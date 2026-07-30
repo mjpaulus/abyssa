@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ABYSSA</title>
+<style>
+  html,body{margin:0;height:100%;background:#010409;overflow:hidden;font-family:Georgia,'Times New Roman',serif}
+  /* The canvas is sized by CSS alone; JS only matches the drawing buffer to it. Letting
+     three set inline width/height left the canvas smaller than the window on some
+     window sizes, exposing the desktop and leaving part of the frame unpainted. */
+  canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;z-index:0}
+  /* z-index is load-bearing: the canvas is appended after this element, so without an
+     explicit order it paints on top and swallows every click on the title screen. */
+  #ui{position:fixed;inset:0;pointer-events:none;color:#bfe3e8;z-index:1}
+  #title{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 60%, rgba(8,24,40,.7), rgba(1,4,9,.97));transition:opacity 1.5s;pointer-events:auto;cursor:pointer}
+  #title h1{font-size:clamp(3rem,9vw,7rem);letter-spacing:.45em;margin:0 0 .2em .45em;font-weight:400;color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.5)}
+  #title p{letter-spacing:.25em;opacity:.7;font-size:.9rem;text-transform:uppercase;margin:.4em}
+  #title .hint{margin-top:3em;opacity:.45;font-size:.8rem;animation:pulse 3s infinite}
+  @keyframes pulse{0%,100%{opacity:.25}50%{opacity:.6}}
+  #msg{position:absolute;left:0;right:0;top:12%;text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
+  #depth{position:absolute;right:1.2rem;top:1rem;font-size:.8rem;letter-spacing:.2em;opacity:.6}
+  #mode{position:absolute;left:1.2rem;top:1rem;font-size:.7rem;letter-spacing:.25em;opacity:.4;text-transform:uppercase}
+  .bar{position:absolute;left:50%;transform:translateX(-50%);width:min(340px,60vw);height:6px;border:1px solid rgba(160,230,255,.35);border-radius:4px;overflow:hidden}
+  .bar .fill{height:100%;width:100%;transform-origin:left;transition:transform .2s}
+  .bar .label{position:absolute;left:-4.6rem;top:-.35rem;font-size:.6rem;letter-spacing:.2em;opacity:.5;text-transform:uppercase}
+  #lightbar{bottom:2rem}
+  #lightfill{background:linear-gradient(90deg,#3fd9ff,#bff6ff);box-shadow:0 0 14px rgba(120,220,255,.8)}
+  #o2bar{bottom:3.4rem}
+  #o2fill{background:linear-gradient(90deg,#4ade9b,#d6ffe9);box-shadow:0 0 14px rgba(120,255,190,.8)}
+  #o2fill.critical{background:linear-gradient(90deg,#ff5a4a,#ffb0a0);box-shadow:0 0 16px rgba(255,90,74,.9);animation:alarm .8s infinite}
+  @keyframes alarm{0%,100%{opacity:1}50%{opacity:.45}}
+  #fuelbar{bottom:4.8rem}
+  #fuelfill{background:linear-gradient(90deg,#c08a3a,#ffd9a0);box-shadow:0 0 12px rgba(255,190,120,.6)}
+  #hose{position:absolute;right:1.2rem;top:2.2rem;font-size:.72rem;letter-spacing:.16em;opacity:.55}
+  #hose.taut{color:#ff9a86;opacity:1}
+  #mats{position:absolute;right:1.2rem;top:3.4rem;font-size:.72rem;letter-spacing:.16em;opacity:.5}
+  #craft{position:absolute;left:0;right:0;bottom:7rem;text-align:center;font-size:.8rem;letter-spacing:.18em;opacity:0;transition:opacity .4s;text-transform:uppercase}
+  #cross{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px;border-radius:50%;background:rgba(200,240,255,.5)}
+  /* bearing strip: a quiet brass rule with ticks for raft / sleeper / rift */
+  #bearing{position:absolute;left:50%;top:3.2rem;transform:translateX(-50%);width:min(560px,64vw);height:2.4rem;
+    border-top:1px solid rgba(190,225,232,.22)}
+  .bm{position:absolute;top:0;transform:translateX(-50%);text-align:center;transition:opacity .3s;white-space:nowrap}
+  .bm .tick{width:1px;height:.55rem;margin:0 auto;background:rgba(220,244,248,.8)}
+  .bm .lbl{font-size:.58rem;letter-spacing:.28em;padding-left:.28em;opacity:.85}
+  .bm .dst{font-size:.55rem;letter-spacing:.18em;opacity:.5}
+  #bmLev .tick{background:rgba(255,170,140,.9)}
+  #bmLev .lbl{color:#ffb9a0}
+  #bmRift .tick{background:rgba(150,235,255,.95)}
+  #bmRift .lbl{color:#aee9ff}
+  /* low-air vignette: breathes at the frame edges, driven from game.js */
+  #warn{position:absolute;inset:0;opacity:0;background:radial-gradient(ellipse at center,
+    rgba(0,0,0,0) 52%, rgba(120,20,10,.55) 100%);animation:warnpulse 1.6s ease-in-out infinite}
+  @keyframes warnpulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.6)}}
+  .hidden{opacity:0!important;pointer-events:none!important}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div id="msg"></div>
+  <div id="depth"></div>
+  <div id="mode"></div>
+  <div id="cross" class="hidden"></div>
+  <div id="warn"></div>
+  <div id="bearing">
+    <div class="bm" id="bmRaft"><div class="tick"></div><div class="lbl">RAFT</div><div class="dst"></div></div>
+    <div class="bm" id="bmLev"><div class="tick"></div><div class="lbl">SLEEPER</div><div class="dst"></div></div>
+    <div class="bm" id="bmRift"><div class="tick"></div><div class="lbl">RIFT</div><div class="dst"></div></div>
+  </div>
+  <div id="hose"></div>
+  <div id="mats"></div>
+  <div id="craft"></div>
+  <div id="lightbar" class="bar"><span class="label">lantern</span><div id="lightfill" class="fill"></div></div>
+  <div id="o2bar" class="bar"><span class="label">air</span><div id="o2fill" class="fill"></div></div>
+  <div id="fuelbar" class="bar"><span class="label">pump</span><div id="fuelfill" class="fill"></div></div>
+  <div id="title">
+    <h1>ABYSSA</h1>
+    <p>three sleepers bar the deep</p>
+    <p>your air comes down a hose. do not outrun it.</p>
+    <p class="hint">click to descend · mouse: look · WASD: move · space/ctrl: rise/sink · shift: boost · E/F: craft at the raft</p>
+  </div>
+</div>
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/",
+  "three/examples/jsm/":"https://unpkg.com/three@0.160.0/examples/jsm/",
+  "postprocessing":"https://unpkg.com/postprocessing@6.35.3/build/index.js",
+  "n8ao":"https://unpkg.com/n8ao@1.9.4/dist/N8AO.js"
+}}
+</script>
+<script type="module" src="./src/game.js"></script>
+</body>
+</html>

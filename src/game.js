@@ -1,0 +1,597 @@
+// Game state machine, camera, HUD, and the frame loop. Owned by the orchestrator.
+import * as THREE from 'three';
+import { scene, camera, clock } from './core.js';
+import { ZONE_GAP, zoneTop, zoneBottom, riftPos } from './config.js';
+import { V3, rng, clamp } from './lib/math.js';
+import { render, samplePerf, setPostBypass, getPostBypass, getVolumetrics } from './postfx.js';
+import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
+import { buildTerrain, updateTerrain, terrainH } from './world/terrain.js';
+import { buildFlora, updateFlora, rockColliders } from './world/flora.js';
+import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim } from './world/water.js';
+import { buildCreatures, updateCreatures } from './world/creatures.js';
+import { buildRifts, updateRifts, seedMotes, updateMotes } from './world/rifts.js';
+import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
+import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash } from './entities/diver.js';
+import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
+import { player, updatePlayer, requestLock, locked, forwardVec, keys, setStormCurrent } from './player.js';
+import {
+  initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
+  setSpeed, setWalking, footstep, setZone, slam, setCalm
+} from './audio.js';
+import {
+  survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
+  resupplyAtRaft, canDescendTo, HOSE_REQ
+} from './systems/survival.js';
+import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell } from './systems/raft.js';
+import { buildTether, updateTether } from './systems/tether.js';
+import { buildResources, updateResources } from './world/resources.js';
+import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
+import { buildProps, updateProps, propColliders } from './world/props.js';
+import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world/footfx.js';
+import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk } from './world/predators.js';
+import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic } from './world/wrecks.js';
+import { initTools, updateTools, sonarPing, fireSpear, thrusterFX } from './systems/tools.js';
+import { initWeather, updateWeather } from './systems/weather.js';
+import { startEnding, updateEnding } from './ending.js';
+
+// ---- build the world ----
+buildTerrain();
+buildFlora();
+buildWater();
+buildCreatures();
+buildRifts();
+buildRaft();
+buildTether(pumpPos);
+buildResources();
+buildProps();   // async; props pop in shortly after load, world never blocks on them
+buildFootFX();
+buildPredators();
+buildWrecks();
+initTools();
+initWeather();
+
+// lastStepPhase mirrors stepCount()'s starting value so no bootfall fires on frame one.
+let state = 'title', msgT = 0, shake = 0, winT = 0, wasLightOut = false, lastStepPhase = 0;
+// One-shot onboarding tips: the game speaks once, at the moment each mechanic first
+// matters, and never talks over another message.
+const tips = { submerged: 0, taut: 0, fuel: 0, wander: 0, polymer: 0, bitumen: 0 };
+let zoneTime = 0;
+let wasGrounded = false, landVel = 0;   // tracks fall speed so landings kick up silt
+let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
+let lev = null, zone = -1;
+const lanternPos = V3();
+
+const $msg = document.getElementById('msg');
+const $depth = document.getElementById('depth');
+const $mode = document.getElementById('mode');
+const $lightfill = document.getElementById('lightfill');
+const $o2fill = document.getElementById('o2fill');
+const $fuelfill = document.getElementById('fuelfill');
+const $hose = document.getElementById('hose');
+const $mats = document.getElementById('mats');
+const $craft = document.getElementById('craft');
+const $warn = document.getElementById('warn');
+const $bm = {
+  raft: document.getElementById('bmRaft'),
+  lev: document.getElementById('bmLev'),
+  rift: document.getElementById('bmRift')
+};
+
+// Bearing strip: place a marker by its horizontal angle from the view direction.
+// Off-screen targets pin to the strip's edge at reduced opacity, so you can still
+// turn toward them. dy drives a rise/dive glyph appended to the distance.
+function setBearing(el, tx, ty, tz, show) {
+  if (!show) { el.style.opacity = 0; return; }
+  const dx = tx - player.pos.x, dz = tz - player.pos.z, dy = ty - player.pos.y;
+  let rel = Math.atan2(dx, dz) - player.yaw;
+  while (rel > Math.PI) rel -= Math.PI * 2;
+  while (rel < -Math.PI) rel += Math.PI * 2;
+  const SPAN = 1.05;                        // radians mapped across the strip's half-width
+  const off = clamp(rel / SPAN, -1, 1);
+  el.style.left = (50 + off * 50) + '%';
+  el.style.opacity = Math.abs(rel) > SPAN ? 0.28 : 0.55 + 0.45 * (1 - Math.abs(off));
+  const dist = Math.round(Math.hypot(dx, dy, dz) * 3);
+  const vert = dy < -25 ? ' ▾' : dy > 25 ? ' ▴' : '';
+  el.querySelector('.dst').textContent = dist + ' m' + vert;
+}
+
+// Crafting is only possible at the raft, where the pump and reel are.
+addEventListener('keydown', e => {
+  // Diagnostic: P bypasses the whole post chain so an on-screen artifact can be
+  // attributed to either the scene or a pass, live, without a rebuild.
+  if (e.code === 'KeyP') {
+    setPostBypass(!getPostBypass());
+    showMsg(getPostBypass() ? 'POST PROCESSING BYPASSED (P TO RESTORE)' : 'POST PROCESSING ON', 3);
+    return;
+  }
+  // Q vents a carried ink sac: a dark cloud that breaks a hunting shark's charge.
+  if (e.code === 'KeyQ' && state === 'play' && survival.ink > 0) {
+    if (deployInk(player.pos)) {
+      survival.ink--;
+      chime(196, 1.2, 0.2);
+      showMsg('INK VENTED', 2);
+    }
+    return;
+  }
+  // T: sonar pulse (once the set is recovered from the shallows wreck)
+  if (e.code === 'KeyT' && state === 'play' && survival.hasSonar) {
+    if (sonarPing(player.pos, zone < 0 ? 0 : zone)) chime(1174, 2.2, 0.16);
+    return;
+  }
+  // E near a wreck's relic: take the tool
+  if (e.code === 'KeyE' && state === 'play') {
+    const rel = nearRelic(player.pos);
+    if (rel) {
+      const tool = takeRelic(rel.zi);
+      if (tool === 'sonar') { survival.hasSonar = true; showMsg('A SOUNDING SET — [T] LISTENS TO THE DARK', 5); }
+      else if (tool === 'spear') { survival.hasSpear = true; survival.spears = 3; showMsg('A SPEAR GUN — RIGHT CLICK. SPEARS CAN BE RECOVERED.', 5); }
+      else if (tool === 'thruster') { survival.hasThruster = true; showMsg('AN AIR THRUSTER — HOLD SHIFT TO VENT THE LINE FOR SPEED. IT BREATHES YOUR AIR.', 6); }
+      if (tool) { chime(659, 2.5, 0.28); chime(880, 2.5, 0.2); return; }
+    }
+  }
+  if (state !== 'play' || !nearRaft(player.pos)) return;
+  if (e.code === 'KeyE' && craftHose()) { chime(523, 1.4, 0.22); showMsg('HOSE EXTENDED', 2); }
+  if (e.code === 'KeyF' && craftFuel()) { chime(392, 1.4, 0.22); showMsg('PUMP REFUELLED', 2); }
+});
+addEventListener('contextmenu', e => { if (locked) e.preventDefault(); });
+
+// Left-click while locked: knife slash. The anim gates repeats; the hit lands on the
+// contact frame via pendingSlash so the blade connects when it visually connects.
+let pendingSlash = 0;
+addEventListener('mousedown', e => {
+  if (state !== 'play' || !locked) return;
+  if (e.button === 0 && triggerSlash()) pendingSlash = 0.22;   // contact ~0.22s into the swing
+  if (e.button === 2 && survival.hasSpear) {
+    if (survival.spears > 0 && fireSpear(player.pos, forwardVec())) {
+      survival.spears--;
+      chime(330, 0.3, 0.24);
+    } else if (survival.spears === 0 && msgT <= 0) {
+      showMsg('NO SPEARS — FIND THE ONES YOU THREW', 2.5);
+    }
+  }
+});
+
+function showMsg(text, dur = 4) {
+  $msg.textContent = text;
+  $msg.style.opacity = 1;
+  msgT = dur;
+}
+
+function enterZone(i) {
+  disposeLeviathan(lev);
+  zone = i;
+  setZone(i);            // must precede growl() so the voice is tuned to the zone
+  lev = makeLeviathan(i);
+  seedMotes(i);
+  physicsSwitchZone(i);  // no-op until the WASM world is up
+  switchPredatorZone(i);
+  setCalm(0);
+  showMsg(lev.name);
+  growl();
+}
+
+export function start() {
+  if (state !== 'title') return;
+  state = 'play';
+  // Snap the camera from the title portrait (in front of Sal) straight to the
+  // play position behind him — letting the spring travel there would drag the
+  // lens through his body.
+  camera.position.set(player.pos.x, player.pos.y + CAM_UP, player.pos.z - CAM_BACK);
+  camVel.set(0, 0, 0);
+  camLook.set(player.pos.x, player.pos.y, player.pos.z + 6);
+  document.getElementById('title').classList.add('hidden');
+  initAudio();
+  enterZone(0);
+  // Async WASM load; the module degrades to no-ops if the CDN fails, so no await.
+  initPhysics(0);
+  // Lock is requested by the window click handler below, on this same click. Asking
+  // here as well made Chrome reject the duplicate request, so the mouse stayed dead
+  // until the player clicked a second time.
+  showMsg('LIGHT THE SIGILS. WAKE NOTHING ELSE.');
+}
+
+document.getElementById('title').addEventListener('click', start);
+addEventListener('click', () => {
+  if (state !== 'title' && !locked) requestLock();
+});
+
+// Debug/automation surface used by the visual-review harness.
+Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, diver, scene, survival, setState: s => { state = s; } });
+// Debug: jump straight to the ending cinematic from anywhere in a running game.
+window.playEnding = () => {
+  if (state !== 'play') return 'start the game first';
+  player.pos.set(0, zoneBottom(2) - 72, 0);
+  player.vel.set(0, 0, 0);
+  state = 'won'; winT = 0;
+  chime(523, 3, 0.3); chime(659, 3, 0.2); chime(784, 4, 0.2);
+  startEnding();
+  return 'ending started';
+};
+Object.defineProperties(window, {
+  lev: { get: () => lev },
+  zone: { get: () => zone },
+  gameState: { get: () => state }
+});
+
+// ---- cinematic third-person camera ----
+const camVel = V3(), camAim = V3(), camDesired = V3(), camLook = V3();
+const camBack = V3(), camTo = V3(), camRight = V3();   // hot-path temps, never allocated per frame
+let camDist = 9, camRoll = 0, camFov = 70;
+const CAM_BACK = 9, CAM_UP = 2.4;
+
+// Walk the ray from the player out to the ideal camera spot and stop short of the
+// seafloor and of any boulder large enough to swallow the camera, so obstacles push
+// the camera in instead of clipping through it.
+function clearCamDistance(from, dir, want, zi) {
+  const STEPS = 8, MARGIN = 0.8;
+  for (let i = 1; i <= STEPS; i++) {
+    const d = want * (i / STEPS);
+    const x = from.x + dir.x * d, y = from.y + dir.y * d, z = from.z + dir.z * d;
+    if (y < terrainH(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
+    for (let list = 0; list < 3; list++) {
+    const cols = list === 0 ? rockColliders : list === 1 ? propColliders : wreckColliders;
+    for (let k = 0; k < cols.length; k++) {
+      const c = cols[k];
+      // cheap reject on the dominant axes before the full sphere test
+      const dx = x - c.x; if (dx > c.r + MARGIN || dx < -c.r - MARGIN) continue;
+      const dz = z - c.z; if (dz > c.r + MARGIN || dz < -c.r - MARGIN) continue;
+      const dy = y - c.y;
+      const rr = c.r + MARGIN;
+      if (dx * dx + dy * dy + dz * dz < rr * rr) return Math.max(2.2, want * ((i - 1) / STEPS));
+    }
+    }
+  }
+  return want;
+}
+
+function updateCamera(dt, t, fwd) {
+  const zi = zone < 0 ? 0 : zone;
+  const speed = player.vel.length();
+  camBack.copy(fwd).multiplyScalar(-1);
+
+  const want = clearCamDistance(player.pos, camBack, CAM_BACK, zi);
+  camDist += (want - camDist) * Math.min(1, (want < camDist ? 14 : 4) * dt);
+
+  camDesired.copy(player.pos).addScaledVector(camBack, camDist);
+  camDesired.y += CAM_UP;
+  camDesired.y = Math.max(camDesired.y, terrainH(camDesired.x, camDesired.z, zi) + 1.2);
+  // idle breathing drift so the frame is never perfectly locked
+  camDesired.y += Math.sin(t * 0.7) * 0.09;
+  camDesired.x += Math.sin(t * 0.43) * 0.07;
+
+  // critically-damped spring: settles without the rubber-band of a raw lerp
+  const stiff = 42, damp = 2 * Math.sqrt(stiff);
+  camTo.copy(camDesired).sub(camera.position);
+  camVel.addScaledVector(camTo, stiff * dt).addScaledVector(camVel, -damp * dt);
+  camera.position.addScaledVector(camVel, dt);
+
+  if (shake > 0) {
+    camera.position.x += rng(-1, 1) * shake * 0.5;
+    camera.position.y += rng(-1, 1) * shake * 0.5;
+    camera.position.z += rng(-1, 1) * shake * 0.5;
+    shake = Math.max(0, shake - dt * 2);
+  }
+
+  // aim slightly ahead of travel so fast movement leads the frame
+  // Aim tracks the look direction almost immediately. Heavy smoothing here reads as
+  // mouse lag, which is far more objectionable than a little jitter.
+  camAim.copy(player.pos).addScaledVector(fwd, 6).addScaledVector(player.vel, 0.10);
+  camLook.lerp(camAim, Math.min(1, 40 * dt));
+  camera.lookAt(camLook);
+
+  // bank into lateral movement, and widen slightly with speed
+  camRight.set(Math.sin(player.yaw - Math.PI / 2), 0, Math.cos(player.yaw - Math.PI / 2));
+  const lateral = player.vel.dot(camRight);
+  camRoll += (clamp(-lateral * 0.012, -0.11, 0.11) - camRoll) * Math.min(1, 3 * dt);
+  camera.rotateZ(camRoll);
+
+  const wantFov = 70 + clamp(speed * 0.32, 0, 9);
+  camFov += (wantFov - camFov) * Math.min(1, 2.5 * dt);
+  if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
+}
+
+function update(dt, t) {
+  if (msgT > 0) { msgT -= dt; if (msgT <= 0) $msg.style.opacity = 0; }
+
+  // Title portrait: Sal front-on at the surface, idling, with a slow drift so the
+  // shot breathes. (Without this the camera boots at the origin — inside his suit.)
+  if (state === 'title') {
+    diver.position.copy(player.pos);
+    updateDiver(dt, t, player);
+    const a = t * 0.05;
+    camera.position.set(
+      player.pos.x + Math.sin(a) * 1.3 + 0.4,
+      player.pos.y + 0.72 + Math.sin(t * 0.5) * 0.06,
+      player.pos.z + 4.5 + Math.cos(a) * 0.4
+    );
+    // Look-target offset to the left puts Sal in the right third of the frame,
+    // clear of the title type.
+    camera.lookAt(player.pos.x - 1.55, player.pos.y + 0.62, player.pos.z);
+  }
+
+  // Weather runs even behind the title so a session can open at dusk or mid-storm.
+  const wx = updateWeather(dt, t);
+  setWeatherLight(wx.day, wx.storm, wx.flash);
+  setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm), wx.storm);
+  setSwell(wx.storm);
+  setStormCurrent(wx.storm);
+  setRayDim(getVolumetrics() ? 0.55 : 1);
+
+  // Ambient world animation runs even behind the title screen.
+  updateFlora(dt, t);
+  updateProps(dt, t);
+  updateFootFX(dt, t);
+  updateCreatures(dt, t);
+  updateWater(dt, t);
+  updateTerrain(dt, t, camera.position.y);
+  updateRifts(dt, t, zone, !!(lev && lev.calmed));
+
+  if (state !== 'play' && state !== 'won') return;
+
+  // The ending cinematic owns the player and camera; the world keeps breathing
+  // underneath it (flora/water updates above already ran this frame).
+  if (state === 'won') {
+    winT += dt;
+    updateEnding(dt, t);
+    const d01 = clamp(-player.pos.y / 900, 0, 1);
+    updateRaft(dt, t);
+    updateAtmosphere(d01);
+    updateLighting(d01);
+    setDepth(d01);
+    return;
+  }
+
+  const { fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed));
+  $mode.textContent = player.grounded ? 'walking' : 'swimming';
+  const depth01 = clamp(-player.pos.y / 900, 0, 1);
+
+  // zone progression through the rift, gated on having the line to work the next zone
+  if (lev && lev.calmed && zone < 2 && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
+    if (canDescendTo(zone + 1)) enterZone(zone + 1);
+    else if (msgT <= 0) showMsg(`THE LINE IS TOO SHORT — ${HOSE_REQ[zone + 1]} M NEEDED`, 3);
+  }
+  if (lev && lev.calmed && zone === 2 && player.pos.y < zoneBottom(2) - 70 && state === 'play') {
+    state = 'won'; winT = 0;
+    chime(523, 3, 0.3); chime(659, 3, 0.2); chime(784, 4, 0.2);
+    startEnding();
+    return;
+  }
+
+  const gained = updateMotes(dt, t, player.pos);
+  if (gained) {
+    player.light = Math.min(1, player.light + 0.34 * gained);
+    chime(880 + Math.random() * 220, 0.9, 0.18);
+  }
+
+  if (lev) {
+    const ev = updateLeviathan(lev, dt, t, player);
+    if (ev.lightDrain) player.light -= ev.lightDrain;
+    if (ev.slam) { shake = Math.min(1, shake + 2 * dt); slam(); }
+    if (ev.sigilLit) {
+      chime(ev.sigilLit, 2, 0.3);
+      shake = 0.6;
+      if (ev.remaining > 0) showMsg(ev.remaining + (ev.remaining === 1 ? ' SIGIL SLEEPS' : ' SIGILS SLEEP'), 2.5);
+    }
+    if (ev.calmed) {
+      player.light = 1;
+      setCalm(1);
+      showMsg(zone < 2 ? 'THE SLEEPER STILLS. A RIFT OPENS BELOW.' : 'THE LAST SLEEPER STILLS. THE RIFT WAITS.', 5);
+      chime(262, 3, 0.3); chime(330, 3, 0.25); chime(392, 3, 0.25);
+    }
+  }
+
+  // The lantern going out is no longer fatal on its own — it blinds you and makes you
+  // breathe harder. Drowning is the single death condition.
+  player.light = Math.min(1, player.light + dt * 0.008);
+  const lightOut = player.light <= 0;
+  if (lightOut) player.light = 0;
+  if (lightOut && !wasLightOut) showMsg('YOUR LANTERN IS OUT', 3);
+  wasLightOut = lightOut;
+
+  // ---- surface-supplied air ----
+  updateRaft(dt, t);
+  const distFromRaft = updateTether(dt, player, zone);
+  const drowned = updateSurvival(dt, depth01, player.pos.y < -3, lightOut);
+
+  // At a storm's peak the pump gasps: brief windows where the swell outruns the
+  // flywheel and the tank dips. Survivable, but it teaches you to ride storms deep
+  // or sit them out on the raft.
+  if (wx.storm > 0.7) {
+    sputterCd -= dt;
+    if (sputterCd <= 0) { sputterT = 2.2; sputterCd = rng(9, 16); }
+  }
+  if (sputterT > 0) {
+    sputterT -= dt;
+    if (player.pos.y < -3) {
+      survival.oxygen = Math.max(0.04, survival.oxygen - dt * 0.30);
+      if (msgT <= 0) showMsg('THE PUMP GASPS IN THE SWELL', 2);
+    }
+  }
+
+  if (nearRaft(player.pos)) {
+    resupplyAtRaft();
+    const canH = canCraftHose(), canF = canCraftFuel();
+    $craft.textContent = canH || canF
+      ? `[E] craft hose  ·  [F] refuel pump${canH ? '' : '   (need 3 polymer)'}`
+      : 'at the raft — collect polymer and bitumen below';
+    $craft.style.opacity = 1;
+  } else {
+    const rel = nearRelic(player.pos);
+    if (rel) {
+      $craft.textContent = `[E] take the ${rel.tool === 'sonar' ? 'sounding set' : rel.tool === 'spear' ? 'spear gun' : 'air thruster'}`;
+      $craft.style.opacity = 1;
+    } else {
+      $craft.style.opacity = 0;
+    }
+  }
+
+  const got = updateResources(dt, t, player.pos);
+  if (got) {
+    chime(got === 'polymer' ? 660 : 330, 0.7, 0.14);
+    if (got === 'polymer' && !tips.polymer) { tips.polymer = 1; showMsg('POLYMER — THREE MAKE A LENGTH OF HOSE', 4); }
+    else if (got === 'bitumen' && !tips.bitumen) { tips.bitumen = 1; showMsg('BITUMEN — FOOD FOR THE PUMP', 4); }
+  }
+
+  // onboarding beats fire only in silence, each exactly once
+  zoneTime += dt;
+  if (msgT <= 0 && state === 'play') {
+    if (!tips.submerged && player.pos.y < -6) {
+      tips.submerged = 1; showMsg('YOUR AIR COMES DOWN THE LINE. THE PUMP ABOVE MUST STAY FED.', 5);
+    } else if (!tips.taut && survival.tautness > 0.92) {
+      tips.taut = 1; showMsg('THE LINE IS TAUT — MORE HOSE CAN BE MADE AT THE RAFT', 5);
+    } else if (!tips.fuel && survival.fuel < 0.5) {
+      tips.fuel = 1; showMsg('THE PUMP RUNS LOW. IT BURNS BITUMEN — BLACK LUMPS ON THE FLOOR.', 5);
+    } else if (!tips.wander && zone === 0 && zoneTime > 75 && lev && !lev.calmed && !lev.sigils.some(s => s.lit)) {
+      tips.wander = 1; showMsg('FOLLOW THE SLEEPER MARK ON THE RULE ABOVE. TOUCH ITS WARDS.', 6);
+    }
+  }
+
+  if (drowned && state === 'play') {
+    state = 'dead';
+    showMsg('YOUR AIR RAN OUT', 4);
+    setTimeout(() => {
+      player.pos.copy(raft.position).setY(raft.position.y - 6);
+      player.vel.set(0, 0, 0);
+      player.light = 1;
+      survival.oxygen = 1;
+      // The rescue tops the pump up from the reserve can. Without this, drowning with
+      // an empty tank and no bitumen strands you at the raft with 45s of air and all
+      // the bitumen 200m below — an unwinnable state.
+      survival.fuel = Math.max(survival.fuel, 0.3);
+      state = 'play';
+      showMsg('HAULED BACK TO THE RAFT', 3);
+    }, 2500);
+  }
+
+  // ---- feed the audio engine ----
+  setDepth(depth01);
+  setLight(player.light);
+  setAir(survival.oxygen);
+  setSpeed(player.vel.length());
+  setWalking(player.grounded);
+  // knife: the hit lands on the swing's contact frame, not the click
+  if (pendingSlash > 0) {
+    pendingSlash -= dt;
+    if (pendingSlash <= 0) {
+      const kill = slash(player.pos, forwardVec(), 3.4);
+      if (kill) {
+        chime(880, 0.5, 0.22);
+        shake = Math.min(1, shake + 0.25);
+        if (kill.killed === 'squid') showMsg('THE SHOAL SCATTERS — IT DROPPED SOMETHING', 3);
+      }
+    }
+  }
+
+  // wrecks + relic tools
+  updateWrecks(dt, t);
+  const tev = updateTools(dt, t, player);
+  if (tev.spearKill) {
+    chime(880, 0.5, 0.22);
+    showMsg('THE SPEAR FINDS ITS MARK', 2.5);
+  }
+  if (tev.spearRecovered) {
+    survival.spears += tev.spearRecovered;
+    chime(494, 0.5, 0.16);
+  }
+  // the air thruster vents the breathing line for speed: fast, and it costs air
+  const thrustOn = survival.hasThruster && (keys['ShiftLeft'] || keys['ShiftRight'])
+    && !player.grounded && survival.oxygen > 0.06;
+  player.thrustOn = thrustOn;
+  // Drain must beat the hose's 0.28/s refill or thrust is free: net ~-0.05/s while
+  // supplied (20s of continuous thrust empties the tank), lethal-fast if the line is out.
+  if (thrustOn) survival.oxygen = Math.max(0.05, survival.oxygen - dt * 0.33);
+  thrusterFX(thrustOn, player);
+
+  // predators: hunting behavior, strikes and light-stealing
+  const pev = updatePredators(dt, t, player, lanternPos);
+  if (pev.inkPickup) {
+    survival.ink += pev.inkPickup;
+    chime(740, 0.8, 0.18);
+    if (msgT <= 0) showMsg('INK SAC — [Q] VENTS IT AT A HUNTER', 3.5);
+  }
+  if (pev.bite) {
+    survival.oxygen = Math.max(0.04, survival.oxygen - 0.10 * pev.bite);
+    shake = Math.min(1, shake + 0.5);
+    slam();
+    if (msgT <= 0) showMsg('SOMETHING STRUCK YOU — AIR IS LEAKING', 3);
+  }
+  if (pev.lightSteal) player.light = Math.max(0, player.light - pev.lightSteal * dt);
+
+  let dread = 0;
+  if (lev) {
+    let near = Infinity;
+    for (const s of lev.spine) { const d = s.distanceTo(player.pos); if (d < near) near = d; }
+    dread = clamp(1 - near / (lev.size * 9), 0, 1);
+  }
+  setProximity(Math.max(dread, pev.threat));
+  // Debris reacts to the diver's push and the leviathan's sweep.
+  updatePhysics(dt, player.pos, player.vel, lev ? lev.spine : null);
+
+  updateDiver(dt, t, player);
+  // Bootfall audio, sand puff and boot print all key off the rig's real heel strikes
+  // (counted inside updateDiver), so they land on the same frame the weight drops.
+  const sc = stepCount();
+  if (sc !== lastStepPhase) {
+    lastStepPhase = sc;
+    footstep();
+    spawnFootfall(player.pos, player.yaw, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);
+  }
+  // Landing after a drop kicks up a bigger cloud under both boots.
+  if (player.grounded && !wasGrounded && landVel > 3) {
+    const zi = zone < 0 ? 0 : zone;
+    spawnFootfall(player.pos, player.yaw, 1, zi, Math.min(2.2, landVel * 0.28));
+    spawnFootfall(player.pos, player.yaw, -1, zi, Math.min(2.2, landVel * 0.28));
+  }
+  wasGrounded = player.grounded;
+  landVel = player.grounded ? 0 : Math.max(landVel * 0.98, -player.vel.y);
+  lanternWorldPos(lanternPos);
+  lanternLight.position.copy(lanternPos);
+  setLanternPos(lanternPos);   // dust catches the lantern's warmth
+  lanternLight.intensity = (9 + 3.5 * Math.sin(t * 9) + 1.5 * Math.sin(t * 23)) * player.light;
+  playerLightSrc.position.copy(player.pos);
+  playerLightSrc.intensity = 8 + 40 * player.light;
+
+  updateAtmosphere(depth01);
+  updateLighting(depth01);
+
+  updateCamera(dt, t, fwd);
+
+  // wayfinding: raft always, the sleeper until calmed, the rift once open
+  setBearing($bm.raft, raft.position.x, raft.position.y, raft.position.z, true);
+  setBearing($bm.lev, lev ? lev.head.x : 0, lev ? lev.head.y : 0, lev ? lev.head.z : 0, !!(lev && !lev.calmed));
+  const rp = zone >= 0 ? riftPos(zone) : null;
+  setBearing($bm.rift, rp ? rp.x : 0, rp ? terrainH(rp.x, rp.z, zone) : 0, rp ? rp.z : 0, !!(rp && lev && lev.calmed));
+  // low-air vignette breathes in once the tank drops below a third
+  $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
+
+  $lightfill.style.transform = `scaleX(${player.light})`;
+  $o2fill.style.transform = `scaleX(${survival.oxygen})`;
+  $fuelfill.style.transform = `scaleX(${survival.fuel})`;
+  $o2fill.classList.toggle('critical', survival.oxygen < 0.3);
+  $hose.textContent = `${Math.floor(distFromRaft)} / ${Math.floor(survival.hose)} m of line`;
+  $hose.classList.toggle('taut', survival.tautness > 0.92);
+  $mats.textContent = `polymer ${survival.polymer}  ·  bitumen ${survival.bitumen}`
+    + (survival.ink > 0 ? `  ·  ink ${survival.ink}` : '')
+    + (survival.hasSpear ? `  ·  spears ${survival.spears}` : '');
+  $depth.textContent = Math.floor(-player.pos.y * 3) + ' m';
+  if (state === 'won') winT += dt;
+}
+
+// requestAnimationFrame is scheduled first so a throw can't stop the loop — but that
+// also means a broken frame fails silently forever. Surface it once, loudly, instead.
+let loopFailed = false;
+function frame() {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
+  try {
+    update(dt, t);
+    render(dt);
+    samplePerf(dt, state === 'play' || state === 'won');
+  } catch (e) {
+    if (!loopFailed) {
+      loopFailed = true;
+      console.error('ABYSSA: frame loop threw — the game is frozen from here.', e);
+    }
+  }
+}
+frame();

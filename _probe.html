@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>ABYSSA probe</title></head>
+<body>
+<pre id="out">running…</pre>
+<div id="cross"></div>
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/",
+  "postprocessing":"https://unpkg.com/postprocessing@6.35.3/build/index.js"
+}}
+</script>
+<!--
+  Headless physics harness. Imports player.js + terrain.js only — no game loop, no
+  renderer passes — so results can't be perturbed by anything driving the main page.
+  Steps updatePlayer at a fixed dt so runs are deterministic.
+-->
+<script type="module">
+import { player, updatePlayer, keys } from './src/player.js';
+import { terrainH } from './src/world/terrain.js';
+
+const DT = 1 / 60;
+const out = [];
+const log = (k, v) => out.push(k + ': ' + JSON.stringify(v));
+
+function reset(x, y, z) {
+  player.pos.set(x, y, z);
+  player.vel.set(0, 0, 0);
+  player.grounded = false;
+  for (const k of Object.keys(keys)) delete keys[k];
+}
+function step(n, t0 = 0) {
+  for (let i = 0; i < n; i++) updatePlayer(DT, t0 + i * DT, 0, false);
+}
+
+// --- 1. free-water sink: terminal velocity and time to reach the floor ---
+{
+  const x = -60, z = 40, floor = terrainH(x, z, 0);
+  reset(x, floor + 8, z);
+  step(30);
+  const vy30 = player.vel.y;
+  let frames = 0;
+  while (!player.grounded && frames < 1800) { step(1); frames++; }
+  log('terminal_vy_after_0.5s', +vy30.toFixed(2));
+  log('seconds_to_ground_from_8_units', +(frames / 60).toFixed(2));
+  log('grounded', player.grounded);
+  log('rest_gap_above_terrain', +(player.pos.y - terrainH(player.pos.x, player.pos.z, 0)).toFixed(2));
+}
+
+// --- 2. walking: does W actually move him along the floor? ---
+{
+  const x = -60, z = 40;
+  reset(x, terrainH(x, z, 0) + 0.5, z);
+  step(60);
+  const groundedBefore = player.grounded;
+  const p0 = player.pos.clone();
+  keys['KeyW'] = true;
+  step(90);
+  delete keys['KeyW'];
+  log('grounded_on_floor', groundedBefore);
+  log('walk_distance_1.5s', +Math.hypot(player.pos.x - p0.x, player.pos.z - p0.z).toFixed(2));
+}
+
+// --- 3. staying grounded while walking over broken terrain ---
+{
+  const x = -60, z = 40;
+  reset(x, terrainH(x, z, 0) + 0.5, z);
+  step(60);
+  keys['KeyW'] = true;
+  let airborne = 0;
+  for (let i = 0; i < 300; i++) { step(1); if (!player.grounded) airborne++; }
+  delete keys['KeyW'];
+  log('frames_airborne_while_walking_of_300', airborne);
+}
+
+// --- 4. swimming up beats the sink ---
+{
+  reset(0, -120, 0);
+  keys['Space'] = true;
+  step(120);
+  delete keys['Space'];
+  log('rose_while_holding_space', +(player.pos.y + 120).toFixed(2));
+}
+
+document.getElementById('out').textContent = out.join('\n');
+window.__probe = out.join('\n');
+</script>
+</body>
+</html>

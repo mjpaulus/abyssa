@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "abyssa",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["serve.py"],
+      "port": 8777
+    },
+    {
+      "name": "abyssa-alt",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["serve.py", "8790"],
+      "port": 8790
+    }
+  ]
+}

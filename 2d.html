@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ABYSSA</title>
+<style>
+  html,body{margin:0;height:100%;background:#02060c;overflow:hidden;font-family:Georgia,'Times New Roman',serif}
+  canvas{display:block;width:100vw;height:100vh}
+  #ui{position:fixed;inset:0;pointer-events:none;color:#bfe3e8}
+  #title{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:radial-gradient(ellipse at 50% 60%, rgba(10,30,50,.6), rgba(2,6,12,.95));transition:opacity 1.5s;pointer-events:auto;cursor:pointer}
+  #title h1{font-size:clamp(3rem,9vw,7rem);letter-spacing:.45em;margin:0 0 .2em .45em;font-weight:400;color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.5)}
+  #title p{letter-spacing:.25em;opacity:.7;font-size:.9rem;text-transform:uppercase}
+  #title .hint{margin-top:3em;opacity:.45;font-size:.8rem;animation:pulse 3s infinite}
+  @keyframes pulse{0%,100%{opacity:.25}50%{opacity:.6}}
+  #msg{position:absolute;left:0;right:0;top:14%;text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
+  #depth{position:absolute;right:1.2rem;top:1rem;font-size:.8rem;letter-spacing:.2em;opacity:.6}
+  #lightbar{position:absolute;left:50%;bottom:2rem;transform:translateX(-50%);width:min(340px,60vw);height:6px;border:1px solid rgba(160,230,255,.35);border-radius:4px;overflow:hidden}
+  #lightfill{height:100%;width:100%;transform-origin:left;background:linear-gradient(90deg,#3fd9ff,#bff6ff);box-shadow:0 0 14px rgba(120,220,255,.8);transition:transform .2s}
+  .hidden{opacity:0!important;pointer-events:none!important}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="ui">
+  <div id="msg"></div>
+  <div id="depth"></div>
+  <div id="lightbar"><div id="lightfill"></div></div>
+  <div id="title">
+    <h1>ABYSSA</h1>
+    <p>three sleepers bar the deep</p>
+    <p class="hint">move — WASD / arrows · boost — shift · click or press any key to descend</p>
+  </div>
+</div>
+<script>
+'use strict';
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+let W=0,H=0;function resize(){W=cv.width=innerWidth*devicePixelRatio;H=cv.height=innerHeight*devicePixelRatio;ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);}
+addEventListener('resize',resize);resize();
+const vw=()=>innerWidth,vh=()=>innerHeight;
+
+// ---------- input ----------
+const keys={};
+addEventListener('keydown',e=>{keys[e.key.toLowerCase()]=true;start();});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false;});
+document.getElementById('title').addEventListener('click',start);
+
+// ---------- audio ----------
+let AC=null,master;
+function initAudio(){
+  AC=new (window.AudioContext||window.webkitAudioContext)();
+  master=AC.createGain();master.gain.value=.5;master.connect(AC.destination);
+  // deep drone: two detuned sines + filtered noise swell
+  const mk=(f,g)=>{const o=AC.createOscillator(),gn=AC.createGain();o.frequency.value=f;o.type='sine';gn.gain.value=g;o.connect(gn);gn.connect(master);o.start();return{o,gn}};
+  mk(38,.12);mk(57.2,.07);mk(76.5,.03);
+  const buf=AC.createBuffer(1,AC.sampleRate*4,AC.sampleRate);const d=buf.getChannelData(0);
+  for(let i=0;i<d.length;i++)d[i]=Math.random()*2-1;
+  const n=AC.createBufferSource();n.buffer=buf;n.loop=true;
+  const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=140;
+  const ng=AC.createGain();ng.gain.value=.05;
+  n.connect(f);f.connect(ng);ng.connect(master);n.start();
+  const lfo=AC.createOscillator(),lg=AC.createGain();lfo.frequency.value=.05;lg.gain.value=.03;
+  lfo.connect(lg);lg.connect(ng.gain);lfo.start();
+}
+function chime(freq,dur=1.2,vol=.25){
+  if(!AC)return;const t=AC.currentTime;
+  const o=AC.createOscillator(),g=AC.createGain();o.type='sine';o.frequency.value=freq;
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(vol,t+.02);g.gain.exponentialRampToValueAtTime(.0001,t+dur);
+  o.connect(g);g.connect(master);o.start(t);o.stop(t+dur);
+  const o2=AC.createOscillator(),g2=AC.createGain();o2.type='sine';o2.frequency.value=freq*2.01;
+  g2.gain.setValueAtTime(0,t);g2.gain.linearRampToValueAtTime(vol*.3,t+.02);g2.gain.exponentialRampToValueAtTime(.0001,t+dur*.7);
+  o2.connect(g2);g2.connect(master);o2.start(t);o2.stop(t+dur);
+}
+function growl(){
+  if(!AC)return;const t=AC.currentTime;
+  const o=AC.createOscillator(),g=AC.createGain();o.type='sawtooth';
+  o.frequency.setValueAtTime(60,t);o.frequency.exponentialRampToValueAtTime(28,t+1.4);
+  const f=AC.createBiquadFilter();f.type='lowpass';f.frequency.value=180;
+  g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.3,t+.15);g.gain.exponentialRampToValueAtTime(.0001,t+1.6);
+  o.connect(f);f.connect(g);g.connect(master);o.start(t);o.stop(t+1.7);
+}
+
+// ---------- world ----------
+const WORLD_W=6000;
+const rng=(a,b)=>a+Math.random()*(b-a);
+const player={x:3000,y:300,vx:0,vy:0,light:1,dead:0,face:1};
+let cam={x:0,y:0},depth=0,state='title',msgT=0,shake=0,tGlobal=0,winT=0;
+
+// marine snow
+const snow=[];for(let i=0;i<160;i++)snow.push({x:Math.random()*WORLD_W,y:Math.random()*4000,z:rng(.3,1),r:rng(.5,2)});
+// mote refuel points per zone (regenerating)
+let motes=[];
+function seedMotes(zoneY){
+  motes=[];for(let i=0;i<10;i++)motes.push({x:rng(300,WORLD_W-300),y:zoneY+rng(120,900),r:rng(6,10),ph:Math.random()*7,alive:1,respawn:0});
+}
+// bubbles/particles
+const parts=[];
+function puff(x,y,col,n=8,sp=2){for(let i=0;i<n;i++)parts.push({x,y,vx:rng(-sp,sp),vy:rng(-sp,sp),life:rng(.4,1.2),max:1.2,col});}
+
+// ---------- leviathans ----------
+// Each: segmented spine following a drifting head, sigils attached to segment indices.
+function makeLeviathan(idx,zoneY){
+  const cfg=[
+    {segs:26,size:46,speed:.55,nSigils:3,hue:185,name:'VELKATH, THE PALE RIBBON'},
+    {segs:34,size:60,speed:.75,nSigils:4,hue:265,name:'ORUNE, CROWN OF THORNS'},
+    {segs:44,size:78,speed:.95,nSigils:5,hue:15,name:'MHOR, THE LAST FURNACE'}
+  ][idx];
+  const L={...cfg,idx,zoneY,head:{x:rng(1500,4500),y:zoneY+600},ang:0,t:Math.random()*100,
+    spine:[],sigils:[],agitation:0,calmed:false,calmT:0};
+  for(let i=0;i<L.segs;i++)L.spine.push({x:L.head.x-i*L.size*.8,y:L.head.y});
+  const step=Math.floor(L.segs/(L.nSigils+1));
+  for(let i=1;i<=L.nSigils;i++)L.sigils.push({seg:i*step,lit:false,pulse:0});
+  return L;
+}
+let lev=null,zone=0;
+const ZONE_H=1600,ZONE_GAP=700;
+function zoneTop(i){return 500+i*(ZONE_H+ZONE_GAP);}
+
+function enterZone(i){
+  zone=i;lev=makeLeviathan(i,zoneTop(i));seedMotes(zoneTop(i));
+  showMsg(lev.name);growl();
+}
+function showMsg(t,dur=4){const m=document.getElementById('msg');m.textContent=t;m.style.opacity=1;msgT=dur;}
+
+function start(){
+  if(state!=='title')return;
+  state='play';document.getElementById('title').classList.add('hidden');
+  initAudio();enterZone(0);
+  showMsg('LIGHT THE SIGILS. WAKE NOTHING ELSE.');
+}
+
+// ---------- update ----------
+function update(dt){
+  tGlobal+=dt;
+  if(msgT>0){msgT-=dt;if(msgT<=0)document.getElementById('msg').style.opacity=0;}
+  if(state!=='play'&&state!=='won')return;
+
+  // player control
+  const boost=(keys['shift']?1.9:1);
+  const acc=340*boost;
+  let ix=0,iy=0;
+  if(keys['a']||keys['arrowleft'])ix-=1;if(keys['d']||keys['arrowright'])ix+=1;
+  if(keys['w']||keys['arrowup'])iy-=1;if(keys['s']||keys['arrowdown'])iy+=1;
+  if(ix)player.face=ix;
+  player.vx+=ix*acc*dt;player.vy+=iy*acc*dt;
+  player.vy+=8*dt; // faint sink
+  player.vx*=Math.pow(.12,dt);player.vy*=Math.pow(.12,dt);
+  player.x+=player.vx*dt;player.y+=player.vy*dt;
+  player.x=Math.max(40,Math.min(WORLD_W-40,player.x));
+  player.y=Math.max(60,player.y);
+  if(boost>1&&(ix||iy)&&Math.random()<.5)puff(player.x-player.face*10,player.y,'rgba(160,230,255,.5)',1,1.4);
+
+  depth=Math.max(depth,Math.floor(player.y/10));
+
+  // zone floor gate: can't pass below zone bottom until calmed
+  const bottom=zoneTop(zone)+ZONE_H;
+  if(lev&&!lev.calmed&&player.y>bottom){player.y=bottom;player.vy=Math.min(0,player.vy);}
+  // descend to next zone
+  if(lev&&lev.calmed&&player.y>bottom+ZONE_GAP*.6&&zone<2)enterZone(zone+1);
+  if(lev&&lev.calmed&&zone===2&&player.y>bottom+400&&state==='play'){
+    state='won';winT=0;showMsg('THE TRENCH IS QUIET. YOU ARE THE ONLY LIGHT LEFT.',12);chime(523,3,.3);chime(659,3,.2);chime(784,4,.2);
+  }
+
+  // motes
+  for(const m of motes){
+    if(!m.alive){m.respawn-=dt;if(m.respawn<=0)m.alive=1;continue;}
+    const dx=m.x-player.x,dy=m.y-player.y;
+    if(dx*dx+dy*dy<(m.r+14)**2){
+      m.alive=0;m.respawn=14;player.light=Math.min(1,player.light+.34);
+      chime(880+Math.random()*220,.9,.18);puff(m.x,m.y,'rgba(180,255,220,.8)',14,2.6);
+    }
+  }
+
+  // leviathan
+  if(lev){const L=lev;L.t+=dt;
+    if(!L.calmed){
+      // head wanders in its zone, biased toward player when agitated
+      const wob=Math.sin(L.t*.4)*1.2+Math.sin(L.t*.13)*2;
+      let tx=WORLD_W/2+Math.sin(L.t*.11+L.idx*3)*2100;
+      let ty=L.zoneY+700+Math.cos(L.t*.09)*420;
+      if(L.agitation>0){tx=player.x;ty=player.y;}
+      const dx=tx-L.head.x,dy=ty-L.head.y,d=Math.hypot(dx,dy)||1;
+      const sp=L.speed*(60+L.agitation*95);
+      L.ang+=((Math.atan2(dy,dx)+wob*.08)-L.ang+Math.PI*3)%(Math.PI*2)-Math.PI>0?1.2*dt:-1.2*dt;
+      // simpler steering:
+      const want=Math.atan2(dy,dx);let da=want-L.ang;while(da>Math.PI)da-=Math.PI*2;while(da<-Math.PI)da+=Math.PI*2;
+      L.ang+=da*Math.min(1,(L.agitation>0?1.8:.7)*dt);
+      L.head.x+=Math.cos(L.ang)*sp*dt;L.head.y+=Math.sin(L.ang)*sp*dt;
+      L.head.y=Math.max(L.zoneY+150,Math.min(L.zoneY+ZONE_H-100,L.head.y));
+      L.head.x=Math.max(200,Math.min(WORLD_W-200,L.head.x));
+      L.agitation=Math.max(0,L.agitation-dt*.25);
+      // spine follow
+      let px=L.head.x,py=L.head.y;
+      for(let i=0;i<L.spine.length;i++){
+        const s=L.spine[i],ddx=px-s.x,ddy=py-s.y,dd=Math.hypot(ddx,ddy)||1,gap=L.size*.55;
+        if(dd>gap){s.x+=ddx/dd*(dd-gap);s.y+=ddy/dd*(dd-gap);}
+        // gentle sinusoid sway
+        s.y+=Math.sin(L.t*2.2+i*.5)*L.size*.02;
+        px=s.x;py=s.y;
+      }
+      // proximity: drains light, raises agitation
+      const pd=Math.hypot(player.x-L.head.x,player.y-L.head.y);
+      let nearBody=1e9;
+      for(const s of L.spine)nearBody=Math.min(nearBody,Math.hypot(player.x-s.x,player.y-s.y));
+      const danger=Math.max(0,1-nearBody/(L.size*3));
+      if(danger>0){player.light-=danger*dt*(.10+.05*L.idx);L.agitation=Math.min(1,L.agitation+danger*dt*1.4);}
+      if(nearBody<L.size*.75){ // body slam push
+        const s=L.spine.reduce((a,b)=>Math.hypot(player.x-b.x,player.y-b.y)<Math.hypot(player.x-a.x,player.y-a.y)?b:a);
+        const ax=player.x-s.x,ay=player.y-s.y,ad=Math.hypot(ax,ay)||1;
+        player.vx+=ax/ad*600*dt*8;player.vy+=ay/ad*600*dt*8;
+        player.light-=dt*.5;shake=Math.min(10,shake+18*dt);
+      }
+      // sigils
+      let allLit=true;
+      for(const g of L.sigils){
+        g.pulse+=dt;
+        if(!g.lit){allLit=false;
+          const s=L.spine[g.seg];
+          if(Math.hypot(player.x-s.x,player.y-s.y)<L.size*.9){
+            g.lit=true;chime(392+g.seg*8,2,.3);shake=6;L.agitation=1;
+            puff(s.x,s.y,'rgba(255,240,180,.9)',26,4);
+            const remaining=L.sigils.filter(q=>!q.lit).length;
+            if(remaining>0)showMsg(remaining+(remaining===1?' SIGIL SLEEPS':' SIGILS SLEEP'),2.5);
+          }
+        }
+      }
+      if(allLit){L.calmed=true;L.calmT=0;
+        showMsg((zone<2?'THE SLEEPER STILLS. DESCEND.':'THE LAST SLEEPER STILLS.'),5);
+        chime(262,3,.3);chime(330,3,.25);chime(392,3,.25);
+        player.light=1;
+      }
+    }else{L.calmT+=dt;
+      // drift downward peacefully, fading
+      for(const s of L.spine){s.y+=6*dt;s.x+=Math.sin(L.t*.5+s.y*.01)*4*dt;}
+      L.head.y+=6*dt;L.t+=0;
+    }
+  }
+
+  // light death
+  if(player.light<=0&&state==='play'){
+    player.light=0;player.dead+=dt;
+    if(player.dead>.1){
+      state='dead';showMsg('YOUR LIGHT WENT OUT',4);
+      setTimeout(()=>{ // respawn at zone top
+        player.x=WORLD_W/2;player.y=zoneTop(zone)+60;player.vx=player.vy=0;player.light=1;player.dead=0;
+        for(const g of lev.sigils)g.lit=false; // sigils reset — the encounter is one breath
+        lev.agitation=0;state='play';showMsg('BEGIN AGAIN',3);
+      },2500);
+    }
+  }
+  player.light=Math.min(1,player.light+dt*.008); // faint self-glow regen
+
+  // particles
+  for(let i=parts.length-1;i>=0;i--){const p=parts[i];p.x+=p.vx;p.y+=p.vy;p.vy-=.02;p.life-=dt;if(p.life<=0)parts.splice(i,1);}
+  shake=Math.max(0,shake-dt*12);
+
+  // camera
+  cam.x+= (player.x-vw()/2-cam.x)*Math.min(1,3*dt);
+  cam.y+= (player.y-vh()/2-cam.y)*Math.min(1,3*dt);
+  cam.x=Math.max(0,Math.min(WORLD_W-vw(),cam.x));cam.y=Math.max(0,cam.y);
+
+  document.getElementById('lightfill').style.transform='scaleX('+player.light+')';
+  document.getElementById('depth').textContent=Math.floor(player.y/10)+' m';
+  if(state==='won')winT+=dt;
+}
+
+// ---------- render ----------
+function bgColor(y){
+  // darker with depth
+  const d=Math.min(1,y/5500);
+  const r=Math.round(4+10*(1-d)),g=Math.round(10+26*(1-d)),b=Math.round(22+40*(1-d));
+  return[r,g,b];
+}
+function draw(){
+  const [r,g,b]=bgColor(cam.y+vh()/2);
+  ctx.fillStyle=`rgb(${r},${g},${b})`;ctx.fillRect(0,0,vw(),vh());
+  const sx=(Math.random()-.5)*shake,sy=(Math.random()-.5)*shake;
+  ctx.save();ctx.translate(-cam.x+sx,-cam.y+sy);
+
+  // god rays near surface
+  if(cam.y<900){
+    ctx.save();ctx.globalAlpha=Math.max(0,1-cam.y/900)*.12;
+    for(let i=0;i<6;i++){
+      const x=((i*997)%WORLD_W)+Math.sin(tGlobal*.2+i)*60;
+      const grad=ctx.createLinearGradient(x,0,x+160,1100);
+      grad.addColorStop(0,'rgba(180,230,255,.9)');grad.addColorStop(1,'rgba(180,230,255,0)');
+      ctx.fillStyle=grad;ctx.beginPath();
+      ctx.moveTo(x,0);ctx.lineTo(x+120,0);ctx.lineTo(x+320,1100);ctx.lineTo(x+80,1100);ctx.closePath();ctx.fill();
+    }ctx.restore();
+  }
+
+  // parallax rock silhouettes (two layers, deterministic)
+  for(let layer=0;layer<2;layer++){
+    const par=layer?".55":".8",mul=layer?.55:.8,alpha=layer?.35:.6;
+    ctx.save();ctx.translate(cam.x*(1-mul),cam.y*(1-mul)*.3);
+    ctx.fillStyle=`rgba(2,8,14,${alpha})`;
+    for(let i=0;i<24;i++){
+      const seed=i*127.13+layer*53;
+      const x=(Math.sin(seed)*.5+.5)*WORLD_W;
+      const w=200+(Math.sin(seed*2.7)*.5+.5)*500;
+      const zi=Math.floor((Math.sin(seed*1.3)*.5+.5)*3);
+      const yy=zoneTop(zi)+((Math.sin(seed*3.1)*.5+.5))*ZONE_H;
+      ctx.beginPath();ctx.ellipse(x,yy+w*.7,w*.6,w*.9,Math.sin(seed)*.4,0,7);ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // marine snow
+  ctx.fillStyle='rgba(200,230,240,.25)';
+  for(const s of snow){
+    const yy=(s.y+tGlobal*8*s.z)%4200+Math.floor(cam.y/4200)*4200;
+    ctx.globalAlpha=.1+.2*s.z;
+    ctx.fillRect(s.x,yy,s.r,s.r);
+  }
+  ctx.globalAlpha=1;
+
+  // zone gates (glowing seam once calmed)
+  if(lev){
+    const bottom=zoneTop(zone)+ZONE_H;
+    ctx.save();
+    if(!lev.calmed){
+      ctx.strokeStyle='rgba(120,60,80,.25)';ctx.lineWidth=3;ctx.setLineDash([14,22]);
+      ctx.beginPath();ctx.moveTo(0,bottom);ctx.lineTo(WORLD_W,bottom);ctx.stroke();
+    }else{
+      const gl=.3+.2*Math.sin(tGlobal*2);
+      ctx.strokeStyle=`rgba(150,240,255,${gl})`;ctx.lineWidth=2;ctx.setLineDash([4,30]);
+      ctx.beginPath();ctx.moveTo(0,bottom);ctx.lineTo(WORLD_W,bottom);ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // motes
+  for(const m of motes){
+    if(!m.alive)continue;
+    const p=.6+.4*Math.sin(tGlobal*2+m.ph);
+    ctx.save();ctx.globalAlpha=p;
+    const gr=ctx.createRadialGradient(m.x,m.y,0,m.x,m.y,m.r*4);
+    gr.addColorStop(0,'rgba(180,255,220,.9)');gr.addColorStop(1,'rgba(180,255,220,0)');
+    ctx.fillStyle=gr;ctx.beginPath();ctx.arc(m.x,m.y,m.r*4,0,7);ctx.fill();
+    ctx.fillStyle='#dfffee';ctx.beginPath();ctx.arc(m.x,m.y,m.r*.5,0,7);ctx.fill();
+    ctx.restore();
+  }
+
+  // leviathan
+  if(lev)drawLeviathan(lev);
+
+  // particles
+  for(const p of parts){ctx.globalAlpha=Math.max(0,p.life/p.max);ctx.fillStyle=p.col;ctx.beginPath();ctx.arc(p.x,p.y,2.2,0,7);ctx.fill();}
+  ctx.globalAlpha=1;
+
+  // player glow + body
+  if(state!=='title'){
+    const gl=player.light;
+    const gr=ctx.createRadialGradient(player.x,player.y,0,player.x,player.y,60+120*gl);
+    gr.addColorStop(0,`rgba(160,230,255,${.35*gl+.05})`);gr.addColorStop(1,'rgba(160,230,255,0)');
+    ctx.fillStyle=gr;ctx.beginPath();ctx.arc(player.x,player.y,60+120*gl,0,7);ctx.fill();
+    // little lure-fish
+    ctx.save();ctx.translate(player.x,player.y);ctx.scale(player.face,1);
+    ctx.fillStyle='#e8fbff';
+    ctx.beginPath();ctx.ellipse(0,0,9,4.5,0,0,7);ctx.fill();
+    ctx.beginPath();ctx.moveTo(-8,0);ctx.lineTo(-15,-5);ctx.lineTo(-15,5);ctx.closePath();ctx.fill(); // tail
+    ctx.strokeStyle='rgba(200,240,255,.8)';ctx.lineWidth=1;
+    ctx.beginPath();ctx.moveTo(7,-2);ctx.quadraticCurveTo(13,-9,16,-7);ctx.stroke(); // lure stalk
+    ctx.fillStyle='#bff6ff';ctx.beginPath();ctx.arc(16,-7,2.5+Math.sin(tGlobal*6)*.8,0,7);ctx.fill();
+    ctx.restore();
+  }
+
+  ctx.restore();
+
+  // vignette
+  const vg=ctx.createRadialGradient(vw()/2,vh()/2,vh()*.35,vw()/2,vh()/2,vh()*.85);
+  vg.addColorStop(0,'rgba(0,0,0,0)');vg.addColorStop(1,'rgba(0,0,0,.55)');
+  ctx.fillStyle=vg;ctx.fillRect(0,0,vw(),vh());
+  if(state==='won'){
+    ctx.fillStyle=`rgba(2,6,12,${Math.min(.7,winT*.04)})`;ctx.fillRect(0,0,vw(),vh());
+  }
+}
+function drawLeviathan(L){
+  const fade=L.calmed?Math.max(.25,1-L.calmT*.05):1;
+  ctx.save();ctx.globalAlpha=fade;
+  const hue=L.hue;
+  // body segments back-to-front
+  for(let i=L.spine.length-1;i>=0;i--){
+    const s=L.spine[i],t=i/L.spine.length;
+    const rad=L.size*(1-t*.75)*(0.85+.15*Math.sin(L.t*3+i));
+    const agit=L.agitation;
+    ctx.fillStyle=`hsla(${hue},${30+agit*40}%,${8+agit*10}%,.92)`;
+    ctx.beginPath();ctx.arc(s.x,s.y,rad,0,7);ctx.fill();
+    // ridge fins
+    if(i%3===0&&i>0){
+      ctx.strokeStyle=`hsla(${hue},50%,${20+agit*20}%,.5)`;ctx.lineWidth=2;
+      const a=Math.atan2(s.y-L.spine[i-1].y,s.x-L.spine[i-1].x)+Math.PI/2;
+      ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(s.x+Math.cos(a)*rad*1.8,s.y+Math.sin(a)*rad*1.8);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(s.x-Math.cos(a)*rad*1.8,s.y-Math.sin(a)*rad*1.8);ctx.stroke();
+    }
+  }
+  // eye on head
+  const h=L.spine[0],agit=L.agitation;
+  ctx.fillStyle=`hsla(${L.calmed?190:0},80%,${L.calmed?70:40+agit*40}%,${L.calmed?.4:.8})`;
+  ctx.beginPath();ctx.arc(h.x+Math.cos(L.ang)*L.size*.4,h.y+Math.sin(L.ang)*L.size*.4,L.size*.14,0,7);ctx.fill();
+  // sigils
+  for(const g of L.sigils){
+    const s=L.spine[g.seg];
+    if(g.lit){
+      const p=.7+.3*Math.sin(g.pulse*3);
+      const gr=ctx.createRadialGradient(s.x,s.y,0,s.x,s.y,L.size*1.4);
+      gr.addColorStop(0,`rgba(255,240,180,${.7*p})`);gr.addColorStop(1,'rgba(255,240,180,0)');
+      ctx.fillStyle=gr;ctx.beginPath();ctx.arc(s.x,s.y,L.size*1.4,0,7);ctx.fill();
+      ctx.fillStyle='#fff3cf';ctx.beginPath();ctx.arc(s.x,s.y,L.size*.18,0,7);ctx.fill();
+    }else{
+      const p=.4+.3*Math.sin(g.pulse*1.5);
+      ctx.strokeStyle=`rgba(255,240,180,${p})`;ctx.lineWidth=2;
+      ctx.beginPath();ctx.arc(s.x,s.y,L.size*.28,0,7);ctx.stroke();
+      ctx.fillStyle=`rgba(255,240,180,${p*.35})`;ctx.beginPath();ctx.arc(s.x,s.y,L.size*.28,0,7);ctx.fill();
+    }
+  }
+  ctx.restore();
+}
+
+// ---------- loop ----------
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000);last=now;
+  update(dt);draw();requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

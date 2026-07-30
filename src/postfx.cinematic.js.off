@@ -1,0 +1,563 @@
+// Post-processing stack + adaptive quality. OWNED BY: lighting/post agent.
+//
+// Pipeline: scene -> HDR half-float buffer -> [normals] -> eye adaptation -> quarter-res
+// defocus + lantern light shafts -> one merged pass (lens/DoF composite, SSAO, bloom,
+// ACES + depth grade). Tone mapping happens HERE, not on the renderer: three r160 only
+// applies renderer.toneMapping when drawing straight to the canvas, so the composer path
+// was shipping untone-mapped colour clamped at 1.0 — the old flat, washy look.
+import * as THREE from 'three';
+import {
+  EffectComposer, RenderPass, EffectPass, Effect, Pass, BlendFunction, EffectAttribute,
+  BloomEffect, NormalPass, SSAOEffect
+} from 'postprocessing';
+import { renderer, scene, camera, onResize } from './core.js';
+import { lanternLight, playerLightSrc, rig, degradeLighting } from './lighting.js';
+
+renderer.toneMapping = THREE.NoToneMapping; // owned by GradeEffect below
+
+// MSAA is deliberately OFF. AdaptationPass and LightShaftPass read inputBuffer.texture
+// mid-frame, and each read forces a resolve blit of the multisampled buffer while later
+// passes keep rendering into it — which intermittently paints flashing black rectangles
+// on some GPUs. The custom passes matter more than 2x MSAA does.
+export const composer = new EffectComposer(renderer, {
+  multisampling: 0,
+  frameBufferType: THREE.HalfFloatType
+});
+composer.addPass(new RenderPass(scene, camera));
+
+const rtOpts = { depthBuffer: false, stencilBuffer: false, type: THREE.HalfFloatType };
+const quad = { blending: THREE.NoBlending, depthWrite: false, depthTest: false };
+const VERT = 'varying vec2 vUv;void main(){vUv=position.xy*0.5+0.5;gl_Position=vec4(position.xy,1.0,1.0);}';
+
+// Scene shaders upstream can emit NaN/Inf into the HDR buffer (a 0/0 in a fog or water
+// term is enough). Comparisons against NaN are always false, so this maps NaN -> 0 and
+// Inf -> 64. Every stage that could latch or broadcast a bad value runs colour through it.
+const FINITE = `
+  vec3 finite(vec3 v) {
+    return vec3(v.x > 0.0 ? min(v.x, 64.0) : 0.0,
+                v.y > 0.0 ? min(v.y, 64.0) : 0.0,
+                v.z > 0.0 ? min(v.z, 64.0) : 0.0);
+  }`;
+
+// focus distance, far range, near range, max blur radius (fraction of screen height).
+// Shared by the defocus pass and the lens effect so they can never disagree.
+const focus = new THREE.Uniform(new THREE.Vector4(9.5, 26, 6.5, 0.032));
+
+// ---------------------------------------------------------------- eye adaptation
+// Three tiny reductions (frame -> 32x32 -> 4x4 -> 1x1) plus an asymmetric temporal filter:
+// the eye stops down fast when a sigil lights, opens slowly on the way into the dark.
+class AdaptationPass extends Pass {
+  constructor() {
+    super('AdaptationPass');
+    this.needsSwap = false;
+    this.rtDown = new THREE.WebGLRenderTarget(32, 32, rtOpts);
+    this.rtMid = new THREE.WebGLRenderTarget(4, 4, rtOpts);
+    this.rtLum = [new THREE.WebGLRenderTarget(1, 1, rtOpts), new THREE.WebGLRenderTarget(1, 1, rtOpts)];
+    this.flip = 0;
+
+    this.mDown = new THREE.ShaderMaterial({
+      ...quad,
+      uniforms: { inputBuffer: { value: null }, texelSize: { value: new THREE.Vector2() } },
+      vertexShader: VERT,
+      fragmentShader: `
+        uniform sampler2D inputBuffer; uniform vec2 texelSize; varying vec2 vUv;
+        ${FINITE}
+        void main(){
+          vec2 o = texelSize * 3.0;
+          vec3 c = finite(texture2D(inputBuffer, vUv).rgb);
+          c += finite(texture2D(inputBuffer, vUv + o).rgb);
+          c += finite(texture2D(inputBuffer, vUv - o).rgb);
+          c += finite(texture2D(inputBuffer, vUv + vec2(o.x, -o.y)).rgb);
+          c += finite(texture2D(inputBuffer, vUv + vec2(-o.x, o.y)).rgb);
+          float l = dot(c * 0.2, vec3(0.2126, 0.7152, 0.0722));
+          vec2 d = vUv - 0.5;
+          float w = exp(-dot(d, d) * 3.5); // centre-weighted metering
+          gl_FragColor = vec4(log2(max(l, 1e-4)) * w, w, 0.0, 1.0);
+        }`
+    });
+    this.mMid = new THREE.ShaderMaterial({
+      ...quad,
+      uniforms: { inputBuffer: { value: this.rtDown.texture } },
+      vertexShader: VERT,
+      fragmentShader: `
+        uniform sampler2D inputBuffer; varying vec2 vUv;
+        void main(){
+          vec2 base = floor(vUv * 4.0) * 0.25;
+          vec2 sum = vec2(0.0);
+          for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++)
+            sum += texture2D(inputBuffer, base + (vec2(float(x), float(y)) + 0.5) / 32.0).rg;
+          gl_FragColor = vec4(sum, 0.0, 1.0);
+        }`
+    });
+    this.mLum = new THREE.ShaderMaterial({
+      ...quad,
+      uniforms: {
+        inputBuffer: { value: this.rtMid.texture }, prevBuffer: { value: null },
+        rate: { value: new THREE.Vector3(3.2, 0.5, 0.016) }
+      },
+      vertexShader: VERT,
+      fragmentShader: `
+        uniform sampler2D inputBuffer; uniform sampler2D prevBuffer; uniform vec3 rate;
+        void main(){
+          vec2 sum = vec2(0.0);
+          for (int y = 0; y < 4; y++) for (int x = 0; x < 4; x++)
+            sum += texture2D(inputBuffer, (vec2(float(x), float(y)) + 0.5) * 0.25).rg;
+          float cur = exp2(sum.x / max(sum.y, 1e-4));
+          // Never let a bad frame latch into the ping-pong: this buffer scales the whole image.
+          if (!(cur > 0.0)) cur = 0.03;
+          cur = clamp(cur, 1e-4, 64.0);
+          float prev = texture2D(prevBuffer, vec2(0.5)).r;
+          if (!(prev > 0.0)) prev = cur;
+          float k = cur > prev ? rate.x : rate.y;
+          gl_FragColor = vec4(prev + (cur - prev) * (1.0 - exp(-k * rate.z)), 0.0, 0.0, 1.0);
+        }`
+    });
+  }
+
+  get texture() { return this.rtLum[this.flip].texture; }
+
+  // Seed the ping-pong so the first frames meter against a plausible value instead of
+  // the zero a fresh render target clears to.
+  initialize(renderer) {
+    const prev = renderer.getClearColor(new THREE.Color()).clone(), prevA = renderer.getClearAlpha();
+    renderer.setClearColor(new THREE.Color(0.08, 0.08, 0.08), 1);
+    for (const rt of this.rtLum) { renderer.setRenderTarget(rt); renderer.clear(true, false, false); }
+    renderer.setRenderTarget(null);
+    renderer.setClearColor(prev, prevA);
+  }
+
+  render(renderer, inputBuffer, outputBuffer, deltaTime) {
+    this.mDown.uniforms.inputBuffer.value = inputBuffer.texture;
+    this.fullscreenMaterial = this.mDown;
+    renderer.setRenderTarget(this.rtDown);
+    renderer.render(this.scene, this.camera);
+
+    this.fullscreenMaterial = this.mMid;
+    renderer.setRenderTarget(this.rtMid);
+    renderer.render(this.scene, this.camera);
+
+    const prev = this.flip;
+    this.flip ^= 1;
+    this.mLum.uniforms.prevBuffer.value = this.rtLum[prev].texture;
+    this.mLum.uniforms.rate.value.z = Math.min(0.05, deltaTime || 0.016);
+    this.fullscreenMaterial = this.mLum;
+    renderer.setRenderTarget(this.rtLum[this.flip]);
+    renderer.render(this.scene, this.camera);
+  }
+
+  setSize(width, height) {
+    this.mDown.uniforms.texelSize.value.set(1 / width, 1 / height);
+  }
+}
+
+// ---------------------------------------------------------------- defocus
+// Quarter-res golden-angle bokeh. The library's DepthOfFieldEffect costs 3-5ms at this
+// resolution because two of its four bokeh passes run full res; this is ~0.2ms and the
+// far field is the only place the blur gets strong enough to notice the resolution.
+const COC = `
+  float cocFrom(float d) {
+    float dist = -(planes.x * planes.y) / ((planes.y - planes.x) * d - planes.y);
+    float c = dist > focus.x ? (dist - focus.x) / focus.y : (focus.x - dist) / focus.z;
+    return clamp(c, 0.0, 1.0);
+  }
+  float cocAt(vec2 uv) { return cocFrom(texture2D(depthBuffer, uv).r); }`;
+
+class DefocusPass extends Pass {
+  constructor() {
+    super('DefocusPass');
+    this.needsSwap = false;
+    this.needsDepthTexture = true;
+    this.scale = 0.25;
+    this.renderTarget = new THREE.WebGLRenderTarget(1, 1, rtOpts);
+    this.renderTarget.texture.name = 'Defocus';
+    this.baseSize = new THREE.Vector2(1, 1);
+    this.fullscreenMaterial = new THREE.ShaderMaterial({
+      ...quad,
+      defines: { TAPS: '14' },
+      uniforms: {
+        inputBuffer: { value: null }, depthBuffer: { value: null }, focus,
+        planes: { value: new THREE.Vector2(0.1, 700) }, aspect: { value: 1 }
+      },
+      vertexShader: VERT,
+      fragmentShader: `
+        uniform sampler2D inputBuffer; uniform sampler2D depthBuffer;
+        uniform vec4 focus; uniform vec2 planes; uniform float aspect; varying vec2 vUv;
+        ${COC}${FINITE}
+        void main(){
+          float r = cocAt(vUv) * focus.w;
+          if (r < 0.0008) { gl_FragColor = vec4(finite(texture2D(inputBuffer, vUv).rgb), 1.0); return; }
+          float rot = fract(sin(dot(vUv, vec2(12.9898, 78.233))) * 43758.5453) * 6.283185;
+          vec3 acc = texture2D(inputBuffer, vUv).rgb;
+          float wsum = 1.0;
+          for (int i = 0; i < TAPS; i++) {
+            float fi = float(i) + 0.5;
+            float a = fi * 2.39996323 + rot;
+            vec2 o = vec2(cos(a) / aspect, sin(a)) * sqrt(fi / float(TAPS)) * r;
+            vec2 uv = vUv + o;
+            // taps that are themselves in focus must not smear across the sharp subject
+            float w = smoothstep(0.0, 0.4, cocAt(uv));
+            acc += texture2D(inputBuffer, uv).rgb * w;
+            wsum += w;
+          }
+          gl_FragColor = vec4(finite(acc / wsum), 1.0);
+        }`
+    });
+  }
+
+  get texture() { return this.renderTarget.texture; }
+  setDepthTexture(depthTexture) { this.fullscreenMaterial.uniforms.depthBuffer.value = depthTexture; }
+
+  render(renderer, inputBuffer) {
+    const u = this.fullscreenMaterial.uniforms;
+    u.inputBuffer.value = inputBuffer.texture;
+    u.planes.value.set(camera.near, camera.far);
+    renderer.setRenderTarget(this.renderTarget);
+    renderer.render(this.scene, this.camera);
+  }
+
+  setSize(width, height) {
+    this.baseSize.set(width, height);
+    this.renderTarget.setSize(Math.max(1, Math.round(width * this.scale)), Math.max(1, Math.round(height * this.scale)));
+    this.fullscreenMaterial.uniforms.aspect.value = width / height;
+  }
+}
+
+// ---------------------------------------------------------------- light shafts
+// Radial-blur volumetrics keyed on the lantern's screen position. Only pixels above a
+// bright-pass threshold streak, so the murk never smears — the lantern, sigils and motes
+// do. Quarter res with a dithered ray start keeps it cheap and band-free.
+class LightShaftPass extends Pass {
+  constructor() {
+    super('LightShaftPass');
+    this.needsSwap = false;
+    this.scale = 0.25;
+    this.renderTarget = new THREE.WebGLRenderTarget(1, 1, rtOpts);
+    this.renderTarget.texture.name = 'LightShafts';
+    this.baseSize = new THREE.Vector2(1, 1);
+    this.fullscreenMaterial = new THREE.ShaderMaterial({
+      ...quad,
+      defines: { SAMPLES: '20' },
+      uniforms: {
+        inputBuffer: { value: null },
+        lightPos: { value: new THREE.Vector2(0.5, 0.5) },
+        params: { value: new THREE.Vector4(0.72, 0.9, 0.94, 0.34) }, // density, threshold, decay, weight
+        aspect: { value: 1 },
+        strength: { value: 0 }
+      },
+      vertexShader: VERT,
+      fragmentShader: `
+        uniform sampler2D inputBuffer; uniform vec2 lightPos; uniform vec4 params;
+        uniform float aspect; uniform float strength; varying vec2 vUv;
+        ${FINITE}
+        void main(){
+          if (strength <= 0.0) { gl_FragColor = vec4(0.0); return; }
+          vec2 delta = (vUv - lightPos) * (params.x / float(SAMPLES));
+          float dither = fract(sin(dot(vUv, vec2(12.9898, 78.233))) * 43758.5453);
+          vec2 uv = vUv - delta * dither;
+          float illum = 1.0;
+          vec3 acc = vec3(0.0);
+          for (int i = 0; i < SAMPLES; i++) {
+            uv -= delta;
+            vec3 c = texture2D(inputBuffer, uv).rgb;
+            float l = max(max(c.r, c.g), c.b);
+            float inside = step(0.0, uv.x) * step(uv.x, 1.0) * step(0.0, uv.y) * step(uv.y, 1.0);
+            acc += c * smoothstep(params.y, params.y + 0.7, l) * illum * inside;
+            illum *= params.z;
+          }
+          vec2 d = (vUv - lightPos) * vec2(aspect, 1.0);
+          gl_FragColor = vec4(finite(acc * (params.w / float(SAMPLES)) * exp(-dot(d, d) * 2.2) * strength), 1.0);
+        }`
+    });
+    this.ndc = new THREE.Vector3();
+  }
+
+  get texture() { return this.renderTarget.texture; }
+
+  render(renderer, inputBuffer) {
+    const u = this.fullscreenMaterial.uniforms;
+    this.ndc.copy(lanternLight.position).project(camera);
+    // Fade out as the lantern leaves the frame or falls behind the camera.
+    const off = Math.max(Math.abs(this.ndc.x), Math.abs(this.ndc.y));
+    const vis = this.ndc.z > 1 ? 0 : 1 - THREE.MathUtils.smoothstep(off, 0.85, 1.9);
+    u.lightPos.value.set(this.ndc.x * 0.5 + 0.5, this.ndc.y * 0.5 + 0.5);
+    u.strength.value = vis * THREE.MathUtils.clamp(lanternLight.intensity / 9, 0, 1.4) * (0.55 + 0.7 * rig.depth01);
+    u.inputBuffer.value = inputBuffer.texture;
+    renderer.setRenderTarget(this.renderTarget);
+    renderer.render(this.scene, this.camera);
+  }
+
+  setSize(width, height) {
+    this.baseSize.set(width, height);
+    this.renderTarget.setSize(Math.max(1, Math.round(width * this.scale)), Math.max(1, Math.round(height * this.scale)));
+    this.fullscreenMaterial.uniforms.aspect.value = width / height;
+  }
+}
+
+// ---------------------------------------------------------------- underwater lens
+// Convolution effect, so postprocessing sorts it to the front of the merged pass and it
+// samples the raw frame: defocus composite, slow refraction wobble, and a radial RGB split
+// that only bites at the edges. Light through moving water — felt, not noticed.
+class LensEffect extends Effect {
+  constructor(defocus) {
+    super('LensEffect', `
+      uniform sampler2D bokeh;
+      uniform vec4 focus;
+      uniform vec2 planes;
+      uniform vec3 lens; // wobble amplitude, chromatic split, defocus strength
+      ${COC}
+      void mainImage(const in vec4 inputColor, const in vec2 uv, const in float depth, out vec4 outputColor) {
+        vec2 p = uv * vec2(aspect, 1.0);
+        vec2 w = vec2(
+          sin(p.y * 9.0 + time * 0.70) + sin(p.y * 3.7 - time * 0.43),
+          cos(p.x * 7.3 - time * 0.61) + cos(p.x * 4.1 + time * 0.37)
+        );
+        vec2 c = uv - 0.5;
+        vec2 u = uv + w * lens.x * (0.35 + smoothstep(0.12, 0.72, length(c)));
+        vec2 off = c * dot(c, c) * lens.y;
+        vec4 g = texture2D(inputBuffer, u);
+        vec3 sharp = vec3(texture2D(inputBuffer, u + off).r, g.g, texture2D(inputBuffer, u - off).b);
+        float m = smoothstep(0.06, 0.85, cocFrom(depth)) * lens.z;
+        outputColor = vec4(mix(sharp, texture2D(bokeh, u).rgb, m), g.a);
+      }`,
+      {
+        attributes: EffectAttribute.CONVOLUTION | EffectAttribute.DEPTH,
+        uniforms: new Map([
+          ['bokeh', new THREE.Uniform(defocus)],
+          ['focus', focus],
+          ['planes', new THREE.Uniform(new THREE.Vector2(0.1, 700))],
+          ['lens', new THREE.Uniform(new THREE.Vector3(0.00045, 0.006, 1))]
+        ])
+      }
+    );
+  }
+}
+
+// ---------------------------------------------------------------- grade
+// Composites the light shafts, applies auto-exposure + ACES, then a depth-driven ASC-CDL
+// grade in display space, vignette and shadow-weighted grain.
+class GradeEffect extends Effect {
+  constructor(shafts, lum) {
+    super('GradeEffect', `
+      uniform sampler2D shafts;
+      uniform sampler2D lumBuffer;
+      uniform vec3 slope; uniform vec3 offset; uniform vec3 power;
+      uniform vec3 shaftTint;
+      uniform vec4 tone;  // exposure, contrast, saturation, metering key
+      uniform vec4 look;  // vignette darkness, vignette radius, grain, top-down gradient
+      uniform vec2 adapt; // min/max auto-exposure multiplier
+      ${FINITE}
+
+      // Hill's ACES fit, including three's 0.6 prescale so exposure numbers stay comparable
+      // to renderer.toneMappingExposure.
+      vec3 aces(vec3 c) {
+        const mat3 mIn = mat3(0.59719, 0.07600, 0.02840, 0.35458, 0.90834, 0.13383, 0.04823, 0.01566, 0.83777);
+        const mat3 mOut = mat3(1.60475, -0.10208, -0.00327, -0.53108, 1.10813, -0.07276, -0.07367, -0.00605, 1.07602);
+        c = mIn * (c / 0.6);
+        vec3 a = c * (c + 0.0245786) - 0.000090537;
+        vec3 b = c * (0.983729 * c + 0.4329510) + 0.238081;
+        return clamp(mOut * (a / b), 0.0, 1.0);
+      }
+
+      void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor) {
+        vec3 c = finite(inputColor.rgb + texture2D(shafts, uv).rgb * shaftTint);
+
+        // graduated filter: even down here the light comes from above
+        c *= 1.0 + look.w * (uv.y - 0.38);
+
+        float avg = texture2D(lumBuffer, vec2(0.5)).r;
+        if (!(avg > 0.0)) avg = tone.w;
+        float ev = tone.x * clamp(tone.w / max(avg, 1e-4), adapt.x, adapt.y);
+        // Hard floor: no metering result or future tuning may black the frame out.
+        if (!(ev > 0.0)) ev = tone.x;
+        c = aces(c * clamp(ev, 0.15, 40.0));
+
+        c = pow(c, vec3(0.4545454));            // grade in display space
+        c = pow(max(c * slope + offset, 0.0), power);
+        c = mix(vec3(luminance(c)), c, tone.z);
+        c = mix(c, smoothstep(0.0, 1.0, c), tone.y); // S-curve contrast that can't clip to black
+
+        vec2 d = (uv - 0.5) * vec2(aspect, 1.0);
+        float v = smoothstep(look.y, look.y + 0.62, length(d));
+        c *= 1.0 - look.x * v;
+        c = mix(c, vec3(luminance(c)), v * 0.22);
+
+        float g = fract(sin(dot(uv * resolution + fract(time) * 91.7, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        c += g * look.z * (1.0 - smoothstep(0.0, 0.75, luminance(c)));
+
+        outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
+      }`,
+      {
+        uniforms: new Map([
+          ['shafts', new THREE.Uniform(shafts)],
+          ['lumBuffer', new THREE.Uniform(lum)],
+          ['slope', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
+          ['offset', new THREE.Uniform(new THREE.Vector3(0, 0, 0))],
+          ['power', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
+          ['shaftTint', new THREE.Uniform(new THREE.Vector3(1, 0.78, 0.5))],
+          ['tone', new THREE.Uniform(new THREE.Vector4(1.9, 0.18, 1.15, 0.02))],
+          ['look', new THREE.Uniform(new THREE.Vector4(0.4, 0.45, 0.035, 0.16))],
+          ['adapt', new THREE.Uniform(new THREE.Vector2(0.7, 1.6))]
+        ])
+      }
+    );
+  }
+}
+
+// Three-stop look, lerped by depth. This world is lit ~4 stops under what ACES expects
+// (the fog itself is ~0.004 linear), so exposure runs high and the CDL offset LIFTS the
+// blacks instead of crushing them — a print-style toe that keeps the murk readable.
+// Cooler offsets in blue than in red tint the shadows without touching the warm lantern.
+export const LOOKS = [
+  { d: 0.00, slope: [0.98, 1.04, 1.02], offset: [0.020, 0.024, 0.028], power: [1.02, 1.00, 1.00], sat: 1.16, con: 0.18, exp: 1.9, vig: 0.38, grad: 0.20 },
+  { d: 0.45, slope: [0.90, 0.96, 1.10], offset: [0.018, 0.022, 0.030], power: [1.06, 1.02, 0.98], sat: 1.14, con: 0.22, exp: 2.1, vig: 0.44, grad: 0.14 },
+  { d: 1.00, slope: [0.86, 0.90, 1.06], offset: [0.014, 0.017, 0.026], power: [1.10, 1.06, 1.00], sat: 1.10, con: 0.26, exp: 2.4, vig: 0.50, grad: 0.07 }
+];
+
+export const adaptation = new AdaptationPass();
+export const defocus = new DefocusPass();
+export const shafts = new LightShaftPass();
+export const lens = new LensEffect(defocus.texture);
+export const grade = new GradeEffect(shafts.texture, adaptation.rtLum[0].texture);
+
+export const bloom = new BloomEffect({
+  blendFunction: BlendFunction.ADD, // physically-correct glare: bloom is added light, pre-tonemap
+  intensity: 1.2, luminanceThreshold: 0.62, luminanceSmoothing: 0.45,
+  mipmapBlur: true, levels: 8, radius: 0.82
+});
+bloom.luminancePass.resolution.scale = 0.5; // the bright pass is low frequency; half res is free
+
+let normalPass = null, ssao = null;
+try {
+  normalPass = new NormalPass(scene, camera, { resolutionScale: 0.5 });
+  ssao = new SSAOEffect(camera, normalPass.texture, {
+    blendFunction: BlendFunction.MULTIPLY, samples: 9, rings: 4, resolutionScale: 0.5,
+    distanceThreshold: 0.6, distanceFalloff: 0.1, rangeThreshold: 0.012, rangeFalloff: 0.004,
+    luminanceInfluence: 0.55, radius: 0.09, intensity: 1.9, bias: 0.02
+  });
+} catch (e) {
+  console.warn('SSAO unavailable:', e);
+  normalPass = ssao = null;
+}
+
+if (normalPass) composer.addPass(normalPass);
+composer.addPass(adaptation);
+composer.addPass(defocus);
+composer.addPass(shafts);
+
+let effectPass = null;
+function buildEffectPass() {
+  if (effectPass) composer.removePass(effectPass); // effects are reused, so never dispose them
+  const list = [lens];
+  if (ssao) list.push(ssao);
+  list.push(bloom, grade);
+  effectPass = new EffectPass(camera, ...list);
+  effectPass.dithering = true; // 8-bit output dither: the abyss is one huge dark gradient
+  composer.addPass(effectPass);
+}
+
+// updateStyle=false so the composer never writes inline width/height onto the canvas;
+// CSS owns layout size, and w/h here are already the integer drawing-buffer dimensions.
+onResize((w, h) => composer.setSize(w, h, false));
+
+// ---------------------------------------------------------------- per-frame
+const focusTarget = new THREE.Vector3();
+let focusDist = 9.5, shadowTick = 0;
+
+function updateGrade() {
+  const d = rig.depth01;
+  let i = 0;
+  while (i < LOOKS.length - 2 && d > LOOKS[i + 1].d) i++;
+  const a = LOOKS[i], b = LOOKS[i + 1];
+  const t = THREE.MathUtils.clamp((d - a.d) / (b.d - a.d), 0, 1);
+  const u = grade.uniforms;
+  const f = k => a[k] + (b[k] - a[k]) * t;
+  const v3 = (k, out) => out.set(
+    a[k][0] + (b[k][0] - a[k][0]) * t,
+    a[k][1] + (b[k][1] - a[k][1]) * t,
+    a[k][2] + (b[k][2] - a[k][2]) * t
+  );
+  v3('slope', u.get('slope').value);
+  v3('offset', u.get('offset').value);
+  v3('power', u.get('power').value);
+  u.get('tone').value.set(f('exp'), f('con'), f('sat'), 0.02);
+  u.get('look').value.set(f('vig'), 0.45, 0.035, f('grad'));
+}
+
+// Diagnostic escape hatch: renders the scene straight to the canvas with ACES applied
+// on the renderer, skipping every custom pass. If an artifact survives with the post
+// chain bypassed it lives in the scene; if it vanishes, it lives in a pass.
+let bypass = false;
+export function setPostBypass(on) {
+  bypass = on;
+  renderer.toneMapping = on ? THREE.ACESFilmicToneMapping : THREE.NoToneMapping;
+  renderer.toneMappingExposure = 1.05;
+}
+export function getPostBypass() { return bypass; }
+
+export function render(dt) {
+  if (bypass) {
+    renderer.setRenderTarget(null);
+    renderer.render(scene, camera);
+    return;
+  }
+  // Focus rides the diver (playerLightSrc travels with him) with a lens-like lag.
+  focusTarget.copy(playerLightSrc.position);
+  const want = THREE.MathUtils.clamp(camera.position.distanceTo(focusTarget), 3, 40);
+  focusDist += (want - focusDist) * Math.min(1, dt * 3.5);
+  focus.value.x = focusDist;
+  lens.uniforms.get('planes').value.set(camera.near, camera.far);
+
+  updateGrade();
+  grade.uniforms.get('lumBuffer').value = adaptation.texture;
+
+  // Point-light shadows cost six cube faces; a hand lantern hides a 30Hz shadow update.
+  if (tier < 2) {
+    shadowTick ^= 1;
+    renderer.shadowMap.autoUpdate = shadowTick === 0;
+  }
+  composer.render(dt);
+}
+
+// ---------------------------------------------------------------- adaptive quality
+// Rolling windows rather than one shot: tier 1 sheds SSAO and cheapens the volumetrics,
+// tier 2 drops defocus, shadows and the device pixel ratio.
+let tier = 0, perfT = 0, perfN = 0, warmup = 2;
+
+function setTier(n) {
+  if (n <= tier) return;
+  tier = n;
+  if (tier >= 1) {
+    if (normalPass) { composer.removePass(normalPass); normalPass.dispose(); normalPass = null; ssao = null; }
+    shafts.scale = 0.18;
+    shafts.setSize(shafts.baseSize.x, shafts.baseSize.y);
+    defocus.scale = 0.18;
+    defocus.setSize(defocus.baseSize.x, defocus.baseSize.y);
+    buildEffectPass();
+  }
+  if (tier >= 2) {
+    renderer.shadowMap.autoUpdate = false;
+    renderer.shadowMap.enabled = false;
+    scene.traverse(o => { if (o.isLight) o.castShadow = false; });
+    degradeLighting();
+    defocus.enabled = shafts.enabled = false;
+    lens.uniforms.get('lens').value.z = 0;
+    grade.uniforms.get('shaftTint').value.setScalar(0);
+    // Drop to 1:1 pixels. Integer dimensions only — a fractional buffer size makes the
+    // composer resize every frame, which flashes black rectangles across the screen.
+    composer.setSize(Math.round(innerWidth), Math.round(innerHeight), false);
+  }
+  console.info('ABYSSA: reduced quality tier ' + tier);
+}
+
+export function samplePerf(dt, active) {
+  if (!active || tier >= 2) return;
+  perfT += dt; perfN++;
+  if (perfT < 3) return;
+  const fps = perfN / perfT;
+  perfT = 0; perfN = 0;
+  if (warmup > 0) { warmup--; return; }
+  if (fps < 34) setTier(2);
+  else if (fps < 48) setTier(1);
+}
+
+buildEffectPass();
