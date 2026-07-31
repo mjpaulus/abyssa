@@ -616,6 +616,56 @@ export function slam() {
   duckBed(t, 0.55, 0.05, 0.9);
 }
 
+// Cracking a compressed-air bottle: the brass lever clacks, then a hard noise burst
+// that falls from a hiss toward a roar as the jet entrains water, then a slug of bubbles
+// boiling past the faceplate. NOTE env() is (param, t0, attack, duration, peak) — `power`
+// scales LEVEL, never duration, or a weak vent plays at full volume for less time.
+export function airVent(power = 1) {
+  if (!AC || muted || live > 100) return;
+  const t = now();
+
+  const cg = gain(0), cf = filt('bandpass', 1800, 3.0, cg);
+  cg.connect(gain(0.30 * power, dry));
+  env(cg.gain, t, 0.002, 0.03, 0.30);
+  fire(noise(0.12, cf), t, t + 0.14, [cf, cg]);
+
+  const ng = gain(0), nf = filt('bandpass', 2800, 1.1, ng);
+  ng.connect(gain(0.85, dry));
+  ng.connect(gain(0.55, revIn));
+  nf.frequency.setValueAtTime(2800, t + 0.01);
+  nf.frequency.exponentialRampToValueAtTime(380, t + 0.30);
+  env(ng.gain, t, 0.005, 0.30, 0.42 * power);
+  fire(noise(0.6, nf), t, t + 0.55, [nf, ng]);
+
+  // the shove itself, felt more than heard
+  const bg = gain(0);
+  bg.connect(gain(0.45, dry));
+  const bo = osc('sine', 74, bg);
+  bo.frequency.exponentialRampToValueAtTime(38, t + 0.16);
+  env(bg.gain, t, 0.004, 0.20, 0.5 * power);
+  fire(bo, t, t + 0.4, [bg]);
+
+  const nb = Math.round(6 + 9 * power);
+  for (let i = 0; i < nb; i++) {
+    const f = rnd(420, 980);
+    bubble(t + rnd(0.01, 0.55), f, f * rnd(1.6, 2.6), rnd(0.04, 0.09), rnd(0.05, 0.11), helmetIn, rnd(-0.7, 0.7));
+  }
+  // slam() dips the bed to 0.55; a third of that dip is 0.85. Anything deeper turns a
+  // tool the player uses every few seconds into the loudest event in the game.
+  duckBed(t, 0.85, 0.02, 0.5);
+}
+
+// Bottle back to pressure. Deliberately NOT chime(): chime snaps to the zone scale and
+// is the pickup/mote voice, so a note every few seconds would read as a reward.
+export function bottleReady() {
+  if (!AC || muted || live > 100) return;
+  const t = now();
+  const g = gain(0), bp = filt('bandpass', 1240, 6, g);
+  g.connect(gain(0.5, helmetIn));
+  env(g.gain, t, 0.001, 0.03, 0.06);
+  fire(noise(0.5, bp), t, t + 0.06, [bp, g]);
+}
+
 export function footstep(force = 1) { manual.step = true; step(cl01(force)); }
 export function setDepth(d) { manual.depth = true; T.depth = cl01(d); }
 export function setProximity(p) { manual.prox = true; T.prox = cl01(p); }

@@ -918,8 +918,15 @@ export function updateDiver(dt, t, player) {
   const b = diver.body;
   // LIFT plants the soles on player.pos - 1.35 (the collision floor) in the rest pose
   b.position.set(po[CH.shiftX], LIFT + po[CH.bobY] + settle.x * 0.045, po[CH.shiftZ]);
-  const pitchTarget = gb > 0.5 ? 0 : clamp(-player.pitch * 0.62 + speed * 0.012, -1.15, 1.15);
-  spring(sPitch, pitchTarget, dt, 3.4, 0.85);
+  // Lead boots below, a copper helmet full of air above: the centres of gravity and
+  // buoyancy are a metre apart, so the righting moment is an order of magnitude larger
+  // than any couple he can generate — and it GROWS with every litre in the dress. He
+  // leans; he never tips like a frogman. The lean also reads off horizontal speed only,
+  // so the ending's pure-vertical ascent cannot drive it.
+  const upright = 0.22 + 0.30 * (1 - (player.fill || 0));
+  const hsp = Math.hypot(player.vel.x, player.vel.z);
+  const pitchTarget = gb > 0.5 ? 0 : clamp(-player.pitch * upright + hsp * 0.010, -0.55, 0.55);
+  spring(sPitch, pitchTarget, dt, 2.2, 0.90);
   spring(sRollT, (1 - gb) * clamp(-(player.yaw - yawF) * 2.2, -0.5, 0.5), dt, 4, 0.8);
   b.rotation.set(sPitch.x + po[CH.pPitch] * (1 - gb), 0, sRollT.x);
 

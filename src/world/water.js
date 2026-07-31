@@ -25,12 +25,38 @@ const K_ABS = [0.0520, 0.0062, 0.0042];
 const K_EXT = [3.50, 1.45, 1.00];
 // Surface irradiance tint; scene.fog.color carries it, everything else derives from it.
 // Green-dominant at the surface (coastal teal) — absorption alone turns it blue with depth.
-// These are scene-linear radiances: postfx does ACES + auto-exposure downstream.
+// These are scene-linear radiances, and they stay linear all the way to the canvas:
+// see the note on SKY_ZEN_D below — nothing in this pipeline actually tone-maps.
 const SURF_LIGHT = [0.055, 0.135, 0.112];
-const SUN_DIR = new THREE.Vector3(0.20, 0.94, 0.16).normalize();
+// ONE sun. This is lighting.js's `sun.position` (0.2, 1, 0.1) normalised: adopting the
+// light's vector rather than the surface's old (0.20, 0.94, 0.16) leaves the directional
+// light and the volumetric phase lobe byte-identical and retunes only the refracted disc,
+// which is the cheap side. Measured disagreement before this: 3.9 degrees surface-vs-light,
+// 26.5 degrees surface-vs-billboard-shafts (the shafts also leaned the wrong way; fixed
+// in buildRays below).
+const SUN_DIR = new THREE.Vector3(0.20, 1.00, 0.10).normalize();
+// Shafts descend ALONG the sunlight, so as they drop by h they move by -sunDir.xz/sunDir.y.
+const SUN_PROJ = [SUN_DIR.x / SUN_DIR.y, SUN_DIR.z / SUN_DIR.y];
+
+// Sky radiance seen through the interface, night -> day. These are raw scene-linear
+// values: verified live that NOTHING in this pipeline tone-maps (0 of 121 compiled
+// programs contain ACESFilmicToneMapping — three only injects it when rendering to the
+// canvas, and the composer renders to targets), so what a material writes is what
+// BloomEffect thresholds at 0.28. The window interior is deliberately kept just under
+// that; only the sun disc, its aureole and the compressed horizon ring cross it.
+// Horizon 4.3x the zenith: the whole point is that the window has an IMAGE in it, and
+// the horizon ring is the only structural landmark the sky offers. Measured through the
+// full Fresnel composite that lands as a 0.35 ring against a 0.15 centre.
+const SKY_ZEN_D = [0.090, 0.155, 0.310], SKY_HOR_D = [0.620, 0.660, 0.720];
+// Night is not the true ~1e-5: game.js floors the surface irradiance at 0.20 of noon so
+// the world stays legible, and the sky has to sit consistently below the water that sky
+// is supposed to be lighting, or the window inverts into a bright lid again.
+const SKY_ZEN_N = [0.0045, 0.0068, 0.0135], SKY_HOR_N = [0.0165, 0.0180, 0.0210];
+const SUN_DISC = [3.4, 3.0, 2.3], MOON_DISC = [0.30, 0.34, 0.42];
 
 const f = v => v.toFixed(5);
 const v3 = a => `vec3(${f(a[0])},${f(a[1])},${f(a[2])})`;
+const v2 = a => `vec2(${f(a[0])},${f(a[1])})`;
 
 const GLSL_NOISE = `
 float h21(vec2 p){vec3 q=fract(vec3(p.xyx)*0.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}
@@ -56,12 +82,31 @@ vec3 abyssaAmbient(vec3 surf,float y){
 
 // Weather scaling of the surface irradiance (set by game.js): night and storms dim
 // what reaches the water; the zoneGlow floor is untouched so the deep stays itself.
-let wSurfK = 1, wMurk = 0, rayDim = 1;
-export function setWeatherWater(surfK, murk) { wSurfK = surfK; wMurk = murk; }
+// The surface material needs day/storm/flash as well, or the sky in Snell's window is
+// the same radiance at midnight as at noon (it was: byte-identical, which made the sky
+// hole ~3x MORE conspicuous at night than at noon).
+//   murk IS wx.storm — game.js already passes it.
+//   day and flash are optional. Until game.js passes them, day is recovered by inverting
+//   the exact expression game.js:315 builds surfK from. That inversion is only valid
+//   while that expression is; passing day/flash explicitly is a one-line wiring change
+//   and is the preferred form.
+let wSurfK = 1, wMurk = 0, rayDim = 1, wDay = 1, wFlash = 0;
+export function setWeatherWater(surfK, murk, day, flash) {
+  wSurfK = surfK; wMurk = murk;
+  wDay = day !== undefined ? day
+    : clamp((surfK / Math.max(0.35, 1 - 0.45 * murk) - 0.20) / 0.80, 0, 1);
+  wFlash = flash || 0;
+}
 export function setRayDim(k) { rayDim = k; }
 
 // CPU mirror of abyssaAmbient, for scene.background and the returned tint.
 const ms = THREE.MathUtils.smoothstep, ml = THREE.MathUtils.lerp;
+// Night->day sky lerp, then storm gain and desaturation, written in place (no allocation).
+function mixSky(v, N, D, day, gain, desat) {
+  const x = ml(N[0], D[0], day) * gain, y = ml(N[1], D[1], day) * gain, z = ml(N[2], D[2], day) * gain;
+  const l = 0.2126 * x + 0.7152 * y + 0.0722 * z;
+  v.set(ml(x, l, desat), ml(y, l, desat), ml(z, l, desat));
+}
 function ambientAt(y, out) {
   const t = clamp(-y / 900, 0, 1);
   const a = ms(t, 0.20, 0.52), b = ms(t, 0.62, 0.92), c = ms(t, 0.03, 0.30), d = Math.min(0, y);
@@ -232,7 +277,10 @@ function buildRays() {
         float v = position.y;
         vec3 wp = c + rt * ( position.x * aParam.x * ( 1.0 + v * 1.35 ) );
         wp.y -= v * aParam.y;
-        wp.xz += vec2( 0.15, 0.13 ) * ( v * aParam.y );   // shafts lean along the sun azimuth
+        // shafts lean ALONG the sunlight: light from a sun at (+x,+z) travels toward
+        // (-x,-z) on the way down, so this is a minus. It used to be a plus with a
+        // hand-picked vector, which aimed the shafts 26 degrees off and 180 out.
+        wp.xz -= ${v2(SUN_PROJ)} * ( v * aParam.y );
         float dist = distance( wp, uCam );
         vFade = uFade
           * smoothstep( ${f(RAY_L * 0.5)}, ${f(RAY_L * 0.30)}, dist )   // hides the wrap boundary
@@ -330,43 +378,114 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB) {
 // Ocean surface seen from beneath: Snell's window, total internal reflection,
 // a refracted sun disc and chop. No reflection render target.
 // ---------------------------------------------------------------------------
-const GLSL_WAVES = `
-// wave height plus analytic gradient, world space
-vec3 waveHN( vec2 p, float t ){
-  float a1 = p.x * 0.085 + t * 1.10;
-  float a2 = p.y * 0.062 - t * 0.85;
-  float a3 = ( p.x + p.y ) * 0.041 + t * 0.62;
-  float a4 = ( p.x - p.y * 1.7 ) * 0.150 + t * 1.90;
-  float h = 0.55 * sin( a1 ) + 0.65 * sin( a2 ) + 0.85 * sin( a3 ) + 0.22 * sin( a4 );
-  float dx = 0.04675 * cos( a1 ) + 0.03485 * cos( a3 ) + 0.03300 * cos( a4 );
-  float dz = -0.04030 * cos( a2 ) + 0.03485 * cos( a3 ) - 0.05610 * cos( a4 );
-  return vec3( h, dx, dz );
+// Deep-water gravity-wave spectrum. omega = sqrt(g*k) with one world unit = 3 m, so the
+// 62-unit swell runs an 11 s period and the 6.5-unit chop a 3.5 s one: the components
+// slide past each other and the field never reads as one rigid scrolling texture. (The
+// four sines this replaced moved at unrelated hand-picked rates and had NO storm input,
+// so a gale and a dead calm produced the identical 3.99-unit peak-to-peak field.)
+//   lambda (u), direction (deg), amplitude calm, amplitude storm, retirement radius
+// Storm peak-to-peak is 4.23 u against calm's 1.32. The storm figure is deliberately held
+// at roughly the OLD field's amplitude rather than the ~6.9 u a real wind sea would want:
+// player.js clamps the swim ceiling to y = -1.2 and game.js's camera sits up to 2.4 u
+// above that, so a taller field would put the interface through the camera at the raft.
+const WAVE = [
+  [62.0, 20, 0.300, 0.900, 420],
+  [41.0, 44, 0.180, 0.580, 260],
+  [27.0, -11, 0.100, 0.340, 170],
+  [17.0, 67, 0.050, 0.175, 110],
+  [11.0, -38, 0.022, 0.082, 70],
+  [6.5, 91, 0.010, 0.036, 45]
+];
+const DISP = Math.sqrt(9.81 / 3);   // k is per world unit and a unit is 3 m: omega = sqrt(g*k/3)
+
+// Unrolled from JS because GLSL ES 1.00 (what three compiles a plain ShaderMaterial as)
+// has no array constructors — `const float A[6] = float[6](...)` is a 3.00-only form.
+// `dist` retires each component before the mesh stops resolving it; see WAVE above and
+// the ring-spacing note in buildSurfaceGeo.
+function waveSum(n) {
+  let s = '';
+  for (let i = 0; i < n; i++) {
+    const [lam, deg, a0, a1, fr] = WAVE[i];
+    const k = 2 * Math.PI / lam, w = DISP * Math.sqrt(k), a = deg * Math.PI / 180;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    s += `\n  { float amp=mix(${f(a0)},${f(a1)},sm)*(1.0-smoothstep(${f(fr * 0.5)},${f(fr)},dist));
+    float q=(p.x*${f(dx)}+p.y*${f(dz)})*${f(k)}+t*${f(w)};
+    h+=amp*sin(q); g+=${v2([dx, dz])}*(amp*${f(k)}*cos(q)); }`;
+  }
+  return s;
+}
+// Vertex pass: the three components the mesh can actually carry as geometry.
+const GLSL_WAVE_V = `
+float waveH( vec2 p, float t, float storm, float dist ){
+  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);${waveSum(3)}
+  return h;
+}`;
+// Fragment pass: all six, height and analytic gradient. The gradient is the normal, and
+// the normal is the whole image — it decides refraction, reflection and Fresnel at once.
+const GLSL_WAVE_F = `
+vec3 waveHN( vec2 p, float t, float storm, float dist ){
+  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);${waveSum(6)}
+  return vec3(h,g);
 }`;
 
+// Camera-centred polar disc, exponentially spaced rings. The old uniform 820x820 grid
+// spent 34,848 triangles at a flat 6.21 u pitch: far too coarse at 5 units away (where
+// the diver actually meets the interface) and absurdly dense at 400 (where fog has eaten
+// it). This gives 0.085 u cells at r = 1.2 and 32 u at r = 460 in 22,400 triangles.
+// Ring spacing is 0.0708*r everywhere, so each WAVE component is kept at >= 4 vertices
+// per wavelength wherever it is at full amplitude and tapered to zero before it drops
+// under Nyquist — which matters more here than usual, because the mesh is camera-anchored
+// while the field is world-anchored, so any aliasing would CRAWL as the diver swims.
+// Sectors index modulo NS, so there is no duplicated seam ring and no crack at theta = 0.
+function buildSurfaceGeo() {
+  const R0 = 1.2, RMAX = 460, NR = 88, NS = 128;
+  const ratio = Math.pow(RMAX / R0, 1 / (NR - 1));
+  const pos = new Float32Array((NR * NS + 1) * 3);   // vertex 0 is the centre, at r = 0
+  for (let i = 0; i < NR; i++) {
+    const r = R0 * Math.pow(ratio, i);
+    for (let s = 0; s < NS; s++) {
+      const a = s * Math.PI * 2 / NS, o = (1 + i * NS + s) * 3;
+      pos[o] = Math.cos(a) * r; pos[o + 2] = Math.sin(a) * r;
+    }
+  }
+  const idx = new Uint16Array(NS * 3 + (NR - 1) * NS * 6);
+  let k = 0;
+  for (let s = 0; s < NS; s++) { idx[k++] = 0; idx[k++] = 1 + s; idx[k++] = 1 + (s + 1) % NS; }
+  for (let i = 0; i < NR - 1; i++) for (let s = 0; s < NS; s++) {
+    const a0 = 1 + i * NS + s, a1 = 1 + i * NS + (s + 1) % NS;
+    idx[k++] = a0; idx[k++] = a0 + NS; idx[k++] = a1 + NS;
+    idx[k++] = a0; idx[k++] = a1 + NS; idx[k++] = a1;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), RMAX * 1.05);
+  return g;
+}
+
 function buildSurface() {
-  const g = new THREE.PlaneGeometry(820, 820, 132, 132);
-  g.rotateX(-Math.PI / 2);
   const u = Object.assign(fogUniforms(), {
     uTime, uCam,
-    uSun: { value: SUN_DIR.clone() },
-    uSky: { value: new THREE.Vector3(0.30, 0.42, 0.60) },
-    uHaze: { value: new THREE.Vector3(0.44, 0.45, 0.46) },
-    uDeep: { value: new THREE.Vector3(0.006, 0.019, 0.029) },
+    uSunDir: { value: SUN_DIR.clone() },
+    uSkyZen: { value: new THREE.Vector3(...SKY_ZEN_D) },
+    uSkyHor: { value: new THREE.Vector3(...SKY_HOR_D) },
+    uSunCol: { value: new THREE.Vector3(...SUN_DISC) },
+    uSunSize: { value: 700 }, uCloud: { value: 0.22 },
+    uStorm: { value: 0 }, uFlash: { value: 0 },
+    uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
     uBright: { value: 1 }, uFade: { value: 1 }
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
     vertexShader: `#include <fog_pars_vertex>
-      ${GLSL_WAVES}
-      uniform float uTime; uniform vec3 uCam;
+      ${GLSL_WAVE_V}
+      uniform float uTime, uStorm; uniform vec3 uCam;
       varying vec3 vW;
       void main(){
         vec3 p = position;
+        float dist = length( position.xz );         // polar disc: the local radius IS r
         p.x += uCam.x; p.z += uCam.z;               // the surface follows the diver
-        p.y += ${f(SURFACE_Y)};
-        // flatten far chop so the coarse outer tessellation cannot alias
-        float fade = 1.0 - smoothstep( 30.0, 210.0, distance( p.xz, uCam.xz ) );
-        p.y += waveHN( p.xz, uTime ).x * fade * 0.9;
+        p.y += ${f(SURFACE_Y)} + waveH( p.xz, uTime, uStorm, dist );
         vW = p;
         vec4 mvPosition = viewMatrix * vec4( p, 1.0 );
         gl_Position = projectionMatrix * mvPosition;
@@ -374,50 +493,156 @@ function buildSurface() {
       }`,
     fragmentShader: `#include <fog_pars_fragment>
       ${GLSL_NOISE}
-      ${GLSL_WAVES}
-      uniform float uTime, uBright, uFade; uniform vec3 uCam, uSun, uSky, uHaze, uDeep;
+      ${GLSL_WAVE_F}
+      uniform float uTime, uBright, uFade, uStorm, uCloud, uSunSize, uMirrorK, uNearK,
+                    uFoamThr, uFlash;
+      uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
       varying vec3 vW;
+
+      const float ETA = 1.333;
+      const float F0  = 0.020383;   // ((n-1)/(n+1))^2 at n = 1.333; theta_c = 48.59 deg
+
+      // The sky, on the AIR side of the interface. The entire upper hemisphere is
+      // squeezed into the 97-degree window, so the horizon lands on the window rim and
+      // the zenith at its centre; sqrt() biases the gradient toward the horizon, which
+      // is where that compression puts most of the sky.
+      vec3 skyRadiance( vec3 d ){
+        float up = clamp( d.y, 0.0, 1.0 );
+        vec3 c = mix( uSkyHor, uSkyZen, sqrt( up ) );
+        // Cloud deck, projected onto a plane overhead so it parallaxes with the
+        // refracted ray: the waves slide the sky about instead of scrolling a texture
+        // stuck to the water. Faded out toward the horizon, where the projection's
+        // derivative blows up and would alias into the rim.
+        float cl = fbm2( ( d.xz / max( up, 0.12 ) ) * 0.35
+                         + vec2( uTime * 0.012, uTime * 0.009 ) );
+        c *= 1.0 - uCloud * smoothstep( 0.02, 0.30, up ) * ( 0.55 - 0.85 * cl );
+        float sd = max( 0.0, dot( d, uSunDir ) );
+        c += uSunCol * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) );
+        return c;
+      }
+
+      // What is actually above a total-internal-reflection ray in THIS world: the water
+      // column below, which darkens with depth. That gradient is the horizon in the
+      // mirror — dark where R is steep (just outside the window rim, R.y = -0.661) and
+      // bright where R is shallow (toward the true horizon, R.y -> 0).
+      // The seabed is NOT in it and must not be faked in: measured, zone 0's floor is
+      // y = -240 to -317, so the shortest reflected path to it is 360+ units, where
+      // green transmittance is 0.016 — under 0.1% of the inscatter, not worth an ALU.
+      vec3 mirrorRadiance( vec3 P, vec3 R, float t, float mk ){
+        float Ry = min( R.y, -0.012 );
+        // Extinction-weighted mean sample height, the same closed form fog_fragment
+        // uses, so the mirror is made of exactly the water the diver is swimming in.
+        float ea = clamp( fogDensity * ${f(K_EXT[1])} * 300.0, 1e-4, 30.0 );
+        float wgt = ea < 0.6 ? 0.5 - ea * 0.0833333 + ea * ea * ea * 0.0013889
+                             : 1.0 / ea - 1.0 / ( exp( ea ) - 1.0 );
+        vec3 tr = exp( -fogDensity * ${v3(K_EXT)} * 300.0 );
+        vec3 c = abyssaAmbient( fogColor, P.y + Ry * 300.0 * wgt ) * ( 1.0 - tr );
+        // Caustics: sunlight refracting through the wavy interface focuses into a sheet
+        // a few metres down, and it is the only thing with real contrast that a
+        // down-going ray can find at these depths. Sample the sheet where R actually
+        // CROSSES it — the crossing point sweeps ~10 units across the visible arc of the
+        // mirror, so the pattern shears and parallaxes with the view and with every wave
+        // that tilts the normal, which is what separates a reflection from a texture.
+        // Multiplicative, because a caustic modulates the light already there; that also
+        // preserves the R.y depth gradient underneath it. Cell scale 0.30 = 3.4-unit
+        // cells: any coarser and the visible arc of the mirror holds barely one blob and
+        // reads flat, which is exactly the failure this whole pass exists to remove.
+        float sh = fbm2( ( P.xz + R.xz * min( 16.0 / -Ry, 200.0 ) ) * 0.30
+                         + vec2( t * 0.09, -t * 0.07 ) );
+        // 0.45/1.65 is a 2.1x swing about unity — real caustic contrast is that strong,
+        // and anything weaker sank back into "constant colour times noise" on screen.
+        return c * ( 1.0 - mk * ( 0.45 - 1.65 * sh * sh ) );
+      }
+
+      // One expanding ring dimple per cell per beat. Rain read from below is a normal
+      // perturbation first (a brief lens in the window) and a brightness second, which
+      // is why it has to ride the displaced interface. Radius is capped under half a
+      // cell so a ring never crosses into its neighbour and we never pay a 3x3 lookup.
+      float rainRing( vec2 p, float t, float sd, out vec2 grad ){
+        vec2 c = floor( p ), fp = fract( p ) - 0.5;
+        float ph = fract( t * 0.85 + h21( c + sd ) );
+        float d = max( length( fp ), 1e-3 );
+        float w = d - ph * 0.44;
+        float e = exp( -w * w * 300.0 ) * ( 1.0 - ph ) * ( 1.0 - ph );
+        grad = ( fp / d ) * ( e * -600.0 * w );
+        return e;
+      }
+
       void main(){
         vec3 V = normalize( vW - uCam );
-        vec3 hn = waveHN( vW.xz, uTime );
-        vec2 q = vW.xz;
-        // fine ripple layer, normal only: this is what makes the window rim dance
-        float c3 = cos( q.x * 0.7 - q.y * 0.9 + uTime * 3.6 );
-        float dx = hn.y + 0.0551 * cos( q.x * 0.95 + uTime * 3.1 ) + 0.0280 * c3
-                 + 0.0620 * cos( q.x * 2.30 - q.y * 0.6 + uTime * 5.2 );
-        float dz = hn.z + 0.0575 * cos( q.y * 1.15 - uTime * 2.7 ) - 0.0360 * c3
-                 + 0.0480 * cos( q.y * 2.05 + q.x * 0.5 - uTime * 4.6 );
-        vec3 N = normalize( vec3( -dx, 1.0, -dz ) );
+        float dist = distance( vW.xz, uCam.xz );
+        vec2 dh = waveHN( vW.xz, uTime, uStorm, dist ).yz;
 
-        float ct = abs( dot( V, N ) );                       // cos of incidence at the interface
-        float st = sqrt( max( 0.0, 1.0 - ct * ct ) );
-        // total internal reflection past the critical angle: sin(theta) > 1/1.333
-        float win = smoothstep( 0.652, 0.674, ct );
+        float rain = 0.0;
+        if ( uStorm > 0.02 ) {                       // uniform branch, fully coherent
+          // Cells of 0.45 and 0.22 units (1.4 m and 0.7 m), so a ring reads as a drop
+          // strike and not as a porthole; and only inside 26 units, because past that a
+          // ring is under a pixel and all it can do is alias.
+          float rk = uStorm * uNearK * ( 1.0 - smoothstep( 6.0, 26.0, dist ) );
+          vec2 g1, g2;
+          float r1 = rainRing( vW.xz * 2.2, uTime, 0.0, g1 );
+          float r2 = rainRing( vW.xz * 4.5, uTime * 1.27, 11.0, g2 );
+          dh += ( g1 * 0.0022 + g2 * 0.0011 ) * rk;
+          rain = ( r1 + 0.6 * r2 ) * rk;
+        }
 
-        float sa = clamp( st * 1.333, 0.0, 1.0 );            // Snell, water -> air
-        float hl = length( V.xz );
-        vec2 hdir = hl > 1e-5 ? V.xz / hl : vec2( 1.0, 0.0 );
-        vec3 R = vec3( hdir.x * sa, sqrt( max( 0.0, 1.0 - sa * sa ) ), hdir.y * sa );
+        vec3 N = normalize( vec3( -dh.x, 1.0, -dh.y ) );
+        // The camera really does cross the interface — player.js clamps the swim ceiling
+        // to y = -1.2 and game.js adds up to +2.4 of camera lift, so at the raft this
+        // plane is above the eye. Flipping the normal is what the old abs(dot(V,N)) was
+        // standing in for; doing it properly also lets the from-above case be right.
+        bool below = dot( V, N ) > 0.0;
+        vec3 Nf = below ? N : -N;
+        float ct = dot( V, Nf ), F;
+        // Caustic detail dies with distance as well as depth: past ~120 units a 3.4-unit
+        // cell is under 4 pixels and the pattern would alias into a crawl.
+        float mk = uMirrorK * ( 1.0 - smoothstep( 35.0, 120.0, dist ) );
+        // Each side owns an fbm2. Gating them on F keeps the common fragment paying for
+        // one, not two: inside the window F is 0.02 so the mirror is invisible, outside it
+        // F is 1.0 so the sky is. The branches are spatially coherent (whole window vs
+        // whole mirror) and only diverge in the few degrees of the Fresnel rim.
+        vec3 col = vec3( 0.0 );
+        if ( below ) {
+          float kk = 1.0 - ETA * ETA * ( 1.0 - ct * ct );
+          float ca = sqrt( max( kk, 0.0 ) );          // cosine on the AIR side
+          // Schlick on the air-side cosine: 0.020 at the zenith, 0.061 at 30 deg, 0.25
+          // at 44, exactly 1.0 at the critical angle. The reflection therefore takes
+          // over continuously across the last ~10 degrees and brightens itself in
+          // proportion to what is in the mirror — a horizon, where the 1.7-degree
+          // smoothstep plus 2.8-degree Gaussian this replaces gave a glowing wire.
+          F = kk <= 0.0 ? 1.0 : F0 + ( 1.0 - F0 ) * pow( 1.0 - ca, 5.0 );
+          // refract() returns exactly vec3(0) past the critical angle. F is 1.0 there so
+          // the sky term is multiplied out; skyRadiance(vec3(0)) is still well defined
+          // (pow(0.0, k) is 0.0 for k > 0 in GLSL), so no guard branch is needed.
+          // mf ramps the mirror in rather than switching it, so the gate cannot leave a
+          // step ring 8 degrees inside the rim; at F = 0.09 the term it drops is 0.01.
+          float mf = smoothstep( 0.030, 0.090, F );
+          if ( F < 0.998 ) col  = skyRadiance( refract( V, -Nf, ETA ) ) * ( 1.0 - F );
+          if ( mf > 0.0 )  col += mirrorRadiance( vW, reflect( V, Nf ), uTime, mk ) * ( F * mf );
+        } else {
+          // Above the interface: air -> water, no TIR, and the roles swap.
+          F = F0 + ( 1.0 - F0 ) * pow( 1.0 - ct, 5.0 );
+          col = mirrorRadiance( vW, refract( V, -Nf, 1.0 / ETA ), uTime, mk ) * ( 1.0 - F )
+              + skyRadiance( reflect( V, Nf ) ) * F;
+        }
 
-        vec3 sky = mix( uHaze, uSky, clamp( R.y, 0.0, 1.0 ) );
-        float sd = max( 0.0, dot( R, uSun ) );
-        sky += vec3( 3.4, 3.0, 2.3 ) * pow( sd, 700.0 );     // refracted sun disc
-        sky += vec3( 0.34, 0.36, 0.36 ) * pow( sd, 18.0 );   // glare halo
-        float ch = fbm2( q * 0.50 + vec2( uTime * 0.11, -uTime * 0.09 ) )
-                 * 0.72 + 0.28 * vn( q * 1.7 + vec2( -uTime * 0.20, uTime * 0.16 ) );
-        sky *= 0.70 + 0.62 * ch;                             // chop breaking up the window
-
-        vec3 tir = uDeep * ( 0.5 + 0.9 * fbm2( q * 0.11 - vec2( uTime * 0.05 ) ) );
-        // the critical-angle rim is the brightest thing in the frame.
-        // NB: squared by multiplication — GLSL pow() is undefined for a negative base.
-        float rd = ( ct - 0.663 ) / 0.018;
-        float rim = exp( -rd * rd )
-                  * ( 0.30 + 1.5 * vn( q * 1.1 + vec2( uTime * 0.30, uTime * 0.21 ) ) );
-
-        vec3 col = mix( tir, sky, win ) + vec3( 0.72, 0.92, 1.0 ) * rim * 0.75;
-        // foam flecks, only close enough to resolve
-        col += vec3( 0.9, 0.97, 1.0 ) * ( 1.0 - smoothstep( 12.0, 70.0, distance( vW, uCam ) ) )
-             * smoothstep( 0.72, 0.95, ch ) * 0.35 * win;
+        // Foam from below is a bubble raft, not a highlight: it scatters isotropically,
+        // so it is lit by the surface irradiance and replaces BOTH the window and the
+        // mirror with the same dull grey-white. Hence a mix AFTER the Fresnel composite.
+        // Deriving it from |grad h| means only the storm spectrum can ever steepen enough
+        // to break. Monte-Carlo over the spectrum (20k samples): calm p99 = 0.078 and
+        // max 0.095, so a 0.30 calm threshold can never fire; storm p50 = 0.102,
+        // p90 = 0.189, max 0.306, so a 0.145 storm threshold covers ~22% of the ceiling.
+        // 4.6x the irradiance level puts a full-storm whitecap at ~0.33 scene-linear:
+        // just over BloomEffect's 0.28, so foam is the one thing on a storm ceiling that
+        // glows, and it goes dark on its own at night without a second uniform.
+        vec3 foamCol = vec3( 0.86, 0.94, 1.00 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6;
+        float foam = smoothstep( uFoamThr, uFoamThr + 0.05, length( dh ) )
+                   * ( 0.20 + 0.80 * uStorm )
+                   * ( 0.45 + 0.75 * vn( vW.xz * 0.55 + vec2( uTime * 0.12 ) ) );
+        col = mix( col, foamCol, clamp( foam, 0.0, 0.85 ) * uNearK );
+        col += foamCol * rain * 0.25;   // the LENS is the effect; the fleck is a garnish
+        col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
 
         // uFade retires the surface as the diver descends. Without it the depth fog
         // drives this plane to near-black while the dome behind stays lit, and the
@@ -428,7 +653,7 @@ function buildSurface() {
   });
   mat.transparent = true;
   mat.depthWrite = false;
-  surface = new THREE.Mesh(g, mat);
+  surface = new THREE.Mesh(buildSurfaceGeo(), mat);
   surface.renderOrder = -1;          // behind everything; it is a ceiling, not an occluder
   surface.frustumCulled = false;
   surface.onBeforeRender = (r, s, cam) => uCam.value.copy(cam.position);
@@ -526,6 +751,30 @@ export function updateWater(dt, t) {
     const su = surface.material.uniforms;
     if (su.uFade) su.uFade.value = sFade;   // tolerate a shader built without it
     su.uBright.value = clamp(1 - d01 * 0.6, 0.45, 1) * (0.35 + 0.65 * sFade);
+
+    // Weather reaches the sky in the window. Storms dim it AND grey it out (an overcast
+    // sky is grey), thicken the cloud deck and soften the disc, which is what makes a
+    // storm ceiling read as overcast rather than as dimmed sunshine.
+    const storm = clamp(wMurk, 0, 1), gain = 1 - 0.62 * storm, desat = 0.5 * storm;
+    mixSky(su.uSkyZen.value, SKY_ZEN_N, SKY_ZEN_D, wDay, gain, desat);
+    mixSky(su.uSkyHor.value, SKY_HOR_N, SKY_HOR_D, wDay, gain, desat);
+    // Sun disc crossfades to a moon through the twilight band. uSunDir does not move —
+    // this world has one fixed sun azimuth; only what sits in that direction changes.
+    const dk = ms(wDay, 0.05, 0.25), sk = 1 - 0.85 * storm;
+    su.uSunCol.value.set(
+      ml(MOON_DISC[0], SUN_DISC[0] * wDay, dk) * sk,
+      ml(MOON_DISC[1], SUN_DISC[1] * wDay, dk) * sk,
+      ml(MOON_DISC[2], SUN_DISC[2] * wDay, dk) * sk
+    );
+    su.uSunSize.value = 700 - 560 * storm;
+    su.uCloud.value = 0.22 + 0.70 * storm;
+    su.uStorm.value = storm;
+    su.uFlash.value = wFlash;
+    su.uFoamThr.value = ml(0.30, 0.145, storm);
+    // The caustic sheet in the mirror and the foam/rain/flash detail are near-surface
+    // phenomena; retire them well before uFade does, so the deep pays nothing for them.
+    su.uMirrorK.value = clamp(1 + y / 70, 0, 1);
+    su.uNearK.value = clamp(1 + y / 90, 0, 1);
   }
 
   // particulates thicken with depth

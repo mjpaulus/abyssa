@@ -13,10 +13,13 @@ import { buildRifts, updateRifts, seedMotes, updateMotes } from './world/rifts.j
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
 import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
-import { player, updatePlayer, requestLock, locked, forwardVec, keys, setStormCurrent } from './player.js';
+import {
+  player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys,
+  setStormCurrent, resetSuit, BURST_DUR, NEUTRAL_FILL
+} from './player.js';
 import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
-  setSpeed, setWalking, footstep, setZone, slam, setCalm
+  setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady
 } from './audio.js';
 import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
@@ -30,7 +33,7 @@ import { buildProps, updateProps, propColliders } from './world/props.js';
 import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world/footfx.js';
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk } from './world/predators.js';
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic } from './world/wrecks.js';
-import { initTools, updateTools, sonarPing, fireSpear, thrusterFX } from './systems/tools.js';
+import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
 
@@ -54,9 +57,16 @@ initWeather();
 let state = 'title', msgT = 0, shake = 0, winT = 0, wasLightOut = false, lastStepPhase = 0;
 // One-shot onboarding tips: the game speaks once, at the moment each mechanic first
 // matters, and never talks over another message.
-const tips = { submerged: 0, taut: 0, fuel: 0, wander: 0, polymer: 0, bitumen: 0 };
+const tips = { submerged: 0, taut: 0, fuel: 0, wander: 0, polymer: 0, bitumen: 0,
+  dress: 0, swollen: 0, stand: 0, flat: 0 };
 let zoneTime = 0;
 let wasGrounded = false, landVel = 0;   // tracks fall speed so landings kick up silt
+// Air thruster: one shove per press of the bottle. BURST_RECHARGE is the whole anti-flight
+// argument — at 5 s, mashing Shift while swimming buys +12.7% distance over 30 s against
+// the +85% the held-Shift version bought. It is punctuation, never a travel mode.
+const BURST_RECHARGE = 5.0, AIR_PER_BURST = 0.10;
+let wasCharged = true;
+const _burst = V3();
 let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
 let lev = null, zone = -1;
 const lanternPos = V3();
@@ -77,6 +87,35 @@ const $bm = {
   rift: document.getElementById('bmRift')
 };
 
+// ---- two new brass gauges -------------------------------------------------------
+// DRESS is load-bearing, not decoration: the suit-air model is otherwise invisible state
+// and the controls would just read as having got worse. The tick sits at the neutral
+// fill, so a player who descends without touching a key WATCHES the bar shrink past it
+// and learns Boyle's law in one dive without a word of text.
+// Built here rather than in index.html only because that file is outside this change's
+// ownership; the markup mirrors the three existing bars exactly and should move.
+const $trimfill = (() => {
+  const css = document.createElement('style');
+  css.textContent = `#trimbar{bottom:6.2rem}
+    #trimfill{background:linear-gradient(90deg,#8a6a33,#e8c98a);box-shadow:0 0 10px rgba(232,201,138,.5)}
+    #trimbar .neutral{position:absolute;left:${(NEUTRAL_FILL * 100).toFixed(1)}%;top:0;width:1px;height:100%;
+      background:rgba(200,235,255,.85);z-index:2}
+    #bottlebar{bottom:7.6rem;width:min(180px,32vw)}
+    #bottlefill{background:linear-gradient(90deg,#5c4a2a,#b99a63);box-shadow:0 0 8px rgba(185,154,99,.35)}`;
+  document.head.appendChild(css);
+  const bar = document.createElement('div');
+  bar.id = 'trimbar'; bar.className = 'bar';
+  bar.innerHTML = '<span class="label">dress</span><div id="trimfill" class="fill"></div><i class="neutral"></i>';
+  const bot = document.createElement('div');
+  bot.id = 'bottlebar'; bot.className = 'bar hidden';
+  bot.innerHTML = '<span class="label">bottle</span><div id="bottlefill" class="fill"></div>';
+  const ui = document.getElementById('ui');
+  ui.appendChild(bar); ui.appendChild(bot);
+  return document.getElementById('trimfill');
+})();
+const $bottlebar = document.getElementById('bottlebar');
+const $bottlefill = document.getElementById('bottlefill');
+
 // Bearing strip: place a marker by its horizontal angle from the view direction.
 // Off-screen targets pin to the strip's edge at reduced opacity, so you can still
 // turn toward them. dy drives a rise/dive glyph appended to the distance.
@@ -95,8 +134,46 @@ function setBearing(el, tx, ty, tz, show) {
   el.querySelector('.dst').textContent = dist + ' m' + vert;
 }
 
+// One press, one shove. Edge-triggered on keydown with !e.repeat, so HOLDING Shift can
+// never repeat the burst — that is the only reading of the input that fully kills flight.
+// Shift still means "swim hard" while held; cracking the bottle and finning hard are the
+// same panic gesture, and keeping the 2x swim boost preserves the marginal escape from a
+// striking shark (predators.js strikeSpeed 22 against a 25.2 u/s sprint).
+function tryBurst() {
+  if (player.grounded) return;                 // lead boots on the floor: nothing to push off
+  if (survival.thrustCharge < 1) return;       // still repressurising
+  const cost = survival.supplied ? AIR_PER_BURST : AIR_PER_BURST * 2;
+  if (survival.oxygen <= cost + 0.06) {
+    // a wheeze, not a burst — the FX still fires so the player learns why
+    _burst.copy(forwardVec());
+    fireThruster(_burst.x, _burst.y, _burst.z, 0.12);
+    airVent(0.18);
+    if (msgT <= 0) showMsg('THE BOTTLE ONLY SIGHS — NOT ENOUGH AIR', 2.5);
+    return;
+  }
+  survival.thrustCharge = 0;
+  survival.oxygen = Math.max(0.05, survival.oxygen - cost);
+  // Direction: the way he is looking, nudged toward whatever he is asking for. S is
+  // applied LAST so reversing does not also invert the lateral nudge.
+  _burst.copy(forwardVec());
+  if (keys['KeyA'] || keys['ArrowLeft']) _burst.addScaledVector(rightVec(), -0.55);
+  if (keys['KeyD'] || keys['ArrowRight']) _burst.addScaledVector(rightVec(), 0.55);
+  if (keys['Space']) _burst.y += 0.55;
+  if (keys['ControlLeft'] || keys['KeyC']) _burst.y -= 0.55;
+  if (keys['KeyS'] || keys['ArrowDown']) _burst.multiplyScalar(-1);
+  _burst.normalize();
+  player.burstDir.copy(_burst);
+  player.burstT = BURST_DUR;
+  fireThruster(_burst.x, _burst.y, _burst.z, 1);
+  airVent(1);
+  camKick = 1; camKickPunch = 1;
+  shake = Math.max(shake, 0.34);
+}
+
 // Crafting is only possible at the raft, where the pump and reel are.
 addEventListener('keydown', e => {
+  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && state === 'play'
+      && survival.hasThruster && !e.repeat) { tryBurst(); return; }
   // Diagnostic: P bypasses the whole post chain so an on-screen artifact can be
   // attributed to either the scene or a pass, live, without a rebuild.
   if (e.code === 'KeyP') {
@@ -125,7 +202,7 @@ addEventListener('keydown', e => {
       const tool = takeRelic(rel.zi);
       if (tool === 'sonar') { survival.hasSonar = true; showMsg('A SOUNDING SET — [T] LISTENS TO THE DARK', 5); }
       else if (tool === 'spear') { survival.hasSpear = true; survival.spears = 3; showMsg('A SPEAR GUN — RIGHT CLICK. SPEARS CAN BE RECOVERED.', 5); }
-      else if (tool === 'thruster') { survival.hasThruster = true; showMsg('AN AIR THRUSTER — HOLD SHIFT TO VENT THE LINE FOR SPEED. IT BREATHES YOUR AIR.', 6); }
+      else if (tool === 'thruster') { survival.hasThruster = true; showMsg('AN AIR THRUSTER — TAP SHIFT TO CRACK THE BOTTLE. ONE SHOVE, AND IT COSTS AIR.', 6); }
       if (tool) { chime(659, 2.5, 0.28); chime(880, 2.5, 0.2); return; }
     }
   }
@@ -204,6 +281,7 @@ window.playEnding = () => {
   player.vel.set(0, 0, 0);
   state = 'won'; winT = 0;
   chime(523, 3, 0.3); chime(659, 3, 0.2); chime(784, 4, 0.2);
+  resetSuit(player.pos.y);
   startEnding();
   return 'ending started';
 };
@@ -217,6 +295,9 @@ Object.defineProperties(window, {
 const camVel = V3(), camAim = V3(), camDesired = V3(), camLook = V3();
 const camBack = V3(), camTo = V3(), camRight = V3();   // hot-path temps, never allocated per frame
 let camDist = 9, camRoll = 0, camFov = 70;
+// Burst reaction. Scoped entirely to these two envelopes so ordinary swimming — which
+// nobody complained about — is byte-identical to before.
+let camKick = 0, camKickPunch = 0;
 const CAM_BACK = 9, CAM_UP = 2.4;
 
 // Walk the ray from the player out to the ideal camera spot and stop short of the
@@ -248,6 +329,8 @@ function updateCamera(dt, t, fwd) {
   const zi = zone < 0 ? 0 : zone;
   const speed = player.vel.length();
   camBack.copy(fwd).multiplyScalar(-1);
+  camKick = Math.max(0, camKick - dt / 0.62);
+  camKickPunch = Math.max(0, camKickPunch - dt / 0.34);
 
   const want = clearCamDistance(player.pos, camBack, CAM_BACK, zi);
   camDist += (want - camDist) * Math.min(1, (want < camDist ? 14 : 4) * dt);
@@ -258,12 +341,23 @@ function updateCamera(dt, t, fwd) {
   // idle breathing drift so the frame is never perfectly locked
   camDesired.y += Math.sin(t * 0.7) * 0.09;
   camDesired.x += Math.sin(t * 0.43) * 0.07;
+  // A critically-damped tracker sits damp*v/stiff behind its target, measured at 20.9 u
+  // when the old thruster was at full chat — so the camera made the effect LESS visible
+  // at exactly the moment it fired. Lead the spring by that amount and punch in, but
+  // only while the kick is live.
+  if (camKick > 0) {
+    camDesired.addScaledVector(player.vel, 0.3086 * camKick);
+    camDesired.addScaledVector(camBack, -2.6 * camKick);
+  }
 
   // critically-damped spring: settles without the rubber-band of a raw lerp
   const stiff = 42, damp = 2 * Math.sqrt(stiff);
   camTo.copy(camDesired).sub(camera.position);
   camVel.addScaledVector(camTo, stiff * dt).addScaledVector(camVel, -damp * dt);
   camera.position.addScaledVector(camVel, dt);
+  // Leading the target is not enough on its own: the spring needs ~0.31 s to respond and
+  // the whole burst is 0.26 s. Close the rest of the gap directly, scoped to the kick.
+  if (camKick > 0) camera.position.lerp(camDesired, Math.min(1, 7 * camKick * dt));
 
   if (shake > 0) {
     camera.position.x += rng(-1, 1) * shake * 0.5;
@@ -285,8 +379,14 @@ function updateCamera(dt, t, fwd) {
   camRoll += (clamp(-lateral * 0.012, -0.11, 0.11) - camRoll) * Math.min(1, 3 * dt);
   camera.rotateZ(camRoll);
 
-  const wantFov = 70 + clamp(speed * 0.32, 0, 9);
-  camFov += (wantFov - camFov) * Math.min(1, 2.5 * dt);
+  // The 2.5/s lerp has a 0.4 s time constant, so it can only reach 48% of any target
+  // inside a 0.26 s burst — which is why the existing +9 speed FOV was imperceptible.
+  // Snap out, ease back. Capped at 86: the speed term and the kick peak together, and
+  // 70 + 9 + 15 would be an 89-degree fisheye.
+  const wantFov = Math.min(86, 70 + clamp(speed * 0.32, 0, 9) + 11 * camKickPunch);
+  // Snap out only while a kick is live; the 2.5/s ease is otherwise exactly as shipped.
+  const fovRate = camKickPunch > 0 && wantFov > camFov ? 20 : 2.5;
+  camFov += (wantFov - camFov) * Math.min(1, fovRate * dt);
   if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
 }
 
@@ -342,17 +442,22 @@ function update(dt, t) {
   }
 
   const { fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed));
-  $mode.textContent = player.grounded ? 'walking' : 'swimming';
+  $mode.textContent = player.grounded ? 'walking'
+    : player.fill > NEUTRAL_FILL + 0.09 ? 'rising'
+    : player.fill < NEUTRAL_FILL - 0.09 ? 'sinking' : 'trimmed';
   const depth01 = clamp(-player.pos.y / 900, 0, 1);
 
   // zone progression through the rift, gated on having the line to work the next zone
   if (lev && lev.calmed && zone < 2 && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
     if (canDescendTo(zone + 1)) enterZone(zone + 1);
-    else if (msgT <= 0) showMsg(`THE LINE IS TOO SHORT — ${HOSE_REQ[zone + 1]} M NEEDED`, 3);
+    else if (msgT <= 0) showMsg(`THE LINE IS TOO SHORT — ${HOSE_REQ[zone + 1] * 3} M NEEDED`, 3);
   }
   if (lev && lev.calmed && zone === 2 && player.pos.y < zoneBottom(2) - 70 && state === 'play') {
     state = 'won'; winT = 0;
     chime(523, 3, 0.3); chime(659, 3, 0.2); chime(784, 4, 0.2);
+    // The cinematic drives player.pos/vel itself; clear the suit state so a banked burst
+    // cannot fire under it and so the rig's pose reads off a sane fill.
+    resetSuit(player.pos.y);
     startEnding();
     return;
   }
@@ -445,6 +550,20 @@ function update(dt, t) {
       tips.wander = 1; showMsg('FOLLOW THE SLEEPER MARK ON THE RULE ABOVE. TOUCH ITS WARDS.', 6);
     }
   }
+  // Suit-air beats are gated separately: 'TOO MUCH AIR TO STAND' has to fire on the
+  // FIRST occurrence or the player bobs helplessly without knowing Ctrl is the answer.
+  if (state === 'play') {
+    if (!tips.dress && player.pos.y < -8) {
+      tips.dress = 1; showMsg('AIR IN THE DRESS LIFTS YOU. [SPACE] FILLS IT, [CTRL] VENTS IT.', 5);
+    } else if (!tips.swollen && player.fill > 0.97 && player.vel.y > 2) {
+      tips.swollen = 1; showMsg('THE DRESS IS SWELLING. VENT OR IT WILL CARRY YOU UP.', 4);
+    } else if (!tips.stand && !player.grounded && player.buoy > 0.9
+               && player.pos.y < player.groundY + 2.5 && player.pos.y > player.groundY - 1) {
+      tips.stand = 1; showMsg('TOO MUCH AIR TO STAND. VENT.', 4);
+    } else if (!tips.flat && player.fill <= 0.001 && player.pos.y < -400) {
+      tips.flat = 1; showMsg('THE DRESS IS FLAT. YOU ARE A STONE.', 4);
+    }
+  }
 
   if (drowned && state === 'play') {
     state = 'dead';
@@ -454,6 +573,11 @@ function update(dt, t) {
       player.vel.set(0, 0, 0);
       player.light = 1;
       survival.oxygen = 1;
+      survival.thrustCharge = 1;
+      // The tenders re-dress him and blow the suit up. Without this he arrives at the
+      // raft with whatever the drowning left — usually a flat dress — and sinks straight
+      // back off the surface he was just hauled to.
+      resetSuit(player.pos.y);
       // The rescue tops the pump up from the reserve can. Without this, drowning with
       // an empty tank and no bitumen strands you at the raft with 45s of air and all
       // the bitumen 200m below — an unwinnable state.
@@ -493,14 +617,14 @@ function update(dt, t) {
     survival.spears += tev.spearRecovered;
     chime(494, 0.5, 0.16);
   }
-  // the air thruster vents the breathing line for speed: fast, and it costs air
-  const thrustOn = survival.hasThruster && (keys['ShiftLeft'] || keys['ShiftRight'])
-    && !player.grounded && survival.oxygen > 0.06;
-  player.thrustOn = thrustOn;
-  // Drain must beat the hose's 0.28/s refill or thrust is free: net ~-0.05/s while
-  // supplied (20s of continuous thrust empties the tank), lethal-fast if the line is out.
-  if (thrustOn) survival.oxygen = Math.max(0.05, survival.oxygen - dt * 0.33);
-  thrusterFX(thrustOn, player);
+  // The bottle repressurises off the hose, so outrunning the line costs you the relic
+  // too: a quarter-rate refill when the pump is dry or the line is taut.
+  if (survival.hasThruster) {
+    survival.thrustCharge = Math.min(1,
+      survival.thrustCharge + dt / (BURST_RECHARGE * (survival.supplied ? 1 : 4)));
+    if (survival.thrustCharge >= 1 && !wasCharged) bottleReady();
+    wasCharged = survival.thrustCharge >= 1;
+  }
 
   // predators: hunting behavior, strikes and light-stealing
   const pev = updatePredators(dt, t, player, lanternPos);
@@ -537,16 +661,20 @@ function update(dt, t) {
     spawnFootfall(player.pos, player.yaw, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);
   }
   // Landing after a drop kicks up a bigger cloud under both boots.
-  if (player.grounded && !wasGrounded && landVel > 3) {
+  // Terminal sink is 5.1 u/s vented (10.2 with the exhaust held open), not the 18 u/s
+  // of the old point-and-hold dive, so the old >3 gate almost never fired.
+  if (player.grounded && !wasGrounded && landVel > 1.8) {
     const zi = zone < 0 ? 0 : zone;
-    spawnFootfall(player.pos, player.yaw, 1, zi, Math.min(2.2, landVel * 0.28));
-    spawnFootfall(player.pos, player.yaw, -1, zi, Math.min(2.2, landVel * 0.28));
+    const p = Math.min(2.2, landVel * 0.42);
+    spawnFootfall(player.pos, player.yaw, 1, zi, p);
+    spawnFootfall(player.pos, player.yaw, -1, zi, p);
   }
   wasGrounded = player.grounded;
   landVel = player.grounded ? 0 : Math.max(landVel * 0.98, -player.vel.y);
   lanternWorldPos(lanternPos);
   lanternLight.position.copy(lanternPos);
   setLanternPos(lanternPos);   // dust catches the lantern's warmth
+  setToolsLanternPos(lanternPos);
   lanternLight.intensity = (9 + 3.5 * Math.sin(t * 9) + 1.5 * Math.sin(t * 23)) * player.light;
   playerLightSrc.position.copy(player.pos);
   playerLightSrc.intensity = 8 + 40 * player.light;
@@ -564,11 +692,18 @@ function update(dt, t) {
   // low-air vignette breathes in once the tank drops below a third
   $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
 
+  $trimfill.style.transform = `scaleX(${player.fill})`;
+  $bottlebar.classList.toggle('hidden', !survival.hasThruster);
+  $bottlefill.style.transform = `scaleX(${survival.thrustCharge})`;
   $lightfill.style.transform = `scaleX(${player.light})`;
   $o2fill.style.transform = `scaleX(${survival.oxygen})`;
   $fuelfill.style.transform = `scaleX(${survival.fuel})`;
   $o2fill.classList.toggle('critical', survival.oxygen < 0.3);
-  $hose.textContent = `${Math.floor(distFromRaft)} / ${Math.floor(survival.hose)} m of line`;
+  // Charted metres, ×3 like the depth readout. The raw values are world units, and
+  // printing them unconverted put "306 / 380 m of line" next to "690 m" of depth in the
+  // same frame — the HUD contradicting itself threefold on the one number that is
+  // supposed to tell you how far you can go.
+  $hose.textContent = `${Math.floor(distFromRaft * 3)} / ${Math.floor(survival.hose * 3)} m of line`;
   $hose.classList.toggle('taut', survival.tautness > 0.92);
   $mats.textContent = `polymer ${survival.polymer}  ·  bitumen ${survival.bitumen}`
     + (survival.ink > 0 ? `  ·  ink ${survival.ink}` : '')

@@ -32,7 +32,12 @@ export const survival = {
   hasSonar: false,
   hasSpear: false,
   hasThruster: false,
-  spears: 0           // loaded spears; spent ones stick in the world and can be recovered
+  spears: 0,          // loaded spears; spent ones stick in the world and can be recovered
+  // Accumulator bottle for the air thruster: one burst spends all of it. It refills off
+  // the hose, so an unsupplied diver gets his bottle back at a crawl. game.js owns the
+  // recharge (it has dt and the play-state gate); it lives here so the HUD, the debug
+  // surface and the respawn path all read one authoritative value.
+  thrustCharge: 1
 };
 
 // The pump only burns fuel while the diver is actually down the line.

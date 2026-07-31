@@ -11,23 +11,31 @@
 //     a visible spear; on squid contact reuse predators.slash at the impact point for the
 //     kill (ranged version of the knife). Spent spears lie in the world and can be
 //     recovered by proximity (spearRecovered event). Returns false if none are loaded.
-//   thrusterFX(on, player)            — visual state for the air thruster (bubble exhaust
-//     off the backpack); physics + air drain stay in game.js/player.js.
+//   fireThruster(dx, dy, dz, power)   — ONE-SHOT: the diver cracked the bottle. (dx,dy,dz)
+//     is the unit THRUST direction; the exhaust vents opposite it. power < 0.25 is a dud
+//     wheeze (cloud only). Physics + air cost stay in player.js/game.js.
+//   setToolsLanternPos(v)             — the plume catches the lantern, same as the dust.
 //
 // Discipline: every pool is allocated once at init, every hot-path vector is a module
 // temp, and each subsystem early-outs to zero work when idle.
+//
+// NOTE the deliberate duplication of predators.js's FOG_GLSL / TONE_OUT / billboard
+// pattern below. Exporting them would make two agent-owned modules share a shader
+// program cache key, which this project has already been bitten by (see CLAUDE.md on
+// creatures.js). The per-frame `uFogD` write is part of the pattern, not optional —
+// without it the plume keeps core.js's boot density and stops sitting in the water.
 import * as THREE from 'three';
 import { scene } from '../core.js';
 import { ZONE_GAP, RIFT_R, riftPos, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
-import { glowTex } from '../lib/textures.js';
+import { glowTex, canvas2d, noiseCanvas } from '../lib/textures.js';
 import { terrainH } from '../world/terrain.js';
 import { motes } from '../world/rifts.js';
 import { nodes } from '../world/resources.js';
 import { slash } from '../world/predators.js';
 import { RAFT_POS } from './raft.js';
 import { airInletWorldPos } from '../entities/diver.js';
-import { player } from '../player.js';
+import { player, burstEnv, BURST_DUR } from '../player.js';
 
 const ev = { spearKill: null, spearRecovered: 0 };
 
@@ -430,146 +438,384 @@ function updateSpears(dt, t, p) {
 }
 
 // =================================================================== 3. AIR THRUSTER
-// A hard stream out of the backpack inlet, thrown opposite the direction of travel, plus
-// a faint turbulence cone. Off means genuinely off: the pool stops updating once the last
-// bubble dies.
-const TH_MAX = 80;
-const thPos = new Float32Array(TH_MAX * 3);
-const thVel = new Float32Array(TH_MAX * 3);
-const thLife = new Float32Array(TH_MAX);
-const thMax = new Float32Array(TH_MAX);
-const thAttr = new Float32Array(TH_MAX * 2);    // (alpha, size)
-let thHead = 0, thLive = 0, thInt = 0, thEmit = 0, thOn = false;
-let thPts = null, thCone = null;
-const thOrigin = new THREE.Vector3(), thDir = new THREE.Vector3(0, -1, 0);
+// One press = one shove. The bottle blows down in 0.26 s and the water does the rest,
+// so this is an EVENT with an onset, a peak and a recovery, not a movement mode.
+//
+// The plume is built in three phases because a gas jet in water genuinely has three:
+// a short coherent white core, an expanding turbulent cloud, then a rising bubble wake.
+// The cloud and wake are NORMAL-blended with a bright rim and a core darker than the
+// water behind it — a bubble is a mirror with a refracting middle. A purely additive
+// particle can only ADD light, which is why the old plume vanished in the shallows.
+//
+// Both nozzles are canted outward. The exhaust must vent opposite the thrust (recoil is
+// not optional) and the chase camera sits on exactly that axis, so a single cone
+// foreshortens onto a point — measured at 0.03 NDC on the build this replaces.
+const JET_MAX = 160, BUB_MAX = 260;
+const JET_IGNITE = 34, BUB_IGNITE = 40;      // per nozzle, on the frame the valve cracks
+const JET_RATE = 900, BUB_RATE = 800;        // per second, modulated by the blowdown
+const RING_DUR = 0.30;
+
+// Additive/alpha billboards must fade to black with distance rather than toward the fog
+// colour — the same trick predators.js and creatures.js use for their glow fields.
+const FOG_GLSL = `
+uniform float uFogD;
+float fogVis(vec3 wp){ float d = length(wp - cameraPosition); return exp(-uFogD*uFogD*d*d); }`;
+const TONE_OUT = '#include <tonemapping_fragment>\n#include <colorspace_fragment>';
+const uFogD = { value: 0.016 };
+const uLant = { value: new THREE.Vector3(0, 0, 0) };
+
+export function setToolsLanternPos(v) { uLant.value.copy(v); }
+
+// ---- bubble atlas: rim in R, body in G, so one texture drives both meshes ----------
+const bubbleTex = (() => {
+  const S = 256, C = S / 2;
+  const { canvas, ctx } = canvas2d(S);
+  const nz = noiseCanvas(128, 4, 1.1).getContext('2d').getImageData(0, 0, 128, 128).data;
+  for (let cell = 0; cell < 4; cell++) {
+    const ox = (cell % 2) * C, oy = ((cell / 2) | 0) * C;
+    const img = ctx.createImageData(C, C);
+    for (let y = 0; y < C; y++) for (let x = 0; x < C; x++) {
+      const dx = (x - C / 2) / (C / 2), dy = (y - C / 2) / (C / 2);
+      const r = Math.hypot(dx, dy);
+      // one consistent light direction across all four cells: a cluster then reads as a
+      // handful of spheres lit from the same place rather than as a bag of marbles
+      const lit = clamp(0.45 + 0.55 * (-dx * 0.6 - dy * 0.8), 0, 1);
+      const ring = Math.max(0, 1 - Math.abs(r - 0.80) / 0.26);
+      const n = nz[(((y * 517 + cell * 31) % 128) * 128 + ((x * 731 + cell * 57) % 128)) * 4] / 255;
+      const edge = Math.max(0, 1 - r) * (0.55 + 0.45 * n);
+      let rim = ring * ring * lit * (0.5 + 0.5 * n);
+      // one small specular dot where the light hits
+      rim = Math.max(rim, Math.max(0, 1 - Math.hypot(dx + 0.34, dy + 0.40) / 0.20) * 0.9);
+      const body = r < 1 ? edge * 0.85 : 0;
+      const i = (y * C + x) * 4;
+      img.data[i] = Math.min(255, rim * 255);
+      img.data[i + 1] = Math.min(255, body * 255);
+      img.data[i + 2] = 0;
+      img.data[i + 3] = 255;
+    }
+    ctx.putImageData(img, ox, oy);
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.NoColorSpace;   // this is data, not colour
+  return tex;
+})();
+
+// ---- pools -------------------------------------------------------------------------
+// Positions live directly in the instanced attribute arrays; only velocity/life/phase
+// need a shadow copy. Nothing here is allocated after init.
+function makeField(n) {
+  const quad = new THREE.PlaneGeometry(1, 1);
+  const g = new THREE.InstancedBufferGeometry();
+  g.setIndex(quad.index);
+  g.setAttribute('position', quad.attributes.position);
+  g.setAttribute('uv', quad.attributes.uv);
+  const pos = new THREE.InstancedBufferAttribute(new Float32Array(n * 3), 3);
+  const size = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
+  const col = new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4);
+  const cell = new THREE.InstancedBufferAttribute(new Float32Array(n), 1);
+  g.setAttribute('aPos', pos); g.setAttribute('aSize', size);
+  g.setAttribute('aCol', col); g.setAttribute('aCell', cell);
+  g.instanceCount = n;
+  quad.dispose();
+  return { g, pos: pos.array, size: size.array, col: col.array, cell: cell.array, attr: [pos, size, col] };
+}
+
+const VS = `
+  attribute vec3 aPos; attribute float aSize; attribute vec4 aCol; attribute float aCell;
+  varying vec2 vUv; varying vec4 vC; varying float vFog; varying vec3 vW;
+  ${FOG_GLSL}
+  void main(){
+    vFog = fogVis(aPos); vW = aPos; vC = aCol;
+    vec4 mv = viewMatrix * vec4(aPos, 1.0);
+    mv.xy += position.xy * aSize;
+    // The plume passes through the lens at 40+ u/s of closing speed. Without this the
+    // frame washes white and overdraw spikes; it is a requirement, not a polish pass.
+    vC.a *= smoothstep(0.6, 2.4, -mv.z);
+    vUv = uv * 0.5 + vec2(mod(aCell, 2.0), floor(aCell * 0.5)) * 0.5;
+    gl_Position = projectionMatrix * mv;
+  }`;
+
+function fieldMaterial(blending, frag) {
+  return new THREE.ShaderMaterial({
+    uniforms: { uMap: { value: bubbleTex }, uFogD, uLant },
+    vertexShader: VS,
+    fragmentShader: `
+      uniform sampler2D uMap; uniform vec3 uLant;
+      varying vec2 vUv; varying vec4 vC; varying float vFog; varying vec3 vW;
+      void main(){
+        vec2 tx = texture2D(uMap, vUv).rg;
+        ${frag}
+        ${TONE_OUT}
+      }`,
+    transparent: true, depthWrite: false, blending
+  });
+}
+
+let jet = null, bub = null, ringA = null, ringB = null, pShell = null;
+const jVel = new Float32Array(JET_MAX * 3), jLife = new Float32Array(JET_MAX), jMax = new Float32Array(JET_MAX);
+const bVel = new Float32Array(BUB_MAX * 3), bLife = new Float32Array(BUB_MAX), bMax = new Float32Array(BUB_MAX);
+const bPh = new Float32Array(BUB_MAX), bBuoy = new Float32Array(BUB_MAX), bS0 = new Float32Array(BUB_MAX);
+let jHead = 0, jAlive = 0, bHead = 0, bAlive = 0;
+let burstT = 0, burstPow = 0, jFrac = 0, bFrac = 0, ringT = 0, burstCount = 0;
+
+const _origin = new THREE.Vector3(), _ex = new THREE.Vector3(), _rt = new THREE.Vector3();
+const _up2 = new THREE.Vector3(), _noz = new THREE.Vector3(), _axis = new THREE.Vector3();
+const _thrust = new THREE.Vector3(0, 0, 1);
 
 function buildThruster() {
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(thPos, 3));
-  g.setAttribute('aLife', new THREE.BufferAttribute(thAttr, 2));
-  const m = new THREE.ShaderMaterial({
-    uniforms: {},
-    transparent: true, depthWrite: false, fog: false,
-    blending: THREE.AdditiveBlending,
-    vertexShader: `
-      attribute vec2 aLife; varying float vA;
+  jet = makeField(JET_MAX);
+  bub = makeField(BUB_MAX);
+  // Jet core: this phase genuinely IS specular, so additive is right here and only here.
+  jet.mesh = new THREE.Mesh(jet.g, fieldMaterial(THREE.AdditiveBlending, `
+        float a = (tx.r * 0.95 + tx.g * 0.85) * vC.a * mix(0.06, 1.0, vFog);
+        if (a < 0.004) discard;
+        gl_FragColor = vec4(vC.rgb, a);`));
+  bub.mesh = new THREE.Mesh(bub.g, fieldMaterial(THREE.NormalBlending, `
+        float rim = tx.r, body = tx.g;
+        float a = (rim * 0.92 + body * 0.5) * vC.a * mix(0.10, 1.0, vFog);
+        if (a < 0.004) discard;
+        // Bright rim, core DARKER than the water behind it. That single fact is what
+        // makes the plume read against the bright shallows AND against the abyss.
+        vec3 col = mix(vec3(0.030, 0.062, 0.082), vec3(0.90, 0.96, 1.00), rim / max(rim + body, 1e-3));
+        col *= 0.34 + 1.15 * clamp(1.0 - distance(vW, uLant) / 13.0, 0.0, 1.0);
+        gl_FragColor = vec4(col, a);`));
+  for (const m of [jet.mesh, bub.mesh]) {
+    m.frustumCulled = false; m.visible = false; m.renderOrder = 5;
+    scene.add(m);
+  }
+
+  // Pressure front: venting a bottle shoves water radially. Two rings, the second
+  // delayed, is the honest cheap read — a screen-space refraction would need a post
+  // pass and postfx.js has a documented history with those.
+  const rg = new THREE.RingGeometry(0.86, 1.0, 40);
+  const ringMat = () => new THREE.ShaderMaterial({
+    uniforms: { uA: { value: 0 }, uFogD },
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    vertexShader: `varying vec2 vUv; varying float vFog;
+      ${FOG_GLSL}
+      void main(){ vUv = uv;
+        vec3 wp = (modelMatrix * vec4(position, 1.0)).xyz;
+        vFog = fogVis(wp);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `uniform float uA; varying vec2 vUv; varying float vFog;
       void main(){
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = clamp(aLife.y * (240.0 / max(-mv.z, 0.4)), 1.0, 40.0);
-        vA = aLife.x;
-        gl_Position = projectionMatrix * mv;
-      }`,
-    // vented air: a bright meniscus with a hollow middle, not a glowing dot
-    fragmentShader: `
-      varying float vA;
-      void main(){
-        vec2 c = gl_PointCoord - 0.5;
-        float r = length(c) * 2.0;
-        if (r > 1.0) discard;
-        float rim = smoothstep(0.42, 0.92, r) * (1.0 - smoothstep(0.92, 1.0, r));
-        float body = (1.0 - r * r) * 0.16;
-        float a = (rim * 0.85 + body) * vA;
+        float a = (1.0 - abs(vUv.y - 0.5) * 2.0) * uA * mix(0.05, 1.0, vFog);
         if (a <= 0.004) discard;
-        gl_FragColor = vec4(vec3(0.74, 0.85, 0.88), a);
+        gl_FragColor = vec4(vec3(0.80, 0.92, 0.97), a);
+        ${TONE_OUT}
       }`
   });
-  thPts = new THREE.Points(g, m);
-  thPts.frustumCulled = false;
-  thPts.visible = false;
-  scene.add(thPts);
-
-  const cg = new THREE.ConeGeometry(0.42, 2.0, 14, 1, true);
-  cg.rotateX(Math.PI / 2);      // opens along +Z
-  cg.translate(0, 0, 1.0);
-  thCone = new THREE.Mesh(cg, new THREE.ShaderMaterial({
+  ringA = new THREE.Mesh(rg, ringMat());
+  ringB = new THREE.Mesh(rg, ringMat());
+  // Compression shell: a fresnel bubble standing in for the refraction we cannot afford.
+  pShell = new THREE.Mesh(new THREE.SphereGeometry(1, 20, 12), new THREE.ShaderMaterial({
     uniforms: { uA: { value: 0 } },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide, fog: false,
-    vertexShader: `varying vec2 vUv; varying vec3 vN, vW;
-      void main(){ vUv = uv; vN = normalize(mat3(modelMatrix) * normal);
+    side: THREE.BackSide,
+    vertexShader: `varying vec3 vN, vW;
+      void main(){ vN = normalize(mat3(modelMatrix) * normal);
         vW = (modelMatrix * vec4(position, 1.0)).xyz;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: `uniform float uA; varying vec2 vUv; varying vec3 vN, vW;
+    fragmentShader: `uniform float uA; varying vec3 vN, vW;
       void main(){
         vec3 V = normalize(cameraPosition - vW);
-        float chord = pow(1.0 - abs(dot(normalize(vN), V)), 1.6);
-        float a = chord * (1.0 - vUv.y) * uA;
-        if (a <= 0.003) discard;
-        gl_FragColor = vec4(vec3(0.60, 0.72, 0.76), a);
+        float a = pow(1.0 - abs(dot(normalize(vN), V)), 3.0) * uA;
+        if (a <= 0.004) discard;
+        gl_FragColor = vec4(vec3(0.66, 0.80, 0.88), a);
+        ${TONE_OUT}
       }`
   }));
-  thCone.frustumCulled = false;
-  thCone.visible = false;
-  scene.add(thCone);
+  for (const m of [ringA, ringB, pShell]) { m.frustumCulled = false; m.visible = false; scene.add(m); }
 }
 
-// game.js owns the authoritative on/off (physics + air drain); we only render it.
-export function thrusterFX(on, p) {
-  thOn = !!on;
-  if (on) {
-    airInletWorldPos(thOrigin);
-    // exhaust goes out the back: opposite the direction the diver is actually moving
-    if (p.vel.lengthSq() > 0.25) thDir.copy(p.vel).normalize().negate();
-    else thDir.set(-Math.sin(player.yaw), 0.1, -Math.cos(player.yaw)).normalize();
-  }
-}
-
-function emitThrust(n) {
+function emitJet(n) {
   for (let i = 0; i < n; i++) {
-    const k = thHead; thHead = (thHead + 1) % TH_MAX;
-    if (thLife[k] <= 0) thLive++;
-    thPos[k * 3] = thOrigin.x + rng(-0.07, 0.07);
-    thPos[k * 3 + 1] = thOrigin.y + rng(-0.07, 0.07);
-    thPos[k * 3 + 2] = thOrigin.z + rng(-0.07, 0.07);
-    const sp = rng(4.5, 8.5);
-    thVel[k * 3] = thDir.x * sp + rng(-0.9, 0.9);
-    thVel[k * 3 + 1] = thDir.y * sp + rng(-0.9, 0.9);
-    thVel[k * 3 + 2] = thDir.z * sp + rng(-0.9, 0.9);
-    thMax[k] = thLife[k] = rng(0.55, 1.05);
-    thAttr[k * 2 + 1] = rng(0.55, 1.5);
+    const k = jHead; jHead = (jHead + 1) % JET_MAX;
+    if (jLife[k] <= 0) jAlive++;
+    const p = k * 3;
+    jet.pos[p] = _noz.x + rng(-0.05, 0.05);
+    jet.pos[p + 1] = _noz.y + rng(-0.05, 0.05);
+    jet.pos[p + 2] = _noz.z + rng(-0.05, 0.05);
+    const sp = rng(22, 30);
+    // 14 degree half-angle cone about the nozzle axis
+    jVel[p] = _axis.x * sp + _rt.x * rng(-5.5, 5.5) + _up2.x * rng(-5.5, 5.5);
+    jVel[p + 1] = _axis.y * sp + _rt.y * rng(-5.5, 5.5) + _up2.y * rng(-5.5, 5.5);
+    jVel[p + 2] = _axis.z * sp + _rt.z * rng(-5.5, 5.5) + _up2.z * rng(-5.5, 5.5);
+    // Exhaust is fired into still water; it barely inherits his motion, so at 40 u/s he
+    // visibly outruns his own bubbles. That is correct and it is half the read.
+    jVel[p] += player.vel.x * 0.15; jVel[p + 1] += player.vel.y * 0.15; jVel[p + 2] += player.vel.z * 0.15;
+    jMax[k] = jLife[k] = rng(0.18, 0.42);
+    jet.cell[k] = (Math.random() * 4) | 0;
+    jet.size[k] = 0.10;
   }
 }
 
-function updateThruster(dt) {
-  thInt = thOn ? 1 : Math.max(0, thInt - dt / 0.4);
-  if (thInt <= 0 && thLive === 0) {
-    if (thPts.visible) { thPts.visible = false; thCone.visible = false; }
+function emitBub(n) {
+  for (let i = 0; i < n; i++) {
+    const k = bHead; bHead = (bHead + 1) % BUB_MAX;
+    if (bLife[k] <= 0) bAlive++;
+    const p = k * 3;
+    bub.pos[p] = _noz.x + rng(-0.09, 0.09);
+    bub.pos[p + 1] = _noz.y + rng(-0.09, 0.09);
+    bub.pos[p + 2] = _noz.z + rng(-0.09, 0.09);
+    const sp = rng(6, 14);
+    bVel[p] = _axis.x * sp + _rt.x * rng(-6, 6) + _up2.x * rng(-6, 6);
+    bVel[p + 1] = _axis.y * sp + _rt.y * rng(-6, 6) + _up2.y * rng(-6, 6);
+    bVel[p + 2] = _axis.z * sp + _rt.z * rng(-6, 6) + _up2.z * rng(-6, 6);
+    bVel[p] += player.vel.x * 0.15; bVel[p + 1] += player.vel.y * 0.15; bVel[p + 2] += player.vel.z * 0.15;
+    // Capped at 1.8 s: the pool is a ring buffer with no depth sort, and a long spatial
+    // wake makes the wrap-order compositing errors visible. A localized cloud hides them.
+    bMax[k] = bLife[k] = rng(0.9, 1.8);
+    bPh[k] = Math.random() * 7;
+    bBuoy[k] = rng(1.4, 2.4);
+    bS0[k] = rng(0.06, 0.19);
+    bub.cell[k] = (Math.random() * 4) | 0;
+    bub.size[k] = bS0[k];
+  }
+}
+
+// Re-derive the twin nozzle frame from the LIVE inlet position. Sampling it once at
+// ignition would leave the sustain spawning in open water 3-7 u behind his backpack.
+function nozzleFrame(n) {
+  airInletWorldPos(_origin);
+  _rt.crossVectors(_ex, UP);
+  if (_rt.lengthSq() < 1e-4) _rt.set(1, 0, 0);
+  _rt.normalize();
+  _up2.crossVectors(_rt, _ex).normalize();
+  const s = n ? 1 : -1;
+  _noz.copy(_origin).addScaledVector(_rt, s * 0.26).addScaledVector(_up2, -0.08);
+  // ~14 degrees out and 6 down: from directly behind, a diverging V instead of a point
+  _axis.copy(_ex).addScaledVector(_rt, s * 0.25).addScaledVector(_up2, -0.10).normalize();
+}
+
+export function fireThruster(dx, dy, dz, power = 1) {
+  _thrust.set(dx, dy, dz);
+  if (_thrust.lengthSq() < 1e-6) _thrust.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw));
+  _thrust.normalize();
+  _ex.copy(_thrust).negate();
+  burstT = BURST_DUR; burstPow = power; burstCount++;
+  const live = power >= 0.25;
+  for (let n = 0; n < 2; n++) {
+    nozzleFrame(n);
+    if (live) emitJet(JET_IGNITE);
+    emitBub(Math.round(BUB_IGNITE * (live ? 1 : 0.30)));
+  }
+  if (live) {
+    ringT = RING_DUR;
+    ringA.quaternion.setFromUnitVectors(FWD_Z, _thrust);
+    ringB.quaternion.copy(ringA.quaternion);
+  }
+}
+
+function updateThruster(dt, t) {
+  if (burstT <= 0 && jAlive === 0 && bAlive === 0 && ringT <= 0) {
+    if (jet.mesh.visible) {
+      jet.mesh.visible = bub.mesh.visible = false;
+      ringA.visible = ringB.visible = pShell.visible = false;
+    }
     return;
   }
+  if (scene.fog) uFogD.value = scene.fog.density;
 
-  if (thInt > 0) {
-    thEmit += dt * 58 * thInt;
-    const n = thEmit | 0;
-    if (n > 0) { thEmit -= n; emitThrust(Math.min(n, 12)); }
-    thCone.visible = true;
-    thCone.position.copy(thOrigin);
-    thCone.quaternion.setFromUnitVectors(FWD_Z, thDir);
-    thCone.material.uniforms.uA.value = 0.10 * thInt;
-  } else if (thCone.visible) {
-    thCone.visible = false;
-  }
+  // ---- sustain emission, still tracking his backpack --------------------------------
+  if (burstT > 0) {
+    const e = burstEnv(BURST_DUR - burstT) * burstPow;
+    burstT = Math.max(0, burstT - dt);
+    jFrac += JET_RATE * e * dt;
+    bFrac += BUB_RATE * e * dt;
+    const nj = jFrac | 0, nb = bFrac | 0;
+    jFrac -= nj; bFrac -= nb;
+    if (nj > 0 || nb > 0) {
+      for (let n = 0; n < 2; n++) {
+        nozzleFrame(n);
+        if (nj > 0 && burstPow >= 0.25) emitJet(Math.min(nj, 12) >> 1 || 1);
+        if (nb > 0) emitBub(Math.min(nb, 12) >> 1 || 1);
+      }
+    }
+  } else { jFrac = bFrac = 0; }
 
-  thPts.visible = true;
+  // ---- jet core: hard drag, short life ---------------------------------------------
+  jet.mesh.visible = true;
   let live = 0;
-  for (let k = 0; k < TH_MAX; k++) {
-    if (thLife[k] <= 0) { thAttr[k * 2] = 0; continue; }
+  const jd = Math.exp(-3.2 * dt);
+  for (let k = 0; k < JET_MAX; k++) {
+    const c = k * 4;
+    if (jLife[k] <= 0) { jet.col[c + 3] = 0; continue; }
+    jLife[k] -= dt;
+    if (jLife[k] <= 0) { jet.col[c + 3] = 0; continue; }
     live++;
-    thLife[k] -= dt;
-    if (thLife[k] <= 0) { thAttr[k * 2] = 0; live--; continue; }
-    const drag = Math.pow(0.06, dt);
-    thVel[k * 3] *= drag;
-    thVel[k * 3 + 2] *= drag;
-    // once the jet dies the air simply rises, the way vented air does
-    thVel[k * 3 + 1] = thVel[k * 3 + 1] * drag + 2.6 * dt;
-    thPos[k * 3] += thVel[k * 3] * dt;
-    thPos[k * 3 + 1] += thVel[k * 3 + 1] * dt;
-    thPos[k * 3 + 2] += thVel[k * 3 + 2] * dt;
-    const t01 = thLife[k] / thMax[k];
-    thAttr[k * 2] = Math.min(1, t01 * 2.2) * 0.85;
+    const p = k * 3;
+    jVel[p] *= jd; jVel[p + 1] *= jd; jVel[p + 2] *= jd;
+    jet.pos[p] += jVel[p] * dt; jet.pos[p + 1] += jVel[p + 1] * dt; jet.pos[p + 2] += jVel[p + 2] * dt;
+    const u = 1 - jLife[k] / jMax[k];
+    jet.size[k] = 0.10 + 0.45 * u;
+    jet.col[c] = 0.95; jet.col[c + 1] = 0.99; jet.col[c + 2] = 1.0;
+    jet.col[c + 3] = Math.min(1, u * 30) * Math.pow(1 - u, 1.2) * 0.85;
   }
-  thLive = live;
-  thPts.geometry.attributes.position.needsUpdate = true;
-  thPts.geometry.attributes.aLife.needsUpdate = true;
+  jAlive = live;
+
+  // ---- cloud + wake: coalesce, boil, then rise wobbling -----------------------------
+  bub.mesh.visible = true;
+  live = 0;
+  const bd = Math.exp(-2.2 * dt);
+  for (let k = 0; k < BUB_MAX; k++) {
+    const c = k * 4;
+    if (bLife[k] <= 0) { bub.col[c + 3] = 0; continue; }
+    bLife[k] -= dt;
+    if (bLife[k] <= 0) { bub.col[c + 3] = 0; continue; }
+    live++;
+    const p = k * 3;
+    bVel[p] *= bd; bVel[p + 1] *= bd; bVel[p + 2] *= bd;
+    // Analytic curl so the plume boils rather than expanding cleanly. Three sin/cos —
+    // two fbm samples would be 24 Math.sin and 74% of this module's whole frame budget.
+    const px = bub.pos[p], py = bub.pos[p + 1], pz = bub.pos[p + 2];
+    bVel[p] += Math.sin(py * 0.7 + t * 1.9) * 1.6 * dt;
+    bVel[p + 1] += Math.sin(pz * 0.6 - t * 1.6) * 1.0 * dt;
+    bVel[p + 2] += Math.sin(px * 0.8 + t * 2.2) * 1.6 * dt;
+    const sp2 = bVel[p] * bVel[p] + bVel[p + 1] * bVel[p + 1] + bVel[p + 2] * bVel[p + 2];
+    if (sp2 < 1.44) {
+      // the jet is spent: it is just air now, and air goes up — wobbling, the way real
+      // millimetre bubbles zig-zag rather than climbing straight
+      bVel[p + 1] += (bBuoy[k] - bVel[p + 1]) * 2.0 * dt;
+      bVel[p] += Math.sin(t * 3.4 + bPh[k]) * 1.8 * dt;
+      bVel[p + 2] += Math.cos(t * 2.9 + bPh[k] * 1.7) * 1.8 * dt;
+    }
+    bub.pos[p] = px + bVel[p] * dt;
+    bub.pos[p + 1] = py + bVel[p + 1] * dt;
+    bub.pos[p + 2] = pz + bVel[p + 2] * dt;
+    const u = 1 - bLife[k] / bMax[k];
+    // bubbles coalesce and expand as they slow
+    bub.size[k] = bS0[k] * (0.35 + 1.9 * Math.pow(u, 0.6));
+    bub.col[c] = bub.col[c + 1] = bub.col[c + 2] = 1;
+    bub.col[c + 3] = Math.min(1, u * 14) * Math.pow(1 - u, 0.9);
+  }
+  bAlive = live;
+
+  // no array literal here: this runs every frame of a burst and the pools are hot
+  for (let a = 0; a < jet.attr.length; a++) { jet.attr[a].needsUpdate = true; bub.attr[a].needsUpdate = true; }
+
+  // ---- shock rings + compression shell ---------------------------------------------
+  if (ringT > 0) {
+    ringT = Math.max(0, ringT - dt);
+    const u = 1 - ringT / RING_DUR, f = (1 - u) * (1 - u);
+    airInletWorldPos(_origin);
+    ringA.visible = true;
+    ringA.position.copy(_origin);
+    ringA.scale.setScalar(0.45 + 4.15 * u);
+    ringA.material.uniforms.uA.value = 0.55 * f * burstPow;
+    const u2 = clamp((u * RING_DUR - 0.07) / (RING_DUR - 0.07), 0, 1);
+    ringB.visible = u2 > 0;
+    ringB.position.copy(_origin);
+    ringB.scale.setScalar(0.45 + 5.75 * u2);
+    ringB.material.uniforms.uA.value = 0.30 * (1 - u2) * (1 - u2) * burstPow;
+    pShell.visible = true;
+    pShell.position.copy(_origin);
+    pShell.scale.setScalar(0.6 + 2.8 * u);
+    pShell.material.uniforms.uA.value = 0.30 * f * burstPow;
+  } else if (ringA.visible) {
+    ringA.visible = ringB.visible = pShell.visible = false;
+  }
 }
 
 // =================================================================== lifecycle
@@ -584,7 +830,7 @@ export function updateTools(dt, t, p) {
   ev.spearRecovered = 0;
   updateSonar(dt);
   updateSpears(dt, t, p);
-  updateThruster(dt);
+  updateThruster(dt, t);
   return ev;
 }
 
@@ -592,5 +838,7 @@ export function updateTools(dt, t, p) {
 window.tools = {
   spears,
   sonar: () => ({ cool: +sonarCool.toFixed(2), age: +sonarAge.toFixed(2), echoes: echoN, live: echoLive }),
+  thruster: () => ({ jet: jAlive, bub: bAlive, ring: +ringT.toFixed(2), burstT: +burstT.toFixed(3), bursts: burstCount }),
+  jetPos: () => jet.pos, jetCol: () => jet.col, bubPos: () => bub.pos, bubCol: () => bub.col,
   drop: () => spears.map(s => s.state)
 };
