@@ -22,7 +22,52 @@ export let snow = null;
 // reference frame. Red still dies fast, which is what keeps warm accents punchy up close.
 const K_ABS = [0.0520, 0.0062, 0.0042];
 // Relative extinction along the *viewing* path (turbidity), scaled by fog.density.
+// This is the MOLECULAR spectrum: it is what clear water does. See K_PART below for
+// the mineral half.
 const K_EXT = [3.50, 1.45, 1.00];
+
+// ---------------------------------------------------------------------------
+// THE SILT LINE — the water column is stratified, not uniform.
+// ---------------------------------------------------------------------------
+// rho(y) = rhoClear(y) + amp * min(1, exp(-(y - yf)/hs))
+//
+// A nepheloid layer pools on each seabed under genuinely clearer water, so the murk
+// has a CEILING and rising out of it is the reveal. amp is solved per zone so the
+// GREEN extinction at the STANDING CAMERA equals the old flat model's value EXACTLY.
+// That height is floor + EYE_H + CAM_UP = 3.75, NOT the eye at 1.35: updateAtmosphere
+// is keyed on camera.position.y (game.js), so the camera is what the profile is
+// sampled at. Calibrating at the eye instead left the floors 4-5% thinner than the old
+// model — measured live at -4.1/-5.1/-4.6% — which also carried every additive glow
+// that reads fog.density (creatures, predators, tools) 5% further than tuned.
+// Where Sal walks is preserved by construction; what changes is the room above him.
+// Green visibility on rising: 1.9x in zone 0, 3.4x in zone 1, 4.8x in zone 2.
+//
+// The clear column is linear in y, so its exact path mean is the profile at the
+// segment MIDPOINT — free, no exp at all. RC_MIN's floor lands at y = -1111, which
+// is 231 units below the deepest terrain; it exists only to guarantee positivity.
+const RC0 = 0.00780, RC_K = 0.00072, RC_MIN = 0.20;
+// Per zone: yf (datum), hs (scale height), amp. Selected by CAMERA height and blended
+// over the inter-zone gaps — see nephParams/nephAt.
+const NEPH_YF = [-246, -552, -836];
+const NEPH_HS = [24, 30, 38];
+const NEPH_AMP = [0.00810, 0.01776, 0.02626];
+
+// --- A/B KILL SWITCH: THE WARM NEAR FIELD IS A TASTE CALL -------------------
+// These THREE values, and only these three, buy the mineral colour. Change them to
+//     const K_PART = K_EXT;
+//     const SILT_MIX = 0.00, SILT_GAIN = 1.00;
+// and the whole system collapses to pure DENSITY stratification with BYTE-IDENTICAL
+// colour: same fog tint, same dome, same everything the old model drew, with only the
+// vertical structure added. Nothing else needs touching, in this file or any other.
+// What they cost: the near field at the floor shifts warm — red 2% reach goes 84 -> 105
+// units in zone 0, 55 -> 79 in zone 1, 42 -> 64 in zone 2, and silt inscatter lifts
+// luminance ~19%. Green is byte-identical at every floor either way. That warmth is
+// physically right for mineral particulate (red is the channel silt scatters back
+// rather than absorbs) but it is a LOOK change in the one region the brief said to
+// preserve, so it gets A/B'd against the reference screenshots, not argued about.
+const K_PART = [2.10, 1.44, 1.12];   // green matched to 1%, red 1.67x more transmissive
+const SILT_MIX = 0.62, SILT_GAIN = 1.08;
+// ---------------------------------------------------------------------------
 // Surface irradiance tint; scene.fog.color carries it, everything else derives from it.
 // Green-dominant at the surface (coastal teal) — absorption alone turns it blue with depth.
 // These are scene-linear radiances, and they stay linear all the way to the canvas:
@@ -80,6 +125,59 @@ vec3 abyssaAmbient(vec3 surf,float y){
   return surf*exp(${v3(K_ABS)}*min(y,0.0))+zoneGlow(y);
 }`;
 
+// The stratified water profile, shared VERBATIM by the fog chunk and the background
+// dome. It has to be both places: the fog chunk's L -> infinity asymptote and the
+// dome converge on the identical value only because they evaluate the same functions
+// at the same height. (Injecting it into one shader and not the other is not a subtle
+// bug — the other one fails to link and there is no background at all.)
+const GLSL_WATER = `
+#define RC0 ${f(RC0)}
+#define RC_K ${f(RC_K)}
+#define RC_MIN ${f(RC_MIN)}
+#define KMOL ${v3(K_EXT)}
+#define KPART ${v3(K_PART)}
+
+float rhoClearAt( float y ){ return RC0 * max( RC_MIN, 1.0 + RC_K * y ); }
+
+// Both edges ASCEND. GLSL smoothstep is UNDEFINED for edge0 >= edge1: the inverted
+// form works on some drivers and produces garbage on others, presenting as
+// zone-dependent fog corruption on one machine only.
+void nephParams( float yc, out float yf, out float hs, out float amp ){
+  float t1 = 1.0 - smoothstep( -400.0, -300.0, yc );
+  float t2 = 1.0 - smoothstep( -710.0, -610.0, yc );
+  yf  = mix( mix( ${f(NEPH_YF[0])}, ${f(NEPH_YF[1])}, t1 ), ${f(NEPH_YF[2])}, t2 );
+  hs  = mix( mix( ${f(NEPH_HS[0])}, ${f(NEPH_HS[1])}, t1 ), ${f(NEPH_HS[2])}, t2 );
+  amp = mix( mix( ${f(NEPH_AMP[0])}, ${f(NEPH_AMP[1])}, t1 ), ${f(NEPH_AMP[2])}, t2 );
+}
+
+// Antiderivative of the SATURATING shape min(1, exp(-s)). The exp argument is
+// ALWAYS <= 0, so this cannot overflow. The saturation is what stops the layer
+// amplifying without bound below its own datum -- that amplification is what made
+// the naive exponential give 22-unit visibility in the open water between zones,
+// which is exactly where every zone transition happens.
+float nephG( float s, out float e ){
+  e = exp( -max( s, 0.0 ) );
+  return min( s, 0.0 ) + 1.0 - e;
+}
+
+// Local silt share of the GREEN extinction. A PURE FUNCTION OF y -- that is what
+// makes the dome and the fog chunk agree at L -> infinity, analytically, at every
+// elevation. Do not reintroduce an optical-depth-share version: as a share of the
+// RAY's optical depth it drifts with distance, so two pixels straddling a silhouette
+// get different tints.
+float murkFracAt( float y, float yf, float hs, float amp ){
+  float m = amp * exp( -max( ( y - yf ) / hs, 0.0 ) ) * KPART.g;
+  return m / ( rhoClearAt( y ) * KMOL.g + m );
+}
+
+// Mineral inscatter: silt scatters back warm and lifts luminance. See the A/B kill
+// switch beside K_PART in water.js -- at SILT_MIX 0.0 / SILT_GAIN 1.0 this is the
+// identity function and the whole system is pure density stratification.
+vec3 siltTint( vec3 A, float fm ){
+  float lum = dot( A, vec3( 0.2126, 0.7152, 0.0722 ) );
+  return mix( A, mix( A, lum * vec3( 1.42, 1.16, 0.72 ), ${f(SILT_MIX)} ) * ${f(SILT_GAIN)}, fm );
+}`;
+
 // Weather scaling of the surface irradiance (set by game.js): night and storms dim
 // what reaches the water; the zoneGlow floor is untouched so the deep stays itself.
 // The surface material needs day/storm/flash as well, or the sky in Snell's window is
@@ -118,6 +216,35 @@ function ambientAt(y, out) {
   );
 }
 
+// CPU mirror of GLSL_WATER — ONE source of truth: both read the same constants above,
+// so the shader and the JS cannot drift. This is what drives scene.fog.density (the
+// true local total at the eye, which is why creatures/predators/tools/volumetrics need
+// no edits) and uExtG.
+// Note THREE.MathUtils.smoothstep takes (x, min, max), not GLSL's (edge0, edge1, x).
+export function rhoClearAt(y) { return RC0 * Math.max(RC_MIN, 1 + RC_K * y); }
+// Returns a module-scoped object: called every frame, and this file allocates nothing
+// in a hot path. Do not hold the reference across a second nephAt() call.
+const _neph = { yf: 0, hs: 0, amp: 0 };
+export function nephAt(y) {
+  const t1 = 1 - ms(y, -400, -300), t2 = 1 - ms(y, -710, -610);
+  _neph.yf = ml(ml(NEPH_YF[0], NEPH_YF[1], t1), NEPH_YF[2], t2);
+  _neph.hs = ml(ml(NEPH_HS[0], NEPH_HS[1], t1), NEPH_HS[2], t2);
+  _neph.amp = ml(ml(NEPH_AMP[0], NEPH_AMP[1], t1), NEPH_AMP[2], t2);
+  return _neph;
+}
+const nephShape = (y, n) => n.amp * Math.exp(-Math.max((y - n.yf) / n.hs, 0));
+export function waterRho(y) { const n = nephAt(y); return rhoClearAt(y) + nephShape(y, n); }
+export function waterExtG(y) {
+  const n = nephAt(y);
+  return rhoClearAt(y) * K_EXT[1] + nephShape(y, n) * K_PART[1];
+}
+// Silt share of the green extinction: 0 in clear water, ~0.53/0.78/0.89 on the three
+// floors. Drives the particulate density, so the grit visibly thins as Sal climbs out.
+export function murkFrac(y) {
+  const n = nephAt(y), m = nephShape(y, n) * K_PART[1];
+  return m / (rhoClearAt(y) * K_EXT[1] + m);
+}
+
 // Replace three's grey-mix fog with per-channel Beer-Lambert extinction plus
 // depth-tinted inscatter. scene.fog stays a FogExp2 so USE_FOG / FOG_EXP2 and the
 // fogColor / fogDensity uniform plumbing keep working on every built-in material.
@@ -145,11 +272,19 @@ function ambientAt(y, out) {
     uniform float fogFar;
   #endif
 ${GLSL_AMBIENT}
+${GLSL_WATER}
 #endif`;
   // The inscatter is dominated by the near end of a long ray, so weight the sample
   // height by extinction: wgt = 1/a - 1/(e^a - 1), which tends to 1/2 for short rays
-  // and to 1/a for deep ones. That also makes an infinitely distant surface converge
-  // on exactly what the background dome draws, so there is no seam between them.
+  // and to 1/a for deep ones. Under the OLD uniform medium that made an infinitely
+  // distant surface land on exactly what the dome draws. Stratified it no longer can:
+  // wgt uses the ray's PATH-mean extinction while the dome's uReach is the camera's
+  // LOCAL mean free path, and in a layered column those differ off the horizontal.
+  // Measured (shipped GLSL, black object at camera.far against the dome): 0 code
+  // values at the horizon at every depth, 0-3 up to 15 degrees, worst 7-8 at 45-80
+  // degrees from a FLOOR, and 0-2 everywhere in the clear bands. The silt TINT half
+  // does agree exactly by construction — murkFracAt is a pure function of height, so
+  // both sides evaluate the same number at their own sample point. See the report.
   C.fog_fragment = `#ifdef USE_FOG
   {
     #ifdef FOG_EXP2
@@ -157,15 +292,44 @@ ${GLSL_AMBIENT}
     #else
       float dens = 1.0 / max( 1.0, fogFar - fogNear );
     #endif
-    float ea = clamp( dens * ${f(K_EXT[1])} * vFogDepth, 1e-4, 30.0 );
+    float yf, hs, amp;
+    nephParams( cameraPosition.y, yf, hs, amp );
+    float s0 = ( cameraPosition.y - yf ) / hs;
+    float s1 = ( vFogY - yf ) / hs;
+    float e0, e1;
+    float g0 = nephG( s0, e0 );
+    float g1 = nephG( s1, e1 );
+    float ds = s1 - s0;
+    // Below |ds| = 0.02 the difference of two nearly equal G values loses fp32;
+    // above it the quotient is EXACT for every ray, including one straddling the
+    // saturation kink. Verified in emulated fp32 against a 400k-sample integration:
+    // worst relative error anywhere 1.77e-3 (on a term worth 3.4e-4 of amp),
+    // 1.67e-5 at the crossover. There is no 0/0 branch to guard.
+    float shp = abs( ds ) > 0.02 ? ( g1 - g0 ) / ds
+                                 : exp( -max( 0.5 * ( s0 + s1 ), 0.0 ) );
+
+    // fogDensity is the TRUE LOCAL total density at the eye -- unchanged meaning for
+    // creatures.js, predators.js, tools.js (uFogD) and postfx.volumetrics.js (uDens),
+    // all four of which keep working with NO edit. Invert the profile at the eye to
+    // recover the storm gain: e0 is already computed by nephG, so weather coupling
+    // costs one divide and zero extra transcendentals.
+    float storm = dens / max( rhoClearAt( cameraPosition.y ) + amp * e0, 1e-6 );
+
+    // Clear column is linear in y, so its exact path mean is the midpoint value.
+    float ic  = vFogDepth * rhoClearAt( 0.5 * ( cameraPosition.y + vFogY ) ) * storm;
+    float im  = vFogDepth * amp * shp * storm;
+    vec3  tau = ic * KMOL + im * KPART;
+    vec3  tr  = exp( -tau );
+
     // series form below 0.6: the closed form is two large reciprocals that cancel,
     // which loses all precision in fp32 on nearby geometry
-    float wgt = ea < 0.6
-      ? 0.5 - ea * 0.0833333 + ea * ea * ea * 0.0013889
-      : 1.0 / ea - 1.0 / ( exp( ea ) - 1.0 );
-    float ay = cameraPosition.y + ( vFogY - cameraPosition.y ) * wgt;
-    vec3 tr = exp( -dens * ${v3(K_EXT)} * vFogDepth );
-    gl_FragColor.rgb = gl_FragColor.rgb * tr + abyssaAmbient( fogColor, ay ) * ( 1.0 - tr );
+    float ea  = clamp( tau.g, 1e-4, 30.0 );
+    float wgt = ea < 0.6 ? 0.5 - ea * 0.0833333 + ea * ea * ea * 0.0013889
+                         : 1.0 / ea - 1.0 / ( exp( ea ) - 1.0 );
+    float ay  = cameraPosition.y + ( vFogY - cameraPosition.y ) * wgt;
+
+    vec3 J = siltTint( abyssaAmbient( fogColor, ay ), murkFracAt( ay, yf, hs, amp ) );
+    gl_FragColor.rgb = gl_FragColor.rgb * tr + J * ( 1.0 - tr );
   }
 #endif`;
 })();
@@ -208,10 +372,20 @@ function buildDome() {
       varying vec3 vDir;
       ${GLSL_NOISE}
       ${GLSL_AMBIENT}
+      ${GLSL_WATER}
       void main(){
         vec3 d = normalize( vDir );
-        // uReach is one mean free path: the extinction-weighted height this ray samples
-        vec3 c = abyssaAmbient( uSurf, cameraPosition.y + d.y * uReach );
+        // uReach is one mean free path: the extinction-weighted height this ray samples.
+        // murkFracAt is a PURE FUNCTION of that height, so the silt tint here and the
+        // silt tint the fog chunk reaches at L -> infinity are the same number by
+        // construction -- no magic path length, and no view-dependent tint where two
+        // pixels straddle a silhouette. That is what a fixed "four mean free paths"
+        // composite could not do. The residual step is in ay itself, not in the tint:
+        // see the note above C.fog_fragment for the measured numbers.
+        float ay = cameraPosition.y + d.y * uReach;
+        float yf, hs, amp;
+        nephParams( cameraPosition.y, yf, hs, amp );
+        vec3 c = siltTint( abyssaAmbient( uSurf, ay ), murkFracAt( ay, yf, hs, amp ) );
         float up = max( 0.0, d.y );
         c += uSunGlow * ( up * up * up + 0.25 * up );
         // volume texture, faded out near the horizon so the ocean plane's far edge
@@ -316,7 +490,11 @@ function buildRays() {
 // box that follows the camera modulo its own size, so density stays constant and
 // nothing is simulated on the CPU.
 // ---------------------------------------------------------------------------
-function snowLayer(N, L, sizeMul, alpha, fall, colA, colB) {
+// extK scales the along-ray extinction the layer fades under. The near layer keeps
+// 0.75; the far one runs 0.45 so it can survive out to 250 units in the clear water
+// above the silt line — that mid-field is empty otherwise, and clear water is what
+// exposes it.
+function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
   const g = new THREE.BufferGeometry();
   const p = new Float32Array(N * 3), s = new Float32Array(N * 3);
   for (let i = 0; i < N; i++) {
@@ -331,13 +509,14 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB) {
     uTime, uCam, uExtG, uLightPos,
     uL: { value: L }, uSize: { value: sizeMul }, uAlpha: { value: alpha },
     uFall: { value: fall }, uPix: { value: 900 }, uDepth: { value: 0.5 },
+    uExtK: { value: extK },
     uColA: { value: new THREE.Vector3(...colA) }, uColB: { value: new THREE.Vector3(...colB) }
   };
   const mat = new THREE.ShaderMaterial({
     uniforms: u, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, fog: false,
     vertexShader: `uniform vec3 uCam, uLightPos, uColA, uColB;
-      uniform float uTime, uL, uSize, uAlpha, uFall, uPix, uExtG, uDepth;
+      uniform float uTime, uL, uSize, uAlpha, uFall, uPix, uExtG, uDepth, uExtK;
       attribute vec3 aSeed;
       varying float vA; varying vec3 vC;
       void main(){
@@ -354,7 +533,7 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB) {
         vA = uAlpha * uDepth
            * smoothstep( uL * 0.5, uL * 0.32, length( w - uCam ) )
            * smoothstep( 0.5, 3.0, dist )
-           * exp( -dist * uExtG * 0.75 );
+           * exp( -dist * uExtG * uExtK );
         vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 + 2.6 * lb );
         gl_Position = projectionMatrix * mv;
       }`,
@@ -728,11 +907,25 @@ export function buildWater() {
   snow = new THREE.Group();
   // near grit gives the parallax that sells "I am inside a medium"
   snow.add(snowLayer(2400, 30, 0.020, 0.36, 0.55, [0.55, 0.75, 0.85], [0.80, 0.86, 0.78]));
-  // far snow: bigger, slower, with a few large detritus flakes from the size^2 bias
-  snow.add(snowLayer(3200, 170, 0.075, 0.30, 0.35, [0.50, 0.70, 0.85], [0.86, 0.80, 0.62]));
+  // far snow: bigger, slower, with a few large detritus flakes from the size^2 bias.
+  // Box 170 -> 300 (fade band 150..96 instead of 85..54) and 3200 -> 4200 points to
+  // hold the same density in the larger volume. At 250 units in the zone-0 clear band
+  // it still reads 30% transmittance — real mid-field grit, where today there is
+  // nothing at all between 85 and 205 units.
+  snow.add(snowLayer(4200, 300, 0.075, 0.30, 0.35, [0.50, 0.70, 0.85], [0.86, 0.80, 0.62], 0.45));
   scene.add(snow);
   buildBubbles();
-  updateAtmosphere(0.03);   // prime fog / background before the title screen renders
+  // Prime fog / background before the title screen renders. game.js only calls
+  // updateAtmosphere in the play and won branches, so this ONE call is what the entire
+  // title screen renders with — the camera is still at the origin at boot, so camY has
+  // to be passed explicitly or the title primes from y=0 rather than from where the
+  // portrait shot actually sits. -27 is that height (depth01 0.03 x 900).
+  // This does NOT reproduce the old title density and cannot: the old flat model
+  // THICKENED with depth from 0.0078, while the stratified clear column THINS (RC_K>0,
+  // y<0 — deep water really is clearer than surface water). Matching 0.008415 would
+  // need y=+109, above the waterline. The title is ~10% clearer than it was, which is
+  // the same opening the descent sweep already accepts at y=-20 (ratio 1.074).
+  updateAtmosphere(0.03, -27);
 }
 
 export function updateWater(dt, t) {
@@ -741,11 +934,18 @@ export function updateWater(dt, t) {
 
   // shafts only exist while sunlight does; when the raymarched volumetric pass is
   // active the billboards drop to accents over its broad columns (rayDim, game.js)
-  uRayFade.value = 0.62 * rayDim * Math.max(0, 1 - d01 * 4.2) * (0.82 + 0.18 * Math.sin(t * 0.23));
+  // 3.66 puts the fade at exactly zero at y = -245.9, which is zone 0's silt datum:
+  // shafts do not exist inside the nepheloid layer, and they fade IN as Sal climbs out
+  // of it (0.244 at the zone-0 clear band, 0.39 at -150, 0.59 at -100). The identical
+  // constant lives in postfx.volumetrics.js MARCH_FRAG — if the two ever disagree the
+  // billboards are visible where the raymarched columns are not, which reads as a bug.
+  uRayFade.value = 0.62 * rayDim * Math.max(0, 1 - d01 * 3.66) * (0.82 + 0.18 * Math.sin(t * 0.23));
   rayMesh.visible = uRayFade.value > 0.004;
-  // Fade the surface out over the first ~150 units rather than cutting it off, so it
-  // never lingers as a black ceiling once absorption has swallowed it.
-  const sFade = clamp(1 - (-y - 45) / 105, 0, 1);
+  // The surface survives to y = -330 instead of being culled at -150. In stratified
+  // water the ceiling is the invitation: from the zone-0 floor the column overhead now
+  // passes 14.6% blue (3.8% under the old flat model), so there is something up there
+  // worth climbing to and it has to still be drawn.
+  const sFade = clamp(1 - (-y - 60) / 270, 0, 1);
   surface.visible = sFade > 0.004;
   if (surface.visible) {
     const su = surface.material.uniforms;
@@ -777,10 +977,14 @@ export function updateWater(dt, t) {
     su.uNearK.value = clamp(1 + y / 90, 0, 1);
   }
 
-  // particulates thicken with depth
-  const dens = clamp(d01 * 1.6, 0, 1);
-  snowLayers[0].uDepth.value = 0.55 + dens * 0.75;
-  snowLayers[1].uDepth.value = 0.50 + dens * 0.90;
+  // Particulate density follows the SILT, not the depth. This is the strongest local
+  // confirmation of a global effect the game can give: the grit visibly thins around
+  // Sal as he rises out of the layer, and thickens as he settles back into it. On the
+  // floors it lands where the depth-driven version used to (z0 0.91 vs 0.88, z2 1.33
+  // vs 1.40), so standing on the bottom is unchanged.
+  const mf = murkFrac(y);
+  snowLayers[0].uDepth.value = 0.42 + 0.95 * mf;
+  snowLayers[1].uDepth.value = 0.36 + 1.10 * mf;
 
   // the lantern rides roughly where the camera looks, ~8.5 units ahead
   camera.getWorldDirection(_tmp);
@@ -795,17 +999,28 @@ export function updateWater(dt, t) {
   );
 }
 
-// Depth-driven water optics. depth01 = 0 at the surface, 1 at the deepest zone.
+// Depth-driven water optics. depth01 = 0 at the surface, 1 at the deepest zone; it
+// now only carries the WEATHER falloff, because the column itself is a function of
+// height. camY defaults to the live camera so water.js's own boot call still works.
 // scene.fog.color is the *surface irradiance*; the shader applies the vertical
 // absorption ramp per fragment, so a frame can be teal above and ink below.
-export function updateAtmosphere(depth01) {
+export function updateAtmosphere(depth01, camY = camera.position.y) {
   scene.fog.color.setRGB(SURF_LIGHT[0] * wSurfK, SURF_LIGHT[1] * wSurfK, SURF_LIGHT[2] * wSurfK, THREE.LinearSRGBColorSpace);
-  // Long visibility in the shallows (the reference reads 200+ units), closing to a
-  // slightly murkier abyss than before so the descent arc is brightness you give up.
-  // Storms stir the top of the column: extra murk that fades out with depth.
-  scene.fog.density = (0.0078 + depth01 * 0.0205) * (1 + wMurk * 0.55 * Math.max(0, 1 - depth01 * 2.4));
-  uExtG.value = scene.fog.density * K_EXT[1];
-  scene.background = ambientAt(-depth01 * 900, _outCol);
+  // Storms stir the top of the column: extra murk that fades out with depth. It is a
+  // scalar GAIN on the whole profile — the shader divides it back out at the eye to
+  // recover it, so weather still thickens the water. What a gale CANNOT do is raise
+  // the silt ceiling; that needs a scale-height uniform and there is no free one.
+  const storm = 1 + wMurk * 0.55 * Math.max(0, 1 - depth01 * 2.4);
+  // The TRUE LOCAL total density at the eye. Four downstream consumers read this every
+  // frame (creatures/predators/tools uFogD, volumetrics uDens) and its meaning is
+  // deliberately unchanged: within 1% of the old flat model at every floor, so no
+  // additive glow changes range and nothing turns neon.
+  scene.fog.density = waterRho(camY) * storm;
+  uExtG.value = waterExtG(camY) * storm;
+  // Keyed to the CAMERA, not to -depth01*900. That incidentally settles the long-
+  // standing player-depth vs camera-depth disagreement (CAM_UP 2.4 / CAM_BACK 9 on a
+  // lagging spring), and it is what makes the background match the fog's asymptote.
+  scene.background = ambientAt(camY, _outCol);
   return _outCol;
 }
 

@@ -142,9 +142,11 @@ void main(){
 
   for ( int i = 0; i < STEPS; i++ ) {
     // Exactly the billboard-ray fade curve from water.js updateWater(): gone by
-    // y = -214, which is ~40% of zone 0's range.
+    // y = -245.9, which is zone 0's silt datum. Shafts do not exist inside the
+    // nepheloid layer and fade in as the diver climbs out of it. If this constant
+    // ever drifts from water.js's the billboards read where the columns do not.
     float d01 = clamp( -p.y / 900.0, 0.0, 1.0 );
-    float fade = max( 0.0, 1.0 - d01 * 4.2 );
+    float fade = max( 0.0, 1.0 - d01 * 3.66 );
 
     if ( fade > 0.002 && p.y < 0.0 ) {
       float shaft = texture2D( tCaust, q ).r;

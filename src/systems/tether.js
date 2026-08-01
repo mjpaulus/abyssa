@@ -97,6 +97,25 @@ const MAXSUB = 4;                // dt is split into <=4 equal steps, never trun
 const RIB_PITCH = 0.12;          // m of world arc per corrugation rib — constant, always
 
 // ---------------------------------------------------------------------------
+// Minimum screen width. The hose is 2*RAD = 0.13 units across, so past
+// dv = 0.13*uPix/TETHER_MIN_PX it covers less than one and a half pixels and the
+// rasteriser drops it to a dashed ghost and then to nothing — exactly where it would
+// otherwise be the best scale cue in the game, and the only one that reads along the
+// VERTICAL axis. The floor is in BACKING-STORE pixels, not CSS pixels, because that is
+// where the dropout happens; the crossover therefore lands at 72 m on a 1080-tall buffer
+// and at 149 m on a 2256-tall one (measured). RAD itself cannot move: it feeds EXT, the
+// seabed contact offset, and ending.js finds the umbilical by shape alone. So the
+// widening is done in the vertex shader on the unit-radius cylinder, BEFORE instanceMatrix
+// applies RAD, and it is a max() against 1.0 — inside the crossover distance not one bit
+// of the near-field silhouette changes.
+const TETHER_MIN_PX = 1.4;
+// px of canvas per world unit at 1 unit of view depth; same form as water.js's pixScale.
+// The 900 default only matters for the frames before the first onBeforeRender.
+const uPix = { value: 900 };
+const uMinPx = { value: TETHER_MIN_PX };
+const _vpSize = new THREE.Vector2();
+
+// ---------------------------------------------------------------------------
 // State. Typed arrays throughout: zero allocation after build.
 // ---------------------------------------------------------------------------
 const px = new Float64Array(N), py = new Float64Array(N), pz = new Float64Array(N);
@@ -310,12 +329,24 @@ function tetherMaterial() {
   });
   mat.customProgramCacheKey = () => 'abyssa-tether';   // three silently shares programs otherwise
   mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uPix = uPix;
+    sh.uniforms.uMinPx = uMinPx;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aArc;
         varying float vArc;
-        varying vec3 vAxisView;`)
+        varying vec3 vAxisView;
+        uniform float uPix;
+        uniform float uMinPx;`)
       .replace('#include <project_vertex>', `
+        // Widen to a floor of uMinPx on screen. dv is this vertex's own view depth taken
+        // on the segment AXIS, so a segment running away from the eye tapers with
+        // perspective instead of stepping. project_vertex is where instanceMatrix lands,
+        // so transformed is still unit-radius here and k multiplies RAD exactly.
+        float dv = -( modelViewMatrix * instanceMatrix * vec4( 0.0, position.y, 0.0, 1.0 ) ).z;
+        float need = uMinPx * max( dv, 0.5 ) / uPix;
+        float k = max( 1.0, need / ( 2.0 * ${RAD.toFixed(4)} ) );
+        transformed.xz *= k;
         vArc = aArc + position.y * length(instanceMatrix[1].xyz);
         vAxisView = normalize((modelViewMatrix * vec4(instanceMatrix[1].xyz, 0.0)).xyz);
         #include <project_vertex>`);
@@ -357,6 +388,14 @@ export function buildTether(anchorPos) {
     inst.receiveShadow = true;
     inst.frustumCulled = false;
     inst.userData.isTether = true;          // belt and braces for ending.js's shape match
+    // Guarded on isPerspectiveCamera: if anything ever renders this mesh from the shadow
+    // camera, cam.fov is undefined and one NaN here would collapse the hose for the whole
+    // frame, not just for that pass.
+    inst.onBeforeRender = (r, s, cam) => {
+      if (!cam.isPerspectiveCamera) return;
+      r.getSize(_vpSize);
+      uPix.value = _vpSize.y * r.getPixelRatio() / (2 * Math.tan(cam.fov * Math.PI / 360));
+    };
     scene.add(inst);
     meshes.push(inst);
     arcAttr.push(arc);
@@ -449,6 +488,13 @@ if (typeof window !== 'undefined') {
   window.tether = {
     get deployed() { return deployed; },
     get contacts() { return contacts; },
+    // Mirrors the vertex shader exactly, so the screen-width floor can be read rather
+    // than inferred. widthPx is what the hose actually covers at that view depth.
+    get pix() { return uPix.value; },
+    get minPx() { return uMinPx.value; },
+    set minPx(v) { uMinPx.value = v; },   // 0 restores the pre-widening hose for an A/B
+    kAt(dv) { return Math.max(1, uMinPx.value * Math.max(dv, 0.5) / uPix.value / (2 * RAD)); },
+    widthPx(dv) { return 2 * RAD * this.kAt(dv) * uPix.value / Math.max(dv, 1e-6); },
     nodes: () => ({ px, py, pz, N }),
     stats() {
       let len = 0, sum = 0, max = 0;

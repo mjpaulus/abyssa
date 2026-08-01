@@ -16,8 +16,15 @@ import { player } from '../player.js';
 const uTime = { value: 0 };
 const uFogD = { value: 0.016 };
 
-// Nothing is drawn past the fog wall; culling here is invisible and cheap.
-const CULL = 205;
+// Nothing is drawn past the fog wall; culling here is invisible and cheap — but the
+// wall MOVES now. 205 was exactly zone 0's green 2% visibility under the old uniform
+// water (3.912 / (0.01337 * 1.45) = 202), which is why it read as invisible. The
+// column is stratified since THE SILT LINE, so rising out of the silt takes that to
+// ~380 in zone 0 and ~480 in zone 2, and a fixed radius popped whole schools in and
+// out at half the distance the player could see them — at exactly the payoff altitude.
+// Track the wall off the density updateCreatures already reads. K_EXT green is 1.45.
+const CULL_MAX = 420;              // above any reachable clear-band sightline
+let cullR = 205;
 
 const tmpV = V3(), tmpV2 = V3(), tmpQ = new THREE.Quaternion(), tmpM = new THREE.Matrix4();
 const spinQ = new THREE.Quaternion();
@@ -310,7 +317,7 @@ function updateSchool(S, dt, t) {
   S.inst.boundingSphere.center.copy(c);
 
   // ---- distance cull: past the fog wall nothing is visible ----
-  if (pd > CULL + S.radius) {
+  if (pd > cullR + S.radius) {
     if (S.inst.visible) S.inst.visible = false;
     return;
   }
@@ -921,7 +928,10 @@ export function buildCreatures() {
 
 export function updateCreatures(dt, t) {
   uTime.value = t;
-  if (scene.fog) uFogD.value = scene.fog.density;
+  if (scene.fog) {
+    uFogD.value = scene.fog.density;
+    cullR = Math.min(CULL_MAX, 3.912 / Math.max(scene.fog.density * 1.45, 1e-4));
+  }
   for (const S of schools) updateSchool(S, dt, t);
   updateJellies(dt, t);
 }

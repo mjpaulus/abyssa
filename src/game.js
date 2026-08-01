@@ -435,7 +435,7 @@ function update(dt, t) {
     updateEnding(dt, t);
     const d01 = clamp(-player.pos.y / 900, 0, 1);
     updateRaft(dt, t);
-    updateAtmosphere(d01);
+    updateAtmosphere(d01, camera.position.y);
     updateLighting(d01);
     setDepth(d01);
     return;
@@ -679,7 +679,10 @@ function update(dt, t) {
   playerLightSrc.position.copy(player.pos);
   playerLightSrc.intensity = 8 + 40 * player.light;
 
-  updateAtmosphere(depth01);
+  // Keyed on the CAMERA's height, not the player's: the water column is stratified, so
+  // what the eye is sitting in decides the optics. updateCamera runs below, so this reads
+  // last frame's position — half a unit at full swim speed, against a 24-unit scale height.
+  updateAtmosphere(depth01, camera.position.y);
   updateLighting(depth01);
 
   updateCamera(dt, t, fwd);
