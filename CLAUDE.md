@@ -53,6 +53,21 @@ against explicit contracts and reviewed on return.
 - `world/water.js` — per-channel Beer–Lambert optics patched into
   `THREE.ShaderChunk` fog globally. fog.color means *surface irradiance*.
   `setWeatherWater`, `setRayDim` are game.js-driven.
+  **THE SILT LINE**: the column is STRATIFIED — a nepheloid layer pools on each
+  seabed under clearer water, so rising is the reveal (1.9x/3.4x/4.8x green
+  visibility by zone; the payoff grows with depth). `rho(y) = rhoClear(y) + amp *
+  min(1, exp(-(y-yf)/hs))`, exact antiderivative `G(s) = min(s,0) + 1 -
+  exp(-max(s,0))`. The SATURATION is load-bearing (the unsaturated form amplifies
+  below its datum and collapsed the inter-zone gaps to 22 units); every `exp()`
+  argument is <= 0 so overflow is structurally impossible. `amp` is solved at the
+  STANDING CAMERA (floor + EYE_H + CAM_UP = 3.75), not the eye — `updateAtmosphere`
+  is keyed on `camera.position.y`. `scene.fog.density` KEEPS its old meaning (true
+  local total at the eye) because creatures/predators/tools read it for additive-glow
+  range; redefining it makes every jelly visible 4.6x further = floating neon.
+  The warm near field is an A/B kill switch: three adjacent constants at ~line 44.
+  Physics that constrains everything here: brightness cannot buy distance — range
+  scales with the LOG of it (1e6x brighter = +1088 units). A far field at r=3600
+  renders at e^-100 no matter what you spend.
 - `world/terrain.js` + `lib/triplanar.js` — 3 always-present heightfield meshes
   (rifts are flattened bowls, NOT holes; fall-through is a player.js special case).
   Triplanar CC0 PBR (channel-packed, 3.3 MB) multiplies ON TOP of zone palettes:
@@ -128,3 +143,33 @@ orchestrator redoes it, not the agent.
 - Audio audit (needs the user's ears) and a zone-1 art-identity pass (twilight
   thermal-vent concept) are the two remaining ideas from the original punch list.
 - User keeps a feedback doc; expect a batch of notes rather than single items.
+
+### Far field / world scale — state after THE SILT LINE (phase 1 shipped)
+
+- **The warm near field is UNRESOLVED and needs the user's eye** against his
+  reference screenshots. Red 2% reach 84 -> 105 units in zone 0. Kill switch:
+  `K_PART = K_EXT` and `SILT_MIX/SILT_GAIN = 0.00/1.00` in water.js.
+- **Zones 1 and 2 have nothing to reveal yet.** Their clear bands measure 3.4x and
+  4.8x more visibility but render near-black — the rise shows more empty water, not
+  a revealed room. This is a CONTENT gap, not an optics bug, and it is what phase 2
+  (W2) exists to fix. Zone 0 is the only zone where the reveal currently lands.
+- **W2 BLOCKER, found and unfixed**: the rampart at r=340..540 does not fit inside
+  the terrain mesh, which is a SQUARE of half-extent 390. The crest is missing over
+  39% of bearings and would render as four corner lobes. Worse, clear-band visibility
+  is now 456u/477u in zones 1-2 against a 390u mesh — the player can see FURTHER THAN
+  THE WORLD EXTENDS on the axes. Fix is free: `HALF` 390 -> 560 with
+  `axisMap(u) = HALF*(0.432u + 0.568u^3)`, which holds the inner sampling product at
+  242 so the basin stays bit-identical and the vertex count does not change. Costs
+  31% coarser rim quads. Do NOT raise WORLD_R (riftPos and bubble vents key off it).
+- Streaming/chunked LOD is DECLINED with arithmetic, not taste: utilisation is 4.6%
+  at r=2236 and 1.8% at r=3600, because scale is (resolvable feature)/(mean free
+  path) and both terms are set by the water. The procedural answer being given
+  instead is killing the lathe — the rim onset radius becomes azimuthal.
+- Latent, currently invisible: `nephParams` keys off CAMERA height, and `yf(y)`
+  crosses `y` itself near -336 and -649, making phantom nepheloid layers in the open
+  water between zones (murkier there than on the zone-0 seabed). Harmless today
+  because those gaps are unlit; put any light or geometry there and it becomes real.
+- The dome/fog seam is NOT analytically zero (the spec claimed it was). Measured
+  0-2 code values in the clear bands, up to ~10 at extreme elevation from a floor.
+  Within tolerance; the source comments say so accurately. Do not "fix" it with a
+  path integral in the dome — that was evaluated and killed.
