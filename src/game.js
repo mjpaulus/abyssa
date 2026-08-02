@@ -295,6 +295,13 @@ Object.defineProperties(window, {
 const camVel = V3(), camAim = V3(), camDesired = V3(), camLook = V3();
 const camBack = V3(), camTo = V3(), camRight = V3();   // hot-path temps, never allocated per frame
 let camDist = 9, camRoll = 0, camFov = 70;
+// A respawn TELEPORTS the diver, and the spring then flew the camera the whole way after
+// him — measured 210 units in ~1.2 s, during which the frame peaked at 3.15x its normal
+// luminance and fell back. That bright wash is the camera crossing the entire water
+// column in open water while the LIGHTING has already snapped to surface values (it keys
+// off player depth, which teleports; the fog keys off the camera, which does not). A
+// respawn is a CUT, not a camera move. Set this and updateCamera places the eye directly.
+let camSnap = false;
 // Burst reaction. Scoped entirely to these two envelopes so ordinary swimming — which
 // nobody complained about — is byte-identical to before.
 let camKick = 0, camKickPunch = 0;
@@ -348,6 +355,15 @@ function updateCamera(dt, t, fwd) {
   if (camKick > 0) {
     camDesired.addScaledVector(player.vel, 0.3086 * camKick);
     camDesired.addScaledVector(camBack, -2.6 * camKick);
+  }
+
+  // Cut, don't fly. Done before the spring so camVel never integrates the teleport.
+  if (camSnap) {
+    camSnap = false;
+    camera.position.copy(camDesired);
+    camVel.set(0, 0, 0);
+    camLook.copy(player.pos).addScaledVector(fwd, 6);
+    camDist = want;
   }
 
   // critically-damped spring: settles without the rubber-band of a raw lerp
@@ -593,6 +609,11 @@ function update(dt, t) {
       // tender reels in at 0.6 m/s from wherever he drowned — six minutes of slack hose
       // tangled around the camera after a death at 220 m.
       reseatTether(player);
+      // Cut the camera with him. The y is set here as well as via camSnap because
+      // updateAtmosphere runs BEFORE updateCamera in the frame, so leaving the eye 210
+      // units down would key one more frame of fog off the death depth.
+      camera.position.set(player.pos.x, player.pos.y + CAM_UP, player.pos.z + CAM_BACK);
+      camSnap = true;
       // The rescue tops the pump up from the reserve can. Without this, drowning with
       // an empty tank and no bitumen strands you at the raft with 45s of air and all
       // the bitumen 200m below — an unwinnable state.
