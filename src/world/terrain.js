@@ -100,6 +100,24 @@ const ZB = [zoneBottom(0), zoneBottom(1), zoneBottom(2)];
 const RIFT_RR = RIFT_R * 2.7;
 const RIM_IN = WORLD_R * 0.68, RIM_SPAN = WORLD_R * 0.44, RIM_H = 118;
 
+// Azimuthal rim harmonics (a2,b2,a3,b3,a5,b5 per zone). Distinct seeds per zone so
+// the three skylines never rhyme. Amplitudes are sized so aR*0.62+0.5 and aH*0.62+0.5
+// span all of [0,1] (measured over 4096 bearings: ~7-17% of bearings clamp at each
+// end, which reads as flat crest/saddle stretches rather than lost range).
+const RIM_KR = [
+  [ 0.62, -0.31,  0.44,  0.26, -0.22,  0.30],
+  [-0.38,  0.55,  0.20, -0.48,  0.28,  0.17],
+  [ 0.29,  0.47, -0.52,  0.14,  0.19, -0.33]
+];
+const RIM_KH = [
+  [ 0.41,  0.52, -0.36,  0.30,  0.24, -0.18],
+  [ 0.57, -0.22,  0.33,  0.41, -0.15,  0.26],
+  [-0.48,  0.34,  0.45, -0.20,  0.31,  0.12]
+];
+
+// Second ridgeline. Zero new triangles: the graded axisMap already samples out here.
+const RAM_IN = 340, RAM_PK = 410, RAM_OUT = 540, RAM_H = 66;
+
 // Analytic height function. Mesh generation, prop scatter, and player collision all
 // call this, so any change here changes what the player physically stands on.
 export function terrainH(x, z, zi) {
@@ -163,13 +181,95 @@ export function terrainH(x, z, zi) {
   h += ZB[zi];
 
   // Basin rim: a noisy wall that closes each zone into a bowl and hides the mesh edge.
-  const rt = c01((Math.sqrt(x * x + z * z) - RIM_IN) / RIM_SPAN);
+  // The onset radius and crest height run on azimuthal Chebyshev harmonics of the
+  // unit direction — no atan2, no branch cut, wraps seamlessly by construction — so
+  // the wall is a skyline rather than a lathe cut. OUTWARD ONLY: rin >= RIM_IN, so
+  // the basin never shrinks and scatter out to WORLD_R*0.99 = 257 stays off wall faces.
+  const rr = Math.sqrt(x * x + z * z);
+  const ir = 1 / Math.max(rr, 1e-3), cx = x * ir, cz = z * ir;
+  const c2 = cx * cx - cz * cz, s2 = 2 * cx * cz;
+  const c3 = cx * c2 - cz * s2, s3 = cx * s2 + cz * c2;
+  const c5 = c2 * c3 - s2 * s3, s5 = c2 * s3 + s2 * c3;
+  const KR = RIM_KR[zi], KH = RIM_KH[zi];
+  const aR = KR[0] * c2 + KR[1] * s2 + KR[2] * c3 + KR[3] * s3 + KR[4] * c5 + KR[5] * s5;
+  const aH = KH[0] * c2 + KH[1] * s2 + KH[2] * c3 + KH[3] * s3 + KH[4] * c5 + KH[5] * s5;
+  const rin = RIM_IN + 46 * c01(aR * 0.62 + 0.5);            // 176.8 .. 222.8
+  const rh = RIM_H * (0.55 + 0.90 * c01(aH * 0.62 + 0.5));   // 64.9 .. 171.1
+  const rt = c01((rr - rin) / RIM_SPAN);
   if (rt > 0) {
     const s = rt * rt * rt * (rt * (rt * 6 - 15) + 10);
-    h += s * RIM_H * (1.0 + fbm2(x * 0.0060 + 71, z * 0.0060 - 19, 3) * 0.55)
+    h += s * rh * (1.0 + fbm2(x * 0.0060 + 71, z * 0.0060 - 19, 3) * 0.55)
        + s * s * rmf(x * 0.0105 + 5, z * 0.0105 - 3, 3) * 30;
   }
+
+  // Rampart: a second ridgeline 100+ units behind the rim crest, at roughly half its
+  // luminance through the water — aerial perspective, and the wall that keeps the
+  // clear-band sightlines (456/477 units in zones 1/2) from finding the mesh edge.
+  // The upper bound is exact, not a fade cutoff: at rr >= RAM_OUT the envelope is
+  // identically zero, and without the bound 11% of mesh samples (the corners) paid
+  // six noise octaves for nothing.
+  if (rr > RAM_IN && rr < RAM_OUT) {
+    const up = c01((rr - RAM_IN) / (RAM_PK - RAM_IN));
+    const dn = c01((rr - RAM_PK) / (RAM_OUT - RAM_PK));
+    const sR = up * up * (3 - 2 * up) * (1 - dn * dn * (3 - 2 * dn));
+    h += sR * RAM_H * (1.0 + fbm2(x * 0.0042 + 133, z * 0.0042 - 61, 3) * 0.62)
+       + sR * rmf(x * 0.0080 + 17, z * 0.0080 + 29, 3) * 22;
+  }
+  // Drowned shelf edge: everything above y=-34 is compressed toward it, never folded.
+  // The increasing form matters — the published `-34 - (h+34)*0.15` is monotone
+  // DECREASING in h, which inverts every crest above the line into a crease and flips
+  // terrainNormal's central differences along the whole far ridgeline. Only zone 0
+  // can reach -34 (zones 1/2 top out near -320 and -630), so this fires nowhere else.
+  if (h > -34) h = -34 + (h + 34) * 0.15;
   return h;
+}
+
+// ---------------------------------------------------------------------------
+// Foot-of-wall clamp table: where the play boundary meets rock, per bearing.
+// player.js lerps this instead of the old circular r=260 clamp, which stranded
+// Sal at y=-118 in open water partway up a cliff face. Index 128 duplicates
+// index 0 so the consumer's lerp never needs a wrap branch.
+// ---------------------------------------------------------------------------
+export const clampR = [];   // 3 x Float32Array(129), filled by buildTerrain
+
+const CLAMP_N = 128, CLAMP_MIN = 235, CLAMP_MAX = 305, RIM_FOOT_RISE = 30;
+
+function buildClampTable() {
+  for (let zi = 0; zi < 3; zi++) {
+    const t = new Float32Array(CLAMP_N + 1);
+    for (let bi = 0; bi < CLAMP_N; bi++) {
+      const a = (bi / CLAMP_N) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+      // Basin reference at r=150: far enough out to be past the rift funnel, far
+      // enough in to be untouched by the rim on every bearing.
+      const href = terrainH(150 * ca, 150 * sa, zi) + RIM_FOOT_RISE;
+      // Bisect for the smallest r where the wall stands RIM_FOOT_RISE above the
+      // basin. The wall is the dominant monotone term out here, so 12 halvings of
+      // a 154-unit bracket land within 0.04 units.
+      let r = CLAMP_MAX;
+      if (terrainH(330 * ca, 330 * sa, zi) > href) {
+        let lo = 176, hi = 330;
+        for (let it = 0; it < 12; it++) {
+          const mid = (lo + hi) * 0.5;
+          if (terrainH(mid * ca, mid * sa, zi) > href) hi = mid; else lo = mid;
+        }
+        r = hi;
+      }
+      // The 235 floor is not cosmetic: flora and props scatter to WORLD_R*0.99 = 257,
+      // and a clamp below that would make existing content unreachable.
+      t[bi] = Math.min(CLAMP_MAX, Math.max(CLAMP_MIN, r));
+    }
+    // One circular 1-2-1 pass: the raw foot can jump ~20 units between adjacent
+    // bearings where a noise spur meets the criterion early, and the consumer is a
+    // straight lerp — smoothing here is what keeps the boundary from kinking. A
+    // convex blend of in-range values stays in [235, 305].
+    const raw = Float32Array.from(t.subarray(0, CLAMP_N));
+    for (let bi = 0; bi < CLAMP_N; bi++) {
+      const p = raw[(bi + CLAMP_N - 1) % CLAMP_N], q = raw[(bi + 1) % CLAMP_N];
+      t[bi] = raw[bi] * 0.5 + (p + q) * 0.25;
+    }
+    t[CLAMP_N] = t[0];
+    clampR.push(t);
+  }
 }
 
 // Surface normal via finite differences of terrainH — used for slope-aware placement and physics.
@@ -402,13 +502,87 @@ export const terrainMat = zoneMats[0];
 export const terrainMeshes = [];
 
 // ---------------------------------------------------------------------------
+// Roof shells, zones 0 and 1: the underside of the zone above. The silt-line
+// optics give 25% blue transmittance from zone 1's clear band straight up to
+// zone 0's floor, and zoneMats are FrontSide — without these the player sees the
+// background dome through 300 units of rock at exactly the altitude the design
+// tells him to climb to. BackSide + fog so they sit in the same medium as
+// everything else; no PBR, no lighting — at 200+ units through silt only the
+// silhouette and the lichen survive.
+// ---------------------------------------------------------------------------
+// DROP is 22, not the drafted 12: the stride-3 subsample runs 25-40u cells over the
+// rampart's rmf crests near the mesh corners, and the bilinear shell there sat up to
+// 18u above the true surface — a player under it would have been inside the shell
+// volume. Measured worst gap 18.0u (zone 1); 22 leaves 4u everywhere. The offset is
+// invisible: at 231 units through 25% transmittance nothing about it reads.
+const SHELL_STEP = 3, SHELL_DROP = 22;   // 288/3 = 96 quads/side, 97x97 verts
+const roofShells = [];
+
+function shellMat(alb) {
+  return new THREE.ShaderMaterial({
+    side: THREE.BackSide, fog: true,
+    uniforms: Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
+      uAlb: { value: new THREE.Color(alb) }
+    }),
+    vertexShader: /* glsl */`
+      varying vec3 vWPos;
+      #include <fog_pars_vertex>
+      void main() {
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vWPos = wp.xyz;
+        vec4 mvPosition = viewMatrix * wp;
+        gl_Position = projectionMatrix * mvPosition;
+        #include <fog_vertex>
+      }`,
+    fragmentShader: /* glsl */`
+      #include <fog_pars_fragment>
+      uniform vec3 uAlb;
+      varying vec3 vWPos;
+      float sh21(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float svn(vec2 p) {
+        vec2 i = floor(p), f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        float a = sh21(i), b = sh21(i + vec2(1.0, 0.0));
+        float c = sh21(i + vec2(0.0, 1.0)), d = sh21(i + vec2(1.0, 1.0));
+        return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+      }
+      float sfbm(vec2 p) {
+        return svn(p) * 0.5 + svn(p * 2.13 + 19.7) * 0.27 + svn(p * 4.41 - 7.3) * 0.145;
+      }
+      void main() {
+        // Broad tonal variation so the ceiling is not one flat card up close.
+        vec3 col = uAlb * (0.78 + 0.44 * svn(vWPos.xz * 0.017));
+        // Sparse lichen, 2.98 percent coverage measured at this threshold. The
+        // emissive is load-bearing: a pure silhouette at 231 units sits near the
+        // 8-bit detection floor, and these patches push it suprathreshold. Peak
+        // channel 0.14 is half the bloom luminanceThreshold of 0.28, so it glows
+        // and never flares.
+        float m = smoothstep(0.46, 0.64, sfbm(vWPos.xz * 0.06));
+        col += vec3(0.0824, 0.14, 0.1153) * m;
+        gl_FragColor = vec4(col, 1.0);
+        #include <fog_fragment>
+      }`
+  });
+}
+
+const shellMats = [shellMat(0x0d1416), shellMat(0x121612)];
+
+// ---------------------------------------------------------------------------
 // Mesh. Graded axis mapping keeps ~1.7m spacing through the playable basin and
 // coarsens out on the rim wall, which is only ever seen through heavy fog.
+// HALF is 560, not WORLD_R*1.5 = 390: the mesh is a SQUARE, so its edge sits at
+// only 390 on the axes, and the silt-line clear bands see 456/477 units in zones
+// 1/2 — the player could see past the edge of the world, and the 340..540 rampart
+// would lose its crest over 39% of bearings. The linear coefficient holds the
+// inner sampling product at ~242 (was 390*0.62, now 560*0.432), so basin pitch is
+// unchanged and the extra reach is paid for entirely by coarser rim quads (+31%).
 // ---------------------------------------------------------------------------
-const SEG = 288, HALF = WORLD_R * 1.5;
-const axisMap = u => HALF * (0.62 * u + 0.38 * u * u * u);
+const SEG = 288, HALF = 560;
+const axisMap = u => HALF * (0.432 * u + 0.568 * u * u * u);
 
 export function buildTerrain() {
+  buildClampTable();   // ~4.7k terrainH calls, vs the 250k the meshes below do
+
   const n = SEG + 1, ax = new Float32Array(n);
   for (let i = 0; i < n; i++) ax[i] = axisMap((i / SEG) * 2 - 1);
 
@@ -461,7 +635,10 @@ export function buildTerrain() {
       const a = c01(ao[i]);
       col[i * 3] = 0.18 + 0.82 * a * a;
       col[i * 3 + 1] = c01(gn(ax[k] * 0.0135 + zi * 40, ax[j] * 0.0135 - zi * 17) * 1.5 + 0.5);
-      col[i * 3 + 2] = c01((H[i] - B - 2) / 70);
+      // /220, not /70: at /70 the channel saturates 70 units up, so the 118-unit rim
+      // read as one flat value and the new 65..184 skyline plus the rampart would get
+      // no tonal separation at all.
+      col[i * 3 + 2] = c01((H[i] - B - 2) / 220);
     }
 
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -473,10 +650,39 @@ export function buildTerrain() {
     tm.receiveShadow = true;
     scene.add(tm);
     terrainMeshes.push(tm);
+
+    // Roof shell: subsample the H array just computed — SEG = 288 and 288/3 = 96
+    // exactly, so a 97x97 stride-3 pick lands on real grid points. Zero extra
+    // terrainH calls, and building it here (not lazily) is what puts its material
+    // in the scene before the boot precompile, so first sight never hitches.
+    if (zi < 2) {
+      const q = SEG / SHELL_STEP, m = q + 1;
+      const sg = new THREE.PlaneGeometry(1, 1, q, q);
+      sg.rotateX(-Math.PI / 2);
+      const SP = sg.attributes.position.array;
+      for (let j = 0, i = 0; j < m; j++) for (let k = 0; k < m; k++, i++) {
+        SP[i * 3] = ax[k * SHELL_STEP];
+        SP[i * 3 + 1] = H[(j * SHELL_STEP) * n + k * SHELL_STEP] - SHELL_DROP;
+        SP[i * 3 + 2] = ax[j * SHELL_STEP];
+      }
+      sg.attributes.position.needsUpdate = true;
+      sg.computeBoundingSphere();
+      const sm = new THREE.Mesh(sg, shellMats[zi]);
+      sm.visible = false;               // updateTerrain gates it; warmUp un-hides for compile
+      scene.add(sm);
+      roofShells.push(sm);
+    }
   }
 }
 
 export function updateTerrain(dt, t, camY) {
   causticsUniforms.uTime.value = t;
   causticsUniforms.uCamY.value = camY;
+  // A shell only exists for the player in the zone BELOW it, looking up: on when the
+  // camera is 40 under the parent floor, off again 340 under (past the next floor,
+  // where the zone below's own shell takes over). From above, backfaces + early-z
+  // make it free, so this gate is about draw-call hygiene, not correctness.
+  for (let i = 0; i < roofShells.length; i++) {
+    roofShells[i].visible = camY < ZB[i] - 40 && camY > ZB[i] - 340;
+  }
 }

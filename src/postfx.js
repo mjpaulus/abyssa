@@ -198,16 +198,31 @@ function degradeQuality() {
 //      SUSTAIN seconds of genuinely-sampled time, so one hitch cannot cost the player
 //      the whole render pipeline.
 const WARMUP = 2.0, WINDOW = 1.0, SUSTAIN = 4.0, FPS_BAR = 34;
-let warmT = 0, winT2 = 0, winN = 0, badT = 0;
+let warmT = 0, winT2 = 0, winN = 0, badT = 0, lastT = 0;
 
 export function samplePerf(dt, active) {
-  if (perfDone || !active) return;
-  // A hidden tab throttles rAF to ~0; those frames say nothing about the GPU and would
-  // otherwise guarantee a degrade the moment the player alt-tabs back.
-  if (document.hidden || dt > 0.25) return;
-  if (warmT < WARMUP) { warmT += dt; return; }
+  if (perfDone) return;
+  // Reset the clock whenever sampling is not running, or the gap across a title screen
+  // or an ending gets counted as one enormous frame.
+  if (!active) { lastT = 0; return; }
 
-  winT2 += dt; winN++;
+  // Measure WALL TIME here rather than trusting the caller's dt. game.js passes
+  // Math.min(0.05, clock.getDelta()), so dt is CLAMPED before it arrives: a frame that
+  // really took 500 ms is indistinguishable from one that took 50, and a throttled
+  // stretch reads as a steady 20 fps instead of being discarded. That clamp is correct
+  // for physics (it stops a stall from teleporting the diver) and fatal for a perf
+  // judge — it is why this degraded on a machine measured at 54 fps steady.
+  const now = performance.now();
+  if (!lastT) { lastT = now; return; }
+  const real = (now - lastT) / 1000;
+  lastT = now;
+
+  // A backgrounded tab throttles rAF toward zero. Those frames say nothing about the
+  // GPU, and without this the player loses the whole render pipeline for alt-tabbing.
+  if (document.hidden || real > 0.25) return;
+  if (warmT < WARMUP) { warmT += real; return; }
+
+  winT2 += real; winN++;
   if (winT2 < WINDOW) return;
   const fps = winN / winT2;
   winT2 = 0; winN = 0;

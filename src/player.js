@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { renderer } from './core.js';
 import { WORLD_R, SURFACE_Y, RIFT_R, riftPos } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
-import { terrainH, terrainNormal } from './world/terrain.js';
+import { terrainH, terrainNormal, clampR } from './world/terrain.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
@@ -222,8 +222,21 @@ export function updatePlayer(dt, t, zone, riftOpen) {
 
   player.pos.addScaledVector(player.vel, dt);
 
+  // Stop him at the FOOT OF THE WALL, not on a circle. The flat WORLD_R clamp put the
+  // boundary at r=260 on every bearing, which after the rim warp (and before it) left him
+  // hovering in open water partway up a cliff face — measured 128 units above the basin
+  // floor with nothing under his boots. terrain.js bisects the real wall foot per bearing
+  // into clampR, so the invisible boundary and the visible one are now the same object.
+  // 128 bearings, wrapped (index 128 === index 0) so the lerp is continuous across 0/2pi.
   const hr = Math.hypot(player.pos.x, player.pos.z);
-  if (hr > WORLD_R) { player.pos.x *= WORLD_R / hr; player.pos.z *= WORLD_R / hr; }
+  const tbl = clampR[zone < 0 ? 0 : zone];
+  let lim = WORLD_R;
+  if (tbl) {
+    const th = Math.atan2(player.pos.z, player.pos.x);
+    const fi = ((th < 0 ? th + Math.PI * 2 : th) / (Math.PI * 2)) * 128, i = fi | 0;
+    lim = tbl[i] + (tbl[i + 1] - tbl[i]) * (fi - i);
+  }
+  if (hr > lim) { const k = lim / hr; player.pos.x *= k; player.pos.z *= k; }
   // Backstop only. The emergence term above is what actually floats him, so in calm
   // water this never fires; in a storm the swell throws him against it, which is right.
   if (player.pos.y > SURFACE_Y - 1.2) {
