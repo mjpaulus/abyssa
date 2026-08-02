@@ -402,6 +402,41 @@ export function buildTether(anchorPos) {
   }
 }
 
+// A respawn TELEPORTS the diver from wherever he drowned back to the raft, but the tender
+// only hauls in at RETRIEVE (0.6 m/s). Drowning at 220 m therefore leaves ~218 m of slack
+// to reel in — six minutes of it — piled into a tangle around the camera the entire time,
+// which reads as a bright, laggy, chaotic mess exactly when the player is trying to
+// recover. The fiction already says what happened: they HAULED HIM BACK BY THE LINE, so
+// the line came up with him. Snap the tender to the new range and re-lay the rope along
+// it, collapsing the verlet history so the solver does not spend the next second undoing
+// a 200 m fold. Nodes are spaced by REST ARC, not evenly, or the graded segment lengths
+// start violated and the first substep snaps them.
+export function reseatTether(player) {
+  anchor.copy(pumpPos);
+  // Lay to player.pos, NOT airInletWorldPos: the inlet is read off the diver mesh's world
+  // matrix, and on a respawn that matrix is still at the death position until the next
+  // updateDiver. Using it re-laid the rope as a straight 216 m line to where he drowned
+  // while the rest lengths summed to 8 m, so the solver then had to contract it 26x and
+  // produced a far worse tangle than the one this function exists to prevent. The inlet
+  // is ~1 m from player.pos; the first updateTether pins it exactly.
+  const dist = _d.copy(player.pos).sub(anchor).length();
+  deployed = Math.min(survival.hose, dist * (1 + SLACK) + SLACK_MIN);
+  allocRest(deployed, dist);
+  restFor = deployed;
+  for (let i = 0; i < N; i++) {
+    const u = cum[i] / deployed;
+    px[i] = anchor.x + (player.pos.x - anchor.x) * u;
+    py[i] = anchor.y + (player.pos.y - anchor.y) * u;
+    pz[i] = anchor.z + (player.pos.z - anchor.z) * u;
+    ox[i] = px[i]; oy[i] = py[i]; oz[i] = pz[i];   // zero verlet velocity
+  }
+  // The substeps lerp the pinned ends from their previous positions; without this the
+  // rope gets dragged across the whole world on the frame after a teleport.
+  _pa.copy(anchor); _ph.set(player.pos.x, player.pos.y, player.pos.z);
+  primed = true;
+  flOK.fill(0);                                    // floor cache is keyed on position
+}
+
 export function tetherAnchor() { return anchor; }
 
 export function setTetherVisible(v) { for (const m of meshes) m.visible = v; }

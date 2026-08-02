@@ -1,7 +1,7 @@
 // Game state machine, camera, HUD, and the frame loop. Owned by the orchestrator.
 import * as THREE from 'three';
 import { scene, camera, clock } from './core.js';
-import { ZONE_GAP, zoneTop, zoneBottom, riftPos } from './config.js';
+import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, setPostBypass, getPostBypass, getVolumetrics } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
@@ -26,7 +26,7 @@ import {
   resupplyAtRaft, canDescendTo, HOSE_REQ
 } from './systems/survival.js';
 import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell } from './systems/raft.js';
-import { buildTether, updateTether } from './systems/tether.js';
+import { buildTether, updateTether, reseatTether } from './systems/tether.js';
 import { buildResources, updateResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
 import { buildProps, updateProps, propColliders } from './world/props.js';
@@ -366,6 +366,17 @@ function updateCamera(dt, t, fwd) {
     shake = Math.max(0, shake - dt * 2);
   }
 
+  // There is no above-water world yet — no sky, and the raft deck sits at y = -2.08 — so
+  // a camera that breaks the surface renders air through the WATER's optics and washes
+  // the frame out to flat grey-green. Sal can legitimately reach the surface (the tenders
+  // trim him up at the raft), so hold the eye just under it and let him bob through
+  // instead. Zeroing the rising spring velocity matters: without it the spring keeps
+  // integrating into the clamp and snaps when he descends again.
+  if (camera.position.y > SURFACE_Y - 0.9) {
+    camera.position.y = SURFACE_Y - 0.9;
+    if (camVel.y > 0) camVel.y = 0;
+  }
+
   // aim slightly ahead of travel so fast movement leads the frame
   // Aim tracks the look direction almost immediately. Heavy smoothing here reads as
   // mouse lag, which is far more objectionable than a little jitter.
@@ -578,6 +589,10 @@ function update(dt, t) {
       // raft with whatever the drowning left — usually a flat dress — and sinks straight
       // back off the surface he was just hauled to.
       resetSuit(player.pos.y);
+      // They hauled him back BY the line, so the line came up with him. Without this the
+      // tender reels in at 0.6 m/s from wherever he drowned — six minutes of slack hose
+      // tangled around the camera after a death at 220 m.
+      reseatTether(player);
       // The rescue tops the pump up from the reserve can. Without this, drowning with
       // an empty tank and no bitumen strands you at the raft with 45s of air and all
       // the bitumen 200m below — an unwinnable state.

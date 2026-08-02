@@ -288,9 +288,16 @@ export function respawn(y) {
 
 // He is hauled up and re-dressed: the tenders blow the dress up, they do not leave him
 // flat. game.js's own respawn path calls this — player.js's respawn() is not on it.
+// Re-dressed AND TRIMMED, not over-inflated. This used to set a full dress at maximum
+// lift (+2.61), which meant every respawn rocketed Sal off the spawn point and clipped
+// him up inside the raft hull, with the camera breaking the surface into a washed-out
+// frame the game has no above-water world to fill. Neutral holds him where the tenders
+// put him — which is what the "he must not sink straight back off the surface" note
+// below was actually asking for.
 export function resetSuit(y) {
-  player.trim = (1 + Math.max(0, -y) / P_REF) / PFILL;
-  player.fill = 1;
-  player.buoy = A_BUOY_MAX;
+  const P = 1 + Math.max(0, -y) / P_REF;
+  player.trim = NEUTRAL_FILL * P / PFILL;
+  player.fill = NEUTRAL_FILL;
+  player.buoy = 0;
   player.burstT = 0;
 }
