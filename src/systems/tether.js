@@ -78,9 +78,17 @@ const ITER = 8;                  // constraint relaxation passes
 const SLACK = 0.02;              // excess line as a fraction of the straight-line range
 const SLACK_MIN = 2.0;           // m of excess even at zero range
 const RETRIEVE = 0.6;            // m/s the tender hauls back in
+const EXCESS_MAX = 8;            // hard cap on slack beyond `want` — see the ascent note below
 const SEG_FINE = 0.40;           // rest length of the segment at Sal's shoulder
 const FINE = 40;                 // segments that absorb an un-retrieved bight
-const BIGHT = 0.5;               // fraction of the slack parked at the diver's end
+// Slack lives at the ANCHOR end, not the diver's. This was 0.5 — half of all excess
+// line parked in coils at Sal's backpack — and the user read it exactly right
+// (2026-08-02): "the hose feels like it originates from Sal's air tank on his back
+// when it should be reeled from the raft." The reel IS on the raft, so un-retrieved
+// line hangs under the tender up top. At 0 the geometric rest-length grading absorbs
+// all excess into the long anchor-end segments on its own; the fine segments at Sal's
+// shoulder stay at SEG_FINE and the line leaves his inlet clean.
+const BIGHT = 0.0;
 const BIGHT_MAX = 25;            // m
 
 // Seabed
@@ -471,6 +479,15 @@ export function updateTether(dt, player, zone) {
   const want = Math.min(survival.hose, dist * (1 + SLACK) + SLACK_MIN);
   if (deployed < want) deployed = want;
   else deployed = Math.max(want, deployed - RETRIEVE * dt);
+  // EXCESS_MAX is the accordion fix. A buoyant ascent closes range at up to ~9 u/s
+  // against a 0.6 u/s haul, so rising off the zone-0 floor used to strand ~200 units of
+  // excess line that the solver folded into a zigzag around the diver (user-reported,
+  // twice). A real tender takes up line AS FAST AS THE DIVER RISES; the slow RETRIEVE
+  // is only for slack that has already formed. Capping the excess never lets the new
+  // slack form: the per-frame delta this clamp removes is bounded by the player's own
+  // speed, so the rope is never yanked, and the walk-home bight survives at up to 8
+  // units, which allocRest still parks at Sal's shoulder.
+  deployed = Math.min(deployed, want + EXCESS_MAX);
   deployed = Math.min(deployed, survival.hose);
   if (restFor < 0 || Math.abs(deployed - restFor) > restFor * 0.005) {
     allocRest(deployed, dist); restFor = deployed;
