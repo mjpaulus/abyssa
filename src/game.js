@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { scene, camera, clock } from './core.js';
 import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
-import { render, samplePerf, setPostBypass, getPostBypass, getVolumetrics } from './postfx.js';
+import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetrics } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders } from './world/flora.js';
@@ -754,12 +754,35 @@ function update(dt, t) {
 // requestAnimationFrame is scheduled first so a throw can't stop the loop — but that
 // also means a broken frame fails silently forever. Surface it once, loudly, instead.
 let loopFailed = false;
+// Boot loader. #load is painted by the browser before this module even evaluates (ES
+// modules are deferred), so it covers the whole world build. What it also covers, and
+// the reason it exists, is the SHADER PRECOMPILE: three compiles lazily on first render,
+// so ~75 programs used to compile during the opening seconds of play. That cost the
+// player twice — visible hitches, and a perf sampler that graded the warmup and silently
+// dropped volumetrics, AO and shadows for the whole session on hardware that then ran at
+// a steady 60. Two settled frames after the compile, uncover the title.
+let bootFrames = 0;
+function boot() {
+  if (bootFrames === 0) {
+    const n = warmUp();
+    console.info(`ABYSSA: ${n} shader programs precompiled`);
+  }
+  if (++bootFrames < 3) return false;
+  const el = document.getElementById('load');
+  if (el && !el.classList.contains('done')) {
+    el.classList.add('done');
+    setTimeout(() => el.remove(), 1100);   // it is z-index 2 over the title; do not leave it
+  }
+  return true;
+}
+
 function frame() {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
   try {
     update(dt, t);
     render(dt);
+    boot();
     samplePerf(dt, state === 'play' || state === 'won');
   } catch (e) {
     if (!loopFailed) {

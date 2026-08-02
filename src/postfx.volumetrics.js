@@ -145,8 +145,16 @@ void main(){
     // y = -245.9, which is zone 0's silt datum. Shafts do not exist inside the
     // nepheloid layer and fade in as the diver climbs out of it. If this constant
     // ever drifts from water.js's the billboards read where the columns do not.
+    // The smoothstep ramps the shafts IN over the top 50 units. Without it the curve
+    // peaks at y = 0, which is where the game starts, and this pass alone tripled total
+    // frame luminance there (measured 140 vs 40) — the opening dive was a blown-out
+    // cyan wash. A shaft needs depth to form and darker water to read against; right
+    // under the surface you are inside the light. Identical shaping lives in water.js
+    // updateWater as the rayBand term -- if the two ever disagree the billboards are
+    // visible where the raymarched columns are not, which reads as a bug.
+    // (No backticks in this comment: it sits inside a JS template literal.)
     float d01 = clamp( -p.y / 900.0, 0.0, 1.0 );
-    float fade = max( 0.0, 1.0 - d01 * 3.66 );
+    float fade = max( 0.0, 1.0 - d01 * 3.66 ) * smoothstep( 0.0, 0.055, d01 );
 
     if ( fade > 0.002 && p.y < 0.0 ) {
       float shaft = texture2D( tCaust, q ).r;

@@ -18,6 +18,15 @@
   #title h1{font-size:clamp(3rem,9vw,7rem);letter-spacing:.45em;margin:0 0 .2em .45em;font-weight:400;color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.5)}
   #title p{letter-spacing:.25em;opacity:.7;font-size:.9rem;text-transform:uppercase;margin:.4em}
   #title .hint{margin-top:3em;opacity:.45;font-size:.8rem;animation:pulse 3s infinite}
+  /* Boot loader. ES modules are deferred, so this paints BEFORE game.js runs and covers
+     the whole build + shader precompile. z-index above #title so the title screen can
+     sit ready underneath and simply be uncovered. */
+  #load{position:fixed;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    background:#010409;color:#bfe3e8;transition:opacity 1s;font-family:Georgia,'Times New Roman',serif}
+  #load h1{font-size:clamp(2rem,6vw,4rem);letter-spacing:.45em;margin:0 0 1.6em .45em;font-weight:400;
+    color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.35);opacity:.85}
+  #load p{letter-spacing:.28em;font-size:.7rem;text-transform:uppercase;opacity:.42;margin:0;animation:pulse 2.4s infinite}
+  #load.done{opacity:0;pointer-events:none}
   @keyframes pulse{0%,100%{opacity:.25}50%{opacity:.6}}
   #msg{position:absolute;left:0;right:0;top:12%;text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
   #depth{position:absolute;right:1.2rem;top:1rem;font-size:.8rem;letter-spacing:.2em;opacity:.6}
@@ -57,6 +66,7 @@
 </style>
 </head>
 <body>
+<div id="load"><h1>ABYSSA</h1><p>raising the pump</p></div>
 <div id="ui">
   <div id="msg"></div>
   <div id="depth"></div>

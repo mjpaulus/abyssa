@@ -939,7 +939,16 @@ export function updateWater(dt, t) {
   // of it (0.244 at the zone-0 clear band, 0.39 at -150, 0.59 at -100). The identical
   // constant lives in postfx.volumetrics.js MARCH_FRAG — if the two ever disagree the
   // billboards are visible where the raymarched columns are not, which reads as a bug.
-  uRayFade.value = 0.62 * rayDim * Math.max(0, 1 - d01 * 3.66) * (0.82 + 0.18 * Math.sin(t * 0.23));
+  // ...but the curve above is monotonically DECREASING from the surface, so it put the
+  // shafts at FULL strength at y = 0 — which is exactly where the game starts. Measured:
+  // the volumetric pass tripled total frame luminance (140 vs 40) in the opening dive,
+  // a blown-out cyan wash. Physically it is backwards too: right under the surface you
+  // are inside the light, not looking at shafts; a shaft needs depth to form and darker
+  // water behind it to read against. So ramp them IN over the top 50 units. Only the
+  // top 50 change — at -100 and below this is byte-identical to before.
+  //   y=-10 0.10 (was 0.96) · y=-25 0.45 · y=-50 0.80 · y=-100 0.59 · y=-246 0.00
+  const rayBand = Math.max(0, 1 - d01 * 3.66) * ms(d01, 0, 0.055);
+  uRayFade.value = 0.62 * rayDim * rayBand * (0.82 + 0.18 * Math.sin(t * 0.23));
   rayMesh.visible = uRayFade.value > 0.004;
   // The surface survives to y = -330 instead of being culled at -150. In stratified
   // water the ceiling is the invitation: from the zone-0 floor the column overhead now

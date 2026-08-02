@@ -186,11 +186,42 @@ function degradeQuality() {
   console.info('ABYSSA: reduced quality mode (AO/shadows off)');
 }
 
+// This used to average the FIRST six seconds of play and degrade below 34 fps — which
+// meant it was grading the warmup, not the machine. Those six seconds contain shader
+// compilation for ~75 programs, texture uploads and first-touch costs, so it tripped on
+// hardware that then runs at a steady 60, and every session logged "reduced quality
+// mode". The cost was silent and permanent: no volumetrics, no AO, no shadows, for the
+// whole game. Two changes make it honest.
+//   1. WARMUP is skipped outright. game.js precompiles at boot, but the first frames of
+//      real play still touch buffers nothing has bound yet.
+//   2. A single bad average is not enough. The frame rate has to stay under the bar for
+//      SUSTAIN seconds of genuinely-sampled time, so one hitch cannot cost the player
+//      the whole render pipeline.
+const WARMUP = 2.0, WINDOW = 1.0, SUSTAIN = 4.0, FPS_BAR = 34;
+let warmT = 0, winT2 = 0, winN = 0, badT = 0;
+
 export function samplePerf(dt, active) {
   if (perfDone || !active) return;
-  perfT += dt; perfN++;
-  if (perfT > 6) {
-    if (perfN / perfT < 34) degradeQuality();
-    perfDone = true;
-  }
+  // A hidden tab throttles rAF to ~0; those frames say nothing about the GPU and would
+  // otherwise guarantee a degrade the moment the player alt-tabs back.
+  if (document.hidden || dt > 0.25) return;
+  if (warmT < WARMUP) { warmT += dt; return; }
+
+  winT2 += dt; winN++;
+  if (winT2 < WINDOW) return;
+  const fps = winN / winT2;
+  winT2 = 0; winN = 0;
+
+  badT = fps < FPS_BAR ? badT + WINDOW : 0;
+  if (badT >= SUSTAIN) { degradeQuality(); perfDone = true; }
+}
+
+// Called by the boot loader once every material has a compiled program, so the sampler
+// never sees a compile hitch. Cheap and idempotent.
+export function warmUp() {
+  const hidden = [];
+  scene.traverse(o => { if (!o.visible) { hidden.push(o); o.visible = true; } });
+  try { renderer.compile(scene, camera); } catch (e) { console.warn('ABYSSA: precompile failed', e); }
+  for (const o of hidden) o.visible = false;
+  return renderer.info.programs.length;
 }
