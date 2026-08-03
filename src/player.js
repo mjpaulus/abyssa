@@ -7,6 +7,7 @@ import { terrainH, terrainNormal, clampR } from './world/terrain.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
+import { raft } from './systems/raft.js';
 
 export const player = {
   pos: V3(0, -10, 0),
@@ -76,6 +77,10 @@ function sampleCurrent(pos, t) {
 // Steeper than this and the diver can't get purchase; he slides instead of walking.
 const MAX_WALK_SLOPE = 0.62; // cos of max standable angle (~52 degrees)
 const EYE_H = 1.35;
+// Raft deck footprint and top, mirrored from raft.js's plank layout (9 planks at 1.05
+// pitch, 0.22 thick, 9.4 long). Kept here as constants rather than imported because
+// raft.js builds them inline; if that layout changes these must follow.
+const DECK_HX = 4.7, DECK_HZ = 4.7, DECK_TOP = 0.11;
 
 // ---------------------------------------------------------------- the suit as physics
 // A dressed Mark V is ~170 kg. Its displacement splits in two, and that split is the
@@ -128,13 +133,26 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   const th = terrainH(player.pos.x, player.pos.z, zi);
   const rp = riftPos(zi);
   const overRift = riftOpen && Math.hypot(player.pos.x - rp.x, player.pos.z - rp.z) < RIFT_R;
-  const floorY = overRift ? -1e5 : th + EYE_H;
+
+  // THE RAFT DECK IS A ONE-WAY PLATFORM. He lands on it from above and passes straight
+  // up through it from below — surfacing under the raft should put him alongside it, not
+  // punt him onto the deck from 200 m down. The 0.7 tolerance is what lets him land
+  // rather than clip when he steps off and the swell lifts the deck to meet him.
+  let deckY = -1e5;
+  const dxr = player.pos.x - raft.position.x, dzr = player.pos.z - raft.position.z;
+  if (dxr > -DECK_HX && dxr < DECK_HX && dzr > -DECK_HZ && dzr < DECK_HZ) {
+    const top = raft.position.y + DECK_TOP + EYE_H;
+    if (player.pos.y > top - 0.7) deckY = top;
+  }
+  const onDeck = deckY > -1e4;
+  const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY);
 
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
   const boost = sprinting ? 2 : 1;
   const fwd = forwardVec(), flat = flatVec(), right = rightVec();
   const normal = overRift ? _up : terrainNormal(player.pos.x, player.pos.z, zi);
-  const walkable = normal.y > MAX_WALK_SLOPE;
+  // On the deck the seafloor's slope is irrelevant — planks are planks.
+  const walkable = onDeck || normal.y > MAX_WALK_SLOPE;
 
   // ---- suit air, integrated UNCONDITIONALLY ---------------------------------
   // Above the grounded/swim split on purpose: the exhaust valve has to work while he is
@@ -276,11 +294,14 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     else if (player.vel.y < 0) player.vel.y = 0;
     // Set BOTH ways: a diver with air in his dress cannot get purchase on the bottom,
     // and if that is only ever tested on the way down he can never be lifted off it.
-    player.grounded = player.buoy < GROUND_BUOY;
-  } else if (player.pos.y < floorY + 1.2 && player.vel.y <= 0.5 && !keys['Space'] && player.buoy < GROUND_BUOY) {
+    // In AIR buoyancy is meaningless: he is held down by his own weight, not by failing
+    // to displace water. Without the onDeck term a full dress (buoy +2.61 at the surface,
+    // where the tenders keep him blown up) made the deck unstandable.
+    player.grounded = onDeck || player.buoy < GROUND_BUOY;
+  } else if (player.pos.y < floorY + 1.2 && player.vel.y <= 0.5 && !keys['Space'] && (onDeck || player.buoy < GROUND_BUOY)) {
     player.pos.y += (floorY - player.pos.y) * Math.min(1, 10 * dt);
     player.grounded = true;
-  } else if (player.pos.y > floorY + 1.4 || player.buoy > GROUND_BUOY) {
+  } else if (player.pos.y > floorY + 1.4 || (!onDeck && player.buoy > GROUND_BUOY)) {
     player.grounded = false;
   }
 

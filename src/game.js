@@ -247,9 +247,23 @@ function enterZone(i) {
   growl();
 }
 
+// Where a dressed diver waits before a dive: on the deck, clear of the pump block at
+// local z = -1.2, facing out over the water he is about to step into.
+export function deckSpawn(out) {
+  return out.set(raft.position.x, raft.position.y + 0.11 + 1.35, raft.position.z + 2.6);
+}
+
 export function start() {
   if (state !== 'title') return;
   state = 'play';
+  // He begins the dive standing on the raft, not already in the water. The whole point
+  // of the surface round: you see the sea before you are under it.
+  deckSpawn(player.pos);
+  player.vel.set(0, 0, 0);
+  player.yaw = 0;                 // facing +z, out across the water
+  player.pitch = -0.05;
+  resetSuit(player.pos.y);
+  reseatTether(player);
   // Snap the camera from the title portrait (in front of Sal) straight to the
   // play position behind him — letting the spring travel there would drag the
   // lens through his body.
@@ -390,14 +404,17 @@ function updateCamera(dt, t, fwd) {
   // integrating into the clamp and snaps when he descends again.
   // window.__noSurfClamp lets a probe put the eye in the air on purpose. This clamp is a
   // stopgap for having no above-water world; the surface round is what retires it.
-  // Clamp against the LIVE surface under the camera, not a flat SURFACE_Y: in a gale a
-  // wave trough drops to about -0.6, and a flat -0.9 clamp would then sit inside the
-  // sky's blend band and leak air into an underwater frame. Tracking the real surface
-  // keeps the eye a fixed depth under whatever the water is actually doing.
-  const surfLim = localSurfaceY() - 0.9;
-  if (camera.position.y > surfLim && !window.__noSurfClamp) {
-    camera.position.y = surfLim;
-    if (camVel.y > 0) camVel.y = 0;
+  // The waterline clamp is RETIRED. It existed because there was no above-water world to
+  // render; there is one now, and Sal starts the dive standing on the deck, so the eye
+  // has to be allowed into the air. What remains is a floor under the DECK so the spring
+  // cannot dip the lens through the planks while he stands on them — the deck is a
+  // one-way platform for him and needs to be one for the camera too.
+  if (player.grounded && player.pos.y > SURFACE_Y) {
+    const deckLim = raft.position.y + 0.11 + 0.35;
+    if (camera.position.y < deckLim) {
+      camera.position.y = deckLim;
+      if (camVel.y < 0) camVel.y = 0;
+    }
   }
 
   // aim slightly ahead of travel so fast movement leads the frame
@@ -754,7 +771,12 @@ function update(dt, t) {
   $mats.textContent = `polymer ${survival.polymer}  ·  bitumen ${survival.bitumen}`
     + (survival.ink > 0 ? `  ·  ink ${survival.ink}` : '')
     + (survival.hasSpear ? `  ·  spears ${survival.spears}` : '');
-  $depth.textContent = Math.floor(-player.pos.y * 3) + ' m';
+  // A gauge reads depth, not altitude. Standing on the deck this printed "-7 m", which is
+  // a diving gauge claiming he is seven metres into the sky; on the surface it reads the
+  // deck, which is what a tender would call it.
+  $depth.textContent = player.pos.y >= SURFACE_Y
+    ? 'ON DECK'
+    : Math.floor(-player.pos.y * 3) + ' m';
   if (state === 'won') winT += dt;
 }
 
