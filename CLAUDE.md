@@ -144,32 +144,39 @@ orchestrator redoes it, not the agent.
   thermal-vent concept) are the two remaining ideas from the original punch list.
 - User keeps a feedback doc; expect a batch of notes rather than single items.
 
-### Far field / world scale — state after THE SILT LINE (phase 1 shipped)
+### Far field / world scale — SILT LINE + W2 both shipped
 
-- **The warm near field is UNRESOLVED and needs the user's eye** against his
-  reference screenshots. Red 2% reach 84 -> 105 units in zone 0. Kill switch:
-  `K_PART = K_EXT` and `SILT_MIX/SILT_GAIN = 0.00/1.00` in water.js.
-- **Zones 1 and 2 have nothing to reveal yet.** Their clear bands measure 3.4x and
-  4.8x more visibility but render near-black — the rise shows more empty water, not
-  a revealed room. This is a CONTENT gap, not an optics bug, and it is what phase 2
-  (W2) exists to fix. Zone 0 is the only zone where the reveal currently lands.
-- **W2 BLOCKER, found and unfixed**: the rampart at r=340..540 does not fit inside
-  the terrain mesh, which is a SQUARE of half-extent 390. The crest is missing over
-  39% of bearings and would render as four corner lobes. Worse, clear-band visibility
-  is now 456u/477u in zones 1-2 against a 390u mesh — the player can see FURTHER THAN
-  THE WORLD EXTENDS on the axes. Fix is free: `HALF` 390 -> 560 with
-  `axisMap(u) = HALF*(0.432u + 0.568u^3)`, which holds the inner sampling product at
-  242 so the basin stays bit-identical and the vertex count does not change. Costs
-  31% coarser rim quads. Do NOT raise WORLD_R (riftPos and bubble vents key off it).
+- **The warm near field is UNRESOLVED and needs the user's eye.** Red 2% reach
+  84 -> 105 units in zone 0. Kill switch: `K_PART = K_EXT` and
+  `SILT_MIX/SILT_GAIN = 0.00/1.00` in water.js (three adjacent lines, ~line 44).
+  Worth re-judging NOW: until the samplePerf fix the game silently ran with
+  volumetrics/AO/shadows off every session, so the user has never seen full quality.
+- **Does the far ridgeline read?** W2's rampart sits at 4.5% transmittance against
+  the rim's 13.1% — a measured 2.9x separation, but subtle. `RAM_H` is the lever if
+  it is too faint on a real monitor. Only the user can settle this.
 - Streaming/chunked LOD is DECLINED with arithmetic, not taste: utilisation is 4.6%
   at r=2236 and 1.8% at r=3600, because scale is (resolvable feature)/(mean free
-  path) and both terms are set by the water. The procedural answer being given
-  instead is killing the lathe — the rim onset radius becomes azimuthal.
-- Latent, currently invisible: `nephParams` keys off CAMERA height, and `yf(y)`
-  crosses `y` itself near -336 and -649, making phantom nepheloid layers in the open
-  water between zones (murkier there than on the zone-0 seabed). Harmless today
-  because those gaps are unlit; put any light or geometry there and it becomes real.
-- The dome/fog seam is NOT analytically zero (the spec claimed it was). Measured
-  0-2 code values in the clear bands, up to ~10 at extreme elevation from a floor.
-  Within tolerance; the source comments say so accurately. Do not "fix" it with a
-  path integral in the dome — that was evaluated and killed.
+  path) and both terms are set by the water, not the triangle budget. The procedural
+  answer given instead was killing the lathe (azimuthal rim onset).
+- `WORLD_R` stays 260 forever — riftPos and bubble vents key off it, and the ending's
+  rift-threaded spline breaks. `HALF` (mesh extent, now 560) is the knob that moves.
+- Latent, currently invisible: `nephParams` keys off CAMERA height and `yf(y)` crosses
+  `y` itself near -336 and -649, making phantom nepheloid layers in the open water
+  BETWEEN zones (murkier there than on the zone-0 seabed). Harmless while those gaps
+  are unlit; put light or geometry there and it becomes real.
+- The dome/fog seam is NOT analytically zero (the spec claimed it was). Measured 0-2
+  code values in the clear bands, up to ~10 at extreme elevation from a floor. Within
+  tolerance; the source comments say so accurately. Do NOT "fix" it with a path
+  integral in the dome — that was evaluated and killed.
+- The spec's "the basin can never shrink" is overstated: the wall foot moves in up to
+  9u on ~10% of bearings (a second-order effect of the crest-height warp, not the
+  onset). Scatter-band steepness got BETTER, so the concern it guarded is closed.
+
+### Perf sampling — read this before touching samplePerf
+
+`game.js` passes `Math.min(0.05, clock.getDelta())`. That clamp is CORRECT for
+physics and FATAL for any perf judge: a 500 ms frame is indistinguishable from a
+50 ms one, and a throttled stretch reads as a steady 20 fps. `samplePerf` therefore
+measures its own `performance.now()` wall time and discards frames over 250 ms.
+Two separate false-degrade bugs came from getting this wrong; both shipped a game
+that silently ran without volumetrics, AO or shadows on hardware doing 54-60 fps.
