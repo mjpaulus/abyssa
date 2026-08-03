@@ -99,6 +99,22 @@ const SKY_ZEN_D = [0.090, 0.155, 0.310], SKY_HOR_D = [0.620, 0.660, 0.720];
 const SKY_ZEN_N = [0.0045, 0.0068, 0.0135], SKY_HOR_N = [0.0165, 0.0180, 0.0210];
 const SUN_DISC = [3.4, 3.0, 2.3], MOON_DISC = [0.30, 0.34, 0.42];
 
+// ---------------------------------------------------------------------------
+// AIR — the other half of the medium.
+// ---------------------------------------------------------------------------
+// Until the surface round the Beer-Lambert extinction above ran on EVERY fragment
+// regardless of height, so the air was rendered as water: from the raft the upper frame
+// was the underwater dome and the sea was a milky see-through band. Air gets its own,
+// far thinner haze, and any ray that crosses y = 0 is integrated piecewise.
+//
+// 0.0040/unit in green is a marine haze: one unit is 3 m, so meteorological visibility
+// (2% transmittance) lands at 978 units = 2.9 km. That is a grey working sea, not a
+// tropical postcard, and it is also what closes the seam at the ocean disc's 460-unit
+// rim: transmittance there is 0.159 green, so the last of the difference between the
+// sea and the dome behind it is under 4 sRGB code values.
+// Faintly blue-tilted (aerosol, not Rayleigh — a real marine haze is nearly grey).
+const K_AIR = [0.00380, 0.00400, 0.00440];
+
 const f = v => v.toFixed(5);
 const v3 = a => `vec3(${f(a[0])},${f(a[1])},${f(a[2])})`;
 const v2 = a => `vec2(${f(a[0])},${f(a[1])})`;
@@ -176,6 +192,52 @@ float murkFracAt( float y, float yf, float hs, float amp ){
 vec3 siltTint( vec3 A, float fm ){
   float lum = dot( A, vec3( 0.2126, 0.7152, 0.0722 ) );
   return mix( A, mix( A, lum * vec3( 1.42, 1.16, 0.72 ), ${f(SILT_MIX)} ) * ${f(SILT_GAIN)}, fm );
+}`;
+
+// The AIR half of the medium. Shared VERBATIM by the fog chunk, the dome and the ocean
+// surface for exactly the reason GLSL_WATER is: the fog chunk's L -> infinity limit, the
+// dome below the horizon and the far edge of the ocean disc are three different pieces of
+// geometry that have to agree on one number, and the only way to guarantee that is to
+// have them evaluate the same function.
+const GLSL_AIR = `
+#define KAIR ${v3(K_AIR)}
+
+// Airlight: what a long path through air settles on. It IS the sky at the horizon, which
+// is what makes those three pieces land on one colour with nothing to step against.
+//
+// The fog chunk can only see fogColor and fogDensity. three clones UniformsLib.fog into
+// every ShaderLib entry at ITS module-eval, so mutating UniformsLib.fog afterwards is a
+// no-op for built-in materials and would leave an undeclared uniform in the chunk -- the
+// program fails to link and there is no fog at all. So day is recovered here by inverting
+// game.js's surfK, exactly the way setWeatherWater already does it one file up.
+// Storm is NOT separable from that one scalar: at full gale this reads ~13% brighter and
+// less desaturated than the sky it meets. skyDome eases the last 3.4 degrees of sky into
+// this same value, so the residual is a soft gradient at the horizon and never a step.
+vec3 airLight( vec3 surfIrr ){
+  float dg = clamp( ( surfIrr.g / ${f(SURF_LIGHT[1])} - 0.20 ) / 0.80, 0.0, 1.0 );
+  return ${v3(SKY_HOR_D)} * ( 0.0266 + 0.9734 * dg );
+}`;
+
+// THE SKY. One function, used by the ocean surface on BOTH sides of the interface and by
+// the background dome, so the sky seen from the air and the sky compressed into Snell's
+// window from below are literally the same image. The body is unchanged from the
+// window-only version it grew out of — that is what keeps the underwater view identical,
+// and it is also the whole point: consistency between the two views.
+// Requires GLSL_NOISE (fbm2) and the uSky*/uSun*/uCloud/uTime uniforms.
+const GLSL_SKY = `
+vec3 skyRadiance( vec3 d ){
+  float up = clamp( d.y, 0.0, 1.0 );
+  vec3 c = mix( uSkyHor, uSkyZen, sqrt( up ) );
+  // Cloud deck, projected onto a plane overhead so it parallaxes with the ray: from
+  // below the waves slide the sky about instead of scrolling a texture stuck to the
+  // water; from above it is the overcast itself. Faded out toward the horizon, where the
+  // projection's derivative blows up and would alias into the rim.
+  float cl = fbm2( ( d.xz / max( up, 0.12 ) ) * 0.35
+                   + vec2( uTime * 0.012, uTime * 0.009 ) );
+  c *= 1.0 - uCloud * smoothstep( 0.02, 0.30, up ) * ( 0.55 - 0.85 * cl );
+  float sd = max( 0.0, dot( d, uSunDir ) );
+  c += uSunCol * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) );
+  return c;
 }`;
 
 // Weather scaling of the surface irradiance (set by game.js): night and storms dim
@@ -273,6 +335,7 @@ export function murkFrac(y) {
   #endif
 ${GLSL_AMBIENT}
 ${GLSL_WATER}
+${GLSL_AIR}
 #endif`;
   // The inscatter is dominated by the near end of a long ray, so weight the sample
   // height by extinction: wgt = 1/a - 1/(e^a - 1), which tends to 1/2 for short rays
@@ -292,10 +355,37 @@ ${GLSL_WATER}
     #else
       float dens = 1.0 / max( 1.0, fogFar - fogNear );
     #endif
+
+    // --- SPLIT THE PATH AT THE WATERLINE ------------------------------------
+    // The medium is piecewise in HEIGHT exactly the way the nepheloid layer is, so the
+    // same split-and-integrate applies one level up: WATER only over the submerged part
+    // of the ray, thin AIR over the rest. Before this, the extinction ran on every
+    // fragment regardless of height and the air above the raft was rendered as water.
+    //
+    // fw is the fraction of the segment lying below y = 0. For a ray with BOTH endpoints
+    // submerged the quotient exceeds 1 and the clamp saturates to EXACTLY 1.0, so
+    // Lw == vFogDepth, La == 0.0, yw0/yw1 collapse to the raw endpoints, and every term
+    // below is bit-identical to the pre-sky shader. That is the regression guarantee for
+    // the whole underwater game, and it is exact rather than approximate.
+    // The |dy| guard is the horizontal ray: not a 0/0 that needs a limit, just a divide
+    // that would produce inf. step() returns exactly 1.0 for an eye at or below y = 0.
+    float dy  = vFogY - cameraPosition.y;
+    float fw  = abs( dy ) > 1e-4
+      ? clamp( -min( cameraPosition.y, vFogY ) / abs( dy ), 0.0, 1.0 )
+      : step( cameraPosition.y, 0.0 );
+    float Lw  = vFogDepth * fw;
+    float La  = vFogDepth - Lw;
+    // Endpoints of the SUBMERGED sub-segment. min(y,0) gives them for free and, crucially,
+    // preserves which end is nearer the eye: eye in air -> yw0 is the crossing (near),
+    // yw1 the fragment; eye in water -> yw0 is the eye, yw1 the crossing. That ordering is
+    // what lets the inscatter weight below keep meaning "weighted toward the eye".
+    float yw0 = min( cameraPosition.y, 0.0 );
+    float yw1 = min( vFogY, 0.0 );
+
     float yf, hs, amp;
     nephParams( cameraPosition.y, yf, hs, amp );
-    float s0 = ( cameraPosition.y - yf ) / hs;
-    float s1 = ( vFogY - yf ) / hs;
+    float s0 = ( yw0 - yf ) / hs;
+    float s1 = ( yw1 - yf ) / hs;
     float e0, e1;
     float g0 = nephG( s0, e0 );
     float g1 = nephG( s1, e1 );
@@ -313,11 +403,16 @@ ${GLSL_WATER}
     // all four of which keep working with NO edit. Invert the profile at the eye to
     // recover the storm gain: e0 is already computed by nephG, so weather coupling
     // costs one divide and zero extra transcendentals.
+    // e0 now comes from yw0, not from cameraPosition.y. Those are the same number for
+    // every submerged eye; for an eye in the AIR they differ by amp*(e^-(y/hs) - 1) on a
+    // term already down at 3.3e-5 of amp -- 2.5e-7 relative on the divisor. Recomputing it
+    // at the true camera height would cost a whole extra exp() per fragment to fix the
+    // seventh decimal place of a case the water is not even in.
     float storm = dens / max( rhoClearAt( cameraPosition.y ) + amp * e0, 1e-6 );
 
     // Clear column is linear in y, so its exact path mean is the midpoint value.
-    float ic  = vFogDepth * rhoClearAt( 0.5 * ( cameraPosition.y + vFogY ) ) * storm;
-    float im  = vFogDepth * amp * shp * storm;
+    float ic  = Lw * rhoClearAt( 0.5 * ( yw0 + yw1 ) ) * storm;
+    float im  = Lw * amp * shp * storm;
     vec3  tau = ic * KMOL + im * KPART;
     vec3  tr  = exp( -tau );
 
@@ -326,10 +421,28 @@ ${GLSL_WATER}
     float ea  = clamp( tau.g, 1e-4, 30.0 );
     float wgt = ea < 0.6 ? 0.5 - ea * 0.0833333 + ea * ea * ea * 0.0013889
                          : 1.0 / ea - 1.0 / ( exp( ea ) - 1.0 );
-    float ay  = cameraPosition.y + ( vFogY - cameraPosition.y ) * wgt;
+    float ay  = yw0 + ( yw1 - yw0 ) * wgt;
 
     vec3 J = siltTint( abyssaAmbient( fogColor, ay ), murkFracAt( ay, yf, hs, amp ) );
-    gl_FragColor.rgb = gl_FragColor.rgb * tr + J * ( 1.0 - tr );
+    vec3 c = gl_FragColor.rgb * tr + J * ( 1.0 - tr );
+
+    // The air leg. Skipped outright when the ray never leaves the water, which is every
+    // frame the game itself renders -- so the underwater path pays nothing for the sky,
+    // not even the three exp() this costs, and c is left byte-identical.
+    if ( La > 0.0 ) {
+      vec3 trA = exp( -La * KAIR );
+      vec3 A   = airLight( fogColor );
+      // ORDER MATTERS: the leg nearer the EYE attenuates the far leg's inscatter, and
+      // which leg that is flips with the eye. Both forms below are the exact three-term
+      // composite (frag*trW*trA + near-J + far-J*tr_near), algebraically folded so the
+      // pure-water result c can be reused instead of recomputed.
+      //   eye in air  : L = trA*c + A*(1-trA)
+      //   eye in water: L = c + trW*(1-trA)*(A - frag)
+      c = cameraPosition.y < 0.0
+        ? c + tr * ( 1.0 - trA ) * ( A - gl_FragColor.rgb )
+        : mix( A, c, trA );
+    }
+    gl_FragColor.rgb = c;
   }
 #endif`;
 })();
@@ -344,6 +457,17 @@ const uCam = { value: new THREE.Vector3() };
 const uExtG = { value: 0.024 };          // green-channel extinction, for manual fades
 const uRayFade = { value: 0.55 };
 const uLightPos = { value: new THREE.Vector3() };
+// Sky state, SHARED by the ocean surface and the background dome. One set of uniform
+// objects, written once per frame in updateWater: the two materials cannot disagree about
+// what the sky is doing, which is the whole reason the sky seen from the air and the sky
+// in Snell's window are the same sky.
+const uSkyZen = { value: new THREE.Vector3(...SKY_ZEN_D) };
+const uSkyHor = { value: new THREE.Vector3(...SKY_HOR_D) };
+const uSunCol = { value: new THREE.Vector3(...SUN_DISC) };
+const uSunDirU = { value: SUN_DIR.clone() };
+const uSunSize = { value: 700 };
+const uCloud = { value: 0.22 };
+const uStormU = { value: 0 };
 const _tmp = new THREE.Vector3();
 const _size = new THREE.Vector2();
 const _outCol = new THREE.Color();
@@ -361,7 +485,8 @@ function buildDome() {
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       uSurf: { value: new THREE.Vector3(...SURF_LIGHT) },
-      uReach: { value: 46 }, uTime, uSunGlow: { value: new THREE.Vector3() }
+      uReach: { value: 46 }, uTime, uSunGlow: { value: new THREE.Vector3() },
+      uSkyZen, uSkyHor, uSunCol, uSunDir: uSunDirU, uSunSize, uCloud, uAir
     },
     side: THREE.BackSide, depthWrite: false, fog: false,
     vertexShader: `varying vec3 vDir;
@@ -369,12 +494,39 @@ function buildDome() {
         vec4 p = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
         gl_Position = vec4( p.xy, p.w * 0.999999, p.w ); }`,
     fragmentShader: `uniform vec3 uSurf, uSunGlow; uniform float uReach, uTime;
+      uniform vec3 uSkyZen, uSkyHor, uSunCol, uSunDir;
+      uniform float uSunSize, uCloud, uAir;
       varying vec3 vDir;
       ${GLSL_NOISE}
       ${GLSL_AMBIENT}
       ${GLSL_WATER}
+      ${GLSL_AIR}
+      ${GLSL_SKY}
+
+      // The far field on the AIR side. Below the horizon it is open sea at grazing
+      // incidence — which is the reflected horizon sky closed by haze, i.e. the airlight
+      // — and that is also what the fog chunk converges on at L -> infinity and what the
+      // ocean disc fades into at its 460-unit rim. Three surfaces, one number, no ring.
+      // Above the horizon, ease the last 3.4 degrees of sky into the same value: it costs
+      // nothing in clear weather (skyRadiance already tends to uSkyHor there) and it is
+      // what hides airLight's storm approximation.
+      // BOTH smoothstep edges ASCEND. The inverted form is UNDEFINED in GLSL and produces
+      // driver-dependent garbage — the same trap documented on nephParams.
+      vec3 skyDome( vec3 d, vec3 hz ){
+        return mix( skyRadiance( d ), hz, 1.0 - smoothstep( 0.0, 0.060, d.y ) );
+      }
+
       void main(){
         vec3 d = normalize( vDir );
+        // Above the waterline the background is SKY, not water. uAir is computed on the
+        // CPU against the REAL local surface height under the camera (see surfaceHeightAt)
+        // rather than a flat threshold — a flat one disagreed with the sea's own
+        // per-fragment dot(V,N) test and made the interface strobe as waves rolled past it.
+        float air = uAir;
+        if ( air >= 1.0 ) {
+          gl_FragColor = vec4( skyDome( d, airLight( uSurf ) ), 1.0 );
+          return;
+        }
         // uReach is one mean free path: the extinction-weighted height this ray samples.
         // murkFracAt is a PURE FUNCTION of that height, so the silt tint here and the
         // silt tint the fog chunk reaches at L -> infinity are the same number by
@@ -393,6 +545,9 @@ function buildDome() {
         vec2 q = d.xz / max( 0.30, abs( d.y ) + 0.22 );
         float na = 0.16 * smoothstep( 0.05, 0.42, abs( d.y ) );
         c *= 1.0 - na * 0.5 + na * fbm2( q * 2.0 + vec2( uTime * 0.012, uTime * 0.008 ) );
+        // The crossing band. Skipped entirely at air == 0.0, which is every frame the
+        // game can produce, so the water dome below the waterline is untouched.
+        if ( air > 0.0 ) c = mix( c, skyDome( d, airLight( uSurf ) ), air );
         gl_FragColor = vec4( c, 1.0 );
       }`
   });
@@ -531,6 +686,10 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
         vec3 dl = w - uLightPos;
         float lb = exp( -dot( dl, dl ) * 0.006 );   // the lantern picking grit out of the dark
         vA = uAlpha * uDepth
+           // Marine snow is water-borne. The wrap box follows the camera, so an eye at
+           // the surface used to fill the AIR with drifting grit. Exactly 1.0 for
+           // w.y <= 0, so nothing below the waterline changes by a bit.
+           * ( 1.0 - smoothstep( 0.0, 0.9, w.y ) )
            * smoothstep( uL * 0.5, uL * 0.32, length( w - uCam ) )
            * smoothstep( 0.5, 3.0, dist )
            * exp( -dist * uExtG * uExtK );
@@ -576,6 +735,42 @@ const WAVE = [
   [6.5, 91, 0.010, 0.036, 45]
 ];
 const DISP = Math.sqrt(9.81 / 3);   // k is per world unit and a unit is 3 m: omega = sqrt(g*k/3)
+
+// CPU mirror of the VERTEX wave pass (the first 3 components — the ones the mesh actually
+// carries as geometry, so this is the height the surface really has). Evaluated at the
+// camera's own xz, where the distance taper is 1 by construction (dist = 0 < fr*0.5).
+//
+// This exists because "is the eye in air?" was being answered THREE different ways that
+// disagreed: the dome used a flat smoothstep(-0.85, 0.15, camY), the occlusion toggle
+// used a hard y > 0, and the surface shader used a correct per-fragment dot(V,N) > 0.
+// Measured consequences of that disagreement: the dome painted sky into the underwater
+// far field as a pale band with terrain silhouetted against it; an 81-123 code-value step
+// as the eye crossed, in the wrong direction (going under got BRIGHTER); and a camera
+// held still at the waterline STROBED by 59% frame-mean as waves swept past the flat
+// threshold. One shared answer, keyed on the real local surface, removes all three.
+const _wavePhase = WAVE.slice(0, 3).map(([lam, deg, a0, a1]) => {
+  const k = 2 * Math.PI / lam, a = deg * Math.PI / 180;
+  return { k, w: DISP * Math.sqrt(k), dx: Math.cos(a), dz: Math.sin(a), a0, a1 };
+});
+export function surfaceHeightAt(x, z, t, storm) {
+  const sm = THREE.MathUtils.smoothstep(storm, 0, 0.90);
+  let h = 0;
+  for (let i = 0; i < 3; i++) {
+    const c = _wavePhase[i];
+    h += (c.a0 + (c.a1 - c.a0) * sm) * Math.sin((x * c.dx + z * c.dz) * c.k + t * c.w);
+  }
+  return h;
+}
+// 0 = eye fully in water, 1 = fully in air. The band is half a helmet: narrow enough that
+// the transition is a moment, wide enough not to alias on a chopping surface.
+const AIR_BAND = 0.35;
+const uAir = { value: 0 };
+// The live surface height under the camera, refreshed once per frame in updateWater.
+// game.js clamps the play camera against THIS rather than a flat SURFACE_Y, so the
+// clamp sits below the air band even in a gale (a storm trough reaches about -0.6, which
+// against a flat -0.9 clamp would have leaked a little sky into the underwater frame).
+let _surfH = SURFACE_Y;
+export function localSurfaceY() { return _surfH; }
 
 // Unrolled from JS because GLSL ES 1.00 (what three compiles a plain ShaderMaterial as)
 // has no array constructors — `const float A[6] = float[6](...)` is a 3.00-only form.
@@ -643,14 +838,14 @@ function buildSurfaceGeo() {
 }
 
 function buildSurface() {
+  // uSkyZen/uSkyHor/uSunCol/uSunDir/uSunSize/uCloud/uStorm are the module-scoped objects
+  // the DOME also holds. Shared on purpose: the sky in Snell's window and the sky over
+  // the horizon are the same sky, and sharing the uniform is the only way that stays true
+  // without a second update path to keep in sync.
   const u = Object.assign(fogUniforms(), {
     uTime, uCam,
-    uSunDir: { value: SUN_DIR.clone() },
-    uSkyZen: { value: new THREE.Vector3(...SKY_ZEN_D) },
-    uSkyHor: { value: new THREE.Vector3(...SKY_HOR_D) },
-    uSunCol: { value: new THREE.Vector3(...SUN_DISC) },
-    uSunSize: { value: 700 }, uCloud: { value: 0.22 },
-    uStorm: { value: 0 }, uFlash: { value: 0 },
+    uSunDir: uSunDirU, uSkyZen, uSkyHor, uSunCol, uSunSize, uCloud, uStorm: uStormU,
+    uFlash: { value: 0 },
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
     uBright: { value: 1 }, uFade: { value: 1 }
   });
@@ -681,24 +876,12 @@ function buildSurface() {
       const float ETA = 1.333;
       const float F0  = 0.020383;   // ((n-1)/(n+1))^2 at n = 1.333; theta_c = 48.59 deg
 
-      // The sky, on the AIR side of the interface. The entire upper hemisphere is
-      // squeezed into the 97-degree window, so the horizon lands on the window rim and
-      // the zenith at its centre; sqrt() biases the gradient toward the horizon, which
-      // is where that compression puts most of the sky.
-      vec3 skyRadiance( vec3 d ){
-        float up = clamp( d.y, 0.0, 1.0 );
-        vec3 c = mix( uSkyHor, uSkyZen, sqrt( up ) );
-        // Cloud deck, projected onto a plane overhead so it parallaxes with the
-        // refracted ray: the waves slide the sky about instead of scrolling a texture
-        // stuck to the water. Faded out toward the horizon, where the projection's
-        // derivative blows up and would alias into the rim.
-        float cl = fbm2( ( d.xz / max( up, 0.12 ) ) * 0.35
-                         + vec2( uTime * 0.012, uTime * 0.009 ) );
-        c *= 1.0 - uCloud * smoothstep( 0.02, 0.30, up ) * ( 0.55 - 0.85 * cl );
-        float sd = max( 0.0, dot( d, uSunDir ) );
-        c += uSunCol * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) );
-        return c;
-      }
+      // Seen from BELOW, the entire upper hemisphere is squeezed into the 97-degree
+      // window, so the horizon lands on the window rim and the zenith at its centre;
+      // sqrt() biases the gradient toward the horizon, which is where that compression
+      // puts most of the sky. From ABOVE the identical function is evaluated on the
+      // true reflected direction. Same sky, both sides — see GLSL_SKY.
+      ${GLSL_SKY}
 
       // What is actually above a total-internal-reflection ray in THIS world: the water
       // column below, which darkens with depth. That gradient is the horizon in the
@@ -747,12 +930,53 @@ function buildSurface() {
         return e;
       }
 
+      // Down-looking is not up-looking. abyssaAmbient is the ISOTROPIC fully-scattered
+      // field -- what a diver is INSIDE -- and it is several times what actually escapes
+      // upward through the interface; real ocean irradiance reflectance is 2-6%. Left
+      // raw, the sea from above measured 0.080 scene-linear green against a horizon sky
+      // of 0.56 and read as a lit tropical lagoon. 0.46 is the level. The 0.35 pull
+      // toward luminance is what turns a teal pool into grey North-Atlantic water
+      // WITHOUT moving the hue off the game's own palette -- the same trick siltTint
+      // uses, for the same reason: desaturate, do not re-tint.
+      // Air side only. The from-below mirror is the diver's own medium and keeps its
+      // full radiance.
+      vec3 seaBody( vec3 c ){
+        return mix( c, vec3( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ) ), 0.35 ) * 0.46;
+      }
+
+      // Short wind chop, AIR SIDE ONLY. The six-component swell bottoms out at a
+      // 19.5 m wavelength, which from an eye 1.6 units (5 m) above the water is a sheet
+      // of glass — no sea state at all. Three crossed components at 3.4 / 1.7 / 0.85
+      // units (10 / 5 / 2.5 m) with analytic gradients, NORMALS ONLY: the polar mesh's
+      // cell is 0.085 u at r = 1.2 but 2.4 u at r = 34, so it cannot carry these as
+      // geometry. Retired between 40 and 130 units for the same reason — the mesh is
+      // camera-anchored and the field is world-anchored, so any aliasing would CRAWL as
+      // the diver moves, which is the one artefact this sea cannot afford.
+      // The vn() term is patchiness: cat's paws of ruffled water, not uniform corduroy.
+      // Deliberately NOT applied to the from-below normal: that would change Snell's
+      // window, the foam threshold and the TIR mirror all at once.
+      vec2 rippleGrad( vec2 p, float t, float storm, float dist ){
+        float fade = 1.0 - smoothstep( 50.0, 165.0, dist );
+        if ( fade <= 0.002 ) return vec2( 0.0 );
+        float gain = ( 0.95 + 1.15 * storm ) * fade
+                   * ( 0.45 + 1.05 * vn( p * 0.055 + vec2( t * 0.021, -t * 0.017 ) ) );
+        vec2 g = vec2( 0.0 );
+        { float q = dot( p, vec2( 0.940, 0.342 ) ) * 1.848 + t * 2.458;
+          g += vec2( 0.940, 0.342 ) * ( 0.02033 * cos( q ) ); }
+        { float q = dot( p, vec2( -0.423, 0.906 ) ) * 3.696 + t * 3.477;
+          g += vec2( -0.423, 0.906 ) * ( 0.02033 * cos( q ) ); }
+        { float q = dot( p, vec2( 0.707, -0.707 ) ) * 7.392 + t * 4.916;
+          g += vec2( 0.707, -0.707 ) * ( 0.01626 * cos( q ) ); }
+        return g * gain;
+      }
+
       void main(){
         vec3 V = normalize( vW - uCam );
         float dist = distance( vW.xz, uCam.xz );
         vec2 dh = waveHN( vW.xz, uTime, uStorm, dist ).yz;
 
         float rain = 0.0;
+        vec2 dhRain = vec2( 0.0 );   // kept separate: the air side wants less of it
         if ( uStorm > 0.02 ) {                       // uniform branch, fully coherent
           // Cells of 0.45 and 0.22 units (1.4 m and 0.7 m), so a ring reads as a drop
           // strike and not as a porthole; and only inside 26 units, because past that a
@@ -761,7 +985,8 @@ function buildSurface() {
           vec2 g1, g2;
           float r1 = rainRing( vW.xz * 2.2, uTime, 0.0, g1 );
           float r2 = rainRing( vW.xz * 4.5, uTime * 1.27, 11.0, g2 );
-          dh += ( g1 * 0.0022 + g2 * 0.0011 ) * rk;
+          dhRain = ( g1 * 0.0022 + g2 * 0.0011 ) * rk;
+          dh += dhRain;
           rain = ( r1 + 0.6 * r2 ) * rk;
         }
 
@@ -776,11 +1001,21 @@ function buildSurface() {
         // Caustic detail dies with distance as well as depth: past ~120 units a 3.4-unit
         // cell is under 4 pixels and the pattern would alias into a crawl.
         float mk = uMirrorK * ( 1.0 - smoothstep( 35.0, 120.0, dist ) );
+        // Foam colour, hoisted above the branch so the air side can reach it for wind
+        // streaks. Pure function of fogColor, so moving it changes nothing it did before.
+        // Foam from below is a bubble raft, not a highlight: it scatters isotropically,
+        // so it is lit by the surface irradiance and replaces BOTH the window and the
+        // mirror with the same dull grey-white. 4.6x the irradiance level puts a
+        // full-storm whitecap at ~0.33 scene-linear: just over BloomEffect's 0.28, so
+        // foam is the one thing on a storm ceiling that glows, and it goes dark on its
+        // own at night without a second uniform.
+        vec3 foamCol = vec3( 0.86, 0.94, 1.00 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6;
+        float rimK = 0.0;
+        vec3 col = vec3( 0.0 );
         // Each side owns an fbm2. Gating them on F keeps the common fragment paying for
         // one, not two: inside the window F is 0.02 so the mirror is invisible, outside it
         // F is 1.0 so the sky is. The branches are spatially coherent (whole window vs
         // whole mirror) and only diverge in the few degrees of the Fresnel rim.
-        vec3 col = vec3( 0.0 );
         if ( below ) {
           float kk = 1.0 - ETA * ETA * ( 1.0 - ct * ct );
           float ca = sqrt( max( kk, 0.0 ) );          // cosine on the AIR side
@@ -799,29 +1034,70 @@ function buildSurface() {
           if ( F < 0.998 ) col  = skyRadiance( refract( V, -Nf, ETA ) ) * ( 1.0 - F );
           if ( mf > 0.0 )  col += mirrorRadiance( vW, reflect( V, Nf ), uTime, mk ) * ( F * mf );
         } else {
-          // Above the interface: air -> water, no TIR, and the roles swap.
-          F = F0 + ( 1.0 - F0 ) * pow( 1.0 - ct, 5.0 );
-          col = mirrorRadiance( vW, refract( V, -Nf, 1.0 / ETA ), uTime, mk ) * ( 1.0 - F )
-              + skyRadiance( reflect( V, Nf ) ) * F;
+          // ---- THE SEA FROM ABOVE ------------------------------------------
+          // air -> water, no TIR, and the roles swap. Nothing in this branch can run for
+          // a fragment the diver sees from below, so none of it can regress the window.
+          // rainRing gives exactly one ring per cell per beat on a 0.45-unit (1.35 m)
+          // lattice. From below that is a diffuse lens in the window and the lattice never
+          // shows; from above, at an eye height of 1.6 units, it reads as a GRID of stamped
+          // o's -- measured, it dominated the near field of a full-gale frame. The air side
+          // therefore drops it entirely and lets the wind chop carry the rain. Doing rain
+          // properly from above needs a stochastic splash field, not one ring per cell;
+          // that is a separate piece of work. The from-below normal is untouched.
+          vec2 dhA = dh - dhRain + rippleGrad( vW.xz, uTime, uStorm, dist );
+          vec3 Na = normalize( vec3( -dhA.x, 1.0, -dhA.y ) );
+          float cta = clamp( -dot( V, Na ), 0.0, 1.0 );
+          F = F0 + ( 1.0 - F0 ) * pow( 1.0 - cta, 5.0 );
+          // Fresnel does the whole job here: 0.020 looking straight down (you see into
+          // the water), 0.60 at the 5.7 degrees the raft subtends from an eye 1.6 up
+          // (mostly sky), 1.0 at the horizon. What is NOT sky is the body of the sea —
+          // the column below sampled along the REFRACTED ray by the same closed form the
+          // from-below mirror uses, so from the air you are looking into exactly the
+          // water Sal swims in, and it dims with the weather for free.
+          // Caustics at 0.55x: from below they are the only contrast a down-going ray can
+          // find; from above they are a garnish on a grey sea, and at full strength they
+          // read tropical.
+          col = seaBody( mirrorRadiance( vW, refract( V, Na, 1.0 / ETA ), uTime, mk * 0.55 ) ) * ( 1.0 - F )
+              + skyRadiance( reflect( V, Na ) ) * F;
+
+          // Wind streaks: storm foam blown into lines along the dominant swell's own
+          // bearing (WAVE[0], 20 degrees), sampled ~9:1 anisotropically so it reads as
+          // streaks and not as blobs. Two octaves multiplied, so the streaks break up
+          // instead of running the length of the frame.
+          if ( uStorm > 0.02 ) {
+            vec2 wr = vec2( vW.x * 0.93969 + vW.z * 0.34202,
+                           -vW.x * 0.34202 + vW.z * 0.93969 );
+            float sk = vn( vec2( wr.x * 0.030 - uTime * 0.30, wr.y * 0.27 ) )
+                     * vn( vec2( wr.x * 0.075 - uTime * 0.52, wr.y * 0.62 ) + 3.7 );
+            col = mix( col, foamCol, smoothstep( 0.16, 0.42, sk ) * uStorm * uStorm * 0.55
+                     * ( 1.0 - smoothstep( 90.0, 260.0, dist ) ) );
+          }
+          // The disc stops at 460 units; the sea does not. Its last 30% eases into the
+          // same airlight the dome draws past the rim and the fog chunk converges on, so
+          // the three meet with no ring. Applied after the foam block below, or a storm
+          // whitecap at 400 units would sit on top of the horizon haze.
+          rimK = smoothstep( 320.0, 455.0, dist );
         }
 
-        // Foam from below is a bubble raft, not a highlight: it scatters isotropically,
-        // so it is lit by the surface irradiance and replaces BOTH the window and the
-        // mirror with the same dull grey-white. Hence a mix AFTER the Fresnel composite.
-        // Deriving it from |grad h| means only the storm spectrum can ever steepen enough
-        // to break. Monte-Carlo over the spectrum (20k samples): calm p99 = 0.078 and
-        // max 0.095, so a 0.30 calm threshold can never fire; storm p50 = 0.102,
+        // Deriving foam from |grad h| means only the storm spectrum can ever steepen
+        // enough to break. Monte-Carlo over the spectrum (20k samples): calm p99 = 0.078
+        // and max 0.095, so a 0.30 calm threshold can never fire; storm p50 = 0.102,
         // p90 = 0.189, max 0.306, so a 0.145 storm threshold covers ~22% of the ceiling.
-        // 4.6x the irradiance level puts a full-storm whitecap at ~0.33 scene-linear:
-        // just over BloomEffect's 0.28, so foam is the one thing on a storm ceiling that
-        // glows, and it goes dark on its own at night without a second uniform.
-        vec3 foamCol = vec3( 0.86, 0.94, 1.00 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6;
+        // Mixed AFTER the Fresnel composite because it replaces what is underneath.
         float foam = smoothstep( uFoamThr, uFoamThr + 0.05, length( dh ) )
                    * ( 0.20 + 0.80 * uStorm )
                    * ( 0.45 + 0.75 * vn( vW.xz * 0.55 + vec2( uTime * 0.12 ) ) );
         col = mix( col, foamCol, clamp( foam, 0.0, 0.85 ) * uNearK );
-        col += foamCol * rain * 0.25;   // the LENS is the effect; the fleck is a garnish
+        // the LENS is the effect; the fleck is a garnish. Air side keeps a tenth of the
+        // fleck for the same reason the air side dropped the ring normal above.
+        // Air side is 0.0, not 0.10: the rain field is a REGULAR lattice, and from above
+        // it read as an evenly-spaced diagonal band of little circles marching across the
+        // near water — obviously procedural. From below it is fine (you see it edge-on
+        // through the interface), so only the air branch is muted. It comes back when
+        // there is a stochastic splash field to draw instead.
+        col += foamCol * rain * 0.25 * ( below ? 1.0 : 0.0 );
         col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
+        if ( rimK > 0.0 ) col = mix( col, airLight( fogColor ), rimK );
 
         // uFade retires the surface as the diver descends. Without it the depth fog
         // drives this plane to near-black while the dome behind stays lit, and the
@@ -932,6 +1208,13 @@ export function updateWater(dt, t) {
   uTime.value = t;
   const y = camera.position.y, d01 = clamp(-y / 900, 0, 1);
 
+  // ONE answer to "is the eye in air", against the real surface under the camera, shared
+  // by the background dome and the sea's occlusion. Computed first because both read it.
+  // uStormU is set further down from wMurk; one frame of lag on the wave amplitude here
+  // is invisible and avoids reordering the whole function.
+  _surfH = SURFACE_Y + surfaceHeightAt(camera.position.x, camera.position.z, t, uStormU.value);
+  uAir.value = clamp((y - (_surfH - AIR_BAND)) / (2 * AIR_BAND), 0, 1);
+
   // shafts only exist while sunlight does; when the raymarched volumetric pass is
   // active the billboards drop to accents over its broad columns (rayDim, game.js)
   // 3.66 puts the fade at exactly zero at y = -245.9, which is zone 0's silt datum:
@@ -956,34 +1239,50 @@ export function updateWater(dt, t) {
   // worth climbing to and it has to still be drawn.
   const sFade = clamp(1 - (-y - 60) / 270, 0, 1);
   surface.visible = sFade > 0.004;
+
+  // THE SKY, driven by weather.js through game.js and by nothing else — there is no
+  // second clock up here. Written UNCONDITIONALLY now, not inside the surface's own
+  // visibility branch: the dome holds the same uniform objects and it is always drawn,
+  // so leaving them stale below y = -330 would freeze the sky mid-cycle. Storms dim it
+  // AND grey it out (an overcast sky is grey), thicken the cloud deck and soften the
+  // disc, which is what makes a storm ceiling read as overcast rather than as dimmed
+  // sunshine, and what takes the sky low and flat when seen from the air.
+  const storm = clamp(wMurk, 0, 1), gain = 1 - 0.62 * storm, desat = 0.5 * storm;
+  mixSky(uSkyZen.value, SKY_ZEN_N, SKY_ZEN_D, wDay, gain, desat);
+  mixSky(uSkyHor.value, SKY_HOR_N, SKY_HOR_D, wDay, gain, desat);
+  // Sun disc crossfades to a moon through the twilight band, so night is moonlit rather
+  // than black. uSunDir does not move — this world has one fixed sun azimuth; only what
+  // sits in that direction changes.
+  const dk = ms(wDay, 0.05, 0.25), sk = 1 - 0.85 * storm;
+  uSunCol.value.set(
+    ml(MOON_DISC[0], SUN_DISC[0] * wDay, dk) * sk,
+    ml(MOON_DISC[1], SUN_DISC[1] * wDay, dk) * sk,
+    ml(MOON_DISC[2], SUN_DISC[2] * wDay, dk) * sk
+  );
+  uSunSize.value = 700 - 560 * storm;
+  uCloud.value = 0.22 + 0.70 * storm;
+  uStormU.value = storm;
+
   if (surface.visible) {
     const su = surface.material.uniforms;
     if (su.uFade) su.uFade.value = sFade;   // tolerate a shader built without it
     su.uBright.value = clamp(1 - d01 * 0.6, 0.45, 1) * (0.35 + 0.65 * sFade);
-
-    // Weather reaches the sky in the window. Storms dim it AND grey it out (an overcast
-    // sky is grey), thicken the cloud deck and soften the disc, which is what makes a
-    // storm ceiling read as overcast rather than as dimmed sunshine.
-    const storm = clamp(wMurk, 0, 1), gain = 1 - 0.62 * storm, desat = 0.5 * storm;
-    mixSky(su.uSkyZen.value, SKY_ZEN_N, SKY_ZEN_D, wDay, gain, desat);
-    mixSky(su.uSkyHor.value, SKY_HOR_N, SKY_HOR_D, wDay, gain, desat);
-    // Sun disc crossfades to a moon through the twilight band. uSunDir does not move —
-    // this world has one fixed sun azimuth; only what sits in that direction changes.
-    const dk = ms(wDay, 0.05, 0.25), sk = 1 - 0.85 * storm;
-    su.uSunCol.value.set(
-      ml(MOON_DISC[0], SUN_DISC[0] * wDay, dk) * sk,
-      ml(MOON_DISC[1], SUN_DISC[1] * wDay, dk) * sk,
-      ml(MOON_DISC[2], SUN_DISC[2] * wDay, dk) * sk
-    );
-    su.uSunSize.value = 700 - 560 * storm;
-    su.uCloud.value = 0.22 + 0.70 * storm;
-    su.uStorm.value = storm;
     su.uFlash.value = wFlash;
     su.uFoamThr.value = ml(0.30, 0.145, storm);
     // The caustic sheet in the mirror and the foam/rain/flash detail are near-surface
     // phenomena; retire them well before uFade does, so the deep pays nothing for them.
     su.uMirrorK.value = clamp(1 + y / 70, 0, 1);
     su.uNearK.value = clamp(1 + y / 90, 0, 1);
+    // ABOVE the waterline the sea must OCCLUDE. It is drawn transparent at renderOrder
+    // -1 with depthWrite off, so every additive thing drawn after it — marine snow, the
+    // god-ray billboards, jellies, weather.js's rain plane at y = -0.5 — used to paint
+    // straight through it. That is most of what made the sea read as cloud rather than
+    // water. Below y = 0 it stays off exactly as before: it is a ceiling, not an
+    // occluder, and turning it on down there would clip the whole midwater menagerie.
+    // Keyed on the same local-surface answer as the dome, not a flat y > 0. These two
+    // disagreeing is what let sky bleed into the underwater far field.
+    const occl = uAir.value > 0.5;
+    if (surface.material.depthWrite !== occl) surface.material.depthWrite = occl;
   }
 
   // Particulate density follows the SILT, not the depth. This is the strongest local

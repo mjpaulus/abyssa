@@ -7,7 +7,7 @@ import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetric
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders } from './world/flora.js';
-import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY } from './world/water.js';
 import { buildCreatures, updateCreatures } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
@@ -390,8 +390,13 @@ function updateCamera(dt, t, fwd) {
   // integrating into the clamp and snaps when he descends again.
   // window.__noSurfClamp lets a probe put the eye in the air on purpose. This clamp is a
   // stopgap for having no above-water world; the surface round is what retires it.
-  if (camera.position.y > SURFACE_Y - 0.9 && !window.__noSurfClamp) {
-    camera.position.y = SURFACE_Y - 0.9;
+  // Clamp against the LIVE surface under the camera, not a flat SURFACE_Y: in a gale a
+  // wave trough drops to about -0.6, and a flat -0.9 clamp would then sit inside the
+  // sky's blend band and leak air into an underwater frame. Tracking the real surface
+  // keeps the eye a fixed depth under whatever the water is actually doing.
+  const surfLim = localSurfaceY() - 0.9;
+  if (camera.position.y > surfLim && !window.__noSurfClamp) {
+    camera.position.y = surfLim;
     if (camVel.y > 0) camVel.y = 0;
   }
 
