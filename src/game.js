@@ -61,6 +61,9 @@ const tips = { submerged: 0, taut: 0, fuel: 0, wander: 0, polymer: 0, bitumen: 0
   dress: 0, swollen: 0, stand: 0, flat: 0 };
 let zoneTime = 0;
 let wasGrounded = false, landVel = 0;   // tracks fall speed so landings kick up silt
+// Entry detector: he is only ABOVE the water at the start of a dive and after a rescue,
+// so this fires on the one beat the surface round exists for — the step over the side.
+let wasAboveWater = true, deckTip = 0;
 // Air thruster: one shove per press of the bottle. BURST_RECHARGE is the whole anti-flight
 // argument — at 5 s, mashing Shift while swimming buys +12.7% distance over 30 s against
 // the +85% the held-Shift version bought. It is punctuation, never a travel mode.
@@ -498,6 +501,29 @@ function update(dt, t) {
     : player.fill < NEUTRAL_FILL - 0.09 ? 'sinking' : 'trimmed';
   const depth01 = clamp(-player.pos.y / 900, 0, 1);
 
+  // ---- THE STEP OVER THE SIDE -------------------------------------------------------
+  // Crossing the waterline downward is the moment the whole surface round was built for,
+  // and it costs almost nothing to give it weight: a slam for the impact, a rush of
+  // bubbles past the helmet, and a camera kick so the frame lurches as he goes under.
+  // Keyed on the LIVE local surface, the same one the optics and the clamp use.
+  const aboveWater = player.pos.y > localSurfaceY();
+  if (wasAboveWater && !aboveWater) {
+    const impact = Math.min(1, Math.abs(player.vel.y) / 6);
+    slam();
+    airVent(0.5 + 0.5 * impact);
+    shake = Math.max(shake, 0.35 + 0.5 * impact);
+    camKick = Math.max(camKick, 0.5);
+    showMsg('VENT THE DRESS TO GO DOWN', 3.5);
+  }
+  wasAboveWater = aboveWater;
+
+  // One-shot deck prompt: he starts standing on planks with no idea he is meant to leave
+  // them. Fires once, only while he is actually up there, and never over another message.
+  if (!deckTip && player.grounded && player.pos.y > SURFACE_Y && msgT <= 0) {
+    deckTip = 1;
+    showMsg('STEP OVER THE SIDE', 4);
+  }
+
   // zone progression through the rift, gated on having the line to work the next zone
   if (lev && lev.calmed && zone < 2 && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
     if (canDescendTo(zone + 1)) enterZone(zone + 1);
@@ -620,7 +646,12 @@ function update(dt, t) {
     state = 'dead';
     showMsg('YOUR AIR RAN OUT', 4);
     setTimeout(() => {
-      player.pos.copy(raft.position).setY(raft.position.y - 6);
+      // BACK ON THE DECK, not floating under the raft. The tenders hauled him up and
+      // stood him on his feet; the dive starts again the way it started the first time,
+      // by stepping over the side. Same pose as start().
+      deckSpawn(player.pos);
+      player.yaw = 0;
+      player.pitch = -0.05;
       player.vel.set(0, 0, 0);
       player.light = 1;
       survival.oxygen = 1;
@@ -643,7 +674,7 @@ function update(dt, t) {
       // the bitumen 200m below — an unwinnable state.
       survival.fuel = Math.max(survival.fuel, 0.3);
       state = 'play';
-      showMsg('HAULED BACK TO THE RAFT', 3);
+      showMsg('THEY HAVE YOU BACK ON THE DECK', 3);
     }, 2500);
   }
 
