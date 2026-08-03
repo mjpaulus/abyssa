@@ -388,7 +388,9 @@ function updateCamera(dt, t, fwd) {
   // trim him up at the raft), so hold the eye just under it and let him bob through
   // instead. Zeroing the rising spring velocity matters: without it the spring keeps
   // integrating into the clamp and snaps when he descends again.
-  if (camera.position.y > SURFACE_Y - 0.9) {
+  // window.__noSurfClamp lets a probe put the eye in the air on purpose. This clamp is a
+  // stopgap for having no above-water world; the surface round is what retires it.
+  if (camera.position.y > SURFACE_Y - 0.9 && !window.__noSurfClamp) {
     camera.position.y = SURFACE_Y - 0.9;
     if (camVel.y > 0) camVel.y = 0;
   }

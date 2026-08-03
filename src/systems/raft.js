@@ -8,7 +8,14 @@ import { makeGlow } from '../lib/textures.js';
 import { survival } from './survival.js';
 
 export const raft = new THREE.Group();
-export const RAFT_POS = V3(0, SURFACE_Y - 1.6, 0);
+// IT FLOATS. This sat at SURFACE_Y - 1.6 for the whole project, which put the deck top at
+// y = -1.49 and the flotation drums entirely under water — nobody noticed because the
+// camera had never once been above the waterline. At +0.55 the drums (r 0.85, local
+// centre -0.75) sit about 62% submerged, which is where an oil drum floats, and the deck
+// carries ~0.66 of freeboard. The bob is +-0.32 before storm gain, so the deck never
+// dips under. Everything downstream is position-relative (pumpPos, nearRaft, the respawn
+// point, the ending's arrival, the HUD bearing) and follows for free.
+export const RAFT_POS = V3(0, SURFACE_Y + 0.55, 0);
 let flywheel = null, beacon = null, beaconGlow = null, reel = null;
 
 // Where the umbilical leaves the pump.
