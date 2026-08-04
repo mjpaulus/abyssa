@@ -17,7 +17,7 @@ import { renderer, scene, camera, onResize } from './core.js';
 import { playerLightSrc } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
-import { degradeRefraction } from './world/water.js';
+import { degradeRefraction, reduceRefraction } from './world/water.js';
 // --- END VOLUMETRICS INTEGRATION ---
 
 // Tone mapping on the renderer: it is baked into every material's fragment output at
@@ -164,11 +164,29 @@ export function render(dt) {
 // Adaptive quality: sample real framerate after warmup, shed expensive passes once.
 let perfT = 0, perfN = 0, perfDone = false;
 
+// A LADDER, not a hammer. The first miss used to shed EVERYTHING at once — and with
+// the refraction pass first on the list, a machine that dipped under the bar for four
+// seconds lost the sea's transparency permanently (user-reported twice: "starts out
+// transparent and then drops back", with a frame showing shadows gone too, i.e. the
+// full shed had fired). The sea being a window is a headline feature now; it goes
+// LAST. Each rung gets its own fresh SUSTAIN of evidence before the next fires:
+//   1. refraction target quartered      (~4x cheaper, transparency kept)
+//   2. volumetrics + AO off             (the two historically-heaviest passes)
+//   3. full shed                        (shadows, simplified chain, refraction gone)
+let degradeStage = 0;
 function degradeQuality() {
-  // --- VOLUMETRICS INTEGRATION (degradeQuality removal hook) ---
-  setVolumetrics(false);
-  // --- END VOLUMETRICS INTEGRATION ---
-  // The refraction pass is a second (half-res) scene render — first thing overboard.
+  degradeStage++;
+  if (degradeStage === 1) {
+    reduceRefraction();
+    console.info('ABYSSA: perf tier 1 — refraction target quartered');
+    return false;
+  }
+  if (degradeStage === 2) {
+    setVolumetrics(false);
+    if (n8aoPass) { composer.removePass(n8aoPass); n8aoPass = null; }
+    console.info('ABYSSA: perf tier 2 — volumetrics and AO off');
+    return false;
+  }
   degradeRefraction();
   renderer.shadowMap.enabled = false;
   scene.traverse(o => { if (o.isLight) o.castShadow = false; });
@@ -187,6 +205,14 @@ function degradeQuality() {
   }
   useDepthCopy();
   console.info('ABYSSA: reduced quality mode (AO/shadows off)');
+  return true;
+}
+
+// Debug surface, kept: lets a session force the ladder rung by rung instead of waiting
+// four sustained seconds under the bar per tier, and lets a player report which tier
+// their machine landed on ("what does __perf.stage() say?").
+if (typeof window !== 'undefined') {
+  window.__perf = { degrade: degradeQuality, stage: () => degradeStage };
 }
 
 // This used to average the FIRST six seconds of play and degrade below 34 fps — which
@@ -231,7 +257,9 @@ export function samplePerf(dt, active) {
   winT2 = 0; winN = 0;
 
   badT = fps < FPS_BAR ? badT + WINDOW : 0;
-  if (badT >= SUSTAIN) { degradeQuality(); perfDone = true; }
+  // Each tier gets its own fresh SUSTAIN of evidence: the clock resets after a shed,
+  // so tier 2 only fires if the machine STAYS under the bar with tier 1 applied.
+  if (badT >= SUSTAIN) { if (degradeQuality()) perfDone = true; badT = 0; }
 }
 
 // Called by the boot loader once every material has a compiled program, so the sampler

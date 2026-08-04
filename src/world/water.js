@@ -872,8 +872,15 @@ const _rtSize = new THREE.Vector2();
 const _prevClear = new THREE.Color();
 let refrOn = true, refrAir = true;
 
-// Quality fallback: the pass is a second (half-res) scene render, so it is the first
-// thing to go when the frame budget is missed. postfx.degradeQuality calls this.
+// Quality fallback ladder, driven by postfx.degradeQuality. reduceRefraction is tier 1:
+// the target drops from half-res to quarter-res — ~a quarter of the pass's cost, and
+// through a distorting, water-fogged interface the resolution loss barely reads.
+// degradeRefraction is tier 2: the pass is gone and the analytic sea returns.
+let refrShift = 1;
+export function reduceRefraction() {
+  refrShift = 2;
+  if (refrRT) { refrRT.dispose(); refrRT = null; }   // rebuilt next frame at the new size
+}
 export function degradeRefraction() { refrOn = false; uRefrK.value = 0; }
 
 // Called by game.js once per frame, after updateWater (needs _surfH/uAir) and before
