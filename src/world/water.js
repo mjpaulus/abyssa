@@ -870,7 +870,7 @@ const _clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
 const _clipArr = [_clipPlane];
 const _rtSize = new THREE.Vector2();
 const _prevClear = new THREE.Color();
-let refrOn = true;
+let refrOn = true, refrAir = true;
 
 // Quality fallback: the pass is a second (half-res) scene render, so it is the first
 // thing to go when the frame budget is missed. postfx.degradeQuality calls this.
@@ -896,7 +896,14 @@ export function renderRefraction() {
     });
   } else if (refrRT.width !== w || refrRT.height !== h) refrRT.setSize(w, h);
 
-  const air = uAir.value >= 0.5;
+  // Hysteresis, not a threshold. Floating at the surface the camera rides the swell
+  // right through uAir = 0.5, and a hard cut there flip-flops the target between
+  // worlds — each wrong-side frame renders as the old opaque sea, which is exactly the
+  // report that exposed this. The side only changes once the camera is DECIDEDLY on
+  // the other side of the band.
+  if (refrAir && uAir.value < 0.30) refrAir = false;
+  else if (!refrAir && uAir.value > 0.70) refrAir = true;
+  const air = refrAir;
   uRefrSide.value = air ? 1 : 0;
   // Keep the half-world the transmitted ray enters. A 0.04 bias hides the sliver of
   // double-drawn geometry where the wavy true surface crosses the flat clip plane.
