@@ -16,6 +16,7 @@ export const player = {
   yaw: 0,
   pitch: 0,
   grounded: false,
+  onDeck: false,
   // smoothed ground height, so cliffy terrain doesn't make the camera judder
   groundY: -10,
   bobPhase: 0,
@@ -77,9 +78,10 @@ function sampleCurrent(pos, t) {
 // Steeper than this and the diver can't get purchase; he slides instead of walking.
 const MAX_WALK_SLOPE = 0.62; // cos of max standable angle (~52 degrees)
 const EYE_H = 1.35;
-// Raft deck footprint and top, mirrored from raft.js's plank layout (9 planks at 1.05
-// pitch, 0.22 thick, 9.4 long). Kept here as constants rather than imported because
-// raft.js builds them inline; if that layout changes these must follow.
+// Raft deck footprint and top. These are the CONTRACT the deck is built to, not a
+// readback of it: systems/raft/hull.js lays its planking to exactly this footprint and
+// this top face, and every builder on the raft is given these numbers as the frame it
+// composes in. Change one of them and the planks and the floor Sal stands on part ways.
 const DECK_HX = 4.7, DECK_HZ = 4.7, DECK_TOP = 0.11;
 
 // ---------------------------------------------------------------- the suit as physics
@@ -145,6 +147,9 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     if (player.pos.y > top - 0.7) deckY = top;
   }
   const onDeck = deckY > -1e4;
+  // Published because the footfall FX are seabed effects: a silt cloud and a boot print
+  // pressed into the sand. On planks, in the air, both are nonsense.
+  player.onDeck = onDeck;
   const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY);
 
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];

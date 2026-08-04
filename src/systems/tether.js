@@ -438,11 +438,25 @@ export function reseatTether(player) {
     pz[i] = anchor.z + (player.pos.z - anchor.z) * u;
     ox[i] = px[i]; oy[i] = py[i]; oz[i] = pz[i];   // zero verlet velocity
   }
+  // SETTLE IT BEFORE ANYONE LOOKS. A rope laid on a straight line is not at rest — its
+  // rest lengths carry ~2% slack, so it has to fall into its own catenary, and it does
+  // that over about a second and a half of visible wriggling. reseat runs on the frame
+  // the dive begins, so that wriggle was the first thing the player ever saw. Both ends
+  // are pinned inside substep(), so the solver can simply be run here against a frozen
+  // world: 90 fixed steps is the 1.5 s it was taking to converge, it costs a couple of
+  // milliseconds once, and it hands over a hose that is already hanging.
+  flOK.fill(0);                                    // floor cache is keyed on position
+  updateCurrent(clockT);
+  for (let s = 0; s < 90; s++) {
+    substep(FIXED, anchor.x, anchor.y, anchor.z, player.pos.x, player.pos.y, player.pos.z, 0);
+  }
+  // Settling leaves the nodes with whatever velocity the last step gave them; without
+  // this they carry it into the first real frame and the rope breathes once on entry.
+  for (let i = 0; i < N; i++) { ox[i] = px[i]; oy[i] = py[i]; oz[i] = pz[i]; }
   // The substeps lerp the pinned ends from their previous positions; without this the
   // rope gets dragged across the whole world on the frame after a teleport.
   _pa.copy(anchor); _ph.set(player.pos.x, player.pos.y, player.pos.z);
   primed = true;
-  flOK.fill(0);                                    // floor cache is keyed on position
 }
 
 export function tetherAnchor() { return anchor; }

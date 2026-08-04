@@ -19,3 +19,20 @@ export const LEVIATHAN_CFG = [
   { segs: 40, size: 7.5, speed: 12, nSigils: 4, color: 0x2a1d44, emiss: 0x1d1033, hue: 0.74, name: 'ORUNE, CROWN OF THORNS' },
   { segs: 52, size: 10, speed: 15, nSigils: 5, color: 0x441d1d, emiss: 0x330e0e, hue: 0.02, name: 'MHOR, THE LAST FURNACE' }
 ];
+
+// THE SUN. One direction, shared: lighting.js aims the key light and its shadow camera
+// down it, water.js draws the sky disc, the sea's glitter path and the god-ray shaft
+// offset off it. They were separate copies of the same three numbers and would have
+// silently drifted apart the first time either moved.
+//
+// Elevation is the whole argument. It sat at 77 degrees — near-vertical, which nobody
+// chose; it was just "roughly downward" back when the camera never came above water.
+// At that angle every shadow falls directly under the thing casting it, so the raft's
+// deck renders flat no matter how much detail is on it. Lower rakes the light across
+// the planks and slants the shafts below.
+//
+// The floor is physics, not taste: refraction at the surface compresses the entire sky
+// into Snell's window, so a sun anywhere in the sky arrives underwater at no shallower
+// than 41.4 degrees. Going under that would light the seabed from an angle the sea
+// cannot produce.
+export const SUN_ELEV_DEG = 58;

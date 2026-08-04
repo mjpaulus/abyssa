@@ -74,6 +74,23 @@ against explicit contracts and reviewed on return.
   texture = structure, palette = hue.
 - `lighting.js` — STOPS depth blend; `setWeatherLight(day, storm, flash)`; weather
   bite fades out by ~40% depth so the abyss never changes.
+  **ABOVE THE WATERLINE IS A SEPARATE REGIME.** Every STOPS entry describes being IN
+  the water, where the column scatters light into every shadow — so the shallow stop
+  carries amb 0.55 / hemi 1.00 in teal-over-green. Applied in air that floods the
+  raft's deck flat and dyes its timber sage. `updateLighting` therefore fades the omni
+  fill and travels the hemisphere's two ends to sky/sea colours as the CAMERA rises,
+  blended over 1.6 units. Below the interface every frame is unchanged.
+  The sun also casts shadows, but ONLY over the raft: an 18-unit ortho box at the
+  origin, which is exactly where the raft is moored, so the map costs the raft and
+  nothing else. It switches off below y = -26 and under the quality fallback.
+- `config.js` `SUN_ELEV_DEG` — ONE sun direction, shared. lighting.js aims the key
+  light and its shadow camera down it; water.js draws the sky disc, the sea's glitter
+  path and the god-ray shaft offset off it. They used to be two hand-written copies of
+  the same vector. Elevation was 77 degrees — nobody chose that, it was "roughly
+  downward" from when the camera never came above water, and at that angle every
+  shadow falls directly under its caster. The floor is physics: refraction compresses
+  the whole sky into Snell's window, so sunlight arrives underwater at no shallower
+  than 41.4 degrees. 58 rakes the deck and slants the shafts.
 - `entities/diver.js` — procedural Mark V Sal (~40k tris): Part/bake merged
   geometry, spring secondary motion, curve-keyed gait, heel-strike `stepCount()`
   drives footsteps+dust+prints on the same frame. Knife slash contact at t=0.22s
@@ -111,6 +128,35 @@ against explicit contracts and reviewed on return.
   floors) → three sleeper silhouette passes keyed to DEPTH → surface → title card.
   `playEnding()` on window = debug jump.
 - `systems/physics.js` — Rapier WASM via CDN, degrades to no-ops if the CDN fails.
+- `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
+  on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
+  material palette, the hose reel, the lantern and all wiring; five builders own
+  regions: `hull.js` (planking, bulwark, drums, mooring), `station.js` (port wing —
+  the dressing station, whose hero object is an EMPTY helmet stand), `gear.js`
+  (starboard + aft — the bitumen the pump eats, made physical), `davit.js` (the
+  gallows the umbilical rides + boarding ladder + anchor lantern), `pump.js` (oil
+  engine belt-driving a compressor).
+  - `raft/kit.js` — `Part`/`bake` merged-geometry idiom, `weather()` (grime + a
+    waterline slime band into VERTEX COLOURS), and fittings. **Transform THEN weather**:
+    `weather()` reads raw vertex Y to place the waterline, so a piece must already be
+    in raft-local space. Materials are PASSED IN, never built by a builder.
+  - Each builder bakes per material, then `consolidate()` in raft.js merges again
+    ACROSS builders (meshes flagged `userData.rmerge`, direct children of `raft`
+    only, so animated sub-groups are untouched). Whole raft: ~10 static draw calls,
+    ~36k tris.
+  - THE FRAME, raft-local: deck top **y = +0.11**, footprint **x,z ∈ [-4.7, +4.7]** —
+    player.js hard-codes both. Waterline y = -0.55. +Z is the dive side. The walk lane
+    (x ∈ [-1.1,1.1], z ∈ [1.7,4.7]) and the bulwark gap at z = +4.7 are the dive
+    ritual; the boarding ladder hangs in that gap. There is NO per-object collision on
+    deck — the deck is one flat platform — so tall gear lives against the bulwarks
+    where nobody treads.
+  - Board width is the whole deck read: at 8 boards across the span they were metre-
+    wide slabs and the deck rendered as facets. 44 rows, each `weather()`ed as a whole
+    board (boards weather as boards, not as one sheet of noise).
+  - Pump tells running/dead SIX ways at once (flywheel coasts, belt-driven pulley,
+    governor, receiver gauge needle that bleeds down after the wheel stops, vibration,
+    exhaust). `pumpSpeed()` is published so audio's `setPump` hears the same coast-down
+    the eye sees.
 
 ## Conventions that are enforced
 
@@ -143,6 +189,20 @@ orchestrator redoes it, not the agent.
 - Audio audit (needs the user's ears) and a zone-1 art-identity pass (twilight
   thermal-vent concept) are the two remaining ideas from the original punch list.
 - User keeps a feedback doc; expect a batch of notes rather than single items.
+- **Nothing above the waterline is visible from underwater.** The sea surface renders
+  an ANALYTIC sky from below (`mirrorRadiance` never samples the scene), so the raft's
+  hull, bulwark and lantern simply are not there when you look up — all you see is the
+  submerged part of the drums, the boarding ladder and the hose. This is the same gap
+  as "the water has no transparency" seen from the other side, and the screen-space
+  refraction pass is the fix for both. Consequence to know about: the beacon halo's
+  depth-scaling in raft.js is dead until that lands, and the raft's downward PointLight
+  is doing all the from-below landmark work.
+- The raft casts no shadow onto the sea, so from below there is no dark patch marking
+  where it floats. Wants the water surface to receive the sun's shadow map.
+- The third-person camera is 9 units back and the raft is 9.4 across, so the camera is
+  always OFF the boat while Sal is on deck. Every deck detail is only ever read from
+  ~9 units. Pulling the camera in on deck would change movement feel, which is the
+  user's call, not the orchestrator's.
 
 ### Far field / world scale — SILT LINE + W2 both shipped
 

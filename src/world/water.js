@@ -3,7 +3,7 @@
 // OWNED BY: water/atmosphere agent.
 import * as THREE from 'three';
 import { scene, camera } from '../core.js';
-import { WORLD_R, SURFACE_Y } from '../config.js';
+import { WORLD_R, SURFACE_Y, SUN_ELEV_DEG } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { scatter } from './flora.js';
 
@@ -79,7 +79,11 @@ const SURF_LIGHT = [0.055, 0.135, 0.112];
 // which is the cheap side. Measured disagreement before this: 3.9 degrees surface-vs-light,
 // 26.5 degrees surface-vs-billboard-shafts (the shafts also leaned the wrong way; fixed
 // in buildRays below).
-const SUN_DIR = new THREE.Vector3(0.20, 1.00, 0.10).normalize();
+// Now derived from SUN_ELEV_DEG so this and lighting.js's key light cannot drift apart:
+// they were two hand-written copies of the same vector, and the comment above is the
+// record of what happened last time they disagreed. Azimuth is unchanged.
+const _sk = 1 / Math.tan(SUN_ELEV_DEG * Math.PI / 180);
+const SUN_DIR = new THREE.Vector3(0.894427 * _sk, 1.00, 0.447214 * _sk).normalize();
 // Shafts descend ALONG the sunlight, so as they drop by h they move by -sunDir.xz/sunDir.y.
 const SUN_PROJ = [SUN_DIR.x / SUN_DIR.y, SUN_DIR.z / SUN_DIR.y];
 

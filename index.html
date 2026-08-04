@@ -14,7 +14,11 @@
      explicit order it paints on top and swallows every click on the title screen. */
   #ui{position:fixed;inset:0;pointer-events:none;color:#bfe3e8;z-index:1}
   #title{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    background:radial-gradient(ellipse at 50% 60%, rgba(8,24,40,.7), rgba(1,4,9,.97));transition:opacity 1.5s;pointer-events:auto;cursor:pointer}
+    /* Scrim, not a blackout. This was 0.70 at the centre because the title used to sit
+       over a murky underwater portrait that needed the help; it now sits over the raft's
+       deck in daylight, and at 0.70 it hid the entire shot. The type is pale with a 30px
+       glow and carries fine at 0.42, while the edges stay heavy enough to hold the frame. */
+    background:radial-gradient(ellipse at 50% 58%, rgba(6,18,32,.42), rgba(1,4,9,.90));transition:opacity 1.5s;pointer-events:auto;cursor:pointer}
   #title h1{font-size:clamp(3rem,9vw,7rem);letter-spacing:.45em;margin:0 0 .2em .45em;font-weight:400;color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.5)}
   #title p{letter-spacing:.25em;opacity:.7;font-size:.9rem;text-transform:uppercase;margin:.4em}
   #title .hint{margin-top:3em;opacity:.45;font-size:.8rem;animation:pulse 3s infinite}
