@@ -462,6 +462,12 @@ function update(dt, t) {
   // above water, which is the whole shape of it: you start in the light and give it up.
   if (state === 'title') {
     deckSpawn(player.pos);
+    // The rig poses off player state and updatePlayer never runs behind the title, so
+    // grounded keeps its boot value of FALSE — which blended Sal into the swim posture,
+    // treading water on top of his own deck. He is standing on planks; say so.
+    player.grounded = true;
+    player.onDeck = true;
+    player.vel.set(0, 0, 0);
     diver.position.copy(player.pos);
     updateDiver(dt, t, player);
     // Three-quarter from the starboard bow, so the davit rakes across the frame behind
