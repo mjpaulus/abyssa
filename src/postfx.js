@@ -17,6 +17,7 @@ import { renderer, scene, camera, onResize } from './core.js';
 import { playerLightSrc } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
+import { degradeRefraction } from './world/water.js';
 // --- END VOLUMETRICS INTEGRATION ---
 
 // Tone mapping on the renderer: it is baked into every material's fragment output at
@@ -167,6 +168,8 @@ function degradeQuality() {
   // --- VOLUMETRICS INTEGRATION (degradeQuality removal hook) ---
   setVolumetrics(false);
   // --- END VOLUMETRICS INTEGRATION ---
+  // The refraction pass is a second (half-res) scene render — first thing overboard.
+  degradeRefraction();
   renderer.shadowMap.enabled = false;
   scene.traverse(o => { if (o.isLight) o.castShadow = false; });
   if (n8aoPass) {

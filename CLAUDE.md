@@ -189,14 +189,19 @@ orchestrator redoes it, not the agent.
 - Audio audit (needs the user's ears) and a zone-1 art-identity pass (twilight
   thermal-vent concept) are the two remaining ideas from the original punch list.
 - User keeps a feedback doc; expect a batch of notes rather than single items.
-- **Nothing above the waterline is visible from underwater.** The sea surface renders
-  an ANALYTIC sky from below (`mirrorRadiance` never samples the scene), so the raft's
-  hull, bulwark and lantern simply are not there when you look up — all you see is the
-  submerged part of the drums, the boarding ladder and the hose. This is the same gap
-  as "the water has no transparency" seen from the other side, and the screen-space
-  refraction pass is the fix for both. Consequence to know about: the beacon halo's
-  depth-scaling in raft.js is dead until that lands, and the raft's downward PointLight
-  is doing all the from-below landmark work.
+- **SCREEN-SPACE REFRACTION SHIPPED** (`renderRefraction` in water.js, called by
+  game.js after updateWater, before the composer). The sea's TRANSMISSION term samples
+  a half-res clip-plane render of the far side of the interface; reflection stays
+  analytic. Key insight: the globally-patched height-integrated fog does the
+  Beer-Lambert absorption for free in that render, so there is NO depth texture and no
+  path reconstruction. Gated to camera.y > -35, fades over its last 10 units, first
+  thing shed by degradeQuality, `window.__noRefr` = A/B kill switch. Own depth
+  RENDERBUFFER (never share attachments — GL_INVALID_OPERATION history).
+  shadowMap.autoUpdate is parked during the pass or every caster draws twice.
+  The uv offset is HARD-CLAMPED at 0.035 NDC: in a gale the wave gradient smeared the
+  transmitted scene into ghosts (a phantom davit leg, measured). Known limit of
+  screen-space: storm crests overlapping the raft show refracted water, not the deck
+  behind them — physically defensible, watch it with the user's eye.
 - The raft casts no shadow onto the sea, so from below there is no dark patch marking
   where it floats. Wants the water surface to receive the sun's shadow map.
 - The third-person camera is 9 units back and the raft is 9.4 across, so the camera is

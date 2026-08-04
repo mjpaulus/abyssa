@@ -7,7 +7,7 @@ import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetric
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders } from './world/flora.js';
-import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
 import { buildCreatures, updateCreatures } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
@@ -876,6 +876,10 @@ function frame() {
   const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
   try {
     update(dt, t);
+    // The sea's transmission target: a clip-plane render of the far side of the
+    // interface. Runs after update (needs the frame's surface height and camera) and
+    // before the composer, so the surface shader samples this frame, not the last one.
+    renderRefraction();
     render(dt);
     boot();
     samplePerf(dt, state === 'play' || state === 'won');
