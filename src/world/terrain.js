@@ -491,8 +491,17 @@ function compileTerrain(sh) {
           // the luminance the albedo multiply costs (floor albedos run 0.05-0.25).
           vec3 sunV = normalize((viewMatrix * vec4(${SUN_W.x.toFixed(5)}, ${SUN_W.y.toFixed(5)}, ${SUN_W.z.toFixed(5)}, 0.0)).xyz);
           float ndl = clamp(dot(normal, sunV), 0.0, 1.0);
-          totalEmissiveRadiance += c * diffuseColor.rgb * vec3(0.55, 0.95, 1.05)
-                                 * fade * 4.4 * (0.18 + 0.82 * ndl);
+          // PARTIALLY normalised albedo, not raw. Raw albedo was physically pure and
+          // visually wrong for this world: the palette keeps rock near 0.05 on
+          // purpose, so the bands survived only on pale silt (user-reported: "now
+          // only sand has that effect"). Dividing by a soft luminance floor lifts
+          // dark surfaces toward the band's tuned brightness while the LOCAL texture
+          // and hue still modulate it — silt to rock now spans about 2:1 instead of
+          // 5:1, and zero was never on the menu.
+          float alum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
+          vec3 alb = diffuseColor.rgb / (alum * 0.55 + 0.045);
+          totalEmissiveRadiance += c * alb * vec3(0.35, 0.60, 0.70)
+                                 * fade * 0.90 * (0.22 + 0.78 * ndl);
         }
       }`);
 }
