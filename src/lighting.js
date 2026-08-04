@@ -1,7 +1,14 @@
 // Scene lighting rig. OWNED BY: lighting/post agent.
 import * as THREE from 'three';
 import { scene, camera } from './core.js';
+import { SUN_ELEV_DEG, SURFACE_Y } from './config.js';
 import { V3, clamp } from './lib/math.js';
+
+// Azimuth is unchanged from the value this project has always used (atan2(0.10, 0.20));
+// only the elevation moves, and it moves in config.js so water.js's sky disc and glitter
+// path travel with it. See the note there for why 77 degrees was never a choice.
+const _k = 1 / Math.tan(SUN_ELEV_DEG * Math.PI / 180);
+export const SUN_VEC = new THREE.Vector3(0.894427 * _k, 1, 0.447214 * _k).normalize();
 
 // Depth palette. World albedos are extremely dark (terrain ~0x14222e), so ambient terms
 // stay low on purpose: contrast comes from the lantern key and the cool rim, not from fill.
@@ -15,12 +22,33 @@ const STOPS = [
 ];
 const C = (o, k) => (o['_' + k] || (o['_' + k] = new THREE.Color(o[k])));
 
+// What the hemisphere's two ends become once the camera is out of the water.
+const AIR_SKY = new THREE.Color(0xa8bcc8), AIR_SEA = new THREE.Color(0x2a3a3c);
+
 export const ambient = new THREE.AmbientLight(0x1b4a54, 0.30);
 scene.add(ambient);
 
 // Downwelling sunlight. Dies off by the time the first zone floor is reached.
 export const sun = new THREE.DirectionalLight(0xcdeeff, 1.8);
-sun.position.set(0.2, 1, 0.1);
+// Pushed out to 40 units. Direction is position-minus-target, so this does not change a
+// single shading result — but a shadow camera sits AT the light, and from 1 unit up the
+// raft's own davit was behind its near plane.
+sun.position.copy(SUN_VEC).multiplyScalar(40);
+// THE SUN CASTS SHADOWS OVER THE RAFT AND NOWHERE ELSE. Above water is the only place
+// in this game with a hard light and a man-made object for it to rake across, and
+// without contact shadows a detailed deck reads as flat decals. The ortho box is 18
+// units around the origin, which is exactly where the raft is moored, so the map costs
+// the raft and nothing else — every other object in the world is outside the frustum
+// and culled before it is drawn. postfx reads sun.position normalized, so the move is
+// invisible to the god rays too.
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.camera.left = -9; sun.shadow.camera.right = 9;
+sun.shadow.camera.top = 9; sun.shadow.camera.bottom = -9;
+sun.shadow.camera.near = 28; sun.shadow.camera.far = 72;
+sun.shadow.camera.updateProjectionMatrix();
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.045;
 scene.add(sun);
 
 // Sky/seabed gradient — gives up-facing surfaces a different colour to down-facing ones,
@@ -81,13 +109,32 @@ export function updateLighting(depth01) {
   const wk = 1 - surf * (1 - dayK * stormK);
   const flashBoost = surf * wFlash;
 
+  // ABOVE THE WATERLINE THE FILL HAS TO GO. Every stop in this table describes being IN
+  // the water, where the column scatters light into every shadow from every direction —
+  // which is why the shallow stop carries amb 0.55 and hemi 1.00. Applied in air those
+  // same terms flood the raft's deck until the sun's own shadows are barely a tint, and
+  // a deck with no shadows on it renders flat however much detail is carpentered into
+  // it. Out of the water there is only sky: keep most of the hemisphere, lose the omni.
+  // Blended over 1.6 units across the surface, so nothing pops as Sal steps off; below
+  // the interface every frame is bit-identical to before.
+  const air = clamp((camera.position.y - SURFACE_Y + 0.6) / 1.6, 0, 1);
   mixInto(ambient.color, a, b, 'amb', t);
-  ambient.intensity = mix('ambI') * wk;
+  ambient.intensity = mix('ambI') * wk * (1 - 0.74 * air);
   mixInto(hemi.color, a, b, 'sky', t);
   mixInto(hemi.groundColor, a, b, 'gnd', t);
-  hemi.intensity = mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8;
+  // Same mistake as the fill, in colour instead of level: the hemisphere's shallow stop
+  // is teal over dark green because that is what a diver in the shallows sees above and
+  // below him. In air it dyed the raft's timber sage, and no amount of weathering makes
+  // green-grey planks look like wood. Above the interface the dome is sky and the floor
+  // is the sea, so the two ends travel to those instead.
+  hemi.color.lerp(AIR_SKY, air * 0.85);
+  hemi.groundColor.lerp(AIR_SEA, air * 0.85);
+  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - 0.42 * air);
   mixInto(sun.color, a, b, 'sun', t);
   sun.intensity = mix('sunI') * wk + flashBoost * 2.2;
+  // The shadow map only ever contains the raft, so stop rendering it the moment the
+  // camera is deep enough that the raft is a dot, or dark enough that it casts nothing.
+  sun.castShadow = !reduced && camera.position.y > -26 && sun.intensity > 0.15;
   mixInto(rim.color, a, b, 'rim', t);
   rim.intensity = reduced ? 0 : mix('rimI');
   mixInto(playerLightSrc.color, a, b, 'fill', t);
@@ -109,5 +156,6 @@ export function degradeLighting() {
   if (reduced) return;
   reduced = true;
   lanternLight.castShadow = false;
+  sun.castShadow = false;
   rim.visible = false;
 }

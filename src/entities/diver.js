@@ -847,7 +847,10 @@ function evalSlash(ts) {
 // Legs are 8% longer and the boots deeper than the old build, so LIFT is re-derived to keep
 // the soles planted on player.pos - 1.35 (the collision floor) in the rest pose.
 const LIFT = 0.163;
-let walkP = 0, swimP = 0, gb = 0, yawF = 0, yawInit = false;
+// gb boots at 1 (standing), not 0: every session now opens with Sal on the raft's deck
+// behind the title, and a 0 boot meant the first thing anyone ever saw was the frog-kick
+// pose easing out — legs drawn up, boots half a metre off the planks he is standing on.
+let walkP = 0, swimP = 0, gb = 1, yawF = 0, yawInit = false;
 const sPitch = { x: 0, v: 0 }, sRollT = { x: 0, v: 0 };
 
 const lnX = { x: 0, v: 0 }, lnZ = { x: 0, v: 0 };

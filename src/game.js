@@ -7,7 +7,7 @@ import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetric
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders } from './world/flora.js';
-import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
 import { buildCreatures, updateCreatures } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
@@ -19,13 +19,13 @@ import {
 } from './player.js';
 import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
-  setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady
+  setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady, setPump
 } from './audio.js';
 import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
   resupplyAtRaft, canDescendTo, HOSE_REQ
 } from './systems/survival.js';
-import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell } from './systems/raft.js';
+import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed } from './systems/raft.js';
 import { buildTether, updateTether, reseatTether } from './systems/tether.js';
 import { buildResources, updateResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
@@ -52,6 +52,14 @@ buildPredators();
 buildWrecks();
 initTools();
 initWeather();
+
+// Put Sal on the deck and hang the umbilical there BEFORE the title draws. buildTether
+// lays the rope as a straight vertical line under the sheave, and nothing simulates it
+// behind the title screen — so the first frame of play snapped every node into place at
+// once (98 units of travel, measured) and then wriggled for a second and a half while
+// the solver found the catenary. Both of those are now paid for here, off-screen.
+deckSpawn(player.pos);
+reseatTether(player);
 
 // lastStepPhase mirrors stepCount()'s starting value so no bootfall fires on frame one.
 let state = 'title', msgT = 0, shake = 0, winT = 0, wasLightOut = false, lastStepPhase = 0;
@@ -447,27 +455,39 @@ function updateCamera(dt, t, fwd) {
 function update(dt, t) {
   if (msgT > 0) { msgT -= dt; if (msgT <= 0) $msg.style.opacity = 0; }
 
-  // Title portrait: Sal front-on at the surface, idling, with a slow drift so the
-  // shot breathes. (Without this the camera boots at the origin — inside his suit.)
+  // TITLE: Sal already dressed and standing on the tender's deck, waiting to go over.
+  // He used to hang 10 m under the raft here and get teleported onto the planks by
+  // start() — a seam, and a waste of the one place in this game with daylight in it.
+  // Standing him where the dive actually begins removes the cut and opens the game
+  // above water, which is the whole shape of it: you start in the light and give it up.
   if (state === 'title') {
+    deckSpawn(player.pos);
+    // The rig poses off player state and updatePlayer never runs behind the title, so
+    // grounded keeps its boot value of FALSE — which blended Sal into the swim posture,
+    // treading water on top of his own deck. He is standing on planks; say so.
+    player.grounded = true;
+    player.onDeck = true;
+    player.vel.set(0, 0, 0);
     diver.position.copy(player.pos);
     updateDiver(dt, t, player);
+    // Three-quarter from the starboard bow, so the davit rakes across the frame behind
+    // him and the pump's stack sits over his shoulder. Drifts slowly; the raft's own
+    // bob rides underneath it, so the shot breathes twice at different rates.
     const a = t * 0.05;
     camera.position.set(
-      player.pos.x + Math.sin(a) * 1.3 + 0.4,
-      player.pos.y + 0.72 + Math.sin(t * 0.5) * 0.06,
-      player.pos.z + 4.5 + Math.cos(a) * 0.4
+      player.pos.x + 3.15 + Math.sin(a) * 0.55,
+      player.pos.y + 1.05 + Math.sin(t * 0.5) * 0.06,
+      player.pos.z + 4.30 + Math.cos(a) * 0.40
     );
-    // Look-target offset to the left puts Sal in the right third of the frame,
-    // clear of the title type.
-    camera.lookAt(player.pos.x - 1.55, player.pos.y + 0.62, player.pos.z);
+    // Look-target offset puts Sal in the right third of the frame, clear of the type.
+    camera.lookAt(player.pos.x - 1.35, player.pos.y + 0.30, player.pos.z);
   }
 
   // Weather runs even behind the title so a session can open at dusk or mid-storm.
   const wx = updateWeather(dt, t);
   setWeatherLight(wx.day, wx.storm, wx.flash);
   setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm), wx.storm);
-  setSwell(wx.storm);
+  setSwell(wx.storm, wx.day);
   setStormCurrent(wx.storm);
   setRayDim(getVolumetrics() ? 0.55 : 1);
 
@@ -574,6 +594,18 @@ function update(dt, t) {
   updateRaft(dt, t);
   const distFromRaft = updateTether(dt, player, zone);
   const drowned = updateSurvival(dt, depth01, player.pos.y < -3, lightOut);
+
+  // The pump, heard. On deck it is the loudest object in Sal's world; once he is under,
+  // the same thump comes down the umbilical, faint and never quite gone — that thread of
+  // sound IS the machine breathing for him, so it keeps a floor all the way to the
+  // bottom. Which makes the moment it stops the moment he finds out. Speed comes from
+  // the real flywheel, so what he hears and what he'd see always agree.
+  {
+    const near = clamp(1 - (player.pos.distanceTo(raft.position) - 3) / 26, 0, 1);
+    setPump(pumpSpeed(), player.pos.y > localSurfaceY()
+      ? Math.max(0.12, near)
+      : 0.13 * (1 - 0.45 * depth01));
+  }
 
   // At a storm's peak the pump gasps: brief windows where the swell outruns the
   // flywheel and the tank dips. Survivable, but it teaches you to ride storms deep
@@ -749,12 +781,15 @@ function update(dt, t) {
   if (sc !== lastStepPhase) {
     lastStepPhase = sc;
     footstep();
-    spawnFootfall(player.pos, player.yaw, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);
+    // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
+    // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
+    // the sound and nothing else.
+    if (!player.onDeck) spawnFootfall(player.pos, player.yaw, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);
   }
   // Landing after a drop kicks up a bigger cloud under both boots.
   // Terminal sink is 5.1 u/s vented (10.2 with the exhaust held open), not the 18 u/s
   // of the old point-and-hold dive, so the old >3 gate almost never fired.
-  if (player.grounded && !wasGrounded && landVel > 1.8) {
+  if (player.grounded && !wasGrounded && landVel > 1.8 && !player.onDeck) {
     const zi = zone < 0 ? 0 : zone;
     const p = Math.min(2.2, landVel * 0.42);
     spawnFootfall(player.pos, player.yaw, 1, zi, p);
@@ -841,6 +876,10 @@ function frame() {
   const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
   try {
     update(dt, t);
+    // The sea's transmission target: a clip-plane render of the far side of the
+    // interface. Runs after update (needs the frame's surface height and camera) and
+    // before the composer, so the surface shader samples this frame, not the last one.
+    renderRefraction();
     render(dt);
     boot();
     samplePerf(dt, state === 'play' || state === 'won');

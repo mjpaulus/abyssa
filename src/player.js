@@ -16,6 +16,7 @@ export const player = {
   yaw: 0,
   pitch: 0,
   grounded: false,
+  onDeck: false,
   // smoothed ground height, so cliffy terrain doesn't make the camera judder
   groundY: -10,
   bobPhase: 0,
@@ -77,10 +78,14 @@ function sampleCurrent(pos, t) {
 // Steeper than this and the diver can't get purchase; he slides instead of walking.
 const MAX_WALK_SLOPE = 0.62; // cos of max standable angle (~52 degrees)
 const EYE_H = 1.35;
-// Raft deck footprint and top, mirrored from raft.js's plank layout (9 planks at 1.05
-// pitch, 0.22 thick, 9.4 long). Kept here as constants rather than imported because
-// raft.js builds them inline; if that layout changes these must follow.
+// Raft deck footprint and top. These are the CONTRACT the deck is built to, not a
+// readback of it: systems/raft/hull.js lays its planking to exactly this footprint and
+// this top face, and every builder on the raft is given these numbers as the frame it
+// composes in. Change one of them and the planks and the floor Sal stands on part ways.
 const DECK_HX = 4.7, DECK_HZ = 4.7, DECK_TOP = 0.11;
+// Up the boarding ladder. A man in 90 lb of dress does not vault a bulwark: 1.1 u/s is
+// a deliberate hand-over-hand, about three seconds from the waterline to the catch.
+const CLIMB_RATE = 1.1;
 
 // ---------------------------------------------------------------- the suit as physics
 // A dressed Mark V is ~170 kg. Its displacement splits in two, and that split is the
@@ -145,6 +150,38 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     if (player.pos.y > top - 0.7) deckY = top;
   }
   const onDeck = deckY > -1e4;
+  // Published because the footfall FX are seabed effects: a silt cloud and a boot print
+  // pressed into the sand. On planks, in the air, both are nonsense.
+  player.onDeck = onDeck;
+
+  // THE LADDER IS HOW HE BOARDS. A man floating at the surface sits ~1.6 below the
+  // one-way platform's 0.7 catch, so without this the raft cannot be re-boarded at all —
+  // measured: swimming at it passes clean under the deck, and the boarding ladder the
+  // davit hangs into the water was scenery. The zone is the bulwark gap the ladder hangs
+  // in (raft-local |x| < 1.2, z 4.2..5.9, from ladder-foot depth up to the catch), and
+  // holding W toward the raft is the grab: he rises up the rungs at a climb, not a
+  // launch, until the deck check takes him. No new input to learn — swim at the ladder
+  // and keep swimming.
+  player.onLadder = false;
+  if (!onDeck && dxr > -1.2 && dxr < 1.2 && dzr > 4.2 && dzr < 5.9) {
+    const top = raft.position.y + DECK_TOP + EYE_H;
+    if (player.pos.y > top - 4.2 && player.pos.y <= top - 0.68 &&
+        (keys['KeyW'] || keys['ArrowUp']) && Math.cos(player.yaw - Math.PI) > 0.1) {
+      player.onLadder = true;
+      player.pos.y += CLIMB_RATE * dt;
+      // hold him against the rungs: kill the swim that was carrying him under the hull,
+      // and pin him to the ladder line from BOTH sides — the swim thrust re-accumulates
+      // after this block and was walking him off the foot of the ladder at ~0.4 u/s.
+      player.vel.set(0, 0, 0);
+      // The rungs hang at 4.78 — OUTBOARD of the 4.7 deck footprint, as a real ladder
+      // is. Held there to the top he falls off the last rung forever (measured: climb
+      // to 1.46, drop, climb again), so the last metre of climb steps him inboard over
+      // the rail, which is also just what boarding looks like.
+      const zAim = player.pos.y > top - 1.15 ? 4.42 : 4.78;
+      player.pos.z -= clamp(dzr - zAim, -1.6 * dt, 1.6 * dt);
+      player.pos.x -= clamp(dxr, -0.5 * dt, 0.5 * dt);
+    }
+  }
   const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY);
 
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
@@ -257,7 +294,10 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   if (hr > lim) { const k = lim / hr; player.pos.x *= k; player.pos.z *= k; }
   // Backstop only. The emergence term above is what actually floats him, so in calm
   // water this never fires; in a storm the swell throws him against it, which is right.
-  if (player.pos.y > SURFACE_Y - 1.2) {
+  // A man on the boarding ladder is the exception: hand-over-hand up the rungs is the
+  // one legitimate way out of the water, and this ceiling was silently erasing every
+  // centimetre the climb added.
+  if (player.pos.y > SURFACE_Y - 1.2 && !player.onLadder) {
     player.pos.y = SURFACE_Y - 1.2;
     if (player.vel.y > 0) player.vel.y = 0;
   }

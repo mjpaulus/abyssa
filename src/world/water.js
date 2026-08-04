@@ -2,8 +2,8 @@
 // and the depth-absorption atmosphere model.
 // OWNED BY: water/atmosphere agent.
 import * as THREE from 'three';
-import { scene, camera } from '../core.js';
-import { WORLD_R, SURFACE_Y } from '../config.js';
+import { scene, camera, renderer } from '../core.js';
+import { WORLD_R, SURFACE_Y, SUN_ELEV_DEG } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { scatter } from './flora.js';
 
@@ -79,7 +79,11 @@ const SURF_LIGHT = [0.055, 0.135, 0.112];
 // which is the cheap side. Measured disagreement before this: 3.9 degrees surface-vs-light,
 // 26.5 degrees surface-vs-billboard-shafts (the shafts also leaned the wrong way; fixed
 // in buildRays below).
-const SUN_DIR = new THREE.Vector3(0.20, 1.00, 0.10).normalize();
+// Now derived from SUN_ELEV_DEG so this and lighting.js's key light cannot drift apart:
+// they were two hand-written copies of the same vector, and the comment above is the
+// record of what happened last time they disagreed. Azimuth is unchanged.
+const _sk = 1 / Math.tan(SUN_ELEV_DEG * Math.PI / 180);
+const SUN_DIR = new THREE.Vector3(0.894427 * _sk, 1.00, 0.447214 * _sk).normalize();
 // Shafts descend ALONG the sunlight, so as they drop by h they move by -sunDir.xz/sunDir.y.
 const SUN_PROJ = [SUN_DIR.x / SUN_DIR.y, SUN_DIR.z / SUN_DIR.y];
 
@@ -837,6 +841,110 @@ function buildSurfaceGeo() {
   return g;
 }
 
+// ---------------------------------------------------------------------------
+// SCREEN-SPACE REFRACTION — the sea's transmission term becomes real.
+// ---------------------------------------------------------------------------
+// The surface shader used to INVENT what lies through the interface: an analytic water
+// body from above, an analytic sky from below. That is why the sea read as an opaque
+// green sheet from the deck, and why the raft's hull simply did not exist when you
+// looked up at it from underneath. Each frame near the surface we now render the OTHER
+// side of the interface into a half-res target — a clip plane at the local surface
+// height keeps exactly the half-world the transmitted ray would see — and the shader
+// samples it with a refraction offset. Reflection stays analytic; only transmission
+// becomes real.
+//
+// The absorption comes free, and this is the reason the pass needs no depth texture:
+// the Beer-Lambert fog is patched into EVERY material globally and integrates density
+// along the camera->fragment path in height, so a render of the underwater world from
+// an in-air camera already carries near-correct per-channel attenuation for the
+// underwater leg of each ray (the air leg contributes ~nothing — rho above the surface
+// is the profile's exponential tail). What lands in the target is the scene through
+// the water, already dimmed and hued by exactly the water Sal swims in.
+const uRefr = { value: new THREE.DataTexture(new Uint8Array([8, 24, 32, 255]), 1, 1) };
+uRefr.value.needsUpdate = true;
+const uRefrK = { value: 0 };            // master gate: 0 = pure analytic (old behaviour)
+const uRefrSide = { value: 1 };         // 1 = target holds the UNDERWATER world (camera in air)
+const uRes = { value: new THREE.Vector2(1, 1) };
+let refrRT = null;
+const _clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
+const _clipArr = [_clipPlane];
+const _rtSize = new THREE.Vector2();
+const _prevClear = new THREE.Color();
+let refrOn = true, refrAir = true;
+
+// Quality fallback ladder, driven by postfx.degradeQuality. reduceRefraction is tier 1:
+// the target drops from half-res to quarter-res — ~a quarter of the pass's cost, and
+// through a distorting, water-fogged interface the resolution loss barely reads.
+// degradeRefraction is tier 2: the pass is gone and the analytic sea returns.
+let refrShift = 1;
+export function reduceRefraction() {
+  refrShift = 2;
+  if (refrRT) { refrRT.dispose(); refrRT = null; }   // rebuilt next frame at the new size
+}
+export function degradeRefraction() { refrOn = false; uRefrK.value = 0; }
+
+// Called by game.js once per frame, after updateWater (needs _surfH/uAir) and before
+// the composer render. Renders the far side of the interface into refrRT.
+export function renderRefraction() {
+  // Below -35 the ceiling is fog-bound arm-waving anyway, and from the air the pass is
+  // pointless once the surface itself has been retired.
+  const on = refrOn && !window.__noRefr && surface && surface.visible &&
+    camera.position.y > -35;
+  if (!on) { uRefrK.value = 0; return; }
+
+  renderer.getDrawingBufferSize(_rtSize);
+  uRes.value.copy(_rtSize);
+  const w = Math.max(2, _rtSize.x >> 1), h = Math.max(2, _rtSize.y >> 1);
+  if (!refrRT) {
+    // Own depth RENDERBUFFER, never shared with the composer — this project has a
+    // GL_INVALID_OPERATION history from depth-attachment sharing.
+    refrRT = new THREE.WebGLRenderTarget(w, h, {
+      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, depthBuffer: true
+    });
+  } else if (refrRT.width !== w || refrRT.height !== h) refrRT.setSize(w, h);
+
+  // Hysteresis, not a threshold. Floating at the surface the camera rides the swell
+  // right through uAir = 0.5, and a hard cut there flip-flops the target between
+  // worlds — each wrong-side frame renders as the old opaque sea, which is exactly the
+  // report that exposed this. The side only changes once the camera is DECIDEDLY on
+  // the other side of the band.
+  if (refrAir && uAir.value < 0.30) refrAir = false;
+  else if (!refrAir && uAir.value > 0.70) refrAir = true;
+  const air = refrAir;
+  uRefrSide.value = air ? 1 : 0;
+  // Keep the half-world the transmitted ray enters. A 0.04 bias hides the sliver of
+  // double-drawn geometry where the wavy true surface crosses the flat clip plane.
+  if (air) { _clipPlane.normal.set(0, -1, 0); _clipPlane.constant = _surfH + 0.04; }
+  else { _clipPlane.normal.set(0, 1, 0); _clipPlane.constant = -(_surfH - 0.04); }
+
+  const prevRT = renderer.getRenderTarget();
+  const prevShadow = renderer.shadowMap.autoUpdate;
+  renderer.getClearColor(_prevClear);
+  const prevAlpha = renderer.getClearAlpha();
+  surface.visible = false;
+  renderer.clippingPlanes = _clipArr;
+  // The composer's main render refreshes the shadow maps this frame anyway; letting
+  // this pass refresh them too would draw every caster twice for nothing.
+  renderer.shadowMap.autoUpdate = false;
+  renderer.setRenderTarget(refrRT);
+  // autoClear is false globally (composer discipline), so clear by hand. The clear
+  // colour is the far-field ambient at the camera — anywhere no geometry lands, the
+  // transmitted ray reads as open water, which is what an unbounded ray would find.
+  renderer.setClearColor(scene.background && scene.background.isColor ? scene.background : _prevClear, 1);
+  renderer.clear(true, true, false);
+  renderer.render(scene, camera);
+  renderer.setRenderTarget(prevRT);
+  renderer.clippingPlanes = [];
+  renderer.shadowMap.autoUpdate = prevShadow;
+  renderer.setClearColor(_prevClear, prevAlpha);
+  surface.visible = true;
+
+  uRefr.value = refrRT.texture;
+  // Fade the whole effect out over the last 10 units of its depth range so it never
+  // pops on the gate; analytic underneath is continuous.
+  uRefrK.value = clamp((camera.position.y + 35) / 10, 0, 1);
+}
+
 function buildSurface() {
   // uSkyZen/uSkyHor/uSunCol/uSunDir/uSunSize/uCloud/uStorm are the module-scoped objects
   // the DOME also holds. Shared on purpose: the sky in Snell's window and the sky over
@@ -847,7 +955,8 @@ function buildSurface() {
     uSunDir: uSunDirU, uSkyZen, uSkyHor, uSunCol, uSunSize, uCloud, uStorm: uStormU,
     uFlash: { value: 0 },
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
-    uBright: { value: 1 }, uFade: { value: 1 }
+    uBright: { value: 1 }, uFade: { value: 1 },
+    uRefr, uRefrK, uRefrSide, uRes
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -869,9 +978,35 @@ function buildSurface() {
       ${GLSL_NOISE}
       ${GLSL_WAVE_F}
       uniform float uTime, uBright, uFade, uStorm, uCloud, uSunSize, uMirrorK, uNearK,
-                    uFoamThr, uFlash;
+                    uFoamThr, uFlash, uRefrK, uRefrSide;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
+      uniform sampler2D uRefr;
+      uniform vec2 uRes;
       varying vec3 vW;
+
+      // The scene through the interface, sampled from the far-side render. The offset
+      // is the view-space parallax between the refracted ray and the straight one plus
+      // a wobble from the wave gradient, which is what makes the transmitted world
+      // shimmer with the swell instead of sitting still under it. ok fades to 0 at the
+      // target's edges so the caller can ease back to the analytic answer where the
+      // screen simply does not know what the ray would hit.
+      vec3 refrSample( vec3 R, vec3 V, vec2 dh, out float ok ){
+        vec3 Rv = normalize( ( viewMatrix * vec4( R, 0.0 ) ).xyz );
+        vec3 Vv = normalize( ( viewMatrix * vec4( V, 0.0 ) ).xyz );
+        // The offset is CLAMPED, hard. In a gale the wave gradient reaches ~0.5 and an
+        // unbounded wobble smeared the whole transmitted scene into ghosts (measured:
+        // a phantom davit leg two metres from the real one). 0.035 NDC is ~30 px at
+        // 1080p — enough shimmer to say water, small enough that things stay themselves.
+        vec2 off = ( Rv.xy / max( -Rv.z, 0.08 ) - Vv.xy / max( -Vv.z, 0.08 ) ) * 0.14
+                 + dh * 0.05;
+        float om = length( off );
+        if ( om > 0.035 ) off *= 0.035 / om;
+        vec2 uv = gl_FragCoord.xy / uRes + off;
+        vec2 m = min( uv, 1.0 - uv );
+        float inb = min( m.x, m.y );
+        ok = clamp( inb * 14.0, 0.0, 1.0 ) * step( 0.0, inb );
+        return texture2D( uRefr, clamp( uv, 0.002, 0.998 ) ).rgb;
+      }
 
       const float ETA = 1.333;
       const float F0  = 0.020383;   // ((n-1)/(n+1))^2 at n = 1.333; theta_c = 48.59 deg
@@ -1031,7 +1166,21 @@ function buildSurface() {
           // mf ramps the mirror in rather than switching it, so the gate cannot leave a
           // step ring 8 degrees inside the rim; at F = 0.09 the term it drops is 0.01.
           float mf = smoothstep( 0.030, 0.090, F );
-          if ( F < 0.998 ) col  = skyRadiance( refract( V, -Nf, ETA ) ) * ( 1.0 - F );
+          if ( F < 0.998 ) {
+            vec3 T = refract( V, -Nf, ETA );
+            vec3 win = skyRadiance( T );
+            // Snell's window becomes a WINDOW: when the far-side target holds the air
+            // world (camera below, uRefrSide 0), the transmitted ray samples the actual
+            // raft, ladder and sky instead of an analytic gradient. Falls back to the
+            // analytic sky at the screen edges and whenever the pass is off, so the old
+            // frame is the floor, never the casualty.
+            float rk = uRefrK * ( 1.0 - uRefrSide );
+            if ( rk > 0.001 ) {
+              float ok; vec3 rs = refrSample( T, V, dh, ok );
+              win = mix( win, rs, rk * ok );
+            }
+            col = win * ( 1.0 - F );
+          }
           if ( mf > 0.0 )  col += mirrorRadiance( vW, reflect( V, Nf ), uTime, mk ) * ( F * mf );
         } else {
           // ---- THE SEA FROM ABOVE ------------------------------------------
@@ -1057,7 +1206,21 @@ function buildSurface() {
           // Caustics at 0.55x: from below they are the only contrast a down-going ray can
           // find; from above they are a garnish on a grey sea, and at full strength they
           // read tropical.
-          col = seaBody( mirrorRadiance( vW, refract( V, Na, 1.0 / ETA ), uTime, mk * 0.55 ) ) * ( 1.0 - F )
+          vec3 T = refract( V, Na, 1.0 / ETA );
+          vec3 body = seaBody( mirrorRadiance( vW, T, uTime, mk * 0.55 ) );
+          // TRANSPARENCY. When the far-side target holds the underwater world (camera
+          // in air, uRefrSide 1), the transmission is the actual scene under the
+          // surface — drums, tether, Sal descending — already water-fogged by the
+          // shared Beer-Lambert chunk in that render. A 15% veil of the analytic body
+          // stays on top: even perfectly clear water scatters some of its own column
+          // into the eye, and the veil is also what keeps the hand-off seamless where
+          // the sample runs off screen and ok fades to the analytic answer.
+          float rk = uRefrK * uRefrSide;
+          if ( rk > 0.001 ) {
+            float ok; vec3 rs = refrSample( T, V, dhA, ok );
+            body = mix( body, mix( rs, body, 0.15 ), rk * ok );
+          }
+          col = body * ( 1.0 - F )
               + skyRadiance( reflect( V, Na ) ) * F;
 
           // Wind streaks: storm foam blown into lines along the dominant swell's own

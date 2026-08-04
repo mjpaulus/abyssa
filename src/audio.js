@@ -18,6 +18,7 @@
 //   setZone(i)         first line of enterZone(i), BEFORE growl()
 //   slam()             when updateLeviathan returns ev.slam (self rate-limits)
 //   setCalm(0|1)       on ev.calmed, back to 0 on respawn
+//   setPump(spd01,lvl01) every frame — raft engine: 0..1 revs, 0..1 audibility by distance
 // ---------------------------------------------------------------------------
 
 let AC = null, live = 0, muted = false;
@@ -25,6 +26,7 @@ let master, dry, revIn, revWet, revTone, preDelay, tailGA, tailGB;
 let droneLP, droneGain, noiseLP, noiseGain, surfGain, shimGain, subGain, bedDuck, bedWet;
 let helmetIn, breathGain, whineGain, moveGain, moveBP;
 let levBus, levLP, threatGain, tenseGain, chimeBus;
+let pumpBus, pumpMechGain, pumpMechLP, pumpMechPulse, pumpHissGain;
 let noiseBuf, drones = [];
 
 const rnd = (a, b) => a + Math.random() * (b - a);
@@ -239,6 +241,26 @@ function build() {
   osc('sine', 466.16, tenseGain).start();
   osc('sine', 493.88, tenseGain).start();
 
+  // ---- raft pump: single-cylinder oil engine belt-driving the compressor ----
+  // A surface machine, not a diver sound — same dry/reverb split as the leviathan
+  // bus, never helmetIn. Deliberately outside bedDuck: growl/slam happen to Sal at
+  // depth and have no physical reach to a wooden deck above, and the pump's own
+  // death (fuel-out) has to read clean, not folded into a leviathan-event dip.
+  // level01 sets the one output fader below; speed01 shapes everything upstream
+  // of it, so distance and engine-state never multiply into a squared falloff.
+  pumpBus = gain(0.0001);
+  pumpBus.connect(gain(0.5, dry));
+  pumpBus.connect(gain(0.65, revIn));
+
+  pumpMechPulse = gain(1, pumpBus);              // per-stroke accent, retriggered by the thump
+  pumpMechGain = gain(0.0001, pumpMechPulse);    // belt/compressor/bearing rumble
+  pumpMechLP = filt('lowpass', 160, 0.9, pumpMechGain);
+  noise(0.5, pumpMechLP).start();
+
+  pumpHissGain = gain(0.0001, pumpBus);          // compressor delivery — the one bright thread
+  const pumpHissBP = filt('bandpass', 3400, 1.1, pumpHissGain);
+  noise(1.3, pumpHissBP).start();
+
   chimeBus = bus(0.75, 0.9);
 }
 
@@ -381,11 +403,39 @@ function deepKnock() {
   fire(noise(0.7, nf), t, t + 0.4, [nf, ng]);
 }
 
-let breathTimer = 0, creakTimer = 0, groanTimer = 0, callTimer = 0, knockTimer = 0;
+let breathTimer = 0, creakTimer = 0, groanTimer = 0, callTimer = 0, knockTimer = 0, pumpTimer = 0;
 const schedCreak = () => { creakTimer = setTimeout(suitCreak, rnd(8, 24) * 1000 / (1 + S.depth * 1.6)); };
 const schedGroan = () => { groanTimer = setTimeout(rockGroan, rnd(20, 55) * 1000); };
 const schedCall = () => { callTimer = setTimeout(distantCall, rnd(42, 105) * 1000); };
 const schedKnock = () => { knockTimer = setTimeout(deepKnock, rnd(28, 72) * 1000); };
+
+// One stroke of the engine: a low thud plus a belt/compressor accent on the same
+// beat. Fired by pumpTick, never by setPump — setPump only ever writes params.
+function pumpThump(spd) {
+  const t = now();
+  const f0 = mix(42, 56, spd) * rnd(0.985, 1.015);   // pitch rises with revs, wanders a hair
+  const g = gain(0, pumpBus), o = osc('sine', f0, g);
+  o.frequency.exponentialRampToValueAtTime(f0 * 0.5, t + 0.12);
+  env(g.gain, t, 0.005, 0.16 + 0.06 * (1 - spd), 0.11 + 0.16 * spd);  // slower engine = softer, duller
+  fire(o, t, t + 0.28, [g]);
+
+  const p = pumpMechPulse.gain;
+  p.cancelScheduledValues(t); p.setValueAtTime(p.value, t);
+  p.linearRampToValueAtTime(1 + 0.55 * spd, t + 0.02);
+  p.setTargetAtTime(1, t + 0.02, 0.08);
+}
+
+// Self-scheduling heartbeat at governed ~1.4 Hz, proportional to speed01 like a
+// real crank. As speed sags the interval between thumps stretches on its own —
+// slowing, then faltering, then simply not firing again — which is how a heavy
+// engine actually dies, not a ramp anyone could hear as a fade.
+let pRate = 0, pSpeed = 0, pLevel = 0;
+function pumpTick() {
+  pRate += (1.4 * pSpeed - pRate) * 0.5;
+  pumpTimer = setTimeout(pumpTick, pRate > 0.05 ? (1 / pRate) * rnd(0.97, 1.03) * 1000 : 260);
+  if (pRate <= 0.05 || !AC || muted || AC.state !== 'running' || live > 100 || pLevel < 0.004) return;
+  pumpThump(pSpeed);
+}
 
 // ---- per-tick mixing -----------------------------------------------------
 function applyMix() {
@@ -470,6 +520,7 @@ export function initAudio() {
   breathTimer = setTimeout(breathCycle, 900);
   schedCreak(); schedGroan(); schedKnock();
   callTimer = setTimeout(distantCall, rnd(12, 30) * 1000);
+  pumpTimer = setTimeout(pumpTick, 200);
   setInterval(drive, 50);
 
   // Optional self-drive. If player.js ever moves the catch keeps audio alive,
@@ -675,3 +726,17 @@ export function setCalm(c) { manual.calm = true; T.calm = cl01(c); }
 export function setSpeed(u) { manual.speed = true; T.speed = Math.max(0, u); }
 export function setWalking(w) { manual.walking = true; S.walking = !!w; }
 export function setZone(i) { manual.zone = true; applyZone(i); }
+
+// speed01: engine state (0 stopped .. 1 governed) — shapes rumble, hiss and thump
+// tempo/pitch upstream of the fader. level01: audibility right now (distance +
+// immersion) — the single output fader, so the two never compound into a
+// squared falloff.
+export function setPump(speed01, level01) {
+  if (!AC) return;
+  pSpeed = cl01(speed01);
+  pLevel = cl01(level01);
+  ramp('pbus', pumpBus.gain, 0.0001 + 0.30 * pLevel, 0.4);
+  ramp('pmech', pumpMechGain.gain, 0.0001 + 0.18 * Math.pow(pSpeed, 0.8), 0.35);
+  ramp('pmlp', pumpMechLP.frequency, mix(150, 320, pSpeed), 0.5);
+  ramp('phiss', pumpHissGain.gain, 0.0001 + 0.02 * pSpeed * pSpeed, 0.4);
+}
