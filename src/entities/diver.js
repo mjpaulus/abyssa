@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, envTex } from '../core.js';
+import { SURFACE_Y } from '../config.js';
 import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
 
@@ -720,6 +721,9 @@ function updateBubbles(dt, t, vel) {
       b.p.addScaledVector(b.v, dt);
       b.p.x += Math.sin(t * 3.1 + b.ph) * 0.10 * dt * 8;     // wobble as they rise
       b.p.z += Math.cos(t * 2.6 + b.ph * 1.7) * 0.10 * dt * 8;
+      // A bubble that reaches the surface bursts there. Without this the ones released
+      // just under the waterline kept climbing into the sky.
+      if (b.p.y >= SURFACE_Y) b.life = 0;
       const k = b.life / b.max;
       _sv.setScalar(b.r * (1.35 - 0.35 * k) * ss(0, 0.16, 1 - k) * ss(0, 0.30, k));
     } else _sv.setScalar(0);
@@ -973,16 +977,22 @@ export function updateDiver(dt, t, player) {
   diver.glow.scale.setScalar(0.5 + fl * 0.55);
   diver.glow.material.opacity = 0.35 + 0.5 * fl;
 
-  // breathing: a steady trickle plus a burst on every exhale
+  // breathing: a steady trickle plus a burst on every exhale — ONLY UNDER WATER.
+  // The exhaust port is a one-way valve into the sea; standing on the raft deck he was
+  // streaming bubbles up into the sky. Gated on the port's own world height rather than
+  // the diver's, so the last of the exhale still leaves as his shoulders go under.
   diver.exhaust.getWorldPosition(_ex);
+  const submerged = _ex.y < SURFACE_Y;
   breathT -= dt;
   if (breathT <= 0) {
     breathT = rng(2.9, 4.1);
-    const n = 6 + Math.floor(Math.random() * 6);
-    for (let i = 0; i < n; i++) emitBubble(_ex, player.vel);
+    if (submerged) {
+      const n = 6 + Math.floor(Math.random() * 6);
+      for (let i = 0; i < n; i++) emitBubble(_ex, player.vel);
+    }
   }
   trickle -= dt;
-  if (trickle <= 0) { trickle = rng(0.16, 0.4); emitBubble(_ex, player.vel); }
+  if (trickle <= 0) { trickle = rng(0.16, 0.4); if (submerged) emitBubble(_ex, player.vel); }
   updateBubbles(dt, t, player.vel);
 }
 
