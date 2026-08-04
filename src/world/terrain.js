@@ -1,7 +1,7 @@
 // Seafloor terrain: heightfield, mesh, triplanar PBR material, caustics. OWNED BY: terrain agent.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, RIFT_R, zoneBottom, riftPos } from '../config.js';
+import { WORLD_R, RIFT_R, zoneBottom, riftPos, SUN_ELEV_DEG } from '../config.js';
 import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textures.js';
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 
@@ -338,7 +338,12 @@ const MAPS = (() => {
   };
 })();
 
-export const causticsUniforms = { uTime: { value: 0 }, uCamY: { value: 0 } };
+export const causticsUniforms = { uTime: { value: 0 }, uCamY: { value: 0 }, uSunK: { value: 1 } };
+
+// The same sun the sky, key light and god rays share, in world space, for the caustic
+// shading term below. One constant, one direction — see config.js.
+const _sk = 1 / Math.tan(SUN_ELEV_DEG * Math.PI / 180);
+const SUN_W = new THREE.Vector3(0.894427 * _sk, 1, 0.447214 * _sk).normalize();
 
 const COMMON = {
   uDetail: { value: MAPS.detail },
@@ -349,7 +354,7 @@ const COMMON = {
 const FRAG_HEAD = PBR_GLSL + /* glsl */`
 uniform sampler2D uDetail, uRockN, uRipple;
 uniform vec3 uSilt, uGrav, uRock;
-uniform float uTime, uCamY, uCaust, uWet;
+uniform float uTime, uCamY, uCaust, uWet, uSunK;
 varying vec3 vWPos, vWNrm;
 
 vec4 tpDetail(vec3 p, vec3 bw, float s) {
@@ -462,16 +467,32 @@ function compileTerrain(sh) {
         float depth01 = clamp((-vWPos.y - 110.0) / 380.0, 0.0, 1.0);
         float fade = 1.0 - depth01; fade *= fade;
         fade *= clamp(1.0 + (uCamY + 60.0) / 460.0, 0.12, 1.0);
-        fade *= max(0.0, wn.y) * ao * uCaust * (0.35 + 0.9 * mac.b);
+        fade *= max(0.0, wn.y) * ao * uCaust * uSunK * (0.35 + 0.9 * mac.b);
         if (fade > 0.002) {
           vec2 cp = vWPos.xz * mix(0.155, 0.075, depth01);
-          vec2 ch = vec2(0.055, -0.03);            // chromatic split of the refracted band
+          // The chromatic split was 0.35 WORLD UNITS of RGB separation — a metre-wide
+          // rainbow fringe on every band, which is a swimming-pool-mural tell, not
+          // dispersion. Real dispersion at this scale is a few centimetres of warm/cool
+          // edge; 0.008 keeps exactly that and nothing more.
+          vec2 ch = vec2(0.008, -0.005);
           float g = causticF(cp, uTime);
           float r = causticF(cp + ch, uTime);
           float b = causticF(cp - ch, uTime);
           float fine = causticF(cp * 2.35 + 11.0, uTime * 1.42) * 0.45;
-          vec3 c = vec3(r, g, b) * vec3(0.85, 1.0, 1.15) + fine * vec3(0.5, 0.85, 1.0);
-          totalEmissiveRadiance += c * vec3(0.34, 0.62, 0.72) * fade * 0.95;
+          vec3 c = vec3(r, g, b) + fine * vec3(0.6, 0.9, 1.0);
+          // A caustic is FOCUSED SUNLIGHT, not a glowing decal. The old form added a
+          // flat emissive tint that ignored the surface entirely — which is why the
+          // bands washed the triplanar texture out instead of revealing it. Focused
+          // light obeys the same physics as unfocused light: it is coloured by the
+          // ALBEDO it lands on (diffuseColor here already carries the full triplanar
+          // composite) and shaded by the micro NORMAL (facets tilted away from the sun
+          // go dark inside the band). The texture now shows through the caustic — the
+          // band brightens the detail rather than replacing it. The 4.4 gain rebuys
+          // the luminance the albedo multiply costs (floor albedos run 0.05-0.25).
+          vec3 sunV = normalize((viewMatrix * vec4(${SUN_W.x.toFixed(5)}, ${SUN_W.y.toFixed(5)}, ${SUN_W.z.toFixed(5)}, 0.0)).xyz);
+          float ndl = clamp(dot(normal, sunV), 0.0, 1.0);
+          totalEmissiveRadiance += c * diffuseColor.rgb * vec3(0.55, 0.95, 1.05)
+                                 * fade * 4.4 * (0.18 + 0.82 * ndl);
         }
       }`);
 }
@@ -675,9 +696,13 @@ export function buildTerrain() {
   }
 }
 
-export function updateTerrain(dt, t, camY) {
+export function updateTerrain(dt, t, camY, sunK = 1) {
   causticsUniforms.uTime.value = t;
   causticsUniforms.uCamY.value = camY;
+  // Caustics are sunlight. Night has none, an overcast gale has none — the same
+  // day/storm factor the sky and key light already run on, or the floor sparkles
+  // under a black sky.
+  causticsUniforms.uSunK.value = sunK;
   // A shell only exists for the player in the zone BELOW it, looking up: on when the
   // camera is 40 under the parent floor, off again 340 under (past the next floor,
   // where the zone below's own shell takes over). From above, backfaces + early-z

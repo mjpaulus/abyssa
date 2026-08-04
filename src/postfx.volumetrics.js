@@ -90,7 +90,7 @@ uniform sampler2D tDepth, tCaust;
 uniform vec3 uCamPos, uSunDir, uSurf;
 uniform mat4 uCamW, uViewProj;
 uniform vec2 uTanHalf;
-uniform float uNear, uFar, uDens, uSunK, uJitter, uOcclude;
+uniform float uNear, uFar, uDens, uSunK, uJitter, uOcclude, uDensK;
 varying vec2 vUv;
 
 // perspectiveDepthToViewZ, negated: distance along a ray whose view-space z is -1
@@ -155,6 +155,12 @@ void main(){
     // (No backticks in this comment: it sits inside a JS template literal.)
     float d01 = clamp( -p.y / 900.0, 0.0, 1.0 );
     float fade = max( 0.0, 1.0 - d01 * 3.66 ) * smoothstep( 0.0, 0.055, d01 );
+    // SQUARED, and water.js's rayBand squares the same factor. The linear curve left
+    // 21% strength at y = -193, where the illuminated free path is at its longest —
+    // measured, a diver on the zone-0 upper wall stood in a cyan wash that outshone
+    // the terrain under his boots. Squaring costs the tuned top-of-column look ~10%
+    // (0.90 to 0.81 at the y = -25 peak) and takes the mid-column down fivefold.
+    fade *= fade;
 
     if ( fade > 0.002 && p.y < 0.0 ) {
       float shaft = texture2D( tCaust, q ).r;
@@ -189,7 +195,16 @@ void main(){
     tr *= trStep;
   }
 
-  gl_FragColor = vec4( acc * ( dt * rlen * uSunK ), tS );
+  // uDensK is the SCATTERING coefficient the source term always needed. Inscatter per
+  // unit length is sigma_s * L — proportional to how much water there is to scatter —
+  // but only the extinction here ever used density. In murky water extinction kills
+  // the ray fast, so the omission was invisible when this pass was calibrated; in the
+  // CLEAR bands the silt line created, transmittance stays near 1 for the whole
+  // 320-unit march and the integral grows linearly instead of converging. Measured: a
+  // diver standing on the zone-0 upper wall (y = -193, the clear band) could not see
+  // the floor under his own boots for cyan. Normalised to the surface density the pass
+  // was tuned at, so at y = 0 this multiplies by ~1.0 and changes nothing.
+  gl_FragColor = vec4( acc * ( dt * rlen * uSunK * uDensK ), tS );
 }`;
 
 const COMPOSITE_FRAG = `
@@ -298,7 +313,7 @@ export class VolumetricLightPass extends Pass {
         uCamW: { value: new THREE.Matrix4() },
         uViewProj: { value: new THREE.Matrix4() },
         uTanHalf: { value: new THREE.Vector2(1, 1) },
-        uNear: { value: 0.1 }, uFar: { value: 700 }, uDens: { value: 0.0078 },
+        uNear: { value: 0.1 }, uFar: { value: 700 }, uDens: { value: 0.0078 }, uDensK: { value: 1 },
         uSunK: { value: 1 }, uJitter: { value: 0 }, uOcclude: { value: 1 }
       },
       vertexShader: VERT, fragmentShader: MARCH_FRAG,
@@ -400,7 +415,13 @@ export class VolumetricLightPass extends Pass {
     mu.uSunDir.value.copy(sun.position).normalize();
     // Turbidity: water.js drives scene.fog.density from depth + storm murk, so the
     // shafts dim in murky water on their own.
-    if (scene.fog) mu.uDens.value = scene.fog.density;
+    if (scene.fog) {
+      mu.uDens.value = scene.fog.density;
+      // Scattering strength, normalised at the 0.0078 surface density the pass was
+      // calibrated against and soft-capped: silt THICKER than the surface must not
+      // push the shafts brighter than their tuned look, only clearer water dimmer.
+      mu.uDensK.value = Math.min(1.15, scene.fog.density / 0.0078);
+    }
 
     const cu = this.fullscreenMaterial.uniforms;
     cu.uNear.value = camera.near;

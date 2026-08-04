@@ -497,7 +497,7 @@ function update(dt, t) {
   updateFootFX(dt, t);
   updateCreatures(dt, t);
   updateWater(dt, t);
-  updateTerrain(dt, t, camera.position.y);
+  updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm));
   updateRifts(dt, t, zone, !!(lev && lev.calmed));
 
   if (state !== 'play' && state !== 'won') return;

@@ -1393,7 +1393,10 @@ export function updateWater(dt, t) {
   // water behind it to read against. So ramp them IN over the top 50 units. Only the
   // top 50 change — at -100 and below this is byte-identical to before.
   //   y=-10 0.10 (was 0.96) · y=-25 0.45 · y=-50 0.80 · y=-100 0.59 · y=-246 0.00
-  const rayBand = Math.max(0, 1 - d01 * 3.66) * ms(d01, 0, 0.055);
+  // The (1 - d01*3.66) factor is SQUARED, matching the raymarch in
+  // postfx.volumetrics.js exactly — the two disagreeing puts billboards where the
+  // columns are not, which reads as a bug. See the march for why it steepened.
+  const rayBand = Math.max(0, 1 - d01 * 3.66) ** 2 * ms(d01, 0, 0.055);
   uRayFade.value = 0.62 * rayDim * rayBand * (0.82 + 0.18 * Math.sin(t * 0.23));
   rayMesh.visible = uRayFade.value > 0.004;
   // The surface survives to y = -330 instead of being culled at -150. In stratified
