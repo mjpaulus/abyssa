@@ -1,6 +1,6 @@
 ---
 title: Honest floor light
-status: ship
+status: done
 tags: light
 updated: 2026-08-05
 ---

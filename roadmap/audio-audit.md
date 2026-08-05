@@ -1,6 +1,6 @@
 ---
 title: Audio audit
-status: back
+status: backlog
 tags: audio, user
 updated: 2026-08-05
 ---

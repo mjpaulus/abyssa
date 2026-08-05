@@ -1,6 +1,6 @@
 ---
 title: Voyage fade timing
-status: eye
+status: decision
 tags: chart
 updated: 2026-08-05
 ---

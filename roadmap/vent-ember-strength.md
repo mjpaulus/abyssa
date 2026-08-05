@@ -1,6 +1,6 @@
 ---
 title: Vent ember strength
-status: eye
+status: decision
 tags: zone 1
 updated: 2026-08-05
 ---

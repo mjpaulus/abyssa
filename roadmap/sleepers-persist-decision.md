@@ -1,6 +1,6 @@
 ---
 title: Sleepers-persist decision
-status: next
+status: decision
 tags: chart, design
 updated: 2026-08-05
 ---
@@ -12,3 +12,4 @@ The ritual reading: the sleepers stir again when you leave; the chart remembers 
 
 ## Log
 - 2026-08-05 — deferred deliberately at phase 4; user call pending
+- 2026-08-05 — moved next -> decision; the generic columns made it obvious this is blocked on the user, not queued work

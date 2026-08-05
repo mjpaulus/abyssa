@@ -1,6 +1,6 @@
 ---
 title: Feedback doc batch
-status: back
+status: backlog
 tags: user
 updated: 2026-08-05
 ---

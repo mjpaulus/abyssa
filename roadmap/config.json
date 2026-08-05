@@ -1,14 +1,34 @@
 {
-  "title": "ABYSSA — The Working Chart",
+  "title": "ABYSSA — Roadmap",
   "project": "~/sc/abyssa",
   "favicon": "⚓",
   "artifactUrl": "https://claude.ai/code/artifact/d47d2269-86bf-4277-a2d9-b57bdaf82b00",
-  "userDecisionColumn": "eye",
+  "userDecisionColumn": "decision",
   "columns": [
-    { "key": "eye",  "title": "Needs Michael's Eye", "sub": "decisions only you can make — say the word and constants move" },
-    { "key": "wip",  "title": "In the Water",        "sub": "being built right now" },
-    { "key": "next", "title": "Next",                "sub": "agreed, not started" },
-    { "key": "back", "title": "Charted",             "sub": "the backlog, in no order" },
-    { "key": "ship", "title": "Shipped",             "sub": "the pencil takes what is done" }
+    {
+      "key": "backlog",
+      "title": "Backlog",
+      "sub": "captured, not scheduled"
+    },
+    {
+      "key": "next",
+      "title": "Up Next",
+      "sub": "agreed, queued"
+    },
+    {
+      "key": "wip",
+      "title": "In Progress",
+      "sub": "being built now"
+    },
+    {
+      "key": "decision",
+      "title": "Needs Decision",
+      "sub": "blocked on the user's call"
+    },
+    {
+      "key": "done",
+      "title": "Done",
+      "sub": "shipped and verified"
+    }
   ]
 }

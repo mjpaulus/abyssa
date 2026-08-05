@@ -1,6 +1,6 @@
 ---
 title: Deck camera pull-in
-status: eye
+status: decision
 tags: camera
 updated: 2026-08-05
 ---

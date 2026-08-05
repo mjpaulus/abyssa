@@ -1,6 +1,6 @@
 ---
 title: Fly Pallid Bank + Burned Ground
-status: eye
+status: decision
 tags: chart, phase 5
 updated: 2026-08-05
 ---

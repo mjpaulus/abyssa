@@ -219,7 +219,7 @@ claiming work.
   `python3 ~/.claude/skills/roadmap/gen.py roadmap`, republish ROADMAP.html via the
   Artifact tool with `url` from config.json and favicon "⚓", and commit roadmap/ +
   ROADMAP.html with the code.
-- Cards with `status: eye` are decisions ONLY the user can make — never resolve one
+- Cards with `status: decision` are decisions ONLY the user can make — never resolve one
   without his explicit call; record his words in the log line when he rules.
 
 ## Working model (multi-agent)

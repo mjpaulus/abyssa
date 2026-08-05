@@ -1,6 +1,6 @@
 ---
 title: Gale crests over the deck
-status: eye
+status: decision
 tags: water, storm
 updated: 2026-08-05
 ---

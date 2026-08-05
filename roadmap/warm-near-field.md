@@ -1,6 +1,6 @@
 ---
 title: Warm near field, zone 0
-status: eye
+status: decision
 tags: water, taste
 updated: 2026-08-05
 ---

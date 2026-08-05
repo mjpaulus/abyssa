@@ -1,6 +1,6 @@
 ---
 title: The sea became a window
-status: ship
+status: done
 tags: water
 updated: 2026-08-05
 ---

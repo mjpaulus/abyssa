@@ -1,6 +1,6 @@
 ---
 title: Chart V2: keepsakes shelf
-status: back
+status: backlog
 tags: chart, v2
 updated: 2026-08-05
 ---

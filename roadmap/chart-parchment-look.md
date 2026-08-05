@@ -1,6 +1,6 @@
 ---
 title: Chart parchment on your monitor
-status: eye
+status: decision
 tags: chart, ui
 updated: 2026-08-05
 ---

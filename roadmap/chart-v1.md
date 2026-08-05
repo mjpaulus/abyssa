@@ -1,6 +1,6 @@
 ---
 title: THE CHART v1
-status: ship
+status: done
 tags: chart
 updated: 2026-08-05
 ---

@@ -1,6 +1,6 @@
 ---
 title: Sal boards by the ladder
-status: ship
+status: done
 tags: raft
 updated: 2026-08-05
 ---

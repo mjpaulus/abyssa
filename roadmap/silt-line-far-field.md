@@ -1,6 +1,6 @@
 ---
 title: THE SILT LINE + far field
-status: ship
+status: done
 tags: water, terrain
 updated: 2026-08-05
 ---

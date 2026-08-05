@@ -1,6 +1,6 @@
 ---
 title: Far ridgeline read
-status: eye
+status: decision
 tags: terrain
 updated: 2026-08-05
 ---

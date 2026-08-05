@@ -1,6 +1,6 @@
 ---
 title: Pump audio level
-status: eye
+status: decision
 tags: audio
 updated: 2026-08-05
 ---

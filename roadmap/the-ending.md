@@ -1,6 +1,6 @@
 ---
 title: The ending
-status: ship
+status: done
 tags: cinematic
 updated: 2026-08-05
 ---

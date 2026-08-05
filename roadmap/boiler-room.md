@@ -1,6 +1,6 @@
 ---
 title: The boiler room (zone 1)
-status: ship
+status: done
 tags: zone 1
 updated: 2026-08-05
 ---

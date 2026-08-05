@@ -1,6 +1,6 @@
 ---
 title: Quality ladder
-status: ship
+status: done
 tags: perf
 updated: 2026-08-05
 ---
