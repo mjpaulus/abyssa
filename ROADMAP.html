@@ -1,0 +1,224 @@
+<!--
+  ABYSSA — THE WORKING CHART (feature board)
+  ==========================================
+  THIS FILE IS THE SOURCE OF TRUTH *AND* THE ARTIFACT SOURCE.
+
+  Any session that changes feature state:
+    1. edits the BOARD const below (move/add/retire cards, bump `inked`),
+    2. republishes with the Artifact tool: file_path = this file,
+       url = the artifact URL recorded in CLAUDE.md ("THE WORKING CHART"),
+       favicon "⚓" (keep it stable),
+    3. commits this file with the code change.
+  Columns are ordered by actionability. `eye` cards are decisions only Michael can
+  make — never resolve one without his explicit call.
+-->
+<title>ABYSSA — The Working Chart</title>
+<style>
+  :root {
+    --paper: #e7dcc0; --paper-hi: #efe6cf; --card: #efe6cf; --edge: #b5a67f;
+    --ink: #2a2018; --ink-soft: #57503f; --pencil: #6b655c;
+    --red: #a03c28; --brass: #8a6d2f; --ember: #a35325;
+    --stripe-eye: #a03c28; --stripe-wip: #8a6d2f; --stripe-next: #57503f;
+    --stripe-back: #8b8474; --stripe-ship: #6b655c;
+    --shadow: 0 1px 0 rgba(42,32,24,.14), 0 6px 18px rgba(42,32,24,.10);
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --paper: #0a1216; --paper-hi: #0e181e; --card: #101c23; --edge: #24343c;
+    --ink: #d8cfae; --ink-soft: #a49a7d; --pencil: #6f7d80;
+    --red: #c05a40; --brass: #ac8a2f; --ember: #d8703a;
+    --stripe-eye: #c05a40; --stripe-wip: #ac8a2f; --stripe-next: #7d8a8c;
+    --stripe-back: #4c5a5e; --stripe-ship: #3c4a4e;
+    --shadow: 0 1px 0 rgba(0,0,0,.5), 0 8px 22px rgba(0,0,0,.35);
+  } }
+  :root[data-theme="dark"] {
+    --paper: #0a1216; --paper-hi: #0e181e; --card: #101c23; --edge: #24343c;
+    --ink: #d8cfae; --ink-soft: #a49a7d; --pencil: #6f7d80;
+    --red: #c05a40; --brass: #ac8a2f; --ember: #d8703a;
+    --stripe-eye: #c05a40; --stripe-wip: #ac8a2f; --stripe-next: #7d8a8c;
+    --stripe-back: #4c5a5e; --stripe-ship: #3c4a4e;
+    --shadow: 0 1px 0 rgba(0,0,0,.5), 0 8px 22px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"] {
+    --paper: #e7dcc0; --paper-hi: #efe6cf; --card: #efe6cf; --edge: #b5a67f;
+    --ink: #2a2018; --ink-soft: #57503f; --pencil: #6b655c;
+    --red: #a03c28; --brass: #8a6d2f; --ember: #a35325;
+    --stripe-eye: #a03c28; --stripe-wip: #8a6d2f; --stripe-next: #57503f;
+    --stripe-back: #8b8474; --stripe-ship: #6b655c;
+    --shadow: 0 1px 0 rgba(42,32,24,.14), 0 6px 18px rgba(42,32,24,.10);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--ink);
+    font-family: Georgia, 'Times New Roman', serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1720px; margin: 0 auto; padding: 2.2rem 1.6rem 3rem; }
+
+  header { text-align: center; margin-bottom: 1.9rem; }
+  .over { font-size: .68rem; letter-spacing: .34em; color: var(--ink-soft);
+    text-transform: uppercase; }
+  h1 { font-size: clamp(1.5rem, 3.4vw, 2.3rem); font-weight: 400; margin: .35rem 0 .5rem;
+    letter-spacing: .32em; text-transform: uppercase; text-wrap: balance; }
+  h1::after { content: ""; display: block; width: 180px; height: 1px;
+    background: var(--ink-soft); margin: .65rem auto 0; opacity: .55; }
+  .meta { font-size: .7rem; letter-spacing: .2em; color: var(--pencil);
+    text-transform: uppercase; margin-top: .55rem; }
+  .meta code { font-family: ui-monospace, Menlo, monospace; letter-spacing: .06em;
+    font-size: .72rem; color: var(--ink-soft); }
+
+  .board-scroll { overflow-x: auto; padding-bottom: 1rem; }
+  .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(280px, 1fr);
+    gap: 1.1rem; min-width: 1460px; align-items: start; }
+
+  .col { background: var(--paper-hi); border: 1px solid var(--edge);
+    border-radius: 3px; padding: .9rem .8rem 1rem; }
+  .col h2 { font-size: .74rem; font-weight: 400; letter-spacing: .26em;
+    text-transform: uppercase; margin: 0 0 .2rem; display: flex;
+    justify-content: space-between; align-items: baseline; gap: .5rem; }
+  .col h2 .n { font-family: ui-monospace, Menlo, monospace;
+    font-variant-numeric: tabular-nums; font-size: .78rem; color: var(--pencil); }
+  .col .sub { font-size: .66rem; letter-spacing: .1em; color: var(--pencil);
+    margin: 0 0 .8rem; font-style: italic; }
+  .cards { display: flex; flex-direction: column; gap: .65rem; }
+
+  .card { background: var(--card); border: 1px solid var(--edge); border-radius: 2px;
+    padding: .6rem .7rem .55rem .85rem; position: relative; box-shadow: var(--shadow); }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0;
+    width: 3px; background: var(--stripe); }
+  .card h3 { font-size: .82rem; font-weight: 400; margin: 0 0 .28rem;
+    letter-spacing: .12em; text-transform: uppercase; line-height: 1.45; }
+  .card p { font-size: .76rem; line-height: 1.5; margin: 0; color: var(--ink-soft); }
+  .card .tags { margin-top: .45rem; display: flex; flex-wrap: wrap; gap: .3rem; }
+  .tag { font-size: .58rem; letter-spacing: .16em; text-transform: uppercase;
+    color: var(--pencil); border: 1px solid var(--edge); border-radius: 2px;
+    padding: .1rem .4rem .08rem; }
+
+  .c-eye  { --stripe: var(--stripe-eye); }
+  .c-wip  { --stripe: var(--stripe-wip); }
+  .c-next { --stripe: var(--stripe-next); }
+  .c-back { --stripe: var(--stripe-back); }
+  .c-ship { --stripe: var(--stripe-ship); }
+
+  /* the game's own idiom: what is done takes the pencil */
+  .c-ship .card h3 { color: var(--pencil); position: relative; display: inline-block; }
+  .c-ship .card h3::after { content: ""; position: absolute; left: -2px; right: -2px;
+    top: 54%; height: 1.5px; background: var(--pencil); opacity: .85;
+    transform: rotate(-.6deg); }
+  .c-ship .card p { color: var(--pencil); }
+  .c-ship .card { box-shadow: none; }
+
+  .c-eye .card h3 { color: var(--red); }
+
+  footer { margin-top: 1.6rem; text-align: center; font-size: .64rem;
+    letter-spacing: .22em; text-transform: uppercase; color: var(--pencil); }
+
+  @media (max-width: 720px) {
+    .board { min-width: 1200px; }
+    .wrap { padding: 1.4rem .9rem 2rem; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="over">Abyssa &mdash; feature board</div>
+    <h1>The Working Chart</h1>
+    <div class="meta" id="meta"></div>
+  </header>
+  <div class="board-scroll"><div class="board" id="board"></div></div>
+  <footer>Truth lives in <span style="letter-spacing:.06em">ROADMAP.html</span> in the repo &mdash; edit the board block, republish, commit</footer>
+</div>
+
+<script>
+// ============================== BOARD (edit me) ==============================
+const BOARD = {
+  inked: '2026-08-05',
+  commit: 'de2aacc',
+  columns: [
+    {
+      key: 'eye', title: "Needs Michael's Eye",
+      sub: 'decisions only you can make — say the word and constants move',
+      cards: [
+        { t: 'Fly Pallid Bank + Burned Ground', d: 'Phase 5 of THE CHART: judge both remote skylines, vent clusters, wreck placement. Tuning is one row per site in site.js.', tags: ['chart', 'phase 5'] },
+        { t: 'Chart parchment on your monitor', d: 'Warmth, size, the drop shadow, and the one authored margin line — cut it if it oversteps the voice.', tags: ['chart', 'ui'] },
+        { t: 'Voyage fade timing', d: '2s out, 2.3s black, 1.6s in. Judged only by feel, in real time.', tags: ['chart'] },
+        { t: 'Warm near field, zone 0', d: 'Red 2% reach 84 to 105 units. Kill switch is three constants at ~water.js:44. You have never seen it at full quality until recently.', tags: ['water', 'taste'] },
+        { t: 'Gale crests over the deck', d: 'Screen-space refraction shows water through crests that overlap the raft. Defensible as sea washing the deck — judge in motion.', tags: ['water', 'storm'] },
+        { t: 'Vent ember strength', d: 'The far halo reads to 90 units. Too shy or too loud on a real monitor is one coefficient.', tags: ['zone 1'] },
+        { t: 'Deck camera pull-in', d: 'Camera sits 9 back; the raft is 9.4 wide, so deck detail is only ever read from range. Movement-feel call.', tags: ['camera'] },
+        { t: 'Far ridgeline read', d: 'W2 rampart at 4.5% vs rim 13.1% transmittance. RAM_H is the lever if too faint.', tags: ['terrain'] },
+        { t: 'Pump audio level', d: 'Synth engine thump, deliberately shy. Raise the pumpBus ramp if it hides.', tags: ['audio'] },
+      ]
+    },
+    {
+      key: 'wip', title: 'In the Water',
+      sub: 'being built right now',
+      cards: [
+        { t: 'THE CHART — seed curation', d: 'Author-tune the two remote sites once flown: terrain offsets, scarcity feel, sleeper rows, epithets.', tags: ['chart', 'phase 5'] },
+      ]
+    },
+    {
+      key: 'next', title: 'Next',
+      sub: 'agreed, not started',
+      cards: [
+        { t: 'Zone-1 vent life', d: 'Pale shrimp and crabs swarming the chimneys — the boiler room inhabited, not just built.', tags: ['zone 1', 'creatures'] },
+        { t: 'Sleepers-persist decision', d: 'V1: the chart records history but sleepers re-wake per visit. Keep as ritual, or persist the calm per site?', tags: ['chart', 'design'] },
+        { t: 'Sailing soundscape', d: 'The voyage has a chain slam and a bell. Wants hull creak, canvas, water on the strakes.', tags: ['audio', 'chart'] },
+        { t: 'Mark V helmet .glb', d: 'Wired and waiting. Needs your Sketchfab login to download the CC-BY model.', tags: ['user action'] },
+      ]
+    },
+    {
+      key: 'back', title: 'Charted',
+      sub: 'the backlog, in no order',
+      cards: [
+        { t: 'Chart V2: sonar soundings', d: 'The sounding set reveals new anchorages on the paper — the flagship V2 hook.', tags: ['chart', 'v2'] },
+        { t: 'Chart V2: keepsakes shelf', d: 'Physical keepsake props on the raft; each remote wreck carries one line of the previous owner.', tags: ['chart', 'v2'] },
+        { t: 'Creatures reseed per site', d: 'Schools and jellies are identical everywhere; V1 deliberately skipped them.', tags: ['chart', 'v2'] },
+        { t: 'Raft shadow on the sea', d: 'No dark patch marks the hull from below; wants the surface to receive the sun map.', tags: ['water'] },
+        { t: 'Rain from above', d: 'The air-side rain lattice read as stamped circles and was muted; needs a stochastic splash field.', tags: ['water', 'storm'] },
+        { t: 'Sal climbs hand-over-hand', d: 'Boarding works; the climb is a smooth rise without a rung-grab pose.', tags: ['animation'] },
+        { t: 'Audio audit', d: 'Full mix pass with your ears; the synth engine has never had one.', tags: ['audio', 'user'] },
+        { t: 'Feedback doc batch', d: 'You keep a notes doc — expect a round of fixes when it lands.', tags: ['user'] },
+      ]
+    },
+    {
+      key: 'ship', title: 'Shipped',
+      sub: 'the pencil takes what is done',
+      cards: [
+        { t: 'THE CHART v1', d: 'Three anchorages, paper chart, voyage, full-world in-place reseed, localStorage memory, authored sleepers, once-only ending rite.', tags: ['chart'] },
+        { t: 'The boiler room', d: 'Zone-1 vent field: 17 smokers, plumes, shimmer, ember wayfinding, shared throat light.', tags: ['zone 1'] },
+        { t: 'Honest floor light', d: 'Caustics coloured by albedo and shaded by the normal; volumetric march gained its missing density term.', tags: ['light'] },
+        { t: 'The sea became a window', d: 'Screen-space refraction both ways; Beer-Lambert absorption free via the global fog; temporal half-rate pass.', tags: ['water'] },
+        { t: 'Quality ladder', d: 'Degrade sheds transparency LAST: quarter target, volumetrics/AO/sun-shadow, then full shed.', tags: ['perf'] },
+        { t: 'The raft became a place', d: 'Five-builder dive tender: hull, dressing station, gear, davit, pump; 44-row deck; sun at 58 degrees; raft-only shadows.', tags: ['raft'] },
+        { t: 'Sal boards by the ladder', d: 'Swim at it and keep swimming; steps inboard over the rail at the top.', tags: ['raft'] },
+        { t: 'THE SILT LINE + far field', d: 'Stratified column, rising is the reveal; W2 rampart ridgeline; basin bit-identity proven.', tags: ['water', 'terrain'] },
+        { t: 'Predators + tools + weather', d: 'Shark FSM, octopus dens, squid ink economy; sonar, spear, thruster, knife; day cycle and storms.', tags: ['systems'] },
+        { t: 'The ending', d: '75s rift-threaded ascent, three sleeper passes, the title card.', tags: ['cinematic'] },
+      ]
+    },
+  ]
+};
+// ============================ end BOARD (edit me) ============================
+
+const board = document.getElementById('board');
+document.getElementById('meta').innerHTML =
+  'last inked ' + BOARD.inked + ' &middot; at commit <code>' + BOARD.commit + '</code>';
+for (const col of BOARD.columns) {
+  const el = document.createElement('div');
+  el.className = 'col c-' + col.key;
+  el.innerHTML = '<h2><span>' + col.title + '</span><span class="n">' + col.cards.length + '</span></h2>'
+    + '<p class="sub">' + col.sub + '</p>';
+  const cards = document.createElement('div');
+  cards.className = 'cards';
+  for (const c of col.cards) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = '<h3>' + c.t + '</h3><p>' + c.d + '</p>'
+      + '<div class="tags">' + c.tags.map(t => '<span class="tag">' + t + '</span>').join('') + '</div>';
+    cards.appendChild(card);
+  }
+  el.appendChild(cards);
+  board.appendChild(el);
+}
+</script>

@@ -205,6 +205,23 @@ against explicit contracts and reviewed on return.
   gameState, setState, playEnding, pred, wrecks, weather, __helm.
 - Licenses: every borrowed asset gets a CREDITS.md line (props, textures, models).
 
+## THE WORKING CHART (feature board — keep it inked)
+
+`ROADMAP.html` in the repo root is the feature board: source of truth AND artifact
+source in one file. It renders at the artifact URL below, which is THE stable link —
+never mint a new one.
+
+- Artifact URL: https://claude.ai/code/artifact/d47d2269-86bf-4277-a2d9-b57bdaf82b00
+- WHEN feature state changes (shipped something, started something, a new taste call
+  for the user, a backlog item born or killed): edit the `BOARD` const in
+  ROADMAP.html (move/add/retire cards, bump `inked` + `commit`), republish via the
+  Artifact tool with `url` set to the URL above and favicon "⚓", and commit the file
+  alongside the code change.
+- Column meanings: "Needs Michael's Eye" = decisions ONLY the user can make — never
+  resolve one without his explicit call; "In the Water" = building now; "Next" =
+  agreed not started; "Charted" = backlog; "Shipped" = done (cards take the pencil
+  strike-through automatically).
+
 ## Working model (multi-agent)
 
 The orchestrator keeps taste work, integration, game.js/player.js/postfx.js, and
