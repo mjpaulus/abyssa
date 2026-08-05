@@ -34,6 +34,7 @@ import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, reseedDens } from './world/predators.js';
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks } from './world/wrecks.js';
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
+import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
@@ -86,6 +87,7 @@ if (survival.hasSonar || survival.hasSpear || survival.hasThruster) {
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
 }
 buildVents();
+buildVentLife();
 initTools();
 initWeather();
 
@@ -370,6 +372,7 @@ function reseedWorld(i) {
   reseedResources();
   reseedProps();
   reseedVents();
+  reseedVentLife();
   reseatRifts();
   reseedDens();
   enterZone(0);
@@ -881,6 +884,7 @@ function update(dt, t) {
 
   // wrecks + relic tools
   updateVents(dt, t);
+  updateVentLife(dt, t);
   updateWrecks(dt, t);
   const tev = updateTools(dt, t, player);
   if (tev.spearKill) {

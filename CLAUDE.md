@@ -142,6 +142,13 @@ against explicit contracts and reviewed on return.
     because changing the scene's LIGHT COUNT recompiles every lit material mid-game.
     Its gate is linear over 34 units: the camera trails the diver ~10, so squared
     gates put the light at 6% while Sal stood beside the fire.
+  - `world/ventlife.js` — vent fauna: two InstancedMeshes (pale shrimp swirling at
+    each active throat, crabs on the crust at the chimney feet), anchored on
+    `activeVents`, ALL motion in the vertex shader off uTime (CPU writes two floats
+    a frame). No glow, fog ON (fog:false is for the ember SPRITES only). Buffers
+    sized for 20 vents at build, reseed rewrites them in place; everything hides
+    above y=-340 for a one-compare early-out. Distinct customProgramCacheKey per
+    material (the creatures.js shared-program hazard).
   - `window.gotoZone(i)` (game.js debug) switches zones without calming a sleeper —
     without it a teleported probe gets floored back to the OLD zone's seabed and
     reads as a broken teleport.

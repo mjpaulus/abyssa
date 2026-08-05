@@ -237,7 +237,7 @@ const uni = { uTime: { value: 0 }, uVis: { value: 0 }, uFogD: { value: 0.01 } };
 let plumePts = null, shimmerPts = null, ventLight = null;
 let root = null;          // the merged chimney/fumarole/crust group — disposed+regrown on reseed
 let chimneyMat = null;    // the ONE MeshStandardMaterial every solid piece shares — REUSED across reseeds, never recreated (zero recompiles)
-const activeVents = [];   // {x,y,z} throat positions, non-dead
+export const activeVents = [];   // {x,y,z,baseR} throat positions, non-dead — ventlife.js anchors its swarms here (array keeps identity across reseeds)
 const hotVents = [];      // {x,y,z,sprite} the 2-3 hottest — shimmer + ember glow
 
 // ---------------------------------------------------------------------------
