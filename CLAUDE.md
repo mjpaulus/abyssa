@@ -145,6 +145,25 @@ against explicit contracts and reviewed on return.
   - `window.gotoZone(i)` (game.js debug) switches zones without calming a sleeper —
     without it a teleported probe gets floored back to the OLD zone's seabed and
     reads as a broken teleport.
+- THE CHART (multi-site ocean) — `world/site.js` is the registry (3 authored
+  anchorages; site 0 = shipped world BIT-IDENTICAL, the regression anchor; terrain
+  fingerprints: home 5e6cfe45, Pallid Bank ef14da09 on the 32x32x3 probe). The world
+  reseeds IN PLACE around the raft: `reseedWorld(i)` in game.js runs
+  fillTerrain -> reseedWrecks(tools) -> reseedFlora -> reseedResources ->
+  reseedProps -> reseedVents -> reseatRifts -> reseedDens -> enterZone(0) — ORDER IS
+  CONTRACT (flora excludes around wreckSites(), dens re-pick from flora's colliders).
+  Discipline held everywhere: materials/programs never recreated, collider arrays
+  keep object identity, layouts are pure functions of site seed streams (20x soak:
+  programs constant, zero geometry/texture growth, zero scene drift).
+  The paper chart: `ui/chartOverlay.js` (canvas-drawn, deterministic), opened by [E]
+  at the chart table (`systems/raft/chart.js`, anchor exported from raft.js).
+  Voyage = 'voyage' state in game.js: fade to black, reseed at full black, arrive.
+  Persistence = localStorage 'abyssa.chart.v1' loaded BEFORE the world builds (saved
+  site builds directly, no boot reseed): site, pencil record, tools, hose,
+  endingSeen. The full rite plays ONCE ever; later triple-calms get the quiet
+  chart-inking beat. Sleeper overlays (sigils/hue/epithet) merge over LEVIATHAN_CFG
+  in makeLeviathan(idx, over) and flow via the ...c spread. Debug: window.__chart
+  { sail, arrive, rec }, window.gotoZone.
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own

@@ -1,15 +1,15 @@
 // Game state machine, camera, HUD, and the frame loop. Owned by the orchestrator.
 import * as THREE from 'three';
 import { scene, camera, clock } from './core.js';
-import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos } from './config.js';
+import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetrics } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH } from './world/terrain.js';
-import { buildFlora, updateFlora, rockColliders } from './world/flora.js';
+import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
+import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
 import { buildCreatures, updateCreatures } from './world/creatures.js';
-import { buildRifts, updateRifts, seedMotes, updateMotes } from './world/rifts.js';
+import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
 import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
@@ -25,18 +25,47 @@ import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
   resupplyAtRaft, canDescendTo, HOSE_REQ
 } from './systems/survival.js';
-import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed } from './systems/raft.js';
+import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed, chartAnchor } from './systems/raft.js';
 import { buildTether, updateTether, reseatTether } from './systems/tether.js';
-import { buildResources, updateResources } from './world/resources.js';
+import { buildResources, updateResources, reseedResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
-import { buildProps, updateProps, propColliders } from './world/props.js';
+import { buildProps, updateProps, propColliders, reseedProps } from './world/props.js';
 import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world/footfx.js';
-import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk } from './world/predators.js';
-import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic } from './world/wrecks.js';
-import { buildVents, updateVents, ventColliders } from './world/vents.js';
+import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, reseedDens } from './world/predators.js';
+import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks } from './world/wrecks.js';
+import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
+import { setSite, currentSite, currentSiteIndex, siteAt } from './world/site.js';
+import { openChart, closeChart, isChartOpen } from './ui/chartOverlay.js';
+
+// ---- THE CHART's memory -----------------------------------------------------------
+// Loaded BEFORE the world builds, so a saved anchorage builds directly — no reseed at
+// boot, no double work. The chart is the save file: which mooring she rides at, which
+// sleepers have taken the pencil, what Sal carries, whether the rite has been seen.
+const SAVE_KEY = 'abyssa.chart.v1';
+let chartRec = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], endingSeen = false;
+(() => { try {
+  const sv = JSON.parse(localStorage.getItem(SAVE_KEY));
+  if (!sv) return;
+  if (Array.isArray(sv.rec)) chartRec = sv.rec;
+  endingSeen = !!sv.endingSeen;
+  if (sv.site) setSite(sv.site);
+  if (sv.hose) survival.hose = Math.max(survival.hose, sv.hose);
+  if (sv.tools) {
+    survival.hasSonar = !!sv.tools.sonar;
+    survival.hasSpear = !!sv.tools.spear;
+    if (sv.tools.spear) survival.spears = Math.max(survival.spears || 0, 2);
+    survival.hasThruster = !!sv.tools.thruster;
+  }
+} catch (e) { /* a torn save is a blank chart, never a crash */ } })();
+function saveChart() { try {
+  localStorage.setItem(SAVE_KEY, JSON.stringify({
+    site: currentSiteIndex(), rec: chartRec, endingSeen, hose: survival.hose,
+    tools: { sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster }
+  }));
+} catch (e) { /* private mode etc: play on, remember nothing */ } }
 
 // ---- build the world ----
 buildTerrain();
@@ -51,6 +80,11 @@ buildProps();   // async; props pop in shortly after load, world never blocks on
 buildFootFX();
 buildPredators();
 buildWrecks();
+// A restored diver already owns his relics: rebuild the wrecks with those cradles
+// empty rather than offering him a second sounding set.
+if (survival.hasSonar || survival.hasSpear || survival.hasThruster) {
+  reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
+}
 buildVents();
 initTools();
 initWeather();
@@ -220,6 +254,7 @@ addEventListener('keydown', e => {
     }
   }
   if (state !== 'play' || !nearRaft(player.pos)) return;
+  if (e.code === 'KeyE' && nearChartTable()) { consultChart(); return; }
   if (e.code === 'KeyE' && craftHose()) { chime(523, 1.4, 0.22); showMsg('HOSE EXTENDED', 2); }
   if (e.code === 'KeyF' && craftFuel()) { chime(392, 1.4, 0.22); showMsg('PUMP REFUELLED', 2); }
 });
@@ -251,7 +286,14 @@ function enterZone(i) {
   disposeLeviathan(lev);
   zone = i;
   setZone(i);            // must precede growl() so the voice is tuned to the zone
-  lev = makeLeviathan(i);
+  // Remote anchorages carry hand-authored sleeper rows: more wards, a hue nudge, an
+  // epithet in the previous chart-owner's ink. Home passes undefined and is untouched.
+  const row = currentSite().sleepers && currentSite().sleepers[i];
+  lev = makeLeviathan(i, row ? {
+    nSigils: row.sigils,
+    hue: (LEVIATHAN_CFG[i].hue + row.hueShift + 1) % 1,
+    name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name
+  } : undefined);
   seedMotes(i);
   physicsSwitchZone(i);  // no-op until the WASM world is up
   switchPredatorZone(i);
@@ -296,8 +338,64 @@ export function start() {
 
 document.getElementById('title').addEventListener('click', start);
 addEventListener('click', () => {
-  if (state !== 'title' && !locked) requestLock();
+  if (state !== 'title' && !locked && !isChartOpen()) requestLock();
 });
+
+// ---- THE VOYAGE: weigh anchor, black water, a new sea floor -------------------------
+const $voyage = (() => {
+  const d = document.createElement('div');
+  d.id = 'voyage';
+  d.style.cssText = 'position:fixed;inset:0;background:#010409;opacity:0;pointer-events:none;z-index:15';
+  document.body.appendChild(d);
+  return d;
+})();
+let voyageT = 0, voyageTo = 0, voyageDone = false, inkBeat = false;
+
+function startVoyage(i) {
+  if (state !== 'play') return;
+  state = 'voyage';
+  voyageT = 0; voyageTo = i; voyageDone = false;
+  slam();                                   // the chain lets go of the seabed
+  showMsg('SHE MAKES FOR ' + siteAt(i).name, 4);
+}
+
+// The reseed itself, run once under full black: a load event, exempt from the
+// per-frame allocation rule. ORDER IS CONTRACT — flora excludes around wreckSites(),
+// dens are re-picked from flora's fresh colliders.
+function reseedWorld(i) {
+  setSite(i);
+  fillTerrain();
+  reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
+  reseedFlora();
+  reseedResources();
+  reseedProps();
+  reseedVents();
+  reseatRifts();
+  reseedDens();
+  enterZone(0);
+  inkBeat = false;
+  deckSpawn(player.pos);
+  player.vel.set(0, 0, 0); player.yaw = 0; player.pitch = -0.05;
+  resetSuit(player.pos.y);
+  reseatTether(player);
+  survival.oxygen = 1;
+  survival.fuel = Math.max(survival.fuel, 0.3);   // the tender refits while she sails
+  camera.position.set(player.pos.x, player.pos.y + CAM_UP, player.pos.z - CAM_BACK);
+  camSnap = true;
+  saveChart();
+}
+
+// The [E] CONSULT reach: on deck, within arm's length of the table's standing spot.
+const _chartW = V3();
+function nearChartTable() {
+  raft.localToWorld(_chartW.copy(chartAnchor));
+  return player.onDeck && player.pos.distanceTo(_chartW) < 3.2;
+}
+function consultChart() {
+  if (document.exitPointerLock) document.exitPointerLock();
+  openChart({ currentSite: currentSiteIndex(), calmed: chartRec },
+    i => startVoyage(i), () => {});
+}
 
 // Debug/automation surface used by the visual-review harness.
 Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, diver, scene, survival, setState: s => { state = s; } });
@@ -305,6 +403,9 @@ Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, di
 // predators, leviathan, physics) all key off this, so a teleported probe that skips it
 // gets snapped back up to the previous zone's seabed and reads as a broken teleport.
 window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zone ' + zone; };
+// Debug: sail without the fade (the fade is cosmetic; this is the state change), and
+// force the reseed directly. Kept for probes and for future harness runs.
+window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
   if (state !== 'play') return 'start the game first';
@@ -506,6 +607,27 @@ function update(dt, t) {
   updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm));
   updateRifts(dt, t, zone, !!(lev && lev.calmed));
 
+  // ---- THE VOYAGE ------------------------------------------------------------------
+  // A cut dressed as passage: fade to black, reseed the whole sea floor under it,
+  // arrive on deck at the new anchorage. The world keeps breathing (ambient updates
+  // above already ran); the reseed itself happens exactly once, at full black.
+  if (state === 'voyage') {
+    voyageT += dt;
+    $voyage.style.opacity = voyageT < 2 ? voyageT / 2
+      : voyageT < 4.6 ? 1
+      : Math.max(0, 1 - (voyageT - 4.6) / 1.5);
+    if (!voyageDone && voyageT >= 2.3) {
+      voyageDone = true;
+      reseedWorld(voyageTo);
+      chime(392, 2.6, 0.2);                 // the bell as she takes her new mooring
+    }
+    if (voyageT >= 6.2) { state = 'play'; $voyage.style.opacity = 0; }
+    updateRaft(dt, t);
+    updateAtmosphere(0, camera.position.y);
+    updateLighting(0);
+    return;
+  }
+
   if (state !== 'play' && state !== 'won') return;
 
   // The ending cinematic owns the player and camera; the world keeps breathing
@@ -521,6 +643,8 @@ function update(dt, t) {
     return;
   }
 
+  // The chart in hand stills the man: movement keys are parked while the paper is up.
+  if (isChartOpen()) for (const k in keys) keys[k] = false;
   const { fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed));
   $mode.textContent = player.grounded ? 'walking'
     : player.fill > NEUTRAL_FILL + 0.09 ? 'rising'
@@ -556,6 +680,19 @@ function update(dt, t) {
     else if (msgT <= 0) showMsg(`THE LINE IS TOO SHORT — ${HOSE_REQ[zone + 1] * 3} M NEEDED`, 3);
   }
   if (lev && lev.calmed && zone === 2 && player.pos.y < zoneBottom(2) - 70 && state === 'play') {
+    // The full rite plays ONCE, the first triple-calm anywhere. Every later completion
+    // is a quiet beat: the chart takes the ink and the dive simply ends where it is.
+    if (endingSeen) {
+      if (!inkBeat) {
+        inkBeat = true;
+        saveChart();
+        showMsg('THE THIRD SLEEPS. THE CHART TAKES THE INK.', 7);
+        chime(523, 3, 0.25); chime(659, 3, 0.18); chime(784, 4, 0.15);
+      }
+      return;
+    }
+    endingSeen = true;
+    saveChart();
     state = 'won'; winT = 0;
     chime(523, 3, 0.3); chime(659, 3, 0.2); chime(784, 4, 0.2);
     // The cinematic drives player.pos/vel itself; clear the suit state so a banked burst
@@ -581,6 +718,8 @@ function update(dt, t) {
       if (ev.remaining > 0) showMsg(ev.remaining + (ev.remaining === 1 ? ' SIGIL SLEEPS' : ' SIGILS SLEEP'), 2.5);
     }
     if (ev.calmed) {
+      chartRec[currentSiteIndex()][zone] = 1;
+      saveChart();
       player.light = 1;
       setCalm(1);
       showMsg(zone < 2 ? 'THE SLEEPER STILLS. A RIFT OPENS BELOW.' : 'THE LAST SLEEPER STILLS. THE RIFT WAITS.', 5);
@@ -630,11 +769,16 @@ function update(dt, t) {
 
   if (nearRaft(player.pos)) {
     resupplyAtRaft();
-    const canH = canCraftHose(), canF = canCraftFuel();
-    $craft.textContent = canH || canF
-      ? `[E] craft hose  ·  [F] refuel pump${canH ? '' : '   (need 3 polymer)'}`
-      : 'at the raft — collect polymer and bitumen below';
-    $craft.style.opacity = 1;
+    if (nearChartTable()) {
+      $craft.textContent = '[E] consult the chart';
+      $craft.style.opacity = 1;
+    } else {
+      const canH = canCraftHose(), canF = canCraftFuel();
+      $craft.textContent = canH || canF
+        ? `[E] craft hose  ·  [F] refuel pump${canH ? '' : '   (need 3 polymer)'}`
+        : 'at the raft — collect polymer and bitumen below';
+      $craft.style.opacity = 1;
+    }
   } else {
     const rel = nearRelic(player.pos);
     if (rel) {

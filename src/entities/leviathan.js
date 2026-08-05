@@ -312,8 +312,11 @@ function teethMesh(Z, mat, dir) {
 
 // ---------------------------------------------------------------- build
 
-export function makeLeviathan(idx) {
-  const c = LEVIATHAN_CFG[idx], Z = ZONE[idx];
+export function makeLeviathan(idx, over) {
+  // `over` is THE CHART's authored sleeper row for a remote site (nSigils/hue/name).
+  // It merges over the shipped config, and ...c below spreads it through everything —
+  // the NSIG shader define, the ward count, the shown name. Home passes undefined.
+  const c = over ? Object.assign({}, LEVIATHAN_CFG[idx], over) : LEVIATHAN_CFG[idx], Z = ZONE[idx];
   const grp = new THREE.Group();
   const yMid = (zoneTop(idx) + zoneBottom(idx)) / 2;
   const n = c.segs, NP = n + 1, gap = c.size * 0.62;
