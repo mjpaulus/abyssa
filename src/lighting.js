@@ -78,7 +78,13 @@ scene.add(lanternLight);
 export const rig = { depth01: 0 };
 
 const fwd = V3(), right = V3(), rimPos = V3();
-let reduced = false;
+let reduced = false, sunParked = false;
+
+// Perf tier 2 (postfx.js): the sun's shadow pass is raft-only cosmetics — ~35 casters
+// re-rendered every frame the camera is near the surface — and it goes before the
+// lantern shadow ever would. A flag rather than sun.castShadow directly, because
+// updateLighting recomputes that property every frame and would switch it back on.
+export function parkSunShadow() { sunParked = true; }
 
 function blend(depth01) {
   let i = 0;
@@ -134,7 +140,7 @@ export function updateLighting(depth01) {
   sun.intensity = mix('sunI') * wk + flashBoost * 2.2;
   // The shadow map only ever contains the raft, so stop rendering it the moment the
   // camera is deep enough that the raft is a dot, or dark enough that it casts nothing.
-  sun.castShadow = !reduced && camera.position.y > -26 && sun.intensity > 0.15;
+  sun.castShadow = !reduced && !sunParked && camera.position.y > -26 && sun.intensity > 0.15;
   mixInto(rim.color, a, b, 'rim', t);
   rim.intensity = reduced ? 0 : mix('rimI');
   mixInto(playerLightSrc.color, a, b, 'fill', t);

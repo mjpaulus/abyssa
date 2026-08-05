@@ -870,7 +870,7 @@ const _clipPlane = new THREE.Plane(new THREE.Vector3(0, -1, 0), 0);
 const _clipArr = [_clipPlane];
 const _rtSize = new THREE.Vector2();
 const _prevClear = new THREE.Color();
-let refrOn = true, refrAir = true;
+let refrOn = true, refrAir = true, refrFrame = 0;
 
 // Quality fallback ladder, driven by postfx.degradeQuality. reduceRefraction is tier 1:
 // the target drops from half-res to quarter-res — ~a quarter of the pass's cost, and
@@ -891,6 +891,18 @@ export function renderRefraction() {
   const on = refrOn && !window.__noRefr && surface && surface.visible &&
     camera.position.y > -35;
   if (!on) { uRefrK.value = 0; return; }
+
+  // TEMPORAL, because quarter-res was not the cost. The pass submits the whole scene a
+  // second time, and draw-call submission is CPU work that no render-target size can
+  // shrink — which is why the tier-1 shed didn't save the machine it was built for
+  // (user-reported: frame rate still dropping, transparency lost immediately). Under a
+  // surface that distorts every sample anyway, a target refreshed at half rate (a third
+  // at tier 1) is indistinguishable, and it halves the pass's true cost. The one frame
+  // that must never be skipped is a side flip: a stale target there shows the WRONG
+  // WORLD through the interface for a frame.
+  refrFrame++;
+  const sideNow = refrAir ? (uAir.value >= 0.30) : (uAir.value > 0.70);
+  if (sideNow === refrAir && refrFrame % (refrShift === 1 ? 2 : 3) !== 0) return;
 
   renderer.getDrawingBufferSize(_rtSize);
   uRes.value.copy(_rtSize);

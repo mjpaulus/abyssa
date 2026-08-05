@@ -14,7 +14,7 @@ import {
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { renderer, scene, camera, onResize } from './core.js';
-import { playerLightSrc } from './lighting.js';
+import { playerLightSrc, parkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
 import { degradeRefraction, reduceRefraction } from './world/water.js';
@@ -184,7 +184,9 @@ function degradeQuality() {
   if (degradeStage === 2) {
     setVolumetrics(false);
     if (n8aoPass) { composer.removePass(n8aoPass); n8aoPass = null; }
-    console.info('ABYSSA: perf tier 2 — volumetrics and AO off');
+    // The sun shadow is raft-only cosmetics; it goes long before transparency does.
+    parkSunShadow();
+    console.info('ABYSSA: perf tier 2 — volumetrics, AO and sun shadow off');
     return false;
   }
   degradeRefraction();
