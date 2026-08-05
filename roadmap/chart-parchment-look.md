@@ -12,5 +12,7 @@ The in-game paper chart: warmth, size, drop shadow, and the one authored margin 
 - The margin line WHAT SLEEPS WILL WAKE FOR NOISE is the only authored copy beyond YOU RIDE HERE — delete if it oversteps.
 - Check the two conditions lines clear each other at narrow widths.
 
+- Acceptance: Michael judges warmth/size/shadow/margin-line on his monitor; each keeps or changes by his word.
+
 ## Log
 - 2026-08-05 — created; overlay verified structurally + visually in pane

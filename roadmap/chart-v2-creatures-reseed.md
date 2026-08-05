@@ -9,5 +9,7 @@ Schools and jellies are identical everywhere; V1 deliberately skipped them.
 ## Detail
 [risk]'s audit: mid-water Y-band placement means nothing breaks unseeded — it just repeats. Reseed = same pattern as flora (seed streams + dispose/rebuild), lower stakes.
 
+- Acceptance: Schools/jellies differ per site, deterministic per seed, zero recompiles in the reseed soak.
+
 ## Log
 - 2026-08-05 — deliberate V1 cut

@@ -10,5 +10,7 @@ Pale shrimp and crabs swarming the chimneys — the boiler room inhabited, not j
 Pattern: creatures.js boid/instancing idioms; swarm anchors at the 12 active chimney positions (vents.js `activeVents`).
 Tone: pale, small, dense near throats — life that eats the heat. No glow.
 
+- Acceptance: Swarms visible at every active chimney, dense near throats, zero glow, no measurable frame cost at the floor.
+
 ## Log
 - 2026-08-05 — agreed as next after the boiler room shipped

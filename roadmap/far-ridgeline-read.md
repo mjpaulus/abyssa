@@ -10,5 +10,7 @@ Does the W2 rampart read against the rim? 4.5% vs 13.1% transmittance — measur
 `RAM_H` in `src/world/terrain.js` (currently 66) is the lever if too faint on a real monitor.
 Also of note: the rampart breaches the surface in places — distant 'islands' on the horizon from the deck. Looks intentional; confirm you like it.
 
+- Acceptance: Michael judges the horizon from mid-water and from the deck; RAM_H moves or stays; islands blessed or cut.
+
 ## Log
 - 2026-08-05 — carried from W2; islands observation added during the raft round

@@ -10,6 +10,8 @@ V1: the chart records history but sleepers re-wake per visit. Keep as ritual, or
 Design question, then small build. Persisting needs makeLeviathan to boot calmed (sigils lit, `calmed=true`) — modest leviathan surgery.
 The ritual reading: the sleepers stir again when you leave; the chart remembers that you HAVE calmed them, the water does not.
 
+- Acceptance: Michael rules ritual (re-wake) or persistence; if persistence, a follow-up card scopes the leviathan boot-calmed work.
+
 ## Log
 - 2026-08-05 — deferred deliberately at phase 4; user call pending
 - 2026-08-05 — moved next -> decision; the generic columns made it obvious this is blocked on the user, not queued work
