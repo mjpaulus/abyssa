@@ -25,6 +25,7 @@ import { buildHull } from './raft/hull.js';
 import { buildStation } from './raft/station.js';
 import { buildGear } from './raft/gear.js';
 import { buildDavit } from './raft/davit.js';
+import { buildChart } from './raft/chart.js';
 import { buildPump, updatePump, PUMP_POS } from './raft/pump.js';
 
 export const raft = new THREE.Group();
@@ -42,6 +43,8 @@ export const RAFT_POS = V3(0, SURFACE_Y + 0.55, 0);
 const hoseHead = V3();
 // Where the umbilical leaves the pump.
 export const pumpPos = V3();
+// Raft-local standing spot in front of the chart table (world = raft.localToWorld of this).
+export const chartAnchor = V3();
 
 let pumpH = null, lampGlass = null, beaconGlow = null, lamp = null, lampLight = null;
 const PUFFN = 7, puffs = [];
@@ -173,6 +176,9 @@ export function buildRaft() {
   buildHull(raft, mats);
   buildStation(raft, mats);
   buildGear(raft, mats);
+  // The chart table (port side, aft of the dressing station): THE CHART's physical
+  // home. Its anchor is where game.js centres the [E] CONSULT prompt.
+  chartAnchor.copy(buildChart(raft, mats).anchor);
 
   const P = Part(raft);
   buildReel(P, mats, hoseHead);

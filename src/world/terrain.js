@@ -4,6 +4,7 @@ import { scene } from '../core.js';
 import { WORLD_R, RIFT_R, zoneBottom, riftPos, SUN_ELEV_DEG } from '../config.js';
 import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textures.js';
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
+import { siteParams } from './site.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -114,6 +115,26 @@ const RIM_KH = [
   [ 0.57, -0.22,  0.33,  0.41, -0.15,  0.26],
   [-0.48,  0.34,  0.45, -0.20,  0.31,  0.12]
 ];
+
+// THE CHART owns the per-zone domain offsets and the rim harmonic rows now. The
+// literals above stay as the module's resting state, but the truth is whatever site
+// is current: syncSite copies the active site's rows over them IN PLACE, so terrainH
+// keeps reading the same objects it always has — no per-call registry lookup on the
+// hottest function in the game, and no stale captured copies either, because every
+// caller reaches these tables through the module scope. Site 0's registry rows are
+// verbatim copies of the literals, so the shipped world survives bit-identical.
+// Amplitudes, frequencies and the mesh itself never vary by site — only where in the
+// infinite noise field each zone looks, and which skyline harmonics it wears.
+function syncSite() {
+  const t = siteParams().terra;
+  for (let zi = 0; zi < 3; zi++) {
+    ZP[zi].ox = t.off[zi][0];
+    ZP[zi].oz = t.off[zi][1];
+    const kr = t.rimKR[zi], kh = t.rimKH[zi];
+    for (let k = 0; k < 6; k++) { RIM_KR[zi][k] = kr[k]; RIM_KH[zi][k] = kh[k]; }
+  }
+}
+syncSite();
 
 // Second ridgeline. Zero new triangles: the graded axisMap already samples out here.
 const RAM_IN = 340, RAM_PK = 410, RAM_OUT = 540, RAM_H = 66;
@@ -230,13 +251,15 @@ export function terrainH(x, z, zi) {
 // Sal at y=-118 in open water partway up a cliff face. Index 128 duplicates
 // index 0 so the consumer's lerp never needs a wrap branch.
 // ---------------------------------------------------------------------------
-export const clampR = [];   // 3 x Float32Array(129), filled by buildTerrain
+export const clampR = [];   // 3 x Float32Array(129), filled by fillTerrain
 
 const CLAMP_N = 128, CLAMP_MIN = 235, CLAMP_MAX = 305, RIM_FOOT_RISE = 30;
 
 function buildClampTable() {
   for (let zi = 0; zi < 3; zi++) {
-    const t = new Float32Array(CLAMP_N + 1);
+    // Refill in place on reseed: player.js holds these exact arrays by reference,
+    // so a fresh allocation here would strand it clamping against the old site.
+    const t = clampR[zi] || (clampR[zi] = new Float32Array(CLAMP_N + 1));
     for (let bi = 0; bi < CLAMP_N; bi++) {
       const a = (bi / CLAMP_N) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
       // Basin reference at r=150: far enough out to be past the rift funnel, far
@@ -268,7 +291,6 @@ function buildClampTable() {
       t[bi] = raw[bi] * 0.5 + (p + q) * 0.25;
     }
     t[CLAMP_N] = t[0];
-    clampR.push(t);
   }
 }
 
@@ -610,16 +632,59 @@ const shellMats = [shellMat(0x0d1416), shellMat(0x121612)];
 const SEG = 288, HALF = 560;
 const axisMap = u => HALF * (0.432 * u + 0.568 * u * u * u);
 
-export function buildTerrain() {
-  buildClampTable();   // ~4.7k terrainH calls, vs the 250k the meshes below do
+// The axis samples are pure topology — site changes never move a vertex in XZ, only
+// in height — so they are computed once and shared by every fill.
+const AX = (() => {
+  const n = SEG + 1, a = new Float32Array(n);
+  for (let i = 0; i < n; i++) a[i] = axisMap((i / SEG) * 2 - 1);
+  return a;
+})();
 
-  const n = SEG + 1, ax = new Float32Array(n);
-  for (let i = 0; i < n; i++) ax[i] = axisMap((i / SEG) * 2 - 1);
+// Topology once, heights per site. buildTerrain allocates the geometries and puts the
+// meshes in the scene — that half must never run twice, because player.js and the
+// render list hold the mesh and attribute references. fillTerrain owns everything the
+// height functions derive and is the reseed entry point: setSite(i) then fillTerrain()
+// under the black screen re-floors the basin in place.
+export function buildTerrain() {
+  if (terrainMeshes.length) { fillTerrain(); return; }
 
   for (let zi = 0; zi < 3; zi++) {
     // PlaneGeometry is used for its index/attribute topology only; every position is rewritten.
     const g = new THREE.PlaneGeometry(1, 1, SEG, SEG);
     g.rotateX(-Math.PI / 2);
+    g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3), 3));
+    const tm = new THREE.Mesh(g, zoneMats[zi]);
+    tm.receiveShadow = true;
+    scene.add(tm);
+    terrainMeshes.push(tm);
+
+    // Roof shell topology: built here (not lazily) so its material is in the scene
+    // before the boot precompile and first sight never hitches.
+    if (zi < 2) {
+      const q = SEG / SHELL_STEP;
+      const sg = new THREE.PlaneGeometry(1, 1, q, q);
+      sg.rotateX(-Math.PI / 2);
+      const sm = new THREE.Mesh(sg, shellMats[zi]);
+      sm.visible = false;               // updateTerrain gates it; warmUp un-hides for compile
+      scene.add(sm);
+      roofShells.push(sm);
+    }
+  }
+
+  fillTerrain();
+}
+
+// Everything downstream of terrainH, recomputed for the current site. Safe and
+// complete to call again: every array it touches is refilled end to end, nothing is
+// reallocated, and the temporaries below are load-time cost, not per-frame cost.
+export function fillTerrain() {
+  syncSite();
+  buildClampTable();   // ~4.7k terrainH calls, vs the 250k the meshes below do
+
+  const n = SEG + 1, ax = AX;
+
+  for (let zi = 0; zi < 3; zi++) {
+    const g = terrainMeshes[zi].geometry;
     const P = g.attributes.position.array, N = g.attributes.position.count;
     const H = new Float32Array(N), B = ZB[zi];
 
@@ -660,7 +725,7 @@ export function buildTerrain() {
       }
     }
 
-    const col = new Float32Array(N * 3);
+    const col = g.attributes.color.array;
     for (let j = 0, i = 0; j < n; j++) for (let k = 0; k < n; k++, i++) {
       const a = c01(ao[i]);
       col[i * 3] = 0.18 + 0.82 * a * a;
@@ -671,24 +736,18 @@ export function buildTerrain() {
       col[i * 3 + 2] = c01((H[i] - B - 2) / 220);
     }
 
-    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.attributes.position.needsUpdate = true;
     g.attributes.normal.needsUpdate = true;
+    g.attributes.color.needsUpdate = true;
     g.computeBoundingSphere();
-
-    const tm = new THREE.Mesh(g, zoneMats[zi]);
-    tm.receiveShadow = true;
-    scene.add(tm);
-    terrainMeshes.push(tm);
 
     // Roof shell: subsample the H array just computed — SEG = 288 and 288/3 = 96
     // exactly, so a 97x97 stride-3 pick lands on real grid points. Zero extra
-    // terrainH calls, and building it here (not lazily) is what puts its material
-    // in the scene before the boot precompile, so first sight never hitches.
+    // terrainH calls; the geometry is the one buildTerrain allocated, resampled in
+    // place so the mesh the scene already holds follows the new floor.
     if (zi < 2) {
-      const q = SEG / SHELL_STEP, m = q + 1;
-      const sg = new THREE.PlaneGeometry(1, 1, q, q);
-      sg.rotateX(-Math.PI / 2);
+      const m = SEG / SHELL_STEP + 1;
+      const sg = roofShells[zi].geometry;
       const SP = sg.attributes.position.array;
       for (let j = 0, i = 0; j < m; j++) for (let k = 0; k < m; k++, i++) {
         SP[i * 3] = ax[k * SHELL_STEP];
@@ -697,10 +756,6 @@ export function buildTerrain() {
       }
       sg.attributes.position.needsUpdate = true;
       sg.computeBoundingSphere();
-      const sm = new THREE.Mesh(sg, shellMats[zi]);
-      sm.visible = false;               // updateTerrain gates it; warmUp un-hides for compile
-      scene.add(sm);
-      roofShells.push(sm);
     }
   }
 }
