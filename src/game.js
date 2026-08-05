@@ -33,6 +33,7 @@ import { buildProps, updateProps, propColliders } from './world/props.js';
 import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world/footfx.js';
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk } from './world/predators.js';
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic } from './world/wrecks.js';
+import { buildVents, updateVents, ventColliders } from './world/vents.js';
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
@@ -50,6 +51,7 @@ buildProps();   // async; props pop in shortly after load, world never blocks on
 buildFootFX();
 buildPredators();
 buildWrecks();
+buildVents();
 initTools();
 initWeather();
 
@@ -299,6 +301,10 @@ addEventListener('click', () => {
 
 // Debug/automation surface used by the visual-review harness.
 Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, diver, scene, survival, setState: s => { state = s; } });
+// Debug: switch the active zone without calming a sleeper — zone gating (terrain floor,
+// predators, leviathan, physics) all key off this, so a teleported probe that skips it
+// gets snapped back up to the previous zone's seabed and reads as a broken teleport.
+window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zone ' + zone; };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
   if (state !== 'play') return 'start the game first';
@@ -341,8 +347,8 @@ function clearCamDistance(from, dir, want, zi) {
     const d = want * (i / STEPS);
     const x = from.x + dir.x * d, y = from.y + dir.y * d, z = from.z + dir.z * d;
     if (y < terrainH(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
-    for (let list = 0; list < 3; list++) {
-    const cols = list === 0 ? rockColliders : list === 1 ? propColliders : wreckColliders;
+    for (let list = 0; list < 4; list++) {
+    const cols = list === 0 ? rockColliders : list === 1 ? propColliders : list === 2 ? wreckColliders : ventColliders;
     for (let k = 0; k < cols.length; k++) {
       const c = cols[k];
       // cheap reject on the dominant axes before the full sphere test
@@ -730,6 +736,7 @@ function update(dt, t) {
   }
 
   // wrecks + relic tools
+  updateVents(dt, t);
   updateWrecks(dt, t);
   const tev = updateTools(dt, t, player);
   if (tev.spearKill) {

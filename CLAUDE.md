@@ -128,6 +128,23 @@ against explicit contracts and reviewed on return.
   floors) → three sleeper silhouette passes keyed to DEPTH → surface → title card.
   `playEnding()` on window = debug jump.
 - `systems/physics.js` — Rapier WASM via CDN, degrades to no-ops if the CDN fails.
+- `world/vents.js` — ZONE 1's identity: THE BOILER ROOM. 17 black smoker chimneys in
+  4 clusters on the zone-1 seabed (deterministic seed 0xB01Ec0DE, rejection-sampled
+  clear of both rifts), merged to ~6 draw calls; dark plume/shimmer particle streams,
+  GPU-side motion. `ventColliders` is list 4 in the camera-probe/push-out loops
+  (game.js + player.js). Hard-won display rules for a lightless zone:
+  - the ember sprites are `fog:false` (per-channel fog turned warm amber TEAL in
+    metres — same lesson as the raft lantern), sit ABOVE the bore rim (recessed, the
+    chimney's own lip depth-tests them away up close), and carry a two-range curve:
+    linear halo to 90 units (zone 1's only wayfinding, like the raft lamp) swelling
+    with distance (murk grows halos), plus a near bore-fire term.
+  - ONE shared PointLight rides the nearest hot throat — never per-vent lights,
+    because changing the scene's LIGHT COUNT recompiles every lit material mid-game.
+    Its gate is linear over 34 units: the camera trails the diver ~10, so squared
+    gates put the light at 6% while Sal stood beside the fire.
+  - `window.gotoZone(i)` (game.js debug) switches zones without calming a sleeper —
+    without it a teleported probe gets floored back to the OLD zone's seabed and
+    reads as a broken teleport.
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own

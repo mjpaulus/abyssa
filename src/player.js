@@ -7,6 +7,7 @@ import { terrainH, terrainNormal, clampR } from './world/terrain.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
+import { ventColliders } from './world/vents.js';
 import { raft } from './systems/raft.js';
 
 export const player = {
@@ -305,8 +306,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // Solid boulders and props: push the diver out of the same spheres the camera avoids,
   // and kill the inward velocity so he slides along the surface instead of jittering.
   const BODY_R = 0.9;
-  for (let list = 0; list < 3; list++) {
-  const cols = list === 0 ? rockColliders : list === 1 ? propColliders : wreckColliders;
+  for (let list = 0; list < 4; list++) {
+  const cols = list === 0 ? rockColliders : list === 1 ? propColliders : list === 2 ? wreckColliders : ventColliders;
   for (let k = 0; k < cols.length; k++) {
     const c = cols[k], rr = c.r + BODY_R;
     const dx = player.pos.x - c.x; if (dx > rr || dx < -rr) continue;
