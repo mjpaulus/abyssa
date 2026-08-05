@@ -1,0 +1,14 @@
+{
+  "title": "ABYSSA — The Working Chart",
+  "project": "~/sc/abyssa",
+  "favicon": "⚓",
+  "artifactUrl": "https://claude.ai/code/artifact/d47d2269-86bf-4277-a2d9-b57bdaf82b00",
+  "userDecisionColumn": "eye",
+  "columns": [
+    { "key": "eye",  "title": "Needs Michael's Eye", "sub": "decisions only you can make — say the word and constants move" },
+    { "key": "wip",  "title": "In the Water",        "sub": "being built right now" },
+    { "key": "next", "title": "Next",                "sub": "agreed, not started" },
+    { "key": "back", "title": "Charted",             "sub": "the backlog, in no order" },
+    { "key": "ship", "title": "Shipped",             "sub": "the pencil takes what is done" }
+  ]
+}

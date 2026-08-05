@@ -207,20 +207,20 @@ against explicit contracts and reviewed on return.
 
 ## THE WORKING CHART (feature board — keep it inked)
 
-`ROADMAP.html` in the repo root is the feature board: source of truth AND artifact
-source in one file. It renders at the artifact URL below, which is THE stable link —
-never mint a new one.
+`roadmap/` is the feature board: ONE MARKDOWN FILE PER CARD, git is the revision
+history, `ROADMAP.html` is GENERATED (never hand-edit it). The `roadmap` skill in
+~/.claude/skills has the full conventions — invoke it. Cards are CONTEXT: read a
+feature's card before working on it; parallel sessions check `status` before
+claiming work.
 
-- Artifact URL: https://claude.ai/code/artifact/d47d2269-86bf-4277-a2d9-b57bdaf82b00
-- WHEN feature state changes (shipped something, started something, a new taste call
-  for the user, a backlog item born or killed): edit the `BOARD` const in
-  ROADMAP.html (move/add/retire cards, bump `inked` + `commit`), republish via the
-  Artifact tool with `url` set to the URL above and favicon "⚓", and commit the file
-  alongside the code change.
-- Column meanings: "Needs Michael's Eye" = decisions ONLY the user can make — never
-  resolve one without his explicit call; "In the Water" = building now; "Next" =
-  agreed not started; "Charted" = backlog; "Shipped" = done (cards take the pencil
-  strike-through automatically).
+- Artifact URL (stable, never mint another): in `roadmap/config.json` artifactUrl.
+- WHEN feature state changes: edit/add the card .md (status = column; append a dated
+  `## Log` line with the why + commit hash; bump `updated`), then
+  `python3 ~/.claude/skills/roadmap/gen.py roadmap`, republish ROADMAP.html via the
+  Artifact tool with `url` from config.json and favicon "⚓", and commit roadmap/ +
+  ROADMAP.html with the code.
+- Cards with `status: eye` are decisions ONLY the user can make — never resolve one
+  without his explicit call; record his words in the log line when he rules.
 
 ## Working model (multi-agent)
 
