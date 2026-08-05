@@ -8,8 +8,18 @@ import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
+import { siteParams } from './site.js';
 
 const TAU = Math.PI * 2;
+
+// Build-scoped random stream (THE CHART's reseed path). buildFlora()/reseedFlora()
+// install a fresh `siteParams('flora').rng` here before touching anything else, so
+// every placement/orientation/scale/shape call below becomes a pure function of the
+// site instead of the latent Math.random() nondeterminism this used to run on.
+// `scatter()` is the one exemption (see its own comment): it keeps lib/math.js's
+// Math.random-backed `rng`, unchanged, for water.js's bubble vents.
+let _fr = Math.random;
+const rr = (a, b) => a + _fr() * (b - a);
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 const _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
 const UP = V3(0, 1, 0), IDQ = new THREE.Quaternion();
@@ -244,9 +254,9 @@ function kelpGeo() {
   for (let i = 0; i < NB; i++) {
     const f = 0.1 + (i / NB) * 0.89, a = i * 2.399;
     // canopy bunching: blades lengthen toward the top, as giant kelp does at the surface
-    const len = 0.85 * (0.45 + 0.75 * f) * rng(0.8, 1.15);
+    const len = 0.85 * (0.45 + 0.75 * f) * rr(0.8, 1.15);
     const g = bladeGeo(len, 0.07, 0.17, len * 0.34);
-    B.add(g, xf(Math.cos(a) * 0.05, f, Math.sin(a) * 0.05, -a, -0.42 + f * 0.75), { t: 'b', ph: Math.random() * TAU, len });
+    B.add(g, xf(Math.cos(a) * 0.05, f, Math.sin(a) * 0.05, -a, -0.42 + f * 0.75), { t: 'b', ph: _fr() * TAU, len });
     g.dispose();
   }
   stipe.dispose();
@@ -262,8 +272,8 @@ function kelpGeo() {
 function grassGeo() {
   const B = new Build();
   for (let i = 0; i < 7; i++) {
-    const a = rng(0, TAU), g = strapGeo(rng(0.6, 1), 0.03, 0.012, rng(0.1, 0.34), 3);
-    B.add(g, xf(Math.cos(a) * 0.04, 0, Math.sin(a) * 0.04, a, rng(-0.22, 0.22)), { ph: Math.random() * TAU });
+    const a = rr(0, TAU), g = strapGeo(rr(0.6, 1), 0.03, 0.012, rr(0.1, 0.34), 3);
+    B.add(g, xf(Math.cos(a) * 0.04, 0, Math.sin(a) * 0.04, a, rr(-0.22, 0.22)), { ph: _fr() * TAU });
     g.dispose();
   }
   return B.done((x, y, z, h, m, o) => {
@@ -283,10 +293,10 @@ function staghornGeo() {
     const n = d === 0 ? 3 : 2;
     for (let i = 0; i < n; i++) {
       const b = base.clone()
-        .multiply(new THREE.Matrix4().makeTranslation(0, len * rng(0.7, 0.97), 0))
-        .multiply(new THREE.Matrix4().makeRotationY(i / n * TAU + rng(0, 1.3)))
-        .multiply(new THREE.Matrix4().makeRotationX(rng(0.35, 0.8)));
-      grow(b, len * rng(0.6, 0.8), rad * 0.68, d + 1);
+        .multiply(new THREE.Matrix4().makeTranslation(0, len * rr(0.7, 0.97), 0))
+        .multiply(new THREE.Matrix4().makeRotationY(i / n * TAU + rr(0, 1.3)))
+        .multiply(new THREE.Matrix4().makeRotationX(rr(0.35, 0.8)));
+      grow(b, len * rr(0.6, 0.8), rad * 0.68, d + 1);
     }
   };
   grow(new THREE.Matrix4(), 0.42, 0.07, 0);
@@ -310,7 +320,7 @@ function fanGeo() {
     if (d >= 3) return;
     const tx = x - Math.sin(ang) * len, ty = y + Math.cos(ang) * len, n = d === 0 ? 3 : 2;
     for (let i = 0; i < n; i++)
-      grow(tx, ty, ang + (i - (n - 1) / 2) * rng(0.34, 0.62), len * rng(0.62, 0.8), w * 0.78, d + 1);
+      grow(tx, ty, ang + (i - (n - 1) / 2) * rr(0.34, 0.62), len * rr(0.62, 0.8), w * 0.78, d + 1);
   };
   grow(0, 0, 0, 0.38, 0.03, 0);
   return B.done((x, y, z, h, m, o) => {
@@ -321,7 +331,7 @@ function fanGeo() {
 }
 
 function brainGeo() {
-  const g = new THREE.SphereGeometry(0.5, 16, 9), p = g.attributes.position, sd = rng(0, 90);
+  const g = new THREE.SphereGeometry(0.5, 16, 9), p = g.attributes.position, sd = rr(0, 90);
   for (let k = 0; k < p.count; k++) {
     let x = p.getX(k), y = p.getY(k), z = p.getZ(k);
     const d = 1 + 0.24 * (n3(x * 5 + sd, y * 5, z * 5 + sd) - 0.5) + 0.1 * (n3(x * 11, y * 11, z * 11) - 0.5);
@@ -340,10 +350,10 @@ function brainGeo() {
 function spongeGeo() {
   const B = new Build();
   for (let i = 0; i < 5; i++) {
-    const a = rng(0, TAU), r = rng(0.02, 0.15), hh = rng(0.45, 1), rad = rng(0.055, 0.1);
+    const a = rr(0, TAU), r = rr(0.02, 0.15), hh = rr(0.45, 1), rad = rr(0.055, 0.1);
     const t = new THREE.CylinderGeometry(rad * 0.92, rad * 0.66, hh, 7, 2, true);
     t.translate(0, hh / 2, 0);
-    B.add(t, xf(Math.cos(a) * r, 0, Math.sin(a) * r, 0, rng(-0.2, 0.2)), { top: hh });
+    B.add(t, xf(Math.cos(a) * r, 0, Math.sin(a) * r, 0, rr(-0.2, 0.2)), { top: hh });
     t.dispose();
   }
   return B.done((x, y, z, h, m, o) => {
@@ -362,11 +372,11 @@ function anemoneGeo() {
   B.add(disc, xf(0, 0.28, 0, 0, 0, 0, 1, 0.4, 1), { t: 'c' });
   for (let i = 0; i < 14; i++) {
     const ring = i < 8 ? 0 : 1, a = (i - (ring ? 8 : 0)) / (ring ? 6 : 8) * TAU + ring * 0.4;
-    const r = ring ? 0.08 : 0.15, len = rng(0.3, 0.5);
-    const g = strapGeo(len, 0.026, 0.006, rng(0.04, 0.18), 3);
-    const m = new THREE.Matrix4().makeRotationY(a).multiply(new THREE.Matrix4().makeRotationX(rng(0.45, 1.15)));
+    const r = ring ? 0.08 : 0.15, len = rr(0.3, 0.5);
+    const g = strapGeo(len, 0.026, 0.006, rr(0.04, 0.18), 3);
+    const m = new THREE.Matrix4().makeRotationY(a).multiply(new THREE.Matrix4().makeRotationX(rr(0.45, 1.15)));
     m.setPosition(Math.sin(a) * r, 0.3, Math.cos(a) * r);
-    B.add(g, m, { t: 't', ph: Math.random() * TAU, bx: Math.sin(a) * r, by: 0.3, bz: Math.cos(a) * r, len });
+    B.add(g, m, { t: 't', ph: _fr() * TAU, bx: Math.sin(a) * r, by: 0.3, bz: Math.cos(a) * r, len });
     g.dispose();
   }
   col.dispose(); disc.dispose();
@@ -410,7 +420,7 @@ function rockGeo(detail, squash, amp) {
   const ico = new THREE.IcosahedronGeometry(1, detail);
   const g = weld(ico);
   ico.dispose();
-  const p = g.attributes.position, sd = rng(0, 90), sd2 = rng(0, 90);
+  const p = g.attributes.position, sd = rr(0, 90), sd2 = rr(0, 90);
   for (let k = 0; k < p.count; k++) {
     let x = p.getX(k), y = p.getY(k), z = p.getZ(k);
     // Shape warp: bend the sphere off-axis before eroding, so no two rocks share a silhouette.
@@ -443,12 +453,12 @@ function seedClusters(zi, n, minR, maxR, seed, thresh, radLo, radHi) {
   const out = [], rp = riftPos(zi);
   let guard = 0;
   while (out.length < n && guard++ < n * 70) {
-    const a = Math.random() * TAU, r = rng(minR, maxR);
+    const a = _fr() * TAU, r = rr(minR, maxR);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
     if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 3) continue;
     if (guard < n * 35 && fbm(x * 0.011 + seed, z * 0.011 - seed) < thresh) continue;
     if (out.some(s => Math.hypot(s[0] - x, s[1] - z) < radLo * 1.05)) continue;
-    out.push([x, z, rng(radLo, radHi)]);
+    out.push([x, z, rr(radLo, radHi)]);
   }
   return out;
 }
@@ -461,9 +471,9 @@ function place(zi, count, seeds, minSlope, maxSlope = 1.01) {
   let lo = minSlope, guard = 0, relaxed = false;
   while (out.length < count && guard++ < count * 40) {
     if (!relaxed && guard > count * 18) { relaxed = true; lo = 1 - (1 - lo) * 2.4; }
-    const s = seeds[(Math.random() * seeds.length) | 0];
-    const a = Math.random() * TAU, u = Math.pow(Math.random(), 0.8);
-    if (Math.random() < u * 0.5) continue;
+    const s = seeds[(_fr() * seeds.length) | 0];
+    const a = _fr() * TAU, u = Math.pow(_fr(), 0.8);
+    if (_fr() < u * 0.5) continue;
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
@@ -527,7 +537,62 @@ function stand(n, blend, yaw) {
 
 const CUR0 = 0.9;
 
-export function buildFlora() {
+// Per-zone material sets, built ONCE and reused across every reseed. Materials (and
+// the texture/env-map refs they hold) are site-INVARIANT — only geometry/placement is
+// re-rolled per site — so keeping them alive is what buys zero shader recompiles on
+// reseed; three.js recompiles a program the first time a NEW material/defines combo
+// hits the GPU, not on repeated use of an existing one.
+let zoneMats = null;
+function buildZoneMats() {
+  return PAL.map(P => ({
+    kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS'] }),
+    grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS'] }),
+    stag: floraMat({ key: 'stag', rough: 0.62, sway: 1, freq: 0.55, cull: 105, glow: P.glow, env: 0.14 }),
+    fan: floraMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.8, cull: 105, sss: 0.55, glow: P.glow, def: ['SSS', 'FAN'] }),
+    brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['GROOVE'] }),
+    sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER'] }),
+    anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS'] }),
+    rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] })
+  }));
+}
+
+// Tears down everything the previous build put in the scene/accumulators, WITHOUT
+// touching zoneMats (site-invariant, see above) or the shared `uni` uniforms object.
+function disposeFlora() {
+  for (let zi = 0; zi < 3; zi++) {
+    const grp = zones[zi];
+    if (!grp) continue;
+    for (const child of grp.children) {
+      // Halo sprites (the bioluminescent-cluster glow) carry a UNIQUE SpriteMaterial
+      // per build (their scale/opacity is placement-derived) — dispose it. Their
+      // geometry is three.js's shared Sprite._geometry singleton; never dispose that.
+      if (child.isSprite) child.material.dispose();
+      // InstancedMesh geometry is `mount()`'s per-zone clone (see mount() below) —
+      // always unique to this build, never shared, always safe/necessary to dispose.
+      else if (child.geometry) child.geometry.dispose();
+    }
+    scene.remove(grp);
+    zones[zi] = null;
+  }
+  // rockColliders' array IDENTITY is a contract with game.js/player.js/predators.js/
+  // physics.js — they hold this reference forever, so truncate in place, never reassign.
+  rockColliders.length = 0;
+  // kelp{} is the other cross-build accumulator this file owns: data/meshes arrays
+  // and the `inst` pointer all describe the build that disposeFlora() just tore down.
+  kelp.data.length = 0;
+  kelp.meshes.length = 0;
+  kelp.inst = null;
+}
+
+function buildOnce() {
+  // Fresh deterministic stream per build (THE CHART's contract): layout, orientation,
+  // scale AND the procedural shapes below (kelp blades, rock erosion, ...) all read
+  // through this one source, so the same site reseeds to the same forest, rock for
+  // rock, bud for bud.
+  const rng = siteParams('flora').rng;
+  _fr = rng;
+  if (!zoneMats) zoneMats = buildZoneMats();
+
   const G = {
     kelp: kelpGeo(), grass: grassGeo(), stag: staghornGeo(), fan: fanGeo(),
     brain: brainGeo(), sponge: spongeGeo(), anem: anemoneGeo(),
@@ -540,17 +605,7 @@ export function buildFlora() {
     const P = PAL[zi];
     zones[zi] = new THREE.Group();
     scene.add(zones[zi]);
-
-    const M = {
-      kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS'] }),
-      grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS'] }),
-      stag: floraMat({ key: 'stag', rough: 0.62, sway: 1, freq: 0.55, cull: 105, glow: P.glow, env: 0.14 }),
-      fan: floraMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.8, cull: 105, sss: 0.55, glow: P.glow, def: ['SSS', 'FAN'] }),
-      brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['GROOVE'] }),
-      sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER'] }),
-      anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS'] }),
-      rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] })
-    };
+    const M = zoneMats[zi];
 
     const forest = seedClusters(zi, 26, 22, WORLD_R * 0.9, zi * 11.3 + 3, 0.40, 11, 24);
     const reef = seedClusters(zi, 24, 16, WORLD_R * 0.92, zi * 7.7 + 31, 0.42, 6, 15);
@@ -562,13 +617,13 @@ export function buildFlora() {
       const L = place(zi, zi === 0 ? 560 : 430, forest, 0.84);
       const im = mount(zi, G.kelp, M.kelp, L.length);
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], under = Math.random() < 0.34;
-        const H = under ? rng(2.6, 6.5) : rng(8, 21) * (0.8 + 0.4 * fbm(p.x * 0.03, p.z * 0.03));
-        const W = under ? rng(1.9, 3.4) : rng(1.1, 2.3);
-        const glow = Math.random() < 0.12 ? rng(0.3, 0.85) : 0;
-        _c.set(P.kelp[i % P.kelp.length]).multiplyScalar(rng(0.55, 1.15));
-        put(im, i, stand(p.n, 0.35, rng(0, TAU)), W, H, p.x, p.y - 0.25, p.z,
-          _c, Math.random() * TAU, H * 0.1 / W, W * W / (2 * H * H) * 0.8, glow);
+        const p = L[i], under = _fr() < 0.34;
+        const H = under ? rr(2.6, 6.5) : rr(8, 21) * (0.8 + 0.4 * fbm(p.x * 0.03, p.z * 0.03));
+        const W = under ? rr(1.9, 3.4) : rr(1.1, 2.3);
+        const glow = _fr() < 0.12 ? rr(0.3, 0.85) : 0;
+        _c.set(P.kelp[i % P.kelp.length]).multiplyScalar(rr(0.55, 1.15));
+        put(im, i, stand(p.n, 0.35, rr(0, TAU)), W, H, p.x, p.y - 0.25, p.z,
+          _c, _fr() * TAU, H * 0.1 / W, W * W / (2 * H * H) * 0.8, glow);
         kelp.data.push({ p: V3(p.x, p.y, p.z), h: H, zi });
       }
       seal(im, L.length);
@@ -580,22 +635,22 @@ export function buildFlora() {
       const L = place(zi, [2600, 1500, 900][zi], turf, 0.72);
       const im = mount(zi, G.grass, M.grass, L.length);
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], H = rng(0.9, 2.8), W = rng(0.9, 1.8);
-        _c.set((Math.random() < 0.5 ? P.turfWarm : P.kelp)[(i + 1) % 4]).multiplyScalar(rng(0.45, 0.95));
-        put(im, i, stand(p.n, 0.6, rng(0, TAU)), W, H, p.x, p.y - 0.1, p.z,
-          _c, Math.random() * TAU, H * 0.16 / W, 0.2, Math.random() < 0.07 ? rng(0.2, 0.6) : 0);
+        const p = L[i], H = rr(0.9, 2.8), W = rr(0.9, 1.8);
+        _c.set((_fr() < 0.5 ? P.turfWarm : P.kelp)[(i + 1) % 4]).multiplyScalar(rr(0.45, 0.95));
+        put(im, i, stand(p.n, 0.6, rr(0, TAU)), W, H, p.x, p.y - 0.1, p.z,
+          _c, _fr() * TAU, H * 0.16 / W, 0.2, _fr() < 0.07 ? rr(0.2, 0.6) : 0);
       }
       seal(im, L.length);
     }
     // ---- reef: staghorn / fans / brain / sponges / anemones ----
-    const reefCol = i => _c.set(P.reef[i % P.reef.length]).multiplyScalar(rng(0.55, 1.1));
+    const reefCol = i => _c.set(P.reef[i % P.reef.length]).multiplyScalar(rr(0.55, 1.1));
     {
       const L = place(zi, 220, reef, 0.7);
       const im = mount(zi, G.stag, M.stag, L.length, true);
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], S = rng(1.1, 4.2);
-        put(im, i, stand(p.n, 0.5, rng(0, TAU)), S, S * rng(0.8, 1.4), p.x, p.y - S * 0.12, p.z,
-          reefCol(i), Math.random() * TAU, 0.6 / S, 0.35, Math.random() < 0.14 ? rng(0.3, 0.8) : 0);
+        const p = L[i], S = rr(1.1, 4.2);
+        put(im, i, stand(p.n, 0.5, rr(0, TAU)), S, S * rr(0.8, 1.4), p.x, p.y - S * 0.12, p.z,
+          reefCol(i), _fr() * TAU, 0.6 / S, 0.35, _fr() < 0.14 ? rr(0.3, 0.8) : 0);
       }
       seal(im, L.length);
     }
@@ -604,10 +659,10 @@ export function buildFlora() {
       const im = mount(zi, G.fan, M.fan, L.length);
       const yaw = Math.atan2(Math.cos(CUR0), Math.sin(CUR0));
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], S = rng(1.4, 5);
-        put(im, i, stand(p.n, 0.4, yaw + rng(-0.45, 0.45) + (Math.random() < 0.5 ? Math.PI : 0)),
-          S * rng(0.85, 1.25), S, p.x, p.y - S * 0.06, p.z,
-          reefCol(i + 2), Math.random() * TAU, 0.35 / S, 0.3, Math.random() < 0.12 ? rng(0.25, 0.7) : 0);
+        const p = L[i], S = rr(1.4, 5);
+        put(im, i, stand(p.n, 0.4, yaw + rr(-0.45, 0.45) + (_fr() < 0.5 ? Math.PI : 0)),
+          S * rr(0.85, 1.25), S, p.x, p.y - S * 0.06, p.z,
+          reefCol(i + 2), _fr() * TAU, 0.35 / S, 0.3, _fr() < 0.12 ? rr(0.25, 0.7) : 0);
       }
       seal(im, L.length);
     }
@@ -615,9 +670,9 @@ export function buildFlora() {
       const L = place(zi, 110, reef, 0.72);
       const im = mount(zi, G.brain, M.brain, L.length, true);
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], S = rng(1.3, 4.6);
-        put(im, i, stand(p.n, 0.75, rng(0, TAU)), S, S * rng(0.75, 1.1), p.x, p.y - S * 0.16, p.z,
-          reefCol(i + 1), Math.random() * TAU, 0, 0, Math.random() < 0.3 ? rng(0.1, 0.45) : 0);
+        const p = L[i], S = rr(1.3, 4.6);
+        put(im, i, stand(p.n, 0.75, rr(0, TAU)), S, S * rr(0.75, 1.1), p.x, p.y - S * 0.16, p.z,
+          reefCol(i + 1), _fr() * TAU, 0, 0, _fr() < 0.3 ? rr(0.1, 0.45) : 0);
       }
       seal(im, L.length);
     }
@@ -625,9 +680,9 @@ export function buildFlora() {
       const L = place(zi, 110, reef, 0.72);
       const im = mount(zi, G.sponge, M.sponge, L.length);
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], S = rng(1.2, 3.6);
-        put(im, i, stand(p.n, 0.55, rng(0, TAU)), S, S * rng(1, 2), p.x, p.y - S * 0.08, p.z,
-          reefCol(i + 3), Math.random() * TAU, 0.3 / S, 0.3, Math.random() < 0.18 ? rng(0.3, 0.9) : 0);
+        const p = L[i], S = rr(1.2, 3.6);
+        put(im, i, stand(p.n, 0.55, rr(0, TAU)), S, S * rr(1, 2), p.x, p.y - S * 0.08, p.z,
+          reefCol(i + 3), _fr() * TAU, 0.3 / S, 0.3, _fr() < 0.18 ? rr(0.3, 0.9) : 0);
       }
       seal(im, L.length);
     }
@@ -636,11 +691,11 @@ export function buildFlora() {
       const L = place(zi, 190, reef, 0.74);
       const im = mount(zi, G.anem, M.anem, L.length);
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], S = rng(0.7, 2.4);
-        const glow = Math.random() < 0.35 ? rng(0.4, 1.2) : 0;
+        const p = L[i], S = rr(0.7, 2.4);
+        const glow = _fr() < 0.35 ? rr(0.4, 1.2) : 0;
         if (glow > 0.9 && lit.length < 6) lit.push([p, S]);
-        put(im, i, stand(p.n, 0.7, rng(0, TAU)), S, S * rng(0.85, 1.2), p.x, p.y - S * 0.1, p.z,
-          reefCol(i + 2), Math.random() * TAU, 0.25 / S, 0.3, glow);
+        put(im, i, stand(p.n, 0.7, rr(0, TAU)), S, S * rr(0.85, 1.2), p.x, p.y - S * 0.1, p.z,
+          reefCol(i + 2), _fr() * TAU, 0.25 / S, 0.3, glow);
       }
       seal(im, L.length);
     }
@@ -656,9 +711,9 @@ export function buildFlora() {
       const L = place(zi, cnt, field.concat(reef), 0.42);
       const im = mount(zi, geo, M.rock, L.length, true);
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], S = rng(sLo, sHi) * (0.7 + 0.9 * fbm(p.x * 0.05 + 9, p.z * 0.05));
-        _c.set(P.rock).multiplyScalar(rng(0.7, 1.25));
-        put(im, i, stand(p.n, 0.85, rng(0, TAU)), S * rng(0.85, 1.3), S * rng(0.7, 1.1),
+        const p = L[i], S = rr(sLo, sHi) * (0.7 + 0.9 * fbm(p.x * 0.05 + 9, p.z * 0.05));
+        _c.set(P.rock).multiplyScalar(rr(0.7, 1.25));
+        put(im, i, stand(p.n, 0.85, rr(0, TAU)), S * rr(0.85, 1.3), S * rr(0.7, 1.1),
           p.x, p.y - S * sq, p.z, _c, 0, 0, 0, 0);
         if (S >= 2) rockColliders.push({ x: p.x, y: p.y - S * sq + S * 0.45, z: p.z, r: S * 0.95 });
       }
@@ -669,18 +724,18 @@ export function buildFlora() {
       const im = mount(zi, G.r2, M.rock, L.length + 60, true);
       let i = 0;
       for (const p of L) {
-        const S = rng(8, 20);
-        _c.set(P.rock).multiplyScalar(rng(0.75, 1.1));
-        put(im, i++, stand(p.n, 0.6, rng(0, TAU)), S * rng(0.8, 1.25), S * rng(0.55, 0.95),
+        const S = rr(8, 20);
+        _c.set(P.rock).multiplyScalar(rr(0.75, 1.1));
+        put(im, i++, stand(p.n, 0.6, rr(0, TAU)), S * rr(0.8, 1.25), S * rr(0.55, 0.95),
           p.x, p.y - S * 0.36, p.z, _c, 0, 0, 0, 0);
         rockColliders.push({ x: p.x, y: p.y - S * 0.36 + S * 0.4, z: p.z, r: S * 0.9 });
         // bed the landmark in with debris so it never reads as a floating prop
         for (let k = 0; k < 6 && i < L.length + 60; k++) {
-          const a = rng(0, TAU), r = S * rng(0.7, 1.35), x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
+          const a = rr(0, TAU), r = S * rr(0.7, 1.35), x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
           if (nearWreck(zi, x, z)) continue;
-          const s2 = S * rng(0.08, 0.22);
-          _c.set(P.rock).multiplyScalar(rng(0.6, 1.1));
-          put(im, i++, stand(terrainNormal(x, z, zi), 0.85, rng(0, TAU)), s2 * 1.2, s2,
+          const s2 = S * rr(0.08, 0.22);
+          _c.set(P.rock).multiplyScalar(rr(0.6, 1.1));
+          put(im, i++, stand(terrainNormal(x, z, zi), 0.85, rr(0, TAU)), s2 * 1.2, s2,
             x, terrainH(x, z, zi) - s2 * 0.4, z, _c, 0, 0, 0, 0);
         }
       }
@@ -688,6 +743,22 @@ export function buildFlora() {
     }
   }
   for (const g of Object.values(G)) g.dispose();
+}
+
+// First boot: identical path to every prior version of this file (buildZoneMats()
+// runs once here since zoneMats starts null; there is nothing yet to dispose).
+export function buildFlora() {
+  buildOnce();
+}
+
+// THE CHART's reseed hook: called when the player sails to another dive site, under
+// the black screen, after terrain has already re-sampled. Tear down this build's
+// geometry/instances/accumulators, keep the site-invariant materials, roll a fresh
+// site-seeded stream, rebuild. Terrain reseeds itself (fillTerrain() in terrain.js);
+// this is flora's half of the same contract.
+export function reseedFlora() {
+  disposeFlora();
+  buildOnce();
 }
 
 export function updateFlora(dt, t) {

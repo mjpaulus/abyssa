@@ -12,9 +12,16 @@
 //
 // Contract with game.js:
 //   buildWrecks()             — once at world build.
+//   reseedWrecks(toolsOwned)  — THE CHART: dispose + rebuild against the site current at
+//                               call time. toolsOwned = {sonar,spear,thruster} booleans;
+//                               a relic whose tool is already owned builds pre-taken.
+//                               wreckColliders is emptied and repushed IN PLACE (game.js/
+//                               player.js hold the array reference, not a copy).
 //   updateWrecks(dt, t)       — ambient animation (sway, dust, glow).
 //   wreckColliders            — array of {x,y,z,r} spheres, same shape as rockColliders;
 //                               game.js adds them to the camera probe and player push-out.
+//   wreckSites()              — the 3 site records (flora's exclusion read); returns the
+//                               NEW sites once reseedWrecks has run.
 //   nearRelic(pos)            — {zi, tool} if the player is within reach of an untaken
 //                               relic ('sonar'|'spear'|'thruster'), else null.
 //   takeRelic(zi)             — claims it (hides the relic prop, plays local VFX); returns
@@ -27,6 +34,7 @@ import { rng, clamp, fbm, V3 } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { player } from '../player.js';
+import { siteParams } from './site.js';
 
 const TAU = Math.PI * 2;
 const UP = V3(0, 1, 0);
@@ -167,8 +175,15 @@ function siltify(m, zi, sway) {
   return m;
 }
 
+// Height maps AND the material sets built from them are site-invariant — a reseed
+// changes the floor and the decorative rng, never the hull's paint. Cache both per zone
+// so reseedWrecks rebuilds geometry only: zero texture regeneration, zero shader
+// recompiles (customProgramCacheKey would dedupe the compile anyway, but reusing the
+// instances outright means there is never a second material to key against).
 let MAPS = null;
+const PALETTES = new Map();
 function palette(zi) {
+  if (PALETTES.has(zi)) return PALETTES.get(zi);
   if (!MAPS) MAPS = { wood: woodMaps(), iron: ironMaps(), brass: brassMaps() };
   const std = o => new THREE.MeshStandardMaterial(o);
   const P = {
@@ -198,6 +213,8 @@ function palette(zi) {
       emissive: 0xffbe6a, emissiveIntensity: 1.5
     })
   };
+  for (const k of ['wood', 'iron', 'brass', 'rope', 'glass', 'lit']) P[k].userData.persist = true;
+  PALETTES.set(zi, P);
   return P;
 }
 
@@ -850,63 +867,121 @@ export function wreckSites() {
 const WRECKS = [];
 let built = false;
 
+const WRECK_SPEC = [
+  { make: skiff, tool: 'sonar', sink: 1.5, tilt: 0.55, glow: 0xffc472, cols: 6 },
+  { make: trawler, tool: 'spear', sink: 2.2, tilt: 0.45, glow: 0xffb060, cols: 8 },
+  { make: submersible, tool: 'thruster', sink: 1.0, tilt: 0.60, glow: 0xff9a52, cols: 5 }
+];
+
 export function buildWrecks() {
   if (built) return;
   built = true;
 
-  const SPEC = [
-    { make: skiff, tool: 'sonar', sink: 1.5, tilt: 0.55, glow: 0xffc472, cols: 6 },
-    { make: trawler, tool: 'spear', sink: 2.2, tilt: 0.45, glow: 0xffb060, cols: 8 },
-    { make: submersible, tool: 'thruster', sink: 1.0, tilt: 0.60, glow: 0xff9a52, cols: 5 }
-  ];
+  // One fresh stream per build, keyed to the current site — layout (which decorative
+  // rng call lands where: crates, worm bore, torn plating, splinters, dust) is a pure
+  // function of the site, never of how many times this has run before. Every rng() and
+  // Math.random() call under the hull builders below already funnels through global
+  // Math.random, so redirecting it for the length of this synchronous build seeds the
+  // whole tree without touching a single call site. Nothing yields inside this call
+  // (no await, no rAF), so no other code can observe the swap.
+  const siteRng = siteParams('wrecks').rng;
+  const origRandom = Math.random;
+  Math.random = siteRng;
+  try {
+    for (let zi = 0; zi < 3; zi++) {
+      const S = WRECK_SPEC[zi];
+      const site = wreckSites()[zi].site;
+      const M = palette(zi);
+      const W = S.make(M);
 
-  for (let zi = 0; zi < 3; zi++) {
-    const S = SPEC[zi];
-    const site = wreckSites()[zi].site;
-    const M = palette(zi);
-    const W = S.make(M);
+      const g = new THREE.Group();
+      g.add(W.root);
+      g.position.set(site.x, site.y - S.sink, site.z);
+      // settle into the silt: partially align with the ground so she lies with the slope
+      const n = terrainNormal(site.x, site.z, zi);
+      _q.setFromUnitVectors(UP, n).slerp(IDQ, 1 - S.tilt);
+      g.quaternion.copy(_q.multiply(_q2.setFromAxisAngle(UP, zi * 2.1 + 0.6)));
+      g.visible = false;
+      scene.add(g);
 
-    const g = new THREE.Group();
-    g.add(W.root);
-    g.position.set(site.x, site.y - S.sink, site.z);
-    // settle into the silt: partially align with the ground so she lies with the slope
-    const n = terrainNormal(site.x, site.z, zi);
-    _q.setFromUnitVectors(UP, n).slerp(IDQ, 1 - S.tilt);
-    g.quaternion.copy(_q.multiply(_q2.setFromAxisAngle(UP, zi * 2.1 + 0.6)));
-    g.visible = false;
-    scene.add(g);
+      // relic marker + burst, parented to the wreck so they inherit the settle transform
+      // Marker and burst share the relic's own parent frame, so they follow whatever
+      // transform the hull section they sit on already carries.
+      const host = W.relic.parent;
+      const marker = relicMarker(S.glow);
+      marker.position.copy(W.relic.position).y += 0.5;
+      host.add(marker);
+      const burst = burstFX(S.glow);
+      burst.position.copy(W.relic.position);
+      host.add(burst);
 
-    // relic marker + burst, parented to the wreck so they inherit the settle transform
-    // Marker and burst share the relic's own parent frame, so they follow whatever
-    // transform the hull section they sit on already carries.
-    const host = W.relic.parent;
-    const marker = relicMarker(S.glow);
-    marker.position.copy(W.relic.position).y += 0.5;
-    host.add(marker);
-    const burst = burstFX(S.glow);
-    burst.position.copy(W.relic.position);
-    host.add(burst);
+      // world-space relic position, for the cheap per-frame proximity test
+      g.updateMatrixWorld(true);
+      const wp = W.relic.getWorldPosition(new THREE.Vector3());
 
-    // world-space relic position, for the cheap per-frame proximity test
-    g.updateMatrixWorld(true);
-    const wp = W.relic.getWorldPosition(new THREE.Vector3());
+      // hull colliders, authored in the wreck's local frame then baked to world
+      const LOC = [
+        [[-6, 2.6, 0, 3.4], [-1.5, 2.4, 0, 3.2], [3, 2.2, 0, 3.0], [7, 1.8, 0, 2.4], [-3.0, 0.4, 5.4, 1.2], [5.0, 1.4, 1.6, 1.6]],
+        [[8.6, 3.6, -0.8, 3.6], [4.0, 3.4, -0.6, 3.6], [0.4, 3.2, 0.4, 2.6], [-4.4, 3.6, 0.9, 3.8], [-9.0, 3.8, 1.4, 3.6],
+         [-6.0, 6.0, 1.1, 2.4], [-9.3, 8.4, 1.5, 1.6], [-12.6, 2.6, 1.1, 2.0]],
+        [[0, 0.4, 0.3, 3.1], [0, 0.1, -3.2, 1.9], [0, -0.3, -6.4, 1.8], [0, 3.7, 0.2, 1.2], [0, -0.6, -8.6, 1.5]]
+      ][zi];
+      for (const [lx, ly, lz, lr] of LOC) {
+        _v.set(lx, ly, lz).applyMatrix4(g.matrixWorld);
+        wreckColliders.push({ x: _v.x, y: _v.y, z: _v.z, r: lr });
+      }
 
-    // hull colliders, authored in the wreck's local frame then baked to world
-    const LOC = [
-      [[-6, 2.6, 0, 3.4], [-1.5, 2.4, 0, 3.2], [3, 2.2, 0, 3.0], [7, 1.8, 0, 2.4], [-3.0, 0.4, 5.4, 1.2], [5.0, 1.4, 1.6, 1.6]],
-      [[8.6, 3.6, -0.8, 3.6], [4.0, 3.4, -0.6, 3.6], [0.4, 3.2, 0.4, 2.6], [-4.4, 3.6, 0.9, 3.8], [-9.0, 3.8, 1.4, 3.6],
-       [-6.0, 6.0, 1.1, 2.4], [-9.3, 8.4, 1.5, 1.6], [-12.6, 2.6, 1.1, 2.0]],
-      [[0, 0.4, 0.3, 3.1], [0, 0.1, -3.2, 1.9], [0, -0.3, -6.4, 1.8], [0, 3.7, 0.2, 1.2], [0, -0.6, -8.6, 1.5]]
-    ][zi];
-    for (const [lx, ly, lz, lr] of LOC) {
-      _v.set(lx, ly, lz).applyMatrix4(g.matrixWorld);
-      wreckColliders.push({ x: _v.x, y: _v.y, z: _v.z, r: lr });
+      WRECKS.push({
+        zi, grp: g, tool: S.tool, marker, burst, relic: W.relic,
+        pos: wp, taken: false, burstT: 2, ph: zi * 2.1
+      });
     }
+  } finally {
+    Math.random = origRandom;
+  }
+}
 
-    WRECKS.push({
-      zi, grp: g, tool: S.tool, marker, burst, relic: W.relic,
-      pos: wp, taken: false, burstT: 2, ph: zi * 2.1
-    });
+// Disposes everything a rebuild would otherwise leak: geometries (every hull is re-carved
+// per site) and per-instance materials (marker sprites, burst/dust shaders — none of them
+// tagged `persist`). The palette materials (wood/iron/brass/rope/glass/lit) and relicGeo
+// carry `persist`/are the shared module-scope primitive, so they survive untouched —
+// disposing a material still in use by the next build would blank every future wreck.
+function disposeGroup(g) {
+  g.traverse(o => {
+    if (o.geometry && o.geometry !== relicGeo) o.geometry.dispose();
+    if (o.material) {
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (const m of mats) if (!m.userData || !m.userData.persist) m.dispose();
+    }
+  });
+}
+
+// THE CHART's reseed path: sail to a new site, the wrecks rebuild on the new floor.
+// toolsOwned = {sonar, spear, thruster} — a relic whose tool is already in hand builds
+// pre-taken (prop hidden from the start, no pickup burst; that burst is reserved for the
+// moment of taking, not for a relic the diver walked in already holding).
+export function reseedWrecks(toolsOwned) {
+  for (const W of WRECKS) {
+    scene.remove(W.grp);
+    disposeGroup(W.grp);
+  }
+  WRECKS.length = 0;
+  wreckColliders.length = 0;   // game.js/player.js hold this array's reference, not a copy
+  SITES = null;                 // wreckSites() must recompute against the new terrain
+  built = false;                 // let buildWrecks() run again through its normal gate
+
+  buildWrecks();
+
+  if (toolsOwned) {
+    for (const W of WRECKS) {
+      if (toolsOwned[W.tool]) {
+        // Reuse takeRelic's hide statements, not the whole function — takeRelic() also
+        // arms the pickup burst, which would fire on a relic nobody just picked up.
+        W.taken = true;
+        W.relic.visible = false;
+        W.marker.visible = false;
+      }
+    }
   }
 }
 

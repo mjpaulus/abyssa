@@ -220,6 +220,20 @@ export function buildRifts() {
   }
 }
 
+// Rift positions never move (riftPos is frozen — THE CHART may not touch it), but a
+// site swap regrows terrain under them, so the group's cached floor height goes stale.
+// Re-seat each rift's y exactly the way buildRifts() first set it, off the CURRENT
+// terrainH; x/z are re-set too (cheap, and keeps this the single source of truth for
+// "where a rift group sits" rather than a delta applied on top of build's own math).
+export function reseatRifts() {
+  for (let zi = 0; zi < 3; zi++) {
+    const R = rifts[zi];
+    if (!R) continue;
+    const rp = riftPos(zi), y = terrainH(rp.x, rp.z, zi) + 2;
+    R.grp.position.set(rp.x, y, rp.z);
+  }
+}
+
 export function updateRifts(dt, t, activeZone, isCalmed) {
   for (let zi = 0; zi < 3; zi++) {
     const R = rifts[zi], isOpen = zi === activeZone && isCalmed;

@@ -2,11 +2,17 @@
 //
 // EXPORTS
 //   buildProps() -> Promise<{ loaded, placed }>
-//     Awaitable. Loads every entry in MANIFEST, scatters it per zone with the same
-//     idioms flora.js uses (terrainH/terrainNormal sampled at placement, rift funnel
-//     kept clear, slope gating), and adds one InstancedMesh per prop per zone.
-//     Missing/failed downloads are skipped silently — an empty assets/props/ yields
-//     an empty world and zero errors.
+//     Awaitable. Loads every entry in MANIFEST (once — cached forever after, see
+//     loadAssets()), scatters it per zone with the same idioms flora.js uses
+//     (terrainH/terrainNormal sampled at placement, rift funnel kept clear, slope
+//     gating), and adds one InstancedMesh per prop per zone. Missing/failed downloads
+//     are skipped silently — an empty assets/props/ yields an empty world and zero
+//     errors.
+//   reseedProps() -> Promise<{ loaded, placed }>
+//     Same contract, for a site change: never re-fetches the glTFs (loadAssets()'s
+//     cache), disposes only the placement products (InstancedMeshes + their per-build
+//     geometry/material clones) and re-places from siteParams('props').rng against the
+//     terrain as it now stands. See run()'s gen token for the load-race guard.
 //   updateProps(dt, t) — per-zone visibility gating plus one uniform write for sway.
 //   propMeshes — the InstancedMeshes created, for diagnostics.
 //   propColliders — [{x,y,z,r}] for props big enough to block the camera (same shape
@@ -19,9 +25,10 @@
 import * as THREE from 'three';
 import { scene, camera, envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
-import { rng, clamp, fbm } from '../lib/math.js';
+import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { loadProp } from '../lib/assets.js';
+import { siteParams } from './site.js';
 
 const TAU = Math.PI * 2;
 const BASE = 'assets/props/';
@@ -104,16 +111,27 @@ function propMat(src, zi, sway) {
   return m;
 }
 
+// ---------------------------------------------------------------------------
+// Deterministic PRNG — mulberry32 via siteParams('props').rng, drawn fresh on every
+// build/reseed (site.js's own stream() factory). `rnd` is a `let` reassigned per
+// build/reseed inside run(), never a counter this module owns, so a reseed can never
+// resume mid-stream from a stale cursor. Site 0's seed is 0x9A11A5E1 and every draw
+// below happens in the exact order the shipped Math.random()-driven version did, so
+// site 0 scatters the SHIPPED field.
+// ---------------------------------------------------------------------------
+let rnd = null;
+const rr = (a, b) => a + rnd() * (b - a);
+
 // ----------------------------------------------------------------- placement --
 function seedClusters(zi, n, minR, maxR, seed) {
   const out = [], rp = riftPos(zi);
   let guard = 0;
   while (out.length < n && guard++ < n * 70) {
-    const a = Math.random() * TAU, r = rng(minR, maxR);
+    const a = rnd() * TAU, r = rr(minR, maxR);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
     if (Math.hypot(x - rp.x, z - rp.z) < RIFT_CLEAR) continue;
     if (guard < n * 35 && fbm(x * 0.011 + seed, z * 0.011 - seed) < 0.34) continue;
-    out.push([x, z, rng(24, 58)]);
+    out.push([x, z, rr(24, 58)]);
   }
   return out;
 }
@@ -126,8 +144,8 @@ function place(zi, count, seeds, minSlope, minGap) {
   let lo = minSlope, gap = minGap, guard = 0, relaxed = false;
   while (out.length < count && guard++ < count * 40) {
     if (!relaxed && guard > count * 18) { relaxed = true; lo = 1 - (1 - lo) * 2.4; gap *= 0.5; }
-    const s = seeds[(Math.random() * seeds.length) | 0];
-    const a = Math.random() * TAU, u = Math.pow(Math.random(), 0.8);
+    const s = seeds[(rnd() * seeds.length) | 0];
+    const a = rnd() * TAU, u = Math.pow(rnd(), 0.8);
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
@@ -151,11 +169,51 @@ export const propColliders = [];
 const zones = [];
 export const propMeshes = [];
 
-export async function buildProps() {
-  const results = await Promise.all(MANIFEST.map(e => loadProp(BASE + e.file).catch(() => null)));
-  const entries = [];
-  for (let i = 0; i < MANIFEST.length; i++) if (results[i]) entries.push({ cfg: MANIFEST[i], prop: results[i] });
+// The glTF load, cached forever: buildProps() and every later reseedProps() share this
+// one promise/result, so a site change never re-fetches or re-merges the assets — only
+// their PLACEMENT (instancing, world positions) is per-build.
+let loadPromise = null;
+function loadAssets() {
+  if (!loadPromise) loadPromise = Promise.all(MANIFEST.map(e => loadProp(BASE + e.file).catch(() => null)))
+    .then(results => {
+      const entries = [];
+      for (let i = 0; i < MANIFEST.length; i++) if (results[i]) entries.push({ cfg: MANIFEST[i], prop: results[i] });
+      return entries;
+    });
+  return loadPromise;
+}
+
+// Dispose only what a build itself produced: the per-node InstancedMesh, its cloned
+// (per-build) geometry and its cloned (per-build, per-zone/sway) material. The cached
+// prop.geometry/prop.material this clones from, and propMat()'s envTex/glowTex, are
+// never touched — reseedProps() never re-fetches or recompiles those.
+function clearPlaced() {
+  for (const im of propMeshes) {
+    if (im.parent) im.parent.remove(im);
+    im.geometry.dispose();
+    im.material.dispose();
+  }
+  propMeshes.length = 0;
+  propColliders.length = 0;   // in place — game.js/player.js hold this exact array reference
+}
+
+// The shared load-then-place pipeline both buildProps() and reseedProps() run. `gen` is
+// a monotonic token: if a reseed is requested while the very first buildProps() is still
+// awaiting the glTF fetch, both calls await the SAME cached loadAssets() promise and both
+// resume — but only the call whose gen is still current when it resumes actually places;
+// the superseded one no-ops (returns placed: 0) rather than racing to scatter twice or
+// clearing what the other just placed. In the ordinary case (assets already cached, no
+// concurrent call) this resolves same-tick and behaves like a plain synchronous rebuild.
+let gen = 0;
+
+async function run() {
+  const myGen = ++gen;
+  const entries = await loadAssets();
+  if (myGen !== gen) return { loaded: entries.length, placed: 0 };
   if (!entries.length) return { loaded: 0, placed: 0 };
+
+  rnd = siteParams('props').rng;   // fresh stream per brief: never reuse one across rebuilds
+  clearPlaced();
 
   let placed = 0;
   for (let zi = 0; zi < 3; zi++) {
@@ -178,18 +236,18 @@ export async function buildProps() {
       const base = PAL[zi][cfg.tint];
       for (let i = 0; i < L.length; i++) {
         const p = L[i];
-        const H = rng(cfg.size[0], cfg.size[1]) * (0.75 + 0.6 * fbm(p.x * 0.05 + 3, p.z * 0.05));
-        const W = H * rng(0.8, 1.3);
+        const H = rr(cfg.size[0], cfg.size[1]) * (0.75 + 0.6 * fbm(p.x * 0.05 + 3, p.z * 0.05));
+        const W = H * rr(0.8, 1.3);
         // Bed every prop slightly into the terrain so none ever reads as floating.
         // cfg.sink beds the prop into the silt (0 = base on the surface)
-        _m.compose(_p.set(p.x, p.y - H * (0.12 + (cfg.sink || 0)), p.z), stand(p.n, cfg.stand, rng(0, TAU)), _s.set(W, H, W));
+        _m.compose(_p.set(p.x, p.y - H * (0.12 + (cfg.sink || 0)), p.z), stand(p.n, cfg.stand, rr(0, TAU)), _s.set(W, H, W));
         im.setMatrixAt(i, _m);
         // Multiply toward the zone mood rather than replacing: keeps the source's
         // own value variation while dropping it into the muted palette.
-        _c.set(base).multiplyScalar(rng(0.85, 1.6));
+        _c.set(base).multiplyScalar(rr(0.85, 1.6));
         im.setColorAt(i, _c);
-        a[i * 2] = Math.random() * TAU;
-        a[i * 2 + 1] = clamp(rng(0.5, 1), 0, 1);
+        a[i * 2] = rnd() * TAU;
+        a[i * 2 + 1] = clamp(rr(0.5, 1), 0, 1);
         if (cfg.collide && H >= cfg.collide) propColliders.push({ x: p.x, y: p.y + H * 0.45, z: p.z, r: Math.max(W, H) * 0.45 });
       }
       im.instanceMatrix.needsUpdate = true;
@@ -202,6 +260,9 @@ export async function buildProps() {
   }
   return { loaded: entries.length, placed };
 }
+
+export function buildProps() { return run(); }
+export function reseedProps() { return run(); }
 
 export function updateProps(dt, t) {
   uni.uTime.value = t;

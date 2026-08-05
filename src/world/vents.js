@@ -19,6 +19,7 @@ import { riftPos } from '../config.js';
 import { clamp, vnoise } from '../lib/math.js';
 import { makeGlow } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
+import { siteParams } from './site.js';
 
 const TAU = Math.PI * 2;
 const ZI = 1;   // zone 1 only, per brief
@@ -26,16 +27,15 @@ const UP = new THREE.Vector3(0, 1, 0);
 const IDQ = new THREE.Quaternion();
 
 // ---------------------------------------------------------------------------
-// Deterministic PRNG — mulberry32, constant seed, same idiom as weather.js. Every
-// session grows the identical field so it can be quoted in a bug report.
+// Deterministic PRNG — mulberry32, drawn fresh per build from siteParams('vents').rng
+// (site.js's own stream() factory, the same mulberry32 body this file used to keep
+// inline). Site 0's seed constant is 0xB01Ec0DE — byte-identical to the fixed seed
+// this module shipped with — and every draw below happens in the exact order it did
+// before this file took a stream instead of owning its own counter, so site 0 grows
+// the SHIPPED field. `rnd` is a `let` reassigned per build/reseed, never the counter
+// itself, so a reseed can never resume mid-stream from a stale cursor.
 // ---------------------------------------------------------------------------
-let sSeed = 0xB01Ec0DE;
-function rnd() {
-  sSeed |= 0; sSeed = (sSeed + 0x6d2b79f5) | 0;
-  let x = Math.imul(sSeed ^ (sSeed >>> 15), 1 | sSeed);
-  x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x;
-  return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
-}
+let rnd = null;
 const rng = (a, b) => a + rnd() * (b - a);
 
 // ---------------------------------------------------------------------------
@@ -235,6 +235,8 @@ let built = false;
 
 const uni = { uTime: { value: 0 }, uVis: { value: 0 }, uFogD: { value: 0.01 } };
 let plumePts = null, shimmerPts = null, ventLight = null;
+let root = null;          // the merged chimney/fumarole/crust group — disposed+regrown on reseed
+let chimneyMat = null;    // the ONE MeshStandardMaterial every solid piece shares — REUSED across reseeds, never recreated (zero recompiles)
 const activeVents = [];   // {x,y,z} throat positions, non-dead
 const hotVents = [];      // {x,y,z,sprite} the 2-3 hottest — shimmer + ember glow
 
@@ -242,7 +244,53 @@ const hotVents = [];      // {x,y,z,sprite} the 2-3 hottest — shimmer + ember 
 export function buildVents() {
   if (built) return;
   built = true;
+  rnd = siteParams('vents').rng;
+  growField();
+}
 
+// Tear down every accumulator this module owns and regrow against the current site +
+// current terrain. The chimney material and the shared PointLight are the two things
+// that must survive untouched (material: zero recompiles; light: scene light-count is
+// fixed for the game's whole life, see the buildVents comment below on ventLight).
+export function reseedVents() {
+  if (!built) { buildVents(); return; }
+
+  if (root) {
+    root.traverse(o => { if (o.isMesh) o.geometry.dispose(); }); // material is chimneyMat — reused, not touched
+    scene.remove(root);
+    root = null;
+  }
+  if (plumePts) {
+    plumePts.geometry.dispose();
+    plumePts.material.dispose();  // cheap ShaderMaterial, no shared textures — safe to recreate
+    scene.remove(plumePts);
+    plumePts = null;
+  }
+  if (shimmerPts) {
+    shimmerPts.geometry.dispose();
+    shimmerPts.material.dispose();
+    scene.remove(shimmerPts);
+    shimmerPts = null;
+  }
+  for (const v of hotVents) {
+    scene.remove(v.sprite);
+    // NEVER dispose v.sprite.material.map: makeGlow() hands out lib/textures.js's
+    // module-level shared glowTex, used by every glow sprite in the game. Only the
+    // per-sprite SpriteMaterial instance is ours to free.
+    v.sprite.material.dispose();
+  }
+  hotVents.length = 0;
+  activeVents.length = 0;
+  ventColliders.length = 0;   // in place — player.js/game.js hold this exact array reference
+
+  rnd = siteParams('vents').rng;   // fresh stream per brief: never reuse one across rebuilds
+  growField();
+}
+
+// The shared placement/plume/shimmer pipeline both buildVents() and reseedVents() run.
+// No `built` guard here — callers own that — and it never touches ventLight, which
+// lives for the whole game.
+function growField() {
   // --- pass 1: cluster centres, deterministic rejection sampling -------------
   const clusters = [];
   for (let ci = 0; ci < N_CLUSTERS; ci++) {
@@ -293,8 +341,12 @@ export function buildVents() {
   const hotSet = new Set(activeIdx.slice(0, 3));
 
   // --- pass 4: build geometry + FX ------------------------------------------
-  const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0.02 });
-  const root = new THREE.Group();
+  // chimneyMat is created once, ever, and reused on every reseed — a fresh material
+  // instance would recompile every mesh that binds it, and reseedVents()'s whole point
+  // is zero recompiles.
+  if (!chimneyMat) chimneyMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0.02 });
+  const mat = chimneyMat;
+  root = new THREE.Group();
   const part = Part(root);
 
   for (let i = 0; i < chimneys.length; i++) {
@@ -345,8 +397,10 @@ export function buildVents() {
   // apart, so no frame can ever see two lit throats missing their light. It is what
   // makes the ember read as FIRE INSIDE ROCK — warm light on the chimney's own flank
   // and the seabed at its foot — instead of a sticker floating on the bore.
-  ventLight = new THREE.PointLight(0xff7a3c, 0, 13, 2.0);
-  scene.add(ventLight);
+  // Created once and NEVER touched again by a reseed: removing/re-adding it would
+  // change the scene's light count for a frame, which recompiles every lit material
+  // in the game — exactly what this module exists to avoid.
+  if (!ventLight) { ventLight = new THREE.PointLight(0xff7a3c, 0, 13, 2.0); scene.add(ventLight); }
 
   buildPlumes();
   buildShimmer();

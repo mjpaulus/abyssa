@@ -13,6 +13,9 @@
 //     }
 //   slash(pos, fwd, range)      — the knife arc landed; kills a squid or spooks a hunter.
 //   deployInk(pos)              — vents a carried sac as a shark-breaking cloud.
+//   reseedDens()                 — call after flora rebuilds (new dive site): every
+//     boulder moved, so octopus dens (picked once at build from flora's rockColliders)
+//     are re-picked against the live pool. Safe to call mid-chase; fires no event.
 //
 // Cost model, mirroring creatures.js: the CPU steers a handful of bodies (1 shark,
 // 3 octopuses, 4 squid in the active zone) and everything expensive — spine
@@ -1632,6 +1635,52 @@ export function switchPredatorZone(zi) {
   if (inkMesh) inkMesh.visible = false;
   for (let i = 0; i < CLOUD_N; i++) clouds[i].life = 0;
   for (let i = 0; i < SAC_N; i++) { sacs[i].alive = false; sacs[i].grp.visible = false; }
+}
+
+// The one stale-state fix a new dive site needs: octopus dens are the only predator
+// state permanently cached against a build-time world position. `pickDens` reads
+// `rockColliders` live (flora refills the same array reference on rebuild, never
+// swaps it), so calling it again here re-picks real, currently-standing boulders.
+//
+// Everything else self-corrects without help: sharks and squid re-sample `terrainH`
+// every frame (see the `floor`/`aFloor`/`ceil` clamps in updateShark/updateSquid), so
+// a shark or squid whose cached `pos` now sits inside or above new terrain is pushed
+// back onto it on the very next tick — no explicit reset needed. Shark patrol centres
+// are a function of live `t`, not a cached point. Ink sacs and vented clouds are
+// runtime pickups spawned at kill/vent positions, not flora-anchored, and are already
+// cleared by switchPredatorZone; reseedDens leaves them alone.
+//
+// Mid-chase safety: this rewrites `den`/`pos`/`mesh.position` and forces the FSM back
+// to 'den' with reach/active/grab decayed to 0 — an octopus that was mid-reach or
+// mid-grab simply lets go and reappears camouflaged at its (new) den, same as a normal
+// cooldown return. `ev` is not touched: it is fully rebuilt every frame at the top of
+// updatePredators, so this reset cannot leak a stale threat/lightSteal tick.
+export function reseedDens() {
+  for (let zi = 0; zi < 3; zi++) {
+    const group = octos.filter(o => o.zi === zi);
+    if (!group.length) continue;
+    const dens = pickDens(zi, group.length);
+    for (let i = 0; i < group.length; i++) {
+      const rock = dens[i];
+      // Pool came up short (fewer big rocks at this site than octopuses built for it) —
+      // same tolerance buildOctopuses already has; leaving this one at its last den is
+      // no worse than the shipped shortfall behaviour.
+      if (!rock) continue;
+      const O = group[i];
+      const scale = O.mesh.scale.x;
+      const a = rng(0, TAU), r = rock.r + scale * 0.75;
+      const x = rock.x + Math.cos(a) * r, z = rock.z + Math.sin(a) * r;
+      const y = terrainH(x, z, zi) + 0.2;
+      O.den.set(x, y, z);
+      O.pos.copy(O.den);
+      O.jet.set(0, 0, 0);
+      O.mesh.position.copy(O.den);
+      octSet(O, 'den');
+      O.cool = rng(3, 12);
+      O.reach = 0; O.active = 0; O.grab = 0;
+      O.u.uReach.value = 0; O.u.uActive.value = 0; O.u.uGrab.value = 0;
+    }
+  }
 }
 
 export function updatePredators(dt, t, p, lanternPos) {
