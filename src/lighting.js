@@ -1,8 +1,17 @@
 // Scene lighting rig. OWNED BY: lighting/post agent.
 import * as THREE from 'three';
 import { scene, camera } from './core.js';
-import { SUN, SURFACE_Y } from './config.js';
+import { SUN, SURFACE_Y, GLASS } from './config.js';
 import { V3, clamp } from './lib/math.js';
+// SKY DRAMA ambience, published by water.js's updateWater: {fog, moon}, both 0..1.
+// Imported rather than wired through game.js because it is a READ of a value water.js
+// already resolves each frame — there is no state here and nothing to keep in sync.
+// The import is one-way (water.js does not import lighting.js) so there is no cycle.
+// A BRIGHT MOON IS NOT A LIGHT. Adding a Light object would change the scene's light
+// count, which recompiles every lit material in the game mid-frame — the same hazard
+// the vents' single shared PointLight exists to avoid. The moon lifts the hemisphere and
+// the ambient, and nothing else.
+import { airAmbience } from './world/water.js';
 
 // THE SUN IS LIVE. This used to be baked from SUN_ELEV_DEG at module load; it is now a
 // mirror of config.js's SUN.dir, rewritten IN PLACE by updateLighting every frame the
@@ -24,6 +33,14 @@ const C = (o, k) => (o['_' + k] || (o['_' + k] = new THREE.Color(o[k])));
 
 // What the hemisphere's two ends become once the camera is out of the water.
 const AIR_SKY = new THREE.Color(0xa8bcc8), AIR_SEA = new THREE.Color(0x2a3a3c);
+// A fog morning has ONE light in it: a bright shadowless lid, the same value in every
+// direction. So both ends of the hemisphere travel to the same near-white and the key
+// light goes away — the flatness IS the effect, and it is why a fog frame reads as fog
+// and not as an overcast one. Cool-neutral, never blue: fog is grey.
+const FOG_LIGHT = new THREE.Color(0xc3c9cc);
+// The moon's colour on the deck. Cool and desaturated — moonlight looks blue because the
+// eye is dark-adapted, not because it is blue.
+const MOON_SKY = new THREE.Color(0x8fa6c8);
 
 export const ambient = new THREE.AmbientLight(0x1b4a54, 0.30);
 scene.add(ambient);
@@ -167,6 +184,32 @@ export function updateLighting(depth01) {
   hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - 0.42 * air);
   mixInto(sun.color, a, b, 'sun', t);
   sun.intensity = mix('sunI') * wk + flashBoost * 2.2;
+
+  // --- SKY DRAMA ambience (air only) ---------------------------------------
+  // Both terms are scaled by `air`, so BELOW THE INTERFACE EVERY FRAME IS UNCHANGED —
+  // the same discipline the AIR_SKY/AIR_SEA travel above follows, and the reason the
+  // underwater regression anchors through this card.
+  const fogK = airAmbience.fog * air;
+  if (fogK > 0.004) {
+    hemi.color.lerp(FOG_LIGHT, fogK * 0.88);
+    hemi.groundColor.lerp(FOG_LIGHT, fogK * 0.62);
+    hemi.intensity *= 1 + 0.38 * fogK;
+    ambient.intensity *= 1 + 0.30 * fogK;
+    // The key is the first casualty of a marine layer: there is no direction left in the
+    // light. This also retires the raft's shadow map on its own through the gate below,
+    // which is correct — a fog morning casts no shadows.
+    sun.intensity *= 1 - 0.86 * fogK;
+  }
+  // A bright moon lifts the night, it does not light it: hemisphere and ambient only,
+  // and only in the top of the column (surf), so the abyss is moon-blind exactly the way
+  // it is weather-blind.
+  const moonK = airAmbience.moon * surf;
+  if (moonK > 0.004) {
+    const lift = 1 + GLASS.moon.hemiLift * moonK;
+    hemi.color.lerp(MOON_SKY, moonK * 0.45 * air);
+    hemi.intensity *= lift;
+    ambient.intensity *= lift;
+  }
   // The shadow map only ever contains the raft, so stop rendering it the moment the
   // camera is deep enough that the raft is a dot, or dark enough that it casts nothing.
   sun.castShadow = !reduced && !sunParked && camera.position.y > -26 && sun.intensity > 0.15;

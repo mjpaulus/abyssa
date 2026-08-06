@@ -7,7 +7,7 @@ import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetric
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
-import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
@@ -634,6 +634,7 @@ function update(dt, t) {
   const wx = updateWeather(dt, t);
   setWeatherLight(wx.day, wx.storm, wx.flash, wx.env);
   setWeatherEnv(wx.env);
+  setWeatherHand(wx.hand, wx.wind);
   setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm), wx.storm);
   setSwell(wx.env.sea, wx.day);
   setStormCurrent(wx.env.below);   // subsurface current lags the sky — weather arrives from above

@@ -114,7 +114,15 @@ export const GLASS = {
       disc: [3.20, 1.75, 0.85], tint: [1.18, 1.00, 0.86], surfK: 0.72, desat: 0
     },
     noon: {
-      zen: [0.090, 0.155, 0.310], hor: [0.620, 0.660, 0.720],
+      // THE ONE SANCTIONED CHANGE TO THE SHIPPED NOON (Michael's ruling: the shipped
+      // noon was flat — "no blue sky"). Old zenith: [0.090, 0.155, 0.310]. The blue
+      // channel is NOT raised (0.310 already sits over BloomEffect's 0.28 and making it
+      // brighter would put a bloom halo on the whole upper sky); red and green come DOWN
+      // instead, which is what turns a pale cyan-white lid into a marine blue. Ratios:
+      // blue/red 3.44 -> 7.50, blue/green 2.00 -> 2.86. `hor` and `disc` are untouched,
+      // so the horizon ring, the disc, the tint, surfK and desat all still anchor and
+      // everything derived from SURF_LIGHT (scene.fog.color, ambient) is bit-identical.
+      zen: [0.040, 0.105, 0.300], hor: [0.620, 0.660, 0.720],
       disc: [3.40, 3.00, 2.30], tint: [1, 1, 1], surfK: 1, desat: 0
     },
     // Ember: dusk is dawn with the red pushed and the blue pulled.
@@ -129,6 +137,86 @@ export const GLASS = {
       zen: [0.052, 0.068, 0.078], hor: [0.235, 0.258, 0.250],
       disc: [0.42, 0.46, 0.42], tint: [0.92, 1.00, 0.95], surfK: 1, desat: 0.55
     }
+  },
+
+  // --- SKY DRAMA (clouds / marine layer / moon). Authored constants for the three
+  // beats water.js draws in the sky dome and the sea's air-side branch. All plain data,
+  // all read once per frame by water.js's updateWater — poke any of it live.
+  //
+  // CLOUDS. The field is one FBM on a plane projected overhead; `cov` maps the day
+  // hand's `clouds` onto the smoothstep threshold, `soft` is the edge width (a fair-
+  // weather cumulus has a hard edge, a storm deck has none), and the two colours are
+  // resolved on the CPU from the palette so the deck is always made of the same light
+  // as the sky behind it.
+  cloud: {
+    // uv scale on the projected plane. The deck this replaced ran at 0.35 and got away
+    // with it because it was a soft multiplicative dimming with no shape to read: at
+    // that scale the ENTIRE visible hemisphere maps into ~0.35 uv, which is a third of
+    // one fbm cell, so the sky was one enormous smooth blob (measured — a clean blue
+    // zenith with no cloud in it at coverage 0.48). 4.0 puts several cells across the
+    // sky, which is what makes a cumulus a cumulus.
+    scale: 3.2,
+    drift: 0.028,         // uv per second at wind.speed 1 (a system moving, not a fan)
+    covCalm: 0.16,        // coverage floor even at hand.clouds 0 (a few high wisps)
+    covGain: 0.74,        // coverage added at hand.clouds 1
+    covStorm: 0.30,       // extra coverage the storm envelope buys on top
+    softCalm: 0.30,       // cumulus: crisp edges
+    softStorm: 0.78,      // deck: no edges at all, one flat lid
+    // Cloud colours are multipliers on the palette's HORIZON radiance. litK sits UNDER 1
+    // on purpose: at noon the horizon is 0.62-0.72 scene-linear and already over the 0.28
+    // bloom threshold, so a physically-white cumulus at 1.55x measured 0.96 and bloomed
+    // three times harder than the sky it sat in — a fireworks sky, which this game is not.
+    // At 0.85 a lit top measures ~0.53: brightly white against the 0.30 blue zenith,
+    // a shade under the bright horizon band, and nothing new crossing the threshold.
+    litK: 0.85,           // brightness of a sun-facing cloud top vs the horizon sky
+    baseK: 0.42,          // darkness of the underside vs the horizon sky, at cloudTex 0
+    baseDark: 0.26,       // how much further cloudTex 1 pushes the underside down
+    stormLit: 0.30,       // the lit colour collapses toward the base under a storm deck
+    // PEAK scene-linear radiance of an ember-lit cloud top at the dawn/dusk stops. The
+    // disc's own colour is renormalised to this, deliberately just UNDER BloomEffect's
+    // 0.28: the sunset payoff is coverage and hue, not a glowing sky. The moon disc is
+    // the only thing this card is allowed to put over that line.
+    emberK: 0.26,
+    emberElev: 26,        // degrees of solar elevation over which the ember term dies
+    // Gain on the day hand's sunsetDrama before it is clamped. A clear day deals ~0.08
+    // and a post-storm clearing ~0.55-0.73; at gain 1 both rounded to nothing. At 1.7 a
+    // clear evening reaches 0.14 and a post-storm one saturates — which is the card's
+    // acceptance test ("a post-storm sunset visibly outdrames a clear one") made a knob.
+    emberGain: 1.7
+  },
+  // MARINE LAYER. The morning white-out. `thr`/`full` map hand.fog onto 0..1; the
+  // burn-off is keyed on solar ELEVATION against the hand's own fogBurn, so the sun
+  // really does eat it from the top down. Storms blow it out.
+  fog: {
+    thr: 0.34, full: 0.66,
+    burnBand: 9,          // degrees below fogBurn over which it thins to nothing
+    maxK: 0.94,           // horizon whiteness at full fog (never a solid 1.0)
+    zenK: 0.42,           // share of that which reaches the zenith
+    discK: 0.82,          // how much of the disc heavy fog eats (pale disc, no glitter)
+    stormKill: 0.70,      // a gale clears the fog
+    nightK: 0.35,         // fog at deep night vs at noon
+    // The white-out colour, as a multiplier on the palette's HORIZON — so the fog is
+    // always made of the day's own light and goes dark at night for free. Under 1 on
+    // purpose: a lid at the full horizon radiance (0.62-0.72 at noon) would put the
+    // WHOLE sky over the bloom threshold. At these values a foggy noon peaks at ~0.32
+    // where a clear noon's horizon already peaks at 0.72, so the frame's peak radiance
+    // goes DOWN in fog, which is also what the eye expects.
+    col: [0.44, 0.45, 0.45]
+  },
+  // THE MOON. Its own arc, opposite the sun's: elevation is the sun's proxy negated, so
+  // it is highest at midnight and gone by mid-morning. Radius is ANGULAR (radians) —
+  // 0.052 is ~3 degrees, six times the real moon, which is the size the eye expects a
+  // "big moon" to be in a game frame.
+  moon: {
+    elevMax: 62, azimOffset: 180,
+    radius: 0.052,
+    bright: 0.95,         // scene-linear radiance of the lit limb at moonK 1 (over the
+                          // 0.28 bloom threshold ON PURPOSE — the disc is the one thing
+                          // in this card allowed to)
+    earthshine: 0.16,     // the unlit limb, so a crescent still reads as a sphere
+    halo: 0.055,          // the soft aureole around it
+    col: [0.72, 0.82, 1.00],  // cool; the night stop's disc was already this family
+    hemiLift: 0.30        // hemisphere/ambient lift in lighting.js on a full-moon night
   }
 };
 

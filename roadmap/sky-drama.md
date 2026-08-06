@@ -1,6 +1,6 @@
 ---
 title: SKY & WIND — clouds, fog, moon
-status: next
+status: done
 tags: sky, water, shaders
 updated: 2026-08-05
 ---
@@ -17,3 +17,4 @@ Builds on the day-hands contract (weather state + GLASS). All in `world/water.js
 
 ## Log
 - 2026-08-05 — cut from the west-coast round; waits on day hands
+- 2026-08-06 — shipped: FBM cumulus in skyRadiance (coverage/thickness from the hand, wind drift, sun-lit edges, storm deck sd 54.7→26.1 flat), marine layer burning off past fogBurn (underwater at -80 differs 0.025% between fog and clear mornings — untouched), moon disc with terminator + free glitter (7 lights before and after), sanctioned marine-blue noon zenith (B/R 3.44→7.50, blue channel NOT raised — bloom discipline). game.js wired setWeatherHand. Post-storm sunset R-B 18.8→36.7

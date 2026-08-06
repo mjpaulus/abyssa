@@ -243,24 +243,82 @@ vec3 airLight( vec3 surfIrr ){
 
 // THE SKY. One function, used by the ocean surface on BOTH sides of the interface and by
 // the background dome, so the sky seen from the air and the sky compressed into Snell's
-// window from below are literally the same image. The body is unchanged from the
-// window-only version it grew out of — that is what keeps the underwater view identical,
-// and it is also the whole point: consistency between the two views.
-// Requires GLSL_NOISE (fbm2) and the uSky*/uSun*/uCloud/uTime uniforms.
+// window from below are literally the same image. The body grew out of the window-only
+// version, and it stays ONE function for exactly that reason: consistency between the
+// two views. Everything the SKY DRAMA card added — cumulus, the marine layer's white-out
+// and the moon — therefore appears in Snell's window too, which is the point.
+// Requires GLSL_NOISE (fbm2) and the uSky*/uSun*/uCloud*/uMoon*/uFog* uniforms.
+//
+// THE CLOUD FIELD is one fbm on a plane projected overhead (the ray's xz divided by its
+// own elevation), so the deck parallaxes with the view instead of being a texture stuck
+// to the sky. `uCloudDrift` is integrated ON THE CPU from wind.dir/wind.speed — there is
+// no per-frame trig in here and none in the JS hot path beyond one sin/cos.
+//   coverage  threshold on the field, from hand.clouds (+ the storm envelope)
+//   soft      edge width: a fair cumulus has a hard edge, a storm deck has none
+//   uCloudTex thickness — flattens the lighting response and darkens the underside
+// Sun-lit edges come from ONE extra fbm sample taken a short step TOWARD the sun's
+// bearing (uSunUV, precomputed on the CPU): where the field falls off in that direction
+// the fragment is on the sunward flank of a cloud, and that is the flank that catches
+// the light. At the dawn/dusk stops the CPU walks uCloudBase toward the disc colour by
+// hand.sunsetDrama, which is the post-storm-clearing payoff — see cloudColours().
+// SECOND fbm: gated behind the coverage test, so a cloudless day pays for neither.
 const GLSL_SKY = `
 vec3 skyRadiance( vec3 d ){
   float up = clamp( d.y, 0.0, 1.0 );
   vec3 c = mix( uSkyHor, uSkyZen, sqrt( up ) );
-  // Cloud deck, projected onto a plane overhead so it parallaxes with the ray: from
-  // below the waves slide the sky about instead of scrolling a texture stuck to the
-  // water; from above it is the overcast itself. Faded out toward the horizon, where the
-  // projection's derivative blows up and would alias into the rim.
-  float cl = fbm2( ( d.xz / max( up, 0.12 ) ) * 0.35
-                   + vec2( uTime * 0.012, uTime * 0.009 ) );
-  c *= 1.0 - uCloud * smoothstep( 0.02, 0.30, up ) * ( 0.55 - 0.85 * cl );
+
+  float amt = 0.0;
+  if ( uCloudCov > 0.005 ) {
+    // Faded out toward the horizon, where the projection's derivative blows up and would
+    // alias into the rim. (Unchanged from the deck this replaced.)
+    vec2 uv = ( d.xz / max( up, 0.12 ) ) * uCloudScale + uCloudDrift;
+    float fv = fbm2( uv );
+    // fbm2 is 4 octaves at halving amplitude: range [0, 0.9375], mean ~0.47. A threshold
+    // sweeping 0.72 -> 0.22 therefore walks from "a few wisps" to "solid lid".
+    float thr = 0.72 - 0.50 * uCloudCov;
+    amt = smoothstep( thr, thr + uCloudSoft, fv ) * smoothstep( 0.02, 0.30, up );
+    float g = fv - fbm2( uv + uSunUV );
+    float k = clamp( 0.55 - 0.35 * uCloudTex + ( 1.7 + 1.6 * uCloudTex ) * g, 0.0, 1.0 );
+    c = mix( c, mix( uCloudBase, uCloudLit, k ), amt );
+  }
+  // The discs sit BEHIND the deck: a cloud in front of the sun occludes it (0.92, not
+  // 1.0 — a thin edge still glows through, which is most of what says "cloud").
+  float occ = 1.0 - amt * 0.92;
   float sd = max( 0.0, dot( d, uSunDir ) );
-  c += uSunCol * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) );
+  c += uSunCol * uDiscK * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) ) * occ;
+
+  // THE MOON. Not a pow() lobe like the sun but a real disc with a terminator: at this
+  // art scale a smoothstep against the angular radius and one signed cut across it is
+  // enough to read as a phase, and the earthshine term keeps the unlit limb a sphere
+  // rather than a bite. uMoonPh = (lit side, terminator position, earthshine, halo).
+  // uMoonCol is zeroed by day, so daylight costs one compare.
+  if ( uMoonCol.b > 0.001 ) {
+    float md = dot( d, uMoonDir );
+    if ( md > 0.0 ) {
+      vec3 tv = d - uMoonDir * md;
+      float ang = length( tv );
+      float body = 1.0 - smoothstep( uMoonR * 0.88, uMoonR, ang );
+      float xn = dot( tv, uMoonRight ) / uMoonR;
+      float lit = smoothstep( uMoonPh.y - 0.12, uMoonPh.y + 0.12, xn * uMoonPh.x );
+      c += uMoonCol * occ
+         * ( body * ( uMoonPh.z + ( 1.0 - uMoonPh.z ) * lit ) + uMoonPh.w * pow( md, 240.0 ) );
+    }
+  }
   return c;
+}
+
+// THE MARINE LAYER — the AIR side only. uFog is the live amount (hand.fog past its
+// threshold, thinned as the sun climbs toward hand.fogBurn: burn-off comes from above).
+// It is applied by the DOME's air path and by the sea's from-above branch, and by
+// NOTHING ELSE: the underwater dome, the fog chunk, fog.density and every Beer-Lambert
+// consumer are untouched, which is the load-bearing constraint on this whole card.
+// The vertical profile is the burn-off in space rather than in time — thickest at the
+// horizon, ${f(GLASS.fog.zenK)} of that at the zenith, so the sun is a pale disc in a
+// bright lid while the horizon has simply gone.
+vec3 airFog( vec3 c, float upness, float distK ){
+  if ( uFog <= 0.002 ) return c;
+  float k = uFog * mix( 1.0, ${f(GLASS.fog.zenK)}, smoothstep( 0.0, 0.55, upness ) ) * distK;
+  return mix( c, uFogCol, clamp( k, 0.0, 1.0 ) );
 }`;
 
 // Weather scaling of the surface irradiance (set by game.js): night and storms dim
@@ -296,6 +354,52 @@ export function setWeatherWater(surfK, murk, day, flash) {
   palette(SKY.ring, wEnvSky);
 }
 export function setRayDim(k) { rayDim = k; }
+
+// ---------------------------------------------------------------------------
+// THE DAY HAND. weather.js deals one per day index and hands out the SAME object
+// forever; the wind object is likewise reused. So this stores REFERENCES, never copies:
+// there is nothing to keep in sync and nothing allocated per frame. Until game.js wires
+// it (ONE line, next to setWeatherEnv), everything below falls back to the storm
+// envelope alone — which is a plain overcast deck, no fog and no moon, i.e. what
+// shipped. Nothing here can break if the wiring is missing.
+let wHand = null, wWind = null;
+export function setWeatherHand(hand, wind) { wHand = hand; wWind = wind || null; }
+// Read by lighting.js (see the note there): the marine layer's flat white light and a
+// bright moon's lift are AMBIENCE, not new Light objects.
+export const airAmbience = { fog: 0, moon: 0 };
+
+// Dev surface, namespaced and kept (the convention in CLAUDE.md). `sync()` snapshots the
+// live hand/wind off window.weather and installs it, which is what lets a probe FORCE a
+// hand — poke __sky.h.fog / .clouds / .moonK and the sky answers on the next frame —
+// without weather.js or game.js knowing. Once game.js calls setWeatherHand every frame,
+// sync() is just a way to freeze a hand for a screenshot.
+if (typeof window !== 'undefined') {
+  window.__sky = {
+    // The tuning surface itself, so a probe (and the lab) can A/B a stop live.
+    G: GLASS,
+    h: null, w: { speed: 0, dir: 0 },
+    sync() {
+      if (!window.weather) return null;
+      this.h = window.weather.hand();
+      const w = window.weather.wind();
+      this.w.speed = w.speed; this.w.dir = w.dir;
+      setWeatherHand(this.h, this.w);
+      return this.h;
+    },
+    release() { setWeatherHand(null, null); this.h = null; },
+    probe() {
+      return {
+        cov: uCloudCov.value, soft: uCloudSoft.value, tex: uCloudTex.value,
+        drift: [uCloudDrift.value.x, uCloudDrift.value.y],
+        lit: uCloudLit.value.toArray(), base: uCloudBase.value.toArray(),
+        fog: uFog.value, fogCol: uFogCol.value.toArray(), discK: uDiscK.value,
+        moon: uMoonCol.value.toArray(), moonDir: uMoonDir.value.toArray(),
+        moonPh: uMoonPh.value.toArray(),
+        amb: { fog: airAmbience.fog, moon: airAmbience.moon }
+      };
+    }
+  };
+}
 
 // CPU mirror of abyssaAmbient, for scene.background and the returned tint.
 const ms = THREE.MathUtils.smoothstep, ml = THREE.MathUtils.lerp;
@@ -575,8 +679,39 @@ const uSunDirU = { value: new THREE.Vector3(SUN.dir.x, SUN.dir.y, SUN.dir.z) };
 // literal in the god-ray vertex shader.
 const uSunProj = { value: new THREE.Vector2(SUN.proj[0], SUN.proj[1]) };
 const uSunSize = { value: 700 };
-const uCloud = { value: 0.22 };
 const uStormU = { value: 0 };
+// --- SKY DRAMA uniforms. Shared by the dome and the sea exactly the way uSky*/uSun*
+// are: skyRadiance() is ONE function compiled into both, so both must be handed the
+// same objects or the sky over the horizon and the sky in Snell's window drift apart.
+// Every one of them is written in updateWater's existing single pass — there is no
+// second update path and nothing here allocates.
+const uCloudDrift = { value: new THREE.Vector2() };   // CPU-integrated wind advection
+const uCloudScale = { value: GLASS.cloud.scale };
+const uCloudCov = { value: 0.16 };
+const uCloudSoft = { value: GLASS.cloud.softCalm };
+const uCloudTex = { value: 0.3 };
+const uCloudLit = { value: new THREE.Vector3() };
+const uCloudBase = { value: new THREE.Vector3() };
+const uSunUV = { value: new THREE.Vector2() };        // cloud-uv step toward the sun
+const uDiscK = { value: 1 };                          // fog eats the disc (and the glitter)
+const uMoonDir = { value: new THREE.Vector3(0, 1, 0) };
+const uMoonRight = { value: new THREE.Vector3(1, 0, 0) };
+const uMoonCol = { value: new THREE.Vector3() };
+const uMoonR = { value: GLASS.moon.radius };
+const uMoonPh = { value: new THREE.Vector4(1, 0, GLASS.moon.earthshine, GLASS.moon.halo) };
+const uFog = { value: 0 };
+const uFogCol = { value: new THREE.Vector3() };
+// One declaration block, injected into both fragment shaders so the two can never
+// disagree about what skyRadiance/airFog need.
+const GLSL_SKY_DECL = `uniform vec2 uCloudDrift, uSunUV;
+uniform float uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uDiscK, uMoonR, uFog;
+uniform vec3 uCloudLit, uCloudBase, uMoonDir, uMoonRight, uMoonCol, uFogCol;
+uniform vec4 uMoonPh;`;
+// The uniform map half of the same pairing.
+const SKY_UNIFORMS = {
+  uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
+  uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol
+};
 const _tmp = new THREE.Vector3();
 const _size = new THREE.Vector2();
 const _outCol = new THREE.Color();
@@ -595,7 +730,8 @@ function buildDome() {
     uniforms: {
       uSurf: { value: new THREE.Vector3(...SURF_LIGHT) },
       uReach: { value: 46 }, uTime, uSunGlow: { value: new THREE.Vector3() },
-      uSkyZen, uSkyHor, uSunCol, uSunDir: uSunDirU, uSunSize, uCloud, uAir
+      uSkyZen, uSkyHor, uSunCol, uSunDir: uSunDirU, uSunSize, uAir,
+      ...SKY_UNIFORMS
     },
     side: THREE.BackSide, depthWrite: false, fog: false,
     vertexShader: `varying vec3 vDir;
@@ -604,7 +740,8 @@ function buildDome() {
         gl_Position = vec4( p.xy, p.w * 0.999999, p.w ); }`,
     fragmentShader: `uniform vec3 uSurf, uSunGlow; uniform float uReach, uTime;
       uniform vec3 uSkyZen, uSkyHor, uSunCol, uSunDir;
-      uniform float uSunSize, uCloud, uAir;
+      uniform float uSunSize, uAir;
+      ${GLSL_SKY_DECL}
       varying vec3 vDir;
       ${GLSL_NOISE}
       ${GLSL_AMBIENT}
@@ -621,8 +758,12 @@ function buildDome() {
       // what hides airLight's storm approximation.
       // BOTH smoothstep edges ASCEND. The inverted form is UNDEFINED in GLSL and produces
       // driver-dependent garbage — the same trap documented on nephParams.
+      // The marine layer rides on top of the whole air-side answer, horizon included:
+      // whiting the sky and leaving the airlight band clear is exactly the seam this
+      // function exists to prevent.
       vec3 skyDome( vec3 d, vec3 hz ){
-        return mix( skyRadiance( d ), hz, 1.0 - smoothstep( 0.0, 0.060, d.y ) );
+        return airFog( mix( skyRadiance( d ), hz, 1.0 - smoothstep( 0.0, 0.060, d.y ) ),
+                       d.y, 1.0 );
       }
 
       void main(){
@@ -1066,13 +1207,14 @@ export function renderRefraction() {
 }
 
 function buildSurface() {
-  // uSkyZen/uSkyHor/uSunCol/uSunDir/uSunSize/uCloud/uStorm are the module-scoped objects
+  // uSkyZen/uSkyHor/uSunCol/uSunDir/uSunSize/uStorm + SKY_UNIFORMS are the module-scoped
   // the DOME also holds. Shared on purpose: the sky in Snell's window and the sky over
   // the horizon are the same sky, and sharing the uniform is the only way that stays true
   // without a second update path to keep in sync.
   const u = Object.assign(fogUniforms(), {
     uTime, uCam,
-    uSunDir: uSunDirU, uSkyZen, uSkyHor, uSunCol, uSunSize, uCloud, uStorm: uStormU,
+    uSunDir: uSunDirU, uSkyZen, uSkyHor, uSunCol, uSunSize, uStorm: uStormU,
+    ...SKY_UNIFORMS,
     uFlash: { value: 0 },
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
     uBright: { value: 1 }, uFade: { value: 1 },
@@ -1097,9 +1239,10 @@ function buildSurface() {
     fragmentShader: `#include <fog_pars_fragment>
       ${GLSL_NOISE}
       ${GLSL_WAVE_F}
-      uniform float uTime, uBright, uFade, uStorm, uCloud, uSunSize, uMirrorK, uNearK,
+      uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
                     uFoamThr, uFlash, uRefrK, uRefrSide;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
+      ${GLSL_SKY_DECL}
       uniform sampler2D uRefr;
       uniform vec2 uRes;
       varying vec3 vW;
@@ -1266,6 +1409,9 @@ function buildSurface() {
         // own at night without a second uniform.
         vec3 foamCol = vec3( 0.86, 0.94, 1.00 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6;
         float rimK = 0.0;
+        // The marine layer's reach across the SEA. Stays 0 on the from-below path, so
+        // the underwater half of this shader cannot be touched by the fog beat at all.
+        float airK = 0.0;
         vec3 col = vec3( 0.0 );
         // Each side owns an fbm2. Gating them on F keeps the common fragment paying for
         // one, not two: inside the window F is 0.02 so the mirror is invisible, outside it
@@ -1360,6 +1506,10 @@ function buildSurface() {
           // the three meet with no ring. Applied after the foam block below, or a storm
           // whitecap at 400 units would sit on top of the horizon haze.
           rimK = smoothstep( 320.0, 455.0, dist );
+          // The raft floats in white: water within a few units of the eye keeps its own
+          // colour, everything past ~220 units is gone. Same curve the eye reads on a
+          // real fog morning — the sea does not vanish under you, it vanishes around you.
+          airK = smoothstep( 6.0, 220.0, dist );
         }
 
         // Deriving foam from |grad h| means only the storm spectrum can ever steepen
@@ -1381,6 +1531,9 @@ function buildSurface() {
         col += foamCol * rain * 0.25 * ( below ? 1.0 : 0.0 );
         col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
         if ( rimK > 0.0 ) col = mix( col, airLight( fogColor ), rimK );
+        // AFTER the rim hand-off, so the sea, the dome past its rim and the horizon all
+        // white out together and the seam stays a seam of nothing.
+        if ( airK > 0.0 ) col = airFog( col, 0.0, airK );
 
         // uFade retires the surface as the diver descends. Without it the depth fog
         // drives this plane to near-black while the dome behind stays lit, and the
@@ -1487,6 +1640,131 @@ export function buildWater() {
   updateAtmosphere(0.03, -27);
 }
 
+// ---------------------------------------------------------------------------
+// SKY DRAMA — clouds, the marine layer and the moon, resolved on the CPU once a frame
+// and written into the uniforms skyRadiance()/airFog() read. Everything expensive is
+// here rather than in the shader: colours, the moon's placement and the cloud
+// advection are a few dozen ops a frame, against a dome-full of fragments.
+//
+// ZERO ALLOCATION: the two colour scratch arrays are module-scoped, and the uniforms
+// are Vector2/3/4 objects written with .set(). No trig in here beyond one sin/cos pair
+// for the wind and one for the moon.
+const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0];
+// The moon's own arc: elevation is the sun's elevation proxy NEGATED, so it is highest
+// at midnight and gone by mid-morning, and its azimuth is the sun's plus 180. That is
+// not celestial mechanics — it is the one arrangement that guarantees the moon is never
+// in the sky beside the sun, which is the only way this can look wrong at a glance.
+const _d2r = Math.PI / 180;
+function skyDrama(dt, storm) {
+  const G = GLASS, C = G.cloud, F = G.fog, M = G.moon;
+  const h = wHand;
+
+  // --- clouds -------------------------------------------------------------
+  const clouds = h ? h.clouds : 0.22, cTex = h ? h.cloudTex : 0.35;
+  uCloudScale.value = C.scale;
+  uCloudCov.value = clamp(C.covCalm + C.covGain * clouds + C.covStorm * storm, 0, 0.98);
+  uCloudSoft.value = ml(C.softCalm, C.softStorm, storm);
+  uCloudTex.value = clamp(cTex + 0.45 * storm, 0, 1);
+
+  // Drift. The wind's bearing is integrated into a uv OFFSET on the CPU, so the shader
+  // does no trig and a direction change simply starts moving the deck a new way — no
+  // jump, because the offset is continuous through it. dt is the frame's, so a 4x lab
+  // speed drifts 4x as far without a second clock.
+  if (wWind) {
+    const k = C.drift * wWind.speed * dt;
+    uCloudDrift.value.x += Math.cos(wWind.dir) * k;
+    uCloudDrift.value.y += Math.sin(wWind.dir) * k;
+  } else {
+    uCloudDrift.value.x += C.drift * 0.25 * dt;   // the shipped deck's slow crawl
+  }
+
+  // The sunward step for the lit-edge gradient, in the same uv space the field is
+  // sampled in. Length is one cloud's worth at the authored scale.
+  const sx = SUN.dir.x, sz = SUN.dir.z, sl = Math.hypot(sx, sz) || 1;
+  uSunUV.value.set(sx / sl * 0.55, sz / sl * 0.55);
+
+  // Colours. Both ends are made from the palette's HORIZON radiance, so a cloud is
+  // always lit by the day it is in and needs no stop of its own.
+  const litK = ml(C.litK, C.stormLit, storm);
+  const baseK = (C.baseK - C.baseDark * uCloudTex.value) * (1 - 0.30 * storm);
+  for (let i = 0; i < 3; i++) { _cLit[i] = _pHor[i] * litK; _cBase[i] = _pHor[i] * baseK; }
+
+  // EMBER UNDERSIDES — the post-storm-clearing payoff. Only at low sun, only by the
+  // day's own sunsetDrama, and killed by an active storm (a gale has no sunset). The
+  // disc colour is renormalised to GLASS.cloud.emberK so the payoff is HUE and COVERAGE,
+  // never a blown-out sky: broken cloud left over from a squall catches the light, a
+  // clear day has nothing up there to catch it, and that difference IS the drama.
+  // The gate on wDay is a SMOOTHSTEP, not the raw factor: at the dusk stop the daylight
+  // scalar is already halfway down, and multiplying by it directly killed the ember
+  // exactly where it is supposed to live (measured: 0.155 lit on a drama-0.55 evening
+  // against 0.153 on a drama-0.08 one — no difference at all). The step keeps it full
+  // through dusk and still takes it to zero by deep night, where the "disc" is the moon.
+  const drama = h ? h.sunsetDrama : 0;
+  const ember = clamp(drama * C.emberGain, 0, 1)
+              * (1 - clamp(SUN.elevDeg / C.emberElev, 0, 1))
+              * (1 - storm) * ms(wDay, 0.05, 0.42);
+  if (ember > 0.002) {
+    const mx = Math.max(_pDisc[0], _pDisc[1], _pDisc[2]) || 1, s = C.emberK / mx;
+    for (let i = 0; i < 3; i++) {
+      _ember[i] = _pDisc[i] * s;
+      _cLit[i] += (_ember[i] - _cLit[i]) * ember;
+      _cBase[i] += (_ember[i] * 0.80 - _cBase[i]) * ember;
+    }
+  }
+  uCloudLit.value.set(_cLit[0], _cLit[1], _cLit[2]);
+  uCloudBase.value.set(_cBase[0], _cBase[1], _cBase[2]);
+
+  // --- marine layer -------------------------------------------------------
+  // Amount from the hand, burn-off from the SUN'S ELEVATION against the hand's own
+  // fogBurn: the sun eats it from the top down and a scrub through the morning shows it
+  // go. Storms blow it out; deep night keeps a share of it (a night fog is real, and the
+  // colour it whites to is the night horizon, so it goes dark on its own).
+  let fk = 0;
+  if (h && h.fog > F.thr) {
+    fk = ms(h.fog, F.thr, F.full)
+       * (1 - ms(SUN.elevDeg, h.fogBurn - F.burnBand, h.fogBurn))
+       * (1 - F.stormKill * storm)
+       * ml(F.nightK, 1, wDay);
+  }
+  uFog.value = fk * F.maxK;
+  uFogCol.value.set(_pHor[0] * F.col[0], _pHor[1] * F.col[1], _pHor[2] * F.col[2]);
+  // Heavy fog dims the disc — which is the same uniform the GLITTER PATH is made of, so
+  // killing the disc kills the glitter in one write. That is the whole reason the discs
+  // live inside skyRadiance().
+  uDiscK.value = 1 - F.discK * fk;
+
+  // --- the moon -----------------------------------------------------------
+  // Visible only as the day gives out; uMoonCol at zero is what makes daylight cost one
+  // compare in the shader.
+  const nightK = clamp((0.40 - wDay) / 0.34, 0, 1);
+  const moonK = h ? h.moonK : 0;
+  const proxy = Math.cos(Math.PI * 2 * SKY.phase01);        // +1 at midnight
+  const mElev = M.elevMax * proxy;
+  const vis = nightK * moonK * clamp(mElev / 6, 0, 1) * (1 - 0.85 * storm) * (1 - 0.9 * uFog.value);
+  if (vis > 0.004) {
+    const el = mElev * _d2r, az = (SUN.azimDeg + M.azimOffset) * _d2r;
+    const ce = Math.cos(el);
+    uMoonDir.value.set(ce * Math.cos(az), Math.sin(el), ce * Math.sin(az));
+    // The terminator axis is the moon's horizontal perpendicular: cross(dir, up),
+    // normalised. At this art scale a horizontal terminator is what reads as a phase.
+    _tmp.set(uMoonDir.value.z, 0, -uMoonDir.value.x);
+    if (_tmp.lengthSq() < 1e-6) _tmp.set(1, 0, 0);
+    uMoonRight.value.copy(_tmp).normalize();
+    const ph = h ? h.moonPhase : 0.5;
+    const illum = 1 - Math.abs(1 - 2 * ph);
+    uMoonPh.value.set(ph < 0.5 ? 1 : -1, 1 - 2 * illum, M.earthshine, M.halo);
+    uMoonR.value = M.radius;
+    const b = M.bright * vis;
+    uMoonCol.value.set(M.col[0] * b, M.col[1] * b, M.col[2] * b);
+  } else {
+    uMoonCol.value.set(0, 0, 0);
+  }
+
+  // Published for lighting.js — ambience only, never a Light.
+  airAmbience.fog = uFog.value;
+  airAmbience.moon = vis;
+}
+
 export function updateWater(dt, t) {
   uTime.value = t;
   const y = camera.position.y, d01 = clamp(-y / 900, 0, 1);
@@ -1548,8 +1826,10 @@ export function updateWater(dt, t) {
   // The shafts get the SNELL-CLAMPED sun instead, so they can never rake past 41.4.
   uSunProj.value.set(SUN.proj[0], SUN.proj[1]);
   uSunSize.value = 700 - 560 * storm;
-  uCloud.value = 0.22 + 0.70 * storm;
   uStormU.value = storm;
+  // Clouds, marine layer and moon. After the palette copy above, because every colour it
+  // resolves is made out of _pHor/_pDisc, and before anything reads the uniforms.
+  skyDrama(dt, storm);
 
   if (surface.visible) {
     const su = surface.material.uniforms;
