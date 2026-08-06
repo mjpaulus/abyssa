@@ -50,3 +50,17 @@ Wind direction / anisotropic waves, per-site weather, rain rework, HUD changes.
   uniform writes only).
 - Storm parity probe: at storm 1.0, surface and subsurface envelope values move on
   the same eased curve.
+
+## Amendment — SKY & WIND, the west-coast round (approved 2026-08-05)
+
+Michael's lab verdict: range flat — no blue sky, no clouds, storms subtle, no wind.
+Target: west-coast marine days ("early morning fog, sun burns the fog off, pop up
+ocean storm, clearing weather into a big beautiful sunset, big night time moon.
+This is not a rinse and repeat every day.")
+
+Four work items (roadmap cards): day hands + wind (weather.js, orchestrator);
+clouds/marine fog/moon (water.js sky + air fog regime, agent); wind on the water
+(anisotropic waves, whitecaps, depth-decaying current, agent, serialized behind the
+sky card); lab v2 (day-hand readout + reroll + knobs, cheap agent last).
+Regression: calm noon anchored EXCEPT a sanctioned bluer zenith; underwater deep
+untouched; determinism (pure function of t + day index) everywhere.
