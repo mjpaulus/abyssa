@@ -1,6 +1,6 @@
 ---
 title: THE CHART — seed curation
-status: wip
+status: done
 tags: chart, phase 5
 updated: 2026-08-05
 ---
@@ -14,3 +14,4 @@ If two sites read too similar, the next knob is parameterising terrain's PERM se
 
 ## Log
 - 2026-08-05 — opened at phase 4 ship (de2aacc)
+- 2026-08-05 — closed by Michael: "ok seems we can mark chart as done." The authored site rows stand as shipped; any later tuning is a new card.
