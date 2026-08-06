@@ -1,6 +1,6 @@
 ---
 title: SKY & WIND — day hands
-status: wip
+status: done
 tags: weather, sky
 updated: 2026-08-05
 ---
@@ -15,3 +15,4 @@ Michael's target: west-coast marine days — "Early morning fog, sun burns the f
 
 ## Log
 - 2026-08-05 — round approved after Michael's lab verdict (flat range); cards cut, contract first
+- 2026-08-06 — shipped: hand {fog, fogBurn, clouds, cloudTex, stormDay/At/Len/Peak, sunsetDrama, moonK, moonPhase, windBase, windDir0, windLead} dealt per dayIndex; wind {speed, dir} leads storms by 60-90s and locks dir mid-storm; storms 33.00f 200 sampled days, post-storm sunsets average drama 0.772 vs 0.360; deterministic across reloads; env parity 1.0000. Dev: weather.day(n)/peek(n)/hand()/wind()

@@ -11,7 +11,15 @@
 //                       never in the first 3 minutes of a session.
 //       flash: 0..1   — lightning flash impulse this frame (storm only), for the
 //                       shallows to catch as a brief silver flicker.
+//       hand: {...}   — THE DAY HAND, re-dealt once per day index (see dealHand).
+//                       fog, fogBurn, clouds, cloudTex, stormDay, stormAt, stormLen,
+//                       stormPeak, sunsetDrama, moonK, moonPhase, windBase,
+//                       windDir0, windLead, dayIndex.
+//       wind: {speed 0..1, dir radians}
+//       dayIndex      — integer day, respects PHASE0; scrub/day() move it coherently.
 //     }
+// STORMS ARE NOW AN EVENT, not a metronome: ~1 day in 3 deals one, and it fires at
+// that day's dealt hour. Calm days carry no storm at all.
 // Consumers (wired in game.js by the orchestrator): lighting STOPS + water optics
 // scale with day/storm in the top zone, raft swell amplitude with storm, ambient
 // current with storm, and the pump sputters near storm peak.
@@ -34,11 +42,17 @@ import { SURFACE_Y, GLASS, setSun, setSkyPhase } from '../config.js';
 //                    what makes "surface and subsurface move together" checkable.
 //                    Daylight is NOT folded in here on purpose — a lagged day would
 //                    desync the palette from the sun that is casting it.
+//   hand             THE DAY HAND — the cached, per-day-index deal (see dealHand).
+//                    Re-dealt only when the day index changes; zero per-frame cost.
+//   wind             {speed 0..1, dir radians}. Leads storms, gusts, lulls overnight.
 const st = {
   day: 1, storm: 0, flash: 0,
   sunElev: GLASS.sun.elevNoon, sunAzim: GLASS.sun.azimCenter,
   phase01: 0.5, ring: 2,
-  env: { sky: 0, sea: 0, below: 0 }
+  dayIndex: 0,
+  env: { sky: 0, sea: 0, below: 0 },
+  hand: null,        // set by dealHand — the reused HAND object
+  wind: { speed: 0, dir: 0 }
 };
 
 // ---------------------------------------------------------------------------
@@ -106,10 +120,28 @@ const PHASE0 = (() => {
 })();
 
 // ---------------------------------------------------------------------------
-// Storm schedule. Deterministic PRNG from a fixed seed, precomputed once.
+// THE DAY HAND.
+//
+// Every day index deals one hand from a mulberry32 stream seeded ONLY from that
+// index, so day 4 is day 4 forever — across reloads, scrubs and jumps. The hand is
+// dealt once per day-index CHANGE into a reused object; a frame that stays inside a
+// day does no work at all.
+//
+// The storm now lives IN the hand rather than in a global schedule: most days deal
+// no storm at all (the pop-up squall is an event, not a metronome), and on the days
+// that do, the storm fires at the dealt hour and drives the SAME `st.storm` number
+// the old scheduler drove, so env {sky,sea,below} keeps its lead/lag behaviour and
+// every consumer downstream is untouched.
 // ---------------------------------------------------------------------------
 const RISE = 20, RELEASE = 30;
-const HORIZON = 12 * 3600;          // 12h of weather; a session will never outrun it.
+
+// The hand's storm is CONTAINED IN ITS DAY by construction: stormAt is dealt in
+// [0.28, 0.72] and the hold caps at 120s, so a + RISE + hold + RELEASE < CYCLE. That
+// is what lets one cached hand answer for the whole day with no neighbour lookups.
+const STORM_AT_LO = 0.28, STORM_AT_HI = 0.72;
+const STORM_ODDS = 1 / 3;            // most days are calm
+const DUSK_PHASE = 0.75;             // where the daylight curve falls through zero
+const PRE_DUSK = 2 / 24;             // "within ~2 hours-of-day before dusk"
 
 let sSeed = 0x9e3779b1;
 function rnd() {                     // mulberry32
@@ -119,88 +151,217 @@ function rnd() {                     // mulberry32
   return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
 }
 const rng = (a, b) => a + rnd() * (b - a);
+const clamp01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-// Storms, flat arrays (index i): start of rise, start of release, end.
-let stT0 = null, stT1 = null, stT2 = null, stPeak = null, stCount = 0;
-// Lightning sub-impulses, flat and sorted: fire time + amplitude.
-let flT = null, flA = null, flCount = 0;
+// THE HAND — one reused object. `st.hand` points at this forever; consumers (sky,
+// water, lab) read fields off it and must never hold a copy.
+const hand = {
+  dayIndex: -1,
+  fog: 0, fogBurn: 20,
+  clouds: 0, cloudTex: 0,
+  stormDay: false, stormAt: 0, stormLen: 0, stormPeak: 0,
+  sunsetDrama: 0,
+  moonK: 0, moonPhase: 0,
+  windBase: 0.2, windDir0: 0, windLead: 75
+};
 
-function buildSchedule() {
-  const t0 = [], t1 = [], t2 = [], pk = [];
-  const ft = [], fa = [];
-  // First storm never before 3 minutes.
-  let cursor = 180 + rng(0, 90);
-  while (cursor < HORIZON) {
-    const hold = rng(60, 120);
-    const a = cursor, b = a + RISE + hold, c = b + RELEASE;
-    t0.push(a); t1.push(b); t2.push(c); pk.push(rng(0.75, 0.92));
-    // Lightning lives in the hold: every 8-25s, a main stroke plus 1-3 echoes
-    // decaying over ~0.8s.
-    let f = a + RISE + rng(2, 10);
-    while (f < b - 1.5) {
-      const amp = rng(0.6, 1.0);
-      ft.push(f); fa.push(amp);
-      const echoes = 1 + Math.floor(rnd() * 3);
-      let e = f;
-      for (let k = 0; k < echoes; k++) {
-        e += rng(0.09, 0.26);
-        if (e - f > 0.85) break;
-        ft.push(e); fa.push(amp * rng(0.22, 0.5));
-      }
-      f += rng(8, 25);
+// Lightning strokes for THIS day's storm, flat + sorted, rewritten in place on each
+// deal. 120s of hold at 8-25s spacing x (1 + up to 3 echoes) never reaches 128.
+const FL_CAP = 128;
+const flT = new Float32Array(FL_CAP), flA = new Float32Array(FL_CAP);
+let flCount = 0;
+
+// Absolute clock (in `tt` units) at which day `i` begins. PHASE0 shifts the session
+// into mid-morning, so the day boundary sits at tt = i*CYCLE - PHASE0.
+const dayStartT = i => i * CYCLE - PHASE0;
+const dayIndexAt = tt => Math.floor((PHASE0 + tt) / CYCLE);
+
+function dealHand(idx) {
+  if (hand.dayIndex === idx) return;
+  hand.dayIndex = idx;
+  // Seed from the day index ALONE. The odd constant spreads adjacent indices across
+  // the state space so day 3 and day 4 are unrelated rather than neighbours.
+  sSeed = (Math.imul(idx | 0, 0x9e3779b1) ^ 0x5bf03635) | 0;
+  for (let i = 0; i < 4; i++) rnd();   // warm-up: shake off the low-entropy first draw
+
+  // --- marine layer ---
+  // ~60% of days barely fog at all, ~34% a real layer, ~6% pea soup. That puts
+  // fog > 0.3 on ~40% of days, which is the west-coast summer feel.
+  const fr = rnd();
+  hand.fog = fr < 0.60 ? rng(0.02, 0.30) : fr < 0.94 ? rng(0.30, 0.72) : rng(0.82, 0.95);
+  // Solar elevation (deg) at which the layer has fully burned off. Thicker layers
+  // hang on to a higher sun; a thin haze is gone by mid-morning.
+  hand.fogBurn = Math.min(42, Math.max(8, 12 + 28 * hand.fog + rng(-3, 3)));
+
+  // --- cloud regime ---
+  const cr = rnd();
+  hand.clouds = cr < 0.40 ? rng(0.00, 0.20)      // clear
+              : cr < 0.78 ? rng(0.20, 0.55)      // fair cumulus
+                          : rng(0.55, 0.95);     // building
+
+  // --- storm dice ---
+  hand.stormDay = rnd() < STORM_ODDS;
+  hand.stormAt = rng(STORM_AT_LO, STORM_AT_HI);
+  hand.stormLen = rng(60, 120);
+  hand.stormPeak = rng(0.75, 0.92);
+  // A squall day is never a clear day.
+  if (hand.stormDay && hand.clouds < 0.55) hand.clouds = rng(0.55, 0.95);
+  hand.cloudTex = clamp01(0.22 + 0.62 * hand.clouds + rng(-0.18, 0.18));
+
+  // --- the sunset ---
+  // Post-storm clearing feeds the sunset: if the squall lets go within ~2 hours of
+  // day before dusk, the drama is biased hard up. That is the west-coast beat.
+  const endPhase = hand.stormAt + (RISE + hand.stormLen + RELEASE) / CYCLE;
+  const cleared = hand.stormDay && endPhase < DUSK_PHASE && endPhase > DUSK_PHASE - PRE_DUSK;
+  const drama = rng(0.10, 0.75);
+  hand.sunsetDrama = clamp01(cleared ? 0.62 + 0.38 * drama
+                                     : drama * (0.55 + 0.55 * hand.clouds));
+
+  // --- the moon ---
+  // Phase WALKS ~0.12 per day so the cycle reads across a run of days; it is still a
+  // pure function of the index, not an accumulator.
+  hand.moonPhase = ((idx * 0.12 + 0.31) % 1 + 1) % 1;
+  const illum = 1 - Math.abs(1 - 2 * hand.moonPhase);   // 0 = new, 1 = full
+  hand.moonK = clamp01(0.12 + 0.88 * illum * rng(0.86, 1.06));
+
+  // --- wind seeds ---
+  hand.windBase = hand.clouds < 0.35 ? rng(0.10, 0.30) : rng(0.30, 0.50);
+  hand.windDir0 = rng(0, Math.PI * 2);
+  hand.windLead = rng(60, 90);        // seconds of rise BEFORE the squall lands
+
+  dealLightning(idx);
+}
+
+function dealLightning(idx) {
+  flCount = 0;
+  if (!hand.stormDay) return;
+  const a = dayStartT(idx) + hand.stormAt * CYCLE;
+  const b = a + RISE + hand.stormLen;
+  // Lightning lives in the hold: every 8-25s, a main stroke plus 1-3 echoes decaying
+  // over ~0.8s.
+  let f = a + RISE + rng(2, 10);
+  while (f < b - 1.5 && flCount < FL_CAP - 4) {
+    const amp = rng(0.6, 1.0);
+    flT[flCount] = f; flA[flCount] = amp; flCount++;
+    const echoes = 1 + Math.floor(rnd() * 3);
+    let e = f;
+    for (let k = 0; k < echoes; k++) {
+      e += rng(0.09, 0.26);
+      if (e - f > 0.85) break;
+      flT[flCount] = e; flA[flCount] = amp * rng(0.22, 0.5); flCount++;
     }
-    cursor = c + rng(300 - RISE - hold - RELEASE, 540 - RISE - hold - RELEASE);
-    // Gaps are measured storm-start to storm-start (5-9 min); guard the degenerate case.
-    if (cursor < c + 20) cursor = c + 20;
+    f += rng(8, 25);
   }
-  stT0 = Float32Array.from(t0); stT1 = Float32Array.from(t1);
-  stT2 = Float32Array.from(t2); stPeak = Float32Array.from(pk);
-  stCount = t0.length;
-  flT = Float32Array.from(ft); flA = Float32Array.from(fa);
-  flCount = ft.length;
 }
 
-// Monotonic cursors, re-seeked only when the clock jumps backwards (dev scrubbing).
-let sIdx = 0, fIdx = 0;
-
-function seek(arr, n, tt, idx) {
-  if (idx >= n || arr[idx] > tt) idx = 0;
-  while (idx + 1 < n && arr[idx + 1] <= tt) idx++;
-  return idx;
+// A dev-forced storm (window.weather.storm()) gets its own stroke train, or the lab
+// would test a squall with no lightning in it on a calm day. It overwrites the day's
+// strokes until the next day-index change re-deals them; the forced storm retires
+// itself well before that matters.
+function forcedLightning(t0) {
+  sSeed = (Math.imul(Math.floor(t0) | 0, 0x85ebca6b) ^ 0x27d4eb2f) | 0;
+  flCount = 0;
+  const b = t0 + RISE + 90;
+  let f = t0 + RISE + rng(2, 8);
+  while (f < b - 1.5 && flCount < FL_CAP - 4) {
+    const amp = rng(0.6, 1.0);
+    flT[flCount] = f; flA[flCount] = amp; flCount++;
+    let e = f;
+    const echoes = 1 + Math.floor(rnd() * 3);
+    for (let k = 0; k < echoes; k++) {
+      e += rng(0.09, 0.26);
+      if (e - f > 0.85) break;
+      flT[flCount] = e; flA[flCount] = amp * rng(0.22, 0.5); flCount++;
+    }
+    f += rng(8, 25);
+  }
 }
 
-function stormAt(tt) {
-  sIdx = seek(stT2, stCount, tt, sIdx);
-  // seek() lands on the last storm whose END has passed; the live one is the next.
-  let i = sIdx;
-  if (i < stCount && stT2[i] <= tt) i++;
-  if (i >= stCount) return 0;
-  const a = stT0[i];
-  if (tt < a) return 0;
-  const b = stT1[i], c = stT2[i], peak = stPeak[i];
+// The day's storm window in absolute clock units. Written into a reused object.
+const win = { a: 0, b: 0, c: 0, peak: 0, live: false };
+function stormWindow(idx) {
+  win.live = hand.stormDay;
+  const a = dayStartT(idx) + hand.stormAt * CYCLE;
+  win.a = a; win.b = a + RISE + hand.stormLen; win.c = win.b + RELEASE;
+  win.peak = hand.stormPeak;
+  return win;
+}
+
+// The same envelope shape the old scheduler produced, now fed by the hand.
+function stormEnv(tt, idx) {
+  const w = stormWindow(idx);
+  if (!w.live || tt < w.a || tt >= w.c) return 0;
   let env;
-  if (tt < a + RISE) env = smoothstep(0, 1, (tt - a) / RISE) * peak;
-  else if (tt < b) {
+  if (tt < w.a + RISE) env = smoothstep(0, 1, (tt - w.a) / RISE) * w.peak;
+  else if (tt < w.b) {
     // Slow +/-0.15 wander across the hold, two incommensurate rates so it never
     // reads as a loop.
-    const k = tt - a;
-    env = peak + 0.09 * Math.sin(k * 0.081 + i) + 0.06 * Math.sin(k * 0.213 + i * 2.3);
-  } else env = (1 - smoothstep(0, 1, (tt - b) / (c - b))) * peak;
+    const k = tt - w.a;
+    env = w.peak + 0.09 * Math.sin(k * 0.081 + idx) + 0.06 * Math.sin(k * 0.213 + idx * 2.3);
+  } else env = (1 - smoothstep(0, 1, (tt - w.b) / (w.c - w.b))) * w.peak;
   return env < 0 ? 0 : env > 1 ? 1 : env;
 }
 
 const FLASH_DECAY = 0.045;           // ~2 frames at 60fps
 function flashAt(tt) {
-  if (!flCount) return 0;
-  fIdx = seek(flT, flCount, tt, fIdx);
   let v = 0;
-  for (let i = fIdx > 0 ? fIdx - 1 : 0; i <= fIdx; i++) {
+  for (let i = 0; i < flCount; i++) {
     const d = tt - flT[i];
     if (d < 0 || d > FLASH_DECAY) continue;
     const a = flA[i] * (1 - d / FLASH_DECAY);
     if (a > v) v = a;
   }
   return v;
+}
+
+// ---------------------------------------------------------------------------
+// WIND. Pure function of the clock + the day's hand; nothing is integrated, so a
+// scrub lands on exactly the wind that time-of-day owns.
+//   speed  0..1   base (per day) x diurnal lull, lifted by the storm approach, plus
+//                 a smooth gust term (sum of three incommensurate sines — never a
+//                 per-frame random).
+//   dir    rad    slow drift over hours; LOCKED for a storm's whole duration, because
+//                 a squall brings its own wind and holds it until it lets go.
+// ---------------------------------------------------------------------------
+const GUST_FALL = 90;                // seconds the wind takes to let go after a storm
+
+function gustAt(tt) {
+  return 0.062 * Math.sin(tt * 0.3701)
+       + 0.045 * Math.sin(tt * 0.8313 + 1.7)
+       + 0.028 * Math.sin(tt * 1.5227 + 4.1);
+}
+
+// The storm's own wind envelope: begins rising windLead seconds BEFORE the squall,
+// peaks with it, falls over its release plus GUST_FALL.
+function stormWindAt(tt, idx) {
+  const w = stormWindow(idx);
+  if (!w.live) return 0;
+  const lead = hand.windLead;
+  if (tt < w.a - lead || tt > w.c + GUST_FALL) return 0;
+  if (tt < w.a + RISE) return smoothstep(0, 1, (tt - (w.a - lead)) / (lead + RISE));
+  if (tt < w.b) return 1;
+  return 1 - smoothstep(0, 1, (tt - w.b) / (w.c - w.b + GUST_FALL));
+}
+
+function dirAt(tt) {
+  // Two slow incommensurate terms: a full lazy veer over ~4 days plus an hour-scale
+  // wobble. About +/-0.5 rad of drift, which is a weather system moving, not a spin.
+  return hand.windDir0
+       + 0.42 * Math.sin(tt * (Math.PI * 2) / (4 * CYCLE))
+       + 0.16 * Math.sin(tt / 431.7 + 2.1);
+}
+
+function updateWind(tt, idx, dayFac) {
+  // Overnight lull: the sea breeze dies with the sun.
+  const diurnal = 0.58 + 0.42 * dayFac;
+  const sw = stormWindAt(tt, idx);
+  let s = hand.windBase * diurnal;
+  s += (0.97 - s) * sw;                       // the squall dominates when it owns the sky
+  s += gustAt(tt) * (0.35 + 0.65 * s);
+  st.wind.speed = clamp01(s);
+  // A storm LOCKS the direction for its duration (frozen at the moment it landed).
+  const w = win;                              // stormWindAt() just refreshed it
+  st.wind.dir = (w.live && tt >= w.a && tt <= w.c) ? dirAt(w.a) : dirAt(tt);
 }
 
 // ---------------------------------------------------------------------------
@@ -319,10 +480,12 @@ let rawPrev = -1, wSpeed = 1, wPaused = false;
 let fDay = -1, fStorm = -1;          // dev overrides (<0 = off)
 let forcedT0 = -1;                   // dev-triggered storm start
 let fFlash = -1, fFlashT = 0;        // dev-injected stroke (<0 = off) and its hold
+let pendDay = -1e9;               // day() target before the next frame confirms it
 let envSeed = true;                  // seed the envelope on frame 1, don't ramp from 0
 
 export function initWeather() {
-  buildSchedule();
+  st.hand = hand;
+  dealHand(dayIndexAt(0));
   buildRainLayer();
 
   // Dev helpers: window.weather.set(day, storm) / .storm() / .advance(sec).
@@ -333,7 +496,7 @@ export function initWeather() {
         fDay = (day === null || day === undefined) ? -1 : Math.min(1, Math.max(0, day));
         fStorm = (storm === null || storm === undefined) ? -1 : Math.min(1, Math.max(0, storm));
       },
-      storm() { forcedT0 = lastT; fStorm = -1; },
+      storm() { forcedT0 = lastT; fStorm = -1; forcedLightning(lastT); },
       advance(sec) { tOff += sec; },
       // Fire a stroke on the next frame — for grabbing a flash frame on demand.
       // Fire a stroke and hold it for `hold` seconds — a real stroke is 2 frames,
@@ -346,13 +509,47 @@ export function initWeather() {
         const have = (PHASE0 + lastT) % CYCLE;
         tOff += want - have;
       },
+      // Jump the DAY INDEX (scrub only moves inside the current day). Keeps the
+      // time-of-day where it is, so the lab can compare the same hour across hands.
+      day(n) {
+        const cur = pendDay >= -1e8 ? pendDay : dayIndexAt(lastT);
+        if (n === undefined) return cur;
+        const w = Math.floor(n);
+        tOff += (w - cur) * CYCLE;
+        pendDay = w;                  // so two day() calls before a frame still land right
+        return w;
+      },
+      // Deal any day's hand WITHOUT moving the clock — the lab's reroll/preview and
+      // the way a probe reads a run of days. Restores the live day's hand after.
+      peek(n) {
+        const cur = hand.dayIndex;
+        dealHand(Math.floor(n));
+        const snap = window.weather.hand();
+        dealHand(cur);
+        return snap;
+      },
       pause(b) { wPaused = b === undefined ? true : !!b; },
       speed(k) { wSpeed = k === undefined ? 1 : Math.max(0, k); },
+      wind() { return { speed: st.wind.speed, dir: st.wind.dir }; },
+      hand() {
+        const h = st.hand;
+        return {
+          dayIndex: h.dayIndex, fog: h.fog, fogBurn: h.fogBurn,
+          clouds: h.clouds, cloudTex: h.cloudTex,
+          stormDay: h.stormDay, stormAt: h.stormAt, stormLen: h.stormLen,
+          stormPeak: h.stormPeak, sunsetDrama: h.sunsetDrama,
+          moonK: h.moonK, moonPhase: h.moonPhase,
+          windBase: h.windBase, windDir0: h.windDir0, windLead: h.windLead
+        };
+      },
       state() {
         return {
           day: st.day, storm: st.storm, flash: st.flash, clock: lastT,
           sunElev: st.sunElev, sunAzim: st.sunAzim, phase01: st.phase01, ring: st.ring,
-          env: { sky: st.env.sky, sea: st.env.sea, below: st.env.below }
+          dayIndex: st.dayIndex,
+          env: { sky: st.env.sky, sea: st.env.sea, below: st.env.below },
+          hand: window.weather.hand(),
+          wind: { speed: st.wind.speed, dir: st.wind.dir }
         };
       }
     };
@@ -373,6 +570,13 @@ export function updateWeather(dt, t) {
   lastT = tt;
 
   const u = ((PHASE0 + tt) % CYCLE + CYCLE) % CYCLE;
+  // THE DAY HAND. dealHand() early-outs on an unchanged index, so this is one floor
+  // and one compare on every frame but the first of a day (and after a scrub/jump).
+  const dIdx = dayIndexAt(tt);
+  pendDay = -1e9;
+  st.dayIndex = dIdx;
+  dealHand(dIdx);
+
   st.day = fDay >= 0 ? fDay : dayAt(u);
 
   if (fStorm >= 0) {
@@ -380,12 +584,15 @@ export function updateWeather(dt, t) {
   } else if (forcedT0 >= 0) {
     // A dev-forced storm: same envelope shape, 90s hold, then it retires itself.
     const k = tt - forcedT0;
-    if (k > RISE + 90 + RELEASE) { forcedT0 = -1; st.storm = 0; }
+    // On retire, force a re-deal so the day gets its own stroke train back.
+    if (k > RISE + 90 + RELEASE) { forcedT0 = -1; st.storm = 0; hand.dayIndex = -1; }
     else if (k < RISE) st.storm = smoothstep(0, 1, k / RISE);
     else if (k < RISE + 90) st.storm = 0.92 + 0.08 * Math.sin(k * 0.13);
     else st.storm = 1 - smoothstep(0, 1, (k - RISE - 90) / RELEASE);
   } else {
-    st.storm = stormAt(tt);
+    // The hand's storm — and ONLY the hand's. On a calm day this is flatly 0: the
+    // old "a squall every 5-9 minutes forever" schedule is gone on purpose.
+    st.storm = stormEnv(tt, dIdx);
   }
 
   // Lightning only during a storm's hold plateau, and it scales with intensity.
@@ -421,6 +628,11 @@ export function updateWeather(dt, t) {
     st.env.sea += (st.storm - st.env.sea) * (1 - Math.exp(-dtw / 3.5));
     st.env.below += (st.storm - st.env.below) * (1 - Math.exp(-dtw / 8.0));
   }
+
+  // --- wind ------------------------------------------------------------------
+  // After the envelope so it reads the same clock, but it is not derived from env:
+  // wind LEADS the storm, env lags it.
+  updateWind(tt, dIdx, st.day);
 
   // --- surface layer -------------------------------------------------------
   const camY = camera.position.y;
