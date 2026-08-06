@@ -1084,3 +1084,6 @@ function frame() {
   }
 }
 frame();
+
+// DEV: the weather/light lab. One guard, dynamic import — a normal load never fetches it.
+if (location.search.includes('lab')) import('./ui/lab.js').catch(e => console.warn('lab: ' + e));
