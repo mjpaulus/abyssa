@@ -186,7 +186,28 @@ function serialize() {
     return `    ${nm}: {\n      zen: ${trip(p.zen)}, hor: ${trip(p.hor)},\n` +
       `      disc: ${trip(p.disc)}, tint: ${trip(p.tint)}, surfK: ${n3(p.surfK)}, desat: ${n3(p.desat)}\n    }`;
   }).join(',\n');
-  out += '\n  }\n};\n';
+  out += '\n  },\n  cloud: {\n';
+  const c = GLASS.cloud;
+  out += `    scale: ${n3(c.scale)}, drift: ${n3(c.drift)},\n` +
+    `    covCalm: ${n3(c.covCalm)}, covGain: ${n3(c.covGain)}, covStorm: ${n3(c.covStorm)},\n` +
+    `    softCalm: ${n3(c.softCalm)}, softStorm: ${n3(c.softStorm)},\n` +
+    `    litK: ${n3(c.litK)}, baseK: ${n3(c.baseK)}, baseDark: ${n3(c.baseDark)}, stormLit: ${n3(c.stormLit)},\n` +
+    `    emberK: ${n3(c.emberK)}, emberElev: ${n3(c.emberElev)}, emberGain: ${n3(c.emberGain)}\n  },\n`;
+  const fg = GLASS.fog;
+  out += '  fog: {\n';
+  out += `    thr: ${n3(fg.thr)}, full: ${n3(fg.full)}, burnBand: ${n3(fg.burnBand)},\n` +
+    `    maxK: ${n3(fg.maxK)}, zenK: ${n3(fg.zenK)}, discK: ${n3(fg.discK)},\n` +
+    `    stormKill: ${n3(fg.stormKill)}, nightK: ${n3(fg.nightK)},\n` +
+    `    col: ${trip(fg.col)}\n  },\n`;
+  const mo = GLASS.moon;
+  out += '  moon: {\n';
+  out += `    elevMax: ${n3(mo.elevMax)}, azimOffset: ${n3(mo.azimOffset)}, radius: ${n3(mo.radius)},\n` +
+    `    bright: ${n3(mo.bright)}, earthshine: ${n3(mo.earthshine)}, halo: ${n3(mo.halo)},\n` +
+    `    col: ${trip(mo.col)}, hemiLift: ${n3(mo.hemiLift)}\n  },\n`;
+  const ww = GLASS.windwater;
+  out += '  windwater: {\n';
+  out += `    capThr: ${n3(ww.capThr)}, capK: ${n3(ww.capK)}, anisoK: ${n3(ww.anisoK)},\n` +
+    `    ampK: ${n3(ww.ampK)}, currentK: ${n3(ww.currentK)}, decayH: ${n3(ww.decayH)}\n  }\n};\n`;
   return out;
 }
 
@@ -256,6 +277,130 @@ function build() {
   el('button', null, sbt, 'squall').addEventListener('click', () => wx().storm());
   el('button', null, sbt, 'flash').addEventListener('click', () => wx().flash(0.95, 0.25));
 
+  // --- TODAY'S HAND ------------------------------------------------------------
+  el('h4', null, bd, "today's hand");
+  const hro = el('div', 'ro', bd);
+  const hbt = el('div', 'btns', bd);
+  el('button', null, hbt, 'prev day').addEventListener('click', () => { wx().day(wx().day() - 1); });
+  el('button', null, hbt, 'next day').addEventListener('click', () => { wx().day(wx().day() + 1); });
+  const filtSel = el('select', null, bd);
+  filtSel.style.cssText = 'background:#111a1e;border:1px solid #232b31;color:#c8bfa8;' +
+    'font:inherit;font-size:10px;padding:2px 4px;margin:4px 0';
+  [['any', 'any'], ['foggy', 'foggy (fog>0.5)'], ['storm', 'storm'],
+    ['clear', 'clear (clouds<0.2 & fog<0.3)'], ['moon', 'big moon (moonK>0.8)']]
+    .forEach(([v, lb]) => { const o = el('option', null, filtSel, lb); o.value = v; });
+  const rbt = el('div', 'btns', bd);
+  const rrBtn = el('button', null, rbt, 'reroll');
+  const handStatus = el('p', 'note', bd, '');
+  function handMatches(h, filt) {
+    switch (filt) {
+      case 'foggy': return h.fog > 0.5;
+      case 'storm': return h.stormDay;
+      case 'clear': return h.clouds < 0.2 && h.fog < 0.3;
+      case 'moon': return h.moonK > 0.8;
+      default: return true;
+    }
+  }
+  rrBtn.addEventListener('click', () => {
+    const w = wx(); if (!w) return;
+    const cur = w.day();
+    for (let i = 1; i <= 60; i++) {
+      const idx = cur + i;
+      const h = w.peek(idx);
+      if (handMatches(h, filtSel.value)) {
+        w.day(idx);
+        handStatus.textContent = `landed on day ${idx} (+${i}, filter: ${filtSel.value})`;
+        return;
+      }
+    }
+    handStatus.textContent = `none in 60 (filter: ${filtSel.value})`;
+  });
+
+  // --- WIND ---------------------------------------------------------------------
+  el('h4', null, bd, 'wind');
+  const wro = el('div', 'ro', bd);
+  const wsRow = el('div', 'row', bd);
+  el('span', 'dot', wsRow).style.visibility = 'hidden';
+  el('span', 'nm', wsRow, 'speed');
+  const wsR = el('input', null, wsRow); wsR.type = 'range'; wsR.min = 0; wsR.max = 1; wsR.step = 0.01;
+  const wsV = el('span', 'vl', wsRow);
+  const wdRow = el('div', 'row', bd);
+  el('span', 'dot', wdRow).style.visibility = 'hidden';
+  el('span', 'nm', wdRow, 'dir');
+  const wdR = el('input', null, wdRow); wdR.type = 'range'; wdR.min = 0; wdR.max = 360; wdR.step = 1;
+  const wdV = el('span', 'vl', wdRow);
+  let windState = { speed: 0, dirDeg: 0 };
+  function pushWind() {
+    windState.speed = parseFloat(wsR.value); windState.dirDeg = parseFloat(wdR.value);
+    wsV.textContent = windState.speed.toFixed(2); wdV.textContent = windState.dirDeg.toFixed(0) + '°';
+    window.__sky && window.__sky.wind(windState.speed, windState.dirDeg * Math.PI / 180);
+  }
+  wsR.addEventListener('input', pushWind);
+  wdR.addEventListener('input', pushWind);
+  wsR.value = 0; wdR.value = 0; wsV.textContent = '0.00'; wdV.textContent = '0°';
+  const wbt = el('div', 'btns', bd);
+  el('button', null, wbt, 'auto').addEventListener('click', () => {
+    window.__sky && window.__sky.windOff();
+  });
+
+  // --- CLOUDS / FOG / MOON / WINDWATER -----------------------------------------
+  el('h4', null, bd, 'sky drama');
+  function knobGroup(title, holder, boot, spec) {
+    const d = el('details', 'stop', bd);
+    const sm = el('summary', null, d);
+    el('span', null, sm, title);
+    const in_ = el('div', 'in', d);
+    spec.forEach(f => {
+      if (f.color) colorField(in_, f.key, holder, f.key, boot[f.key]);
+      else slider(in_, f.key, holder, f.key, f.min, f.max, f.step, boot[f.key]);
+    });
+  }
+  knobGroup('clouds', GLASS.cloud, BOOT.cloud, [
+    { key: 'scale', min: 0, max: 10, step: 0.05 },
+    { key: 'drift', min: 0, max: 0.1, step: 0.001 },
+    { key: 'covCalm', min: 0, max: 1, step: 0.01 },
+    { key: 'covGain', min: 0, max: 1, step: 0.01 },
+    { key: 'covStorm', min: 0, max: 1, step: 0.01 },
+    { key: 'softCalm', min: 0, max: 1, step: 0.01 },
+    { key: 'softStorm', min: 0, max: 1, step: 0.01 },
+    { key: 'litK', min: 0, max: 2, step: 0.01 },
+    { key: 'baseK', min: 0, max: 2, step: 0.01 },
+    { key: 'baseDark', min: 0, max: 1, step: 0.01 },
+    { key: 'stormLit', min: 0, max: 1, step: 0.01 },
+    { key: 'emberK', min: 0, max: 1, step: 0.01 },
+    { key: 'emberElev', min: 0, max: 60, step: 0.5 },
+    { key: 'emberGain', min: 0, max: 5, step: 0.05 }
+  ]);
+  knobGroup('fog', GLASS.fog, BOOT.fog, [
+    { key: 'thr', min: 0, max: 1, step: 0.01 },
+    { key: 'full', min: 0, max: 1, step: 0.01 },
+    { key: 'burnBand', min: 0, max: 30, step: 0.5 },
+    { key: 'maxK', min: 0, max: 1, step: 0.01 },
+    { key: 'zenK', min: 0, max: 1, step: 0.01 },
+    { key: 'discK', min: 0, max: 1, step: 0.01 },
+    { key: 'stormKill', min: 0, max: 1, step: 0.01 },
+    { key: 'nightK', min: 0, max: 1, step: 0.01 },
+    { key: 'col', color: true }
+  ]);
+  knobGroup('moon', GLASS.moon, BOOT.moon, [
+    { key: 'elevMax', min: 0, max: 90, step: 0.5 },
+    { key: 'azimOffset', min: 0, max: 360, step: 1 },
+    { key: 'radius', min: 0, max: 0.2, step: 0.001 },
+    { key: 'bright', min: 0, max: 3, step: 0.01 },
+    { key: 'earthshine', min: 0, max: 1, step: 0.01 },
+    { key: 'halo', min: 0, max: 0.3, step: 0.005 },
+    { key: 'col', color: true },
+    { key: 'hemiLift', min: 0, max: 1, step: 0.01 }
+  ]);
+  knobGroup('wind / water', GLASS.windwater, BOOT.windwater, [
+    { key: 'capThr', min: 0, max: 1, step: 0.01 },
+    { key: 'capK', min: 0, max: 2, step: 0.01 },
+    { key: 'anisoK', min: 0, max: 1, step: 0.01 },
+    { key: 'ampK', min: 0, max: 1, step: 0.01 },
+    { key: 'currentK', min: 0, max: 5, step: 0.05 },
+    { key: 'decayH', min: 0, max: 300, step: 1 }
+  ]);
+
   // --- SURFACE: the sun -------------------------------------------------------
   el('h4', null, bd, 'surface — sun');
   const s = GLASS.sun, bs = BOOT.sun;
@@ -320,6 +465,10 @@ function build() {
     const b = clone(BOOT);
     Object.assign(GLASS.sun, b.sun);
     for (const nm in b.stops) Object.assign(GLASS.stops[nm], b.stops[nm]);
+    Object.assign(GLASS.cloud, b.cloud);
+    Object.assign(GLASS.fog, b.fog);
+    Object.assign(GLASS.moon, b.moon);
+    Object.assign(GLASS.windwater, b.windwater);
     syncAll();
     status.textContent = 'boot values restored';
   });
@@ -366,6 +515,29 @@ function build() {
       `   below ${q.env.below.toFixed(3)}`;
     if (!dragging) time.value = Math.round(q.phase01 * 1000);
     drawRing(q.phase01, q.day);
+
+    // --- today's hand -----------------------------------------------------
+    const h = q.hand;
+    const stormTxt = h.stormDay
+      ? `at ${h.stormAt.toFixed(2)} len ${h.stormLen.toFixed(0)} peak ${h.stormPeak.toFixed(2)}`
+      : '—';
+    hro.textContent =
+      `day    ${q.dayIndex}\n` +
+      `fog    ${h.fog.toFixed(2)}  burn ${h.fogBurn.toFixed(1)}\n` +
+      `clouds ${h.clouds.toFixed(2)}  tex ${h.cloudTex.toFixed(2)}\n` +
+      `storm  ${stormTxt}\n` +
+      `sunset drama ${h.sunsetDrama.toFixed(2)}\n` +
+      `moon   K ${h.moonK.toFixed(2)}  phase ${h.moonPhase.toFixed(2)}\n` +
+      `wind base ${h.windBase.toFixed(2)}`;
+
+    // --- wind ---------------------------------------------------------------
+    const sky = window.__sky;
+    if (sky) {
+      const p = sky.probe();
+      wro.textContent =
+        `eased  speed ${p.windS.toFixed(3)}\n` +
+        `target speed ${p.windT[0].toFixed(3)}  ${p.forced ? '(forced)' : '(auto)'}`;
+    }
   }, 200);
 
   // --- input containment ------------------------------------------------------
