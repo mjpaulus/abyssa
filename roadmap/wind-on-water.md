@@ -1,6 +1,6 @@
 ---
 title: SKY & WIND — wind on the water
-status: next
+status: done
 tags: water, waves, player
 updated: 2026-08-05
 ---
@@ -15,3 +15,4 @@ Builds on day hands (wind {speed, dir}); runs AFTER the clouds/fog/moon card (sa
 
 ## Log
 - 2026-08-05 — cut from the west-coast round; serialized behind the sky card
+- 2026-08-06 — shipped: anisotropic chop in waveSum (vertex+fragment+CPU mirror agree — maxAbsDiff 0 at wind 0 over 1600 samples), whitecaps height-led (coverage 9-13% calm to gale, hard-clamped 0.26 under bloom), wind-aligned undercurrent decaying exp(-depth/60) — push at -30 (2.2u/5s), noise by -200. game.js wired setWindCurrentVec off the EASED wind. GLASS.windwater knobs

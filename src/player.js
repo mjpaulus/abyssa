@@ -1,7 +1,7 @@
 // Player state, input, and underwater/ground locomotion. OWNED BY: orchestrator.
 import * as THREE from 'three';
 import { renderer } from './core.js';
-import { WORLD_R, SURFACE_Y, RIFT_R, riftPos } from './config.js';
+import { WORLD_R, SURFACE_Y, RIFT_R, riftPos, GLASS } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
 import { terrainH, terrainNormal, clampR } from './world/terrain.js';
 import { rockColliders } from './world/flora.js';
@@ -62,6 +62,25 @@ export function rightVec() { return _right.set(Math.sin(player.yaw - Math.PI / 2
 let stormK = 0;
 export function setStormCurrent(k) { stormK = k; }
 
+// THE UNDERCURRENT. The wind on the surface drags the water under it: a wind-aligned
+// drift that is real at -30, a whisper at -200 and arithmetically nothing in the abyss.
+// setStormCurrent's signature is left ALONE — it carries a scalar and callers depend on
+// that — so this is its own setter, called next to it in game.js with the EASED wind
+// water.js publishes (windState()), so the drift and the chop re-aim on one curve.
+// Zero-safe: with the wiring absent, windS stays 0 and every term below vanishes.
+let windS = 0, windX = 0, windZ = 0;
+export function setWindCurrent(speed, dirRad) {
+  windS = clamp(speed || 0, 0, 1);
+  // (cos, sin) in (x, z) — water.js's convention for the same angle. See the note there.
+  windX = Math.cos(dirRad || 0); windZ = Math.sin(dirRad || 0);
+}
+// Vector form, for callers that already hold the eased unit bearing and would only be
+// converting it to an angle for this function to convert it straight back.
+export function setWindCurrentVec(speed, dx, dz) {
+  windS = clamp(speed || 0, 0, 1);
+  windX = dx; windZ = dz;
+}
+
 // Slow large-scale current that varies over space and time; gives the water a living push.
 const current = V3();
 function sampleCurrent(pos, t) {
@@ -73,7 +92,20 @@ function sampleCurrent(pos, t) {
   // time term it is a STATIC field — a permanent per-location updraught — and once
   // buoyancy exists that reads as the trim being broken rather than as water moving.
   const c = (fbm(pos.x * s + 7, pos.z * s + 3 + t * 0.05) - 0.5) * 0.22;
-  return current.set(a, c, b).multiplyScalar(2.2 * surge);
+  current.set(a, c, b).multiplyScalar(2.2 * surge);
+  // The wind drift rides ON TOP of the ambient field, horizontally only — wind does not
+  // push water down. It is ADDED after the surge multiply on purpose: it must not be
+  // amplified by the storm term (they are two separate things arriving together), and
+  // at wind 0 this whole block is +0.
+  if (windS > 0.0005) {
+    const WW = GLASS.windwater;
+    // depth is measured from the mean waterline, not the live crest: one exp per frame,
+    // and a diver 30 units down does not care which way the swell happens to be leaning.
+    const depth = SURFACE_Y - pos.y;
+    const k = windS * WW.currentK * (depth <= 0 ? 1 : Math.exp(-depth / WW.decayH));
+    current.x += windX * k; current.z += windZ * k;
+  }
+  return current;
 }
 
 // Steeper than this and the diver can't get purchase; he slides instead of walking.

@@ -363,7 +363,20 @@ export function setRayDim(k) { rayDim = k; }
 // envelope alone — which is a plain overcast deck, no fog and no moon, i.e. what
 // shipped. Nothing here can break if the wiring is missing.
 let wHand = null, wWind = null;
-export function setWeatherHand(hand, wind) { wHand = hand; wWind = wind || null; }
+export function setWeatherHand(hand, wind) {
+  wHand = hand; wWind = wind || null;
+  // The wind TARGET is latched here; updateWater chases it. Storing the target rather
+  // than the uniform is what makes the re-aim a property of the water instead of a
+  // property of how often game.js happens to call this.
+  const w = _wForce || wWind;
+  if (w) {
+    _wspT = clamp(w.speed, 0, 1);
+    // (cos, sin) in the (x, z) plane — the SAME convention WAVE's own `deg` column uses
+    // and the same one the sky's uCloudDrift integrates, so the chop, the cloud deck and
+    // the undercurrent all point one way. Getting this 90 degrees out is silent.
+    _wdTX = Math.cos(w.dir); _wdTZ = Math.sin(w.dir);
+  } else { _wspT = 0; }
+}
 // Read by lighting.js (see the note there): the marine layer's flat white light and a
 // bright moon's lift are AMBIENCE, not new Light objects.
 export const airAmbience = { fog: 0, moon: 0 };
@@ -387,6 +400,16 @@ if (typeof window !== 'undefined') {
       return this.h;
     },
     release() { setWeatherHand(null, null); this.h = null; },
+    // Force the wind, over the top of whatever game.js pushes each frame. The EASE still
+    // runs, which is the point: wind(0.9, 1.57) is how you watch the chop re-aim.
+    wind(speed, dir) {
+      _wForce = { speed, dir: dir === undefined ? (_wForce ? _wForce.dir : 0) : dir };
+      setWeatherHand(wHand, wWind);
+      return _wForce;
+    },
+    windOff() { _wForce = null; setWeatherHand(wHand, wWind); },
+    // Snap the ease home, for a screenshot that should not have to wait 16 seconds.
+    windSnap() { _wsp = _wspT; _wdX = _wdTX; _wdZ = _wdTZ; },
     probe() {
       return {
         cov: uCloudCov.value, soft: uCloudSoft.value, tex: uCloudTex.value,
@@ -395,7 +418,10 @@ if (typeof window !== 'undefined') {
         fog: uFog.value, fogCol: uFogCol.value.toArray(), discK: uDiscK.value,
         moon: uMoonCol.value.toArray(), moonDir: uMoonDir.value.toArray(),
         moonPh: uMoonPh.value.toArray(),
-        amb: { fog: airAmbience.fog, moon: airAmbience.moon }
+        amb: { fog: airAmbience.fog, moon: airAmbience.moon },
+        windS: uWindS.value, windD: [uWindD.value.x, uWindD.value.y],
+        windT: [_wspT, _wdTX, _wdTZ], forced: !!_wForce,
+        windK: [uWindK.value.x, uWindK.value.y], cap: [uCap.value.x, uCap.value.y]
       };
     }
   };
@@ -989,6 +1015,42 @@ const WAVE = [
 ];
 const DISP = Math.sqrt(9.81 / 3);   // k is per world unit and a unit is 3 m: omega = sqrt(g*k/3)
 
+// ---------------------------------------------------------------------------
+// WIND ON THE WATER — the field obeys the day hand's wind.
+// ---------------------------------------------------------------------------
+// This is a BIAS on the spectrum above, not a second ocean. Each component keeps its
+// wavelength, its dispersion-correct speed and its retirement radius; what the wind
+// changes is (a) the component's BEARING, dragged part-way onto the wind axis, and
+// (b) how the amplitude is distributed across the spread — energy onto the components
+// already pointing downwind, away from the ones lying across it.
+//
+// At uWindS = 0 every one of those terms is an exact identity: mix(d0, ..., 0) is d0,
+// d0 is already unit so normalize() is a no-op, and both amplitude factors are 1. Calm
+// windless noon therefore renders the shipped field bit-for-bit. That is the anchor.
+//
+// The direction is carried as a VECTOR, not an angle, and eased on the CPU (see
+// updateWater): a new bearing re-aims the chop over ~15 s instead of snapping, and a
+// vector lerp needs no wrap handling. A 180-degree reversal passes near zero length on
+// the way, which reads as the wind dropping and rebuilding on the new bearing — which
+// is what actually happens.
+const uWindD = { value: new THREE.Vector2(1, 0) };   // eased unit bearing (x, z)
+const uWindS = { value: 0 };                          // eased speed 0..1
+const uWindK = { value: new THREE.Vector2(GLASS.windwater.anisoK, GLASS.windwater.ampK) };
+const uCap = { value: new THREE.Vector2(GLASS.windwater.capThr, GLASS.windwater.capK) };
+// Eased CPU state. Module-scoped, zero allocation per frame.
+let _wdX = 1, _wdZ = 0, _wsp = 0;
+// Targets, written by setWeatherHand (or the dev override) and chased in updateWater.
+let _wdTX = 1, _wdTZ = 0, _wspT = 0;
+// Time constant of the re-aim. tau 5.5 s puts a 90-degree swing 95% home in ~16 s,
+// which is the card's "over seconds, not on the frame".
+const WIND_TAU = 5.5;
+// Dev override: game.js pushes the real wind every frame, so poking the stored object
+// is not enough to force a sweep. window.__sky.wind(s, dirRad) / .windOff().
+let _wForce = null;
+// Declared inside the wave GLSL so both the vertex and the fragment copy see them; the
+// two are compiled into one program, which is exactly what a shared uniform is for.
+const GLSL_WIND_DECL = `uniform vec2 uWindD, uWindK; uniform float uWindS;`;
+
 // CPU mirror of the VERTEX wave pass (the first 3 components — the ones the mesh actually
 // carries as geometry, so this is the height the surface really has). Evaluated at the
 // camera's own xz, where the distance taper is 1 by construction (dist = 0 < fr*0.5).
@@ -1005,12 +1067,27 @@ const _wavePhase = WAVE.slice(0, 3).map(([lam, deg, a0, a1]) => {
   const k = 2 * Math.PI / lam, a = deg * Math.PI / 180;
   return { k, w: DISP * Math.sqrt(k), dx: Math.cos(a), dz: Math.sin(a), a0, a1 };
 });
+// MIRRORS THE WIND BIAS EXACTLY. It has to: game.js clamps the play camera against
+// localSurfaceY() and the refraction clip plane is placed on it, so if the CPU height
+// and the vertex height disagree the eye crosses the interface at the wrong moment and
+// the raft rides a swell the water is not making.
 export function surfaceHeightAt(x, z, t, storm) {
   const sm = THREE.MathUtils.smoothstep(storm, 0, 0.90);
+  const aK = uWindK.value.x, mK = uWindK.value.y, S = uWindS.value;
+  const wx = uWindD.value.x, wz = uWindD.value.y;
   let h = 0;
   for (let i = 0; i < 3; i++) {
     const c = _wavePhase[i];
-    h += (c.a0 + (c.a1 - c.a0) * sm) * Math.sin((x * c.dx + z * c.dz) * c.k + t * c.w);
+    const sgn = c.dx * wx + c.dz * wz < 0 ? -1 : 1;
+    const k2 = aK * S;
+    let dx = c.dx + (wx * sgn - c.dx) * k2, dz = c.dz + (wz * sgn - c.dz) * k2;
+    const L = Math.hypot(dx, dz) || 1;
+    dx /= L; dz /= L;
+    const al = dx * wx + dz * wz, al2 = al * al;
+    const amp = (c.a0 + (c.a1 - c.a0) * sm)
+      * (1 + mK * S * (1 - 0.5 * sm))
+      * (1 + S * ((1 - aK) + 2 * aK * al2 - 1));
+    h += amp * Math.sin((x * dx + z * dz) * c.k + t * c.w);
   }
   return h;
 }
@@ -1035,21 +1112,30 @@ function waveSum(n) {
     const [lam, deg, a0, a1, fr] = WAVE[i];
     const k = 2 * Math.PI / lam, w = DISP * Math.sqrt(k), a = deg * Math.PI / 180;
     const dx = Math.cos(a), dz = Math.sin(a);
-    s += `\n  { float amp=mix(${f(a0)},${f(a1)},sm)*(1.0-smoothstep(${f(fr * 0.5)},${f(fr)},dist));
-    float q=(p.x*${f(dx)}+p.y*${f(dz)})*${f(k)}+t*${f(w)};
-    h+=amp*sin(q); g+=${v2([dx, dz])}*(amp*${f(k)}*cos(q)); }`;
+    // d0 -> dw: the bearing dragged onto the wind axis, taking whichever SIGN of the
+    // wind vector is nearer so a component never has to swing through 180 degrees (and
+    // so a beam wind rotates the chop rather than reversing its travel).
+    s += `\n  { vec2 d0=${v2([dx, dz])};
+    vec2 dw=normalize( mix( d0, uWindD*(dot(d0,uWindD)<0.0?-1.0:1.0), uWindK.x*uWindS ) );
+    float al=dot(dw,uWindD); al*=al;
+    float amp=mix(${f(a0)},${f(a1)},sm)
+      *(1.0+uWindK.y*uWindS*(1.0-0.5*sm))
+      *(1.0+uWindS*(mix(1.0-uWindK.x,1.0+uWindK.x,al)-1.0))
+      *(1.0-smoothstep(${f(fr * 0.5)},${f(fr)},dist));
+    float q=dot(p,dw)*${f(k)}+t*${f(w)};
+    h+=amp*sin(q); g+=dw*(amp*${f(k)}*cos(q)); }`;
   }
   return s;
 }
 // Vertex pass: the three components the mesh can actually carry as geometry.
-const GLSL_WAVE_V = `
+const GLSL_WAVE_V = `${GLSL_WIND_DECL}
 float waveH( vec2 p, float t, float storm, float dist ){
   float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);${waveSum(3)}
   return h;
 }`;
 // Fragment pass: all six, height and analytic gradient. The gradient is the normal, and
 // the normal is the whole image — it decides refraction, reflection and Fresnel at once.
-const GLSL_WAVE_F = `
+const GLSL_WAVE_F = `${GLSL_WIND_DECL}
 vec3 waveHN( vec2 p, float t, float storm, float dist ){
   float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);${waveSum(6)}
   return vec3(h,g);
@@ -1218,7 +1304,8 @@ function buildSurface() {
     uFlash: { value: 0 },
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
     uBright: { value: 1 }, uFade: { value: 1 },
-    uRefr, uRefrK, uRefrSide, uRes
+    uRefr, uRefrK, uRefrSide, uRes,
+    uWindD, uWindS, uWindK, uCap
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -1241,6 +1328,7 @@ function buildSurface() {
       ${GLSL_WAVE_F}
       uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
                     uFoamThr, uFlash, uRefrK, uRefrSide;
+      uniform vec2 uCap;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
       ${GLSL_SKY_DECL}
       uniform sampler2D uRefr;
@@ -1371,7 +1459,8 @@ function buildSurface() {
       void main(){
         vec3 V = normalize( vW - uCam );
         float dist = distance( vW.xz, uCam.xz );
-        vec2 dh = waveHN( vW.xz, uTime, uStorm, dist ).yz;
+        vec3 hn = waveHN( vW.xz, uTime, uStorm, dist );
+        vec2 dh = hn.yz;
 
         float rain = 0.0;
         vec2 dhRain = vec2( 0.0 );   // kept separate: the air side wants less of it
@@ -1521,6 +1610,53 @@ function buildSurface() {
                    * ( 0.20 + 0.80 * uStorm )
                    * ( 0.45 + 0.75 * vn( vW.xz * 0.55 + vec2( uTime * 0.12 ) ) );
         col = mix( col, foamCol, clamp( foam, 0.0, 0.85 ) * uNearK );
+
+        // WHITECAPS. Above uCap.x of wind the tops tear off. Keyed on the wave field's
+        // own height AND its steepness — a tall smooth swell does not break, a steep
+        // little chop does, and a crest is where the two coincide. Both come straight
+        // out of waveHN, so there is no texture fetch and no second field to keep in
+        // sync with the one the normal is built from: caps land ON crests by
+        // construction, and they re-aim with the wind because the crests do.
+        //
+        // Written AFTER the Fresnel composite and after the storm foam, and outside the
+        // below/air branch, so a cap reads from the deck and from three units under
+        // looking up through the interface — the same torn white on both sides, which is
+        // the whole point of the interface being one shader.
+        //
+        // Scene-linear discipline: the colour is HARD CLAMPED at 0.26, under
+        // BloomEffect's 0.28. The storm foam above deliberately crosses it (it is the one
+        // thing on a storm ceiling that glows); this does not, or a gale becomes a field
+        // of fireworks. Desaturated white-green rather than the foam's blue-white: torn
+        // water carries the sea's own colour in it, not the sky's.
+        float capW = smoothstep( uCap.x, min( 0.98, uCap.x + 0.30 ), uWindS );
+        if ( capW > 0.0 ) {
+          // Height normalised against the field's own working range, so the term does
+          // not quietly turn into a storm gate: at storm 0 the three carried components
+          // peak near 0.58, at storm 1 near 1.82.
+          // BOTH terms are normalised by the sea state, not by absolute numbers. An
+          // absolute steepness gate was tried first and is WRONG here: for a wave train
+          // |grad h| peaks at the ZERO CROSSINGS, not at the crests, so gating height
+          // AND steepness multiplicatively selects the places they happen to coincide —
+          // measured over 200k samples that is 3.6% of the surface at storm 0 falling to
+          // 0.39% at storm 1, i.e. the caps got RARER as the sea got worse.
+          // So: height picks the crest, steepness only BRIGHTENS it. Coverage then holds
+          // at 9-13% of the surface from flat calm to full gale before the tear noise
+          // and the wind gate cut it further.
+          float hRef = 0.58 + 1.24 * uStorm, gRef = 0.075 + 0.24 * uStorm;
+          float crest = smoothstep( 0.55, 1.00, hn.x / hRef );
+          float steep = 0.55 + 0.45 * smoothstep( 0.55, 1.30, length( dh ) / gRef );
+          // Torn, not painted: two octaves drifting DOWNWIND break the band into patches
+          // and streaks, and the second is sampled anisotropically along the wind axis.
+          vec2 wr = vec2( vW.x * uWindD.x + vW.z * uWindD.y,
+                         -vW.x * uWindD.y + vW.z * uWindD.x );
+          float tear = vn( vec2( wr.x * 0.14 - uTime * 0.55, wr.y * 0.62 ) )
+                     * ( 0.55 + 0.85 * vn( vec2( wr.x * 0.045 - uTime * 0.24, wr.y * 0.20 ) + 5.1 ) );
+          vec3 capCol = vec3( 0.90, 1.00, 0.94 )
+                      * min( dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6, 0.26 );
+          float cap = capW * uCap.y * crest * steep * smoothstep( 0.12, 0.50, tear )
+                    * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
+          col = mix( col, capCol, clamp( cap, 0.0, 0.90 ) );
+        }
         // the LENS is the effect; the fleck is a garnish. Air side keeps a tenth of the
         // fleck for the same reason the air side dropped the ring normal above.
         // Air side is 0.0, not 0.10: the rain field is a REGULAR lattice, and from above
@@ -1765,9 +1901,31 @@ function skyDrama(dt, storm) {
   airAmbience.moon = vis;
 }
 
+// Published for player.js's undercurrent (game.js wires it): the EASED wind, so the
+// drift under the surface re-aims on exactly the same curve the chop above it does.
+export function windState() { return _windOut; }
+const _windOut = { speed: 0, dx: 1, dz: 0 };
+
 export function updateWater(dt, t) {
   uTime.value = t;
   const y = camera.position.y, d01 = clamp(-y / 900, 0, 1);
+
+  // --- the wind eases; it never snaps. ------------------------------------------
+  // Exponential chase, frame-rate independent. Done BEFORE the surface height below,
+  // because surfaceHeightAt reads these same uniforms and localSurfaceY has to be the
+  // height the vertex shader is about to write, not last frame's.
+  {
+    const a = 1 - Math.exp(-dt / WIND_TAU);
+    _wsp += (_wspT - _wsp) * a;
+    _wdX += (_wdTX - _wdX) * a; _wdZ += (_wdTZ - _wdZ) * a;
+    const L = Math.hypot(_wdX, _wdZ);
+    if (L > 1e-4) { uWindD.value.set(_wdX / L, _wdZ / L); }
+    uWindS.value = _wsp;
+    const WW = GLASS.windwater;
+    uWindK.value.set(WW.anisoK, WW.ampK);
+    uCap.value.set(WW.capThr, WW.capK);
+    _windOut.speed = _wsp; _windOut.dx = uWindD.value.x; _windOut.dz = uWindD.value.y;
+  }
 
   // ONE answer to "is the eye in air", against the real surface under the camera, shared
   // by the background dome and the sea's occlusion. Computed first because both read it.

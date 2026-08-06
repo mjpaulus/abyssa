@@ -217,6 +217,36 @@ export const GLASS = {
     halo: 0.055,          // the soft aureole around it
     col: [0.72, 0.82, 1.00],  // cool; the night stop's disc was already this family
     hemiLift: 0.30        // hemisphere/ambient lift in lighting.js on a full-moon night
+  },
+
+  // --- WIND ON THE WATER. The wave field, the whitecaps and the subsurface drift all
+  // read these. EVERY ONE OF THEM IS ZERO-SAFE: at wind.speed 0 the anisotropy mix, the
+  // amplitude gain, the cap term and the current all collapse to exactly what shipped,
+  // which is the regression anchor (calm windless noon must be indistinguishable).
+  // water.js pushes anisoK/ampK/capThr/capK into uniforms every frame, so all four are
+  // live-tunable; currentK/decayH are read by player.js each frame.
+  windwater: {
+    // Wind speed at which torn crests begin. Below this the only foam is the storm
+    // spectrum's own |grad h| term that shipped.
+    capThr: 0.60,
+    capK: 1.00,           // strength of the cap mix at wind 1 (colour is clamped separately)
+    // How far each wave component's bearing is dragged onto the wind axis, and how much
+    // the amplitude is redistributed onto the aligned components. The redistribution is
+    // MEAN-NEUTRAL — mix(1-anisoK, 1+anisoK, cos^2) averages to 1 over the spectrum's
+    // spread — so this re-aims the chop without inflating the field on its own.
+    anisoK: 0.45,
+    // Amplitude the wind adds ON TOP of the storm swell, at wind 1 in a dead calm. Held
+    // low and further halved under a full storm: WAVE's storm amplitudes are already
+    // capped because player.js clamps the swim ceiling to y = -1.2 and game.js lifts the
+    // camera 2.4 above it — a taller field puts the interface through the eye at the raft.
+    ampK: 0.30,
+    // Subsurface drift: u/s^2 of wind-aligned push at the surface, at wind 1. Sits well
+    // under the storm surge this rides alongside (that term reaches ~4.8) — it is a
+    // drift, never a shove, and the swim feel is not up for renegotiation.
+    currentK: 1.5,
+    // e-folding depth of that push, in world units. Real at -30 (0.61), a whisper at
+    // -200 (0.036), arithmetically nothing in the abyss (-600 -> 4e-5).
+    decayH: 60
   }
 };
 
