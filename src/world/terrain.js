@@ -1,7 +1,7 @@
 // Seafloor terrain: heightfield, mesh, triplanar PBR material, caustics. OWNED BY: terrain agent.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, RIFT_R, zoneBottom, riftPos, SUN_ELEV_DEG } from '../config.js';
+import { WORLD_R, RIFT_R, zoneBottom, riftPos, SUN } from '../config.js';
 import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textures.js';
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams } from './site.js';
@@ -360,12 +360,15 @@ const MAPS = (() => {
   };
 })();
 
-export const causticsUniforms = { uTime: { value: 0 }, uCamY: { value: 0 }, uSunK: { value: 1 } };
-
-// The same sun the sky, key light and god rays share, in world space, for the caustic
-// shading term below. One constant, one direction — see config.js.
-const _sk = 1 / Math.tan(SUN_ELEV_DEG * Math.PI / 180);
-const SUN_W = new THREE.Vector3(0.894427 * _sk, 1, 0.447214 * _sk).normalize();
+// uSunW: the same sun the sky, key light and god rays share, in WORLD space, for the
+// caustic shading term below. It was a module-level constant baked into the shader
+// source; it is a uniform now, refreshed every updateTerrain from config.js's SUN.
+// It reads dirWater, not dir — a caustic is sunlight that has already crossed the
+// interface, so it arrives inside Snell's window or it is not a caustic.
+export const causticsUniforms = {
+  uTime: { value: 0 }, uCamY: { value: 0 }, uSunK: { value: 1 },
+  uSunW: { value: new THREE.Vector3(SUN.dirWater.x, SUN.dirWater.y, SUN.dirWater.z) }
+};
 
 const COMMON = {
   uDetail: { value: MAPS.detail },
@@ -377,6 +380,7 @@ const FRAG_HEAD = PBR_GLSL + /* glsl */`
 uniform sampler2D uDetail, uRockN, uRipple;
 uniform vec3 uSilt, uGrav, uRock;
 uniform float uTime, uCamY, uCaust, uWet, uSunK;
+uniform vec3 uSunW;
 varying vec3 vWPos, vWNrm;
 
 vec4 tpDetail(vec3 p, vec3 bw, float s) {
@@ -511,7 +515,7 @@ function compileTerrain(sh) {
           // go dark inside the band). The texture now shows through the caustic — the
           // band brightens the detail rather than replacing it. The 4.4 gain rebuys
           // the luminance the albedo multiply costs (floor albedos run 0.05-0.25).
-          vec3 sunV = normalize((viewMatrix * vec4(${SUN_W.x.toFixed(5)}, ${SUN_W.y.toFixed(5)}, ${SUN_W.z.toFixed(5)}, 0.0)).xyz);
+          vec3 sunV = normalize((viewMatrix * vec4(uSunW, 0.0)).xyz);
           float ndl = clamp(dot(normal, sunV), 0.0, 1.0);
           // PARTIALLY normalised albedo, not raw. Raw albedo was physically pure and
           // visually wrong for this world: the palette keeps rock near 0.05 on
@@ -767,6 +771,7 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   // day/storm factor the sky and key light already run on, or the floor sparkles
   // under a black sky.
   causticsUniforms.uSunK.value = sunK;
+  causticsUniforms.uSunW.value.set(SUN.dirWater.x, SUN.dirWater.y, SUN.dirWater.z);
   // A shell only exists for the player in the zone BELOW it, looking up: on when the
   // camera is 40 under the parent floor, off again 340 under (past the next floor,
   // where the zone below's own shell takes over). From above, backfaces + early-z

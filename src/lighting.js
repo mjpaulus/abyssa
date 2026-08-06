@@ -1,14 +1,14 @@
 // Scene lighting rig. OWNED BY: lighting/post agent.
 import * as THREE from 'three';
 import { scene, camera } from './core.js';
-import { SUN_ELEV_DEG, SURFACE_Y } from './config.js';
+import { SUN, SURFACE_Y } from './config.js';
 import { V3, clamp } from './lib/math.js';
 
-// Azimuth is unchanged from the value this project has always used (atan2(0.10, 0.20));
-// only the elevation moves, and it moves in config.js so water.js's sky disc and glitter
-// path travel with it. See the note there for why 77 degrees was never a choice.
-const _k = 1 / Math.tan(SUN_ELEV_DEG * Math.PI / 180);
-export const SUN_VEC = new THREE.Vector3(0.894427 * _k, 1, 0.447214 * _k).normalize();
+// THE SUN IS LIVE. This used to be baked from SUN_ELEV_DEG at module load; it is now a
+// mirror of config.js's SUN.dir, rewritten IN PLACE by updateLighting every frame the
+// sun actually moves. The object identity never changes, so anything holding a
+// reference keeps working — but nothing may assume the numbers are constant.
+export const SUN_VEC = new THREE.Vector3(SUN.dir.x, SUN.dir.y, SUN.dir.z);
 
 // Depth palette. World albedos are extremely dark (terrain ~0x14222e), so ambient terms
 // stay low on purpose: contrast comes from the lantern key and the cool rim, not from fill.
@@ -100,18 +100,47 @@ function mixInto(target, a, b, k, t) {
 // Weather modulation (set by game.js from the weather system). Day/storm only bite
 // near the surface — by mid zone 0 the water column has eaten the difference, which
 // keeps the abyss identical day or night.
-let wDay = 1, wStorm = 0, wFlash = 0;
-export function setWeatherLight(day, storm, flash) { wDay = day; wStorm = storm; wFlash = flash; }
+let wDay = 1, wStorm = 0, wFlash = 0, wDeep = 0;
+// `env` is weather.js's single storm envelope {sky, sea, below}. When it is passed, the
+// near-surface bite reads env.sky and the deeper bite reads env.below, so the light and
+// the water are provably on the same eased curve. Omitted (or absent), both fall back to
+// raw storm — which is exactly what shipped, so the anchor is untouched.
+export function setWeatherLight(day, storm, flash, env) {
+  wDay = day; wFlash = flash;
+  wStorm = env ? env.sky : storm;
+  wDeep = env ? env.below : storm;
+}
+
+// The key light and its raft-only shadow camera ride SUN.dir. Both are pure
+// position writes, and they are skipped entirely on the frames the sun has not moved
+// (which is most of them at 12 real minutes per day) — a moved directional light makes
+// three rebuild the shadow matrices, and there is no reason to pay for that at 0 delta.
+let lastElev = -1e9, lastAzim = -1e9;
+function trackSun() {
+  if (SUN.elevDeg === lastElev && SUN.azimDeg === lastAzim) return;
+  lastElev = SUN.elevDeg; lastAzim = SUN.azimDeg;
+  SUN_VEC.set(SUN.dir.x, SUN.dir.y, SUN.dir.z);
+  // 40 units out: the shadow camera sits AT the light and near/far are tuned for that
+  // stand-off. Direction is position-minus-target, so the distance is cosmetic to
+  // shading and load-bearing to the shadow frustum. See the note on sun.position.
+  sun.position.copy(SUN_VEC).multiplyScalar(40);
+  sun.updateMatrixWorld();
+}
 
 // Called each frame with normalized depth 0..1 so lighting can respond to descent.
 export function updateLighting(depth01) {
   rig.depth01 = depth01;
+  trackSun();
   const { a, b, t } = blend(depth01);
   const mix = (k) => a[k] + (b[k] - a[k]) * t;
 
   const surf = 1 - clamp(depth01 * 2.4, 0, 1);       // weather influence, gone by ~40% depth
   const dayK = 0.20 + 0.80 * wDay;                   // deep night keeps a moonlit 20%
-  const stormK = 1 - 0.45 * wStorm;
+  // The gale reaches the top of the column before it reaches the water under it, so the
+  // storm term travels from env.sky at the interface to env.below by the bottom of the
+  // weather band. Identical to the old single-scalar form whenever the two agree — i.e.
+  // at every steady state, and always when game.js passes no envelope.
+  const stormK = 1 - 0.45 * (wDeep + (wStorm - wDeep) * surf);
   const wk = 1 - surf * (1 - dayK * stormK);
   const flashBoost = surf * wFlash;
 

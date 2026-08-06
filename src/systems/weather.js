@@ -20,9 +20,26 @@
 // replays identically and a dev helper can scrub the clock forward.
 import * as THREE from 'three';
 import { scene, camera } from '../core.js';
-import { SURFACE_Y } from '../config.js';
+import { SURFACE_Y, GLASS, setSun, setSkyPhase } from '../config.js';
 
-const st = { day: 1, storm: 0, flash: 0 };
+// THE RETURNED STATE IS ONE REUSED OBJECT (`env` included). Never hold it across a
+// frame, never mutate it from a consumer.
+//   sunElev/sunAzim  degrees; pure functions of time-of-day, fed to setSun().
+//   phase01          0 = midnight, 0.5 = noon.
+//   ring             0..4 on night->dawn->noon->dusk; 2 = noon EXACTLY.
+//   env              the ONE storm envelope every consumer reads instead of raw
+//                    storm: {sky, sea, below}, each 0..1. Sky leads, sea trails,
+//                    below lags ~8s, so weather visibly arrives from above; at a
+//                    steady state all three converge on the same number, which is
+//                    what makes "surface and subsurface move together" checkable.
+//                    Daylight is NOT folded in here on purpose — a lagged day would
+//                    desync the palette from the sun that is casting it.
+const st = {
+  day: 1, storm: 0, flash: 0,
+  sunElev: GLASS.sun.elevNoon, sunAzim: GLASS.sun.azimCenter,
+  phase01: 0.5, ring: 2,
+  env: { sky: 0, sea: 0, below: 0 }
+};
 
 // ---------------------------------------------------------------------------
 // Clock. 12 real minutes per full day.
@@ -45,6 +62,36 @@ function dayAt(u) {
   // A gentle arc on top of the plateau so midday still reads as a curve rather than
   // a flat hold: exactly 1 at noon, easing off through the afternoon.
   return base * (0.85 + 0.15 * Math.max(0, e));
+}
+
+// --- THE SUN -----------------------------------------------------------------
+// Elevation and azimuth are pure functions of the same solar proxy `e` the daylight
+// curve rides, so the sun and the light it makes can never disagree.
+//
+// NOON IS THE ANCHOR. At u = CYCLE/2 the proxy is exactly +1 and the azimuth term is
+// exactly 0, so elev = elevNoon (58) and azim = azimCenter (26.565): the shipped
+// constants, reproduced bit-for-bit. Everything else is free to move.
+//
+// Below the horizon the elevation eases to a held floor rather than going negative —
+// night is the moon/ambient regime and nothing down there wants a real sun vector.
+// (Underwater consumers additionally clamp at Snell's 41.4 in config.js's setSun.)
+function elevAt(e) {
+  const s = GLASS.sun;
+  return e >= 0 ? s.elevDawn + (s.elevNoon - s.elevDawn) * e
+                : s.elevNight + (s.elevDawn - s.elevNight) * (1 + e);
+}
+// One sweep of `azimSweep` degrees across the whole cycle, centred on noon. It wraps
+// at midnight — a discontinuity that is invisible because the sun is under the horizon
+// and its elevation is pinned at the floor there.
+function azimAt(u) {
+  return GLASS.sun.azimCenter + GLASS.sun.azimSweep * (u / CYCLE - 0.5);
+}
+// Position on the palette ring. Rising half maps day 0..1 onto night->dawn->noon
+// (0..2), falling half onto noon->dusk->night (2..4). day = 1 lands on 2 = the noon
+// stop exactly, which is the palette half of the regression anchor.
+function ringAt(day, rising) {
+  const r = rising ? 2 * day : 4 - 2 * day;
+  return r >= 4 ? 0 : r < 0 ? 0 : r;
 }
 
 // Sessions open mid-morning (day ~0.8 and rising) so the first thing a player sees is
@@ -264,9 +311,15 @@ function buildRainLayer() {
 
 // ---------------------------------------------------------------------------
 let tOff = 0;                        // dev scrub offset
+// Lab clock controls. The weather clock stays `t + tOff` — pause and speed are
+// implemented by STEERING tOff against the raw frame delta rather than by keeping a
+// second clock, so scrub/advance and determinism are unaffected: at any instant the
+// whole system is still a pure function of one number.
+let rawPrev = -1, wSpeed = 1, wPaused = false;
 let fDay = -1, fStorm = -1;          // dev overrides (<0 = off)
 let forcedT0 = -1;                   // dev-triggered storm start
 let fFlash = -1, fFlashT = 0;        // dev-injected stroke (<0 = off) and its hold
+let envSeed = true;                  // seed the envelope on frame 1, don't ramp from 0
 
 export function initWeather() {
   buildSchedule();
@@ -286,7 +339,22 @@ export function initWeather() {
       // Fire a stroke and hold it for `hold` seconds — a real stroke is 2 frames,
       // which is impossible to screenshot.
       flash(a, hold) { fFlash = a === undefined ? 0.95 : a; fFlashT = hold === undefined ? 0 : hold; },
-      state() { return { day: st.day, storm: st.storm, flash: st.flash, clock: lastT }; }
+      // --- lab controls ---
+      // Jump to a fraction of the full day cycle (0 = midnight, 0.5 = noon).
+      scrub(u01) {
+        const want = ((u01 % 1) + 1) % 1 * CYCLE;
+        const have = (PHASE0 + lastT) % CYCLE;
+        tOff += want - have;
+      },
+      pause(b) { wPaused = b === undefined ? true : !!b; },
+      speed(k) { wSpeed = k === undefined ? 1 : Math.max(0, k); },
+      state() {
+        return {
+          day: st.day, storm: st.storm, flash: st.flash, clock: lastT,
+          sunElev: st.sunElev, sunAzim: st.sunAzim, phase01: st.phase01, ring: st.ring,
+          env: { sky: st.env.sky, sea: st.env.sea, below: st.env.below }
+        };
+      }
     };
   }
 }
@@ -294,10 +362,18 @@ export function initWeather() {
 let lastT = 0;
 
 export function updateWeather(dt, t) {
+  // Steer the scrub offset so the weather clock runs at wSpeed (0 while paused).
+  if (rawPrev < 0) rawPrev = t;
+  const dRaw = t - rawPrev;
+  rawPrev = t;
+  if (wPaused) tOff -= dRaw;
+  else if (wSpeed !== 1) tOff += dRaw * (wSpeed - 1);
+
   const tt = t + tOff;
   lastT = tt;
 
-  st.day = fDay >= 0 ? fDay : dayAt((PHASE0 + tt) % CYCLE);
+  const u = ((PHASE0 + tt) % CYCLE + CYCLE) % CYCLE;
+  st.day = fDay >= 0 ? fDay : dayAt(u);
 
   if (fStorm >= 0) {
     st.storm = fStorm;
@@ -315,6 +391,36 @@ export function updateWeather(dt, t) {
   // Lightning only during a storm's hold plateau, and it scales with intensity.
   if (fFlash >= 0) { st.flash = fFlash; fFlashT -= dt; if (fFlashT <= 0) fFlash = -1; }
   else st.flash = st.storm > 0.55 ? flashAt(tt) * st.storm : 0;
+
+  // --- the sun ---------------------------------------------------------------
+  // Under a forced day (window.weather.set) the proxy is recovered from the forced
+  // value so a screenshot at "day 1" really is noon, sun and all.
+  const eRaw = -Math.cos((Math.PI * 2 * u) / CYCLE);
+  const rising = u < CYCLE * 0.5;
+  const e = fDay >= 0 ? 2 * fDay - 1 : eRaw;
+  st.sunElev = elevAt(e > 1 ? 1 : e < -1 ? -1 : e);
+  // Forced day: place the sun on whichever half of the sky the live clock is on, so a
+  // forced day = 1 still gives azimCenter exactly and forced twilight still has a side.
+  st.sunAzim = fDay >= 0
+    ? GLASS.sun.azimCenter + GLASS.sun.azimSweep * 0.5 * (1 - st.day) * (rising ? -1 : 1)
+    : azimAt(u);
+  st.phase01 = u / CYCLE;
+  st.ring = ringAt(st.day, rising);
+  setSun(st.sunElev, st.sunAzim);
+  setSkyPhase(st.phase01, st.ring);
+
+  // --- the one envelope ------------------------------------------------------
+  // First-order lags off the same storm number. Sky is effectively immediate, the sea
+  // trails it, the column below lags ~8s: weather arrives from ABOVE. Because they are
+  // lags and not separate curves, a held storm drives all three to the same value —
+  // that convergence is the storm-parity probe.
+  const dtw = dt * (wPaused ? 0 : wSpeed);
+  if (envSeed) { st.env.sky = st.env.sea = st.env.below = st.storm; envSeed = false; }
+  else {
+    st.env.sky += (st.storm - st.env.sky) * (1 - Math.exp(-dtw / 1.2));
+    st.env.sea += (st.storm - st.env.sea) * (1 - Math.exp(-dtw / 3.5));
+    st.env.below += (st.storm - st.env.below) * (1 - Math.exp(-dtw / 8.0));
+  }
 
   // --- surface layer -------------------------------------------------------
   const camY = camera.position.y;

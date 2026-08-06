@@ -7,7 +7,7 @@ import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetric
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
-import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
@@ -632,10 +632,11 @@ function update(dt, t) {
 
   // Weather runs even behind the title so a session can open at dusk or mid-storm.
   const wx = updateWeather(dt, t);
-  setWeatherLight(wx.day, wx.storm, wx.flash);
+  setWeatherLight(wx.day, wx.storm, wx.flash, wx.env);
+  setWeatherEnv(wx.env);
   setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm), wx.storm);
-  setSwell(wx.storm, wx.day);
-  setStormCurrent(wx.storm);
+  setSwell(wx.env.sea, wx.day);
+  setStormCurrent(wx.env.below);   // subsurface current lags the sky — weather arrives from above
   setRayDim(getVolumetrics() ? 0.55 : 1);
 
   // Ambient world animation runs even behind the title screen.

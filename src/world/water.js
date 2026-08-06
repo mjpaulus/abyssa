@@ -3,7 +3,12 @@
 // OWNED BY: water/atmosphere agent.
 import * as THREE from 'three';
 import { scene, camera, renderer } from '../core.js';
-import { WORLD_R, SURFACE_Y, SUN_ELEV_DEG } from '../config.js';
+import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
+// Re-exported so the coming lab (and the brief's contract) can reach the tuning surface
+// from here. It is DEFINED in config.js — weather.js needs GLASS.sun and this file needs
+// GLASS.stops, and config.js is the only module both already import. Plain mutable data:
+// poke it live and the next frame picks it up.
+export { GLASS } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { scatter } from './flora.js';
 
@@ -79,13 +84,14 @@ const SURF_LIGHT = [0.055, 0.135, 0.112];
 // which is the cheap side. Measured disagreement before this: 3.9 degrees surface-vs-light,
 // 26.5 degrees surface-vs-billboard-shafts (the shafts also leaned the wrong way; fixed
 // in buildRays below).
-// Now derived from SUN_ELEV_DEG so this and lighting.js's key light cannot drift apart:
-// they were two hand-written copies of the same vector, and the comment above is the
-// record of what happened last time they disagreed. Azimuth is unchanged.
-const _sk = 1 / Math.tan(SUN_ELEV_DEG * Math.PI / 180);
-const SUN_DIR = new THREE.Vector3(0.894427 * _sk, 1.00, 0.447214 * _sk).normalize();
-// Shafts descend ALONG the sunlight, so as they drop by h they move by -sunDir.xz/sunDir.y.
-const SUN_PROJ = [SUN_DIR.x / SUN_DIR.y, SUN_DIR.z / SUN_DIR.y];
+// THE SUN IS LIVE NOW. There is no module-level SUN_DIR or SUN_PROJ any more: those
+// were baked once at import and would have frozen the sky mid-morning the moment the
+// day cycle started moving it. Everything here reads config.js's SUN each frame through
+// uniforms — uSunDirU from SUN.dir (the in-air sun, for the disc and the glitter path)
+// and uSunProj from SUN.proj (the UNDERWATER sun, elevation clamped at Snell's 41.4,
+// for the god-ray shaft descent). The shaft offset in particular used to be a string
+// constant compiled into the shader; converting it to a uniform is what lets the shafts
+// swing with the day without recompiling a single program.
 
 // Sky radiance seen through the interface, night -> day. These are raw scene-linear
 // values: verified live that NOTHING in this pipeline tone-maps (0 of 121 compiled
@@ -96,12 +102,17 @@ const SUN_PROJ = [SUN_DIR.x / SUN_DIR.y, SUN_DIR.z / SUN_DIR.y];
 // Horizon 4.3x the zenith: the whole point is that the window has an IMAGE in it, and
 // the horizon ring is the only structural landmark the sky offers. Measured through the
 // full Fresnel composite that lands as a 0.35 ring against a 0.15 centre.
-const SKY_ZEN_D = [0.090, 0.155, 0.310], SKY_HOR_D = [0.620, 0.660, 0.720];
+// These now live in config.js's GLASS.stops so the lab can poke them; the aliases stay
+// because every note in this file refers to them by name. `_D` = the noon stop, `_N` =
+// the night stop, and those two stops carry the exact values that shipped, so the old
+// two-point night/day lerp is a strict subset of the new five-stop ring.
+const SKY_ZEN_D = GLASS.stops.noon.zen, SKY_HOR_D = GLASS.stops.noon.hor;
 // Night is not the true ~1e-5: game.js floors the surface irradiance at 0.20 of noon so
 // the world stays legible, and the sky has to sit consistently below the water that sky
 // is supposed to be lighting, or the window inverts into a bright lid again.
-const SKY_ZEN_N = [0.0045, 0.0068, 0.0135], SKY_HOR_N = [0.0165, 0.0180, 0.0210];
-const SUN_DISC = [3.4, 3.0, 2.3], MOON_DISC = [0.30, 0.34, 0.42];
+// (The old SKY_*_N night pair and MOON_DISC are gone as named constants — they are the
+// `night` stop in GLASS.stops now, reached by the ring rather than by a lerp parameter.)
+const SUN_DISC = GLASS.stops.noon.disc;
 
 // ---------------------------------------------------------------------------
 // AIR — the other half of the medium.
@@ -217,6 +228,14 @@ const GLSL_AIR = `
 // Storm is NOT separable from that one scalar: at full gale this reads ~13% brighter and
 // less desaturated than the sky it meets. skyDome eases the last 3.4 degrees of sky into
 // this same value, so the residual is a soft gradient at the horizon and never a step.
+// THE ONE SURVIVING BAKE. SKY_HOR_D is compiled in here as a literal and does NOT follow
+// the palette ring, for the reason in the paragraph above: this lives in the globally
+// patched fog chunk, which cannot be given a uniform of its own. It is the NOON horizon,
+// so it is right where it matters most and drifts warm-ward at dawn/dusk against a sky
+// that has moved. Visible only as a slight cool cast in the last few degrees above the
+// horizon in air, at the two times of day the horizon is most interesting — flagged for
+// the lab to judge rather than silently "fixed" here, since fixing it means re-patching
+// the fog chunk for every material in the game.
 vec3 airLight( vec3 surfIrr ){
   float dg = clamp( ( surfIrr.g / ${f(SURF_LIGHT[1])} - 0.20 ) / 0.80, 0.0, 1.0 );
   return ${v3(SKY_HOR_D)} * ( 0.0266 + 0.9734 * dg );
@@ -255,29 +274,111 @@ vec3 skyRadiance( vec3 d ){
 //   while that expression is; passing day/flash explicitly is a one-line wiring change
 //   and is the preferred form.
 let wSurfK = 1, wMurk = 0, rayDim = 1, wDay = 1, wFlash = 0;
+// weather.js's single envelope. Until game.js wires it, BOTH default to raw murk, which
+// is bit-for-bit what shipped. sky drives the palette and the sky material; sea drives
+// the interface's own churn.
+let wEnvSky = 0, wEnvSea = 0, envWired = false;
+export function setWeatherEnv(env) {
+  if (!env) { envWired = false; wEnvSky = wEnvSea = wMurk; return; }
+  envWired = true;
+  wEnvSky = env.sky; wEnvSea = env.sea;
+}
 export function setWeatherWater(surfK, murk, day, flash) {
   wSurfK = surfK; wMurk = murk;
+  if (!envWired) { wEnvSky = murk; wEnvSea = murk; }
   wDay = day !== undefined ? day
     : clamp((surfK / Math.max(0.35, 1 - 0.45 * murk) - 0.20) / 0.80, 0, 1);
   wFlash = flash || 0;
+  // The palette is resolved ONCE per frame, here: game.js calls this straight after
+  // updateWeather and before both updateWater and updateAtmosphere, which are the two
+  // consumers. Doing it in either of those would make the sky and the fog disagree on
+  // the frames only one of them runs.
+  palette(SKY.ring, wEnvSky);
 }
 export function setRayDim(k) { rayDim = k; }
 
 // CPU mirror of abyssaAmbient, for scene.background and the returned tint.
 const ms = THREE.MathUtils.smoothstep, ml = THREE.MathUtils.lerp;
-// Night->day sky lerp, then storm gain and desaturation, written in place (no allocation).
-function mixSky(v, N, D, day, gain, desat) {
-  const x = ml(N[0], D[0], day) * gain, y = ml(N[1], D[1], day) * gain, z = ml(N[2], D[2], day) * gain;
-  const l = 0.2126 * x + 0.7152 * y + 0.0722 * z;
-  v.set(ml(x, l, desat), ml(y, l, desat), ml(z, l, desat));
+// ---------------------------------------------------------------------------
+// THE PALETTE RING. Five authored stops (config.js GLASS.stops) replacing the old
+// two-point night/day lerp. Position on night->dawn->noon->dusk->night comes from
+// weather.js as SKY.ring (0..4, wrapping); the whole result is then cross-faded toward
+// the STORM stop by the storm envelope.
+//
+// The old form was `mixSky(v, N, D, day, gain, desat)` — a straight lerp between the
+// night and day pairs, then a scalar gain and a desaturation for storms. Both endpoints
+// of that lerp survive VERBATIM as the `night` and `noon` stops, so this is a strict
+// generalisation: ring 0 reproduces the old day = 0 and ring 2 the old day = 1 exactly.
+// The storm cross-fade is authored to land where the old gain/desat pair landed at noon,
+// then pushed off the blue axis (see the stop's note).
+//
+// Every value below is written into module-scope arrays and then into existing uniform
+// objects. NOTHING here allocates, and nothing here can recompile a program: the stops
+// are data, not shader source.
+const _ring = [null, null, null, null];
+const _pZen = [0, 0, 0], _pHor = [0, 0, 0], _pDisc = [0, 0, 0];
+const _pSurf = [0, 0, 0];               // SURF_LIGHT * wSurfK * stop.surfK * stop.tint
+let _pDesat = 0;
+
+function lerp3(out, a, b, t) {
+  out[0] = a[0] + (b[0] - a[0]) * t;
+  out[1] = a[1] + (b[1] - a[1]) * t;
+  out[2] = a[2] + (b[2] - a[2]) * t;
 }
+function toward3(out, b, t) {
+  out[0] += (b[0] - out[0]) * t;
+  out[1] += (b[1] - out[1]) * t;
+  out[2] += (b[2] - out[2]) * t;
+}
+// Pull toward the array's own luminance. Same Rec.709 weights the old mixSky used.
+function desat3(v, k) {
+  if (k <= 0) return;
+  const l = 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2];
+  v[0] = ml(v[0], l, k); v[1] = ml(v[1], l, k); v[2] = ml(v[2], l, k);
+}
+
+function palette(ring, envSky) {
+  const S = GLASS.stops;
+  _ring[0] = S.night; _ring[1] = S.dawn; _ring[2] = S.noon; _ring[3] = S.dusk;
+  let r = ring >= 0 && ring < 4 ? ring : 2;
+  const i = Math.floor(r), t = r - i;
+  const a = _ring[i], b = _ring[(i + 1) & 3];
+  lerp3(_pZen, a.zen, b.zen, t);
+  lerp3(_pHor, a.hor, b.hor, t);
+  lerp3(_pDisc, a.disc, b.disc, t);
+  lerp3(_pSurf, a.tint, b.tint, t);
+  let sk = a.surfK + (b.surfK - a.surfK) * t;
+  _pDesat = a.desat + (b.desat - a.desat) * t;
+
+  const s = clamp(envSky, 0, 1);
+  if (s > 0) {
+    const T = S.storm;
+    toward3(_pZen, T.zen, s);
+    toward3(_pHor, T.hor, s);
+    toward3(_pDisc, T.disc, s);
+    toward3(_pSurf, T.tint, s);
+    sk += (T.surfK - sk) * s;
+    _pDesat += (T.desat - _pDesat) * s;
+  }
+  desat3(_pZen, _pDesat);
+  desat3(_pHor, _pDesat);
+
+  // The surface irradiance. game.js's own day/storm surfK still multiplies in front —
+  // the stop only adds the TINT and a stop-local scale, and at noon both are identity,
+  // which is what keeps scene.fog.color bit-identical to today.
+  const g = wSurfK * sk;
+  _pSurf[0] *= SURF_LIGHT[0] * g;
+  _pSurf[1] *= SURF_LIGHT[1] * g;
+  _pSurf[2] *= SURF_LIGHT[2] * g;
+}
+palette(2, 0);
 function ambientAt(y, out) {
   const t = clamp(-y / 900, 0, 1);
   const a = ms(t, 0.20, 0.52), b = ms(t, 0.62, 0.92), c = ms(t, 0.03, 0.30), d = Math.min(0, y);
   return out.setRGB(
-    SURF_LIGHT[0] * wSurfK * Math.exp(K_ABS[0] * d) + ml(ml(0.0020, 0.0064, a), 0.0123, b) * c,
-    SURF_LIGHT[1] * wSurfK * Math.exp(K_ABS[1] * d) + ml(ml(0.0073, 0.0027, a), 0.0042, b) * c,
-    SURF_LIGHT[2] * wSurfK * Math.exp(K_ABS[2] * d) + ml(ml(0.0115, 0.0127, a), 0.0025, b) * c,
+    _pSurf[0] * Math.exp(K_ABS[0] * d) + ml(ml(0.0020, 0.0064, a), 0.0123, b) * c,
+    _pSurf[1] * Math.exp(K_ABS[1] * d) + ml(ml(0.0073, 0.0027, a), 0.0042, b) * c,
+    _pSurf[2] * Math.exp(K_ABS[2] * d) + ml(ml(0.0115, 0.0127, a), 0.0025, b) * c,
     THREE.LinearSRGBColorSpace
   );
 }
@@ -468,7 +569,11 @@ const uLightPos = { value: new THREE.Vector3() };
 const uSkyZen = { value: new THREE.Vector3(...SKY_ZEN_D) };
 const uSkyHor = { value: new THREE.Vector3(...SKY_HOR_D) };
 const uSunCol = { value: new THREE.Vector3(...SUN_DISC) };
-const uSunDirU = { value: SUN_DIR.clone() };
+// The in-air sun, rewritten from SUN.dir every updateWater.
+const uSunDirU = { value: new THREE.Vector3(SUN.dir.x, SUN.dir.y, SUN.dir.z) };
+// The UNDERWATER sun's horizontal descent, dirWater.xz/dirWater.y. Was a baked vec2
+// literal in the god-ray vertex shader.
+const uSunProj = { value: new THREE.Vector2(SUN.proj[0], SUN.proj[1]) };
 const uSunSize = { value: 700 };
 const uCloud = { value: 0.22 };
 const uStormU = { value: 0 };
@@ -594,12 +699,12 @@ function buildRays() {
 
   const mat = new THREE.ShaderMaterial({
     uniforms: {
-      uTime, uCam, uExtG, uFade: uRayFade,
+      uTime, uCam, uExtG, uFade: uRayFade, uSunProj,
       uColor: { value: new THREE.Vector3(0.36, 0.55, 0.68) }
     },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide, fog: false,
-    vertexShader: `uniform vec3 uCam; uniform float uFade, uExtG;
+    vertexShader: `uniform vec3 uCam; uniform float uFade, uExtG; uniform vec2 uSunProj;
       attribute vec3 aCenter; attribute vec4 aParam;
       varying vec2 vUv; varying float vSeed, vFade;
       void main(){
@@ -613,7 +718,10 @@ function buildRays() {
         // shafts lean ALONG the sunlight: light from a sun at (+x,+z) travels toward
         // (-x,-z) on the way down, so this is a minus. It used to be a plus with a
         // hand-picked vector, which aimed the shafts 26 degrees off and 180 out.
-        wp.xz -= ${v2(SUN_PROJ)} * ( v * aParam.y );
+        // A UNIFORM, not a baked literal: the shafts swing with the day, and because it
+        // is fed from SUN.proj (dirWater, clamped at Snell's 41.4) they can never lean
+        // further than refraction allows however low the sun gets.
+        wp.xz -= uSunProj * ( v * aParam.y );
         float dist = distance( wp, uCam );
         vFade = uFade
           * smoothstep( ${f(RAY_L * 0.5)}, ${f(RAY_L * 0.30)}, dist )   // hides the wrap boundary
@@ -1425,18 +1533,20 @@ export function updateWater(dt, t) {
   // AND grey it out (an overcast sky is grey), thicken the cloud deck and soften the
   // disc, which is what makes a storm ceiling read as overcast rather than as dimmed
   // sunshine, and what takes the sky low and flat when seen from the air.
-  const storm = clamp(wMurk, 0, 1), gain = 1 - 0.62 * storm, desat = 0.5 * storm;
-  mixSky(uSkyZen.value, SKY_ZEN_N, SKY_ZEN_D, wDay, gain, desat);
-  mixSky(uSkyHor.value, SKY_HOR_N, SKY_HOR_D, wDay, gain, desat);
-  // Sun disc crossfades to a moon through the twilight band, so night is moonlit rather
-  // than black. uSunDir does not move — this world has one fixed sun azimuth; only what
-  // sits in that direction changes.
-  const dk = ms(wDay, 0.05, 0.25), sk = 1 - 0.85 * storm;
-  uSunCol.value.set(
-    ml(MOON_DISC[0], SUN_DISC[0] * wDay, dk) * sk,
-    ml(MOON_DISC[1], SUN_DISC[1] * wDay, dk) * sk,
-    ml(MOON_DISC[2], SUN_DISC[2] * wDay, dk) * sk
-  );
+  const storm = clamp(wEnvSky, 0, 1);
+  // The palette was resolved in setWeatherWater; here it is only copied into uniforms.
+  uSkyZen.value.set(_pZen[0], _pZen[1], _pZen[2]);
+  uSkyHor.value.set(_pHor[0], _pHor[1], _pHor[2]);
+  // The disc is a palette stop now, not a night/day crossfade: the night stop IS the
+  // moon, so the same ring that walks the sky through dawn walks the disc from moon to
+  // amber to white and back to ember. And uSunDir DOES move — see below.
+  uSunCol.value.set(_pDisc[0], _pDisc[1], _pDisc[2]);
+  // THE LIVE SUN. Written every frame from config.js's authority; the surface material
+  // and the dome share this one uniform object, so the disc in the sky, the disc in
+  // Snell's window and the glitter path on the sea can never point three ways.
+  uSunDirU.value.set(SUN.dir.x, SUN.dir.y, SUN.dir.z);
+  // The shafts get the SNELL-CLAMPED sun instead, so they can never rake past 41.4.
+  uSunProj.value.set(SUN.proj[0], SUN.proj[1]);
   uSunSize.value = 700 - 560 * storm;
   uCloud.value = 0.22 + 0.70 * storm;
   uStormU.value = storm;
@@ -1476,7 +1586,7 @@ export function updateWater(dt, t) {
   camera.getWorldDirection(_tmp);
   uLightPos.value.copy(camera.position).addScaledVector(_tmp, 8.5);
 
-  dome.material.uniforms.uSurf.value.set(SURF_LIGHT[0] * wSurfK, SURF_LIGHT[1] * wSurfK, SURF_LIGHT[2] * wSurfK);
+  dome.material.uniforms.uSurf.value.set(_pSurf[0], _pSurf[1], _pSurf[2]);
   dome.material.uniforms.uReach.value = 1 / uExtG.value;
   dome.material.uniforms.uSunGlow.value.set(
     0.018 * Math.max(0, 1 - d01 * 3.4),
@@ -1491,7 +1601,11 @@ export function updateWater(dt, t) {
 // scene.fog.color is the *surface irradiance*; the shader applies the vertical
 // absorption ramp per fragment, so a frame can be teal above and ink below.
 export function updateAtmosphere(depth01, camY = camera.position.y) {
-  scene.fog.color.setRGB(SURF_LIGHT[0] * wSurfK, SURF_LIGHT[1] * wSurfK, SURF_LIGHT[2] * wSurfK, THREE.LinearSRGBColorSpace);
+  // _pSurf is SURF_LIGHT * wSurfK * the palette stop's scale and tint — which at the
+  // noon stop is exactly SURF_LIGHT * wSurfK, i.e. the value that shipped. The per-
+  // channel Beer-Lambert ramp downstream is untouched; this is still, and only,
+  // SURFACE IRRADIANCE.
+  scene.fog.color.setRGB(_pSurf[0], _pSurf[1], _pSurf[2], THREE.LinearSRGBColorSpace);
   // Storms stir the top of the column: extra murk that fades out with depth. It is a
   // scalar GAIN on the whole profile — the shader divides it back out at the eye to
   // recover it, so weather still thickens the water. What a gale CANNOT do is raise
