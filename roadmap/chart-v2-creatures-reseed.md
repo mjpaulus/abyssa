@@ -1,6 +1,6 @@
 ---
 title: Creatures reseed per site
-status: backlog
+status: done
 tags: chart, v2
 updated: 2026-08-05
 ---
@@ -13,3 +13,5 @@ Schools and jellies are identical everywhere; V1 deliberately skipped them.
 
 ## Log
 - 2026-08-05 — deliberate V1 cut
+- 2026-08-05 — V2 round started; orchestrator wired contracts (site.js 4th hidden site, game.js found/keeps persistence), agents on keepsakes + creatures
+- 2026-08-05 — shipped: creatures layout is a pure function of siteParams('creatures').rng (kills the last raw Math.random layout); schools/jellies/drifters/sparks re-lay in place per site. Verified: fresh boots identical, per-site hashes differ, 12-voyage soak flat at 353 programs / 148 geometries

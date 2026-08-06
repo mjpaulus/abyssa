@@ -170,7 +170,21 @@ against explicit contracts and reviewed on return.
   endingSeen. The full rite plays ONCE ever; later triple-calms get the quiet
   chart-inking beat. Sleeper overlays (sigils/hue/epithet) merge over LEVIATHAN_CFG
   in makeLeviathan(idx, over) and flow via the ...c spread. Debug: window.__chart
-  { sail, arrive, rec }, window.gotoZone.
+  { sail, arrive, rec, found, keeps }, window.gotoZone.
+  CHART V2 shipped on top: (1) SONAR SOUNDINGS — site 3 THE UNSOUNDED SHELF is
+  `hidden: true` in site.js; a sonar ping FROM ZONE 2 discovers it once-ever
+  (game.js KeyT handler), persisted as `found[]` in the save; the chart shows a
+  pencil "?" until then and renders a discovered anchorage entirely in PENCIL
+  (the owner's three stay ink — the title stays THE THREE ANCHORAGES on purpose).
+  (2) KEEPSAKES — every remote wreck carries a small brass keepsake (shapes in
+  lib/keepsakes.js, placement/pickup/9 authored lines in wrecks.js, real E path);
+  taken ones appear on the shelf by the chart table (systems/raft/shelf.js, +0
+  static draw calls, one dynamic merged mesh, site-major slot order — gaps are
+  the record); state is `keeps[][]` in the save, pushed via setKeepsakeState /
+  setKeepsakes after every reseed. (3) CREATURES RESEED — creatures.js layout is
+  a pure function of siteParams('creatures').rng (build AND reseed install a
+  fresh stream; trailer geometry draws from its own fixed GEO_RNG so boot ==
+  arrive-back). Soak: 12 voyages flat at 353 programs / 148 geometries.
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own

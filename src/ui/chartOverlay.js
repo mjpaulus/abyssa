@@ -27,7 +27,8 @@ const PAPER = '#d8c9a3';
 const SPOTS = [
   { x: 0.235, y: 0.640 },   // THE HOME MOORING — lower-left-ish
   { x: 0.685, y: 0.270 },   // PALLID BANK — upper-right
-  { x: 0.720, y: 0.700 }    // THE BURNED GROUND — lower-right
+  { x: 0.720, y: 0.700 },   // THE BURNED GROUND — lower-right
+  { x: 0.435, y: 0.430 }    // THE UNSOUNDED SHELF — blank water, mid-sheet
 ];
 
 // ---------------------------------------------------------------------------
@@ -316,7 +317,20 @@ function drawAnchorage(i, W, H, state, rng) {
   const namePx = Math.max(10, W * 0.0122);
   const condPx = Math.max(8, W * 0.0084);
 
-  drawAnchor(x, y, aS, INK, rng);
+  // A hidden anchorage the sounding set has not yet given up: blank water and a
+  // pencil question mark in Sal's hand. Not an anchorage yet — no name, no hit.
+  const found = !site.hidden || (state.found && state.found[i]);
+  if (!found) {
+    letter('?', x, y + aS, aS * 2.4, 0, PENCIL_SOFT, rng);
+    return;
+  }
+
+  // The dead owner drew three anchorages in ink. A discovered one is Sal's:
+  // everything at this spot goes down in pencil.
+  const hand = site.hidden ? PENCIL : INK;
+  const handFade = site.hidden ? PENCIL_SOFT : INK_FADE;
+
+  drawAnchor(x, y, aS, hand, rng);
 
   // current anchorage: pencil ring + note
   if (isCur) {
@@ -338,9 +352,9 @@ function drawAnchorage(i, W, H, state, rng) {
 
   // name + conditions
   const nameY = y + aS * 2.6;
-  letter(site.name, x, nameY, namePx, W * 0.0042, INK, rng);
+  letter(site.name, x, nameY, namePx, W * 0.0042, hand, rng);
   const condY = nameY + condPx * 1.7;
-  letter(site.conditions, x, condY, condPx, W * 0.0022, INK_FADE, rng);
+  letter(site.conditions, x, condY, condPx, W * 0.0022, handFade, rng);
 
   // calmed sleepers: pencil strike marks, one per becalmed sleeper
   const calmed = (state.calmed && state.calmed[i]) || [];
@@ -447,7 +461,8 @@ export function openChart(state, onChoose, onClose) {
   }
   curState = {
     currentSite: (state && state.currentSite) | 0,
-    calmed: (state && state.calmed) || []
+    calmed: (state && state.calmed) || [],
+    found: (state && state.found) || null   // null = everything authored is known
   };
   chooseCb = onChoose || null;
   closeCb = onClose || null;

@@ -1,6 +1,6 @@
 ---
 title: Chart V2: sonar soundings
-status: backlog
+status: done
 tags: chart, v2
 updated: 2026-08-05
 ---
@@ -14,3 +14,5 @@ Needs: hidden flag per site row, discovery event from sonarPing, chart redraw.
 
 ## Log
 - 2026-08-05 — from the design panel's V2 list
+- 2026-08-05 — V2 round started; orchestrator wired contracts (site.js 4th hidden site, game.js found/keeps persistence), agents on keepsakes + creatures
+- 2026-08-05 — shipped: 4th hidden site THE UNSOUNDED SHELF in site.js; sonar ping from zone 2 discovers it once-ever ("A FAR RETURN..."); chart shows a pencil "?" until then, and the discovered anchorage renders in Sal's pencil, not ink. Persisted in the save (found[]). Verified: real T-path discovery, terrain hash differs at site 3, site-0 round trip identical

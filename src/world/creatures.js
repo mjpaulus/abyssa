@@ -7,10 +7,25 @@
 import * as THREE from 'three';
 import { scene } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
-import { rng, clamp, V3 } from '../lib/math.js';
+import { clamp, V3 } from '../lib/math.js';
 import { glowTex } from '../lib/textures.js';
 import { terrainH } from './terrain.js';
+import { siteParams, stream } from './site.js';
 import { player } from '../player.js';
+
+// Build/reseed-scoped random stream (THE CHART's reseed path), same idiom as flora.js:
+// buildCreatures()/reseedCreatures() install a FRESH `siteParams('creatures').rng` here
+// before any placement, so every school centre, boid offset, jelly, drifter and spark
+// is a pure function of the site seed instead of the latent Math.random() this ran on.
+// A fresh stream every time is the contract — reusing one would make layout depend on
+// rebuild COUNT. Species tables, counts and Y-band logic are untouched: the same water,
+// differently peopled.
+let _cr = Math.random;
+const rr = (a, b) => a + _cr() * (b - a);
+// Trailer/strand GEOMETRY is built once and never reseeded, so it draws from its own
+// fixed stream — otherwise it would offset the site stream and make the first build's
+// layout differ from an arrive() back to the same site.
+const GEO_RNG = stream(0x7A11ED00);
 
 // One uniform object shared by every creature shader — one write per frame.
 const uTime = { value: 0 };
@@ -223,7 +238,7 @@ export const fish = schools; // convenience alias
 const NB = [1, 2, 3, 5, 8, 13];
 
 function pickGoal(S) {
-  const a = Math.random() * Math.PI * 2, r = rng(18, WORLD_R * 0.64);
+  const a = _cr() * Math.PI * 2, r = rr(18, WORLD_R * 0.64);
   S.goal.x = Math.cos(a) * r; S.goal.z = Math.sin(a) * r;
   const lo = terrainH(S.goal.x, S.goal.z, S.zi) + S.radius + 14;
   const hi = zoneTop(S.zi) - 14 - S.radius;
@@ -231,8 +246,8 @@ function pickGoal(S) {
   // reef-hugging species (floorBias > 0) pick goals weighted toward the seafloor
   // layer instead of the full water column, so density reads where the player is
   const hiEff = S.floorBias > 0 ? loC + (hi - loC) * (1 - S.floorBias * 0.75) : hi;
-  S.goal.y = clamp(rng(zoneBottom(S.zi) + 22, hiEff), loC, hi);
-  S.goalT = rng(6, 15);
+  S.goal.y = clamp(rr(zoneBottom(S.zi) + 22, hiEff), loC, hi);
+  S.goalT = rr(6, 15);
 }
 
 function buildSchool(sp, seed) {
@@ -246,39 +261,64 @@ function buildSchool(sp, seed) {
   inst.receiveShadow = false;
 
   const tint = new Float32Array(n * 3), fdat = new Float32Array(n * 2);
-  const base = new THREE.Color(sp.col), c = new THREE.Color();
   const sz = new Float32Array(n);
   const P = new Float32Array(n * 3), V = new Float32Array(n * 3), F = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    c.copy(base).offsetHSL(rng(-0.03, 0.03), rng(-0.12, 0.12), rng(-sp.jit, sp.jit));
-    tint[i * 3] = c.r; tint[i * 3 + 1] = c.g; tint[i * 3 + 2] = c.b;
-    fdat[i * 2] = Math.random() * 6.283;
-    fdat[i * 2 + 1] = rng(0.85, 1.2);
-    sz[i] = rng(sp.sz[0], sp.sz[1]);
-    P[i * 3] = rng(-sp.radius, sp.radius);
-    P[i * 3 + 1] = rng(-sp.radius, sp.radius) * 0.4;
-    P[i * 3 + 2] = rng(-sp.radius, sp.radius);
-    F[i * 3 + 2] = 1;
-  }
   geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tint, 3));
   geo.setAttribute('aFish', new THREE.InstancedBufferAttribute(fdat, 2));
   scene.add(inst);
 
-  const a = seed * 2.3 + sp.zi * 1.7, r = rng(30, WORLD_R * 0.55);
   const S = {
-    inst, mat, n, zi: sp.zi, sp, P, V, F, sz,
+    inst, mat, n, zi: sp.zi, sp, P, V, F, sz, seed,
+    tint: geo.attributes.aTint, fdat: geo.attributes.aFish,
     bank: new Float32Array(n), phs: new Float32Array(n),
-    center: V3(Math.cos(a) * r, 0, Math.sin(a) * r), cvel: V3(), goal: V3(), goalT: 0,
+    center: V3(), cvel: V3(), goal: V3(), goalT: 0,
     radius: sp.radius, speed: sp.speed, local: sp.local, fear: sp.fear,
     floorBias: sp.floorBias || 0,
-    beatPh: Math.random() * 40, roll: 0, panic: 0
+    beatPh: 0, roll: 0, panic: 0, lay: null
   };
-  for (let i = 0; i < n; i++) S.phs[i] = Math.random() * 6.283;
+  layoutSchool(S);
+  schools.push(S);
+}
+
+// Everything a school's LAYOUT is: per-fish tint/phase/size, boid offsets inside the
+// shoal, the shoal's centre and its first goal. Buffers are the ones allocated at
+// build; capacities never change (n is the species' authored count).
+function layoutSchool(S) {
+  const sp = S.sp, n = S.n;
+  const tint = S.tint.array, fdat = S.fdat.array;
+  const base = new THREE.Color(sp.col), c = new THREE.Color();
+  const P = S.P, V = S.V, F = S.F, sz = S.sz;
+  for (let i = 0; i < n; i++) {
+    c.copy(base).offsetHSL(rr(-0.03, 0.03), rr(-0.12, 0.12), rr(-sp.jit, sp.jit));
+    tint[i * 3] = c.r; tint[i * 3 + 1] = c.g; tint[i * 3 + 2] = c.b;
+    fdat[i * 2] = _cr() * 6.283;
+    fdat[i * 2 + 1] = rr(0.85, 1.2);
+    sz[i] = rr(sp.sz[0], sp.sz[1]);
+    P[i * 3] = rr(-sp.radius, sp.radius);
+    P[i * 3 + 1] = rr(-sp.radius, sp.radius) * 0.4;
+    P[i * 3 + 2] = rr(-sp.radius, sp.radius);
+    V[i * 3] = V[i * 3 + 1] = V[i * 3 + 2] = 0;
+    F[i * 3] = F[i * 3 + 1] = 0; F[i * 3 + 2] = 1;
+    S.bank[i] = 0;
+    S.phs[i] = _cr() * 6.283;
+  }
+  S.tint.needsUpdate = true; S.fdat.needsUpdate = true;
+
+  // Shoal centre: the authored spiral of the shipped world, but the bearing and the
+  // radius now come off the site stream, so each anchorage is peopled differently.
+  const a = S.seed * 2.3 + sp.zi * 1.7 + rr(-0.9, 0.9), r = rr(30, WORLD_R * 0.55);
+  S.center.set(Math.cos(a) * r, 0, Math.sin(a) * r);
   S.center.y = sp.floorBias
     ? zoneBottom(sp.zi) + (zoneTop(sp.zi) - zoneBottom(sp.zi)) * (0.5 - 0.3 * sp.floorBias)
     : (zoneTop(sp.zi) + zoneBottom(sp.zi)) * 0.5;
+  S.cvel.set(0, 0, 0);
+  S.beatPh = _cr() * 40;
+  S.panic = 0; S.roll = 0;
   pickGoal(S);
-  schools.push(S);
+  // Layout fingerprint, frozen at lay-down time: the centre wanders every frame, so a
+  // determinism probe needs the value BEFORE the sim touches it.
+  S.lay = [S.center.x, S.center.y, S.center.z, S.goal.x, S.goal.y, S.goal.z];
+  S.inst.boundingSphere.center.copy(S.center);
 }
 
 function updateSchool(S, dt, t) {
@@ -520,13 +560,14 @@ function trailerGeometry(cfg) {
     }
     base += (segs + 1) * 2;
   };
+  const gr = (a, b) => a + GEO_RNG() * (b - a);
   for (let s = 0; s < cfg.tent; s++) {
     const ang = (s + 0.5) / cfg.tent * Math.PI * 2;
-    strand(9, ang, rng(cfg.tlen[0], cfg.tlen[1]), 0.99, rng(0.04, 0.075), 0, s * 1.37);
+    strand(9, ang, gr(cfg.tlen[0], cfg.tlen[1]), 0.99, gr(0.04, 0.075), 0, s * 1.37);
   }
   for (let s = 0; s < cfg.arms; s++) {
     const ang = (s + 0.25) / cfg.arms * Math.PI * 2;
-    strand(12, ang, rng(cfg.alen[0], cfg.alen[1]), 0.20, rng(0.16, 0.24), 1, s * 2.1);
+    strand(12, ang, gr(cfg.alen[0], cfg.alen[1]), 0.20, gr(0.16, 0.24), 1, s * 2.1);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -637,6 +678,12 @@ function instAttr(geo, src) {
   for (const k in src) geo.setAttribute(k, src[k]);
 }
 
+// Per-instance jelly buffers, allocated once at build and rewritten in place on reseed.
+// aPhase/aRate/aSeed/aTint/aRibs/aLenMul are ONE set of Float32Arrays wrapped by two
+// InstancedBufferAttribute pairs (bell + trailer geometry), so a reseed writes the
+// arrays once and flags both wrappers.
+let JB = null;
+
 function buildJellies() {
   const N = 7 * 3;
   const bellGeo = bellGeometry();
@@ -645,43 +692,29 @@ function buildJellies() {
   const aPhase = new Float32Array(N), aRate = new Float32Array(N), aSeed = new Float32Array(N);
   const aTint = new Float32Array(N * 3), aRibs = new Float32Array(N), aLenMul = new Float32Array(N);
   const gCol = new Float32Array(N * 3);
+  JB = { N, aPhase, aRate, aSeed, aTint, aRibs, aLenMul, gCol, attrs: [] };
 
-  const c = new THREE.Color();
-  for (let zi = 0; zi < 3; zi++) {
-    const Z = JELLY_ZONE[zi];
-    for (let k = 0; k < 7; k++) {
-      const i = zi * 7 + k;
-      const hue = rng(Z.hue[0], Z.hue[1]);
-      c.setHSL(hue, Z.sat, Z.lum);
-      aTint[i * 3] = c.r; aTint[i * 3 + 1] = c.g; aTint[i * 3 + 2] = c.b;
-      const gk = Z.glow * 0.13;
-      gCol[i * 3] = c.r * gk; gCol[i * 3 + 1] = c.g * gk; gCol[i * 3 + 2] = c.b * gk;
-      aPhase[i] = Math.random();
-      aRate[i] = rng(0.20, 0.34) * (1 - zi * 0.15);
-      aSeed[i] = Math.random() * 6.283;
-      aRibs[i] = Z.ribs;
-      aLenMul[i] = rng(0.8, 1.2) * Z.trail;
-      const a = Math.random() * Math.PI * 2, r = rng(16, WORLD_R * 0.7);
-      const pos = V3(Math.cos(a) * r, rng(zoneBottom(zi) + 45, zoneTop(zi) - 25), Math.sin(a) * r);
-      jellies.push({
-        i, zi, pos, vel: V3(rng(-.3, .3), 0, rng(-.3, .3)),
-        axis: V3(rng(-.25, .25), 1, rng(-.25, .25)).normalize(),
-        wob: V3(rng(-1, 1), 0, rng(-1, 1)).normalize(),
-        scale: rng(Z.scale[0], Z.scale[1]), spin: rng(-0.12, 0.12), spinA: Math.random() * 6.283,
-        phase: aPhase[i], rate: aRate[i], baseRate: aRate[i], thrust: rng(9, 15), glow: Z.glow,
-        alarm: 0, grp: null
-      });
-    }
+  for (let zi = 0; zi < 3; zi++) for (let k = 0; k < 7; k++) {
+    jellies.push({
+      i: zi * 7 + k, zi, pos: V3(), vel: V3(), axis: V3(0, 1, 0), wob: V3(1, 0, 0),
+      scale: 1, spin: 0, spinA: 0, phase: 0, rate: 0.25, baseRate: 0.25, thrust: 12,
+      glow: JELLY_ZONE[zi].glow, alarm: 0, grp: null
+    });
   }
+  layoutJellies();
 
-  const shared = () => ({
-    aPhase: new THREE.InstancedBufferAttribute(aPhase, 1),
-    aRate: new THREE.InstancedBufferAttribute(aRate, 1),
-    aSeed: new THREE.InstancedBufferAttribute(aSeed, 1),
-    aTint: new THREE.InstancedBufferAttribute(aTint, 3),
-    aRibs: new THREE.InstancedBufferAttribute(aRibs, 1),
-    aLenMul: new THREE.InstancedBufferAttribute(aLenMul, 1)
-  });
+  const shared = () => {
+    const set = {
+      aPhase: new THREE.InstancedBufferAttribute(aPhase, 1),
+      aRate: new THREE.InstancedBufferAttribute(aRate, 1),
+      aSeed: new THREE.InstancedBufferAttribute(aSeed, 1),
+      aTint: new THREE.InstancedBufferAttribute(aTint, 3),
+      aRibs: new THREE.InstancedBufferAttribute(aRibs, 1),
+      aLenMul: new THREE.InstancedBufferAttribute(aLenMul, 1)
+    };
+    for (const k in set) JB.attrs.push(set[k]);
+    return set;
+  };
   instAttr(bellGeo, shared());
   instAttr(trailGeo, shared());
 
@@ -719,6 +752,44 @@ function buildJellies() {
   jellyGlow.geometry.attributes.aCol.array.set(gCol);
   jellyGlow.geometry.attributes.aCol.needsUpdate = true;
   scene.add(jellyGlow);
+}
+
+// Jelly LAYOUT: hue inside the zone's authored band, pulse phase/rate, bell scale,
+// trail length and where in the column it floats. Zone identity (JELLY_ZONE) is fixed;
+// only the individuals change. Reused objects, reused buffers, no allocation.
+function layoutJellies() {
+  const { aPhase, aRate, aSeed, aTint, aRibs, aLenMul, gCol } = JB;
+  const c = new THREE.Color();
+  for (const J of jellies) {
+    const zi = J.zi, Z = JELLY_ZONE[zi], i = J.i;
+    c.setHSL(rr(Z.hue[0], Z.hue[1]), Z.sat, Z.lum);
+    aTint[i * 3] = c.r; aTint[i * 3 + 1] = c.g; aTint[i * 3 + 2] = c.b;
+    const gk = Z.glow * 0.13;
+    gCol[i * 3] = c.r * gk; gCol[i * 3 + 1] = c.g * gk; gCol[i * 3 + 2] = c.b * gk;
+    aPhase[i] = _cr();
+    aRate[i] = rr(0.20, 0.34) * (1 - zi * 0.15);
+    aSeed[i] = _cr() * 6.283;
+    aRibs[i] = Z.ribs;
+    aLenMul[i] = rr(0.8, 1.2) * Z.trail;
+    const a = _cr() * Math.PI * 2, r = rr(16, WORLD_R * 0.7);
+    J.pos.set(Math.cos(a) * r, rr(zoneBottom(zi) + 45, zoneTop(zi) - 25), Math.sin(a) * r);
+    J.vel.set(rr(-.3, .3), 0, rr(-.3, .3));
+    J.axis.set(rr(-.25, .25), 1, rr(-.25, .25)).normalize();
+    J.wob.set(rr(-1, 1), 0, rr(-1, 1)).normalize();
+    J.scale = rr(Z.scale[0], Z.scale[1]);
+    J.spin = rr(-0.12, 0.12);
+    J.spinA = _cr() * 6.283;
+    J.phase = aPhase[i];
+    J.rate = J.baseRate = aRate[i];
+    J.thrust = rr(9, 15);
+    J.glow = Z.glow;
+    J.alarm = 0;
+  }
+  for (const at of JB.attrs) at.needsUpdate = true;
+  if (jellyGlow) {
+    jellyGlow.geometry.attributes.aCol.array.set(gCol);
+    jellyGlow.geometry.attributes.aCol.needsUpdate = true;
+  }
 }
 
 function updateJellies(dt, t) {
@@ -829,13 +900,17 @@ void main(){
   ${TONE_OUT}
 }`;
 
-function buildDrifters() {
+// Drifter placement is BAKED into the vertex arrays (one static mesh, all motion in the
+// shader), so a reseed re-runs the same strand walk and copies the results back over the
+// same buffers. Strand count and segment count are fixed, so the arrays are always the
+// same length — geometry and material are never touched.
+function driftArrays() {
   const pos = [], D = [], E = [], C = [], idx = [];
   let base = 0;
   const col = new THREE.Color();
   const strand = (o, segs, len, wid, amp, kind, hue, rate) => {
     col.setHSL(hue, 0.7, 0.55);
-    const seed = Math.random() * 6.283;
+    const seed = _cr() * 6.283;
     for (let i = 0; i <= segs; i++) {
       const T = i / segs;
       for (const side of [-1, 1]) {
@@ -852,16 +927,20 @@ function buildDrifters() {
     base += (segs + 1) * 2;
   };
   const place = zi => {
-    const a = Math.random() * Math.PI * 2, r = rng(20, WORLD_R * 0.72);
-    return V3(Math.cos(a) * r, rng(zoneBottom(zi) + 60, zoneTop(zi) - 20), Math.sin(a) * r);
+    const a = _cr() * Math.PI * 2, r = rr(20, WORLD_R * 0.72);
+    return V3(Math.cos(a) * r, rr(zoneBottom(zi) + 60, zoneTop(zi) - 20), Math.sin(a) * r);
   };
   // siphonophores: long bead chains
-  for (let k = 0; k < 10; k++) strand(place(2), 24, rng(26, 48), 0.28, rng(2.5, 5), 0, rng(0.42, 0.52), rng(0.25, 0.4));
-  for (let k = 0; k < 4; k++) strand(place(1), 20, rng(18, 32), 0.24, rng(2, 4), 0, rng(0.72, 0.86), rng(0.3, 0.45));
+  for (let k = 0; k < 10; k++) strand(place(2), 24, rr(26, 48), 0.28, rr(2.5, 5), 0, rr(0.42, 0.52), rr(0.25, 0.4));
+  for (let k = 0; k < 4; k++) strand(place(1), 20, rr(18, 32), 0.24, rr(2, 4), 0, rr(0.72, 0.86), rr(0.3, 0.45));
   // ghost ribbons
-  for (let k = 0; k < 7; k++) strand(place(2), 20, rng(16, 30), rng(0.7, 1.6), rng(3, 6), 1, rng(0.5, 0.62), rng(0.2, 0.34));
-  for (let k = 0; k < 3; k++) strand(place(1), 18, rng(14, 24), rng(0.6, 1.2), rng(2.5, 5), 1, rng(0.76, 0.9), rng(0.22, 0.36));
+  for (let k = 0; k < 7; k++) strand(place(2), 20, rr(16, 30), rr(0.7, 1.6), rr(3, 6), 1, rr(0.5, 0.62), rr(0.2, 0.34));
+  for (let k = 0; k < 3; k++) strand(place(1), 18, rr(14, 24), rr(0.6, 1.2), rr(2.5, 5), 1, rr(0.76, 0.9), rr(0.22, 0.36));
+  return { pos, D, E, C, idx };
+}
 
+function buildDrifters() {
+  const { pos, D, E, C, idx } = driftArrays();
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('aD', new THREE.Float32BufferAttribute(D, 4));
@@ -878,6 +957,15 @@ function buildDrifters() {
   scene.add(drifters);
 }
 
+function layoutDrifters() {
+  const a = driftArrays(), at = drifters.geometry.attributes;
+  at.position.array.set(a.pos); at.position.needsUpdate = true;
+  at.aD.array.set(a.D); at.aD.needsUpdate = true;
+  at.aE.array.set(a.E); at.aE.needsUpdate = true;
+  at.aCol.array.set(a.C); at.aCol.needsUpdate = true;
+  // index is topology only — identical every time, so it is never re-uploaded
+}
+
 // Twinkling plankton — pure vertex-shader motion, zero CPU per frame.
 function buildSparks() {
   // zone counts as explicit buckets (not percentages) so zone 0 can be boosted
@@ -892,6 +980,15 @@ function buildSparks() {
   mat.fragmentShader = mat.fragmentShader.replace('vec4(vC * vFog, a)', 'vec4(vC * vFog * vTw, a)');
   sparks = glowField(N, mat);
   sparks.renderOrder = 4;
+  SPARK_N = [N0, N1, N];
+  layoutSparks();
+  scene.add(sparks);
+}
+
+let SPARK_N = null;
+
+function layoutSparks() {
+  const [N0, N1, N] = SPARK_N;
   const p = sparks.geometry.attributes.aPos.array;
   const s = sparks.geometry.attributes.aSize.array;
   const c = sparks.geometry.attributes.aCol.array;
@@ -899,19 +996,20 @@ function buildSparks() {
   const col = new THREE.Color();
   for (let i = 0; i < N; i++) {
     const zi = i < N0 ? 0 : (i < N0 + N1 ? 1 : 2);
-    const a = Math.random() * Math.PI * 2, r = rng(10, WORLD_R * 0.85);
+    const a = _cr() * Math.PI * 2, r = rr(10, WORLD_R * 0.85);
     p[i * 3] = Math.cos(a) * r;
-    p[i * 3 + 1] = rng(zoneBottom(zi) + 10, zoneTop(zi) - 6);
+    p[i * 3 + 1] = rr(zoneBottom(zi) + 10, zoneTop(zi) - 6);
     p[i * 3 + 2] = Math.sin(a) * r;
-    s[i] = rng(0.5, 1.8) * (1 + zi * 0.35);
-    col.setHSL(zi === 2 ? rng(0.38, 0.52) : (zi === 1 ? rng(0.68, 0.86) : rng(0.5, 0.6)), 0.8, 0.6);
+    s[i] = rr(0.5, 1.8) * (1 + zi * 0.35);
+    col.setHSL(zi === 2 ? rr(0.38, 0.52) : (zi === 1 ? rr(0.68, 0.86) : rr(0.5, 0.6)), 0.8, 0.6);
     const k = 0.5 + zi * 0.5;
     c[i * 3] = col.r * k; c[i * 3 + 1] = col.g * k; c[i * 3 + 2] = col.b * k;
-    e[i * 3] = Math.random() * 6.283;
-    e[i * 3 + 1] = rng(0.08, 0.22);
-    e[i * 3 + 2] = rng(0.5, 2.2);
+    e[i * 3] = _cr() * 6.283;
+    e[i * 3 + 1] = rr(0.08, 0.22);
+    e[i * 3 + 2] = rr(0.5, 2.2);
   }
-  scene.add(sparks);
+  const at = sparks.geometry.attributes;
+  at.aPos.needsUpdate = at.aSize.needsUpdate = at.aCol.needsUpdate = at.aExtra.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -919,11 +1017,24 @@ function buildSparks() {
 // ---------------------------------------------------------------------------
 
 export function buildCreatures() {
+  _cr = siteParams('creatures').rng;
   let seed = 0;
   for (const sp of SPECIES) for (let k = 0; k < sp.copies; k++) buildSchool(sp, seed++);
   buildJellies();
   buildDrifters();
   buildSparks();
+}
+
+// Re-lay schools/jellies/drifters/sparks for the current site (CHART V2 contract:
+// pure function of siteParams('creatures').rng, buffers rewritten in place, materials
+// and programs never recreated). The stream order matches buildCreatures() exactly, so
+// a boot at a site and an arrive() back to it produce the identical layout.
+export function reseedCreatures() {
+  _cr = siteParams('creatures').rng;
+  for (const S of schools) layoutSchool(S);
+  layoutJellies();
+  layoutDrifters();
+  layoutSparks();
 }
 
 export function updateCreatures(dt, t) {

@@ -8,7 +8,7 @@ import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from '.
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setRayDim, localSurfaceY, renderRefraction } from './world/water.js';
-import { buildCreatures, updateCreatures } from './world/creatures.js';
+import { buildCreatures, updateCreatures, reseedCreatures } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
 import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash } from './entities/diver.js';
@@ -25,14 +25,14 @@ import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
   resupplyAtRaft, canDescendTo, HOSE_REQ
 } from './systems/survival.js';
-import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed, chartAnchor } from './systems/raft.js';
+import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed, chartAnchor, setKeepsakes } from './systems/raft.js';
 import { buildTether, updateTether, reseatTether } from './systems/tether.js';
 import { buildResources, updateResources, reseedResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
 import { buildProps, updateProps, propColliders, reseedProps } from './world/props.js';
 import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world/footfx.js';
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, reseedDens } from './world/predators.js';
-import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks } from './world/wrecks.js';
+import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks, setKeepsakeState, nearKeepsake, takeKeepsake } from './world/wrecks.js';
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
@@ -46,11 +46,18 @@ import { openChart, closeChart, isChartOpen } from './ui/chartOverlay.js';
 // boot, no double work. The chart is the save file: which mooring she rides at, which
 // sleepers have taken the pencil, what Sal carries, whether the rite has been seen.
 const SAVE_KEY = 'abyssa.chart.v1';
-let chartRec = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], endingSeen = false;
+let chartRec = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], endingSeen = false;
+// V2: which hidden anchorages the deep sound channel has given up (index-aligned with
+// SITES; authored sites start found), and which keepsakes sit on the raft shelf
+// (per site, per wreck berth).
+let chartFound = [1, 1, 1, 0];
+let keepsakes = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
 (() => { try {
   const sv = JSON.parse(localStorage.getItem(SAVE_KEY));
   if (!sv) return;
-  if (Array.isArray(sv.rec)) chartRec = sv.rec;
+  if (Array.isArray(sv.rec)) { chartRec = sv.rec; while (chartRec.length < 4) chartRec.push([0, 0, 0]); }
+  if (Array.isArray(sv.found)) chartFound = sv.found;
+  if (Array.isArray(sv.keeps)) { keepsakes = sv.keeps; while (keepsakes.length < 4) keepsakes.push([0, 0, 0]); }
   endingSeen = !!sv.endingSeen;
   if (sv.site) setSite(sv.site);
   if (sv.hose) survival.hose = Math.max(survival.hose, sv.hose);
@@ -63,7 +70,8 @@ let chartRec = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], endingSeen = false;
 } catch (e) { /* a torn save is a blank chart, never a crash */ } })();
 function saveChart() { try {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
-    site: currentSiteIndex(), rec: chartRec, endingSeen, hose: survival.hose,
+    site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes,
+    endingSeen, hose: survival.hose,
     tools: { sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster }
   }));
 } catch (e) { /* private mode etc: play on, remember nothing */ } }
@@ -86,6 +94,8 @@ buildWrecks();
 if (survival.hasSonar || survival.hasSpear || survival.hasThruster) {
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
 }
+setKeepsakeState(keepsakes[currentSiteIndex()]);
+setKeepsakes(keepsakes);
 buildVents();
 buildVentLife();
 initTools();
@@ -241,11 +251,35 @@ addEventListener('keydown', e => {
   }
   // T: sonar pulse (once the set is recovered from the shallows wreck)
   if (e.code === 'KeyT' && state === 'play' && survival.hasSonar) {
-    if (sonarPing(player.pos, zone < 0 ? 0 : zone)) chime(1174, 2.2, 0.16);
+    if (sonarPing(player.pos, zone < 0 ? 0 : zone)) {
+      chime(1174, 2.2, 0.16);
+      // THE DEEP SOUND CHANNEL: a ping from zone 2 carries far enough to sound
+      // ground the chart's owner never reached. Once, ever, per hidden anchorage.
+      if (zone === 2 && !chartFound[3]) {
+        chartFound[3] = 1;
+        saveChart();
+        showMsg('A FAR RETURN. NEW GROUND — THE PENCIL TAKES IT.', 6);
+        chime(587, 3.5, 0.12);
+      }
+    }
     return;
   }
   // E near a wreck's relic: take the tool
   if (e.code === 'KeyE' && state === 'play') {
+    // keepsakes first: at remote sites the relic berth is long empty — what is
+    // left is the previous owner's small thing, and one line of them.
+    const kp = nearKeepsake(player.pos);
+    if (kp) {
+      const got = takeKeepsake(kp.zi);
+      if (got) {
+        keepsakes[currentSiteIndex()][kp.zi] = 1;
+        setKeepsakes(keepsakes);
+        saveChart();
+        if (got.line) showMsg(got.line, 6);
+        chime(659, 2.5, 0.22);
+        return;
+      }
+    }
     const rel = nearRelic(player.pos);
     if (rel) {
       const tool = takeRelic(rel.zi);
@@ -368,6 +402,7 @@ function reseedWorld(i) {
   setSite(i);
   fillTerrain();
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
+  setKeepsakeState(keepsakes[currentSiteIndex()]);
   reseedFlora();
   reseedResources();
   reseedProps();
@@ -375,6 +410,7 @@ function reseedWorld(i) {
   reseedVentLife();
   reseatRifts();
   reseedDens();
+  reseedCreatures();
   enterZone(0);
   inkBeat = false;
   deckSpawn(player.pos);
@@ -396,7 +432,7 @@ function nearChartTable() {
 }
 function consultChart() {
   if (document.exitPointerLock) document.exitPointerLock();
-  openChart({ currentSite: currentSiteIndex(), calmed: chartRec },
+  openChart({ currentSite: currentSiteIndex(), calmed: chartRec, found: chartFound },
     i => startVoyage(i), () => {});
 }
 
@@ -408,7 +444,8 @@ Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, di
 window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zone ' + zone; };
 // Debug: sail without the fade (the fade is cosmetic; this is the state change), and
 // force the reseed directly. Kept for probes and for future harness runs.
-window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec };
+window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec,
+  found: () => chartFound, keeps: () => keepsakes };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
   if (state !== 'play') return 'start the game first';

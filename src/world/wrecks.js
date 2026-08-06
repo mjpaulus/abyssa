@@ -26,6 +26,12 @@
 //                               relic ('sonar'|'spear'|'thruster'), else null.
 //   takeRelic(zi)             — claims it (hides the relic prop, plays local VFX); returns
 //                               the tool name or null if already taken.
+//   setKeepsakeState(taken3)  — CHART V2: this site's per-wreck keepsake taken flags.
+//                               No keepsakes at site 0; at remote sites builds/hides one
+//                               small unbeaconed prop per wreck beside the relic berth.
+//   nearKeepsake(pos)         — {zi} within RELIC_REACH of a present, untaken keepsake.
+//   takeKeepsake(zi)          — hides it, returns { line } — the previous owner, in one
+//                               line, or at THE UNSOUNDED SHELF something older.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera, envTex } from '../core.js';
@@ -34,7 +40,8 @@ import { rng, clamp, fbm, V3 } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { player } from '../player.js';
-import { siteParams } from './site.js';
+import { siteParams, currentSiteIndex } from './site.js';
+import { keepsakeKind, keepsakeGeo } from '../lib/keepsakes.js';
 
 const TAU = Math.PI * 2;
 const UP = V3(0, 1, 0);
@@ -933,7 +940,9 @@ export function buildWrecks() {
 
       WRECKS.push({
         zi, grp: g, tool: S.tool, marker, burst, relic: W.relic,
-        pos: wp, taken: false, burstT: 2, ph: zi * 2.1
+        pos: wp, taken: false, burstT: 2, ph: zi * 2.1,
+        // CHART V2: filled in by setKeepsakeState, which game.js calls after every reseed.
+        keep: null, keepPos: null, keepLine: null, keepTaken: true
       });
     }
   } finally {
@@ -1006,6 +1015,8 @@ export function updateWrecks(dt, t) {
       u.g2.scale.setScalar(5.0 * (1.9 - s * 0.85));
       u.g2.material.opacity = 0.22 + 0.10 * Math.sin(t * 1.15 + W.ph);
     }
+    // The keepsake's only motion: a turn so slow it is barely a tell, and no light at all.
+    if (W.keep && !W.keepTaken) W.keep.rotation.y += dt * 0.16;
     if (W.burstT < 1) {
       W.burstT += dt * 0.9;
       W.burst.material.uniforms.uT.value = W.burstT;
@@ -1015,6 +1026,101 @@ export function updateWrecks(dt, t) {
 }
 
 // --------------------------------------------------------------- gameplay ----
+
+// ---------------------------------------------------------------- keepsakes ---
+// CHART V2. At the home mooring the relics are still in their berths and there is nothing
+// else to find. At every REMOTE site the berth was emptied long before Sal got there — the
+// tools are already in his hands — and what is left beside it is the small thing the
+// previous chart-owner carried and did not take home. One per wreck, one line each.
+//
+// Deliberately UNBEACONED: no marker sprite, no halo, no glow of any kind, unlike the
+// relics. A relic is a landmark the chart promises you; a keepsake is only found by being
+// at the wreck and looking down. It reads at ~6 units off silhouette alone, which is why
+// the shapes are taken at 2.2x their true size at the berth (1.0x on the raft shelf, where
+// the eye is half a metre away).
+const KEEP_SCALE = 2.2;
+// Where the keepsake sits relative to the relic berth: a stride off it, laid down rather
+// than stowed. Parented to the relic's own host, so it inherits the wreck's settle tilt.
+const KEEP_OFF = [0.46, 0.10, 0.42];
+
+// The lines. Sites 1 and 2 are one man, the owner whose chart Sal is now inking, told in
+// nine words at a time and never in the first person — he does not get to speak, he only
+// gets to have left things.
+//
+// SITE 3 IS NOT HIS. THE UNSOUNDED SHELF reads 'NO SOUNDINGS. THE OWNER NEVER CAME.' — so
+// its berths carry things that were down there before any chart was drawn, and the lines
+// have to say so without ever explaining it.
+const KEEP_LINE = [
+  null,
+  [
+    'A PIPE, BITTEN THROUGH. HE WAITED BADLY.',
+    'A WATCH, STOPPED AT SLACK WATER. HE NEVER WOUND IT AGAIN.',
+    'A TIN CUP, SCOURED THIN. HE TOOK HIS RATION COLD, AND ALONE.'
+  ],
+  [
+    'A CLASP KNIFE, FOLDED SHUT. HE CUT HIMSELF FREE ONCE, AND KEPT IT.',
+    'A BRASS BUTTON OFF A COAT HE DID NOT COME BACK FOR.',
+    'A TOBACCO TIN OF ASH. HE WAS KEEPING SOMETHING BURNT.'
+  ],
+  [
+    "A DOLL'S HEAD, SALT-WHITE. NO BOAT IN THIS REGISTER CARRIED CHILDREN.",
+    'A COIN STRUCK WITH NO FACE AND NO YEAR. IT IS NOT WORN. IT WAS MADE SO.',
+    'A KEY OF BLACK GLASS. THE OWNER NEVER CAME. SOMETHING ELSE DID.'
+  ]
+];
+
+// Called by game.js after every reseedWrecks, with this site's per-wreck taken flags.
+// Idempotent: builds the prop once per wreck build, then only toggles visibility.
+export function setKeepsakeState(taken3) {
+  if (!built) return;
+  const si = currentSiteIndex();
+  const lines = KEEP_LINE[si];
+  for (const W of WRECKS) {
+    const kind = lines ? keepsakeKind(si, W.zi) : null;
+    const want = !!kind && !(taken3 && taken3[W.zi]);
+    if (want && !W.keep) {
+      const grp = new THREE.Group();
+      const P = Part(grp);
+      const M = palette(W.zi);
+      // ONE material, so the whole keepsake is one draw call. Brass is the right read for
+      // a thing a man kept in a pocket for years, and the odd one out (the doll, the glass
+      // key) gains from being the same dull metal as everything else down here.
+      for (const g of keepsakeGeo(kind, KEEP_SCALE)) P.add(g, M.brass);
+      P.bake();
+      const host = W.relic.parent;
+      grp.position.copy(W.relic.position)
+        .add(_v.set(KEEP_OFF[0], KEEP_OFF[1], KEEP_OFF[2]));
+      grp.rotation.y = W.zi * 1.9 + 0.4;
+      host.add(grp);
+      W.grp.updateMatrixWorld(true);
+      W.keep = grp;
+      W.keepPos = grp.getWorldPosition(new THREE.Vector3());
+      W.keepLine = lines[W.zi];
+    }
+    if (W.keep) { W.keep.visible = want; W.keepTaken = !want; }
+  }
+}
+
+// Reach test, the relic's own pattern and the relic's own reach.
+export function nearKeepsake(pos) {
+  if (!built) return null;
+  for (let i = 0; i < WRECKS.length; i++) {
+    const W = WRECKS[i];
+    if (!W.keep || W.keepTaken || !W.keep.visible) continue;
+    const dx = pos.x - W.keepPos.x, dy = pos.y - W.keepPos.y, dz = pos.z - W.keepPos.z;
+    if (dx * dx + dy * dy + dz * dz < RELIC_REACH * RELIC_REACH) return { zi: W.zi };
+  }
+  return null;
+}
+
+export function takeKeepsake(zi) {
+  const W = WRECKS.find(w => w.zi === zi);
+  if (!W || !W.keep || W.keepTaken) return null;
+  W.keepTaken = true;
+  W.keep.visible = false;
+  return { line: W.keepLine };
+}
+
 export function nearRelic(pos) {
   if (!built) return null;
   for (let i = 0; i < WRECKS.length; i++) {
@@ -1060,5 +1166,21 @@ window.wrecks = {
     x: +W.pos.x.toFixed(1), y: +W.pos.y.toFixed(1), z: +W.pos.z.toFixed(1)
   })),
   near: p => nearRelic(p || player.pos),
+  // CHART V2: what the keepsake layer thinks is out there, for the same reason `list` exists.
+  keeps: () => WRECKS.map(W => ({
+    zi: W.zi, has: !!W.keep, taken: W.keepTaken, shown: !!W.keep && W.keep.visible,
+    line: W.keepLine,
+    x: W.keepPos && +W.keepPos.x.toFixed(1), y: W.keepPos && +W.keepPos.y.toFixed(1),
+    z: W.keepPos && +W.keepPos.z.toFixed(1)
+  })),
+  nearKeep: p => nearKeepsake(p || player.pos),
+  // Park the diver right on a keepsake, the way goto() parks him on a relic.
+  gotoKeep(zi) {
+    const W = WRECKS[zi];
+    if (!W || !W.keepPos) return 'no keepsake ' + zi;
+    player.pos.set(W.keepPos.x + 0.8, W.keepPos.y + 0.9, W.keepPos.z + 0.8);
+    player.vel.set(0, 0, 0);
+    return `keepsake ${zi} @ ${W.keepPos.x.toFixed(1)}, ${W.keepPos.y.toFixed(1)}, ${W.keepPos.z.toFixed(1)}`;
+  },
   colliders: () => wreckColliders.slice()
 };

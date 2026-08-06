@@ -26,6 +26,7 @@ import { buildStation } from './raft/station.js';
 import { buildGear } from './raft/gear.js';
 import { buildDavit } from './raft/davit.js';
 import { buildChart } from './raft/chart.js';
+import { buildShelf } from './raft/shelf.js';
 import { buildPump, updatePump, PUMP_POS } from './raft/pump.js';
 
 export const raft = new THREE.Group();
@@ -47,6 +48,9 @@ export const pumpPos = V3();
 export const chartAnchor = V3();
 
 let pumpH = null, lampGlass = null, beaconGlow = null, lamp = null, lampLight = null;
+// The keepsake shelf's dynamic-row setter, and anything game.js pushed in before the raft
+// existed (it loads the saved chart and calls setKeepsakes at module scope).
+let shelfSet = null, pendingKeeps = null;
 const PUFFN = 7, puffs = [];
 let puffT = 0;
 const puffOrigin = V3();
@@ -179,6 +183,10 @@ export function buildRaft() {
   // The chart table (port side, aft of the dressing station): THE CHART's physical
   // home. Its anchor is where game.js centres the [E] CONSULT prompt.
   chartAnchor.copy(buildChart(raft, mats).anchor);
+  // The keepsake shelf shares that wall. Its board and brackets go into the static merge
+  // below; the row of small things on it is dynamic and returns its own setter.
+  shelfSet = buildShelf(raft, mats);
+  if (pendingKeeps) { shelfSet(pendingKeeps); pendingKeeps = null; }
 
   const P = Part(raft);
   buildReel(P, mats, hoseHead);
@@ -233,6 +241,17 @@ export function buildRaft() {
 
 // Storm intensity and daylight, pushed in by game.js from the weather system.
 let storm = 0, day = 1, govK = 0;
+// CHART V2 keepsakes: keeps is the full per-site/per-wreck taken matrix. The shelf on the
+// port bulwark forward of the chart table shows one small prop per taken keepsake, in a
+// FIXED site-major order — the slot a keepsake lands in never depends on the order they
+// were found, so the gaps in the row are themselves the record of where Sal has not been.
+// Idempotent and callable at any time: before buildRaft it is remembered, after it the
+// shelf builder no-ops unless the set actually changed.
+export function setKeepsakes(keeps) {
+  if (shelfSet) shelfSet(keeps);
+  else pendingKeeps = keeps;
+}
+
 export function setSwell(k, d = 1) { storm = k; day = d; }
 
 // The flywheel's real speed, 0..1. Published so the audio hears the same coast-down the
