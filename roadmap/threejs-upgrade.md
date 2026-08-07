@@ -1,6 +1,6 @@
 ---
 title: three.js upgrade (r160 → current)
-status: backlog
+status: wip
 tags: infra, risk
 updated: 2026-08-06
 ---
@@ -14,3 +14,4 @@ WebGPU is a separate decision from the version bump — do not conflate.
 
 ## Log
 - 2026-08-06 — captured from Michael's note that a new version exists; parked while SKY & WIND is in flight
+- 2026-08-06 — Michael: "upgrade threejs first then tackle A" (puff-cluster clouds wait on this). Upgrade agent launched on a branch
