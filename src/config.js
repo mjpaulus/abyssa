@@ -254,7 +254,60 @@ export const GLASS = {
     // and a post-storm clearing ~0.55-0.73; at gain 1 both rounded to nothing. At 1.7 a
     // clear evening reaches 0.14 and a post-storm one saturates — which is the card's
     // acceptance test ("a post-storm sunset visibly outdrames a clear one") made a knob.
-    emberGain: 1.7
+    emberGain: 1.7,
+    // THE DOME'S SHARE. Michael's ruling on the painted sky: "just seems like a flat map
+    // on the sky". world/clouds.js now draws real instanced puff clusters in the air, so
+    // this layer is demoted to the DISTANT BACKDROP they fade into — 0.28 leaves a faint
+    // painted haze past the puffs' 540-unit horizon and nothing readable as a clump.
+    // It is the A/B for the whole ruling: 1 restores the shipped painted sky exactly,
+    // 0 hands the sky entirely to the puffs. The storm envelope drives it back to 1 on
+    // its own (see uCloudDome in water.js) — a gale's lid is a lid.
+    dome: 0.28
+  },
+
+  // ---------------------------------------------------------------------------
+  // PUFF-CLUSTER CLOUDS — world/clouds.js. Real 3D sprites in the air above the sea,
+  // so parallax and inter-cloud occlusion are geometry rather than a shader's opinion.
+  // The photo bar's four properties are bought here by ARRANGEMENT, not by shaping:
+  // distinct clumps (each cluster is one object), gathered low near the horizon (an
+  // area-uniform deal over a 130..540 annulus puts most clusters far, and perspective
+  // compresses them into a low band for free), dark flat bases (per-puff height profile
+  // + the same backlit pow the dome uses), milky merge at the waterline (hazeUp/hazeK,
+  // shared with the dome so the two dissolve on the same curve).
+  puff: {
+    nMin: 6, nMax: 16,      // clusters dealt at hand.clouds 0 .. 1 (hard max 16)
+    pMin: 16, pMax: 30,     // puffs per cluster (hard max 30) — 480 instances, 1 draw
+    rIn: 130, rOut: 540,    // annulus the clusters are dealt into, around the camera
+    yLo: 95, yHi: 205,      // cluster altitude band, world units. LOW, deliberately:
+                            // altitude/distance IS the elevation angle, so this is what
+                            // gathers the band down where the photo puts it (20 deg at
+                            // 500 units, 45 deg at 150) instead of hanging it overhead.
+    sizeMin: 34, sizeMax: 80,   // cluster half-width
+    // Puff radius as a fraction of the cluster half-width. BIG, and paired with a
+    // low per-puff alpha: at 0.30/0.52 and alpha 0.92 a cluster rendered as a dozen
+    // separate bright discs (measured on screen — Michael's exact old complaint in a
+    // new form). Fat overlapping puffs at low alpha ACCUMULATE into a solid body with a
+    // soft torn rim, which is the only way a sprite cloud has ever worked.
+    puffLo: 0.55, puffHi: 0.95,
+    // A puff's own vertical squash, from base (flat, the photo's dark undersides) to
+    // crown (round). Storm multiplies the whole cluster down on top of this.
+    flatBase: 0.52,
+    // DISTANCE. The camera's far plane is 700 and clusters wrap at 560, so the puffs are
+    // fully faded before anything can be clipped by it — past `far` the painted dome IS
+    // the far field. near/far are the fade band.
+    fadeNear: 380, fadeFar: 545, wrapR: 560,
+    wind: 5.4,              // world units per second of cluster drift at wind.speed 1
+    // FORM. Deliberately the same three knobs the dome's dimension pass uses, and read
+    // the same way, because the two have to agree about where the sun is.
+    shade: 0.58,            // how far the leeward flank's lighting is pulled down
+    base: 0.52,             // how far the bottom of a cluster is pulled down
+    crown: 0.26,            // highlight on sunward tops
+    litK: 0.94,             // scalar on the dome's lit colour (keeps the puffs a shade
+                            // under the painted layer, so nothing new bloom-clips)
+    alpha: 0.55,            // peak opacity of a puff's core (see puffLo/puffHi)
+    // STORM. Clusters flatten, darken, sink toward a common deck and fade out as the
+    // painted lid comes up — the handoff.
+    stormFlat: 0.58, stormDark: 0.46, deckY: 108
   },
   // MARINE LAYER. The morning white-out. `thr`/`full` map hand.fog onto 0..1; the
   // burn-off is keyed on solar ELEVATION against the hand's own fogBurn, so the sun

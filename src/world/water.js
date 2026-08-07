@@ -317,6 +317,13 @@ vec3 skyRadiance( vec3 d ){
     // rendered frame: per-row cloud/sky contrast falls from 18.2 code values in the cloud
     // band to 5.5 at the waterline, which is the sea-glint/dither floor.
     amt *= 1.0 - ${f(GLASS.cloud.hazeK)} * ( 1.0 - smoothstep( 0.0, uCloudShp.w, up ) );
+    // THE DOME/PUFF HANDOFF. world/clouds.js draws real instanced puff clusters in the
+    // air; this painted layer stays, faded to GLASS.cloud.dome, as the DISTANT BACKDROP
+    // the puffs fade into (and as the A/B: dome = 1 is the shipped painted sky, 0 is
+    // puffs alone). It is driven back to 1 by the storm envelope, because a gale's lid
+    // is a lid — the puff clusters fade out under it and the deck takes over. Scaling
+    // the AMOUNT (not the colour) means the disc occlusion below tracks it for free.
+    amt *= uCloudDome;
     float g = fv - fbm2( uv + uSunUV );
     float k = clamp( 0.55 - 0.35 * uCloudTex + ( 1.7 + 1.6 * uCloudTex ) * g, 0.0, 1.0 );
 
@@ -816,6 +823,10 @@ const uCloudBase = { value: new THREE.Vector3() };
 const uCloudIsl = { value: new THREE.Vector4() };
 const uCloudShp = { value: new THREE.Vector4() };
 const uCloudBak = { value: 0 };                       // backlit amount, 0 noon .. 1 dusk
+// Painted-dome cloud amount: 1 = the shipped painted sky, 0 = no painted cloud at all
+// (world/clouds.js's instanced puffs own the sky instead). Resolved on the CPU in
+// skyDrama from GLASS.cloud.dome and the storm envelope.
+const uCloudDome = { value: 1 };
 // Cloud FORM (the dimension pass), same packing discipline:
 //   uCloudFrm  = (flank terminator width, height-proxy depth, shade amount, base amount)
 //   uCloudFrm2 = (crown highlight, cauliflower detail)
@@ -834,13 +845,13 @@ const uFogCol = { value: new THREE.Vector3() };
 // One declaration block, injected into both fragment shaders so the two can never
 // disagree about what skyRadiance/airFog need.
 const GLSL_SKY_DECL = `uniform vec2 uCloudDrift, uSunUV, uCloudFrm2;
-uniform float uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudBak, uDiscK, uMoonR, uFog;
+uniform float uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudBak, uCloudDome, uDiscK, uMoonR, uFog;
 uniform vec3 uCloudLit, uCloudBase, uMoonDir, uMoonRight, uMoonCol, uFogCol;
 uniform vec4 uMoonPh, uCloudIsl, uCloudShp, uCloudFrm;`;
 // The uniform map half of the same pairing.
 const SKY_UNIFORMS = {
   uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
-  uCloudIsl, uCloudShp, uCloudBak, uCloudFrm, uCloudFrm2,
+  uCloudIsl, uCloudShp, uCloudBak, uCloudDome, uCloudFrm, uCloudFrm2,
   uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol
 };
 const _tmp = new THREE.Vector3();
@@ -1891,6 +1902,15 @@ export function buildWater() {
 // are Vector2/3/4 objects written with .set(). No trig in here beyond one sin/cos pair
 // for the wind and one for the moon.
 const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0];
+
+// Published for world/clouds.js: the SAME two colours the painted dome mixes between,
+// plus the backlit amount and the storm envelope. The instanced puffs are lit by the
+// palette exactly the way the dome is — that is the whole reason the two read as one
+// sky rather than as two cloud systems. `lit`/`base` are the LIVE uniform vectors, so
+// there is nothing to keep in sync and nothing copied per frame.
+export const cloudLook = {
+  lit: uCloudLit.value, base: uCloudBase.value, bak: 0, storm: 0, dome: 1
+};
 // The moon's own arc: elevation is the sun's elevation proxy NEGATED, so it is highest
 // at midnight and gone by mid-morning, and its azimuth is the sun's plus 180. That is
 // not celestial mechanics — it is the one arrangement that guarantees the moon is never
@@ -1982,6 +2002,15 @@ function skyDrama(dt, storm) {
   }
   uCloudLit.value.set(_cLit[0], _cLit[1], _cLit[2]);
   uCloudBase.value.set(_cBase[0], _cBase[1], _cBase[2]);
+
+  // THE HANDOFF, resolved here so both systems read one number. GLASS.cloud.dome is the
+  // fair-weather amount of PAINTED cloud left on the dome (the distant backdrop the
+  // instanced puffs fade into); the storm envelope drives it back to a full lid, which
+  // is what world/clouds.js fades its clusters out against.
+  uCloudDome.value = clamp(C.dome + (1 - C.dome) * ms(storm, 0.25, 0.85), 0, 1);
+  cloudLook.bak = uCloudBak.value;
+  cloudLook.storm = storm;
+  cloudLook.dome = uCloudDome.value;
 
   // --- marine layer -------------------------------------------------------
   // Amount from the hand, burn-off from the SUN'S ELEVATION against the hand's own

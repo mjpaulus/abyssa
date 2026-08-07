@@ -34,6 +34,7 @@ import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, reseedDens } from './world/predators.js';
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks, setKeepsakeState, nearKeepsake, takeKeepsake } from './world/wrecks.js';
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
+import { buildClouds, updateClouds, setCloudWeather } from './world/clouds.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
@@ -80,6 +81,7 @@ function saveChart() { try {
 buildTerrain();
 buildFlora();
 buildWater();
+buildClouds();   // instanced puff clusters in the air; must follow buildWater (palette + wind)
 buildCreatures();
 buildRifts();
 buildRaft();
@@ -635,6 +637,7 @@ function update(dt, t) {
   setWeatherLight(wx.day, wx.storm, wx.flash, wx.env);
   setWeatherEnv(wx.env);
   setWeatherHand(wx.hand, wx.wind);
+  setCloudWeather(wx.hand, wx.env.sky);
   setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm), wx.storm);
   setSwell(wx.env.sea, wx.day);
   setStormCurrent(wx.env.below);   // subsurface current lags the sky — weather arrives from above
@@ -647,6 +650,7 @@ function update(dt, t) {
   updateFootFX(dt, t);
   updateCreatures(dt, t);
   updateWater(dt, t);
+  updateClouds(dt, t);   // after updateWater: reads its eased wind and its resolved cloud palette
   updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm));
   updateRifts(dt, t, zone, !!(lev && lev.calmed));
 
