@@ -1,6 +1,6 @@
 ---
 title: Rain from above
-status: backlog
+status: wip
 tags: water, storm
 updated: 2026-08-05
 ---
@@ -13,3 +13,4 @@ The from-below rain lens is fine and untouched. Air side needs non-lattice splas
 
 ## Log
 - 2026-08-05 — carried from the sky round
+- 2026-08-07 — picked as next after the SKY & WIND round (Michael: "ok rain next"); agent launched
