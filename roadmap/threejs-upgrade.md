@@ -1,6 +1,6 @@
 ---
 title: three.js upgrade (r160 → current)
-status: decision
+status: done
 tags: infra, risk
 updated: 2026-08-07
 ---
@@ -53,3 +53,4 @@ Watch-items that are noise so far but should meet Michael's eye:
   P-bypass clean, volumetrics present, full quality after 5 min, frame time 20.4 ms vs main's
   23.1 ms. **Needs Michael:** the deprecated soft shadow map (above) is a real if small look
   change, and the merge is his call. NOT merged.
+- 2026-08-06 — MERGED by Michael's call ("merge it"): 109d5a3 on main. r184 live (probed REVISION 184, console clean). The harder raft-shadow edge is accepted; soften via shadow camera/map-size later if it bothers his eye
