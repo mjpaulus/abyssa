@@ -372,6 +372,47 @@ export const GLASS = {
     // e-folding depth of that push, in world units. Real at -30 (0.61), a whisper at
     // -200 (0.036), arithmetically nothing in the abyss (-600 -> 4e-5).
     decayH: 60
+  },
+
+  // --- RAIN. Two systems, one entry.
+  //
+  // SPLASH (water.js, air side only): the sea's own drop-strike field. The shipped
+  // version put one expanding ring at the CENTRE of every cell of a regular lattice,
+  // which from the deck read as a marching grid of stamped o's. The replacement keeps
+  // the technique (a ring in the surface normal) and breaks the lattice three ways at
+  // once — per-cell centre jitter, per-cell beat rate, and dead cells. See splash() in
+  // water.js. NOT LIVE-POKEABLE: these are baked into the shader as literals (they are
+  // curve shape, and the sea shader is the most expensive in the game — they would cost
+  // uniforms for nothing). Changing them needs a reload.
+  //   splashScales  the two cell frequencies, 1/units. 2.6 -> 0.38 u (1.2 m) cells,
+  //                 5.3 -> 0.19 u. The second lattice is ROTATED (see splashRot) so the
+  //                 two grids share no axis.
+  //   splashRot     rotation of the fine lattice, radians. 0.61 rad is deliberately not
+  //                 a fraction of pi/2.
+  //   splashDead    fraction of cells that never fire. Irregular spacing beats regular
+  //                 spacing with jitter — a gap is what stops the eye finding a period.
+  //   splashK       brightness of the splash fleck on the air side (foam colour x this).
+  //                 Held far under BloomEffect's 0.28 so rain never glows.
+  //
+  // FALLING STREAKS (world/rain.js): ONE instanced draw call of wind-slanted streaks in
+  // a cylinder around the camera. Those ARE live — rain.js reads them per frame.
+  rain: {
+    splashScales: [2.6, 5.3],
+    splashRot: 0.61,
+    splashDead: 0.34,
+    splashK: 0.20,
+
+    streaks: 420,       // instance count ceiling; buffers are sized for this once
+    radius: 26,         // cylinder radius around the camera, world units
+    top: 22,            // spawn height above the camera, recycled from the top
+    len: 1.35,          // streak length in units at env.sky 1 (scaled down in a shower)
+    wide: 0.020,        // streak half-width
+    slantK: 0.62,       // horizontal drift per unit of fall at wind 1 (the slant)
+    fall: 26,           // fall speed, u/s
+    alpha: 0.16,        // peak per-streak alpha. Grey-silver, thin; never white noise.
+    col: [0.74, 0.78, 0.82],   // brass-age grey-silver, faintly cool
+    gustK: 0.55,        // how much the wind's gust term modulates density/slant
+    skyOn: 0.10         // env.sky below this = no rain at all, one compare per frame
   }
 };
 

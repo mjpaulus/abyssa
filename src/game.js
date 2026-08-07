@@ -35,6 +35,7 @@ import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, 
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks, setKeepsakeState, nearKeepsake, takeKeepsake } from './world/wrecks.js';
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
 import { buildClouds, updateClouds, setCloudWeather } from './world/clouds.js';
+import { buildRain, updateRain, setRainWeather } from './world/rain.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
@@ -82,6 +83,7 @@ buildTerrain();
 buildFlora();
 buildWater();
 buildClouds();   // instanced puff clusters in the air; must follow buildWater (palette + wind)
+buildRain();     // one instanced draw call of wind-slanted rain streaks, air side only
 buildCreatures();
 buildRifts();
 buildRaft();
@@ -638,6 +640,7 @@ function update(dt, t) {
   setWeatherEnv(wx.env);
   setWeatherHand(wx.hand, wx.wind);
   setCloudWeather(wx.hand, wx.env.sky);
+  setRainWeather(wx.env, windState());   // the eased wind, so the streaks lean on the same curve as the chop
   setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm), wx.storm);
   setSwell(wx.env.sea, wx.day);
   setStormCurrent(wx.env.below);   // subsurface current lags the sky — weather arrives from above
@@ -651,6 +654,7 @@ function update(dt, t) {
   updateCreatures(dt, t);
   updateWater(dt, t);
   updateClouds(dt, t);   // after updateWater: reads its eased wind and its resolved cloud palette
+  updateRain(dt, t);     // after updateWater: reads the surface height it just resolved
   updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm));
   updateRifts(dt, t, zone, !!(lev && lev.calmed));
 

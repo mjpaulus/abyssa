@@ -1336,6 +1336,11 @@ export function degradeRefraction() { refrOn = false; uRefrK.value = 0; }
 
 // Called by game.js once per frame, after updateWater (needs _surfH/uAir) and before
 // the composer render. Renders the far side of the interface into refrRT.
+// Meshes that must sit OUT of the refraction render. Pushed by their own module at
+// build; a fixed handful, walked twice per pass (and the pass runs at half rate).
+export const refrHide = [];
+const _hidWas = [];
+
 export function renderRefraction() {
   // Below -35 the ceiling is fog-bound arm-waving anyway, and from the air the pass is
   // pointless once the surface itself has been retired.
@@ -1385,6 +1390,13 @@ export function renderRefraction() {
   renderer.getClearColor(_prevClear);
   const prevAlpha = renderer.getClearAlpha();
   surface.visible = false;
+  // Objects that are in the AIR and are not clipped by the plane (a plain ShaderMaterial
+  // does not honour clippingPlanes unless its own source carries the clipping chunks).
+  // The puff clouds DO belong in this render — the sky through Snell's window is real
+  // sky. Falling rain does not: the air half is never the half this pass keeps.
+  for (let i = 0; i < refrHide.length; i++) {
+    _hidWas[i] = refrHide[i].visible; refrHide[i].visible = false;
+  }
   renderer.clippingPlanes = _clipArr;
   // The composer's main render refreshes the shadow maps this frame anyway; letting
   // this pass refresh them too would draw every caster twice for nothing.
@@ -1400,6 +1412,7 @@ export function renderRefraction() {
   renderer.clippingPlanes = [];
   renderer.shadowMap.autoUpdate = prevShadow;
   renderer.setClearColor(_prevClear, prevAlpha);
+  for (let i = 0; i < refrHide.length; i++) refrHide[i].visible = _hidWas[i];
   surface.visible = true;
 
   uRefr.value = refrRT.texture;
@@ -1532,6 +1545,41 @@ function buildSurface() {
         return e;
       }
 
+      // THE STOCHASTIC SPLASH FIELD — the AIR side's rain, and the only thing that
+      // replaces rainRing above. rainRing is untouched and still owns the from-below
+      // lens, where a lattice is invisible because you see the rings edge-on through the
+      // interface. From an eye 1.6 units over the water it was the tell: one ring, dead
+      // centre, in every cell of a square grid, all the same size, all beating on one
+      // clock. Three independent breaks, all off ONE hash (no extra noise samples — the
+      // three streams are fract() of the same value against incommensurate multipliers):
+      //   1. CENTRE JITTER. The strike lands anywhere in the middle 44% of its cell.
+      //      Jitter alone is not enough — a jittered grid still has one strike per cell,
+      //      and the eye reads the DENSITY as periodic even when the positions are not.
+      //   2. DEAD CELLS. splashDead of them never fire at all, so the spacing between
+      //      live strikes is irregular and there is no period to lock onto.
+      //   3. PER-CELL BEAT. Rate AND phase vary per cell, so neighbours never fire
+      //      together; the field never pulses as a sheet.
+      // Amplitude and reach vary per cell too, which is what stops the surviving rings
+      // reading as one rubber stamp. Reach is capped so jitter + radius + the ring's own
+      // tail stays inside the cell: a ring must never be clipped by its cell wall (a
+      // clipped arc is a straight edge, and a straight edge is a lattice you can see).
+      // Called on TWO lattices whose scales are not a small integer ratio and whose fine
+      // one is ROTATED, so the two grids share no axis and their beat frequencies do not
+      // resolve. Cost: identical to rainRing (one h21, one exp, one length per call).
+      float splash( vec2 p, float t, float sd, out vec2 grad ){
+        vec2 c = floor( p );
+        float h = h21( c + sd );
+        float j1 = fract( h * 97.13 ), j2 = fract( h * 41.71 ), j3 = fract( h * 173.71 );
+        float amp = step( ${f(GLASS.rain.splashDead)}, j3 ) * ( 0.55 + 0.75 * j3 );
+        vec2 fp = fract( p ) - ( 0.5 + vec2( j1, j2 ) * 0.44 - 0.22 );
+        float ph = fract( t * ( 0.62 + 0.55 * j2 ) + h );
+        float d = max( length( fp ), 1e-3 );
+        float w = d - ph * ( 0.11 + 0.09 * j1 );
+        float e = exp( -w * w * 300.0 ) * ( 1.0 - ph ) * ( 1.0 - ph ) * amp;
+        grad = ( fp / d ) * ( e * -600.0 * w );
+        return e;
+      }
+
       // Down-looking is not up-looking. abyssaAmbient is the ISOTROPIC fully-scattered
       // field -- what a diver is INSIDE -- and it is several times what actually escapes
       // upward through the interface; real ocean irradiance reflectance is 2-6%. Left
@@ -1578,27 +1626,47 @@ function buildSurface() {
         vec3 hn = waveHN( vW.xz, uTime, uStorm, dist );
         vec2 dh = hn.yz;
 
-        float rain = 0.0;
-        vec2 dhRain = vec2( 0.0 );   // kept separate: the air side wants less of it
-        if ( uStorm > 0.02 ) {                       // uniform branch, fully coherent
-          // Cells of 0.45 and 0.22 units (1.4 m and 0.7 m), so a ring reads as a drop
-          // strike and not as a porthole; and only inside 26 units, because past that a
-          // ring is under a pixel and all it can do is alias.
-          float rk = uStorm * uNearK * ( 1.0 - smoothstep( 6.0, 26.0, dist ) );
-          vec2 g1, g2;
-          float r1 = rainRing( vW.xz * 2.2, uTime, 0.0, g1 );
-          float r2 = rainRing( vW.xz * 4.5, uTime * 1.27, 11.0, g2 );
-          dhRain = ( g1 * 0.0022 + g2 * 0.0011 ) * rk;
-          dh += dhRain;
-          rain = ( r1 + 0.6 * r2 ) * rk;
-        }
-
+        // Which side of the interface this fragment is seen from, decided BEFORE the rain
+        // so the two sides can run different rain and neither pays for the other's. The
+        // rain gradient this drops is O(0.002) against a wave gradient that reaches
+        // O(0.5), so the sign it would have flipped is a fragment already exactly edge-on.
         vec3 N = normalize( vec3( -dh.x, 1.0, -dh.y ) );
         // The camera really does cross the interface — player.js clamps the swim ceiling
         // to y = -1.2 and game.js adds up to +2.4 of camera lift, so at the raft this
         // plane is above the eye. Flipping the normal is what the old abs(dot(V,N)) was
         // standing in for; doing it properly also lets the from-above case be right.
         bool below = dot( V, N ) > 0.0;
+
+        float rain = 0.0;            // from-below lens, unchanged
+        float splashV = 0.0;         // air-side splash fleck
+        vec2 dhSpl = vec2( 0.0 );    // kept separate: the air side wants less of it
+        if ( uStorm > 0.02 ) {                       // uniform branch, fully coherent
+          // Only inside 26 units, because past that a strike is under a pixel and all it
+          // can do is alias. rk is the SAME intensity drive both sides read.
+          float rk = uStorm * uNearK * ( 1.0 - smoothstep( 6.0, 26.0, dist ) );
+          vec2 g1, g2;
+          if ( below ) {
+            // Cells of 0.45 and 0.22 units (1.4 m and 0.7 m), so a ring reads as a drop
+            // strike and not as a porthole. THE LENS IS FINE — do not touch it.
+            float r1 = rainRing( vW.xz * 2.2, uTime, 0.0, g1 );
+            float r2 = rainRing( vW.xz * 4.5, uTime * 1.27, 11.0, g2 );
+            dh += ( g1 * 0.0022 + g2 * 0.0011 ) * rk;
+            rain = ( r1 + 0.6 * r2 ) * rk;
+          } else {
+            // Two lattices, the fine one rotated so they share no axis. See splash().
+            vec2 pf = vW.xz * ${f(GLASS.rain.splashScales[1])};
+            pf = vec2( pf.x * ${f(Math.cos(GLASS.rain.splashRot))} - pf.y * ${f(Math.sin(GLASS.rain.splashRot))},
+                       pf.x * ${f(Math.sin(GLASS.rain.splashRot))} + pf.y * ${f(Math.cos(GLASS.rain.splashRot))} );
+            float s1 = splash( vW.xz * ${f(GLASS.rain.splashScales[0])}, uTime, 0.0, g1 );
+            float s2 = splash( pf, uTime * 1.31, 11.0, g2 );
+            dhSpl = ( g1 * 0.0030 + g2 * 0.0016 ) * rk;
+            splashV = ( s1 + 0.7 * s2 ) * rk;
+          }
+        }
+
+        // Re-formed with the from-below lens folded in (the air side left dh alone and
+        // carries its splash in dhSpl, applied in its own branch below).
+        N = normalize( vec3( -dh.x, 1.0, -dh.y ) );
         vec3 Nf = below ? N : -N;
         float ct = dot( V, Nf ), F;
         // Caustic detail dies with distance as well as depth: past ~120 units a 3.4-unit
@@ -1657,14 +1725,10 @@ function buildSurface() {
           // ---- THE SEA FROM ABOVE ------------------------------------------
           // air -> water, no TIR, and the roles swap. Nothing in this branch can run for
           // a fragment the diver sees from below, so none of it can regress the window.
-          // rainRing gives exactly one ring per cell per beat on a 0.45-unit (1.35 m)
-          // lattice. From below that is a diffuse lens in the window and the lattice never
-          // shows; from above, at an eye height of 1.6 units, it reads as a GRID of stamped
-          // o's -- measured, it dominated the near field of a full-gale frame. The air side
-          // therefore drops it entirely and lets the wind chop carry the rain. Doing rain
-          // properly from above needs a stochastic splash field, not one ring per cell;
-          // that is a separate piece of work. The from-below normal is untouched.
-          vec2 dhA = dh - dhRain + rippleGrad( vW.xz, uTime, uStorm, dist );
+          // The air side's rain is dhSpl — the stochastic splash field, not rainRing's
+          // lattice (see splash()). dh here is the pure wave gradient: the from-below
+          // lens was never added on this path, so nothing has to be subtracted back out.
+          vec2 dhA = dh + dhSpl + rippleGrad( vW.xz, uTime, uStorm, dist );
           vec3 Na = normalize( vec3( -dhA.x, 1.0, -dhA.y ) );
           float cta = clamp( -dot( V, Na ), 0.0, 1.0 );
           F = F0 + ( 1.0 - F0 ) * pow( 1.0 - cta, 5.0 );
@@ -1773,14 +1837,11 @@ function buildSurface() {
                     * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
           col = mix( col, capCol, clamp( cap, 0.0, 0.90 ) );
         }
-        // the LENS is the effect; the fleck is a garnish. Air side keeps a tenth of the
-        // fleck for the same reason the air side dropped the ring normal above.
-        // Air side is 0.0, not 0.10: the rain field is a REGULAR lattice, and from above
-        // it read as an evenly-spaced diagonal band of little circles marching across the
-        // near water — obviously procedural. From below it is fine (you see it edge-on
-        // through the interface), so only the air branch is muted. It comes back when
-        // there is a stochastic splash field to draw instead.
-        col += foamCol * rain * 0.25 * ( below ? 1.0 : 0.0 );
+        // From below the LENS is the effect and the fleck is a garnish. From above the
+        // splash fleck is back — it was muted to zero only because the field it drew was
+        // a regular lattice — at splashK, which puts a full-gale splash at ~0.066
+        // scene-linear against BloomEffect's 0.28. Rain never glows.
+        col += foamCol * ( below ? rain * 0.25 : splashV * ${f(GLASS.rain.splashK)} );
         col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
         if ( rimK > 0.0 ) col = mix( col, airLight( fogColor ), rimK );
         // AFTER the rim hand-off, so the sea, the dome past its rim and the horizon all
