@@ -14,7 +14,12 @@ renderer.setSize(Math.round(innerWidth * RES_SCALE), Math.round(innerHeight * RE
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// r182 deprecated PCFSoftShadowMap for WebGLRenderer: three now warns and silently
+// substitutes PCFShadowMap. Naming it here is the truth about what actually runs —
+// the soft variant is gone from the core, not switched off by us. If the raft's
+// shadow edge ever wants softening back, it has to come from the shadow camera /
+// map size / bias, not from this constant.
+renderer.shadowMap.type = THREE.PCFShadowMap;
 document.body.appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();

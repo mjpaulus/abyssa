@@ -21,7 +21,7 @@ const URL_GLB = 'assets/models/markv_helmet/helmet.glb';
 
 const TUNE = { scale: 1.0, y: 0.0, z: 0.0, rotY: 0.0 };
 
-const draco = new DRACOLoader().setDecoderPath('https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/');
+const draco = new DRACOLoader().setDecoderPath('https://unpkg.com/three@0.184.0/examples/jsm/libs/draco/');
 const loader = new GLTFLoader().setDRACOLoader(draco);
 
 fetch(URL_GLB, { method: 'HEAD' }).then(r => {

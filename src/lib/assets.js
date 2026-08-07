@@ -19,7 +19,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 export const PROP_UNIT = 1;
 
-const DRACO_PATH = 'https://unpkg.com/three@0.160.0/examples/jsm/libs/draco/';
+const DRACO_PATH = 'https://unpkg.com/three@0.184.0/examples/jsm/libs/draco/';
 
 let _loader = null;
 function loader() {
