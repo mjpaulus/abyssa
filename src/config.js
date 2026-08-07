@@ -207,6 +207,33 @@ export const GLASS = {
     backElev: 34,
     backPow: 2.2,
     backK: 0.88,
+    // FORM — the dimension pass. The shaping pass cut good silhouettes and Michael read
+    // the result as flat cutouts, because a coverage map has an outline and no interior.
+    // These six give the interior relief. They cost NO extra noise samples: the sunward
+    // density gradient and the ragged-edge vn are both already computed for other
+    // reasons, and this block just reads them a second way. All except formGrad/formDepth
+    // (pure curve shape) are storm-scaled to zero on the CPU.
+    formGrad: 0.055,      // half-width of the terminator in gradient units. Wider than
+                          // this and the two flanks blur back into the soft vignette the
+                          // shipped k already was; much narrower and the shadow line
+                          // crawls with the noise and reads as a seam, not a curve.
+    formDepth: 0.20,      // density above the coverage threshold that counts as "the top
+                          // of the cloud". The amt ramp is uCloudSoft (0.30) wide, so at
+                          // 0.20 the skirt band is genuinely the outer feathered third
+                          // and the crown only lands where the body is actually thick.
+    formShade: 0.55,      // how far the anti-sunward flank's lighting is pulled down.
+                          // This is THE dimension knob — it is the whole lit-side /
+                          // shadow-side split, and it is what the sun-side ratio probe
+                          // measures. Over ~0.7 a fair noon sky starts to look bruised.
+    formBase: 0.45,       // flat dark underside at noon. Faded out by uCloudBak so it
+                          // never stacks with the dawn/dusk backlit bases.
+    formTop: 0.30,        // crown highlight where the body is deep AND facing the sun.
+                          // k is clamped to 1 afterwards, so this can brighten a top
+                          // toward uCloudLit and never past it — the 0.85x horizon bloom
+                          // cap is structural here, not a tuning result.
+    formDetail: 0.30,     // cauliflower relief on lit faces (the rag vn is +/-0.5, so
+                          // this is +/-0.15 on the lighting term), dying to nothing in
+                          // shadow. Lumpy light side, smooth dark side = curvature.
     // Cloud colours are multipliers on the palette's HORIZON radiance. litK sits UNDER 1
     // on purpose: at noon the horizon is 0.62-0.72 scene-linear and already over the 0.28
     // bloom threshold, so a physically-white cumulus at 1.55x measured 0.96 and bloomed

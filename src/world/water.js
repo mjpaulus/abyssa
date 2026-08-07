@@ -290,8 +290,12 @@ vec3 skyRadiance( vec3 d ){
     float open = smoothstep( uCloudIsl.y, uCloudIsl.y + uCloudIsl.z,
                              vn( uv * uCloudIsl.x + vec2( 17.3, 5.9 ) ) );
     // RAGGED EDGE: one high-frequency vn perturbing the density either way, so the
-    // silhouette tears instead of following the fbm's own smooth contour.
-    float dens = fv + uCloudShp.y * ( vn( uv * uCloudShp.x + vec2( 41.7, 23.1 ) ) - 0.5 );
+    // silhouette tears instead of following the fbm's own smooth contour. The sample is
+    // KEPT (rag) because the FORM block below reuses it as cauliflower surface texture —
+    // the same noise that tears the silhouette is the lumpiness on the flank, which is
+    // what a real cumulus is: one process seen in profile and in relief.
+    float rag = vn( uv * uCloudShp.x + vec2( 41.7, 23.1 ) ) - 0.5;
+    float dens = fv + uCloudShp.y * rag;
     // fbm2 is 4 octaves at halving amplitude: range [0, 0.9375], mean ~0.47. A threshold
     // sweeping 0.72 -> 0.22 therefore walks from "a few wisps" to "solid lid".
     // HORIZON GATHERING is the last term: perspective compresses a cloud layer into a
@@ -315,6 +319,47 @@ vec3 skyRadiance( vec3 d ){
     amt *= 1.0 - ${f(GLASS.cloud.hazeK)} * ( 1.0 - smoothstep( 0.0, uCloudShp.w, up ) );
     float g = fv - fbm2( uv + uSunUV );
     float k = clamp( 0.55 - 0.35 * uCloudTex + ( 1.7 + 1.6 * uCloudTex ) * g, 0.0, 1.0 );
+
+    // ---- FORM ------------------------------------------------------------
+    // The shaping pass gave every clump its own silhouette and the sky read as a
+    // well-cut STENCIL: correct outlines, no interior. Michael: "clouds seem really
+    // flat still, no dimension." Everything below adds relief to the interior of a
+    // clump, and it adds ZERO noise samples — both signals are already on the stack.
+    //
+    // (1) THE FLANK. g is the density gradient toward the sun's uv bearing, so its
+    // SIGN is which side of the lump a fragment is on: g > 0 means the field falls away
+    // sunward = a face turned into the light; g < 0 means it climbs = the shadowed
+    // side. The shipped k folded that into one continuous ramp, which is a soft
+    // vignette, not a terminator. lit re-reads the same number through a narrow
+    // smoothstep so the two flanks SEPARATE, and the shade factor multiplies the whole
+    // lighting response down on the far side. This is the term that makes a clump look
+    // like a solid with a light on one side of it.
+    // g is REUSED, not re-sampled. A second fbm2 at a shorter sunward step (0.15/0.30/
+    // 0.50 of uSunUV) was built and measured against this: it bought a little more
+    // within-clump range (comp2 1.96 -> 2.03) and LOST the thing the term exists for —
+    // the sunward/anti-sunward mean ratio went 0.947 -> 0.994, i.e. back toward
+    // directionless. The long step is the better flank signal AND the free one, so the
+    // whole dimension pass adds no noise evaluation anywhere.
+    float lit = smoothstep( -uCloudFrm.x, uCloudFrm.x, g );
+    // (2) THE VERTICAL PROFILE. Distance above the coverage threshold is a free proxy
+    // for height in the cloud: at dens == thr you are on the skirt where the body
+    // feathers out (the flat dark base), and deep inside is the massif that towers.
+    // hgt therefore darkens the base band and gates the top highlight, which is the
+    // difference between a disc and a dome. uCloudFrm.w is faded out on the CPU as
+    // uCloudBak rises so this can NEVER double-darken with the dusk base term — at the
+    // ring stops the backlit pow owns the bases outright and this contributes nothing.
+    float hgt = smoothstep( 0.0, uCloudFrm.y, dens - thr );
+    k *= mix( 1.0 - uCloudFrm.z, 1.0, lit );      // shadow flank
+    k *= mix( 1.0 - uCloudFrm.w, 1.0, hgt );      // dark flat base skirt
+    // (3) THE CROWN + CAULIFLOWER. The highlight needs BOTH deep density and a sunward
+    // face, so it lands on the top of the massif rather than washing the whole clump;
+    // hgt is squared to keep it off the shoulders. The detail term rides lit for the
+    // same reason relief photographs at raking light and vanishes at noon-on-a-wall:
+    // shadow flanks go smooth and featureless, and THAT is what makes the lit side read
+    // as curvature. k is clamped, so the brightest possible fragment is still exactly
+    // uCloudLit — the 0.85x horizon bloom cap holds by construction, not by tuning.
+    k = clamp( k + uCloudFrm2.x * hgt * hgt * lit + uCloudFrm2.y * rag * lit * hgt,
+               0.0, 1.0 );
     // BACKLIT BASES. uCloudBak rises as the sun sinks to the ring stops. The curve is a
     // pow, not a scale: it collapses the middle of the response toward the base colour
     // and leaves only the strongest sunward flanks lit, which is exactly a backlit cloud
@@ -456,6 +501,7 @@ if (typeof window !== 'undefined') {
       return {
         cov: uCloudCov.value, soft: uCloudSoft.value, tex: uCloudTex.value,
         isl: uCloudIsl.value.toArray(), shp: uCloudShp.value.toArray(), bak: uCloudBak.value,
+        frm: uCloudFrm.value.toArray(), frm2: uCloudFrm2.value.toArray(),
         skyHor: uSkyHor.value.toArray(), skyZen: uSkyZen.value.toArray(),
         drift: [uCloudDrift.value.x, uCloudDrift.value.y],
         lit: uCloudLit.value.toArray(), base: uCloudBase.value.toArray(),
@@ -770,6 +816,12 @@ const uCloudBase = { value: new THREE.Vector3() };
 const uCloudIsl = { value: new THREE.Vector4() };
 const uCloudShp = { value: new THREE.Vector4() };
 const uCloudBak = { value: 0 };                       // backlit amount, 0 noon .. 1 dusk
+// Cloud FORM (the dimension pass), same packing discipline:
+//   uCloudFrm  = (flank terminator width, height-proxy depth, shade amount, base amount)
+//   uCloudFrm2 = (crown highlight, cauliflower detail)
+// Every amount is storm-scaled to zero on the CPU, so the gale's flat lid is untouched.
+const uCloudFrm = { value: new THREE.Vector4() };
+const uCloudFrm2 = { value: new THREE.Vector2() };
 const uSunUV = { value: new THREE.Vector2() };        // cloud-uv step toward the sun
 const uDiscK = { value: 1 };                          // fog eats the disc (and the glitter)
 const uMoonDir = { value: new THREE.Vector3(0, 1, 0) };
@@ -781,14 +833,14 @@ const uFog = { value: 0 };
 const uFogCol = { value: new THREE.Vector3() };
 // One declaration block, injected into both fragment shaders so the two can never
 // disagree about what skyRadiance/airFog need.
-const GLSL_SKY_DECL = `uniform vec2 uCloudDrift, uSunUV;
+const GLSL_SKY_DECL = `uniform vec2 uCloudDrift, uSunUV, uCloudFrm2;
 uniform float uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudBak, uDiscK, uMoonR, uFog;
 uniform vec3 uCloudLit, uCloudBase, uMoonDir, uMoonRight, uMoonCol, uFogCol;
-uniform vec4 uMoonPh, uCloudIsl, uCloudShp;`;
+uniform vec4 uMoonPh, uCloudIsl, uCloudShp, uCloudFrm;`;
 // The uniform map half of the same pairing.
 const SKY_UNIFORMS = {
   uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
-  uCloudIsl, uCloudShp, uCloudBak,
+  uCloudIsl, uCloudShp, uCloudBak, uCloudFrm, uCloudFrm2,
   uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol
 };
 const _tmp = new THREE.Vector3();
@@ -1869,6 +1921,19 @@ function skyDrama(dt, storm) {
   // the sun is properly up. Storm-scaled because a deck already collapses lit toward
   // base (stormLit) and doubling the two just flattens it to one grey.
   uCloudBak.value = (1 - clamp(SUN.elevDeg / C.backElev, 0, 1)) * (1 - storm);
+
+  // FORM. All four amounts die with the storm envelope, exactly like the shaping terms,
+  // so the gale's deck stays the flat regression-checkable lid it has always been.
+  // The BASE amount additionally dies with uCloudBak: at the ring stops the backlit pow
+  // is already crushing the whole body toward uCloudBase, and stacking a second skirt
+  // darkening on top of it is how you get a black hole low in a dusk sky. The flank,
+  // crown and detail terms stay ALIVE at dusk on purpose — they are what decides which
+  // side of a clump catches the ember colour the CPU has already walked uCloudLit
+  // toward, so the sunset payoff needs no second ember path of its own.
+  const frm = 1 - storm;
+  uCloudFrm.value.set(C.formGrad, C.formDepth, C.formShade * frm,
+                      C.formBase * frm * (1 - uCloudBak.value));
+  uCloudFrm2.value.set(C.formTop * frm, C.formDetail * frm);
 
   // Drift. The wind's bearing is integrated into a uv OFFSET on the CPU, so the shader
   // does no trig and a direction change simply starts moving the deck a new way — no

@@ -11,7 +11,10 @@ dignified; never neon, never fireworks. The diver is named **Sal**.
   `abyssa` (port 8777) and `abyssa-alt` (8790) in `.claude/launch.json`.
 - No build step. Three.js r160 + postprocessing + n8ao via CDN importmap in
   `index.html`. `node --check` is the only offline gate; **the browser is the only
-  trusted loader** (node once accepted a file the browser rejected).
+  trusted loader** (node once accepted a file the browser rejected — concrete cause
+  found later: a BACKTICK inside a GLSL comment inside a template literal terminates
+  the string; node --check passed it, the browser threw. Never use backticks in
+  comments inside the GLSL template strings).
 - Verification discipline: every change is verified live in the browser before it is
   reported done. Numeric probes (console JS against the debug surface) beat
   screenshots for state; screenshots for look. Report failures plainly.
