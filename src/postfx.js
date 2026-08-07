@@ -48,6 +48,11 @@ const bloom = new BloomEffect({
 // bokehScale kept modest: the half-res CoC upsample stair-steps on bright edges (the
 // lantern pool) once the blur radius gets large.
 const dof = new DepthOfFieldEffect(camera, { focusDistance: 9 / 700, focalLength: 0.06, bokehScale: 1.35 });
+// Same 6.39 world-units shift as the per-frame focus write below: the constructor's
+// normalized focusRange/focalLength (0.06 of camera.far = 42 world units of sharp
+// band on 6.35) lands raw in the new CoC material — 6cm of focus. Restore the
+// shipped band through the world-unit accessors when they exist.
+if ('worldFocusRange' in dof.cocMaterial) dof.cocMaterial.worldFocusRange = 0.06 * 700;
 const vignette = new VignetteEffect({ darkness: 0.55, offset: 0.28 });
 const grain = new NoiseEffect({ blendFunction: BlendFunction.COLOR_DODGE });
 grain.blendMode.opacity.value = 0.06;
@@ -155,9 +160,14 @@ export function render(dt) {
   focusTarget.copy(playerLightSrc.position);
   const want = THREE.MathUtils.clamp(camera.position.distanceTo(focusTarget), 3, 40);
   focusDist += (want - focusDist) * Math.min(1, (dt || 0.016) * 3.5);
-  // Uniform name varies across postprocessing versions; missing it just means a fixed focus.
-  const fu = dof.cocMaterial.uniforms && dof.cocMaterial.uniforms.focusDistance;
-  if (fu) fu.value = focusDist / camera.far;
+  // postprocessing >= 6.39 reads focus in WORLD units via the cocMaterial accessors;
+  // 6.35 read the raw uniform NORMALIZED by camera.far. Writing the normalized value
+  // into the 6.39 uniform focused the camera ~1cm in front of the lens and blurred the
+  // whole world (user-reported: "everything looks blurry and lowres"). The uniform NAME
+  // survived the upgrade; its MEANING didn't — poke the accessor, not the uniform.
+  const cm = dof.cocMaterial;
+  if ('worldFocusDistance' in cm) cm.worldFocusDistance = focusDist;
+  else if (cm.uniforms && cm.uniforms.focusDistance) cm.uniforms.focusDistance.value = focusDist / camera.far;
   composer.render(dt);
 }
 
