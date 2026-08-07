@@ -153,15 +153,60 @@ export const GLASS = {
     // with it because it was a soft multiplicative dimming with no shape to read: at
     // that scale the ENTIRE visible hemisphere maps into ~0.35 uv, which is a third of
     // one fbm cell, so the sky was one enormous smooth blob (measured — a clean blue
-    // zenith with no cloud in it at coverage 0.48). 4.0 puts several cells across the
-    // sky, which is what makes a cumulus a cumulus.
-    scale: 3.2,
+    // zenith with no cloud in it at coverage 0.48). Several cells across the sky is what
+    // makes a cumulus a cumulus. Came DOWN from 3.2 when the island mask below landed:
+    // once the mask groups cells into clumps, 3.2 made each clump a stipple of small
+    // identical puffs. At 2.4 one clump is one cloud with its own silhouette — measured
+    // at hand.clouds 0.4, mean component size 0.45% -> 0.93% of the sky for the same
+    // total cover.
+    scale: 2.4,
     drift: 0.028,         // uv per second at wind.speed 1 (a system moving, not a fan)
     covCalm: 0.16,        // coverage floor even at hand.clouds 0 (a few high wisps)
     covGain: 0.74,        // coverage added at hand.clouds 1
     covStorm: 0.30,       // extra coverage the storm envelope buys on top
     softCalm: 0.30,       // cumulus: crisp edges
     softStorm: 0.78,      // deck: no edges at all, one flat lid
+    // NOT LIVE-POKEABLE: hazeK, backPow and backK are COMPILED INTO the shader as
+    // literals (they are pure curve shape, so they cost a uniform for nothing). Every
+    // other field below rides a uniform and answers on the next frame, the way the rest
+    // of THE GLASS does. Changing the three baked ones needs a reload.
+    //
+    // CLUMPS, not a field. A second, much lower-frequency value-noise blob field gates
+    // WHERE cloud may exist; the coverage threshold swings by +/-islAmp across it (two-
+    // sided — a one-sided penalty just empties the sky). islScale is relative to the
+    // cumulus uv, so one island holds several cumulus cells. Raising islGate empties
+    // more of the sky; raising islAmp hardens the edge between "cloudy region" and
+    // "clear region". islAmp is faded out above coverage 0.62 so a storm still shuts.
+    islScale: 0.42,
+    islGate: 0.46,
+    islSoft: 0.30,
+    islAmp: 0.20,
+    // Ragged silhouette: one high-frequency vn sample perturbing the density +/-rag/2
+    // before the threshold, so edges tear rather than following the fbm's own contour.
+    ragScale: 3.4,
+    rag: 0.10,
+    // HORIZON GATHERING. Added to the threshold as view elevation climbs (smoothstep
+    // over up 0.35..0.95, i.e. 20 to 72 degrees), so the zenith goes nearly clean on a
+    // fair day while the low band keeps its cloud. Storm-scaled to zero on the CPU — a
+    // gale's deck covers the zenith too.
+    zenBias: 0.16,
+    // THE MILKY BAND: clouds dissolve back into the sky over the lowest hazeUp of the
+    // hemisphere (0.18 = 10.4 degrees), by hazeK at the waterline, so there is no hard
+    // cloud/sea meeting on a CLEAR day. The marine layer's own white-out is separate and
+    // multiplies after this; they cannot double-apply because this scales the cloud's
+    // amount, not the colour.
+    hazeUp: 0.18,
+    hazeK: 0.92,
+    // DARK BASES at the day's edges. backElev is the solar elevation (degrees) over
+    // which the backlit response dies; under it the lighting term is pushed through
+    // pow(k, backPow) * backK, which darkens the body and keeps only the sunward rim
+    // lit. At noon this is inert. 34 (not the dawn/dusk stop's own 12) because the term
+    // has to be ALREADY STRONG when the ring reaches that stop, not just starting:
+    // at elevation 12 this deals 0.65, at 20 it deals 0.41, at the shipped noon 58 it
+    // is exactly 0 and the lit-top response is byte-identical to what shipped.
+    backElev: 34,
+    backPow: 2.2,
+    backK: 0.88,
     // Cloud colours are multipliers on the palette's HORIZON radiance. litK sits UNDER 1
     // on purpose: at noon the horizon is 0.62-0.72 scene-linear and already over the 0.28
     // bloom threshold, so a physically-white cumulus at 1.55x measured 0.96 and bloomed

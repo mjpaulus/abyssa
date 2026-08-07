@@ -269,16 +269,58 @@ vec3 skyRadiance( vec3 d ){
 
   float amt = 0.0;
   if ( uCloudCov > 0.005 ) {
-    // Faded out toward the horizon, where the projection's derivative blows up and would
-    // alias into the rim. (Unchanged from the deck this replaced.)
-    vec2 uv = ( d.xz / max( up, 0.12 ) ) * uCloudScale + uCloudDrift;
+    // The overhead-plane projection, softened at the horizon where its derivative blows
+    // up. This is ( up + 0.10 ), NOT max( up, 0.10 ): the clamped form freezes the uv
+    // below 5.7 degrees, so whatever pattern sits at that elevation extends straight
+    // down as a vertical column — measured as pale curtains standing on the waterline
+    // in the first build of this card. The additive form has no discontinuity in its
+    // derivative anywhere, so the field simply compresses harder and harder toward the
+    // horizon, which is the perspective this card is trying to buy in the first place.
+    vec2 uv = ( d.xz / ( up + 0.10 ) ) * uCloudScale + uCloudDrift;
     float fv = fbm2( uv );
+    // ISLANDS. One low-frequency value-noise blob field (ONE vn sample, not an fbm)
+    // decides WHERE cloud is allowed to exist at all: "open" is 1 inside a blob and 0
+    // between them, and the coverage threshold swings +/- uCloudIsl.w across that. The
+    // swing is TWO-SIDED on purpose — a one-sided penalty just raises the mean threshold
+    // and empties the whole sky (measured: 12.9% cover -> 0.7%). Two-sided keeps the
+    // shipped coverage mapping honest while cutting the field into separated clumps with
+    // clear sky between them, and gives them SIZE VARIETY, which is most of what says
+    // "weather" rather than "texture". uCloudIsl.w is faded out by coverage on the CPU,
+    // so a storm deck still closes into one lid.
+    float open = smoothstep( uCloudIsl.y, uCloudIsl.y + uCloudIsl.z,
+                             vn( uv * uCloudIsl.x + vec2( 17.3, 5.9 ) ) );
+    // RAGGED EDGE: one high-frequency vn perturbing the density either way, so the
+    // silhouette tears instead of following the fbm's own smooth contour.
+    float dens = fv + uCloudShp.y * ( vn( uv * uCloudShp.x + vec2( 41.7, 23.1 ) ) - 0.5 );
     // fbm2 is 4 octaves at halving amplitude: range [0, 0.9375], mean ~0.47. A threshold
     // sweeping 0.72 -> 0.22 therefore walks from "a few wisps" to "solid lid".
-    float thr = 0.72 - 0.50 * uCloudCov;
-    amt = smoothstep( thr, thr + uCloudSoft, fv ) * smoothstep( 0.02, 0.30, up );
+    // HORIZON GATHERING is the last term: perspective compresses a cloud layer into a
+    // band low in the sky and leaves the zenith clean, so the threshold climbs with view
+    // elevation. Together with the horizon fade below (0.02..0.30 -> 0.008..0.075, which
+    // unlocks the whole 1-17 degree band the shipped version suppressed) this INVERTS
+    // the elevation profile rather than adding cloud: measured cover by band at
+    // hand.clouds 0.4 went 0.1/8.4/13.1/23.3% (2-10/10-25/25-45/45-90 deg) to
+    // 9.1/13.3/17.1/7.7% — same total, gathered low, zenith cap 24.4% -> 7.5%.
+    float thr = 0.72 - 0.50 * uCloudCov
+              + uCloudIsl.w * ( 1.0 - 2.0 * open )
+              + uCloudShp.z * smoothstep( 0.35, 0.95, up );
+    amt = smoothstep( thr, thr + uCloudSoft, dens ) * smoothstep( 0.008, 0.075, up );
+    // THE MILKY BAND. The lowest few degrees dissolve the cloud back into the sky it
+    // sits in, so silhouettes never clip against the waterline. This attenuates the
+    // cloud's OWN amount rather than tinting the result, which is why it cannot
+    // double-apply with the marine layer's airFog (that whites the whole sky on a fog
+    // day; this is the clear-day haze and is subtler by construction). Measured on the
+    // rendered frame: per-row cloud/sky contrast falls from 18.2 code values in the cloud
+    // band to 5.5 at the waterline, which is the sea-glint/dither floor.
+    amt *= 1.0 - ${f(GLASS.cloud.hazeK)} * ( 1.0 - smoothstep( 0.0, uCloudShp.w, up ) );
     float g = fv - fbm2( uv + uSunUV );
     float k = clamp( 0.55 - 0.35 * uCloudTex + ( 1.7 + 1.6 * uCloudTex ) * g, 0.0, 1.0 );
+    // BACKLIT BASES. uCloudBak rises as the sun sinks to the ring stops. The curve is a
+    // pow, not a scale: it collapses the middle of the response toward the base colour
+    // and leaves only the strongest sunward flanks lit, which is exactly a backlit cloud
+    // — a dark body with a bright torn rim. At midday uCloudBak is 0 and lit tops
+    // dominate, byte-identical to what shipped.
+    k = mix( k, pow( k, ${f(GLASS.cloud.backPow)} ) * ${f(GLASS.cloud.backK)}, uCloudBak );
     c = mix( c, mix( uCloudBase, uCloudLit, k ), amt );
   }
   // The discs sit BEHIND the deck: a cloud in front of the sun occludes it (0.92, not
@@ -413,6 +455,8 @@ if (typeof window !== 'undefined') {
     probe() {
       return {
         cov: uCloudCov.value, soft: uCloudSoft.value, tex: uCloudTex.value,
+        isl: uCloudIsl.value.toArray(), shp: uCloudShp.value.toArray(), bak: uCloudBak.value,
+        skyHor: uSkyHor.value.toArray(), skyZen: uSkyZen.value.toArray(),
         drift: [uCloudDrift.value.x, uCloudDrift.value.y],
         lit: uCloudLit.value.toArray(), base: uCloudBase.value.toArray(),
         fog: uFog.value, fogCol: uFogCol.value.toArray(), discK: uDiscK.value,
@@ -718,6 +762,14 @@ const uCloudSoft = { value: GLASS.cloud.softCalm };
 const uCloudTex = { value: 0.3 };
 const uCloudLit = { value: new THREE.Vector3() };
 const uCloudBase = { value: new THREE.Vector3() };
+// Cloud SHAPING, packed so the two shaders gain two vec4s and one float rather than
+// nine scalars. Everything storm- or coverage-dependent in here is resolved on the CPU
+// in skyDrama, so the shader reads them straight.
+//   uCloudIsl = (island uv scale, gate, gate softness, threshold swing)
+//   uCloudShp = (ragged-edge uv scale, ragged amount, zenith bias, milky-band top)
+const uCloudIsl = { value: new THREE.Vector4() };
+const uCloudShp = { value: new THREE.Vector4() };
+const uCloudBak = { value: 0 };                       // backlit amount, 0 noon .. 1 dusk
 const uSunUV = { value: new THREE.Vector2() };        // cloud-uv step toward the sun
 const uDiscK = { value: 1 };                          // fog eats the disc (and the glitter)
 const uMoonDir = { value: new THREE.Vector3(0, 1, 0) };
@@ -730,12 +782,13 @@ const uFogCol = { value: new THREE.Vector3() };
 // One declaration block, injected into both fragment shaders so the two can never
 // disagree about what skyRadiance/airFog need.
 const GLSL_SKY_DECL = `uniform vec2 uCloudDrift, uSunUV;
-uniform float uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uDiscK, uMoonR, uFog;
+uniform float uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudBak, uDiscK, uMoonR, uFog;
 uniform vec3 uCloudLit, uCloudBase, uMoonDir, uMoonRight, uMoonCol, uFogCol;
-uniform vec4 uMoonPh;`;
+uniform vec4 uMoonPh, uCloudIsl, uCloudShp;`;
 // The uniform map half of the same pairing.
 const SKY_UNIFORMS = {
   uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
+  uCloudIsl, uCloudShp, uCloudBak,
   uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol
 };
 const _tmp = new THREE.Vector3();
@@ -1801,6 +1854,21 @@ function skyDrama(dt, storm) {
   uCloudCov.value = clamp(C.covCalm + C.covGain * clouds + C.covStorm * storm, 0, 0.98);
   uCloudSoft.value = ml(C.softCalm, C.softStorm, storm);
   uCloudTex.value = clamp(cTex + 0.45 * storm, 0, 1);
+
+  // SHAPING. The island swing dies as coverage closes (a deck has no islands) AND as the
+  // storm envelope rises; the zenith bias and the ragged edge die with the storm alone,
+  // because a gale's lid is flat and covers the zenith. At full storm every term here is
+  // zero and the field is exactly the deck that shipped — which is what keeps the storm
+  // look a regression-checkable constant (measured mean amt 0.227 -> 0.247, spatial sd
+  // 0.183 -> 0.186; the flat lid is intact).
+  const shut = (1 - ms(uCloudCov.value, 0.62, 0.94)) * (1 - storm);
+  uCloudIsl.value.set(C.islScale, C.islGate, C.islSoft, C.islAmp * shut);
+  uCloudShp.value.set(C.ragScale, C.rag * (1 - storm), C.zenBias * (1 - storm), C.hazeUp);
+
+  // Backlit amount: full at and below the ring stops' solar elevation, gone by the time
+  // the sun is properly up. Storm-scaled because a deck already collapses lit toward
+  // base (stormLit) and doubling the two just flattens it to one grey.
+  uCloudBak.value = (1 - clamp(SUN.elevDeg / C.backElev, 0, 1)) * (1 - storm);
 
   // Drift. The wind's bearing is integrated into a uv OFFSET on the CPU, so the shader
   // does no trig and a direction change simply starts moving the deck a new way — no
