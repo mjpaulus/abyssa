@@ -15,3 +15,4 @@ Includes the GENERATED Mark V helmet upgrade (bonnet, faceplates with real bezel
 
 ## Log
 - 2026-08-07 — cut from Michael's verdict + the all-generated hard rule; sculpt pass first
+- 2026-08-07 — Michael: "when he is standing on the raft he is bobbing up and down like he is in the water." Diagnosed for the motion pass: (1) idle pose is the AQUATIC sway/bob sine set even on planks — deck idle must be terrestrial (planted, weight-shifts, shoulder breathing); (2) pos.y eases toward the live deckY at 10/s and the camera at 8/s — out-of-phase with the swell; on deck the follow should be RIGID (you move with the boat); (3) swim->walk blend (gb, 4.5/s) leaks swim bob just after boarding. Probes: player.pos.y vs raft.position.y phase, gb settle time
