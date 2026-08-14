@@ -925,7 +925,13 @@ const W = {
   bob: curve([[0, -.05], [.09, -.088], [.16, -.045], [.26, .036], [.38, .004], [.50, -.05], [.59, -.088], [.66, -.045], [.76, .036], [.88, .004]]),
   sway: curve([[0, -.025], [.20, -.082], [.34, -.03], [.50, .025], [.70, .082], [.84, .03]]),
   list: curve([[0, 0], [.25, -.09], [.50, 0], [.75, .09]]),
-  yaw: curve([[0, .175], [.25, .04], [.50, -.175], [.75, -.04]])
+  yaw: curve([[0, .175], [.25, .04], [.50, -.175], [.75, -.04]]),
+  // Arm swing gets its OWN curve instead of borrowing the hip's. A hip reverses fast
+  // (the leg is driven); an arm is a pendulum hung off a shoulder inside stiff canvas, so
+  // it dwells at each end of the swing and moves quickest through the passing position.
+  // Normalised to +/-1 and symmetric, extremes at p=0 and p=0.5.
+  arm: curve([[0, -1.0], [.06, -.96], [.14, -.78], [.25, 0], [.36, .78], [.44, .96],
+  [.50, 1.0], [.56, .96], [.64, .78], [.75, 0], [.86, -.78], [.94, -.96]])
 };
 // frog kick: slow tuck (0-.45), snap (.45-.62), long glide
 const S = {
@@ -942,50 +948,89 @@ const CH = {
 };
 const pw = new Float32Array(CH.N), psw = new Float32Array(CH.N), po = new Float32Array(CH.N);
 
-function poseWalk(o, p, a, t) {
+// Phase offsets, in cycles. At a walking cadence of ~1.1 cycles/s these are the timings
+// that stop the gait reading as one rigid marionette: the pelvis leads, the shoulders
+// answer it a beat later, the arms trail further still.
+const SH_LAG = 0.085;      // shoulders lag the hips ~75 ms
+const ARM_LAG = 0.045;     // arms trail the opposing leg on top of their own 0.08 offset
+
+// tanh(2.2) — normalises the weight-shift clip so the shift still reaches +/-1
+const TANH22 = 0.975743;
+
+function poseWalk(o, p, a, t, deck) {
   const idle = 1 - a;                                        // at a standstill every cyclic term falls away
-  o[CH.bobY] = W.bob(p) * a + Math.sin(t * 1.15) * 0.014 * idle;
-  o[CH.shiftX] = W.sway(p) * a + Math.sin(t * 0.47) * 0.028 * idle;
+  // ---- idle, SPLIT BY GROUND. Planks are not water. ----
+  // SEA idle (deck=0): he is standing in a moving column, so the sway survives — but the
+  // vertical is HALVED from the old value. A man in lead boots on the bottom is heavy;
+  // he does not float.
+  // DECK idle (deck=1): terrestrial and planted. Zero vertical bob. Weight shifts foot to
+  // foot on a ~30 s period with a dwell at each foot (tanh-clipped sine), the pelvis lists
+  // onto the loaded leg and the shoulders counter it, breathing lives in the SHOULDERS
+  // rather than the pelvis, and the head turns occasionally. The head gate is a sparse
+  // deterministic function of t — never Math.random(), which would make the turn
+  // frame-rate dependent and unrepeatable between sessions.
+  const wob = Math.sin(t * 0.47);
+  const brS = Math.sin(t * 0.90);                            // ~8.6 breaths a minute
+  const wsh = Math.tanh(2.2 * Math.sin(t * 0.21)) / TANH22;  // +1 = weight on his left foot
+  const look = 0.30 * ss(0.88, 1, Math.sin(t * 0.137)) - 0.26 * ss(0.88, 1, Math.sin(t * 0.0912 + 2.1));
+  const dk = deck * idle, sw = (1 - deck) * idle;
+
+  o[CH.bobY] = W.bob(p) * a + Math.sin(t * 1.15) * 0.007 * sw;
+  o[CH.shiftX] = W.sway(p) * a + wob * 0.028 * sw + wsh * 0.030 * dk;
   o[CH.shiftZ] = 0;
-  o[CH.pYaw] = W.yaw(p) * a;
-  o[CH.pRoll] = W.list(p) * a + Math.sin(t * 0.47) * 0.032 * idle;
+  o[CH.pYaw] = W.yaw(p) * a + wsh * 0.020 * dk;
+  o[CH.pRoll] = W.list(p) * a + wob * 0.032 * sw + wsh * 0.038 * dk;
   o[CH.pPitch] = 0;
-  o[CH.sYaw] = -1.5 * W.yaw(p - 0.06) * a;
-  o[CH.sPitch] = -(0.07 + 0.11 * a) + Math.sin(t * 1.15 + 0.6) * 0.022 * idle;
-  o[CH.sRoll] = -0.6 * W.list(p - 0.04) * a;
-  o[CH.nYaw] = 0; o[CH.nPitch] = 0.05 * a;
+  o[CH.sYaw] = -1.5 * W.yaw(p - SH_LAG) * a - wsh * 0.030 * dk + brS * 0.006 * dk;
+  o[CH.sPitch] = -(0.07 + 0.11 * a) + Math.sin(t * 1.15 + 0.6) * 0.022 * sw + brS * 0.020 * dk;
+  o[CH.sRoll] = -0.6 * W.list(p - SH_LAG * 0.7) * a - wsh * 0.021 * dk;
+  o[CH.nYaw] = look * dk; o[CH.nPitch] = 0.05 * a - 0.02 * Math.abs(look) * dk;
   o[CH.Rhx] = -W.hip(p) * a; o[CH.Rhz] = 0.075;
-  o[CH.Rk] = W.knee(p) * a + 0.07 * idle; o[CH.Ra] = W.ankle(p) * a;
+  o[CH.Rk] = W.knee(p) * a + 0.07 * idle + 0.022 * wsh * dk; o[CH.Ra] = W.ankle(p) * a;
   o[CH.Lhx] = -W.hip(p + 0.5) * a; o[CH.Lhz] = 0.075;
-  o[CH.Lk] = W.knee(p + 0.5) * a + 0.07 * idle; o[CH.La] = W.ankle(p + 0.5) * a;
-  // arms swing against the same-side leg with a lag; the lantern arm is damped
-  const ra = -W.hip(p - 0.08) * a, la = -W.hip(p + 0.42) * a;
-  o[CH.Rsx] = -ra * 0.34 - 0.10; o[CH.Rsz] = 0.18; o[CH.Rsy] = -0.10;
+  o[CH.Lk] = W.knee(p + 0.5) * a + 0.07 * idle - 0.022 * wsh * dk; o[CH.La] = W.ankle(p + 0.5) * a;
+  // Arms trail the opposing leg on W.arm's eased pendulum profile. Centre and half-range
+  // reproduce the old -W.hip() swing exactly, so the reach of the swing is unchanged; what
+  // changed is WHEN it gets there and how it turns around.
+  const ra = (0.445 * W.arm(p - 0.08 - ARM_LAG) - 0.09) * a;
+  const la = (0.445 * W.arm(p + 0.42 - ARM_LAG) - 0.09) * a;
+  o[CH.Rsx] = -ra * 0.34 - 0.10 - wsh * 0.012 * dk; o[CH.Rsz] = 0.18; o[CH.Rsy] = -0.10;
   o[CH.Re] = -(0.44 + Math.max(0, -ra) * 0.35);
-  o[CH.Lsx] = -la * 0.62; o[CH.Lsz] = 0.15; o[CH.Lsy] = 0.05;
+  o[CH.Lsx] = -la * 0.62 + wsh * 0.012 * dk; o[CH.Lsz] = 0.15; o[CH.Lsy] = 0.05;
   o[CH.Le] = -(0.20 + Math.max(0, -la) * 0.5);
 }
 
+// A limb dragging through water reverses SLOWLY — drag is largest exactly where the
+// velocity is largest, so the stroke flattens at its turnarounds. Peak is still 1.0, so
+// every amplitude this replaces keeps its old range.
+const dragS = x => { const s = Math.sin(x); return s * (1.15 - 0.15 * s * s); };
+const SWIM_DRAG = 0.28;    // seconds the arms trail the body's roll/yaw
+
 function poseSwim(o, p, t, drive) {
+  const td = t - SWIM_DRAG;
+  // The kick's phase is warped so the tuck and the glide — the two extremes — take longer
+  // than the transit between them. Pure reparametrisation: every S curve keeps its range.
+  const pk = p - 0.022 * Math.sin(4 * Math.PI * (p - 0.45));
   o[CH.bobY] = Math.sin(t * 0.9) * 0.035;
   o[CH.shiftX] = Math.sin(t * 0.62) * 0.03;
   o[CH.shiftZ] = 0;
   o[CH.pYaw] = Math.sin(t * 0.5) * 0.05;
   o[CH.pRoll] = Math.sin(t * 0.71) * 0.06;
-  o[CH.pPitch] = -0.10 - S.hip(p) * 0.10;
+  o[CH.pPitch] = -0.10 - S.hip(pk) * 0.10;
   o[CH.sYaw] = Math.sin(t * 0.44 + 1) * 0.07;
-  o[CH.sPitch] = 0.10 + S.hip(p) * 0.06;
+  o[CH.sPitch] = 0.10 + S.hip(pk) * 0.06;
   o[CH.sRoll] = Math.sin(t * 0.58) * 0.07;
   o[CH.nYaw] = Math.sin(t * 0.33) * 0.06; o[CH.nPitch] = -0.06;
   const k = 0.45 + 0.55 * drive;
-  o[CH.Rhx] = -S.hip(p) * k; o[CH.Rhz] = 0.06 + S.abd(p) * k;
-  o[CH.Rk] = S.knee(p) * k; o[CH.Ra] = S.ankle(p) * k;
-  o[CH.Lhx] = -S.hip(p + 0.03) * k; o[CH.Lhz] = 0.06 + S.abd(p + 0.03) * k;   // slight asymmetry
-  o[CH.Lk] = S.knee(p + 0.03) * k; o[CH.La] = S.ankle(p + 0.03) * k;
-  o[CH.Rsx] = -0.42 - Math.sin(t * 0.8) * 0.10; o[CH.Rsz] = 0.34; o[CH.Rsy] = -0.22;
-  o[CH.Re] = -(0.85 + Math.sin(t * 0.8 + 0.6) * 0.10);
-  o[CH.Lsx] = -0.22 + Math.sin(t * 0.66 + 2) * 0.30; o[CH.Lsz] = 0.42 + Math.sin(t * 0.5) * 0.10; o[CH.Lsy] = 0.18;
-  o[CH.Le] = -(0.55 + Math.sin(t * 0.66 + 1.2) * 0.28);
+  o[CH.Rhx] = -S.hip(pk) * k; o[CH.Rhz] = 0.06 + S.abd(pk) * k;
+  o[CH.Rk] = S.knee(pk) * k; o[CH.Ra] = S.ankle(pk) * k;
+  o[CH.Lhx] = -S.hip(pk + 0.03) * k; o[CH.Lhz] = 0.06 + S.abd(pk + 0.03) * k;   // slight asymmetry
+  o[CH.Lk] = S.knee(pk + 0.03) * k; o[CH.La] = S.ankle(pk + 0.03) * k;
+  // arms on the delayed clock: they answer the roll the torso had a third of a second ago
+  o[CH.Rsx] = -0.42 - dragS(td * 0.8) * 0.10; o[CH.Rsz] = 0.34; o[CH.Rsy] = -0.22;
+  o[CH.Re] = -(0.85 + dragS(td * 0.8 + 0.6) * 0.10);
+  o[CH.Lsx] = -0.22 + dragS(td * 0.66 + 2) * 0.30; o[CH.Lsz] = 0.42 + dragS(td * 0.5) * 0.10; o[CH.Lsy] = 0.18;
+  o[CH.Le] = -(0.55 + dragS(td * 0.66 + 1.2) * 0.28);
 }
 
 // ---- knife slash: a one-shot keyed overlay on the LEFT arm ----
@@ -1035,7 +1080,17 @@ const LIFT = 0.163;
 // behind the title, and a 0 boot meant the first thing anyone ever saw was the frog-kick
 // pose easing out — legs drawn up, boots half a metre off the planks he is standing on.
 let walkP = 0, swimP = 0, gb = 1, yawF = 0, yawInit = false;
+// deckF boots at 1 for the same reason gb does: the title opens on Sal standing on planks.
+let deckF = 1, ampS = 0;
 const sPitch = { x: 0, v: 0 }, sRollT = { x: 0, v: 0 };
+// heel-strike knee soften, and the trailing wrists/ankles (secondary motion, sprung rather
+// than keyed — same idiom as the helmet lag). Wrist targets are REST-RELATIVE so the rest
+// pose, and with it the knife's held geometry and the lantern bail, is untouched.
+const kneeSoft = { x: 0, v: 0 };
+let kneeSide = 0;
+const wrR = { x: 0, v: 0 }, wrL = { x: 0, v: 0 };
+const ankR = { x: 0, v: 0 }, ankL = { x: 0, v: 0 };
+const REST_RE = -0.44, REST_LE = -0.20;
 
 const lnX = { x: 0, v: 0 }, lnZ = { x: 0, v: 0 };
 const hdY = { x: 0, v: 0 }, hdX = { x: 0, v: 0 };
@@ -1058,15 +1113,26 @@ export function updateDiver(dt, t, player) {
   yawF = lerp(yawF, player.yaw, Math.min(1, (player.grounded ? 9 : 2.6) * dt));
   diver.rotation.y = yawF;
 
-  gb = lerp(gb, player.grounded ? 1 : 0, Math.min(1, 4.5 * dt));
+  // Stepping onto planks kills the aquatic motion in ~0.15 s rather than half a second:
+  // the deck is a hard, dry contract with the world, and swim bob leaking past the ladder
+  // was the single most visible thing wrong with him. Off the deck the old soft 4.5/s
+  // stands — settling onto the seabed IS gradual, you sink into it.
+  gb = lerp(gb, player.grounded ? 1 : 0, Math.min(1, (player.onDeck ? 10 : 4.5) * dt));
+  deckF = lerp(deckF, player.onDeck ? 1 : 0, Math.min(1, 10 * dt));
 
   // stride advances with distance travelled, capped so a boosted sprint doesn't turn into a scurry
   const stepRate = clamp(flat / 2.35, 0, 2.1);
   walkP = (walkP + stepRate * dt) % 1;
   swimP = (swimP + (0.24 + speed * 0.028) * dt) % 1;
 
-  const amp = clamp(flat * 0.42 - 0.06, 0, 1);
-  poseWalk(pw, walkP, amp, t);
+  // Gait amplitude used to be velocity ALONE, so the cycle snapped on and off with the
+  // stick. It now has an envelope: a short attack (he leans into the walk) and a longer
+  // release (he settles out of it and the last stride finishes). walkP is untouched, so
+  // the heel-strike cadence — and the footstep audio that keys off it — is unchanged.
+  const ampT = clamp(flat * 0.42 - 0.06, 0, 1);
+  ampS = lerp(ampS, ampT, Math.min(1, (ampT > ampS ? 8.3 : 4.0) * dt));   // ~0.12 s / ~0.25 s
+  const amp = ampS;
+  poseWalk(pw, walkP, amp, t, deckF);
   poseSwim(psw, swimP, t, clamp(speed * 0.09, 0, 1));
   for (let i = 0; i < CH.N; i++) po[i] = psw[i] + (pw[i] - psw[i]) * gb;
 
@@ -1099,12 +1165,18 @@ export function updateDiver(dt, t, player) {
   const side = walkP < 0.5 ? 0 : 1;
   if (side !== lastStepSide) {
     lastStepSide = side;
-    settle.v -= 1.9 * gb * amp;
+    settle.v -= 2.25 * gb * amp;
+    // the landing leg takes the weight: a short knee soften, ~5 degrees, peaking ~78 ms in
+    kneeSoft.v += 4.0 * gb * amp;
+    kneeSide = side;
     // Audio keys off the same event that drops the visual weight, so boot sounds can
     // never drift from the animation no matter how the gait is retimed.
     if (gb > 0.5 && amp > 0.08) steps++;
   }
   spring(settle, 0, dt, 11, 0.34);
+  spring(kneeSoft, 0, dt, 20, 0.55);
+  const ks = Math.max(0, kneeSoft.x) * 0.42;
+  if (kneeSide === 0) po[CH.Rk] += ks; else po[CH.Lk] += ks;
 
   const b = diver.body;
   // LIFT plants the soles on player.pos - 1.35 (the collision floor) in the rest pose
@@ -1133,15 +1205,23 @@ export function updateDiver(dt, t, player) {
 
   const R = diver.legR, L = diver.legL;
   R.root.rotation.set(po[CH.Rhx], 0, -po[CH.Rhz]);
-  R.mid.rotation.x = po[CH.Rk]; R.end.rotation.x = po[CH.Ra];
+  R.mid.rotation.x = po[CH.Rk];
   L.root.rotation.set(po[CH.Lhx], 0, po[CH.Lhz]);
-  L.mid.rotation.x = po[CH.Lk]; L.end.rotation.x = po[CH.La];
+  L.mid.rotation.x = po[CH.Lk];
+  // Ankles TRAIL the shank instead of being welded to it (~50 ms at walking cadence). A
+  // spring converges exactly on its target, so the rest pose — and LIFT's sole plant —
+  // is bit-identical at a standstill; only the transitions gain the lag.
+  R.end.rotation.x = spring(ankR, po[CH.Ra], dt, 34, 0.85);
+  L.end.rotation.x = spring(ankL, po[CH.La], dt, 34, 0.85);
 
   const AR = diver.armR, AL = diver.armL;
   AR.root.rotation.set(po[CH.Rsx], po[CH.Rsy], -po[CH.Rsz]);
   AR.mid.rotation.x = po[CH.Re];
   AL.root.rotation.set(po[CH.Lsx], po[CH.Lsy], po[CH.Lsz]);
   AL.mid.rotation.x = po[CH.Le];
+  // wrists relax after the elbow, measured from the rest fold so nothing static moves
+  AR.end.rotation.x = spring(wrR, (po[CH.Re] - REST_RE) * 0.30, dt, 26, 0.75);
+  AL.end.rotation.x = spring(wrL, (po[CH.Le] - REST_LE) * 0.30, dt, 26, 0.75);
 
   // hand velocity in the diver's own frame drives the lantern pendulum
   const c = Math.cos(-yawF), s = Math.sin(-yawF);

@@ -372,7 +372,12 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // where the tenders keep him blown up) made the deck unstandable.
     player.grounded = onDeck || player.buoy < GROUND_BUOY;
   } else if (player.pos.y < floorY + 1.2 && player.vel.y <= 0.5 && !keys['Space'] && (onDeck || player.buoy < GROUND_BUOY)) {
-    player.pos.y += (floorY - player.pos.y) * Math.min(1, 10 * dt);
+    // ON PLANKS THE FOLLOW IS RIGID: a man standing on a boat moves WITH the boat.
+    // The 10/s ease is for seabed terrain; against the raft's swell bob it left Sal
+    // a few centimetres out of phase with his own deck, which read as him bobbing
+    // "like he is in the water" (user-reported). Exact snap on deck, ease on ground.
+    if (onDeck) player.pos.y = floorY;
+    else player.pos.y += (floorY - player.pos.y) * Math.min(1, 10 * dt);
     player.grounded = true;
   } else if (player.pos.y > floorY + 1.4 || (!onDeck && player.buoy > GROUND_BUOY)) {
     player.grounded = false;
