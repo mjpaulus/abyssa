@@ -2,7 +2,7 @@
 title: SAL — the diver deserves better
 status: wip
 tags: sal, character, animation
-updated: 2026-08-07
+updated: 2026-08-14
 ---
 Sal's limbs read as tubes and his movement is stiff. A two-pass quality round: sculpt the suit like canvas over a man, then make the man move like one — all generated, per the hard rule.
 
@@ -15,4 +15,5 @@ Includes the GENERATED Mark V helmet upgrade (bonnet, faceplates with real bezel
 
 ## Log
 - 2026-08-07 — cut from Michael's verdict + the all-generated hard rule; sculpt pass first
+- 2026-08-14 — SCULPT PASS SHIPPED (diver.js; motion pass still open). Limbs are lathe profiles per segment (`segGeo` + `profOf`), not capsules: deltoid>elbow, forearm belly>wrist, thigh>knee, calf>ankle. Gather rings at elbows/knees/groin, seam piping on the outer limbs, ballooned torso + seat sag, laced gauntlet cuffs with mitten hands (knuckle ridge + opposed thumb), weighted boots with toe box/heel block/ankle flare/lead sole. Helmet upgraded in place: five spun bonnet rings, four neck-ring wing-nut dogs, corselet brailles. `helmetSwap.js` no longer loads the glb (external-glb plan retired per the hard rule) — the `helmet.glb 404` is gone. 32.6k->45.6k tris, draw calls 88->88 unchanged. Joint pivots, stepCount heel strikes, slash timing (held 0.10-0.48s, arc 0.15-0.32s), lantern and tether dock all verified live. Root-caused a long-standing artifact on the way: `fold()` displaced coincident lathe/capsule POLE vertices along their differing normals, tearing a white starburst at the crotch and every limb joint — fold() now welds the displacement direction across coincident positions.
 - 2026-08-07 — Michael: "when he is standing on the raft he is bobbing up and down like he is in the water." Diagnosed for the motion pass: (1) idle pose is the AQUATIC sway/bob sine set even on planks — deck idle must be terrestrial (planted, weight-shifts, shoulder breathing); (2) pos.y eases toward the live deckY at 10/s and the camera at 8/s — out-of-phase with the swell; on deck the follow should be RIGID (you move with the boat); (3) swim->walk blend (gb, 4.5/s) leaks swim bob just after boarding. Probes: player.pos.y vs raft.position.y phase, gb settle time

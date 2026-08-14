@@ -138,7 +138,8 @@ function grainMaps(base, hi, rep, wet, S = 128) {
 const copperM = metalMaps([214, 138, 96], [98, 54, 37], [56, 110, 92], 3);
 const brassM = metalMaps([232, 196, 108], [112, 88, 38], [84, 114, 76], 4);
 const clothM = clothMaps([20, 50, 168], 3);                  // royal blue underlayer
-const leatherM = grainMaps([150, 88, 44], [214, 150, 92], 2, 0.60);   // warm tan-orange
+// aged canvas duck: still warm, but pulled off the orange toward a salt-bleached tan-olive
+const leatherM = grainMaps([140, 98, 60], [198, 160, 116], 2, 0.62);
 const darkLeaM = grainMaps([96, 56, 32], [148, 98, 58], 2, 0.56);
 const rubberM = grainMaps([34, 36, 41], [66, 70, 76], 3, 0.74);
 
@@ -224,16 +225,40 @@ function Part(node) {
 
 // Displace cloth along its normals and bake grime into vertex colours, so dirt genuinely
 // pools in the creases the geometry has rather than in an unrelated texture.
-function fold(geo, amp, freq, tone = 1) {
+// `mask` (optional) scales the displacement per vertex. It exists for solids of
+// revolution: at a lathe's POLE every column's vertex is coincident but carries a
+// DIFFERENT normal, so one shared displacement fans them out into a starburst of bright
+// slivers — visible as a white spray at the crotch, elbows and ankles, exactly where the
+// limb caps sit. Masking the amplitude to zero near the axis removes the cause.
+function fold(geo, amp, freq, tone = 1, mask = null) {
   const pos = geo.attributes.position, nrm = geo.attributes.normal, n = pos.count;
   const col = new Float32Array(n * 3);
+  // WELD THE DISPLACEMENT DIRECTION across coincident vertices before moving anything.
+  // A lathe, capsule or sphere POLE is several vertices sharing one position but carrying
+  // DIFFERENT normals — one per column of the seam. Push each along its own normal and the
+  // pole tears open into a starburst of bright slivers. It showed as a white spray at the
+  // crotch (the pelvis capsule's lower pole) and at every limb joint. Averaging first makes
+  // every copy of a point move as the single point it actually is. Build-time only.
+  const key = i => `${Math.round(pos.getX(i) * 1e4)},${Math.round(pos.getY(i) * 1e4)},${Math.round(pos.getZ(i) * 1e4)}`;
+  const acc = new Map();
+  for (let i = 0; i < n; i++) {
+    const k = key(i);
+    let a = acc.get(k);
+    if (!a) acc.set(k, a = [0, 0, 0]);
+    a[0] += nrm.getX(i); a[1] += nrm.getY(i); a[2] += nrm.getZ(i);
+  }
+  for (const a of acc.values()) {
+    const L = Math.hypot(a[0], a[1], a[2]) || 1;
+    a[0] /= L; a[1] /= L; a[2] /= L;
+  }
   for (let i = 0; i < n; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    const dir = acc.get(key(i));
     const a = fbm(x * freq + 11, z * freq + 3) - 0.5;
     const b = fbm(y * freq * 1.7 + 5, (x + z) * 0.7 * freq * 1.7 + 9) - 0.5;
     const c = fbm(y * freq * 4.1 + 21, (x - z) * freq * 4.1 + 2) - 0.5;
-    const d = (a * 1.1 + b * 0.9 + c * 0.45) * amp;
-    pos.setXYZ(i, x + nrm.getX(i) * d, y + nrm.getY(i) * d, z + nrm.getZ(i) * d);
+    const d = (a * 1.1 + b * 0.9 + c * 0.45) * amp * (mask ? mask(x, y, z) : 1);
+    pos.setXYZ(i, x + dir[0] * d, y + dir[1] * d, z + dir[2] * d);
     const g = clamp(tone * (0.80 + (d / amp) * 0.24 - clamp(-y * 0.09, 0, 0.16)), 0.34, 1.1);
     col[i * 3] = g; col[i * 3 + 1] = g * 0.98; col[i * 3 + 2] = g * 0.93;
   }
@@ -271,6 +296,86 @@ function seamTube(pts, zs, r, sign = 1, xoff = 0, rad = 0.014) {
 }
 // Flattened ring band (sock cuffs, thigh straps, gauntlet bands).
 const band = (r, h, t = 0.9, seg = 14) => new THREE.CylinderGeometry(r, r, h, seg, 1, true).scale(1, 1, t);
+
+// ---- limb sculpting ----
+// A LIMB IS NOT A TUBE. Every segment is a solid of revolution whose radius is keyed
+// along its length, so the girth story reads at nine units (the only distance any deck
+// detail is ever seen from): deltoid > elbow, forearm belly > wrist, thigh > knee,
+// calf > ankle. The suit is canvas OVER that anatomy, so the keys are soft — the twill
+// smooths a bicep into a swell — but the swell has to be there or the eye reads pipe.
+//
+// profOf: piecewise keys [s, radius-multiplier], smoothstepped between, s = 0 at the
+// joint above and 1 at the joint below. Smoothstep (not linear) gives flat tangents at
+// every key, which is exactly how slack cloth drapes over a taper.
+function profOf(keys) {
+  return s => {
+    let i = 1;
+    while (i < keys.length - 1 && keys[i][0] < s) i++;
+    const [s0, k0] = keys[i - 1], [s1, k1] = keys[i];
+    const u = clamp((s - s0) / (s1 - s0), 0, 1);
+    return k0 + (k1 - k0) * (u * u * (3 - 2 * u));
+  };
+}
+
+// Lathe a profiled segment of length `len`, hung from y = 0 down to y = -len, with
+// rounded caps at both ends so consecutive segments read continuous through a bend
+// instead of showing a hard disc at the joint.
+function segGeo(len, r, prof, seg = 16, rings = 13) {
+  const pts = [];
+  const rT = r * prof(0), rB = r * prof(1);
+  for (let k = 0; k <= 3; k++) {                             // bottom cap, pole first
+    const a = (k / 4) * (Math.PI / 2);
+    pts.push([rB * Math.sin(a), -len - rB * 0.62 * Math.cos(a)]);
+  }
+  for (let i = rings; i >= 0; i--) pts.push([r * prof(i / rings), -len * (i / rings)]);
+  for (let k = 3; k >= 0; k--) {                             // top cap, back to the pole
+    const a = (k / 4) * (Math.PI / 2);
+    pts.push([rT * Math.sin(a), rT * 0.45 * Math.cos(a)]);
+  }
+  return lathe(pts, seg);
+}
+
+// Flat vertex tint. fold() is the wrong tool on a small torus — its displacement is
+// per-vertex noise, and on a 5-segment ring that reads as spikes rather than slack. This
+// just darkens the gather so grime pools where cloth doubles over, and keeps the geometry
+// smooth. Also supplies the `color` attribute the merge needs in a vertexColors bucket.
+function tint(geo, g) {
+  const n = geo.attributes.position.count, c = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { c[i * 3] = g; c[i * 3 + 1] = g * 0.98; c[i * 3 + 2] = g * 0.93; }
+  geo.setAttribute('color', new THREE.BufferAttribute(c, 3));
+  return geo;
+}
+
+// Canvas has nowhere to go when a joint folds, so it GATHERS: a few soft rings of slack
+// stacked where the elbow, knee and groin crease. These sit only just proud of the limb
+// surface — a ring standing 20% of the radius off the leg is a hose, not a suit — and are
+// tinted down so the crease reads as shadow first and silhouette second.
+function bunch(p, mat, r, y, n = 3, dy = 0.052, tube = 0.019, zs = 0.95) {
+  const mid = (n - 1) / 2;
+  for (let i = 0; i < n; i++) {
+    const k = 1 - Math.abs(i - mid) / n;
+    const g = new THREE.TorusGeometry(r * 0.985, tube * (0.7 + 0.6 * k), 6, 16)
+      .rotateX(Math.PI / 2).scale(1, 1, zs);
+    p.add(tint(xf(g, 0, y + (i - mid) * dy), 0.80), mat);
+  }
+}
+
+// Raised piping down a segment's seam, riding the profile so it swells with the limb.
+// A tube of 4 radial segments: ~110 tris buys the single line that says "this was sewn".
+function piping(p, mat, len, r, prof, sx, sz = 0, rad = 0.013, n = 7) {
+  const q = [];
+  for (let i = 0; i <= n; i++) {
+    const s = i / n, rr = r * prof(s) * 0.99;
+    q.push(V3(sx * rr, -len * s, sz * rr));
+  }
+  p.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(q), n * 2, rad, 4, false), mat);
+}
+
+// The four segment profiles. Arms r = 0.150, legs r = 0.186.
+const P_UPARM = profOf([[0, 1.00], [0.16, 1.17], [0.45, 1.00], [0.80, 0.86], [1, 0.80]]);   // deltoid/bicep -> elbow
+const P_FOREARM = profOf([[0, 0.80], [0.22, 0.93], [0.55, 0.80], [0.85, 0.66], [1, 0.60]]); // belly -> hard wrist taper
+const P_THIGH = profOf([[0, 1.06], [0.14, 1.14], [0.42, 1.02], [0.78, 0.85], [1, 0.80]]);
+const P_SHANK = profOf([[0, 0.80], [0.14, 0.86], [0.30, 0.95], [0.58, 0.80], [0.86, 0.64], [1, 0.60]]); // calf belly -> ankle
 
 // ---- Sal's dive knife ----
 // Local frame: the grip's base sits at the origin, the blade runs down -Y. The same
@@ -364,6 +469,17 @@ export const diver = (() => {
       const a = i * 2.094;
       wingnut(p, Math.sin(a) * 0.300, 0.455 + Math.cos(a) * 0.300, 0.300, 0, 0.85);
     }
+    // The bonnet is RAISED COPPER — beaten up out of sheet over a former and spun true —
+    // and spinning leaves ridges. Five rings sitting exactly on the lathe profile give the
+    // dome a scale and a set of specular lines it otherwise has no way to earn.
+    for (const [rr, yy] of [[0.402, 0.235], [0.446, 0.400], [0.442, 0.520], [0.420, 0.635], [0.334, 0.775]])
+      p.add(xf(new THREE.TorusGeometry(rr, 0.0085, 5, 22).rotateX(Math.PI / 2), 0, yy), copper);
+    // four wing-nut dogs round the neck ring, clamping the bonnet down onto the corselet.
+    // ry = PI/2 - a points each nut's shaft radially outward from the ring.
+    for (let i = 0; i < 4; i++) {
+      const a = i / 4 * TAU + 0.785;
+      wingnut(p, Math.cos(a) * 0.302, 0.068, Math.sin(a) * 0.302, Math.PI / 2 - a, 0.9);
+    }
     // brass crest strip, front faceplate to top port
     p.add(xf(new THREE.TorusGeometry(0.40, 0.019, 5, 20, 1.15).rotateZ(0.42).rotateY(Math.PI / 2), 0, 0.455, 0), brass);
     // exhaust valve, right of the faceplate — bubbles vent here
@@ -399,6 +515,10 @@ export const diver = (() => {
     p.add(xf(new THREE.TorusGeometry(0.278, 0.026, 6, 22).rotateX(Math.PI / 2), 0, 0.804), brass);
     p.add(xf(new THREE.TorusGeometry(0.394, 0.024, 6, 26).rotateX(Math.PI / 2), 0, 0.062).scale(0.93, 1, ZS), darkLeather);
     rivetRing(p, brass, 12, 0.284, 0.780, 0.020);
+    // BRAILLES: the studs round the corselet's skirt that the dress is bolted down to
+    // through its rubber gasket. On a real Mark V they are the whole reason the suit is
+    // watertight, and they are the corselet's most recognisable read at distance.
+    rivetRing(p, brass, 14, 0.404, 0.078, 0.023, ZS * 0.93);
     for (const sx of [-0.205, 0.205]) {                      // circular chest vent bosses
       p.add(xf(new THREE.CylinderGeometry(0.080, 0.090, 0.07, 14).rotateX(Math.PI / 2), sx, 0.424, 0.418), copper);
       p.add(xf(new THREE.TorusGeometry(0.076, 0.015, 5, 14), sx, 0.424, 0.452), brass);
@@ -406,10 +526,12 @@ export const diver = (() => {
       for (let i = 0; i < 3; i++)                            // louvre slats in the port
         p.add(xf(new THREE.BoxGeometry(0.102, 0.012, 0.014), sx, 0.424 + (i - 1) * 0.026, 0.464), steel);
     }
-    // blue fabric torso: slightly broader in x than the carapace so it reads at the sides
-    const t = lathe([[0.000, -0.16], [0.320, -0.17], [0.362, -0.06], [0.424, 0.10], [0.510, 0.30], [0.578, 0.470], [0.556, 0.560], [0.000, 0.572]], 22);
+    // Blue fabric torso: slightly broader in x than the carapace so it reads at the sides.
+    // The dress is AIR-FILLED, so the belly and flank balloon out below the corselet while
+    // the twill pulls tauter across the shoulders where the breastplate pins it down.
+    const t = lathe([[0.000, -0.16], [0.336, -0.17], [0.398, -0.06], [0.464, 0.10], [0.536, 0.30], [0.582, 0.470], [0.556, 0.560], [0.000, 0.572]], 22);
     t.scale(1, 1, 0.66);
-    p.add(fold(t, 0.036, 7.5, 0.74), cloth);
+    p.add(fold(t, 0.030, 7.5, 0.74), cloth);
     p.bake();
   }
 
@@ -419,6 +541,11 @@ export const diver = (() => {
     const pel = new THREE.CapsuleGeometry(0.338, 0.16, 6, 18);
     pel.scale(1, 1, 0.86);
     p.add(fold(xf(pel, 0, 0.02, 0), 0.034, 8, 0.74), cloth);
+    // the dress sags at the seat, where the air in the suit can't reach and the canvas
+    // just hangs on the man — the one place the silhouette should NOT be a smooth sweep
+    const seat = new THREE.SphereGeometry(0.20, 12, 9);
+    seat.scale(1.34, 0.80, 0.86);
+    p.add(fold(xf(seat, 0, -0.140, -0.140), 0.024, 9, 0.70), cloth);
     const trunk = new THREE.CapsuleGeometry(0.348, 0.13, 6, 18);       // leather trunks over the blue
     trunk.scale(1, 1, 0.86);
     p.add(xf(trunk, 0, -0.10, 0), leather);
@@ -488,90 +615,147 @@ export const diver = (() => {
   }
 
   // ---- limbs ----
-  function limb(parent, x, y, upLen, loLen, r, taper, inward) {   // inward 0 = no fabric gusset
+  // Joint hierarchy is CONTRACT: root (shoulder/hip) -> mid (elbow/knee) -> end
+  // (wrist/ankle), with mid at -upLen and end at -loLen. The gait poses exactly these
+  // three groups; only the skin hung on them changes here.
+  function limb(parent, x, y, upLen, loLen, r, taper, inward, upProf, loProf) {   // inward 0 = no fabric gusset
     const root = new THREE.Group(); root.position.set(x, y, 0); parent.add(root);
     const mid = new THREE.Group(); mid.position.y = -upLen; root.add(mid);
     const end = new THREE.Group(); end.position.y = -loLen; mid.add(end);
     const pu = Part(root), pl = Part(mid);
-    pu.add(fold(xf(new THREE.CapsuleGeometry(r, upLen - r * 0.6, 7, 16), 0, -upLen * 0.5 + r * 0.1, 0), 0.030, 11), leather);
-    pl.add(fold(xf(new THREE.CapsuleGeometry(r * taper, loLen - r * 0.5, 7, 16), 0, -loLen * 0.5 + r * 0.05, 0), 0.026, 12), leather);
+    // capMask fences the fold into the segment's BODY (y in [-len, 0]) and fades it out
+    // over the last 55mm at each end, so the rounded caps — whose poles starburst under
+    // displacement, see fold() — are left perfectly smooth. Nothing is lost: both caps sit
+    // buried inside the neighbouring segment and its gather rings.
+    const capMask = len => (_x, y) => ss(0, 0.055, -y) * ss(0, 0.055, y + len);
+    pu.add(fold(segGeo(upLen, r, upProf), 0.024, 11, 1, capMask(upLen)), leather);
+    pl.add(fold(segGeo(loLen, r, loProf), 0.021, 12, 1, capMask(loLen)), leather);
     // blue fabric underlayer: a gusset down the inner limb and a ring at the joint
     if (inward) {
       pu.add(fold(xf(new THREE.CapsuleGeometry(r * 0.42, upLen * 0.44, 5, 10), inward * r * 0.80, -upLen * 0.54, 0), 0.020, 13, 0.74), cloth);
-      // clears the sleeve's fold displacement (0.030) so the band never breaks into patches
-      pu.add(xf(band(r * 1.24, 0.06, 0.98, 16), 0, -upLen * 0.20), trim);
+      // clears the sleeve's fold displacement so the band never breaks into patches
+      pu.add(xf(band(r * upProf(0.20) * 1.10, 0.06, 0.98, 16), 0, -upLen * 0.20), trim);
     }
-    pl.add(fold(xf(new THREE.CapsuleGeometry(r * 0.99, 0.05, 6, 14), 0, 0.015, 0), 0.018, 14, 0.74), cloth);
-    return { root, mid, end, pu, pl, r, upLen, loLen, taper };
+    pl.add(fold(xf(new THREE.CapsuleGeometry(r * loProf(0.02) * 1.02, 0.05, 6, 14), 0, 0.015, 0), 0.018, 14, 0.74), cloth);
+    return { root, mid, end, pu, pl, r, upLen, loLen, taper, up: upProf, lo: loProf };
   }
   // the diver faces +Z, so his right side is -X
-  g.armR = limb(spine, -0.500, 0.615, 0.50, 0.42, 0.150, 0.86, 1);
-  g.armL = limb(spine, 0.500, 0.615, 0.50, 0.42, 0.150, 0.86, -1);
-  g.legR = limb(hips, -0.225, 0.0, 0.562, 0.465, 0.186, 0.88, 0);
-  g.legL = limb(hips, 0.225, 0.0, 0.562, 0.465, 0.186, 0.88, 0);
+  g.armR = limb(spine, -0.500, 0.615, 0.50, 0.42, 0.150, 0.86, 1, P_UPARM, P_FOREARM);
+  g.armL = limb(spine, 0.500, 0.615, 0.50, 0.42, 0.150, 0.86, -1, P_UPARM, P_FOREARM);
+  g.legR = limb(hips, -0.225, 0.0, 0.562, 0.465, 0.186, 0.88, 0, P_THIGH, P_SHANK);
+  g.legL = limb(hips, 0.225, 0.0, 0.562, 0.465, 0.186, 0.88, 0, P_THIGH, P_SHANK);
+
+  // sleeves: piping down the outer seam, and the canvas bunching at the elbow
+  for (const [arm, sx] of [[g.armR, -1], [g.armL, 1]]) {
+    const { pu, pl, r, upLen, loLen } = arm;
+    // in `leather`, not darkLeather: the sleeve Parts carry no dark bucket, and a second
+    // bucket here is a second draw call per arm. A raised ridge in the same canvas still
+    // reads as a seam off its own shading — it does not need a contrasting colour.
+    piping(pu, leather, upLen, r, P_UPARM, sx, 0, 0.012);
+    piping(pl, leather, loLen, r, P_FOREARM, sx, 0, 0.011);
+    bunch(pu, leather, r * P_UPARM(0.90), -upLen * 0.90, 2, 0.055, 0.026);
+    bunch(pl, leather, r * P_FOREARM(0.10), -loLen * 0.10, 3, 0.050, 0.028);
+  }
 
   // trousers: panel seams, stitched knee pads, thigh + under-knee straps
   for (const leg of [g.legR, g.legL]) {
-    const { pu, pl, r, upLen, taper } = leg;
-    for (const sz of [1, -1]) pu.add(xf(new THREE.BoxGeometry(0.020, upLen * 0.86, 0.026), 0, -upLen * 0.52, sz * r * 0.95), darkLeather);
-    for (const sx of [1, -1]) pu.add(xf(new THREE.BoxGeometry(0.026, upLen * 0.86, 0.020), sx * r * 0.95, -upLen * 0.52, 0), darkLeather);
-    for (const yy of [-0.20, -0.40]) {                       // thigh straps with tiny buckles
-      pu.add(xf(band(r * 1.04, 0.048, 0.95, 14), 0, yy), darkLeather);
-      pu.add(xf(new THREE.BoxGeometry(0.06, 0.055, 0.022), 0, yy, r * 1.02), brass);
+    const { pu, pl, r, upLen, loLen } = leg;
+    const rU = s => r * P_THIGH(s), rL = s => r * P_SHANK(s);   // surface radius at a given s
+    // outer and back seam piping, riding the thigh's swell instead of cutting straight down it
+    for (const sx of [1, -1]) piping(pu, darkLeather, upLen, r, P_THIGH, sx, 0, 0.013);
+    for (const sz of [1, -1]) piping(pu, darkLeather, upLen, r, P_THIGH, 0, sz, 0.011);
+    piping(pl, darkLeather, loLen, r, P_SHANK, 1, 0, 0.011);
+    piping(pl, darkLeather, loLen, r, P_SHANK, -1, 0, 0.011);
+    // the dress gathers into the groin at the top of the thigh, and above the knee
+    bunch(pu, leather, rU(0.06), -upLen * 0.06, 3, 0.056, 0.032);
+    bunch(pu, leather, rU(0.90), -upLen * 0.90, 2, 0.052, 0.026);
+    bunch(pl, leather, rL(0.10), -loLen * 0.10, 3, 0.048, 0.030);
+    for (const s of [0.356, 0.712]) {                        // thigh straps with tiny buckles
+      const yy = -upLen * s;
+      pu.add(xf(band(rU(s) * 1.04, 0.048, 0.95, 14), 0, yy), darkLeather);
+      pu.add(xf(new THREE.BoxGeometry(0.06, 0.055, 0.022), 0, yy, rU(s) * 1.02), brass);
     }
+    const kz = rL(0.118);                                     // knee pad rides the shank's surface
     const pad = new THREE.SphereGeometry(0.10, 12, 8);        // stitched knee pad, flattened
     pad.scale(1.42, 1.72, 0.40);
-    pl.add(xf(pad, 0, -0.055, r * taper * 0.80), darkLeather);
+    pl.add(xf(pad, 0, -0.055, kz * 0.82), darkLeather);
     for (let i = 0; i < 12; i++) {                           // stitch dots round the pad
       const a = i / 12 * TAU;
-      pl.add(xf(new THREE.SphereGeometry(0.011, 5, 4), Math.cos(a) * 0.128, -0.055 + Math.sin(a) * 0.155, r * taper * 0.86), leather);
+      pl.add(xf(new THREE.SphereGeometry(0.011, 5, 4), Math.cos(a) * 0.128, -0.055 + Math.sin(a) * 0.155, kz * 0.88), leather);
     }
-    pl.add(xf(band(r * taper * 1.05, 0.042, 0.95, 14), 0, -0.20), darkLeather);
-    pl.add(xf(new THREE.BoxGeometry(0.055, 0.05, 0.022), 0, -0.20, r * taper * 1.02), brass);
+    pl.add(xf(band(rL(0.43) * 1.05, 0.042, 0.95, 14), 0, -0.20), darkLeather);
+    pl.add(xf(new THREE.BoxGeometry(0.055, 0.05, 0.022), 0, -0.20, rL(0.43) * 1.02), brass);
   }
   for (const l of [g.armR, g.armL, g.legR, g.legL]) { l.pu.bake(); l.pl.bake(); }
 
-  // gauntlets: white band, blue band, dark glove with finger definition
+  // GAUNTLETS. The forearm now tapers hard into a 0.090 wrist, so the cuff FLARES back
+  // out over it — a laced canvas bell, a lace band with brass eyelets, then a mitten with
+  // a real knuckle ridge and an opposed thumb. Hands are half of what makes a silhouette
+  // read as a man; a rounded stump at the end of a sleeve reads as a mannequin.
   for (const [arm, s] of [[g.armR, -1], [g.armL, 1]]) {
     const p = Part(arm.end);
-    p.add(xf(band(0.152, 0.05, 0.95, 14), 0, 0.062), trim);
-    p.add(fold(xf(band(0.147, 0.058, 0.95, 14), 0, 0.014), 0.010, 16, 0.74), cloth);
-    p.add(xf(new THREE.CylinderGeometry(0.142, 0.128, 0.07, 12), 0, -0.028), rubber);
-    p.add(xf(new THREE.TorusGeometry(0.140, 0.020, 5, 14).rotateX(Math.PI / 2), 0, -0.058), steel);
-    const palm = new THREE.CapsuleGeometry(0.096, 0.08, 5, 10);
-    palm.scale(1, 1, 0.78);
-    p.add(xf(palm, 0, -0.125, 0.01), rubber);
-    for (let i = 0; i < 4; i++) {                            // curled fingers
-      const fx = (-1.5 + i) * 0.048, bend = 0.55 + i * 0.08;
-      p.add(xf(new THREE.CapsuleGeometry(0.026, 0.075, 3, 6), fx, -0.222, 0.028, bend), rubber);
-      p.add(xf(new THREE.CapsuleGeometry(0.024, 0.055, 3, 6), fx, -0.252, 0.088, bend + 0.75), rubber);
-      p.add(xf(new THREE.SphereGeometry(0.021, 5, 4), fx, -0.238, 0.062), darkLeather);   // knuckle
+    // the cuff bell: canvas gathered up off the wrist and laced down
+    p.add(fold(lathe([
+      [0.090, 0.140], [0.112, 0.110], [0.140, 0.076], [0.152, 0.040], [0.150, 0.012], [0.126, -0.012], [0.114, -0.034]
+    ], 16), 0.010, 16, 0.74), cloth);
+    p.add(xf(new THREE.TorusGeometry(0.152, 0.016, 5, 16).rotateX(Math.PI / 2), 0, 0.040), trim);   // lace band
+    for (let i = 0; i < 6; i++) {                            // lace eyelets
+      const a = i / 6 * TAU;
+      p.add(xf(new THREE.SphereGeometry(0.013, 5, 4), Math.cos(a) * 0.153, 0.040, Math.sin(a) * 0.153), brass);
     }
-    p.add(xf(new THREE.CapsuleGeometry(0.031, 0.07, 3, 6), s * 0.088, -0.175, 0.05, 0.5, 0, s * 0.7), rubber);
+    p.add(xf(new THREE.TorusGeometry(0.126, 0.015, 5, 14).rotateX(Math.PI / 2), 0, -0.032), darkLeather);   // cuff welt
+    p.add(xf(new THREE.CylinderGeometry(0.120, 0.112, 0.05, 12), 0, -0.058), rubber);                       // glove mouth
+    // the mitten mass, cocked slightly forward as a relaxed hand hangs
+    const mitt = new THREE.CapsuleGeometry(0.100, 0.112, 6, 14);
+    mitt.scale(0.92, 1, 0.76);
+    p.add(xf(mitt, 0, -0.150, 0.020, 0.22), rubber);
+    for (let i = 0; i < 4; i++)                              // knuckle ridge across the back of the hand
+      p.add(xf(new THREE.SphereGeometry(0.030, 7, 6).scale(1, 0.80, 1), (-1.5 + i) * 0.046, -0.196, 0.050), rubber);
+    p.add(xf(new THREE.CapsuleGeometry(0.042, 0.142, 5, 10).rotateZ(Math.PI / 2), 0, -0.244, 0.038), rubber);   // curled fingers, one roll
+    p.add(xf(new THREE.CapsuleGeometry(0.033, 0.126, 4, 9).rotateZ(Math.PI / 2), 0, -0.282, 0.012), rubber);
+    // opposed thumb, outboard: two phalanges and a knuckle
+    p.add(xf(new THREE.CapsuleGeometry(0.036, 0.058, 4, 8), s * 0.080, -0.168, 0.048, 0.45, 0, s * 0.85), rubber);
+    p.add(xf(new THREE.CapsuleGeometry(0.030, 0.048, 4, 8), s * 0.100, -0.218, 0.076, 0.95, 0, s * 0.55), rubber);
+    p.add(xf(new THREE.SphereGeometry(0.027, 6, 5), s * 0.090, -0.198, 0.062), darkLeather);
     p.bake();
   }
 
-  // boots: blue sock cuff + white band, leather upper, dark toe cap and heel, thick sole
+  // BOOTS. The shank now tapers to a 0.112 ankle, so the boot flares back out over it:
+  // sock cuff, a lathed leather ankle flare, then a foot with actual form — a vamp, a
+  // domed toe box, a stacked heel block under a lead sole. The sole's underside stays at
+  // local y ~ -0.365: LIFT is derived against it to plant Sal on the collision floor.
   for (const leg of [g.legR, g.legL]) {
     const p = Part(leg.end);
-    p.add(fold(xf(band(0.192, 0.13, 0.95, 14), 0, -0.028), 0.012, 15, 0.74), cloth);
-    p.add(xf(band(0.197, 0.048, 0.95, 14), 0, 0.052), trim);
-    p.add(xf(new THREE.CylinderGeometry(0.185, 0.168, 0.14, 12), 0, -0.135), leather);
-    p.add(xf(new THREE.TorusGeometry(0.186, 0.024, 5, 14).rotateX(Math.PI / 2), 0, -0.072), darkLeather);
-    p.add(xf(new THREE.BoxGeometry(0.212, 0.20, 0.40), 0, -0.225, 0.045), leather);
+    p.add(fold(xf(band(0.128, 0.15, 0.95, 14), 0, -0.018), 0.011, 15, 0.74), cloth);
+    p.add(xf(band(0.134, 0.046, 0.95, 14), 0, 0.058), trim);
+    // Ankle flare: the boot's leather cuff opening out from the narrow ankle. A CLOSED
+    // solid, not an open lathe skirt — an open lathe here showed its back faces through
+    // the mouth and read as a lampshade hung round the leg.
+    p.add(xf(new THREE.CylinderGeometry(0.120, 0.170, 0.20, 14, 1).scale(1, 1, 0.96), 0, -0.095), leather);
+    p.add(xf(new THREE.TorusGeometry(0.168, 0.021, 6, 16).rotateX(Math.PI / 2).scale(1, 1, 0.96), 0, -0.176), darkLeather);
+    // vamp: the body of the foot, broader at the ball than at the ankle. These are
+    // WEIGHTED boots — a hundredweight of brass and lead between the two of them — so the
+    // foot has to out-mass the ankle by a lot or it reads as a slipper under a heavy leg.
+    const vamp = new THREE.CapsuleGeometry(0.120, 0.21, 6, 12).rotateX(Math.PI / 2);
+    vamp.scale(1.06, 0.90, 1);
+    p.add(xf(vamp, 0, -0.238, 0.070), leather);
     for (let i = 0; i < 4; i++) {                            // laces over the instep
-      p.add(xf(new THREE.CylinderGeometry(0.011, 0.011, 0.20, 5).rotateZ(Math.PI / 2), 0, -0.160 + i * 0.012, 0.05 + i * 0.055, 0.28, 0, 0), darkLeather);
-      p.add(xf(new THREE.SphereGeometry(0.016, 5, 4), 0.10, -0.160 + i * 0.012, 0.05 + i * 0.055), brass);
-      p.add(xf(new THREE.SphereGeometry(0.016, 5, 4), -0.10, -0.160 + i * 0.012, 0.05 + i * 0.055), brass);
+      p.add(xf(new THREE.CylinderGeometry(0.011, 0.011, 0.21, 5).rotateZ(Math.PI / 2), 0, -0.150 + i * 0.012, 0.05 + i * 0.054, 0.28, 0, 0), darkLeather);
+      for (const sx of [1, -1]) p.add(xf(new THREE.SphereGeometry(0.015, 5, 4), sx * 0.106, -0.150 + i * 0.012, 0.05 + i * 0.054), brass);
     }
-    p.add(xf(new THREE.BoxGeometry(0.238, 0.055, 0.075), 0, -0.245, 0.10), darkLeather);   // instep strap
-    p.add(xf(new THREE.BoxGeometry(0.06, 0.045, 0.02), 0.115, -0.245, 0.10), brass);
-    const toe = new THREE.SphereGeometry(0.115, 12, 8, 0, TAU, 0, Math.PI / 2);
-    toe.scale(0.95, 1.0, 1.25);
-    p.add(xf(toe, 0, -0.290, 0.20, Math.PI / 2), steel);                                  // dark metal toe cap
-    p.add(xf(new THREE.BoxGeometry(0.245, 0.075, 0.44), 0, -0.328, 0.05), rubber);         // thick sole
-    p.add(xf(new THREE.BoxGeometry(0.255, 0.05, 0.13), 0, -0.300, -0.145), steel);         // heel
-    rivetRing(p, brass, 10, 0.115, -0.328, 0.017, 1.9);
+    p.add(xf(new THREE.BoxGeometry(0.252, 0.052, 0.072), 0, -0.230, 0.105), darkLeather);   // instep strap
+    p.add(xf(new THREE.BoxGeometry(0.06, 0.045, 0.02), 0.124, -0.230, 0.105), brass);
+    const toe = new THREE.SphereGeometry(0.124, 12, 8);       // toe box: wider than it is tall
+    toe.scale(1.10, 0.80, 1.26);
+    p.add(xf(toe, 0, -0.244, 0.185), leather);
+    // toe RAND, not a capping sphere: a co-surfaced cap z-fought the toe box into a
+    // sawtooth. A band wrapped round the front of the box is the real detail anyway.
+    p.add(xf(new THREE.TorusGeometry(0.114, 0.021, 6, 16, Math.PI * 1.15).scale(1.14, 0.86, 1)
+      .rotateX(Math.PI / 2).rotateY(-Math.PI * 0.075), 0, -0.252, 0.200), steel);
+    p.add(xf(new THREE.BoxGeometry(0.210, 0.085, 0.150), 0, -0.306, -0.085), darkLeather);                // stacked heel block
+    p.add(xf(new THREE.BoxGeometry(0.250, 0.055, 0.46), 0, -0.328, 0.055), rubber);                       // thick sole
+    p.add(xf(new THREE.BoxGeometry(0.262, 0.026, 0.472), 0, -0.3505, 0.055), steel);                      // lead sole plate
+    rivetRing(p, brass, 10, 0.120, -0.3505, 0.016, 1.9);
     p.bake();
   }
 
