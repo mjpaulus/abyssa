@@ -4,6 +4,12 @@
 holds reference screenshots and judges against them. Tone: quiet dread, brass-age,
 dignified; never neon, never fireworks. The diver is named **Sal**.
 
+**HARD RULE (Michael, 2026-08-07): ALL assets are GENERATED — geometry, textures,
+sprites, audio, everything — authored procedurally in code by Claude. No downloaded
+models, no image files, no sample libraries. The bar does not drop because of this
+rule; it rises: procedural is the craft, not the excuse. (This retired the external
+Mark V helmet .glb plan — the helmet is generated now like everything else.)**
+
 ## Run / verify
 
 - Dev server: `python3 serve.py [port]` (no-store headers — plain http.server lets the
