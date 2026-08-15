@@ -482,6 +482,19 @@ let camSnap = false;
 // nobody complained about — is byte-identical to before.
 let camKick = 0, camKickPunch = 0;
 const CAM_BACK = 9, CAM_UP = 2.4;
+// ---- THE FEEL CHANNEL -------------------------------------------------------------
+// Every embodiment change so far lived in Sal's BODY, and Michael couldn't feel any of
+// it — because the player experiences the game through a critically-damped camera nine
+// units back, and that spring is a low-pass filter that erases surge and footfall
+// alike. Feel is transmitted through the camera or it is not transmitted at all.
+//   swim: the camera breathes with the stroke — an EMA tracks mean speed, and the
+//         camera pulls in on the kick's surge and drifts out through the coast.
+//   deck: each heel strike dips the eye a few centimetres with a fast recovery, so
+//         footfalls exist in the hands, not just in Sal's knees.
+// Millimetres, not screen shake — the game stays quiet. window.__feel A/Bs it live.
+let speedEMA = 0, camStepDip = 0;
+const FEEL = { on: true, surgeK: 1.35, stepDip: 0.05 };
+window.__feel = FEEL;
 
 // Walk the ray from the player out to the ideal camera spot and stop short of the
 // seafloor and of any boulder large enough to swallow the camera, so obstacles push
@@ -524,6 +537,19 @@ function updateCamera(dt, t, fwd) {
   // idle breathing drift so the frame is never perfectly locked
   camDesired.y += Math.sin(t * 0.7) * 0.09;
   camDesired.x += Math.sin(t * 0.43) * 0.07;
+
+  // feel channel: swim surge + deck footfall (see the block at the constants)
+  if (FEEL.on) {
+    const spd = player.vel.length();
+    speedEMA += (spd - speedEMA) * Math.min(1, 0.5 * dt);          // ~2s mean
+    if (!player.grounded && speedEMA > 1.5) {
+      // surge > 0 on the kick, < 0 in the coast; camera pulls in on the push
+      const surge = (spd - speedEMA) / Math.max(speedEMA, 1);
+      camDesired.addScaledVector(camBack, -FEEL.surgeK * clamp(surge, -0.6, 0.6));
+    }
+    camStepDip = Math.max(0, camStepDip - dt / 0.22);
+    camDesired.y -= FEEL.stepDip * camStepDip;
+  }
   // A critically-damped tracker sits damp*v/stiff behind its target, measured at 20.9 u
   // when the old thruster was at full chat — so the camera made the effect LESS visible
   // at exactly the moment it fired. Lead the spring by that amount and punch in, but
@@ -984,6 +1010,8 @@ function update(dt, t) {
   if (sc !== lastStepPhase) {
     lastStepPhase = sc;
     footstep();
+    // The eye feels the footfall on planks: a few centimetres of dip, fast recovery.
+    if (player.onDeck && FEEL.on) camStepDip = 1;
     // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
     // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
     // the sound and nothing else.

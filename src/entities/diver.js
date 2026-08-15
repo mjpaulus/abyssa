@@ -1150,7 +1150,12 @@ export function updateDiver(dt, t, player) {
   // relationship is stated rather than remembered.
   const stepRate = clamp(flat / STRIDE_U, 0, 2.1);
   walkP = (walkP + stepRate * dt) % 1;
-  swimP = (swimP + (0.24 + speed * 0.028) * dt) % 1;
+  // Stroke commitment: from a near-standstill with way coming on, the kick cycle
+  // spins up ~2.6x until the body reaches the speed the effort implies — pressing
+  // forward means a kick NOW, not a throttle fading in. At cruise the term is zero
+  // and the cadence is the shipped one.
+  const spinUp = 1 + 1.6 * clamp(1 - speed / 14, 0, 1) * clamp(flat * 0.4 + Math.abs(player.vel.y) * 0.2, 0, 1);
+  swimP = (swimP + (0.24 + speed * 0.028) * spinUp * dt) % 1;
   // Published to player.js, which shapes the forward thrust on swimP (the visible kick IS
   // the push) and lands the per-stride water resistance on walkP's heel strike. Two scalar
   // stores; no allocation, no new clock, no second source of truth.

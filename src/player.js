@@ -205,12 +205,16 @@ const STRIDE_DRAG = 0.048, STRIDE_DRAG_LIGHT = 0.040;
 const KICK_P = 0.55, KICK_W = 0.185;
 // integral of exp(-((p)/KICK_W)^2) over one cycle = KICK_W * sqrt(pi)
 const KICK_NORM = KICK_W * Math.sqrt(Math.PI);
-const KICK_DEPTH = 0.60;   // 0 = the old constant glide, 1 = pure impulse
+// 0.60 shipped first and Michael couldn't feel it — a ±27% swell over a whole kick
+// cycle is a tide, not a stroke. 0.88 drops the coast toward half the mean and makes
+// the snap a real SURGE. The camera now shows this (game.js swim-surge coupling).
+const KICK_DEPTH = 0.88;   // 0 = the old constant glide, 1 = pure impulse
 // Drag is QUADRATIC, so a thrust that is unit-mean in force is NOT unit-mean in speed:
 // the peaks are taxed harder than the coasts are rebated and the average drops. This is
 // the measured make-good (mean 16.39 -> 17.6 against the old constant 17.72), applied to
 // the whole pulse so the shape is untouched and only the average moves.
-const KICK_GAIN = 1.075;
+// Retuned for depth 0.88 (the deeper the pulse, the harder quadratic drag taxes it).
+const KICK_GAIN = 1.16;
 // Backwards and sideways are sculls, not strokes: a man in a Mark V can paddle himself
 // crabwise, slowly. Was 1.0 and 1.0 — indistinguishable from swimming forwards.
 // This is a FORCE fraction and the target is a SPEED fraction, and drag is quadratic, so
