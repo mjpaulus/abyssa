@@ -15,3 +15,4 @@ Michael's verdicts (2026-08-07): (1) "he can fall off from any side of the raft.
 
 ## Log
 - 2026-08-07 — cut from Michael's three oddities; single agent round on player.js/diver.js/davit.js with hard contracts
+- 2026-08-07 — shipped: (1) the bulwark is real — held at 4.36 on all rails with zero drift, the ladder bay is the one gap, Space no longer hops on deck, the davit purchase swung to starboard so the climb capsule is geometry-clean; (2) one walk law, two grounds — deck stops in 0.34u/0.55s, seabed 0.94-1.94u by dress fill (vented plants, full dress moon-walks), stride slip zeroed (ratio 0.999), top speed exactly 2.600 frame-rate independent; (3) swimming breathes — thrust pulses on the kick snap (±27% around a mean within 3% of shipped), banked turns (+6.7° into a sustained turn), back/strafe sculls at 55%. FEEL CHANGES FOR MICHAEL: scull speeds halved, deck hop removed, davit silhouette asymmetric, deck top +1.8%

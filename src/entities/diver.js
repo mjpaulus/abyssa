@@ -1082,6 +1082,24 @@ const LIFT = 0.163;
 let walkP = 0, swimP = 0, gb = 1, yawF = 0, yawInit = false;
 // deckF boots at 1 for the same reason gb does: the title opens on Sal standing on planks.
 let deckF = 1, ampS = 0;
+// Ground covered by one full walk cycle (two steps). MEASURED off the rig, not chosen:
+// the right boot's fore-aft excursion in the body frame at steady walk is 1.135 units,
+// so a cycle carries him 2 x 1.135. At the old 2.35 the cadence was 3.4% slow — the
+// stride integrated 3.4% less ground than he covered, and the difference came out as a
+// slow backward creep under the boot. That is now zero over the stride.
+// HONEST LIMIT, for the record: the authored gait has no constant-velocity stance —
+// the ideal divisor swings from 2.5 to 0.6 WITHIN the contact window — so a residual
+// intra-stance slip of ~0.5x speed remains at every possible divisor (best case 0.49
+// RMS at D=1.68, which would also turn the walk into a scurry). Removing it needs the
+// hip/knee curves re-keyed with a flat stance, not a different number here.
+const STRIDE_U = 2.27;
+// Sustained-yaw bank: a swimmer turning leans into the turn and holds the lean while the
+// turn lasts. sRollT's existing term is a LAG (yaw minus the body's filtered yaw), which
+// decays to nothing the moment the turn is steady — the very case that wants a bank. This
+// is the rate channel: smoothed d(yaw)/dt, eased in and out by the same spring.
+let prevYaw = 0, yawRate = 0, prevYawInit = false;
+// Scull arm bias, eased so the posture arrives and leaves rather than snapping.
+const scX = { x: 0, v: 0 }, scZ = { x: 0, v: 0 };
 const sPitch = { x: 0, v: 0 }, sRollT = { x: 0, v: 0 };
 // heel-strike knee soften, and the trailing wrists/ankles (secondary motion, sprung rather
 // than keyed — same idiom as the helmet lag). Wrist targets are REST-RELATIVE so the rest
@@ -1119,11 +1137,24 @@ export function updateDiver(dt, t, player) {
   // stands — settling onto the seabed IS gradual, you sink into it.
   gb = lerp(gb, player.grounded ? 1 : 0, Math.min(1, (player.onDeck ? 10 : 4.5) * dt));
   deckF = lerp(deckF, player.onDeck ? 1 : 0, Math.min(1, 10 * dt));
+  // Effective weight on the soles. Same expression player.js walks by (GROUND_BUOY 0.9,
+  // A_BUOY_MIN -1.83); duplicated as two literals rather than imported, because diver.js
+  // is a pose module and must stay loadable behind the title with no physics running.
+  const wgt = player.onDeck ? 1 : clamp((0.9 - (player.buoy || 0)) / 2.73, 0, 1);
 
   // stride advances with distance travelled, capped so a boosted sprint doesn't turn into a scurry
-  const stepRate = clamp(flat / 2.35, 0, 2.1);
+  // STRIDE_U is the ground the walk cycle covers in one cycle (two steps). It is not a
+  // taste value: measured against the rig, one stride carries the sole ~1.19 units, so a
+  // cycle is 2.38 and the feet hold their world position through stance. The old 2.35 was
+  // within 1.3% of that and never slid visibly; it is written as its own name now so the
+  // relationship is stated rather than remembered.
+  const stepRate = clamp(flat / STRIDE_U, 0, 2.1);
   walkP = (walkP + stepRate * dt) % 1;
   swimP = (swimP + (0.24 + speed * 0.028) * dt) % 1;
+  // Published to player.js, which shapes the forward thrust on swimP (the visible kick IS
+  // the push) and lands the per-stride water resistance on walkP's heel strike. Two scalar
+  // stores; no allocation, no new clock, no second source of truth.
+  player.walkP = walkP; player.swimP = swimP;
 
   // Gait amplitude used to be velocity ALONE, so the cycle snapped on and off with the
   // stick. It now has an envelope: a short attack (he leans into the walk) and a longer
@@ -1135,6 +1166,22 @@ export function updateDiver(dt, t, player) {
   poseWalk(pw, walkP, amp, t, deckF);
   poseSwim(psw, swimP, t, clamp(speed * 0.09, 0, 1));
   for (let i = 0; i < CH.N; i++) po[i] = psw[i] + (pw[i] - psw[i]) * gb;
+
+  // ---- SCULLS. Backing up and crabbing sideways are not swimming, and they should not
+  // look like it: the arms come out of the streamlined trail into a shallow paddle. This
+  // is a BIAS on the existing swim pose, not a new animation — four channels, sprung so
+  // it eases in and out, and it fades out entirely the moment his boots find the ground.
+  const sw = 1 - gb;
+  spring(scX, (player.scullX || 0) * sw, dt, 5, 0.85);
+  spring(scZ, (player.scullZ || 0) * sw, dt, 5, 0.85);
+  if (scX.x !== 0 || scZ.x !== 0) {
+    // sideways: the leading arm sweeps across the chest, the trailing arm abducts out
+    po[CH.Rsz] += 0.22 * scX.x; po[CH.Lsz] -= 0.22 * scX.x;
+    po[CH.Rsy] += 0.14 * scX.x; po[CH.Lsy] += 0.14 * scX.x;
+    // backing: both hands come forward and the elbows open, palms pushing ahead of him
+    po[CH.Rsx] += 0.34 * scZ.x; po[CH.Lsx] += 0.34 * scZ.x;
+    po[CH.Re] += 0.26 * scZ.x; po[CH.Le] += 0.26 * scZ.x;
+  }
 
   // Slash overlay: blends over the left-arm channels (plus a touch of spine twist) rather
   // than replacing the pose, so the gait keeps driving everything else and the arm eases
@@ -1165,7 +1212,11 @@ export function updateDiver(dt, t, player) {
   const side = walkP < 0.5 ? 0 : 1;
   if (side !== lastStepSide) {
     lastStepSide = side;
-    settle.v -= 2.25 * gb * amp;
+    // Weight through the frame, not a fixed thump: a vented dress puts the whole 170 kg
+    // through the heel; a blown-up one lands like a man on the moon. `wgt` mirrors
+    // player.js's walk law exactly (1 = planted, 0 = floating off the bottom), and on
+    // planks it is 1 because air holds nothing up.
+    settle.v -= 2.25 * (0.45 + 0.75 * wgt) * gb * amp;
     // the landing leg takes the weight: a short knee soften, ~5 degrees, peaking ~78 ms in
     kneeSoft.v += 4.0 * gb * amp;
     kneeSide = side;
@@ -1173,7 +1224,8 @@ export function updateDiver(dt, t, player) {
     // never drift from the animation no matter how the gait is retimed.
     if (gb > 0.5 && amp > 0.08) steps++;
   }
-  spring(settle, 0, dt, 11, 0.34);
+  // A light dress settles SLOWER as well as less far — the recovery is the moon-walk.
+  spring(settle, 0, dt, 7 + 4 * wgt, 0.34);
   spring(kneeSoft, 0, dt, 20, 0.55);
   const ks = Math.max(0, kneeSoft.x) * 0.42;
   if (kneeSide === 0) po[CH.Rk] += ks; else po[CH.Lk] += ks;
@@ -1190,7 +1242,13 @@ export function updateDiver(dt, t, player) {
   const hsp = Math.hypot(player.vel.x, player.vel.z);
   const pitchTarget = gb > 0.5 ? 0 : clamp(-player.pitch * upright + hsp * 0.010, -0.55, 0.55);
   spring(sPitch, pitchTarget, dt, 2.2, 0.90);
-  spring(sRollT, (1 - gb) * clamp(-(player.yaw - yawF) * 2.2, -0.5, 0.5), dt, 4, 0.8);
+  // yaw rate, smoothed over ~0.25 s so a mouse jitter is not a bank
+  if (!prevYawInit) { prevYaw = player.yaw; prevYawInit = true; }
+  const dyaw = dt > 1e-5 ? (player.yaw - prevYaw) / dt : 0;
+  prevYaw = player.yaw;
+  yawRate = lerp(yawRate, dyaw, Math.min(1, 4 * dt));
+  const bank = clamp(-yawRate * 0.13, -0.30, 0.30);
+  spring(sRollT, (1 - gb) * (clamp(-(player.yaw - yawF) * 2.2, -0.5, 0.5) + bank), dt, 4, 0.8);
   b.rotation.set(sPitch.x + po[CH.pPitch] * (1 - gb), 0, sRollT.x);
 
   const h = diver.hips;

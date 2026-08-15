@@ -54,8 +54,18 @@ export function buildDavit(group, mats) {
   // planted above 2.0 reads as headroom, not an obstruction. Below it, every member
   // in this file stays outside |x| 1.1 while it's inside that z band.
   const GATE_Y = 2.10, GATE_X = 1.20;
+  // THE CLIMB LINE. The boarding ladder hangs in the bulwark gap and player.js grabs it
+  // inside raft-local |x| < 1.2, z 4.2..5.9; a climbing man's helmet reaches ~2.5 above
+  // the deck top. That box is a NO-MEMBER volume for this file. It used to hold the
+  // tackle block, the hook, the fall's first leg, the shot line and the last stretch of
+  // both raked legs — Sal climbed up through his own gallows (user-reported: "the boom
+  // is in the way of the ladder"). Everything below is placed against these three lines.
+  const BAY_X = 1.20, BAY_Z0 = 4.20, BAY_Y = DECK_Y + 2.50;   // 2.61
   const FOOT = s => [s * 1.30, DECK_Y, 3.75];
-  const KNEE = s => [s * 1.25, GATE_Y + 0.05, 4.05];
+  // The knee is higher and a touch inboard-aft of its old place, so the jib leg has
+  // already climbed past 2.73 by the time it crosses z = 4.2 into the bay (was 2.38 —
+  // it went through a climber's chest).
+  const KNEE = s => [s * 1.25, 2.45, 3.90];
   const PEAK = [0, 3.35, 4.85]; // the knuckle: legs, jib and guys all resolve here
 
   // ---- legs: raked, gusseted, kinked at a knee knuckle ------------------------------
@@ -99,20 +109,24 @@ export function buildDavit(group, mats) {
   }
 
   // ---- tackle: heavy block, hook, becket, fall to a deck cleat ---------------------
+  // The whole purchase is swung to STARBOARD of the bay: a davit's tackle is swung off
+  // the man, not hung down his throat. TK_X clears BAY_X by the block's own half-width
+  // plus a hand's breadth, so nothing here re-enters the climb line at any height.
   {
-    const top = [0, 2.85, 4.85], mid = [0, 2.62, 4.85];
+    const TK_X = BAY_X + 0.25;
+    const top = [TK_X, 2.85, 4.85], mid = [TK_X, 2.62, 4.85];
     grime(strut(P, iron, PEAK[0], PEAK[1], PEAK[2], top[0], top[1], top[2], 0.030, 0.028));
     const becket = P.put(new THREE.TorusGeometry(0.05, 0.014, 4, 8), iron, top[0], top[1], top[2], Math.PI / 2);
     grime(becket);
     const block = P.put(new THREE.BoxGeometry(0.22, 0.34, 0.16), iron, mid[0], mid[1], mid[2]);
     grime(block);
     // the hook: a partial torus (kit's tor() has no arc param), open throat facing up
-    const hook = P.put(new THREE.TorusGeometry(0.085, 0.018, 5, 10, 4.2), iron, 0, 2.30, 4.85, Math.PI, 0, 0);
+    const hook = P.put(new THREE.TorusGeometry(0.085, 0.018, 5, 10, 4.2), iron, TK_X, 2.30, 4.85, Math.PI, 0, 0);
     grime(hook);
     // fall of rope: hangs from the block, ducks under the walk-lane gate the same way
     // the guys do, and belays to a horn cleat by the leg foot.
-    const gate = [GATE_X, GATE_Y, 3.90], cleatPos = [1.30, 0.20, 3.70];
-    ropeGrime(strut(P, ropeMat, 0, 2.28, 4.85, gate[0], gate[1], gate[2], 0.022));
+    const gate = [GATE_X + 0.15, GATE_Y, 3.90], cleatPos = [1.30, 0.20, 3.70];
+    ropeGrime(strut(P, ropeMat, TK_X, 2.28, 4.85, gate[0], gate[1], gate[2], 0.022));
     ropeGrime(strut(P, ropeMat, gate[0], gate[1], gate[2], cleatPos[0], cleatPos[1], cleatPos[2], 0.022));
     const cbase = P.put(new THREE.BoxGeometry(0.16, 0.05, 0.06), iron, cleatPos[0], cleatPos[1], cleatPos[2]);
     grime(cbase);
@@ -140,11 +154,13 @@ export function buildDavit(group, mats) {
 
   // ---- descent line: a shot line and lead weight into the water beside the ladder --
   {
-    const pts = [[0.70, 3.00, 4.92], [0.75, 0.50, 4.86], [0.80, -1.20, 4.80], [0.82, -2.50, 4.78]];
+    // Also swung starboard of the bay, alongside the tackle it hangs beside: at x 0.7 it
+    // ran straight down through the climb line for its whole length.
+    const pts = [[1.42, 3.02, 4.92], [1.47, 0.50, 4.86], [1.52, -1.20, 4.80], [1.55, -2.50, 4.78]];
     const c = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p)));
     const line = P.add(new THREE.TubeGeometry(c, 16, 0.028, 5, false), ropeMat);
     ropeWetGrime(line);
-    P.put(cyl(0.012, 0.06, 0.16, 8, false), lead, 0.82, -2.62, 4.78); // shot weight
+    P.put(cyl(0.012, 0.06, 0.16, 8, false), lead, 1.55, -2.62, 4.78); // shot weight
   }
 
   // ---- the anchor lantern: brass housing, caged glass, vent cowl, bail ------------
@@ -155,7 +171,9 @@ export function buildDavit(group, mats) {
   // Daylight sees brass; only close up at night does the slot of glass between the
   // ribs read as lit. That's what stops the bloom halo: geometry that occludes itself,
   // not a dimmer on the emissive (the orchestrator tunes bloom/glow separately).
-  const BR = [-0.40, 3.28, 4.60], TOP = [-0.55, 2.98, 4.50];
+  // Hung 0.12 higher than it was: its base cap sat 0.11 above the climb line's ceiling,
+  // which is not a margin, it is a coincidence. Now it clears a climbing helmet by 0.23.
+  const BR = [-0.40, 3.28, 4.60], TOP = [-0.55, 3.10, 4.50];
   grime(strut(P, iron, BR[0], BR[1], BR[2], TOP[0], TOP[1], TOP[2], 0.028, 0.024));
   const capY = TOP[1], cowlY = capY - 0.045, shoulderY = capY - 0.105, cageY = capY - 0.175, footY = capY - 0.255;
   P.put(cyl(0.05, 0.055, 0.04, 8, false), brass, TOP[0], capY, TOP[2]); // mount cap
