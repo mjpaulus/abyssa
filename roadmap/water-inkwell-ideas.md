@@ -1,5 +1,5 @@
 ---
-title: Water ideas from inkwell
+title: Surface water bar (inkwell + poseidon)
 status: backlog
 tags: water, reference
 updated: 2026-08-07
@@ -17,3 +17,4 @@ Constraints as always: no new render targets, bloom discipline, calm-noon anchor
 
 ## Log
 - 2026-08-07 — evaluated the repo at Michael's ask; adoption declined, ideas harvested ("add to backlog... if you have some ideas to push closer to it")
+- 2026-08-07 — second reference: https://github.com/owenyuwono/poseidon ("This is amazing" — Michael, with a storm screenshot). Same wall: WebGPU-only Tessendorf FFT, TSL, no WebGL fallback. NEW harvest from his screenshot: (1) CHOPPY horizontal displacement — steep-fronted waves from crowding vertices toward crests (Gerstner-style term on our analytic field; the CPU height mirror in water.js surfaceHeightAt MUST mirror it or the raft/camera/refraction part ways with the mesh); (2) TEXTURED foam with build/decay off the Jacobian (fold-born, lingering, streaking — upgrades the flat whitecap term); (3) foam texture procedural per the all-generated rule. Plan when Michael returns to surface water: the WebGL "poseidon look" pass first (~70% of the screenshot), then, if his eye wants the true spectrum motion, the WebGPU migration becomes a named project-defining decision.
