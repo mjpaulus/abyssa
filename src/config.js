@@ -374,6 +374,65 @@ export const GLASS = {
     decayH: 60
   },
 
+  // --- THE CHOP (surface water bar: Gerstner displacement, Jacobian foam, backlit
+  // crests). All of it is pushed into uniforms by updateWater every frame, so every
+  // number here is live-pokeable from the console (GLASS.chop.k = 2.2 etc).
+  //
+  // THE ANCHOR: `k` multiplies max(smoothstep(storm,0,0.9), windSpeed), so at storm 0
+  // wind 0 the choppiness is EXACTLY zero — the horizontal displacement vanishes, the
+  // Jacobian is the identity, det = 1, and the whole apparatus collapses to the shipped
+  // vertical-only field, bit-for-bit, in the shader AND in surfaceHeightAt.
+  chop: {
+    // Gerstner choppiness. The no-self-intersection bound is sum(k_i * A_i) * chop < 1;
+    // at full storm that sum is 0.406, so the loop-free ceiling is ~2.46. 1.55 spends
+    // ~63% of it: the fronts steepen hard and the backs stretch, without the field ever
+    // folding through itself (a folded Gerstner surface renders as a shattered mirror
+    // and breaks the height mirror's fixed point at the same time).
+    k: 1.55,
+    // FOAM BIRTH. The determinant of (I + dD/dp) is 1 on undisturbed water and falls
+    // below 1 exactly where the surface crowds. Foam starts at foamThr and is full
+    // foamSoft below it. 0.86/0.34 puts foam on the steep FACE of a front rather than
+    // on its top, which is where Michael's poseidon frames put it.
+    // Tuned live in a full gale from 20 u up. 0.86 fired over ~90% of the surface (the
+    // determinant swings about 1 by ~0.8 at this choppiness, and the three lagged samples
+    // are max-combined on top) and the sea rendered as a white sheet; 0.65 puts foam on
+    // the folds and leaves the troughs green. Measured sea-band brightness against
+    // foam-off: 0.86 = +21.8 code values, 0.70 = +9.1, 0.65 = ~+6, 0.55 = +3.4.
+    foamThr: 0.65,
+    foamSoft: 0.24,
+    foamK: 1.00,          // master foam strength (colour is clamped separately, see below)
+    // FOAM PERSISTENCE, in seconds. Foam is a temporal state and this sea has no render
+    // target to keep it in — so it is recovered ANALYTICALLY. A Gerstner field is a
+    // LAGRANGIAN description: the parameter point p labels a water PARTICLE, and every
+    // component's phase at time t-tau is sin(q)cos(w*tau) - cos(q)sin(w*tau) off values
+    // the fragment already has. Three lagged evaluations of the compression therefore
+    // cost three multiply-adds per component and tell you, exactly, whether THIS PARCEL
+    // folded recently. No ping-pong RT, no state, no history texture.
+    foamDecay: 2.9,       // e-folding time of the lagged weights; lags are 1.35 s apart
+    // How much lingering foam there is against freshly-born foam. 1.0 is "the wake of a
+    // fold is as white as the fold"; lower it and foam becomes a flash on the break again.
+    foamLagK: 0.85,
+    // THE OLD WIND-STREAK BLOCK, kept at its shipped strength (1.0) and given a knob.
+    // It paints straight unbroken bands along WAVE[0]'s fixed 20-degree bearing whether
+    // or not the water there is folding — which is the same job the Jacobian foam now
+    // does properly, and from height in a gale the two together read as corduroy under
+    // lace. A MICHAEL DECISION, not the agent's: 0 hands the gale entirely to the
+    // fold-born foam. Screenshots of both are on the card.
+    streakLegacy: 1.0,
+    // FOAM TEXTURE. Value-noise octaves in the existing vn() style, advected downwind and
+    // stretched ALONG the wind as it rises, so foam becomes streaks in a gale instead of
+    // blobs. texScale is cells per world unit; streakK is the along-wind stretch at wind 1.
+    // 0.42/5.0 was authored blind and read as fog patches from height: 2.4 u cells
+    // stretched 5.5x are a smear, not foam. 1.2/2.5 gives 0.83 u cells stretched 3.2x at
+    // wind 0.9 — fine enough to tear into lace along a crest, long enough to say wind.
+    texScale: 1.2,
+    streakK: 2.5,
+    // BACKLIT CREST SCATTER. Green-teal light transmitted through a thin crest when the
+    // sun is low and beyond it. scatterPow is the view/sun lobe tightness.
+    scatterK: 1.00,
+    scatterPow: 5.0
+  },
+
   // --- RAIN. Two systems, one entry.
   //
   // SPLASH (water.js, air side only): the sea's own drop-strike field. The shipped
