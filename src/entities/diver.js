@@ -3,6 +3,10 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
+// The deck is a MOVING GROUND. A stance anchor claimed on planks is stored relative to
+// raft.position so it heaves and surges with the boat; a world-space anchor would leave
+// the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
+import { raft } from '../systems/raft.js';
 import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
 
@@ -956,6 +960,20 @@ const ARM_LAG = 0.045;     // arms trail the opposing leg on top of their own 0.
 
 // tanh(2.2) — normalises the weight-shift clip so the shift still reaches +/-1
 const TANH22 = 0.975743;
+let breathPh = 0;
+
+// Per-kick asymmetry, redrawn on every wrap of the swim clock. THE TWO LEGS OF A FROG
+// KICK ARE NEVER TWINS: one knee comes up further, one snaps a beat earlier, one foot
+// sweeps wider. The old pose had a single hard-coded 0.03 phase offset, which is
+// symmetry with a constant added to it — the eye reads that as one leg and its mirror.
+let kAmpR = 1, kAmpL = 1, kPhL = 0.03, kAbdR = 1, kAbdL = 1, kickIdx = 0;
+function drawKick(i) {
+  kAmpR = 1 + 0.075 * sSym(i, 21);
+  kAmpL = 1 + 0.075 * sSym(i, 22);
+  kPhL = 0.030 + 0.026 * sSym(i, 23);      // the left knee snaps up to 55 ms off the right
+  kAbdR = 1 + 0.13 * sSym(i, 24);
+  kAbdL = 1 + 0.13 * sSym(i, 25);
+}
 
 function poseWalk(o, p, a, t, deck) {
   const idle = 1 - a;                                        // at a standstill every cyclic term falls away
@@ -970,7 +988,10 @@ function poseWalk(o, p, a, t, deck) {
   // deterministic function of t — never Math.random(), which would make the turn
   // frame-rate dependent and unrepeatable between sessions.
   const wob = Math.sin(t * 0.47);
-  const brS = Math.sin(t * 0.90);                            // ~8.6 breaths a minute
+  // Breathing DRIFTS. A fixed 0.90 rad/s was a metronome in his chest — the one idle
+  // signal you can watch for thirty seconds, and it never varied by a millisecond. The
+  // rate now wanders +/-13% on a ~80 s period, integrated as a phase so it never jumps.
+  const brS = Math.sin(breathPh);                            // ~8.6 breaths a minute, wandering
   const wsh = Math.tanh(2.2 * Math.sin(t * 0.21)) / TANH22;  // +1 = weight on his left foot
   const look = 0.30 * ss(0.88, 1, Math.sin(t * 0.137)) - 0.26 * ss(0.88, 1, Math.sin(t * 0.0912 + 2.1));
   const dk = deck * idle, sw = (1 - deck) * idle;
@@ -1022,10 +1043,11 @@ function poseSwim(o, p, t, drive) {
   o[CH.sRoll] = Math.sin(t * 0.58) * 0.07;
   o[CH.nYaw] = Math.sin(t * 0.33) * 0.06; o[CH.nPitch] = -0.06;
   const k = 0.45 + 0.55 * drive;
-  o[CH.Rhx] = -S.hip(pk) * k; o[CH.Rhz] = 0.06 + S.abd(pk) * k;
-  o[CH.Rk] = S.knee(pk) * k; o[CH.Ra] = S.ankle(pk) * k;
-  o[CH.Lhx] = -S.hip(pk + 0.03) * k; o[CH.Lhz] = 0.06 + S.abd(pk + 0.03) * k;   // slight asymmetry
-  o[CH.Lk] = S.knee(pk + 0.03) * k; o[CH.La] = S.ankle(pk + 0.03) * k;
+  const kr = k * kAmpR, kl = k * kAmpL, pl = pk + kPhL;
+  o[CH.Rhx] = -S.hip(pk) * kr; o[CH.Rhz] = 0.06 + S.abd(pk) * kr * kAbdR;
+  o[CH.Rk] = S.knee(pk) * kr; o[CH.Ra] = S.ankle(pk) * kr;
+  o[CH.Lhx] = -S.hip(pl) * kl; o[CH.Lhz] = 0.06 + S.abd(pl) * kl * kAbdL;
+  o[CH.Lk] = S.knee(pl) * kl; o[CH.La] = S.ankle(pl) * kl;
   // arms on the delayed clock: they answer the roll the torso had a third of a second ago
   o[CH.Rsx] = -0.42 - dragS(td * 0.8) * 0.10; o[CH.Rsz] = 0.34; o[CH.Rsy] = -0.22;
   o[CH.Re] = -(0.85 + dragS(td * 0.8 + 0.6) * 0.10);
@@ -1092,7 +1114,245 @@ let deckF = 1, ampS = 0;
 // intra-stance slip of ~0.5x speed remains at every possible divisor (best case 0.49
 // RMS at D=1.68, which would also turn the walk into a scurry). Removing it needs the
 // hip/knee curves re-keyed with a flat stance, not a different number here.
-const STRIDE_U = 2.27;
+// Re-derived, not retuned. The stance span DUTY * STRIDE_U is the ground one boot must
+// hold, and the pendulum above can only reach 0.56 either side of the hip. 2.00 fits that
+// with margin. It costs 16% cadence against the old 2.27 (2.67 steps/s at top speed,
+// was 2.29) — the honest price of feet that no longer cheat, paid once.
+const STRIDE_U = 1.95;
+
+// ===========================================================================
+// FOOT PLANTING — the structural answer to "the movements aren't real".
+//
+// The gait above is curve-keyed FK: the legs swing through authored poses while the root
+// slides underneath, and NOTHING makes the planted boot stick. Measured intra-stance slip
+// at the best possible STRIDE_U was ~0.5x walk speed (~1.3 u per stance) — the tell the
+// eye catches even when it can't name it.
+//
+// What follows nails the stance foot to a WORLD anchor and solves the leg to it. The
+// authored curves survive: they still drive the swing (they're good in the air) and they
+// still drive everything above the pelvis. What changed is who is boss during contact —
+// the ground is, and the hip/knee/ankle bend to obey it.
+// ===========================================================================
+
+// Read off the rig, not chosen: limb(hips, +/-0.225, 0, 0.562, 0.465, ...) below, and the
+// boot's lead sole plate sits at local y = -0.3505 in the ankle frame.
+const UP_L = 0.562, LO_L = 0.465, HIP_X = 0.225;
+// MEASURED off the rig, not read off the source: the lead sole plate's UNDERSIDE is at
+// -0.3665 in the ankle frame (the -0.3505 in the boot builder is that plate's centre).
+// The 16 mm matters — it is the difference between a boot on the planks and a boot in
+// them.
+const SOLE_Y = -0.3665;
+const EYE_H = 1.35;                 // player.js's own constant: pos.y - EYE_H is the floor
+// Duty factor: the fraction of one cycle a foot spends on the ground. 0.56 puts 6% of the
+// cycle in double support, which is what a slow, heavy walk actually does. Stance for the
+// right foot is [0, DUTY); heel strikes stay at walkP 0 and 0.5 so stepCount() is untouched.
+const DUTY = 0.56;
+// Roll-through windows within stance, and the foot's absolute pitch at each.
+const HS_END = 0.10, HO_START = 0.74;
+const TH_STRIKE = -0.30, TH_OFF = 0.62;
+const CZ_HEEL = -0.125, CZ_FLAT = 0.02, CZ_BALL = 0.21;
+
+// THE INVERTED PENDULUM — and the thing the sliding feet were hiding all along.
+//
+// With the feet nailed, the leg has to actually REACH the anchor, and the rig's rest pose
+// stands on straight legs: hip to ankle is 1.018 against a 1.027 leg, 99% extension. The
+// first build of this clamped against its own reach the moment the foot got 0.2 behind
+// the hip, released the anchor early and crept — measured 0.10 u of drift per stance. No
+// amount of solver work fixes that; it is geometry.
+//
+// A walk is a vaulting pendulum: the pelvis is HIGHEST over the planted foot at mid-stance
+// and LOWEST at double support, and the size of that dip is exactly what buys the stride.
+// W.bob is already that shape at already-nearly-the-right size — it was simply scaled down
+// by gait amplitude and then ignored, because nothing depended on it. Now everything does:
+//   PEND_M scales the pelvis dip to what the reach arithmetic demands,
+//   IK_DROP sets the mean so the pendulum's PEAK sits just under full extension,
+//   STRIDE_U is then whatever fits in the trough.
+// Solved, not tuned, and the binding case is TOE-OFF (walkP 0.5, where W.bob's dip is
+// the shallower of its two): peak V = 1.005 gives a 17 deg knee at mid-stance, the
+// toe-off trough V = 0.868 admits a foot 0.52 behind the hip, and the reach clamp is
+// never touched in a steady walk.
+// The visible consequence is the point: he now RISES AND FALLS as he walks, over each
+// boot in turn, which is what a hundredweight of lead moving on two legs looks like.
+// IK_DROP_IDLE is not a style choice either. player.js's collision floor is pos.y - 1.35,
+// but the rig standing on straight legs only reaches pos.y - 1.313: the shipped rest pose
+// has Sal's boots hanging 37 mm ABOVE the deck, at full leg extension, and has always
+// had. FK never noticed because nothing asked it to touch anything. The IK does ask, so
+// the pelvis comes down 47 mm — which both puts the soles on the planks and buys the idle
+// stance a soft knee instead of a locked one. He stands 58 mm lower than he shipped.
+const PEND_M = 1.60;
+const IK_DROP_IDLE = 0.058;
+const IK_DROP = 0.114;
+
+// Deterministic per-step variation. mulberry32's mixer, but STATELESS — keyed on (step
+// index, channel) so any step's draws are reproducible from its index alone and two legs
+// asking for the same step get the same numbers. NOTHING IS CLOCKWORK, but nothing here
+// is random either: the same walk replays identically every session.
+function sHash(i, c) {
+  let s = (Math.imul(i, 0x9e3779b1) ^ Math.imul(c + 1, 0x85ebca6b)) | 0;
+  s = (s + 0x6d2b79f5) | 0;
+  let t = Math.imul(s ^ (s >>> 15), 1 | s);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+const sSym = (i, c) => sHash(i, c) * 2 - 1;      // -1..1
+
+// ---- two-bone analytic IK ----
+// The chain is root.rotation = (hx, 0, hz) [three's XYZ order => Rx*Ry*Rz] and
+// mid.rotation.x = k, so the ankle offset from the hip is
+//     d = Rx(hx) * Rz(hz) * ( (0,-up,0) + Rx(k)*(0,-lo,0) )
+// The bracket q always has q.x = 0, so |q| = D is the law of cosines in k alone, hz falls
+// straight out of d.x, and hx is a single 2-D rotation fit. Exact, branchless, allocation
+// free, and it inverts the forward pose exactly (IK(FK(p)) === p) — which is what lets the
+// same code path drive both stance and swing with no seam between them.
+const _ik = new Float32Array(3);                  // hx, hz, k
+// The solver's clamp is the TRUE anatomical limit, a hair short of locked. It is NOT the
+// place to enforce style: an earlier 0.985 here also rewrote poses the IK was not even
+// driving — the frog kick's long glide reaches 1.011 between the hip and ankle, and the
+// clamp was folding both knees to a matched 20 deg and quietly deleting the per-kick
+// asymmetry. The "never lock the knee" margin belongs in the pendulum budget above, which
+// is where the stance target is generated, not in the round trip that must reproduce an
+// authored pose exactly.
+const REACH_MAX = (UP_L + LO_L) * 0.9995, REACH_MIN = 0.30;
+let ikClamped = 0, ikOver = 0;                    // 1 / by how much the last solve shortened d
+function solveLeg(dx, dy, dz) {
+  let D = Math.hypot(dx, dy, dz);
+  ikClamped = 0; ikOver = 0;
+  if (D > REACH_MAX) { ikOver = D - REACH_MAX; const s = REACH_MAX / D; dx *= s; dy *= s; dz *= s; D = REACH_MAX; ikClamped = 1; }
+  else if (D < REACH_MIN) { const s = REACH_MIN / (D || 1e-6); dx *= s; dy *= s; dz *= s; D = REACH_MIN; ikClamped = 1; }
+  const ck = clamp((D * D - UP_L * UP_L - LO_L * LO_L) / (2 * UP_L * LO_L), -1, 1);
+  const k = Math.acos(ck);
+  const qy = -(UP_L + LO_L * ck), qz = -LO_L * Math.sin(k), m = -qy;
+  const sh = clamp(dx / m, -0.985, 0.985);
+  const chz = Math.sqrt(1 - sh * sh);
+  let hx = Math.atan2(dz, dy) - Math.atan2(qz, qy * chz);
+  if (hx > Math.PI) hx -= TAU; else if (hx < -Math.PI) hx += TAU;
+  _ik[0] = hx; _ik[1] = Math.asin(sh); _ik[2] = k;
+}
+// The same chain forwards, used to read the authored curves' ankle position.
+function fkAnkle(hx, hz, k, out) {
+  const qy = -(UP_L + LO_L * Math.cos(k)), qz = -LO_L * Math.sin(k);
+  const sh = Math.sin(hz), chz = Math.cos(hz);
+  const y0 = qy * chz, cx = Math.cos(hx), sx = Math.sin(hx);
+  return out.set(-qy * sh, y0 * cx - qz * sx, y0 * sx + qz * cx);
+}
+// Where the ankle joint must sit for a given contact point and foot pitch. The contact
+// point stays nailed; the ankle rises and eases forward across heel-off exactly as a real
+// ankle does when the foot rolls over the ball. Total ankle excursion through a whole
+// stance is ~0.05 u vertical / ~0.07 u fore-aft, and DEAD ZERO across the flat window.
+function ankleOverContact(th, cz, out) {
+  const c = Math.cos(th), s = Math.sin(th);
+  return out.set(0, -(SOLE_Y * c - cz * s), -(SOLE_Y * s + cz * c));
+}
+
+// ---- per-foot anchor state ----
+// A foot in stance owns an anchor: a CONTACT POINT expressed in its ground's frame. On
+// planks that frame is raft.position (translation only — player.js's deck collision is a
+// flat plane at raft.position.y + DECK_TOP and ignores the boat's roll, so honouring the
+// roll here would slide the feet against the body he actually stands with). On the seabed
+// the frame is the world and the height is frozen at the moment of the plant, which is
+// what makes a step onto a slope keep its own level instead of dragging.
+function foot() {
+  return {
+    planted: false, deck: false, seed: false, step: 0,
+    ax: 0, ay: 0, az: 0,           // contact point in the ground frame
+    duty: DUTY, stride: 1, lat: 0, // this step's variation draws
+    slip: 0,                       // accumulated travel through the flat window (the probe)
+    wx: 0, wy: 0, wz: 0            // last resolved world contact (probe + re-plant seed)
+  };
+}
+const ftR = foot(), ftL = foot();
+let stepSeq = 0;                   // monotonic plant index; seeds every per-step draw
+let strideK = 1;                   // the live step's stride multiplier, read by the clock
+
+// ---- gait state machine: transitions are EVENTS, not fades ----
+// 0 = standing, 1 = start lean (anticipation), 2 = walking, 3 = catch step (stopping).
+let gaitState = 0, gaitT = 0, catchFrom = 0, catchTo = 0;
+const START_LEAN = 0.15, CATCH_DUR = 0.30;
+const leanP = { x: 0, v: 0 };      // body pitch for lean/catch, in radians
+let bankG = 0;                     // grounded bank into a turn
+let prevGrounded = true, landImp = 0;
+
+const _mH = new THREE.Matrix4(), _mHi = new THREE.Matrix4();
+const _vA = V3(), _vB = V3(), _vC = V3(), _vD = V3();
+// Live probe surface for the slip test — game.js never reads it, but the browser can.
+export const ikDebug = { slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0 };
+
+// ===========================================================================
+// COMPLIANCE — the spring-driven skeleton.
+//
+// Michael: "he just feels a little robotic." The cause is that every joint WAS its
+// authored pose, exactly and instantly: zero compliance anywhere in the body, so a turn
+// or a stop arrives at all 27 channels on the same frame. Real mass cannot do that.
+//
+// Every composed channel now passes through its own semi-implicit spring before it
+// reaches a joint — the same integrator the helmet lag has always used, which is the
+// reference feel, applied to the whole skeleton. Frequencies are keyed to LIMB MASS:
+// the pelvis and torso are slow and stiff, the shanks and elbows quick, and the distal
+// joints are deliberately UNDER-damped (0.76-0.85) so a hard stop over-travels a few
+// degrees and settles, and momentum ripples shoulder -> elbow -> wrist with real lag at
+// each link. This is partial ragdoll, not ragdoll: nothing here is free to fall, every
+// spring converges exactly on its authored target, and at a standstill the rest pose is
+// bit-identical to the authored one.
+//
+// TWO EXCEPTIONS, both load-bearing:
+//  - THE PLANTED LEG. A stance foot must satisfy its anchor EXACTLY or the whole slip
+//    contract smears back to where it was. The springs are computed for every leg channel
+//    but blended out by the stance weight, so the swing leg is fully compliant and the
+//    planted leg is not compliant at all.
+//  - THE SLASHING ARM. game.js checks the hit at t+0.22s, so the blade has to be exactly
+//    where the animation says at that instant. The left arm's four channels are BYPASSED
+//    for the duration of the swing. Stiffening them 3x was tried first and measured: at
+//    3 x 21 = 63 rad/s the semi-implicit integrator sits at w*h ~ 1.05 and RANG, the blade
+//    tip alternating 0.8 u frame to frame through contact. The spring state keeps tracking
+//    the pose while bypassed, so it re-engages without a step. The slash is authored with
+//    its own eases (easeSeg) and does not need borrowed compliance.
+// Underwater every frequency drops 30% — water damps a limb, and the same table run wet
+// and dry is one of the reasons the swim and the walk used to feel like the same man.
+const SPF = new Float32Array(CH.N), SPD = new Float32Array(CH.N);
+{
+  const set = (list, f, d) => { for (const c of list) { SPF[c] = f; SPD[c] = d; } };
+  // ROOT TRANSLATION IS EXEMPT (freq 0 = pass through). It looked like the obvious place
+  // to start, and it was the one place compliance must not go: the pelvis dip is not a
+  // stylistic bob, it is the inverted pendulum the leg's REACH is budgeted against. A
+  // spring at 26 rad/s took 27% off it at walking cadence and shifted its phase, which
+  // starved the stance leg and pinned it against the reach clamp for a third of every
+  // step — measured, and the reason the knee locked straight through late stance.
+  set([CH.bobY, CH.shiftX, CH.shiftZ], 0, 1);
+  set([CH.pYaw, CH.pRoll, CH.pPitch], 18, 0.92);               // pelvis: heavy, slow, stiff
+  set([CH.sYaw, CH.sPitch, CH.sRoll], 13, 0.88);               // torso in a corselet
+  set([CH.nYaw, CH.nPitch], 9, 0.80);                          // head (helmet lag rides on top)
+  set([CH.Rhx, CH.Rhz, CH.Lhx, CH.Lhz], 22, 0.90);             // thighs
+  set([CH.Rk, CH.Lk], 28, 0.85);                               // shanks
+  set([CH.Ra, CH.La], 34, 0.82);                               // feet (was the old ankle spring)
+  set([CH.Rsx, CH.Rsz, CH.Rsy, CH.Lsx, CH.Lsz, CH.Lsy], 19, 0.80);   // upper arms
+  set([CH.Re, CH.Le], 21, 0.76);                               // forearms: the loosest link
+}
+const spx = new Float32Array(CH.N), spv = new Float32Array(CH.N);
+let spInit = false;
+// Integrate the whole table in one pass. `stiff` is the per-channel multiplier the slash
+// window raises; `wet` scales every frequency for the water.
+function compliance(dst, src, dt, wet, slashW) {
+  const h = Math.min(dt, 0.022);
+  if (!spInit) { spInit = true; for (let i = 0; i < CH.N; i++) { spx[i] = src[i]; spv[i] = 0; } }
+  // Stability ceiling on the integrator. Semi-implicit Euler goes unstable as w*h
+  // approaches 2 and rings visibly well before that; 0.55/h keeps every channel inside
+  // the well-behaved band even when a stalled frame pushes h to its 22 ms clamp.
+  const fMax = 0.55 / h;
+  for (let i = 0; i < CH.N; i++) {
+    const bypass = SPF[i] === 0 ||
+      (slashW > 0 && (i === CH.Lsx || i === CH.Lsy || i === CH.Lsz || i === CH.Le));
+    if (bypass) { spx[i] = dst[i] = src[i]; spv[i] = 0; continue; }
+    let f = Math.min(SPF[i] * wet, fMax);
+    const d = src[i] - spx[i];
+    // A respawn or a zone teleport can move a channel by radians in one frame; snapping
+    // there costs one frame of compliance and saves a visible whip through the pose.
+    if (d > 1.6 || d < -1.6) { spx[i] = src[i]; spv[i] = 0; dst[i] = src[i]; continue; }
+    spv[i] += (f * f * d - 2 * SPD[i] * f * spv[i]) * h;
+    spx[i] += spv[i] * h;
+    dst[i] = spx[i];
+  }
+}
+const pc = new Float32Array(CH.N);   // the composed pose AFTER compliance
 // Sustained-yaw bank: a swimmer turning leans into the turn and holds the lean while the
 // turn lasts. sRollT's existing term is a LAG (yaw minus the body's filtered yaw), which
 // decays to nothing the moment the turn is steady — the very case that wants a bank. This
@@ -1107,8 +1367,10 @@ const sPitch = { x: 0, v: 0 }, sRollT = { x: 0, v: 0 };
 const kneeSoft = { x: 0, v: 0 };
 let kneeSide = 0;
 const wrR = { x: 0, v: 0 }, wrL = { x: 0, v: 0 };
-const ankR = { x: 0, v: 0 }, ankL = { x: 0, v: 0 };
 const REST_RE = -0.44, REST_LE = -0.20;
+// The ankles' own spring is gone: the compliance table's Ra/La channels (34 / 0.82) are
+// the same integrator at the same numbers, and running both would have put two lags in
+// series on the one joint the IK needs to place precisely.
 
 const lnX = { x: 0, v: 0 }, lnZ = { x: 0, v: 0 };
 const hdY = { x: 0, v: 0 }, hdX = { x: 0, v: 0 };
@@ -1119,6 +1381,211 @@ let lastStepSide = 0;
 // sync with the animation, instead of guessing the cadence from a fixed frequency.
 let steps = 0;
 export function stepCount() { return steps; }
+
+// Channel index triples per leg, so driveLegs can run one body of code twice with no
+// branching on side and no array literal per frame.
+const LEG_CH = [
+  [CH.Rhx, CH.Rhz, CH.Rk, CH.Ra, -1],    // right: root.rotation.z = -pc[Rhz]
+  [CH.Lhx, CH.Lhz, CH.Lk, CH.La, 1]
+];
+
+// The stance roll-through: absolute foot pitch and the point of the sole in contact,
+// as a function of progress through this foot's stance. Heel strikes, slaps flat, sits
+// flat for two thirds of the contact, then breaks at the heel and rolls over the ball.
+// Written into _vA.x/_vA.y purely to avoid a return allocation.
+function rollThrough(u, out) {
+  let th, cz;
+  if (u < HS_END) {
+    const q = u / HS_END, e = q * q * (3 - 2 * q);
+    th = TH_STRIKE * (1 - e); cz = CZ_HEEL + (CZ_FLAT - CZ_HEEL) * e;
+  } else if (u < HO_START) {
+    th = 0; cz = CZ_FLAT;
+  } else {
+    const q = (u - HO_START) / (1 - HO_START), e = q * q * (3 - 2 * q);
+    th = TH_OFF * q * q;                                  // the heel breaks slowly, then goes
+    cz = CZ_FLAT + (CZ_BALL - CZ_FLAT) * e;
+  }
+  return out.set(th, cz, 0);
+}
+
+// ---- the ground is boss ----
+function driveLegs(dt, player, ikOn, amp, stepRate) {
+  const legs = [diver.legR, diver.legL], fts = [ftR, ftL];
+
+  // The hips' world matrix, composed by hand from the three transforms we just wrote.
+  // Everything above the pelvis is authored and already final, so this is exact — and it
+  // costs three matrix composes rather than a walk of the whole 40k-tri hierarchy.
+  diver.updateMatrix(); diver.body.updateMatrix(); diver.hips.updateMatrix();
+  _mH.multiplyMatrices(diver.matrix, diver.body.matrix).multiply(diver.hips.matrix);
+  _mHi.copy(_mH).invert();
+
+  // The ground under the soles, and the FRAME the anchors live in. On planks that frame
+  // is raft.position: player.js pins pos.y rigidly to raft.position.y + DECK_TOP and
+  // ignores the boat's roll, so anchors that tracked the roll would slide against the
+  // very body he is standing with. Translation is the honest frame here — he heaves and
+  // surges with the boat, which is the part the eye reads.
+  const onDeck = !!player.onDeck;
+  const soleY = (player.grounded ? player.pos.y : player.groundY) - EYE_H;
+  const ox = onDeck ? raft.position.x : 0, oy = onDeck ? raft.position.y : 0, oz = onDeck ? raft.position.z : 0;
+  const cy = Math.cos(yawF), sy = Math.sin(yawF);
+
+  // Landing. The knees can genuinely absorb now — the feet are pinned and the pelvis is
+  // free to drop between them — so a drop to the seabed gets a real impulse instead of a
+  // cosmetic dip, and both boots re-find the ground on contact rather than blending to it.
+  if (player.grounded && !prevGrounded) {
+    const hit = clamp(-player.vel.y * 0.55, 0, 4.2);
+    settle.v -= 1.2 + hit;
+    landImp = hit;
+    ftR.planted = ftL.planted = false;
+  }
+  prevGrounded = !!player.grounded;
+
+  // Standing: the phase clock is stopped, so stance/swing is meaningless. Both boots stay
+  // where they were put. THIS is what killed the old "idle slides with the raft" read —
+  // the feet are anchored objects, not a pose evaluated at a stalled phase.
+  const standing = amp < 0.06 && gaitState !== 2 && gaitState !== 3;
+  const turnWide = clamp(Math.abs(yawRate) * 0.07, 0, 0.10);
+  const turnBias = clamp(yawRate * 0.05, -0.08, 0.08);
+
+  for (let i = 0; i < 2; i++) {
+    const seg = legs[i], ft = fts[i], ch = LEG_CH[i], sgn = ch[4];
+    const hxF = pc[ch[0]], hzF = sgn * pc[ch[1]], kF = pc[ch[2]];
+    // where the authored curves put this ankle, in the hips frame
+    fkAnkle(hxF, hzF, kF, _vA);
+    const fkx = sgn * HIP_X + _vA.x, fky = _vA.y, fkz = _vA.z;
+
+    const lp = (walkP - (i ? 0.5 : 0) + 1) % 1;
+    let inStance, sp;
+    if (standing) { inStance = true; sp = 0.30; }          // parked in the flat window
+    else { inStance = lp < ft.duty; sp = inStance ? lp / ft.duty : 0; }
+
+    // ---- CLAIM. A foot entering stance takes the ground where it already is. ----
+    if (inStance && !ft.planted) {
+      stepSeq++;
+      ft.step = stepSeq;
+      // NOTHING IS CLOCKWORK. Small, deterministic, keyed on the step index alone.
+      ft.duty = DUTY * (1 + 0.08 * sSym(stepSeq, 1));      // stance duration +/-8%
+      ft.stride = 1 + 0.06 * sSym(stepSeq, 2);             // stride length +/-6%
+      ft.lat = 0.05 * sSym(stepSeq, 3) + sgn * turnWide + turnBias;   // placement +/-0.05
+      ft.slip = 0;
+      strideK = ft.stride;
+      // The anchor is the foot's OWN last resolved contact — the swing delivered it there,
+      // so the plant cannot pop by construction. The fallback covers boot, respawn, a
+      // zone teleport and the first contact out of a swim, where there is no history.
+      const dx = ft.wx - player.pos.x, dz = ft.wz - player.pos.z;
+      if (!ft.seed || dx * dx + dz * dz > 2.6) {
+        const latL = sgn * HIP_X + ft.lat;
+        ft.wx = player.pos.x + cy * latL; ft.wz = player.pos.z - sy * latL;
+        ft.seed = true;
+      }
+      ft.ax = ft.wx - ox; ft.ay = soleY - oy; ft.az = ft.wz - oz;
+      ft.deck = onDeck; ft.planted = true;
+    } else if (!inStance && ft.planted) {
+      ft.planted = false;
+    }
+    // A ground that changed frame under a planted foot (stepping off the deck) has to be
+    // re-based or the boot is left standing on a memory of the raft.
+    if (ft.planted && ft.deck !== onDeck) { ft.planted = false; }
+    // ...and so does an anchor that is suddenly nowhere near him. A voyage, a zone jump or
+    // a drowning respawn moves the root hundreds of units between frames; without this the
+    // stance leg spends one frame solving toward the last world he was in.
+    if (ft.planted) {
+      const gx = ft.ax + ox - player.pos.x, gz = ft.az + oz - player.pos.z;
+      if (gx * gx + gz * gz > 4) ft.planted = false;
+    }
+    // THE SHUFFLE. Standing still, the anchors are absolute — so turning on the spot, or
+    // being pushed off a wreck, would drag the boots sideways under him and twist the legs
+    // out of the rig. When a planted foot ends up more than ~0.3 u from where the hip now
+    // wants it, the anchor CREEPS back toward neutral at 2.2 u/s. Releasing and re-claiming
+    // instead would teleport the boot; creeping is a man scuffing his feet round to face a
+    // new way, which is exactly what he is doing.
+    if (standing && ft.planted) {
+      const latL = sgn * HIP_X + ft.lat;
+      const nx = player.pos.x + cy * latL, nz = player.pos.z - sy * latL;
+      const dx = nx - (ft.ax + ox), dz = nz - (ft.az + oz);
+      const d2 = dx * dx + dz * dz;
+      if (d2 > 0.09) {
+        const k = Math.min(1, 2.2 * dt / Math.sqrt(d2));
+        ft.ax += dx * k; ft.az += dz * k;
+      }
+      ft.ay = soleY - oy;                    // and it keeps its footing as the deck heaves
+    }
+
+    // ---- TARGET. One world-space ankle point, however it was arrived at. ----
+    let th, cz, wIK;
+    if (inStance) {
+      rollThrough(sp, _vB); th = _vB.x; cz = _vB.y;
+      ankleOverContact(th, cz, _vC);
+      _vD.set(ft.ax + ox + sy * _vC.z, ft.ay + oy + _vC.y, ft.az + oz + cy * _vC.z);
+      // Hand the last tenth of stance back to the curves so toe-off is continuous: the
+      // solver inverts the forward pose exactly, so at wIK = 0 it reproduces the authored
+      // angles and there is no seam between contact and swing.
+      wIK = 1 - ss(0.90, 1.0, sp);
+    } else {
+      // ---- SWING. Authored in the air, aimed at the ground. ----
+      // The next plant is where the root will BE when this foot lands (velocity x the
+      // swing time still to run) plus half a stance's worth of ground ahead of it — which
+      // is exactly the offset that makes the coming stance hold still.
+      const swp = (lp - ft.duty) / (1 - ft.duty);
+      const tRem = clamp((1 - lp) / Math.max(stepRate, 0.25), 0, 0.9);
+      const ahead = DUTY * STRIDE_U * ft.stride * 0.5 + (gaitState === 3 ? 0.18 : 0);
+      const latL = sgn * HIP_X + ft.lat;
+      th = TH_STRIKE; cz = CZ_HEEL;
+      ankleOverContact(th, cz, _vC);
+      _vD.set(
+        player.pos.x + player.vel.x * tRem + sy * ahead + cy * latL + sy * _vC.z,
+        soleY + _vC.y,
+        player.pos.z + player.vel.z * tRem + cy * ahead - sy * latL + cy * _vC.z
+      );
+      // Ease onto the landing line over the back half of the swing: early swing is pure
+      // authored curve (which is good in the air), late swing is pure ground truth.
+      wIK = ss(0.40, 0.97, swp);
+    }
+    _vD.applyMatrix4(_mHi);
+
+    // Blend against the authored pose by the IK weight and by how grounded he is at all.
+    const w = wIK * ikOn;
+    if (w < 1e-3) {
+      // Nothing to solve: he is swimming, or this leg is in the authored part of its
+      // swing. Write the curves through untouched — a round trip that is merely
+      // near-exact still costs the pose its finest detail.
+      _ik[0] = hxF; _ik[1] = hzF; _ik[2] = kF; ikClamped = 0; ikOver = 0;
+    } else {
+      const tx = fkx + (_vD.x - fkx) * w, ty = fky + (_vD.y - fky) * w, tz = fkz + (_vD.z - fkz) * w;
+      solveLeg(tx - sgn * HIP_X, ty, tz);
+    }
+    if (i === 0) { ikDebug.clampR = ikClamped; ikDebug.overR = ikOver; } else { ikDebug.clampL = ikClamped; ikDebug.overL = ikOver; }
+    // A stance anchor the leg genuinely CANNOT reach — he was shoved, the ground moved,
+    // the raft dropped away — releases early and takes a new step. The threshold is 60 mm
+    // of overrun, not merely touching the clamp: at the ends of a long stance the leg is
+    // meant to run right up against full extension (that is what a straightening leg IS),
+    // and releasing there re-anchored every frame and chewed through the per-step
+    // variation draws for nothing.
+    if (inStance && ikOver > 0.06 && sp > 0.18 && !standing) ft.planted = false;
+
+    seg.root.rotation.set(_ik[0], 0, _ik[1]);
+    seg.mid.rotation.x = _ik[2];
+    // Absolute foot pitch minus what the hip and knee already contribute. During stance
+    // that is the roll-through curve, so the sole stays flat on the ground plane; in the
+    // air it eases toward toe-up for the coming strike.
+    const fkAbs = hxF + kF + pc[ch[3]];
+    const thAbs = fkAbs + (th - fkAbs) * w;
+    seg.end.rotation.x = thAbs - _ik[0] - _ik[2];
+
+    // Resolve the contact this pose actually produced, for the next claim and the probe.
+    ankleOverContact(thAbs, cz, _vC);
+    fkAnkle(_ik[0], _ik[1], _ik[2], _vA);
+    _vB.set(sgn * HIP_X + _vA.x, _vA.y, _vA.z).applyMatrix4(_mH);
+    const nx = _vB.x - sy * _vC.z, nz = _vB.z - cy * _vC.z;
+    if (inStance && sp > HS_END && sp < HO_START) {
+      const d = Math.hypot(nx - ft.wx, nz - ft.wz);
+      ft.slip += d;                                        // accumulated intra-stance travel
+    }
+    ft.wx = nx; ft.wy = _vB.y - _vC.y; ft.wz = nz;
+    if (i === 0) ikDebug.slipR = ft.slip; else ikDebug.slipL = ft.slip;
+  }
+  ikDebug.state = gaitState; ikDebug.stepSeq = stepSeq;
+}
 
 // Pose the diver from player state. grounded => weighted lead-boot walk; else => frog kick.
 export function updateDiver(dt, t, player) {
@@ -1142,35 +1609,88 @@ export function updateDiver(dt, t, player) {
   // is a pose module and must stay loadable behind the title with no physics running.
   const wgt = player.onDeck ? 1 : clamp((0.9 - (player.buoy || 0)) / 2.73, 0, 1);
 
-  // stride advances with distance travelled, capped so a boosted sprint doesn't turn into a scurry
-  // STRIDE_U is the ground the walk cycle covers in one cycle (two steps). It is not a
-  // taste value: measured against the rig, one stride carries the sole ~1.19 units, so a
-  // cycle is 2.38 and the feet hold their world position through stance. The old 2.35 was
-  // within 1.3% of that and never slid visibly; it is written as its own name now so the
-  // relationship is stated rather than remembered.
-  const stepRate = clamp(flat / STRIDE_U, 0, 2.1);
-  walkP = (walkP + stepRate * dt) % 1;
+  // Gait amplitude envelope: a short attack (he leans into the walk) and a longer release
+  // (he settles out of it and the last stride finishes). Hoisted above the phase clock
+  // because the state machine below keys its transitions off it.
+  const ampT = clamp(flat * 0.42 - 0.06, 0, 1);
+  ampS = lerp(ampS, ampT, Math.min(1, (ampT > ampS ? 8.3 : 4.0) * dt));   // ~0.12 s / ~0.25 s
+  const amp = ampS;
+  // How grounded he is, and whether the gait clock is turning at all. The pendulum below
+  // is keyed on `gw`, NOT on amp: the ground a stance foot has to hold is DUTY * STRIDE_U
+  // whatever his speed — the cycle slows, the excursion does not — so a pelvis dip scaled
+  // by speed would leave the leg short of its anchor at a dawdle.
+  const ikOn = gb * clamp(deckF + (player.grounded ? 1 : 0), 0, 1);
+  const gw = ss(0.02, 0.22, ampT) * ikOn;
+
+  // ---- THE PHASE CLOCK, AND THE THREE EVENTS THAT INTERRUPT IT ----
+  // Steady walking: the phase advances with GROUND COVERED, which is the only way the
+  // anchors below can hold — a cycle carries him STRIDE_U, so a foot down for DUTY of a
+  // cycle is down for exactly the ground its anchor must span.
+  // Starting, stopping and turning are not that. They are events with their own clocks:
+  //   START  — 150 ms of lean BEFORE the first push-off, so the body commits and then the
+  //            foot answers. Velocity-keyed fade-in had the legs moving before the weight.
+  //   STOP   — a catch step: the swinging foot is DRIVEN to its plant ahead of the centre
+  //            of mass on its own clock even as the speed decays, the body pitches into it
+  //            ~5 deg, then settles back upright. It arrests; it does not dissolve.
+  // stepCount()'s contract is untouched throughout: heel strikes are still walkP 0 and 0.5,
+  // and the catch step fires its own footfall exactly like any other plant.
+  const wantWalk = ampT > 0.02;
+  let stepRate = 0;
+  if (gaitState === 0) {
+    if (wantWalk) { gaitState = 1; gaitT = 0; }
+  } else if (gaitState === 1) {
+    gaitT += dt;
+    if (!wantWalk) gaitState = 0;
+    else if (gaitT >= START_LEAN) {
+      // Push-off. walkP 0.5 IS the left heel strike: he steps forward onto the leading
+      // foot, both boots are briefly down, and the right toes off out of that double
+      // support. Landing exactly on the strike keeps the footfall audio honest.
+      gaitState = 2; walkP = 0.5; gaitT = 0;
+    }
+  } else if (gaitState === 2) {
+    stepRate = clamp(flat / (STRIDE_U * strideK), 0, 2.1);
+    if (!wantWalk) {
+      // Finish the step that is in the air, on a fixed clock, and land it long.
+      gaitState = 3; gaitT = 0; catchFrom = walkP;
+      catchTo = walkP < 0.5 ? 0.5 : 1.0;
+    }
+  } else {
+    gaitT += dt;
+    const u = clamp(gaitT / CATCH_DUR, 0, 1);
+    walkP = catchFrom + (catchTo - catchFrom) * (u * u * (3 - 2 * u));
+    if (wantWalk) { gaitState = 2; }
+    else if (u >= 1) {
+      // The catch foot is down. Weight drops through it, and the body — which has been
+      // pitched into the step for the last 300 ms — is released to rock back through
+      // upright and settle. The under-damped spring does the settle; this is just the
+      // shove that makes it a recoil rather than a fade.
+      gaitState = 0; walkP %= 1;
+      leanP.v -= 0.85;
+      settle.v -= 2.6;
+    }
+  }
+  if (gaitState === 2) walkP = (walkP + stepRate * dt) % 1;
+  else if (gaitState === 3) walkP %= 1;
   // Stroke commitment: from a near-standstill with way coming on, the kick cycle
   // spins up ~2.6x until the body reaches the speed the effort implies — pressing
   // forward means a kick NOW, not a throttle fading in. At cruise the term is zero
   // and the cadence is the shipped one.
   const spinUp = 1 + 1.6 * clamp(1 - speed / 14, 0, 1) * clamp(flat * 0.4 + Math.abs(player.vel.y) * 0.2, 0, 1);
+  const swPrev = swimP;
   swimP = (swimP + (0.24 + speed * 0.028) * spinUp * dt) % 1;
+  if (swimP < swPrev) drawKick(++kickIdx);   // one fresh pair of legs per kick
+  breathPh += (0.90 + 0.12 * Math.sin(t * 0.079)) * dt;
   // Published to player.js, which shapes the forward thrust on swimP (the visible kick IS
   // the push) and lands the per-stride water resistance on walkP's heel strike. Two scalar
   // stores; no allocation, no new clock, no second source of truth.
   player.walkP = walkP; player.swimP = swimP;
 
-  // Gait amplitude used to be velocity ALONE, so the cycle snapped on and off with the
-  // stick. It now has an envelope: a short attack (he leans into the walk) and a longer
-  // release (he settles out of it and the last stride finishes). walkP is untouched, so
-  // the heel-strike cadence — and the footstep audio that keys off it — is unchanged.
-  const ampT = clamp(flat * 0.42 - 0.06, 0, 1);
-  ampS = lerp(ampS, ampT, Math.min(1, (ampT > ampS ? 8.3 : 4.0) * dt));   // ~0.12 s / ~0.25 s
-  const amp = ampS;
   poseWalk(pw, walkP, amp, t, deckF);
   poseSwim(psw, swimP, t, clamp(speed * 0.09, 0, 1));
   for (let i = 0; i < CH.N; i++) po[i] = psw[i] + (pw[i] - psw[i]) * gb;
+  // The vault. poseWalk already put W.bob(walkP) * amp into the channel; this tops it up
+  // to PEND_M * gw so the dip is the full pendulum whenever he is walking at all.
+  po[CH.bobY] += (PEND_M * gw - amp * gb) * W.bob(walkP);
 
   // ---- SCULLS. Backing up and crabbing sideways are not swimming, and they should not
   // look like it: the arms come out of the streamlined trail into a shallow paddle. This
@@ -1235,9 +1755,19 @@ export function updateDiver(dt, t, player) {
   const ks = Math.max(0, kneeSoft.x) * 0.42;
   if (kneeSide === 0) po[CH.Rk] += ks; else po[CH.Lk] += ks;
 
+  // ---- COMPLIANCE. Nothing below reads `po` again; the body is driven from `pc`. ----
+  // Water takes 30% off every frequency. slashW stiffens the striking arm (see the table).
+  const slashW = slashT >= 0 && slashT < SLASH_DUR ? 1 : 0;
+  compliance(pc, po, dt, 1 - 0.30 * (1 - gb), slashW);
+
   const b = diver.body;
-  // LIFT plants the soles on player.pos - 1.35 (the collision floor) in the rest pose
-  b.position.set(po[CH.shiftX], LIFT + po[CH.bobY] + settle.x * 0.045, po[CH.shiftZ]);
+  // LIFT plants the soles on player.pos - 1.35 (the collision floor) in the rest pose.
+  // IK_DROP takes the pelvis down a further 45 mm the moment the feet are nailed, so
+  // mid-stance has knee headroom and the solver never sits against its reach clamp; and
+  // the heel-strike settle is allowed to travel twice as far, because the knees can now
+  // genuinely absorb it against the ground instead of pushing the whole man through it.
+  b.position.set(pc[CH.shiftX], LIFT - (IK_DROP_IDLE * ikOn + (IK_DROP - IK_DROP_IDLE) * gw) + pc[CH.bobY]
+    + settle.x * (0.045 + 0.045 * ikOn), pc[CH.shiftZ]);
   // Lead boots below, a copper helmet full of air above: the centres of gravity and
   // buoyancy are a metre apart, so the righting moment is an order of magnitude larger
   // than any couple he can generate — and it GROWS with every litre in the dress. He
@@ -1254,37 +1784,43 @@ export function updateDiver(dt, t, player) {
   yawRate = lerp(yawRate, dyaw, Math.min(1, 4 * dt));
   const bank = clamp(-yawRate * 0.13, -0.30, 0.30);
   spring(sRollT, (1 - gb) * (clamp(-(player.yaw - yawF) * 2.2, -0.5, 0.5) + bank), dt, 4, 0.8);
-  b.rotation.set(sPitch.x + po[CH.pPitch] * (1 - gb), 0, sRollT.x);
+  // ON THE GROUND HE BANKS TOO. A man carrying a hundredweight of lead round a corner
+  // leans into it or he goes over; the swim bank was gated to (1-gb) and left the walk
+  // turning like a turret. Smaller than the swimmer's, and only while the turn lasts.
+  bankG = lerp(bankG, clamp(-yawRate * 0.055, -0.13, 0.13) * gb * amp, Math.min(1, 5 * dt));
+  // The lean/catch clock: a start pitches him forward BEFORE the first push-off, a stop
+  // pitches him into the catch step and rocks back upright over ~0.4 s.
+  spring(leanP,
+    gaitState === 1 ? 0.10 * ss(0, START_LEAN, gaitT)      // START: lean, THEN push off
+      : gaitState === 3 ? 0.085                            // STOP: pitch into the catch step
+        : 0,
+    dt, 7.5, 0.62);
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb, 0, sRollT.x + bankG);
 
   const h = diver.hips;
-  h.rotation.set(0, po[CH.pYaw], po[CH.pRoll]);
+  h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);
   const sp = diver.spine;
-  sp.rotation.set(po[CH.sPitch], po[CH.sYaw], po[CH.sRoll]);
+  sp.rotation.set(pc[CH.sPitch], pc[CH.sYaw], pc[CH.sRoll]);
 
   // brass helmet lags the torso, then over-settles
-  spring(hdY, -0.5 * po[CH.sYaw] + po[CH.nYaw], dt, 7, 0.55);
-  spring(hdX, -0.35 * po[CH.sPitch] + po[CH.nPitch], dt, 6.5, 0.6);
+  spring(hdY, -0.5 * pc[CH.sYaw] + pc[CH.nYaw], dt, 7, 0.55);
+  spring(hdX, -0.35 * pc[CH.sPitch] + pc[CH.nPitch], dt, 6.5, 0.6);
   diver.neck.rotation.set(hdX.x, hdY.x, 0);
 
-  const R = diver.legR, L = diver.legL;
-  R.root.rotation.set(po[CH.Rhx], 0, -po[CH.Rhz]);
-  R.mid.rotation.x = po[CH.Rk];
-  L.root.rotation.set(po[CH.Lhx], 0, po[CH.Lhz]);
-  L.mid.rotation.x = po[CH.Lk];
-  // Ankles TRAIL the shank instead of being welded to it (~50 ms at walking cadence). A
-  // spring converges exactly on its target, so the rest pose — and LIFT's sole plant —
-  // is bit-identical at a standstill; only the transitions gain the lag.
-  R.end.rotation.x = spring(ankR, po[CH.Ra], dt, 34, 0.85);
-  L.end.rotation.x = spring(ankL, po[CH.La], dt, 34, 0.85);
+  // ---- THE LEGS. Everything above is authored; from here the GROUND is boss. ----
+  driveLegs(dt, player, ikOn, amp, stepRate);
 
   const AR = diver.armR, AL = diver.armL;
-  AR.root.rotation.set(po[CH.Rsx], po[CH.Rsy], -po[CH.Rsz]);
-  AR.mid.rotation.x = po[CH.Re];
-  AL.root.rotation.set(po[CH.Lsx], po[CH.Lsy], po[CH.Lsz]);
-  AL.mid.rotation.x = po[CH.Le];
-  // wrists relax after the elbow, measured from the rest fold so nothing static moves
-  AR.end.rotation.x = spring(wrR, (po[CH.Re] - REST_RE) * 0.30, dt, 26, 0.75);
-  AL.end.rotation.x = spring(wrL, (po[CH.Le] - REST_LE) * 0.30, dt, 26, 0.75);
+  AR.root.rotation.set(pc[CH.Rsx], pc[CH.Rsy], -pc[CH.Rsz]);
+  AR.mid.rotation.x = pc[CH.Re];
+  AL.root.rotation.set(pc[CH.Lsx], pc[CH.Lsy], pc[CH.Lsz]);
+  AL.mid.rotation.x = pc[CH.Le];
+  // wrists relax after the elbow, measured from the rest fold so nothing static moves.
+  // Fed the COMPLIANT elbow now, so the lag compounds down the chain: shoulder, then
+  // elbow a beat later, then the wrist after that — which is the ripple Michael was
+  // missing when every joint arrived on the same frame.
+  AR.end.rotation.x = spring(wrR, (pc[CH.Re] - REST_RE) * 0.30, dt, 26, 0.75);
+  AL.end.rotation.x = spring(wrL, (pc[CH.Le] - REST_LE) * 0.30, dt, 26, 0.75);
 
   // hand velocity in the diver's own frame drives the lantern pendulum
   const c = Math.cos(-yawF), s = Math.sin(-yawF);
