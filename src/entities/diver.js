@@ -1180,6 +1180,15 @@ const CZ_HEEL = -0.125, CZ_FLAT = 0.02, CZ_BALL = 0.21;
 // the pelvis comes down 47 mm — which both puts the soles on the planks and buys the idle
 // stance a soft knee instead of a locked one. He stands 58 mm lower than he shipped.
 const PEND_M = 1.60;
+// Michael's verdict on the full rigid-pendulum vault: "now its just odd." The agent
+// had flagged it — proportionally ~2.5x a human's rise-and-fall. Humans flatten the
+// arc by walking with the stance knee slightly BENT, and because the leg is IK now,
+// scaling the vault down does exactly that for free: the pelvis path lowers, the
+// planted foot stays nailed, the knee absorbs the difference. 0.45 puts the visible
+// bob near human proportion. Live knob: window.__gait.vault (0 = flat glide,
+// 1 = full pendulum) — A/B it in the running game.
+const GAIT = { vault: 0.45 };
+window.__gait = GAIT;
 const IK_DROP_IDLE = 0.058;
 const IK_DROP = 0.114;
 
@@ -1690,7 +1699,7 @@ export function updateDiver(dt, t, player) {
   for (let i = 0; i < CH.N; i++) po[i] = psw[i] + (pw[i] - psw[i]) * gb;
   // The vault. poseWalk already put W.bob(walkP) * amp into the channel; this tops it up
   // to PEND_M * gw so the dip is the full pendulum whenever he is walking at all.
-  po[CH.bobY] += (PEND_M * gw - amp * gb) * W.bob(walkP);
+  po[CH.bobY] += (PEND_M * GAIT.vault * gw - amp * gb) * W.bob(walkP);
 
   // ---- SCULLS. Backing up and crabbing sideways are not swimming, and they should not
   // look like it: the arms come out of the streamlined trail into a shallow paddle. This
