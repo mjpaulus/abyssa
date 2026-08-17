@@ -518,8 +518,30 @@ if (typeof window !== 'undefined') {
         amb: { fog: airAmbience.fog, moon: airAmbience.moon },
         windS: uWindS.value, windD: [uWindD.value.x, uWindD.value.y],
         windT: [_wspT, _wdTX, _wdTZ], forced: !!_wForce,
-        windK: [uWindK.value.x, uWindK.value.y], cap: [uCap.value.x, uCap.value.y]
+        windK: [uWindK.value.x, uWindK.value.y], cap: [uCap.value.x, uCap.value.y],
+        chop: uChop.value.toArray(), chop2: uChop2.value.toArray(),
+        lagW: uLagW.value.toArray(), surfH: _surfH, air: uAir.value
       };
+    },
+    // THE INVERSE-MIRROR RESIDUAL, measured without a GPU readback. surfaceForwardAt is
+    // literally what the vertex shader does; feeding its world xz back through
+    // surfaceHeightAt's fixed point must return the height it wrote. The gap is the
+    // honest error every consumer of localSurfaceY() inherits.
+    chopResidual(n, storm, t) {
+      n = n || 200; storm = storm === undefined ? uStormU.value : storm;
+      t = t === undefined ? uTime.value : t;
+      const p = { x: 0, y: 0, z: 0 };
+      let mx = 0, s2 = 0, dmax = 0;
+      for (let i = 0; i < n; i++) {
+        const a = i * 2.399963, r = 40 * Math.sqrt(i / n);
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        surfaceForwardAt(p, x, z, t, storm);
+        dmax = Math.max(dmax, Math.hypot(p.x - x, p.z - z));
+        const e = Math.abs(surfaceHeightAt(p.x, p.z, t, storm) - p.y);
+        mx = Math.max(mx, e); s2 += e * e;
+      }
+      return { n, storm, chop: uChop.value.x * Math.max(ms(storm, 0, 0.9), uWindS.value),
+        maxDisp: dmax, max: mx, rms: Math.sqrt(s2 / n) };
     }
   };
 }
@@ -1153,6 +1175,20 @@ const uWindD = { value: new THREE.Vector2(1, 0) };   // eased unit bearing (x, z
 const uWindS = { value: 0 };                          // eased speed 0..1
 const uWindK = { value: new THREE.Vector2(GLASS.windwater.anisoK, GLASS.windwater.ampK) };
 const uCap = { value: new THREE.Vector2(GLASS.windwater.capThr, GLASS.windwater.capK) };
+// THE CHOP. (k, foamThr, foamSoft, foamK) and (texScale, streakK, scatterK, scatterPow).
+// Both refreshed from GLASS.chop every frame in updateWater, so the whole block is
+// live-pokeable from the console like the rest of the glass.
+const uChop = { value: new THREE.Vector4(GLASS.chop.k, GLASS.chop.foamThr, GLASS.chop.foamSoft, GLASS.chop.foamK) };
+const uChop2 = { value: new THREE.Vector4(GLASS.chop.texScale, GLASS.chop.streakK, GLASS.chop.scatterK, GLASS.chop.scatterPow) };
+// Weights of the three lagged compression samples. exp(-tau/foamDecay), resolved on the
+// CPU so foamDecay stays a live knob (the LAG TIMES themselves are compile-time — they
+// set the per-component phase-rotation constants baked into the shader).
+const uLagW = { value: new THREE.Vector3(1, 1, 1) };
+// (streakLegacy, foamLagK). The first scales the OLD wind-streak block; the second scales
+// the three lagged foam samples against the live one, i.e. how much lingering foam there
+// is relative to freshly-born foam.
+const uChopX = { value: new THREE.Vector2(GLASS.chop.streakLegacy, GLASS.chop.foamLagK) };
+const CHOP_LAGS = [1.35, 2.70, 4.05];
 // Eased CPU state. Module-scoped, zero allocation per frame.
 let _wdX = 1, _wdZ = 0, _wsp = 0;
 // Targets, written by setWeatherHand (or the dev override) and chased in updateWater.
@@ -1187,25 +1223,84 @@ const _wavePhase = WAVE.slice(0, 3).map(([lam, deg, a0, a1]) => {
 // localSurfaceY() and the refraction clip plane is placed on it, so if the CPU height
 // and the vertex height disagree the eye crosses the interface at the wrong moment and
 // the raft rides a swell the water is not making.
+//
+// THE INVERSE PROBLEM. With the choppy term on, the mesh no longer maps a grid point to
+// the column above it: the vertex shader evaluates the field at a PARAMETER point p and
+// writes the vertex to (p + D(p), h(p)). "What is the surface height at world (x,z)?"
+// is therefore asking for p such that p + D(p) = (x,z), which has no closed form.
+//
+// The standard answer, and the one used here, is the fixed point p <- (x,z) - D(p) from
+// p0 = (x,z). D is a contraction while sum(k_i*A_i)*chop < 1 (the same bound that keeps
+// the surface from folding through itself — see GLASS.chop.k), so it converges
+// geometrically at that ratio: ~0.65 at full storm, i.e. two iterations leave ~0.65^3 of
+// the initial parameter error, and the HEIGHT error is that times |grad h|. Measured
+// residual is reported on the card; two iterations is where it stops paying.
+//
+// Zero-allocation: the per-component wind-biased bearing and amplitude are resolved ONCE
+// into _cw and then reused by every iteration and by the final height sum.
+const _cw = [0, 1, 2].map(() => ({ dx: 0, dz: 0, amp: 0, k: 0, w: 0 }));
 export function surfaceHeightAt(x, z, t, storm) {
   const sm = THREE.MathUtils.smoothstep(storm, 0, 0.90);
   const aK = uWindK.value.x, mK = uWindK.value.y, S = uWindS.value;
   const wx = uWindD.value.x, wz = uWindD.value.y;
-  let h = 0;
   for (let i = 0; i < 3; i++) {
-    const c = _wavePhase[i];
+    const c = _wavePhase[i], o = _cw[i];
     const sgn = c.dx * wx + c.dz * wz < 0 ? -1 : 1;
     const k2 = aK * S;
     let dx = c.dx + (wx * sgn - c.dx) * k2, dz = c.dz + (wz * sgn - c.dz) * k2;
     const L = Math.hypot(dx, dz) || 1;
     dx /= L; dz /= L;
     const al = dx * wx + dz * wz, al2 = al * al;
-    const amp = (c.a0 + (c.a1 - c.a0) * sm)
+    o.dx = dx; o.dz = dz; o.k = c.k; o.w = c.w;
+    o.amp = (c.a0 + (c.a1 - c.a0) * sm)
       * (1 + mK * S * (1 - 0.5 * sm))
       * (1 + S * ((1 - aK) + 2 * aK * al2 - 1));
-    h += amp * Math.sin((x * dx + z * dz) * c.k + t * c.w);
+  }
+  // EXACTLY the shader's gate (GLSL_WAVE_V/F): at storm 0 wind 0 this is 0 and every
+  // line below collapses to the shipped vertical-only sum.
+  const chop = GLASS.chop.k * Math.max(sm, S);
+  let px = x, pz = z;
+  if (chop > 1e-5) {
+    for (let it = 0; it < 4; it++) {
+      let dX = 0, dZ = 0;
+      for (let i = 0; i < 3; i++) {
+        const o = _cw[i];
+        const c = o.amp * chop * Math.cos((px * o.dx + pz * o.dz) * o.k + t * o.w);
+        dX += o.dx * c; dZ += o.dz * c;
+      }
+      const nx = x - dX, nz = z - dZ;
+      const step = Math.abs(nx - px) + Math.abs(nz - pz);
+      px = nx; pz = nz;
+      // Early out on a converged step. Measured contraction is ~0.48 at full chop, so
+      // this normally runs 3 of the 4 and the whole loop is 36 trig calls A FRAME — the
+      // function is evaluated once, under the camera, not per vertex. Two iterations left
+      // a 0.110 u worst-case height error against the true mesh; four leaves 0.030.
+      if (step < 1e-3) break;
+    }
+  }
+  let h = 0;
+  for (let i = 0; i < 3; i++) {
+    const o = _cw[i];
+    h += o.amp * Math.sin((px * o.dx + pz * o.dz) * o.k + t * o.w);
   }
   return h;
+}
+// Debug/verification surface: the FORWARD map, i.e. exactly what the vertex shader does.
+// Given a parameter point it returns the world xz the mesh puts there and the height it
+// writes. surfaceHeightAt(forward) must return that height back — that round trip IS the
+// residual measurement, and it needs no GPU readback.
+export function surfaceForwardAt(p, x, z, t, storm) {
+  const sm = THREE.MathUtils.smoothstep(storm, 0, 0.90);
+  surfaceHeightAt(x, z, t, storm);            // fills _cw for this (t, storm, wind)
+  const chop = GLASS.chop.k * Math.max(sm, uWindS.value);
+  let dX = 0, dZ = 0, h = 0;
+  for (let i = 0; i < 3; i++) {
+    const o = _cw[i], q = (x * o.dx + z * o.dz) * o.k + t * o.w;
+    const c = o.amp * chop * Math.cos(q);
+    dX += o.dx * c; dZ += o.dz * c; h += o.amp * Math.sin(q);
+  }
+  p.x = x + dX; p.z = z + dZ; p.y = h;
+  return p;
 }
 // 0 = eye fully in water, 1 = fully in air. The band is half a helmet: narrow enough that
 // the transition is a moment, wide enough not to alias on a chopping surface.
@@ -1222,7 +1317,26 @@ export function localSurfaceY() { return _surfH; }
 // has no array constructors — `const float A[6] = float[6](...)` is a 3.00-only form.
 // `dist` retires each component before the mesh stops resolving it; see WAVE above and
 // the ring-spacing note in buildSurfaceGeo.
-function waveSum(n) {
+//
+// THE CHOPPY TERM. Each component now also displaces the surface HORIZONTALLY along its
+// own bearing: D_i = dw_i * chop * A_i * cos(q_i). Its parameter derivative is
+// -A_i k_i chop sin(q_i), which is NEGATIVE at a crest (q = pi/2) and positive in a
+// trough — vertices crowd toward the crests and stretch across the backs, which is the
+// whole Gerstner trick and the entire difference between a rolling sine sea and the
+// steep-fronted one in Michael's poseidon frames. It is the classic form written for
+// this field's sin() phase convention (h = A sin(q) is A cos(q - pi/2), so the standard
+// -dir*Q*A*sin(theta) becomes +dir*Q*A*cos(q)).
+//
+// The Jacobian falls out of the same sin/cos pair for free. With s_i = -A_i k_i chop
+// sin(q_i), the horizontal displacement's Jacobian is sum(s_i * outer(dw_i, dw_i)) —
+// symmetric, three floats — and TWO things read it:
+//   * det(I + J) < 1 is the foam birth test (piece 2), and
+//   * the true surface normal, because the world-space gradient of a displaced surface
+//     is (I + J)^-1 * grad_p h, not grad_p h. Getting this wrong would leave the shading
+//     flat on exactly the steep fronts the displacement just built.
+// Note trace(J) = sum(s_i) because every dw is a unit vector, which is why the three
+// LAGGED compression samples cost one float each instead of three.
+function waveSum(n, mode) {
   let s = '';
   for (let i = 0; i < n; i++) {
     const [lam, deg, a0, a1, fr] = WAVE[i];
@@ -1239,22 +1353,66 @@ function waveSum(n) {
       *(1.0+uWindS*(mix(1.0-uWindK.x,1.0+uWindK.x,al)-1.0))
       *(1.0-smoothstep(${f(fr * 0.5)},${f(fr)},dist));
     float q=dot(p,dw)*${f(k)}+t*${f(w)};
-    h+=amp*sin(q); g+=dw*(amp*${f(k)}*cos(q)); }`;
+    float sq=sin(q), cq=cos(q);
+    h+=amp*sq;`;
+    if (mode === 'v') {
+      s += `\n    D+=dw*(amp*chop*cq); }`;
+    } else {
+      s += `\n    g+=dw*(amp*${f(k)}*cq);
+    float sc=-amp*${f(k)}*chop;
+    float s0=sc*sq;
+    jx+=s0*dw.x*dw.x; jc+=s0*dw.x*dw.y; jz+=s0*dw.y*dw.y;`;
+      // Lagged compression, exactly: sin(q - w*tau) = sin q cos(w tau) - cos q sin(w tau).
+      // The parameter point p labels a water PARTICLE in a Gerstner field, so this is not
+      // an approximation of "did this patch fold recently" — it is that question answered.
+      for (let L = 0; L < CHOP_LAGS.length; L++) {
+        const tau = CHOP_LAGS[L];
+        s += `\n    t${L + 1}+=sc*(sq*${f(Math.cos(w * tau))}-cq*${f(Math.sin(w * tau))});`;
+      }
+      s += ` }`;
+    }
   }
   return s;
 }
-// Vertex pass: the three components the mesh can actually carry as geometry.
+// The gate. chop is EXACTLY mirrored by surfaceHeightAt on the CPU; at storm 0 wind 0 it
+// is zero, D is zero, J is zero, det is 1 and every line here is the shipped field.
+const GLSL_CHOP_DECL = `uniform vec4 uChop, uChop2; uniform vec3 uLagW; uniform vec2 uChopX;
+float chopAmt( float sm ){ return uChop.x*max(sm,uWindS); }`;
+// Vertex pass: the three components the mesh can actually carry as geometry, now with the
+// horizontal displacement that steepens their faces.
 const GLSL_WAVE_V = `${GLSL_WIND_DECL}
-float waveH( vec2 p, float t, float storm, float dist ){
-  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);${waveSum(3)}
-  return h;
+${GLSL_CHOP_DECL}
+float waveH( vec2 p, float t, float storm, float dist, out vec2 disp ){
+  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 D=vec2(0.0);
+  float chop=chopAmt(sm);${waveSum(3, 'v')}
+  disp=D; return h;
 }`;
-// Fragment pass: all six, height and analytic gradient. The gradient is the normal, and
-// the normal is the whole image — it decides refraction, reflection and Fresnel at once.
+// Fragment pass: all six, height, the TRUE (displaced) gradient, and the Jacobian foam
+// intensity. The gradient is the normal, and the normal is the whole image — it decides
+// refraction, reflection and Fresnel at once.
 const GLSL_WAVE_F = `${GLSL_WIND_DECL}
-vec3 waveHN( vec2 p, float t, float storm, float dist ){
-  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);${waveSum(6)}
-  return vec3(h,g);
+${GLSL_CHOP_DECL}
+float waveField( vec2 p, float t, float storm, float dist, out vec2 grad, out float foam ){
+  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);
+  float chop=chopAmt(sm);
+  float jx=0.0, jc=0.0, jz=0.0, t1=0.0, t2=0.0, t3=0.0;${waveSum(6, 'f')}
+  // det(I + J). Floored well clear of zero: chop is held under the folding bound so the
+  // true det cannot reach 0, but a floor is one instruction and it makes the inverse
+  // below structurally safe rather than safe-by-argument.
+  float det=(1.0+jx)*(1.0+jz)-jc*jc;
+  float ds=max(det,0.12);
+  grad=vec2( ((1.0+jz)*g.x-jc*g.y)/ds, ((1.0+jx)*g.y-jc*g.x)/ds );
+  // FOAM: born where the surface is folding now, kept alive where this parcel folded in
+  // the last ~4 s. The lagged samples use the first-order det (1 + trace), which is the
+  // same test to the order that matters and costs one float per lag.
+  float thr=uChop.y, sf=max(uChop.z,0.02);
+  foam=smoothstep(thr,thr-sf,det);
+  float lk=uChopX.y;
+  foam=max(foam,lk*uLagW.x*smoothstep(thr,thr-sf,1.0+t1));
+  foam=max(foam,lk*uLagW.y*smoothstep(thr,thr-sf,1.0+t2));
+  foam=max(foam,lk*uLagW.z*smoothstep(thr,thr-sf,1.0+t3));
+  foam*=uChop.w;
+  return h;
 }`;
 
 // Camera-centred polar disc, exponentially spaced rings. The old uniform 820x820 grid
@@ -1434,7 +1592,7 @@ function buildSurface() {
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
     uBright: { value: 1 }, uFade: { value: 1 },
     uRefr, uRefrK, uRefrSide, uRes,
-    uWindD, uWindS, uWindK, uCap
+    uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -1442,11 +1600,24 @@ function buildSurface() {
       ${GLSL_WAVE_V}
       uniform float uTime, uStorm; uniform vec3 uCam;
       varying vec3 vW;
+      // THE PARAMETER POINT. vW is where the vertex ENDS UP; vP0 is the point of the wave
+      // field it came from. With horizontal displacement on, the two are no longer the
+      // same, and every wave quantity the fragment shader wants — height, gradient,
+      // Jacobian, foam — is a function of the PARAMETER point. Evaluating them at vW.xz
+      // instead would shade the surface with a field shifted up to ~1.4 u sideways: the
+      // normals would slide off the fronts they belong to and the foam would sit beside
+      // the fold instead of on it. World-space patterns (caustics, foam texture, splash
+      // lattices, distance) still read vW, because those live in the world.
+      varying vec2 vP0;
       void main(){
         vec3 p = position;
         float dist = length( position.xz );         // polar disc: the local radius IS r
         p.x += uCam.x; p.z += uCam.z;               // the surface follows the diver
-        p.y += ${f(SURFACE_Y)} + waveH( p.xz, uTime, uStorm, dist );
+        vP0 = p.xz;
+        vec2 disp;
+        float wh = waveH( p.xz, uTime, uStorm, dist, disp );
+        p.x += disp.x; p.z += disp.y;
+        p.y += ${f(SURFACE_Y)} + wh;
         vW = p;
         vec4 mvPosition = viewMatrix * vec4( p, 1.0 );
         gl_Position = projectionMatrix * mvPosition;
@@ -1463,6 +1634,7 @@ function buildSurface() {
       uniform sampler2D uRefr;
       uniform vec2 uRes;
       varying vec3 vW;
+      varying vec2 vP0;      // the wave-field parameter point — see the vertex shader
 
       // The scene through the interface, sampled from the far-side render. The offset
       // is the view-space parallax between the refracted ray and the straight one plus
@@ -1623,8 +1795,11 @@ function buildSurface() {
       void main(){
         vec3 V = normalize( vW - uCam );
         float dist = distance( vW.xz, uCam.xz );
-        vec3 hn = waveHN( vW.xz, uTime, uStorm, dist );
-        vec2 dh = hn.yz;
+        vec2 dh; float foamJ;
+        // Evaluated at the PARAMETER point, and dh comes back already pushed through
+        // the inverse Jacobian, so it is the true world-space slope of the displaced
+        // surface. At chop 0 the inverse is the identity and this is the shipped value.
+        float waveY = waveField( vP0, uTime, uStorm, dist, dh, foamJ );
 
         // Which side of the interface this fragment is seen from, decided BEFORE the rain
         // so the two sides can run different rain and neither pays for the other's. The
@@ -1767,8 +1942,14 @@ function buildSurface() {
                            -vW.x * 0.34202 + vW.z * 0.93969 );
             float sk = vn( vec2( wr.x * 0.030 - uTime * 0.30, wr.y * 0.27 ) )
                      * vn( vec2( wr.x * 0.075 - uTime * 0.52, wr.y * 0.62 ) + 3.7 );
+            // uLagW.z is GLASS.chop.streakLegacy — 1.0 is the shipped look, exactly.
+            // It is a knob because this block and the Jacobian foam below now draw the
+            // same thing two different ways: this one paints straight unbroken bands
+            // along WAVE[0]'s fixed 20-degree bearing whether or not the water there is
+            // folding, and in a gale from height it reads as corduroy under the fold-born
+            // foam. Michael's call which wins; nothing here changes without his poke.
             col = mix( col, foamCol, smoothstep( 0.16, 0.42, sk ) * uStorm * uStorm * 0.55
-                     * ( 1.0 - smoothstep( 90.0, 260.0, dist ) ) );
+                     * ( 1.0 - smoothstep( 90.0, 260.0, dist ) ) * uChopX.x );
           }
           // The disc stops at 460 units; the sea does not. Its last 30% eases into the
           // same airlight the dome draws past the rim and the fog chunk converges on, so
@@ -1791,51 +1972,85 @@ function buildSurface() {
                    * ( 0.45 + 0.75 * vn( vW.xz * 0.55 + vec2( uTime * 0.12 ) ) );
         col = mix( col, foamCol, clamp( foam, 0.0, 0.85 ) * uNearK );
 
-        // WHITECAPS. Above uCap.x of wind the tops tear off. Keyed on the wave field's
-        // own height AND its steepness — a tall smooth swell does not break, a steep
-        // little chop does, and a crest is where the two coincide. Both come straight
-        // out of waveHN, so there is no texture fetch and no second field to keep in
-        // sync with the one the normal is built from: caps land ON crests by
-        // construction, and they re-aim with the wind because the crests do.
+        // JACOBIAN FOAM — this ABSORBS the wind round's height-led whitecap term.
         //
-        // Written AFTER the Fresnel composite and after the storm foam, and outside the
-        // below/air branch, so a cap reads from the deck and from three units under
-        // looking up through the interface — the same torn white on both sides, which is
-        // the whole point of the interface being one shader.
+        // The old gate asked "is this fragment tall AND steep?", which is a proxy for
+        // breaking; this asks the actual question. det(I + dD/dp) is the local area
+        // scale factor of the surface: exactly 1 where the water is undisturbed, above 1
+        // on the stretched backs, and below 1 where the water crowds — which is where a
+        // real sea makes foam. It tracks a front through its whole life instead of
+        // flashing on the peak, and because foamJ carries three LAGGED samples of the
+        // same determinant (see waveField), foam BUILDS on the fold and DECAYS over
+        // ~4 s behind it, with no render target and no history texture.
+        //
+        // The wind gate survives as a BRIGHTENER, not as the source: folds make foam at
+        // any wind, a gale makes more of it.
+        //
+        // Written AFTER the Fresnel composite and outside the below/air branch, so a cap
+        // reads from the deck and from three units under looking up through the
+        // interface — the same torn white on both sides, which is the whole point of the
+        // interface being one shader.
         //
         // Scene-linear discipline: the colour is HARD CLAMPED at 0.26, under
         // BloomEffect's 0.28. The storm foam above deliberately crosses it (it is the one
-        // thing on a storm ceiling that glows); this does not, or a gale becomes a field
-        // of fireworks. Desaturated white-green rather than the foam's blue-white: torn
-        // water carries the sea's own colour in it, not the sky's.
-        float capW = smoothstep( uCap.x, min( 0.98, uCap.x + 0.30 ), uWindS );
-        if ( capW > 0.0 ) {
-          // Height normalised against the field's own working range, so the term does
-          // not quietly turn into a storm gate: at storm 0 the three carried components
-          // peak near 0.58, at storm 1 near 1.82.
-          // BOTH terms are normalised by the sea state, not by absolute numbers. An
-          // absolute steepness gate was tried first and is WRONG here: for a wave train
-          // |grad h| peaks at the ZERO CROSSINGS, not at the crests, so gating height
-          // AND steepness multiplicatively selects the places they happen to coincide —
-          // measured over 200k samples that is 3.6% of the surface at storm 0 falling to
-          // 0.39% at storm 1, i.e. the caps got RARER as the sea got worse.
-          // So: height picks the crest, steepness only BRIGHTENS it. Coverage then holds
-          // at 9-13% of the surface from flat calm to full gale before the tear noise
-          // and the wind gate cut it further.
-          float hRef = 0.58 + 1.24 * uStorm, gRef = 0.075 + 0.24 * uStorm;
-          float crest = smoothstep( 0.55, 1.00, hn.x / hRef );
-          float steep = 0.55 + 0.45 * smoothstep( 0.55, 1.30, length( dh ) / gRef );
-          // Torn, not painted: two octaves drifting DOWNWIND break the band into patches
-          // and streaks, and the second is sampled anisotropically along the wind axis.
+        // thing on a storm ceiling that glows); FOAM NEVER DOES, or a gale becomes a
+        // field of fireworks. Desaturated white-green rather than the foam's blue-white:
+        // torn water carries the sea's own colour in it, not the sky's.
+        float hRef = 0.58 + 1.24 * uStorm, gRef = 0.075 + 0.24 * uStorm;
+        float fj = foamJ * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
+        if ( fj > 0.003 ) {
+          // PROCEDURAL FOAM TEXTURE. Three octaves of the same value noise everything
+          // else here is made of, in a wind-aligned frame: advected downwind so the
+          // pattern travels with the weather, and STRETCHED along the wind as it rises so
+          // foam turns from patches into streaks in a gale. The texture cuts holes in the
+          // foam (smoothstep on the pattern) rather than just dimming it — flat foam
+          // reads as paint, and paint is what the old term looked like up close.
           vec2 wr = vec2( vW.x * uWindD.x + vW.z * uWindD.y,
                          -vW.x * uWindD.y + vW.z * uWindD.x );
-          float tear = vn( vec2( wr.x * 0.14 - uTime * 0.55, wr.y * 0.62 ) )
-                     * ( 0.55 + 0.85 * vn( vec2( wr.x * 0.045 - uTime * 0.24, wr.y * 0.20 ) + 5.1 ) );
+          float st = 1.0 + uChop2.y * uWindS;
+          vec2 fp = vec2( ( wr.x - uTime * ( 0.30 + 1.20 * uWindS ) ) / st, wr.y ) * uChop2.x;
+          float ft = vn( fp ) * 0.60
+                   + vn( fp * 2.30 + 4.1 ) * 0.27
+                   + vn( fp * 5.10 - 2.7 ) * 0.13;
+          // Denser foam closes its own holes: a fresh fold is solid white, a decaying
+          // one breaks into lace. One multiply, and it is most of the "lingering" read.
+          float fm = smoothstep( 0.30, 0.74, ft * ( 0.50 + 0.90 * fj ) );
+          float capW = smoothstep( uCap.x, min( 0.98, uCap.x + 0.30 ), uWindS );
           vec3 capCol = vec3( 0.90, 1.00, 0.94 )
                       * min( dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6, 0.26 );
-          float cap = capW * uCap.y * crest * steep * smoothstep( 0.12, 0.50, tear )
-                    * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
-          col = mix( col, capCol, clamp( cap, 0.0, 0.90 ) );
+          col = mix( col, capCol,
+                     clamp( fj * fm * uCap.y * ( 0.55 + 0.65 * capW ), 0.0, 0.90 ) );
+        }
+
+        // BACKLIT CREST SCATTER. A wave top is thin, and when the sun is low and BEYOND
+        // it the light that gets through is the green the water leaves — the one moment
+        // this sea is lit from inside rather than from above. Three gates, all of which
+        // must open: the sun low (dead at noon, full at the dawn/dusk ring stops), the
+        // view pointed at it in the horizontal plane (that is what "beyond the crest"
+        // means for a surface you are looking across), and the fragment thin — high on
+        // its own crest AND steep, which is the top of a front and nothing else.
+        // Night costs nothing: uSunCol is black then, so the whole term is zero.
+        // Air side only. Under the surface the sun already arrives through Snell's
+        // window and the mirror; a second transmission term there would double-count it.
+        if ( !below && uChop2.z > 0.001 ) {
+          float lum = dot( uSunCol, vec3( 0.2126, 0.7152, 0.0722 ) );
+          // uSunCol is the DISC stop, and at night the disc is the MOON — luminance 0.34
+          // against noon's 2.9 and dawn/dusk's ~1.9. Without this gate a moonlit gale
+          // still put a measured 5 code values of green on 65 pixels, which is not "zero
+          // at night", it is "invisible at night". The sun has to actually be up: the
+          // sea is not backlit by the moon, and moonlight has no green to give.
+          float sunUp = smoothstep( 0.50, 1.10, lum );
+          float lowSun = ( 1.0 - smoothstep( 0.08, 0.45, uSunDir.y ) ) * sunUp;
+          vec2 sxz = uSunDir.xz;
+          float sl = length( sxz );
+          float toward = sl > 1e-3 ? max( dot( normalize( V.xz ), sxz / sl ), 0.0 ) : 0.0;
+          float thin = smoothstep( 0.42, 1.00, waveY / hRef )
+                     * smoothstep( 0.45, 1.25, length( dh ) / gRef );
+          float sc = uChop2.z * lowSun * pow( toward, uChop2.w ) * thin
+                   * ( 1.0 - smoothstep( 60.0, 240.0, dist ) ) * uNearK;
+          // 0.20 ceiling on the emitted colour: transmitted light is dimmer than the
+          // source by construction, and the sum must stay under BloomEffect's 0.28.
+          col += vec3( 0.18, 0.66, 0.46 ) * clamp( sc, 0.0, 1.0 ) * min( lum * 0.62, 0.20 );
         }
         // From below the LENS is the effect and the fleck is a garnish. From above the
         // splash fleck is back — it was muted to zero only because the field it drew was
@@ -2147,6 +2362,16 @@ export function updateWater(dt, t) {
     const WW = GLASS.windwater;
     uWindK.value.set(WW.anisoK, WW.ampK);
     uCap.value.set(WW.capThr, WW.capK);
+    // The chop block, pushed every frame so all nine numbers are live-pokeable. The lag
+    // WEIGHTS are resolved here rather than baked, so foamDecay is a knob too; the lag
+    // TIMES are compile-time (they set the phase rotations inside the shader).
+    const CH = GLASS.chop;
+    uChop.value.set(CH.k, CH.foamThr, CH.foamSoft, CH.foamK);
+    uChop2.value.set(CH.texScale, CH.streakK, CH.scatterK, CH.scatterPow);
+    const td = Math.max(0.2, CH.foamDecay);
+    uLagW.value.set(Math.exp(-CHOP_LAGS[0] / td), Math.exp(-CHOP_LAGS[1] / td),
+      Math.exp(-CHOP_LAGS[2] / td));
+    uChopX.value.set(CH.streakLegacy, CH.foamLagK);
     _windOut.speed = _wsp; _windOut.dx = uWindD.value.x; _windOut.dz = uWindD.value.y;
   }
 
