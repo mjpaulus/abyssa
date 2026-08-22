@@ -602,12 +602,27 @@ function palette(ring, envSky) {
   const s = clamp(envSky, 0, 1);
   if (s > 0) {
     const T = S.storm;
+    // SUNLIT STORMS. The storm stop desaturates to slate at 0.55 flat, which is the
+    // game's dread tone applied to the wrong variable: it keys off STORM when what it is
+    // really describing is DARKNESS. A night gale is slate; a NOON gale, in Michael's
+    // reference, is a bright, vividly coloured, saturated sea under a black sky.
+    //
+    // The gate is the sun's own height (SUN.dir.y = sin of the solar elevation), read
+    // from the one live sun every other consumer reads, over the same window the
+    // broad-body SSS uses — so the desaturation lifts and the glow arrives together.
+    // At night SUN.dir.y is at the elevNight floor and dayG is 0, which makes every line
+    // below identical to what shipped. That identity is the night-gale anchor.
+    const C = GLASS.chop;
+    const dayG = ms(SUN.dir.y, C.sssDayLo, C.sssDayHi);
+    // zen / hor / disc still go the WHOLE way to the storm stop: a gale's sky is a gale's
+    // sky and the deck is the storm's entire silhouette. Only the SATURATION pull, the
+    // tint blend and the irradiance scale are day-gated — i.e. what the SEA is made of.
     toward3(_pZen, T.zen, s);
     toward3(_pHor, T.hor, s);
     toward3(_pDisc, T.disc, s);
-    toward3(_pSurf, T.tint, s);
-    sk += (T.surfK - sk) * s;
-    _pDesat += (T.desat - _pDesat) * s;
+    toward3(_pSurf, T.tint, s * (1 - C.stormTintDayK * dayG));
+    sk += (T.surfK * (1 + C.stormSurfDayK * dayG) - sk) * s;
+    _pDesat += (T.desat * (1 - C.stormDesatDayK * dayG) - _pDesat) * s;
   }
   desat3(_pZen, _pDesat);
   desat3(_pHor, _pDesat);
@@ -1188,6 +1203,11 @@ const uLagW = { value: new THREE.Vector3(1, 1, 1) };
 // the three lagged foam samples against the live one, i.e. how much lingering foam there
 // is relative to freshly-born foam.
 const uChopX = { value: new THREE.Vector2(GLASS.chop.streakLegacy, GLASS.chop.foamLagK) };
+// STORM SWELL SCALE — GLASS.chop.galeAmp. See galeAmt() in GLSL_CHOP_DECL.
+const uGale = { value: GLASS.chop.galeAmp };
+// BROAD-BODY SSS. (sssK, sssPow, sssTau, sssGain) and (sssCap, sssCalm, dayLo, dayHi).
+const uSss = { value: new THREE.Vector4(GLASS.chop.sssK, GLASS.chop.sssPow, GLASS.chop.sssTau, GLASS.chop.sssGain) };
+const uSss2 = { value: new THREE.Vector4(GLASS.chop.sssCap, GLASS.chop.sssCalm, GLASS.chop.sssDayLo, GLASS.chop.sssDayHi) };
 const CHOP_LAGS = [1.35, 2.70, 4.05];
 // Eased CPU state. Module-scoped, zero allocation per frame.
 let _wdX = 1, _wdZ = 0, _wsp = 0;
@@ -1238,7 +1258,10 @@ const _wavePhase = WAVE.slice(0, 3).map(([lam, deg, a0, a1]) => {
 //
 // Zero-allocation: the per-component wind-biased bearing and amplitude are resolved ONCE
 // into _cw and then reused by every iteration and by the final height sum.
-const _cw = [0, 1, 2].map(() => ({ dx: 0, dz: 0, amp: 0, k: 0, w: 0 }));
+// `amp` is the DISPLACEMENT amplitude (shipped, unscaled by the gale) and `ampH` the
+// HEIGHT amplitude — see galeAmt() in GLSL_CHOP_DECL. Keeping them separate on the CPU
+// too is what makes this an exact mirror rather than a near one.
+const _cw = [0, 1, 2].map(() => ({ dx: 0, dz: 0, amp: 0, ampH: 0, k: 0, w: 0 }));
 export function surfaceHeightAt(x, z, t, storm) {
   const sm = THREE.MathUtils.smoothstep(storm, 0, 0.90);
   const aK = uWindK.value.x, mK = uWindK.value.y, S = uWindS.value;
@@ -1255,13 +1278,24 @@ export function surfaceHeightAt(x, z, t, storm) {
     o.amp = (c.a0 + (c.a1 - c.a0) * sm)
       * (1 + mK * S * (1 - 0.5 * sm))
       * (1 + S * ((1 - aK) + 2 * aK * al2 - 1));
+    // MIRRORS galeAmt(): the two longest components carry the storm swell scale in their
+    // HEIGHT only. i >= 2 keeps ampH === amp, and at sm = 0 the factor is exactly 1.
+    o.ampH = i < 2 ? o.amp * (1 + (GLASS.chop.galeAmp - 1) * sm) : o.amp;
   }
   // EXACTLY the shader's gate (GLSL_WAVE_V/F): at storm 0 wind 0 this is 0 and every
   // line below collapses to the shipped vertical-only sum.
   const chop = GLASS.chop.k * Math.max(sm, S);
   let px = x, pz = z;
   if (chop > 1e-5) {
-    for (let it = 0; it < 4; it++) {
+    // SIX, up from four, because of the storm swell scale. The fixed point solves for the
+    // PARAMETER point and its contraction ratio is untouched by galeAmp (the displacement
+    // keeps the shipped amplitude on purpose) — but the HEIGHT error is that parameter
+    // error times |grad h|, and grad h is exactly what the gale scales. Measured at
+    // galeAmp 1.8, wind 0.9, storm 1: four iterations left max 0.050 u, which is the
+    // budget rather than under it; six leave 0.021. The loop early-outs on a converged
+    // step, so calm and moderate seas still run the three they always ran, and the whole
+    // function is evaluated ONCE A FRAME under the camera, not per vertex.
+    for (let it = 0; it < 6; it++) {
       let dX = 0, dZ = 0;
       for (let i = 0; i < 3; i++) {
         const o = _cw[i];
@@ -1281,7 +1315,7 @@ export function surfaceHeightAt(x, z, t, storm) {
   let h = 0;
   for (let i = 0; i < 3; i++) {
     const o = _cw[i];
-    h += o.amp * Math.sin((px * o.dx + pz * o.dz) * o.k + t * o.w);
+    h += o.ampH * Math.sin((px * o.dx + pz * o.dz) * o.k + t * o.w);
   }
   return h;
 }
@@ -1297,7 +1331,7 @@ export function surfaceForwardAt(p, x, z, t, storm) {
   for (let i = 0; i < 3; i++) {
     const o = _cw[i], q = (x * o.dx + z * o.dz) * o.k + t * o.w;
     const c = o.amp * chop * Math.cos(q);
-    dX += o.dx * c; dZ += o.dz * c; h += o.amp * Math.sin(q);
+    dX += o.dx * c; dZ += o.dz * c; h += o.ampH * Math.sin(q);
   }
   p.x = x + dX; p.z = z + dZ; p.y = h;
   return p;
@@ -1357,11 +1391,12 @@ function waveSum(n, mode) {
       *(1.0-smoothstep(${f(fr * 0.5)},${f(fr)},dist));
     float q=dot(p,dw)*${f(k)}+t*${f(w)};
     float sq=sin(q), cq=cos(q);
-    h+=amp*sq;`;
+    float ampH=amp${i < 2 ? '*gA' : ''};
+    h+=ampH*sq;`;
     if (mode === 'v') {
       s += `\n    D+=dw*(amp*chop*cq); }`;
     } else {
-      s += `\n    g+=dw*(amp*${f(k)}*cq);
+      s += `\n    g+=dw*(ampH*${f(k)}*cq);
     float sc=-amp*${f(k)}*chop;
     float s0=sc*sq;
     jx+=s0*dw.x*dw.x; jc+=s0*dw.x*dw.y; jz+=s0*dw.y*dw.y;`;
@@ -1380,14 +1415,22 @@ function waveSum(n, mode) {
 // The gate. chop is EXACTLY mirrored by surfaceHeightAt on the CPU; at storm 0 wind 0 it
 // is zero, D is zero, J is zero, det is 1 and every line here is the shipped field.
 const GLSL_CHOP_DECL = `uniform vec4 uChop, uChop2; uniform vec3 uLagW; uniform vec2 uChopX;
-float chopAmt( float sm ){ return uChop.x*max(sm,uWindS); }`;
+uniform float uGale;
+float chopAmt( float sm ){ return uChop.x*max(sm,uWindS); }
+// STORM SWELL SCALE. GLASS.chop.galeAmp, faded in by the SAME storm smoothstep the wave
+// amplitudes themselves use, so at storm 0 this is exactly 1.0 and the calm field is
+// bit-identical. Applied to the two longest components' HEIGHT (and therefore to grad h)
+// and NOT to the Gerstner displacement or the Jacobian — a big swell is long and tall,
+// not steep, and keeping sum(k*A)*chop at its shipped value is what keeps the no-fold
+// bound, the CPU fixed point's contraction ratio and the foam birth test all unchanged.
+float galeAmt( float sm ){ return mix( 1.0, uGale, sm ); }`;
 // Vertex pass: the three components the mesh can actually carry as geometry, now with the
 // horizontal displacement that steepens their faces.
 const GLSL_WAVE_V = `${GLSL_WIND_DECL}
 ${GLSL_CHOP_DECL}
 float waveH( vec2 p, float t, float storm, float dist, out vec2 disp ){
   float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 D=vec2(0.0);
-  float chop=chopAmt(sm);${waveSum(3, 'v')}
+  float chop=chopAmt(sm), gA=galeAmt(sm);${waveSum(3, 'v')}
   disp=D; return h;
 }`;
 // Fragment pass: all six, height, the TRUE (displaced) gradient, and the Jacobian foam
@@ -1397,7 +1440,7 @@ const GLSL_WAVE_F = `${GLSL_WIND_DECL}
 ${GLSL_CHOP_DECL}
 float waveField( vec2 p, float t, float storm, float dist, out vec2 grad, out float foam ){
   float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);
-  float chop=chopAmt(sm);
+  float chop=chopAmt(sm), gA=galeAmt(sm);
   float jx=0.0, jc=0.0, jz=0.0, t1=0.0, t2=0.0, t3=0.0;${waveSum(6, 'f')}
   // det(I + J). Floored well clear of zero: chop is held under the folding bound so the
   // true det cannot reach 0, but a floor is one instruction and it makes the inverse
@@ -1595,7 +1638,7 @@ function buildSurface() {
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
     uBright: { value: 1 }, uFade: { value: 1 },
     uRefr, uRefrK, uRefrSide, uRes,
-    uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX
+    uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -1632,6 +1675,7 @@ function buildSurface() {
       uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
                     uFoamThr, uFlash, uRefrK, uRefrSide;
       uniform vec2 uCap;
+      uniform vec4 uSss, uSss2;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
       ${GLSL_SKY_DECL}
       uniform sampler2D uRefr;
@@ -1815,6 +1859,15 @@ function buildSurface() {
         // standing in for; doing it properly also lets the from-above case be right.
         bool below = dot( V, N ) > 0.0;
 
+        // Reference wave height and gradient for THIS sea state — the scale every
+        // "how tall / how steep is this fragment" question is asked against. Hoisted
+        // above the interface branch because the broad-body SSS (air side) needs it too.
+        // Both carry the storm swell scale: galeAmt() multiplies the two longest
+        // components' height and their contribution to grad h, so if these did not follow
+        // it the thin/tall gates would simply stop firing once the swell grew.
+        float gG = mix( 1.0, uGale, smoothstep( 0.0, 0.90, uStorm ) );
+        float hRef = 0.58 + 1.24 * uStorm * gG, gRef = 0.075 + 0.24 * uStorm * gG;
+
         float rain = 0.0;            // from-below lens, unchanged
         float splashV = 0.0;         // air-side splash fleck
         vec2 dhSpl = vec2( 0.0 );    // kept separate: the air side wants less of it
@@ -1936,6 +1989,99 @@ function buildSurface() {
           col = body * ( 1.0 - F )
               + skyRadiance( reflect( V, Na ) ) * F;
 
+          // ---- BROAD-BODY SUBSURFACE SCATTERING ---------------------------
+          // The single dominant effect in Michael's poseidon reference: sunlight that
+          // entered the back of a swell, scattered through its MASS, and leaves the
+          // front as turquoise. Not a rim — a body. The dusk crest term further down is
+          // the narrow specialisation of the same physics and the two stack; this one is
+          // wide, and it is strongest exactly where that one is dead (a high sun).
+          //
+          // THREE FACTORS, in the order the physics writes them:
+          //  1. PATH THROUGH THE WATER. The higher a fragment sits on its own wave the
+          //     more lit mass is behind it, so the drive is h01 — the wave's own height
+          //     normalised by hRef — biased upward by sssPow. It is the wave's own
+          //     height, not the world height, so this reads the same on a calm swell and
+          //     a gale crest and never becomes a flat altitude wash.
+          //  2. HOW MUCH LIGHT THERE IS TO TRANSMIT. sin(solar elevation), over the
+          //     sssDayLo..sssDayHi gate, and NOTHING ELSE.
+          //     NOT the disc luminance, which is what the dusk rim term gates on and what
+          //     this term was first written to copy. That was a measured bug: uSunCol is
+          //     the DISC stop, the storm blend collapses it to [0.42,0.46,0.42], and the
+          //     rim term's smoothstep(0.50, 1.10, lum) therefore reads ZERO in a full
+          //     gale — the term switched itself off in precisely the weather it exists
+          //     for, and A/B banding across the whole frame measured a 0.3 code-value
+          //     difference. A storm dims the DISC because the sun is behind cloud; the
+          //     LIGHT still arrives, and a bright sunlit storm is the entire reference.
+          //     The moon is excluded by elevation instead: sssDayLo sits above the
+          //     elevNight floor (8 deg, sin 0.139), so night is exactly zero and dusk
+          //     (12 deg, sin 0.208) is near it, which is correct — dusk belongs to the
+          //     rim term and this one has no business there.
+          //  3. GEOMETRY. Broad on purpose: a floor of 0.30 for any across-the-swell
+          //     view, rising to 1.0 looking toward the sun, times a grazing term, because
+          //     transmitted light leaves a wave sideways and a top-down view sees the
+          //     column, not the glow. No pow() lobe — that is what makes the dusk term a
+          //     wire and this one a body.
+          //
+          // Weighted by (1 - F). Transmitted light arrives where the surface TRANSMITS,
+          // which is both physically correct and the bloom guard: on the grazing horizon
+          // fragments, where the reflected sky already sits at ~0.6 scene-linear, F is 1
+          // and this contributes exactly nothing. Nothing new crosses 0.28.
+          if ( uSss.x > 0.001 ) {
+            float dayS = smoothstep( uSss2.z, uSss2.w, uSunDir.y );
+            if ( dayS > 0.002 ) {
+              float h01 = clamp( waveY / max( hRef, 1e-3 ) * 0.5 + 0.5, 0.0, 1.0 );
+              vec2 sxz2 = uSunDir.xz;
+              float sl2 = length( sxz2 );
+              float tw = sl2 > 1e-3 ? dot( normalize( V.xz ), sxz2 / sl2 ) : 0.0;
+              float viewS = ( 0.30 + 0.70 * ( 0.5 + 0.5 * tw ) )
+                          * ( 0.35 + 0.65 * ( 1.0 - abs( V.y ) ) );
+              // Sea-state scale, floored at sssCalm — the calm anchor. Reads the SAME
+              // max(storm, wind) drive the chop gate does, so a windy fair day glows too.
+              float seaS = uSss2.y + ( 1.0 - uSss2.y )
+                         * smoothstep( 0.0, 0.85, max( uStorm, uWindS ) );
+              // Broad in DEPTH as well: the reference glows to the horizon. The dusk rim
+              // retires at 240; this holds to 430, where the sea is airlight anyway.
+              float amt = pow( h01, uSss.y ) * dayS * viewS * seaS
+                        * ( 1.0 - smoothstep( 220.0, 430.0, dist ) ) * uNearK * uSss.x;
+              // THE HUE IS DERIVED. fogColor is the palette's own surface irradiance;
+              // exp(-K_EXT * tau) is what this game's water does to light passing through
+              // it. Green-teal irradiance times a spectrum whose red dies and whose green
+              // and blue survive in near-equal measure IS the reference's turquoise.
+              // The ceiling is a SCALAR RESCALE, never a per-channel min(): clamping the
+              // channels independently is what turns a turquoise into a white the moment
+              // two of them saturate, and it did exactly that on the first build (a full
+              // whiteout of the gale, measured and screenshotted). Dividing the whole
+              // vector by its own peak keeps the derived hue whatever the ceiling is.
+              vec3 sssRaw = fogColor * exp( -${v3(K_EXT)} * uSss.z ) * uSss.w;
+              float sMax = max( sssRaw.r, max( sssRaw.g, sssRaw.b ) );
+              vec3 sssCol = sssRaw * ( sMax > uSss2.x ? uSss2.x / sMax : 1.0 );
+              // sqrt of the transmittance, not the transmittance. (1 - F) alone is the
+              // literal Fresnel weight and it measured almost nothing: across the open
+              // sea the view is grazing, F runs 0.8-1.0, and a 20x crank on sssK moved
+              // the band by 1.4 code values. The literal factor is also only half the
+              // physics — light leaving at a grazing angle travelled a LONGER path
+              // through the lit body on the way out, so the internal radiance it carries
+              // is correspondingly higher, and the two effects partly cancel. sqrt is the
+              // cheap stand-in for that cancellation. It keeps the property the bloom
+              // argument actually needs: still exactly 0 at F = 1, so the horizon
+              // fragments, where the reflected sky already sits near 0.6 scene-linear,
+              // gain nothing at all.
+              // BLOOM. The TERM is capped at sssCap (0.18), comfortably under
+              // BloomEffect's 0.28, which is the rule this pass was given.
+              //
+              // A HEADROOM clamp -- only ever spending what a fragment still has under
+              // 0.28 -- was built first and measured, because it is a strictly stronger
+              // guarantee. It is unusable here, and the measurement says why: in a bright
+              // gale the sea band already renders at 155-168 code values, i.e. 0.33-0.39
+              // scene-linear, because the reflected storm sky puts it there. The headroom
+              // is ALREADY ZERO across most of the sea, so that clamp deleted the effect
+              // over exactly the water it was written for and left +2.4 code values.
+              // The sea being over threshold in a gale is a pre-existing property of the
+              // sky reflection, not something this term introduces.
+              col += sssCol * clamp( amt, 0.0, 1.0 ) * sqrt( max( 1.0 - F, 0.0 ) );
+            }
+          }
+
           // Wind streaks: storm foam blown into lines along the dominant swell's own
           // bearing (WAVE[0], 20 degrees), sampled ~9:1 anisotropically so it reads as
           // streaks and not as blobs. Two octaves multiplied, so the streaks break up
@@ -1999,7 +2145,6 @@ function buildSurface() {
         // thing on a storm ceiling that glows); FOAM NEVER DOES, or a gale becomes a
         // field of fireworks. Desaturated white-green rather than the foam's blue-white:
         // torn water carries the sea's own colour in it, not the sky's.
-        float hRef = 0.58 + 1.24 * uStorm, gRef = 0.075 + 0.24 * uStorm;
         float fj = foamJ * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
         if ( fj > 0.003 ) {
           // PROCEDURAL FOAM TEXTURE. Three octaves of the same value noise everything
@@ -2375,6 +2520,9 @@ export function updateWater(dt, t) {
     uLagW.value.set(Math.exp(-CHOP_LAGS[0] / td), Math.exp(-CHOP_LAGS[1] / td),
       Math.exp(-CHOP_LAGS[2] / td));
     uChopX.value.set(CH.streakLegacy, CH.foamLagK);
+    uGale.value = CH.galeAmp;
+    uSss.value.set(CH.sssK, CH.sssPow, CH.sssTau, CH.sssGain);
+    uSss2.value.set(CH.sssCap, CH.sssCalm, CH.sssDayLo, CH.sssDayHi);
     _windOut.speed = _wsp; _windOut.dx = uWindD.value.x; _windOut.dz = uWindD.value.y;
   }
 

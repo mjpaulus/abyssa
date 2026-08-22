@@ -429,8 +429,85 @@ export const GLASS = {
     streakK: 2.5,
     // BACKLIT CREST SCATTER. Green-teal light transmitted through a thin crest when the
     // sun is low and beyond it. scatterPow is the view/sun lobe tightness.
+    // This is the DUSK SPECIALIZATION and stays exactly as it shipped: three hard gates
+    // (sun low, view toward it, fragment thin) so it lights rims and nothing else. The
+    // broad-body term below is a SEPARATE, wider, day-strong effect and they stack.
     scatterK: 1.00,
-    scatterPow: 5.0
+    scatterPow: 5.0,
+
+    // --- BROAD-BODY SUBSURFACE SCATTERING ------------------------------------
+    // Michael's poseidon reference is one dominant effect: sunlight scattered through
+    // the MASS of a swell so its whole upper body glows turquoise from inside. Our dusk
+    // rim term answers a different, much narrower question. This one is broad — it wants
+    // most of a wave's upper flank at midday, not a wire on its lip.
+    //
+    // HUE IS DERIVED, NEVER INVENTED. The colour is `fogColor` (the palette's own surface
+    // irradiance — THE SILT LINE still governs it) pushed through the water's molecular
+    // transmittance exp(-K_EXT * sssTau). K_EXT is [3.50, 1.45, 1.00]: red dies, green and
+    // blue survive in near-equal measure, and green-teal irradiance times that spectrum IS
+    // turquoise. The reference teal is not a constant, it is what seawater does to this
+    // game's own light. Raise sssTau for a deeper/bluer glow, lower it toward the raw
+    // surface hue.
+    sssK: 1.00,        // master. 0 removes the term exactly.
+    sssPow: 1.2,       // bias on the wave's own normalized height h01. 1 = linear over the
+                       // whole body; higher concentrates the glow in the upper third.
+    sssTau: 0.55,      // optical thickness of the notional path through the wave body
+    sssGain: 4.0,      // multiplier on fogColor after the transmittance
+    // Ceiling on the emitted colour, applied as a SCALAR RESCALE of the whole vector so
+    // the derived hue survives it (a per-channel min() turns turquoise into white the
+    // moment two channels saturate — that was the first build, and it whited out the
+    // entire gale). This is the hue guard; the BLOOM guard is separate and absolute: the
+    // shader only ever spends the headroom a fragment still has under BloomEffect's 0.28,
+    // so no poke of these knobs can add a blooming pixel to this sea.
+    sssCap: 0.24,
+    // The term is weighted by sqrt(1 - F): light arrives where the surface TRANSMITS, but
+    // light leaving at a grazing angle also travelled further through the lit body, and
+    // the two partly cancel. The literal (1 - F) measured almost nothing across the open
+    // sea, where the view is grazing and F runs 0.8-1.0. sqrt still reads exactly 0 at
+    // F = 1, which is the property the horizon needs.
+    //
+    // CALM ANCHOR. Scales with sea state, floored at sssCalm so a dead-flat noon gets a
+    // faint lift on swell tops and nothing more. Measured calm delta is on the card; this
+    // is the dial if Michael wants calm untouched (set 0) or more of it.
+    sssCalm: 0.10,
+    // Solar-elevation gate, on sin(elevation). 0.20 = 11.5 deg, 0.55 = 33.4 deg. Under
+    // the low end this is dead and the dusk rim term owns the frame; over the high end it
+    // is full. This gate is ALSO what excludes the moon, and it has to be: the rim term's
+    // disc-luminance gate cannot be reused here, because the storm blend collapses the
+    // disc stop to near-moonlight and that gate then shuts the term off in exactly the
+    // gale it exists for (measured — see the shader). The elevNight floor is 8 deg
+    // (sin 0.139), so a night gale reads exactly zero from this line alone.
+    // This pair ALSO drives the sunlit-storm gate in palette() — the desaturation lifts
+    // and the body glow arrives on the same curve, which is the point.
+    sssDayLo: 0.20,
+    sssDayHi: 0.55,
+
+    // --- SUNLIT STORMS -------------------------------------------------------
+    // GLASS.stops.storm.desat is 0.55 flat, so a NOON gale desaturates to slate — which
+    // is the game's dread tone applied to the wrong hour. The reference is a BRIGHT
+    // sunlit storm: vivid, saturated, enormous. These three scale the storm stop's pull
+    // by how much SUN there is, so a night gale is untouched (all three gates read 0 at
+    // elevation <= 0) and a noon gale keeps its colour.
+    //   desat: effective = storm.desat * (1 - stormDesatDayK * dayGate)
+    //   tint:  the blend toward storm.tint is scaled by (1 - stormTintDayK * dayGate)
+    //   surfK: storm.surfK * (1 + stormSurfDayK * dayGate)
+    // zen/hor/disc still blend to the storm stop at FULL strength — a gale's sky is a
+    // gale's sky, and the cloud deck is the storm's whole silhouette.
+    stormDesatDayK: 0.85,
+    stormTintDayK: 0.45,
+    stormSurfDayK: 0.35,
+
+    // --- STORM SWELL SCALE ---------------------------------------------------
+    // Multiplier on the STORM-scaled amplitude of the two LONGEST wave components (the
+    // 62 u and 41 u swells). Applied to the HEIGHT and its gradient only — the Gerstner
+    // horizontal displacement and the Jacobian keep the shipped amplitude, so sum(k*A)*chop
+    // is bit-identical, the no-fold bound is untouched, the CPU height mirror's fixed point
+    // contracts at exactly the rate it did, and the foam still fires where it always did.
+    // Physically this is the right split: a bigger swell is longer and taller, not steeper.
+    // Faded in by the same smoothstep(storm, 0, 0.9) as the storm amplitudes, so calm is
+    // exactly 1.0 and the calm anchor is structural, not tuned.
+    // 1.80 = 6.59 u peak-to-peak at full gale against the shipped 4.23 (1.56x).
+    galeAmp: 1.80
   },
 
   // --- RAIN. Two systems, one entry.
