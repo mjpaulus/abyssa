@@ -667,7 +667,11 @@ function update(dt, t) {
   setWeatherHand(wx.hand, wx.wind);
   setCloudWeather(wx.hand, wx.env.sky);
   setRainWeather(wx.env, windState());   // the eased wind, so the streaks lean on the same curve as the chop
-  setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm), wx.storm);
+  // The storm's 45% cut to surface irradiance is DAY-GATED now (the sunlit-storm
+  // principle, same as the palette desat): a noon gale keeps most of its light —
+  // Michael's poseidon reference is a BRIGHT storm — while a night gale keeps the
+  // full dread cut. At day 1 the cut is ~16%; at day 0 it is the shipped 45%.
+  setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm * (1 - 0.65 * wx.day)), wx.storm);
   setSwell(wx.env.sea, wx.day);
   setStormCurrent(wx.env.below);   // subsurface current lags the sky — weather arrives from above
   setWindCurrentVec(windState().speed, windState().dx, windState().dz);   // eased wind: drift below re-aims on the same curve as the chop above
