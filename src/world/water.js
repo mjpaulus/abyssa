@@ -520,7 +520,20 @@ if (typeof window !== 'undefined') {
         windT: [_wspT, _wdTX, _wdTZ], forced: !!_wForce,
         windK: [uWindK.value.x, uWindK.value.y], cap: [uCap.value.x, uCap.value.y],
         chop: uChop.value.toArray(), chop2: uChop2.value.toArray(),
-        lagW: uLagW.value.toArray(), surfH: _surfH, air: uAir.value
+        lagW: uLagW.value.toArray(), surfH: _surfH, air: uAir.value,
+        // OPACITY / BREAKERS probe. `opq` is the global (foam-free) churned-water
+        // opacity; `wAir`/`wBelow` are the transmission WEIGHTS the shader multiplies
+        // the refracted scene by on each side, and `refrK` is the pass's own gate
+        // (0 also means the pass was skipped this frame — see refrSkipped).
+        opaq: uOpaq.value.toArray(), opaq2: [uOpaq2.value.x, uOpaq2.value.y],
+        spill: uSpill.value.toArray(),
+        opq: (() => {
+          const C = GLASS.chop;
+          return C.opaqK * ms(Math.max(uStormU.value, uWindS.value), C.opaqLo, C.opaqHi);
+        })(),
+        get wAir() { return uRefrK.value * uRefrSide.value * (1 - this.opq); },
+        get wBelow() { return uRefrK.value * (1 - uRefrSide.value) * (1 - this.opq * uOpaq2.value.x); },
+        refrK: uRefrK.value, refrSide: uRefrSide.value, refrSkipped
       };
     },
     // THE INVERSE-MIRROR RESIDUAL, measured without a GPU readback. surfaceForwardAt is
@@ -1227,6 +1240,13 @@ const uGale = { value: GLASS.chop.galeAmp };
 // BROAD-BODY SSS. (sssK, sssPow, sssTau, sssGain) and (sssCap, sssCalm, dayLo, dayHi).
 const uSss = { value: new THREE.Vector4(GLASS.chop.sssK, GLASS.chop.sssPow, GLASS.chop.sssTau, GLASS.chop.sssGain) };
 const uSss2 = { value: new THREE.Vector4(GLASS.chop.sssCap, GLASS.chop.sssCalm, GLASS.chop.sssDayLo, GLASS.chop.sssDayHi) };
+// CHURNED-WATER OPACITY. (opaqK, opaqLo, opaqHi, opaqFoam) and (opaqBelow, opaqSssK).
+// See the GLASS.chop.opaq* block: this scales the WEIGHT of the screen-space refraction,
+// it never touches the pass itself. At storm 0 wind 0 every term is exactly 0.
+const uOpaq = { value: new THREE.Vector4(GLASS.chop.opaqK, GLASS.chop.opaqLo, GLASS.chop.opaqHi, GLASS.chop.opaqFoam) };
+const uOpaq2 = { value: new THREE.Vector2(GLASS.chop.opaqBelow, GLASS.chop.opaqSssK) };
+// SPILLING BREAKERS. (spillK, spillLen, spillLip, spillTail).
+const uSpill = { value: new THREE.Vector4(GLASS.chop.spillK, GLASS.chop.spillLen, GLASS.chop.spillLip, GLASS.chop.spillTail) };
 const CHOP_LAGS = [1.35, 2.70, 4.05];
 // Eased CPU state. Module-scoped, zero allocation per frame.
 let _wdX = 1, _wdZ = 0, _wsp = 0;
@@ -1414,6 +1434,18 @@ function waveSum(n, mode) {
     h+=ampH*sq;`;
     if (mode === 'v') {
       s += `\n    D+=dw*(amp*chop*cq); }`;
+    } else if (mode === 's') {
+      // SPILL PROBE: the compression trace and its lags ONLY. trace(J) = sum(s_i)
+      // because every dw is a unit vector, so this answers "is/was this parcel
+      // folding" for the price of one sin/cos per component — no height, no
+      // gradient, no Jacobian inverse, no matrix solve.
+      s += `\n    float sc=-amp*${f(k)}*chop;
+    tr+=sc*sq;`;
+      for (let L = 0; L < CHOP_LAGS.length; L++) {
+        const tau = CHOP_LAGS[L];
+        s += `\n    t${L + 1}+=sc*(sq*${f(Math.cos(w * tau))}-cq*${f(Math.sin(w * tau))});`;
+      }
+      s += ` }`;
     } else {
       s += `\n    g+=dw*(ampH*${f(k)}*cq);
     float sc=-amp*${f(k)}*chop;
@@ -1442,7 +1474,20 @@ float chopAmt( float sm ){ return uChop.x*max(sm,uWindS); }
 // and NOT to the Gerstner displacement or the Jacobian — a big swell is long and tall,
 // not steep, and keeping sum(k*A)*chop at its shipped value is what keeps the no-fold
 // bound, the CPU fixed point's contraction ratio and the foam birth test all unchanged.
-float galeAmt( float sm ){ return mix( 1.0, uGale, sm ); }`;
+float galeAmt( float sm ){ return mix( 1.0, uGale, sm ); }
+// THE FOLD TEST, written the only way that is DEFINED.
+//
+// This block used to ask smoothstep( thr, thr-sf, det ) — a DECREASING ramp expressed by
+// putting the high edge first. The GLSL spec says results are undefined when
+// edge0 >= edge1, and it means it: measured live in this project's own browser pane, that
+// call returns EXACTLY 0.0 for every input, which silently deleted the whole Jacobian
+// foam (the live term AND all three lagged terms) with no error and no warning. A gale
+// was therefore wearing only the old height-led whitecap and the legacy wind streaks —
+// a large part of why the storm read to Michael as "there is no breaking".
+//
+// 1 - smoothstep(lo, hi, x) is the same function, exactly, and is defined everywhere. On
+// a driver where the reversed form happened to work, this is a bit-for-bit no-op.
+float foldK( float thr, float sf, float x ){ return 1.0 - smoothstep( thr - sf, thr, x ); }`;
 // Vertex pass: the three components the mesh can actually carry as geometry, now with the
 // horizontal displacement that steepens their faces.
 const GLSL_WAVE_V = `${GLSL_WIND_DECL}
@@ -1471,13 +1516,34 @@ float waveField( vec2 p, float t, float storm, float dist, out vec2 grad, out fl
   // the last ~4 s. The lagged samples use the first-order det (1 + trace), which is the
   // same test to the order that matters and costs one float per lag.
   float thr=uChop.y, sf=max(uChop.z,0.02);
-  foam=smoothstep(thr,thr-sf,det);
+  foam=foldK(thr,sf,det);
   float lk=uChopX.y;
-  foam=max(foam,lk*uLagW.x*smoothstep(thr,thr-sf,1.0+t1));
-  foam=max(foam,lk*uLagW.y*smoothstep(thr,thr-sf,1.0+t2));
-  foam=max(foam,lk*uLagW.z*smoothstep(thr,thr-sf,1.0+t3));
+  foam=max(foam,lk*uLagW.x*foldK(thr,sf,1.0+t1));
+  foam=max(foam,lk*uLagW.y*foldK(thr,sf,1.0+t2));
+  foam=max(foam,lk*uLagW.z*foldK(thr,sf,1.0+t3));
   foam*=uChop.w;
   return h;
+}`;
+// SPILLING BREAKERS — the fold question asked somewhere ELSE.
+//
+// Michael: "there is no breaking." Foam that only sits on the fold line is a crease,
+// not a breaker; the reference's violence is whitewater avalanching DOWN the leading
+// face of a collapsing crest. That is TRANSPORT, and the Gerstner field's Lagrangian
+// bookkeeping already carries it: a parcel a little UPSLOPE of this fragment that
+// folded tau seconds ago shed white water which has since slid downhill to here. So
+// the fragment samples the compression at points up its own gradient (+grad h is
+// uphill) and reads the LAGGED trace there — near point with the short lag, far point
+// with the long one. The band therefore persists and slides down-face as the wave
+// advances, with no history texture and no render target, exactly like the foam it
+// extends.
+//
+// Returns (live trace, lag1, lag2, lag3). det(I+J) to first order is 1 + trace, which
+// is the same test waveField's lagged samples already use.
+const GLSL_FOLD = `vec4 foldTrace( vec2 p, float t, float storm, float dist ){
+  float sm=smoothstep(0.0,0.90,storm), h=0.0;
+  float chop=chopAmt(sm), gA=galeAmt(sm);
+  float tr=0.0, t1=0.0, t2=0.0, t3=0.0;${waveSum(6, 's')}
+  return vec4(tr,t1,t2,t3);
 }`;
 
 // Camera-centred polar disc, exponentially spaced rings. The old uniform 820x820 grid
@@ -1545,6 +1611,9 @@ const _clipArr = [_clipPlane];
 const _rtSize = new THREE.Vector2();
 const _prevClear = new THREE.Color();
 let refrOn = true, refrAir = true, refrFrame = 0;
+// True while the pass is being skipped for churn opacity (see renderRefraction). Forces
+// one fresh render on the frame the window re-opens instead of showing a stale target.
+let refrSkipped = false;
 
 // Quality fallback ladder, driven by postfx.degradeQuality. reduceRefraction is tier 1:
 // the target drops from half-res to quarter-res — ~a quarter of the pass's cost, and
@@ -1580,8 +1649,33 @@ export function renderRefraction() {
   // that must never be skipped is a side flip: a stale target there shows the WRONG
   // WORLD through the interface for a frame.
   refrFrame++;
+  // The side the hysteresis WILL settle on this frame, resolved before anything can
+  // return early. It has to be first: the churn skip below reads it, and an early
+  // return that leaves `refrAir` stale would freeze the pass on the wrong side — a
+  // measured bug, the diver swam under a gale and the below-side window never came
+  // back because the skip kept answering with the AIR side's weight.
   const sideNow = refrAir ? (uAir.value >= 0.30) : (uAir.value > 0.70);
-  if (sideNow === refrAir && refrFrame % (refrShift === 1 ? 2 : 3) !== 0) return;
+
+  // CHURN SKIP — the opacity fix pays for itself. Once the shader's transmission
+  // weight has reached zero (a full gale closes the window completely from the air;
+  // see the GLASS.chop.opaq* block), the target this pass fills is multiplied by 0 in
+  // every fragment, so submitting the whole scene a second time buys literally nothing.
+  // Uses the GLOBAL part of opq only — the local foam term can only push opq HIGHER,
+  // so skipping when the global part is already saturated is conservative. The BELOW
+  // side carries opaqBelow (0.35), so it effectively never saturates and the diver's
+  // window is never skipped away.
+  // Re-enable is seamless by construction: the weight ramps back through 0, so the
+  // first frames after the skip weigh a possibly-stale target at ~0 anyway; even so
+  // the stale frame is forced fresh (refrSkipped bypasses the temporal skip below).
+  {
+    const CH = GLASS.chop;
+    const churn = ms(Math.max(uStormU.value, uWindS.value), CH.opaqLo, CH.opaqHi);
+    const w = CH.opaqK * churn * (sideNow ? 1 : CH.opaqBelow);
+    if (w >= 0.995) { uRefrK.value = 0; refrSkipped = true; refrAir = sideNow; return; }
+  }
+
+  if (sideNow === refrAir && !refrSkipped && refrFrame % (refrShift === 1 ? 2 : 3) !== 0) return;
+  refrSkipped = false;
 
   renderer.getDrawingBufferSize(_rtSize);
   uRes.value.copy(_rtSize);
@@ -1657,7 +1751,8 @@ function buildSurface() {
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
     uBright: { value: 1 }, uFade: { value: 1 },
     uRefr, uRefrK, uRefrSide, uRes,
-    uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2
+    uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2,
+    uOpaq, uOpaq2, uSpill
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -1691,10 +1786,11 @@ function buildSurface() {
     fragmentShader: `#include <fog_pars_fragment>
       ${GLSL_NOISE}
       ${GLSL_WAVE_F}
+      ${GLSL_FOLD}
       uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
                     uFoamThr, uFlash, uRefrK, uRefrSide;
-      uniform vec2 uCap;
-      uniform vec4 uSss, uSss2;
+      uniform vec2 uCap, uOpaq2;
+      uniform vec4 uSss, uSss2, uOpaq, uSpill;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
       ${GLSL_SKY_DECL}
       uniform sampler2D uRefr;
@@ -1887,6 +1983,52 @@ function buildSurface() {
         float gG = mix( 1.0, uGale, smoothstep( 0.0, 0.90, uStorm ) );
         float hRef = 0.58 + 1.24 * uStorm * gG, gRef = 0.075 + 0.24 * uStorm * gG;
 
+        // ---- CHURNED-WATER OPACITY ---------------------------------------
+        // Michael's reference storm sea is a WALL. Ours reads as thin glass because
+        // the transmission term is a real screen-space render of the far side, and a
+        // real render is a real image no matter how hard the water is churning. So
+        // the IMAGE'S WEIGHT fades with sea state: entrained bubbles under a gale
+        // scatter the transmitted ray out within centimetres, and what is left is the
+        // water's own body plus what scatters back out of it. THICK, not black — the
+        // analytic body and the broad-body SSS are what remain, which is precisely
+        // the pair that was already underneath the refraction mix.
+        //
+        // ANCHOR: at storm 0 wind 0, churn is smoothstep(lo,hi,0) = 0 and foamJ is
+        // exactly 0 (chop 0 -> det 1), so opq is exactly 0 and every transmission
+        // line below is bit-identical to what shipped.
+        float churn = smoothstep( uOpaq.y, uOpaq.z, max( uStorm, uWindS ) );
+        float opq = clamp( uOpaq.x * max( churn, uOpaq.w * foamJ ), 0.0, 1.0 );
+
+        // ---- SPILLING BREAKERS -------------------------------------------
+        // Whitewater shed by a fold UPSLOPE of here, avalanched down to this
+        // fragment. See GLSL_FOLD. Two probes up the wave's own gradient, read at the
+        // two lags that match the time the water needed to get down here; the near
+        // one is denser (fresh, at the lip), the far one thinner (older, downslope).
+        // Biased onto the LEADING face — waves travel downwind, so the face pointing
+        // downwind is the one that collapses forward.
+        float spill = 0.0;
+        if ( uSpill.x > 0.001 && max( uStorm, uWindS ) > 0.02 ) {
+          float gl = length( dh );
+          if ( gl > 1e-4 ) {
+            vec2 up = dh / gl;                       // +grad h points UPHILL
+            float L = uSpill.y * ( 0.45 + 0.55 * gG ) * ( 0.35 + 0.65 * uStorm );
+            float thr = uChop.y, sf = max( uChop.z, 0.02 );
+            vec4 fA = foldTrace( vP0 + up * ( L * 0.45 ), uTime, uStorm, dist );
+            vec4 fB = foldTrace( vP0 + up * L,           uTime, uStorm, dist );
+            float sA = foldK( thr, sf, 1.0 + fA.y );   // lag 1: 1.35 s
+            float sB = foldK( thr, sf, 1.0 + fB.z );   // lag 2: 2.70 s
+            // Leading-face gate. Soft, and never fully closed on the back: a real
+            // crest throws some water over its own shoulder.
+            float fw = 0.25 + 0.75 * smoothstep( -0.20, 0.45, dot( -up, uWindD ) );
+            // The SAME decay weights the lingering fold-foam uses (uLagW = exp(-tau/
+            // foamDecay)): whitewater that slid this far down the face is that much
+            // older, so it has had exactly that long to dissolve. Without them the
+            // spill measured ~3x the coverage of the fold-born foam it extends, which
+            // is a sheet, not an avalanche.
+            spill = uSpill.x * fw * max( uSpill.z * uLagW.x * sA, uSpill.w * uLagW.y * sB );
+          }
+        }
+
         float rain = 0.0;            // from-below lens, unchanged
         float splashV = 0.0;         // air-side splash fleck
         vec2 dhSpl = vec2( 0.0 );    // kept separate: the air side wants less of it
@@ -1963,7 +2105,13 @@ function buildSurface() {
             // raft, ladder and sky instead of an analytic gradient. Falls back to the
             // analytic sky at the screen edges and whenever the pass is off, so the old
             // frame is the floor, never the casualty.
-            float rk = uRefrK * ( 1.0 - uRefrSide );
+            // THE FROM-BELOW WINDOW THICKENS ONLY PARTLY (uOpaq2.x =
+            // GLASS.chop.opaqBelow, flagged for Michael). Physically bubbles do not
+            // care which way the light travels and this should match the air side;
+            // gameplay does care — Snell's window is the diver's only wayfinding near
+            // a storm ceiling and losing the raft through it is a worse frame than a
+            // slightly-too-clear one. 0.35 murks the ceiling without deleting it.
+            float rk = uRefrK * ( 1.0 - uRefrSide ) * ( 1.0 - opq * uOpaq2.x );
             if ( rk > 0.001 ) {
               float ok; vec3 rs = refrSample( T, V, dh, ok );
               win = mix( win, rs, rk * ok );
@@ -2000,7 +2148,11 @@ function buildSurface() {
           // stays on top: even perfectly clear water scatters some of its own column
           // into the eye, and the veil is also what keeps the hand-off seamless where
           // the sample runs off screen and ok fades to the analytic answer.
-          float rk = uRefrK * uRefrSide;
+          // ...and it closes as the sea churns. (1 - opq) is the whole of Michael's
+          // opacity note: at storm 1 / wind 0.9 this weight is 0 and the sea from the
+          // deck is body + scatter with no transmitted image in it at all. The
+          // analytic body underneath is unchanged, so the sea goes THICK, not black.
+          float rk = uRefrK * uRefrSide * ( 1.0 - opq );
           if ( rk > 0.001 ) {
             float ok; vec3 rs = refrSample( T, V, dhA, ok );
             body = mix( body, mix( rs, body, 0.15 ), rk * ok );
@@ -2060,7 +2212,12 @@ function buildSurface() {
                          * smoothstep( 0.0, 0.85, max( uStorm, uWindS ) );
               // Broad in DEPTH as well: the reference glows to the horizon. The dusk rim
               // retires at 240; this holds to 430, where the sea is airlight anyway.
+              // OPACITY LIFT. As the window closes, the light that used to come
+              // through the sea has to come OUT of it instead — that is what an
+              // opaque churned sea actually is. 1 + opaqSssK*opq, so calm (opq = 0)
+              // is untouched to the bit and a full gale glows half again as hard.
               float amt = pow( h01, uSss.y ) * dayS * viewS * seaS
+                        * ( 1.0 + uOpaq2.y * opq )
                         * ( 1.0 - smoothstep( 220.0, 430.0, dist ) ) * uNearK * uSss.x;
               // THE HUE IS DERIVED. fogColor is the palette's own surface irradiance;
               // exp(-K_EXT * tau) is what this game's water does to light passing through
@@ -2164,7 +2321,12 @@ function buildSurface() {
         // thing on a storm ceiling that glows); FOAM NEVER DOES, or a gale becomes a
         // field of fireworks. Desaturated white-green rather than the foam's blue-white:
         // torn water carries the sea's own colour in it, not the sky's.
-        float fj = foamJ * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
+        // The spill joins the fold-born foam HERE, before the texture, so an
+        // avalanche is torn by exactly the same procedural lace as the crest that
+        // shed it — and because the texture closes its own holes in proportion to
+        // the intensity, the band is solid at the lip and ragged at the tail for
+        // free. max(), not add: whitewater does not stack.
+        float fj = max( foamJ, spill ) * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
         if ( fj > 0.003 ) {
           // PROCEDURAL FOAM TEXTURE. Three octaves of the same value noise everything
           // else here is made of, in a wind-aligned frame: advected downwind so the
@@ -2553,6 +2715,9 @@ export function updateWater(dt, t) {
     uGale.value = CH.galeAmp;
     uSss.value.set(CH.sssK, CH.sssPow, CH.sssTau, CH.sssGain);
     uSss2.value.set(CH.sssCap, CH.sssCalm, CH.sssDayLo, CH.sssDayHi);
+    uOpaq.value.set(CH.opaqK, CH.opaqLo, CH.opaqHi, CH.opaqFoam);
+    uOpaq2.value.set(CH.opaqBelow, CH.opaqSssK);
+    uSpill.value.set(CH.spillK, CH.spillLen, CH.spillLip, CH.spillTail);
     _windOut.speed = _wsp; _windOut.dx = uWindD.value.x; _windOut.dz = uWindD.value.y;
   }
 
