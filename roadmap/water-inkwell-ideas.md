@@ -1,6 +1,6 @@
 ---
 title: Surface water bar (inkwell + poseidon)
-status: done
+status: wip
 tags: water, reference
 updated: 2026-08-16
 ---
@@ -23,3 +23,4 @@ Constraints as always: no new render targets, bloom discipline, calm-noon anchor
 - 2026-08-16 — TWO THINGS NEED MICHAEL'S EYE. (a) `GLASS.chop.streakLegacy` (default 1.0 = shipped): the OLD wind-streak block paints straight unbroken bands along a fixed 20-degree bearing whether or not the water is folding, and from height in a gale it now reads as corduroy under the new fold-born lace. 0 hands the gale entirely to the Jacobian foam. (b) `GLASS.chop.k` (1.55): the steepness dial. Deck-wash was measured over 45 frames at k = 0/0.8/1.2/1.55/2.0 and does NOT rise with chop (1.5-1.9% of the deck region either way), so the open `gale-crests-deck` decision is not made worse — but the taste of how steep this sea should be is his.
 
 - 2026-08-08 — merged (c79feaf) + THE MISSING PIECE found by Michael's "still dont see the improved water": at storm 1 the new 2.5u waves rolled THROUGH the raft (its bob was a decorative ±0.32 sine) and buried the standing camera inside the wave. The raft now RIDES surfaceHeightAt (center/bow/beam average, 0.35s ease, pitch/roll from differentials) — deck stays above the sea and the storm is something you WATCH from it. Verified: noon gale from deck, camera dry, foam field visible to horizon
+- 2026-08-08 — reopened by Michael against the poseidon reference: "not seeing the surface quality I was expecting." Gap re-diagnosed as LIGHT not mechanics: (1) broad-body SSS — the reference's luminous teal lives across whole wave flanks (sun scattered through the upper mass), ours only rims backlit crests at dusk; (2) our storm STOP desaturates to slate by design, fighting the reference's BRIGHT sunlit storm — desat must key off darkness, not storm, so a noon gale stays vivid and a night gale stays dread; (3) storm swell scale up now that the raft rides the field. Luminous-sea pass launched
