@@ -9,6 +9,7 @@ import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
 import { ventColliders } from './world/vents.js';
 import { raft } from './systems/raft.js';
+import { surfaceHeightAt, stormLevel } from './world/water.js';
 
 export const player = {
   pos: V3(0, -10, 0),
@@ -312,8 +313,12 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   if (keys['Space']) player.trim = Math.min(TRIM_MAX, player.trim + TRIM_UP * dt);
   if (keys['ControlLeft'] || keys['KeyC']) player.trim = Math.max(0, player.trim - TRIM_DOWN * dt);
   if (player.trim > fullTrim) player.trim = Math.max(fullTrim, player.trim - TRIM_RELIEF * dt);
-  // Same swell term the raft rides (raft.js), so Sal and the raft heave together.
-  const swell = Math.sin(t * 0.6) * 0.32 * (1 + stormK * 2.1) + stormK * Math.sin(t * 2.3) * 0.22;
+  // THE REAL WAVE UNDER HIM. This was the raft's old decorative sine — but the raft
+  // rides surfaceHeightAt now and Sal was left floating on a phantom flat-ish sea
+  // while gale swells rolled through him (user-reported: "sal doesnt really float in
+  // the water correctly when the storm hits"). Same source the raft and the mesh use,
+  // sampled at HIS position, so a passing crest lifts him and a trough drops him.
+  const swell = surfaceHeightAt(player.pos.x, player.pos.z, t, stormLevel());
   const ySub = SURFACE_Y + Y_SUB + swell;
   // Emergence: buoyant force scales with the volume still under water, weight does not.
   // That makes the waterline a real equilibrium he floats at instead of a ceiling he
@@ -459,8 +464,13 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // A man on the boarding ladder is the exception: hand-over-hand up the rungs is the
   // one legitimate way out of the water, and this ceiling was silently erasing every
   // centimetre the climb added.
-  if (player.pos.y > SURFACE_Y - 1.2 && !player.onLadder) {
-    player.pos.y = SURFACE_Y - 1.2;
+  // Wave-relative, not flat: the old fixed SURFACE_Y - 1.2 plane clamped him ~4 units
+  // under a passing gale crest (the wave field heaves +-3 now), which is exactly the
+  // "doesn't float right in a storm" report. The backstop follows the same wave his
+  // buoyancy equilibrium rides.
+  const ceilY = SURFACE_Y - 1.2 + swell;
+  if (player.pos.y > ceilY && !player.onLadder) {
+    player.pos.y = ceilY;
     if (player.vel.y > 0) player.vel.y = 0;
   }
 
