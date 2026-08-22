@@ -20,6 +20,7 @@ import { SURFACE_Y } from '../config.js';
 import { V3 } from '../lib/math.js';
 import { makeGlow } from '../lib/textures.js';
 import { survival } from './survival.js';
+import { surfaceHeightAt, stormLevel } from '../world/water.js';
 import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash } from './raft/kit.js';
 import { buildHull } from './raft/hull.js';
 import { buildStation } from './raft/station.js';
@@ -51,6 +52,8 @@ let pumpH = null, lampGlass = null, beaconGlow = null, lamp = null, lampLight = 
 // The keepsake shelf's dynamic-row setter, and anything game.js pushed in before the raft
 // existed (it loads the saved chart and calls setKeepsakes at module scope).
 let shelfSet = null, pendingKeeps = null;
+// Ride state: the hull's eased height and attitude on the real wave field.
+let rideY = RAFT_POS.y, rideRX = 0, rideRZ = 0;
 const PUFFN = 7, puffs = [];
 let puffT = 0;
 const puffOrigin = V3();
@@ -259,13 +262,30 @@ export function setSwell(k, d = 1) { storm = k; day = d; }
 export function pumpSpeed() { return govK; }
 
 export function updateRaft(dt, t) {
-  // swell scales with the storm (set by game.js): a storm-tossed raft heaves ~3x and
-  // adds a faster chop harmonic, which the tether anchor inherits for free via pumpPos.
-  const sw = 1 + storm * 2.1, chop = storm * Math.sin(t * 2.3) * 0.22;
-  raft.position.y = RAFT_POS.y + Math.sin(t * 0.6) * 0.32 * sw + chop;
-  raft.position.x = RAFT_POS.x + Math.sin(t * 0.37) * 0.16 * sw;
-  raft.rotation.z = Math.sin(t * 0.52) * 0.035 * sw + storm * Math.sin(t * 1.9) * 0.02;
-  raft.rotation.x = Math.cos(t * 0.44) * 0.028 * sw;
+  // THE RAFT RIDES THE REAL SEA. It used to run its own decorative bob (+-0.32 sine)
+  // while the wave MESH, since the choppy-sea round, heaves 2.5+ units in a gale —
+  // so storm crests rolled straight THROUGH the deck and buried the standing camera
+  // inside the wave (user-reported as "I don't see the improved water": he was IN it).
+  // Now the hull samples the same surfaceHeightAt the mesh is built from — center,
+  // bow and beam — averages them (a 9-unit hull low-passes chop shorter than itself)
+  // and eases with a short time constant (mass; a barge does not follow ripples).
+  // Pitch/roll come from the bow/beam differentials. Everything downstream (pumpPos,
+  // tether, deckY in player.js, the camera) is position-relative and follows free.
+  const st = stormLevel();
+  const hC = surfaceHeightAt(RAFT_POS.x, RAFT_POS.z, t, st);
+  const hF = surfaceHeightAt(RAFT_POS.x, RAFT_POS.z + 3.5, t, st);
+  const hB = surfaceHeightAt(RAFT_POS.x + 3.5, RAFT_POS.z, t, st);
+  const hTarget = RAFT_POS.y + (hC * 2 + hF + hB) * 0.25;
+  const ek = Math.min(1, dt / 0.35);
+  rideY += (hTarget - rideY) * ek;
+  raft.position.y = rideY;
+  raft.position.x = RAFT_POS.x + Math.sin(t * 0.37) * 0.16 * (1 + storm * 2.1);
+  // pitch into the swell off the bow/beam height differentials, softly clamped
+  const pit = clamp01((hF - hC) / 3.5 + 0.5) - 0.5, rol = clamp01((hB - hC) / 3.5 + 0.5) - 0.5;
+  rideRX += (-pit * 0.9 - rideRX) * ek;
+  rideRZ += (rol * 0.9 - rideRZ) * ek;
+  raft.rotation.x = rideRX + Math.cos(t * 0.44) * 0.012;
+  raft.rotation.z = rideRZ + Math.sin(t * 0.52) * 0.014;
   // The anchor rides the sheave, so the hose stays on the block as the raft rolls.
   // The matrix has to be refreshed first — localToWorld reads matrixWorld, which three
   // would not rebuild until render, leaving the anchor a frame behind the swell.

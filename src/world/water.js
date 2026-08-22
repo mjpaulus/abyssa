@@ -1312,6 +1312,9 @@ const uAir = { value: 0 };
 // against a flat -0.9 clamp would have leaked a little sky into the underwater frame).
 let _surfH = SURFACE_Y;
 export function localSurfaceY() { return _surfH; }
+// The storm value the water mesh itself is rendered with — for callers (the raft)
+// that need surfaceHeightAt to agree with the mesh, not with their own copy of storm.
+export function stormLevel() { return uStormU.value; }
 
 // Unrolled from JS because GLSL ES 1.00 (what three compiles a plain ShaderMaterial as)
 // has no array constructors — `const float A[6] = float[6](...)` is a 3.00-only form.
