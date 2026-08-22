@@ -567,7 +567,67 @@ export const GLASS = {
     // Faded in by the same smoothstep(storm, 0, 0.9) as the storm amplitudes, so calm is
     // exactly 1.0 and the calm anchor is structural, not tuned.
     // 1.80 = 6.59 u peak-to-peak at full gale against the shipped 4.23 (1.56x).
-    galeAmp: 1.80
+    galeAmp: 1.80,
+
+    // --- CHURNED-WATER OPACITY (Michael: "maybe its the transparency that is
+    // throwing it off"). His reference storm sea is a WALL, not a window: churned
+    // water is full of entrained bubbles, and a bubble cloud is the most efficient
+    // scatterer in the ocean — the transmitted image dies within centimetres.
+    //
+    // Our screen-space refraction (renderRefraction + uRefr/uRefrK) is beloved,
+    // hard-won CALM-water tech and it is not touched. What changes is its WEIGHT:
+    // the refracted-scene contribution is scaled by (1 - opq), and what replaces it
+    // is what was always underneath — the analytic water BODY plus the broad-body
+    // SSS. Opaque here means THICK, never black; the SSS is exactly the term built
+    // to carry that, so opaqSssK lifts it as the window closes.
+    //
+    // THE ANCHOR IS STRUCTURAL. opq = opaqK * max(churn, opaqFoam * foamJ), and at
+    // storm 0 wind 0 churn is smoothstep(lo,hi,0) = 0 while foamJ is EXACTLY 0 (chop
+    // is 0, the Jacobian is the identity, det = 1). So opq is exactly 0 and the
+    // transmission path is bit-identical to what shipped.
+    opaqK: 1.00,          // master. 0 restores the glass sea everywhere.
+    opaqLo: 0.20,         // sea state (max(storm, wind)) where thickening begins
+    opaqHi: 0.90,         // ...and where the window is fully closed
+    // Local foam also closes the window on its own: whitewater is opaque even on an
+    // otherwise moderate sea, so a breaking crest is never see-through.
+    opaqFoam: 0.90,
+    // FROM BELOW (a Michael flag). Physically the diver looking UP through a churned
+    // ceiling should lose the raft too — bubbles do not care which way the light
+    // goes. Gameplay says otherwise: Snell's window is the only wayfinding a diver
+    // has near the surface in a gale, and the raft/ladder read through it is what
+    // the refraction pass was built for. 0.35 = the below side thickens to just over
+    // a third of the air side's amount, so the ceiling gets murkier in a gale without
+    // the raft ever disappearing. 1.0 = physically consistent, 0 = below untouched.
+    opaqBelow: 0.35,
+    // How much the broad-body SSS is lifted as the window closes (opq = 1 gives
+    // 1 + this). The opaque sea has to go thick, not dark.
+    opaqSssK: 0.50,
+
+    // --- SPILLING BREAKERS (Michael: "there is no breaking"). Whitewater does not
+    // sit on the fold line; it avalanches DOWN the leading face under a collapsing
+    // crest. No geometry change — this is foam TRANSPORT.
+    //
+    // The trick is the same Lagrangian one the Jacobian foam already uses. A parcel
+    // UPSLOPE of this fragment that folded tau seconds ago shed whitewater that has
+    // since slid downhill; so we ask the fold question at points up the wave's own
+    // gradient (+grad h is uphill) and read the LAGGED compression there — near
+    // sample with the 1.35 s lag, far sample with the 2.70 s lag. The band therefore
+    // PERSISTS and slides down-face as the wave advances, for two extra evaluations
+    // of the compression trace only (no height, no gradient, no Jacobian inverse).
+    //
+    // Calm anchor is structural again: chop 0 makes every compression term exactly
+    // 0, the fold test never fires, and the whole block is branch-gated off besides.
+    spillK: 1.00,         // master. 0 removes the avalanches exactly.
+    // Down-face reach of the spill, in world units, at full gale (scaled by the
+    // storm swell so a bigger wave wears a longer avalanche). 3.2 u is about half a
+    // crest face of the 41 u swell — long enough to read as a cascade from the deck,
+    // short enough that it never becomes a sheet.
+    spillLen: 3.20,
+    // Density at the lip against the tail. Denser near the fold, raggedly thinning
+    // downslope — the foam TEXTURE does the tearing (a weaker band closes fewer of
+    // its own noise holes), so these two numbers are the whole gradient.
+    spillLip: 1.00,
+    spillTail: 0.75
   },
 
   // --- RAIN. Two systems, one entry.
