@@ -157,7 +157,15 @@ export function updateLighting(depth01) {
   // storm term travels from env.sky at the interface to env.below by the bottom of the
   // weather band. Identical to the old single-scalar form whenever the two agree — i.e.
   // at every steady state, and always when game.js passes no envelope.
-  const stormK = 1 - 0.45 * (wDeep + (wStorm - wDeep) * surf);
+  // THE SUNLIT-STORM GATE, and it is the SAME expression game.js applies to the surface
+  // irradiance and palette() applies to the storm stop — one principle, three places, so
+  // a noon gale cannot end up bright in the water and black on the deck. Michael's
+  // poseidon reference is a BRIGHT storm; the 45% cut here was describing DARKNESS while
+  // keying off STORM, and with everything else fixed the deck stayed near-black in a noon
+  // gale. At day 1 the cut is 15.75%, at day 0 it is the shipped 45% exactly — so a night
+  // gale is bit-identical and the dread is untouched.
+  const stormBite = wDeep + (wStorm - wDeep) * surf;
+  const stormK = 1 - 0.45 * stormBite * (1 - 0.65 * wDay);
   const wk = 1 - surf * (1 - dayK * stormK);
   const flashBoost = surf * wFlash;
 

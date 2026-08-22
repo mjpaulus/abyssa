@@ -568,6 +568,11 @@ const _ring = [null, null, null, null];
 const _pZen = [0, 0, 0], _pHor = [0, 0, 0], _pDisc = [0, 0, 0];
 const _pSurf = [0, 0, 0];               // SURF_LIGHT * wSurfK * stop.surfK * stop.tint
 let _pDesat = 0;
+// The resolved storm target (storm <-> stormDay by the solar-height gate), and the gate
+// itself. Module-scoped so nothing allocates per frame and so skyDrama() reads the SAME
+// _dayG the palette used rather than a second copy of the expression.
+const _sZen = [0, 0, 0], _sHor = [0, 0, 0], _sDisc = [0, 0, 0], _sTint = [0, 0, 0];
+let _dayG = 0;
 
 function lerp3(out, a, b, t) {
   out[0] = a[0] + (b[0] - a[0]) * t;
@@ -600,29 +605,43 @@ function palette(ring, envSky) {
   _pDesat = a.desat + (b.desat - a.desat) * t;
 
   const s = clamp(envSky, 0, 1);
+  // THE SUNLIT-STORM GATE. The sun's own height (SUN.dir.y = sin of the solar elevation),
+  // read from the one live sun every other consumer reads, over the same window the
+  // broad-body SSS uses — so the sky brightens, the desaturation lifts and the water
+  // starts to glow on ONE curve rather than three that can disagree.
+  //
+  // Stored module-wide because skyDrama() needs the identical value for the cloud lid a
+  // few lines later in the same frame, and recomputing it there is how the sky and its
+  // clouds end up gated slightly differently after someone edits one of them.
+  //
+  // At night SUN.dir.y sits at the elevNight floor (8 deg, sin 0.139) which is below
+  // sssDayLo, so _dayG is EXACTLY 0 and every line below reduces to the shipped storm
+  // blend. That identity is the night-gale anchor, and it is structural, not tuned.
+  _dayG = ms(SUN.dir.y, GLASS.chop.sssDayLo, GLASS.chop.sssDayHi);
   if (s > 0) {
-    const T = S.storm;
-    // SUNLIT STORMS. The storm stop desaturates to slate at 0.55 flat, which is the
-    // game's dread tone applied to the wrong variable: it keys off STORM when what it is
-    // really describing is DARKNESS. A night gale is slate; a NOON gale, in Michael's
-    // reference, is a bright, vividly coloured, saturated sea under a black sky.
-    //
-    // The gate is the sun's own height (SUN.dir.y = sin of the solar elevation), read
-    // from the one live sun every other consumer reads, over the same window the
-    // broad-body SSS uses — so the desaturation lifts and the glow arrives together.
-    // At night SUN.dir.y is at the elevNight floor and dayG is 0, which makes every line
-    // below identical to what shipped. That identity is the night-gale anchor.
-    const C = GLASS.chop;
-    const dayG = ms(SUN.dir.y, C.sssDayLo, C.sssDayHi);
-    // zen / hor / disc still go the WHOLE way to the storm stop: a gale's sky is a gale's
-    // sky and the deck is the storm's entire silhouette. Only the SATURATION pull, the
-    // tint blend and the irradiance scale are day-gated — i.e. what the SEA is made of.
-    toward3(_pZen, T.zen, s);
-    toward3(_pHor, T.hor, s);
-    toward3(_pDisc, T.disc, s);
-    toward3(_pSurf, T.tint, s * (1 - C.stormTintDayK * dayG));
-    sk += (T.surfK * (1 + C.stormSurfDayK * dayG) - sk) * s;
-    _pDesat += (T.desat * (1 - C.stormDesatDayK * dayG) - _pDesat) * s;
+    // The storm TARGET is itself a blend of two authored stops before it touches the
+    // ring: slate at night, the bright reference gale by day. Resolving it here rather
+    // than day-scaling each pull separately is what lets zen and hor move too — and the
+    // far sea is mostly reflected sky, so zen and hor are most of the problem.
+    const T = S.storm, D = S.stormDay, g = _dayG;
+    _sZen[0] = T.zen[0] + (D.zen[0] - T.zen[0]) * g;
+    _sZen[1] = T.zen[1] + (D.zen[1] - T.zen[1]) * g;
+    _sZen[2] = T.zen[2] + (D.zen[2] - T.zen[2]) * g;
+    _sHor[0] = T.hor[0] + (D.hor[0] - T.hor[0]) * g;
+    _sHor[1] = T.hor[1] + (D.hor[1] - T.hor[1]) * g;
+    _sHor[2] = T.hor[2] + (D.hor[2] - T.hor[2]) * g;
+    _sDisc[0] = T.disc[0] + (D.disc[0] - T.disc[0]) * g;
+    _sDisc[1] = T.disc[1] + (D.disc[1] - T.disc[1]) * g;
+    _sDisc[2] = T.disc[2] + (D.disc[2] - T.disc[2]) * g;
+    _sTint[0] = T.tint[0] + (D.tint[0] - T.tint[0]) * g;
+    _sTint[1] = T.tint[1] + (D.tint[1] - T.tint[1]) * g;
+    _sTint[2] = T.tint[2] + (D.tint[2] - T.tint[2]) * g;
+    toward3(_pZen, _sZen, s);
+    toward3(_pHor, _sHor, s);
+    toward3(_pDisc, _sDisc, s);
+    toward3(_pSurf, _sTint, s);
+    sk += ((T.surfK + (D.surfK - T.surfK) * g) - sk) * s;
+    _pDesat += ((T.desat + (D.desat - T.desat) * g) - _pDesat) * s;
   }
   desat3(_pZen, _pDesat);
   desat3(_pHor, _pDesat);
@@ -2398,8 +2417,19 @@ function skyDrama(dt, storm) {
 
   // Colours. Both ends are made from the palette's HORIZON radiance, so a cloud is
   // always lit by the day it is in and needs no stop of its own.
-  const litK = ml(C.litK, C.stormLit, storm);
-  const baseK = (C.baseK - C.baseDark * uCloudTex.value) * (1 - 0.30 * storm);
+  // The two storm-lid numbers travel with the SAME solar-height gate the two storm stops
+  // do (_dayG, resolved in palette() earlier this frame). A night gale keeps the shipped
+  // 0.30 / 0.26 exactly; a noon gale keeps a lit top and a dark underside instead of
+  // collapsing into one grey ceiling, which is what the reference's lid actually does.
+  // Note the lit/base ENDS are both made from _pHor, which the stormDay stop has already
+  // brightened — so this pair only sets the SEPARATION, never the overall level.
+  const stormLit = ml(C.stormLit, C.stormLitDay, _dayG);
+  const baseDark = ml(C.baseDark, C.baseDarkDay, _dayG);
+  const litK = ml(C.litK, stormLit, storm);
+  // Floored at 0. A cloud underside is allowed to be black; it is not allowed to be a
+  // negative radiance, and the pair above can reach one if anyone authors baseDark over
+  // baseK (measured: -0.025 at baseDarkDay 0.48). One max() makes that unauthorable.
+  const baseK = Math.max(0, C.baseK - baseDark * uCloudTex.value) * (1 - 0.30 * storm);
   for (let i = 0; i < 3; i++) { _cLit[i] = _pHor[i] * litK; _cBase[i] = _pHor[i] * baseK; }
 
   // EMBER UNDERSIDES — the post-storm-clearing payoff. Only at low sun, only by the

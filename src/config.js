@@ -136,6 +136,50 @@ export const GLASS = {
     storm: {
       zen: [0.052, 0.068, 0.078], hor: [0.235, 0.258, 0.250],
       disc: [0.42, 0.46, 0.42], tint: [0.92, 1.00, 0.95], surfK: 1, desat: 0.55
+    },
+    // THE BRIGHT STORM. A second authored storm stop, blended against `storm` above by
+    // the sun's own height before either touches the ring (see palette()). It exists
+    // because a storm stop cannot be one look: `storm` describes a gale at NIGHT, which
+    // is this game's dread, and Michael's poseidon reference is a gale at NOON, which is
+    // enormous vivid teal water under a black lid and a hazy bright horizon. Keying the
+    // difference off DARKNESS rather than off STORM is the whole correction.
+    //
+    // WHY A SECOND STOP and not more multipliers on the first: zen/hor/desat/tint/surfK
+    // are six numbers that have to move together to read as one sky, and three
+    // independent `dayK` scalars (which is what this replaced) cannot express "a bright
+    // overcast" — they can only fade the slate out. A stop is authored as a LOOK.
+    //
+    // `storm` is untouched and is still exactly what a night gale gets. Nothing here can
+    // reach a calm sky: both stops are only ever consulted through the storm envelope.
+    stormDay: {
+      // ~2.8x the slate zenith and ~2.1x its horizon. The far sea is mostly REFLECTED
+      // SKY (Fresnel goes to 1 with distance), so these two numbers are what decides
+      // whether the mid-field reads as pale living water or as the grey sheet it was.
+      //
+      // `hor` IS THE BLOOM LEVER, and it was authored against a measurement rather than
+      // by eye, because it drives three things at once: the horizon band, the sea's
+      // reflection of it, and both cloud colours (which are multiples of _pHor). Share of
+      // frame over the 0.28 bloom threshold, noon gale, deck view:
+      //     hor 0.52/0.60/0.66 -> 66%      (the first pass; visibly hot)
+      //     hor 0.46/0.52/0.575 -> 42.9%   <- authored
+      //     hor 0.44/0.50/0.55  -> 50%
+      //     hor 0.36/0.415/0.46 -> 35%
+      //     (a CLEAR noon, for reference    -> 43.4%; the old slate gale -> 26.5%)
+      // 0.46/0.52/0.575 is the value where A DAY GALE IS NO MORE BLOOM-PRONE THAN A CLEAR
+      // NOON — which is the honest ceiling for a game whose whole tone is "never
+      // fireworks". Push this up for more of Michael's bright reference and the frame
+      // starts glowing as a whole; the numbers above say exactly what it costs.
+      zen: [0.140, 0.190, 0.240], hor: [0.460, 0.520, 0.575],
+      // The sun is behind the deck, not gone: enough disc to say there is one up there,
+      // and the cloud occlusion in the sky shader still hides it where the lid is thick.
+      disc: [0.95, 1.00, 0.92],
+      // Barely off neutral. The slate stop pushes off the blue axis so a gale reads as
+      // weather rather than dimmed sunshine; a BRIGHT gale does not need that help,
+      // because its drama is the lid and the sea, not a colour cast.
+      tint: [0.98, 1.02, 0.98],
+      surfK: 1.12,
+      // 0.15, not 0.55. This is the number Michael's frame is actually about.
+      desat: 0.15
     }
   },
 
@@ -244,6 +288,23 @@ export const GLASS = {
     baseK: 0.42,          // darkness of the underside vs the horizon sky, at cloudTex 0
     baseDark: 0.26,       // how much further cloudTex 1 pushes the underside down
     stormLit: 0.30,       // the lit colour collapses toward the base under a storm deck
+    // DAY VARIANTS of the two storm-lid numbers, selected by the same solar-height gate
+    // that cross-fades the two storm stops. A night gale keeps stormLit 0.30 / baseDark
+    // 0.26 exactly. A NOON gale needs its lid to still have a top and a bottom: at 0.30
+    // the lit and base ends collapse into one grey ceiling, which is right for dread and
+    // wrong for the reference, where the deck is visibly modelled and bright along its
+    // upper edges even while it is black underneath. Raising stormLit re-opens that
+    // separation; raising baseDark keeps the UNDERSIDE genuinely dark so the lid does not
+    // just become a bright fog. The pair is what makes a day gale read as weight
+    // overhead rather than as a dimmer switch.
+    // HARD BOUND, not taste: baseK is (baseK - baseDark * cloudTex), and a storm drives
+    // cloudTex to ~0.99, so any baseDark >= baseK (0.42) drives the cloud UNDERSIDE
+    // NEGATIVE. Measured at 0.48: base radiance [-0.020, -0.023, -0.025]. It looks fine
+    // on screen because negative clamps to black, but it is not a colour, and anything
+    // that blends against it inherits the sign. 0.34 leaves the underside at 0.08 x the
+    // horizon — genuinely dark, still light.
+    stormLitDay: 0.60,
+    baseDarkDay: 0.34,
     // PEAK scene-linear radiance of an ember-lit cloud top at the dawn/dusk stops. The
     // disc's own colour is renormalised to this, deliberately just UNDER BloomEffect's
     // 0.28: the sunset payoff is coverage and hue, not a glowing sky. The moon disc is
@@ -483,19 +544,18 @@ export const GLASS = {
     sssDayHi: 0.55,
 
     // --- SUNLIT STORMS -------------------------------------------------------
-    // GLASS.stops.storm.desat is 0.55 flat, so a NOON gale desaturates to slate — which
-    // is the game's dread tone applied to the wrong hour. The reference is a BRIGHT
-    // sunlit storm: vivid, saturated, enormous. These three scale the storm stop's pull
-    // by how much SUN there is, so a night gale is untouched (all three gates read 0 at
-    // elevation <= 0) and a noon gale keeps its colour.
-    //   desat: effective = storm.desat * (1 - stormDesatDayK * dayGate)
-    //   tint:  the blend toward storm.tint is scaled by (1 - stormTintDayK * dayGate)
-    //   surfK: storm.surfK * (1 + stormSurfDayK * dayGate)
-    // zen/hor/disc still blend to the storm stop at FULL strength — a gale's sky is a
-    // gale's sky, and the cloud deck is the storm's whole silhouette.
-    stormDesatDayK: 0.85,
-    stormTintDayK: 0.45,
-    stormSurfDayK: 0.35,
+    // The storm look is now TWO authored stops — GLASS.stops.storm (night slate) and
+    // GLASS.stops.stormDay (the bright reference gale) — cross-faded by the sun's own
+    // height BEFORE either is blended onto the ring. See palette().
+    //
+    // This replaced three independent day-scaled multipliers on the single slate stop
+    // (stormDesatDayK / stormTintDayK / stormSurfDayK). They could fade the slate out but
+    // could not author a bright overcast, because zen and hor were still pinned to the
+    // dark stop and the far sea is mostly reflected sky. Two stops, one gate, six numbers
+    // that move together.
+    //
+    // The gate is sssDayLo..sssDayHi below — the SAME window the body glow uses, so the
+    // sky brightens, the desaturation lifts and the water starts to glow on one curve.
 
     // --- STORM SWELL SCALE ---------------------------------------------------
     // Multiplier on the STORM-scaled amplitude of the two LONGEST wave components (the
