@@ -516,6 +516,8 @@ if (typeof window !== 'undefined') {
         moon: uMoonCol.value.toArray(), moonDir: uMoonDir.value.toArray(),
         moonPh: uMoonPh.value.toArray(),
         amb: { fog: airAmbience.fog, moon: airAmbience.moon },
+        // F1/F2 wiring proof: the day/flash the water actually holds this frame.
+        wDay, wFlash, envMap: !!envRT,
         windS: uWindS.value, windD: [uWindD.value.x, uWindD.value.y],
         windT: [_wspT, _wdTX, _wdTZ], forced: !!_wForce,
         windK: [uWindK.value.x, uWindK.value.y], cap: [uCap.value.x, uCap.value.y],
