@@ -239,6 +239,11 @@ export function buildClouds() {
     depthTest: true,
     fog: false,
     side: THREE.DoubleSide,
+    // ONE draw call, not two. Since r163 three renders a transparent DoubleSide material
+    // in two passes (back faces, then front) unless this is set. These puffs are
+    // camera-facing billboards built in view space, so back and front are the same
+    // picture and the second pass buys nothing but a submission.
+    forceSinglePass: true,
     blending: THREE.NormalBlending,
     vertexShader: `
       attribute vec3 aPos;    // puff world position

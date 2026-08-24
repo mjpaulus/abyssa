@@ -671,7 +671,10 @@ function update(dt, t) {
   // principle, same as the palette desat): a noon gale keeps most of its light —
   // Michael's poseidon reference is a BRIGHT storm — while a night gale keeps the
   // full dread cut. At day 1 the cut is ~16%; at day 0 it is the shipped 45%.
-  setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm * (1 - 0.65 * wx.day)), wx.storm);
+  // day/flash passed EXPLICITLY (water.js's preferred form): the fallback inversion of
+  // surfK predates the day-gated storm cut and skews wDay in mid-day gales, and without
+  // the flash arg the sea-surface lightning term (uFlash) never fires at all.
+  setWeatherWater((0.20 + 0.80 * wx.day) * (1 - 0.45 * wx.storm * (1 - 0.65 * wx.day)), wx.storm, wx.day, wx.flash);
   setSwell(wx.env.sea, wx.day);
   setStormCurrent(wx.env.below);   // subsurface current lags the sky — weather arrives from above
   setWindCurrentVec(windState().speed, windState().dx, windState().dz);   // eased wind: drift below re-aims on the same curve as the chop above
