@@ -388,6 +388,11 @@ function buildRainLayer() {
     uniforms: ru,
     transparent: true, depthWrite: false, fog: false,
     blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+    // ONE draw call, not two. Since r163 three renders a transparent DoubleSide material
+    // in two passes (back faces, then front) unless this is set. This plane is only
+    // ever seen from below and shades identically on both faces, so the second pass
+    // buys nothing but a submission.
+    forceSinglePass: true,
     vertexShader: `
       uniform vec3 uCam;
       varying vec2 vQ; varying float vR;
@@ -417,21 +422,32 @@ function buildRainLayer() {
       }
 
       // One expanding ring per cell per beat: rain striking the underside.
+      // De-latticed the same three ways as water.js's splash() (which see): jittered
+      // centres, dead cells, and a PER-CELL beat — rate and phase both vary per cell,
+      // so neighbours never fire together and the density never reads as periodic.
+      // Amplitude varies per cell too, and jitter + max radius + ring width stays
+      // inside the cell so no ring is ever clipped into a straight (lattice) edge.
+      // Cost-identical to the old form: one h21, three fracts, one length per call.
       float rainCells( vec2 p, float rate, float seed ){
-        vec2 i = floor( p ), f = fract( p ) - 0.5;
+        vec2 i = floor( p );
         float r = h21( i + seed );
-        float ph = fract( uTime * rate + r );
-        float rad = ph * 0.46;
-        float d = length( f - ( vec2( h21(i+7.1+seed), h21(i+3.7+seed) ) - 0.5 ) * 0.5 );
+        float j1 = fract( r * 97.13 ), j2 = fract( r * 41.71 ), j3 = fract( r * 173.71 );
+        float amp = step( 0.30, j3 ) * ( 0.55 + 0.75 * j3 );
+        vec2 f = fract( p ) - ( 0.5 + vec2( j1, j2 ) * 0.36 - 0.18 );
+        float ph = fract( uTime * rate * ( 0.62 + 0.55 * j2 ) + r );
+        float rad = ph * ( 0.18 + 0.08 * j1 );
+        float d = length( f );
         float ring = smoothstep( 0.030, 0.0, abs( d - rad ) );
         float speck = smoothstep( 0.045, 0.0, d ) * ( 1.0 - ph );
-        return ( ring * ( 1.0 - ph ) + speck * 0.9 ) * step( 0.30, r );
+        return ( ring * ( 1.0 - ph ) + speck * 0.9 ) * amp;
       }
 
       void main(){
         float edge = 1.0 - smoothstep( 0.45, 1.0, vR );
         float k = uFade * edge;
-        if ( k <= 0.001 ) discard;
+        // Additive blend: writing pure black is bit-identical to discarding the
+        // fragment, and NOT using discard keeps early-z on for the whole plane.
+        if ( k <= 0.001 ) { gl_FragColor = vec4( 0.0 ); return; }
 
         vec3 col = vec3( 0.0 );
 

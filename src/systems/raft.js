@@ -20,7 +20,7 @@ import { SURFACE_Y } from '../config.js';
 import { V3 } from '../lib/math.js';
 import { makeGlow } from '../lib/textures.js';
 import { survival } from './survival.js';
-import { surfaceHeightAt, stormLevel } from '../world/water.js';
+import { surfaceHeightAt, stormLevel, onSkyEnv } from '../world/water.js';
 import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash } from './raft/kit.js';
 import { buildHull } from './raft/hull.js';
 import { buildStation } from './raft/station.js';
@@ -162,6 +162,15 @@ function buildReel(P, mats, head) {
 export function buildRaft() {
   raft.position.copy(RAFT_POS);
   const mats = palette();
+  // The raft is the one thing in the game that lives at the surface, so it is the one
+  // thing whose reflections should be the game's OWN sky rather than core.js's neutral
+  // RoomEnvironment. water.js captures the sky dome into a small PMREM on palette-stop
+  // transitions and calls back here with each refresh; swapping envMap texture-for-
+  // texture (same CubeUV mapping) never recompiles a program. Authored
+  // envMapIntensity values are untouched — brass-age, never chrome. Everything
+  // UNDERWATER (diver, leviathan, wrecks) deliberately keeps the RoomEnvironment:
+  // sky glints at -500 through the fog-patched materials would be wrong.
+  onSkyEnv(tex => { for (const k in mats) mats[k].envMap = tex; });
 
   // The davit runs first: it owns hoseHead, and the reel's lead has to be laid to it.
   const dav = buildDavit(raft, mats);

@@ -66,6 +66,9 @@ sun.shadow.camera.near = 28; sun.shadow.camera.far = 72;
 sun.shadow.camera.updateProjectionMatrix();
 sun.shadow.bias = -0.0004;
 sun.shadow.normalBias = 0.045;
+// F4 hysteresis timer for the castShadow gate in updateLighting: wall-clock ms since
+// the raw condition first disagreed with the current state; 0 = in agreement.
+let shadowFlipSince = 0;
 scene.add(sun);
 
 // Sky/seabed gradient — gives up-facing surfaces a different colour to down-facing ones,
@@ -220,7 +223,19 @@ export function updateLighting(depth01) {
   }
   // The shadow map only ever contains the raft, so stop rendering it the moment the
   // camera is deep enough that the raft is a dot, or dark enough that it casts nothing.
-  sun.castShadow = !reduced && !sunParked && camera.position.y > -26 && sun.intensity > 0.15;
+  // HYSTERESIS: flipping castShadow changes the scene's shadow-map count, which forces
+  // a full-scene shader program switch — so a flicker of the raw condition (a diver
+  // bobbing across y = -26, a flash grazing the 0.15 intensity gate) must not thrash
+  // it every frame. The raw condition has to HOLD for ~1s continuously before the
+  // flip lands. Module-scoped timer, zero allocation.
+  const wantShadow = !reduced && !sunParked && camera.position.y > -26 && sun.intensity > 0.15;
+  if (wantShadow === sun.castShadow) {
+    shadowFlipSince = 0;
+  } else {
+    const now = performance.now();
+    if (shadowFlipSince === 0) shadowFlipSince = now;
+    else if (now - shadowFlipSince > 1000) { sun.castShadow = wantShadow; shadowFlipSince = 0; }
+  }
   mixInto(rim.color, a, b, 'rim', t);
   rim.intensity = reduced ? 0 : mix('rimI');
   mixInto(playerLightSrc.color, a, b, 'fill', t);

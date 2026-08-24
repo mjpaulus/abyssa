@@ -1021,6 +1021,60 @@ function buildDome() {
     dome.matrixWorld.copy(dome.matrix);
   };
   scene.add(dome);
+  buildSkyEnv();
+}
+
+// ---------------------------------------------------------------------------
+// SKY ENVIRONMENT MAP (M3). The raft's brass and timber had no sky to reflect:
+// scene.environment was never set and every metal leaned on the static
+// RoomEnvironment from core.js. This renders the SKY DOME ALONE — a minimal temp
+// scene holding a second mesh on the dome's own geometry+material, so no water, no
+// terrain, no props ever land in the capture — through a tiny CubeCamera, runs it
+// through PMREMGenerator, and hands the result to whoever registered via onSkyEnv().
+// Deliberately SCOPED (per-material envMap on the raft, never scene.environment):
+// every underwater material — leviathan brass, the diver's helmet, wreck fittings —
+// keeps the neutral RoomEnvironment, so the deep can never pick up sky glints
+// through the fog-patched materials at -500.
+// Refresh is driven by the PALETTE, not the clock: a capture happens only when
+// _pHor/_pZen have drifted past a threshold since the last one (ring-stop
+// transitions, storm onset, fog mornings), throttled to one every 2.5 s. A stable
+// noon sky costs six float comparisons a frame and nothing else.
+let envScene = null, envCam = null, envCubeRT = null, envPM = null, envRT = null;
+const envListeners = [];
+const _envFinger = [9, 9, 9, 9, 9, 9];   // impossible values force the first capture
+let envCool = 0;
+export function onSkyEnv(fn) { envListeners.push(fn); if (envRT) fn(envRT.texture); }
+function buildSkyEnv() {
+  envScene = new THREE.Scene();
+  envScene.add(new THREE.Mesh(dome.geometry, dome.material));
+  envCubeRT = new THREE.WebGLCubeRenderTarget(64, { type: THREE.HalfFloatType });
+  envCam = new THREE.CubeCamera(0.1, 10, envCubeRT);
+  envPM = new THREE.PMREMGenerator(renderer);
+}
+function captureSkyEnv() {
+  // uAir is forced to 1 for the capture so the dome renders its pure-sky branch: the
+  // raft lives at the surface and its reflections are the sky, no matter how deep the
+  // PLAYER's camera happens to be when a palette transition lands.
+  const prevAir = uAir.value;
+  uAir.value = 1;
+  envCam.update(renderer, envScene);
+  uAir.value = prevAir;
+  const old = envRT;
+  envRT = envPM.fromCubemap(envCubeRT.texture);
+  if (old) old.dispose();
+  for (let i = 0; i < envListeners.length; i++) envListeners[i](envRT.texture);
+  _envFinger[0] = _pHor[0]; _envFinger[1] = _pHor[1]; _envFinger[2] = _pHor[2];
+  _envFinger[3] = _pZen[0]; _envFinger[4] = _pZen[1]; _envFinger[5] = _pZen[2];
+  envCool = 2.5;
+}
+function maybeRefreshSkyEnv(dt) {
+  if (!envCam) return;
+  envCool -= dt;
+  if (envCool > 0) return;
+  const d = Math.abs(_pHor[0] - _envFinger[0]) + Math.abs(_pHor[1] - _envFinger[1])
+          + Math.abs(_pHor[2] - _envFinger[2]) + Math.abs(_pZen[0] - _envFinger[3])
+          + Math.abs(_pZen[1] - _envFinger[4]) + Math.abs(_pZen[2] - _envFinger[5]);
+  if (d > 0.030) captureSkyEnv();
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,6 +1110,11 @@ function buildRays() {
     },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide, fog: false,
+    // ONE draw call, not two. Since r163 three renders a transparent DoubleSide material
+    // in two passes (back faces, then front) unless this is set. These ray cards are
+    // additive billboards that shade identically on both faces, so the second pass
+    // buys nothing but a submission.
+    forceSinglePass: true,
     vertexShader: `uniform vec3 uCam; uniform float uFade, uExtG; uniform vec2 uSunProj;
       attribute vec3 aCenter; attribute vec4 aParam;
       varying vec2 vUv; varying float vSeed, vFade;
@@ -2641,6 +2700,16 @@ function skyDrama(dt, storm) {
        * ml(F.nightK, 1, wDay);
   }
   uFog.value = fk * F.maxK;
+  // PERF: on a pea-soup morning the dome still paid for the whole fbm cloud block and
+  // then painted airFog over the result. Crushing the coverage uniform on the CPU lets
+  // the shader's existing uCloudCov > 0.005 gate skip the block entirely once the fog
+  // is heavy enough that no cloud contrast survives the airFog mix anyway (at fk 0.97
+  // the mix leaves under 9% of it, times distK). The ramp starts at 0.60 so light and
+  // moderate fog — where cloud silhouettes still ghost through — are untouched, and a
+  // CLEAR day (fk = 0) is bit-identical. Runs after the clouds section on purpose:
+  // shut/isl were derived from the unscaled coverage, and on the only frames where
+  // this crush bites the whole block is skipped, so they are never read.
+  uCloudCov.value *= 1 - ms(fk, 0.60, 0.97);
   uFogCol.value.set(_pHor[0] * F.col[0], _pHor[1] * F.col[1], _pHor[2] * F.col[2]);
   // Heavy fog dims the disc — which is the same uniform the GLITTER PATH is made of, so
   // killing the disc kills the glitter in one write. That is the whole reason the discs
@@ -2782,6 +2851,9 @@ export function updateWater(dt, t) {
   // Clouds, marine layer and moon. After the palette copy above, because every colour it
   // resolves is made out of _pHor/_pDisc, and before anything reads the uniforms.
   skyDrama(dt, storm);
+  // After skyDrama: every uniform the dome will be captured through is final for this
+  // frame. Captures only fire on palette drift — see the SKY ENVIRONMENT MAP block.
+  maybeRefreshSkyEnv(dt);
 
   if (surface.visible) {
     const su = surface.material.uniforms;
