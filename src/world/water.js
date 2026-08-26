@@ -2823,6 +2823,9 @@ export function updateWater(dt, t) {
   // postfx.volumetrics.js exactly — the two disagreeing puts billboards where the
   // columns are not, which reads as a bug. See the march for why it steepened.
   const rayBand = Math.max(0, 1 - d01 * 3.66) ** 2 * ms(d01, 0, 0.055);
+  // Base 0.62 -> 0.42 (2026-08-25): 0.62 was set while the reversed smoothstep in
+  // buildRays zeroed every billboard, i.e. tuned blind. First live joint tune with
+  // the volumetric columns (their intensity 1.05 -> 0.85): billboards as accents.
   uRayFade.value = 0.42 * rayDim * rayBand * (0.82 + 0.18 * Math.sin(t * 0.23));
   rayMesh.visible = uRayFade.value > 0.004;
   // Ray colour follows the sun disc (the same _pDisc the dome and glitter path use),
