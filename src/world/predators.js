@@ -316,6 +316,9 @@ function sharkMaterial(cfg) {
 // ---------------------------------------------------------------------------
 
 const SHARK_CFG = [
+  // sheen was dead weight until the lateral-line smoothstep fix; re-judged live:
+  // the emissive is uDark (a dark hide tone) * sheen, so 0.10/0.30 read as a wet
+  // glint, not a glow — authored values kept.
   { zi: 0, size: 6.6, dark: 0x35474f, pale: 0xd6e0dc, sheen: 0.10, patrolR: 62 },
   { zi: 1, size: 8.6, dark: 0x262c46, pale: 0x9fa9c4, sheen: 0.30, patrolR: 56 }
 ];
