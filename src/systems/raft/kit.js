@@ -167,8 +167,8 @@ export function tint(geo, r, g = r, b = r) {
 
 // ---- fittings -----------------------------------------------------------------------
 // A ring of bolt/rivet heads on a plate. `axis` is 'x' | 'y' | 'z' (the plate normal).
-export function rivetRing(P, mat, n, cx, cy, cz, r, rad = 0.03, axis = 'z', phase = 0.5) {
-  const g = sph(rad, 6, 4);
+export function rivetRing(P, mat, n, cx, cy, cz, r, rad = 0.03, axis = 'z', phase = 0.5, w = 6, h = 4) {
+  const g = sph(rad, w, h);
   for (let i = 0; i < n; i++) {
     const a = (i + phase) / n * TAU, c = Math.cos(a) * r, s = Math.sin(a) * r;
     if (axis === 'z') P.add(xf(g.clone(), cx + c, cy + s, cz), mat);

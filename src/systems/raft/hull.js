@@ -253,8 +253,9 @@ function buildDrums(P, rust, ropeMat) {
       P.add(W(tor(R + 0.02, 0.035, 5, 24), x + ox, Y, z, 0, Math.PI / 2, 0, 1, wet), rust);
     }
     // chime rivets: a ring of heads round each end where the head is seamed to the shell
+    // cheap domes (5x3): a chime rivet is a glint at this range, not a boss
     for (const sx of [-1, 1])
-      rivetRing(P, rust, 14, x + sx * (HL - 0.06), Y, z, 0.62, 0.024, 'x');
+      rivetRing(P, rust, 12, x + sx * (HL - 0.06), Y, z, 0.62, 0.026, 'x', 0.5, 5, 3);
     // bung plug, proud of the shell near one end
     P.add(W(cyl(0.09, 0.09, 0.06, 8), x + 1.15, Y + R, z, 0, 0, 0, 1, { rust: 0.5 }), rust);
     // rolled seam — a line of rivet heads down one side of the shell
