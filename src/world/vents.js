@@ -115,7 +115,12 @@ function segGeo(rTop, rBot, h, sides, jitter, seed) {
     const k = 1 + n * jitter;
     pos.setX(i, x * k); pos.setZ(i, z * k);
   }
-  g.computeVertexNormals();
+  // KEEP the cylinder's analytic normals — do NOT computeVertexNormals here. Recomputing
+  // per segment face-averages each ring in isolation, and because adjacent segments draw
+  // different jitter noise, every stacked joint became a hard shading seam under the vent
+  // light. The analytic normals are smooth around each ring and continuous top-to-bottom
+  // within a segment; the ~10% radial jitter shades acceptably without them tracking it,
+  // and the residual joint delta is only the small per-segment lean, not a lit crease.
   return g;
 }
 
@@ -423,7 +428,7 @@ function buildPlumes() {
     pos[i * 3] = v.x + rng(-0.5, 0.5);
     pos[i * 3 + 1] = v.y + rng(0, 0.4);
     pos[i * 3 + 2] = v.z + rng(-0.5, 0.5);
-    par[i * 4] = Math.random();          // phase
+    par[i * 4] = rnd();                  // phase — site stream, not Math.random: this module is seeded
     par[i * 4 + 1] = rng(0.55, 1.15);    // cycle-rate variance
     par[i * 4 + 2] = rng(0.55, 1.15);    // size variance
     par[i * 4 + 3] = rng(0, TAU);        // wobble seed
@@ -494,7 +499,7 @@ function buildShimmer() {
     pos[i * 3] = v.x + rng(-0.25, 0.25);
     pos[i * 3 + 1] = v.y;
     pos[i * 3 + 2] = v.z + rng(-0.25, 0.25);
-    par[i * 4] = Math.random();
+    par[i * 4] = rnd();   // site stream, not Math.random: this module is seeded
     par[i * 4 + 1] = rng(0.7, 1.3);
     par[i * 4 + 2] = rng(0.5, 1.0);
     par[i * 4 + 3] = rng(0, TAU);

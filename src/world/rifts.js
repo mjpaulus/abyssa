@@ -1,7 +1,7 @@
 // Zone-exit rifts and the light motes that refuel the lantern.
 // OWNED BY: water/atmosphere agent (rift VFX) — motes logic is shared, coordinate before changing.
 import * as THREE from 'three';
-import { scene } from '../core.js';
+import { scene, camera } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, lerp, clamp } from '../lib/math.js';
 import { makeGlow } from '../lib/textures.js';
@@ -59,7 +59,10 @@ function shaft(rTop, rBot, h, color, power, swirl, opacity, seg = 28) {
     },
     vertexShader: SHAFT_VS, fragmentShader: SHAFT_FS,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide, fog: false
+    // DoubleSide is load-bearing (the chord shading reads both walls of the shell);
+    // forceSinglePass only kills r163+'s transparent double-pass split, it does not
+    // change which faces draw, so the tuned look is unchanged.
+    side: THREE.DoubleSide, forceSinglePass: true, fog: false
   });
   m.uniforms.uColor.value.multiplyScalar(opacity);
   return new THREE.Mesh(g, m);
@@ -91,7 +94,7 @@ function causticDisc(color) {
         gl_FragColor = vec4( uColor, al );
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide, fog: false
+    side: THREE.DoubleSide, forceSinglePass: true, fog: false
   });
   return new THREE.Mesh(g, m);
 }
@@ -123,7 +126,7 @@ function rimRing(color) {
         gl_FragColor = vec4( c, al );
       }`,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide, fog: false
+    side: THREE.DoubleSide, forceSinglePass: true, fog: false
   });
   return new THREE.Mesh(g, m);
 }
@@ -255,23 +258,30 @@ export function updateRifts(dt, t, activeZone, isCalmed) {
 
 // ---- motes ----
 const moteGeo = new THREE.IcosahedronGeometry(0.75, 1);
-const moteMat = new THREE.MeshBasicMaterial({ color: 0xdffff0, fog: false });
+// Template only: each mote clones this so its core can fade with distance (below).
+const moteMat = new THREE.MeshBasicMaterial({ color: 0xdffff0, fog: false, transparent: true });
 export let motes = [];
 
 export function seedMotes(zi) {
-  for (const m of motes) scene.remove(m.grp);
+  for (const m of motes) {
+    scene.remove(m.grp);
+    m.coreMat.dispose();
+    m.grp.children[1].material.dispose();
+    m.grp.children[2].material.dispose();
+  }
   motes = [];
   for (let i = 0; i < 14; i++) {
     const a = Math.random() * Math.PI * 2, r = rng(15, WORLD_R * 0.85);
     const grp = new THREE.Group();
     grp.position.set(Math.cos(a) * r, rng(zoneBottom(zi) + 18, zoneTop(zi) - 15), Math.sin(a) * r);
-    grp.add(new THREE.Mesh(moteGeo, moteMat));
+    const coreMat = moteMat.clone();
+    grp.add(new THREE.Mesh(moteGeo, coreMat));
     grp.add(makeGlow(0x9fffcf, 10));
     const halo = makeGlow(0x4fffb0, 22);
     halo.material.opacity = 0.28;
     grp.add(halo);
     scene.add(grp);
-    motes.push({ grp, alive: true, respawn: 0, ph: Math.random() * 7, home: grp.position.clone() });
+    motes.push({ grp, coreMat, alive: true, respawn: 0, ph: Math.random() * 7, home: grp.position.clone() });
   }
 }
 
@@ -293,6 +303,13 @@ export function updateMotes(dt, t, playerPos) {
     const p = 8 + 3 * Math.sin(t * 2 + m.ph);
     m.grp.children[1].scale.setScalar(p);
     m.grp.children[2].scale.setScalar(18 + 7 * Math.sin(t * 1.3 + m.ph * 1.7));
+    // Beacon extinction (same law as the rift shafts): additive glow with fog:false
+    // must fade to black with range or it reads as neon across the basin. No allocation:
+    // distanceTo on module-held vectors, scalar math only.
+    const fade = Math.exp(-m.grp.position.distanceTo(camera.position) * BEACON_EXT);
+    m.coreMat.opacity = fade;
+    m.grp.children[1].material.opacity = 0.8 * fade;
+    m.grp.children[2].material.opacity = 0.28 * fade;
     if (d < 3.4) {
       m.alive = false; m.respawn = 14; m.grp.visible = false;
       collected++;

@@ -90,6 +90,7 @@ const pMaxLife = new Float32Array(P_MAX);
 const pSize = new Float32Array(P_MAX);
 const pVel = new Float32Array(P_MAX * 3);
 let pHead = 0;
+let pAlive = 0;   // live-particle count: zero means zero buffer uploads this frame
 let points = null;
 const lanternU = { value: new THREE.Vector3(0, 1e9, 0) };
 
@@ -157,7 +158,10 @@ export function buildFootFX() {
     color: 0x2a2f30, roughness: 1, metalness: 0,
     alphaMap: printMaps.alpha, transparent: true, opacity: 0.85,
     normalMap: printMaps.nrm, normalScale: new THREE.Vector2(1.4, 1.4),
-    depthWrite: false, side: THREE.DoubleSide,
+    // DoubleSide stays: the left boot mirrors via negative scale, which flips winding,
+    // so FrontSide would cull half the prints. forceSinglePass kills r163+'s transparent
+    // double-pass split (the ground decal is never seen from below anyway).
+    depthWrite: false, side: THREE.DoubleSide, forceSinglePass: true,
     polygonOffset: true, polygonOffsetFactor: -2
   });
   tracks = new THREE.InstancedMesh(plane, tMat, T_MAX);
@@ -174,6 +178,7 @@ export function setLanternPos(v) { lanternU.value.copy(v); }
 function emitPuff(x, y, z, count, strength) {
   for (let i = 0; i < count; i++) {
     const k = pHead; pHead = (pHead + 1) % P_MAX;
+    if (pLife[k] <= 0) pAlive++;   // reusing a live slot keeps the count honest
     const a = rng(0, Math.PI * 2), r = rng(0.04, 0.28);
     pPos[k * 3] = x + Math.cos(a) * r;
     pPos[k * 3 + 1] = y + rng(0.02, 0.12);
@@ -219,23 +224,28 @@ export function spawnFootfall(playerPos, yaw, side, zi, strength = 1) {
 export function updateFootFX(dt, t) {
   if (!points) return;
   points.material.uniforms.uTime.value = t || 0;
-  const aLife = points.geometry.userData.aLife;
-  for (let k = 0; k < P_MAX; k++) {
-    if (pLife[k] <= 0) { aLife[k * 2] = 0; continue; }
-    pLife[k] -= dt;
+  // Idle skip: with zero live particles nothing in the buffers changes, so flagging
+  // position/aLife needsUpdate would upload dead arrays to the GPU every frame.
+  if (pAlive > 0) {
+    const aLife = points.geometry.userData.aLife;
     const drag = Math.pow(0.3, dt);
-    pVel[k * 3] *= drag;
-    pVel[k * 3 + 1] = pVel[k * 3 + 1] * drag - 0.20 * dt;
-    pVel[k * 3 + 2] *= drag;
-    pPos[k * 3] += pVel[k * 3] * dt;
-    pPos[k * 3 + 1] += pVel[k * 3 + 1] * dt;
-    pPos[k * 3 + 2] += pVel[k * 3 + 2] * dt;
-    const t01 = Math.max(0, pLife[k] / pMaxLife[k]);
-    aLife[k * 2] = t01 * t01;
-    aLife[k * 2 + 1] = pSize[k] * (1.7 - t01);
+    for (let k = 0; k < P_MAX; k++) {
+      if (pLife[k] <= 0) continue;
+      pLife[k] -= dt;
+      if (pLife[k] <= 0) { aLife[k * 2] = 0; pAlive--; continue; }
+      pVel[k * 3] *= drag;
+      pVel[k * 3 + 1] = pVel[k * 3 + 1] * drag - 0.20 * dt;
+      pVel[k * 3 + 2] *= drag;
+      pPos[k * 3] += pVel[k * 3] * dt;
+      pPos[k * 3 + 1] += pVel[k * 3 + 1] * dt;
+      pPos[k * 3 + 2] += pVel[k * 3 + 2] * dt;
+      const t01 = pLife[k] / pMaxLife[k];
+      aLife[k * 2] = t01 * t01;
+      aLife[k * 2 + 1] = pSize[k] * (1.7 - t01);
+    }
+    points.geometry.attributes.position.needsUpdate = true;
+    points.geometry.attributes.aLife.needsUpdate = true;
   }
-  points.geometry.attributes.position.needsUpdate = true;
-  points.geometry.attributes.aLife.needsUpdate = true;
 
   let dirty = false;
   for (let i = 0; i < T_MAX; i++) {

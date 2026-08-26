@@ -15,8 +15,11 @@
 //     terrain as it now stands. See run()'s gen token for the load-race guard.
 //   updateProps(dt, t) — per-zone visibility gating plus one uniform write for sway.
 //   propMeshes — the InstancedMeshes created, for diagnostics.
-//   propColliders — [{x,y,z,r}] for props big enough to block the camera (same shape
-//     as flora.js rockColliders); the orchestrator may concat it if it wants.
+//   propColliders — [{x,y,z,r}] collider list, same shape as flora.js rockColliders.
+//     game.js/player.js hold this exact array reference in their collider loops, so the
+//     export (and its object identity) must stay — but by curation NO current manifest
+//     prop is big enough to block the camera, so nothing pushes into it and it stays
+//     empty. If a large prop is ever added, register its colliders here at placement.
 //
 // ORCHESTRATOR WIRING (game.js):
 //   import { buildProps, updateProps } from './world/props.js';
@@ -42,7 +45,7 @@ const UP = new THREE.Vector3(0, 1, 0), IDQ = new THREE.Quaternion();
 // ------------------------------------------------------------------ manifest --
 // size = world-unit height range (geometry arrives normalised to 1 unit).
 // zones = which zones get it; n = instances per zone; gap = min spacing between them.
-// sway  = shader sway amplitude (0 for stone); collide = register a camera collider.
+// sway  = shader sway amplitude (0 for stone).
 // Curation: the two big Kenney rocks are CUT — their hard-faceted style reads worse than
 // our smoothed procedural boulders and they kept dominating shots. Small rocks pass as
 // pebbles at their scale. Logs stay as half-buried sunken timber; stumps are cut (they
@@ -229,7 +232,9 @@ async function run() {
       g.setAttribute('aInst', new THREE.InstancedBufferAttribute(new Float32Array(L.length * 2), 2));
       const mat = propMat(prop.material, zi, cfg.sway || 0);
       const im = new THREE.InstancedMesh(g, mat, L.length);
-      im.receiveShadow = !!cfg.shadow;
+      // Shadows: the sun's one shadow map covers only the raft's 18-unit ortho box;
+      // seafloor props can never receive it, so both flags are simply off.
+      im.receiveShadow = false;
       im.castShadow = false;
       im.frustumCulled = false;
       const a = g.attributes.aInst.array;
@@ -248,7 +253,6 @@ async function run() {
         im.setColorAt(i, _c);
         a[i * 2] = rnd() * TAU;
         a[i * 2 + 1] = clamp(rr(0.5, 1), 0, 1);
-        if (cfg.collide && H >= cfg.collide) propColliders.push({ x: p.x, y: p.y + H * 0.45, z: p.z, r: Math.max(W, H) * 0.45 });
       }
       im.instanceMatrix.needsUpdate = true;
       if (im.instanceColor) im.instanceColor.needsUpdate = true;
