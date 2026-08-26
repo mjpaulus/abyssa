@@ -16,7 +16,7 @@
 //      one-sided cap on the sagitta (which forbids folds the polyline cannot draw).
 //      With only the cap, the chain locks into a slack-storing helix and never unwinds.
 import * as THREE from 'three';
-import { scene, envTex } from '../core.js';
+import { scene, envTexDeep as envTex } from '../core.js';
 import { V3, clamp, fbm } from '../lib/math.js';
 import { terrainH } from '../world/terrain.js';
 import { survival } from './survival.js';

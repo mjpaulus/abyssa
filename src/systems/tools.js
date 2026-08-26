@@ -25,7 +25,7 @@
 // creatures.js). The per-frame `uFogD` write is part of the pattern, not optional —
 // without it the plume keeps core.js's boot density and stops sitting in the water.
 import * as THREE from 'three';
-import { scene, envTex } from '../core.js';
+import { scene, envTexDeep as envTex } from '../core.js';
 import { ZONE_GAP, RIFT_R, riftPos, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { glowTex, canvas2d, noiseCanvas } from '../lib/textures.js';

@@ -26,7 +26,7 @@
 //   buildProps();                 // fire-and-forget: never blocks first frame
 //   updateProps(dt, t);           // next to updateFlora(dt, t) in the frame loop
 import * as THREE from 'three';
-import { scene, camera, envTex } from '../core.js';
+import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';

@@ -2,7 +2,7 @@
 // All motion happens in the vertex shader (instanced attributes), so updateFlora()
 // costs only a handful of uniform writes regardless of instance count.
 import * as THREE from 'three';
-import { scene, camera, envTex } from '../core.js';
+import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow } from '../lib/textures.js';

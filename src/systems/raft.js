@@ -423,7 +423,10 @@ export function updateRaft(dt, t) {
   beaconGlow.scale.setScalar((1.15 + 6.1 * sub + 1.30 * night * (1 - sub)) * flick);
   beaconGlow.material.opacity = 0.80 * lit * clamp01(0.10 + 0.90 * sub + 0.52 * night * (1 - sub));
   lampLight.intensity = 13 * lit * flick * night * (1 - sub);
-  lamp.intensity = 26 * lit;
+  // The downward beacon exists to be seen FROM BELOW; in air it lit nothing visible
+  // and never dimmed. Scale by sub the way lampLight scales by (1 - sub): full beacon
+  // once the camera is under, fading out as it surfaces.
+  lamp.intensity = 26 * lit * sub;
 }
 
 export function nearRaft(pos, radius = 12) {

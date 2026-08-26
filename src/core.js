@@ -32,11 +32,45 @@ scene.fog = new THREE.FogExp2(0x04121f, 0.016);
 
 export const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 700);
 
-// Indoor-studio IBL used only as a reflection source for metals; it never lights the scene directly.
+// Indoor-studio IBL used only as a reflection source for metals; it never lights the
+// scene directly. The RAFT keeps this (then swaps to water.js's live sky probe via
+// onSkyEnv); underwater consumers take envTexDeep below.
 export const envTex = (() => {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const tex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   pmrem.dispose();
+  return tex;
+})();
+
+// DEEP-WATER IBL for underwater metals (wreck brass, leviathan eye, tools, tether).
+// RoomEnvironment put studio softboxes into abyssal reflections — every bright
+// highlight on brass 300m down was a window. This is a tiny generated scene (no
+// files, per the all-procedural rule): a vertical gradient — dim teal downwelling
+// light above fading to near-black below — plus one soft cool "surface" lid so
+// curved metal still catches a live highlight, PMREM'd once at boot. Static on
+// purpose: reflections this dark don't need to track weather, and swapping envMaps
+// at runtime would touch dozens of materials for nothing.
+export const envTexDeep = (() => {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const env = new THREE.Scene();
+  // Gradient shell: unlit vertex-coloured sphere seen from inside.
+  const geo = new THREE.SphereGeometry(10, 24, 16);
+  const pos = geo.attributes.position, col = new Float32Array(pos.count * 3);
+  const top = new THREE.Color(0x0d3a42), bot = new THREE.Color(0x010304), c = new THREE.Color();
+  for (let i = 0; i < pos.count; i++) {
+    const t = Math.pow(Math.max(0, pos.getY(i) / 10 * 0.5 + 0.5), 1.6);
+    c.copy(bot).lerp(top, t);
+    col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  env.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide })));
+  // The lid: a soft bright patch straight up, so brass still reads alive, just oceanic.
+  const lid = new THREE.Mesh(new THREE.CircleGeometry(4.5, 24), new THREE.MeshBasicMaterial({ color: 0x9fd8d4 }));
+  lid.position.y = 9; lid.rotation.x = Math.PI / 2;
+  env.add(lid);
+  const tex = pmrem.fromScene(env, 0.08).texture;
+  pmrem.dispose();
+  geo.dispose(); lid.geometry.dispose();
   return tex;
 })();
 

@@ -169,9 +169,14 @@ let normalPass = null, effectPass = null, n8aoPass = null;
 // is a strict subset of the last known-good pipeline, so the P-key A/B stays valid.
 try {
   n8aoPass = new N8AOPostPass(scene, camera, innerWidth, innerHeight);
-  n8aoPass.configuration.aoRadius = 2.2;
+  // A/B'd on the deck at noon (2.2/2.6 vs 1.0/3.0): the deck props are 0.1-0.5u, and
+  // at radius 2.2 the AO read as a broad depth-grade darkening — open plank runs went
+  // muddy while the gear never visibly seated. Radius 1.0 pulls the occlusion into the
+  // contacts (gear feet, bulwark roots, davit base) and cleans the open deck; the
+  // intensity nudge to 3.0 keeps the total AO weight in the frame comparable.
+  n8aoPass.configuration.aoRadius = 1.0;
   n8aoPass.configuration.distanceFalloff = 5.0;
-  n8aoPass.configuration.intensity = 2.6;
+  n8aoPass.configuration.intensity = 3.0;
   n8aoPass.configuration.halfRes = true;
   composer.addPass(n8aoPass);
 } catch (e) {
