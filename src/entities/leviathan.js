@@ -20,13 +20,13 @@ const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _col = new THREE.Co
 // Per-zone creature identity. hw/hh/hl are skull half-extents in units of cfg.size.
 const ZONE = [
   { hw: 0.72, hh: 0.86, hl: 1.95, wide: 0.94, fin: 1.45, thorn: 0, crown: 0,
-    teeth: 0.44, teethN: 11, hide: 0x2e5260, hideLo: 0x0b1a22, bio: 0x8ff4ff, bioI: 1.25,
+    gills: 4, teeth: 0.44, teethN: 11, hide: 0x2e5260, hideLo: 0x0b1a22, bio: 0x8ff4ff, bioI: 1.25,
     crack: 0x2fb9d8, crackI: 0.20, rim: 0x6fdcff, rimI: 0.75, eye: 0xd6f8ff, rough: 0.40 },
   { hw: 0.82, hh: 0.94, hl: 1.80, wide: 1.03, fin: 0.80, thorn: 1, crown: 7,
-    teeth: 0.58, teethN: 13, hide: 0x3d2c62, hideLo: 0x120a24, bio: 0xc48bff, bioI: 1.05,
+    gills: 5, teeth: 0.58, teethN: 13, hide: 0x3d2c62, hideLo: 0x120a24, bio: 0xc48bff, bioI: 1.05,
     crack: 0x8a44ff, crackI: 0.55, rim: 0xa86fff, rimI: 0.62, eye: 0xecc4ff, rough: 0.50 },
   { hw: 0.94, hh: 1.00, hl: 1.68, wide: 1.16, fin: 0.95, thorn: 2, crown: 9,
-    teeth: 0.64, teethN: 15, hide: 0x452018, hideLo: 0x120503, bio: 0xff9440, bioI: 1.35,
+    gills: 5, teeth: 0.64, teethN: 15, hide: 0x452018, hideLo: 0x120503, bio: 0xff9440, bioI: 1.35,
     crack: 0xff5a10, crackI: 1.9, rim: 0xff7c2a, rimI: 0.80, eye: 0xffd394, rough: 0.62 }
 ];
 
@@ -177,7 +177,10 @@ vec3 finPos(float u, float tt, float d){
   float vs = d>0.0 ? 1.0 : mix(0.34,1.0,smoothstep(0.68,0.90,u));
   float H = finH(u)*uSize*vs;
   float rip = sin(u*24.0 - uTime*(3.2+uAgit*4.5))*H*0.30*pow(tt,1.7);
-  return P + N*(d*(hw.x*0.94 + H*tt)) + B*rip;
+  // interior membrane belly: zero at root and edge, so only the new mid rows
+  // carry it — the sheet billows between its stays instead of moving as a plate
+  float belly = sin(u*13.0 + tt*3.0 - uTime*2.0)*H*0.12*tt*(1.0-tt);
+  return P + N*(d*(hw.x*0.94 + H*tt)) + B*(rip + belly);
 }`;
 
 // Cracks (noise iso-bands) plus a fresnel rim — shared by body and head.
@@ -222,22 +225,25 @@ function tubeGeo(rings, radial) {
 }
 
 // Two membrane strips (dorsal + ventral) running the length of the body.
+// Four rows (aT 0 / 0.4 / 0.75 / 1): the interior rows give finPos's belly wave
+// real samples to bend, so the membrane billows instead of hinging at the edge.
 function finGeo(rings) {
+  const COLS = [0, 0.4, 0.75, 1], NC = COLS.length;
   const g = new THREE.BufferGeometry();
-  const nv = (rings + 1) * 2 * 2;
+  const nv = (rings + 1) * NC * 2;
   const pos = new Float32Array(nv * 3);
   const aU = new Float32Array(nv), aT = new Float32Array(nv), aF = new Float32Array(nv);
   const idx = [];
   let k = 0;
   for (let side = 0; side < 2; side++) {
     const base = k;
-    for (let i = 0; i <= rings; i++) for (let j = 0; j < 2; j++, k++) {
-      aU[k] = i / rings; aT[k] = j; aF[k] = side ? -1 : 1;
+    for (let i = 0; i <= rings; i++) for (let j = 0; j < NC; j++, k++) {
+      aU[k] = i / rings; aT[k] = COLS[j]; aF[k] = side ? -1 : 1;
       pos[k * 3] = i / rings;
     }
-    for (let i = 0; i < rings; i++) {
-      const a = base + i * 2;
-      idx.push(a, a + 2, a + 1, a + 2, a + 3, a + 1);
+    for (let i = 0; i < rings; i++) for (let j = 0; j < NC - 1; j++) {
+      const a = base + i * NC + j, b = a + NC;
+      idx.push(a, b, a + 1, b, b + 1, a + 1);
     }
   }
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -263,6 +269,10 @@ function skullGeo(Z) {
     x += Math.sign(v.x) * brow * 0.20 * Z.hw;
     const jm = Math.exp(-Math.pow((tt - 0.27) / 0.17, 2)) * clamp(0.55 - v.y * 0.5, 0, 1);
     x += Math.sign(v.x) * jm * 0.26 * Z.hw;
+    // nape bulge over the gill basket: the mass the crescent slits are carved into
+    const nape = Math.exp(-Math.pow((tt - 0.44) / 0.13, 2));
+    x += Math.sign(v.x) * nape * 0.10 * Z.hw * clamp(0.8 - Math.abs(v.y), 0, 1);
+    y += Math.max(0, v.y) * nape * 0.07 * Z.hh;
     if (v.y > 0) y -= Math.pow(v.y, 3) * 0.20 * Z.hh;
     y = Math.max(y, -(0.30 - 0.13 * sn) * Z.hh);        // flat palate the mandible seats against
     p.setXYZ(i, x, y, v.z * Z.hl);
@@ -441,7 +451,7 @@ export function makeLeviathan(idx, over) {
         diffuseColor.rgb *= 0.55+0.45*uFade;`);
   };
   const rings = clamp(n * 3, 64, 168);
-  const bodyGeo = tubeGeo(rings, 14);
+  const bodyGeo = tubeGeo(rings, 22);   // 7-lobe scallop needs >=3 samples/lobe
   L.bodyGeo = bodyGeo;                     // rebuilt on the CPU each frame by rebuildBody()
   const body = new THREE.Mesh(bodyGeo, bodyMat);
   body.frustumCulled = false;              // the tube spans the whole spine; bounds are meaningless
@@ -492,14 +502,28 @@ export function makeLeviathan(idx, over) {
 
   // Head membranes need a plain material: finMat's vertex shader reads aU/aT/aFin and
   // would collapse any geometry that lacks them (three shares one program per material).
+  // Same stochastic alpha-hash cutout as finMat (no-deform variant): the head
+  // membranes render in the OPAQUE pass with depth writes, so the hero can never
+  // mis-sort against its own fins or body. ~62% coverage stands in for the old
+  // opacity 0.62. Build-time only — the constant cache key keeps one program.
   const membMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(Z.hide).multiplyScalar(1.5), roughness: 0.42, metalness: 0,
-    side: THREE.DoubleSide, transparent: true, opacity: 0.62, depthWrite: false,
-    emissive: new THREE.Color(Z.bio).multiplyScalar(0.12),
-    // r163+ renders transparent DoubleSide in two passes (back then front); with
-    // depthWrite off both passes land, doubling the membrane's apparent opacity.
-    forceSinglePass: true
+    side: THREE.DoubleSide, transparent: false,
+    emissive: new THREE.Color(Z.bio).multiplyScalar(0.12)
   });
+  membMat.customProgramCacheKey = () => 'abyssa-lev-memb';
+  membMat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, U);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uFade;')
+      .replace('#include <emissivemap_fragment>', /* glsl */`
+        #include <emissivemap_fragment>
+        float cov = 0.62*uFade;
+        vec2 fc = floor(gl_FragCoord.xy);
+        float bay = fract(dot(fc, vec2(0.7548776662, 0.5698402909)));   // R2 low-discrepancy
+        if (cov < bay*0.94 + 0.03) discard;
+        diffuseColor.a = 1.0;`);
+  };
 
   // ---- bioluminescent nodes: the silhouette that reads first through fog ----
   const pg = new THREE.BufferGeometry();
@@ -652,14 +676,38 @@ export function makeLeviathan(idx, over) {
     color: 0x04060a, roughness: 0.75,
     emissive: new THREE.Color(Z.bio).multiplyScalar(0.10)
   });
-  const gillGeo = new THREE.BoxGeometry(0.06 * Z.hw, 0.30 * Z.hh, 0.035 * Z.hl);
-  for (const sx of [-1, 1]) for (let i = 0; i < 4; i++) {
-    const zz = -0.06 + i * 0.13;                                   // unit-sphere z of this slit
+  // Curved crescent strips (7x3-vert bent grids), recessed into the nape bulge —
+  // 4 in zone 0, 5 in zones 1-2 (Z.gills). One shared geometry; -x is inward, so
+  // mirroring scale.x per side keeps the recess bowing INTO the head on both flanks.
+  const gillGeo = (() => {
+    const SG = 6, WR = 2, gp = [], gi = [];
+    for (let i = 0; i <= SG; i++) {
+      const sT = i / SG, bow = Math.sin(sT * Math.PI);
+      for (let j = 0; j <= WR; j++) {
+        const w = j / WR - 0.5;
+        gp.push(-bow * 0.055 * Z.hw,                            // recess: mid pulled inward
+          (0.5 - sT) * 0.30 * Z.hh,                             // slit runs vertically
+          w * 0.045 * Z.hl + bow * 0.035 * Z.hl);               // crescent sweep aft
+      }
+    }
+    for (let i = 0; i < SG; i++) for (let j = 0; j < WR; j++) {
+      const a = i * (WR + 1) + j, b = a + WR + 1;
+      gi.push(a, b, a + 1, b, b + 1, a + 1);
+    }
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.Float32BufferAttribute(gp, 3));
+    gg.setIndex(gi);
+    gg.computeVertexNormals();
+    return gg;
+  })();
+  const gillStep = Z.gills > 4 ? 0.105 : 0.13;
+  for (const sx of [-1, 1]) for (let i = 0; i < Z.gills; i++) {
+    const zz = -0.08 + i * gillStep;                               // unit-sphere z of this slit
     const halfW = Z.hw * (1 - 0.60 * smooth(zz * 0.5 + 0.5, 0.42, 1.0)) * Math.sqrt(1 - zz * zz);
     const g = new THREE.Mesh(gillGeo, gillMat);
-    g.position.set(sx * halfW * 0.94, -0.05 * Z.hh, Z.hl * (zz + 0.86));
+    g.position.set(sx * halfW * 0.96, -0.05 * Z.hh, Z.hl * (zz + 0.86));
     g.rotation.set(0, 0, sx * 0.16);
-    g.scale.y = 1 - 0.16 * i;
+    g.scale.set(sx, 1 - 0.14 * i, 1);
     head.add(g);
   }
 
@@ -838,6 +886,14 @@ function frameAt(L, u) {
 function rebuildBody(L) {
   const geo = L.bodyGeo;
   if (!geo) return;
+  // Perf guards for the wider tube (radial 14->22, x1.57 CPU): nothing rebuilds
+  // while the group is hidden, and a deeply-calmed slow swimmer rebuilds at half
+  // rate — at swim<=0.2 the surface barely moves between frames.
+  if (L.grp && !L.grp.visible) return;
+  if (L.calmed && L.calmT > 8 && L.swim <= 0.2) {
+    L._rbSkip = !L._rbSkip;
+    if (L._rbSkip) return;
+  }
   const { rings, radial } = geo.userData;
   const pos = geo.attributes.position.array;
   const nor = geo.attributes.normal.array;
