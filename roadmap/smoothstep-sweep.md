@@ -1,8 +1,8 @@
 ---
 title: Reversed-smoothstep sweep
-status: next
+status: done
 tags: bug, shaders
-updated: 2026-08-08
+updated: 2026-08-25
 ---
 A reversed-edge smoothstep is undefined GLSL and returns 0 on this driver — it silently killed the entire Jacobian foam for a whole round. Twelve more suspect call sites remain across the codebase.
 
@@ -14,3 +14,6 @@ Approach: grep every smoothstep, classify GLSL vs CPU, fix GLSL reversed forms w
 
 ## Log
 - 2026-08-08 — cut from the opaque-storm agent's discovery
+
+## Log
+2026-08-25: Absorbed into the AAA shader pass and CLOSED. All 12 card sites confirmed + one new site found (ventlife shrimp flick) = 11 GLSL fixes shipped across water/creatures/predators/flora/ventlife (weather.js's 2 were CPU MathUtils, verified correct, no change). Every resurrected visual was re-judged live and retuned to the quiet bar; see aaa-shader-pass card.

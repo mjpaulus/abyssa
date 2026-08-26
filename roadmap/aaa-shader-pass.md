@@ -15,3 +15,6 @@ Audit headlines (2026-08-25):
 - Worth reviving from the benched cinematic pass: NaN scrub + depth-driven CDL grade (as merged Effects, not Passes).
 
 DECISION (Michael): props.js loads downloaded glTF models — violates the generated-only hard rule (predates it). Regenerate props procedurally, or exempt?
+
+## Log
+2026-08-25: All three branches merged to main (e36295d postfx, 3166de7 world, f797037 life) and pushed. Combined verify on main: clean console, god rays + snow + jelly structure confirmed live at 52 m (first render ever). Retunes logged in-code old→new (fish glowI 7.5→1.5 etc., volumetrics 1.05→0.85, uRayFade 0.62→0.42, grain COLOR_DODGE→shadow-weighted, deck DoF air-blended). New knob: __grade.amount (depth CDL, default 0.15). Awaiting Michael's eye; props.js glTF decision still open.
