@@ -467,7 +467,10 @@ export function makeLeviathan(idx, over) {
   const membMat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(Z.hide).multiplyScalar(1.5), roughness: 0.42, metalness: 0,
     side: THREE.DoubleSide, transparent: true, opacity: 0.62, depthWrite: false,
-    emissive: new THREE.Color(Z.bio).multiplyScalar(0.12)
+    emissive: new THREE.Color(Z.bio).multiplyScalar(0.12),
+    // r163+ renders transparent DoubleSide in two passes (back then front); with
+    // depthWrite off both passes land, doubling the membrane's apparent opacity.
+    forceSinglePass: true
   });
 
   // ---- bioluminescent nodes: the silhouette that reads first through fog ----
@@ -766,6 +769,9 @@ const pt = (L, i) => (i <= 0 ? L.head : L.spine[i - 1]);
 // Mirrors the GLSL bodyR/sect/surf — keep the two in sync.
 // ---------------------------------------------------------------------------
 const _cp = V3(), _cn = V3(), _cb = V3(), _e1 = V3(), _e2 = V3(), _nrm = V3();
+// updateLeviathan steering scratch — dedicated (not the _a/_b pool above) because
+// updateSpine/placeSigil run mid-stretch and must never alias these.
+const _lt = V3(), _ld = V3(), _lc = V3(), _lpu = V3();
 
 function bodyRJs(u) {
   return (0.60 + 0.46 * smooth(u, 0, 0.11)) * Math.pow(Math.max(1 - u, 0), 0.78)
@@ -1025,13 +1031,14 @@ export function updateLeviathan(L, dt, t, player) {
     // Zone 0's sleeper idles shallow (62/38 split toward the top of its band) so it
     // regularly crosses the volumetric sun shafts — the silhouette-through-light beat.
     const yMid = L.idx === 0 ? yTop * 0.62 + yBot * 0.38 : (yTop + yBot) / 2;
+    // module-scoped temps: this ran 4-5 clone()/V3() per frame while un-calmed
     const target = L.agitation > 0.05
-      ? player.pos.clone()
-      : V3(Math.sin(L.t * 0.07) * WORLD_R * 0.6, yMid + Math.sin(L.t * 0.05) * ZONE_H * 0.3, Math.cos(L.t * 0.09) * WORLD_R * 0.6);
-    const dir = target.clone().sub(L.head);
+      ? _lt.copy(player.pos)
+      : _lt.set(Math.sin(L.t * 0.07) * WORLD_R * 0.6, yMid + Math.sin(L.t * 0.05) * ZONE_H * 0.3, Math.cos(L.t * 0.09) * WORLD_R * 0.6);
+    const dir = _ld.copy(target).sub(L.head);
     const d = dir.length() || 1;
     dir.divideScalar(d);
-    const cur = V3(Math.cos(L.pitch) * Math.cos(L.ang), Math.sin(L.pitch), Math.cos(L.pitch) * Math.sin(L.ang));
+    const cur = _lc.set(Math.cos(L.pitch) * Math.cos(L.ang), Math.sin(L.pitch), Math.cos(L.pitch) * Math.sin(L.ang));
     // Steering fades to zero inside a flyby radius: chasing the player's exact position
     // makes the head overshoot, whip around, and pirouette in a tight orbit. Inside
     // ~3 body-radii it holds course and swims past, then re-approaches.
@@ -1071,7 +1078,7 @@ export function updateLeviathan(L, dt, t, player) {
       L.agitation = Math.min(1, L.agitation + danger * dt * 1.5);
     }
     if (near < L.size * 1.4) {
-      const push = player.pos.clone().sub(nearSeg).normalize();
+      const push = _lpu.copy(player.pos).sub(nearSeg).normalize();
       player.vel.addScaledVector(push, 90 * dt * 8);
       ev.lightDrain += dt * 0.5;
       ev.slam = true;
