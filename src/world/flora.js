@@ -122,7 +122,10 @@ float gmask = vFlora.x;
 #endif
 #ifdef FLORA_GROOVE
   float mn = sin(vLocal.x * 27.0 + sin(vLocal.z * 21.0 + vLocal.y * 15.0) * 2.4);
-  float gr = smoothstep(0.3, 0.0, abs(mn));
+  // Reversed-edge smoothstep is UB (0.0 on this driver): the grooves never drew, and
+  // gmask *= gr below silently killed ALL brain-coral bioluminescence with them.
+  // 1.0 - smoothstep(lo, hi, x) is the defined form (see water.js foldK).
+  float gr = 1.0 - smoothstep(0.0, 0.3, abs(mn));
   diffuseColor.rgb *= mix(1.0, 0.3, gr);
   roughnessFactor = mix(roughnessFactor, 1.0, gr * 0.7);
   gmask *= gr;

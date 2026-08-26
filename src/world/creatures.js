@@ -5,7 +5,7 @@
 // hundred boids and ~21 jellyfish bodies; undulation, tentacle lag, ribbon
 // motion and glow all live in vertex shaders so the frame cost stays flat.
 import * as THREE from 'three';
-import { scene } from '../core.js';
+import { scene, camera } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
 import { clamp, V3 } from '../lib/math.js';
 import { glowTex } from '../lib/textures.js';
@@ -162,8 +162,11 @@ function fishMaterial(sp) {
         // countershading: dark back, pale belly — reads instantly as a fish
         float shade = mix(1.35, 0.30, clamp(vFuv.y,0.0,1.0));
         diffuseColor.rgb *= vTint * mix(0.5, shade, body);
-        float lat  = smoothstep(0.075, 0.010, abs(vFuv.y-0.50)) * body;
-        float bel  = smoothstep(0.110, 0.020, abs(vFuv.y-0.13)) * body;
+        // Reversed-edge smoothstep is UNDEFINED (GLSL spec) and returns 0.0 on this
+        // driver — both photophore rows were dead. 1.0 - smoothstep(lo, hi, x) is the
+        // same decreasing ramp, defined everywhere (see water.js foldK).
+        float lat  = (1.0 - smoothstep(0.010, 0.075, abs(vFuv.y-0.50))) * body;
+        float bel  = (1.0 - smoothstep(0.020, 0.110, abs(vFuv.y-0.13))) * body;
         float dots = smoothstep(0.30, 0.95, sin(vFuv.x*uCount + vPh));
         float beat = 0.5 + 0.5*sin(uTime*2.2 + vPh*3.0);
         // photophore rows along the flank and belly, plus a body-wide ghost glow
@@ -203,29 +206,34 @@ const SPECIES = [
     amp: 0.16, beat: 13, floorBias: 0.7
   },
   // zone 1 — colder, dimmer, first real bioluminescence
+  // RETUNE after the dead-smoothstep fix: glowI values below were balanced while the
+  // photophore rows returned 0.0 (only glowI*base ever drew). With the rows live the
+  // old numbers read as LEDs. glowI is cut toward faint paired running lights and
+  // `base` is raised so glowI*base — the ghost-body glow that WAS the shipped look —
+  // stays at its authored product. Verified live at close range and at distance.
   {
     zi: 1, copies: 2, n: 55, sz: [0.62, 1.1], speed: 7.4, radius: 7, local: 2.9, fear: 19,
     rings: 6, sides: 6, w: 0.22, h: 0.46, taper: 0.66, tail: 0.38, dorsal: 0.08, pect: 0.06,
-    col: 0x3d5478, jit: 0.12, glow: 0x5fd8ff, glowI: 2.8, dots: 62, base: 0.005, rough: 0.24, metal: 0.5,
+    col: 0x3d5478, jit: 0.12, glow: 0x5fd8ff, glowI: 1.2, dots: 62, base: 0.012, rough: 0.24, metal: 0.5,   // glowI 2.8->1.2, base 0.005->0.012
     amp: 0.125, beat: 11
   },
   {
     zi: 1, copies: 1, n: 23, sz: [1.5, 2.4], speed: 3.6, radius: 9, local: 1.8, fear: 22,
     rings: 7, sides: 7, w: 0.26, h: 0.74, taper: 0.44, tail: 0.46, dorsal: 0.16, pect: 0.1,
-    col: 0x6a3d86, jit: 0.2, glow: 0xff7ad8, glowI: 3.4, dots: 34, base: 0.008, rough: 0.5, metal: 0.1,
+    col: 0x6a3d86, jit: 0.2, glow: 0xff7ad8, glowI: 1.4, dots: 34, base: 0.019, rough: 0.5, metal: 0.1,     // glowI 3.4->1.4, base 0.008->0.019
     amp: 0.1, beat: 5.2
   },
   // zone 2 — abyssal: near-transparent bodies, photophore rows doing the work
   {
     zi: 2, copies: 2, n: 40, sz: [0.62, 1.1], speed: 5.4, radius: 6.5, local: 2.2, fear: 20,
     rings: 6, sides: 6, w: 0.2, h: 0.42, taper: 0.68, tail: 0.4, dorsal: 0.07, pect: 0.05,
-    col: 0x22333d, jit: 0.06, glow: 0x8dffe4, glowI: 7.5, dots: 96, base: 0.016, rough: 0.3, metal: 0.3,
+    col: 0x22333d, jit: 0.06, glow: 0x8dffe4, glowI: 1.5, dots: 96, base: 0.08, rough: 0.3, metal: 0.3,     // glowI 7.5->1.5 (blew out to white at 4u), base 0.016->0.08
     amp: 0.14, beat: 9
   },
   {
     zi: 2, copies: 1, n: 16, sz: [1.3, 2.1], speed: 2.8, radius: 10, local: 1.5, fear: 24,
     rings: 6, sides: 7, w: 0.24, h: 0.92, taper: 0.4, tail: 0.32, dorsal: 0.18, pect: 0.12,
-    col: 0x2c4250, jit: 0.08, glow: 0xbfe8ff, glowI: 6.5, dots: 54, base: 0.018, rough: 0.22, metal: 0.55,
+    col: 0x2c4250, jit: 0.08, glow: 0xbfe8ff, glowI: 1.4, dots: 54, base: 0.084, rough: 0.22, metal: 0.55,  // glowI 6.5->1.4, base 0.018->0.084
     amp: 0.08, beat: 4.2
   }
 ];
@@ -521,7 +529,10 @@ void main(){
   float margin = smoothstep(0.80, 1.0, vUv.y);
   vec3 col = vTint * (fres*1.15 + ribs*0.55 + 0.05);
   col += vTint * margin * (0.35 + 1.25*vC);
-  col += vTint * smoothstep(0.4, 0.0, vUv.y) * (0.12 + 0.5*vC);
+  // reversed-edge smoothstep = UB (0.0 on this driver): the apex/crown glow never drew.
+  // RETUNE with the term live: (0.12 + 0.5*vC) -> (0.06 + 0.25*vC) — at the authored
+  // weight the already-hot additive bell blew out to white at close range.
+  col += vTint * (1.0 - smoothstep(0.0, 0.4, vUv.y)) * (0.06 + 0.25*vC);
   gl_FragColor = vec4(col * vFog * uInt, 1.0);
   ${TONE_OUT}
 }`;
@@ -533,10 +544,14 @@ varying vec2 vUv; varying vec3 vN; varying vec3 vV; varying vec3 vTint;
 varying float vC; varying float vFog; varying float vRibs;
 void main(){
   float thick = 1.0 - smoothstep(0.0, 0.85, vUv.y);
-  float lobes = pow(abs(cos(vUv.x*12.566)), 4.0) * smoothstep(0.55, 0.06, vUv.y);
+  // reversed-edge smoothstep = UB (0.0 here): the four-lobed core never drew, which
+  // also zeroed its alpha term below.
+  float lobes = pow(abs(cos(vUv.x*12.566)), 4.0) * (1.0 - smoothstep(0.06, 0.55, vUv.y));
   vec3 milk = mix(vTint, vec3(0.78, 0.90, 1.0), 0.55);
-  vec3 col = milk * (0.16 + 0.30*vC) + vTint * lobes * (0.5 + 1.6*vC);
-  float a = (0.09 + 0.26*thick + lobes*0.35) * vFog;
+  // RETUNE with the lobes live: color (0.5 + 1.6*vC) -> (0.3 + 0.9*vC), alpha
+  // lobes*0.35 -> lobes*0.22 — authored against a dead term, read hot when it lit.
+  vec3 col = milk * (0.16 + 0.30*vC) + vTint * lobes * (0.3 + 0.9*vC);
+  float a = (0.09 + 0.26*thick + lobes*0.22) * vFog;
   gl_FragColor = vec4(col * uInt, a);
   ${TONE_OUT}
 }`;
@@ -736,7 +751,10 @@ function buildJellies() {
   const trailMat = new THREE.ShaderMaterial({
     uniforms: { uTime, uFogD, uInt: { value: 1 } },
     vertexShader: TRAIL_VERT, fragmentShader: TRAIL_FRAG,
-    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    // r163+ splits transparent DoubleSide into a back-face + front-face pass; for a
+    // depthWrite:false additive ribbon that is two draw calls for the same fragments.
+    forceSinglePass: true
   });
   trailers = new THREE.InstancedMesh(trailGeo, trailMat, N);
   trailers.frustumCulled = false;
@@ -797,6 +815,17 @@ function updateJellies(dt, t) {
   const gp = jellyGlow.geometry.attributes.aPos.array;
   const gs = jellyGlow.geometry.attributes.aSize.array;
   for (const J of jellies) {
+    // Distance cull past the fog wall (jellies were the one population never culled:
+    // 21 bodies x 4 layers always drawn AND steered). Per-instance scale-to-zero —
+    // the instanced meshes stay one draw call, degenerate instances cost nothing.
+    if (J.pos.distanceTo(player.pos) > cullR + J.scale * 10) {
+      J.phase += dt * J.rate;              // keep the gait clock coherent
+      const oz = J.i * 16;
+      for (let k = 0; k < 15; k++) bm[oz + k] = 0;
+      bm[oz + 15] = 1;
+      gs[J.i] = 0;
+      continue;
+    }
     const step = dt * J.rate;
     J.phase += step;
     const c = contractAt(J.phase), c0 = contractAt(J.phase - step);
@@ -855,7 +884,7 @@ function updateJellies(dt, t) {
 // abyssal drifters: siphonophore bead-chains and ghost ribbons
 // ---------------------------------------------------------------------------
 
-let drifters = null, sparks = null;
+let drifters = null, sparksZ = null;
 
 const DRIFT_VERT = `
 attribute vec4 aD; attribute vec4 aE; attribute vec3 aCol;
@@ -950,7 +979,8 @@ function buildDrifters() {
   drifters = new THREE.Mesh(g, new THREE.ShaderMaterial({
     uniforms: { uTime, uFogD },
     vertexShader: DRIFT_VERT, fragmentShader: DRIFT_FRAG,
-    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending
+    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
+    forceSinglePass: true       // see trailMat — same r163+ double-pass note
   }));
   drifters.frustumCulled = false;
   drifters.renderOrder = 2;
@@ -967,10 +997,12 @@ function layoutDrifters() {
 }
 
 // Twinkling plankton — pure vertex-shader motion, zero CPU per frame.
+// One mesh PER ZONE (same material, so still one program) so updateCreatures can gate
+// them off camera-Y bands like flora.js does — they used to draw in all three zones
+// no matter where the camera was.
 function buildSparks() {
   // zone counts as explicit buckets (not percentages) so zone 0 can be boosted
   // independently: +40% over the original ~58 there, zones 1/2 unchanged.
-  const N0 = 81, N1 = 102, N2 = 160, N = N0 + N1 + N2;
   const mat = glowMaterial(`
     float s = aExtra.x;
     wp.x += sin(uTime*aExtra.y + s)*3.0;
@@ -978,38 +1010,35 @@ function buildSparks() {
     wp.z += cos(uTime*aExtra.y*0.85 + s*0.6)*3.0;
     vTw = 0.35 + 0.65*pow(0.5+0.5*sin(uTime*aExtra.z + s*3.0), 3.0);`, 'varying float vTw;');
   mat.fragmentShader = mat.fragmentShader.replace('vec4(vC * vFog, a)', 'vec4(vC * vFog * vTw, a)');
-  sparks = glowField(N, mat);
-  sparks.renderOrder = 4;
-  SPARK_N = [N0, N1, N];
+  SPARK_N = [81, 102, 160];
+  sparksZ = SPARK_N.map(n => glowField(n, mat));
   layoutSparks();
-  scene.add(sparks);
+  for (const m of sparksZ) { m.renderOrder = 4; scene.add(m); }
 }
 
 let SPARK_N = null;
 
 function layoutSparks() {
-  const [N0, N1, N] = SPARK_N;
-  const p = sparks.geometry.attributes.aPos.array;
-  const s = sparks.geometry.attributes.aSize.array;
-  const c = sparks.geometry.attributes.aCol.array;
-  const e = sparks.geometry.attributes.aExtra.array;
   const col = new THREE.Color();
-  for (let i = 0; i < N; i++) {
-    const zi = i < N0 ? 0 : (i < N0 + N1 ? 1 : 2);
-    const a = _cr() * Math.PI * 2, r = rr(10, WORLD_R * 0.85);
-    p[i * 3] = Math.cos(a) * r;
-    p[i * 3 + 1] = rr(zoneBottom(zi) + 10, zoneTop(zi) - 6);
-    p[i * 3 + 2] = Math.sin(a) * r;
-    s[i] = rr(0.5, 1.8) * (1 + zi * 0.35);
-    col.setHSL(zi === 2 ? rr(0.38, 0.52) : (zi === 1 ? rr(0.68, 0.86) : rr(0.5, 0.6)), 0.8, 0.6);
-    const k = 0.5 + zi * 0.5;
-    c[i * 3] = col.r * k; c[i * 3 + 1] = col.g * k; c[i * 3 + 2] = col.b * k;
-    e[i * 3] = _cr() * 6.283;
-    e[i * 3 + 1] = rr(0.08, 0.22);
-    e[i * 3 + 2] = rr(0.5, 2.2);
+  // zone-major loop = identical _cr consumption order to the old single-mesh layout
+  for (let zi = 0; zi < 3; zi++) {
+    const at = sparksZ[zi].geometry.attributes;
+    const p = at.aPos.array, s = at.aSize.array, c = at.aCol.array, e = at.aExtra.array;
+    for (let i = 0; i < SPARK_N[zi]; i++) {
+      const a = _cr() * Math.PI * 2, r = rr(10, WORLD_R * 0.85);
+      p[i * 3] = Math.cos(a) * r;
+      p[i * 3 + 1] = rr(zoneBottom(zi) + 10, zoneTop(zi) - 6);
+      p[i * 3 + 2] = Math.sin(a) * r;
+      s[i] = rr(0.5, 1.8) * (1 + zi * 0.35);
+      col.setHSL(zi === 2 ? rr(0.38, 0.52) : (zi === 1 ? rr(0.68, 0.86) : rr(0.5, 0.6)), 0.8, 0.6);
+      const k = 0.5 + zi * 0.5;
+      c[i * 3] = col.r * k; c[i * 3 + 1] = col.g * k; c[i * 3 + 2] = col.b * k;
+      e[i * 3] = _cr() * 6.283;
+      e[i * 3 + 1] = rr(0.08, 0.22);
+      e[i * 3 + 2] = rr(0.5, 2.2);
+    }
+    at.aPos.needsUpdate = at.aSize.needsUpdate = at.aCol.needsUpdate = at.aExtra.needsUpdate = true;
   }
-  const at = sparks.geometry.attributes;
-  at.aPos.needsUpdate = at.aSize.needsUpdate = at.aCol.needsUpdate = at.aExtra.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,4 +1074,11 @@ export function updateCreatures(dt, t) {
   }
   for (const S of schools) updateSchool(S, dt, t);
   updateJellies(dt, t);
+  // Camera-Y band gating (flora.js pattern): sparks/drifters used to draw in all
+  // three zones every frame regardless of where the camera was.
+  const cy = camera.position.y;
+  for (let zi = 0; zi < 3; zi++)
+    sparksZ[zi].visible = cy < zoneTop(zi) + 120 && cy > zoneBottom(zi) - 150;
+  // drifters live in zones 1-2 only (see driftArrays placement)
+  drifters.visible = cy < zoneTop(1) + 120;
 }

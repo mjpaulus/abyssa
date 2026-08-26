@@ -29,6 +29,21 @@ import { rng, clamp, lerp, V3 } from '../lib/math.js';
 import { glowTex, makeGlow } from '../lib/textures.js';
 import { terrainH } from './terrain.js';
 import { rockColliders } from './flora.js';
+import { siteParams, stream } from './site.js';
+
+// CHART V2 determinism (same contract as flora/creatures): every placement/phase draw
+// routes through site-seeded streams, never Math.random.
+//   _pr — build-time cosmetics (octopus uSeed, squid phases, sac phases), installed
+//         once per build in buildPredators().
+//   _pd — den layout. Installed FRESH by both buildOctopuses() and reseedDens() (via
+//         denStream()), and both paths consume it in the identical order, so a boot at
+//         a site and an arrive() back to it place bit-identical dens.
+let _pr = Math.random;
+let _pd = Math.random;
+const denStream = () => {
+  const r = siteParams('predators').rng;
+  return stream((Math.floor(r() * 4294967296) ^ 0xDE45) | 0);
+};
 
 // ---------------------------------------------------------------------------
 // shared plumbing
@@ -40,7 +55,12 @@ const uTime = { value: 0 };
 const uFogD = { value: 0.016 };
 
 const TAU = Math.PI * 2;
-const CULL = 205;                       // nothing is visible past the fog wall
+// Sight wall. 205 was zone 0's green 2% visibility under the OLD uniform water; the
+// column is stratified since THE SILT LINE and the real wall reaches ~380-480 out of
+// the silt. Mirror creatures.js's computation off scene.fog.density (updated every
+// frame in updatePredators) so predators stop popping at half the visible range.
+const CULL_MAX = 420;                   // above any reachable clear-band sightline
+let CULL = 205;
 
 // hot-path temps — module-owned, never allocated per frame
 const _a = V3(), _b = V3(), _c = V3(), _d = V3(), _lp = V3();
@@ -272,17 +292,20 @@ function sharkMaterial(cfg) {
         // dermal mottle so the flank is not a flat gradient
         hide *= 0.90 + 0.14*sin(vSuv.x*46.0)*sin(yy*23.0);
         // five gill slits behind the head
-        float gx = smoothstep(0.30, 0.20, vSuv.x) * smoothstep(0.135, 0.175, vSuv.x);
+        // Reversed-edge smoothstep is UB (returns 0.0 on this driver) — gills, eye and
+        // sheen below never rendered. 1.0 - smoothstep(lo, hi, x) is the defined idiom
+        // (see water.js foldK).
+        float gx = (1.0 - smoothstep(0.20, 0.30, vSuv.x)) * smoothstep(0.135, 0.175, vSuv.x);
         float gs = pow(0.5 + 0.5*sin((vSuv.x-0.15)*190.0), 8.0) * gx * step(yy, 0.72) * step(0.18, yy);
         hide *= 1.0 - 0.55*gs;
         // eye: a black bead, present on both flanks because uv.y is side-symmetric
-        float eye = smoothstep(0.038, 0.012, length(vec2((vSuv.x-0.088)*1.9, yy-0.775)));
+        float eye = 1.0 - smoothstep(0.012, 0.038, length(vec2((vSuv.x-0.088)*1.9, yy-0.775)));
         hide = mix(hide, vec3(0.012, 0.014, 0.018), eye);
         // fins take a mid tone, a touch darker than the flank
         vec3 finc = mix(uPale, uDark, 0.72);
         diffuseColor.rgb *= mix(finc, hide, body);
         // faint wet sheen along the lateral line keeps the silhouette legible in murk
-        float lat = smoothstep(0.075, 0.012, abs(yy - 0.46)) * body;
+        float lat = (1.0 - smoothstep(0.012, 0.075, abs(yy - 0.46))) * body;
         totalEmissiveRadiance += uDark * lat * uSheen;`);
   };
   return mat;
@@ -293,6 +316,9 @@ function sharkMaterial(cfg) {
 // ---------------------------------------------------------------------------
 
 const SHARK_CFG = [
+  // sheen was dead weight until the lateral-line smoothstep fix; re-judged live:
+  // the emissive is uDark (a dark hide tone) * sheen, so 0.10/0.30 read as a wet
+  // glint, not a glow — authored values kept.
   { zi: 0, size: 6.6, dark: 0x35474f, pale: 0xd6e0dc, sheen: 0.10, patrolR: 62 },
   { zi: 1, size: 8.6, dark: 0x262c46, pale: 0x9fa9c4, sheen: 0.30, patrolR: 56 }
 ];
@@ -476,7 +502,11 @@ function updateShark(S, dt, t, p) {
   S.u.uAmp.value = 0.030 + 0.032 * clamp(S.speed / SH.strikeSpeed, 0, 1) + S.arch * 0.020;
   S.u.uArch.value = S.arch;
 
-  S.mesh.visible = dist < CULL;
+  // Fade over the last ~15% of sight range instead of a hard visible-pop (house
+  // pattern: ventlife's uVis shrink). Scale-to-zero — no material/uniform churn.
+  const vis = clamp((CULL - dist) / (CULL * 0.15), 0, 1);
+  S.mesh.visible = vis > 0;
+  S.mesh.scale.setScalar((cfg.size / 1.34) * vis);
 
   // ---- threat feed ----
   const prox = clamp(1 - dist / 70, 0, 1);
@@ -613,7 +643,7 @@ const OCT_DEFORM = /* glsl */`
 function octopusMaterial(zi) {
   const P = OCT_PAL[zi];
   const u = {
-    uTime, uReach: { value: 0 }, uSeed: { value: Math.random() * 6.283 },
+    uTime, uReach: { value: 0 }, uSeed: { value: _pr() * 6.283 },
     uActive: { value: 0 }, uGrab: { value: 0 }, uDir: { value: V3(1, 0, 0) },
     uSkin: { value: new THREE.Color(P.skin) },
     uHot: { value: new THREE.Color(P.hot) },
@@ -687,7 +717,7 @@ function pickDens(zi, n) {
   }
   const out = [];
   for (let k = 0; k < n && pool.length; k++) {
-    const idx = (Math.random() * pool.length) | 0;
+    const idx = (_pd() * pool.length) | 0;
     out.push(pool.splice(idx, 1)[0]);
   }
   return out;
@@ -695,6 +725,7 @@ function pickDens(zi, n) {
 
 function buildOctopuses() {
   const geo = octopusGeometry();
+  _pd = denStream();   // fresh den stream — reseedDens() installs its own identically
   for (let zi = 0; zi < 3; zi++) {
     const dens = pickDens(zi, OC.perZone);
     for (const rock of dens) {
@@ -704,8 +735,8 @@ function buildOctopuses() {
       mesh.visible = false;
       // Tucked against the outside of the boulder, not inside it: the rock is cover to
       // hide behind, and the silhouette has to break against it rather than vanish.
-      const scale = rng(1.5, 2.2);
-      const a = rng(0, TAU), r = rock.r + scale * 0.75;
+      const scale = 1.5 + _pd() * 0.7;
+      const a = _pd() * TAU, r = rock.r + scale * 0.75;
       const x = rock.x + Math.cos(a) * r, z = rock.z + Math.sin(a) * r;
       const y = terrainH(x, z, zi) + 0.2;
       mesh.scale.setScalar(scale);
@@ -798,7 +829,9 @@ function updateOctopus(O, dt, t, p, lp) {
   O.u.uActive.value = O.active;
   O.u.uGrab.value = O.grab;
 
-  O.mesh.visible = pd < 130;
+  // 130 predates the stratified fog; track the live sight wall (dens sit in the silt,
+  // so this usually lands near the old figure, but never pops inside visible range).
+  O.mesh.visible = pd < Math.min(CULL, 205);
 }
 
 // ---------------------------------------------------------------------------
@@ -820,7 +853,9 @@ const INK_COL = [[0.012, 0.020, 0.026], [0.014, 0.012, 0.026], [0.018, 0.013, 0.
 
 function buildInk() {
   const mat = billboardMaterial(THREE.NormalBlending,
-    'gl_FragColor = vec4(vC.rgb, a * vC.a * mix(0.15, 1.0, vFog));');
+    // Fade fully to 0 at range: mix(0.15, ...) kept a 15% alpha floor, so an ink
+    // cloud never fully fogged out and read as a dark smudge past the sight wall.
+    'gl_FragColor = vec4(vC.rgb, a * vC.a * vFog);');
   inkMesh = billboardField(INK_N, mat);
   inkMesh.renderOrder = 3;
   inkMesh.visible = false;
@@ -960,7 +995,7 @@ function buildSacs() {
     grp.add(halo);
     grp.visible = false;
     scene.add(grp);
-    sacs.push({ grp, alive: false, life: 0, ph: Math.random() * 7, baseY: 0, spin: Math.random() * 7 });
+    sacs.push({ grp, alive: false, life: 0, ph: _pr() * 7, baseY: 0, spin: _pr() * 7 });
   }
 }
 
@@ -1191,7 +1226,7 @@ function buildSquid() {
   squidMat = squidMaterial();
   squidU = squidMat.userData.u;
   const inst = new Float32Array(SQ.n * 3);
-  for (let i = 0; i < SQ.n; i++) inst[i * 3] = Math.random() * 6.283;
+  for (let i = 0; i < SQ.n; i++) inst[i * 3] = _pr() * 6.283;
   squidI = new THREE.InstancedBufferAttribute(inst, 3);
   geo.setAttribute('aSqI', squidI);
   squidMesh = new THREE.InstancedMesh(geo, squidMat, SQ.n);
@@ -1480,6 +1515,7 @@ let activeZone = -1;
 let profN = 0, profSum = 0, profMax = 0;
 
 export function buildPredators() {
+  _pr = siteParams('predators').rng;
   for (const cfg of SHARK_CFG) buildShark(cfg);
   buildOctopuses();
   buildInk();
@@ -1656,6 +1692,9 @@ export function switchPredatorZone(zi) {
 // cooldown return. `ev` is not touched: it is fully rebuilt every frame at the top of
 // updatePredators, so this reset cannot leak a stale threat/lightSteal tick.
 export function reseedDens() {
+  // Same stream, same draw order as buildOctopuses (scale slot burnt below), so a
+  // boot at a site and an arrive() back to it place bit-identical dens.
+  _pd = denStream();
   for (let zi = 0; zi < 3; zi++) {
     const group = octos.filter(o => o.zi === zi);
     if (!group.length) continue;
@@ -1667,8 +1706,9 @@ export function reseedDens() {
       // no worse than the shipped shortfall behaviour.
       if (!rock) continue;
       const O = group[i];
+      void _pd();                      // burn the scale slot buildOctopuses drew
       const scale = O.mesh.scale.x;
-      const a = rng(0, TAU), r = rock.r + scale * 0.75;
+      const a = _pd() * TAU, r = rock.r + scale * 0.75;
       const x = rock.x + Math.cos(a) * r, z = rock.z + Math.sin(a) * r;
       const y = terrainH(x, z, zi) + 0.2;
       O.den.set(x, y, z);
@@ -1687,7 +1727,11 @@ export function updatePredators(dt, t, p, lanternPos) {
   const t0 = performance.now();
   ev.threat = 0; ev.bite = 0; ev.lightSteal = 0; ev.inkPickup = 0;
   uTime.value = t;
-  if (scene.fog) uFogD.value = scene.fog.density;
+  if (scene.fog) {
+    uFogD.value = scene.fog.density;
+    // same formula as creatures.js cullR: range where green transmittance hits 2%
+    CULL = Math.min(CULL_MAX, 3.912 / Math.max(scene.fog.density * 1.45, 1e-4));
+  }
 
   // lanternPos is written at the end of game.js's frame, so on frame one it is still
   // the origin — fall back to the diver himself rather than luring everything to (0,0,0).

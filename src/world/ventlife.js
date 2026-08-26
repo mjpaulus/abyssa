@@ -186,7 +186,9 @@ function shrimpMaterial() {
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         float vlSz = aBody.x * uVis;
         // pleopod flick — the tail end sweeps, the head barely moves
-        float vlFlex = smoothstep(0.15, -0.6, position.x);
+        // Reversed-edge smoothstep is UB (0.0 on this driver) — the flick never moved
+        // a vertex. 1.0 - smoothstep(lo, hi, x) is the defined form (water.js foldK).
+        float vlFlex = 1.0 - smoothstep(-0.6, 0.15, position.x);
         transformed.z += sin(uTime * 9.0 * aBody.y + aBody.z) * 0.10 * vlFlex;
         transformed *= vlSz;
         transformed.xz = vlRot * transformed.xz;
