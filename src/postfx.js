@@ -9,10 +9,11 @@
 import * as THREE from 'three';
 import {
   EffectComposer, RenderPass, EffectPass, BloomEffect, DepthOfFieldEffect,
-  VignetteEffect, NoiseEffect, ChromaticAberrationEffect, BlendFunction,
+  VignetteEffect, ChromaticAberrationEffect, BlendFunction, Effect,
   KernelSize, NormalPass, SSAOEffect, SMAAEffect, SMAAPreset, DepthCopyPass
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
+import { SURFACE_Y } from './config.js';
 import { renderer, scene, camera, onResize } from './core.js';
 import { playerLightSrc, parkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
@@ -54,8 +55,101 @@ const dof = new DepthOfFieldEffect(camera, { focusDistance: 9 / 700, focalLength
 // shipped band through the world-unit accessors when they exist.
 if ('worldFocusRange' in dof.cocMaterial) dof.cocMaterial.worldFocusRange = 0.06 * 700;
 const vignette = new VignetteEffect({ darkness: 0.55, offset: 0.28 });
-const grain = new NoiseEffect({ blendFunction: BlendFunction.COLOR_DODGE });
-grain.blendMode.opacity.value = 0.06;
+// Shadow-weighted film grain (ported from the benched cinematic grade, which weighted
+// grain by 1 - smoothstep(0, 0.75, luminance)). The old NoiseEffect ran COLOR_DODGE,
+// which divides by (1 - noise): on the near-black murk that AMPLIFIES the noise
+// exactly where a dark game needs it quietest. This adds a zero-mean hash grain that
+// rides the shadows and dies in the highlights — texture in the murk, clean lantern.
+class GrainEffect extends Effect {
+  constructor() {
+    super('AbyssaGrain', `
+      uniform float uAmount;
+      void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
+        float g = fract(sin(dot(uv * resolution + fract(time) * 91.7, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        vec3 c = inputColor.rgb + g * uAmount * (1.0 - smoothstep(0.0, 0.75, luminance(inputColor.rgb)));
+        outputColor = vec4(max(c, 0.0), inputColor.a);
+      }`, {
+      blendFunction: BlendFunction.NORMAL,
+      uniforms: new Map([['uAmount', new THREE.Uniform(0.045)]])
+    });
+  }
+}
+const grain = new GrainEffect();
+// NaN/Inf scrub (concept from the benched chain): a 0/0 in a fog or water term can
+// emit NaN into the buffer, and every comparison against NaN is false, so the clamp
+// is written comparison-first. Runs LAST in the main EffectPass, after DoF and the
+// mipmap-bloom contribution have been blended, so nothing bad leaves the pass.
+class FiniteEffect extends Effect {
+  constructor() {
+    super('AbyssaFinite', `
+      void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
+        vec3 v = inputColor.rgb;
+        outputColor = vec4(v.x > 0.0 ? min(v.x, 64.0) : 0.0,
+                           v.y > 0.0 ? min(v.y, 64.0) : 0.0,
+                           v.z > 0.0 ? min(v.z, 64.0) : 0.0, inputColor.a);
+      }`, { blendFunction: BlendFunction.NORMAL, uniforms: new Map() });
+  }
+}
+const finite = new FiniteEffect();
+// Depth-driven ASC-CDL grade (rehabbed from the benched chain's LOOKS table as a
+// static-uniform effect — no extra pass, no render targets, so none of the machinery
+// that flashed). EXTREMELY subtle by design: window.__grade.amount scales the whole
+// departure from neutral (0 = bit-identical off, default barely-there); the user
+// judges the look by eye and owns the knob.
+class GradeEffect extends Effect {
+  constructor() {
+    super('AbyssaGrade', `
+      uniform vec3 uSlope, uOffset, uPower;
+      uniform float uSat;
+      void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
+        vec3 c = max(inputColor.rgb, 0.0);
+        c = pow(c, vec3(0.4545454));
+        c = pow(max(c * uSlope + uOffset, 0.0), uPower);
+        c = mix(vec3(luminance(c)), c, uSat);
+        outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
+      }`, {
+      blendFunction: BlendFunction.NORMAL,
+      uniforms: new Map([
+        ['uSlope', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
+        ['uOffset', new THREE.Uniform(new THREE.Vector3(0, 0, 0))],
+        ['uPower', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
+        ['uSat', new THREE.Uniform(1)]
+      ])
+    });
+  }
+}
+const grade = new GradeEffect();
+// Shallow / deep look stops (the benched LOOKS, softened): cool slope and lifted
+// blue offset deepening with depth. Lerped by depth, then the whole thing lerped
+// toward neutral by __grade.amount.
+const GRADE_LOOKS = [
+  { slope: [0.99, 1.02, 1.01], offset: [0.006, 0.008, 0.010], power: [1.01, 1.00, 1.00], sat: 1.06 },
+  { slope: [0.93, 0.95, 1.03], offset: [0.004, 0.006, 0.010], power: [1.05, 1.03, 1.00], sat: 1.04 }
+];
+const __grade = { amount: 0.15 };
+if (typeof window !== 'undefined') window.__grade = __grade;
+const _gv = new THREE.Vector3();
+function updateGrade() {
+  const k = Math.max(0, Math.min(1, __grade.amount));
+  const gu = grade.uniforms;
+  if (k <= 0.001) {
+    gu.get('uSlope').value.set(1, 1, 1); gu.get('uOffset').value.set(0, 0, 0);
+    gu.get('uPower').value.set(1, 1, 1); gu.get('uSat').value = 1;
+    return;
+  }
+  const d = Math.max(0, Math.min(1, -camera.position.y / 650));
+  const a = GRADE_LOOKS[0], b = GRADE_LOOKS[1];
+  for (const key of ['slope', 'offset', 'power']) {
+    const neutral = key === 'offset' ? 0 : 1;
+    _gv.set(0, 0, 0);
+    for (let i = 0; i < 3; i++) {
+      const v = a[key][i] + (b[key][i] - a[key][i]) * d;
+      _gv.setComponent(i, neutral + (v - neutral) * k);
+    }
+    gu.get('u' + key[0].toUpperCase() + key.slice(1)).value.copy(_gv);
+  }
+  gu.get('uSat').value = 1 + (a.sat + (b.sat - a.sat) * d - 1) * k;
+}
 const chroma = new ChromaticAberrationEffect({
   offset: new THREE.Vector2(0.0009, 0.0006), radialModulation: true, modulationOffset: 0.35
 });
@@ -64,7 +158,11 @@ const chroma = new ChromaticAberrationEffect({
 // inside the effect chain, so it cannot reintroduce the resolve-blit that flashed.
 const smaa = new SMAAEffect({ preset: SMAAPreset.HIGH });
 
-let effects = [dof, bloom, chroma, vignette, grain];
+// Vignette and grain moved OUT of this pass: they used to run before SMAA, which
+// then smoothed the grain like an edge. They now live with SMAA in the final pass
+// (SMAA is the pass's one convolution effect, so it sorts first within it) — zero
+// extra passes, and the grain lands on the antialiased frame.
+let effects = [dof, bloom, chroma, grade, finite];
 let normalPass = null, effectPass = null, n8aoPass = null;
 // Prefer N8AO (ground-truth-ish AO, far richer contact shading than the old SSAO);
 // fall back to the previous NormalPass+SSAO stack, then to no AO at all. Each tier
@@ -93,9 +191,10 @@ try {
 }
 effectPass = new EffectPass(camera, ...effects);
 composer.addPass(effectPass);
-// SMAA is a convolution effect and cannot share a pass with ChromaticAberration;
-// it runs last so it smooths the whole graded frame.
-const smaaPass = new EffectPass(camera, smaa);
+// SMAA is a convolution effect and cannot share a pass with ChromaticAberration; it
+// runs last so it smooths the whole graded frame. Vignette and grain ride the same
+// pass AFTER it (convolution sorts first within a pass), so grain is never blurred.
+const smaaPass = new EffectPass(camera, smaa, vignette, grain);
 composer.addPass(smaaPass);
 
 // composer.addPass() rewires every pass to the live depth attachment, so this must
@@ -168,6 +267,15 @@ export function render(dt) {
   const cm = dof.cocMaterial;
   if ('worldFocusDistance' in cm) cm.worldFocusDistance = focusDist;
   else if (cm.uniforms && cm.uniforms.focusDistance) cm.uniforms.focusDistance.value = focusDist / camera.far;
+  // ON DECK the water's shallow depth of field is wrong: air is clear, and the 42-unit
+  // focus band + 3-40 focus clamp blurred the horizon from the raft. Same 1.6-unit
+  // air/water blend lighting.js uses for its regime change, so the lens and the light
+  // cross the surface together. In air the band opens ~4x and the bokeh nearly closes;
+  // below the interface every frame is byte-identical to before.
+  const air = THREE.MathUtils.clamp((camera.position.y - SURFACE_Y + 0.6) / 1.6, 0, 1);
+  if ('worldFocusRange' in cm) cm.worldFocusRange = 42 * (1 + 3 * air);
+  dof.bokehScale = 1.35 * (1 - air) + 0.15 * air;
+  updateGrade();
   composer.render(dt);
 }
 
@@ -211,9 +319,9 @@ function degradeQuality() {
     composer.removePass(normalPass);
     composer.removePass(smaaPass);
     normalPass = null;
-    effectPass = new EffectPass(camera, dof, bloom, chroma, vignette, grain);
+    effectPass = new EffectPass(camera, dof, bloom, chroma, grade, finite);
     composer.addPass(effectPass);
-    composer.addPass(smaaPass);   // re-append so SMAA stays last
+    composer.addPass(smaaPass);   // re-append so SMAA (+ vignette/grain) stays last
   }
   useDepthCopy();
   console.info('ABYSSA: reduced quality mode (AO/shadows off)');

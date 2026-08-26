@@ -340,9 +340,13 @@ export class VolumetricLightPass extends Pass {
     });
 
     // Public tuning surface.
-    // Tuned in-game against the billboard rays: below ~0.8 the pass is invisible next
-    // to them, above ~1.3 the open water starts to read milky rather than lit.
-    this.intensity = 1.05;
+    // RE-TUNED 2026-08-25: the 1.05 default was "tuned against the billboard rays" —
+    // which a reversed-edge smoothstep had silently zeroed, so it was tuned against
+    // nothing and carried the whole god-ray look alone. With the billboards alive
+    // (water.js vFade fixed, base 0.42) the pair double-exposed at 1.05; 0.85 keeps
+    // the broad columns under the billboard accents — lit, not milky (judged live at
+    // ~20 m, clear noon).
+    this.intensity = 0.85;
     this.occlusion = true;
     this.resDiv = 2;
 
