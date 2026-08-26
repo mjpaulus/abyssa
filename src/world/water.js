@@ -1136,8 +1136,11 @@ function buildRays() {
         // further than refraction allows however low the sun gets.
         wp.xz -= uSunProj * ( v * aParam.y );
         float dist = distance( wp, uCam );
+        // REVERSED-EDGE smoothstep is UB in GLSL and evaluates to 0 on this driver,
+        // which zeroed vFade and killed the entire billboard system for every frame it
+        // ever shipped. Same idiom as foldK below: 1.0 - smoothstep(lo, hi, x).
         vFade = uFade
-          * smoothstep( ${f(RAY_L * 0.5)}, ${f(RAY_L * 0.30)}, dist )   // hides the wrap boundary
+          * ( 1.0 - smoothstep( ${f(RAY_L * 0.30)}, ${f(RAY_L * 0.5)}, dist ) )   // hides the wrap boundary
           * smoothstep( 8.0, 34.0, dist )                               // no near-plane slicing
           * exp( -dist * uExtG );
         vUv = vec2( position.x, v ); vSeed = aParam.w;
@@ -1215,7 +1218,9 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
            // the surface used to fill the AIR with drifting grit. Exactly 1.0 for
            // w.y <= 0, so nothing below the waterline changes by a bit.
            * ( 1.0 - smoothstep( 0.0, 0.9, w.y ) )
-           * smoothstep( uL * 0.5, uL * 0.32, length( w - uCam ) )
+           // Reversed-edge smoothstep is GLSL UB (x0 on this driver) — it zeroed vA
+           // and killed both snow layers. Fix idiom: 1.0 - smoothstep(lo, hi, x).
+           * ( 1.0 - smoothstep( uL * 0.32, uL * 0.5, length( w - uCam ) ) )
            * smoothstep( 0.5, 3.0, dist )
            * exp( -dist * uExtG * uExtK );
         vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 + 2.6 * lb );
@@ -2818,8 +2823,18 @@ export function updateWater(dt, t) {
   // postfx.volumetrics.js exactly — the two disagreeing puts billboards where the
   // columns are not, which reads as a bug. See the march for why it steepened.
   const rayBand = Math.max(0, 1 - d01 * 3.66) ** 2 * ms(d01, 0, 0.055);
-  uRayFade.value = 0.62 * rayDim * rayBand * (0.82 + 0.18 * Math.sin(t * 0.23));
+  uRayFade.value = 0.42 * rayDim * rayBand * (0.82 + 0.18 * Math.sin(t * 0.23));
   rayMesh.visible = uRayFade.value > 0.004;
+  // Ray colour follows the sun disc (the same _pDisc the dome and glitter path use),
+  // hue-only: the disc palette normalised by its max component, so noon (near-white)
+  // leaves the tuned cool tint untouched while dawn warms the shafts and a storm greys
+  // them — the billboards can never disagree with the volumetric columns at a weather
+  // stop. Baked cyan literal retired.
+  {
+    const m = Math.max(_pDisc[0], _pDisc[1], _pDisc[2], 1e-4);
+    rayMesh.material.uniforms.uColor.value.set(
+      0.36 * _pDisc[0] / m, 0.55 * _pDisc[1] / m, 0.68 * _pDisc[2] / m);
+  }
   // The surface survives to y = -330 instead of being culled at -150. In stratified
   // water the ceiling is the invitation: from the zone-0 floor the column overhead now
   // passes 14.6% blue (3.8% under the old flat model), so there is something up there
