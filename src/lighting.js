@@ -58,6 +58,11 @@ sun.position.copy(SUN_VEC).multiplyScalar(40);
 // the raft and nothing else — every other object in the world is outside the frustum
 // and culled before it is drawn. postfx reads sun.position normalized, so the move is
 // invisible to the god rays too.
+// light.layers scoping (excluding the sun from underwater materials) was evaluated and
+// DECLINED: three gathers lights per-render, so layers can't exclude one light per-
+// material without changing the effective light count — i.e. recompile risk, the exact
+// hazard this file exists to avoid — and the sun already blends to intensity 0
+// underwater, so there is nothing to save. Do not re-suggest.
 sun.castShadow = true;
 sun.shadow.mapSize.set(1024, 1024);
 sun.shadow.camera.left = -9; sun.shadow.camera.right = 9;
@@ -84,9 +89,14 @@ scene.add(rim, rim.target);
 export const playerLightSrc = new THREE.PointLight(0x9fe8ff, 60, 60, 1.8);
 scene.add(playerLightSrc);
 
-// The hand lantern: the one shadow-casting light in the scene.
-export const lanternLight = new THREE.PointLight(0xffdca4, 25, 40, 1.9);
+// The hand lantern: the one shadow-casting light in the scene. distance matches
+// shadow.camera.far (34) — light past the shadow camera's reach cast no shadows and
+// just paid falloff for nothing.
+export const lanternLight = new THREE.PointLight(0xffdca4, 25, 34, 1.9);
 lanternLight.castShadow = true;
+// A/B'd 1024 vs 512 at a wreck wall and a vent chimney with the lantern ~2u out:
+// 512 shows visible stair-stepping on the long raking shadows the murk makes
+// unmissable, so the cube stays at 1024. (Verdict recorded per lighting round.)
 lanternLight.shadow.mapSize.set(1024, 1024);
 lanternLight.shadow.camera.near = 0.35;
 lanternLight.shadow.camera.far = 34;
@@ -248,6 +258,11 @@ export function updateLighting(depth01) {
   rim.target.position.copy(playerLightSrc.position);
   rimPos.copy(rim.target.position).addScaledVector(fwd, 14).addScaledVector(right, -6);
   rimPos.y += 9;
+  // Facing straight down on a descent puts +14 fwd BELOW the diver — the rim ends up
+  // under the seabed and Sal loses his edge light exactly when the frame is darkest.
+  // Clamp: never let the rim sink more than 2u below the diver's own fill light.
+  // (playerLightSrc.y is already resolved this frame and cheaper than a terrainH call.)
+  if (rimPos.y < playerLightSrc.position.y + 2) rimPos.y = playerLightSrc.position.y + 2;
   rim.position.copy(rimPos);
 }
 

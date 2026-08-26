@@ -6,7 +6,7 @@
 // spine plus its frames are uploaded to a tiny float texture that the body/fin vertex
 // shaders sample. Per frame the CPU only touches ~53 points; all skinning is on the GPU.
 import * as THREE from 'three';
-import { scene, envTex, camera } from '../core.js';
+import { scene, envTexDeep as envTex, camera } from '../core.js';
 import { WORLD_R, ZONE_H, LEVIATHAN_CFG, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, lerp } from '../lib/math.js';
 import { makeGlow, glowTex, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, maxAniso } from '../lib/textures.js';
@@ -314,11 +314,37 @@ function teethMesh(Z, mat, dir) {
 
 // ---------------------------------------------------------------- build
 
+// ---- SIGIL LIGHT POOL --------------------------------------------------------
+// enterZone disposes and remakes the leviathan LIVE mid-dive. When each ward owned
+// its own PointLight the scene's LIGHT COUNT changed at that moment (3/4/5 per zone)
+// and three recompiled every lit material in the game at the worst possible time —
+// the exact hazard the vents' single shared PointLight exists to avoid. The wards now
+// borrow from a fixed pool of 5 (the largest authored nSigils), created on the first
+// build, added to the scene ONCE and NEVER removed; disposeLeviathan parks them at
+// intensity 0. Decay is 2.0 (physical): the calming flash used to run decay 1.8,
+// which splashed light across the whole zone; 2.0 keeps the close-range punch and
+// shrinks the far spill (peak retuned in updateSigilFX to match by eye up close).
+const SIGIL_POOL_N = 5;
+const sigilPool = [];
+function ensureSigilPool() {
+  if (sigilPool.length) return;
+  for (let k = 0; k < SIGIL_POOL_N; k++) {
+    const pl = new THREE.PointLight(0xffe8a8, 0, 50, 2.0);
+    sigilPool.push(pl);
+    scene.add(pl);
+  }
+}
+
 export function makeLeviathan(idx, over) {
   // `over` is THE CHART's authored sleeper row for a remote site (nSigils/hue/name).
   // It merges over the shipped config, and ...c below spreads it through everything —
   // the NSIG shader define, the ward count, the shown name. Home passes undefined.
-  const c = over ? Object.assign({}, LEVIATHAN_CFG[idx], over) : LEVIATHAN_CFG[idx], Z = ZONE[idx];
+  let c = over ? Object.assign({}, LEVIATHAN_CFG[idx], over) : LEVIATHAN_CFG[idx];
+  const Z = ZONE[idx];
+  // A chart row asking for more wards than the pool holds would force per-build
+  // PointLights and a scene light-count change mid-voyage — clamp instead.
+  if (c.nSigils > SIGIL_POOL_N) c = Object.assign({}, c, { nSigils: SIGIL_POOL_N });
+  ensureSigilPool();
   const grp = new THREE.Group();
   const yMid = (zoneTop(idx) + zoneBottom(idx)) / 2;
   const n = c.segs, NP = n + 1, gap = c.size * 0.62;
@@ -717,9 +743,12 @@ export function makeLeviathan(idx, over) {
     }));
     rune.position.z = 0.08;
     sg.add(rune);
-    const light = new THREE.PointLight(0xffe8a8, 0, 50, 1.8);
+    // Borrowed pool slot — the light lives on the SCENE, not on grp (placeSigil writes
+    // world-space positions, and grp never moves off the origin, so the coords agree).
+    const light = sigilPool[i - 1];
+    light.intensity = 0;
     const halo = makeGlow(0xffe8a8, 0);
-    grp.add(light, halo, sg);
+    grp.add(halo, sg);
     L.sigils.push({
       seg: i * step, lit: false, grp: sg, mesh: sg, rune, light, halo,
       ang: (i % 2 ? 0.42 : -0.42), pulse: Math.random() * 7, flashT: 9
@@ -736,6 +765,9 @@ export function makeLeviathan(idx, over) {
 
 export function disposeLeviathan(L) {
   if (!L) return;
+  // Return the borrowed sigil lights to the pool: park at intensity 0, but NEVER
+  // remove from the scene — the whole point of the pool is a constant light count.
+  for (const g of L.sigils) g.light.intensity = 0;
   scene.remove(L.grp);
   if (L.blobs) for (const b of L.blobs) { scene.remove(b); b.geometry.dispose(); b.material.dispose(); }
   if (L.blobTex) L.blobTex.dispose();
@@ -988,7 +1020,9 @@ function updateSigilFX(L, dt) {
     const k = Math.min(1, g.flashT / 1.5);
     fx.x = 0.62 * Math.pow(k, 0.65);
     fx.y = 3.4 * (1 - k) * (1 - k) * smooth(k, 0, 0.06);
-    g.light.intensity += 900 * (1 - k) * (1 - k) * (1 - k);
+    // 360 at decay 2.0 replaces 900 at decay 1.8: same close-range read where the
+    // flash happens (~2-6u), roughly half the scene-wide splash at 30-50u.
+    g.light.intensity += 360 * (1 - k) * (1 - k) * (1 - k);
   }
   L.flare = Math.max(0, L.flare - dt * 0.85);
   U.uFlare.value = L.flare * L.flare;

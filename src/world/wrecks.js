@@ -34,7 +34,7 @@
 //                               line, or at THE UNSOUNDED SHELF something older.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { scene, camera, envTex } from '../core.js';
+import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, clamp, fbm, V3 } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
