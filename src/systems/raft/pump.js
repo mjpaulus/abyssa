@@ -55,8 +55,10 @@ function beltArc(P, mat, cx, cy, r, a0, a1, n) {
 // figure — that is why there is no pivot group here any more. Setting rotation.z on a
 // mesh already turned by rotation.y does not spin a torus in its plane, it tumbles it,
 // and that bug cost a round last time.
-function wheel(P, mats, r, spokes, tube, hub) {
-  P.add(tor(r, tube, 6, 18), mats.brass);
+// `ts` is the rim's tubular count: these wheels SPIN, and a faceted rim strobes — the
+// flywheel runs 36, the smaller (and faster, belt-ratio) pulley 24.
+function wheel(P, mats, r, spokes, tube, hub, ts = 36) {
+  P.add(tor(r, tube, 8, ts), mats.brass);
   P.add(xf(cyl(r * 0.96, r * 0.96, tube * 0.55, 20), 0, 0, 0, Math.PI / 2), mats.iron);  // web
   for (let i = 0; i < spokes; i++) {
     P.add(xf(box(r * 1.86, tube * 0.75, tube * 0.6), 0, 0, 0, 0, 0, i * Math.PI / spokes), mats.brass);
@@ -75,8 +77,8 @@ export function buildPump(group, mats) {
     P.add(weather(xf(box(2.62, 0.16, 0.26), 0.08, 0.08, z), { tone: 0.86, freq: 1.1, amp: 0.30 }), mats.wood);
   }
   P.add(xf(box(2.72, 0.05, 0.86), 0.08, 0.185, 0), mats.iron);
-  boltLine(P, mats.iron, -1.16, 0.22, -0.30, 1.30, 0.22, -0.30, 6, 0.036);
-  boltLine(P, mats.iron, -1.16, 0.22, 0.30, 1.30, 0.22, 0.30, 6, 0.036);
+  boltLine(P, mats.iron, -1.16, 0.22, -0.30, 1.30, 0.22, -0.30, 6, 0.036, 6, 4, true);
+  boltLine(P, mats.iron, -1.16, 0.22, 0.30, 1.30, 0.22, 0.30, 6, 0.036, 6, 4, true);
 
   // ---- the engine --------------------------------------------------------------
   // Crankcase, one big cylinder with cooling fins, hot-bulb head. Period oil engines
@@ -189,7 +191,7 @@ export function buildPump(group, mats) {
   pulley.position.set(PL_X, FW_Y, BELT_Z);
   group.add(pulley);
   const UP = Part(pulley);
-  wheel(UP, mats, PL_R, 3, 0.055, 0.075);
+  wheel(UP, mats, PL_R, 3, 0.055, 0.075, 24);
   UP.bake();
 
   {

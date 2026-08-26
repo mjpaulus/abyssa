@@ -82,9 +82,9 @@ export function buildDavit(group, mats) {
     }
     grime(strut(P, iron, fx, fy, fz, kx, ky, kz, 0.10, 0.085));
     grime(strut(P, iron, kx, ky, kz, PEAK[0], PEAK[1], PEAK[2], 0.085, 0.062));
-    grime(P.put(sph(0.06, 8, 6), iron, kx, ky, kz)); // knee knuckle
+    grime(P.put(sph(0.06, 12, 8), iron, kx, ky, kz)); // knee knuckle
   }
-  grime(P.put(sph(0.11, 8, 6), iron, PEAK[0], PEAK[1], PEAK[2])); // head knuckle
+  grime(P.put(sph(0.11, 12, 8), iron, PEAK[0], PEAK[1], PEAK[2])); // head knuckle
   grime(strut(P, iron, PEAK[0], PEAK[1], PEAK[2], HEAD.x, HEAD.y, HEAD.z, 0.075, 0.058)); // jib
 
   // ---- guy wires (tie rods): the back-stay that makes the cantilever honest --------
@@ -102,8 +102,8 @@ export function buildDavit(group, mats) {
   // from the reel and down to the water outboard of the transom.
   {
     const { x, y, z } = HEAD;
-    for (const sx of [-0.065, 0.065]) grime(P.put(cyl(0.19, 0.19, 0.025, 10, false), iron, x + sx, y, z, 0, 0, Math.PI / 2));
-    P.put(cyl(0.17, 0.17, 0.05, 12, false), brass, x, y, z, 0, 0, Math.PI / 2); // the wheel itself
+    for (const sx of [-0.065, 0.065]) grime(P.put(cyl(0.19, 0.19, 0.025, 16, false), iron, x + sx, y, z, 0, 0, Math.PI / 2));
+    P.put(cyl(0.17, 0.17, 0.05, 20, false), brass, x, y, z, 0, 0, Math.PI / 2); // the wheel itself
     P.put(cyl(0.024, 0.024, 0.24, 6, false), brass, x, y, z, 0, 0, Math.PI / 2); // the pin
     for (const sx of [-0.09, 0.09]) grime(strut(P, iron, x + sx, y, z, sx * 0.3, y + 0.10, z, 0.018, 0.016)); // strap up to the jib
   }
@@ -144,11 +144,16 @@ export function buildDavit(group, mats) {
   {
     const LX = 0.275, LZ = 4.78, Y0 = -1.6, Y1 = 0.85, RUNGS = 9, rad = 0.04;
     for (const sx of [-1, 1]) {
-      wetGrime(P.put(cyl(rad, rad, Y1 - Y0, 6, false), iron, sx * LX, (Y0 + Y1) / 2, LZ));
+      wetGrime(P.put(cyl(rad, rad, Y1 - Y0, 10, false), iron, sx * LX, (Y0 + Y1) / 2, LZ));
     }
     for (let i = 0; i < RUNGS; i++) {
       const ry = Y0 + (i + 0.5) / RUNGS * (Y1 - Y0);
-      wetGrime(P.put(cyl(rad * 0.8, rad * 0.8, LX * 2, 6, false), iron, 0, ry, LZ, 0, 0, Math.PI / 2));
+      wetGrime(P.put(cyl(rad * 0.8, rad * 0.8, LX * 2, 10, false), iron, 0, ry, LZ, 0, 0, Math.PI / 2));
+      // weld collars where the top rungs meet the stringers — the dry rungs are the ones
+      // read from a deck-height eye, so the fabrication detail goes where the eye is
+      if (i >= RUNGS - 3) for (const sx of [-1, 1])
+        grime(P.put(new THREE.TorusGeometry(rad * 1.1, 0.011, 5, 10).rotateX(Math.PI / 2),
+          iron, sx * (LX - rad * 1.1), ry, LZ, 0, 0, Math.PI / 2));
     }
   }
 
@@ -176,16 +181,16 @@ export function buildDavit(group, mats) {
   const BR = [-0.40, 3.28, 4.60], TOP = [-0.55, 3.10, 4.50];
   grime(strut(P, iron, BR[0], BR[1], BR[2], TOP[0], TOP[1], TOP[2], 0.028, 0.024));
   const capY = TOP[1], cowlY = capY - 0.045, shoulderY = capY - 0.105, cageY = capY - 0.175, footY = capY - 0.255;
-  P.put(cyl(0.05, 0.055, 0.04, 8, false), brass, TOP[0], capY, TOP[2]); // mount cap
+  P.put(cyl(0.05, 0.055, 0.04, 14, false), brass, TOP[0], capY, TOP[2]); // mount cap
   P.put(new THREE.TorusGeometry(0.085, 0.012, 4, 8, Math.PI), brass, TOP[0], capY + 0.02, TOP[2]); // bail
-  P.put(cyl(0.028, 0.075, 0.09, 8, false), brass, TOP[0], cowlY, TOP[2]); // vent cowl
-  P.put(cyl(0.085, 0.075, 0.03, 8, false), brass, TOP[0], shoulderY, TOP[2]); // shoulder cap
+  P.put(cyl(0.028, 0.075, 0.09, 14, false), brass, TOP[0], cowlY, TOP[2]); // vent cowl
+  P.put(cyl(0.085, 0.075, 0.03, 14, false), brass, TOP[0], shoulderY, TOP[2]); // shoulder cap
   const RIBS = 8, RIB_R = 0.078;
   for (let i = 0; i < RIBS; i++) {
     const a = i / RIBS * TAU;
     P.put(cyl(0.013, 0.013, 0.13, 4, false), brass, TOP[0] + Math.cos(a) * RIB_R, cageY, TOP[2] + Math.sin(a) * RIB_R);
   }
-  P.put(cyl(0.07, 0.05, 0.035, 8, false), brass, TOP[0], footY, TOP[2]); // base cap
+  P.put(cyl(0.07, 0.05, 0.035, 14, false), brass, TOP[0], footY, TOP[2]); // base cap
 
   // recessed well inside RIB_R (0.078) so the ribs shroud it further at any oblique
   // angle than their own angular width alone would suggest — a slot, not a window.

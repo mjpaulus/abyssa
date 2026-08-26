@@ -55,8 +55,9 @@ let shelfSet = null, pendingKeeps = null;
 // Ride state: the hull's eased height and attitude on the real wave field.
 let rideY = RAFT_POS.y, rideRX = 0, rideRZ = 0;
 const PUFFN = 7, puffs = [];
-let puffT = 0;
+let puffT = 0, puffMesh = null;
 const puffOrigin = V3();
+const _puffM = new THREE.Matrix4();
 
 const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
 
@@ -206,20 +207,22 @@ function buildReel(P, mats, head) {
         -d * 0.30, 0, -s * 0.10), mats.iron);
     }
     P.add(xf(box(0.18, 0.05, 0.78), s * 0.60, 0.14, RZ), mats.iron);        // sole plate
-    boltLine(P, mats.iron, s * 0.60, 0.18, RZ - 0.28, s * 0.60, 0.18, RZ + 0.28, 3, 0.030);
+    boltLine(P, mats.iron, s * 0.60, 0.18, RZ - 0.28, s * 0.60, 0.18, RZ + 0.28, 3, 0.030, 6, 4, true);
     P.add(xf(cyl(0.08, 0.08, 0.14, 8), s * 0.60, RY, RZ, 0, 0, Math.PI / 2), mats.brass);  // bearing
   }
   P.add(xf(cyl(0.05, 0.05, 1.32, 8), 0, RY, RZ, 0, 0, Math.PI / 2), mats.iron);            // axle
   // drum and cheeks
   P.add(xf(cyl(DRUM, DRUM, HW * 1.9, 14), 0, RY, RZ, 0, 0, Math.PI / 2), mats.iron);
   for (const s of [-HW, HW]) {
-    P.add(weather(xf(cyl(CHEEK, CHEEK, 0.055, 16), s, RY, RZ, 0, 0, Math.PI / 2),
+    P.add(weather(xf(cyl(CHEEK, CHEEK, 0.055, 28), s, RY, RZ, 0, 0, Math.PI / 2),
       { tone: 0.92, freq: 1.4, amp: 0.22, rust: 0.35 }), mats.iron);
     rivetRing(P, mats.iron, 8, s, RY, RZ, CHEEK - 0.16, 0.028, 'x');
   }
-  // hose wound on in two layers, which is the only way a reel reads as loaded
-  lash(P, mats.hose, 0, RY, RZ, 0.455, 'x', 7, 0.065, 0.118);
-  lash(P, mats.hose, 0, RY, RZ, 0.575, 'x', 5, 0.065, 0.118);
+  // hose wound on in two layers, which is the only way a reel reads as loaded.
+  // Radial 7 on the reel layers only: these turns are the closest fat rope on the deck,
+  // and a pentagon cross-section at that range reads as extrusion, not hose.
+  lash(P, mats.hose, 0, RY, RZ, 0.455, 'x', 7, 0.065, 0.118, 7);
+  lash(P, mats.hose, 0, RY, RZ, 0.575, 'x', 5, 0.065, 0.118, 7);
   // crank, ratchet and pawl on the outboard cheek: a reel you cannot wind is a spool
   P.add(xf(cyl(0.034, 0.034, 0.24, 6), 0.52, RY + 0.26, RZ, 0, 0, Math.PI / 2), mats.iron);
   P.add(xf(cyl(0.030, 0.030, 0.20, 6), 0.64, RY + 0.26, RZ), mats.iron);
@@ -286,13 +289,32 @@ export function buildRaft() {
   puffOrigin.copy(pumpH.stackTip).add(PUMP_POS);
 
   // exhaust: grey puffs that climb and fade, recycled. Only issued while it burns.
+  // ONE InstancedMesh where seven meshes with seven cloned materials used to stand:
+  // smoking cost 7 draw calls, now it costs 1. Per-instance fade rides instanceColor.r
+  // through a two-line shader hook (the alpha channel instancing does not natively have);
+  // a dead puff parks at scale 0.
   const puffMat = new THREE.MeshBasicMaterial({ color: 0x6b6f73, transparent: true, opacity: 0.32, depthWrite: false });
+  puffMat.onBeforeCompile = s => {
+    s.vertexShader = s.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vPuffA;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPuffA = instanceColor.r;');
+    s.fragmentShader = s.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying float vPuffA;')
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );',
+        'vec4 diffuseColor = vec4( diffuse, opacity * vPuffA );');
+  };
+  puffMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 7, 5), puffMat, PUFFN);
+  puffMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  puffMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(PUFFN * 3).fill(1), 3);
+  puffMesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+  puffMesh.castShadow = false; puffMesh.receiveShadow = false;
+  puffMesh.frustumCulled = false;    // instances park at scale 0; the sphere's own bounds lie
   for (let i = 0; i < PUFFN; i++) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(1, 7, 5), puffMat.clone());
-    m.visible = false;
-    raft.add(m);
-    puffs.push({ m, life: 0, max: 1, vy: 0, dz: 0 });
+    _puffM.makeScale(0, 0, 0);
+    puffMesh.setMatrixAt(i, _puffM);
+    puffs.push({ p: V3(), life: 0, max: 1, vy: 0, dz: 0 });
   }
+  raft.add(puffMesh);
 
   // THE BEACON. It exists so a diver 200 m down can find his way home, and that job is
   // why it was a 7-unit additive sprite — which is also why it blew out to an enormous
@@ -389,21 +411,31 @@ export function updateRaft(dt, t) {
       p.life = p.max = 1.7 + Math.random() * 0.9;
       p.vy = 0.9 + Math.random() * 0.5;
       p.dz = (Math.random() - 0.5) * 0.3;
-      p.m.position.copy(puffOrigin);
-      p.m.visible = true;
+      p.p.copy(puffOrigin);
     }
   }
-  for (const p of puffs) {
-    if (p.life <= 0) continue;
-    p.life -= dt;
-    if (p.life <= 0) { p.m.visible = false; continue; }
+  for (let i = 0; i < PUFFN; i++) {
+    const p = puffs[i];
+    if (p.life > 0) p.life -= dt;
+    if (p.life <= 0) {
+      _puffM.makeScale(0, 0, 0);
+      puffMesh.setMatrixAt(i, _puffM);
+      puffMesh.instanceColor.setXYZ(i, 0, 1, 1);
+      continue;
+    }
     const k = 1 - p.life / p.max;
-    p.m.position.y += p.vy * dt;
-    p.m.position.x += (0.35 + p.dz) * dt;      // drifts downwind off the stack
-    p.m.position.z += p.dz * dt;
-    p.m.scale.setScalar(0.10 + k * 0.42);
-    p.m.material.opacity = 0.30 * (1 - k) * (1 - k);
+    p.p.y += p.vy * dt;
+    p.p.x += (0.35 + p.dz) * dt;               // drifts downwind off the stack
+    p.p.z += p.dz * dt;
+    const s = 0.10 + k * 0.42;
+    _puffM.makeScale(s, s, s).setPosition(p.p);
+    puffMesh.setMatrixAt(i, _puffM);
+    // instanceColor.r is the per-puff alpha the shader hook reads (0.32 base opacity
+    // times this reproduces the old 0.30 * (1-k)^2 fade to within a hair)
+    puffMesh.instanceColor.setXYZ(i, 0.94 * (1 - k) * (1 - k), 1, 1);
   }
+  puffMesh.instanceMatrix.needsUpdate = true;
+  puffMesh.instanceColor.needsUpdate = true;
 
   // ---- the lantern -------------------------------------------------------------
   // Two separate reads out of one lamp. Underwater it has to punch through fog from

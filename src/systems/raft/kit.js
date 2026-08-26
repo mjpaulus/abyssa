@@ -64,6 +64,63 @@ export function Part(node) {
   };
 }
 
+// ---- profile prisms -----------------------------------------------------------------
+// A straight prism extruded along +Z from a closed 2D loop (x = width axis, y = height
+// axis), with flat per-face normals, UVs (u around the loop, v along the length) and end
+// caps. Indexed, with the same attribute set as the built-in primitives, so it merges
+// into the same buckets. `segZ` puts vertex rows along the length so weather() has
+// something to vary per-board, not just per-end.
+export function profilePrism(loop, l, segZ = 2) {
+  const nL = loop.length, hz = l / 2;
+  const pos = [], nrm = [], uv = [], idx = [];
+  // side faces: one strip per edge (flat normal), segZ quads along the length
+  for (let e = 0; e < nL; e++) {
+    const [x0, y0] = loop[e], [x1, y1] = loop[(e + 1) % nL];
+    const ex = y1 - y0, ey = x0 - x1;                    // outward normal of the edge
+    const el = Math.hypot(ex, ey) || 1, nx = ex / el, ny = ey / el;
+    const base = pos.length / 3;
+    for (let s = 0; s <= segZ; s++) {
+      const z = -hz + l * s / segZ, v = s / segZ;
+      pos.push(x0, y0, z, x1, y1, z);
+      nrm.push(nx, ny, 0, nx, ny, 0);
+      uv.push(e / nL, v, (e + 1) / nL, v);
+    }
+    for (let s = 0; s < segZ; s++) {
+      const a = base + s * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+  }
+  // end caps: triangle fans about the loop centroid
+  let cx = 0, cy = 0;
+  for (const [x, y] of loop) { cx += x / nL; cy += y / nL; }
+  for (const sgn of [-1, 1]) {
+    const z = sgn * hz, base = pos.length / 3;
+    pos.push(cx, cy, z); nrm.push(0, 0, sgn); uv.push(0.5, 0.5);
+    for (const [x, y] of loop) { pos.push(x, y, z); nrm.push(0, 0, sgn); uv.push(x, y); }
+    for (let e = 0; e < nL; e++) {
+      const a = base + 1 + e, b = base + 1 + (e + 1) % nL;
+      if (sgn > 0) idx.push(base, a, b); else idx.push(base, b, a);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  return g;
+}
+
+// A deck board with eased edges: an 8-vertex-loop prism, top corners chamfered `c` and
+// the bottom corners eased a hair, so every seam catches a real specular line instead of
+// the painted-on grid a bare box gives. Length runs along Z like box(w,h,l).
+export function chamferedPlank(w, h, l, c = 0.012) {
+  const hw = w / 2, hh = h / 2, cc = Math.min(c, hw * 0.4, hh * 0.9), cb = cc * 0.5;
+  return profilePrism([
+    [-hw + cb, -hh], [hw - cb, -hh], [hw, -hh + cb], [hw, hh - cc],
+    [hw - cc, hh], [-hw + cc, hh], [-hw, hh - cc], [-hw, -hh + cb]
+  ], l, 2);
+}
+
 // ---- wear ---------------------------------------------------------------------------
 // Bake grime into vertex colours rather than textures, so dirt lands on the geometry
 // that actually exists. `wetY` is the local height of the waterline: everything under it
@@ -120,19 +177,30 @@ export function rivetRing(P, mat, n, cx, cy, cz, r, rad = 0.03, axis = 'z', phas
   }
 }
 
-// A line of bolt heads — iron strapping, plate seams, hull fastenings.
-export function boltLine(P, mat, x0, y0, z0, x1, y1, z1, n, rad = 0.032) {
-  const g = sph(rad, 6, 4);
+// A line of bolt heads — iron strapping, plate seams, hull fastenings. `w,h` are the
+// dome tessellation, so nail heads can be cheaper than bolt heads. Pass hex=true for
+// manufactured through-bolts: a six-flat head on a washer instead of a dome rivet.
+export function boltLine(P, mat, x0, y0, z0, x1, y1, z1, n, rad = 0.032, w = 6, h = 4, hex = false) {
+  const g = hex ? null : sph(rad, w, h);
   for (let i = 0; i < n; i++) {
     const u = n === 1 ? 0.5 : i / (n - 1);
-    P.add(xf(g.clone(), x0 + (x1 - x0) * u, y0 + (y1 - y0) * u, z0 + (z1 - z0) * u), mat);
+    const x = x0 + (x1 - x0) * u, y = y0 + (y1 - y0) * u, z = z0 + (z1 - z0) * u;
+    if (hex) hexBolt(P, mat, x, y, z, rad);
+    else P.add(xf(g.clone(), x, y, z), mat);
   }
 }
 
+// A hex-head through-bolt seated on its washer, head up (+Y). Dome rivets stay rivets —
+// this is for the fastenings a spanner has actually been on.
+export function hexBolt(P, mat, x, y, z, rad = 0.032, ry = 0) {
+  P.add(xf(cyl(rad * 1.55, rad * 1.55, rad * 0.5, 12), x, y + rad * 0.25, z), mat);      // washer
+  P.add(xf(cyl(rad * 0.92, rad * 1.0, rad * 1.15, 6), x, y + rad * 0.9, z, 0, ry), mat); // head
+}
+
 // A run of rope/chain/hose through space. Points are [x,y,z] triples.
-export function rope(P, mat, pts, rad = 0.03, seg = null, closed = false) {
+export function rope(P, mat, pts, rad = 0.03, seg = null, closed = false, radial = 5) {
   const c = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(p[0], p[1], p[2])), closed);
-  return P.add(new THREE.TubeGeometry(c, seg || Math.max(8, pts.length * 3), rad, 5, closed), mat);
+  return P.add(new THREE.TubeGeometry(c, seg || Math.max(8, pts.length * 3), rad, radial, closed), mat);
 }
 
 // A rope coiled flat on the deck: the single most legible "this is a working boat" prop.
@@ -147,7 +215,7 @@ export function coil(P, mat, cx, cy, cz, r0, turns = 3, rad = 0.035, drop = 0.05
 }
 
 // Rope lashed round something — a few tight turns, used on drums, spars and bitts.
-export function lash(P, mat, cx, cy, cz, r, axis = 'x', turns = 3, rad = 0.022, pitch = 0.05) {
+export function lash(P, mat, cx, cy, cz, r, axis = 'x', turns = 3, rad = 0.022, pitch = 0.05, radial = 5) {
   const pts = [], steps = Math.ceil(turns * 10);
   for (let i = 0; i <= steps; i++) {
     const u = i / steps, a = u * turns * TAU, o = (u - 0.5) * turns * pitch;
@@ -156,18 +224,19 @@ export function lash(P, mat, cx, cy, cz, r, axis = 'x', turns = 3, rad = 0.022, 
     else if (axis === 'y') pts.push([cx + c, cy + o, cz + s]);
     else pts.push([cx + c, cy + s, cz + o]);
   }
-  return rope(P, mat, pts, rad, steps * 2);
+  return rope(P, mat, pts, rad, steps * 2, false, radial);
 }
 
 // A staved timber cask/barrel: lathe body plus iron hoops. Returns nothing; files itself.
+// Hoop tori KEEP radial 4 — square-section wrought-iron hoop stock is period-correct.
 export function barrel(P, woodMat, ironMat, x, y, z, r = 0.42, h = 1.0, ry = 0) {
   const b = h / 2;
   P.add(xf(lathe([[r * 0.80, -b], [r * 0.97, -b * 0.55], [r, 0], [r * 0.97, b * 0.55],
-    [r * 0.80, b], [0, b]], 14), x, y, z, 0, ry, 0), woodMat);
-  P.add(xf(cyl(r * 0.80, r * 0.80, 0.02, 14), x, y - b + 0.01, z), woodMat);
+    [r * 0.80, b], [0, b]], 20), x, y, z, 0, ry, 0), woodMat);
+  P.add(xf(cyl(r * 0.80, r * 0.80, 0.02, 20), x, y - b + 0.01, z), woodMat);
   for (const hy of [-b * 0.78, -b * 0.30, b * 0.30, b * 0.78]) {
     const rr = r * (1 - Math.abs(hy / b) * 0.20) + 0.012;
-    P.add(xf(tor(rr, 0.026, 4, 14), x, y + hy, z, Math.PI / 2), ironMat);
+    P.add(xf(tor(rr, 0.026, 4, 20), x, y + hy, z, Math.PI / 2), ironMat);
   }
 }
 
