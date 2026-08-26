@@ -4,7 +4,7 @@
 import * as THREE from 'three';
 import { scene } from '../core.js';
 import { rng } from '../lib/math.js';
-import { canvas2d, noiseCanvas, normalFromHeight } from '../lib/textures.js';
+import { canvas2d, noiseCanvas, normalFromHeight, maxAniso } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 
 // ---------------------------------------------------------------- dust sprite atlas
@@ -42,6 +42,7 @@ const dustTex = (() => {
   }
   const t = new THREE.CanvasTexture(canvas);
   t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = maxAniso();   // sediment on the floor: only ever seen at grazing angles
   return t;
 })();
 
@@ -79,6 +80,8 @@ const printMaps = (() => {
   a.putImageData(ai, 0, 0);
   const alpha = new THREE.CanvasTexture(ac);
   const nrm = new THREE.CanvasTexture(normalFromHeight(hc, 3.2));
+  // prints lie flat on the floor and are read almost edge-on — max anisotropy or mush
+  alpha.anisotropy = nrm.anisotropy = maxAniso();
   return { alpha, nrm };
 })();
 

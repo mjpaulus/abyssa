@@ -3,6 +3,18 @@
 import * as THREE from 'three';
 import { rng } from './math.js';
 
+// ---- anisotropy ---------------------------------------------------------------------
+// The device's real max anisotropy. core.js calls setMaxAniso(renderer) at module scope,
+// immediately after the renderer is built — before any world module evaluates — so every
+// toTexture() after that picks the true cap. The default 8 only ever applies to textures
+// built by modules core.js itself pulls in (none currently make mip-mapped surfaces).
+let MAX_ANISO = 8;
+export function setMaxAniso(renderer) {
+  const m = renderer && renderer.capabilities && renderer.capabilities.getMaxAnisotropy();
+  if (m) MAX_ANISO = m;
+}
+export const maxAniso = () => MAX_ANISO;
+
 export const glowTex = (() => {
   const c = document.createElement('canvas');
   c.width = c.height = 128;
@@ -35,18 +47,57 @@ export function toTexture(canvas, repeat = 1, srgb = false) {
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(repeat, repeat);
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
-  t.anisotropy = 8;
+  t.anisotropy = MAX_ANISO;
   return t;
 }
 
+// ---- shared generic surface pair ---------------------------------------------------
+// One 256 noise-derived roughnessMap + normalMap, reused by several modules at their own
+// repeats (vent crust, prop de-plastic, diver satellites). The canvases are built once;
+// each surfacePair() call is just two cheap CanvasTexture wrappers over the same pixels,
+// so different repeats never mean re-generating the noise. Deterministic seed: this pair
+// is scenery-wide, it must never drift between boots.
+let _surf = null;
+export function surfacePair(repeat = 1) {
+  if (!_surf) {
+    const S = 256;
+    const hc = noiseCanvas(S, 5, 1.1, seededRand(0x5EAF00D));
+    const hd = hc.getContext('2d').getImageData(0, 0, S, S).data;
+    const { canvas: rc, ctx: r } = canvas2d(S);
+    const ri = r.createImageData(S, S);
+    for (let i = 0; i < S * S; i++) {
+      // multiplier map: mostly 1, dipping to ~0.72 in the low spots — tooth, not sparkle
+      const v = hd[i * 4] / 255;
+      const g = (0.72 + 0.28 * v) * 255;
+      ri.data[i * 4] = ri.data[i * 4 + 1] = ri.data[i * 4 + 2] = g;
+      ri.data[i * 4 + 3] = 255;
+    }
+    r.putImageData(ri, 0, 0);
+    _surf = { rc, nc: normalFromHeight(hc, 1.4) };
+  }
+  return { rough: toTexture(_surf.rc, repeat), nrm: toTexture(_surf.nc, repeat) };
+}
+
+// mulberry32 — the project's house deterministic stream (same body as site.js/weather.js),
+// exposed here so texture generators can be seeded without importing world modules.
+export function seededRand(seed) {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
 // Tileable fractal-noise canvas; returns grayscale ImageData-backed canvas.
-export function noiseCanvas(size, octaves = 4, contrast = 1) {
+export function noiseCanvas(size, octaves = 4, contrast = 1, rand = Math.random) {
   const { canvas, ctx } = canvas2d(size);
   const img = ctx.createImageData(size, size);
   const grid = [];
   for (let o = 0; o < octaves; o++) {
     const n = 4 << o, g = new Float32Array(n * n);
-    for (let i = 0; i < n * n; i++) g[i] = Math.random();
+    for (let i = 0; i < n * n; i++) g[i] = rand();
     grid.push({ n, g });
   }
   const sample = (layer, x, y) => {

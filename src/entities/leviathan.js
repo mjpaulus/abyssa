@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { scene, envTex, camera } from '../core.js';
 import { WORLD_R, ZONE_H, LEVIATHAN_CFG, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, lerp } from '../lib/math.js';
-import { makeGlow, glowTex, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
+import { makeGlow, glowTex, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, maxAniso } from '../lib/textures.js';
 import { terrainH } from '../world/terrain.js';
 
 const UP = V3(0, 1, 0);
@@ -32,8 +32,10 @@ const ZONE = [
 
 // ---------------------------------------------------------------- textures
 
+// Seeded (house mulberry32): a sleeper's hide is part of its identity — it must be the
+// same animal every boot and every voyage back, not a fresh roll of Math.random.
 let _detail = null;
-const detailCv = () => (_detail || (_detail = noiseCanvas(256, 5, 1)));
+const detailCv = () => (_detail || (_detail = noiseCanvas(256, 5, 1, seededRand(0x1E71A7A4))));
 
 // Overlapping teardrop scales, drawn wrapped at the edges so the sheet tiles.
 function scaleHeight(S, cols, rows) {
@@ -120,7 +122,7 @@ function runeTex(seed) {
   }
   ctx.beginPath(); ctx.arc(0, 0, 6.5, 0, Math.PI * 2); ctx.fill();
   const tx = new THREE.CanvasTexture(canvas);
-  tx.anisotropy = 4;
+  tx.anisotropy = maxAniso();
   return tx;
 }
 

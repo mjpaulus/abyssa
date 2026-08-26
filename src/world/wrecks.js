@@ -100,8 +100,26 @@ function woodMaps(S = 256) {
   shade(ctx, S, hd, [0.26, 0.205, 0.145], [0.78, 0.63, 0.42], 1.15);
   return {
     map: toTexture(canvas, 3, true),
-    normalMap: toTexture(normalFromHeight(hc, 1.6), 3)
+    normalMap: toTexture(normalFromHeight(hc, 1.6), 3),
+    // multiplier over the material's 0.96: bores and rot pits sit slick, raised grain dry
+    roughnessMap: toTexture(roughFrom(hd, S, 0.80, 1.0), 3)
   };
+}
+
+// Roughness multiplier canvas from a height field: lo at the cavities, hi on the crests.
+// The diver.js pattern — one height drives albedo, normal AND roughness, so the wet
+// sheen lands in the same recesses the normal map actually shows.
+function roughFrom(hd, S, lo, hi) {
+  const { canvas, ctx } = canvas2d(S);
+  const im = ctx.createImageData(S, S);
+  for (let i = 0; i < S * S; i++) {
+    const v = hd[i * 4] / 255;
+    const g = Math.max(0, Math.min(255, (lo + (hi - lo) * v) * 255));
+    im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = g;
+    im.data[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(im, 0, 0);
+  return canvas;
 }
 
 // Sheet iron: blistered rust, weld seams, streaks running with gravity (v).
@@ -130,7 +148,10 @@ function ironMaps(S = 256) {
   shade(ctx, S, hd, [0.155, 0.170, 0.190], [0.86, 0.50, 0.24], 1.0);
   return {
     map: toTexture(canvas, 4, true),
-    normalMap: toTexture(normalFromHeight(hc, 2.2), 4)
+    normalMap: toTexture(normalFromHeight(hc, 2.2), 4),
+    // wet-metal / dry-scab contrast: worn lows drop to ~0.55x of the 0.86 scalar,
+    // rust blisters stay full rough
+    roughnessMap: toTexture(roughFrom(hd, S, 0.55, 1.0), 4)
   };
 }
 
@@ -147,7 +168,11 @@ function brassMaps(S = 128) {
   const hd = h.getImageData(0, 0, S, S).data;
   const { canvas, ctx } = canvas2d(S);
   shade(ctx, S, hd, [0.30, 0.31, 0.20], [1.0, 0.79, 0.36], 1.0);
-  return { map: toTexture(canvas, 2, true), normalMap: toTexture(normalFromHeight(hc, 1.2), 2) };
+  return {
+    map: toTexture(canvas, 2, true), normalMap: toTexture(normalFromHeight(hc, 1.2), 2),
+    // verdigris lows go matte-ish, polished turning crests keep the 0.42 shine
+    roughnessMap: toTexture(roughFrom(hd, S, 1.0, 0.70), 2)
+  };
 }
 
 // ---------------------------------------------------------------- materials --
