@@ -481,7 +481,10 @@ function skiff(M) {
     const k = 1 + lap + rot;
     return [L * (u - 0.5), ch * dep * k, cw * beam * k];
   };
-  const hull = grime(grid(46, 30, hullFn), 1.0, 0.35, -2.4);
+  // 46x45, up from 46x30: 5 samples per lapstrake (tri(v*9)) so the clinker steps
+  // survive smooth shading up close. Same hullFn — proportions (and the hand-baked
+  // LOC colliders keyed to them) are untouched, this is tessellation only.
+  const hull = grime(grid(46, 45, hullFn), 1.0, 0.35, -2.4);
   p.add(hull, M.wood);
 
   // frames (ribs) showing through the open, upturned belly
@@ -623,7 +626,9 @@ function trawler(M) {
   const bow = new THREE.Group();
   {
     const p = Part(bow);
-    const g = grime(grid(26, 26, (u, v) => hullFn(0.54 + u * 0.46, v)), 1.0, 0.3, -4.5);
+    // 40x42, up from 26x26: the 7-lap strake profile (tri(v*7)) gets 6 samples per
+    // lap so the riveted plating reads as steps at lantern range, not aliased noise.
+    const g = grime(grid(40, 42, (u, v) => hullFn(0.54 + u * 0.46, v)), 1.0, 0.3, -4.5);
     p.add(g, M.iron);
     // torn plating at the break: a ragged fringe of triangles
     for (let i = 0; i < 14; i++) {
@@ -651,7 +656,9 @@ function trawler(M) {
     }
     // anchor hawse + windlass
     p.add(grime(xf(new THREE.CylinderGeometry(0.5, 0.5, 1.5, 10), 9.0, 0.6, 0, 0, 0, Math.PI / 2), 0.9, 0.4, -4.5), M.iron);
-    for (const s of [1, -1]) porthole(Part(bow), M, 0.42, 8.2, -1.2, s * 2.6, s > 0 ? 0.3 : Math.PI - 0.3, false);
+    // Route the portholes through the SAME Part that gets baked below — a throwaway
+    // Part(bow) here filled buckets whose bake() never ran, so none of them rendered.
+    for (const s of [1, -1]) porthole(p, M, 0.42, 8.2, -1.2, s * 2.6, s > 0 ? 0.3 : Math.PI - 0.3, false);
     p.bake();
     bow.rotation.x = 0.30;    // heeled to starboard
     bow.rotation.z = -0.12;   // bow lifted where the break holds her up
@@ -664,7 +671,7 @@ function trawler(M) {
   const stern = new THREE.Group();
   {
     const p = Part(stern);
-    p.add(grime(grid(26, 26, (u, v) => hullFn(u * 0.44, v)), 1.0, 0.3, -4.5), M.iron);
+    p.add(grime(grid(40, 42, (u, v) => hullFn(u * 0.44, v)), 1.0, 0.3, -4.5), M.iron);
     for (let i = 0; i < 14; i++) {
       const v = i / 14, a = hullFn(0.44, v + 0.02), b = hullFn(0.44, v);
       const t = new THREE.BufferGeometry();
@@ -680,11 +687,12 @@ function trawler(M) {
     p.add(grime(xf(new THREE.BoxGeometry(4.6, 2.6, 4.0), -6.0, 1.35, 0), 1.0, 0.5, -4.5), M.iron);
     p.add(grime(xf(new THREE.BoxGeometry(5.0, 0.20, 4.4), -6.0, 2.72, 0), 0.85, 0.5, -4.5), M.iron);
     p.add(grime(xf(new THREE.BoxGeometry(0.9, 1.7, 0.14), -3.72, 0.90, 0.9), 0.8, 0.6, -4.5), M.iron);   // door
-    const ph = Part(stern);
-    porthole(ph, M, 0.40, -6.9, 1.7, 2.02, 0, true);
-    porthole(ph, M, 0.40, -5.2, 1.7, 2.02, 0, false);
-    porthole(ph, M, 0.40, -6.9, 1.7, -2.02, Math.PI, false);
-    porthole(ph, M, 0.40, -8.32, 1.5, 0, -Math.PI / 2, false);
+    // Baked with the stern's own Part (the old `const ph = Part(stern)` was never
+    // baked, which silently dropped all four — including the one light still burning).
+    porthole(p, M, 0.40, -6.9, 1.7, 2.02, 0, true);
+    porthole(p, M, 0.40, -5.2, 1.7, 2.02, 0, false);
+    porthole(p, M, 0.40, -6.9, 1.7, -2.02, Math.PI, false);
+    porthole(p, M, 0.40, -8.32, 1.5, 0, -Math.PI / 2, false);
 
     // funnel, tilted where the stays let go
     p.add(grime(xf(new THREE.CylinderGeometry(0.85, 1.0, 4.4, 14, 1, true), -8.6, 4.2, 0.3, 0.16, 0, 0.42), 1.0, 0.4, -4.5), M.iron);

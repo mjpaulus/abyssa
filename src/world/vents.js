@@ -104,7 +104,10 @@ function standQuat(n, blend, yaw) {
 // A gnarled lathe ring: per-vertex radius jitter driven by angle+height noise, so no
 // two segments read as a lathe-perfect cylinder.
 function segGeo(rTop, rBot, h, sides, jitter, seed) {
-  const g = new THREE.CylinderGeometry(rTop, rBot, h, sides, 3, false);
+  // openEnded: every stacked joint used to carry two full end caps buried inside the
+  // stone (~2.9k invisible tris across the field). The one opening that can be seen —
+  // the throat — gets an explicit disc in buildChimney instead.
+  const g = new THREE.CylinderGeometry(rTop, rBot, h, sides, 4, true);
   const pos = g.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
@@ -173,15 +176,41 @@ function buildChimney(part, mat, baseX, baseY, baseZ, height, dead, forked, acti
     const r0 = Math.max(baseR * (1 - t0 * 0.80) + 0.10, 0.06);
     const r1 = Math.max(baseR * (1 - t1 * 0.80) + 0.08, 0.05);
     const jitter = 0.09 + rnd() * 0.10;
-    const g = segGeo(r1, r0, segH, 7, jitter, seed + i * 7.31);
+    // 12 radial (was 7): at 7 the silhouette read as a lathe of facets under the vent
+    // light, and the radius-jitter noise (ang*1.35) was sampled below its own frequency.
+    // At 12 the jitter forms coherent lobes and the column reads round at walk-up.
+    const g = segGeo(r1, r0, segH, 12, jitter, seed + i * 7.31);
     // Colour while the geometry is still local (Y centred on 0, +-segH/2): xf() below
     // bakes in the world translate + lean, which would otherwise scramble the local
     // height axis paintSegment reads.
     paintSegment(g, segH, t0, t1, dead, active);
     tiltX += rng(-0.10, 0.10) + (dead ? rng(0, 0.16) : 0);
     tiltZ += rng(-0.10, 0.10) + (dead ? rng(-0.08, 0.08) : 0);
-    xf(g, x, y + segH / 2, z, tiltX, rng(0, TAU), tiltZ);
+    const ry = rng(0, TAU);   // captured so the throat disc below shares the transform
+    xf(g, x, y + segH / 2, z, tiltX, ry, tiltZ);
     part.add(g, mat);
+    // The one opening the openEnded segments leave visible: a disc recessed just
+    // inside the bore of the FINAL ring, painted with the segment's own top colours
+    // (ember on active throats). Placed in the segment's local frame then given the
+    // identical transform, so it rides the same lean. No rnd() draws — the site
+    // stream's cursor is untouched and every reseed still grows the same field.
+    if (i === segs - 1) {
+      const disc = new THREE.CircleGeometry(Math.max(r1 * 0.99, 0.05), 12).rotateX(-Math.PI / 2);
+      disc.translate(0, segH / 2 - 0.06, 0);
+      paintSegment(disc, segH, t0, t1, dead, active);
+      xf(disc, x, y + segH / 2, z, tiltX, ry, tiltZ);
+      part.add(disc, mat);
+    }
+    // Base skirt disc, down-facing: on a slope (SLOPE_MAX 35 deg) the open bottom ring
+    // can stand ~r*tan(35) proud of the ground on the downhill side; the old buried cap
+    // covered that. One disc per chimney, not one per joint.
+    if (i === 0) {
+      const disc = new THREE.CircleGeometry(r0 * 1.001, 12).rotateX(Math.PI / 2);
+      disc.translate(0, -segH / 2 + 0.02, 0);
+      paintSegment(disc, segH, t0, t1, dead, active);
+      xf(disc, x, y + segH / 2, z, tiltX, ry, tiltZ);
+      part.add(disc, mat);
+    }
     x += Math.sin(tiltZ) * segH * 0.5;
     z -= Math.sin(tiltX) * segH * 0.5;
     y += segH * Math.cos((Math.abs(tiltX) + Math.abs(tiltZ)) * 0.5);
@@ -196,11 +225,28 @@ function buildChimney(part, mat, baseX, baseY, baseZ, height, dead, forked, acti
       const segH = (height * 0.35 / fsegs) * rng(0.85, 1.2);
       const r0 = Math.max(fBaseR * (1 - (i / fsegs) * 0.7) + 0.08, 0.05);
       const r1 = Math.max(fBaseR * (1 - ((i + 1) / fsegs) * 0.7) + 0.06, 0.04);
-      const g = segGeo(r1, r0, segH, 6, 0.10 + rnd() * 0.08, seed + 51 + i * 5.1);
+      const g = segGeo(r1, r0, segH, 9, 0.10 + rnd() * 0.08, seed + 51 + i * 5.1);
       paintSegment(g, segH, t0f, t1f, false, active);
       ftx += rng(-0.06, 0.06); ftz += rng(-0.06, 0.06);
-      xf(g, fx, fy + segH / 2, fz, ftx, rng(0, TAU), ftz);
+      const fry = rng(0, TAU);
+      xf(g, fx, fy + segH / 2, fz, ftx, fry, ftz);
       part.add(g, mat);
+      // fork tip disc — same reasoning as the main throat above
+      if (i === fsegs - 1) {
+        const disc = new THREE.CircleGeometry(Math.max(r1 * 0.99, 0.04), 9).rotateX(-Math.PI / 2);
+        disc.translate(0, segH / 2 - 0.05, 0);
+        paintSegment(disc, segH, t0f, t1f, false, active);
+        xf(disc, fx, fy + segH / 2, fz, ftx, fry, ftz);
+        part.add(disc, mat);
+      }
+      // fork base hangs in open water off the parent's flank — close it from below
+      if (i === 0) {
+        const disc = new THREE.CircleGeometry(r0 * 1.001, 9).rotateX(Math.PI / 2);
+        disc.translate(0, -segH / 2 + 0.02, 0);
+        paintSegment(disc, segH, t0f, t1f, false, active);
+        xf(disc, fx, fy + segH / 2, fz, ftx, fry, ftz);
+        part.add(disc, mat);
+      }
       fx += Math.sin(ftz) * segH * 0.5;
       fz -= Math.sin(ftx) * segH * 0.5;
       fy += segH * 0.94;
@@ -212,7 +258,7 @@ function buildChimney(part, mat, baseX, baseY, baseZ, height, dead, forked, acti
 function buildFumarole(part, mat, x, z, zi) {
   const y = terrainH(x, z, zi), n = terrainNormal(x, z, zi);
   const h = rng(0.35, 0.85), r = h * rng(0.5, 0.9);
-  const g = new THREE.ConeGeometry(r, h, 6);
+  const g = new THREE.ConeGeometry(r, h, 8);
   const q = standQuat(n, 0.8, rnd() * TAU);
   _o.position.set(x, y + h * 0.42, z); _o.quaternion.copy(q); _o.scale.setScalar(1); _o.updateMatrix();
   g.applyMatrix4(_o.matrix);
