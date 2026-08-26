@@ -182,7 +182,12 @@ function sharkGeometry() {
       // flatten the belly and the top of the head — reads as a shark, not a tube
       const flat = s < 0 ? 0.86 : 1.0;
       const headSquash = 1 - 0.22 * Math.max(0, 1 - t * 6) * Math.max(0, s);
-      pos.push(c * r * W, s * r * H * flat * headSquash, z);
+      // depressed snout: the head widens laterally and flattens dorso-ventrally
+      // toward the nose, so the front reads as a shark's spade, not a cone
+      const snout = Math.max(0, 1 - t * 5);
+      const headWide = 1 + 0.28 * snout;
+      const headFlat = 1 - 0.14 * snout;
+      pos.push(c * r * W * headWide, s * r * H * flat * headSquash * headFlat, z);
       uv.push(t, 0.5 + 0.5 * s);
     }
   }
@@ -197,15 +202,29 @@ function sharkGeometry() {
     for (const tri of tris) idx.push(base + tri[0], base + tri[1], base + tri[2]);
   };
 
-  // heterocercal caudal: long swept upper lobe, short lower lobe, deep notch
+  // heterocercal caudal: long swept upper lobe, short lower lobe, deep notch.
+  // The upper lobe carries two interior verts (uv.x 1.08 / 1.15) so the shader's
+  // travelling wave CURLS the lobe through its length instead of hinging one tri.
   const zT = -0.5;
   fin([
     [0, 0.016, zT + 0.015, 1.00],      // 0 peduncle top
     [0, -0.014, zT + 0.015, 1.00],     // 1 peduncle bottom
     [0, 0.185, zT - 0.315, 1.22],      // 2 upper lobe tip
     [0, 0.028, zT - 0.130, 1.10],      // 3 notch
-    [0, -0.098, zT - 0.145, 1.15]      // 4 lower lobe tip
-  ], [[0, 3, 2], [0, 1, 3], [1, 4, 3]]);
+    [0, -0.098, zT - 0.145, 1.15],     // 4 lower lobe tip
+    [0, 0.072, zT - 0.098, 1.08],      // 5 upper lobe leading-edge mid
+    [0, 0.132, zT - 0.208, 1.15]       // 6 upper lobe interior mid
+  ], [[0, 5, 3], [5, 6, 3], [6, 2, 3], [0, 1, 3], [1, 4, 3]]);
+  // caudal peduncle keel wedges: paired lateral wedges at t≈0.88, the hydrodynamic
+  // flare every pelagic shark carries just ahead of the tail (+8 tris)
+  const kr = sharkR(0.88) * W, kz0 = 0.5 - 0.845, kz1 = 0.5 - 0.915;
+  for (const s of [-1, 1]) fin([
+    [s * kr * 0.75, 0.006, kz0, 0.845],
+    [s * kr * 0.75, -0.006, kz0, 0.845],
+    [s * (kr + 0.030), 0.000, 0.5 - 0.880, 0.880],
+    [s * kr * 0.62, 0.005, kz1, 0.915],
+    [s * kr * 0.62, -0.005, kz1, 0.915]
+  ], [[0, 2, 1], [0, 3, 2], [1, 2, 4], [3, 4, 2]]);
 
   // first dorsal — tall, raked back; the read at range
   const d0 = sharkR(0.36) * H, d1 = sharkR(0.55) * H;
@@ -215,13 +234,33 @@ function sharkGeometry() {
   const e0 = sharkR(0.76) * H;
   fin([[0, e0 * 0.96, 0.5 - 0.76, 0.76], [0, sharkR(0.855) * H * 0.96, 0.5 - 0.855, 0.855],
   [0, e0 + 0.034, 0.5 - 0.825, 0.80]], [[0, 2, 1]]);
-  // pectorals — long and swept, angled down; the widest thing on the animal
+  // pectorals — long and swept, angled down; the widest thing on the animal.
+  // 2×2 grid (3×3 verts) with spanwise camber, and a uv.x gradient root→tip so the
+  // undulation shader flexes the wing on turns instead of waving a rigid plate.
   const pr = sharkR(0.28) * W;
-  for (const s of [-1, 1]) fin([
-    [s * pr * 0.92, -0.014, 0.5 - 0.235, 0.235],
-    [s * pr * 0.92, -0.030, 0.5 - 0.330, 0.330],
-    [s * (pr + 0.152), -0.082, 0.5 - 0.400, 0.40]
-  ], [[0, 1, 2], [0, 2, 1]]);
+  for (const s of [-1, 1]) {
+    const verts = [], tris = [];
+    for (let iv = 0; iv <= 2; iv++) {           // spanwise: root -> tip
+      const v = iv / 2;
+      // root chord along the flank (t 0.235..0.330), tip trailing back near t 0.40
+      const x0 = pr * 0.92, x1 = pr + 0.152;
+      const xx = s * lerp(x0, x1, v);
+      const camber = Math.sin(Math.PI * v) * 0.014;   // wing bows down mid-span
+      for (let ju = 0; ju <= 2; ju++) {         // chordwise: leading -> trailing
+        const uC = ju / 2;
+        const zLead = lerp(0.5 - 0.235, 0.5 - 0.355, v);
+        const zTrail = lerp(0.5 - 0.330, 0.5 - 0.400, v);
+        const zz = lerp(zLead, zTrail, uC);
+        const yy = lerp(-0.014 - uC * 0.016, -0.082, v) - camber;
+        verts.push([xx, yy, zz, 0.235 + v * 0.24 + uC * 0.03]);
+      }
+    }
+    for (let iv = 0; iv < 2; iv++) for (let ju = 0; ju < 2; ju++) {
+      const a = iv * 3 + ju, b = a + 3;
+      tris.push([a, b, a + 1], [b, b + 1, a + 1]);
+    }
+    fin(verts, tris);
+  }
   // pelvics
   const vr = sharkR(0.62) * W;
   for (const s of [-1, 1]) fin([
@@ -555,8 +594,8 @@ function octopusGeometry() {
     idx.push(a, a + MS, b, b, a + MS, b + MS);
   }
 
-  // ---- arms: eight tapering tubes, 5-sided ----
-  const ARMS = 8, SEG = 9, SID = 5;
+  // ---- arms: eight tapering tubes, 6-sided ----
+  const ARMS = 8, SEG = 13, SID = 6;
   for (let k = 0; k < ARMS; k++) {
     const ang = (k + 0.5) / ARMS * TAU;
     const base = pos.length / 3;
@@ -1077,27 +1116,34 @@ function squidGeometry() {
     for (const v of verts) { pos.push(v[0], v[1], v[2]); nrm.push(0, 1, 0); sq.push(v[3], v[4], 0, kind); }
     for (const tri of tris) idx.push(base + tri[0], base + tri[1], base + tri[2]);
   };
+  // 2×3-sample grids per fin: interior verts give the ripple wave something to bend
   for (const s of [-1, 1]) flag([
-    [0, 0, -0.50, 0.0, 0], [0, 0, -0.20, 0.4, 0], [s * 0.26, 0, -0.365, 1.0, 0]
-  ], [[0, 1, 2], [0, 2, 1]], 1);
+    [0, 0, -0.50, 0.0, 0],            // 0 root aft
+    [0, 0, -0.35, 0.2, 0],            // 1 root mid
+    [0, 0, -0.20, 0.4, 0],            // 2 root fore
+    [s * 0.14, 0, -0.44, 0.55, 0],    // 3 interior aft
+    [s * 0.14, 0, -0.27, 0.72, 0],    // 4 interior fore
+    [s * 0.26, 0, -0.365, 1.0, 0]     // 5 tip
+  ], [[0, 1, 3], [1, 4, 3], [1, 2, 4], [3, 4, 5], [0, 3, 5], [2, 5, 4]], 1);
 
-  // arm crown: 8 short arms + 2 long feeding tentacles, 3-sided tubes
+  // arm crown: 8 short arms + 2 long feeding tentacles, 4-sided tubes
+  const SSID = 4;
   const mk = (n, kind, segs, off) => {
     for (let k = 0; k < n; k++) {
       const ang = (k + off) / n * TAU;
       const base = pos.length / 3;
       for (let i = 0; i <= segs; i++) {
         const T = i / segs;
-        for (let j = 0; j < 3; j++) { pos.push(0, 0, 0); nrm.push(0, 1, 0); sq.push(T, ang, j / 3 * TAU, kind); }
+        for (let j = 0; j < SSID; j++) { pos.push(0, 0, 0); nrm.push(0, 1, 0); sq.push(T, ang, j / SSID * TAU, kind); }
       }
-      for (let i = 0; i < segs; i++) for (let j = 0; j < 3; j++) {
-        const a = base + i * 3 + j, b = base + i * 3 + (j + 1) % 3;
-        idx.push(a, a + 3, b, b, a + 3, b + 3);
+      for (let i = 0; i < segs; i++) for (let j = 0; j < SSID; j++) {
+        const a = base + i * SSID + j, b = base + i * SSID + (j + 1) % SSID;
+        idx.push(a, a + SSID, b, b, a + SSID, b + SSID);
       }
     }
   };
-  mk(8, 2, 5, 0.5);
-  mk(2, 3, 7, 0.25);
+  mk(8, 2, 8, 0.5);
+  mk(2, 3, 10, 0.25);
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
