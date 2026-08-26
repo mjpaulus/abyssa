@@ -94,10 +94,11 @@ scene.add(playerLightSrc);
 // just paid falloff for nothing.
 export const lanternLight = new THREE.PointLight(0xffdca4, 25, 34, 1.9);
 lanternLight.castShadow = true;
-// A/B'd 1024 vs 512 at a wreck wall and a vent chimney with the lantern ~2u out:
-// 512 shows visible stair-stepping on the long raking shadows the murk makes
-// unmissable, so the cube stays at 1024. (Verdict recorded per lighting round.)
-lanternLight.shadow.mapSize.set(1024, 1024);
+// A/B'd 1024 vs 512 live at the skiff wreck (lantern ~2u from the hull and the crate
+// sled): no visible stair-stepping at 512 on either the hull planking or the crate
+// contact shadow — the murk and the short 34u range soften the edge before the texel
+// grid can read. 512 ships: 6x fewer texels on the game's one recurring cube shadow.
+lanternLight.shadow.mapSize.set(512, 512);
 lanternLight.shadow.camera.near = 0.35;
 lanternLight.shadow.camera.far = 34;
 lanternLight.shadow.bias = -0.0015;
