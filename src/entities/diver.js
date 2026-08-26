@@ -46,20 +46,23 @@ function curve(keys) {
 // One height field drives albedo, roughness and normal together, so verdigris and wear
 // land in the same crevices the normal map actually shows.
 function metalMaps(hi, lo, verd, rep, S = 256) {
+  // Feature counts scale with canvas AREA and feature sizes with edge length, so a
+  // 512 helmet set is the same brass, just resolved — not a sparser, finer one.
+  const K = S / 256;
   const hc = noiseCanvas(S, 5, 1.0);
   const h = hc.getContext('2d');
-  for (let i = 0; i < 90; i++) {  // hammer dents
-    const x = Math.random() * S, y = Math.random() * S, r = rng(5, 20);
+  for (let i = 0; i < 90 * K * K; i++) {  // hammer dents
+    const x = Math.random() * S, y = Math.random() * S, r = rng(5, 20) * K;
     const gr = h.createRadialGradient(x, y, 0, x, y, r);
     gr.addColorStop(0, Math.random() < 0.6 ? 'rgba(0,0,0,.34)' : 'rgba(255,255,255,.3)');
     gr.addColorStop(1, 'rgba(128,128,128,0)');
     h.fillStyle = gr; h.beginPath(); h.arc(x, y, r, 0, TAU); h.fill();
   }
   h.lineCap = 'round';
-  for (let i = 0; i < 240; i++) {  // hairline scratches
-    const x = Math.random() * S, y = Math.random() * S, a = rng(-0.45, 0.45) + (Math.random() < 0.5 ? 0 : 1.57), l = rng(8, 72);
+  for (let i = 0; i < 240 * K * K; i++) {  // hairline scratches
+    const x = Math.random() * S, y = Math.random() * S, a = rng(-0.45, 0.45) + (Math.random() < 0.5 ? 0 : 1.57), l = rng(8, 72) * K;
     h.strokeStyle = Math.random() < 0.5 ? 'rgba(255,255,255,.24)' : 'rgba(0,0,0,.24)';
-    h.lineWidth = rng(0.5, 1.7);
+    h.lineWidth = rng(0.5, 1.7) * K;
     h.beginPath(); h.moveTo(x, y); h.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); h.stroke();
   }
   const hd = h.getImageData(0, 0, S, S).data;
@@ -139,8 +142,10 @@ function grainMaps(base, hi, rep, wet, S = 128) {
   return { map: toTexture(ac, rep, true), rough: toTexture(rc, rep), nrm: toTexture(normalFromHeight(hc, 2.2), rep) };
 }
 
-const copperM = metalMaps([214, 138, 96], [98, 54, 37], [56, 110, 92], 3);
-const brassM = metalMaps([232, 196, 108], [112, 88, 38], [84, 114, 76], 4);
+// 512 for the two helmet metals only: Sal's helmet is read at ~2 units in close-up and
+// 256 was the blur you could see. One-time boot cost; everything else stays 256/128.
+const copperM = metalMaps([214, 138, 96], [98, 54, 37], [56, 110, 92], 3, 512);
+const brassM = metalMaps([232, 196, 108], [112, 88, 38], [84, 114, 76], 4, 512);
 const clothM = clothMaps([20, 50, 168], 3);                  // royal blue underlayer
 // aged canvas duck: still warm, but pulled off the orange toward a salt-bleached tan-olive
 const leatherM = grainMaps([140, 98, 60], [198, 160, 116], 2, 0.62);
@@ -155,7 +160,12 @@ const brass = new THREE.MeshStandardMaterial({
   map: brassM.map, roughnessMap: brassM.rough, normalMap: brassM.nrm, normalScale: new THREE.Vector2(0.6, 0.6),
   metalness: 0.95, roughness: 1, envMap: envTex, envMapIntensity: 0.62
 });
-const steel = new THREE.MeshStandardMaterial({ color: 0x3c4046, metalness: 0.78, roughness: 0.6, envMap: envTex, envMapIntensity: 0.2 });
+// steel and port were the last two flat-plastic satellites on Sal: they borrow the
+// copper set's rough+normal maps (structure only — their own colors stay authoritative).
+const steel = new THREE.MeshStandardMaterial({
+  color: 0x3c4046, metalness: 0.78, roughness: 0.6, envMap: envTex, envMapIntensity: 0.2,
+  roughnessMap: copperM.rough, normalMap: copperM.nrm, normalScale: new THREE.Vector2(0.45, 0.45)
+});
 const cloth = new THREE.MeshStandardMaterial({
   map: clothM.map, roughnessMap: clothM.rough, normalMap: clothM.nrm, normalScale: new THREE.Vector2(1.15, 1.15),
   roughness: 1, metalness: 0.02, vertexColors: true, envMap: envTex, envMapIntensity: 0.12
@@ -172,7 +182,10 @@ const darkLeather = new THREE.MeshStandardMaterial({
   map: darkLeaM.map, roughnessMap: darkLeaM.rough, normalMap: darkLeaM.nrm, normalScale: new THREE.Vector2(0.95, 0.95),
   roughness: 1, metalness: 0.04, vertexColors: true, envMap: envTex, envMapIntensity: 0.28
 });
-const port = new THREE.MeshStandardMaterial({ color: 0x121519, metalness: 0.55, roughness: 0.42, envMap: envTex, envMapIntensity: 0.3 });
+const port = new THREE.MeshStandardMaterial({
+  color: 0x121519, metalness: 0.55, roughness: 0.42, envMap: envTex, envMapIntensity: 0.3,
+  roughnessMap: copperM.rough, normalMap: copperM.nrm, normalScale: new THREE.Vector2(0.3, 0.3)
+});
 const blueLit = new THREE.MeshStandardMaterial({
   color: 0x0e2c44, emissive: 0x4db8ff, emissiveIntensity: 2.4, roughness: 0.3, metalness: 0.1,
   envMap: envTex, envMapIntensity: 0.3

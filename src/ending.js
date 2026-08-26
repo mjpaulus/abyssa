@@ -17,6 +17,7 @@ import { player } from './player.js';
 import { zoneTop, zoneBottom, riftPos, RIFT_R } from './config.js';
 import { terrainH } from './world/terrain.js';
 import { clamp, V3 } from './lib/math.js';
+import { glowTex as sharedGlowTex } from './lib/textures.js';
 import { updateDiver, lanternWorldPos } from './entities/diver.js';
 import { lanternLight, playerLightSrc } from './lighting.js';
 import { raft } from './systems/raft.js';
@@ -194,23 +195,10 @@ let bubbles = null, bubbleData = null, bubblePos = null;
 const _v = V3(), _lant = V3();
 const _bodyCol = new THREE.Color(), _darkCol = new THREE.Color();
 
-// One soft radial dot, shared by every glow sprite and by the bubbles.
-let _glowTex = null;
-function glowTex() {
-  if (_glowTex) return _glowTex;
-  const c = document.createElement('canvas');
-  c.width = c.height = 64;
-  const g = c.getContext('2d');
-  const rg = g.createRadialGradient(32, 32, 0, 32, 32, 32);
-  rg.addColorStop(0, 'rgba(255,255,255,1)');
-  rg.addColorStop(0.18, 'rgba(255,255,255,0.62)');
-  rg.addColorStop(0.5, 'rgba(255,255,255,0.16)');
-  rg.addColorStop(1, 'rgba(255,255,255,0)');
-  g.fillStyle = rg;
-  g.fillRect(0, 0, 64, 64);
-  _glowTex = new THREE.CanvasTexture(c);
-  return _glowTex;
-}
+// One soft radial dot, shared by every glow sprite and by the bubbles. This used to be
+// a private 64px duplicate of lib/textures' glowTex; the shared 128px one has the same
+// soft-falloff profile and the sprites are scaled anyway, so the duplicate is gone.
+const glowTex = () => sharedGlowTex;
 
 function makeSleeper(spec) {
   const grp = new THREE.Group();

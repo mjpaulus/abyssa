@@ -9,6 +9,7 @@
 // shader helpers below return values centred on 1.0 that are meant to be multiplied
 // into an existing albedo, never to replace it.
 import * as THREE from 'three';
+import { maxAniso } from './textures.js';
 
 const BASE = 'assets/textures/';
 
@@ -29,7 +30,7 @@ function load(file) {
     if (--pending === 0) { fadeT0 = performance.now(); fade(); }
   }, undefined, () => { if (--pending === 0) { texAmt.value = 0; } });
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
+  t.anisotropy = maxAniso();
   // All five maps are non-colour data: packed structure masks and tangent normals.
   t.colorSpace = THREE.NoColorSpace;
   return t;

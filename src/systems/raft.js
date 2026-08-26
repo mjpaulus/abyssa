@@ -18,7 +18,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
 import { V3 } from '../lib/math.js';
-import { makeGlow } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand } from '../lib/textures.js';
 import { survival } from './survival.js';
 import { surfaceHeightAt, stormLevel, onSkyEnv } from '../world/water.js';
 import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash } from './raft/kit.js';
@@ -65,15 +65,91 @@ const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
 // that makes its own material makes its own draw call and breaks the merge. All of them
 // carry vertexColors so kit.js's weather()/tint() can bake grime and waterline stain
 // into whatever geometry wants it.
+// ---- procedural surface maps for the palette ---------------------------------------
+// STRUCTURE ONLY. The raft's colour story is authored twice already — palette hues and
+// kit.js weather() vertex stains — and both MULTIPLY with these maps, so every albedo
+// here is near-white grayscale (grain shadow, never pigment) and every roughnessMap is a
+// multiplier around 1. Deck boards are box(capW, h, len) with the long axis on Z: a box
+// face maps 0..1 regardless of size, so on the deck top the V axis runs down the board
+// and the ~15:1 face stretch elongates everything drawn — grain is therefore drawn along
+// canvas Y and comes out running WITH the boards for free. Deterministic seeds: the raft
+// must look identical every boot. Built once, at first palette() call.
+let RM = null;
+function raftMaps() {
+  if (RM) return RM;
+  const clamp01b = v => v < 0 ? 0 : v > 255 ? 255 : v;
+  const gray = (S, fn) => {
+    const { canvas, ctx } = canvas2d(S);
+    const im = ctx.createImageData(S, S);
+    for (let i = 0; i < S * S; i++) {
+      const g = clamp01b(fn(i) * 255);
+      im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = g;
+      im.data[i * 4 + 3] = 255;
+    }
+    ctx.putImageData(im, 0, 0);
+    return canvas;
+  };
+  // -- wood: long grain along canvas Y, pores, a rare split --
+  const S = 256, wr = seededRand(0xDECC0A7);
+  const whc = noiseCanvas(S, 4, 1.0, wr);
+  const wh = whc.getContext('2d');
+  wh.lineCap = 'round';
+  for (let i = 0; i < 150; i++) {              // grain streaks, running with the board (v)
+    const x = wr() * S, y0 = wr() * S, l = 60 + wr() * 200;
+    wh.strokeStyle = wr() < 0.6 ? 'rgba(0,0,0,.16)' : 'rgba(255,255,255,.11)';
+    wh.lineWidth = 0.6 + wr() * 1.8;
+    wh.beginPath(); wh.moveTo(x, y0);
+    wh.bezierCurveTo(x + (wr() - 0.5) * 5, y0 + l * 0.33, x + (wr() - 0.5) * 5, y0 + l * 0.66, x + (wr() - 0.5) * 3, y0 + l);
+    wh.stroke();
+  }
+  for (let i = 0; i < 60; i++) {               // pores / old fastener stains
+    const x = wr() * S, y = wr() * S, r = 1 + wr() * 2.4;
+    wh.fillStyle = 'rgba(0,0,0,.28)';
+    wh.beginPath(); wh.ellipse(x, y, r * 0.5, r * 1.6, 0, 0, Math.PI * 2); wh.fill();
+  }
+  const wd = wh.getImageData(0, 0, S, S).data;
+  const woodAlb = gray(S, i => 0.80 + 0.20 * (wd[i * 4] / 255));
+  const woodRgh = gray(S, i => 0.90 + 0.10 * (1 - wd[i * 4] / 255));
+  // -- metal: micro-scratches + faint dents (diver.js metalMaps idiom, but neutral) --
+  const mr = seededRand(0xB7A55);
+  const mhc = noiseCanvas(S, 4, 1.0, mr);
+  const mh = mhc.getContext('2d');
+  mh.lineCap = 'round';
+  for (let i = 0; i < 40; i++) {
+    const x = mr() * S, y = mr() * S, r = 5 + mr() * 14;
+    const g = mh.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, mr() < 0.6 ? 'rgba(0,0,0,.26)' : 'rgba(255,255,255,.22)');
+    g.addColorStop(1, 'rgba(128,128,128,0)');
+    mh.fillStyle = g; mh.beginPath(); mh.arc(x, y, r, 0, Math.PI * 2); mh.fill();
+  }
+  for (let i = 0; i < 170; i++) {              // brushed hairlines
+    const x = mr() * S, y = mr() * S, a = (mr() - 0.5) * 0.8 + (mr() < 0.5 ? 0 : 1.57), l = 10 + mr() * 60;
+    mh.strokeStyle = mr() < 0.5 ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.18)';
+    mh.lineWidth = 0.5 + mr() * 1.2;
+    mh.beginPath(); mh.moveTo(x, y); mh.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); mh.stroke();
+  }
+  const md = mh.getImageData(0, 0, S, S).data;
+  const metAlb = gray(S, i => 0.86 + 0.14 * (md[i * 4] / 255));
+  const metRgh = gray(S, i => 0.78 + 0.22 * (1 - md[i * 4] / 255));
+  RM = {
+    wood: { map: toTexture(woodAlb, 1, true), rough: toTexture(woodRgh, 1), nrm: toTexture(normalFromHeight(whc, 1.3), 1) },
+    metal: { map: toTexture(metAlb, 1, true), rough: toTexture(metRgh, 1), nrm: toTexture(normalFromHeight(mhc, 1.2), 1) }
+  };
+  return RM;
+}
+
 function palette() {
   const M = (color, o) => new THREE.MeshStandardMaterial(
     Object.assign({ color, envMap: envTex, vertexColors: true }, o));
+  const { wood: W, metal: MT } = raftMaps();
+  const wset = { map: W.map, roughnessMap: W.rough, normalMap: W.nrm, normalScale: new THREE.Vector2(0.45, 0.45) };
+  const mset = { map: MT.map, roughnessMap: MT.rough, normalMap: MT.nrm, normalScale: new THREE.Vector2(0.35, 0.35) };
   return {
-    wood: M(0x584734, { roughness: 0.94, metalness: 0.02, envMapIntensity: 0.16 }),
-    wood2: M(0x8b7c64, { roughness: 0.96, metalness: 0.00, envMapIntensity: 0.12 }),
-    iron: M(0x33373b, { roughness: 0.58, metalness: 0.78, envMapIntensity: 0.45 }),
+    wood: M(0x584734, { roughness: 0.94, metalness: 0.02, envMapIntensity: 0.16, ...wset }),
+    wood2: M(0x8b7c64, { roughness: 0.96, metalness: 0.00, envMapIntensity: 0.12, ...wset }),
+    iron: M(0x33373b, { roughness: 0.58, metalness: 0.78, envMapIntensity: 0.45, ...mset }),
     rust: M(0x6d452a, { roughness: 0.93, metalness: 0.22, envMapIntensity: 0.18 }),
-    brass: M(0xac8a2f, { roughness: 0.34, metalness: 0.90, envMapIntensity: 0.70 }),
+    brass: M(0xac8a2f, { roughness: 0.34, metalness: 0.90, envMapIntensity: 0.70, ...mset }),
     lead: M(0x6b6f74, { roughness: 0.74, metalness: 0.52, envMapIntensity: 0.28 }),
     rope: M(0x9a8862, { roughness: 0.97, metalness: 0.00, envMapIntensity: 0.10 }),
     canvas: M(0x7c7360, { roughness: 0.98, metalness: 0.00, envMapIntensity: 0.10 }),

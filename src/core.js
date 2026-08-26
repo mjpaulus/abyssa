@@ -1,6 +1,7 @@
 // Renderer, scene, camera, shared environment map. Owned by the orchestrator.
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { setMaxAniso } from './lib/textures.js';
 
 export const renderer = new THREE.WebGLRenderer({ antialias: false, stencil: false, depth: false, powerPreference: 'high-performance' });
 // Render scale is applied by hand to INTEGER buffer dimensions, with pixelRatio pinned
@@ -20,6 +21,9 @@ renderer.shadowMap.enabled = true;
 // shadow edge ever wants softening back, it has to come from the shadow camera /
 // map size / bias, not from this constant.
 renderer.shadowMap.type = THREE.PCFShadowMap;
+// Publish the device's true max anisotropy to lib/textures BEFORE any world module
+// evaluates (they all import core.js), so every generated texture is filtered at the cap.
+setMaxAniso(renderer);
 document.body.appendChild(renderer.domElement);
 
 export const scene = new THREE.Scene();

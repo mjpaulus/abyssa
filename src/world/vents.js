@@ -17,7 +17,7 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
 import { riftPos } from '../config.js';
 import { clamp, vnoise } from '../lib/math.js';
-import { makeGlow } from '../lib/textures.js';
+import { makeGlow, surfacePair } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { siteParams } from './site.js';
 
@@ -349,7 +349,15 @@ function growField() {
   // chimneyMat is created once, ever, and reused on every reseed — a fresh material
   // instance would recompile every mesh that binds it, and reseedVents()'s whole point
   // is zero recompiles.
-  if (!chimneyMat) chimneyMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0.02 });
+  if (!chimneyMat) {
+    // Shared 256 noise rough+normal pair (lib/textures surfacePair): mineral tooth on the
+    // crust, no sparkle. Created once with the material — zero reseed churn.
+    const sp = surfacePair(3);
+    chimneyMat = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 1, metalness: 0.02,
+      roughnessMap: sp.rough, normalMap: sp.nrm, normalScale: new THREE.Vector2(0.6, 0.6)
+    });
+  }
   const mat = chimneyMat;
   root = new THREE.Group();
   const part = Part(root);

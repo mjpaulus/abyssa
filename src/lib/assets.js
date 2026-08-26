@@ -16,6 +16,12 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { surfacePair } from './textures.js';
+
+// ONE shared roughness texture for every prop (surfacePair mints a texture per call;
+// per-prop copies would grow renderer.info.memory.textures and outlive disposeProp).
+let _propRough = null;
+const propRough = () => (_propRough || (_propRough = surfacePair(2).rough));
 
 export const PROP_UNIT = 1;
 
@@ -132,6 +138,12 @@ export async function loadProp(url) {
       color: 0xffffff, vertexColors: bake, map, roughness: 0.9, metalness: 0.02,
       flatShading: bake && !geometry.attributes.uv
     });
+    // De-plastic: the shared lib/textures noise roughnessMap at modest repeat breaks the
+    // uniform 0.9 sheen. Only when the merged geometry actually carries UVs.
+    if (geometry.attributes.uv) {
+      material.roughnessMap = propRough();
+      material.needsUpdate = true;
+    }
     if (map) { map.colorSpace = THREE.SRGBColorSpace; map.needsUpdate = true; }
 
     geometry.userData.tris = (geometry.index ? geometry.index.count : geometry.attributes.position.count) / 3;
