@@ -303,7 +303,7 @@ function guardBar(off, rimR, tube) {
     V3(off, -rimR * 0.98, 0.002), V3(off * 1.06, -rimR * 0.55, 0.048), V3(off * 1.09, 0, 0.062),
     V3(off * 1.06, rimR * 0.55, 0.048), V3(off, rimR * 0.98, 0.002)
   ]);
-  return new THREE.TubeGeometry(c, 9, tube, 4, false);
+  return new THREE.TubeGeometry(c, 9, tube, 6, false);
 }
 
 // A raised trim strip following a lathe profile's front (or back) face — panel/centre seams.
@@ -432,7 +432,7 @@ function sheathGeo(p) {
 function porthole(p, rimR, glassR, bars, x, y, z, rx, ry, nb = 8) {
   const put = g => xf(g, x, y, z, rx, ry, 0);
   p.add(put(new THREE.CylinderGeometry(rimR, rimR * 1.06, 0.075, 20, 1, true).rotateX(Math.PI / 2)), brass);
-  p.add(put(new THREE.TorusGeometry(rimR, rimR * 0.16, 6, 20).translate(0, 0, 0.036)), brass);
+  p.add(put(new THREE.TorusGeometry(rimR, rimR * 0.16, 10, 20).translate(0, 0, 0.036)), brass);
   p.add(put(new THREE.TorusGeometry(rimR * 1.22, rimR * 0.1, 5, 20).translate(0, 0, -0.03)), copper);
   p.add(put(new THREE.SphereGeometry(glassR * 1.9, 14, 7, 0, TAU, 0, 0.56).rotateX(Math.PI / 2).translate(0, 0, -glassR * 1.52)), glassMat);
   for (let i = 0; i < nb; i++) {                             // bezel bolts
@@ -469,10 +469,10 @@ export const diver = (() => {
       [0.000, 0.000], [0.246, 0.000], [0.256, 0.045], [0.262, 0.085], [0.300, 0.115], [0.352, 0.165],
       [0.400, 0.235], [0.430, 0.315], [0.444, 0.400], [0.448, 0.480], [0.440, 0.560], [0.418, 0.635],
       [0.382, 0.705], [0.330, 0.775], [0.262, 0.838], [0.176, 0.892], [0.086, 0.936], [0.000, 0.952]
-    ], 28), copper);
+    ], 44), copper);
     // neck ring / breastplate lock
-    p.add(xf(new THREE.CylinderGeometry(0.268, 0.276, 0.09, 24), 0, 0.035), brass);
-    p.add(xf(new THREE.TorusGeometry(0.272, 0.028, 6, 24).rotateX(Math.PI / 2), 0, 0.082), brass);
+    p.add(xf(new THREE.CylinderGeometry(0.268, 0.276, 0.09, 32), 0, 0.035), brass);
+    p.add(xf(new THREE.TorusGeometry(0.272, 0.028, 6, 32).rotateX(Math.PI / 2), 0, 0.082), brass);
     rivetRing(p, brass, 12, 0.286, 0.036, 0.024);
     for (let i = 0; i < 4; i++) {                            // interrupted-thread lugs
       const a = i / 4 * TAU + 0.4;
@@ -486,11 +486,25 @@ export const diver = (() => {
       const a = i * 2.094;
       wingnut(p, Math.sin(a) * 0.300, 0.455 + Math.cos(a) * 0.300, 0.300, 0, 0.85);
     }
+    // The Mark V signature: the faceplate is a DOOR. Hinge lug on the diver's right of
+    // the front port, swing-bolt hasp on the left — the two fittings that say this
+    // window opens for air on deck and dogs shut before the water.
+    {
+      const HX = 0.225, Y = 0.455, HZ = 0.345;               // just outside the bezel ring
+      for (const dy of [-0.055, 0.055])                      // hinge knuckles
+        p.add(xf(new THREE.BoxGeometry(0.052, 0.042, 0.040), HX, Y + dy, HZ, 0, 0.55, 0), brass);
+      p.add(xf(new THREE.CylinderGeometry(0.013, 0.013, 0.175, 8), HX + 0.012, Y, HZ + 0.012), brass); // hinge pin
+      p.add(xf(new THREE.SphereGeometry(0.017, 8, 5), HX + 0.012, Y + 0.088, HZ + 0.012), brass);      // pin head
+      // hasp: a slotted lug the swing bolt lies into, bolt pivoted below, wingnut on top
+      p.add(xf(new THREE.BoxGeometry(0.046, 0.075, 0.036), -HX, Y + 0.010, HZ, 0, -0.55, 0), brass);   // lug
+      p.add(xf(new THREE.CylinderGeometry(0.011, 0.011, 0.115, 8), -HX - 0.006, Y - 0.012, HZ + 0.006, 0.16, 0, -0.10), brass); // swing bolt
+      wingnut(p, -HX - 0.014, Y + 0.052, HZ + 0.014, -0.55, 0.7);                                      // dogged down
+    }
     // The bonnet is RAISED COPPER — beaten up out of sheet over a former and spun true —
     // and spinning leaves ridges. Five rings sitting exactly on the lathe profile give the
     // dome a scale and a set of specular lines it otherwise has no way to earn.
     for (const [rr, yy] of [[0.402, 0.235], [0.446, 0.400], [0.442, 0.520], [0.420, 0.635], [0.334, 0.775]])
-      p.add(xf(new THREE.TorusGeometry(rr, 0.0085, 5, 22).rotateX(Math.PI / 2), 0, yy), copper);
+      p.add(xf(new THREE.TorusGeometry(rr, 0.0085, 5, 32).rotateX(Math.PI / 2), 0, yy), copper);
     // four wing-nut dogs round the neck ring, clamping the bonnet down onto the corselet.
     // ry = PI/2 - a points each nut's shaft radially outward from the ring.
     for (let i = 0; i < 4; i++) {

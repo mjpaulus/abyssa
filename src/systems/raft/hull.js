@@ -3,7 +3,8 @@
 // OWNED BY: hull agent (raft detail round). Replaces the nine identical planks, three
 // bare beams and four smooth drums that used to stand in for a boat — this is the piece
 // that has to convince the player they are standing on something, not a platform.
-import { Part, xf, box, cyl, tor, weather, boltLine, rope, lash } from './kit.js';
+import { Part, xf, box, cyl, tor, lathe, weather, boltLine, rope, lash,
+  chamferedPlank, profilePrism, rivetRing } from './kit.js';
 
 const FOOT = 4.7;          // walkable footprint half-extent — player.js hard-codes this
 const DECK_TOP = 0.11;     // deck top surface — player.js hard-codes this too
@@ -20,7 +21,7 @@ export function buildHull(group, mats) {
   const { wood, wood2, iron, rust, rope: ropeMat } = mats;
   const P = Part(group);
 
-  buildDeck(P, wood, wood2);
+  buildDeck(P, wood, wood2, iron);
   buildBulwark(P, wood, iron);
   buildStructure(P, iron);
   buildDrums(P, rust, ropeMat);
@@ -36,7 +37,7 @@ export function buildHull(group, mats) {
 // The visible planking is a separate cap layer glued to that slab: varied board widths,
 // staggered butt joints, a few pale replacements, two scarfed patches, and a chamfer
 // bead along every long seam so it reads as boards instead of a painted-on grid.
-function buildDeck(P, wood, wood2) {
+function buildDeck(P, wood, wood2, iron) {
   const SPAN = FOOT * 2, BASE_TOP = 0.02, GROOVE = 0.022, JOINT = 0.02;
 
   P.add(weather(xf(box(SPAN, BASE_TOP + DECK_TOP, SPAN), 0, (BASE_TOP - DECK_TOP) / 2, 0),
@@ -91,8 +92,17 @@ function buildDeck(P, wood, wood2) {
       // because each one is a different piece of timber that went down in a different
       // year. Without this the deck is one sheet of noise and reads as a texture.
       const tone = (isPale ? 1.16 : 0.80) + (h1(i + 313) - 0.5) * 0.26;
-      P.add(weather(xf(box(capW, h, len), xc, BASE_TOP + h / 2, (z0 + z1) / 2),
+      // Chamfered caps, not boxes: the ~0.012 eased top edge is what lets the light find
+      // every seam. Built in local space then xf'd, so weather() still reads raft-local Y.
+      P.add(weather(xf(chamferedPlank(capW, h, len), xc, BASE_TOP + h / 2, (z0 + z1) / 2),
         { tone, freq: 2.6, amp: 0.30 }), mat);
+      // butt-joint nails: a pair driven at the board end each side of an interior joint.
+      // Cheap domes (4x3 spheres) — a nail head is a glint, not a rivet.
+      if (s > 0) {
+        const ny = BASE_TOP + h + 0.004;
+        boltLine(P, iron, xc - capW * 0.28, ny, z0 + 0.05, xc + capW * 0.28, ny, z0 + 0.05,
+          2, 0.014, 4, 3);
+      }
     }
   }
 
@@ -150,18 +160,31 @@ function wallRun(P, wood, iron, axis, a0, a1, edge, scuppers = []) {
     if (lo - cur > 0.05) seg(lo - cur, (cur + lo) / 2, DECK_TOP + RAIL_H / 2, RAIL_H);
     // lintel: the rail keeps running above the slot, only its base is cut open
     seg(c.w, c.at, DECK_TOP + SLOT_H + (RAIL_H - SLOT_H) / 2, RAIL_H - SLOT_H);
+    // drip strip: a proud iron sill under the scupper mouth on the outer face, so the
+    // boarding sea it drains falls clear of the planking instead of tracking down it
+    const dOff = edge - inb * 0.012, dy = DECK_TOP + 0.028;
+    if (axis === 'x') P.put(box(c.w + 0.10, 0.020, 0.030), iron, c.at, dy, dOff);
+    else P.put(box(0.030, 0.020, c.w + 0.10), iron, dOff, dy, c.at);
     cur = hi;
   }
   if (a1 - cur > 0.05) seg(a1 - cur, (cur + a1) / 2, DECK_TOP + RAIL_H / 2, RAIL_H);
 
-  if (axis === 'x') P.put(box(a1 - a0, 0.05, CAPT), wood, (a0 + a1) / 2, DECK_TOP + RAIL_H + 0.025, fc);
-  else P.put(box(CAPT, 0.05, a1 - a0), wood, fc, DECK_TOP + RAIL_H + 0.025, (a0 + a1) / 2);
+  // cap rail with an ovolo profile — a moulded top edge, not a sawn batten. The prism's
+  // loop runs width x height in its local XY with the length on Z; the x-axis runs are
+  // spun 90 degrees to lie along the rail.
+  const capLoop = [
+    [-CAPT / 2, -0.025], [CAPT / 2, -0.025], [CAPT / 2, 0.004],
+    [CAPT * 0.34, 0.025], [-CAPT * 0.34, 0.025], [-CAPT / 2, 0.004]
+  ];
+  if (axis === 'x') P.put(profilePrism(capLoop, a1 - a0, 3), wood,
+    (a0 + a1) / 2, DECK_TOP + RAIL_H + 0.025, fc, 0, Math.PI / 2, 0);
+  else P.put(profilePrism(capLoop, a1 - a0, 3), wood, fc, DECK_TOP + RAIL_H + 0.025, (a0 + a1) / 2);
 
-  // through-bolts pinning the cap to the wall — the strapping detail carried up from the
-  // beams below, at deck-fitting scale
+  // through-bolts pinning the cap to the wall — hex heads on washers: these are the
+  // fastenings a spanner has been on, unlike the dome rivets on the ironwork
   const n = Math.max(2, Math.round((a1 - a0) / 1.3));
-  if (axis === 'x') boltLine(P, iron, a0 + 0.3, DECK_TOP + RAIL_H, fw, a1 - 0.3, DECK_TOP + RAIL_H, fw, n);
-  else boltLine(P, iron, fw, DECK_TOP + RAIL_H, a0 + 0.3, fw, DECK_TOP + RAIL_H, a1 - 0.3, n);
+  if (axis === 'x') boltLine(P, iron, a0 + 0.3, DECK_TOP + RAIL_H, fw, a1 - 0.3, DECK_TOP + RAIL_H, fw, n, 0.032, 6, 4, true);
+  else boltLine(P, iron, fw, DECK_TOP + RAIL_H, a0 + 0.3, fw, DECK_TOP + RAIL_H, a1 - 0.3, n, 0.032, 6, 4, true);
 }
 
 // A corner / gangway post, thicker than the run of wall so the eye reads it as a stop
@@ -194,7 +217,7 @@ function buildStructure(P, iron) {
   }
   // where the aft beam's strap bolts actually punch up through the planking — the only
   // one of the three whose deck-side fastenings sit clear of the pump, reel and davit
-  boltLine(P, iron, -FOOT + 0.4, DECK_TOP + 0.012, -3.6, FOOT - 0.4, DECK_TOP + 0.012, -3.6, 10);
+  boltLine(P, iron, -FOOT + 0.4, DECK_TOP + 0.012, -3.6, FOOT - 0.4, DECK_TOP + 0.012, -3.6, 10, 0.032, 6, 4, true);
 
   for (const x of [-2.3, 2.3]) {
     P.add(W(box(0.24, 0.28, FOOT * 2 - 0.1), x, -0.34, 0, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.4 }), iron);
@@ -212,12 +235,27 @@ function buildDrums(P, rust, ropeMat) {
   const R = 0.85, LEN = 3.2, Y = -0.75;
   const wet = { wetY: WATERLINE, wetBand: 0.35, rust: 0.7 };
 
+  // The shell is a lathe, not a capped cylinder: each end rolls over a chime into a
+  // DISHED head (pressed steel drums are concave — a flat cap reads as a lid), and the
+  // rolled rim catches the waterline slime band the way real chines do. Radius and
+  // centre are THE FRAME's flotation story — R = 0.85 at y = -0.75, untouched.
+  const HL = LEN / 2;
+  const drumProfile = [
+    [0.00, -HL + 0.10], [0.42, -HL + 0.085], [0.70, -HL + 0.035], [0.82, -HL + 0.01], // dished head
+    [R + 0.035, -HL], [R + 0.04, -HL + 0.045], [R, -HL + 0.10],                        // rolled rim
+    [R, HL - 0.10], [R + 0.04, HL - 0.045], [R + 0.035, HL],                           // far rim
+    [0.82, HL - 0.01], [0.70, HL - 0.035], [0.42, HL - 0.085], [0.00, HL - 0.10]       // far head
+  ];
   for (const [x, z] of [[-3.6, -3.2], [3.6, -3.2], [-3.6, 3.2], [3.6, 3.2]]) {
-    P.add(W(cyl(R, R, LEN, 12), x, Y, z, 0, 0, Math.PI / 2, 1, wet), rust);
+    P.add(W(lathe(drumProfile, 24), x, Y, z, 0, 0, Math.PI / 2, 1, wet), rust);
 
     for (const ox of [-1.05, 0, 1.05]) {
-      P.add(W(tor(R + 0.02, 0.035, 5, 12), x + ox, Y, z, 0, Math.PI / 2, 0, 1, wet), rust);
+      P.add(W(tor(R + 0.02, 0.035, 5, 24), x + ox, Y, z, 0, Math.PI / 2, 0, 1, wet), rust);
     }
+    // chime rivets: a ring of heads round each end where the head is seamed to the shell
+    // cheap domes (5x3): a chime rivet is a glint at this range, not a boss
+    for (const sx of [-1, 1])
+      rivetRing(P, rust, 12, x + sx * (HL - 0.06), Y, z, 0.62, 0.026, 'x', 0.5, 5, 3);
     // bung plug, proud of the shell near one end
     P.add(W(cyl(0.09, 0.09, 0.06, 8), x + 1.15, Y + R, z, 0, 0, 0, 1, { rust: 0.5 }), rust);
     // rolled seam — a line of rivet heads down one side of the shell
@@ -247,7 +285,7 @@ function buildMooring(P, iron, rust) {
     const u = i / (n - 1);
     const x = ax + (ex - ax) * u, y = ay + (ey - ay) * u, z = az + (ez - az) * u;
     const rx = i % 2 === 0 ? 0 : Math.PI / 2;
-    P.add(W(tor(0.05, 0.014, 4, 8), x, y, z, rx, 0, 0, 1,
+    P.add(W(tor(0.05, 0.014, 6, 12), x, y, z, rx, 0, 0, 1,
       { wetY: WATERLINE, wetBand: 0.4, rust: 0.75 }), rust);
   }
 }
