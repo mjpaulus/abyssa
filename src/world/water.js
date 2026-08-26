@@ -1259,7 +1259,11 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
 const WAVE = [
   [62.0, 20, 0.300, 0.900, 420],
   [41.0, 44, 0.180, 0.580, 260],
-  [27.0, -11, 0.100, 0.340, 170],
+  // fr 170 -> 135: at 170 the 27 u component was still at part strength where the log
+  // rings sample it under 4 verts/wavelength, and a gale showed crawling mid-distance
+  // aliasing; 135 retires it while the mesh still resolves it. Calm is untouched —
+  // the fade CURVE is the same, it just completes sooner.
+  [27.0, -11, 0.100, 0.340, 135],
   [17.0, 67, 0.050, 0.175, 110],
   [11.0, -38, 0.022, 0.082, 70],
   [6.5, 91, 0.010, 0.036, 45]

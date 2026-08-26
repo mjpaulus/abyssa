@@ -555,7 +555,13 @@ function buildZoneMats() {
     brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['GROOVE'] }),
     sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER'] }),
     anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS'] }),
-    rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] })
+    rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] }),
+    // Boulder / hero-landmark tiers keep the same 'rock' program cache key — three.js
+    // compiles ONE program for all three and only the uCull uniform differs. Bigger
+    // silhouettes earn longer sightlines: culling a 20-unit landmark at 175 left the
+    // clear-band seabed (456/477-unit sightlines in zones 1/2) reading as empty sand.
+    rockB: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 300, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] }),
+    rockH: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 420, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] })
   }));
 }
 
@@ -710,9 +716,9 @@ function buildOnce() {
       zones[zi].add(g);
     }
     // ---- rocks: pebbles, boulders, hero landmarks ----
-    for (const [geo, cnt, sLo, sHi, sq] of [[G.r0, 300, 0.5, 2.2, 0.34], [G.r1, 110, 2, 7, 0.3]]) {
+    for (const [geo, mat, cnt, sLo, sHi, sq] of [[G.r0, M.rock, 300, 0.5, 2.2, 0.34], [G.r1, M.rockB, 110, 2, 7, 0.3]]) {
       const L = place(zi, cnt, field.concat(reef), 0.42);
-      const im = mount(zi, geo, M.rock, L.length, true);
+      const im = mount(zi, geo, mat, L.length, true);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], S = rr(sLo, sHi) * (0.7 + 0.9 * fbm(p.x * 0.05 + 9, p.z * 0.05));
         _c.set(P.rock).multiplyScalar(rr(0.7, 1.25));
@@ -724,7 +730,7 @@ function buildOnce() {
     }
     {
       const L = place(zi, 10, field, 0.62);
-      const im = mount(zi, G.r2, M.rock, L.length + 60, true);
+      const im = mount(zi, G.r2, M.rockH, L.length + 60, true);
       let i = 0;
       for (const p of L) {
         const S = rr(8, 20);

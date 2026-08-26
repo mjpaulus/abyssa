@@ -1,7 +1,7 @@
 // Seafloor terrain: heightfield, mesh, triplanar PBR material, caustics. OWNED BY: terrain agent.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, RIFT_R, zoneBottom, riftPos, SUN } from '../config.js';
+import { WORLD_R, RIFT_R, zoneTop, zoneBottom, riftPos, SUN } from '../config.js';
 import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textures.js';
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams } from './site.js';
@@ -777,6 +777,14 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   // under a black sky.
   causticsUniforms.uSunK.value = sunK;
   causticsUniforms.uSunW.value.set(SUN.dirWater.x, SUN.dirWater.y, SUN.dirWater.z);
+  // Zone gating: each 166k-tri heightfield is submitted only while the camera is
+  // inside its band — the same bands flora already runs (top+120 / bottom-150), which
+  // overlap 180 units through every rift so a descent or the ending's fast ascent
+  // never shows a frame with a missing floor. Visibility only: fillTerrain, the
+  // collision field (terrainH) and the roof shells are untouched.
+  for (let i = 0; i < 3; i++) {
+    terrainMeshes[i].visible = camY < zoneTop(i) + 120 && camY > zoneBottom(i) - 150;
+  }
   // A shell only exists for the player in the zone BELOW it, looking up: on when the
   // camera is 40 under the parent floor, off again 340 under (past the next floor,
   // where the zone below's own shell takes over). From above, backfaces + early-z
