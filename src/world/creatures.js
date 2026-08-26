@@ -99,23 +99,43 @@ function fishGeometry(o) {
     for (const v of verts) { pos.push(v[0], v[1], v[2]); uv.push(v[3], 2.0); }
     for (const tri of tris) idx.push(base + tri[0], base + tri[1], base + tri[2]);
   };
-  // caudal fin — uv.x runs past 1 so the shader whips it harder than the peduncle
+  // caudal fan — uv.x runs past 1 so the shader whips it harder than the peduncle.
+  // Interior column at the fork midline plus a trailing-edge pair at uv.x≈1.3: the
+  // existing >1 whip term then S-curls the fan through its depth, and the notch
+  // between the trailing tips gives the forked silhouette.
   const tl = o.tail, ty = tl * 0.78;
-  fin([[0, 0, -0.5, 1.0], [0, ty, -0.5 - tl, 1.16], [0, ty * 0.14, -0.5 - tl * 0.42, 1.06], [0, -ty, -0.5 - tl, 1.16]],
-    [[0, 1, 2], [0, 2, 3]]);
-  // dorsal — low, swept back so it hugs the spine instead of standing up like a sail
+  fin([
+    [0, 0, -0.5, 1.0],                              // 0 peduncle
+    [0, ty * 0.62, -0.5 - tl * 0.55, 1.12],         // 1 upper interior
+    [0, ty * 1.02, -0.5 - tl * 1.10, 1.30],         // 2 upper trailing tip
+    [0, ty * 0.10, -0.5 - tl * 0.40, 1.06],         // 3 fork notch
+    [0, -ty * 0.62, -0.5 - tl * 0.55, 1.12],        // 4 lower interior
+    [0, -ty * 1.02, -0.5 - tl * 1.10, 1.30]         // 5 lower trailing tip
+  ], [[0, 1, 3], [1, 2, 3], [0, 3, 4], [3, 5, 4]]);
+  // dorsal — low, swept back, with a soft-rayed trailing edge (2 tris)
   fin([[0, rAt(0.30) * o.h * 0.98, 0.20, 0.30], [0, rAt(0.74) * o.h * 0.98, -0.24, 0.74],
-  [0, rAt(0.5) * o.h + o.dorsal, -0.14, 0.60]], [[0, 2, 1]]);
+  [0, rAt(0.5) * o.h + o.dorsal, -0.14, 0.60],
+  [0, rAt(0.68) * o.h + o.dorsal * 0.45, -0.22, 0.70]], [[0, 2, 3], [0, 3, 1]]);
   // anal fin — small, tucked near the peduncle
   fin([[0, -rAt(0.60) * o.h * 0.95, -0.10, 0.60], [0, -rAt(0.86) * o.h * 0.95, -0.36, 0.86],
   [0, -rAt(0.72) * o.h - o.dorsal * 0.45, -0.30, 0.74]], [[0, 1, 2]]);
-  // pectorals — short and swept back/down
+  // pectorals — short and swept back/down, cambered quad (2 tris)
   const pr = rAt(0.32) * o.w;
   for (const s of [-1, 1]) fin(
     [[s * pr * 0.9, -0.02, 0.16, 0.32],
+    [s * (pr + o.pect * 0.6), -0.055, 0.06, 0.40],  // cambered mid-span, bowed down
     [s * (pr + o.pect), -0.08, -0.03, 0.46],
     [s * pr * 0.85, -0.03, -0.01, 0.44]],
-    [[0, 1, 2]]);
+    [[0, 1, 3], [1, 2, 3]]);
+  // pelvics — paired small tris under the belly, large-bodied species only
+  if (o.pelvic) {
+    const vr = rAt(0.48) * o.w;
+    for (const s of [-1, 1]) fin(
+      [[s * vr * 0.7, -rAt(0.48) * o.h * 0.9, 0.02, 0.48],
+      [s * vr * 0.7, -rAt(0.58) * o.h * 0.9, -0.08, 0.58],
+      [s * (vr * 0.7 + o.pect * 0.55), -rAt(0.53) * o.h * 0.9 - o.pect * 0.7, -0.05, 0.55]],
+      [[0, 1, 2]]);
+  }
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -162,6 +182,11 @@ function fishMaterial(sp) {
         // countershading: dark back, pale belly — reads instantly as a fish
         float shade = mix(1.35, 0.30, clamp(vFuv.y,0.0,1.0));
         diffuseColor.rgb *= vTint * mix(0.5, shade, body);
+        // eye: a black bead high on the head, both flanks (uv.y is side-symmetric).
+        // Same smoothstep-dot idiom as the shark — lo<hi always, reversed edges are UB.
+        float eyeD = length(vec2((vFuv.x-0.085)*1.9, clamp(vFuv.y,0.0,1.0)-0.72));
+        float eye = (1.0 - smoothstep(0.014, 0.040, eyeD)) * body;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.010, 0.012, 0.016), eye);
         // Reversed-edge smoothstep is UNDEFINED (GLSL spec) and returns 0.0 on this
         // driver — both photophore rows were dead. 1.0 - smoothstep(lo, hi, x) is the
         // same decreasing ramp, defined everywhere (see water.js foldK).
@@ -189,7 +214,7 @@ const SPECIES = [
     zi: 0, copies: 1, n: 22, sz: [1.1, 1.8], speed: 4.2, radius: 8, local: 2.0, fear: 18,
     rings: 7, sides: 7, w: 0.30, h: 0.62, taper: 0.5, tail: 0.42, dorsal: 0.12, pect: 0.09,
     col: 0xc9793c, jit: 0.24, glow: 0x54e6c8, glowI: 0.7, dots: 18, base: 0.0, rough: 0.42, metal: 0.16,
-    amp: 0.135, beat: 6.5, floorBias: 0.2
+    amp: 0.135, beat: 6.5, floorBias: 0.2, pelvic: 1
   },
   // zone 0 — deep-bodied reef grazer (disc silhouette, hugs the seagrass/kelp reef)
   {
@@ -221,7 +246,7 @@ const SPECIES = [
     zi: 1, copies: 1, n: 23, sz: [1.5, 2.4], speed: 3.6, radius: 9, local: 1.8, fear: 22,
     rings: 7, sides: 7, w: 0.26, h: 0.74, taper: 0.44, tail: 0.46, dorsal: 0.16, pect: 0.1,
     col: 0x6a3d86, jit: 0.2, glow: 0xff7ad8, glowI: 1.4, dots: 34, base: 0.019, rough: 0.5, metal: 0.1,     // glowI 3.4->1.4, base 0.008->0.019
-    amp: 0.1, beat: 5.2
+    amp: 0.1, beat: 5.2, pelvic: 1
   },
   // zone 2 — abyssal: near-transparent bodies, photophore rows doing the work
   {
@@ -234,7 +259,7 @@ const SPECIES = [
     zi: 2, copies: 1, n: 16, sz: [1.3, 2.1], speed: 2.8, radius: 10, local: 1.5, fear: 24,
     rings: 6, sides: 7, w: 0.24, h: 0.92, taper: 0.4, tail: 0.32, dorsal: 0.18, pect: 0.12,
     col: 0x2c4250, jit: 0.08, glow: 0xbfe8ff, glowI: 1.4, dots: 54, base: 0.084, rough: 0.22, metal: 0.55,  // glowI 6.5->1.4, base 0.018->0.084
-    amp: 0.08, beat: 4.2
+    amp: 0.08, beat: 4.2, pelvic: 1
   }
 ];
 
@@ -279,6 +304,8 @@ function buildSchool(sp, seed) {
     inst, mat, n, zi: sp.zi, sp, P, V, F, sz, seed,
     tint: geo.attributes.aTint, fdat: geo.attributes.aFish,
     bank: new Float32Array(n), phs: new Float32Array(n),
+    // per-fish proportion variety: depth (up-basis) and length (heading) multipliers
+    szY: new Float32Array(n), szL: new Float32Array(n),
     center: V3(), cvel: V3(), goal: V3(), goalT: 0,
     radius: sp.radius, speed: sp.speed, local: sp.local, fear: sp.fear,
     floorBias: sp.floorBias || 0,
@@ -302,6 +329,9 @@ function layoutSchool(S) {
     fdat[i * 2] = _cr() * 6.283;
     fdat[i * 2 + 1] = rr(0.85, 1.2);
     sz[i] = rr(sp.sz[0], sp.sz[1]);
+    // free silhouette variety: deep-bodied vs slender, stubby vs elongate
+    S.szY[i] = rr(0.88, 1.18);
+    S.szL[i] = rr(0.92, 1.08);
     P[i * 3] = rr(-sp.radius, sp.radius);
     P[i * 3 + 1] = rr(-sp.radius, sp.radius) * 0.4;
     P[i * 3 + 2] = rr(-sp.radius, sp.radius);
@@ -432,6 +462,14 @@ function updateSchool(S, dt, t) {
     let ny = y + vy * dt;
     if (ny < floorLocal) { ny = floorLocal; vy = Math.abs(vy); }
     P[i3] = x + vx * dt; P[i3 + 1] = ny; P[i3 + 2] = z + vz * dt;
+    // panic can fling fringe fish past the 2.2x bounding sphere and the frustum
+    // cull pops them — clamp local offsets inside 2.1x so the sphere always holds
+    const lr = S.radius * 2.1;
+    const ld2 = P[i3] * P[i3] + P[i3 + 1] * P[i3 + 1] + P[i3 + 2] * P[i3 + 2];
+    if (ld2 > lr * lr) {
+      const kk = lr / Math.sqrt(ld2);
+      P[i3] *= kk; P[i3 + 1] *= kk; P[i3 + 2] *= kk;
+    }
     V[i3] = vx; V[i3 + 1] = vy; V[i3 + 2] = vz;
 
     // heading includes the school's travel: fish visually lead the shoal
@@ -451,10 +489,11 @@ function updateSchool(S, dt, t) {
     rx /= rl; rz /= rl;
     const ux = hy * rz, uy = hz * rx - hx * rz, uz = -hy * rx;
     const cb = Math.cos(b), sb = Math.sin(b), s = S.sz[i];
+    const sy = s * S.szY[i], sl = s * S.szL[i];   // per-fish depth / length variety
     const o = i * 16;
     arr[o] = (rx * cb + ux * sb) * s; arr[o + 1] = uy * sb * s; arr[o + 2] = (rz * cb + uz * sb) * s; arr[o + 3] = 0;
-    arr[o + 4] = (ux * cb - rx * sb) * s; arr[o + 5] = uy * cb * s; arr[o + 6] = (uz * cb - rz * sb) * s; arr[o + 7] = 0;
-    arr[o + 8] = hx * s; arr[o + 9] = hy * s; arr[o + 10] = hz * s; arr[o + 11] = 0;
+    arr[o + 4] = (ux * cb - rx * sb) * sy; arr[o + 5] = uy * cb * sy; arr[o + 6] = (uz * cb - rz * sb) * sy; arr[o + 7] = 0;
+    arr[o + 8] = hx * sl; arr[o + 9] = hy * sl; arr[o + 10] = hz * sl; arr[o + 11] = 0;
     arr[o + 12] = c.x + P[i3]; arr[o + 13] = c.y + P[i3 + 1]; arr[o + 14] = c.z + P[i3 + 2]; arr[o + 15] = 1;
   }
   S.inst.instanceMatrix.needsUpdate = true;
@@ -491,7 +530,7 @@ function bellGeometry() {
   }
   // flared margin curling under the bell
   pts.push(new THREE.Vector2(1.06, -0.09), new THREE.Vector2(1.03, -0.19), new THREE.Vector2(0.93, -0.26));
-  return new THREE.LatheGeometry(pts, 24);
+  return new THREE.LatheGeometry(pts, 36);
 }
 
 const BELL_VERT = `
@@ -510,6 +549,13 @@ void main(){
   float wob = 1.0 + sin(uv.x*18.85 + uTime*0.7 + aSeed)*0.035*k;
   p.xz *= (1.0 - 0.33*c*k) * wob;
   p.y = p.y*(1.0 + 0.44*c) - 0.22*c*k;
+  // margin scallop keyed to the zone's rib count: the lip lags the bell (extra
+  // phase lag on the pulse), so each contraction rolls through a fluted skirt.
+  float lipM = smoothstep(0.75, 1.0, uv.y);
+  float cLag = contractAt(ph - uv.y*0.11 - 0.16);
+  float scal = cos(uv.x*6.2831853*aRibs);
+  p.xz *= 1.0 + 0.06*scal*lipM*(0.45 + 0.90*cLag);
+  p.y -= (0.5 + 0.5*scal)*lipM*0.05*cLag;
   vec4 wp = modelMatrix * instanceMatrix * vec4(p, 1.0);
   vN = normalize(mat3(modelMatrix) * (mat3(instanceMatrix) * normal));
   vV = normalize(cameraPosition - wp.xyz);

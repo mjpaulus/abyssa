@@ -227,6 +227,9 @@ function crabMaterial() {
         transformed.x += sin(vlP * 3.1) * 0.035 * vlLeg;
         transformed.z += cos(vlP * 2.3) * 0.025 * vlLeg;
         transformed.y += sin(vlP * 0.9) * 0.012;
+        // occasional claw lift: only the claw verts (x > 0.15), on a slow beat —
+        // a threat display held for a breath, then lowered
+        transformed.y += max(0.0, sin(vlP * 0.5)) * 0.06 * step(0.15, position.x);
         transformed *= uVis;
         vShade = 0.80 + 0.28 * fract(aCrab.x * 2.9);`);
     sh.fragmentShader = sh.fragmentShader
