@@ -56,7 +56,7 @@ export const wreckColliders = [];
 const RELIC_REACH = 4.2;
 
 // One shared uniform block: the whole ambient layer animates off two writes per frame.
-const uni = { uTime: { value: 0 } };
+const uni = { uTime: { value: 0 }, uFogD: { value: 0.016 } };
 
 // ---------------------------------------------------------------- textures ---
 // One height field per material drives albedo, roughness and normal together, so wear
@@ -213,6 +213,7 @@ function palette(zi) {
     glass: siltify(std({
       color: 0x9fd8e8, roughness: 0.14, metalness: 0.1, vertexColors: true,
       emissive: 0x2a5a68, emissiveIntensity: 0.6, transparent: true, opacity: 0.55,
+      depthWrite: false,   // transparent glass must not occlude what sorts behind it
       envMap: envTex, envMapIntensity: 0.7
     }), zi),
     lit: new THREE.MeshStandardMaterial({
@@ -350,8 +351,8 @@ function dustCloud(n, sx, sy, sz, color) {
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('aP', new THREE.BufferAttribute(par, 3));
   const m = new THREE.ShaderMaterial({
-    uniforms: { uTime: uni.uTime, uH: { value: sy }, uColor: { value: new THREE.Color(color) } },
-    vertexShader: `uniform float uTime, uH; attribute vec3 aP; varying float vA;
+    uniforms: { uTime: uni.uTime, uFogD: uni.uFogD, uH: { value: sy }, uColor: { value: new THREE.Color(color) } },
+    vertexShader: `uniform float uTime, uH, uFogD; attribute vec3 aP; varying float vA;
       void main(){
         vec3 p = position;
         p.y = mod(p.y + uTime * aP.x * 0.20, uH);
@@ -361,7 +362,9 @@ function dustCloud(n, sx, sy, sz, color) {
         float d = -mv.z;
         gl_PointSize = clamp(aP.z * 34.0 / max(d, 0.6), 1.0, 7.0);
         // fade at both ends of the wrap so recycling never pops
-        vA = smoothstep(0.0, 0.18, p.y / uH) * (1.0 - smoothstep(0.72, 1.0, p.y / uH)) * exp(-d * 0.020);
+        // uFogD tracks scene.fog.density per frame (house rule for fog:false additive
+        // sprites) instead of a hardcoded boot-time density.
+        vA = smoothstep(0.0, 0.18, p.y / uH) * (1.0 - smoothstep(0.72, 1.0, p.y / uH)) * exp(-d * uFogD);
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `uniform vec3 uColor; varying float vA;
@@ -998,6 +1001,7 @@ export function reseedWrecks(toolsOwned) {
 export function updateWrecks(dt, t) {
   if (!built) return;
   uni.uTime.value = t;
+  if (scene.fog) uni.uFogD.value = scene.fog.density;
   const cy = camera.position.y;
   for (let i = 0; i < WRECKS.length; i++) {
     const W = WRECKS[i];

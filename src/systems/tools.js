@@ -25,7 +25,7 @@
 // creatures.js). The per-frame `uFogD` write is part of the pattern, not optional —
 // without it the plume keeps core.js's boot density and stops sitting in the water.
 import * as THREE from 'three';
-import { scene } from '../core.js';
+import { scene, envTex } from '../core.js';
 import { ZONE_GAP, RIFT_R, riftPos, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { glowTex, canvas2d, noiseCanvas } from '../lib/textures.js';
@@ -90,7 +90,7 @@ function buildSonar() {
   const sm = new THREE.ShaderMaterial({
     uniforms: { uA: { value: 0 }, uC: { value: new THREE.Vector3(0.62, 0.88, 0.92) } },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide, fog: false,
+    side: THREE.DoubleSide, forceSinglePass: true, fog: false,
     vertexShader: `
       varying vec3 vN, vW;
       void main(){
@@ -121,7 +121,7 @@ function buildSonar() {
   const rm = new THREE.ShaderMaterial({
     uniforms: { uA: { value: 0 }, uC: { value: new THREE.Vector3(0.66, 0.90, 0.94) } },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide, fog: false,
+    side: THREE.DoubleSide, forceSinglePass: true, fog: false,
     vertexShader: `varying vec2 vUv;
       void main(){ vUv = uv;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
@@ -304,9 +304,15 @@ function buildSpear() {
   trailG.rotateX(Math.PI / 2);
   trailG.translate(0, 0, -1.6);
 
-  const steel = new THREE.MeshStandardMaterial({ color: 0x8d949a, roughness: 0.38, metalness: 0.85 });
+  // envMap is what keeps high-metalness surfaces from rendering as a black stick
+  // underwater (no IBL = a metal reflects nothing) — same pattern as wrecks.js's
+  // iron/brass palette, at a modest intensity so the spear glints, never beacons.
+  const steel = new THREE.MeshStandardMaterial({
+    color: 0x8d949a, roughness: 0.38, metalness: 0.85, envMap: envTex, envMapIntensity: 0.25
+  });
   const brass = new THREE.MeshStandardMaterial({
-    color: 0xa8813a, roughness: 0.34, metalness: 0.9, emissive: 0x2a1c06, emissiveIntensity: 0.6
+    color: 0xa8813a, roughness: 0.34, metalness: 0.9, emissive: 0x2a1c06, emissiveIntensity: 0.6,
+    envMap: envTex, envMapIntensity: 0.25
   });
 
   for (let i = 0; i < SPEAR_N; i++) {
@@ -591,7 +597,7 @@ function buildThruster() {
   const ringMat = () => new THREE.ShaderMaterial({
     uniforms: { uA: { value: 0 }, uFogD },
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
+    side: THREE.DoubleSide, forceSinglePass: true,
     vertexShader: `varying vec2 vUv; varying float vFog;
       ${FOG_GLSL}
       void main(){ vUv = uv;

@@ -383,22 +383,27 @@ uniform float uTime, uCamY, uCaust, uWet, uSunK;
 uniform vec3 uSunW;
 varying vec3 vWPos, vWNrm;
 
+// NOTE: no early return before the side taps. A return inside non-uniform control flow
+// leaves the remaining texture2D calls with undefined derivatives on quads straddling
+// the bw.y threshold — measured as sparkle along the flat/steep contour. All taps are
+// unconditional; the flat-ground fast path is selected with step/mix instead.
 vec4 tpDetail(vec3 p, vec3 bw, float s) {
   vec4 a = texture2D(uDetail, p.xz * s);
-  if (bw.y > 0.93) return a;
-  return a * bw.y + texture2D(uDetail, p.zy * s) * bw.x + texture2D(uDetail, p.xy * s) * bw.z;
+  vec4 tri = a * bw.y + texture2D(uDetail, p.zy * s) * bw.x + texture2D(uDetail, p.xy * s) * bw.z;
+  return mix(tri, a, step(0.93, bw.y));
 }
 
 // Whiteout-blended triplanar normal; cliffs get all three planes, flat ground one tap.
 vec3 tpNormal(vec3 p, vec3 n, vec3 bw, float s, float str) {
   vec3 ty = texture2D(uRockN, p.xz * s).xyz * 2.0 - 1.0;
-  if (bw.y > 0.93) return normalize(vec3(n.x + ty.x * str, n.y, n.z + ty.y * str));
   vec3 tx = texture2D(uRockN, p.zy * s).xyz * 2.0 - 1.0;
   vec3 tz = texture2D(uRockN, p.xy * s).xyz * 2.0 - 1.0;
+  vec3 flat_ = normalize(vec3(n.x + ty.x * str, n.y, n.z + ty.y * str));
   vec3 wx = vec3(tx.xy * str + n.zy, abs(tx.z) * n.x);
   vec3 wy = vec3(ty.xy * str + n.xz, abs(ty.z) * n.y);
   vec3 wz = vec3(tz.xy * str + n.xy, abs(tz.z) * n.z);
-  return normalize(wx.zyx * bw.x + wy.xzy * bw.y + wz.xyz * bw.z);
+  vec3 tri = normalize(wx.zyx * bw.x + wy.xzy * bw.y + wz.xyz * bw.z);
+  return mix(tri, flat_, step(0.93, bw.y));
 }
 
 // Refracted-light filament: warped interference field, thresholded hard so the
