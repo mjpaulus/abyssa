@@ -351,7 +351,12 @@ export class VolumetricLightPass extends Pass {
     // (water.js vFade fixed, base 0.42) the pair double-exposed at 1.05; 0.85 keeps
     // the broad columns under the billboard accents — lit, not milky (judged live at
     // ~20 m, clear noon).
-    this.intensity = 0.85;
+    // RE-TUNED 2026-08-28: the composite grew a Reinhard shoulder (vol/(1+vol))
+    // before the add — dense shafts used to clip to flat cyan-white against the
+    // ACES-mapped base. The shoulder costs ~20% in the mids, so 0.85 -> 1.0 restores
+    // the tuned mid-column brightness while the peaks now roll off with visible
+    // internal falloff (judged live at ~25 m, clear noon, up-sun).
+    this.intensity = 1.0;
     this.occlusion = true;
     this.resDiv = 2;
 
