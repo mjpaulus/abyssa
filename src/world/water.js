@@ -1474,6 +1474,8 @@ export function surfaceBoil(x, z, strength) {
   const amp = Math.min(1.6, b.z + strength);
   b.set(x, z, amp, 0.9 + 0.6 * Math.min(1, amp));
 }
+// debug surface (kept, like window.pred / window.__helm)
+if (typeof window !== 'undefined') window.__boil = () => uBoil.value;
 
 // Unrolled from JS because GLSL ES 1.00 (what three compiles a plain ShaderMaterial as)
 // has no array constructors — `const float A[6] = float[6](...)` is a 3.00-only form.
