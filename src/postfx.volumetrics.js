@@ -250,8 +250,13 @@ void main(){
   bw = fr.x * fr.y;
   w = bw / ( 0.05 + abs( s.a - zc ) ); sum += s.rgb * w; wsum += w;
 
-  vec3 vol = wsum > 1e-6 ? sum / wsum : texture2D( tVol, vUv ).rgb;
-  gl_FragColor = vec4( base + max( vec3( 0.0 ), vol ) * uIntensity, 1.0 );
+  vec3 vol = max( vec3( 0.0 ), wsum > 1e-6 ? sum / wsum : texture2D( tVol, vUv ).rgb );
+  // Reinhard shoulder on the inscatter before the add: the base is already ACES
+  // tone-mapped (display-referred), so adding RAW linear inscatter clipped dense
+  // shafts to a flat cyan-white sheet. vol/(1+vol) rolls the top off smoothly, so a
+  // bright shaft keeps internal falloff — lit, not milky.
+  vol = vol / ( vec3( 1.0 ) + vol );
+  gl_FragColor = vec4( base + vol * uIntensity, 1.0 );
 }`;
 
 // ---------------------------------------------------------------------------
@@ -346,7 +351,12 @@ export class VolumetricLightPass extends Pass {
     // (water.js vFade fixed, base 0.42) the pair double-exposed at 1.05; 0.85 keeps
     // the broad columns under the billboard accents — lit, not milky (judged live at
     // ~20 m, clear noon).
-    this.intensity = 0.85;
+    // RE-TUNED 2026-08-28: the composite grew a Reinhard shoulder (vol/(1+vol))
+    // before the add — dense shafts used to clip to flat cyan-white against the
+    // ACES-mapped base. The shoulder costs ~20% in the mids, so 0.85 -> 1.0 restores
+    // the tuned mid-column brightness while the peaks now roll off with visible
+    // internal falloff (judged live at ~25 m, clear noon, up-sun).
+    this.intensity = 1.0;
     this.occlusion = true;
     this.resDiv = 2;
 

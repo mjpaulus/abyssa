@@ -29,7 +29,13 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 // are dark, not because the exposure is low.
 renderer.toneMappingExposure = 1.32;
 
-export const composer = new EffectComposer(renderer, { multisampling: 0 });
+// HalfFloat intermediates: tone mapping is baked at scene render (renderer-level
+// ACES), so the data through the chain is display-referred either way — the win is
+// PRECISION. 8-bit unorm buffers quantised every deep-water gradient to 256 steps
+// per channel and clipped every intermediate (bloom mips, DoF CoC blends) at 1.0.
+export const composer = new EffectComposer(renderer, {
+  multisampling: 0, frameBufferType: THREE.HalfFloatType
+});
 composer.addPass(new RenderPass(scene, camera));
 
 // The composer attaches its DepthTexture to only ONE of its two ping-pong buffers.
@@ -65,8 +71,15 @@ class GrainEffect extends Effect {
     super('AbyssaGrain', `
       uniform float uAmount;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
-        float g = fract(sin(dot(uv * resolution + fract(time) * 91.7, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        // fract(time * phi): the old fract(time) re-rolled the pattern once per SECOND
+        // (integer crossings), a visible 1 Hz tick on a still camera in murk. The
+        // golden-ratio rate never revisits an offset and re-rolls every frame.
+        float g = fract(sin(dot(uv * resolution + fract(time * 0.6180339887) * 91.7, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
         vec3 c = inputColor.rgb + g * uAmount * (1.0 - smoothstep(0.0, 0.75, luminance(inputColor.rgb)));
+        // Unweighted zero-mean dither at +-0.5/255: breaks up 8-bit quantisation bands
+        // on smooth mid-tone water gradients, where the shadow-weighted grain above has
+        // already faded out. Sub-LSB amplitude, so it is invisible as texture.
+        c += g * 0.0039215686;
         outputColor = vec4(max(c, 0.0), inputColor.a);
       }`, {
       blendFunction: BlendFunction.NORMAL,
@@ -79,6 +92,9 @@ const grain = new GrainEffect();
 // emit NaN into the buffer, and every comparison against NaN is false, so the clamp
 // is written comparison-first. Runs LAST in the main EffectPass, after DoF and the
 // mipmap-bloom contribution have been blended, so nothing bad leaves the pass.
+// SCOPE: this scrubs the merged-pass OUTPUT only. A NaN that enters bloom's or DoF's
+// internal render targets (mip chain, CoC buffer) propagates inside those effects
+// unprotected — guarding that would need material-level fixes at the NaN's source.
 class FiniteEffect extends Effect {
   constructor() {
     super('AbyssaFinite', `
@@ -129,29 +145,43 @@ const GRADE_LOOKS = [
 const __grade = { amount: 0.15 };
 if (typeof window !== 'undefined') window.__grade = __grade;
 const _gv = new THREE.Vector3();
+// Uniform refs cached once (zero-alloc convention): the old loop built
+// 'u' + key[0].toUpperCase() + key.slice(1) strings every frame.
+const _gradeU = {
+  slope: grade.uniforms.get('uSlope'),
+  offset: grade.uniforms.get('uOffset'),
+  power: grade.uniforms.get('uPower'),
+  sat: grade.uniforms.get('uSat')
+};
+const _gradeKeys = ['slope', 'offset', 'power'];
 function updateGrade() {
   const k = Math.max(0, Math.min(1, __grade.amount));
-  const gu = grade.uniforms;
   if (k <= 0.001) {
-    gu.get('uSlope').value.set(1, 1, 1); gu.get('uOffset').value.set(0, 0, 0);
-    gu.get('uPower').value.set(1, 1, 1); gu.get('uSat').value = 1;
+    _gradeU.slope.value.set(1, 1, 1); _gradeU.offset.value.set(0, 0, 0);
+    _gradeU.power.value.set(1, 1, 1); _gradeU.sat.value = 1;
     return;
   }
-  const d = Math.max(0, Math.min(1, -camera.position.y / 650));
+  // Depth ramp runs the full column (~-900), not just to -650: the shipped look
+  // lands unchanged at -650 (d = 1 there), then drifts a touch deeper and quieter
+  // to -900 — the abyss keeps darkening character without changing hue.
+  const y = -camera.position.y;
+  const d = Math.min(1, y / 650) + Math.max(0, Math.min(1, (y - 650) / 250)) * 0.18;
   const a = GRADE_LOOKS[0], b = GRADE_LOOKS[1];
-  for (const key of ['slope', 'offset', 'power']) {
+  for (const key of _gradeKeys) {
     const neutral = key === 'offset' ? 0 : 1;
     _gv.set(0, 0, 0);
     for (let i = 0; i < 3; i++) {
       const v = a[key][i] + (b[key][i] - a[key][i]) * d;
       _gv.setComponent(i, neutral + (v - neutral) * k);
     }
-    gu.get('u' + key[0].toUpperCase() + key.slice(1)).value.copy(_gv);
+    _gradeU[key].value.copy(_gv);
   }
-  gu.get('uSat').value = 1 + (a.sat + (b.sat - a.sat) * d - 1) * k;
+  _gradeU.sat.value = 1 + (a.sat + (b.sat - a.sat) * d - 1) * k;
 }
+// Equal offset components: radialModulation does the directional shaping, and an
+// asymmetric base offset read as a diagonal smear on wide windows.
 const chroma = new ChromaticAberrationEffect({
-  offset: new THREE.Vector2(0.0009, 0.0006), radialModulation: true, modulationOffset: 0.35
+  offset: new THREE.Vector2(0.0008, 0.0008), radialModulation: true, modulationOffset: 0.35
 });
 
 // SMAA replaces the MSAA we disabled during the black-box investigation: it runs
@@ -159,9 +189,10 @@ const chroma = new ChromaticAberrationEffect({
 const smaa = new SMAAEffect({ preset: SMAAPreset.HIGH });
 
 // Vignette and grain moved OUT of this pass: they used to run before SMAA, which
-// then smoothed the grain like an edge. They now live with SMAA in the final pass
-// (SMAA is the pass's one convolution effect, so it sorts first within it) — zero
-// extra passes, and the grain lands on the antialiased frame.
+// then smoothed the grain like an edge. They now live with SMAA in the final pass.
+// NOTE: the library does NOT reorder effects — they run in the order given (and it
+// throws on >1 convolution effect per pass) — so SMAA must be listed FIRST in that
+// pass by hand, and it is. Zero extra passes; grain lands on the antialiased frame.
 let effects = [dof, bloom, chroma, grade, finite];
 let normalPass = null, effectPass = null, n8aoPass = null;
 // Prefer N8AO (ground-truth-ish AO, far richer contact shading than the old SSAO);
@@ -198,7 +229,8 @@ effectPass = new EffectPass(camera, ...effects);
 composer.addPass(effectPass);
 // SMAA is a convolution effect and cannot share a pass with ChromaticAberration; it
 // runs last so it smooths the whole graded frame. Vignette and grain ride the same
-// pass AFTER it (convolution sorts first within a pass), so grain is never blurred.
+// pass, listed AFTER it — the library runs effects in the order GIVEN (it does not
+// sort convolutions first), so this argument order is what keeps grain unblurred.
 const smaaPass = new EffectPass(camera, smaa, vignette, grain);
 composer.addPass(smaaPass);
 
@@ -248,6 +280,7 @@ onResize((w, h) => composer.setSize(w, h, false));
 // Focus tracks the diver (playerLightSrc rides him) with a lens-like lag.
 const focusTarget = new THREE.Vector3();
 let focusDist = 9;
+let air = 0;
 
 // Diagnostic escape hatch (P key): render the scene straight to the canvas. Tone
 // mapping lives on the renderer, so bypass and composer output match in exposure.
@@ -277,7 +310,11 @@ export function render(dt) {
   // air/water blend lighting.js uses for its regime change, so the lens and the light
   // cross the surface together. In air the band opens ~4x and the bokeh nearly closes;
   // below the interface every frame is byte-identical to before.
-  const air = THREE.MathUtils.clamp((camera.position.y - SURFACE_Y + 0.6) / 1.6, 0, 1);
+  // The blend is LAGGED like focusDist: recomputing it instantly from camera.y made
+  // background sharpness pulse at wave frequency in a swell (the camera bobs across
+  // the 1.6-unit band every trough), a visible focus "breathing" from the deck.
+  const airWant = THREE.MathUtils.clamp((camera.position.y - SURFACE_Y + 0.6) / 1.6, 0, 1);
+  air += (airWant - air) * Math.min(1, (dt || 0.016) * 3.5);
   if ('worldFocusRange' in cm) cm.worldFocusRange = 42 * (1 + 3 * air);
   dof.bokehScale = 1.35 * (1 - air) + 0.15 * air;
   updateGrade();
@@ -294,8 +331,10 @@ let perfT = 0, perfN = 0, perfDone = false;
 // full shed had fired). The sea being a window is a headline feature now; it goes
 // LAST. Each rung gets its own fresh SUSTAIN of evidence before the next fires:
 //   1. refraction target quartered      (~4x cheaper, transparency kept)
-//   2. volumetrics + AO off             (the two historically-heaviest passes)
-//   3. full shed                        (shadows, simplified chain, refraction gone)
+//   2. volumetrics cheapened            (occlusion march off, third-res march;
+//                                        the shafts survive, softer and ~4x cheaper)
+//   3. volumetrics + AO off             (the two historically-heaviest passes)
+//   4. full shed                        (shadows, simplified chain, refraction gone)
 let degradeStage = 0;
 function degradeQuality() {
   degradeStage++;
@@ -305,11 +344,19 @@ function degradeQuality() {
     return false;
   }
   if (degradeStage === 2) {
+    if (volPass) {
+      volPass.occlusion = false;
+      volPass.setResolutionDivisor(3);
+    }
+    console.info('ABYSSA: perf tier 2 — volumetrics cheapened (no occlusion, third-res)');
+    return false;
+  }
+  if (degradeStage === 3) {
     setVolumetrics(false);
     if (n8aoPass) { composer.removePass(n8aoPass); n8aoPass = null; }
     // The sun shadow is raft-only cosmetics; it goes long before transparency does.
     parkSunShadow();
-    console.info('ABYSSA: perf tier 2 — volumetrics, AO and sun shadow off');
+    console.info('ABYSSA: perf tier 3 — volumetrics, AO and sun shadow off');
     return false;
   }
   degradeRefraction();
