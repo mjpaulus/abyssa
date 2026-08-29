@@ -10,7 +10,7 @@ import { raft } from '../systems/raft.js';
 import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // Exhaust bubbles die INTO the swell, not at a flat plane; survival's air fraction
 // drives the breath cadence. (No cycles: neither module imports the diver.)
-import { surfaceHeightAt, stormLevel } from '../world/water.js';
+import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
 
@@ -912,13 +912,24 @@ export const diver = (() => {
 // size-dependent terminal velocity, corkscrew (small = fast tight helix, big = slow
 // wide one), expand as the pressure comes off on a long climb, and die into the actual
 // swell surface rather than a flat plane.
-const BUBN = 96;
-const bubbles = new THREE.InstancedMesh(
-  new THREE.SphereGeometry(1, 7, 5),
-  new THREE.MeshStandardMaterial({
-    color: 0xd6ecff, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.5,
-    depthWrite: false, envMap: envTex, envMapIntensity: 1.6
-  }), BUBN);
+const BUBN = 200;
+const bubMat = new THREE.MeshStandardMaterial({
+  color: 0xd6ecff, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.62,
+  depthWrite: false, envMap: envTex, envMapIntensity: 2.0
+});
+// Silvery fresnel rim — a real bubble is a mirror at grazing incidence, and at the
+// 9-unit third-person distance the flat translucent ball read as nothing at all. An
+// emissive rim (NOT additive glow: it still fogs, still darkens with depth via the
+// per-channel fog chunk applied after) puts a bright edge on every bubble that
+// catches whatever the water's own light is doing. No backticks live in this GLSL.
+bubMat.onBeforeCompile = (sh) => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+    '#include <emissivemap_fragment>\n' +
+    'float bubFr = pow( 1.0 - abs( dot( normalize( vNormal ), normalize( vViewPosition ) ) ), 3.0 );\n' +
+    'totalEmissiveRadiance += vec3( 0.60, 0.71, 0.80 ) * bubFr * 0.60;');
+};
+bubMat.customProgramCacheKey = () => 'salBubbleRim';
+const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 7, 5), bubMat, BUBN);
 bubbles.frustumCulled = false;
 bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 bubbles.castShadow = bubbles.receiveShadow = false;
@@ -927,21 +938,24 @@ const bub = [];
 for (let i = 0; i < BUBN; i++) bub.push({ p: V3(), v: V3(), r: 0, y0: 0, wf: 1, wa: 0, life: 0, max: 1, ph: rng(0, 7) });
 
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sv = V3(1, 1, 1), _tmp = V3(), _ex = V3();
+const _drift = V3();                  // per-burst emission bias (head-turn column drift)
 let bubCursor = 0, trickle = 1.2;
 
 // Deterministic per-breath hash — the per-frame trail path never touches Math.random.
 const h01 = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
 
-function emitBubble(at, vel, rMin, rMax, seed) {
+// wobK scales the helix radius — the occasional big "gulp" bubble wobbles hard.
+function emitBubble(at, vel, rMin, rMax, seed, wobK = 1) {
   const b = bub[bubCursor]; bubCursor = (bubCursor + 1) % BUBN;
   const j1 = h01(seed) - 0.5, j2 = h01(seed + 17.3) - 0.5, j3 = h01(seed + 41.7) - 0.5;
   b.p.copy(at).add(_tmp.set(j1 * 0.09, j2 * 0.05, j3 * 0.09));
-  b.v.set(j2 * 0.35, 0.55 + h01(seed + 5.1) * 0.5, j1 * 0.35).addScaledVector(vel, 0.22);
+  b.v.set(j2 * 0.35, 0.55 + h01(seed + 5.1) * 0.5, j1 * 0.35)
+    .addScaledVector(vel, 0.22).add(_drift);
   b.r = rMin + (rMax - rMin) * h01(seed + 9.7);
   b.y0 = b.p.y;
   // Helix: frequency inversely proportional to size, radius growing with size.
   b.wf = clamp(0.14 / b.r, 3.0, 11.0);
-  b.wa = clamp(0.09 + b.r * 2.2, 0.1, 0.28);
+  b.wa = clamp((0.09 + b.r * 2.2) * wobK, 0.1, 0.55);
   b.ph = h01(seed + 23.9) * TAU;
   b.max = 24; b.life = b.max;         // long enough to make the surface from depth
 }
@@ -967,7 +981,13 @@ function updateBubbles(dt, t, vel) {
       // A bubble that reaches the surface vanishes INTO it — sampled at the real
       // swell height, not the flat datum, so none linger under a trough or pop
       // through a crest into the sky.
-      if (b.p.y >= SURFACE_Y + surfaceHeightAt(b.p.x, b.p.z, t, storm)) b.life = 0;
+      if (b.p.y >= SURFACE_Y + surfaceHeightAt(b.p.x, b.p.z, t, storm)) {
+        b.life = 0;
+        // The death site BOILS: every bubble that makes the ceiling feeds the water
+        // shader's boil patch, sized by the bubble that burst. A dense burst arriving
+        // over ~a second holds the patch seething; a stray trickle barely dimples it.
+        surfaceBoil(b.p.x, b.p.z, clamp(b.r * grow * 2.6, 0.05, 0.45));
+      }
       const k = b.life / b.max;
       _sv.setScalar(b.r * grow * ss(0, 0.04, 1 - k) * ss(0, 0.06, k));
     } else _sv.setScalar(0);
@@ -989,6 +1009,11 @@ let breathAmp = 1;             // shoulder-lift scale, read by poseWalk
 let breathIdx = 0;             // completed-cycle counter (audio sync + hashes)
 let burstT = -1, burstDur = 0.5, burstNext = 0, burstStep = 0.05, burstSeed = 0;
 let ascVent = 0, _phPrev = 0;               // extra venting while rising fast — expanding air
+// Per-breath character, all phase-hashed off breathIdx (deterministic, no Math.random
+// in the frame path). cycMul spreads the rest cadence across ~3.2-5.2 s; a held breath
+// (about one in ten) stretches to ~6 s and releaseK makes the release that follows it
+// visibly BIGGER. dblT schedules the occasional valve-chatter double burst.
+let cycMul = 1, releaseK = 1, dblT = -1, dblSeed = 0;
 
 export function breathPhase() { return breathPh % TAU; }
 export function breathCount() { return breathIdx; }
@@ -1779,7 +1804,11 @@ export function updateDiver(dt, t, player) {
     let cyc = lerp(BR_REST, BR_WORK, exert);
     cyc = lerp(cyc, BR_PANIC, airLow * 0.85);                 // starving for air: fast...
     breathAmp = (1 - 0.5 * airLow) * (1 + 0.25 * exert);      // ...and thin. Panic read.
-    breathPh += (TAU / cyc) * (1 + 0.09 * Math.sin(t * 0.079)) * dt;
+    // cycMul is this breath's own length (set at each cycle wrap below): at rest it
+    // spreads 3.2-5.2 s with occasional ~6 s held breaths. Exertion and low air narrow
+    // the spread back toward the metered cadence — a sprinting diver cannot hold one.
+    const varK = lerp(cycMul, 1, clamp(exert * 0.8 + airLow * 0.9, 0, 1));
+    breathPh += (TAU / (cyc * varK)) * (1 + 0.09 * Math.sin(t * 0.079)) * dt;
   }
   // Published to player.js, which shapes the forward thrust on swimP (the visible kick IS
   // the push) and lands the per-stride water resistance on walkP's heel strike. Two scalar
@@ -1978,29 +2007,70 @@ export function updateDiver(dt, t, player) {
   diver.exhaust.getWorldPosition(_ex);
   const submerged = _ex.y < SURFACE_Y + surfaceHeightAt(_ex.x, _ex.z, t, stormLevel());
   const phm = breathPh % TAU;
-  if (phm < _phPrev) breathIdx++;                       // wrapped: a cycle completed
+  if (phm < _phPrev) {                                  // wrapped: a cycle completed
+    breathIdx++;
+    // Roll the NEW cycle's character. About 1 in 10 breaths is HELD (~1.45-1.75x rest
+    // length) and the release that ends it comes out half again as big; the rest
+    // spread the cadence 0.78-1.27x (3.2-5.2 s at rest).
+    const hh = h01(breathIdx * 5.13 + 0.7);
+    if (hh < 0.10) { cycMul = 1.45 + 0.30 * h01(breathIdx * 9.1 + 3.3); releaseK = 1.55; }
+    else { cycMul = 0.78 + 0.49 * hh; releaseK = 1; }
+  }
   if (_phPrev < Math.PI && phm >= Math.PI && phm < _phPrev + 2) {
-    // Exhale opens the valve: 1-2 large lead bubbles now, then a trail of small ones
-    // over ~half a second. Every draw in the burst is hashed off its seed — repeatable,
-    // and nothing in the per-frame path touches Math.random.
+    // Exhale opens the valve. Per-breath character, all hashed off the seed —
+    // repeatable, and nothing in the per-frame path touches Math.random:
+    //   - burst CLASS: ~1 in 4 breaths is a thin sip (2-4 bubbles), ~1 in 5 a heavy
+    //     dump (14-20), the rest in between;
+    //   - lead bubbles: 1-3 of them, sized 0.11-0.17 with a further ±60% per breath;
+    //   - ~1 in 8 breaths passes one big GULP bubble that wobbles hard on the rise;
+    //   - trail runs 0.3-1.0 s;
+    //   - a held breath's release (releaseK) is ~1.5x everything;
+    //   - ~1 in 3 breaths while the head is turned drifts the whole column that way.
     burstSeed = breathIdx * 61.7 + 13.1;
-    burstDur = 0.42 + 0.18 * h01(burstSeed + 1);
+    burstDur = 0.3 + 0.7 * h01(burstSeed + 1);
     const airLow = 1 - clamp(survival.oxygen / 0.35, 0, 1);
-    const leads = 1 + (h01(burstSeed + 2) < 0.55 ? 1 : 0);
-    const trailN = Math.max(3, Math.round((7 + h01(burstSeed + 3) * 7) * (1 - 0.5 * airLow) * (1 + 0.35 * exert)));
+    const cls = h01(burstSeed + 4);
+    let trailN = cls < 0.25 ? 2 + Math.round(2 * h01(burstSeed + 5))
+      : cls > 0.80 ? 14 + Math.round(6 * h01(burstSeed + 5))
+        : 6 + Math.round(6 * h01(burstSeed + 5));
+    trailN = Math.max(2, Math.round(trailN * (1 - 0.5 * airLow) * (1 + 0.35 * exert) * releaseK));
+    const leads = Math.max(1, Math.round((1 + h01(burstSeed + 2) * 2) * (cls < 0.25 ? 0.6 : 1) * releaseK));
+    const leadMul = (0.4 + 1.2 * h01(burstSeed + 11)) * releaseK;   // ±60% lead size
     burstStep = burstDur / trailN;
     burstT = 0; burstNext = 0.06;
-    if (submerged) for (let i = 0; i < leads; i++)
-      emitBubble(_ex, player.vel, 0.05, 0.078, burstSeed + 100 + i * 7.7);
+    // Head-turn column drift: bias this whole burst's emission toward where the head
+    // points. Read from the posed neck yaw + body yaw, world-space.
+    _drift.set(0, 0, 0);
+    if (h01(burstSeed + 8) < 0.35) {
+      const hy = diver.rotation.y + po[CH.nYaw] * 1.8;
+      const dk = clamp(Math.abs(po[CH.nYaw]) * 4, 0, 1) * 0.35;
+      _drift.set(Math.sin(hy) * dk, 0, Math.cos(hy) * dk);
+    }
+    if (submerged) {
+      for (let i = 0; i < leads; i++)
+        emitBubble(_ex, player.vel, 0.11 * leadMul, 0.17 * leadMul, burstSeed + 100 + i * 7.7);
+      if (h01(burstSeed + 7) < 0.125)                    // the gulp: big, wobbling hard
+        emitBubble(_ex, player.vel, 0.17, 0.23, burstSeed + 550, 2.4);
+    }
+    // Valve chatter: ~1 in 5 breaths fires a second, smaller spit shortly after.
+    dblT = h01(burstSeed + 6) < 0.20 ? 0.22 + 0.18 * h01(burstSeed + 66) : -1;
+    dblSeed = burstSeed + 700;
   }
   _phPrev = phm;
+  if (dblT >= 0) {                                      // the chattering second spit
+    dblT -= dt;
+    if (dblT < 0 && submerged) {
+      for (let i = 0; i < 3; i++)
+        emitBubble(_ex, player.vel, 0.06, 0.11, dblSeed + i * 11.3);
+    }
+  }
   if (burstT >= 0) {                                    // the trail of the current exhale
     burstT += dt;
     while (burstNext <= burstT && burstNext <= burstDur) {
-      if (submerged) emitBubble(_ex, player.vel, 0.013, 0.036, burstSeed + 200 + burstNext * 97);
+      if (submerged) emitBubble(_ex, player.vel, 0.018, 0.05, burstSeed + 200 + burstNext * 97);
       burstNext += burstStep * (0.7 + 0.6 * h01(burstSeed + 300 + burstNext * 53));
     }
-    if (burstT > burstDur) burstT = -1;
+    if (burstT > burstDur) { burstT = -1; _drift.set(0, 0, 0); }
   }
   // between breaths: a rare stray bubble leaking past the valve seat, nothing more
   trickle -= dt;

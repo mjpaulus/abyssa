@@ -1305,6 +1305,13 @@ const uLagW = { value: new THREE.Vector3(1, 1, 1) };
 // the three lagged foam samples against the live one, i.e. how much lingering foam there
 // is relative to freshly-born foam.
 const uChopX = { value: new THREE.Vector2(GLASS.chop.streakLegacy, GLASS.chop.foamLagK) };
+
+// SURFACE BOIL. One externally-driven boil site (x, z, amp, radius) — the patch of sea
+// Sal's exhaust breaches. Fed by surfaceBoil() (diver.js calls it as each bubble dies
+// into the swell), decays in updateWater over ~1.5 s. Zero new draw calls: it rides the
+// surface shader as a foam patch + expanding ripple rings, and reads from BOTH sides of
+// the interface (the deck looking down and Sal looking up see the same boil).
+const uBoil = { value: new THREE.Vector4(0, 0, 0, 1.4) };
 // STORM SWELL SCALE — GLASS.chop.galeAmp. See galeAmt() in GLSL_CHOP_DECL.
 const uGale = { value: GLASS.chop.galeAmp };
 // BROAD-BODY SSS. (sssK, sssPow, sssTau, sssGain) and (sssCap, sssCalm, dayLo, dayHi).
@@ -1458,6 +1465,17 @@ export function localSurfaceY() { return _surfH; }
 // The storm value the water mesh itself is rendered with — for callers (the raft)
 // that need surfaceHeightAt to agree with the mesh, not with their own copy of storm.
 export function stormLevel() { return uStormU.value; }
+
+// Inject boil at a breach point. Site follows the latest call (Sal's column is one
+// place); strength ACCUMULATES so a dense burst boils harder than a stray trickle,
+// and updateWater decays it. Radius breathes with the accumulated strength.
+export function surfaceBoil(x, z, strength) {
+  const b = uBoil.value;
+  const amp = Math.min(1.6, b.z + strength);
+  b.set(x, z, amp, 0.9 + 0.6 * Math.min(1, amp));
+}
+// debug surface (kept, like window.pred / window.__helm)
+if (typeof window !== 'undefined') window.__boil = () => uBoil.value;
 
 // Unrolled from JS because GLSL ES 1.00 (what three compiles a plain ShaderMaterial as)
 // has no array constructors — `const float A[6] = float[6](...)` is a 3.00-only form.
@@ -1822,7 +1840,7 @@ function buildSurface() {
     uBright: { value: 1 }, uFade: { value: 1 },
     uRefr, uRefrK, uRefrSide, uRes,
     uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2,
-    uOpaq, uOpaq2, uSpill
+    uOpaq, uOpaq2, uSpill, uBoil
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -1860,7 +1878,7 @@ function buildSurface() {
       uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
                     uFoamThr, uFlash, uRefrK, uRefrSide;
       uniform vec2 uCap, uOpaq2;
-      uniform vec4 uSss, uSss2, uOpaq, uSpill;
+      uniform vec4 uSss, uSss2, uOpaq, uSpill, uBoil;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
       ${GLSL_SKY_DECL}
       uniform sampler2D uRefr;
@@ -2123,6 +2141,25 @@ function buildSurface() {
             float s2 = splash( pf, uTime * 1.31, 11.0, g2 );
             dhSpl = ( g1 * 0.0030 + g2 * 0.0016 ) * rk;
             splashV = ( s1 + 0.7 * s2 ) * rk;
+          }
+        }
+
+        // SURFACE BOIL, geometry half: expanding ripple rings radiating from the breach
+        // point, folded into dh BEFORE the normal re-forms so both sides of the
+        // interface see the water disturbed, not just repainted. Two rings on
+        // incommensurate clocks so the boil churns instead of pulsing.
+        if ( uBoil.z > 0.004 ) {
+          vec2 bd0 = vW.xz - uBoil.xy;
+          float bl0 = max( length( bd0 ), 1e-3 );
+          if ( bl0 < uBoil.w + 1.0 ) {
+            float bA = clamp( uBoil.z, 0.0, 1.0 );
+            float ph1 = fract( uTime * 1.35 );
+            float w1 = bl0 - ph1 * ( uBoil.w + 0.7 );
+            float e1 = exp( -w1 * w1 * 240.0 ) * ( 1.0 - ph1 );
+            float ph2 = fract( uTime * 1.35 + 0.47 );
+            float w2 = bl0 - ph2 * ( uBoil.w + 0.7 );
+            float e2 = exp( -w2 * w2 * 240.0 ) * ( 1.0 - ph2 );
+            dh += ( bd0 / bl0 ) * ( ( e1 * w1 + e2 * w2 ) * -520.0 ) * 0.0034 * bA;
           }
         }
 
@@ -2419,6 +2456,25 @@ function buildSurface() {
                       * min( dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6, 0.26 );
           col = mix( col, capCol,
                      clamp( fj * fm * uCap.y * ( 0.55 + 0.65 * capW ), 0.0, 0.90 ) );
+        }
+
+        // SURFACE BOIL, colour half: a churning white patch where Sal's exhaust breaks
+        // the surface. Written OUTSIDE the below/air branch, like the Jacobian foam, so
+        // the same boil reads from the deck looking down and from three units under
+        // looking up. Fast fine lace (two octaves on hostile clocks) cut by smoothstep
+        // so it seethes as holes open and close, not a painted disc. foamCol keeps the
+        // scene-linear discipline: clamped at 0.85 like the storm foam mix above.
+        if ( uBoil.z > 0.004 ) {
+          vec2 bdc = vW.xz - uBoil.xy;
+          float blc = length( bdc );
+          if ( blc < uBoil.w ) {
+            float bA = clamp( uBoil.z, 0.0, 1.0 );
+            float bk = 1.0 - smoothstep( 0.0, uBoil.w, blc );
+            float bn = vn( vW.xz * 6.5 + vec2( uTime * 1.9, -uTime * 2.4 ) ) * 0.6
+                     + vn( vW.xz * 13.0 - vec2( uTime * 3.3, uTime * 2.1 ) ) * 0.4;
+            float bw = bA * bk * smoothstep( 0.26, 0.72, bn * ( 0.55 + 0.95 * bk * bA ) );
+            col = mix( col, foamCol, clamp( bw, 0.0, 0.85 ) );
+          }
         }
 
         // BACKLIT CREST SCATTER. A wave top is thin, and when the sun is low and BEYOND
@@ -2766,6 +2822,9 @@ const _windOut = { speed: 0, dx: 1, dz: 0 };
 
 export function updateWater(dt, t) {
   uTime.value = t;
+  // Boil fades over ~1.5 s once the bubbles stop arriving; while a burst is breaching,
+  // surfaceBoil() keeps re-feeding it faster than this drains it.
+  uBoil.value.z *= Math.exp(-dt / 0.55);
   const y = camera.position.y, d01 = clamp(-y / 900, 0, 1);
 
   // --- the wind eases; it never snaps. ------------------------------------------
