@@ -541,9 +541,11 @@ function updateShark(S, dt, t, p) {
   S.u.uAmp.value = 0.030 + 0.032 * clamp(S.speed / SH.strikeSpeed, 0, 1) + S.arch * 0.020;
   S.u.uArch.value = S.arch;
 
-  // Fade over the last ~15% of sight range instead of a hard visible-pop (house
-  // pattern: ventlife's uVis shrink). Scale-to-zero — no material/uniform churn.
-  const vis = clamp((CULL - dist) / (CULL * 0.15), 0, 1);
+  // Fade at the cull edge instead of a hard visible-pop (house pattern: ventlife's
+  // uVis shrink). Scale-to-zero — no material/uniform churn. The band is 8 units
+  // ABSOLUTE: at CULL*0.15 (~63u) the shark visibly changed SIZE while swimming
+  // well inside sight range, which reads as a shader bug, not a fade.
+  const vis = clamp((CULL - dist) / 8, 0, 1);
   S.mesh.visible = vis > 0;
   S.mesh.scale.setScalar((cfg.size / 1.34) * vis);
 
@@ -833,13 +835,25 @@ function updateOctopus(O, dt, t, p, lp) {
       }
       break;
     }
-    case 'flee':
-      wantActive = 0.6; wantReach = 0.18;
+    case 'flee': {
+      // THE JET DEFORM. The body used to translate away with no arm answer — a prop on
+      // a wire. For the first ~0.6s of flee the arms are held hard in the streamline,
+      // trailing the jet (the squid's SQ_DEFORM pulse is the reference read): reach
+      // stays pinned near the grab's 1.0 and uDir eases from the lantern to the jet's
+      // wake, then the whole thing relaxes to the drift pose. Existing uniforms only.
+      const jp = 1 - Math.min(1, O.tState / 0.6);
+      wantActive = 0.6 + 0.4 * jp;
+      wantReach = 0.18 + 0.82 * jp * jp;
+      if (jp > 0 && O.jet.lengthSq() > 1e-4) {
+        _a.copy(O.jet).multiplyScalar(-1).normalize();
+        O.u.uDir.value.lerp(_a, Math.min(1, dt * 8)).normalize();
+      }
       O.pos.addScaledVector(O.jet, dt);
       O.jet.multiplyScalar(Math.pow(0.35, dt));
       O.jet.y -= 3.0 * dt;
       if (O.tState > OC.fleeT) octSet(O, 'return');
       break;
+    }
     case 'return': {
       wantActive = 0.25; wantReach = 0.10;
       const k = Math.min(1, dt * 1.1);
@@ -1685,6 +1699,18 @@ export function buildPredators() {
     },
     dens: zi => octos.filter(o => o.zi === zi).map(o => ({ x: +o.den.x.toFixed(1), y: +o.den.y.toFixed(1), z: +o.den.z.toFixed(1) }))
   };
+}
+
+// Called once by the ending: predators are story-irrelevant during the rite, and
+// game.js stops ticking updatePredators the moment state goes 'won', so a shark
+// frozen mid-patrol would hang in the flythrough's path forever. A blunt hide is
+// self-healing — every visibility here is re-derived per frame if play ever resumes.
+export function hidePredators() {
+  for (const S of sharks) S.mesh.visible = false;
+  for (const O of octos) O.mesh.visible = false;
+  if (squidMesh) { squidMesh.visible = false; squidGlow.visible = false; }
+  if (inkMesh) inkMesh.visible = false;
+  for (const S of sacs) { S.alive = false; S.grp.visible = false; }
 }
 
 export function switchPredatorZone(zi) {

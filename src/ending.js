@@ -22,6 +22,7 @@ import { updateDiver, lanternWorldPos } from './entities/diver.js';
 import { lanternLight, playerLightSrc } from './lighting.js';
 import { raft } from './systems/raft.js';
 import { setTetherVisible } from './systems/tether.js';
+import { hidePredators } from './world/predators.js';
 import { chime, setCalm, setSpeed, setWalking, setLight } from './audio.js';
 
 // ---------------------------------------------------------------- beat timings (s)
@@ -415,6 +416,7 @@ export function startEnding() {
   setCalm(1);
   setWalking(false);
   hideTether();
+  hidePredators();   // story-irrelevant during the rite, and frozen once 'won' stops their updates
   // The HUD has nothing left to say. Let it go before the ascent starts.
   const ui = document.getElementById('ui');
   if (ui) { ui.style.transition = 'opacity 2.6s ease-in'; ui.style.opacity = '0'; }
@@ -614,12 +616,14 @@ export function updateEnding(dt, t) {
   const wantDist = (8.5 + 10.5 * inRise + 3.6 * Math.sin(T * 0.083) + 15 * inSurf) * (1 - 0.46 * transit);
   const wantH = 1.9 + inRise * (2.2 + 4.2 * Math.sin(T * 0.067)) - 15 * inSurf + 3.4 * transit;
   const wantFov = 62 + 4.5 * Math.sin(T * 0.13 + 1.2) - 6 * inSurf;
-  camDist += (wantDist - camDist) * Math.min(1, 1.1 * dt);
-  camHeight += (wantH - camHeight) * Math.min(1, 0.9 * dt);
-  camFov += (wantFov - camFov) * Math.min(1, 0.8 * dt);
+  // Exponential drop-ins (tether.js's MU_RATE idiom): the k*dt forms made the shot's
+  // composition depend on framerate — a 30 fps machine framed the surf beat differently.
+  camDist += (wantDist - camDist) * (1 - Math.exp(-1.1 * dt));
+  camHeight += (wantH - camHeight) * (1 - Math.exp(-0.9 * dt));
+  camFov += (wantFov - camFov) * (1 - Math.exp(-0.8 * dt));
   // At the surface the camera falls below him and tilts up, so he reads small against
   // the glow rather than centred in it.
-  lookLift += (inSurf * 13 - lookLift) * Math.min(1, 0.6 * dt);
+  lookLift += (inSurf * 13 - lookLift) * (1 - Math.exp(-0.6 * dt));
 
   // Last line of defence, and the same trick game.js plays with its own boom: if the arm
   // still ends up in rock, shorten it until it does not. Measured against the position it
@@ -638,7 +642,7 @@ export function updateEnding(dt, t) {
   _v.set(player.pos.x, player.pos.y + 0.6 + lookLift, player.pos.z);
   camera.up.set(0, 1, 0);
   camera.lookAt(_v);
-  camRoll += (Math.sin(T * 0.094) * 0.022 - camRoll) * Math.min(1, 1.5 * dt);
+  camRoll += (Math.sin(T * 0.094) * 0.022 - camRoll) * (1 - Math.exp(-1.5 * dt));
   camera.rotateZ(camRoll);
   if (Math.abs(camera.fov - camFov) > 0.02) { camera.fov = camFov; camera.updateProjectionMatrix(); }
 

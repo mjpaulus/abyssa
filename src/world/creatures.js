@@ -864,7 +864,11 @@ function updateJellies(dt, t) {
     // Distance cull past the fog wall (jellies were the one population never culled:
     // 21 bodies x 4 layers always drawn AND steered). Per-instance scale-to-zero —
     // the instanced meshes stay one draw call, degenerate instances cost nothing.
-    if (J.pos.distanceTo(player.pos) > cullR + J.scale * 10) {
+    // Hysteresis, +/-10 units around the wall: a single threshold made boundary
+    // jellies blink in and out as the fog wall moved with the player.
+    const jd = J.pos.distanceTo(player.pos) - J.scale * 10;
+    J.culled = J.culled ? jd > cullR - 10 : jd > cullR + 10;
+    if (J.culled) {
       J.phase += dt * J.rate;              // keep the gait clock coherent
       const oz = J.i * 16;
       for (let k = 0; k < 15; k++) bm[oz + k] = 0;
