@@ -8,6 +8,10 @@ import { SURFACE_Y } from '../config.js';
 // the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
 import { raft } from '../systems/raft.js';
 import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
+// Exhaust bubbles die INTO the swell, not at a flat plane; survival's air fraction
+// drives the breath cadence. (No cycles: neither module imports the diver.)
+import { surfaceHeightAt, stormLevel } from '../world/water.js';
+import { survival } from '../systems/survival.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
 
 const TAU = Math.PI * 2;
@@ -901,7 +905,14 @@ export const diver = (() => {
 })();
 
 // ---- exhaust bubbles ----
-const BUBN = 60;
+// A Mark V vents through the one-way valve by the faceplate in BURSTS, one per exhale:
+// one or two large lead bubbles then a ~half-second trail of small ones, and near
+// silence between breaths. The cycle is the single breath clock (breathPh below) that
+// also lifts the shoulders, so chest and water agree. Bubbles rise toward a
+// size-dependent terminal velocity, corkscrew (small = fast tight helix, big = slow
+// wide one), expand as the pressure comes off on a long climb, and die into the actual
+// swell surface rather than a flat plane.
+const BUBN = 96;
 const bubbles = new THREE.InstancedMesh(
   new THREE.SphereGeometry(1, 7, 5),
   new THREE.MeshStandardMaterial({
@@ -913,39 +924,76 @@ bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 bubbles.castShadow = bubbles.receiveShadow = false;
 scene.add(bubbles);
 const bub = [];
-for (let i = 0; i < BUBN; i++) bub.push({ p: V3(), v: V3(), r: 0, life: 0, max: 1, ph: Math.random() * 7 });
+for (let i = 0; i < BUBN; i++) bub.push({ p: V3(), v: V3(), r: 0, y0: 0, wf: 1, wa: 0, life: 0, max: 1, ph: rng(0, 7) });
 
 const _m4 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _sv = V3(1, 1, 1), _tmp = V3(), _ex = V3();
-let bubCursor = 0, breathT = 1.2, trickle = 0;
+let bubCursor = 0, trickle = 1.2;
 
-function emitBubble(at, vel) {
+// Deterministic per-breath hash — the per-frame trail path never touches Math.random.
+const h01 = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+
+function emitBubble(at, vel, rMin, rMax, seed) {
   const b = bub[bubCursor]; bubCursor = (bubCursor + 1) % BUBN;
-  b.p.copy(at).add(_tmp.set(rng(-0.05, 0.05), rng(-0.03, 0.03), rng(-0.05, 0.05)));
-  b.v.set(rng(-0.16, 0.16), rng(0.85, 1.5), rng(-0.16, 0.16)).addScaledVector(vel, 0.22);
-  b.r = rng(0.014, 0.046);
-  b.max = rng(1.8, 3.2); b.life = b.max;
+  const j1 = h01(seed) - 0.5, j2 = h01(seed + 17.3) - 0.5, j3 = h01(seed + 41.7) - 0.5;
+  b.p.copy(at).add(_tmp.set(j1 * 0.09, j2 * 0.05, j3 * 0.09));
+  b.v.set(j2 * 0.35, 0.55 + h01(seed + 5.1) * 0.5, j1 * 0.35).addScaledVector(vel, 0.22);
+  b.r = rMin + (rMax - rMin) * h01(seed + 9.7);
+  b.y0 = b.p.y;
+  // Helix: frequency inversely proportional to size, radius growing with size.
+  b.wf = clamp(0.14 / b.r, 3.0, 11.0);
+  b.wa = clamp(0.09 + b.r * 2.2, 0.1, 0.28);
+  b.ph = h01(seed + 23.9) * TAU;
+  b.max = 24; b.life = b.max;         // long enough to make the surface from depth
 }
 
 function updateBubbles(dt, t, vel) {
+  const storm = stormLevel();
   for (let i = 0; i < BUBN; i++) {
     const b = bub[i];
     if (b.life > 0) {
       b.life -= dt;
-      b.v.y = Math.min(2.1, b.v.y + 0.7 * dt);
-      b.v.x *= 0.985; b.v.z *= 0.985;
+      // Rise toward a size-dependent terminal velocity — the big lead bubbles of a
+      // burst pull away from their own trail, which is most of the read.
+      const vT = clamp(0.55 + b.r * 30, 0.6, 2.6);
+      b.v.y += (vT - b.v.y) * Math.min(1, dt * 1.6);
+      const hd = Math.exp(-2.4 * dt);
+      b.v.x *= hd; b.v.z *= hd;
       b.p.addScaledVector(b.v, dt);
-      b.p.x += Math.sin(t * 3.1 + b.ph) * 0.10 * dt * 8;     // wobble as they rise
-      b.p.z += Math.cos(t * 2.6 + b.ph * 1.7) * 0.10 * dt * 8;
-      // A bubble that reaches the surface bursts there. Without this the ones released
-      // just under the waterline kept climbing into the sky.
-      if (b.p.y >= SURFACE_Y) b.life = 0;
+      const w = b.ph + t * b.wf;
+      b.p.x += Math.cos(w) * b.wa * dt;             // helical corkscrew on the rise
+      b.p.z += Math.sin(w) * b.wa * dt;
+      // Expansion with altitude: ~1.5x over a 30 u climb as the pressure comes off.
+      const grow = 1 + 0.5 * clamp((b.p.y - b.y0) / 30, 0, 1);
+      // A bubble that reaches the surface vanishes INTO it — sampled at the real
+      // swell height, not the flat datum, so none linger under a trough or pop
+      // through a crest into the sky.
+      if (b.p.y >= SURFACE_Y + surfaceHeightAt(b.p.x, b.p.z, t, storm)) b.life = 0;
       const k = b.life / b.max;
-      _sv.setScalar(b.r * (1.35 - 0.35 * k) * ss(0, 0.16, 1 - k) * ss(0, 0.30, k));
+      _sv.setScalar(b.r * grow * ss(0, 0.04, 1 - k) * ss(0, 0.06, k));
     } else _sv.setScalar(0);
     _m4.compose(b.p, _q, _sv);
     bubbles.setMatrixAt(i, _m4);
   }
   bubbles.instanceMatrix.needsUpdate = true;
+}
+
+// ---- the breath clock ----
+// ONE oscillator drives the shoulders (poseWalk's brS), the exhaust bursts and the
+// audio hook. Phase 0..PI is the inhale, PI..TAU the exhale; the burst fires as the
+// exhale opens the valve. Cycle length is context: ~4.1 s at rest, shortening toward
+// ~2.2 s under exertion (hard swimming / thruster), shortening AND shallowing further
+// as the air runs out — a fast thin panic read near drowning.
+const BR_REST = 4.1, BR_WORK = 2.2, BR_PANIC = 1.7;
+let exert = 0;                 // EMA of effort so the cadence winds up, never snaps
+let breathAmp = 1;             // shoulder-lift scale, read by poseWalk
+let breathIdx = 0;             // completed-cycle counter (audio sync + hashes)
+let burstT = -1, burstDur = 0.5, burstNext = 0, burstStep = 0.05, burstSeed = 0;
+let ascVent = 0, _phPrev = 0;               // extra venting while rising fast — expanding air
+
+export function breathPhase() { return breathPh % TAU; }
+export function breathCount() { return breathIdx; }
+export function breathStress() {
+  return clamp(Math.max(exert * 0.7, 1 - clamp(survival.oxygen / 0.35, 0, 1)), 0, 1);
 }
 
 // ---- walk cycle: authored curves, phase 0 = right heel strike ----
@@ -1029,8 +1077,10 @@ function poseWalk(o, p, a, t, deck) {
   o[CH.pYaw] = W.yaw(p) * a + wsh * 0.020 * dk;
   o[CH.pRoll] = W.list(p) * a + wob * 0.032 * sw + wsh * 0.038 * dk;
   o[CH.pPitch] = 0;
-  o[CH.sYaw] = -1.5 * W.yaw(p - SH_LAG) * a - wsh * 0.030 * dk + brS * 0.006 * dk;
-  o[CH.sPitch] = -(0.07 + 0.11 * a) + Math.sin(t * 1.15 + 0.6) * 0.022 * sw + brS * 0.020 * dk;
+  o[CH.sYaw] = -1.5 * W.yaw(p - SH_LAG) * a - wsh * 0.030 * dk + brS * 0.006 * dk * breathAmp;
+  // Breathing reads at the SHOULDERS (rigid canvas and brass over the chest): the same
+  // phase that times the exhaust bursts, scaled by breathAmp so low air shallows it.
+  o[CH.sPitch] = -(0.07 + 0.11 * a) + Math.sin(t * 1.15 + 0.6) * 0.022 * sw + brS * (0.020 * dk + 0.011 * sw) * breathAmp;
   o[CH.sRoll] = -0.6 * W.list(p - SH_LAG * 0.7) * a - wsh * 0.021 * dk;
   o[CH.nYaw] = look * dk; o[CH.nPitch] = 0.05 * a - 0.02 * Math.abs(look) * dk;
   o[CH.Rhx] = -W.hip(p) * a; o[CH.Rhz] = 0.075;
@@ -1719,7 +1769,18 @@ export function updateDiver(dt, t, player) {
   const swPrev = swimP;
   swimP = (swimP + (0.24 + speed * 0.028) * spinUp * dt) % 1;
   if (swimP < swPrev) drawKick(++kickIdx);   // one fresh pair of legs per kick
-  breathPh += (0.90 + 0.12 * Math.sin(t * 0.079)) * dt;
+  // ---- breath clock: context-driven cadence, still drifting so it never metronomes.
+  // Effort winds the rate up through an EMA — a sprint costs breaths for a while after
+  // it ends, which is how lungs actually behave.
+  {
+    const effort = clamp(speed / 7, 0, 1) * 0.9 + (player.thrustOn ? 0.6 : 0);
+    exert += (clamp(effort, 0, 1) - exert) * Math.min(1, dt * (effort > exert ? 0.55 : 0.16));
+    const airLow = 1 - clamp(survival.oxygen / 0.35, 0, 1);   // bites below a third of a tank
+    let cyc = lerp(BR_REST, BR_WORK, exert);
+    cyc = lerp(cyc, BR_PANIC, airLow * 0.85);                 // starving for air: fast...
+    breathAmp = (1 - 0.5 * airLow) * (1 + 0.25 * exert);      // ...and thin. Panic read.
+    breathPh += (TAU / cyc) * (1 + 0.09 * Math.sin(t * 0.079)) * dt;
+  }
   // Published to player.js, which shapes the forward thrust on swimP (the visible kick IS
   // the push) and lands the per-stride water resistance on walkP's heel strike. Two scalar
   // stores; no allocation, no new clock, no second source of truth.
@@ -1910,22 +1971,52 @@ export function updateDiver(dt, t, player) {
   diver.glow.scale.setScalar(0.5 + fl * 0.55);
   diver.glow.material.opacity = 0.35 + 0.5 * fl;
 
-  // breathing: a steady trickle plus a burst on every exhale — ONLY UNDER WATER.
-  // The exhaust port is a one-way valve into the sea; standing on the raft deck he was
-  // streaming bubbles up into the sky. Gated on the port's own world height rather than
-  // the diver's, so the last of the exhale still leaves as his shoulders go under.
+  // breathing: exhaust BURSTS on the exhale of the shared breath clock — ONLY UNDER
+  // WATER. The exhaust port is a one-way valve into the sea; standing on the raft deck
+  // he was streaming bubbles up into the sky. Gated on the port's own world height
+  // rather than the diver's, so the last of the exhale still leaves as he goes under.
   diver.exhaust.getWorldPosition(_ex);
-  const submerged = _ex.y < SURFACE_Y;
-  breathT -= dt;
-  if (breathT <= 0) {
-    breathT = rng(2.9, 4.1);
-    if (submerged) {
-      const n = 6 + Math.floor(Math.random() * 6);
-      for (let i = 0; i < n; i++) emitBubble(_ex, player.vel);
+  const submerged = _ex.y < SURFACE_Y + surfaceHeightAt(_ex.x, _ex.z, t, stormLevel());
+  const phm = breathPh % TAU;
+  if (phm < _phPrev) breathIdx++;                       // wrapped: a cycle completed
+  if (_phPrev < Math.PI && phm >= Math.PI && phm < _phPrev + 2) {
+    // Exhale opens the valve: 1-2 large lead bubbles now, then a trail of small ones
+    // over ~half a second. Every draw in the burst is hashed off its seed — repeatable,
+    // and nothing in the per-frame path touches Math.random.
+    burstSeed = breathIdx * 61.7 + 13.1;
+    burstDur = 0.42 + 0.18 * h01(burstSeed + 1);
+    const airLow = 1 - clamp(survival.oxygen / 0.35, 0, 1);
+    const leads = 1 + (h01(burstSeed + 2) < 0.55 ? 1 : 0);
+    const trailN = Math.max(3, Math.round((7 + h01(burstSeed + 3) * 7) * (1 - 0.5 * airLow) * (1 + 0.35 * exert)));
+    burstStep = burstDur / trailN;
+    burstT = 0; burstNext = 0.06;
+    if (submerged) for (let i = 0; i < leads; i++)
+      emitBubble(_ex, player.vel, 0.05, 0.078, burstSeed + 100 + i * 7.7);
+  }
+  _phPrev = phm;
+  if (burstT >= 0) {                                    // the trail of the current exhale
+    burstT += dt;
+    while (burstNext <= burstT && burstNext <= burstDur) {
+      if (submerged) emitBubble(_ex, player.vel, 0.013, 0.036, burstSeed + 200 + burstNext * 97);
+      burstNext += burstStep * (0.7 + 0.6 * h01(burstSeed + 300 + burstNext * 53));
+    }
+    if (burstT > burstDur) burstT = -1;
+  }
+  // between breaths: a rare stray bubble leaking past the valve seat, nothing more
+  trickle -= dt;
+  if (trickle <= 0) {
+    trickle = rng(1.4, 3.6);
+    if (submerged) emitBubble(_ex, player.vel, 0.010, 0.022, breathIdx * 7.9 + trickle * 31);
+  }
+  // ascending fast, the air in the dress expands and the valve dumps the excess —
+  // extra venting proportional to the climb rate, a detail every hard-hat diver knows
+  if (submerged && player.vel.y > 1.2) {
+    ascVent -= dt;
+    if (ascVent <= 0) {
+      ascVent = clamp(0.9 / (player.vel.y - 0.7), 0.06, 0.45);
+      emitBubble(_ex, player.vel, 0.018, 0.05, breathIdx * 3.3 + t * 41);
     }
   }
-  trickle -= dt;
-  if (trickle <= 0) { trickle = rng(0.16, 0.4); if (submerged) emitBubble(_ex, player.vel); }
   updateBubbles(dt, t, player.vel);
 }
 

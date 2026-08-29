@@ -11,7 +11,7 @@ import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherE
 import { buildCreatures, updateCreatures, reseedCreatures } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan } from './entities/leviathan.js';
-import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash, breathPhase, breathCount, breathStress } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys,
@@ -19,7 +19,8 @@ import {
 } from './player.js';
 import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
-  setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady, setPump
+  setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady, setPump,
+  syncBreath
 } from './audio.js';
 import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
@@ -495,6 +496,9 @@ const CAM_BACK = 9, CAM_UP = 2.4;
 let speedEMA = 0, camStepDip = 0;
 const FEEL = { on: true, surgeK: 1.35, stepDip: 0.05 };
 window.__feel = FEEL;
+// breath probe: cycle timing + phase, for cadence verification without a stopwatch
+window.__breath = () => ({ phase: breathPhase(), count: breathCount(), stress: breathStress() });
+let lastBreath = 0;
 
 // Walk the ray from the player out to the ideal camera spot and stop short of the
 // seafloor and of any boulder large enough to swallow the camera, so obstacles push
@@ -966,6 +970,9 @@ function update(dt, t) {
   }
 
   // ---- feed the audio engine ----
+  // regulator/breath sound phase-locked to the diver's breath clock: one sync per
+  // cycle, fired at inhale start, carrying the same stress that sets the cadence
+  if (breathCount() !== lastBreath) { lastBreath = breathCount(); syncBreath(breathStress()); }
   setDepth(depth01);
   setLight(player.light);
   setAir(survival.oxygen);
