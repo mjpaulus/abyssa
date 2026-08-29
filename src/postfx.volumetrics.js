@@ -250,8 +250,13 @@ void main(){
   bw = fr.x * fr.y;
   w = bw / ( 0.05 + abs( s.a - zc ) ); sum += s.rgb * w; wsum += w;
 
-  vec3 vol = wsum > 1e-6 ? sum / wsum : texture2D( tVol, vUv ).rgb;
-  gl_FragColor = vec4( base + max( vec3( 0.0 ), vol ) * uIntensity, 1.0 );
+  vec3 vol = max( vec3( 0.0 ), wsum > 1e-6 ? sum / wsum : texture2D( tVol, vUv ).rgb );
+  // Reinhard shoulder on the inscatter before the add: the base is already ACES
+  // tone-mapped (display-referred), so adding RAW linear inscatter clipped dense
+  // shafts to a flat cyan-white sheet. vol/(1+vol) rolls the top off smoothly, so a
+  // bright shaft keeps internal falloff — lit, not milky.
+  vol = vol / ( vec3( 1.0 ) + vol );
+  gl_FragColor = vec4( base + vol * uIntensity, 1.0 );
 }`;
 
 // ---------------------------------------------------------------------------
