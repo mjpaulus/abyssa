@@ -274,8 +274,11 @@ function bubble(t0, f0, f1, dur, vol, dest, pan = 0) {
   fire(o, t0, t0 + dur + 0.02, [g, p]);
 }
 
-function breathCycle() {
-  const stress = cl01(Math.max(S.prox * 0.9, 1 - S.light, 1 - S.air));
+function breathCycle(stressIn = -1) {
+  const stress = stressIn >= 0 ? cl01(stressIn) : cl01(Math.max(S.prox * 0.9, 1 - S.light, 1 - S.air));
+  // Self-schedules as a fallback; while the diver's breath clock is running, game.js
+  // pre-empts this timer every cycle via syncBreath() so the regulator sound, the
+  // shoulder rise and the exhaust bubbles all share one phase.
   breathTimer = setTimeout(breathCycle, (mix(5.4, 2.9, stress) + rnd(-0.3, 0.3)) * 1000);
   if (!AC || muted || AC.state !== 'running') return;
   const t = now(), lvl = 0.055 + 0.045 * stress;
@@ -715,6 +718,14 @@ export function bottleReady() {
   g.connect(gain(0.5, helmetIn));
   env(g.gain, t, 0.001, 0.03, 0.06);
   fire(noise(0.5, bp), t, t + 0.06, [bp, g]);
+}
+
+// Fire one breath cycle NOW, phase-locked to the diver's breath clock (called at
+// inhale start; the exhale voice lands mid-cycle where the bubbles burst).
+export function syncBreath(stress01 = -1) {
+  if (!AC) return;
+  clearTimeout(breathTimer);
+  breathCycle(stress01);
 }
 
 export function footstep(force = 1) { manual.step = true; step(cl01(force)); }
