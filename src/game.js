@@ -638,6 +638,11 @@ function update(dt, t) {
   // Standing him where the dive actually begins removes the cut and opens the game
   // above water, which is the whole shape of it: you start in the light and give it up.
   if (state === 'title') {
+    // The hero shot's raft used to be frozen — updateRaft never ran before the
+    // state gate below. Run it first so the deck Sal is spawned onto (and the swell
+    // the camera rides over) is this frame's, not boot's: flywheel turning, exhaust
+    // puffing, lantern lit, hull riding the sea behind the title.
+    updateRaft(dt, t);
     deckSpawn(player.pos);
     // The rig poses off player state and updatePlayer never runs behind the title, so
     // grounded keeps its boot value of FALSE — which blended Sal into the swim posture,
@@ -712,6 +717,21 @@ function update(dt, t) {
     return;
   }
 
+  // The 2.5s between drowning and the deck used to hold a half-frozen frame: ambient
+  // systems above kept breathing but the raft, hose and camera all stopped dead — it
+  // read as a hitch, not a cut. Keep the cheap subset ticking and let the eye rise
+  // slowly off the body: the haul beginning, quiet and unhurried.
+  if (state === 'dead') {
+    updateRaft(dt, t);
+    updateTether(dt, player, zone);
+    const d01 = clamp(-player.pos.y / 900, 0, 1);
+    updateAtmosphere(d01, camera.position.y);
+    updateLighting(d01);
+    camera.position.y += dt * 0.4;
+    camera.lookAt(player.pos);
+    return;
+  }
+
   if (state !== 'play' && state !== 'won') return;
 
   // The ending cinematic owns the player and camera; the world keeps breathing
@@ -721,6 +741,7 @@ function update(dt, t) {
     updateEnding(dt, t);
     const d01 = clamp(-player.pos.y / 900, 0, 1);
     updateRaft(dt, t);
+    updateVentLife(dt, t);   // the boiler-room flythrough is inhabited, not a still
     updateAtmosphere(d01, camera.position.y);
     updateLighting(d01);
     setDepth(d01);

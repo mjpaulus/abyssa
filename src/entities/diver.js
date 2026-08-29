@@ -1131,6 +1131,9 @@ const LIFT = 0.163;
 let walkP = 0, swimP = 0, gb = 1, yawF = 0, yawInit = false;
 // deckF boots at 1 for the same reason gb does: the title opens on Sal standing on planks.
 let deckF = 1, ampS = 0;
+// ladderF: blend weight for the boarding-ladder climb (player.onLadder). Blends in and
+// out over ~0.25 s so the grab and the step over the rail never snap.
+let ladderF = 0;
 // Ground covered by one full walk cycle (two steps). MEASURED off the rig, not chosen:
 // the right boot's fore-aft excursion in the body frame at steady walk is 1.135 units,
 // so a cycle carries him 2 x 1.135. At the old 2.35 the cadence was 3.4% slow — the
@@ -1640,6 +1643,7 @@ export function updateDiver(dt, t, player) {
   // stands — settling onto the seabed IS gradual, you sink into it.
   gb = lerp(gb, player.grounded ? 1 : 0, Math.min(1, (player.onDeck ? 10 : 4.5) * dt));
   deckF = lerp(deckF, player.onDeck ? 1 : 0, Math.min(1, 10 * dt));
+  ladderF = lerp(ladderF, player.onLadder ? 1 : 0, Math.min(1, 4 * dt));
   // Effective weight on the soles. Same expression player.js walks by (GROUND_BUOY 0.9,
   // A_BUOY_MIN -1.83); duplicated as two literals rather than imported, because diver.js
   // is a pose module and must stay loadable behind the title with no physics running.
@@ -1744,6 +1748,30 @@ export function updateDiver(dt, t, player) {
     po[CH.Re] += 0.26 * scZ.x; po[CH.Le] += 0.26 * scZ.x;
   }
 
+  // ---- THE LADDER. player.onLadder walks him up the rungs; without this the rig kept
+  // frog-kicking through the climb — levitation with scenery. An overlay on the blended
+  // pose, not a fourth pose: the swim's bob/roll are blended OUT, the knees tuck onto the
+  // rungs, and the arms take an alternating reach-up phased off CLIMB PROGRESS (vertical
+  // position), so the hands move rung to rung with the body, never on their own clock.
+  if (ladderF > 0.003) {
+    const w = ladderF;
+    const s = Math.sin(player.pos.y * 3.4);        // +1 = right hand reaching for the next rung
+    const rUp = 0.5 + 0.5 * s, lUp = 1 - rUp;
+    const mix = (ch, v) => { po[ch] += (v - po[ch]) * w; };
+    // squared to the rungs: swim bob, sway and roll die under the grip
+    mix(CH.bobY, 0); mix(CH.shiftX, 0); mix(CH.pYaw, 0); mix(CH.pRoll, 0);
+    mix(CH.pPitch, 0.10); mix(CH.sPitch, -0.16); mix(CH.sRoll, 0);
+    mix(CH.nPitch, 0.22);                          // eyes up the ladder, where he is going
+    // arms: the reaching arm goes long overhead, the holding arm stays bent on its rung
+    mix(CH.Rsx, -1.15 - 0.75 * rUp); mix(CH.Rsz, 0.16); mix(CH.Rsy, -0.06);
+    mix(CH.Re, -(0.95 - 0.60 * rUp));
+    mix(CH.Lsx, -1.15 - 0.75 * lUp); mix(CH.Lsz, 0.16); mix(CH.Lsy, 0.06);
+    mix(CH.Le, -(0.95 - 0.60 * lUp));
+    // legs: knees tucked, stepping contralaterally (right hand up, left knee up)
+    mix(CH.Rhx, -0.35 - 0.30 * lUp); mix(CH.Rhz, 0.07); mix(CH.Rk, 0.65 + 0.35 * lUp); mix(CH.Ra, 0.25);
+    mix(CH.Lhx, -0.35 - 0.30 * rUp); mix(CH.Lhz, 0.07); mix(CH.Lk, 0.65 + 0.35 * rUp); mix(CH.La, 0.25);
+  }
+
   // Slash overlay: blends over the left-arm channels (plus a touch of spine twist) rather
   // than replacing the pose, so the gait keeps driving everything else and the arm eases
   // back into whatever it was doing when the swing ends.
@@ -1757,7 +1785,9 @@ export function updateDiver(dt, t, player) {
     po[CH.Le] += (slA[3] - po[CH.Le]) * w;
     po[CH.sYaw] += slA[4] * w * 0.85;
     po[CH.sRoll] += slA[4] * w * 0.25;
-    const held = slashT >= 0.085 && slashT < 0.505;
+    // 0.53, not 0.505: the sheath-return swap fires AFTER the hand has crossed the
+    // scabbard throat (the 0.500 key), so the knife never teleports home mid-reach.
+    const held = slashT >= 0.085 && slashT < 0.53;
     if (diver.knifeHeld.visible !== held) { diver.knifeHeld.visible = held; diver.knifeHome.visible = !held; }
     const dr = 0.30 * ss(0.135, 0.19, slashT) * (1 - ss(0.235, 0.34, slashT));
     diver.slashArc.visible = dr > 0.002;
@@ -1811,7 +1841,8 @@ export function updateDiver(dt, t, player) {
   // so the ending's pure-vertical ascent cannot drive it.
   const upright = 0.22 + 0.30 * (1 - (player.fill || 0));
   const hsp = Math.hypot(player.vel.x, player.vel.z);
-  const pitchTarget = gb > 0.5 ? 0 : clamp(-player.pitch * upright + hsp * 0.010, -0.55, 0.55);
+  // On the ladder he hangs vertical off the rungs whatever the camera pitch is doing.
+  const pitchTarget = (gb > 0.5 ? 0 : clamp(-player.pitch * upright + hsp * 0.010, -0.55, 0.55)) * (1 - ladderF);
   spring(sPitch, pitchTarget, dt, 2.2, 0.90);
   // yaw rate, smoothed over ~0.25 s so a mouse jitter is not a bank
   if (!prevYawInit) { prevYaw = player.yaw; prevYawInit = true; }

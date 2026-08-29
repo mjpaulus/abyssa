@@ -890,7 +890,11 @@ function rebuildBody(L) {
   // while the group is hidden, and a deeply-calmed slow swimmer rebuilds at half
   // rate — at swim<=0.2 the surface barely moves between frames.
   if (L.grp && !L.grp.visible) return;
-  if (L.calmed && L.calmT > 8 && L.swim <= 0.2) {
+  // Distance-gated: sigils/glow/thorns/head still pose every frame, so a half-rate
+  // hull up close reads as 30Hz relative jitter during the vigil. Only skip when the
+  // nearest spine point is well outside close-inspection range (camera trails the
+  // player ~10u, so 70u of player distance keeps the eye past ~60u).
+  if (L.calmed && L.calmT > 8 && L.swim <= 0.2 && L._pd > 70) {
     L._rbSkip = !L._rbSkip;
     if (L._rbSkip) return;
   }
@@ -1112,6 +1116,15 @@ export function updateLeviathan(L, dt, t, player) {
   const ev = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0 };
   const n = L.spine.length, U = L.uni;
   if (!L.pPrev) L.pPrev = player.pos.clone();
+  // Nearest approach of the body to the player, for rebuildBody's half-rate gate.
+  {
+    let pd = L.head.distanceTo(player.pos);
+    for (let i = 0; i < n; i++) {
+      const dd = L.spine[i].distanceTo(player.pos);
+      if (dd < pd) pd = dd;
+    }
+    L._pd = pd;
+  }
   L.t += dt;
   L.swim = L.calmed ? Math.max(0.16, 1 - L.calmT * 0.12) : 1;
   L.wave += dt * (1.8 + L.agitation * 2.4 + L.lunge * 2.2) * L.swim;
@@ -1147,8 +1160,13 @@ export function updateLeviathan(L, dt, t, player) {
 
     // lunge: a committed dash once it has closed on the player
     L.lungeCd -= dt;
-    if (L.lunge > 0) L.lunge = Math.max(0, L.lunge - dt * 0.8);
-    if (L.lungeCd <= 0 && L.agitation > 0.55 && d < L.size * 22) { L.lunge = 1; L.lungeCd = rng(4, 7); }
+    // The trigger arms a dash; commitment eases in over ~0.4s (coil-then-go, not a
+    // one-frame teleport of intent), then drains at the shipped 0.8/s.
+    if (L.lungeArm) {
+      L.lunge = Math.min(1, L.lunge + dt * 2.5);
+      if (L.lunge >= 1) L.lungeArm = false;
+    } else if (L.lunge > 0) L.lunge = Math.max(0, L.lunge - dt * 0.8);
+    if (L.lungeCd <= 0 && L.agitation > 0.55 && d < L.size * 22) { L.lungeArm = true; L.lungeCd = rng(4, 7); }
 
     L.head.addScaledVector(cur, L.speed * (1 + L.agitation * 2.2 + L.lunge * 2.6) * dt);
     L.head.y = clamp(L.head.y, yBot, yTop);
@@ -1210,7 +1228,10 @@ export function updateLeviathan(L, dt, t, player) {
     if (allLit) { L.calmed = true; L.calmT = 0; ev.calmed = true; }
   } else {
     L.calmT += dt;
-    L.agitation = 0;
+    // The final ward-touch set agitation to 1 the frame before this branch takes over;
+    // zeroing it snapped the tail-beat rate ~4.2 -> 1.8 in one frame at the most-watched
+    // beat of the game. Drain it instead — the thrash bleeds out over ~2s.
+    L.agitation = Math.max(0, L.agitation - dt * 0.5);
     L.roll *= Math.pow(0.3, dt);
     L.mouth = lerp(L.mouth, 0.02, Math.min(1, 2 * dt));
     L.head.y -= 2 * dt;

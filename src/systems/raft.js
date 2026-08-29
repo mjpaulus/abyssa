@@ -383,7 +383,9 @@ export function updateRaft(dt, t) {
   const hF = surfaceHeightAt(RAFT_POS.x, RAFT_POS.z + 3.5, t, st);
   const hB = surfaceHeightAt(RAFT_POS.x + 3.5, RAFT_POS.z, t, st);
   const hTarget = RAFT_POS.y + (hC * 2 + hF + hB) * 0.25;
-  const ek = Math.min(1, dt / 0.35);
+  // Framerate-independent ease (tether.js's MU_RATE idiom): dt/0.35 clamps at 1 and
+  // over-tightens at low fps; the exp form is the same 0.35 s time constant everywhere.
+  const ek = 1 - Math.exp(-dt / 0.35);
   rideY += (hTarget - rideY) * ek;
   raft.position.y = rideY;
   raft.position.x = RAFT_POS.x + Math.sin(t * 0.37) * 0.16 * (1 + storm * 2.1);
