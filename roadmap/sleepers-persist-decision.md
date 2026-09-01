@@ -15,3 +15,6 @@ The ritual reading: the sleepers stir again when you leave; the chart remembers 
 ## Log
 - 2026-08-05 — deferred deliberately at phase 4; user call pending
 - 2026-08-05 — moved next -> decision; the generic columns made it obvious this is blocked on the user, not queued work
+
+## Log
+2026-09-01: Evaluation's recommended ruling — "ritual, remembered": sleepers re-wake per visit, but a previously calmed one carries its wards already dim-lit and needs N-1 touches; the water half-remembers. Keeps the ritual, shortens revisits; cost is a calmedBefore bool into the makeLeviathan override. Michael's call.
