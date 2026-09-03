@@ -11,8 +11,43 @@ import { WORLD_R, ZONE_H, LEVIATHAN_CFG, zoneTop, zoneBottom } from '../config.j
 import { rng, V3, clamp, lerp } from '../lib/math.js';
 import { makeGlow, glowTex, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, maxAniso } from '../lib/textures.js';
 import { terrainH } from '../world/terrain.js';
+import { setWardTargets, wardGuardCount } from '../world/predators.js';
 
 const UP = V3(0, 1, 0);
+
+// ---- A TOOL-SHAPED REASON PER ZONE (eval-zone-tool-reasons) --------------------------
+// The three rites used to be the same touch-N-wards fight with a bigger N. Now:
+//   ZONE 1 — ORUNE's wards sit DARK: no rune glow, no light, no halo, no hide-light, and
+//     a touch does nothing. A sonar ping within SONAR reach (tools.js calls revealWards)
+//     rings them for REVEAL_T seconds: they come up to the normal idle and take a touch.
+//     Outside the window they are iron on hide, and the player walks past them.
+//   ZONE 2 — MHOR's wards are KEPT: predators.js stations 2-3 squid on each unlit ward
+//     (fed the ward positions through setWardTargets every frame) and a ward is
+//     untouchable while wardGuardCount(i) > 0. Spear or knife clears the keepers.
+// Both are keyed on the zone index, so a remote site's Orune/Mhor row inherits them.
+// Messages are handed up as ev.msg (one-shot, per leviathan); game.js shows them.
+const REVEAL_T = 8;
+export const MSG_WARDS_ANSWER = 'THE WARDS OF ORUNE ANSWER THE PING.';
+export const MSG_WARDS_DARK = 'THE WARDS OF ORUNE ARE DARK. SOUND FOR THEM.';
+export const MSG_WARDS_KEPT = "MHOR'S WARDS ARE KEPT. CUT THE KEEPERS LOOSE.";
+// The live sleeper (game.js owns `lev`; this is the same object, for the tools hook).
+let live = null;
+
+// tools.js's sonar hook: a ping from `origin` rings every dark ward of the live zone-1
+// sleeper whose body passes within `range` of it. Returns true if anything answered.
+export function revealWards(origin, range = 120) {
+  const L = live;
+  if (!L || !L.sonarWards || L.calmed) return false;
+  const r2 = range * range;
+  let hit = L.head.distanceToSquared(origin) < r2;
+  if (!hit) for (let i = 0; i < L.spine.length && !hit; i++) hit = L.spine[i].distanceToSquared(origin) < r2;
+  if (!hit) return false;
+  L.reveal = REVEAL_T;
+  if (!L.rang) { L.rang = true; L.pendingMsg = MSG_WARDS_ANSWER; }
+  return true;
+}
+// Seconds left on the ring (0 when dark); dev/probe read.
+export function wardRevealLeft() { return live && live.sonarWards ? Math.max(0, live.reveal) : 0; }
 const smooth = THREE.MathUtils.smoothstep;
 const _a = V3(), _b = V3(), _t = V3(), _n = V3(), _p = V3(), _sc = V3();
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _col = new THREE.Color();
@@ -361,6 +396,8 @@ export function makeLeviathan(idx, over) {
 
   const L = {
     ...c, idx, Z, t: Math.random() * 100, agitation: 0, calmed: false, calmT: 0,
+    // zone 1: wards answer sonar only; zone 2: wards are kept by squid (see top of file)
+    sonarWards: idx === 1, guardWards: idx === 2, reveal: 0, rang: false, hinted: false, pendingMsg: null,
     head: V3(rng(-80, 80), yMid, rng(-80, 80)), pitch: 0, gap, swim: 1,
     roll: 0, wave: 0, mouth: 0.06, lunge: 0, lungeCd: 4, flare: 0,
     spine: [], anchor: [], fN: [], fB: [], fT: [], sigils: [], meshes: [], grp
@@ -799,7 +836,9 @@ export function makeLeviathan(idx, over) {
     grp.add(halo, sg);
     L.sigils.push({
       seg: i * step, lit: false, grp: sg, mesh: sg, rune, light, halo,
-      ang: (i % 2 ? 0.42 : -0.42), pulse: Math.random() * 7, flashT: 9
+      ang: (i % 2 ? 0.42 : -0.42), pulse: Math.random() * 7, flashT: 9,
+      // 0 = dark (zone 1 before a ping), 1 = the normal idle; eased per frame
+      rev: L.sonarWards ? 0 : 1
     });
   }
   for (let i = 0; i < c.nSigils; i++) sigArr[i].set((L.sigils[i].seg + 1) / n, 0, L.sigils[i].ang);
@@ -808,11 +847,14 @@ export function makeLeviathan(idx, over) {
   L.meshes = [body, fins, head];
   updateSpine(L);
   scene.add(grp);
+  live = L;
+  if (!L.guardWards) setWardTargets(-1, null);
   return L;
 }
 
 export function disposeLeviathan(L) {
   if (!L) return;
+  if (live === L) { live = null; setWardTargets(-1, null); }
   // Return the borrowed sigil lights to the pool: park at intensity 0, but NEVER
   // remove from the scene — the whole point of the pool is a constant light count.
   for (const g of L.sigils) g.light.intensity = 0;
@@ -1111,9 +1153,11 @@ function updateBlobs(L) {
   }
 }
 
-// Returns { sigilLit, calmed, lightDrain, slam, remaining } so the game layer owns audio/UI/scoring.
+// Returns { sigilLit, calmed, lightDrain, slam, remaining, msg } so the game layer owns
+// audio/UI/scoring. msg is a one-shot HUD line (see MSG_* above) or null.
 export function updateLeviathan(L, dt, t, player) {
-  const ev = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0 };
+  const ev = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null };
+  if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
   const n = L.spine.length, U = L.uni;
   if (!L.pPrev) L.pPrev = player.pos.clone();
   // Nearest approach of the body to the player, for rebuildBody's half-rate gate.
@@ -1194,6 +1238,10 @@ export function updateLeviathan(L, dt, t, player) {
       ev.slam = true;
     }
 
+    // zone 1: the ring window runs down; wards ease up when rung, down when it lapses
+    if (L.sonarWards) L.reveal = Math.max(0, L.reveal - dt);
+    const revTarget = L.sonarWards ? (L.reveal > 0 ? 1 : 0) : 1;
+
     let allLit = true;
     for (let i = 0; i < L.sigils.length; i++) {
       const g = L.sigils[i];
@@ -1207,25 +1255,41 @@ export function updateLeviathan(L, dt, t, player) {
         U.uSig.value[i].y = 1.6 + 0.35 * Math.sin(g.pulse * 3);
       } else {
         allLit = false;
-        g.rune.material.opacity = 0.22 + 0.16 * Math.sin(g.pulse * 2);
-        g.light.intensity = 8 + 5 * Math.sin(g.pulse * 2);
-        g.halo.scale.setScalar(L.size * 1.2 + Math.sin(g.pulse * 2) * 0.6);
-        U.uSig.value[i].y = 0.10 + 0.05 * Math.sin(g.pulse * 2);
+        // rev: 1 is the shipped idle; 0 is iron on hide — no rune, no light, no halo,
+        // no hide-light. Up fast (the ping strikes), down slow (the ring bleeds away).
+        if (g.rev !== revTarget) g.rev = revTarget > g.rev
+          ? Math.min(1, g.rev + dt * 5) : Math.max(0, g.rev - dt * 1.2);
+        const rv = g.rev;
+        g.rune.material.opacity = (0.22 + 0.16 * Math.sin(g.pulse * 2)) * rv;
+        g.light.intensity = (8 + 5 * Math.sin(g.pulse * 2)) * rv;
+        g.halo.scale.setScalar(Math.max(0.001, (L.size * 1.2 + Math.sin(g.pulse * 2) * 0.6) * rv));
+        U.uSig.value[i].y = (0.10 + 0.05 * Math.sin(g.pulse * 2)) * rv;
         // touch radius is measured from the spine point AND the visible ward
         const reach = L.size * 1.6;
         if (segDist(L.spine[g.seg], L.pPrev, player.pos) < reach
           || segDist(g.grp.position, L.pPrev, player.pos) < reach) {
-          g.lit = true;
-          g.flashT = 0;
-          L.flare = 1;
-          burstEmbers(L, g.grp.position);
-          ev.sigilLit = 392 + g.seg * 8;
-          L.agitation = 1;
+          // the two gates: a dark ward (zone 1, no ring) and a kept ward (zone 2,
+          // keepers alive) both refuse the touch; the first refusal says why, once.
+          const dark = L.sonarWards && rv < 0.5;
+          const kept = L.guardWards && wardGuardCount(i) > 0;
+          if (dark || kept) {
+            if (!L.hinted) { L.hinted = true; ev.msg = ev.msg || (dark ? MSG_WARDS_DARK : MSG_WARDS_KEPT); }
+          } else {
+            g.lit = true;
+            g.rev = 1;
+            g.flashT = 0;
+            L.flare = 1;
+            burstEmbers(L, g.grp.position);
+            ev.sigilLit = 392 + g.seg * 8;
+            L.agitation = 1;
+          }
         }
       }
     }
+    // zone 2: hand the keepers their posts (world positions; grp sits at the origin)
+    if (L.guardWards) setWardTargets(L.idx, L.sigils);
     ev.remaining = L.sigils.filter(q => !q.lit).length;
-    if (allLit) { L.calmed = true; L.calmT = 0; ev.calmed = true; }
+    if (allLit) { L.calmed = true; L.calmT = 0; ev.calmed = true; if (L.guardWards) setWardTargets(-1, null); }
   } else {
     L.calmT += dt;
     // The final ward-touch set agitation to 1 the frame before this branch takes over;

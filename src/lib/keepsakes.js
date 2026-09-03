@@ -27,11 +27,12 @@ const tor = (r, t, rs = 5, ts = 12) => new THREE.TorusGeometry(r, t, rs, ts);
 const H = Math.PI / 2;
 
 // WHICH keepsake sits at which berth. Site-major, [site][zone]; site 0 is the home
-// mooring, where the relics themselves still are and no keepsake is left.
-// THE UNSOUNDED SHELF (site 3) has no owner's things on it — nobody's owner ever
-// arrived — so its berths carry older, stranger objects.
+// mooring, where the relics themselves still are — but the skiff in the shallows is HIS
+// boat, and the one thing of his that is still aboard sits there (a null berth carries
+// nothing). THE UNSOUNDED SHELF (site 3) has no owner's things on it — nobody's owner
+// ever arrived — so its berths carry older, stranger objects.
 export const KEEP_KIND = [
-  null,
+  ['sextant', null, null],
   ['pipe', 'watch', 'cup'],
   ['knife', 'button', 'tin'],
   ['doll', 'coin', 'key']
@@ -100,6 +101,18 @@ const SHAPES = {
   coin: () => [
     xf(cyl(0.021, 0.021, 0.003, 18), 0, 0.002, 0, 0.10, 0, 0.06),
     xf(tor(0.019, 0.0015, 4, 16), 0, 0.003, 0, H)
+  ],
+  // A pocket sextant: a drum the size of a fist, the sight tube out along +X, the
+  // index arm still set across the face where he left it.
+  sextant: () => [
+    xf(cyl(0.031, 0.031, 0.026, 18), 0, 0.013, 0),
+    xf(cyl(0.033, 0.033, 0.004, 18), 0, 0.028, 0),
+    xf(cyl(0.024, 0.024, 0.003, 18), 0, 0.0315, 0),
+    xf(box(0.052, 0.004, 0.007), 0.004, 0.034, 0, 0, 0.55, 0),
+    xf(cyl(0.006, 0.0055, 0.046, 8), 0.050, 0.020, 0, 0, 0, H),
+    xf(cyl(0.0075, 0.0075, 0.006, 8), 0.075, 0.020, 0, 0, 0, H),
+    xf(cyl(0.007, 0.007, 0.010, 8), 0, 0.013, -0.036, H),
+    xf(box(0.010, 0.006, 0.004), -0.030, 0.037, 0.012)
   ],
   // A key of black glass.
   key: () => [

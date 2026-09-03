@@ -6,7 +6,8 @@
 //     { spearKill: null|{killed, at}, spearRecovered: 0|1 }
 //   sonarPing(pos, zi)                — T key (only if survival.hasSonar). Expanding
 //     ring + world-space echo glints on motes/resources/sigils/rift, fading over ~4s.
-//     Returns false while on cooldown (~6s) so game.js can gate audio.
+//     Returns false while on cooldown (~6s) so game.js can gate audio. In zone 1 the
+//     ping also RINGS Orune's dark wards (leviathan.revealWards) for ~8s.
 //   fireSpear(pos, fwd)               — right-click (only if survival.hasSpear). Launches
 //     a visible spear; on squid contact reuse predators.slash at the impact point for the
 //     kill (ranged version of the knife). Spent spears lie in the world and can be
@@ -35,6 +36,7 @@ import { nodes } from '../world/resources.js';
 import { slash } from '../world/predators.js';
 import { RAFT_POS } from './raft.js';
 import { airInletWorldPos } from '../entities/diver.js';
+import { revealWards } from '../entities/leviathan.js';
 import { player, burstEnv, BURST_DUR } from '../player.js';
 
 const ev = { spearKill: null, spearRecovered: 0 };
@@ -204,6 +206,10 @@ export function sonarPing(pos, zi) {
     if (n.grp.position.distanceToSquared(sonarOrigin) > R2) continue;
     addEcho(n.grp.position.x, n.grp.position.y + 1.2, n.grp.position.z, C_RES, 4.2);
   }
+  // ZONE 1: the ping is what wakes ORUNE's dark wards (eval-zone-tool-reasons) — an
+  // ~8s ring during which they glow and take a touch. leviathan.js owns the state and
+  // the one-shot HUD line; this is only the strike. Other zones: no-op.
+  revealWards(sonarOrigin, SONAR_REACH);
   // the sleeper's unlit wards — only while it still needs calming
   const L = window.lev;
   if (L && !L.calmed && L.sigils) {
