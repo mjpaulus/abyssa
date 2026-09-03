@@ -105,6 +105,23 @@ lanternLight.shadow.bias = -0.0015;
 lanternLight.shadow.normalBias = 0.035;
 scene.add(lanternLight);
 
+// THE LANTERN'S GUTTER. A hit (shark bite, a sleeper's slam) knocks the flame: for
+// ~1.2 s the lantern gutters — deep, irregular dips that ride on top of the everyday
+// sine flicker game.js already applies — and then it steadies. An envelope, not a
+// state: kickLantern() arms it, lanternGutter() decays it and returns the multiplier.
+// The dips are shaped by two incommensurate sines so no two gutters repeat, and the
+// floor is 0.08 rather than 0: the flame is knocked, never out.
+let gutterT = 0, gutterDur = 1.2;
+export function kickLantern(dur = 1.2) { gutterDur = dur; gutterT = Math.max(gutterT, dur); }
+export function lanternGutter(dt, t) {
+  if (gutterT <= 0) return 1;
+  gutterT = Math.max(0, gutterT - dt);
+  const env = gutterT / gutterDur;                       // 1 at the hit, 0 as it steadies
+  const g = 0.5 + 0.5 * Math.sin(t * 43) * Math.sin(t * 71 + 1.3);   // 0..1, jittery
+  const dip = env * (0.35 + 0.57 * g);                   // deepest right after the hit
+  return Math.max(0.08, 1 - dip);
+}
+
 // Read by postfx for depth-driven grading; kept here so there is one source of truth.
 export const rig = { depth01: 0 };
 

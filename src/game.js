@@ -1,10 +1,10 @@
 // Game state machine, camera, HUD, and the frame loop. Owned by the orchestrator.
 import * as THREE from 'three';
 import { scene, camera, clock } from './core.js';
-import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG } from './config.js';
+import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, warmUp, setPostBypass, getPostBypass, getVolumetrics } from './postfx.js';
-import { lanternLight, playerLightSrc, updateLighting, setWeatherLight } from './lighting.js';
+import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
@@ -24,7 +24,7 @@ import {
 } from './audio.js';
 import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
-  resupplyAtRaft, canDescendTo, HOSE_REQ
+  resupplyAtRaft, canDescendTo, HOSE_REQ, tearDress, o2RefillRate
 } from './systems/survival.js';
 import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed, chartAnchor, setKeepsakes } from './systems/raft.js';
 import { buildTether, updateTether, reseatTether } from './systems/tether.js';
@@ -134,12 +134,16 @@ const _burst = V3();
 let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
 let lev = null, zone = -1;
 const lanternPos = V3();
+let lightDip = 0, lightK = 1, slamWas = false;   // hit feedback on the light (see the lantern block)
 
+const $hud = document.getElementById('hud');
 const $msg = document.getElementById('msg');
 const $depth = document.getElementById('depth');
 const $mode = document.getElementById('mode');
 const $lightfill = document.getElementById('lightfill');
+const $o2bar = document.getElementById('o2bar');
 const $o2fill = document.getElementById('o2fill');
+const $o2leak = document.getElementById('o2leak');
 const $fuelfill = document.getElementById('fuelfill');
 const $hose = document.getElementById('hose');
 const $mats = document.getElementById('mats');
@@ -151,32 +155,13 @@ const $bm = {
   rift: document.getElementById('bmRift')
 };
 
-// ---- two new brass gauges -------------------------------------------------------
 // DRESS is load-bearing, not decoration: the suit-air model is otherwise invisible state
 // and the controls would just read as having got worse. The tick sits at the neutral
 // fill, so a player who descends without touching a key WATCHES the bar shrink past it
-// and learns Boyle's law in one dive without a word of text.
-// Built here rather than in index.html only because that file is outside this change's
-// ownership; the markup mirrors the three existing bars exactly and should move.
-const $trimfill = (() => {
-  const css = document.createElement('style');
-  css.textContent = `#trimbar{bottom:6.2rem}
-    #trimfill{background:linear-gradient(90deg,#8a6a33,#e8c98a);box-shadow:0 0 10px rgba(232,201,138,.5)}
-    #trimbar .neutral{position:absolute;left:${(NEUTRAL_FILL * 100).toFixed(1)}%;top:0;width:1px;height:100%;
-      background:rgba(200,235,255,.85);z-index:2}
-    #bottlebar{bottom:7.6rem;width:min(180px,32vw)}
-    #bottlefill{background:linear-gradient(90deg,#5c4a2a,#b99a63);box-shadow:0 0 8px rgba(185,154,99,.35)}`;
-  document.head.appendChild(css);
-  const bar = document.createElement('div');
-  bar.id = 'trimbar'; bar.className = 'bar';
-  bar.innerHTML = '<span class="label">dress</span><div id="trimfill" class="fill"></div><i class="neutral"></i>';
-  const bot = document.createElement('div');
-  bot.id = 'bottlebar'; bot.className = 'bar hidden';
-  bot.innerHTML = '<span class="label">bottle</span><div id="bottlefill" class="fill"></div>';
-  const ui = document.getElementById('ui');
-  ui.appendChild(bar); ui.appendChild(bot);
-  return document.getElementById('trimfill');
-})();
+// and learns Boyle's law in one dive without a word of text. The markup lives in
+// index.html with the other gauges; only the tick's position is the suit model's to set.
+const $trimfill = document.getElementById('trimfill');
+document.querySelector('#trimbar .neutral').style.left = (NEUTRAL_FILL * 100).toFixed(1) + '%';
 const $bottlebar = document.getElementById('bottlebar');
 const $bottlefill = document.getElementById('bottlefill');
 
@@ -341,7 +326,17 @@ function enterZone(i) {
   setCalm(0);
   showMsg(lev.name);
   growl();
+  pendingWards = i > 0;
+  riftShutSaid = false;
+  // The bowl's rim, for the rift-shut beat: the collar crest sits at 0.84 of the funnel
+  // radius, so sample the height there on four bearings and keep the mean.
+  const rp = riftPos(i), rr = RIFT_R * 2.7 * 0.84;
+  riftRimY = (terrainH(rp.x + rr, rp.z, i) + terrainH(rp.x - rr, rp.z, i)
+    + terrainH(rp.x, rp.z + rr, i) + terrainH(rp.x, rp.z - rr, i)) * 0.25;
 }
+// THE RIFT IS SHUT WHILE IT WAKES: a diver who drops into the bowl before the sleeper
+// stills falls into an unmarked hole in the dark. Said once per zone, 20u below the rim.
+let riftShutSaid = false, riftRimY = 0;
 
 // Where a dressed diver waits before a dive: on the deck, clear of the pump block at
 // local z = -1.2, facing out over the water he is about to step into.
@@ -367,6 +362,7 @@ export function start() {
   camVel.set(0, 0, 0);
   camLook.set(player.pos.x, player.pos.y, player.pos.z + 6);
   document.getElementById('title').classList.add('hidden');
+  $hud.classList.remove('hidden');
   initAudio();
   enterZone(0);
   // Async WASM load; the module degrades to no-ops if the CDN fails, so no await.
@@ -374,8 +370,18 @@ export function start() {
   // Lock is requested by the window click handler below, on this same click. Asking
   // here as well made Chrome reject the duplicate request, so the mouse stayed dead
   // until the player clicked a second time.
-  showMsg('LIGHT THE SIGILS. WAKE NOTHING ELSE.');
+  showMsg(wardsLine());
 }
+
+// THE VERB IS SETTLED: wards are LIT, the sleeper STILLS. One sentence says what a ward
+// is, where it rides, and what lighting it does — with this zone's real count, since a
+// remote anchorage's sleeper can carry more iron than the home one.
+const COUNT = ['NO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE'];
+function wardsLine() {
+  const n = lev ? lev.sigils.length : 3;
+  return `${COUNT[n] || n} IRON WARDS RIDE ITS HIDE. LIGHT THEM AND IT STILLS.`;
+}
+let pendingWards = false;   // zones after the first say their count once the name has faded
 
 document.getElementById('title').addEventListener('click', start);
 addEventListener('click', () => {
@@ -443,6 +449,8 @@ function consultChart() {
 
 // Debug/automation surface used by the visual-review harness.
 Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, diver, scene, survival, setState: s => { state = s; } });
+// Probe surface for the hit feedback: the live refill rate, the light dip, the rift rim.
+window.__hit = () => ({ torn: +survival.torn.toFixed(2), refill: +o2RefillRate().toFixed(3), lightDip: +lightDip.toFixed(3), lightK: +lightK.toFixed(3), riftRimY: +riftRimY.toFixed(1), lantern: +lanternLight.intensity.toFixed(2) });
 // Debug: switch the active zone without calming a sleeper — zone gating (terrain floor,
 // predators, leviathan, physics) all key off this, so a teleported probe that skips it
 // gets snapped back up to the previous zone's seabed and reads as a broken teleport.
@@ -783,6 +791,15 @@ function update(dt, t) {
     showMsg('STEP OVER THE SIDE', 4);
   }
 
+  // THE RIFT IS SHUT WHILE IT WAKES: 20u below the bowl's rim with the sleeper awake.
+  if (!riftShutSaid && lev && !lev.calmed && zone >= 0 && msgT <= 0) {
+    const rq = riftPos(zone);
+    if (Math.hypot(player.pos.x - rq.x, player.pos.z - rq.z) < RIFT_R * 2.7 * 0.84
+        && player.pos.y < riftRimY - 20) {
+      riftShutSaid = true;
+      showMsg('THE RIFT IS SHUT WHILE IT WAKES.', 5);
+    }
+  }
   // zone progression through the rift, gated on having the line to work the next zone
   if (lev && lev.calmed && zone < 2 && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
     if (canDescendTo(zone + 1)) enterZone(zone + 1);
@@ -795,7 +812,7 @@ function update(dt, t) {
       if (!inkBeat) {
         inkBeat = true;
         saveChart();
-        showMsg('THE THIRD SLEEPS. THE CHART TAKES THE INK.', 7);
+        showMsg('THE THIRD STILLS. THE CHART TAKES THE INK.', 7);
         chime(523, 3, 0.25); chime(659, 3, 0.18); chime(784, 4, 0.15);
       }
       return;
@@ -820,18 +837,31 @@ function update(dt, t) {
   if (lev) {
     const ev = updateLeviathan(lev, dt, t, player);
     if (ev.lightDrain) player.light -= ev.lightDrain;
-    if (ev.slam) { shake = Math.min(1, shake + 2 * dt); slam(); }
+    if (ev.slam) {
+      shake = Math.min(1, shake + 2 * dt); slam();
+      // Contact is per-frame; the tear is per collision. Rising edge only.
+      if (!slamWas) {
+        kickLantern(1.2);
+        lightDip = Math.max(lightDip, 0.7);
+        if (tearDress()) showMsg('AIR IS LEAKING — THE DRESS IS TORN', 4);
+      }
+    }
+    slamWas = ev.slam;
     if (ev.sigilLit) {
       chime(ev.sigilLit, 2, 0.3);
       shake = 0.6;
-      if (ev.remaining > 0) showMsg(ev.remaining + (ev.remaining === 1 ? ' SIGIL SLEEPS' : ' SIGILS SLEEP'), 2.5);
+      if (ev.remaining > 0) showMsg((COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), 2.5);
     }
     if (ev.calmed) {
       chartRec[currentSiteIndex()][zone] = 1;
       saveChart();
       player.light = 1;
       setCalm(1);
-      showMsg(zone < 2 ? 'THE SLEEPER STILLS. A RIFT OPENS BELOW.' : 'THE LAST SLEEPER STILLS. THE RIFT WAITS.', 5);
+      // The one moment the player is reading: if the line will not reach the next zone,
+      // say so NOW with the real numbers, not 55% of the way down the rift.
+      showMsg(zone === 2 ? 'ALL WARDS LIT. THE LAST SLEEPER STILLS. THE RIFT WAITS.'
+        : canDescendTo(zone + 1) ? 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.'
+        : `IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6);
       chime(262, 3, 0.3); chime(330, 3, 0.25); chime(392, 3, 0.25);
     }
   }
@@ -908,14 +938,16 @@ function update(dt, t) {
   // onboarding beats fire only in silence, each exactly once
   zoneTime += dt;
   if (msgT <= 0 && state === 'play') {
-    if (!tips.submerged && player.pos.y < -6) {
+    if (pendingWards) {
+      pendingWards = false; showMsg(wardsLine(), 5);
+    } else if (!tips.submerged && player.pos.y < -6) {
       tips.submerged = 1; showMsg('YOUR AIR COMES DOWN THE LINE. THE PUMP ABOVE MUST STAY FED.', 5);
     } else if (!tips.taut && survival.tautness > 0.92) {
       tips.taut = 1; showMsg('THE LINE IS TAUT — MORE HOSE CAN BE MADE AT THE RAFT', 5);
     } else if (!tips.fuel && survival.fuel < 0.5) {
       tips.fuel = 1; showMsg('THE PUMP RUNS LOW. IT BURNS BITUMEN — BLACK LUMPS ON THE FLOOR.', 5);
     } else if (!tips.wander && zone === 0 && zoneTime > 75 && lev && !lev.calmed && !lev.sigils.some(s => s.lit)) {
-      tips.wander = 1; showMsg('FOLLOW THE SLEEPER MARK ON THE RULE ABOVE. TOUCH ITS WARDS.', 6);
+      tips.wander = 1; showMsg('FOLLOW THE SLEEPER MARK ON THE RULE ABOVE. LIGHT ITS WARDS.', 6);
     }
   }
   // Suit-air beats are gated separately: 'TOO MUCH AIR TO STAND' has to fire on the
@@ -946,6 +978,7 @@ function update(dt, t) {
       player.vel.set(0, 0, 0);
       player.light = 1;
       survival.oxygen = 1;
+      survival.torn = 0;
       survival.thrustCharge = 1;
       // The tenders re-dress him and blow the suit up. Without this he arrives at the
       // raft with whatever the drowning left — usually a flat dress — and sinks straight
@@ -974,7 +1007,7 @@ function update(dt, t) {
   // cycle, fired at inhale start, carrying the same stress that sets the cadence
   if (breathCount() !== lastBreath) { lastBreath = breathCount(); syncBreath(breathStress()); }
   setDepth(depth01);
-  setLight(player.light);
+  setLight(lightK);
   setAir(survival.oxygen);
   setSpeed(player.vel.length());
   setWalking(player.grounded);
@@ -1024,7 +1057,12 @@ function update(dt, t) {
     survival.oxygen = Math.max(0.04, survival.oxygen - 0.10 * pev.bite);
     shake = Math.min(1, shake + 0.5);
     slam();
-    if (msgT <= 0) showMsg('SOMETHING STRUCK YOU — AIR IS LEAKING', 3);
+    kickLantern(1.2);
+    lightDip = 1;
+    // A torn dress is the stake: the tenders cannot out-pump the hole, so for the next
+    // TORN_SEC the line refills at half rate and 'AIR IS LEAKING' is true.
+    if (tearDress()) showMsg('AIR IS LEAKING — THE DRESS IS TORN', 4);
+    else if (msgT <= 0) showMsg('SOMETHING STRUCK YOU', 3);
   }
   if (pev.lightSteal) player.light = Math.max(0, player.light - pev.lightSteal * dt);
 
@@ -1067,9 +1105,14 @@ function update(dt, t) {
   lanternLight.position.copy(lanternPos);
   setLanternPos(lanternPos);   // dust catches the lantern's warmth
   setToolsLanternPos(lanternPos);
-  lanternLight.intensity = (9 + 3.5 * Math.sin(t * 9) + 1.5 * Math.sin(t * 23)) * player.light;
+  // A hit reads as a hit in the light too: the meter dips by up to 45% and recovers over
+  // ~3 s (an envelope over the stored value, so it is never a second oxygen penalty),
+  // and the lantern gutters for 1.2 s on top of its everyday flicker.
+  lightDip = Math.max(0, lightDip - dt / 3);
+  lightK = player.light * (1 - 0.45 * lightDip);
+  lanternLight.intensity = (9 + 3.5 * Math.sin(t * 9) + 1.5 * Math.sin(t * 23)) * lightK * lanternGutter(dt, t);
   playerLightSrc.position.copy(player.pos);
-  playerLightSrc.intensity = 8 + 40 * player.light;
+  playerLightSrc.intensity = 8 + 40 * lightK;
 
   // Keyed on the CAMERA's height, not the player's: the water column is stratified, so
   // what the eye is sitting in decides the optics. updateCamera runs below, so this reads
@@ -1084,16 +1127,22 @@ function update(dt, t) {
   setBearing($bm.lev, lev ? lev.head.x : 0, lev ? lev.head.y : 0, lev ? lev.head.z : 0, !!(lev && !lev.calmed));
   const rp = zone >= 0 ? riftPos(zone) : null;
   setBearing($bm.rift, rp ? rp.x : 0, rp ? terrainH(rp.x, rp.z, zone) : 0, rp ? rp.z : 0, !!(rp && lev && lev.calmed));
+  // the active target carries the bright tick: the sleeper until it stills, then the rift
+  $bm.lev.classList.toggle('active', !!(lev && !lev.calmed));
+  $bm.rift.classList.toggle('active', !!(rp && lev && lev.calmed));
   // low-air vignette breathes in once the tank drops below a third
   $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
 
   $trimfill.style.transform = `scaleX(${player.fill})`;
   $bottlebar.classList.toggle('hidden', !survival.hasThruster);
   $bottlefill.style.transform = `scaleX(${survival.thrustCharge})`;
-  $lightfill.style.transform = `scaleX(${player.light})`;
+  $lightfill.style.transform = `scaleX(${lightK})`;
   $o2fill.style.transform = `scaleX(${survival.oxygen})`;
   $fuelfill.style.transform = `scaleX(${survival.fuel})`;
   $o2fill.classList.toggle('critical', survival.oxygen < 0.3);
+  // the torn dress bleeds on the bar: a red bead rides the fill's leading edge
+  $o2bar.classList.toggle('torn', survival.torn > 0);
+  if (survival.torn > 0) $o2leak.style.left = (survival.oxygen * 100).toFixed(1) + '%';
   // Charted metres, ×3 like the depth readout. The raw values are world units, and
   // printing them unconverted put "306 / 380 m of line" next to "690 m" of depth in the
   // same frame — the HUD contradicting itself threefold on the one number that is
