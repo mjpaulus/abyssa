@@ -11,6 +11,13 @@ import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
 export { GLASS } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { scatter } from './flora.js';
+// THE SUN'S SHADOW MAP, read-only. lighting.js imports airAmbience from here, so this
+// closes an import cycle — safe because BOTH sides only touch the other's bindings
+// inside per-frame functions, never at module evaluation. `sun` is never written here.
+import { sun } from '../lighting.js';
+// The vents' warm columns, for the marine snow: a preallocated Float32Array + count,
+// filled by vents.js once per reseed and handed to the snow material as uniforms.
+import { ventColumns, ventColumnCount, VENT_COLS_MAX } from './vents.js';
 
 export let surface = null;
 export const rays = [];
@@ -263,6 +270,10 @@ vec3 airLight( vec3 surfIrr ){
 // hand.sunsetDrama, which is the post-storm-clearing payoff — see cloudColours().
 // SECOND fbm: gated behind the coverage test, so a cloudless day pays for neither.
 const GLSL_SKY = `
+// gSunK scales the sun DISC only. A shader-global, not a uniform, so the sea can set it
+// per fragment (the raft's shadow dims the glitter it would otherwise reflect) while the
+// dome, which never writes it, keeps the constant 1.0 initialiser.
+float gSunK = 1.0;
 vec3 skyRadiance( vec3 d ){
   float up = clamp( d.y, 0.0, 1.0 );
   vec3 c = mix( uSkyHor, uSkyZen, sqrt( up ) );
@@ -379,7 +390,7 @@ vec3 skyRadiance( vec3 d ){
   // 1.0 — a thin edge still glows through, which is most of what says "cloud").
   float occ = 1.0 - amt * 0.92;
   float sd = max( 0.0, dot( d, uSunDir ) );
-  c += uSunCol * uDiscK * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) ) * occ;
+  c += uSunCol * uDiscK * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) ) * occ * gSunK;
 
   // THE MOON. Not a pow() lobe like the sun but a real disc with a terminator: at this
   // art scale a smoothstep against the angular radius and one signed cut across it is
@@ -874,6 +885,42 @@ const uSunDirU = { value: new THREE.Vector3(SUN.dir.x, SUN.dir.y, SUN.dir.z) };
 const uSunProj = { value: new THREE.Vector2(SUN.proj[0], SUN.proj[1]) };
 const uSunSize = { value: 700 };
 const uStormU = { value: 0 };
+// --- THE RAFT'S SHADOW ON THE SEA. The surface samples the sun's own shadow map
+// (lighting.js: an 18-unit ortho box over the raft, PCFShadowMap, so the depth texture
+// carries a COMPARE function and must be read through a sampler2DShadow — reading it
+// through a plain sampler2D is GL_INVALID_OPERATION at draw on WebGL2, the exact class
+// of error this file's history is made of). uShadowK is the gate: 0 whenever the map is
+// off (castShadow false below y = -26 / degrade tier / fog morning) or not yet rendered,
+// and the fallback texture bound then is a tiny cleared depth target of this file's
+// own that ALSO carries a compare function, so the sampler's binding is always valid.
+const uSunShadow = { value: null };
+const uSunShadowMat = { value: new THREE.Matrix4() };
+const uShadowK = { value: 0 };
+let shadowFallbackRT = null;
+function buildShadowFallback() {
+  const dt = new THREE.DepthTexture(4, 4, THREE.UnsignedIntType);
+  dt.format = THREE.DepthFormat;
+  dt.compareFunction = THREE.LessEqualCompare;
+  dt.minFilter = THREE.LinearFilter; dt.magFilter = THREE.LinearFilter;
+  shadowFallbackRT = new THREE.WebGLRenderTarget(4, 4, { depthTexture: dt, depthBuffer: true });
+  // Clear once: depth 1.0 everywhere = "nothing in front of anything" = fully lit.
+  renderer.setRenderTarget(shadowFallbackRT);
+  renderer.clear();
+  renderer.setRenderTarget(null);
+  uSunShadow.value = dt;
+}
+function updateSunShadow() {
+  const map = sun.castShadow ? sun.shadow.map : null;
+  const dt = map ? map.depthTexture : null;
+  if (dt && dt.compareFunction) {
+    uSunShadow.value = dt;
+    uSunShadowMat.value.copy(sun.shadow.matrix);
+    uShadowK.value = clamp((sun.intensity - 0.15) / 0.6, 0, 1);
+  } else {
+    uSunShadow.value = shadowFallbackRT.depthTexture;
+    uShadowK.value = 0;
+  }
+}
 // --- SKY DRAMA uniforms. Shared by the dome and the sea exactly the way uSky*/uSun*
 // are: skyRadiance() is ONE function compiled into both, so both must be handed the
 // same objects or the sky over the horizon and the sky in Snell's window drift apart.
@@ -1193,13 +1240,19 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
     uL: { value: L }, uSize: { value: sizeMul }, uAlpha: { value: alpha },
     uFall: { value: fall }, uPix: { value: 900 }, uDepth: { value: 0.5 },
     uExtK: { value: extK },
-    uColA: { value: new THREE.Vector3(...colA) }, uColB: { value: new THREE.Vector3(...colB) }
+    uColA: { value: new THREE.Vector3(...colA) }, uColB: { value: new THREE.Vector3(...colB) },
+    // The vents' warm columns: the SAME Float32Array vents.js fills per reseed (flat
+    // xyzr per vent; three uploads a flat typed array as-is, no per-frame flatten) and
+    // the same count object, so the snow can never disagree with the chimneys.
+    uVentCols: { value: ventColumns }, uVentN: ventColumnCount
   };
   const mat = new THREE.ShaderMaterial({
     uniforms: u, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, fog: false,
     vertexShader: `uniform vec3 uCam, uLightPos, uColA, uColB;
       uniform float uTime, uL, uSize, uAlpha, uFall, uPix, uExtG, uDepth, uExtK;
+      uniform vec4 uVentCols[${VENT_COLS_MAX}];
+      uniform int uVentN;
       attribute vec3 aSeed;
       varying float vA; varying vec3 vC;
       void main(){
@@ -1208,9 +1261,36 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
         p.x += sin( uTime * 0.21 + aSeed.z * 39.0 ) * 1.7;
         p.z += cos( uTime * 0.17 + aSeed.z * 23.0 ) * 1.7;
         vec3 w = mod( p - uCam + uL * 0.5, uL ) - uL * 0.5 + uCam;
+        // WARM COLUMNS. Marine snow SINKS; the water over an active throat RISES, so
+        // a column above each vent carries far less grit than the cold water round
+        // it, and what grit is in it is going up. The column is a cylinder off the
+        // throat top, radius widening with height, dying out by ~25 units (the
+        // shimmer stream runs 22). One compare gates the whole thing above the vent
+        // field (zone 1 floors at -340 and below), so zone 0 and the surface pay one
+        // branch per vertex and nothing else; the loop is bounded by the live count.
+        float warm = 0.0;
+        if ( uVentN > 0 && w.y < -280.0 ) {
+          for ( int i = 0; i < ${VENT_COLS_MAX}; i++ ) {
+            if ( i >= uVentN ) break;
+            vec4 v = uVentCols[ i ];
+            float h = w.y - v.y;
+            if ( h < -1.0 || h > 26.0 ) continue;
+            float r = v.w + h * 0.07;
+            float k = ( 1.0 - smoothstep( r * 0.5, r, distance( w.xz, v.xz ) ) )
+                    * smoothstep( -1.0, 1.5, h ) * ( 1.0 - smoothstep( 17.0, 26.0, h ) );
+            warm = max( warm, k );
+          }
+        }
+        // Rise phase: carried up ~5 units then gone (alpha reaches ~0 before the phase
+        // wraps, so the wrap is never seen). Snow outside every column: warm = 0,
+        // bit-identical to before.
+        float ph = fract( uTime * 0.06 * ( 0.6 + aSeed.y ) + aSeed.x * 7.0 );
+        w.y += warm * ph * 5.0;
+        float warmA = 1.0 - warm * ( 0.75 + 0.25 * ph );
         vec4 mv = viewMatrix * vec4( w, 1.0 );
         float dist = -mv.z;
-        gl_PointSize = clamp( ( 0.25 + aSeed.x * aSeed.x * 2.0 ) * uSize * uPix / max( dist, 0.4 ), 0.7, 22.0 );
+        gl_PointSize = clamp( ( 0.25 + aSeed.x * aSeed.x * 2.0 ) * uSize * uPix / max( dist, 0.4 ), 0.7, 22.0 )
+                     * ( 1.0 - 0.35 * warm );
         vec3 dl = w - uLightPos;
         float lb = exp( -dot( dl, dl ) * 0.006 );   // the lantern picking grit out of the dark
         vA = uAlpha * uDepth
@@ -1222,7 +1302,8 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
            // and killed both snow layers. Fix idiom: 1.0 - smoothstep(lo, hi, x).
            * ( 1.0 - smoothstep( uL * 0.32, uL * 0.5, length( w - uCam ) ) )
            * smoothstep( 0.5, 3.0, dist )
-           * exp( -dist * uExtG * uExtK );
+           * exp( -dist * uExtG * uExtK )
+           * warmA;
         vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 + 2.6 * lb );
         gl_Position = projectionMatrix * mv;
       }`,
@@ -1840,7 +1921,8 @@ function buildSurface() {
     uBright: { value: 1 }, uFade: { value: 1 },
     uRefr, uRefrK, uRefrSide, uRes,
     uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2,
-    uOpaq, uOpaq2, uSpill, uBoil
+    uOpaq, uOpaq2, uSpill, uBoil,
+    uSunShadow, uSunShadowMat, uShadowK
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -1885,6 +1967,32 @@ function buildSurface() {
       uniform vec2 uRes;
       varying vec3 vW;
       varying vec2 vP0;      // the wave-field parameter point — see the vertex shader
+
+      // THE RAFT'S SHADOW. The sun's depth map through a COMPARE sampler (three compiles
+      // every non-raw ShaderMaterial as GLSL ES 3.00, so sampler2DShadow / texture()
+      // are available here without a glslVersion switch). 1 = lit, 0 = in shadow.
+      // Five hardware-PCF taps (each one is already a 2x2 bilinear compare) in a plus,
+      // 1.5 texels apart: the map is 1024 over 18 units, so the penumbra is ~5 cm.
+      // The 18-unit ortho box is raft-only by design; the last 6% of it fades the
+      // shadow back to lit so the box edge can never draw a line on the sea.
+      uniform highp sampler2DShadow uSunShadow;
+      uniform mat4 uSunShadowMat;
+      uniform float uShadowK;
+      float sunShadow( vec3 P ){
+        if ( uShadowK <= 0.0 ) return 1.0;
+        vec4 sc = uSunShadowMat * vec4( P, 1.0 );
+        sc.xyz /= sc.w;
+        sc.z -= 0.0004;
+        float e = min( min( sc.x, 1.0 - sc.x ), min( sc.y, 1.0 - sc.y ) );
+        if ( e < 0.0 || sc.z > 1.0 || sc.z < 0.0 ) return 1.0;
+        const float tx = 1.5 / 1024.0;
+        float s = texture( uSunShadow, sc.xyz )
+                + texture( uSunShadow, vec3( sc.x + tx, sc.y, sc.z ) )
+                + texture( uSunShadow, vec3( sc.x - tx, sc.y, sc.z ) )
+                + texture( uSunShadow, vec3( sc.x, sc.y + tx, sc.z ) )
+                + texture( uSunShadow, vec3( sc.x, sc.y - tx, sc.z ) );
+        return mix( 1.0, s * 0.2, uShadowK * smoothstep( 0.0, 0.06, e ) );
+      }
 
       // The scene through the interface, sampled from the far-side render. The offset
       // is the view-space parallax between the refracted ray and the straight one plus
@@ -2185,6 +2293,9 @@ function buildSurface() {
         // the underwater half of this shader cannot be touched by the fog beat at all.
         float airK = 0.0;
         vec3 col = vec3( 0.0 );
+        // The raft's shadow on this fragment of sea. One sample cluster for both sides;
+        // exactly 1.0 (and no texture reads) whenever the sun's map is off.
+        float sh = sunShadow( vW );
         // Each side owns an fbm2. Gating them on F keeps the common fragment paying for
         // one, not two: inside the window F is 0.02 so the mirror is invisible, outside it
         // F is 1.0 so the sky is. The branches are spatially coherent (whole window vs
@@ -2223,9 +2334,14 @@ function buildSurface() {
               float ok; vec3 rs = refrSample( T, V, dh, ok );
               win = mix( win, rs, rk * ok );
             }
-            col = win * ( 1.0 - F );
+            // FROM BELOW the shadow is the hull's dark patch on the ceiling: the sun
+            // is not entering the water there, so the window carries less of it and
+            // the caustic-lit mirror under it is dimmer too. Never to black — skylight
+            // still arrives from the whole hemisphere.
+            col = win * ( 1.0 - F ) * ( 1.0 - 0.55 * ( 1.0 - sh ) );
           }
-          if ( mf > 0.0 )  col += mirrorRadiance( vW, reflect( V, Nf ), uTime, mk ) * ( F * mf );
+          if ( mf > 0.0 )  col += mirrorRadiance( vW, reflect( V, Nf ), uTime, mk ) * ( F * mf )
+                               * ( 1.0 - 0.35 * ( 1.0 - sh ) );
         } else {
           // ---- THE SEA FROM ABOVE ------------------------------------------
           // air -> water, no TIR, and the roles swap. Nothing in this branch can run for
@@ -2264,8 +2380,14 @@ function buildSurface() {
             float ok; vec3 rs = refrSample( T, V, dhA, ok );
             body = mix( body, mix( rs, body, 0.15 ), rk * ok );
           }
-          col = body * ( 1.0 - F )
+          // FROM ABOVE: the raft's shadow on the water beside it. The body darkens
+          // (less sun getting into the column there) and the sun's own glitter is
+          // multiplied out of the reflected sky through gSunK; the sky itself stays,
+          // as it does in any real shadow on water.
+          gSunK = sh;
+          col = body * ( 1.0 - F ) * ( 1.0 - 0.45 * ( 1.0 - sh ) )
               + skyRadiance( reflect( V, Na ) ) * F;
+          gSunK = 1.0;
 
           // ---- BROAD-BODY SUBSURFACE SCATTERING ---------------------------
           // The single dominant effect in Michael's poseidon reference: sunlight that
@@ -2325,7 +2447,8 @@ function buildSurface() {
               // is untouched to the bit and a full gale glows half again as hard.
               float amt = pow( h01, uSss.y ) * dayS * viewS * seaS
                         * ( 1.0 + uOpaq2.y * opq )
-                        * ( 1.0 - smoothstep( 220.0, 430.0, dist ) ) * uNearK * uSss.x;
+                        * ( 1.0 - smoothstep( 220.0, 430.0, dist ) ) * uNearK * uSss.x
+                        * sh;   // no sun into the swell = no light to scatter out of it
               // THE HUE IS DERIVED. fogColor is the palette's own surface irradiance;
               // exp(-K_EXT * tau) is what this game's water does to light passing through
               // it. Green-teal irradiance times a spectrum whose red dies and whose green
@@ -2596,6 +2719,7 @@ function buildBubbles() {
 
 // ---------------------------------------------------------------------------
 export function buildWater() {
+  buildShadowFallback();   // before buildSurface: its uniform must never hold null
   buildDome();
   buildSurface();
   buildRays();
@@ -2891,6 +3015,7 @@ export function updateWater(dt, t) {
   // the volumetric columns (their intensity 1.05 -> 0.85): billboards as accents.
   uRayFade.value = 0.42 * rayDim * rayBand * (0.82 + 0.18 * Math.sin(t * 0.23));
   rayMesh.visible = uRayFade.value > 0.004;
+  updateSunShadow();
   // Ray colour follows the sun disc (the same _pDisc the dome and glitter path use),
   // hue-only: the disc palette normalised by its max component, so noon (near-white)
   // leaves the tuned cool tint untouched while dawn warms the shafts and a storm greys
