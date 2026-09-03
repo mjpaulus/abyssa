@@ -986,8 +986,11 @@ function updateLantern(dt, p) {
     octSet(O, 'den'); O.cool = rng(OC.coolMin, OC.coolMax);
   }
   lanternAt(_c);
-  // the way back: walk up to the light
-  if (_c.distanceToSquared(p.pos) < LANT.reach * LANT.reach) {
+  // the way back: walk up to the light AT THE DEN — hoarded, or dropped. Not on the
+  // way there: the snatch happens at arm's length and the flight home can pass Sal, and
+  // either would hand it straight back without the walk that is the whole mechanic.
+  const atRest = !lantern.carried || O.state === 'hoard';
+  if (atRest && _c.distanceToSquared(p.pos) < LANT.reach * LANT.reach) {
     if (lantern.carried && O) {
       // it lets go and covers the retreat, the grab's own exit
       _b.copy(O.pos).sub(p.pos);
@@ -1938,6 +1941,7 @@ export function buildPredators() {
       O.cool = 0; O.thief = true; octSet(O, 'grab'); O.tState = LANT.snatchT + 0.05;
       return 'snatching';
     },
+    lp: () => _lp.toArray().map(v => +v.toFixed(1)),
     // Fast-forward the hold timer (the 90 s drop).
     warpLantern: (sec = 90) => { lantern.t += sec; return +lantern.t.toFixed(1); },
     // ---- MHOR'S KEEPERS ----
