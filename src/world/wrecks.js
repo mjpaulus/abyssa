@@ -27,17 +27,26 @@
 //   takeRelic(zi)             — claims it (hides the relic prop, plays local VFX); returns
 //                               the tool name or null if already taken.
 //   setKeepsakeState(taken3)  — CHART V2: this site's per-wreck keepsake taken flags.
-//                               No keepsakes at site 0; at remote sites builds/hides one
-//                               small unbeaconed prop per wreck beside the relic berth.
-//   nearKeepsake(pos)         — {zi} within RELIC_REACH of a present, untaken keepsake.
-//   takeKeepsake(zi)          — hides it, returns { line } — the previous owner, in one
-//                               line, or at THE UNSOUNDED SHELF something older.
+//                               At remote sites builds/hides one small unbeaconed prop per
+//                               wreck beside the relic berth. At the HOME MOORING (site 0)
+//                               the skiff carries the one thing of HIS that is still
+//                               aboard (taken3[0]); taken3[1..2] are ignored there.
+//                               taken3 may be null/short (a save from before site 0 had
+//                               a keepsake): a missing flag means untaken.
+//   nearKeepsake(pos)         — {zi} within RELIC_REACH of a present, untaken keepsake,
+//                               else {zi, mark:true} within reach of an unread MARK — the
+//                               home mooring's three lines in his own hand (below).
+//   takeKeepsake(zi)          — hides the keepsake and returns { line }; or, if the
+//                               keepsake at zi is gone/absent and the mark is unread,
+//                               reads the mark: returns { line, mark:true }. Marks are
+//                               never consumed (the scratch stays on the hull) and never
+//                               persisted — a reading, not a taking; once per build.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, clamp, fbm, V3 } from '../lib/math.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { player } from '../player.js';
 import { siteParams, currentSiteIndex } from './site.js';
@@ -978,7 +987,9 @@ export function buildWrecks() {
         zi, grp: g, tool: S.tool, marker, burst, relic: W.relic,
         pos: wp, taken: false, burstT: 2, ph: zi * 2.1,
         // CHART V2: filled in by setKeepsakeState, which game.js calls after every reseed.
-        keep: null, keepPos: null, keepLine: null, keepTaken: true
+        keep: null, keepPos: null, keepLine: null, keepTaken: true,
+        // the home mooring's line in his hand (setKeepsakeState builds it at site 0 only)
+        mark: null, markPos: null, markLine: null, markRead: false
       });
     }
   } finally {
@@ -1088,7 +1099,14 @@ const KEEP_OFF = [0.46, 0.10, 0.42];
 // its berths carry things that were down there before any chart was drawn, and the lines
 // have to say so without ever explaining it.
 const KEEP_LINE = [
-  null,
+  // THE HOME MOORING. The skiff in the shallows is HIS boat. The relics are still in
+  // their berths because he never came back up for them; the one thing of his that is
+  // still aboard is the instrument a man keeps on his person, not in a locker.
+  [
+    'A POCKET SEXTANT, THE ARM STILL SET. HE KNEW WHERE HE WAS. HE WENT DOWN ANYWAY.',
+    null,
+    null
+  ],
   [
     'A PIPE, BITTEN THROUGH. HE WAITED BADLY.',
     'A WATCH, STOPPED AT SLACK WATER. HE NEVER WOUND IT AGAIN.',
@@ -1106,6 +1124,79 @@ const KEEP_LINE = [
   ]
 ];
 
+// ---- THE MARKS: three lines in his own hand, home mooring only ---------------------
+// The keepsake lines above are told ABOUT him. These three are HIS: scored with a knife
+// point into a scrap of plating and left propped at each home wreck on the way down —
+// the skiff he dived from, the trawler he passed, the submersible he read the odds off.
+// Together they are the only place the game says it plainly: he dove here, he did not
+// come back, and whoever reads the last one is the one who does. Sal reads them the way
+// he takes a keepsake ([E] in reach), but a scratch on iron is not a thing you pocket:
+// the plate stays, the line shows once per build, nothing is saved.
+const MARK_LINE = [
+  'SHE WENT OVER IN A FLAT CALM. I HAVE GONE DOWN TO SEE WHAT DID IT.',
+  'THE TRAWLER IS IN TWO PIECES. NOTHING ON ANY CHART DOES THAT. LOWER, THEN.',
+  'THEY HAD IRON. I HAVE CANVAS AND A LINE. WHOEVER READS THIS IS THE ONE WHO COMES BACK.'
+];
+// Where each plate leans, in the relic host's frame: a few strides off the berth, so the
+// keepsake beside the sounding set and the plate on the skiff are two separate walks.
+const MARK_OFF = [[-2.8, 0.05, 1.9], [2.6, 0.05, 1.7], [-2.3, 0.05, -2.2]];
+const MARK_SCALE = 2.2;
+
+// A scrap of plating with three ragged rows of knife-scored strokes — legible as
+// WRITING at six units, as nothing in particular at twenty. Seeded off the zone so the
+// three hands are the same hand every boot. True-size like the keepsakes (a 0.19 m
+// plate), taken at the berth scale.
+function markGeo(zi, scale) {
+  const rand = seededRand(0x5C0AED + zi * 131);
+  const out = [];
+  const W = 0.19, Hh = 0.13, T = 0.006;
+  // the plate, leaning back a little on its bottom edge
+  const lean = -0.22;
+  const place = (g, x, y, z) => {
+    _o.position.set(x, y, z); _o.rotation.set(lean, 0, 0); _o.scale.setScalar(1); _o.updateMatrix();
+    return g.applyMatrix4(_o.matrix);
+  };
+  const plate = new THREE.BoxGeometry(W, Hh, T);
+  out.push({ g: place(plate, 0, Hh * 0.5, 0), m: 'iron' });
+  // the strokes: three rows, words as runs of short raised nicks with gaps between them
+  for (let row = 0; row < 3; row++) {
+    const y = Hh * (0.80 - row * 0.27);
+    let x = -W * 0.42;
+    const xEnd = W * (0.30 + rand() * 0.14);
+    while (x < xEnd) {
+      const len = 0.006 + rand() * 0.016;
+      const tilt = (rand() - 0.5) * 0.5;
+      const g = new THREE.BoxGeometry(len, 0.0045, 0.004);
+      _o.position.set(x + len * 0.5, y + (rand() - 0.5) * 0.006, T * 0.5 + 0.001);
+      _o.rotation.set(0, 0, tilt); _o.scale.setScalar(1); _o.updateMatrix();
+      g.applyMatrix4(_o.matrix);
+      out.push({ g: place(g, 0, Hh * 0.5, 0), m: 'brass' });
+      x += len + (rand() < 0.28 ? 0.012 : 0.003);
+    }
+  }
+  if (scale !== 1) for (const o of out) o.g.scale(scale, scale, scale);
+  return out;
+}
+
+function buildMark(W) {
+  const grp = new THREE.Group();
+  const P = Part(grp);
+  const M = palette(W.zi);
+  for (const o of markGeo(W.zi, MARK_SCALE)) P.add(o.g, M[o.m]);
+  P.bake();
+  const host = W.relic.parent;
+  const off = MARK_OFF[W.zi];
+  grp.position.copy(W.relic.position).add(_v.set(off[0], off[1], off[2]));
+  // face the plate roughly back toward the berth, so it reads from the relic's side
+  grp.rotation.y = Math.atan2(-off[0], -off[2]) + 0.35;
+  host.add(grp);
+  W.grp.updateMatrixWorld(true);
+  W.mark = grp;
+  W.markPos = grp.getWorldPosition(new THREE.Vector3());
+  W.markLine = MARK_LINE[W.zi];
+  W.markRead = false;
+}
+
 // Called by game.js after every reseedWrecks, with this site's per-wreck taken flags.
 // Idempotent: builds the prop once per wreck build, then only toggles visibility.
 export function setKeepsakeState(taken3) {
@@ -1114,7 +1205,13 @@ export function setKeepsakeState(taken3) {
   const lines = KEEP_LINE[si];
   for (const W of WRECKS) {
     const kind = lines ? keepsakeKind(si, W.zi) : null;
-    const want = !!kind && !(taken3 && taken3[W.zi]);
+    // A save from before the home mooring had a keepsake carries no site-0 row (or a
+    // short one): read defensively, a missing flag is 'still there'.
+    const taken = !!(taken3 && taken3.length > W.zi && taken3[W.zi]);
+    const want = !!kind && !taken;
+    // his three marks exist at the home mooring only; built once per wreck build
+    if (si === 0 && !W.mark) buildMark(W);
+    if (W.mark) W.mark.visible = si === 0;
     if (want && !W.keep) {
       const grp = new THREE.Group();
       const P = Part(grp);
@@ -1138,24 +1235,42 @@ export function setKeepsakeState(taken3) {
   }
 }
 
-// Reach test, the relic's own pattern and the relic's own reach.
+const within = (pos, q) => {
+  const dx = pos.x - q.x, dy = pos.y - q.y, dz = pos.z - q.z;
+  return dx * dx + dy * dy + dz * dz < RELIC_REACH * RELIC_REACH;
+};
+const keepNear = (W, pos) => !!W.keep && !W.keepTaken && W.keep.visible && within(pos, W.keepPos);
+const markNear = (W, pos) => !!W.mark && W.mark.visible && !W.markRead && within(pos, W.markPos);
+
+// Reach test, the relic's own pattern and the relic's own reach. The keepsake outranks
+// the mark at the same wreck: on the skiff the sextant and his plate are both within a
+// stride of the berth, and the thing you can pocket is the thing [E] takes first.
 export function nearKeepsake(pos) {
   if (!built) return null;
   for (let i = 0; i < WRECKS.length; i++) {
     const W = WRECKS[i];
-    if (!W.keep || W.keepTaken || !W.keep.visible) continue;
-    const dx = pos.x - W.keepPos.x, dy = pos.y - W.keepPos.y, dz = pos.z - W.keepPos.z;
-    if (dx * dx + dy * dy + dz * dz < RELIC_REACH * RELIC_REACH) return { zi: W.zi };
+    if (keepNear(W, pos)) return { zi: W.zi };
+  }
+  for (let i = 0; i < WRECKS.length; i++) {
+    const W = WRECKS[i];
+    if (markNear(W, pos)) return { zi: W.zi, mark: true };
   }
   return null;
 }
 
 export function takeKeepsake(zi) {
   const W = WRECKS.find(w => w.zi === zi);
-  if (!W || !W.keep || W.keepTaken) return null;
-  W.keepTaken = true;
-  W.keep.visible = false;
-  return { line: W.keepLine };
+  if (!W) return null;
+  if (W.keep && !W.keepTaken && W.keep.visible) {
+    W.keepTaken = true;
+    W.keep.visible = false;
+    return { line: W.keepLine };
+  }
+  if (markNear(W, player.pos)) {
+    W.markRead = true;
+    return { line: W.markLine, mark: true };
+  }
+  return null;
 }
 
 export function nearRelic(pos) {
@@ -1211,6 +1326,19 @@ window.wrecks = {
     z: W.keepPos && +W.keepPos.z.toFixed(1)
   })),
   nearKeep: p => nearKeepsake(p || player.pos),
+  // The home mooring's marks: his three lines, and where each plate leans.
+  marks: () => WRECKS.map(W => ({
+    zi: W.zi, has: !!W.mark, shown: !!W.mark && W.mark.visible, read: W.markRead, line: W.markLine,
+    x: W.markPos && +W.markPos.x.toFixed(1), y: W.markPos && +W.markPos.y.toFixed(1),
+    z: W.markPos && +W.markPos.z.toFixed(1)
+  })),
+  gotoMark(zi) {
+    const W = WRECKS[zi];
+    if (!W || !W.markPos) return 'no mark ' + zi;
+    player.pos.set(W.markPos.x + 0.8, W.markPos.y + 0.9, W.markPos.z + 0.8);
+    player.vel.set(0, 0, 0);
+    return `mark ${zi} @ ${W.markPos.x.toFixed(1)}, ${W.markPos.y.toFixed(1)}, ${W.markPos.z.toFixed(1)}`;
+  },
   // Park the diver right on a keepsake, the way goto() parks him on a relic.
   gotoKeep(zi) {
     const W = WRECKS[zi];
