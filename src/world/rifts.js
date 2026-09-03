@@ -99,6 +99,45 @@ function causticDisc(color) {
   return new THREE.Mesh(g, m);
 }
 
+// THE SHUT RIFT'S FLOOR. Before the sleeper is calmed the bowl was an unlit hole at
+// -318 — nothing said "place", only "fall". This is a dim, warm floor glow in the bowl,
+// the uncalmed state's only light: heat leaking up through the seal, not the open
+// rift's blue-white pour. Warmer and far dimmer than causticDisc (peak alpha ~0.13
+// against its ~1.15), no spokes, a slow breathing noise instead of ripples, and it
+// hands over to the caustic as the rift opens (updateRifts cross-fades the two).
+// House law for additive fog:false glow: alpha carries exp(-dist * BEACON_EXT), so
+// it fades to BLACK with range, never toward the fog colour.
+function floorGlow(color) {
+  const g = new THREE.CircleGeometry(RIFT_R * 1.7, 56);
+  g.rotateX(-Math.PI / 2);
+  const m = new THREE.ShaderMaterial({
+    uniforms: {
+      uColor: { value: new THREE.Vector3(...color) }, uTime: { value: 0 }, uOpen: { value: 0 }
+    },
+    vertexShader: `varying vec2 vP; varying vec3 vW;
+      void main(){ vP = position.xz;
+        vW = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 ); }`,
+    fragmentShader: `uniform vec3 uColor; uniform float uTime, uOpen;
+      varying vec2 vP; varying vec3 vW;
+      ${NOISE}
+      void main(){
+        float r = length( vP ) / ${RIFT_R.toFixed(1)};
+        // brightest over the throat, gone by the bowl's shoulder; a slow breath of
+        // noise so it reads as heat, not a decal
+        float band = ( 1.0 - smoothstep( 0.25, 1.65, r ) ) * ( 0.55 + 0.45 * ( 1.0 - smoothstep( 0.0, 0.5, r ) ) );
+        float n = fbm3( vP * 0.11 + vec2( uTime * 0.03, -uTime * 0.02 ) );
+        float al = band * ( 0.45 + 0.9 * n ) * 0.13 * uOpen
+                 * exp( -distance( vW, cameraPosition ) * ${BEACON_EXT.toFixed(4)} );
+        if ( al <= 0.003 ) discard;
+        gl_FragColor = vec4( uColor, al );
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide, forceSinglePass: true, fog: false
+  });
+  return new THREE.Mesh(g, m);
+}
+
 // Glowing rim: a torus shaded with a moving chromatic fringe, which is a cheap stand-in
 // for the refraction shimmer a real screen-space distortion pass would give.
 function rimRing(color) {
@@ -213,8 +252,14 @@ export function buildRifts() {
 
     grp.add(beam, core, throat, haze, ring, disc, sw, glow);
     scene.add(grp);
+    // The shut-state floor glow is a SIBLING of grp, not a child: grp is hidden whole
+    // while the rift is closed, which is exactly when this one has to show.
+    const floor = floorGlow([0.62, 0.40, 0.22]);
+    floor.position.set(rp.x, y + 0.35, rp.z);
+    floor.visible = false;
+    scene.add(floor);
     const shafts = [beam, core, throat, haze, ring, disc, sw];
-    rifts.push({ grp, ring, beam, core, throat, haze, disc, sw, glow, shafts, open: 0 });
+    rifts.push({ grp, ring, beam, core, throat, haze, disc, sw, glow, shafts, open: 0, floor, floorOpen: 0 });
 
     sw.onBeforeRender = (r, s, cam) => {
       r.getSize(_s);
@@ -234,6 +279,7 @@ export function reseatRifts() {
     if (!R) continue;
     const rp = riftPos(zi), y = terrainH(rp.x, rp.z, zi) + 2;
     R.grp.position.set(rp.x, y, rp.z);
+    R.floor.position.set(rp.x, y + 0.35, rp.z);
   }
 }
 
@@ -242,6 +288,17 @@ export function updateRifts(dt, t, activeZone, isCalmed) {
     const R = rifts[zi], isOpen = zi === activeZone && isCalmed;
     R.open = lerp(R.open, isOpen ? 1 : 0, Math.min(1, dt * 1.6));
     R.grp.visible = R.open > 0.004;
+    // The shut-state floor glow: on for the active zone's bowl while its sleeper is
+    // awake, handing over to the caustic pour as the rift opens. Slower than the
+    // open lerp on purpose — heat does not switch off.
+    const isHole = zi === activeZone && !isCalmed;
+    R.floorOpen = lerp(R.floorOpen, isHole ? 1 : 0, Math.min(1, dt * 0.9));
+    R.floor.visible = R.floorOpen > 0.004;
+    if (R.floor.visible) {
+      const fu = R.floor.material.uniforms;
+      fu.uTime.value = t;
+      fu.uOpen.value = R.floorOpen * (1 - R.open) * (0.88 + 0.12 * Math.sin(t * 0.7));
+    }
     if (!R.grp.visible) continue;
     // slow breath plus a faster flutter, so the portal never sits still
     const puls = 0.82 + 0.18 * Math.sin(t * 1.15) + 0.06 * Math.sin(t * 4.3);
