@@ -146,9 +146,45 @@ export function buildDavit(group, mats) {
     for (const sx of [-1, 1]) {
       wetGrime(P.put(cyl(rad, rad, Y1 - Y0, 10, false), iron, sx * LX, (Y0 + Y1) / 2, LZ));
     }
+    // HAND WEAR. Sal boards by this ladder (player.js: W in the bulwark gap climbs him
+    // from ladder-foot depth to the deck catch), and a climbing hand lands on every
+    // rung it passes — but only the dry rungs above the slime line can SHOW it: below
+    // the waterline the wet band owns the surface. The top four rungs (the ones a
+    // deck-height eye reads anyway) carry a burnished patch either side of centre,
+    // where a gripping palm actually wraps, brighter on the side the reach favours,
+    // alternating rung to rung the way a climb alternates hands. Baked into the same
+    // vertex-colour pass as the grime (the kit.js weather() idiom): brighter, less
+    // grimy, a touch warmer — polished iron, not paint. Zero draw calls added; the
+    // worn rungs just carry 14 height rows so the patch can sit where the hand does.
+    const WEAR_FROM = RUNGS - 4, HAND_X = 0.125, HAND_W = 0.058;
+    const polish = (geo, ry, i) => {
+      const col = geo.attributes.color, pos = geo.attributes.position;
+      const lead = i & 1 ? -1 : 1;                     // the hand that reaches first
+      for (let v = 0; v < pos.count; v++) {
+        const x = pos.getX(v), dy = pos.getY(v) - ry;
+        let k = 0;
+        for (const s of [-1, 1]) {
+          const d = (x - s * HAND_X) / HAND_W;
+          k = Math.max(k, Math.exp(-d * d) * (s === lead ? 1.0 : 0.62));
+        }
+        // the palm bears on the top of the rung; the underside keeps more of its grime
+        k *= 0.55 + 0.45 * Math.max(0, dy / (rad * 0.8) + 0.35);
+        if (k < 0.01) continue;
+        const r = col.getX(v), g = col.getY(v), b = col.getZ(v);
+        col.setXYZ(v,
+          r + (1.18 - r) * k * 0.80,
+          g + (1.06 - g) * k * 0.78,
+          b + (0.84 - b) * k * 0.70);
+      }
+      return geo;
+    };
     for (let i = 0; i < RUNGS; i++) {
       const ry = Y0 + (i + 0.5) / RUNGS * (Y1 - Y0);
-      wetGrime(P.put(cyl(rad * 0.8, rad * 0.8, LX * 2, 10, false), iron, 0, ry, LZ, 0, 0, Math.PI / 2));
+      const worn = i >= WEAR_FROM;
+      const rung = wetGrime(P.put(
+        new THREE.CylinderGeometry(rad * 0.8, rad * 0.8, LX * 2, 10, worn ? 14 : 1, false),
+        iron, 0, ry, LZ, 0, 0, Math.PI / 2));
+      if (worn) polish(rung, ry, i);
       // weld collars where the top rungs meet the stringers — the dry rungs are the ones
       // read from a deck-height eye, so the fabrication detail goes where the eye is
       if (i >= RUNGS - 3) for (const sx of [-1, 1])
