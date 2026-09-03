@@ -127,7 +127,7 @@ function floorGlow(color) {
         // noise so it reads as heat, not a decal
         float band = ( 1.0 - smoothstep( 0.25, 1.65, r ) ) * ( 0.55 + 0.45 * ( 1.0 - smoothstep( 0.0, 0.5, r ) ) );
         float n = fbm3( vP * 0.11 + vec2( uTime * 0.03, -uTime * 0.02 ) );
-        float al = band * ( 0.45 + 0.9 * n ) * 0.13 * uOpen
+        float al = band * ( 0.45 + 0.9 * n ) * 0.20 * uOpen
                  * exp( -distance( vW, cameraPosition ) * ${BEACON_EXT.toFixed(4)} );
         if ( al <= 0.003 ) discard;
         gl_FragColor = vec4( uColor, al );

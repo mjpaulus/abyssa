@@ -156,7 +156,7 @@ export function buildDavit(group, mats) {
     // vertex-colour pass as the grime (the kit.js weather() idiom): brighter, less
     // grimy, a touch warmer — polished iron, not paint. Zero draw calls added; the
     // worn rungs just carry 14 height rows so the patch can sit where the hand does.
-    const WEAR_FROM = RUNGS - 4, HAND_X = 0.125, HAND_W = 0.058;
+    const WEAR_FROM = RUNGS - 4, HAND_X = 0.125, HAND_W = 0.068;
     const polish = (geo, ry, i) => {
       const col = geo.attributes.color, pos = geo.attributes.position;
       const lead = i & 1 ? -1 : 1;                     // the hand that reaches first
@@ -171,10 +171,12 @@ export function buildDavit(group, mats) {
         k *= 0.55 + 0.45 * Math.max(0, dy / (rad * 0.8) + 0.35);
         if (k < 0.01) continue;
         const r = col.getX(v), g = col.getY(v), b = col.getZ(v);
+        // the iron albedo is near-black, so the polish has to overshoot 1.0 (the
+        // weather() clamp allows 1.4) to read as bare burnished metal at nine units
         col.setXYZ(v,
-          r + (1.18 - r) * k * 0.80,
-          g + (1.06 - g) * k * 0.78,
-          b + (0.84 - b) * k * 0.70);
+          r + (1.40 - r) * k * 0.90,
+          g + (1.24 - g) * k * 0.88,
+          b + (0.98 - b) * k * 0.80);
       }
       return geo;
     };
