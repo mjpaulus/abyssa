@@ -36,7 +36,7 @@
   #load p{letter-spacing:.28em;font-size:.7rem;text-transform:uppercase;opacity:.42;margin:0;animation:pulse 2.4s infinite}
   #load.done{opacity:0;pointer-events:none}
   @keyframes pulse{0%,100%{opacity:.25}50%{opacity:.6}}
-  #msg{position:absolute;left:0;right:0;top:12%;text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
+  #msg{position:absolute;left:0;right:0;top:max(12%,7.8rem);text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
   #depth{position:absolute;right:1.2rem;top:1rem;font-size:.8rem;letter-spacing:.2em;opacity:.6}
   #mode{position:absolute;left:1.2rem;top:1rem;font-size:.7rem;letter-spacing:.25em;opacity:.4;text-transform:uppercase}
 
@@ -73,7 +73,9 @@
   #bottlebar{left:1.4rem;bottom:4.1rem;width:min(150px,17vw)}
   #bottlefill{background:linear-gradient(90deg,#5c4a2a,#b99a63);box-shadow:0 0 8px rgba(185,154,99,.35)}
   /* the lantern: beside the bearing strip, on its left so the right-hand readouts keep their column */
-  #lightbar{top:4.1rem;width:min(150px,11vw);left:calc(50% - min(448px,39vw) - 1.6rem - min(150px,11vw))}
+  #lightbar{top:4.1rem;width:min(150px,11vw);left:max(1.4rem, calc(50% - min(448px,39vw) - 1.6rem - min(150px,11vw)))}
+  /* a narrow window has no room beside the strip: the lantern tucks under the mode line instead */
+  @media (max-width:1100px){#mode{top:.8rem} #lightbar{top:2.9rem;left:1.4rem}}
   #lightfill{background:linear-gradient(90deg,#3fd9ff,#bff6ff);box-shadow:0 0 14px rgba(120,220,255,.8)}
 
   #hose{position:absolute;right:1.2rem;top:2.2rem;font-size:.72rem;letter-spacing:.16em;opacity:.55}
