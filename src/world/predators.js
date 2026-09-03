@@ -10,12 +10,24 @@
 //       bite: 0|force    — a strike landed this frame (oxygen leak + shake + msg)
 //       lightSteal: 0..1 — light being drained this frame (octopus grab / squid nibble)
 //       inkPickup: 0|n   — ink sacs collected this frame (adds to survival.ink)
+//       lanternStolen: bool — STATE, true every frame the octopus has the lantern:
+//                        game.js holds player.light at 0 while set (octopus-lantern-theft)
+//       lanternTaken / lanternReturned: bool — one-shot edges of that state
+//       msg: string|null — one-shot HUD line for the theft beats (MSG_LANTERN_*)
 //     }
 //   slash(pos, fwd, range)      — the knife arc landed; kills a squid or spooks a hunter.
 //   deployInk(pos)              — vents a carried sac as a shark-breaking cloud.
 //   reseedDens()                 — call after flora rebuilds (new dive site): every
 //     boulder moved, so octopus dens (picked once at build from flora's rockColliders)
 //     are re-picked against the live pool. Safe to call mid-chase; fires no event.
+//     Also restores every squid keeper (below) to its post for the new site's Mhor.
+//
+// Contract with entities/leviathan.js (eval-zone-tool-reasons — MHOR'S KEEPERS):
+//   setWardTargets(zi, sigils)  — leviathan.js, every un-calmed zone-2 frame: the live
+//     wards ({grp.position, lit}). Copied, never held. (-1, null) clears.
+//   wardGuardCount(i)           — living squid keepers stationed on ward i. leviathan.js
+//     refuses the touch while > 0. Keepers are ordinary shoal squid with a role: the
+//     same instanced buffers, the same knife/spear kill, the same ink sac.
 //
 // Cost model, mirroring creatures.js: the CPU steers a handful of bodies (1 shark,
 // 3 octopuses, 4 squid in the active zone) and everything expensive — spine
@@ -49,7 +61,26 @@ const denStream = () => {
 // shared plumbing
 // ---------------------------------------------------------------------------
 
-const ev = { threat: 0, bite: 0, lightSteal: 0, inkPickup: 0 };
+const ev = { threat: 0, bite: 0, lightSteal: 0, inkPickup: 0, lanternStolen: false, lanternTaken: false, lanternReturned: false, msg: null };
+
+// ---- THE LANTERN THEFT (octopus-lantern-theft) ------------------------------------
+// Some grabs are not a grab. Once the arms are on the lantern, about one grab in three
+// (a fixed draw off the grab COUNT, so the same session rolls the same way) the animal
+// simply takes it: the light goes to nothing and stays there, and the octopus jets for
+// its den carrying a glow. Sal gets it back by going to the den — within LANT_REACH of
+// the light, on foot, no button — and the thief inks and lets go. Left 90 s it tires of
+// the thing and drops it at the den mouth, where it lies on the floor, still lit.
+// The glow is a SPRITE, never a light: the scene's light count is sacred.
+const LANT = { p: 0.35, snatchT: 0.9, reach: 2.5, hold: 90 };
+export const MSG_LANTERN_TAKEN = 'IT HAS YOUR LANTERN. IT IS MAKING FOR ITS DEN.';
+export const MSG_LANTERN_BACK = 'THE LANTERN. IT LET GO.';
+export const MSG_LANTERN_DROPPED = 'IT TIRED OF THE LIGHT. THE LANTERN LIES AT THE DEN MOUTH.';
+const lantern = {
+  stolen: false, by: null, carried: false, pos: V3(), t: 0, grabs: 0,
+  glow: null, core: null, pendingReturn: false, pendingMsg: null
+};
+// The roll, off the grab count alone.
+function theftRoll(n) { return stream((0xA5C7 + n * 7919) | 0)() < LANT.p; }
 
 const uTime = { value: 0 };
 const uFogD = { value: 0.016 };
@@ -782,10 +813,12 @@ function buildOctopuses() {
       const y = terrainH(x, z, zi) + 0.2;
       mesh.scale.setScalar(scale);
       scene.add(mesh);
+      // the den mouth: a stride further out from the boulder, where a dropped lantern lies
+      const mx = x + Math.cos(a) * 1.5, mz = z + Math.sin(a) * 1.5;
       octos.push({
         zi, mesh, mat, u: mat.userData.u,
-        den: V3(x, y, z), pos: V3(x, y, z), jet: V3(),
-        state: 'den', tState: 0, cool: rng(0, 10), reach: 0, active: 0, grab: 0
+        den: V3(x, y, z), pos: V3(x, y, z), jet: V3(), mouth: V3(mx, terrainH(mx, mz, zi) + 0.35, mz),
+        state: 'den', tState: 0, cool: rng(0, 10), reach: 0, active: 0, grab: 0, thief: false
       });
     }
   }
@@ -816,7 +849,12 @@ function updateOctopus(O, dt, t, p, lp) {
       _a.copy(lp).sub(O.pos);
       if (_a.lengthSq() > 1e-4) O.u.uDir.value.copy(_a).normalize();
       if (!lit || ld > OC.breakR) octSet(O, 'settle');
-      else if (O.tState > OC.reachT) octSet(O, 'grab');
+      else if (O.tState > OC.reachT) {
+        octSet(O, 'grab');
+        // the roll: is this the grab that takes it?
+        lantern.grabs++;
+        O.thief = !lantern.stolen && theftRoll(lantern.grabs);
+      }
       break;
     case 'grab': {
       wantActive = 1; wantReach = 1; wantGrab = 1;
@@ -824,7 +862,15 @@ function updateOctopus(O, dt, t, p, lp) {
       if (_a.lengthSq() > 1e-4) O.u.uDir.value.copy(_a).normalize();
       ev.lightSteal = Math.max(ev.lightSteal, OC.steal);
       if (ev.threat < 0.20) ev.threat = 0.20;
-      if (!lit || ld > OC.breakR || O.tState > OC.grabT) {
+      const snatch = O.thief && O.tState > LANT.snatchT && ld < OC.breakR;
+      if (snatch || !lit || ld > OC.breakR || O.tState > OC.grabT) {
+        if (snatch) {
+          // THE SNATCH: the light goes with it. game.js sees lanternStolen and holds
+          // player.light at 0; the glow below is the only lantern in the water now.
+          lantern.stolen = true; lantern.carried = true; lantern.by = O; lantern.t = 0;
+          ev.lanternTaken = true; ev.msg = MSG_LANTERN_TAKEN;
+        }
+        O.thief = false;
         // ink and go: the puff covers the escape, exactly as it should
         _b.copy(O.pos).sub(p.pos);
         if (_b.lengthSq() < 1e-4) _b.set(1, 0, 0.3);
@@ -860,8 +906,19 @@ function updateOctopus(O, dt, t, p, lp) {
       O.pos.lerp(O.den, k);
       if (O.tState > OC.backT || O.pos.distanceToSquared(O.den) < 0.05) {
         O.pos.copy(O.den);
-        octSet(O, 'den'); O.cool = rng(OC.coolMin, OC.coolMax);
+        // home with the lantern: it sits on it, and wakes for nothing
+        if (lantern.stolen && lantern.by === O && lantern.carried) octSet(O, 'hoard');
+        else { octSet(O, 'den'); O.cool = rng(OC.coolMin, OC.coolMax); }
       }
+      break;
+    }
+    case 'hoard': {
+      // Tucked at the den with the light under it. The arms stay a little live — the
+      // read at the den is a glow with something moving on it, not a lamp on a rock.
+      wantActive = 0.45; wantReach = 0.22;
+      _a.copy(p.pos).sub(O.pos);
+      if (_a.lengthSq() > 1e-4) O.u.uDir.value.copy(_a).normalize();
+      if (!(lantern.stolen && lantern.by === O && lantern.carried)) { octSet(O, 'den'); O.cool = rng(OC.coolMin, OC.coolMax); }
       break;
     }
     case 'settle':
@@ -885,6 +942,77 @@ function updateOctopus(O, dt, t, p, lp) {
   // 130 predates the stratified fog; track the live sight wall (dens sit in the silt,
   // so this usually lands near the old figure, but never pops inside visible range).
   O.mesh.visible = pd < Math.min(CULL, 205);
+}
+
+// ---- the stolen lantern: one glow, one owner, one way back --------------------------
+function buildLanternGlow() {
+  const g = new THREE.Group();
+  const halo = makeGlow(0xffc46a, 2.2);
+  halo.material.fog = false;          // wayfinding through the silt, same rule as the raft lamp
+  halo.material.opacity = 0.55;
+  const core = makeGlow(0xfff1c8, 0.55);
+  core.material.fog = false;
+  core.material.opacity = 0.95;
+  g.add(halo, core);
+  g.visible = false;
+  scene.add(g);
+  lantern.glow = g; lantern.core = core; lantern.halo = halo;
+}
+
+// Where the light is right now: under the thief, or where it was dropped.
+function lanternAt(out) {
+  const O = lantern.by;
+  if (lantern.carried && O) return out.copy(O.pos).addScaledVector(UP, O.mesh.scale.x * 0.55);
+  return out.copy(lantern.pos);
+}
+
+// The thief lets go where it stands (knife, or Sal walking up to a hoarding animal).
+function dropLantern(at, floorIt) {
+  lantern.carried = false;
+  lantern.pos.copy(at);
+  if (floorIt && lantern.by) lantern.pos.y = terrainH(at.x, at.z, lantern.by.zi) + 0.35;
+}
+
+function updateLantern(dt, p) {
+  if (lantern.pendingReturn) { lantern.pendingReturn = false; ev.lanternReturned = true; ev.msg = ev.msg || MSG_LANTERN_BACK; }
+  if (!lantern.stolen) { if (lantern.glow.visible) lantern.glow.visible = false; return; }
+  ev.lanternStolen = true;
+  const O = lantern.by;
+  lantern.t += dt;
+  // tired of it: dropped at the den mouth, still lit
+  if (lantern.carried && lantern.t > LANT.hold && O.state === 'hoard') {
+    dropLantern(O.mouth, false);
+    ev.msg = ev.msg || MSG_LANTERN_DROPPED;
+    octSet(O, 'den'); O.cool = rng(OC.coolMin, OC.coolMax);
+  }
+  lanternAt(_c);
+  // the way back: walk up to the light
+  if (_c.distanceToSquared(p.pos) < LANT.reach * LANT.reach) {
+    if (lantern.carried && O) {
+      // it lets go and covers the retreat, the grab's own exit
+      _b.copy(O.pos).sub(p.pos);
+      if (_b.lengthSq() < 1e-4) _b.set(1, 0, 0.3);
+      _b.normalize();
+      spawnInk(O.pos, _b, 30, O.zi);
+      O.jet.copy(_b).multiplyScalar(11).setY(3.2);
+      octSet(O, 'flee');
+    }
+    lantern.stolen = false; lantern.carried = false; lantern.by = null;
+    ev.lanternReturned = true; ev.msg = ev.msg || MSG_LANTERN_BACK;
+    lantern.glow.visible = false;
+    return;
+  }
+  // the glow: visible only in the thief's zone, swelling a little with distance so it
+  // still reads as a point through the murk (the ember-sprite lesson, scaled down)
+  const show = O && O.zi === activeZone;
+  lantern.glow.visible = show;
+  if (show) {
+    lantern.glow.position.copy(_c);
+    const d = _c.distanceTo(p.pos);
+    const k = 1 + Math.min(2.2, d * 0.018);
+    lantern.halo.scale.setScalar(2.2 * k);
+    lantern.core.scale.setScalar(0.55 * Math.min(1.6, k));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1263,8 +1391,16 @@ function squidMaterial() {
 }
 
 // Tuning.
+// THE KEEPERS. The shoal is the first SQ.shoal instances; the rest are keepers, sized
+// at build (instanced buffers never grow at runtime) for the largest authored Mhor
+// (5 wards x 3). Keepers are assigned by index round-robin across the live unlit
+// wards, so a 5-ward Mhor is kept 3/3/2/2/2 and a smaller one more thickly.
+const GUARD_N = 12;
 const SQ = {
-  n: 4, sense: 130, orbitLo: 6, orbitHi: 12, jetImpulse: 10,
+  shoal: 4, n: 4 + GUARD_N, sense: 130, orbitLo: 6, orbitHi: 12, jetImpulse: 10,
+  // keepers: station radius about the ward, the reach at which a keeper nibbles the
+  // lantern, how fast the station spring pulls (per second)
+  guardR: 8.5, guardNibR: 7.5, guardK: 3.2,
   nibbleEveryMin: 4.5, nibbleEveryMax: 9, nibbleT: 2.2, nibbleR: 3.6, steal: 0.10,
   outLight: 0.12,
   // death + the resource loop
@@ -1303,7 +1439,9 @@ function buildSquid() {
       jetT: rng(0, 1), jet: 0, orbitPh: rng(0, TAU), orbitR: rng(SQ.orbitLo, SQ.orbitHi),
       state: 'far', tState: 0, glow: 0,
       // combat: dead 0 = alive, 1 = corpse drifting, 2 = despawned and waiting
-      dead: 0, deadT: 0, die: 0, respawn: 0, spin: 0, spinAx: V3(0, 1, 0)
+      dead: 0, deadT: 0, die: 0, respawn: 0, spin: 0, spinAx: V3(0, 1, 0),
+      // keepers: role fixed at build, ward re-derived from the live targets (-1 = none)
+      guard: i >= SQ.shoal, ward: -1
     });
   }
 
@@ -1352,7 +1490,8 @@ function stepDeadSquid(Q, dt, p, im, ia, gp, gs, gc) {
       Q.pos.set(Math.cos(a) * r, zoneMidY(2) + rng(-26, 26), Math.sin(a) * r);
       Q.vel.set(0, 0, 0); Q.fwd.set(0, 0, 1);
       Q.dead = 0; Q.die = 0; Q.deadT = 0; Q.glow = 0; Q.jet = 0; Q.jetT = rng(0, 1);
-      Q.state = 'far'; Q.tState = 0;
+      // a keeper drifts back in and, if its ward is still unlit, takes the post again
+      Q.state = Q.ward >= 0 ? 'guard' : 'far'; Q.tState = 0;
       // hand it straight back to the living path this frame — falling through to the
       // corpse code below would see the old deadT and bury it again on the spot
       return false;
@@ -1412,17 +1551,75 @@ function stepDeadSquid(Q, dt, p, im, ia, gp, gs, gc) {
   return Q.pos.distanceToSquared(p.pos) < CULL * CULL;
 }
 
+// ---- the wards the keepers keep (fed by leviathan.js; copied, never held) ----------
+const WARD_MAX = 6;
+const wardT = { zi: -1, n: 0, pos: [], lit: new Uint8Array(WARD_MAX), stamp: 0 };
+for (let i = 0; i < WARD_MAX; i++) wardT.pos.push(V3());
+
+export function setWardTargets(zi, sigils) {
+  if (zi < 0 || !sigils) { wardT.zi = -1; wardT.n = 0; return; }
+  const n = Math.min(WARD_MAX, sigils.length);
+  if (wardT.zi !== zi || wardT.n !== n) wardT.stamp++;   // a new sleeper: re-post
+  wardT.zi = zi; wardT.n = n;
+  for (let i = 0; i < n; i++) {
+    wardT.pos[i].copy(sigils[i].grp.position);
+    const lit = sigils[i].lit ? 1 : 0;
+    if (wardT.lit[i] !== lit) wardT.stamp++;              // a ward went up: free its keepers
+    wardT.lit[i] = lit;
+  }
+}
+
+export function wardGuardCount(i) {
+  if (wardT.n === 0 || activeZone !== 2) return 0;
+  let n = 0;
+  for (let k = SQ.shoal; k < squids.length; k++) {
+    const Q = squids[k];
+    if (Q.ward === i && !Q.dead) n++;
+  }
+  return n;
+}
+
+// Round-robin the keepers over the UNLIT wards. Runs whenever the target set changes
+// (new sleeper, a ward lit, zone entered); a keeper whose ward is gone drifts as shoal.
+let guardStamp = -1;
+function postGuards() {
+  guardStamp = wardT.stamp;
+  let unlit = 0;
+  for (let i = 0; i < wardT.n; i++) if (!wardT.lit[i]) unlit++;
+  let k = 0;
+  for (let q = SQ.shoal; q < squids.length; q++) {
+    const Q = squids[q];
+    let w = -1;
+    if (unlit > 0) {
+      // the k-th unlit ward, cycling
+      let want = k % unlit, seen = 0;
+      for (let i = 0; i < wardT.n; i++) { if (wardT.lit[i]) continue; if (seen++ === want) { w = i; break; } }
+      k++;
+    }
+    if (Q.ward !== w) {
+      Q.ward = w;
+      if (!Q.dead) { Q.state = w >= 0 ? 'guard' : 'far'; Q.tState = 0; }
+    }
+  }
+}
+
 function updateSquid(dt, t, p, lp) {
   const lit = p.light > SQ.outLight;
   squidNibbleT -= dt;
 
-  // one nibbler at a time, and only when there is a light worth nibbling
+  if (wardT.n === 0) { if (guardStamp !== -2) { guardStamp = -2; for (const Q of squids) if (Q.guard) { Q.ward = -1; if (!Q.dead && Q.state === 'guard') { Q.state = 'far'; Q.tState = 0; } } } }
+  else if (guardStamp !== wardT.stamp) postGuards();
+
+  // one nibbler at a time, and only when there is a light worth nibbling. A keeper
+  // nibbles from its post when the lantern comes within guardNibR of it.
   if (lit && squidNibbleT <= 0) {
     squidNibbleT = rng(SQ.nibbleEveryMin, SQ.nibbleEveryMax);
     let best = null, bd = 1e9;
     for (const Q of squids) {
-      if (Q.state !== 'circle') continue;
+      if (Q.dead) continue;
+      if (Q.state !== 'circle' && Q.state !== 'guard') continue;
       const d = Q.pos.distanceToSquared(lp);
+      if (Q.state === 'guard' && d > SQ.guardNibR * SQ.guardNibR) continue;
       if (d < bd) { bd = d; best = Q; }
     }
     if (best && bd < 400) { best.state = 'nibble'; best.tState = 0; }
@@ -1447,8 +1644,16 @@ function updateSquid(dt, t, p, lp) {
     // ---- state ----
     // A kill outranks everything: the shoal will not come back to the light until the
     // panic has burned off, which is what makes one squid cost you the next few.
+    const posted = Q.ward >= 0;          // a keeper with a ward to keep
     if (Q.state === 'scatter') {
-      if (Q.tState > SQ.scatterT) { Q.state = lit ? 'approach' : 'flee'; Q.tState = 0; }
+      if (Q.tState > SQ.scatterT) { Q.state = posted ? 'guard' : lit ? 'approach' : 'flee'; Q.tState = 0; }
+    }
+    else if (posted) {
+      // keepers hold their post lit or dark — they keep the ward, not the lantern
+      if (Q.state === 'nibble') {
+        if (dLight < SQ.nibbleR) ev.lightSteal = Math.max(ev.lightSteal, SQ.steal);
+        if (Q.tState > SQ.nibbleT) { Q.state = 'guard'; Q.tState = 0; }
+      } else if (Q.state !== 'guard') { Q.state = 'guard'; Q.tState = 0; }
     }
     else if (!lit) { if (Q.state !== 'flee') { Q.state = 'flee'; Q.tState = 0; } }
     else if (Q.state === 'far' || Q.state === 'flee') {
@@ -1484,6 +1689,14 @@ function updateSquid(dt, t, p, lp) {
       _a.set(lp.x + Math.cos(Q.orbitPh) * Q.orbitR, lp.y + Math.sin(t * 0.6 + Q.i) * 2.2,
         lp.z + Math.sin(Q.orbitPh) * Q.orbitR);
       wantGlow = 0.85;
+    } else if (Q.state === 'guard') {
+      // the post: a slow ring about the ward, each keeper on its own bearing
+      Q.orbitPh += dt * 0.42;
+      const wp = wardT.pos[Q.ward];
+      const r = SQ.guardR + (Q.i % 3) * 1.6;
+      _a.set(wp.x + Math.cos(Q.orbitPh) * r, wp.y + Math.sin(t * 0.7 + Q.i * 1.3) * 2.0,
+        wp.z + Math.sin(Q.orbitPh) * r);
+      wantGlow = 0.70;
     } else {
       // 'far' — drift the abyss on a slow loop
       Q.orbitPh += dt * 0.06;
@@ -1497,7 +1710,15 @@ function updateSquid(dt, t, p, lp) {
     Q.jetT -= dt;
     _b.copy(_a).sub(Q.pos);
     const td = _b.length() + 1e-5;
-    if (Q.jetT <= 0) {
+    if (Q.state === 'guard') {
+      // A keeper RIDES its ward. The sleeper swims at 15 u/s; no jet economy holds
+      // station on that, so the post is a spring, and the jet pulse is only the read.
+      const k = 1 - Math.exp(-SQ.guardK * dt);
+      Q.pos.lerp(_a, k);
+      // velocity for the heading code: toward the post, plus the ring's tangent
+      Q.vel.copy(_b).multiplyScalar(0.6);
+      if (Q.jetT <= 0) { Q.jetT = rng(0.9, 1.6); Q.jet = 1; }
+    } else if (Q.jetT <= 0) {
       const urgency = Q.state === 'scatter' ? 2.1 : Q.state === 'nibble' ? 1.7
         : Q.state === 'flee' ? 1.5 : Q.state === 'approach' ? 1.15 : 0.8;
       Q.jetT = rng(0.55, 1.05) / urgency;
@@ -1509,8 +1730,10 @@ function updateSquid(dt, t, p, lp) {
       _b.multiplyScalar(td);           // restore for the heading code below
     }
     Q.jet = Math.max(0, Q.jet - dt * 3.2);
-    Q.vel.multiplyScalar(Math.pow(0.16, dt));
-    Q.pos.addScaledVector(Q.vel, dt);
+    if (Q.state !== 'guard') {
+      Q.vel.multiplyScalar(Math.pow(0.16, dt));
+      Q.pos.addScaledVector(Q.vel, dt);
+    }
     const floor = terrainH(Q.pos.x, Q.pos.z, 2) + Q.size * 0.4 + 0.8;
     if (Q.pos.y < floor) { Q.pos.y = floor; Q.vel.y = Math.abs(Q.vel.y) * 0.4; }
     const ceil = zoneTop(2) - 4;
@@ -1578,6 +1801,7 @@ export function buildPredators() {
   _pr = siteParams('predators').rng;
   for (const cfg of SHARK_CFG) buildShark(cfg);
   buildOctopuses();
+  buildLanternGlow();
   buildInk();
   buildSquid();
   buildSacs();
@@ -1697,7 +1921,48 @@ export function buildPredators() {
       for (const q of squids) { if (q.dead) continue; q.state = 'approach'; q.tState = 0; }
       return 'lured';
     },
-    dens: zi => octos.filter(o => o.zi === zi).map(o => ({ x: +o.den.x.toFixed(1), y: +o.den.y.toFixed(1), z: +o.den.z.toFixed(1) }))
+    dens: zi => octos.filter(o => o.zi === zi).map(o => ({ x: +o.den.x.toFixed(1), y: +o.den.y.toFixed(1), z: +o.den.z.toFixed(1) })),
+    // ---- THE LANTERN THEFT ----
+    lantern: () => ({
+      stolen: lantern.stolen, carried: lantern.carried, t: +lantern.t.toFixed(1), grabs: lantern.grabs,
+      by: lantern.by ? { zi: lantern.by.zi, state: lantern.by.state, den: lantern.by.den.toArray().map(v => +v.toFixed(1)) } : null,
+      at: lantern.stolen ? lanternAt(_k1).toArray().map(v => +v.toFixed(1)) : null,
+      glowVisible: lantern.glow.visible
+    }),
+    // Force a theft: the nearest den octopus of the zone comes to the diver and snatches.
+    steal: (pl = window.player) => {
+      if (lantern.stolen) return 'already stolen';
+      const O = octos.find(o => o.zi === activeZone && (o.state === 'den' || o.state === 'settle'));
+      if (!O) return 'no octopus at rest in this zone';
+      O.pos.copy(pl.pos).add(_k2.set(1.6, -0.6, 1.2)); O.mesh.position.copy(O.pos);
+      O.cool = 0; O.thief = true; octSet(O, 'grab'); O.tState = LANT.snatchT + 0.05;
+      return 'snatching';
+    },
+    // Fast-forward the hold timer (the 90 s drop).
+    warpLantern: (sec = 90) => { lantern.t += sec; return +lantern.t.toFixed(1); },
+    // ---- MHOR'S KEEPERS ----
+    guards: () => ({
+      wards: wardT.n, zone: wardT.zi,
+      perWard: Array.from({ length: wardT.n }, (_, i) => wardGuardCount(i)),
+      keepers: squids.filter(q => q.guard).map(q => ({ i: q.i, ward: q.ward, state: q.dead ? 'dead' : q.state,
+        d: q.ward >= 0 ? +q.pos.distanceTo(wardT.pos[q.ward]).toFixed(1) : null }))
+    }),
+    // Kill every living keeper on ward i (or all wards), the way spear + knife would.
+    killGuards: (i = -1) => {
+      let n = 0;
+      for (const Q of squids) {
+        if (!Q.guard || Q.dead || Q.ward < 0 || (i >= 0 && Q.ward !== i)) continue;
+        killSquidAt(Q, Q.pos); n++;
+      }
+      return `killed ${n}`;
+    },
+    // Park the diver beside ward i's post.
+    goWard: (i = 0, pl = window.player) => {
+      if (wardT.n === 0) return 'no wards posted (zone 2, sleeper awake)';
+      const wp = wardT.pos[Math.min(i, wardT.n - 1)];
+      pl.pos.set(wp.x + 6, wp.y + 2, wp.z + 6); pl.vel.set(0, 0, 0);
+      return `ward ${i} @ ${wp.x.toFixed(1)}, ${wp.y.toFixed(1)}, ${wp.z.toFixed(1)}`;
+    }
   };
 }
 
@@ -1708,6 +1973,7 @@ export function buildPredators() {
 export function hidePredators() {
   for (const S of sharks) S.mesh.visible = false;
   for (const O of octos) O.mesh.visible = false;
+  if (lantern.glow) lantern.glow.visible = false;
   if (squidMesh) { squidMesh.visible = false; squidGlow.visible = false; }
   if (inkMesh) inkMesh.visible = false;
   for (const S of sacs) { S.alive = false; S.grp.visible = false; }
@@ -1715,6 +1981,9 @@ export function hidePredators() {
 
 export function switchPredatorZone(zi) {
   activeZone = zi;
+  // Leaving the thief's zone mid-theft: it drops the light at its den mouth, where it
+  // waits (the octopus below is reset to 'den' like every other one).
+  if (lantern.stolen && lantern.carried && lantern.by && lantern.by.zi !== zi) dropLantern(lantern.by.mouth, false);
   for (const S of sharks) {
     const on = S.cfg.zi === zi;
     if (!on) { S.mesh.visible = false; continue; }
@@ -1727,6 +1996,8 @@ export function switchPredatorZone(zi) {
     if (O.zi !== zi) { O.mesh.visible = false; continue; }
     O.pos.copy(O.den); O.mesh.position.copy(O.den);
     octSet(O, 'den'); O.cool = rng(3, 12); O.reach = 0; O.active = 0; O.grab = 0;
+    // back into the thief's zone: it is still sitting on the light
+    if (lantern.stolen && lantern.carried && lantern.by === O) octSet(O, 'hoard');
   }
   if (zi !== 2) {
     squidMesh.visible = false; squidGlow.visible = false;
@@ -1736,6 +2007,7 @@ export function switchPredatorZone(zi) {
       if (Q.dead) continue;             // still out there waiting to drift back in
       Q.state = 'far'; Q.tState = 0;
     }
+    guardStamp = -1;                    // re-post the keepers against the live wards
   }
   // Any ink hanging in the old zone would otherwise float in the new one.
   for (let i = 0; i < INK_N; i++) inkLife[i] = 0;
@@ -1764,6 +2036,16 @@ export function switchPredatorZone(zi) {
 // cooldown return. `ev` is not touched: it is fully rebuilt every frame at the top of
 // updatePredators, so this reset cannot leak a stale threat/lightSteal tick.
 export function reseedDens() {
+  // A stolen lantern does not sail with the thief: the world under it is gone, so the
+  // light comes back to Sal on the next frame (the edge is reported, never lost).
+  if (lantern.stolen) { lantern.stolen = false; lantern.carried = false; lantern.by = null; lantern.pendingReturn = true; }
+  // A new site's Mhor is fully kept: every keeper alive and waiting for its post.
+  for (let q = SQ.shoal; q < squids.length; q++) {
+    const Q = squids[q];
+    Q.dead = 0; Q.die = 0; Q.deadT = 0; Q.glow = 0; Q.jet = 0; Q.ward = -1;
+    Q.state = 'far'; Q.tState = 0; Q.vel.set(0, 0, 0);
+  }
+  guardStamp = -1;
   // Same stream, same draw order as buildOctopuses (scale slot burnt below), so a
   // boot at a site and an arrive() back to it place bit-identical dens.
   _pd = denStream();
@@ -1784,6 +2066,9 @@ export function reseedDens() {
       const x = rock.x + Math.cos(a) * r, z = rock.z + Math.sin(a) * r;
       const y = terrainH(x, z, zi) + 0.2;
       O.den.set(x, y, z);
+      const mx = x + Math.cos(a) * 1.5, mz = z + Math.sin(a) * 1.5;
+      O.mouth.set(mx, terrainH(mx, mz, zi) + 0.35, mz);
+      O.thief = false;
       O.pos.copy(O.den);
       O.jet.set(0, 0, 0);
       O.mesh.position.copy(O.den);
@@ -1798,6 +2083,7 @@ export function reseedDens() {
 export function updatePredators(dt, t, p, lanternPos) {
   const t0 = performance.now();
   ev.threat = 0; ev.bite = 0; ev.lightSteal = 0; ev.inkPickup = 0;
+  ev.lanternStolen = false; ev.lanternTaken = false; ev.lanternReturned = false; ev.msg = null;
   uTime.value = t;
   if (scene.fog) {
     uFogD.value = scene.fog.density;
@@ -1821,6 +2107,7 @@ export function updatePredators(dt, t, p, lanternPos) {
     updateOctopus(O, dt, t, p, _lp);
   }
   if (activeZone === 2) updateSquid(dt, t, p, _lp);
+  updateLantern(dt, p);
   updateInk(dt);
   updateClouds(dt);
   updateSacs(dt, t, p);
@@ -1890,6 +2177,8 @@ export function slash(pos, fwd, range = 3.4) {
     if (O.zi !== activeZone) continue;
     if (O.pos.distanceToSquared(pos) > (range + 2.2) * (range + 2.2)) continue;
     if (O.state === 'flee' || O.state === 'return') continue;
+    // a knife on the hoarder: it drops the lantern where it sits and goes
+    if (lantern.stolen && lantern.carried && lantern.by === O) dropLantern(O.pos, true);
     // emergency jet: ink first, then gone. Same escape the grab ends on, only faster.
     _k2.copy(O.pos).sub(pos);
     if (_k2.lengthSq() < 1e-4) _k2.set(1, 0, 0.3);
