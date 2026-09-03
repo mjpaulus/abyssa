@@ -421,6 +421,33 @@ export function startEnding() {
   const ui = document.getElementById('ui');
   if (ui) { ui.style.transition = 'opacity 2.6s ease-in'; ui.style.opacity = '0'; }
   if (document.pointerLockElement) document.exitPointerLock();
+  // THE RITE IS A DAY RITE. 'One light returns' needs the light to exist: a rite that
+  // fired at night gave 50 s of black water and a lantern. The STILL beat exists to hide
+  // a cut, so the weather is scrubbed toward late morning under it (see updateEnding).
+  dayScrub = -1;
+}
+
+// ---------------------------------------------------------------- force the rite to day
+// Late morning on the 12-minute cycle: sunrise is phase 0.25, noon 0.5. The clock only
+// ever moves FORWARD (a night rite passes through dawn, not back into the afternoon),
+// and it is not touched when the sky is already bright: a clearing storm at noon is
+// the ending's own drama and stays. Goes through the weather's dev surface — the one
+// scrub API it exposes — never by reaching into weather.js.
+const DAY_PHASE = 0.41;
+let dayScrub = -1;             // total phase to travel this rite; <0 = not measured yet
+function forceRiteToDay(dt) {
+  const w = typeof window !== 'undefined' ? window.weather : null;
+  if (!w || !w.state || !w.scrub) return;
+  const st = w.state();
+  if (dayScrub < 0) {
+    dayScrub = st.day >= 0.7 ? 0 : ((DAY_PHASE - st.phase01) % 1 + 1) % 1;
+    if (dayScrub === 0) return;
+  }
+  if (dayScrub === 0) return;
+  const left = Math.max(0.05, T_STILL - 0.4 - T);          // land before the still beat ends
+  const step = Math.min(dayScrub, dayScrub * Math.min(1, dt / left));
+  w.scrub(st.phase01 + step);
+  dayScrub -= step;
 }
 
 // ---------------------------------------------------------------- per-frame
@@ -433,6 +460,7 @@ export function updateEnding(dt, t) {
   let y;
   if (T <= T_STILL) {
     y = startY + Math.sin(t * 0.5) * 0.12;                       // he only breathes
+    forceRiteToDay(dt);
   } else if (T <= T_RISE_END) {
     y = startY + (SURFACE_END_Y - startY) * ascentCurve(rise);
   } else {

@@ -37,8 +37,26 @@ export const survival = {
   // the hose, so an unsupplied diver gets his bottle back at a crawl. game.js owns the
   // recharge (it has dt and the play-state gate); it lives here so the HUD, the debug
   // surface and the respawn path all read one authoritative value.
-  thrustCharge: 1
+  thrustCharge: 1,
+  // THE TORN DRESS. Seconds left on a tear: a bite or a sleeper's slam opens the suit
+  // and the tenders cannot out-pump the hole — supplied air refills at half rate until
+  // it runs out. Stacking hits EXTEND the tear (capped), they never halve twice.
+  torn: 0
 };
+
+export const TORN_SEC = 20;
+const TORN_CAP = 45;
+const TORN_REFILL = 0.5;            // refill multiplier while torn
+// Returns true when this call opened a NEW tear (the game says so once); false when it
+// only extended one already open.
+export function tearDress(sec = TORN_SEC) {
+  const fresh = survival.torn <= 0;
+  survival.torn = Math.min(TORN_CAP, Math.max(0, survival.torn) + sec);
+  return fresh;
+}
+export function mendDress() { survival.torn = 0; }
+// The live refill rate, for the HUD and for probes: what the line is actually giving him.
+export function o2RefillRate() { return O2_REFILL * (survival.torn > 0 ? TORN_REFILL : 1); }
 
 // The pump only burns fuel while the diver is actually down the line.
 const FUEL_BURN = 1 / 240;          // a full tank runs about four minutes
@@ -54,8 +72,10 @@ export function updateSurvival(dt, depth01, submerged, lightOut) {
   const pumpRunning = survival.fuel > 0;
   survival.supplied = pumpRunning && survival.tautness < 1;
 
+  if (survival.torn > 0) survival.torn = Math.max(0, survival.torn - dt);
+
   if (survival.supplied) {
-    survival.oxygen = Math.min(1, survival.oxygen + O2_REFILL * dt);
+    survival.oxygen = Math.min(1, survival.oxygen + o2RefillRate() * dt);
   } else {
     const panic = lightOut ? 1.5 : 1;
     survival.oxygen -= O2_BASE_DRAIN * (1 + depth01 * O2_DEPTH_FACTOR) * panic * dt;
@@ -89,7 +109,9 @@ export function collect(kind) {
   else if (kind === 'bitumen') survival.bitumen++;
 }
 
-// Surfacing at the raft tops the diver back up; the pump keeps whatever fuel it has.
+// Surfacing at the raft tops the diver back up and the tenders patch the dress; the
+// pump keeps whatever fuel it has.
 export function resupplyAtRaft() {
   survival.oxygen = 1;
+  survival.torn = 0;
 }

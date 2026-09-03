@@ -13,6 +13,10 @@
   /* z-index is load-bearing: the canvas is appended after this element, so without an
      explicit order it paints on top and swallows every click on the title screen. */
   #ui{position:fixed;inset:0;pointer-events:none;color:#bfe3e8;z-index:1}
+  /* Everything the diver reads lives under #hud so it can be put away as one thing:
+     hidden behind the title (the title is a child of #ui, so #ui itself cannot be the
+     thing that hides), uncovered on the first click. */
+  #hud{position:absolute;inset:0;transition:opacity 1.2s}
   #title{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
     /* Scrim, not a blackout. This was 0.70 at the centre because the title used to sit
        over a murky underwater portrait that needed the help; it now sits over the raft's
@@ -32,36 +36,71 @@
   #load p{letter-spacing:.28em;font-size:.7rem;text-transform:uppercase;opacity:.42;margin:0;animation:pulse 2.4s infinite}
   #load.done{opacity:0;pointer-events:none}
   @keyframes pulse{0%,100%{opacity:.25}50%{opacity:.6}}
-  #msg{position:absolute;left:0;right:0;top:12%;text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
+  #msg{position:absolute;left:0;right:0;top:max(12%,7.8rem);text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
   #depth{position:absolute;right:1.2rem;top:1rem;font-size:.8rem;letter-spacing:.2em;opacity:.6}
   #mode{position:absolute;left:1.2rem;top:1rem;font-size:.7rem;letter-spacing:.25em;opacity:.4;text-transform:uppercase}
-  .bar{position:absolute;left:50%;transform:translateX(-50%);width:min(340px,60vw);height:6px;border:1px solid rgba(160,230,255,.35);border-radius:4px;overflow:hidden}
-  .bar .fill{height:100%;width:100%;transform-origin:left;transition:transform .2s}
-  .bar .label{position:absolute;left:-4.6rem;top:-.35rem;font-size:.6rem;letter-spacing:.2em;opacity:.5;text-transform:uppercase}
-  #lightbar{bottom:2rem}
-  #lightfill{background:linear-gradient(90deg,#3fd9ff,#bff6ff);box-shadow:0 0 14px rgba(120,220,255,.8)}
-  #o2bar{bottom:3.4rem}
-  #o2fill{background:linear-gradient(90deg,#4ade9b,#d6ffe9);box-shadow:0 0 14px rgba(120,255,190,.8)}
+
+  /* ---- gauges ----------------------------------------------------------------------
+     Three groups, one hierarchy. The pair that can kill you sits bottom-centre, AIR the
+     widest thing on the screen and PUMP under it; the pair you steer with (DRESS, and
+     the BOTTLE once he has one) sits bottom-left; the LANTERN rides beside the bearing
+     strip, because it and the strip are both about seeing. Labels sit above-left of
+     their bar so a bar at the screen edge never loses its name off-screen. */
+  .bar{position:absolute;height:6px;border:1px solid rgba(160,230,255,.35);border-radius:4px;overflow:visible}
+  .bar .fill{height:100%;width:100%;transform-origin:left;transition:transform .2s;border-radius:3px}
+  .bar .label{position:absolute;left:0;top:-1.05rem;font-size:.6rem;letter-spacing:.24em;opacity:.55;text-transform:uppercase;white-space:nowrap}
+  /* survival pair: bottom-centre */
+  #o2bar{left:50%;transform:translateX(-50%);bottom:2rem;width:min(460px,62vw);height:9px;border-color:rgba(160,255,200,.45)}
+  #o2bar .label{font-size:.7rem;opacity:.75}
+  #o2fill{background:linear-gradient(90deg,#4ade9b,#d6ffe9);box-shadow:0 0 16px rgba(120,255,190,.8)}
   #o2fill.critical{background:linear-gradient(90deg,#ff5a4a,#ffb0a0);box-shadow:0 0 16px rgba(255,90,74,.9);animation:alarm .8s infinite}
   @keyframes alarm{0%,100%{opacity:1}50%{opacity:.45}}
-  #fuelbar{bottom:4.8rem}
+  /* the torn dress: the fill bleeds, and a red bead rides its leading edge */
+  #o2bar.torn{border-color:rgba(255,140,110,.7)}
+  #o2bar.torn #o2fill{animation:bleed .7s ease-in-out infinite}
+  @keyframes bleed{0%,100%{filter:brightness(1)}50%{filter:brightness(.55) saturate(.6)}}
+  #o2leak{position:absolute;top:-4px;width:3px;height:15px;margin-left:-1px;border-radius:2px;background:#ff8a70;
+    box-shadow:0 0 8px rgba(255,120,90,.9);opacity:0;transition:opacity .3s}
+  #o2bar.torn #o2leak{opacity:1;animation:alarm .7s infinite}
+  #o2bar.torn .label::after{content:' — torn';color:#ff9a86;opacity:1}
+  #fuelbar{left:50%;transform:translateX(-50%);bottom:4.4rem;width:min(300px,42vw)}
   #fuelfill{background:linear-gradient(90deg,#c08a3a,#ffd9a0);box-shadow:0 0 12px rgba(255,190,120,.6)}
+  /* control pair: bottom-left */
+  #trimbar{left:1.4rem;bottom:2rem;width:min(210px,24vw)}
+  #trimfill{background:linear-gradient(90deg,#8a6a33,#e8c98a);box-shadow:0 0 10px rgba(232,201,138,.5)}
+  /* neutral-fill tick: game.js sets its left from the suit model's NEUTRAL_FILL */
+  #trimbar .neutral{position:absolute;left:50%;top:-2px;width:1px;height:10px;background:rgba(200,235,255,.85);z-index:2}
+  #bottlebar{left:1.4rem;bottom:4.1rem;width:min(150px,17vw)}
+  #bottlefill{background:linear-gradient(90deg,#5c4a2a,#b99a63);box-shadow:0 0 8px rgba(185,154,99,.35)}
+  /* the lantern: beside the bearing strip, on its left so the right-hand readouts keep their column */
+  #lightbar{top:4.1rem;width:min(150px,11vw);left:max(1.4rem, calc(50% - min(448px,39vw) - 1.6rem - min(150px,11vw)))}
+  /* a narrow window has no room beside the strip: the lantern tucks under the mode line instead */
+  @media (max-width:1100px){#mode{top:.8rem} #lightbar{top:2.9rem;left:1.4rem}}
+  #lightfill{background:linear-gradient(90deg,#3fd9ff,#bff6ff);box-shadow:0 0 14px rgba(120,220,255,.8)}
+
   #hose{position:absolute;right:1.2rem;top:2.2rem;font-size:.72rem;letter-spacing:.16em;opacity:.55}
   #hose.taut{color:#ff9a86;opacity:1}
   #mats{position:absolute;right:1.2rem;top:3.4rem;font-size:.72rem;letter-spacing:.16em;opacity:.5}
-  #craft{position:absolute;left:0;right:0;bottom:7rem;text-align:center;font-size:.8rem;letter-spacing:.18em;opacity:0;transition:opacity .4s;text-transform:uppercase}
+  #craft{position:absolute;left:0;right:0;bottom:7.2rem;text-align:center;font-size:.8rem;letter-spacing:.18em;opacity:0;transition:opacity .4s;text-transform:uppercase}
   #cross{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px;border-radius:50%;background:rgba(200,240,255,.5)}
-  /* bearing strip: a quiet brass rule with ticks for raft / sleeper / rift */
-  #bearing{position:absolute;left:50%;top:3.2rem;transform:translateX(-50%);width:min(560px,64vw);height:2.4rem;
-    border-top:1px solid rgba(190,225,232,.22)}
+  /* bearing strip: a brass rule with ticks for raft / sleeper / rift. It is the game's
+     only map, and sight lines are 40-100u in unlit water, so it is sized to be READ
+     at 1080p on a real monitor, not glanced at: 1.6x the hairline it started as. */
+  #bearing{position:absolute;left:50%;top:3.2rem;transform:translateX(-50%);width:min(896px,78vw);height:3.8rem;
+    border-top:1px solid rgba(190,225,232,.34)}
   .bm{position:absolute;top:0;transform:translateX(-50%);text-align:center;transition:opacity .3s;white-space:nowrap}
-  .bm .tick{width:1px;height:.55rem;margin:0 auto;background:rgba(220,244,248,.8)}
-  .bm .lbl{font-size:.58rem;letter-spacing:.28em;padding-left:.28em;opacity:.85}
-  .bm .dst{font-size:.55rem;letter-spacing:.18em;opacity:.5}
+  .bm .tick{width:2px;height:.9rem;margin:0 auto;background:rgba(220,244,248,.8);border-radius:1px}
+  .bm .lbl{font-size:.92rem;letter-spacing:.3em;padding-left:.3em;opacity:.85;margin-top:.1rem}
+  .bm .dst{font-size:.82rem;letter-spacing:.2em;opacity:.55}
   #bmLev .tick{background:rgba(255,170,140,.9)}
   #bmLev .lbl{color:#ffb9a0}
   #bmRift .tick{background:rgba(150,235,255,.95)}
   #bmRift .lbl{color:#aee9ff}
+  /* the active target — the sleeper until it stills, then the rift — carries a brighter, taller tick */
+  .bm.active .tick{height:1.35rem;width:3px;box-shadow:0 0 10px currentColor,0 0 3px #fff}
+  .bm.active .lbl{opacity:1;text-shadow:0 0 10px currentColor}
+  #bmLev.active .tick{background:#ffd2c0;color:#ffb9a0}
+  #bmRift.active .tick{background:#dbf7ff;color:#aee9ff}
   /* low-air vignette: breathes at the frame edges, driven from game.js */
   #warn{position:absolute;inset:0;opacity:0;background:radial-gradient(ellipse at center,
     rgba(0,0,0,0) 52%, rgba(120,20,10,.55) 100%);animation:warnpulse 1.6s ease-in-out infinite}
@@ -72,22 +111,26 @@
 <body>
 <div id="load"><h1>ABYSSA</h1><p>raising the pump</p></div>
 <div id="ui">
-  <div id="msg"></div>
-  <div id="depth"></div>
-  <div id="mode"></div>
-  <div id="cross" class="hidden"></div>
-  <div id="warn"></div>
-  <div id="bearing">
-    <div class="bm" id="bmRaft"><div class="tick"></div><div class="lbl">RAFT</div><div class="dst"></div></div>
-    <div class="bm" id="bmLev"><div class="tick"></div><div class="lbl">SLEEPER</div><div class="dst"></div></div>
-    <div class="bm" id="bmRift"><div class="tick"></div><div class="lbl">RIFT</div><div class="dst"></div></div>
+  <div id="hud" class="hidden">
+    <div id="msg"></div>
+    <div id="depth"></div>
+    <div id="mode"></div>
+    <div id="cross" class="hidden"></div>
+    <div id="warn"></div>
+    <div id="bearing">
+      <div class="bm" id="bmRaft"><div class="tick"></div><div class="lbl">RAFT</div><div class="dst"></div></div>
+      <div class="bm" id="bmLev"><div class="tick"></div><div class="lbl">SLEEPER</div><div class="dst"></div></div>
+      <div class="bm" id="bmRift"><div class="tick"></div><div class="lbl">RIFT</div><div class="dst"></div></div>
+    </div>
+    <div id="lightbar" class="bar"><span class="label">lantern</span><div id="lightfill" class="fill"></div></div>
+    <div id="hose"></div>
+    <div id="mats"></div>
+    <div id="craft"></div>
+    <div id="trimbar" class="bar"><span class="label">dress</span><div id="trimfill" class="fill"></div><i class="neutral"></i></div>
+    <div id="bottlebar" class="bar hidden"><span class="label">bottle</span><div id="bottlefill" class="fill"></div></div>
+    <div id="fuelbar" class="bar"><span class="label">pump</span><div id="fuelfill" class="fill"></div></div>
+    <div id="o2bar" class="bar"><span class="label">air</span><div id="o2fill" class="fill"></div><i id="o2leak"></i></div>
   </div>
-  <div id="hose"></div>
-  <div id="mats"></div>
-  <div id="craft"></div>
-  <div id="lightbar" class="bar"><span class="label">lantern</span><div id="lightfill" class="fill"></div></div>
-  <div id="o2bar" class="bar"><span class="label">air</span><div id="o2fill" class="fill"></div></div>
-  <div id="fuelbar" class="bar"><span class="label">pump</span><div id="fuelfill" class="fill"></div></div>
   <div id="title">
     <h1>ABYSSA</h1>
     <p>three sleepers bar the deep</p>
