@@ -290,6 +290,26 @@ let root = null;          // the merged chimney/fumarole/crust group — dispose
 let chimneyMat = null;    // the ONE MeshStandardMaterial every solid piece shares — REUSED across reseeds, never recreated (zero recompiles)
 export const activeVents = [];   // {x,y,z,baseR} throat positions, non-dead — ventlife.js anchors its swarms here (array keeps identity across reseeds)
 const hotVents = [];      // {x,y,z,sprite} the 2-3 hottest — shimmer + ember glow
+// THE WARM COLUMNS, uniform-shaped for water.js's marine snow: flat (x, throatY, z,
+// radius) per active throat, up to VENT_COLS_MAX, in ONE Float32Array allocated here
+// once and rewritten in place by every reseed (the snow material holds this exact
+// object as its uniform value, so there is nothing to re-hand over and nothing
+// allocated per frame or per voyage). ventColumnCount is the live count in
+// {value} form for the same reason — it IS the uniform.
+export const VENT_COLS_MAX = 20;
+export const ventColumns = new Float32Array(VENT_COLS_MAX * 4);
+export const ventColumnCount = { value: 0 };
+function publishColumns() {
+  const n = Math.min(activeVents.length, VENT_COLS_MAX);
+  for (let i = 0; i < n; i++) {
+    const v = activeVents[i];
+    ventColumns[i * 4] = v.x; ventColumns[i * 4 + 1] = v.y; ventColumns[i * 4 + 2] = v.z;
+    // column radius at the throat: the bore's own mouth plus a metre of spread
+    ventColumns[i * 4 + 3] = Math.max(1.8, v.baseR * 0.9 + 1.0);
+  }
+  for (let i = n * 4; i < ventColumns.length; i++) ventColumns[i] = 0;
+  ventColumnCount.value = n;
+}
 
 // ---------------------------------------------------------------------------
 export function buildVents() {
@@ -463,6 +483,7 @@ function growField() {
 
   buildPlumes();
   buildShimmer();
+  publishColumns();
 }
 
 // ---------------------------------------------------------------------------
