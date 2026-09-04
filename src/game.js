@@ -986,7 +986,8 @@ function update(dt, t) {
   // The chart in hand stills the man: movement keys are parked while the paper is up.
   if (isChartOpen()) clearKeys();
   // THE PAUSE: no pointer lock and no chart means no helm. See the note at `paused`.
-  paused = (!locked || blurred) && !isChartOpen();
+  // window.__helm: the review harness has no pointer lock; it takes the helm by flag.
+  paused = !window.__helm && (!locked || blurred) && !isChartOpen();
   pauseT = paused ? pauseT + dt : 0;
   // the line waits a beat so the lock's own latency never flashes it
   $pause.classList.toggle('on', paused && pauseT > 0.35);
