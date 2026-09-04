@@ -323,7 +323,27 @@ export const GLASS = {
     // It is the A/B for the whole ruling: 1 restores the shipped painted sky exactly,
     // 0 hands the sky entirely to the puffs. The storm envelope drives it back to 1 on
     // its own (see uCloudDome in water.js) — a gale's lid is a lid.
-    dome: 0.28
+    dome: 0.28,
+    // THE SKY UNDER THE LID (water.js skyDrama). How closed the deck is — smoothstep of
+    // the resolved coverage over lidCov, or of the storm envelope over lidStorm,
+    // whichever is larger — pulls the horizon ring the dome draws, the ring the sea
+    // mirrors and the far-field airlight toward the deck's own underside:
+    //   under = base + (lit - base) * lidHz + hor * lidRing        (never above hor)
+    // lidHz is where between the underside and the lit top the low sky sits (CIE
+    // overcast puts the horizon at a third of the zenith; haze under a real deck
+    // brightens it, so 0.30 lands the fair overcast horizon near its zenith). lidRing
+    // is the share of the authored ring that survives a full deck — the hazy bright
+    // horizon under the black lid of the gale reference. lidCov starts above the
+    // day-0 hand's 0.62 coverage so the shipped calm noon is bit-identical.
+    // Measured (deck view, scene-linear, post bypassed): day-1 overcast cov 0.79 went
+    // horizon-sky 0.36 / sea-under-horizon 0.41 / sea 4 deg down 0.23 / zenith 0.16 to
+    // 0.20 / 0.22 / 0.16 / 0.13 — the sea sits at or under the sky it mirrors; the
+    // storm-noon repro (env 0.44) went 0.54 / 0.46 / 0.28 / 0.18 to 0.16 / 0.17 / 0.14
+    // / 0.11. Day-0 calm noon (cov 0.62) is lid 0.
+    lidHz: 0.25,
+    lidRing: 0.10,
+    lidCov: [0.64, 0.86],
+    lidStorm: [0.10, 0.55]
   },
 
   // ---------------------------------------------------------------------------

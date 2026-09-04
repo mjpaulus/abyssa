@@ -244,9 +244,19 @@ const GLSL_AIR = `
 // horizon in air, at the two times of day the horizon is most interesting — flagged for
 // the lab to judge rather than silently "fixed" here, since fixing it means re-patching
 // the fog chunk for every material in the game.
+// THE AIRLIGHT IS A UNIFORM NOW. abyssaAir = (rgb of the ring the sky actually draws at
+// the horizon this frame, flag). The flag is 0 for any program that was never handed
+// the uniform (GLSL zero-initialises an unset uniform), so such a program gets the old
+// noon bake bit-for-bit instead of black. See patchFog for how a global chunk gets a
+// uniform of its own: the value is ONE shared Float32Array installed on
+// UniformsLib.fog and on every ShaderLib entry that carries fogColor, and
+// UniformsUtils.clone copies a typed array BY REFERENCE, so every material reads the
+// same four floats and water.js writes them once a frame.
+uniform vec4 abyssaAir;
 vec3 airLight( vec3 surfIrr ){
   float dg = clamp( ( surfIrr.g / ${f(SURF_LIGHT[1])} - 0.20 ) / 0.80, 0.0, 1.0 );
-  return ${v3(SKY_HOR_D)} * ( 0.0266 + 0.9734 * dg );
+  vec3 bake = ${v3(SKY_HOR_D)} * ( 0.0266 + 0.9734 * dg );
+  return mix( bake, abyssaAir.rgb, abyssaAir.a );
 }`;
 
 // THE SKY. One function, used by the ocean surface on BOTH sides of the interface and by
@@ -506,6 +516,7 @@ if (typeof window !== 'undefined') {
   window.__sky = {
     // The tuning surface itself, so a probe (and the lab) can A/B a stop live.
     G: GLASS,
+    dbg(n) { uDbg.value = +n || 0; return uDbg.value; },
     h: null, w: { speed: 0, dir: 0 },
     sync() {
       if (!window.weather) return null;
@@ -532,6 +543,7 @@ if (typeof window !== 'undefined') {
         isl: uCloudIsl.value.toArray(), shp: uCloudShp.value.toArray(), bak: uCloudBak.value,
         frm: uCloudFrm.value.toArray(), frm2: uCloudFrm2.value.toArray(),
         skyHor: uSkyHor.value.toArray(), skyZen: uSkyZen.value.toArray(),
+        pHor: _pHor.slice(), lid: cloudLook.lid, airL: Array.from(AIR_U),
         drift: [uCloudDrift.value.x, uCloudDrift.value.y],
         lit: uCloudLit.value.toArray(), base: uCloudBase.value.toArray(),
         fog: uFog.value, fogCol: uFogCol.value.toArray(), discK: uDiscK.value,
@@ -754,8 +766,23 @@ export function murkFrac(y) {
 // depth-tinted inscatter. scene.fog stays a FogExp2 so USE_FOG / FOG_EXP2 and the
 // fogColor / fogDensity uniform plumbing keep working on every built-in material.
 // NOTE: fogColor now means "surface irradiance", not "colour of the far field".
+// The one airlight every fogged program reads (see abyssaAir in GLSL_AIR). Written by
+// skyDrama; .a stays 0 until the first frame resolves it, which is the noon bake.
+const AIR_U = new Float32Array(4);
+
 (function patchFog() {
   const C = THREE.ShaderChunk;
+  // Hand the global chunk a uniform: the SAME Float32Array on UniformsLib.fog (our own
+  // ShaderMaterials clone that) and on every ShaderLib entry three already merged at
+  // its module-eval (the built-ins clone THOSE, not UniformsLib). WebGLUniforms only
+  // builds setters for uniforms the linked program actually uses, so an entry on a
+  // material whose shader never mentions abyssaAir costs nothing; a fogged program
+  // WITHOUT the entry would throw in upload(), which is why both tables get it.
+  THREE.UniformsLib.fog.abyssaAir = { value: AIR_U };
+  for (const k in THREE.ShaderLib) {
+    const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
+    if (u && u.fogColor) u.abyssaAir = { value: AIR_U };
+  }
   C.fog_pars_vertex = `#ifdef USE_FOG
   varying float vFogDepth;
   varying float vFogY;
@@ -999,7 +1026,8 @@ uniform vec4 uMoonPh, uCloudIsl, uCloudShp, uCloudFrm;`;
 const SKY_UNIFORMS = {
   uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
   uCloudIsl, uCloudShp, uCloudBak, uCloudDome, uCloudFrm, uCloudFrm2,
-  uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol
+  uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol,
+  abyssaAir: { value: AIR_U }
 };
 const _tmp = new THREE.Vector3();
 const _size = new THREE.Vector2();
@@ -1141,7 +1169,7 @@ function captureSkyEnv() {
   envRT = envPM.fromCubemap(envCubeRT.texture);
   if (old) old.dispose();
   for (let i = 0; i < envListeners.length; i++) envListeners[i](envRT.texture);
-  _envFinger[0] = _pHor[0]; _envFinger[1] = _pHor[1]; _envFinger[2] = _pHor[2];
+  _envFinger[0] = _pRing[0]; _envFinger[1] = _pRing[1]; _envFinger[2] = _pRing[2];
   _envFinger[3] = _pZen[0]; _envFinger[4] = _pZen[1]; _envFinger[5] = _pZen[2];
   envCool = 2.5;
 }
@@ -1149,8 +1177,8 @@ function maybeRefreshSkyEnv(dt) {
   if (!envCam) return;
   envCool -= dt;
   if (envCool > 0) return;
-  const d = Math.abs(_pHor[0] - _envFinger[0]) + Math.abs(_pHor[1] - _envFinger[1])
-          + Math.abs(_pHor[2] - _envFinger[2]) + Math.abs(_pZen[0] - _envFinger[3])
+  const d = Math.abs(_pRing[0] - _envFinger[0]) + Math.abs(_pRing[1] - _envFinger[1])
+          + Math.abs(_pRing[2] - _envFinger[2]) + Math.abs(_pZen[0] - _envFinger[3])
           + Math.abs(_pZen[1] - _envFinger[4]) + Math.abs(_pZen[2] - _envFinger[5]);
   if (d > 0.030) captureSkyEnv();
 }
@@ -1430,6 +1458,12 @@ const uSss2 = { value: new THREE.Vector4(GLASS.chop.sssCap, GLASS.chop.sssCalm, 
 // CHURNED-WATER OPACITY. (opaqK, opaqLo, opaqHi, opaqFoam) and (opaqBelow, opaqSssK).
 // See the GLASS.chop.opaq* block: this scales the WEIGHT of the screen-space refraction,
 // it never touches the pass itself. At storm 0 wind 0 every term is exactly 0.
+// DEV DECOMPOSITION. uDbg = 0 is the shipped composite (one uniform compare per
+// fragment, nothing else). 1 reflection, 2 analytic body, 3 screen-space transmission,
+// 4 foam (all whitewater mixes), 5 broad-body SSS, 6 haze/airlight, 7 bubble lift
+// (accumulator), 8 sun glitter. Air side only; the from-below path ignores it.
+// window.__sky.dbg(n).
+const uDbg = { value: 0 };
 const uOpaq = { value: new THREE.Vector4(GLASS.chop.opaqK, GLASS.chop.opaqLo, GLASS.chop.opaqHi, GLASS.chop.opaqFoam) };
 const uOpaq2 = { value: new THREE.Vector2(GLASS.chop.opaqBelow, GLASS.chop.opaqSssK) };
 // SPILLING BREAKERS. (spillK, spillLen, spillLip, spillTail).
@@ -2062,7 +2096,7 @@ function buildSurface() {
     ...SKY_UNIFORMS,
     uFlash: { value: 0 },
     uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
-    uBright: { value: 1 }, uFade: { value: 1 },
+    uBright: { value: 1 }, uFade: { value: 1 }, uDbg,
     uRefr, uRefrK, uRefrSide, uRes,
     uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2,
     uOpaq, uOpaq2, uSpill, uBoil,
@@ -2103,6 +2137,7 @@ function buildSurface() {
       ${GLSL_NOISE}
       ${GLSL_WAVE_F}
       ${GLSL_FOLD}
+      uniform float uDbg;
       uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
                     uFoamThr, uFlash, uRefrK, uRefrSide;
       uniform vec2 uCap, uOpaq2, uGlit, uAccC, uAccS;
@@ -2509,6 +2544,11 @@ function buildSurface() {
         // The raft's shadow on this fragment of sea. One sample cluster for both sides;
         // exactly 1.0 (and no texture reads) whenever the sun's map is off.
         float sh = sunShadow( vW );
+        bool dOff = uDbg > 0.5;
+        bool dFoam = !dOff || abs( uDbg - 4.0 ) < 0.5;
+        bool dBub = !dOff || abs( uDbg - 7.0 ) < 0.5;
+        bool dHaze = !dOff || abs( uDbg - 6.0 ) < 0.5;
+        vec3 tRefl = vec3( 0.0 ), tBody = vec3( 0.0 ), tTrans = vec3( 0.0 ), tSss = vec3( 0.0 ), tGlit = vec3( 0.0 );
         // Each side owns an fbm2. Gating them on F keeps the common fragment paying for
         // one, not two: inside the window F is 0.02 so the mirror is invisible, outside it
         // F is 1.0 so the sky is. The branches are spatially coherent (whole window vs
@@ -2577,6 +2617,7 @@ function buildSurface() {
           // read tropical.
           vec3 T = refract( V, Na, 1.0 / ETA );
           vec3 body = seaBody( mirrorRadiance( vW, T, uTime, mk * 0.55 ) );
+          vec3 bodyA = body;
           // TRANSPARENCY. When the far-side target holds the underwater world (camera
           // in air, uRefrSide 1), the transmission is the actual scene under the
           // surface — drums, tether, Sal descending — already water-fogged by the
@@ -2592,6 +2633,7 @@ function buildSurface() {
           if ( rk > 0.001 ) {
             float ok; vec3 rs = refrSample( T, V, dhA, ok );
             body = mix( body, mix( rs, body, 0.15 ), rk * ok );
+            tTrans = rs * ( 0.85 * rk * ok );
           }
           // FROM ABOVE: the raft's shadow on the water beside it. The body darkens
           // (less sun getting into the column there) and the sun's own glitter is
@@ -2608,8 +2650,10 @@ function buildSurface() {
           // lobe carries the SAME light the disc did, spread by the water's state.
           float legacy = uRough.z;
           gSunK = sh * legacy; gHaloK = sh;
-          col = body * ( 1.0 - F ) * ( 1.0 - 0.45 * ( 1.0 - sh ) )
-              + skyRadiance( reflect( V, Na ) ) * F;
+          float bodyW = ( 1.0 - F ) * ( 1.0 - 0.45 * ( 1.0 - sh ) );
+          tBody = bodyA * bodyW; tTrans *= bodyW;
+          tRefl = skyRadiance( reflect( V, Na ) ) * F;
+          col = body * bodyW + tRefl;
           gSunK = 1.0; gHaloK = 1.0;
           if ( legacy < 0.999 ) {
             float NoL = dot( Na, uSunDir );
@@ -2638,7 +2682,8 @@ function buildSurface() {
               float Vis = smithGGXCorrelated( max( cta, 1e-4 ), max( NoL, 1e-4 ), alpha );
               float Fs = F0 + ( 1.0 - F0 ) * pow( 1.0 - VoH, 5.0 );
               float gx = uGlit.y * uRough.w * D * Vis * NoL;
-              col += uSunCol * ( uDiscK * gOcc * sh * Fs * ( 1.0 - legacy ) * ( 1.0 - exp( -gx ) ) );
+              tGlit = uSunCol * ( uDiscK * gOcc * sh * Fs * ( 1.0 - legacy ) * ( 1.0 - exp( -gx ) ) );
+              col += tGlit;
             }
           }
 
@@ -2737,7 +2782,8 @@ function buildSurface() {
               // over exactly the water it was written for and left +2.4 code values.
               // The sea being over threshold in a gale is a pre-existing property of the
               // sky reflection, not something this term introduces.
-              col += sssCol * clamp( amt, 0.0, 1.0 ) * sqrt( max( 1.0 - F, 0.0 ) );
+              tSss = sssCol * clamp( amt, 0.0, 1.0 ) * sqrt( max( 1.0 - F, 0.0 ) );
+              col += tSss;
             }
           }
 
@@ -2745,7 +2791,15 @@ function buildSurface() {
           // bearing (WAVE[0], 20 degrees), sampled ~9:1 anisotropically so it reads as
           // streaks and not as blobs. Two octaves multiplied, so the streaks break up
           // instead of running the length of the frame.
-          if ( uStorm > 0.02 ) {
+          if ( dOff ) {
+            if ( uDbg < 1.5 ) col = tRefl;
+            else if ( uDbg < 2.5 ) col = tBody;
+            else if ( uDbg < 3.5 ) col = tTrans;
+            else if ( uDbg < 5.5 && uDbg > 4.5 ) col = tSss;
+            else if ( uDbg > 7.5 ) col = tGlit;
+            else col = vec3( 0.0 );
+          }
+          if ( uStorm > 0.02 && dFoam ) {
             vec2 wr = vec2( vW.x * 0.93969 + vW.z * 0.34202,
                            -vW.x * 0.34202 + vW.z * 0.93969 );
             float sk = vn( vec2( wr.x * 0.030 - uTime * 0.30, wr.y * 0.27 ) )
@@ -2778,7 +2832,7 @@ function buildSurface() {
         float foam = smoothstep( uFoamThr, uFoamThr + 0.05, length( dh ) )
                    * ( 0.20 + 0.80 * uStorm )
                    * ( 0.45 + 0.75 * vn( vW.xz * 0.55 + vec2( uTime * 0.12 ) ) );
-        col = mix( col, foamCol, clamp( foam, 0.0, 0.85 ) * uNearK );
+        if ( dFoam ) col = mix( col, foamCol, clamp( foam, 0.0, 0.85 ) * uNearK );
 
         // JACOBIAN FOAM — this ABSORBS the wind round's height-led whitecap term.
         //
@@ -2831,8 +2885,8 @@ function buildSurface() {
                  * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
         // Entrained bubbles: a milky lift under the surface where crests broke a while
         // ago, air side only (from below the ceiling already carries the foam raft).
-        if ( !below && acc.g > 0.002 ) col = mix( col, foamCol * 0.55, clamp( acc.g, 0.0, 0.45 ) );
-        if ( fj > 0.003 ) {
+        if ( !below && acc.g > 0.002 && dBub ) col = mix( col, foamCol * 0.55, clamp( acc.g, 0.0, 0.45 ) );
+        if ( fj > 0.003 && dFoam ) {
           // PROCEDURAL FOAM TEXTURE. Three octaves of the same value noise everything
           // else here is made of, in a wind-aligned frame: advected downwind so the
           // pattern travels with the weather, and STRETCHED along the wind as it rises so
@@ -2871,7 +2925,7 @@ function buildSurface() {
             float bn = vn( vW.xz * 6.5 + vec2( uTime * 1.9, -uTime * 2.4 ) ) * 0.6
                      + vn( vW.xz * 13.0 - vec2( uTime * 3.3, uTime * 2.1 ) ) * 0.4;
             float bw = bA * bk * smoothstep( 0.26, 0.72, bn * ( 0.55 + 0.95 * bk * bA ) );
-            col = mix( col, foamCol, clamp( bw, 0.0, 0.85 ) );
+            if ( dFoam ) col = mix( col, foamCol, clamp( bw, 0.0, 0.85 ) );
           }
         }
 
@@ -2903,18 +2957,18 @@ function buildSurface() {
                    * ( 1.0 - smoothstep( 60.0, 240.0, dist ) ) * uNearK;
           // 0.20 ceiling on the emitted colour: transmitted light is dimmer than the
           // source by construction, and the sum must stay under BloomEffect's 0.28.
-          col += vec3( 0.18, 0.66, 0.46 ) * clamp( sc, 0.0, 1.0 ) * min( lum * 0.62, 0.20 );
+          if ( !dOff ) col += vec3( 0.18, 0.66, 0.46 ) * clamp( sc, 0.0, 1.0 ) * min( lum * 0.62, 0.20 );
         }
         // From below the LENS is the effect and the fleck is a garnish. From above the
         // splash fleck is back — it was muted to zero only because the field it drew was
         // a regular lattice — at splashK, which puts a full-gale splash at ~0.066
         // scene-linear against BloomEffect's 0.28. Rain never glows.
-        col += foamCol * ( below ? rain * 0.25 : splashV * ${f(GLASS.rain.splashK)} );
-        col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
-        if ( rimK > 0.0 ) col = mix( col, airLight( fogColor ), rimK );
+        if ( dFoam ) col += foamCol * ( below ? rain * 0.25 : splashV * ${f(GLASS.rain.splashK)} );
+        if ( !dOff ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
+        if ( rimK > 0.0 && dHaze ) col = mix( col, airLight( fogColor ), rimK );
         // AFTER the rim hand-off, so the sea, the dome past its rim and the horizon all
         // white out together and the seam stays a seam of nothing.
-        if ( airK > 0.0 ) col = airFog( col, 0.0, airK );
+        if ( airK > 0.0 && dHaze ) col = airFog( col, 0.0, airK );
 
         // uFade retires the surface as the diver descends. Without it the depth fog
         // drives this plane to near-black while the dome behind stays lit, and the
@@ -3032,7 +3086,7 @@ export function buildWater() {
 // ZERO ALLOCATION: the two colour scratch arrays are module-scoped, and the uniforms
 // are Vector2/3/4 objects written with .set(). No trig in here beyond one sin/cos pair
 // for the wind and one for the moon.
-const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0];
+const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0], _pRing = [0, 0, 0];
 
 // Published for world/clouds.js: the SAME two colours the painted dome mixes between,
 // plus the backlit amount and the storm envelope. The instanced puffs are lit by the
@@ -3040,7 +3094,7 @@ const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0];
 // sky rather than as two cloud systems. `lit`/`base` are the LIVE uniform vectors, so
 // there is nothing to keep in sync and nothing copied per frame.
 export const cloudLook = {
-  lit: uCloudLit.value, base: uCloudBase.value, bak: 0, storm: 0, dome: 1
+  lit: uCloudLit.value, base: uCloudBase.value, bak: 0, storm: 0, dome: 1, lid: 0
 };
 // The moon's own arc: elevation is the sun's elevation proxy NEGATED, so it is highest
 // at midnight and gone by mid-morning, and its azimuth is the sun's plus 180. That is
@@ -3150,6 +3204,39 @@ function skyDrama(dt, storm) {
   // instanced puffs fade into); the storm envelope drives it back to a full lid, which
   // is what world/clouds.js fades its clusters out against.
   uCloudDome.value = clamp(C.dome + (1 - C.dome) * ms(storm, 0.25, 0.85), 0, 1);
+
+  // ---- THE SKY UNDER THE LID -------------------------------------------------
+  // THE MILKY SEA (Michael, bright overcast, deck at 0 m: "looks like a snowfield").
+  // Measured with the uDbg decomposition: from deck height the sea can only mirror the
+  // lowest ~10 degrees of sky, and that band was ALWAYS the clear-day horizon ring —
+  // every stop is authored hor 2.4-6x its zenith, the deck dissolves back into that
+  // ring over the lowest hazeUp (config: THE MILKY BAND), and the fog chunk's airlight
+  // was the noon ring baked in. So under a closed lid the zenith read 0.20 while the
+  // sea 4 degrees under the horizon read 0.41 and the far band 0.77 against a horizon
+  // sky of 0.66: the sea mirrored a bright ring the lid overhead had already hidden,
+  // then had the same ring stacked on top as haze. A real overcast is darkest low
+  // (CIE overcast: horizon = zenith / 3) with at most a hazy slit at the horizon, and
+  // the sea under it is dark steel because it mirrors the underside of the deck.
+  //
+  // So the ring the dome draws, the ring the sea mirrors and the airlight the far
+  // field settles on become ONE number that follows the lid: the authored horizon,
+  // pulled toward the deck's own underside (mix of this frame's base and lit cloud
+  // colours — the stop's hue, only darker) by how closed the lid is. lidRing keeps a
+  // share of the authored ring alive under a full deck: Michael's gale reference is a
+  // black lid over a HAZY BRIGHT horizon, and at 0.15 the gale horizon is ~6x its
+  // underside while sitting ~3x under today's. Fair-weather cumulus (cov under lidCov)
+  // and the calm-noon anchor are bit-identical: lidK is exactly 0 there.
+  const cov = uCloudCov.value;
+  const lidK = Math.max(ms(cov, C.lidCov[0], C.lidCov[1]), ms(storm, C.lidStorm[0], C.lidStorm[1]));
+  if (lidK > 0) {
+    for (let i = 0; i < 3; i++) {
+      const under = _cBase[i] + (_cLit[i] - _cBase[i]) * C.lidHz + _pHor[i] * C.lidRing;
+      _pRing[i] = _pHor[i] + (Math.min(under, _pHor[i]) - _pHor[i]) * lidK;
+    }
+  } else { _pRing[0] = _pHor[0]; _pRing[1] = _pHor[1]; _pRing[2] = _pHor[2]; }
+  uSkyHor.value.set(_pRing[0], _pRing[1], _pRing[2]);
+  AIR_U[0] = _pRing[0]; AIR_U[1] = _pRing[1]; AIR_U[2] = _pRing[2]; AIR_U[3] = 1;
+  cloudLook.lid = lidK;
   cloudLook.bak = uCloudBak.value;
   cloudLook.storm = storm;
   cloudLook.dome = uCloudDome.value;
