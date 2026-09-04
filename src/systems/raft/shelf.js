@@ -20,23 +20,29 @@ const DECK = 0.11;
 const WALL = -4.61;
 const SX = WALL + 0.10;           // board centre: 0.20 deep, flush to the wall
 const SZ = 1.50, SLEN = 1.24;     // z 0.88..2.12 — forward of the table, on the same wall
+// The home slot (his sextant) sits at the forward end: the board grows one slot's
+// width toward the bow so the nine remote slots never move. Brackets stay where they are.
+const HOME_W = 0.135;
+const BZ = SZ - HOME_W / 2, BLEN = SLEN + HOME_W;
 const TOP = 0.40;                 // board top surface: under the cap rail (0.53), over the deck
 const THK = 0.032;
 
 // Nine slots — three remote sites by three wrecks, site-major, left to right. A slot is
 // held even when its keepsake is not yet found, so nothing on the shelf ever moves once
 // it is put down: the gaps are the record.
-const SLOTS = 9;
-const SLOT_Z = k => SZ + (k - (SLOTS - 1) / 2) * 0.135;
+// Slot 0 is the HOME slot (site 0, the skiff — his sextant), one slot's width forward
+// of the nine; slots 1..9 are the remote nine exactly where they always were.
+const SLOTS = 10;
+const SLOT_Z = k => SZ + (k - 1 - 4) * 0.135;
 // A stable, hand-set yaw per slot, so the row reads as things set down rather than racked.
-const YAW = [0.35, -0.62, 1.15, -0.20, 0.80, -1.05, 0.15, 1.42, -0.45];
+const YAW = [0.95, 0.35, -0.62, 1.15, -0.20, 0.80, -1.05, 0.15, 1.42, -0.45];
 
 export function buildShelf(group, mats) {
   const P = Part(group);
   const { wood, wood2, iron } = mats;
 
   // the board: a plain plank, worn pale along its front edge where sleeves pass
-  P.add(weather(xf(box(0.20, THK, SLEN), SX, TOP - THK / 2, SZ),
+  P.add(weather(xf(box(0.20, THK, BLEN), SX, TOP - THK / 2, BZ),
     { tone: 1.02, freq: 2.6, amp: 0.26 }), wood2);
 
   // two iron brackets: a vertical leaf bolted to the bulwark, a shelf leaf under the
@@ -54,7 +60,7 @@ export function buildShelf(group, mats) {
 
   // a fiddle: the 15 mm lip that is the whole difference between a shelf on land and a
   // shelf at sea. Without it the first swell puts every one of these back in the water.
-  P.add(weather(xf(box(0.012, 0.018, SLEN), SX + 0.094, TOP + 0.009, SZ),
+  P.add(weather(xf(box(0.012, 0.018, BLEN), SX + 0.094, TOP + 0.009, BZ),
     { tone: 0.94, amp: 0.22 }), wood);
 
   P.bake();
@@ -70,7 +76,7 @@ export function buildShelf(group, mats) {
   return function setShelf(keeps) {
     // site-major signature: rebuild only when the set actually changed (this is called
     // at boot, on every pickup and on every save load).
-    let s = '';
+    let s = (keeps && keeps[0] && keeps[0][0]) ? '1' : '0';   // the home slot
     for (let si = 1; si <= 3; si++) {
       const row = (keeps && keeps[si]) || [0, 0, 0];
       for (let zi = 0; zi < 3; zi++) s += row[zi] ? '1' : '0';
@@ -81,7 +87,7 @@ export function buildShelf(group, mats) {
     const geos = [];
     for (let k = 0; k < SLOTS; k++) {
       if (s[k] !== '1') continue;
-      const kind = keepsakeKind(1 + ((k / 3) | 0), k % 3);
+      const kind = k === 0 ? keepsakeKind(0, 0) : keepsakeKind(1 + (((k - 1) / 3) | 0), (k - 1) % 3);
       const parts = keepsakeGeo(kind, 1.0);
       for (const g of parts) {
         // weathered in the object's OWN frame on purpose: these are nine copies of the
