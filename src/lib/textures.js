@@ -144,4 +144,105 @@ export function normalFromHeight(heightCanvas, strength = 2) {
   return canvas;
 }
 
+// ---- THE RIPPLE NORMAL (water.js, surface detail) ------------------------------------
+// One 1024x1024 tangent-space normal of wind-ruffled water: two tileable fbm bands
+// (long-ish ruffle + fine capillary) and a trace of cellular (worley) dimpling rounded
+// off hard so it gives shape, not creases. Baked ONCE on the CPU, seeded, and handed
+// over as a mipmapped, anisotropic, RepeatWrapping DataTexture in LINEAR colour space --
+// a normal is data, never colour. The sea samples it with textureGrad at three rotated
+// incommensurate scales, so a single tile has to hold up under any rotation and any
+// footprint: tileability is exact (every lattice is modulo the tile), the mips are the
+// device's own, and the anisotropy is what keeps the near-horizon taps from smearing.
+// Cost is boot-only (~1 s of JS at 1024^2); water.js asks for it lazily at buildSurface.
+// Alpha carries the height, in case a caller wants it.
+let _ripple = null;
+export function rippleNormalTex() {
+  if (_ripple) return _ripple;
+  const S = 1024, N = S * S;
+  const rand = seededRand(0x51D3A7E5);
+  // Tileable value-noise lattice at n cells per tile, smoothstep-interpolated.
+  const lattice = (n) => {
+    const g = new Float32Array(n * n);
+    for (let i = 0; i < n * n; i++) g[i] = rand();
+    return { n, g };
+  };
+  const smp = (L, x, y) => {           // x, y in tile units [0,1)
+    const { n, g } = L;
+    const fx = x * n, fy = y * n;
+    const xi = Math.floor(fx), yi = Math.floor(fy);
+    const x0 = xi % n, y0 = yi % n, x1 = (x0 + 1) % n, y1 = (y0 + 1) % n;
+    let tx = fx - xi, ty = fy - yi;
+    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+    const a = g[y0 * n + x0], b = g[y0 * n + x1], c = g[y1 * n + x0], d = g[y1 * n + x1];
+    return (a + (b - a) * tx) + ((c + (d - c) * tx) - (a + (b - a) * tx)) * ty;
+  };
+  // fbm A: 5 octaves from 11 cells; fbm B: 4 octaves from 26 cells (offset lattice set).
+  const octA = [11, 22, 44, 88, 176].map(lattice);
+  const octB = [26, 52, 104, 208].map(lattice);
+  // Worley: 30x30 cells, one jittered feature point each, F1 distance, torus metric.
+  const WC = 30, wpx = new Float32Array(WC * WC), wpy = new Float32Array(WC * WC);
+  for (let i = 0; i < WC * WC; i++) { wpx[i] = rand(); wpy[i] = rand(); }
+  const worley = (x, y) => {
+    const fx = x * WC, fy = y * WC;
+    const cx = Math.floor(fx), cy = Math.floor(fy);
+    let best = 9;
+    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+      const gx = cx + i, gy = cy + j;
+      const ix = ((gx % WC) + WC) % WC, iy = ((gy % WC) + WC) % WC;
+      const dx = gx + wpx[iy * WC + ix] - fx, dy = gy + wpy[iy * WC + ix] - fy;
+      const d = dx * dx + dy * dy;
+      if (d < best) best = d;
+    }
+    return Math.min(1, Math.sqrt(best));
+  };
+  const h = new Float32Array(N);
+  for (let y = 0; y < S; y++) {
+    const v = y / S;
+    for (let x = 0; x < S; x++) {
+      const u = x / S;
+      let a = 0, amp = 0.5, tot = 0;
+      for (let o = 0; o < 5; o++) { a += smp(octA[o], u, v) * amp; tot += amp; amp *= 0.5; }
+      a /= tot;
+      let b = 0; amp = 0.5; tot = 0;
+      const ub = u + 0.371, vb = v + 0.129;   // a different phase of the tile, still tileable
+      for (let o = 0; o < 4; o++) { b += smp(octB[o], ub - Math.floor(ub), vb - Math.floor(vb)) * amp; tot += amp; amp *= 0.5; }
+      b /= tot;
+      // 1 - F1 peaks at the feature points: dimples, smoothstepped hard so the cell
+      // edges never print as creases.
+      let c = 1 - worley(u, v);
+      c = Math.min(1, Math.max(0, (c - 0.10) / 0.85)); c = c * c * (3 - 2 * c);
+      h[y * S + x] = a * 0.56 + b * 0.30 + c * 0.14;
+    }
+  }
+  // Central differences on the torus -> tangent-space normal. SLOPE sets the baked
+  // steepness; the shader applies its own gains on top, so this only has to fill the
+  // 8-bit range without clipping.
+  const SLOPE = 5.5, data = new Uint8Array(N * 4), e = 1.5 / S;
+  for (let y = 0; y < S; y++) {
+    const ym = (y - 1 + S) % S, yp = (y + 1) % S;
+    for (let x = 0; x < S; x++) {
+      const xm = (x - 1 + S) % S, xp = (x + 1) % S;
+      const gx = (h[y * S + xp] - h[y * S + xm]) / (2 * e);
+      const gy = (h[yp * S + x] - h[ym * S + x]) / (2 * e);
+      let nx = -gx * SLOPE, ny = 1, nz = -gy * SLOPE;
+      const il = 1 / Math.hypot(nx, ny, nz); nx *= il; ny *= il; nz *= il;
+      const i = (y * S + x) * 4;
+      data[i] = (nx * 0.5 + 0.5) * 255;
+      data[i + 1] = (ny * 0.5 + 0.5) * 255;
+      data[i + 2] = (nz * 0.5 + 0.5) * 255;
+      data[i + 3] = Math.min(255, Math.max(0, h[y * S + x] * 255));
+    }
+  }
+  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = MAX_ANISO;
+  t.colorSpace = THREE.NoColorSpace;
+  t.needsUpdate = true;
+  _ripple = t;
+  return t;
+}
+
 export { rng };

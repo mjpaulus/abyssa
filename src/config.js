@@ -627,7 +627,36 @@ export const GLASS = {
     // downslope — the foam TEXTURE does the tearing (a weaker band closes fewer of
     // its own noise holes), so these two numbers are the whole gradient.
     spillLip: 1.00,
-    spillTail: 0.75
+    spillTail: 0.75,
+
+    // --- SURFACE FILTERING (roadmap/ref-surface-filtering.md) -----------------
+    // Baked ripple normal at three rotated scales, faded on pixel FOOTPRINT (never
+    // distance); Cox-Munk roughness for whatever the footprint cannot resolve; GGX sun
+    // glitter on that roughness. All live-pokeable (pushed every frame).
+    detailK: 1.00,        // master on the detail normals. 0 = the retired 3-sine look minus its stripes.
+    detailGain: 0.05,     // slope gain at 0 m/s...
+    detailWind: 0.011,    // ...plus this per m/s of wind (reference: 0.05 + 0.011 U)
+    detailBelow: 0.35,    // fraction of the detail the from-below normal takes (Snell's window stays put)
+    windMps: 14.0,        // wind 1.0 in m/s, for Cox-Munk (0.003 + 0.00512 U). A gale.
+    roughK: 1.00,         // 0 pins alpha at 0.02 (mirror); 1 = the full footprint-aware budget
+    glitterLegacy: 0,     // 1 = the shipped pow(sd, uSunSize) glitter, for a live A/B
+    glitterK: 14.0,       // sun-over-disc brightness ratio feeding the lobe; the pixel is soft-capped at L*F (the legacy peak) regardless
+    glitterDiscK: 1.00,   // how much of the painted disc's half-angle widens the lobe
+
+    // --- FOAM ACCUMULATOR (roadmap/ref-foam-accumulator.md) -------------------
+    // 256^2 ping-pong memory of the fold source, 120 u around the camera. The lags are
+    // the instant layer; this sums on top as persistence and Langmuir windrows.
+    foamAccK: 1.00,       // master on the accumulated foam mask. 0 = pass skipped, lags only.
+    foamRate: 0.5,        // injection per second of full fold. Equilibrium coverage is
+                          // rate*duty*decay; the fold's measured duty on a gale crest is
+                          // ~0.14, so 0.5*12 s peaks near 0.85 and never snowfields (1.6
+                          // saturated the whole near field, measured; 0.25 peaked at 0.31).
+    foamAccDecay: 12.0,   // e-folding time of accumulated foam, seconds (foamDecay above is the lags')
+    bubbleDecay: 20.0,    // e-folding of the slower entrained-bubble channel, seconds
+    bubbleK: 0.35,        // milky lift the bubble channel puts under the surface (air side)
+    foamStretch: 0.22,    // windrow lace anisotropy: along-wind scale relative to across (0.22:1)
+    foamLaceScale: 0.55,  // cells per unit of the windrow lace
+    foamAdvect: 0.6       // downwind drift of the accumulated foam, units/s at wind 1
   },
 
   // --- RAIN. Two systems, one entry.

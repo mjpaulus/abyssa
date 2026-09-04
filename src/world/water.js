@@ -10,6 +10,7 @@ import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
 // poke it live and the next frame picks it up.
 export { GLASS } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
+import { rippleNormalTex, maxAniso } from '../lib/textures.js';
 import { scatter } from './flora.js';
 // THE SUN'S SHADOW MAP, read-only. lighting.js imports airAmbience from here, so this
 // closes an import cycle — safe because BOTH sides only touch the other's bindings
@@ -274,6 +275,15 @@ const GLSL_SKY = `
 // per fragment (the raft's shadow dims the glitter it would otherwise reflect) while the
 // dome, which never writes it, keeps the constant 1.0 initialiser.
 float gSunK = 1.0;
+// gHaloK scales the disc's AUREOLE (the 0.055 pow-14 skirt) on the same terms. The sea
+// splits them: with GGX glitter on, the sharp disc is multiplied OUT of the reflected
+// sky (gSunK 0) and drawn as a microfacet lobe instead, while the aureole -- sky, not
+// sun -- stays in the mirror.
+float gHaloK = 1.0;
+// The cloud occlusion at the LAST direction skyRadiance was asked about, left behind so
+// a caller shading a specular lobe toward that same direction can honour the deck the
+// way the painted disc does. The dome writes it and never reads it.
+float gOcc = 1.0;
 vec3 skyRadiance( vec3 d ){
   float up = clamp( d.y, 0.0, 1.0 );
   vec3 c = mix( uSkyHor, uSkyZen, sqrt( up ) );
@@ -390,7 +400,8 @@ vec3 skyRadiance( vec3 d ){
   // 1.0 — a thin edge still glows through, which is most of what says "cloud").
   float occ = 1.0 - amt * 0.92;
   float sd = max( 0.0, dot( d, uSunDir ) );
-  c += uSunCol * uDiscK * ( pow( sd, uSunSize ) + 0.055 * pow( sd, 14.0 ) ) * occ * gSunK;
+  gOcc = occ;
+  c += uSunCol * uDiscK * ( pow( sd, uSunSize ) * gSunK + 0.055 * pow( sd, 14.0 ) * gHaloK ) * occ;
 
   // THE MOON. Not a pow() lobe like the sun but a real disc with a terminator: at this
   // art scale a smoothstep against the angular radius and one signed cut across it is
@@ -546,8 +557,26 @@ if (typeof window !== 'undefined') {
         })(),
         get wAir() { return uRefrK.value * uRefrSide.value * (1 - this.opq); },
         get wBelow() { return uRefrK.value * (1 - uRefrSide.value) * (1 - this.opq * uOpaq2.value.x); },
-        refrK: uRefrK.value, refrSide: uRefrSide.value, refrSkipped
+        refrK: uRefrK.value, refrSide: uRefrSide.value, refrSkipped,
+        // SURFACE FILTERING / FOAM ACCUMULATOR probe.
+        det: uDet.value.toArray(), rough: uRough.value.toArray(), glit: [uGlit.value.x, uGlit.value.y],
+        acc: uAccA.value.toArray(), accK: uAccK.value.toArray(), accCur, ripple: !!uRipple.value
       };
+    },
+    // FOAM ACCUMULATOR READBACK (dev only -- allocates, never call per frame). Mean and
+    // max of the foam (r) and bubble (g) channels over the live target, so persistence
+    // and windrows can be measured rather than eyeballed.
+    accStats() {
+      if (!accRT[accCur]) return null;
+      const n = ACC_N * ACC_N, buf = new Uint16Array(n * 4);
+      renderer.readRenderTargetPixels(accRT[accCur], 0, 0, ACC_N, ACC_N, buf);
+      const h = THREE.DataUtils.fromHalfFloat;
+      let sr = 0, sg = 0, mr = 0, mg = 0, cov = 0;
+      for (let i = 0; i < n; i++) {
+        const r = h(buf[i * 4]), g = h(buf[i * 4 + 1]);
+        sr += r; sg += g; if (r > mr) mr = r; if (g > mg) mg = g; if (r > 0.15) cov++;
+      }
+      return { meanFoam: sr / n, maxFoam: mr, cover15: cov / n, meanBub: sg / n, maxBub: mg, cur: accCur };
     },
     // THE INVERSE-MIRROR RESIDUAL, measured without a GPU readback. surfaceForwardAt is
     // literally what the vertex shader does; feeding its world xz back through
@@ -1405,6 +1434,27 @@ const uOpaq = { value: new THREE.Vector4(GLASS.chop.opaqK, GLASS.chop.opaqLo, GL
 const uOpaq2 = { value: new THREE.Vector2(GLASS.chop.opaqBelow, GLASS.chop.opaqSssK) };
 // SPILLING BREAKERS. (spillK, spillLen, spillLip, spillTail).
 const uSpill = { value: new THREE.Vector4(GLASS.chop.spillK, GLASS.chop.spillLen, GLASS.chop.spillLip, GLASS.chop.spillTail) };
+// SURFACE FILTERING (roadmap/ref-surface-filtering.md). uRipple is the baked 1024^2
+// ripple normal (lib/textures.js). uDet = (detailK, gain0, gainWind, belowK): the
+// detail-normal master, its calm gain, its per-m/s wind gain, and the fraction of it the
+// from-below normal is allowed. uRough = (windMps, roughK, glitterLegacy, glitterK): the
+// 0..1 wind -> m/s scale for Cox-Munk, the roughness master, the legacy pow() glitter
+// A/B switch and the GGX glitter gain. uGlit = (discHalfAngle, discOmega): the painted
+// sun disc's half-angle (widens the GGX lobe) and its integrated solid angle (the
+// energy the lobe is normalised to, so the GGX path never carries more light than the
+// pow() disc it replaces). Both are derived from uSunSize on the CPU each frame.
+const uRipple = { value: null };
+const uDet = { value: new THREE.Vector4(GLASS.chop.detailK, GLASS.chop.detailGain, GLASS.chop.detailWind, GLASS.chop.detailBelow) };
+const uRough = { value: new THREE.Vector4(GLASS.chop.windMps, GLASS.chop.roughK, GLASS.chop.glitterLegacy, GLASS.chop.glitterK) };
+const uGlit = { value: new THREE.Vector2(0.0445, 0.009) };
+// FOAM ACCUMULATOR (roadmap/ref-foam-accumulator.md). uFoamAcc is the live side of a
+// 256^2 ping-pong target tiled over ACC_TILE world units around the camera (see
+// updateFoamAcc). uAccA = (invTile, accK, fadeR, bubbleK); uAccC = the camera xz the
+// window is centred on; uAccS = (foamStretch, laceScale, 0, 0).
+const uFoamAcc = { value: null };
+const uAccA = { value: new THREE.Vector4(1 / 120, GLASS.chop.foamAccK, 58, GLASS.chop.bubbleK) };
+const uAccC = { value: new THREE.Vector2(0, 0) };
+const uAccS = { value: new THREE.Vector2(GLASS.chop.foamStretch, 0.55) };
 const CHOP_LAGS = [1.35, 2.70, 4.05];
 // Eased CPU state. Module-scoped, zero allocation per frame.
 let _wdX = 1, _wdZ = 0, _wsp = 0;
@@ -1907,6 +1957,100 @@ export function renderRefraction() {
   uRefrK.value = clamp((camera.position.y + 35) / 10, 0, 1);
 }
 
+// ---------------------------------------------------------------------------
+// FOAM ACCUMULATOR (roadmap/ref-foam-accumulator.md). A 256^2 HalfFloat ping-pong
+// target, RepeatWrapping, tiled over ACC_TILE world units of PARAMETER space around
+// the camera. Each frame a fullscreen pass integrates our own fold source (foldTrace,
+// the same GLSL chunk the surface's spilling breakers read) as a RATE with exponential
+// decay -- equilibrium coverage rate*duty/decay, so only water that keeps breaking
+// goes white -- advected downwind by a uv offset, plus a slower bubble channel. The
+// lags stay the instant layer; this is the memory. Texel (u,v) stands for the world
+// point congruent to it mod ACC_TILE that lies nearest the camera, so as Sal moves the
+// texels leaving the window on one side re-enter on the other carrying a few seconds
+// of stale foam that decays out; the surface fades the mask before the window edge.
+// OWN attachments, depth NONE, never shared (GL_INVALID_OPERATION history). Zero
+// per-frame allocation: two targets built once, swapped by reference.
+const ACC_N = 256, ACC_TILE = 120;
+let accRT = [null, null], accCur = 0, accScene = null, accCam = null, accMat = null;
+// uAccK = (foamRate, foamAccDecay s, bubbleDecay s, invTile); uAccK2 = (advect u/s at wind 1, 0).
+const uAccPrev = { value: null }, uAccDt = { value: 0 };
+const uAccK = { value: new THREE.Vector4(1.6, 9, 20, 1 / ACC_TILE) }, uAccK2 = { value: new THREE.Vector2(0.6, 0) };
+function buildFoamAcc() {
+  for (let i = 0; i < 2; i++) {
+    const rt = new THREE.WebGLRenderTarget(ACC_N, ACC_N, {
+      type: THREE.HalfFloatType, format: THREE.RGBAFormat,
+      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
+      wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping,
+      depthBuffer: false, stencilBuffer: false, generateMipmaps: false
+    });
+    accRT[i] = rt;
+  }
+  accMat = new THREE.ShaderMaterial({
+    uniforms: {
+      uPrev: uAccPrev, uDt: uAccDt, uAccK, uAccK2, uAccC, uTime, uStorm: uStormU,
+      uWindD, uWindS, uWindK, uChop, uChop2, uLagW, uChopX, uGale
+    },
+    depthTest: false, depthWrite: false,
+    vertexShader: `varying vec2 vUv;
+      void main(){ vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }`,
+    fragmentShader: `${GLSL_WIND_DECL}
+      ${GLSL_CHOP_DECL}
+      ${GLSL_FOLD}
+      uniform sampler2D uPrev; uniform vec4 uAccK; uniform vec2 uAccC, uAccK2;
+      uniform float uDt, uTime, uStorm;
+      varying vec2 vUv;
+      void main(){
+        float tile = 1.0 / uAccK.w;
+        // The world (parameter) point this texel stands for: congruent to vUv mod the
+        // tile, nearest the camera.
+        vec2 p = uAccC + ( fract( vUv - uAccC * uAccK.w + 0.5 ) - 0.5 ) * tile;
+        // dist 0: every component at full amplitude. The surface retires components
+        // with distance for its own mesh reasons; foam memory has no such reason.
+        vec4 ft = foldTrace( p, uTime, uStorm, 0.0 );
+        float thr = uChop.y, sf = max( uChop.z, 0.02 );
+        float fold = foldK( thr, sf, 1.0 + ft.x );
+        // Advection: what was here came from upwind.
+        vec2 adv = uWindD * ( uWindS * uAccK2.x * uDt * uAccK.w );
+        vec4 prev = texture2D( uPrev, vUv - adv );
+        // Entrainment is a RATE, not a level: integrating it gives an equilibrium
+        // coverage instead of snapping every touched texel to white.
+        float foam = prev.r * exp( -uDt / uAccK.y ) + fold * uAccK.x * uDt;
+        // A small linear bleed so the tail actually reaches zero (an exponential never
+        // does, and a 0.01 haze over the whole window read as dirt). 0.004/s takes
+        // 12 s to remove 0.05 -- well under the exponential's own share.
+        foam = max( foam - uDt * 0.004, 0.0 );
+        float bub = prev.g * exp( -uDt / uAccK.z ) + fold * uAccK.x * uDt * 0.55;
+        gl_FragColor = vec4( min( foam, 1.0 ), min( bub, 1.0 ), 0.0, 1.0 );
+      }`
+  });
+  accScene = new THREE.Scene();
+  accScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), accMat));
+  accCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  uFoamAcc.value = accRT[0].texture;
+}
+// Runs inside updateWater (after the wind ease, so the fold source and the surface read
+// the same wind). Skipped while the surface itself is retired or the eye is deep enough
+// that the ceiling foam has faded out; the targets then simply hold.
+function updateFoamAcc(dt) {
+  if (!accMat || !surface.visible || camera.position.y < -45 || GLASS.chop.foamAccK <= 0) return;
+  const CH = GLASS.chop;
+  uAccK.value.set(CH.foamRate, Math.max(0.2, CH.foamAccDecay), Math.max(0.2, CH.bubbleDecay), 1 / ACC_TILE);
+  uAccK2.value.set(CH.foamAdvect, 0);
+  uAccDt.value = Math.min(dt, 0.1);
+  uAccC.value.set(camera.position.x, camera.position.z);
+  const next = accCur ^ 1;
+  uAccPrev.value = accRT[accCur].texture;
+  const prevRT = renderer.getRenderTarget();
+  const prevShadow = renderer.shadowMap.autoUpdate;
+  renderer.shadowMap.autoUpdate = false;
+  renderer.setRenderTarget(accRT[next]);
+  renderer.render(accScene, accCam);
+  renderer.setRenderTarget(prevRT);
+  renderer.shadowMap.autoUpdate = prevShadow;
+  accCur = next;
+  uFoamAcc.value = accRT[accCur].texture;
+}
+
 function buildSurface() {
   // uSkyZen/uSkyHor/uSunCol/uSunDir/uSunSize/uStorm + SKY_UNIFORMS are the module-scoped
   // the DOME also holds. Shared on purpose: the sky in Snell's window and the sky over
@@ -1922,8 +2066,10 @@ function buildSurface() {
     uRefr, uRefrK, uRefrSide, uRes,
     uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2,
     uOpaq, uOpaq2, uSpill, uBoil,
+    uRipple, uDet, uRough, uGlit, uFoamAcc, uAccA, uAccC, uAccS,
     uSunShadow, uSunShadowMat, uShadowK
   });
+  uRipple.value = rippleNormalTex();
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
     vertexShader: `#include <fog_pars_vertex>
@@ -1959,8 +2105,9 @@ function buildSurface() {
       ${GLSL_FOLD}
       uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
                     uFoamThr, uFlash, uRefrK, uRefrSide;
-      uniform vec2 uCap, uOpaq2;
-      uniform vec4 uSss, uSss2, uOpaq, uSpill, uBoil;
+      uniform vec2 uCap, uOpaq2, uGlit, uAccC, uAccS;
+      uniform vec4 uSss, uSss2, uOpaq, uSpill, uBoil, uDet, uRough, uAccA;
+      uniform sampler2D uRipple, uFoamAcc;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
       ${GLSL_SKY_DECL}
       uniform sampler2D uRefr;
@@ -2124,30 +2271,64 @@ function buildSurface() {
         return mix( c, vec3( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ) ), 0.35 ) * 0.46;
       }
 
-      // Short wind chop, AIR SIDE ONLY. The six-component swell bottoms out at a
-      // 19.5 m wavelength, which from an eye 1.6 units (5 m) above the water is a sheet
-      // of glass — no sea state at all. Three crossed components at 3.4 / 1.7 / 0.85
-      // units (10 / 5 / 2.5 m) with analytic gradients, NORMALS ONLY: the polar mesh's
-      // cell is 0.085 u at r = 1.2 but 2.4 u at r = 34, so it cannot carry these as
-      // geometry. Retired between 40 and 130 units for the same reason — the mesh is
-      // camera-anchored and the field is world-anchored, so any aliasing would CRAWL as
-      // the diver moves, which is the one artefact this sea cannot afford.
-      // The vn() term is patchiness: cat's paws of ruffled water, not uniform corduroy.
-      // Deliberately NOT applied to the from-below normal: that would change Snell's
-      // window, the foam threshold and the TIR mirror all at once.
-      vec2 rippleGrad( vec2 p, float t, float storm, float dist ){
-        float fade = 1.0 - smoothstep( 50.0, 165.0, dist );
-        if ( fade <= 0.002 ) return vec2( 0.0 );
-        float gain = ( 0.95 + 1.15 * storm ) * fade
-                   * ( 0.45 + 1.05 * vn( p * 0.055 + vec2( t * 0.021, -t * 0.017 ) ) );
-        vec2 g = vec2( 0.0 );
-        { float q = dot( p, vec2( 0.940, 0.342 ) ) * 1.848 + t * 2.458;
-          g += vec2( 0.940, 0.342 ) * ( 0.02033 * cos( q ) ); }
-        { float q = dot( p, vec2( -0.423, 0.906 ) ) * 3.696 + t * 3.477;
-          g += vec2( -0.423, 0.906 ) * ( 0.02033 * cos( q ) ); }
-        { float q = dot( p, vec2( 0.707, -0.707 ) ) * 7.392 + t * 4.916;
-          g += vec2( 0.707, -0.707 ) * ( 0.01626 * cos( q ) ); }
-        return g * gain;
+      // ---- SURFACE FILTERING ----------------------------------------------------
+      // The retired 3-sine rippleGrad answered "is there short chop?" with three fixed
+      // sines faded on DISTANCE, which threw the detail away past 165 u however much
+      // of the frame the water filled, and left everything nearer as the same three
+      // stripes. What replaces it (technique from the abyssal-living-deep reference,
+      // every line ours) is a baked ripple NORMAL sampled with textureGrad at three
+      // incommensurate scales, each in its own rotated frame, faded on the pixel's
+      // FOOTPRINT on the water -- so detail lives exactly as far as the screen can
+      // resolve it and not one texel further, near or far, low eye or high.
+      //
+      // THE FOOTPRINT. dFdx/dFdy of the world position are the two axes of this
+      // pixel's patch of sea. You look at the sea nearly edge-on, so they differ by
+      // orders of magnitude: toward the horizon a pixel is centimetres across and
+      // metres deep. fpMinor is what anisotropic filtering still resolves and decides
+      // whether a wavelength is drawn; fpShade (the geometric mean) is the honest
+      // isotropic area the ROUGHNESS answers to -- charge roughness for the minor axis
+      // alone and the far sea goes mirror-smooth at grazing incidence and speckles.
+      const float ANISO = ${f(maxAniso())};
+      const vec3 DET_SC = vec3( 0.0406, 0.147, 0.411 );   // tiles per unit: 24.6 / 6.8 / 2.4 u
+      const vec3 DET_W  = vec3( 0.46, 0.33, 0.21 );
+      // 1024 texels per tile -> texels per world unit, per layer.
+      const vec3 DET_TX = DET_SC * 1024.0;
+      const mat2 ROT_A = mat2(  0.8339, 0.5519, -0.5519,  0.8339 );
+      const mat2 ROT_B = mat2( -0.2225, 0.9749, -0.9749, -0.2225 );
+
+      // Detail slope in world xz. microFade is the footprint fade shared with the
+      // roughness budget below (1 at a resolved footprint, 0 where the layer is under
+      // a pixel and belongs in the roughness lobe instead).
+      vec2 detailSlope( vec2 p, vec2 ddx, vec2 ddy, float microFade, float U ){
+        vec2 wd = uWindD;
+        // Each layer drifts downwind on its own clock; the three never lock.
+        vec2 drift = wd * uTime * ( 0.18 + 0.30 * uWindS );
+        vec2 pA = ROT_A * p, pB = ROT_B * p;
+        vec2 r0 = textureGrad( uRipple, p  * DET_SC.x + drift * ( 0.05 * DET_SC.x ),
+                               ddx * DET_SC.x, ddy * DET_SC.x ).xz * 2.0 - 1.0;
+        vec2 r1 = textureGrad( uRipple, pA * DET_SC.y - ( ROT_A * drift ) * ( 0.09 * DET_SC.y ),
+                               ROT_A * ddx * DET_SC.y, ROT_A * ddy * DET_SC.y ).xz * 2.0 - 1.0;
+        vec2 r2 = textureGrad( uRipple, pB * DET_SC.z + ( ROT_B * drift ) * ( 0.14 * DET_SC.z ),
+                               ROT_B * ddx * DET_SC.z, ROT_B * ddy * DET_SC.z ).xz * 2.0 - 1.0;
+        // Each layer's slope lives in its own rotated frame; carry it back with the
+        // TRANSPOSE (v * M is M^T * v in GLSL) or the ripples all lean the same wrong way.
+        vec2 micro = r0 * DET_W.x + ( r1 * ROT_A ) * DET_W.y + ( r2 * ROT_B ) * DET_W.z;
+        // Cat's paws: the ruffle is patchy, not corduroy. Same vn() the old block used.
+        float paws = 0.55 + 0.90 * vn( p * 0.055 + vec2( uTime * 0.021, -uTime * 0.017 ) );
+        return micro * ( microFade * ( uDet.y + uDet.z * U ) * paws * uDet.x );
+      }
+
+      // GGX / correlated Smith, for the sun glitter.
+      float ggxD( float NoH, float a ){
+        float a2 = a * a;
+        float d = ( NoH * a2 - NoH ) * NoH + 1.0;
+        return a2 / max( 3.14159265 * d * d, 1e-8 );
+      }
+      float smithGGXCorrelated( float NoV, float NoL, float a ){
+        float a2 = a * a;
+        float gv = NoL * sqrt( NoV * NoV * ( 1.0 - a2 ) + a2 );
+        float gl = NoV * sqrt( NoL * NoL * ( 1.0 - a2 ) + a2 );
+        return 0.5 / max( gv + gl, 1e-6 );
       }
 
       void main(){
@@ -2169,6 +2350,38 @@ function buildSurface() {
         // plane is above the eye. Flipping the normal is what the old abs(dot(V,N)) was
         // standing in for; doing it properly also lets the from-above case be right.
         bool below = dot( V, N ) > 0.0;
+
+        // ---- FOOTPRINT, DETAIL, ROUGHNESS BUDGET ---------------------------------
+        vec2 fdx = dFdx( vW.xz ), fdy = dFdy( vW.xz );
+        float fpA = length( fdx ), fpB = length( fdy );
+        float fpMajor = max( fpA, fpB );
+        float fpMinor = max( max( min( fpA, fpB ), fpMajor / ANISO ), 1e-5 );
+        float fpShade = sqrt( fpMinor * fpMajor );
+        // Footprint fade in world units (1 u ~ 3 m): full under 0.10 u per pixel, gone
+        // by 0.75 -- the ripple tile's finest feature is ~0.014 u, its coarsest 2.2 u.
+        float microFade = 1.0 - smoothstep( 0.10, 0.75, fpShade );
+        // Wind in m/s for Cox-Munk; a dead calm still carries 0.5 m/s of capillaries.
+        float U = max( uRough.x * uWindS, 0.5 );
+        vec2 micro = vec2( 0.0 );
+        if ( microFade > 0.004 && uDet.x > 0.001 ) micro = detailSlope( vW.xz, fdx, fdy, microFade, U );
+        // COX-MUNK. Total mean-square slope 0.003 + 0.00512 U. The share the geometry
+        // and the three detail layers RESOLVE at this footprint is already in the
+        // normal; what they cannot resolve (each layer's LOD against its own texel
+        // density, weighted by the share of the slope variance that lives at its
+        // scale) becomes the GGX alpha of the specular lobe. Far water therefore stays
+        // textured-but-rough, and near calm water is glass.
+        float alpha = 0.02;
+        {
+          float mssTotal = 0.003 + 0.00512 * U;
+          vec3 lod = log2( max( vec3( fpShade ) * DET_TX, vec3( 1.0 ) ) );
+          float lost = dot( vec3( 0.10, 0.30, 0.60 ), clamp( lod / 6.0, 0.0, 1.0 ) );
+          lost = max( lost, 1.0 - microFade * 0.9 );
+          float mssUnres = mssTotal * lost + 0.0009;
+          alpha = mix( 0.02, clamp( sqrt( 2.0 * mssUnres ), 0.02, 0.6 ), uRough.y );
+        }
+        // FROM BELOW the detail is a fraction: it sharpens the TIR mirror and the
+        // window's rim without moving Snell's window or the foam threshold by much.
+        if ( below ) dh += micro * uDet.w;
 
         // Reference wave height and gradient for THIS sea state — the scale every
         // "how tall / how steep is this fragment" question is asked against. Hoisted
@@ -2349,7 +2562,7 @@ function buildSurface() {
           // The air side's rain is dhSpl — the stochastic splash field, not rainRing's
           // lattice (see splash()). dh here is the pure wave gradient: the from-below
           // lens was never added on this path, so nothing has to be subtracted back out.
-          vec2 dhA = dh + dhSpl + rippleGrad( vW.xz, uTime, uStorm, dist );
+          vec2 dhA = dh + dhSpl + micro;
           vec3 Na = normalize( vec3( -dhA.x, 1.0, -dhA.y ) );
           float cta = clamp( -dot( V, Na ), 0.0, 1.0 );
           F = F0 + ( 1.0 - F0 ) * pow( 1.0 - cta, 5.0 );
@@ -2384,10 +2597,50 @@ function buildSurface() {
           // (less sun getting into the column there) and the sun's own glitter is
           // multiplied out of the reflected sky through gSunK; the sky itself stays,
           // as it does in any real shadow on water.
-          gSunK = sh;
+          // GGX SUN GLITTER. The painted disc's pow(sd, uSunSize) is a mirror answer:
+          // it is only ever as wide as the disc, so a glassy noon sea carried one hard
+          // spot and a gale carried a soft one, and neither lengthened toward the
+          // horizon or narrowed with the wind the way a real glitter path does. With
+          // uRough.z (GLASS.chop.glitterLegacy) at 0 the disc is multiplied OUT of the
+          // reflected sky (the aureole stays: that is sky) and drawn as a microfacet
+          // lobe on the unresolved roughness instead, widened by the disc's own
+          // half-angle and normalised to the disc's integrated solid angle -- the
+          // lobe carries the SAME light the disc did, spread by the water's state.
+          float legacy = uRough.z;
+          gSunK = sh * legacy; gHaloK = sh;
           col = body * ( 1.0 - F ) * ( 1.0 - 0.45 * ( 1.0 - sh ) )
               + skyRadiance( reflect( V, Na ) ) * F;
-          gSunK = 1.0;
+          gSunK = 1.0; gHaloK = 1.0;
+          if ( legacy < 0.999 ) {
+            float NoL = dot( Na, uSunDir );
+            if ( NoL > 0.0 ) {
+              vec3 H = normalize( uSunDir - V );
+              float NoH = max( dot( Na, H ), 0.0 );
+              float VoH = max( -dot( V, H ), 1e-4 );
+              // Widened by the disc's half-angle and NOT renormalised by (a/aP)^2: that
+              // factor is the point-light correction and it drove the lobe to zero as
+              // the water went glassy (measured: the moon's whole glitter column
+              // vanished). ggxD integrates to 1 at any width, so the lobe carries the
+              // disc's energy uGlit.y * L at every roughness by construction, and in
+              // the glassy limit its peak is ~0.36 L F / NoV -- the painted disc's own
+              // mirror brightness at a moderate grazing angle.
+              // THE BRIGHTNESS. uGlit.y * D * Vis * NoL is the Cox-Munk glitter: the
+              // probability a facet in this pixel mirrors the disc, and it is honest --
+              // measured at the path's distance alpha runs ~0.2 and the answer is ~1/50
+              // of a mirror, which on a disc painted ~5x the sky (the real sun is 1e5x)
+              // is invisible. glitterK is that missing ratio: the disc's radiance is
+              // an art stop, the sun behind it is not. The SOFT CAP is the constraint:
+              // 1 - exp(-x) never passes 1, so a pixel can never carry more than L * F,
+              // the mirror answer and exactly the legacy disc's peak. Wide rough paths
+              // read; glassy noon can only ever be as bright as today.
+              float aP = min( alpha + uGlit.x, 1.0 );
+              float D = ggxD( NoH, aP );
+              float Vis = smithGGXCorrelated( max( cta, 1e-4 ), max( NoL, 1e-4 ), alpha );
+              float Fs = F0 + ( 1.0 - F0 ) * pow( 1.0 - VoH, 5.0 );
+              float gx = uGlit.y * uRough.w * D * Vis * NoL;
+              col += uSunCol * ( uDiscK * gOcc * sh * Fs * ( 1.0 - legacy ) * ( 1.0 - exp( -gx ) ) );
+            }
+          }
 
           // ---- BROAD-BODY SUBSURFACE SCATTERING ---------------------------
           // The single dominant effect in Michael's poseidon reference: sunlight that
@@ -2556,7 +2809,29 @@ function buildSurface() {
         // shed it — and because the texture closes its own holes in proportion to
         // the intensity, the band is solid at the lip and ragged at the tail for
         // free. max(), not add: whitewater does not stack.
-        float fj = max( foamJ, spill ) * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
+        // FOAM ACCUMULATOR: the persistence layer. The lags are the INSTANT layer
+        // (a fold and its ~4 s wake); the accumulator is what a sea remembers longer --
+        // foam that was shed repeatedly, blown downwind into windrows. Sampled at the
+        // parameter point (the accumulator integrates foldTrace in parameter space),
+        // valid inside the window it covers around the camera, and laced along the
+        // wind at foamStretch:1 so it streaks instead of spattering (Langmuir rows).
+        vec2 acc = vec2( 0.0 );
+        if ( uAccA.y > 0.001 ) {
+          float accW = 1.0 - smoothstep( uAccA.z * 0.72, uAccA.z, distance( vP0, uAccC ) );
+          if ( accW > 0.002 ) {
+            acc = texture2D( uFoamAcc, vP0 * uAccA.x ).rg * accW;
+            vec2 wq = vec2( vP0.x * uWindD.x + vP0.y * uWindD.y,
+                           -vP0.x * uWindD.y + vP0.y * uWindD.x );
+            float lace = vn( vec2( wq.x * uAccS.x, wq.y ) * uAccS.y + vec2( uTime * 0.05, 0.0 ) );
+            acc.r *= uAccA.y * ( 0.25 + 1.25 * smoothstep( 0.30, 0.75, lace ) );
+            acc.g *= uAccA.w;
+          }
+        }
+        float fj = min( max( foamJ, spill ) + acc.r, 1.0 )
+                 * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
+        // Entrained bubbles: a milky lift under the surface where crests broke a while
+        // ago, air side only (from below the ceiling already carries the foam raft).
+        if ( !below && acc.g > 0.002 ) col = mix( col, foamCol * 0.55, clamp( acc.g, 0.0, 0.45 ) );
         if ( fj > 0.003 ) {
           // PROCEDURAL FOAM TEXTURE. Three octaves of the same value noise everything
           // else here is made of, in a wind-aligned frame: advected downwind so the
@@ -2720,6 +2995,7 @@ function buildBubbles() {
 // ---------------------------------------------------------------------------
 export function buildWater() {
   buildShadowFallback();   // before buildSurface: its uniform must never hold null
+  buildFoamAcc();          // same rule: uFoamAcc holds a real texture from frame 0
   buildDome();
   buildSurface();
   buildRays();
@@ -2981,6 +3257,10 @@ export function updateWater(dt, t) {
     uOpaq.value.set(CH.opaqK, CH.opaqLo, CH.opaqHi, CH.opaqFoam);
     uOpaq2.value.set(CH.opaqBelow, CH.opaqSssK);
     uSpill.value.set(CH.spillK, CH.spillLen, CH.spillLip, CH.spillTail);
+    uDet.value.set(CH.detailK, CH.detailGain, CH.detailWind, CH.detailBelow);
+    uRough.value.set(CH.windMps, CH.roughK, CH.glitterLegacy, CH.glitterK);
+    uAccA.value.set(1 / ACC_TILE, CH.foamAccK, ACC_TILE * 0.48, CH.bubbleK);
+    uAccS.value.set(CH.foamStretch, CH.foamLaceScale);
     _windOut.speed = _wsp; _windOut.dx = uWindD.value.x; _windOut.dz = uWindD.value.y;
   }
 
@@ -3062,6 +3342,11 @@ export function updateWater(dt, t) {
   // After skyDrama: every uniform the dome will be captured through is final for this
   // frame. Captures only fire on palette drift — see the SKY ENVIRONMENT MAP block.
   maybeRefreshSkyEnv(dt);
+  // The painted disc pow(sd, n) ~ exp(-n th^2 / 2): half-angle at half max is
+  // 1.177 / sqrt(n), integrated solid angle 2 pi / (n + 1). These are what the GGX
+  // glitter widens by and normalises to, so the lobe tracks the disc through a storm.
+  uGlit.value.set(GLASS.chop.glitterDiscK * 1.177 / Math.sqrt(uSunSize.value), 6.2831853 / (uSunSize.value + 1));
+  updateFoamAcc(dt);
 
   if (surface.visible) {
     const su = surface.material.uniforms;
