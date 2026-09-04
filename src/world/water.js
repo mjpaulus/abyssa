@@ -563,6 +563,21 @@ if (typeof window !== 'undefined') {
         acc: uAccA.value.toArray(), accK: uAccK.value.toArray(), accCur, ripple: !!uRipple.value
       };
     },
+    // FOAM ACCUMULATOR READBACK (dev only -- allocates, never call per frame). Mean and
+    // max of the foam (r) and bubble (g) channels over the live target, so persistence
+    // and windrows can be measured rather than eyeballed.
+    accStats() {
+      if (!accRT[accCur]) return null;
+      const n = ACC_N * ACC_N, buf = new Uint16Array(n * 4);
+      renderer.readRenderTargetPixels(accRT[accCur], 0, 0, ACC_N, ACC_N, buf);
+      const h = THREE.DataUtils.fromHalfFloat;
+      let sr = 0, sg = 0, mr = 0, mg = 0, cov = 0;
+      for (let i = 0; i < n; i++) {
+        const r = h(buf[i * 4]), g = h(buf[i * 4 + 1]);
+        sr += r; sg += g; if (r > mr) mr = r; if (g > mg) mg = g; if (r > 0.15) cov++;
+      }
+      return { meanFoam: sr / n, maxFoam: mr, cover15: cov / n, meanBub: sg / n, maxBub: mg, cur: accCur };
+    },
     // THE INVERSE-MIRROR RESIDUAL, measured without a GPU readback. surfaceForwardAt is
     // literally what the vertex shader does; feeding its world xz back through
     // surfaceHeightAt's fixed point must return the height it wrote. The gap is the
@@ -2000,7 +2015,10 @@ function buildFoamAcc() {
         // Entrainment is a RATE, not a level: integrating it gives an equilibrium
         // coverage instead of snapping every touched texel to white.
         float foam = prev.r * exp( -uDt / uAccK.y ) + fold * uAccK.x * uDt;
-        foam = max( foam - uDt * 0.015, 0.0 );
+        // A small linear bleed so the tail actually reaches zero (an exponential never
+        // does, and a 0.01 haze over the whole window read as dirt). 0.004/s takes
+        // 12 s to remove 0.05 -- well under the exponential's own share.
+        foam = max( foam - uDt * 0.004, 0.0 );
         float bub = prev.g * exp( -uDt / uAccK.z ) + fold * uAccK.x * uDt * 0.55;
         gl_FragColor = vec4( min( foam, 1.0 ), min( bub, 1.0 ), 0.0, 1.0 );
       }`
@@ -2296,8 +2314,8 @@ function buildSurface() {
         // TRANSPOSE (v * M is M^T * v in GLSL) or the ripples all lean the same wrong way.
         vec2 micro = r0 * DET_W.x + ( r1 * ROT_A ) * DET_W.y + ( r2 * ROT_B ) * DET_W.z;
         // Cat's paws: the ruffle is patchy, not corduroy. Same vn() the old block used.
-        float patch = 0.55 + 0.90 * vn( p * 0.055 + vec2( uTime * 0.021, -uTime * 0.017 ) );
-        return micro * ( microFade * ( uDet.y + uDet.z * U ) * patch * uDet.x );
+        float paws = 0.55 + 0.90 * vn( p * 0.055 + vec2( uTime * 0.021, -uTime * 0.017 ) );
+        return micro * ( microFade * ( uDet.y + uDet.z * U ) * paws * uDet.x );
       }
 
       // GGX / correlated Smith, for the sun glitter.
@@ -2599,13 +2617,28 @@ function buildSurface() {
               vec3 H = normalize( uSunDir - V );
               float NoH = max( dot( Na, H ), 0.0 );
               float VoH = max( -dot( V, H ), 1e-4 );
+              // Widened by the disc's half-angle and NOT renormalised by (a/aP)^2: that
+              // factor is the point-light correction and it drove the lobe to zero as
+              // the water went glassy (measured: the moon's whole glitter column
+              // vanished). ggxD integrates to 1 at any width, so the lobe carries the
+              // disc's energy uGlit.y * L at every roughness by construction, and in
+              // the glassy limit its peak is ~0.36 L F / NoV -- the painted disc's own
+              // mirror brightness at a moderate grazing angle.
+              // THE BRIGHTNESS. uGlit.y * D * Vis * NoL is the Cox-Munk glitter: the
+              // probability a facet in this pixel mirrors the disc, and it is honest --
+              // measured at the path's distance alpha runs ~0.2 and the answer is ~1/50
+              // of a mirror, which on a disc painted ~5x the sky (the real sun is 1e5x)
+              // is invisible. glitterK is that missing ratio: the disc's radiance is
+              // an art stop, the sun behind it is not. The SOFT CAP is the constraint:
+              // 1 - exp(-x) never passes 1, so a pixel can never carry more than L * F,
+              // the mirror answer and exactly the legacy disc's peak. Wide rough paths
+              // read; glassy noon can only ever be as bright as today.
               float aP = min( alpha + uGlit.x, 1.0 );
-              float nrm = ( alpha * alpha ) / ( aP * aP );
               float D = ggxD( NoH, aP );
               float Vis = smithGGXCorrelated( max( cta, 1e-4 ), max( NoL, 1e-4 ), alpha );
               float Fs = F0 + ( 1.0 - F0 ) * pow( 1.0 - VoH, 5.0 );
-              col += uSunCol * ( uDiscK * gOcc * sh * uGlit.y * uRough.w * ( 1.0 - legacy )
-                               * D * Vis * Fs * NoL * nrm );
+              float gx = uGlit.y * uRough.w * D * Vis * NoL;
+              col += uSunCol * ( uDiscK * gOcc * sh * Fs * ( 1.0 - legacy ) * ( 1.0 - exp( -gx ) ) );
             }
           }
 
