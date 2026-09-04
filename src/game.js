@@ -858,9 +858,18 @@ function pollGamepad(dt) {
 }
 
 function update(dt, t) {
-  if (msgT > -1) { msgT -= dt; if (msgT <= 0 && msgT + dt > 0) $msg.classList.remove('on'); }
-  // drain the waiting line once the live one has had most of its fade
-  if (msgPend && msgT <= -0.5) { const p = msgPend; msgPend = null; msgT = 0; showMsg(p.text, p.dur, p.prio); }
+  if (msgT > 0) {
+    msgT -= dt;
+    if (msgT <= 0) {
+      if ($msg.classList.contains('on')) {
+        // the live line fades; if one waits, hold the slot (at ITS priority) for the fade
+        $msg.classList.remove('on');
+        if (msgPend) { msgT = 0.5; msgPrio = msgPend.prio; }
+      } else if (msgPend) {
+        const p = msgPend; msgPend = null; showMsg(p.text, p.dur, p.prio);
+      }
+    }
+  }
   // reduced motion: the feel channel goes with it (window.__feel can still A/B it)
   const rmNow = reducedMotion();
   if (rmNow !== rmWas) { rmWas = rmNow; FEEL.on = !rmNow; }
