@@ -86,7 +86,9 @@ against explicit contracts and reviewed on return.
   fall-through is a player.js special case. Site-0 fingerprint probe (FNV-1a over
   float32 terrainH, 32x32x3, x,z −248..248 step 16) must stay 35acc2d0.
   Triplanar CC0 PBR (channel-packed, 3.3 MB) multiplies ON TOP of zone palettes:
-  texture = structure, palette = hue.
+  texture = structure, palette = hue. ROCKS (flora.js) use a GENERATED rock map set
+  (lib/textures.js rockMapSet, two variants) triplanar via onBeforeCompile + screen-
+  derivative relief; cleavage faces are pure functions of existing stream draws.
 - `lighting.js` — STOPS depth blend; `setWeatherLight(day, storm, flash)`; weather
   bite fades out by ~40% depth so the abyss never changes.
   **ABOVE THE WATERLINE IS A SEPARATE REGIME.** Every STOPS entry describes being IN
@@ -119,6 +121,14 @@ against explicit contracts and reviewed on return.
   events, contact blobs. Zone-0 sleeper idles shallow (62/38) to cross the god rays.
   Chase steering fades inside ~3 body-radii (`flyby`) or it pirouettes around the
   player — user-reported bug, don't regress.
+- `world/gardens.js` — the plant vocabulary (12 instanced types by zone: fans/seagrass/
+  staghorn/sponges/anemones; tube worms with retracting plumes on activeVents, mats,
+  crinoids; sea pens/glass sponges/whips). Own siteParams('gardens') stream (site.js has
+  no authored seed yet — falls back to a per-site stream). window.__noGardens = A/B.
+- `world/fauna.js` — the animal vocabulary (loft/blade/limb/gape/eyes/photophores,
+  part-id vertex animation, 30 Hz steering): ray, turtle, moray, crabs, stars/urchins;
+  vent fish, flapjack, isopods; anglerfish, gulper, lanternfish. Own 'fauna' stream;
+  hidden during the rite (hideFauna).
 - `world/creatures.js` — boid schools (floorBias reef layering), jellies, drifters,
   sparks. NOTE: shared MeshStandardMaterial variants need distinct
   `customProgramCacheKey` or three silently shares compiled programs.
@@ -174,7 +184,8 @@ against explicit contracts and reviewed on return.
   fingerprints: home 5e6cfe45, Pallid Bank ef14da09 on the 32x32x3 probe). The world
   reseeds IN PLACE around the raft: `reseedWorld(i)` in game.js runs
   fillTerrain -> reseedWrecks(tools) -> reseedFlora -> reseedResources ->
-  reseedProps -> reseedVents -> reseatRifts -> reseedDens -> enterZone(0) — ORDER IS
+  reseedProps -> reseedVents -> reseedVentLife -> reseedGardens -> reseatRifts ->
+  reseedDens -> reseedCreatures -> reseedFauna -> enterZone(0) — ORDER IS
   CONTRACT (flora excludes around wreckSites(), dens re-pick from flora's colliders).
   Discipline held everywhere: materials/programs never recreated, collider arrays
   keep object identity, layouts are pure functions of site seed streams (20x soak:
