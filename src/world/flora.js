@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
-import { makeGlow } from '../lib/textures.js';
+import { makeGlow, rockMapSet } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
 import { siteParams } from './site.js';
@@ -102,23 +102,75 @@ uniform float uTime; uniform vec3 uGlowCol; uniform float uSSS; uniform vec3 uSi
 varying vec3 vFlora; varying vec3 vLocal;
 #ifdef FLORA_ROCK
   varying vec3 vWPos;
-  // Cheap 3-axis world-space detail: two bands of interfering sines. No texture fetch,
-  // no derivatives — just enough grain that smooth stone still reads as stone up close.
+  uniform sampler2D uRockPack, uRockNrm; uniform float uWet;
+  // Coarse weathering field, no fetch: two bands of interfering sines.
   float rockDet(vec3 w, float f) {
     return sin(w.x * f) * sin(w.z * f * 1.13 + 1.7) + sin(w.y * f * 0.87 + 4.1) * 0.7;
+  }
+  // Triplanar (world-normal projected, sharpness 4) sample of the packed structure map.
+  // Rocks are instanced with arbitrary rotations, so UVs cannot carry a tile; the
+  // world position can, and it also makes neighbouring rocks share one stratum grain.
+  vec4 rockTri(sampler2D t, vec3 p, vec3 bw, float f) {
+    return texture2D(t, p.zy * f) * bw.x + texture2D(t, p.xz * f) * bw.y + texture2D(t, p.xy * f) * bw.z;
+  }
+  // Whiteout-blended tangent normals, same convention as lib/triplanar.js.
+  vec3 rockNrm(vec3 p, vec3 n, vec3 bw, float f, float str) {
+    vec3 tx = texture2D(uRockNrm, p.zy * f).xyz * 2.0 - 1.0;
+    vec3 ty = texture2D(uRockNrm, p.xz * f).xyz * 2.0 - 1.0;
+    vec3 tz = texture2D(uRockNrm, p.xy * f).xyz * 2.0 - 1.0;
+    vec3 wx = vec3(tx.xy * str + n.zy, abs(tx.z) * n.x);
+    vec3 wy = vec3(ty.xy * str + n.xz, abs(ty.z) * n.y);
+    vec3 wz = vec3(tz.xy * str + n.xy, abs(tz.z) * n.z);
+    return normalize(wx.zyx * bw.x + wy.xzy * bw.y + wz.xyz * bw.z);
+  }
+  // Screen-derivative relief: a procedural height evaluated in the fragment is turned
+  // into a normal by its screen-space gradient against the surface's own dFdx/dFdy
+  // frame. Costs no texture, needs no tangents. The caller fades height by a
+  // fwidth-resolved guard so under-sampled detail never turns to sparkle at range.
+  vec3 rockRelief(vec3 n, float height, float strength) {
+    vec3 dx = dFdx(vWPos), dy = dFdy(vWPos), r1 = cross(dy, n), r2 = cross(n, dx);
+    float det = dot(dx, r1);
+    vec3 grad = sign(det) * (dFdx(height) * r1 + dFdy(height) * r2);
+    return normalize(max(abs(det), 0.0000001) * n - grad * strength);
   }
 #endif`;
 
 const F_BODY = `
 float gmask = vFlora.x;
 #ifdef FLORA_ROCK
-  // Coarse patchiness (weathering) + fine pitting, both subtle enough to survive fog.
-  float rc = rockDet(vWPos, 0.42);
-  float rf = rockDet(vWPos, 2.7);
-  float mott = 0.5 + 0.5 * sin(rc * 1.9 + rf * 0.45);
-  float grain = 0.5 + 0.5 * rf;
-  diffuseColor.rgb *= mix(0.80, 1.14, mott) * mix(0.94, 1.06, grain);
-  roughnessFactor = clamp(roughnessFactor + (mott - 0.5) * 0.18 - (grain - 0.5) * 0.08, 0.45, 1.0);
+  // Silt (below) settles by the GEOMETRIC up, not the micro-normal: dusting every
+  // up-facing pit of the relief turned wet stone into chalk.
+  vec3 rockGeoN = normal;
+  {
+    // World normal for the projection; the perturbed result goes back to view space.
+    vec3 wN = normalize(inverseTransformDirection(normal, viewMatrix));
+    vec3 bw = pow(abs(wN), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
+    // Two incommensurate scales: grain/fissures at 1 tile per ~3.1 u, bedding at 1 per
+    // ~13.7 u (offset so the coarse tile never lines up with the fine one).
+    const float R_DET = 0.32, R_MAC = 0.073;
+    vec4 pd = rockTri(uRockPack, vWPos, bw, R_DET);
+    vec4 pc = rockTri(uRockPack, vWPos + vec3(7.3, 2.9, 5.1), bw, R_MAC);
+    // Texture is STRUCTURE (mean 1.0), vertex/instance colour stays the hue authority.
+    float albM = (pd.r * 1.6) * mix(1.0, pc.r * 1.6, 0.55);
+    float rc = rockDet(vWPos, 0.42);
+    float mott = 0.5 + 0.5 * sin(rc * 1.9);
+    diffuseColor.rgb *= albM * mix(0.90, 1.08, mott);
+    // Baked normal (whiteout triplanar) at both scales, then the derivative relief for
+    // the last octave the texture cannot hold at walk-up: fine grit in the fragment.
+    vec3 wN2 = rockNrm(vWPos, wN, bw, R_DET, 0.9);
+    wN2 = normalize(mix(wN2, rockNrm(vWPos + vec3(7.3, 2.9, 5.1), wN, bw, R_MAC, 0.7), 0.35));
+    float resolved = 1.0 - smoothstep(0.6, 3.0, length(fwidth(vWPos)) * 130.0);
+    float fine = rockDet(vWPos, 9.5) * 0.5 + rockDet(vWPos, 23.0) * 0.25;
+    wN2 = rockRelief(wN2, (fine * 0.012 + (pd.b - 0.5) * 0.02) * resolved, 1.0);
+    normal = normalize((viewMatrix * vec4(wN2, 0.0)).xyz);
+    // Roughness from the bake; wet sheen = a Fresnel-shaped roughness drop that only
+    // exists near the camera (stone under the lantern is wet, stone at 20 u is fog).
+    float rgh = mix(pd.g, pc.g, 0.4);
+    float fr = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
+    float wet = uWet * (1.0 - smoothstep(5.0, 22.0, length(vViewPosition)));
+    roughnessFactor = clamp(roughnessFactor * mix(0.72, 1.22, rgh) - wet * (0.16 + 0.22 * fr), 0.32, 1.0);
+    diffuseColor.rgb *= 1.0 - 0.10 * wet;
+  }
 #endif
 #ifdef FLORA_GROOVE
   float mn = sin(vLocal.x * 27.0 + sin(vLocal.z * 21.0 + vLocal.y * 15.0) * 2.4);
@@ -134,7 +186,11 @@ float gmask = vFlora.x;
   if (!gl_FrontFacing) diffuseColor.rgb *= 0.28;
 #endif
 #ifdef FLORA_SILT
-  float up = inverseTransformDirection(normal, viewMatrix).y;
+  #ifdef FLORA_ROCK
+    float up = inverseTransformDirection(rockGeoN, viewMatrix).y;
+  #else
+    float up = inverseTransformDirection(normal, viewMatrix).y;
+  #endif
   diffuseColor.rgb = mix(diffuseColor.rgb, uSilt, smoothstep(0.4, 0.97, up) * 0.5);
   diffuseColor.rgb *= mix(0.4, 1.0, smoothstep(-0.85, 0.15, up));
 #endif
@@ -160,6 +216,9 @@ function floraMat(o) {
       uGlowCol: { value: new THREE.Color(o.glow ?? 0x000000) },
       uSSS: { value: o.sss ?? 0 },
       uSilt: { value: new THREE.Color(o.silt ?? 0x2c4152) }
+    });
+    if (o.rockSet) Object.assign(sh.uniforms, {
+      uRockPack: { value: o.rockSet.pack }, uRockNrm: { value: o.rockSet.nrm }, uWet: { value: o.wet ?? 0 }
     });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>' + V_HEAD)
@@ -419,22 +478,43 @@ function weld(g) {
 // 20*(detail+1)^2 triangles, so the tri budget is quadratic, not exponential.
 // Displacement is four octaves: a low-frequency shape warp that breaks the sphere,
 // mid-frequency erosion lobes, then two fine grains that survive smooth shading.
-function rockGeo(detail, squash, amp) {
+function rockGeo(detail, squash, amp, facet = 1) {
   const ico = new THREE.IcosahedronGeometry(1, detail);
   const g = weld(ico);
   ico.dispose();
   const p = g.attributes.position, sd = rr(0, 90), sd2 = rr(0, 90);
+  // Cleavage: three flat faces whose orientation and depth are pure functions of the
+  // two seeds already drawn above (NO extra stream draws — the site fingerprint
+  // downstream of this call must not move). Each is a plane at distance c from the
+  // centre; anything the erosion pushes past it is pressed back onto the plane, so
+  // boulders carry a few faceted faces and ledges instead of reading as pure blobs.
+  const planes = [];
+  for (let k = 0; k < 3; k++) {
+    const th = n3(sd * 0.37 + k * 5.1, 0.5, k * 2.3) * TAU;
+    const ph = (n3(k * 3.3, sd2 * 0.29, 0.5) - 0.5) * 1.5;
+    const c = 0.80 + 0.16 * n3(k * 7.7, sd * 0.11, sd2 * 0.13);
+    planes.push({ x: Math.cos(ph) * Math.cos(th), y: Math.sin(ph), z: Math.cos(ph) * Math.sin(th), c });
+  }
+  const bedF = 3.4 + 1.6 * n3(sd * 0.5, sd2 * 0.5, 1.5), bedPh = sd * 0.1;
   for (let k = 0; k < p.count; k++) {
     let x = p.getX(k), y = p.getY(k), z = p.getZ(k);
     // Shape warp: bend the sphere off-axis before eroding, so no two rocks share a silhouette.
     const wx = x + amp * 0.55 * (n3(x * 0.7 + sd2, y * 0.7, z * 0.7) - 0.5);
     const wz = z + amp * 0.55 * (n3(x * 0.7, y * 0.7, z * 0.7 + sd2) - 0.5);
+    // Bedding: a soft square wave in local Y terraces the radius into ledges.
+    const bed = Math.tanh(Math.sin(y * bedF + bedPh) * 2.6) * amp * 0.075 * facet * (1 - Math.abs(y) * 0.6);
     const d = 1
       + amp * 0.62 * (n3(wx * 1.15 + sd, y * 1.15, wz * 1.15 + sd) - 0.5)
       + amp * 0.40 * (n3(x * 2.6, y * 2.6 + sd, z * 2.6) - 0.5)
       + amp * 0.17 * (n3(x * 6.3 + sd2, y * 6.3, z * 6.3) - 0.5)
-      + amp * 0.07 * (n3(x * 14.7, y * 14.7, z * 14.7 + sd) - 0.5);
-    x = wx * d; z = wz * d; y = y * d * squash;
+      + amp * 0.07 * (n3(x * 14.7, y * 14.7, z * 14.7 + sd) - 0.5)
+      + bed;
+    x = wx * d; z = wz * d; y = y * d;
+    for (const pl of planes) {
+      const dp = x * pl.x + y * pl.y + z * pl.z;
+      if (dp > pl.c) { const t = (dp - pl.c) * facet; x -= pl.x * t; y -= pl.y * t; z -= pl.z * t; }
+    }
+    y *= squash;
     // Flatten the underside on a smooth ramp (no crease) so the rock beds into the silt.
     y *= 1 - 0.78 * sstep(-0.42, -0.95, y);
     p.setXYZ(k, x, y, z);
@@ -547,7 +627,9 @@ const CUR0 = 0.9;
 // hits the GPU, not on repeated use of an existing one.
 let zoneMats = null;
 function buildZoneMats() {
-  return PAL.map(P => ({
+  return PAL.map((P, zi) => {
+    const RS = rockMapSet(zi === 0 ? 0 : 1), WET = [0.9, 0.4, 0.12][zi];
+    return {
     kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS'] }),
     grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS'] }),
     stag: floraMat({ key: 'stag', rough: 0.62, sway: 1, freq: 0.55, cull: 105, glow: P.glow, env: 0.14 }),
@@ -555,14 +637,21 @@ function buildZoneMats() {
     brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['GROOVE'] }),
     sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER'] }),
     anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS'] }),
-    rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] }),
+    // Rock structure: a generated map set (lib/textures.js rockMapSet) projected
+    // triplanar by world normal, multiplied INTO the zone hue below. Zone 0 gets the
+    // weathered basalt/limestone bake and a wet sheen; the two deep zones share the
+    // darker, more fissured, mineral-crusted variant and go matte.
+    rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET }),
     // Boulder / hero-landmark tiers keep the same 'rock' program cache key — three.js
     // compiles ONE program for all three and only the uCull uniform differs. Bigger
     // silhouettes earn longer sightlines: culling a 20-unit landmark at 175 left the
     // clear-band seabed (456/477-unit sightlines in zones 1/2) reading as empty sand.
-    rockB: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 300, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] }),
-    rockH: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 420, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'] })
-  }));
+    // The deep variant is a different TEXTURE on the same shader source, so the three
+    // zones share that program too (sampler uniforms are per material, never per
+    // program) — distinct keys are only needed when the compiled source differs.
+    rockB: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 300, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET }),
+    rockH: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 420, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET })
+  }; });
 }
 
 // Tears down everything the previous build put in the scene/accumulators, WITHOUT
@@ -607,7 +696,7 @@ function buildOnce() {
     brain: brainGeo(), sponge: spongeGeo(), anem: anemoneGeo(),
     // Tri counts are 20*(detail+1)^2: pebbles 320, boulders 980, heroes 3920 —
     // all per-geometry, shared across every instance of the tier.
-    r0: rockGeo(3, 0.72, 0.70), r1: rockGeo(6, 0.95, 0.78), r2: rockGeo(13, 1.05, 0.64)
+    r0: rockGeo(3, 0.72, 0.70, 0.45), r1: rockGeo(6, 0.95, 0.78, 0.8), r2: rockGeo(13, 1.05, 0.64, 1.0)
   };
 
   for (let zi = 0; zi < 3; zi++) {
