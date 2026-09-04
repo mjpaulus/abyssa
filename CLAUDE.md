@@ -49,8 +49,9 @@ against explicit contracts and reviewed on return.
   composer.setSize). Canvas z-index 0 / #ui z-index 1 is load-bearing.
 - `player.js` — locomotion. Walking is deliberately PONDEROUS (top ~2.6 u/s, slow
   ramp, momentum carry) — the user rejected faster/snappier. Swim untouched.
-  Thruster boost via `player.thrustOn` (set in game.js; drain beats the 0.28/s hose
-  refill or thrust is free — currently 0.33/s).
+  Air thruster is a BURST model, not a drain: one shove per Shift press (`player.burstDir`
+  / `player.burstT`, set by game.js's `tryBurst`), costing AIR_PER_BURST of the tank and
+  a 5 s bottle recharge (`survival.thrustCharge`). Holding Shift never repeats it.
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Vignette, Grain) → EffectPass(SMAA; convolution effects can't share a
   pass). Tiered fallbacks; `degradeQuality()` sheds passes below 34 fps.

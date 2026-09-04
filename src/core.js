@@ -84,6 +84,11 @@ export function onResize(fn) { resizeHandlers.push(fn); }
 // zoom changes, devtools docking — any of which previously left the canvas a different
 // size from its drawing buffer, so part of the window went unpainted.
 let lastW = 0, lastH = 0;
+// Resizes are COALESCED: a drag fires the resize event and the ResizeObserver many times
+// a frame, and each setSize reallocates every render target. applySize only records the
+// wanted size (the aspect is immediate — it is one matrix); flushSize, called once by the
+// frame loop before update, does the reallocation.
+let pendingW = 0, pendingH = 0;
 function applySize() {
   const cssW = renderer.domElement.clientWidth || innerWidth;
   const cssH = renderer.domElement.clientHeight || innerHeight;
@@ -97,11 +102,19 @@ function applySize() {
   lastW = w; lastH = h;
   camera.aspect = cssW / cssH;
   camera.updateProjectionMatrix();
+  pendingW = w; pendingH = h;
+}
+export function flushSize() {
+  if (!pendingW) return false;
+  const w = pendingW, h = pendingH;
+  pendingW = pendingH = 0;
   renderer.setSize(w, h, false);
   for (const fn of resizeHandlers) fn(w, h);
+  return true;
 }
 
 addEventListener('resize', applySize);
 new ResizeObserver(applySize).observe(renderer.domElement);
 applySize();
+flushSize();   // the boot size applies at once: nothing may render into a stale buffer
 export { applySize };

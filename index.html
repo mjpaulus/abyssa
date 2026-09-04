@@ -12,7 +12,10 @@
   canvas{position:fixed;top:0;left:0;width:100vw;height:100vh;display:block;z-index:0}
   /* z-index is load-bearing: the canvas is appended after this element, so without an
      explicit order it paints on top and swallows every click on the title screen. */
-  #ui{position:fixed;inset:0;pointer-events:none;color:#bfe3e8;z-index:1}
+  /* Scales with the window (em below is relative to this), and every line carries a
+     shadow so it stays legible over the daylit deck as well as the dark. */
+  #ui{position:fixed;inset:0;pointer-events:none;color:#bfe3e8;z-index:1;font-size:clamp(12px, 0.9vmin + 7px, 22px);
+    text-shadow:0 1px 2px rgba(1,4,9,.85),0 0 8px rgba(1,4,9,.5)}
   /* Everything the diver reads lives under #hud so it can be put away as one thing:
      hidden behind the title (the title is a child of #ui, so #ui itself cannot be the
      thing that hides), uncovered on the first click. */
@@ -36,9 +39,18 @@
   #load p{letter-spacing:.28em;font-size:.7rem;text-transform:uppercase;opacity:.42;margin:0;animation:pulse 2.4s infinite}
   #load.done{opacity:0;pointer-events:none}
   @keyframes pulse{0%,100%{opacity:.25}50%{opacity:.6}}
-  #msg{position:absolute;left:0;right:0;top:max(12%,7.8rem);text-align:center;font-size:1.15rem;letter-spacing:.2em;opacity:0;transition:opacity 2s;text-shadow:0 0 12px rgba(120,220,255,.6)}
-  #depth{position:absolute;right:1.2rem;top:1rem;font-size:.8rem;letter-spacing:.2em;opacity:.6}
-  #mode{position:absolute;left:1.2rem;top:1rem;font-size:.7rem;letter-spacing:.25em;opacity:.4;text-transform:uppercase}
+  /* fade in fast, out slow: class-driven so the queue in game.js can time the gap */
+  #msg{position:absolute;left:0;right:0;top:max(12%,6.8em);text-align:center;font-size:1.15em;letter-spacing:.2em;opacity:0;transition:opacity 1.4s;text-shadow:0 0 12px rgba(120,220,255,.6),0 1px 2px rgba(1,4,9,.85)}
+  #msg.on{opacity:1;transition:opacity .35s}
+  #depth{position:absolute;right:1.2em;top:1em;font-size:.8em;letter-spacing:.2em;opacity:.8}
+  #mode{position:absolute;left:1.2em;top:1em;font-size:.7em;letter-spacing:.25em;opacity:.7;text-transform:uppercase}
+  /* the pause: no pointer lock is no helm */
+  #pause{position:absolute;left:0;right:0;top:50%;margin-top:2.4em;text-align:center;font-size:.95em;letter-spacing:.3em;opacity:0;transition:opacity .5s}
+  #pause.on{opacity:1;animation:pulse 3s infinite}
+  /* the failure card: context lost or the loop threw. Same shape as the ending card. */
+  #fail{position:fixed;inset:0;z-index:40;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#010409;color:#bfe3e8;cursor:pointer;font-family:Georgia,'Times New Roman',serif}
+  #fail h1{font-size:clamp(1.6rem,4vw,3rem);letter-spacing:.4em;margin:0 0 1.2em .4em;font-weight:400;color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.35)}
+  #fail p{letter-spacing:.28em;font-size:.8rem;text-transform:uppercase;opacity:.6;margin:0;animation:pulse 2.4s infinite}
 
   /* ---- gauges ----------------------------------------------------------------------
      Three groups, one hierarchy. The pair that can kill you sits bottom-centre, AIR the
@@ -48,10 +60,10 @@
      their bar so a bar at the screen edge never loses its name off-screen. */
   .bar{position:absolute;height:6px;border:1px solid rgba(160,230,255,.35);border-radius:4px;overflow:visible}
   .bar .fill{height:100%;width:100%;transform-origin:left;transition:transform .2s;border-radius:3px}
-  .bar .label{position:absolute;left:0;top:-1.05rem;font-size:.6rem;letter-spacing:.24em;opacity:.55;text-transform:uppercase;white-space:nowrap}
+  .bar .label{position:absolute;left:0;top:-1.05em;font-size:.6em;letter-spacing:.24em;opacity:.75;text-transform:uppercase;white-space:nowrap}
   /* survival pair: bottom-centre */
-  #o2bar{left:50%;transform:translateX(-50%);bottom:2rem;width:min(460px,62vw);height:9px;border-color:rgba(160,255,200,.45)}
-  #o2bar .label{font-size:.7rem;opacity:.75}
+  #o2bar{left:50%;transform:translateX(-50%);bottom:2em;width:min(460px,62vw);height:9px;border-color:rgba(160,255,200,.45)}
+  #o2bar .label{font-size:.7em;opacity:.75}
   #o2fill{background:linear-gradient(90deg,#4ade9b,#d6ffe9);box-shadow:0 0 16px rgba(120,255,190,.8)}
   #o2fill.critical{background:linear-gradient(90deg,#ff5a4a,#ffb0a0);box-shadow:0 0 16px rgba(255,90,74,.9);animation:alarm .8s infinite}
   @keyframes alarm{0%,100%{opacity:1}50%{opacity:.45}}
@@ -63,47 +75,54 @@
     box-shadow:0 0 8px rgba(255,120,90,.9);opacity:0;transition:opacity .3s}
   #o2bar.torn #o2leak{opacity:1;animation:alarm .7s infinite}
   #o2bar.torn .label::after{content:' — torn';color:#ff9a86;opacity:1}
-  #fuelbar{left:50%;transform:translateX(-50%);bottom:4.4rem;width:min(300px,42vw)}
+  #fuelbar{left:50%;transform:translateX(-50%);bottom:4.4em;width:min(300px,42vw)}
   #fuelfill{background:linear-gradient(90deg,#c08a3a,#ffd9a0);box-shadow:0 0 12px rgba(255,190,120,.6)}
   /* control pair: bottom-left */
-  #trimbar{left:1.4rem;bottom:2rem;width:min(210px,24vw)}
+  #trimbar{left:1.4em;bottom:2em;width:min(210px,24vw)}
   #trimfill{background:linear-gradient(90deg,#8a6a33,#e8c98a);box-shadow:0 0 10px rgba(232,201,138,.5)}
   /* neutral-fill tick: game.js sets its left from the suit model's NEUTRAL_FILL */
   #trimbar .neutral{position:absolute;left:50%;top:-2px;width:1px;height:10px;background:rgba(200,235,255,.85);z-index:2}
-  #bottlebar{left:1.4rem;bottom:4.1rem;width:min(150px,17vw)}
+  #bottlebar{left:1.4em;bottom:4.1em;width:min(150px,17vw)}
   #bottlefill{background:linear-gradient(90deg,#5c4a2a,#b99a63);box-shadow:0 0 8px rgba(185,154,99,.35)}
   /* the lantern: beside the bearing strip, on its left so the right-hand readouts keep their column */
-  #lightbar{top:4.1rem;width:min(150px,11vw);left:max(1.4rem, calc(50% - min(448px,39vw) - 1.6rem - min(150px,11vw)))}
+  #lightbar{top:4.1em;width:min(150px,11vw);left:max(1.4em, calc(50% - min(448px,39vw) - 1.6em - min(150px,11vw)))}
   /* a narrow window has no room beside the strip: the lantern tucks under the mode line instead */
-  @media (max-width:1100px){#mode{top:.8rem} #lightbar{top:2.9rem;left:1.4rem}}
+  @media (max-width:1100px){#mode{top:.8em} #lightbar{top:2.9em;left:1.4em}}
   #lightfill{background:linear-gradient(90deg,#3fd9ff,#bff6ff);box-shadow:0 0 14px rgba(120,220,255,.8)}
 
-  #hose{position:absolute;right:1.2rem;top:2.2rem;font-size:.72rem;letter-spacing:.16em;opacity:.55}
+  #hose{position:absolute;right:1.2em;top:2.2em;font-size:.72em;letter-spacing:.16em;opacity:.75}
   #hose.taut{color:#ff9a86;opacity:1}
-  #mats{position:absolute;right:1.2rem;top:3.4rem;font-size:.72rem;letter-spacing:.16em;opacity:.5}
-  #craft{position:absolute;left:0;right:0;bottom:7.2rem;text-align:center;font-size:.8rem;letter-spacing:.18em;opacity:0;transition:opacity .4s;text-transform:uppercase}
+  #hose.taut::after{content:' — TAUT'}
+  #mats{position:absolute;right:1.2em;top:3.4em;font-size:.72em;letter-spacing:.16em;opacity:.7}
+  #craft{position:absolute;left:0;right:0;bottom:7.2em;text-align:center;font-size:.8em;letter-spacing:.18em;opacity:0;transition:opacity .4s;text-transform:uppercase}
   #cross{position:absolute;left:50%;top:50%;width:4px;height:4px;margin:-2px;border-radius:50%;background:rgba(200,240,255,.5)}
   /* bearing strip: a brass rule with ticks for raft / sleeper / rift. It is the game's
      only map, and sight lines are 40-100u in unlit water, so it is sized to be READ
      at 1080p on a real monitor, not glanced at: 1.6x the hairline it started as. */
-  #bearing{position:absolute;left:50%;top:3.2rem;transform:translateX(-50%);width:min(896px,78vw);height:3.8rem;
+  #bearing{position:absolute;left:50%;top:3.2em;transform:translateX(-50%);width:min(896px,78vw);height:3.8em;
     border-top:1px solid rgba(190,225,232,.34)}
   .bm{position:absolute;top:0;transform:translateX(-50%);text-align:center;transition:opacity .3s;white-space:nowrap}
-  .bm .tick{width:2px;height:.9rem;margin:0 auto;background:rgba(220,244,248,.8);border-radius:1px}
-  .bm .lbl{font-size:.92rem;letter-spacing:.3em;padding-left:.3em;opacity:.85;margin-top:.1rem}
-  .bm .dst{font-size:.82rem;letter-spacing:.2em;opacity:.55}
+  .bm .tick{width:2px;height:.9em;margin:0 auto;background:rgba(220,244,248,.8);border-radius:1px}
+  .bm .lbl{font-size:.92em;letter-spacing:.3em;padding-left:.3em;opacity:.85;margin-top:.1em}
+  .bm .dst{font-size:.82em;letter-spacing:.2em;opacity:.55}
   #bmLev .tick{background:rgba(255,170,140,.9)}
   #bmLev .lbl{color:#ffb9a0}
   #bmRift .tick{background:rgba(150,235,255,.95)}
   #bmRift .lbl{color:#aee9ff}
   /* the active target — the sleeper until it stills, then the rift — carries a brighter, taller tick */
-  .bm.active .tick{height:1.35rem;width:3px;box-shadow:0 0 10px currentColor,0 0 3px #fff}
+  .bm.active .tick{height:1.35em;width:3px;box-shadow:0 0 10px currentColor,0 0 3px #fff}
   .bm.active .lbl{opacity:1;text-shadow:0 0 10px currentColor}
   #bmLev.active .tick{background:#ffd2c0;color:#ffb9a0}
   #bmRift.active .tick{background:#dbf7ff;color:#aee9ff}
   /* low-air vignette: breathes at the frame edges, driven from game.js */
   #warn{position:absolute;inset:0;opacity:0;background:radial-gradient(ellipse at center,
     rgba(0,0,0,0) 52%, rgba(120,20,10,.55) 100%);animation:warnpulse 1.6s ease-in-out infinite}
+  /* a hunter closing: cold at the edges, driven from predators' threat scalar */
+  #threat{position:absolute;inset:0;opacity:0;transition:opacity .4s;background:radial-gradient(ellipse at center,
+    rgba(0,0,0,0) 58%, rgba(40,90,130,.5) 100%)}
+  @media (prefers-reduced-motion: reduce){
+    #o2fill.critical,#o2bar.torn #o2fill,#o2bar.torn #o2leak,#warn,#pause,#load p,#title .hint{animation:none}
+  }
   @keyframes warnpulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.6)}}
   .hidden{opacity:0!important;pointer-events:none!important}
 </style>
@@ -117,6 +136,8 @@
     <div id="mode"></div>
     <div id="cross" class="hidden"></div>
     <div id="warn"></div>
+    <div id="threat"></div>
+    <div id="pause">CLICK TO TAKE THE HELM</div>
     <div id="bearing">
       <div class="bm" id="bmRaft"><div class="tick"></div><div class="lbl">RAFT</div><div class="dst"></div></div>
       <div class="bm" id="bmLev"><div class="tick"></div><div class="lbl">SLEEPER</div><div class="dst"></div></div>
@@ -135,7 +156,7 @@
     <h1>ABYSSA</h1>
     <p>three sleepers bar the deep</p>
     <p>your air comes down a hose. do not outrun it.</p>
-    <p class="hint">click to descend · mouse: look · WASD: move · space/ctrl: rise/sink · shift: boost · E/F: craft at the raft</p>
+    <p class="hint">click to descend · mouse: look · WASD: move · space/C: fill/vent the dress · shift: boost · E/F: craft at the raft · M: sound</p>
   </div>
 </div>
 <script type="importmap">

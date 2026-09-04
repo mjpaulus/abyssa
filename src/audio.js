@@ -1098,6 +1098,12 @@ export function setWalking(w) { manual.walking = true; S.walking = !!w; }
 export function setZone(i) { manual.zone = true; applyZone(i); }
 export function setAbove(a) { manual.above = true; T.above = a ? 1 : 0; }
 export function setWind(w) { manual.wind = true; T.wind = cl01(w); }
+// Master fader, for the game's one volume control (M). Safe before initAudio: K.MASTER
+// is what the fade-in ramps to. 0 is silence (the graph keeps running; nothing is torn down).
+export function setMaster(v) {
+  K.MASTER = Math.max(0, Math.min(1, +v || 0));
+  if (master && !muted) master.gain.setTargetAtTime(Math.max(0.0001, K.MASTER), now(), 0.05);
+}
 
 // speed01: engine state (0 stopped .. 1 governed) — shapes rumble, hiss and thump
 // tempo/pitch upstream of the fader. level01: audibility right now (distance +

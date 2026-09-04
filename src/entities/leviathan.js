@@ -897,6 +897,9 @@ const _cp = V3(), _cn = V3(), _cb = V3(), _e1 = V3(), _e2 = V3(), _nrm = V3();
 // updateSpine/placeSigil run mid-stretch and must never alias these.
 const _lt = V3(), _ld = V3(), _lc = V3(), _lpu = V3();
 
+// The body's widest radius as a fraction of L.size (bodyRJs's maximum, at u ~ 0.11):
+// game.js sizes the camera-probe spheres round the spine with it.
+export const BODY_R_MAX = 1.06;
 function bodyRJs(u) {
   return (0.60 + 0.46 * smooth(u, 0, 0.11)) * Math.pow(Math.max(1 - u, 0), 0.78)
     * (1 - 0.82 * smooth(u, 0.76, 1));
