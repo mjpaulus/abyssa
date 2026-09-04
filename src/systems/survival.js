@@ -6,12 +6,16 @@ import { clamp } from '../lib/math.js';
 // Enough line to work all of zone 0 even when the leviathan wanders to the far rim —
 // reachability must never depend on where the creature happens to be swimming.
 export const HOSE_START = 380;
-export const HOSE_PER_CRAFT = 80;
+// THE HOSE IS A GRIND, NOT A GATE: one craft was 80 (a fifth of the reel's headroom),
+// and the zone-1 gate sat one craft above the start — met once, forgotten. At 120 per
+// craft and gates of 640/920 the reel is worked three times before zone 1 and five
+// before zone 2, and every visit to the raft with polymer still matters.
+export const HOSE_PER_CRAFT = 120;
 export const HOSE_MAX = 1000;       // reaches the floor of zone 2 at the world's edge
 
 // Descent is gated on line explicitly rather than on how deep the hose physically
 // stretches, so terrain shape and creature wander can never soft-lock progression.
-export const HOSE_REQ = [0, 480, 720];
+export const HOSE_REQ = [0, 640, 920];
 export function canDescendTo(zoneIndex) {
   return survival.hose >= (HOSE_REQ[zoneIndex] || 0);
 }
@@ -41,8 +45,13 @@ export const survival = {
   // THE TORN DRESS. Seconds left on a tear: a bite or a sleeper's slam opens the suit
   // and the tenders cannot out-pump the hole — supplied air refills at half rate until
   // it runs out. Stacking hits EXTEND the tear (capped), they never halve twice.
-  torn: 0
+  torn: 0,
+  // THE GASP. Seconds the line is actually stopped: a storm-peak sputter (game.js sets
+  // it) cuts `supplied`, so supplied air is threatenable at all — the tank drains at
+  // depth rate, the bottle recharges at a crawl, the HUD reads the line as dead.
+  sputter: 0
 };
+export const SPUTTER_SEC = 2.2;
 
 export const TORN_SEC = 20;
 const TORN_CAP = 45;
@@ -59,8 +68,16 @@ export function mendDress() { survival.torn = 0; }
 export function o2RefillRate() { return O2_REFILL * (survival.torn > 0 ? TORN_REFILL : 1); }
 
 // The pump only burns fuel while the diver is actually down the line.
-const FUEL_BURN = 1 / 240;          // a full tank runs about four minutes
-const O2_REFILL = 0.28;             // supplied air recovers quickly
+// FUEL: a full tank is seven minutes. At four (1/240) zone 2 was a death by arithmetic:
+// the descent alone spent more than the tank held, and the bitumen to refill it lay on
+// the floor he could not reach. Seven covers a zone-2 descent, its floor and the climb
+// with a margin that is thin, not fictional.
+const FUEL_BURN = 1 / 420;
+// REFILL: 0.28/s topped the tank in under four seconds, so nothing that costs air ever
+// cost anything while the line ran. 0.10/s (ten seconds from empty) makes a bite, a
+// burst and a gasp each leave a mark that has to be waited out. The torn-dress halving
+// still applies on top.
+const O2_REFILL = 0.10;
 const O2_BASE_DRAIN = 1 / 45;       // unsupplied, roughly 45s at the surface
 const O2_DEPTH_FACTOR = 1.9;        // pressure makes each breath cost more
 
@@ -70,7 +87,8 @@ export function updateSurvival(dt, depth01, submerged, lightOut) {
   if (submerged && survival.fuel > 0) survival.fuel = Math.max(0, survival.fuel - FUEL_BURN * dt);
 
   const pumpRunning = survival.fuel > 0;
-  survival.supplied = pumpRunning && survival.tautness < 1;
+  if (survival.sputter > 0) survival.sputter = Math.max(0, survival.sputter - dt);
+  survival.supplied = pumpRunning && survival.tautness < 1 && survival.sputter <= 0;
 
   if (survival.torn > 0) survival.torn = Math.max(0, survival.torn - dt);
 

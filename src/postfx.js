@@ -443,3 +443,14 @@ export function warmUp() {
   for (const o of hidden) o.visible = false;
   return renderer.info.programs.length;
 }
+// The same warm-up, asynchronous: r184's compileAsync uses KHR_parallel_shader_compile
+// where the driver has it, so the boot loader covers the compile without the main
+// thread stalling on each program. Rejects where unsupported; game.js falls back.
+export async function warmUpAsync() {
+  if (!renderer.compileAsync) throw new Error('no compileAsync');
+  const hidden = [];
+  scene.traverse(o => { if (!o.visible) { hidden.push(o); o.visible = true; } });
+  try { await renderer.compileAsync(scene, camera); }
+  finally { for (const o of hidden) o.visible = false; }
+  return renderer.info.programs.length;
+}

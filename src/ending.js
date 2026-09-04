@@ -506,7 +506,7 @@ export function updateEnding(dt, t) {
     const ax0 = o.ax + (player.pos.x - o.px) * FOLLOW;
     const az0 = o.az + (player.pos.z - o.pz) * FOLLOW;
     const uu = clamp(u, 0, 1);
-    if (!o.seen && uu > 0.1) { o.seen = true; chime(sp.note, 5.5, 0.1); chime(sp.note * 1.5, 4.5, 0.055); }
+    if (!o.seen && uu > 0.1) { o.seen = true; chime(sp.note, 5.5, 0.1, 'ending'); chime(sp.note * 1.5, 4.5, 0.055, 'ending'); }
 
     // it crosses the frame perpendicular to our line of sight, drifting up more slowly
     // than he does, so he overtakes it and it slides away below into the fog
@@ -682,11 +682,11 @@ export function updateEnding(dt, t) {
   if (!cardOn && T >= T_SURF_END) {
     cardOn = true;
     card.style.opacity = '1';
-    chime(196, 7, 0.1); chime(294, 6, 0.07);   // a last pair of notes under the wipe
+    chime(196, 7, 0.1, 'ending'); chime(294, 6, 0.07, 'ending');   // a last pair of notes under the wipe
     setTimeout(() => { cLine1.style.opacity = '1'; cRule.style.opacity = '1'; }, T_FADE * 1000 - 400);
   }
   if (cardOn && !l2 && T >= T_LINE2) { l2 = true; cLine2.style.opacity = '1'; }
-  if (cardOn && !l3 && T >= T_LINE3) { l3 = true; cLine3.style.opacity = '1'; chime(349, 6, 0.07); }
+  if (cardOn && !l3 && T >= T_LINE3) { l3 = true; cLine3.style.opacity = '1'; chime(349, 6, 0.07, 'ending'); }
   if (cardOn && !hintOn && T >= T_HINT) { hintOn = true; cHint.style.opacity = '1'; cHint.classList.add('on'); }
   // Once the card is opaque there is nothing to see; stop paying for the silhouettes.
   if (T > T_CARD + 1.5 && bubbles.visible) {

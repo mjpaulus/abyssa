@@ -49,17 +49,33 @@ export let locked = false;
 
 addEventListener('keydown', e => { keys[e.code] = true; });
 addEventListener('keyup', e => { keys[e.code] = false; });
+// Every key up. A keyup that lands on another window, the chart, or a fade never reaches
+// the listener above; game.js calls this at each of those seams so nothing stays held.
+export function clearKeys() { for (const k in keys) keys[k] = false; }
 document.addEventListener('pointerlockchange', () => {
   locked = document.pointerLockElement === renderer.domElement;
   document.getElementById('cross').classList.toggle('hidden', !locked);
 });
+// Clamped: a lock transition or a stalled frame can deliver one enormous delta and
+// spin him round. 150 px is more than any real hand moves in a frame.
+const MOVE_MAX = 150;
 addEventListener('mousemove', e => {
   if (!locked) return;
-  player.yaw -= e.movementX * 0.0022;
-  player.pitch = clamp(player.pitch - e.movementY * 0.0022, -1.45, 1.45);
+  player.yaw -= clamp(e.movementX, -MOVE_MAX, MOVE_MAX) * 0.0022;
+  player.pitch = clamp(player.pitch - clamp(e.movementY, -MOVE_MAX, MOVE_MAX) * 0.0022, -1.45, 1.45);
 });
 
-export function requestLock() { renderer.domElement.requestPointerLock(); }
+// Raw mouse where the browser offers it (no OS acceleration under the lock); the
+// promise form rejects on a denied or unsupported request — fall back to the plain
+// call once, and never let either rejection surface as an unhandled error.
+export function requestLock() {
+  const el = renderer.domElement;
+  let p = null;
+  try { p = el.requestPointerLock({ unadjustedMovement: true }); } catch (e) { p = null; }
+  if (p && p.catch) {
+    p.catch(() => { try { const q = el.requestPointerLock(); if (q && q.catch) q.catch(() => {}); } catch (e) { /* */ } });
+  }
+}
 
 // Shared temps: these run every frame, so each returns a module-owned vector that is
 // valid until the same helper is called again. Copy it if you need to hold it.

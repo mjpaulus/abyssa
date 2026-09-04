@@ -10,7 +10,11 @@ import { terrainH } from './terrain.js';
 import { collect } from '../systems/survival.js';
 import { siteParams } from './site.js';
 
-const RESPAWN = 55;   // finite-feeling but never soft-locking; scaled per-kind by scarcity
+// RESPAWN: 55 s meant a lump came back before the diver had left its sight, so salvage
+// was never scarce and the hose was ground out in one sitting. Four minutes is longer
+// than a round trip to the raft, so a floor picked clean STAYS clean for the dive that
+// picked it, and comes back for the next. Scaled per-kind by the site's scarcity dial.
+const RESPAWN = 240;
 const N_POLYMER = 11, N_BITUMEN = 9;   // site-0 base counts — verbatim shipped values
 export const nodes = [];
 
