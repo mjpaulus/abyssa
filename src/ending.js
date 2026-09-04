@@ -23,6 +23,7 @@ import { lanternLight, playerLightSrc } from './lighting.js';
 import { raft } from './systems/raft.js';
 import { setTetherVisible } from './systems/tether.js';
 import { hidePredators } from './world/predators.js';
+import { hideFauna } from './world/fauna.js';   // FAUNA PATCH
 import { chime, setCalm, setSpeed, setWalking, setLight } from './audio.js';
 
 // ---------------------------------------------------------------- beat timings (s)
@@ -417,6 +418,7 @@ export function startEnding() {
   setWalking(false);
   hideTether();
   hidePredators();   // story-irrelevant during the rite, and frozen once 'won' stops their updates
+  hideFauna();       // FAUNA PATCH: same rule
   // The HUD has nothing left to say. Let it go before the ascent starts.
   const ui = document.getElementById('ui');
   if (ui) { ui.style.transition = 'opacity 2.6s ease-in'; ui.style.opacity = '0'; }
