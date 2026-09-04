@@ -570,7 +570,7 @@ function consultChart() {
 }
 
 // Debug/automation surface used by the visual-review harness.
-Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, diver, scene, survival, setState: s => { state = s; } });
+Object.assign(window, { player, start, zoneTop, zoneBottom, terrainH, camera, diver, scene, survival, keys, setState: s => { state = s; } });
 // Probe surface for the hit feedback: the live refill rate, the light dip, the rift rim.
 window.__hit = () => ({ torn: +survival.torn.toFixed(2), refill: +o2RefillRate().toFixed(3), lightDip: +lightDip.toFixed(3), lightK: +lightK.toFixed(3), riftRimY: +riftRimY.toFixed(1), lantern: +lanternLight.intensity.toFixed(2) });
 // Debug: switch the active zone without calming a sleeper — zone gating (terrain floor,
