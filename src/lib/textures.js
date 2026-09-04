@@ -245,4 +245,143 @@ export function rippleNormalTex() {
   return t;
 }
 
+// ---- THE ROCK MAP SET (flora.js, boulders) --------------------------------------------
+// Weathered stone, generated: two variants baked once on the CPU, each a PAIR of
+// 512x512 RepeatWrapping, mipmapped, anisotropic DataTextures.
+//   pack : R = albedo multiplier (mean ~1.0, so it multiplies INTO the zone palette,
+//              never replaces it), G = roughness (0..1), B = height (0..1), A = 255.
+//   nrm  : tangent-space normal (linear, NoColorSpace), A = height again.
+// The height is three things summed: layered fbm STRATA (bedding planes -- a sine of
+// v warped by a low fbm, integer band count so the tile closes), Worley FISSURES
+// (F2-F1 valleys carved down as thin dark cracks along the cell borders) and fine
+// GRIT (a high-octave lattice). Variant 1 (the deep zones) is darker, more fissured,
+// and carries a mineral crust: bright speckle pooled in low-frequency Worley blotches.
+// Everything is a tileable lattice modulo the tile, like rippleNormalTex, so the
+// triplanar projection in flora.js can sample it at any world scale and rotation.
+// Boot cost: ~60-90 ms per variant at 512^2 (measured 2026-09, M-series Safari/Chrome).
+const _rockSets = [null, null];
+export function rockMapSet(variant = 0) {
+  if (_rockSets[variant]) return _rockSets[variant];
+  const S = 512, N = S * S, deep = variant === 1;
+  const rand = seededRand(deep ? 0xBA5A17C0 : 0x5707E5ED);
+  const lattice = (n) => {
+    const g = new Float32Array(n * n);
+    for (let i = 0; i < n * n; i++) g[i] = rand();
+    return { n, g };
+  };
+  const smp = (L, x, y) => {
+    const { n, g } = L;
+    x -= Math.floor(x); y -= Math.floor(y);
+    const fx = x * n, fy = y * n;
+    const xi = Math.floor(fx), yi = Math.floor(fy);
+    const x0 = xi % n, y0 = yi % n, x1 = (x0 + 1) % n, y1 = (y0 + 1) % n;
+    let tx = fx - xi, ty = fy - yi;
+    tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+    const a = g[y0 * n + x0], b = g[y0 * n + x1], c = g[y1 * n + x0], d = g[y1 * n + x1];
+    const top = a + (b - a) * tx;
+    return top + ((c + (d - c) * tx) - top) * ty;
+  };
+  const fbmL = (octs, x, y) => {
+    let v = 0, amp = 0.5, tot = 0;
+    for (let o = 0; o < octs.length; o++) { v += smp(octs[o], x, y) * amp; tot += amp; amp *= 0.5; }
+    return v / tot;
+  };
+  const base = [6, 12, 24, 48, 96].map(lattice);   // body fbm
+  const warp = [3, 6, 12].map(lattice);              // strata warp
+  const grit = [64, 128, 256].map(lattice);          // fine grit
+  // Worley: F1 and F2 on a torus, one jittered point per cell.
+  const worley = (WC) => {
+    const px = new Float32Array(WC * WC), py = new Float32Array(WC * WC);
+    for (let i = 0; i < WC * WC; i++) { px[i] = rand(); py[i] = rand(); }
+    return (x, y) => {
+      const fx = x * WC, fy = y * WC, cx = Math.floor(fx), cy = Math.floor(fy);
+      let f1 = 9, f2 = 9;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        const gx = cx + i, gy = cy + j;
+        const ix = ((gx % WC) + WC) % WC, iy = ((gy % WC) + WC) % WC;
+        const dx = gx + px[iy * WC + ix] - fx, dy = gy + py[iy * WC + ix] - fy;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+      }
+      return [f1, f2];
+    };
+  };
+  const cracks = worley(deep ? 11 : 8);     // fissure network (fine)
+  const splits = worley(3);                 // the few big splits per tile
+  const crust = worley(5);                  // mineral-crust blotches (deep only)
+  const mask = [4, 8, 16].map(lattice);     // where the fine fissures live at all
+  const BANDS = deep ? 9 : 7;               // bedding planes per tile
+  const sst = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  const h = new Float32Array(N), alb = new Float32Array(N), rgh = new Float32Array(N);
+  for (let y = 0; y < S; y++) {
+    const v = y / S;
+    for (let x = 0; x < S; x++) {
+      const u = x / S, i = y * S + x;
+      const body = fbmL(base, u, v);                                   // 0..1, mean .5
+      const w = fbmL(warp, u + 0.31, v + 0.77) - 0.5;
+      // strata: asymmetric sawtooth of bedding -- a slow rise, a sharp drop (the
+      // ledge). Warped by the low fbm so the planes undulate instead of ruling lines.
+      let ph = (v * BANDS + w * 0.9 + body * 0.25) % 1; if (ph < 0) ph += 1;
+      const strata = ph < 0.82 ? ph / 0.82 : 1 - (ph - 0.82) / 0.18;
+      const ledge = ph > 0.82 ? 1 : 0;
+      // Fissures: a full Voronoi net reads as dry mud, so the fine net only exists
+      // inside a patchy fbm mask (~40% of the tile, soft-edged), and a second, much
+      // sparser Worley supplies the two or three long splits every real boulder has.
+      const [f1, f2] = cracks(u + w * 0.05, v - w * 0.04);
+      const fine = 1 - Math.min(1, (f2 - f1) / (deep ? 0.09 : 0.07));
+      const mk = sst(deep ? 0.44 : 0.50, deep ? 0.60 : 0.66, fbmL(mask, u + 0.61, v + 0.23));
+      const [s1, s2] = splits(u - w * 0.08, v + w * 0.06);
+      const big = 1 - Math.min(1, (s2 - s1) / 0.11);
+      let ck = Math.max(fine * fine * (3 - 2 * fine) * mk, big * big * (3 - 2 * big) * 0.85);
+      const g = fbmL(grit, u, v) - 0.5;
+      let hh = 0.52 * body + 0.22 * strata - 0.30 * ck + 0.12 * g + 0.14;
+      let a = 0.86 + 0.22 * body + 0.045 * strata - 0.30 * ck + 0.07 * g + ledge * 0.04 * (1 - ck);
+      let r = 0.64 + 0.28 * ck + 0.10 * (1 - strata) + 0.08 * Math.abs(g) * 2;
+      if (deep) {
+        const [c1, c2] = crust(u, v);
+        const blot = Math.max(0, 1 - c1 / 0.55);                        // pooled crust
+        const speck = Math.max(0, (smp(grit[2], u * 1.7, v * 1.3) - 0.74) / 0.26);
+        a = a * 0.86 - 0.05 * blot + speck * blot * 0.22;             // darker, crusted
+        r = r * 0.92 + blot * 0.10 - speck * blot * 0.18;
+        hh += speck * blot * 0.03 - blot * 0.03 - (1 - Math.min(1, (c2 - c1) / 0.06)) * 0.04;
+      }
+      h[i] = hh; alb[i] = a; rgh[i] = r;
+    }
+  }
+  // Level-normalise the albedo multiplier to a 1.0 mean: structure, not brightness.
+  let mean = 0; for (let i = 0; i < N; i++) mean += alb[i]; mean /= N;
+  const pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  const SLOPE = 3.2, e = 1.5 / S;
+  for (let y = 0; y < S; y++) {
+    const ym = (y - 1 + S) % S, yp = (y + 1) % S;
+    for (let x = 0; x < S; x++) {
+      const xm = (x - 1 + S) % S, xp = (x + 1) % S, i = y * S + x, o = i * 4;
+      const gx = (h[y * S + xp] - h[y * S + xm]) / (2 * e);
+      const gy = (h[yp * S + x] - h[ym * S + x]) / (2 * e);
+      let nx = -gx * SLOPE, ny = -gy * SLOPE, nz = 1;
+      const il = 1 / Math.hypot(nx, ny, nz); nx *= il; ny *= il; nz *= il;
+      const hb = Math.min(255, Math.max(0, h[i] * 255)) | 0;
+      // albedo multiplier packed as value/1.6 so the range [0,1.6] fits 8 bits.
+      pack[o] = Math.min(255, Math.max(0, (alb[i] / mean) / 1.6 * 255)) | 0;
+      pack[o + 1] = Math.min(255, Math.max(0, rgh[i] * 255)) | 0;
+      pack[o + 2] = hb; pack[o + 3] = 255;
+      nrm[o] = (nx * 0.5 + 0.5) * 255; nrm[o + 1] = (ny * 0.5 + 0.5) * 255;
+      nrm[o + 2] = (nz * 0.5 + 0.5) * 255; nrm[o + 3] = hb;
+    }
+  }
+  const mk = (data) => {
+    const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.generateMipmaps = true;
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = MAX_ANISO;
+    t.colorSpace = THREE.NoColorSpace;   // structure and normals are data, never colour
+    t.needsUpdate = true;
+    return t;
+  };
+  _rockSets[variant] = { pack: mk(pack), nrm: mk(nrm), size: S };
+  return _rockSets[variant];
+}
+
 export { rng };
