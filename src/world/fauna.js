@@ -46,8 +46,9 @@
 // to BLACK with range, never toward the fog colour. No lights are added, ever.
 //
 // Budget (measured at build, window.__fauna.stats): 12 draw calls across all
-// zones (6 / 3 / 3), ~78k tris worst case (zone 0 + zone 1 bands overlap
-// between y = -230 and -410), 0 B/frame.
+// zones (6 / 3 / 3); 65.4k / 31.8k / 45.7k tris per zone, ~97k worst case where
+// the zone 0 and zone 1 bands overlap, 0 B/frame. At the reef: +6 draw calls,
+// +65,436 tris per frame against main (measured with window.__noFauna).
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
@@ -1237,7 +1238,7 @@ export function buildFauna() {
 
   // zone 2
   makeGroup('ANGLER', 2, 2, anglerGeometry(), faunaMaterial({
-    rough: 0.75, mot: [0.04, 0.12, 2.5, 0], body: [2.5, 1.0, 1.2, 1.1], hinge: [0.43, 0.0, 1.2, 0.62], glow: 0xd6e6c8, glowI: 2.2
+    rough: 0.75, mot: [0.04, 0.12, 2.5, 0], body: [2.5, 1.0, 1.2, 1.1], hinge: [0.43, 0.0, 1.2, 0.62], glow: 0xd6e6c8, glowI: 1.6
   }), { ...arrs(2, ['gx', 'gz', 'gh', 'gt', 'mt', 'ph']), mode: new Int8Array(2), step: anglerStep, layout: anglerLayout });
 
   makeGroup('GULPER', 2, 1, gulperGeometry(), faunaMaterial({
