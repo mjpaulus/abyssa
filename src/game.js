@@ -1167,13 +1167,14 @@ function update(dt, t) {
       $craft.style.opacity = 1;
     }
   } else {
-    const rel = nearRelic(player.pos);
-    const kp = rel ? null : nearKeepsake(player.pos);
-    if (rel) {
-      $craft.textContent = `[E] take the ${rel.tool === 'sonar' ? 'sounding set' : rel.tool === 'spear' ? 'spear gun' : 'air thruster'}`;
-      $craft.style.opacity = 1;
-    } else if (kp) {
+    // Same order as the E handler: the keepsake (or his mark) first, then the relic.
+    const kp = nearKeepsake(player.pos);
+    const rel = kp ? null : nearRelic(player.pos);
+    if (kp) {
       $craft.textContent = kp.mark ? '[E] READ IT' : '[E] TAKE IT';
+      $craft.style.opacity = 1;
+    } else if (rel) {
+      $craft.textContent = `[E] take the ${rel.tool === 'sonar' ? 'sounding set' : rel.tool === 'spear' ? 'spear gun' : 'air thruster'}`;
       $craft.style.opacity = 1;
     } else {
       $craft.style.opacity = 0;
