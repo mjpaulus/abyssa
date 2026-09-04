@@ -244,9 +244,19 @@ const GLSL_AIR = `
 // horizon in air, at the two times of day the horizon is most interesting — flagged for
 // the lab to judge rather than silently "fixed" here, since fixing it means re-patching
 // the fog chunk for every material in the game.
+// THE AIRLIGHT IS A UNIFORM NOW. abyssaAir = (rgb of the ring the sky actually draws at
+// the horizon this frame, flag). The flag is 0 for any program that was never handed
+// the uniform (GLSL zero-initialises an unset uniform), so such a program gets the old
+// noon bake bit-for-bit instead of black. See patchFog for how a global chunk gets a
+// uniform of its own: the value is ONE shared Float32Array installed on
+// UniformsLib.fog and on every ShaderLib entry that carries fogColor, and
+// UniformsUtils.clone copies a typed array BY REFERENCE, so every material reads the
+// same four floats and water.js writes them once a frame.
+uniform vec4 abyssaAir;
 vec3 airLight( vec3 surfIrr ){
   float dg = clamp( ( surfIrr.g / ${f(SURF_LIGHT[1])} - 0.20 ) / 0.80, 0.0, 1.0 );
-  return ${v3(SKY_HOR_D)} * ( 0.0266 + 0.9734 * dg );
+  vec3 bake = ${v3(SKY_HOR_D)} * ( 0.0266 + 0.9734 * dg );
+  return mix( bake, abyssaAir.rgb, abyssaAir.a );
 }`;
 
 // THE SKY. One function, used by the ocean surface on BOTH sides of the interface and by
@@ -533,6 +543,7 @@ if (typeof window !== 'undefined') {
         isl: uCloudIsl.value.toArray(), shp: uCloudShp.value.toArray(), bak: uCloudBak.value,
         frm: uCloudFrm.value.toArray(), frm2: uCloudFrm2.value.toArray(),
         skyHor: uSkyHor.value.toArray(), skyZen: uSkyZen.value.toArray(),
+        pHor: _pHor.slice(), lid: cloudLook.lid, airL: Array.from(AIR_U),
         drift: [uCloudDrift.value.x, uCloudDrift.value.y],
         lit: uCloudLit.value.toArray(), base: uCloudBase.value.toArray(),
         fog: uFog.value, fogCol: uFogCol.value.toArray(), discK: uDiscK.value,
@@ -755,8 +766,23 @@ export function murkFrac(y) {
 // depth-tinted inscatter. scene.fog stays a FogExp2 so USE_FOG / FOG_EXP2 and the
 // fogColor / fogDensity uniform plumbing keep working on every built-in material.
 // NOTE: fogColor now means "surface irradiance", not "colour of the far field".
+// The one airlight every fogged program reads (see abyssaAir in GLSL_AIR). Written by
+// skyDrama; .a stays 0 until the first frame resolves it, which is the noon bake.
+const AIR_U = new Float32Array(4);
+
 (function patchFog() {
   const C = THREE.ShaderChunk;
+  // Hand the global chunk a uniform: the SAME Float32Array on UniformsLib.fog (our own
+  // ShaderMaterials clone that) and on every ShaderLib entry three already merged at
+  // its module-eval (the built-ins clone THOSE, not UniformsLib). WebGLUniforms only
+  // builds setters for uniforms the linked program actually uses, so an entry on a
+  // material whose shader never mentions abyssaAir costs nothing; a fogged program
+  // WITHOUT the entry would throw in upload(), which is why both tables get it.
+  THREE.UniformsLib.fog.abyssaAir = { value: AIR_U };
+  for (const k in THREE.ShaderLib) {
+    const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
+    if (u && u.fogColor) u.abyssaAir = { value: AIR_U };
+  }
   C.fog_pars_vertex = `#ifdef USE_FOG
   varying float vFogDepth;
   varying float vFogY;
@@ -1000,7 +1026,8 @@ uniform vec4 uMoonPh, uCloudIsl, uCloudShp, uCloudFrm;`;
 const SKY_UNIFORMS = {
   uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
   uCloudIsl, uCloudShp, uCloudBak, uCloudDome, uCloudFrm, uCloudFrm2,
-  uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol
+  uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol,
+  abyssaAir: { value: AIR_U }
 };
 const _tmp = new THREE.Vector3();
 const _size = new THREE.Vector2();
@@ -1142,7 +1169,7 @@ function captureSkyEnv() {
   envRT = envPM.fromCubemap(envCubeRT.texture);
   if (old) old.dispose();
   for (let i = 0; i < envListeners.length; i++) envListeners[i](envRT.texture);
-  _envFinger[0] = _pHor[0]; _envFinger[1] = _pHor[1]; _envFinger[2] = _pHor[2];
+  _envFinger[0] = _pRing[0]; _envFinger[1] = _pRing[1]; _envFinger[2] = _pRing[2];
   _envFinger[3] = _pZen[0]; _envFinger[4] = _pZen[1]; _envFinger[5] = _pZen[2];
   envCool = 2.5;
 }
@@ -1150,8 +1177,8 @@ function maybeRefreshSkyEnv(dt) {
   if (!envCam) return;
   envCool -= dt;
   if (envCool > 0) return;
-  const d = Math.abs(_pHor[0] - _envFinger[0]) + Math.abs(_pHor[1] - _envFinger[1])
-          + Math.abs(_pHor[2] - _envFinger[2]) + Math.abs(_pZen[0] - _envFinger[3])
+  const d = Math.abs(_pRing[0] - _envFinger[0]) + Math.abs(_pRing[1] - _envFinger[1])
+          + Math.abs(_pRing[2] - _envFinger[2]) + Math.abs(_pZen[0] - _envFinger[3])
           + Math.abs(_pZen[1] - _envFinger[4]) + Math.abs(_pZen[2] - _envFinger[5]);
   if (d > 0.030) captureSkyEnv();
 }
@@ -3059,7 +3086,7 @@ export function buildWater() {
 // ZERO ALLOCATION: the two colour scratch arrays are module-scoped, and the uniforms
 // are Vector2/3/4 objects written with .set(). No trig in here beyond one sin/cos pair
 // for the wind and one for the moon.
-const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0];
+const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0], _pRing = [0, 0, 0];
 
 // Published for world/clouds.js: the SAME two colours the painted dome mixes between,
 // plus the backlit amount and the storm envelope. The instanced puffs are lit by the
@@ -3067,7 +3094,7 @@ const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0];
 // sky rather than as two cloud systems. `lit`/`base` are the LIVE uniform vectors, so
 // there is nothing to keep in sync and nothing copied per frame.
 export const cloudLook = {
-  lit: uCloudLit.value, base: uCloudBase.value, bak: 0, storm: 0, dome: 1
+  lit: uCloudLit.value, base: uCloudBase.value, bak: 0, storm: 0, dome: 1, lid: 0
 };
 // The moon's own arc: elevation is the sun's elevation proxy NEGATED, so it is highest
 // at midnight and gone by mid-morning, and its azimuth is the sun's plus 180. That is
@@ -3177,6 +3204,39 @@ function skyDrama(dt, storm) {
   // instanced puffs fade into); the storm envelope drives it back to a full lid, which
   // is what world/clouds.js fades its clusters out against.
   uCloudDome.value = clamp(C.dome + (1 - C.dome) * ms(storm, 0.25, 0.85), 0, 1);
+
+  // ---- THE SKY UNDER THE LID -------------------------------------------------
+  // THE MILKY SEA (Michael, bright overcast, deck at 0 m: "looks like a snowfield").
+  // Measured with the uDbg decomposition: from deck height the sea can only mirror the
+  // lowest ~10 degrees of sky, and that band was ALWAYS the clear-day horizon ring —
+  // every stop is authored hor 2.4-6x its zenith, the deck dissolves back into that
+  // ring over the lowest hazeUp (config: THE MILKY BAND), and the fog chunk's airlight
+  // was the noon ring baked in. So under a closed lid the zenith read 0.20 while the
+  // sea 4 degrees under the horizon read 0.41 and the far band 0.77 against a horizon
+  // sky of 0.66: the sea mirrored a bright ring the lid overhead had already hidden,
+  // then had the same ring stacked on top as haze. A real overcast is darkest low
+  // (CIE overcast: horizon = zenith / 3) with at most a hazy slit at the horizon, and
+  // the sea under it is dark steel because it mirrors the underside of the deck.
+  //
+  // So the ring the dome draws, the ring the sea mirrors and the airlight the far
+  // field settles on become ONE number that follows the lid: the authored horizon,
+  // pulled toward the deck's own underside (mix of this frame's base and lit cloud
+  // colours — the stop's hue, only darker) by how closed the lid is. lidRing keeps a
+  // share of the authored ring alive under a full deck: Michael's gale reference is a
+  // black lid over a HAZY BRIGHT horizon, and at 0.15 the gale horizon is ~6x its
+  // underside while sitting ~3x under today's. Fair-weather cumulus (cov under lidCov)
+  // and the calm-noon anchor are bit-identical: lidK is exactly 0 there.
+  const cov = uCloudCov.value;
+  const lidK = Math.max(ms(cov, C.lidCov[0], C.lidCov[1]), ms(storm, C.lidStorm[0], C.lidStorm[1]));
+  if (lidK > 0) {
+    for (let i = 0; i < 3; i++) {
+      const under = _cBase[i] + (_cLit[i] - _cBase[i]) * C.lidHz + _pHor[i] * C.lidRing;
+      _pRing[i] = _pHor[i] + (Math.min(under, _pHor[i]) - _pHor[i]) * lidK;
+    }
+  } else { _pRing[0] = _pHor[0]; _pRing[1] = _pHor[1]; _pRing[2] = _pHor[2]; }
+  uSkyHor.value.set(_pRing[0], _pRing[1], _pRing[2]);
+  AIR_U[0] = _pRing[0]; AIR_U[1] = _pRing[1]; AIR_U[2] = _pRing[2]; AIR_U[3] = 1;
+  cloudLook.lid = lidK;
   cloudLook.bak = uCloudBak.value;
   cloudLook.storm = storm;
   cloudLook.dome = uCloudDome.value;
