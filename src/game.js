@@ -38,6 +38,7 @@ import { buildVents, updateVents, ventColliders, reseedVents } from './world/ven
 import { buildClouds, updateClouds, setCloudWeather } from './world/clouds.js';
 import { buildRain, updateRain, setRainWeather } from './world/rain.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
+import { buildGardens, updateGardens, reseedGardens } from './world/gardens.js';
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
@@ -137,6 +138,7 @@ setKeepsakeState(keepsakes[currentSiteIndex()]);
 setKeepsakes(keepsakes);
 buildVents();
 buildVentLife();
+buildGardens();   // after flora (reef anchors = its rock colliders) and vents (activeVents)
 initTools();
 initWeather();
 performance.mark('abyssa:world-build-end');
@@ -541,6 +543,7 @@ function reseedWorld(i) {
   reseedProps();
   reseedVents();
   reseedVentLife();
+  reseedGardens();   // after reseedFlora + reseedVents: reads rockColliders and activeVents
   reseatRifts();
   reseedDens();
   reseedCreatures();
@@ -931,6 +934,7 @@ function update(dt, t) {
   // Ambient world animation runs even behind the title screen. Decorative: each is fenced.
   if (window.__breakAmbient) { window.__breakAmbient = 0; safe('probe', () => { throw new Error('probe: injected ambient throw'); }); }
   safe('flora', () => updateFlora(dt, t));
+  safe('gardens', () => updateGardens(dt, t));
   safe('props', () => updateProps(dt, t));
   safe('footfx', () => updateFootFX(dt, t));
   safe('creatures', () => updateCreatures(dt, t));
