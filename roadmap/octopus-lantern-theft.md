@@ -1,8 +1,8 @@
 ---
 title: Octopus Steals Sal's Lantern
-status: backlog
+status: done
 tags: octopus, predators, light
-updated: 2026-08-05
+updated: 2026-09-01
 ---
 The octopus should sometimes snatch Sal's hand lantern during a grab and drag it back to its den, forcing the player to go retrieve it.
 
@@ -17,3 +17,6 @@ Open questions / acceptance criteria (still needs design pass before moving to n
 
 ## Log
 - 2026-08-05 — captured as backlog idea
+
+## Log
+2026-09-01: Shipped in campaign wave 1 (merged 7d7771d design / 5c36aa6 story / 8e5726c audio / eec2480 world). Awaiting Michael's eye.

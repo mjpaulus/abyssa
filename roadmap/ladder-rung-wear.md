@@ -1,8 +1,8 @@
 ---
 title: Boarding Ladder Rungs Should Show Wear Where Sal Grabs
-status: backlog
+status: done
 tags: raft, davit, detail
-updated: 2026-08-05
+updated: 2026-09-01
 ---
 The boarding ladder's rungs are bare iron cylinders with only waterline grime. Add
 worn, hand-polished patches where Sal's grip actually lands each climb, so the
@@ -35,3 +35,6 @@ in daylight and matched against the "recent No Man's Sky underwater" quality bar
 
 ## Log
 - 2026-08-05 — created; captured from user request, not yet scheduled.
+
+## Log
+2026-09-01: Shipped in campaign wave 1 (merged 7d7771d design / 5c36aa6 story / 8e5726c audio / eec2480 world). Awaiting Michael's eye.

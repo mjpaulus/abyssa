@@ -1,8 +1,8 @@
 ---
 title: Shark Bite Lantern Flicker + HUD Dip
-status: backlog
+status: done
 tags: predators, lantern, hud
-updated: 2026-08-05
+updated: 2026-09-01
 ---
 When the shark bites Sal, the lantern should flicker and the HUD light meter should visibly dip, so a hit reads as a hit beyond the oxygen loss and camera shake.
 
@@ -20,3 +20,6 @@ Acceptance criteria: on `ev.bite`/`pev.bite`, the lantern visibly flickers (extr
 
 ## Log
 - 2026-08-05 — created
+
+## Log
+2026-09-01: Shipped in campaign wave 1 (merged 7d7771d design / 5c36aa6 story / 8e5726c audio / eec2480 world). Awaiting Michael's eye.

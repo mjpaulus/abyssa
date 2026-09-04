@@ -1,8 +1,8 @@
 ---
 title: Thin Marine Snow In Vent Warm Columns
-status: backlog
+status: done
 tags: water, vents, marine-snow
-updated: 2026-08-05
+updated: 2026-09-01
 ---
 Marine snow should thin out inside the hydrothermal vents' warm water columns, since rising heated water would carry fewer sinking particles through those columns than the surrounding cold water.
 
@@ -16,3 +16,6 @@ Currently the marine snow layers are built without regard to vent shimmer column
 
 ## Log
 - 2026-08-05 — created
+
+## Log
+2026-09-01: Shipped in campaign wave 1 (merged 7d7771d design / 5c36aa6 story / 8e5726c audio / eec2480 world). Awaiting Michael's eye.
