@@ -39,6 +39,7 @@ import { buildClouds, updateClouds, setCloudWeather } from './world/clouds.js';
 import { buildRain, updateRain, setRainWeather } from './world/rain.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { buildGardens, updateGardens, reseedGardens } from './world/gardens.js';
+import { buildFauna, updateFauna, reseedFauna } from './world/fauna.js';   // FAUNA PATCH
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
@@ -139,6 +140,7 @@ setKeepsakes(keepsakes);
 buildVents();
 buildVentLife();
 buildGardens();   // after flora (reef anchors = its rock colliders) and vents (activeVents)
+buildFauna();   // FAUNA PATCH: after creatures AND after vents (isopods/vent fish anchor on activeVents, moray/crabs on flora's rockColliders)
 initTools();
 initWeather();
 performance.mark('abyssa:world-build-end');
@@ -547,6 +549,7 @@ function reseedWorld(i) {
   reseatRifts();
   reseedDens();
   reseedCreatures();
+  reseedFauna();   // FAUNA PATCH: after creatures, flora and vents — ORDER IS CONTRACT
   enterZone(0);
   inkBeat = false;
   deckSpawn(player.pos);
@@ -938,6 +941,7 @@ function update(dt, t) {
   safe('props', () => updateProps(dt, t));
   safe('footfx', () => updateFootFX(dt, t));
   safe('creatures', () => updateCreatures(dt, t));
+  safe('fauna', () => updateFauna(dt, t));   // FAUNA PATCH
   updateWater(dt, t);    // NOT decorative: the surface height, optics and refraction key off it
   safe('clouds', () => updateClouds(dt, t));   // after updateWater: reads its eased wind and its resolved cloud palette
   safe('rain', () => updateRain(dt, t));       // after updateWater: reads the surface height it just resolved
