@@ -15,7 +15,7 @@ Mark V helmet .glb plan — the helmet is generated now like everything else.)**
 - Dev server: `python3 serve.py [port]` (no-store headers — plain http.server lets the
   browser cache ES modules and silently serve stale code). Launch config name
   `abyssa` (port 8777) and `abyssa-alt` (8790) in `.claude/launch.json`.
-- No build step. Three.js r160 + postprocessing + n8ao via CDN importmap in
+- No build step. Three.js r184 + postprocessing 6.39 + n8ao 1.9 via CDN importmap in
   `index.html`. `node --check` is the only offline gate; **the browser is the only
   trusted loader** (node once accepted a file the browser rejected — concrete cause
   found later: a BACKTICK inside a GLSL comment inside a template literal terminates
@@ -53,8 +53,10 @@ against explicit contracts and reviewed on return.
   / `player.burstT`, set by game.js's `tryBurst`), costing AIR_PER_BURST of the tank and
   a 5 s bottle recharge (`survival.thrustCharge`). Holding Shift never repeats it.
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
-  Chroma, Vignette, Grain) → EffectPass(SMAA; convolution effects can't share a
-  pass). Tiered fallbacks; `degradeQuality()` sheds passes below 34 fps.
+  Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
+  AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
+  end-to-end. Tiered fallbacks; `degradeQuality()` sheds passes below 34 fps (a cheap-
+  volumetrics rung precedes full removal). Boot warm-up is `compileAsync`.
   **P key = full post bypass** — the canonical A/B for any rendering artifact.
 - `postfx.volumetrics.js` — half-res raymarched god rays, screen-space occlusion.
   Soak-tested (10k frames, 620 P-toggles, 155 resizes, zero artifacts) against this
@@ -78,8 +80,11 @@ against explicit contracts and reviewed on return.
   Physics that constrains everything here: brightness cannot buy distance — range
   scales with the LOG of it (1e6x brighter = +1088 units). A far field at r=3600
   renders at e^-100 no matter what you spend.
-- `world/terrain.js` + `lib/triplanar.js` — 3 always-present heightfield meshes
-  (rifts are flattened bowls, NOT holes; fall-through is a player.js special case).
+- `world/terrain.js` + `lib/triplanar.js` — 3 heightfield meshes, ZONE-GATED by
+  camera Y with flora's bands (−332k tris/frame; verified 0 visibility violations
+  across the ending ascent and voyages). Rifts are flattened bowls, NOT holes;
+  fall-through is a player.js special case. Site-0 fingerprint probe (FNV-1a over
+  float32 terrainH, 32x32x3, x,z −248..248 step 16) must stay 35acc2d0.
   Triplanar CC0 PBR (channel-packed, 3.3 MB) multiplies ON TOP of zone palettes:
   texture = structure, palette = hue.
 - `lighting.js` — STOPS depth blend; `setWeatherLight(day, storm, flash)`; weather
@@ -105,11 +110,10 @@ against explicit contracts and reviewed on return.
   geometry, spring secondary motion, curve-keyed gait, heel-strike `stepCount()`
   drives footsteps+dust+prints on the same frame. Knife slash contact at t=0.22s
   (game.js `pendingSlash` matches — keep in sync). `airInletWorldPos` = tether dock.
-  `helmGroup` is swappable — see `helmetSwap.js`.
-- `entities/helmetSwap.js` — mounts `assets/models/markv_helmet/helmet.glb`
-  (CC-BY BeaVex Mark V; USER STILL NEEDS TO DOWNLOAD IT from Sketchfab — needs a
-  login) over the procedural helmet; silently absent otherwise. `window.__helm`
-  adjusts fit.
+  The helmet is generated (44-seg spun bonnet, Mark V hasp); `helmetSwap.js` loader
+  is RETIRED under the hard rule. Sal breathes on ONE clock (`breathPhase()`):
+  shoulders, exhaust bursts from the real valve, and the audio regulator share it;
+  bursts have character classes and the column boils the surface (`surfaceBoil`).
 - `entities/leviathan.js` — CPU-rebuilt body (GPU deform produced degenerate geometry
   once), alpha-hashed fin cutout (blending can't mis-sort), sigil flash/calming-wave
   events, contact blobs. Zone-0 sleeper idles shallow (62/38) to cross the god rays.
@@ -129,8 +133,11 @@ against explicit contracts and reviewed on return.
   predators.slash at the tip), thruster bubble FX.
 - `systems/weather.js` — deterministic 12-min day cycle + storm/lightning schedule
   (pure function of t, mulberry32 const seed). `window.weather.set/advance`.
-- `systems/survival.js` — air economy. Drowning respawn refuels pump to 0.3 (soft-
-  lock fix). HOSE_REQ gates descent (never leash-clamp the player — user rejected).
+- `systems/survival.js` — air economy (campaign set: FUEL_BURN 1/420, O2_REFILL
+  0.10, HOSE 120/craft, HOSE_REQ [0,640,920], rescue refuel 0.5). TORN DRESS: bites
+  and sleeper slams halve refill for 20 s (stacks extend). Storm sputter cuts supply.
+  HOSE_REQ gates descent. NOTE: tether.js carries a hard leash clamp that contradicts
+  the recorded user ruling — `hose-leash-decision` card is open; do not touch it.
 - `systems/tether.js` — verlet hose, anchors to live `pumpPos` (raft bobs), docks at
   `airInletWorldPos`. `setTetherVisible` used by the ending.
 - `ending.js` — 75s cinematic: stillness → rift-threaded ascent (spline through all
@@ -210,7 +217,7 @@ against explicit contracts and reviewed on return.
   - Each builder bakes per material, then `consolidate()` in raft.js merges again
     ACROSS builders (meshes flagged `userData.rmerge`, direct children of `raft`
     only, so animated sub-groups are untouched). Whole raft: ~10 static draw calls,
-    ~36k tris.
+    ~56k tris (chamfered planks, lathed drums, hex bolts — the geometry pass).
   - THE FRAME, raft-local: deck top **y = +0.11**, footprint **x,z ∈ [-4.7, +4.7]** —
     player.js hard-codes both. Waterline y = -0.55. +Z is the dive side. The walk lane
     (x ∈ [-1.1,1.1], z ∈ [1.7,4.7]) and the bulwark gap at z = +4.7 are the dive
@@ -233,7 +240,13 @@ against explicit contracts and reviewed on return.
 - One-shot diegetic onboarding via `showMsg`, never over another message. ALL-CAPS
   short lines, period voice ("BITUMEN — FOOD FOR THE PUMP").
 - Debug surfaces are namespaced on window and kept: player, survival, lev, zone,
-  gameState, setState, playEnding, pred, wrecks, weather, __helm.
+  gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
+  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart.
+- Message discipline: `showMsg(text, dur, prio)` is a two-slot priority queue —
+  never clobber; sleeper-name lines are prio 0. Esc/blur is a real pause.
+- Reversed-edge `smoothstep(a,b,x)` with a>=b is GLSL UB and returns 0 on this
+  driver — it silently killed eleven art systems for months. Always `1.0 -
+  smoothstep(lo, hi, x)`. Transparent DoubleSide materials need `forceSinglePass`.
 - Licenses: every borrowed asset gets a CREDITS.md line (props, textures, models).
 
 ## THE WORKING CHART (feature board — keep it inked)
@@ -265,7 +278,6 @@ orchestrator redoes it, not the agent.
 
 ## Known issues / open threads
 
-- Helmet glb not yet downloaded (user action; everything else is wired).
 - One-time `GL_INVALID_OPERATION` on some fresh loads — suspected depth-attachment
   sharing in the composer (pre-volumetrics; background task may have fixed it).
 - Flora can crowd wreck sites (background task in flight to add exclusion radii).
@@ -286,8 +298,6 @@ orchestrator redoes it, not the agent.
   transmitted scene into ghosts (a phantom davit leg, measured). Known limit of
   screen-space: storm crests overlapping the raft show refracted water, not the deck
   behind them — physically defensible, watch it with the user's eye.
-- The raft casts no shadow onto the sea, so from below there is no dark patch marking
-  where it floats. Wants the water surface to receive the sun's shadow map.
 - The third-person camera is 9 units back and the raft is 9.4 across, so the camera is
   always OFF the boat while Sal is on deck. Every deck detail is only ever read from
   ~9 units. Pulling the camera in on deck would change movement feel, which is the
@@ -329,3 +339,14 @@ physics and FATAL for any perf judge: a 500 ms frame is indistinguishable from a
 measures its own `performance.now()` wall time and discards frames over 250 ms.
 Two separate false-degrade bugs came from getting this wrong; both shipped a game
 that silently ran without volumetrics, AO or shadows on hardware doing 54-60 fps.
+
+### 2026-09 campaign (see roadmap/everything-better.md)
+Skill-pack sweeps (shaders/textures/lighting/geometry/postfx/animation), a design
+evaluation (roadmap/eval-*.md, all shipped), and two campaign waves. New systems:
+wards must be LIT (verb settled), Orune's wards answer the sonar, Mhor's are squid-
+kept, the octopus can steal the lantern (retrieve at the den), the mariner's story is
+seeded at home (sextant + three marks in his hand), the sea receives the raft's shadow
+(sampler2DShadow — never a plain sampler2D on a compare depth texture), context-loss
+and frame-throw are handled visibly, reduced-motion/mute/gamepad exist. Open on
+Michael: eye pass, ear pass (audio-audit), three decisions (props glTF, skyline
+fingerprint, hose leash).
