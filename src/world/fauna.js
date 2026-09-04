@@ -1325,6 +1325,8 @@ export function faunaNearby() {
 // ---------------------------------------------------------------------------
 export function updateFauna(dt, t) {
   if (!built || hidden) return;
+  // window.__noFauna = A/B kill switch (draw-call / tri / fps deltas): everything hidden, nothing stepped.
+  if (window.__noFauna) { for (const G of groups) { if (G.mesh.visible) G.mesh.visible = false; G.active = false; } return; }
   uTime.value = t;
   if (scene.fog) {
     uFogD.value = scene.fog.density;
