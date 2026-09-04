@@ -187,6 +187,10 @@ const chroma = new ChromaticAberrationEffect({
 // SMAA replaces the MSAA we disabled during the black-box investigation: it runs
 // inside the effect chain, so it cannot reintroduce the resolve-blit that flashed.
 const smaa = new SMAAEffect({ preset: SMAAPreset.HIGH });
+// Reduced motion: the colour fringe is the one post effect that reads as motion
+// (it swims with the camera); game.js flips it with the feel channel.
+const CHROMA_OFF = 0.0008;
+export function setChromaReduced(on) { chroma.offset.set(on ? 0 : CHROMA_OFF, on ? 0 : CHROMA_OFF); }
 
 // Vignette and grain moved OUT of this pass: they used to run before SMAA, which
 // then smoothed the grain like an edge. They now live with SMAA in the final pass.

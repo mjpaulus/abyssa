@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
 import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
-import { render, samplePerf, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics } from './postfx.js';
+import { render, samplePerf, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
@@ -872,7 +872,7 @@ function update(dt, t) {
   }
   // reduced motion: the feel channel goes with it (window.__feel can still A/B it)
   const rmNow = reducedMotion();
-  if (rmNow !== rmWas) { rmWas = rmNow; FEEL.on = !rmNow; }
+  if (rmNow !== rmWas) { rmWas = rmNow; FEEL.on = !rmNow; setChromaReduced(rmNow); }
 
   // TITLE: Sal already dressed and standing on the tender's deck, waiting to go over.
   // He used to hang 10 m under the raft here and get teleported onto the planks by
