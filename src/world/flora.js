@@ -6,7 +6,7 @@ import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow, rockMapSet } from '../lib/textures.js';
-import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL, STROKE_GLSL } from '../lib/paint.js';
+import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
 import { siteParams } from './site.js';
@@ -105,8 +105,6 @@ varying vec3 vFlora; varying vec3 vLocal;
   varying vec3 vWPos;
   uniform sampler2D uRockPack, uRockNrm; uniform float uWet; uniform float uPaintK;
   ` + EDGE_GLSL + `
-#else
-  ` + STROKE_GLSL + `
   // Coarse weathering field, no fetch: two bands of interfering sines.
   float rockDet(vec3 w, float f) {
     return sin(w.x * f) * sin(w.z * f * 1.13 + 1.7) + sin(w.y * f * 0.87 + 4.1) * 0.7;

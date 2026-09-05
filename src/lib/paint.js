@@ -18,6 +18,7 @@
 // Every term is bit-identical to the shipped look at styleK() === 0.
 import * as THREE from 'three';
 import { GLASS, SUN, styleK } from '../config.js';
+import { renderer } from '../core.js';
 
 const REG = [];
 let lastPaint = -1, lastEdge = -1, lastStrokes = -1;
@@ -137,4 +138,10 @@ export function injectStrokes(sh, early = false) {
 }
 
 // Dev surface.
-if (typeof window !== 'undefined') window.__paint = { applyPaintLaw, styleUniforms, count: paintCount, G: GLASS };
+if (typeof window !== 'undefined') window.__paint = {
+  applyPaintLaw, styleUniforms, count: paintCount, G: GLASS,
+  set: v => { GLASS.style.flowLean = v; styleTick(); },
+  programs: () => renderer.info.programs.length,
+  broken: () => renderer.info.programs.filter(p => p.diagnostics && !p.diagnostics.runnable).length,
+  dump: () => REG.map(m => [m.userData.paint.hero ? 'H' : '-', +m.roughness.toFixed(3), +m.metalness.toFixed(3), m.normalScale ? +m.normalScale.x.toFixed(3) : null])
+};
