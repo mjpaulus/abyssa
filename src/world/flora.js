@@ -6,7 +6,7 @@ import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow, rockMapSet } from '../lib/textures.js';
-import { registerPaint, styleTick, styleUniforms, EDGE_GLSL, STROKE_GLSL, STROKE_BODY } from '../lib/paint.js';
+import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL, STROKE_GLSL } from '../lib/paint.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
 import { siteParams } from './site.js';
@@ -238,12 +238,7 @@ function floraMat(o) {
       .replace('#include <common>', '#include <common>' + F_HEAD)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{' + F_BODY + '\n}');
     if (o.rockSet) Object.assign(sh.uniforms, { uEdgeK: styleUniforms.uEdgeK, uEdgeSun: styleUniforms.uEdgeSun, uPaintK: styleUniforms.uPaintK });
-    else {
-      // SILHOUETTE STROKES (lib/paint.js): organic flora only — never the rocks.
-      Object.assign(sh.uniforms, { uStrokeK: styleUniforms.uStrokeK });
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <color_fragment>', '#include <color_fragment>\n{' + STROKE_BODY + '}');
-    }
+    else injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): organic flora only — never the rocks.
   };
   m.customProgramCacheKey = () => 'flora|' + o.key;
   return registerPaint(m);

@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { scene, camera } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
+import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, V3 } from '../lib/math.js';
 import { glowTex } from '../lib/textures.js';
 import { terrainH } from './terrain.js';
@@ -198,8 +199,9 @@ function fishMaterial(sp) {
         totalEmissiveRadiance += uGlow * ((lat + bel*0.85) * (dots*beat + 0.18) + uBase);
         // faint wash on the fins so silhouettes stay legible in the murk
         totalEmissiveRadiance += uGlow * (1.0-body) * (0.05 + uBase);`);
+    injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js)
   };
-  return mat;
+  return registerPaint(mat);
 }
 
 const SPECIES = [

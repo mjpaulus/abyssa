@@ -53,6 +53,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
+import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp } from '../lib/math.js';
 import { terrainH } from './terrain.js';
 import { rockColliders } from './flora.js';
@@ -533,8 +534,9 @@ function faunaMaterial(o) {
       .replace('#include <common>', FRAG_COMMON)
       .replace('#include <color_fragment>', FRAG_COLOR)
       .replace('#include <emissivemap_fragment>', FRAG_EMIT);
+    injectStrokes(sh, true);   // SILHOUETTE STROKES (lib/paint.js) — alpha-hash turns the rim into real fray
   };
-  return m;
+  return registerPaint(m);
 }
 
 // ---------------------------------------------------------------------------

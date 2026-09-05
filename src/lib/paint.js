@@ -122,12 +122,18 @@ if (uStrokeK > 0.0) {
 }
 `;
 
-// Convenience for the onBeforeCompile paths: declare + inject in one call.
-export function injectStrokes(sh) {
+// Convenience for the onBeforeCompile paths: declare + inject in one call. Call it
+// AFTER the module's own replacements. early=true lands the block right after
+// color_fragment (before alphahash_fragment, so alpha-hash materials fray for real);
+// the default lands it just before lights_physical_fragment, after every module-side
+// diffuseColor assignment, so nothing downstream can overwrite the stroke.
+export function injectStrokes(sh, early = false) {
   Object.assign(sh.uniforms, { uStrokeK: styleUniforms.uStrokeK });
+  const at = early ? '#include <color_fragment>' : '#include <lights_physical_fragment>';
+  const rep = early ? at + '\n{' + STROKE_BODY + '}' : '{' + STROKE_BODY + '}\n' + at;
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', '#include <common>\n' + STROKE_GLSL)
-    .replace('#include <color_fragment>', '#include <color_fragment>\n{' + STROKE_BODY + '}');
+    .replace(at, rep);
 }
 
 // Dev surface.

@@ -37,6 +37,7 @@
 import * as THREE from 'three';
 import { scene } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
+import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { rng, clamp, lerp, V3 } from '../lib/math.js';
 import { glowTex, makeGlow } from '../lib/textures.js';
 import { terrainH } from './terrain.js';
@@ -377,8 +378,9 @@ function sharkMaterial(cfg) {
         // faint wet sheen along the lateral line keeps the silhouette legible in murk
         float lat = (1.0 - smoothstep(0.012, 0.075, abs(yy - 0.46))) * body;
         totalEmissiveRadiance += uDark * lat * uSheen;`);
+    injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js)
   };
-  return mat;
+  return registerPaint(mat);
 }
 
 // ---------------------------------------------------------------------------
@@ -759,8 +761,9 @@ function octopusMaterial(zi) {
         // in the dark, never enough to overwhelm the skin it sits on
         float tipGlow = step(0.5, vOctK) * pow(vOctT, 4.0);
         totalEmissiveRadiance += uGlow * (uActive*0.015 + uGrab*0.075) * (0.10 + tipGlow*0.90);`);
+    injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js)
   };
-  return mat;
+  return registerPaint(mat);
 }
 
 const OCT_PAL = [
@@ -1170,6 +1173,7 @@ function buildSacs() {
     color: 0x0e0a14, roughness: 0.17, metalness: 0.55,
     emissive: new THREE.Color(0x2a1046)
   });
+  registerPaint(sacMat, { hero: true });   // authored glisten — the paint law leaves it
   for (let i = 0; i < SAC_N; i++) {
     const grp = new THREE.Group();
     grp.add(new THREE.Mesh(sacGeo, sacMat));
@@ -1389,8 +1393,9 @@ function squidMaterial() {
         float stut = mix(1.0, pow(0.5 + 0.5*sin(uTime*17.0 + vSqP*4.0), 2.0), step(0.02, vSqD));
         float lampsOut = (1.0 - vSqD) * (1.0 - vSqD);
         totalEmissiveRadiance += uGlow * uPulse * lampsOut * stut * (row*wave*1.5 + tip*0.8 + 0.025);`);
+    injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js)
   };
-  return mat;
+  return registerPaint(mat);
 }
 
 // Tuning.
