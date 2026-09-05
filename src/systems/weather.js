@@ -14,7 +14,11 @@
 //       hand: {...}   — THE DAY HAND, re-dealt once per day index (see dealHand).
 //                       fog, fogBurn, clouds, cloudTex, stormDay, stormAt, stormLen,
 //                       stormPeak, sunsetDrama, moonK, moonPhase, windBase,
-//                       windDir0, windLead, dayIndex.
+//                       windDir0, windLead, layers, dayIndex.
+//                       `layers` (0..1) is the LOW STRATUS DECK under the cumulus
+//                       (world/clouds.js two-layer deck; the crepuscular-ray hole is
+//                       where that deck's gaps are). It is the LAST draw of the hand,
+//                       so every field before it is bit-identical to the old deal.
 //       wind: {speed 0..1, dir radians}
 //       dayIndex      — integer day, respects PHASE0; scrub/day() move it coherently.
 //     }
@@ -162,7 +166,8 @@ const hand = {
   stormDay: false, stormAt: 0, stormLen: 0, stormPeak: 0,
   sunsetDrama: 0,
   moonK: 0, moonPhase: 0,
-  windBase: 0.2, windDir0: 0, windLead: 75
+  windBase: 0.2, windDir0: 0, windLead: 75,
+  layers: 0
 };
 
 // Lightning strokes for THIS day's storm, flat + sorted, rewritten in place on each
@@ -230,6 +235,15 @@ function dealHand(idx) {
   hand.windLead = rng(60, 90);        // seconds of rise BEFORE the squall lands
 
   dealLightning(idx);
+
+  // --- the low deck (crepuscular-sky) ---
+  // APPENDED AFTER EVERYTHING, lightning included: ONE new draw at the very end of the
+  // stream, so day 4 still deals exactly the fog/clouds/storm/moon/wind/strokes it
+  // always did. A clear day carries at most a thin veil; a cloudy day deals a real
+  // stratus layer about half the time, and it grows with the cumulus above it.
+  const lr = rnd();
+  hand.layers = hand.clouds < 0.30 ? lr * 0.15
+              : clamp01((lr * 1.35 - 0.35) * (0.45 + 0.70 * hand.clouds));
 }
 
 function dealLightning(idx) {
@@ -555,9 +569,15 @@ export function initWeather() {
           stormDay: h.stormDay, stormAt: h.stormAt, stormLen: h.stormLen,
           stormPeak: h.stormPeak, sunsetDrama: h.sunsetDrama,
           moonK: h.moonK, moonPhase: h.moonPhase,
-          windBase: h.windBase, windDir0: h.windDir0, windLead: h.windLead
+          windBase: h.windBase, windDir0: h.windDir0, windLead: h.windLead,
+          layers: h.layers
         };
       },
+      // FORCE fields of the LIVE hand (the object every consumer holds) until the next
+      // day-index change re-deals it. The lab's presets stage a sky with this; a probe
+      // reads it back through hand(). Returns the hand so a caller can chain a
+      // window.__clouds.redeal() after moving `clouds` or `layers`.
+      force(fields) { if (fields) for (const k in fields) if (k in hand && k !== 'dayIndex') hand[k] = fields[k]; return window.weather.hand(); },
       state() {
         return {
           day: st.day, storm: st.storm, flash: st.flash, clock: lastT,

@@ -388,7 +388,32 @@ export const GLASS = {
     alpha: 0.55,            // peak opacity of a puff's core (see puffLo/puffHi)
     // STORM. Clusters flatten, darken, sink toward a common deck and fade out as the
     // painted lid comes up — the handoff.
-    stormFlat: 0.58, stormDark: 0.46, deckY: 108
+    stormFlat: 0.58, stormDark: 0.46, deckY: 108,
+    // SELF-SHADOW (ref-cloud-selfshadow): a puff is darkened by the puffs of its own
+    // cluster that sit between it and the sun, walked on the CPU when the sun has moved.
+    selfShadow: 0.38,
+    // THE LOW DECK (crepuscular-sky, day hand `layers`): the share of the cluster pool
+    // that becomes a low, flat, dark stratus layer at layers = 1, its altitude band,
+    // its flatness, its shade against the cumulus above and its drift factor.
+    lowShare: 0.5, lowYLo: 58, lowYHi: 84, lowFlat: 0.34, lowShade: 0.62, lowDrift: 0.55,
+    lowSize: 1.55
+  },
+  // CREPUSCULAR RAYS — postfx.skyrays.js (roadmap/crepuscular-sky.md). Sun-visibility
+  // mask (puffs + dome coverage, half-res) radially blurred toward the projected sun,
+  // added over the sky and the sea's air side, scaled by the air's haze and by the
+  // cloud-coverage window (nothing at clear, nothing under a full lid).
+  rays: {
+    strength: 1.0,        // overall gain; 0 = the pass contributes nothing (bit-identical)
+    decay: 0.93,          // per-tap exponential falloff along the fan (higher = longer rays)
+    taps: 24,             // samples per blur pass (hard max 32; a uniform, not a recompile)
+    reach: 0.42,          // fraction of the pixel-to-sun distance the first pass integrates
+    holeBias: 0.55,       // 0 = every cloud occludes alike; 1 = the LOW deck owns the hole
+                          // (the high torn layer thins to a veil in the mask)
+    lining: 0.65,         // silver-lining rim strength on backlit puffs (world/clouds.js)
+    lowDeck: 1.0,         // scalar on the hand's `layers` (0 = no low deck at all)
+    window: [0.35, 0.55, 0.85, 0.92],   // coverage window: rise, peak from, peak to, dead
+    cap: 0.60,            // brightest ray as a share of the hole's own luminance
+    nearK: 0.0            // extra floor on near geometry (0 = the haze integral alone)
   },
   // MARINE LAYER. The morning white-out. `thr`/`full` map hand.fog onto 0..1; the
   // burn-off is keyed on solar ELEVATION against the hand's own fogBurn, so the sun
