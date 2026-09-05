@@ -490,7 +490,23 @@ function pickSubject(dt) {
   }
   subj = null; cand = null; candT = 0;
 }
-if (typeof window !== 'undefined') window.__dof = { subject: () => subj, dist: () => focusDist, subjDist: () => subjDist };
+// Probe surface for the Flow-lean A/B: every style-driven number in this file at once,
+// so a session can assert the k = 0 end against the shipped constants numerically.
+if (typeof window !== 'undefined') {
+  window.__dof = { subject: () => subj, dist: () => focusDist, subjDist: () => subjDist };
+  window.__style = {
+    probe: () => ({
+      haze: styleK('haze'), grade: styleK('grade'), dof: styleK('dof'), matte: styleK('matte'),
+      bloom: { thr: bloom.luminanceMaterial.threshold, smooth: bloom.luminanceMaterial.smoothing,
+               int: bloom.intensity, radius: bloom.mipmapBlurPass ? bloom.mipmapBlurPass.radius : null },
+      grade_u: { slope: _gradeU.slope.value.toArray(), offset: _gradeU.offset.value.toArray(),
+                 power: _gradeU.power.value.toArray(), sat: _gradeU.sat.value,
+                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray() },
+      dof_u: { focus: focusDist, range: 'worldFocusRange' in dof.cocMaterial ? dof.cocMaterial.worldFocusRange : null,
+               bokeh: dof.bokehScale, air, subject: !!subj, subjDist }
+    })
+  };
+}
 
 // Diagnostic escape hatch (P key): render the scene straight to the canvas. Tone
 // mapping lives on the renderer, so bypass and composer output match in exposure.

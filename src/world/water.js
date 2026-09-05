@@ -532,6 +532,8 @@ if (typeof window !== 'undefined') {
   window.__sky = {
     // The tuning surface itself, so a probe (and the lab) can A/B a stop live.
     G: GLASS,
+    // The Flow-lean vec4 every fogged program reads this frame (see STYLE_U).
+    style: () => Array.from(STYLE_U),
     dbg(n) { uDbg.value = +n || 0; return uDbg.value; },
     h: null, w: { speed: 0, dir: 0 },
     sync() {
