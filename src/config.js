@@ -701,6 +701,24 @@ export const GLASS = {
   //
   // FALLING STREAKS (world/rain.js): ONE instanced draw call of wind-slanted streaks in
   // a cylinder around the camera. Those ARE live — rain.js reads them per frame.
+  // THE FLOW LEAN (roadmap/flow-lean-style.md). ONE dial every style term reads:
+  // 0 = the shipped NMS-side look, 1 = full lean toward Flow's painted naturalism.
+  // Sub-knobs let Michael find the midpoint per axis; each defaults to following
+  // the master. Consumers: materials (paint law, edge-not-middle, strokes), water
+  // (matte mirror), atmosphere/halation/grade/DoF (postfx + water haze), camera
+  // (layered handheld), lighting (rim-led, soft shadows, temperature split, lit medium).
+  style: {
+    flowLean: 0.6,        // master dial
+    paint: -1,            // material roughness/metalness law (-1 = follow master)
+    edge: -1,             // edge-not-middle detail flattening
+    strokes: -1,          // silhouette strokes on organics
+    haze: -1,             // atmosphere forward + halation
+    grade: -1,            // authored per-zone colour push
+    dof: -1,              // subject-aware focus, wider aperture underwater
+    camera: -1,           // layered handheld + interest drift
+    light: -1,            // rim-led three-point, soft shadows, temperature split, lit medium
+    matte: -1,            // water mirror roughness floor
+  },
   rain: {
     splashScales: [2.6, 5.3],
     splashRot: 0.61,
