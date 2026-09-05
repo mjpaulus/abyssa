@@ -503,7 +503,7 @@ export function updateClouds(dt, t) {
   // with the storm (a lid has no sun behind it) and with the marine layer's cut.
   {
     const d = skyState.disc, m = Math.max(d[0], d[1], d[2], 1e-4);
-    const lum = (0.2126 * u.uLit.value.x + 0.7152 * u.uLit.value.y + 0.0722 * u.uLit.value.z) * 1.35;
+    const lum = (0.2126 * u.uLit.value.x + 0.7152 * u.uLit.value.y + 0.0722 * u.uLit.value.z) * 2.0;
     u.uSil.value.set(d[0] / m * lum, d[1] / m * lum, d[2] / m * lum);
     u.uLin.value.set(GLASS.rays.lining * (1 - storm) * skyState.discK, P.selfShadow * (1 - storm), P.lowShade);
   }
