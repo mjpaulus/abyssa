@@ -148,7 +148,8 @@ export function lanternGutter(dt, t) {
 }
 
 // Read by postfx for depth-driven grading; kept here so there is one source of truth.
-export const rig = { depth01: 0 };
+// `steer` is the rim-steering probe (item 9): which source won this frame and how sure.
+export const rig = { depth01: 0, steer: { src: 'none', score: 0, sunS: 0, lampS: 0, lantS: 0, conf: 0, dir: [0, 0, 0] } };
 
 const fwd = V3(), right = V3(), rimPos = V3();
 let reduced = false, sunParked = false;
@@ -168,6 +169,11 @@ const steerDir = V3(0, 1, 0), steerCol = new THREE.Color(1, 1, 1);
 const candDir = V3(), bestDir = V3(), tmpV = V3(), steerPos = V3();
 const bestCol = new THREE.Color(), tmpCol = new THREE.Color();
 let steerConf = 0, lastSteerT = 0, lastScanT = -1e9;
+// The incumbent source keeps a 30% edge. The lantern's everyday sine flicker and a
+// setting sun cross each other's score many times a second otherwise, and the rim
+// would shuttle between two directions instead of easing to one.
+let steerSrc = null;
+const HOLD = 1.3;
 let srcLights = [];
 function scanSources() {
   const out = [];
@@ -186,11 +192,15 @@ function steerRim(k, air, dt) {
   //    the backlight can never come from an angle the sea cannot produce.
   const sd = SUN.dirWater;
   candDir.set(SUN_VEC.x + (sd.x - SUN_VEC.x) * (1 - air), SUN_VEC.y + (sd.y - SUN_VEC.y) * (1 - air), SUN_VEC.z + (sd.z - SUN_VEC.z) * (1 - air)).normalize();
-  const sunS = clamp(sun.intensity / 2.6, 0, 1) * behindW(candDir);
-  if (sunS > best) { best = sunS; bestDir.copy(candDir); bestCol.copy(sun.color); }
+  //    In air the sun is the shot's key and gets a 50% edge over point sources: a lamp
+  //    1 u away always wins on irradiance, and Flow's deck at dusk is lit by the sun.
+  const sunS = clamp(sun.intensity / 2.6, 0, 1) * behindW(candDir) * (1 + 0.5 * air) * (steerSrc === sun ? HOLD : 1);
+  const st = rig.steer; st.sunS = sunS; st.lampS = 0; st.lantS = 0;
+  let win = null;
+  if (sunS > best) { best = sunS; bestDir.copy(candDir); bestCol.copy(sun.color); win = sun; }
   // 2. Point sources: wards, vent throat, raft lamps. Irradiance at Sal with three's
-  //    physical falloff, so a 140-intensity ward at 10 u (1.4) outranks a 2.6 sun only
-  //    when it is close, and a dark ward (intensity 0) is never a candidate.
+  //    physical falloff, normalised so a lit ward (140) saturates at ~14 u and the vent
+  //    throat (6.5) reads at ~5 u; a dark ward (intensity 0) is never a candidate.
   const now = performance.now();
   if (now - lastScanT > 2000) { lastScanT = now; scanSources(); }
   for (let i = 0; i < srcLights.length; i++) {
@@ -203,19 +213,23 @@ function steerRim(k, air, dt) {
     candDir.multiplyScalar(1 / d);
     let irr = L.intensity / (d * d);
     if (L.distance > 0) { const q = d / L.distance, q4 = q * q * q * q; irr *= (1 - q4) * (1 - q4); }
-    const s = clamp(irr / 1.4, 0, 1) * behindW(candDir);
-    if (s > best) { best = s; bestDir.copy(candDir); bestCol.copy(L.color); }
+    const s = clamp(irr / 0.7, 0, 1) * behindW(candDir) * (steerSrc === L ? HOLD : 1);
+    if (s > st.lampS) st.lampS = s;
+    if (s > best) { best = s; bestDir.copy(candDir); bestCol.copy(L.color); win = L; }
   }
   // 3. His own lantern, when he faces away from it: the hand is beyond him from the
   //    camera, so the flame rims his helmet and shoulders. Gated hard on behind-ness
-  //    (it is 0.8 u away and would otherwise always win on irradiance).
+  //    and weighted at 0.45 (it is 0.8 u away and would otherwise always win on
+  //    irradiance): it is the rim when nothing else is behind him, and a ward or a
+  //    throat he walks toward takes over.
   candDir.subVectors(lanternLight.position, subj);
   if (candDir.lengthSq() > 0.04) {
     candDir.normalize();
     const c = candDir.dot(fwd);
     const gate = clamp((c - 0.15) / 0.45, 0, 1);
-    const s = clamp(lanternLight.intensity / 12, 0, 1) * 0.8 * gate * gate;
-    if (s > best) { best = s; bestDir.copy(candDir); bestCol.copy(lanternLight.color); }
+    const s = clamp(lanternLight.intensity / 12, 0, 1) * 0.45 * gate * gate * (steerSrc === lanternLight ? HOLD : 1);
+    st.lantS = s;
+    if (s > best) { best = s; bestDir.copy(candDir); bestCol.copy(lanternLight.color); win = lanternLight; }
   }
   // Ease: direction, colour and confidence all on the same ~0.4 s time constant.
   const e = 1 - Math.exp(-dt * 2.5);
@@ -225,6 +239,9 @@ function steerRim(k, air, dt) {
     steerDir.lerp(bestDir, e).normalize();
     steerCol.lerp(bestCol, e);
   }
+  steerSrc = win;
+  st.src = win === null ? 'none' : win === sun ? 'sun' : win === lanternLight ? 'lantern' : 'point';
+  st.score = best; st.conf = steerConf; st.dir[0] = steerDir.x; st.dir[1] = steerDir.y; st.dir[2] = steerDir.z;
   return steerConf;
 }
 
