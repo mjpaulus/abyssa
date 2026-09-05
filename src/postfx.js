@@ -168,10 +168,10 @@ class GradeEffect extends Effect {
           // left alone so a sun disc or a lantern core stays its own colour. A single
           // warm wash over everything read as a filter, not a lit scene.
           float lw = luminance( c );
-          float sh = 1.0 - smoothstep( 0.12, 0.40, lw );
-          float md = smoothstep( 0.12, 0.40, lw ) * ( 1.0 - smoothstep( 0.55, 0.95, lw ) );
+          float sh = 1.0 - smoothstep( 0.18, 0.55, lw );
+          float md = smoothstep( 0.18, 0.55, lw ) * ( 1.0 - smoothstep( 0.62, 0.95, lw ) );
           c = mix( c, uWash.rgb * lw, uWash.w * md );
-          c = mix( c, uCool * lw, uWash.w * 0.8 * sh );
+          c = mix( c, uCool * lw, uWash.w * sh );
         }
         outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
       }`, {
@@ -226,11 +226,11 @@ const _gradeKeys = ['slope', 'offset', 'power'];
 // x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
 const ZONE_LOOKS = [
   // reef -- mossy teal
-  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.30 , cool: [0.10, 0.36, 0.44] },
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.30 , cool: [0.06, 0.34, 0.46] },
   // boiler room -- sulphur-amber
-  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.38 , cool: [0.24, 0.30, 0.44] },
+  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.38 , cool: [0.18, 0.26, 0.46] },
   // abyss -- violet-black
-  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.34 , cool: [0.20, 0.14, 0.42] }
+  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.34 , cool: [0.16, 0.10, 0.44] }
 ];
 // LOOK-DEV PUSH (2026-09-05): the tables above were authored timid -- at the default
 // dial the probe read slope 0.99..1.01 and a 1% saturation move, which no eye registers.
@@ -240,14 +240,14 @@ const ZONE_LOOKS = [
 const PUSH = 1.8;
 const WX_LOOKS = {
   // night -- cold ink, colour drained
-  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.22 , cool: [0.18, 0.28, 0.52] },
+  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.22 , cool: [0.14, 0.24, 0.54] },
   // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
-  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.30 , cool: [0.30, 0.42, 0.60] },
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.30 , cool: [0.22, 0.38, 0.64] },
   // noon -- the marine blue stays legible: a light hand
-  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.12 , cool: [0.30, 0.44, 0.66] },
-  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.34 , cool: [0.30, 0.42, 0.62] },
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.12 , cool: [0.24, 0.42, 0.70] },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.34 , cool: [0.20, 0.36, 0.66] },
   // gale -- slate, recognisable: values compressed, colour held down everywhere
-  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.16 , cool: [0.38, 0.44, 0.52] }
+  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.16 , cool: [0.34, 0.42, 0.54] }
 };
 const WX_RING = [WX_LOOKS.night, WX_LOOKS.dawn, WX_LOOKS.noon, WX_LOOKS.dusk, WX_LOOKS.night];
 // Mood colours -> unit chroma directions (colour minus its luminance, normalised), once.

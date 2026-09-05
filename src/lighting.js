@@ -45,7 +45,7 @@ const AIR_SKY = new THREE.Color(0xa8bcc8), AIR_SEA = new THREE.Color(0x2a3a3c);
 // low (dusk/dawn apricot); AIR_SKY_C is the cooler dome the shadow side is filled from;
 // AIR_SEA_L is the lifted, slightly cool sea floor of the hemisphere so deck shadows
 // feather instead of pitching (item 10). All three are only reached through styleK.
-const AIR_SUN_W = new THREE.Color(0xffcf9a), AIR_SKY_C = new THREE.Color(0x98b4d2), AIR_SEA_L = new THREE.Color(0x3a4c54);
+const AIR_SUN_W = new THREE.Color(0xffcf9a), AIR_SKY_C = new THREE.Color(0x7fa6dc), AIR_SEA_L = new THREE.Color(0x36505e);
 
 // THE DIAL. GLASS.style.flowLean is the master (0 = shipped, 1 = full lean); the
 // `light` sub-knob overrides it when >= 0. Read every frame — GLASS is live data and
