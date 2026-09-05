@@ -1,14 +1,14 @@
 // Game state machine, camera, HUD, and the frame loop. Owned by the orchestrator.
 import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
-import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG } from './config.js';
+import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
-import { buildCreatures, updateCreatures, reseedCreatures } from './world/creatures.js';
+import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX } from './entities/leviathan.js';
 import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash, breathPhase, breathCount, breathStress } from './entities/diver.js';
@@ -608,6 +608,7 @@ Object.defineProperties(window, {
 // ---- cinematic third-person camera ----
 const camVel = V3(), camAim = V3(), camDesired = V3(), camLook = V3();
 const camBack = V3(), camTo = V3(), camRight = V3();   // hot-path temps, never allocated per frame
+const camUpAxis = V3(0, 1, 0);
 let camDist = 9, camRoll = 0, camFov = 70;
 // A respawn TELEPORTS the diver, and the spring then flew the camera the whole way after
 // him — measured 210 units in ~1.2 s, during which the frame peaked at 3.15x its normal
@@ -634,6 +635,82 @@ const MASTER_VOL = 0.62;   // audio.js K.MASTER's shipped value; M toggles betwe
 let speedEMA = 0, camStepDip = 0;
 const FEEL = { on: true, surgeK: 1.35, stepDip: 0.05 };
 window.__feel = FEEL;
+// ---- THE FLOW LEAN: a camera with a point of view (roadmap/flow-lean-style.md, item 6)
+// styleK reads GLASS.style: a sub-knob of -1 follows the master flowLean. Local on
+// purpose — config.js is shared and every style term reads the dial the same way.
+function styleK(name) {
+  const st = GLASS.style; if (!st) return 0;
+  const v = st[name];
+  return clamp(v == null || v < 0 ? st.flowLean : v, 0, 1);
+}
+// Flow's handheld is LAYERED: Zilbalodis keyed a standstill layer, a walking layer and
+// a running layer and mixed them by what the character was doing. Ours: STANDSTILL
+// (slow breathing drift), WALKING (heel-strike-coupled sway) and SWIMMING (rolling
+// drift on the stroke), each a 4-octave sine noise on position, look AND roll, mixed
+// by state with ~0.4 s crossfades. Amplitudes scale with styleK('camera'); at 0 the
+// block does nothing and the camera is bit-identical to the shipped one.
+// Everything integrates its own phase by dt, so the motion is framerate-independent.
+// The deck is Flow's boat: standstill only, no roll — the handheld lives in the water.
+const HH = {
+  // per-layer scale at styleK = 1: [pos x, y, z (units)], [yaw, pitch, roll (deg)], rate (Hz)
+  still: { pos: [0.05, 0.06, 0.03], look: [0.40, 0.30, 0.35], rate: 0.15 },
+  walk:  { pos: [0.08, 0.05, 0.04], look: [0.70, 0.50, 0.80], rate: 0.90, heelRoll: 0.55, heelX: 0.035, heelTau: 0.30 },
+  swim:  { pos: [0.07, 0.09, 0.05], look: [0.60, 0.50, 0.90], rate: 0.22, strokeRoll: 0.45 },
+  fade: 0.4,           // layer crossfade, seconds
+  interestDeg: 3,      // max look bias toward the nearest living thing
+  interestTau: 2,      // seconds
+  interestR: 45,       // notice things within this many units
+  flinchDeg: 2.2,      // roll flinch per unit of shake impulse
+  rmK: 0.3,            // reduced motion: every layer at 30%
+};
+window.__hh = HH;
+// noise: 4 octaves of incommensurate sines with a hashed phase per channel, in [-1, 1]
+const HH_OCT = [1, 2.07, 3.91, 7.3], HH_AMP = [1, 0.5, 0.25, 0.125], HH_NORM = 1 / 1.875;
+function hhHash(i) { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return (x - Math.floor(x)) * Math.PI * 2; }
+function hhNoise(ph, ch) {
+  let v = 0;
+  for (let o = 0; o < 4; o++) v += HH_AMP[o] * Math.sin(ph * HH_OCT[o] + hhHash(ch * 4 + o));
+  return v * HH_NORM;
+}
+const hhPh = [0, 0, 0];                 // still / walk / swim phases (radians), dt-integrated
+const hhW = [0, 0, 0];                  // mixed layer weights
+let hhGate = 0;                         // eases out under the pause, in again after
+let hhHeel = 0, hhHeelSign = 1;         // walking heel-strike pulse (0..1), alternating side
+let hhFlinch = 0, hhFlinchV = 0;        // roll flinch: a damped spring kicked by shake impulses
+let hhShakeWas = 0;
+let hhYawB = 0, hhPitchB = 0;           // interest drift bias (radians), toward the nearest life
+let hhYawWas = 0, hhPitchWas = 0, hhMouseCool = 0;
+const hhOff = V3(), hhTmp = V3();
+let hhRoll = 0, hhYaw = 0, hhPitch = 0;  // this frame's look terms (radians), for the probe
+window.__hhState = () => ({ k: styleK('camera'), gate: hhGate, w: hhW.slice(), off: [hhOff.x, hhOff.y, hhOff.z],
+  yaw: hhYaw, pitch: hhPitch, roll: hhRoll, flinch: hhFlinch, iYaw: hhYawB, iPitch: hhPitchB, heel: hhHeel });
+
+// The nearest living thing in the front hemisphere: fauna groups (instance state
+// buffers), boid schools (their centre), jellies, sharks, the sleeper's head when it
+// is awake. Returns the squared distance, target in hhTmp; Infinity if nothing.
+function hhNearestLife(fwd) {
+  const px = player.pos.x, py = player.pos.y, pz = player.pos.z, R2 = HH.interestR * HH.interestR;
+  let best = Infinity;
+  const consider = (x, y, z) => {
+    const dx = x - px, dy = y - py, dz = z - pz, d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 >= best || d2 > R2 || d2 < 4) return;
+    if (dx * fwd.x + dy * fwd.y + dz * fwd.z < 0) return;   // behind the lens
+    best = d2; hhTmp.set(x, y, z);
+  };
+  const F = window.__fauna;
+  if (F && F.groups) for (const G of F.groups) {
+    if (!G.mesh.visible) continue;
+    const st = G.st, n = G.n;
+    for (let i = 0; i < n; i++) { const o = i * 10; consider(st[o], st[o + 1], st[o + 2]); }
+  }
+  const zi = zone < 0 ? 0 : zone;
+  for (const S of schools) if (S.zi === zi && S.inst && S.inst.visible) consider(S.center.x, S.center.y, S.center.z);
+  for (const J of jellies) if (J.zi === zi) consider(J.pos.x, J.pos.y, J.pos.z);
+  const P = window.pred;
+  if (P && P.sharks) for (const S of P.sharks) if (S.mesh && S.mesh.visible) consider(S.pos.x, S.pos.y, S.pos.z);
+  if (lev && lev.head && !lev.calmed) consider(lev.head.x, lev.head.y, lev.head.z);
+  return best;
+}
 // breath probe: cycle timing + phase, for cadence verification without a stopwatch
 window.__breath = () => ({ phase: breathPhase(), count: breathCount(), stress: breathStress() });
 let lastBreath = 0;
@@ -716,6 +793,63 @@ function updateCamera(dt, t, fwd) {
     camStepDip = Math.max(0, camStepDip - dt / 0.22);
     camDesired.y -= FEEL.stepDip * camStepDip;
   }
+  // THE HANDHELD (Flow lean item 6). Mix weights by state, integrate each layer's
+  // phase by dt, sum position offsets into the spring target. Look and roll terms
+  // are computed here and applied after lookAt below. Nothing runs at styleK 0.
+  const hk = styleK('camera') * (rmK ? 1 : HH.rmK);
+  hhOff.set(0, 0, 0); hhYaw = 0; hhPitch = 0; hhRoll = 0;
+  if (hk > 0) {
+    const fadeK = Math.min(1, dt / HH.fade);
+    // the pause stills the lens over one crossfade; phases hold, offsets ease to zero
+    hhGate += ((paused ? 0 : 1) - hhGate) * fadeK;
+    const moving = player.grounded && speed > 0.35;
+    const wantW0 = player.grounded && !moving ? 1 : 0, wantW1 = moving ? 1 : 0, wantW2 = player.grounded ? 0 : 1;
+    hhW[0] += (wantW0 - hhW[0]) * fadeK; hhW[1] += (wantW1 - hhW[1]) * fadeK; hhW[2] += (wantW2 - hhW[2]) * fadeK;
+    if (!paused) {
+      hhPh[0] += dt * HH.still.rate * Math.PI * 2;
+      hhPh[1] += dt * HH.walk.rate * Math.PI * 2 * (0.6 + 0.4 * Math.min(1, speed / 2.2));   // sway follows the gait
+      hhPh[2] += dt * (HH.swim.rate + 0.02 * speed) * Math.PI * 2;
+      hhHeel = Math.max(0, hhHeel - dt / HH.walk.heelTau);
+    }
+    const deck = player.onDeck;                      // Flow's deck shots are steady
+    const g = hk * hhGate, D2R = Math.PI / 180;
+    const L = [HH.still, HH.walk, HH.swim];
+    for (let i = 0; i < 3; i++) {
+      const w = (deck && i > 0 ? 0 : hhW[i]) * g; if (w < 1e-4) continue;
+      const ph = hhPh[i], ch = i * 6, lay = L[i];
+      hhOff.x += w * lay.pos[0] * hhNoise(ph, ch);
+      hhOff.y += w * lay.pos[1] * hhNoise(ph, ch + 1);
+      hhOff.z += w * lay.pos[2] * hhNoise(ph, ch + 2);
+      hhYaw   += w * lay.look[0] * D2R * hhNoise(ph, ch + 3);
+      hhPitch += w * lay.look[1] * D2R * hhNoise(ph, ch + 4);
+      if (!deck) hhRoll += w * lay.look[2] * D2R * hhNoise(ph, ch + 5);
+    }
+    // walking: the heel strike lands in the lens — a lateral nudge and a roll pulse to
+    // the side the weight went, decaying before the next step
+    if (!deck && hhW[1] > 1e-3 && hhHeel > 0) {
+      camRight.set(Math.sin(player.yaw - Math.PI / 2), 0, Math.cos(player.yaw - Math.PI / 2));
+      const hp = hhW[1] * g * hhHeel * hhHeel * hhHeelSign;
+      hhOff.addScaledVector(camRight, HH.walk.heelX * hp);
+      hhRoll += HH.walk.heelRoll * D2R * hp;
+    }
+    // swimming: the roll leans with the stroke (player.swimP is the kick phase, 0..1)
+    if (!deck && hhW[2] > 1e-3) hhRoll += hhW[2] * g * HH.swim.strokeRoll * D2R * Math.sin(player.swimP * Math.PI * 2);
+    // impulses: bites, slams, the lunge all raise `shake`. A rising edge kicks a damped
+    // roll spring, so the hit reads as the lens flinching rather than vibrating.
+    if (shake > hhShakeWas + 1e-4) hhFlinchV += (shake - hhShakeWas) * HH.flinchDeg * D2R * 14 * (rng(0, 1) < 0.5 ? -1 : 1);
+    hhShakeWas = shake;
+    if (!paused) {
+      const fs = 120, fd = 2 * Math.sqrt(fs) * 0.55;   // underdamped: one wobble, then still
+      hhFlinchV += (-fs * hhFlinch - fd * hhFlinchV) * dt;
+      hhFlinch += hhFlinchV * dt;
+    }
+    hhRoll += hhFlinch * g;
+    // put the position layers on the spring target: the spring's own damping keeps
+    // them cinematic, not shaky
+    camDesired.add(hhOff);
+  } else if (hhGate !== 0) {
+    hhGate = 0; hhFlinch = hhFlinchV = 0; hhShakeWas = shake;
+  }
   // A critically-damped tracker sits damp*v/stiff behind its target, measured at 20.9 u
   // when the old thruster was at full chat — so the camera made the effect LESS visible
   // at exactly the moment it fired. Lead the spring by that amount and punch in, but
@@ -744,7 +878,7 @@ function updateCamera(dt, t, fwd) {
   if (camKick > 0) camera.position.lerp(camDesired, Math.min(1, 7 * camKick * dt));
 
   if (shake > 0) {
-    const sk = shake * 0.5 * (rmK ? 1 : 0.3);
+    const sk = shake * 0.5 * (rmK ? 1 : 0.3) * (hk > 0 ? 1 - 0.5 * hk * hhGate : 1);
     camera.position.x += rng(-1, 1) * sk;
     camera.position.y += rng(-1, 1) * sk;
     camera.position.z += rng(-1, 1) * sk;
@@ -778,12 +912,42 @@ function updateCamera(dt, t, fwd) {
   camAim.copy(player.pos).addScaledVector(fwd, 6).addScaledVector(player.vel, 0.10);
   camLook.lerp(camAim, Math.min(1, 40 * dt));
   camera.lookAt(camLook);
+  if (hk > 0) {
+    // INTEREST DRIFT: the lens notices the world. A slow bias of the look toward the
+    // nearest living thing in front, capped at a few degrees, tau ~2 s. Any mouse or
+    // stick input on the look this frame drops the bias at once and holds it off for
+    // a beat — it never fights the player.
+    const looked = Math.abs(player.yaw - hhYawWas) > 1e-6 || Math.abs(player.pitch - hhPitchWas) > 1e-6;
+    hhYawWas = player.yaw; hhPitchWas = player.pitch;
+    let wantYawB = 0, wantPitchB = 0;
+    if (looked) hhMouseCool = 0.8;
+    if (!paused) hhMouseCool = Math.max(0, hhMouseCool - dt);
+    if (hhMouseCool <= 0 && !paused && hhNearestLife(fwd) < Infinity) {
+      hhTmp.sub(camera.position);
+      const dl = hhTmp.length();
+      if (dl > 1e-3) {
+        // yaw/pitch of the target in the camera's frame (lookAt already faced camLook)
+        camera.getWorldDirection(camTo);
+        const yawT = Math.atan2(hhTmp.x, hhTmp.z), yawC = Math.atan2(camTo.x, camTo.z);
+        let dy = yawT - yawC; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+        const pitT = Math.asin(clamp(hhTmp.y / dl, -1, 1)), pitC = Math.asin(clamp(camTo.y, -1, 1));
+        const lim = HH.interestDeg * Math.PI / 180 * hk;
+        wantYawB = clamp(dy, -lim, lim); wantPitchB = clamp(pitT - pitC, -lim, lim);
+      }
+    }
+    const ik = looked ? 1 : Math.min(1, dt / HH.interestTau);
+    hhYawB += (wantYawB - hhYawB) * ik; hhPitchB += (wantPitchB - hhPitchB) * ik;
+    // apply the interest bias and the layered look noise as rotations of the lens
+    // (world-Y yaw so the horizon stays level, local pitch)
+    camera.rotateOnWorldAxis(camUpAxis, (hhYawB * hhGate + hhYaw));
+    camera.rotateX(hhPitchB * hhGate + hhPitch);
+  } else if (hhYawB !== 0 || hhPitchB !== 0) { hhYawB = hhPitchB = 0; hhYawWas = player.yaw; hhPitchWas = player.pitch; }
 
   // bank into lateral movement, and widen slightly with speed
   camRight.set(Math.sin(player.yaw - Math.PI / 2), 0, Math.cos(player.yaw - Math.PI / 2));
   const lateral = player.vel.dot(camRight);
   camRoll += (clamp(-lateral * 0.012, -0.11, 0.11) * rmK - camRoll) * Math.min(1, 3 * dt);
-  camera.rotateZ(camRoll);
+  camera.rotateZ(camRoll + hhRoll);
 
   // The 2.5/s lerp has a 0.4 s time constant, so it can only reach 48% of any target
   // inside a 0.26 s burst — which is why the existing +9 speed FOV was imperceptible.
@@ -1357,6 +1521,7 @@ function update(dt, t) {
     footstep();
     // The eye feels the footfall on planks: a few centimetres of dip, fast recovery.
     if (player.onDeck && FEEL.on) camStepDip = 1;
+    if (!player.onDeck) { hhHeel = 1; hhHeelSign = sc % 2 === 0 ? 1 : -1; }   // handheld walking layer (styleK-gated in updateCamera)
     // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
     // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
     // the sound and nothing else.
