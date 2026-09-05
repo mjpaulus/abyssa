@@ -20,6 +20,9 @@ import { playerLightSrc, parkSunShadow } from './lighting.js';
 import { VolumetricLightPass } from './postfx.volumetrics.js';
 import { degradeRefraction, reduceRefraction, stormLevel } from './world/water.js';
 // --- END VOLUMETRICS INTEGRATION ---
+// CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
+// underwater volumetrics and before the main EffectPass so bloom/grade see it.
+import { SkyRaysPass } from './postfx.skyrays.js';
 // Read-only subject sources for the Flow-lean focus pull (item 5). creatures.js has no
 // side-effecting imports beyond core/config/terrain; predators, the leviathan and the
 // keepsakes are read through their existing window dev surfaces (pred / lev / wrecks)
@@ -437,6 +440,7 @@ composer.addPass(smaaPass);
 function useDepthCopy() {
   if (effectPass) effectPass.setDepthTexture(depthCopy.texture);
   if (volPass) volPass.setDepthTexture(depthCopy.texture);
+  if (raysPass) raysPass.setDepthTexture(depthCopy.texture);
 }
 
 // --- VOLUMETRICS INTEGRATION (pass insertion + kill switch) ---
@@ -450,7 +454,53 @@ try {
   console.warn('Volumetric light shafts unavailable:', e);
   volPass = null;
 }
+// --- CREPUSCULAR RAYS (pass insertion + kill switch) ---
+// AFTER volumetrics (the underwater fan never sees the sky's), BEFORE the effect chain.
+// Behind try/catch like the volumetrics: a build failure leaves the stack unchanged.
+let raysPass = null;
+try {
+  raysPass = new SkyRaysPass();
+  composer.addPass(raysPass, composer.passes.indexOf(effectPass));
+} catch (e) {
+  console.warn('Crepuscular rays unavailable:', e);
+  raysPass = null;
+}
 useDepthCopy();
+export function setSkyRays(on) {
+  if (on) {
+    if (raysPass || !effectPass) return false;
+    try {
+      raysPass = new SkyRaysPass();
+      composer.addPass(raysPass, composer.passes.indexOf(effectPass));
+      useDepthCopy();
+    } catch (e) { console.warn('Sky rays re-enable failed:', e); raysPass = null; }
+    return !!raysPass;
+  }
+  if (!raysPass) return false;
+  composer.removePass(raysPass);
+  raysPass.dispose();
+  raysPass = null;
+  return true;
+}
+export function getSkyRays() { return !!raysPass; }
+if (typeof window !== 'undefined') {
+  window.__rays = {
+    R: GLASS.rays,
+    on: () => !!raysPass,
+    set: setSkyRays,
+    state: () => raysPass ? raysPass.state : null,
+    profile: (on) => raysPass ? raysPass.profile(on === undefined ? true : on) : null,
+    // {gpuMs mean/max over the profiled frames, cpuMs of the last submit, n}
+    cost: () => {
+      if (!raysPass) return null;
+      const a = raysPass.gpuMs; let s = 0, mx = 0;
+      for (let i = 0; i < a.length; i++) { s += a[i]; if (a[i] > mx) mx = a[i]; }
+      return { n: a.length, gpuMean: a.length ? +(s / a.length).toFixed(3) : null, gpuMax: +mx.toFixed(3), cpuMs: +raysPass._cpuMs.toFixed(3), ext: !!raysPass._ext };
+    },
+    passes: () => composer.passes.map(p => p.name)
+  };
+}
+// --- END CREPUSCULAR RAYS ---
 // Runtime kill switch: removes the pass from the composer entirely (not just
 // disables it), so a suspect pass can be taken out of the chain during an A/B.
 export function setVolumetrics(on) {
@@ -745,11 +795,13 @@ function degradeQuality() {
       volPass.occlusion = false;
       volPass.setResolutionDivisor(3);
     }
+    if (raysPass) raysPass.setResolutionDivisor(3);
     console.info('ABYSSA: perf tier 2 — volumetrics cheapened (no occlusion, third-res)');
     return false;
   }
   if (degradeStage === 3) {
     setVolumetrics(false);
+    setSkyRays(false);   // the sky's fan sheds on the same rung as the water's
     if (n8aoPass) { composer.removePass(n8aoPass); n8aoPass = null; }
     // The sun shadow is raft-only cosmetics; it goes long before transparency does.
     parkSunShadow();
