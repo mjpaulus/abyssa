@@ -407,7 +407,9 @@ function build() {
     { key: 'lining', min: 0, max: 2, step: 0.01 },
     { key: 'lowDeck', min: 0, max: 2, step: 0.01 },
     { key: 'cap', min: 0, max: 1.5, step: 0.01 },
-    { key: 'nearK', min: 0, max: 1, step: 0.01 }
+    { key: 'nearK', min: 0, max: 1, step: 0.01 },
+    { key: 'gainK', min: 0, max: 4, step: 0.01 },
+    { key: 'shadow', min: 0, max: 1, step: 0.01 }
   ]);
   {
     const rb = el('div', 'btns', bd);

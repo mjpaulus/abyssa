@@ -413,7 +413,10 @@ export const GLASS = {
     lowDeck: 1.0,         // scalar on the hand's `layers` (0 = no low deck at all)
     window: [0.35, 0.55, 0.85, 0.92],   // coverage window: rise, peak from, peak to, dead
     cap: 0.60,            // brightest ray as a share of the hole's own luminance
-    nearK: 0.0            // extra floor on near geometry (0 = the haze integral alone)
+    nearK: 0.0,           // extra floor on near geometry (0 = the haze integral alone)
+    gainK: 0.9,           // internal gain on the mean-subtracted fan before the cap
+    shadow: 0.18          // darkening of the haze where the mask sits UNDER its mean
+                          // (the cloud shadows the rays are the gaps between)
   },
   // MARINE LAYER. The morning white-out. `thr`/`full` map hand.fog onto 0..1; the
   // burn-off is keyed on solar ELEVATION against the hand's own fogBurn, so the sun

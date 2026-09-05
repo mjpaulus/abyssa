@@ -378,8 +378,8 @@ export class SkyRaysPass extends Pass {
     const holeLum = holeLumOf(skyState.hor);
     cu.uCap.value = Math.max(0.02, R.cap * holeLum);
     S.cap = cu.uCap.value;
-    cu.uGain.value = gain * 1.6;
-    cu.uShadow.value = 0.45 * Math.min(1, R.strength);
+    cu.uGain.value = gain * R.gainK;
+    cu.uShadow.value = R.shadow * win * offK * skyState.discK * Math.min(1, R.strength);
     // Looking toward the sun the fan is brightest (forward scatter); across it, half.
     camera.getWorldDirection(_fwd);
     cu.uSunW.value = 0.5 + 0.5 * Math.max(0, _fwd.x * SUN.dir.x + _fwd.y * SUN.dir.y + _fwd.z * SUN.dir.z);
