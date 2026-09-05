@@ -175,7 +175,11 @@ function deal(dayIndex, camX, camZ) {
   for (let i = 0; i < nC; i++) {
     const low = i >= nC - nLow;
     cLay[i] = low ? 1 : 0;
-    const ang = rnd() * TAU;
+    // The low deck is dealt across the SUN'S SWEEP (azimCenter +/- 90 degrees, a
+    // config constant, so still a pure function of the day): a stratus layer that the
+    // day's sun has to pass behind is the whole reason it exists. The high layer keeps
+    // its all-round deal.
+    const ang = low ? GLASS.sun.azimCenter * (Math.PI / 180) + (rnd() * 2 - 1) * 1.57 : rnd() * TAU;
     // area-uniform over the annulus -> most clusters far -> a low band, by perspective
     const rr = Math.sqrt(0.05 + 0.95 * rnd());
     const rad = low ? P.rIn * 0.7 + (P.rOut * 0.6 - P.rIn * 0.7) * rr

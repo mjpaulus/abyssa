@@ -108,12 +108,20 @@ precision highp float;
 uniform sampler2D tDiffuse, tRays, tDepth;
 uniform vec3 uCol;
 uniform vec2 uSun;
-uniform float uNear, uFar, uKAir, uNearK, uCap, uGain, uSunW;
+uniform float uNear, uFar, uKAir, uNearK, uCap, uGain, uSunW, uShadow;
 varying vec2 vUv;
 float sceneT( float d ){ return -( ( uNear * uFar ) / ( ( uFar - uNear ) * d - uFar ) ); }
 void main(){
   vec3 base = texture2D( tDiffuse, vUv ).rgb;
+  // CONTRAST, NOT LEVEL. A clear sky's fan is uniform, and a uniform add is milk (the
+  // sky already carries its own airlight). Crepuscular rays are the gaps between cloud
+  // SHADOWS in the haze, so the fan is read against the frame's own mean visibility
+  // (the mask's top mip): above it, lit haze, added; below it, shadowed haze, a gentle
+  // darkening. A cloudless frame has r == mean everywhere and adds nothing.
   float r = texture2D( tRays, vUv ).r;
+  float mean = textureLod( tRays, vec2( 0.5 ), 12.0 ).r;
+  float lit = max( 0.0, r - mean );
+  float shd = max( 0.0, mean - r );
   // THE AIR IN FRONT OF THIS PIXEL. A ray is scattered haze along the view path, so a
   // pixel gets the fan in proportion to 1 - exp( -K t ): the sky (t = far) gets it all,
   // the sea at 100 units a third, the deck's timber at 9 units a few percent.
@@ -123,9 +131,10 @@ void main(){
   // A little of the fan's own geometry: pixels nearer the sun point are brighter, the
   // way the photo's rays are strongest around the hole and pale toward the edges.
   float near = 1.0 - 0.45 * smoothstep( 0.15, 1.2, distance( vUv, uSun ) );
-  float v = r * air * near * uGain * uSunW;
+  float v = lit * air * near * uGain * uSunW;
   // SOFT CAP: the brightest ray is never more than uCap of the hole's own luminance.
   v = uCap * ( 1.0 - exp( -v / max( uCap, 1e-4 ) ) );
+  base *= 1.0 - uShadow * shd * air * uSunW;
   gl_FragColor = vec4( base + uCol * v, 1.0 );
 }`;
 
@@ -157,7 +166,10 @@ export class SkyRaysPass extends Pass {
     };
     this.rtMask = new THREE.WebGLRenderTarget(2, 2, rtOpts);
     this.rtMask.texture.name = 'SkyRays.Mask';
-    this.rtMask.texture.generateMipmaps = false;
+    // The mask target carries a mip chain: the composite reads its top mip as the
+    // frame's mean visibility (three regenerates it at the end of every render into it).
+    this.rtMask.texture.generateMipmaps = true;
+    this.rtMask.texture.minFilter = THREE.LinearMipmapLinearFilter;
     this.rtBlur = new THREE.WebGLRenderTarget(2, 2, rtOpts);
     this.rtBlur.texture.name = 'SkyRays.Blur';
     this.rtBlur.texture.generateMipmaps = false;
@@ -194,7 +206,7 @@ export class SkyRaysPass extends Pass {
         tDiffuse: { value: null }, tRays: { value: this.rtMask.texture }, tDepth: { value: null },
         uCol: { value: new THREE.Vector3(1, 0.95, 0.85) }, uSun: { value: new THREE.Vector2(0.5, 0.5) },
         uNear: { value: 0.1 }, uFar: { value: 700 }, uKAir: { value: K_AIR_G }, uNearK: { value: 0 },
-        uCap: { value: 0.3 }, uGain: { value: 1 }, uSunW: { value: 1 }
+        uCap: { value: 0.3 }, uGain: { value: 1 }, uSunW: { value: 1 }, uShadow: { value: 0.35 }
       },
       vertexShader: VERT, fragmentShader: COMP_FRAG, depthTest: false, depthWrite: false
     });
@@ -366,7 +378,8 @@ export class SkyRaysPass extends Pass {
     const holeLum = holeLumOf(skyState.hor);
     cu.uCap.value = Math.max(0.02, R.cap * holeLum);
     S.cap = cu.uCap.value;
-    cu.uGain.value = gain * 0.5;
+    cu.uGain.value = gain * 1.6;
+    cu.uShadow.value = 0.45 * Math.min(1, R.strength);
     // Looking toward the sun the fan is brightest (forward scatter); across it, half.
     camera.getWorldDirection(_fwd);
     cu.uSunW.value = 0.5 + 0.5 * Math.max(0, _fwd.x * SUN.dir.x + _fwd.y * SUN.dir.y + _fwd.z * SUN.dir.z);
