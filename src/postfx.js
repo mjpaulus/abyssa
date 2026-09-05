@@ -551,10 +551,10 @@ if (typeof window !== 'undefined') {
     }),
     diff: styleDiff,
     tune: TUNE, looks: { zone: ZONE_LOOKS, wx: WX_LOOKS },
-    capture: () => afterFrames(1).then(captureLinear),
+    capture: () => afterFrames(1, captureLinear),
     // A region of the DRAWN frame as RGBA bytes (top-down rows), read inside the frame
     // hook. Look-dev eyes: draw it on an overlay canvas at 2-3x to inspect a rim.
-    grab: (x, y, w, h) => afterFrames(1).then(() => {
+    grab: (x, y, w, h) => afterFrames(1, () => {
       const gl = renderer.getContext(), H = renderer.domElement.height;
       renderer.setRenderTarget(null);
       const buf = new Uint8Array(w * h * 4), out = new Uint8ClampedArray(w * h * 4);
@@ -583,12 +583,15 @@ const capQ = [];
 const SRGB_LUT = new Float32Array(256);
 for (let i = 0; i < 256; i++) { const c = i / 255; SRGB_LUT[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
 let capBuf = null;
-function afterFrames(n) { return new Promise(res => capQ.push({ n, res })); }
+// `fn` runs SYNCHRONOUSLY inside the frame hook, while the drawing buffer is still the
+// frame just drawn (a microtask after the loop's callback batch is too late on some
+// frames -- the first readbacks after a fresh load came back all zeros).
+function afterFrames(n, fn) { return new Promise(res => capQ.push({ n, res, fn })); }
 function pumpCaptures() {
   if (!capQ.length) return;
   const c = capQ[0];
   if (--c.n > 0) return;
-  capQ.shift(); c.res();
+  capQ.shift(); c.res(c.fn ? c.fn() : undefined);
 }
 function captureLinear() {
   const gl = renderer.getContext(), W = renderer.domElement.width, H = renderer.domElement.height;
@@ -630,9 +633,9 @@ async function styleDiff(opts = {}) {
   const st = GLASS.style, save = Object.assign({}, st);
   const zero = () => { for (const k in st) st[k] = k === 'flowLean' ? 0 : -1; };
   const restore = () => Object.assign(st, save);
-  zero(); await afterFrames(frames); const A = captureLinear();
-  restore(); await afterFrames(frames); const B = captureLinear();
-  zero(); await afterFrames(frames); const A2 = captureLinear();
+  zero(); const A = await afterFrames(frames, captureLinear);
+  restore(); const B = await afterFrames(frames, captureLinear);
+  zero(); const A2 = await afterFrames(frames, captureLinear);
   restore();
   const r = cmpLinear(A, B); r.noise = cmpLinear(A, A2).meanAbsDiff; r.lean = save.flowLean; r.frames = frames;
   return r;
