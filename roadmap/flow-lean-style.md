@@ -1,6 +1,6 @@
 ---
 title: The Flow lean (a style between NMS and Flow)
-status: next
+status: wip
 tags: art-direction, style, postfx, materials, camera
 updated: 2026-09-05
 ---
