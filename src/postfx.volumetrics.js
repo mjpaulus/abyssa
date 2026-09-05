@@ -137,7 +137,9 @@ void main(){
   // and a low sun through the surface glows around its column instead of only inside it.
   // Same integral over the hemisphere within 8% (0.45+1.75/4 vs 0.70+1.10/2.8) so the
   // total added radiance does not climb with the dial -- it is redistributed.
-  phase = mix( phase, 0.70 + 1.10 * pow( cosS, 1.8 ), uStyle );
+  // Look-dev round 3: the 0.70 floor read as a neon cyan lift up-sun (mean luminance
+  // +60% from this pass alone); 0.58 keeps the shoulder without lifting the whole frame.
+  phase = mix( phase, 0.58 + 1.25 * pow( cosS, 2.2 ), uStyle );
 
   // Everything that varies linearly or exponentially along the ray is stepped
   // incrementally. The straightforward version evaluates six exp() and a divide per
