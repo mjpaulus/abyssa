@@ -397,6 +397,40 @@ function build() {
     { key: 'col', color: true },
     { key: 'hemiLift', min: 0, max: 1, step: 0.01 }
   ]);
+  // --- CREPUSCULAR RAYS (roadmap/crepuscular-sky.md) ------------------------
+  knobGroup('rays', GLASS.rays, BOOT.rays, [
+    { key: 'strength', min: 0, max: 3, step: 0.01 },
+    { key: 'decay', min: 0.5, max: 0.995, step: 0.005 },
+    { key: 'taps', min: 4, max: 32, step: 1 },
+    { key: 'reach', min: 0.05, max: 1, step: 0.01 },
+    { key: 'holeBias', min: 0, max: 1, step: 0.01 },
+    { key: 'lining', min: 0, max: 2, step: 0.01 },
+    { key: 'lowDeck', min: 0, max: 2, step: 0.01 },
+    { key: 'cap', min: 0, max: 1.5, step: 0.01 },
+    { key: 'nearK', min: 0, max: 1, step: 0.01 }
+  ]);
+  {
+    const rb = el('div', 'btns', bd);
+    const road = el('button', null, rb, "michael's road");
+    const rnote = el('p', 'note', bd, 'lowDeck/holeBias need a redeal (the button does one). rays probe: __rays.state() / __rays.cost().');
+    // THE PRESET: coverage 0.72 (hand.clouds solved through covCalm/covGain), low deck
+    // 0.6, the Flow-lean haze at 0.6, late afternoon with the sun ~25 degrees up -- the
+    // deck's band, so the sun sits behind it. Stand on the deck and face the sun.
+    road.addEventListener('click', () => {
+      const w = wx(); if (!w) return;
+      const C = GLASS.cloud;
+      const clouds = Math.max(0, Math.min(1, (0.72 - C.covCalm) / Math.max(1e-4, C.covGain)));
+      w.set(null, 0);
+      w.force({ clouds, layers: 0.6, fog: 0.12, stormDay: false });
+      w.set(null, null);
+      GLASS.style.haze = 0.6;
+      // elevAt: 12 + 46 e = 25 -> e = 0.283; afternoon: u/CYCLE = 1 - acos(-e) / 2pi
+      w.scrub(1 - Math.acos(-((25 - GLASS.sun.elevDawn) / (GLASS.sun.elevNoon - GLASS.sun.elevDawn))) / (Math.PI * 2));
+      if (window.__clouds) window.__clouds.redeal();
+      syncAll();
+      rnote.textContent = `michael's road: clouds ${clouds.toFixed(3)} (cov 0.72), layers 0.6, haze 0.6, sun 25 deg. face the sun (azim ${SUN.azimDeg.toFixed(0)} deg).`;
+    });
+  }
   knobGroup('wind / water', GLASS.windwater, BOOT.windwater, [
     { key: 'capThr', min: 0, max: 1, step: 0.01 },
     { key: 'capK', min: 0, max: 2, step: 0.01 },
@@ -495,6 +529,7 @@ function build() {
     Object.assign(GLASS.moon, b.moon);
     Object.assign(GLASS.windwater, b.windwater);
     Object.assign(GLASS.style, b.style);
+    Object.assign(GLASS.rays, b.rays);
     syncAll();
     status.textContent = 'boot values restored';
   });
@@ -554,7 +589,7 @@ function build() {
       `storm  ${stormTxt}\n` +
       `sunset drama ${h.sunsetDrama.toFixed(2)}\n` +
       `moon   K ${h.moonK.toFixed(2)}  phase ${h.moonPhase.toFixed(2)}\n` +
-      `wind base ${h.windBase.toFixed(2)}`;
+      `wind base ${h.windBase.toFixed(2)}  layers ${(h.layers || 0).toFixed(2)}`;
 
     // --- wind ---------------------------------------------------------------
     const sky = window.__sky;

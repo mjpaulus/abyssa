@@ -136,12 +136,10 @@ function fullscreenTri() {
   return g;
 }
 
-// ACES (the renderer's tone map, exposure included) on the CPU, for the cap: the buffer
-// this composites into is display-referred, so the hole's luminance has to be too.
-function aces(x) {
-  x *= 1.32;
-  return Math.max(0, Math.min(1, (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)));
-}
+// The hole's luminance for the cap. The dome is a ShaderMaterial without the tone-map
+// chunk, so the sky lands in the buffer as its raw scene-linear radiance (water.js
+// measured this); the clamp only guards a blown stop.
+function holeLumOf(h) { return Math.max(0, Math.min(1.2, 0.2126 * h[0] + 0.7152 * h[1] + 0.0722 * h[2])); }
 
 const _v = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
@@ -365,8 +363,7 @@ export class SkyRaysPass extends Pass {
     // dusk's is amber, never a saturated orange.
     cu.uCol.value.set(0.67 + 0.33 * d[0] / m, 0.67 + 0.33 * d[1] / m, 0.67 + 0.33 * d[2] / m);
     // The hole's luminance, display-referred, is the cap.
-    const h = skyState.hor;
-    const holeLum = aces(0.2126 * h[0] + 0.7152 * h[1] + 0.0722 * h[2]);
+    const holeLum = holeLumOf(skyState.hor);
     cu.uCap.value = Math.max(0.02, R.cap * holeLum);
     S.cap = cu.uCap.value;
     cu.uGain.value = gain * 0.5;
