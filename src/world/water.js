@@ -3360,8 +3360,8 @@ export function updateWater(dt, t) {
   // THE FLOW LEAN, resolved once a frame for every fogged program (see STYLE_U).
   {
     const hz = styleK('haze'), mt = styleK('matte');
-    STYLE_U[0] = hz;              // air: KAIR * (1 + hz) -- one stop denser at full lean
-    STYLE_U[1] = 0.25 * hz;       // nepheloid amp x1.25 at full lean (silt line structure kept)
+    STYLE_U[0] = 1.4 * hz;        // air: KAIR * (1 + 1.4 hz) -- 2.4x at full lean (look-dev: one stop read as nothing)
+    STYLE_U[1] = 0.45 * hz;       // nepheloid amp x1.45 at full lean (silt line structure kept)
     STYLE_U[2] = mt;              // the matte mirror (surface shader, from-above branch only)
     STYLE_U[3] = hz;              // lid ring share, read by skyDrama on the CPU
   }

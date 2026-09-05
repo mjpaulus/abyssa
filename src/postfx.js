@@ -73,10 +73,11 @@ function updateHalation() {
   const k = styleK('haze');
   if (k === _bloomK) return;
   _bloomK = k;
-  bloom.luminanceMaterial.threshold = BLOOM0.thr - 0.10 * k;      // 0.28 -> 0.18
-  bloom.luminanceMaterial.smoothing = BLOOM0.smooth + 0.25 * k;   // 0.25 -> 0.50 (soft knee)
-  bloom.intensity = BLOOM0.int * (1 - 0.32 * k);                  // 1.1 -> 0.75
-  if (bloom.mipmapBlurPass) bloom.mipmapBlurPass.radius = BLOOM0.radius * (1 + 0.14 * k);
+  // Look-dev 2026-09-05: the shipped 0.18 / 0.50 / 0.75 halo was invisible next to 0.
+  bloom.luminanceMaterial.threshold = BLOOM0.thr - 0.16 * k;      // 0.28 -> 0.12
+  bloom.luminanceMaterial.smoothing = BLOOM0.smooth + 0.40 * k;   // 0.25 -> 0.65 (soft knee)
+  bloom.intensity = BLOOM0.int * (1 - 0.12 * k);                  // 1.1 -> 0.97
+  if (bloom.mipmapBlurPass) bloom.mipmapBlurPass.radius = BLOOM0.radius * (1 + 0.16 * k);
 }
 // bokehScale kept modest: the half-res CoC upsample stair-steps on bright edges (the
 // lantern pool) once the blur radius gets large.
@@ -144,6 +145,7 @@ class GradeEffect extends Effect {
       uniform vec3 uSlope, uOffset, uPower, uMood;
       uniform float uSat;
       uniform vec2 uSat2;
+      uniform vec4 uWash;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
         vec3 c = max(inputColor.rgb, 0.0);
         c = pow(c, vec3(0.4545454));
@@ -159,6 +161,13 @@ class GradeEffect extends Effect {
           float cl = length( ch );
           float w = cl > 1e-4 ? smoothstep( 0.0, 0.85, dot( ch / cl, uMood ) ) : 0.0;
           c = mix( vec3( l ), c, 1.0 + mix( uSat2.y, uSat2.x, w ) );
+          // THE WASH (look-dev 2026-09-05): Flow commits a scene to ONE colour. The frame
+          // is pulled toward its own luminance in the mood tint (uWash.rgb is the mood
+          // colour normalised to luminance 1, so values are untouched -- hue does the
+          // work, exactly Flow's law). Strongest in the mid-tones and shadows, eased out
+          // of the highlights so a sun disc or a lantern core stays its own colour.
+          float lw = luminance( c );
+          c = mix( c, uWash.rgb * lw, uWash.w * ( 1.0 - smoothstep( 0.55, 0.95, lw ) ) );
         }
         outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
       }`, {
@@ -169,7 +178,8 @@ class GradeEffect extends Effect {
         ['uPower', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
         ['uSat', new THREE.Uniform(1)],
         ['uMood', new THREE.Uniform(new THREE.Vector3(0, 0, 1))],
-        ['uSat2', new THREE.Uniform(new THREE.Vector2(0, 0))]
+        ['uSat2', new THREE.Uniform(new THREE.Vector2(0, 0))],
+        ['uWash', new THREE.Uniform(new THREE.Vector4(1, 1, 1, 0))]
       ])
     });
   }
@@ -193,7 +203,8 @@ const _gradeU = {
   power: grade.uniforms.get('uPower'),
   sat: grade.uniforms.get('uSat'),
   mood: grade.uniforms.get('uMood'),
-  sat2: grade.uniforms.get('uSat2')
+  sat2: grade.uniforms.get('uSat2'),
+  wash: grade.uniforms.get('uWash')
 };
 const _gradeKeys = ['slope', 'offset', 'power'];
 
@@ -209,22 +220,28 @@ const _gradeKeys = ['slope', 'offset', 'power'];
 // x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
 const ZONE_LOOKS = [
   // reef -- mossy teal
-  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22 },
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.30 },
   // boiler room -- sulphur-amber
-  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26 },
+  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.38 },
   // abyss -- violet-black
-  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30 }
+  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.34 }
 ];
+// LOOK-DEV PUSH (2026-09-05): the tables above were authored timid -- at the default
+// dial the probe read slope 0.99..1.01 and a 1% saturation move, which no eye registers.
+// Every deviation from neutral in the stack is scaled by PUSH before it composes, so the
+// authored RATIOS between looks survive and the magnitude lands at 10-20%. 1.0 = the
+// tables as written.
+const PUSH = 1.8;
 const WX_LOOKS = {
   // night -- cold ink, colour drained
-  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28 },
+  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.22 },
   // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
-  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18 },
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.30 },
   // noon -- the marine blue stays legible: a light hand
-  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12 },
-  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20 },
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.12 },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.34 },
   // gale -- slate, recognisable: values compressed, colour held down everywhere
-  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26 }
+  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.16 }
 };
 const WX_RING = [WX_LOOKS.night, WX_LOOKS.dawn, WX_LOOKS.noon, WX_LOOKS.dusk, WX_LOOKS.night];
 // Mood colours -> unit chroma directions (colour minus its luminance, normalised), once.
@@ -232,19 +249,22 @@ for (const L of [...ZONE_LOOKS, ...Object.values(WX_LOOKS)]) {
   const m = L.mood, l = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];
   const v = [m[0] - l, m[1] - l, m[2] - l], n = Math.hypot(v[0], v[1], v[2]) || 1;
   L.moodDir = [v[0] / n, v[1] / n, v[2] / n];
+  L.tint = [m[0] / l, m[1] / l, m[2] / l];
 }
 // Working accumulators (zero-alloc): slope, offset, power, mood, satUp, satDn.
-const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], satUp: 0, satDn: 0 };
-const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], satUp: 0, satDn: 0 };
+const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], satUp: 0, satDn: 0, wash: 0 };
+const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], satUp: 0, satDn: 0, wash: 0 };
 function lookLerp(out, a, b, t) {
   for (let i = 0; i < 3; i++) {
     out.slope[i] = a.slope[i] + (b.slope[i] - a.slope[i]) * t;
     out.offset[i] = a.offset[i] + (b.offset[i] - a.offset[i]) * t;
     out.power[i] = a.power[i] + (b.power[i] - a.power[i]) * t;
     out.mood[i] = a.moodDir[i] + (b.moodDir[i] - a.moodDir[i]) * t;
+    out.tint[i] = a.tint[i] + (b.tint[i] - a.tint[i]) * t;
   }
   out.satUp = a.satUp + (b.satUp - a.satUp) * t;
   out.satDn = a.satDn + (b.satDn - a.satDn) * t;
+  out.wash = a.wash + (b.wash - a.wash) * t;
   out.moodDir = out.mood;
   return out;
 }
@@ -279,8 +299,9 @@ function updateGrade(airK) {
   if (ks > 0.001) {
     const S = resolveStack(airK);
     _gradeU.mood.value.set(S.mood[0], S.mood[1], S.mood[2]);
-    _gradeU.sat2.value.set(S.satUp * ks, S.satDn * ks);
-  } else _gradeU.sat2.value.set(0, 0);
+    _gradeU.sat2.value.set(S.satUp * PUSH * ks, S.satDn * PUSH * ks);
+    _gradeU.wash.value.set(S.tint[0], S.tint[1], S.tint[2], S.wash * ks);
+  } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; }
   // Depth ramp runs the full column (~-900), not just to -650: the shipped look
   // lands unchanged at -650 (d = 1 there), then drifts a touch deeper and quieter
   // to -900 — the abyss keeps darkening character without changing hue.
@@ -297,7 +318,7 @@ function updateGrade(airK) {
       // the factor is exactly 1.0 and the addend exactly 0.0.
       if (ks > 0.001) {
         const sv = _stk[key][i];
-        g = key === 'offset' ? g + sv * ks : g * (1 + (sv - 1) * ks);
+        g = key === 'offset' ? g + sv * PUSH * ks : g * (1 + (sv - 1) * PUSH * ks);
       }
       _gv.setComponent(i, g);
     }
@@ -501,7 +522,7 @@ if (typeof window !== 'undefined') {
                int: bloom.intensity, radius: bloom.mipmapBlurPass ? bloom.mipmapBlurPass.radius : null },
       grade_u: { slope: _gradeU.slope.value.toArray(), offset: _gradeU.offset.value.toArray(),
                  power: _gradeU.power.value.toArray(), sat: _gradeU.sat.value,
-                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray() },
+                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray(), wash: _gradeU.wash.value.toArray() },
       dof_u: { focus: focusDist, range: 'worldFocusRange' in dof.cocMaterial ? dof.cocMaterial.worldFocusRange : null,
                bokeh: dof.bokehScale, air, subject: !!subj, subjDist }
     }),
@@ -565,7 +586,10 @@ function cmpLinear(A, B) {
   const m0 = Math.hypot(c0[0], c0[1], c0[2]) || 1e-9, m1 = Math.hypot(c1[0], c1[1], c1[2]) || 1e-9;
   const cosA = Math.max(-1, Math.min(1, (c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2]) / (m0 * m1)));
   const r4 = v => +v.toFixed(4);
-  return { meanAbsDiff: r4(ad / (3 * n)), meanLum0: r4(l0 / n), meanLum1: r4(l1 / n), satDelta: r4((s1 - s0) / n), hueShift: r4(Math.acos(cosA) * 180 / Math.PI) };
+  // relDiff: the same difference over the scene's own mean luminance -- the gate for the
+  // dark scenes (a 0.02-luminance abyss cannot move 0.06 absolute without stopping being
+  // an abyss).
+  return { meanAbsDiff: r4(ad / (3 * n)), relDiff: r4((ad / (3 * n)) / Math.max(1e-4, (l0 + l1) / (2 * n))), meanLum0: r4(l0 / n), meanLum1: r4(l1 / n), satDelta: r4((s1 - s0) / n), hueShift: r4(Math.acos(cosA) * 180 / Math.PI) };
 }
 async function styleDiff(opts = {}) {
   const frames = opts.frames || 2;
