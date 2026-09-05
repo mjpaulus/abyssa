@@ -504,8 +504,80 @@ if (typeof window !== 'undefined') {
                  mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray() },
       dof_u: { focus: focusDist, range: 'worldFocusRange' in dof.cocMaterial ? dof.cocMaterial.worldFocusRange : null,
                bokeh: dof.bokehScale, air, subject: !!subj, subjDist }
-    })
+    }),
+    diff: styleDiff,
+    capture: () => afterFrames(1).then(captureLinear)
   };
+}
+
+// ---- THE MEASURER (__style.diff) ------------------------------------------------
+// The look-dev gate for the Flow lean: a number an eye can be held to. Renders the
+// current view at flowLean 0 (every sub-knob following) and at the current dial, waits
+// `frames` rendered frames after each toggle, reads the DEFAULT framebuffer back inside
+// the frame that drew it (gl.readPixels is valid there whatever preserveDrawingBuffer
+// says -- only cross-frame reads need it), box-downsamples to 64x64 in SCENE-LINEAR
+// (sRGB LUT, so the 0..1 numbers are light, not code values) and compares.
+//   meanAbsDiff  mean |k - 0| over cells x channels          (gate: >= 0.06 at 1, >= 0.03 at 0.6)
+//   meanLum0/1   mean luminance at 0 and at the dial
+//   satDelta     mean chroma (max-min) at k minus at 0
+//   hueShift     angle between the mean chroma vectors, degrees
+//   noise        |0 - 0| across the same wait (waves, flicker, grain): the floor a real
+//                difference has to clear
+// Needs rendered frames: a hidden tab is rAF-throttled and the promise never settles.
+const capQ = [];
+const SRGB_LUT = new Float32Array(256);
+for (let i = 0; i < 256; i++) { const c = i / 255; SRGB_LUT[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+let capBuf = null;
+function afterFrames(n) { return new Promise(res => capQ.push({ n, res })); }
+function pumpCaptures() {
+  if (!capQ.length) return;
+  const c = capQ[0];
+  if (--c.n > 0) return;
+  capQ.shift(); c.res();
+}
+function captureLinear() {
+  const gl = renderer.getContext(), W = renderer.domElement.width, H = renderer.domElement.height;
+  renderer.setRenderTarget(null);
+  if (!capBuf || capBuf.length !== W * H * 4) capBuf = new Uint8Array(W * H * 4);
+  gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, capBuf);
+  const N = 64, out = new Float32Array(N * N * 3), cnt = new Float32Array(N * N);
+  for (let y = 0; y < H; y++) {
+    const cy = Math.min(N - 1, (y * N / H) | 0);
+    for (let x = 0; x < W; x++) {
+      const ci = cy * N + Math.min(N - 1, (x * N / W) | 0), pi = (y * W + x) * 4;
+      out[ci * 3] += SRGB_LUT[capBuf[pi]]; out[ci * 3 + 1] += SRGB_LUT[capBuf[pi + 1]]; out[ci * 3 + 2] += SRGB_LUT[capBuf[pi + 2]];
+      cnt[ci]++;
+    }
+  }
+  for (let i = 0; i < N * N; i++) { const k = cnt[i] ? 1 / cnt[i] : 0; out[i * 3] *= k; out[i * 3 + 1] *= k; out[i * 3 + 2] *= k; }
+  return out;
+}
+function cmpLinear(A, B) {
+  let ad = 0, l0 = 0, l1 = 0, s0 = 0, s1 = 0; const c0 = [0, 0, 0], c1 = [0, 0, 0]; const n = A.length / 3;
+  for (let i = 0; i < n; i++) {
+    const r0 = A[i * 3], g0 = A[i * 3 + 1], b0 = A[i * 3 + 2], r1 = B[i * 3], g1 = B[i * 3 + 1], b1 = B[i * 3 + 2];
+    ad += Math.abs(r1 - r0) + Math.abs(g1 - g0) + Math.abs(b1 - b0);
+    const L0 = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0, L1 = 0.2126 * r1 + 0.7152 * g1 + 0.0722 * b1;
+    l0 += L0; l1 += L1;
+    s0 += Math.max(r0, g0, b0) - Math.min(r0, g0, b0); s1 += Math.max(r1, g1, b1) - Math.min(r1, g1, b1);
+    c0[0] += r0 - L0; c0[1] += g0 - L0; c0[2] += b0 - L0; c1[0] += r1 - L1; c1[1] += g1 - L1; c1[2] += b1 - L1;
+  }
+  const m0 = Math.hypot(c0[0], c0[1], c0[2]) || 1e-9, m1 = Math.hypot(c1[0], c1[1], c1[2]) || 1e-9;
+  const cosA = Math.max(-1, Math.min(1, (c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2]) / (m0 * m1)));
+  const r4 = v => +v.toFixed(4);
+  return { meanAbsDiff: r4(ad / (3 * n)), meanLum0: r4(l0 / n), meanLum1: r4(l1 / n), satDelta: r4((s1 - s0) / n), hueShift: r4(Math.acos(cosA) * 180 / Math.PI) };
+}
+async function styleDiff(opts = {}) {
+  const frames = opts.frames || 2;
+  const st = GLASS.style, save = Object.assign({}, st);
+  const zero = () => { for (const k in st) st[k] = k === 'flowLean' ? 0 : -1; };
+  const restore = () => Object.assign(st, save);
+  zero(); await afterFrames(frames); const A = captureLinear();
+  restore(); await afterFrames(frames); const B = captureLinear();
+  zero(); await afterFrames(frames); const A2 = captureLinear();
+  restore();
+  const r = cmpLinear(A, B); r.noise = cmpLinear(A, A2).meanAbsDiff; r.lean = save.flowLean; r.frames = frames;
+  return r;
 }
 
 // Diagnostic escape hatch (P key): render the scene straight to the canvas. Tone
@@ -518,6 +590,7 @@ export function render(dt) {
   if (bypass) {
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
+    pumpCaptures();
     return;
   }
   focusTarget.copy(playerLightSrc.position);
@@ -558,6 +631,7 @@ export function render(dt) {
   updateHalation();
   updateGrade(air);
   composer.render(dt);
+  pumpCaptures();
 }
 
 // Adaptive quality: sample real framerate after warmup, shed expensive passes once.
