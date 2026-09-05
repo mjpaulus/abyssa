@@ -362,7 +362,7 @@ export function updateLighting(depth01) {
   // hemisphere's from 42% to 28% at full lean, so the deck's shadows are filled by sky
   // instead of pitching; underwater the hemisphere carries what the fill gives up
   // (item 9) — +22% at full lean — and the omni ambient a hair.
-  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.32 * sk) * air) * (1 + 0.12 * sk * (1 - air));
+  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.42 * sk) * air) * (1 + 0.12 * sk * (1 - air));
   mixInto(hemi.color, a, b, 'sky', t);
   mixInto(hemi.groundColor, a, b, 'gnd', t);
   // Same mistake as the fill, in colour instead of level: the hemisphere's shallow stop
@@ -372,7 +372,7 @@ export function updateLighting(depth01) {
   // is the sea, so the two ends travel to those instead.
   hemi.color.lerp(AIR_SKY, air * 0.85);
   hemi.groundColor.lerp(AIR_SEA, air * 0.85);
-  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.30 * sk) * air) * (1 + 0.20 * sk * (1 - air));
+  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.36 * sk) * air) * (1 + 0.20 * sk * (1 - air));
   mixInto(sun.color, a, b, 'sun', t);
   sun.intensity = mix('sunI') * wk + flashBoost * 2.2;
   if (sk > 0) {
@@ -390,8 +390,8 @@ export function updateLighting(depth01) {
     hemi.color.lerp(AIR_SKY_C, sk * air * 0.80);
     hemi.color.lerp(C(t < 0.5 ? a : b, 'cf'), sk * (1 - air) * 0.40);
     hemi.groundColor.lerp(AIR_SEA_L, sk * air * 0.80);
-    // Values compressed, not contrast: the key comes down 20% in air as the fill rises.
-    sun.intensity *= 1 - 0.20 * sk * air;
+    // Values compressed, not contrast: the key comes down 25% in air as the fill rises.
+    sun.intensity *= 1 - 0.25 * sk * air;
   }
 
   // --- SKY DRAMA ambience (air only) ---------------------------------------

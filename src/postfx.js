@@ -244,7 +244,7 @@ const _gradeKeys = ['slope', 'offset', 'power'];
 // x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
 const ZONE_LOOKS = [
   // reef -- mossy teal
-  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.32, cool: [0.06, 0.34, 0.46] },
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.16, satDn: -0.22, wash: 0.28, cool: [0.06, 0.34, 0.46] },
   // boiler room -- sulphur-amber
   { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.42, cool: [0.18, 0.26, 0.46], band: [0.03, 0.20] },
   // abyss -- violet-black
@@ -258,15 +258,17 @@ const ZONE_LOOKS = [
 // TUNE is live (window.__style.tune) so the look can be dialled in the browser and the
 // numbers copied back here. push: slope/offset/power deviations; pushSat: the mood-hue
 // saturation pair; coolK: the shadows' cool weight relative to the look's wash.
-const TUNE = { push: 1.25, pushSat: 1.0, coolK: 1.0, coolMax: 0.5, bandWater: [0.20, 0.55], bandAir: [0.08, 0.32] };
+// coolAir: the shadow cool is weighted UP in air -- the deck's shadow side must read cool
+// against the apricot key (Flow's dusk), where under water the medium already is cool.
+const TUNE = { push: 1.25, pushSat: 1.0, coolK: 1.0, coolMax: 0.5, coolAir: 1.5, bandWater: [0.20, 0.55], bandAir: [0.10, 0.40] };
 const WX_LOOKS = {
   // night -- cold ink, colour drained
   night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.26, cool: [0.14, 0.24, 0.54], air: [0.62, 0.70, 0.92] },
   // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
-  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.34, cool: [0.22, 0.38, 0.64], air: [1.00, 0.66, 0.30] },
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.30, cool: [0.22, 0.38, 0.64], air: [1.00, 0.66, 0.30] },
   // noon -- the marine blue stays legible: a light hand
-  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.26, cool: [0.24, 0.42, 0.70], air: [1.00, 0.86, 0.64] },
-  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.36, cool: [0.20, 0.36, 0.66], air: [1.00, 0.60, 0.26] },
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.30, cool: [0.24, 0.42, 0.70], air: [1.00, 0.86, 0.64] },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.30, cool: [0.20, 0.36, 0.66], air: [1.00, 0.60, 0.26] },
   // gale -- slate, recognisable: values compressed, colour held down everywhere
   storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.22, cool: [0.34, 0.42, 0.54], air: [0.70, 0.72, 0.76] }
 };
@@ -342,7 +344,7 @@ function updateGrade(airK) {
     _gradeU.sat2.value.set(S.satUp * TUNE.pushSat * ks, S.satDn * TUNE.pushSat * ks);
     _gradeU.wash.value.set(S.tint[0] + (S.airT[0] - S.tint[0]) * airK, S.tint[1] + (S.airT[1] - S.tint[1]) * airK, S.tint[2] + (S.airT[2] - S.tint[2]) * airK, S.wash * ks);
     _gradeU.cool.value.set(S.coolT[0], S.coolT[1], S.coolT[2]);
-    _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK) * ks;
+    _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK * (1 + (TUNE.coolAir - 1) * airK)) * ks;
     const bw = S.band, ba = TUNE.bandAir;
     _gradeU.band.value.set(bw[0] + (ba[0] - bw[0]) * airK, bw[1] + (ba[1] - bw[1]) * airK);
   } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; _gradeU.coolW.value = 0; }
