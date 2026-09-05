@@ -2684,8 +2684,11 @@ function buildSurface() {
           // opaque gale is untouched because it is body + scatter with F's sky on top of
           // a surface whose alpha is already over the floor. At z = 0 the branch is
           // skipped and tRefl is the shipped expression, bit for bit.
-          if ( abyssaStyle.z > 0.001 ) {
-            float z = abyssaStyle.z;
+          // Gated by ( 1 - opq ): the churned gale is body + scatter under a lid, and
+          // the brief says it stays exactly what shipped.
+          float zM = abyssaStyle.z * ( 1.0 - opq );
+          if ( zM > 0.001 ) {
+            float z = zM;
             vec2 dhR = dh + dhSpl + micro * ( 1.0 - 0.6 * z );
             vec3 Nr = normalize( vec3( -dhR.x, 1.0, -dhR.y ) );
             vec3 R = reflect( V, Nr );
