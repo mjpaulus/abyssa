@@ -409,7 +409,8 @@ export const GLASS = {
     reach: 0.42,          // fraction of the pixel-to-sun distance the first pass integrates
     holeBias: 0.55,       // 0 = every cloud occludes alike; 1 = the LOW deck owns the hole
                           // (the high torn layer thins to a veil in the mask)
-    lining: 0.65,         // silver-lining rim strength on backlit puffs (world/clouds.js)
+    lining: 0.45,         // silver-lining rim strength on backlit puffs (world/clouds.js).
+                          // Per-puff, so past ~0.8 it outlines the DISCS (the old complaint)
     lowDeck: 1.0,         // scalar on the hand's `layers` (0 = no low deck at all)
     window: [0.35, 0.55, 0.85, 0.92],   // coverage window: rise, peak from, peak to, dead
     cap: 0.60,            // brightest ray as a share of the hole's own luminance
