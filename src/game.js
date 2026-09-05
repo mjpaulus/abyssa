@@ -664,6 +664,9 @@ const HH = {
   rmK: 0.3,            // reduced motion: every layer at 30%
 };
 window.__hh = HH;
+// probe handles: the dial and the player, so a console harness can drive the layers
+HH.style = GLASS.style; HH.player = player; HH.cam = camera; HH.keys = keys;
+HH.impulse = (v = 0.5) => { shake = Math.max(shake, v); return shake; };   // probe: a bite-sized hit
 // noise: 4 octaves of incommensurate sines with a hashed phase per channel, in [-1, 1]
 const HH_OCT = [1, 2.07, 3.91, 7.3], HH_AMP = [1, 0.5, 0.25, 0.125], HH_NORM = 1 / 1.875;
 function hhHash(i) { const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453; return (x - Math.floor(x)) * Math.PI * 2; }
