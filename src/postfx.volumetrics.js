@@ -20,6 +20,19 @@ import * as THREE from 'three';
 import { Pass } from 'postprocessing';
 import { camera, scene } from './core.js';
 import { sun } from './lighting.js';
+import { GLASS } from './config.js';
+
+// THE FLOW LEAN (roadmap/flow-lean-style.md, item 12): the medium stays lit. Same dial
+// lighting.js reads (GLASS.style.flowLean, `light` sub-knob), a local copy because the
+// helper is not exported and this module must not depend on lighting.js's internals.
+// Live data, read per frame; at 0 the shader mixes back to the shipped constants.
+function styleK(sub = 'light') {
+  const s = GLASS.style;
+  if (!s) return 0;
+  const m = Math.min(1, Math.max(0, +s.flowLean || 0));
+  const v = s[sub];
+  return (v === undefined || v === null || v < 0) ? m : Math.min(1, Math.max(0, +v));
+}
 
 // ---------------------------------------------------------------------------
 // Water optics, mirrored from world/water.js so the shafts are made of the same
@@ -90,7 +103,7 @@ uniform sampler2D tDepth, tCaust;
 uniform vec3 uCamPos, uSunDir, uSurf;
 uniform mat4 uCamW, uViewProj;
 uniform vec2 uTanHalf;
-uniform float uNear, uFar, uDens, uSunK, uJitter, uOcclude, uDensK;
+uniform float uNear, uFar, uDens, uSunK, uJitter, uOcclude, uDensK, uStyle;
 varying vec2 vUv;
 
 // perspectiveDepthToViewZ, negated: distance along a ray whose view-space z is -1
@@ -116,7 +129,15 @@ void main(){
   float jit = fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) + uJitter );
 
   // Mie-ish forward lobe: shafts blaze when you look up-sun, fade looking down-sun.
-  float phase = 0.45 + 1.75 * pow( max( 0.0, dot( rdn, uSunDir ) ), 3.0 );
+  float cosS = max( 0.0, dot( rdn, uSunDir ) );
+  float phase = 0.45 + 1.75 * pow( cosS, 3.0 );
+  // Flow lean (item 12): a WIDER, SOFTER lobe. The shipped lobe is a tight forward spike
+  // (blazes up-sun, near nothing across-sun); at uStyle 1 it is a broad shoulder with a
+  // lifted isotropic floor, so the shafts read as light IN the water from more angles
+  // and a low sun through the surface glows around its column instead of only inside it.
+  // Same integral over the hemisphere within 8% (0.45+1.75/4 vs 0.70+1.10/2.8) so the
+  // total added radiance does not climb with the dial -- it is redistributed.
+  phase = mix( phase, 0.70 + 1.10 * pow( cosS, 1.8 ), uStyle );
 
   // Everything that varies linearly or exponentially along the ray is stepped
   // incrementally. The straightforward version evaluates six exp() and a divide per
@@ -182,7 +203,10 @@ void main(){
             float sz = sceneT( texture2D( tDepth, su ).x );
             float diff = cp.w - sz;                       // >0: geometry in front of us
             // Thickness window: a far background surface must not shadow the world.
-            if ( diff > 0.8 + cp.w * 0.035 && diff < 55.0 ) { occ = 0.0; break; }
+            // Flow lean (item 12): lower occlusion CONTRAST -- a shadowed sample keeps
+            // 35% at full lean, so a ward or a leviathan flank against the sun sits in a
+            // halo of scattered light rather than cutting a hard black notch out of it.
+            if ( diff > 0.8 + cp.w * 0.035 && diff < 55.0 ) { occ = 0.35 * uStyle; break; }
           }
         }
         if ( occ > 0.0 ) acc += down * tr * ( shaft * fade * occ * phase );
@@ -319,7 +343,7 @@ export class VolumetricLightPass extends Pass {
         uViewProj: { value: new THREE.Matrix4() },
         uTanHalf: { value: new THREE.Vector2(1, 1) },
         uNear: { value: 0.1 }, uFar: { value: 700 }, uDens: { value: 0.0078 }, uDensK: { value: 1 },
-        uSunK: { value: 1 }, uJitter: { value: 0 }, uOcclude: { value: 1 }
+        uSunK: { value: 1 }, uJitter: { value: 0 }, uOcclude: { value: 1 }, uStyle: { value: 0 }
       },
       vertexShader: VERT, fragmentShader: MARCH_FRAG,
       depthTest: false, depthWrite: false
@@ -426,6 +450,11 @@ export class VolumetricLightPass extends Pass {
     mu.uSunK.value = sunK;
     mu.uJitter.value = this._frame * 0.6180339887;
     mu.uOcclude.value = this.occlusion ? 1 : 0;
+    // Flow lean (item 12). The composite's Reinhard shoulder caps the added radiance at
+    // uIntensity per channel whatever the march produces, so a +20% intensity at full
+    // lean is a ceiling of 1.2 -- soft and wide, never neon.
+    const sk = styleK('light');
+    mu.uStyle.value = sk;
     mu.uSunDir.value.copy(sun.position).normalize();
     // Turbidity: water.js drives scene.fog.density from depth + storm murk, so the
     // shafts dim in murky water on their own.
@@ -440,7 +469,7 @@ export class VolumetricLightPass extends Pass {
     const cu = this.fullscreenMaterial.uniforms;
     cu.uNear.value = camera.near;
     cu.uFar.value = camera.far;
-    cu.uIntensity.value = this.intensity;
+    cu.uIntensity.value = this.intensity * (1 + 0.20 * sk);
     cu.tDiffuse.value = inputBuffer.texture;
 
     // 1) bake the seamless caustic tile (reads nothing)
