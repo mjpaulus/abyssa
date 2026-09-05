@@ -6,6 +6,7 @@ import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow, rockMapSet } from '../lib/textures.js';
+import { registerPaint, styleTick, styleUniforms, EDGE_GLSL, STROKE_GLSL, STROKE_BODY } from '../lib/paint.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
 import { siteParams } from './site.js';
@@ -102,7 +103,10 @@ uniform float uTime; uniform vec3 uGlowCol; uniform float uSSS; uniform vec3 uSi
 varying vec3 vFlora; varying vec3 vLocal;
 #ifdef FLORA_ROCK
   varying vec3 vWPos;
-  uniform sampler2D uRockPack, uRockNrm; uniform float uWet;
+  uniform sampler2D uRockPack, uRockNrm; uniform float uWet; uniform float uPaintK;
+  ` + EDGE_GLSL + `
+#else
+  ` + STROKE_GLSL + `
   // Coarse weathering field, no fetch: two bands of interfering sines.
   float rockDet(vec3 w, float f) {
     return sin(w.x * f) * sin(w.z * f * 1.13 + 1.7) + sin(w.y * f * 0.87 + 4.1) * 0.7;
@@ -157,11 +161,15 @@ float gmask = vFlora.x;
     diffuseColor.rgb *= albM * mix(0.90, 1.08, mott);
     // Baked normal (whiteout triplanar) at both scales, then the derivative relief for
     // the last octave the texture cannot hold at walk-up: fine grit in the fragment.
-    vec3 wN2 = rockNrm(vWPos, wN, bw, R_DET, 0.9);
-    wN2 = normalize(mix(wN2, rockNrm(vWPos + vec3(7.3, 2.9, 5.1), wN, bw, R_MAC, 0.7), 0.35));
+    // EDGE-NOT-MIDDLE (lib/paint.js): every detail octave scales by the mid-tone
+    // flattening of the GEOMETRIC normal, so grain lives at the shadow edge and
+    // dissolves on the lit flank. ef == 1.0 at uEdgeK 0 (bit-identical).
+    float ef = edgeFlat(wN);
+    vec3 wN2 = rockNrm(vWPos, wN, bw, R_DET, 0.9 * ef);
+    wN2 = normalize(mix(wN2, rockNrm(vWPos + vec3(7.3, 2.9, 5.1), wN, bw, R_MAC, 0.7 * ef), 0.35));
     float resolved = 1.0 - smoothstep(0.6, 3.0, length(fwidth(vWPos)) * 130.0);
     float fine = rockDet(vWPos, 9.5) * 0.5 + rockDet(vWPos, 23.0) * 0.25;
-    wN2 = rockRelief(wN2, (fine * 0.012 + (pd.b - 0.5) * 0.02) * resolved, 1.0);
+    wN2 = rockRelief(wN2, (fine * 0.012 + (pd.b - 0.5) * 0.02) * resolved, ef);
     normal = normalize((viewMatrix * vec4(wN2, 0.0)).xyz);
     // Roughness from the bake; wet sheen = a Fresnel-shaped roughness drop that only
     // exists near the camera (stone under the lantern is wet, stone at 20 u is fog).
@@ -169,6 +177,9 @@ float gmask = vFlora.x;
     float fr = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 3.0);
     float wet = uWet * (1.0 - smoothstep(5.0, 22.0, length(vViewPosition)));
     roughnessFactor = clamp(roughnessFactor * mix(0.72, 1.22, rgh) - wet * (0.16 + 0.22 * fr), 0.32, 1.0);
+    // PAINT LAW floor for the shader-driven roughness (the material's own roughness is
+    // already lifted by lib/paint.js; this keeps the wet sheen from undercutting it).
+    roughnessFactor = max(roughnessFactor, 0.75 * uPaintK);
     diffuseColor.rgb *= 1.0 - 0.10 * wet;
   }
 #endif
@@ -226,9 +237,16 @@ function floraMat(o) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>' + F_HEAD)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{' + F_BODY + '\n}');
+    if (o.rockSet) Object.assign(sh.uniforms, { uEdgeK: styleUniforms.uEdgeK, uEdgeSun: styleUniforms.uEdgeSun, uPaintK: styleUniforms.uPaintK });
+    else {
+      // SILHOUETTE STROKES (lib/paint.js): organic flora only — never the rocks.
+      Object.assign(sh.uniforms, { uStrokeK: styleUniforms.uStrokeK });
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <color_fragment>', '#include <color_fragment>\n{' + STROKE_BODY + '}');
+    }
   };
   m.customProgramCacheKey = () => 'flora|' + o.key;
-  return m;
+  return registerPaint(m);
 }
 
 // ------------------------------------------------------------- geometry ------
@@ -861,6 +879,7 @@ export function reseedFlora() {
 
 export function updateFlora(dt, t) {
   uni.uTime.value = t;
+  styleTick();   // the ONE per-frame poll of the style dial (lib/paint.js)
   const a = CUR0 + 0.5 * Math.sin(t * 0.055);
   uni.uCur.value.set(Math.cos(a), Math.sin(a));
   // Only the zone(s) around the camera are submitted; the rest cost nothing.

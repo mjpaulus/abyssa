@@ -10,6 +10,7 @@
 // into an existing albedo, never to replace it.
 import * as THREE from 'three';
 import { maxAniso } from './textures.js';
+import { styleUniforms, EDGE_GLSL } from './paint.js';
 
 const BASE = 'assets/textures/';
 
@@ -51,7 +52,9 @@ export const pbrUniforms = {
   uPNS: { value: PBR.nSilt },
   uPNG: { value: PBR.nSed },
   uPNR: { value: PBR.nRock },
-  uTexAmt: texAmt
+  uTexAmt: texAmt,
+  // Style dial (lib/paint.js): edge-not-middle flattening + the paint floor, shared objects.
+  uEdgeK: styleUniforms.uEdgeK, uEdgeSun: styleUniforms.uEdgeSun, uPaintK: styleUniforms.uPaintK
 };
 
 // ---------------------------------------------------------------------------
@@ -60,9 +63,9 @@ export const pbrUniforms = {
 // scales are only ever near 50/50 inside narrow transition bands (a constant 0.5
 // blend would halve contrast everywhere).
 // ---------------------------------------------------------------------------
-export const PBR_GLSL = /* glsl */`
+export const PBR_GLSL = EDGE_GLSL + /* glsl */`
 uniform sampler2D uPAlb, uPRgh, uPNS, uPNG, uPNR;
-uniform float uTexAmt;
+uniform float uTexAmt; uniform float uPaintK;
 
 const float PBR_NEAR = 0.125;   // 1 repeat / 8 world units
 const float PBR_FAR  = 0.0222;  // 1 repeat / 45 world units
@@ -92,6 +95,9 @@ vec3 pbrNrmUV(vec2 uv, vec3 w, float f) {
 // Whiteout triplanar for the sediment normals, matching the convention the
 // procedural rock normal already uses so the two can simply be summed.
 vec3 pbrNormal(vec3 p, vec3 n, vec3 bw, vec3 w, float f, float str) {
+  // EDGE-NOT-MIDDLE (lib/paint.js): relief contrast dissolves on lit faces of the
+  // geometric normal, survives in the shadow/edge transitions. Identity at uEdgeK 0.
+  str *= edgeFlat(n);
   vec3 ty = pbrNrmUV(p.xz, w, f);
   if (bw.y > 0.93) return vec3(ty.x * str, 0.0, ty.y * str);
   vec3 tx = pbrNrmUV(p.zy, w, f);
