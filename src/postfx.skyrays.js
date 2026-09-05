@@ -186,7 +186,7 @@ export class SkyRaysPass extends Pass {
         uDomeK: { value: 0.85 }, uHorizon: { value: 0.03 },
         ...SKY_UNIFORMS
       },
-      vertexShader: VERT, fragmentShader: MASK_FRAG, depthTest: false, depthWrite: false
+      vertexShader: VERT, fragmentShader: MASK_FRAG, depthTest: false, depthWrite: false, toneMapped: false
     });
     this.maskScene = mkScene(this.maskMaterial);
 
@@ -196,7 +196,7 @@ export class SkyRaysPass extends Pass {
         tSrc: { value: null }, uSun: { value: new THREE.Vector2(0.5, 0.5) },
         uReach: { value: 0.4 }, uDecay: { value: 0.93 }, uTaps: { value: 24 }
       },
-      vertexShader: VERT, fragmentShader: BLUR_FRAG, depthTest: false, depthWrite: false
+      vertexShader: VERT, fragmentShader: BLUR_FRAG, depthTest: false, depthWrite: false, toneMapped: false
     });
     this.blurScene = mkScene(this.blurMaterial);
 
@@ -208,7 +208,7 @@ export class SkyRaysPass extends Pass {
         uNear: { value: 0.1 }, uFar: { value: 700 }, uKAir: { value: K_AIR_G }, uNearK: { value: 0 },
         uCap: { value: 0.3 }, uGain: { value: 1 }, uSunW: { value: 1 }, uShadow: { value: 0.35 }
       },
-      vertexShader: VERT, fragmentShader: COMP_FRAG, depthTest: false, depthWrite: false
+      vertexShader: VERT, fragmentShader: COMP_FRAG, depthTest: false, depthWrite: false, toneMapped: false
     });
 
     this.resDiv = 2;
@@ -216,7 +216,12 @@ export class SkyRaysPass extends Pass {
     // Probe state, read by window.__rays: why the pass skipped, the frame's weights.
     this.state = { on: false, why: 'boot', cov: 0, win: 0, off: 0, sunUV: [0, 0], air: 0, gain: 0, cap: 0, sunK: 0, frames: 0 };
 
-    // BOOT COMPILE. Everything this pass will ever draw is compiled here. The occluder
+    // BOOT COMPILE. Everything this pass will ever draw is compiled here. toneMapped is
+    // FALSE on all four materials for a reason: three picks the tone-mapping program
+    // variant by whether the CURRENT render target is the canvas, so a material compiled
+    // against the canvas at boot and drawn into a target later is a second program,
+    // compiled mid-game (measured: +4 programs on the first fan). With toneMapped off
+    // the variant is the same either way, and the buffer is not tone-mapped here anyway. The occluder
     // scene exists once buildClouds has run (game.js builds the world before postfx's
     // first render, but this constructor runs at module scope), so it is compiled on the
     // first render if it was not ready here -- still before any real fan is drawn, and

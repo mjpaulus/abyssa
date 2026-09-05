@@ -412,7 +412,7 @@ export function buildClouds() {
       uFade: mat.uniforms.uFade, uHaze: mat.uniforms.uHaze,
       uOccK: { value: new THREE.Vector2(1, 1) }
     },
-    transparent: true, depthWrite: false, depthTest: false, fog: false,
+    transparent: true, depthWrite: false, depthTest: false, fog: false, toneMapped: false,
     side: THREE.DoubleSide, forceSinglePass: true, blending: THREE.NormalBlending,
     vertexShader: `
       attribute vec3 aPos; attribute vec4 aP; attribute vec4 aMod;
