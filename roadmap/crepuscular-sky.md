@@ -17,3 +17,6 @@ D. TWO-LAYER DECK: the day hand gets a `layers` field: a low dark stratus deck (
 E. LAB: knobs for ray strength, decay, hole bias, lining strength; a "MICHAEL'S ROAD" preset (coverage 0.72, low deck 0.6, sun 25° behind the deck, haze 0.6).
 
 GATES: never neon (rays are haze-lit, values compressed like the photo — the brightest ray is dimmer than the hole); the storm lid stays a lid (rays die at cov > 0.9); performance: the occlusion pass is half-res and skipped when the camera is below the surface or the sun is > 40° off-screen; zero new programs at runtime. Judge against the photo: the fan should read as light in the air, converging behind the cloud, silver at the edges.
+
+## Log
+- 2026-09-05 — BUILT on branch `crepuscular` (agent round, not merged): `src/postfx.skyrays.js` (half-res sun-visibility mask = dome coverage chunk + puff occluders + depth gate, 2x radial blur toward the clamped sun point, additive composite read against the mask's mean, haze-weighted by depth, soft-capped at 0.6x the hole); clouds.js two-layer deck off the new hand field `layers` (last draw of the hand, pool split, one draw call), silver-lining rim + CPU self-shadow; GLASS.rays knobs + MICHAEL'S ROAD preset in the lab. Measured: 1.1 ms GPU at 1788x1812, zero programs on first fan, gates (clear/lid/night/underwater/off-screen) verified. Orchestrator to review + merge.

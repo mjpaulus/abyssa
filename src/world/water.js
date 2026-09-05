@@ -154,7 +154,7 @@ const f = v => v.toFixed(5);
 const v3 = a => `vec3(${f(a[0])},${f(a[1])},${f(a[2])})`;
 const v2 = a => `vec2(${f(a[0])},${f(a[1])})`;
 
-const GLSL_NOISE = `
+export const GLSL_NOISE = `
 float h21(vec2 p){vec3 q=fract(vec3(p.xyx)*0.1031);q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}
 float vn(vec2 p){vec2 i=floor(p),g=fract(p);g=g*g*(3.0-2.0*g);
 return mix(mix(h21(i),h21(i+vec2(1,0)),g.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),g.x),g.y);}
@@ -473,6 +473,40 @@ vec3 airFog( vec3 c, float upness, float distK ){
 //   the exact expression game.js:315 builds surfK from. That inversion is only valid
 //   while that expression is; passing day/flash explicitly is a one-line wiring change
 //   and is the preferred form.
+// THE COVERAGE ALONE, for the crepuscular-ray occlusion mask (postfx.skyrays.js). The
+// same expressions as the coverage half of skyRadiance above, line for line, minus the
+// colour work and minus uCloudDome (the mask wants the FIELD, not the painted layer's
+// faded share of it). Requires GLSL_NOISE + GLSL_SKY_DECL, and the SKY_UNIFORMS map, so
+// the hole the rays fan out of is exactly where the dome and the sea both draw sky.
+// Kept BESIDE skyRadiance rather than refactored out of it: the dome/sea shader text is
+// a regression anchor and this must never change a byte of it.
+export const GLSL_SKY_COVERAGE = `
+float skyCloudAmt( vec3 d ){
+  float up = clamp( d.y, 0.0, 1.0 );
+  if ( uCloudCov <= 0.005 ) return 0.0;
+  vec2 uv = ( d.xz / ( up + 0.10 ) ) * uCloudScale + uCloudDrift;
+  float fv = fbm2( uv );
+  float open = smoothstep( uCloudIsl.y, uCloudIsl.y + uCloudIsl.z,
+                           vn( uv * uCloudIsl.x + vec2( 17.3, 5.9 ) ) );
+  float rag = vn( uv * uCloudShp.x + vec2( 41.7, 23.1 ) ) - 0.5;
+  float dens = fv + uCloudShp.y * rag;
+  float thr = 0.72 - 0.50 * uCloudCov
+            + uCloudIsl.w * ( 1.0 - 2.0 * open )
+            + uCloudShp.z * smoothstep( 0.35, 0.95, up );
+  float amt = smoothstep( thr, thr + uCloudSoft, dens ) * smoothstep( 0.008, 0.075, up );
+  amt *= 1.0 - ${f(GLASS.cloud.hazeK)} * ( 1.0 - smoothstep( 0.0, uCloudShp.w, up ) );
+  return amt;
+}`;
+
+// The per-frame sky numbers the ray pass reads (crepuscular-sky). Written at the end of
+// updateWater, after skyDrama has resolved them; a reused object, never copied.
+//   cov    resolved cloud coverage (the fog crush included) — the ray WINDOW's input
+//   disc   the sun disc palette this frame (scene-linear) — the rays' hue
+//   hor    the horizon radiance this frame — the hole's own brightness, the rays' cap
+//   discK  fog's cut on the disc (0 = no sun to fan out of)
+//   fog    marine-layer amount; air = the camera's air/water blend (1 = in air)
+export const skyState = { cov: 0, disc: [0, 0, 0], hor: [0, 0, 0], discK: 1, fog: 0, air: 0, lid: 0 };
+
 let wSurfK = 1, wMurk = 0, rayDim = 1, wDay = 1, wFlash = 0;
 // weather.js's single envelope. Until game.js wires it, BOTH default to raw murk, which
 // is bit-for-bit what shipped. sky drives the palette and the sky material; sea drives
@@ -1038,12 +1072,12 @@ const uFog = { value: 0 };
 const uFogCol = { value: new THREE.Vector3() };
 // One declaration block, injected into both fragment shaders so the two can never
 // disagree about what skyRadiance/airFog need.
-const GLSL_SKY_DECL = `uniform vec2 uCloudDrift, uSunUV, uCloudFrm2;
+export const GLSL_SKY_DECL = `uniform vec2 uCloudDrift, uSunUV, uCloudFrm2;
 uniform float uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudBak, uCloudDome, uDiscK, uMoonR, uFog;
 uniform vec3 uCloudLit, uCloudBase, uMoonDir, uMoonRight, uMoonCol, uFogCol;
 uniform vec4 uMoonPh, uCloudIsl, uCloudShp, uCloudFrm;`;
 // The uniform map half of the same pairing.
-const SKY_UNIFORMS = {
+export const SKY_UNIFORMS = {
   uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
   uCloudIsl, uCloudShp, uCloudBak, uCloudDome, uCloudFrm, uCloudFrm2,
   uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol,
@@ -3490,6 +3524,12 @@ export function updateWater(dt, t) {
   // glitter widens by and normalises to, so the lobe tracks the disc through a storm.
   uGlit.value.set(GLASS.chop.glitterDiscK * 1.177 / Math.sqrt(uSunSize.value), 6.2831853 / (uSunSize.value + 1));
   updateFoamAcc(dt);
+  // crepuscular-sky: publish this frame's resolved sky for postfx.skyrays.js.
+  skyState.cov = uCloudCov.value;
+  skyState.disc[0] = _pDisc[0]; skyState.disc[1] = _pDisc[1]; skyState.disc[2] = _pDisc[2];
+  skyState.hor[0] = _pHor[0]; skyState.hor[1] = _pHor[1]; skyState.hor[2] = _pHor[2];
+  skyState.discK = uDiscK.value; skyState.fog = uFog.value; skyState.air = uAir.value;
+  skyState.lid = cloudLook.lid;
 
   if (surface.visible) {
     const su = surface.material.uniforms;

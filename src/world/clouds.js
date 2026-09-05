@@ -52,7 +52,7 @@
 import * as THREE from 'three';
 import { scene, camera, renderer } from '../core.js';
 import { SUN, GLASS } from '../config.js';
-import { windState, airAmbience, cloudLook } from './water.js';
+import { windState, airAmbience, cloudLook, skyState } from './water.js';
 
 const TAU = Math.PI * 2;
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
@@ -81,11 +81,17 @@ const cR = new Float32Array(MAXC);            // half-width
 const cN = new Int32Array(MAXC);              // puff count
 const cB = new Int32Array(MAXC);              // first puff index
 const cA = new Float32Array(MAXC);            // per-cluster alpha (spawn fade-in)
+const cLay = new Int32Array(MAXC);            // 0 = high torn cumulus, 1 = the LOW DECK
 // per puff, static for the day
 const pX = new Float32Array(MAXI), pY = new Float32Array(MAXI), pZ = new Float32Array(MAXI);
 const pNX = new Float32Array(MAXI), pNY = new Float32Array(MAXI), pNZ = new Float32Array(MAXI);
 const pRad = new Float32Array(MAXI), pPh = new Float32Array(MAXI);
 const pHgt = new Float32Array(MAXI), pYS = new Float32Array(MAXI);
+// SELF-SHADOW (ref-cloud-selfshadow): how much of each puff is shaded by the puffs of
+// its own cluster that sit between it and the sun. Walked on the CPU only when the sun
+// has moved (~0.6 degrees) or the deal changed; 480 x 30 compares, a few times a minute.
+const pSh = new Float32Array(MAXI);
+let shSunX = 9, shSunY = 9, shSunZ = 9;
 // per puff, per frame
 const wX = new Float32Array(MAXI), wY = new Float32Array(MAXI), wZ = new Float32Array(MAXI);
 const key = new Float32Array(MAXI);
@@ -95,6 +101,7 @@ const srcI = new Int32Array(MAXI), srcC = new Int32Array(MAXI);
 
 let nC = 0, nI = 0, dealtDay = -999;
 let mesh = null, mat = null, geo = null;
+let matOcc = null, occMesh = null, occScene = null;
 let aPos, aOffN, aP, aMod;   // InstancedBufferAttributes
 let hand = null, storm = 0;
 let rnd = null;
@@ -156,18 +163,34 @@ function deal(dayIndex, camX, camZ) {
   nC = Math.round(nMin + (nMax - nMin) * clouds);
   const pMin = Math.min(MAXP, Math.max(3, P.pMin | 0));
   const pMax = Math.min(MAXP, Math.max(pMin, P.pMax | 0));
+  // THE TWO-LAYER DECK (crepuscular-sky). The hand's `layers` turns a share of the SAME
+  // pool into a low, flat, dark stratus layer under the cumulus: bigger and flatter
+  // clusters, dealt nearer so they sit at the elevations a low sun has to shine through,
+  // drifting slower. The pool is split, never grown — still one instanced draw. The
+  // low clusters are dealt LAST so the high layer's own draws are the ones that shipped.
+  const layers = clamp((hand ? hand.layers : 0) * (GLASS.rays ? GLASS.rays.lowDeck : 1), 0, 1);
+  const nLow = Math.min(nC - 1, Math.round(nC * P.lowShare * layers));
 
   let k = 0;
   for (let i = 0; i < nC; i++) {
-    const ang = rnd() * TAU;
+    const low = i >= nC - nLow;
+    cLay[i] = low ? 1 : 0;
+    // The low deck is dealt across the SUN'S SWEEP (azimCenter +/- 90 degrees, a
+    // config constant, so still a pure function of the day): a stratus layer that the
+    // day's sun has to pass behind is the whole reason it exists. The high layer keeps
+    // its all-round deal.
+    const ang = low ? GLASS.sun.azimCenter * (Math.PI / 180) + (rnd() * 2 - 1) * 1.57 : rnd() * TAU;
     // area-uniform over the annulus -> most clusters far -> a low band, by perspective
     const rr = Math.sqrt(0.05 + 0.95 * rnd());
-    const rad = P.rIn + (P.rOut - P.rIn) * rr;
+    // The low deck is dealt NEAR (0.6..0.42 of the cumulus annulus): at 80..230 units a
+    // 60..85-unit altitude subtends 15..45 degrees, which is the band a late sun crosses.
+    const rad = low ? P.rIn * 0.6 + (P.rOut * 0.42 - P.rIn * 0.6) * rr
+                    : P.rIn + (P.rOut - P.rIn) * rr;
     cX[i] = camX + Math.cos(ang) * rad;
     cZ[i] = camZ + Math.sin(ang) * rad;
-    cY[i] = P.yLo + (P.yHi - P.yLo) * rnd();
+    cY[i] = low ? P.lowYLo + (P.lowYHi - P.lowYLo) * rnd() : P.yLo + (P.yHi - P.yLo) * rnd();
     // far clusters get to be bigger, so the annulus does not read as "everything shrinks"
-    cR[i] = (P.sizeMin + (P.sizeMax - P.sizeMin) * rnd()) * (0.72 + 0.55 * rr);
+    cR[i] = (P.sizeMin + (P.sizeMax - P.sizeMin) * rnd()) * (0.72 + 0.55 * rr) * (low ? P.lowSize : 1);
     cA[i] = 1;
     const np = pMin + Math.floor(rnd() * (pMax - pMin + 1));
     cB[i] = k;
@@ -177,7 +200,8 @@ function deal(dayIndex, camX, camZ) {
       let ux, uz, q;
       do { ux = rnd() * 2 - 1; uz = rnd() * 2 - 1; q = ux * ux + uz * uz; } while (q > 1);
       const dome = Math.sqrt(1 - q);
-      const yBot = -0.16, yTop = 0.10 + 0.62 * dome;
+      // the low deck is a SLAB: a shallow dome over the same flat floor
+      const yBot = -0.16, yTop = low ? 0.02 + 0.20 * dome : 0.10 + 0.62 * dome;
       // pow < 1 crowds the draw toward the top, which is where the volume actually is —
       // a uniform draw put as many puffs in the skirt as in the massif and read as a ball
       const hg = Math.pow(rnd(), 0.72);
@@ -192,12 +216,47 @@ function deal(dayIndex, camX, camZ) {
       pNX[k] = nx / nl; pNY[k] = ny / nl; pNZ[k] = nz / nl;
       // bases are bigger and flatter, crowns smaller and rounder
       pRad[k] = R * (P.puffLo + (P.puffHi - P.puffLo) * rnd()) * (1.18 - 0.34 * pHgt[k]);
-      pYS[k] = P.flatBase + (1 - P.flatBase) * pHgt[k];
+      pYS[k] = low ? P.lowFlat : P.flatBase + (1 - P.flatBase) * pHgt[k];
       pPh[k] = rnd() * TAU;
     }
   }
   nI = k;
   dealtDay = dayIndex;
+  shSunX = 9;   // force the self-shadow walk on the next frame
+}
+
+// SELF-SHADOW WALK. For every puff, the puffs of its own cluster that lie sunward of it
+// (positive projection on the sun axis) and whose disc the sun line passes through
+// shade it; each such occluder takes a share, multiplied through so a deep interior
+// puff ends up dark and a rim puff stays lit. Cluster-local, so it never depends on the
+// wind drift, and the storm flattening is ignored (a lid is shadeless anyway). Runs only
+// when the sun has moved by ~0.6 degrees since the last walk.
+function selfShadow() {
+  const sx = SUN.dir.x, sy = SUN.dir.y, sz = SUN.dir.z;
+  const d = Math.abs(sx - shSunX) + Math.abs(sy - shSunY) + Math.abs(sz - shSunZ);
+  if (d < 0.01) return false;
+  shSunX = sx; shSunY = sy; shSunZ = sz;
+  for (let i = 0; i < nC; i++) {
+    const b = cB[i], n = cN[i];
+    for (let j = 0; j < n; j++) {
+      const s = b + j;
+      let vis = 1;
+      for (let m = 0; m < n; m++) {
+        if (m === j) continue;
+        const o = b + m;
+        const dx = pX[o] - pX[s], dy = pY[o] - pY[s], dz = pZ[o] - pZ[s];
+        const proj = dx * sx + dy * sy + dz * sz;
+        if (proj <= pRad[o] * 0.25) continue;                  // not sunward of us
+        const ex = dx - sx * proj, ey = dy - sy * proj, ez = dz - sz * proj;
+        const perp = Math.sqrt(ex * ex + ey * ey + ez * ez);
+        // soft disc: full inside 0.45 r, gone at 0.95 r
+        const cov = clamp((pRad[o] * 0.95 - perp) / (pRad[o] * 0.5), 0, 1);
+        if (cov > 0) vis *= 1 - 0.42 * cov;
+      }
+      pSh[s] = 1 - vis;
+    }
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +270,8 @@ export function buildClouds() {
   aPos = new THREE.InstancedBufferAttribute(new Float32Array(MAXI * 3), 3);
   aOffN = new THREE.InstancedBufferAttribute(new Float32Array(MAXI * 3), 3);
   aP = new THREE.InstancedBufferAttribute(new Float32Array(MAXI * 4), 4);
-  aMod = new THREE.InstancedBufferAttribute(new Float32Array(MAXI * 2), 2);
+  // (cluster alpha, cluster shade, layer 0/1, self-shadow 0..1)
+  aMod = new THREE.InstancedBufferAttribute(new Float32Array(MAXI * 4), 4);
   for (const a of [aPos, aOffN, aP, aMod]) a.setUsage(THREE.DynamicDrawUsage);
   geo.setAttribute('aPos', aPos);
   geo.setAttribute('aOffN', aOffN);
@@ -232,7 +292,11 @@ export function buildClouds() {
       uBak: { value: 0 },
       uFrm: { value: new THREE.Vector4(P.shade, P.base, P.crown, 0) },
       uFade: { value: new THREE.Vector2(P.fadeNear, P.fadeFar) },
-      uHaze: { value: new THREE.Vector2(GLASS.cloud.hazeUp, GLASS.cloud.hazeK) }
+      uHaze: { value: new THREE.Vector2(GLASS.cloud.hazeUp, GLASS.cloud.hazeK) },
+      // SILVER LINING (crepuscular-sky): rim colour (the sun disc's hue at the lit
+      // cloud's brightness) and (lining strength, self-shadow depth, low-deck shade).
+      uSil: { value: new THREE.Vector3(0.6, 0.58, 0.5) },
+      uLin: { value: new THREE.Vector3(GLASS.rays.lining, P.selfShadow, P.lowShade) }
     },
     transparent: true,
     depthWrite: false,
@@ -249,15 +313,15 @@ export function buildClouds() {
       attribute vec3 aPos;    // puff world position
       attribute vec3 aOffN;   // outward normal of the puff on its cluster
       attribute vec4 aP;      // radius, phase, height 0..1, vertical squash
-      attribute vec2 aMod;    // cluster alpha, cluster shade
+      attribute vec4 aMod;    // cluster alpha, cluster shade, layer, self-shadow
       uniform float uTime, uBak;
-      uniform vec3 uSunDir, uLit, uBase;
+      uniform vec3 uSunDir, uLit, uBase, uLin;
       uniform vec4 uFrm;      // flank shade, base darkening, crown highlight
       uniform vec2 uFade;     // fade near, fade far
       uniform vec2 uHaze;     // milky band top (upness), milky band strength
       varying vec2 vUv;
       varying vec3 vCol;
-      varying float vA;
+      varying float vA, vBak;
       void main() {
         vUv = uv;
         // THE BILLOW. Tiny on purpose: a cloud that visibly breathes is a cartoon. This
@@ -280,11 +344,22 @@ export function buildClouds() {
         // skyRadiance (pow 2.2 * 0.88), driven by the identical uCloudBak. At noon uBak
         // is 0 and this line does nothing.
         k = mix( k, pow( k, 2.2 ) * 0.88, uBak );
-        vCol = mix( uBase, uLit, k ) * aMod.y;
+        // SELF-SHADOW: the puffs sunward of this one in its cluster (CPU walk, aMod.w).
+        k *= 1.0 - uLin.y * aMod.w;
+        // THE LOW DECK sits in its own shade: a stratus underside seen from below.
+        k *= mix( 1.0, uLin.z, aMod.z );
 
         vec3 rel = wp - cameraPosition;
         float dist = length( rel );
         float upn = rel.y / max( dist, 1e-4 );
+        // SILVER LINING. When the sun is BEHIND this puff relative to the eye the light
+        // leaks around its edge (forward scatter through the thin rim) while the body
+        // stays dark: the rim is drawn in the fragment over the alpha 0.1..0.5 band, the
+        // body is pulled down here. A puff shaded by its own cluster gets less rim.
+        float bl = smoothstep( 0.55, 0.97, dot( rel / max( dist, 1e-4 ), uSunDir ) );
+        vBak = bl * uLin.x * ( 1.0 - 0.7 * aMod.w );
+        k *= 1.0 - 0.32 * bl * uLin.x;
+        vCol = mix( uBase, uLit, k ) * aMod.y;
         float a = aMod.x;
         // DISTANCE HAZE, ours and not the global fog chunk's: the puffs dissolve into the
         // painted dome before the 700-unit far plane can ever clip one.
@@ -301,13 +376,18 @@ export function buildClouds() {
       }`,
     fragmentShader: `
       uniform sampler2D uMap;
+      uniform vec3 uSil;
       varying vec2 vUv;
       varying vec3 vCol;
-      varying float vA;
+      varying float vA, vBak;
       void main() {
-        float a = texture2D( uMap, vUv ).a * vA;
+        float ta = texture2D( uMap, vUv ).a;
+        float a = ta * vA;
         if ( a < 0.004 ) discard;
-        gl_FragColor = vec4( vCol, a );
+        // the rim band of the disc profile: thin cloud, where transmittance lets the
+        // backlight through. Both smoothsteps ascend (reversed edges are UB).
+        float rim = smoothstep( 0.05, 0.20, ta ) * ( 1.0 - smoothstep( 0.30, 0.55, ta ) );
+        gl_FragColor = vec4( vCol + uSil * ( rim * vBak ), a );
       }`
   });
   // creatures.js's hazard: three silently shares a compiled program between materials
@@ -320,7 +400,62 @@ export function buildClouds() {
   mesh.renderOrder = -2;   // before the sea surface (-1); see the header
   mesh.visible = false;
   scene.add(mesh);
+
+  // THE OCCLUDER (crepuscular-sky). A second mesh on the SAME instanced geometry, in its
+  // own tiny scene, drawn by postfx.skyrays.js into its half-res sun-visibility mask:
+  // the puffs as alpha, nothing else. Same billboard/fade maths (so a puff occludes the
+  // sun exactly where it is drawn), darkening a white sky by its alpha. uOccK weights the
+  // two layers -- holeBias hands the hole to the LOW deck by thinning the high torn layer
+  // to a veil in the mask. Built here at boot, compiled by the pass at boot: no program
+  // is ever created at runtime.
+  matOcc = new THREE.ShaderMaterial({
+    uniforms: {
+      uMap: mat.uniforms.uMap, uTime: mat.uniforms.uTime,
+      uFade: mat.uniforms.uFade, uHaze: mat.uniforms.uHaze,
+      uOccK: { value: new THREE.Vector2(1, 1) }
+    },
+    transparent: true, depthWrite: false, depthTest: false, fog: false, toneMapped: false,
+    side: THREE.DoubleSide, forceSinglePass: true, blending: THREE.NormalBlending,
+    vertexShader: `
+      attribute vec3 aPos; attribute vec4 aP; attribute vec4 aMod;
+      uniform float uTime; uniform vec2 uFade, uHaze, uOccK;
+      varying vec2 vUv; varying float vA;
+      void main() {
+        vUv = uv;
+        vec3 wp = aPos;
+        wp.y += sin( uTime * 0.11 + aP.y ) * aP.x * 0.05;
+        wp.x += cos( uTime * 0.087 + aP.y * 1.3 ) * aP.x * 0.04;
+        vec3 rel = wp - cameraPosition;
+        float dist = length( rel );
+        float upn = rel.y / max( dist, 1e-4 );
+        float a = aMod.x * smoothstep( uFade.y, uFade.x, dist );
+        a *= 1.0 - uHaze.y * ( 1.0 - smoothstep( 0.0, uHaze.x, upn ) );
+        vA = a * mix( uOccK.x, uOccK.y, aMod.z );
+        float rad = aP.x * ( 1.0 + 0.045 * sin( uTime * 0.17 + aP.y * 1.7 ) );
+        vec4 mv = viewMatrix * vec4( wp, 1.0 );
+        mv.xy += position.xy * rad * vec2( 1.0, aP.w );
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `
+      uniform sampler2D uMap; varying vec2 vUv; varying float vA;
+      void main() {
+        float a = texture2D( uMap, vUv ).a * vA;
+        if ( a < 0.004 ) discard;
+        gl_FragColor = vec4( 0.0, 0.0, 0.0, a );
+      }`
+  });
+  matOcc.customProgramCacheKey = () => 'abyssa-puffcloud-occ-v1';
+  occMesh = new THREE.Mesh(geo, matOcc);
+  occMesh.frustumCulled = false;
+  occMesh.visible = false;
+  occScene = new THREE.Scene();
+  occScene.add(occMesh);
 }
+
+// The occluder scene for postfx.skyrays.js (render it with the main camera into the
+// mask target). null until buildClouds has run. `occK(high, low)` weights the layers.
+export function cloudOccluder() { return occScene; }
+export function cloudOccK(high, low) { if (matOcc) matOcc.uniforms.uOccK.value.set(high, low); }
 
 // Called by game.js beside setWeatherHand. Storage only — the hand object is the one
 // weather.js reuses forever, so this is a reference, never a copy.
@@ -345,8 +480,9 @@ export function updateClouds(dt, t) {
   const stormFade = 1 - ms(storm, 0.55, 0.95);
   const fogFade = 1 - 0.95 * clamp(airAmbience.fog, 0, 1);
   const gAlpha = P.alpha * stormFade * fogFade;
-  if (gAlpha < 0.004 || nC === 0) { mesh.visible = false; geo.instanceCount = 0; return; }
-  mesh.visible = true;
+  if (gAlpha < 0.004 || nC === 0) { mesh.visible = false; occMesh.visible = false; geo.instanceCount = 0; return; }
+  mesh.visible = true; occMesh.visible = true;
+  selfShadow();
 
   // --- live look, straight off water.js's palette ------------------------------------
   const u = mat.uniforms;
@@ -362,6 +498,15 @@ export function updateClouds(dt, t) {
   u.uFrm.value.set(P.shade * frm, P.base * frm * (1 - cloudLook.bak), P.crown * frm, 0);
   u.uFade.value.set(P.fadeNear, P.fadeFar);
   u.uHaze.value.set(GLASS.cloud.hazeUp, GLASS.cloud.hazeK);
+  // SILVER LINING colour: the sun disc's hue (water.js's own palette, so dawn's rim is
+  // amber and noon's is white) at a touch over the lit cloud's brightness, and dying
+  // with the storm (a lid has no sun behind it) and with the marine layer's cut.
+  {
+    const d = skyState.disc, m = Math.max(d[0], d[1], d[2], 1e-4);
+    const lum = (0.2126 * u.uLit.value.x + 0.7152 * u.uLit.value.y + 0.0722 * u.uLit.value.z) * 2.0;
+    u.uSil.value.set(d[0] / m * lum, d[1] / m * lum, d[2] / m * lum);
+    u.uLin.value.set(GLASS.rays.lining * (1 - storm) * skyState.discK, P.selfShadow * (1 - storm), P.lowShade);
+  }
 
   // --- drift + wrap -------------------------------------------------------------------
   const w = windState();
@@ -375,7 +520,8 @@ export function updateClouds(dt, t) {
 
   let k = 0;
   for (let i = 0; i < nC; i++) {
-    cX[i] += dx; cZ[i] += dz;
+    const lowK = cLay[i] ? P.lowDrift : 1;   // the low deck drifts slower
+    cX[i] += dx * lowK; cZ[i] += dz * lowK;
     let ox = cX[i] - camX, oz = cZ[i] - camZ;
     if (ox * ox + oz * oz > wrap2) {
       // RESPAWN UPWIND. Placed at the far edge, where its own distance fade already has
@@ -425,16 +571,16 @@ export function updateClouds(dt, t) {
   const ap = aPos.array, an = aOffN.array, apr = aP.array, am = aMod.array;
   for (let o = 0; o < n; o++) {
     const q = order[o], s = srcI[q], c = srcC[q];
-    let p3 = o * 3, p4 = o * 4, p2 = o * 2;
+    let p3 = o * 3, p4 = o * 4;
     ap[p3] = wX[q]; ap[p3 + 1] = wY[q]; ap[p3 + 2] = wZ[q];
     an[p3] = pNX[s]; an[p3 + 1] = pNY[s]; an[p3 + 2] = pNZ[s];
     apr[p4] = pRad[s]; apr[p4 + 1] = pPh[s]; apr[p4 + 2] = pHgt[s];
     apr[p4 + 3] = pYS[s] * flat;
-    am[p2] = gAlpha * cA[c]; am[p2 + 1] = shade;
+    am[p4] = gAlpha * cA[c]; am[p4 + 1] = shade; am[p4 + 2] = cLay[c]; am[p4 + 3] = pSh[s];
   }
   aPos.needsUpdate = aOffN.needsUpdate = aP.needsUpdate = aMod.needsUpdate = true;
   aPos.addUpdateRange(0, n * 3); aOffN.addUpdateRange(0, n * 3);
-  aP.addUpdateRange(0, n * 4); aMod.addUpdateRange(0, n * 2);
+  aP.addUpdateRange(0, n * 4); aMod.addUpdateRange(0, n * 4);
   geo.instanceCount = n;
 }
 
@@ -535,7 +681,11 @@ if (typeof window !== 'undefined') {
                facingPlusX: r(ex / Math.max(1, exN)), facingMinusX: r(we / Math.max(1, weN)) };
     },
     probe() {
-      const out = { n: nC, instances: nI, drawn: geo ? geo.instanceCount : 0,
+      let nLow = 0, shSum = 0;
+      for (let i = 0; i < nC; i++) nLow += cLay[i];
+      for (let s = 0; s < nI; s++) shSum += pSh[s];
+      const out = { n: nC, nLow, layers: hand ? hand.layers : 0, meanShadow: +(shSum / Math.max(1, nI)).toFixed(3),
+                    instances: nI, drawn: geo ? geo.instanceCount : 0,
                     day: dealtDay, storm, fog: airAmbience.fog,
                     dome: cloudLook.dome, bak: cloudLook.bak,
                     sun: [SUN.dir.x, SUN.dir.y, SUN.dir.z], elev: SUN.elevDeg,
@@ -545,7 +695,7 @@ if (typeof window !== 'undefined') {
       for (let i = 0; i < nC; i++) {
         const dxx = cX[i] - camera.position.x, dzz = cZ[i] - camera.position.z;
         out.clusters.push({ x: +cX[i].toFixed(1), y: +cY[i].toFixed(1), z: +cZ[i].toFixed(1),
-                            r: +cR[i].toFixed(1), n: cN[i], a: +cA[i].toFixed(2),
+                            r: +cR[i].toFixed(1), n: cN[i], a: +cA[i].toFixed(2), low: cLay[i],
                             d: +Math.hypot(dxx, dzz).toFixed(1) });
       }
       return out;
