@@ -537,7 +537,17 @@ if (typeof window !== 'undefined') {
                bokeh: dof.bokehScale, air, subject: !!subj, subjDist }
     }),
     diff: styleDiff,
-    capture: () => afterFrames(1).then(captureLinear)
+    capture: () => afterFrames(1).then(captureLinear),
+    // A region of the DRAWN frame as RGBA bytes (top-down rows), read inside the frame
+    // hook. Look-dev eyes: draw it on an overlay canvas at 2-3x to inspect a rim.
+    grab: (x, y, w, h) => afterFrames(1).then(() => {
+      const gl = renderer.getContext(), H = renderer.domElement.height;
+      renderer.setRenderTarget(null);
+      const buf = new Uint8Array(w * h * 4), out = new Uint8ClampedArray(w * h * 4);
+      gl.readPixels(x, H - y - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      for (let r = 0; r < h; r++) out.set(buf.subarray((h - 1 - r) * w * 4, (h - r) * w * 4), r * w * 4);
+      return { w, h, data: out };
+    })
   };
 }
 
