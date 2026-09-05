@@ -497,7 +497,9 @@ if (typeof window !== 'undefined') {
       for (let i = 0; i < a.length; i++) { s += a[i]; if (a[i] > mx) mx = a[i]; }
       return { n: a.length, gpuMean: a.length ? +(s / a.length).toFixed(3) : null, gpuMax: +mx.toFixed(3), cpuMs: +raysPass._cpuMs.toFixed(3), ext: !!raysPass._ext };
     },
-    passes: () => composer.passes.map(p => p.name)
+    passes: () => composer.passes.map(p => p.name),
+    pass: () => raysPass,
+    div: (d) => { if (raysPass) raysPass.setResolutionDivisor(d); return raysPass ? raysPass.resDiv : null; }
   };
 }
 // --- END CREPUSCULAR RAYS ---
@@ -890,6 +892,7 @@ export function warmUp() {
   scene.traverse(o => { if (!o.visible) { hidden.push(o); o.visible = true; } });
   try { renderer.compile(scene, camera); } catch (e) { console.warn('ABYSSA: precompile failed', e); }
   for (const o of hidden) o.visible = false;
+  if (raysPass) raysPass.warmUp(renderer);   // the cloud occluder exists only once the world is built
   return renderer.info.programs.length;
 }
 // The same warm-up, asynchronous: r184's compileAsync uses KHR_parallel_shader_compile
@@ -901,5 +904,6 @@ export async function warmUpAsync() {
   scene.traverse(o => { if (!o.visible) { hidden.push(o); o.visible = true; } });
   try { await renderer.compileAsync(scene, camera); }
   finally { for (const o of hidden) o.visible = false; }
+  if (raysPass) raysPass.warmUp(renderer);
   return renderer.info.programs.length;
 }

@@ -234,6 +234,10 @@ export class SkyRaysPass extends Pass {
     } catch (e) { console.warn('SkyRays: boot compile', e); }
   }
 
+  // Called by postfx.js's boot warm-up, after the world (and so the cloud occluder)
+  // exists: the last program this pass can ever need is compiled here, before play.
+  warmUp(r) { this._compileOcc(r); return this._occCompiled; }
+
   _compileOcc(r) {
     if (this._occCompiled) return;
     const occ = cloudOccluder();
