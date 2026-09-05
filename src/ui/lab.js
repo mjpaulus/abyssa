@@ -423,6 +423,7 @@ function build() {
         r.title = why + ' — drag left of 0 to follow the master';
       });
     el('p', 'note', in_, '0 = shipped look, 1 = full lean. sub-knobs at "follow" track the master.');
+    el('p', 'note', in_, 'measure: __style.diff() (0 vs dial, scene-linear). tune: __style.tune (push, coolK, coolAir, bands), __style.looks (per-zone / per-weather wash + cool).');
   }
 
   // --- SURFACE: the sun -------------------------------------------------------

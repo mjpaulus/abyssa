@@ -5,10 +5,10 @@
 // re-applied live when the knob moves. Each material's AUTHORED values are stored once
 // (userData.paint) so the law never compounds: apply(k) always starts from the author.
 //
-//   roughness  = max(authored, 0.75 * k)                 the matte floor rises toward 0.75
+//   roughness  = max(authored, 0.85 * k)                 the matte floor rises toward 0.85
 //   metalness  = authored * (1 - k)   if authored < 0.5  non-metals lose their sheen
 //              = authored             otherwise          real metal stays metal
-//   normalScale= authored * (1 - 0.5 * k)                relief reads as brushwork
+//   normalScale= authored * (1 - 0.65 * k)               relief reads as brushwork
 //
 // HERO EXCEPTIONS (registerPaint(m, { hero: true }) — untouched at every k): brass and
 // copper on Sal and the raft, the lantern glass, wreck brass/glass/lit lamps, Sal's port
@@ -29,15 +29,16 @@ export const styleUniforms = {
   uPaintK:  { value: 0 },                       // paint law strength (rock roughness floor in-shader)
   uEdgeK:   { value: 0 },                       // edge-not-middle: k = styleK('edge') * 0.8
   uEdgeSun: { value: new THREE.Vector3(0, 1, 0) }, // SUN.dirWater, the pre-detail key direction
-  uStrokeK: { value: 0 }                        // silhouette strokes: styleK('strokes') * 0.35
+  uStrokeK: { value: 0 }                        // silhouette strokes: styleK('strokes') * 0.50
 };
 
 function apply(m, k) {
   const a = m.userData.paint;
   if (!a || a.hero) return;
-  m.roughness = Math.max(a.rough, 0.75 * k);
+  // Look-dev 2026-09-05: 0.75 / 0.5x was invisible against 0 on rock and plank.
+  m.roughness = Math.max(a.rough, 0.85 * k);
   m.metalness = a.metal < 0.5 ? a.metal * (1 - k) : a.metal;
-  if (a.ns && m.normalScale) m.normalScale.set(a.ns.x * (1 - 0.5 * k), a.ns.y * (1 - 0.5 * k));
+  if (a.ns && m.normalScale) m.normalScale.set(a.ns.x * (1 - 0.65 * k), a.ns.y * (1 - 0.65 * k));
 }
 
 // Register a material under the law. Idempotent (re-registering keeps the first
@@ -70,7 +71,7 @@ export function styleTick() {
   if (p !== lastPaint) applyPaintLaw(p);
   const e = styleK('edge') * 0.8;
   if (e !== lastEdge) { lastEdge = e; styleUniforms.uEdgeK.value = e; }
-  const s = styleK('strokes') * 0.35;
+  const s = styleK('strokes') * 0.50;
   if (s !== lastStrokes) { lastStrokes = s; styleUniforms.uStrokeK.value = s; }
   const d = SUN.dirWater;
   styleUniforms.uEdgeSun.value.set(d.x, d.y, d.z);

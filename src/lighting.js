@@ -45,7 +45,7 @@ const AIR_SKY = new THREE.Color(0xa8bcc8), AIR_SEA = new THREE.Color(0x2a3a3c);
 // low (dusk/dawn apricot); AIR_SKY_C is the cooler dome the shadow side is filled from;
 // AIR_SEA_L is the lifted, slightly cool sea floor of the hemisphere so deck shadows
 // feather instead of pitching (item 10). All three are only reached through styleK.
-const AIR_SUN_W = new THREE.Color(0xffcf9a), AIR_SKY_C = new THREE.Color(0x98b4d2), AIR_SEA_L = new THREE.Color(0x3a4c54);
+const AIR_SUN_W = new THREE.Color(0xffcf9a), AIR_SKY_C = new THREE.Color(0x7fa6dc), AIR_SEA_L = new THREE.Color(0x36505e);
 
 // THE DIAL. GLASS.style.flowLean is the master (0 = shipped, 1 = full lean); the
 // `light` sub-knob overrides it when >= 0. Read every frame — GLASS is live data and
@@ -168,12 +168,19 @@ let reduced = false, sunParked = false;
 const steerDir = V3(0, 1, 0), steerCol = new THREE.Color(1, 1, 1);
 const candDir = V3(), bestDir = V3(), tmpV = V3(), steerPos = V3();
 const bestCol = new THREE.Color(), tmpCol = new THREE.Color();
-let steerConf = 0, lastSteerT = 0, lastScanT = -1e9;
+let steerConf = 0, lastSteerT = 0, lastScanT = -1e9, steerSnap = true;
 // The incumbent source keeps a 30% edge. The lantern's everyday sine flicker and a
 // setting sun cross each other's score many times a second otherwise, and the rim
 // would shuttle between two directions instead of easing to one.
-let steerSrc = null;
-const HOLD = 1.3;
+let steerSrc = null, steerSince = 0;
+// A source that wins keeps the rim for HOLD_S seconds whatever the scores do (look-dev
+// pass: the multiplicative 1.3x edge still let a flickering lantern and a setting sun
+// trade the edge light several times a second; a hard hold reads as a decision).
+const HOLD_S = 1.5;
+// The rim is LIFTED toward up before it is placed: a source dead behind Sal at 14
+// degrees only grazes his silhouette, and a rim reads as a rim from above-behind
+// (helmet crown, shoulders). 0.45 of up mixed in, renormalised.
+const RIM_LIFT = 0.45;
 let srcLights = [];
 function scanSources() {
   const out = [];
@@ -194,7 +201,9 @@ function steerRim(k, air, dt) {
   candDir.set(SUN_VEC.x + (sd.x - SUN_VEC.x) * (1 - air), SUN_VEC.y + (sd.y - SUN_VEC.y) * (1 - air), SUN_VEC.z + (sd.z - SUN_VEC.z) * (1 - air)).normalize();
   //    In air the sun is the shot's key and gets a 50% edge over point sources: a lamp
   //    1 u away always wins on irradiance, and Flow's deck at dusk is lit by the sun.
-  const sunS = clamp(sun.intensity / 2.6, 0, 1) * behindW(candDir) * (1 + 0.5 * air) * (steerSrc === sun ? HOLD : 1);
+  //    In air the sun IS the shot's key (look-dev: x3, it always wins while it is up and
+  //    beyond Sal); below, the Snell-clamped sun is also the FALLBACK -- see the end.
+  const sunS = clamp(sun.intensity / 2.6, 0, 1) * behindW(candDir) * (1 + 2.0 * air);
   const st = rig.steer; st.sunS = sunS; st.lampS = 0; st.lantS = 0;
   let win = null;
   if (sunS > best) { best = sunS; bestDir.copy(candDir); bestCol.copy(sun.color); win = sun; }
@@ -213,7 +222,7 @@ function steerRim(k, air, dt) {
     candDir.multiplyScalar(1 / d);
     let irr = L.intensity / (d * d);
     if (L.distance > 0) { const q = d / L.distance, q4 = q * q * q * q; irr *= (1 - q4) * (1 - q4); }
-    const s = clamp(irr / 0.7, 0, 1) * behindW(candDir) * (steerSrc === L ? HOLD : 1);
+    const s = clamp(irr / 0.7, 0, 1) * behindW(candDir);
     if (s > st.lampS) st.lampS = s;
     if (s > best) { best = s; bestDir.copy(candDir); bestCol.copy(L.color); win = L; }
   }
@@ -227,12 +236,31 @@ function steerRim(k, air, dt) {
     candDir.normalize();
     const c = candDir.dot(fwd);
     const gate = clamp((c - 0.15) / 0.45, 0, 1);
-    const s = clamp(lanternLight.intensity / 12, 0, 1) * 0.45 * gate * gate * (steerSrc === lanternLight ? HOLD : 1);
+    const s = clamp(lanternLight.intensity / 12, 0, 1) * 0.45 * gate * gate;
     st.lantS = s;
     if (s > best) { best = s; bestDir.copy(candDir); bestCol.copy(lanternLight.color); win = lanternLight; }
   }
-  // Ease: direction, colour and confidence all on the same ~0.4 s time constant.
-  const e = 1 - Math.exp(-dt * 2.5);
+  // 4. Nothing lit behind him under water: the sun's underwater direction, at half
+  //    confidence, so the edge light still comes from where the light in the water does.
+  if (win === null && air < 0.999 && sun.intensity > 0.02) {
+    candDir.set(sd.x, sd.y, sd.z);
+    best = 0.125; bestDir.copy(candDir); bestCol.copy(sun.color); win = sun;
+  }
+  // THE HOLD: the incumbent keeps the rim for HOLD_S after it won, unless it went dark.
+  const now2 = performance.now();
+  if (steerSrc && win !== steerSrc && now2 - steerSince < HOLD_S * 1000 && steerSrc.intensity > 0.01 && steerSrc.visible !== false) {
+    win = steerSrc; best = Math.max(best, 0.125);
+    // Re-derive the incumbent's direction (it may have moved: the lantern swings).
+    if (steerSrc === sun) { const sd2 = SUN.dirWater; bestDir.set(SUN_VEC.x + (sd2.x - SUN_VEC.x) * (1 - air), SUN_VEC.y + (sd2.y - SUN_VEC.y) * (1 - air), SUN_VEC.z + (sd2.z - SUN_VEC.z) * (1 - air)).normalize(); bestCol.copy(sun.color); }
+    else { steerSrc.getWorldPosition(tmpV); bestDir.subVectors(tmpV, subj).normalize(); bestCol.copy(steerSrc.color); }
+  }
+  if (win !== steerSrc) steerSince = now2;
+  // Lift toward up so the rim is above-behind, then ease: direction, colour and
+  // confidence all on the same ~0.4 s time constant. A snap on the first frame the dial
+  // comes up from 0, so dragging the lab slider answers immediately.
+  bestDir.y += RIM_LIFT; bestDir.normalize();
+  const e = steerSnap ? 1 : 1 - Math.exp(-dt * 2.5);
+  steerSnap = false;
   const conf = clamp(best / 0.25, 0, 1);
   steerConf += (conf - steerConf) * e;
   if (conf > 0.001) {
@@ -334,7 +362,7 @@ export function updateLighting(depth01) {
   // hemisphere's from 42% to 28% at full lean, so the deck's shadows are filled by sky
   // instead of pitching; underwater the hemisphere carries what the fill gives up
   // (item 9) — +22% at full lean — and the omni ambient a hair.
-  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.20 * sk) * air) * (1 + 0.10 * sk * (1 - air));
+  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.42 * sk) * air) * (1 + 0.12 * sk * (1 - air));
   mixInto(hemi.color, a, b, 'sky', t);
   mixInto(hemi.groundColor, a, b, 'gnd', t);
   // Same mistake as the fill, in colour instead of level: the hemisphere's shallow stop
@@ -344,7 +372,7 @@ export function updateLighting(depth01) {
   // is the sea, so the two ends travel to those instead.
   hemi.color.lerp(AIR_SKY, air * 0.85);
   hemi.groundColor.lerp(AIR_SEA, air * 0.85);
-  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.14 * sk) * air) * (1 + 0.22 * sk * (1 - air));
+  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.36 * sk) * air) * (1 + 0.20 * sk * (1 - air));
   mixInto(sun.color, a, b, 'sun', t);
   sun.intensity = mix('sunI') * wk + flashBoost * 2.2;
   if (sk > 0) {
@@ -356,14 +384,14 @@ export function updateLighting(depth01) {
     // toward the stop's cf below. The sea end lifts (item 10) so shadows have a floor.
     const lowSun = 1 - clamp((SUN.elevDeg - 8) / 37, 0, 1);
     const lowS = lowSun * lowSun * (3 - 2 * lowSun);
-    sun.color.lerp(AIR_SUN_W, sk * air * (0.30 + 0.55 * lowS));
+    sun.color.lerp(AIR_SUN_W, sk * air * (0.65 + 0.35 * lowS));
     mixInto(tmpCol, a, b, 'kw', t);
-    sun.color.lerp(tmpCol, sk * (1 - air) * 0.30);
-    hemi.color.lerp(AIR_SKY_C, sk * air * 0.55);
-    hemi.color.lerp(C(t < 0.5 ? a : b, 'cf'), sk * (1 - air) * 0.22);
-    hemi.groundColor.lerp(AIR_SEA_L, sk * air * 0.55);
-    // Values compressed, not contrast: the key comes down 15% in air as the fill rises.
-    sun.intensity *= 1 - 0.15 * sk * air;
+    sun.color.lerp(tmpCol, sk * (1 - air) * 0.45);
+    hemi.color.lerp(AIR_SKY_C, sk * air * 0.80);
+    hemi.color.lerp(C(t < 0.5 ? a : b, 'cf'), sk * (1 - air) * 0.40);
+    hemi.groundColor.lerp(AIR_SEA_L, sk * air * 0.80);
+    // Values compressed, not contrast: the key comes down 25% in air as the fill rises.
+    sun.intensity *= 1 - 0.25 * sk * air;
   }
 
   // --- SKY DRAMA ambience (air only) ---------------------------------------
@@ -438,15 +466,25 @@ export function updateLighting(depth01) {
     if (steerPos.y < playerLightSrc.position.y + 2) steerPos.y = playerLightSrc.position.y + 2;
     rimPos.lerp(steerPos, sk * conf);
     rim.color.lerp(C(t < 0.5 ? a : b, 'cf'), sk * 0.35);
-    rim.color.lerp(steerCol, sk * 0.70 * conf);
-    rim.intensity *= 1 + sk * (0.90 + 0.50 * conf);
+    rim.color.lerp(steerCol, sk * 0.85 * conf);
+    // LOOK-DEV (2026-09-05, round 2): under water the rim is the shot -- x7.5 at full lean
+    // with a source behind him (x3 was measured invisible once the grade was fixed; a forced
+    // 10 read as the backlit reference, 6.4 is the cut). IN AIR IT IS THE
+    // OPPOSITE: the sun is the backlight and casts the deck's real shadows, and a second
+    // shadowless directional from the same bearing at 2x floods those shadows -- the
+    // "lighting is not right" read. So in air the rim comes DOWN 60% and becomes a soft
+    // sky-side kicker in the sun's colour; the halo is bloom's job (postfx).
+    const rimGain = (1 + sk * (4.5 + 2.0 * conf)) * (1 - air) + (1 - 0.45 * sk) * air;
+    rim.intensity *= rimGain;
     // Item 9: THE FILL GOES TO HAZE. The omni that rides Sal drops 55% and its colour
     // travels to the hue of the water the camera sits in (scene.fog.color is surface
     // irradiance, normalised to a hue here so the value is unchanged) — his front is
     // filled by the medium's own scatter, never by a hard fill. Above water there is no
     // haze fill; the shipped air fade already retires the omni. game.js writes the
     // intensity every frame before this runs, so the scale never compounds.
-    playerLightSrc.intensity *= 1 - 0.55 * sk;
+    // Look-dev round 2: the cut is 20% flat + 25% x confidence (0.55 floor with a rim
+    // behind him) -- his camera side stays >= 0.35 of the rim, haze-dark, never black.
+    playerLightSrc.intensity *= 1 - sk * (0.20 + 0.25 * conf);
     const fc = scene.fog && scene.fog.color;
     if (fc) {
       const m = Math.max(fc.r, fc.g, fc.b);
@@ -457,16 +495,19 @@ export function updateLighting(depth01) {
     // deeper apricot so it separates from the cool fill by hue, not by level.
     lanternLight.intensity *= 1 - 0.12 * sk;
     mixInto(tmpCol, a, b, 'kw', t);
-    lanternLight.color.lerp(tmpCol, sk * 0.55);
+    lanternLight.color.lerp(tmpCol, sk * 0.80);
     // Item 10: SHADOW SOFTNESS. Three r184's PCF path scales its 5-tap Vogel disk by
     // shadow.radius (a uniform — no recompile, and the map itself is unchanged), so the
     // raft map's kernel widens from 1 texel to 7 (0.12 u on the 18-unit box) and the
     // lantern's cube map from 1 to 3. Broad, feathered, still attached at the contact.
-    sun.shadow.radius = 1 + 6 * sk;
-    lanternLight.shadow.radius = 1 + 2 * sk;
-  } else if (sun.shadow.radius !== 1) {
-    // The dial came back to 0 mid-session: restore the shipped kernel exactly.
-    sun.shadow.radius = 1; lanternLight.shadow.radius = 1;
+    sun.shadow.radius = 1 + 9 * sk;
+    lanternLight.shadow.radius = 1 + 3 * sk;
+  } else {
+    steerSnap = true;   // the next frame the dial comes up, the rim lands where it belongs
+    if (sun.shadow.radius !== 1) {
+      // The dial came back to 0 mid-session: restore the shipped kernel exactly.
+      sun.shadow.radius = 1; lanternLight.shadow.radius = 1;
+    }
   }
   rim.position.copy(rimPos);
 }

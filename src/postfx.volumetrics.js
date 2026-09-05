@@ -137,7 +137,9 @@ void main(){
   // and a low sun through the surface glows around its column instead of only inside it.
   // Same integral over the hemisphere within 8% (0.45+1.75/4 vs 0.70+1.10/2.8) so the
   // total added radiance does not climb with the dial -- it is redistributed.
-  phase = mix( phase, 0.70 + 1.10 * pow( cosS, 1.8 ), uStyle );
+  // Look-dev round 3: the 0.70 floor read as a neon cyan lift up-sun (mean luminance
+  // +60% from this pass alone); 0.58 keeps the shoulder without lifting the whole frame.
+  phase = mix( phase, 0.58 + 1.25 * pow( cosS, 2.2 ), uStyle );
 
   // Everything that varies linearly or exponentially along the ray is stepped
   // incrementally. The straightforward version evaluates six exp() and a divide per
@@ -206,7 +208,7 @@ void main(){
             // Flow lean (item 12): lower occlusion CONTRAST -- a shadowed sample keeps
             // 35% at full lean, so a ward or a leviathan flank against the sun sits in a
             // halo of scattered light rather than cutting a hard black notch out of it.
-            if ( diff > 0.8 + cp.w * 0.035 && diff < 55.0 ) { occ = 0.35 * uStyle; break; }
+            if ( diff > 0.8 + cp.w * 0.035 && diff < 55.0 ) { occ = 0.40 * uStyle; break; }
           }
         }
         if ( occ > 0.0 ) acc += down * tr * ( shaft * fade * occ * phase );
@@ -469,7 +471,7 @@ export class VolumetricLightPass extends Pass {
     const cu = this.fullscreenMaterial.uniforms;
     cu.uNear.value = camera.near;
     cu.uFar.value = camera.far;
-    cu.uIntensity.value = this.intensity * (1 + 0.20 * sk);
+    cu.uIntensity.value = this.intensity * (1 + 0.15 * sk);
     cu.tDiffuse.value = inputBuffer.texture;
 
     // 1) bake the seamless caustic tile (reads nothing)

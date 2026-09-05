@@ -73,10 +73,11 @@ function updateHalation() {
   const k = styleK('haze');
   if (k === _bloomK) return;
   _bloomK = k;
-  bloom.luminanceMaterial.threshold = BLOOM0.thr - 0.10 * k;      // 0.28 -> 0.18
-  bloom.luminanceMaterial.smoothing = BLOOM0.smooth + 0.25 * k;   // 0.25 -> 0.50 (soft knee)
-  bloom.intensity = BLOOM0.int * (1 - 0.32 * k);                  // 1.1 -> 0.75
-  if (bloom.mipmapBlurPass) bloom.mipmapBlurPass.radius = BLOOM0.radius * (1 + 0.14 * k);
+  // Look-dev 2026-09-05: the shipped 0.18 / 0.50 / 0.75 halo was invisible next to 0.
+  bloom.luminanceMaterial.threshold = BLOOM0.thr - 0.16 * k;      // 0.28 -> 0.12
+  bloom.luminanceMaterial.smoothing = BLOOM0.smooth + 0.40 * k;   // 0.25 -> 0.65 (soft knee)
+  bloom.intensity = BLOOM0.int * (1 - 0.12 * k);                  // 1.1 -> 0.97
+  if (bloom.mipmapBlurPass) bloom.mipmapBlurPass.radius = BLOOM0.radius * (1 + 0.16 * k);
 }
 // bokehScale kept modest: the half-res CoC upsample stair-steps on bright edges (the
 // lantern pool) once the blur radius gets large.
@@ -144,6 +145,7 @@ class GradeEffect extends Effect {
       uniform vec3 uSlope, uOffset, uPower, uMood;
       uniform float uSat;
       uniform vec2 uSat2;
+      uniform vec4 uWash; uniform vec3 uCool; uniform float uCoolW; uniform vec2 uBand;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
         vec3 c = max(inputColor.rgb, 0.0);
         c = pow(c, vec3(0.4545454));
@@ -159,6 +161,31 @@ class GradeEffect extends Effect {
           float cl = length( ch );
           float w = cl > 1e-4 ? smoothstep( 0.0, 0.85, dot( ch / cl, uMood ) ) : 0.0;
           c = mix( vec3( l ), c, 1.0 + mix( uSat2.y, uSat2.x, w ) );
+          // THE WASH (look-dev 2026-09-05): Flow commits a scene to one colour, and
+          // separates by TEMPERATURE: the mid-tones are pulled toward the mood tint and
+          // the shadows toward the look's cool (both luminance-1 tints times the pixel's
+          // own luminance, so values are untouched -- hue does the work). Highlights are
+          // left alone so a sun disc or a lantern core stays its own colour. A single
+          // warm wash over everything read as a filter, not a lit scene.
+          float lw = luminance( c );
+          // HUE PROTECTION (look-dev round 2): a pixel whose own chroma points AWAY from
+          // the tint it would be pulled toward keeps its hue -- the copper helmet, the
+          // lantern pool and warm timber survive the cool shadow wash; the sea and the
+          // shadow side survive the dusk wash. Only neutral and like-hued pixels commit.
+          // Without this the wash read as a filter and Sal went navy-black in every zone.
+          vec3 tw = uWash.rgb - luminance( uWash.rgb ); vec3 tc = uCool - luminance( uCool );
+          float cs = smoothstep( 0.015, 0.10, cl );
+          vec3 cd = cl > 1e-4 ? ch / cl : vec3( 0.0 );
+          float twl = length( tw ), tcl = length( tc );
+          float keepW = cs * smoothstep( 0.0, 0.6, twl > 1e-4 ? -dot( cd, tw / twl ) : 0.0 );
+          float keepC = cs * smoothstep( 0.0, 0.6, tcl > 1e-4 ? -dot( cd, tc / tcl ) : 0.0 );
+          // uWash.w = mood weight in the mids, uCoolW = cool weight in the shadows; the
+          // bands cross at uBand (gamma), set per regime by updateGrade: the deck's sunlit
+          // timber is dark in absolute terms and must not be read as shadow.
+          float sh = 1.0 - smoothstep( uBand.x, uBand.y, lw );
+          float md = smoothstep( uBand.x, uBand.y, lw ) * ( 1.0 - smoothstep( 0.70, 0.95, lw ) );
+          c = mix( c, uWash.rgb * lw, uWash.w * md * ( 1.0 - keepW ) );
+          c = mix( c, uCool * lw, uCoolW * sh * ( 1.0 - keepC ) );
         }
         outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
       }`, {
@@ -169,7 +196,11 @@ class GradeEffect extends Effect {
         ['uPower', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
         ['uSat', new THREE.Uniform(1)],
         ['uMood', new THREE.Uniform(new THREE.Vector3(0, 0, 1))],
-        ['uSat2', new THREE.Uniform(new THREE.Vector2(0, 0))]
+        ['uSat2', new THREE.Uniform(new THREE.Vector2(0, 0))],
+        ['uWash', new THREE.Uniform(new THREE.Vector4(1, 1, 1, 0))],
+        ['uCool', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
+        ['uCoolW', new THREE.Uniform(0)],
+        ['uBand', new THREE.Uniform(new THREE.Vector2(0.22, 0.60))]
       ])
     });
   }
@@ -193,7 +224,11 @@ const _gradeU = {
   power: grade.uniforms.get('uPower'),
   sat: grade.uniforms.get('uSat'),
   mood: grade.uniforms.get('uMood'),
-  sat2: grade.uniforms.get('uSat2')
+  sat2: grade.uniforms.get('uSat2'),
+  wash: grade.uniforms.get('uWash'),
+  cool: grade.uniforms.get('uCool'),
+  coolW: grade.uniforms.get('uCoolW'),
+  band: grade.uniforms.get('uBand')
 };
 const _gradeKeys = ['slope', 'offset', 'power'];
 
@@ -209,22 +244,33 @@ const _gradeKeys = ['slope', 'offset', 'power'];
 // x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
 const ZONE_LOOKS = [
   // reef -- mossy teal
-  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22 },
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.16, satDn: -0.22, wash: 0.22, cool: [0.08, 0.36, 0.40] },
   // boiler room -- sulphur-amber
-  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26 },
+  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.42, cool: [0.18, 0.26, 0.46], band: [0.03, 0.20] },
   // abyss -- violet-black
-  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30 }
+  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.30, cool: [0.16, 0.10, 0.44] }
 ];
+// LOOK-DEV PUSH (2026-09-05): the tables above were authored timid -- at the default
+// dial the probe read slope 0.99..1.01 and a 1% saturation move, which no eye registers.
+// Every deviation from neutral in the stack is scaled by PUSH before it composes, so the
+// authored RATIOS between looks survive and the magnitude lands at 10-20%. 1.0 = the
+// tables as written.
+// TUNE is live (window.__style.tune) so the look can be dialled in the browser and the
+// numbers copied back here. push: slope/offset/power deviations; pushSat: the mood-hue
+// saturation pair; coolK: the shadows' cool weight relative to the look's wash.
+// coolAir: the shadow cool is weighted UP in air -- the deck's shadow side must read cool
+// against the apricot key (Flow's dusk), where under water the medium already is cool.
+const TUNE = { push: 1.15, pushSat: 1.0, coolK: 1.0, coolMax: 0.5, coolAir: 1.5, bandWater: [0.20, 0.55], bandAir: [0.10, 0.40] };
 const WX_LOOKS = {
   // night -- cold ink, colour drained
-  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28 },
+  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.26, cool: [0.14, 0.24, 0.54], air: [0.62, 0.70, 0.92] },
   // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
-  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18 },
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.26, cool: [0.22, 0.38, 0.64], air: [1.00, 0.66, 0.30] },
   // noon -- the marine blue stays legible: a light hand
-  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12 },
-  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20 },
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.34, cool: [0.24, 0.42, 0.70], air: [1.00, 0.86, 0.64] },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.26, cool: [0.20, 0.36, 0.66], air: [1.00, 0.60, 0.26] },
   // gale -- slate, recognisable: values compressed, colour held down everywhere
-  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26 }
+  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.22, cool: [0.34, 0.42, 0.54], air: [0.70, 0.72, 0.76] }
 };
 const WX_RING = [WX_LOOKS.night, WX_LOOKS.dawn, WX_LOOKS.noon, WX_LOOKS.dusk, WX_LOOKS.night];
 // Mood colours -> unit chroma directions (colour minus its luminance, normalised), once.
@@ -232,19 +278,35 @@ for (const L of [...ZONE_LOOKS, ...Object.values(WX_LOOKS)]) {
   const m = L.mood, l = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];
   const v = [m[0] - l, m[1] - l, m[2] - l], n = Math.hypot(v[0], v[1], v[2]) || 1;
   L.moodDir = [v[0] / n, v[1] / n, v[2] / n];
+  L.tint = [m[0] / l, m[1] / l, m[2] / l];
+  const c = L.cool, lc = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  L.coolT = [c[0] / lc, c[1] / lc, c[2] / lc];
+  // The mids' tint IN AIR: the deck's timber under the key (warm at every sunlit stop),
+  // never the water's blue. Zone looks are never read in air; they fall back to tint.
+  const a = L.air || m, la = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
+  L.airT = [a[0] / la, a[1] / la, a[2] / la];
 }
 // Working accumulators (zero-alloc): slope, offset, power, mood, satUp, satDn.
-const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], satUp: 0, satDn: 0 };
-const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], satUp: 0, satDn: 0 };
+const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
+const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
 function lookLerp(out, a, b, t) {
   for (let i = 0; i < 3; i++) {
     out.slope[i] = a.slope[i] + (b.slope[i] - a.slope[i]) * t;
     out.offset[i] = a.offset[i] + (b.offset[i] - a.offset[i]) * t;
     out.power[i] = a.power[i] + (b.power[i] - a.power[i]) * t;
     out.mood[i] = a.moodDir[i] + (b.moodDir[i] - a.moodDir[i]) * t;
+    out.tint[i] = a.tint[i] + (b.tint[i] - a.tint[i]) * t;
+    out.coolT[i] = a.coolT[i] + (b.coolT[i] - a.coolT[i]) * t;
+    out.airT[i] = a.airT[i] + (b.airT[i] - a.airT[i]) * t;
   }
   out.satUp = a.satUp + (b.satUp - a.satUp) * t;
   out.satDn = a.satDn + (b.satDn - a.satDn) * t;
+  out.wash = a.wash + (b.wash - a.wash) * t;
+  // The shadow/mid crossover in WATER is per look: a boiler room or the abyss at a mean
+  // luminance of 0.02 has no mids at all under the reef's band, so the whole frame fell
+  // into the cool wash and the mood never showed (the boiler went navy, not amber).
+  const ab = a.band || TUNE.bandWater, bb = b.band || TUNE.bandWater;
+  out.band[0] = ab[0] + (bb[0] - ab[0]) * t; out.band[1] = ab[1] + (bb[1] - ab[1]) * t;
   out.moodDir = out.mood;
   return out;
 }
@@ -279,8 +341,13 @@ function updateGrade(airK) {
   if (ks > 0.001) {
     const S = resolveStack(airK);
     _gradeU.mood.value.set(S.mood[0], S.mood[1], S.mood[2]);
-    _gradeU.sat2.value.set(S.satUp * ks, S.satDn * ks);
-  } else _gradeU.sat2.value.set(0, 0);
+    _gradeU.sat2.value.set(S.satUp * TUNE.pushSat * ks, S.satDn * TUNE.pushSat * ks);
+    _gradeU.wash.value.set(S.tint[0] + (S.airT[0] - S.tint[0]) * airK, S.tint[1] + (S.airT[1] - S.tint[1]) * airK, S.tint[2] + (S.airT[2] - S.tint[2]) * airK, S.wash * ks);
+    _gradeU.cool.value.set(S.coolT[0], S.coolT[1], S.coolT[2]);
+    _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK * (1 + (TUNE.coolAir - 1) * airK)) * ks;
+    const bw = S.band, ba = TUNE.bandAir;
+    _gradeU.band.value.set(bw[0] + (ba[0] - bw[0]) * airK, bw[1] + (ba[1] - bw[1]) * airK);
+  } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; _gradeU.coolW.value = 0; }
   // Depth ramp runs the full column (~-900), not just to -650: the shipped look
   // lands unchanged at -650 (d = 1 there), then drifts a touch deeper and quieter
   // to -900 — the abyss keeps darkening character without changing hue.
@@ -297,7 +364,7 @@ function updateGrade(airK) {
       // the factor is exactly 1.0 and the addend exactly 0.0.
       if (ks > 0.001) {
         const sv = _stk[key][i];
-        g = key === 'offset' ? g + sv * ks : g * (1 + (sv - 1) * ks);
+        g = key === 'offset' ? g + sv * TUNE.push * ks : g * (1 + (sv - 1) * TUNE.push * ks);
       }
       _gv.setComponent(i, g);
     }
@@ -501,11 +568,100 @@ if (typeof window !== 'undefined') {
                int: bloom.intensity, radius: bloom.mipmapBlurPass ? bloom.mipmapBlurPass.radius : null },
       grade_u: { slope: _gradeU.slope.value.toArray(), offset: _gradeU.offset.value.toArray(),
                  power: _gradeU.power.value.toArray(), sat: _gradeU.sat.value,
-                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray() },
+                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray(), wash: _gradeU.wash.value.toArray(), coolW: _gradeU.coolW.value },
       dof_u: { focus: focusDist, range: 'worldFocusRange' in dof.cocMaterial ? dof.cocMaterial.worldFocusRange : null,
                bokeh: dof.bokehScale, air, subject: !!subj, subjDist }
+    }),
+    diff: styleDiff,
+    tune: TUNE, looks: { zone: ZONE_LOOKS, wx: WX_LOOKS },
+    capture: () => afterFrames(1, captureLinear),
+    // A region of the DRAWN frame as RGBA bytes (top-down rows), read inside the frame
+    // hook. Look-dev eyes: draw it on an overlay canvas at 2-3x to inspect a rim.
+    grab: (x, y, w, h) => afterFrames(1, () => {
+      const gl = renderer.getContext(), H = renderer.domElement.height;
+      renderer.setRenderTarget(null);
+      const buf = new Uint8Array(w * h * 4), out = new Uint8ClampedArray(w * h * 4);
+      gl.readPixels(x, H - y - h, w, h, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+      for (let r = 0; r < h; r++) out.set(buf.subarray((h - 1 - r) * w * 4, (h - r) * w * 4), r * w * 4);
+      return { w, h, data: out };
     })
   };
+}
+
+// ---- THE MEASURER (__style.diff) ------------------------------------------------
+// The look-dev gate for the Flow lean: a number an eye can be held to. Renders the
+// current view at flowLean 0 (every sub-knob following) and at the current dial, waits
+// `frames` rendered frames after each toggle, reads the DEFAULT framebuffer back inside
+// the frame that drew it (gl.readPixels is valid there whatever preserveDrawingBuffer
+// says -- only cross-frame reads need it), box-downsamples to 64x64 in SCENE-LINEAR
+// (sRGB LUT, so the 0..1 numbers are light, not code values) and compares.
+//   meanAbsDiff  mean |k - 0| over cells x channels          (gate: >= 0.06 at 1, >= 0.03 at 0.6)
+//   meanLum0/1   mean luminance at 0 and at the dial
+//   satDelta     mean chroma (max-min) at k minus at 0
+//   hueShift     angle between the mean chroma vectors, degrees
+//   noise        |0 - 0| across the same wait (waves, flicker, grain): the floor a real
+//                difference has to clear
+// Needs rendered frames: a hidden tab is rAF-throttled and the promise never settles.
+const capQ = [];
+const SRGB_LUT = new Float32Array(256);
+for (let i = 0; i < 256; i++) { const c = i / 255; SRGB_LUT[i] = c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+let capBuf = null;
+// `fn` runs SYNCHRONOUSLY inside the frame hook, while the drawing buffer is still the
+// frame just drawn (a microtask after the loop's callback batch is too late on some
+// frames -- the first readbacks after a fresh load came back all zeros).
+function afterFrames(n, fn) { return new Promise(res => capQ.push({ n, res, fn })); }
+function pumpCaptures() {
+  if (!capQ.length) return;
+  const c = capQ[0];
+  if (--c.n > 0) return;
+  capQ.shift(); c.res(c.fn ? c.fn() : undefined);
+}
+function captureLinear() {
+  const gl = renderer.getContext(), W = renderer.domElement.width, H = renderer.domElement.height;
+  renderer.setRenderTarget(null);
+  if (!capBuf || capBuf.length !== W * H * 4) capBuf = new Uint8Array(W * H * 4);
+  gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, capBuf);
+  const N = 64, out = new Float32Array(N * N * 3), cnt = new Float32Array(N * N);
+  for (let y = 0; y < H; y++) {
+    const cy = Math.min(N - 1, (y * N / H) | 0);
+    for (let x = 0; x < W; x++) {
+      const ci = cy * N + Math.min(N - 1, (x * N / W) | 0), pi = (y * W + x) * 4;
+      out[ci * 3] += SRGB_LUT[capBuf[pi]]; out[ci * 3 + 1] += SRGB_LUT[capBuf[pi + 1]]; out[ci * 3 + 2] += SRGB_LUT[capBuf[pi + 2]];
+      cnt[ci]++;
+    }
+  }
+  for (let i = 0; i < N * N; i++) { const k = cnt[i] ? 1 / cnt[i] : 0; out[i * 3] *= k; out[i * 3 + 1] *= k; out[i * 3 + 2] *= k; }
+  return out;
+}
+function cmpLinear(A, B) {
+  let ad = 0, l0 = 0, l1 = 0, s0 = 0, s1 = 0; const c0 = [0, 0, 0], c1 = [0, 0, 0]; const n = A.length / 3;
+  for (let i = 0; i < n; i++) {
+    const r0 = A[i * 3], g0 = A[i * 3 + 1], b0 = A[i * 3 + 2], r1 = B[i * 3], g1 = B[i * 3 + 1], b1 = B[i * 3 + 2];
+    ad += Math.abs(r1 - r0) + Math.abs(g1 - g0) + Math.abs(b1 - b0);
+    const L0 = 0.2126 * r0 + 0.7152 * g0 + 0.0722 * b0, L1 = 0.2126 * r1 + 0.7152 * g1 + 0.0722 * b1;
+    l0 += L0; l1 += L1;
+    s0 += Math.max(r0, g0, b0) - Math.min(r0, g0, b0); s1 += Math.max(r1, g1, b1) - Math.min(r1, g1, b1);
+    c0[0] += r0 - L0; c0[1] += g0 - L0; c0[2] += b0 - L0; c1[0] += r1 - L1; c1[1] += g1 - L1; c1[2] += b1 - L1;
+  }
+  const m0 = Math.hypot(c0[0], c0[1], c0[2]) || 1e-9, m1 = Math.hypot(c1[0], c1[1], c1[2]) || 1e-9;
+  const cosA = Math.max(-1, Math.min(1, (c0[0] * c1[0] + c0[1] * c1[1] + c0[2] * c1[2]) / (m0 * m1)));
+  const r4 = v => +v.toFixed(4);
+  // relDiff: the same difference over the scene's own mean luminance -- the gate for the
+  // dark scenes (a 0.02-luminance abyss cannot move 0.06 absolute without stopping being
+  // an abyss).
+  return { meanAbsDiff: r4(ad / (3 * n)), relDiff: r4((ad / (3 * n)) / Math.max(1e-4, (l0 + l1) / (2 * n))), meanLum0: r4(l0 / n), meanLum1: r4(l1 / n), satDelta: r4((s1 - s0) / n), hueShift: r4(Math.acos(cosA) * 180 / Math.PI) };
+}
+async function styleDiff(opts = {}) {
+  const frames = opts.frames || 2;
+  const st = GLASS.style, save = Object.assign({}, st);
+  const zero = () => { for (const k in st) st[k] = k === 'flowLean' ? 0 : -1; };
+  const restore = () => Object.assign(st, save);
+  zero(); const A = await afterFrames(frames, captureLinear);
+  restore(); const B = await afterFrames(frames, captureLinear);
+  zero(); const A2 = await afterFrames(frames, captureLinear);
+  restore();
+  const r = cmpLinear(A, B); r.noise = cmpLinear(A, A2).meanAbsDiff; r.lean = save.flowLean; r.frames = frames;
+  return r;
 }
 
 // Diagnostic escape hatch (P key): render the scene straight to the canvas. Tone
@@ -518,6 +674,7 @@ export function render(dt) {
   if (bypass) {
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
+    pumpCaptures();
     return;
   }
   focusTarget.copy(playerLightSrc.position);
@@ -558,6 +715,7 @@ export function render(dt) {
   updateHalation();
   updateGrade(air);
   composer.render(dt);
+  pumpCaptures();
 }
 
 // Adaptive quality: sample real framerate after warmup, shed expensive passes once.
