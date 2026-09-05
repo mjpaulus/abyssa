@@ -362,7 +362,7 @@ export function updateLighting(depth01) {
   // hemisphere's from 42% to 28% at full lean, so the deck's shadows are filled by sky
   // instead of pitching; underwater the hemisphere carries what the fill gives up
   // (item 9) — +22% at full lean — and the omni ambient a hair.
-  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.32 * sk) * air) * (1 + 0.25 * sk * (1 - air));
+  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.32 * sk) * air) * (1 + 0.12 * sk * (1 - air));
   mixInto(hemi.color, a, b, 'sky', t);
   mixInto(hemi.groundColor, a, b, 'gnd', t);
   // Same mistake as the fill, in colour instead of level: the hemisphere's shallow stop
@@ -372,7 +372,7 @@ export function updateLighting(depth01) {
   // is the sea, so the two ends travel to those instead.
   hemi.color.lerp(AIR_SKY, air * 0.85);
   hemi.groundColor.lerp(AIR_SEA, air * 0.85);
-  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.30 * sk) * air) * (1 + 0.45 * sk * (1 - air));
+  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.30 * sk) * air) * (1 + 0.20 * sk * (1 - air));
   mixInto(sun.color, a, b, 'sun', t);
   sun.intensity = mix('sunI') * wk + flashBoost * 2.2;
   if (sk > 0) {
@@ -467,13 +467,14 @@ export function updateLighting(depth01) {
     rimPos.lerp(steerPos, sk * conf);
     rim.color.lerp(C(t < 0.5 ? a : b, 'cf'), sk * 0.35);
     rim.color.lerp(steerCol, sk * 0.85 * conf);
-    // LOOK-DEV (2026-09-05): under water the rim is the shot -- x3.0 at full lean with a
-    // source behind him (was +90%..+140%; the eye did not register it). IN AIR IT IS THE
+    // LOOK-DEV (2026-09-05, round 2): under water the rim is the shot -- x7.5 at full lean
+    // with a source behind him (x3 was measured invisible once the grade was fixed; a forced
+    // 10 read as the backlit reference, 6.4 is the cut). IN AIR IT IS THE
     // OPPOSITE: the sun is the backlight and casts the deck's real shadows, and a second
     // shadowless directional from the same bearing at 2x floods those shadows -- the
     // "lighting is not right" read. So in air the rim comes DOWN 60% and becomes a soft
     // sky-side kicker in the sun's colour; the halo is bloom's job (postfx).
-    const rimGain = (1 + sk * (2.0 + 1.0 * conf)) * (1 - air) + (1 - 0.60 * sk) * air;
+    const rimGain = (1 + sk * (4.5 + 2.0 * conf)) * (1 - air) + (1 - 0.45 * sk) * air;
     rim.intensity *= rimGain;
     // Item 9: THE FILL GOES TO HAZE. The omni that rides Sal drops 55% and its colour
     // travels to the hue of the water the camera sits in (scene.fog.color is surface
@@ -481,9 +482,9 @@ export function updateLighting(depth01) {
     // filled by the medium's own scatter, never by a hard fill. Above water there is no
     // haze fill; the shipped air fade already retires the omni. game.js writes the
     // intensity every frame before this runs, so the scale never compounds.
-    // Look-dev: the cut is 30% flat + 30% x confidence -- with no rim behind him the
-    // fill only eases, so he goes haze-dark, never muddy-black.
-    playerLightSrc.intensity *= 1 - sk * (0.30 + 0.30 * conf);
+    // Look-dev round 2: the cut is 20% flat + 25% x confidence (0.55 floor with a rim
+    // behind him) -- his camera side stays >= 0.35 of the rim, haze-dark, never black.
+    playerLightSrc.intensity *= 1 - sk * (0.20 + 0.25 * conf);
     const fc = scene.fog && scene.fog.color;
     if (fc) {
       const m = Math.max(fc.r, fc.g, fc.b);

@@ -168,13 +168,24 @@ class GradeEffect extends Effect {
           // left alone so a sun disc or a lantern core stays its own colour. A single
           // warm wash over everything read as a filter, not a lit scene.
           float lw = luminance( c );
+          // HUE PROTECTION (look-dev round 2): a pixel whose own chroma points AWAY from
+          // the tint it would be pulled toward keeps its hue -- the copper helmet, the
+          // lantern pool and warm timber survive the cool shadow wash; the sea and the
+          // shadow side survive the dusk wash. Only neutral and like-hued pixels commit.
+          // Without this the wash read as a filter and Sal went navy-black in every zone.
+          vec3 tw = uWash.rgb - luminance( uWash.rgb ); vec3 tc = uCool - luminance( uCool );
+          float cs = smoothstep( 0.015, 0.10, cl );
+          vec3 cd = cl > 1e-4 ? ch / cl : vec3( 0.0 );
+          float twl = length( tw ), tcl = length( tc );
+          float keepW = cs * smoothstep( 0.0, 0.6, twl > 1e-4 ? -dot( cd, tw / twl ) : 0.0 );
+          float keepC = cs * smoothstep( 0.0, 0.6, tcl > 1e-4 ? -dot( cd, tc / tcl ) : 0.0 );
           // uWash.w = mood weight in the mids, uCoolW = cool weight in the shadows; the
           // bands cross at uBand (gamma), set per regime by updateGrade: the deck's sunlit
           // timber is dark in absolute terms and must not be read as shadow.
           float sh = 1.0 - smoothstep( uBand.x, uBand.y, lw );
           float md = smoothstep( uBand.x, uBand.y, lw ) * ( 1.0 - smoothstep( 0.70, 0.95, lw ) );
-          c = mix( c, uWash.rgb * lw, uWash.w * md );
-          c = mix( c, uCool * lw, uCoolW * sh );
+          c = mix( c, uWash.rgb * lw, uWash.w * md * ( 1.0 - keepW ) );
+          c = mix( c, uCool * lw, uCoolW * sh * ( 1.0 - keepC ) );
         }
         outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
       }`, {
@@ -233,9 +244,9 @@ const _gradeKeys = ['slope', 'offset', 'power'];
 // x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
 const ZONE_LOOKS = [
   // reef -- mossy teal
-  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.42, cool: [0.06, 0.34, 0.46] },
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.32, cool: [0.06, 0.34, 0.46] },
   // boiler room -- sulphur-amber
-  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.46, cool: [0.18, 0.26, 0.46] },
+  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.42, cool: [0.18, 0.26, 0.46], band: [0.03, 0.20] },
   // abyss -- violet-black
   { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.30, cool: [0.16, 0.10, 0.44] }
 ];
@@ -247,15 +258,15 @@ const ZONE_LOOKS = [
 // TUNE is live (window.__style.tune) so the look can be dialled in the browser and the
 // numbers copied back here. push: slope/offset/power deviations; pushSat: the mood-hue
 // saturation pair; coolK: the shadows' cool weight relative to the look's wash.
-const TUNE = { push: 1.25, pushSat: 1.2, coolK: 1.5, coolMax: 0.8, bandWater: [0.22, 0.60], bandAir: [0.10, 0.30] };
+const TUNE = { push: 1.25, pushSat: 1.0, coolK: 1.0, coolMax: 0.5, bandWater: [0.20, 0.55], bandAir: [0.08, 0.32] };
 const WX_LOOKS = {
   // night -- cold ink, colour drained
-  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.30, cool: [0.14, 0.24, 0.54], air: [0.62, 0.70, 0.92] },
+  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.26, cool: [0.14, 0.24, 0.54], air: [0.62, 0.70, 0.92] },
   // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
-  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.42, cool: [0.22, 0.38, 0.64], air: [1.00, 0.66, 0.30] },
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.34, cool: [0.22, 0.38, 0.64], air: [1.00, 0.66, 0.30] },
   // noon -- the marine blue stays legible: a light hand
-  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.20, cool: [0.24, 0.42, 0.70], air: [1.00, 0.86, 0.64] },
-  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.46, cool: [0.20, 0.36, 0.66], air: [1.00, 0.60, 0.26] },
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.26, cool: [0.24, 0.42, 0.70], air: [1.00, 0.86, 0.64] },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.36, cool: [0.20, 0.36, 0.66], air: [1.00, 0.60, 0.26] },
   // gale -- slate, recognisable: values compressed, colour held down everywhere
   storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.22, cool: [0.34, 0.42, 0.54], air: [0.70, 0.72, 0.76] }
 };
@@ -274,8 +285,8 @@ for (const L of [...ZONE_LOOKS, ...Object.values(WX_LOOKS)]) {
   L.airT = [a[0] / la, a[1] / la, a[2] / la];
 }
 // Working accumulators (zero-alloc): slope, offset, power, mood, satUp, satDn.
-const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], satUp: 0, satDn: 0, wash: 0 };
-const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], satUp: 0, satDn: 0, wash: 0 };
+const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
+const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
 function lookLerp(out, a, b, t) {
   for (let i = 0; i < 3; i++) {
     out.slope[i] = a.slope[i] + (b.slope[i] - a.slope[i]) * t;
@@ -289,6 +300,11 @@ function lookLerp(out, a, b, t) {
   out.satUp = a.satUp + (b.satUp - a.satUp) * t;
   out.satDn = a.satDn + (b.satDn - a.satDn) * t;
   out.wash = a.wash + (b.wash - a.wash) * t;
+  // The shadow/mid crossover in WATER is per look: a boiler room or the abyss at a mean
+  // luminance of 0.02 has no mids at all under the reef's band, so the whole frame fell
+  // into the cool wash and the mood never showed (the boiler went navy, not amber).
+  const ab = a.band || TUNE.bandWater, bb = b.band || TUNE.bandWater;
+  out.band[0] = ab[0] + (bb[0] - ab[0]) * t; out.band[1] = ab[1] + (bb[1] - ab[1]) * t;
   out.moodDir = out.mood;
   return out;
 }
@@ -327,7 +343,7 @@ function updateGrade(airK) {
     _gradeU.wash.value.set(S.tint[0] + (S.airT[0] - S.tint[0]) * airK, S.tint[1] + (S.airT[1] - S.tint[1]) * airK, S.tint[2] + (S.airT[2] - S.tint[2]) * airK, S.wash * ks);
     _gradeU.cool.value.set(S.coolT[0], S.coolT[1], S.coolT[2]);
     _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK) * ks;
-    const bw = TUNE.bandWater, ba = TUNE.bandAir;
+    const bw = S.band, ba = TUNE.bandAir;
     _gradeU.band.value.set(bw[0] + (ba[0] - bw[0]) * airK, bw[1] + (ba[1] - bw[1]) * airK);
   } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; _gradeU.coolW.value = 0; }
   // Depth ramp runs the full column (~-900), not just to -650: the shipped look

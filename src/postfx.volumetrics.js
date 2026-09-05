@@ -206,7 +206,7 @@ void main(){
             // Flow lean (item 12): lower occlusion CONTRAST -- a shadowed sample keeps
             // 35% at full lean, so a ward or a leviathan flank against the sun sits in a
             // halo of scattered light rather than cutting a hard black notch out of it.
-            if ( diff > 0.8 + cp.w * 0.035 && diff < 55.0 ) { occ = 0.45 * uStyle; break; }
+            if ( diff > 0.8 + cp.w * 0.035 && diff < 55.0 ) { occ = 0.40 * uStyle; break; }
           }
         }
         if ( occ > 0.0 ) acc += down * tr * ( shaft * fade * occ * phase );
@@ -469,7 +469,7 @@ export class VolumetricLightPass extends Pass {
     const cu = this.fullscreenMaterial.uniforms;
     cu.uNear.value = camera.near;
     cu.uFar.value = camera.far;
-    cu.uIntensity.value = this.intensity * (1 + 0.45 * sk);
+    cu.uIntensity.value = this.intensity * (1 + 0.30 * sk);
     cu.tDiffuse.value = inputBuffer.texture;
 
     // 1) bake the seamless caustic tile (reads nothing)
