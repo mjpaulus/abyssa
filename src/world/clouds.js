@@ -182,7 +182,9 @@ function deal(dayIndex, camX, camZ) {
     const ang = low ? GLASS.sun.azimCenter * (Math.PI / 180) + (rnd() * 2 - 1) * 1.57 : rnd() * TAU;
     // area-uniform over the annulus -> most clusters far -> a low band, by perspective
     const rr = Math.sqrt(0.05 + 0.95 * rnd());
-    const rad = low ? P.rIn * 0.7 + (P.rOut * 0.6 - P.rIn * 0.7) * rr
+    // The low deck is dealt NEAR (0.6..0.42 of the cumulus annulus): at 80..230 units a
+    // 60..85-unit altitude subtends 15..45 degrees, which is the band a late sun crosses.
+    const rad = low ? P.rIn * 0.6 + (P.rOut * 0.42 - P.rIn * 0.6) * rr
                     : P.rIn + (P.rOut - P.rIn) * rr;
     cX[i] = camX + Math.cos(ang) * rad;
     cZ[i] = camZ + Math.sin(ang) * rad;
