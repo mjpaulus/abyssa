@@ -207,7 +207,12 @@ function serialize() {
   const ww = GLASS.windwater;
   out += '  windwater: {\n';
   out += `    capThr: ${n3(ww.capThr)}, capK: ${n3(ww.capK)}, anisoK: ${n3(ww.anisoK)},\n` +
-    `    ampK: ${n3(ww.ampK)}, currentK: ${n3(ww.currentK)}, decayH: ${n3(ww.decayH)}\n  }\n};\n`;
+    `    ampK: ${n3(ww.ampK)}, currentK: ${n3(ww.currentK)}, decayH: ${n3(ww.decayH)}\n  },\n`;
+  const st = GLASS.style;
+  out += '  style: {\n';
+  out += `    flowLean: ${n3(st.flowLean)}, paint: ${n3(st.paint)}, edge: ${n3(st.edge)}, strokes: ${n3(st.strokes)},\n` +
+    `    haze: ${n3(st.haze)}, grade: ${n3(st.grade)}, dof: ${n3(st.dof)}, camera: ${n3(st.camera)},\n` +
+    `    light: ${n3(st.light)}, matte: ${n3(st.matte)}\n  }\n};\n`;
   return out;
 }
 
@@ -401,6 +406,25 @@ function build() {
     { key: 'decayH', min: 0, max: 300, step: 1 }
   ]);
 
+  // --- THE FLOW LEAN (roadmap/flow-lean-style.md) -----------------------------
+  // ONE master dial; each axis can peel off. -1 on a sub-knob = follow the master.
+  el('h4', null, bd, 'the flow lean');
+  {
+    const d = el('details', 'stop', bd); d.open = true;
+    const sm = el('summary', null, d); el('span', null, sm, 'style');
+    const in_ = el('div', 'in', d);
+    const follow = x => (+x < 0 ? 'follow' : (+x).toFixed(2));
+    slider(in_, 'flowLean (master)', GLASS.style, 'flowLean', 0, 1, 0.01, BOOT.style.flowLean);
+    [['paint', 'roughness/metalness law'], ['edge', 'edge-not-middle detail'], ['strokes', 'silhouette strokes'],
+     ['haze', 'atmosphere + halation'], ['grade', 'zone colour'], ['dof', 'focus with intent'],
+     ['camera', 'handheld + interest'], ['light', 'rim-led light + shadows'], ['matte', 'matte sea']]
+      .forEach(([k, why]) => {
+        const r = slider(in_, k, GLASS.style, k, -1, 1, 0.01, BOOT.style[k], follow);
+        r.title = why + ' — drag left of 0 to follow the master';
+      });
+    el('p', 'note', in_, '0 = shipped look, 1 = full lean. sub-knobs at "follow" track the master.');
+  }
+
   // --- SURFACE: the sun -------------------------------------------------------
   el('h4', null, bd, 'surface — sun');
   const s = GLASS.sun, bs = BOOT.sun;
@@ -469,6 +493,7 @@ function build() {
     Object.assign(GLASS.fog, b.fog);
     Object.assign(GLASS.moon, b.moon);
     Object.assign(GLASS.windwater, b.windwater);
+    Object.assign(GLASS.style, b.style);
     syncAll();
     status.textContent = 'boot values restored';
   });
