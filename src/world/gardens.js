@@ -37,6 +37,7 @@
 import * as THREE from 'three';
 import { scene, camera } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
+import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
@@ -173,9 +174,10 @@ function gardenMat(o) {
       .replace('#include <common>', '#include <common>' + F_HEAD)
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + F_DITHER)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{' + F_BODY + '\n}');
+    injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): the plants are organic
   };
   m.customProgramCacheKey = () => 'gardens|' + o.key;
-  return m;
+  return registerPaint(m);
 }
 
 // The one additive material: sea-pen tips. fog:false + manual extinction (vGl.x),

@@ -744,4 +744,11 @@ export const GLASS = {
 //   phase01  0 = midnight, 0.5 = noon, wraps at 1
 //   ring     position on the night->dawn->noon->dusk ring, 0..4 (2 = noon exactly)
 export const SKY = { phase01: 0.5, ring: 2 };
+// The one shared reader of the style dial: a sub-knob if it is authored (>= 0), else
+// the master. Every style term is written so that styleK(...) === 0 is bit-identical
+// to the shipped look.
+export function styleK(name) {
+  const v = GLASS.style[name];
+  return (v !== undefined && v >= 0) ? v : GLASS.style.flowLean;
+}
 export function setSkyPhase(phase01, ring) { SKY.phase01 = phase01; SKY.ring = ring; }

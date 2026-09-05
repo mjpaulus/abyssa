@@ -17,6 +17,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
+import { registerPaint } from '../lib/paint.js';
 import { V3 } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand } from '../lib/textures.js';
 import { survival } from './survival.js';
@@ -163,6 +164,13 @@ function palette() {
     glass: M(0xc6d8de, { roughness: 0.10, metalness: 0.00, envMapIntensity: 0.9, transparent: true, opacity: 0.30 })
   };
 }
+// PAINT LAW (lib/paint.js): the deck's timber, iron, rope, canvas, leather, paint and
+// hose go matte with the dial (the plank normal maps soften with it). Brass and the
+// glass are HERO — wet brass is one of the few specular stories the style keeps.
+function paintRaft(mats) {
+  for (const k in mats) registerPaint(mats[k], { hero: k === 'brass' || k === 'glass' });
+  return mats;
+}
 
 // Second-pass merge across builders. Every mesh a Part baked is flagged and sits at
 // identity in raft-local space, so this is a straight geometry concat — no matrices to
@@ -240,7 +248,7 @@ function buildReel(P, mats, head) {
 
 export function buildRaft() {
   raft.position.copy(RAFT_POS);
-  const mats = palette();
+  const mats = paintRaft(palette());
   // The raft is the one thing in the game that lives at the surface, so it is the one
   // thing whose reflections should be the game's OWN sky rather than core.js's neutral
   // RoomEnvironment. water.js captures the sky dome into a small PMREM on palette-stop

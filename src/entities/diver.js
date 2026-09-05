@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
+import { registerPaint } from '../lib/paint.js';
 // The deck is a MOVING GROUND. A stance anchor claimed on planks is stored relative to
 // raft.position so it heaves and surges with the boat; a world-space anchor would leave
 // the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
@@ -207,6 +208,12 @@ const lantGlass = new THREE.MeshPhysicalMaterial({
   emissive: 0xffca7a, emissiveIntensity: 0.5, side: THREE.DoubleSide, depthWrite: false,
   envMap: envTex, envMapIntensity: 0.8
 });
+// PAINT LAW (lib/paint.js). The suit goes matte with the dial: cloth, trim, leathers,
+// rubber, steel (its 0.78 metalness is real metal and stays; only its normal map and
+// roughness floor move). HERO, untouched at every k: copper and brass (the Mark V's
+// bonnet and fittings), the port and lantern glass, the blue helmet lamp, the bubbles.
+for (const m of [steel, cloth, trim, leather, darkLeather, rubber]) registerPaint(m);
+for (const m of [copper, brass, port, blueLit, glassMat, lantGlass]) registerPaint(m, { hero: true });
 // the blade's water-drag streak: additive, opacity animated by the slash clock
 const dragMat = new THREE.MeshBasicMaterial({
   color: 0x9fd8f0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
@@ -917,6 +924,7 @@ const bubMat = new THREE.MeshStandardMaterial({
   color: 0xd6ecff, roughness: 0.05, metalness: 0, transparent: true, opacity: 0.62,
   depthWrite: false, envMap: envTex, envMapIntensity: 2.0
 });
+registerPaint(bubMat, { hero: true });   // a bubble is a mirror at grazing incidence: hero
 // Silvery fresnel rim — a real bubble is a mirror at grazing incidence, and at the
 // 9-unit third-person distance the flat translucent ball read as nothing at all. An
 // emissive rim (NOT additive glow: it still fogs, still darkens with depth via the
