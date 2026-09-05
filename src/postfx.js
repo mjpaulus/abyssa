@@ -13,13 +13,22 @@ import {
   KernelSize, NormalPass, SSAOEffect, SMAAEffect, SMAAPreset, DepthCopyPass
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
-import { SURFACE_Y } from './config.js';
+import { SURFACE_Y, GLASS, SKY, ZONE_H, ZONE_GAP } from './config.js';
 import { renderer, scene, camera, onResize } from './core.js';
 import { playerLightSrc, parkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
-import { degradeRefraction, reduceRefraction } from './world/water.js';
+import { degradeRefraction, reduceRefraction, stormLevel } from './world/water.js';
 // --- END VOLUMETRICS INTEGRATION ---
+// Read-only subject sources for the Flow-lean focus pull (item 5). creatures.js has no
+// side-effecting imports beyond core/config/terrain; predators, the leviathan and the
+// keepsakes are read through their existing window dev surfaces (pred / lev / wrecks)
+// so no new wiring lands in game.js.
+import { schools, jellies } from './world/creatures.js';
+
+// THE FLOW LEAN (roadmap/flow-lean-style.md). LOCAL helper until config.js grows
+// styleK(); same contract: a sub-knob at -1 follows the master.
+const styleK = n => { const st = GLASS.style; return st && st[n] >= 0 ? st[n] : (st ? st.flowLean : 0); };
 
 // Tone mapping on the renderer: it is baked into every material's fragment output at
 // scene-render time, so it applies identically through the composer and the bypass.
@@ -52,6 +61,23 @@ const bloom = new BloomEffect({
   intensity: 1.1, luminanceThreshold: 0.28, luminanceSmoothing: 0.25,
   kernelSize: KernelSize.LARGE, mipmapBlur: true
 });
+// HALATION (Flow lean item 3, styleK('haze')). Light blooms softly INTO the haze rather
+// than hot-spotting: the threshold comes down and the knee widens so a sun disc, the
+// lantern, a lit ward or an ember gets a halo, the mip radius opens, and the intensity
+// comes DOWN so nothing crosses into neon -- a photophore or jelly core at ~0.5 luminance
+// contributes about what it does today (lower gate x lower gain). Shipped numbers are
+// the k = 0 end and are reproduced exactly there.
+const BLOOM0 = { thr: 0.28, smooth: 0.25, int: 1.1, radius: bloom.mipmapBlurPass ? bloom.mipmapBlurPass.radius : 0.85 };
+let _bloomK = -1;
+function updateHalation() {
+  const k = styleK('haze');
+  if (k === _bloomK) return;
+  _bloomK = k;
+  bloom.luminanceMaterial.threshold = BLOOM0.thr - 0.10 * k;      // 0.28 -> 0.18
+  bloom.luminanceMaterial.smoothing = BLOOM0.smooth + 0.25 * k;   // 0.25 -> 0.50 (soft knee)
+  bloom.intensity = BLOOM0.int * (1 - 0.32 * k);                  // 1.1 -> 0.75
+  if (bloom.mipmapBlurPass) bloom.mipmapBlurPass.radius = BLOOM0.radius * (1 + 0.14 * k);
+}
 // bokehScale kept modest: the half-res CoC upsample stair-steps on bright edges (the
 // lantern pool) once the blur radius gets large.
 const dof = new DepthOfFieldEffect(camera, { focusDistance: 9 / 700, focalLength: 0.06, bokehScale: 1.35 });
@@ -115,13 +141,25 @@ const finite = new FiniteEffect();
 class GradeEffect extends Effect {
   constructor() {
     super('AbyssaGrade', `
-      uniform vec3 uSlope, uOffset, uPower;
+      uniform vec3 uSlope, uOffset, uPower, uMood;
       uniform float uSat;
+      uniform vec2 uSat2;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
         vec3 c = max(inputColor.rgb, 0.0);
         c = pow(c, vec3(0.4545454));
         c = pow(max(c * uSlope + uOffset, 0.0), uPower);
         c = mix(vec3(luminance(c)), c, uSat);
+        // HUE-SELECTIVE SATURATION (Flow lean item 4). uMood is the zone's mood colour as
+        // a unit chroma direction; a pixel's chroma alignment with it (0..1) picks between
+        // uSat2.y (everything else, DOWN) and uSat2.x (the mood hue, UP). Guarded so the
+        // whole block is absent at lean 0 -- a mix by exactly 1.0 is NOT bit-exact.
+        if ( uSat2.x != 0.0 || uSat2.y != 0.0 ) {
+          float l = luminance( c );
+          vec3 ch = c - vec3( l );
+          float cl = length( ch );
+          float w = cl > 1e-4 ? smoothstep( 0.0, 0.85, dot( ch / cl, uMood ) ) : 0.0;
+          c = mix( vec3( l ), c, 1.0 + mix( uSat2.y, uSat2.x, w ) );
+        }
         outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
       }`, {
       blendFunction: BlendFunction.NORMAL,
@@ -129,7 +167,9 @@ class GradeEffect extends Effect {
         ['uSlope', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
         ['uOffset', new THREE.Uniform(new THREE.Vector3(0, 0, 0))],
         ['uPower', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
-        ['uSat', new THREE.Uniform(1)]
+        ['uSat', new THREE.Uniform(1)],
+        ['uMood', new THREE.Uniform(new THREE.Vector3(0, 0, 1))],
+        ['uSat2', new THREE.Uniform(new THREE.Vector2(0, 0))]
       ])
     });
   }
@@ -151,16 +191,96 @@ const _gradeU = {
   slope: grade.uniforms.get('uSlope'),
   offset: grade.uniforms.get('uOffset'),
   power: grade.uniforms.get('uPower'),
-  sat: grade.uniforms.get('uSat')
+  sat: grade.uniforms.get('uSat'),
+  mood: grade.uniforms.get('uMood'),
+  sat2: grade.uniforms.get('uSat2')
 };
 const _gradeKeys = ['slope', 'offset', 'power'];
-function updateGrade() {
+
+// AUTHORED SCENE COLOUR (Flow lean item 4, styleK('grade')). A per-zone + per-weather-
+// stop grade STACK composed on top of the depth CDL above: each look is hand-tuned
+// slope/offset/power in the same 0.4545-gamma space, a MOOD colour (turned into a unit
+// chroma direction once, below) and the saturation pair (mood hue UP, elsewhere DOWN).
+// The zone looks blend across the zone bands by camera height; the weather looks blend
+// around the palette ring (config SKY.ring: night 0, dawn 1, noon 2, dusk 3) and toward
+// the storm look by the sea state; the deck reads the weather look through the lagged
+// air blend and the water fades it out over its first 300 units. Every departure is
+// scaled by styleK('grade') and COMPOSED with the legacy CDL (slope x, offset +, power
+// x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
+const ZONE_LOOKS = [
+  // reef -- mossy teal
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22 },
+  // boiler room -- sulphur-amber
+  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26 },
+  // abyss -- violet-black
+  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30 }
+];
+const WX_LOOKS = {
+  // night -- cold ink, colour drained
+  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28 },
+  // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18 },
+  // noon -- the marine blue stays legible: a light hand
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12 },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20 },
+  // gale -- slate, recognisable: values compressed, colour held down everywhere
+  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26 }
+};
+const WX_RING = [WX_LOOKS.night, WX_LOOKS.dawn, WX_LOOKS.noon, WX_LOOKS.dusk, WX_LOOKS.night];
+// Mood colours -> unit chroma directions (colour minus its luminance, normalised), once.
+for (const L of [...ZONE_LOOKS, ...Object.values(WX_LOOKS)]) {
+  const m = L.mood, l = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];
+  const v = [m[0] - l, m[1] - l, m[2] - l], n = Math.hypot(v[0], v[1], v[2]) || 1;
+  L.moodDir = [v[0] / n, v[1] / n, v[2] / n];
+}
+// Working accumulators (zero-alloc): slope, offset, power, mood, satUp, satDn.
+const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], satUp: 0, satDn: 0 };
+const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], satUp: 0, satDn: 0 };
+function lookLerp(out, a, b, t) {
+  for (let i = 0; i < 3; i++) {
+    out.slope[i] = a.slope[i] + (b.slope[i] - a.slope[i]) * t;
+    out.offset[i] = a.offset[i] + (b.offset[i] - a.offset[i]) * t;
+    out.power[i] = a.power[i] + (b.power[i] - a.power[i]) * t;
+    out.mood[i] = a.moodDir[i] + (b.moodDir[i] - a.moodDir[i]) * t;
+  }
+  out.satUp = a.satUp + (b.satUp - a.satUp) * t;
+  out.satDn = a.satDn + (b.satDn - a.satDn) * t;
+  out.moodDir = out.mood;
+  return out;
+}
+const sstep = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// Resolves the stack for this frame into _stk. `airK` is the lagged air blend.
+function resolveStack(airK) {
+  const y = camera.position.y;
+  // Zone band: continuous zone index from the camera's height, blended across each gap.
+  const zf = Math.max(0, Math.min(2, (-y - 40) / (ZONE_H + ZONE_GAP)));
+  const zi = Math.min(1, Math.floor(zf)), zt = sstep(0.62, 1.0, zf - zi);
+  const zone = lookLerp(_stk, ZONE_LOOKS[zi], ZONE_LOOKS[Math.min(2, zi + 1)], zt);
+  // Weather stop around the ring, then toward the storm look by sea state.
+  const r = Math.max(0, Math.min(3.999, SKY.ring || 0)), ri = Math.floor(r);
+  const wx = lookLerp(_stkTmp, WX_RING[ri], WX_RING[ri + 1], r - ri);
+  const st = Math.max(0, Math.min(1, stormLevel()));
+  if (st > 0) lookLerp(wx, wx, WX_LOOKS.storm, sstep(0.15, 0.85, st));
+  // Deck reads the weather; the water reads its zone, with the weather bleeding in
+  // over the first 300 units below the surface (the lit shallows are still a day).
+  const wxK = airK + (1 - airK) * 0.65 * (1 - Math.max(0, Math.min(1, -y / 300)));
+  return lookLerp(zone, zone, wx, wxK);
+}
+function updateGrade(airK) {
   const k = Math.max(0, Math.min(1, __grade.amount));
-  if (k <= 0.001) {
+  const ks = Math.max(0, Math.min(1, styleK('grade')));
+  // The stack applies even with the legacy depth CDL at 0 -- Flow commits.
+  if (k <= 0.001 && ks <= 0.001) {
     _gradeU.slope.value.set(1, 1, 1); _gradeU.offset.value.set(0, 0, 0);
     _gradeU.power.value.set(1, 1, 1); _gradeU.sat.value = 1;
+    _gradeU.sat2.value.set(0, 0);
     return;
   }
+  if (ks > 0.001) {
+    const S = resolveStack(airK);
+    _gradeU.mood.value.set(S.mood[0], S.mood[1], S.mood[2]);
+    _gradeU.sat2.value.set(S.satUp * ks, S.satDn * ks);
+  } else _gradeU.sat2.value.set(0, 0);
   // Depth ramp runs the full column (~-900), not just to -650: the shipped look
   // lands unchanged at -650 (d = 1 there), then drifts a touch deeper and quieter
   // to -900 — the abyss keeps darkening character without changing hue.
@@ -172,7 +292,14 @@ function updateGrade() {
     _gv.set(0, 0, 0);
     for (let i = 0; i < 3; i++) {
       const v = a[key][i] + (b[key][i] - a[key][i]) * d;
-      _gv.setComponent(i, neutral + (v - neutral) * k);
+      let g = neutral + (v - neutral) * k;
+      // Compose the authored stack on top: x for slope/power, + for offset. At ks = 0
+      // the factor is exactly 1.0 and the addend exactly 0.0.
+      if (ks > 0.001) {
+        const sv = _stk[key][i];
+        g = key === 'offset' ? g + sv * ks : g * (1 + (sv - 1) * ks);
+      }
+      _gv.setComponent(i, g);
     }
     _gradeU[key].value.copy(_gv);
   }
@@ -286,6 +413,101 @@ const focusTarget = new THREE.Vector3();
 let focusDist = 9;
 let air = 0;
 
+// DEPTH OF FIELD WITH INTENT (Flow lean item 5, styleK('dof')). The nearest living
+// thing / lit ward / keepsake inside the CENTRE THIRD of the frame pulls focus over
+// ~0.6 s; with nothing there focus returns to the diver at the shipped rate. Subjects
+// are read from the modules' own live objects (creatures' schools/jellies, the
+// predators' and leviathan's dev surfaces, the keepsake positions the wrecks publish),
+// never copied. NO HUNTING: a candidate must hold the centre for SUBJ_DWELL before it
+// takes over, the held subject keeps focus while it is anywhere in the centre HALF
+// (hysteresis band) unless something sits at under 0.6x its distance, and the focus
+// distance is slew-limited to SUBJ_SLEW u/s. Disabled outright at k = 0 (byte-identical
+// focus path).
+const SUBJ_DWELL = 0.25, SUBJ_HOLD = 0.35, SUBJ_SLEW = 22, SUBJ_TAU = 0.6, SUBJ_RANGE = 70;
+const _sp = new THREE.Vector3();
+let subj = null, subjPos = null, subjDist = 9, cand = null, candT = 0, keepPos = [], keepT = 0;
+// Returns the subject's world position in `_sp` (Vector3 refs are read in place; a
+// leviathan ward is a child of a deformed group so it is resolved through the scene).
+function subjectPos(o) {
+  if (o.isSigil) return o.grp.getWorldPosition(_sp);
+  return _sp.copy(o.pos || o.center);
+}
+// NDC test against the centre band (1/3 for capture, 1/2 for hold). Returns the
+// distance or -1. Uses Vector3.project (no allocation).
+function subjScore(p, band) {
+  const d = camera.position.distanceTo(p);
+  if (d < 1.5 || d > SUBJ_RANGE) return -1;
+  p.project(camera);
+  if (p.z < -1 || p.z > 1 || Math.abs(p.x) > band || Math.abs(p.y) > band) return -1;
+  return d;
+}
+let bestD = 0, bestO = null;
+function consider(o, alive) {
+  if (!alive) return;
+  const d = subjScore(subjectPos(o), 1 / 3);
+  if (d > 0 && (bestO === null || d < bestD)) { bestD = d; bestO = o; }
+}
+function pickSubject(dt) {
+  bestO = null; bestD = 0;
+  for (let i = 0; i < schools.length; i++) { const S = schools[i]; consider(S, S.inst && S.inst.visible); }
+  for (let i = 0; i < jellies.length; i++) { const J = jellies[i]; consider(J, !!J.pos); }
+  const P = typeof window !== 'undefined' ? window.pred : null;
+  if (P) {
+    if (P.sharks) for (let i = 0; i < P.sharks.length; i++) { const S = P.sharks[i]; consider(S, S.mesh && S.mesh.visible); }
+    if (P.octos) for (let i = 0; i < P.octos.length; i++) { const O = P.octos[i]; consider(O, O.mesh && O.mesh.visible && O.state !== 'den'); }
+    if (P.squids) for (let i = 0; i < P.squids.length; i++) { const Q = P.squids[i]; consider(Q, !Q.dead); }
+  }
+  const L = typeof window !== 'undefined' && window.lev ? window.lev : null;
+  if (L && L.grp && L.grp.visible && L.sigils) {
+    for (let i = 0; i < L.sigils.length; i++) { const g = L.sigils[i]; g.isSigil = true; consider(g, g.lit || g.rev > 0.5); }
+  }
+  // Keepsakes: the wrecks' dev surface allocates, so it is polled every 2 s.
+  keepT -= dt;
+  if (keepT <= 0 && typeof window !== 'undefined' && window.wrecks && window.wrecks.keeps) {
+    keepT = 2;
+    try {
+      const ks = window.wrecks.keeps();
+      keepPos.length = 0;
+      for (const kp of ks) if (kp.shown && !kp.taken && kp.x !== undefined && kp.x !== null)
+        keepPos.push({ pos: new THREE.Vector3(kp.x, kp.y, kp.z) });
+    } catch (e) { keepPos.length = 0; }
+  }
+  for (let i = 0; i < keepPos.length; i++) consider(keepPos[i], true);
+
+  // Hysteresis: hold the current subject while it is in the centre half and nothing
+  // clearly nearer has shown up; a new candidate must dwell before it takes over.
+  if (subj) {
+    const hd = subjScore(subjectPos(subj), 0.5);
+    if (hd > 0 && (bestO === null || bestO === subj || bestD > hd * 0.6)) {
+      subjDist = hd; cand = null; candT = 0; return;
+    }
+  }
+  if (bestO && bestO !== subj) {
+    if (cand === bestO) candT += dt; else { cand = bestO; candT = 0; }
+    if (candT >= SUBJ_DWELL) { subj = bestO; subjDist = bestD; cand = null; candT = 0; }
+    else if (subj) subj = null;   // the old subject has left the band; drift home meanwhile
+    return;
+  }
+  subj = null; cand = null; candT = 0;
+}
+// Probe surface for the Flow-lean A/B: every style-driven number in this file at once,
+// so a session can assert the k = 0 end against the shipped constants numerically.
+if (typeof window !== 'undefined') {
+  window.__dof = { subject: () => subj, dist: () => focusDist, subjDist: () => subjDist };
+  window.__style = {
+    probe: () => ({
+      haze: styleK('haze'), grade: styleK('grade'), dof: styleK('dof'), matte: styleK('matte'),
+      bloom: { thr: bloom.luminanceMaterial.threshold, smooth: bloom.luminanceMaterial.smoothing,
+               int: bloom.intensity, radius: bloom.mipmapBlurPass ? bloom.mipmapBlurPass.radius : null },
+      grade_u: { slope: _gradeU.slope.value.toArray(), offset: _gradeU.offset.value.toArray(),
+                 power: _gradeU.power.value.toArray(), sat: _gradeU.sat.value,
+                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray() },
+      dof_u: { focus: focusDist, range: 'worldFocusRange' in dof.cocMaterial ? dof.cocMaterial.worldFocusRange : null,
+               bokeh: dof.bokehScale, air, subject: !!subj, subjDist }
+    })
+  };
+}
+
 // Diagnostic escape hatch (P key): render the scene straight to the canvas. Tone
 // mapping lives on the renderer, so bypass and composer output match in exposure.
 let bypass = false;
@@ -299,8 +521,17 @@ export function render(dt) {
     return;
   }
   focusTarget.copy(playerLightSrc.position);
-  const want = THREE.MathUtils.clamp(camera.position.distanceTo(focusTarget), 3, 40);
-  focusDist += (want - focusDist) * Math.min(1, (dt || 0.016) * 3.5);
+  const kd = styleK('dof');
+  let want = THREE.MathUtils.clamp(camera.position.distanceTo(focusTarget), 3, 40);
+  if (kd > 0.001) {
+    pickSubject(dt || 0.016);
+    if (subj) {
+      // Pull toward the subject by the lean; the diver is what is left at the other end.
+      want = want + (THREE.MathUtils.clamp(subjDist, 1.5, SUBJ_RANGE) - want) * kd;
+      const step = (want - focusDist) * Math.min(1, (dt || 0.016) / SUBJ_TAU);
+      focusDist += THREE.MathUtils.clamp(step, -SUBJ_SLEW * (dt || 0.016), SUBJ_SLEW * (dt || 0.016));
+    } else focusDist += (want - focusDist) * Math.min(1, (dt || 0.016) * 3.5);
+  } else focusDist += (want - focusDist) * Math.min(1, (dt || 0.016) * 3.5);
   // postprocessing >= 6.39 reads focus in WORLD units via the cocMaterial accessors;
   // 6.35 read the raw uniform NORMALIZED by camera.far. Writing the normalized value
   // into the 6.39 uniform focused the camera ~1cm in front of the lens and blurred the
@@ -319,9 +550,13 @@ export function render(dt) {
   // the 1.6-unit band every trough), a visible focus "breathing" from the deck.
   const airWant = THREE.MathUtils.clamp((camera.position.y - SURFACE_Y + 0.6) / 1.6, 0, 1);
   air += (airWant - air) * Math.min(1, (dt || 0.016) * 3.5);
-  if ('worldFocusRange' in cm) cm.worldFocusRange = 42 * (1 + 3 * air);
-  dof.bokehScale = 1.35 * (1 - air) + 0.15 * air;
-  updateGrade();
+  // WIDER APERTURE UNDERWATER by styleK('dof'): the sharp band narrows to 0.65x and the
+  // bokeh opens to 1.45x at full lean, both scaled by (1 - air) so the deck stays the
+  // shipped sharp lens. At kd = 0 both factors are exactly 1.0.
+  if ('worldFocusRange' in cm) cm.worldFocusRange = 42 * (1 + 3 * air) * (1 - 0.35 * kd * (1 - air));
+  dof.bokehScale = 1.35 * (1 + 0.45 * kd) * (1 - air) + 0.15 * air;
+  updateHalation();
+  updateGrade(air);
   composer.render(dt);
 }
 
