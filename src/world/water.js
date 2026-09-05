@@ -138,6 +138,18 @@ const SUN_DISC = GLASS.stops.noon.disc;
 // Faintly blue-tilted (aerosol, not Rayleigh — a real marine haze is nearly grey).
 const K_AIR = [0.00380, 0.00400, 0.00440];
 
+// THE FLOW LEAN — atmosphere forward (roadmap/flow-lean-style.md item 3) and the matte
+// mirror (item 8). GLASS.style is the dial; each sub-knob follows the master at -1.
+// LOCAL helper until config.js grows styleK(); same contract.
+const styleK = n => { const st = GLASS.style; return st && st[n] >= 0 ? st[n] : (st ? st.flowLean : 0); };
+// ONE shared vec4 every fogged program reads, installed exactly the way abyssaAir is
+// (see patchFog): x = air haze gain (KAIR * (1 + x): +1 stop at x = 1), y = nepheloid
+// amp gain (amp * (1 + y)), z = matte mirror amount, w = spare. A program never handed
+// the uniform reads zeros and is bit-identical to today; at styleK() = 0 every term is
+// multiplied by exactly 1.0 or added exactly 0.0, which IEEE makes identity.
+const STYLE_U = new Float32Array(4);
+export function styleState() { return STYLE_U; }
+
 const f = v => v.toFixed(5);
 const v3 = a => `vec3(${f(a[0])},${f(a[1])},${f(a[2])})`;
 const v2 = a => `vec2(${f(a[0])},${f(a[1])})`;
@@ -170,6 +182,7 @@ vec3 abyssaAmbient(vec3 surf,float y){
 // at the same height. (Injecting it into one shader and not the other is not a subtle
 // bug — the other one fails to link and there is no background at all.)
 const GLSL_WATER = `
+uniform vec4 abyssaStyle;
 #define RC0 ${f(RC0)}
 #define RC_K ${f(RC_K)}
 #define RC_MIN ${f(RC_MIN)}
@@ -187,6 +200,9 @@ void nephParams( float yc, out float yf, out float hs, out float amp ){
   yf  = mix( mix( ${f(NEPH_YF[0])}, ${f(NEPH_YF[1])}, t1 ), ${f(NEPH_YF[2])}, t2 );
   hs  = mix( mix( ${f(NEPH_HS[0])}, ${f(NEPH_HS[1])}, t1 ), ${f(NEPH_HS[2])}, t2 );
   amp = mix( mix( ${f(NEPH_AMP[0])}, ${f(NEPH_AMP[1])}, t1 ), ${f(NEPH_AMP[2])}, t2 );
+  // Flow lean: the silt line one notch thicker (structure untouched -- yf and hs are
+  // the layer's shape, amp is only its weight). Mirrored on the CPU in nephAt().
+  amp *= 1.0 + abyssaStyle.y;
 }
 
 // Antiderivative of the SATURATING shape min(1, exp(-s)). The exp argument is
@@ -223,7 +239,7 @@ vec3 siltTint( vec3 A, float fm ){
 // geometry that have to agree on one number, and the only way to guarantee that is to
 // have them evaluate the same function.
 const GLSL_AIR = `
-#define KAIR ${v3(K_AIR)}
+#define KAIR ( ${v3(K_AIR)} * ( 1.0 + abyssaStyle.x ) )
 
 // Airlight: what a long path through air settles on. It IS the sky at the horizon, which
 // is what makes those three pieces land on one colour with nothing to step against.
@@ -746,7 +762,8 @@ export function nephAt(y) {
   const t1 = 1 - ms(y, -400, -300), t2 = 1 - ms(y, -710, -610);
   _neph.yf = ml(ml(NEPH_YF[0], NEPH_YF[1], t1), NEPH_YF[2], t2);
   _neph.hs = ml(ml(NEPH_HS[0], NEPH_HS[1], t1), NEPH_HS[2], t2);
-  _neph.amp = ml(ml(NEPH_AMP[0], NEPH_AMP[1], t1), NEPH_AMP[2], t2);
+  // Same Flow-lean gain the shader applies (STYLE_U[1]); 1 + 0 is exact at lean 0.
+  _neph.amp = ml(ml(NEPH_AMP[0], NEPH_AMP[1], t1), NEPH_AMP[2], t2) * (1 + STYLE_U[1]);
   return _neph;
 }
 const nephShape = (y, n) => n.amp * Math.exp(-Math.max((y - n.yf) / n.hs, 0));
@@ -779,9 +796,10 @@ const AIR_U = new Float32Array(4);
   // material whose shader never mentions abyssaAir costs nothing; a fogged program
   // WITHOUT the entry would throw in upload(), which is why both tables get it.
   THREE.UniformsLib.fog.abyssaAir = { value: AIR_U };
+  THREE.UniformsLib.fog.abyssaStyle = { value: STYLE_U };
   for (const k in THREE.ShaderLib) {
     const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
-    if (u && u.fogColor) u.abyssaAir = { value: AIR_U };
+    if (u && u.fogColor) { u.abyssaAir = { value: AIR_U }; u.abyssaStyle = { value: STYLE_U }; }
   }
   C.fog_pars_vertex = `#ifdef USE_FOG
   varying float vFogDepth;
@@ -1027,7 +1045,8 @@ const SKY_UNIFORMS = {
   uCloudDrift, uCloudScale, uCloudCov, uCloudSoft, uCloudTex, uCloudLit, uCloudBase, uSunUV, uDiscK,
   uCloudIsl, uCloudShp, uCloudBak, uCloudDome, uCloudFrm, uCloudFrm2,
   uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol,
-  abyssaAir: { value: AIR_U }
+  abyssaAir: { value: AIR_U },
+  abyssaStyle: { value: STYLE_U }
 };
 const _tmp = new THREE.Vector3();
 const _size = new THREE.Vector2();
@@ -2652,7 +2671,30 @@ function buildSurface() {
           gSunK = sh * legacy; gHaloK = sh;
           float bodyW = ( 1.0 - F ) * ( 1.0 - 0.45 * ( 1.0 - sh ) );
           tBody = bodyA * bodyW; tTrans *= bodyW;
-          tRefl = skyRadiance( reflect( V, Na ) ) * F;
+          // THE MATTE MIRROR (Flow lean item 8, abyssaStyle.z). The reflection's
+          // roughness floor comes up: the resolved micro ripple is pulled OUT of the
+          // reflection normal (the sea keeps its SWELL, loses its glass) and the sky is
+          // read through a lobe -- three taps at +-aM in elevation about the reflected
+          // ray, aM = max( alpha, 0.06 + 0.16 z ), so the horizon ring smears upward
+          // the way a painted sea's does instead of mirroring each ripple. Only the
+          // SKY term: the glitter below keeps Na and alpha (the GGX lobe stays sharp),
+          // the from-below TIR mirror is the other branch and never enters here, and the
+          // opaque gale is untouched because it is body + scatter with F's sky on top of
+          // a surface whose alpha is already over the floor. At z = 0 the branch is
+          // skipped and tRefl is the shipped expression, bit for bit.
+          if ( abyssaStyle.z > 0.001 ) {
+            float z = abyssaStyle.z;
+            vec2 dhR = dh + dhSpl + micro * ( 1.0 - 0.6 * z );
+            vec3 Nr = normalize( vec3( -dhR.x, 1.0, -dhR.y ) );
+            vec3 R = reflect( V, Nr );
+            float aM = max( alpha, 0.06 + 0.16 * z );
+            vec3 sU = skyRadiance( normalize( vec3( R.x, R.y + aM, R.z ) ) );
+            vec3 sD = skyRadiance( normalize( vec3( R.x, R.y - aM, R.z ) ) );
+            vec3 sR = skyRadiance( R );
+            tRefl = mix( sR, ( sR + sU + sD ) * 0.33333333, 0.85 * z ) * F;
+          } else {
+            tRefl = skyRadiance( reflect( V, Na ) ) * F;
+          }
           col = body * bodyW + tRefl;
           gSunK = 1.0; gHaloK = 1.0;
           if ( legacy < 0.999 ) {
@@ -3230,7 +3272,8 @@ function skyDrama(dt, storm) {
   const lidK = Math.max(ms(cov, C.lidCov[0], C.lidCov[1]), ms(storm, C.lidStorm[0], C.lidStorm[1]));
   if (lidK > 0) {
     for (let i = 0; i < 3; i++) {
-      const under = _cBase[i] + (_cLit[i] - _cBase[i]) * C.lidHz + _pHor[i] * C.lidRing;
+      // Flow lean: a hazier slit under the lid (the ring's share up to 1.5x at full lean).
+      const under = _cBase[i] + (_cLit[i] - _cBase[i]) * C.lidHz + _pHor[i] * C.lidRing * (1 + 0.5 * STYLE_U[3]);
       _pRing[i] = _pHor[i] + (Math.min(under, _pHor[i]) - _pHor[i]) * lidK;
     }
   } else { _pRing[0] = _pHor[0]; _pRing[1] = _pHor[1]; _pRing[2] = _pHor[2]; }
@@ -3309,6 +3352,14 @@ const _windOut = { speed: 0, dx: 1, dz: 0 };
 
 export function updateWater(dt, t) {
   uTime.value = t;
+  // THE FLOW LEAN, resolved once a frame for every fogged program (see STYLE_U).
+  {
+    const hz = styleK('haze'), mt = styleK('matte');
+    STYLE_U[0] = hz;              // air: KAIR * (1 + hz) -- one stop denser at full lean
+    STYLE_U[1] = 0.25 * hz;       // nepheloid amp x1.25 at full lean (silt line structure kept)
+    STYLE_U[2] = mt;              // the matte mirror (surface shader, from-above branch only)
+    STYLE_U[3] = hz;              // lid ring share, read by skyDrama on the CPU
+  }
   // Boil fades over ~1.5 s once the bubbles stop arriving; while a burst is breaching,
   // surfaceBoil() keeps re-feeding it faster than this drains it.
   uBoil.value.z *= Math.exp(-dt / 0.55);
