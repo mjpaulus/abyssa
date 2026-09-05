@@ -230,13 +230,24 @@ export class SkyRaysPass extends Pass {
     // GPU timer (EXT_disjoint_timer_query_webgl2, where the driver has it): the cost
     // claim in the report is measured, not asserted. Off until __rays.profile(true).
     this._prof = false; this._ext = null; this._q = []; this.gpuMs = []; this._cpuMs = 0;
+    // ...and the compile happens with a RENDER TARGET bound: three keys a program on the
+    // current target's colour space too (canvas = sRGB, target = linear), so a compile
+    // against the canvas is a different program from the one the pass draws with.
     const r = coreRenderer;
     try {
-      r.compile(this.maskScene, camera);
-      r.compile(this.blurScene, camera);
-      r.compile(this.scene, this.camera);
+      this._withTarget(r, () => {
+        r.compile(this.maskScene, camera);
+        r.compile(this.blurScene, camera);
+        r.compile(this.scene, this.camera);
+      });
       this._compileOcc(r);
     } catch (e) { console.warn('SkyRays: boot compile', e); }
+  }
+
+  _withTarget(r, fn) {
+    const prev = r.getRenderTarget();
+    r.setRenderTarget(this.rtBlur);
+    try { fn(); } finally { r.setRenderTarget(prev); }
   }
 
   // Called by postfx.js's boot warm-up, after the world (and so the cloud occluder)
@@ -250,7 +261,7 @@ export class SkyRaysPass extends Pass {
     // compile() skips invisible objects; flip for the call only.
     const m = occ.children[0], was = m.visible;
     m.visible = true;
-    try { r.compile(occ, camera); } finally { m.visible = was; }
+    try { this._withTarget(r, () => r.compile(occ, camera)); } finally { m.visible = was; }
     this._occCompiled = true;
   }
 
