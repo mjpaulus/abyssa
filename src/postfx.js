@@ -145,7 +145,7 @@ class GradeEffect extends Effect {
       uniform vec3 uSlope, uOffset, uPower, uMood;
       uniform float uSat;
       uniform vec2 uSat2;
-      uniform vec4 uWash; uniform vec3 uCool;
+      uniform vec4 uWash; uniform vec3 uCool; uniform float uCoolW;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
         vec3 c = max(inputColor.rgb, 0.0);
         c = pow(c, vec3(0.4545454));
@@ -168,10 +168,12 @@ class GradeEffect extends Effect {
           // left alone so a sun disc or a lantern core stays its own colour. A single
           // warm wash over everything read as a filter, not a lit scene.
           float lw = luminance( c );
-          float sh = 1.0 - smoothstep( 0.18, 0.55, lw );
-          float md = smoothstep( 0.18, 0.55, lw ) * ( 1.0 - smoothstep( 0.62, 0.95, lw ) );
+          // uWash.w = mood weight in the mids, uCoolW = cool weight in the shadows; the
+          // bands cross at gamma 0.22..0.60 (linear ~0.04..0.32).
+          float sh = 1.0 - smoothstep( 0.22, 0.60, lw );
+          float md = smoothstep( 0.22, 0.60, lw ) * ( 1.0 - smoothstep( 0.70, 0.95, lw ) );
           c = mix( c, uWash.rgb * lw, uWash.w * md );
-          c = mix( c, uCool * lw, uWash.w * sh );
+          c = mix( c, uCool * lw, uCoolW * sh );
         }
         outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
       }`, {
@@ -184,7 +186,8 @@ class GradeEffect extends Effect {
         ['uMood', new THREE.Uniform(new THREE.Vector3(0, 0, 1))],
         ['uSat2', new THREE.Uniform(new THREE.Vector2(0, 0))],
         ['uWash', new THREE.Uniform(new THREE.Vector4(1, 1, 1, 0))],
-        ['uCool', new THREE.Uniform(new THREE.Vector3(1, 1, 1))]
+        ['uCool', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
+        ['uCoolW', new THREE.Uniform(0)]
       ])
     });
   }
@@ -210,7 +213,8 @@ const _gradeU = {
   mood: grade.uniforms.get('uMood'),
   sat2: grade.uniforms.get('uSat2'),
   wash: grade.uniforms.get('uWash'),
-  cool: grade.uniforms.get('uCool')
+  cool: grade.uniforms.get('uCool'),
+  coolW: grade.uniforms.get('uCoolW')
 };
 const _gradeKeys = ['slope', 'offset', 'power'];
 
@@ -226,28 +230,31 @@ const _gradeKeys = ['slope', 'offset', 'power'];
 // x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
 const ZONE_LOOKS = [
   // reef -- mossy teal
-  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.30 , cool: [0.06, 0.34, 0.46] },
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.26, satDn: -0.22, wash: 0.42, cool: [0.06, 0.34, 0.46] },
   // boiler room -- sulphur-amber
-  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.38 , cool: [0.18, 0.26, 0.46] },
+  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.46, cool: [0.18, 0.26, 0.46] },
   // abyss -- violet-black
-  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.34 , cool: [0.16, 0.10, 0.44] }
+  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.44, cool: [0.16, 0.10, 0.44] }
 ];
 // LOOK-DEV PUSH (2026-09-05): the tables above were authored timid -- at the default
 // dial the probe read slope 0.99..1.01 and a 1% saturation move, which no eye registers.
 // Every deviation from neutral in the stack is scaled by PUSH before it composes, so the
 // authored RATIOS between looks survive and the magnitude lands at 10-20%. 1.0 = the
 // tables as written.
-const PUSH = 1.8;
+// TUNE is live (window.__style.tune) so the look can be dialled in the browser and the
+// numbers copied back here. push: slope/offset/power deviations; pushSat: the mood-hue
+// saturation pair; coolK: the shadows' cool weight relative to the look's wash.
+const TUNE = { push: 1.25, pushSat: 1.2, coolK: 1.5, coolMax: 0.8 };
 const WX_LOOKS = {
   // night -- cold ink, colour drained
-  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.22 , cool: [0.14, 0.24, 0.54] },
+  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.30, cool: [0.14, 0.24, 0.54] },
   // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
-  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.30 , cool: [0.22, 0.38, 0.64] },
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.42, cool: [0.22, 0.38, 0.64] },
   // noon -- the marine blue stays legible: a light hand
-  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.12 , cool: [0.24, 0.42, 0.70] },
-  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.34 , cool: [0.20, 0.36, 0.66] },
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.20, cool: [0.24, 0.42, 0.70] },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.46, cool: [0.20, 0.36, 0.66] },
   // gale -- slate, recognisable: values compressed, colour held down everywhere
-  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.16 , cool: [0.34, 0.42, 0.54] }
+  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.22, cool: [0.34, 0.42, 0.54] }
 };
 const WX_RING = [WX_LOOKS.night, WX_LOOKS.dawn, WX_LOOKS.noon, WX_LOOKS.dusk, WX_LOOKS.night];
 // Mood colours -> unit chroma directions (colour minus its luminance, normalised), once.
@@ -308,10 +315,11 @@ function updateGrade(airK) {
   if (ks > 0.001) {
     const S = resolveStack(airK);
     _gradeU.mood.value.set(S.mood[0], S.mood[1], S.mood[2]);
-    _gradeU.sat2.value.set(S.satUp * PUSH * ks, S.satDn * PUSH * ks);
+    _gradeU.sat2.value.set(S.satUp * TUNE.pushSat * ks, S.satDn * TUNE.pushSat * ks);
     _gradeU.wash.value.set(S.tint[0], S.tint[1], S.tint[2], S.wash * ks);
     _gradeU.cool.value.set(S.coolT[0], S.coolT[1], S.coolT[2]);
-  } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; }
+    _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK) * ks;
+  } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; _gradeU.coolW.value = 0; }
   // Depth ramp runs the full column (~-900), not just to -650: the shipped look
   // lands unchanged at -650 (d = 1 there), then drifts a touch deeper and quieter
   // to -900 — the abyss keeps darkening character without changing hue.
@@ -328,7 +336,7 @@ function updateGrade(airK) {
       // the factor is exactly 1.0 and the addend exactly 0.0.
       if (ks > 0.001) {
         const sv = _stk[key][i];
-        g = key === 'offset' ? g + sv * PUSH * ks : g * (1 + (sv - 1) * PUSH * ks);
+        g = key === 'offset' ? g + sv * TUNE.push * ks : g * (1 + (sv - 1) * TUNE.push * ks);
       }
       _gv.setComponent(i, g);
     }
@@ -532,11 +540,12 @@ if (typeof window !== 'undefined') {
                int: bloom.intensity, radius: bloom.mipmapBlurPass ? bloom.mipmapBlurPass.radius : null },
       grade_u: { slope: _gradeU.slope.value.toArray(), offset: _gradeU.offset.value.toArray(),
                  power: _gradeU.power.value.toArray(), sat: _gradeU.sat.value,
-                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray(), wash: _gradeU.wash.value.toArray() },
+                 mood: _gradeU.mood.value.toArray(), sat2: _gradeU.sat2.value.toArray(), wash: _gradeU.wash.value.toArray(), coolW: _gradeU.coolW.value },
       dof_u: { focus: focusDist, range: 'worldFocusRange' in dof.cocMaterial ? dof.cocMaterial.worldFocusRange : null,
                bokeh: dof.bokehScale, air, subject: !!subj, subjDist }
     }),
     diff: styleDiff,
+    tune: TUNE, looks: { zone: ZONE_LOOKS, wx: WX_LOOKS },
     capture: () => afterFrames(1).then(captureLinear),
     // A region of the DRAWN frame as RGBA bytes (top-down rows), read inside the frame
     // hook. Look-dev eyes: draw it on an overlay canvas at 2-3x to inspect a rim.
