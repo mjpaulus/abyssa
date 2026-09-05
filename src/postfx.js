@@ -145,7 +145,7 @@ class GradeEffect extends Effect {
       uniform vec3 uSlope, uOffset, uPower, uMood;
       uniform float uSat;
       uniform vec2 uSat2;
-      uniform vec4 uWash; uniform vec3 uCool; uniform float uCoolW;
+      uniform vec4 uWash; uniform vec3 uCool; uniform float uCoolW; uniform vec2 uBand;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
         vec3 c = max(inputColor.rgb, 0.0);
         c = pow(c, vec3(0.4545454));
@@ -169,9 +169,10 @@ class GradeEffect extends Effect {
           // warm wash over everything read as a filter, not a lit scene.
           float lw = luminance( c );
           // uWash.w = mood weight in the mids, uCoolW = cool weight in the shadows; the
-          // bands cross at gamma 0.22..0.60 (linear ~0.04..0.32).
-          float sh = 1.0 - smoothstep( 0.22, 0.60, lw );
-          float md = smoothstep( 0.22, 0.60, lw ) * ( 1.0 - smoothstep( 0.70, 0.95, lw ) );
+          // bands cross at uBand (gamma), set per regime by updateGrade: the deck's sunlit
+          // timber is dark in absolute terms and must not be read as shadow.
+          float sh = 1.0 - smoothstep( uBand.x, uBand.y, lw );
+          float md = smoothstep( uBand.x, uBand.y, lw ) * ( 1.0 - smoothstep( 0.70, 0.95, lw ) );
           c = mix( c, uWash.rgb * lw, uWash.w * md );
           c = mix( c, uCool * lw, uCoolW * sh );
         }
@@ -187,7 +188,8 @@ class GradeEffect extends Effect {
         ['uSat2', new THREE.Uniform(new THREE.Vector2(0, 0))],
         ['uWash', new THREE.Uniform(new THREE.Vector4(1, 1, 1, 0))],
         ['uCool', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
-        ['uCoolW', new THREE.Uniform(0)]
+        ['uCoolW', new THREE.Uniform(0)],
+        ['uBand', new THREE.Uniform(new THREE.Vector2(0.22, 0.60))]
       ])
     });
   }
@@ -214,7 +216,8 @@ const _gradeU = {
   sat2: grade.uniforms.get('uSat2'),
   wash: grade.uniforms.get('uWash'),
   cool: grade.uniforms.get('uCool'),
-  coolW: grade.uniforms.get('uCoolW')
+  coolW: grade.uniforms.get('uCoolW'),
+  band: grade.uniforms.get('uBand')
 };
 const _gradeKeys = ['slope', 'offset', 'power'];
 
@@ -244,7 +247,7 @@ const ZONE_LOOKS = [
 // TUNE is live (window.__style.tune) so the look can be dialled in the browser and the
 // numbers copied back here. push: slope/offset/power deviations; pushSat: the mood-hue
 // saturation pair; coolK: the shadows' cool weight relative to the look's wash.
-const TUNE = { push: 1.25, pushSat: 1.2, coolK: 1.5, coolMax: 0.8 };
+const TUNE = { push: 1.25, pushSat: 1.2, coolK: 1.5, coolMax: 0.8, bandWater: [0.22, 0.60], bandAir: [0.10, 0.30] };
 const WX_LOOKS = {
   // night -- cold ink, colour drained
   night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.30, cool: [0.14, 0.24, 0.54] },
@@ -319,6 +322,8 @@ function updateGrade(airK) {
     _gradeU.wash.value.set(S.tint[0], S.tint[1], S.tint[2], S.wash * ks);
     _gradeU.cool.value.set(S.coolT[0], S.coolT[1], S.coolT[2]);
     _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK) * ks;
+    const bw = TUNE.bandWater, ba = TUNE.bandAir;
+    _gradeU.band.value.set(bw[0] + (ba[0] - bw[0]) * airK, bw[1] + (ba[1] - bw[1]) * airK);
   } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; _gradeU.coolW.value = 0; }
   // Depth ramp runs the full column (~-900), not just to -650: the shipped look
   // lands unchanged at -650 (d = 1 there), then drifts a touch deeper and quieter

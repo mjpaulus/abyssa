@@ -362,7 +362,7 @@ export function updateLighting(depth01) {
   // hemisphere's from 42% to 28% at full lean, so the deck's shadows are filled by sky
   // instead of pitching; underwater the hemisphere carries what the fill gives up
   // (item 9) — +22% at full lean — and the omni ambient a hair.
-  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.26 * sk) * air) * (1 + 0.25 * sk * (1 - air));
+  ambient.intensity = mix('ambI') * wk * (1 - (0.74 - 0.32 * sk) * air) * (1 + 0.25 * sk * (1 - air));
   mixInto(hemi.color, a, b, 'sky', t);
   mixInto(hemi.groundColor, a, b, 'gnd', t);
   // Same mistake as the fill, in colour instead of level: the hemisphere's shallow stop
@@ -372,7 +372,7 @@ export function updateLighting(depth01) {
   // is the sea, so the two ends travel to those instead.
   hemi.color.lerp(AIR_SKY, air * 0.85);
   hemi.groundColor.lerp(AIR_SEA, air * 0.85);
-  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.24 * sk) * air) * (1 + 0.45 * sk * (1 - air));
+  hemi.intensity = (mix('hemiI') * (reduced ? 1.5 : 1) * wk + flashBoost * 0.8) * (1 - (0.42 - 0.30 * sk) * air) * (1 + 0.45 * sk * (1 - air));
   mixInto(sun.color, a, b, 'sun', t);
   sun.intensity = mix('sunI') * wk + flashBoost * 2.2;
   if (sk > 0) {
@@ -384,7 +384,7 @@ export function updateLighting(depth01) {
     // toward the stop's cf below. The sea end lifts (item 10) so shadows have a floor.
     const lowSun = 1 - clamp((SUN.elevDeg - 8) / 37, 0, 1);
     const lowS = lowSun * lowSun * (3 - 2 * lowSun);
-    sun.color.lerp(AIR_SUN_W, sk * air * (0.50 + 0.50 * lowS));
+    sun.color.lerp(AIR_SUN_W, sk * air * (0.65 + 0.35 * lowS));
     mixInto(tmpCol, a, b, 'kw', t);
     sun.color.lerp(tmpCol, sk * (1 - air) * 0.45);
     hemi.color.lerp(AIR_SKY_C, sk * air * 0.80);
