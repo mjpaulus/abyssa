@@ -40,7 +40,7 @@ import { Pass } from 'postprocessing';
 import { camera, renderer as coreRenderer } from './core.js';
 import { sun } from './lighting.js';
 import { GLASS, SUN } from './config.js';
-import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, localSurfaceY, styleState } from './world/water.js';
+import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, cloudLook, localSurfaceY, styleState } from './world/water.js';
 import { cloudOccluder, cloudOccK } from './world/clouds.js';
 
 const SUN_REF_I = 2.60;     // lighting.js STOPS[0].sunI, the same reference volumetrics uses
@@ -281,7 +281,11 @@ export class SkyRaysPass extends Pass {
     const cov = skyState.cov;
     S.cov = cov;
     const W = R.window;
-    const win = sm(W[0], W[1], cov) * (1 - sm(W[2], W[3], cov));
+    // The coverage window, and the storm envelope on top of it: a gale's lid is a lid
+    // before the coverage uniform has finished closing (env.sky lags the storm ~1 s and
+    // the puffs are already sinking into the deck), so the fan dies with the envelope
+    // too. Calm days: exactly 1.0.
+    const win = sm(W[0], W[1], cov) * (1 - sm(W[2], W[3], cov)) * (1 - sm(0.30, 0.70, cloudLook.storm));
     S.win = win;
     if (win < 0.004) return skip(cov < W[1] ? 'clear' : 'lid');
 
