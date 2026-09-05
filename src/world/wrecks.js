@@ -45,6 +45,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
+import { registerPaint } from '../lib/paint.js';
 import { rng, clamp, fbm, V3 } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
@@ -256,6 +257,10 @@ function palette(zi) {
     })
   };
   for (const k of ['wood', 'iron', 'brass', 'rope', 'glass', 'lit']) P[k].userData.persist = true;
+  // PAINT LAW (lib/paint.js): timber, iron and rope go matte with the dial; brass, the
+  // glass and the lit lamps are authored hero surfaces and keep their sharpness.
+  for (const k of ['wood', 'iron', 'rope']) registerPaint(P[k]);
+  for (const k of ['brass', 'glass', 'lit']) registerPaint(P[k], { hero: true });
   PALETTES.set(zi, P);
   return P;
 }

@@ -16,6 +16,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
 import { riftPos } from '../config.js';
+import { registerPaint } from '../lib/paint.js';
 import { clamp, vnoise } from '../lib/math.js';
 import { makeGlow, surfacePair } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
@@ -423,6 +424,7 @@ function growField() {
       vertexColors: true, roughness: 1, metalness: 0.02,
       roughnessMap: sp.rough, normalMap: sp.nrm, normalScale: new THREE.Vector2(0.6, 0.6)
     });
+    registerPaint(chimneyMat);   // PAINT LAW (lib/paint.js): crust relief softens with the dial
   }
   const mat = chimneyMat;
   root = new THREE.Group();
