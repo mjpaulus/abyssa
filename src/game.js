@@ -1623,9 +1623,40 @@ function boot() {
   return true;
 }
 
-function frame() {
+// THE FRAME GOVERNOR (roadmap/battery-governor.md). rAF fires at the display's rate
+// (120 Hz on this box), and the loop used to render every one of them: the title screen
+// alone pinned the GPU for as long as the window was open, which is what a laptop on
+// battery feels first. Now a frame is SKIPPED unless its slot is due: `cap` fps while
+// the sea has the helm, `idle` fps on the title / unfocused / paused unlocked, and no
+// frame at all while the document is hidden. Skipping means not even calling
+// clock.getDelta(), so the skipped time lands in the next frame's dt (clamped 50 ms as
+// always) — physics and the weather clock see the same seconds either way. Kept in
+// phase (the remainder carries) so a 60 cap on a 120 Hz display is a steady every-other
+// frame, not a beat.
+let frameDue = 0;
+function frameCap() {
+  if (document.hidden) return -1;
+  const P = GLASS.power;
+  const idle = state === 'title' || blurred || !document.hasFocus() || (paused && !window.__helm);
+  return idle ? P.idle : P.cap;
+}
+window.__power = {
+  state: () => ({ cap: frameCap(), focus: document.hasFocus(), blurred, paused, state, hidden: document.hidden, knobs: { ...GLASS.power } }),
+  set: (cap, idle) => { if (cap != null) GLASS.power.cap = cap; if (idle != null) GLASS.power.idle = idle; return window.__power.state(); }
+};
+
+function frame(now = performance.now()) {
   if (loopFailed) return;
   requestAnimationFrame(frame);
+  const cap = frameCap();
+  if (cap < 0) return;                        // hidden: hold everything, spend nothing
+  if (cap > 0) {
+    const slot = 1000 / cap;
+    if (now < frameDue - 1) return;           // -1 ms: rAF timestamps jitter under the slot
+    // Carry the phase so the cadence is even; resync after a long gap (a stall, a
+    // return from hidden) rather than bursting to catch up.
+    frameDue = now - frameDue > slot * 2 ? now + slot : frameDue + slot;
+  }
   const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
   try {
     flushSize();   // one resize per frame, before anything reads the camera or the targets
@@ -1636,7 +1667,9 @@ function frame() {
     renderRefraction();
     render(dt);
     boot();
-    samplePerf(dt, state === 'play' || state === 'won');
+    // The perf judge grades wall-time fps against a 34 fps bar. A governed loop is not
+    // evidence about the GPU: only sample when it runs at least 45 fps or uncapped.
+    samplePerf(dt, (state === 'play' || state === 'won') && (cap === 0 || cap >= 45));
   } catch (e) {
     if (!loopFailed) {
       loopFailed = true;

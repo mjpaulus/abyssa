@@ -397,6 +397,12 @@ function build() {
     { key: 'col', color: true },
     { key: 'hemiLift', min: 0, max: 1, step: 0.01 }
   ]);
+  // --- POWER (roadmap/battery-governor.md) -----------------------------------
+  knobGroup('power', GLASS.power, BOOT.power, [
+    { key: 'cap', min: 0, max: 120, step: 1 },
+    { key: 'idle', min: 0, max: 120, step: 1 }
+  ]);
+  el('p', 'note', bd, 'frame cap in fps; 0 = uncapped (profiling only). __power.state() says which rate the loop is on now.');
   // --- CREPUSCULAR RAYS (roadmap/crepuscular-sky.md) ------------------------
   knobGroup('rays', GLASS.rays, BOOT.rays, [
     { key: 'strength', min: 0, max: 3, step: 0.01 },

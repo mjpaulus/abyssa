@@ -398,6 +398,16 @@ export const GLASS = {
     lowShare: 0.5, lowYLo: 58, lowYHi: 84, lowFlat: 0.34, lowShade: 0.62, lowDrift: 0.55,
     lowSize: 1.55
   },
+  // POWER — the frame governor (game.js frame(); roadmap/battery-governor.md). A laptop
+  // on battery cannot afford an uncapped loop: this box renders the full HalfFloat
+  // chain at 120 fps on the title screen, forever. The governor holds the loop at `cap`
+  // while the game has the helm, drops to `idle` on the title / when the window loses
+  // focus / when the sea is paused unlocked, and renders NOTHING while the document is
+  // hidden. Skipped frames accumulate into dt, so physics sees the same time.
+  power: {
+    cap: 60,              // fps with the helm; 0 = uncapped (the old behaviour, for profiling)
+    idle: 30              // fps on the title, unfocused, or paused; 0 = uncapped
+  },
   // CREPUSCULAR RAYS — postfx.skyrays.js (roadmap/crepuscular-sky.md). Sun-visibility
   // mask (puffs + dome coverage, half-res) radially blurred toward the projected sun,
   // added over the sky and the sea's air side, scaled by the air's haze and by the
