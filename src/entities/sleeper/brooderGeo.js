@@ -384,11 +384,12 @@ export function barnacleMatrices(n, seed) {
     const x = rnd() * 2 - 1, z = rnd() * 2 - 1;
     shellAt(x, z, sh);
     if (sh.rho > 0.97 || sh.rho < 0.25) continue;
-    const want = sst(0.40, 0.62, fbm(x * 0.9 + 0.5, z * 0.9 + 0.5, 0, 3)) * (0.35 + 0.65 * sst(0.4, 0.95, sh.rho)) * (z < 0 ? 1 : 0.6);
+    const want = sst(0.50, 0.66, fbm(x * 0.9 + 0.5, z * 0.9 + 0.5, 0, 3)) * (0.35 + 0.65 * sst(0.4, 0.95, sh.rho)) * (z < 0 ? 1 : 0.6);
     if (rnd() > want) continue;
     shellNormal(x, z, _nn);
     _qq.setFromUnitVectors(_up, _nn).multiply(_qt.setFromAxisAngle(_up, rnd() * TAU));
-    const k = 0.5 + 1.3 * Math.pow(rnd(), 1.6);
+    // sized to the scutes, not to the diver: a crust, not a rockpile (look-dev 2026-09-24)
+    const k = 0.30 + 0.55 * Math.pow(rnd(), 2.2);
     m.push(new THREE.Matrix4().compose(_pp.set(x, sh.h - 0.004, z), _qq, _ss.set(k, k * (0.8 + 0.4 * rnd()), k)));
     const t = 0.84 + 0.14 * rnd();
     c.push(new THREE.Color(t, t * 0.98, t * 0.93));

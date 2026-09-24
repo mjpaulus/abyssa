@@ -1213,4 +1213,7 @@ function disposeSerpentExtras(L) {
   if (L.blobs) for (const b of L.blobs) { scene.remove(b); b.geometry.dispose(); b.material.dispose(); }
   if (L.blobTex) L.blobTex.dispose();
   if (L.sTex) L.sTex.dispose();
+  // the crack-detail map is referenced only by a uniform, so the material traversal never
+  // reaches it: it leaked one texture per zone entry before the split (found 2026-09-24)
+  if (L.uni && L.uni.uDetail.value) L.uni.uDetail.value.dispose();
 }

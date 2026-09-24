@@ -177,3 +177,130 @@ export function disposeSleeper(L) {
     }
   });
 }
+
+// ---- wards, for kinds that place them in their own frame ---------------------------
+// (The serpent keeps its original inline ward code; these are the same visuals and the
+// same touch rule, factored for the kinds that followed.)
+const _wq = new THREE.Vector3();
+export function makeWard(L, i, scale) {
+  const ringGeo = new THREE.TorusGeometry(0.62, 0.11, 6, 18);
+  const boltGeo = new THREE.ConeGeometry(0.10, 0.42, 5);
+  boltGeo.translate(0, 0.21, 0);
+  const ironMat = new THREE.MeshStandardMaterial({ color: 0x241d16, roughness: 0.42, metalness: 0.85, envMap: envTex, envMapIntensity: 1.1 });
+  const socketMat = new THREE.MeshStandardMaterial({ color: 0x0a0806, roughness: 0.9, metalness: 0.2 });
+  const sg = new THREE.Group();
+  sg.scale.setScalar(scale);
+  sg.add(new THREE.Mesh(ringGeo, ironMat));
+  const socket = new THREE.Mesh(new THREE.CircleGeometry(0.60, 16), socketMat);
+  socket.position.z = -0.05;
+  sg.add(socket);
+  const bolts = new THREE.InstancedMesh(boltGeo, ironMat, 6);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), p = new THREE.Vector3(), s = new THREE.Vector3(1, 1, 1);
+  for (let b = 0; b < 6; b++) {
+    const a = b / 6 * 6.2832;
+    p.set(Math.cos(a) * 0.62, Math.sin(a) * 0.62, 0.04);
+    q.setFromUnitVectors(_wq.set(0, 1, 0), p.clone().setZ(0).normalize().multiplyScalar(0.45).setZ(1).normalize());
+    bolts.setMatrixAt(b, m.compose(p, q, s));
+  }
+  bolts.instanceMatrix.needsUpdate = true;
+  sg.add(bolts);
+  const rune = new THREE.Mesh(new THREE.PlaneGeometry(1.15, 1.15), new THREE.MeshBasicMaterial({
+    map: runeTex(L.idx * 17 + i * 7), color: 0xffe8a8, transparent: true, opacity: 0.3,
+    blending: THREE.AdditiveBlending, depthWrite: false
+  }));
+  rune.position.z = 0.08;
+  sg.add(rune);
+  const light = sigilPool[i - 1];
+  light.intensity = 0;
+  const halo = makeGlow(0xffe8a8, 0);
+  L.grp.add(halo, sg);
+  return { lit: false, grp: sg, mesh: sg, rune, light, halo, pulse: Math.random() * 7, flashT: 9, rev: 1, note: 352 + i * 40, scale };
+}
+export function wardIdle(g, dt, haloK) {
+  g.pulse += dt;
+  const rv = g.rev;
+  g.rune.material.opacity = (0.22 + 0.16 * Math.sin(g.pulse * 2)) * rv;
+  g.light.intensity = (8 + 5 * Math.sin(g.pulse * 2)) * rv;
+  g.halo.scale.setScalar(Math.max(0.001, (haloK * 1.2 + Math.sin(g.pulse * 2) * 0.6) * rv));
+  g.light.position.copy(g.grp.position);
+  g.halo.position.copy(g.grp.position);
+}
+export function wardLitPose(g, dt, haloK) {
+  g.pulse += dt;
+  g.rune.material.opacity = 1;
+  g.grp.scale.setScalar(g.scale * (1 + 0.04 * Math.sin(g.pulse * 3)));
+  g.light.intensity = 140 + 40 * Math.sin(g.pulse * 3);
+  g.halo.scale.setScalar(haloK * 3);
+  g.light.position.copy(g.grp.position);
+  g.halo.position.copy(g.grp.position);
+}
+// The touch: a swept test from last frame's diver position, so a hitch or a fast pass
+// can't tunnel through a ward. The zone-1 dark rule and zone-2 keeper rule apply to any
+// kind that sets sonarWards / guardWards. Returns true on the frame the ward lights.
+export function wardTouch(L, i, g, player, ev) {
+  if (segDist(g.grp.position, L.pPrev, player.pos) >= L.reach) return false;
+  const dark = L.sonarWards && g.rev < 0.5;
+  const kept = L.guardWards && wardGuardCount(i) > 0;
+  if (dark || kept) {
+    if (!L.hinted) { L.hinted = true; ev.msg = ev.msg || (dark ? MSG_WARDS_DARK : MSG_WARDS_KEPT); }
+    return false;
+  }
+  g.lit = true; g.rev = 1; g.flashT = 0;
+  L.flare = 1;
+  burstEmbers(L, g.grp.position);
+  ev.sigilLit = g.note;
+  L.agitation = 1;
+  return true;
+}
+// The ward-lighting flash: ~1.5 s of extra light on the borrowed PointLight (and the
+// hide ring, for kinds with a uniform array to drive).
+export function wardFlashes(L, dt, fx) {
+  for (let i = 0; i < L.sigils.length; i++) {
+    const g = L.sigils[i], f = fx ? fx[i] : null;
+    if (g.flashT >= 1.5) { if (f) f.y = 0; continue; }
+    g.flashT += dt;
+    const k = Math.min(1, g.flashT / 1.5);
+    if (f) { f.x = 0.62 * Math.pow(k, 0.65); f.y = 3.4 * (1 - k) * (1 - k) * THREE.MathUtils.smoothstep(k, 0, 0.06); }
+    g.light.intensity += 360 * (1 - k) * (1 - k) * (1 - k);
+  }
+  updateEmbers(L, dt);
+}
+// The ember burst pool, idle at zero cost (mesh hidden, no integration).
+export function makeEmbers(L, size) {
+  const EM = 96;
+  const emPos = new Float32Array(EM * 3), emLife = new Float32Array(EM), emSz = new Float32Array(EM);
+  const emVel = new Float32Array(EM * 3);
+  const emGeo = new THREE.BufferGeometry();
+  emGeo.setAttribute('position', new THREE.BufferAttribute(emPos, 3));
+  emGeo.setAttribute('aLife', new THREE.BufferAttribute(emLife, 1));
+  emGeo.setAttribute('aSize', new THREE.BufferAttribute(emSz, 1));
+  emGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e4);
+  const emMat = new THREE.ShaderMaterial({
+    uniforms: { uTex: { value: glowTex }, uPS: { value: size * 170 } },
+    vertexShader: /* glsl */`
+      attribute float aLife, aSize;
+      uniform float uPS;
+      varying float vL;
+      void main(){
+        vL = aLife;
+        vec4 mv = modelViewMatrix*vec4(position,1.0);
+        gl_Position = projectionMatrix*mv;
+        gl_PointSize = aSize*uPS/max(-mv.z, 0.5);
+      }`,
+    fragmentShader: /* glsl */`
+      uniform sampler2D uTex;
+      varying float vL;
+      void main(){
+        if (vL <= 0.0) discard;
+        float a = texture2D(uTex, gl_PointCoord).a;
+        vec3 col = mix(vec3(1.0,0.42,0.12), vec3(1.0,0.94,0.78), vL);
+        gl_FragColor = vec4(col, a*vL*(0.35+0.65*vL)*1.25);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending
+  });
+  L.embers = new THREE.Points(emGeo, emMat);
+  L.embers.frustumCulled = false;
+  L.embers.visible = false;
+  L.em = { pos: emPos, vel: emVel, life: emLife, sz: emSz, cap: EM, head: 0, alive: 0 };
+  L.grp.add(L.embers);
+}
