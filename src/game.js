@@ -430,7 +430,9 @@ function enterZone(i) {
 }
 
 // Sleeper probe (roadmap/three-sleepers.md). fp(i): the split's regression hash for zone
-// i's home sleeper; tears the live sleeper down around the run and rebuilds it.
+// i's home sleeper. swap(kind): rebuild the live zone's sleeper as another kind — a
+// placeable kind is set down 45 u ahead of the diver, facing him. cmd: the kind's own
+// lab verbs (brooder: stand / settle / walk / rear / place). Dev only; nothing calls it.
 window.__lev = {
   fp(i = Math.max(0, zone)) {
     disposeLeviathan(lev); lev = null;
@@ -438,7 +440,22 @@ window.__lev = {
     try { out = sleeperFingerprint(i); }
     finally { if (zone >= 0) lev = makeZoneSleeper(zone); }
     return out;
-  }
+  },
+  swap(kind) {
+    if (zone < 0) return null;
+    disposeLeviathan(lev);
+    lev = makeZoneSleeper(zone, kind ? { kind } : undefined);
+    if (lev.cmd) {
+      const f = forwardVec(), fx = f.x, fz = f.z, fl = Math.hypot(fx, fz) || 1;
+      const pos = player.pos.clone();
+      pos.x += fx / fl * 45; pos.z += fz / fl * 45;
+      lev.cmd('place', { pos, yaw: Math.atan2(-fx, -fz) });
+    }
+    return lev.kind;
+  },
+  cmd(name, arg) { return lev && lev.cmd ? lev.cmd(name, arg) : null; },
+  state() { return lev ? (lev.probe ? lev.probe() : { kind: lev.kind, calmed: lev.calmed }) : null; },
+  me() { return player.pos.clone(); }
 };
 // THE RIFT IS SHUT WHILE IT WAKES: a diver who drops into the bowl before the sleeper
 // stills falls into an unmarked hole in the dark. Said once per zone, 20u below the rim.
@@ -752,7 +769,7 @@ function dynCol(x, y, z, r) {
 function buildDynCols() {
   dynN = 0;
   if (lev && lev.spine) {
-    const r = lev.size * BODY_R_MAX;
+    const r = lev.collR || lev.size * BODY_R_MAX;   // per kind: the brooder's shell spheres are smaller
     for (let i = 0; i < lev.spine.length; i++) { const s = lev.spine[i]; dynCol(s.x, s.y, s.z, r); }
   }
   // the hull only matters from under it: on deck the camera is meant to be over the planks

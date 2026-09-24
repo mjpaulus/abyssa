@@ -439,6 +439,33 @@ function build() {
       rnote.textContent = `michael's road: clouds ${clouds.toFixed(3)} (cov 0.72), layers 0.6, haze 0.6, sun 25 deg. face the sun (azim ${SUN.azimDeg.toFixed(0)} deg).`;
     });
   }
+  // --- SLEEPERS (roadmap/three-sleepers.md) ----------------------------------------
+  // Swap the live zone's sleeper to another kind and pose it. Not saved, not a knob:
+  // the next zone entry or voyage rebuilds the shipped kind.
+  {
+    const d = el('details', 'stop', bd);
+    const sm = el('summary', null, d);
+    el('span', null, sm, 'sleeper');
+    const inr = el('div', 'in', d);
+    const rb = el('div', 'btns', inr);
+    const rb2 = el('div', 'btns', inr);
+    const sro = el('div', 'ro', inr);
+    const show = () => {
+      const s = window.__lev && window.__lev.state();
+      sro.textContent = s ? JSON.stringify(s, (k, v) => typeof v === 'number' ? +v.toFixed(2) : v, 1).slice(0, 900) : 'no sleeper (start a dive)';
+    };
+    const btn = (row, label, fn) => {
+      const b = el('button', null, row, label);
+      b.addEventListener('click', () => { if (window.__lev) fn(window.__lev); show(); });
+    };
+    btn(rb, 'serpent', L => L.swap('serpent'));
+    btn(rb, 'brooder', L => L.swap('brooder'));
+    btn(rb2, 'stand', L => L.cmd('stand'));
+    btn(rb2, 'settle', L => L.cmd('settle'));
+    btn(rb2, 'walk to me', L => L.cmd('walk', L.me()));
+    btn(rb2, 'rear', L => L.cmd('rear'));
+    setInterval(() => { if (!d.open || !panel || panel.classList.contains('off')) return; show(); }, 500);
+  }
   knobGroup('wind / water', GLASS.windwater, BOOT.windwater, [
     { key: 'capThr', min: 0, max: 1, step: 0.01 },
     { key: 'capK', min: 0, max: 2, step: 0.01 },
