@@ -1668,21 +1668,34 @@ function boot() {
 // always) — physics and the weather clock see the same seconds either way. Kept in
 // phase (the remainder carries) so a 60 cap on a 120 Hz display is a steady every-other
 // frame, not a beat.
-let frameDue = 0;
+let frameDue = 0, driveT = 0;
 function frameCap() {
-  if (document.hidden) return -1;
+  if (document.hidden && !driveT) return -1;
   const P = GLASS.power;
   const idle = state === 'title' || blurred || !document.hasFocus() || (paused && !window.__helm);
   return idle ? P.idle : P.cap;
 }
 window.__power = {
   state: () => ({ cap: frameCap(), focus: document.hasFocus(), blurred, paused, state, hidden: document.hidden, knobs: { ...GLASS.power } }),
-  set: (cap, idle) => { if (cap != null) GLASS.power.cap = cap; if (idle != null) GLASS.power.idle = idle; return window.__power.state(); }
+  set: (cap, idle) => { if (cap != null) GLASS.power.cap = cap; if (idle != null) GLASS.power.idle = idle; return window.__power.state(); },
+  // DEV: the in-app browser pane reports document.hidden whenever it is not on screen,
+  // and a hidden document gets no rAF at all. drive(true) runs the loop from a 60 Hz
+  // timer so probes and canvas captures work anyway; drive(false) stops. Never called
+  // by the game.
+  drive(on) {
+    if (driveT) { clearInterval(driveT); driveT = 0; }
+    if (on) driveT = setInterval(() => { if (document.hidden) frame(performance.now()); }, 16);
+    return !!driveT;
+  }
 };
 
+// One rAF pending at most: __power.drive calls frame() from a timer while hidden, and
+// an unguarded re-queue per call would stack parallel loops the moment it is visible.
+let rafQ = false;
+function rafTick(t) { rafQ = false; frame(t); }
 function frame(now = performance.now()) {
   if (loopFailed) return;
-  requestAnimationFrame(frame);
+  if (!rafQ) { rafQ = true; requestAnimationFrame(rafTick); }
   const cap = frameCap();
   if (cap < 0) return;                        // hidden: hold everything, spend nothing
   if (cap > 0) {

@@ -26,7 +26,7 @@ import * as G from './brooderGeo.js';
 
 const UP = V3(0, 1, 0);
 const smooth = THREE.MathUtils.smoothstep;
-const R_OF_SIZE = 2.55;                    // carapace half-width in cfg.size units (5.5 -> 14 u)
+const R_OF_SIZE = 2.8;                     // carapace half-width in cfg.size units (5.5 -> 15.4 u)
 // Walking legs, per side front to back: hip on the lip, rest-foot bearing off the side
 // (+ toward the front), length scale (the middle pairs are the longest, as in crabs).
 const LEGS = [
@@ -35,9 +35,10 @@ const LEGS = [
   { hip: [0.84, -0.07, -0.16], splay: -0.16, k: 1.00 },
   { hip: [0.74, -0.07, -0.42], splay: -0.46, k: 0.88 }
 ];
-// Squat, heavy proportions (a Cancer crab, not a spider crab): the knees ride at the
-// shell's flank, never above it. Look-dev 2026-09-24: 0.95/0.90/0.45 read as a spider.
-const SEG = { coxa: 0.14, femur: 0.66, tibia: 0.60, dactyl: 0.34 };
+// Tall and spiked (Michael 2026-09-24: "crab like, menacing", not a literal crab): the
+// knees ride above her back and the body towers over the diver. The first squat cut
+// read as a friendly Cancer crab.
+const SEG = { coxa: 0.14, femur: 0.90, tibia: 0.86, dactyl: 0.46 };
 // Ward sockets on the underside, local position and outward normal. The first nSigils
 // are used: mouth, both hips, then two more for chart rows that ask for them.
 const SOCKETS = [
@@ -80,25 +81,25 @@ export function makeBrooder(idx, cfg) {
 
   // ---- materials ----
   const maps = G.carapaceMaps();
-  const grain = G.limbGrain(), limbAlb = G.limbAlbedo();
-  L.keepTex = new Set([maps.map, maps.normalMap, maps.roughnessMap, grain, limbAlb]);
+  const grain = G.limbGrain(), limbAlb = G.limbAlbedo(false), paleAlb = G.limbAlbedo(true);
+  L.keepTex = new Set([maps.map, maps.normalMap, maps.roughnessMap, grain, limbAlb, paleAlb]);
   const shellMat = registerPaint(new THREE.MeshStandardMaterial({
     map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.roughnessMap,
     normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0, vertexColors: true,
     envMap: envTex, envMapIntensity: 0.35
   }));
   const limbMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xd8cfbe, map: limbAlb, roughness: 0.78, metalness: 0, vertexColors: true,
+    color: 0xffffff, map: limbAlb, roughness: 0.55, metalness: 0, vertexColors: true,
     normalMap: grain, normalScale: new THREE.Vector2(0.6, 0.6), envMap: envTex, envMapIntensity: 0.3
   }));
   // The underside is where the ward fight happens, looked at from below at arm's length:
   // it gets the limb mottle and grain at a fine repeat of its own (planar UV spans the
   // whole belly, so the shared repeats would read as a few blurry blotches).
-  const bellyAlb = limbAlb.clone(), bellyGrain = grain.clone();
+  const bellyAlb = paleAlb.clone(), bellyGrain = grain.clone();
   bellyAlb.repeat.set(7, 7); bellyGrain.repeat.set(14, 14);
   bellyAlb.needsUpdate = bellyGrain.needsUpdate = true;
   const bellyMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xe4dccb, map: bellyAlb, roughness: 0.82, metalness: 0, vertexColors: true,
+    color: 0xffffff, map: bellyAlb, roughness: 0.82, metalness: 0, vertexColors: true,
     normalMap: bellyGrain, normalScale: new THREE.Vector2(0.9, 0.9), envMap: envTex, envMapIntensity: 0.25
   }));
 
@@ -143,10 +144,10 @@ export function makeBrooder(idx, cfg) {
 
   // ---- walking legs: one InstancedMesh per segment type, eight instances each ----
   const legs = {
-    coxa: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.125, r1: 0.118, rows: 8, radial: 16 }), limbMat, 8),
-    femur: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.122, r1: 0.096, spines: 6 }), limbMat, 8),
-    tibia: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.090, r1: 0.064, spines: 4 }), limbMat, 8),
-    dactyl: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.062, r1: 0, tip: true, curl: 0.10, rows: 20, radial: 12 }), limbMat, 8)
+    coxa: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.115, r1: 0.108, rows: 8, radial: 16 }), limbMat, 8),
+    femur: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.112, r1: 0.070, spines: 9, rows: 30 }), limbMat, 8),
+    tibia: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.068, r1: 0.040, spines: 6 }), limbMat, 8),
+    dactyl: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.046, r1: 0, tip: true, curl: 0.16, rows: 22, radial: 12 }), limbMat, 8)
   };
   for (const k in legs) {
     legs[k].frustumCulled = false;                 // instance bounds go stale as she walks
@@ -160,53 +161,45 @@ export function makeBrooder(idx, cfg) {
     L.feet.push({ planted: V3(), from: V3(), to: V3(), cur: V3(), t: -1, group: (k + (sd > 0 ? 0 : 1)) & 1 });
   }
 
-  // ---- claws: crusher on the -X side, cutter on +X ----
-  L.claws = [buildClaw(body, limbMat, -1, 'crusher'), buildClaw(body, limbMat, 1, 'cutter')];
+  // ---- arms: a massive crusher on -X, a mantis scythe on +X ----
+  // Bone-pale arms: dark limbs vanished against her own dark face (look-dev 2026-09-24).
+  const armMat = registerPaint(new THREE.MeshStandardMaterial({
+    color: 0xffffff, map: paleAlb, roughness: 0.5, metalness: 0, vertexColors: true,
+    normalMap: grain, normalScale: new THREE.Vector2(0.7, 0.7), envMap: envTex, envMapIntensity: 0.35
+  }));
+  L.claws = [buildClaw(body, armMat, -1, 'crusher'), buildClaw(body, armMat, 1, 'scythe')];
 
-  // ---- eyes on stalks, antennules, mouthparts ----
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x06080a, roughness: 0.08, metalness: 0.25, envMap: envTex, envMapIntensity: 1.4 });
-  const pupilMat = new THREE.MeshBasicMaterial({ color: 0x8ff4ff, transparent: true, opacity: 0 });
-  L.eyes = [];
-  for (const sd of [-1, 1]) {
-    const piv = new THREE.Group();
-    piv.position.set(0.21 * sd, 0.0, 0.76);
-    piv.rotation.order = 'YXZ';
-    const stalk = new THREE.Mesh(G.segmentGeo({ r0: 0.030, r1: 0.024, rows: 10, radial: 12 }), limbMat);
-    stalk.scale.set(0.15, 1, 1);
-    stalk.rotation.z = Math.PI / 2;                // +X segment axis -> +Y
-    piv.add(stalk);
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.048, 18, 14), eyeMat);
-    eye.position.y = 0.16;
-    piv.add(eye);
-    const pupil = new THREE.Mesh(new THREE.CircleGeometry(0.018, 12), pupilMat);
-    pupil.position.set(0, 0.16, 0.049);
-    piv.add(pupil);
-    const halo = makeGlow(0x8ff4ff, 0.001);
-    halo.position.set(0, 0.16, 0.05);
-    piv.add(halo);
-    body.add(piv);
-    L.eyes.push({ piv, halo, sd });
+  // ---- thorns: the silhouette ----
+  const thornMat = registerPaint(new THREE.MeshStandardMaterial({
+    color: 0xcfc4ae, roughness: 0.5, metalness: 0, vertexColors: true, envMap: envTex, envMapIntensity: 0.35
+  }));
+  const tm = G.thornMatrices(0x7A0A5 + idx);
+  const thorns = new THREE.InstancedMesh(G.thornGeo(), thornMat, tm.length);
+  tm.forEach((m, i) => thorns.setMatrixAt(i, m));
+  thorns.instanceMatrix.needsUpdate = true;
+  thorns.castShadow = true;
+  body.add(thorns);
+
+  // ---- the face: a cluster of eight black eyes under the brow, no glow — only
+  // cold catchlights — and a cage of hooked mouthparts that never stops working ----
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x030405, roughness: 0.04, metalness: 0.4, envMap: envTex, envMapIntensity: 2.2 });
+  const EYES = [[0.075, -0.075, 0.895, 0.040], [0.165, -0.085, 0.870, 0.032], [0.245, -0.105, 0.835, 0.024], [0.040, -0.135, 0.905, 0.022]];
+  const eyes = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 20, 14), eyeMat, EYES.length * 2);
+  let ei = 0;
+  for (const [x, y, z, r] of EYES) for (const sd of [-1, 1]) {
+    eyes.setMatrixAt(ei++, _m.compose(_v.set(x * sd, y, z), _q.identity(), _sc.set(r, r * 0.85, r)));
   }
-  L.pupilMat = pupilMat;
-  L.antennae = [];
-  for (const sd of [-1, 1]) {
-    const a = new THREE.Mesh(G.segmentGeo({ r0: 0.010, r1: 0, tip: true, curl: -0.15, rows: 12, radial: 6 }), limbMat);
-    a.scale.set(0.16, 1, 1);
-    a.position.set(0.05 * sd, 0.03, 0.80);
-    a.rotation.set(0, -Math.PI / 2 + sd * 0.25, 0.5, 'YZX');
-    body.add(a);
-    L.antennae.push({ mesh: a, sd });
-  }
+  eyes.instanceMatrix.needsUpdate = true;
+  body.add(eyes);
   L.mouth = [];
-  for (const sd of [-1, 1]) {
-    const pl = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10), limbMat);
-    pl.scale.set(0.07, 0.014, 0.11);
+  for (let k = 0; k < 3; k++) for (const sd of [-1, 1]) {
     const hinge = new THREE.Group();
-    hinge.position.set(0.065 * sd, -0.065, 0.74);
-    pl.position.z = -0.10;
-    hinge.add(pl);
+    hinge.position.set(0.05 * sd + 0.035 * k * sd, -0.12 - 0.02 * k, 0.86 - 0.03 * k);
+    hinge.rotation.order = 'YZX';
+    const hook = new THREE.Mesh(G.hornGeo({ len: 0.20 - 0.03 * k, r0: 0.030, curve: -0.35, bite: -1, teeth: 'saw', rows: 14, radial: 8 }), limbMat);
+    hinge.add(hook);
     body.add(hinge);
-    L.mouth.push({ hinge, sd });
+    L.mouth.push({ hinge, sd, k });
   }
 
   // ---- wards ----
@@ -262,12 +255,13 @@ function buildClaw(body, mat, sd, kind) {
   root.position.set(0.40 * sd, -0.05, 0.62);
   root.rotation.order = 'YZX';
   body.add(root);
-  const merus = new THREE.Mesh(G.segmentGeo({ r0: 0.088, r1: 0.078, spines: 4 }), mat);
-  merus.scale.x = 0.62;
+  const scythe = kind === 'scythe', ML = scythe ? 0.80 : 0.62;
+  const merus = new THREE.Mesh(G.segmentGeo({ r0: scythe ? 0.075 : 0.092, r1: scythe ? 0.060 : 0.080, spines: scythe ? 7 : 5 }), mat);
+  merus.scale.x = ML;
   merus.castShadow = true;
   root.add(merus);
   const cj = new THREE.Group();
-  cj.position.x = 0.62;
+  cj.position.x = ML;
   cj.rotation.order = 'YZX';
   root.add(cj);
   const carpus = new THREE.Mesh(G.segmentGeo({ r0: 0.082, r1: 0.090, spines: 2 }), mat);
@@ -286,10 +280,12 @@ function buildClaw(body, mat, sd, kind) {
   dj.position.fromArray(pg.userData.hinge);
   pj.add(dj);
   const crusher = kind === 'crusher';
-  const dact = new THREE.Mesh(G.hornGeo({ len: crusher ? 0.32 : 0.46, r0: crusher ? 0.085 : 0.055, curve: -0.12, bite: -1, teeth: crusher ? 'molar' : 'saw' }), mat);
+  const dact = new THREE.Mesh(G.hornGeo(scythe
+    ? { len: 0.85, r0: 0.060, curve: -0.26, bite: -1, teeth: 'saw' }
+    : { len: 0.32, r0: 0.085, curve: -0.12, bite: -1, teeth: 'molar' }), mat);
   dact.castShadow = true;
   dj.add(dact);
-  return { root, cj, pj, dj, sd, crusher };
+  return { root, cj, pj, dj, sd, crusher, scythe };
 }
 
 // Teleport: body to pos (on the ground), heading yaw, feet reset to their rest spots.
@@ -307,7 +303,7 @@ function placeAt(L, pos, yaw) {
 // Rest spot of foot li: local (yaw only) -> world, on the terrain.
 function restWorld(L, li, out) {
   const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, st = L.standE;
-  const reach = lerp(1.34, 1.16, st) * lg.k, a = lg.splay * lerp(1.15, 0.85, st);
+  const reach = lerp(1.62, 1.28, st) * lg.k, a = lg.splay * lerp(1.15, 0.85, st);
   const lx = lg.hip[0] * sd + Math.cos(a) * reach * sd, lz = lg.hip[2] + Math.sin(a) * reach;
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   out.set(L.pos.x + (lx * cy + lz * sy) * L.R, 0, L.pos.z + (-lx * sy + lz * cy) * L.R);
@@ -357,16 +353,29 @@ function poseLeg(L, li, footL) {
   segMat(L.legs.dactyl, li, _ank2, _ft, _pn);
 }
 
-// Claw pose: folded before the mouth (asleep / idle) <-> raised and open (threat).
+// Arm pose. At rest both are folded up before the face like a mantis at prayer, the
+// scythe's blade closed back along its hand. In threat the scythe lifts high over her
+// back with the blade half open and the crusher comes forward, gaping.
 function poseClaws(L) {
   const th = L.threatE, t = L.t, st = L.standE;
   for (const c of L.claws) {
-    const sd = c.sd, low = c.crusher ? -0.45 : -0.25;
-    c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.35, 0.75, th), lerp(low - 0.25 * (1 - st), 0.70, th));
-    c.cj.rotation.set(0, -sd * lerp(1.50, 0.90, th), lerp(-0.05, 0.60, th));
-    c.pj.rotation.set(0, -sd * lerp(0.50, 0.15, th), lerp(-0.10, 0.30, th));
-    const snap = Math.pow(Math.max(0, Math.sin(t * 0.7 + sd * 1.3)), 8) * 0.10 * st;
-    c.dj.rotation.z = 0.04 + snap + 0.55 * th;
+    const sd = c.sd;
+    // a slow tremor that never quite stops: the menace is that she is never still
+    const tr = 0.03 * Math.sin(t * 2.3 + sd * 2.1) * Math.sin(t * 0.61) * st;
+    if (c.scythe) {
+      // strike-ready, not a crane: upper arm raised forward, forearm folded down toward
+      // the diver, blade cocked half open
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.30, 0.45, th), lerp(0.25 - 0.55 * (1 - st), 0.95, th) + tr);
+      c.cj.rotation.set(0, -sd * lerp(1.35, 0.30, th), lerp(-0.60, -1.55, th));
+      c.pj.rotation.set(0, -sd * lerp(0.35, 0.10, th), lerp(-1.10, -0.35, th) + tr);
+      c.dj.rotation.z = lerp(-2.75, -1.10, th);                 // folded back <-> half open
+    } else {
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.35, 0.55, th), lerp(-0.10 - 0.45 * (1 - st), 0.30, th) + tr);
+      c.cj.rotation.set(0, -sd * lerp(1.45, 0.55, th), lerp(0.10, -0.25, th));
+      c.pj.rotation.set(0, -sd * lerp(0.45, 0.05, th), lerp(-0.20, 0.05, th));
+      const snap = Math.pow(Math.max(0, Math.sin(t * 0.7 + sd * 1.3)), 8) * 0.10 * st;
+      c.dj.rotation.z = 0.04 + snap + 0.60 * th;
+    }
   }
 }
 
@@ -378,9 +387,10 @@ function poseAll(L, dt, player) {
   const gL = terrainH(L.pos.x + cy * o, L.pos.z - sy * o, L.idx), gR = terrainH(L.pos.x - cy * o, L.pos.z + sy * o, L.idx);
   const gC = terrainH(L.pos.x, L.pos.z, L.idx);
   const gy = (gF + gB + gL + gR + gC) / 5;
-  L.bodyY = gy + R * (lerp(0.06, 0.72, st) + 0.14 * L.threatE + 0.012 * Math.sin(L.t * 0.45) * (1 - st));
+  L.bodyY = gy + R * (lerp(0.06, 0.92, st) + 0.10 * L.threatE + 0.012 * Math.sin(L.t * 0.45) * (1 - st));
   b.position.set(L.pos.x, L.bodyY, L.pos.z);
-  b.rotation.set(-Math.atan2(gF - gB, 2 * o) - 0.32 * L.threatE, L.yaw, Math.atan2(gL - gR, 2 * o));
+  // hunched: standing, the front drops over the diver; threat lifts it to show the face
+  b.rotation.set(-Math.atan2(gF - gB, 2 * o) + 0.16 * st - 0.36 * L.threatE, L.yaw, Math.atan2(gL - gR, 2 * o));
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
 
@@ -388,23 +398,11 @@ function poseAll(L, dt, player) {
   for (const k in L.legs) L.legs[k].instanceMatrix.needsUpdate = true;
   poseClaws(L);
 
-  // eyes: folded into the orbits asleep, up and tracking the diver awake
-  const look = player ? _pl.copy(player.pos).applyMatrix4(_inv) : null;
-  for (const e of L.eyes) {
-    let yawL = 0, pitchL = 0;
-    if (look) {
-      const dx = look.x - e.piv.position.x, dz = look.z - e.piv.position.z, dy = look.y - e.piv.position.y;
-      yawL = clamp(Math.atan2(dx, dz), -1.1, 1.1);
-      pitchL = clamp(Math.atan2(dy, Math.hypot(dx, dz)), -0.5, 0.6);
-    }
-    // asleep the stalk lies flat along the orbit groove, eye tucked under the rim
-    e.piv.rotation.set(lerp(1.62, 0.25, st) - pitchL * st, yawL * st, e.sd * 0.12);
-    e.halo.material.opacity = 0.35 * st;
-    e.halo.scale.setScalar(0.001 + 0.10 * st);
+  // the mouthparts: three pairs working out of phase, faster when roused
+  for (const m of L.mouth) {
+    const w = L.t * (3.4 + 3 * L.agitation) + m.k * 2.1 + (m.sd > 0 ? 0 : Math.PI);
+    m.hinge.rotation.set(0, -Math.PI / 2 - m.sd * 0.35, -0.9 + 0.22 * Math.sin(w) * (0.3 + 0.7 * st));
   }
-  L.pupilMat.opacity = 0.25 + 0.55 * st;
-  for (const a of L.antennae) a.mesh.rotation.z = 0.5 + 0.18 * Math.sin(L.t * 3.1 + a.sd) * (0.3 + st);
-  for (const m of L.mouth) m.hinge.rotation.x = 0.10 + 0.08 * Math.sin(L.t * 5.3 + m.sd * 1.9) * (0.4 + st);
 
   // wards, collision centres, head
   for (const g of L.sigils) {
@@ -427,6 +425,8 @@ export function updateBrooder(L, dt, t, player) {
   const rate = L.standTarget > L.stand ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
+  // she rears on her own when the diver comes close (the lab's hold/rear override it)
+  if (!L.hold && !L.calmed) L.threatTarget = L.standE > 0.9 && L._pd < L.R * 2.4 ? 1 : 0;
   L.threat += clamp(L.threatTarget - L.threat, -1.5 * dt, 1.5 * dt);
   L.threatE = smooth(L.threat, 0, 1) * L.standE;
 
