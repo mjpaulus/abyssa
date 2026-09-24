@@ -1,8 +1,8 @@
 ---
 title: The Three Sleepers (crab / octopus / squid)
-status: next
+status: wip
 tags: leviathan, design, world, geometry
-updated: 2026-09-13
+updated: 2026-09-24
 ---
 Michael: the leviathan is boring, one serpent scaled three ways. Each zone gets its own colossus — crab, octopus and squid characteristics, not those animals — monolithic next to Sal, different strengths and weaknesses. Something discoverable in each level triggers the creature (the trigger is also the reward), so the world gets bigger and more discoverable. Wards stay the verb; the payoff differs per zone.
 
@@ -11,3 +11,4 @@ Full design: docs/superpowers/specs/2026-09-13-three-sleepers-design.md. Zone 0 
 
 ## Log
 2026-09-13: Design written from a short brainstorm; Michael asked to be surprised rather than consulted on payoffs. Awaiting his read of the spec before planning.
+2026-09-24: Plan written (docs/superpowers/plans/2026-09-24-brooder-body.md): module split, then the Brooder's body posable in the lab, stop for Michael's eye. Split regression anchor `__lev.fp(i)` recorded on the pre-split serpent: zone 0 15ce888c, zone 1 c938fe6e, zone 2 652d0412 (deterministic from the first call; the probe warms a lazy cache that draws Math.random once).

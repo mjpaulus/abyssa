@@ -10,7 +10,7 @@ import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flo
 import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
-import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX } from './entities/leviathan.js';
+import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
 import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash, breathPhase, breathCount, breathStress } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
@@ -396,18 +396,24 @@ function showMsg(text, dur = 4, prio = 1) {
 // Probe surface: what is live, what waits.
 window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPrio, pend: msgPend && msgPend.text });
 
+// Remote anchorages carry hand-authored sleeper rows: more wards, a hue nudge, an
+// epithet in the previous chart-owner's ink. Home passes undefined and is untouched.
+// `extra` merges last (the lab uses it to ask for a different kind).
+function makeZoneSleeper(i, extra) {
+  const row = currentSite().sleepers && currentSite().sleepers[i];
+  const over = row ? {
+    nSigils: row.sigils,
+    hue: (LEVIATHAN_CFG[i].hue + row.hueShift + 1) % 1,
+    name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name
+  } : undefined;
+  return makeLeviathan(i, extra ? Object.assign({}, over, extra) : over);
+}
+
 function enterZone(i) {
   disposeLeviathan(lev);
   zone = i;
   setZone(i);            // must precede growl() so the voice is tuned to the zone
-  // Remote anchorages carry hand-authored sleeper rows: more wards, a hue nudge, an
-  // epithet in the previous chart-owner's ink. Home passes undefined and is untouched.
-  const row = currentSite().sleepers && currentSite().sleepers[i];
-  lev = makeLeviathan(i, row ? {
-    nSigils: row.sigils,
-    hue: (LEVIATHAN_CFG[i].hue + row.hueShift + 1) % 1,
-    name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name
-  } : undefined);
+  lev = makeZoneSleeper(i);
   seedMotes(i);
   physicsSwitchZone(i);  // no-op until the WASM world is up
   switchPredatorZone(i);
@@ -422,6 +428,18 @@ function enterZone(i) {
   riftRimY = (terrainH(rp.x + rr, rp.z, i) + terrainH(rp.x - rr, rp.z, i)
     + terrainH(rp.x, rp.z + rr, i) + terrainH(rp.x, rp.z - rr, i)) * 0.25;
 }
+
+// Sleeper probe (roadmap/three-sleepers.md). fp(i): the split's regression hash for zone
+// i's home sleeper; tears the live sleeper down around the run and rebuilds it.
+window.__lev = {
+  fp(i = Math.max(0, zone)) {
+    disposeLeviathan(lev); lev = null;
+    let out;
+    try { out = sleeperFingerprint(i); }
+    finally { if (zone >= 0) lev = makeZoneSleeper(zone); }
+    return out;
+  }
+};
 // THE RIFT IS SHUT WHILE IT WAKES: a diver who drops into the bowl before the sleeper
 // stills falls into an unmarked hole in the dark. Said once per zone, 20u below the rim.
 let riftShutSaid = false, riftRimY = 0;

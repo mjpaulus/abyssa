@@ -1363,3 +1363,38 @@ export function updateLeviathan(L, dt, t, player) {
   L.pPrev.copy(player.pos);
   return ev;
 }
+
+// ---- REGRESSION ANCHOR --------------------------------------------------------------
+// Build zone idx's sleeper under a seeded Math.random, step it `frames` fixed 1/60 s
+// frames against a parked player 12 u off the head, and FNV-1a hash what came out
+// (events, head, spine, ward positions, a stride of the body surface). Disposes what it
+// built. The CALLER owns the live sleeper: this touches the shared ward light pool and
+// the module's live pointer, so game.js tears the live one down first and rebuilds after.
+// Values are rounded to 1e-4 before hashing so a harmless reassociation can't flip it.
+export function sleeperFingerprint(idx, over, frames = 120) {
+  // Warm the lazy module caches first (one of them draws Math.random on its first
+  // build), so the seeded run below sees the same stream on every call.
+  disposeLeviathan(makeLeviathan(idx, over));
+  const R0 = Math.random;
+  Math.random = seededRand(0x51EE9E11);
+  let h = 0x811c9dc5;
+  const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+  const mix = v => { f32[0] = Math.round(v * 1e4) / 1e4; h ^= u32[0]; h = Math.imul(h, 0x01000193) >>> 0; };
+  let L = null;
+  try {
+    L = makeLeviathan(idx, over);
+    const player = { pos: L.head.clone().add(new THREE.Vector3(12, 0, 0)), vel: new THREE.Vector3() };
+    for (let f = 0; f < frames; f++) {
+      const ev = updateLeviathan(L, 1 / 60, f / 60, player);
+      mix(ev.sigilLit); mix(ev.lightDrain); mix(ev.remaining); mix(ev.slam ? 1 : 0);
+    }
+    mix(L.head.x); mix(L.head.y); mix(L.head.z);
+    for (const s of L.spine) { mix(s.x); mix(s.y); mix(s.z); }
+    for (const g of L.sigils) { mix(g.grp.position.x); mix(g.grp.position.y); mix(g.grp.position.z); mix(g.lit ? 1 : 0); }
+    if (L.bodyGeo) { const a = L.bodyGeo.attributes.position.array; for (let i = 0; i < a.length; i += 7) mix(a[i]); }
+  } finally {
+    if (L) disposeLeviathan(L);
+    Math.random = R0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
