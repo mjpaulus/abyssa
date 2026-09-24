@@ -80,20 +80,26 @@ export function makeBrooder(idx, cfg) {
 
   // ---- materials ----
   const maps = G.carapaceMaps();
-  const grain = G.limbGrain();
-  L.keepTex = new Set([maps.map, maps.normalMap, maps.roughnessMap, grain]);
+  const grain = G.limbGrain(), limbAlb = G.limbAlbedo();
+  L.keepTex = new Set([maps.map, maps.normalMap, maps.roughnessMap, grain, limbAlb]);
   const shellMat = registerPaint(new THREE.MeshStandardMaterial({
     map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.roughnessMap,
     normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0, vertexColors: true,
     envMap: envTex, envMapIntensity: 0.35
   }));
   const limbMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xa39782, roughness: 0.74, metalness: 0, vertexColors: true,
+    color: 0xd8cfbe, map: limbAlb, roughness: 0.78, metalness: 0, vertexColors: true,
     normalMap: grain, normalScale: new THREE.Vector2(0.6, 0.6), envMap: envTex, envMapIntensity: 0.3
   }));
+  // The underside is where the ward fight happens, looked at from below at arm's length:
+  // it gets the limb mottle and grain at a fine repeat of its own (planar UV spans the
+  // whole belly, so the shared repeats would read as a few blurry blotches).
+  const bellyAlb = limbAlb.clone(), bellyGrain = grain.clone();
+  bellyAlb.repeat.set(7, 7); bellyGrain.repeat.set(14, 14);
+  bellyAlb.needsUpdate = bellyGrain.needsUpdate = true;
   const bellyMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xd6ccb8, roughness: 0.82, metalness: 0, vertexColors: true,
-    normalMap: grain, normalScale: new THREE.Vector2(0.4, 0.4), envMap: envTex, envMapIntensity: 0.25
+    color: 0xe4dccb, map: bellyAlb, roughness: 0.82, metalness: 0, vertexColors: true,
+    normalMap: bellyGrain, normalScale: new THREE.Vector2(0.9, 0.9), envMap: envTex, envMapIntensity: 0.25
   }));
 
   // ---- shell ----
@@ -163,7 +169,7 @@ export function makeBrooder(idx, cfg) {
   L.eyes = [];
   for (const sd of [-1, 1]) {
     const piv = new THREE.Group();
-    piv.position.set(0.21 * sd, 0.04, 0.76);
+    piv.position.set(0.21 * sd, 0.0, 0.76);
     piv.rotation.order = 'YXZ';
     const stalk = new THREE.Mesh(G.segmentGeo({ r0: 0.030, r1: 0.024, rows: 10, radial: 12 }), limbMat);
     stalk.scale.set(0.15, 1, 1);
@@ -391,7 +397,8 @@ function poseAll(L, dt, player) {
       yawL = clamp(Math.atan2(dx, dz), -1.1, 1.1);
       pitchL = clamp(Math.atan2(dy, Math.hypot(dx, dz)), -0.5, 0.6);
     }
-    e.piv.rotation.set(lerp(1.35, 0.25, st) - pitchL * st, yawL * st, e.sd * 0.12);
+    // asleep the stalk lies flat along the orbit groove, eye tucked under the rim
+    e.piv.rotation.set(lerp(1.62, 0.25, st) - pitchL * st, yawL * st, e.sd * 0.12);
     e.halo.material.opacity = 0.35 * st;
     e.halo.scale.setScalar(0.001 + 0.10 * st);
   }

@@ -204,14 +204,15 @@ export function carapaceMaps(S = 1024) {
 }
 
 // ---- belly + brood apron -------------------------------------------------------------
-export function bellyGeo(COLS = 128, ROWS = 28) {
+export function bellyGeo(COLS = 160, ROWS = 48) {
   const pos = [], uv = [], col = [], idx = [];
   for (let i = 0; i <= ROWS; i++) for (let j = 0; j <= COLS; j++) {
     const th = (j % COLS) / COLS * TAU, rho = 0.002 + 0.998 * i / ROWS, rr = rimR(th) * 0.80;
     const x = Math.cos(th) * rr * rho, z = Math.sin(th) * rr * rho;
     let y = -0.075 - 0.035 * (1 - rho * rho);
-    for (const zk of [0.40, 0.18, -0.04, -0.26]) y += 0.010 * gauss(z - zk, 0.018) * (1 - rho);   // sternite sutures
-    y += 0.008 * gauss(x, 0.02) * (1 - rho);                                                     // median suture
+    for (const zk of [0.40, 0.18, -0.04, -0.26]) y += 0.016 * gauss(z - zk, 0.016) * (1 - 0.6 * rho);   // sternite sutures
+    y += 0.012 * gauss(x, 0.018) * (1 - rho);                                                     // median suture
+    y -= 0.006 * sst(0.55, 0.75, fbm(x * 0.8 + 0.5, z * 0.8 + 0.5, 1, 4));                        // swollen sternites
     pos.push(x, y, z); uv.push(x * 0.5 + 0.5, z * 0.5 + 0.5);
     const c = 0.62 + 0.10 * rho; col.push(c, c * 0.97, c * 0.92);
   }
@@ -252,12 +253,15 @@ export function segmentGeo({ r0, r1, flat = 0.58, spines = 0, rows = 26, radial 
     if (tip) r = r0 * Math.pow(1 - s, 0.75) + 0.002;
     else {
       r = r0 + (r1 - r0) * s;
-      r *= 1 - 0.16 * gauss(s - 0.04, 0.05);
-      r *= 1 + 0.20 * gauss(s - 0.95, 0.06);
+      // articulation, not plumbing: a pinched neck into the socket and a flared condyle
+      // cup at the distal joint, so each segment visibly SEATS in the last
+      r *= 1 - 0.28 * gauss(s - 0.035, 0.045);
+      r *= 1 + 0.30 * gauss(s - 0.95, 0.055);
       r *= 1 + 0.04 * Math.sin(s * Math.PI);
     }
     const cy = -curl * s * s;
-    const dark = tip ? 1 - 0.78 * sst(0.35, 1.0, s) : 1 - 0.35 * (gauss(s, 0.05) + gauss(s - 1, 0.05));
+    // the arthrodial membrane: a dark, soft ring in every joint
+    const dark = tip ? 1 - 0.78 * sst(0.35, 1.0, s) : 1 - 0.62 * gauss(s - 0.02, 0.04) - 0.30 * gauss(s - 1, 0.04);
     for (let j = 0; j <= radial; j++) {
       const a = (j % radial) / radial * TAU, ca = Math.cos(a), sa = Math.sin(a);
       const keel = 1 + 0.10 * Math.pow(Math.max(0, ca), 8);
@@ -276,9 +280,10 @@ export function segmentGeo({ r0, r1, flat = 0.58, spines = 0, rows = 26, radial 
     const parts = [g];
     for (let k = 0; k < spines; k++) {
       const s = 0.14 + 0.72 * (k + 0.5) / spines, r = r0 + (r1 - r0) * s;
-      const cone = new THREE.ConeGeometry(r * 0.22, r * 0.9, 5);
-      cone.translate(0, r * 0.45, 0);
-      cone.rotateZ(-0.6);                                          // raked toward the distal end
+      // stubby, broad-based tubercles raked hard toward the tip (thin cones read as nails)
+      const cone = new THREE.ConeGeometry(r * 0.30, r * 0.55, 6);
+      cone.translate(0, r * 0.27, 0);
+      cone.rotateZ(-0.85);                                          // raked toward the distal end
       cone.translate(s, r * 1.02, 0);
       parts.push(withColor(cone, 0.55, 0.52, 0.47));
     }
@@ -413,6 +418,30 @@ export function weedMatrices(n, seed) {
     m.push(new THREE.Matrix4().compose(_pp.set(x, sh.h - 0.003, z), _qq, _ss.set(k, k, k)));
   }
   return m;
+}
+
+// Limb albedo: tileable chalk mottle with dark pitting and a faint olive film. Tiles on
+// the segment UV (s along the bone, angle around it) at the material's repeat.
+let _limbAlb = null;
+export function limbAlbedo(S = 256) {
+  if (_limbAlb) return _limbAlb;
+  const { canvas, ctx } = canvas2d(S), im = ctx.createImageData(S, S);
+  const B = [0.62, 0.58, 0.51], D = [0.36, 0.33, 0.28], F = [0.40, 0.44, 0.31];
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = (y * S + x) * 4;
+    const m = fbm(u, v, 0, 5), pit = sst(0.64, 0.70, fbm(u * 4, v * 4, 2, 6)), film = sst(0.55, 0.72, fbm(u + 0.3, v + 0.7, 0, 3));
+    for (let k = 0; k < 3; k++) {
+      let c = B[k] + (D[k] - B[k]) * sst(0.35, 0.75, m) * 0.7;
+      c += (F[k] - c) * film * 0.35;
+      c *= 1 - 0.45 * pit;
+      im.data[i + k] = Math.max(0, Math.min(255, c * 255));
+    }
+    im.data[i + 3] = 255;
+  }
+  ctx.putImageData(im, 0, 0);
+  _limbAlb = toTexture(canvas, 1, true);
+  _limbAlb.repeat.set(3, 1);
+  return _limbAlb;
 }
 
 let _grain = null;

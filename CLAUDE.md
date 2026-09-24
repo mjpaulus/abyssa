@@ -116,11 +116,18 @@ against explicit contracts and reviewed on return.
   is RETIRED under the hard rule. Sal breathes on ONE clock (`breathPhase()`):
   shoulders, exhaust bursts from the real valve, and the audio regulator share it;
   bursts have character classes and the column boils the surface (`surfaceBoil`).
-- `entities/leviathan.js` — CPU-rebuilt body (GPU deform produced degenerate geometry
-  once), alpha-hashed fin cutout (blending can't mis-sort), sigil flash/calming-wave
-  events, contact blobs. Zone-0 sleeper idles shallow (62/38) to cross the god rays.
-  Chase steering fades inside ~3 body-radii (`flyby`) or it pirouettes around the
-  player — user-reported bug, don't regress.
+- `entities/leviathan.js` — FACADE: dispatches on `cfg.kind` (config LEVIATHAN_CFG rows;
+  a chart row or `__lev.swap(kind)` can override). Shared machinery in
+  `entities/sleeper/common.js` (ward light pool of 5, rune, ward build/touch/flash,
+  embers, sonar/keeper gates, generic dispose with `L.onDispose`/`L.keepTex`).
+  Kinds: `sleeper/serpent.js` (the original: CPU-rebuilt body, alpha-hashed fins,
+  flyby steering fade — don't regress the pirouette fix; zone-0 idles shallow 62/38)
+  and `sleeper/brooder.js` + `brooderGeo.js` (VELKATH THE BROODER, roadmap/three-
+  sleepers.md: crab colossus, planted-foot tetrapod gait on 2-bone IK, instanced
+  legs, underside wards buried and dark while she sleeps, touchable only standing).
+  `__lev.fp(i)` is the serpent's regression hash (z0 15ce888c, z1 c938fe6e, z2
+  652d0412); `__lev.swap/cmd/state` and the lab "sleeper" group drive the kinds.
+  Zone 0 still SHIPS the serpent until Michael approves the Brooder.
 - `world/gardens.js` — the plant vocabulary (12 instanced types by zone: fans/seagrass/
   staghorn/sponges/anemones; tube worms with retracting plumes on activeVents, mats,
   crinoids; sea pens/glass sponges/whips). Own siteParams('gardens') stream (site.js has
