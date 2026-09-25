@@ -451,6 +451,23 @@ export const GLASS = {
     shadowNormalBias: 0.35, // world-unit push along the normal against sand acne
     shadowAmbient: 0.45   // share of the floor's hemisphere/ambient light the shadow takes
   },
+  // LIGHTNING AS A LIGHT (roadmap/ref-lightning-light.md, world/lightning.js). Each
+  // main stroke of the weather's deterministic schedule grows a channel (recursive
+  // midpoint displacement, 2-4 branches) drawn as ONE instanced ribbon draw, and the two
+  // strongest live bolts are injected into the globally patched fog chunk as a two-slot
+  // inverse-square cold-white light — every fogged, lit material is lit from the bolt's
+  // own side, with no per-material surgery. All live uniforms; nothing here recompiles.
+  lightning: {
+    rate: 1.0,            // rate bias on the schedule: <1 skips main strokes (seeded), >1 twins them
+    width: 0.35,          // channel ribbon half-width in world units (branches thinner)
+    peak: 8.0,            // light intensity at the floor distance, per unit of stroke amplitude
+    temp: 0.35,           // colour temperature 0 = cold blue-white, 1 = white (never neon)
+    floor: 45,            // inverse-square floor distance (u): closer than this it stops growing
+    after: 0.25,          // afterimage share of the peak lingering ~0.25 s after the last pulse
+    depthK: 2.0,          // extinction gain on the bolt's WATER leg (direct beam dies with depth)
+    sheet: 0.5,           // what remains of the old underside/sea flash sheets (1 = as shipped)
+    coarseK: 0.45         // what remains of setWeatherLight's flash boost (1 = as shipped)
+  },
   // MARINE LAYER. The morning white-out. `thr`/`full` map hand.fog onto 0..1; the
   // burn-off is keyed on solar ELEVATION against the hand's own fogBurn, so the sun
   // really does eat it from the top down. Storms blow it out.

@@ -150,6 +150,26 @@ const styleK = n => { const st = GLASS.style; return st && st[n] >= 0 ? st[n] : 
 const STYLE_U = new Float32Array(4);
 export function styleState() { return STYLE_U; }
 
+// LIGHTNING AS A LIGHT (roadmap/ref-lightning-light.md). Two slots of bolt light, installed
+// on the fog chunk exactly the way abyssaAir is: xyz = the channel's light anchor in world
+// space, w = intensity (0 = slot empty). BOLT_COL = the cold-white colour with the diffuse
+// reflectance folded in (the chunk sees the LIT colour, never the albedo, so a flash reads
+// as a desaturated cold wash -- which is what a lightning flash does to the eye anyway).
+// BOLT_K = (floor distance, water-leg extinction gain, spare, spare). Written by
+// world/lightning.js every frame it has a live bolt; a program never handed the uniforms
+// reads zeros, and at w = 0 the chunk's bolt block is a single uniform compare.
+const BOLT0_U = new Float32Array(4), BOLT1_U = new Float32Array(4);
+const BOLT_COL_U = new Float32Array(4), BOLT_K_U = new Float32Array([45, 2, 0, 0]);
+export function setBoltLight(i, x, y, z, I) {
+  const u = i === 0 ? BOLT0_U : BOLT1_U;
+  u[0] = x; u[1] = y; u[2] = z; u[3] = I;
+}
+export function setBoltParams(r, g, b, floor, depthK) {
+  BOLT_COL_U[0] = r; BOLT_COL_U[1] = g; BOLT_COL_U[2] = b;
+  BOLT_K_U[0] = floor; BOLT_K_U[1] = depthK;
+}
+export function boltUniforms() { return { b0: BOLT0_U, b1: BOLT1_U, col: BOLT_COL_U, k: BOLT_K_U }; }
+
 const f = v => v.toFixed(5);
 const v3 = a => `vec3(${f(a[0])},${f(a[1])},${f(a[2])})`;
 const v2 = a => `vec2(${f(a[0])},${f(a[1])})`;
@@ -273,6 +293,41 @@ vec3 airLight( vec3 surfIrr ){
   float dg = clamp( ( surfIrr.g / ${f(SURF_LIGHT[1])} - 0.20 ) / 0.80, 0.0, 1.0 );
   vec3 bake = ${v3(SKY_HOR_D)} * ( 0.0266 + 0.9734 * dg );
   return mix( bake, abyssaAir.rgb, abyssaAir.a );
+}`;
+
+// THE BOLT LIGHT (roadmap/ref-lightning-light.md). Two slots, inverse-square with a floor
+// distance, lighting every fogged fragment from the bolt's own side. It lives in the fog
+// chunk because that is the one piece of GLSL every material in the game already runs:
+// a global uniform reaches sea, raft, terrain, Sal and the plankton without touching a
+// material. The fragment's diffuse reflectance is not available here (only the lit
+// colour is), so it is folded into abyssaBoltCol as a flat cold grey -- a flash bleaches
+// colour in the eye too, and it is on screen for two frames.
+//   ndl   Lambert against the world normal: the lit side flashes, the far side stays dark.
+//   att   floor^2 / max(d^2, floor^2): inverse-square that stops growing inside `floor`,
+//         so a strike beside the raft is a flash, not a bleach.
+//   trw   the WATER leg. The share of the bolt->fragment path below y = 0 is extinguished
+//         by the clear column's total extinction (KMOL, storm-scaled) -- extinction and
+//         not the sun's absorption-only K_ABS, because a point source's DIRECT beam loses
+//         what scatters out of it (that light is the sheet the sea underside draws).
+//         abyssaBoltK.y is the gain on that leg; the nepheloid is ignored (the light is
+//         gone long before it reaches a silt line).
+//   gBoltK a shader-global on the gSunK pattern: the sea sets it before its include (a
+//         specular surface takes a fraction of a diffuse term); every other program
+//         keeps the 1.0 initialiser.
+const GLSL_BOLT = `
+uniform vec4 abyssaBolt0, abyssaBolt1, abyssaBoltCol, abyssaBoltK;
+float gBoltK = 1.0;
+vec3 boltLight( vec3 P, vec3 N, vec4 B, float storm ){
+  vec3  d    = B.xyz - P;
+  float d2   = dot( d, d );
+  float dist = sqrt( d2 );
+  float ndl  = max( dot( N, d ), 0.0 ) / max( dist, 1e-3 );
+  float fl2  = abyssaBoltK.x * abyssaBoltK.x;
+  float att  = fl2 / max( d2, fl2 );
+  float yw   = min( P.y, 0.0 );
+  float Lw   = -yw / max( B.y - P.y, 1.0 ) * dist;
+  vec3  trw  = exp( -Lw * rhoClearAt( 0.5 * yw ) * storm * abyssaBoltK.y * KMOL );
+  return abyssaBoltCol.rgb * ( B.w * ndl * att ) * trw;
 }`;
 
 // THE SKY. One function, used by the ocean surface on BOTH sides of the interface and by
@@ -833,24 +888,44 @@ const AIR_U = new Float32Array(4);
   // WITHOUT the entry would throw in upload(), which is why both tables get it.
   THREE.UniformsLib.fog.abyssaAir = { value: AIR_U };
   THREE.UniformsLib.fog.abyssaStyle = { value: STYLE_U };
+  THREE.UniformsLib.fog.abyssaBolt0 = { value: BOLT0_U };
+  THREE.UniformsLib.fog.abyssaBolt1 = { value: BOLT1_U };
+  THREE.UniformsLib.fog.abyssaBoltCol = { value: BOLT_COL_U };
+  THREE.UniformsLib.fog.abyssaBoltK = { value: BOLT_K_U };
   for (const k in THREE.ShaderLib) {
     const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
-    if (u && u.fogColor) { u.abyssaAir = { value: AIR_U }; u.abyssaStyle = { value: STYLE_U }; }
+    if (u && u.fogColor) {
+      u.abyssaAir = { value: AIR_U }; u.abyssaStyle = { value: STYLE_U };
+      u.abyssaBolt0 = { value: BOLT0_U }; u.abyssaBolt1 = { value: BOLT1_U };
+      u.abyssaBoltCol = { value: BOLT_COL_U }; u.abyssaBoltK = { value: BOLT_K_U };
+    }
   }
+  // THE BOLT NEEDS A NORMAL, and the fog chunk is shared by materials that have one and
+  // materials that do not. Every LIT built-in (Lambert/Phong/Toon/Standard/Physical)
+  // includes lights_fragment_begin, textually AFTER normal_fragment_begin has declared
+  // the view-space `normal` and BEFORE fog_fragment; a #define planted at its head is
+  // therefore visible exactly to the programs that own a normal. Everything else (basic,
+  // points, sprites, our ShaderMaterials) takes the screen-derivative flat normal.
+  C.lights_fragment_begin = `#define ABYSSA_LIT 1\n` + C.lights_fragment_begin;
   C.fog_pars_vertex = `#ifdef USE_FOG
   varying float vFogDepth;
   varying float vFogY;
+  varying vec3 vFogP;
 #endif`;
   // viewMatrix[1].xyz is row 1 of the inverse view rotation, so world height comes back
-  // without needing worldpos_vertex (which is not emitted by every material).
+  // without needing worldpos_vertex (which is not emitted by every material). vFogP is
+  // the same trick for all three axes (v * M == transpose(M) * v, and the transpose of a
+  // rotation is its inverse): the bolt light needs the fragment's world position.
   C.fog_vertex = `#ifdef USE_FOG
   vFogDepth = - mvPosition.z;
   vFogY = dot( viewMatrix[ 1 ].xyz, mvPosition.xyz ) + cameraPosition.y;
+  vFogP = mvPosition.xyz * mat3( viewMatrix ) + cameraPosition;
 #endif`;
   C.fog_pars_fragment = `#ifdef USE_FOG
   uniform vec3 fogColor;
   varying float vFogDepth;
   varying float vFogY;
+  varying vec3 vFogP;
   #ifdef FOG_EXP2
     uniform float fogDensity;
   #else
@@ -860,6 +935,7 @@ const AIR_U = new Float32Array(4);
 ${GLSL_AMBIENT}
 ${GLSL_WATER}
 ${GLSL_AIR}
+${GLSL_BOLT}
 #endif`;
   // The inscatter is dominated by the near end of a long ray, so weight the sample
   // height by extinction: wgt = 1/a - 1/(e^a - 1), which tends to 1/2 for short rays
@@ -933,6 +1009,20 @@ ${GLSL_AIR}
     // at the true camera height would cost a whole extra exp() per fragment to fix the
     // seventh decimal place of a case the water is not even in.
     float storm = dens / max( rhoClearAt( cameraPosition.y ) + amp * e0, 1e-6 );
+
+    // --- THE BOLT LIGHT -----------------------------------------------------
+    // Added to the fragment's OWN radiance, before the eye leg's extinction below, so a
+    // lit deck 30 units off is fogged exactly as its sunlight is. One uniform compare
+    // when no bolt is live (every calm frame): the block is skipped whole.
+    if ( abyssaBolt0.w + abyssaBolt1.w > 0.0 ) {
+      #ifdef ABYSSA_LIT
+        vec3 bN = normalize( normal * mat3( viewMatrix ) );
+      #else
+        vec3 bN = normalize( cross( dFdx( vFogP ), dFdy( vFogP ) ) );
+      #endif
+      gl_FragColor.rgb += gBoltK * ( boltLight( vFogP, bN, abyssaBolt0, storm )
+                                   + boltLight( vFogP, bN, abyssaBolt1, storm ) );
+    }
 
     // Clear column is linear in y, so its exact path mean is the midpoint value.
     float ic  = Lw * rhoClearAt( 0.5 * ( yw0 + yw1 ) ) * storm;
@@ -1082,7 +1172,9 @@ export const SKY_UNIFORMS = {
   uCloudIsl, uCloudShp, uCloudBak, uCloudDome, uCloudFrm, uCloudFrm2,
   uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol,
   abyssaAir: { value: AIR_U },
-  abyssaStyle: { value: STYLE_U }
+  abyssaStyle: { value: STYLE_U },
+  abyssaBolt0: { value: BOLT0_U }, abyssaBolt1: { value: BOLT1_U },
+  abyssaBoltCol: { value: BOLT_COL_U }, abyssaBoltK: { value: BOLT_K_U }
 };
 const _tmp = new THREE.Vector3();
 const _size = new THREE.Vector2();
@@ -3057,6 +3149,10 @@ function buildSurface() {
         // scene-linear against BloomEffect's 0.28. Rain never glows.
         if ( dFoam ) col += foamCol * ( below ? rain * 0.25 : splashV * ${f(GLASS.rain.splashK)} );
         if ( !dOff ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
+        // The bolt light (fog chunk): the sea is a mirror, not a wall, so it takes a
+        // fraction of the diffuse term -- the foam and the chop's roughness are what
+        // catch a flash; the sheet term above does the transmitted underside.
+        gBoltK = 0.15;
         if ( rimK > 0.0 && dHaze ) col = mix( col, airLight( fogColor ), rimK );
         // AFTER the rim hand-off, so the sea, the dome past its rim and the horizon all
         // white out together and the seam stays a seam of nothing.
@@ -3554,7 +3650,8 @@ export function updateWater(dt, t) {
     const su = surface.material.uniforms;
     if (su.uFade) su.uFade.value = sFade;   // tolerate a shader built without it
     su.uBright.value = clamp(1 - d01 * 0.6, 0.45, 1) * (0.35 + 0.65 * sFade);
-    su.uFlash.value = wFlash;
+    // The bolt light carries the strike now; the sea's sheet keeps its `sheet` share.
+    su.uFlash.value = wFlash * GLASS.lightning.sheet;
     su.uFoamThr.value = ml(0.30, 0.145, storm);
     // The caustic sheet in the mirror and the foam/rain/flash detail are near-surface
     // phenomena; retire them well before uFade does, so the deep pays nothing for them.

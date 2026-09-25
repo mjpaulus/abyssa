@@ -37,6 +37,7 @@ import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseed
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
 import { buildClouds, updateClouds, setCloudWeather } from './world/clouds.js';
 import { buildRain, updateRain, setRainWeather } from './world/rain.js';
+import { buildLightning, updateLightning, setBoltRibbons } from './world/lightning.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { buildGardens, updateGardens, reseedGardens } from './world/gardens.js';
 import { buildFauna, updateFauna, reseedFauna } from './world/fauna.js';   // FAUNA PATCH
@@ -121,6 +122,7 @@ buildFlora();
 buildWater();
 buildClouds();   // instanced puff clusters in the air; must follow buildWater (palette + wind)
 buildRain();     // one instanced draw call of wind-slanted rain streaks, air side only
+buildLightning();   // bolt channels (one instanced draw) + the two-slot bolt light in the fog chunk
 buildCreatures();
 buildRifts();
 buildRaft();
@@ -1134,7 +1136,13 @@ function update(dt, t) {
   // Weather runs even behind the title so a session can open at dusk or mid-storm.
   const wx = updateWeather(dt, t);
   const flash = gateFlash(wx.flash, t);
-  setWeatherLight(wx.day, wx.storm, flash, wx.env);
+  // THE BOLT LIGHT (world/lightning.js) carries the strike now: channels + a two-slot
+  // light in the fog chunk that every material reads. The scalar flash stays as the
+  // coarse fallback at its `coarseK` share (the light is four uniforms and never sheds;
+  // only the ribbon mesh goes under the terminal perf rung).
+  safe('lightning', () => updateLightning(dt, wx, reducedMotion()));
+  setBoltRibbons(!(window.__perf && window.__perf.stage() >= 3));
+  setWeatherLight(wx.day, wx.storm, flash * GLASS.lightning.coarseK, wx.env);
   setWeatherEnv(wx.env);
   setWeatherHand(wx.hand, wx.wind);
   setCloudWeather(wx.hand, wx.env.sky);
