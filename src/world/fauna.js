@@ -234,6 +234,9 @@ function finish(pos, idx, uv, color, part, phase, glow, noise, kind = 0) {
   g.setAttribute('aKind', new THREE.BufferAttribute(kd, 1));
   g.setIndex(idx);
   g.computeVertexNormals();
+  // a vertex only in collapsed triangles gets a zero normal; normalize(0) is NaN
+  const nn = g.attributes.normal.array;
+  for (let i = 0; i < nn.length; i += 3) if (nn[i] * nn[i] + nn[i + 1] * nn[i + 1] + nn[i + 2] * nn[i + 2] < 1e-12) nn[i + 1] = 1;
   return g;
 }
 

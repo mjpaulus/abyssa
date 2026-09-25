@@ -170,6 +170,8 @@ function fishGeometry(o) {
     const a = i * cols * 3, b = (i * cols + sides) * 3;
     for (let k = 0; k < 3; k++) { const m = (nr[a + k] + nr[b + k]) * 0.5; nr[a + k] = m; nr[b + k] = m; }
   }
+  // a vertex only in collapsed triangles gets a zero normal; normalize(0) is NaN
+  for (let i = 0; i < nr.length; i += 3) if (nr[i] * nr[i] + nr[i + 1] * nr[i + 1] + nr[i + 2] * nr[i + 2] < 1e-12) nr[i + 1] = 1;
   return g;
 }
 
