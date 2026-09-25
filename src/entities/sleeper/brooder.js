@@ -247,6 +247,8 @@ export function makeBrooder(idx, cfg) {
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     const nest = lip.clone().addScaledVector(perp, R * 2.8);
     L.brood = makeBrood(L, idx, nest, nest.clone().addScaledVector(out, -95));
+    L.rite = L.brood;                                 // the game's generic [E] / prompt hook
+    L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
     L.brood.onTake = () => { if (L.dormant) wakeBrooder(L); };
   }

@@ -325,17 +325,15 @@ addEventListener('keydown', e => {
     return;
   }
   // E near a wreck's relic: take the tool
-  if (e.code === 'KeyE' && state === 'play' && lev && lev.brood) {
-    // THE BROOD (zone 0's Brooder): take an egg — which wakes her — or set it back
-    const r = lev.brood.interact(player.pos);
+  if (e.code === 'KeyE' && state === 'play' && lev && lev.rite) {
+    // THE RITE'S TRIGGER (the Brooder's eggs, the Hoarder's lamp): the sleeper's own
+    // object decides what [E] does here, and hands back the line to show
+    const r = lev.rite.interact(player.pos);
     if (r) {
-      if (r.took) {
-        chime(740, 2.2, 0.2, 'pickup');
-        if (!r.first) showMsg('ANOTHER EGG. SHE KNOWS.', 3);
-      } else if (r.returned) {
-        chime(494, 2.4, 0.2, 'ward');
-        showMsg(r.out ? (r.out === 1 ? 'ONE EGG STILL OUT OF THE NEST.' : r.out + ' EGGS STILL OUT OF THE NEST.') : 'THE CLUTCH IS WHOLE.', 3);
-      }
+      if (r.took) chime(740, 2.2, 0.2, 'pickup');
+      else if (r.returned) chime(494, 2.4, 0.2, 'ward');
+      if (r.lamp) player.hasLamp = true;
+      if (r.msg) showMsg(r.msg, 3);
       return;
     }
   }
@@ -518,7 +516,7 @@ const COUNT = ['NO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE'];
 function wardsLine() {
   const n = lev ? lev.sigils.length : 3;
   // a dormant sleeper (the Brooder asleep as a ridge) is not described: finding her is the point
-  if (lev && lev.dormant) return `SOMETHING SLEEPS BY THE RIFT, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND IT. LIGHT THEM.`;
+  if (lev && lev.dormant) return `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND IT. LIGHT THEM.`;
   return `${COUNT[n] || n} IRON WARDS RIDE ITS HIDE. LIGHT THEM AND IT STILLS.`;
 }
 let pendingWards = false;   // zones after the first say their count once the name has faded
@@ -1306,6 +1304,7 @@ function update(dt, t) {
   if (lev) {
     const ev = updateLeviathan(lev, dt, t, player);
     if (ev.woke) { showMsg(lev.name, 5, 2); growl(); shake = 1; }
+    if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); }
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
     if (ev.slam) {
@@ -1339,7 +1338,8 @@ function update(dt, t) {
 
   // The lantern going out is no longer fatal on its own — it blinds you and makes you
   // breathe harder. Drowning is the single death condition.
-  if (!paused) player.light = Math.min(1, player.light + dt * 0.008);
+  // the Hoarder's ship's lamp, once kept, refills the lantern twice as fast
+  if (!paused) player.light = Math.min(1, player.light + dt * 0.008 * (player.hasLamp ? 2.2 : 1));
   // THE SNATCH: while the octopus has the lantern there is no light to regain. Held at
   // zero AFTER the regen line, every frame, until predators.js says it let go.
   if (lanternHeld) player.light = 0;
@@ -1396,7 +1396,7 @@ function update(dt, t) {
     }
   } else {
     // Same order as the E handler: the brood, the keepsake (or his mark), the relic.
-    const bp = lev && lev.brood ? lev.brood.prompt(player.pos) : null;
+    const bp = lev && lev.rite ? lev.rite.prompt(player.pos) : null;
     const kp = bp ? null : nearKeepsake(player.pos);
     const rel = kp || bp ? null : nearRelic(player.pos);
     if (bp) {
@@ -1504,6 +1504,7 @@ function update(dt, t) {
     pendingSlash -= dt;
     if (pendingSlash <= 0) {
       const kill = slash(player.pos, forwardVec(), 3.4);
+      if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec());   // the Hoarder lets go of a cut arm
       if (kill) {
         chime(880, 0.5, 0.22, 'pickup');
         shake = Math.min(1, shake + 0.25);
