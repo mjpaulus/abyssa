@@ -14,7 +14,19 @@ import { seededRand, makeGlow } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
 import { envTexDeep as envTex } from '../../core.js';
 import { terrainH } from '../../world/terrain.js';
-import { lanternGeo } from './hoarderGeo.js';
+import { lanternParts, shipLampParts, crateParts, woodMaps } from './hoarderGeo.js';
+
+// The chimney glass: its grime (vertex colour) dims its own glow, not just its tint.
+function grimeGlow(m) {
+  m.customProgramCacheKey = () => 'abyssa-hoard-glass';
+  m.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      #ifdef USE_COLOR
+        totalEmissiveRadiance *= vColor.rgb;
+      #endif`);
+  };
+  return m;
+}
 
 const TAU = Math.PI * 2, TAKE_R = 3.6;
 const _v = V3();
@@ -25,17 +37,21 @@ export function makeHoard(L, idx, center, trailFrom) {
   H.center.y = terrainH(H.center.x, H.center.z, idx);
   H.trailA.y = terrainH(H.trailA.x, H.trailA.z, idx);
 
-  const brass = registerPaint(new THREE.MeshStandardMaterial({ color: 0x6d5430, roughness: 0.45, metalness: 0.75, envMap: envTex, envMapIntensity: 0.9 }));
-  const glass = new THREE.MeshStandardMaterial({ color: 0x2a2418, roughness: 0.1, metalness: 0, emissive: 0xffb45a, emissiveIntensity: 0.9 });
+  // polish-sleepers2: built props. Brass carries patina (verdigris low and in the joints,
+  // tarnish, worn edges) in vertex colour; the glass chimney's grime gradient multiplies
+  // its own glow (a sooted crown, a clean band at the flame). The 17 hoard lanterns are
+  // TWO instanced draws (brass, glass) where they were 34 meshes.
+  const brass = registerPaint(new THREE.MeshStandardMaterial({ color: 0xc09a58, vertexColors: true, roughness: 0.38, metalness: 0.85, envMap: envTex, envMapIntensity: 1.0 }));
+  const glass = grimeGlow(new THREE.MeshStandardMaterial({ color: 0x3a3226, vertexColors: true, roughness: 0.08, metalness: 0, envMap: envTex, envMapIntensity: 1.2, emissive: 0xffb45a, emissiveIntensity: 0.9 }));
   H.glass = glass;
-  const lg = lanternGeo();
+  const LP = lanternParts(), mats = [], dummy = new THREE.Object3D();
   const put = (x, z, s, tilt, bright) => {
     const y = terrainH(x, z, idx);
-    const m = new THREE.Mesh(lg, brass);
-    m.position.set(x, y - 0.05 * s, z);
-    m.scale.setScalar(s);
-    m.rotation.set(tilt * (rnd() - 0.5), rnd() * TAU, tilt * (rnd() - 0.5));
-    grp.add(m);
+    dummy.position.set(x, y - 0.05 * s, z);
+    dummy.scale.setScalar(s);
+    dummy.rotation.set(tilt * (rnd() - 0.5), rnd() * TAU, tilt * (rnd() - 0.5));
+    dummy.updateMatrix();
+    mats.push(dummy.matrix.clone());
     // fog OFF with its own distance curve (the vent-ember lesson: per-channel fog turns a
     // warm glow teal and then to nothing in metres) — the hoard is zone 1's far beacon
     const glow = makeGlow(0xffb466, 2.2 * s);
@@ -43,12 +59,7 @@ export function makeHoard(L, idx, center, trailFrom) {
     glow.position.set(x, y + 0.38 * s, z);
     glow.material.opacity = 0.55 * bright;
     grp.add(glow);
-    // the chimney, lit: a small emissive cylinder inside the frame
-    const flame = new THREE.Mesh(new THREE.CylinderGeometry(0.16 * s, 0.16 * s, 0.4 * s, 8), glass);
-    flame.position.set(x, y + 0.38 * s, z);
-    grp.add(flame);
-    H.lights.push({ glow, flame, base: 0.55 * bright, phase: rnd() * TAU, on: 1, s });
-    return m;
+    H.lights.push({ glow, inst: mats.length - 1, base: 0.55 * bright, phase: rnd() * TAU, on: 1, s });
   };
 
   // the hoard: a ring of lanterns round the lair, some on their sides
@@ -56,28 +67,39 @@ export function makeHoard(L, idx, center, trailFrom) {
     const a = k / 11 * TAU + rnd() * 0.4, r = 6 + rnd() * 12;
     put(H.center.x + Math.cos(a) * r, H.center.z + Math.sin(a) * r, 0.9 + rnd() * 0.8, rnd() < 0.4 ? 2.2 : 0.3, 0.7 + 0.3 * rnd());
   }
-  // the altar: a crate, and on it the ship's lamp
-  const crate = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.4, 1.8), registerPaint(new THREE.MeshStandardMaterial({ color: 0x3a2e22, roughness: 0.9, metalness: 0 })));
+  // the altar: a planked crate with iron corners, and on it the ship's lamp
+  const wm = woodMaps();
+  L.keepTex.add(wm.map); L.keepTex.add(wm.normalMap);
+  const CP = crateParts();
+  const crate = new THREE.Group();
+  const wood = new THREE.Mesh(CP.wood, registerPaint(new THREE.MeshStandardMaterial({ map: wm.map, normalMap: wm.normalMap, vertexColors: true, roughness: 0.88, metalness: 0, envMap: envTex, envMapIntensity: 0.25 })));
+  const iron = new THREE.Mesh(CP.iron, registerPaint(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.8, metalness: 0.2, envMap: envTex, envMapIntensity: 0.2 })));
+  wood.castShadow = wood.receiveShadow = iron.castShadow = true;
+  crate.add(wood, iron);
   crate.position.set(H.center.x, H.center.y + 0.6, H.center.z);
   crate.rotation.y = rnd() * TAU;
-  crate.castShadow = crate.receiveShadow = true;
   grp.add(crate);
-  H.lamp = new THREE.Mesh(lg, brass);
-  H.lamp.scale.setScalar(2.1);
+  const SL = shipLampParts(), LAMP_S = 1.9;
+  H.lamp = new THREE.Mesh(SL.brass, brass);
+  H.lamp.scale.setScalar(LAMP_S);
   H.lamp.position.set(H.center.x, H.center.y + 1.3, H.center.z);
+  H.lamp.rotation.y = crate.rotation.y;
+  H.lamp.castShadow = true;
   grp.add(H.lamp);
-  const lampGlass = glass.clone();
+  const lampGlass = grimeGlow(glass.clone());                  // clone() drops onBeforeCompile
   lampGlass.emissiveIntensity = 1.4;
-  const lampFlame = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.8, 10), lampGlass);
-  lampFlame.position.set(H.center.x, H.center.y + 1.3 + 0.8, H.center.z);
-  grp.add(lampFlame);
+  const lampLens = new THREE.Mesh(SL.glass, lampGlass);
+  lampLens.scale.setScalar(LAMP_S);
+  lampLens.position.copy(H.lamp.position);
+  lampLens.rotation.y = crate.rotation.y;
+  grp.add(lampLens);
   const lampGlow = makeGlow(0xffc070, 7);
   lampGlow.material.fog = false;
-  lampGlow.position.copy(lampFlame.position);
+  lampGlow.position.set(H.center.x, H.center.y + 1.3 + 0.8, H.center.z);
   lampGlow.material.opacity = 0.75;
   grp.add(lampGlow);
-  H.lampParts = [H.lamp, lampFlame, lampGlow];
-  H.lampPos = lampFlame.position.clone();
+  H.lampParts = [H.lamp, lampLens, lampGlow];
+  H.lampPos = lampGlow.position.clone();
 
   // the trail: lanterns she let fall on the way in, leading to her
   for (let k = 0; k < 6; k++) {
@@ -87,6 +109,11 @@ export function makeHoard(L, idx, center, trailFrom) {
     const dx = H.center.x - trailFrom.x, dz = H.center.z - trailFrom.z, dl = Math.hypot(dx, dz) || 1;
     put(_v.x - dz / dl * bend, _v.z + dx / dl * bend, 0.9, 2.4, 0.8);
   }
+
+  const lb = new THREE.InstancedMesh(LP.brass, brass, mats.length), lgl = new THREE.InstancedMesh(LP.glass, glass, mats.length);
+  for (let k = 0; k < mats.length; k++) { lb.setMatrixAt(k, mats[k]); lgl.setMatrixAt(k, mats[k]); }
+  lb.castShadow = true;
+  grp.add(lb, lgl);
 
   // ---- the generic rite interface game.js drives with [E] ----
   H.prompt = pos => (!H.lampTaken && pos.distanceTo(H.lampPos) < TAKE_R + 1.5) ? "[E] TAKE THE SHIP'S LAMP" : null;
