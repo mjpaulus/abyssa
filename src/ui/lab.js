@@ -432,6 +432,19 @@ function build() {
     { key: 'gainK', min: 0, max: 4, step: 0.01 },
     { key: 'shadow', min: 0, max: 1, step: 0.01 }
   ]);
+  // --- LIGHTNING (roadmap/ref-lightning-light.md) ------------------------------
+  knobGroup('lightning', GLASS.lightning, BOOT.lightning, [
+    { key: 'rate', min: 0, max: 2, step: 0.05 },
+    { key: 'width', min: 0.05, max: 1.5, step: 0.01 },
+    { key: 'peak', min: 0, max: 30, step: 0.1 },
+    { key: 'temp', min: 0, max: 1, step: 0.01 },
+    { key: 'floor', min: 5, max: 150, step: 1 },
+    { key: 'after', min: 0, max: 1, step: 0.01 },
+    { key: 'depthK', min: 0, max: 8, step: 0.05 },
+    { key: 'sheet', min: 0, max: 1, step: 0.01 },
+    { key: 'coarseK', min: 0, max: 1, step: 0.01 }
+  ]);
+  el('p', 'note', bd, 'bolts fire on the storm hand\'s own strokes (weather.storm() forces one). probe: __bolt.state() / __bolt.fire(x, z, strength) / __bolt.last().');
   // --- SEABED (roadmap/ref-caustics-shadow.md) --------------------------------
   knobGroup('seabed', GLASS.seabed, BOOT.seabed, [
     { key: 'caustStr', min: 0, max: 3, step: 0.01 },
@@ -595,6 +608,7 @@ function build() {
     Object.assign(GLASS.style, b.style);
     Object.assign(GLASS.rays, b.rays);
     Object.assign(GLASS.seabed, b.seabed);
+    Object.assign(GLASS.lightning, b.lightning);
     syncAll();
     status.textContent = 'boot values restored';
   });

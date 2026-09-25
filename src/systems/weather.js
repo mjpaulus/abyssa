@@ -50,7 +50,7 @@ import { SURFACE_Y, GLASS, setSun, setSkyPhase } from '../config.js';
 //                    Re-dealt only when the day index changes; zero per-frame cost.
 //   wind             {speed 0..1, dir radians}. Leads storms, gusts, lulls overnight.
 const st = {
-  day: 1, storm: 0, flash: 0,
+  day: 1, storm: 0, flash: 0, clock: 0,
   sunElev: GLASS.sun.elevNoon, sunAzim: GLASS.sun.azimCenter,
   phase01: 0.5, ring: 2,
   dayIndex: 0,
@@ -175,6 +175,17 @@ const hand = {
 const FL_CAP = 128;
 const flT = new Float32Array(FL_CAP), flA = new Float32Array(FL_CAP);
 let flCount = 0;
+// BOLTS (world/lightning.js). flMain marks the first stroke of each group — the one
+// that gets a channel drawn and a light; the echoes after it are that channel's
+// return-stroke pulses. flGen bumps on every deal so a consumer can drop its "already
+// fired" bookkeeping; flSeed identifies the deal (day index, or the forced storm's
+// clock) so bolt positions are a pure function of the schedule and repeat across
+// reloads. NOT ONE EXTRA rnd() DRAW: the hand's stream is a contract (`layers` is its
+// last draw and every field before it is bit-identical to the old deal).
+const flMain = new Uint8Array(FL_CAP);
+let flGen = 0, flSeed = 0;
+const sched = { t: flT, a: flA, main: flMain, n: 0, gen: 0, seed: 0 };
+export function lightningSchedule() { sched.n = flCount; sched.gen = flGen; sched.seed = flSeed; return sched; }
 
 // Absolute clock (in `tt` units) at which day `i` begins. PHASE0 shifts the session
 // into mid-morning, so the day boundary sits at tt = i*CYCLE - PHASE0.
@@ -247,7 +258,7 @@ function dealHand(idx) {
 }
 
 function dealLightning(idx) {
-  flCount = 0;
+  flCount = 0; flGen++; flSeed = idx | 0;
   if (!hand.stormDay) return;
   const a = dayStartT(idx) + hand.stormAt * CYCLE;
   const b = a + RISE + hand.stormLen;
@@ -256,13 +267,13 @@ function dealLightning(idx) {
   let f = a + RISE + rng(2, 10);
   while (f < b - 1.5 && flCount < FL_CAP - 4) {
     const amp = rng(0.6, 1.0);
-    flT[flCount] = f; flA[flCount] = amp; flCount++;
+    flT[flCount] = f; flA[flCount] = amp; flMain[flCount] = 1; flCount++;
     const echoes = 1 + Math.floor(rnd() * 3);
     let e = f;
     for (let k = 0; k < echoes; k++) {
       e += rng(0.09, 0.26);
       if (e - f > 0.85) break;
-      flT[flCount] = e; flA[flCount] = amp * rng(0.22, 0.5); flCount++;
+      flT[flCount] = e; flA[flCount] = amp * rng(0.22, 0.5); flMain[flCount] = 0; flCount++;
     }
     f += rng(8, 25);
   }
@@ -274,18 +285,18 @@ function dealLightning(idx) {
 // itself well before that matters.
 function forcedLightning(t0) {
   sSeed = (Math.imul(Math.floor(t0) | 0, 0x85ebca6b) ^ 0x27d4eb2f) | 0;
-  flCount = 0;
+  flCount = 0; flGen++; flSeed = sSeed;
   const b = t0 + RISE + 90;
   let f = t0 + RISE + rng(2, 8);
   while (f < b - 1.5 && flCount < FL_CAP - 4) {
     const amp = rng(0.6, 1.0);
-    flT[flCount] = f; flA[flCount] = amp; flCount++;
+    flT[flCount] = f; flA[flCount] = amp; flMain[flCount] = 1; flCount++;
     let e = f;
     const echoes = 1 + Math.floor(rnd() * 3);
     for (let k = 0; k < echoes; k++) {
       e += rng(0.09, 0.26);
       if (e - f > 0.85) break;
-      flT[flCount] = e; flA[flCount] = amp * rng(0.22, 0.5); flCount++;
+      flT[flCount] = e; flA[flCount] = amp * rng(0.22, 0.5); flMain[flCount] = 0; flCount++;
     }
     f += rng(8, 25);
   }
@@ -561,6 +572,8 @@ export function initWeather() {
       pause(b) { wPaused = b === undefined ? true : !!b; },
       speed(k) { wSpeed = k === undefined ? 1 : Math.max(0, k); },
       wind() { return { speed: st.wind.speed, dir: st.wind.dir }; },
+      // The stroke train (main strokes + echoes) as plain arrays, for probes.
+      strokes() { const o = []; for (let i = 0; i < flCount; i++) o.push({ t: flT[i], a: flA[i], main: !!flMain[i] }); return { seed: flSeed, gen: flGen, strokes: o }; },
       hand() {
         const h = st.hand;
         return {
@@ -604,6 +617,7 @@ export function updateWeather(dt, t) {
 
   const tt = t + tOff;
   lastT = tt;
+  st.clock = tt;      // the weather clock itself, for consumers keyed to the schedule (world/lightning.js)
 
   const u = ((PHASE0 + tt) % CYCLE + CYCLE) % CYCLE;
   // THE DAY HAND. dealHand() early-outs on an unchanged index, so this is one floor
@@ -680,7 +694,9 @@ export function updateWeather(dt, t) {
   if (show) {
     ru.uTime.value = tt;
     ru.uStorm.value = st.storm > 0.05 ? st.storm : 0;
-    ru.uFlash.value = st.flash;
+    // The bolt light (world/lightning.js) now lights the column directly; the sheet
+    // keeps only its `sheet` share so a strike is not counted twice.
+    ru.uFlash.value = st.flash * GLASS.lightning.sheet;
     ru.uNight.value = night * (1 - 0.7 * st.storm);
     ru.uFade.value = depthFade;
   }
