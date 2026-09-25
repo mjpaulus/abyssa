@@ -15,14 +15,16 @@
 // ACROSS builders, so four files that each emit an iron bucket cost one iron draw call.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { scene, camera, envTex } from '../core.js';
+import { scene, camera, envTex, renderer } from '../core.js';
 import { SURFACE_Y } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { V3 } from '../lib/math.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand,
+  raftWoodSet } from '../lib/textures.js';
 import { survival } from './survival.js';
 import { surfaceHeightAt, stormLevel, onSkyEnv } from '../world/water.js';
-import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash } from './raft/kit.js';
+import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash, DECK_SENTINEL } from './raft/kit.js';
+import { DECK_NAILS } from './raft/hull.js';
 import { buildHull } from './raft/hull.js';
 import { buildStation } from './raft/station.js';
 import { buildGear } from './raft/gear.js';
@@ -140,15 +142,76 @@ function raftMaps() {
   return RM;
 }
 
+// ---- THE SURFACE PATCH (polish-raft) ----------------------------------------------
+// One onBeforeCompile shared by every lit raft material, keyed so materials with the same
+// maps still share a program. It reads three things no stock material can:
+//   vColor.a  the baked SURFACE STATE (kit.js): 0.5 neutral, lower = wet / hand-polished
+//             (smoother), higher = rust / dust (rougher, and dull: metalness falls away)
+//   raftWet   rain wetness, pushed from updateRaft: upward faces go dark and slick first
+//   the DECK MAP (wood only, RAFT_DECK): contact grime, iron stain, wet, foot polish,
+//             baked once at build from a top-down render of the finished raft
+// Inserted after normal_fragment_maps so the geometric normal is known; everything it
+// touches (diffuseColor, roughnessFactor, metalnessFactor) is read only by the lights.
+const RAFT_WET = { value: 0 };
+const DECK_N = 256, DECK_EXT = 5.0;          // deck map texels, half-extent in raft metres
+const deckData = new Uint8Array(DECK_N * DECK_N * 4);
+for (let i = 0; i < DECK_N * DECK_N; i++) { deckData[i * 4] = 255; deckData[i * 4 + 3] = 0; }
+const deckTex = new THREE.DataTexture(deckData, DECK_N, DECK_N, THREE.RGBAFormat, THREE.UnsignedByteType);
+deckTex.magFilter = THREE.LinearFilter; deckTex.minFilter = THREE.LinearMipmapLinearFilter;
+deckTex.generateMipmaps = true; deckTex.needsUpdate = true;
+const SURF_FS = `#include <normal_fragment_maps>
+{
+  float rsK = 0.5;
+  #ifdef USE_COLOR_ALPHA
+    rsK = vColor.a;
+  #endif
+  vec3 rsUp = normalize( ( viewMatrix * vec4( 0.0, 1.0, 0.0, 0.0 ) ).xyz );
+  float rsFace = clamp( dot( nonPerturbedNormal, rsUp ), 0.0, 1.0 );
+  float rsWet = raftWet * ( 0.35 + 0.65 * rsFace );
+  float rsDry = clamp( rsK * 2.0 - 1.0, 0.0, 1.0 );
+  float rsSlick = clamp( 1.0 - rsK * 2.0, 0.0, 1.0 );
+  roughnessFactor *= mix( 1.0, 0.36, rsSlick ) * mix( 1.0, 1.70, rsDry );
+  metalnessFactor *= 1.0 - 0.85 * rsDry;
+  #ifdef RAFT_DECK
+    vec4 rdk = texture2D( raftDeckMap, vRaftDeck );
+    diffuseColor.rgb *= mix( 0.38, 1.0, rdk.r );
+    diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.12, 0.065, 0.035 ), rdk.g * 0.85 );
+    diffuseColor.rgb *= ( 1.0 - 0.42 * rdk.b ) * ( 1.0 + 0.14 * rdk.a );
+    roughnessFactor *= ( 1.0 - 0.58 * rdk.b ) * ( 1.0 - 0.34 * rdk.a );
+    roughnessFactor = mix( roughnessFactor, 1.0, rdk.g * 0.5 );
+  #endif
+  diffuseColor.rgb *= 1.0 - 0.30 * rsWet;
+  roughnessFactor = clamp( roughnessFactor * ( 1.0 - 0.60 * rsWet ), 0.04, 1.0 );
+}`;
+function raftSurf(m, deck = false) {
+  if (deck) { m.defines = Object.assign({}, m.defines, { RAFT_DECK: '' }); m.userData.deckAttr = true; }
+  m.onBeforeCompile = sh => {
+    sh.uniforms.raftWet = RAFT_WET;
+    if (deck) sh.uniforms.raftDeckMap = { value: deckTex };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n#ifdef RAFT_DECK\nattribute vec2 raftDeck;\nvarying vec2 vRaftDeck;\n#endif')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n#ifdef RAFT_DECK\nvRaftDeck = raftDeck;\n#endif');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float raftWet;\n#ifdef RAFT_DECK\nuniform sampler2D raftDeckMap;\nvarying vec2 vRaftDeck;\n#endif')
+      .replace('#include <normal_fragment_maps>', SURF_FS);
+  };
+  // same key for every raft material: programs are still split by the maps/defines
+  // three already keys on, and shared wherever those match
+  m.customProgramCacheKey = () => 'raftSurf1';
+  return m;
+}
+
 function palette() {
   const M = (color, o) => new THREE.MeshStandardMaterial(
     Object.assign({ color, envMap: envTex, vertexColors: true }, o));
-  const { wood: W, metal: MT } = raftMaps();
-  const wset = { map: W.map, roughnessMap: W.rough, normalMap: W.nrm, normalScale: new THREE.Vector2(0.45, 0.45) };
+  const { metal: MT } = raftMaps();
+  const WS = raftWoodSet();
+  const wset = { map: WS.map, roughnessMap: WS.rough, normalMap: WS.nrm, normalScale: new THREE.Vector2(1.0, 1.0) };
   const mset = { map: MT.map, roughnessMap: MT.rough, normalMap: MT.nrm, normalScale: new THREE.Vector2(0.35, 0.35) };
+  const metric = m => { m.userData.uv = 'metric'; return m; };
   return {
-    wood: M(0x584734, { roughness: 0.94, metalness: 0.02, envMapIntensity: 0.16, ...wset }),
-    wood2: M(0x8b7c64, { roughness: 0.96, metalness: 0.00, envMapIntensity: 0.12, ...wset }),
+    wood: metric(M(0x8f7658, { roughness: 0.94, metalness: 0.02, envMapIntensity: 0.22, ...wset })),
+    wood2: metric(M(0xa89878, { roughness: 0.96, metalness: 0.00, envMapIntensity: 0.16, ...wset })),
     iron: M(0x33373b, { roughness: 0.58, metalness: 0.78, envMapIntensity: 0.45, ...mset }),
     rust: M(0x6d452a, { roughness: 0.93, metalness: 0.22, envMapIntensity: 0.18 }),
     brass: M(0xac8a2f, { roughness: 0.34, metalness: 0.90, envMapIntensity: 0.70, ...mset }),
@@ -168,8 +231,141 @@ function palette() {
 // hose go matte with the dial (the plank normal maps soften with it). Brass and the
 // glass are HERO — wet brass is one of the few specular stories the style keeps.
 function paintRaft(mats) {
-  for (const k in mats) registerPaint(mats[k], { hero: k === 'brass' || k === 'glass' });
+  for (const k in mats) {
+    registerPaint(mats[k], { hero: k === 'brass' || k === 'glass' });
+    if (!mats[k].transparent) raftSurf(mats[k], k === 'wood');
+  }
   return mats;
+}
+
+// ---- THE DECK MAP ------------------------------------------------------------------
+// Baked once, after every builder has placed its gear: a top-down orthographic render of
+// the raft's own geometry between the plank tops and 0.7 above them tells us exactly
+// what stands on the deck and how tall it is. From that the deck gets what real planking
+// has and no texture can know: contact grime pooled at every foot and bulwark, iron
+// stain bleeding out of every nail and bolt, the wet the dive gap and the scuppers carry,
+// and the burnished trails boots have worn between the stations. RGBA = grime (1 clean),
+// iron stain, wet, polish. Costs one tiny render and a few box blurs at boot.
+const DECK_TOP = 0.11;
+let deckReadMs = 0;
+function bakeDeckMap(group) {
+  const N = DECK_N, E = DECK_EXT, px = (2 * E) / N;
+  const rt = new THREE.WebGLRenderTarget(N, N, { depthBuffer: true });
+  const cam = new THREE.OrthographicCamera(-E, E, E, -E, 0, 0.56);
+  cam.position.set(0, 0.70, 0); cam.up.set(0, 0, -1); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
+  const hm = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
+    vertexShader: 'varying float vH; void main() { vec4 w = modelMatrix * vec4( position, 1.0 ); vH = w.y; gl_Position = projectionMatrix * viewMatrix * w; }',
+    fragmentShader: 'varying float vH; void main() { gl_FragColor = vec4( clamp( ( vH - 0.14 ) / 0.56, 0.0, 1.0 ), 1.0, 0.0, 1.0 ); }'
+  });
+  const tmp = new THREE.Scene();
+  const p0 = group.position.clone(), r0 = group.rotation.clone();
+  group.position.set(0, 0, 0); group.rotation.set(0, 0, 0);
+  tmp.add(group); tmp.overrideMaterial = hm;
+  const prevRT = renderer.getRenderTarget(), prevCC = renderer.getClearColor(new THREE.Color()), prevCA = renderer.getClearAlpha();
+  renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear();
+  renderer.render(tmp, cam);
+  const pix = new Uint8Array(N * N * 4);
+  const tr0 = performance.now();
+  renderer.readRenderTargetPixels(rt, 0, 0, N, N, pix);
+  deckReadMs = performance.now() - tr0;
+  renderer.setRenderTarget(prevRT); renderer.setClearColor(prevCC, prevCA);
+  tmp.remove(group); tmp.overrideMaterial = null;
+  group.position.copy(p0); group.rotation.copy(r0);
+  hm.dispose(); rt.dispose();
+
+  // occupancy / height, in DECK layout: texel (i, j) <-> x = -E + (i+.5)px, z = -E + (j+.5)px.
+  // The camera's screen-up is world -Z, so render row r is z = +E - (r+.5)px.
+  const occ = new Float32Array(N * N), low = new Float32Array(N * N);
+  for (let r = 0; r < N; r++) for (let i = 0; i < N; i++) {
+    const o = (r * N + i) * 4, j = N - 1 - r, k = j * N + i;
+    if (pix[o + 3] === 0) continue;
+    const h = pix[o] / 255 * 0.56;
+    occ[k] = 0.55 + 0.45 * Math.min(1, h / 0.3);        // taller stands make deeper shade
+    if (h < 0.06) low[k] = 1;                             // fittings flush with the planks
+  }
+  for (const [x, z] of DECK_NAILS) {
+    const i = Math.floor((x + E) / px), j = Math.floor((z + E) / px);
+    if (i >= 0 && j >= 0 && i < N && j < N) low[j * N + i] = 1;
+  }
+  const blur = (src, r, passes = 2) => {
+    let a = src.slice(), b = new Float32Array(N * N);
+    const w = 1 / (2 * r + 1);
+    for (let p = 0; p < passes; p++) {
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        let t = 0;
+        for (let d = -r; d <= r; d++) { const ii = i + d; t += ii < 0 || ii >= N ? 0 : a[j * N + ii]; }
+        b[j * N + i] = t * w;
+      }
+      for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+        let t = 0;
+        for (let d = -r; d <= r; d++) { const jj = j + d; t += jj < 0 || jj >= N ? 0 : b[jj * N + i]; }
+        a[j * N + i] = t * w;
+      }
+    }
+    return a;
+  };
+  const aoN = blur(occ, 2), aoF = blur(occ, 7), stain = blur(low, 2), occS = blur(occ, 1, 1);
+  // cheap smooth value noise over a 64^2 lattice table (hashed once)
+  const LAT = new Float32Array(64 * 64);
+  for (let k = 0; k < LAT.length; k++) { const h = Math.sin(k * 12.9898 + 4.1) * 43758.5453; LAT[k] = h - Math.floor(h); }
+  const vn = (x, z) => {
+    const xi = Math.floor(x), zi = Math.floor(z), fx = x - xi, fz = z - zi;
+    const sx = fx * fx * (3 - 2 * fx), sz = fz * fz * (3 - 2 * fz);
+    const x0 = xi & 63, z0 = zi & 63, x1 = (xi + 1) & 63, z1 = (zi + 1) & 63;
+    const a = LAT[z0 * 64 + x0], b = LAT[z0 * 64 + x1], c = LAT[z1 * 64 + x0], d = LAT[z1 * 64 + x1];
+    return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
+  };
+  // the trails: boots go from the ladder gap up the lane, then round the reel to the
+  // stations. Distance to each segment, gaussian across, patchy along.
+  const TRAILS = [
+    [0, 4.6, 0, 1.6, 1.0], [0, 1.6, -1.35, 1.25, 0.8], [-1.35, 1.25, -3.2, 2.9, 0.7],
+    [-1.35, 1.25, -1.45, -0.55, 0.7], [-1.45, -0.55, -3.4, -1.2, 0.6], [0, 1.6, 1.4, 1.25, 0.8],
+    [1.4, 1.25, 1.55, -0.9, 0.7], [1.55, -0.9, 1.9, -2.6, 0.55], [1.9, -2.6, 3.0, -3.1, 0.5],
+    [1.4, 1.25, 3.3, 0.2, 0.45], [1.55, -0.9, 0.9, -2.55, 0.5], [-1.45, -0.55, -1.0, -2.5, 0.4]
+  ];
+  // wet: the dive gap, and a fan round each scupper mouth (hull.js positions)
+  const SCUP = [[-2.9, 4.7], [2.9, 4.7], [-1.6, -4.7], [1.6, -4.7], [4.7, -2.0], [4.7, 2.0], [-4.7, 1.4]];
+  const segD = (x, z, s) => {
+    const dx = s[2] - s[0], dz = s[3] - s[1], l2 = dx * dx + dz * dz;
+    const t = Math.max(0, Math.min(1, ((x - s[0]) * dx + (z - s[1]) * dz) / l2));
+    const ex = x - s[0] - dx * t, ez = z - s[1] - dz * t;
+    return Math.sqrt(ex * ex + ez * ez);
+  };
+  const d = deckData;
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const k = j * N + i, o = k * 4, x = -E + (i + 0.5) * px, z = -E + (j + 0.5) * px;
+    const n1 = vn(x * 2.3, z * 2.3), n2 = vn(x * 7.1 + 40, z * 7.1), n3 = vn(x * 0.9 + 13, z * 0.9 + 7);
+    // grime: contact shade + a broad uneven dirt, heavier toward the bulwarks
+    const edge = Math.max(Math.abs(x), Math.abs(z));
+    const toRail = Math.max(0, 1 - (4.62 - edge) / 0.30);
+    let g = 1 - Math.min(0.85, aoN[k] * 0.80 + aoF[k] * 0.55) - toRail * 0.30 * (0.6 + 0.4 * n2) - (n3 - 0.5) * 0.12;
+    // bitumen: drips from the tapped barrel's tap and a trodden-in smear toward the pump
+    const tapD = Math.hypot(x - 3.97, z + 4.12), bit = Math.max(0, 1 - tapD / 0.34) * (0.6 + 0.4 * n2)
+      + Math.max(0, 1 - segD(x, z, [3.8, -4.0, 1.7, -2.4]) / 0.10) * 0.25 * n1;
+    g -= bit * 0.55;
+    // foot polish
+    let pol = 0;
+    for (const s of TRAILS) { const dd = segD(x, z, s); pol = Math.max(pol, Math.exp(-(dd * dd) / (2 * 0.26 * 0.26)) * s[4]); }
+    pol *= (0.55 + 0.45 * n1) * (1 - Math.min(1, occS[k] * 1.4));
+    // wet
+    let wet = 0;
+    if (z > 3.2 && Math.abs(x) < 1.6) wet = Math.max(wet, Math.max(0, (z - 3.2) / 1.5) * Math.max(0, 1 - Math.abs(x) / 1.6) * (0.5 + 0.7 * n2));
+    for (const [sx, sz] of SCUP) {
+      const dd = Math.hypot((x - sx) * (Math.abs(sz) > 4 ? 0.7 : 1.3), (z - sz) * (Math.abs(sz) > 4 ? 1.3 : 0.7));
+      wet = Math.max(wet, Math.max(0, 1 - dd / 0.55) * (0.6 + 0.5 * n2));
+    }
+    wet = Math.max(wet, toRail * 0.35 * n2, bit * 0.8);    // bitumen reads glossy-black
+    d[o] = Math.max(0, Math.min(1, g)) * 255;
+    d[o + 1] = Math.min(1, stain[k] * 2.4) * (1 - bit) * 255;
+    d[o + 2] = Math.min(1, wet) * 255;
+    d[o + 3] = Math.min(1, pol) * 255;
+  }
+  // the neutral corner the non-deck wood samples (kit.js DECK_SENTINEL)
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+    const o = (j * N + i) * 4; d[o] = 255; d[o + 1] = 0; d[o + 2] = 0; d[o + 3] = 0;
+  }
+  deckTex.needsUpdate = true;
 }
 
 // Second-pass merge across builders. Every mesh a Part baked is flagged and sits at
@@ -247,8 +443,10 @@ function buildReel(P, mats, head) {
 }
 
 export function buildRaft() {
+  const tb0 = performance.now();
   raft.position.copy(RAFT_POS);
   const mats = paintRaft(palette());
+  const tMaps = performance.now() - tb0;
   // The raft is the one thing in the game that lives at the surface, so it is the one
   // thing whose reflections should be the game's OWN sky rather than core.js's neutral
   // RoomEnvironment. water.js captures the sky dome into a small PMREM on palette-stop
@@ -295,6 +493,10 @@ export function buildRaft() {
   raft.add(pumpGroup);
   pumpH = buildPump(pumpGroup, mats);
   puffOrigin.copy(pumpH.stackTip).add(PUMP_POS);
+  // every static object is placed: bake the deck map before the sprites and lights exist
+  const tDeck0 = performance.now();
+  bakeDeckMap(raft);
+  const tDeck = performance.now() - tDeck0;
 
   // exhaust: grey puffs that climb and fade, recycled. Only issued while it burns.
   // ONE InstancedMesh where seven meshes with seven cloned materials used to stand:
@@ -351,6 +553,9 @@ export function buildRaft() {
   // Debug surface, kept: five builders compose into one frame and the only trustworthy
   // check that nobody strayed out of their box is a bounding-box probe on the real tree.
   window.__raft = raft;
+  // Boot cost, kept: the surface maps are generated on the main thread at load, and the
+  // polish pass budgets them (maps = palette + texture generation, total = whole build).
+  window.__raftBoot = { maps: +tMaps.toFixed(1), deck: +tDeck.toFixed(1), deckRead: +deckReadMs.toFixed(1), total: +(performance.now() - tb0).toFixed(1), calls };
   scene.add(raft);
   raft.updateMatrixWorld(true);
   raft.localToWorld(pumpPos.copy(hoseHead));
@@ -371,6 +576,8 @@ export function setKeepsakes(keeps) {
 }
 
 export function setSwell(k, d = 1) { storm = k; day = d; }
+// DEV: the surface state the patch reads, for the lab / captures.
+export const raftSurface = { wet: RAFT_WET, deckTex };
 
 // The flywheel's real speed, 0..1. Published so the audio hears the same coast-down the
 // eye does — an engine whose sound and whose wheel disagree reads as two objects.
@@ -408,6 +615,10 @@ export function updateRaft(dt, t) {
   // would not rebuild until render, leaving the anchor a frame behind the swell.
   raft.updateMatrixWorld(true);
   raft.localToWorld(pumpPos.copy(hoseHead));
+
+  // rain wets the whole boat (surface patch): storm drives it in, and it dries slowly
+  const wetTo = storm > 0.25 ? Math.min(1, (storm - 0.25) / 0.45) : 0;
+  RAFT_WET.value += (wetTo - RAFT_WET.value) * Math.min(1, dt * (wetTo > RAFT_WET.value ? 0.5 : 0.05));
 
   const running = survival.fuel > 0;
   govK = updatePump(pumpH, dt, t, running);

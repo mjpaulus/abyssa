@@ -3,13 +3,27 @@
 // OWNED BY: hull agent (raft detail round). Replaces the nine identical planks, three
 // bare beams and four smooth drums that used to stand in for a boat — this is the piece
 // that has to convince the player they are standing on something, not a platform.
+import * as THREE from 'three';
 import { Part, xf, box, cyl, tor, lathe, weather, boltLine, rope, lash,
-  chamferedPlank, profilePrism, rivetRing } from './kit.js';
+  chamferedPlank, profilePrism, rivetRing, state } from './kit.js';
 
 const FOOT = 4.7;          // walkable footprint half-extent — player.js hard-codes this
 const DECK_TOP = 0.11;     // deck top surface — player.js hard-codes this too
 const WATERLINE = -0.55;   // raft-local; see RAFT_BRIEF frame table
 const RAIL_H = 0.42;       // bulwark height above the deck
+
+// Every nail head driven into the planking, raft-local [x, z]: raft.js stains the deck
+// map round each one (iron bleeding into oak goes blue-black, then rust-brown).
+export const DECK_NAILS = [];
+
+// Deck-map coordinates for real planking (raft.js bakeDeckMap): raft-local x,z mapped
+// over the map's +-5 m. Anything without this attribute samples the neutral corner.
+function deckUV(geo) {
+  const p = geo.attributes.position, a = new Float32Array(p.count * 2);
+  for (let i = 0; i < p.count; i++) { a[i * 2] = (p.getX(i) + 5) / 10; a[i * 2 + 1] = (p.getZ(i) + 5) / 10; }
+  geo.setAttribute('raftDeck', new THREE.BufferAttribute(a, 2));
+  return geo;
+}
 
 // Transform-then-weather: weather() reads each vertex's raw Y to place the waterline
 // band, so a piece has to be sitting in raft-local space (post-xf) before it runs, not
@@ -40,8 +54,8 @@ export function buildHull(group, mats) {
 function buildDeck(P, wood, wood2, iron) {
   const SPAN = FOOT * 2, BASE_TOP = 0.02, GROOVE = 0.022, JOINT = 0.02;
 
-  P.add(weather(xf(box(SPAN, BASE_TOP + DECK_TOP, SPAN), 0, (BASE_TOP - DECK_TOP) / 2, 0),
-    { tone: 0.74, freq: 0.9, amp: 0.26 }), wood);
+  P.add(deckUV(weather(xf(box(SPAN, BASE_TOP + DECK_TOP, SPAN), 0, (BASE_TOP - DECK_TOP) / 2, 0),
+    { tone: 0.62, freq: 0.9, amp: 0.26 })), wood);
 
   // BOARD WIDTH IS THE WHOLE THING. Sal is 1.8 units tall and reads as a man, so a unit
   // is about a metre — which made the first pass's eight boards across the span METRE-
@@ -94,24 +108,33 @@ function buildDeck(P, wood, wood2, iron) {
       const tone = (isPale ? 1.16 : 0.80) + (h1(i + 313) - 0.5) * 0.26;
       // Chamfered caps, not boxes: the ~0.012 eased top edge is what lets the light find
       // every seam. Built in local space then xf'd, so weather() still reads raft-local Y.
-      P.add(weather(xf(chamferedPlank(capW, h, len), xc, BASE_TOP + h / 2, (z0 + z1) / 2),
-        { tone, freq: 2.6, amp: 0.30 }), mat);
+      // Rows every ~0.28 m on the three top faces so the deck map's grime, wet and
+      // foot-polish resolve along the board instead of once per end.
+      const rows = Math.max(2, Math.round(len / 0.28));
+      const board = deckUV(weather(xf(chamferedPlank(capW, h, len, 0.012, rows), xc, BASE_TOP + h / 2, (z0 + z1) / 2),
+        { tone, freq: 2.6, amp: 0.30 }));
+      // each board is a different piece of timber: its own dryness, and the ends (end
+      // grain drinks water) a touch rougher/drier than the middle
+      const dry = (h1(i * 3 + s + 57) - 0.5) * 0.16;
+      state(board, (k, bx, by, bz) => dry + Math.max(0, 1 - Math.min(bz - z0, z1 - bz) / 0.12) * 0.12);
+      P.add(board, mat);
       // butt-joint nails: a pair driven at the board end each side of an interior joint.
       // Cheap domes (4x3 spheres) — a nail head is a glint, not a rivet.
       if (s > 0) {
         const ny = BASE_TOP + h + 0.004;
         boltLine(P, iron, xc - capW * 0.28, ny, z0 + 0.05, xc + capW * 0.28, ny, z0 + 0.05,
           2, 0.014, 4, 3);
+        DECK_NAILS.push([xc - capW * 0.28, z0 + 0.05], [xc + capW * 0.28, z0 + 0.05]);
       }
     }
   }
 
   // two scarfed repairs: a diagonal patch board let in over an old joint, proud enough
   // to throw a real shadow line rather than just a colour change
-  P.add(weather(xf(box(0.62, 0.028, 0.34), -3.0, DECK_TOP + 0.012, -1.0, 0, 0.42, 0),
-    { tone: 1.10, freq: 3.2, amp: 0.30 }), wood);
-  P.add(weather(xf(box(0.58, 0.026, 0.30), 3.15, DECK_TOP + 0.011, 0.55, 0, -0.33, 0),
-    { tone: 1.04, freq: 3.2, amp: 0.30 }), wood);
+  P.add(deckUV(weather(xf(box(0.62, 0.028, 0.34), -3.0, DECK_TOP + 0.012, -1.0, 0, 0.42, 0),
+    { tone: 1.10, freq: 3.2, amp: 0.30 })), wood);
+  P.add(deckUV(weather(xf(box(0.58, 0.026, 0.30), 3.15, DECK_TOP + 0.011, 0.55, 0, -0.33, 0),
+    { tone: 1.04, freq: 3.2, amp: 0.30 })), wood);
 }
 
 // ---- bulwark / toe rail -----------------------------------------------------------------
@@ -218,6 +241,7 @@ function buildStructure(P, iron) {
   // where the aft beam's strap bolts actually punch up through the planking — the only
   // one of the three whose deck-side fastenings sit clear of the pump, reel and davit
   boltLine(P, iron, -FOOT + 0.4, DECK_TOP + 0.012, -3.6, FOOT - 0.4, DECK_TOP + 0.012, -3.6, 10, 0.032, 6, 4, true);
+  for (let k = 0; k < 10; k++) DECK_NAILS.push([-FOOT + 0.4 + (2 * FOOT - 0.8) * k / 9, -3.6]);
 
   for (const x of [-2.3, 2.3]) {
     P.add(W(box(0.24, 0.28, FOOT * 2 - 0.1), x, -0.34, 0, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.4 }), iron);
