@@ -385,3 +385,116 @@ export function rockMapSet(variant = 0) {
 }
 
 export { rng };
+
+// =====================================================================================
+// ---- SAL'S DRESS AND FITTINGS (polish-sal) -----------------------------------------
+// Appended block, owned by the diver polish pass (entities/diver.js is the only caller).
+// Everything here is generated ONCE at boot, seeded (the same dress every session), and
+// handed over as mipmapped RepeatWrapping DataTextures in LINEAR space: these are
+// structure maps that the diver's own shaders turn into colour, never colour themselves.
+// Layout convention for every set: `pack` RGBA8 (channels documented per set) and `nrm`
+// RGBA8 = tangent-space normal in rgb, height in a.
+// =====================================================================================
+
+// Tileable value noise straight into a Float32Array (no canvas round trip). Every
+// lattice is modulo its own cell count, so the tile wraps exactly at any octave.
+function _tileNoise(S, cells, oct, rand) {
+  const out = new Float32Array(S * S);
+  let amp = 1, tot = 0;
+  for (let o = 0; o < oct; o++) {
+    const n = cells << o, g = new Float32Array(n * n);
+    for (let i = 0; i < n * n; i++) g[i] = rand();
+    for (let y = 0; y < S; y++) {
+      const fy = y / S * n, y0 = Math.floor(fy), ty = fy - y0, sy = ty * ty * (3 - 2 * ty);
+      const r0 = (y0 % n) * n, r1 = ((y0 + 1) % n) * n;
+      for (let x = 0; x < S; x++) {
+        const fx = x / S * n, x0 = Math.floor(fx), tx = fx - x0, sx = tx * tx * (3 - 2 * tx);
+        const c0 = x0 % n, c1 = (x0 + 1) % n;
+        const a = g[r0 + c0], b = g[r0 + c1], c = g[r1 + c0], d = g[r1 + c1];
+        out[y * S + x] += ((a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy) * amp;
+      }
+    }
+    tot += amp; amp *= 0.5;
+  }
+  for (let i = 0; i < S * S; i++) out[i] /= tot;
+  return out;
+}
+
+// Height field -> packed normal (rgb) + height (a). Central differences, wrapped.
+function _packNormal(h, S, slope) {
+  const nrm = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++) {
+    const ym = ((y - 1 + S) % S) * S, yp = ((y + 1) % S) * S;
+    for (let x = 0; x < S; x++) {
+      const xm = (x - 1 + S) % S, xp = (x + 1) % S, i = y * S + x, o = i * 4;
+      let nx = (h[y * S + xm] - h[y * S + xp]) * slope, ny = (h[ym + x] - h[yp + x]) * slope, nz = 1;
+      const il = 1 / Math.hypot(nx, ny, nz); nx *= il; ny *= il; nz *= il;
+      nrm[o] = (nx * 0.5 + 0.5) * 255; nrm[o + 1] = (ny * 0.5 + 0.5) * 255;
+      nrm[o + 2] = (nz * 0.5 + 0.5) * 255; nrm[o + 3] = Math.max(0, Math.min(255, h[i] * 255));
+    }
+  }
+  return nrm;
+}
+
+function _dataTex(data, S) {
+  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = MAX_ANISO;
+  t.colorSpace = THREE.NoColorSpace;
+  t.needsUpdate = true;
+  return t;
+}
+
+// RUBBERISED TWILL. A 2/1 twill (the warp floats over two wefts and under one, the float
+// stepping one thread per row), which is what gives drill and dress canvas their
+// diagonal rib. 36 threads per tile at 8 px each; 36 is a multiple of the 3-thread
+// repeat, so the diagonal wraps without a seam. Per-thread slub (thickness) and tone
+// jitter keep it cloth and not a halftone screen.
+//   pack.r = weave height, pack.g = low-frequency mottle (stains, salt, rubber-coat
+//   thickness; sampled by the shader at a much larger scale), pack.b = thread tone
+//   (warp darker than weft + fibre noise), pack.a = 255.
+let _twill = null;
+export function twillSet() {
+  if (_twill) return _twill;
+  const S = 288, N = 36, P = S / N;
+  const rand = seededRand(0x5a1c0a7);
+  const slubW = new Float32Array(N), slubF = new Float32Array(N), toneW = new Float32Array(N), toneF = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    slubW[i] = 0.86 + 0.26 * rand(); slubF[i] = 0.86 + 0.26 * rand();
+    toneW[i] = rand(); toneF[i] = rand();
+  }
+  const fib = _tileNoise(S, 32, 2, rand);
+  const mot = _tileNoise(S, 3, 4, rand);
+  const h = new Float32Array(S * S), pack = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++) {
+    const j = Math.floor(y / P), fy = (y % P + 0.5) / P;
+    for (let x = 0; x < S; x++) {
+      const i = Math.floor(x / P), fx = (x % P + 0.5) / P;
+      const k = (((i - j) % 3) + 3) % 3;
+      const f = fib[y * S + x];
+      let hh, tone;
+      if (k < 2) {                                         // warp float, two cells long
+        const t = (k === 1 ? fy : 1 + fy) / 2;
+        const across = Math.pow(Math.sin(Math.PI * Math.min(1, fx * slubW[i] + (1 - slubW[i]) * 0.5)), 0.55);
+        hh = across * (0.62 + 0.38 * Math.sin(Math.PI * t));
+        tone = 0.30 + 0.16 * toneW[i];
+      } else {                                             // weft on top for one cell
+        const across = Math.pow(Math.sin(Math.PI * Math.min(1, fy * slubF[j] + (1 - slubF[j]) * 0.5)), 0.55);
+        hh = across * (0.55 + 0.45 * Math.pow(Math.sin(Math.PI * fx), 0.4));
+        tone = 0.62 + 0.18 * toneF[j];
+      }
+      hh = hh * (0.90 + 0.2 * f);
+      const o = (y * S + x) * 4;
+      h[y * S + x] = hh;
+      pack[o] = hh * 255;
+      pack[o + 1] = mot[y * S + x] * 255;
+      pack[o + 2] = Math.max(0, Math.min(1, tone + (f - 0.5) * 0.3)) * 255;
+      pack[o + 3] = 255;
+    }
+  }
+  _twill = { pack: _dataTex(pack, S), nrm: _dataTex(_packNormal(h, S, 2.4), S), size: S };
+  return _twill;
+}

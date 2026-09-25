@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
-import { registerPaint } from '../lib/paint.js';
+import { registerPaint, styleUniforms } from '../lib/paint.js';
 // The deck is a MOVING GROUND. A stance anchor claimed on planks is stored relative to
 // raft.position so it heaves and surges with the boat; a world-space anchor would leave
 // the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
@@ -13,7 +13,7 @@ import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // drives the breath cadence. (No cycles: neither module imports the diver.)
 import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet } from '../lib/textures.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -89,41 +89,6 @@ function metalMaps(hi, lo, verd, rep, S = 256) {
   return { map: toTexture(ac, rep, true), rough: toTexture(rc, rep), nrm: toTexture(normalFromHeight(hc, 2.6), rep) };
 }
 
-function clothMaps(base, rep, S = 256) {
-  const { canvas: hc, ctx: h } = canvas2d(S);
-  h.fillStyle = '#808080'; h.fillRect(0, 0, S, S);
-  const P = 6;                                               // woven thread pitch
-  for (let y = 0; y < S; y += P) for (let x = 0; x < S; x += P) {
-    const over = ((x / P) + (y / P)) & 1;
-    const g = h.createLinearGradient(x, y, over ? x : x + P, over ? y + P : y);
-    g.addColorStop(0, 'rgba(60,60,60,.55)'); g.addColorStop(0.5, 'rgba(215,215,215,.6)'); g.addColorStop(1, 'rgba(60,60,60,.55)');
-    h.fillStyle = g; h.fillRect(x, y, P, P);
-  }
-  for (let i = 0; i < 40; i++) {                             // slubs / thread irregularity
-    const y = Math.random() * S;
-    h.strokeStyle = `rgba(${Math.random() < 0.5 ? 240 : 40},128,128,.18)`;
-    h.lineWidth = rng(1, 3);
-    h.beginPath(); h.moveTo(0, y); h.lineTo(S, y + rng(-2, 2)); h.stroke();
-  }
-  const nd = noiseCanvas(S, 4, 1.2).getContext('2d').getImageData(0, 0, S, S).data;
-  const hd = h.getImageData(0, 0, S, S).data;
-  const { canvas: ac, ctx: a } = canvas2d(S);
-  const { canvas: rc, ctx: r } = canvas2d(S);
-  const ai = a.createImageData(S, S), ri = r.createImageData(S, S);
-  const grime = [58, 52, 40], salt = [206, 200, 184];
-  for (let i = 0; i < S * S; i++) {
-    const w = hd[i * 4] / 255, n = nd[i * 4] / 255;
-    let c = mix3(base, mix3(base, [255, 255, 255], 0.14), w);
-    c = mix3(c, grime, ss(0.55, 0.12, n) * 0.34);            // grime pools in the low-frequency dips
-    c = mix3(c, salt, ss(0.88, 0.99, n) * 0.20);             // salt bloom on the high spots
-    ai.data[i * 4] = c[0]; ai.data[i * 4 + 1] = c[1]; ai.data[i * 4 + 2] = c[2]; ai.data[i * 4 + 3] = 255;
-    const rough = clamp(0.98 - 0.16 * n - 0.08 * w, 0, 1) * 255;
-    ri.data[i * 4] = ri.data[i * 4 + 1] = ri.data[i * 4 + 2] = rough; ri.data[i * 4 + 3] = 255;
-  }
-  a.putImageData(ai, 0, 0); r.putImageData(ri, 0, 0);
-  return { map: toTexture(ac, rep, true), rough: toTexture(rc, rep), nrm: toTexture(normalFromHeight(hc, 1.5), rep) };
-}
-
 function grainMaps(base, hi, rep, wet, S = 128) {
   const hc = noiseCanvas(S, 5, 1.4);
   const h = hc.getContext('2d');
@@ -151,9 +116,7 @@ function grainMaps(base, hi, rep, wet, S = 128) {
 // 256 was the blur you could see. One-time boot cost; everything else stays 256/128.
 const copperM = metalMaps([214, 138, 96], [98, 54, 37], [56, 110, 92], 3, 512);
 const brassM = metalMaps([232, 196, 108], [112, 88, 38], [84, 114, 76], 4, 512);
-const clothM = clothMaps([20, 50, 168], 3);                  // royal blue underlayer
 // aged canvas duck: still warm, but pulled off the orange toward a salt-bleached tan-olive
-const leatherM = grainMaps([140, 98, 60], [198, 160, 116], 2, 0.62);
 const darkLeaM = grainMaps([96, 56, 32], [148, 98, 58], 2, 0.56);
 const rubberM = grainMaps([34, 36, 41], [66, 70, 76], 3, 0.74);
 
@@ -171,17 +134,19 @@ const steel = new THREE.MeshStandardMaterial({
   color: 0x3c4046, metalness: 0.78, roughness: 0.6, envMap: envTex, envMapIntensity: 0.2,
   roughnessMap: copperM.rough, normalMap: copperM.nrm, normalScale: new THREE.Vector2(0.45, 0.45)
 });
+// THE DRESS. The three canvas materials no longer ride their primitives' UVs — every
+// lathe, capsule and tube on Sal has its own UV extent, so one repeat gave a different
+// thread size on every part. They sample a generated 2/1 TWILL triplanar in their bone's
+// own space instead (see SUIT_* below): one thread pitch everywhere, riding the bone.
 const cloth = new THREE.MeshStandardMaterial({
-  map: clothM.map, roughnessMap: clothM.rough, normalMap: clothM.nrm, normalScale: new THREE.Vector2(1.15, 1.15),
-  roughness: 1, metalness: 0.02, vertexColors: true, envMap: envTex, envMapIntensity: 0.12
+  color: 0x1f3c96, roughness: 0.92, metalness: 0.02, vertexColors: true, envMap: envTex, envMapIntensity: 0.12
 });
-const trim = new THREE.MeshStandardMaterial({    // no albedo map: clothM's is blue
-  roughnessMap: clothM.rough, normalMap: clothM.nrm, normalScale: new THREE.Vector2(0.9, 0.9), color: 0xe9e3d2,
-  roughness: 0.86, metalness: 0.02, envMap: envTex, envMapIntensity: 0.14
+const trim = new THREE.MeshStandardMaterial({
+  color: 0xe4ddca, roughness: 0.84, metalness: 0.02, envMap: envTex, envMapIntensity: 0.14
 });
+// the dress proper: rubberised twill, tan drill under a salt-bleached rubber coat
 const leather = new THREE.MeshStandardMaterial({
-  map: leatherM.map, roughnessMap: leatherM.rough, normalMap: leatherM.nrm, normalScale: new THREE.Vector2(0.85, 0.85),
-  roughness: 1, metalness: 0.04, vertexColors: true, envMap: envTex, envMapIntensity: 0.34
+  color: 0x806447, roughness: 0.90, metalness: 0.03, vertexColors: true, envMap: envTex, envMapIntensity: 0.30
 });
 const darkLeather = new THREE.MeshStandardMaterial({
   map: darkLeaM.map, roughnessMap: darkLeaM.rough, normalMap: darkLeaM.nrm, normalScale: new THREE.Vector2(0.95, 0.95),
@@ -208,6 +173,120 @@ const lantGlass = new THREE.MeshPhysicalMaterial({
   emissive: 0xffca7a, emissiveIntensity: 0.5, side: THREE.DoubleSide, depthWrite: false,
   envMap: envTex, envMapIntensity: 0.8
 });
+// ---- THE DRESS SHADER ----
+// One injected block shared by every canvas material on Sal (one program per
+// vertex-colour variant; everything material-specific is a uniform). It samples the
+// generated twill TRIPLANAR in the bone's own space, so the thread rides the limb and has
+// one pitch everywhere, and reads three baked per-vertex terms from `salAux`:
+//   x = WEAR   (0..1): knees, elbows, seat, shoulder rub. The rubber coat is scrubbed off
+//                     there, so the drill shows lighter and the surface polishes smoother.
+//   y = SEAM   (signed arc distance to the nearest sewn seam, units): taped seams — a
+//                     band of rubber-solution tape, smoother and darker, with a stitch row
+//                     each side. Signed and linear across a triangle, so the band is exact.
+//   z = PATCH  (signed distance to a reinforcing patch outline, <0 inside).
+// Pad value (0, 9, 9) = no wear, no seam, no patch (Part.bake pads missing geometry).
+// WET: uSalWet (0 dry .. 1 soaked, driven by updateDiver) darkens and glosses the canvas;
+// it dries from the helmet DOWN (vSalY is height above the soles), boots last.
+// No backticks anywhere in this GLSL.
+const SUIT_VS_COMMON = `
+attribute vec3 salAux;
+varying vec3 vSalP; varying vec3 vSalN; varying vec3 vSalA; varying float vSalY;
+uniform float uSalRootY;`;
+const SUIT_FS_COMMON = `
+uniform sampler2D tSalTw; uniform sampler2D tSalTwN;
+uniform float uSalTile; uniform float uSalWeave; uniform float uSalWeaveAlb; uniform float uSalWetDark;
+uniform float uSalWet; uniform float uPaintK;
+uniform vec3 uSalWearCol; uniform vec3 uSalTapeCol;
+uniform mat3 normalMatrix;
+varying vec3 vSalP; varying vec3 vSalN; varying vec3 vSalA; varying float vSalY;
+vec4 salTri(sampler2D t, vec3 p, vec3 w) {
+  return texture2D(t, p.zy) * w.x + texture2D(t, p.xz) * w.y + texture2D(t, p.xy) * w.z;
+}
+vec3 salTriN(vec3 p, vec3 w) {
+  vec2 tx = texture2D(tSalTwN, p.zy).xy * 2.0 - 1.0;
+  vec2 ty = texture2D(tSalTwN, p.xz).xy * 2.0 - 1.0;
+  vec2 tz = texture2D(tSalTwN, p.xy).xy * 2.0 - 1.0;
+  return w.x * vec3(0.0, tx.y, tx.x) + w.y * vec3(ty.x, 0.0, ty.y) + w.z * vec3(tz.x, tz.y, 0.0);
+}
+vec3 salBump(vec3 sp, vec3 sn, vec2 dh) {
+  vec3 sx = normalize(dFdx(sp)); vec3 sy = normalize(dFdy(sp));
+  vec3 r1 = cross(sy, sn); vec3 r2 = cross(sn, sx);
+  float det = dot(sx, r1);
+  return normalize(abs(det) * sn - sign(det) * (dh.x * r1 + dh.y * r2));
+}
+vec3 salNo; vec3 salW; vec3 salPp; vec4 salPk;
+float salMot; float salTape; float salStitch; float salWear; float salWetK; float salPatch; float salPEdge;`;
+const SUIT_FS_COLOR = `
+salNo = normalize(vSalN);
+salW = pow(abs(salNo), vec3(4.0)); salW /= (salW.x + salW.y + salW.z);
+salPp = vSalP * uSalTile;
+salPk = salTri(tSalTw, salPp, salW);
+salMot = salTri(tSalTw, vSalP * (uSalTile * 0.071) + 0.37, salW).g;
+{
+  float d = abs(vSalA.y), aa = max(fwidth(vSalA.y), 1e-4);
+  salTape = 1.0 - smoothstep(0.0125 - aa, 0.0125 + aa, d);
+  float row = 1.0 - smoothstep(0.0011 - aa, 0.0011 + aa, abs(d - 0.0085));
+  float al = vSalP.y * 105.0;
+  float dash = smoothstep(0.22, 0.34, fract(al)) * (1.0 - smoothstep(0.70, 0.82, fract(al)));
+  salStitch = row * dash * (1.0 - smoothstep(0.18, 0.5, fwidth(al)));
+  float pa = max(fwidth(vSalA.z), 1e-4);
+  salPatch = 1.0 - smoothstep(-pa, pa, vSalA.z);
+  salPEdge = 1.0 - smoothstep(0.0045 - pa, 0.0045 + pa, abs(vSalA.z + 0.0045));
+}
+salWear = smoothstep(0.12, 0.85, vSalA.x + (salMot - 0.5) * 0.8) * (0.5 + 0.5 * salPk.r);
+salWetK = clamp(uSalWet * 1.6 - vSalY * 0.22, 0.0, 1.0);
+diffuseColor.rgb *= mix(1.0 - uSalWeaveAlb, 1.0 + uSalWeaveAlb, salPk.r * 0.55 + salPk.b * 0.45) * (0.80 + 0.40 * salMot);
+diffuseColor.rgb = mix(diffuseColor.rgb, uSalWearCol * (0.78 + 0.44 * salPk.r), salWear * 0.72);
+diffuseColor.rgb *= mix(vec3(1.0), uSalTapeCol, max(salTape, salPEdge));
+diffuseColor.rgb *= 1.0 - 0.13 * salPatch;
+diffuseColor.rgb *= 1.0 - 0.45 * salStitch;
+diffuseColor.rgb *= 1.0 - uSalWetDark * salWetK;`;
+const SUIT_FS_ROUGH = `
+roughnessFactor *= 0.82 + 0.34 * salPk.b * (1.0 - 0.35 * salPk.r);
+roughnessFactor = mix(roughnessFactor, 0.48, max(salTape, salPEdge) * 0.85);
+roughnessFactor -= 0.24 * salWear;
+roughnessFactor = mix(roughnessFactor, 0.30, salWetK * 0.8);
+roughnessFactor = clamp(roughnessFactor, 0.08, 1.0);`;
+const SUIT_FS_NORMAL = `
+{
+  float ws = uSalWeave * (1.0 - 0.65 * uPaintK) * (1.0 - 0.75 * salTape);
+  vec3 nt = normalize(salNo + salTriN(salPp, salW) * ws);
+  normal = normalize(normalMatrix * nt);
+  float bh = salTape * 0.7 + salPEdge * 0.6 - salStitch * 0.5;
+  normal = salBump(-vViewPosition, normal, vec2(dFdx(bh), dFdy(bh)) * 0.55);
+}`;
+export const salShared = { uSalWet: { value: 0 }, uSalRootY: { value: 0 } };
+const _tw = twillSet();
+function suitify(m, o) {
+  const U = {
+    tSalTw: { value: _tw.pack }, tSalTwN: { value: _tw.nrm },
+    uSalTile: { value: o.tile }, uSalWeave: { value: o.weave }, uSalWeaveAlb: { value: o.alb },
+    uSalWetDark: { value: o.wetDark }, uSalWearCol: { value: new THREE.Color(o.wear) },
+    uSalTapeCol: { value: new THREE.Vector3(...o.tape) },   // a LINEAR multiplier, not a colour
+    uSalWet: salShared.uSalWet, uSalRootY: salShared.uSalRootY, uPaintK: styleUniforms.uPaintK
+  };
+  m.userData.salSuit = true;
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + SUIT_VS_COMMON)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSalP = position; vSalN = normal; vSalA = salAux;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvSalY = (modelMatrix * vec4(transformed, 1.0)).y - uSalRootY;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + SUIT_FS_COMMON)
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + SUIT_FS_COLOR)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + SUIT_FS_ROUGH)
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + SUIT_FS_NORMAL);
+  };
+  m.customProgramCacheKey = () => 'salSuit1';
+  return m;
+}
+// thread pitch ~2 mm on the dress (tile 0.077 u); the webbing straps a finer, fainter weave
+suitify(leather, { tile: 13.0, weave: 0.60, alb: 0.13, wetDark: 0.40, wear: 0xb49c7c, tape: [0.74, 0.68, 0.60] });
+suitify(cloth, { tile: 13.0, weave: 0.60, alb: 0.14, wetDark: 0.42, wear: 0x5a72b0, tape: [0.72, 0.74, 0.80] });
+suitify(trim, { tile: 15.0, weave: 0.50, alb: 0.10, wetDark: 0.30, wear: 0xefe9dc, tape: [0.82, 0.80, 0.76] });
+suitify(darkLeather, { tile: 18.0, weave: 0.40, alb: 0.08, wetDark: 0.28, wear: 0x86603f, tape: [0.80, 0.76, 0.72] });
+
 // PAINT LAW (lib/paint.js). The suit goes matte with the dial: cloth, trim, leathers,
 // rubber, steel (its 0.78 metalness is real metal and stays; only its normal map and
 // roughness floor move). HERO, untouched at every k: copper and brass (the Mark V's
@@ -241,6 +320,10 @@ function Part(node) {
         // merging demands identical attribute sets; pad plain primitives mixed with folded cloth
         if (mat.vertexColors || list.some(g => g.attributes.color)) for (const g of list) if (!g.attributes.color)
           g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
+        // the dress shader reads salAux on EVERY vertex; an unbound attribute reads 0,
+        // which is "on a seam" — so every suit bucket is padded to (no wear, no seam, no patch)
+        if (mat.userData.salSuit || list.some(g => g.attributes.salAux)) for (const g of list) if (!g.attributes.salAux) aux(g, null);
+        if (mat.userData.salMetal || list.some(g => g.attributes.salCav)) for (const g of list) if (!g.attributes.salCav) cav(g, 0);
         const m = new THREE.Mesh(list.length > 1 ? mergeGeometries(list) : list[0], mat);
         m.castShadow = shadow; m.receiveShadow = true;
         node.add(m);
@@ -250,6 +333,34 @@ function Part(node) {
     }
   };
 }
+
+// Bake the dress shader's per-vertex terms (see THE DRESS SHADER). fn(x, y, z, out)
+// writes [wear, seam, patch] for a vertex in the geometry's current (bone) space;
+// fn = null writes the pad. Build-time only.
+const _ax = [0, 9, 9];
+function aux(geo, fn) {
+  const pos = geo.attributes.position, n = pos.count, a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    _ax[0] = 0; _ax[1] = 9; _ax[2] = 9;
+    if (fn) fn(pos.getX(i), pos.getY(i), pos.getZ(i), _ax);
+    a[i * 3] = _ax[0]; a[i * 3 + 1] = _ax[1]; a[i * 3 + 2] = _ax[2];
+  }
+  geo.setAttribute('salAux', new THREE.BufferAttribute(a, 3));
+  return geo;
+}
+// Metal cavity (0 = open face .. 1 = deep crevice): tarnish and verdigris pool here.
+// v is a number (uniform) or fn(x, y, z) in the geometry's own space.
+function cav(geo, v) {
+  const pos = geo.attributes.position, n = pos.count, a = new Float32Array(n);
+  for (let i = 0; i < n; i++) a[i] = typeof v === 'function' ? clamp(v(pos.getX(i), pos.getY(i), pos.getZ(i)), 0, 1) : v;
+  geo.setAttribute('salCav', new THREE.BufferAttribute(a, 1));
+  return geo;
+}
+const gau = t => Math.exp(-t * t);
+// Seam distance for a limb segment lathed round its own Y axis: nseams evenly spaced seams
+// starting on +X. r*sin(n*theta)/n is the arc distance near each seam and stays smooth
+// (and so interpolates exactly) all the way round.
+const seamD = (x, z, nseams) => Math.hypot(x, z) * Math.sin(nseams * Math.atan2(z, x)) / nseams;
 
 // Displace cloth along its normals and bake grime into vertex colours, so dirt genuinely
 // pools in the creases the geometry has rather than in an unrelated texture.
@@ -348,7 +459,7 @@ function profOf(keys) {
 // Lathe a profiled segment of length `len`, hung from y = 0 down to y = -len, with
 // rounded caps at both ends so consecutive segments read continuous through a bend
 // instead of showing a hard disc at the joint.
-function segGeo(len, r, prof, seg = 16, rings = 13) {
+function segGeo(len, r, prof, seg = 22, rings = 16) {   // 16x13 faceted the fold into crumpled paper
   const pts = [];
   const rT = r * prof(0), rB = r * prof(1);
   for (let k = 0; k <= 3; k++) {                             // bottom cap, pole first
@@ -382,9 +493,10 @@ function bunch(p, mat, r, y, n = 3, dy = 0.052, tube = 0.019, zs = 0.95) {
   const mid = (n - 1) / 2;
   for (let i = 0; i < n; i++) {
     const k = 1 - Math.abs(i - mid) / n;
-    const g = new THREE.TorusGeometry(r * 0.985, tube * (0.7 + 0.6 * k), 6, 16)
+    const g = new THREE.TorusGeometry(r * 0.985, tube * (0.7 + 0.6 * k), 6, 20)
       .rotateX(Math.PI / 2).scale(1, 1, zs);
-    p.add(tint(xf(g, 0, y + (i - mid) * dy), 0.80), mat);
+    const gg = tint(xf(g, 0, y + (i - mid) * dy), 0.80);
+    p.add(p.auxFn ? aux(gg, p.auxFn) : gg, mat);
   }
 }
 
@@ -396,7 +508,8 @@ function piping(p, mat, len, r, prof, sx, sz = 0, rad = 0.013, n = 7) {
     const s = i / n, rr = r * prof(s) * 0.99;
     q.push(V3(sx * rr, -len * s, sz * rr));
   }
-  p.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(q), n * 2, rad, 4, false), mat);
+  const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(q), n * 2, rad, 4, false);
+  p.add(p.auxFn ? aux(tg, p.auxFn) : tg, mat);
 }
 
 // The four segment profiles. Arms r = 0.150, legs r = 0.186.
@@ -585,12 +698,22 @@ export const diver = (() => {
     p.add(fold(xf(pel, 0, 0.02, 0), 0.034, 8, 0.74), cloth);
     // the dress sags at the seat, where the air in the suit can't reach and the canvas
     // just hangs on the man — the one place the silhouette should NOT be a smooth sweep
+    const seatAux = (x, y, z, o) => {
+      const rr = Math.hypot(x, z) || 1, bk = Math.max(0, -z) / rr;
+      o[0] = 0.9 * gau((y + 0.24) / 0.13) * bk;
+      o[1] = seamD(x, z, 1);
+      if (z < 0) o[2] = (Math.hypot(x / 0.24, (y + 0.22) / 0.15) - 1) * 0.1;
+    };
+    // in the dress canvas, not the blue: it pokes through the trunks by design (the sag),
+    // and in blue the poke-through read as a jagged tear
     const seat = new THREE.SphereGeometry(0.20, 12, 9);
     seat.scale(1.34, 0.80, 0.86);
-    p.add(fold(xf(seat, 0, -0.140, -0.140), 0.024, 9, 0.70), cloth);
+    p.add(aux(fold(xf(seat, 0, -0.140, -0.140), 0.024, 9, 0.70), seatAux), leather);
     const trunk = new THREE.CapsuleGeometry(0.348, 0.13, 6, 18);       // leather trunks over the blue
     trunk.scale(1, 1, 0.86);
-    p.add(xf(trunk, 0, -0.10, 0), leather);
+    // the seat takes every sit on a gunwale and every slide down a rock: worn pale, with
+    // a reinforcing patch, and the side seams run down from the belt
+    p.add(aux(xf(trunk, 0, -0.10, 0), seatAux), leather);
     p.add(xf(band(0.368, 0.20, 0.90, 24), 0, 0.03), leather);          // wide belt
     for (const yy of [-0.062, 0.122]) p.add(xf(new THREE.TorusGeometry(0.372, 0.017, 5, 24).rotateX(Math.PI / 2), 0, 0.03 + yy).scale(1, 1, 0.90), darkLeather);
     p.add(xf(new THREE.BoxGeometry(0.235, 0.175, 0.032), 0, 0.03, 0.348), brass);   // rectangular buckle
@@ -670,15 +793,38 @@ export const diver = (() => {
     // displacement, see fold() — are left perfectly smooth. Nothing is lost: both caps sit
     // buried inside the neighbouring segment and its gather rings.
     const capMask = len => (_x, y) => ss(0, 0.055, -y) * ss(0, 0.055, y + len);
-    pu.add(fold(segGeo(upLen, r, upProf), 0.024, 11, 1, capMask(upLen)), leather);
-    pl.add(fold(segGeo(loLen, r, loProf), 0.021, 12, 1, capMask(loLen)), leather);
+    // WEAR, SEAMS AND PATCHES, baked in the segment's own frame (+Z forward, -Z back;
+    // the elbow points back, the knee forward). rr normalises "which side of the limb".
+    const sx = x > 0 ? 1 : -1, arm = inward !== 0, ns = arm ? 1 : 2;   // arms: under+outer seam; legs: four panels
+    pu.auxFn = (px, py, pz, o) => {
+      const rr = Math.hypot(px, pz) || 1, fr = Math.max(0, pz) / rr, bk = Math.max(0, -pz) / rr;
+      o[1] = seamD(px, pz, ns);
+      o[0] = arm
+        ? 0.85 * gau((py + 0.03) / 0.07) * Math.max(0, px * sx) / rr + 0.9 * gau((py + upLen * 0.95) / 0.07) * bk
+        : 0.7 * gau((py + upLen * 0.93) / 0.07) * fr + 0.8 * gau((py + 0.05) / 0.10) * bk;
+    };
+    pl.auxFn = (px, py, pz, o) => {
+      const rr = Math.hypot(px, pz) || 1, fr = Math.max(0, pz) / rr, bk = Math.max(0, -pz) / rr;
+      o[1] = seamD(px, pz, ns);
+      if (arm) {
+        o[0] = 1.0 * gau((py + 0.03) / 0.08) * bk + 0.35 * gau((py + loLen * 0.6) / 0.12) * Math.max(0, -px * sx) / rr;
+        // elbow reinforcing patch: an ellipse on the back of the joint
+        if (pz < 0) o[2] = (Math.hypot(px / 0.078, (py + 0.075) / 0.105) - 1) * 0.08;
+      } else {
+        o[0] = 1.0 * gau((py + 0.03) / 0.09) * fr + 0.55 * gau((py + 0.25) / 0.09) * fr;
+      }
+    };
+    pu.add(aux(fold(segGeo(upLen, r, upProf), 0.024, 11, 1, capMask(upLen)), pu.auxFn), leather);
+    pl.add(aux(fold(segGeo(loLen, r, loProf), 0.021, 12, 1, capMask(loLen)), pl.auxFn), leather);
     // blue fabric underlayer: a gusset down the inner limb and a ring at the joint
     if (inward) {
       pu.add(fold(xf(new THREE.CapsuleGeometry(r * 0.42, upLen * 0.44, 5, 10), inward * r * 0.80, -upLen * 0.54, 0), 0.020, 13, 0.74), cloth);
       // clears the sleeve's fold displacement so the band never breaks into patches
       pu.add(xf(band(r * upProf(0.20) * 1.10, 0.06, 0.98, 16), 0, -upLen * 0.20), trim);
     }
-    pl.add(fold(xf(new THREE.CapsuleGeometry(r * loProf(0.02) * 1.02, 0.05, 6, 14), 0, 0.015, 0), 0.018, 14, 0.74), cloth);
+    // the joint filler is the SAME canvas as the sleeve: in blue it poked through the
+    // folded segment caps as a jagged zig-zag at every knee and elbow
+    pl.add(aux(fold(xf(new THREE.CapsuleGeometry(r * loProf(0.02) * 1.0, 0.05, 6, 14), 0, 0.015, 0), 0.018, 14, 0.74), pl.auxFn), leather);
     return { root, mid, end, pu, pl, r, upLen, loLen, taper, up: upProf, lo: loProf };
   }
   // the diver faces +Z, so his right side is -X
@@ -720,10 +866,10 @@ export const diver = (() => {
     const kz = rL(0.118);                                     // knee pad rides the shank's surface
     const pad = new THREE.SphereGeometry(0.10, 12, 8);        // stitched knee pad, flattened
     pad.scale(1.42, 1.72, 0.40);
-    pl.add(xf(pad, 0, -0.055, kz * 0.82), darkLeather);
+    pl.add(xf(pad, 0, -0.055, kz * 1.04), darkLeather);   // proud of the knee gather, which cut through it
     for (let i = 0; i < 12; i++) {                           // stitch dots round the pad
       const a = i / 12 * TAU;
-      pl.add(xf(new THREE.SphereGeometry(0.011, 5, 4), Math.cos(a) * 0.128, -0.055 + Math.sin(a) * 0.155, kz * 0.88), leather);
+      pl.add(xf(new THREE.SphereGeometry(0.011, 5, 4), Math.cos(a) * 0.128, -0.055 + Math.sin(a) * 0.155, kz * 1.10), leather);
     }
     pl.add(xf(band(rL(0.43) * 1.05, 0.042, 0.95, 14), 0, -0.20), darkLeather);
     pl.add(xf(new THREE.BoxGeometry(0.055, 0.05, 0.022), 0, -0.20, rL(0.43) * 1.02), brass);
@@ -768,12 +914,14 @@ export const diver = (() => {
   // local y ~ -0.365: LIFT is derived against it to plant Sal on the collision floor.
   for (const leg of [g.legR, g.legL]) {
     const p = Part(leg.end);
-    p.add(fold(xf(band(0.128, 0.15, 0.95, 14), 0, -0.018), 0.011, 15, 0.74), cloth);
-    p.add(xf(band(0.134, 0.046, 0.95, 14), 0, 0.058), trim);
+    // sock and trim ride just OUTSIDE the shank's folded bottom, which used to bite them
+    // into a jagged blue-and-white zig-zag round every ankle
+    p.add(fold(xf(band(0.140, 0.15, 0.95, 22), 0, -0.018), 0.002, 15, 0.74), cloth);
+    p.add(xf(band(0.152, 0.046, 0.95, 22), 0, 0.058), trim);
     // Ankle flare: the boot's leather cuff opening out from the narrow ankle. A CLOSED
     // solid, not an open lathe skirt — an open lathe here showed its back faces through
     // the mouth and read as a lampshade hung round the leg.
-    p.add(xf(new THREE.CylinderGeometry(0.120, 0.170, 0.20, 14, 1).scale(1, 1, 0.96), 0, -0.095), leather);
+    p.add(xf(new THREE.CylinderGeometry(0.120, 0.170, 0.20, 22, 1).scale(1, 1, 0.96), 0, -0.095), leather);
     p.add(xf(new THREE.TorusGeometry(0.168, 0.021, 6, 16).rotateX(Math.PI / 2).scale(1, 1, 0.96), 0, -0.176), darkLeather);
     // vamp: the body of the foot, broader at the ball than at the ankle. These are
     // WEIGHTED boots — a hundredweight of brass and lead between the two of them — so the
@@ -2014,6 +2162,12 @@ export function updateDiver(dt, t, player) {
   // rather than the diver's, so the last of the exhale still leaves as he goes under.
   diver.exhaust.getWorldPosition(_ex);
   const submerged = _ex.y < SURFACE_Y + surfaceHeightAt(_ex.x, _ex.z, t, stormLevel());
+  // THE DRESS SOAKS AND DRIES. Under water the canvas is soaked in ~half a second; on
+  // deck it dries over ~75 s, helmet first (the shader dries it top-down). Two float
+  // writes, no allocation, and nothing here feeds the breath clock below.
+  salShared.uSalRootY.value = diver.position.y - EYE_H;
+  salShared.uSalWet.value = submerged ? Math.min(1, salShared.uSalWet.value + dt * 2.0)
+    : Math.max(0, salShared.uSalWet.value - dt / 75);
   const phm = breathPh % TAU;
   if (phm < _phPrev) {                                  // wrapped: a cycle completed
     breathIdx++;
