@@ -597,7 +597,6 @@ export function braidSet() {
   _braid = { map: mapT, rough: _dataTex(rgh, S), nrm: _dataTex(_packNormal(h, S, 3.2), S) };
   return _braid;
 }
-=======
 // ---- RAFT SURFACE SETS (polish-raft) — appended block, OWNED BY: raft polish pass ----
 // =====================================================================================
 // Generated PBR sets for the dive tender, authored in METRES: the raft rewrites every
