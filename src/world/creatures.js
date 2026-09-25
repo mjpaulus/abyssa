@@ -12,6 +12,7 @@ import { clamp, V3 } from '../lib/math.js';
 import { glowTex } from '../lib/textures.js';
 import { terrainH } from './terrain.js';
 import { siteParams, stream } from './site.js';
+import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { player } from '../player.js';
 
 // Build/reseed-scoped random stream (THE CHART's reseed path), same idiom as flora.js:
@@ -79,25 +80,45 @@ const TONE_OUT = '#include <tonemapping_fragment>\n#include <colorspace_fragment
 // Body runs along +Z (head at z=+0.5). uv.x = 0 nose .. 1 caudal peduncle and
 // slightly past on the tail fin; uv.y = 0 belly, 0.5 lateral line, 1 back, and
 // 2.0 to flag fin geometry.
+// polish-fauna: aSurf = (body t, around 0..1, 0) on the body and (root->edge s,
+// across q, 1) on every fin, so the fragment can lay scales round the body and rays
+// across a fin without touching uv (the undulation keys off uv and stays exactly as
+// it was). The body carries ~2.3x the rings and +4 sides so it rounds instead of
+// faceting at 5 u.
 function fishGeometry(o) {
-  const rings = o.rings, sides = o.sides;
-  const pos = [], uv = [], idx = [];
-  const rAt = t => Math.max(0.04, Math.sin(Math.pow(t, 0.55) * Math.PI * 0.98) * (1 - o.taper * t * t));
+  const rings = o.rings * 2 + 2, sides = o.sides + 4;
+  const pos = [], uv = [], idx = [], surf = [];
+  // Profile: a sine fore-body (tapered snout, full shoulder at m) into a
+  // cosine after-body that pinches to a real caudal peduncle. The old sin(t^0.55)
+  // profile peaked at the head and ran straight to the tail — a cone from the side.
+  const m = 0.34, ped = 0.12 - o.taper * 0.05;
+  const rAt = t => {
+    if (t < m) return Math.max(0.05, Math.pow(Math.sin(Math.PI * 0.5 * t / m), 0.72));
+    const u = Math.min(1, (t - m) / (1 - m));
+    return ped + (1 - ped) * Math.pow(Math.cos(u * Math.PI * 0.5), 0.75 + o.taper * 0.6);
+  };
+  // one duplicated seam column (j = sides) so the scale grid's around-coordinate
+  // never interpolates backwards across a strip; its normals are welded after.
+  const cols = sides + 1;
   for (let i = 0; i <= rings; i++) {
     const t = i / rings, r = rAt(t), z = 0.5 - t;
-    for (let j = 0; j < sides; j++) {
+    for (let j = 0; j <= sides; j++) {
       const a = j / sides * Math.PI * 2;
-      pos.push(Math.cos(a) * r * o.w, Math.sin(a) * r * o.h, z);
+      // the back arches higher than the belly hangs: centre line lifts mid-body
+      const arch = Math.sin(Math.PI * Math.min(1, t * 1.15)) * 0.10 * o.h * r;
+      pos.push(Math.cos(a) * r * o.w, Math.sin(a) * r * o.h * (Math.sin(a) > 0 ? 1.04 : 0.96) + arch, z);
       uv.push(t, 0.5 + 0.5 * Math.sin(a));
+      surf.push(t, j / sides, 0);
     }
   }
   for (let i = 0; i < rings; i++) for (let j = 0; j < sides; j++) {
-    const a = i * sides + j, b = i * sides + (j + 1) % sides;
-    idx.push(a, a + sides, b, b, a + sides, b + sides);
+    const a = i * cols + j, b = a + 1;
+    idx.push(a, a + cols, b, b, a + cols, b + cols);
   }
+  // v = [x, y, z, uv.x, s, q]: s runs root 0 -> free edge 1, q across the rays
   const fin = (verts, tris) => {
     const base = pos.length / 3;
-    for (const v of verts) { pos.push(v[0], v[1], v[2]); uv.push(v[3], 2.0); }
+    for (const v of verts) { pos.push(v[0], v[1], v[2]); uv.push(v[3], 2.0); surf.push(v[4], v[5], 1); }
     for (const tri of tris) idx.push(base + tri[0], base + tri[1], base + tri[2]);
   };
   // caudal fan — uv.x runs past 1 so the shader whips it harder than the peduncle.
@@ -106,64 +127,93 @@ function fishGeometry(o) {
   // between the trailing tips gives the forked silhouette.
   const tl = o.tail, ty = tl * 0.78;
   fin([
-    [0, 0, -0.5, 1.0],                              // 0 peduncle
-    [0, ty * 0.62, -0.5 - tl * 0.55, 1.12],         // 1 upper interior
-    [0, ty * 1.02, -0.5 - tl * 1.10, 1.30],         // 2 upper trailing tip
-    [0, ty * 0.10, -0.5 - tl * 0.40, 1.06],         // 3 fork notch
-    [0, -ty * 0.62, -0.5 - tl * 0.55, 1.12],        // 4 lower interior
-    [0, -ty * 1.02, -0.5 - tl * 1.10, 1.30]         // 5 lower trailing tip
+    [0, 0, -0.5, 1.0, 0, 0.5],                              // 0 peduncle
+    [0, ty * 0.62, -0.5 - tl * 0.55, 1.12, 0.55, 0.82],     // 1 upper interior
+    [0, ty * 1.02, -0.5 - tl * 1.10, 1.30, 1, 1],           // 2 upper trailing tip
+    [0, ty * 0.10, -0.5 - tl * 0.40, 1.06, 0.62, 0.5],      // 3 fork notch
+    [0, -ty * 0.62, -0.5 - tl * 0.55, 1.12, 0.55, 0.18],    // 4 lower interior
+    [0, -ty * 1.02, -0.5 - tl * 1.10, 1.30, 1, 0]           // 5 lower trailing tip
   ], [[0, 1, 3], [1, 2, 3], [0, 3, 4], [3, 5, 4]]);
   // dorsal — low, swept back, with a soft-rayed trailing edge (2 tris)
-  fin([[0, rAt(0.30) * o.h * 0.98, 0.20, 0.30], [0, rAt(0.74) * o.h * 0.98, -0.24, 0.74],
-  [0, rAt(0.5) * o.h + o.dorsal, -0.14, 0.60],
-  [0, rAt(0.68) * o.h + o.dorsal * 0.45, -0.22, 0.70]], [[0, 2, 3], [0, 3, 1]]);
+  fin([[0, rAt(0.30) * o.h * 0.98, 0.20, 0.30, 0, 0], [0, rAt(0.74) * o.h * 0.98, -0.24, 0.74, 0, 1],
+  [0, rAt(0.5) * o.h + o.dorsal, -0.14, 0.60, 1, 0.3],
+  [0, rAt(0.68) * o.h + o.dorsal * 0.45, -0.22, 0.70, 0.9, 0.75]], [[0, 2, 3], [0, 3, 1]]);
   // anal fin — small, tucked near the peduncle
-  fin([[0, -rAt(0.60) * o.h * 0.95, -0.10, 0.60], [0, -rAt(0.86) * o.h * 0.95, -0.36, 0.86],
-  [0, -rAt(0.72) * o.h - o.dorsal * 0.45, -0.30, 0.74]], [[0, 1, 2]]);
+  fin([[0, -rAt(0.60) * o.h * 0.95, -0.10, 0.60, 0, 0], [0, -rAt(0.86) * o.h * 0.95, -0.36, 0.86, 0, 1],
+  [0, -rAt(0.72) * o.h - o.dorsal * 0.45, -0.30, 0.74, 1, 0.55]], [[0, 1, 2]]);
   // pectorals — short and swept back/down, cambered quad (2 tris)
   const pr = rAt(0.32) * o.w;
   for (const s of [-1, 1]) fin(
-    [[s * pr * 0.9, -0.02, 0.16, 0.32],
-    [s * (pr + o.pect * 0.6), -0.055, 0.06, 0.40],  // cambered mid-span, bowed down
-    [s * (pr + o.pect), -0.08, -0.03, 0.46],
-    [s * pr * 0.85, -0.03, -0.01, 0.44]],
+    [[s * pr * 0.9, -0.02, 0.16, 0.32, 0, 0.1],
+    [s * (pr + o.pect * 0.6), -0.055, 0.06, 0.40, 0.6, 0.3],  // cambered mid-span, bowed down
+    [s * (pr + o.pect), -0.08, -0.03, 0.46, 1, 0.55],
+    [s * pr * 0.85, -0.03, -0.01, 0.44, 0.05, 0.95]],
     [[0, 1, 3], [1, 2, 3]]);
   // pelvics — paired small tris under the belly, large-bodied species only
   if (o.pelvic) {
     const vr = rAt(0.48) * o.w;
     for (const s of [-1, 1]) fin(
-      [[s * vr * 0.7, -rAt(0.48) * o.h * 0.9, 0.02, 0.48],
-      [s * vr * 0.7, -rAt(0.58) * o.h * 0.9, -0.08, 0.58],
-      [s * (vr * 0.7 + o.pect * 0.55), -rAt(0.53) * o.h * 0.9 - o.pect * 0.7, -0.05, 0.55]],
+      [[s * vr * 0.7, -rAt(0.48) * o.h * 0.9, 0.02, 0.48, 0, 0],
+      [s * vr * 0.7, -rAt(0.58) * o.h * 0.9, -0.08, 0.58, 0, 1],
+      [s * (vr * 0.7 + o.pect * 0.55), -rAt(0.53) * o.h * 0.9 - o.pect * 0.7, -0.05, 0.55, 1, 0.5]],
       [[0, 1, 2]]);
   }
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('aSurf', new THREE.Float32BufferAttribute(surf, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
+  const nr = g.attributes.normal.array;
+  for (let i = 0; i <= rings; i++) {
+    const a = i * cols * 3, b = (i * cols + sides) * 3;
+    for (let k = 0; k < 3; k++) { const m = (nr[a + k] + nr[b + k]) * 0.5; nr[a + k] = m; nr[b + k] = m; }
+  }
   return g;
 }
 
+// polish-fauna: every school species shares ONE program (identical injected source,
+// one explicit key); what differs per species is uniforms only — scale grid, relief,
+// iridescence, fin-ray count. uSkinA = (scales along, rows around, relief u, iri k),
+// uSkinB = (iri hue offset, fin rays, eye iris tint 0 silver .. 1 gold, dorsal saddle),
+// uSilver = how much of the bright water above the flank mirrors (guanine plates).
+const FISH_SKIN = [
+  [44, 20, 0.008, 0.55, 0.00, 11, 0.15, 0.0, 0.95],   // z0 silver schooler: herring sheen
+  [26, 14, 0.018, 0.22, 0.30, 13, 0.85, 0.5, 0.35],   // z0 amber reef fish
+  [24, 16, 0.015, 0.30, 0.12, 15, 0.95, 0.9, 0.45],   // z0 deep-bodied grazer: saddle bands
+  [48, 14, 0.006, 0.45, 0.62, 9, 0.30, 0.0, 0.8],     // z0 darter
+  [44, 20, 0.008, 0.40, 0.55, 11, 0.20, 0.0, 0.8],    // z1 slate schooler
+  [26, 14, 0.016, 0.30, 0.78, 13, 0.60, 0.3, 0.4],    // z1 violet
+  [32, 14, 0.010, 0.25, 0.45, 11, 0.10, 0.0, 0.5],    // z2 glass bodies
+  [26, 14, 0.013, 0.35, 0.25, 13, 0.20, 0.0, 0.9]     // z2 hatchet
+];
 function fishMaterial(sp) {
+  const sk = FISH_SKIN[Math.max(0, SPECIES.indexOf(sp))];
+  const sz = (sp.sz[0] + sp.sz[1]) * 0.5;
   const u = {
     uPhase: { value: 0 }, uAmp: { value: sp.amp }, uTime,
-    uGlow: { value: new THREE.Color(sp.glow).multiplyScalar(sp.glowI) },
-    uCount: { value: sp.dots }, uBase: { value: sp.base }
+    // polish-fauna: sunlit reef fish carry no photophores — zone 0's rows read as LED
+    // dashes by day, so there they fall to a faint reflective lateral stripe.
+    uGlow: { value: new THREE.Color(sp.glow).multiplyScalar(sp.glowI * (sp.zi === 0 ? 0.14 : 1)) },
+    uCount: { value: sp.dots }, uBase: { value: sp.base },
+    uSkinA: { value: new THREE.Vector4(sk[0], sk[1], sk[2] * sz, sk[3]) },
+    uSkinB: { value: new THREE.Vector4(sk[4], sk[5], sk[6], sk[7]) },
+    uSilver: { value: sk[8] }
   };
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff, roughness: sp.rough, metalness: sp.metal,
     side: THREE.DoubleSide, emissive: 0x000000
   });
   mat.userData.u = u;
+  mat.customProgramCacheKey = () => 'abyssa-fish-skin';
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
-        attribute vec3 aTint; attribute vec2 aFish;
+        attribute vec3 aTint; attribute vec2 aFish; attribute vec3 aSurf;
         uniform float uPhase; uniform float uAmp;
-        varying vec2 vFuv; varying vec3 vTint; varying float vPh;`)
+        varying vec2 vFuv; varying vec3 vTint; varying float vPh; varying vec3 vSurf;`)
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
         float bT = uv.x;
         float amp = uAmp * (bT*bT*0.94 + 0.05);
@@ -173,21 +223,85 @@ function fishMaterial(sp) {
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         transformed.x += sin(bT*5.0 - ph) * amp;
         transformed.y += sin(ph*0.5 + aFish.x)*0.012;
-        vFuv = uv; vTint = aTint; vPh = aFish.x;`);
+        vFuv = uv; vTint = aTint; vPh = aFish.x; vSurf = aSurf;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uGlow; uniform float uCount; uniform float uTime; uniform float uBase;
-        varying vec2 vFuv; varying vec3 vTint; varying float vPh;`)
+        uniform vec4 uSkinA; uniform vec4 uSkinB; uniform float uSilver;
+        varying vec2 vFuv; varying vec3 vTint; varying float vPh; varying vec3 vSurf;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         float body = step(vFuv.y, 1.5);
-        // countershading: dark back, pale belly — reads instantly as a fish
-        float shade = mix(1.35, 0.30, clamp(vFuv.y,0.0,1.0));
-        diffuseColor.rgb *= vTint * mix(0.5, shade, body);
-        // eye: a black bead high on the head, both flanks (uv.y is side-symmetric).
-        // Same smoothstep-dot idiom as the shark — lo<hi always, reversed edges are UB.
-        float eyeD = length(vec2((vFuv.x-0.085)*1.9, clamp(vFuv.y,0.0,1.0)-0.72));
-        float eye = (1.0 - smoothstep(0.014, 0.040, eyeD)) * body;
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.010, 0.012, 0.016), eye);
+        float fy = clamp(vFuv.y, 0.0, 1.0);          // 0 belly .. 1 back, both flanks
+        vec3 fV = normalize(vViewPosition);
+        vec3 alb = vTint;
+        float fh = 0.0, wet = 0.0, pupil = 0.0, rays = 0.0, scId = 0.5;
+        if (body > 0.5) {
+          // ---- scales: roof-tiled, head-ward on top, fading out over the head ----
+          vec2 sp = vec2(vSurf.x * uSkinA.x, vSurf.y * uSkinA.y);
+          vec3 sc = skScales(sp);
+          scId = sc.z;
+          float scK = smoothstep(0.17, 0.25, vSurf.x) * (1.0 - smoothstep(0.93, 1.0, vSurf.x)) * skAA(sp);
+          fh = sc.x * scK;
+          // countershading with a soft waterline, and a darker dorsal saddle on the reef grazers
+          float shade = mix(1.30, 0.34, smoothstep(0.18, 0.92, fy));
+          float saddle = uSkinB.w * smoothstep(0.55, 0.8, fy) * smoothstep(0.35, 0.9, sin(vSurf.x * 18.0 + 1.2));
+          alb *= shade * (1.0 - 0.45 * saddle);
+          // per-scale value jitter and the dark crescent where each scale ends
+          alb *= 1.0 + ((sc.z - 0.5) * 0.16 + sc.x * 0.14 - sc.y * 0.22) * scK;
+          // operculum: the gill cover's curved edge, a groove and a dark line
+          float opx = vSurf.x - 0.2 - 0.05 * (fy - 0.5) * (fy - 0.5) * 4.0;
+          float op = (1.0 - smoothstep(0.0, 0.010, abs(opx))) * step(0.12, fy) * (1.0 - step(0.9, fy));
+          alb *= 1.0 - 0.32 * op; fh -= op * 0.8;
+          // head: fine skin grain instead of scales
+          fh += (1.0 - scK) * skN2(vSurf.xy * vec2(160.0, 60.0)) * 0.25 * step(vSurf.x, 0.25);
+          // lateral line: a row of pores along the flank
+          float lat = (1.0 - smoothstep(0.004, 0.016, abs(fy - 0.56 + 0.06 * vSurf.x))) * step(0.22, vSurf.x) * step(vSurf.x, 0.92);
+          alb *= 1.0 - 0.18 * lat * step(0.5, fract(vSurf.x * uSkinA.x));
+          // ---- eye: a wet dome, iris ring, black pupil, catchlight ----
+          float eyeD = length(vec2((vSurf.x - 0.085) * 1.9, fy - 0.72));
+          float eyeIn = 1.0 - smoothstep(0.036, 0.044, eyeD);
+          float dome = sqrt(max(0.0, 1.0 - (eyeD / 0.044) * (eyeD / 0.044)));
+          fh = mix(fh, 2.2 * dome, eyeIn);
+          vec3 iris = mix(vec3(0.62, 0.64, 0.66), vec3(0.72, 0.52, 0.16), uSkinB.z);
+          iris *= 0.75 + 0.35 * skN2(vec2(atan(fy - 0.72, vSurf.x - 0.085) * 6.0, eyeD * 80.0));
+          pupil = 1.0 - smoothstep(0.017, 0.022, eyeD);
+          alb = mix(alb, mix(iris, vec3(0.008, 0.009, 0.012), pupil), eyeIn);
+          wet = eyeIn;
+          // a thin dark orbit ring seats the eye in the head
+          alb *= 1.0 - 0.45 * (smoothstep(0.036, 0.044, eyeD) * (1.0 - smoothstep(0.044, 0.056, eyeD)));
+        } else {
+          // ---- fin membrane: rays fanning from the root, jointed, a paler free edge ----
+          float q = vSurf.y * uSkinB.y;
+          float rq = abs(fract(q) - 0.5) * 2.0;
+          float rAA = 1.0 - smoothstep(0.3, 0.8, fwidth(q));
+          rays = (1.0 - smoothstep(0.0, 0.34, 1.0 - rq)) * rAA;
+          float joint = step(0.82, fract(vSurf.x * 7.0 + q * 0.13)) * rays;
+          // the free edge is scalloped between the rays: membrane recedes, ray tips lead
+          float edgeS = 1.0 - 0.16 * (1.0 - rq) * (1.0 - rq);
+          if (vSurf.x > edgeS && vSurf.z > 0.5) discard;
+          alb *= mix(0.78, 0.42, rays) * (1.0 + 0.25 * joint);
+          alb = mix(alb, alb * 0.7, smoothstep(0.7, 1.0, vSurf.x / edgeS));
+          fh = rays * 0.9 - joint * 0.3;
+        }
+        normal = skBump(-vViewPosition, normal, fh * uSkinA.z, faceDirection);
+        // ---- iridescence: a fresnel-weighted hue walk, strongest at grazing ----
+        float fr = pow(1.0 - clamp(abs(dot(normal, fV)), 0.0, 1.0), 2.2);
+        vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (vec3(0.0, 0.33, 0.67) + fr * 0.85 + scId * 0.12 + uSkinB.x));
+        alb = mix(alb, alb * (0.6 + 0.8 * irid), uSkinA.w * body * (1.0 - wet) * (0.2 + 0.8 * fr));
+        diffuseColor.rgb *= alb * mix(0.46, 1.0, body);
+        roughnessFactor = mix(roughnessFactor, 0.07, wet);
+        // no env map on these materials: raw metalness only blackens the flank, so the
+        // mirror is carried by skEnv below and the lit layer stays mostly dielectric
+        metalnessFactor = mix(metalnessFactor * 0.3, 0.0, wet);
+        // thin membrane: light from behind comes through between the rays
+        totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * (1.0 - body) * (1.0 - 0.7 * rays) * 0.38;
+        // silver flank: the guanine layer mirrors the bright water above as the fish turns
+        totalEmissiveRadiance += skEnv(normal, fV) * (alb * 0.7 + 0.3) * uSilver * 1.8 * body * (1.0 - wet) * (0.55 + 0.45 * (1.0 - smoothstep(0.55, 0.95, fy)));
+        // catchlight on the wet dome
+        totalEmissiveRadiance += skCatch(normal, fV, vViewPosition) * wet * (0.35 + 0.65 * pupil);
         // Reversed-edge smoothstep is UNDEFINED (GLSL spec) and returns 0.0 on this
         // driver — both photophore rows were dead. 1.0 - smoothstep(lo, hi, x) is the
         // same decreasing ramp, defined everywhere (see water.js foldK).

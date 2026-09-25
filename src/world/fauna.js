@@ -63,6 +63,124 @@ import { player } from '../player.js';
 
 const TAU = Math.PI * 2;
 
+// ---------------------------------------------------------------------------
+// THE SKIN KIT (polish-fauna). Shared GLSL for every animal in this module and in
+// creatures.js / predators.js / ventlife.js, so the whole sea is made of ONE idea of
+// skin: generated pattern -> height -> screen-derivative relief (no tangents, no
+// texture reads, works on any surface with a coordinate), plus two light-aware terms
+// that plain MeshStandardMaterial lacks — thin-sheet transmission (fins, carapaces,
+// webs lit from behind) and the wet catchlight on an eye dome. No lights are added;
+// both terms read the lights the scene already has.
+//   SKIN_COMMON — hashes, value noise, Worley, roof-tile scales, relief. Goes in
+//                 after `#include <common>` (needs nothing from the light chunks).
+//   SKIN_LIGHTS — skTransmit / skCatch. Goes in after `#include <lights_pars_begin>`
+//                 because it reads the light uniform arrays.
+// House rules honoured here: no reversed-edge smoothstep, no backticks in comments.
+// ---------------------------------------------------------------------------
+export const SKIN_COMMON = `
+float skH1(vec2 p){ vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+vec2 skH2(vec2 p){ vec3 q = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973)); q += dot(q, q.yzx + 33.33); return fract((q.xx + q.yz) * q.zy); }
+float skH3(vec3 p){ p = fract(p * 0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+float skN2(vec2 p){ vec2 i = floor(p), f = fract(p); vec2 u = f*f*(3.0 - 2.0*f);
+  return mix(mix(skH1(i), skH1(i + vec2(1.0, 0.0)), u.x), mix(skH1(i + vec2(0.0, 1.0)), skH1(i + vec2(1.0, 1.0)), u.x), u.y); }
+float skN3(vec3 p){ vec3 i = floor(p), f = fract(p); vec3 u = f*f*(3.0 - 2.0*f);
+  float a = mix(mix(skH3(i), skH3(i + vec3(1.0,0.0,0.0)), u.x), mix(skH3(i + vec3(0.0,1.0,0.0)), skH3(i + vec3(1.0,1.0,0.0)), u.x), u.y);
+  float b = mix(mix(skH3(i + vec3(0.0,0.0,1.0)), skH3(i + vec3(1.0,0.0,1.0)), u.x), mix(skH3(i + vec3(0.0,1.0,1.0)), skH3(i + vec3(1.0,1.0,1.0)), u.x), u.y);
+  return mix(a, b, u.z); }
+float skFbm3(vec3 p){ return skN3(p)*0.55 + skN3(p*2.07 + 3.1)*0.3 + skN3(p*4.3 + 7.7)*0.15; }
+// Worley in 2D: vec3(F1, F2, cell id). F2 - F1 is the seam between cells.
+vec3 skVor(vec2 p){
+  vec2 i = floor(p), f = fract(p); float d1 = 8.0, d2 = 8.0, id = 0.0;
+  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+    vec2 g = vec2(float(x), float(y)); vec2 r = g + skH2(i + g) * 0.85 + 0.075 - f; float d = dot(r, r);
+    if (d < d1) { d2 = d1; d1 = d; id = skH1(i + g + 17.0); } else if (d < d2) { d2 = d; }
+  }
+  return vec3(sqrt(d1), sqrt(d2), id);
+}
+// Overlapping fish scales in roof-tile order: the head-ward scale lies on top, so
+// each visible scale shows its free POSTERIOR half and a crescent rim where it ends.
+// p.x runs head -> tail in scale units, p.y around the body. vec3(height, rim, id).
+vec3 skScales(vec2 p){
+  float bx = 1e5; vec3 o = vec3(0.0, 1.0, 0.0);
+  for (int j = -1; j <= 1; j++) {
+    float row = floor(p.y) + float(j); float off = 0.5 * mod(row, 2.0);
+    for (int i = -1; i <= 1; i++) {
+      vec2 c = vec2(floor(p.x - off) + float(i) + 0.5 + off, row + 0.5);
+      vec2 d = (p - c) * vec2(1.0, 0.86); float k = length(d) / 0.8;
+      if (k < 1.0 && c.x < bx) {
+        bx = c.x;
+        o = vec3(clamp(0.45 + 0.55 * d.x / 0.8, 0.0, 1.0) * (1.0 - k*k*k*k), smoothstep(0.74, 0.98, k), skH1(c * 7.13 + 1.7));
+      }
+    }
+  }
+  return o;
+}
+// Relief from a scalar height (world units) by screen derivatives — the same maths as
+// three's perturbNormalArb, fed a procedural height instead of a bump texture.
+vec3 skBump(vec3 surfPos, vec3 surfN, float h, float faceDir){
+  vec3 sx = dFdx(surfPos), sy = dFdy(surfPos);
+  vec3 r1 = cross(sy, surfN), r2 = cross(surfN, sx);
+  float det = dot(sx, r1) * faceDir;
+  vec3 grad = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);
+  return normalize(abs(det) * surfN - grad);
+}
+// Fade a pattern out once its cells shrink under ~2 px, so relief never shimmers.
+float skAA(vec2 p){ vec2 w = fwidth(p); return 1.0 - smoothstep(0.22, 0.6, max(w.x, w.y)); }
+`;
+
+export const SKIN_LIGHTS = `
+// Light arriving on the FAR side of a thin sheet (fin membrane, web, carapace edge):
+// what a translucent surface shows the eye when it is backlit. View space, like the
+// light uniforms. Reads the scene's own lights; adds none.
+vec3 skTransmit(vec3 n, vec3 vpos){
+  vec3 t = vec3(0.0);
+  #if NUM_DIR_LIGHTS > 0
+  for (int i = 0; i < NUM_DIR_LIGHTS; i++) t += directionalLights[i].color * max(0.0, -dot(n, directionalLights[i].direction));
+  #endif
+  #if NUM_HEMI_LIGHTS > 0
+  for (int i = 0; i < NUM_HEMI_LIGHTS; i++) t += hemisphereLights[i].skyColor * max(0.0, -dot(n, hemisphereLights[i].direction)) * 0.6;
+  #endif
+  #if NUM_POINT_LIGHTS > 0
+  for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+    vec3 lv = pointLights[i].position + vpos; float d = max(length(lv), 1e-3);
+    t += pointLights[i].color * getDistanceAttenuation(d, pointLights[i].distance, pointLights[i].decay) * max(0.0, -dot(n, lv / d));
+  }
+  #endif
+  return t;
+}
+// A cheap environment for silver skin: the hemisphere's sky/ground radiance seen
+// along the reflected view ray, weighted by a Schlick-style fresnel. This is what
+// makes a schooling fish's flank flash the bright water above as it turns.
+vec3 skEnv(vec3 n, vec3 v){
+  vec3 e = vec3(0.0);
+  #if NUM_HEMI_LIGHTS > 0
+  vec3 r = reflect(-v, n);
+  float k = 0.5 + 0.5 * dot(r, hemisphereLights[0].direction);
+  e = mix(hemisphereLights[0].groundColor, hemisphereLights[0].skyColor, smoothstep(0.1, 0.95, k));
+  #endif
+  float f = 0.18 + 0.82 * pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 4.0);
+  return e * f;
+}
+// The wet dome's catchlight: a tight mirror lobe of every light the eye can see,
+// plus the bright disc of the sky overhead. Adds nothing in the dark.
+vec3 skCatch(vec3 n, vec3 v, vec3 vpos){
+  vec3 r = reflect(-v, n); vec3 c = vec3(0.0);
+  #if NUM_DIR_LIGHTS > 0
+  for (int i = 0; i < NUM_DIR_LIGHTS; i++) c += directionalLights[i].color * pow(max(dot(r, directionalLights[i].direction), 0.0), 160.0) * 1.6;
+  #endif
+  #if NUM_HEMI_LIGHTS > 0
+  c += hemisphereLights[0].skyColor * smoothstep(0.80, 0.97, dot(r, hemisphereLights[0].direction)) * 0.9;
+  #endif
+  #if NUM_POINT_LIGHTS > 0
+  for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+    vec3 lv = pointLights[i].position + vpos; float d = max(length(lv), 1e-3);
+    c += pointLights[i].color * getDistanceAttenuation(d, pointLights[i].distance, pointLights[i].decay) * pow(max(dot(r, lv / d), 0.0), 220.0) * 1.2;
+  }
+  #endif
+  return c;
+}
+`;
+
 // Layout stream: installed fresh from siteParams('fauna') by build and reseed.
 let _fr = Math.random;
 const rr = (a, b) => a + _fr() * (b - a);
@@ -89,9 +207,13 @@ const _c = new THREE.Color();
 // Assemble a BufferGeometry with the full fauna attribute set. `part` may be a
 // number or a function (x, y, z) -> part id, so a helper can split itself across
 // parts (the gape's lower jaw, a leg's foot).
-function finish(pos, idx, uv, color, part, phase, glow, noise) {
+// polish-fauna: `kind` is the SURFACE the vertex belongs to (skin, cornea, iris, fin
+// membrane, mouth, tooth, belly, leg, spine, shell — see SK below); the fragment keys
+// its skin off it. Animation still keys off aPart only, so motion is untouched.
+const SK = { skin: 0, cornea: 1, iris: 2, fin: 3, mouth: 4, tooth: 5, belly: 6, leg: 7, spine: 8, shell: 10 };
+function finish(pos, idx, uv, color, part, phase, glow, noise, kind = 0) {
   const n = pos.length / 3;
-  const col = new Float32Array(n * 3), pa = new Float32Array(n), ph = new Float32Array(n), gl = new Float32Array(n);
+  const col = new Float32Array(n * 3), pa = new Float32Array(n), ph = new Float32Array(n), gl = new Float32Array(n), kd = new Float32Array(n);
   const base = _c.set(color);
   const r0 = base.r, g0 = base.g, b0 = base.b;
   for (let i = 0; i < n; i++) {
@@ -100,6 +222,7 @@ function finish(pos, idx, uv, color, part, phase, glow, noise) {
     pa[i] = typeof part === 'function' ? part(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]) : part;
     ph[i] = phase;
     gl[i] = glow;
+    kd[i] = kind;
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -108,6 +231,7 @@ function finish(pos, idx, uv, color, part, phase, glow, noise) {
   g.setAttribute('aPart', new THREE.BufferAttribute(pa, 1));
   g.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
   g.setAttribute('aGlow', new THREE.BufferAttribute(gl, 1));
+  g.setAttribute('aKind', new THREE.BufferAttribute(kd, 1));
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
@@ -142,7 +266,7 @@ function loft(profile, color, o = {}) {
     const a = v * TAU, soft = 1 + Math.sin(x * 8.2 + a * 3) * Math.sin(a * 5 + x * 3.7) * skin;
     return [x, cy + Math.cos(a) * ry * soft, Math.sin(a) * rz * soft];
   });
-  return finish(g.pos, g.idx, g.uv, color, o.part || 0, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.06 : o.noise);
+  return finish(g.pos, g.idx, g.uv, color, o.part || 0, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.06 : o.noise, o.kind || 0);
 }
 
 // Fin/wing surface from a closed outline: rings from the centroid out to the edge,
@@ -164,7 +288,7 @@ function blade(points, color, o = {}) {
     tmp.copy(center).lerp(e, t).addScaledVector(nrm, Math.sin(t * Math.PI) * span * bulge);
     return [tmp.x, tmp.y, tmp.z];
   });
-  return finish(g.pos, g.idx, g.uv, color, o.part === undefined ? 2 : o.part, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.05 : o.noise);
+  return finish(g.pos, g.idx, g.uv, color, o.part === undefined ? 2 : o.part, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.05 : o.noise, o.kind || 0);
 }
 
 // Tapered tube along a Catmull-Rom spine using its Frenet frames.
@@ -181,13 +305,13 @@ function limb(points, radius, color, o = {}) {
     tmp.copy(c).addScaledVector(fr.normals[i], Math.cos(a) * r).addScaledVector(fr.binormals[i], Math.sin(a) * r);
     return [tmp.x, tmp.y, tmp.z];
   });
-  return finish(g.pos, g.idx, g.uv, color, o.part === undefined ? 3 : o.part, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.05 : o.noise);
+  return finish(g.pos, g.idx, g.uv, color, o.part === undefined ? 3 : o.part, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.05 : o.noise, o.kind || 0);
 }
 
 // Parametric skirt: surface(angle, t) -> [x, y, z].
 function web(surface, color, o = {}) {
   const g = grid(o.rows || 6, o.sides || 32, true, (t, u) => surface(u * TAU, t));
-  return finish(g.pos, g.idx, g.uv, color, o.part === undefined ? 6 : o.part, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.05 : o.noise);
+  return finish(g.pos, g.idx, g.uv, color, o.part === undefined ? 6 : o.part, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.05 : o.noise, o.kind || 0);
 }
 
 // Ellipsoid bead.
@@ -197,15 +321,15 @@ function ell(pos, scale, color, o = {}) {
   s.scale(scale[0], scale[1], scale[2]);
   s.translate(pos[0], pos[1], pos[2]);
   const g = finish(Array.from(s.attributes.position.array), Array.from(s.index.array), Array.from(s.attributes.uv.array),
-    color, o.part || 0, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.04 : o.noise);
+    color, o.part || 0, o.phase || 0, o.glow || 0, o.noise === undefined ? 0.04 : o.noise, o.kind || 0);
   s.dispose();
   return g;
 }
 
 function eyes(parts, x, y, z, r, o = {}) {
   for (const s of [-1, 1]) {
-    parts.push(ell([x, y, z * s], [r, r * 0.95, r * 0.5], o.rim || 0x4a4132, { detail: 8, part: o.part || 0 }));
-    parts.push(ell([x + r * 0.1, y, z * s + s * r * 0.3], [r * 0.7, r * 0.72, r * 0.35], 0x07090a, { detail: 7, part: o.part || 0, noise: 0 }));
+    parts.push(ell([x, y, z * s], [r, r * 0.95, r * 0.5], o.rim || 0x4a4132, { detail: 10, part: o.part || 0, kind: SK.iris }));
+    parts.push(ell([x + r * 0.1, y, z * s + s * r * 0.3], [r * 0.7, r * 0.72, r * 0.35], 0x07090a, { detail: 10, part: o.part || 0, noise: 0, kind: SK.cornea }));
   }
 }
 
@@ -223,14 +347,14 @@ function photophores(parts, count, x0, x1, y, z, r, color) {
 function gape(parts, x, y, ry, rz, depth, color, teeth, hy = y) {
   const jaw = (px, py) => (py < hy ? 4 : 0);
   parts.push(loft([[x - depth, 0.02, 0.02, y], [x - depth * 0.75, ry * 0.35, rz * 0.4, y], [x - depth * 0.3, ry * 0.78, rz * 0.83, y], [x, ry, rz, y]],
-    0x0b0908, { rows: 6, sides: 10, part: jaw, skin: 0, noise: 0.02 }));
+    0x2a0f0d, { rows: 6, sides: 10, part: jaw, skin: 0, noise: 0.02, kind: SK.mouth }));
   const lip = [];
   for (let i = 0; i < 25; i++) { const a = i / 24 * TAU; lip.push([x + 0.008 * Math.sin(a * 5), y + Math.cos(a) * ry, Math.sin(a) * rz]); }
   parts.push(limb(lip, ry * 0.11, color, { rows: 24, sides: 5, tip: 1, part: jaw }));
   for (let i = 0; i < teeth; i++) {
     const a = (i + 0.1 + gr(0, 0.35)) / teeth * TAU, cy = Math.cos(a), sz = Math.sin(a), len = 0.22 + gr(0, 0.27);
     parts.push(limb([[x + 0.012, y + cy * ry, sz * rz], [x + 0.07, y + cy * ry * (1 - len * 0.5), sz * rz * (1 - len * 0.35)], [x + 0.10, y + cy * ry * (1 - len), sz * rz * (1 - len * 0.7)]],
-      ry * 0.035 + gr(0, 0.01), 0xc5bca7, { rows: 3, sides: 4, tip: 0.05, part: jaw, noise: 0.02 }));
+      ry * 0.035 + gr(0, 0.01), 0xc5bca7, { rows: 3, sides: 4, tip: 0.05, part: jaw, noise: 0.02, kind: SK.tooth }));
   }
 }
 
@@ -251,13 +375,13 @@ function rayGeometry() {
   // disc body: flat, wide, tapering to a tail root
   P.push(loft([[-1.0, 0.04, 0.10, 0], [-0.55, 0.16, 0.42, 0.02], [-0.1, 0.24, 0.62, 0.03], [0.4, 0.22, 0.60, 0.02], [0.85, 0.12, 0.40, 0], [1.1, 0.03, 0.14, -0.03]], back, { rows: 20, sides: 14 }));
   // wings: two blades, the travelling wave lives in the shader off |z|
-  for (const s of [-1, 1]) P.push(blade([[0.9, 0.02, s * 0.30], [0.45, 0.0, s * 1.9], [-0.35, -0.02, s * 2.35], [-0.85, -0.02, s * 1.1], [-0.7, 0.0, s * 0.35]], back, { rows: 6, sides: 40, bulge: 0.02 }));
+  for (const s of [-1, 1]) P.push(blade([[0.9, 0.02, s * 0.30], [0.45, 0.0, s * 1.9], [-0.35, -0.02, s * 2.35], [-0.85, -0.02, s * 1.1], [-0.7, 0.0, s * 0.35]], back, { rows: 9, sides: 48, bulge: 0.02 }));
   // cephalic lobes
   for (const s of [-1, 1]) P.push(limb([[1.0, -0.02, s * 0.28], [1.25, -0.05, s * 0.34], [1.45, -0.1, s * 0.36]], 0.07, back, { rows: 5, sides: 5, tip: 0.3, part: 0 }));
   // tail whip
   P.push(limb([[-1.0, 0.0, 0], [-1.9, 0.02, 0], [-2.9, 0.06, 0], [-3.6, 0.1, 0]], 0.06, back, { rows: 10, sides: 5, tip: 0.1, part: 1 }));
   // pale belly plate under the disc
-  P.push(loft([[-0.8, 0.02, 0.10, -0.03], [-0.3, 0.06, 0.52, -0.16], [0.35, 0.06, 0.52, -0.15], [0.9, 0.02, 0.22, -0.06]], belly, { rows: 8, sides: 10, skin: 0.004 }));
+  P.push(loft([[-0.8, 0.02, 0.10, -0.03], [-0.3, 0.06, 0.52, -0.16], [0.35, 0.06, 0.52, -0.15], [0.9, 0.02, 0.22, -0.06]], belly, { rows: 8, sides: 10, skin: 0.004, kind: SK.belly }));
   eyes(P, 0.95, 0.12, 0.30, 0.06);
   return merge(P, 3.1);
 }
@@ -265,10 +389,10 @@ function rayGeometry() {
 function turtleGeometry() {
   const P = [];
   const shell = 0x5c5a3a, skin = 0x7c7856, plastron = 0xa39c78;
-  P.push(loft([[-0.95, 0.02, 0.1, 0.1], [-0.6, 0.28, 0.62, 0.15], [-0.1, 0.42, 0.78, 0.16], [0.45, 0.36, 0.7, 0.15], [0.85, 0.16, 0.42, 0.1], [1.0, 0.02, 0.1, 0.08]], shell, { rows: 18, sides: 14, skin: 0.035 }));
-  P.push(loft([[-0.8, 0.02, 0.08, -0.05], [-0.4, 0.10, 0.52, -0.14], [0.3, 0.10, 0.55, -0.14], [0.8, 0.03, 0.2, -0.07]], plastron, { rows: 6, sides: 10, skin: 0 }));
+  P.push(loft([[-0.95, 0.02, 0.1, 0.1], [-0.6, 0.28, 0.62, 0.15], [-0.1, 0.42, 0.78, 0.16], [0.45, 0.36, 0.7, 0.15], [0.85, 0.16, 0.42, 0.1], [1.0, 0.02, 0.1, 0.08]], shell, { rows: 30, sides: 24, skin: 0.012, kind: SK.shell }));
+  P.push(loft([[-0.8, 0.02, 0.08, -0.05], [-0.4, 0.10, 0.52, -0.14], [0.3, 0.10, 0.55, -0.14], [0.8, 0.03, 0.2, -0.07]], plastron, { rows: 8, sides: 14, skin: 0, kind: SK.belly }));
   // head + neck
-  P.push(loft([[0.85, 0.08, 0.10, 0.06], [1.15, 0.13, 0.15, 0.08], [1.45, 0.14, 0.16, 0.1], [1.7, 0.08, 0.1, 0.06], [1.8, 0.02, 0.02, 0.04]], skin, { rows: 10, sides: 8 }));
+  P.push(loft([[0.85, 0.08, 0.10, 0.06], [1.15, 0.13, 0.15, 0.08], [1.45, 0.14, 0.16, 0.1], [1.7, 0.08, 0.1, 0.06], [1.8, 0.02, 0.02, 0.04]], skin, { rows: 14, sides: 12 }));
   eyes(P, 1.5, 0.18, 0.15, 0.045);
   // flippers: part 7 (rigid stroke about the root), fore pair phase 0, hind pair pi
   for (const s of [-1, 1]) {
@@ -282,9 +406,9 @@ function morayGeometry() {
   const P = [];
   const c = 0x6b6a4c;
   // head forward, body running back into the rock (x < 0). Head widens, mouth at x=1.
-  P.push(loft([[-3.2, 0.10, 0.09, 0], [-2.2, 0.16, 0.14, 0.02], [-1.2, 0.2, 0.17, 0.04], [-0.3, 0.24, 0.2, 0.05], [0.35, 0.26, 0.23, 0.05], [0.8, 0.22, 0.2, 0.03], [1.0, 0.16, 0.16, 0.0], [1.06, 0.02, 0.02, -0.02]], c, { rows: 34, sides: 12 }));
+  P.push(loft([[-3.2, 0.10, 0.09, 0], [-2.2, 0.16, 0.14, 0.02], [-1.2, 0.2, 0.17, 0.04], [-0.3, 0.24, 0.2, 0.05], [0.35, 0.26, 0.23, 0.05], [0.8, 0.22, 0.2, 0.03], [1.0, 0.16, 0.16, 0.0], [1.06, 0.02, 0.02, -0.02]], c, { rows: 44, sides: 16 }));
   // dorsal ribbon fin
-  P.push(blade([[-3.1, 0.1, 0], [-2.2, 0.32, 0], [-1.0, 0.4, 0], [0.2, 0.36, 0], [0.5, 0.26, 0], [-1.2, 0.2, 0]], c, { rows: 3, sides: 30, bulge: 0.01, part: 0 }));
+  P.push(blade([[-3.1, 0.1, 0], [-2.2, 0.32, 0], [-1.0, 0.4, 0], [0.2, 0.36, 0], [0.5, 0.26, 0], [-1.2, 0.2, 0]], c, { rows: 3, sides: 30, bulge: 0.01, part: 0, kind: SK.fin }));
   gape(P, 1.0, -0.02, 0.15, 0.15, 0.55, c, 14, -0.02);
   eyes(P, 0.62, 0.16, 0.19, 0.045);
   return merge(P, 1.0);
@@ -293,16 +417,18 @@ function morayGeometry() {
 function crabGeometry() {
   const P = [];
   const c = 0x8a6a4a, claw = 0x9a7a58;
-  P.push(loft([[-0.55, 0.02, 0.4, 0.3], [-0.3, 0.16, 0.66, 0.34], [0.1, 0.2, 0.7, 0.36], [0.45, 0.14, 0.58, 0.34], [0.62, 0.02, 0.3, 0.3]], c, { rows: 8, sides: 12, skin: 0.03 }));
+  P.push(loft([[-0.55, 0.02, 0.4, 0.3], [-0.3, 0.16, 0.66, 0.34], [0.1, 0.2, 0.7, 0.36], [0.45, 0.14, 0.58, 0.34], [0.62, 0.02, 0.3, 0.3]], c, { rows: 12, sides: 18, skin: 0.03 }));
   for (const s of [-1, 1]) {
     // claw arm + pincer
-    P.push(limb([[0.4, 0.3, s * 0.45], [0.85, 0.42, s * 0.75], [1.15, 0.36, s * 0.7]], 0.09, claw, { rows: 5, sides: 5, tip: 0.6, part: 3, phase: s * 1.3 }));
-    P.push(ell([1.2, 0.36, s * 0.68], [0.22, 0.13, 0.17], claw, { detail: 7, part: 3, phase: s * 1.3 }));
-    P.push(limb([[1.3, 0.4, s * 0.62], [1.5, 0.42, s * 0.56], [1.58, 0.38, s * 0.66]], 0.05, claw, { rows: 3, sides: 4, part: 3, phase: s * 1.3 }));
+    P.push(limb([[0.4, 0.3, s * 0.45], [0.85, 0.42, s * 0.75], [1.15, 0.36, s * 0.7]], 0.09, claw, { rows: 8, sides: 7, tip: 0.6, part: 3, phase: s * 1.3, kind: SK.leg }));
+    P.push(ell([1.2, 0.36, s * 0.68], [0.22, 0.13, 0.17], claw, { detail: 10, part: 3, phase: s * 1.3 }));
+    P.push(limb([[1.3, 0.4, s * 0.62], [1.5, 0.42, s * 0.56], [1.58, 0.38, s * 0.66]], 0.05, claw, { rows: 4, sides: 6, part: 3, phase: s * 1.3 }));
+    // the fixed finger of the chela, so the claw reads as a pincer and not a bead
+    P.push(limb([[1.3, 0.32, s * 0.70], [1.48, 0.31, s * 0.66], [1.56, 0.34, s * 0.72]], 0.042, claw, { rows: 4, sides: 6, part: 3, phase: s * 1.3 }));
     // four walking legs a side, alternating phase
     for (let i = 0; i < 4; i++) {
       const x = (i / 3 - 0.5) * 0.9, z = 0.5;
-      P.push(limb([[x, 0.3, s * z], [x - 0.12, 0.55, s * (z + 0.4)], [x - 0.2, 0.06, s * (z + 0.78)]], 0.055, c, { rows: 6, sides: 5, tip: 0.2, part: 3, phase: (i % 2) * Math.PI + s * 0.5 }));
+      P.push(limb([[x, 0.3, s * z], [x - 0.12, 0.55, s * (z + 0.4)], [x - 0.2, 0.06, s * (z + 0.78)]], 0.055, c, { rows: 9, sides: 6, tip: 0.2, part: 3, phase: (i % 2) * Math.PI + s * 0.5, kind: SK.leg }));
     }
   }
   eyes(P, 0.58, 0.42, 0.22, 0.05);
@@ -312,22 +438,22 @@ function crabGeometry() {
 function starGeometry() {
   const P = [];
   const c = 0x9a6248;
-  P.push(ell([0, 0.12, 0], [0.36, 0.14, 0.36], c, { detail: 10 }));
+  P.push(ell([0, 0.12, 0], [0.36, 0.14, 0.36], c, { detail: 14 }));
   for (let i = 0; i < 5; i++) {
     const a = i / 5 * TAU, cx = Math.cos(a), sz = Math.sin(a);
-    P.push(limb([[cx * 0.05, 0.12, sz * 0.05], [cx * 0.5, 0.15, sz * 0.5], [cx * 1.0, 0.07, sz * 1.0]], 0.22, c, { rows: 6, sides: 6, tip: 0.1, part: 0 }));
+    P.push(limb([[cx * 0.05, 0.12, sz * 0.05], [cx * 0.5, 0.15, sz * 0.5], [cx * 1.0, 0.07, sz * 1.0]], 0.22, c, { rows: 10, sides: 10, tip: 0.1, part: 0 }));
   }
   return merge(P, 0.7);
 }
 
 function urchinGeometry() {
   const P = [];
-  P.push(ell([0, 0.3, 0], [0.38, 0.3, 0.38], 0x3d3a4a, { detail: 10 }));
+  P.push(ell([0, 0.3, 0], [0.38, 0.3, 0.38], 0x3d3a4a, { detail: 16 }));
   for (let i = 0; i < 44; i++) {
     const y = i / 43 * 1.3 - 0.3, a = i * 2.399963, r = Math.sqrt(Math.max(0, 1 - y * y));
     const d = [Math.cos(a) * r, y, Math.sin(a) * r], len = 0.35 + gr(0, 0.28);
     P.push(limb([[d[0] * 0.34, 0.3 + d[1] * 0.27, d[2] * 0.34], [d[0] * (0.34 + len), 0.3 + d[1] * (0.27 + len), d[2] * (0.34 + len)]],
-      0.03, i % 3 ? 0x6b6478 : 0x9a8f96, { rows: 1, sides: 3, tip: 0.02, part: 0, noise: 0.03 }));
+      0.03, i % 3 ? 0x6b6478 : 0x9a8f96, { rows: 2, sides: 4, tip: 0.02, part: 0, noise: 0.03, kind: SK.spine }));
   }
   return merge(P, 0.75);
 }
@@ -337,9 +463,9 @@ function ventfishGeometry() {
   const P = [];
   const c = 0xc9c2b0;
   P.push(loft([[-1.0, 0.03, 0.03, 0], [-0.7, 0.12, 0.10, 0.01], [-0.2, 0.24, 0.18, 0.02], [0.3, 0.26, 0.2, 0.02], [0.75, 0.18, 0.15, 0.0], [1.0, 0.04, 0.04, -0.02]], c, { rows: 12, sides: 8 }));
-  P.push(blade([[-0.95, 0, 0], [-1.35, 0.36, 0], [-1.2, 0, 0], [-1.35, -0.34, 0]], c, { rows: 3, sides: 16, bulge: 0.02, part: 1 }));
-  P.push(blade([[-0.5, 0.22, 0], [-0.1, 0.44, 0], [0.35, 0.26, 0]], c, { rows: 2, sides: 12, bulge: 0.02, part: 0 }));
-  for (const s of [-1, 1]) P.push(blade([[0.35, -0.04, s * 0.18], [0.0, -0.18, s * 0.5], [-0.15, -0.06, s * 0.2]], c, { rows: 2, sides: 12, bulge: 0.02, part: 2, phase: s }));
+  P.push(blade([[-0.95, 0, 0], [-1.35, 0.36, 0], [-1.2, 0, 0], [-1.35, -0.34, 0]], c, { rows: 3, sides: 16, bulge: 0.02, part: 1, kind: SK.fin }));
+  P.push(blade([[-0.5, 0.22, 0], [-0.1, 0.44, 0], [0.35, 0.26, 0]], c, { rows: 2, sides: 12, bulge: 0.02, part: 0, kind: SK.fin }));
+  for (const s of [-1, 1]) P.push(blade([[0.35, -0.04, s * 0.18], [0.0, -0.18, s * 0.5], [-0.15, -0.06, s * 0.2]], c, { rows: 2, sides: 12, bulge: 0.02, part: 2, kind: SK.fin, phase: s }));
   return merge(P, 0.62);
 }
 
@@ -350,14 +476,14 @@ function flapjackGeometry() {
   const c = 0x8f5a44, webc = 0x9a6650;
   P.push(loft([[-0.66, 0.03, 0.04, 0.26], [-0.5, 0.21, 0.38, 0.3], [-0.24, 0.31, 0.58, 0.33], [0.06, 0.29, 0.59, 0.32], [0.31, 0.22, 0.49, 0.29], [0.49, 0.13, 0.3, 0.25], [0.57, 0.03, 0.04, 0.2]], c, { rows: 12, sides: 14, skin: 0.02 }));
   eyes(P, 0.34, 0.36, 0.44, 0.09, { rim: 0x6a4a34 });
-  P.push(web((a, t) => { const r = 0.24 + t * (0.74 + Math.cos(a * 8) * 0.09); return [Math.cos(a) * r, 0.2 * (1 - t) * (1 - t) + 0.07 + Math.cos(a * 8) * t * 0.014, Math.sin(a) * r]; }, webc, { rows: 6, sides: 40 }));
+  P.push(web((a, t) => { const r = 0.24 + t * (0.74 + Math.cos(a * 8) * 0.09); return [Math.cos(a) * r, 0.2 * (1 - t) * (1 - t) + 0.07 + Math.cos(a * 8) * t * 0.014, Math.sin(a) * r]; }, webc, { rows: 6, sides: 40, kind: SK.fin }));
   for (let i = 0; i < 8; i++) {
     const a = i / 8 * TAU, reach = 1.1;
     const tip = [Math.cos(a) * reach, 0.05, Math.sin(a) * reach];
     P.push(limb([[Math.cos(a) * 0.29, 0.19, Math.sin(a) * 0.29], [Math.cos(a + 0.025) * reach * 0.59, 0.1, Math.sin(a + 0.025) * reach * 0.59], tip, [tip[0] * 1.015, 0.073, tip[2] * 1.015]],
       0.062, c, { rows: 8, sides: 5, tip: 0.1, part: 6, phase: a }));
   }
-  for (const s of [-1, 1]) P.push(blade([[-0.35, 0.46, s * 0.34], [-0.52, 0.57, s * 0.62], [-0.49, 0.68, s * 0.83], [-0.25, 0.7, s * 0.91], [-0.08, 0.61, s * 0.71], [-0.06, 0.43, s * 0.42]], 0xa06a52, { rows: 3, sides: 24, bulge: 0.03, part: 2, phase: s }));
+  for (const s of [-1, 1]) P.push(blade([[-0.35, 0.46, s * 0.34], [-0.52, 0.57, s * 0.62], [-0.49, 0.68, s * 0.83], [-0.25, 0.7, s * 0.91], [-0.08, 0.61, s * 0.71], [-0.06, 0.43, s * 0.42]], 0xa06a52, { rows: 3, sides: 24, bulge: 0.03, part: 2, kind: SK.fin, phase: s }));
   return merge(P, 1.1);
 }
 
@@ -386,9 +512,9 @@ function anglerGeometry() {
   P.push(loft([[-1.0, 0.04, 0.035, 0.04], [-0.73, 0.14, 0.12, 0.07], [-0.4, 0.41, 0.36, 0.12], [-0.02, 0.59, 0.48, 0.14], [0.3, 0.66, 0.51, 0.13], [0.58, 0.58, 0.46, 0.075], [0.74, 0.49, 0.41, 0.025]], c, { rows: 18, sides: 14, skin: 0.03 }));
   gape(P, 0.748, 0.025, 0.48, 0.4, 0.48, c, 23, 0.0);
   eyes(P, 0.52, 0.48, 0.41, 0.067, { rim: 0x6b5940 });
-  P.push(blade([[-0.9, 0, 0], [-1.3, 0.3, 0], [-1.15, 0, 0], [-1.3, -0.3, 0]], 0x4b443b, { rows: 3, sides: 16, bulge: 0.02, part: 1 }));
-  for (const s of [-1, 1]) P.push(blade([[-0.2, -0.08, s * 0.38], [-0.41, -0.4, s * 0.69], [-0.78, -0.28, s * 0.46], [-0.62, -0.1, s * 0.26]], 0x574e43, { rows: 3, sides: 18, bulge: 0.03, part: 2, phase: s }));
-  P.push(blade([[-0.72, 0.2, 0], [-0.57, 0.58, 0], [-0.36, 0.47, 0], [-0.3, 0.36, 0]], 0x4c443a, { rows: 2, sides: 14, bulge: 0.02, part: 0 }));
+  P.push(blade([[-0.9, 0, 0], [-1.3, 0.3, 0], [-1.15, 0, 0], [-1.3, -0.3, 0]], 0x4b443b, { rows: 3, sides: 16, bulge: 0.02, part: 1, kind: SK.fin }));
+  for (const s of [-1, 1]) P.push(blade([[-0.2, -0.08, s * 0.38], [-0.41, -0.4, s * 0.69], [-0.78, -0.28, s * 0.46], [-0.62, -0.1, s * 0.26]], 0x574e43, { rows: 3, sides: 18, bulge: 0.03, part: 2, kind: SK.fin, phase: s }));
+  P.push(blade([[-0.72, 0.2, 0], [-0.57, 0.58, 0], [-0.36, 0.47, 0], [-0.3, 0.36, 0]], 0x4c443a, { rows: 2, sides: 14, bulge: 0.02, part: 0, kind: SK.fin }));
   // lure: illicium stalk + esca bead (aGlow)
   P.push(limb([[0.18, 0.76, 0], [0.28, 1.38, 0.02], [0.79, 1.46, 0.035], [1.04, 1.08, 0]], 0.013, 0x6d6654, { rows: 10, sides: 4, tip: 0.6, part: 5 }));
   P.push(ell([1.04, 1.08, 0], [0.075, 0.085, 0.07], 0xd8e9d0, { detail: 7, part: 5, glow: 1, noise: 0 }));
@@ -400,7 +526,7 @@ function gulperGeometry() {
   const c = 0x2e2c2a;
   P.push(loft([[-4.7, 0.004, 0.004, -0.15], [-3.4, 0.025, 0.02, -0.17], [-2.1, 0.06, 0.05, -0.09], [-0.9, 0.11, 0.095, -0.06], [-0.1, 0.19, 0.18, -0.05], [0.5, 0.32, 0.32, -0.13], [1.06, 0.37, 0.35, -0.16], [1.49, 0.32, 0.31, -0.1]], c, { rows: 40, sides: 12, part: (x) => (x < -1.5 ? 1 : 0) }));
   gape(P, 1.49, -0.1, 0.315, 0.3, 0.67, 0x4b4438, 11, -0.16);
-  P.push(blade([[-0.2, 0.11, 0], [-1.1, 0.22, 0], [-3.7, -0.04, 0], [-4.2, -0.17, 0], [-1.9, -0.1, 0]], 0x494640, { rows: 3, sides: 30, bulge: 0.01, part: 1 }));
+  P.push(blade([[-0.2, 0.11, 0], [-1.1, 0.22, 0], [-3.7, -0.04, 0], [-4.2, -0.17, 0], [-1.9, -0.1, 0]], 0x494640, { rows: 3, sides: 30, bulge: 0.01, part: 1, kind: SK.fin }));
   eyes(P, 1.02, 0.21, 0.23, 0.044);
   P.push(ell([-4.67, -0.15, 0], [0.03, 0.03, 0.03], 0xb9d9be, { detail: 5, part: 1, glow: 1, noise: 0 }));
   return merge(P, 1.5);
@@ -410,9 +536,9 @@ function lanternfishGeometry() {
   const P = [];
   const c = 0x556a76;
   P.push(loft([[-1.0, 0.03, 0.03, 0], [-0.72, 0.12, 0.1, 0.01], [-0.25, 0.25, 0.19, 0.02], [0.25, 0.27, 0.2, 0.02], [0.72, 0.19, 0.15, 0.0], [1.0, 0.04, 0.04, -0.02]], c, { rows: 12, sides: 8 }));
-  P.push(blade([[-0.95, 0, 0], [-1.38, 0.38, 0], [-1.2, 0, 0], [-1.38, -0.36, 0]], 0x6a8290, { rows: 3, sides: 16, bulge: 0.02, part: 1 }));
-  P.push(blade([[-0.5, 0.24, 0], [-0.2, 0.46, 0], [0.3, 0.27, 0]], 0x6a8290, { rows: 2, sides: 12, bulge: 0.02, part: 0 }));
-  for (const s of [-1, 1]) P.push(blade([[0.35, -0.04, s * 0.18], [0.0, -0.2, s * 0.52], [-0.15, -0.06, s * 0.2]], 0x6a8290, { rows: 2, sides: 12, bulge: 0.02, part: 2, phase: s }));
+  P.push(blade([[-0.95, 0, 0], [-1.38, 0.38, 0], [-1.2, 0, 0], [-1.38, -0.36, 0]], 0x6a8290, { rows: 3, sides: 16, bulge: 0.02, part: 1, kind: SK.fin }));
+  P.push(blade([[-0.5, 0.24, 0], [-0.2, 0.46, 0], [0.3, 0.27, 0]], 0x6a8290, { rows: 2, sides: 12, bulge: 0.02, part: 0, kind: SK.fin }));
+  for (const s of [-1, 1]) P.push(blade([[0.35, -0.04, s * 0.18], [0.0, -0.2, s * 0.52], [-0.15, -0.06, s * 0.2]], 0x6a8290, { rows: 2, sides: 12, bulge: 0.02, part: 2, kind: SK.fin, phase: s }));
   eyes(P, 0.62, 0.06, 0.17, 0.09, { rim: 0x8fa9a0 });
   photophores(P, 7, -0.7, 0.55, -0.2, 0.15, 0.045, 0x9fc8c4);
   const g = merge(P, 0.7);
@@ -426,10 +552,11 @@ function lanternfishGeometry() {
 // the one shader
 // ---------------------------------------------------------------------------
 const VERT_COMMON = `#include <common>
-attribute float aPart; attribute float aPhase; attribute float aGlow; attribute vec4 aInst;
+attribute float aPart; attribute float aPhase; attribute float aGlow; attribute vec4 aInst; attribute float aKind;
 uniform float uTime; uniform float uCull; uniform float uFogD;
 uniform vec4 uMot; uniform vec4 uHinge; uniform vec4 uBody;
 varying float vGlow; varying float vFade;
+varying float vKind; varying vec3 vObj; varying vec3 vObjN; varying vec2 vFuv;
 float fnContract(float x){ x = fract(x); return x < 0.28 ? 0.5 - 0.5*cos(x*11.2199) : 0.5 + 0.5*cos((x-0.28)*4.3633); }`;
 
 // Runs in beginnormal_vertex (first chunk), leaving fnP/fnN for begin_vertex.
@@ -495,14 +622,214 @@ vec4 fnW = modelMatrix * vec4(transformed, 1.0);
 #endif
 float fnDist = length(fnW.xyz - cameraPosition);
 vFade = 1.0 - smoothstep(uCull * 0.72, uCull, fnDist);
-vGlow = aGlow * aInst.w * exp(-uFogD * uFogD * fnDist * fnDist);`;
+vGlow = aGlow * aInst.w * exp(-uFogD * uFogD * fnDist * fnDist);
+// skin coordinates are the AUTHORED rest pose, so a pattern rides the animal through
+// every wing-beat and jaw-drop instead of swimming across it
+vKind = aKind; vObj = position; vObjN = normal; vFuv = uv;`;
 
 const FRAG_COMMON = `#include <common>
-uniform vec3 uGlowCol;
-varying float vGlow; varying float vFade;`;
+uniform vec3 uGlowCol; uniform vec4 uSkin;
+varying float vGlow; varying float vFade;
+varying float vKind; varying vec3 vObj; varying vec3 vObjN; varying vec2 vFuv;
+${SKIN_COMMON}
+// turtle carapace: 5 vertebral + 4 x 2 costal scute centres, authored shell space
+const vec2 TSC[13] = vec2[13](vec2(-0.72, 0.0), vec2(-0.38, 0.0), vec2(-0.02, 0.0), vec2(0.34, 0.0), vec2(0.68, 0.0),
+  vec2(-0.55, 0.42), vec2(-0.18, 0.5), vec2(0.2, 0.48), vec2(0.55, 0.36),
+  vec2(-0.55, -0.42), vec2(-0.18, -0.5), vec2(0.2, -0.48), vec2(0.55, -0.36));`;
 const FRAG_COLOR = `#include <color_fragment>
 diffuseColor.a *= vFade;`;
+// THE SKINS. uSkin = (skin id, authored->mesh scale, relief in world units, spare).
+// ids: 0 plain, 1 ray, 2 turtle, 3 moray, 4 crab, 5 star, 6 urchin, 7 fish,
+// 8 flapjack, 9 isopod, 10 deep (angler/gulper). One program: the id is a uniform,
+// so the branch is coherent across a draw.
 const FRAG_EMIT = `#include <emissivemap_fragment>
+{
+  float kd = floor(vKind + 0.5);
+  int sid = int(uSkin.x + 0.5);
+  vec3 P = vObj / uSkin.y;                       // authored space
+  vec3 oN = normalize(vObjN) * faceDirection;    // rest-pose normal of the face we see
+  vec3 V = normalize(vViewPosition);
+  float h = 0.0, wet = 0.0, lum = 0.0, thin = 0.0, rk = 1.0;
+  vec3 tint = vec3(1.0);
+  if (kd < 0.5 || kd > 9.5) {
+    if (sid == 1) {
+      // RAY: pale ochre spots scattered over a dark back, a cream belly, a mottled
+      // spec map (smooth wet patches on a velvet skin) and a fine dermal grain
+      vec2 q = P.xz * 3.1;
+      vec3 vr = skVor(q);
+      float up = smoothstep(-0.1, 0.35, oN.y);
+      float spot = (1.0 - smoothstep(0.16, 0.24, vr.x)) * step(0.35, vr.z) * up * skAA(q);
+      tint = mix(tint, vec3(2.3, 2.1, 1.75), spot);
+      float under = 1.0 - smoothstep(-0.45, 0.05, oN.y);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.60, 0.52), under);
+      float edge = smoothstep(1.7, 2.3, abs(P.z));
+      tint *= 1.0 - 0.35 * edge * up;
+      rk = mix(0.62, 1.2, skN2(P.xz * 5.0));
+      h = skN2(P.xz * 95.0) * 0.25 + spot * 0.3;
+    } else if (sid == 2) {
+      if (kd > 9.5) {
+        // TURTLE CARAPACE: scutes (nearest two of the authored centres), a groove on
+        // every seam, growth rings running parallel to the seams, radiating
+        // tortoiseshell streaks, and the marginal scutes round the rim
+        vec2 q = P.xz * vec2(1.0, 1.15);
+        float d1 = 9.0, d2 = 9.0; vec2 c1 = vec2(0.0);
+        for (int i = 0; i < 13; i++) { float d = length(q - TSC[i]); if (d < d1) { d2 = d1; d1 = d; c1 = TSC[i]; } else if (d < d2) { d2 = d; } }
+        float seam = d2 - d1;
+        float rim = 1.0 - smoothstep(0.25, 0.5, oN.y);
+        float ma = atan(P.z, P.x) * 3.8197;          // 24 marginals round the shell
+        float mseam = abs(fract(ma) - 0.5) * 2.0;
+        seam = mix(seam, min(seam, (1.0 - mseam) * 0.12), rim);
+        float groove = 1.0 - smoothstep(0.0, 0.028, seam);
+        float rings = (0.5 + 0.5 * cos(seam * 150.0)) * (1.0 - smoothstep(0.02, 0.2, seam));
+        float ang = atan(q.y - c1.y, q.x - c1.x);
+        float streak = skN2(vec2(ang * 4.0, d1 * 3.0) + c1 * 11.0);
+        tint = mix(vec3(0.62, 0.52, 0.34), vec3(1.35, 1.12, 0.72), smoothstep(0.35, 0.8, streak)) * (1.0 - 0.55 * groove) * (1.0 - 0.10 * rings);
+        tint *= mix(1.0, 0.8, rim);
+        h = -groove * 1.2 + rings * 0.18 + (1.0 - smoothstep(0.0, 0.25, seam)) * 0.35;
+        rk = mix(0.85, 1.1, streak);
+      } else {
+        // TURTLE SKIN: head and flippers in polygonal scales with dark seams
+        vec2 q = vec2(P.x * 13.0, (P.z + P.y * 0.8) * 13.0);
+        vec3 vr = skVor(q);
+        float sm = 1.0 - smoothstep(0.0, 0.14, vr.y - vr.x);
+        tint = vec3(1.0 + (vr.z - 0.5) * 0.25) * (1.0 - 0.45 * sm);
+        h = (1.0 - sm) * 0.5 * skAA(q);
+      }
+    } else if (sid == 3) {
+      // MORAY: dark reticulation over a pale mottle, slick with mucus
+      vec2 q = vec2(P.x * 5.5, (P.y * 1.3 + P.z) * 6.5);
+      vec3 vr = skVor(q);
+      float net = 1.0 - smoothstep(0.02, 0.16, vr.y - vr.x);
+      float blot = skN2(q * 0.6);
+      tint = mix(vec3(1.45, 1.38, 0.9), vec3(0.22, 0.2, 0.14), max(net, smoothstep(0.5, 0.75, blot) * 0.7));
+      float under = 1.0 - smoothstep(-0.6, -0.1, oN.y);
+      tint = mix(tint, vec3(1.3, 1.25, 1.0), under * 0.6);
+      h = skN2(q * 3.0) * 0.4 - net * 0.3;
+      rk = 0.55; wet = 0.25;
+    } else if (sid == 4) {
+      // CRAB CARAPACE: granules, darker brick above, a pale underside
+      vec2 q = P.xz * 11.0;
+      vec3 vr = skVor(q);
+      float gran = 1.0 - smoothstep(0.0, 0.34, vr.x);
+      float up = smoothstep(-0.2, 0.6, oN.y);
+      tint = mix(vec3(1.45, 1.35, 1.15), vec3(0.78, 0.46, 0.34) * (0.85 + 0.3 * vr.z), up);
+      tint *= 1.0 + gran * 0.07 * up;
+      tint *= 1.0 - 0.45 * smoothstep(1.3, 1.52, P.x);           // dark chela tips
+      h = gran * 0.8 * skAA(q) + skN2(P.xz * 35.0) * 0.2;
+      rk = 0.8;
+    } else if (sid == 5) {
+      // SEA STAR: ossicle bumps in a reticulated plate net above; two rows of
+      // tube feet along the groove of each arm below
+      vec2 q = P.xz * 15.0;
+      vec3 vr = skVor(q);
+      float boss = 1.0 - smoothstep(0.0, 0.38, vr.x);
+      float up = smoothstep(-0.25, 0.25, oN.y);
+      tint = vec3(0.9 + boss * 0.22) * mix(vec3(0.95, 0.85, 0.8), vec3(1.0), up);
+      float r = length(P.xz), a = atan(P.z, P.x);
+      float k = floor(a * 0.7957747 + 0.5) / 0.7957747;        // nearest arm axis (5 arms)
+      float across = r * sin(a - k);
+      float rows = 1.0 - smoothstep(0.02, 0.05, abs(abs(across) - 0.07));
+      float feet = rows * (1.0 - smoothstep(0.25, 0.45, abs(fract(r * 22.0) - 0.5) * 2.0)) * (1.0 - up);
+      tint = mix(tint, vec3(1.55, 1.35, 1.1), feet);
+      tint *= mix(1.0, 1.2, smoothstep(0.7, 1.0, r));            // pale arm tips
+      h = boss * up * 0.9 * skAA(q) + feet * 0.6;
+      rk = 1.05;
+    } else if (sid == 6) {
+      // URCHIN TEST: tubercles in ten meridional bands, each a boss in a socket
+      // ring — the ball joint every spine sits on
+      vec3 d = normalize(P - vec3(0.0, 0.3, 0.0));
+      float th = atan(d.z, d.x) * 3.1830989;                   // 20 columns
+      float ph = acos(clamp(d.y, -1.0, 1.0)) * 5.0929582;      // 16 rows
+      vec2 q = vec2(th + 0.5 * mod(floor(ph), 2.0), ph);
+      vec2 f = fract(q) - 0.5;
+      float rr = length(f * vec2(1.0, 1.1));
+      float boss = 1.0 - smoothstep(0.08, 0.16, rr);
+      float ring = (1.0 - smoothstep(0.0, 0.05, abs(rr - 0.24)));
+      float amb = 1.0 - smoothstep(0.05, 0.25, abs(fract(th * 0.1) - 0.5) * 2.0);
+      tint = vec3(0.8) * (1.0 + boss * 0.7) * (1.0 - ring * 0.3) * mix(1.0, 0.8, amb);
+      h = boss * 0.8 + ring * 0.35 - (1.0 - smoothstep(0.16, 0.2, rr)) * (1.0 - boss) * 0.3;
+      h *= skAA(q);
+      rk = 0.9;
+    } else if (sid == 7) {
+      // FISH (vent fish, lanternfish): roof-tiled scales along the loft, pale belly
+      vec2 q = vec2((1.0 - vFuv.y) * 30.0, atan(P.z, P.y) * 2.2282);
+      vec3 sc = skScales(q);
+      float aa = skAA(q);
+      tint = vec3(1.0 + ((sc.z - 0.5) * 0.2 + sc.x * 0.15 - sc.y * 0.25) * aa);
+      tint *= mix(0.72, 1.3, 1.0 - smoothstep(-0.5, 0.4, oN.y));
+      h = sc.x * aa;
+    } else if (sid == 8) {
+      // FLAPJACK: soft papillate mantle
+      vec3 vr = skVor(P.xz * 9.0 + P.y * 4.0);
+      tint = vec3(0.85 + vr.z * 0.3) * (1.0 - 0.3 * (1.0 - smoothstep(0.0, 0.12, vr.y - vr.x)));
+      h = (1.0 - smoothstep(0.0, 0.3, vr.x)) * 0.6;
+    } else if (sid == 9) {
+      // ISOPOD: pitted chitin with a wet gloss
+      float pit = 1.0 - smoothstep(0.0, 0.18, skVor(P.xz * 24.0).x);
+      tint = vec3(1.0 - pit * 0.25);
+      h = -pit * 0.5 + skN2(P.xz * 40.0) * 0.2;
+      rk = 0.62; wet = 0.15;
+    } else if (sid == 10) {
+      // DEEP (angler, gulper): velvet-black skin with pale pores and warts
+      vec3 vr = skVor(vec2(P.x, P.y + P.z) * 16.0);
+      float pore = 1.0 - smoothstep(0.0, 0.1, vr.x);
+      float wart = (1.0 - smoothstep(0.1, 0.32, vr.x)) * step(0.8, vr.z);
+      tint = vec3(1.0 + pore * 0.8 + wart * 0.35);
+      h = wart * 0.8 - pore * 0.3 + skFbm3(P * 9.0) * 0.3;
+      rk = 1.1;
+    }
+  } else if (kd < 1.5) {
+    // CORNEA: the black wet dome — mirror-smooth; the catchlight comes from skCatch
+    wet = 1.0; rk = 0.0;
+  } else if (kd < 2.5) {
+    // IRIS: a metallic, fibrous ring behind the cornea
+    tint = vec3(1.2 + skN2(P.xy * 180.0) * 0.6);
+    rk = 0.35; wet = 0.5;
+  } else if (kd < 3.5) {
+    // FIN MEMBRANE: rays radiating across the outline param, jointed, translucent
+    float qq = vFuv.x * 44.0;
+    float rq = abs(fract(qq) - 0.5) * 2.0;
+    float ray = (1.0 - smoothstep(0.0, 0.34, 1.0 - rq)) * (1.0 - smoothstep(0.3, 0.8, fwidth(qq)));
+    tint = vec3(mix(0.95, 0.55, ray));
+    h = ray * 0.7;
+    thin = 1.0 - 0.7 * ray;
+  } else if (kd < 4.5) {
+    // MOUTH: wet, dark, blood-red lining with palatal folds
+    diffuseColor.rgb = vec3(0.20, 0.055, 0.05) * (0.7 + 0.5 * skN2(P.xy * 40.0));
+    h = sin(P.x * 90.0) * 0.3;
+    wet = 0.8; rk = 0.3;
+  } else if (kd < 5.5) {
+    // TOOTH: translucent ivory enamel
+    rk = 0.35; wet = 0.4; thin = 0.3;
+  } else if (kd < 6.5) {
+    // BELLY / PLASTRON: pale, faintly plated
+    vec3 vr = skVor(P.xz * 7.0);
+    tint = vec3(1.08) * (1.0 - 0.18 * (1.0 - smoothstep(0.0, 0.08, vr.y - vr.x)));
+    h = -(1.0 - smoothstep(0.0, 0.08, vr.y - vr.x)) * 0.4;
+  } else if (kd < 7.5) {
+    // LEG: jointed podomeres with pale arthrodial cuffs at each joint, dark dactyl
+    float t = vFuv.y;
+    float cuff = 1.0 - smoothstep(0.02, 0.06, abs(t - 0.5));
+    float cuff2 = 1.0 - smoothstep(0.02, 0.05, abs(t - 0.16));
+    float rim = (1.0 - smoothstep(0.0, 0.015, abs(abs(t - 0.5) - 0.065))) + (1.0 - smoothstep(0.0, 0.012, abs(abs(t - 0.16) - 0.05)));
+    tint = mix(vec3(0.95, 0.72, 0.62), vec3(1.7, 1.5, 1.3), max(cuff, cuff2)) * (1.0 - 0.5 * rim);
+    tint *= 1.0 - 0.6 * smoothstep(0.82, 0.97, t);
+    h = -max(cuff, cuff2) * 0.5 - rim * 0.3 + skN2(vec2(vFuv.x * 12.0, t * 40.0)) * 0.2;
+    rk = mix(0.75, 1.1, max(cuff, cuff2));
+  } else if (kd < 8.5) {
+    // SPINE: banded, glossy calcite, dark at the socket
+    float t = vFuv.y;
+    tint = vec3(mix(0.55, 1.25, smoothstep(0.1, 0.5, t))) * (0.85 + 0.3 * step(0.5, fract(t * 4.0 + 0.2)));
+    rk = 0.45;
+  }
+  // relief -> normal, then the surface response
+  normal = skBump(-vViewPosition, normal, h * uSkin.z, faceDirection);
+  diffuseColor.rgb *= tint;
+  roughnessFactor = mix(roughnessFactor * rk, 0.06, wet);
+  metalnessFactor = mix(metalnessFactor, 0.0, wet);
+  totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * thin * 0.4;
+  totalEmissiveRadiance += skCatch(normal, V, vViewPosition) * wet * (kd < 1.5 ? 1.0 : 0.25) * vFade;
+}
 totalEmissiveRadiance += uGlowCol * vGlow;`;
 
 // o: { rough, metal, mot:[undAmp, wingAmp, wingK, legAmp], hinge:[x,y,z,openAng],
@@ -513,6 +840,7 @@ function faunaMaterial(o) {
     uHinge: { value: new THREE.Vector4(...(o.hinge || [0, 0, 0, 0])) },
     uBody: { value: new THREE.Vector4(...(o.body || [1, 0.5, 2, 1])) },
     uGlowCol: { value: new THREE.Color(o.glow || 0).multiplyScalar(o.glowI || 0) },
+    uSkin: { value: new THREE.Vector4(...(o.skin || [0, 1, 0, 0])) },
     uTime, uCull, uFogD
   };
   const m = new THREE.MeshStandardMaterial({
@@ -523,7 +851,7 @@ function faunaMaterial(o) {
   // Every fauna material carries the identical injected source, so sharing one
   // key is CORRECT here — one program for the whole module. (The creatures.js
   // hazard is DIFFERENT sources under one key.)
-  m.customProgramCacheKey = () => 'abyssa-fauna';
+  m.customProgramCacheKey = () => 'abyssa-fauna-skin';
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
@@ -533,6 +861,7 @@ function faunaMaterial(o) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', FRAG_COMMON)
       .replace('#include <color_fragment>', FRAG_COLOR)
+      .replace('#include <lights_pars_begin>', '#include <lights_pars_begin>\n' + SKIN_LIGHTS)
       .replace('#include <emissivemap_fragment>', FRAG_EMIT);
     injectStrokes(sh, true);   // SILHOUETTE STROKES (lib/paint.js) — alpha-hash turns the rim into real fray
   };
@@ -1195,27 +1524,27 @@ export function buildFauna() {
 
   // zone 0
   makeGroup('RAY', 0, 1, rayGeometry(), faunaMaterial({
-    rough: 0.62, mot: [0.06, 0.55, 2.6, 0], body: [4, 3, 0.35, 7.3], hinge: [0, 0, 0, 0]
+    rough: 0.62, mot: [0.06, 0.55, 2.6, 0], body: [4, 3, 0.35, 7.3], hinge: [0, 0, 0, 0], skin: [1, 3.1, 0.022, 0]
   }), { gx: 0, gz: 0, gh: 8, gt: 0, step: rayStep, layout: rayLayout });
 
   makeGroup('TURTLE', 0, 2, turtleGeometry(), faunaMaterial({
-    rough: 0.8, mot: [0.02, 0, 0, 0.55], body: [2, 1.2, 0.5, 2], hinge: [0, 0, 0.85, 0]
+    rough: 0.8, mot: [0.02, 0, 0, 0.55], body: [2, 1.2, 0.5, 2], hinge: [0, 0, 0.85, 0], skin: [2, 1.35, 0.014, 0]
   }), { ...arrs(2, ['gx', 'gz', 'gh', 'gt', 'cyc']), step: turtleStep, layout: turtleLayout });
 
   makeGroup('MORAY', 0, 3, morayGeometry(), faunaMaterial({
-    rough: 0.55, metal: 0.05, mot: [0.10, 0, 0, 0], body: [4.2, 0.6, 1.3, 1], hinge: [0.45, -0.02, 0, 0.55]
+    rough: 0.55, metal: 0.05, mot: [0.10, 0, 0, 0], body: [4.2, 0.6, 1.3, 1], hinge: [0.45, -0.02, 0, 0.55], skin: [3, 1.0, 0.010, 0]
   }), { ...arrs(3, ['bx', 'by', 'bz', 'dx', 'dz', 'rr', 'out', 'cyc']), cand: new Int32Array(2048), step: morayStep, layout: morayLayout });
 
   makeGroup('CRAB', 0, 20, crabGeometry(), faunaMaterial({
-    rough: 0.7, mot: [0, 0, 0, 0.09], body: [1, 0, 0, 1], hinge: [0, 0, 0, 0]
+    rough: 0.7, mot: [0, 0, 0, 0.09], body: [1, 0, 0, 1], hinge: [0, 0, 0, 0], skin: [4, 0.55, 0.005, 0]
   }), { ...arrs(20, ['mt', 'side']), mode: new Int8Array(20), cand: new Int32Array(2048), step: crabStep, layout: crabLayout });
 
-  makeGroup('SEA STAR', 0, 40, starGeometry(), faunaMaterial({ rough: 0.85 }), { stat: true, layout: G => floorLayout(G, 0, 12, 150, 0.0) });
-  makeGroup('URCHIN', 0, 30, urchinGeometry(), faunaMaterial({ rough: 0.6, metal: 0.1 }), { stat: true, layout: G => floorLayout(G, 0, 12, 150, 0.0) });
+  makeGroup('SEA STAR', 0, 40, starGeometry(), faunaMaterial({ rough: 0.85, skin: [5, 0.7, 0.008, 0] }), { stat: true, layout: G => floorLayout(G, 0, 12, 150, 0.0) });
+  makeGroup('URCHIN', 0, 30, urchinGeometry(), faunaMaterial({ rough: 0.6, metal: 0.1, skin: [6, 0.75, 0.006, 0] }), { stat: true, layout: G => floorLayout(G, 0, 12, 150, 0.0) });
 
   // zone 1
   makeGroup('VENT FISH', 1, 28, ventfishGeometry(), faunaMaterial({
-    rough: 0.5, metal: 0.05, mot: [0.11, 0.18, 3, 0], body: [1.3, 0.5, 4.5, 0.55], hinge: [0, 0, 0, 0]
+    rough: 0.5, metal: 0.05, mot: [0.11, 0.18, 3, 0], body: [1.3, 0.5, 4.5, 0.55], hinge: [0, 0, 0, 0], skin: [7, 0.62, 0.004, 0]
   }), {
     ...arrs(28, ['ph']), P: new Float32Array(28 * 3), V: new Float32Array(28 * 3), roll: 0, panic: 0,
     radius: 3.2, speed: 2.4, local: 1.6, fear: 9, beat: 9, home: 4, roam: 14, hLo: 2, hHi: 7, ax: 0, az: 0,
@@ -1231,24 +1560,24 @@ export function buildFauna() {
   });
 
   makeGroup('FLAPJACK', 1, 2, flapjackGeometry(), faunaMaterial({
-    rough: 0.62, mot: [0, 0.26, 0.22, 0], body: [1, 0, 0, 1.0], hinge: [0, 0, 0, 0]
+    rough: 0.62, mot: [0, 0.26, 0.22, 0], body: [1, 0, 0, 1.0], hinge: [0, 0, 0, 0], skin: [8, 1.1, 0.010, 0]
   }), { ...arrs(2, ['gx', 'gz', 'gh', 'gt', 'ax', 'az']), step: flapjackStep, layout: flapjackLayout });
 
   makeGroup('ISOPOD', 1, 10, isopodGeometry(), faunaMaterial({
-    rough: 0.55, metal: 0.08, mot: [0, 0, 0, 0.07], body: [1, 0, 0, 1], hinge: [0, 0, 0, 0]
+    rough: 0.55, metal: 0.08, mot: [0, 0, 0, 0.07], body: [1, 0, 0, 1], hinge: [0, 0, 0, 0], skin: [9, 0.62, 0.005, 0]
   }), { ...arrs(10, ['mt', 'gh', 'ax', 'az', 'ar']), mode: new Int8Array(10), step: isopodStep, layout: isopodLayout });
 
   // zone 2
   makeGroup('ANGLER', 2, 2, anglerGeometry(), faunaMaterial({
-    rough: 0.75, mot: [0.04, 0.12, 2.5, 0], body: [2.5, 1.0, 1.2, 1.1], hinge: [0.43, 0.0, 1.2, 0.62], glow: 0xd6e6c8, glowI: 1.6
+    rough: 0.75, mot: [0.04, 0.12, 2.5, 0], body: [2.5, 1.0, 1.2, 1.1], hinge: [0.43, 0.0, 1.2, 0.62], glow: 0xd6e6c8, glowI: 1.6, skin: [10, 1.6, 0.012, 0]
   }), { ...arrs(2, ['gx', 'gz', 'gh', 'gt', 'mt', 'ph']), mode: new Int8Array(2), step: anglerStep, layout: anglerLayout });
 
   makeGroup('GULPER', 2, 1, gulperGeometry(), faunaMaterial({
-    rough: 0.7, mot: [0.28, 0, 0, 0], body: [8.5, 2, 0.9, 1], hinge: [1.23, -0.24, 0, 0.7], glow: 0xa8c8b0, glowI: 0.8
+    rough: 0.7, mot: [0.28, 0, 0, 0], body: [8.5, 2, 0.9, 1], hinge: [1.23, -0.24, 0, 0.7], glow: 0xa8c8b0, glowI: 0.8, skin: [10, 1.5, 0.010, 0]
   }), { gx: 0, gz: 0, gh: 10, gt: 0, mt: new Float32Array(1), mode: new Int8Array(1), step: gulperStep, layout: gulperLayout });
 
   makeGroup('LANTERNFISH', 2, 36, lanternfishGeometry(), faunaMaterial({
-    rough: 0.45, metal: 0.15, mot: [0.11, 0.18, 3, 0], body: [1.4, 0.5, 4.5, 0.55], hinge: [0, 0, 0, 0], glow: 0x9fc8c4, glowI: 1.2
+    rough: 0.45, metal: 0.15, mot: [0.11, 0.18, 3, 0], body: [1.4, 0.5, 4.5, 0.55], hinge: [0, 0, 0, 0], glow: 0x9fc8c4, glowI: 1.2, skin: [7, 0.7, 0.004, 0]
   }), {
     ...arrs(36, ['ph']), P: new Float32Array(36 * 3), V: new Float32Array(36 * 3), roll: 0, panic: 0,
     radius: 4, speed: 2.6, local: 1.7, fear: 10, beat: 9, home: 10, roam: 60, hLo: 6, hHi: 30, ax: 0, az: 0,
