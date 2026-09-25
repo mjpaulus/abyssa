@@ -160,6 +160,14 @@ against explicit contracts and reviewed on return.
   predators.slash at the tip), thruster bubble FX.
 - `systems/weather.js` — deterministic 12-min day cycle + storm/lightning schedule
   (pure function of t, mulberry32 const seed). `window.weather.set/advance`.
+- `world/lightning.js` — LIGHTNING IS A LIGHT (roadmap/ref-lightning-light.md): each main
+  stroke grows a midpoint-displaced channel (one instanced additive ribbon draw, fog:false)
+  and the two strongest live bolts are `abyssaBolt0/1` uniforms in the fog chunk — every
+  fogged material is lit from the bolt's side, inverse-square with a floor, water leg
+  extinguished. NOT a THREE light (the count is sacred). `ABYSSA_LIT` is planted on
+  `lights_fragment_begin` so lit programs use their real normal; the rest take a
+  screen-derivative one. Bolt positions are seeded from the deal, so a hand repeats.
+  `__bolt.last()` is where audio will place the thunder.
 - `systems/survival.js` — air economy (campaign set: FUEL_BURN 1/420, O2_REFILL
   0.10, HOSE 120/craft, HOSE_REQ [0,640,920], rescue refuel 0.5). TORN DRESS: bites
   and sleeper slams halve refill for 20 s (stacks extend). Storm sputter cuts supply.
