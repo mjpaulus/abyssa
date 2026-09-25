@@ -149,9 +149,19 @@ export function makeBrooder(idx, cfg) {
   barn.castShadow = true;
   body.add(barn);
 
-  const weedGeo = new THREE.PlaneGeometry(0.014, 0.14, 1, 6);
+  // a frond, not a paper strip: tapered to a point, folded along its midrib, curling
+  const weedGeo = new THREE.PlaneGeometry(0.014, 0.14, 2, 5);
   weedGeo.translate(0, 0.07, 0);
-  const weedMat = new THREE.MeshStandardMaterial({ color: 0x55603c, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+  {
+    const p = weedGeo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), t = y / 0.14;
+      p.setX(i, x * (1 - 0.85 * t) * (1 + 0.4 * Math.sin(t * 9)));
+      p.setZ(i, Math.abs(x) * 0.9 + 0.02 * t * t);
+    }
+    weedGeo.computeVertexNormals();
+  }
+  const weedMat = new THREE.MeshStandardMaterial({ color: 0x4a5634, roughness: 0.8, metalness: 0, side: THREE.DoubleSide });
   weedMat.customProgramCacheKey = () => 'abyssa-brooder-weed';
   weedMat.onBeforeCompile = sh => {
     sh.uniforms.uTime = L.uni.uTime;

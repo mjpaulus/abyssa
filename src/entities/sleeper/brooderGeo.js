@@ -138,7 +138,9 @@ export function carapaceGeo(COLS = 256, ROWS = 88, RIM = 14) {
       const rho = 1 + 0.018 * Math.sin(k * Math.PI) - (0.20 - 0.12 * front) * sst(0.25, 1, k);
       const yE = shellAt(c * rr * 0.9999, s * rr * 0.9999, sh).h;
       x = c * rr * rho; z = s * rr * rho;
-      y = yE * (1 - k) - (0.085 + 0.22 * front) * Math.sin(k * Math.PI / 2);
+      // (polish-brooder) the visor stops ABOVE the eye cluster: it shades the face, it
+      // no longer curtains it — the eyes sit in their sockets in the face plate below
+      y = yE * (1 - k) - (0.085 + 0.05 * front) * Math.sin(k * Math.PI / 2);
       shade = 1 - 0.72 * k;                                        // the lip's underside is in its own shade
     }
     pos.push(x, y, z); uv.push(x * 0.5 + 0.5, z * 0.5 + 0.5); col.push(shade, shade, shade);
