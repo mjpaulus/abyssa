@@ -458,16 +458,60 @@ export function lash(P, mat, cx, cy, cz, r, axis = 'x', turns = 3, rad = 0.022, 
   return rope(P, mat, pts, rad, steps * 2, false, radial);
 }
 
-// A staved timber cask/barrel: lathe body plus iron hoops. Returns nothing; files itself.
+// STAVES. A cask is N separate boards bent round, and the eye knows it from the dark
+// line between every pair. Each stave is its own strip (so its own smooth normals), its
+// long edges pulled in by `groove` to cut a V between neighbours, and its own UV offset
+// and tone so the grain never runs continuously round the body. UVs are metric here
+// (arc length x profile length), already offset, so the kit's metricUV leaves them be.
+let _stv = 1;
+export function stavedLathe(profile, staves = 18, cols = 2, groove = 0.007, toneVar = 0.10) {
+  const rows = profile.length, pos = [], uv = [], col = [], idx = [];
+  let L = 0; const cum = [0];
+  for (let k = 1; k < rows; k++) { L += Math.hypot(profile[k][0] - profile[k - 1][0], profile[k][1] - profile[k - 1][1]); cum.push(L); }
+  const rmax = Math.max(...profile.map(p => p[0]));
+  for (let s = 0; s < staves; s++) {
+    const a0 = s / staves * TAU, a1 = (s + 1) / staves * TAU, base = pos.length / 3;
+    const h1 = Math.sin((_stv++) * 91.17) * 43758.5453, rnd = h1 - Math.floor(h1);
+    const ou = rnd * 13, ov = (rnd * 7.3) % 3, tone = 1 + (rnd - 0.5) * 2 * toneVar;
+    for (let j = 0; j < rows; j++) {
+      for (let c = 0; c <= cols; c++) {
+        const t = c / cols, a = a0 + (a1 - a0) * t, edge = (c === 0 || c === cols) ? groove : 0;
+        const r = Math.max(0, profile[j][0] - edge);
+        pos.push(Math.cos(a) * r, profile[j][1], Math.sin(a) * r);
+        uv.push(ou + a * rmax, ov + cum[j]);
+        col.push(tone * (edge ? 0.72 : 1), tone * (edge ? 0.70 : 1), tone * (edge ? 0.68 : 1), edge ? 0.62 : 0.5);
+      }
+    }
+    for (let j = 0; j < rows - 1; j++) for (let c = 0; c < cols; c++) {
+      const a = base + j * (cols + 1) + c, b = a + cols + 1;
+      idx.push(a, b, a + 1, a + 1, b, b + 1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 4));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  g.userData.muv = true;
+  return g;
+}
+
+// A staved timber cask/barrel: staved body, inset heads, iron hoops. Files itself.
 // Hoop tori KEEP radial 4 — square-section wrought-iron hoop stock is period-correct.
 export function barrel(P, woodMat, ironMat, x, y, z, r = 0.42, h = 1.0, ry = 0) {
   const b = h / 2;
-  P.add(xf(lathe([[r * 0.80, -b], [r * 0.97, -b * 0.55], [r, 0], [r * 0.97, b * 0.55],
-    [r * 0.80, b], [0, b]], 20), x, y, z, 0, ry, 0), woodMat);
-  P.add(xf(cyl(r * 0.80, r * 0.80, 0.02, 20), x, y - b + 0.01, z), woodMat);
+  // the profile turns in over each chime and down its inside face, so looking into the
+  // lip above the head shows stave ends, not the sky through a back-face
+  P.add(xf(stavedLathe([[r * 0.72, -b + 0.03], [r * 0.80, -b], [r * 0.90, -b * 0.78], [r * 0.97, -b * 0.55], [r, 0],
+    [r * 0.97, b * 0.55], [r * 0.90, b * 0.78], [r * 0.80, b], [r * 0.72, b - 0.03]], Math.max(14, Math.round(r * 46))),
+    x, y, z, 0, ry, 0), woodMat);
+  // heads let in below the chime, the way a cooper crozes them: a lip of stave-end
+  // stands proud all round, which is what makes a barrel top read as a barrel
+  for (const sy of [-1, 1]) P.add(xf(cyl(r * 0.78, r * 0.78, 0.02, 24), x, y + sy * (b - 0.025), z), woodMat);
   for (const hy of [-b * 0.78, -b * 0.30, b * 0.30, b * 0.78]) {
     const rr = r * (1 - Math.abs(hy / b) * 0.20) + 0.012;
-    P.add(xf(tor(rr, 0.026, 4, 20), x, y + hy, z, Math.PI / 2), ironMat);
+    P.add(rustHead(xf(tor(rr, 0.026, 4, 28), x, y + hy, z, Math.PI / 2), x, y + hy, z, 0.8), ironMat);
   }
 }
 

@@ -19,7 +19,8 @@ import { scene, camera, envTex, renderer } from '../core.js';
 import { SURFACE_Y } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { V3 } from '../lib/math.js';
-import { makeGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftSetsBench } from '../lib/textures.js';
+import { makeGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftRopeSet, raftCanvasSet,
+  raftLeatherSet, raftSetsBench } from '../lib/textures.js';
 import { survival } from './survival.js';
 import { surfaceHeightAt, stormLevel, onSkyEnv } from '../world/water.js';
 import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash, DECK_SENTINEL } from './raft/kit.js';
@@ -101,7 +102,7 @@ const SURF_FS = `#include <normal_fragment_maps>
   #ifdef RAFT_DECK
     vec4 rdk = texture2D( raftDeckMap, vRaftDeck );
     diffuseColor.rgb *= mix( 0.38, 1.0, rdk.r );
-    diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.12, 0.065, 0.035 ), rdk.g * 0.85 );
+    diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.62, 0.40, 0.26 ), rdk.g );
     diffuseColor.rgb *= ( 1.0 - 0.42 * rdk.b ) * ( 1.0 + 0.14 * rdk.a );
     roughnessFactor *= ( 1.0 - 0.58 * rdk.b ) * ( 1.0 - 0.34 * rdk.a );
     roughnessFactor = mix( roughnessFactor, 1.0, rdk.g * 0.5 );
@@ -135,7 +136,9 @@ function palette() {
   // near-white grain), so the palette hues were lifted to keep each material's mean.
   const set = (S, ns) => ({ map: S.map, roughnessMap: S.rough, normalMap: S.nrm, normalScale: new THREE.Vector2(ns, ns) });
   const WS = raftWoodSet(), IS = raftIronSet(), BS = raftBrassSet(), PS = raftPaintSet();
+  const RS = raftRopeSet(), CS = raftCanvasSet(), LS = raftLeatherSet();
   const metric = m => { m.userData.uv = 'metric'; return m; };
+  const strand = m => { m.userData.uv = 'strand'; return m; };
   const brassy = m => { m.userData.brass = true; return m; };
   const rusty = (m, k) => { m.userData.rustK = k; return m; };
   // ENGINE ENAMEL: the one painted surface on the boat, so it is the one clear-coat.
@@ -150,12 +153,13 @@ function palette() {
     wood: metric(M(0x8f7658, { roughness: 0.94, metalness: 0.02, envMapIntensity: 0.22, ...set(WS, 1.0) })),
     wood2: metric(M(0xa89878, { roughness: 0.96, metalness: 0.00, envMapIntensity: 0.16, ...set(WS, 1.0) })),
     iron: rusty(metric(M(0x60656a, { roughness: 1.0, metalness: 0.80, envMapIntensity: 0.50, ...set(IS, 1.0) })), 0.3),
-    rust: rusty(metric(M(0xc08858, { roughness: 1.0, metalness: 0.25, envMapIntensity: 0.20, ...set(IS, 1.2) })), 0.6),
+    rust: rusty(metric(M(0x9c6c4a, { roughness: 1.0, metalness: 0.25, envMapIntensity: 0.20, ...set(IS, 1.2) })), 0.6),
     brass: brassy(metric(M(0xa8862f, { roughness: 0.62, metalness: 0.92, envMapIntensity: 0.75, ...set(BS, 1.0) }))),
     lead: metric(M(0x9ea3a8, { roughness: 1.0, metalness: 0.50, envMapIntensity: 0.28, ...set(IS, 0.8) })),
-    rope: M(0x9a8862, { roughness: 0.97, metalness: 0.00, envMapIntensity: 0.10 }),
-    canvas: M(0x7c7360, { roughness: 0.98, metalness: 0.00, envMapIntensity: 0.10 }),
-    leather: M(0x4e3620, { roughness: 0.80, metalness: 0.04, envMapIntensity: 0.16 }),
+    // laid rope: one texture tile per lay, wrapped by the kit's 'strand' mapping
+    rope: strand(M(0xae9a72, { roughness: 1.0, metalness: 0.00, envMapIntensity: 0.10, ...set(RS, 1.0) })),
+    canvas: metric(M(0x8a806a, { roughness: 1.0, metalness: 0.00, envMapIntensity: 0.10, ...set(CS, 1.0) })),
+    leather: metric(M(0x5c432c, { roughness: 1.0, metalness: 0.04, envMapIntensity: 0.18, ...set(LS, 1.0) })),
     paint: metric(paint),
     // Matched to tether.js's own hose material (0x33383b / 0.5) on purpose: the wound
     // reel, the lead over the sheave and the deployed umbilical have to read as ONE
@@ -243,7 +247,7 @@ function bakeDeckMap(group) {
     }
     return a;
   };
-  const aoN = blur(occ, 2), aoF = blur(occ, 7), stain = blur(low, 2), occS = blur(occ, 1, 1);
+  const aoN = blur(occ, 2), aoF = blur(occ, 7), stain = blur(low, 1), occS = blur(occ, 1, 1);
   // cheap smooth value noise over a 64^2 lattice table (hashed once)
   const LAT = new Float32Array(64 * 64);
   for (let k = 0; k < LAT.length; k++) { const h = Math.sin(k * 12.9898 + 4.1) * 43758.5453; LAT[k] = h - Math.floor(h); }
@@ -295,7 +299,7 @@ function bakeDeckMap(group) {
     }
     wet = Math.max(wet, toRail * 0.35 * n2, bit * 0.8);    // bitumen reads glossy-black
     d[o] = Math.max(0, Math.min(1, g)) * 255;
-    d[o + 1] = Math.min(1, stain[k] * 2.4) * (1 - bit) * 255;
+    d[o + 1] = Math.min(1, stain[k] * 1.6) * (1 - bit) * 255;
     d[o + 2] = Math.min(1, wet) * 255;
     d[o + 3] = Math.min(1, pol) * 255;
   }

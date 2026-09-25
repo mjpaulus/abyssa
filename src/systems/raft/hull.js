@@ -4,6 +4,7 @@
 // bare beams and four smooth drums that used to stand in for a boat — this is the piece
 // that has to convince the player they are standing on something, not a platform.
 import * as THREE from 'three';
+import { fbm } from '../../lib/math.js';
 import { Part, xf, box, cyl, tor, lathe, weather, boltLine, rope, lash,
   chamferedPlank, profilePrism, rivetRing, state } from './kit.js';
 
@@ -271,7 +272,7 @@ function buildDrums(P, rust, ropeMat) {
     [0.82, HL - 0.01], [0.70, HL - 0.035], [0.42, HL - 0.085], [0.00, HL - 0.10]       // far head
   ];
   for (const [x, z] of [[-3.6, -3.2], [3.6, -3.2], [-3.6, 3.2], [3.6, 3.2]]) {
-    P.add(W(lathe(drumProfile, 24), x, Y, z, 0, 0, Math.PI / 2, 1, wet), rust);
+    P.add(W(lathe(drumProfile, 40), x, Y, z, 0, 0, Math.PI / 2, 1, wet), rust);
 
     for (const ox of [-1.05, 0, 1.05]) {
       P.add(W(tor(R + 0.02, 0.035, 5, 24), x + ox, Y, z, 0, Math.PI / 2, 0, 1, wet), rust);
@@ -280,6 +281,28 @@ function buildDrums(P, rust, ropeMat) {
     // cheap domes (5x3): a chime rivet is a glint at this range, not a boss
     for (const sx of [-1, 1])
       rivetRing(P, rust, 12, x + sx * (HL - 0.06), Y, z, 0.62, 0.026, 'x', 0.5, 5, 3);
+    // THE PAINTED BAND. Every drum carried its owner's colour once: a broad band between
+    // the rolling hoops, sun-bleached on top, chipped down to the rust, bleeding orange
+    // below where the swell works at it. Same rust bucket (the band is a lift of colour
+    // and state over the drum's own oxide texture), so it costs no draw call.
+    {
+      const bp = [];
+      for (let k = 0; k <= 20; k++) bp.push([R + 0.006 - (k === 0 || k === 20 ? 0.003 : 0), -0.34 + k * 0.034]);
+      const band = W(lathe(bp, 48), x + 0.52, Y, z, 0, 0, Math.PI / 2, 1, wet);
+      const hue = (x > 0) === (z > 0) ? [1.25, 1.45, 1.75] : [1.10, 0.95, 0.95];   // faded white / faded red
+      const bpos = band.attributes.position, bc = band.attributes.color;
+      for (let i = 0; i < bpos.count; i++) {
+        const vy = bpos.getY(i) - Y, vz = bpos.getZ(i) - z, vx = bpos.getX(i);
+        const up = vy / R;                                           // +1 on top, -1 underneath
+        const chip = fbm(vx * 3.1 + vz * 1.7 + 11, vy * 3.4 + vz * 1.5);
+        if (chip > 0.62 - Math.max(0, -up) * 0.25) continue;        // flaked off: the drum shows
+        const bleach = 0.85 + 0.25 * Math.max(0, up);
+        const k = Math.min(1, (0.62 - chip) * 6);
+        const m = [1 + (hue[0] * bleach - 1) * k, 1 + (hue[1] * bleach - 1) * k, 1 + (hue[2] * bleach - 1) * k];
+        bc.setXYZW(i, bc.getX(i) * m[0], bc.getY(i) * m[1], bc.getZ(i) * m[2], Math.min(0.98, bc.getW(i) * 0.9 + 0.12 * k));
+      }
+      P.add(band, rust);
+    }
     // bung plug, proud of the shell near one end
     P.add(W(cyl(0.09, 0.09, 0.06, 8), x + 1.15, Y + R, z, 0, 0, 0, 1, { rust: 0.5 }), rust);
     // rolled seam — a line of rivet heads down one side of the shell
