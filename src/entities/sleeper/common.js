@@ -245,12 +245,16 @@ export function wardTouch(L, i, g, player, ev) {
     if (!L.hinted) { L.hinted = true; ev.msg = ev.msg || (dark ? MSG_WARDS_DARK : MSG_WARDS_KEPT); }
     return false;
   }
+  lightWard(L, g, ev);
+  return true;
+}
+// Light a ward: the flash, the embers, the event the game rings a chime on.
+export function lightWard(L, g, ev) {
   g.lit = true; g.rev = 1; g.flashT = 0;
   L.flare = 1;
   burstEmbers(L, g.grp.position);
   ev.sigilLit = g.note;
   L.agitation = 1;
-  return true;
 }
 // The ward-lighting flash: ~1.5 s of extra light on the borrowed PointLight (and the
 // hide ring, for kinds with a uniform array to drive).

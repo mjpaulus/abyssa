@@ -325,6 +325,20 @@ addEventListener('keydown', e => {
     return;
   }
   // E near a wreck's relic: take the tool
+  if (e.code === 'KeyE' && state === 'play' && lev && lev.brood) {
+    // THE BROOD (zone 0's Brooder): take an egg — which wakes her — or set it back
+    const r = lev.brood.interact(player.pos);
+    if (r) {
+      if (r.took) {
+        chime(740, 2.2, 0.2, 'pickup');
+        if (!r.first) showMsg('ANOTHER EGG. SHE KNOWS.', 3);
+      } else if (r.returned) {
+        chime(494, 2.4, 0.2, 'ward');
+        showMsg(r.out ? (r.out === 1 ? 'ONE EGG STILL OUT OF THE NEST.' : r.out + ' EGGS STILL OUT OF THE NEST.') : 'THE CLUTCH IS WHOLE.', 3);
+      }
+      return;
+    }
+  }
   if (e.code === 'KeyE' && state === 'play') {
     // keepsakes first: at remote sites the relic berth is long empty — what is
     // left is the previous owner's small thing, and one line of them.
@@ -418,8 +432,9 @@ function enterZone(i) {
   physicsSwitchZone(i);  // no-op until the WASM world is up
   switchPredatorZone(i);
   setCalm(0);
-  showMsg(lev.name, 4, 0);   // colour, not instruction: it waits behind anything that matters
-  growl();
+  // colour, not instruction: it waits behind anything that matters. A dormant sleeper
+  // (the Brooder asleep as a ridge) is not announced — her name is the reveal.
+  if (!lev.dormant) { showMsg(lev.name, 4, 0); growl(); }
   pendingWards = i > 0;
   riftShutSaid = false;
   // The bowl's rim, for the rift-shut beat: the collar crest sits at 0.84 of the funnel
@@ -437,7 +452,7 @@ window.__lev = {
   fp(i = Math.max(0, zone)) {
     disposeLeviathan(lev); lev = null;
     let out;
-    try { out = sleeperFingerprint(i); }
+    try { out = sleeperFingerprint(i, { kind: 'serpent' }); }   // the serpent's regression anchor
     finally { if (zone >= 0) lev = makeZoneSleeper(zone); }
     return out;
   },
@@ -502,6 +517,8 @@ export function start() {
 const COUNT = ['NO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE'];
 function wardsLine() {
   const n = lev ? lev.sigils.length : 3;
+  // a dormant sleeper (the Brooder asleep as a ridge) is not described: finding her is the point
+  if (lev && lev.dormant) return `SOMETHING SLEEPS BY THE RIFT, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND IT. LIGHT THEM.`;
   return `${COUNT[n] || n} IRON WARDS RIDE ITS HIDE. LIGHT THEM AND IT STILLS.`;
 }
 let pendingWards = false;   // zones after the first say their count once the name has faded
@@ -1288,6 +1305,7 @@ function update(dt, t) {
 
   if (lev) {
     const ev = updateLeviathan(lev, dt, t, player);
+    if (ev.woke) { showMsg(lev.name, 5, 2); growl(); shake = 1; }
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
     if (ev.slam) {
@@ -1377,10 +1395,14 @@ function update(dt, t) {
       $craft.style.opacity = 1;
     }
   } else {
-    // Same order as the E handler: the keepsake (or his mark) first, then the relic.
-    const kp = nearKeepsake(player.pos);
-    const rel = kp ? null : nearRelic(player.pos);
-    if (kp) {
+    // Same order as the E handler: the brood, the keepsake (or his mark), the relic.
+    const bp = lev && lev.brood ? lev.brood.prompt(player.pos) : null;
+    const kp = bp ? null : nearKeepsake(player.pos);
+    const rel = kp || bp ? null : nearRelic(player.pos);
+    if (bp) {
+      $craft.textContent = bp;
+      $craft.style.opacity = 1;
+    } else if (kp) {
       $craft.textContent = kp.mark ? '[E] READ IT' : '[E] TAKE IT';
       $craft.style.opacity = 1;
     } else if (rel) {
@@ -1541,7 +1563,7 @@ function update(dt, t) {
   if (pev.lanternStolen) player.light = 0;
 
   let dread = 0;
-  if (lev) {
+  if (lev && !lev.dormant) {
     let near = Infinity;
     for (const s of lev.spine) { const d = s.distanceTo(player.pos); if (d < near) near = d; }
     dread = clamp(1 - near / (lev.size * 9), 0, 1);
@@ -1599,11 +1621,12 @@ function update(dt, t) {
 
   // wayfinding: raft always, the sleeper until calmed, the rift once open
   setBearing($bm.raft, raft.position.x, raft.position.y, raft.position.z, true);
-  setBearing($bm.lev, lev ? lev.head.x : 0, lev ? lev.head.y : 0, lev ? lev.head.z : 0, !!(lev && !lev.calmed));
+  const levShown = !!(lev && !lev.calmed && !lev.dormant);   // a sleeping ridge has no bearing
+  setBearing($bm.lev, lev ? lev.head.x : 0, lev ? lev.head.y : 0, lev ? lev.head.z : 0, levShown);
   const rp = zone >= 0 ? riftPos(zone) : null;
   setBearing($bm.rift, rp ? rp.x : 0, rp ? terrainH(rp.x, rp.z, zone) : 0, rp ? rp.z : 0, !!(rp && lev && lev.calmed));
   // the active target carries the bright tick: the sleeper until it stills, then the rift
-  $bm.lev.classList.toggle('active', !!(lev && !lev.calmed));
+  $bm.lev.classList.toggle('active', levShown);
   $bm.rift.classList.toggle('active', !!(rp && lev && lev.calmed));
   // low-air vignette breathes in once the tank drops below a third
   $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
