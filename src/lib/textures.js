@@ -593,7 +593,7 @@ export function raftIronSet() {
   return _rs.iron;
 }
 
-// BRASS. 512^2 over 0.30 m. Patinated brass is two surfaces fighting: a warm brown-green
+// BRASS. 256^2 over 0.30 m. Patinated brass is two surfaces fighting: a warm brown-green
 // tarnish that lives in every low spot, and bright metal wherever something rubs. The
 // texture carries the micro version (tarnish pooling in scratches and pores, dull
 // fingerprint whorls on the polish); the handled/crevice split is baked per vertex.
@@ -602,12 +602,12 @@ export function raftBrassSet() {
   const nz0 = pfbm(4, 4, 5, 7);
   const nz1 = pfbm(96, 3, 2, 13);
   const nz2 = pfbm(24, 24, 2, 19);
-  const S = 512, T = 0.30, n = S * S;
+  const S = 256, T = 0.30, n = S * S;
   const alb = new Float32Array(n * 3), rgh = new Float32Array(n), hgt = new Float32Array(n);
   const rr = seededRand(0xB2A55);
   const fp = new Float32Array(n);
-  for (let k = 0; k < 26; k++) {                        // fingerprints: concentric whorls
-    const cx = rr() * S, cy = rr() * S, rx = 9 + rr() * 8, ry = rx * (1.2 + rr() * 0.4), a = rr() * 3.14;
+  for (let k = 0; k < 7; k++) {                        // fingerprints: concentric whorls
+    const cx = rr() * S, cy = rr() * S, rx = 4.5 + rr() * 4, ry = rx * (1.2 + rr() * 0.4), a = rr() * 3.14;
     const ca = Math.cos(a), sa = Math.sin(a), R = Math.ceil(ry * 1.2);
     for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
       const qx = (dx * ca + dy * sa) / rx, qy = (-dx * sa + dy * ca) / ry, d = Math.sqrt(qx * qx + qy * qy);
@@ -633,17 +633,17 @@ export function raftBrassSet() {
   return _rs.brass;
 }
 
-// ENGINE ENAMEL over iron. 512^2 over 0.55 m. The albedo carries the colour (the
+// ENGINE ENAMEL over iron. 256^2 over 0.40 m. The albedo carries the colour (the
 // material is white): sun-faded engine green, chipped through a red-oxide primer ring to
 // dark iron, with a raised paint lip round every chip. `coat` is a separate mask
 // (clearcoatMap) that takes the clear-coat off the chips and thins it on the primer.
 export function raftPaintSet() {
   if (_rs.paint) return _rs.paint;
-  const nz0 = pfbm(14, 14, 4, 5);
+  const nz0 = pfbm(10, 10, 4, 5);
   const nz1 = pfbm(3, 24, 2, 9);
   const nz2 = pfbm(2, 2, 3, 15);
-  const nz3 = pfbm(48, 48, 2, 21);
-  const S = 512, T = 0.55, n = S * S;
+  const nz3 = pfbm(32, 32, 2, 21);
+  const S = 256, T = 0.40, n = S * S;
   const alb = new Float32Array(n * 3), rgh = new Float32Array(n), hgt = new Float32Array(n);
   const coat = new Uint8Array(n * 4);
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {

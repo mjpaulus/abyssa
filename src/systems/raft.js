@@ -15,7 +15,7 @@
 // ACROSS builders, so four files that each emit an iron bucket cost one iron draw call.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { scene, camera, envTex, renderer } from '../core.js';
+import { scene, camera, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { V3 } from '../lib/math.js';
@@ -180,49 +180,63 @@ function paintRaft(mats) {
 }
 
 // ---- THE DECK MAP ------------------------------------------------------------------
-// Baked once, after every builder has placed its gear: a top-down orthographic render of
-// the raft's own geometry between the plank tops and 0.7 above them tells us exactly
-// what stands on the deck and how tall it is. From that the deck gets what real planking
+// Baked once, after every builder has placed its gear: a top-down height field of the
+// raft's own triangles between the plank tops and 0.7 above them (rasterised on the CPU)
+// tells us exactly what stands on the deck and how tall it is. From that the deck gets what real planking
 // has and no texture can know: contact grime pooled at every foot and bulwark, iron
 // stain bleeding out of every nail and bolt, the wet the dive gap and the scuppers carry,
 // and the burnished trails boots have worn between the stations. RGBA = grime (1 clean),
-// iron stain, wet, polish. Costs one tiny render and a few box blurs at boot.
+// iron stain, wet, polish. Costs one raster pass and a few box blurs at boot.
 const DECK_TOP = 0.11;
 let deckReadMs = 0;
 function bakeDeckMap(group) {
   const N = DECK_N, E = DECK_EXT, px = (2 * E) / N;
-  const rt = new THREE.WebGLRenderTarget(N, N, { depthBuffer: true });
-  const cam = new THREE.OrthographicCamera(-E, E, E, -E, 0, 0.56);
-  cam.position.set(0, 0.70, 0); cam.up.set(0, 0, -1); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true);
-  const hm = new THREE.ShaderMaterial({
-    side: THREE.DoubleSide,
-    vertexShader: 'varying float vH; void main() { vec4 w = modelMatrix * vec4( position, 1.0 ); vH = w.y; gl_Position = projectionMatrix * viewMatrix * w; }',
-    fragmentShader: 'varying float vH; void main() { gl_FragColor = vec4( clamp( ( vH - 0.14 ) / 0.56, 0.0, 1.0 ), 1.0, 0.0, 1.0 ); }'
+  // TOP-DOWN HEIGHT FIELD, rasterised on the CPU from the raft's own triangles (no GPU
+  // round-trip, no extra program, no stall): for every texel, the highest surface between
+  // the plank tops (0.14) and 0.70 above the raft origin, exactly what an orthographic
+  // camera looking straight down through that slab would see first.
+  const hgt = new Float32Array(N * N).fill(-1);
+  const t0 = performance.now();
+  group.updateMatrixWorld(true);
+  const inv = new THREE.Matrix4().copy(group.matrixWorld).invert(), m = new THREE.Matrix4(), v = new THREE.Vector3();
+  const Y0 = 0.14, Y1 = 0.70;
+  group.traverse(o => {
+    if (!o.isMesh || o.isInstancedMesh || o.material.transparent || !o.geometry.attributes.position) return;
+    const g = o.geometry, P = g.attributes.position, n = P.count, I = g.index;
+    m.multiplyMatrices(inv, o.matrixWorld);
+    const X = new Float32Array(n), Yv = new Float32Array(n), Z = new Float32Array(n);
+    for (let i = 0; i < n; i++) { v.fromBufferAttribute(P, i).applyMatrix4(m); X[i] = v.x; Yv[i] = v.y; Z[i] = v.z; }
+    const tc = I ? I.count / 3 : n / 3;
+    for (let t = 0; t < tc; t++) {
+      const a = I ? I.getX(t * 3) : t * 3, b = I ? I.getX(t * 3 + 1) : t * 3 + 1, c = I ? I.getX(t * 3 + 2) : t * 3 + 2;
+      const ya = Yv[a], yb = Yv[b], yc = Yv[c];
+      if (Math.max(ya, yb, yc) < Y0 || Math.min(ya, yb, yc) > Y1) continue;
+      // texel space
+      const ax = (X[a] + E) / px - 0.5, az = (Z[a] + E) / px - 0.5, bx = (X[b] + E) / px - 0.5, bz = (Z[b] + E) / px - 0.5;
+      const cx = (X[c] + E) / px - 0.5, cz = (Z[c] + E) / px - 0.5;
+      const den = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+      if (Math.abs(den) < 1e-9) continue;                 // edge-on from above
+      const i0 = Math.max(0, Math.ceil(Math.min(ax, bx, cx))), i1 = Math.min(N - 1, Math.floor(Math.max(ax, bx, cx)));
+      const j0 = Math.max(0, Math.ceil(Math.min(az, bz, cz))), j1 = Math.min(N - 1, Math.floor(Math.max(az, bz, cz)));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const w0 = ((bz - cz) * (i - cx) + (cx - bx) * (j - cz)) / den;
+        const w1 = ((cz - az) * (i - cx) + (ax - cx) * (j - cz)) / den;
+        const w2 = 1 - w0 - w1;
+        if (w0 < -1e-4 || w1 < -1e-4 || w2 < -1e-4) continue;
+        const y = w0 * ya + w1 * yb + w2 * yc;
+        if (y < Y0 || y > Y1) continue;
+        const k = j * N + i;
+        if (y > hgt[k]) hgt[k] = y;
+      }
+    }
   });
-  const tmp = new THREE.Scene();
-  const p0 = group.position.clone(), r0 = group.rotation.clone(), parent = group.parent;
-  group.position.set(0, 0, 0); group.rotation.set(0, 0, 0);
-  tmp.add(group); tmp.overrideMaterial = hm;
-  const prevRT = renderer.getRenderTarget(), prevCC = renderer.getClearColor(new THREE.Color()), prevCA = renderer.getClearAlpha();
-  renderer.setRenderTarget(rt); renderer.setClearColor(0x000000, 0); renderer.clear();
-  renderer.render(tmp, cam);
-  const pix = new Uint8Array(N * N * 4);
-  const tr0 = performance.now();
-  renderer.readRenderTargetPixels(rt, 0, 0, N, N, pix);
-  deckReadMs = performance.now() - tr0;
-  renderer.setRenderTarget(prevRT); renderer.setClearColor(prevCC, prevCA);
-  tmp.remove(group); tmp.overrideMaterial = null;
-  if (parent) parent.add(group);
-  group.position.copy(p0); group.rotation.copy(r0);
-  hm.dispose(); rt.dispose();
+  deckReadMs = performance.now() - t0;
 
-  // occupancy / height, in DECK layout: texel (i, j) <-> x = -E + (i+.5)px, z = -E + (j+.5)px.
-  // The camera's screen-up is world -Z, so render row r is z = +E - (r+.5)px.
+  // occupancy, in DECK layout: texel (i, j) <-> x = -E + (i+.5)px, z = -E + (j+.5)px
   const occ = new Float32Array(N * N), low = new Float32Array(N * N);
-  for (let r = 0; r < N; r++) for (let i = 0; i < N; i++) {
-    const o = (r * N + i) * 4, j = N - 1 - r, k = j * N + i;
-    if (pix[o + 3] === 0) continue;
-    const h = pix[o] / 255 * 0.56;
+  for (let k = 0; k < N * N; k++) {
+    if (hgt[k] < 0) continue;
+    const h = hgt[k] - Y0;
     occ[k] = 0.55 + 0.45 * Math.min(1, h / 0.3);        // taller stands make deeper shade
     if (h < 0.06) low[k] = 1;                             // fittings flush with the planks
   }
@@ -326,7 +340,9 @@ function consolidate(g) {
     if (list.length < 2) { n++; continue; }
     const merged = mergeGeometries(list.map(o => o.geometry));
     if (!merged) { n += list.length; continue; }   // mismatched attributes: leave them be
-    for (const o of list) g.remove(o);
+    // the per-builder geometries are done with: the deck-map bake already uploaded them
+    // once, so free the GPU copies rather than leak a second raft's worth of buffers
+    for (const o of list) { g.remove(o); o.geometry.dispose(); }
     const m = new THREE.Mesh(merged, mat);
     m.castShadow = true; m.receiveShadow = true;
     g.add(m);
@@ -502,12 +518,13 @@ export function buildRaft() {
   window.__raft = raft;
   // Boot cost, kept: the surface maps are generated on the main thread at load, and the
   // polish pass budgets them (maps = palette + texture generation, total = whole build).
-  window.__raftBoot = { maps: +tMaps.toFixed(1), deck: +tDeck.toFixed(1), deckRead: +deckReadMs.toFixed(1), total: +(performance.now() - tb0).toFixed(1), calls };
+  window.__raftBoot = { maps: +tMaps.toFixed(1), deck: +tDeck.toFixed(1), deckRaster: +deckReadMs.toFixed(1), total: +(performance.now() - tb0).toFixed(1), calls };
   // DEV bench: cold regeneration of the surface sets + a re-bake of the deck map, timed
   // warm (boot-time numbers above swing 2x with whatever else the main thread is doing)
   window.__raftBench = () => {
     const t0 = performance.now(); bakeDeckMap(raft);
-    return { sets: raftSetsBench(), deck: +(performance.now() - t0).toFixed(1), deckRead: +deckReadMs.toFixed(1) };
+    const deck = +(performance.now() - t0).toFixed(1);
+    return { deck, deckRaster: +deckReadMs.toFixed(1), sets: raftSetsBench() };
   };
   scene.add(raft);
   raft.updateMatrixWorld(true);
