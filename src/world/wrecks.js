@@ -47,8 +47,8 @@ import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { rng, clamp, fbm, V3 } from '../lib/math.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand } from '../lib/textures.js';
-import { terrainH, terrainNormal } from './terrain.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, ironPlateSet } from '../lib/textures.js';
+import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
 import { player } from '../player.js';
 import { siteParams, currentSiteIndex } from './site.js';
 import { keepsakeKind, keepsakeGeo } from '../lib/keepsakes.js';
@@ -132,38 +132,7 @@ function roughFrom(hd, S, lo, hi) {
   return canvas;
 }
 
-// Sheet iron: blistered rust, weld seams, streaks running with gravity (v).
-function ironMaps(S = 256) {
-  const hc = noiseCanvas(S, 5, 1.15);
-  const h = hc.getContext('2d');
-  for (let i = 0; i < 150; i++) {           // rust blisters
-    const x = Math.random() * S, y = Math.random() * S, r = rng(3, 16);
-    const gr = h.createRadialGradient(x, y, 0, x, y, r);
-    gr.addColorStop(0, 'rgba(255,255,255,.42)'); gr.addColorStop(1, 'rgba(128,128,128,0)');
-    h.fillStyle = gr; h.beginPath(); h.arc(x, y, r, 0, TAU); h.fill();
-  }
-  for (let i = 0; i < 70; i++) {            // vertical bleed streaks
-    const x = Math.random() * S, y = Math.random() * S, l = rng(20, 110);
-    h.strokeStyle = 'rgba(255,255,255,.16)';
-    h.lineWidth = rng(1, 5);
-    h.beginPath(); h.moveTo(x, y); h.lineTo(x + rng(-4, 4), y + l); h.stroke();
-  }
-  for (let i = 0; i < 90; i++) {            // pitting
-    const x = Math.random() * S, y = Math.random() * S, r = rng(1, 4);
-    h.fillStyle = 'rgba(0,0,0,.5)';
-    h.beginPath(); h.arc(x, y, r, 0, TAU); h.fill();
-  }
-  const hd = h.getImageData(0, 0, S, S).data;
-  const { canvas, ctx } = canvas2d(S);
-  shade(ctx, S, hd, [0.155, 0.170, 0.190], [0.86, 0.50, 0.24], 1.0);
-  return {
-    map: toTexture(canvas, 4, true),
-    normalMap: toTexture(normalFromHeight(hc, 2.2), 4),
-    // wet-metal / dry-scab contrast: worn lows drop to ~0.55x of the 0.86 scalar,
-    // rust blisters stay full rough
-    roughnessMap: toTexture(roughFrom(hd, S, 0.55, 1.0), 4)
-  };
-}
+// Sheet iron is lib/textures.js ironPlateSet() now (riveted plating, rust sources).
 
 // Tarnished brass: fine turning marks with verdigris settled into the lows.
 function brassMaps(S = 128) {
@@ -188,19 +157,116 @@ function brassMaps(S = 128) {
 // ---------------------------------------------------------------- materials --
 // Silt settles on upward faces and downward faces fall away — the same trick props.js
 // and flora.js use, so wrecks sit in the identical lantern-lit material family.
-const F_SILT = `
-float up = inverseTransformDirection(normal, viewMatrix).y;
+//
+// POLISH-WORLD (2026-09): the one wreck shader now also carries
+//   * GROWTH — an encrusting albedo mask (pale calcareous crust going to a brown-green
+//     film) on every surface facing the light, plus a per-vertex band (aGrow) at each
+//     hull's old waterline. Broken by two octaves of world-space value noise so it
+//     reads as colonies, not paint. The barnacle geometry (buildGrowth) is scattered by
+//     the same two terms, so the shells sit where the crust is.
+//   * RUST STREAKS (iron only) — the plate set's alpha is a rust SOURCE mask (rivet
+//     blooms, seam weep). The fragment finds world DOWN in the map's uv space from the
+//     screen derivatives of world position and uv (a cotangent frame, no tangents
+//     needed), then gathers that mask up-slope in six taps: every streak runs down the
+//     hull along real gravity AFTER the wreck's roll and settle tilt, however the plate
+//     happens to be mapped. textureGrad with the pre-branch derivatives, so there is no
+//     implicit-derivative hazard anywhere in the gather.
+//   * interior faces of the double-sided skins go dark (a hull is a cave).
+// Geometric (non-perturbed) normal drives silt and growth: dusting every up-facing pit
+// of a normal map turns iron to chalk (the flora rock lesson).
+const V_WRECK_HEAD = `
+attribute float aGrow;
+varying float vGrow; varying vec3 vWPosW;`;
+const V_WRECK_BODY = `
+vGrow = aGrow;
+vWPosW = (modelMatrix * vec4(transformed, 1.0)).xyz;`;
+const F_WRECK_HEAD = `
+uniform vec3 uSilt, uGrowA, uGrowB; uniform float uGrowK, uStreakK;
+varying float vGrow; varying vec3 vWPosW;
+float wkHash(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float wkNoise(vec3 x) {
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(wkHash(i), wkHash(i + vec3(1.0, 0.0, 0.0)), f.x), mix(wkHash(i + vec3(0.0, 1.0, 0.0)), wkHash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+             mix(mix(wkHash(i + vec3(0.0, 0.0, 1.0)), wkHash(i + vec3(1.0, 0.0, 1.0)), f.x), mix(wkHash(i + vec3(0.0, 1.0, 1.0)), wkHash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+}`;
+const F_WRECK = `
+vec3 wkN = normalize(inverseTransformDirection(nonPerturbedNormal, viewMatrix));
+float up = wkN.y;
+#ifdef WRECK_INNER
+  if (!gl_FrontFacing) diffuseColor.rgb *= 0.42;
+#endif
+#if defined( WRECK_STREAK ) && defined( USE_MAP )
+{
+  vec3 dpx = dFdx(vWPosW), dpy = dFdy(vWPosW);
+  vec2 dux = dFdx(vMapUv), duy = dFdy(vMapUv);
+  vec3 gN = cross(dpx, dpy);
+  vec3 r1 = cross(dpy, gN), r2 = cross(gN, dpx);
+  float det = dot(dpx, r1);
+  det = sign(det) * max(abs(det), 1e-14) + (det == 0.0 ? 1e-14 : 0.0);
+  vec3 gu = (r1 * dux.x + r2 * duy.x) / det;
+  vec3 gv = (r1 * dux.y + r2 * duy.y) / det;
+  // uv step per world unit of DESCENT (world down = -Y), projected onto the surface
+  vec2 dn = -vec2(gu.y, gv.y);
+  float L = length(dn);
+  dn *= min(1.0, 3.0 / max(L, 1e-5));
+  vec2 pr = vec2(-dn.y, dn.x) / max(length(dn), 1e-5);
+  float lx = dot(vMapUv, pr);
+  float lane = 0.5 + 0.5 * sin(lx * 173.0 + sin(lx * 41.0) * 2.3);
+  float st = 0.0;
+  for (int k = 1; k <= 6; k++) {
+    float fk = float(k);
+    st += textureGrad(map, vMapUv - dn * (0.17 * fk), dux, duy).a * (1.0 - fk / 7.5);
+  }
+  st = clamp(st * 0.40 * (0.35 + 0.65 * lane), 0.0, 1.0) * uStreakK * (1.0 - smoothstep(0.55, 0.95, abs(up)));
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.30, 0.74, 0.52) + vec3(0.030, 0.010, 0.003), st);
+  roughnessFactor = mix(roughnessFactor, 1.0, st * 0.5);
+}
+#endif
+#ifdef WRECK_GROW
+{
+  float gn1 = wkNoise(vWPosW * 0.9), gn2 = wkNoise(vWPosW * 3.7 + 7.1), gn3 = wkNoise(vWPosW * 13.0 + 3.3);
+  float upM = smoothstep(0.28, 0.85, up);
+  float gw = max(vGrow, upM * 0.9) * uGrowK;
+  // algal film: broad and soft, a TINT over the timber/iron, never a paint
+  float film = smoothstep(0.25, 0.65, gw * (0.5 + 0.8 * gn1));
+  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.55 + uGrowB * 0.45, film * 0.55);
+  // calcareous crust: colonies at a metre scale with speckled, eaten edges
+  float crust = smoothstep(0.56, 0.70, gw * (0.25 + 0.70 * gn2 + 0.25 * gn1) + (gn3 - 0.5) * 0.14);
+  vec3 cc = uGrowA * (0.70 + 0.55 * gn3);
+  diffuseColor.rgb = mix(diffuseColor.rgb, cc, crust * 0.9);
+  roughnessFactor = mix(roughnessFactor, 0.97, max(crust, film * 0.5));
+  metalnessFactor = mix(metalnessFactor, 0.0, max(crust, film * 0.7));
+}
+#endif
 diffuseColor.rgb = mix(diffuseColor.rgb, uSilt, smoothstep(0.30, 0.95, up) * 0.42);
 diffuseColor.rgb *= mix(0.40, 1.0, smoothstep(-0.85, 0.25, up));`;
 
 const SILT = [new THREE.Color(0x1d2a35), new THREE.Color(0x241e33), new THREE.Color(0x2b1e19)];
+// Growth crust per zone: calcareous white-grey going to a brown-green film in the
+// shallows; the deep zones get a paler, sparser mineral/bacterial crust.
+const GROW_A = [new THREE.Color(0x7a766a), new THREE.Color(0x77727e), new THREE.Color(0x807466)];
+const GROW_B = [new THREE.Color(0x2f3a24), new THREE.Color(0x3a3346), new THREE.Color(0x4a3a2e)];
+const GROW_K = [1.0, 0.7, 0.55];
 
-function siltify(m, zi, sway) {
+// kind: 'wood' | 'iron' | 'brass' | 'rope' | 'glass' | 'grow'. The program key is the
+// KIND (never the zone): the three zones run identical source with different uniform
+// values, so one program per kind is shared by all three (flora's rock idiom).
+function siltify(m, zi, sway, kind = 'x', o = {}) {
+  m.defines = m.defines || {};
+  if (o.grow) m.defines.WRECK_GROW = 1;
+  if (o.streak) m.defines.WRECK_STREAK = 1;
+  if (o.inner) m.defines.WRECK_INNER = 1;
   m.onBeforeCompile = sh => {
     sh.uniforms.uSilt = { value: SILT[zi] };
+    sh.uniforms.uGrowA = { value: GROW_A[zi] };
+    sh.uniforms.uGrowB = { value: GROW_B[zi] };
+    sh.uniforms.uGrowK = { value: GROW_K[zi] * (o.growK ?? 1) };
+    sh.uniforms.uStreakK = { value: o.streakK ?? 1 };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>' + V_WRECK_HEAD);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uSilt;')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{' + F_SILT + '\n}');
+      .replace('#include <common>', '#include <common>' + F_WRECK_HEAD)
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{' + F_WRECK + '\n}');
     if (sway) {
       sh.uniforms.uTime = uni.uTime;
       sh.vertexShader = sh.vertexShader
@@ -212,8 +278,21 @@ function siltify(m, zi, sway) {
         transformed.x += sin(uTime * 0.55 + transformed.z * 0.7 + transformed.y) * w;
         transformed.z += cos(uTime * 0.41 + transformed.x * 0.6) * w * 0.8;`);
     }
+    // Just before projection, so vWPosW is the final (swayed) position.
+    sh.vertexShader = sh.vertexShader.replace('#include <project_vertex>', V_WRECK_BODY + '\n#include <project_vertex>');
   };
-  m.customProgramCacheKey = () => 'wreck|' + zi + '|' + (sway ? 1 : 0);
+  m.customProgramCacheKey = () => 'wreck|' + kind + '|' + (sway ? 1 : 0);
+  return m;
+}
+
+// The lit porthole glass/ember: emissive modulated by the vertex colour, so the grime
+// baked into the disc's vertices darkens the light itself, not only the surface.
+function litify(m) {
+  m.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
+      '#include <emissivemap_fragment>\n#ifdef USE_COLOR\n totalEmissiveRadiance *= vColor.rgb;\n#endif');
+  };
+  m.customProgramCacheKey = () => 'wreck|lit';
   return m;
 }
 
@@ -224,42 +303,56 @@ function siltify(m, zi, sway) {
 // instances outright means there is never a second material to key against).
 let MAPS = null;
 const PALETTES = new Map();
+// Plate repeat per zone: hull uvs run u*4 along, v*2 around, so this sets the tile to
+// roughly 2.5 u of hull per plate pair (trawler) and a tighter weave on the sphere.
+const PLATE_REP = [2.0, 2.5, 3.2];
+function plateMaps(zi) {
+  const P = ironPlateSet();
+  const rep = t => { const c = t.clone(); c.repeat.set(PLATE_REP[zi], PLATE_REP[zi]); c.needsUpdate = true; return c; };
+  return { map: rep(P.map), normalMap: rep(P.nrm), roughnessMap: rep(P.pack) };
+}
 function palette(zi) {
   if (PALETTES.has(zi)) return PALETTES.get(zi);
-  if (!MAPS) MAPS = { wood: woodMaps(), iron: ironMaps(), brass: brassMaps() };
+  if (!MAPS) MAPS = { wood: woodMaps(), brass: brassMaps() };
   const std = o => new THREE.MeshStandardMaterial(o);
   const P = {
     wood: siltify(std({
       color: zi === 0 ? 0xffffff : 0xd8cec0, roughness: 0.96, metalness: 0.02,
       vertexColors: true, side: THREE.DoubleSide, ...MAPS.wood
-    }), zi),
+    }), zi, false, 'wood', { grow: true, inner: true }),
     iron: siltify(std({
-      color: zi === 2 ? 0xe8ddd2 : 0xffffff, roughness: 0.86, metalness: 0.30,
+      color: zi === 2 ? 0xf2e6da : 0xffffff, roughness: 0.92, metalness: 0.34,
       vertexColors: true, side: THREE.DoubleSide, envMap: envTex, envMapIntensity: 0.18,
-      ...MAPS.iron
-    }), zi),
+      normalScale: new THREE.Vector2(0.95, 0.95),
+      ...plateMaps(zi)
+    }), zi, false, 'iron', { grow: true, streak: true, inner: true }),
     brass: siltify(std({
       color: 0xfff0d0, roughness: 0.42, metalness: 0.88, vertexColors: true,
       envMap: envTex, envMapIntensity: 0.9, ...MAPS.brass
-    }), zi),
+    }), zi, false, 'brass', { grow: true, growK: 0.45 }),
     rope: siltify(std({
       color: 0xb4a888, roughness: 1.0, metalness: 0.0, vertexColors: true
-    }), zi, true),
+    }), zi, true, 'rope', { grow: true, growK: 0.6 }),
     glass: siltify(std({
-      color: 0x9fd8e8, roughness: 0.14, metalness: 0.1, vertexColors: true,
-      emissive: 0x2a5a68, emissiveIntensity: 0.6, transparent: true, opacity: 0.55,
+      // dark, grimed glass: a faint cold sheen, not a lit blue disc
+      color: 0x6f8a90, roughness: 0.18, metalness: 0.1, vertexColors: true,
+      emissive: 0x1c3a44, emissiveIntensity: 0.14, transparent: true, opacity: 0.62,
       depthWrite: false,   // transparent glass must not occlude what sorts behind it
       envMap: envTex, envMapIntensity: 0.7
-    }), zi),
-    lit: new THREE.MeshStandardMaterial({
+    }), zi, false, 'glass'),
+    // The barnacle shells and crust knobs (buildGrowth): matte calcite, vertex-coloured.
+    grow: siltify(std({
+      color: 0xffffff, roughness: 0.93, metalness: 0.0, vertexColors: true
+    }), zi, false, 'grow'),
+    lit: litify(new THREE.MeshStandardMaterial({
       color: 0x2a2418, roughness: 0.3, metalness: 0.2, vertexColors: true,
       emissive: 0xffbe6a, emissiveIntensity: 1.5
-    })
+    }))
   };
-  for (const k of ['wood', 'iron', 'brass', 'rope', 'glass', 'lit']) P[k].userData.persist = true;
+  for (const k of ['wood', 'iron', 'brass', 'rope', 'glass', 'grow', 'lit']) P[k].userData.persist = true;
   // PAINT LAW (lib/paint.js): timber, iron and rope go matte with the dial; brass, the
   // glass and the lit lamps are authored hero surfaces and keep their sharpness.
-  for (const k of ['wood', 'iron', 'rope']) registerPaint(P[k]);
+  for (const k of ['wood', 'iron', 'rope', 'grow']) registerPaint(P[k]);
   for (const k of ['brass', 'glass', 'lit']) registerPaint(P[k], { hero: true });
   PALETTES.set(zi, P);
   return P;
@@ -285,6 +378,8 @@ function Part(node) {
             g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
           if (!g.attributes.uv)
             g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+          if (!g.attributes.aGrow)
+            g.setAttribute('aGrow', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1));
           if (g.index === null) g.setIndex([...Array(g.attributes.position.count).keys()]);
         }
         const m = new THREE.Mesh(list.length > 1 ? mergeGeometries(list, false) : list[0], mat);
@@ -315,9 +410,52 @@ function grime(geo, tone = 1, freq = 0.5, floorY = -99) {
   return geo;
 }
 
+// Planking read at range: every strake gets its own tone and is cut into planks of
+// random length (a darker butt joint and a tone step at each), the lap VALLEY (where
+// one strake tucks under the next) is darkened as cavity and the proud lap edge is
+// worn lighter. Written over grime()'s colours on a grid() skin (vertex order i*(nv+1)+j).
+function plankTone(geo, nu, nv, STR, rnd) {
+  const col = geo.attributes.color.array;
+  const butts = [];
+  for (let k = 0; k < STR; k++) {
+    const b = [0]; let u = 0;
+    while (u < 1) { u += 0.18 + rnd() * 0.30; b.push(u); }
+    butts.push({ b, tones: b.map(() => 0.78 + rnd() * 0.42) });
+  }
+  for (let i = 0; i <= nu; i++) for (let j = 0; j <= nv; j++) {
+    const u = i / nu, v = j / nv, sv = v * STR, k = Math.min(STR - 1, Math.floor(sv)), f = sv - k;
+    const P = butts[k];
+    let seg = 0; while (seg < P.b.length - 1 && u > P.b[seg + 1]) seg++;
+    const du = Math.min(Math.abs(u - P.b[seg]), Math.abs((P.b[seg + 1] ?? 9) - u));
+    let t = P.tones[seg];
+    t *= 1 - 0.45 * Math.exp(-du * du / 0.00003);                  // butt joint
+    const lap = f < 0.5 ? f * 2 : 2 - f * 2;                         // tri(v*STR)
+    t *= 0.62 + 0.38 * Math.min(1, lap / 0.35);                      // lap valley cavity
+    t *= 1 + 0.18 * Math.max(0, (lap - 0.85) / 0.15);                // worn proud edge
+    const o = (i * (nv + 1) + j) * 3;
+    col[o] *= t; col[o + 1] *= t; col[o + 2] *= t * 0.97;
+  }
+  return geo;
+}
+
+// The old waterline, as a per-vertex growth weight (aGrow) read by the wreck shader
+// and by buildGrowth: a band centred on local y = wl, plus a softer fouling skirt below
+// it (the part that was always wet). Must run in the hull's own frame, before any roll.
+function band(geo, wl, width = 0.3, below = 0.55) {
+  const pos = geo.attributes.position, n = pos.count, a = new Float32Array(n);
+  for (let i = 0; i < n; i++) {
+    const y = pos.getY(i), x = pos.getX(i), z = pos.getZ(i);
+    const d = (y - wl) / width;
+    const wob = 0.12 * Math.sin(x * 1.3 + z * 0.7);
+    a[i] = Math.min(1, Math.exp(-d * d) + below * clamp((wl - y) / 0.6 + wob, 0, 1));
+  }
+  geo.setAttribute('aGrow', new THREE.BufferAttribute(a, 1));
+  return geo;
+}
+
 // Parametric quad-grid surface. fn(u,v) -> [x,y,z]. This is what makes the hulls hulls:
 // one continuous skin with plank/strake ribbing folded into the radius.
-function grid(nu, nv, fn) {
+function grid(nu, nv, fn, hole = null) {
   const g = new THREE.BufferGeometry();
   const pos = new Float32Array((nu + 1) * (nv + 1) * 3);
   const uvs = new Float32Array((nu + 1) * (nv + 1) * 2);
@@ -330,6 +468,8 @@ function grid(nu, nv, fn) {
     k++;
   }
   for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+    // hole(u, v) at the quad centre: a stove-in plank run is simply not skinned
+    if (hole && hole((i + 0.5) / nu, (j + 0.5) / nv)) continue;
     const a = i * (nv + 1) + j, b = a + nv + 1;
     idx.push(a, b, a + 1, b, b + 1, a + 1);
   }
@@ -338,6 +478,17 @@ function grid(nu, nv, fn) {
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
+}
+
+// Matrix placing local +Y along `y` and local +Z as close to `z` as orthogonality
+// allows, origin at `o` (splinters, petals, shells: things that lie in a surface).
+const _bx = V3(), _by = V3(), _bz = V3();
+function basisAt(o, y, z) {
+  _by.copy(y).normalize();
+  _bz.copy(z).addScaledVector(_by, -_bz.copy(z).dot(_by)).normalize();
+  if (_bz.lengthSq() < 1e-8) _bz.set(0, 0, 1);
+  _bx.crossVectors(_by, _bz).normalize();
+  return new THREE.Matrix4().makeBasis(_bx, _by, _bz).setPosition(o);
 }
 
 // Triangle wave in [0,1] — the plank/strake seam profile.
@@ -369,11 +520,79 @@ function porthole(p, M, R, x, y, z, ry, lit) {
   const put = g => xf(g, x, y, z, 0, ry, 0);
   p.add(put(new THREE.TorusGeometry(R, R * 0.20, 6, 14)), M.brass);
   p.add(put(new THREE.CylinderGeometry(R * 1.05, R * 1.05, R * 0.3, 14, 1, true).rotateX(Math.PI / 2)), M.brass);
-  p.add(put(new THREE.CircleGeometry(R * 0.95, 14).translate(0, 0, 0.02)), lit ? M.lit : M.glass);
+  // The pane: a disc with grime baked into its vertex colours — silt settled in the
+  // lower lip, a crust of growth round the rim, a wiped-clear middle that is not quite
+  // clear. On the lit material the colour modulates the EMISSION (litify), so the
+  // grime dims the light itself.
+  const pane = new THREE.RingGeometry(0, R * 0.95, 24, 5).translate(0, 0, 0.02);
+  {
+    const pp = pane.attributes.position, col = new Float32Array(pp.count * 3);
+    for (let i = 0; i < pp.count; i++) {
+      const px = pp.getX(i) / R, py = pp.getY(i) / R, r = Math.hypot(px, py);
+      let g = 0.40 + 0.95 * Math.pow(fbm(px * 4.3 + x, py * 4.3 + z), 1.6) + 0.25 * fbm(px * 11 + 7, py * 11) - 0.55 * Math.pow(r, 3.0);
+      g -= 0.35 * clamp(-py - 0.25, 0, 1) * (0.6 + 0.4 * fbm(px * 7 + 3, 1.3));   // silt in the lower lip
+      g = clamp(g, lit ? 0.18 : 0.30, 1.1);
+      col[i * 3] = g; col[i * 3 + 1] = g * 0.96; col[i * 3 + 2] = g * 0.88;
+    }
+    pane.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  }
+  p.add(put(pane), lit ? M.lit : M.glass);
+  // a proud glass dome over every pane, so the rim catches a highlight
+  const dome = new THREE.SphereGeometry(R * 0.97, 16, 5, 0, TAU, 0, 0.55).rotateX(Math.PI / 2);
+  dome.scale(1, 1, 0.38).translate(0, 0, 0.03);
+  p.add(put(dome), M.glass);
   for (let i = 0; i < 6; i++) {
     const a = i / 6 * TAU;
     p.add(put(new THREE.SphereGeometry(R * 0.13, 5, 4).translate(Math.cos(a) * R * 1.15, Math.sin(a) * R * 1.15, 0.03)), M.brass);
   }
+  if (lit) {
+    // LIGHT SPILL: a soft additive frustum out of the pane and down into the silt, and
+    // a small warm halo at the glass. Fog is applied by hand (the house rule for
+    // additive light: fade to black by the local density, never toward fog colour).
+    const Lc = R * 9, Rb = R * 3.4;
+    const cone = new THREE.CylinderGeometry(R * 0.82, Rb, Lc, 18, 5, true).translate(0, -Lc / 2, 0);
+    const cp = cone.attributes.position, at = new Float32Array(cp.count);
+    for (let i = 0; i < cp.count; i++) at[i] = -cp.getY(i) / Lc;
+    cone.setAttribute('aT', new THREE.BufferAttribute(at, 1));
+    cone.rotateX(-Math.PI / 2).rotateX(0.32).translate(0, 0, 0.04);
+    const spill = new THREE.Mesh(put(cone), spillMat());
+    spill.renderOrder = 3;
+    p.node.add(spill);
+    const halo = makeGlow(0xffb468, R * 5.5);
+    halo.material.opacity = 0.28;
+    _v.set(0, 0, R * 0.5).applyAxisAngle(UP, ry);
+    halo.position.set(x + _v.x, y + _v.y, z + _v.z);
+    p.node.add(halo);
+  }
+}
+
+// One additive program for every porthole spill (trawler + submersible).
+let SPILL_MAT = null;
+function spillMat() {
+  if (SPILL_MAT) return SPILL_MAT;
+  SPILL_MAT = new THREE.ShaderMaterial({
+    uniforms: { uFogD: uni.uFogD, uTime: uni.uTime, uCol: { value: new THREE.Color(0xffae62) } },
+    vertexShader: `attribute float aT; varying float vT; varying vec3 vN, vV; varying float vD;
+      void main(){
+        vT = aT;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        vN = normalize(normalMatrix * normal); vV = normalize(-mv.xyz); vD = -mv.z;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `uniform float uFogD, uTime; uniform vec3 uCol; varying float vT; varying vec3 vN, vV; varying float vD;
+      void main(){
+        // bright down the axis, gone at the grazing silhouette; falls off along the beam
+        float edge = pow(abs(dot(normalize(vN), normalize(vV))), 1.8);
+        float along = (1.0 - vT); along *= along;
+        float a = edge * along * smoothstep(0.0, 0.06, vT) * exp(-vD * uFogD) * (0.93 + 0.07 * sin(uTime * 1.3));
+        gl_FragColor = vec4(uCol * a * 0.20, 1.0);
+      }`,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide, fog: false
+  });
+  SPILL_MAT.forceSinglePass = true;
+  SPILL_MAT.userData.persist = true;
+  return SPILL_MAT;
 }
 
 // ------------------------------------------------------------------ dust -----
@@ -499,8 +718,103 @@ function skiff(M) {
   // 46x45, up from 46x30: 5 samples per lapstrake (tri(v*9)) so the clinker steps
   // survive smooth shading up close. Same hullFn — proportions (and the hand-baked
   // LOC colliders keyed to them) are untouched, this is tessellation only.
-  const hull = grime(grid(46, 45, hullFn), 1.0, 0.35, -2.4);
+  // STOVE-IN: a run of planks broken through on the port bilge (the side the
+  // capsize left facing the light). Each strake broke at its own length along the
+  // grain, so the hole is a staircase of plank ends, not a clean cut; every broken end
+  // is dressed with a fan of splinters (below). Colliders are spheres on the old hull
+  // and do not change — the hole is a window, not a door.
+  const sr = seededRand(0x5C1FF00D + currentSiteIndex() * 7919);
+  const HOLE_U = 0.43, HOLE_V = 0.27, HOLE_DV = 0.15, STR = 9;
+  const holeSpan = [];
+  for (let k = 0; k < STR; k++) {
+    const vc = (k + 0.5) / STR, dv = (vc - HOLE_V) / HOLE_DV;
+    const w = dv * dv < 1 ? Math.sqrt(1 - dv * dv) : 0;
+    // [lo, hi, skewLo, skewHi]: each plank end breaks on a slant along its width
+    holeSpan.push(w > 0 ? [HOLE_U - w * (0.04 + 0.09 * sr()), HOLE_U + w * (0.035 + 0.09 * sr()),
+      (sr() - 0.5) * 0.05, (sr() - 0.5) * 0.05] : null);
+  }
+  const holeLo = (k, vf) => holeSpan[k][0] + holeSpan[k][2] * (vf - 0.5) + 0.006 * Math.sin(vf * 19 + k);
+  const holeHi = (k, vf) => holeSpan[k][1] + holeSpan[k][3] * (vf - 0.5) - 0.006 * Math.sin(vf * 23 + k * 2);
+  const inHole = (u, v) => {
+    const k = Math.min(STR - 1, Math.floor(v * STR)), sp = holeSpan[k];
+    if (!sp) return false;
+    const vf = v * STR - k;
+    return u > holeLo(k, vf) && u < holeHi(k, vf);
+  };
+  // 92 stations along (was 46): the plank ends at the hole break on a fine enough
+  // stride that the staircase reads as broken timber, not as a missing panel.
+  const hull = plankTone(grime(grid(92, 45, hullFn, inHole), 1.0, 0.35, -2.4), 92, 45, STR, sr);
+  // old waterline: she floated about 45% of her depth down (hull-local, before the roll)
+  band(hull, -D * 0.46, 0.28, 0.6);
   p.add(hull, M.wood);
+
+  // hull frame helpers: point, grain tangent (along u) and outward normal at (u, v)
+  const hp = (u, v) => V3(...hullFn(u, v));
+  const frame = (u, v) => {
+    const o = hp(u, v), du = hp(Math.min(1, u + 0.004), v).sub(hp(Math.max(0, u - 0.004), v)).normalize();
+    const dv = hp(u, Math.min(1, v + 0.004)).sub(hp(u, Math.max(0, v - 0.004))).normalize();
+    const n = du.clone().cross(dv).normalize();
+    if (n.dot(V3(0, o.y, o.z)) < 0) n.negate();          // outward, away from the keel line
+    return { o, du, dv, n };
+  };
+  // SPLINTER FANS: at both broken ends of every holed strake, 3-5 flat slivers along
+  // the grain, jutting into the hole and bent inward where the blow drove them.
+  {
+    const sliver = new THREE.ConeGeometry(1, 1, 3, 1).translate(0, 0.5, 0);
+    for (let k = 0; k < STR; k++) {
+      const sp = holeSpan[k];
+      if (!sp) continue;
+      for (const end of [0, 1]) {
+        const dir = end === 0 ? 1 : -1;
+        const nS = 4 + ((sr() * 3) | 0);
+        for (let q = 0; q < nS; q++) {
+          const vf = 0.10 + 0.80 * (q + sr() * 0.6) / nS, v = (k + vf) / STR;
+          const u0 = end === 0 ? holeLo(k, vf) : holeHi(k, vf);
+          const f = frame(u0, v);
+          const len = 0.25 + sr() * 0.85, wid = 0.04 + sr() * 0.06, bend = 0.25 + sr() * 0.9;
+          // grain direction into the hole, pitched inward (toward -n) by the bend
+          const d = f.du.clone().multiplyScalar(dir).multiplyScalar(Math.cos(bend)).addScaledVector(f.n, -Math.sin(bend)).normalize();
+          const g = sliver.clone();
+          g.scale(wid, len, wid * 0.28);
+          // basis: Y along the sliver, Z (its thin axis) along the plank normal, so the
+          // sliver lies flat in the plank's own plane
+          g.applyMatrix4(basisAt(f.o.clone().addScaledVector(f.n, -0.03), d, f.n));
+          p.add(grime(g, 0.75 + sr() * 0.3, 0.9, -2.4), M.wood);
+        }
+      }
+      // a torn stub of the strake's lap edge hanging into the hole
+      const f = frame((sp[0] + sp[1]) * 0.5, (k + 0.95) / STR);
+      if (sr() < 0.6) {
+        const g = new THREE.BoxGeometry(0.05, (sp[1] - sp[0]) * L * (0.25 + sr() * 0.3), 0.012);
+        g.applyMatrix4(basisAt(f.o, f.du.clone().addScaledVector(f.n, -0.6).normalize(), f.n));
+        p.add(grime(g, 0.7, 0.9, -2.4), M.wood);
+      }
+    }
+    sliver.dispose();
+  }
+  { const f = frame(HOLE_U, HOLE_V); grp.userData.hole = { o: f.o, n: f.n }; }
+  // CLINKER RIVETS: copper clench nails down every lap, the detail that says 'built',
+  // not 'moulded'. Skipped inside the hole.
+  {
+    const nail = new THREE.OctahedronGeometry(0.045, 0).scale(1, 1, 0.45);
+    for (let k = 1; k < STR; k++) {
+      const v = (k - 0.06) / STR;
+      for (let u = 0.035; u < 0.975; u += 0.021) {
+        if (inHole(u, v) || inHole(u, v + 0.5 / STR) || inHole(u, v - 0.5 / STR)) continue;
+        const f = frame(u, v);
+        const g = nail.clone();
+        {   // verdigrised copper: dull green-brown, never bright brass
+          const t = 0.30 + 0.16 * sr(), c = new Float32Array(g.attributes.position.count * 3);
+          for (let i = 0; i < c.length; i += 3) { c[i] = t * 0.85; c[i + 1] = t * 1.05; c[i + 2] = t * 0.80; }
+          g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+        }
+        _q.setFromUnitVectors(V3(0, 0, 1), f.n);
+        g.applyMatrix4(new THREE.Matrix4().compose(f.o.clone().addScaledVector(f.n, 0.012), _q, V3(1, 1, 1)));
+        p.add(g, M.brass);
+      }
+    }
+    nail.dispose();
+  }
 
   // frames (ribs) showing through the open, upturned belly
   for (let i = 1; i < 9; i++) {
@@ -586,8 +900,11 @@ function skiff(M) {
   p.bake();
 
   // ---- the trawl net, still made fast to her, draped off the high gunwale ----
-  // Every strand is a real catenary, and the rope material sways them in the vertex
-  // shader by how far each vertex sagged, so the mesh drifts without any CPU cost.
+  // A REAL net: diamond mesh (the bars run on the bias, never a square grid), a knot at
+  // every crossing, cork floats on the head rope and lead sinkers on the foot rope, a
+  // torn hole with frayed bar ends hanging loose. The sheet is a parametric surface
+  // between the head rope and the foot rope with the catenary belly the old strands
+  // had; the rope material still sways it in the vertex shader.
   const net = new THREE.Group();
   {
     const nn = Part(net);
@@ -597,24 +914,94 @@ function skiff(M) {
       top.push(V3(-5.4 + u * 11.4, 4.55 + Math.sin(u * 3.1) * 0.25, 1.35));
       bot.push(V3(-6.6 + u * 13.6, 0.25 + fbm(u * 4, 1.7) * 0.5, 6.4 + Math.sin(u * 2.2) * 0.9));
     }
-    for (let i = 0; i < N; i++) nn.add(strand(top[i], bot[i], 0.95, 0.030, 10), M.rope);
-    for (let r = 1; r <= 9; r++) {          // cross courses
-      const t = r / 10;
-      const row = top.map((a, i) => V3(
-        a.x + (bot[i].x - a.x) * t, a.y + (bot[i].y - a.y) * t - 0.95 * Math.sin(Math.PI * t), a.z + (bot[i].z - a.z) * t));
-      for (let i = 0; i < N - 1; i++) nn.add(strand(row[i], row[i + 1], 0.07, 0.026, 3), M.rope);
+    const lerpArr = (arr, u) => {
+      const f = clamp(u, 0, 1) * (arr.length - 1), i = Math.min(arr.length - 2, Math.floor(f)), t = f - i;
+      return arr[i].clone().lerp(arr[i + 1], t);
+    };
+    // sheet(u, t): u across (0..1), t down from head rope (0) to foot rope (1)
+    const sheet = (u, t) => {
+      const a = lerpArr(top, u), b = lerpArr(bot, u);
+      const p = a.lerp(b, t);
+      p.y -= 0.95 * Math.sin(Math.PI * t) + 0.18 * Math.sin(u * 17.0 + t * 5.0) * Math.sin(Math.PI * t);
+      p.z += 0.22 * Math.sin(u * 9.0 + 1.3) * Math.sin(Math.PI * t);    // billow
+      return p;
+    };
+    const NU = 30, NT = 14;
+    // the tear: an elliptical run of meshes missing, low on the sheet
+    const torn = (u, t) => ((u - 0.63) / 0.10) ** 2 + ((t - 0.62) / 0.16) ** 2 < 1;
+    const nodeOk = (i, j) => !torn(i / NU, j / NT);
+    const knot = new THREE.IcosahedronGeometry(0.052, 0);
+    const bar = (A, B, sag, frayed) => {
+      if (frayed) {             // a snapped bar: half its length, hanging slack
+        const mid = A.clone().lerp(B, 0.45);
+        mid.y -= 0.18 + 0.1 * Math.sin(A.x * 7.1);
+        nn.add(grime(strand(A, mid, 0.04, 0.020, 3), 0.5, 1.6, -1), M.rope);
+      } else nn.add(grime(strand(A, B, sag, 0.022, 3), 0.55, 1.6, -1), M.rope);
+    };
+    for (let i = 0; i <= NU; i++) for (let j = 0; j <= NT; j++) {
+      if ((i + j) & 1) continue;                        // diamond lattice
+      const ok = nodeOk(i, j);
+      const P0 = sheet(i / NU, j / NT);
+      if (ok && j > 0 && j < NT) nn.add(grime(xf(knot.clone(), P0.x, P0.y, P0.z), 0.45, 1.6, -1), M.rope);
+      for (const dj of [-1, 1]) {
+        const i2 = i + 1, j2 = j + dj;
+        if (i2 > NU || j2 < 0 || j2 > NT) continue;
+        const ok2 = nodeOk(i2, j2);
+        if (!ok && !ok2) continue;
+        const P1 = sheet(i2 / NU, j2 / NT);
+        if (ok && ok2) bar(P0, P1, 0.035, false);
+        else if (ok) bar(P0, P1, 0, true);
+        else bar(P1, P0, 0, true);
+      }
     }
-    // head rope with its cork floats, still trying to lift
-    for (let i = 0; i < N - 1; i++) nn.add(strand(top[i], top[i + 1], 0.10, 0.055, 4), M.rope);
+    knot.dispose();
+    // head rope (with its cork floats, still trying to lift) and foot rope (with leads)
+    for (let i = 0; i < N - 1; i++) nn.add(grime(strand(top[i], top[i + 1], 0.10, 0.055, 4), 0.6, 1.2, -1), M.rope);
     for (let i = 0; i < N; i += 5)
       nn.add(xf(new THREE.CylinderGeometry(0.17, 0.17, 0.30, 8), top[i].x, top[i].y + 0.22, top[i].z, Math.PI / 2, 0, 0), M.rope);
+    const foot = [];
+    for (let i = 0; i <= NU; i++) foot.push(sheet(i / NU, 1));
+    for (let i = 0; i < NU; i++) nn.add(grime(strand(foot[i], foot[i + 1], 0.05, 0.05, 3), 0.5, 1.2, -1), M.rope);
+    for (let i = 1; i < NU; i += 3) {
+      const a = foot[i], b = foot[i + 1];
+      const lead = new THREE.CylinderGeometry(0.085, 0.085, 0.24, 7).rotateZ(Math.PI / 2);
+      lead.rotateY(-Math.atan2(b.z - a.z, b.x - a.x));
+      nn.add(grime(xf(lead, a.x, a.y, a.z), 0.55, 1.2, -1), M.iron);
+    }
     nn.bake();
   }
 
   const root = new THREE.Group();
   root.add(grp, deck, rel, net);
   root.add(dustCloud(70, 8, 6, 4, 0x9ec8d8));
-  return { root, relic: rel };
+  return { root, relic: rel, hulls: [grp] };
+}
+
+// Peeled plating along a tear at hull station u0. Each petal is a strip of the skin
+// (a grid patch following the hull's own surface for its first stretch) that then
+// curls outward and away from the break, tearing narrower toward its tip. dir is the
+// direction along the hull the petal extends into the gap (+1 toward bow).
+function tornPetals(p, M, hullFn, u0, dir) {
+  const NP = 13;
+  for (let i = 0; i < NP; i++) {
+    const v0 = (i + rng(0.0, 0.25)) / NP, v1 = (i + 1 - rng(0.05, 0.3)) / NP;
+    if (rng(0, 1) < 0.18) continue;                      // some plates are simply gone
+    const len = rng(0.5, 1.8), curl = rng(0.4, 1.4), twist = rng(-0.5, 0.5);
+    const g = grid(4, 3, (s, t) => {
+      const v = v0 + (v1 - v0) * (0.5 + (t - 0.5) * (1 - 0.55 * s));   // tapers to the tip
+      const a = hullFn(u0, v), c = hullFn(u0, 0.5);
+      // outward (away from the hull centreline) in the cross-section plane
+      let ox = 0, oy = a[1] - c[1] * 0.2, oz = a[2];
+      const ol = Math.hypot(oy, oz) || 1; oy /= ol; oz /= ol;
+      const run = s * len, bendA = curl * s * s;
+      return [
+        a[0] + dir * run * Math.cos(bendA),
+        a[1] + oy * run * Math.sin(bendA) + twist * s * s * 0.3,
+        a[2] + oz * run * Math.sin(bendA) + (t - 0.5) * s * twist * 0.2
+      ];
+    });
+    p.add(grime(g, 0.7, 0.5, -4.5), M.iron);
+  }
 }
 
 // Zone 1 — an iron trawler torn in half amidships. The gap is a real swimmable
@@ -644,18 +1031,11 @@ function trawler(M) {
     // 40x42, up from 26x26: the 7-lap strake profile (tri(v*7)) gets 6 samples per
     // lap so the riveted plating reads as steps at lantern range, not aliased noise.
     const g = grime(grid(40, 42, (u, v) => hullFn(0.54 + u * 0.46, v)), 1.0, 0.3, -4.5);
+    band(g, -D * 0.42, 0.34, 0.5);
     p.add(g, M.iron);
-    // torn plating at the break: a ragged fringe of triangles
-    for (let i = 0; i < 14; i++) {
-      const v = i / 14, a = hullFn(0.54, v + 0.02), b = hullFn(0.54, v);
-      const t = new THREE.BufferGeometry();
-      const mx = (a[0] + b[0]) * 0.5 - rng(0.3, 1.4);
-      t.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-        a[0], a[1], a[2], b[0], b[1], b[2], mx, (a[1] + b[1]) * 0.5 + rng(-0.4, 0.4), (a[2] + b[2]) * 0.5 + rng(-0.3, 0.3)
-      ]), 3));
-      t.computeVertexNormals();
-      p.add(grime(t, 0.7, 0.5, -4.5), M.iron);
-    }
+    // torn plating at the break: steel fails in PETALS — plates peeled back from the
+    // tear and curled outward, each a strip of the hull skin itself
+    tornPetals(p, M, hullFn, 0.54, -1);
     // deck plate + bulwark rail with stanchions
     p.add(grime(xf(new THREE.BoxGeometry(11.5, 0.18, B * 1.6), 7.2, 0.05, 0), 0.9, 0.3, -4.5), M.iron);
     for (let i = 0; i < 9; i++) {
@@ -686,16 +1066,8 @@ function trawler(M) {
   const stern = new THREE.Group();
   {
     const p = Part(stern);
-    p.add(grime(grid(40, 42, (u, v) => hullFn(u * 0.44, v)), 1.0, 0.3, -4.5), M.iron);
-    for (let i = 0; i < 14; i++) {
-      const v = i / 14, a = hullFn(0.44, v + 0.02), b = hullFn(0.44, v);
-      const t = new THREE.BufferGeometry();
-      t.setAttribute('position', new THREE.BufferAttribute(new Float32Array([
-        a[0], a[1], a[2], b[0], b[1], b[2], (a[0] + b[0]) * 0.5 + rng(0.3, 1.5), (a[1] + b[1]) * 0.5 + rng(-0.4, 0.4), (a[2] + b[2]) * 0.5 + rng(-0.3, 0.3)
-      ]), 3));
-      t.computeVertexNormals();
-      p.add(grime(t, 0.7, 0.5, -4.5), M.iron);
-    }
+    p.add(band(grime(grid(40, 42, (u, v) => hullFn(u * 0.44, v)), 1.0, 0.3, -4.5), -D * 0.42, 0.34, 0.5), M.iron);
+    tornPetals(p, M, hullFn, 0.44, 1);
     p.add(grime(xf(new THREE.BoxGeometry(11.0, 0.18, B * 1.5), -5.8, 0.05, 0), 0.9, 0.3, -4.5), M.iron);
 
     // deckhouse
@@ -768,7 +1140,7 @@ function trawler(M) {
   stern.add(rel);
   root.add(dustCloud(90, 12, 9, 5, 0xa89ad0));
 
-  return { root, relic: rel };
+  return { root, relic: rel, hulls: [bow, stern] };
 }
 
 // Zone 2 — a crushed one-atmosphere submersible. The intact half still holds its
@@ -780,16 +1152,30 @@ function submersible(M) {
 
   // pressure sphere, imploded on the port-forward quarter: vertices inside a crush
   // cone are pulled toward the centre and creased, which is how real steel fails.
+  // CRUSH CREASES: a shell failing under external pressure buckles into a diamond
+  // (Yoshimura) pattern — two families of fold lines spiralling out of the dent, each a
+  // sharp triangle-wave ridge, deepest at the centre and dying out at the dent's rim,
+  // plus a ring of hoop folds where the intact shell holds. Tessellated finely enough
+  // (72x54) that the ridges land on vertices and survive smooth shading.
   {
-    const g = new THREE.SphereGeometry(R, 26, 20);
+    const g = new THREE.SphereGeometry(R, 72, 54);
     const pos = g.attributes.position;
     const dent = V3(-0.55, 0.25, -0.79).normalize();
+    const e1 = V3(0, 1, 0).cross(dent).normalize(), e2 = dent.clone().cross(e1).normalize();
+    const tw = x => { const f = x - Math.floor(x); return Math.abs(f - 0.5) * 2; };   // 1 at ridges
+    const nH = V3();
     for (let i = 0; i < pos.count; i++) {
       _v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
-      const d = _v.clone().normalize().dot(dent);
-      const k = clamp((d - 0.25) / 0.75, 0, 1);
-      const crease = 0.30 * Math.sin(_v.y * 4.2) * Math.sin(_v.x * 3.4);
-      const s = 1 - (k * k * (3 - 2 * k)) * (0.52 + crease * 0.4) + fbm(_v.x * 1.4, _v.z * 1.4) * 0.05;
+      nH.copy(_v).normalize();
+      const d = nH.dot(dent);
+      const k = clamp((d - 0.22) / 0.78, 0, 1), ks = k * k * (3 - 2 * k);
+      const phi = Math.atan2(nH.dot(e2), nH.dot(e1)), rho = Math.acos(clamp(d, -1, 1));
+      const a = phi * 7 / TAU;
+      const yosh = (tw(a + rho * 2.2) + tw(a - rho * 2.2)) * 0.5;       // diamond facets
+      const hoop = tw(rho * 3.1 + 0.3);                                    // ring folds
+      const rim = Math.exp(-(((k - 0.18) / 0.10) ** 2));                    // buckle at the edge
+      const depth = ks * (0.40 + 0.20 * (0.5 - yosh)) + rim * 0.05 * (hoop - 0.5) + ks * 0.05 * (hoop - 0.5);
+      const s = 1 - depth + fbm(_v.x * 1.4, _v.z * 1.4) * 0.05;
       pos.setXYZ(i, _v.x * s, _v.y * s, _v.z * s);
     }
     g.computeVertexNormals();
@@ -868,7 +1254,273 @@ function submersible(M) {
   root.add(rel);
   root.add(dustCloud(60, 6, 7, 6, 0xd0a080));
 
-  return { root, relic: rel };
+  return { root, relic: rel, hulls: [root] };
+}
+
+// ------------------------------------------------------- terrain sampling ----
+// The EXACT rendered height of the terrain mesh (its own two-triangle split of each
+// grid cell), plus its vertex colour (r = cavity AO, g = macro rock bias, b = height
+// above the basin floor — terrain.js's encoding). A skirt that uses the terrain's own
+// material with these colours IS terrain: same program, same palette, same caustics,
+// same ripples; only its shape is ours. Read-only use of terrain.js exports.
+let _AX = null, _AN = 0;
+function axis() {
+  if (_AX) return _AX;
+  const P = terrainMeshes[0].geometry.attributes.position.array;
+  _AN = Math.round(Math.sqrt(terrainMeshes[0].geometry.attributes.position.count));
+  _AX = new Float32Array(_AN);
+  for (let k = 0; k < _AN; k++) _AX[k] = P[k * 3];      // XZ topology never moves (terrain.js)
+  return _AX;
+}
+function axFind(ax, x) {
+  let lo = 0, hi = ax.length - 2;
+  if (x <= ax[0]) return 0;
+  if (x >= ax[hi + 1]) return hi;
+  while (lo < hi) { const m = (lo + hi + 1) >> 1; if (ax[m] <= x) lo = m; else hi = m - 1; }
+  return lo;
+}
+export function terrainSample(zi, x, z, col) {
+  const ax = axis(), n = _AN, g = terrainMeshes[zi].geometry;
+  const P = g.attributes.position.array, C = g.attributes.color.array;
+  const k = axFind(ax, x), j = axFind(ax, z);
+  const fx = clamp((x - ax[k]) / (ax[k + 1] - ax[k]), 0, 1), fz = clamp((z - ax[j]) / (ax[j + 1] - ax[j]), 0, 1);
+  const ia = j * n + k, ib = (j + 1) * n + k, ic = (j + 1) * n + k + 1, id = j * n + k + 1;
+  let wa, wb, wc, wd;
+  if (fx + fz <= 1) { wa = 1 - fx - fz; wb = fz; wc = 0; wd = fx; }
+  else { wa = 0; wb = 1 - fx; wc = fx + fz - 1; wd = 1 - fz; }
+  if (col) for (let c = 0; c < 3; c++)
+    col[c] = C[ia * 3 + c] * wa + C[ib * 3 + c] * wb + C[ic * 3 + c] * wc + C[id * 3 + c] * wd;
+  return P[ia * 3 + 1] * wa + P[ib * 3 + 1] * wb + P[ic * 3 + 1] * wc + P[id * 3 + 1] * wd;
+}
+
+// A drift skirt around a footprint: NA bearings x NR rings, WORLD coordinates. fp[a] is
+// the footprint radius on bearing a (a/NA of a turn); hFn(a)/wFn(a) the bank's height
+// and width there. The inner ring sits inside the object at full bank height, the
+// outer ring dips 3 cm under the exact mesh so the seam is buried; between them a
+// concave drift profile. AO is darkened toward the contact line in the vertex colour.
+const _tc = [0, 0, 0];
+export function driftSkirt(zi, cx, cz, fp, hFn, wFn, innerK = 0.78, NR = 6) {
+  const NA = fp.length, nv = NA * (NR + 1);
+  const pos = new Float32Array(nv * 3), col = new Float32Array(nv * 3), idx = [];
+  for (let a = 0; a < NA; a++) {
+    const th = a / NA * TAU, cs = Math.cos(th), sn = Math.sin(th);
+    const R0 = fp[a], H = hFn(a), W = wFn(a);
+    const span = R0 * (1 - innerK) + W, s0 = R0 * (1 - innerK) / span;
+    for (let r = 0; r <= NR; r++) {
+      const sr = r / NR, s = sr * sr * 0.35 + sr * 0.65;           // rings bunch at the hull
+      const rad = R0 * innerK + s * span;
+      const x = cx + cs * rad, z = cz + sn * rad;
+      const q = clamp((s - s0) / (1 - s0), 0, 1);
+      const prof = (1 - q) * (1 - q) * (1 - 0.35 * q) * (1 + 0.12 * Math.sin(th * 5 + rad));
+      const hm = terrainSample(zi, x, z, _tc);
+      const y = r === NR ? hm - 0.03 : hm + Math.max(0.015, H * prof);
+      const i = a * (NR + 1) + r;
+      pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+      col[i * 3] = _tc[0] * (0.52 + 0.48 * Math.min(1, q * 2.2 + 0.1 * (r === NR))); col[i * 3 + 1] = _tc[1]; col[i * 3 + 2] = _tc[2];
+    }
+  }
+  for (let a = 0; a < NA; a++) {
+    const a2 = (a + 1) % NA;
+    for (let r = 0; r < NR; r++) {
+      const i0 = a * (NR + 1) + r, i1 = a2 * (NR + 1) + r;
+      idx.push(i0, i0 + 1, i1, i1, i0 + 1, i1 + 1);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  // winding sanity: the skirt must face UP (terrain material is FrontSide)
+  const nr = g.attributes.normal;
+  if (nr.getY(0) < 0) { for (let i = 0; i < idx.length; i += 3) { const t = idx[i + 1]; idx[i + 1] = idx[i + 2]; idx[i + 2] = t; } g.setIndex(idx); g.computeVertexNormals(); }
+  return g;
+}
+
+// The flow direction on the seabed (flora.js CUR0, the mean of its slow veer): the
+// drift banks up on the downstream (lee) side of anything lying on the floor.
+const CUR_A = 0.9;
+export const leeOf = th => Math.max(0, Math.cos(th - CUR_A));
+
+// Footprint of a wreck from its own hull vertices: every vertex within 1.2 u of the
+// floor, binned by bearing around their centroid, the farthest per bin, gaps filled
+// and blurred. So the skirt hugs a rolled skiff, a split trawler and a sphere alike.
+const _fv = V3();
+function wreckFootprint(zi, M, hulls, NA) {
+  const xs = [], zs = [];
+  for (const node of hulls) node.traverse(o => {
+    if (!o.isMesh || (o.material !== M.wood && o.material !== M.iron)) return;
+    const pa = o.geometry.attributes.position;
+    for (let i = 0; i < pa.count; i += 2) {
+      _fv.fromBufferAttribute(pa, i).applyMatrix4(o.matrixWorld);
+      if (_fv.y < terrainSample(zi, _fv.x, _fv.z) + 1.2) { xs.push(_fv.x); zs.push(_fv.z); }
+    }
+  });
+  if (xs.length < 8) return null;
+  let cx = 0, cz = 0;
+  for (let i = 0; i < xs.length; i++) { cx += xs[i]; cz += zs[i]; }
+  cx /= xs.length; cz /= xs.length;
+  const fp = new Float32Array(NA);
+  for (let i = 0; i < xs.length; i++) {
+    const dx = xs[i] - cx, dz = zs[i] - cz;
+    let th = Math.atan2(dz, dx); if (th < 0) th += TAU;
+    const b = Math.min(NA - 1, Math.floor(th / TAU * NA)), d = Math.hypot(dx, dz);
+    if (d > fp[b]) fp[b] = d;
+  }
+  // fill empty bins from their nearest filled neighbours, then two circular blurs
+  for (let pass = 0; pass < NA; pass++) {
+    let any = false;
+    for (let a = 0; a < NA; a++) if (fp[a] === 0) {
+      const l = fp[(a + NA - 1) % NA], r = fp[(a + 1) % NA];
+      if (l || r) { fp[a] = l && r ? (l + r) / 2 : (l || r); } else any = true;
+    }
+    if (!any) break;
+  }
+  const tmp = new Float32Array(NA);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let a = 0; a < NA; a++) tmp[a] = (fp[(a + NA - 1) % NA] + 2 * fp[a] + fp[(a + 1) % NA]) / 4;
+    fp.set(tmp);
+  }
+  for (let a = 0; a < NA; a++) fp[a] = Math.max(0.9, fp[a]);
+  return { cx, cz, fp };
+}
+
+const SKIRT = [
+  { h: 0.55, w: 2.4 },     // skiff: fine shelf sand, a soft bank
+  { h: 0.85, w: 3.2 },     // trawler: the big hull piles the most
+  { h: 0.45, w: 2.0 }      // submersible: ash drifts thin
+];
+const _gi = new THREE.Matrix4();
+function buildSkirt(zi, M, hulls, g) {
+  if (!terrainMeshes[zi]) return null;
+  const F = wreckFootprint(zi, M, hulls, 40);
+  if (!F) return null;
+  const S = SKIRT[zi], NA = F.fp.length;
+  const geo = driftSkirt(zi, F.cx, F.cz, F.fp,
+    a => S.h * (0.35 + 0.65 * leeOf(a / NA * TAU)) * (0.85 + 0.3 * fbm(a * 0.37 + zi, 2.1)),
+    a => S.w * (0.45 + 0.95 * leeOf(a / NA * TAU)) + 0.6 * fbm(a * 0.29, 5.3 + zi));
+  _gi.copy(g.matrixWorld).invert();
+  geo.applyMatrix4(_gi);                 // into the wreck's frame, so it rides with g
+  const m = new THREE.Mesh(geo, terrainMeshes[zi].material);
+  m.receiveShadow = true;
+  m.userData.sharedMat = true;           // the TERRAIN's material: never dispose it
+  g.add(m);
+  return m;
+}
+
+// BARNACLES: calcite volcanoes scattered over the hull by the shader's own growth terms
+// (up-facing + the waterline band) and clustered by a low noise, so shells crowd where
+// the crust is thick and thin out at its edges. Written straight into one merged
+// buffer in the wreck's frame (one draw, the 'grow' material). Deterministic from its
+// own stream: the site's decorative stream is never consumed.
+const SHELL = (() => {
+  // profile (radius, height): foot, shoulder, rim, into the crater
+  const prof = [[1.0, 0.0], [0.64, 0.58], [0.40, 0.70], [0.22, 0.34]];
+  const SEG = 6, P = [], N = [], C = [], I = [];
+  for (let s = 0; s <= SEG; s++) {
+    const a = s / SEG * TAU, plate = s % 2 ? 0.86 : 1.0;
+    for (let k = 0; k < prof.length; k++) {
+      const r = prof[k][0] * (k < 2 ? plate : 1), y = prof[k][1];
+      P.push(Math.cos(a) * r, y, Math.sin(a) * r);
+      const ny = k === 3 ? -0.2 : 0.55, nl = Math.hypot(ny, 1);
+      N.push(Math.cos(a) / nl * (k === 3 ? -1 : 1), ny / nl, Math.sin(a) / nl * (k === 3 ? -1 : 1));
+      C.push(k === 3 ? 0.22 : (k === 2 ? 1.0 : 0.82));
+    }
+  }
+  const np = prof.length;
+  for (let s = 0; s < SEG; s++) for (let k = 0; k < np - 1; k++) {
+    const a = s * np + k, b = (s + 1) * np + k;
+    I.push(a, a + 1, b, b, a + 1, b + 1);
+  }
+  return { P, N, C, I, nv: P.length / 3 };
+})();
+const SHELL_MAX = [600, 900, 600];
+const SHELL_DENS = [9, 6, 6];            // candidate sites per square unit of hull
+const _pa = V3(), _pb = V3(), _pc = V3(), _na = V3(), _nb = V3(), _nc = V3(), _pp = V3(), _pn = V3();
+const _nm3 = new THREE.Matrix3(), _sm = new THREE.Matrix4(), _t1 = V3(), _t2 = V3();
+const _qa = V3(), _qb = V3(), _qc = V3(), _qt1 = V3(), _qt2 = V3(), _pq = V3(), _qnm = new THREE.Matrix3();
+function buildGrowth(zi, M, hulls, g, rnd) {
+  _gi.copy(g.matrixWorld).invert();
+  const outP = [], outN = [], outC = [], outI = [];
+  let count = 0;
+  const MAX = SHELL_MAX[zi];
+  const place = (P, N, size, tone) => {
+    // basis: Y along N, a random yaw about it (own temporaries: the caller's triangle
+    // corners live in the module temps)
+    _qt1.set(N.y * 0.3 + 0.1, -N.x, 0.2).cross(N).normalize();
+    if (_qt1.lengthSq() < 0.1) _qt1.set(1, 0, 0);
+    _qt2.crossVectors(N, _qt1).normalize();
+    const yaw = rnd() * TAU, c = Math.cos(yaw), s = Math.sin(yaw);
+    _qa.copy(_qt1).multiplyScalar(c).addScaledVector(_qt2, s).multiplyScalar(size);
+    _qb.copy(_qt2).multiplyScalar(c).addScaledVector(_qt1, -s).multiplyScalar(size);
+    const hy = size * (0.55 + 0.6 * rnd());
+    _sm.makeBasis(_qa, _qc.copy(N).multiplyScalar(hy), _qb).setPosition(P);
+    _sm.premultiply(_gi);
+    _qnm.getNormalMatrix(_sm);
+    const base = outP.length / 3;
+    for (let v = 0; v < SHELL.nv; v++) {
+      _qa.set(SHELL.P[v * 3], SHELL.P[v * 3 + 1], SHELL.P[v * 3 + 2]).applyMatrix4(_sm);
+      _qb.set(SHELL.N[v * 3], SHELL.N[v * 3 + 1], SHELL.N[v * 3 + 2]).applyMatrix3(_qnm).normalize();
+      outP.push(_qa.x, _qa.y, _qa.z); outN.push(_qb.x, _qb.y, _qb.z);
+      const k = SHELL.C[v] * tone;
+      outC.push(k * 0.97, k, k * 0.93);
+    }
+    for (const i of SHELL.I) outI.push(base + i);
+    count++;
+  };
+  for (const node of hulls) node.traverse(o => {
+    if (!o.isMesh || (o.material !== M.wood && o.material !== M.iron)) return;
+    const geo = o.geometry, pos = geo.attributes.position, nor = geo.attributes.normal;
+    const gro = geo.attributes.aGrow, idx = geo.index;
+    _nm3.getNormalMatrix(o.matrixWorld);
+    const nm = _nm3.clone();
+    const tri = idx ? idx.count / 3 : pos.count / 3;
+    for (let t = 0; t < tri && count < MAX; t++) {
+      const ia = idx ? idx.getX(t * 3) : t * 3, ib = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, ic = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      _pa.fromBufferAttribute(pos, ia).applyMatrix4(o.matrixWorld);
+      _pb.fromBufferAttribute(pos, ib).applyMatrix4(o.matrixWorld);
+      _pc.fromBufferAttribute(pos, ic).applyMatrix4(o.matrixWorld);
+      const area = _t1.subVectors(_pb, _pa).cross(_t2.subVectors(_pc, _pa)).length() * 0.5;
+      const want = area * SHELL_DENS[zi];
+      let n = Math.floor(want) + (rnd() < want - Math.floor(want) ? 1 : 0);
+      if (!n) continue;
+      _na.fromBufferAttribute(nor, ia); _nb.fromBufferAttribute(nor, ib); _nc.fromBufferAttribute(nor, ic);
+      const ga = gro ? gro.getX(ia) : 0, gb = gro ? gro.getX(ib) : 0, gc = gro ? gro.getX(ic) : 0;
+      while (n-- > 0 && count < MAX) {
+        let r1 = rnd(), r2 = rnd();
+        if (r1 + r2 > 1) { r1 = 1 - r1; r2 = 1 - r2; }
+        const r0 = 1 - r1 - r2;
+        _pp.set(_pa.x * r0 + _pb.x * r1 + _pc.x * r2, _pa.y * r0 + _pb.y * r1 + _pc.y * r2, _pa.z * r0 + _pb.z * r1 + _pc.z * r2);
+        _pn.set(_na.x * r0 + _nb.x * r1 + _nc.x * r2, _na.y * r0 + _nb.y * r1 + _nc.y * r2, _na.z * r0 + _nb.z * r1 + _nc.z * r2).applyMatrix3(nm).normalize();
+        const up = _pn.y, gw = Math.max(ga * r0 + gb * r1 + gc * r2, clamp((up - 0.28) / 0.57, 0, 1) * 0.9) * GROW_K[zi];
+        const cl = fbm(_pp.x * 0.95 + zi * 3.1, _pp.z * 0.95 - _pp.y * 0.8);
+        const p = clamp((gw * (0.4 + 0.9 * cl) - 0.32) / 0.3, 0, 1);
+        if (rnd() > p) continue;
+        if (_pp.y < terrainSample(zi, _pp.x, _pp.z) + 0.04) continue;      // buried
+        // a small colony: 1-3 shells jittered in the tangent plane, one big one
+        const nc = 1 + ((rnd() * 2.6) | 0);
+        for (let q = 0; q < nc && count < MAX; q++) {
+          const big = q === 0 ? 1 : 0.6;
+          const sz = (0.04 + 0.10 * rnd() * rnd() + 0.04 * p) * big * [1.0, 1.25, 0.85][zi];
+          _t1.set(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).multiplyScalar(0.22 * (q ? 1 : 0));
+          _t1.addScaledVector(_pn, -_t1.dot(_pn));
+          place(_pq.copy(_pp).add(_t1).addScaledVector(_pn, -0.01), _pn, sz, 0.62 + 0.4 * rnd());
+        }
+      }
+    }
+  });
+  if (!count) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(outP, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(outN, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(outC, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(outP.length / 3 * 2), 2));
+  geo.setAttribute('aGrow', new THREE.BufferAttribute(new Float32Array(outP.length / 3), 1));
+  geo.setIndex(outI);
+  const m = new THREE.Mesh(geo, M.grow);
+  m.castShadow = false; m.receiveShadow = true;
+  g.add(m);
+  return count;
 }
 
 // ------------------------------------------------------------- placement -----
@@ -949,8 +1601,11 @@ export function buildWrecks() {
     for (let zi = 0; zi < 3; zi++) {
       const S = WRECK_SPEC[zi];
       const site = wreckSites()[zi].site;
+      const tB0 = performance.now();
       const M = palette(zi);
+      const tB1 = performance.now();
       const W = S.make(M);
+      const tB2 = performance.now();
 
       const g = new THREE.Group();
       g.add(W.root);
@@ -976,6 +1631,19 @@ export function buildWrecks() {
       // world-space relic position, for the cheap per-frame proximity test
       g.updateMatrixWorld(true);
       const wp = W.relic.getWorldPosition(new THREE.Vector3());
+
+      // POLISH-WORLD: growth shells over the hull and the drift skirt banked against
+      // its lee. Both are pure functions of the placed hull + site (own stream), both
+      // parented to g (they ride its transform and die with it on reseed). Neither
+      // touches colliders or the relic/keepsake frames.
+      const gr = seededRand(0x6A0B7E5 + zi * 104729 + currentSiteIndex() * 7919);
+      const tB3 = performance.now();
+      const shells = buildGrowth(zi, M, W.hulls, g, gr);
+      const tB4 = performance.now();
+      const skirt = buildSkirt(zi, M, W.hulls, g);
+      const tB5 = performance.now();
+      g.userData.polish = { shells, skirt: !!skirt,
+        ms: { palette: +(tB1 - tB0).toFixed(1), hull: +(tB2 - tB1).toFixed(1), growth: +(tB4 - tB3).toFixed(1), skirt: +(tB5 - tB4).toFixed(1) } };
 
       // hull colliders, authored in the wreck's local frame then baked to world
       const LOC = [
@@ -1011,7 +1679,7 @@ export function buildWrecks() {
 function disposeGroup(g) {
   g.traverse(o => {
     if (o.geometry && o.geometry !== relicGeo) o.geometry.dispose();
-    if (o.material) {
+    if (o.material && !o.userData.sharedMat) {
       const mats = Array.isArray(o.material) ? o.material : [o.material];
       for (const m of mats) if (!m.userData || !m.userData.persist) m.dispose();
     }
@@ -1353,5 +2021,19 @@ window.wrecks = {
     player.vel.set(0, 0, 0);
     return `keepsake ${zi} @ ${W.keepPos.x.toFixed(1)}, ${W.keepPos.y.toFixed(1)}, ${W.keepPos.z.toFixed(1)}`;
   },
-  colliders: () => wreckColliders.slice()
+  colliders: () => wreckColliders.slice(),
+  // POLISH-WORLD probe: shells/skirt per wreck, and the skiff's stove-in hole in world
+  // space (centre + outward normal) so a capture can be aimed at it.
+  polish: () => WRECKS.map(W => {
+    const o = { zi: W.zi, ...W.grp.userData.polish };
+    W.grp.traverse(n => {
+      if (n.userData && n.userData.hole) {
+        const h = n.userData.hole;
+        const p = h.o.clone().applyMatrix4(n.matrixWorld);
+        const q = h.n.clone().transformDirection(n.matrixWorld);
+        o.hole = [p.x, p.y, p.z, q.x, q.y, q.z].map(v => +v.toFixed(2));
+      }
+    });
+    return o;
+  })
 };

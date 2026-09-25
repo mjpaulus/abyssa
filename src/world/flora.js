@@ -5,10 +5,10 @@ import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
-import { makeGlow, rockMapSet } from '../lib/textures.js';
+import { makeGlow, rockMapSet, bladeMapSet } from '../lib/textures.js';
 import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
-import { terrainH, terrainNormal } from './terrain.js';
-import { wreckSites } from './wrecks.js';
+import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
+import { wreckSites, driftSkirt, leeOf } from './wrecks.js';
 import { siteParams } from './site.js';
 
 const TAU = Math.PI * 2;
@@ -72,11 +72,25 @@ attribute vec4 aInst;   // phase, sway amp, arc-shorten k, glow
 uniform float uTime; uniform vec2 uCur; uniform vec2 uCull;
 uniform float uSway; uniform float uFreq;
 varying vec3 vFlora; varying vec3 vLocal;
+attribute vec2 aBU;     // blade uv (across, along + 1); (0,0) on every non-blade part
+varying vec3 vBl;       // blade uv + the part's own phase
+#ifdef FLORA_BLADE
+  uniform float uRipple;
+#endif
 #ifdef FLORA_ROCK
   varying vec3 vWPos;
 #endif`;
 
 const V_BODY = `
+vBl = vec3(aBU, aVA.w);
+#ifdef FLORA_BLADE
+  // EDGE RIPPLE: the margins of a blade flutter faster than the blade sways, on the
+  // blade's own phase, growing toward the tip — the midrib holds, the lamina ruffles.
+  if (aBU.y > 0.5) {
+    float ea = abs(aBU.x - 0.5) * 2.0, al = aBU.y - 1.0;
+    transformed += objectNormal * (sin(uTime * 2.3 + al * 17.0 + aVA.w * 5.0) * ea * ea * (0.3 + al) * uRipple);
+  }
+#endif
 float w = uTime * uFreq + aInst.x;
 float s1 = sin(w - aVA.y * 3.1), s2 = sin(w * 1.71 - aVA.y * 5.7 + 1.3);
 vec2 d = (uCur * (0.34 + 0.66 * s1) + vec2(-uCur.y, uCur.x) * (0.4 * s2)) * (aInst.y * uSway * aVA.x);
@@ -100,10 +114,26 @@ vLocal = position;
 
 const F_HEAD = `
 uniform float uTime; uniform vec3 uGlowCol; uniform float uSSS; uniform vec3 uSilt;
-varying vec3 vFlora; varying vec3 vLocal;
+varying vec3 vFlora; varying vec3 vLocal; varying vec3 vBl;
+#ifdef FLORA_BLADE
+  uniform sampler2D uBladePack, uBladeNrm; uniform float uTrans, uCut;
+#endif
+#ifdef FLORA_PIT
+  // sponge skin: a cell field whose F1 minima are the pores (ostia)
+  float pitCell(vec3 p) {
+    vec3 i = floor(p), f = fract(p); float d = 9.0;
+    for (int z = -1; z <= 1; z++) for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+      vec3 g = vec3(float(x), float(y), float(z));
+      vec3 h = fract(sin(vec3(dot(i + g, vec3(127.1, 311.7, 74.7)), dot(i + g, vec3(269.5, 183.3, 246.1)), dot(i + g, vec3(113.5, 271.9, 124.6)))) * 43758.5453);
+      vec3 r = g + h - f; d = min(d, dot(r, r));
+    }
+    return sqrt(d);
+  }
+#endif
 #ifdef FLORA_ROCK
   varying vec3 vWPos;
   uniform sampler2D uRockPack, uRockNrm; uniform float uWet; uniform float uPaintK;
+  uniform vec3 uCrustA, uCrustB; uniform float uMoss;
   ` + EDGE_GLSL + `
   // Coarse weathering field, no fetch: two bands of interfering sines.
   float rockDet(vec3 w, float f) {
@@ -139,10 +169,57 @@ varying vec3 vFlora; varying vec3 vLocal;
 
 const F_BODY = `
 float gmask = vFlora.x;
+#ifdef FLORA_BLADE
+  // THIN BLADE (polish-world): midrib + herringbone veins + bullate lamina from the
+  // generated blade map (lib/textures.js bladeMapSet), applied as a derivative-frame
+  // normal perturbation; the rib reads paler and yellower, the tip older and browner,
+  // each blade shifts hue on its own phase, and the margin is cut into a ruffled,
+  // tattered outline instead of a straight card edge. floraThin feeds the back-light
+  // transmission term injected after the light loop. All taps and derivatives are
+  // unconditional (non-blade parts mix back by isB).
+  {
+    float isB = step(0.5, vBl.y);
+    vec2 bu = vec2(vBl.x, clamp(vBl.y - 1.0, 0.0, 1.0));
+    vec4 bp = texture2D(uBladePack, bu);
+    vec3 bn = texture2D(uBladeNrm, bu).xyz * 2.0 - 1.0;
+    vec3 q0 = dFdx(-vViewPosition), q1 = dFdy(-vViewPosition);
+    vec2 st0 = dFdx(bu), st1 = dFdy(bu);
+    vec3 q1p = cross(q1, normal), q0p = cross(normal, q0);
+    vec3 T = q1p * st0.x + q0p * st1.x, Bt = q1p * st0.y + q0p * st1.y;
+    float dm = max(dot(T, T), dot(Bt, Bt));
+    float sc = dm > 0.0 ? inversesqrt(dm) : 0.0;
+    vec3 pn = normalize(T * (bn.x * sc * 0.35) + Bt * (bn.y * sc * 0.35) + normal * max(bn.z, 0.2));
+    normal = normalize(mix(normal, pn, isB));
+    float tip = smoothstep(0.62, 1.0, bu.y);
+    float hueK = fract(sin(vBl.z * 12.9898) * 43758.5453);
+    vec3 tint = mix(vec3(1.0), mix(vec3(0.92, 1.06, 0.86), vec3(1.14, 1.0, 0.72), hueK), 0.8);
+    vec3 bc = diffuseColor.rgb * tint * mix(0.92, 1.10, bp.r);
+    bc = mix(bc, bc * vec3(1.18, 1.06, 0.66), bp.r * 0.45 + tip * 0.55);
+    bc *= 1.0 - 0.18 * bp.b;
+    diffuseColor.rgb = mix(diffuseColor.rgb, bc, isB);
+    float ea = abs(bu.x - 0.5) * 2.0;
+    float edge = 0.95 - 0.16 * tip - 0.035 * sin(bu.y * 71.0 + vBl.z * 3.0) - 0.03 * sin(bu.y * 29.0 + vBl.z) - 0.05 * tip * sin(bu.y * 140.0);
+    if (isB > 0.5 && uCut > 0.5 && ea > edge) discard;
+    floraThin = isB * (1.0 - bp.g * 0.75);
+  }
+#endif
+#ifdef FLORA_PIT
+  {
+    // pores: dark pits in a cell field on the local surface, the skin between them
+    // slightly paler and rougher
+    float cd = pitCell(vLocal * 38.0);
+    float pore = 1.0 - smoothstep(0.10, 0.26, cd);
+    diffuseColor.rgb *= 1.0 - 0.55 * pore;
+    diffuseColor.rgb *= 0.92 + 0.16 * smoothstep(0.3, 0.7, cd);
+    roughnessFactor = mix(roughnessFactor, 1.0, pore);
+  }
+#endif
+
 #ifdef FLORA_ROCK
   // Silt (below) settles by the GEOMETRIC up, not the micro-normal: dusting every
   // up-facing pit of the relief turned wet stone into chalk.
   vec3 rockGeoN = normal;
+  float rockCrust = 0.0;
   {
     // World normal for the projection; the perturbed result goes back to view space.
     vec3 wN = normalize(inverseTransformDirection(normal, viewMatrix));
@@ -157,6 +234,20 @@ float gmask = vFlora.x;
     float rc = rockDet(vWPos, 0.42);
     float mott = 0.5 + 0.5 * sin(rc * 1.9);
     diffuseColor.rgb *= albM * mix(0.90, 1.08, mott);
+    // POLISH-WORLD: CRUST on the faces that look up — coralline and lichen in the
+    // shallows, a pale mineral/bacterial film in the deep — gated by the GEOMETRIC
+    // slope and broken by the bake's own height and macro albedo, so it pools on the
+    // ledges and bedding tops and never paints a face flat. MOSS (zone 0 only, uMoss)
+    // lives down in the fissures: the bake's low height is the crack network itself.
+    {
+      float cn = pd.b * 0.65 + pc.r * 0.55 + 0.22 * sin(rc * 2.3);
+      rockCrust = smoothstep(0.34, 0.78, wN.y) * smoothstep(0.50, 0.70, cn);
+      vec3 crustC = mix(uCrustA, uCrustB, smoothstep(0.25, 0.85, mott)) * 1.35;
+      diffuseColor.rgb = mix(diffuseColor.rgb, crustC * (0.7 + 0.6 * pd.r), rockCrust * 0.85);
+      float crack = 1.0 - smoothstep(0.24, 0.40, pd.b);
+      float mossM = uMoss * crack * smoothstep(-0.25, 0.35, wN.y);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.040, 0.066, 0.026) * (0.8 + 0.4 * mott), mossM * 0.75);
+    }
     // Baked normal (whiteout triplanar) at both scales, then the derivative relief for
     // the last octave the texture cannot hold at walk-up: fine grit in the fragment.
     // EDGE-NOT-MIDDLE (lib/paint.js): every detail octave scales by the mid-tone
@@ -178,6 +269,8 @@ float gmask = vFlora.x;
     // PAINT LAW floor for the shader-driven roughness (the material's own roughness is
     // already lifted by lib/paint.js; this keeps the wet sheen from undercutting it).
     roughnessFactor = max(roughnessFactor, 0.75 * uPaintK);
+    // crust is dry lime and lichen: matte, it never takes the wet sheen
+    roughnessFactor = mix(roughnessFactor, 0.97, rockCrust);
     diffuseColor.rgb *= 1.0 - 0.10 * wet;
   }
 #endif
@@ -209,6 +302,26 @@ float gmask = vFlora.x;
 #endif
 totalEmissiveRadiance += uGlowCol * gmask * (0.4 + 0.6 * (0.5 + 0.5 * sin(uTime * 0.9 + vFlora.z * 3.0)));`;
 
+// BACK-LIGHT TRANSMISSION for thin blades: sunlight arriving on the far side of the
+// visible face comes THROUGH it, tinted by the blade and strongest when the eye looks
+// toward the sun through the blade (forward scatter), thinner at the margins and
+// between the veins than on the rib. Added to the direct diffuse after the light loop
+// so it rides the key light's own colour and intensity (depth fade, day cycle, storm
+// dim — lighting.js owns all of that); no new light. gardens.js injects the same term.
+export const F_TRANS = `
+#if defined( FLORA_BLADE ) || defined( GD_BLADE )
+#if NUM_DIR_LIGHTS > 0
+{
+  vec3 tL = directionalLights[ 0 ].direction;
+  vec3 tV = normalize(vViewPosition);
+  float back = clamp(-dot(normal, tL), 0.0, 1.0);
+  float fwd = pow(clamp(dot(tV, -tL), 0.0, 1.0), 3.0);
+  float tk = back * (0.30 + 0.70 * fwd) * (0.35 + 0.65 * floraThin) * uTrans;
+  reflectedLight.directDiffuse += diffuseColor.rgb * vec3(1.0, 1.04, 0.80) * directionalLights[ 0 ].color * tk;
+}
+#endif
+#endif`;
+
 function floraMat(o) {
   const m = new THREE.MeshStandardMaterial({
     color: 0xffffff, vertexColors: true, roughness: o.rough ?? 0.85, metalness: o.metal ?? 0,
@@ -217,6 +330,7 @@ function floraMat(o) {
   if (o.env) { m.envMap = envTex; m.envMapIntensity = o.env; }
   m.defines = {};
   for (const d of o.def || []) m.defines['FLORA_' + d] = 1;
+  if (o.blade) { m.defines.FLORA_BLADE = 1; m.forceSinglePass = true; }
   const cull = o.cull ?? 105;
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, uni, {
@@ -226,15 +340,23 @@ function floraMat(o) {
       uSSS: { value: o.sss ?? 0 },
       uSilt: { value: new THREE.Color(o.silt ?? 0x2c4152) }
     });
+    if (o.blade) {
+      const BS = bladeMapSet();
+      Object.assign(sh.uniforms, { uBladePack: { value: BS.pack }, uBladeNrm: { value: BS.nrm },
+        uTrans: { value: o.trans ?? 1 }, uRipple: { value: o.ripple ?? 0.02 }, uCut: { value: o.cut ?? 1 } });
+    }
     if (o.rockSet) Object.assign(sh.uniforms, {
-      uRockPack: { value: o.rockSet.pack }, uRockNrm: { value: o.rockSet.nrm }, uWet: { value: o.wet ?? 0 }
+      uRockPack: { value: o.rockSet.pack }, uRockNrm: { value: o.rockSet.nrm }, uWet: { value: o.wet ?? 0 },
+      uCrustA: { value: new THREE.Color(o.crustA ?? 0x000000) }, uCrustB: { value: new THREE.Color(o.crustB ?? 0x000000) },
+      uMoss: { value: o.moss ?? 0 }
     });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>' + V_HEAD)
       .replace('#include <begin_vertex>', '#include <begin_vertex>' + V_BODY);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>' + F_HEAD)
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{' + F_BODY + '\n}');
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
+      .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS);
     if (o.rockSet) Object.assign(sh.uniforms, { uEdgeK: styleUniforms.uEdgeK, uEdgeSun: styleUniforms.uEdgeSun, uPaintK: styleUniforms.uPaintK });
     else injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): organic flora only — never the rocks.
   };
@@ -246,14 +368,16 @@ function floraMat(o) {
 // Accumulates transformed primitives into one indexed buffer, tagging every vertex
 // with the per-part data the sway/glow shaders read.
 class Build {
-  constructor() { this.p = []; this.n = []; this.i = []; this.meta = []; this.v = 0; }
+  constructor() { this.p = []; this.n = []; this.i = []; this.meta = []; this.bu = []; this.v = 0; }
   add(geo, m, o = {}) {
     const g = geo.clone().applyMatrix4(m);
     const pos = g.attributes.position, nor = g.attributes.normal, c = pos.count;
+    const uv = o.bu ? g.attributes.uv : null;   // blades carry their uv as aBU (v + 1)
     for (let k = 0; k < c; k++) {
       this.p.push(pos.getX(k), pos.getY(k), pos.getZ(k));
       this.n.push(nor.getX(k), nor.getY(k), nor.getZ(k));
       this.meta.push(o);
+      if (uv) this.bu.push(uv.getX(k), uv.getY(k) + 1); else this.bu.push(0, 0);
     }
     if (g.index) for (const k of g.index.array) this.i.push(k + this.v);
     else for (let k = 0; k < c; k++) this.i.push(k + this.v);
@@ -281,6 +405,7 @@ class Build {
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.setAttribute('aVA', new THREE.BufferAttribute(va, 4));
     g.setAttribute('aFlut', new THREE.BufferAttribute(fl, 1));
+    g.setAttribute('aBU', new THREE.Float32BufferAttribute(this.bu, 2));
     g.setIndex(this.i);
     return g;
   }
@@ -295,6 +420,23 @@ function xf(px, py, pz, ry = 0, rz = 0, rx = 0, sx = 1, sy = sx, sz = sx) {
   return m;
 }
 
+// Tapered tube on a Catmull-Rom path (gardens.js's idiom): each ring is scaled about
+// its own centre from r0 to r1, so a tentacle reads grown, not extruded.
+const _tv = new THREE.Vector3();
+function taperTube(pts, segs, r0, r1, sides) {
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const g = new THREE.TubeGeometry(curve, segs, r0, sides, false);
+  const p = g.attributes.position;
+  for (let k = 0; k < p.count; k++) {
+    const t = Math.floor(k / (sides + 1)) / segs;
+    curve.getPointAt(t, _tv);
+    const tp = 1 + (r1 / r0 - 1) * t;
+    p.setXYZ(k, _tv.x + (p.getX(k) - _tv.x) * tp, _tv.y + (p.getY(k) - _tv.y) * tp, _tv.z + (p.getZ(k) - _tv.z) * tp);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 // Ribbon along +Y, tapering, curving toward +Z.
 function strapGeo(h, w0, w1, curve, segs = 3) {
   const g = new THREE.PlaneGeometry(1, 1, 1, segs), p = g.attributes.position;
@@ -307,12 +449,16 @@ function strapGeo(h, w0, w1, curve, segs = 3) {
 }
 
 // Kelp blade: extends along +X, droops, ruffled edges (the twist reads as growth).
-function bladeGeo(len, w0, w1, droop, segs = 4) {
+// POLISH-WORLD: 5 rows (was 4) and the last quarter CURLS — the tip rolls down and the
+// lamina twists about the rib, the way an old blade's end frays and cups.
+function bladeGeo(len, w0, w1, droop, segs = 5) {
   const g = new THREE.PlaneGeometry(1, 1, 1, segs), p = g.attributes.position;
   for (let k = 0; k < p.count; k++) {
     const u = p.getY(k) + 0.5, v = p.getX(k);
     const w = w0 + (w1 - w0) * Math.sin(Math.min(1, u * 1.25) * Math.PI * 0.72);
-    p.setXYZ(k, u * len, -droop * u * u + Math.sin(u * 13) * 0.02 * v, v * w);
+    const c = u > 0.7 ? (u - 0.7) / 0.3 : 0, tw = c * c * 0.9;
+    const vw = v * w;
+    p.setXYZ(k, u * len - c * c * len * 0.05, -droop * u * u + Math.sin(u * 13) * 0.02 * v - c * c * len * 0.10 + vw * Math.sin(tw), vw * Math.cos(tw));
   }
   g.computeVertexNormals();
   return g;
@@ -323,13 +469,23 @@ function kelpGeo() {
   const stipe = new THREE.CylinderGeometry(0.035, 0.085, 1, 4, 9, true);
   B.add(stipe, xf(0, 0.5, 0), { t: 's' });
   B.add(new THREE.IcosahedronGeometry(0.17, 0), xf(0, 0.035, 0, 0, 0, 0, 1, 0.4, 1), { t: 'h' });
+  // HOLDFAST: two haptera splayed out and down from the bulb, gripping
+  // the rock or sand (deterministic angles: no stream draws, flora's layout holds)
+  {
+    const hap = new THREE.ConeGeometry(0.045, 0.30, 3, 1, true).translate(0, -0.15, 0);
+    for (let k = 0; k < 2; k++) {
+      const a = k * 3.1416 + 0.45;
+      B.add(hap, xf(Math.cos(a) * 0.06, 0.05, Math.sin(a) * 0.06, -a, 0, 0).multiply(new THREE.Matrix4().makeRotationZ(-1.05)), { t: 'h' });
+    }
+    hap.dispose();
+  }
   const NB = 14;
   for (let i = 0; i < NB; i++) {
     const f = 0.1 + (i / NB) * 0.89, a = i * 2.399;
     // canopy bunching: blades lengthen toward the top, as giant kelp does at the surface
     const len = 0.85 * (0.45 + 0.75 * f) * rr(0.8, 1.15);
     const g = bladeGeo(len, 0.07, 0.17, len * 0.34);
-    B.add(g, xf(Math.cos(a) * 0.05, f, Math.sin(a) * 0.05, -a, -0.42 + f * 0.75), { t: 'b', ph: _fr() * TAU, len });
+    B.add(g, xf(Math.cos(a) * 0.05, f, Math.sin(a) * 0.05, -a, -0.42 + f * 0.75), { t: 'b', ph: _fr() * TAU, len, bu: true });
     g.dispose();
   }
   stipe.dispose();
@@ -345,13 +501,16 @@ function kelpGeo() {
 function grassGeo() {
   const B = new Build();
   for (let i = 0; i < 7; i++) {
-    const a = rr(0, TAU), g = strapGeo(rr(0.6, 1), 0.03, 0.012, rr(0.1, 0.34), 3);
-    B.add(g, xf(Math.cos(a) * 0.04, 0, Math.sin(a) * 0.04, a, rr(-0.22, 0.22)), { ph: _fr() * TAU });
+    // width varies blade to blade (a golden-ratio walk, not a stream draw)
+    const wk = 0.55 + 0.9 * ((i * 0.618 + 0.3) % 1);
+    const a = rr(0, TAU), g = strapGeo(rr(0.6, 1), 0.03 * wk, 0.012 * wk, rr(0.1, 0.34), 3);
+    B.add(g, xf(Math.cos(a) * 0.04, 0, Math.sin(a) * 0.04, a, rr(-0.22, 0.22)), { ph: _fr() * TAU, bu: true });
     g.dispose();
   }
   return B.done((x, y, z, h, m, o) => {
-    const s = 0.35 + 0.65 * h;
-    o.c[0] = s * 0.7; o.c[1] = s; o.c[2] = s * 0.74;
+    const s = 0.35 + 0.65 * h, tp = sstep(0.62, 1, h);
+    // the tip is older growth: paler and yellowed
+    o.c[0] = s * (0.7 + 0.45 * tp); o.c[1] = s * (1 + 0.08 * tp); o.c[2] = s * (0.74 - 0.12 * tp);
     o.flut = 0.03 * h; o.glow = sstep(0.65, 1, h);
   });
 }
@@ -388,7 +547,7 @@ function fanGeo() {
     const g = strapGeo(len, w, w * 0.66, 0, 2);
     const m = new THREE.Matrix4().makeRotationZ(ang);
     m.setPosition(x, y, 0);
-    B.add(g, m, { d });
+    B.add(g, m, { d, bu: true });
     g.dispose();
     if (d >= 3) return;
     const tx = x - Math.sin(ang) * len, ty = y + Math.cos(ang) * len, n = d === 0 ? 3 : 2;
@@ -433,6 +592,9 @@ function spongeGeo() {
     const s = 0.4 + 0.6 * h;
     o.c[0] = s; o.c[1] = s * 0.82; o.c[2] = s * 0.9;
     o.flex = h * h; o.glow = sstep(0.82, 1, y / m.top);
+    // OSCULUM: the exhalant opening's rim is paler (bleached lip); pores are per-pixel
+    const rim = sstep(0.93, 1, y / m.top);
+    o.c[0] *= 1 + 0.3 * rim; o.c[1] *= 1 + 0.22 * rim; o.c[2] *= 1 + 0.18 * rim;
   });
 }
 
@@ -446,12 +608,21 @@ function anemoneGeo() {
   for (let i = 0; i < 14; i++) {
     const ring = i < 8 ? 0 : 1, a = (i - (ring ? 8 : 0)) / (ring ? 6 : 8) * TAU + ring * 0.4;
     const r = ring ? 0.08 : 0.15, len = rr(0.3, 0.5);
-    const g = strapGeo(len, 0.026, 0.006, rr(0.04, 0.18), 3);
-    const m = new THREE.Matrix4().makeRotationY(a).multiply(new THREE.Matrix4().makeRotationX(rr(0.45, 1.15)));
+    // POLISH-WORLD: a real TUBE along the strap's old centreline (same draws, same
+    // order: len, curve, tilt, phase), tapering to a blunt tip
+    const cv = rr(0.04, 0.18);
+    // outer ring as tubes (the silhouette), inner ring stays ribbons (budget)
+    const g = ring ? strapGeo(len, 0.026, 0.006, cv, 3) : taperTube([V3(0, 0, 0), V3(0, len * 0.5, cv * 0.3), V3(0, len * 0.95, cv * 1.0)], 2, 0.030, 0.011, 3);
+    // same draw, remapped: a CROWN (tentacles rise then curl out), not an urchin's spines
+    const m = new THREE.Matrix4().makeRotationY(a).multiply(new THREE.Matrix4().makeRotationX(0.12 + (rr(0.45, 1.15) - 0.45) * 0.55));
     m.setPosition(Math.sin(a) * r, 0.3, Math.cos(a) * r);
     B.add(g, m, { t: 't', ph: _fr() * TAU, bx: Math.sin(a) * r, by: 0.3, bz: Math.cos(a) * r, len });
     g.dispose();
   }
+  // MOUTH: a raised oral lip round a dark slit, at the centre of the disc
+  const lip = new THREE.TorusGeometry(0.05, 0.014, 3, 7).rotateX(Math.PI / 2);
+  B.add(lip, xf(0, 0.335, 0, 0, 0, 0, 1, 1, 0.7), { t: 'm' });
+  lip.dispose();
   col.dispose(); disc.dispose();
   return B.done((x, y, z, h, m, o) => {
     if (m.t === 't') {
@@ -459,9 +630,15 @@ function anemoneGeo() {
       const s = 0.45 + 0.55 * u;
       o.c[0] = s; o.c[1] = s * 0.95; o.c[2] = s;
       o.flex = u * u; o.flut = 0.05 * u; o.glow = sstep(0.35, 1, u);
+    } else if (m.t === 'm') {
+      o.c[0] = 0.72; o.c[1] = 0.62; o.c[2] = 0.62; o.flex = 0; o.glow = 0.3;
+    } else if (m.t === 's') {
+      o.c[0] = 0.10; o.c[1] = 0.07; o.c[2] = 0.08; o.flex = 0;
     } else {
       const s = 0.3 + 0.3 * h;
       o.c[0] = s * 0.9; o.c[1] = s * 0.8; o.c[2] = s * 0.85;
+      // the oral disc darkens into the mouth at its centre
+      if (y > 0.28 && Math.hypot(x, z) < 0.05) { o.c[0] *= 0.3; o.c[1] *= 0.25; o.c[2] *= 0.28; }
       o.flex = 0;
     }
   });
@@ -507,6 +684,10 @@ function rockGeo(detail, squash, amp, facet = 1) {
     planes.push({ x: Math.cos(ph) * Math.cos(th), y: Math.sin(ph), z: Math.cos(ph) * Math.sin(th), c });
   }
   const bedF = 3.4 + 1.6 * n3(sd * 0.5, sd2 * 0.5, 1.5), bedPh = sd * 0.1;
+  // FRESH BREAK (polish-world): how hard each vertex was pressed onto a cleavage plane.
+  // A cleaved face is younger stone than the weathered rind — darker, cooler, less
+  // stained — so it is written into the vertex colour below (no stream draws).
+  const brk = new Float32Array(p.count);
   for (let k = 0; k < p.count; k++) {
     let x = p.getX(k), y = p.getY(k), z = p.getZ(k);
     // Shape warp: bend the sphere off-axis before eroding, so no two rocks share a silhouette.
@@ -523,7 +704,10 @@ function rockGeo(detail, squash, amp, facet = 1) {
     x = wx * d; z = wz * d; y = y * d;
     for (const pl of planes) {
       const dp = x * pl.x + y * pl.y + z * pl.z;
-      if (dp > pl.c) { const t = (dp - pl.c) * facet; x -= pl.x * t; y -= pl.y * t; z -= pl.z * t; }
+      if (dp > pl.c) {
+        const t = (dp - pl.c) * facet; x -= pl.x * t; y -= pl.y * t; z -= pl.z * t;
+        brk[k] = Math.max(brk[k], Math.min(1, t * 9));
+      }
     }
     y *= squash;
     // Flatten the underside on a smooth ramp (no crease) so the rock beds into the silt.
@@ -533,13 +717,20 @@ function rockGeo(detail, squash, amp, facet = 1) {
   g.computeVertexNormals();
   const B = new Build().add(g, xf(0, 0, 0));
   g.dispose();
-  return B.done((x, y, z, h, m, o) => {
+  const out = B.done((x, y, z, h, m, o) => {
     // Broad mineral banding only — fine mottling is done per-pixel in FLORA_ROCK.
     const mot = 0.86 + 0.2 * n3(x * 1.3 + 11, y * 1.3, z * 1.3);
     const s = mot * (0.62 + 0.38 * h);
     o.c[0] = s * 0.96; o.c[1] = s; o.c[2] = s * 1.04;
     o.flex = 0;
   });
+  // Single add, so the vertex order is the icosphere's: brk[k] lines up with colour k.
+  const col = out.attributes.color.array;
+  for (let k = 0; k < brk.length; k++) {
+    const b = brk[k], d = 1 - 0.34 * b;
+    col[k * 3] *= d * (1 - 0.04 * b); col[k * 3 + 1] *= d; col[k * 3 + 2] *= d * (1 + 0.05 * b);
+  }
+  return out;
 }
 
 // -------------------------------------------------------------- placement ----
@@ -645,19 +836,22 @@ let zoneMats = null;
 function buildZoneMats() {
   return PAL.map((P, zi) => {
     const RS = rockMapSet(zi === 0 ? 0 : 1), WET = [0.9, 0.4, 0.12][zi];
+    // crust A/B (linear-ish, in the rocks' own dark albedo range) and fissure moss
+    const CR = [[0x5a3a46, 0x55523a, 1], [0x4a4452, 0x3c3c46, 0], [0x5a3e2c, 0x463a30, 0]][zi];
+    const RX = { crustA: CR[0], crustB: CR[1], moss: CR[2] };
     return {
-    kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS'] }),
-    grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS'] }),
+    kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS'], blade: true, trans: 1.3, ripple: 0.018 }),
+    grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS'], blade: true, trans: 0.9, ripple: 0.006 }),
     stag: floraMat({ key: 'stag', rough: 0.62, sway: 1, freq: 0.55, cull: 105, glow: P.glow, env: 0.14 }),
-    fan: floraMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.8, cull: 105, sss: 0.55, glow: P.glow, def: ['SSS', 'FAN'] }),
+    fan: floraMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.8, cull: 105, sss: 0.55, glow: P.glow, def: ['SSS', 'FAN'], blade: true, trans: 1.0, ripple: 0, cut: 0 }),
     brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['GROOVE'] }),
-    sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER'] }),
+    sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER', 'PIT'] }),
     anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS'] }),
     // Rock structure: a generated map set (lib/textures.js rockMapSet) projected
     // triplanar by world normal, multiplied INTO the zone hue below. Zone 0 gets the
     // weathered basalt/limestone bake and a wet sheen; the two deep zones share the
     // darker, more fissured, mineral-crusted variant and go matte.
-    rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET }),
+    rock: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 175, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET , ...RX }),
     // Boulder / hero-landmark tiers keep the same 'rock' program cache key — three.js
     // compiles ONE program for all three and only the uCull uniform differs. Bigger
     // silhouettes earn longer sightlines: culling a 20-unit landmark at 175 left the
@@ -665,8 +859,8 @@ function buildZoneMats() {
     // The deep variant is a different TEXTURE on the same shader source, so the three
     // zones share that program too (sampler uniforms are per material, never per
     // program) — distinct keys are only needed when the compiled source differs.
-    rockB: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 300, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET }),
-    rockH: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 420, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET })
+    rockB: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 300, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET , ...RX }),
+    rockH: floraMat({ key: 'rock', flat: false, rough: 0.88, metal: 0.03, sway: 0, cull: 420, env: 0.12, silt: P.silt, def: ['SILT', 'ROCK'], rockSet: RS, wet: WET , ...RX })
   }; });
 }
 
@@ -821,6 +1015,7 @@ function buildOnce() {
       zones[zi].add(g);
     }
     // ---- rocks: pebbles, boulders, hero landmarks ----
+    const fillets = [];   // x, z, footprint radius, size — for the sand fillets below
     for (const [geo, mat, cnt, sLo, sHi, sq] of [[G.r0, M.rock, 300, 0.5, 2.2, 0.34], [G.r1, M.rockB, 110, 2, 7, 0.3]]) {
       const L = place(zi, cnt, field.concat(reef), 0.42);
       const im = mount(zi, geo, mat, L.length, true, geo === G.r1);
@@ -830,6 +1025,7 @@ function buildOnce() {
         put(im, i, stand(p.n, 0.85, rr(0, TAU)), S * rr(0.85, 1.3), S * rr(0.7, 1.1),
           p.x, p.y - S * sq, p.z, _c, 0, 0, 0, 0);
         if (S >= 2) rockColliders.push({ x: p.x, y: p.y - S * sq + S * 0.45, z: p.z, r: S * 0.95 });
+        if (S >= 4 && geo === G.r1) fillets.push(p.x, p.z, _s.x * 0.9, S);   // _s = put()'s scale
       }
       seal(im, L.length);
     }
@@ -843,6 +1039,7 @@ function buildOnce() {
         put(im, i++, stand(p.n, 0.6, rr(0, TAU)), S * rr(0.8, 1.25), S * rr(0.55, 0.95),
           p.x, p.y - S * 0.36, p.z, _c, 0, 0, 0, 0);
         rockColliders.push({ x: p.x, y: p.y - S * 0.36 + S * 0.4, z: p.z, r: S * 0.9 });
+        fillets.push(p.x, p.z, _s.x * 0.86, S);
         // bed the landmark in with debris so it never reads as a floating prop
         for (let k = 0; k < 6 && i < L.length + 60; k++) {
           const a = rr(0, TAU), r = S * rr(0.7, 1.35), x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
@@ -855,8 +1052,53 @@ function buildOnce() {
       }
       seal(im, i);
     }
+    mountFillets(zi, fillets);
   }
   for (const g of Object.values(G)) g.dispose();
+}
+
+// SAND FILLETS (polish-world): where a hero rock or a big boulder meets the floor the
+// silt banks up against it — deeper on the lee of the current — instead of the stone
+// simply intersecting a flat plane. One merged mesh per zone in WORLD space using the
+// TERRAIN's own material and its exact mesh height/colour (wrecks.js driftSkirt), so
+// the fillet IS seabed: same program, same caustics, same ripples, +1 draw per zone.
+// Footprint wobble is a hash of position, never a stream draw (the flora stream and
+// every fingerprint downstream of it are untouched).
+function mountFillets(zi, F) {
+  if (!terrainMeshes[zi] || !F.length) return;
+  const NA = 16, NR = 3, parts = [];
+  let nv = 0, ni = 0;
+  for (let k = 0; k < F.length; k += 4) {
+    const x = F[k], z = F[k + 1], R = F[k + 2], S = F[k + 3];
+    const fp = new Float32Array(NA);
+    for (let a = 0; a < NA; a++) fp[a] = R * (0.86 + 0.28 * n3(x * 0.37 + a * 0.61, z * 0.37, S));
+    const H = Math.min(1.1, 0.07 * S + 0.12), Wd = 0.9 + 0.30 * S;
+    const g = driftSkirt(zi, x, z, fp,
+      a => H * (0.45 + 0.55 * leeOf(a / NA * TAU)),
+      a => Wd * (0.55 + 0.75 * leeOf(a / NA * TAU)), 0.74, NR);
+    parts.push(g); nv += g.attributes.position.count; ni += g.index.count;
+  }
+  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), col = new Float32Array(nv * 3);
+  const idx = new Uint32Array(ni);
+  let vo = 0, io = 0;
+  for (const g of parts) {
+    pos.set(g.attributes.position.array, vo * 3);
+    nor.set(g.attributes.normal.array, vo * 3);
+    col.set(g.attributes.color.array, vo * 3);
+    const ix = g.index.array;
+    for (let i = 0; i < ix.length; i++) idx[io + i] = ix[i] + vo;
+    vo += g.attributes.position.count; io += ix.length;
+    g.dispose();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  const m = new THREE.Mesh(geo, terrainMeshes[zi].material);
+  m.receiveShadow = true;
+  m.name = 'fillets' + zi;
+  zones[zi].add(m);
 }
 
 // First boot: identical path to every prior version of this file (buildZoneMats()
