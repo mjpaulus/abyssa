@@ -20,9 +20,12 @@ import { registerPaint } from '../../lib/paint.js';
 import { terrainH } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
+  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard
 } from './common.js';
 import * as G from './brooderGeo.js';
+import { makeBrood } from './brood.js';
+import { riftPos } from '../../config.js';
+import { emitDust } from '../../world/footfx.js';
 
 const UP = V3(0, 1, 0);
 const smooth = THREE.MathUtils.smoothstep;
@@ -231,8 +234,22 @@ export function makeBrooder(idx, cfg) {
   }
   makeEmbers(L, c.size);
 
-  // Set down somewhere in the zone, asleep. The lab and (later) the ridge move her.
-  placeAt(L, V3((Math.random() - 0.5) * 120, 0, (Math.random() - 0.5) * 120), Math.random() * Math.PI * 2);
+  // THE RIDGE: she sleeps at this zone's rift, facing the open seabed the diver comes
+  // from, a reef-crusted mound in the silt. Her nest lies in her lee, and a trail of
+  // tracks runs to it from the open ground past the shells of an old clutch. Taking an
+  // egg wakes her (brood.onTake); calmed, she walks back and settles over her brood,
+  // which clears the way.
+  {
+    const rp = riftPos(idx), out = V3(rp.x, 0, rp.z).normalize(), perp = V3(-out.z, 0, out.x);
+    // on the rift's LIP (its bowl is a deep funnel — sat in it she was a hole, not a
+    // ridge), between the rift and the open ground, facing the way a diver comes
+    const lip = V3(rp.x, 0, rp.z).addScaledVector(out, -(16 * 2.7 + R * 0.55));
+    placeAt(L, lip, Math.atan2(-out.x, -out.z));
+    const nest = lip.clone().addScaledVector(perp, R * 2.8);
+    L.brood = makeBrood(L, idx, nest, nest.clone().addScaledVector(out, -95));
+    L.dormant = true;
+    L.brood.onTake = () => { if (L.dormant) wakeBrooder(L); };
+  }
 
   L.cmd = (name, arg) => {
     if (name === 'stand') L.standTarget = 1;
@@ -244,7 +261,7 @@ export function makeBrooder(idx, cfg) {
     return L.probe();
   };
   L.probe = () => ({
-    kind: 'brooder', stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
+    kind: 'brooder', dormant: !!L.dormant, eggsOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
     wards: L.sigils.map(g => ({ lit: g.lit, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
     tris: countTris(L.body)
@@ -304,6 +321,14 @@ function buildClaw(body, mat, sd, k) {
   return { root, cj, pj, dj, sd, major: k >= 1 };
 }
 
+// She wakes: the name, the rise, the silt pouring off her back for as long as it takes.
+function wakeBrooder(L) {
+  L.dormant = false;
+  L.standTarget = 1;
+  L.woke = true;
+  L.riseDust = RISE_T;
+}
+
 // Teleport: body to pos (on the ground), heading yaw, feet reset to their rest spots.
 function placeAt(L, pos, yaw) {
   L.pos.set(pos.x, 0, pos.z);
@@ -319,7 +344,8 @@ function placeAt(L, pos, yaw) {
 // Rest spot of foot li: local (yaw only) -> world, on the terrain.
 function restWorld(L, li, out) {
   const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, st = L.standE;
-  const reach = lerp(1.22, 1.02, st) * lg.k, a = lg.splay * lerp(1.15, 0.85, st);
+  // asleep the legs fold UNDER the shell: a ridge, not a crab
+  const reach = lerp(0.80, 1.02, st) * lg.k, a = lg.splay * lerp(1.15, 0.85, st);
   const lx = lg.hip[0] * sd + Math.cos(a) * reach * sd, lz = lg.hip[2] + Math.sin(a) * reach;
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   out.set(L.pos.x + (lx * cy + lz * sy) * L.R, 0, L.pos.z + (-lx * sy + lz * cy) * L.R);
@@ -380,10 +406,12 @@ function poseClaws(L) {
     const snap = Math.pow(Math.max(0, Math.sin(t * 0.7 + sd * 1.3)), 8) * 0.12 * st;
     if (c.major) {
       // the strike: the great claw comes up to head height and gapes, cocked to swing
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th), lerp(-0.30 - 0.25 * (1 - st), 0.40, th) + tr);
-      c.cj.rotation.set(0, -sd * lerp(0.95, 0.40, th), lerp(0.30, 0.30, th));
-      c.pj.rotation.set(0, -sd * lerp(0.45, 0.15, th), lerp(-0.55, -0.30, th) + tr);
-      c.dj.rotation.z = 0.10 + snap + 1.00 * th;
+      // ...and every couple of seconds it comes DOWN: a hammer blow across her front
+      const sw = L.swing * th;
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw, lerp(-0.30 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + tr);
+      c.cj.rotation.set(0, -sd * lerp(0.95, 0.40, th), lerp(0.30, 0.30, th) - 0.25 * sw);
+      c.pj.rotation.set(0, -sd * lerp(0.45, 0.15, th), lerp(-0.55, -0.30, th) + 0.2 * sw + tr);
+      c.dj.rotation.z = 0.10 + snap + 1.00 * th * (1 - 0.9 * sw);
     } else {
       // the minor stays low and close, a guard across the mouth, working
       c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th), lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + tr);
@@ -443,6 +471,22 @@ function poseAll(L, dt, player) {
 export function updateBrooder(L, dt, t, player) {
   const ev = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null };
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
+  if (L.woke) { L.woke = false; ev.woke = true; }
+  if (L.riseDust > 0) {
+    // silt pours off her back as she rises
+    L.riseDust -= dt;
+    L.dustT = (L.dustT || 0) - dt;
+    if (L.dustT <= 0) {
+      L.dustT = 0.08;
+      const a = Math.random() * Math.PI * 2, r = L.R * (0.7 + 0.4 * Math.random());
+      const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
+      emitDust(x, L.bodyY - L.R * 0.05, z, 16, 2.5);
+    }
+  }
+  if (L.brood) {
+    L.brood.update(dt, player, ev);
+    if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = 'THE RIDGE IS WARM UNDER YOUR HAND.'; }
+  }
   if (!L.pPrev) L.pPrev = player.pos.clone();
   L.t += dt;
   L.uni.uTime.value = L.t;
@@ -452,7 +496,10 @@ export function updateBrooder(L, dt, t, player) {
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
   // she rears on her own when the diver comes close (the lab's hold/rear override it)
-  if (!L.hold && !L.calmed) L.threatTarget = L.standE > 0.9 && L._pd < L.R * 2.4 ? 1 : 0;
+  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pd < L.R * 2.4 ? 1 : 0;
+  // the hammer cycle: a slow wind-up, a fast fall (only means anything in threat)
+  L.swingT = (L.swingT || 0) + dt;
+  { const ph = (L.swingT % 2.6) / 2.6; L.swing = ph < 0.8 ? 0 : Math.sin((ph - 0.8) / 0.2 * Math.PI); }
   L.threat += clamp(L.threatTarget - L.threat, -1.5 * dt, 1.5 * dt);
   L.threatE = smooth(L.threat, 0, 1) * L.standE;
 
@@ -463,9 +510,12 @@ export function updateBrooder(L, dt, t, player) {
   let want = null, speed = 0;
   if (L.walkTo && L.standE > 0.9) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
-    if (dist < L.R * 1.9) L.walkTo = null;              // stop with the claws short of the target
+    if (dist < (L.toNest ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
+      L.walkTo = null;
+      if (L.toNest) { L.toNest = false; L.standTarget = 0; }  // home: settle over the brood
+    }
     else { want = Math.atan2(dx, dz); speed = L.speed * 0.30; }
-  } else if (!L.calmed && !L.hold && L.standE > 0.5 && pd < 90) {
+  } else if (!L.calmed && !L.hold && !L.dormant && L.standE > 0.5 && pd < 90) {
     want = Math.atan2(player.pos.x - L.pos.x, player.pos.z - L.pos.z);
   }
   if (want !== null) {
@@ -478,7 +528,7 @@ export function updateBrooder(L, dt, t, player) {
   let vx = Math.sin(L.yaw) * speed, vz = Math.cos(L.yaw) * speed;
   // STALK: awake and not yet striking, she circles the diver crab-fashion — sideways,
   // face locked on him — and changes direction every few seconds.
-  if (!L.walkTo && !L.calmed && !L.hold && L.standE > 0.9 && L.threatE < 0.5 && pd > L.R * 1.4 && pd < L.R * 5) {
+  if (!L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.9 && L.threatE < 0.5 && pd > L.R * 1.4 && pd < L.R * 5) {
     L.strafeT = (L.strafeT || 0) - dt;
     if (L.strafeT <= 0) { L.strafeT = 4 + Math.random() * 4; L.strafeDir = Math.random() < 0.5 ? -1 : 1; }
     const ss = L.speed * 0.22 * L.strafeDir;
@@ -500,7 +550,7 @@ export function updateBrooder(L, dt, t, player) {
       const e = smooth(f.t, 0, 1);
       f.cur.lerpVectors(f.from, f.to, e);
       f.cur.y += Math.sin(Math.PI * f.t) * 0.30 * L.R * L.standE;
-      if (f.t >= 1) { f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to); }
+      if (f.t >= 1) { f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to); emitDust(f.cur.x, f.cur.y, f.cur.z, 10, 1.6); }
     } else if (L.standE > 0.35) {
       if (busy[f.group ^ 1] === 0 && f.planted.distanceTo(_rw) > STRIDE * L.R) {
         f.from.copy(f.planted);
@@ -526,6 +576,19 @@ export function updateBrooder(L, dt, t, player) {
     ev.lightDrain += dt * 0.5;
     ev.slam = true;
   }
+  // the hammer: at the bottom of the swing, anything under the great claw's fingers
+  L.strikeCd = Math.max(0, (L.strikeCd || 0) - dt);
+  if (!L.calmed && L.threatE > 0.8 && L.swing > 0.85 && L.strikeCd <= 0) {
+    const c = L.claws[1].major ? L.claws[1] : L.claws[0];
+    c.dj.getWorldPosition(_ft);
+    if (_ft.distanceTo(player.pos) < L.R * 0.42) {
+      _v.copy(player.pos).sub(_ft).setY(0.4).normalize();
+      player.vel.addScaledVector(_v, 38);
+      ev.lightDrain += 0.12;
+      ev.slam = true;
+      L.strikeCd = 2.0;
+    }
+  }
   if (!L.calmed && L.standE > 0.5 && pd < L.R * 2) L.agitation = Math.min(1, L.agitation + dt * 0.8);
   L.agitation = Math.max(0, L.agitation - dt * 0.2);
 
@@ -543,11 +606,28 @@ export function updateBrooder(L, dt, t, player) {
         wardIdle(g, dt, haloK);
         // buried wards can sit within reach of her face through the sand: only a
         // standing Brooder offers them
-        if (L.standE > 0.6) wardTouch(L, i, g, player, ev);
+        if (L.standE > 0.6) {
+          // THE BROOD RULE: her last ward will not light while any egg is out of the
+          // nest; with the clutch whole again it lights on its own.
+          const last = L.sigils.filter(q => !q.lit).length === 1;
+          if (last && L.brood && L.brood.out() > 0) {
+            if (g.grp.position.distanceTo(player.pos) < L.reach * 1.2 && !L.broodHint) {
+              L.broodHint = true;
+              ev.msg = ev.msg || 'THE LAST WARD IS COLD. SHE WILL NOT STILL WHILE HER BROOD IS OUT.';
+            }
+          } else if (last && L.brood && L.sigils.length > 1 && !ev.sigilLit) {
+            lightWard(L, g, ev);
+          } else wardTouch(L, i, g, player, ev);
+        }
       }
     }
     ev.remaining = L.sigils.filter(q => !q.lit).length;
-    if (allLit) { L.calmed = true; L.calmT = 0; ev.calmed = true; L.standTarget = 0; L.threatTarget = 0; L.walkTo = null; }
+    if (allLit) {
+      L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
+      // she goes home: back to the nest to settle over her brood, off the rift
+      if (L.brood) { L.walkTo = L.brood.nest.clone(); L.toNest = true; L.standTarget = 1; }
+      else { L.standTarget = 0; L.walkTo = null; }
+    }
   } else {
     L.calmT += dt;
     for (const g of L.sigils) {

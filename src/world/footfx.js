@@ -178,6 +178,9 @@ export function buildFootFX() {
 
 export function setLanternPos(v) { lanternU.value.copy(v); }
 
+// Exported for the sleepers: the Brooder's footfalls and the silt that pours off her as
+// she rises use the same puff pool as Sal's boots.
+export function emitDust(x, y, z, count = 12, strength = 1) { emitPuff(x, y, z, count, strength); }
 function emitPuff(x, y, z, count, strength) {
   for (let i = 0; i < count; i++) {
     const k = pHead; pHead = (pHead + 1) % P_MAX;
