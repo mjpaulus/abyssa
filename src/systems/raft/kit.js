@@ -28,7 +28,7 @@ export function xf(geo, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, s = 1) {
 // ---- primitive shorthands (all indexed, so mergeGeometries stays happy) ------------
 export const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
 export const cyl = (rt, rb, h, seg = 10, open = false) => new THREE.CylinderGeometry(rt, rb, h, seg, 1, open);
-export const sph = (r, w = 8, h = 6) => new THREE.SphereGeometry(r, w, h);
+export const sph = (r, w = 8, h = 6, ps, pl, ts, tl) => new THREE.SphereGeometry(r, w, h, ps, pl, ts, tl);
 export const tor = (r, t, rs = 6, ts = 14) => new THREE.TorusGeometry(r, t, rs, ts);
 export const lathe = (pts, seg = 16) => new THREE.LatheGeometry(pts.map(p => new THREE.Vector2(p[0], p[1])), seg);
 
@@ -47,6 +47,13 @@ export function Part(node) {
         // so no two boards, staves or plates show the same patch of texture.
         const mode = mat.userData.uv;
         if (mode) for (const g of list) metricUV(g, mode);
+        // No part may render at one roughness: pieces a builder filed without any wear
+        // get the material's default treatment — patina on brass (tarnish facing down,
+        // bright facing up), and a light grime/oxide field on everything else textured.
+        if (mode && !mat.transparent) for (const g of list) if (!g.attributes.color) {
+          if (mat.userData.brass) brassPatina(g);
+          else weather(g, { tone: 0.94, freq: 2.2, amp: 0.20, rust: mat.userData.rustK || 0 });
+        }
         // merging demands identical attribute sets: pad plain primitives that got mixed
         // in with weathered ones carrying vertex colours. Colour is RGBA: A is the
         // surface STATE (0.5 neutral; lower = wetter / more polished, higher = rustier /
@@ -178,6 +185,9 @@ export function metricUV(g, mode = 'metric') {
   } else if (t === 'SphereGeometry') {
     const r = P.radius, ph = P.phiLength ?? TAU_, th = P.thetaLength ?? Math.PI;
     for (let i = 0; i < n; i++) set(i, uv.getX(i) * ph * r, uv.getY(i) * th * r);
+  } else if (t === 'CircleGeometry') {
+    const r = P.radius;
+    for (let i = 0; i < n; i++) set(i, (uv.getX(i) - 0.5) * 2 * r, (uv.getY(i) - 0.5) * 2 * r);
   } else if (g.userData.prism) {
     const { perim, l, side } = g.userData.prism;
     for (let i = 0; i < n; i++) {
@@ -318,35 +328,104 @@ export function tint(geo, r, g = r, b = r, st = 0.5) {
 }
 
 // ---- fittings -----------------------------------------------------------------------
+// Fastener heads are where iron rusts first: the seam round a head holds water. Each
+// head gets its own deterministic share of oxide (colour + dull, rough state), so a
+// line of rivets reads as a line of individual rivets, not a stamped pattern.
+const _fh = (x, y, z) => { const h = Math.sin(x * 91.7 + y * 47.3 + z * 23.9) * 43758.5453; return h - Math.floor(h); };
+export function rustHead(g, x, y, z, k = 1) {
+  const r = _fh(x, y, z), o = (0.25 + 0.75 * r) * k;
+  return tint(g, 1 + o * 0.95, 1 + o * 0.12, 1 - o * 0.30, 0.5 + o * 0.38);
+}
+
 // A ring of bolt/rivet heads on a plate. `axis` is 'x' | 'y' | 'z' (the plate normal).
 export function rivetRing(P, mat, n, cx, cy, cz, r, rad = 0.03, axis = 'z', phase = 0.5, w = 6, h = 4) {
   const g = sph(rad, w, h);
   for (let i = 0; i < n; i++) {
     const a = (i + phase) / n * TAU, c = Math.cos(a) * r, s = Math.sin(a) * r;
-    if (axis === 'z') P.add(xf(g.clone(), cx + c, cy + s, cz), mat);
-    else if (axis === 'y') P.add(xf(g.clone(), cx + c, cy, cz + s), mat);
-    else P.add(xf(g.clone(), cx, cy + c, cz + s), mat);
+    let q;
+    if (axis === 'z') q = xf(g.clone(), cx + c, cy + s, cz);
+    else if (axis === 'y') q = xf(g.clone(), cx + c, cy, cz + s);
+    else q = xf(g.clone(), cx, cy + c, cz + s);
+    if (!mat.userData.brass) rustHead(q, cx + c, cy + s, cz + i);
+    P.add(q, mat);
   }
 }
 
 // A line of bolt heads — iron strapping, plate seams, hull fastenings. `w,h` are the
 // dome tessellation, so nail heads can be cheaper than bolt heads. Pass hex=true for
 // manufactured through-bolts: a six-flat head on a washer instead of a dome rivet.
-export function boltLine(P, mat, x0, y0, z0, x1, y1, z1, n, rad = 0.032, w = 6, h = 4, hex = false) {
+export function boltLine(P, mat, x0, y0, z0, x1, y1, z1, n, rad = 0.032, w = 6, h = 4, hex = false, halo = false) {
   const g = hex ? null : sph(rad, w, h);
   for (let i = 0; i < n; i++) {
     const u = n === 1 ? 0.5 : i / (n - 1);
     const x = x0 + (x1 - x0) * u, y = y0 + (y1 - y0) * u, z = z0 + (z1 - z0) * u;
-    if (hex) hexBolt(P, mat, x, y, z, rad);
-    else P.add(xf(g.clone(), x, y, z), mat);
+    if (hex) hexBolt(P, mat, x, y, z, rad, 0, halo);
+    else P.add(mat.userData.brass ? xf(g.clone(), x, y, z) : rustHead(xf(g.clone(), x, y, z), x, y, z), mat);
   }
 }
 
 // A hex-head through-bolt seated on its washer, head up (+Y). Dome rivets stay rivets —
 // this is for the fastenings a spanner has actually been on.
-export function hexBolt(P, mat, x, y, z, rad = 0.032, ry = 0) {
-  P.add(xf(cyl(rad * 1.55, rad * 1.55, rad * 0.5, 12), x, y + rad * 0.25, z), mat);      // washer
-  P.add(xf(cyl(rad * 0.92, rad * 1.0, rad * 1.15, 6), x, y + rad * 0.9, z, 0, ry), mat); // head
+// `halo` lays a rust bloom on the plate under it: a flush 16-sided disc whose centre is
+// oxide-orange and dull, fading at the rim back to the plate's own grey-iron state, so
+// the stain reads as bleeding OUT of the seam rather than as a sticker. Iron plates only
+// (on timber the deck map does this job).
+export function hexBolt(P, mat, x, y, z, rad = 0.032, ry = 0, halo = false) {
+  P.add(rustHead(xf(cyl(rad * 1.55, rad * 1.55, rad * 0.5, 12), x, y + rad * 0.25, z), x, y, z, 1.2), mat);      // washer
+  // the head: a spanner has been on its flats, so the top is brighter than the washer
+  const hd = rustHead(xf(cyl(rad * 0.92, rad * 1.0, rad * 1.15, 6), x, y + rad * 0.9, z, 0, ry), x + 1, y, z, 0.6);
+  state(hd, (i, hx, hy) => hy > y + rad * 1.4 ? -0.18 : 0);
+  P.add(hd, mat);
+  if (halo) {
+    const d = new THREE.CircleGeometry(rad * 3.2, 16).rotateX(-Math.PI / 2);
+    xf(d, x, y + 0.0015, z, 0, _fh(x, z, y) * 6.28);
+    const dp = d.attributes.position, n = dp.count, c = new Float32Array(n * 4);
+    for (let i = 0; i < n; i++) {
+      const dx = dp.getX(i) - x, dz = dp.getZ(i) - z, rim = Math.hypot(dx, dz) > 1e-5;
+      // uneven edge: the bloom runs further one way (the way the water sits)
+      if (rim) {
+        const a = Math.atan2(dz, dx), sc = 0.72 + 0.55 * _fh(Math.cos(a) * 3 + x, Math.sin(a) * 3 + z, y);
+        dp.setX(i, x + dx * sc); dp.setZ(i, z + dz * sc);
+      }
+      const o = rim ? 0 : 1, t = rim ? 0.92 : 1;
+      c[i * 4] = t * (1 + o * 1.25); c[i * 4 + 1] = t * (1 + o * 0.15); c[i * 4 + 2] = t * (1 - o * 0.35); c[i * 4 + 3] = 0.5 + o * 0.45;
+    }
+    d.setAttribute('color', new THREE.BufferAttribute(c, 4));
+    P.add(d, mat);
+  }
+}
+
+// BRASS WEAR for a wheel/ring in the XY plane about (cx, cy): the rim's outside and
+// face are where hands and belts polish it bright and slick; the inside of the rim and
+// the spoke roots near the hub hold dark, dry tarnish. `R` is the wheel radius.
+export function brassWear(g, cx, cy, R) {
+  rgba(g);
+  const p = g.attributes.position, nr = g.attributes.normal, c = g.attributes.color;
+  for (let i = 0; i < p.count; i++) {
+    const dx = p.getX(i) - cx, dy = p.getY(i) - cy, r = Math.hypot(dx, dy) || 1;
+    const out = (nr.getX(i) * dx + nr.getY(i) * dy) / r;          // + faces outward
+    const face = Math.abs(nr.getZ(i));
+    let pol = Math.max(0, out) * 0.9 + face * 0.35 * Math.min(1, r / R);
+    let tar = Math.max(0, -out) * 0.8 + Math.max(0, 1 - r / (R * 0.45)) * 0.7;
+    const k = Math.max(-1, Math.min(1, pol - tar));
+    const cr = c.getX(i), cg = c.getY(i), cb = c.getZ(i);
+    if (k > 0) c.setXYZW(i, cr * (1 + k * 0.22), cg * (1 + k * 0.20), cb * (1 + k * 0.12), 0.5 - k * 0.38);
+    else c.setXYZW(i, cr * (1 + k * 0.45), cg * (1 + k * 0.40), cb * (1 + k * 0.30), 0.5 - k * 0.40);
+  }
+  return g;
+}
+
+// General brass: tarnish settles where a part faces down or away from hands (lower
+// hemisphere of the normal), bright where it faces up and out.
+export function brassPatina(g, k = 1) {
+  rgba(g);
+  const nr = g.attributes.normal, c = g.attributes.color, p = g.attributes.position;
+  for (let i = 0; i < nr.count; i++) {
+    const up = nr.getY(i), n = _fh(p.getX(i) * 7, p.getY(i) * 7, p.getZ(i) * 7) - 0.5;
+    const t = Math.max(-1, Math.min(1, (-up * 0.55 + n * 0.9 + 0.25) * k));
+    c.setXYZW(i, c.getX(i) * (1 - t * 0.30), c.getY(i) * (1 - t * 0.26), c.getZ(i) * (1 - t * 0.12), 0.5 + t * 0.35);
+  }
+  return g;
 }
 
 // A run of rope/chain/hose through space. Points are [x,y,z] triples.

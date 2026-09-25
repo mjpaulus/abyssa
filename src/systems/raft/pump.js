@@ -18,7 +18,8 @@
 // The group origin sits ON THE DECK (local y = 0 is the plank surface), so every number
 // below reads as a height above the boards.
 import * as THREE from 'three';
-import { Part, xf, box, cyl, sph, tor, lathe, weather, tint, rivetRing, boltLine, rope, TAU } from './kit.js';
+import { Part, xf, box, cyl, sph, tor, lathe, weather, tint, rivetRing, boltLine, rope, TAU,
+  brassWear, brassPatina, state } from './kit.js';
 
 // Where the machine sits on the deck. Its footprint is the OCCUPIED box the deck
 // builders were told to keep clear: x [-1.15,1.60], y [0,2.50], z [-2.05,-0.35].
@@ -57,13 +58,17 @@ function beltArc(P, mat, cx, cy, r, a0, a1, n) {
 // and that bug cost a round last time.
 // `ts` is the rim's tubular count: these wheels SPIN, and a faceted rim strobes — the
 // flywheel runs 36, the smaller (and faster, belt-ratio) pulley 24.
+// Brass wear: the rim is what a hand grabs to bar the engine over and what the belt
+// dressing wipes, so its crown and faces run bright and slick; the inside of the rim
+// and the spoke roots at the hub hold dark tarnish.
 function wheel(P, mats, r, spokes, tube, hub, ts = 36) {
-  P.add(tor(r, tube, 8, ts), mats.brass);
-  P.add(xf(cyl(r * 0.96, r * 0.96, tube * 0.55, 20), 0, 0, 0, Math.PI / 2), mats.iron);  // web
+  P.add(brassWear(tor(r, tube, 8, ts), 0, 0, r), mats.brass);
+  P.add(weather(xf(cyl(r * 0.96, r * 0.96, tube * 0.55, 20), 0, 0, 0, Math.PI / 2), { tone: 0.8, freq: 3, amp: 0.25, rust: 0.25 }), mats.iron);  // web
   for (let i = 0; i < spokes; i++) {
-    P.add(xf(box(r * 1.86, tube * 0.75, tube * 0.6), 0, 0, 0, 0, 0, i * Math.PI / spokes), mats.brass);
+    // spokes get a row of vertices along their length so the root tarnish can grade out
+    P.add(brassWear(xf(new THREE.BoxGeometry(r * 1.86, tube * 0.75, tube * 0.6, 8, 1, 1), 0, 0, 0, 0, 0, i * Math.PI / spokes), 0, 0, r), mats.brass);
   }
-  P.add(xf(cyl(hub, hub, tube * 2.6, 10), 0, 0, 0, Math.PI / 2), mats.iron);
+  P.add(weather(xf(cyl(hub, hub, tube * 2.6, 10), 0, 0, 0, Math.PI / 2), { tone: 0.85, freq: 4, amp: 0.2, rust: 0.2 }), mats.iron);
 }
 
 export function buildPump(group, mats) {
@@ -76,14 +81,16 @@ export function buildPump(group, mats) {
   for (const z of [-0.30, 0.30]) {
     P.add(weather(xf(box(2.62, 0.16, 0.26), 0.08, 0.08, z), { tone: 0.86, freq: 1.1, amp: 0.30 }), mats.wood);
   }
-  P.add(xf(box(2.72, 0.05, 0.86), 0.08, 0.185, 0), mats.iron);
-  boltLine(P, mats.iron, -1.16, 0.22, -0.30, 1.30, 0.22, -0.30, 6, 0.036, 6, 4, true);
-  boltLine(P, mats.iron, -1.16, 0.22, 0.30, 1.30, 0.22, 0.30, 6, 0.036, 6, 4, true);
+  P.add(weather(xf(box(2.72, 0.05, 0.86), 0.08, 0.185, 0), { tone: 0.85, freq: 2.2, amp: 0.28, rust: 0.45 }), mats.iron);
+  boltLine(P, mats.iron, -1.16, 0.21, -0.30, 1.30, 0.21, -0.30, 6, 0.036, 6, 4, true, true);
+  boltLine(P, mats.iron, -1.16, 0.21, 0.30, 1.30, 0.21, 0.30, 6, 0.036, 6, 4, true, true);
 
   // ---- the engine --------------------------------------------------------------
   // Crankcase, one big cylinder with cooling fins, hot-bulb head. Period oil engines
   // were enormous for their power, which is why this thing is half the machine.
-  P.add(weather(xf(box(1.02, 0.62, 0.62), FW_X, 0.52, 0), { tone: 0.92, freq: 1.4, amp: 0.22, rust: 0.35 }), mats.iron);
+  // the crankcase, fuel tank, compressor case and receiver are the ENAMELLED castings
+  // (mats.paint, clear-coated, chipped); fins, heads and stack stay bare iron
+  P.add(weather(xf(box(1.02, 0.62, 0.62), FW_X, 0.52, 0), { tone: 0.95, freq: 1.4, amp: 0.18, rust: 0.20 }), mats.paint);
   P.add(xf(box(1.08, 0.06, 0.68), FW_X, 0.84, 0), mats.iron);          // crankcase joint flange
   rivetRing(P, mats.iron, 8, FW_X, 0.52, 0.32, 0.24, 0.028, 'z');       // inspection door
   P.add(xf(cyl(0.14, 0.14, 0.04, 10), FW_X, 0.52, 0.33, Math.PI / 2), mats.brass);
@@ -106,7 +113,7 @@ export function buildPump(group, mats) {
   rope(P, mats.iron, [[FW_X - 0.16, 1.62, 0], [-0.80, 1.70, 0], [-1.00, 1.58, 0]], 0.075, 10);
 
   // Fuel tank: this is the bitumen. Sight glass on the near face so the level reads.
-  P.add(weather(xf(box(0.44, 0.40, 0.46), -1.08, 1.06, -0.22), { tone: 0.84, freq: 1.8, amp: 0.26, rust: 0.45 }), mats.iron);
+  P.add(weather(xf(box(0.44, 0.40, 0.46), -1.08, 1.06, -0.22), { tone: 0.88, freq: 1.8, amp: 0.24, rust: 0.30 }), mats.paint);
   P.add(xf(cyl(0.035, 0.035, 0.34, 8), -0.88, 1.06, -0.04), mats.glass);   // sight glass
   P.add(xf(cyl(0.05, 0.05, 0.07, 8), -1.08, 1.28, -0.22), mats.brass);     // filler cap
   P.add(xf(cyl(0.028, 0.028, 0.16, 6), -0.94, 0.90, -0.02, 0, 0, Math.PI / 2), mats.brass);  // tap
@@ -129,21 +136,22 @@ export function buildPump(group, mats) {
   // ---- the compressor ----------------------------------------------------------
   // Two finned barrels on a small crankcase: high stage and low stage. It is visibly
   // smaller and faster than the engine, which is what the belt ratio is telling you.
-  P.add(weather(xf(box(0.74, 0.48, 0.52), PL_X, 0.45, 0), { tone: 0.90, freq: 1.6, amp: 0.22, rust: 0.30 }), mats.iron);
+  P.add(weather(xf(box(0.74, 0.48, 0.52), PL_X, 0.45, 0), { tone: 0.95, freq: 1.6, amp: 0.18, rust: 0.18 }), mats.paint);
   for (const [x, r, h] of [[PL_X - 0.17, 0.135, 0.50], [PL_X + 0.17, 0.105, 0.44]]) {
     P.add(xf(cyl(r, r * 1.05, h, 10), x, 0.69 + h / 2 - 0.02, 0), mats.iron);
     for (let i = 0; i < 5; i++) P.add(xf(cyl(r + 0.055, r + 0.055, 0.022, 10), x, 0.76 + i * 0.085, 0), mats.iron);
-    P.add(xf(cyl(r + 0.03, r + 0.03, 0.07, 10), x, 0.71 + h, 0), mats.brass);   // head
+    P.add(brassPatina(xf(cyl(r + 0.03, r + 0.03, 0.07, 16), x, 0.71 + h, 0), 1.2), mats.brass);   // head
   }
-  P.add(xf(box(0.52, 0.07, 0.16), PL_X, 1.26, 0), mats.brass);                  // manifold
+  P.add(brassPatina(xf(box(0.52, 0.07, 0.16), PL_X, 1.26, 0), 1.2), mats.brass);                  // manifold
 
   // Receiver, cradled above the compressor. Air is stored here before it goes down the
   // hose, and its gauge is the one dial on the raft worth reading.
   // Hemispherical ends put a full radius past the barrel, so the barrel is short: the
   // whole vessel has to finish inside x = 1.45.
-  P.add(weather(xf(cyl(0.25, 0.25, 0.98, 14), 0.68, 1.66, -0.14, 0, 0, Math.PI / 2),
-    { tone: 0.92, freq: 1.5, amp: 0.20, rust: 0.28 }), mats.iron);
-  for (const x of [0.19, 1.17]) P.add(xf(sph(0.25, 10, 6), x, 1.66, -0.14), mats.iron);
+  P.add(weather(xf(cyl(0.25, 0.25, 0.98, 20), 0.68, 1.66, -0.14, 0, 0, Math.PI / 2),
+    { tone: 0.96, freq: 1.5, amp: 0.16, rust: 0.15 }), mats.paint);
+  for (const x of [0.19, 1.17]) P.add(weather(xf(sph(0.25, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2)
+    .rotateZ(x < 0.5 ? Math.PI / 2 : -Math.PI / 2), x, 1.66, -0.14), { tone: 0.96, freq: 1.5, amp: 0.16, rust: 0.15 }), mats.paint);
   for (const x of [0.34, 1.02]) {                                              // saddle straps
     P.add(xf(tor(0.27, 0.028, 4, 14), x, 1.66, -0.14, 0, Math.PI / 2), mats.iron);
     P.add(xf(box(0.06, 0.30, 0.12), x, 1.41, -0.14), mats.iron);
@@ -153,7 +161,7 @@ export function buildPump(group, mats) {
   rope(P, mats.brass, [[1.17, 1.62, 0.02], [1.24, 1.30, 0.28], [1.18, 0.72, 0.52]], 0.036, 12);
 
   // Stop valve on the delivery. A wheel says a human decides when air flows.
-  P.add(xf(tor(0.105, 0.020, 4, 12), 1.24, 1.30, 0.30, Math.PI / 2), mats.brass);
+  P.add(xf(brassWear(tor(0.105, 0.020, 6, 20), 0, 0, 0.105), 1.24, 1.30, 0.30, Math.PI / 2), mats.brass);
   for (let i = 0; i < 3; i++) P.add(xf(box(0.20, 0.018, 0.018), 1.24, 1.30, 0.30, 0, i * Math.PI / 3, 0), mats.brass);
   P.add(xf(cyl(0.028, 0.028, 0.09, 6), 1.24, 1.30, 0.30, Math.PI / 2), mats.brass);
 
@@ -171,7 +179,7 @@ export function buildPump(group, mats) {
     arm.position.set(0, 0.46, 0);
     const AP = Part(arm);
     AP.add(xf(cyl(0.020, 0.020, 0.34, 5), 0, -0.17, 0), mats.iron);
-    AP.add(xf(sph(0.070, 8, 6), 0, -0.34, 0), mats.brass);
+    AP.add(state(xf(sph(0.070, 12, 8), 0, -0.34, 0), -0.25), mats.brass);
     AP.bake();
     arm.userData.sgn = sgn;
     gov.add(arm);
@@ -212,7 +220,7 @@ export function buildPump(group, mats) {
   // Mounted on the compressor head facing +Z, because the player stands forward of the
   // machine and looks aft at it.
   const GX = PL_X, GY = 1.15, GZ = 0.30;
-  P.add(xf(cyl(0.11, 0.11, 0.05, 14), GX, GY, GZ, Math.PI / 2), mats.brass);
+  P.add(brassPatina(xf(cyl(0.11, 0.11, 0.05, 20), GX, GY, GZ, Math.PI / 2)), mats.brass);
   P.add(tint(xf(cyl(0.093, 0.093, 0.012, 14), GX, GY, GZ + 0.028, Math.PI / 2), 1.22, 1.20, 1.10), mats.brass);
   P.add(xf(cyl(0.02, 0.02, 0.20, 6), GX, GY - 0.14, GZ - 0.06), mats.brass);   // standpipe
   for (let i = 0; i <= 8; i++) {                                               // dial ticks

@@ -19,8 +19,7 @@ import { scene, camera, envTex, renderer } from '../core.js';
 import { SURFACE_Y } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { V3 } from '../lib/math.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand,
-  raftWoodSet } from '../lib/textures.js';
+import { makeGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftSetsBench } from '../lib/textures.js';
 import { survival } from './survival.js';
 import { surfaceHeightAt, stormLevel, onSkyEnv } from '../world/water.js';
 import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash, DECK_SENTINEL } from './raft/kit.js';
@@ -69,79 +68,6 @@ const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
 // that makes its own material makes its own draw call and breaks the merge. All of them
 // carry vertexColors so kit.js's weather()/tint() can bake grime and waterline stain
 // into whatever geometry wants it.
-// ---- procedural surface maps for the palette ---------------------------------------
-// STRUCTURE ONLY. The raft's colour story is authored twice already — palette hues and
-// kit.js weather() vertex stains — and both MULTIPLY with these maps, so every albedo
-// here is near-white grayscale (grain shadow, never pigment) and every roughnessMap is a
-// multiplier around 1. Deck boards are box(capW, h, len) with the long axis on Z: a box
-// face maps 0..1 regardless of size, so on the deck top the V axis runs down the board
-// and the ~15:1 face stretch elongates everything drawn — grain is therefore drawn along
-// canvas Y and comes out running WITH the boards for free. Deterministic seeds: the raft
-// must look identical every boot. Built once, at first palette() call.
-let RM = null;
-function raftMaps() {
-  if (RM) return RM;
-  const clamp01b = v => v < 0 ? 0 : v > 255 ? 255 : v;
-  const gray = (S, fn) => {
-    const { canvas, ctx } = canvas2d(S);
-    const im = ctx.createImageData(S, S);
-    for (let i = 0; i < S * S; i++) {
-      const g = clamp01b(fn(i) * 255);
-      im.data[i * 4] = im.data[i * 4 + 1] = im.data[i * 4 + 2] = g;
-      im.data[i * 4 + 3] = 255;
-    }
-    ctx.putImageData(im, 0, 0);
-    return canvas;
-  };
-  // -- wood: long grain along canvas Y, pores, a rare split --
-  const S = 256, wr = seededRand(0xDECC0A7);
-  const whc = noiseCanvas(S, 4, 1.0, wr);
-  const wh = whc.getContext('2d');
-  wh.lineCap = 'round';
-  for (let i = 0; i < 150; i++) {              // grain streaks, running with the board (v)
-    const x = wr() * S, y0 = wr() * S, l = 60 + wr() * 200;
-    wh.strokeStyle = wr() < 0.6 ? 'rgba(0,0,0,.16)' : 'rgba(255,255,255,.11)';
-    wh.lineWidth = 0.6 + wr() * 1.8;
-    wh.beginPath(); wh.moveTo(x, y0);
-    wh.bezierCurveTo(x + (wr() - 0.5) * 5, y0 + l * 0.33, x + (wr() - 0.5) * 5, y0 + l * 0.66, x + (wr() - 0.5) * 3, y0 + l);
-    wh.stroke();
-  }
-  for (let i = 0; i < 60; i++) {               // pores / old fastener stains
-    const x = wr() * S, y = wr() * S, r = 1 + wr() * 2.4;
-    wh.fillStyle = 'rgba(0,0,0,.28)';
-    wh.beginPath(); wh.ellipse(x, y, r * 0.5, r * 1.6, 0, 0, Math.PI * 2); wh.fill();
-  }
-  const wd = wh.getImageData(0, 0, S, S).data;
-  const woodAlb = gray(S, i => 0.80 + 0.20 * (wd[i * 4] / 255));
-  const woodRgh = gray(S, i => 0.90 + 0.10 * (1 - wd[i * 4] / 255));
-  // -- metal: micro-scratches + faint dents (diver.js metalMaps idiom, but neutral) --
-  const mr = seededRand(0xB7A55);
-  const mhc = noiseCanvas(S, 4, 1.0, mr);
-  const mh = mhc.getContext('2d');
-  mh.lineCap = 'round';
-  for (let i = 0; i < 40; i++) {
-    const x = mr() * S, y = mr() * S, r = 5 + mr() * 14;
-    const g = mh.createRadialGradient(x, y, 0, x, y, r);
-    g.addColorStop(0, mr() < 0.6 ? 'rgba(0,0,0,.26)' : 'rgba(255,255,255,.22)');
-    g.addColorStop(1, 'rgba(128,128,128,0)');
-    mh.fillStyle = g; mh.beginPath(); mh.arc(x, y, r, 0, Math.PI * 2); mh.fill();
-  }
-  for (let i = 0; i < 170; i++) {              // brushed hairlines
-    const x = mr() * S, y = mr() * S, a = (mr() - 0.5) * 0.8 + (mr() < 0.5 ? 0 : 1.57), l = 10 + mr() * 60;
-    mh.strokeStyle = mr() < 0.5 ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.18)';
-    mh.lineWidth = 0.5 + mr() * 1.2;
-    mh.beginPath(); mh.moveTo(x, y); mh.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); mh.stroke();
-  }
-  const md = mh.getImageData(0, 0, S, S).data;
-  const metAlb = gray(S, i => 0.86 + 0.14 * (md[i * 4] / 255));
-  const metRgh = gray(S, i => 0.78 + 0.22 * (1 - md[i * 4] / 255));
-  RM = {
-    wood: { map: toTexture(woodAlb, 1, true), rough: toTexture(woodRgh, 1), nrm: toTexture(normalFromHeight(whc, 1.3), 1) },
-    metal: { map: toTexture(metAlb, 1, true), rough: toTexture(metRgh, 1), nrm: toTexture(normalFromHeight(mhc, 1.2), 1) }
-  };
-  return RM;
-}
-
 // ---- THE SURFACE PATCH (polish-raft) ----------------------------------------------
 // One onBeforeCompile shared by every lit raft material, keyed so materials with the same
 // maps still share a program. It reads three things no stock material can:
@@ -204,22 +130,33 @@ function raftSurf(m, deck = false) {
 function palette() {
   const M = (color, o) => new THREE.MeshStandardMaterial(
     Object.assign({ color, envMap: envTex, vertexColors: true }, o));
-  const { metal: MT } = raftMaps();
-  const WS = raftWoodSet();
-  const wset = { map: WS.map, roughnessMap: WS.rough, normalMap: WS.nrm, normalScale: new THREE.Vector2(1.0, 1.0) };
-  const mset = { map: MT.map, roughnessMap: MT.rough, normalMap: MT.nrm, normalScale: new THREE.Vector2(0.35, 0.35) };
+  // Generated PBR sets (lib/textures.js, RAFT SURFACE SETS), laid on in metres by the
+  // kit's metricUV. The albedo maps carry real value range now (the old ones were
+  // near-white grain), so the palette hues were lifted to keep each material's mean.
+  const set = (S, ns) => ({ map: S.map, roughnessMap: S.rough, normalMap: S.nrm, normalScale: new THREE.Vector2(ns, ns) });
+  const WS = raftWoodSet(), IS = raftIronSet(), BS = raftBrassSet(), PS = raftPaintSet();
   const metric = m => { m.userData.uv = 'metric'; return m; };
+  const brassy = m => { m.userData.brass = true; return m; };
+  const rusty = (m, k) => { m.userData.rustK = k; return m; };
+  // ENGINE ENAMEL: the one painted surface on the boat, so it is the one clear-coat.
+  // The colour lives in the map (enamel, primer rings, bare iron in the chips) and the
+  // coat is masked off wherever the enamel has flaked.
+  const paint = new THREE.MeshPhysicalMaterial({
+    color: 0xffffff, envMap: envTex, vertexColors: true, roughness: 1.0, metalness: 0.08,
+    envMapIntensity: 0.55, ...set(PS, 0.8), clearcoat: 0.45, clearcoatRoughness: 0.30,
+    clearcoatMap: PS.coat
+  });
   return {
-    wood: metric(M(0x8f7658, { roughness: 0.94, metalness: 0.02, envMapIntensity: 0.22, ...wset })),
-    wood2: metric(M(0xa89878, { roughness: 0.96, metalness: 0.00, envMapIntensity: 0.16, ...wset })),
-    iron: M(0x33373b, { roughness: 0.58, metalness: 0.78, envMapIntensity: 0.45, ...mset }),
-    rust: M(0x6d452a, { roughness: 0.93, metalness: 0.22, envMapIntensity: 0.18 }),
-    brass: M(0xac8a2f, { roughness: 0.34, metalness: 0.90, envMapIntensity: 0.70, ...mset }),
-    lead: M(0x6b6f74, { roughness: 0.74, metalness: 0.52, envMapIntensity: 0.28 }),
+    wood: metric(M(0x8f7658, { roughness: 0.94, metalness: 0.02, envMapIntensity: 0.22, ...set(WS, 1.0) })),
+    wood2: metric(M(0xa89878, { roughness: 0.96, metalness: 0.00, envMapIntensity: 0.16, ...set(WS, 1.0) })),
+    iron: rusty(metric(M(0x60656a, { roughness: 1.0, metalness: 0.80, envMapIntensity: 0.50, ...set(IS, 1.0) })), 0.3),
+    rust: rusty(metric(M(0xc08858, { roughness: 1.0, metalness: 0.25, envMapIntensity: 0.20, ...set(IS, 1.2) })), 0.6),
+    brass: brassy(metric(M(0xa8862f, { roughness: 0.62, metalness: 0.92, envMapIntensity: 0.75, ...set(BS, 1.0) }))),
+    lead: metric(M(0x9ea3a8, { roughness: 1.0, metalness: 0.50, envMapIntensity: 0.28, ...set(IS, 0.8) })),
     rope: M(0x9a8862, { roughness: 0.97, metalness: 0.00, envMapIntensity: 0.10 }),
     canvas: M(0x7c7360, { roughness: 0.98, metalness: 0.00, envMapIntensity: 0.10 }),
     leather: M(0x4e3620, { roughness: 0.80, metalness: 0.04, envMapIntensity: 0.16 }),
-    paint: M(0x7a3c2b, { roughness: 0.86, metalness: 0.10, envMapIntensity: 0.20 }),
+    paint: metric(paint),
     // Matched to tether.js's own hose material (0x33383b / 0.5) on purpose: the wound
     // reel, the lead over the sheave and the deployed umbilical have to read as ONE
     // continuous line, and a shade of difference at the block gives that away.
@@ -259,7 +196,7 @@ function bakeDeckMap(group) {
     fragmentShader: 'varying float vH; void main() { gl_FragColor = vec4( clamp( ( vH - 0.14 ) / 0.56, 0.0, 1.0 ), 1.0, 0.0, 1.0 ); }'
   });
   const tmp = new THREE.Scene();
-  const p0 = group.position.clone(), r0 = group.rotation.clone();
+  const p0 = group.position.clone(), r0 = group.rotation.clone(), parent = group.parent;
   group.position.set(0, 0, 0); group.rotation.set(0, 0, 0);
   tmp.add(group); tmp.overrideMaterial = hm;
   const prevRT = renderer.getRenderTarget(), prevCC = renderer.getClearColor(new THREE.Color()), prevCA = renderer.getClearAlpha();
@@ -271,6 +208,7 @@ function bakeDeckMap(group) {
   deckReadMs = performance.now() - tr0;
   renderer.setRenderTarget(prevRT); renderer.setClearColor(prevCC, prevCA);
   tmp.remove(group); tmp.overrideMaterial = null;
+  if (parent) parent.add(group);
   group.position.copy(p0); group.rotation.copy(r0);
   hm.dispose(); rt.dispose();
 
@@ -410,8 +348,8 @@ function buildReel(P, mats, head) {
       P.add(xf(cyl(0.045, 0.065, RY - 0.11, 6), s * 0.60, (RY + 0.11) / 2, RZ + d * 0.30,
         -d * 0.30, 0, -s * 0.10), mats.iron);
     }
-    P.add(xf(box(0.18, 0.05, 0.78), s * 0.60, 0.14, RZ), mats.iron);        // sole plate
-    boltLine(P, mats.iron, s * 0.60, 0.18, RZ - 0.28, s * 0.60, 0.18, RZ + 0.28, 3, 0.030, 6, 4, true);
+    P.add(weather(xf(box(0.18, 0.05, 0.78), s * 0.60, 0.14, RZ), { tone: 0.85, freq: 3, amp: 0.3, rust: 0.5 }), mats.iron);        // sole plate
+    boltLine(P, mats.iron, s * 0.60, 0.165, RZ - 0.28, s * 0.60, 0.165, RZ + 0.28, 3, 0.030, 6, 4, true, true);
     P.add(xf(cyl(0.08, 0.08, 0.14, 8), s * 0.60, RY, RZ, 0, 0, Math.PI / 2), mats.brass);  // bearing
   }
   P.add(xf(cyl(0.05, 0.05, 1.32, 8), 0, RY, RZ, 0, 0, Math.PI / 2), mats.iron);            // axle
@@ -556,6 +494,12 @@ export function buildRaft() {
   // Boot cost, kept: the surface maps are generated on the main thread at load, and the
   // polish pass budgets them (maps = palette + texture generation, total = whole build).
   window.__raftBoot = { maps: +tMaps.toFixed(1), deck: +tDeck.toFixed(1), deckRead: +deckReadMs.toFixed(1), total: +(performance.now() - tb0).toFixed(1), calls };
+  // DEV bench: cold regeneration of the surface sets + a re-bake of the deck map, timed
+  // warm (boot-time numbers above swing 2x with whatever else the main thread is doing)
+  window.__raftBench = () => {
+    const t0 = performance.now(); bakeDeckMap(raft);
+    return { sets: raftSetsBench(), deck: +(performance.now() - t0).toFixed(1), deckRead: +deckReadMs.toFixed(1) };
+  };
   scene.add(raft);
   raft.updateMatrixWorld(true);
   raft.localToWorld(pumpPos.copy(hoseHead));

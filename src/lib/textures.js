@@ -619,13 +619,13 @@ export function raftBrassSet() {
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
     const u = x / S, v = y / S, i = y * S + x;
     const tn = nz0(u, v);
-    const tar = _ss(0.40, 0.72, tn);                       // tarnish patches
+    const tar = _ss(0.30, 0.64, tn);                       // tarnish patches
     const brush = nz1(u, v);                // polishing hairlines
     const spot = nz2(u, v);
     const pitD = spot < 0.22 ? (0.22 - spot) * 4 : 0;
     const k = _sat(tar * 0.8 + pitD * 0.7);
     let L = 0.92 + (brush - 0.5) * 0.10;
-    alb[i * 3] = L * (1 - k * 0.55); alb[i * 3 + 1] = L * (1 - k * 0.50); alb[i * 3 + 2] = L * (1 - k * 0.40);
+    alb[i * 3] = L * (1 - k * 0.66); alb[i * 3 + 1] = L * (1 - k * 0.58); alb[i * 3 + 2] = L * (1 - k * 0.42);
     rgh[i] = 0.55 + k * 0.45 + fp[i] * 0.35 + (brush - 0.5) * 0.15;
     hgt[i] = (brush - 0.5) * 0.00008 - pitD * 0.0002 + fp[i] * 0.00002;
   }
@@ -634,12 +634,12 @@ export function raftBrassSet() {
 }
 
 // ENGINE ENAMEL over iron. 512^2 over 0.55 m. The albedo carries the colour (the
-// material is white): oxide-red enamel, chipped through to grey primer and dark iron at
-// edges of flakes, with a raised paint lip round every chip. `coat` is a separate mask
+// material is white): sun-faded engine green, chipped through a red-oxide primer ring to
+// dark iron, with a raised paint lip round every chip. `coat` is a separate mask
 // (clearcoatMap) that takes the clear-coat off the chips and thins it on the primer.
 export function raftPaintSet() {
   if (_rs.paint) return _rs.paint;
-  const nz0 = pfbm(8, 8, 4, 5);
+  const nz0 = pfbm(14, 14, 4, 5);
   const nz1 = pfbm(3, 24, 2, 9);
   const nz2 = pfbm(2, 2, 3, 15);
   const nz3 = pfbm(48, 48, 2, 21);
@@ -649,18 +649,18 @@ export function raftPaintSet() {
   for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
     const u = x / S, v = y / S, i = y * S + x;
     const cn = nz0(u, v);
-    const chip = _ss(0.66, 0.69, cn);                    // bare where the flake came off
-    const primer = _ss(0.62, 0.66, cn) - chip;           // a primer ring round each chip
+    const chip = _ss(0.695, 0.705, cn);                  // bare where the flake came off
+    const primer = _ss(0.672, 0.688, cn) - chip;         // red-oxide primer ring round each chip
     const drip = nz1(u, v);                 // brush drag in the enamel
     const fade = nz2(u, v);
     const pr = _sat(primer);
-    const iron = 0.30 + (nz3(u, v) - 0.5) * 0.12;
-    const pa = [0.42 + fade * 0.08, 0.13 + fade * 0.03, 0.08 + fade * 0.02];
-    const pm = [0.55, 0.52, 0.47];
+    const iron = 0.22 + (nz3(u, v) - 0.5) * 0.10;
+    const pa = [0.12 + fade * 0.05, 0.18 + fade * 0.05, 0.10 + fade * 0.03];   // engine green, sun-faded
+    const pm = [0.46, 0.20, 0.13];
     for (let c = 0; c < 3; c++) {
       let a = pa[c] * (0.94 + (drip - 0.5) * 0.12);
       a = a * (1 - pr) + pm[c] * pr;
-      alb[i * 3 + c] = a * (1 - chip) + iron * (c === 0 ? 1.05 : 1) * chip;
+      alb[i * 3 + c] = a * (1 - chip) + iron * (c === 0 ? 1.08 : 1) * chip;
     }
     rgh[i] = 0.42 + (drip - 0.5) * 0.12 + fade * 0.10 + pr * 0.35 + chip * 0.45;
     hgt[i] = (1 - chip) * 0.00018 + pr * 0.00006 + (drip - 0.5) * 0.00004;
@@ -752,5 +752,22 @@ export function raftLeatherSet() {
   }
   _rs.leather = _packSet(S, S, alb, rgh, hgt, T / S, T / S, [T, T], 1.0);
   return _rs.leather;
+}
+// DEV bench: regenerate every raft set cold (cache bypassed, results discarded) and
+// time each. Used to hold the boot budget; the game never calls it.
+export function raftSetsBench() {
+  const keep = Object.assign({}, _rs), t = {};
+  for (const k in _rs) delete _rs[k];
+  const fns = { wood: raftWoodSet, iron: raftIronSet, brass: raftBrassSet, paint: raftPaintSet,
+    rope: raftRopeSet, canvas: raftCanvasSet, leather: raftLeatherSet };
+  let tot = 0;
+  for (const k in fns) {
+    const t0 = performance.now(); const S = fns[k](); t[k] = +(performance.now() - t0).toFixed(1); tot += t[k];
+    for (const x of ['map', 'rough', 'nrm', 'coat']) if (S[x]) S[x].dispose();
+  }
+  for (const k in _rs) delete _rs[k];
+  Object.assign(_rs, keep);
+  t.total = +tot.toFixed(1);
+  return t;
 }
 // ---- end RAFT SURFACE SETS ----------------------------------------------------------
