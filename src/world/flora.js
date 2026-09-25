@@ -596,12 +596,17 @@ export const kelp = { inst: null, data: [], meshes: [] };
 export const rockColliders = [];
 const zones = [];
 
-function mount(zi, geo, mat, n, shadow) {
+function mount(zi, geo, mat, n, shadow, cast) {
   n = Math.max(1, n);
   const g = geo.clone();
   g.setAttribute('aInst', new THREE.InstancedBufferAttribute(new Float32Array(n * 4), 4));
   const im = new THREE.InstancedMesh(g, mat, n);
   im.receiveShadow = !!shadow;
+  // Boulders and hero rocks cast into the seabed sun shadow (lighting.js re-aims the
+  // sun's box over the zone-0 floor). Rocks have no sway (aInst.y = 0), so three's
+  // instanced depth material draws them exactly where the lit pass does; the far cull
+  // scale is the only term it lacks, and that only ever affects rocks past 420 u.
+  im.castShadow = !!cast;
   im.frustumCulled = false;
   zones[zi].add(im);
   return im;
@@ -818,7 +823,7 @@ function buildOnce() {
     // ---- rocks: pebbles, boulders, hero landmarks ----
     for (const [geo, mat, cnt, sLo, sHi, sq] of [[G.r0, M.rock, 300, 0.5, 2.2, 0.34], [G.r1, M.rockB, 110, 2, 7, 0.3]]) {
       const L = place(zi, cnt, field.concat(reef), 0.42);
-      const im = mount(zi, geo, mat, L.length, true);
+      const im = mount(zi, geo, mat, L.length, true, geo === G.r1);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], S = rr(sLo, sHi) * (0.7 + 0.9 * fbm(p.x * 0.05 + 9, p.z * 0.05));
         _c.set(P.rock).multiplyScalar(rr(0.7, 1.25));
@@ -830,7 +835,7 @@ function buildOnce() {
     }
     {
       const L = place(zi, 10, field, 0.62);
-      const im = mount(zi, G.r2, M.rockH, L.length + 60, true);
+      const im = mount(zi, G.r2, M.rockH, L.length + 60, true, true);
       let i = 0;
       for (const p of L) {
         const S = rr(8, 20);

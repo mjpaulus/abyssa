@@ -417,6 +417,20 @@ function build() {
     { key: 'gainK', min: 0, max: 4, step: 0.01 },
     { key: 'shadow', min: 0, max: 1, step: 0.01 }
   ]);
+  // --- SEABED (roadmap/ref-caustics-shadow.md) --------------------------------
+  knobGroup('seabed', GLASS.seabed, BOOT.seabed, [
+    { key: 'caustStr', min: 0, max: 3, step: 0.01 },
+    { key: 'caustScale', min: 0.3, max: 3, step: 0.01 },
+    { key: 'caustFollow', min: 0, max: 4, step: 0.01 },
+    { key: 'shadow', min: 0, max: 1, step: 1 },
+    { key: 'shadowEvery', min: 1, max: 60, step: 1 },
+    { key: 'shadowSize', min: 60, max: 320, step: 2 },
+    { key: 'shadowRadius', min: 0, max: 8, step: 0.1 },
+    { key: 'shadowBias', min: -0.003, max: 0.003, step: 0.0001 },
+    { key: 'shadowNormalBias', min: 0, max: 2, step: 0.01 },
+    { key: 'shadowAmbient', min: 0, max: 1, step: 0.01 }
+  ]);
+  el('p', 'note', bd, 'zone-0 floor only: caustics follow the swell (follow 0 = fixed scroll); the sun shadow box is re-aimed over the floor below -26. probe: __caust.state() / __caust.set({...}).');
   {
     const rb = el('div', 'btns', bd);
     const road = el('button', null, rb, "michael's road");
@@ -565,6 +579,7 @@ function build() {
     Object.assign(GLASS.windwater, b.windwater);
     Object.assign(GLASS.style, b.style);
     Object.assign(GLASS.rays, b.rays);
+    Object.assign(GLASS.seabed, b.seabed);
     syncAll();
     status.textContent = 'boot values restored';
   });

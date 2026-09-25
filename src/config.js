@@ -431,6 +431,26 @@ export const GLASS = {
     shadow: 0.18          // darkening of the haze where the mask sits UNDER its mean
                           // (the cloud shadows the rays are the gaps between)
   },
+  // THE SEABED (roadmap/ref-caustics-shadow.md). Wave-slope caustics: the zone-0 floor's
+  // caustic lookup is displaced by the gradient of the two longest Gerstner components
+  // at the point where each fragment's sun ray crossed the surface, so the lace moves
+  // with the swell and stretches in a gale. Seabed sun shadow: below y = -26 in zone 0's
+  // band the sun's ONE shadow camera (the raft's 18 u box) is re-aimed at a `shadowSize`
+  // ortho box centred on the diver and refreshed every `shadowEvery` frames; above -26
+  // the raft box comes back exactly as shipped. Every value is live (a uniform or a
+  // shadow property, never a recompile). Probe: __caust.state() / __caust.set({...}).
+  seabed: {
+    caustStr: 1.0,        // caustic gain on top of each zone's own uCaust (0 = none)
+    caustScale: 1.0,      // pattern scale multiplier (1 = the shipped 0.155/0.075 mix)
+    caustFollow: 1.0,     // how far the lace follows the swell (0 = the old fixed scroll)
+    shadow: 1,            // 0/1: the seabed shadow box (0 = the raft box only, as shipped)
+    shadowEvery: 18,      // frames between seabed shadow-map refreshes
+    shadowSize: 180,      // ortho box width in world units (1024 texels across it)
+    shadowRadius: 2.5,    // PCF disc radius in texels (the raft box runs 1)
+    shadowBias: -0.0003,  // depth bias over the box's ~240 u range
+    shadowNormalBias: 0.35, // world-unit push along the normal against sand acne
+    shadowAmbient: 0.45   // share of the floor's hemisphere/ambient light the shadow takes
+  },
   // MARINE LAYER. The morning white-out. `thr`/`full` map hand.fog onto 0..1; the
   // burn-off is keyed on solar ELEVATION against the hand's own fogBurn, so the sun
   // really does eat it from the top down. Storms blow it out.

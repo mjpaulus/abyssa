@@ -288,7 +288,8 @@ function Part(node) {
           if (g.index === null) g.setIndex([...Array(g.attributes.position.count).keys()]);
         }
         const m = new THREE.Mesh(list.length > 1 ? mergeGeometries(list, false) : list[0], mat);
-        m.castShadow = false; m.receiveShadow = true;
+        // Wrecks cast into the seabed sun shadow (lighting.js) and receive it and the lantern's.
+        m.castShadow = true; m.receiveShadow = true;
         node.add(m);
       }
       b.clear();

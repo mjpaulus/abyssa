@@ -1,7 +1,13 @@
 // Seafloor terrain: heightfield, mesh, triplanar PBR material, caustics. OWNED BY: terrain agent.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, RIFT_R, zoneTop, zoneBottom, riftPos, SUN } from '../config.js';
+import { WORLD_R, RIFT_R, zoneTop, zoneBottom, riftPos, SUN, GLASS } from '../config.js';
+// WAVE-SLOPE CAUSTICS + SEABED SHADOW (roadmap/ref-caustics-shadow.md). Both are
+// runtime-only reads of values those modules already resolve each frame (the wave field
+// water.js publishes, the shadow mode lighting.js runs); nothing here is touched at
+// module evaluation, so the import cycle through water.js -> lighting.js is inert.
+import { waveLow } from './water.js';
+import { floorShadow, playerLightSrc } from '../lighting.js';
 import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textures.js';
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams } from './site.js';
@@ -367,7 +373,14 @@ const MAPS = (() => {
 // interface, so it arrives inside Snell's window or it is not a caustic.
 export const causticsUniforms = {
   uTime: { value: 0 }, uCamY: { value: 0 }, uSunK: { value: 1 },
-  uSunW: { value: new THREE.Vector3(SUN.dirWater.x, SUN.dirWater.y, SUN.dirWater.z) }
+  uSunW: { value: new THREE.Vector3(SUN.dirWater.x, SUN.dirWater.y, SUN.dirWater.z) },
+  // The two longest Gerstner components, mirrored from water.js's waveLow every frame:
+  // (dir.x, dir.z, k, height amplitude) each, and (omega0, omega1, wave clock, 0).
+  uWaveA: { value: new THREE.Vector4(1, 0, 0.1, 0) },
+  uWaveB: { value: new THREE.Vector4(0, 1, 0.15, 0) },
+  uWaveW: { value: new THREE.Vector4(0, 0, 0, 0) },
+  // GLASS.seabed: (caustStr, caustScale, caustFollow, shadowAmbient), live.
+  uCTune: { value: new THREE.Vector4(1, 1, 1, 0.45) }
 };
 
 const COMMON = {
@@ -381,6 +394,7 @@ uniform sampler2D uDetail, uRockN, uRipple;
 uniform vec3 uSilt, uGrav, uRock;
 uniform float uTime, uCamY, uCaust, uWet, uSunK;
 uniform vec3 uSunW;
+uniform vec4 uWaveA, uWaveB, uWaveW, uCTune;
 varying vec3 vWPos, vWNrm;
 
 // NOTE: no early return before the side taps. A return inside non-uniform control flow
@@ -490,17 +504,50 @@ function compileTerrain(sh) {
         float k = mf * (0.22 + 1.05 * siltW);
         tN = normalize(tN + vec3(r1.x * 1.15 + r2.x * 0.45, 0.0, r1.y * 1.15 + r2.y * 0.45) * k);
       }`)
+    // The sky light is blocked too: under a boulder or the Brooder's belly the
+    // hemisphere and ambient terms are what remain once the direct sun is gone, and at
+    // 240 u they are most of the floor's light — an unshaded indirect left the shadow a
+    // 15% tint (measured). GLASS.seabed.shadowAmbient is how much of it the map takes.
+    .replace('#include <lights_fragment_end>', /* glsl */`#include <lights_fragment_end>
+      reflectedLight.indirectDiffuse *= mix(1.0, seabedSh, uCTune.w);`)
     .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = tRough;')
     .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(tN, 0.0)).xyz);')
     .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
+      // SEABED SHADOW. The sun's shadow map (lighting.js, re-aimed over the floor in
+      // zone 0), sampled once here with the same 5-tap PCF the lit term uses, so the
+      // caustic lace and the direct light share one edge. Above -26 the map is the
+      // raft box and every floor fragment is outside it: getShadow returns 1. In
+      // zones 1-2 the sun casts no map at all and this whole branch is not compiled.
+      float seabedSh = 1.0;
+      #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+        seabedSh = getShadow( directionalShadowMap[ 0 ], directionalLightShadows[ 0 ].shadowMapSize, directionalLightShadows[ 0 ].shadowIntensity, directionalLightShadows[ 0 ].shadowBias, directionalLightShadows[ 0 ].shadowRadius, vDirectionalShadowCoord[ 0 ] );
+      #endif
       {
         // Calibrated so the zone-0 seafloor (~-240) still catches light and zone 1 is nearly dark.
         float depth01 = clamp((-vWPos.y - 110.0) / 380.0, 0.0, 1.0);
         float fade = 1.0 - depth01; fade *= fade;
         fade *= clamp(1.0 + (uCamY + 60.0) / 460.0, 0.12, 1.0);
         fade *= max(0.0, wn.y) * ao * uCaust * uSunK * (0.35 + 0.9 * mac.b);
+        fade *= uCTune.x;
         if (fade > 0.002) {
-          vec2 cp = vWPos.xz * mix(0.155, 0.075, depth01);
+          // WAVE-SLOPE CAUSTICS. The sun ray that lands on this fragment crossed the
+          // surface at sp (uSunW points up-sun, Snell-clamped). The surface gradient
+          // there, from the two longest components of the SAME field the sea mesh runs
+          // (water.js publishes bearing, k, height amplitude and omega each frame),
+          // bends the ray by roughly (n - 1) times the slope, and the lace on the
+          // floor moves by that times the depth: a calm 62 u swell walks it ~2 u, a
+          // gale stretches it by 10+. Zero extra taps, two cosines.
+          vec2 sp = vWPos.xz - uSunW.xz * (vWPos.y / max(0.25, uSunW.y));
+          float pa = dot(sp, uWaveA.xy) * uWaveA.z + uWaveW.x * uWaveW.z;
+          float pb = dot(sp, uWaveB.xy) * uWaveB.z + uWaveW.y * uWaveW.z;
+          vec2 grad = uWaveA.xy * (uWaveA.z * uWaveA.w * cos(pa))
+                    + uWaveB.xy * (uWaveB.z * uWaveB.w * cos(pb));
+          vec2 off = grad * (uCTune.z * 0.33 * clamp(-vWPos.y, 0.0, 300.0));
+          vec2 cp = (vWPos.xz + off) * mix(0.155, 0.075, depth01) * uCTune.y;
+          // Focused sunlight is still sunlight: where a rock or the Brooder is in the
+          // way, the lace goes out too. The 0.12 floor is the water column scattering
+          // a little light under everything.
+          float csh = 0.12 + 0.88 * seabedSh;
           // The chromatic split was 0.35 WORLD UNITS of RGB separation — a metre-wide
           // rainbow fringe on every band, which is a swimming-pool-mural tell, not
           // dispersion. Real dispersion at this scale is a few centimetres of warm/cool
@@ -532,13 +579,18 @@ function compileTerrain(sh) {
           float alum = dot(diffuseColor.rgb, vec3(0.2126, 0.7152, 0.0722));
           vec3 alb = diffuseColor.rgb / (alum * 0.55 + 0.045);
           totalEmissiveRadiance += c * alb * vec3(0.35, 0.60, 0.70)
-                                 * fade * 0.90 * (0.22 + 0.78 * ndl);
+                                 * fade * csh * 0.90 * (0.22 + 0.78 * ndl);
         }
       }`);
 }
 
 function zoneMat(silt, grav, rock, caust, wet) {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, dithering: true });
+  // SEABED SHADOW: three draws the BACK faces of a caster into a PCF shadow map (its
+  // acne defence), and a heightfield seen from the sun has none, so the floor wrote
+  // nothing into the map — measured: rocks and the Brooder present, terrain absent.
+  // Front faces here; the map's bias/normalBias (GLASS.seabed) carry the acne instead.
+  m.shadowSide = THREE.FrontSide;
   const u = {
     uSilt: { value: new THREE.Color(silt) },
     uGrav: { value: new THREE.Color(grav) },
@@ -777,6 +829,19 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   // under a black sky.
   causticsUniforms.uSunK.value = sunK;
   causticsUniforms.uSunW.value.set(SUN.dirWater.x, SUN.dirWater.y, SUN.dirWater.z);
+  // The swell under the caustics: water.js resolved this frame's two longest wave
+  // components (storm and wind already folded in) in updateWater, which game.js runs
+  // before this. Copied by value into the terrain's own uniforms.
+  const W = waveLow, SB = GLASS.seabed;
+  causticsUniforms.uWaveA.value.set(W[0], W[1], W[2], W[3]);
+  causticsUniforms.uWaveB.value.set(W[5], W[6], W[7], W[8]);
+  causticsUniforms.uWaveW.value.set(W[4], W[9], W[10], 0);
+  causticsUniforms.uCTune.value.set(SB.caustStr, SB.caustScale, SB.caustFollow, SB.shadowAmbient);
+  // The floor casts onto itself (cliffs onto sand) only while lighting.js has the sun's
+  // shadow box over the seabed. Off, the terrain never enters the raft box's shadow
+  // pass (its bounding sphere would otherwise put 166k tris into it every frame).
+  const cast = floorShadow.on;
+  for (let i = 0; i < 3; i++) if (terrainMeshes[i].castShadow !== cast) terrainMeshes[i].castShadow = cast;
   // Zone gating: each 166k-tri heightfield is submitted only while the camera is
   // inside its band — the same bands flora already runs (top+120 / bottom-150), which
   // overlap 180 units through every rift so a descent or the ending's fast ascent
@@ -792,4 +857,30 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   for (let i = 0; i < roofShells.length; i++) {
     roofShells[i].visible = camY < ZB[i] - 40 && camY > ZB[i] - 340;
   }
+}
+
+// ---- DEV PROBE: window.__caust (roadmap/ref-caustics-shadow.md) --------------------
+// state(): the live wave gradient at the diver's sun projection (the same expression the
+// shader evaluates per fragment, on the CPU), the tune uniforms, and lighting.js's
+// seabed shadow state. set({caustStr, caustFollow, shadow, ...}) writes GLASS.seabed.
+if (typeof window !== 'undefined') {
+  window.__caust = {
+    state() {
+      const W = waveLow, P = playerLightSrc.position, d = SUN.dirWater;
+      const sx = P.x - d.x * (P.y / Math.max(0.25, d.y)), sz = P.z - d.z * (P.y / Math.max(0.25, d.y));
+      const pa = (sx * W[0] + sz * W[1]) * W[2] + W[4] * W[10];
+      const pb = (sx * W[5] + sz * W[6]) * W[7] + W[9] * W[10];
+      const ca = W[2] * W[3] * Math.cos(pa), cb = W[7] * W[8] * Math.cos(pb);
+      const gx = W[0] * ca + W[5] * cb, gz = W[1] * ca + W[6] * cb;
+      const k = GLASS.seabed.caustFollow * 0.33 * Math.min(300, Math.max(0, -P.y));
+      return {
+        grad: [gx, gz], offset: [gx * k, gz * k], ampH: [W[3], W[8]], t: W[10],
+        sunK: causticsUniforms.uSunK.value, camY: causticsUniforms.uCamY.value,
+        tune: causticsUniforms.uCTune.value.toArray(),
+        shadow: { on: floorShadow.on, refreshes: floorShadow.refreshes, box: floorShadow.box.slice(), terrainCast: terrainMeshes[0].castShadow },
+        knobs: { ...GLASS.seabed }
+      };
+    },
+    set(o) { Object.assign(GLASS.seabed, o); return window.__caust.state(); }
+  };
 }

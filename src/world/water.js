@@ -1680,6 +1680,10 @@ const uAir = { value: 0 };
 // game.js clamps the play camera against THIS rather than a flat SURFACE_Y, so the
 // clamp sits below the air band even in a gale (a storm trough reaches about -0.6, which
 // against a flat -0.9 clamp would have leaked a little sky into the underwater frame).
+// The resolved low-frequency wave field, for the seabed caustics (terrain.js reads it
+// in updateTerrain): [dx, dz, k, ampH, w] x 2 longest components, then t. Written once a
+// frame in updateWater right after surfaceHeightAt resolves _cw.
+export const waveLow = new Float32Array(11);
 let _surfH = SURFACE_Y;
 export function localSurfaceY() { return _surfH; }
 // The storm value the water mesh itself is rendered with — for callers (the raft)
@@ -3453,6 +3457,14 @@ export function updateWater(dt, t) {
   // uStormU is set further down from wMurk; one frame of lag on the wave amplitude here
   // is invisible and avoids reordering the whole function.
   _surfH = SURFACE_Y + surfaceHeightAt(camera.position.x, camera.position.z, t, uStormU.value);
+  // WAVE-SLOPE CAUSTICS (roadmap/ref-caustics-shadow.md). surfaceHeightAt has just
+  // resolved _cw for this frame's storm and wind; publish the two longest components
+  // (bearing, k, HEIGHT amplitude, omega) plus the clock so terrain.js can evaluate the
+  // same low-frequency surface gradient per fragment. Plain floats into a fixed array:
+  // no allocation, no import of terrain.js from here.
+  waveLow[0] = _cw[0].dx; waveLow[1] = _cw[0].dz; waveLow[2] = _cw[0].k; waveLow[3] = _cw[0].ampH; waveLow[4] = _cw[0].w;
+  waveLow[5] = _cw[1].dx; waveLow[6] = _cw[1].dz; waveLow[7] = _cw[1].k; waveLow[8] = _cw[1].ampH; waveLow[9] = _cw[1].w;
+  waveLow[10] = t;
   uAir.value = clamp((y - (_surfH - AIR_BAND)) / (2 * AIR_BAND), 0, 1);
 
   // shafts only exist while sunlight does; when the raymarched volumetric pass is
