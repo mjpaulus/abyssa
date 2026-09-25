@@ -10,13 +10,15 @@ import { seededRand } from '../lib/textures.js';
 import { disposeSleeper } from './sleeper/common.js';
 import { makeSerpent, updateSerpent, BODY_R_MAX } from './sleeper/serpent.js';
 import { makeBrooder, updateBrooder } from './sleeper/brooder.js';
+import { makeHoarder, updateHoarder } from './sleeper/hoarder.js';
 
 export { BODY_R_MAX };
 export { revealWards, wardRevealLeft, MSG_WARDS_ANSWER, MSG_WARDS_DARK, MSG_WARDS_KEPT } from './sleeper/common.js';
 
 const KINDS = {
   serpent: { make: makeSerpent, update: updateSerpent },
-  brooder: { make: makeBrooder, update: updateBrooder }
+  brooder: { make: makeBrooder, update: updateBrooder },
+  hoarder: { make: makeHoarder, update: updateHoarder }
 };
 export const sleeperKinds = () => Object.keys(KINDS);
 

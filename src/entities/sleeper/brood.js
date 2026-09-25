@@ -177,7 +177,8 @@ export function makeBrood(L, idx, nestPos, trailFrom) {
       e.mesh.position.copy(e.home);
       e.mesh.rotation.copy(e.tilt);
       B.held = -1;
-      return { returned: true, out: B.out() };
+      const out = B.out();
+      return { returned: true, out, msg: out ? (out === 1 ? 'ONE EGG STILL OUT OF THE NEST.' : out + ' EGGS STILL OUT OF THE NEST.') : 'THE CLUTCH IS WHOLE.' };
     }
     const k = B.nearEgg(pos);
     if (k < 0) return null;
@@ -185,7 +186,7 @@ export function makeBrood(L, idx, nestPos, trailFrom) {
     B.held = k;
     B.taken++;
     if (B.onTake) B.onTake(B.taken);
-    return { took: true, first: B.taken === 1 };
+    return { took: true, first: B.taken === 1, msg: B.taken === 1 ? null : 'ANOTHER EGG. SHE KNOWS.' };
   };
   // Per frame: the held egg rides at Sal's side; the clutch breathes its slow warmth;
   // the trail announces itself once each as it is found.

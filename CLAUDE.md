@@ -130,6 +130,11 @@ against explicit contracts and reviewed on return.
   Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge on the
   rift lip, nest + 3 eggs + tracks; taking an egg wakes her; the last ward won't light
   while an egg is out; `lev.dormant` hides name/bearing/dread until she wakes).
+  Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
+  wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
+  wakes her; arms lash/grab (knife frees: `lev.onSlash`), flinch from light; wards on
+  the sucker faces answer the sonar; calmed, a lighthouse. `lev.rite` is the generic
+  [E]/prompt hook both use.
 - `world/gardens.js` — the plant vocabulary (12 instanced types by zone: fans/seagrass/
   staghorn/sponges/anemones; tube worms with retracting plumes on activeVents, mats,
   crinoids; sea pens/glass sponges/whips). Own siteParams('gardens') stream (site.js has
