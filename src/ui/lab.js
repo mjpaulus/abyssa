@@ -411,6 +411,7 @@ function build() {
     { key: 'tauDark', min: 0.05, max: 10, step: 0.05 },
     { key: 'centre', min: 0, max: 1, step: 0.01 },
     { key: 'every', min: 1, max: 8, step: 1 },
+    { key: 'airRaw', min: 0, max: 1, step: 0.01 },
     { key: 'lo0', min: 0.25, max: 1, step: 0.01 }, { key: 'hi0', min: 1, max: 3, step: 0.01 }, { key: 'key0', min: -12, max: 0, step: 0.05 },
     { key: 'lo1', min: 0.25, max: 1, step: 0.01 }, { key: 'hi1', min: 1, max: 3, step: 0.01 }, { key: 'key1', min: -12, max: 0, step: 0.05 },
     { key: 'lo2', min: 0.25, max: 1, step: 0.01 }, { key: 'hi2', min: 1, max: 3, step: 0.01 }, { key: 'key2', min: -12, max: 0, step: 0.05 },

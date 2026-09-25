@@ -76,7 +76,18 @@ if (typeof window !== 'undefined') {
     state: () => expPass ? expPass.state() : null,
     // set({ ev, tauBright, ... }) pokes knobs; set(false) / set(true) is the switch.
     set: (o) => { const E = GLASS.exposure; if (o === false || o === true) E.on = o ? 1 : 0; else if (o) Object.assign(E, o); return { ...E }; },
-    pass: () => expPass
+    pass: () => expPass,
+    // Per-pass GPU cost (lab): profile(n) holds the frame timer (one query may be open)
+    // and times the meter's own draws + readback issue for n metered frames; cost()
+    // reads the ring {n, gpuMean, gpuMax}. Releases the frame timer when done.
+    profile: (n = 120) => { if (!expPass) return 0; gpuPaused = true; return expPass.profile(n); },
+    cost: () => {
+      if (!expPass) return null;
+      const a = expPass.gpuMs; let s = 0, mx = 0;
+      for (let i = 0; i < a.length; i++) { s += a[i]; if (a[i] > mx) mx = a[i]; }
+      if (expPass.profiling <= 0) gpuPaused = false;
+      return { n: a.length, gpuMean: a.length ? +(s / a.length).toFixed(4) : null, gpuMax: +mx.toFixed(4), profiling: expPass.profiling };
+    }
   };
 }
 
@@ -789,7 +800,7 @@ export function render(dt) {
   updateHalation();
   updateGrade(air);
   // Exposure is set BEFORE the scene renders: three bakes it into every material.
-  if (expPass) expPass.update(dt || 0.016, renderer);
+  if (expPass) expPass.update(dt || 0.016, renderer, air);
   composer.render(dt);
   pumpCaptures();
   if (DEV_LAB && window.__perf && window.__perf.load > 0) { const e = performance.now() + window.__perf.load; while (performance.now() < e) { /* dev load */ } }

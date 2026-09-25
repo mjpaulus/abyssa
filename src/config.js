@@ -425,12 +425,14 @@ export const GLASS = {
     tauDark: 3.0,         // s, when it may RISE
     centre: 0.6,          // metering weight: 1 at the middle, 1 - centre at the corners
     every: 2,             // meter every N frames
+    airRaw: 0.65,         // deck correction: the unexposed share of an air frame (dome, sea
+                          // surface are raw shaders); measured loop gain -0.65 at noon
     // Measured 2026-09-25 at multiplier 1 (scene-referred mean log2, ACES inverted):
-    // deck noon -2.72 / night -5.34; zone-0 wreck by day -4.27 / night -4.75; zone-1
+    // deck noon -2.42 / night -5.64; zone-0 wreck by day -4.27 / night -4.75; zone-1
     // trawler -5.41; zone-2 wreck -5.36, the furnace field facing it cold -5.14 / lit
     // -4.95. Keys sit so the authored daylight frames land near 1.0 and the lit
     // furnace pulls the abyss to its floor.
-    d0: 0.00, lo0: 0.70, hi0: 1.40, key0: -3.0,
+    d0: 0.00, lo0: 0.70, hi0: 1.40, key0: -2.7,
     d1: 0.27, lo1: 0.85, hi1: 1.15, key1: -4.3,
     d2: 0.60, lo2: 0.85, hi2: 1.12, key2: -5.4,
     d3: 0.93, lo3: 0.90, hi3: 1.05, key3: -5.1

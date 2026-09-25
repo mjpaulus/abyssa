@@ -10,11 +10,16 @@
 // render targets, so the composer schedules it; nothing of the library's adaptive-
 // luminance machinery is used and no history texture is shared):
 //   inputBuffer (the composer's HalfFloat scene colour, tone-mapped at scene render)
-//     -> 64x64  weighted log2 luminance, 8x8 sparse taps per cell   (RG: sum wl, sum w)
-//     -> 8x8    exact box of the 64x64                               (same program)
-//     -> 1x1    exact box of the 8x8, RGBA32F                        (same program)
-//     -> PBO ring readback with fences: never a readPixels stall. A result lands 2-3
-//        frames later and the CPU integrates it. ONE program, no depth attachments
+//     -> 32x32  weighted log2 luminance, 8x8 sparse taps per cell   (RG: sum wl, sum w)
+//     -> 4x4    exact box of the 32x32                               (same program)
+//     -> 1x1    exact box of the 4x4, RGBA32F                        (same program)
+//     -> PBO ring readback, NO fence: readPixels into a pixel-pack buffer is async,
+//        and the buffer is only mapped back (getBufferSubData) once PBO_LAG later
+//        meterings have been issued (>= 6 frames at every 2), by which time the frame
+//        that wrote it has long presented. A fenceSync per readback was tried first:
+//        ANGLE/Metal commits the command buffer to make a sync signalable, and that
+//        mid-frame commit cost ~1 ms of lost GPU parallelism per metering (measured
+//        on the deck, frame median 11.9 -> 13.0 ms). ONE program, no depth attachments
 //        (depthBuffer: false on all three — nothing to share, nothing to feedback).
 //
 // The buffer is TONE-MAPPED (three bakes ACES + exposure into every material at scene
@@ -31,11 +36,15 @@
 // the deck a positive-feedback loop (a lower exposure inflated the sky's reading by
 // 1/exposure and the meter walked to the fence; measured -2.72 -> -2.21 over half a
 // stop). Both leave depth at the far plane (depthWrite: false), so a tap at depth 1.0
-// is taken as it is. The sea over the seabed still inverts (the bed behind it wrote
-// depth) — a known residual, small next to the dome.
+// is taken as it is. The sea SURFACE over a seabed still inverts (the bed behind it
+// wrote depth), and it is most of a deck frame: measured on the deck at noon, a -0.51
+// stop exposure step read +0.33 stops (loop gain -0.65 — a stable fixed point, but
+// 2.9x oversensitive). The CPU corrects the reading by that raw fraction, weighted by
+// the lagged air blend postfx.js already keeps (meanLog += airRaw * air * ev), so the
+// deck responds 1:1 and the term is exactly zero below the interface.
 //
-// Zero per-frame allocation except one WebGLSync per issued readback (a fence is a GL
-// object, not JS heap; issued every `every` frames, default 2).
+// Zero per-frame allocation: the PBO ring, the readback Float32Array and every RT are
+// built once.
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
 import { GLASS } from './config.js';
@@ -90,7 +99,7 @@ function fullscreenTri() {
   return g;
 }
 
-const PBO_RING = 3;
+const PBO_RING = 4, PBO_LAG = 3;   // read a buffer only after 3 later readbacks were issued
 const log2 = Math.log2;
 
 export class ExposurePass extends Pass {
@@ -104,13 +113,13 @@ export class ExposurePass extends Pass {
       depthBuffer: false, stencilBuffer: false, generateMipmaps: false,
       wrapS: THREE.ClampToEdgeWrapping, wrapT: THREE.ClampToEdgeWrapping
     };
-    this.rtA = new THREE.WebGLRenderTarget(64, 64, { ...opt, type: THREE.HalfFloatType });
-    this.rtB = new THREE.WebGLRenderTarget(8, 8, { ...opt, type: THREE.HalfFloatType });
+    this.rtA = new THREE.WebGLRenderTarget(32, 32, { ...opt, type: THREE.HalfFloatType });
+    this.rtB = new THREE.WebGLRenderTarget(4, 4, { ...opt, type: THREE.HalfFloatType });
     this.rtC = new THREE.WebGLRenderTarget(1, 1, { ...opt, type: THREE.FloatType });
-    this.rtA.texture.name = 'Exposure.64'; this.rtB.texture.name = 'Exposure.8'; this.rtC.texture.name = 'Exposure.1';
+    this.rtA.texture.name = 'Exposure.32'; this.rtB.texture.name = 'Exposure.4'; this.rtC.texture.name = 'Exposure.1';
     this.material = new THREE.ShaderMaterial({
       name: 'AutoExposureMeter',
-      uniforms: { tSrc: { value: null }, tDepth: { value: null }, uCells: { value: 64 }, uFirst: { value: 1 }, uCentre: { value: 0.6 }, uExp: { value: 1 } },
+      uniforms: { tSrc: { value: null }, tDepth: { value: null }, uCells: { value: 32 }, uFirst: { value: 1 }, uCentre: { value: 0.6 }, uExp: { value: 1 } },
       vertexShader: VERT, fragmentShader: FRAG, depthTest: false, depthWrite: false, toneMapped: false
     });
     this.scene = new THREE.Scene();
@@ -119,14 +128,41 @@ export class ExposurePass extends Pass {
     this.u = this.material.uniforms;
 
     // Readback ring: PBOs + fences, created lazily on the live context.
-    this.gl = null; this.pbo = null; this.sync = new Array(PBO_RING).fill(null); this.head = 0; this.tail = 0;
+    this.gl = null; this.pbo = null; this.issued = 0; this.read = 0;   // monotonic counters; slot = n % PBO_RING
     this.out = new Float32Array(4);
     this.frame = 0; this.failed = false;
 
     // Adaptation state. ev = log2 of the multiplier on `base`; lum = last metered mean.
     this.ev = 0; this.lum = 0; this.meanLog = -20; this.samples = 0; this.age = 0;
     this.lo = 1; this.hi = 1; this.key = 0; this.target = 0;
-    this.stale = 0;
+    // Own profiler (lab only): a TIME_ELAPSED query around the three draws + the
+    // readback issue, while postfx.js holds the frame timer. gpuMs is the sample ring.
+    // CAVEAT (measured): on a tile-based GPU the first render-target switch after the
+    // scene pass closes that pass, and this query absorbs its tile work (1.9-2.5 ms
+    // here for three 32x32-and-under draws). The number to trust is a PAIRED frame-
+    // level A/B on __gpu.median() (E.on 0/1 alternated, median of the pair deltas).
+    this.profiling = 0; this.gpuMs = []; this._q = null; this._qOpen = false; this._ext = null;
+  }
+  // n frames of per-pass GPU timing; results in gpuMs (mean/max via __exposure.cost()).
+  profile(n = 120) {
+    this.gpuMs.length = 0; this.profiling = n | 0;
+    return this.profiling;
+  }
+  _profBegin(gl) {
+    if (!this._ext) { this._ext = gl.getExtension('EXT_disjoint_timer_query_webgl2'); if (!this._ext) { this.profiling = 0; return; } }
+    if (this._q && this._qOpen === false && this._qPending) {
+      if (gl.getQueryParameter(this._q, gl.QUERY_RESULT_AVAILABLE)) {
+        const ns = gl.getQueryParameter(this._q, gl.QUERY_RESULT); this._qPending = false;
+        if (!gl.getParameter(this._ext.GPU_DISJOINT_EXT)) this.gpuMs.push(ns / 1e6);
+      } else return;   // last result still in flight: skip this frame
+    }
+    if (!this._q) this._q = gl.createQuery();
+    try { gl.beginQuery(this._ext.TIME_ELAPSED_EXT, this._q); this._qOpen = true; } catch (e) { this._qOpen = false; }
+  }
+  _profEnd(gl) {
+    if (!this._qOpen) return;
+    try { gl.endQuery(this._ext.TIME_ELAPSED_EXT); this._qPending = true; } catch (e) { /* dropped */ }
+    this._qOpen = false; this.profiling--;
   }
   setSize() { /* fixed-size targets: the meter is resolution-independent by design */ }
   setDepthTexture(tex) { this.u.tDepth.value = tex; }
@@ -134,7 +170,7 @@ export class ExposurePass extends Pass {
 
   _glSetup(renderer) {
     const gl = renderer.getContext();
-    if (!gl.fenceSync || !gl.PIXEL_PACK_BUFFER) { this.failed = true; return false; }
+    if (!gl.PIXEL_PACK_BUFFER || !gl.getBufferSubData) { this.failed = true; return false; }
     this.gl = gl;
     this.pbo = [];
     for (let i = 0; i < PBO_RING; i++) {
@@ -146,22 +182,16 @@ export class ExposurePass extends Pass {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     return true;
   }
-  // Drain finished readbacks in issue order; stop at the first still in flight.
+  // Map back every readback that is at least PBO_LAG issues old, in issue order.
   _poll() {
     const gl = this.gl;
-    while (this.sync[this.head]) {
-      const s = this.sync[this.head];
-      const st = gl.clientWaitSync(s, 0, 0);
-      if (st === gl.TIMEOUT_EXPIRED) break;
-      gl.deleteSync(s); this.sync[this.head] = null;
-      if (st !== gl.WAIT_FAILED) {
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.head]);
-        gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
-        gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-        const w = this.out[1];
-        if (w > 1e-6 && isFinite(this.out[0])) { this.meanLog = this.out[0] / w; this.lum = Math.pow(2, this.meanLog); this.samples++; this.age = 0; }
-      }
-      this.head = (this.head + 1) % PBO_RING;
+    while (this.issued - this.read > PBO_LAG) {
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.read % PBO_RING]);
+      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      this.read++;
+      const w = this.out[1];
+      if (w > 1e-6 && isFinite(this.out[0])) { this.meanLog = this.out[0] / w; this.lum = Math.pow(2, this.meanLog); this.samples++; this.age = 0; }
     }
   }
 
@@ -173,24 +203,24 @@ export class ExposurePass extends Pass {
     this._poll();
     // Sparse in time as well as space: meter every `every` frames, and never with the
     // ring full (a slow readback simply drops this frame's sample).
-    if ((this.frame++ % Math.max(1, E.every | 0)) !== 0 || this.sync[this.tail]) return;
+    if ((this.frame++ % Math.max(1, E.every | 0)) !== 0 || this.issued - this.read >= PBO_RING) return;
     const u = this.u;
+    if (this.profiling > 0) this._profBegin(gl);
     u.uCentre.value = Math.max(0, Math.min(1, E.centre));
     u.uExp.value = Math.max(1e-3, renderer.toneMappingExposure);   // this frame's, exactly
-    u.tSrc.value = inputBuffer.texture; u.uCells.value = 64; u.uFirst.value = 1;
+    u.tSrc.value = inputBuffer.texture; u.uCells.value = 32; u.uFirst.value = 1;
     renderer.setRenderTarget(this.rtA); renderer.render(this.scene, this.camera);
-    u.tSrc.value = this.rtA.texture; u.uCells.value = 8; u.uFirst.value = 0;
+    u.tSrc.value = this.rtA.texture; u.uCells.value = 4; u.uFirst.value = 0;
     renderer.setRenderTarget(this.rtB); renderer.render(this.scene, this.camera);
     u.tSrc.value = this.rtB.texture; u.uCells.value = 1;
     renderer.setRenderTarget(this.rtC); renderer.render(this.scene, this.camera);
-    // The 1x1 is bound now: queue the read into the PBO and fence it.
+    // The 1x1 is bound now: queue the read into the next PBO. No fence, no flush.
     try {
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.tail]);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.issued % PBO_RING]);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, 0);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-      this.sync[this.tail] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-      gl.flush();
-      this.tail = (this.tail + 1) % PBO_RING;
+      this.issued++;
+      if (this.profiling > 0) this._profEnd(gl);
     } catch (e) {
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
       this.failed = true;
@@ -214,7 +244,7 @@ export class ExposurePass extends Pass {
 
   // CPU side, once per frame BEFORE the scene renders (the exposure it sets is the one
   // this frame's materials bake). dt in seconds. Returns the multiplier on `base`.
-  update(dt, renderer) {
+  update(dt, renderer, air = 0) {
     const E = GLASS.exposure;
     if (!E || !(E.on > 0) || this.failed) { this.ev = 0; renderer.toneMappingExposure = this.base; return 1; }
     this._stops(E);
@@ -222,7 +252,7 @@ export class ExposurePass extends Pass {
     if (this.samples > 0) {
       // Absolute: the metered mean is scene-referred, so the EV that puts it on the key
       // does not depend on the exposure the sample was taken under.
-      let want = (this.key - this.meanLog) + E.ev;
+      let want = (this.key - (this.meanLog + (E.airRaw || 0) * air * this.ev)) + E.ev;
       want = Math.max(loE, Math.min(hiE, want));
       this.target = want;
       // Asymmetric: the scene got brighter (exposure must FALL) -> fast; darker -> slow.
@@ -250,7 +280,7 @@ export class ExposurePass extends Pass {
   }
   dispose() {
     this.rtA.dispose(); this.rtB.dispose(); this.rtC.dispose(); this.material.dispose();
-    if (this.gl && this.pbo) { for (const b of this.pbo) this.gl.deleteBuffer(b); for (const s of this.sync) if (s) this.gl.deleteSync(s); }
+    if (this.gl && this.pbo) for (const b of this.pbo) this.gl.deleteBuffer(b);
     this.pbo = null;
   }
 }
