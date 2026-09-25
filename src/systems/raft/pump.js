@@ -79,7 +79,7 @@ function wheel(P, mats, r, spokes, tube, hub, ts = 36) {
 
 export function buildPump(group, mats) {
   group.position.copy(PUMP_POS);
-  const P = Part(group);
+  const P = Part(group, { groundY: 0 });
 
   // ---- bed ---------------------------------------------------------------------
   // Timber bearers on iron sole plates, through-bolted to the deck. An engine that is

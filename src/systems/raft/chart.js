@@ -21,7 +21,7 @@ const BOARD_W = 0.72, BOARD_D = 0.62, BOARD_T = 0.035;
 const BOARD_CY = 1.02;            // centre height of the board slab, within the 0.95-1.1 band
 
 export function buildChart(group, mats) {
-  const P = Part(group);
+  const P = Part(group, { groundY: 0.11 });
   // Four materials only, to keep this at four baked buckets: the board and its lip share
   // `wood` (no need for a second wood tone here), and the sounding-weight borrows `iron`
   // rather than pulling in a fifth material just for one small casting.

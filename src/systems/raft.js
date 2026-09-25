@@ -432,7 +432,7 @@ export function buildRaft() {
   shelfSet = buildShelf(raft, mats);
   if (pendingKeeps) { shelfSet(pendingKeeps); pendingKeeps = null; }
 
-  const P = Part(raft);
+  const P = Part(raft, { groundY: DECK_TOP });
   buildReel(P, mats, hoseHead);
   P.bake();
 

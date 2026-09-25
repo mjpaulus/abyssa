@@ -14,7 +14,7 @@ const TAU = Math.PI * 2;
 const DECK = 0.11; // deck top surface, raft-local — everything here sits on it
 
 export function buildStation(group, mats) {
-  const P = Part(group);
+  const P = Part(group, { groundY: 0.11 });
   // `rope` collides with the kit's tube-builder of the same name, hence the rename.
   const { wood, iron, brass, lead, canvas, rope: ropeMat } = mats;
 

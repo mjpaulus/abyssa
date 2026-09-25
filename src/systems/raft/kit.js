@@ -33,8 +33,14 @@ export const tor = (r, t, rs = 6, ts = 14, arc) => new THREE.TorusGeometry(r, t,
 export const lathe = (pts, seg = 16) => new THREE.LatheGeometry(pts.map(p => new THREE.Vector2(p[0], p[1])), seg);
 
 // Bucket primitives by material, emit one merged mesh each.
-export function Part(node) {
+// opts.groundY: the deck plank surface in this Part's local frame (0.11 for raft-level
+// builders, 0 inside the pump group). When set, bake() darkens every standing piece's
+// vertices in the last 14 cm above the planks: the grime a deck splashes and scuffs up
+// the foot of everything that stands on it (the deck side of the same contact is the
+// raft's deck map). Planking itself (raftDeck) and low flat fittings are left alone.
+export function Part(node, opts = {}) {
   const b = new Map();
+  const groundY = opts.groundY ?? null;
   return {
     node,
     add(geo, mat) { let a = b.get(mat); if (!a) b.set(mat, a = []); a.push(geo); return geo; },
@@ -65,6 +71,7 @@ export function Part(node) {
               new Float32Array(g.attributes.position.count * 3).fill(1), 3));
           } else for (const g of list) rgba(g);
         }
+        if (groundY !== null && !mat.transparent) for (const g of list) footGrime(g, groundY);
         // the deck-map coordinate (raft.js): real deck planking carries raft-local xz,
         // everything else in the bucket points at the map's neutral corner texel
         if (mat.userData.deckAttr) for (const g of list) if (!g.attributes.raftDeck) {
@@ -111,6 +118,21 @@ export function state(g, fn) {
     c.setW(i, clamp(c.getW(i) + d, 0, 1));
   }
   return g;
+}
+
+function footGrime(g, gy) {
+  if (g.attributes.raftDeck || !g.attributes.color || g.attributes.color.itemSize !== 4) return;
+  const p = g.attributes.position, c = g.attributes.color;
+  let lo = Infinity, hi = -Infinity;
+  for (let i = 0; i < p.count; i++) { const y = p.getY(i); if (y < lo) lo = y; if (y > hi) hi = y; }
+  if (hi - gy < 0.08 || lo - gy > 0.14 || hi < gy) return;   // flat fittings / things up in the air
+  for (let i = 0; i < p.count; i++) {
+    const t = (p.getY(i) - gy) / 0.14;
+    if (t < -0.05 || t > 1) continue;
+    const k = (1 - Math.max(0, t)) ** 2;
+    c.setXYZW(i, c.getX(i) * (1 - 0.38 * k), c.getY(i) * (1 - 0.40 * k), c.getZ(i) * (1 - 0.42 * k),
+      Math.min(0.98, c.getW(i) + 0.14 * k));
+  }
 }
 
 // Deterministic per-piece offset from where the piece sits (metres, wraps any tile).

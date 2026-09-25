@@ -30,7 +30,7 @@ function strut(P, mat, x0, y0, z0, x1, y1, z1, r0, r1 = r0, seg = 8) {
 }
 
 export function buildDavit(group, mats) {
-  const P = Part(group);
+  const P = Part(group, { groundY: 0.11 });
   const { iron, brass, rope: ropeMat, lead, glass } = mats;
 
   // Weathering profiles. Only iron and rope carry vertex colours (brass, lead and

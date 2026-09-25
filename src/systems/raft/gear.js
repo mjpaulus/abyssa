@@ -28,7 +28,7 @@ function crate(P, wood, x, y, z, w, h, d, ry, tone = 0.9) {
 const DY = 0.11; // deck top; everything not on a chock sits with its base flush here.
 
 export function buildGear(group, mats) {
-  const P = Part(group);
+  const P = Part(group, { groundY: 0.11 });
   const { wood, wood2, iron, rope: ropeMat, canvas, hose } = mats;
 
   // ---- FUEL DEPOT ----------------------------------------------------------------

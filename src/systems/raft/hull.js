@@ -34,7 +34,7 @@ const W = (geo, x, y, z, rx, ry, rz, s, opts) =>
 
 export function buildHull(group, mats) {
   const { wood, wood2, iron, rust, rope: ropeMat } = mats;
-  const P = Part(group);
+  const P = Part(group, { groundY: 0.11 });
 
   buildDeck(P, wood, wood2, iron);
   buildBulwark(P, wood, iron);
