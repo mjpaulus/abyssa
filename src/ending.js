@@ -186,10 +186,15 @@ function insideFloor(x, y, z) {
 // while the ascent barely moved sideways. Now that the path tracks rift 2 -> rift 1 it
 // threw the body out past r=240 and buried its nose in the basin rim; 4.2 keeps the whole
 // 118u body 80u clear of the zone-2 floor while still crossing the frame.
+// THE THREE SLEEPERS (roadmap/three-sleepers.md): each pass is its own animal now, not
+// three eels. Mhor streams through tail-first, arms trailing; Orune jets by, sac leading
+// and eight arms pulsing behind; Velkath WALKS home along the zone-0 floor beneath him
+// (`floor`: pinned to the seabed, the diver looks down at her as he rises).
 const SLEEPERS = [
-  { yFrom: -840, yTo: -670, dist: 72, len: 118, rad: 9.5, segs: 34, travel: 205, bearing: 4.2, note: 233, tint: 0x74d8ff },
-  { yFrom: -560, yTo: -380, dist: 57, len: 100, rad: 8.0, segs: 30, travel: 165, bearing: 2.75, note: 262, tint: 0x8ae2ff },
-  { yFrom: -250, yTo: -70, dist: 43, len: 84, rad: 6.5, segs: 26, travel: 128, bearing: 4.65, note: 311, tint: 0xa6ecff }
+  { kind: 'squid', yFrom: -840, yTo: -670, dist: 72, len: 118, rad: 9.5, segs: 34, travel: 205, bearing: 4.2, note: 233, tint: 0xffa060 },
+  { kind: 'octopus', yFrom: -560, yTo: -380, dist: 57, len: 100, rad: 12.0, segs: 30, travel: 165, bearing: 2.75, note: 262, tint: 0xd8a8ff },
+  // her pass is timed to the moment he rises past the zone-0 floor, so she walks by at eye level
+  { kind: 'crab', yFrom: -300, yTo: -170, dist: 50, len: 84, rad: 13.0, segs: 26, travel: 110, bearing: 4.65, note: 311, tint: 0xcfe9d6, floor: 0 }
 ];
 
 let built = false;
@@ -221,73 +226,83 @@ function makeSleeper(spec) {
     color: spec.tint, map: glowTex(), transparent: true, opacity: 0, fog: false,
     depthWrite: false, blending: THREE.AdditiveBlending
   });
-  const geo = new THREE.SphereGeometry(1, 12, 8);
-  const segs = [], deco = [];
-  const N = spec.segs;
-  const spacing = spec.len / (N - 1);
-  // Segment count is set high (26-34) purely so the spheres overlap enough to read as
-  // one continuous body: at 15 segments the silhouette scalloped into visible blobs.
-  for (let k = 0; k < N; k++) {
-    const u = k / (N - 1);
-    // fat behind the head, tapering to a thread at the tail
-    const prof = Math.pow(Math.sin(Math.PI * Math.pow(u, 0.62)), 0.7) * 0.9 + 0.14;
-    const r = spec.rad * prof;
+  const geo = new THREE.SphereGeometry(1, 14, 10);
+  // Parts: a mesh (or sprite), a base position in the animal's frame (+Z = the way it
+  // travels), and a motion kind the pose loop reads. Chains (arms, legs) are runs of
+  // stretched spheres, each link offset from the last.
+  const parts = [];
+  const R = spec.rad, L = spec.len;
+  const blob = (sx, sy, sz, x, y, z, mot = 'body', k = 0, n = 1) => {
     const m = new THREE.Mesh(geo, body);
-    // The along-body half-length never drops below the segment spacing: once the taper
-    // took r under len/N the nose and tail broke into a row of separate floating discs.
-    // Each segment is stretched well past the spacing along the body. Two earlier passes
-    // showed why: at z-scale ~= r the outline stepped visibly from sphere to sphere in
-    // bright water, and at the tapered ends it broke into separate floating discs.
-    m.scale.set(r, r * 0.8, Math.max(r * 1.5, spacing * 1.7));
+    m.scale.set(sx, sy, sz);
     m.renderOrder = 2;
     grp.add(m);
-    segs.push(m);
-
-    // Sprites hang off the group, not off the segments: a sprite inherits its parent's
-    // scale, and the segments are scaled non-uniformly, which would squash the billboard.
-    // They are cheap enough to reposition by hand each frame (about a dozen writes).
-    if (k % Math.max(1, Math.round(N / 7)) === 1) {
-      const h = new THREE.Sprite(haze);
-      const s = spec.rad * (1.5 + 2.1 * prof);
-      h.scale.set(s, s * 0.8, 1);
-      h.renderOrder = 1;
-      grp.add(h);
-      deco.push({ sp: h, k, dy: 0 });
+    parts.push({ m, bx: x, by: y, bz: z, mot, k, n });
+    return m;
+  };
+  const light = (x, y, z, s) => {
+    const g = new THREE.Sprite(glow);
+    g.scale.set(s, s, 1);
+    g.renderOrder = 3;
+    grp.add(g);
+    parts.push({ m: g, bx: x, by: y, bz: z, mot: 'body', k: 0, n: 1 });
+  };
+  const hazeAt = (x, y, z, s) => {
+    const h = new THREE.Sprite(haze);
+    h.scale.set(s, s * 0.8, 1);
+    h.renderOrder = 1;
+    grp.add(h);
+    parts.push({ m: h, bx: x, by: y, bz: z, mot: 'body', k: 0, n: 1 });
+  };
+  if (spec.kind === 'squid') {
+    // tail (fins) leads at +Z, the mantle a long torpedo, the head, then arms trailing
+    const M = 14;
+    for (let k = 0; k < M; k++) {
+      const u = k / (M - 1), prof = Math.pow(Math.sin(Math.PI * (0.08 + 0.84 * u)), 0.6) * (0.35 + 0.65 * u);
+      blob(R * prof, R * prof * 0.9, L * 0.05, 0, 0, L * (0.5 - 0.45 * u), 'body');
     }
-    // ward-light points down the flank, brighter toward the head
-    if (k % 5 === 3) {
-      const g = new THREE.Sprite(glow);
-      const s = spec.rad * (0.15 + 0.1 * (1 - u));
-      g.scale.set(s, s, 1);
-      g.renderOrder = 3;
-      grp.add(g);
-      // Sits just clear of the hull: the body is opaque and depth-tests the sprites, so a
-      // node buried inside the mass would be rejected and never light anything.
-      deco.push({ sp: g, k, dy: r * 0.95 });
+    for (const sx of [-1, 1]) { const f = blob(R * 1.1, R * 0.06, L * 0.09, sx * R * 0.55, 0, L * 0.44, 'fin', sx); f.rotation.z = sx * 0.1; }
+    blob(R * 0.9, R * 0.85, R * 1.1, 0, 0, L * 0.02, 'body');            // the head
+    for (let a = 0; a < 10; a++) {
+      const ang = (a + 0.5) / 10 * Math.PI * 2, tent = a < 2, len = L * (tent ? 0.75 : 0.45), n = tent ? 9 : 6;
+      for (let k = 0; k < n; k++) {
+        const u = (k + 0.5) / n, r = R * (tent ? 0.10 : 0.22) * (1 - 0.7 * u) + 0.2;
+        blob(r, r, len / n * 0.85, Math.cos(ang) * R * 0.35 * (1 + u), Math.sin(ang) * R * 0.35 * (1 + u), -len * u, 'arm', a, u);
+      }
     }
+    for (let k = 0; k < 8; k++) light((k & 1 ? 1 : -1) * R * 0.75, 0, L * (0.4 - k * 0.07), R * 0.18);
+    hazeAt(0, 0, L * 0.2, R * 4);
+  } else if (spec.kind === 'octopus') {
+    // the sac leads, swollen and tilted back; eight arms pulse behind it (a jet swim)
+    blob(R * 0.9, R * 0.8, R * 1.4, 0, R * 0.3, R * 0.4, 'body');
+    blob(R * 0.75, R * 0.65, R * 0.8, 0, 0, -R * 0.5, 'body');         // the head
+    for (const sx of [-1, 1]) light(sx * R * 0.55, R * 0.05, -R * 0.35, R * 0.22);  // eyeshine
+    for (let a = 0; a < 8; a++) {
+      const ang = (a + 0.5) / 8 * Math.PI * 2, n = 9, len = L * 0.7;
+      for (let k = 0; k < n; k++) {
+        const u = (k + 0.5) / n, r = R * 0.18 * (1 - 0.8 * u) + 0.2;
+        blob(r, r, len / n * 0.8, Math.cos(ang) * R * 0.45, Math.sin(ang) * R * 0.45, -R * 0.8 - len * u, 'jet', a, u);
+      }
+    }
+    for (let k = 0; k < 4; k++) light((k & 1 ? 1 : -1) * R * 0.25, -R * 0.25, -R * 0.8 - L * 0.1 * (k + 1), R * 0.12);   // the burning wards
+    hazeAt(0, R * 0.2, 0, R * 3.4);
+  } else {
+    // the Brooder walking: a low wedge of shell, eight legs stepping, the great claw
+    blob(R * 1.0, R * 0.34, R * 0.85, 0, 0, 0, 'body');
+    blob(R * 0.55, R * 0.22, R * 0.45, 0, R * 0.22, -R * 0.1, 'body');   // the hump
+    for (let l = 0; l < 8; l++) {
+      const sd = l < 4 ? 1 : -1, j = l & 3, z = R * (0.55 - j * 0.36);
+      blob(R * 0.55, R * 0.10, R * 0.10, sd * R * 1.15, -R * 0.05, z, 'legA', l);     // femur, out and up
+      blob(R * 0.10, R * 0.55, R * 0.10, sd * R * 1.65, -R * 0.45, z, 'legB', l);     // tibia, down to the floor
+    }
+    blob(R * 0.55, R * 0.28, R * 0.40, R * 0.75, R * 0.10, R * 1.05, 'body');          // the great claw
+    blob(R * 0.30, R * 0.16, R * 0.25, -R * 0.55, -R * 0.05, R * 0.95, 'body');         // the minor
+    for (const sx of [-1, 1]) light(sx * R * 0.12, R * 0.05, R * 0.85, R * 0.12);       // eyeshine
+    hazeAt(0, 0, 0, R * 3);
   }
-  // Tail fluke and one pair of pectorals, so the silhouette reads as a creature and not
-  // a worm. They ride the group rather than a segment: the segments carry a big
-  // non-uniform stretch that turned the fluke into a fourteen-unit paddle.
-  const R = spec.rad;
-  const fluke = new THREE.Mesh(geo, body);
-  fluke.scale.set(R * 0.16, R * 1.15, R * 0.5);
-  fluke.renderOrder = 2;
-  grp.add(fluke);
-  deco.push({ sp: fluke, k: N - 1, dy: 0 });
-  const fi = Math.round(N * 0.28);
-  for (let i = 0; i < 2; i++) {
-    const sx = i === 0 ? -1 : 1;
-    const fin = new THREE.Mesh(geo, body);
-    fin.scale.set(R * 1.15, R * 0.12, R * 0.5);
-    fin.position.x = sx * R * 0.9;
-    fin.rotation.z = sx * 0.22;
-    fin.renderOrder = 2;
-    grp.add(fin);
-    deco.push({ sp: fin, k: fi, dy: -R * 0.2, dx: sx * R * 0.9 });
-  }
+  const segs = parts, deco = [], N = parts.length;
   scene.add(grp);
-  return { grp, segs, deco, body, haze, glow, N, ax: 0, az: 0, seen: false, live: false };
+  return { grp, segs, deco, parts, kind: spec.kind, body, haze, glow, N, ax: 0, az: 0, seen: false, live: false };
 }
 
 const NBUB = 260;
@@ -519,28 +534,37 @@ export function updateEnding(dt, t) {
     // The +72 puts the moment their paths cross at uu = 0.5, so the animal is level with
     // him — and dead centre of frame — exactly at the middle of the pass. Without it the
     // crossing landed at uu 0.29 and it spent most of the shot sliding out of the corner.
-    o.grp.position.set(cx + hx * off, sp.yFrom + 72 + 40 * uu, cz + hz * off);
+    const gx = cx + hx * off, gz = cz + hz * off;
+    // the Brooder walks the floor; the swimmers cross the water column
+    const gy = sp.floor != null ? terrainH(gx, gz, sp.floor) + sp.rad * 0.55 : sp.yFrom + 72 + 40 * uu;
+    o.grp.position.set(gx, gy, gz);
     // A dead-level body reads as a bar across the frame; a few degrees of climb and
     // roll is the difference between a shape and something swimming.
-    o.grp.rotation.set(-0.06 + Math.sin(t * 0.07 + i) * 0.03, Math.atan2(hx, hz), -0.05 + Math.sin(t * 0.05 + i) * 0.05);
+    o.grp.rotation.set(sp.floor != null ? 0 : -0.06 + Math.sin(t * 0.07 + i) * 0.03, Math.atan2(hx, hz), sp.floor != null ? 0 : -0.05 + Math.sin(t * 0.05 + i) * 0.05);
 
-    // slow body wave; the later (closer) sleepers move slower still
+    // each animal's own motion, slow — the later (closer) passes slower still
     const ph = t * (0.42 - i * 0.09);
-    const amp = sp.rad * 0.85;
-    const N = o.N;
-    for (let k = 0; k < N; k++) {
-      const kv = k / (N - 1);
-      o.segs[k].position.set(
-        Math.sin(ph - k * 0.4) * amp * (0.18 + 0.82 * kv),
-        Math.cos(ph * 0.7 - k * 0.28) * amp * 0.3,
-        (kv - 0.5) * -sp.len
-      );
-    }
-    for (let d = 0; d < o.deco.length; d++) {
-      const dc = o.deco[d];
-      dc.sp.position.copy(o.segs[dc.k].position);
-      dc.sp.position.y += dc.dy;
-      if (dc.dx) dc.sp.position.x += dc.dx;
+    const R = sp.rad, jet = 0.5 + 0.5 * Math.sin(t * 0.9);
+    for (let k = 0; k < o.parts.length; k++) {
+      const p = o.parts[k];
+      let x = p.bx, y = p.by, z = p.bz;
+      if (p.mot === 'arm') {                  // trailing arms, a slow wave down each
+        x += Math.sin(ph * 1.3 - p.n * 3 + p.k) * R * 0.5 * p.n;
+        y += Math.cos(ph * 1.1 - p.n * 3 + p.k * 1.7) * R * 0.4 * p.n;
+      } else if (p.mot === 'fin') {
+        y += Math.sin(ph * 3) * R * 0.25 * Math.abs(p.bx) / R;
+      } else if (p.mot === 'jet') {           // arms close together and flare out: the jet pulse
+        const k2 = 0.55 + 0.9 * jet;
+        x *= k2; y *= k2;
+        x += Math.sin(ph - p.n * 2.5 + p.k) * R * 0.25 * p.n;
+      } else if (p.mot === 'legA' || p.mot === 'legB') {
+        const gp = ((p.k & 3) + (p.k < 4 ? 0 : 1)) & 1, step = Math.max(0, Math.sin(t * 1.1 + gp * Math.PI));
+        y += step * R * 0.18;
+        z += Math.cos(t * 1.1 + gp * Math.PI) * R * 0.12;
+      } else {
+        y += Math.sin(ph * 0.8) * R * 0.04;
+      }
+      p.m.position.set(x, y, z);
     }
     // Hand-rolled visibility instead of scene fog: at 0.028 density the real fog would
     // erase anything past ~50u in the deep, and these need to be seen and then lost.
