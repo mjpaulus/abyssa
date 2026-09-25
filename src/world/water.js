@@ -1933,6 +1933,13 @@ export function reduceRefraction() {
   if (refrRT) { refrRT.dispose(); refrRT = null; }   // rebuilt next frame at the new size
 }
 export function degradeRefraction() { refrOn = false; uRefrK.value = 0; }
+// The upgrade path (postfx.restoreQuality): back to the half-res target. Only undoes
+// reduceRefraction — the full shed (degradeRefraction) is the ladder's terminal rung.
+export function restoreRefraction() {
+  if (refrShift === 1) return;
+  refrShift = 1;
+  if (refrRT) { refrRT.dispose(); refrRT = null; }
+}
 
 // Called by game.js once per frame, after updateWater (needs _surfH/uAir) and before
 // the composer render. Renders the far side of the interface into refrRT.

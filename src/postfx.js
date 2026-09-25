@@ -15,10 +15,10 @@ import {
 import { N8AOPostPass } from 'n8ao';
 import { SURFACE_Y, GLASS, SKY, ZONE_H, ZONE_GAP } from './config.js';
 import { renderer, scene, camera, onResize } from './core.js';
-import { playerLightSrc, parkSunShadow } from './lighting.js';
+import { playerLightSrc, parkSunShadow, unparkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
-import { degradeRefraction, reduceRefraction, stormLevel } from './world/water.js';
+import { degradeRefraction, reduceRefraction, restoreRefraction, stormLevel } from './world/water.js';
 // --- END VOLUMETRICS INTEGRATION ---
 // CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
 // underwater volumetrics and before the main EffectPass so bloom/grade see it.
@@ -31,6 +31,7 @@ import { schools, jellies } from './world/creatures.js';
 
 // THE FLOW LEAN (roadmap/flow-lean-style.md). LOCAL helper until config.js grows
 // styleK(); same contract: a sub-knob at -1 follows the master.
+const DEV_LAB = typeof location !== 'undefined' && location.search.includes('lab');
 const styleK = n => { const st = GLASS.style; return st && st[n] >= 0 ? st[n] : (st ? st.flowLean : 0); };
 
 // Tone mapping on the renderer: it is baked into every material's fragment output at
@@ -489,7 +490,7 @@ if (typeof window !== 'undefined') {
     on: () => !!raysPass,
     set: setSkyRays,
     state: () => raysPass ? raysPass.state : null,
-    profile: (on) => raysPass ? raysPass.profile(on === undefined ? true : on) : null,
+    profile: (on) => { gpuPaused = raysPass ? (on === undefined ? true : !!on) : false; return raysPass ? raysPass.profile(on === undefined ? true : on) : null; },
     // {gpuMs mean/max over the profiled frames, cpuMs of the last submit, n}
     cost: () => {
       if (!raysPass) return null;
@@ -768,36 +769,138 @@ export function render(dt) {
   updateGrade(air);
   composer.render(dt);
   pumpCaptures();
+  if (DEV_LAB && window.__perf && window.__perf.load > 0) { const e = performance.now() + window.__perf.load; while (performance.now() < e) { /* dev load */ } }
 }
 
-// Adaptive quality: sample real framerate after warmup, shed expensive passes once.
-let perfT = 0, perfN = 0, perfDone = false;
+// ---------------------------------------------------------------------------------
+// GPU TIMER PROFILER (roadmap/ref-gpu-profiler-quality.md). A ring of
+// EXT_disjoint_timer_query_webgl2 queries around the whole frame render (refraction
+// pass + composer), read back ASYNCHRONOUSLY — never gl.finish, never a blocking
+// getQueryParameter: a result is taken only once QUERY_RESULT_AVAILABLE says so, which
+// is typically 2-3 frames later. Disjoint events (GPU clock change, context juggling)
+// discard everything in flight. Where the extension is absent (Safari, some ANGLE
+// backends) `supported` is false and every reader returns null; the quality judge then
+// runs on wall time alone. Zero allocation per frame: the ring, the sample window and
+// the sort scratch are built once.
+const GPU_RING = 8, GPU_WIN = 64;
+const gpuQ = new Array(GPU_RING).fill(null);
+const gpuPending = new Uint8Array(GPU_RING);       // 1 = query issued, result not yet read
+let gpuExt = null, gpuSupported = false, gpuInit = false, gpuHead = 0, gpuTail = 0, gpuOpen = -1;
+let gpuPaused = false;                              // __rays.profile owns the timer while it runs
+const gpuWin = new Float64Array(GPU_WIN), gpuScratch = new Float64Array(GPU_WIN);
+let gpuN = 0, gpuAt = 0, gpuEma = 0, gpuLast = 0, gpuSamples = 0;
+function gpuSetup() {
+  gpuInit = true;
+  try {
+    const gl = renderer.getContext();
+    gpuExt = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    if (!gpuExt) return;
+    for (let i = 0; i < GPU_RING; i++) gpuQ[i] = gl.createQuery();
+    gpuSupported = true;
+  } catch (e) { gpuExt = null; gpuSupported = false; }
+}
+function gpuPoll(gl) {
+  // Drain in issue order; stop at the first result still in flight so ordering holds.
+  while (gpuPending[gpuHead]) {
+    const q = gpuQ[gpuHead];
+    if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+    const disjoint = gl.getParameter(gpuExt.GPU_DISJOINT_EXT);
+    const ns = gl.getQueryParameter(q, gl.QUERY_RESULT);
+    gpuPending[gpuHead] = 0; gpuHead = (gpuHead + 1) % GPU_RING;
+    if (disjoint) { gpuN = 0; gpuAt = 0; continue; }   // the window is poisoned; start over
+    const ms = ns / 1e6;
+    gpuLast = ms; gpuSamples++;
+    gpuEma = gpuSamples === 1 ? ms : gpuEma + (ms - gpuEma) * 0.1;
+    gpuWin[gpuAt] = ms; gpuAt = (gpuAt + 1) % GPU_WIN; if (gpuN < GPU_WIN) gpuN++;
+  }
+}
+// game.js brackets renderRefraction() + render() with these. Only one TIME_ELAPSED
+// query may be open on a context, so the frame is skipped while the ring is full or
+// the sky-rays profiler holds the timer.
+export function gpuFrameBegin() {
+  if (!gpuInit) gpuSetup();
+  if (!gpuSupported || gpuPaused) return;
+  const gl = renderer.getContext();
+  gpuPoll(gl);
+  if (gpuPending[gpuTail]) return;                  // ring full: this frame goes untimed
+  try { gl.beginQuery(gpuExt.TIME_ELAPSED_EXT, gpuQ[gpuTail]); gpuOpen = gpuTail; }
+  catch (e) { gpuOpen = -1; }
+}
+export function gpuFrameEnd() {
+  if (gpuOpen < 0) return;
+  const gl = renderer.getContext();
+  try { gl.endQuery(gpuExt.TIME_ELAPSED_EXT); gpuPending[gpuOpen] = 1; gpuTail = (gpuOpen + 1) % GPU_RING; }
+  catch (e) { /* lost context mid-frame: the query is simply dropped */ }
+  gpuOpen = -1;
+}
+// Median of a Float64Array ring's live prefix, via a preallocated scratch. Typed-array
+// sort without a comparator is numeric and in place: no allocation.
+function medianOf(win, n, scratch) {
+  if (!n) return null;
+  for (let i = 0; i < n; i++) scratch[i] = win[i];
+  const sub = scratch.subarray(0, n);   // a view, not a copy; the one per-call object
+  sub.sort();
+  return n & 1 ? sub[n >> 1] : 0.5 * (sub[(n >> 1) - 1] + sub[n >> 1]);
+}
+const gpuMedian = () => gpuSupported ? medianOf(gpuWin, gpuN, gpuScratch) : null;
+if (typeof window !== 'undefined') {
+  window.__gpu = {
+    get supported() { if (!gpuInit) gpuSetup(); return gpuSupported; },
+    ms: () => gpuSupported && gpuSamples ? gpuEma : null,        // EMA (alpha 0.1)
+    last: () => gpuSupported && gpuSamples ? gpuLast : null,
+    median: gpuMedian,                                            // over the last 64 timed frames
+    n: () => gpuSamples,
+    // Per-pass timing is not wired (one query per frame, by design); the sky-rays
+    // pass has its own profiler at __rays.profile / __rays.cost.
+    passes: () => null
+  };
+}
 
-// A LADDER, not a hammer. The first miss used to shed EVERYTHING at once — and with
-// the refraction pass first on the list, a machine that dipped under the bar for four
-// seconds lost the sea's transparency permanently (user-reported twice: "starts out
-// transparent and then drops back", with a frame showing shadows gone too, i.e. the
-// full shed had fired). The sea being a window is a headline feature now; it goes
-// LAST. Each rung gets its own fresh SUSTAIN of evidence before the next fires:
+// ---------------------------------------------------------------------------------
+// THE QUALITY LADDER. A LADDER, not a hammer. The first miss used to shed EVERYTHING
+// at once — and with the refraction pass first on the list, a machine that dipped
+// under the bar for four seconds lost the sea's transparency permanently
+// (user-reported twice: "starts out transparent and then drops back", with a frame
+// showing shadows gone too, i.e. the full shed had fired). The sea being a window is a
+// headline feature now; it goes LAST. Each rung gets its own fresh evidence before the
+// next fires:
 //   1. refraction target quartered      (~4x cheaper, transparency kept)
 //   2. volumetrics cheapened            (occlusion march off, third-res march;
 //                                        the shafts survive, softer and ~4x cheaper)
 //   3. volumetrics + AO off             (the two historically-heaviest passes)
 //   4. full shed                        (shadows, simplified chain, refraction gone)
+// Rungs 1-3 are reversible (restoreQuality); 4 is terminal — it rewires the chain and
+// strips castShadow from every light, and a machine that needed it is not a candidate
+// for climbing back.
 let degradeStage = 0;
+function makeN8AO() {
+  const p = new N8AOPostPass(scene, camera, innerWidth, innerHeight);
+  // A/B'd on the deck at noon (2.2/2.6 vs 1.0/3.0): the deck props are 0.1-0.5u, and
+  // at radius 2.2 the AO read as a broad depth-grade darkening — open plank runs went
+  // muddy while the gear never visibly seated. Radius 1.0 pulls the occlusion into the
+  // contacts (gear feet, bulwark roots, davit base) and cleans the open deck; the
+  // intensity nudge to 3.0 keeps the total AO weight in the frame comparable.
+  p.configuration.aoRadius = 1.0;
+  p.configuration.distanceFalloff = 5.0;
+  p.configuration.intensity = 3.0;
+  p.configuration.halfRes = true;
+  return p;
+}
+function cheapenVolumetrics(on) {
+  if (volPass) { volPass.occlusion = !on; volPass.setResolutionDivisor(on ? 3 : 2); }
+  if (raysPass) raysPass.setResolutionDivisor(on ? 3 : 2);
+}
 function degradeQuality() {
+  if (degradeStage >= 4) return true;
   degradeStage++;
+  judgeNote(-1);
   if (degradeStage === 1) {
     reduceRefraction();
     console.info('ABYSSA: perf tier 1 — refraction target quartered');
     return false;
   }
   if (degradeStage === 2) {
-    if (volPass) {
-      volPass.occlusion = false;
-      volPass.setResolutionDivisor(3);
-    }
-    if (raysPass) raysPass.setResolutionDivisor(3);
+    cheapenVolumetrics(true);
     console.info('ABYSSA: perf tier 2 — volumetrics cheapened (no occlusion, third-res)');
     return false;
   }
@@ -830,34 +933,93 @@ function degradeQuality() {
   console.info('ABYSSA: reduced quality mode (AO/shadows off)');
   return true;
 }
-
-// Debug surface, kept: lets a session force the ladder rung by rung instead of waiting
-// four sustained seconds under the bar per tier, and lets a player report which tier
-// their machine landed on ("what does __perf.stage() say?").
-if (typeof window !== 'undefined') {
-  window.__perf = { degrade: degradeQuality, stage: () => degradeStage };
+// The missing half: one rung back up. Each step restores exactly what its rung shed,
+// leaving the stage below it in force (3 -> 2 brings the passes back CHEAPENED).
+function restoreQuality() {
+  if (degradeStage <= 0 || degradeStage >= 4) return false;
+  const from = degradeStage;
+  degradeStage--;
+  judgeNote(+1);
+  if (from === 3) {
+    if (!n8aoPass && !normalPass) {
+      try { n8aoPass = makeN8AO(); composer.addPass(n8aoPass, composer.passes.indexOf(depthCopy) + 1); }
+      catch (e) { console.warn('N8AO re-enable failed:', e); n8aoPass = null; }
+    }
+    setVolumetrics(true);
+    setSkyRays(true);
+    cheapenVolumetrics(true);   // rung 2 is still in force
+    unparkSunShadow();
+    console.info('ABYSSA: perf tier 3 lifted — volumetrics, AO and sun shadow back');
+    return true;
+  }
+  if (from === 2) {
+    cheapenVolumetrics(false);
+    console.info('ABYSSA: perf tier 2 lifted — volumetrics at full quality');
+    return true;
+  }
+  restoreRefraction();
+  console.info('ABYSSA: perf tier 1 lifted — refraction target at half-res');
+  return true;
 }
 
-// This used to average the FIRST six seconds of play and degrade below 34 fps — which
-// meant it was grading the warmup, not the machine. Those six seconds contain shader
-// compilation for ~75 programs, texture uploads and first-touch costs, so it tripped on
-// hardware that then runs at a steady 60, and every session logged "reduced quality
-// mode". The cost was silent and permanent: no volumetrics, no AO, no shadows, for the
-// whole game. Two changes make it honest.
-//   1. WARMUP is skipped outright. game.js precompiles at boot, but the first frames of
-//      real play still touch buffers nothing has bound yet.
-//   2. A single bad average is not enough. The frame rate has to stay under the bar for
-//      SUSTAIN seconds of genuinely-sampled time, so one hitch cannot cost the player
-//      the whole render pipeline.
-const WARMUP = 2.0, WINDOW = 1.0, SUSTAIN = 4.0, FPS_BAR = 34;
-let warmT = 0, winT2 = 0, winN = 0, badT = 0, lastT = 0;
+// THE JUDGE. This used to average ONE second of fps and shed below a 34 fps bar —
+// twice it shipped a game silently running without volumetrics, AO or shadows on
+// hardware doing 54-60 fps (once by grading the warm-up, once by trusting a clamped
+// dt). Now:
+//   * The sample is WALL TIME per frame (performance.now here, never the caller's
+//     clamped dt), and the statistic is a MEDIAN over a rolling window of WIN frames,
+//     so a hitch, a GC pause or a tab switch cannot move it. Discards kept: hidden
+//     document, frames over 250 ms, the first WARMUP seconds after the compile, and
+//     every frame the caller marks inactive (title, ending, idle-governed).
+//   * The bar is a frame-TIME budget, not an fps number. game.js passes the governor's
+//     cap: at cap 60 a healthy frame is <= 16.7 ms and the governor PACES the loop to
+//     exactly that, so "fps vs 34" was meaningless once the governor shipped. A frame
+//     is failing when the median costs more than OVER slots (1.5 x budget, + 1 ms of
+//     vsync slack): every-other-frame missed on a 60 Hz panel, every frame missing by
+//     one tick on a 120 Hz one.
+//   * Evidence has to SUSTAIN: the median must sit over the bar for SUSTAIN_DOWN
+//     seconds of sampled time (the window is judged every JUDGE_EVERY), then a shed
+//     fires and the window is cleared — the frames before the change say nothing
+//     about the new chain. A COOLDOWN follows any change before judging resumes.
+//   * Panic is sized by log2(overshoot): floor(log2(median / budget)) rungs at once,
+//     at least one, never past rung 3 (the terminal rung only ever fires alone, on
+//     its own sustained evidence, and only with the GPU median over half the budget
+//     where the timer exists — it is permanent, and a CPU-bound frame gains nothing).
+//   * The UPGRADE path climbs one rung when the median shows HEADROOM for SUSTAIN_UP
+//     seconds: the frame keeps pace with the governor AND the GPU median is under
+//     UP_FRAC of the budget (uncapped or without the timer extension, the wall median
+//     itself must be under UP_FRAC). Hysteresis: each shed that follows an upgrade
+//     doubles that rung's wait (10 s, 20 s, 40 s ... capped), so a machine on the
+//     edge settles instead of oscillating.
+//   * Driven frames (__power.drive while hidden) never reach the window: the hidden
+//     check discards them before they are timed.
+const WARMUP = 2.0, WIN = 90, JUDGE_EVERY = 0.5, SUSTAIN_DOWN = 3.0, SUSTAIN_UP = 10.0;
+const OVER = 1.5, SLACK_MS = 1.0, UP_FRAC = 0.65, PACE_TOL = 1.08, COOLDOWN = 3.0;
+const UP_BACKOFF_MAX = 160;
+let perfDone = false, warmT = 0, lastT = 0;
+const wallWin = new Float64Array(WIN), wallScratch = new Float64Array(WIN);
+let wallN = 0, wallAt = 0, sinceJudge = 0, badT = 0, goodT = 0, coolT = 0;
+let lastMedian = 0, lastGpuMedian = null, lastBudget = 1000 / 60;
+// Per-rung upgrade wait, doubled each time a shed follows an upgrade to that rung.
+const upWait = new Float64Array([0, SUSTAIN_UP, SUSTAIN_UP, SUSTAIN_UP]);
+let lastMove = 0;               // +1 upgrade, -1 shed, 0 none yet
+const judgeLog = [];            // transition records (rare; allocation at the event only)
+function judgeNote(dir) {
+  if (dir < 0 && lastMove > 0) upWait[degradeStage] = Math.min(UP_BACKOFF_MAX, upWait[degradeStage] * 2);
+  lastMove = dir;
+  judgeLog.push({ t: +(performance.now() / 1000).toFixed(2), stage: degradeStage, dir,
+    median: +lastMedian.toFixed(2), gpu: lastGpuMedian == null ? null : +lastGpuMedian.toFixed(2), budget: +lastBudget.toFixed(2) });
+  if (judgeLog.length > 64) judgeLog.shift();
+}
+function clearWindow() { wallN = 0; wallAt = 0; badT = 0; goodT = 0; sinceJudge = 0; coolT = COOLDOWN; }
 
-export function samplePerf(dt, active) {
+// dt is unused (kept for the call-site contract); `active` gates the sample; `cap` is
+// the governor's fps cap in force (0 = uncapped -> a 60 fps budget).
+export function samplePerf(dt, active, cap = 0) {
   if (perfDone) return;
   // Reset the clock whenever sampling is not running, or the gap across a title screen
   // or an ending gets counted as one enormous frame.
   if (!active) { lastT = 0; return; }
-
   // Measure WALL TIME here rather than trusting the caller's dt. game.js passes
   // Math.min(0.05, clock.getDelta()), so dt is CLAMPED before it arrives: a frame that
   // really took 500 ms is indistinguishable from one that took 50, and a throttled
@@ -868,21 +1030,73 @@ export function samplePerf(dt, active) {
   if (!lastT) { lastT = now; return; }
   const real = (now - lastT) / 1000;
   lastT = now;
-
-  // A backgrounded tab throttles rAF toward zero. Those frames say nothing about the
-  // GPU, and without this the player loses the whole render pipeline for alt-tabbing.
-  if (document.hidden || real > 0.25) return;
+  // A backgrounded tab throttles rAF toward zero (and __power.drive runs the loop from
+  // a timer while hidden). Those frames say nothing about the GPU.
+  if ((document.hidden && !(DEV_LAB && window.__perf.judgeHidden)) || real > 0.25) return;
   if (warmT < WARMUP) { warmT += real; return; }
 
-  winT2 += real; winN++;
-  if (winT2 < WINDOW) return;
-  const fps = winN / winT2;
-  winT2 = 0; winN = 0;
+  wallWin[wallAt] = real * 1000; wallAt = (wallAt + 1) % WIN; if (wallN < WIN) wallN++;
+  // The cooldown fills the window (those frames are the new chain's) but is not
+  // evidence: the judge's clock only runs once it is over.
+  if (coolT > 0) { coolT -= real; return; }
+  sinceJudge += real;
+  if (sinceJudge < JUDGE_EVERY || wallN < WIN >> 1) return;
+  const step = sinceJudge; sinceJudge = 0;
 
-  badT = fps < FPS_BAR ? badT + WINDOW : 0;
-  // Each tier gets its own fresh SUSTAIN of evidence: the clock resets after a shed,
-  // so tier 2 only fires if the machine STAYS under the bar with tier 1 applied.
-  if (badT >= SUSTAIN) { if (degradeQuality()) perfDone = true; badT = 0; }
+  const budget = cap > 0 ? 1000 / cap : 1000 / 60;
+  const median = medianOf(wallWin, wallN, wallScratch);
+  const gmed = gpuMedian();
+  lastMedian = median; lastGpuMedian = gmed; lastBudget = budget;
+
+  // DOWN: over the bar, sustained.
+  if (median > budget * OVER + SLACK_MS) {
+    goodT = 0;
+    badT += step;
+    if (badT >= SUSTAIN_DOWN) {
+      const over = median / budget;
+      let rungs = Math.max(1, Math.floor(Math.log2(over)));
+      if (degradeStage < 3) rungs = Math.min(rungs, 3 - degradeStage);   // panic stops short of the terminal rung
+      // The terminal rung is permanent and sheds GPU work. Where the timer exists it
+      // has to show the GPU is actually the cost (over half the budget): a CPU-bound
+      // frame (physics, a script stall) gains nothing from losing its shadows.
+      else if (gmed != null && gmed < budget * 0.5) { badT = 0; return; }
+      else rungs = 1;
+      let done = false;
+      for (let i = 0; i < rungs && !done; i++) done = degradeQuality();
+      if (done) perfDone = true;
+      clearWindow();
+    }
+    return;
+  }
+  badT = 0;
+  // UP: headroom, sustained. Pace-keeping is the wall test; the GPU timer is the
+  // cost test where it exists, the wall median where it does not.
+  if (degradeStage > 0 && degradeStage < 4) {
+    const keepsPace = median <= budget * PACE_TOL;
+    const cheap = gmed != null ? gmed < budget * UP_FRAC : (cap > 0 ? keepsPace : median < budget * UP_FRAC);
+    if (keepsPace && cheap) {
+      goodT += step;
+      if (goodT >= upWait[degradeStage]) { restoreQuality(); clearWindow(); }
+    } else goodT = 0;
+  }
+}
+
+// Debug surface, kept: lets a session force the ladder rung by rung instead of waiting
+// for sustained evidence per tier, and lets a player report which tier their machine
+// landed on ("what does __perf.stage() say?").
+if (typeof window !== 'undefined') {
+  window.__perf = {
+    degrade: degradeQuality, restore: restoreQuality, stage: () => degradeStage,
+    // The judge's last reading: wall median / gpu median / budget in ms, evidence timers.
+    state: () => ({ stage: degradeStage, done: perfDone, median: +lastMedian.toFixed(2), gpu: lastGpuMedian == null ? null : +lastGpuMedian.toFixed(2),
+      budget: +lastBudget.toFixed(2), n: wallN, badT: +badT.toFixed(1), goodT: +goodT.toFixed(1), coolT: +Math.max(0, coolT).toFixed(1),
+      upWait: upWait[degradeStage], warm: warmT >= WARMUP }),
+    log: () => judgeLog.slice(),
+    // DEV (?lab only): __perf.load = ms busy-waits the main thread per frame so the
+    // ladder can be watched shedding and climbing; __perf.judgeHidden = true lets the
+    // driven loop (__power.drive) be judged in a hidden pane. Never read on a normal load.
+    load: 0, judgeHidden: false
+  };
 }
 
 // Called by the boot loader once every material has a compiled program, so the sampler

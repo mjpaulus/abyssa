@@ -368,6 +368,21 @@ measures its own `performance.now()` wall time and discards frames over 250 ms.
 Two separate false-degrade bugs came from getting this wrong; both shipped a game
 that silently ran without volumetrics, AO or shadows on hardware doing 54-60 fps.
 
+The judge is now a MEDIAN over a rolling 90-frame window of those wall times, graded
+against the frame governor's BUDGET (1000/cap ms; uncapped means 60), never an fps
+number: the governor paces a healthy frame to exactly the slot, so "fps vs 34" stopped
+meaning anything the day it shipped. The bar is 1.5 x budget + 1 ms (a frame that
+misses its slot by a display tick, every frame), held for 3 s before a shed; the shed
+is log2(overshoot) rungs at once but never reaches the terminal rung in one go, and
+the terminal rung also needs the GPU median (`__gpu`, EXT_disjoint_timer_query ring,
+async) over half the budget — it is permanent, and a CPU-bound frame gains nothing
+from losing its shadows. The other half exists: `restoreQuality()` climbs one rung
+after 10 s of sustained headroom (keeps pace AND GPU median under 65% of budget), and
+each shed that follows an upgrade doubles that rung's wait, so an edge machine settles.
+Hidden or driven (`__power.drive`) frames never enter the window. `__perf.state()` /
+`__perf.log()` show the judge's reading and every transition; `?lab` adds
+`__perf.load` (ms busy-wait per frame) and `__perf.judgeHidden` for testing.
+
 ### 2026-09 campaign (see roadmap/everything-better.md)
 Skill-pack sweeps (shaders/textures/lighting/geometry/postfx/animation), a design
 evaluation (roadmap/eval-*.md, all shipped), and two campaign waves. New systems:

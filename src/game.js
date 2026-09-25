@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
 import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
-import { render, samplePerf, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced } from './postfx.js';
+import { render, samplePerf, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
@@ -1737,12 +1737,15 @@ function frame(now = performance.now()) {
     // The sea's transmission target: a clip-plane render of the far side of the
     // interface. Runs after update (needs the frame's surface height and camera) and
     // before the composer, so the surface shader samples this frame, not the last one.
+    gpuFrameBegin();     // one GPU timer query around the refraction pass + composer
     renderRefraction();
     render(dt);
+    gpuFrameEnd();
     boot();
-    // The perf judge grades wall-time fps against a 34 fps bar. A governed loop is not
-    // evidence about the GPU: only sample when it runs at least 45 fps or uncapped.
-    samplePerf(dt, (state === 'play' || state === 'won') && (cap === 0 || cap >= 45));
+    // The perf judge grades a wall-time MEDIAN against the governor's frame budget
+    // (postfx.samplePerf). An idle-governed loop (30 fps cap) is not evidence about
+    // the GPU: only sample with the helm at 45+ or uncapped, and tell it the cap.
+    samplePerf(dt, (state === 'play' || state === 'won') && (cap === 0 || cap >= 45), cap);
   } catch (e) {
     if (!loopFailed) {
       loopFailed = true;
