@@ -43,12 +43,12 @@ export function rimR(th) {
   // fine jagged serration all round instead of scallops. The big spikes are thorn
   // instances (thornMatrices), not footprint wiggles.
   const c = Math.cos(th), s = Math.sin(th);
-  let r = 1 / Math.sqrt(c * c + (s / 1.02) * (s / 1.02));
+  let r = 1 / Math.sqrt(c * c + (s / 0.96) * (s / 0.96));   // wider than long: chunky, not a millipede
   if (s < 0) r *= 1 - 0.34 * Math.pow(-s, 1.3);                   // tapers to the rear
   if (s > 0) r *= 1 + 0.06 * Math.pow(s, 0.8) * (1 - s * s) * 4;   // heavy front shoulders
-  if (s > 0) r = Math.min(r, 0.92 / Math.max(s, 1e-3));            // the brow
+  // the prow: a V over the face (Michael's reference, 2026-09-24), not a flat brow
+  if (s > 0) r = Math.min(r, 1.06 / Math.max(1e-3, s + 0.55 * Math.abs(c)));
   r *= 1 + 0.018 * Math.pow(Math.abs(Math.sin(th * 23)), 6);       // jagged margin
-  if (s > 0) r -= 0.035 * gauss(c, 0.06) * s;                      // rostral notch
   return r;
 }
 
@@ -75,15 +75,17 @@ export function shellAt(x, z, out) {
   f1 = Math.sqrt(f1); f2 = Math.sqrt(f2);
   const d = f2 - f1, inner = 1 - sst(0.86, 0.985, rho);           // scutes fade into the margin
   // hunched: the mass rides forward over the face, the back falls away
-  let h = 0.50 * Math.pow(Math.max(0, 1 - Math.pow(rho, 2.2)), 0.55) * (0.78 + 0.34 * sst(-0.7, 0.35, z));
+  // a low angular slab (the reference reads as a rock wedge), not a dome
+  let h = 0.36 * Math.pow(Math.max(0, 1 - Math.pow(rho, 2.8)), 0.42) * (0.82 + 0.26 * sst(-0.7, 0.35, z));
   h += 0.045 * Math.exp(-(x * x + (z - 0.34) * (z - 0.34)) / 0.07);                        // gastric
   h += 0.035 * (Math.exp(-((x - 0.46) * (x - 0.46) + (z + 0.04) * (z + 0.04)) / 0.09)
               + Math.exp(-((x + 0.46) * (x + 0.46) + (z + 0.04) * (z + 0.04)) / 0.09));   // branchial
   h += 0.030 * Math.exp(-(x * x + (z + 0.30) * (z + 0.30)) / 0.03);                        // cardiac
   h -= 0.020 * gauss(z - (0.08 + 0.35 * x * x), 0.03) * inner;                              // cervical groove
-  h += 0.070 * gauss(x, 0.055) * (1 - rho * rho);                                            // keel ridge
-  h -= 0.022 * (1 - sst(0.0, 0.035, d)) * inner;                                             // scute seams
-  h += 0.018 * sst(0.02, 0.16, d) * inner;                                                   // scute crowns
+  h += 0.045 * gauss(x, 0.05) * (1 - rho * rho);                                             // keel ridge
+  h += 0.050 * gauss(Math.abs(x) - (0.95 - z) * 0.55, 0.035) * sst(-0.2, 0.5, z) * (1 - sst(0.9, 1.0, rho));   // prow ridges
+  h -= 0.012 * (1 - sst(0.0, 0.035, d)) * inner;                                             // scute seams
+  h += 0.010 * sst(0.02, 0.16, d) * inner;                                                   // scute crowns
   out.h = h; out.rho = rho; out.d = d; out.id = id; out.f1 = f1;
   return out;
 }
@@ -132,7 +134,7 @@ export function carapaceGeo(COLS = 256, ROWS = 88, RIM = 14) {
       const rho = 1 + 0.018 * Math.sin(k * Math.PI) - (0.20 - 0.12 * front) * sst(0.25, 1, k);
       const yE = shellAt(c * rr * 0.9999, s * rr * 0.9999, sh).h;
       x = c * rr * rho; z = s * rr * rho;
-      y = yE * (1 - k) - (0.085 + 0.17 * front) * Math.sin(k * Math.PI / 2);
+      y = yE * (1 - k) - (0.085 + 0.22 * front) * Math.sin(k * Math.PI / 2);
       shade = 1 - 0.42 * k;                                        // the lip's underside is in its own shade
     }
     pos.push(x, y, z); uv.push(x * 0.5 + 0.5, z * 0.5 + 0.5); col.push(shade, shade, shade);
@@ -161,39 +163,44 @@ export function carapaceMaps(S = 1024) {
   const sh = {};
   const A = canvas2d(S), Rg = canvas2d(S), H = canvas2d(S);
   const ai = A.ctx.createImageData(S, S), ri = Rg.ctx.createImageData(S, S), hi = H.ctx.createImageData(S, S);
-  // Wet near-black armour; each scute's chamfer worn to pale bone just inside its seam;
-  // black seams; a dark olive film; bone-white crust. The crowns stay wet (low rough).
-  const C0 = [0.150, 0.145, 0.135], C1 = [0.50, 0.46, 0.39], C2 = [0.030, 0.026, 0.022];
-  const C3 = [0.13, 0.15, 0.09], C4 = [0.70, 0.67, 0.60], SAND = [0.42, 0.39, 0.33];
+  // After Michael's reference (2026-09-24): an olive-grey back gone to moss and lichen,
+  // rust bleeding along every seam and the margin, pale lichen blotches, and sponge
+  // holes — dark bores with bleached rims — eaten into the plates.
+  const C0 = [0.30, 0.31, 0.27], MOSS = [0.30, 0.35, 0.19], RUST = [0.55, 0.22, 0.08], C2 = [0.05, 0.04, 0.035];
+  const LICH = [0.62, 0.62, 0.55], SAND = [0.42, 0.39, 0.33], HOLE = [0.03, 0.03, 0.03], RIM = [0.70, 0.68, 0.62];
+  const holes = (() => { const r = seededRand(0x40E5); const p = []; for (let k = 0; k < 70; k++) p.push([r() * 2 - 1, r() * 2 - 1, 0.008 + 0.022 * r() * r()]); return p; })();
   for (let py = 0; py < S; py++) {
     const z = 1 - 2 * (py + 0.5) / S, v = z * 0.5 + 0.5;
     for (let px = 0; px < S; px++) {
       const x = 2 * (px + 0.5) / S - 1, u = x * 0.5 + 0.5, i = (py * S + px) * 4;
       shellAt(x, z, sh);
-      const tone = 0.85 + 0.30 * ((sh.id * 0.618034) % 1);
-      const seam = 1 - sst(0.0, 0.020, sh.d);
-      const edge = sst(0.012, 0.035, sh.d) * (1 - sst(0.045, 0.10, sh.d));      // the worn chamfer
+      const seam = 1 - sst(0.0, 0.018, sh.d);
       const mott = fbm(u * 2.0, v * 2.0, 1, 5);
-      const film = sst(0.55, 0.72, fbm(u * 1.3 + 0.37, v * 1.3 + 0.11, 0, 4)) * (0.35 + 0.65 * sst(0.45, 1.0, sh.rho));
-      const crust = sst(0.72, 0.77, fbm(u * 6.0, v * 6.0, 2, 6));
-      const pits = sst(0.64, 0.70, fbm(u * 11 + 0.5, v * 11 + 0.5, 3, 6));
-      const scars = sst(0.80, 0.83, fbm(u * 3.2 + 0.2, v * 9 + 0.6, 1, 5));    // old gouges
-      const rings = 0.5 + 0.5 * Math.sin(sh.f1 * 150 + mott * 3);
+      const moss = sst(0.42, 0.66, fbm(u * 1.4 + 0.37, v * 1.4 + 0.11, 0, 4));
+      const rust = Math.min(1, (1 - sst(0.0, 0.07, sh.d)) * 0.8 + sst(0.80, 1.0, sh.rho) * 0.9) * (0.5 + 0.5 * fbm(u * 5, v * 5, 1, 4));
+      const lich = sst(0.70, 0.76, fbm(u * 5.0 + 0.2, v * 5.0, 2, 6));
+      const streak = sst(0.55, 0.9, fbm(u * 1.2, v * 14 + 0.3, 0, 4)) * 0.5;   // run-lines down the slab
+      let hole = 0, rim = 0;
+      for (const [hx, hz, hr] of holes) {
+        const dd = Math.hypot(x - hx, z - hz);
+        if (dd < hr * 1.9) { hole = Math.max(hole, 1 - sst(hr * 0.75, hr, dd)); rim = Math.max(rim, sst(hr * 0.8, hr, dd) * (1 - sst(hr * 1.3, hr * 1.9, dd))); }
+      }
       for (let k = 0; k < 3; k++) {
-        let cv = C0[k] * tone * (0.80 + 0.40 * mott) * (1 - 0.10 * rings);
-        cv += (C1[k] - cv) * (edge * (0.45 + 0.35 * mott) + scars * 0.55);
-        cv += (C3[k] - cv) * film * 0.6;
-        cv += (C4[k] - cv) * crust * 0.60;
-        cv += (SAND[k] - cv) * 0.30 * sst(-0.15, -0.85, z);
-        cv += (C2[k] - cv) * seam * 0.95;
-        cv *= 1 - 0.40 * pits;
+        let cv = C0[k] * (0.75 + 0.5 * mott);
+        cv += (MOSS[k] - cv) * moss * 0.75;
+        cv += (RUST[k] - cv) * rust;
+        cv += (LICH[k] - cv) * lich * 0.55;
+        cv *= 1 - 0.18 * streak;
+        cv += (SAND[k] - cv) * 0.25 * sst(-0.15, -0.85, z);
+        cv += (C2[k] - cv) * seam * 0.85;
+        cv += (RIM[k] - cv) * rim * 0.8;
+        cv += (HOLE[k] - cv) * hole;
         ai.data[i + k] = Math.max(0, Math.min(255, cv * 255));
       }
       ai.data[i + 3] = 255;
-      const rough = Math.min(1, 0.40 + 0.45 * seam + 0.30 * film + 0.40 * crust + 0.25 * pits + 0.2 * edge);
+      const rough = Math.min(1, 0.62 + 0.25 * moss + 0.2 * seam + 0.15 * lich - 0.15 * rust + 0.3 * hole);
       ri.data[i] = ri.data[i + 1] = ri.data[i + 2] = rough * 255; ri.data[i + 3] = 255;
-      const ht = 0.5 + 0.30 * sst(0.02, 0.16, sh.d) - 0.50 * seam + 0.06 * rings
-        + 0.10 * crust - 0.25 * pits - 0.20 * scars + 0.08 * (mott - 0.5);
+      const ht = 0.5 + 0.15 * sst(0.02, 0.16, sh.d) - 0.40 * seam + 0.08 * lich + 0.10 * (mott - 0.5) - 0.9 * hole + 0.18 * rim - 0.1 * streak;
       hi.data[i] = hi.data[i + 1] = hi.data[i + 2] = Math.max(0, Math.min(255, ht * 255)); hi.data[i + 3] = 255;
     }
   }
@@ -249,7 +256,7 @@ export function bellyGeo(COLS = 160, ROWS = 48) {
 // tall in Y, thin in Z (crab legs are flattened fore-aft), a neck at the socket, condyles
 // flaring at the distal joint, a dorsal carina, optional raked spines along the top.
 // Vertex colour darkens into both joints; a `tip` segment tapers to a hooked, dark point.
-export function segmentGeo({ r0, r1, flat = 0.58, spines = 0, rows = 26, radial = 18, tip = false, curl = 0 }) {
+export function segmentGeo({ r0, r1, flat = 0.58, spines = 0, rows = 26, radial = 18, tip = false, curl = 0, knobs = 0 }) {
   const pos = [], uv = [], col = [], idx = [];
   for (let i = 0; i <= rows; i++) {
     const s = i / rows;
@@ -295,13 +302,28 @@ export function segmentGeo({ r0, r1, flat = 0.58, spines = 0, rows = 26, radial 
     }
     g = mergeGeometries(parts);
   }
+  if (knobs) {
+    // rows of round tubercles down the outer face and the crest, pale, like set rivets
+    const parts = [g];
+    for (let k = 0; k < knobs; k++) for (const a of [0.0, 0.9, -0.9]) {
+      const sk = 0.12 + 0.76 * (k + (a ? 0.5 : 0)) / knobs, r = r0 + (r1 - r0) * sk;
+      const kn = new THREE.SphereGeometry(r * 0.20, 8, 6);
+      kn.scale(1, 0.7, 1);
+      kn.translate(0, r * 0.95, 0);
+      kn.rotateX(a);
+      kn.scale(1, 1, flat);
+      kn.translate(sk, 0, 0);
+      parts.push(withColor(kn, 1.5, 1.5, 1.45));
+    }
+    g = mergeGeometries(parts);
+  }
   return g;
 }
 
 // A curved finger along +X from its hinge, hooking by `curve` (+ up, - down), tapering to
 // a dark point. Teeth on the biting edge (`bite` +1 = +Y, -1 = -Y): 'molar' is three
 // rounded crushing tubercles, 'saw' nine raked cutting teeth.
-export function hornGeo({ len, r0, curve, flat = 0.7, bite = -1, teeth = 'saw', rows = 22, radial = 14 }) {
+export function hornGeo({ len, r0, curve, flat = 0.7, bite = -1, teeth = 'saw', rows = 22, radial = 14, rust = false }) {
   const pos = [], uv = [], col = [], idx = [];
   const C = s => [len * s, curve * len * s * s];
   for (let i = 0; i <= rows; i++) {
@@ -312,7 +334,8 @@ export function hornGeo({ len, r0, curve, flat = 0.7, bite = -1, teeth = 'saw', 
       const a = (j % radial) / radial * TAU, ca = Math.cos(a), sa = Math.sin(a);
       pos.push(cx + nx * ca * r, cy + ny * ca * r, sa * r * flat);
       uv.push(s, j / radial);
-      col.push(dark, dark * 0.93, dark * 0.86);
+      if (rust) { const k = sst(0.10, 0.8, s); col.push(1 + 1.3 * k, 1 - 0.30 * k, 1 - 0.70 * k); }   // grey-teal chitin to rust
+      else col.push(dark, dark * 0.93, dark * 0.86);
     }
   }
   for (let i = 0; i < rows; i++) for (let j = 0; j < radial; j++) {
@@ -320,13 +343,18 @@ export function hornGeo({ len, r0, curve, flat = 0.7, bite = -1, teeth = 'saw', 
     idx.push(a, a + 1, b, b, a + 1, b + 1);
   }
   const parts = [build(pos, uv, col, idx)];
-  const at = teeth === 'none' ? [] : teeth === 'molar' ? [0.25, 0.50, 0.72] : Array.from({ length: 9 }, (_, k) => 0.10 + 0.08 * k);
+  const at = teeth === 'none' ? [] : teeth === 'molar' ? [0.25, 0.50, 0.72] : teeth === 'fang' ? [0.22, 0.42, 0.60] : Array.from({ length: 9 }, (_, k) => 0.10 + 0.08 * k);
   for (const s of at) {
     const [cx, cy] = C(s), r = r0 * Math.pow(1 - s, 0.8) + 0.002;
     let t;
     if (teeth === 'molar') {
       t = new THREE.SphereGeometry(r * 0.55, 10, 8);
       t.scale(1.3, 0.8, 0.9);
+    } else if (teeth === 'fang') {
+      t = new THREE.ConeGeometry(r * 0.45, r * 1.5, 6);
+      t.translate(0, r * 0.75, 0);
+      t.rotateZ(-0.35);
+      if (bite < 0) t.rotateX(Math.PI);
     } else {
       t = new THREE.ConeGeometry(r * 0.30, r * 0.95, 5);
       t.translate(0, r * 0.47, 0);
@@ -334,7 +362,7 @@ export function hornGeo({ len, r0, curve, flat = 0.7, bite = -1, teeth = 'saw', 
       if (bite < 0) t.rotateX(Math.PI);
     }
     t.translate(cx, cy + bite * r * 0.92, 0);
-    parts.push(withColor(t, 0.30, 0.27, 0.24));
+    parts.push(rust ? withColor(t, 1.6, 0.8, 0.45) : withColor(t, 0.30, 0.27, 0.24));
   }
   return parts.length > 1 ? mergeGeometries(parts) : parts[0];
 }
@@ -344,15 +372,15 @@ export function hornGeo({ len, r0, curve, flat = 0.7, bite = -1, teeth = 'saw', 
 // 'scythe' is the raptorial arm: a long, slim, keeled hand whose finger folds back
 // along it like a mantis blade.
 export function palmGeo(kind) {
-  const crusher = kind === 'crusher', scythe = kind === 'scythe';
-  const len = crusher ? 0.62 : scythe ? 0.95 : 0.74, hgt = crusher ? 0.36 : scythe ? 0.15 : 0.22, wid = crusher ? 0.62 : 0.55;
+  const crusher = kind === 'crusher', scythe = kind === 'scythe', hook = kind === 'hook';
+  const len = crusher ? 0.62 : scythe ? 0.95 : kind === 'hook' ? 0.70 : 0.74, hgt = crusher ? 0.36 : scythe ? 0.15 : kind === 'hook' ? 0.34 : 0.22, wid = crusher || kind === 'hook' ? 0.62 : 0.55;
   const rows = 30, radial = 22, pos = [], uv = [], col = [], idx = [];
   for (let i = 0; i <= rows; i++) {
     const s = i / rows, prof = Math.pow(Math.sin(Math.PI * (0.06 + 0.88 * s)), 0.55);
     for (let j = 0; j <= radial; j++) {
       const a = (j % radial) / radial * TAU, ca = Math.cos(a), sa = Math.sin(a);
       // granular tubercles on the crusher's outer face; the cutter is smooth and keeled
-      const gr = crusher ? 1 + 0.04 * sst(0.58, 0.74, fbm(s * 3, j / radial * 3, 2, 5)) : 1 + 0.06 * Math.pow(Math.max(0, ca), 10);
+      const gr = crusher || hook ? 1 + 0.05 * sst(0.58, 0.74, fbm(s * 3, j / radial * 3, 2, 5)) : 1 + 0.06 * Math.pow(Math.max(0, ca), 10);
       const r = hgt * 0.5 * prof * gr;
       pos.push(s * len, ca * r, sa * r * wid);
       uv.push(s, j / radial);
@@ -364,7 +392,9 @@ export function palmGeo(kind) {
     const a = i * (radial + 1) + j, b = a + radial + 1;
     idx.push(a, a + 1, b, b, a + 1, b + 1);
   }
-  const pollex = hornGeo({ len: crusher ? 0.30 : scythe ? 0.16 : 0.44, r0: hgt * 0.28, curve: 0.12, bite: 1, teeth: crusher ? 'molar' : 'saw' });
+  const pollex = hornGeo(hook
+    ? { len: 0.62, r0: hgt * 0.30, curve: 0.30, bite: 1, teeth: 'fang', rust: true }
+    : { len: crusher ? 0.30 : scythe ? 0.16 : 0.44, r0: hgt * 0.28, curve: 0.12, bite: 1, teeth: crusher ? 'molar' : 'saw' });
   pollex.translate(len * 0.88, -hgt * 0.17, 0);
   const g = mergeGeometries([build(pos, uv, col, idx), pollex]);
   g.userData.hinge = [len * 0.90, hgt * 0.20, 0];
@@ -513,4 +543,125 @@ export function limbGrain() {
   _grain = toTexture(normalFromHeight(noiseCanvas(256, 5, 1.3, seededRand(0x6A1F00D5)), 3));
   _grain.repeat.set(6, 2);
   return _grain;
+}
+
+// ---- the shingles ----------------------------------------------------------------------
+// The reference's signature: long angular blade-plates layered down the flanks like
+// split shale, sweeping back. One unit blade along +X (0 at the root), flat in XZ, a
+// chamfered edge, a crest rib; vertex colour runs grey-teal at the heart to rust at the
+// edges and tip.
+export function bladeGeo(rows = 16, radial = 18) {
+  // A flattened lens-section tube tapering to a point: z across the width, y the
+  // thickness, x along the length. Being a real grid it can CURL — edges roll down
+  // across the width and the tip droops — so it hugs the shell like a shingle.
+  const pos = [], uv = [], col = [], idx = [];
+  for (let i = 0; i <= rows; i++) {
+    const x = i / rows;
+    let w = 0.14 * Math.pow(Math.sin(Math.PI * (0.04 + 0.96 * x)), 0.55) * (1 - 0.35 * x) + 0.004;
+    w *= 1 - 0.22 * gauss(x - 0.66, 0.035);                          // a chipped notch
+    const th = 0.012 * (1 - 0.6 * x) + 0.002;                       // thin: shale, not beans
+    for (let j = 0; j <= radial; j++) {
+      const a = (j % radial) / radial * TAU, ca = Math.cos(a), sa = Math.sin(a);
+      const z = ca * w, y = sa * th - 1.2 * z * z - 0.10 * x * x + 0.006 * Math.sin(x * 40) * (sa > 0 ? 1 : 0);   // flat plate, slight curl, growth ridges
+      pos.push(x, y, z); uv.push(x, j / radial);
+      const edge = Math.pow(Math.abs(ca), 3), tipK = sst(0.72, 1.0, x), e = Math.max(edge, tipK) ;
+      const und = sa < 0 ? 0.45 : 1;                                   // the shingle's shadowed underside
+      col.push((0.17 + 0.45 * e) * und, (0.19 - 0.04 * e) * und, (0.19 - 0.14 * e) * und);  // grey-teal heart, rust rims
+    }
+  }
+  for (let i = 0; i < rows; i++) for (let j = 0; j < radial; j++) {
+    const a = i * (radial + 1) + j, b = a + radial + 1;
+    idx.push(a, b, a + 1, b, b + 1, a + 1);
+  }
+  return build(pos, uv, col, idx);
+}
+
+const _bd = new THREE.Vector3(), _bn = new THREE.Vector3(), _bz = new THREE.Vector3(), _bs = new THREE.Vector3();
+function bladeMat(p, dir, up, len, wid, out) {
+  _bd.copy(dir).normalize();
+  _bz.crossVectors(_bd, up).normalize();
+  _bn.crossVectors(_bz, _bd).normalize();
+  return out.makeBasis(_bd, _bn, _bz).scale(_bs.set(len, 1, wid)).setPosition(p);
+}
+// Three shingled layers down each flank from the shoulder to the tail, the upper layers
+// shorter and steeper; a crest of tall shards off the rear of the back; two brow blades
+// along the prow.
+export function bladeMatrices(seed) {
+  const rnd = seededRand(seed), sh = {}, m = [];
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  for (const sd of [1, -1]) {
+    for (let layer = 0; layer < 4; layer++) {
+      const rhoL = [1.02, 0.90, 0.78, 0.64][layer], N = [9, 8, 7, 6][layer];
+      for (let k = 0; k < N; k++) {
+        const f = (k + 0.5 * (layer & 1)) / (N - 0.5);
+        const th0 = 1.00 - f * 1.95, th = sd > 0 ? th0 : Math.PI - th0;   // shoulder -> tail
+        const rr = rimR(th) * rhoL * 0.97, x = Math.cos(th) * rr, z = Math.sin(th) * rr;
+        const y = shellAt(Math.min(0.99, 1 / rhoL) * x, Math.min(0.99, 1 / rhoL) * z, sh).h + 0.02;
+        shellNormal(x * 0.96, z * 0.96, _nn);
+        // lie along the slope, sweeping back: outward-and-down plus aft
+        const dir = V(Math.cos(th) * 0.75, -0.22 + 0.06 * layer, Math.sin(th) * 0.75 - 0.6);
+        const len = (0.28 + 0.16 * Math.sin(Math.PI * f)) * (1 - 0.08 * layer) * (0.85 + 0.3 * rnd());
+        m.push(bladeMat(V(x, y, z), dir, _nn, len, 0.9 + 0.6 * rnd(), new THREE.Matrix4()));
+      }
+    }
+  }
+  // rear crest: tall shards raking up and back off the hind slab
+  for (let k = 0; k < 5; k++) {
+    const x = (k - 2) * 0.16 + (rnd() - 0.5) * 0.05, z = -0.30 - 0.12 * Math.abs(k - 2) + (rnd() - 0.5) * 0.06;
+    const y = shellAt(x, z, sh).h;
+    shellNormal(x, z, _nn);
+    m.push(bladeMat(V(x, y - 0.01, z), V(x * 0.6, 0.30 + 0.15 * rnd(), -1), _nn, 0.38 + 0.20 * rnd(), 1.2, new THREE.Matrix4()));
+  }
+  // brow blades along the prow edges
+  for (const sd of [1, -1]) {
+    const th = sd > 0 ? 1.15 : Math.PI - 1.15, rr = rimR(th) * 0.96, x = Math.cos(th) * rr, z = Math.sin(th) * rr;
+    shellNormal(x, z, _nn);
+    m.push(bladeMat(V(x, shellAt(x, z, sh).h, z), V(sd * 0.40, -0.12, 1), _nn, 0.42, 1.3, new THREE.Matrix4()));
+  }
+  return m;
+}
+
+// ---- the reef on her back --------------------------------------------------------------
+// Growths in muted pigment (never neon): blue-grey tube sponges, a red fan coral, an
+// orange tube cluster, a lattice sponge. Returned as { geo, color } parts in shell space,
+// each merged; brooder.js gives each part its own flat material.
+function tubes(rnd, cx, cz, n, rMin, rMax, hMin, hMax, spread) {
+  const sh = {}, parts = [];
+  for (let k = 0; k < n; k++) {
+    const x = cx + (rnd() - 0.5) * spread, z = cz + (rnd() - 0.5) * spread;
+    const r = rMin + (rMax - rMin) * rnd(), h = hMin + (hMax - hMin) * rnd();
+    const t = new THREE.CylinderGeometry(r * 1.1, r, h, 10, 3, true);
+    t.translate(0, h / 2, 0);
+    t.rotateX((rnd() - 0.5) * 0.7); t.rotateZ((rnd() - 0.5) * 0.7);
+    t.translate(x, shellAt(x, z, sh).h - 0.01, z);
+    parts.push(t);
+  }
+  return mergeGeometries(parts);
+}
+function fan(rnd, cx, cz, size) {
+  // a planar branching fan: recursive forks of thin cylinders in one plane
+  const sh = {}, parts = [], y0 = shellAt(cx, cz, sh).h - 0.005, yaw = rnd() * TAU;
+  const grow = (x, y, ang, len, r, depth) => {
+    const ex = x + Math.cos(ang) * len, ey = y + Math.sin(ang) * len;
+    const c = new THREE.CylinderGeometry(r * 0.7, r, len, 5, 1, true);
+    c.translate(0, len / 2, 0);
+    c.rotateZ(ang - Math.PI / 2);
+    c.translate(x, y, 0);
+    parts.push(c);
+    if (depth > 0) for (const da of [-0.45, 0.45]) grow(ex, ey, ang + da + (rnd() - 0.5) * 0.3, len * 0.72, r * 0.7, depth - 1);
+  };
+  grow(0, 0, Math.PI / 2, size * 0.35, size * 0.02, 5);
+  const g = mergeGeometries(parts);
+  g.rotateY(yaw);
+  g.translate(cx, y0, cz);
+  return g;
+}
+export function reefParts(seed) {
+  const rnd = seededRand(seed);
+  return [
+    { geo: mergeGeometries([tubes(rnd, -0.42, 0.30, 9, 0.012, 0.020, 0.05, 0.12, 0.16), tubes(rnd, 0.30, -0.10, 6, 0.010, 0.018, 0.04, 0.09, 0.12)]), color: 0x3d557e },
+    { geo: tubes(rnd, 0.20, -0.52, 7, 0.018, 0.030, 0.05, 0.10, 0.14), color: 0x8f5530 },
+    { geo: mergeGeometries([fan(rnd, -0.66, 0.46, 0.26), fan(rnd, 0.05, 0.20, 0.20)]), color: 0x8e3a3e },
+    { geo: tubes(rnd, -0.10, -0.25, 5, 0.006, 0.010, 0.03, 0.07, 0.10), color: 0x9c8a74 }
+  ];
 }

@@ -38,7 +38,9 @@ const LEGS = [
 // Tall and spiked (Michael 2026-09-24: "crab like, menacing", not a literal crab): the
 // knees ride above her back and the body towers over the diver. The first squat cut
 // read as a friendly Cancer crab.
-const SEG = { coxa: 0.14, femur: 0.90, tibia: 0.86, dactyl: 0.46 };
+// Round 3 (Michael's reference painting, 2026-09-24): she is LOW and massive; short, dark,
+// spined legs mostly hidden under the shingles. Round 2's tall spider legs are gone.
+const SEG = { coxa: 0.14, femur: 0.56, tibia: 0.50, dactyl: 0.32 };
 // Ward sockets on the underside, local position and outward normal. The first nSigils
 // are used: mouth, both hips, then two more for chart rows that ask for them.
 const SOCKETS = [
@@ -112,7 +114,7 @@ export function makeBrooder(idx, cfg) {
   body.add(belly);
 
   // ---- crust: barnacles and weed ----
-  const bar = G.barnacleMatrices(110, 0xBA2AC1E5 + idx);
+  const bar = G.barnacleMatrices(36, 0xBA2AC1E5 + idx);
   const barnMat = registerPaint(new THREE.MeshStandardMaterial({ color: 0xdcd6c8, roughness: 0.86, metalness: 0, side: THREE.DoubleSide, envMap: envTex, envMapIntensity: 0.25 }));
   const barn = new THREE.InstancedMesh(G.barnacleGeo(), barnMat, bar.m.length);
   bar.m.forEach((m, i) => { barn.setMatrixAt(i, m); barn.setColorAt(i, bar.c[i]); });
@@ -144,10 +146,10 @@ export function makeBrooder(idx, cfg) {
 
   // ---- walking legs: one InstancedMesh per segment type, eight instances each ----
   const legs = {
-    coxa: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.115, r1: 0.108, rows: 8, radial: 16 }), limbMat, 8),
-    femur: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.112, r1: 0.070, spines: 9, rows: 30 }), limbMat, 8),
-    tibia: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.068, r1: 0.040, spines: 6 }), limbMat, 8),
-    dactyl: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.046, r1: 0, tip: true, curl: 0.16, rows: 22, radial: 12 }), limbMat, 8)
+    coxa: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.125, r1: 0.118, rows: 8, radial: 16 }), limbMat, 8),
+    femur: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.122, r1: 0.092, spines: 8, rows: 30 }), limbMat, 8),
+    tibia: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.090, r1: 0.060, spines: 6 }), limbMat, 8),
+    dactyl: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.060, r1: 0, tip: true, curl: 0.16, rows: 22, radial: 12 }), limbMat, 8)
   };
   for (const k in legs) {
     legs[k].frustumCulled = false;                 // instance bounds go stale as she walks
@@ -161,42 +163,56 @@ export function makeBrooder(idx, cfg) {
     L.feet.push({ planted: V3(), from: V3(), to: V3(), cur: V3(), t: -1, group: (k + (sd > 0 ? 0 : 1)) & 1 });
   }
 
-  // ---- arms: a massive crusher on -X, a mantis scythe on +X ----
-  // Bone-pale arms: dark limbs vanished against her own dark face (look-dev 2026-09-24).
+  // Round 3 arms, after the reference: two huge armoured arms held forward like a guard,
+  // grey-teal chitin with a wet sheen, set with pale knobs, ending in long hooked
+  // pincers that run to rust at the tips. The right (+X) arm is the major.
   const armMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xffffff, map: paleAlb, roughness: 0.5, metalness: 0, vertexColors: true,
-    normalMap: grain, normalScale: new THREE.Vector2(0.7, 0.7), envMap: envTex, envMapIntensity: 0.35
+    color: 0x9fb4b0, map: paleAlb, roughness: 0.34, metalness: 0.18, vertexColors: true,
+    normalMap: grain, normalScale: new THREE.Vector2(0.7, 0.7), envMap: envTex, envMapIntensity: 0.6
   }));
-  L.claws = [buildClaw(body, armMat, -1, 'crusher'), buildClaw(body, armMat, 1, 'scythe')];
+  L.claws = [buildClaw(body, armMat, -1, 0.74), buildClaw(body, armMat, 1, 1.0)];
 
-  // ---- thorns: the silhouette ----
-  const thornMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xcfc4ae, roughness: 0.5, metalness: 0, vertexColors: true, envMap: envTex, envMapIntensity: 0.35
+  // ---- the shingles: layered blade-plates down the flanks, the silhouette ----
+  const bladeMatl = registerPaint(new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.72, metalness: 0.05, vertexColors: true,
+    normalMap: grain, normalScale: new THREE.Vector2(1.0, 1.0), envMap: envTex, envMapIntensity: 0.3
   }));
-  const tm = G.thornMatrices(0x7A0A5 + idx);
-  const thorns = new THREE.InstancedMesh(G.thornGeo(), thornMat, tm.length);
-  tm.forEach((m, i) => thorns.setMatrixAt(i, m));
-  thorns.instanceMatrix.needsUpdate = true;
-  thorns.castShadow = true;
-  body.add(thorns);
+  const bm = G.bladeMatrices(0xB1ADE5 + idx);
+  const blades = new THREE.InstancedMesh(G.bladeGeo(), bladeMatl, bm.length);
+  bm.forEach((m, i) => blades.setMatrixAt(i, m));
+  blades.instanceMatrix.needsUpdate = true;
+  blades.castShadow = blades.receiveShadow = true;
+  body.add(blades);
+
+  // ---- the reef on her back ----
+  for (const part of G.reefParts(0x4EEF + idx)) {
+    const m = new THREE.Mesh(part.geo, registerPaint(new THREE.MeshStandardMaterial({
+      color: part.color, roughness: 0.85, metalness: 0, side: THREE.DoubleSide, envMap: envTex, envMapIntensity: 0.25
+    })));
+    m.castShadow = true;
+    body.add(m);
+  }
 
   // ---- the face: a cluster of eight black eyes under the brow, no glow — only
   // cold catchlights — and a cage of hooked mouthparts that never stops working ----
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x030405, roughness: 0.04, metalness: 0.4, envMap: envTex, envMapIntensity: 2.2 });
-  const EYES = [[0.075, -0.075, 0.895, 0.040], [0.165, -0.085, 0.870, 0.032], [0.245, -0.105, 0.835, 0.024], [0.040, -0.135, 0.905, 0.022]];
-  const eyes = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 20, 14), eyeMat, EYES.length * 2);
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x050607, roughness: 0.04, metalness: 0.3, envMap: envTex, envMapIntensity: 2.0,
+    emissive: 0xd8e2e0, emissiveIntensity: 0.0 });
+  L.eyeMat = eyeMat;
+  // pinpoints deep in the shadow under the prow (the reference's white eyes)
+  const EYES = [[0.045, -0.165, 0.905, 0.016], [0.095, -0.158, 0.885, 0.014], [0.140, -0.150, 0.860, 0.012], [0.06, -0.195, 0.895, 0.011]];
+  const eyes = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 14, 10), eyeMat, EYES.length * 2);
   let ei = 0;
   for (const [x, y, z, r] of EYES) for (const sd of [-1, 1]) {
-    eyes.setMatrixAt(ei++, _m.compose(_v.set(x * sd, y, z), _q.identity(), _sc.set(r, r * 0.85, r)));
+    eyes.setMatrixAt(ei++, _m.compose(_v.set(x * sd, y, z), _q.identity(), _sc.set(r, r, r)));
   }
   eyes.instanceMatrix.needsUpdate = true;
   body.add(eyes);
   L.mouth = [];
-  for (let k = 0; k < 3; k++) for (const sd of [-1, 1]) {
+  for (let k = 0; k < 5; k++) for (const sd of [-1, 1]) {
     const hinge = new THREE.Group();
-    hinge.position.set(0.05 * sd + 0.035 * k * sd, -0.12 - 0.02 * k, 0.86 - 0.03 * k);
+    hinge.position.set(0.035 * sd + 0.022 * k * sd, -0.20 - 0.012 * k, 0.84 - 0.025 * k);
     hinge.rotation.order = 'YZX';
-    const hook = new THREE.Mesh(G.hornGeo({ len: 0.20 - 0.03 * k, r0: 0.030, curve: -0.35, bite: -1, teeth: 'saw', rows: 14, radial: 8 }), limbMat);
+    const hook = new THREE.Mesh(G.hornGeo({ len: 0.16 - 0.018 * k, r0: 0.026, curve: -0.35, bite: -1, teeth: 'saw', rows: 12, radial: 8 }), armMat);
     hinge.add(hook);
     body.add(hinge);
     L.mouth.push({ hinge, sd, k });
@@ -249,14 +265,15 @@ function countTris(root) {
 }
 
 // A cheliped as a joint chain: root (merus) -> carpus -> palm -> moving finger. Each
-// joint is a Group so posing is plain Euler writes (no allocation).
-function buildClaw(body, mat, sd, kind) {
+// joint is a Group so posing is plain Euler writes (no allocation). `k` scales the minor arm.
+function buildClaw(body, mat, sd, k) {
   const root = new THREE.Group();
-  root.position.set(0.40 * sd, -0.05, 0.62);
+  root.position.set(0.30 * sd, -0.10, 0.66);
   root.rotation.order = 'YZX';
+  root.scale.setScalar(k);
   body.add(root);
-  const scythe = kind === 'scythe', ML = scythe ? 0.80 : 0.62;
-  const merus = new THREE.Mesh(G.segmentGeo({ r0: scythe ? 0.075 : 0.092, r1: scythe ? 0.060 : 0.080, spines: scythe ? 7 : 5 }), mat);
+  const ML = 0.40;
+  const merus = new THREE.Mesh(G.segmentGeo({ r0: 0.130, r1: 0.118, spines: 3, knobs: 5, rows: 30, radial: 22 }), mat);
   merus.scale.x = ML;
   merus.castShadow = true;
   root.add(merus);
@@ -264,28 +281,25 @@ function buildClaw(body, mat, sd, kind) {
   cj.position.x = ML;
   cj.rotation.order = 'YZX';
   root.add(cj);
-  const carpus = new THREE.Mesh(G.segmentGeo({ r0: 0.082, r1: 0.090, spines: 2 }), mat);
-  carpus.scale.x = 0.26;
+  const carpus = new THREE.Mesh(G.segmentGeo({ r0: 0.118, r1: 0.128, knobs: 2, rows: 16, radial: 22 }), mat);
+  carpus.scale.x = 0.24;
   carpus.castShadow = true;
   cj.add(carpus);
   const pj = new THREE.Group();
-  pj.position.x = 0.26;
+  pj.position.x = 0.24;
   pj.rotation.order = 'YZX';
   cj.add(pj);
-  const pg = G.palmGeo(kind);
+  const pg = G.palmGeo('hook');
   const palm = new THREE.Mesh(pg, mat);
   palm.castShadow = true;
   pj.add(palm);
   const dj = new THREE.Group();
   dj.position.fromArray(pg.userData.hinge);
   pj.add(dj);
-  const crusher = kind === 'crusher';
-  const dact = new THREE.Mesh(G.hornGeo(scythe
-    ? { len: 0.85, r0: 0.060, curve: -0.26, bite: -1, teeth: 'saw' }
-    : { len: 0.32, r0: 0.085, curve: -0.12, bite: -1, teeth: 'molar' }), mat);
+  const dact = new THREE.Mesh(G.hornGeo({ len: 0.66, r0: 0.105, curve: -0.34, bite: -1, teeth: 'fang', rust: true }), mat);
   dact.castShadow = true;
   dj.add(dact);
-  return { root, cj, pj, dj, sd, crusher, scythe };
+  return { root, cj, pj, dj, sd, major: k >= 1 };
 }
 
 // Teleport: body to pos (on the ground), heading yaw, feet reset to their rest spots.
@@ -303,7 +317,7 @@ function placeAt(L, pos, yaw) {
 // Rest spot of foot li: local (yaw only) -> world, on the terrain.
 function restWorld(L, li, out) {
   const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, st = L.standE;
-  const reach = lerp(1.62, 1.28, st) * lg.k, a = lg.splay * lerp(1.15, 0.85, st);
+  const reach = lerp(1.32, 1.10, st) * lg.k, a = lg.splay * lerp(1.15, 0.85, st);
   const lx = lg.hip[0] * sd + Math.cos(a) * reach * sd, lz = lg.hip[2] + Math.sin(a) * reach;
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   out.set(L.pos.x + (lx * cy + lz * sy) * L.R, 0, L.pos.z + (-lx * sy + lz * cy) * L.R);
@@ -353,29 +367,20 @@ function poseLeg(L, li, footL) {
   segMat(L.legs.dactyl, li, _ank2, _ft, _pn);
 }
 
-// Arm pose. At rest both are folded up before the face like a mantis at prayer, the
-// scythe's blade closed back along its hand. In threat the scythe lifts high over her
-// back with the blade half open and the crusher comes forward, gaping.
+// Arm pose, after the reference: a forward guard — upper arms reaching ahead under the
+// prow, forearms turned in, the hooked pincers hanging open-mouthed before her face.
+// Threat lifts both hands to the height of her brow and gapes them wide.
 function poseClaws(L) {
   const th = L.threatE, t = L.t, st = L.standE;
   for (const c of L.claws) {
     const sd = c.sd;
-    // a slow tremor that never quite stops: the menace is that she is never still
-    const tr = 0.03 * Math.sin(t * 2.3 + sd * 2.1) * Math.sin(t * 0.61) * st;
-    if (c.scythe) {
-      // strike-ready, not a crane: upper arm raised forward, forearm folded down toward
-      // the diver, blade cocked half open
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.30, 0.45, th), lerp(0.25 - 0.55 * (1 - st), 0.95, th) + tr);
-      c.cj.rotation.set(0, -sd * lerp(1.35, 0.30, th), lerp(-0.60, -1.55, th));
-      c.pj.rotation.set(0, -sd * lerp(0.35, 0.10, th), lerp(-1.10, -0.35, th) + tr);
-      c.dj.rotation.z = lerp(-2.75, -1.10, th);                 // folded back <-> half open
-    } else {
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.35, 0.55, th), lerp(-0.10 - 0.45 * (1 - st), 0.30, th) + tr);
-      c.cj.rotation.set(0, -sd * lerp(1.45, 0.55, th), lerp(0.10, -0.25, th));
-      c.pj.rotation.set(0, -sd * lerp(0.45, 0.05, th), lerp(-0.20, 0.05, th));
-      const snap = Math.pow(Math.max(0, Math.sin(t * 0.7 + sd * 1.3)), 8) * 0.10 * st;
-      c.dj.rotation.z = 0.04 + snap + 0.60 * th;
-    }
+    const tr = 0.025 * Math.sin(t * 2.3 + sd * 2.1) * Math.sin(t * 0.61) * st;     // never quite still
+    // threat pushes the guard FORWARD and a little up (a boxer's lead), never overhead
+    c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.30, th), lerp(-0.30 - 0.25 * (1 - st), -0.05, th) + tr);
+    c.cj.rotation.set(0, -sd * lerp(0.95, 0.55, th), lerp(0.30, 0.20, th));
+    c.pj.rotation.set(0, -sd * lerp(0.45, 0.20, th), lerp(-0.55, -0.05, th) + tr);
+    const snap = Math.pow(Math.max(0, Math.sin(t * 0.7 + sd * 1.3)), 8) * 0.12 * st;
+    c.dj.rotation.z = 0.10 + snap + 0.75 * th;
   }
 }
 
@@ -387,10 +392,10 @@ function poseAll(L, dt, player) {
   const gL = terrainH(L.pos.x + cy * o, L.pos.z - sy * o, L.idx), gR = terrainH(L.pos.x - cy * o, L.pos.z + sy * o, L.idx);
   const gC = terrainH(L.pos.x, L.pos.z, L.idx);
   const gy = (gF + gB + gL + gR + gC) / 5;
-  L.bodyY = gy + R * (lerp(0.06, 0.92, st) + 0.10 * L.threatE + 0.012 * Math.sin(L.t * 0.45) * (1 - st));
+  L.bodyY = gy + R * (lerp(0.06, 0.55, st) + 0.10 * L.threatE + 0.012 * Math.sin(L.t * 0.45) * (1 - st));
   b.position.set(L.pos.x, L.bodyY, L.pos.z);
   // hunched: standing, the front drops over the diver; threat lifts it to show the face
-  b.rotation.set(-Math.atan2(gF - gB, 2 * o) + 0.16 * st - 0.36 * L.threatE, L.yaw, Math.atan2(gL - gR, 2 * o));
+  b.rotation.set(-Math.atan2(gF - gB, 2 * o) + 0.06 * st - 0.22 * L.threatE, L.yaw, Math.atan2(gL - gR, 2 * o));
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
 
@@ -398,7 +403,8 @@ function poseAll(L, dt, player) {
   for (const k in L.legs) L.legs[k].instanceMatrix.needsUpdate = true;
   poseClaws(L);
 
-  // the mouthparts: three pairs working out of phase, faster when roused
+  L.eyeMat.emissiveIntensity = 0.55 * st + 0.35 * L.threatE;   // faint cold pinpoints, never a glow
+  // the mouthparts: five pairs working out of phase, faster when roused
   for (const m of L.mouth) {
     const w = L.t * (3.4 + 3 * L.agitation) + m.k * 2.1 + (m.sd > 0 ? 0 : Math.PI);
     m.hinge.rotation.set(0, -Math.PI / 2 - m.sd * 0.35, -0.9 + 0.22 * Math.sin(w) * (0.3 + 0.7 * st));
