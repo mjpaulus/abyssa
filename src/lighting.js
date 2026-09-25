@@ -278,6 +278,7 @@ function steerRim(k, air, dt) {
 // lantern shadow ever would. A flag rather than sun.castShadow directly, because
 // updateLighting recomputes that property every frame and would switch it back on.
 export function parkSunShadow() { sunParked = true; }
+export function unparkSunShadow() { sunParked = false; }
 
 function blend(depth01) {
   let i = 0;
