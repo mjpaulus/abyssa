@@ -15,7 +15,7 @@
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp } from '../../lib/math.js';
-import { makeGlow } from '../../lib/textures.js';
+import { makeGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
 import { terrainH } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
@@ -63,6 +63,26 @@ const STRIDE = 0.30, SWING_T = 0.55, RISE_T = 6, SETTLE_T = 4;
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
 const _x = V3(), _y = V3(), _z = V3(), _sc = V3(), _r = V3(), _rw = V3(), _lp = V3(), _pl = V3();
 const _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _q = new THREE.Quaternion(), _qs = new THREE.Quaternion();
+const _col = new THREE.Color();
+
+// CHITIN SHEEN (polish-brooder): a pale, subsurface-ish rim on the arms, legs and mouth.
+// A view-grazing Fresnel of the PERTURBED normal, scaled by the diffuse light the surface
+// actually receives — so it lifts the silhouette of a lit limb like light through the
+// edge of a shell, and is nothing at all in the dark (never a glow). One program for
+// every material that carries it: they differ only in uniforms.
+function chitinSheen(m) {
+  m.customProgramCacheKey = () => 'abyssa-brooder-chitin';
+  m.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `{
+        float chF = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+        chF = chF * chF * chF;
+        vec3 chLit = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
+        outgoingLight += chF * chLit * vec3(1.10, 1.22, 1.18) * 1.4;
+      }
+      #include <opaque_fragment>`);
+  };
+  return m;
+}
 
 export function makeBrooder(idx, cfg) {
   let c = cfg;
@@ -85,18 +105,21 @@ export function makeBrooder(idx, cfg) {
   };
 
   // ---- materials ----
-  const maps = G.carapaceMaps();
-  const grain = G.limbGrain(), limbAlb = G.limbAlbedo(false), paleAlb = G.limbAlbedo(true);
-  L.keepTex = new Set([maps.map, maps.normalMap, maps.roughnessMap, grain, limbAlb, paleAlb]);
+  const maps = G.carapaceMaps(), chit = G.chitinMaps(), bmaps = G.bladeMaps();
+  const grain = G.limbGrain(), paleAlb = G.limbAlbedo(true);
+  L.keepTex = new Set([maps.map, maps.normalMap, maps.roughnessMap, grain, paleAlb,
+    chit.map, chit.normalMap, chit.roughnessMap, bmaps.map, bmaps.normalMap, bmaps.roughnessMap]);
   const shellMat = registerPaint(new THREE.MeshStandardMaterial({
     map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.roughnessMap,
     normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0, vertexColors: true,
     envMap: envTex, envMapIntensity: 0.35
   }));
-  const limbMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xffffff, map: limbAlb, roughness: 0.55, metalness: 0, vertexColors: true,
-    normalMap: grain, normalScale: new THREE.Vector2(0.6, 0.6), envMap: envTex, envMapIntensity: 0.3
-  }));
+  // Legs: the arms' chitin atlas (membranes, cuffs, stipple, horn tips) under a charcoal
+  // tint — the painting's legs are near-black. Same program as the arms (chitinSheen).
+  const limbMat = registerPaint(chitinSheen(new THREE.MeshStandardMaterial({
+    color: 0x5e6463, map: chit.map, normalMap: chit.normalMap, roughnessMap: chit.roughnessMap,
+    normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0, vertexColors: true, envMap: envTex, envMapIntensity: 0.45
+  })));
   // The underside is where the ward fight happens, looked at from below at arm's length:
   // it gets the limb mottle and grain at a fine repeat of its own (planar UV spans the
   // whole belly, so the shared repeats would read as a few blurry blotches).
@@ -118,7 +141,7 @@ export function makeBrooder(idx, cfg) {
 
   // ---- crust: barnacles and weed ----
   const bar = G.barnacleMatrices(36, 0xBA2AC1E5 + idx);
-  const barnMat = registerPaint(new THREE.MeshStandardMaterial({ color: 0xdcd6c8, roughness: 0.86, metalness: 0, side: THREE.DoubleSide, envMap: envTex, envMapIntensity: 0.25 }));
+  const barnMat = registerPaint(new THREE.MeshStandardMaterial({ color: 0xa8a294, roughness: 0.86, normalMap: grain, normalScale: new THREE.Vector2(0.8, 0.8), metalness: 0, side: THREE.DoubleSide, envMap: envTex, envMapIntensity: 0.25 }));
   const barn = new THREE.InstancedMesh(G.barnacleGeo(), barnMat, bar.m.length);
   bar.m.forEach((m, i) => { barn.setMatrixAt(i, m); barn.setColorAt(i, bar.c[i]); });
   barn.instanceMatrix.needsUpdate = true;
@@ -126,9 +149,19 @@ export function makeBrooder(idx, cfg) {
   barn.castShadow = true;
   body.add(barn);
 
-  const weedGeo = new THREE.PlaneGeometry(0.014, 0.14, 1, 6);
+  // a frond, not a paper strip: tapered to a point, folded along its midrib, curling
+  const weedGeo = new THREE.PlaneGeometry(0.014, 0.14, 2, 5);
   weedGeo.translate(0, 0.07, 0);
-  const weedMat = new THREE.MeshStandardMaterial({ color: 0x55603c, roughness: 0.9, metalness: 0, side: THREE.DoubleSide });
+  {
+    const p = weedGeo.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), y = p.getY(i), t = y / 0.14;
+      p.setX(i, x * (1 - 0.85 * t) * (1 + 0.4 * Math.sin(t * 9)));
+      p.setZ(i, Math.abs(x) * 0.9 + 0.02 * t * t);
+    }
+    weedGeo.computeVertexNormals();
+  }
+  const weedMat = new THREE.MeshStandardMaterial({ color: 0x4a5634, roughness: 0.8, metalness: 0, side: THREE.DoubleSide });
   weedMat.customProgramCacheKey = () => 'abyssa-brooder-weed';
   weedMat.onBeforeCompile = sh => {
     sh.uniforms.uTime = L.uni.uTime;
@@ -149,7 +182,7 @@ export function makeBrooder(idx, cfg) {
 
   // ---- walking legs: one InstancedMesh per segment type, eight instances each ----
   const legs = {
-    coxa: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.125, r1: 0.118, rows: 8, radial: 16 }), limbMat, 8),
+    coxa: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.125, r1: 0.118, rows: 16, radial: 16 }), limbMat, 8),
     femur: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.122, r1: 0.092, spines: 8, rows: 30 }), limbMat, 8),
     tibia: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.090, r1: 0.060, spines: 6 }), limbMat, 8),
     dactyl: new THREE.InstancedMesh(G.segmentGeo({ r0: 0.060, r1: 0, tip: true, curl: 0.16, rows: 22, radial: 12 }), limbMat, 8)
@@ -169,30 +202,51 @@ export function makeBrooder(idx, cfg) {
   // Round 3 arms, after the reference: two huge armoured arms held forward like a guard,
   // grey-teal chitin with a wet sheen, set with pale knobs, ending in long hooked
   // pincers that run to rust at the tips. The right (+X) arm is the major.
-  const armMat = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0x9fb4b0, map: paleAlb, roughness: 0.34, metalness: 0.18, vertexColors: true,
-    normalMap: grain, normalScale: new THREE.Vector2(0.7, 0.7), envMap: envTex, envMapIntensity: 0.6
-  }));
+  // AAA pass: a generated chitin atlas (G.chitinMaps) — fine stipple normal, teal and pale
+  // flecks, pale wrinkled membranes at every joint, rust on the pincers as a MAP running to
+  // dark horn at the points — plus a pale subsurface-ish rim (chitinSheen).
+  const armMat = registerPaint(chitinSheen(new THREE.MeshStandardMaterial({
+    color: 0xffffff, map: chit.map, normalMap: chit.normalMap, roughnessMap: chit.roughnessMap,
+    normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0.08, vertexColors: true, envMap: envTex, envMapIntensity: 0.7
+  })));
   // Lopsided on purpose (the coconut crab / fiddler read): the major claw is nearly
   // twice the minor. The asymmetry is the first thing the silhouette says.
   L.claws = [buildClaw(body, armMat, -1, 0.72), buildClaw(body, armMat, 1, 1.35)];
 
   // ---- the shingles: layered blade-plates down the flanks, the silhouette ----
+  // AAA pass: four broken-edge plate variants (bevelled rim, thick root, growth shelves in
+  // their own atlas strip), one InstancedMesh each, every plate tinted a little its own way.
   const bladeMatl = registerPaint(new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.72, metalness: 0.05, vertexColors: true,
-    normalMap: grain, normalScale: new THREE.Vector2(1.0, 1.0), envMap: envTex, envMapIntensity: 0.3
+    color: 0xffffff, map: bmaps.map, normalMap: bmaps.normalMap, roughnessMap: bmaps.roughnessMap,
+    normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0.0, vertexColors: true, envMap: envTex, envMapIntensity: 0.4
   }));
-  const bm = G.bladeMatrices(0xB1ADE5 + idx);
-  const blades = new THREE.InstancedMesh(G.bladeGeo(), bladeMatl, bm.length);
-  bm.forEach((m, i) => blades.setMatrixAt(i, m));
-  blades.instanceMatrix.needsUpdate = true;
-  blades.castShadow = blades.receiveShadow = true;
-  body.add(blades);
+  const bm = G.bladeMatrices(0xB1ADE5 + idx), brnd = seededRand(0xB1AD7 + idx), byV = [[], [], [], []];
+  for (const m of bm) byV[Math.floor(brnd() * G.BLADE_VARIANTS) % G.BLADE_VARIANTS].push(m);
+  L.blades = [];
+  for (let v = 0; v < G.BLADE_VARIANTS; v++) {
+    if (!byV[v].length) continue;
+    const blades = new THREE.InstancedMesh(G.bladeGeo(v), bladeMatl, byV[v].length);
+    byV[v].forEach((m, i) => {
+      blades.setMatrixAt(i, m);
+      const a = brnd(), b = brnd(), k = 0.86 + 0.26 * brnd();
+      _col.setRGB(k * (0.94 + 0.14 * a), k * (0.96 + 0.06 * b), k * (0.92 + 0.12 * (1 - a)));
+      blades.setColorAt(i, _col);
+    });
+    blades.instanceMatrix.needsUpdate = true;
+    blades.instanceColor.needsUpdate = true;
+    blades.castShadow = blades.receiveShadow = true;
+    body.add(blades);
+    L.blades.push(blades);
+  }
 
   // ---- the reef on her back ----
-  for (const part of G.reefParts(0x4EEF + idx)) {
-    const m = new THREE.Mesh(part.geo, registerPaint(new THREE.MeshStandardMaterial({
-      color: part.color, roughness: 0.85, metalness: 0, side: THREE.DoubleSide, envMap: envTex, envMapIntensity: 0.25
+  // one merged mesh: tube sponges with oscula, lattice fans, encrusting mats (vertex colour)
+  {
+    const reefGrain = grain.clone();
+    reefGrain.repeat.set(3, 3); reefGrain.needsUpdate = true;
+    const m = new THREE.Mesh(G.reefGeo(0x4EEF + idx), registerPaint(new THREE.MeshStandardMaterial({
+      color: 0xffffff, vertexColors: true, roughness: 0.88, metalness: 0, side: THREE.DoubleSide,
+      normalMap: reefGrain, normalScale: new THREE.Vector2(0.8, 0.8), envMap: envTex, envMapIntensity: 0.25
     })));
     m.castShadow = true;
     body.add(m);
@@ -200,24 +254,43 @@ export function makeBrooder(idx, cfg) {
 
   // ---- the face: a cluster of eight black eyes under the brow, no glow — only
   // cold catchlights — and a cage of hooked mouthparts that never stops working ----
-  const eyeMat = new THREE.MeshStandardMaterial({ color: 0x050607, roughness: 0.04, metalness: 0.3, envMap: envTex, envMapIntensity: 2.0,
+  // AAA pass: wet black domes with a gold ring at the rim, sunk in cupped sockets (one
+  // merged eye geometry); the eyeshine emissive is masked to the dome by vertex colour.
+  const eyeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.05, metalness: 0.25, envMap: envTex, envMapIntensity: 1.4,
     emissive: 0xcfe9d6, emissiveIntensity: 0.0 });
+  eyeMat.customProgramCacheKey = () => 'abyssa-brooder-eye';
+  eyeMat.onBeforeCompile = sh => {
+    // vColor.r < 0.004 is the black dome: only it glows, and only it is mirror-wet; the
+    // gold ring and the mounds are satin
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      float eyeK = 1.0 - smoothstep(0.004, 0.01, vColor.r);
+      roughnessFactor = mix(0.55, roughnessFactor, eyeK);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      totalEmissiveRadiance *= 1.0 - smoothstep(0.004, 0.01, vColor.r);`);
+  };
   L.eyeMat = eyeMat;
   // pinpoints deep in the shadow under the prow (the reference's white eyes)
-  const EYES = [[0.045, -0.165, 0.905, 0.016], [0.095, -0.158, 0.885, 0.014], [0.140, -0.150, 0.860, 0.012], [0.06, -0.195, 0.895, 0.011]];
-  const eyes = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 14, 10), eyeMat, EYES.length * 2);
+  const EYES = G.EYES;
+  const eyes = new THREE.InstancedMesh(G.eyeGeo(), eyeMat, EYES.length * 2);
   let ei = 0;
   for (const [x, y, z, r] of EYES) for (const sd of [-1, 1]) {
-    eyes.setMatrixAt(ei++, _m.compose(_v.set(x * sd, y, z), _q.identity(), _sc.set(r, r, r)));
+    _q.setFromUnitVectors(_x.set(0, 0, 1), _y.set(x * sd * 3.8, 0, 1).normalize());   // square to the face plate
+    eyes.setMatrixAt(ei++, _m.compose(_v.set(x * sd, y, z), _q, _sc.set(r, r, r)));
   }
   eyes.instanceMatrix.needsUpdate = true;
   body.add(eyes);
+  // mouthparts: the chitin, but wetter (one program with the arms: only uniforms differ)
+  const mouthMat = registerPaint(chitinSheen(new THREE.MeshStandardMaterial({
+    color: 0x8c8580, map: chit.map, normalMap: chit.normalMap, roughnessMap: chit.roughnessMap,
+    normalScale: new THREE.Vector2(0.6, 0.6), roughness: 0.55, metalness: 0.08, vertexColors: true, envMap: envTex, envMapIntensity: 1.1
+  })));
   L.mouth = [];
   for (let k = 0; k < 5; k++) for (const sd of [-1, 1]) {
     const hinge = new THREE.Group();
     hinge.position.set(0.035 * sd + 0.022 * k * sd, -0.20 - 0.012 * k, 0.84 - 0.025 * k);
     hinge.rotation.order = 'YZX';
-    const hook = new THREE.Mesh(G.hornGeo({ len: 0.16 - 0.018 * k, r0: 0.026, curve: -0.35, bite: -1, teeth: 'saw', rows: 12, radial: 8 }), armMat);
+    const hook = new THREE.Mesh(G.hornGeo({ len: 0.16 - 0.018 * k, r0: 0.026, curve: -0.35, bite: -1, teeth: 'saw', rows: 12, radial: 8, fringe: 12 }), mouthMat);
     hinge.add(hook);
     body.add(hinge);
     L.mouth.push({ hinge, sd, k });
@@ -294,7 +367,7 @@ function buildClaw(body, mat, sd, k) {
   root.scale.setScalar(k);
   body.add(root);
   const ML = 0.40;
-  const merus = new THREE.Mesh(G.segmentGeo({ r0: 0.130, r1: 0.118, spines: 3, knobs: 5, rows: 30, radial: 22 }), mat);
+  const merus = new THREE.Mesh(G.segmentGeo({ r0: 0.130, r1: 0.118, spines: 3, knobs: 5, rows: 34, radial: 22, x0: -0.35, capF: 0.22 }), mat);   // its root buried under the lip
   merus.scale.x = ML;
   merus.castShadow = true;
   root.add(merus);
@@ -302,7 +375,7 @@ function buildClaw(body, mat, sd, k) {
   cj.position.x = ML;
   cj.rotation.order = 'YZX';
   root.add(cj);
-  const carpus = new THREE.Mesh(G.segmentGeo({ r0: 0.118, r1: 0.128, knobs: 2, rows: 16, radial: 22 }), mat);
+  const carpus = new THREE.Mesh(G.segmentGeo({ r0: 0.118, r1: 0.128, knobs: 2, rows: 24, radial: 22, capF: 0.3 }), mat);
   carpus.scale.x = 0.24;
   carpus.castShadow = true;
   cj.add(carpus);
@@ -317,7 +390,7 @@ function buildClaw(body, mat, sd, k) {
   const dj = new THREE.Group();
   dj.position.fromArray(pg.userData.hinge);
   pj.add(dj);
-  const dact = new THREE.Mesh(G.hornGeo({ len: 0.66, r0: 0.105, curve: -0.34, bite: -1, teeth: 'fang', rust: true }), mat);
+  const dact = new THREE.Mesh(G.hornGeo({ len: 0.66, r0: 0.105, curve: -0.34, bite: -1, teeth: 'fang', knobs: 4 }), mat);
   dact.castShadow = true;
   dj.add(dact);
   return { root, cj, pj, dj, sd, major: k >= 1 };
