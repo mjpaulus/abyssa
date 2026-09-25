@@ -1,8 +1,8 @@
 ---
 title: Auto-exposure (EV100)
-status: backlog
+status: wip
 tags: postfx, reference
-updated: 2026-09-01
+updated: 2026-09-25
 ---
 From the abyssal-living-deep reference analysis (emollick, fully procedural — a peer under the hard rule). Technique, not code. Effort: M.
 
@@ -10,3 +10,6 @@ From the abyssal-living-deep reference analysis (emollick, fully procedural — 
 Study: PostFX.js EXPOSURE_FRAG (log-luminance mip chain, asymmetric adaptation speed, -0.5 EV compensation). The single biggest reason their screenshots look composed.
 
 CHANGE: A 1x1 ping-pong float RT feeding renderer.toneMappingExposure; asymmetric speed; clamp range so the abyss stays dark by design (never brighten the deep past its authored stop). AdaptationPass history: do it as a tiny RT, not a Pass.
+
+## Log
+- 2026-09-25 — SHIPPED on branch ref-exposure (not merged; a4329f9): `src/postfx.exposure.js` (ExposurePass, a Pass shell round three tiny RTs: 32x32 -> 4x4 -> 1x1 RGBA32F, one program, no depth attachments), wired in `src/postfx.js` after DepthCopy (`__exposure.state/set/pass/profile/cost`), knobs `GLASS.exposure` in `src/config.js`, lab group 'exposure' in `src/ui/lab.js`. The meter INVERTS the ACES fit per tap (the renderer's exposure of the metered frame is known exactly at pass time) so it reads scene-referred log2 luminance — metered post-ACES the loop gain was ~0.1 on the deck and the exposure walked to the fence. Sky taps (depth 1.0: dome and far sea, both raw shaders) are taken as-is; the sea SURFACE over the seabed is raw too, so on the deck the loop gain read -0.65 and `airRaw: 0.65` corrects the reading by the lagged air blend. Readback: PBO ring of 4, mapped back 3 issues later, NO fence (a fence forced a mid-frame command-buffer commit). CPU adaptation on `ev = log2(multiplier on 1.32)`, asymmetric (tauBright 0.6 s falling, tauDark 3.0 s rising), per-stop key/lo/hi blended on lighting's depth01. CLAMPS: deck/shallows [0.70, 1.40], zone-0 seabed (d 0.27) [0.85, 1.15], zone-1 seabed (d 0.60) [0.85, 1.12], zone-2 seabed (d 0.93) [0.90, 1.05]; keys (scene-referred mean log2 at multiplier 1): -2.7 / -4.3 / -5.4 / -5.1. MEASURED: deck noon settles at 0.82 (exposure 1.09), night on the 1.40 fence (1.82); day->night 63% in 3.3 s (the weather itself eases over 2.9 s), night->day 0.6 s; pure EV step in a static zone 0: 0.6 s down, 2.5 s up. Zone 0 by day 0.89. Furnace (zone 2, facing from 22 u): 1.017 cold -> 0.900 lit, on the floor; the surround did not lift. Hoard (zone 1): 1.06 lit, peaks 1.107 as the lanterns go out, never past 1.117. P bypass snaps to 1.32 / ev 0 at once. Programs +1 (AutoExposureMeter); GL errors 0 across 6 P toggles + 3 resizes; sleeper fingerprints unchanged. COST: paired frame-level A/B on `__gpu.median()` (E.on alternated, median of pair deltas): +0.04 ms zone 2 (11 pairs), +0.23 ms deck (10 pairs, ±1 ms pair noise) — the per-pass timer query reads 1.9-2.5 ms because on this TBDR GPU it absorbs the scene pass closing; do not trust it. NOT VERIFIED: the user's eye on the deck at noon (0.82x) and night (1.4x); a real-window feel pass; the residual sea-surface term underwater near the interface.
