@@ -410,6 +410,33 @@ export const GLASS = {
     cap: 60,              // fps with the helm; 0 = uncapped (the old behaviour, for profiling)
     idle: 30              // fps on the title, unfocused, or paused; 0 = uncapped
   },
+  // AUTO-EXPOSURE — postfx.exposure.js (roadmap/ref-auto-exposure.md). The metered mean
+  // log2 luminance of the tone-mapped frame (centre-weighted) drives the renderer's
+  // exposure as a MULTIPLIER on the authored 1.32, adapting like an eye (fast to a
+  // brighter scene, slow to a darker one) inside a HARD per-depth clamp. Stops are keyed
+  // on lighting's depth01 (-y / 900): d0 the deck and shallows, d1 the zone-0 seabed,
+  // d2 the zone-1 seabed (the boiler room), d3 the zone-2 seabed (the abyss). key* is
+  // the stop's authored mean log2 luminance measured at multiplier 1 — the set point —
+  // and lo*/hi* fence the multiplier so the deep is never lifted past its authored look.
+  exposure: {
+    on: 1,                // 0 = the authored constant, meter idle (bit-identical)
+    ev: 0.0,              // EV compensation on top of the key (stops)
+    tauBright: 0.6,       // s, 63% time constant when the exposure must FALL
+    tauDark: 3.0,         // s, when it may RISE
+    centre: 0.6,          // metering weight: 1 at the middle, 1 - centre at the corners
+    every: 2,             // meter every N frames
+    airRaw: 0.65,         // deck correction: the unexposed share of an air frame (dome, sea
+                          // surface are raw shaders); measured loop gain -0.65 at noon
+    // Measured 2026-09-25 at multiplier 1 (scene-referred mean log2, ACES inverted):
+    // deck noon -2.42 / night -5.64; zone-0 wreck by day -4.27 / night -4.75; zone-1
+    // trawler -5.41; zone-2 wreck -5.36, the furnace field facing it cold -5.14 / lit
+    // -4.95. Keys sit so the authored daylight frames land near 1.0 and the lit
+    // furnace pulls the abyss to its floor.
+    d0: 0.00, lo0: 0.70, hi0: 1.40, key0: -2.7,
+    d1: 0.27, lo1: 0.85, hi1: 1.15, key1: -4.3,
+    d2: 0.60, lo2: 0.85, hi2: 1.12, key2: -5.4,
+    d3: 0.93, lo3: 0.90, hi3: 1.05, key3: -5.1
+  },
   // CREPUSCULAR RAYS — postfx.skyrays.js (roadmap/crepuscular-sky.md). Sun-visibility
   // mask (puffs + dome coverage, half-res) radially blurred toward the projected sun,
   // added over the sky and the sea's air side, scaled by the air's haze and by the

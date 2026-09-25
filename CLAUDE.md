@@ -58,6 +58,19 @@ against explicit contracts and reviewed on return.
   end-to-end. Tiered fallbacks; `degradeQuality()` sheds passes below 34 fps (a cheap-
   volumetrics rung precedes full removal). Boot warm-up is `compileAsync`.
   **P key = full post bypass** — the canonical A/B for any rendering artifact.
+  AUTO-EXPOSURE (`postfx.exposure.js`, branch ref-exposure): a Pass shell round three
+  tiny own RTs (32x32 -> 4x4 -> 1x1, one program, no depth attachments) meters the
+  scene colour after DepthCopy, INVERTING the ACES fit per tap (three bakes tone
+  mapping + exposure into every material, so the buffer is display-referred; metered
+  as-is the loop gain was ~0.1 and the exposure walked to its fence) and taking depth-
+  1.0 taps raw (dome, far sea: unexposed shaders). The 1x1 is read through a 4-deep
+  PBO ring three issues later with NO fence (a fence makes ANGLE/Metal commit mid-
+  frame). The CPU adapts `renderer.toneMappingExposure` = 1.32 x 2^ev, fast down
+  (0.6 s) slow up (3 s), inside a HARD per-depth clamp on lighting's depth01 (deck
+  [0.7,1.4], seabeds [0.85,1.15] / [0.85,1.12] / [0.90,1.05]) so the deep never
+  brightens past its authored look; `GLASS.exposure`, lab group 'exposure',
+  `__exposure.state()`. P bypass snaps to 1.32. Cost ~0.05-0.2 ms by PAIRED frame A/B;
+  a per-pass timer query on this TBDR GPU absorbs the scene pass and lies (2 ms).
 - `postfx.volumetrics.js` — half-res raymarched god rays, screen-space occlusion.
   Soak-tested (10k frames, 620 P-toggles, 155 resizes, zero artifacts) against this
   project's flashing-black-rectangle history. `postfx.cinematic.js.off` is the old
