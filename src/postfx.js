@@ -23,6 +23,8 @@ import { degradeRefraction, reduceRefraction, restoreRefraction, stormLevel } fr
 // CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
 // underwater volumetrics and before the main EffectPass so bloom/grade see it.
 import { SkyRaysPass } from './postfx.skyrays.js';
+// AUTO-EXPOSURE (roadmap/ref-auto-exposure.md): a metering shell around three tiny RTs.
+import { ExposurePass } from './postfx.exposure.js';
 // Read-only subject sources for the Flow-lean focus pull (item 5). creatures.js has no
 // side-effecting imports beyond core/config/terrain; predators, the leviathan and the
 // keepsakes are read through their existing window dev surfaces (pred / lev / wrecks)
@@ -40,7 +42,8 @@ renderer.toneMapping = THREE.ACESFilmicToneMapping;
 // Raised from 1.05 for the luminous-shallows look: the fixed exposure has to carry what
 // the benched auto-exposure pass used to. Zone 2 stays dark because its light sources
 // are dark, not because the exposure is low.
-renderer.toneMappingExposure = 1.32;
+const EXPOSURE_BASE = 1.32;
+renderer.toneMappingExposure = EXPOSURE_BASE;
 
 // HalfFloat intermediates: tone mapping is baked at scene render (renderer-level
 // ACES), so the data through the chain is display-referred either way — the win is
@@ -60,6 +63,22 @@ composer.addPass(new RenderPass(scene, camera));
 // useDepthCopy below). Raw float copy, so consumers see bit-identical depth.
 const depthCopy = new DepthCopyPass({ depthPacking: THREE.BasicDepthPacking });
 composer.addPass(depthCopy);
+// The exposure meter reads the scene colour right here, before AO and the shafts, and
+// renders only into its own three tiny targets (needsSwap false: the ping-pong is
+// untouched). Behind try/catch like every optional pass: a build failure leaves the
+// chain unchanged and the exposure at its authored constant.
+let expPass = null;
+try { expPass = new ExposurePass(EXPOSURE_BASE); composer.addPass(expPass); }
+catch (e) { console.warn('Auto-exposure unavailable:', e); expPass = null; }
+if (typeof window !== 'undefined') {
+  window.__exposure = {
+    E: GLASS.exposure,
+    state: () => expPass ? expPass.state() : null,
+    // set({ ev, tauBright, ... }) pokes knobs; set(false) / set(true) is the switch.
+    set: (o) => { const E = GLASS.exposure; if (o === false || o === true) E.on = o ? 1 : 0; else if (o) Object.assign(E, o); return { ...E }; },
+    pass: () => expPass
+  };
+}
 
 const bloom = new BloomEffect({
   intensity: 1.1, luminanceThreshold: 0.28, luminanceSmoothing: 0.25,
@@ -440,6 +459,7 @@ composer.addPass(smaaPass);
 // run after ANY addPass that creates or re-adds a depth-sampling pass.
 function useDepthCopy() {
   if (effectPass) effectPass.setDepthTexture(depthCopy.texture);
+  if (expPass) expPass.setDepthTexture(depthCopy.texture);
   if (volPass) volPass.setDepthTexture(depthCopy.texture);
   if (raysPass) raysPass.setDepthTexture(depthCopy.texture);
 }
@@ -725,6 +745,7 @@ export function getPostBypass() { return bypass; }
 
 export function render(dt) {
   if (bypass) {
+    if (expPass) expPass.reset(renderer);   // no auto-exposure without the post chain
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     pumpCaptures();
@@ -767,6 +788,8 @@ export function render(dt) {
   dof.bokehScale = 1.35 * (1 + 0.45 * kd) * (1 - air) + 0.15 * air;
   updateHalation();
   updateGrade(air);
+  // Exposure is set BEFORE the scene renders: three bakes it into every material.
+  if (expPass) expPass.update(dt || 0.016, renderer);
   composer.render(dt);
   pumpCaptures();
   if (DEV_LAB && window.__perf && window.__perf.load > 0) { const e = performance.now() + window.__perf.load; while (performance.now() < e) { /* dev load */ } }

@@ -403,6 +403,20 @@ function build() {
     { key: 'idle', min: 0, max: 120, step: 1 }
   ]);
   el('p', 'note', bd, 'frame cap in fps; 0 = uncapped (profiling only). __power.state() says which rate the loop is on now.');
+  // --- AUTO-EXPOSURE (roadmap/ref-auto-exposure.md) -------------------------
+  knobGroup('exposure', GLASS.exposure, BOOT.exposure, [
+    { key: 'on', min: 0, max: 1, step: 1 },
+    { key: 'ev', min: -2, max: 2, step: 0.05 },
+    { key: 'tauBright', min: 0.05, max: 3, step: 0.05 },
+    { key: 'tauDark', min: 0.05, max: 10, step: 0.05 },
+    { key: 'centre', min: 0, max: 1, step: 0.01 },
+    { key: 'every', min: 1, max: 8, step: 1 },
+    { key: 'lo0', min: 0.25, max: 1, step: 0.01 }, { key: 'hi0', min: 1, max: 3, step: 0.01 }, { key: 'key0', min: -12, max: 0, step: 0.05 },
+    { key: 'lo1', min: 0.25, max: 1, step: 0.01 }, { key: 'hi1', min: 1, max: 3, step: 0.01 }, { key: 'key1', min: -12, max: 0, step: 0.05 },
+    { key: 'lo2', min: 0.25, max: 1, step: 0.01 }, { key: 'hi2', min: 1, max: 3, step: 0.01 }, { key: 'key2', min: -12, max: 0, step: 0.05 },
+    { key: 'lo3', min: 0.25, max: 1, step: 0.01 }, { key: 'hi3', min: 1, max: 3, step: 0.01 }, { key: 'key3', min: -12, max: 0, step: 0.05 }
+  ]);
+  el('p', 'note', bd, 'lo/hi fence the multiplier on the authored 1.32 per depth stop (0 deck, 1-3 the seabeds); key = that stop\'s mean log2 luminance. __exposure.state() reads lum / ev / clamp.');
   // --- CREPUSCULAR RAYS (roadmap/crepuscular-sky.md) ------------------------
   knobGroup('rays', GLASS.rays, BOOT.rays, [
     { key: 'strength', min: 0, max: 3, step: 0.01 },
