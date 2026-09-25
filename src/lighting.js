@@ -1,7 +1,7 @@
 // Scene lighting rig. OWNED BY: lighting/post agent.
 import * as THREE from 'three';
 import { scene, camera } from './core.js';
-import { SUN, SURFACE_Y, GLASS } from './config.js';
+import { SUN, SURFACE_Y, GLASS, zoneBottom } from './config.js';
 import { V3, clamp } from './lib/math.js';
 // SKY DRAMA ambience, published by water.js's updateWater: {fog, moon}, both 0..1.
 // Imported rather than wired through game.js because it is a READ of a value water.js
@@ -100,6 +100,54 @@ sun.shadow.normalBias = 0.045;
 // the raw condition first disagreed with the current state; 0 = in agreement.
 let shadowFlipSince = 0;
 scene.add(sun);
+
+// ---- THE SEABED SUN SHADOW (roadmap/ref-caustics-shadow.md) --------------------------
+// Still ONE light and ONE shadow map. Below y = -26, inside zone 0's band, the raft's
+// 18 u box is re-aimed at a GLASS.seabed.shadowSize ortho box centred on the diver
+// (asymmetric left/right/top/bottom on the SAME shadow camera, which stays at
+// sun.position looking at the origin, so postfx's sun.position read and the god rays
+// are untouched) and refreshed every shadowEvery frames through the per-shadow
+// autoUpdate/needsUpdate pair. The box centre is snapped to the map's texel grid so a
+// walking diver does not make the shadows crawl. Above -26 every raft-box property is
+// written back and autoUpdate returns, so the deck shadow is exactly as shipped.
+// castShadow itself keeps its 1 s hysteresis; the mode switch is property writes only.
+const RAFT_BOX = { half: 9, near: 28, far: 72, bias: -0.0004, normalBias: 0.045, radius: 1 };
+export const floorShadow = { on: false, refreshes: 0, box: [0, 0, 0, 0, 0, 0], since: 0 };
+const _fsV = new THREE.Vector3(), _fsM = new THREE.Matrix4(), _fsO = new THREE.Vector3(), _fsUp = new THREE.Vector3(0, 1, 0);
+let floorFrame = 1e9, aimElev = -1e9, aimAzim = -1e9;
+function inFloorBand() {
+  const y = camera.position.y;
+  return y <= -26 && y > zoneBottom(0) - 60;
+}
+function aimFloorBox(C, size) {
+  // The shadow camera's frame: three does lookAt(target = origin) from sun.position with
+  // the default up, so the same lookAt here gives its axes (columns: right, up, back).
+  aimElev = SUN.elevDeg; aimAzim = SUN.azimDeg;
+  _fsM.lookAt(sun.position, _fsO, _fsUp);
+  const e = _fsM.elements;
+  _fsV.copy(C).sub(sun.position);
+  let vx = e[0] * _fsV.x + e[1] * _fsV.y + e[2] * _fsV.z;
+  let vy = e[4] * _fsV.x + e[5] * _fsV.y + e[6] * _fsV.z;
+  const d = -(e[8] * _fsV.x + e[9] * _fsV.y + e[10] * _fsV.z);
+  const half = size * 0.5, tex = size / 1024;
+  vx = Math.round(vx / tex) * tex; vy = Math.round(vy / tex) * tex;
+  const c = sun.shadow.camera;
+  c.left = vx - half; c.right = vx + half; c.top = vy + half; c.bottom = vy - half;
+  // Depth range: the floor's own relief plus a hero rock or the Brooder, and the lateral
+  // reach of the box projected onto a 58-degree sun, all fit inside +-120 u of the diver.
+  c.near = Math.max(1, d - 120); c.far = d + 120;
+  c.updateProjectionMatrix();
+  const b = floorShadow.box;
+  b[0] = c.left; b[1] = c.right; b[2] = c.bottom; b[3] = c.top; b[4] = c.near; b[5] = c.far;
+}
+function restoreRaftBox() {
+  const c = sun.shadow.camera, R = RAFT_BOX;
+  c.left = -R.half; c.right = R.half; c.top = R.half; c.bottom = -R.half;
+  c.near = R.near; c.far = R.far;
+  c.updateProjectionMatrix();
+  sun.shadow.bias = R.bias; sun.shadow.normalBias = R.normalBias; sun.shadow.radius = R.radius;
+  sun.shadow.autoUpdate = true;
+}
 
 // Sky/seabed gradient — gives up-facing surfaces a different colour to down-facing ones,
 // which is most of what sells "underwater" before any post runs.
@@ -318,6 +366,10 @@ function trackSun() {
   // shading and load-bearing to the shadow frustum. See the note on sun.position.
   sun.position.copy(SUN_VEC).multiplyScalar(40);
   sun.updateMatrixWorld();
+  // The seabed box is aimed in the shadow camera's frame, so a sun that has swung more
+  // than 2 degrees since the last aim gets a fresh one next frame. Not on every move:
+  // the lab clock moves the sun every frame, and a per-frame re-aim is a per-frame map.
+  if (Math.abs(SUN.elevDeg - aimElev) + Math.abs(SUN.azimDeg - aimAzim) > 2) floorFrame = 1e9;
 }
 
 // Called each frame with normalized depth 0..1 so lighting can respond to descent.
@@ -426,13 +478,29 @@ export function updateLighting(depth01) {
   // bobbing across y = -26, a flash grazing the 0.15 intensity gate) must not thrash
   // it every frame. The raw condition has to HOLD for ~1s continuously before the
   // flip lands. Module-scoped timer, zero allocation.
-  const wantShadow = !reduced && !sunParked && camera.position.y > -26 && sun.intensity > 0.15;
+  const SB = GLASS.seabed;
+  const floor = SB.shadow > 0 && inFloorBand();
+  const wantShadow = !reduced && !sunParked && sun.intensity > 0.15 && (camera.position.y > -26 || floor);
   if (wantShadow === sun.castShadow) {
     shadowFlipSince = 0;
   } else {
     const now = performance.now();
     if (shadowFlipSince === 0) shadowFlipSince = now;
     else if (now - shadowFlipSince > 1000) { sun.castShadow = wantShadow; shadowFlipSince = 0; }
+  }
+  if (sun.castShadow && floor) {
+    if (!floorShadow.on) { floorShadow.on = true; floorShadow.since = performance.now(); floorFrame = 1e9; }
+    sun.shadow.bias = SB.shadowBias; sun.shadow.normalBias = SB.shadowNormalBias; sun.shadow.radius = SB.shadowRadius;
+    sun.shadow.autoUpdate = false;
+    if (++floorFrame >= SB.shadowEvery) {
+      floorFrame = 0;
+      aimFloorBox(playerLightSrc.position, SB.shadowSize);
+      sun.shadow.needsUpdate = true;
+      floorShadow.refreshes++;
+    }
+  } else if (floorShadow.on) {
+    floorShadow.on = false;
+    restoreRaftBox();
   }
   mixInto(rim.color, a, b, 'rim', t);
   rim.intensity = reduced ? 0 : mix('rimI');
@@ -500,11 +568,12 @@ export function updateLighting(depth01) {
     // shadow.radius (a uniform — no recompile, and the map itself is unchanged), so the
     // raft map's kernel widens from 1 texel to 7 (0.12 u on the 18-unit box) and the
     // lantern's cube map from 1 to 3. Broad, feathered, still attached at the contact.
-    sun.shadow.radius = 1 + 9 * sk;
+    // (Over the seabed the sun's kernel is GLASS.seabed.shadowRadius, written above.)
+    if (!floorShadow.on) sun.shadow.radius = 1 + 9 * sk;
     lanternLight.shadow.radius = 1 + 3 * sk;
   } else {
     steerSnap = true;   // the next frame the dial comes up, the rim lands where it belongs
-    if (sun.shadow.radius !== 1) {
+    if (!floorShadow.on && sun.shadow.radius !== 1) {
       // The dial came back to 0 mid-session: restore the shipped kernel exactly.
       sun.shadow.radius = 1; lanternLight.shadow.radius = 1;
     }
