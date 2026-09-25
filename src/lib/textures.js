@@ -567,3 +567,33 @@ export function dropletSet() {
   _drops = { nrm: _dataTex(nrm, S) };
   return _drops;
 }
+
+// BRAIDED HOSE COVER. Two families of flat strands (each a bundle of 3 yarns) wound in
+// opposite helices, crossing two-over-two-under: the diamond texture of a braided
+// air hose. 8 strands per family per tile; u runs ALONG the hose, v round it, so a
+// caller repeats v by an integer to close the seam.
+//   map = albedo (sRGB, tarred-canvas brown), rough.g = roughness, nrm = normal (a = height).
+let _braid = null;
+export function braidSet() {
+  if (_braid) return _braid;
+  const S = 256, N = 8, rand = seededRand(0xb4a1d0c5);
+  const fib = _tileNoise(S, 64, 1, rand), dirt = _tileNoise(S, 4, 3, rand);
+  const h = new Float32Array(S * S), map = new Uint8Array(S * S * 4), rgh = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S * N, v = y / S * N;
+    const a = u + v, b = u - v + N;                        // the two helix families
+    const ia = Math.floor(a), ib = Math.floor(b), fa = a - ia, fb = b - ib;
+    const top = ((ia + (ib >> 1)) & 1) === 0;              // two-over-two-under
+    const prof = f => Math.pow(Math.sin(Math.PI * f), 0.5) * (0.82 + 0.18 * Math.cos(f * Math.PI * 6));   // 3 yarns
+    const ha = prof(fa), hb = prof(fb);
+    const hh = top ? Math.max(ha, hb * 0.55) : Math.max(hb, ha * 0.55);
+    const f = fib[y * S + x], d = dirt[y * S + x], i = y * S + x, o = i * 4;
+    h[i] = hh * (0.9 + 0.2 * f);
+    const tone = 0.55 + 0.45 * hh;
+    map[o] = (58 + 30 * d) * tone + 20 * f; map[o + 1] = (46 + 22 * d) * tone + 16 * f; map[o + 2] = (34 + 14 * d) * tone + 12 * f; map[o + 3] = 255;
+    rgh[o] = rgh[o + 1] = rgh[o + 2] = Math.max(0, Math.min(1, 0.95 - 0.25 * hh + (f - 0.5) * 0.1)) * 255; rgh[o + 3] = 255;
+  }
+  const mapT = _dataTex(map, S); mapT.colorSpace = THREE.SRGBColorSpace;
+  _braid = { map: mapT, rough: _dataTex(rgh, S), nrm: _dataTex(_packNormal(h, S, 3.2), S) };
+  return _braid;
+}

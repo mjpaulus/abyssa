@@ -14,7 +14,7 @@ import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // drives the breath cadence. (No cycles: neither module imports the diver.)
 import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet } from '../lib/textures.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -181,9 +181,22 @@ const glassMat = new THREE.MeshPhysicalMaterial({
   vertexColors: true
 });
 const lantGlass = new THREE.MeshPhysicalMaterial({
-  color: 0xffe6bb, metalness: 0, roughness: 0.08, transparent: true, opacity: 0.28,
-  emissive: 0xffca7a, emissiveIntensity: 0.5, side: THREE.DoubleSide, depthWrite: false,
+  // the globe is GLASS round a flame, not a lamp shade: faint self-glow only, so the
+  // flame cone and its white core read through it instead of one blown-out column
+  // (and near-black DIFFUSE: the lamp's own light sits 8 cm from this surface, and a
+  // pale diffuse glass caught it as a solid white wall — glass returns specular only)
+  color: 0x1a140c, metalness: 0, roughness: 0.06, transparent: true, opacity: 0.30,
+  emissive: 0xffca7a, emissiveIntensity: 0.18, side: THREE.DoubleSide, depthWrite: false, forceSinglePass: true,
   envMap: envTex, envMapIntensity: 0.8
+});
+// THE FEED HOSE: braided canvas over rubber (braidSet, on the tube's own UVs: u along,
+// v round — v repeats by an integer so the braid closes), and it WETS like the dress:
+// darker and glossy under water, drying on deck on the same uSalWet clock.
+const braidM = braidSet();
+for (const t of [braidM.map, braidM.rough, braidM.nrm]) t.repeat.set(7, 4);
+const hoseMat = new THREE.MeshStandardMaterial({
+  map: braidM.map, roughnessMap: braidM.rough, normalMap: braidM.nrm, normalScale: new THREE.Vector2(1.2, 1.2),
+  roughness: 1, metalness: 0.02, envMap: envTex, envMapIntensity: 0.3
 });
 // ---- THE METAL SHADER ----
 // Shared by copper, brass, steel and lead (one program; everything else is uniforms).
@@ -435,7 +448,15 @@ suitify(darkLeather, { tile: 18.0, weave: 0.40, alb: 0.08, wetDark: 0.28, wear: 
 // rubber, steel (its 0.78 metalness is real metal and stays; only its normal map and
 // roughness floor move). HERO, untouched at every k: copper and brass (the Mark V's
 // bonnet and fittings), the port and lantern glass, the blue helmet lamp, the bubbles.
-for (const m of [steel, lead, cloth, trim, leather, darkLeather, rubber]) registerPaint(m);
+hoseMat.onBeforeCompile = sh => {
+  sh.uniforms.uSalWet = salShared.uSalWet;
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform float uSalWet;')
+    .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= 1.0 - 0.35 * uSalWet;')
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.26, uSalWet * 0.85);');
+};
+hoseMat.customProgramCacheKey = () => 'salHose1';
+for (const m of [steel, lead, cloth, trim, leather, darkLeather, rubber, hoseMat]) registerPaint(m);
 for (const m of [copper, brass, port, blueLit, glassMat, lantGlass]) registerPaint(m, { hero: true });
 // the blade's water-drag streak: additive, opacity animated by the slash clock
 const dragMat = new THREE.MeshBasicMaterial({
@@ -1099,11 +1120,14 @@ export const diver = (() => {
     const c = new THREE.CatmullRomCurve3([
       V3(-0.155, 0.755, -0.445), V3(-0.235, 0.885, -0.415), V3(-0.330, 1.035, -0.375), V3(-0.352, 1.118, -0.338)
     ]);
-    p.add(new THREE.TubeGeometry(c, 14, 0.056, 8, false), rubber);
-    for (let i = 0; i <= 11; i++) {
-      const q = c.getPoint(i / 11), tan = c.getTangent(i / 11);
-      _o.position.copy(q); _o.lookAt(q.clone().add(tan)); _o.scale.setScalar(1); _o.updateMatrix();
-      p.add(new THREE.TorusGeometry(0.058, 0.015, 5, 10).applyMatrix4(_o.matrix), rubber);
+    p.add(new THREE.TubeGeometry(c, 24, 0.052, 12, false), hoseMat);
+    // brass ferrules crimped on at both ends, and the union nut where it meets the regulator
+    for (const t of [0, 1]) {
+      const q = c.getPointAt(t), tan = c.getTangentAt(t);
+      if (t === 0) tan.negate();
+      p.add(faceAlong(lathe([[0.056, -0.05], [0.062, -0.044], [0.062, -0.006], [0.058, 0.0], [0.050, 0.004]], 16).rotateX(Math.PI / 2), q, tan), brass);
+      for (let k = 0; k < 2; k++)                             // crimp ridges
+        p.add(faceAlong(new THREE.TorusGeometry(0.0625, 0.0035, 4, 16).translate(0, 0, -0.036 + k * 0.018), q, tan), brass);
     }
     p.bake();
   }
@@ -1392,19 +1416,36 @@ export const diver = (() => {
     lantern.scale.setScalar(1.25);
     pivot.add(lantern);
 
-    const cage = Part(lantern);   // thin members cast the streaked light pattern
+    // THE LANTERN as a made thing: round brass posts and bowed guard wires (the members
+    // that cast the streaked light), a blown glass globe on a brass fount with its wick,
+    // and a vented crown that lets the heat out. The flame, core and halo are unchanged.
+    const cage = Part(lantern);
     for (let i = 0; i < 4; i++) {
       const a = i / 4 * TAU + Math.PI / 4;
-      cage.add(xf(new THREE.BoxGeometry(0.022, 0.25, 0.022), Math.cos(a) * 0.098, -0.145, Math.sin(a) * 0.098, 0, -a, 0), brass);
+      cage.add(xf(new THREE.CylinderGeometry(0.0085, 0.0085, 0.25, 6), Math.cos(a) * 0.098, -0.145, Math.sin(a) * 0.098), brass);
+      const b = a + Math.PI / 4;                              // a guard wire between each pair of posts
+      const w = new THREE.CatmullRomCurve3([V3(Math.cos(b) * 0.094, -0.088, Math.sin(b) * 0.094),
+        V3(Math.cos(b) * 0.110, -0.145, Math.sin(b) * 0.110), V3(Math.cos(b) * 0.094, -0.202, Math.sin(b) * 0.094)]);
+      cage.add(new THREE.TubeGeometry(w, 6, 0.0045, 4, false), brass);
     }
-    cage.add(xf(new THREE.TorusGeometry(0.098, 0.010, 5, 14).rotateX(Math.PI / 2), 0, -0.085), brass);
-    cage.add(xf(new THREE.TorusGeometry(0.098, 0.010, 5, 14).rotateX(Math.PI / 2), 0, -0.205), brass);
+    for (const yy of [-0.085, -0.205]) cage.add(xf(new THREE.TorusGeometry(0.098, 0.009, 6, 24).rotateX(Math.PI / 2), 0, yy), brass);
+    cage.add(xf(new THREE.TorusGeometry(0.106, 0.005, 5, 24).rotateX(Math.PI / 2), 0, -0.145), brass);
     cage.bake(true);
 
     const shell = Part(lantern);  // bulky caps: no shadow, they'd swallow the seafloor light
-    shell.add(lathe([[0.000, 0.02], [0.055, 0.015], [0.075, -0.005], [0.118, -0.03], [0.128, -0.048], [0.106, -0.055], [0.100, -0.062]], 14), brass);
-    shell.add(lathe([[0.000, -0.315], [0.105, -0.312], [0.118, -0.295], [0.112, -0.255], [0.100, -0.245]], 14), brass);
-    shell.add(xf(new THREE.CylinderGeometry(0.086, 0.086, 0.185, 12, 1, true), 0, -0.145), lantGlass);
+    shell.add(lathe([[0.000, 0.02], [0.055, 0.015], [0.075, -0.005], [0.118, -0.03], [0.128, -0.048], [0.106, -0.055], [0.100, -0.062]], 24), brass);
+    // vented crown on the cap: a short stack with a hood, the vents dark (deep crevice)
+    shell.add(lathe([[0.000, 0.078], [0.030, 0.078], [0.044, 0.068], [0.046, 0.060], [0.034, 0.056], [0.034, 0.030], [0.052, 0.022], [0.056, 0.014]], 18), brass);
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * TAU;
+      shell.add(cav(faceAlong(new THREE.CircleGeometry(0.0075, 8), V3(Math.cos(a) * 0.0345, 0.043, Math.sin(a) * 0.0345), V3(Math.cos(a), 0, Math.sin(a))), 1), brass);
+    }
+    shell.add(lathe([[0.000, -0.315], [0.105, -0.312], [0.118, -0.295], [0.112, -0.255], [0.100, -0.245]], 24), brass);
+    // the fount and burner, and the wick (a crevice-dark stub under the flame)
+    shell.add(lathe([[0.000, -0.245], [0.062, -0.245], [0.066, -0.236], [0.052, -0.214], [0.024, -0.205], [0.021, -0.193], [0.000, -0.193]], 18), brass);
+    shell.add(cav(xf(new THREE.CylinderGeometry(0.010, 0.011, 0.016, 8), 0, -0.186), 1), brass);
+    // the blown globe, bellied, open top and bottom
+    shell.add(lathe([[0.050, -0.242], [0.068, -0.228], [0.082, -0.200], [0.087, -0.160], [0.084, -0.118], [0.072, -0.084], [0.056, -0.064]], 20), lantGlass);
     shell.bake(false);
 
     const flame = new THREE.Mesh(new THREE.ConeGeometry(0.030, 0.10, 7), flameMat);
