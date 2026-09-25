@@ -576,9 +576,9 @@ export function bladeMapSet() {
       const ribW = 0.06 * (1 - 0.6 * v) + 0.015;
       const rib = Math.exp(-(a * a) / (ribW * ribW));
       // lateral veins: lines of constant (v - k*a), spacing tightening toward the tip
-      const ph = (v * 26 - a * 2.4) ;
+      const ph = (v * 15 - a * 1.6);
       const f = ph - Math.floor(ph);
-      const vl = Math.exp(-((f - 0.5) * (f - 0.5)) / 0.004) * (1 - a * 0.85) * (0.55 + 0.45 * v);
+      const vl = Math.exp(-((f - 0.5) * (f - 0.5)) / 0.006) * (1 - a * 0.85) * (0.45 + 0.35 * v);
       const b = _pwFbm(bl, u * 0.5 + 0.13, v * 2.0);
       const blister = (1 - a) * (0.5 + 0.5 * Math.sin(ph * Math.PI * 2 + 1.6)) * (0.6 + 0.8 * b);
       h[i] = 0.55 * rib + 0.14 * vl + 0.10 * blister;

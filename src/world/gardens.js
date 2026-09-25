@@ -43,7 +43,8 @@ import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
 import { siteParams, stream } from './site.js';
 import { activeVents } from './vents.js';
-import { rockColliders } from './flora.js';
+import { rockColliders, F_TRANS } from './flora.js';
+import { bladeMapSet } from '../lib/textures.js';
 import { windState } from './water.js';
 
 const TAU = Math.PI * 2;
@@ -75,7 +76,9 @@ attribute float aFlut;  // local flutter weight
 attribute vec4 aInst;   // phase, sway amp, arc-shorten k, per-instance weight
 uniform float uTime; uniform vec2 uCur; uniform vec2 uCull;
 uniform float uSway; uniform float uFreq; uniform float uFogD;
-varying vec4 vGd; varying vec3 vGl;`;
+varying vec4 vGd; varying vec3 vGl;
+attribute vec2 aBU;     // blade uv (across, along + 1); (0,0) off-blade
+varying vec3 vBl;`;
 
 const V_BODY = `
 float gw = uTime * uFreq + aInst.x;
@@ -94,6 +97,13 @@ if (aFlut > 0.0) {
   transformed.xz *= 1.0 - 0.85 * aVA.z * grc;
   transformed.y -= aVA.z * grc * 0.42;
 #endif
+vBl = vec3(aBU, aVA.w);
+#ifdef GD_BLADE
+  if (aBU.y > 0.5) {   // margin ripple on the blade's own phase (flora.js idiom)
+    float gea = abs(aBU.x - 0.5) * 2.0, gal = aBU.y - 1.0;
+    transformed += objectNormal * (sin(uTime * 2.6 + gal * 15.0 + aVA.w * 5.0) * gea * gea * (0.3 + gal) * 0.006);
+  }
+#endif
 vec3 giw = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 float gdd = distance(giw, cameraPosition);
 float gfade = 1.0 - smoothstep(uCull.x, uCull.y, gdd);
@@ -109,7 +119,21 @@ vGl = position;
 
 const F_HEAD = `
 uniform float uTime; uniform float uSSS; uniform vec3 uPale; uniform vec3 uPale2;
-varying vec4 vGd; varying vec3 vGl;`;
+varying vec4 vGd; varying vec3 vGl; varying vec3 vBl;
+#ifdef GD_BLADE
+  uniform sampler2D uBladePack, uBladeNrm; uniform float uTrans;
+#endif
+#ifdef GD_PIT
+  float gPit(vec3 p) {
+    vec3 i = floor(p), f = fract(p); float d = 9.0;
+    for (int z = -1; z <= 1; z++) for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+      vec3 g = vec3(float(x), float(y), float(z));
+      vec3 h = fract(sin(vec3(dot(i + g, vec3(127.1, 311.7, 74.7)), dot(i + g, vec3(269.5, 183.3, 246.1)), dot(i + g, vec3(113.5, 271.9, 124.6)))) * 43758.5453);
+      vec3 r = g + h - f; d = min(d, dot(r, r));
+    }
+    return sqrt(d);
+  }
+#endif`;
 
 // Dithered range fade: interleaved-gradient noise against the per-instance fade.
 // Opaque, no sorting, no transparency; the far edge of every type dissolves into
@@ -121,6 +145,47 @@ const F_DITHER = `
 }`;
 
 const F_BODY = `
+#ifdef GD_BLADE
+  // THIN BLADE (polish-world, flora.js's idiom): rib + veins from bladeMapSet, a
+  // derivative-frame normal, paler/yellower rib and tip, per-blade hue, a ruffled
+  // margin; the lace membrane of the fans counts as thin too (translucency only).
+  {
+    float isB = step(0.5, vBl.y);
+    vec2 bu = vec2(vBl.x, clamp(vBl.y - 1.0, 0.0, 1.0));
+    vec4 bp = texture2D(uBladePack, bu);
+    vec3 bn = texture2D(uBladeNrm, bu).xyz * 2.0 - 1.0;
+    vec3 q0 = dFdx(-vViewPosition), q1 = dFdy(-vViewPosition);
+    vec2 st0 = dFdx(bu), st1 = dFdy(bu);
+    vec3 q1p = cross(q1, normal), q0p = cross(normal, q0);
+    vec3 T = q1p * st0.x + q0p * st1.x, Bt = q1p * st0.y + q0p * st1.y;
+    float dm = max(dot(T, T), dot(Bt, Bt));
+    float sc = dm > 0.0 ? inversesqrt(dm) : 0.0;
+    vec3 pn = normalize(T * (bn.x * sc * 0.3) + Bt * (bn.y * sc * 0.3) + normal * max(bn.z, 0.2));
+    normal = normalize(mix(normal, pn, isB));
+    float tip = smoothstep(0.6, 1.0, bu.y);
+    float hueK = fract(sin(vBl.z * 12.9898) * 43758.5453);
+    vec3 bc = diffuseColor.rgb * mix(vec3(0.94, 1.05, 0.88), vec3(1.10, 1.0, 0.76), hueK) * mix(0.92, 1.10, bp.r);
+    bc = mix(bc, bc * vec3(1.22, 1.08, 0.66), tip * 0.6);
+    diffuseColor.rgb = mix(diffuseColor.rgb, bc, isB);
+    #ifdef GD_COMB
+      // sea-pen pinna: a comb of pinnules along its leading edge, not a solid vane
+      if (isB > 0.5 && bu.x > 0.30 && fract(bu.y * 11.0) > 0.52) discard;
+    #else
+      float ea = abs(bu.x - 0.5) * 2.0;
+      float edge = 0.95 - 0.14 * tip - 0.04 * sin(bu.y * 63.0 + vBl.z * 3.0);
+      if (isB > 0.5 && ea > edge) discard;
+    #endif
+    floraThin = max(isB * (1.0 - bp.g * 0.75), vGd.x * 0.9);
+  }
+#endif
+#ifdef GD_PIT
+  {
+    float cd = gPit(vGl * 22.0);
+    float pore = 1.0 - smoothstep(0.10, 0.27, cd);
+    diffuseColor.rgb *= (1.0 - 0.5 * pore) * (0.93 + 0.14 * smoothstep(0.3, 0.7, cd));
+    roughnessFactor = mix(roughnessFactor, 1.0, pore);
+  }
+#endif
 #ifdef GD_LACE
   // Sea-fan lace: the membrane between branches is a mesh, not a sheet — a two-axis
   // sine grid punches the holes. Only lace vertices carry the mask.
@@ -158,8 +223,13 @@ function gardenMat(o) {
   });
   m.defines = {};
   for (const d of o.def || []) m.defines['GD_' + d] = 1;
+  if (m.defines.GD_BLADE) m.forceSinglePass = true;
   const cull = o.cull ?? 90;
   m.onBeforeCompile = sh => {
+    if (m.defines.GD_BLADE) {
+      const BS = bladeMapSet();
+      Object.assign(sh.uniforms, { uBladePack: { value: BS.pack }, uBladeNrm: { value: BS.nrm }, uTrans: { value: o.trans ?? 1 } });
+    }
     Object.assign(sh.uniforms, uni, {
       uCull: { value: new THREE.Vector2(cull * 0.72, cull) },
       uSway: { value: o.sway ?? 0 }, uFreq: { value: o.freq ?? 0.85 },
@@ -173,7 +243,8 @@ function gardenMat(o) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>' + F_HEAD)
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + F_DITHER)
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{' + F_BODY + '\n}');
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
+      .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS);
     injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): the plants are organic
   };
   m.customProgramCacheKey = () => 'gardens|' + o.key;
@@ -214,14 +285,16 @@ function tipMat(o) {
 // Accumulates transformed primitives into one indexed buffer, tagging every vertex
 // with the per-part data the sway shader reads (flora.js's Build idiom).
 class Build {
-  constructor() { this.p = []; this.n = []; this.i = []; this.meta = []; this.v = 0; }
+  constructor() { this.p = []; this.n = []; this.i = []; this.meta = []; this.bu = []; this.v = 0; }
   add(geo, m, o = {}) {
     const g = geo.clone().applyMatrix4(m);
     const pos = g.attributes.position, nor = g.attributes.normal, c = pos.count;
+    const uv = o.bu ? g.attributes.uv : null;   // blades carry their uv as aBU (v + 1)
     for (let k = 0; k < c; k++) {
       this.p.push(pos.getX(k), pos.getY(k), pos.getZ(k));
       this.n.push(nor.getX(k), nor.getY(k), nor.getZ(k));
       this.meta.push(o);
+      if (uv) this.bu.push(uv.getX(k), uv.getY(k) + 1); else this.bu.push(0, 0);
     }
     if (g.index) for (const k of g.index.array) this.i.push(k + this.v);
     else for (let k = 0; k < c; k++) this.i.push(k + this.v);
@@ -249,6 +322,7 @@ class Build {
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     g.setAttribute('aVA', new THREE.BufferAttribute(va, 4));
     g.setAttribute('aFlut', new THREE.BufferAttribute(fl, 1));
+    g.setAttribute('aBU', new THREE.Float32BufferAttribute(this.bu, 2));
     g.setIndex(this.i);
     return g;
   }
@@ -282,14 +356,16 @@ function tubeGeo(pts, segs, r0, r1, sides) {
 
 // Rooted blade: zero flex at the rhizome, leaning with t^2, width tapering to a tip.
 function bladeGeo(h, w, lean, rows = 5) {
-  const p = [], idx = [];
+  const p = [], idx = [], uv = [];
   for (let j = 0; j <= rows; j++) {
     const t = j / rows, bend = lean * t * t, side = w * (1 - 0.85 * t * t), y = h * (t - 0.19 * t * t * t);
     p.push(-side, y, bend, side, y, bend);
+    uv.push(0, t, 1, t);
     if (j < rows) { const n = j * 2; idx.push(n, n + 1, n + 2, n + 1, n + 3, n + 2); }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(p, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
   return g;
@@ -344,13 +420,14 @@ function seagrassGeo() {
   const lean = gr(0, TAU);
   for (let i = 0; i < 10; i++) {
     const a = gr(0, TAU), r = Math.sqrt(_ge()) * 0.14, h = gr(0.45, 1);
-    const g = bladeGeo(h, gr(0.016, 0.03), h * gr(0.2, 0.7));
-    B.add(g, xf(Math.cos(a) * r, 0, Math.sin(a) * r, lean + gr(-0.8, 0.8)), { ph: gr(0, TAU), h });
+    const g = bladeGeo(h, gr(0.012, 0.036), h * gr(0.2, 0.7));
+    B.add(g, xf(Math.cos(a) * r, 0, Math.sin(a) * r, lean + gr(-0.8, 0.8)), { ph: gr(0, TAU), h, bu: true });
     g.dispose();
   }
   return B.done((x, y, z, h, m, o) => {
-    const u = clamp(y / m.h, 0, 1), s = 0.32 + 0.68 * u;
-    o.c[0] = s * 0.72; o.c[1] = s; o.c[2] = s * 0.66;
+    const u = clamp(y / m.h, 0, 1), s = 0.32 + 0.68 * u, tp = sstep(0.6, 1, u);
+    // older, paler, yellowing tips — the blade grows from the base
+    o.c[0] = s * (0.72 + 0.4 * tp); o.c[1] = s * (1 + 0.06 * tp); o.c[2] = s * (0.66 - 0.1 * tp);
     o.flex = Math.pow(u, 1.4); o.flut = 0.02 * u * u;
   });
 }
@@ -407,7 +484,8 @@ function barrelGeo() {
   g.dispose();
   return B.done((x, y, z, h, m, o) => {
     const rad = Math.hypot(x, z), inner = y > 0.28 && rad < 0.42 ? 1 : 0;
-    const s = (0.42 + 0.58 * h) * (1 - 0.5 * inner);
+    const rim = y > 1.62 ? 1 : 0;            // the osculum's lip: paler, sun-bleached
+    const s = (0.42 + 0.58 * h) * (1 - 0.5 * inner) * (1 + 0.25 * rim);
     o.c[0] = s; o.c[1] = s * 0.78; o.c[2] = s * 0.72;
     o.flex = h * h * 0.25;
   });
@@ -422,23 +500,34 @@ function anemoneGeo() {
   B.add(col, ID, { t: 'c' });
   const disc = new THREE.SphereGeometry(0.17, 8, 3, 0, TAU, 0, Math.PI * 0.5);
   B.add(disc, xf(0, 0.25, 0, 0, 0, 0, 0.85, 0.3, 0.85), { t: 'c' });
-  for (let i = 0; i < 20; i++) {
-    const ring = i < 13 ? 0 : 1, a = (i - (ring ? 13 : 0)) / (ring ? 7 : 13) * TAU + ring * 0.3;
+  // POLISH-WORLD: 22 tentacles (14 outer + 8 inner) on 3-segment tubes with a
+  // bulbed tip, and a MOUTH: a raised oral lip round a dark slit (below)
+  for (let i = 0; i < 22; i++) {
+    const ring = i < 14 ? 0 : 1, a = (i - (ring ? 14 : 0)) / (ring ? 8 : 14) * TAU + ring * 0.3;
     const r = ring ? 0.07 : 0.145, len = gr(0.28, 0.46), up = ring ? gr(0.75, 1.0) : gr(0.35, 0.65);
     const b = new THREE.Vector3(Math.sin(a) * r, 0.29, Math.cos(a) * r);
     const d = new THREE.Vector3(Math.sin(a) * (1 - up), up, Math.cos(a) * (1 - up)).normalize();
     const mid = b.clone().addScaledVector(d, len * 0.5); mid.y += len * 0.18;
     const e = b.clone().addScaledVector(d, len); e.y -= len * gr(0.0, 0.2);
-    const g = tubeGeo([b, mid, e], 2, 0.026, 0.008, 3);
+    const g = tubeGeo([b, mid, e], 3, 0.024, 0.010, 3);
     B.add(g, ID, { t: 't', ph: gr(0, TAU), bx: b.x, by: b.y, bz: b.z, len });
     g.dispose();
   }
+  const lip = new THREE.TorusGeometry(0.05, 0.015, 3, 6).rotateX(Math.PI / 2);
+  B.add(lip, xf(0, 0.30, 0, 0, 0, 0, 1, 1, 0.72), { t: 'm' });
+  const slit = new THREE.SphereGeometry(0.045, 5, 2, 0, TAU, 0, Math.PI * 0.5);
+  B.add(slit, xf(0, 0.292, 0, 0, 0, 0, 0.9, 0.25, 0.42), { t: 's' });
+  lip.dispose(); slit.dispose();
   col.dispose(); disc.dispose();
   return B.done((x, y, z, h, m, o) => {
     if (m.t === 't') {
       const u = clamp(Math.hypot(x - m.bx, y - m.by, z - m.bz) / m.len, 0, 1), s = 0.5 + 0.5 * u;
       o.c[0] = s; o.c[1] = s * 0.94; o.c[2] = s * 0.9;
       o.flex = u * u; o.flut = 0.04 * u * u; o.mask = sstep(0.6, 1, u);
+    } else if (m.t === 'm') {
+      o.c[0] = 0.62; o.c[1] = 0.52; o.c[2] = 0.52; o.flex = 0;
+    } else if (m.t === 's') {
+      o.c[0] = 0.09; o.c[1] = 0.06; o.c[2] = 0.07; o.flex = 0;
     } else {
       const s = 0.32 + 0.3 * h;
       o.c[0] = s * 0.9; o.c[1] = s * 0.78; o.c[2] = s * 0.8;
@@ -572,7 +661,7 @@ function seaPenGeo() {
   for (const s of PEN_SPEC) for (const sd of [-1, 1]) {
     const f = bladeGeo(s.len, 0.028, s.len * 0.25, 2);
     // pinna: rooted on the rachis, growing sideways (+/-X) and a little up
-    B.add(f, xf(0.02 * s.y, s.y, 0, 0, sd * 1.25, 0), { t: 'p', ph: s.ph, len: s.len, by: s.y });
+    B.add(f, xf(0.02 * s.y, s.y, 0, 0, sd * 1.25, 0), { t: 'p', ph: s.ph, len: s.len, by: s.y, bu: true });
     f.dispose();
   }
   return B.done((x, y, z, h, m, o) => {
@@ -747,15 +836,15 @@ let mats = null;
 
 function makeMats() {
   return {
-    fan: gardenMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.8, cull: CULL.fan, sss: 0.4, def: ['SSS', 'LACE'] }),
-    grass: gardenMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.2, cull: CULL.grass, sss: 0.45, def: ['SSS'] }),
+    fan: gardenMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.8, cull: CULL.fan, sss: 0.4, def: ['SSS', 'LACE', 'BLADE'], trans: 1.0 }),
+    grass: gardenMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.2, cull: CULL.grass, sss: 0.45, def: ['SSS', 'BLADE'], trans: 0.9 }),
     stag: gardenMat({ key: 'stag', rough: 0.62, sway: 1, freq: 0.5, cull: CULL.stag, pale: 0xf2ece0, def: ['PALE'] }),
-    barrel: gardenMat({ key: 'barrel', side: THREE.DoubleSide, rough: 0.82, sway: 1, freq: 0.5, cull: CULL.barrel, def: ['INNER'] }),
+    barrel: gardenMat({ key: 'barrel', side: THREE.DoubleSide, rough: 0.82, sway: 1, freq: 0.5, cull: CULL.barrel, def: ['INNER', 'PIT'] }),
     anem: gardenMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: CULL.anem, sss: 0.35, pale: 0xfff0e0, def: ['SSS', 'PALE'] }),
     worm: gardenMat({ key: 'worm', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.6, cull: CULL.worm, def: ['WORM', 'INNER'] }),
     mat: gardenMat({ key: 'mat', rough: 0.95, sway: 0, cull: CULL.mat, pale: 0xf3ecd8, pale2: 0x9a4e28, def: ['MAT'] }),
     crin: gardenMat({ key: 'crin', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.7, cull: CULL.crin, sss: 0.3, def: ['SSS'] }),
-    pen: gardenMat({ key: 'pen', side: THREE.DoubleSide, rough: 0.75, sway: 1, freq: 0.55, cull: CULL.pen, sss: 0.3, def: ['SSS'] }),
+    pen: gardenMat({ key: 'pen', side: THREE.DoubleSide, rough: 0.75, sway: 1, freq: 0.55, cull: CULL.pen, sss: 0.3, def: ['SSS', 'BLADE', 'COMB'], trans: 0.6 }),
     glass: gardenMat({ key: 'glass', side: THREE.DoubleSide, rough: 0.35, metal: 0.05, sway: 1, freq: 0.4, cull: CULL.glass, sss: 0.6, def: ['SSS'] }),
     whip: gardenMat({ key: 'whip', rough: 0.7, sway: 1, freq: 0.45, cull: CULL.whip }),
     tip: tipMat({ sway: 1, freq: 0.55, cull: CULL.pen, gain: 0.42 })
