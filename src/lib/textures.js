@@ -498,3 +498,43 @@ export function twillSet() {
   _twill = { pack: _dataTex(pack, S), nrm: _dataTex(_packNormal(h, S, 2.4), S), size: S };
   return _twill;
 }
+
+// CAST LEAD. Sand-cast weights and boot soles: a fine sand grain, gas pits (small, round,
+// sharp-lipped), a few shallow pour ripples, and the white-grey oxide bloom lead grows in
+// every hollow. Same API as the diver's metal sets: { map (sRGB), rough, nrm }.
+//   map = albedo (sRGB), rough.g = roughness, nrm = tangent normal (a = height).
+let _cast = null;
+export function castSet() {
+  if (_cast) return _cast;
+  const S = 256, rand = seededRand(0x1eadca57);
+  const grain = _tileNoise(S, 48, 2, rand), lump = _tileNoise(S, 4, 3, rand), ox = _tileNoise(S, 6, 3, rand);
+  const h = new Float32Array(S * S);
+  for (let i = 0; i < S * S; i++) h[i] = 0.55 + (grain[i] - 0.5) * 0.22 + (lump[i] - 0.5) * 0.35;
+  const pit = new Float32Array(S * S);
+  for (let k = 0; k < 150; k++) {                          // gas pits, wrapped
+    const cx = rand() * S, cy = rand() * S, r = 1.2 + rand() * rand() * 5.5;
+    const R = Math.ceil(r + 2);
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const d = Math.hypot(dx, dy) / r;
+      if (d > 1.35) continue;
+      const x = ((Math.floor(cx) + dx) % S + S) % S, y = ((Math.floor(cy) + dy) % S + S) % S, i = y * S + x;
+      const dep = d < 1 ? (1 - d * d) : 0, lip = d >= 0.85 ? Math.max(0, 1 - Math.abs(d - 1.05) / 0.2) * 0.25 : 0;
+      h[i] += lip * 0.12 - dep * 0.30;
+      pit[i] = Math.max(pit[i], dep);
+    }
+  }
+  const map = new Uint8Array(S * S * 4), rgh = new Uint8Array(S * S * 4);
+  for (let i = 0; i < S * S; i++) {
+    const v = h[i], o = i * 4;
+    const hi = Math.max(0, Math.min(1, (v - 0.35) / 0.5));
+    let r = 84 + 62 * hi, g = 86 + 62 * hi, b = 92 + 60 * hi;         // grey lead, lighter on the highs
+    const bloom = Math.max(pit[i], Math.max(0, (0.5 - v) * 2.2)) * (0.45 + 0.55 * ox[i]);
+    r += (196 - r) * bloom * 0.8; g += (194 - g) * bloom * 0.8; b += (186 - b) * bloom * 0.8;
+    map[o] = r; map[o + 1] = g; map[o + 2] = b; map[o + 3] = 255;
+    const ro = Math.max(0, Math.min(1, 0.62 + 0.3 * bloom - 0.22 * hi + (grain[i] - 0.5) * 0.2));
+    rgh[o] = rgh[o + 1] = rgh[o + 2] = ro * 255; rgh[o + 3] = 255;
+  }
+  const mapT = _dataTex(map, S); mapT.colorSpace = THREE.SRGBColorSpace;
+  _cast = { map: mapT, rough: _dataTex(rgh, S), nrm: _dataTex(_packNormal(h, S, 3.0), S) };
+  return _cast;
+}
