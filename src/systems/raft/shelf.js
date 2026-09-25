@@ -38,7 +38,7 @@ const SLOT_Z = k => SZ + (k - 1 - 4) * 0.135;
 const YAW = [0.95, 0.35, -0.62, 1.15, -0.20, 0.80, -1.05, 0.15, 1.42, -0.45];
 
 export function buildShelf(group, mats) {
-  const P = Part(group);
+  const P = Part(group, { groundY: 0.11 });
   const { wood, wood2, iron } = mats;
 
   // the board: a plain plank, worn pale along its front edge where sleeves pass

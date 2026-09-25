@@ -1,0 +1,13 @@
+---
+title: Raft to AAA — generated surfaces, wear, silhouettes
+status: wip
+tags: quality
+updated: 2026-09-25
+---
+Every raft surface is now a generated PBR set laid on in metres, with baked wear (rust, tarnish, wet, foot polish, contact grime) and eased/flanged/welded silhouettes. Branch polish-raft, not merged.
+
+## Detail
+Audit verdict: "lots of things just look like primitives no polish", raft the worst offender. Seven seeded, exactly tileable generated sets (lib/textures.js RAFT SURFACE SETS, appended block): plain-sawn deck timber (cathedral rings, eroded earlywood / proud latewood relief, knots, checks), cast iron (pitting, rust blooms), brass (tarnish, polish hairlines, fingerprints), clear-coated engine enamel (primer rings, chips), laid rope (3 strands per lay), duck canvas (plain weave), oiled leather (creases). kit.js rewrites every baked piece's UVs to metres along its own grain with a per-piece offset (no two boards repeat); vertex colour is RGBA and A is a SURFACE STATE (wet/polished <-> rust/dry) that one shared onBeforeCompile patch turns into roughness + metalness, plus rain wetness (upward faces first). A deck map (256^2, CPU-rasterised top-down height field of the finished raft at build) carries contact grime, iron stain round every nail/bolt, dive-gap/scupper wet, and boot-polished trails between the stations. Silhouettes: bulwark laid up in strakes with an outboard splash band + salt line, chamfered castings with foot flanges and studs, girth welds, cast tapered spokes, staved barrels with crozed heads, a draped cloth tarp, horn cleats, a real davit block, beaded lantern. Grime baked up the foot of everything standing on the deck. Needs Michael's eye: the enamel colour (engine green), brass tarnish density, and whether the deck wants more sun-bleach at noon.
+
+## Log
+- 2026-09-25 — wip on polish-raft (f6d9547..0f1f6fa, 6 commits). Raft 57.2k -> 79.3k tris (budget 80k); raft direct meshes 11 -> 11 (consolidate still merges); scene draw calls +1 (the enamel material: 156 -> 157 at title, 157 -> 158 in play); programs 234 -> 241 at title, 238 -> 245 in play (raft now 4 programs per light state, was 2: deck-map wood and clear-coat enamel are the new combos); GPU geometries 168 = 168, textures 109 -> 125; raft build 74 -> ~172 ms (__raftBoot), world build median ~560 -> ~673 ms on a loaded shared machine (~+100-115 ms, budget 250). No lights added; sleeper fps 15ce888c/c938fe6e/652d0412 unchanged; lane walk identical to baseline on real KeyW input. Captures: scratchpad/caps/raft/final_noon_{fore,aft,macro,bolt,lane,wide,wideSun}.png, final_dusk_{fore,wide}.png, final_rain_{fore,lane}.png; baseline base_{fore,aft,macro,wide}.png.

@@ -9,7 +9,7 @@
 // stand under), and the sheave is a strapped fitting with cheeks and a pin, not a torus
 // floating in space.
 import * as THREE from 'three';
-import { Part, cyl, sph, weather } from './kit.js';
+import { Part, cyl, sph, weather, chamferBox, weldBead, xf, brassWear, state } from './kit.js';
 
 const TAU = Math.PI * 2;
 
@@ -30,7 +30,7 @@ function strut(P, mat, x0, y0, z0, x1, y1, z1, r0, r1 = r0, seg = 8) {
 }
 
 export function buildDavit(group, mats) {
-  const P = Part(group);
+  const P = Part(group, { groundY: 0.11 });
   const { iron, brass, rope: ropeMat, lead, glass } = mats;
 
   // Weathering profiles. Only iron and rope carry vertex colours (brass, lead and
@@ -74,8 +74,14 @@ export function buildDavit(group, mats) {
     // gusset plate + bolt ring: the difference between a welded foot and a stick
     // shoved into the planking. Low and inside the walk lane's height allowance.
     P.put(cyl(0.20, 0.22, 0.045, 8), iron, fx, DECK_Y + 0.02, fz); // deck pad
-    const gusset = P.put(new THREE.BoxGeometry(0.34, 0.05, 0.28), iron, fx, DECK_Y + 0.045, fz);
+    const gusset = P.put(chamferBox(0.34, 0.05, 0.28, 0.012), iron, fx, DECK_Y + 0.045, fz);
     grime(gusset);
+    // fillet weld where the leg lands on its gusset, and triangular web plates either side
+    grime(P.put(weldBead(0.105, 0.012, 24), iron, fx, DECK_Y + 0.075, fz, Math.PI / 2));
+    for (const a of [0, Math.PI / 2]) {
+      const web = new THREE.CylinderGeometry(0.0, 0.13, 0.16, 3, 1).scale(1, 1, 0.08);
+      grime(P.put(web, iron, fx, DECK_Y + 0.15, fz, 0, a + Math.PI / 6, 0));
+    }
     for (let i = 0; i < 5; i++) {
       const a = (i + 0.5) / 5 * TAU, r = 0.155;
       grime(P.put(sph(0.026, 6, 4), iron, fx + Math.cos(a) * r, DECK_Y + 0.07, fz + Math.sin(a) * r));
@@ -118,8 +124,14 @@ export function buildDavit(group, mats) {
     grime(strut(P, iron, PEAK[0], PEAK[1], PEAK[2], top[0], top[1], top[2], 0.030, 0.028));
     const becket = P.put(new THREE.TorusGeometry(0.05, 0.014, 4, 8), iron, top[0], top[1], top[2], Math.PI / 2);
     grime(becket);
-    const block = P.put(new THREE.BoxGeometry(0.22, 0.34, 0.16), iron, mid[0], mid[1], mid[2]);
+    // the block: a shell between two cheek plates, the sheave's pin standing proud
+    // through both, and a swallow at the bottom where the fall runs out
+    const block = P.put(chamferBox(0.16, 0.34, 0.12, 0.03, 2), iron, mid[0], mid[1], mid[2]);
     grime(block);
+    for (const sz of [-1, 1]) {
+      grime(P.put(chamferBox(0.22, 0.30, 0.018, 0.02), iron, mid[0], mid[1], mid[2] + sz * 0.069));
+      grime(P.put(cyl(0.028, 0.028, 0.012, 12), iron, mid[0], mid[1] + 0.05, mid[2] + sz * 0.082, Math.PI / 2));
+    }
     // the hook: a partial torus (kit's tor() has no arc param), open throat facing up
     const hook = P.put(new THREE.TorusGeometry(0.085, 0.018, 5, 10, 4.2), iron, TK_X, 2.30, 4.85, Math.PI, 0, 0);
     grime(hook);
@@ -128,7 +140,7 @@ export function buildDavit(group, mats) {
     const gate = [GATE_X + 0.15, GATE_Y, 3.90], cleatPos = [1.30, 0.20, 3.70];
     ropeGrime(strut(P, ropeMat, TK_X, 2.28, 4.85, gate[0], gate[1], gate[2], 0.022));
     ropeGrime(strut(P, ropeMat, gate[0], gate[1], gate[2], cleatPos[0], cleatPos[1], cleatPos[2], 0.022));
-    const cbase = P.put(new THREE.BoxGeometry(0.16, 0.05, 0.06), iron, cleatPos[0], cleatPos[1], cleatPos[2]);
+    const cbase = P.put(chamferBox(0.16, 0.05, 0.06, 0.012), iron, cleatPos[0], cleatPos[1], cleatPos[2]);
     grime(cbase);
     for (const sx of [-1, 1]) {
       const horn = strut(P, iron, cleatPos[0] + sx * 0.03, cleatPos[1] + 0.02, cleatPos[2],
@@ -220,15 +232,22 @@ export function buildDavit(group, mats) {
   grime(strut(P, iron, BR[0], BR[1], BR[2], TOP[0], TOP[1], TOP[2], 0.028, 0.024));
   const capY = TOP[1], cowlY = capY - 0.045, shoulderY = capY - 0.105, cageY = capY - 0.175, footY = capY - 0.255;
   P.put(cyl(0.05, 0.055, 0.04, 14, false), brass, TOP[0], capY, TOP[2]); // mount cap
-  P.put(new THREE.TorusGeometry(0.085, 0.012, 4, 8, Math.PI), brass, TOP[0], capY + 0.02, TOP[2]); // bail
+  P.add(state(xf(new THREE.TorusGeometry(0.085, 0.010, 8, 20, Math.PI), TOP[0], capY + 0.02, TOP[2]), -0.25), brass); // bail, hand-worn
   P.put(cyl(0.028, 0.075, 0.09, 14, false), brass, TOP[0], cowlY, TOP[2]); // vent cowl
   P.put(cyl(0.085, 0.075, 0.03, 14, false), brass, TOP[0], shoulderY, TOP[2]); // shoulder cap
   const RIBS = 8, RIB_R = 0.078;
   for (let i = 0; i < RIBS; i++) {
     const a = i / RIBS * TAU;
-    P.put(cyl(0.013, 0.013, 0.13, 4, false), brass, TOP[0] + Math.cos(a) * RIB_R, cageY, TOP[2] + Math.sin(a) * RIB_R);
+    P.put(cyl(0.011, 0.011, 0.13, 6, false), brass, TOP[0] + Math.cos(a) * RIB_R, cageY, TOP[2] + Math.sin(a) * RIB_R);
   }
-  P.put(cyl(0.07, 0.05, 0.035, 14, false), brass, TOP[0], footY, TOP[2]); // base cap
+  P.put(cyl(0.07, 0.05, 0.035, 20, false), brass, TOP[0], footY, TOP[2]); // base cap
+  // beaded rings where the cage meets its caps, and a vent crown on the cowl
+  for (const ry of [shoulderY - 0.016, footY + 0.019]) P.put(new THREE.TorusGeometry(0.080, 0.006, 6, 28), brass, TOP[0], ry, TOP[2], Math.PI / 2);
+  for (let i = 0; i < 6; i++) {
+    const a = i / 6 * TAU;
+    P.put(cyl(0.008, 0.008, 0.03, 5, false), brass, TOP[0] + Math.cos(a) * 0.032, cowlY + 0.05, TOP[2] + Math.sin(a) * 0.032);
+  }
+  P.put(cyl(0.042, 0.042, 0.008, 16, false), brass, TOP[0], cowlY + 0.066, TOP[2]);
 
   // recessed well inside RIB_R (0.078) so the ribs shroud it further at any oblique
   // angle than their own angular width alone would suggest — a slot, not a window.
