@@ -24,5 +24,10 @@ CHANGE: Replace samplePerf's one-window fps bar: per-zone GPU timings, outlier-p
   `__gpu.median()` 8.7-9.4 ms at 1536x1152, stable; 60-cap rest 65 s -> stage 0 (median
   16.3-17.1 ms); hidden drive 20 s -> never sampled; 30 ms busy-wait -> tier 1 at +4.5 s,
   tier 2 at +10.6 s, load off -> tier 1 at +13.6 s, tier 0 at +13.1 s; 70 ms busy-wait
-  (median 74 ms, 4.5x) -> two rungs in one judge. Not verified with real visible-tab rAF
+  (median 74 ms, 4.5x) -> two rungs in one judge. Manual 3-rung round trip restores the
+  exact pass chain (N8AO, VolumetricLight, SkyRays back in place). Heap: usedJSHeapSize
+  is a GC sawtooth (78-104 MB, ~2 cycles/s from the game's own churn); judge on vs off
+  deltas over 10 s were -19 / +21 MB, i.e. inside the noise — the judge's per-frame path
+  is typed-array rings with no allocation by construction (median scratch sorted in
+  place, two subarray views per 0.5 s judge). Not verified with real visible-tab rAF
   (pane and Chrome both reported document.hidden); per-pass timing not wired.
