@@ -385,3 +385,215 @@ export function rockMapSet(variant = 0) {
 }
 
 export { rng };
+
+// =====================================================================================
+// ---- SAL'S DRESS AND FITTINGS (polish-sal) -----------------------------------------
+// Appended block, owned by the diver polish pass (entities/diver.js is the only caller).
+// Everything here is generated ONCE at boot, seeded (the same dress every session), and
+// handed over as mipmapped RepeatWrapping DataTextures in LINEAR space: these are
+// structure maps that the diver's own shaders turn into colour, never colour themselves.
+// Layout convention for every set: `pack` RGBA8 (channels documented per set) and `nrm`
+// RGBA8 = tangent-space normal in rgb, height in a.
+// =====================================================================================
+
+// Tileable value noise straight into a Float32Array (no canvas round trip). Every
+// lattice is modulo its own cell count, so the tile wraps exactly at any octave.
+function _tileNoise(S, cells, oct, rand) {
+  const out = new Float32Array(S * S);
+  let amp = 1, tot = 0;
+  for (let o = 0; o < oct; o++) {
+    const n = cells << o, g = new Float32Array(n * n);
+    for (let i = 0; i < n * n; i++) g[i] = rand();
+    for (let y = 0; y < S; y++) {
+      const fy = y / S * n, y0 = Math.floor(fy), ty = fy - y0, sy = ty * ty * (3 - 2 * ty);
+      const r0 = (y0 % n) * n, r1 = ((y0 + 1) % n) * n;
+      for (let x = 0; x < S; x++) {
+        const fx = x / S * n, x0 = Math.floor(fx), tx = fx - x0, sx = tx * tx * (3 - 2 * tx);
+        const c0 = x0 % n, c1 = (x0 + 1) % n;
+        const a = g[r0 + c0], b = g[r0 + c1], c = g[r1 + c0], d = g[r1 + c1];
+        out[y * S + x] += ((a + (b - a) * sx) * (1 - sy) + (c + (d - c) * sx) * sy) * amp;
+      }
+    }
+    tot += amp; amp *= 0.5;
+  }
+  for (let i = 0; i < S * S; i++) out[i] /= tot;
+  return out;
+}
+
+// Height field -> packed normal (rgb) + height (a). Central differences, wrapped.
+function _packNormal(h, S, slope) {
+  const nrm = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++) {
+    const ym = ((y - 1 + S) % S) * S, yp = ((y + 1) % S) * S;
+    for (let x = 0; x < S; x++) {
+      const xm = (x - 1 + S) % S, xp = (x + 1) % S, i = y * S + x, o = i * 4;
+      let nx = (h[y * S + xm] - h[y * S + xp]) * slope, ny = (h[ym + x] - h[yp + x]) * slope, nz = 1;
+      const il = 1 / Math.hypot(nx, ny, nz); nx *= il; ny *= il; nz *= il;
+      nrm[o] = (nx * 0.5 + 0.5) * 255; nrm[o + 1] = (ny * 0.5 + 0.5) * 255;
+      nrm[o + 2] = (nz * 0.5 + 0.5) * 255; nrm[o + 3] = Math.max(0, Math.min(255, h[i] * 255));
+    }
+  }
+  return nrm;
+}
+
+function _dataTex(data, S) {
+  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = MAX_ANISO;
+  t.colorSpace = THREE.NoColorSpace;
+  t.needsUpdate = true;
+  return t;
+}
+
+// RUBBERISED TWILL. A 2/1 twill (the warp floats over two wefts and under one, the float
+// stepping one thread per row), which is what gives drill and dress canvas their
+// diagonal rib. 36 threads per tile at 8 px each; 36 is a multiple of the 3-thread
+// repeat, so the diagonal wraps without a seam. Per-thread slub (thickness) and tone
+// jitter keep it cloth and not a halftone screen.
+//   pack.r = weave height, pack.g = low-frequency mottle (stains, salt, rubber-coat
+//   thickness; sampled by the shader at a much larger scale), pack.b = thread tone
+//   (warp darker than weft + fibre noise), pack.a = 255.
+let _twill = null;
+export function twillSet() {
+  if (_twill) return _twill;
+  const S = 288, N = 36, P = S / N;
+  const rand = seededRand(0x5a1c0a7);
+  const slubW = new Float32Array(N), slubF = new Float32Array(N), toneW = new Float32Array(N), toneF = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    slubW[i] = 0.86 + 0.26 * rand(); slubF[i] = 0.86 + 0.26 * rand();
+    toneW[i] = rand(); toneF[i] = rand();
+  }
+  const fib = _tileNoise(S, 32, 2, rand);
+  const mot = _tileNoise(S, 3, 4, rand);
+  const h = new Float32Array(S * S), pack = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++) {
+    const j = Math.floor(y / P), fy = (y % P + 0.5) / P;
+    for (let x = 0; x < S; x++) {
+      const i = Math.floor(x / P), fx = (x % P + 0.5) / P;
+      const k = (((i - j) % 3) + 3) % 3;
+      const f = fib[y * S + x];
+      let hh, tone;
+      if (k < 2) {                                         // warp float, two cells long
+        const t = (k === 1 ? fy : 1 + fy) / 2;
+        const across = Math.pow(Math.sin(Math.PI * Math.min(1, fx * slubW[i] + (1 - slubW[i]) * 0.5)), 0.55);
+        hh = across * (0.62 + 0.38 * Math.sin(Math.PI * t));
+        tone = 0.30 + 0.16 * toneW[i];
+      } else {                                             // weft on top for one cell
+        const across = Math.pow(Math.sin(Math.PI * Math.min(1, fy * slubF[j] + (1 - slubF[j]) * 0.5)), 0.55);
+        hh = across * (0.55 + 0.45 * Math.pow(Math.sin(Math.PI * fx), 0.4));
+        tone = 0.62 + 0.18 * toneF[j];
+      }
+      hh = hh * (0.90 + 0.2 * f);
+      const o = (y * S + x) * 4;
+      h[y * S + x] = hh;
+      pack[o] = hh * 255;
+      pack[o + 1] = mot[y * S + x] * 255;
+      pack[o + 2] = Math.max(0, Math.min(1, tone + (f - 0.5) * 0.3)) * 255;
+      pack[o + 3] = 255;
+    }
+  }
+  _twill = { pack: _dataTex(pack, S), nrm: _dataTex(_packNormal(h, S, 2.4), S), size: S };
+  return _twill;
+}
+
+// CAST LEAD. Sand-cast weights and boot soles: a fine sand grain, gas pits (small, round,
+// sharp-lipped), a few shallow pour ripples, and the white-grey oxide bloom lead grows in
+// every hollow. Same API as the diver's metal sets: { map (sRGB), rough, nrm }.
+//   map = albedo (sRGB), rough.g = roughness, nrm = tangent normal (a = height).
+let _cast = null;
+export function castSet() {
+  if (_cast) return _cast;
+  const S = 256, rand = seededRand(0x1eadca57);
+  const grain = _tileNoise(S, 48, 2, rand), lump = _tileNoise(S, 4, 3, rand), ox = _tileNoise(S, 6, 3, rand);
+  const h = new Float32Array(S * S);
+  for (let i = 0; i < S * S; i++) h[i] = 0.55 + (grain[i] - 0.5) * 0.22 + (lump[i] - 0.5) * 0.35;
+  const pit = new Float32Array(S * S);
+  for (let k = 0; k < 150; k++) {                          // gas pits, wrapped
+    const cx = rand() * S, cy = rand() * S, r = 1.2 + rand() * rand() * 5.5;
+    const R = Math.ceil(r + 2);
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const d = Math.hypot(dx, dy) / r;
+      if (d > 1.35) continue;
+      const x = ((Math.floor(cx) + dx) % S + S) % S, y = ((Math.floor(cy) + dy) % S + S) % S, i = y * S + x;
+      const dep = d < 1 ? (1 - d * d) : 0, lip = d >= 0.85 ? Math.max(0, 1 - Math.abs(d - 1.05) / 0.2) * 0.25 : 0;
+      h[i] += lip * 0.12 - dep * 0.30;
+      pit[i] = Math.max(pit[i], dep);
+    }
+  }
+  const map = new Uint8Array(S * S * 4), rgh = new Uint8Array(S * S * 4);
+  for (let i = 0; i < S * S; i++) {
+    const v = h[i], o = i * 4;
+    const hi = Math.max(0, Math.min(1, (v - 0.35) / 0.5));
+    let r = 84 + 62 * hi, g = 86 + 62 * hi, b = 92 + 60 * hi;         // grey lead, lighter on the highs
+    const bloom = Math.max(pit[i], Math.max(0, (0.5 - v) * 2.2)) * (0.45 + 0.55 * ox[i]);
+    r += (196 - r) * bloom * 0.8; g += (194 - g) * bloom * 0.8; b += (186 - b) * bloom * 0.8;
+    map[o] = r; map[o + 1] = g; map[o + 2] = b; map[o + 3] = 255;
+    const ro = Math.max(0, Math.min(1, 0.62 + 0.3 * bloom - 0.22 * hi + (grain[i] - 0.5) * 0.2));
+    rgh[o] = rgh[o + 1] = rgh[o + 2] = ro * 255; rgh[o + 3] = 255;
+  }
+  const mapT = _dataTex(map, S); mapT.colorSpace = THREE.SRGBColorSpace;
+  _cast = { map: mapT, rough: _dataTex(rgh, S), nrm: _dataTex(_packNormal(h, S, 3.0), S) };
+  return _cast;
+}
+
+// WATER ON GLASS. Beads left on a porthole after the helmet breaks the surface: round
+// domes of every size, a few drops that ran and left a trail. Tileable, seeded.
+//   nrm.rgb = tangent normal of the beads, nrm.a = bead mask/height (0 = dry glass).
+let _drops = null;
+export function dropletSet() {
+  if (_drops) return _drops;
+  const S = 256, rand = seededRand(0xd40b1e75);
+  const h = new Float32Array(S * S);
+  const dome = (cx, cy, r, amp) => {
+    const R = Math.ceil(r + 1);
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const d2 = (dx * dx + dy * dy) / (r * r);
+      if (d2 >= 1) continue;
+      const x = ((Math.floor(cx) + dx) % S + S) % S, y = ((Math.floor(cy) + dy) % S + S) % S, i = y * S + x;
+      h[i] = Math.max(h[i], amp * Math.sqrt(1 - d2));
+    }
+  };
+  for (let k = 0; k < 420; k++) { const r = 0.8 + Math.pow(rand(), 3) * 7; dome(rand() * S, rand() * S, r, 0.35 + 0.65 * Math.min(1, r / 5)); }
+  for (let k = 0; k < 9; k++) {                            // runs: a head bead and its thinning trail
+    const x0 = rand() * S, y0 = rand() * S, len = 20 + rand() * 60, r0 = 2.5 + rand() * 3;
+    for (let t = 0; t < len; t += 0.7) dome(x0 + Math.sin(t * 0.08) * 1.5, y0 + t, r0 * (0.35 + 0.35 * (1 - t / len)), 0.4);
+    dome(x0, y0 + len, r0 * 1.2, 1);
+  }
+  const nrm = _packNormal(h, S, 6.0);
+  for (let i = 0; i < S * S; i++) nrm[i * 4 + 3] = Math.min(255, h[i] * 400);
+  _drops = { nrm: _dataTex(nrm, S) };
+  return _drops;
+}
+
+// BRAIDED HOSE COVER. Two families of flat strands (each a bundle of 3 yarns) wound in
+// opposite helices, crossing two-over-two-under: the diamond texture of a braided
+// air hose. 8 strands per family per tile; u runs ALONG the hose, v round it, so a
+// caller repeats v by an integer to close the seam.
+//   map = albedo (sRGB, tarred-canvas brown), rough.g = roughness, nrm = normal (a = height).
+let _braid = null;
+export function braidSet() {
+  if (_braid) return _braid;
+  const S = 256, N = 8, rand = seededRand(0xb4a1d0c5);
+  const fib = _tileNoise(S, 64, 1, rand), dirt = _tileNoise(S, 4, 3, rand);
+  const h = new Float32Array(S * S), map = new Uint8Array(S * S * 4), rgh = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S * N, v = y / S * N;
+    const a = u + v, b = u - v + N;                        // the two helix families
+    const ia = Math.floor(a), ib = Math.floor(b), fa = a - ia, fb = b - ib;
+    const top = ((ia + (ib >> 1)) & 1) === 0;              // two-over-two-under
+    const prof = f => Math.pow(Math.sin(Math.PI * f), 0.5) * (0.82 + 0.18 * Math.cos(f * Math.PI * 6));   // 3 yarns
+    const ha = prof(fa), hb = prof(fb);
+    const hh = top ? Math.max(ha, hb * 0.55) : Math.max(hb, ha * 0.55);
+    const f = fib[y * S + x], d = dirt[y * S + x], i = y * S + x, o = i * 4;
+    h[i] = hh * (0.9 + 0.2 * f);
+    const tone = 0.55 + 0.45 * hh;
+    map[o] = (58 + 30 * d) * tone + 20 * f; map[o + 1] = (46 + 22 * d) * tone + 16 * f; map[o + 2] = (34 + 14 * d) * tone + 12 * f; map[o + 3] = 255;
+    rgh[o] = rgh[o + 1] = rgh[o + 2] = Math.max(0, Math.min(1, 0.95 - 0.25 * hh + (f - 0.5) * 0.1)) * 255; rgh[o + 3] = 255;
+  }
+  const mapT = _dataTex(map, S); mapT.colorSpace = THREE.SRGBColorSpace;
+  _braid = { map: mapT, rough: _dataTex(rgh, S), nrm: _dataTex(_packNormal(h, S, 3.2), S) };
+  return _braid;
+}

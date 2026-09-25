@@ -1,9 +1,10 @@
 // The Mark V diver: model, materials, and pose animation. OWNED BY: diver/character agent.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { scene, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
-import { registerPaint } from '../lib/paint.js';
+import { registerPaint, styleUniforms } from '../lib/paint.js';
 // The deck is a MOVING GROUND. A stance anchor claimed on planks is stored relative to
 // raft.position so it heaves and surges with the boat; a world-space anchor would leave
 // the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
@@ -13,7 +14,7 @@ import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // drives the breath cadence. (No cycles: neither module imports the diver.)
 import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet } from '../lib/textures.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -46,6 +47,10 @@ function curve(keys) {
     return 0.5 * (2 * v1 + (v2 - v0) * u + (2 * v0 - 5 * v1 + 4 * v2 - v3) * u * u + (-v0 + 3 * v1 - 3 * v2 + v3) * u * u * u);
   };
 }
+
+// Shared per-frame uniforms, written by updateDiver (two/three float writes a frame):
+// uSalWet (dress soak 0..1), uSalRootY (sole height, world), uSalDrop (beads on the glass).
+export const salShared = { uSalWet: { value: 0 }, uSalRootY: { value: 0 }, uSalDrop: { value: 0.15 } };
 
 // ---- procedural PBR maps ----
 // One height field drives albedo, roughness and normal together, so verdigris and wear
@@ -89,41 +94,6 @@ function metalMaps(hi, lo, verd, rep, S = 256) {
   return { map: toTexture(ac, rep, true), rough: toTexture(rc, rep), nrm: toTexture(normalFromHeight(hc, 2.6), rep) };
 }
 
-function clothMaps(base, rep, S = 256) {
-  const { canvas: hc, ctx: h } = canvas2d(S);
-  h.fillStyle = '#808080'; h.fillRect(0, 0, S, S);
-  const P = 6;                                               // woven thread pitch
-  for (let y = 0; y < S; y += P) for (let x = 0; x < S; x += P) {
-    const over = ((x / P) + (y / P)) & 1;
-    const g = h.createLinearGradient(x, y, over ? x : x + P, over ? y + P : y);
-    g.addColorStop(0, 'rgba(60,60,60,.55)'); g.addColorStop(0.5, 'rgba(215,215,215,.6)'); g.addColorStop(1, 'rgba(60,60,60,.55)');
-    h.fillStyle = g; h.fillRect(x, y, P, P);
-  }
-  for (let i = 0; i < 40; i++) {                             // slubs / thread irregularity
-    const y = Math.random() * S;
-    h.strokeStyle = `rgba(${Math.random() < 0.5 ? 240 : 40},128,128,.18)`;
-    h.lineWidth = rng(1, 3);
-    h.beginPath(); h.moveTo(0, y); h.lineTo(S, y + rng(-2, 2)); h.stroke();
-  }
-  const nd = noiseCanvas(S, 4, 1.2).getContext('2d').getImageData(0, 0, S, S).data;
-  const hd = h.getImageData(0, 0, S, S).data;
-  const { canvas: ac, ctx: a } = canvas2d(S);
-  const { canvas: rc, ctx: r } = canvas2d(S);
-  const ai = a.createImageData(S, S), ri = r.createImageData(S, S);
-  const grime = [58, 52, 40], salt = [206, 200, 184];
-  for (let i = 0; i < S * S; i++) {
-    const w = hd[i * 4] / 255, n = nd[i * 4] / 255;
-    let c = mix3(base, mix3(base, [255, 255, 255], 0.14), w);
-    c = mix3(c, grime, ss(0.55, 0.12, n) * 0.34);            // grime pools in the low-frequency dips
-    c = mix3(c, salt, ss(0.88, 0.99, n) * 0.20);             // salt bloom on the high spots
-    ai.data[i * 4] = c[0]; ai.data[i * 4 + 1] = c[1]; ai.data[i * 4 + 2] = c[2]; ai.data[i * 4 + 3] = 255;
-    const rough = clamp(0.98 - 0.16 * n - 0.08 * w, 0, 1) * 255;
-    ri.data[i * 4] = ri.data[i * 4 + 1] = ri.data[i * 4 + 2] = rough; ri.data[i * 4 + 3] = 255;
-  }
-  a.putImageData(ai, 0, 0); r.putImageData(ri, 0, 0);
-  return { map: toTexture(ac, rep, true), rough: toTexture(rc, rep), nrm: toTexture(normalFromHeight(hc, 1.5), rep) };
-}
-
 function grainMaps(base, hi, rep, wet, S = 128) {
   const hc = noiseCanvas(S, 5, 1.4);
   const h = hc.getContext('2d');
@@ -151,37 +121,37 @@ function grainMaps(base, hi, rep, wet, S = 128) {
 // 256 was the blur you could see. One-time boot cost; everything else stays 256/128.
 const copperM = metalMaps([214, 138, 96], [98, 54, 37], [56, 110, 92], 3, 512);
 const brassM = metalMaps([232, 196, 108], [112, 88, 38], [84, 114, 76], 4, 512);
-const clothM = clothMaps([20, 50, 168], 3);                  // royal blue underlayer
 // aged canvas duck: still warm, but pulled off the orange toward a salt-bleached tan-olive
-const leatherM = grainMaps([140, 98, 60], [198, 160, 116], 2, 0.62);
 const darkLeaM = grainMaps([96, 56, 32], [148, 98, 58], 2, 0.56);
 const rubberM = grainMaps([34, 36, 41], [66, 70, 76], 3, 0.74);
 
+// THE METALS no longer ride their primitives' UVs either (a stud and a bonnet had
+// wildly different texel sizes, so small fittings wore giant smeared blotches and read
+// as painted). Their maps are sampled TRIPLANAR in the bone's space by the metal shader
+// below, which also adds cavity tarnish, polished edges and the bonnet's spun rings.
 const copper = new THREE.MeshStandardMaterial({
-  map: copperM.map, roughnessMap: copperM.rough, normalMap: copperM.nrm, normalScale: new THREE.Vector2(0.7, 0.7),
   metalness: 0.94, roughness: 1, envMap: envTex, envMapIntensity: 0.5
 });
 const brass = new THREE.MeshStandardMaterial({
-  map: brassM.map, roughnessMap: brassM.rough, normalMap: brassM.nrm, normalScale: new THREE.Vector2(0.6, 0.6),
   metalness: 0.95, roughness: 1, envMap: envTex, envMapIntensity: 0.62
 });
-// steel and port were the last two flat-plastic satellites on Sal: they borrow the
-// copper set's rough+normal maps (structure only — their own colors stay authoritative).
 const steel = new THREE.MeshStandardMaterial({
-  color: 0x3c4046, metalness: 0.78, roughness: 0.6, envMap: envTex, envMapIntensity: 0.2,
-  roughnessMap: copperM.rough, normalMap: copperM.nrm, normalScale: new THREE.Vector2(0.45, 0.45)
+  color: 0x3c4046, metalness: 0.78, roughness: 1, envMap: envTex, envMapIntensity: 0.2
+});
+// LEAD: the chest weight, the boot soles. Soft, dull, oxide-bloomed; metal, but a dead one.
+const castM = castSet();
+const lead = new THREE.MeshStandardMaterial({
+  metalness: 0.55, roughness: 1, envMap: envTex, envMapIntensity: 0.22
 });
 const cloth = new THREE.MeshStandardMaterial({
-  map: clothM.map, roughnessMap: clothM.rough, normalMap: clothM.nrm, normalScale: new THREE.Vector2(1.15, 1.15),
-  roughness: 1, metalness: 0.02, vertexColors: true, envMap: envTex, envMapIntensity: 0.12
+  color: 0x1f3c96, roughness: 0.92, metalness: 0.02, vertexColors: true, envMap: envTex, envMapIntensity: 0.12
 });
-const trim = new THREE.MeshStandardMaterial({    // no albedo map: clothM's is blue
-  roughnessMap: clothM.rough, normalMap: clothM.nrm, normalScale: new THREE.Vector2(0.9, 0.9), color: 0xe9e3d2,
-  roughness: 0.86, metalness: 0.02, envMap: envTex, envMapIntensity: 0.14
+const trim = new THREE.MeshStandardMaterial({
+  color: 0xe4ddca, roughness: 0.84, metalness: 0.02, envMap: envTex, envMapIntensity: 0.14
 });
+// the dress proper: rubberised twill, tan drill under a salt-bleached rubber coat
 const leather = new THREE.MeshStandardMaterial({
-  map: leatherM.map, roughnessMap: leatherM.rough, normalMap: leatherM.nrm, normalScale: new THREE.Vector2(0.85, 0.85),
-  roughness: 1, metalness: 0.04, vertexColors: true, envMap: envTex, envMapIntensity: 0.34
+  color: 0x806447, roughness: 0.90, metalness: 0.03, vertexColors: true, envMap: envTex, envMapIntensity: 0.30
 });
 const darkLeather = new THREE.MeshStandardMaterial({
   map: darkLeaM.map, roughnessMap: darkLeaM.rough, normalMap: darkLeaM.nrm, normalScale: new THREE.Vector2(0.95, 0.95),
@@ -199,20 +169,294 @@ const rubber = new THREE.MeshStandardMaterial({
   map: rubberM.map, roughnessMap: rubberM.rough, normalMap: rubberM.nrm, normalScale: new THREE.Vector2(0.8, 0.8),
   roughness: 1, metalness: 0.06, envMap: envTex, envMapIntensity: 0.16
 });
+// PORT GLASS: thick, wet, and actually glass. Transparent (alpha from a Fresnel term —
+// near-clear face-on, a mirror at grazing), over a dark RECESS disc that is merged into
+// the same draw (vertex colour black = the helmet's shadowed inside, opaque; it is
+// emitted first in each port so the glass blends over it in index order). Beads of
+// water sit on it in air (dropletSet, triplanar in the helmet's space), fading as the
+// dress dries. Front faces only + forceSinglePass: no DoubleSide transparency sorting.
 const glassMat = new THREE.MeshPhysicalMaterial({
-  color: 0x1d5c46, metalness: 0.15, roughness: 0.06, emissive: 0x0b2a1d, clearcoat: 1, clearcoatRoughness: 0.05,
-  envMap: envTex, envMapIntensity: 1.1, side: THREE.DoubleSide
+  color: 0x4f6a63, metalness: 0.0, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.04,
+  envMap: envTex, envMapIntensity: 0.8, side: THREE.FrontSide, transparent: true, forceSinglePass: true,
+  vertexColors: true
 });
 const lantGlass = new THREE.MeshPhysicalMaterial({
-  color: 0xffe6bb, metalness: 0, roughness: 0.08, transparent: true, opacity: 0.28,
-  emissive: 0xffca7a, emissiveIntensity: 0.5, side: THREE.DoubleSide, depthWrite: false,
+  // the globe is GLASS round a flame, not a lamp shade: faint self-glow only, so the
+  // flame cone and its white core read through it instead of one blown-out column
+  // (and near-black DIFFUSE: the lamp's own light sits 8 cm from this surface, and a
+  // pale diffuse glass caught it as a solid white wall — glass returns specular only)
+  color: 0x1a140c, metalness: 0, roughness: 0.06, transparent: true, opacity: 0.30,
+  emissive: 0xffca7a, emissiveIntensity: 0.18, side: THREE.DoubleSide, depthWrite: false, forceSinglePass: true,
   envMap: envTex, envMapIntensity: 0.8
 });
+// THE FEED HOSE: braided canvas over rubber (braidSet, on the tube's own UVs: u along,
+// v round — v repeats by an integer so the braid closes), and it WETS like the dress:
+// darker and glossy under water, drying on deck on the same uSalWet clock.
+const braidM = braidSet();
+for (const t of [braidM.map, braidM.rough, braidM.nrm]) t.repeat.set(7, 4);
+const hoseMat = new THREE.MeshStandardMaterial({
+  map: braidM.map, roughnessMap: braidM.rough, normalMap: braidM.nrm, normalScale: new THREE.Vector2(1.2, 1.2),
+  roughness: 1, metalness: 0.02, envMap: envTex, envMapIntensity: 0.3
+});
+// ---- THE METAL SHADER ----
+// Shared by copper, brass, steel and lead (one program; everything else is uniforms).
+//  - triplanar albedo/roughness/normal from the metal's generated set, one texel size on
+//    every fitting (uMetTile per unit, in the bone's space);
+//  - CAVITY: baked per vertex (salCav.x, 0 open .. 1 crevice) where a fitting meets the
+//    surface it is mounted on, plus screen-space CONCAVE curvature. Tarnish darkens,
+//    verdigris (or lead's white oxide) blooms, the surface goes dead and rough;
+//  - EDGES: screen-space CONVEX curvature (dN.dP / dP.dP ~ 1/radius) polishes every
+//    rim, bolt head and wing to bright metal — the hands and the hose rub them bare;
+//  - SPUN (salCav.y = 1 on the bonnet): the concentric lathe rings a spun dome carries,
+//    as a roughness stretch plus a fine relief, faded out before it can alias.
+// No backticks anywhere in this GLSL.
+const MET_VS_COMMON = `
+attribute vec2 salCav;
+varying vec3 vMetP; varying vec3 vMetN; varying vec2 vMetC;`;
+const MET_FS_COMMON = `
+uniform sampler2D tMetA; uniform sampler2D tMetR; uniform sampler2D tMetN;
+uniform float uMetTile; uniform float uMetNs; uniform float uMetAlbK; uniform float uMetEdge; uniform float uMetPaint;
+uniform vec3 uMetTarn; uniform vec3 uMetVerd; uniform float uPaintK;
+uniform mat3 normalMatrix;
+varying vec3 vMetP; varying vec3 vMetN; varying vec2 vMetC;
+vec4 metTri(sampler2D t, vec3 p, vec3 w) {
+  return texture2D(t, p.zy) * w.x + texture2D(t, p.xz) * w.y + texture2D(t, p.xy) * w.z;
+}
+vec3 metBump(vec3 sp, vec3 sn, vec2 dh) {
+  vec3 sx = normalize(dFdx(sp)); vec3 sy = normalize(dFdy(sp));
+  vec3 r1 = cross(sy, sn); vec3 r2 = cross(sn, sx);
+  float det = dot(sx, r1);
+  return normalize(abs(det) * sn - sign(det) * (dh.x * r1 + dh.y * r2));
+}
+vec3 metNo; vec3 metW; vec3 metPp; float metCav; float metEdge; float metVg; float metSg;`;
+const MET_FS_COLOR = `
+metNo = normalize(vMetN);
+metW = pow(abs(metNo), vec3(4.0)); metW /= (metW.x + metW.y + metW.z);
+metPp = vMetP * uMetTile;
+{
+  vec3 alb = metTri(tMetA, metPp, metW).rgb;
+  diffuseColor.rgb *= mix(vec3(1.0), alb, uMetAlbK);
+  vec3 vp = -vViewPosition; vec3 dpx = dFdx(vp); vec3 dpy = dFdy(vp);
+  vec3 nv = normalize(vNormal); vec3 dnx = dFdx(nv); vec3 dny = dFdy(nv);
+  float curv = (dot(dnx, dpx) + dot(dny, dpy)) / max(dot(dpx, dpx) + dot(dpy, dpy), 1e-9);
+  metEdge = smoothstep(16.0, 60.0, curv);
+  float conc = 1.0 - smoothstep(-45.0, -10.0, curv);
+  metCav = clamp(vMetC.x + conc * 0.5, 0.0, 1.0);
+  metVg = smoothstep(0.30, 0.70, metTri(tMetR, vMetP * (uMetTile * 0.31) + 0.21, metW).g);
+  diffuseColor.rgb = mix(diffuseColor.rgb, uMetTarn, metCav * 0.72);
+  diffuseColor.rgb = mix(diffuseColor.rgb, uMetVerd, metCav * metVg * 0.85);
+  diffuseColor.rgb *= 1.0 + uMetEdge * metEdge * (1.0 - metCav);
+  float sa = vMetP.y * 820.0;
+  metSg = vMetC.y * sin(sa) * (1.0 - smoothstep(0.25, 0.6, fwidth(sa) * 0.16));
+}`;
+const MET_FS_ROUGH = `
+roughnessFactor *= metTri(tMetR, metPp, metW).g;
+roughnessFactor = mix(roughnessFactor, 0.88, metCav * (0.55 + 0.4 * metVg));
+roughnessFactor *= 1.0 - 0.5 * metEdge * (1.0 - metCav);
+roughnessFactor *= 1.0 + 0.14 * metSg;
+roughnessFactor = clamp(roughnessFactor, 0.05, 1.0);`;
+const MET_FS_METAL = `
+metalnessFactor *= 1.0 - 0.75 * metCav * metVg;`;
+const MET_FS_NORMAL = `
+{
+  vec3 tx = texture2D(tMetN, metPp.zy).xyz * 2.0 - 1.0;
+  vec3 ty = texture2D(tMetN, metPp.xz).xyz * 2.0 - 1.0;
+  vec3 tz = texture2D(tMetN, metPp.xy).xyz * 2.0 - 1.0;
+  float ns = uMetNs * (1.0 - 0.65 * uPaintK * uMetPaint);
+  vec3 d = metW.x * vec3(0.0, tx.y, tx.x) + metW.y * vec3(ty.x, 0.0, ty.y) + metW.z * vec3(tz.x, tz.y, 0.0);
+  normal = normalize(normalMatrix * normalize(metNo + d * ns));
+  normal = metBump(-vViewPosition, normal, vec2(dFdx(metSg), dFdy(metSg)) * 0.06);
+}`;
+function metalize(m, o) {
+  const U = {
+    tMetA: { value: o.set.map }, tMetR: { value: o.set.rough }, tMetN: { value: o.set.nrm },
+    uMetTile: { value: o.tile }, uMetNs: { value: o.ns }, uMetAlbK: { value: o.albK ?? 1 },
+    uMetEdge: { value: o.edge }, uMetPaint: { value: o.paint ? 1 : 0 },
+    uMetTarn: { value: new THREE.Color(o.tarn) }, uMetVerd: { value: new THREE.Color(o.verd) },
+    uPaintK: styleUniforms.uPaintK
+  };
+  m.userData.salMetal = true;
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + MET_VS_COMMON)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMetP = position; vMetN = normal; vMetC = salCav;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + MET_FS_COMMON)
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + MET_FS_COLOR)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + MET_FS_ROUGH)
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n' + MET_FS_METAL)
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + MET_FS_NORMAL);
+  };
+  m.customProgramCacheKey = () => 'salMetal1';
+  return m;
+}
+metalize(copper, { set: copperM, tile: 5.0, ns: 0.22, edge: 0.45, tarn: 0x3a2014, verd: 0x2e5c4c });
+metalize(brass, { set: brassM, tile: 6.0, ns: 0.12, edge: 0.55, tarn: 0x4a3a16, verd: 0x557a52 });
+metalize(steel, { set: copperM, tile: 3.0, ns: 0.45, albK: 0, edge: 0.6, tarn: 0x2a1a10, verd: 0x3a2a1c, paint: true });
+metalize(lead, { set: castM, tile: 4.0, ns: 0.9, edge: 0.12, tarn: 0x9a9890, verd: 0xc4c2b8, paint: true });
+
+// ---- THE GLASS SHADER (port glass only) ----
+const GL_FS_COMMON = `
+uniform sampler2D tSalDrop; uniform float uSalDropK;
+varying vec3 vGlP; varying vec3 vGlN;
+float glDrop;`;
+const GL_FS_NORMAL = `
+{
+  vec3 gn = normalize(vGlN);
+  vec3 gw = pow(abs(gn), vec3(4.0)); gw /= (gw.x + gw.y + gw.z);
+  vec3 gp = vGlP * 5.5;
+  vec4 dx = texture2D(tSalDrop, gp.zy), dy = texture2D(tSalDrop, gp.xz), dz = texture2D(tSalDrop, gp.xy);
+  glDrop = (dx.a * gw.x + dy.a * gw.y + dz.a * gw.z) * uSalDropK * step(0.5, vColor.r);
+  vec3 d = gw.x * vec3(0.0, dx.y * 2.0 - 1.0, dx.x * 2.0 - 1.0) + gw.y * vec3(dy.x * 2.0 - 1.0, 0.0, dy.y * 2.0 - 1.0)
+         + gw.z * vec3(dz.x * 2.0 - 1.0, dz.y * 2.0 - 1.0, 0.0);
+  normal = normalize(normal + (normalMatrix * d) * 1.4 * uSalDropK * step(0.5, vColor.r));
+}`;
+const GL_FS_ALPHA = `
+{
+  float fr = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 2.2);
+  float rec = 1.0 - step(0.5, vColor.r);
+  diffuseColor.a = mix(clamp(mix(0.22, 0.94, fr) + glDrop * 0.35, 0.0, 1.0), 1.0, rec);
+}`;
+const _drops = dropletSet();
+glassMat.onBeforeCompile = sh => {
+  Object.assign(sh.uniforms, { tSalDrop: { value: _drops.nrm }, uSalDropK: salShared.uSalDrop });
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vGlP; varying vec3 vGlN;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlP = position; vGlN = normal;');
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform mat3 normalMatrix;\n' + GL_FS_COMMON)
+    .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + GL_FS_NORMAL)
+    .replace('#include <opaque_fragment>', GL_FS_ALPHA + '\n#include <opaque_fragment>');
+};
+glassMat.customProgramCacheKey = () => 'salGlass1';
+
+// ---- THE DRESS SHADER ----
+// One injected block shared by every canvas material on Sal (one program per
+// vertex-colour variant; everything material-specific is a uniform). It samples the
+// generated twill TRIPLANAR in the bone's own space, so the thread rides the limb and has
+// one pitch everywhere, and reads three baked per-vertex terms from `salAux`:
+//   x = WEAR   (0..1): knees, elbows, seat, shoulder rub. The rubber coat is scrubbed off
+//                     there, so the drill shows lighter and the surface polishes smoother.
+//   y = SEAM   (signed arc distance to the nearest sewn seam, units): taped seams — a
+//                     band of rubber-solution tape, smoother and darker, with a stitch row
+//                     each side. Signed and linear across a triangle, so the band is exact.
+//   z = PATCH  (signed distance to a reinforcing patch outline, <0 inside).
+// Pad value (0, 9, 9) = no wear, no seam, no patch (Part.bake pads missing geometry).
+// WET: uSalWet (0 dry .. 1 soaked, driven by updateDiver) darkens and glosses the canvas;
+// it dries from the helmet DOWN (vSalY is height above the soles), boots last.
+// No backticks anywhere in this GLSL.
+const SUIT_VS_COMMON = `
+attribute vec3 salAux;
+varying vec3 vSalP; varying vec3 vSalN; varying vec3 vSalA; varying float vSalY;
+uniform float uSalRootY;`;
+const SUIT_FS_COMMON = `
+uniform sampler2D tSalTw; uniform sampler2D tSalTwN;
+uniform float uSalTile; uniform float uSalWeave; uniform float uSalWeaveAlb; uniform float uSalWetDark;
+uniform float uSalWet; uniform float uPaintK;
+uniform vec3 uSalWearCol; uniform vec3 uSalTapeCol;
+uniform mat3 normalMatrix;
+varying vec3 vSalP; varying vec3 vSalN; varying vec3 vSalA; varying float vSalY;
+vec4 salTri(sampler2D t, vec3 p, vec3 w) {
+  return texture2D(t, p.zy) * w.x + texture2D(t, p.xz) * w.y + texture2D(t, p.xy) * w.z;
+}
+vec3 salTriN(vec3 p, vec3 w) {
+  vec2 tx = texture2D(tSalTwN, p.zy).xy * 2.0 - 1.0;
+  vec2 ty = texture2D(tSalTwN, p.xz).xy * 2.0 - 1.0;
+  vec2 tz = texture2D(tSalTwN, p.xy).xy * 2.0 - 1.0;
+  return w.x * vec3(0.0, tx.y, tx.x) + w.y * vec3(ty.x, 0.0, ty.y) + w.z * vec3(tz.x, tz.y, 0.0);
+}
+vec3 salBump(vec3 sp, vec3 sn, vec2 dh) {
+  vec3 sx = normalize(dFdx(sp)); vec3 sy = normalize(dFdy(sp));
+  vec3 r1 = cross(sy, sn); vec3 r2 = cross(sn, sx);
+  float det = dot(sx, r1);
+  return normalize(abs(det) * sn - sign(det) * (dh.x * r1 + dh.y * r2));
+}
+vec3 salNo; vec3 salW; vec3 salPp; vec4 salPk;
+float salMot; float salTape; float salStitch; float salWear; float salWetK; float salPatch; float salPEdge;`;
+const SUIT_FS_COLOR = `
+salNo = normalize(vSalN);
+salW = pow(abs(salNo), vec3(4.0)); salW /= (salW.x + salW.y + salW.z);
+salPp = vSalP * uSalTile;
+salPk = salTri(tSalTw, salPp, salW);
+salMot = salTri(tSalTw, vSalP * (uSalTile * 0.071) + 0.37, salW).g;
+{
+  float d = abs(vSalA.y), aa = max(fwidth(vSalA.y), 1e-4);
+  salTape = 1.0 - smoothstep(0.0125 - aa, 0.0125 + aa, d);
+  float row = 1.0 - smoothstep(0.0011 - aa, 0.0011 + aa, abs(d - 0.0085));
+  float al = vSalP.y * 105.0;
+  float dash = smoothstep(0.22, 0.34, fract(al)) * (1.0 - smoothstep(0.70, 0.82, fract(al)));
+  salStitch = row * dash * (1.0 - smoothstep(0.18, 0.5, fwidth(al)));
+  float pa = max(fwidth(vSalA.z), 1e-4);
+  salPatch = 1.0 - smoothstep(-pa, pa, vSalA.z);
+  salPEdge = 1.0 - smoothstep(0.0045 - pa, 0.0045 + pa, abs(vSalA.z + 0.0045));
+}
+salWear = smoothstep(0.12, 0.85, vSalA.x + (salMot - 0.5) * 0.8) * (0.5 + 0.5 * salPk.r);
+salWetK = clamp(uSalWet * 1.6 - vSalY * 0.22, 0.0, 1.0);
+diffuseColor.rgb *= mix(1.0 - uSalWeaveAlb, 1.0 + uSalWeaveAlb, salPk.r * 0.55 + salPk.b * 0.45) * (0.80 + 0.40 * salMot);
+diffuseColor.rgb = mix(diffuseColor.rgb, uSalWearCol * (0.78 + 0.44 * salPk.r), salWear * 0.72);
+diffuseColor.rgb *= mix(vec3(1.0), uSalTapeCol, max(salTape, salPEdge));
+diffuseColor.rgb *= 1.0 - 0.13 * salPatch;
+diffuseColor.rgb *= 1.0 - 0.45 * salStitch;
+diffuseColor.rgb *= 1.0 - uSalWetDark * salWetK;`;
+const SUIT_FS_ROUGH = `
+roughnessFactor *= 0.82 + 0.34 * salPk.b * (1.0 - 0.35 * salPk.r);
+roughnessFactor = mix(roughnessFactor, 0.48, max(salTape, salPEdge) * 0.85);
+roughnessFactor -= 0.24 * salWear;
+roughnessFactor = mix(roughnessFactor, 0.30, salWetK * 0.8);
+roughnessFactor = clamp(roughnessFactor, 0.08, 1.0);`;
+const SUIT_FS_NORMAL = `
+{
+  float ws = uSalWeave * (1.0 - 0.65 * uPaintK) * (1.0 - 0.75 * salTape);
+  vec3 nt = normalize(salNo + salTriN(salPp, salW) * ws);
+  normal = normalize(normalMatrix * nt);
+  float bh = salTape * 0.7 + salPEdge * 0.6 - salStitch * 0.5;
+  normal = salBump(-vViewPosition, normal, vec2(dFdx(bh), dFdy(bh)) * 0.55);
+}`;
+const _tw = twillSet();
+function suitify(m, o) {
+  const U = {
+    tSalTw: { value: _tw.pack }, tSalTwN: { value: _tw.nrm },
+    uSalTile: { value: o.tile }, uSalWeave: { value: o.weave }, uSalWeaveAlb: { value: o.alb },
+    uSalWetDark: { value: o.wetDark }, uSalWearCol: { value: new THREE.Color(o.wear) },
+    uSalTapeCol: { value: new THREE.Vector3(...o.tape) },   // a LINEAR multiplier, not a colour
+    uSalWet: salShared.uSalWet, uSalRootY: salShared.uSalRootY, uPaintK: styleUniforms.uPaintK
+  };
+  m.userData.salSuit = true;
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + SUIT_VS_COMMON)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvSalP = position; vSalN = normal; vSalA = salAux;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvSalY = (modelMatrix * vec4(transformed, 1.0)).y - uSalRootY;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + SUIT_FS_COMMON)
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + SUIT_FS_COLOR)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + SUIT_FS_ROUGH)
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + SUIT_FS_NORMAL);
+  };
+  m.customProgramCacheKey = () => 'salSuit1';
+  return m;
+}
+// thread pitch ~2 mm on the dress (tile 0.077 u); the webbing straps a finer, fainter weave
+suitify(leather, { tile: 13.0, weave: 0.60, alb: 0.13, wetDark: 0.40, wear: 0xb49c7c, tape: [0.74, 0.68, 0.60] });
+suitify(cloth, { tile: 13.0, weave: 0.60, alb: 0.14, wetDark: 0.42, wear: 0x5a72b0, tape: [0.72, 0.74, 0.80] });
+suitify(trim, { tile: 15.0, weave: 0.50, alb: 0.10, wetDark: 0.30, wear: 0xefe9dc, tape: [0.82, 0.80, 0.76] });
+suitify(darkLeather, { tile: 18.0, weave: 0.40, alb: 0.08, wetDark: 0.28, wear: 0x86603f, tape: [0.80, 0.76, 0.72] });
+
 // PAINT LAW (lib/paint.js). The suit goes matte with the dial: cloth, trim, leathers,
 // rubber, steel (its 0.78 metalness is real metal and stays; only its normal map and
 // roughness floor move). HERO, untouched at every k: copper and brass (the Mark V's
 // bonnet and fittings), the port and lantern glass, the blue helmet lamp, the bubbles.
-for (const m of [steel, cloth, trim, leather, darkLeather, rubber]) registerPaint(m);
+hoseMat.onBeforeCompile = sh => {
+  sh.uniforms.uSalWet = salShared.uSalWet;
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform float uSalWet;')
+    .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= 1.0 - 0.35 * uSalWet;')
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.26, uSalWet * 0.85);');
+};
+hoseMat.customProgramCacheKey = () => 'salHose1';
+for (const m of [steel, lead, cloth, trim, leather, darkLeather, rubber, hoseMat]) registerPaint(m);
 for (const m of [copper, brass, port, blueLit, glassMat, lantGlass]) registerPaint(m, { hero: true });
 // the blade's water-drag streak: additive, opacity animated by the slash clock
 const dragMat = new THREE.MeshBasicMaterial({
@@ -231,16 +475,30 @@ const lathe = (pts, seg = 26) => new THREE.LatheGeometry(pts.map(p => new THREE.
 
 // Bucket primitives by material and emit one merged mesh each: hundreds of rivets,
 // grille bars and studs stay at a handful of draw calls.
-function Part(node) {
+// cavFn (optional): (x, y, z) -> 0..1, evaluated in the Part's space on every METAL
+// piece added without its own salCav — "how deep in a crevice is this vertex", usually
+// the distance to the host surface the fitting is mounted on.
+function Part(node, cavFn = null) {
   const b = new Map();
   return {
     node,
-    add(geo, mat) { let a = b.get(mat); if (!a) b.set(mat, a = []); a.push(geo); return geo; },
+    add(geo, mat) {
+      if (cavFn && mat.userData.salMetal && !geo.attributes.salCav) cav(geo, cavFn);
+      let a = b.get(mat); if (!a) b.set(mat, a = []); a.push(geo); return geo;
+    },
     bake(shadow = true) {
       for (const [mat, list] of b) {
         // merging demands identical attribute sets; pad plain primitives mixed with folded cloth
         if (mat.vertexColors || list.some(g => g.attributes.color)) for (const g of list) if (!g.attributes.color)
           g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 3).fill(1), 3));
+        // the dress shader reads salAux on EVERY vertex; an unbound attribute reads 0,
+        // which is "on a seam" — so every suit bucket is padded to (no wear, no seam, no patch)
+        if (mat.userData.salSuit || list.some(g => g.attributes.salAux)) for (const g of list) if (!g.attributes.salAux) aux(g, null);
+        if (mat.userData.salMetal || list.some(g => g.attributes.salCav)) for (const g of list) if (!g.attributes.salCav) cav(g, 0);
+        // extruded and prototype fittings are non-indexed; a bucket that mixes them with
+        // indexed primitives merges as non-indexed throughout
+        if (list.some(g => g.index) && list.some(g => !g.index))
+          for (let i = 0; i < list.length; i++) if (list[i].index) list[i] = list[i].toNonIndexed();
         const m = new THREE.Mesh(list.length > 1 ? mergeGeometries(list) : list[0], mat);
         m.castShadow = shadow; m.receiveShadow = true;
         node.add(m);
@@ -250,6 +508,38 @@ function Part(node) {
     }
   };
 }
+
+// Bake the dress shader's per-vertex terms (see THE DRESS SHADER). fn(x, y, z, out)
+// writes [wear, seam, patch] for a vertex in the geometry's current (bone) space;
+// fn = null writes the pad. Build-time only.
+const _ax = [0, 9, 9];
+function aux(geo, fn) {
+  const pos = geo.attributes.position, n = pos.count, a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    _ax[0] = 0; _ax[1] = 9; _ax[2] = 9;
+    if (fn) fn(pos.getX(i), pos.getY(i), pos.getZ(i), _ax);
+    a[i * 3] = _ax[0]; a[i * 3 + 1] = _ax[1]; a[i * 3 + 2] = _ax[2];
+  }
+  geo.setAttribute('salAux', new THREE.BufferAttribute(a, 3));
+  return geo;
+}
+// Metal cavity (0 = open face .. 1 = deep crevice): tarnish and verdigris pool here.
+// v is a number (uniform) or fn(x, y, z) in the geometry's own space.
+// spun = 1 marks the bonnet's spun copper (the metal shader's lathe rings).
+function cav(geo, v, spun = 0) {
+  const pos = geo.attributes.position, n = pos.count, a = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    a[i * 2] = typeof v === 'function' ? clamp(v(pos.getX(i), pos.getY(i), pos.getZ(i)), 0, 1) : v;
+    a[i * 2 + 1] = spun;
+  }
+  geo.setAttribute('salCav', new THREE.BufferAttribute(a, 2));
+  return geo;
+}
+const gau = t => Math.exp(-t * t);
+// Seam distance for a limb segment lathed round its own Y axis: nseams evenly spaced seams
+// starting on +X. r*sin(n*theta)/n is the arc distance near each seam and stays smooth
+// (and so interpolates exactly) all the way round.
+const seamD = (x, z, nseams) => Math.hypot(x, z) * Math.sin(nseams * Math.atan2(z, x)) / nseams;
 
 // Displace cloth along its normals and bake grime into vertex colours, so dirt genuinely
 // pools in the creases the geometry has rather than in an unrelated texture.
@@ -296,16 +586,51 @@ function fold(geo, amp, freq, tone = 1, mask = null) {
 }
 
 function rivetRing(p, mat, n, r, y, rad = 0.032, zs = 1, phase = 0.5) {
-  const g = new THREE.SphereGeometry(rad, 7, 5);
+  const g = new THREE.SphereGeometry(rad, 6, 4);
   for (let i = 0; i < n; i++) {
     const a = (i + phase) / n * TAU;
     p.add(xf(g.clone(), Math.cos(a) * r, y, Math.sin(a) * r * zs), mat);
   }
 }
 
+// A WING NUT, as cast: a chamfered hub on a threaded stub, two thumb wings flaring up
+// from it with rounded ears, every edge bevelled so the metal shader has a rim to
+// polish. Built once (unit scale, shaft along +Z, wings in the XY plane) and cloned.
+// ~190 tris. The stud end shows proud of the hub like a real thread does.
+const WING_PROTO = (() => {
+  const hub = lathe([[0, 0], [0.031, 0], [0.033, 0.006], [0.033, 0.030], [0.027, 0.040], [0.014, 0.044],
+    [0.011, 0.044], [0.011, 0.058], [0.008, 0.062], [0, 0.062]], 10).rotateX(Math.PI / 2).toNonIndexed();
+  const wing = sx => {
+    const sh = new THREE.Shape();
+    sh.moveTo(sx * 0.024, -0.012);
+    sh.quadraticCurveTo(sx * 0.046, -0.016, sx * 0.058, 0.004);
+    sh.quadraticCurveTo(sx * 0.066, 0.030, sx * 0.050, 0.036);
+    sh.quadraticCurveTo(sx * 0.034, 0.036, sx * 0.024, 0.016);
+    sh.lineTo(sx * 0.024, -0.012);
+    return new THREE.ExtrudeGeometry(sh, { depth: 0.008, bevelEnabled: true, bevelThickness: 0.0035,
+      bevelSize: 0.003, bevelSegments: 1, curveSegments: 3 }).translate(0, 0, 0.012);
+  };
+  return mergeGeometries([hub, wing(1), wing(-1)]);
+})();
 function wingnut(p, x, y, z, ry, s = 1) {
-  p.add(xf(new THREE.CylinderGeometry(0.028 * s, 0.032 * s, 0.055 * s, 8).rotateX(Math.PI / 2), x, y, z, 0, ry, 0), brass);
-  p.add(xf(new THREE.BoxGeometry(0.115 * s, 0.05 * s, 0.017 * s), x, y, z + 0.012 * s, 0, ry, 0), brass);
+  const g = WING_PROTO.clone().scale(s, s, s);
+  p.add(xf(g, x, y, z, 0, ry, 0), brass);
+}
+// Place a +Z-facing prototype at pos, facing along dir (roll about that axis).
+const _pq = new THREE.Vector3();
+function faceAlong(geo, pos, dir, roll = 0) {
+  _o.position.copy(pos); _o.scale.setScalar(1); _o.rotation.set(0, 0, 0);
+  _o.lookAt(_pq.copy(pos).add(dir)); _o.rotateZ(roll); _o.updateMatrix();
+  return geo.applyMatrix4(_o.matrix);
+}
+// A roller-less frame buckle: a torus with four tubular segments IS a square loop.
+// w x h outer size, t bar radius; lies in XY, faces +Z. Optional prong across it.
+function buckleGeo(w, h, t = 0.005, prong = true) {
+  const parts = [new THREE.TorusGeometry(0.5, t / Math.max(w, h) * 1.4, 4, 4).rotateZ(Math.PI / 4)
+    .scale(w * 0.707, h * 0.707, Math.max(w, h) * 0.707).toNonIndexed()];
+  if (prong) parts.push(new THREE.CylinderGeometry(t * 0.7, t * 0.7, w * 0.62, 5).rotateZ(Math.PI / 2)
+    .translate(w * 0.06, 0, t * 0.9).toNonIndexed());
+  return mergeGeometries(parts);
 }
 
 // One arced guard bar bowing out over a porthole, in the port's local frame (+Z outward).
@@ -348,7 +673,7 @@ function profOf(keys) {
 // Lathe a profiled segment of length `len`, hung from y = 0 down to y = -len, with
 // rounded caps at both ends so consecutive segments read continuous through a bend
 // instead of showing a hard disc at the joint.
-function segGeo(len, r, prof, seg = 16, rings = 13) {
+function segGeo(len, r, prof, seg = 22, rings = 16) {   // 16x13 faceted the fold into crumpled paper
   const pts = [];
   const rT = r * prof(0), rB = r * prof(1);
   for (let k = 0; k <= 3; k++) {                             // bottom cap, pole first
@@ -382,9 +707,10 @@ function bunch(p, mat, r, y, n = 3, dy = 0.052, tube = 0.019, zs = 0.95) {
   const mid = (n - 1) / 2;
   for (let i = 0; i < n; i++) {
     const k = 1 - Math.abs(i - mid) / n;
-    const g = new THREE.TorusGeometry(r * 0.985, tube * (0.7 + 0.6 * k), 6, 16)
+    const g = new THREE.TorusGeometry(r * 0.985, tube * (0.7 + 0.6 * k), 5, 18)
       .rotateX(Math.PI / 2).scale(1, 1, zs);
-    p.add(tint(xf(g, 0, y + (i - mid) * dy), 0.80), mat);
+    const gg = tint(xf(g, 0, y + (i - mid) * dy), 0.80);
+    p.add(p.auxFn ? aux(gg, p.auxFn) : gg, mat);
   }
 }
 
@@ -396,7 +722,8 @@ function piping(p, mat, len, r, prof, sx, sz = 0, rad = 0.013, n = 7) {
     const s = i / n, rr = r * prof(s) * 0.99;
     q.push(V3(sx * rr, -len * s, sz * rr));
   }
-  p.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(q), n * 2, rad, 4, false), mat);
+  const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(q), n * 2, rad, 4, false);
+  p.add(p.auxFn ? aux(tg, p.auxFn) : tg, mat);
 }
 
 // The four segment profiles. Arms r = 0.150, legs r = 0.186.
@@ -440,17 +767,23 @@ function sheathGeo(p) {
   return p;
 }
 
-function porthole(p, rimR, glassR, bars, x, y, z, rx, ry, nb = 8) {
+// sOff: distance along the port's axis from its centre to the bonnet's outer surface,
+// so the bezel, the recess and the glass all sit ON the copper rather than inside it.
+function porthole(p, rimR, glassR, bars, x, y, z, rx, ry, nb = 8, sOff = 0.045) {
   const put = g => xf(g, x, y, z, rx, ry, 0);
-  p.add(put(new THREE.CylinderGeometry(rimR, rimR * 1.06, 0.075, 20, 1, true).rotateX(Math.PI / 2)), brass);
-  p.add(put(new THREE.TorusGeometry(rimR, rimR * 0.16, 10, 20).translate(0, 0, 0.036)), brass);
-  p.add(put(new THREE.TorusGeometry(rimR * 1.22, rimR * 0.1, 5, 20).translate(0, 0, -0.03)), copper);
-  p.add(put(new THREE.SphereGeometry(glassR * 1.9, 14, 7, 0, TAU, 0, 0.56).rotateX(Math.PI / 2).translate(0, 0, -glassR * 1.52)), glassMat);
-  for (let i = 0; i < nb; i++) {                             // bezel bolts
+  p.add(put(new THREE.CylinderGeometry(rimR, rimR * 1.06, 0.07, 22, 1, true).rotateX(Math.PI / 2).translate(0, 0, sOff - 0.025)), brass);
+  p.add(put(new THREE.TorusGeometry(rimR, rimR * 0.15, 9, 24).translate(0, 0, sOff + 0.012)), brass);     // bezel
+  p.add(put(new THREE.TorusGeometry(rimR * 1.22, rimR * 0.1, 5, 24).translate(0, 0, sOff - 0.012)), copper); // flange
+  // the recess first (dark, opaque), then the glass over it: one draw, index order
+  p.add(put(tint(new THREE.CircleGeometry(rimR * 0.98, 20).translate(0, 0, sOff + 0.003), 0.02)), glassMat);
+  const capZ = sOff + 0.008 - glassR * 1.9 * Math.cos(0.56);
+  p.add(put(new THREE.SphereGeometry(glassR * 1.9, 18, 6, 0, TAU, 0, 0.56).rotateX(Math.PI / 2).translate(0, 0, capZ)), glassMat);
+  for (let i = 0; i < nb; i++) {                             // bezel bolts: hex heads
     const a = i / nb * TAU;
-    p.add(put(new THREE.SphereGeometry(rimR * 0.135, 6, 5).translate(Math.cos(a) * rimR * 1.06, Math.sin(a) * rimR * 1.06, 0.042)), brass);
+    p.add(put(new THREE.CylinderGeometry(rimR * 0.10, rimR * 0.10, rimR * 0.09, 6).rotateX(Math.PI / 2)
+      .translate(Math.cos(a) * rimR * 1.06, Math.sin(a) * rimR * 1.06, sOff + 0.022)), brass);
   }
-  if (bars) for (let i = -1; i <= 1; i++) p.add(put(guardBar(i * rimR * 0.56, rimR, rimR * 0.085)), brass);
+  if (bars) for (let i = -1; i <= 1; i++) p.add(put(guardBar(i * rimR * 0.56, rimR, rimR * 0.085).translate(0, 0, sOff + 0.004)), brass);
 }
 
 // A short corrugated hose length running up its own +Y, baked to one mesh per joint.
@@ -475,24 +808,59 @@ export const diver = (() => {
   neck.add(helmGroup);
   g.helmGroup = helmGroup;
   {
-    const p = Part(helmGroup);
-    p.add(lathe([
+    const HP = [
       [0.000, 0.000], [0.246, 0.000], [0.256, 0.045], [0.262, 0.085], [0.300, 0.115], [0.352, 0.165],
       [0.400, 0.235], [0.430, 0.315], [0.444, 0.400], [0.448, 0.480], [0.440, 0.560], [0.418, 0.635],
       [0.382, 0.705], [0.330, 0.775], [0.262, 0.838], [0.176, 0.892], [0.086, 0.936], [0.000, 0.952]
-    ], 44), copper);
+    ];
+    const hR = y => {
+      for (let i = 2; i < HP.length; i++) if (y <= HP[i][1]) {
+        const [r0, y0] = HP[i - 1], [r1, y1] = HP[i];
+        return r0 + (r1 - r0) * clamp((y - y0) / (y1 - y0), 0, 1);
+      }
+      return 0;
+    };
+    // every helmet fitting's crevice depth = its distance off the bonnet's surface
+    const p = Part(helmGroup, (x, y, z) => y < 0 ? 0 : 1 - ss(0.004, 0.030, Math.hypot(x, z) - hR(y)));
+    // THE BONNET: spun copper (salCav.y = 1), its crevice term baked where water and
+    // verdigris collect — round every port flange, the spun ridges, the neck ring, and
+    // under the exhaust and inlet bosses.
+    const PORTS = [[0.198, 0, 0.455, 0.402, -0.08, 0], [0.132, 0.376, 0.470, 0.128, 0, 1.245],
+      [0.132, -0.376, 0.470, 0.128, 0, -1.245], [0.126, 0, 0.818, 0.172, -1.16, 0]];
+    const pAx = PORTS.map(q => new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(q[4], q[5], 0)));
+    const _pv = new THREE.Vector3();
+    p.add(cav(lathe(HP, 56), (x, y, z) => {
+      let c = 1 - ss(0.07, 0.13, y);
+      for (let k = 0; k < 4; k++) {
+        const q = PORTS[k]; _pv.set(x - q[1], y - q[2], z - q[3]);
+        const al = _pv.dot(pAx[k]), rad = Math.sqrt(Math.max(0, _pv.lengthSq() - al * al));
+        c = Math.max(c, gau((rad - q[0] * 1.30) / 0.030) * 0.9);
+      }
+      for (const yy of [0.235, 0.400, 0.520, 0.635, 0.775]) c = Math.max(c, 0.45 * gau((y - yy) / 0.012));
+      c = Math.max(c, 0.8 * gau(Math.hypot(x + 0.36, y - 0.315, z - 0.245) / 0.085), 0.8 * gau(Math.hypot(x + 0.30, y - 0.40, z + 0.28) / 0.10));
+      return c;
+    }, 1), copper);
     // neck ring / breastplate lock
     p.add(xf(new THREE.CylinderGeometry(0.268, 0.276, 0.09, 32), 0, 0.035), brass);
     p.add(xf(new THREE.TorusGeometry(0.272, 0.028, 6, 32).rotateX(Math.PI / 2), 0, 0.082), brass);
-    rivetRing(p, brass, 12, 0.286, 0.036, 0.024);
+    for (let i = 0; i < 12; i++) {                           // neck-ring bolts: washer + hex head
+      const a = (i + 0.5) / 12 * TAU, pos = V3(Math.cos(a) * 0.281, 0.036, Math.sin(a) * 0.281), dir = V3(Math.cos(a), 0, Math.sin(a));
+      p.add(faceAlong(new THREE.CylinderGeometry(0.023, 0.023, 0.005, 12).rotateX(Math.PI / 2), pos, dir), brass);
+      p.add(faceAlong(new THREE.CylinderGeometry(0.017, 0.017, 0.016, 6).rotateX(Math.PI / 2).translate(0, 0, 0.009), pos, dir), brass);
+    }
     for (let i = 0; i < 4; i++) {                            // interrupted-thread lugs
       const a = i / 4 * TAU + 0.4;
       p.add(xf(new THREE.BoxGeometry(0.10, 0.036, 0.05), Math.cos(a) * 0.29, 0.005, Math.sin(a) * 0.29, 0, -a, 0), brass);
     }
-    porthole(p, 0.198, 0.160, false, 0, 0.455, 0.402, -0.08, 0, 12);    // open front faceplate, 12-bolt bezel
-    porthole(p, 0.132, 0.104, true, 0.376, 0.470, 0.128, 0, 1.245);     // side ports
-    porthole(p, 0.132, 0.104, true, -0.376, 0.470, 0.128, 0, -1.245);
-    porthole(p, 0.126, 0.100, true, 0, 0.818, 0.172, -1.16, 0);         // top port
+    const sOff = k => {                                       // march out along the axis to the copper
+      const q = PORTS[k], a = pAx[k];
+      for (let t = -0.05; t < 0.2; t += 0.001) if (Math.hypot(q[1] + a.x * t, q[3] + a.z * t) > hR(q[2] + a.y * t)) return t;
+      return 0.045;
+    };
+    porthole(p, 0.198, 0.160, false, 0, 0.455, 0.402, -0.08, 0, 12, sOff(0));    // open front faceplate, 12-bolt bezel
+    porthole(p, 0.132, 0.104, true, 0.376, 0.470, 0.128, 0, 1.245, 8, sOff(1));  // side ports
+    porthole(p, 0.132, 0.104, true, -0.376, 0.470, 0.128, 0, -1.245, 8, sOff(2));
+    porthole(p, 0.126, 0.100, true, 0, 0.818, 0.172, -1.16, 0, 8, sOff(3));      // top port
     for (let i = 0; i < 3; i++) {                            // faceplate dog clamps
       const a = i * 2.094;
       wingnut(p, Math.sin(a) * 0.300, 0.455 + Math.cos(a) * 0.300, 0.300, 0, 0.85);
@@ -515,7 +883,7 @@ export const diver = (() => {
     // and spinning leaves ridges. Five rings sitting exactly on the lathe profile give the
     // dome a scale and a set of specular lines it otherwise has no way to earn.
     for (const [rr, yy] of [[0.402, 0.235], [0.446, 0.400], [0.442, 0.520], [0.420, 0.635], [0.334, 0.775]])
-      p.add(xf(new THREE.TorusGeometry(rr, 0.0085, 5, 32).rotateX(Math.PI / 2), 0, yy), copper);
+      p.add(cav(xf(new THREE.TorusGeometry(rr, 0.0085, 5, 32).rotateX(Math.PI / 2), 0, yy), 0.2), copper);
     // four wing-nut dogs round the neck ring, clamping the bonnet down onto the corselet.
     // ry = PI/2 - a points each nut's shaft radially outward from the ring.
     for (let i = 0; i < 4; i++) {
@@ -526,54 +894,130 @@ export const diver = (() => {
     p.add(xf(new THREE.TorusGeometry(0.40, 0.019, 5, 20, 1.15).rotateZ(0.42).rotateY(Math.PI / 2), 0, 0.455, 0), brass);
     // exhaust valve, right of the faceplate — bubbles vent here
     const ex = new THREE.Group(); ex.position.set(-0.352, 0.315, 0.245); neck.add(ex); g.exhaust = ex;
-    p.add(xf(new THREE.CylinderGeometry(0.055, 0.062, 0.07, 10).rotateZ(Math.PI / 2), -0.375, 0.315, 0.245), brass);
-    p.add(xf(new THREE.CylinderGeometry(0.036, 0.036, 0.05, 8).rotateZ(Math.PI / 2), -0.425, 0.315, 0.245), copper);
-    for (let i = 0; i < 6; i++) {
-      const a = i / 6 * TAU;
-      p.add(xf(new THREE.BoxGeometry(0.05, 0.016, 0.016), -0.425, 0.315 + Math.cos(a) * 0.036, 0.245 + Math.sin(a) * 0.036, a, 0, 0), brass);
+    // THE EXHAUST VALVE as a fitting: a chamfered base flange sweated to the bonnet, the
+    // valve barrel, a hex body, the knurled adjusting cap the diver screws down with his
+    // chin-side hand, and the spitcock lever. Axis radial off the bonnet at the vent.
+    {
+      const d = V3(-0.375, 0, 0.245).normalize(), B = V3(d.x * hR(0.315), 0.315, d.z * hR(0.315));
+      const along = (geo, t) => faceAlong(geo.rotateX(Math.PI / 2).translate(0, 0, t), B, d);
+      p.add(along(lathe([[0, 0], [0.070, 0], [0.074, 0.006], [0.066, 0.014], [0, 0.014]], 18), -0.004), brass);
+      p.add(along(lathe([[0.050, 0], [0.054, 0.006], [0.054, 0.040], [0.049, 0.048], [0.040, 0.050]], 16), 0.008), brass);
+      p.add(along(new THREE.CylinderGeometry(0.046, 0.046, 0.020, 6), 0.068), brass);
+      const kn = new THREE.CylinderGeometry(0.036, 0.036, 0.032, 28, 1);
+      const kp = kn.attributes.position;
+      for (let i = 0; i < kp.count; i++) {                   // knurl: alternate the rim radius
+        const ang = Math.atan2(kp.getZ(i), kp.getX(i)), r = Math.hypot(kp.getX(i), kp.getZ(i));
+        if (r > 0.03) { const k = 1 + 0.07 * Math.sign(Math.cos(ang * 14)); kp.setX(i, kp.getX(i) * k); kp.setZ(i, kp.getZ(i) * k); }
+      }
+      kn.computeVertexNormals();
+      p.add(along(kn, 0.094), copper);
+      p.add(along(new THREE.SphereGeometry(0.018, 10, 6, 0, TAU, 0, Math.PI / 2), 0.110), brass);
+      // spitcock: a small lever off the barrel, pointing forward
+      p.add(faceAlong(new THREE.CapsuleGeometry(0.006, 0.05, 3, 6).rotateX(Math.PI / 2).translate(0, 0, 0.03),
+        V3(B.x + d.x * 0.04, 0.315 - 0.045, B.z + d.z * 0.04), V3(0.15, -0.2, 1).normalize()), brass);
     }
-    // air inlet elbow (back right) and comms gland (back left)
-    p.add(xf(new THREE.CylinderGeometry(0.072, 0.082, 0.12, 10).rotateZ(-0.7), -0.30, 0.40, -0.28, 0, -0.6, 0), brass);
+    // THE AIR INLET: a gooseneck elbow out of the back of the bonnet turning down to meet
+    // the feed hose, with a hex coupling nut at each end and the non-return valve body.
+    {
+      const P0 = V3(-0.323, 0.452, -0.306), P3 = V3(-0.352, 0.378, -0.338);
+      const gc = new THREE.CatmullRomCurve3([P0, V3(-0.352, 0.476, -0.338), V3(-0.380, 0.452, -0.366), V3(-0.372, 0.408, -0.358), P3]);
+      p.add(new THREE.TubeGeometry(gc, 14, 0.030, 10, false), brass);
+      p.add(faceAlong(new THREE.CylinderGeometry(0.046, 0.050, 0.020, 6).rotateX(Math.PI / 2), P0, V3(-0.72, 0.05, -0.69).normalize()), brass);
+      p.add(faceAlong(new THREE.CylinderGeometry(0.040, 0.040, 0.030, 6).rotateX(Math.PI / 2), P3, gc.getTangentAt(1)), brass);
+      p.add(faceAlong(lathe([[0.034, 0], [0.042, 0.008], [0.042, 0.030], [0.034, 0.038]], 14).rotateX(Math.PI / 2),
+        gc.getPointAt(0.5), gc.getTangentAt(0.5).negate()), brass);
+    }
     p.add(xf(new THREE.CylinderGeometry(0.05, 0.056, 0.10, 8).rotateZ(0.5), 0.28, 0.30, -0.30, 0, 0.6, 0), brass);
     p.add(xf(new THREE.SphereGeometry(0.042, 8, 6), 0.30, 0.365, -0.325), copper);
     rivetRing(p, brass, 16, 0.436, 0.24, 0.021);
     p.bake();
   }
 
-  // ---- leather breastplate over the blue-fabric torso ----
+  // ---- the corselet: a BRASS breastplate over the dress, the front weight below it ----
+  // The breastplate is the rigid collar the helmet locks to. It covers the shoulders and
+  // upper chest only and stops at a rolled SKIRT, where the dress's rubber gasket is
+  // clamped by four brass BRAILS on twelve studs, every stud dogged down with a wing nut —
+  // the corselet's signature read at any distance. Below the skirt it is dress canvas
+  // (the full-height lathe stays, in the dress, as what the brass is bolted over), and on
+  // that canvas hangs the cast-lead FRONT WEIGHT, hooked to two of the studs. The old
+  // pair of vent bosses that sat on the chest (a Mark V breastplate has none, and they
+  // read as a pair of eyes) is gone.
   const BP = [
     [0.392, 0.055], [0.414, 0.092], [0.432, 0.158], [0.462, 0.240], [0.524, 0.328], [0.588, 0.424], [0.612, 0.500],
     [0.594, 0.578], [0.530, 0.648], [0.420, 0.706], [0.322, 0.746], [0.276, 0.772], [0.274, 0.816]
   ];
-  {
-    const p = Part(spine);
-    const ZS = 0.78;
-    // body-space y minus the spine origin (0.10)
-    const shell = lathe(BP, 26);
-    shell.scale(0.93, 1, ZS);
-    p.add(shell, leather);
-    p.add(seamTube(BP.slice(0, 12), ZS * 0.93, 0.010), darkLeather);            // centre seam, front
-    p.add(seamTube(BP.slice(0, 12), ZS * 0.93, 0.010, -1), darkLeather);        // spine seam, back
-    p.add(xf(new THREE.TorusGeometry(0.278, 0.026, 6, 22).rotateX(Math.PI / 2), 0, 0.804), brass);
-    p.add(xf(new THREE.TorusGeometry(0.394, 0.024, 6, 26).rotateX(Math.PI / 2), 0, 0.062).scale(0.93, 1, ZS), darkLeather);
-    rivetRing(p, brass, 12, 0.284, 0.780, 0.020);
-    // BRAILLES: the studs round the corselet's skirt that the dress is bolted down to
-    // through its rubber gasket. On a real Mark V they are the whole reason the suit is
-    // watertight, and they are the corselet's most recognisable read at distance.
-    rivetRing(p, brass, 14, 0.404, 0.078, 0.023, ZS * 0.93);
-    for (const sx of [-0.205, 0.205]) {                      // circular chest vent bosses
-      p.add(xf(new THREE.CylinderGeometry(0.080, 0.090, 0.07, 14).rotateX(Math.PI / 2), sx, 0.424, 0.418), copper);
-      p.add(xf(new THREE.TorusGeometry(0.076, 0.015, 5, 14), sx, 0.424, 0.452), brass);
-      p.add(xf(new THREE.CylinderGeometry(0.060, 0.060, 0.03, 12).rotateX(Math.PI / 2), sx, 0.424, 0.452), port);
-      for (let i = 0; i < 3; i++)                            // louvre slats in the port
-        p.add(xf(new THREE.BoxGeometry(0.102, 0.012, 0.014), sx, 0.424 + (i - 1) * 0.026, 0.464), steel);
+  const bpR = y => {                                          // profile radius at height y
+    if (y <= BP[0][1]) return BP[0][0];
+    for (let i = 1; i < BP.length; i++) if (y <= BP[i][1]) {
+      const [r0, y0] = BP[i - 1], [r1, y1] = BP[i];
+      return r0 + (r1 - r0) * (y - y0) / (y1 - y0);
     }
-    // Blue fabric torso: slightly broader in x than the carapace so it reads at the sides.
-    // The dress is AIR-FILLED, so the belly and flank balloon out below the corselet while
+    return BP[BP.length - 1][0];
+  };
+  {
+    const ZS = 0.78, SX = 0.93, SKIRT = 0.395;
+    // crevice depth = how close a fitting sits to the corselet's (elliptical) surface
+    const p = Part(spine, (x, y, z) => 1 - ss(0.004, 0.034, Math.hypot(x / SX, z / (SX * ZS)) - bpR(y)));
+    // the dress under the brass, full height
+    p.add(aux(lathe(BP, 30).scale(SX * 0.985, 1, ZS * 0.985), (x, y, z, o) => { o[1] = seamD(x, z, 1); }), leather);
+    // the brass shell: the same profile from the skirt up, spun smooth (40 segments)
+    const up = [[bpR(SKIRT) + 0.004, SKIRT]].concat(BP.filter(q => q[1] > SKIRT + 0.01));
+    const shell = lathe(up, 40).scale(SX, 1, ZS);
+    p.add(cav(shell, (x, y) => 0.55 * (1 - ss(0.0, 0.035, y - SKIRT)) + 0.6 * ss(0.765, 0.80, y)), brass);
+    // rolled skirt edge and neck collar
+    p.add(xf(new THREE.TorusGeometry(bpR(SKIRT) + 0.006, 0.013, 7, 40).rotateX(Math.PI / 2), 0, SKIRT).scale(SX, 1, ZS), brass);
+    p.add(xf(new THREE.TorusGeometry(0.278, 0.026, 7, 28).rotateX(Math.PI / 2), 0, 0.804), brass);
+    rivetRing(p, brass, 12, 0.284, 0.780, 0.020);
+    // four BRAILS: flat brass straps pressing the gasket, broken at the shoulders
+    const yb = SKIRT + 0.030, rb = bpR(yb);
+    for (let k = 0; k < 4; k++) {
+      const g = new THREE.TorusGeometry(rb + 0.012, 0.0085, 4, 12, TAU / 4 - 0.16).rotateZ(k * TAU / 4 + 0.08);
+      p.add(g.rotateX(Math.PI / 2).scale(SX, 2.6, ZS).translate(0, yb, 0), brass);
+    }
+    // twelve studs, each with its wing nut, faced outward along the corselet normal
+    for (let i = 0; i < 12; i++) {
+      const a = (i + 0.5) / 12 * TAU, cx = Math.cos(a), sz = Math.sin(a);
+      const pos = V3(cx * (rb + 0.022) * SX, yb, sz * (rb + 0.022) * SX * ZS);
+      const dir = V3(cx / SX, 0, sz / (SX * ZS)).normalize();
+      p.add(faceAlong(WING_PROTO.clone().scale(0.62, 0.62, 0.62), pos, dir, 0), brass);
+    }
+    // THE FRONT WEIGHT. ~16 kg of sand-cast lead, bent to the chest, hung on two hooks.
+    {
+      const W = 0.205, H = 0.29, Y0 = 0.035, Z0 = 0.43, BEND = 1.1;
+      // a rounded slab (the rounding is the casting's draft), subdivided so it can BEND:
+      // tapered toward the bottom, the top edge dipped to clear the skirt, the flanks
+      // wrapped back round the chest
+      const wg = new RoundedBoxGeometry(2 * W, H, 0.05, 4, 0.016);
+      const wp = wg.attributes.position;
+      for (let i = 0; i < wp.count; i++) {
+        let x = wp.getX(i), y = wp.getY(i) + H / 2, z = wp.getZ(i);
+        const u = x / W;
+        x *= 0.84 + 0.16 * clamp(y / H, 0, 1) + 0.05 * ss(0.8, 1, y / H);
+        y -= 0.018 * (1 - u * u) * ss(0.6, 1, y / H);
+        z -= BEND * x * x + 0.10 * (1 - clamp(y / H, 0, 1));   // the bottom tucks in to the belly
+        wp.setXYZ(i, x, y, z);
+      }
+      wg.computeVertexNormals();
+      wg.translate(0, Y0, Z0);
+      p.add(cav(wg, (x, y, z) => 0.35 * (1 - ss(0.0, 0.03, z - (Z0 - BEND * x * x - 0.10 * (1 - clamp((y - Y0) / H, 0, 1))) + 0.025))), lead);
+      // cast boss with the two hanging eyes, and the brass hooks up to the skirt studs
+      for (const hx of [-0.15, 0.15]) {
+        const top = Y0 + H - 0.006, zf = Z0 + 0.012 - BEND * hx * hx;
+        p.add(cav(xf(new THREE.TorusGeometry(0.020, 0.008, 6, 10), hx, top + 0.010, zf, 0, Math.PI / 2, 0), 0.25), lead);   // cast eye
+        const hook = new THREE.CatmullRomCurve3([V3(hx, top + 0.004, zf + 0.004), V3(hx * 1.01, top + 0.040, zf + 0.030),
+          V3(hx * 1.03, yb - 0.030, zf + 0.050), V3(hx * 1.03, yb - 0.004, zf + 0.056)]);
+        p.add(new THREE.TubeGeometry(hook, 8, 0.0068, 5, false), brass);
+      }
+      // the webbing strap that holds the weight to the man, round the torso behind it
+      p.add(aux(xf(band(0.500, 0.050, 0.665, 34), 0, 0.105), (x, y, z, o) => { o[0] = 0.4 * gau(x / 0.2); }), darkLeather);
+      p.add(faceAlong(buckleGeo(0.07, 0.062, 0.0055), V3(0.494, 0.105, 0.03), V3(1, 0, 0.12).normalize(), Math.PI / 2), brass);
+    }
+    // Dress torso: slightly broader in x than the corselet so it reads at the sides. The
+    // dress is AIR-FILLED, so the belly and flank balloon out below the corselet while
     // the twill pulls tauter across the shoulders where the breastplate pins it down.
-    const t = lathe([[0.000, -0.16], [0.336, -0.17], [0.398, -0.06], [0.464, 0.10], [0.536, 0.30], [0.582, 0.470], [0.556, 0.560], [0.000, 0.572]], 22);
+    const t = lathe([[0.000, -0.16], [0.336, -0.17], [0.398, -0.06], [0.464, 0.10], [0.536, 0.30], [0.582, 0.470], [0.556, 0.560], [0.000, 0.572]], 26);
     t.scale(1, 1, 0.66);
-    p.add(fold(t, 0.030, 7.5, 0.74), cloth);
+    p.add(aux(fold(t, 0.030, 7.5, 0.74), (x, y, z, o) => { o[1] = seamD(x, z, 1); }), cloth);
     p.bake();
   }
 
@@ -585,16 +1029,43 @@ export const diver = (() => {
     p.add(fold(xf(pel, 0, 0.02, 0), 0.034, 8, 0.74), cloth);
     // the dress sags at the seat, where the air in the suit can't reach and the canvas
     // just hangs on the man — the one place the silhouette should NOT be a smooth sweep
+    const seatAux = (x, y, z, o) => {
+      const rr = Math.hypot(x, z) || 1, bk = Math.max(0, -z) / rr;
+      o[0] = 0.9 * gau((y + 0.24) / 0.13) * bk;
+      o[1] = seamD(x, z, 1);
+      if (z < 0) o[2] = (Math.hypot(x / 0.24, (y + 0.22) / 0.15) - 1) * 0.1;
+    };
+    // in the dress canvas, not the blue: it pokes through the trunks by design (the sag),
+    // and in blue the poke-through read as a jagged tear
     const seat = new THREE.SphereGeometry(0.20, 12, 9);
     seat.scale(1.34, 0.80, 0.86);
-    p.add(fold(xf(seat, 0, -0.140, -0.140), 0.024, 9, 0.70), cloth);
+    p.add(aux(fold(xf(seat, 0, -0.140, -0.140), 0.024, 9, 0.70), seatAux), leather);
     const trunk = new THREE.CapsuleGeometry(0.348, 0.13, 6, 18);       // leather trunks over the blue
     trunk.scale(1, 1, 0.86);
-    p.add(xf(trunk, 0, -0.10, 0), leather);
-    p.add(xf(band(0.368, 0.20, 0.90, 24), 0, 0.03), leather);          // wide belt
-    for (const yy of [-0.062, 0.122]) p.add(xf(new THREE.TorusGeometry(0.372, 0.017, 5, 24).rotateX(Math.PI / 2), 0, 0.03 + yy).scale(1, 1, 0.90), darkLeather);
-    p.add(xf(new THREE.BoxGeometry(0.235, 0.175, 0.032), 0, 0.03, 0.348), brass);   // rectangular buckle
-    p.add(xf(new THREE.BoxGeometry(0.145, 0.09, 0.045), 0, 0.03, 0.352), leather);
+    // the seat takes every sit on a gunwale and every slide down a rock: worn pale, with
+    // a reinforcing patch, and the side seams run down from the belt
+    p.add(aux(xf(trunk, 0, -0.10, 0), seatAux), leather);
+    // THE WEIGHT BELT: bridle leather, welted edges, a cast frame buckle with its prong
+    // through the tongue at the front and a laced adjustment at the back.
+    p.add(aux(xf(band(0.368, 0.20, 0.90, 32), 0, 0.03), (x, y, z, o) => { o[0] = 0.5 * gau((y - 0.03) / 0.12) * Math.max(0, -z) / 0.33; }), darkLeather);
+    for (const yy of [-0.062, 0.122]) p.add(xf(new THREE.TorusGeometry(0.372, 0.014, 5, 32).rotateX(Math.PI / 2), 0, 0.03 + yy).scale(1, 1, 0.90), darkLeather);
+    p.add(xf(new THREE.BoxGeometry(0.30, 0.118, 0.014), -0.02, 0.03, 0.336, 0, 0, 0), darkLeather);   // tongue under the frame
+    p.add(xf(new THREE.CylinderGeometry(0.059, 0.059, 0.014, 14, 1, false, 0, Math.PI).rotateX(Math.PI / 2).rotateZ(-Math.PI / 2), 0.13, 0.03, 0.336), darkLeather);
+    p.add(xf(buckleGeo(0.205, 0.165, 0.011, false), 0, 0.03, 0.349), brass);
+    p.add(xf(new THREE.CylinderGeometry(0.0075, 0.0075, 0.165, 7), -0.02, 0.03, 0.352), brass);       // centre bar
+    p.add(xf(new THREE.CapsuleGeometry(0.0055, 0.085, 3, 6).rotateZ(Math.PI / 2), 0.030, 0.03, 0.357), brass);  // prong
+    p.add(xf(new THREE.BoxGeometry(0.030, 0.140, 0.020), -0.13, 0.03, 0.343), darkLeather);          // keeper loop
+    // back lacing: two rows of eyelets and a criss-cross thong
+    {
+      const bz = -0.334, ys = [-0.035, 0.005, 0.045, 0.085];
+      for (const yy of ys) for (const lx of [-0.052, 0.052])
+        p.add(xf(new THREE.TorusGeometry(0.0085, 0.0038, 5, 8), lx, yy, bz - 0.003), brass);
+      for (let i = 0; i < ys.length - 1; i++) for (const sx of [-1, 1]) {
+        const c = new THREE.LineCurve3(V3(sx * 0.052, ys[i], bz - 0.006), V3(-sx * 0.052, ys[i + 1], bz - 0.006));
+        p.add(new THREE.TubeGeometry(c, 1, 0.0045, 4, false), darkLeather);
+      }
+      // (no loose tail: a 4.5 mm cord is nothing but rim, and the water's rim light made it neon)
+    }
     for (const sx of [-1, 1]) {                              // hip D-rings on the belt
       p.add(xf(new THREE.TorusGeometry(0.042, 0.012, 5, 12), sx * 0.318, -0.02, 0.13, 0, sx * 1.1, 0), brass);
     }
@@ -605,8 +1076,10 @@ export const diver = (() => {
   {
     const p = Part(spine);
     for (const sx of [-1, 1]) {
-      p.add(xf(new THREE.BoxGeometry(0.072, 0.34, 0.022), sx * 0.20, 0.50, 0.425, 0.10, 0, sx * 0.05), darkLeather);
-      p.add(xf(new THREE.BoxGeometry(0.088, 0.055, 0.02), sx * 0.20, 0.375, 0.436, 0.10, 0, sx * 0.05), brass);
+      // the harness straps lie ON the brass now and end above the skirt (buckled), instead
+      // of hanging a brass block into the air under it
+      p.add(xf(new THREE.BoxGeometry(0.072, 0.17, 0.016), sx * 0.20, 0.515, 0.432, -0.36, 0, sx * 0.05), darkLeather);
+      p.add(xf(buckleGeo(0.086, 0.05, 0.006), sx * 0.20, 0.445, 0.440, -0.36, 0, sx * 0.05), brass);
     }
     p.bake();
   }
@@ -645,13 +1118,16 @@ export const diver = (() => {
   {
     const p = Part(spine);
     const c = new THREE.CatmullRomCurve3([
-      V3(-0.155, 0.755, -0.445), V3(-0.235, 0.885, -0.415), V3(-0.305, 1.045, -0.355), V3(-0.300, 1.160, -0.290)
+      V3(-0.155, 0.755, -0.445), V3(-0.235, 0.885, -0.415), V3(-0.330, 1.035, -0.375), V3(-0.352, 1.118, -0.338)
     ]);
-    p.add(new THREE.TubeGeometry(c, 14, 0.056, 8, false), rubber);
-    for (let i = 0; i <= 11; i++) {
-      const q = c.getPoint(i / 11), tan = c.getTangent(i / 11);
-      _o.position.copy(q); _o.lookAt(q.clone().add(tan)); _o.scale.setScalar(1); _o.updateMatrix();
-      p.add(new THREE.TorusGeometry(0.058, 0.015, 5, 10).applyMatrix4(_o.matrix), rubber);
+    p.add(new THREE.TubeGeometry(c, 24, 0.052, 12, false), hoseMat);
+    // brass ferrules crimped on at both ends, and the union nut where it meets the regulator
+    for (const t of [0, 1]) {
+      const q = c.getPointAt(t), tan = c.getTangentAt(t);
+      if (t === 0) tan.negate();
+      p.add(faceAlong(lathe([[0.056, -0.05], [0.062, -0.044], [0.062, -0.006], [0.058, 0.0], [0.050, 0.004]], 16).rotateX(Math.PI / 2), q, tan), brass);
+      for (let k = 0; k < 2; k++)                             // crimp ridges
+        p.add(faceAlong(new THREE.TorusGeometry(0.0625, 0.0035, 4, 16).translate(0, 0, -0.036 + k * 0.018), q, tan), brass);
     }
     p.bake();
   }
@@ -670,15 +1146,38 @@ export const diver = (() => {
     // displacement, see fold() — are left perfectly smooth. Nothing is lost: both caps sit
     // buried inside the neighbouring segment and its gather rings.
     const capMask = len => (_x, y) => ss(0, 0.055, -y) * ss(0, 0.055, y + len);
-    pu.add(fold(segGeo(upLen, r, upProf), 0.024, 11, 1, capMask(upLen)), leather);
-    pl.add(fold(segGeo(loLen, r, loProf), 0.021, 12, 1, capMask(loLen)), leather);
+    // WEAR, SEAMS AND PATCHES, baked in the segment's own frame (+Z forward, -Z back;
+    // the elbow points back, the knee forward). rr normalises "which side of the limb".
+    const sx = x > 0 ? 1 : -1, arm = inward !== 0, ns = arm ? 1 : 2;   // arms: under+outer seam; legs: four panels
+    pu.auxFn = (px, py, pz, o) => {
+      const rr = Math.hypot(px, pz) || 1, fr = Math.max(0, pz) / rr, bk = Math.max(0, -pz) / rr;
+      o[1] = seamD(px, pz, ns);
+      o[0] = arm
+        ? 0.85 * gau((py + 0.03) / 0.07) * Math.max(0, px * sx) / rr + 0.9 * gau((py + upLen * 0.95) / 0.07) * bk
+        : 0.7 * gau((py + upLen * 0.93) / 0.07) * fr + 0.8 * gau((py + 0.05) / 0.10) * bk;
+    };
+    pl.auxFn = (px, py, pz, o) => {
+      const rr = Math.hypot(px, pz) || 1, fr = Math.max(0, pz) / rr, bk = Math.max(0, -pz) / rr;
+      o[1] = seamD(px, pz, ns);
+      if (arm) {
+        o[0] = 1.0 * gau((py + 0.03) / 0.08) * bk + 0.35 * gau((py + loLen * 0.6) / 0.12) * Math.max(0, -px * sx) / rr;
+        // elbow reinforcing patch: an ellipse on the back of the joint
+        if (pz < 0) o[2] = (Math.hypot(px / 0.078, (py + 0.075) / 0.105) - 1) * 0.08;
+      } else {
+        o[0] = 1.0 * gau((py + 0.03) / 0.09) * fr + 0.55 * gau((py + 0.25) / 0.09) * fr;
+      }
+    };
+    pu.add(aux(fold(segGeo(upLen, r, upProf), 0.024, 11, 1, capMask(upLen)), pu.auxFn), leather);
+    pl.add(aux(fold(segGeo(loLen, r, loProf), 0.021, 12, 1, capMask(loLen)), pl.auxFn), leather);
     // blue fabric underlayer: a gusset down the inner limb and a ring at the joint
     if (inward) {
       pu.add(fold(xf(new THREE.CapsuleGeometry(r * 0.42, upLen * 0.44, 5, 10), inward * r * 0.80, -upLen * 0.54, 0), 0.020, 13, 0.74), cloth);
       // clears the sleeve's fold displacement so the band never breaks into patches
       pu.add(xf(band(r * upProf(0.20) * 1.10, 0.06, 0.98, 16), 0, -upLen * 0.20), trim);
     }
-    pl.add(fold(xf(new THREE.CapsuleGeometry(r * loProf(0.02) * 1.02, 0.05, 6, 14), 0, 0.015, 0), 0.018, 14, 0.74), cloth);
+    // the joint filler is the SAME canvas as the sleeve: in blue it poked through the
+    // folded segment caps as a jagged zig-zag at every knee and elbow
+    pl.add(aux(fold(xf(new THREE.CapsuleGeometry(r * loProf(0.02) * 1.0, 0.05, 6, 14), 0, 0.015, 0), 0.018, 14, 0.74), pl.auxFn), leather);
     return { root, mid, end, pu, pl, r, upLen, loLen, taper, up: upProf, lo: loProf };
   }
   // the diver faces +Z, so his right side is -X
@@ -715,18 +1214,18 @@ export const diver = (() => {
     for (const s of [0.356, 0.712]) {                        // thigh straps with tiny buckles
       const yy = -upLen * s;
       pu.add(xf(band(rU(s) * 1.04, 0.048, 0.95, 14), 0, yy), darkLeather);
-      pu.add(xf(new THREE.BoxGeometry(0.06, 0.055, 0.022), 0, yy, rU(s) * 1.02), brass);
+      pu.add(xf(buckleGeo(0.062, 0.056, 0.0055), 0, yy, rU(s) * 1.055), brass);
     }
     const kz = rL(0.118);                                     // knee pad rides the shank's surface
     const pad = new THREE.SphereGeometry(0.10, 12, 8);        // stitched knee pad, flattened
     pad.scale(1.42, 1.72, 0.40);
-    pl.add(xf(pad, 0, -0.055, kz * 0.82), darkLeather);
+    pl.add(xf(pad, 0, -0.055, kz * 1.04), darkLeather);   // proud of the knee gather, which cut through it
     for (let i = 0; i < 12; i++) {                           // stitch dots round the pad
       const a = i / 12 * TAU;
-      pl.add(xf(new THREE.SphereGeometry(0.011, 5, 4), Math.cos(a) * 0.128, -0.055 + Math.sin(a) * 0.155, kz * 0.88), leather);
+      pl.add(xf(new THREE.SphereGeometry(0.011, 5, 4), Math.cos(a) * 0.128, -0.055 + Math.sin(a) * 0.155, kz * 1.10), leather);
     }
     pl.add(xf(band(rL(0.43) * 1.05, 0.042, 0.95, 14), 0, -0.20), darkLeather);
-    pl.add(xf(new THREE.BoxGeometry(0.055, 0.05, 0.022), 0, -0.20, rL(0.43) * 1.02), brass);
+    pl.add(xf(buckleGeo(0.056, 0.05, 0.005), 0, -0.20, rL(0.43) * 1.06), brass);
   }
   for (const l of [g.armR, g.armL, g.legR, g.legL]) { l.pu.bake(); l.pl.bake(); }
 
@@ -768,36 +1267,74 @@ export const diver = (() => {
   // local y ~ -0.365: LIFT is derived against it to plant Sal on the collision floor.
   for (const leg of [g.legR, g.legL]) {
     const p = Part(leg.end);
-    p.add(fold(xf(band(0.128, 0.15, 0.95, 14), 0, -0.018), 0.011, 15, 0.74), cloth);
-    p.add(xf(band(0.134, 0.046, 0.95, 14), 0, 0.058), trim);
+    // sock and trim ride just OUTSIDE the shank's folded bottom, which used to bite them
+    // into a jagged blue-and-white zig-zag round every ankle
+    p.add(fold(xf(band(0.140, 0.15, 0.95, 22), 0, -0.018), 0.002, 15, 0.74), cloth);
+    p.add(xf(band(0.152, 0.046, 0.95, 22), 0, 0.058), trim);
     // Ankle flare: the boot's leather cuff opening out from the narrow ankle. A CLOSED
     // solid, not an open lathe skirt — an open lathe here showed its back faces through
     // the mouth and read as a lampshade hung round the leg.
-    p.add(xf(new THREE.CylinderGeometry(0.120, 0.170, 0.20, 14, 1).scale(1, 1, 0.96), 0, -0.095), leather);
+    p.add(xf(new THREE.CylinderGeometry(0.120, 0.170, 0.20, 22, 1).scale(1, 1, 0.96), 0, -0.095), darkLeather);
     p.add(xf(new THREE.TorusGeometry(0.168, 0.021, 6, 16).rotateX(Math.PI / 2).scale(1, 1, 0.96), 0, -0.176), darkLeather);
     // vamp: the body of the foot, broader at the ball than at the ankle. These are
     // WEIGHTED boots — a hundredweight of brass and lead between the two of them — so the
     // foot has to out-mass the ankle by a lot or it reads as a slipper under a heavy leg.
     const vamp = new THREE.CapsuleGeometry(0.120, 0.21, 6, 12).rotateX(Math.PI / 2);
     vamp.scale(1.06, 0.90, 1);
-    p.add(xf(vamp, 0, -0.238, 0.070), leather);
+    p.add(xf(vamp, 0, -0.238, 0.070), darkLeather);   // boots are leather, not dress canvas
     for (let i = 0; i < 4; i++) {                            // laces over the instep
       p.add(xf(new THREE.CylinderGeometry(0.011, 0.011, 0.21, 5).rotateZ(Math.PI / 2), 0, -0.150 + i * 0.012, 0.05 + i * 0.054, 0.28, 0, 0), darkLeather);
       for (const sx of [1, -1]) p.add(xf(new THREE.SphereGeometry(0.015, 5, 4), sx * 0.106, -0.150 + i * 0.012, 0.05 + i * 0.054), brass);
     }
-    p.add(xf(new THREE.BoxGeometry(0.252, 0.052, 0.072), 0, -0.230, 0.105), darkLeather);   // instep strap
-    p.add(xf(new THREE.BoxGeometry(0.06, 0.045, 0.02), 0.124, -0.230, 0.105), brass);
-    const toe = new THREE.SphereGeometry(0.124, 12, 8);       // toe box: wider than it is tall
+    // instep strap: a real strap arched over the vamp, square frame buckle on the outside
+    p.add(xf(new THREE.TorusGeometry(0.128, 0.013, 4, 16, Math.PI).scale(1.08, 0.94, 2.3), 0, -0.236, 0.112), darkLeather);
+    p.add(faceAlong(buckleGeo(0.052, 0.046, 0.0045), V3(0.139, -0.222, 0.112), V3(1, 0.25, 0).normalize(), Math.PI / 2), brass);
+    // ankle strap round the top of the boot, buckled on the outside
+    p.add(xf(band(0.157, 0.040, 0.96, 24), 0, -0.118), darkLeather);
+    p.add(faceAlong(buckleGeo(0.048, 0.042, 0.0045), V3(0.160, -0.118, 0.0), V3(1, 0, 0), Math.PI / 2), brass);
+    const toe = new THREE.SphereGeometry(0.124, 14, 9);       // toe box: wider than it is tall
     toe.scale(1.10, 0.80, 1.26);
-    p.add(xf(toe, 0, -0.244, 0.185), leather);
-    // toe RAND, not a capping sphere: a co-surfaced cap z-fought the toe box into a
-    // sawtooth. A band wrapped round the front of the box is the real detail anyway.
-    p.add(xf(new THREE.TorusGeometry(0.114, 0.021, 6, 16, Math.PI * 1.15).scale(1.14, 0.86, 1)
-      .rotateX(Math.PI / 2).rotateY(-Math.PI * 0.075), 0, -0.252, 0.200), steel);
-    p.add(xf(new THREE.BoxGeometry(0.210, 0.085, 0.150), 0, -0.306, -0.085), darkLeather);                // stacked heel block
-    p.add(xf(new THREE.BoxGeometry(0.250, 0.055, 0.46), 0, -0.328, 0.055), rubber);                       // thick sole
-    p.add(xf(new THREE.BoxGeometry(0.262, 0.026, 0.472), 0, -0.3505, 0.055), steel);                      // lead sole plate
-    rivetRing(p, brass, 10, 0.120, -0.3505, 0.016, 1.9);
+    p.add(xf(toe, 0, -0.244, 0.185), darkLeather);
+    // BRASS TOE CAP: a spun shell over the front of the toe box, standing 5% proud of it
+    // (a co-surfaced cap z-fights, which is why the old build fell back to a steel rand),
+    // with a rolled rim and a line of cap rivets. It is the Mark V boot's signature.
+    {
+      const capG = new THREE.SphereGeometry(0.124, 18, 8, Math.PI * 0.10, Math.PI * 0.80, 0, Math.PI * 0.60);
+      capG.scale(1.10 * 1.05, 0.80 * 1.05, 1.26 * 1.05);
+      p.add(cav(xf(capG, 0, -0.244, 0.185), (x, y, z) => 0.7 * (1 - ss(-0.33, -0.29, y)) + 0.5 * (1 - ss(0.13, 0.16, z))), brass);
+      // rim: follows the cap's open edge (theta = 0.6 PI) round the front
+      const rim = [];
+      for (let i = 0; i <= 12; i++) {
+        const ph = Math.PI * (0.10 + 0.80 * i / 12), th = Math.PI * 0.60, R = 0.124 * 1.05;
+        rim.push(V3(-R * Math.cos(ph) * Math.sin(th) * 1.10, -0.244 + R * Math.cos(th) * 0.80, 0.185 + R * Math.sin(ph) * Math.sin(th) * 1.26));
+      }
+      p.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim), 16, 0.006, 5, false), brass);
+      for (let i = 1; i < 12; i += 2) p.add(xf(new THREE.SphereGeometry(0.0065, 5, 4), rim[i].x * 1.02, rim[i].y + 0.008, rim[i].z + 0.004), brass);
+    }
+    p.add(xf(new THREE.BoxGeometry(0.210, 0.085, 0.150), 0, -0.286, -0.085), darkLeather);                // stacked heel block
+    // THE LEAD SOLE: one casting in the outline of the foot (heel, waist, ball, toe),
+    // chamfered all round, nailed through to the welt. Its underside is the contract:
+    // it sits at exactly SOLE_Y (-0.3665 in the ankle frame), which the IK plants on.
+    {
+      const sh = new THREE.Shape(), outline = [
+        [0.000, -0.185], [0.070, -0.176], [0.100, -0.140], [0.104, -0.060], [0.098, 0.030], [0.122, 0.130],
+        [0.130, 0.215], [0.112, 0.285], [0.066, 0.328], [0.000, 0.338]];
+      const pts = outline.concat(outline.slice(1, -1).reverse().map(q => [-q[0], q[1]]));
+      sh.moveTo(pts[0][0], -pts[0][1]);
+      sh.splineThru(pts.slice(1).map(q => new THREE.Vector2(q[0], -q[1])).concat([new THREE.Vector2(pts[0][0], -pts[0][1])]));
+      const SOLE = -0.3665, BT = 0.009, DEP = 0.048;   // SOLE === SOLE_Y below (declared after the build)
+      const sole = new THREE.ExtrudeGeometry(sh, { depth: DEP, bevelEnabled: true, bevelThickness: BT, bevelSize: 0.008,
+        bevelSegments: 2, curveSegments: 3, steps: 1 });
+      sole.rotateX(-Math.PI / 2).translate(0, SOLE + BT, 0);
+      p.add(cav(sole, (x, y) => 0.45 * ss(SOLE + 0.05, SOLE + 0.066, y)), lead);
+      // leather welt where the upper meets the lead, and the brass sole nails through it
+      const wc = new THREE.CatmullRomCurve3(pts.map(q => V3(q[0] * 1.01, SOLE + DEP + 2 * BT + 0.003, q[1] * 1.01)), true);
+      p.add(new THREE.TubeGeometry(wc, 40, 0.0105, 5, true), darkLeather);
+      for (let i = 0; i < 14; i++) {
+        const q = wc.getPointAt(i / 14);
+        p.add(xf(new THREE.SphereGeometry(0.0072, 5, 4), q.x * 1.04, SOLE + DEP * 0.62, q.z * 1.04), brass);
+      }
+    }
     p.bake();
   }
 
@@ -879,19 +1416,36 @@ export const diver = (() => {
     lantern.scale.setScalar(1.25);
     pivot.add(lantern);
 
-    const cage = Part(lantern);   // thin members cast the streaked light pattern
+    // THE LANTERN as a made thing: round brass posts and bowed guard wires (the members
+    // that cast the streaked light), a blown glass globe on a brass fount with its wick,
+    // and a vented crown that lets the heat out. The flame, core and halo are unchanged.
+    const cage = Part(lantern);
     for (let i = 0; i < 4; i++) {
       const a = i / 4 * TAU + Math.PI / 4;
-      cage.add(xf(new THREE.BoxGeometry(0.022, 0.25, 0.022), Math.cos(a) * 0.098, -0.145, Math.sin(a) * 0.098, 0, -a, 0), brass);
+      cage.add(xf(new THREE.CylinderGeometry(0.0085, 0.0085, 0.25, 6), Math.cos(a) * 0.098, -0.145, Math.sin(a) * 0.098), brass);
+      const b = a + Math.PI / 4;                              // a guard wire between each pair of posts
+      const w = new THREE.CatmullRomCurve3([V3(Math.cos(b) * 0.094, -0.088, Math.sin(b) * 0.094),
+        V3(Math.cos(b) * 0.110, -0.145, Math.sin(b) * 0.110), V3(Math.cos(b) * 0.094, -0.202, Math.sin(b) * 0.094)]);
+      cage.add(new THREE.TubeGeometry(w, 6, 0.0045, 4, false), brass);
     }
-    cage.add(xf(new THREE.TorusGeometry(0.098, 0.010, 5, 14).rotateX(Math.PI / 2), 0, -0.085), brass);
-    cage.add(xf(new THREE.TorusGeometry(0.098, 0.010, 5, 14).rotateX(Math.PI / 2), 0, -0.205), brass);
+    for (const yy of [-0.085, -0.205]) cage.add(xf(new THREE.TorusGeometry(0.098, 0.009, 6, 24).rotateX(Math.PI / 2), 0, yy), brass);
+    cage.add(xf(new THREE.TorusGeometry(0.106, 0.005, 5, 24).rotateX(Math.PI / 2), 0, -0.145), brass);
     cage.bake(true);
 
     const shell = Part(lantern);  // bulky caps: no shadow, they'd swallow the seafloor light
-    shell.add(lathe([[0.000, 0.02], [0.055, 0.015], [0.075, -0.005], [0.118, -0.03], [0.128, -0.048], [0.106, -0.055], [0.100, -0.062]], 14), brass);
-    shell.add(lathe([[0.000, -0.315], [0.105, -0.312], [0.118, -0.295], [0.112, -0.255], [0.100, -0.245]], 14), brass);
-    shell.add(xf(new THREE.CylinderGeometry(0.086, 0.086, 0.185, 12, 1, true), 0, -0.145), lantGlass);
+    shell.add(lathe([[0.000, 0.02], [0.055, 0.015], [0.075, -0.005], [0.118, -0.03], [0.128, -0.048], [0.106, -0.055], [0.100, -0.062]], 24), brass);
+    // vented crown on the cap: a short stack with a hood, the vents dark (deep crevice)
+    shell.add(lathe([[0.000, 0.078], [0.030, 0.078], [0.044, 0.068], [0.046, 0.060], [0.034, 0.056], [0.034, 0.030], [0.052, 0.022], [0.056, 0.014]], 18), brass);
+    for (let i = 0; i < 8; i++) {
+      const a = i / 8 * TAU;
+      shell.add(cav(faceAlong(new THREE.CircleGeometry(0.0075, 8), V3(Math.cos(a) * 0.0345, 0.043, Math.sin(a) * 0.0345), V3(Math.cos(a), 0, Math.sin(a))), 1), brass);
+    }
+    shell.add(lathe([[0.000, -0.315], [0.105, -0.312], [0.118, -0.295], [0.112, -0.255], [0.100, -0.245]], 24), brass);
+    // the fount and burner, and the wick (a crevice-dark stub under the flame)
+    shell.add(lathe([[0.000, -0.245], [0.062, -0.245], [0.066, -0.236], [0.052, -0.214], [0.024, -0.205], [0.021, -0.193], [0.000, -0.193]], 18), brass);
+    shell.add(cav(xf(new THREE.CylinderGeometry(0.010, 0.011, 0.016, 8), 0, -0.186), 1), brass);
+    // the blown globe, bellied, open top and bottom
+    shell.add(lathe([[0.050, -0.242], [0.068, -0.228], [0.082, -0.200], [0.087, -0.160], [0.084, -0.118], [0.072, -0.084], [0.056, -0.064]], 20), lantGlass);
     shell.bake(false);
 
     const flame = new THREE.Mesh(new THREE.ConeGeometry(0.030, 0.10, 7), flameMat);
@@ -2014,6 +2568,15 @@ export function updateDiver(dt, t, player) {
   // rather than the diver's, so the last of the exhale still leaves as he goes under.
   diver.exhaust.getWorldPosition(_ex);
   const submerged = _ex.y < SURFACE_Y + surfaceHeightAt(_ex.x, _ex.z, t, stormLevel());
+  // THE DRESS SOAKS AND DRIES. Under water the canvas is soaked in ~half a second; on
+  // deck it dries over ~75 s, helmet first (the shader dries it top-down). Two float
+  // writes, no allocation, and nothing here feeds the breath clock below.
+  salShared.uSalRootY.value = diver.position.y - EYE_H;
+  salShared.uSalWet.value = submerged ? Math.min(1, salShared.uSalWet.value + dt * 2.0)
+    : Math.max(0, salShared.uSalWet.value - dt / 75);
+  // beads on the port glass exist only in air: gone under water, thick just after he
+  // surfaces, drying off with the dress down to a faint condensation film
+  salShared.uSalDrop.value = submerged ? 0 : 0.15 + 0.85 * salShared.uSalWet.value;
   const phm = breathPh % TAU;
   if (phm < _phPrev) {                                  // wrapped: a cycle completed
     breathIdx++;
