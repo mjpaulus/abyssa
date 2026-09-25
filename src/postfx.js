@@ -983,7 +983,8 @@ function restoreQuality() {
 //     about the new chain. A COOLDOWN follows any change before judging resumes.
 //   * Panic is sized by log2(overshoot): floor(log2(median / budget)) rungs at once,
 //     at least one, never past rung 3 (the terminal rung only ever fires alone, on
-//     its own sustained evidence).
+//     its own sustained evidence, and only with the GPU median over half the budget
+//     where the timer exists — it is permanent, and a CPU-bound frame gains nothing).
 //   * The UPGRADE path climbs one rung when the median shows HEADROOM for SUSTAIN_UP
 //     seconds: the frame keeps pace with the governor AND the GPU median is under
 //     UP_FRAC of the budget (uncapped or without the timer extension, the wall median
@@ -1035,8 +1036,10 @@ export function samplePerf(dt, active, cap = 0) {
   if (warmT < WARMUP) { warmT += real; return; }
 
   wallWin[wallAt] = real * 1000; wallAt = (wallAt + 1) % WIN; if (wallN < WIN) wallN++;
-  sinceJudge += real;
+  // The cooldown fills the window (those frames are the new chain's) but is not
+  // evidence: the judge's clock only runs once it is over.
   if (coolT > 0) { coolT -= real; return; }
+  sinceJudge += real;
   if (sinceJudge < JUDGE_EVERY || wallN < WIN >> 1) return;
   const step = sinceJudge; sinceJudge = 0;
 
@@ -1053,6 +1056,10 @@ export function samplePerf(dt, active, cap = 0) {
       const over = median / budget;
       let rungs = Math.max(1, Math.floor(Math.log2(over)));
       if (degradeStage < 3) rungs = Math.min(rungs, 3 - degradeStage);   // panic stops short of the terminal rung
+      // The terminal rung is permanent and sheds GPU work. Where the timer exists it
+      // has to show the GPU is actually the cost (over half the budget): a CPU-bound
+      // frame (physics, a script stall) gains nothing from losing its shadows.
+      else if (gmed != null && gmed < budget * 0.5) { badT = 0; return; }
       else rungs = 1;
       let done = false;
       for (let i = 0; i < rungs && !done; i++) done = degradeQuality();
