@@ -385,3 +385,216 @@ export function rockMapSet(variant = 0) {
 }
 
 export { rng };
+
+// =====================================================================================
+// ==== BLOCK: polish-world (wrecks / flora / gardens) — appended 2026-09-25 ===========
+// Owned by the polish-world branch. Two generated sets, both baked once, cached forever,
+// both DataTextures (mipmapped, anisotropic, RepeatWrapping):
+//   ironPlateSet()  riveted ship plating for the wrecks
+//   bladeMapSet()   the thin-blade vein/rib map for kelp and fan blades
+// =====================================================================================
+
+// Shared tileable lattice helpers for this block (the rock set keeps its own copies so
+// its bake stays bit-identical).
+function _pwLattice(rand, n) {
+  const g = new Float32Array(n * n);
+  for (let i = 0; i < n * n; i++) g[i] = rand();
+  return { n, g };
+}
+function _pwSmp(L, x, y) {
+  const { n, g } = L;
+  x -= Math.floor(x); y -= Math.floor(y);
+  const fx = x * n, fy = y * n, xi = Math.floor(fx), yi = Math.floor(fy);
+  const x0 = xi % n, y0 = yi % n, x1 = (x0 + 1) % n, y1 = (y0 + 1) % n;
+  let tx = fx - xi, ty = fy - yi;
+  tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+  const a = g[y0 * n + x0], b = g[y0 * n + x1], c = g[y1 * n + x0], d = g[y1 * n + x1];
+  const top = a + (b - a) * tx;
+  return top + ((c + (d - c) * tx) - top) * ty;
+}
+function _pwFbm(octs, x, y) {
+  let v = 0, amp = 0.5, tot = 0;
+  for (let o = 0; o < octs.length; o++) { v += _pwSmp(octs[o], x, y) * amp; tot += amp; amp *= 0.5; }
+  return v / tot;
+}
+function _pwTex(data, S, T, srgb) {
+  const t = new THREE.DataTexture(data, S, T, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.generateMipmaps = true;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.anisotropy = MAX_ANISO;
+  t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+  t.needsUpdate = true;
+  return t;
+}
+function _pwNormals(h, S, T, slope, out, aFn) {
+  const ex = 1.5 / S, ey = 1.5 / T;
+  for (let y = 0; y < T; y++) {
+    const ym = (y - 1 + T) % T, yp = (y + 1) % T;
+    for (let x = 0; x < S; x++) {
+      const xm = (x - 1 + S) % S, xp = (x + 1) % S, i = y * S + x, o = i * 4;
+      const gx = (h[y * S + xp] - h[y * S + xm]) / (2 * ex);
+      const gy = (h[yp * S + x] - h[ym * S + x]) / (2 * ey);
+      let nx = -gx * slope, ny = -gy * slope, nz = 1;
+      const il = 1 / Math.hypot(nx, ny, nz); nx *= il; ny *= il; nz *= il;
+      out[o] = (nx * 0.5 + 0.5) * 255; out[o + 1] = (ny * 0.5 + 0.5) * 255;
+      out[o + 2] = (nz * 0.5 + 0.5) * 255; out[o + 3] = aFn ? aFn(i) : 255;
+    }
+  }
+}
+
+// ---- THE IRON PLATE SET (wrecks.js: trawler, submersible, every iron fitting) --------
+// One tile = two strakes of riveted plating (u runs along the strake, v across it).
+// Each strake is two plates butted end to end, the butts staggered strake to strake the
+// way a yard lays them. The strake's LOWER edge laps proud over the one below (a height
+// ramp across the strake that drops at the seam), seams are cut as grooves, and rivet
+// heads stand in double rows along every lap and single rows down every butt.
+// Dents: a handful of broad pressure dishes per plate plus low fbm. Rust: patchy bloom
+// that POOLS round every rivet head and weeps along the seams, over a dark grey-green
+// oxide paint that survives in the flat middles of the plates.
+//   map   (sRGB)   : RGB albedo, A = rust SOURCE mask (rivet blooms + seam weep) — the
+//                    wreck shader smears this down the hull along world gravity.
+//   nrm   (linear) : tangent-space normal, A = cavity (0 in seams/around heads).
+//   pack  (linear) : R = unused (1), G = roughness (three reads .g), B = height, A = 255.
+// Boot cost ~70 ms at 512^2 (measured in the polish-world log).
+let _ironSet = null;
+export function ironPlateSet() {
+  if (_ironSet) return _ironSet;
+  const S = 512, N = S * S;
+  const rand = seededRand(0x1A0B7A7E);
+  const low = [4, 8, 16].map(n => _pwLattice(rand, n));
+  const mid = [16, 32, 64].map(n => _pwLattice(rand, n));
+  const fine = [64, 128, 256].map(n => _pwLattice(rand, n));
+  const STRAKES = 2, RIV_U = 22, RIV_B = 7;
+  // per-plate dents: 4 strake-plates per tile, three dishes each
+  const dents = [];
+  for (let k = 0; k < STRAKES * 2 * 3; k++) dents.push([rand(), rand(), 0.05 + rand() * 0.09, 0.5 + rand() * 0.8]);
+  const h = new Float32Array(N), src = new Float32Array(N), rust = new Float32Array(N), cav = new Float32Array(N);
+  const sst = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+  for (let y = 0; y < S; y++) {
+    const v = y / S;
+    const sv = v * STRAKES, si = Math.floor(sv), sf = sv - si;       // strake index / frac
+    for (let x = 0; x < S; x++) {
+      const u = x / S, i = y * S + x;
+      // butt joints: plates are half a tile long, staggered a quarter tile per strake
+      const bu = (u * 2 + si * 0.5) % 1, bi = Math.floor(u * 2 + si * 0.5);
+      // distances (in tile units) to the nearest lap seam and nearest butt
+      const dSeam = Math.min(sf, 1 - sf) / STRAKES;
+      const dButt = Math.min(bu, 1 - bu) / 2;
+      // plate body: lap ramp (lower edge proud), broad dents, low fbm buckle
+      let hh = 0.46 + 0.07 * sf + 0.10 * (_pwFbm(low, u, v) - 0.5);
+      for (let k = 0; k < 3; k++) {
+        const d = dents[((si * 2 + (bi & 1)) * 3 + k) % dents.length];
+        const cx = (d[0] * 0.5 + (bi & 1) * 0.5 - si * 0.25), cy = (si + 0.15 + d[1] * 0.7) / STRAKES;
+        let dx = u - cx; dx -= Math.round(dx);
+        let dy = v - cy; dy -= Math.round(dy);
+        hh -= 0.05 * d[3] * Math.exp(-(dx * dx + dy * dy) / (d[2] * d[2]));
+      }
+      // seams: cut grooves, the lap edge rounded over
+      const seamG = 1 - sst(0.0, 0.0065, dSeam), buttG = 1 - sst(0.0, 0.005, dButt);
+      hh -= 0.20 * Math.max(seamG, buttG);
+      // rivets: double row either side of every lap seam, single row down every butt
+      let riv = 0, near = 0;
+      const ru = u * RIV_U, rf = ru - Math.floor(ru) - 0.5;
+      for (const off of [0.018, 0.036]) {
+        for (const side of [-1, 1]) {
+          const ry = (side < 0 ? si : si + 1) / STRAKES + side * -off;
+          let dy2 = v - ry; dy2 -= Math.round(dy2);
+          const stag = off > 0.03 ? 0.5 : 0;
+          let rx = ru + stag; rx = rx - Math.floor(rx) - 0.5;
+          const d = Math.hypot(rx / RIV_U, dy2);
+          if (d < 0.0085) riv = Math.max(riv, Math.sqrt(1 - (d / 0.0085) ** 2));
+          near = Math.max(near, Math.exp(-(d * d) / (0.024 * 0.024)));
+        }
+      }
+      {
+        const rv = v * RIV_B * STRAKES, rvf = rv - Math.floor(rv) - 0.5;
+        const d = Math.hypot(dButt - 0.016, rvf / (RIV_B * STRAKES));
+        if (d < 0.0085) riv = Math.max(riv, Math.sqrt(1 - (d / 0.0085) ** 2));
+        near = Math.max(near, Math.exp(-(d * d) / (0.024 * 0.024)));
+      }
+      hh += 0.16 * riv;
+      // fine pitting / scale
+      const pit = _pwFbm(fine, u, v);
+      hh += 0.016 * (pit - 0.5) - 0.028 * Math.max(0, pit - 0.72);
+      // rust: patchy fbm field, pooled at the rivet heads and weeping from the seams
+      const patch = 0.62 * _pwFbm(low, u + 0.37, v + 0.11) + 0.38 * _pwFbm(mid, u + 0.37, v + 0.11);
+      let r = sst(0.46, 0.66, patch + 0.30 * near + 0.22 * Math.max(seamG, buttG));
+      r = Math.max(r, near * 0.75 * sst(0.35, 0.6, patch + 0.2));
+      h[i] = hh; rust[i] = r;
+      src[i] = Math.min(1, near * 0.9 + 0.7 * Math.max(seamG, buttG) * sst(0.4, 0.6, patch));
+      cav[i] = 1 - Math.max(seamG, buttG) * 0.8 - (near - riv) * 0.25;
+    }
+  }
+  const map = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4), pack = new Uint8Array(N * 4);
+  // paint: dark oxide grey-green; rust: dark umber through to a dull orange bloom
+  const P0 = [0.105, 0.115, 0.108], P1 = [0.165, 0.170, 0.155];
+  const R0 = [0.170, 0.080, 0.040], R1 = [0.340, 0.160, 0.066];
+  for (let i = 0; i < N; i++) {
+    const o = i * 4, x = i % S, y = (i / S) | 0;
+    const t = _pwFbm(fine, x / S * 0.5 + 0.2, y / S * 0.5);   // tonal breakup
+    const r = rust[i], c = Math.max(0.35, cav[i]);
+    for (let k = 0; k < 3; k++) {
+      const paint = P0[k] + (P1[k] - P0[k]) * t;
+      const rc = R0[k] + (R1[k] - R0[k]) * Math.min(1, r * 1.2 * (0.6 + 0.8 * t));
+      const lin = (paint + (rc - paint) * r) * c;
+      map[o + k] = Math.min(255, Math.max(0, Math.pow(lin, 1 / 2.2) * 255));
+    }
+    map[o + 3] = Math.min(255, src[i] * 255);
+    pack[o] = 255;
+    pack[o + 1] = Math.min(255, (0.55 + 0.42 * r + 0.08 * (1 - cav[i])) * 255);
+    pack[o + 2] = Math.min(255, Math.max(0, h[i] * 255));
+    pack[o + 3] = 255;
+  }
+  _pwNormals(h, S, S, 2.6, nrm, i => Math.min(255, Math.max(0, cav[i] * 255)));
+  _ironSet = { map: _pwTex(map, S, S, true), nrm: _pwTex(nrm, S, S, false), pack: _pwTex(pack, S, S, false), size: S };
+  return _ironSet;
+}
+
+// ---- THE BLADE MAP SET (flora.js kelp, gardens.js/flora.js fans and seagrass) ---------
+// A 128 x 512 map in BLADE space: u across the blade (0 edge .. 0.5 midrib .. 1 edge),
+// v along it (0 base .. 1 tip). The midrib is a raised ridge that thins toward the tip;
+// lateral veins leave it at a shallow angle toward the tip (herringbone, like a real
+// laminaria blade) and fade before the margin; between the veins the lamina is bullate
+// (a soft blistered quilting). Non-tiling in v on purpose — it spans exactly one blade.
+//   nrm  : tangent-space normal (x across, y along), A = 255
+//   pack : R = vein/rib mask (bright where the blade is thick), G = thickness (0 at the
+//          margin, 1 on the rib — the translucency term reads 1-G), B = bullate
+//          blister height, A = 255
+let _bladeSet = null;
+export function bladeMapSet() {
+  if (_bladeSet) return _bladeSet;
+  const W = 128, H = 512, N = W * H;
+  const rand = seededRand(0xB1ADE5E7);
+  const bl = [8, 16, 32].map(n => _pwLattice(rand, n));
+  const h = new Float32Array(N), vein = new Float32Array(N), thick = new Float32Array(N), blis = new Float32Array(N);
+  for (let y = 0; y < H; y++) {
+    const v = y / H;
+    for (let x = 0; x < W; x++) {
+      const u = x / W, i = y * W + x, a = Math.abs(u - 0.5) * 2;      // 0 rib .. 1 edge
+      const ribW = 0.06 * (1 - 0.6 * v) + 0.015;
+      const rib = Math.exp(-(a * a) / (ribW * ribW));
+      // lateral veins: lines of constant (v - k*a), spacing tightening toward the tip
+      const ph = (v * 26 - a * 2.4) ;
+      const f = ph - Math.floor(ph);
+      const vl = Math.exp(-((f - 0.5) * (f - 0.5)) / 0.004) * (1 - a * 0.85) * (0.55 + 0.45 * v);
+      const b = _pwFbm(bl, u * 0.5 + 0.13, v * 2.0);
+      const blister = (1 - a) * (0.5 + 0.5 * Math.sin(ph * Math.PI * 2 + 1.6)) * (0.6 + 0.8 * b);
+      h[i] = 0.55 * rib + 0.14 * vl + 0.10 * blister;
+      vein[i] = Math.min(1, rib + vl * 0.8);
+      thick[i] = Math.min(1, 0.25 + 0.75 * rib + 0.2 * vl) * (1 - Math.pow(a, 6) * 0.8);
+      blis[i] = blister;
+    }
+  }
+  const nrm = new Uint8Array(N * 4), pack = new Uint8Array(N * 4);
+  _pwNormals(h, W, H, 3.0, nrm, null);
+  for (let i = 0; i < N; i++) {
+    const o = i * 4;
+    pack[o] = vein[i] * 255; pack[o + 1] = thick[i] * 255; pack[o + 2] = Math.min(255, blis[i] * 255); pack[o + 3] = 255;
+  }
+  const mk = (d, srgb) => { const t = _pwTex(d, W, H, srgb); t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping; return t; };
+  _bladeSet = { nrm: mk(nrm, false), pack: mk(pack, false) };
+  return _bladeSet;
+}
+// ==== END BLOCK: polish-world ========================================================
