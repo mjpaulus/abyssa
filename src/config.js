@@ -19,7 +19,7 @@ export const LEVIATHAN_CFG = [
   // the serpent's and unused by her, kept so a chart row can still ask for the serpent.
   { kind: 'brooder', segs: 30, size: 5.5, speed: 9, nSigils: 3, color: 0x1d3a44, emiss: 0x0e2a33, hue: 0.52, name: 'VELKATH, THE BROODER' },
   { kind: 'hoarder', segs: 40, size: 7.5, speed: 12, nSigils: 4, color: 0x2a1d44, emiss: 0x1d1033, hue: 0.74, name: 'ORUNE, THE HOARDER' },
-  { kind: 'serpent', segs: 52, size: 10, speed: 15, nSigils: 5, color: 0x441d1d, emiss: 0x330e0e, hue: 0.02, name: 'MHOR, THE LAST FURNACE' }
+  { kind: 'hunter', segs: 52, size: 10, speed: 15, nSigils: 5, color: 0x441d1d, emiss: 0x330e0e, hue: 0.02, name: 'MHOR, THE HUNTER' }
 ];
 
 // THE SUN. One direction, shared: lighting.js aims the key light and its shadow camera

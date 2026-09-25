@@ -134,7 +134,10 @@ against explicit contracts and reviewed on return.
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (knife frees: `lev.onSlash`), flinch from light; wards on
   the sucker faces answer the sonar; calmed, a lighthouse. `lev.rite` is the generic
-  [E]/prompt hook both use.
+  [E]/prompt hook all three use. Zone 2 SHIPS MHOR THE HUNTER (`sleeper/hunter.js`):
+  absent until THE LAST FURNACE is fed 2 bitumen (warm pocket refills air); arrives
+  from the deep, circles, strikes; a strike through the flare stuns him (keepers
+  scatter, wards open). The serpent kind remains for chart rows / `__lev.fp`.
 - `world/gardens.js` — the plant vocabulary (12 instanced types by zone: fans/seagrass/
   staghorn/sponges/anemones; tube worms with retracting plumes on activeVents, mats,
   crinoids; sea pens/glass sponges/whips). Own siteParams('gardens') stream (site.js has

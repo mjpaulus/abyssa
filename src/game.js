@@ -304,6 +304,7 @@ addEventListener('keydown', e => {
   if (e.code === 'KeyQ' && state === 'play' && survival.ink > 0) {
     if (deployInk(player.pos)) {
       survival.ink--;
+      player.inkAt = performance.now();   // the Hunter reads it: ink in his line breaks a strike
       chime(196, 1.2, 0.2, 'pickup');
       showMsg('INK VENTED', 2);
     }
