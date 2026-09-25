@@ -3,8 +3,27 @@
 // perimeter fittings (<= y 0.35) all round. Everything here answers one question —
 // what does the pump eat, and who feeds it — because bitumen and polymer are a real
 // resource loop in this game, not set dressing. OWNED BY: raft-detail agent (gear).
+import * as THREE from 'three';
 import { box, cyl, sph, tor, lathe, weather, rivetRing, boltLine, rope, coil,
-  lash, barrel, Part } from './kit.js';
+  lash, barrel, Part, xf, chamferBox, tint, state } from './kit.js';
+
+// A packing crate as a crate: a chamfered body with proud battens round the top and
+// bottom edges and down the corners, and a rope becket on one end. Built about its own
+// origin, then turned and placed (xf twice: local, then the crate's own yaw and seat).
+function crate(P, wood, x, y, z, w, h, d, ry, tone = 0.9) {
+  const put = (g, lx, ly, lz, t = tone) => P.add(weather(xf(xf(g, lx, ly, lz), x, y, z, 0, ry, 0), { tone: t, freq: 2.4, amp: 0.26 }), wood);
+  put(chamferBox(w - 0.03, h - 0.03, d - 0.03, 0.008, 2), 0, 0, 0);
+  const b = 0.045, t = 0.018;
+  for (const sy of [-1, 1]) {
+    const yy = sy * (h / 2 - b / 2);
+    put(chamferBox(w, b, t, 0.005), 0, yy, d / 2 - t / 2, tone * 0.92);
+    put(chamferBox(w, b, t, 0.005), 0, yy, -d / 2 + t / 2, tone * 0.92);
+    put(chamferBox(t, b, d, 0.005), w / 2 - t / 2, yy, 0, tone * 0.92);
+    put(chamferBox(t, b, d, 0.005), -w / 2 + t / 2, yy, 0, tone * 0.92);
+  }
+  for (const sx of [-1, 1]) for (const sz of [-1, 1])
+    put(chamferBox(b, h - 2 * b, t, 0.005).rotateX(0), sx * (w / 2 - b / 2), 0, sz * (d / 2 - t / 2 + 0.001), tone * 0.95);
+}
 
 const DY = 0.11; // deck top; everything not on a chock sits with its base flush here.
 
@@ -25,7 +44,7 @@ export function buildGear(group, mats) {
 
   const chockH = 0.16;
   for (const s of [-1, 1]) {
-    P.put(weather(box(0.16, chockH, 0.30), { tone: 0.85 }), wood2,
+    P.put(weather(chamferBox(0.16, chockH, 0.30, 0.012), { tone: 0.85 }), wood2,
       bC.x + s * 0.16, DY + chockH / 2, bC.z, 0, 0.1, 0);
   }
   const cY = DY + chockH + bC.h / 2;
@@ -50,25 +69,57 @@ export function buildGear(group, mats) {
   // deck, not a corner shared with anything else.
   coil(P, hose, 3.95, DY + 0.02, -0.05, 0.34, 4, 0.045, 0.05);
   for (const x of [3.55, 4.30]) {
-    P.put(weather(box(0.10, 0.10, 0.28), { tone: 0.85 }), wood2, x, DY + 0.05, -0.05, 0, 0, 0);
+    P.put(weather(chamferBox(0.10, 0.10, 0.28, 0.012), { tone: 0.85 }), wood2, x, DY + 0.05, -0.05, 0, 0, 0);
   }
 
   // ---- LASHED CARGO ------------------------------------------------------------------
   // Crates and a small cask, thrown-tarp over the top, the tarp actually made off to
   // ring bolts rather than just draped — a tarp with nothing holding it down reads as
   // a mistake the first time the raft rolls.
-  P.put(weather(box(0.62, 0.46, 0.58), { tone: 0.9 }), wood2, 2.55, DY + 0.23, 1.10, 0, 0.15, 0);
-  P.put(weather(box(0.46, 0.36, 0.42), { tone: 0.9 }), wood2, 3.05, DY + 0.18, 0.85, 0, -0.20, 0);
+  crate(P, wood2, 2.55, DY + 0.23, 1.10, 0.62, 0.46, 0.58, 0.15, 0.9);
+  crate(P, wood2, 3.05, DY + 0.18, 0.85, 0.46, 0.36, 0.42, -0.20, 0.82);
   barrel(P, wood, iron, 2.85, DY + 0.30, 1.55, 0.30, 0.60, 0.5);
 
   // The tarp has to sit ON the crates, not hover a hand's breadth over them and overhang
   // them by a third of a metre on every side — at that size the crates read as legs and
   // the whole group reads as a white card table. Smaller, lower, and darker: a tarp is
   // oiled duck that has lived outdoors, not a tablecloth.
-  P.put(weather(box(0.92, 0.07, 1.16), { tone: 0.60, freq: 0.8, amp: 0.30 }), canvas,
-    2.80, DY + 0.47, 1.15, -0.10, 0.08, 0.04);
-  P.put(weather(box(0.44, 0.30, 0.06), { tone: 0.56, freq: 0.8, amp: 0.30 }), canvas,
-    2.38, DY + 0.31, 0.86, 0.30, 0.10, 0);
+  // The tarp is CLOTH now, not a slab: a 26 x 30 sheet draped over what is actually under
+  // it. Each vertex sits on the highest support (crate tops, the cask head) or falls away
+  // from the nearest edge like a tent, down to the planks, with fold ripples wherever it
+  // hangs free. A thin hem strip gives the edge a thickness to catch light.
+  {
+    const DX = 0.95, DZ = 1.15, NX = 26, NZ = 30, cx = 2.74, cz = 1.26, ry = 0.08;
+    const cr = Math.cos(ry), sr = Math.sin(ry);
+    const rects = [[2.55, 1.10, 0.31, 0.29, 0.15, DY + 0.465], [3.05, 0.85, 0.23, 0.21, -0.20, DY + 0.365]];
+    const cask = [2.85, 1.55, 0.26, DY + 0.61];
+    const g = new THREE.PlaneGeometry(DX, DZ, NX, NZ).rotateX(-Math.PI / 2);
+    const gp = g.attributes.position;
+    for (let i = 0; i < gp.count; i++) {
+      const lx = gp.getX(i), lz = gp.getZ(i);
+      const x = cx + lx * cr + lz * sr, z = cz - lx * sr + lz * cr;
+      let hgt = DY + 0.012, hang = 0;
+      for (const [rx, rz, hx, hz, rr, top] of rects) {
+        const c = Math.cos(rr), sn = Math.sin(rr), qx = (x - rx) * c - (z - rz) * sn, qz = (x - rx) * sn + (z - rz) * c;
+        const ox = Math.max(0, Math.abs(qx) - hx), oz = Math.max(0, Math.abs(qz) - hz), d = Math.hypot(ox, oz);
+        const hh = top - d * 2.2 - d * d * 3;
+        if (hh > hgt) { hgt = hh; hang = d; }
+      }
+      {
+        const d = Math.max(0, Math.hypot(x - cask[0], z - cask[1]) - cask[2]);
+        const hh = cask[3] - d * 1.9 - d * d * 3;
+        if (hh > hgt) { hgt = hh; hang = d; }
+      }
+      // folds where it hangs, a slight belly where it spans
+      hgt += Math.sin(x * 23 + z * 7) * 0.012 * Math.min(1, hang * 8) + Math.sin(z * 31 - x * 5) * 0.004;
+      gp.setXYZ(i, x, Math.max(DY + 0.006, hgt), z);
+    }
+    g.computeVertexNormals();
+    g.userData.metricDone = true;   // plane uv 0..1 over DX x DZ: rescale to metres below
+    const uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) * DX, uv.getY(i) * DZ);
+    P.add(weather(g, { tone: 0.62, freq: 1.6, amp: 0.34 }), canvas);
+  }
 
   const ringBoltDeck = (x, z) => P.put(weather(tor(0.045, 0.011, 4, 8), { tone: 0.85 }),
     iron, x, DY + 0.015, z, Math.PI / 2, 0, 0);
@@ -99,7 +150,9 @@ export function buildGear(group, mats) {
   P.put(weather(cyl(0.05, 0.06, 0.14, 8), { tone: 0.75 }), iron, 0.15, DY + 0.07, -2.50);
   P.put(weather(cyl(0.012, 0.020, 0.14, 6), { tone: 0.75 }), iron, 0.24, DY + 0.15, -2.42, 0.9, 0, 0.5);
   // toolbox, banded, rivets at the lid seam
-  P.put(weather(box(0.42, 0.20, 0.26), { tone: 0.88 }), wood2, 0.62, DY + 0.10, -2.50, 0, 0.1, 0);
+  P.put(weather(chamferBox(0.42, 0.20, 0.26, 0.012, 2), { tone: 0.88 }), wood2, 0.62, DY + 0.10, -2.50, 0, 0.1, 0);
+  P.put(weather(chamferBox(0.44, 0.03, 0.28, 0.008), { tone: 0.95 }), wood2, 0.62, DY + 0.215, -2.50, 0, 0.1, 0);   // lid
+  P.put(state(tor(0.06, 0.009, 6, 12, Math.PI), -0.2), iron, 0.62, DY + 0.232, -2.50, 0, 0.1, 0);                 // handle
   boltLine(P, iron, 0.62 - 0.19, DY + 0.20, -2.44, 0.62 + 0.19, DY + 0.20, -2.44, 4, 0.014);
   // the ash scoop, laid flat rather than leaned on nothing
   P.put(weather(cyl(0.018, 0.018, 0.85, 6), { tone: 0.75 }), iron, -0.15, DY + 0.02, -2.68, 0, 0.25, Math.PI / 2);
@@ -109,11 +162,14 @@ export function buildGear(group, mats) {
   // Low stuff, all round the rail — under y 0.35 everywhere, so it's legal even across
   // the walk lane and the other wings. This is what keeps the deck edge from reading
   // as a cut line: nobody plates a raft's rail with nothing on it.
+  // horn cleats: a tapered pedestal and two round horns tapering to blunt tips, cast
   const cleat = (x, z, ry) => {
-    P.put(weather(box(0.11, 0.09, 0.11), { tone: 0.85 }), iron, x, DY + 0.045, z, 0, ry, 0);
+    P.put(weather(cyl(0.035, 0.055, 0.085, 10), { tone: 0.85 }), iron, x, DY + 0.043, z, 0, ry, 0);
+    P.put(weather(chamferBox(0.16, 0.012, 0.09, 0.004), { tone: 0.8 }), iron, x, DY + 0.006, z, 0, ry, 0);
+    const ax = Math.cos(ry), az = -Math.sin(ry);
     for (const s of [-1, 1]) {
-      P.put(weather(box(0.20, 0.045, 0.05), { tone: 0.85 }), iron,
-        x + Math.sin(ry) * 0.10 * s, DY + 0.095, z + Math.cos(ry) * 0.10 * s, 0, ry + s * 0.55, 0);
+      const h = xf(cyl(0.017, 0.028, 0.15, 10), 0, 0, 0, 0, 0, s * Math.PI / 2 - s * 0.12);
+      P.add(weather(xf(h, x + ax * 0.075 * s, DY + 0.095, z + az * 0.075 * s, 0, ry, 0), { tone: 0.88 }), iron);
     }
   };
   for (const [x, z, ry] of [[4.25, 4.25, 0.78], [4.25, -4.25, -0.78], [-4.25, 4.25, 2.36], [-4.25, -4.25, -2.36]])
@@ -125,7 +181,7 @@ export function buildGear(group, mats) {
     [0.9, -4.35], [-0.9, -4.35], [-2.0, 4.35], [2.0, 4.35]]) ringBolt(x, z);
 
   for (const [x, z, ry] of [[4.40, -3.95, 0], [-4.40, -3.95, 0], [1.72, 4.35, 0.2], [-1.72, 4.35, -0.2]])
-    P.put(weather(box(0.22, 0.13, 0.02), { tone: 0.8, rust: 0.4 }), iron, x, DY + 0.075, z, 0, ry, 0);
+    P.put(weather(chamferBox(0.22, 0.13, 0.02, 0.005), { tone: 0.8, rust: 0.4 }), iron, x, DY + 0.075, z, 0, ry, 0);
 
   // ---- BOAT HOOK, stowed along the starboard rail --------------------------------------
   // A 2.2m pole would trip Sal if it stood up; laid flat against the bulwark it reads
@@ -137,7 +193,7 @@ export function buildGear(group, mats) {
   // ---- BILGE PUMP HANDLE ----------------------------------------------------------------
   // The one slender vertical this side of the deck gets. Aft-port corner of the aft
   // strip, tucked well below the davit's silhouette and off any line Sal actually walks.
-  P.put(weather(box(0.16, 0.12, 0.16), { tone: 0.85 }), iron, -1.55, DY + 0.06, -4.15);
+  P.put(weather(chamferBox(0.16, 0.12, 0.16, 0.015), { tone: 0.85 }), iron, -1.55, DY + 0.06, -4.15);
   P.put(weather(cyl(0.022, 0.022, 0.62, 6), { tone: 0.85 }), iron, -1.55, DY + 0.42, -4.05, 0, 0, 0.15);
   P.put(weather(sph(0.035, 6, 5), { tone: 0.85 }), iron, -1.46, DY + 0.71, -4.05);
 

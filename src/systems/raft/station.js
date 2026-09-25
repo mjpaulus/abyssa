@@ -8,7 +8,7 @@
 // empty helmet stand: a cradle with nothing in it says "the man is in the water"
 // without a line of UI.
 import * as THREE from 'three';
-import { Part, xf, box, cyl, tor, lathe, weather, tint, rivetRing, rope, coil, lash } from './kit.js';
+import { Part, xf, box, cyl, tor, lathe, weather, tint, rivetRing, rope, coil, lash, chamferBox, chamferedPlank, state } from './kit.js';
 
 const TAU = Math.PI * 2;
 const DECK = 0.11; // deck top surface, raft-local — everything here sits on it
@@ -26,15 +26,21 @@ export function buildStation(group, mats) {
   {
     for (const lx of [BX - 0.16, BX + 0.16]) {
       for (const lz of [-2.30, -0.68]) {
-        P.add(weather(xf(box(0.06, LEG_H, 0.06), lx, DECK + LEG_H / 2, lz), { tone: 0.82, amp: 0.24 }), wood);
+        P.add(weather(xf(chamferBox(0.06, 0.06, LEG_H, 0.008, 2).rotateX(Math.PI / 2), lx, DECK + LEG_H / 2, lz), { tone: 0.82, amp: 0.24 }), wood);
       }
-      P.add(weather(xf(box(0.045, 0.045, 1.62), lx, DECK + 0.22, -1.49), { tone: 0.82, amp: 0.22 }), wood);
+      P.add(weather(xf(chamferBox(0.045, 0.045, 1.62, 0.007, 4), lx, DECK + 0.22, -1.49), { tone: 0.82, amp: 0.22 }), wood);
     }
     // seat plank — pale and smooth where two seasons of dressed divers have sat on it
-    P.add(weather(xf(box(0.44, TOP_T, 1.60), BX, DECK + LEG_H + TOP_T / 2, -1.70),
-      { tone: 1.18, amp: 0.14 }), wood);
+    // two boards, not one slab, with eased edges; the near one is hand-polished where
+    // the dressed man slid on and off it
+    for (const sx of [-1, 1]) {
+      const sb = weather(xf(chamferedPlank(0.215, TOP_T, 1.60, 0.012, 6), BX + sx * 0.1105, DECK + LEG_H + TOP_T / 2, -1.70),
+        { tone: sx > 0 ? 1.18 : 1.08, amp: 0.14 });
+      state(sb, (i, x, y, z) => (y > DECK + LEG_H + TOP_T * 0.8 ? -0.22 * Math.max(0, 1 - Math.abs(z + 1.55) / 0.6) : 0));
+      P.add(sb, wood);
+    }
     // the step-down shelf carrying the cradle
-    P.add(weather(xf(box(0.44, 0.05, 0.40), BX, DECK + LEG_H + 0.025, -0.70),
+    P.add(weather(xf(chamferBox(0.44, 0.05, 0.40, 0.01), BX, DECK + LEG_H + 0.025, -0.70),
       { tone: 1.02, amp: 0.18 }), wood);
     // the trough itself: bottom half of a cylinder, open face up, let into the shelf
     const trough = new THREE.CylinderGeometry(0.15, 0.15, 0.42, 10, 1, true, Math.PI / 2, Math.PI)
@@ -50,7 +56,7 @@ export function buildStation(group, mats) {
   // otherwise hang the basket out past the wing's edge.
   const SX = -4.20, SZ = 0.90, POST_H = 0.72, POST_Y0 = DECK + 0.03;
   {
-    P.add(weather(xf(box(0.24, 0.03, 0.24), SX, POST_Y0 + 0.015, SZ), { tone: 0.8, amp: 0.2 }), wood);
+    P.add(weather(xf(chamferBox(0.24, 0.03, 0.24, 0.008), SX, POST_Y0 + 0.015, SZ), { tone: 0.8, amp: 0.2 }), wood);
     rivetRing(P, brass, 4, SX, POST_Y0 + 0.03, SZ, 0.09, 0.014, 'y');
     const postTop = POST_Y0 + POST_H;
     P.add(weather(xf(cyl(0.05, 0.065, POST_H, 10), SX, POST_Y0 + POST_H / 2, SZ),
@@ -58,7 +64,7 @@ export function buildStation(group, mats) {
     const cradle = lathe([[0, 0], [0.14, 0], [0.25, 0.07], [0.29, 0.15], [0.26, 0.19]], 16);
     P.add(weather(xf(cradle, SX, postTop, SZ), { tone: 1.05, amp: 0.16 }), wood);
     const ringY = postTop + 0.19;
-    P.add(xf(tor(0.26, 0.022, 6, 20).rotateX(Math.PI / 2), SX, ringY, SZ), brass);
+    P.add(xf(tor(0.26, 0.022, 8, 40).rotateX(Math.PI / 2), SX, ringY, SZ), brass);
     // three loose dogs, drooped open at 120 degrees — hinge lugs on the ring, wingnut
     // tabs hanging below where they'd swing shut over a helmet's neck flange
     for (let i = 0; i < 3; i++) {
@@ -146,9 +152,10 @@ export function buildStation(group, mats) {
 
   // ---- folded tarpaulin -------------------------------------------------------------
   {
-    P.add(weather(xf(box(0.48, 0.09, 0.38), -4.16, DECK + 0.05, -0.30), { tone: 0.8, amp: 0.22 }), canvas);
-    P.add(weather(xf(box(0.40, 0.08, 0.32), -4.16, DECK + 0.13, -0.30, 0, 0, 0.06), { tone: 0.86, amp: 0.20 }), canvas);
-    P.add(weather(xf(box(0.32, 0.06, 0.25), -4.16, DECK + 0.19, -0.30, 0, 0, -0.05), { tone: 0.92, amp: 0.18 }), canvas);
+    // folds, not bricks: heavily rounded long edges read as cloth doubled over
+    P.add(weather(xf(chamferBox(0.48, 0.09, 0.38, 0.035, 2), -4.16, DECK + 0.05, -0.30), { tone: 0.8, amp: 0.22 }), canvas);
+    P.add(weather(xf(chamferBox(0.40, 0.08, 0.32, 0.032, 2), -4.16, DECK + 0.13, -0.30, 0, 0, 0.06), { tone: 0.86, amp: 0.20 }), canvas);
+    P.add(weather(xf(chamferBox(0.32, 0.06, 0.25, 0.026, 2), -4.16, DECK + 0.19, -0.30, 0, 0, -0.05), { tone: 0.92, amp: 0.18 }), canvas);
   }
 
   // ---- coiled spare line, dropped by the stool ---------------------------------------
@@ -168,7 +175,10 @@ export function buildStation(group, mats) {
 
     // the slate — the dive log, chalked and rubbed out and chalked again
     const BDX = RAIL_X + 0.06, BDZ = 0.35;
-    P.add(weather(xf(box(0.03, 0.46, 0.34), BDX, DECK + 0.72, BDZ, 0, 0, 0.03), { tone: 0.60, amp: 0.16 }), wood);
+    P.add(weather(xf(chamferBox(0.03, 0.46, 0.34, 0.006), BDX, DECK + 0.72, BDZ, 0, 0, 0.03), { tone: 0.60, amp: 0.16 }), wood);
+    // the slate's frame: four battens proud of the board face
+    for (const [fy, fz, fh, fd] of [[0.94, 0, 0.03, 0.36], [0.50, 0, 0.03, 0.36], [0.72, -0.165, 0.46, 0.03], [0.72, 0.165, 0.46, 0.03]])
+      P.add(weather(xf(chamferBox(0.036, fh, fd, 0.005), BDX + 0.006, DECK + fy, BDZ + fz, 0, 0, 0.03), { tone: 0.85, amp: 0.2 }), wood);
     // radius/centre chosen to loop past both the post and the board's near face, so the
     // lashing actually reads as holding the two together rather than floating near them
     weather(lash(P, ropeMat, RAIL_X + 0.03, DECK + 0.90, BDZ, 0.075, 'y', 2, 0.016), { tone: 0.9, amp: 0.18 });
@@ -185,7 +195,7 @@ export function buildStation(group, mats) {
     P.add(xf(new THREE.TorusGeometry(0.045, 0.011, 5, 10, Math.PI * 1.3), RAIL_X, DECK + 0.86, LZ,
       0, Math.PI / 2, 0.3), iron);
     weather(rope(P, ropeMat, [[RAIL_X, DECK + 0.85, LZ], [LX, DECK + 0.72, LZ]], 0.010), { tone: 0.8, amp: 0.2 });
-    P.add(weather(xf(box(0.09, 0.12, 0.09), LX, DECK + 0.60, LZ), { tone: 0.75, amp: 0.2 }), iron);
+    P.add(weather(xf(chamferBox(0.09, 0.12, 0.09, 0.012), LX, DECK + 0.60, LZ), { tone: 0.75, amp: 0.2 }), iron);
     P.add(weather(xf(new THREE.ConeGeometry(0.07, 0.06, 6), LX, DECK + 0.69, LZ), { tone: 0.75, amp: 0.2 }), iron);
     P.add(xf(tor(0.025, 0.006, 5, 10), LX, DECK + 0.735, LZ), brass);
   }

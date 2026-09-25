@@ -29,7 +29,7 @@ export function xf(geo, x = 0, y = 0, z = 0, rx = 0, ry = 0, rz = 0, s = 1) {
 export const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
 export const cyl = (rt, rb, h, seg = 10, open = false) => new THREE.CylinderGeometry(rt, rb, h, seg, 1, open);
 export const sph = (r, w = 8, h = 6, ps, pl, ts, tl) => new THREE.SphereGeometry(r, w, h, ps, pl, ts, tl);
-export const tor = (r, t, rs = 6, ts = 14) => new THREE.TorusGeometry(r, t, rs, ts);
+export const tor = (r, t, rs = 6, ts = 14, arc) => new THREE.TorusGeometry(r, t, rs, ts, arc);
 export const lathe = (pts, seg = 16) => new THREE.LatheGeometry(pts.map(p => new THREE.Vector2(p[0], p[1])), seg);
 
 // Bucket primitives by material, emit one merged mesh each.
@@ -270,6 +270,28 @@ export function chamferedPlank(w, h, l, c = 0.012, rows = 2) {
   ], l, 2, e => (e >= 3 && e <= 5) ? rows : 1);
 }
 
+// A box with its four long edges chamfered: the difference between a lump of timber or
+// a casting and a default cube is the line of light an eased edge catches. Extruded
+// along its longest horizontal side (so a plank's grain and its vertex rows run the right
+// way), `rows` vertex rows along that length for the baked grime to grade along.
+export function chamferBox(w, h, d, c = 0.012, rows = 1, sidesOnly = false) {
+  const alongX = w > d, W = alongX ? d : w, L = alongX ? w : d;
+  const hw = W / 2, hh = h / 2, cc = Math.min(c, hw * 0.45, hh * 0.45);
+  // sidesOnly: rows on the two broad side faces only (edges 2 and 6), the rest single
+  const g = profilePrism([
+    [-hw + cc, -hh], [hw - cc, -hh], [hw, -hh + cc], [hw, hh - cc],
+    [hw - cc, hh], [-hw + cc, hh], [-hw, hh - cc], [-hw, -hh + cc]
+  ], L, rows, sidesOnly ? (e => (e === 2 || e === 6) ? rows : 1) : null);
+  if (alongX) g.rotateY(Math.PI / 2);
+  return g;
+}
+
+// A weld bead: a thin rough ring laid where two plates meet (a pipe to a flange, a
+// shell to its head). Rougher and a touch darker than the parent plate.
+export function weldBead(r, t = 0.008, seg = 32) {
+  return tint(tor(r, t, 5, seg), 0.82, 0.80, 0.78, 0.74);
+}
+
 // ---- wear ---------------------------------------------------------------------------
 // Bake grime into vertex colours rather than textures, so dirt lands on the geometry
 // that actually exists. `wetY` is the local height of the waterline: everything under it
@@ -371,7 +393,7 @@ export function boltLine(P, mat, x0, y0, z0, x1, y1, z1, n, rad = 0.032, w = 6, 
 // the stain reads as bleeding OUT of the seam rather than as a sticker. Iron plates only
 // (on timber the deck map does this job).
 export function hexBolt(P, mat, x, y, z, rad = 0.032, ry = 0, halo = false) {
-  P.add(rustHead(xf(cyl(rad * 1.55, rad * 1.55, rad * 0.5, 12), x, y + rad * 0.25, z), x, y, z, 1.2), mat);      // washer
+  P.add(rustHead(xf(cyl(rad * 1.55, rad * 1.55, rad * 0.5, 10), x, y + rad * 0.25, z), x, y, z, 1.2), mat);      // washer
   // the head: a spanner has been on its flats, so the top is brighter than the washer
   const hd = rustHead(xf(cyl(rad * 0.92, rad * 1.0, rad * 1.15, 6), x, y + rad * 0.9, z, 0, ry), x + 1, y, z, 0.6);
   state(hd, (i, hx, hy) => hy > y + rad * 1.4 ? -0.18 : 0);
@@ -504,7 +526,7 @@ export function barrel(P, woodMat, ironMat, x, y, z, r = 0.42, h = 1.0, ry = 0) 
   // the profile turns in over each chime and down its inside face, so looking into the
   // lip above the head shows stave ends, not the sky through a back-face
   P.add(xf(stavedLathe([[r * 0.72, -b + 0.03], [r * 0.80, -b], [r * 0.90, -b * 0.78], [r * 0.97, -b * 0.55], [r, 0],
-    [r * 0.97, b * 0.55], [r * 0.90, b * 0.78], [r * 0.80, b], [r * 0.72, b - 0.03]], Math.max(14, Math.round(r * 46))),
+    [r * 0.97, b * 0.55], [r * 0.90, b * 0.78], [r * 0.80, b], [r * 0.72, b - 0.03]], Math.max(12, Math.round(r * 38))),
     x, y, z, 0, ry, 0), woodMat);
   // heads let in below the chime, the way a cooper crozes them: a lip of stave-end
   // stands proud all round, which is what makes a barrel top read as a barrel

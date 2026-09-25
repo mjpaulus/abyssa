@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import { fbm } from '../../lib/math.js';
 import { Part, xf, box, cyl, tor, lathe, weather, boltLine, rope, lash,
-  chamferedPlank, profilePrism, rivetRing, state } from './kit.js';
+  chamferedPlank, profilePrism, rivetRing, state, chamferBox, weldBead, rustHead } from './kit.js';
 
 const FOOT = 4.7;          // walkable footprint half-extent — player.js hard-codes this
 const DECK_TOP = 0.11;     // deck top surface — player.js hard-codes this too
@@ -109,9 +109,9 @@ function buildDeck(P, wood, wood2, iron) {
       const tone = (isPale ? 1.16 : 0.80) + (h1(i + 313) - 0.5) * 0.26;
       // Chamfered caps, not boxes: the ~0.012 eased top edge is what lets the light find
       // every seam. Built in local space then xf'd, so weather() still reads raft-local Y.
-      // Rows every ~0.28 m on the three top faces so the deck map's grime, wet and
-      // foot-polish resolve along the board instead of once per end.
-      const rows = Math.max(2, Math.round(len / 0.28));
+      // A few rows on the three top faces: the deck map does grime/wet/polish per
+      // fragment, so vertex rows only have to carry the drier end-grain state.
+      const rows = Math.max(2, Math.round(len / 0.9));
       const board = deckUV(weather(xf(chamferedPlank(capW, h, len, 0.012, rows), xc, BASE_TOP + h / 2, (z0 + z1) / 2),
         { tone, freq: 2.6, amp: 0.30 }));
       // each board is a different piece of timber: its own dryness, and the ends (end
@@ -162,6 +162,28 @@ function buildBulwark(P, wood, iron) {
     [-4.3, -3.2], [4.3, -3.2], [-4.3, 3.2], [4.3, 3.2]]) padEye(P, iron, x, z);
 }
 
+// THE SPLASH BAND. The outboard face of the bulwark takes every sea that slaps the hull:
+// darker and slick low down, fading up the wall in tongues (the noise), with a pale salt
+// line crusting where the spray dries at the top of the wet. Inboard faces are untouched.
+function splash(g, axis, edge) {
+  const p = g.attributes.position, nr = g.attributes.normal, c = g.attributes.color;
+  const ox = axis === 'z' ? Math.sign(edge) : 0, oz = axis === 'x' ? Math.sign(edge) : 0;
+  for (let i = 0; i < p.count; i++) {
+    const out = nr.getX(i) * ox + nr.getZ(i) * oz;
+    if (out < 0.5) continue;
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const n = fbm((x + z) * 1.9 + 3.3, y * 3.1 + 7.7);
+    const top = 0.22 + 0.20 * n;                                // how far up the wet reaches
+    const hgt = y - DECK_TOP;
+    const wet = Math.max(0, Math.min(1, (top - hgt) / 0.14 + 0.35));
+    const salt = Math.max(0, 1 - Math.abs(hgt - top - 0.025) / 0.03) * (0.4 + 0.6 * n);
+    const k = 1 - wet * 0.36;
+    c.setXYZW(i, c.getX(i) * k + salt * 0.22, c.getY(i) * k + salt * 0.22, c.getZ(i) * k + salt * 0.24,
+      Math.max(0.05, c.getW(i) - wet * 0.34 + salt * 0.2));
+  }
+  return g;
+}
+
 // One straight run of bulwark: toe wall + cap rail + scupper cuts. `axis` is the run's
 // direction ('x' or 'z'); `edge` is the raft-local coordinate of the OUTER face on the
 // cross axis (e.g. z = +FOOT for the dive-side rail). `scuppers` are {at, w} cut
@@ -172,9 +194,20 @@ function wallRun(P, wood, iron, axis, a0, a1, edge, scuppers = []) {
   const inb = edge > 0 ? -1 : 1;
   const fw = edge + inb * T / 2, fc = edge + inb * CAPT / 2;
 
+  // STRAKES, not a slab: the wall is laid up from horizontal boards ~0.14 tall, each
+  // with eased edges, so the bulwark carries two shadow lines along its whole run and
+  // reads as carpentry from the deck and from the water. Rows every ~0.3 m along the
+  // length let the grime and the outboard splash band grade (weather + splash below).
   const seg = (len, mid, y, h) => {
-    if (axis === 'x') P.put(box(len, h, T), wood, mid, y, fw);
-    else P.put(box(T, h, len), wood, fw, y, mid);
+    const n = Math.max(1, Math.round(h / 0.14)), sh = h / n, rows = Math.max(1, Math.round(len / 0.4));
+    for (let k = 0; k < n; k++) {
+      const sy = y - h / 2 + sh * (k + 0.5);
+      const g = axis === 'x'
+        ? xf(chamferBox(len, sh - 0.004, T, 0.009, rows, true), mid, sy, fw)
+        : xf(chamferBox(T, sh - 0.004, len, 0.009, rows, true), fw, sy, mid);
+      const tone = 0.84 + 0.14 * (((Math.sin((mid + k * 3.1 + edge) * 12.9898) * 43758.5453) % 1 + 1) % 1);
+      P.add(splash(weather(g, { tone, freq: 1.8, amp: 0.26 }), axis, edge), wood);
+    }
   };
 
   const cuts = scuppers.map(s => ({ at: s.at, w: s.w || 0.22 })).sort((m, n) => m.at - n.at);
@@ -216,15 +249,19 @@ function wallRun(P, wood, iron, axis, a0, a1, edge, scuppers = []) {
 // ironwork without a whole new fastening pattern.
 function post(P, wood, iron, x, z) {
   const s = 0.11, h = RAIL_H + 0.08;
-  P.put(box(s, h, s), wood, x, DECK_TOP + h / 2, z);
-  P.put(box(s + 0.02, 0.05, s + 0.02), iron, x, DECK_TOP + h - 0.02, z);
+  // stood on end: a chamfered timber with a pyramid-dressed top under an iron cap band
+  P.add(weather(xf(chamferBox(s, s, h, 0.014, 3).rotateX(Math.PI / 2), x, DECK_TOP + h / 2, z),
+    { tone: 0.88, freq: 2, amp: 0.26 }), wood);
+  P.put(chamferBox(s + 0.024, 0.05, s + 0.024, 0.006), iron, x, DECK_TOP + h - 0.02, z);
+  P.put(cyl(0.012, 0.03, 0.035, 4), wood, x, DECK_TOP + h + 0.022, z, 0, Math.PI / 4, 0);
 }
 
 // A ring bolt let into the deck — the thing a lashing actually ties to. Flat torus plus
 // a short stub so it reads as bolted through the planking, not sitting loose on top.
 function padEye(P, iron, x, z) {
-  P.put(tor(0.05, 0.013, 5, 10), iron, x, DECK_TOP + 0.02, z, Math.PI / 2, 0, 0);
-  P.put(cyl(0.02, 0.02, 0.05, 6), iron, x, DECK_TOP, z);
+  P.put(tor(0.05, 0.013, 6, 16), iron, x, DECK_TOP + 0.02, z, Math.PI / 2, 0, 0);
+  P.put(cyl(0.02, 0.02, 0.05, 8), iron, x, DECK_TOP, z);
+  P.put(cyl(0.045, 0.05, 0.012, 12), iron, x, DECK_TOP + 0.004, z);   // deck plate the eye is let through
 }
 
 // ---- structure underneath ---------------------------------------------------------------
@@ -234,10 +271,10 @@ function padEye(P, iron, x, z) {
 // pattern that actually holds a plank deck onto a row of flotation drums.
 function buildStructure(P, iron) {
   for (const z of [-3.6, 0, 3.6]) {
-    P.add(W(box(FOOT * 2, 0.20, 0.55), 0, -0.22, z, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.35 }), iron);
+    P.add(W(chamferBox(FOOT * 2, 0.20, 0.55, 0.02, 5, true), 0, -0.22, z, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.35 }), iron);
     // strap doubler riding the top of the beam, bolted through into the planking above
-    P.add(W(box(FOOT * 2, 0.03, 0.62), 0, -0.115, z, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.4 }), iron);
-    boltLine(P, iron, -FOOT + 0.4, -0.10, z, FOOT - 0.4, -0.10, z, 14);
+    P.add(W(chamferBox(FOOT * 2, 0.03, 0.62, 0.008, 5, true), 0, -0.115, z, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.4 }), iron);
+    boltLine(P, iron, -FOOT + 0.4, -0.10, z, FOOT - 0.4, -0.10, z, 14, 0.032, 5, 3);
   }
   // where the aft beam's strap bolts actually punch up through the planking — the only
   // one of the three whose deck-side fastenings sit clear of the pump, reel and davit
@@ -245,8 +282,8 @@ function buildStructure(P, iron) {
   for (let k = 0; k < 10; k++) DECK_NAILS.push([-FOOT + 0.4 + (2 * FOOT - 0.8) * k / 9, -3.6]);
 
   for (const x of [-2.3, 2.3]) {
-    P.add(W(box(0.24, 0.28, FOOT * 2 - 0.1), x, -0.34, 0, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.4 }), iron);
-    boltLine(P, iron, x, -0.20, -FOOT + 0.5, x, -0.20, FOOT - 0.5, 10);
+    P.add(W(chamferBox(0.24, 0.28, FOOT * 2 - 0.1, 0.02, 5, true), x, -0.34, 0, 0, 0, 0, 1, { wetY: WATERLINE, rust: 0.4 }), iron);
+    boltLine(P, iron, x, -0.20, -FOOT + 0.5, x, -0.20, FOOT - 0.5, 10, 0.032, 5, 3);
   }
 }
 
@@ -272,7 +309,7 @@ function buildDrums(P, rust, ropeMat) {
     [0.82, HL - 0.01], [0.70, HL - 0.035], [0.42, HL - 0.085], [0.00, HL - 0.10]       // far head
   ];
   for (const [x, z] of [[-3.6, -3.2], [3.6, -3.2], [-3.6, 3.2], [3.6, 3.2]]) {
-    P.add(W(lathe(drumProfile, 40), x, Y, z, 0, 0, Math.PI / 2, 1, wet), rust);
+    P.add(W(lathe(drumProfile, 32), x, Y, z, 0, 0, Math.PI / 2, 1, wet), rust);
 
     for (const ox of [-1.05, 0, 1.05]) {
       P.add(W(tor(R + 0.02, 0.035, 5, 24), x + ox, Y, z, 0, Math.PI / 2, 0, 1, wet), rust);
@@ -280,15 +317,15 @@ function buildDrums(P, rust, ropeMat) {
     // chime rivets: a ring of heads round each end where the head is seamed to the shell
     // cheap domes (5x3): a chime rivet is a glint at this range, not a boss
     for (const sx of [-1, 1])
-      rivetRing(P, rust, 12, x + sx * (HL - 0.06), Y, z, 0.62, 0.026, 'x', 0.5, 5, 3);
+      rivetRing(P, rust, 10, x + sx * (HL - 0.06), Y, z, 0.62, 0.026, 'x', 0.5, 4, 3);
     // THE PAINTED BAND. Every drum carried its owner's colour once: a broad band between
     // the rolling hoops, sun-bleached on top, chipped down to the rust, bleeding orange
     // below where the swell works at it. Same rust bucket (the band is a lift of colour
     // and state over the drum's own oxide texture), so it costs no draw call.
     {
       const bp = [];
-      for (let k = 0; k <= 20; k++) bp.push([R + 0.006 - (k === 0 || k === 20 ? 0.003 : 0), -0.34 + k * 0.034]);
-      const band = W(lathe(bp, 48), x + 0.52, Y, z, 0, 0, Math.PI / 2, 1, wet);
+      for (let k = 0; k <= 10; k++) bp.push([R + 0.006 - (k === 0 || k === 10 ? 0.003 : 0), -0.34 + k * 0.068]);
+      const band = W(lathe(bp, 32), x + 0.52, Y, z, 0, 0, Math.PI / 2, 1, wet);
       const hue = (x > 0) === (z > 0) ? [1.25, 1.45, 1.75] : [1.10, 0.95, 0.95];   // faded white / faded red
       const bpos = band.attributes.position, bc = band.attributes.color;
       for (let i = 0; i < bpos.count; i++) {
@@ -322,8 +359,9 @@ function buildDrums(P, rust, ropeMat) {
 function buildMooring(P, iron, rust) {
   const ax = -3.6, az = -FOOT - 0.02, ay = DECK_TOP + RAIL_H + 0.09;
 
-  P.put(box(0.18, 0.10, 0.20), iron, ax, ay - 0.03, az);
-  P.put(cyl(0.05, 0.05, 0.20, 8), iron, ax, ay, az, 0, 0, Math.PI / 2);
+  P.put(chamferBox(0.18, 0.10, 0.20, 0.015), iron, ax, ay - 0.03, az);
+  P.put(cyl(0.05, 0.05, 0.20, 14), iron, ax, ay, az, 0, 0, Math.PI / 2);
+  for (const sx of [-1, 1]) P.put(cyl(0.065, 0.065, 0.02, 14), iron, ax + sx * 0.11, ay, az, 0, 0, Math.PI / 2);  // cheek bosses
 
   // a handful of visible links, then the run drops into water dense enough that it does
   // not need modelling any further than that — the fog does the rest

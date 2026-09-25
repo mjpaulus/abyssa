@@ -23,7 +23,7 @@ import { makeGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftRop
   raftLeatherSet, raftSetsBench } from '../lib/textures.js';
 import { survival } from './survival.js';
 import { surfaceHeightAt, stormLevel, onSkyEnv } from '../world/water.js';
-import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash, DECK_SENTINEL } from './raft/kit.js';
+import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash, DECK_SENTINEL, chamferBox, weldBead } from './raft/kit.js';
 import { DECK_NAILS } from './raft/hull.js';
 import { buildHull } from './raft/hull.js';
 import { buildStation } from './raft/station.js';
@@ -352,16 +352,21 @@ function buildReel(P, mats, head) {
       P.add(xf(cyl(0.045, 0.065, RY - 0.11, 6), s * 0.60, (RY + 0.11) / 2, RZ + d * 0.30,
         -d * 0.30, 0, -s * 0.10), mats.iron);
     }
-    P.add(weather(xf(box(0.18, 0.05, 0.78), s * 0.60, 0.14, RZ), { tone: 0.85, freq: 3, amp: 0.3, rust: 0.5 }), mats.iron);        // sole plate
+    P.add(weather(xf(chamferBox(0.18, 0.05, 0.78, 0.01, 3), s * 0.60, 0.14, RZ), { tone: 0.85, freq: 3, amp: 0.3, rust: 0.5 }), mats.iron);        // sole plate
     boltLine(P, mats.iron, s * 0.60, 0.165, RZ - 0.28, s * 0.60, 0.165, RZ + 0.28, 3, 0.030, 6, 4, true, true);
     P.add(xf(cyl(0.08, 0.08, 0.14, 8), s * 0.60, RY, RZ, 0, 0, Math.PI / 2), mats.brass);  // bearing
   }
   P.add(xf(cyl(0.05, 0.05, 1.32, 8), 0, RY, RZ, 0, 0, Math.PI / 2), mats.iron);            // axle
   // drum and cheeks
-  P.add(xf(cyl(DRUM, DRUM, HW * 1.9, 14), 0, RY, RZ, 0, 0, Math.PI / 2), mats.iron);
+  P.add(xf(cyl(DRUM, DRUM, HW * 1.9, 28), 0, RY, RZ, 0, 0, Math.PI / 2), mats.iron);
   for (const s of [-HW, HW]) {
-    P.add(weather(xf(cyl(CHEEK, CHEEK, 0.055, 28), s, RY, RZ, 0, 0, Math.PI / 2),
+    P.add(weather(xf(cyl(CHEEK, CHEEK, 0.055, 40), s, RY, RZ, 0, 0, Math.PI / 2),
       { tone: 0.92, freq: 1.4, amp: 0.22, rust: 0.35 }), mats.iron);
+    // rolled rim on the cheek (a flat disc edge reads as sheet, a bead reads as a flange)
+    // and a raised hub boss with its weld
+    P.add(weather(xf(tor(CHEEK, 0.034, 8, 56), s, RY, RZ, 0, Math.PI / 2), { tone: 0.88, freq: 3, amp: 0.25, rust: 0.45 }), mats.iron);
+    P.add(weather(xf(cyl(0.13, 0.15, 0.09, 20), s + Math.sign(s) * 0.04, RY, RZ, 0, 0, Math.PI / 2), { tone: 0.85, rust: 0.3 }), mats.iron);
+    P.add(xf(weldBead(0.15, 0.008, 28), s + Math.sign(s) * 0.004, RY, RZ, 0, Math.PI / 2), mats.iron);
     rivetRing(P, mats.iron, 8, s, RY, RZ, CHEEK - 0.16, 0.028, 'x');
   }
   // hose wound on in two layers, which is the only way a reel reads as loaded.
@@ -375,7 +380,7 @@ function buildReel(P, mats, head) {
   P.add(xf(cyl(0.045, 0.045, 0.15, 8), 0.64, RY + 0.38, RZ), mats.wood);
   P.add(xf(cyl(0.034, 0.034, 0.34, 6), 0.58, RY + 0.13, RZ, 0, 0, Math.PI / 2), mats.iron);
   P.add(xf(tor(0.22, 0.030, 4, 14), -0.52, RY, RZ, 0, Math.PI / 2), mats.iron);  // ratchet ring
-  P.add(xf(box(0.24, 0.045, 0.045), -0.52, RY - 0.23, RZ - 0.13, 0, 0, 0.5), mats.iron);  // pawl
+  P.add(xf(chamferBox(0.24, 0.045, 0.045, 0.01), -0.52, RY - 0.23, RZ - 0.13, 0, 0, 0.5), mats.iron);  // pawl
 
   // The lead from the drum up over the sheave. Without it the umbilical appears out of
   // thin air at the block, which is what the last round's bug actually looked like.
