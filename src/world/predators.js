@@ -746,7 +746,9 @@ function octopusGeometry() {
   // ---- mantle: a closed egg-shaped sack, widest low, with two eye knobs ----
   // v = 0 at the underside pole, 1 at the crown. Closed at both ends so the animal
   // reads as a solid body rather than a hood or a bell.
-  const MR = 16, MS = 16;
+  // polish-fauna: 16x16 -> 28x28 mantle, 13x6 -> 30x12 arms, so the silhouette
+  // rounds and the oral face has room for its sucker rows.
+  const MR = 28, MS = 28;
   const mProfile = v => 0.475 * Math.pow(Math.sin(Math.pow(v, 0.80) * Math.PI), 0.78);
   const mHeight = v => -0.30 + Math.pow(v, 0.92) * 1.02;
   const mBase = pos.length / 3;
@@ -756,7 +758,7 @@ function octopusGeometry() {
       const ang = j / MS * TAU;
       const c = Math.cos(ang), s = Math.sin(ang);
       // eye knobs: two bumps low on the sides, where an octopus actually carries them
-      const eyeB = Math.pow(Math.max(0, Math.abs(c)), 10.0) * Math.max(0, 1 - Math.abs(v - 0.30) * 7.0) * 0.15;
+      const eyeB = Math.pow(Math.max(0, Math.abs(c)), 10.0) * Math.max(0, 1 - Math.abs(v - 0.42) * 7.0) * 0.15;
       const rr = r + eyeB;
       // slightly wider than deep, so the sack lies rather than stands
       pos.push(c * rr * 1.06, y + eyeB * 0.25, s * rr * 0.90);
@@ -772,7 +774,7 @@ function octopusGeometry() {
   }
 
   // ---- arms: eight tapering tubes, 6-sided ----
-  const ARMS = 8, SEG = 13, SID = 6;
+  const ARMS = 8, SEG = 30, SID = 12;
   for (let k = 0; k < ARMS; k++) {
     const ang = (k + 0.5) / ARMS * TAU;
     const base = pos.length / 3;
@@ -808,7 +810,10 @@ const OCT_DEFORM = /* glsl */`
   attribute vec4 aOct;
   uniform float uReach; uniform float uSeed; uniform float uActive; uniform float uGrab;
   uniform vec3 uDir;
-  varying float vOctT; varying float vOctK; varying float vOctA;
+  varying float vOctT; varying float vOctK; varying float vOctA; varying float vOctR;
+  // the ring / azimuth angle as a unit vector: an angle varying wraps 2pi -> 0 across
+  // one strip of the closed tube and interpolates backwards; cos/sin do not
+  varying vec2 vOctCS;
   void octDeform(out vec3 P, out vec3 N){
     float kind = aOct.w;
     if (kind < 0.5) {
@@ -828,12 +833,14 @@ const OCT_DEFORM = /* glsl */`
       float w = pow(max(0.0, dot(ca, flatD)), 3.0) * uReach;
       // at rest the arms fold down and inward against the rock; roused, they splay,
       // and the ones facing the light stretch toward it
-      vec3 restD = normalize(vec3(ca.x*1.15, -0.50, ca.z*1.15));
+      // polish-fauna: at rest the arms lie OUT across the silt and curl, rather than
+      // hanging as stubs under the mantle (visual only: reach/grab are CPU-side)
+      vec3 restD = normalize(vec3(ca.x*1.15, -0.10, ca.z*1.15));
       vec3 openD = normalize(vec3(ca.x, -0.18, ca.z));
       vec3 actD  = normalize(mix(openD, normalize(uDir), w * 0.92));
       vec3 D = normalize(mix(restD, actD, uReach));
       float jitter = fract(sin(A*12.9898 + uSeed)*43758.5453);
-      float len = mix(0.66, 1.72, uReach) * (0.84 + 0.32*jitter);
+      float len = mix(0.98, 1.72, uReach) * (0.84 + 0.32*jitter);
       vec3 rt = normalize(cross(D, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
       vec3 up2 = cross(rt, D);
       float ph = uTime*(1.15 + 0.55*uReach) + A*2.3 + uSeed;
@@ -846,14 +853,23 @@ const OCT_DEFORM = /* glsl */`
       // curl: arm tips coil under, hard when idle, loosely when reaching
       c += up2 * (T*T*len * mix(-0.42, 0.16, uReach));
       c.y -= drag * 0.62 * (1.0 - uReach);   // at rest the arms drape flat on the silt
-      float rad = (0.172 - 0.158*T) * mix(0.94, 1.08, uReach);
+      // ...and lie ON it: a soft floor under the skirt, so a resting arm spreads and
+      // curls across the ground instead of standing the mantle up on stilts
+      float oFloor = -0.24 + (0.15 - 0.142 * T) * 0.9 + 0.02 * sin(T * 9.0 + A);
+      c.y = mix(c.y, max(c.y, oFloor), 1.0 - uReach);
+      float rad = (0.150 - 0.142*pow(T, 0.8)) * mix(0.94, 1.08, uReach);
       vec3 rn = rt*cos(R) + up2*sin(R);
+      // the oral face is flattened, a keel runs along the aboral side: an arm, not a hose
+      float oral = max(0.0, -sin(R));
+      rad *= 1.0 - 0.22 * oral * oral + 0.06 * max(0.0, sin(R));
       P = c + rn*rad;
       P.xz += ca.xz * 0.24;                          // arms leave from the skirt
       P.y += 0.14;
       N = normalize(rn + D*0.12);
     }
-    vOctT = aOct.x; vOctK = kind; vOctA = aOct.y;
+    vOctT = aOct.x; vOctK = kind; vOctA = aOct.y; vOctR = aOct.z;
+    float csA = kind < 0.5 ? aOct.y : aOct.z;
+    vOctCS = vec2(cos(csA), sin(csA));
   }`;
 
 function octopusMaterial(zi) {
@@ -870,7 +886,7 @@ function octopusMaterial(zi) {
     side: THREE.DoubleSide, emissive: 0x000000
   });
   mat.userData.u = u;
-  mat.customProgramCacheKey = () => 'abyssa-octopus';
+  mat.customProgramCacheKey = () => 'abyssa-octopus-skin';
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
@@ -885,19 +901,66 @@ function octopusMaterial(zi) {
       .replace('#include <common>', `#include <common>
         uniform vec3 uSkin; uniform vec3 uHot; uniform vec3 uGlow;
         uniform float uActive; uniform float uGrab; uniform float uTime;
-        varying float vOctT; varying float vOctK; varying float vOctA;`)
+        varying float vOctT; varying float vOctK; varying float vOctA; varying float vOctR;
+        varying vec2 vOctCS;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        // at rest the skin sits on the silt palette; rousing flushes it warmer and
-        // raises papillae contrast, which is what sells the reveal
+        float isArm = step(0.5, vOctK);
+        vec3 oV = normalize(vViewPosition);
+        float oAng = atan(vOctCS.y, vOctCS.x);          // -pi..pi, seam-free
+        // at rest the skin sits on the silt palette; rousing flushes it warmer
         vec3 skin = mix(uSkin, uHot, uActive*0.75);
-        float papilla = 0.5 + 0.5*sin(vOctA*9.0 + vOctT*38.0 + uTime*0.4);
-        skin *= 0.40 + 0.26*papilla*(0.45 + 0.55*uActive);
-        // suckers: a bright dotted line down the underside of each arm
-        float suck = pow(0.5 + 0.5*sin(vOctT*54.0), 10.0) * step(0.5, vOctK);
-        skin = mix(skin, uHot*1.10, suck*0.5*(0.3 + 0.7*uActive));
-        // arm tips pale out
-        skin *= mix(1.0, 1.14, step(0.5, vOctK) * pow(vOctT, 2.0));
+        // skin coordinate: (along, around) — arm T x ring angle, or mantle v x azimuth
+        vec2 sq = isArm > 0.5 ? vec2(vOctT * 22.0, oAng * 1.2732395) : vec2(vOctT * 13.0, oAng * 2.5464791);
+        // PAPILLAE: soft warts that stand up as the animal rouses
+        vec3 pv = skVor(sq * 2.2);
+        float pap = (1.0 - smoothstep(0.0, 0.42, pv.x)) * (0.35 + 0.65 * uActive);
+        // CHROMATOPHORES: pigment sacs that open (grow) when it flushes, closed dots at rest
+        vec3 cv = skVor(sq * 6.5 + 3.1);
+        float cr = mix(0.08, 0.34, uActive) * (0.6 + 0.8 * cv.z);
+        float chrom = 1.0 - smoothstep(cr, cr + 0.1, cv.x);
+        vec3 chromC = mix(vec3(0.34, 0.12, 0.06), vec3(0.62, 0.36, 0.12), step(0.6, cv.z));
+        skin *= 0.52 + 0.3 * pap;
+        skin = mix(skin, chromC * (0.45 + 0.7 * uActive), chrom * mix(0.45, 0.8, uActive) * skAA(sq * 6.5));
+        float h = pap * 0.7 * skAA(sq * 2.2);
+        float wet = 0.0; float pup = 0.0;
+        // SUCKERS: two staggered rows of cups down the oral face, shrinking to the tip —
+        // a pale raised rim round a dark sunk acetabulum
+        float oral = max(0.0, -vOctCS.y);
+        float sT = vOctT * 34.0 - vOctT * vOctT * 12.0;
+        float rOff = oAng + 1.5707963;
+        float suckA = 0.0, suckR = 0.0;
+        for (int k = 0; k < 2; k++) {
+          float side = k == 0 ? -1.0 : 1.0;
+          vec2 l = vec2(fract(sT + 0.5 * float(k)) - 0.5, (rOff - side * 0.36) / 0.34);
+          float d = length(l);
+          suckR = max(suckR, 1.0 - smoothstep(0.03, 0.07, abs(d - 0.34)));
+          suckA = max(suckA, 1.0 - smoothstep(0.2, 0.28, d));
+        }
+        float sK = isArm * smoothstep(0.55, 0.85, oral) * (1.0 - smoothstep(0.93, 1.0, vOctT)) * skAA(vec2(sT, oAng * 3.0));
+        skin = mix(skin, vec3(0.78, 0.62, 0.52) * (0.6 + 0.3 * uActive), suckR * sK);
+        skin = mix(skin, vec3(0.32, 0.16, 0.14), suckA * sK);
+        h += (suckR * 1.4 - suckA * 1.2) * sK;
+        // oral face paler, arm tips pale out
+        skin *= mix(1.0, 1.25, isArm * smoothstep(0.3, 0.9, oral) * (1.0 - suckA * sK));
+        skin *= mix(1.0, 1.14, isArm * pow(vOctT, 2.0));
+        // EYES: on the mantle's two knobs — a wet dome, a brass iris, the horizontal slit
+        float ea = min(abs(oAng), 3.1415927 - abs(oAng));
+        vec2 el = vec2(ea / 0.15, (vOctT - 0.42) / 0.08);
+        float ed = length(el);
+        float eIn = (1.0 - isArm) * (1.0 - smoothstep(0.82, 1.0, ed));
+        float slit = (1.0 - smoothstep(0.58, 0.68, abs(el.x))) * (1.0 - smoothstep(0.14, 0.22, abs(el.y) - 0.03 * uActive));
+        vec3 iris = vec3(0.36, 0.30, 0.17) * (0.65 + 0.5 * skN2(vec2(atan(el.y, el.x) * 5.0, ed * 9.0)));
+        skin = mix(skin, mix(iris, vec3(0.01, 0.01, 0.012), slit), eIn);
+        skin *= 1.0 - 0.45 * (1.0 - isArm) * (1.0 - smoothstep(0.0, 0.14, abs(ed - 1.05)));   // lid fold
+        h = mix(h, sqrt(max(0.0, 1.0 - ed * ed)) * 2.5, eIn);
+        wet = eIn;
         diffuseColor.rgb *= skin;
+        normal = skBump(-vViewPosition, normal, h * 0.012, faceDirection);
+        roughnessFactor = mix(roughnessFactor * 0.8, 0.05, wet);
+        totalEmissiveRadiance += skCatch(normal, oV, vViewPosition) * wet;
         // dim bioluminescent ring around the eyes / along reaching arms
         // a whisper of bioluminescence at the arm tips only — enough to catch the eye
         // in the dark, never enough to overwhelm the skin it sits on
