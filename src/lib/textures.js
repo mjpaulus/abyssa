@@ -538,3 +538,32 @@ export function castSet() {
   _cast = { map: mapT, rough: _dataTex(rgh, S), nrm: _dataTex(_packNormal(h, S, 3.0), S) };
   return _cast;
 }
+
+// WATER ON GLASS. Beads left on a porthole after the helmet breaks the surface: round
+// domes of every size, a few drops that ran and left a trail. Tileable, seeded.
+//   nrm.rgb = tangent normal of the beads, nrm.a = bead mask/height (0 = dry glass).
+let _drops = null;
+export function dropletSet() {
+  if (_drops) return _drops;
+  const S = 256, rand = seededRand(0xd40b1e75);
+  const h = new Float32Array(S * S);
+  const dome = (cx, cy, r, amp) => {
+    const R = Math.ceil(r + 1);
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const d2 = (dx * dx + dy * dy) / (r * r);
+      if (d2 >= 1) continue;
+      const x = ((Math.floor(cx) + dx) % S + S) % S, y = ((Math.floor(cy) + dy) % S + S) % S, i = y * S + x;
+      h[i] = Math.max(h[i], amp * Math.sqrt(1 - d2));
+    }
+  };
+  for (let k = 0; k < 420; k++) { const r = 0.8 + Math.pow(rand(), 3) * 7; dome(rand() * S, rand() * S, r, 0.35 + 0.65 * Math.min(1, r / 5)); }
+  for (let k = 0; k < 9; k++) {                            // runs: a head bead and its thinning trail
+    const x0 = rand() * S, y0 = rand() * S, len = 20 + rand() * 60, r0 = 2.5 + rand() * 3;
+    for (let t = 0; t < len; t += 0.7) dome(x0 + Math.sin(t * 0.08) * 1.5, y0 + t, r0 * (0.35 + 0.35 * (1 - t / len)), 0.4);
+    dome(x0, y0 + len, r0 * 1.2, 1);
+  }
+  const nrm = _packNormal(h, S, 6.0);
+  for (let i = 0; i < S * S; i++) nrm[i * 4 + 3] = Math.min(255, h[i] * 400);
+  _drops = { nrm: _dataTex(nrm, S) };
+  return _drops;
+}

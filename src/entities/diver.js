@@ -14,7 +14,7 @@ import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // drives the breath cadence. (No cycles: neither module imports the diver.)
 import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet } from '../lib/textures.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -47,6 +47,10 @@ function curve(keys) {
     return 0.5 * (2 * v1 + (v2 - v0) * u + (2 * v0 - 5 * v1 + 4 * v2 - v3) * u * u + (-v0 + 3 * v1 - 3 * v2 + v3) * u * u * u);
   };
 }
+
+// Shared per-frame uniforms, written by updateDiver (two/three float writes a frame):
+// uSalWet (dress soak 0..1), uSalRootY (sole height, world), uSalDrop (beads on the glass).
+export const salShared = { uSalWet: { value: 0 }, uSalRootY: { value: 0 }, uSalDrop: { value: 0.15 } };
 
 // ---- procedural PBR maps ----
 // One height field drives albedo, roughness and normal together, so verdigris and wear
@@ -165,9 +169,16 @@ const rubber = new THREE.MeshStandardMaterial({
   map: rubberM.map, roughnessMap: rubberM.rough, normalMap: rubberM.nrm, normalScale: new THREE.Vector2(0.8, 0.8),
   roughness: 1, metalness: 0.06, envMap: envTex, envMapIntensity: 0.16
 });
+// PORT GLASS: thick, wet, and actually glass. Transparent (alpha from a Fresnel term —
+// near-clear face-on, a mirror at grazing), over a dark RECESS disc that is merged into
+// the same draw (vertex colour black = the helmet's shadowed inside, opaque; it is
+// emitted first in each port so the glass blends over it in index order). Beads of
+// water sit on it in air (dropletSet, triplanar in the helmet's space), fading as the
+// dress dries. Front faces only + forceSinglePass: no DoubleSide transparency sorting.
 const glassMat = new THREE.MeshPhysicalMaterial({
-  color: 0x1d5c46, metalness: 0.15, roughness: 0.06, emissive: 0x0b2a1d, clearcoat: 1, clearcoatRoughness: 0.05,
-  envMap: envTex, envMapIntensity: 1.1, side: THREE.DoubleSide
+  color: 0x4f6a63, metalness: 0.0, roughness: 0.05, clearcoat: 1, clearcoatRoughness: 0.04,
+  envMap: envTex, envMapIntensity: 0.8, side: THREE.FrontSide, transparent: true, forceSinglePass: true,
+  vertexColors: true
 });
 const lantGlass = new THREE.MeshPhysicalMaterial({
   color: 0xffe6bb, metalness: 0, roughness: 0.08, transparent: true, opacity: 0.28,
@@ -229,7 +240,7 @@ const MET_FS_ROUGH = `
 roughnessFactor *= metTri(tMetR, metPp, metW).g;
 roughnessFactor = mix(roughnessFactor, 0.88, metCav * (0.55 + 0.4 * metVg));
 roughnessFactor *= 1.0 - 0.5 * metEdge * (1.0 - metCav);
-roughnessFactor *= 1.0 + 0.30 * metSg;
+roughnessFactor *= 1.0 + 0.14 * metSg;
 roughnessFactor = clamp(roughnessFactor, 0.05, 1.0);`;
 const MET_FS_METAL = `
 metalnessFactor *= 1.0 - 0.75 * metCav * metVg;`;
@@ -241,7 +252,7 @@ const MET_FS_NORMAL = `
   float ns = uMetNs * (1.0 - 0.65 * uPaintK * uMetPaint);
   vec3 d = metW.x * vec3(0.0, tx.y, tx.x) + metW.y * vec3(ty.x, 0.0, ty.y) + metW.z * vec3(tz.x, tz.y, 0.0);
   normal = normalize(normalMatrix * normalize(metNo + d * ns));
-  normal = metBump(-vViewPosition, normal, vec2(dFdx(metSg), dFdy(metSg)) * 0.18);
+  normal = metBump(-vViewPosition, normal, vec2(dFdx(metSg), dFdy(metSg)) * 0.06);
 }`;
 function metalize(m, o) {
   const U = {
@@ -267,10 +278,45 @@ function metalize(m, o) {
   m.customProgramCacheKey = () => 'salMetal1';
   return m;
 }
-metalize(copper, { set: copperM, tile: 3.6, ns: 0.32, edge: 0.45, tarn: 0x3a2014, verd: 0x2e5c4c });
-metalize(brass, { set: brassM, tile: 4.4, ns: 0.18, edge: 0.55, tarn: 0x4a3a16, verd: 0x557a52 });
+metalize(copper, { set: copperM, tile: 5.0, ns: 0.22, edge: 0.45, tarn: 0x3a2014, verd: 0x2e5c4c });
+metalize(brass, { set: brassM, tile: 6.0, ns: 0.12, edge: 0.55, tarn: 0x4a3a16, verd: 0x557a52 });
 metalize(steel, { set: copperM, tile: 3.0, ns: 0.45, albK: 0, edge: 0.6, tarn: 0x2a1a10, verd: 0x3a2a1c, paint: true });
 metalize(lead, { set: castM, tile: 4.0, ns: 0.9, edge: 0.12, tarn: 0x9a9890, verd: 0xc4c2b8, paint: true });
+
+// ---- THE GLASS SHADER (port glass only) ----
+const GL_FS_COMMON = `
+uniform sampler2D tSalDrop; uniform float uSalDropK;
+varying vec3 vGlP; varying vec3 vGlN;
+float glDrop;`;
+const GL_FS_NORMAL = `
+{
+  vec3 gn = normalize(vGlN);
+  vec3 gw = pow(abs(gn), vec3(4.0)); gw /= (gw.x + gw.y + gw.z);
+  vec3 gp = vGlP * 5.5;
+  vec4 dx = texture2D(tSalDrop, gp.zy), dy = texture2D(tSalDrop, gp.xz), dz = texture2D(tSalDrop, gp.xy);
+  glDrop = (dx.a * gw.x + dy.a * gw.y + dz.a * gw.z) * uSalDropK * step(0.5, vColor.r);
+  vec3 d = gw.x * vec3(0.0, dx.y * 2.0 - 1.0, dx.x * 2.0 - 1.0) + gw.y * vec3(dy.x * 2.0 - 1.0, 0.0, dy.y * 2.0 - 1.0)
+         + gw.z * vec3(dz.x * 2.0 - 1.0, dz.y * 2.0 - 1.0, 0.0);
+  normal = normalize(normal + (normalMatrix * d) * 1.4 * uSalDropK * step(0.5, vColor.r));
+}`;
+const GL_FS_ALPHA = `
+{
+  float fr = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 2.2);
+  float rec = 1.0 - step(0.5, vColor.r);
+  diffuseColor.a = mix(clamp(mix(0.22, 0.94, fr) + glDrop * 0.35, 0.0, 1.0), 1.0, rec);
+}`;
+const _drops = dropletSet();
+glassMat.onBeforeCompile = sh => {
+  Object.assign(sh.uniforms, { tSalDrop: { value: _drops.nrm }, uSalDropK: salShared.uSalDrop });
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vGlP; varying vec3 vGlN;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlP = position; vGlN = normal;');
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', '#include <common>\nuniform mat3 normalMatrix;\n' + GL_FS_COMMON)
+    .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + GL_FS_NORMAL)
+    .replace('#include <opaque_fragment>', GL_FS_ALPHA + '\n#include <opaque_fragment>');
+};
+glassMat.customProgramCacheKey = () => 'salGlass1';
 
 // ---- THE DRESS SHADER ----
 // One injected block shared by every canvas material on Sal (one program per
@@ -354,7 +400,6 @@ const SUIT_FS_NORMAL = `
   float bh = salTape * 0.7 + salPEdge * 0.6 - salStitch * 0.5;
   normal = salBump(-vViewPosition, normal, vec2(dFdx(bh), dFdy(bh)) * 0.55);
 }`;
-export const salShared = { uSalWet: { value: 0 }, uSalRootY: { value: 0 } };
 const _tw = twillSet();
 function suitify(m, o) {
   const U = {
@@ -701,17 +746,23 @@ function sheathGeo(p) {
   return p;
 }
 
-function porthole(p, rimR, glassR, bars, x, y, z, rx, ry, nb = 8) {
+// sOff: distance along the port's axis from its centre to the bonnet's outer surface,
+// so the bezel, the recess and the glass all sit ON the copper rather than inside it.
+function porthole(p, rimR, glassR, bars, x, y, z, rx, ry, nb = 8, sOff = 0.045) {
   const put = g => xf(g, x, y, z, rx, ry, 0);
-  p.add(put(new THREE.CylinderGeometry(rimR, rimR * 1.06, 0.075, 20, 1, true).rotateX(Math.PI / 2)), brass);
-  p.add(put(new THREE.TorusGeometry(rimR, rimR * 0.16, 10, 20).translate(0, 0, 0.036)), brass);
-  p.add(put(new THREE.TorusGeometry(rimR * 1.22, rimR * 0.1, 5, 20).translate(0, 0, -0.03)), copper);
-  p.add(put(new THREE.SphereGeometry(glassR * 1.9, 14, 7, 0, TAU, 0, 0.56).rotateX(Math.PI / 2).translate(0, 0, -glassR * 1.52)), glassMat);
-  for (let i = 0; i < nb; i++) {                             // bezel bolts
+  p.add(put(new THREE.CylinderGeometry(rimR, rimR * 1.06, 0.07, 22, 1, true).rotateX(Math.PI / 2).translate(0, 0, sOff - 0.025)), brass);
+  p.add(put(new THREE.TorusGeometry(rimR, rimR * 0.15, 9, 24).translate(0, 0, sOff + 0.012)), brass);     // bezel
+  p.add(put(new THREE.TorusGeometry(rimR * 1.22, rimR * 0.1, 5, 24).translate(0, 0, sOff - 0.012)), copper); // flange
+  // the recess first (dark, opaque), then the glass over it: one draw, index order
+  p.add(put(tint(new THREE.CircleGeometry(rimR * 0.98, 20).translate(0, 0, sOff + 0.003), 0.02)), glassMat);
+  const capZ = sOff + 0.008 - glassR * 1.9 * Math.cos(0.56);
+  p.add(put(new THREE.SphereGeometry(glassR * 1.9, 18, 6, 0, TAU, 0, 0.56).rotateX(Math.PI / 2).translate(0, 0, capZ)), glassMat);
+  for (let i = 0; i < nb; i++) {                             // bezel bolts: hex heads
     const a = i / nb * TAU;
-    p.add(put(new THREE.SphereGeometry(rimR * 0.135, 6, 5).translate(Math.cos(a) * rimR * 1.06, Math.sin(a) * rimR * 1.06, 0.042)), brass);
+    p.add(put(new THREE.CylinderGeometry(rimR * 0.10, rimR * 0.10, rimR * 0.09, 6).rotateX(Math.PI / 2)
+      .translate(Math.cos(a) * rimR * 1.06, Math.sin(a) * rimR * 1.06, sOff + 0.022)), brass);
   }
-  if (bars) for (let i = -1; i <= 1; i++) p.add(put(guardBar(i * rimR * 0.56, rimR, rimR * 0.085)), brass);
+  if (bars) for (let i = -1; i <= 1; i++) p.add(put(guardBar(i * rimR * 0.56, rimR, rimR * 0.085).translate(0, 0, sOff + 0.004)), brass);
 }
 
 // A short corrugated hose length running up its own +Y, baked to one mesh per joint.
@@ -771,15 +822,24 @@ export const diver = (() => {
     // neck ring / breastplate lock
     p.add(xf(new THREE.CylinderGeometry(0.268, 0.276, 0.09, 32), 0, 0.035), brass);
     p.add(xf(new THREE.TorusGeometry(0.272, 0.028, 6, 32).rotateX(Math.PI / 2), 0, 0.082), brass);
-    rivetRing(p, brass, 12, 0.286, 0.036, 0.024);
+    for (let i = 0; i < 12; i++) {                           // neck-ring bolts: washer + hex head
+      const a = (i + 0.5) / 12 * TAU, pos = V3(Math.cos(a) * 0.281, 0.036, Math.sin(a) * 0.281), dir = V3(Math.cos(a), 0, Math.sin(a));
+      p.add(faceAlong(new THREE.CylinderGeometry(0.023, 0.023, 0.005, 12).rotateX(Math.PI / 2), pos, dir), brass);
+      p.add(faceAlong(new THREE.CylinderGeometry(0.017, 0.017, 0.016, 6).rotateX(Math.PI / 2).translate(0, 0, 0.009), pos, dir), brass);
+    }
     for (let i = 0; i < 4; i++) {                            // interrupted-thread lugs
       const a = i / 4 * TAU + 0.4;
       p.add(xf(new THREE.BoxGeometry(0.10, 0.036, 0.05), Math.cos(a) * 0.29, 0.005, Math.sin(a) * 0.29, 0, -a, 0), brass);
     }
-    porthole(p, 0.198, 0.160, false, 0, 0.455, 0.402, -0.08, 0, 12);    // open front faceplate, 12-bolt bezel
-    porthole(p, 0.132, 0.104, true, 0.376, 0.470, 0.128, 0, 1.245);     // side ports
-    porthole(p, 0.132, 0.104, true, -0.376, 0.470, 0.128, 0, -1.245);
-    porthole(p, 0.126, 0.100, true, 0, 0.818, 0.172, -1.16, 0);         // top port
+    const sOff = k => {                                       // march out along the axis to the copper
+      const q = PORTS[k], a = pAx[k];
+      for (let t = -0.05; t < 0.2; t += 0.001) if (Math.hypot(q[1] + a.x * t, q[3] + a.z * t) > hR(q[2] + a.y * t)) return t;
+      return 0.045;
+    };
+    porthole(p, 0.198, 0.160, false, 0, 0.455, 0.402, -0.08, 0, 12, sOff(0));    // open front faceplate, 12-bolt bezel
+    porthole(p, 0.132, 0.104, true, 0.376, 0.470, 0.128, 0, 1.245, 8, sOff(1));  // side ports
+    porthole(p, 0.132, 0.104, true, -0.376, 0.470, 0.128, 0, -1.245, 8, sOff(2));
+    porthole(p, 0.126, 0.100, true, 0, 0.818, 0.172, -1.16, 0, 8, sOff(3));      // top port
     for (let i = 0; i < 3; i++) {                            // faceplate dog clamps
       const a = i * 2.094;
       wingnut(p, Math.sin(a) * 0.300, 0.455 + Math.cos(a) * 0.300, 0.300, 0, 0.85);
@@ -813,14 +873,39 @@ export const diver = (() => {
     p.add(xf(new THREE.TorusGeometry(0.40, 0.019, 5, 20, 1.15).rotateZ(0.42).rotateY(Math.PI / 2), 0, 0.455, 0), brass);
     // exhaust valve, right of the faceplate — bubbles vent here
     const ex = new THREE.Group(); ex.position.set(-0.352, 0.315, 0.245); neck.add(ex); g.exhaust = ex;
-    p.add(xf(new THREE.CylinderGeometry(0.055, 0.062, 0.07, 10).rotateZ(Math.PI / 2), -0.375, 0.315, 0.245), brass);
-    p.add(xf(new THREE.CylinderGeometry(0.036, 0.036, 0.05, 8).rotateZ(Math.PI / 2), -0.425, 0.315, 0.245), copper);
-    for (let i = 0; i < 6; i++) {
-      const a = i / 6 * TAU;
-      p.add(xf(new THREE.BoxGeometry(0.05, 0.016, 0.016), -0.425, 0.315 + Math.cos(a) * 0.036, 0.245 + Math.sin(a) * 0.036, a, 0, 0), brass);
+    // THE EXHAUST VALVE as a fitting: a chamfered base flange sweated to the bonnet, the
+    // valve barrel, a hex body, the knurled adjusting cap the diver screws down with his
+    // chin-side hand, and the spitcock lever. Axis radial off the bonnet at the vent.
+    {
+      const d = V3(-0.375, 0, 0.245).normalize(), B = V3(d.x * hR(0.315), 0.315, d.z * hR(0.315));
+      const along = (geo, t) => faceAlong(geo.rotateX(Math.PI / 2).translate(0, 0, t), B, d);
+      p.add(along(lathe([[0, 0], [0.070, 0], [0.074, 0.006], [0.066, 0.014], [0, 0.014]], 18), -0.004), brass);
+      p.add(along(lathe([[0.050, 0], [0.054, 0.006], [0.054, 0.040], [0.049, 0.048], [0.040, 0.050]], 16), 0.008), brass);
+      p.add(along(new THREE.CylinderGeometry(0.046, 0.046, 0.020, 6), 0.068), brass);
+      const kn = new THREE.CylinderGeometry(0.036, 0.036, 0.032, 28, 1);
+      const kp = kn.attributes.position;
+      for (let i = 0; i < kp.count; i++) {                   // knurl: alternate the rim radius
+        const ang = Math.atan2(kp.getZ(i), kp.getX(i)), r = Math.hypot(kp.getX(i), kp.getZ(i));
+        if (r > 0.03) { const k = 1 + 0.07 * Math.sign(Math.cos(ang * 14)); kp.setX(i, kp.getX(i) * k); kp.setZ(i, kp.getZ(i) * k); }
+      }
+      kn.computeVertexNormals();
+      p.add(along(kn, 0.094), copper);
+      p.add(along(new THREE.SphereGeometry(0.018, 10, 6, 0, TAU, 0, Math.PI / 2), 0.110), brass);
+      // spitcock: a small lever off the barrel, pointing forward
+      p.add(faceAlong(new THREE.CapsuleGeometry(0.006, 0.05, 3, 6).rotateX(Math.PI / 2).translate(0, 0, 0.03),
+        V3(B.x + d.x * 0.04, 0.315 - 0.045, B.z + d.z * 0.04), V3(0.15, -0.2, 1).normalize()), brass);
     }
-    // air inlet elbow (back right) and comms gland (back left)
-    p.add(xf(new THREE.CylinderGeometry(0.072, 0.082, 0.12, 10).rotateZ(-0.7), -0.30, 0.40, -0.28, 0, -0.6, 0), brass);
+    // THE AIR INLET: a gooseneck elbow out of the back of the bonnet turning down to meet
+    // the feed hose, with a hex coupling nut at each end and the non-return valve body.
+    {
+      const P0 = V3(-0.323, 0.452, -0.306), P3 = V3(-0.352, 0.378, -0.338);
+      const gc = new THREE.CatmullRomCurve3([P0, V3(-0.352, 0.476, -0.338), V3(-0.380, 0.452, -0.366), V3(-0.372, 0.408, -0.358), P3]);
+      p.add(new THREE.TubeGeometry(gc, 14, 0.030, 10, false), brass);
+      p.add(faceAlong(new THREE.CylinderGeometry(0.046, 0.050, 0.020, 6).rotateX(Math.PI / 2), P0, V3(-0.72, 0.05, -0.69).normalize()), brass);
+      p.add(faceAlong(new THREE.CylinderGeometry(0.040, 0.040, 0.030, 6).rotateX(Math.PI / 2), P3, gc.getTangentAt(1)), brass);
+      p.add(faceAlong(lathe([[0.034, 0], [0.042, 0.008], [0.042, 0.030], [0.034, 0.038]], 14).rotateX(Math.PI / 2),
+        gc.getPointAt(0.5), gc.getTangentAt(0.5).negate()), brass);
+    }
     p.add(xf(new THREE.CylinderGeometry(0.05, 0.056, 0.10, 8).rotateZ(0.5), 0.28, 0.30, -0.30, 0, 0.6, 0), brass);
     p.add(xf(new THREE.SphereGeometry(0.042, 8, 6), 0.30, 0.365, -0.325), copper);
     rivetRing(p, brass, 16, 0.436, 0.24, 0.021);
@@ -972,7 +1057,7 @@ export const diver = (() => {
     for (const sx of [-1, 1]) {
       // the harness straps lie ON the brass now and end above the skirt (buckled), instead
       // of hanging a brass block into the air under it
-      p.add(xf(new THREE.BoxGeometry(0.072, 0.25, 0.016), sx * 0.20, 0.545, 0.418, -0.36, 0, sx * 0.05), darkLeather);
+      p.add(xf(new THREE.BoxGeometry(0.072, 0.17, 0.016), sx * 0.20, 0.515, 0.432, -0.36, 0, sx * 0.05), darkLeather);
       p.add(xf(buckleGeo(0.086, 0.05, 0.006), sx * 0.20, 0.445, 0.440, -0.36, 0, sx * 0.05), brass);
     }
     p.bake();
@@ -1012,7 +1097,7 @@ export const diver = (() => {
   {
     const p = Part(spine);
     const c = new THREE.CatmullRomCurve3([
-      V3(-0.155, 0.755, -0.445), V3(-0.235, 0.885, -0.415), V3(-0.305, 1.045, -0.355), V3(-0.300, 1.160, -0.290)
+      V3(-0.155, 0.755, -0.445), V3(-0.235, 0.885, -0.415), V3(-0.330, 1.035, -0.375), V3(-0.352, 1.118, -0.338)
     ]);
     p.add(new THREE.TubeGeometry(c, 14, 0.056, 8, false), rubber);
     for (let i = 0; i <= 11; i++) {
@@ -2448,6 +2533,9 @@ export function updateDiver(dt, t, player) {
   salShared.uSalRootY.value = diver.position.y - EYE_H;
   salShared.uSalWet.value = submerged ? Math.min(1, salShared.uSalWet.value + dt * 2.0)
     : Math.max(0, salShared.uSalWet.value - dt / 75);
+  // beads on the port glass exist only in air: gone under water, thick just after he
+  // surfaces, drying off with the dress down to a faint condensation film
+  salShared.uSalDrop.value = submerged ? 0 : 0.15 + 0.85 * salShared.uSalWet.value;
   const phm = breathPh % TAU;
   if (phm < _phPrev) {                                  // wrapped: a cycle completed
     breathIdx++;
