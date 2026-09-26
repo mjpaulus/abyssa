@@ -34,7 +34,7 @@ import { makeHoard } from './hoard.js';
 
 const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
-const RM_OF_SIZE = 0.95, ARM_OF_SIZE = 5.0, NA = 8, RINGS = 40, RR = 128, RAD = 28, SUCK = 40;
+const RM_OF_SIZE = 0.95, ARM_OF_SIZE = 5.0, NA = 8, RINGS = 40, RR = 128, RAD = 28, SUCK = 36;
 const WARD_ARMS = [0, 2, 4, 6], WARD_S = 0.22;
 const UP = V3(0, 1, 0);
 

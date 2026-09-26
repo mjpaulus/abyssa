@@ -460,7 +460,7 @@ export function lidGeo(R = 0.178, lower = false, radial = 36) {
 // ---- suckers -----------------------------------------------------------------------------
 // A stalked cup facing +Y: a short stalk into the flesh, the outer wall, a pale rolled RIM,
 // the pink inner cup (infundibulum) and the dark central opening (acetabulum).
-export function suckerGeo(radial = 14) {
+export function suckerGeo(radial = 12) {
   const P = [
     [0.50, -0.40, 0.55], [0.56, -0.12, 0.6], [0.80, 0.00, 0.66], [0.96, 0.10, 0.72], [1.00, 0.19, 0.8],
     [0.93, 0.26, 0.88], [0.80, 0.23, 0.78], [0.62, 0.15, 0.58], [0.40, 0.08, 0.42], [0.22, 0.03, 0.09], [0.12, -0.06, 0.04], [0.0, -0.08, 0.03]
@@ -723,3 +723,7 @@ export function woodMaps(S = 256) {
   _wood = { map: dataTex(alb, S, S, true), normalMap: dataTex(nrm, S, S, false) };
   return _wood;
 }
+
+// shared with hunter.js (Mhor's club)
+export { colorize as paint, mergeClean };
+export const suckerRaw = radial => suckerGeo(radial);
