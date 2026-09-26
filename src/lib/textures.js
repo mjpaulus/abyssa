@@ -1512,13 +1512,13 @@ export function barkSet() {
     const u = x / W, v = y / H, i = y * W + x;
     const w = fb(wrp, u, v) - 0.5;
     // ridge profile: flat plateaus, V furrows
-    const ph = u * RID + w * 1.6 + 0.35 * Math.sin(v * Math.PI * 2 * 3 + u * 9);
+    const ph = u * RID + w * 1.0 + (fb(pat, u * 2 + 0.3, v * 3) - 0.5) * 0.6;
     const fr = Math.abs(Math.sin(Math.PI * ph));
-    const ridge = Math.min(1, Math.pow(fr, 0.45) * 1.15);
+    const ridge = Math.min(1, Math.pow(fr, 0.8) * 1.2);
     // cross checks: sparse horizontal breaks that cut the ridges into plates
-    const cv = v * 36 + w * 2 + Math.floor(ph) * 0.37;
+    const cv = v * 44 + w * 2 + Math.floor(ph) * 0.37;
     const cc = Math.abs(Math.sin(Math.PI * cv));
-    const cut = (1 - Math.min(1, cc / 0.12)) * (smp(chk[0], u + Math.floor(ph) * 0.13, v) > 0.45 ? 1 : 0);
+    const cut = (1 - Math.min(1, cc / 0.16)) * (smp(chk[0], u + Math.floor(ph) * 0.13, v) > 0.35 ? 1 : 0);
     const barkH = 0.55 * ridge * (1 - 0.8 * cut) + 0.08 * (fb(fn, u, v) - 0.5);
     // sloughed patches: bare wood
     const pm = fb(pat, u + 0.2, v + 0.7);
@@ -1527,7 +1527,8 @@ export function barkSet() {
     const woodH = 0.05 + 0.03 * Math.sin((u * 90 + g * 6) * Math.PI) * 0.5 - 0.1 * Math.max(0, smp(grn[0], u * 3, v) - 0.8) * 4;
     h[i] = bare * (0.2 + barkH) + (1 - bare) * woodH;
     bk[i] = bare;
-    const tone = 0.62 + 0.45 * ridge - 0.25 * cut + 0.15 * (fb(fn, u + 0.5, v) - 0.5);
+    const plateT = _ihash(Math.floor(ph), Math.floor(cv), 77);   // each plate its own weathering
+    const tone = 0.5 + 0.45 * ridge - 0.3 * cut + 0.25 * (plateT - 0.5) + 0.15 * (fb(fn, u + 0.5, v) - 0.5);
     al[i] = bare * tone * 0.8 + (1 - bare) * (0.95 + 0.25 * (g - 0.5) + 0.1 * Math.sin((u * 90 + g * 6) * Math.PI));
     rg[i] = bare * (0.78 + 0.18 * (1 - ridge)) + (1 - bare) * 0.62;
   }
@@ -1536,7 +1537,7 @@ export function barkSet() {
     pack[i * 4] = Math.min(255, al[i] / 1.4 * 255); pack[i * 4 + 1] = Math.min(255, rg[i] * 255);
     pack[i * 4 + 2] = Math.max(0, Math.min(255, h[i] * 255)); pack[i * 4 + 3] = bk[i] * 255;
   }
-  _pwNormals(h, W, H, 0.012, nrm, i => Math.max(0, Math.min(255, h[i] * 255)));
+  _pwNormals(h, W, H, 0.03, nrm, i => Math.max(0, Math.min(255, h[i] * 255)));
   _barkSet = { pack: _pwTex(pack, W, H, false), nrm: _pwTex(nrm, W, H, false), ms: performance.now() - t0 };
   return _barkSet;
 }
@@ -1563,7 +1564,7 @@ export function staveSet() {
     const edge = Math.min(f, 1 - f);                         // 0 at the seam
     const seam = 1 - Math.min(1, edge / 0.05);
     const round = 1 - Math.pow(1 - Math.min(1, edge / 0.16), 2);
-    let gx = f * 22 + gph[k] + (_pwFbm(wan, u, v) - 0.5) * 3;
+    let gx = f * 14 + gph[k] + (_pwFbm(wan, u, v) - 0.5) * 3;
     for (const [kx, ky, kr] of knots) {                     // grain swirls round a knot
       const dx = u - kx, dy = (v - ky) * 0.5, d = Math.hypot(dx, dy);
       if (d < kr * 4) gx += (kr * 4 - d) / (kr * 4) * 3 * Math.sign(dx || 1);
@@ -1571,8 +1572,8 @@ export function staveSet() {
     const gl = Math.abs(Math.sin(Math.PI * gx));
     const late = Math.pow(gl, 3);
     const fnn = _pwFbm(fn, u, v);
-    h[i] = 0.5 * round - 0.35 * seam + 0.06 * late + 0.05 * (fnn - 0.5);
-    al[i] = (0.72 + 0.4 * tone[k]) * (0.86 + 0.2 * late) * (1 - 0.5 * seam) * (0.9 + 0.2 * fnn);
+    h[i] = 0.5 * round - 0.35 * seam + 0.025 * late + 0.05 * (fnn - 0.5);
+    al[i] = (0.62 + 0.5 * tone[k]) * (0.8 + 0.3 * late) * (1 - 0.6 * seam) * (0.8 + 0.4 * fnn);
     rg[i] = 0.72 + 0.2 * (1 - late) + 0.08 * seam;
     sm[i] = seam;
   }
