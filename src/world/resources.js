@@ -236,15 +236,20 @@ function polymerGeo(L) {
     for (let k = 1; k < 4; k++) if (lobes[k].rx * lobes[k].ry > big.rx * big.ry) big = lobes[k];
     cx = big.cx; cy = big.cy; cz = big.cz;
   }
-  const g = new THREE.IcosahedronGeometry(1, 5);
+  // weld FIRST (three's icosahedron is non-indexed: 6x the vertices) so every surface
+  // point is solved once
+  const g0 = new THREE.IcosahedronGeometry(1, 5);
+  g0.deleteAttribute('normal'); g0.deleteAttribute('uv');
+  const g = mergeVertices(g0, 1e-5);
+  g0.dispose();
   const p = g.attributes.position, nV = p.count;
   const aRes = new Float32Array(nV * 3), tmp = [0, 0];
   for (let i = 0; i < nV; i++) {
     const dx = p.getX(i), dy = p.getY(i), dz = p.getZ(i);
     // march in from outside to the outermost crossing, then bisect
-    let hi = 2.2, lo = 0;
-    for (let t = 2.2; t > 0; t -= 0.08) if (field(cx + dx * t, cy + dy * t, cz + dz * t) > 0) { lo = t; hi = t + 0.08; break; }
-    for (let it = 0; it < 14; it++) { const m = (lo + hi) / 2; if (field(cx + dx * m, cy + dy * m, cz + dz * m) > 0) lo = m; else hi = m; }
+    let hi = 2.0, lo = 0;
+    for (let t = 2.0; t > 0; t -= 0.12) if (field(cx + dx * t, cy + dy * t, cz + dz * t) > 0) { lo = t; hi = t + 0.12; break; }
+    for (let it = 0; it < 10; it++) { const m = (lo + hi) / 2; if (field(cx + dx * m, cy + dy * m, cz + dz * m) > 0) lo = m; else hi = m; }
     let x = cx + dx * lo, y = cy + dy * lo, z = cz + dz * lo;
     field(x, y, z, tmp);
     // a little lumpy growth over the whole skin (cheap, low octave)
@@ -256,13 +261,9 @@ function polymerGeo(L) {
     aRes[i * 3 + 1] = lobes[tmp[0]].t;
     aRes[i * 3 + 2] = 0;
   }
-  // three's icosahedron is non-indexed; weld for smooth normals across its seams
-  g.deleteAttribute('normal'); g.deleteAttribute('uv');
   g.setAttribute('aRes', new THREE.BufferAttribute(aRes, 3));
-  const w = mergeVertices(g, 1e-5);
-  g.dispose();
-  w.computeVertexNormals();
-  return w;
+  g.computeVertexNormals();
+  return g;
 }
 
 // Drape a node onto the seabed it sits on: each vertex follows the terrain's offset
@@ -301,7 +302,7 @@ function polymerMesh(at, zi) {
 // aRes: x = crust (0 pool .. 1 plate), y = unused, z = sulphur.
 function bitumenGeo(B) {
   const r = _mix32(Math.floor(B[0].r * 1e7) ^ Math.floor(B[2].x * 1e6 + 3e5));
-  const R = 1.35, RINGS = 12, SEG = 40;
+  const R = 1.35, RINGS = 8, SEG = 32;
   const poolR = 0.55 + 0.12 * r(), lip = 0.06 + 0.04 * r(), sd = r() * 50;
   const pos = [], ares = [], idx = [];
   const H = (x, z) => {

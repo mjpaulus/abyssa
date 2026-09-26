@@ -36,8 +36,15 @@ function eggShape(x, y, z) {
 // One egg: the ovoid at a resolution that holds its silhouette at arm's length. The
 // skin (veins, pebbling, warmth) is all in the material; the vertex colour keeps a
 // faint large mottle, aShell = 0 (a living egg: it glows).
+// Built once per session (a fixed seed: the same egg every time). disposeSleeper
+// disposes it with her, which only frees the GPU copy; the next nest re-uploads it.
+let _eggGeo = null;
 function eggGeo() {
-  const g = new THREE.SphereGeometry(1, 36, 26);
+  if (!_eggGeo) _eggGeo = buildEggGeo();
+  return _eggGeo;
+}
+function buildEggGeo() {
+  const g = new THREE.SphereGeometry(1, 32, 22);
   const p = g.attributes.position, c = new Float32Array(p.count * 3), rnd = seededRand(0xE665);
   const spots = Array.from({ length: 22 }, () => [rnd() * 2 - 1, rnd() * 2 - 1, rnd() * 2 - 1]);
   for (let i = 0; i < p.count; i++) {
@@ -58,9 +65,14 @@ function eggGeo() {
 // (a noisy radius in the patch's own angular frame), real thickness (inner skin +
 // rim wall), the inside a pale dried membrane, the rim bone-white where it snapped.
 // aShell = 1: dead shell, no warmth in it. ONE geometry for all twelve instances.
+let _shardGeo = null;
 function shardGeo() {
+  if (!_shardGeo) _shardGeo = buildShardGeo();
+  return _shardGeo;
+}
+function buildShardGeo() {
   const rnd = seededRand(0x5AADD);
-  const RR = 9, SS = 28, TH = 0.035;                       // rings, rim samples, thickness
+  const RR = 4, SS = 18, TH = 0.035;                       // rings, rim samples, thickness
   // a broken outline: a wandering radius with a few deep notches, never a regular crown
   const jag0 = Array.from({ length: SS }, () => rnd());
   const jag = jag0.map((v, j) => { const a = jag0[(j + SS - 1) % SS], b = jag0[(j + 1) % SS]; const w = (a + 2 * v + b) / 4; return 0.55 + 0.4 * w + (v > 0.86 ? -0.22 : 0) + (v < 0.08 ? 0.12 : 0); });
@@ -253,10 +265,20 @@ function _sn(x, y, z) {
 }
 // One cobble in world space: a unit icosphere pushed by two octaves of noise, squashed
 // (sq) and stretched along its own long axis, then yawed, tilted and seated.
+// The welded unit icosphere is built once per session and copied per stone (welding is
+// most of the cost; the nest is rebuilt on every zone-0 entry).
+let _cobBase = null;
 function cobbleGeo(seed, s, yaw, tilt, pos, tone) {
-  const g0 = new THREE.IcosahedronGeometry(1, 4);
-  g0.deleteAttribute('normal'); g0.deleteAttribute('uv');
-  const g = mergeVertices(g0); g0.dispose();
+  if (!_cobBase) {
+    const g0 = new THREE.IcosahedronGeometry(1, 4);
+    g0.deleteAttribute('normal'); g0.deleteAttribute('uv');
+    const w = mergeVertices(g0); g0.dispose();
+    _cobBase = { pos: w.attributes.position.array.slice(), idx: w.index.array.slice() };
+    w.dispose();
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(_cobBase.pos.slice(), 3));
+  g.setIndex(new THREE.BufferAttribute(_cobBase.idx.slice(), 1));
   const p = g.attributes.position, n = p.count, col = new Float32Array(n * 3);
   const sq = 0.68 + 0.2 * _sn(seed, 1.5, 2.5), el = 1.05 + 0.3 * _sn(2.5, seed, 1.5);
   const m = new THREE.Matrix4().compose(pos, new THREE.Quaternion().setFromEuler(new THREE.Euler(tilt, yaw, tilt * 0.6)), new THREE.Vector3(s, s, s));

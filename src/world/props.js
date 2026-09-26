@@ -303,10 +303,10 @@ function Acc() {
 // The near end is an old weathered cut (end grain, a rounded arris); the far end snapped
 // — a jagged crown of splinters round a torn, recessed crater of raw wood. A branch
 // stub, and three tufts of weed on the upper face (their tips sway on the prop clock).
-// ~420 triangles.
+// ~470 triangles.
 function logGeo() {
   const A = Acc(), seams = [];
-  const NA = 16, NZ = 8, R0 = 0.118, Z0 = -0.5, Z1 = 0.44;
+  const NA = 16, NZ = 6, R0 = 0.118, Z0 = -0.5, Z1 = 0.44;
   const axisX = z => 0.022 * Math.sin(Math.PI * (z - Z0));
   const rad = (z, th) => R0 * (1 - 0.13 * (z - Z0)) * (1 + 0.06 * (_gn(Math.cos(th) * 1.3 + 4, Math.sin(th) * 1.3, z * 5) - 0.5) * 2 + 0.03 * (_gn(Math.cos(th) * 3 + 9, Math.sin(th) * 3, z * 11) - 0.5) * 2);
   const ringAt = (z, k, part, w) => {
@@ -392,14 +392,14 @@ function logGeo() {
     for (let j = 0; j < S; j++) A.t(c, rings[2][j], rings[2][j + 1]);
   }
   // weed: three tufts of thin triangular-prism blades on the upper face
-  for (const [z, th, nb] of [[-0.32, 1.45, 5], [0.02, 1.75, 6], [0.28, 1.3, 5]]) {
+  for (const [z, th, nb] of [[-0.32, 1.45, 4], [0.02, 1.75, 5], [0.28, 1.3, 4]]) {
     const r = rad(z, th) * 0.96, bx = axisX(z) + Math.cos(th) * r, by = R0 + Math.sin(th) * r;
     for (let b = 0; b < nb; b++) {
       const s1 = _gh(b, z * 100, 1), s2 = _gh(b, z * 100, 2), len = 0.03 + 0.045 * s1, lean = 1.2 + (s2 - 0.5) * 1.2, wd = 0.005;
       const ox = bx + (s2 - 0.5) * 0.03, oz = z + (s1 - 0.5) * 0.04;
       const seg = [];
-      for (let k = 0; k <= 2; k++) {
-        const f = k / 2, h = len * f, bend = lean * f * f * len, w = wd * (1 - 0.7 * f);
+      for (let k = 0; k <= 1; k++) {
+        const f = k, h = len * f, bend = lean * f * f * len, w = wd * (1 - 0.7 * f);
         const cx = ox + bend + Math.cos(th) * h * 0.3, cy = by + h, cz = oz + bend * 0.6;
         const tri = [];
         for (let e = 0; e < 3; e++) {
@@ -408,7 +408,7 @@ function logGeo() {
         }
         seg.push(tri);
       }
-      for (let k = 0; k < 2; k++) for (let e = 0; e < 3; e++) A.qf(seg[k][e], seg[k][(e + 1) % 3], seg[k + 1][(e + 1) % 3], seg[k + 1][e]);
+      for (let k = 0; k < 1; k++) for (let e = 0; e < 3; e++) A.qf(seg[k][e], seg[k][(e + 1) % 3], seg[k + 1][(e + 1) % 3], seg[k + 1][e]);
     }
   }
   const g = A.done(seams);
@@ -419,10 +419,10 @@ function logGeo() {
 // extent, as the contract wants). 16 staves bulge to the bilge (sin profile); the head
 // sits recessed inside a chime; three rusted iron hoops stand proud. One side is BURST:
 // three staves caved in below a jagged break, their tops snapped short and splayed,
-// raw wood showing. ~430 triangles.
+// raw wood showing. ~440 triangles.
 function barrelGeo() {
   const A = Acc(), seams = [];
-  const NA = 16, NY = 5, RH = 0.30, RB = 0.38, HEAD = 0.955;
+  const NA = 16, NY = 4, RH = 0.30, RB = 0.38, HEAD = 0.955;
   const R = y => RH + (RB - RH) * Math.sin(Math.PI * Math.min(1, Math.max(0, y)));
   // burst: vertices 3..6 (staves 3-5), cave depth and break height per vertex
   const cave = j => [0, 0, 0, 0.45, 1, 1, 0.45][j] || 0;
@@ -504,7 +504,8 @@ function barrelGeo() {
     const r0 = ring(yc - hw, 0.001), r1 = ring(yc - hw, 0.013), r2 = ring(yc + hw, 0.013), r3 = ring(yc + hw, 0.001);
     for (let j = 0; j < HN; j++) {
       if (gap(j) || gap((j + 1) % HN)) continue;
-      A.qf(r0[j], r0[j + 1], r1[j + 1], r1[j]); A.qf(r1[j], r1[j + 1], r2[j + 1], r2[j]); A.qf(r2[j], r2[j + 1], r3[j + 1], r3[j]);
+      // outer face and top edge only: the underside of a 12 mm band is never seen
+      A.qf(r1[j], r1[j + 1], r2[j + 1], r2[j]); A.qf(r2[j], r2[j + 1], r3[j + 1], r3[j]);
     }
   }
   return norm(A.done(seams));
