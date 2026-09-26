@@ -1,6 +1,6 @@
 ---
 title: Polish the Brooder (AAA materials and geometry)
-status: wip
+status: done
 tags: quality
 updated: 2026-09-25
 ---

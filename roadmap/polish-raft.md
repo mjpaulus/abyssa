@@ -1,6 +1,6 @@
 ---
 title: Raft to AAA — generated surfaces, wear, silhouettes
-status: wip
+status: done
 tags: quality
 updated: 2026-09-25
 ---

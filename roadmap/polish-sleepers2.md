@@ -1,6 +1,6 @@
 ---
 title: Polish Orune and Mhor (AAA materials and geometry)
-status: wip
+status: done
 tags: quality
 updated: 2026-09-25
 ---

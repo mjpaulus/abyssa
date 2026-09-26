@@ -1,6 +1,6 @@
 ---
 title: Polish fauna — skins, eyes, fins, anatomy
-status: wip
+status: done
 tags: quality
 updated: 2026-09-25
 ---

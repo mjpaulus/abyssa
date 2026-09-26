@@ -1,6 +1,6 @@
 ---
 title: World polish — wrecks, rocks, gardens
-status: wip
+status: done
 tags: quality, wrecks, flora, gardens, textures
 updated: 2026-09-25
 ---

@@ -1,6 +1,6 @@
 ---
 title: Vents + corals polish — chimneys, staghorn, brain, table coral, prop rocks
-status: wip
+status: done
 tags: quality, vents, flora, props, textures
 updated: 2026-09-25
 ---

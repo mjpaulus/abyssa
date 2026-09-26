@@ -1,6 +1,6 @@
 ---
 title: Polish Sal — AAA dress, hardware, helmet
-status: wip
+status: done
 tags: quality, diver
 updated: 2026-09-25
 ---
