@@ -1277,3 +1277,61 @@ export function coralMazeSet() {
   _mazeSet = { nrm: _pwTex(nrm, S, S, false), pack: _pwTex(pack, S, S, false), ms: performance.now() - t0 };
   return _mazeSet;
 }
+
+// ---- THE SULPHIDE CRUST SET (vents.js black-smoker chimneys) ----------------------------
+// Porous, crystalline chimney wall: a Worley grain of sulphide crystals (each cell a
+// facet with its own tone; the walls between them are dark pores), laid over a coarse
+// fbm of growth nodules and cut by thin cooling cracks (F2-F1 valleys of a larger cell
+// field). GLITTER: a sparse set of crystal faces flagged in A — the chimney shader turns
+// those into near-mirror brassy chalcopyrite facets near the hot throat, so the vent
+// light and the lantern catch points of fire in the crust.
+//   pack : R = albedo multiplier (mean ~1), G = roughness, B = height, A = glitter mask
+//   nrm  : tangent-space normal (linear), A = cavity (0 in pores/cracks)
+let _sulSet = null;
+export function sulphideSet() {
+  if (_sulSet) return _sulSet;
+  const t0 = performance.now();
+  const S = 256, N = S * S;
+  const rand = seededRand(0x5A1F1DE5);
+  const nod = [4, 8, 16, 32].map(n => _pwLattice(rand, n));
+  const fine = [64, 128].map(n => _pwLattice(rand, n));
+  const cellField = (WC) => {
+    const px = new Float32Array(WC * WC), py = new Float32Array(WC * WC), tone = new Float32Array(WC * WC);
+    for (let i = 0; i < WC * WC; i++) { px[i] = rand(); py[i] = rand(); tone[i] = rand(); }
+    return (x, y, out) => {
+      const fx = x * WC, fy = y * WC, cx = Math.floor(fx), cy = Math.floor(fy);
+      let f1 = 9, f2 = 9, id = 0;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        const gx = cx + i, gy = cy + j, k = (((gy % WC) + WC) % WC) * WC + (((gx % WC) + WC) % WC);
+        const dx = gx + px[k] - fx, dy = gy + py[k] - fy, d = dx * dx + dy * dy;
+        if (d < f1) { f2 = f1; f1 = d; id = k; } else if (d < f2) f2 = d;
+      }
+      out[0] = Math.sqrt(f1); out[1] = Math.sqrt(f2); out[2] = tone[id];
+    };
+  };
+  const grains = cellField(48), cracks = cellField(7);
+  const g = [0, 0, 0], c = [0, 0, 0];
+  const h = new Float32Array(N), alb = new Float32Array(N), rgh = new Float32Array(N), gl = new Float32Array(N), cav = new Float32Array(N);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = y * S + x;
+    grains(u, v, g); cracks(u, v, c);
+    const nd = _pwFbm(nod, u, v), fn = _pwFbm(fine, u, v);
+    const pore = 1 - Math.min(1, (g[1] - g[0]) / 0.12);           // 1 on the grain walls
+    const crack = Math.max(0, 1 - (c[1] - c[0]) / 0.035);          // 1 in the cooling cracks
+    const facet = Math.max(0, 1 - g[0] / 0.7);                      // crystal crown
+    h[i] = 0.55 * nd + 0.18 * facet - 0.16 * pore * pore - 0.3 * crack + 0.05 * (fn - 0.5);
+    alb[i] = (0.78 + 0.42 * g[2]) * (1 - 0.45 * pore * pore) * (1 - 0.6 * crack) * (0.85 + 0.3 * nd);
+    rgh[i] = Math.min(1, 0.62 + 0.3 * pore + 0.2 * (1 - g[2]) * 0.5 + 0.2 * crack);
+    gl[i] = (g[2] > 0.975 && pore < 0.3 && facet > 0.3) ? 1 : 0;
+    cav[i] = 1 - 0.7 * Math.max(pore * pore, crack);
+  }
+  const pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    pack[i * 4] = Math.min(255, alb[i] * 200); pack[i * 4 + 1] = rgh[i] * 255;
+    pack[i * 4 + 2] = Math.max(0, Math.min(255, h[i] * 255)); pack[i * 4 + 3] = gl[i] * 255;
+  }
+  _pwNormals(h, S, S, 0.045, nrm, i => cav[i] * 255);
+  _sulSet = { pack: _pwTex(pack, S, S, false), nrm: _pwTex(nrm, S, S, false), ms: performance.now() - t0 };
+  return _sulSet;
+}
+// ==== END BLOCK: polish-vents ========================================================
