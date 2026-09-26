@@ -97,19 +97,15 @@ export function makeHoarder(idx, cfg) {
   // a lit Fresnel sheen and iridophore flecks at grazing angles (G.wetSkin, one program)
   const skin = registerPaint(G.wetSkin(new THREE.MeshStandardMaterial({
     map: sk.map, normalMap: sk.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: sk.roughnessMap, vertexColors: true,
-    roughness: 1.2, metalness: 0, envMap: envTex, envMapIntensity: 0.35,
+    roughness: 1.55, metalness: 0, envMap: envTex, envMapIntensity: 0.28,
     // faint violet photophores: in the dark zone the only way to see the size of her
     emissive: 0x6b58d8, emissiveMap: sk.emissiveMap, emissiveIntensity: 0.25
-  }), 'abyssa-orune-skin'));
+  }), 'abyssa-orune-skin', 1, true));
   L.skin = skin;
-  // the mantle: the same skin, sampled biplanar (a sphere's UV pinches at its poles)
-  const skinM = registerPaint(G.wetSkin(new THREE.MeshStandardMaterial({
-    map: sk.map, normalMap: sk.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: sk.roughnessMap, vertexColors: true,
-    roughness: 1.4, metalness: 0, envMap: envTex, envMapIntensity: 0.3,
-    emissive: 0x6b58d8, emissiveMap: sk.emissiveMap, emissiveIntensity: 0.25
-  }), 'abyssa-orune-mantle', 1, true));
-  L.skinM = skinM;
-  const mantle = new THREE.Mesh(G.mantleGeo(), skinM);
+  // one program for all of her skin: the mantle's biplanar blend is carried by attributes
+  // (uvB, wB) that every other skin geometry sets to its own UV with weight 0
+  L.skinM = skin;
+  const mantle = new THREE.Mesh(G.mantleGeo(), skin);
   mantle.castShadow = mantle.receiveShadow = true;
   body.add(mantle);
   L.mantle = mantle;

@@ -491,6 +491,7 @@ export function makeHunter(idx, cfg) {
   gg.setAttribute('position', new THREE.BufferAttribute(gp, 3));
   L.glowMat = new THREE.PointsMaterial({ map: glowTex, color: 0xff8a3a, size: 3, sizeAttenuation: true, transparent: true, opacity: 0,
     depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
+  L.glowMat.color.setRGB(2.6, 1.05, 0.34);                            // over-unity: a lensed point, not a smudge
   L.glow = new THREE.Points(gg, L.glowMat);
   L.glow.frustumCulled = false;
   body.add(L.glow);
@@ -763,7 +764,7 @@ export function updateHunter(L, dt, t, player) {
   {
     const dG = L.head.distanceTo(player.pos), far = 1 - Math.min(1, Math.max(0, (dG - 60) / 140));
     L.glowMat.opacity = Math.min(1, 1.5 * ph) * (0.35 + 0.65 * far) * (dG > 200 ? 0 : 1);
-    L.glowMat.size = 2.4 * (1 + Math.min(3, dG * 0.025));
+    L.glowMat.size = 1.9 * (1 + Math.min(3, dG * 0.03));
   }
   // fins ripple
   for (const f of L.fins) f.fin.rotation.z = f.sd * 0.25 * Math.sin(L.t * (L.state === 'strike' ? 9 : 3));

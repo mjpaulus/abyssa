@@ -113,7 +113,8 @@ const hash1 = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return 
 // never a glow in the dark) plus IRIDOPHORES — flecks packed into the roughness map's R
 // that throw a teal-to-violet sheen only at grazing angles.
 //
-// BIPLANAR (the mantle only, its own program): a sphere's UV pinches at its poles, so the
+// BIPLANAR (all of Orune's skin shares it; only the mantle's wB is non-zero — both samples
+// are always taken, no branch: implicit derivatives must stay in uniform control flow): a sphere's UV pinches at its poles, so the
 // mantle carries a second spherical UV about the X axis (uvB) and a weight (wB) that hands
 // the two Y-pole caps to it; every map is sampled in both and blended, the normal map in
 // both tangent frames.
@@ -200,7 +201,7 @@ export function skinMaps(S = 1024) {
   const chrom = cellGrid(96, 96, 0xC4A0, 0.45), rel = cellGrid(44, 44, 0x7E11), net = cellGrid(6, 6, 0x4E7, 0.8);
   const pap = cellGrid(10, 10, 0x9A911, 0.3), phot = cellGrid(11, 11, 0xF070, 0.5), iri = cellGrid(64, 64, 0x1215, 0.5);
   const Hf = new Float32Array(S * S), alb = new Uint8Array(S * S * 4), rgh = new Uint8Array(S * S * 4), emi = new Uint8Array(S * S * 4), nrm = new Uint8Array(S * S * 4);
-  const BASE0 = [0.31, 0.18, 0.17], BASE1 = [0.19, 0.10, 0.12], SAC = [[0.07, 0.035, 0.04], [0.28, 0.07, 0.04], [0.42, 0.26, 0.08]];
+  const BASE0 = [0.44, 0.27, 0.25], BASE1 = [0.29, 0.155, 0.17], SAC = [[0.07, 0.035, 0.04], [0.28, 0.07, 0.04], [0.42, 0.26, 0.08]];
   const TIP = [0.46, 0.36, 0.33], LENS = [0.34, 0.33, 0.42], RIM = [0.08, 0.04, 0.05];
   const vr = {}, vn = {}, oc = {}, op = {}, oq = {}, oi = {};
   // the coarse reticulate net and the dark patches it bounds: smooth fields, baked at 256
@@ -453,6 +454,8 @@ export function lidGeo(R = 0.178, lower = false, radial = 36) {
     uv.setXY(i, uv.getX(i) * 1.0, uv.getY(i) * 0.35);
   }
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('uvB', new THREE.BufferAttribute(uv.array, 2));
+  g.setAttribute('wB', new THREE.BufferAttribute(new Float32Array(n), 1));
   g.computeVertexNormals();
   return g;
 }
@@ -501,6 +504,8 @@ export function armTubeGeo(rings, radial) {
   g.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setAttribute('uvB', new THREE.BufferAttribute(uv, 2));             // the skin program's
+  g.setAttribute('wB', new THREE.BufferAttribute(new Float32Array(nv), 1));   // biplanar slots, unused
   g.setIndex(idx);
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e4);
   g.userData.rings = rings; g.userData.radial = radial;

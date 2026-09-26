@@ -9,6 +9,7 @@
 // keep it: the lamp refills Sal's lantern twice as fast (game.js, player.hasLamp).
 // Glows are sprites only — never PointLights (the scene's light count is sacred).
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { V3 } from '../../lib/math.js';
 import { seededRand, makeGlow } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
@@ -28,7 +29,7 @@ function grimeGlow(m) {
   return m;
 }
 
-const TAU = Math.PI * 2, TAKE_R = 3.6;
+const TAU = Math.PI * 2, TAKE_R = 3.6, IDENT = new THREE.Matrix4();
 const _v = V3();
 
 export function makeHoard(L, idx, center, trailFrom) {
@@ -72,15 +73,18 @@ export function makeHoard(L, idx, center, trailFrom) {
   L.keepTex.add(wm.map); L.keepTex.add(wm.normalMap);
   const CP = crateParts();
   const crate = new THREE.Group();
-  const wood = new THREE.Mesh(CP.wood, registerPaint(new THREE.MeshStandardMaterial({ map: wm.map, normalMap: wm.normalMap, vertexColors: true, roughness: 0.88, metalness: 0, envMap: envTex, envMapIntensity: 0.25 })));
-  const iron = new THREE.Mesh(CP.iron, registerPaint(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.8, metalness: 0.2, envMap: envTex, envMapIntensity: 0.2 })));
-  wood.castShadow = wood.receiveShadow = iron.castShadow = true;
-  crate.add(wood, iron);
+  // one draw: the iron is merged into the planks, told apart by its dark rusted vertex colour
+  const wood = new THREE.Mesh(mergeGeometries([CP.wood, CP.iron]), registerPaint(new THREE.MeshStandardMaterial({ map: wm.map, normalMap: wm.normalMap, vertexColors: true, roughness: 0.86, metalness: 0, envMap: envTex, envMapIntensity: 0.25 })));
+  CP.wood.dispose(); CP.iron.dispose();
+  wood.castShadow = wood.receiveShadow = true;
+  crate.add(wood);
   crate.position.set(H.center.x, H.center.y + 0.6, H.center.z);
   crate.rotation.y = rnd() * TAU;
   grp.add(crate);
   const SL = shipLampParts(), LAMP_S = 1.9;
-  H.lamp = new THREE.Mesh(SL.brass, brass);
+  // the lamp and its lens are one-instance InstancedMeshes: they share the lanterns' programs
+  H.lamp = new THREE.InstancedMesh(SL.brass, brass, 1);
+  H.lamp.setMatrixAt(0, IDENT);
   H.lamp.scale.setScalar(LAMP_S);
   H.lamp.position.set(H.center.x, H.center.y + 1.3, H.center.z);
   H.lamp.rotation.y = crate.rotation.y;
@@ -88,7 +92,8 @@ export function makeHoard(L, idx, center, trailFrom) {
   grp.add(H.lamp);
   const lampGlass = grimeGlow(glass.clone());                  // clone() drops onBeforeCompile
   lampGlass.emissiveIntensity = 1.4;
-  const lampLens = new THREE.Mesh(SL.glass, lampGlass);
+  const lampLens = new THREE.InstancedMesh(SL.glass, lampGlass, 1);
+  lampLens.setMatrixAt(0, IDENT);
   lampLens.scale.setScalar(LAMP_S);
   lampLens.position.copy(H.lamp.position);
   lampLens.rotation.y = crate.rotation.y;
