@@ -64,7 +64,7 @@ Open http://localhost:8777 and click to descend.
 
 ## Credits
 
-- Prop models: Kenney (CC0) — see `assets/props/CREDITS.md`
+- Props: all generated in code (the hard rule) — see `assets/props/CREDITS.md`
 - Terrain textures: AmbientCG (CC0) — see `assets/textures/CREDITS.md`
 - Optional Mark V helmet model: Egor Gulyushkin / BeaVex (CC-BY) — see
   `assets/models/CREDITS.md`

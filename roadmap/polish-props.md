@@ -1,6 +1,6 @@
 ---
 title: Props polish — resource nodes, the Brooder's nest, the umbilical, generated log + barrel
-status: wip
+status: done
 tags: quality, props, resources, brooder, tether, textures
 updated: 2026-09-26
 ---
