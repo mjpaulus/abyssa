@@ -2,7 +2,11 @@
 // An octopus-like colossus: a warty chromatophore mantle-sac behind a head with raised
 // eye turrets (gold irises, horizontal slit pupils, eyeshine when the lantern finds
 // them), and eight arms of ~37 u, pale-suckered underneath, rebuilt on the CPU as
-// world-space tubes every frame (8 x 40 x 14 verts).
+// world-space tubes every frame. The arm's LOGIC spine is 41 points (pts/U/B: lash, grab,
+// the knife, wards and suckers all read it, unchanged); the RENDER tube is 129 rings x 28
+// sides Catmull-Rom'd off it, with a flattened oral face, a dorsal ridge, longitudinal
+// skin folds and transverse wrinkles that bunch on the inside of every bend
+// (polish-sleepers2).
 //
 // Asleep she lies wrapped round the broken trawler she hoards her lights in, arms draped
 // over the wreck and out across the silt like cargo chain, eyes shut to slits. Taking the
@@ -30,12 +34,44 @@ import { makeHoard } from './hoard.js';
 
 const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
-const RM_OF_SIZE = 0.95, ARM_OF_SIZE = 5.0, NA = 8, RINGS = 40, RADIAL = 14, SUCK = 14;
+const RM_OF_SIZE = 0.95, ARM_OF_SIZE = 5.0, NA = 8, RINGS = 40, RR = 128, RAD = 28, SUCK = 36;
 const WARD_ARMS = [0, 2, 4, 6], WARD_S = 0.22;
 const UP = V3(0, 1, 0);
 
 const _a = V3(), _b = V3(), _c = V3(), _d = V3(), _t = V3(), _u = V3(), _w = V3(), _p = V3(), _q = new THREE.Quaternion();
-const _m = new THREE.Matrix4(), _s = V3(), _zp = V3(0, 0, 1), _yp = V3(0, 1, 0);
+const _m = new THREE.Matrix4(), _s = V3(), _zp = V3(0, 0, 1), _yp = V3(0, 1, 0), _mi = new THREE.Matrix4(), _l = V3();
+
+// ---- the arm's cross-section (unit), per side vertex: dorsal U at a = 0, the oral face
+// at a = PI flattened to ~0.76 with a shallow furrow down its middle, a dorsal ridge, and
+// a little width toward the face. Static tables; the per-frame work is folds + wrinkles.
+function section(a, out) {
+  const ca = Math.cos(a), sa = Math.sin(a);
+  let y = ca, x = sa * 1.03;
+  // a soft flattening (no crease at the flanks): the oral face sits at ~0.85
+  const fl = G.sst(-0.1, -0.9, ca);
+  y = ca * (1 - 0.15 * fl);
+  x *= 1 + 0.04 * fl;
+  if (ca > 0) y += 0.07 * Math.exp(-(sa / 0.28) * (sa / 0.28));
+  if (ca < -0.5) y += 0.035 * Math.exp(-(sa / 0.10) * (sa / 0.10));
+  out[0] = x; out[1] = y;
+  return out;
+}
+const SEC_X = new Float32Array(RAD + 1), SEC_Y = new Float32Array(RAD + 1), SEC_PALE = new Float32Array(RAD + 1);
+(() => { const o = [0, 0]; for (let j = 0; j <= RAD; j++) { const a = (j % RAD) / RAD * TAU; section(a, o); SEC_X[j] = o[0]; SEC_Y[j] = o[1]; SEC_PALE[j] = G.sst(-0.2, -0.7, Math.cos(a)); } })();
+const SUCK_SIDE = 0.35, SUCK_DEPTH = (() => { const o = section(Math.PI - Math.asin(SUCK_SIDE), [0, 0]); return -o[1]; })();
+// Catmull-Rom weights from the 41-point logic spine to the render rings (static)
+const CR_I = new Int16Array(RR + 1), CR_W = new Float32Array((RR + 1) * 4);
+(() => {
+  for (let f = 0; f <= RR; f++) {
+    const x = f / RR * RINGS, i0 = Math.min(RINGS - 1, Math.floor(x)), t = x - i0, t2 = t * t, t3 = t2 * t;
+    CR_I[f] = i0;
+    CR_W[f * 4] = 0.5 * (-t + 2 * t2 - t3); CR_W[f * 4 + 1] = 0.5 * (2 - 5 * t2 + 3 * t3);
+    CR_W[f * 4 + 2] = 0.5 * (t + 4 * t2 - 3 * t3); CR_W[f * 4 + 3] = 0.5 * (-t2 + t3);
+  }
+})();
+// transverse wrinkle phase per render ring: soft ridges between sharp creases
+const WRINK = new Float32Array(RR + 1);
+for (let f = 0; f <= RR; f++) WRINK[f] = Math.pow(0.5 + 0.5 * Math.cos(f * Math.PI * 0.46), 2);
 
 export function makeHoarder(idx, cfg) {
   let c = cfg;
@@ -55,23 +91,29 @@ export function makeHoarder(idx, cfg) {
   };
 
   // ---- skin ----
-  const sk = G.skinMaps();
-  L.keepTex = new Set([sk.map, sk.normalMap, sk.emissiveMap, G.eyeTex()]);
-  const skin = registerPaint(new THREE.MeshStandardMaterial({
-    map: sk.map, normalMap: sk.normalMap, normalScale: new THREE.Vector2(1.1, 1.1), vertexColors: true,
-    roughness: 0.42, metalness: 0, envMap: envTex, envMapIntensity: 0.55,
+  const sk = G.skinMaps(), em = G.eyeMaps();
+  L.keepTex = new Set([sk.map, sk.normalMap, sk.roughnessMap, sk.emissiveMap, em.map, em.emissiveMap]);
+  // wet chromatophore skin: roughness from the map (glossy seams, drier papilla tips),
+  // a lit Fresnel sheen and iridophore flecks at grazing angles (G.wetSkin, one program)
+  const skin = registerPaint(G.wetSkin(new THREE.MeshStandardMaterial({
+    map: sk.map, normalMap: sk.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: sk.roughnessMap, vertexColors: true,
+    roughness: 1.55, metalness: 0, envMap: envTex, envMapIntensity: 0.28,
     // faint violet photophores: in the dark zone the only way to see the size of her
     emissive: 0x6b58d8, emissiveMap: sk.emissiveMap, emissiveIntensity: 0.25
-  }));
+  }), 'abyssa-orune-skin', 1, true));
   L.skin = skin;
+  // one program for all of her skin: the mantle's biplanar blend is carried by attributes
+  // (uvB, wB) that every other skin geometry sets to its own UV with weight 0
+  L.skinM = skin;
   const mantle = new THREE.Mesh(G.mantleGeo(), skin);
   mantle.castShadow = mantle.receiveShadow = true;
   body.add(mantle);
   L.mantle = mantle;
 
   // ---- eyes: gold, slit-pupilled, shut to slits asleep; eyeshine when the lantern finds them ----
-  const eyeMat = new THREE.MeshStandardMaterial({ map: G.eyeTex(), roughness: 0.06, metalness: 0.1, envMap: envTex, envMapIntensity: 1.8,
-    emissive: 0xd9b24a, emissiveMap: G.eyeTex(), emissiveIntensity: 0 });
+  const eyeMat = G.wetEye(new THREE.MeshStandardMaterial({ map: em.map, roughness: 0.04, metalness: 0.1, envMap: envTex, envMapIntensity: 1.8,
+    emissive: 0xd9b24a, emissiveMap: em.emissiveMap, emissiveIntensity: 0 }));
+  const ballG = G.eyeBallGeo(0.16), lidTG = G.lidGeo(0.178, false), lidBG = G.lidGeo(0.178, true);
   L.eyeMat = eyeMat;
   const lidMat = skin;
   L.eyes = [];
@@ -79,23 +121,24 @@ export function makeHoarder(idx, cfg) {
     const e = new THREE.Group();
     e.position.set(G.EYE_AT[0] * sd, G.EYE_AT[1] + 0.02, G.EYE_AT[2]);
     e.rotation.y = sd * 0.75;                                     // look out and forward
-    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.16, 24, 18), eyeMat);
+    const ball = new THREE.Mesh(ballG, eyeMat);
     e.add(ball);
-    const lidT = new THREE.Mesh(new THREE.SphereGeometry(0.175, 20, 10, 0, TAU, 0, Math.PI / 2), lidMat);
-    const lidB = new THREE.Mesh(new THREE.SphereGeometry(0.175, 20, 10, 0, TAU, Math.PI / 2, Math.PI / 2), lidMat);
+    const lidT = new THREE.Mesh(lidTG, lidMat);
+    const lidB = new THREE.Mesh(lidBG, lidMat);
     e.add(lidT, lidB);
     body.add(e);
     L.eyes.push({ e, lidT, lidB });
   }
 
   // ---- arms ----
-  const suckMat = registerPaint(new THREE.MeshStandardMaterial({ color: 0xcdb8b0, roughness: 0.55, metalness: 0, envMap: envTex, envMapIntensity: 0.4 }));
+  // stalked cups: pale rolled rim, pink cup, dark centre (vertex colour), wet
+  const suckMat = registerPaint(new THREE.MeshStandardMaterial({ color: 0xd8b4a8, vertexColors: true, roughness: 0.42, metalness: 0, envMap: envTex, envMapIntensity: 0.35 }));
   L.suckers = new THREE.InstancedMesh(G.suckerGeo(), suckMat, NA * SUCK);
   L.suckers.frustumCulled = false;
   L.suckers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   grp.add(L.suckers);
   for (let a = 0; a < NA; a++) {
-    const geo = G.armTubeGeo(RINGS, RADIAL);
+    const geo = G.armTubeGeo(RR, RAD);
     const mesh = new THREE.Mesh(geo, skin);
     mesh.frustumCulled = false;
     mesh.castShadow = true;
@@ -105,8 +148,31 @@ export function makeHoarder(idx, cfg) {
       mesh, geo, ang, pts: Array.from({ length: RINGS + 1 }, () => V3()),
       U: Array.from({ length: RINGS + 1 }, () => V3()), B: Array.from({ length: RINGS + 1 }, () => V3()),
       base: V3(), drape: V3(), tip: V3(), tipGoal: V3(), lift: 0, recoil: 0, lash: 0, phase: a * 1.37,
-      r0: Rm * 0.26, len: AL * (0.85 + 0.25 * ((a * 0.618) % 1))
+      r0: Rm * 0.26, len: AL * (0.85 + 0.25 * ((a * 0.618) % 1)),
+      // render-tube state (polish-sleepers2)
+      Pf: new Float32Array((RR + 1) * 3), Uf: new Float32Array((RR + 1) * 3), Bf: new Float32Array((RR + 1) * 3),
+      Ka: new Float32Array(RR + 1), Kd: new Float32Array((RR + 1) * 3), rf: new Float32Array(RR + 1), fold: new Float32Array((RR + 1) * (RAD + 1)),
+      suckS: new Float32Array(SUCK)
     });
+    const A = L.arms[a];
+    for (let f = 0; f <= RR; f++) {
+      const s = f / RR;
+      A.rf[f] = A.r0 * Math.pow(1 - s, 0.85) + 0.12;
+      for (let j = 0; j <= RAD; j++) {
+        const an = (j % RAD) / RAD * TAU;
+        A.fold[f * (RAD + 1) + j] = 0.024 * Math.sin(an * 7 + s * 9 + A.phase * 2.3) * (1 - SEC_PALE[j]) * (0.6 + 0.4 * Math.sin(s * 23 + an * 2));
+      }
+    }
+    // sucker stations: spaced by the local radius, so they crowd and shrink to the tip
+    const rs = s => (A.r0 * Math.pow(1 - s, 0.85) + 0.12);
+    let lo = 0, hi = 4;
+    for (let it = 0; it < 30; it++) {
+      const c2 = (lo + hi) / 2; let s = 0.05;
+      for (let k = 1; k < SUCK; k++) s += c2 * rs(s) / A.len;
+      if (s > 0.95) hi = c2; else lo = c2;
+    }
+    let s = 0.05;
+    for (let k = 0; k < SUCK; k++) { A.suckS[k] = s; s += lo * rs(s) / A.len; }
   }
 
   // ---- wards on the sucker faces of four arms ----
@@ -217,23 +283,74 @@ function buildArm(L, A, dt) {
   }
   const roll = A.recoil * Math.PI * 0.85;
   const cr = Math.cos(roll), sr = Math.sin(roll);
-  const pos = A.geo.attributes.position.array, nor = A.geo.attributes.normal.array, row = RADIAL + 1;
   for (let i = 0; i <= n; i++) {
-    const s = i / n, r = A.r0 * Math.pow(1 - s, 0.85) + 0.12, U = A.U[i], B = A.B[i];
-    // apply the roll to this ring's frame
+    const U = A.U[i], B = A.B[i];
+    // apply the roll to this ring's frame; stash the rolled frame for suckers and wards
     const ux = U.x * cr + B.x * sr, uy = U.y * cr + B.y * sr, uz = U.z * cr + B.z * sr;
     const bx = B.x * cr - U.x * sr, by = B.y * cr - U.y * sr, bz = B.z * cr - U.z * sr;
-    for (let j = 0; j <= RADIAL; j++) {
-      const ang = (j % RADIAL) / RADIAL * TAU, ca = Math.cos(ang), sa = Math.sin(ang);
-      const flat = ca < 0 ? 0.78 : 1;                              // the sucker face is flatter
-      const nx = ux * ca * flat + bx * sa, ny = uy * ca * flat + by * sa, nz = uz * ca * flat + bz * sa;
-      const k = (i * row + j) * 3;
-      pos[k] = P[i].x + nx * r; pos[k + 1] = P[i].y + ny * r; pos[k + 2] = P[i].z + nz * r;
-      const l = Math.hypot(nx, ny, nz) || 1;
-      nor[k] = nx / l; nor[k + 1] = ny / l; nor[k + 2] = nz / l;
-    }
-    // stash the rolled frame for suckers and wards
     U.set(ux, uy, uz); B.set(bx, by, bz);
+  }
+  buildTube(A);
+}
+
+// The render tube off the logic spine: Catmull-Rom rings, frames lerped from the rolled
+// logic frames and re-orthogonalised, the section scaled by the static folds and by
+// transverse WRINKLES whose depth is the local bend strain (curvature x radius) and which
+// only bunch on the inside of the bend. Normals from the grid itself. Zero allocation.
+function buildTube(A) {
+  const P = A.pts, Pf = A.Pf, Uf = A.Uf, Bf = A.Bf, Ka = A.Ka, Kd = A.Kd;
+  for (let f = 0; f <= RR; f++) {
+    const i0 = CR_I[f], im = Math.max(0, i0 - 1), i1 = i0 + 1, i2 = Math.min(RINGS, i0 + 2), w = f * 4, o = f * 3;
+    const wa = CR_W[w], wb = CR_W[w + 1], wc = CR_W[w + 2], wd = CR_W[w + 3];
+    Pf[o] = P[im].x * wa + P[i0].x * wb + P[i1].x * wc + P[i2].x * wd;
+    Pf[o + 1] = P[im].y * wa + P[i0].y * wb + P[i1].y * wc + P[i2].y * wd;
+    Pf[o + 2] = P[im].z * wa + P[i0].z * wb + P[i1].z * wc + P[i2].z * wd;
+  }
+  for (let f = 0; f <= RR; f++) {
+    const o = f * 3, fa = Math.max(0, f - 1) * 3, fb = Math.min(RR, f + 1) * 3;
+    let tx = Pf[fb] - Pf[fa], ty = Pf[fb + 1] - Pf[fa + 1], tz = Pf[fb + 2] - Pf[fa + 2];
+    const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
+    const i0 = CR_I[f], t = f / RR * RINGS - i0, U0 = A.U[i0], U1 = A.U[i0 + 1];
+    let ux = U0.x + (U1.x - U0.x) * t, uy = U0.y + (U1.y - U0.y) * t, uz = U0.z + (U1.z - U0.z) * t;
+    const d = ux * tx + uy * ty + uz * tz; ux -= d * tx; uy -= d * ty; uz -= d * tz;
+    const ul = Math.hypot(ux, uy, uz) || 1; ux /= ul; uy /= ul; uz /= ul;
+    Uf[o] = ux; Uf[o + 1] = uy; Uf[o + 2] = uz;
+    Bf[o] = ty * uz - tz * uy; Bf[o + 1] = tz * ux - tx * uz; Bf[o + 2] = tx * uy - ty * ux;
+    // bend: second difference over the chord (points to the centre of curvature)
+    if (f > 0 && f < RR) {
+      const h = tl * 0.5;
+      let kx = (Pf[fb] - 2 * Pf[o] + Pf[fa]) / (h * h), ky = (Pf[fb + 1] - 2 * Pf[o + 1] + Pf[fa + 1]) / (h * h), kz = (Pf[fb + 2] - 2 * Pf[o + 2] + Pf[fa + 2]) / (h * h);
+      const kl = Math.hypot(kx, ky, kz);
+      Ka[f] = Math.min(0.22, kl * A.rf[f] * 1.4);
+      if (kl > 1e-6) { Kd[o] = kx / kl; Kd[o + 1] = ky / kl; Kd[o + 2] = kz / kl; } else { Kd[o] = Kd[o + 1] = Kd[o + 2] = 0; }
+    } else Ka[f] = 0;
+  }
+  const pos = A.geo.attributes.position.array, nor = A.geo.attributes.normal.array, row = RAD + 1, fold = A.fold;
+  for (let f = 0; f <= RR; f++) {
+    const o = f * 3, r = A.rf[f], ka = Ka[f], wk = WRINK[f] - 0.35;
+    const ux = Uf[o], uy = Uf[o + 1], uz = Uf[o + 2], bx = Bf[o], by = Bf[o + 1], bz = Bf[o + 2];
+    const kx = Kd[o], ky = Kd[o + 1], kz = Kd[o + 2], px = Pf[o], py = Pf[o + 1], pz = Pf[o + 2];
+    for (let j = 0; j <= RAD; j++) {
+      const sx = SEC_X[j], sy = SEC_Y[j];
+      const nx = ux * sy + bx * sx, ny = uy * sy + by * sx, nz = uz * sy + bz * sx;
+      const comp = nx * kx + ny * ky + nz * kz;
+      const k = 1 + fold[f * row + j] + 0.014 * wk + (comp > 0 ? ka * comp * wk : 0);
+      const q = (f * row + j) * 3;
+      pos[q] = px + nx * r * k; pos[q + 1] = py + ny * r * k; pos[q + 2] = pz + nz * r * k;
+    }
+  }
+  // normals: cross of the around and along differences (around x along is outward)
+  for (let f = 0; f <= RR; f++) {
+    const fa = Math.max(0, f - 1), fb = Math.min(RR, f + 1);
+    for (let j = 0; j <= RAD; j++) {
+      const jm = j === 0 ? RAD - 1 : j - 1, jp = j === RAD ? 1 : j + 1;
+      const a = (f * row + jp) * 3, b = (f * row + jm) * 3, c = (fb * row + j) * 3, d = (fa * row + j) * 3;
+      const ax = pos[a] - pos[b], ay = pos[a + 1] - pos[b + 1], az = pos[a + 2] - pos[b + 2];
+      const tx = pos[c] - pos[d], ty = pos[c + 1] - pos[d + 1], tz = pos[c + 2] - pos[d + 2];
+      let nx = ay * tz - az * ty, ny = az * tx - ax * tz, nz = ax * ty - ay * tx;
+      const l = 1 / (Math.hypot(nx, ny, nz) || 1), q = (f * row + j) * 3;
+      nor[q] = nx * l; nor[q + 1] = ny * l; nor[q + 2] = nz * l;
+    }
   }
   A.geo.attributes.position.needsUpdate = true;
   A.geo.attributes.normal.needsUpdate = true;
@@ -252,19 +369,26 @@ function poseHoarder(L, dt, player) {
 
   // arms
   let si = 0;
+  _mi.copy(b.matrixWorld).invert();
   for (let a = 0; a < NA; a++) {
     const A = L.arms[a];
     _p.set(Math.sin(A.ang) * 0.52, -0.42, Math.cos(A.ang) * 0.52 + 0.10).applyMatrix4(b.matrixWorld);
     A.base.copy(_p);
     buildArm(L, A, dt);
-    // suckers: two staggered rows on the sucker face (-U) from s 0.12 to 0.9
+    // suckers: two staggered rows on the oral face (-U), crowding and shrinking to the tip,
+    // seated on the render tube's face
     for (let k = 0; k < SUCK; k++) {
-      const s = 0.12 + 0.78 * k / (SUCK - 1), i = Math.round(s * RINGS);
-      const r = A.r0 * Math.pow(1 - s, 0.85) + 0.12, side = (k & 1) ? 0.35 : -0.35;
-      _u.copy(A.U[i]).multiplyScalar(-1);
-      _p.copy(A.pts[i]).addScaledVector(_u, r * 0.80).addScaledVector(A.B[i], side * r);
+      const s = A.suckS[k], x = s * RR, f0 = Math.min(RR - 1, x | 0), t = x - f0, o0 = f0 * 3, o1 = o0 + 3;
+      const r = A.r0 * Math.pow(1 - s, 0.85) + 0.12, side = (k & 1) ? SUCK_SIDE : -SUCK_SIDE;
+      _u.set(-(A.Uf[o0] + (A.Uf[o1] - A.Uf[o0]) * t), -(A.Uf[o0 + 1] + (A.Uf[o1 + 1] - A.Uf[o0 + 1]) * t), -(A.Uf[o0 + 2] + (A.Uf[o1 + 2] - A.Uf[o0 + 2]) * t)).normalize();
+      _w.set(A.Bf[o0] + (A.Bf[o1] - A.Bf[o0]) * t, A.Bf[o0 + 1] + (A.Bf[o1 + 1] - A.Bf[o0 + 1]) * t, A.Bf[o0 + 2] + (A.Bf[o1 + 2] - A.Bf[o0 + 2]) * t);
+      _p.set(A.Pf[o0] + (A.Pf[o1] - A.Pf[o0]) * t, A.Pf[o0 + 1] + (A.Pf[o1 + 1] - A.Pf[o0 + 1]) * t, A.Pf[o0 + 2] + (A.Pf[o1 + 2] - A.Pf[o0 + 2]) * t)
+        .addScaledVector(_u, r * (SUCK_DEPTH - 0.02)).addScaledVector(_w, side * 1.04 * r);
       _q.setFromUnitVectors(_yp, _u);
-      const sz = r * 0.30;
+      // a sucker whose seat is inside the mantle (the arm roots arch up through it) is hidden
+      _l.copy(_p).applyMatrix4(_mi);
+      const inside = (_l.x / 0.86) ** 2 + ((_l.y - 0.1) / 0.75) ** 2 + ((_l.z + 0.15) / 1.05) ** 2 < 1;
+      const sz = inside ? 0 : r * 0.27;
       L.suckers.setMatrixAt(si++, _m.compose(_p, _q, _s.set(sz, sz, sz)));
     }
   }
@@ -294,6 +418,7 @@ function poseHoarder(L, dt, player) {
   L.eyeMat.emissiveIntensity = (0.05 + 2.0 * shine) * open;
   // the freckles breathe slowly asleep, run brighter and quicker when she is roused
   L.skin.emissiveIntensity = L.calmed ? 0.18 : (0.16 + 0.10 * Math.sin(L.t * (L.dormant ? 0.4 : 1.6))) * (1 + 1.2 * L.riseE);
+  L.skinM.emissiveIntensity = L.skin.emissiveIntensity;
 
   // collision centres (the mantle) and the head
   L.spine[0].set(0, 0.35, -0.55).applyMatrix4(b.matrixWorld);
