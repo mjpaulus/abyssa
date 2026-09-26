@@ -91,11 +91,11 @@ function fishGeometry(o) {
   // Profile: a sine fore-body (tapered snout, full shoulder at m) into a
   // cosine after-body that pinches to a real caudal peduncle. The old sin(t^0.55)
   // profile peaked at the head and ran straight to the tail — a cone from the side.
-  const m = 0.34, ped = 0.12 - o.taper * 0.05;
+  const m = 0.30, ped = 0.11 - o.taper * 0.05;
   const rAt = t => {
-    if (t < m) return Math.max(0.05, Math.pow(Math.sin(Math.PI * 0.5 * t / m), 0.72));
+    if (t < m) return Math.max(0.05, Math.pow(Math.sin(Math.PI * 0.5 * t / m), 0.9));
     const u = Math.min(1, (t - m) / (1 - m));
-    return ped + (1 - ped) * Math.pow(Math.cos(u * Math.PI * 0.5), 0.75 + o.taper * 0.6);
+    return ped + (1 - ped) * Math.pow(Math.cos(u * Math.PI * 0.5), 1.15 + o.taper * 0.5);
   };
   // one duplicated seam column (j = sides) so the scale grid's around-coordinate
   // never interpolates backwards across a strip; its normals are welded after.
