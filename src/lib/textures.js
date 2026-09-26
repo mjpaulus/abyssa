@@ -1250,7 +1250,7 @@ export function canvasSet() {
 // ==== BLOCK: polish-vents (corals / vent chimneys) — appended 2026-09-25 ============
 // Owned by the polish-vents branch. Generated sets, baked once, cached forever, all
 // DataTextures (mipmapped, anisotropic, RepeatWrapping), built on this file's
-// polish-world helpers (_pwTex, _pwNormals, _pwLattice, _pwFbm):
+// polish-world helpers (_pwTex, _pwNormals, _pwLattice, _pwFbm) and the polish-vents torus blur (_pvBox):
 //   coralMazeSet()  the brain-coral labyrinth (flora.js FLORA_BRAIN)
 //   sulphideSet()   black-smoker sulphide crust (vents.js chimney material)
 // Each set records its own bake time in `.ms`.
@@ -1386,3 +1386,204 @@ export function sulphideSet() {
   return _sulSet;
 }
 // ==== END BLOCK: polish-vents ========================================================
+
+// =====================================================================================
+// ==== BLOCK: polish-props (brood eggs / seabed log + barrel) — appended 2026-09-25 ===
+// Owned by the polish-props branch. Generated sets, baked once, cached forever, all
+// DataTextures (mipmapped, anisotropic, RepeatWrapping, LINEAR: structure, not colour —
+// the callers' shaders own every hue), built on this file's polish-world helpers
+// (_pwTex, _pwNormals, _pwLattice, _pwFbm) and the polish-vents torus blur (_pvBox):
+//   eggSkinSet()  leathery egg skin with a vein network (brood.js eggs + shards)
+//   barkSet()     waterlogged bark over bare, grain-lined wood (props.js log)
+//   staveSet()    coopered staves: grain, seams, per-stave tone (props.js barrel)
+// Each set records its own bake time in `.ms`.
+// =====================================================================================
+
+// Worley F1/F2 on a torus with a per-cell id, one jittered point per cell.
+function _ppCells(rand, WC, WR = WC) {
+  const px = new Float32Array(WC * WR), py = new Float32Array(WC * WR), id = new Float32Array(WC * WR);
+  for (let i = 0; i < WC * WR; i++) { px[i] = rand(); py[i] = rand(); id[i] = rand(); }
+  return (x, y, out) => {
+    const fx = x * WC, fy = y * WR, cx = Math.floor(fx), cy = Math.floor(fy);
+    let f1 = 9, f2 = 9, ci = 0;
+    for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+      const gx = cx + i, gy = cy + j, k = (((gy % WR) + WR) % WR) * WC + (((gx % WC) + WC) % WC);
+      const dx = gx + px[k] - fx, dy = gy + py[k] - fy, d = dx * dx + dy * dy;
+      if (d < f1) { f2 = f1; f1 = d; ci = k; } else if (d < f2) f2 = d;
+    }
+    out[0] = Math.sqrt(f1); out[1] = Math.sqrt(f2); out[2] = id[ci];
+  };
+}
+
+// ---- THE EGG SKIN (brood.js) ---------------------------------------------------------
+// Leathery, not calcareous: a pebbled grain of tiny domed scutes (Worley F1 domes with
+// sunken borders), a slow crease field, and GROWN vessels — tapering random walks
+// that fork, with a blurred halo (the blood seen through the skin, not drawn on it).
+//   pack : R = vein (0..1: vessel core ~1, its subsurface halo ~0.3), G = roughness,
+//          B = height, A = mottle (low-frequency pigment)
+//   nrm  : tangent-space normal (linear), A = height
+let _eggSet = null;
+export function eggSkinSet() {
+  if (_eggSet) return _eggSet;
+  const t0 = performance.now();
+  const S = 256, N = S * S, rand = seededRand(0xE665C1A7);
+  const mott = [3, 6, 12].map(n => _pwLattice(rand, n));
+  const crease = [8, 16].map(n => _pwLattice(rand, n)), fine = [64, 128].map(n => _pwLattice(rand, n));
+  const scute = _ppCells(rand, 40);
+  const a = [0, 0, 0];
+  // VESSELS: grown, not tiled. Root vessels random-walk across the torus, taper, and
+  // fork (depth 5); each step stamps a soft disc into `ves` (max-blend, wrapped). A box
+  // blur of the result is the diffuse subsurface halo round every vessel.
+  const ves = new Float32Array(N);
+  const stamp = (cx, cy, r) => {
+    const R = Math.ceil(r + 1.5);
+    for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+      const d = Math.hypot(dx - (cx - Math.floor(cx)), dy - (cy - Math.floor(cy)));
+      const k = Math.max(0, Math.min(1, r + 0.8 - d)) * (0.55 + 0.45 * Math.min(1, r / 2.2));
+      if (k <= 0) continue;
+      const xx = ((Math.floor(cx) + dx) % S + S) % S, yy = ((Math.floor(cy) + dy) % S + S) % S, i = yy * S + xx;
+      if (k > ves[i]) ves[i] = k;
+    }
+  };
+  const grow = (x, y, ang, w, len, depth) => {
+    for (let t = 0; t < len; t += 1.2) {
+      ang += (rand() - 0.5) * 0.28;
+      x += Math.cos(ang) * 1.2; y += Math.sin(ang) * 1.2;
+      stamp(x, y, w * (1 - 0.35 * t / len));
+    }
+    if (depth <= 0 || w < 0.45) return;
+    const n = rand() < 0.3 ? 3 : 2;
+    for (let k = 0; k < n; k++) grow(x, y, ang + (k - (n - 1) / 2) * (0.55 + 0.4 * rand()), w * (0.62 + 0.1 * rand()), len * (0.62 + 0.25 * rand()), depth - 1);
+  };
+  for (let k = 0; k < 6; k++) grow(rand() * S, rand() * S, rand() * Math.PI * 2, 2.4 + rand() * 0.8, 38 + rand() * 30, 5);
+  const halo = new Float32Array(N), tmpB = new Float32Array(N);
+  _pvBox(ves, halo, tmpB, S, 3);
+  const h = new Float32Array(N), vein = new Float32Array(N), rg = new Float32Array(N), mo = new Float32Array(N);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = y * S + x;
+    scute(u, v, a);
+    const ve = Math.min(1, ves[i] * 0.8 + halo[i] * 0.6);
+    const dome = Math.max(0, 1 - a[0] / 0.75), border = Math.max(0, 1 - (a[1] - a[0]) / 0.08);
+    const cr = _pwFbm(crease, u, v);
+    h[i] = 0.35 * dome * dome - 0.18 * border + 0.25 * cr + 0.10 * ves[i] + 0.05 * (_pwFbm(fine, u, v) - 0.5);
+    vein[i] = ve; mo[i] = _pwFbm(mott, u, v);
+    rg[i] = Math.min(1, 0.55 + 0.25 * border + 0.15 * (1 - dome) - 0.1 * ve);
+  }
+  const pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    pack[i * 4] = vein[i] * 255; pack[i * 4 + 1] = rg[i] * 255;
+    pack[i * 4 + 2] = Math.max(0, Math.min(255, (h[i] + 0.2) * 255)); pack[i * 4 + 3] = mo[i] * 255;
+  }
+  _pwNormals(h, S, S, 0.05, nrm, i => Math.max(0, Math.min(255, (h[i] + 0.2) * 255)));
+  _eggSet = { pack: _pwTex(pack, S, S, false), nrm: _pwTex(nrm, S, S, false), ms: performance.now() - t0 };
+  return _eggSet;
+}
+
+// ---- WATERLOGGED BARK (props.js log) ---------------------------------------------------
+// 256 around (u) x 512 along (v); a caller repeats u by an integer so the log closes.
+// Bark: deep longitudinal furrows between flat-topped ridges (a warped |sin| of u), the
+// ridges broken across into blocky plates by sparse horizontal checks; soaked and
+// eroded, so the ridge tops are rounded and the furrows silted. Where the bark has
+// sloughed away (a patch mask), BARE WOOD: smooth, grey, lined along v with fine grain
+// and a few long drying checks, sitting a step below the bark.
+//   pack : R = albedo multiplier (mean ~0.8), G = roughness, B = height,
+//          A = bark (1) / bare wood (0)
+//   nrm  : tangent-space normal (linear), A = height
+let _barkSet = null;
+export function barkSet() {
+  if (_barkSet) return _barkSet;
+  const t0 = performance.now();
+  const W = 256, H = 512, N = W * H, rand = seededRand(0xBA4C5E7);
+  const lat = (nx, ny) => { const g = new Float32Array(nx * ny); for (let i = 0; i < nx * ny; i++) g[i] = rand(); return { nx, ny, g }; };
+  const smp = (L, x, y) => {
+    x -= Math.floor(x); y -= Math.floor(y);
+    const fx = x * L.nx, fy = y * L.ny, xi = Math.floor(fx), yi = Math.floor(fy);
+    const x0 = xi % L.nx, y0 = yi % L.ny, x1 = (x0 + 1) % L.nx, y1 = (y0 + 1) % L.ny;
+    let tx = fx - xi, ty = fy - yi; tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+    const g = L.g, a = g[y0 * L.nx + x0], b = g[y0 * L.nx + x1], c = g[y1 * L.nx + x0], d = g[y1 * L.nx + x1];
+    const t = a + (b - a) * tx; return t + ((c + (d - c) * tx) - t) * ty;
+  };
+  const fb = (Ls, x, y) => { let v = 0, am = 0.5, t = 0; for (const L of Ls) { v += smp(L, x, y) * am; t += am; am *= 0.5; } return v / t; };
+  const wrp = [lat(4, 4), lat(8, 16)], pat = [lat(3, 4), lat(6, 8), lat(12, 16)], grn = [lat(64, 8), lat(128, 16)];
+  const chk = [lat(16, 24)], fn = [lat(64, 128), lat(128, 256)];
+  const RID = 14;                                         // bark ridges round the log per tile
+  const h = new Float32Array(N), al = new Float32Array(N), rg = new Float32Array(N), bk = new Float32Array(N);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const u = x / W, v = y / H, i = y * W + x;
+    const w = fb(wrp, u, v) - 0.5;
+    // ridge profile: flat plateaus, V furrows
+    const ph = u * RID + w * 1.0 + (fb(pat, u * 2 + 0.3, v * 3) - 0.5) * 0.6;
+    const fr = Math.abs(Math.sin(Math.PI * ph));
+    const ridge = Math.min(1, Math.pow(fr, 0.8) * 1.2);
+    // cross checks: sparse horizontal breaks that cut the ridges into plates
+    const cv = v * 44 + w * 2 + Math.floor(ph) * 0.37;
+    const cc = Math.abs(Math.sin(Math.PI * cv));
+    const cut = (1 - Math.min(1, cc / 0.16)) * (smp(chk[0], u + Math.floor(ph) * 0.13, v) > 0.35 ? 1 : 0);
+    const barkH = 0.55 * ridge * (1 - 0.8 * cut) + 0.08 * (fb(fn, u, v) - 0.5);
+    // sloughed patches: bare wood
+    const pm = fb(pat, u + 0.2, v + 0.7);
+    const bare = 1 - Math.min(1, Math.max(0, (pm - 0.56) / 0.05));   // 1 = bark
+    const g = fb(grn, u, v * 4);
+    const woodH = 0.05 + 0.03 * Math.sin((u * 90 + g * 6) * Math.PI) * 0.5 - 0.1 * Math.max(0, smp(grn[0], u * 3, v) - 0.8) * 4;
+    h[i] = bare * (0.2 + barkH) + (1 - bare) * woodH;
+    bk[i] = bare;
+    const plateT = _ihash(Math.floor(ph), Math.floor(cv), 77);   // each plate its own weathering
+    const tone = 0.5 + 0.45 * ridge - 0.3 * cut + 0.25 * (plateT - 0.5) + 0.15 * (fb(fn, u + 0.5, v) - 0.5);
+    al[i] = bare * tone * 0.8 + (1 - bare) * (0.95 + 0.25 * (g - 0.5) + 0.1 * Math.sin((u * 90 + g * 6) * Math.PI));
+    rg[i] = bare * (0.78 + 0.18 * (1 - ridge)) + (1 - bare) * 0.62;
+  }
+  const pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    pack[i * 4] = Math.min(255, al[i] / 1.4 * 255); pack[i * 4 + 1] = Math.min(255, rg[i] * 255);
+    pack[i * 4 + 2] = Math.max(0, Math.min(255, h[i] * 255)); pack[i * 4 + 3] = bk[i] * 255;
+  }
+  _pwNormals(h, W, H, 0.03, nrm, i => Math.max(0, Math.min(255, h[i] * 255)));
+  _barkSet = { pack: _pwTex(pack, W, H, false), nrm: _pwTex(nrm, W, H, false), ms: performance.now() - t0 };
+  return _barkSet;
+}
+
+// ---- COOPERED STAVES (props.js barrel) -------------------------------------------------
+// 256 x 256, u round the barrel (STV staves per tile; the caller repeats u by an
+// integer), v along it. Each stave: its own tone and grain phase, straight grain lines
+// along v with a slow wander and the odd pin knot, a V seam between staves, edges worn
+// round, the grain eroded soft (waterlogged oak: the early wood gone, the late standing).
+//   pack : R = albedo multiplier (mean ~0.8), G = roughness, B = height, A = seam (1)
+//   nrm  : tangent-space normal (linear), A = height
+let _staveSet = null;
+export function staveSet() {
+  if (_staveSet) return _staveSet;
+  const t0 = performance.now();
+  const S = 256, N = S * S, STV = 8, rand = seededRand(0x57A7E5);
+  const tone = Array.from({ length: STV }, () => rand()), gph = Array.from({ length: STV }, () => rand() * 10);
+  const wan = [4, 8].map(n => _pwLattice(rand, n)), fn = [64, 128].map(n => _pwLattice(rand, n));
+  const knots = Array.from({ length: 5 }, () => [rand(), rand(), 0.01 + 0.015 * rand()]);
+  const h = new Float32Array(N), al = new Float32Array(N), rg = new Float32Array(N), sm = new Float32Array(N);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = y * S + x;
+    const su = u * STV, k = Math.floor(su), f = su - k;
+    const edge = Math.min(f, 1 - f);                         // 0 at the seam
+    const seam = 1 - Math.min(1, edge / 0.05);
+    const round = 1 - Math.pow(1 - Math.min(1, edge / 0.16), 2);
+    let gx = f * 14 + gph[k] + (_pwFbm(wan, u, v) - 0.5) * 3;
+    for (const [kx, ky, kr] of knots) {                     // grain swirls round a knot
+      const dx = u - kx, dy = (v - ky) * 0.5, d = Math.hypot(dx, dy);
+      if (d < kr * 4) gx += (kr * 4 - d) / (kr * 4) * 3 * Math.sign(dx || 1);
+    }
+    const gl = Math.abs(Math.sin(Math.PI * gx));
+    const late = Math.pow(gl, 3);
+    const fnn = _pwFbm(fn, u, v);
+    h[i] = 0.5 * round - 0.35 * seam + 0.025 * late + 0.05 * (fnn - 0.5);
+    al[i] = (0.62 + 0.5 * tone[k]) * (0.8 + 0.3 * late) * (1 - 0.6 * seam) * (0.8 + 0.4 * fnn);
+    rg[i] = 0.72 + 0.2 * (1 - late) + 0.08 * seam;
+    sm[i] = seam;
+  }
+  const pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    pack[i * 4] = Math.min(255, al[i] / 1.4 * 255); pack[i * 4 + 1] = Math.min(255, rg[i] * 255);
+    pack[i * 4 + 2] = Math.max(0, Math.min(255, (h[i] + 0.4) * 200)); pack[i * 4 + 3] = sm[i] * 255;
+  }
+  _pwNormals(h, S, S, 0.02, nrm, i => Math.max(0, Math.min(255, (h[i] + 0.4) * 200)));
+  _staveSet = { pack: _pwTex(pack, S, S, false), nrm: _pwTex(nrm, S, S, false), ms: performance.now() - t0 };
+  return _staveSet;
+}
+// ==== END BLOCK: polish-props ========================================================

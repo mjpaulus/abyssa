@@ -22,6 +22,8 @@ import { terrainH } from '../world/terrain.js';
 import { survival } from './survival.js';
 import { pumpPos } from './raft.js';
 import { airInletWorldPos } from '../entities/diver.js';
+import { braidSet } from '../lib/textures.js';
+import { registerPaint } from '../lib/paint.js';
 
 // ---------------------------------------------------------------------------
 // Geometry / topology
@@ -323,27 +325,45 @@ function substep(h, ax, ay, az, hx, hy, hz, zi) {
 }
 
 // ---------------------------------------------------------------------------
-// Material: wet rubber and tarred canvas. The rib is driven from world arc length in the
-// shader, NOT from the segment index — segment length runs 0.4 m to 24 m depending on how
-// far Sal is from the raft, so an index-driven rib made the hose's apparent texture a
-// function of his depth. No azimuthal term: the instance frame is a shortest-arc rotation
-// whose roll is undetermined for near-vertical segments and re-randomises every frame, so
-// any helix would swim. Rings only.
+// Material (POLISH-PROPS 2026-09-25): the SAME braided canvas cover as Sal's own feed
+// hose (lib/textures.js braidSet — the very textures diver.js binds, sampled here
+// through our own uniforms so their repeat is untouched and no second set is baked),
+// at Sal's braid pitch, wet-sheened like his dress. Where the two meet at his inlet
+// they now read as one hose.
+//
+// ALONG: world arc length in the shader, NOT the segment index — segment length runs
+// 0.4 m to 24 m depending on how far Sal is from the raft, so an index-driven pattern
+// would make the hose's texture a function of his depth.
+// AROUND: the instance frame is a shortest-arc rotation whose roll is undetermined for
+// near-vertical segments and re-randomises every frame, so the instance's own azimuth
+// would swim. The azimuth is taken instead in a VIEW-LOCKED frame (the segment axis and
+// the eye): the braid rides the hose's length exactly and its roll is held to the
+// camera, which on a braid is indistinguishable from a real roll and never flickers.
+// The atan2 seam sits on the far side of the hose, which is never seen.
+// The corrugation of the rubber under the cover survives as a soft normal ripple
+// (RIB_PITCH, arc-driven as before), not as a lathe.
 // ---------------------------------------------------------------------------
+const BRAID_ALONG = 0.064;       // m of hose per braid tile along (Sal's hose: 7 per 0.45 m)
+const BRAID_ROUND = 5.0;         // tiles round the circumference (0.41 m / 5 = Sal's 0.082)
 function tetherMaterial() {
+  const BR = braidSet();
   const mat = new THREE.MeshStandardMaterial({
-    color: 0x33383b, roughness: 0.5, metalness: 0.0,
-    envMap: envTex, envMapIntensity: 0.25
+    color: 0xffffff, roughness: 1.0, metalness: 0.02,
+    envMap: envTex, envMapIntensity: 0.3
   });
-  mat.customProgramCacheKey = () => 'abyssa-tether';   // three silently shares programs otherwise
+  mat.customProgramCacheKey = () => 'abyssa-tether2';   // three silently shares programs otherwise
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uPix = uPix;
     sh.uniforms.uMinPx = uMinPx;
+    sh.uniforms.uBraidMap = { value: BR.map };
+    sh.uniforms.uBraidRough = { value: BR.rough };
+    sh.uniforms.uBraidNrm = { value: BR.nrm };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aArc;
         varying float vArc;
         varying vec3 vAxisView;
+        varying float vTwY;
         uniform float uPix;
         uniform float uMinPx;`)
       .replace('#include <project_vertex>', `
@@ -357,27 +377,82 @@ function tetherMaterial() {
         transformed.xz *= k;
         vArc = aArc + position.y * length(instanceMatrix[1].xyz);
         vAxisView = normalize((modelViewMatrix * vec4(instanceMatrix[1].xyz, 0.0)).xyz);
+        vTwY = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).y;
         #include <project_vertex>`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
+        uniform sampler2D uBraidMap, uBraidRough, uBraidNrm;
         varying float vArc;
         varying vec3 vAxisView;
+        varying float vTwY;
         float ribAt(float a) { return sin(6.2831853 * a / ${RIB_PITCH.toFixed(4)}); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
-        float rib = ribAt(vArc);
-        // Slow drift toward tarred canvas over the rubber, on a metre scale. These are
-        // LINEAR values, not sRGB: three converts the diffuse uniform for you but not a
-        // literal written here, and an sRGB literal lands about 7x too bright.
+        // view-locked braid frame (see the header): A along, S across the view, F toward it
+        vec3 twA = normalize(vAxisView);
+        vec3 twS = cross(twA, normalize(vViewPosition));
+        twS = length(twS) > 1e-4 ? normalize(twS) : vec3(1.0, 0.0, 0.0);
+        vec3 twF = cross(twS, twA);
+        vec3 twN0 = normalize(vNormal);
+        float twPhi = atan(dot(twN0, twS), dot(twN0, twF));
+        vec2 twUV = vec2(vArc / ${BRAID_ALONG.toFixed(4)}, twPhi * ${(BRAID_ROUND / (2 * Math.PI)).toFixed(5)});
+        // wet everywhere under the sea; the loop above the waterline only damp
+        float twWet = 1.0 - 0.6 * smoothstep(-0.2, 0.8, vTwY);
+        vec3 twAlb = texture2D(uBraidMap, twUV).rgb;
+        // slow drift of tar through the cover on a metre scale (LINEAR literal)
         float tar = 0.5 + 0.5 * sin(vArc * 0.37) * sin(vArc * 0.11 + 1.7);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.062, 0.049, 0.036), tar * 0.55);
-        diffuseColor.rgb *= 0.86 + 0.14 * rib;`)
+        twAlb = mix(twAlb, vec3(0.045, 0.036, 0.027), tar * 0.35);
+        diffuseColor.rgb = twAlb * 0.8 * (1.0 - 0.35 * twWet);`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor *= mix(1.24, 0.84, 0.5 + 0.5 * rib);`)
-      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
-        normal = normalize(normal + vAxisView * rib * 0.42);`);
+        roughnessFactor = texture2D(uBraidRough, twUV).g;
+        roughnessFactor = mix(roughnessFactor, 0.34, twWet * 0.8);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        {
+          // braid relief in the view-locked frame: u along the axis, v round it
+          vec3 bn = texture2D(uBraidNrm, twUV).xyz * 2.0 - 1.0;
+          vec3 twB = cross(twA, normal);
+          normal = normalize(twA * bn.x * 0.8 + twB * bn.y * 0.8 + normal * bn.z);
+          // the rubber's corrugation under the cover: a soft ripple, not a lathe
+          normal = normalize(normal + twA * ribAt(vArc) * 0.12);
+        }`);
   };
   return mat;
 }
+
+// BRASS AT THE RAFT END: the hose-tail ferrule crimped over the line and the hex union
+// nut that couples it to the davit fitting, lathed along +Y (the segment frame), base
+// at the anchor. A child of the first hose chunk (whose own transform is identity, the
+// instances carry world space): hiding the hose — ending.js's shape match — hides the
+// fitting with it. Its matrix is written in place each update: no allocation.
+function ferruleGeo() {
+  const parts = [];
+  const lathe = (pts, seg) => new THREE.LatheGeometry(pts.map(([r, y]) => new THREE.Vector2(r, y)), seg);
+  // sleeve over the hose, a rolled lip, two crimp grooves
+  parts.push(lathe([[0.070, 0.05], [0.079, 0.052], [0.080, 0.07], [0.075, 0.078], [0.080, 0.086],
+    [0.080, 0.13], [0.075, 0.138], [0.080, 0.146], [0.080, 0.19], [0.076, 0.198], [0.068, 0.2]], 20));
+  // hex union nut (6-sided lathe = true flats), chamfered both faces
+  parts.push(lathe([[0.03, -0.035], [0.088, -0.035], [0.098, -0.026], [0.098, 0.026], [0.088, 0.035], [0.03, 0.035]], 6));
+  // collar between nut and sleeve
+  parts.push(lathe([[0.060, 0.030], [0.072, 0.034], [0.072, 0.050], [0.062, 0.054]], 20));
+  let n = 0;
+  for (const g of parts) n += g.attributes.position.count;
+  const pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), idx = [];
+  let o = 0;
+  for (const g of parts) {
+    g.computeVertexNormals();
+    pos.set(g.attributes.position.array, o * 3); nor.set(g.attributes.normal.array, o * 3);
+    if (g.index) for (const i of g.index.array) idx.push(i + o);
+    o += g.attributes.position.count;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  out.setIndex(idx);
+  return out;
+}
+let ferrule = null;
+const FERRULE_AT = 0.22;          // m down the line from node 0
+const _one = new THREE.Vector3(1, 1, 1);
 
 export function buildTether(anchorPos) {
   anchor.copy(anchorPos);
@@ -408,6 +483,12 @@ export function buildTether(anchorPos) {
     meshes.push(inst);
     arcAttr.push(arc);
   }
+  ferrule = new THREE.Mesh(ferruleGeo(), registerPaint(new THREE.MeshStandardMaterial({
+    color: 0xa8862f, metalness: 0.92, roughness: 0.42, envMap: envTex, envMapIntensity: 0.75
+  }), { hero: true }));
+  ferrule.matrixAutoUpdate = false;
+  ferrule.castShadow = true;
+  meshes[0].add(ferrule);
 }
 
 // A respawn TELEPORTS the diver from wherever he drowned back to the raft, but the tender
@@ -546,6 +627,12 @@ export function updateTether(dt, player, zone) {
     inst.instanceMatrix.needsUpdate = true;
     inst.geometry.attributes.aArc.needsUpdate = true;
   }
+  // the brass at the raft end, seated on node 0 along the first segment
+  _d.set(px[1] - px[0], py[1] - py[0], pz[1] - pz[0]).normalize();
+  _q.setFromUnitVectors(_up, _d);
+  // (seated 0.22 m down the line: node 0 is inside the davit sheave, which hid it)
+  ferrule.matrix.compose(_p.set(px[0], py[0], pz[0]).addScaledVector(_d, FERRULE_AT), _q, _one);
+  ferrule.matrixWorldNeedsUpdate = true;
   return dist;
 }
 
