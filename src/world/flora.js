@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
-import { makeGlow, rockMapSet, bladeMapSet } from '../lib/textures.js';
+import { makeGlow, rockMapSet, bladeMapSet, coralMazeSet } from '../lib/textures.js';
 import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
 import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
 import { wreckSites, driftSkirt, leeOf } from './wrecks.js';
@@ -130,6 +130,47 @@ varying vec3 vFlora; varying vec3 vLocal; varying vec3 vBl;
     return sqrt(d);
   }
 #endif
+#ifdef FLORA_CORAL
+  // corallite field: F1 and F2 of a 3D cell field. Sliced by the branch surface the
+  // F2-F1 edges tile it completely — every cell is one corallite.
+  vec2 coralCell(vec3 p) {
+    vec3 i = floor(p), f = fract(p); float d1 = 9.0, d2 = 9.0;
+    for (int z = -1; z <= 1; z++) for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {
+      vec3 g = vec3(float(x), float(y), float(z));
+      vec3 h = fract(sin(vec3(dot(i + g, vec3(127.1, 311.7, 74.7)), dot(i + g, vec3(269.5, 183.3, 246.1)), dot(i + g, vec3(113.5, 271.9, 124.6)))) * 43758.5453);
+      vec3 r = g + h - f; float d = dot(r, r);
+      if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) d2 = d;
+    }
+    return vec2(sqrt(d1), sqrt(d2));
+  }
+#endif
+#if defined( FLORA_CORAL ) || defined( FLORA_BRAIN )
+  // POLISH-VENTS surface-gradient bump (Mikkelsen) in VIEW space. dhx/dhy are the
+  // height's screen derivatives; heights are authored in the coral's LOCAL units and
+  // lifted to view units by the local->view stretch, so a colony's relief scales with
+  // the colony.
+  vec3 coralBump(vec3 n, float dhx, float dhy, float k) {
+    vec3 p = -vViewPosition, dx = dFdx(p), dy = dFdy(p), r1 = cross(dy, n), r2 = cross(n, dx);
+    float det = dot(dx, r1);
+    vec3 g = sign(det) * (dhx * r1 + dhy * r2);
+    return normalize(abs(det) * n - g * k);
+  }
+  float coralStretch() {
+    return length(dFdx(vViewPosition)) / max(length(dFdx(vLocal)), 1e-6);
+  }
+#endif
+#ifdef FLORA_BRAIN
+  // THE MAZE (lib/textures.js coralMazeSet): a grown Turing labyrinth, wrapped over the
+  // dome by an AZIMUTHAL-EQUIDISTANT map about its pole — radial distance is arc length,
+  // so the meanders keep their width from crown to rim and there is no seam to hide.
+  uniform sampler2D uMazePack, uMazeNrm;
+  vec2 brainUV(vec3 p) {
+    vec3 q = p - vec3(0.0, 0.06, 0.0); q.y /= 0.72;
+    float rxz = length(q.xz);
+    float th = atan(rxz, q.y);
+    return q.xz / max(rxz, 1e-5) * th * 0.5 * BRAIN_TILE;
+  }
+#endif
 #ifdef FLORA_ROCK
   varying vec3 vWPos;
   uniform sampler2D uRockPack, uRockNrm; uniform float uWet; uniform float uPaintK;
@@ -166,6 +207,9 @@ varying vec3 vFlora; varying vec3 vLocal; varying vec3 vBl;
     return normalize(max(abs(det), 0.0000001) * n - grad * strength);
   }
 #endif`;
+
+// Brain maze tiles per local unit of dome arc (~13 meanders across a colony).
+const BRAIN_TILE = '0.62';
 
 const F_BODY = `
 float gmask = vFlora.x;
@@ -274,6 +318,77 @@ float gmask = vFlora.x;
     diffuseColor.rgb *= 1.0 - 0.10 * wet;
   }
 #endif
+#ifdef FLORA_CORAL
+  {
+    // CORALLITE CUPS: each polyp sits in a raised cup with a dark pit at its centre
+    // (a cell field on the local surface), bump-mapped; fades before it can alias.
+    const float CF = 150.0;
+    vec3 cq = vLocal * CF;
+    vec2 cc = coralCell(cq);
+    float e = cc.y - cc.x;                       // 0 on the cell walls, high inside
+    // each corallite a small raised tube near its cell's heart, flat coenosteum between
+    // (the cell walls themselves never show), a dark calyx pit in the tube's mouth
+    float cup = smoothstep(0.18, 0.46, e);
+    float hole = smoothstep(0.50, 0.66, e);
+    float res = 1.0 - smoothstep(0.12, 0.42, length(fwidth(cq)));
+    float hgt = (cup * 0.9 - hole * 1.1) * res * (0.6 / CF);
+    float st = coralStretch();
+    normal = coralBump(normal, dFdx(hgt) * st, dFdy(hgt) * st, 1.0);
+    float tipK = vBl.x;
+    // TABLE TOP: a dense field of short upright branchlets radiating from the stalk,
+    // read as fine radial ribbing plus the cups (vBl.y marks the upper skin)
+    {
+      float tk = vBl.y;
+      float ang = atan(vLocal.z, vLocal.x);
+      float rad = length(vLocal.xz);
+      // radial branch rows (fork as they spread: frequency doubles past mid-radius) and
+      // concentric growth bands, at a scale that still resolves at ten units
+      float nr = rad > 0.3 ? 64.0 : 32.0;
+      float rib = sin(ang * nr + sin(rad * 25.0) * 1.2);
+      float band = 0.5 + 0.5 * sin(rad * 55.0 + sin(ang * 5.0) * 0.8);
+      float rres = (1.0 - smoothstep(0.1, 0.4, fwidth(ang) * nr)) * (1.0 - smoothstep(0.15, 0.5, length(fwidth(vLocal)) * 60.0));
+      float rh = (rib * 0.7 + band * 0.5) * tk * rres * 0.004;
+      normal = coralBump(normal, dFdx(rh) * coralStretch(), dFdy(rh) * coralStretch(), 1.0);
+      diffuseColor.rgb *= 1.0 - tk * (0.10 + 0.22 * rres * (0.5 - 0.5 * rib)) - tk * 0.12 * band;
+      diffuseColor.rgb *= 1.0 - tk * 0.35 * (1.0 - smoothstep(0.05, 0.35, rad));
+    }
+    // bleached growing tips/rims, then pit shade and a pale lip on each cup
+    vec3 bone = vec3(0.80, 0.76, 0.66) * (0.55 + 0.5 * dot(diffuseColor.rgb, vec3(0.333)));
+    diffuseColor.rgb = mix(diffuseColor.rgb, bone, tipK * 0.55);
+    diffuseColor.rgb *= mix(0.92, 0.80 - 0.45 * hole + 0.26 * cup, res);
+    roughnessFactor = mix(roughnessFactor, 0.95, hole * res);
+    gmask *= 0.4 + 0.6 * tipK;
+  }
+#endif
+#ifdef FLORA_BRAIN
+  {
+    // RIDGE AND VALLEY: rounded collines, darker warmer valleys, a furrow along every
+    // crest. The baked normal rides a cotangent frame built from the map's own screen
+    // derivatives (no tangents needed); detail resolves out with range.
+    vec2 bu = brainUV(vLocal);
+    vec4 mp = texture2D(uMazePack, bu);
+    vec3 mn = texture2D(uMazeNrm, bu).xyz * 2.0 - 1.0;
+    vec3 q0 = dFdx(-vViewPosition), q1 = dFdy(-vViewPosition);
+    vec2 st0 = dFdx(bu), st1 = dFdy(bu);
+    vec3 q1p = cross(q1, normal), q0p = cross(normal, q0);
+    vec3 T = q1p * st0.x + q0p * st1.x, Bt = q1p * st0.y + q0p * st1.y;
+    float dm = max(dot(T, T), dot(Bt, Bt));
+    float sc = dm > 0.0 ? inversesqrt(dm) : 0.0;
+    float res = 1.0 - smoothstep(0.35, 1.2, length(fwidth(bu)) * 256.0 / 16.0);
+    vec3 pn = normalize(T * (mn.x * sc * 0.55) + Bt * (mn.y * sc * 0.55) + normal * max(mn.z, 0.15));
+    normal = normalize(mix(normal, pn, res));
+    float ridge = mp.r, valley = 1.0 - smoothstep(0.15, 0.55, ridge);
+    vec3 valC = diffuseColor.rgb * vec3(0.40, 0.34, 0.26) * (0.85 + 0.3 * mp.b);
+    vec3 ridC = mix(diffuseColor.rgb, vec3(0.80, 0.76, 0.66) * dot(diffuseColor.rgb, vec3(0.45)), 0.18);
+    vec3 bc = mix(valC, ridC, smoothstep(0.25, 0.75, ridge)) * (1.0 - 0.25 * mp.g);
+    // a dark line down every valley floor, a pale one along every crest
+    bc *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.14, ridge));
+    bc = mix(bc, ridC * 1.25, 0.35 * smoothstep(0.88, 1.0, ridge) * (1.0 - mp.g));
+    diffuseColor.rgb = mix(diffuseColor.rgb * 0.8, bc, res);
+    roughnessFactor = mix(roughnessFactor, mix(0.92, 0.62, ridge), res);
+    gmask *= mix(0.2, valley * 0.5, res);
+  }
+#endif
 #ifdef FLORA_GROOVE
   float mn = sin(vLocal.x * 27.0 + sin(vLocal.z * 21.0 + vLocal.y * 15.0) * 2.4);
   // Reversed-edge smoothstep is UB (0.0 on this driver): the grooves never drew, and
@@ -345,6 +460,7 @@ function floraMat(o) {
       Object.assign(sh.uniforms, { uBladePack: { value: BS.pack }, uBladeNrm: { value: BS.nrm },
         uTrans: { value: o.trans ?? 1 }, uRipple: { value: o.ripple ?? 0.02 }, uCut: { value: o.cut ?? 1 } });
     }
+    if (o.maze) { const MZ = coralMazeSet(); Object.assign(sh.uniforms, { uMazePack: { value: MZ.pack }, uMazeNrm: { value: MZ.nrm } }); }
     if (o.rockSet) Object.assign(sh.uniforms, {
       uRockPack: { value: o.rockSet.pack }, uRockNrm: { value: o.rockSet.nrm }, uWet: { value: o.wet ?? 0 },
       uCrustA: { value: new THREE.Color(o.crustA ?? 0x000000) }, uCrustB: { value: new THREE.Color(o.crustB ?? 0x000000) },
@@ -354,7 +470,7 @@ function floraMat(o) {
       .replace('#include <common>', '#include <common>' + V_HEAD)
       .replace('#include <begin_vertex>', '#include <begin_vertex>' + V_BODY);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>' + F_HEAD)
+      .replace('#include <common>', '#include <common>' + F_HEAD.replace('BRAIN_TILE', BRAIN_TILE))
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
       .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS);
     if (o.rockSet) Object.assign(sh.uniforms, { uEdgeK: styleUniforms.uEdgeK, uEdgeSun: styleUniforms.uEdgeSun, uPaintK: styleUniforms.uPaintK });
@@ -515,31 +631,6 @@ function grassGeo() {
   });
 }
 
-function staghornGeo() {
-  const B = new Build();
-  const seg = new THREE.CylinderGeometry(0.62, 1, 1, 4, 1, false);
-  seg.translate(0, 0.5, 0);
-  const grow = (base, len, rad, d) => {
-    B.add(seg, base.clone().multiply(new THREE.Matrix4().makeScale(rad, len, rad)), { d });
-    if (d >= 2) return;
-    const n = d === 0 ? 3 : 2;
-    for (let i = 0; i < n; i++) {
-      const b = base.clone()
-        .multiply(new THREE.Matrix4().makeTranslation(0, len * rr(0.7, 0.97), 0))
-        .multiply(new THREE.Matrix4().makeRotationY(i / n * TAU + rr(0, 1.3)))
-        .multiply(new THREE.Matrix4().makeRotationX(rr(0.35, 0.8)));
-      grow(b, len * rr(0.6, 0.8), rad * 0.68, d + 1);
-    }
-  };
-  grow(new THREE.Matrix4(), 0.42, 0.07, 0);
-  seg.dispose();
-  return B.done((x, y, z, h, m, o) => {
-    const t = clamp(m.d * 0.3 + h * 0.55, 0, 1), s = 0.3 + 0.7 * t;
-    o.c[0] = s; o.c[1] = s * 0.9; o.c[2] = s * 0.93;
-    o.flex = h * h * 0.6; o.glow = sstep(0.7, 1, t);
-  });
-}
-
 // Flat gorgonian lattice in the XY plane; ripples along local Z (see FLORA_FAN).
 function fanGeo() {
   const B = new Build();
@@ -562,19 +653,261 @@ function fanGeo() {
   });
 }
 
+// ---- POLISH-VENTS: stony corals ---------------------------------------------------------
+// THE STREAM CONTRACT: the flora stream `_fr` also places every rock after the reef, and
+// rockColliders must stay bit-identical. The old stick/lump builders drew 36 values
+// (staghorn: 3 + 3x2 child branches, four draws each) and 1 value (brain). The new
+// builders BURN exactly those draws and fold them into a seed for a LOCAL mulberry32,
+// so the shapes are still a pure function of the site stream and nothing downstream
+// moves. The detail they grow from it costs the site stream nothing.
+function coralBurn(n) {
+  let h = 0x9E3779B1 | 0;
+  for (let k = 0; k < n; k++) h = Math.imul(h ^ ((_fr() * 4294967296) >>> 0), 0x85EBCA6B) ^ (h >>> 13);
+  return h | 0;
+}
+function coralRng(seed) {
+  let s = seed | 0;
+  return () => {
+    s = (s + 0x6d2b79f5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// A grown tube: rings along a Catmull-Rom path on parallel-transported frames, radius
+// tapering r0 -> r1 and KNOBBLED (each ring swells and pinches on a 3D noise of its own
+// position, the way a calcified branch thickens in growth pulses), closed at the tip by
+// a blunt rounded apex. The base is left open — it is always buried in a parent branch
+// or the base plate. Pushes one tip value per vertex into `tip` (0 body .. 1 apex, over
+// the last `tipLen` of the branch) so the shader can bleach the growing tips.
+const _cv = new THREE.Vector3(), _cn = new THREE.Vector3(), _cb = new THREE.Vector3();
+function coralTube(pts, r0, r1, sides, segs, knob, seed, tip, tipLen) {
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const fr = curve.computeFrenetFrames(segs, false);
+  const L = curve.getLength();
+  const pos = [], idx = [];
+  for (let j = 0; j <= segs; j++) {
+    const t = j / segs;
+    curve.getPointAt(t, _cv);
+    const r = r0 + (r1 - r0) * t;
+    const tp = clamp((t * L - (L - tipLen)) / tipLen, 0, 1);
+    for (let s = 0; s < sides; s++) {
+      const a = s / sides * TAU + j * 0.5;
+      const kn = 1 + knob * (n3(_cv.x * 55 + seed, _cv.y * 55, _cv.z * 55 + a * 0.6) - 0.5) * 2;
+      _cn.copy(fr.normals[j]).multiplyScalar(Math.cos(a) * r * kn);
+      _cb.copy(fr.binormals[j]).multiplyScalar(Math.sin(a) * r * kn);
+      pos.push(_cv.x + _cn.x + _cb.x, _cv.y + _cn.y + _cb.y, _cv.z + _cn.z + _cb.z);
+      tip.push(tp * tp * tp);
+    }
+  }
+  for (let j = 0; j < segs; j++) for (let s = 0; s < sides; s++) {
+    const a = j * sides + s, b = j * sides + (s + 1) % sides, c = a + sides, d = b + sides;
+    idx.push(a, c, b, b, c, d);
+  }
+  // rounded apex: a shoulder ring half a radius on, shrunk, then the apex vertex
+  const T = fr.tangents[segs];
+  curve.getPointAt(1, _cv);
+  const sh = pos.length / 3;
+  for (let s = 0; s < sides; s++) {
+    const a = s / sides * TAU + segs * 0.5;
+    _cn.copy(fr.normals[segs]).multiplyScalar(Math.cos(a) * r1 * 0.72);
+    _cb.copy(fr.binormals[segs]).multiplyScalar(Math.sin(a) * r1 * 0.72);
+    pos.push(_cv.x + T.x * r1 * 0.5 + _cn.x + _cb.x, _cv.y + T.y * r1 * 0.5 + _cn.y + _cb.y, _cv.z + T.z * r1 * 0.5 + _cn.z + _cb.z);
+    tip.push(1);
+  }
+  for (let s = 0; s < sides; s++) {
+    const a = segs * sides + s, b = segs * sides + (s + 1) % sides, c = sh + s, d = sh + (s + 1) % sides;
+    idx.push(a, c, b, b, c, d);
+  }
+  const ap = pos.length / 3;
+  pos.push(_cv.x + T.x * r1 * 0.95, _cv.y + T.y * r1 * 0.95, _cv.z + T.z * r1 * 0.95);
+  tip.push(1);
+  for (let s = 0; s < sides; s++) idx.push(sh + s, ap, sh + (s + 1) % sides);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+// An encrusting base plate: an irregular low dome that the branches rise out of, lobed
+// at the rim and tucked under into the sand.
+function coralPlate(R, h, sectors, rings, seed, lobe, tip, tipV) {
+  const pos = [0, h, 0], idx = [];
+  tip.push(tipV(0));
+  for (let j = 1; j <= rings; j++) {
+    const u = j / rings;
+    for (let s = 0; s < sectors; s++) {
+      const a = s / sectors * TAU;
+      const rl = R * u * (1 + lobe * (Math.sin(a * 3 + seed) * 0.6 + Math.sin(a * 5 + seed * 1.7) * 0.4 + (n3(Math.cos(a) * 2 + seed, Math.sin(a) * 2, u) - 0.5)));
+      pos.push(Math.cos(a) * rl, h * (1 - u * u) - (j === rings ? h * 0.6 : 0), Math.sin(a) * rl);
+      tip.push(tipV(u));
+    }
+  }
+  for (let s = 0; s < sectors; s++) idx.push(0, 1 + (s + 1) % sectors, 1 + s);
+  for (let j = 1; j < rings; j++) for (let s = 0; s < sectors; s++) {
+    const a = 1 + (j - 1) * sectors + s, b = 1 + (j - 1) * sectors + (s + 1) % sectors, c = a + sectors, d = b + sectors;
+    idx.push(a, b, c, b, d, c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
+// Overwrite the (unused on stony corals) blade-uv channel with the per-vertex tip mask:
+// aBU.x = tip (bleached growing tip / growing rim), aBU.y = table-top branchlet field
+// (the stony-coral material never defines FLORA_BLADE, so this channel is free).
+function coralTips(g, tip, top) {
+  const bu = g.attributes.aBU.array;
+  for (let k = 0; k < tip.length; k++) { bu[k * 2] = tip[k]; if (top) bu[k * 2 + 1] = top[k]; }
+  return g;
+}
+
+// STAGHORN (Acropora cervicornis): an encrusting base plate, four primary antler
+// branches that rise and curve upward, secondaries forking off them at 30-50 degrees
+// and a few short tertiaries — recursive tapered tubes with a knobbled growth surface.
+// Corallite cups are a normal feature in the fragment (FLORA_CORAL); tips bleach pale.
+// ~540 tris (was a 160-tri stick bundle); rigid (stony coral does not sway).
+function staghornGeo() {
+  const R = coralRng(coralBurn(36));
+  const B = new Build(), tip = [], I = new THREE.Matrix4();
+  const plate = coralPlate(0.2, 0.035, 10, 2, R() * 9, 0.12, tip, () => 0);
+  B.add(plate, I, { d: -1 }); plate.dispose();
+  const up = V3(0, 1, 0), dir = new THREE.Vector3(), side = new THREE.Vector3();
+  const branch = (p0, d0, len, r0, r1, depth, segs) => {
+    // path: rises along d0 and bends toward vertical as it grows (antler habit)
+    const pts = [p0.clone()];
+    let p = p0.clone(); dir.copy(d0);
+    for (let k = 1; k <= 3; k++) {
+      dir.lerp(up, 0.16 + R() * 0.1).add(side.set(R() - 0.5, 0, R() - 0.5).multiplyScalar(0.3)).normalize();
+      p = p.clone().addScaledVector(dir, len / 3);
+      pts.push(p);
+    }
+    const g = coralTube(pts, r0, r1, 6, segs, 0.2, R() * 50, tip, 0.14);
+    B.add(g, I, { d: depth }); g.dispose();
+    return pts;
+  };
+  const kids = (pts, len, r, depth, n, segs) => {
+    const curve = new THREE.CatmullRomCurve3(pts);
+    for (let i = 0; i < n; i++) {
+      const t = 0.32 + (i + R() * 0.8) / n * 0.4;
+      const p0 = curve.getPointAt(t), tg = curve.getTangentAt(t);
+      const az = R() * TAU, off = 0.5 + R() * 0.35;
+      side.set(Math.cos(az), 0, Math.sin(az));
+      const d0 = tg.clone().multiplyScalar(Math.cos(off)).addScaledVector(side, Math.sin(off)).normalize();
+      const L2 = len * (0.42 + R() * 0.2);
+      const cp = branch(p0.addScaledVector(d0, -r * 0.3), d0, L2, r * 0.8, r * 0.62, depth, segs);
+      if (depth === 1 && i === 0 && R() < 0.8) kids(cp, L2, r * 0.75, 2, 1, 2);
+    }
+  };
+  for (let b = 0; b < 4; b++) {
+    const az = b / 4 * TAU + R() * 0.9, tilt = 0.5 + R() * 0.45;
+    const d0 = V3(Math.cos(az) * Math.sin(tilt), Math.cos(tilt), Math.sin(az) * Math.sin(tilt));
+    const len = 0.62 + R() * 0.3;
+    const pts = branch(V3(Math.cos(az) * 0.05, 0.015, Math.sin(az) * 0.05), d0, len, 0.03, 0.021, 0, 4);
+    kids(pts, len, 0.026, 1, 2, 2);
+  }
+  const g = B.done((x, y, z, h, m, o) => {
+    const s = m.d < 0 ? 0.52 : 0.62 + 0.38 * sstep(0.0, 0.9, h);
+    o.c[0] = s; o.c[1] = s * 0.96; o.c[2] = s * 0.9;
+    o.flex = 0; o.glow = sstep(0.75, 1, h);
+  });
+  return coralTips(g, tip);
+}
+
+// TABLE CORAL (Acropora hyacinthus): a short stalk flaring into a broad, shallow dish
+// with a lobed growing rim — the rim is the bleached growth edge (aBU.x). Top and
+// underside are separate skins so the rim stays crisp; the upper face carries the same
+// corallite cups as the staghorn (shared material/program, zero new programs). ~400 tris.
+function tableGeo() {
+  const R = coralRng(0x7AB1E0C0);   // fixed: the geometry is shared by every instance
+  const B = new Build(), tip = [], I = new THREE.Matrix4(), topN = [];
+  const addT = (g, t, flag) => { B.add(g, I, { t }); topN.push([g.attributes.position.count, flag]); g.dispose(); };
+  // stalk: a short tube to the dish centre, leaning a little
+  const top = V3(0.05, 0.40, 0.03);
+  const st = coralTube([V3(0, -0.02, 0), V3(0.02, 0.2, 0.01), top], 0.075, 0.05, 6, 3, 0.12, 7.1, tip, 0.001);
+  addT(st, 's', 0);
+  const foot = coralPlate(0.16, 0.03, 8, 1, 3.3, 0.3, tip, () => 0);
+  addT(foot, 's', 0);
+  // dish outline: lobed, deterministic
+  const NS = 24, NR = 5, Rr = new Float32Array(NS);
+  const ph1 = R() * TAU, ph2 = R() * TAU;
+  for (let s = 0; s < NS; s++) { const a = s / NS * TAU; Rr[s] = 0.58 * (1 + 0.10 * Math.sin(3 * a + ph1) + 0.07 * Math.sin(5 * a + ph2) + 0.06 * (R() - 0.5)); }
+  const dishY = (u, s) => top.y + 0.02 + 0.2 * Math.pow(u, 1.8) + 0.02 * Math.sin(s * 1.7) * u;
+  const skin = (under) => {
+    const rings = under ? 2 : NR, pos = [top.x, dishY(0, 0) - (under ? 0.05 : 0), top.z], idx = [];
+    tip.push(0);
+    for (let j = 1; j <= rings; j++) {
+      const u = j / rings;
+      for (let s = 0; s < NS; s++) {
+        const a = s / NS * TAU, r = Rr[s] * u;
+        const th = under ? 0.05 * (1 - u) + 0.014 : 0;
+        pos.push(top.x + Math.cos(a) * r, dishY(u, s) - th, top.z + Math.sin(a) * r);
+        tip.push(sstep(0.82, 1, u));
+      }
+    }
+    for (let s = 0; s < NS; s++) { const b = 1 + s, c = 1 + (s + 1) % NS; if (under) idx.push(0, b, c); else idx.push(0, c, b); }
+    for (let j = 1; j < rings; j++) for (let s = 0; s < NS; s++) {
+      const a = 1 + (j - 1) * NS + s, b = 1 + (j - 1) * NS + (s + 1) % NS, c = a + NS, d = b + NS;
+      if (under) idx.push(a, c, b, b, c, d); else idx.push(a, b, c, b, d, c);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx); g.computeVertexNormals();
+    return g;
+  };
+  addT(skin(false), 't', 1);
+  addT(skin(true), 'u', 0);
+  // growing rim: a band joining the top skin's last ring to the underside's
+  {
+    const pos = [], idx = [];
+    for (let s = 0; s < NS; s++) {
+      const a = s / NS * TAU, r = Rr[s];
+      pos.push(top.x + Math.cos(a) * r, dishY(1, s), top.z + Math.sin(a) * r);
+      pos.push(top.x + Math.cos(a) * r * 1.01, dishY(1, s) - 0.014, top.z + Math.sin(a) * r * 1.01);
+      tip.push(1, 1);
+    }
+    for (let s = 0; s < NS; s++) { const a = s * 2, b = ((s + 1) % NS) * 2; idx.push(a, a + 1, b, b, a + 1, b + 1); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx); g.computeVertexNormals();
+    addT(g, 'r', 0);
+  }
+  const tf = new Float32Array(tip.length);
+  { let k = 0; for (const n of topN) { tf.fill(n[1], k, k + n[0]); k += n[0]; } }
+  const g = B.done((x, y, z, h, m, o) => {
+    const rr2 = Math.hypot(x - top.x, z - top.z);
+    const s = m.t === 's' ? 0.5 : m.t === 'u' ? 0.4 : 0.5 + 0.18 * sstep(0.0, 0.5, rr2);
+    o.c[0] = s; o.c[1] = s * 0.96; o.c[2] = s * 0.9;
+    o.flex = 0; o.glow = m.t === 'r' ? 0.7 : 0;
+  });
+  return coralTips(g, tip, tf);
+}
+
+// BRAIN CORAL: a dome — the meandering ridge-and-valley maze is NOT geometry, it is the
+// generated labyrinth (coralMazeSet) mapped about the dome's pole in the fragment
+// (FLORA_BRAIN), normal + albedo, so it needs no UVs. Here: an upper cap with low
+// growth lumps and a rim rolled under into the sand. Burns the one
+// draw the old lump spent.
 function brainGeo() {
-  const g = new THREE.SphereGeometry(0.5, 16, 9), p = g.attributes.position, sd = rr(0, 90);
+  const sd = coralBurn(1) * 1e-7;
+  const g = new THREE.SphereGeometry(0.5, 18, 8, 0, TAU, 0, Math.PI * 0.6), p = g.attributes.position;
   for (let k = 0; k < p.count; k++) {
-    let x = p.getX(k), y = p.getY(k), z = p.getZ(k);
-    const d = 1 + 0.24 * (n3(x * 5 + sd, y * 5, z * 5 + sd) - 0.5) + 0.1 * (n3(x * 11, y * 11, z * 11) - 0.5);
-    p.setXYZ(k, x * d, Math.max(y * d * 0.62, -0.2), z * d);
+    const x = p.getX(k), y = p.getY(k), z = p.getZ(k);
+    const d = 1 + 0.16 * (n3(x * 4 + sd, y * 4, z * 4 + sd) - 0.5) + 0.06 * (n3(x * 9, y * 9, z * 9) - 0.5);
+    // the rim rolls under into the sand
+    const yy = y * d * 0.72 - (y < 0 ? 0.06 : 0);
+    p.setXYZ(k, x * d, yy, z * d);
   }
   g.computeVertexNormals();
-  const B = new Build().add(g, xf(0, 0.2, 0));
+  const B = new Build().add(g, xf(0, 0.06, 0));
   g.dispose();
   return B.done((x, y, z, h, m, o) => {
-    const s = 0.5 + 0.5 * h;
-    o.c[0] = s; o.c[1] = s * 0.95; o.c[2] = s * 0.86;
+    const s = 0.62 + 0.38 * sstep(0.0, 0.5, h);
+    o.c[0] = s; o.c[1] = s * 0.97; o.c[2] = s * 0.92;
     o.flex = 0; o.glow = 1;
   });
 }
@@ -780,6 +1113,12 @@ const PAL = [
   { kelp: [0x8c5039, 0x9c6136, 0x7a4030, 0x8a3f45], reef: [0xe0603a, 0xd8a03a, 0xc83a5a, 0xe08a4a], glow: 0xff9455, silt: 0x3e2d26, rock: 0x473633, turfWarm: [0x8a5c35, 0x7a4a30, 0x6b503a, 0x8c5039] }
 ];
 
+// Stony-coral hues (polish-vents): muted, bleached, never neon.
+const CORAL = [0xa8844e, 0xa87266, 0xc6b99c, 0x7d8150, 0x8a6e76, 0xb09a72];
+const _tc = new THREE.Color();
+// hashed (no stream draw) value in [a, b) for per-slot shape variation
+const rr0 = (a, b, i) => a + (b - a) * (Math.abs(Math.sin(i * 91.345 + 7.1) * 24634.6345) % 1);
+
 export const kelp = { inst: null, data: [], meshes: [] };
 
 // Sphere colliders for boulders big enough to swallow the camera. The camera probe in
@@ -842,9 +1181,11 @@ function buildZoneMats() {
     return {
     kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS'], blade: true, trans: 1.3, ripple: 0.018 }),
     grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS'], blade: true, trans: 0.9, ripple: 0.006 }),
-    stag: floraMat({ key: 'stag', rough: 0.62, sway: 1, freq: 0.55, cull: 105, glow: P.glow, env: 0.14 }),
+    // POLISH-VENTS: staghorn AND the new table coral share this one material/program
+    // (FLORA_CORAL: corallite cups + bleached tips). Stony coral is rigid: sway 0.
+    stag: floraMat({ key: 'stag', rough: 0.7, sway: 0, freq: 0.55, cull: 105, glow: P.glow, env: 0.14, def: ['CORAL'] }),
     fan: floraMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.8, cull: 105, sss: 0.55, glow: P.glow, def: ['SSS', 'FAN'], blade: true, trans: 1.0, ripple: 0, cut: 0 }),
-    brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['GROOVE'] }),
+    brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['BRAIN'], maze: true }),
     sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER', 'PIT'] }),
     anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS'] }),
     // Rock structure: a generated map set (lib/textures.js rockMapSet) projected
@@ -903,7 +1244,7 @@ function buildOnce() {
 
   const G = {
     kelp: kelpGeo(), grass: grassGeo(), stag: staghornGeo(), fan: fanGeo(),
-    brain: brainGeo(), sponge: spongeGeo(), anem: anemoneGeo(),
+    brain: brainGeo(), sponge: spongeGeo(), anem: anemoneGeo(), table: tableGeo(),
     // Tri counts are 20*(detail+1)^2: pebbles 320, boulders 980, heroes 3920 —
     // all per-geometry, shared across every instance of the tier.
     r0: rockGeo(3, 0.72, 0.70, 0.45), r1: rockGeo(6, 0.95, 0.78, 0.8), r2: rockGeo(13, 1.05, 0.64, 1.0)
@@ -952,15 +1293,31 @@ function buildOnce() {
     }
     // ---- reef: staghorn / fans / brain / sponges / anemones ----
     const reefCol = i => _c.set(P.reef[i % P.reef.length]).multiplyScalar(rr(0.55, 1.1));
+    // POLISH-VENTS: stony corals take a MUTED per-instance hue (ochre, rose, bone, olive,
+    // dusty mauve), leaning only a fifth of the way toward the zone's reef mood. Spends
+    // exactly the one draw reefCol spent, so the stream (and every rock after) holds.
+    const coralCol = (i, salt) => {
+      const k = (rr(0.55, 1.1) - 0.55) / 0.55;
+      const hsh = Math.abs(Math.sin(i * 12.9898 + zi * 78.233 + salt * 37.719) * 43758.5453) % 1;
+      _c.set(CORAL[Math.floor(hsh * CORAL.length)]).lerp(_tc.set(P.reef[i % P.reef.length]), 0.2);
+      return _c.multiplyScalar(0.72 + 0.4 * k);
+    };
     {
+      // Same 220 placements and the same draws per slot as ever; each slot now becomes a
+      // full staghorn colony (every fourth), a table coral (every eighth, offset) or
+      // nothing — fewer, far better colonies inside the same triangle budget.
       const L = place(zi, 220, reef, 0.7);
-      const im = mount(zi, G.stag, M.stag, L.length, true);
+      const im = mount(zi, G.stag, M.stag, Math.ceil(L.length / 4), true);
+      const it = mount(zi, G.table, M.stag, Math.ceil(L.length / 8), true);
+      let ks = 0, kt = 0;
       for (let i = 0; i < L.length; i++) {
-        const p = L[i], S = rr(1.1, 4.2);
-        put(im, i, stand(p.n, 0.5, rr(0, TAU)), S, S * rr(0.8, 1.4), p.x, p.y - S * 0.12, p.z,
-          reefCol(i), _fr() * TAU, 0.6 / S, 0.35, _fr() < 0.14 ? rr(0.3, 0.8) : 0);
+        const p = L[i], S = rr(1.1, 4.2), yaw = rr(0, TAU), sy = S * rr(0.8, 1.4);
+        coralCol(i, 1);
+        const ph = _fr() * TAU, gl = _fr() < 0.14 ? rr(0.3, 0.8) : 0;
+        if (i % 4 === 0) put(im, ks++, stand(p.n, 0.5, yaw), S * 1.35, sy * 1.1, p.x, p.y - S * 0.03, p.z, _c, ph, 0, 0, gl);
+        else if (i % 8 === 2) put(it, kt++, stand(p.n, 0.2, yaw), S * 1.05, S * rr0(0.85, 1.1, i), p.x, p.y - S * 0.02, p.z, _c, ph, 0, 0, gl * 0.6);
       }
-      seal(im, L.length);
+      seal(im, ks); seal(it, kt);
     }
     {
       const L = place(zi, 150, reef, 0.5, 0.95);
@@ -979,8 +1336,8 @@ function buildOnce() {
       const im = mount(zi, G.brain, M.brain, L.length, true);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], S = rr(1.3, 4.6);
-        put(im, i, stand(p.n, 0.75, rr(0, TAU)), S, S * rr(0.75, 1.1), p.x, p.y - S * 0.16, p.z,
-          reefCol(i + 1), _fr() * TAU, 0, 0, _fr() < 0.3 ? rr(0.1, 0.45) : 0);
+        put(im, i, stand(p.n, 0.75, rr(0, TAU)), S, S * rr(0.75, 1.1), p.x, p.y - S * 0.05, p.z,
+          coralCol(i + 1, 2), _fr() * TAU, 0, 0, _fr() < 0.3 ? rr(0.1, 0.45) : 0);
       }
       seal(im, L.length);
     }

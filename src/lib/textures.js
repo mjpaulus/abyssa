@@ -1194,3 +1194,86 @@ export function bladeMapSet() {
   return _bladeSet;
 }
 // ==== END BLOCK: polish-world ========================================================
+
+// =====================================================================================
+// ==== BLOCK: polish-vents (corals / vent chimneys) — appended 2026-09-25 ============
+// Owned by the polish-vents branch. Generated sets, baked once, cached forever, all
+// DataTextures (mipmapped, anisotropic, RepeatWrapping), built on this file's
+// polish-world helpers (_pwTex, _pwNormals, _pwLattice, _pwFbm):
+//   coralMazeSet()  the brain-coral labyrinth (flora.js FLORA_BRAIN)
+//   sulphideSet()   black-smoker sulphide crust (vents.js chimney material)
+// Each set records its own bake time in `.ms`.
+// =====================================================================================
+
+// Separable box blur on a torus (running sums), radius r, in place via `tmp`.
+function _pvBox(src, dst, tmp, S, r) {
+  const w = 2 * r + 1;
+  for (let y = 0; y < S; y++) {
+    const o = y * S;
+    let acc = 0;
+    for (let k = -r; k <= r; k++) acc += src[o + ((k + S) % S)];
+    for (let x = 0; x < S; x++) {
+      tmp[o + x] = acc / w;
+      acc += src[o + (x + r + 1) % S] - src[o + (x - r + S) % S];
+    }
+  }
+  for (let x = 0; x < S; x++) {
+    let acc = 0;
+    for (let k = -r; k <= r; k++) acc += tmp[((k + S) % S) * S + x];
+    for (let y = 0; y < S; y++) {
+      dst[y * S + x] = acc / w;
+      acc += tmp[((y + r + 1) % S) * S + x] - tmp[((y - r + S) % S) * S + x];
+    }
+  }
+}
+
+// ---- THE CORAL MAZE SET (flora.js brain coral) ----------------------------------------
+// A real labyrinth, grown rather than drawn: a two-scale activator/inhibitor iteration
+// (McCabe-style Turing: blur at radius 3 excites, blur at radius 6 inhibits, every
+// texel steps toward whichever wins, the field renormalised each pass) run 26 times on
+// a random start. It settles into meandering ridges and valleys of one width — the
+// brain-coral maze — and, being built from torus blurs, it tiles. The height is then
+// rounded (two soft blurs of the saturated field) and a shallow groove is cut along
+// every ridge crest (the collines' central furrow).
+//   nrm  : tangent-space normal (linear), A = height
+//   pack : R = ridge mask (0 valley .. 1 crest), G = crest groove, B = valley-floor
+//          grain, A = 255
+let _mazeSet = null;
+export function coralMazeSet() {
+  if (_mazeSet) return _mazeSet;
+  const t0 = performance.now();
+  const S = 256, N = S * S;
+  const rand = seededRand(0xB2A1C0A1);
+  let a = new Float32Array(N);
+  for (let i = 0; i < N; i++) a[i] = rand() * 2 - 1;
+  const act = new Float32Array(N), inh = new Float32Array(N), tmp = new Float32Array(N);
+  for (let it = 0; it < 26; it++) {
+    _pvBox(a, act, tmp, S, 3); _pvBox(act, act, tmp, S, 2);
+    _pvBox(a, inh, tmp, S, 6); _pvBox(inh, inh, tmp, S, 4);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < N; i++) {
+      const v = a[i] + (act[i] > inh[i] ? 0.06 : -0.06);
+      a[i] = v; if (v < lo) lo = v; if (v > hi) hi = v;
+    }
+    const k = 2 / Math.max(1e-6, hi - lo);
+    for (let i = 0; i < N; i++) a[i] = (a[i] - lo) * k - 1;
+  }
+  // saturate, then round the profile
+  const sat = new Float32Array(N), h = new Float32Array(N), crest = new Float32Array(N);
+  for (let i = 0; i < N; i++) sat[i] = Math.tanh(a[i] * 3.0);
+  _pvBox(sat, h, tmp, S, 2); _pvBox(h, h, tmp, S, 1);
+  _pvBox(h, crest, tmp, S, 3);          // wide blur: peaks along each ridge's centre line
+  const grain = [32, 64, 128].map(n => _pwLattice(rand, n));
+  const ht = new Float32Array(N), pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    const r = h[i] * 0.5 + 0.5;                       // 0 valley .. 1 ridge
+    const groove = Math.max(0, Math.min(1, (crest[i] - 0.62) / 0.3)) * (r > 0.8 ? 1 : 0);
+    const x = i % S, y = (i / S) | 0;
+    const gr = _pwFbm(grain, x / S, y / S);
+    ht[i] = r - 0.16 * groove + (1 - r) * 0.05 * (gr - 0.5);
+    pack[i * 4] = r * 255; pack[i * 4 + 1] = groove * 255; pack[i * 4 + 2] = gr * 255; pack[i * 4 + 3] = 255;
+  }
+  _pwNormals(ht, S, S, 0.055, nrm, i => Math.max(0, Math.min(255, ht[i] * 255)));
+  _mazeSet = { nrm: _pwTex(nrm, S, S, false), pack: _pwTex(pack, S, S, false), ms: performance.now() - t0 };
+  return _mazeSet;
+}
