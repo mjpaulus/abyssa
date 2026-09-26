@@ -1245,3 +1245,144 @@ export function canvasSet() {
   return _canvasSet;
 }
 // ==== END BLOCK: polish-followups ====================================================
+
+// =====================================================================================
+// ==== BLOCK: polish-vents (corals / vent chimneys) — appended 2026-09-25 ============
+// Owned by the polish-vents branch. Generated sets, baked once, cached forever, all
+// DataTextures (mipmapped, anisotropic, RepeatWrapping), built on this file's
+// polish-world helpers (_pwTex, _pwNormals, _pwLattice, _pwFbm):
+//   coralMazeSet()  the brain-coral labyrinth (flora.js FLORA_BRAIN)
+//   sulphideSet()   black-smoker sulphide crust (vents.js chimney material)
+// Each set records its own bake time in `.ms`.
+// =====================================================================================
+
+// Separable box blur on a torus (running sums), radius r, in place via `tmp`.
+function _pvBox(src, dst, tmp, S, r) {
+  const w = 2 * r + 1;
+  for (let y = 0; y < S; y++) {
+    const o = y * S;
+    let acc = 0;
+    for (let k = -r; k <= r; k++) acc += src[o + ((k + S) % S)];
+    for (let x = 0; x < S; x++) {
+      tmp[o + x] = acc / w;
+      acc += src[o + (x + r + 1) % S] - src[o + (x - r + S) % S];
+    }
+  }
+  for (let x = 0; x < S; x++) {
+    let acc = 0;
+    for (let k = -r; k <= r; k++) acc += tmp[((k + S) % S) * S + x];
+    for (let y = 0; y < S; y++) {
+      dst[y * S + x] = acc / w;
+      acc += tmp[((y + r + 1) % S) * S + x] - tmp[((y - r + S) % S) * S + x];
+    }
+  }
+}
+
+// ---- THE CORAL MAZE SET (flora.js brain coral) ----------------------------------------
+// A real labyrinth, grown rather than drawn: a two-scale activator/inhibitor iteration
+// (McCabe-style Turing: blur at radius 3 excites, blur at radius 6 inhibits, every
+// texel steps toward whichever wins, the field renormalised each pass) run 26 times on
+// a random start. It settles into meandering ridges and valleys of one width — the
+// brain-coral maze — and, being built from torus blurs, it tiles. The height is then
+// rounded (two soft blurs of the saturated field) and a shallow groove is cut along
+// every ridge crest (the collines' central furrow).
+//   nrm  : tangent-space normal (linear), A = height
+//   pack : R = ridge mask (0 valley .. 1 crest), G = crest groove, B = valley-floor
+//          grain, A = 255
+let _mazeSet = null;
+export function coralMazeSet() {
+  if (_mazeSet) return _mazeSet;
+  const t0 = performance.now();
+  const S = 256, N = S * S;
+  const rand = seededRand(0xB2A1C0A1);
+  let a = new Float32Array(N);
+  for (let i = 0; i < N; i++) a[i] = rand() * 2 - 1;
+  const act = new Float32Array(N), inh = new Float32Array(N), tmp = new Float32Array(N);
+  for (let it = 0; it < 26; it++) {
+    _pvBox(a, act, tmp, S, 3); _pvBox(act, act, tmp, S, 2);
+    _pvBox(a, inh, tmp, S, 6); _pvBox(inh, inh, tmp, S, 4);
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < N; i++) {
+      const v = a[i] + (act[i] > inh[i] ? 0.06 : -0.06);
+      a[i] = v; if (v < lo) lo = v; if (v > hi) hi = v;
+    }
+    const k = 2 / Math.max(1e-6, hi - lo);
+    for (let i = 0; i < N; i++) a[i] = (a[i] - lo) * k - 1;
+  }
+  // saturate, then round the profile
+  const sat = new Float32Array(N), h = new Float32Array(N), crest = new Float32Array(N);
+  for (let i = 0; i < N; i++) sat[i] = Math.tanh(a[i] * 3.0);
+  _pvBox(sat, h, tmp, S, 2); _pvBox(h, h, tmp, S, 1);
+  _pvBox(h, crest, tmp, S, 3);          // wide blur: peaks along each ridge's centre line
+  const grain = [32, 64, 128].map(n => _pwLattice(rand, n));
+  const ht = new Float32Array(N), pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    const r = h[i] * 0.5 + 0.5;                       // 0 valley .. 1 ridge
+    const groove = Math.max(0, Math.min(1, (crest[i] - 0.62) / 0.3)) * (r > 0.8 ? 1 : 0);
+    const x = i % S, y = (i / S) | 0;
+    const gr = _pwFbm(grain, x / S, y / S);
+    ht[i] = r - 0.16 * groove + (1 - r) * 0.05 * (gr - 0.5);
+    pack[i * 4] = r * 255; pack[i * 4 + 1] = groove * 255; pack[i * 4 + 2] = gr * 255; pack[i * 4 + 3] = 255;
+  }
+  _pwNormals(ht, S, S, 0.055, nrm, i => Math.max(0, Math.min(255, ht[i] * 255)));
+  _mazeSet = { nrm: _pwTex(nrm, S, S, false), pack: _pwTex(pack, S, S, false), ms: performance.now() - t0 };
+  return _mazeSet;
+}
+
+// ---- THE SULPHIDE CRUST SET (vents.js black-smoker chimneys) ----------------------------
+// Porous, crystalline chimney wall: a Worley grain of sulphide crystals (each cell a
+// facet with its own tone; the walls between them are dark pores), laid over a coarse
+// fbm of growth nodules and cut by thin cooling cracks (F2-F1 valleys of a larger cell
+// field). GLITTER: a sparse set of crystal faces flagged in A — the chimney shader turns
+// those into near-mirror brassy chalcopyrite facets near the hot throat, so the vent
+// light and the lantern catch points of fire in the crust.
+//   pack : R = albedo multiplier (mean ~1), G = roughness, B = height, A = glitter mask
+//   nrm  : tangent-space normal (linear), A = cavity (0 in pores/cracks)
+let _sulSet = null;
+export function sulphideSet() {
+  if (_sulSet) return _sulSet;
+  const t0 = performance.now();
+  const S = 256, N = S * S;
+  const rand = seededRand(0x5A1F1DE5);
+  const nod = [4, 8, 16, 32].map(n => _pwLattice(rand, n));
+  const fine = [64, 128].map(n => _pwLattice(rand, n));
+  const cellField = (WC) => {
+    const px = new Float32Array(WC * WC), py = new Float32Array(WC * WC), tone = new Float32Array(WC * WC);
+    for (let i = 0; i < WC * WC; i++) { px[i] = rand(); py[i] = rand(); tone[i] = rand(); }
+    return (x, y, out) => {
+      const fx = x * WC, fy = y * WC, cx = Math.floor(fx), cy = Math.floor(fy);
+      let f1 = 9, f2 = 9, id = 0;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        const gx = cx + i, gy = cy + j, k = (((gy % WC) + WC) % WC) * WC + (((gx % WC) + WC) % WC);
+        const dx = gx + px[k] - fx, dy = gy + py[k] - fy, d = dx * dx + dy * dy;
+        if (d < f1) { f2 = f1; f1 = d; id = k; } else if (d < f2) f2 = d;
+      }
+      out[0] = Math.sqrt(f1); out[1] = Math.sqrt(f2); out[2] = tone[id];
+    };
+  };
+  const grains = cellField(48), cracks = cellField(7);
+  const g = [0, 0, 0], c = [0, 0, 0];
+  const h = new Float32Array(N), alb = new Float32Array(N), rgh = new Float32Array(N), gl = new Float32Array(N), cav = new Float32Array(N);
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const u = x / S, v = y / S, i = y * S + x;
+    grains(u, v, g); cracks(u, v, c);
+    const nd = _pwFbm(nod, u, v), fn = _pwFbm(fine, u, v);
+    const pore = 1 - Math.min(1, (g[1] - g[0]) / 0.12);           // 1 on the grain walls
+    const crack = Math.max(0, 1 - (c[1] - c[0]) / 0.035);          // 1 in the cooling cracks
+    const facet = Math.max(0, 1 - g[0] / 0.7);                      // crystal crown
+    h[i] = 0.55 * nd + 0.18 * facet - 0.16 * pore * pore - 0.3 * crack + 0.05 * (fn - 0.5);
+    alb[i] = (0.78 + 0.42 * g[2]) * (1 - 0.45 * pore * pore) * (1 - 0.6 * crack) * (0.85 + 0.3 * nd);
+    rgh[i] = Math.min(1, 0.62 + 0.3 * pore + 0.2 * (1 - g[2]) * 0.5 + 0.2 * crack);
+    gl[i] = (g[2] > 0.975 && pore < 0.3 && facet > 0.3) ? 1 : 0;
+    cav[i] = 1 - 0.7 * Math.max(pore * pore, crack);
+  }
+  const pack = new Uint8Array(N * 4), nrm = new Uint8Array(N * 4);
+  for (let i = 0; i < N; i++) {
+    pack[i * 4] = Math.min(255, alb[i] * 200); pack[i * 4 + 1] = rgh[i] * 255;
+    pack[i * 4 + 2] = Math.max(0, Math.min(255, h[i] * 255)); pack[i * 4 + 3] = gl[i] * 255;
+  }
+  _pwNormals(h, S, S, 0.045, nrm, i => cav[i] * 255);
+  _sulSet = { pack: _pwTex(pack, S, S, false), nrm: _pwTex(nrm, S, S, false), ms: performance.now() - t0 };
+  return _sulSet;
+}
+// ==== END BLOCK: polish-vents ========================================================
