@@ -47,11 +47,16 @@ const UP = new THREE.Vector3(0, 1, 0), IDQ = new THREE.Quaternion();
 // zones = which zones get it; n = instances per zone; gap = min spacing between them.
 // sway  = shader sway amplitude (0 for stone).
 // Curation: the two big Kenney rocks are CUT — their hard-faceted style reads worse than
-// our smoothed procedural boulders and they kept dominating shots. Small rocks pass as
-// pebbles at their scale. Logs stay as half-buried sunken timber; stumps are cut (they
-// read as land clearance, not seabed). Barrels are sunken cargo and fit the fiction.
+// our smoothed procedural boulders and they kept dominating shots. Logs stay as
+// half-buried sunken timber; stumps are cut (they read as land clearance, not seabed).
+// Barrels are sunken cargo and fit the fiction.
+// POLISH-VENTS (2026-09-25): the last downloaded rock, rock_smallC.glb (16 tris,
+// flat-shaded, no maps, 110 per zone), is CUT too. It was the untextured dark hexagon
+// in the quality audit and a violation of the generated-only rule; flora.js's pebble
+// and boulder tiers (generated rock map set, crust, fillets) already fill the role.
+// Removing it shortens the props stream, so the log/barrel scatter re-rolls (still a
+// pure function of siteParams('props')); propColliders was empty and stays empty.
 const MANIFEST = [
-  { file: 'rock_smallC.glb', n: 110, gap: 5, size: [0.7, 2.0], zones: [0, 1, 2], slope: 0.6, stand: 0.95, tint: 'rock' },
   { file: 'log.glb', n: 32, gap: 9, size: [1.6, 3.4], zones: [0, 1], slope: 0.78, stand: 0.9, tint: 'wood', sway: 0, sink: 0.45 },
   { file: 'barrel.glb', n: 26, gap: 7, size: [1.1, 2.0], zones: [0, 1, 2], slope: 0.8, stand: 0.65, tint: 'wreck' }
 ];
