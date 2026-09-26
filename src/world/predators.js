@@ -43,6 +43,7 @@ import { glowTex, makeGlow } from '../lib/textures.js';
 import { terrainH } from './terrain.js';
 import { rockColliders } from './flora.js';
 import { siteParams, stream } from './site.js';
+import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 
 // CHART V2 determinism (same contract as flora/creatures): every placement/phase draw
 // routes through site-seeded streams, never Math.random.
@@ -185,68 +186,149 @@ const SHARK_R = [
   [0.780, 0.212], [0.890, 0.120], [1.000, 0.062]
 ];
 
+// polish-fauna: Catmull-Rom through the keys. The old per-segment smoothstep put a
+// flat spot at every key, invisible at 26 rings and a row of lumps at 110.
 function sharkR(t) {
-  for (let i = 1; i < SHARK_R.length; i++) {
-    if (t <= SHARK_R[i][0]) {
-      const a = SHARK_R[i - 1], b = SHARK_R[i];
-      let u = (t - a[0]) / (b[0] - a[0]);
-      u = u * u * (3 - 2 * u);
-      return lerp(a[1], b[1], u);
+  const K = SHARK_R, n = K.length;
+  for (let i = 1; i < n; i++) {
+    if (t <= K[i][0]) {
+      const p0 = K[Math.max(0, i - 2)][1], p1 = K[i - 1][1], p2 = K[i][1], p3 = K[Math.min(n - 1, i + 1)][1];
+      const u = (t - K[i - 1][0]) / (K[i][0] - K[i - 1][0]);
+      return 0.5 * (2 * p1 + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u * u + (-p0 + 3 * p1 - 3 * p2 + p3) * u * u * u);
     }
   }
-  return SHARK_R[SHARK_R.length - 1][1];
+  return K[n - 1][1];
 }
 
 // Body runs along +Z, snout at z=+0.5. uv.x = 0 snout .. 1 peduncle (and past 1 on the
 // caudal fin, so the shader whips it harder); uv.y = 0 belly, 1 dorsal ridge, 2.0 flags
 // fin geometry. Same convention as creatures.js fish, so the shading code rhymes.
+// A vertex that only ever sits in collapsed triangles (a fin's tip row, a knife edge)
+// gets a zero normal from computeVertexNormals, and normalize(0) is NaN on the GPU —
+// one NaN pixel and the bloom/exposure chain blacks out the whole frame. Give any such
+// vertex a finite normal.
+function safeNormals(g) {
+  const n = g.attributes.normal.array;
+  for (let i = 0; i < n.length; i += 3) if (n[i] * n[i] + n[i + 1] * n[i + 1] + n[i + 2] * n[i + 2] < 1e-12) { n[i] = 0; n[i + 1] = 1; n[i + 2] = 0; }
+}
+
 function sharkGeometry() {
-  const RINGS = 26, SIDES = 12;
-  const pos = [], uv = [], idx = [];
+  const SIDES = 36;
+  const pos = [], uv = [], idx = [], surf = [];
   // Fineness ratio matters more than any other number here: a pelagic shark is about
   // 5.5 body lengths long for its depth. Anything fatter reads as a tuna.
   const W = 0.158, H = 0.205;           // sharks are taller than wide
+  // polish-fauna: rings are spent where the detail is. The head (eye, mouth) and the
+  // gill field get fine rings, the long flank coarse ones; ~4.7k tris the lot.
+  const T = [];
+  for (let t = 0; t < 0.13; t += 0.0065) T.push(t);
+  for (let t = 0.13; t < 0.31; t += 0.0032) T.push(t);
+  for (let t = 0.31; t < 1.0; t += 0.0135) T.push(t);
+  T.push(1.0);
+  const RINGS = T.length - 1, cols = SIDES + 1;
+  // Five gill slits, the last two shorter, each a real groove: the cut dips into the
+  // flank and the flap behind it stands proud, so the slit has an edge light catches.
+  const GILL_T = [0.186, 0.207, 0.228, 0.249, 0.268], GILL_H = [1, 1, 0.95, 0.85, 0.72];
+  const gill = (t, s) => {
+    let d = 0;
+    for (let k = 0; k < 5; k++) {
+      const lo = -0.34 * GILL_H[k] - 0.05, hi = 0.46 * GILL_H[k];
+      if (s < lo || s > hi) continue;
+      const along = (s - lo) / (hi - lo);
+      const len = Math.sin(Math.PI * along) ** 0.5;
+      const dt = t - GILL_T[k] - 0.006 * (s - 0.1);      // slits rake back toward the belly
+      const cut = Math.exp(-(((dt / 0.0022)) ** 2));
+      const flap = Math.exp(-((((dt - 0.0055) / 0.003)) ** 2));
+      d += (-0.075 * cut + 0.018 * flap) * len;
+    }
+    return d;
+  };
+  // Underslung crescent mouth: a groove whose corners sweep back along the jaw line.
+  const MOUTH = c => 0.066 + 0.042 * c * c;
+  const mouth = (t, s, c) => {
+    if (s > -0.25 || Math.abs(c) > 0.9) return 0;
+    const k = (1 - Math.abs(c) / 0.9) ** 0.6 * Math.min(1, (-s - 0.25) / 0.3);
+    const dt = t - MOUTH(c);
+    return -0.09 * Math.exp(-(((dt / 0.0065)) ** 2)) * k;
+  };
+  // A proud, wet eye in a shallow orbit.
+  const EYE_T = 0.092, EYE_S = 0.34;
+  const eye = (t, s) => {
+    const d = Math.hypot((t - EYE_T) / 0.012, (s - EYE_S) / 0.11);
+    return d < 1 ? 0.028 * Math.sqrt(1 - d * d) : (d < 1.6 ? -0.010 * Math.sin((d - 1) / 0.6 * Math.PI) : 0);
+  };
+  const bodyAt = (t, ang, out) => {
+    const r = sharkR(t), s = Math.sin(ang), c = Math.cos(ang);
+    const flat = s < 0 ? 0.86 : 1.0;
+    const headSquash = 1 - 0.22 * Math.max(0, 1 - t * 6) * Math.max(0, s);
+    const snout = Math.max(0, 1 - t * 5);
+    const headWide = 1 + 0.28 * snout;
+    const headFlat = 1 - 0.14 * snout;
+    const k = 1 + gill(t, s) + mouth(t, s, c) + eye(t, s);
+    out[0] = c * r * W * headWide * k; out[1] = s * r * H * flat * headSquash * headFlat * k; out[2] = 0.5 - t;
+    return out;
+  };
+  const bp = [0, 0, 0];
   for (let i = 0; i <= RINGS; i++) {
-    const t = i / RINGS, r = sharkR(t), z = 0.5 - t;
-    for (let j = 0; j < SIDES; j++) {
+    const t = T[i];
+    for (let j = 0; j <= SIDES; j++) {
       const ang = j / SIDES * TAU;
-      const s = Math.sin(ang), c = Math.cos(ang);
-      // flatten the belly and the top of the head — reads as a shark, not a tube
-      const flat = s < 0 ? 0.86 : 1.0;
-      const headSquash = 1 - 0.22 * Math.max(0, 1 - t * 6) * Math.max(0, s);
-      // depressed snout: the head widens laterally and flattens dorso-ventrally
-      // toward the nose, so the front reads as a shark's spade, not a cone
-      const snout = Math.max(0, 1 - t * 5);
-      const headWide = 1 + 0.28 * snout;
-      const headFlat = 1 - 0.14 * snout;
-      pos.push(c * r * W * headWide, s * r * H * flat * headSquash * headFlat, z);
-      uv.push(t, 0.5 + 0.5 * s);
+      bodyAt(t, ang, bp);
+      pos.push(bp[0], bp[1], bp[2]);
+      uv.push(t, 0.5 + 0.5 * Math.sin(ang));
+      surf.push(t, j / SIDES, 0);
     }
   }
   for (let i = 0; i < RINGS; i++) for (let j = 0; j < SIDES; j++) {
-    const a = i * SIDES + j, b = i * SIDES + (j + 1) % SIDES;
-    idx.push(a, a + SIDES, b, b, a + SIDES, b + SIDES);
+    const a = i * cols + j, b = a + 1;
+    idx.push(a, a + cols, b, b, a + cols, b + cols);
   }
 
-  const fin = (verts, tris) => {
+  const fin = (verts, tris, flag = 2.0) => {
     const base = pos.length / 3;
-    for (const v of verts) { pos.push(v[0], v[1], v[2]); uv.push(v[3], 2.0); }
+    for (const v of verts) { pos.push(v[0], v[1], v[2]); uv.push(v[3], flag); surf.push(v[3], 0, 1); }
     for (const tri of tris) idx.push(base + tri[0], base + tri[1], base + tri[2]);
   };
+  // A fin with a body: convex leading edge, falcate (concave) trailing edge, and a
+  // thickness that swells behind the leading edge and dies to a knife at the rim.
+  // a = leading root, b = trailing root, tip. uv.x is the body t (0.5 - z) so the
+  // undulation bends every fin exactly as it bent the old flat triangles.
+  const _l = [0, 0, 0], _t = [0, 0, 0];
+  const bez = (p0, p1, p2, u, o) => { const w0 = (1 - u) * (1 - u), w1 = 2 * u * (1 - u), w2 = u * u; for (let k = 0; k < 3; k++) o[k] = p0[k] * w0 + p1[k] * w1 + p2[k] * w2; return o; };
+  const finSolid = (a, b, tip, th, o = {}) => {
+    const NS = o.ns || 7, NC = o.nc || 6;
+    const e1 = [tip[0] - a[0], tip[1] - a[1], tip[2] - a[2]], e2 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+    const nl = Math.hypot(n[0], n[1], n[2]) || 1; n = n.map(v => v / nl);
+    const fwd = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    const cl = [0, 1, 2].map(k => a[k] + (tip[k] - a[k]) * 0.5 + fwd[k] * (o.lead ?? 0.22));
+    const ct = [0, 1, 2].map(k => b[k] + (tip[k] - b[k]) * 0.55 + fwd[k] * (o.fal ?? 0.3));
+    const base = pos.length / 3, per = NC + 1;
+    for (const side of [1, -1]) {
+      for (let i = 0; i <= NS; i++) {
+        const v = i / NS;
+        bez(a, cl, tip, v, _l); bez(b, ct, tip, v, _t);
+        for (let j = 0; j <= NC; j++) {
+          const u = j / NC;
+          const thk = th * (1 - 0.85 * v) * 2.6 * Math.sqrt(u) * (1 - u) * side;
+          const x = _l[0] + (_t[0] - _l[0]) * u + n[0] * thk, y = _l[1] + (_t[1] - _l[1]) * u + n[1] * thk, z = _l[2] + (_t[2] - _l[2]) * u + n[2] * thk;
+          pos.push(x, y, z); uv.push(0.5 - z, 2.0); surf.push(v, u, 1);
+        }
+      }
+    }
+    const off = (NS + 1) * per;
+    for (let i = 0; i < NS; i++) for (let j = 0; j < NC; j++) {
+      const p = base + i * per + j;
+      idx.push(p, p + per, p + 1, p + 1, p + per, p + per + 1);
+      const q = p + off;
+      idx.push(q, q + 1, q + per, q + 1, q + per + 1, q + per);
+    }
+  };
 
-  // heterocercal caudal: long swept upper lobe, short lower lobe, deep notch.
-  // The upper lobe carries two interior verts (uv.x 1.08 / 1.15) so the shader's
-  // travelling wave CURLS the lobe through its length instead of hinging one tri.
+  // heterocercal caudal: a long swept upper lobe and a short lower lobe, deep notch
   const zT = -0.5;
-  fin([
-    [0, 0.016, zT + 0.015, 1.00],      // 0 peduncle top
-    [0, -0.014, zT + 0.015, 1.00],     // 1 peduncle bottom
-    [0, 0.185, zT - 0.315, 1.22],      // 2 upper lobe tip
-    [0, 0.028, zT - 0.130, 1.10],      // 3 notch
-    [0, -0.098, zT - 0.145, 1.15],     // 4 lower lobe tip
-    [0, 0.072, zT - 0.098, 1.08],      // 5 upper lobe leading-edge mid
-    [0, 0.132, zT - 0.208, 1.15]       // 6 upper lobe interior mid
-  ], [[0, 5, 3], [5, 6, 3], [6, 2, 3], [0, 1, 3], [1, 4, 3]]);
+  finSolid([0, 0.030, zT + 0.035], [0, -0.004, zT - 0.02], [0, 0.185, zT - 0.315], 0.010, { lead: 0.1, fal: 0.55, ns: 9 });
+  finSolid([0, -0.022, zT + 0.03], [0, 0.002, zT - 0.02], [0, -0.098, zT - 0.145], 0.008, { lead: 0.1, fal: 0.35 });
   // caudal peduncle keel wedges: paired lateral wedges at t≈0.88, the hydrodynamic
   // flare every pelagic shark carries just ahead of the tail (+8 tris)
   const kr = sharkR(0.88) * W, kz0 = 0.5 - 0.845, kz1 = 0.5 - 0.915;
@@ -258,58 +340,53 @@ function sharkGeometry() {
     [s * kr * 0.62, -0.005, kz1, 0.915]
   ], [[0, 2, 1], [0, 3, 2], [1, 2, 4], [3, 4, 2]]);
 
-  // first dorsal — tall, raked back; the read at range
+  // first dorsal — tall, raked back, falcate; the read at range
   const d0 = sharkR(0.36) * H, d1 = sharkR(0.55) * H;
-  fin([[0, d0 * 0.96, 0.5 - 0.36, 0.36], [0, d1 * 0.96, 0.5 - 0.56, 0.56],
-  [0, d0 + 0.118, 0.5 - 0.495, 0.46]], [[0, 2, 1]]);
+  finSolid([0, d0 * 0.9, 0.5 - 0.35], [0, d1 * 0.9, 0.5 - 0.57], [0, d0 + 0.118, 0.5 - 0.505], 0.014, { lead: 0.2, fal: 0.34, ns: 8 });
   // second dorsal — small
   const e0 = sharkR(0.76) * H;
-  fin([[0, e0 * 0.96, 0.5 - 0.76, 0.76], [0, sharkR(0.855) * H * 0.96, 0.5 - 0.855, 0.855],
-  [0, e0 + 0.034, 0.5 - 0.825, 0.80]], [[0, 2, 1]]);
-  // pectorals — long and swept, angled down; the widest thing on the animal.
-  // 2×2 grid (3×3 verts) with spanwise camber, and a uv.x gradient root→tip so the
-  // undulation shader flexes the wing on turns instead of waving a rigid plate.
+  finSolid([0, e0 * 0.9, 0.5 - 0.755], [0, sharkR(0.855) * H * 0.9, 0.5 - 0.86], [0, e0 + 0.034, 0.5 - 0.82], 0.006, { ns: 4, nc: 4 });
+  // pectorals — long, swept, angled down; the widest thing on the animal
   const pr = sharkR(0.28) * W;
-  for (const s of [-1, 1]) {
-    const verts = [], tris = [];
-    for (let iv = 0; iv <= 2; iv++) {           // spanwise: root -> tip
-      const v = iv / 2;
-      // root chord along the flank (t 0.235..0.330), tip trailing back near t 0.40
-      const x0 = pr * 0.92, x1 = pr + 0.152;
-      const xx = s * lerp(x0, x1, v);
-      const camber = Math.sin(Math.PI * v) * 0.014;   // wing bows down mid-span
-      for (let ju = 0; ju <= 2; ju++) {         // chordwise: leading -> trailing
-        const uC = ju / 2;
-        const zLead = lerp(0.5 - 0.235, 0.5 - 0.355, v);
-        const zTrail = lerp(0.5 - 0.330, 0.5 - 0.400, v);
-        const zz = lerp(zLead, zTrail, uC);
-        const yy = lerp(-0.014 - uC * 0.016, -0.082, v) - camber;
-        verts.push([xx, yy, zz, 0.235 + v * 0.24 + uC * 0.03]);
-      }
-    }
-    for (let iv = 0; iv < 2; iv++) for (let ju = 0; ju < 2; ju++) {
-      const a = iv * 3 + ju, b = a + 3;
-      tris.push([a, b, a + 1], [b, b + 1, a + 1]);
-    }
-    fin(verts, tris);
-  }
+  for (const s of [-1, 1]) finSolid([s * pr * 0.88, -0.012, 0.5 - 0.232], [s * pr * 0.88, -0.03, 0.5 - 0.335], [s * (pr + 0.16), -0.088, 0.5 - 0.405], 0.012, { lead: 0.16, fal: 0.3, ns: 8 });
   // pelvics
   const vr = sharkR(0.62) * W;
-  for (const s of [-1, 1]) fin([
-    [s * vr * 0.9, -sharkR(0.62) * H * 0.72, 0.5 - 0.60, 0.60],
-    [s * vr * 0.9, -sharkR(0.68) * H * 0.72, 0.5 - 0.68, 0.68],
-    [s * (vr + 0.048), -sharkR(0.65) * H * 0.72 - 0.040, 0.5 - 0.665, 0.66]
-  ], [[0, 1, 2], [0, 2, 1]]);
+  for (const s of [-1, 1]) finSolid([s * vr * 0.85, -sharkR(0.62) * H * 0.7, 0.5 - 0.60], [s * vr * 0.85, -sharkR(0.68) * H * 0.7, 0.5 - 0.68], [s * (vr + 0.05), -sharkR(0.65) * H * 0.72 - 0.042, 0.5 - 0.67], 0.006, { ns: 4, nc: 4 });
   // anal fin
-  fin([[0, -sharkR(0.80) * H * 0.82, 0.5 - 0.80, 0.80],
-  [0, -sharkR(0.875) * H * 0.82, 0.5 - 0.875, 0.875],
-  [0, -sharkR(0.83) * H * 0.82 - 0.030, 0.5 - 0.855, 0.84]], [[0, 1, 2], [0, 2, 1]]);
+  finSolid([0, -sharkR(0.80) * H * 0.8, 0.5 - 0.80], [0, -sharkR(0.875) * H * 0.8, 0.5 - 0.875], [0, -sharkR(0.83) * H * 0.82 - 0.032, 0.5 - 0.86], 0.005, { ns: 4, nc: 4 });
+
+  // TEETH: two serrated rows along the crescent, the uppers hanging, the lowers
+  // standing — white triangles seated in the mouth groove (uv.y 3 flags enamel).
+  const tp0 = [0, 0, 0], tp1 = [0, 0, 0], tp2 = [0, 0, 0];
+  for (const row of [-1, 1]) {
+    for (let k = 0; k < 26; k++) {
+      const c = -0.8 + 1.6 * (k + 0.5) / 26;
+      const s = -Math.sqrt(Math.max(0, 1 - c * c));
+      const ang = Math.atan2(s, c), da = 0.028;
+      const tt = MOUTH(c) + row * 0.0028;
+      bodyAt(tt, ang - da, tp0); bodyAt(tt, ang + da, tp1);
+      bodyAt(MOUTH(c) - row * 0.0015, ang, tp2);
+      // pull the tooth a hair inside the lip and point it across the gape
+      const tipIn = 0.9;
+      tp2[0] *= tipIn; tp2[1] *= tipIn;
+      const tl = 0.5 - tt;
+      fin([[tp0[0] * 0.97, tp0[1] * 0.97, tp0[2], tl], [tp1[0] * 0.97, tp1[1] * 0.97, tp1[2], tl], [tp2[0], tp2[1], tp2[2], tl]], [[0, 1, 2], [0, 2, 1]], 3.0);
+    }
+  }
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('aSurf', new THREE.Float32BufferAttribute(surf, 3));
   g.setIndex(idx);
   g.computeVertexNormals();
+  // weld the body's seam column normals
+  const nr = g.attributes.normal.array;
+  for (let i = 0; i <= RINGS; i++) {
+    const a = i * cols * 3, b = (i * cols + SIDES) * 3;
+    for (let k = 0; k < 3; k++) { const m = (nr[a + k] + nr[b + k]) * 0.5; nr[a + k] = m; nr[b + k] = m; }
+  }
+  safeNormals(g);
   g.boundingSphere = new THREE.Sphere(V3(0, 0, -0.15), 1.1);
   return g;
 }
@@ -321,7 +398,8 @@ function sharkMaterial(cfg) {
     uPhase: { value: 0 }, uAmp: { value: 0.045 }, uArch: { value: 0 }, uTime,
     uDark: { value: new THREE.Color(cfg.dark) },
     uPale: { value: new THREE.Color(cfg.pale) },
-    uSheen: { value: cfg.sheen }
+    uSheen: { value: cfg.sheen },
+    uScar: { value: cfg.scar || 0 }
   };
   const mat = new THREE.MeshStandardMaterial({
     color: 0xffffff, roughness: 0.46, metalness: 0.16,
@@ -331,13 +409,14 @@ function sharkMaterial(cfg) {
   // Three caches compiled programs by material type + parameters, NOT by the source
   // onBeforeCompile produced. Without a distinct key the shark, octopus and squid — all
   // MeshStandardMaterial — collide and get whichever program compiled first.
-  mat.customProgramCacheKey = () => 'abyssa-shark';
+  mat.customProgramCacheKey = () => 'abyssa-shark-skin';
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
+        attribute vec3 aSurf;
         uniform float uPhase; uniform float uAmp; uniform float uArch;
-        varying vec2 vSuv;`)
+        varying vec2 vSuv; varying vec3 vSsurf; varying vec3 vAxis;`)
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
         float bT = uv.x;
         float env = 0.02 + 0.98 * pow(clamp(bT, 0.0, 1.3), 2.35);
@@ -349,32 +428,105 @@ function sharkMaterial(cfg) {
         // strike arch: the whole body bows, so the turn-in reads before it happens
         transformed.x += uArch * env * 0.16;
         transformed.y += sin(uPhase*0.37) * 0.006;
-        vSuv = uv;`);
+        vSuv = uv; vSsurf = aSurf;
+        // the body axis, bent by the same wave: the grain the denticles lie along
+        vAxis = normalize((modelViewMatrix * vec4(-slope, 0.0, 1.0, 0.0)).xyz);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        uniform vec3 uDark; uniform vec3 uPale; uniform float uSheen;
-        varying vec2 vSuv;`)
+        uniform vec3 uDark; uniform vec3 uPale; uniform float uSheen; uniform float uScar; uniform float uTime;
+        varying vec2 vSuv; varying vec3 vSsurf; varying vec3 vAxis;
+        ${SKIN_COMMON}
+        // distance from p to segment ab (scar strokes in t / around space)
+        // distance to a healed scar stroke: tapered at both ends, the edge torn by noise
+        float shSeg(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+          float taper = 0.35 + 0.65 * sin(3.14159 * h); return length(pa - ba * h) / taper + (skN2(p * 900.0) - 0.5) * 0.0012; }`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}
+        // DENTICLE SHEEN. Shark skin is tiled with tooth-like scales whose ridges all
+        // run nose-to-tail, so its highlight is a Kajiya-Kay streak stretched ACROSS the
+        // body axis, not a round spot. Reads the scene's own lights; adds none.
+        vec3 shAniso(vec3 n, vec3 t, vec3 v, vec3 vpos){
+          vec3 s = vec3(0.0);
+          #if NUM_DIR_LIGHTS > 0
+          for (int i = 0; i < NUM_DIR_LIGHTS; i++) {
+            vec3 l = directionalLights[i].direction; vec3 hv = normalize(l + v);
+            float th = dot(t, hv); float st = sqrt(max(0.0, 1.0 - th * th));
+            s += directionalLights[i].color * pow(st, 90.0) * max(0.0, dot(n, l));
+          }
+          #endif
+          #if NUM_POINT_LIGHTS > 0
+          for (int i = 0; i < NUM_POINT_LIGHTS; i++) {
+            vec3 lv = pointLights[i].position + vpos; float d = max(length(lv), 1e-3); vec3 l = lv / d;
+            vec3 hv = normalize(l + v); float th = dot(t, hv); float st = sqrt(max(0.0, 1.0 - th * th));
+            s += pointLights[i].color * getDistanceAttenuation(d, pointLights[i].distance, pointLights[i].decay) * pow(st, 90.0) * max(0.0, dot(n, l));
+          }
+          #endif
+          return s;
+        }`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         float body = step(vSuv.y, 1.5);
+        float tooth = step(2.5, vSuv.y);
         float yy = clamp(vSuv.y, 0.0, 1.0);
-        // crisp counter-shade line: dark dorsal above, near-white ventral below
-        float cs = smoothstep(0.26, 0.44, yy);
-        vec3 hide = mix(uPale, uDark, cs);
-        // dermal mottle so the flank is not a flat gradient
-        hide *= 0.90 + 0.14*sin(vSuv.x*46.0)*sin(yy*23.0);
-        // five gill slits behind the head
-        // Reversed-edge smoothstep is UB (returns 0.0 on this driver) — gills, eye and
-        // sheen below never rendered. 1.0 - smoothstep(lo, hi, x) is the defined idiom
-        // (see water.js foldK).
-        float gx = (1.0 - smoothstep(0.20, 0.30, vSuv.x)) * smoothstep(0.135, 0.175, vSuv.x);
-        float gs = pow(0.5 + 0.5*sin((vSuv.x-0.15)*190.0), 8.0) * gx * step(yy, 0.72) * step(0.18, yy);
-        hide *= 1.0 - 0.55*gs;
-        // eye: a black bead, present on both flanks because uv.y is side-symmetric
-        float eye = 1.0 - smoothstep(0.012, 0.038, length(vec2((vSuv.x-0.088)*1.9, yy-0.775)));
-        hide = mix(hide, vec3(0.012, 0.014, 0.018), eye);
-        // fins take a mid tone, a touch darker than the flank
-        vec3 finc = mix(uPale, uDark, 0.72);
-        diffuseColor.rgb *= mix(finc, hide, body);
+        float t = vSuv.x, ar = vSsurf.y;
+        vec3 V = normalize(vViewPosition);
+        float h = 0.0, wet = 0.0;
+        // ---- countershading: dark dorsal over a near-white belly, the line broken by
+        // a ragged edge, the back darkest along the spine ----
+        float ragged = (skN2(vec2(t * 26.0, ar * 9.0)) - 0.5) * 0.09;
+        float cs = smoothstep(0.30, 0.40, yy + ragged);
+        vec3 hide = mix(uPale, uDark * mix(1.12, 0.78, smoothstep(0.7, 1.0, yy)), cs);
+        // dermal mottle: soft blotches and a fine freckle, never a regular pattern
+        hide *= 0.88 + 0.18 * skFbm3(vec3(t * 14.0, ar * 5.0, 0.3)) + 0.05 * (skN2(vec2(t * 160.0, ar * 90.0)) - 0.5);
+        // ---- denticles: ridges along the axis (sub-pixel beyond a few metres; the
+        // sheen below carries them at range) ----
+        vec2 dq = vec2(t * 420.0, ar * 1400.0);
+        h += (0.5 + 0.5 * sin(dq.y + skN2(dq * 0.05) * 3.0)) * 0.18 * skAA(dq * vec2(0.02, 1.0));
+        // ---- gill slits: the groove is geometry; inside it the gill tissue is dark red ----
+        float gz = 0.0;
+        for (int k = 0; k < 5; k++) {
+          float gt = 0.186 + 0.021 * float(k) - 0.00025 * float(k * k);
+          float s = yy * 2.0 - 1.0;
+          float hk = 1.0 - 0.07 * float(k * k) * 0.25;
+          float inY = step(-0.34 * hk - 0.05, s) * step(s, 0.46 * hk);
+          gz = max(gz, (1.0 - smoothstep(0.0007, 0.0018, abs(t - gt - 0.006 * (s - 0.1)))) * inY);
+        }
+        hide = mix(hide, vec3(0.10, 0.025, 0.03), gz * 0.6);
+        // ---- mouth: the dark line of the gape in the crescent groove ----
+        float cm = cos(ar * 6.2831853);
+        float mline = (1.0 - smoothstep(0.0015, 0.004, abs(t - 0.066 - 0.042 * cm * cm))) * step(yy, 0.36) * step(abs(cm), 0.9);
+        hide = mix(hide, vec3(0.05, 0.015, 0.015), mline);
+        // ---- scars: old healed rakes, paler and sunk, one set per animal ----
+        vec2 sp = vec2(t, ar * 0.3);
+        float sc = 0.0;
+        sc = max(sc, 1.0 - smoothstep(0.0004, 0.0026, shSeg(sp, vec2(0.40, 0.031 + uScar * 0.07), vec2(0.53, 0.019 + uScar * 0.07))));
+        sc = max(sc, 1.0 - smoothstep(0.0004, 0.0024, shSeg(sp, vec2(0.41, 0.024 + uScar * 0.07), vec2(0.54, 0.012 + uScar * 0.07))));
+        sc = max(sc, 1.0 - smoothstep(0.0004, 0.0022, shSeg(sp, vec2(0.425, 0.017 + uScar * 0.07), vec2(0.53, 0.006 + uScar * 0.07))));
+        sc = max(sc, 1.0 - smoothstep(0.0004, 0.0020, shSeg(sp, vec2(0.30, 0.122), vec2(0.37, 0.131))));
+        sc = max(sc, 1.0 - smoothstep(0.0006, 0.0030, shSeg(sp, vec2(0.60 - uScar * 0.1, 0.121), vec2(0.72 - uScar * 0.1, 0.104))));
+        sc *= body;
+        hide = mix(hide, hide * 1.45 + vec3(0.06, 0.055, 0.05), sc * 0.8);
+        h -= sc * 2.2;
+        // ---- eye: a wet black dome (the dome is geometry), a thin pale rim, catchlight ----
+        float eyeD = length(vec2((t - 0.092) / 0.012, (yy - 0.67) / 0.055));
+        float eyeIn = 1.0 - smoothstep(0.78, 0.9, eyeD);
+        float irisR = (1.0 - smoothstep(0.55, 0.7, eyeD)) * (1.0 - smoothstep(0.0, 0.1, 0.55 - eyeD));
+        vec3 eyeC = mix(vec3(0.012, 0.014, 0.018), vec3(0.16, 0.13, 0.08), irisR * 0.5);
+        hide = mix(hide, eyeC, eyeIn);
+        hide *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.25, abs(eyeD - 1.0)));   // orbit fold
+        wet = eyeIn * body;
+        // ---- fins: dorsal tone above, pale under, with dusky trailing edges ----
+        vec3 finc = mix(uPale, uDark, 0.72) * (1.0 - 0.3 * smoothstep(0.55, 1.0, vSsurf.y) * smoothstep(0.3, 1.0, vSsurf.x));
+        vec3 alb = mix(finc, hide, body);
+        alb = mix(alb, vec3(0.86, 0.84, 0.76), tooth);
+        diffuseColor.rgb *= alb;
+        normal = skBump(-vViewPosition, normal, h * 0.0012, faceDirection);
+        roughnessFactor = mix(roughnessFactor, 0.05, wet);
+        roughnessFactor = mix(roughnessFactor, 0.3, tooth);
+        metalnessFactor = mix(metalnessFactor, 0.0, max(wet, tooth));
+        // denticle sheen along the grain, and the eye's catchlight
+        vec3 ax = normalize(vAxis - normal * dot(vAxis, normal));
+        totalEmissiveRadiance += shAniso(normal, ax, V, vViewPosition) * uPale * 0.22 * (1.0 - wet) * (1.0 - tooth) * (1.0 - sc);
+        totalEmissiveRadiance += skCatch(normal, V, vViewPosition) * wet;
         // faint wet sheen along the lateral line keeps the silhouette legible in murk
         float lat = (1.0 - smoothstep(0.012, 0.075, abs(yy - 0.46))) * body;
         totalEmissiveRadiance += uDark * lat * uSheen;`);
@@ -391,8 +543,8 @@ const SHARK_CFG = [
   // sheen was dead weight until the lateral-line smoothstep fix; re-judged live:
   // the emissive is uDark (a dark hide tone) * sheen, so 0.10/0.30 read as a wet
   // glint, not a glow — authored values kept.
-  { zi: 0, size: 6.6, dark: 0x35474f, pale: 0xd6e0dc, sheen: 0.10, patrolR: 62 },
-  { zi: 1, size: 8.6, dark: 0x262c46, pale: 0x9fa9c4, sheen: 0.30, patrolR: 56 }
+  { zi: 0, size: 6.6, dark: 0x35474f, pale: 0xd6e0dc, sheen: 0.10, patrolR: 62, scar: 0 },
+  { zi: 1, size: 8.6, dark: 0x262c46, pale: 0x9fa9c4, sheen: 0.30, patrolR: 56, scar: 1 }
 ];
 
 // Tuning, all in one place.
@@ -604,7 +756,9 @@ function octopusGeometry() {
   // ---- mantle: a closed egg-shaped sack, widest low, with two eye knobs ----
   // v = 0 at the underside pole, 1 at the crown. Closed at both ends so the animal
   // reads as a solid body rather than a hood or a bell.
-  const MR = 16, MS = 16;
+  // polish-fauna: 16x16 -> 28x28 mantle, 13x6 -> 30x12 arms, so the silhouette
+  // rounds and the oral face has room for its sucker rows.
+  const MR = 28, MS = 28;
   const mProfile = v => 0.475 * Math.pow(Math.sin(Math.pow(v, 0.80) * Math.PI), 0.78);
   const mHeight = v => -0.30 + Math.pow(v, 0.92) * 1.02;
   const mBase = pos.length / 3;
@@ -614,7 +768,7 @@ function octopusGeometry() {
       const ang = j / MS * TAU;
       const c = Math.cos(ang), s = Math.sin(ang);
       // eye knobs: two bumps low on the sides, where an octopus actually carries them
-      const eyeB = Math.pow(Math.max(0, Math.abs(c)), 10.0) * Math.max(0, 1 - Math.abs(v - 0.30) * 7.0) * 0.15;
+      const eyeB = Math.pow(Math.max(0, Math.abs(c)), 10.0) * Math.max(0, 1 - Math.abs(v - 0.42) * 7.0) * 0.15;
       const rr = r + eyeB;
       // slightly wider than deep, so the sack lies rather than stands
       pos.push(c * rr * 1.06, y + eyeB * 0.25, s * rr * 0.90);
@@ -630,7 +784,7 @@ function octopusGeometry() {
   }
 
   // ---- arms: eight tapering tubes, 6-sided ----
-  const ARMS = 8, SEG = 13, SID = 6;
+  const ARMS = 8, SEG = 30, SID = 12;
   for (let k = 0; k < ARMS; k++) {
     const ang = (k + 0.5) / ARMS * TAU;
     const base = pos.length / 3;
@@ -666,7 +820,10 @@ const OCT_DEFORM = /* glsl */`
   attribute vec4 aOct;
   uniform float uReach; uniform float uSeed; uniform float uActive; uniform float uGrab;
   uniform vec3 uDir;
-  varying float vOctT; varying float vOctK; varying float vOctA;
+  varying float vOctT; varying float vOctK; varying float vOctA; varying float vOctR;
+  // the ring / azimuth angle as a unit vector: an angle varying wraps 2pi -> 0 across
+  // one strip of the closed tube and interpolates backwards; cos/sin do not
+  varying vec2 vOctCS;
   void octDeform(out vec3 P, out vec3 N){
     float kind = aOct.w;
     if (kind < 0.5) {
@@ -686,12 +843,14 @@ const OCT_DEFORM = /* glsl */`
       float w = pow(max(0.0, dot(ca, flatD)), 3.0) * uReach;
       // at rest the arms fold down and inward against the rock; roused, they splay,
       // and the ones facing the light stretch toward it
-      vec3 restD = normalize(vec3(ca.x*1.15, -0.50, ca.z*1.15));
+      // polish-fauna: at rest the arms lie OUT across the silt and curl, rather than
+      // hanging as stubs under the mantle (visual only: reach/grab are CPU-side)
+      vec3 restD = normalize(vec3(ca.x*1.15, -0.10, ca.z*1.15));
       vec3 openD = normalize(vec3(ca.x, -0.18, ca.z));
       vec3 actD  = normalize(mix(openD, normalize(uDir), w * 0.92));
       vec3 D = normalize(mix(restD, actD, uReach));
       float jitter = fract(sin(A*12.9898 + uSeed)*43758.5453);
-      float len = mix(0.66, 1.72, uReach) * (0.84 + 0.32*jitter);
+      float len = mix(0.98, 1.72, uReach) * (0.84 + 0.32*jitter);
       vec3 rt = normalize(cross(D, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
       vec3 up2 = cross(rt, D);
       float ph = uTime*(1.15 + 0.55*uReach) + A*2.3 + uSeed;
@@ -704,14 +863,23 @@ const OCT_DEFORM = /* glsl */`
       // curl: arm tips coil under, hard when idle, loosely when reaching
       c += up2 * (T*T*len * mix(-0.42, 0.16, uReach));
       c.y -= drag * 0.62 * (1.0 - uReach);   // at rest the arms drape flat on the silt
-      float rad = (0.172 - 0.158*T) * mix(0.94, 1.08, uReach);
+      // ...and lie ON it: a soft floor under the skirt, so a resting arm spreads and
+      // curls across the ground instead of standing the mantle up on stilts
+      float oFloor = -0.24 + (0.15 - 0.142 * T) * 0.9 + 0.02 * sin(T * 9.0 + A);
+      c.y = mix(c.y, max(c.y, oFloor), 1.0 - uReach);
+      float rad = (0.150 - 0.142*pow(T, 0.8)) * mix(0.94, 1.08, uReach);
       vec3 rn = rt*cos(R) + up2*sin(R);
+      // the oral face is flattened, a keel runs along the aboral side: an arm, not a hose
+      float oral = max(0.0, -sin(R));
+      rad *= 1.0 - 0.22 * oral * oral + 0.06 * max(0.0, sin(R));
       P = c + rn*rad;
       P.xz += ca.xz * 0.24;                          // arms leave from the skirt
       P.y += 0.14;
       N = normalize(rn + D*0.12);
     }
-    vOctT = aOct.x; vOctK = kind; vOctA = aOct.y;
+    vOctT = aOct.x; vOctK = kind; vOctA = aOct.y; vOctR = aOct.z;
+    float csA = kind < 0.5 ? aOct.y : aOct.z;
+    vOctCS = vec2(cos(csA), sin(csA));
   }`;
 
 function octopusMaterial(zi) {
@@ -728,7 +896,7 @@ function octopusMaterial(zi) {
     side: THREE.DoubleSide, emissive: 0x000000
   });
   mat.userData.u = u;
-  mat.customProgramCacheKey = () => 'abyssa-octopus';
+  mat.customProgramCacheKey = () => 'abyssa-octopus-skin';
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
@@ -743,19 +911,66 @@ function octopusMaterial(zi) {
       .replace('#include <common>', `#include <common>
         uniform vec3 uSkin; uniform vec3 uHot; uniform vec3 uGlow;
         uniform float uActive; uniform float uGrab; uniform float uTime;
-        varying float vOctT; varying float vOctK; varying float vOctA;`)
+        varying float vOctT; varying float vOctK; varying float vOctA; varying float vOctR;
+        varying vec2 vOctCS;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        // at rest the skin sits on the silt palette; rousing flushes it warmer and
-        // raises papillae contrast, which is what sells the reveal
+        float isArm = step(0.5, vOctK);
+        vec3 oV = normalize(vViewPosition);
+        float oAng = atan(vOctCS.y, vOctCS.x);          // -pi..pi, seam-free
+        // at rest the skin sits on the silt palette; rousing flushes it warmer
         vec3 skin = mix(uSkin, uHot, uActive*0.75);
-        float papilla = 0.5 + 0.5*sin(vOctA*9.0 + vOctT*38.0 + uTime*0.4);
-        skin *= 0.40 + 0.26*papilla*(0.45 + 0.55*uActive);
-        // suckers: a bright dotted line down the underside of each arm
-        float suck = pow(0.5 + 0.5*sin(vOctT*54.0), 10.0) * step(0.5, vOctK);
-        skin = mix(skin, uHot*1.10, suck*0.5*(0.3 + 0.7*uActive));
-        // arm tips pale out
-        skin *= mix(1.0, 1.14, step(0.5, vOctK) * pow(vOctT, 2.0));
+        // skin coordinate: (along, around) — arm T x ring angle, or mantle v x azimuth
+        vec2 sq = isArm > 0.5 ? vec2(vOctT * 22.0, oAng * 1.2732395) : vec2(vOctT * 13.0, oAng * 2.5464791);
+        // PAPILLAE: soft warts that stand up as the animal rouses
+        vec3 pv = skVor(sq * 2.2);
+        float pap = (1.0 - smoothstep(0.0, 0.42, pv.x)) * (0.35 + 0.65 * uActive);
+        // CHROMATOPHORES: pigment sacs that open (grow) when it flushes, closed dots at rest
+        vec3 cv = skVor(sq * 6.5 + 3.1);
+        float cr = mix(0.08, 0.34, uActive) * (0.6 + 0.8 * cv.z);
+        float chrom = 1.0 - smoothstep(cr, cr + 0.1, cv.x);
+        vec3 chromC = mix(vec3(0.34, 0.12, 0.06), vec3(0.62, 0.36, 0.12), step(0.6, cv.z));
+        skin *= 0.52 + 0.3 * pap;
+        skin = mix(skin, chromC * (0.45 + 0.7 * uActive), chrom * mix(0.45, 0.8, uActive) * skAA(sq * 6.5));
+        float h = pap * 0.7 * skAA(sq * 2.2);
+        float wet = 0.0; float pup = 0.0;
+        // SUCKERS: two staggered rows of cups down the oral face, shrinking to the tip —
+        // a pale raised rim round a dark sunk acetabulum
+        float oral = max(0.0, -vOctCS.y);
+        float sT = vOctT * 34.0 - vOctT * vOctT * 12.0;
+        float rOff = oAng + 1.5707963;
+        float suckA = 0.0, suckR = 0.0;
+        for (int k = 0; k < 2; k++) {
+          float side = k == 0 ? -1.0 : 1.0;
+          vec2 l = vec2(fract(sT + 0.5 * float(k)) - 0.5, (rOff - side * 0.36) / 0.34);
+          float d = length(l);
+          suckR = max(suckR, 1.0 - smoothstep(0.03, 0.07, abs(d - 0.34)));
+          suckA = max(suckA, 1.0 - smoothstep(0.2, 0.28, d));
+        }
+        float sK = isArm * smoothstep(0.55, 0.85, oral) * (1.0 - smoothstep(0.93, 1.0, vOctT)) * skAA(vec2(sT, oAng * 3.0));
+        skin = mix(skin, vec3(0.78, 0.62, 0.52) * (0.6 + 0.3 * uActive), suckR * sK);
+        skin = mix(skin, vec3(0.32, 0.16, 0.14), suckA * sK);
+        h += (suckR * 1.4 - suckA * 1.2) * sK;
+        // oral face paler, arm tips pale out
+        skin *= mix(1.0, 1.25, isArm * smoothstep(0.3, 0.9, oral) * (1.0 - suckA * sK));
+        skin *= mix(1.0, 1.14, isArm * pow(vOctT, 2.0));
+        // EYES: on the mantle's two knobs — a wet dome, a brass iris, the horizontal slit
+        float ea = min(abs(oAng), 3.1415927 - abs(oAng));
+        vec2 el = vec2(ea / 0.15, (vOctT - 0.42) / 0.08);
+        float ed = length(el);
+        float eIn = (1.0 - isArm) * (1.0 - smoothstep(0.82, 1.0, ed));
+        float slit = (1.0 - smoothstep(0.58, 0.68, abs(el.x))) * (1.0 - smoothstep(0.14, 0.22, abs(el.y) - 0.03 * uActive));
+        vec3 iris = vec3(0.36, 0.30, 0.17) * (0.65 + 0.5 * skN2(vec2(atan(el.y, el.x) * 5.0, ed * 9.0)));
+        skin = mix(skin, mix(iris, vec3(0.01, 0.01, 0.012), slit), eIn);
+        skin *= 1.0 - 0.45 * (1.0 - isArm) * (1.0 - smoothstep(0.0, 0.14, abs(ed - 1.05)));   // lid fold
+        h = mix(h, sqrt(max(0.0, 1.0 - ed * ed)) * 2.5, eIn);
+        wet = eIn;
         diffuseColor.rgb *= skin;
+        normal = skBump(-vViewPosition, normal, h * 0.012, faceDirection);
+        roughnessFactor = mix(roughnessFactor * 0.8, 0.05, wet);
+        totalEmissiveRadiance += skCatch(normal, oV, vViewPosition) * wet;
         // dim bioluminescent ring around the eyes / along reaching arms
         // a whisper of bioluminescence at the arm tips only — enough to catch the eye
         // in the dark, never enough to overwhelm the skin it sits on
@@ -1239,44 +1454,68 @@ function updateSacs(dt, t, p) {
 function squidGeometry() {
   const pos = [], nrm = [], sq = [], idx = [];
 
-  const MR = 12, MS = 10;
+  // polish-fauna: a denser mantle (24 x 16, seam column duplicated so the skin's
+  // around-coordinate never runs backwards) that continues past the mantle collar
+  // into a HEAD (v 1 .. 1.3) carrying two big eyes; the arms now leave the head.
+  const MR = 24, MH = 7, MS = 16;
   const prof = v => {                          // v: 0 tail tip .. 1 head
     const s = Math.sin(Math.pow(v, 0.62) * Math.PI * 0.94);
     return Math.max(0.012, s * 0.20 * (1 - 0.30 * v * v));
   };
-  for (let i = 0; i <= MR; i++) {
-    const v = i / MR, r = prof(v), z = -0.5 + v * 0.68;
-    for (let j = 0; j < MS; j++) {
+  const rMouth = prof(1);
+  const head = h => {                          // h: 0 collar .. 1 arm crown
+    const eyeBulge = Math.sin(Math.PI * Math.min(1, h * 1.3)) * 0.035;
+    return { r: rMouth * 0.92 + 0.03 * Math.sin(Math.PI * h) + eyeBulge, z: 0.18 + h * 0.12 };
+  };
+  const cols = MS + 1;
+  for (let i = 0; i <= MR + MH; i++) {
+    let v, r, z;
+    if (i <= MR) { v = i / MR; r = prof(v); z = -0.5 + v * 0.68; }
+    else { const h = (i - MR) / MH; const hd = head(h); v = 1 + h * 0.3; r = hd.r; z = hd.z; }
+    for (let j = 0; j <= MS; j++) {
       const ang = j / MS * TAU;
       const c = Math.cos(ang), s = Math.sin(ang);
-      pos.push(c * r, s * r, z);
-      nrm.push(c, s, 0.15);
+      // eyes sit on the head's flanks: widen it sideways there
+      const wide = v > 1 ? 1 + 0.25 * Math.abs(c) ** 3 * Math.sin(Math.PI * Math.min(1, (v - 1) / 0.3)) : 1;
+      pos.push(c * r * wide, s * r, z);
+      nrm.push(c, s, v > 1 ? 0 : 0.15);
       sq.push(v, ang, 0, 0);
     }
   }
-  for (let i = 0; i < MR; i++) for (let j = 0; j < MS; j++) {
-    const a = i * MS + j, b = i * MS + (j + 1) % MS;
-    idx.push(a, a + MS, b, b, a + MS, b + MS);
+  for (let i = 0; i < MR + MH; i++) for (let j = 0; j < MS; j++) {
+    const a = i * cols + j, b = a + 1;
+    idx.push(a, a + cols, b, b, a + cols, b + cols);
   }
 
-  // caudal fins: two triangular flags either side of the tail
+  // caudal fins: rhomboid muscular flaps, a 6 x 4 grid each so the ripple bends
+  // them smoothly; T (the ripple's amplitude key) grows outward from the root
   const flag = (verts, tris, kind) => {
     const base = pos.length / 3;
     for (const v of verts) { pos.push(v[0], v[1], v[2]); nrm.push(0, 1, 0); sq.push(v[3], v[4], 0, kind); }
     for (const tri of tris) idx.push(base + tri[0], base + tri[1], base + tri[2]);
   };
-  // 2×3-sample grids per fin: interior verts give the ripple wave something to bend
-  for (const s of [-1, 1]) flag([
-    [0, 0, -0.50, 0.0, 0],            // 0 root aft
-    [0, 0, -0.35, 0.2, 0],            // 1 root mid
-    [0, 0, -0.20, 0.4, 0],            // 2 root fore
-    [s * 0.14, 0, -0.44, 0.55, 0],    // 3 interior aft
-    [s * 0.14, 0, -0.27, 0.72, 0],    // 4 interior fore
-    [s * 0.26, 0, -0.365, 1.0, 0]     // 5 tip
-  ], [[0, 1, 3], [1, 4, 3], [1, 2, 4], [3, 4, 5], [0, 3, 5], [2, 5, 4]], 1);
+  const FA = 6, FO = 4;
+  for (const s of [-1, 1]) {
+    const verts = [], tris = [];
+    for (let i = 0; i <= FA; i++) {
+      const a = i / FA, z = -0.50 + a * 0.33;
+      const root = prof(Math.max(0, (z + 0.5) / 0.68)) * 0.9;
+      // never exactly zero: a collapsed row has no face to take a normal from
+      const w = 0.27 * Math.max(0.03, Math.pow(Math.sin(Math.PI * Math.pow(a, 0.75)), 0.9));
+      for (let j = 0; j <= FO; j++) {
+        const o = j / FO;
+        verts.push([s * (root + w * o), 0, z - o * 0.04 * Math.sin(Math.PI * a), 0.25 * a + 0.75 * o, o]);
+      }
+    }
+    for (let i = 0; i < FA; i++) for (let j = 0; j < FO; j++) {
+      const p = i * (FO + 1) + j;
+      tris.push([p, p + FO + 1, p + 1], [p + 1, p + FO + 1, p + FO + 2]);
+    }
+    flag(verts, tris, 1);
+  }
 
-  // arm crown: 8 short arms + 2 long feeding tentacles, 4-sided tubes
-  const SSID = 4;
+  // arm crown: 8 arms + 2 long feeding tentacles with clubs, 7-sided tubes
+  const SSID = 7;
   const mk = (n, kind, segs, off) => {
     for (let k = 0; k < n; k++) {
       const ang = (k + off) / n * TAU;
@@ -1291,14 +1530,16 @@ function squidGeometry() {
       }
     }
   };
-  mk(8, 2, 8, 0.5);
-  mk(2, 3, 10, 0.25);
+  mk(8, 2, 12, 0.5);
+  mk(2, 3, 18, 0.25);
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setAttribute('aSq', new THREE.Float32BufferAttribute(sq, 4));
   g.setIndex(idx);
+  g.computeVertexNormals();
+  safeNormals(g);   // the arms are posed entirely in the vertex shader
   return g;
 }
 
@@ -1307,7 +1548,7 @@ const SQ_DEFORM = /* glsl */`
   attribute vec3 aSqI;         // per-instance: phase, jet 0..1, death 0..1
   uniform float uTime;
   varying float vSqT; varying float vSqK; varying float vSqA; varying float vSqP;
-  varying float vSqD;
+  varying float vSqD; varying vec2 vSqCS; varying vec2 vSqF;
   void sqDeform(out vec3 P, out vec3 N){
     float kind = aSq.w;
     float ph = uTime*2.1 + aSqI.x;
@@ -1326,7 +1567,7 @@ const SQ_DEFORM = /* glsl */`
         float T = aSq.x;
         P.y += sin(T*4.0 + ph*0.8)*0.055*T;
       }
-      N = normalize(normal);
+      N = normalize(normal + vec3(0.0, 1e-4, 0.0));
     } else {
       float T = aSq.x, A = aSq.y, R = aSq.z;
       float longArm = step(2.5, kind);
@@ -1342,13 +1583,18 @@ const SQ_DEFORM = /* glsl */`
       float drag = T*T;
       float s1 = sin(T*4.2 - ph*1.5 + A*1.9) * (0.09 + 0.05*longArm) * (1.0 - 0.7*die);
       float s2 = cos(T*3.1 - ph*1.1 + A*2.7) * 0.07 * (1.0 - 0.7*die);
-      vec3 c = vec3(0.0, 0.0, 0.18) + D*(T*len) + rt*(s1*drag*len*2.0) + up2*(s2*drag*len*2.0);
+      vec3 c = vec3(0.0, 0.0, 0.29) + D*(T*len) + rt*(s1*drag*len*2.0) + up2*(s2*drag*len*2.0);
       float rad = (0.028 - 0.024*T) * mix(1.0, 0.7, longArm);
+      // the feeding tentacles end in a CLUB: a flattened paddle of suckers
+      rad *= 1.0 + longArm * 1.6 * smoothstep(0.72, 0.86, T) * (1.0 - smoothstep(0.93, 1.0, T));
       vec3 rn = rt*cos(R) + up2*sin(R);
       P = c + rn*rad;
       N = normalize(rn + D*0.2);
     }
     vSqT = aSq.x; vSqK = kind; vSqA = aSq.y; vSqP = aSqI.x; vSqD = die;
+    float csA = kind < 1.5 ? aSq.y : aSq.z;
+    vSqCS = vec2(cos(csA), sin(csA));
+    vSqF = position.xz;
   }`;
 
 function squidMaterial() {
@@ -1363,7 +1609,7 @@ function squidMaterial() {
     side: THREE.DoubleSide, emissive: 0x000000
   });
   mat.userData.u = u;
-  mat.customProgramCacheKey = () => 'abyssa-squid';
+  mat.customProgramCacheKey = () => 'abyssa-squid-skin';
   mat.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
@@ -1376,23 +1622,59 @@ function squidMaterial() {
       .replace('#include <common>', `#include <common>
         uniform vec3 uSkin; uniform vec3 uGlow; uniform float uPulse; uniform float uTime;
         varying float vSqT; varying float vSqK; varying float vSqA; varying float vSqP;
-        varying float vSqD;`)
+        varying float vSqD; varying vec2 vSqCS; varying vec2 vSqF;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        vec3 skin = uSkin * (0.55 + 0.30*sin(vSqA*5.0 + vSqT*11.0));
+        float sAng = atan(vSqCS.y, vSqCS.x);                 // seam-free around angle
+        float isMantle = 1.0 - step(0.5, vSqK), isFin = step(0.5, vSqK) * (1.0 - step(1.5, vSqK)), isArmS = step(1.5, vSqK);
+        float isHead = isMantle * step(1.0, vSqT);
+        vec3 sV = normalize(vViewPosition);
+        vec3 skin = uSkin * (0.62 + 0.22*sin(sAng*5.0 + vSqT*11.0));
+        // CHROMATOPHORES: rust and umber pigment sacs over a pale iridescent ground,
+        // pulsing open and shut in waves (a live squid's skin never holds still)
+        vec2 cq = isFin > 0.5 ? vSqF * 60.0 : (isArmS > 0.5 ? vec2(vSqT * 40.0, sAng * 1.9) : vec2(vSqT * 34.0, sAng * 3.8197));
+        vec3 cv = skVor(cq);
+        float pulse = 0.5 + 0.5 * sin(uTime * 1.7 + cv.z * 6.2831 + vSqT * 6.0 + vSqP);
+        float cr = mix(0.12, 0.36, pulse) * (0.6 + 0.8 * cv.z);
+        float chrom = (1.0 - smoothstep(cr, cr + 0.1, cv.x)) * skAA(cq);
+        vec3 chromC = mix(vec3(0.42, 0.13, 0.08), vec3(0.30, 0.18, 0.10), step(0.55, cv.z));
+        skin = mix(skin * 1.25, chromC, chrom * 0.85);
         // chromatophores relax in death: the colour drains out to a pale slack grey
         skin = mix(skin, vec3(0.20, 0.19, 0.21), vSqD*0.75);
-        // chromatophore speckle
-        skin *= 0.8 + 0.5*pow(0.5+0.5*sin(vSqT*70.0 + vSqA*17.0), 3.0);
-        skin *= mix(1.0, 1.5, step(1.5, vSqK));       // arms paler than the mantle
+        skin *= mix(1.0, 1.35, isArmS);                      // arms paler than the mantle
+        // the fin is a thin sheet: lighter, and lit through from behind
+        float finK = isFin;
+        // EYES: huge, on the head's flanks — a silvered iris ring round a black wet pupil
+        float ea = min(abs(sAng), 3.1415927 - abs(sAng));
+        vec2 el = vec2(ea / 0.62, (vSqT - 1.13) / 0.085);
+        float ed = length(el);
+        float eIn = isHead * (1.0 - smoothstep(0.85, 1.0, ed));
+        float pupil = 1.0 - smoothstep(0.42, 0.52, ed);
+        vec3 eyeC = mix(vec3(0.46, 0.5, 0.52) * (0.8 + 0.4 * skN2(vec2(atan(el.y, el.x) * 6.0, ed * 8.0))), vec3(0.008, 0.01, 0.014), pupil);
+        skin = mix(skin, eyeC, eIn);
+        skin *= 1.0 - 0.5 * isHead * (1.0 - smoothstep(0.0, 0.18, abs(ed - 1.05)));
         diffuseColor.rgb *= skin;
-        // photophore rows: a strobe that travels tail-to-head along the mantle
-        float row = pow(0.5 + 0.5*sin(vSqA*4.0), 6.0) * step(vSqK, 0.5);
+        float sh = chrom * 0.25 + eIn * sqrt(max(0.0, 1.0 - ed * ed)) * 2.2;
+        normal = skBump(-vViewPosition, normal, sh * 0.02, faceDirection);
+        roughnessFactor = mix(roughnessFactor, 0.05, eIn);
+        metalnessFactor = mix(metalnessFactor, 0.0, eIn);
+        totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * finK * 0.45;
+        totalEmissiveRadiance += skCatch(normal, sV, vViewPosition) * eIn;
+        // PHOTOPHORES: discrete lamps in four ventral-lateral rows, and a strobe that
+        // travels tail-to-head along them
+        float rowA = min(abs(sAng + 1.1), abs(sAng + 2.04));
+        float rowB = min(abs(sAng + 0.55), abs(sAng + 2.59));
+        vec2 pl = vec2(fract(vSqT * 16.0) - 0.5, min(rowA, rowB) * 2.6);
+        float lamp = (1.0 - smoothstep(0.07, 0.13, length(pl))) * isMantle * (1.0 - isHead) * step(0.12, vSqT);
+        float row = lamp;
         float wave = pow(0.5 + 0.5*sin(vSqT*7.0 - uTime*5.5 + vSqP*3.0), 7.0);
         float tip  = step(1.5, vSqK) * pow(vSqT, 4.0);
         // dying photophores stutter for a moment at double rate, then go out for good
         float stut = mix(1.0, pow(0.5 + 0.5*sin(uTime*17.0 + vSqP*4.0), 2.0), step(0.02, vSqD));
         float lampsOut = (1.0 - vSqD) * (1.0 - vSqD);
-        totalEmissiveRadiance += uGlow * uPulse * lampsOut * stut * (row*wave*1.5 + tip*0.8 + 0.025);`);
+        totalEmissiveRadiance += uGlow * uPulse * lampsOut * stut * (row*(wave*1.2 + 0.06) + tip*0.8 + 0.025);`);
     injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js)
   };
   return registerPaint(mat);
@@ -1546,12 +1828,12 @@ function stepDeadSquid(Q, dt, p, im, ia, gp, gs, gc) {
     const gi = Q.i * GLOW_PER + k, g3 = gi * 3, g4 = gi * 4;
     const tt = k / (GLOW_PER - 1), zz = -0.42 + tt * 0.58;
     gp[g3] = Q.pos.x + Q.fwd.x * zz * Q.size;
-    gp[g3 + 1] = Q.pos.y + Q.fwd.y * zz * Q.size + 0.12 * Q.size;
+    gp[g3 + 1] = Q.pos.y + Q.fwd.y * zz * Q.size - 0.14 * Q.size;   // ventral lamps (polish-fauna)
     gp[g3 + 2] = Q.pos.z + Q.fwd.z * zz * Q.size;
     const dying = (1 - Q.die) * (1 - Q.die) * fade;
     const flick = Math.pow(0.5 + 0.5 * Math.sin(Q.deadT * 26 - tt * 5 + Q.i * 2.1), 2);
     const amp = dying * (0.15 + 0.85 * flick);
-    gs[gi] = Q.size * (0.09 + 0.17 * amp);
+    gs[gi] = Q.size * (0.06 + 0.12 * amp);
     gc[g4] = 0.34 * amp; gc[g4 + 1] = 0.72 * amp; gc[g4 + 2] = 0.86 * amp; gc[g4 + 3] = 1;
   }
 
@@ -1770,11 +2052,11 @@ function updateSquid(dt, t, p, lp) {
       const tt = k / (GLOW_PER - 1);
       const zz = -0.42 + tt * 0.58;
       gp[g3] = Q.pos.x + Q.fwd.x * zz * Q.size;
-      gp[g3 + 1] = Q.pos.y + Q.fwd.y * zz * Q.size + 0.12 * Q.size;
+      gp[g3 + 1] = Q.pos.y + Q.fwd.y * zz * Q.size - 0.14 * Q.size;   // ventral lamps (polish-fauna)
       gp[g3 + 2] = Q.pos.z + Q.fwd.z * zz * Q.size;
       const flick = Math.pow(0.5 + 0.5 * Math.sin(t * 5.5 - tt * 7 + Q.i * 2.1), 6);
       const amp = Q.glow * (0.25 + 0.95 * flick) * 0.9;
-      gs[gi] = Q.size * (0.09 + 0.17 * amp);
+      gs[gi] = Q.size * (0.06 + 0.12 * amp);
       gc[g4] = 0.34 * amp; gc[g4 + 1] = 0.72 * amp; gc[g4 + 2] = 0.86 * amp; gc[g4 + 3] = 1;
     }
 

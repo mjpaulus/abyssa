@@ -37,6 +37,7 @@ import { scene, camera } from '../core.js';
 import { clamp } from '../lib/math.js';
 import { terrainH } from './terrain.js';
 import { activeVents } from './vents.js';
+import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 
 const TAU = Math.PI * 2;
 const ZI = 1;
@@ -93,60 +94,116 @@ let aShrimpA = null, aShrimpB = null, aCrab = null;
 // +X forward so the vertex shader's yaw is a plain 2x2 on (x, z).
 // ---------------------------------------------------------------------------
 
-// A caridean fleck: open-ended tapered barrel + a snout cone + a two-triangle
-// tail fan. 4-sided and open-ended on purpose — at the size these read on screen
-// (a few pixels at arm's length) caps and extra rings are pure triangle tax.
-function shrimpGeometry() {
-  const parts = [];
-  const body = new THREE.CylinderGeometry(0.16, 0.30, 0.62, 4, 1, true);
-  body.rotateZ(Math.PI / 2);           // +Y -> +X
-  body.translate(0.05, 0, 0);
-  parts.push(body);
-
-  const head = new THREE.ConeGeometry(0.30, 0.30, 4, 1, true);
-  head.rotateZ(-Math.PI / 2);
-  head.translate(0.51, 0, 0);
-  parts.push(head);
-
-  // tail fan — a flat wedge, two triangles, doubled by the material's DoubleSide
-  const fan = new THREE.BufferGeometry();
-  fan.setAttribute('position', new THREE.Float32BufferAttribute([
-    -0.26, 0, 0, -0.50, 0.09, 0.09, -0.50, 0.09, -0.09,
-    -0.26, 0, 0, -0.50, -0.07, 0.09, -0.50, -0.07, -0.09
-  ], 3));
-  fan.computeVertexNormals();
-  parts.push(fan);
-
-  const g = mergeGeometries(parts.map(p => {
-    if (!p.attributes.uv) p.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(p.attributes.position.count * 2), 2));
-    return p.index ? p.toNonIndexed() : p;
-  }), false);
-  for (const p of parts) p.dispose();
+// polish-fauna: every vertex carries uv = (surface kind, along) for the skin shader —
+// shrimp: 0 carapace/abdomen, 1 eye, 2 fan/antenna/rostrum; crab: 0 shell, 1 leg,
+// 2 claw, 3 eye. Built from plain arrays (no merge step), one indexed mesh each.
+function vlMesh(P, U, I) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+  g.setIndex(I);
+  g.computeVertexNormals();
+  const n = g.attributes.normal.array;
+  for (let i = 0; i < n.length; i += 3) if (n[i] * n[i] + n[i + 1] * n[i + 1] + n[i + 2] * n[i + 2] < 1e-12) n[i + 1] = 1;
   return g;
 }
-
-// A crab: low carapace, two claws held forward, four stub legs per side folded
-// into two blocks. Legs are the only vertices below y = 0 — the shader keys the
-// shuffle off that sign test, so no extra attribute is needed.
-function crabGeometry() {
-  const parts = [];
-  const shell = new THREE.BoxGeometry(0.34, 0.16, 0.46);
-  shell.translate(0, 0.10, 0);
-  parts.push(shell);
-
-  for (const s of [-1, 1]) {
-    const claw = new THREE.BoxGeometry(0.22, 0.09, 0.09);
-    claw.translate(0.24, 0.06, s * 0.17);
-    claw.rotateY(s * 0.30);
-    parts.push(claw);
-    const legs = new THREE.BoxGeometry(0.30, 0.05, 0.07);
-    legs.translate(0, -0.04, s * 0.27);
-    parts.push(legs);
+// Tube along a polyline with per-ring radii (ry, rz) and `sides` round; open ends.
+function vlTube(P, U, I, spine, ry, rz, sides, kind, rot = 0) {
+  const base = P.length / 3, n = spine.length;
+  for (let i = 0; i < n; i++) {
+    const a = spine[Math.max(0, i - 1)], b = spine[Math.min(n - 1, i + 1)];
+    let tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2];
+    const tl = Math.hypot(tx, ty, tz) || 1; tx /= tl; ty /= tl; tz /= tl;
+    // frame: side = t x up, up' = side x t
+    let sx = ty * 0 - tz * 1, sy = tz * 0 - tx * 0, sz = tx * 1 - ty * 0;
+    let sl = Math.hypot(sx, sy, sz);
+    if (sl < 1e-4) { sx = 0; sy = 0; sz = 1; sl = 1; }
+    sx /= sl; sy /= sl; sz /= sl;
+    const ux = sy * tz - sz * ty, uy = sz * tx - sx * tz, uz = sx * ty - sy * tx;
+    for (let j = 0; j < sides; j++) {
+      const ang = j / sides * Math.PI * 2 + rot, c = Math.cos(ang), s = Math.sin(ang);
+      const p = spine[i];
+      P.push(p[0] + ux * c * ry[i] + sx * s * rz[i], p[1] + uy * c * ry[i] + sy * s * rz[i], p[2] + uz * c * ry[i] + sz * s * rz[i]);
+      U.push(kind, i / (n - 1));
+    }
   }
+  for (let i = 0; i < n - 1; i++) for (let j = 0; j < sides; j++) {
+    const a = base + i * sides + j, b = base + i * sides + (j + 1) % sides;
+    I.push(a, a + sides, b, b, a + sides, b + sides);
+  }
+}
+function vlTri(P, U, I, a, b, c, kind) {
+  const base = P.length / 3;
+  P.push(...a, ...b, ...c); U.push(kind, 0, kind, 0.5, kind, 1);
+  I.push(base, base + 1, base + 2);
+}
+function vlBead(P, U, I, c, r, kind) {        // octahedron: 8 tris
+  const base = P.length / 3;
+  const v = [[r, 0, 0], [-r, 0, 0], [0, r, 0], [0, -r, 0], [0, 0, r], [0, 0, -r]];
+  for (const d of v) { P.push(c[0] + d[0], c[1] + d[1], c[2] + d[2]); U.push(kind, 0); }
+  const f = [[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4], [2, 0, 5], [1, 2, 5], [3, 1, 5], [0, 3, 5]];
+  for (const t of f) I.push(base + t[0], base + t[1], base + t[2]);
+}
 
-  const g = mergeGeometries(parts.map(p => p.toNonIndexed()), false);
-  for (const p of parts) p.dispose();
-  return g;
+// A caridean shrimp, ~56 tris: a hunched, laterally-compressed body (5 segments x 4
+// sides, diamond section), rostrum, eyes on the carapace, two antennae, a split
+// tail fan. The pleopod flick in the shader still keys off position.x < 0.15.
+function shrimpGeometry() {
+  const P = [], U = [], I = [];
+  const spine = [[0.44, 0.02, 0], [0.24, 0.07, 0], [0.02, 0.08, 0], [-0.16, 0.05, 0], [-0.32, -0.01, 0], [-0.44, -0.07, 0]];
+  vlTube(P, U, I, spine, [0.12, 0.17, 0.17, 0.14, 0.10, 0.06], [0.08, 0.12, 0.11, 0.09, 0.065, 0.04], 4, 0, Math.PI / 4 * 0);
+  vlTri(P, U, I, [0.44, 0.07, 0.03], [0.44, 0.07, -0.03], [0.70, 0.13, 0], 2);                 // rostrum
+  vlTri(P, U, I, [0.44, 0.07, -0.03], [0.44, 0.07, 0.03], [0.70, 0.13, 0], 2);
+  for (const s of [-1, 1]) vlBead(P, U, I, [0.42, 0.10, s * 0.085], 0.045, 1);             // eyes
+  for (const s of [-1, 1]) vlTri(P, U, I, [0.46, 0.0, s * 0.03], [0.46, 0.03, s * 0.035], [0.95, 0.22, s * 0.28], 2); // antennae
+  vlTri(P, U, I, [-0.44, -0.05, 0.02], [-0.62, -0.02, 0.12], [-0.60, -0.11, 0.02], 2);    // uropods + telson
+  vlTri(P, U, I, [-0.44, -0.05, -0.02], [-0.60, -0.11, -0.02], [-0.62, -0.02, -0.12], 2);
+  vlTri(P, U, I, [-0.44, -0.04, 0.0], [-0.64, -0.06, 0.05], [-0.64, -0.06, -0.05], 2);
+  vlTri(P, U, I, [-0.44, -0.04, 0.0], [-0.64, -0.06, -0.05], [-0.64, -0.06, 0.05], 2);
+  return vlMesh(P, U, I);
+}
+
+// A vent crab, ~380 tris: a domed carapace with a front ridge, stalked eyes, two
+// chelae held forward, four jointed walking legs a side. Legs are the only
+// vertices below y = 0 (the shuffle keys off that), claws the only ones at x > 0.15.
+function crabGeometry() {
+  const P = [], U = [], I = [];
+  // carapace: squashed dome, front edge a touch squarer
+  const R = 7, S = 14, base = P.length / 3;
+  for (let i = 0; i <= R; i++) {
+    const v = i / R, phi = v * Math.PI * 0.5;
+    for (let j = 0; j < S; j++) {
+      const a = j / S * Math.PI * 2, c = Math.cos(a), s = Math.sin(a);
+      const sq = 1 + 0.12 * Math.max(0, c) ** 4;
+      P.push(c * Math.cos(phi) * 0.13 * sq, 0.035 + Math.sin(phi) * 0.075 * (1 - 0.25 * v * v), s * Math.cos(phi) * 0.22);
+      U.push(0, v);
+    }
+  }
+  for (let i = 0; i < R; i++) for (let j = 0; j < S; j++) {
+    const a = base + i * S + j, b = base + i * S + (j + 1) % S;
+    I.push(a, b, a + S, b, b + S, a + S);
+  }
+  // underside plate (sternum)
+  const cb = P.length / 3; P.push(0, 0.03, 0); U.push(0, 1);
+  for (let j = 0; j < S; j++) I.push(cb, base + (j + 1) % S, base + j);
+  for (const s of [-1, 1]) {
+    // eye stalks + eyes
+    vlTube(P, U, I, [[0.12, 0.08, s * 0.05], [0.145, 0.12, s * 0.065]], [0.012, 0.01], [0.012, 0.01], 4, 3);
+    vlBead(P, U, I, [0.148, 0.125, s * 0.068], 0.016, 3);
+    // cheliped: merus -> carpus -> hand, then two fingers
+    vlTube(P, U, I, [[0.06, 0.05, s * 0.15], [0.17, 0.07, s * 0.2], [0.24, 0.06, s * 0.15]], [0.02, 0.022, 0.02], [0.02, 0.022, 0.02], 5, 2);
+    vlTube(P, U, I, [[0.24, 0.06, s * 0.15], [0.29, 0.065, s * 0.12], [0.33, 0.06, s * 0.1]], [0.03, 0.036, 0.022], [0.022, 0.026, 0.016], 6, 2);
+    vlTube(P, U, I, [[0.33, 0.06, s * 0.1], [0.38, 0.055, s * 0.085]], [0.012, 0.003], [0.01, 0.003], 4, 2);
+    vlTube(P, U, I, [[0.325, 0.045, s * 0.105], [0.37, 0.035, s * 0.095]], [0.01, 0.003], [0.008, 0.003], 4, 2);
+    // four walking legs: coxa out from the shell edge, knee up, dactyl down to the crust
+    for (let k = 0; k < 4; k++) {
+      const x = 0.06 - k * 0.055, z = 0.17 - Math.abs(k - 1.5) * 0.012;
+      const sp = 0.1 + k * 0.03;
+      vlTube(P, U, I, [[x, 0.04, s * z], [x - 0.02, 0.09, s * (z + 0.1)], [x - 0.05 - sp * 0.2, -0.02, s * (z + 0.19)], [x - 0.07 - sp * 0.3, -0.07, s * (z + 0.23)]],
+        [0.016, 0.014, 0.011, 0.003], [0.013, 0.011, 0.009, 0.003], 4, 1);
+    }
+  }
+  return vlMesh(P, U, I);
 }
 
 // ---------------------------------------------------------------------------
@@ -169,7 +226,7 @@ function shrimpMaterial() {
         attribute vec4 aSwirl;   // x: phase  y: angular speed (signed)  z: orbit radius  w: height offset
         attribute vec4 aBody;    // x: size   y: bob rate  z: bob phase  w: radial wobble
         uniform float uTime; uniform float uVis;
-        varying float vShade;
+        varying float vShade; varying vec2 vVl; varying vec3 vVlP;
         mat2 vlYaw(float s, float c){ return mat2(c, -s, s, c); }`)
       // beginnormal_vertex runs first and its locals stay in scope for
       // begin_vertex below — one swirl evaluation serves both.
@@ -195,13 +252,40 @@ function shrimpMaterial() {
         transformed.x += vlCa * vlR;
         transformed.z += vlSa * vlR;
         transformed.y += aSwirl.w + sin(uTime * aBody.y + aBody.z) * 0.22;
-        vShade = 0.74 + 0.34 * fract(aSwirl.x * 3.7);`);
+        vShade = 0.74 + 0.34 * fract(aSwirl.x * 3.7);
+        vVl = uv; vVlP = position;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying float vShade;`)
-      // Tint only — no emissive, no added light. These are matte animals.
+        varying float vShade; varying vec2 vVl; varying vec3 vVlP;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}`)
+      // polish-fauna: a glassy caridean. Pale translucent carapace with the segment
+      // overlaps drawn in, the gut showing dark through the back, a scatter of red
+      // chromatophores, black wet eyes. Still no glow: the only added term is light
+      // the scene already has, TRANSMITTED through the body (the vent fire behind a
+      // shrimp shows through it) — zero where there is no light.
       .replace('#include <color_fragment>', `#include <color_fragment>
-        diffuseColor.rgb *= vShade;`);
+        float vlK = floor(vVl.x + 0.5);
+        vec3 vp = vVlP;
+        vec3 vlC = vec3(1.0);
+        float abd = 1.0 - smoothstep(0.05, 0.15, vp.x);
+        float seg = (1.0 - smoothstep(0.0, 0.08, abs(fract((0.12 - vp.x) * 7.5) - 0.5) * 2.0 - 0.86)) * abd;
+        vlC *= 1.0 - 0.28 * seg;
+        float gut = (1.0 - smoothstep(0.012, 0.03, abs(vp.z))) * step(0.03, vp.y) * (1.0 - smoothstep(0.3, 0.4, vp.x));
+        vlC = mix(vlC, vec3(0.42, 0.30, 0.22), gut * 0.7);
+        vec3 cv = skVor(vp.xy * 26.0 + vp.z * 13.0);
+        float chrom = (1.0 - smoothstep(0.08, 0.14, cv.x)) * step(0.55, cv.z);
+        vlC = mix(vlC, vec3(0.95, 0.42, 0.30), chrom * 0.8 * step(vlK, 0.5));
+        float vlEye = step(0.5, vlK) * step(vlK, 1.5);
+        vlC = mix(vlC, vec3(0.02, 0.018, 0.016), vlEye);
+        vlC *= mix(1.0, 1.12, step(1.5, vlK));
+        diffuseColor.rgb *= vShade * vlC;`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(0.42, 0.06, vlEye);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * (1.0 - vlEye) * 0.55;
+        totalEmissiveRadiance += skCatch(normal, normalize(vViewPosition), vViewPosition) * vlEye * 0.8;`);
   };
   return m;
 }
@@ -217,8 +301,9 @@ function crabMaterial() {
       .replace('#include <common>', `#include <common>
         attribute vec2 aCrab;    // x: phase  y: rate
         uniform float uTime; uniform float uVis;
-        varying float vShade;`)
+        varying float vShade; varying vec2 vVl; varying vec3 vVlP;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vVl = uv; vVlP = position;
         // Mostly still. A slow rock on the carapace and a leg shuffle that only
         // touches the vertices below the body — a crab holding station in the
         // warm water, not a crab walking somewhere.
@@ -234,9 +319,45 @@ function crabMaterial() {
         vShade = 0.80 + 0.28 * fract(aCrab.x * 2.9);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying float vShade;`)
+        varying float vShade; varying vec2 vVl; varying vec3 vVlP;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}`)
+      // polish-fauna: the reef crab's skin (fauna.js, skin 4) on the vent palette —
+      // granular carapace with a darker frontal ridge, pale jointed legs with
+      // arthrodial cuffs and dark dactyls, dark-tipped chelae, wet black eyes.
       .replace('#include <color_fragment>', `#include <color_fragment>
-        diffuseColor.rgb *= vShade;`);
+        float vlK = floor(vVl.x + 0.5);
+        vec3 vp = vVlP;
+        vec3 vlC = vec3(1.0);
+        float vlH = 0.0;
+        if (vlK < 0.5) {
+          vec3 vr = skVor(vp.xz * 70.0);
+          float gran = 1.0 - smoothstep(0.0, 0.34, vr.x);
+          float ridge = 1.0 - smoothstep(0.0, 0.03, abs(vp.x - 0.1 - 0.02 * vp.z * vp.z * 20.0));
+          vlC *= (0.92 + 0.16 * vr.z) * (1.0 + gran * 0.08) * (1.0 - 0.25 * ridge);
+          vlC *= mix(1.0, 1.25, 1.0 - smoothstep(0.02, 0.05, vp.y));   // pale underside
+          vlH = gran * 0.8 + ridge * 0.4;
+        } else if (vlK < 1.5) {
+          float t = vVl.y;
+          float cuff = max(1.0 - smoothstep(0.02, 0.06, abs(t - 0.333)), 1.0 - smoothstep(0.02, 0.06, abs(t - 0.667)));
+          vlC = mix(vlC * 0.95, vec3(1.35, 1.3, 1.2), cuff);
+          vlC *= 1.0 - 0.6 * smoothstep(0.82, 0.97, t);
+          vlH = -cuff * 0.6;
+        } else if (vlK < 2.5) {
+          vlC *= 1.0 - 0.65 * smoothstep(0.33, 0.38, vp.x);
+          vlH = skN2(vp.xz * 160.0) * 0.4;
+        } else {
+          vlC = vec3(0.02, 0.018, 0.016);
+        }
+        float vlEye = step(2.5, vlK);
+        diffuseColor.rgb *= vShade * vlC;`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = skBump(-vViewPosition, normal, vlH * 0.0025, faceDirection);`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.06, vlEye);`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += skCatch(normal, normalize(vViewPosition), vViewPosition) * vlEye * 0.8;`);
   };
   return m;
 }
