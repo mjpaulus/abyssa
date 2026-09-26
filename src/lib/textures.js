@@ -1194,3 +1194,54 @@ export function bladeMapSet() {
   return _bladeSet;
 }
 // ==== END BLOCK: polish-world ========================================================
+
+// ==== BLOCK: polish-followups (Sal's underlayer canvas) =============================
+// HEAVY DUCK CANVAS for the blue underlayer: a 2/2 basket weave of doubled, slubbed yarns,
+// coarser and more irregular than the dress twill, with the odd thick pick running across
+// and a fulled, felted fibre noise over all. Same packing as twillSet so it drops into the
+// dress shader as a uniform (no new program):
+//   pack.r = thread height, pack.g = low-frequency motley, pack.b = yarn tone; nrm.a = height.
+let _canvasSet = null;
+export function canvasSet() {
+  if (_canvasSet) return _canvasSet;
+  const S = 256, N = 32, P = S / N;
+  const rand = seededRand(0xd0c4ca57);
+  const slubW = new Float32Array(N * 4), slubF = new Float32Array(N * 4), toneW = new Float32Array(N), toneF = new Float32Array(N);
+  for (let i = 0; i < N * 4; i++) { slubW[i] = 0.78 + 0.34 * rand(); slubF[i] = 0.78 + 0.34 * rand(); }
+  for (let i = 0; i < N; i++) { toneW[i] = rand(); toneF[i] = rand() < 0.12 ? 1.6 : rand(); }   // a few thick picks
+  const fib = _tileNoise(S, 48, 2, rand), felt = _tileNoise(S, 12, 3, rand), mot = _tileNoise(S, 3, 4, rand);
+  const h = new Float32Array(S * S), pack = new Uint8Array(S * S * 4);
+  for (let y = 0; y < S; y++) {
+    const j = Math.floor(y / P), fy = (y % P + 0.5) / P;
+    for (let x = 0; x < S; x++) {
+      const i = Math.floor(x / P), fx = (x % P + 0.5) / P;
+      const over = ((i >> 1) + (j >> 1)) & 1;               // basket: pairs of yarns go over together
+      // each doubled yarn is two plies: a shallow groove down the middle of the float
+      const sW = slubW[i * 4 + (j & 3)], sF = slubF[j * 4 + (i & 3)];
+      let hh, tone;
+      if (over) {                                          // warp on top
+        const a = Math.min(1, Math.abs(fx - 0.5) * 2 / sW);
+        hh = Math.pow(Math.max(0, 1 - a * a), 0.5) * (0.92 - 0.10 * Math.exp(-Math.pow((fx - 0.5) / 0.08, 2)));
+        hh *= 0.70 + 0.30 * Math.sin(Math.PI * ((j & 1) ? 0.5 + fy * 0.5 : fy * 0.5 + 0.0) + 0.2);
+        tone = 0.34 + 0.20 * toneW[i];
+      } else {                                             // weft on top
+        const a = Math.min(1, Math.abs(fy - 0.5) * 2 / sF);
+        const thick = toneF[j] > 1 ? 1.12 : 1;
+        hh = Math.pow(Math.max(0, 1 - a * a), 0.5) * 0.88 * thick;
+        hh *= 0.72 + 0.28 * Math.sin(Math.PI * ((i & 1) ? 0.5 + fx * 0.5 : fx * 0.5) + 0.2);
+        tone = 0.58 + 0.16 * Math.min(1, toneF[j]);
+      }
+      const f = fib[y * S + x], fe = felt[y * S + x];
+      hh = hh * (0.84 + 0.22 * f) * (0.9 + 0.2 * fe) + (fe - 0.5) * 0.10;   // fulled: the weave softened by felting
+      const o = (y * S + x) * 4;
+      h[y * S + x] = hh;
+      pack[o] = Math.max(0, Math.min(1, hh)) * 255;
+      pack[o + 1] = mot[y * S + x] * 255;
+      pack[o + 2] = Math.max(0, Math.min(1, tone + (f - 0.5) * 0.34 + (fe - 0.5) * 0.2)) * 255;
+      pack[o + 3] = 255;
+    }
+  }
+  _canvasSet = { pack: _dataTex(pack, S), nrm: _dataTex(_packNormal(h, S, 3.0), S), size: S };
+  return _canvasSet;
+}
+// ==== END BLOCK: polish-followups ====================================================

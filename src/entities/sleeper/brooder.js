@@ -14,10 +14,10 @@
 // payoff come in the next plan; until then the lab drives her through L.cmd().
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../../core.js';
-import { V3, clamp, lerp } from '../../lib/math.js';
+import { V3, clamp, lerp, fbm } from '../../lib/math.js';
 import { makeGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
-import { terrainH } from '../../world/terrain.js';
+import { terrainH, terrainMeshes } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard
@@ -58,12 +58,25 @@ const SOCKETS = [
 const COLL = [[0, 0.17, 0]];
 for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; COLL.push([Math.cos(a) * 0.55, 0.15, Math.sin(a) * 0.50]); }
 const STRIDE = 0.30, SWING_T = 0.55, RISE_T = 6, SETTLE_T = 4;
+// ASLEEP SHE IS A RIDGE (polish-followups). Every term below is scaled by (1 - standE), so
+// the standing pose is bit-identical: x - k * 0 === x. `tuck` pulls each rest foot in under
+// the shell, `fold` lays the leg plane flat (knee sideways, not up, so no knee stands
+// above the rim), `drop` lowers the shell so the plate skirts sit in the silt, and the
+// claws fold back under the prow (targets per joint, x/y/z Euler in the YZX order the arm
+// uses; y is mirrored by side). Exported so the lab can tune it live.
+export const DORM = {
+  tuck: 0.76, fold: 1.0, drop: 0.035,
+  // (searched: every joint inside 0.86 of the rim, nothing past the prow, below the shell)
+  major: { root: [0, 1.0, -0.08], cj: [0, 1.2, 0.05], pj: [0, 1.6, -0.10], dj: -0.3 },
+  minor: { root: [0, 1.0, -0.08], cj: [0, 1.2, 0.05], pj: [0, 1.0, -0.10], dj: -0.3 }
+};
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
 const _x = V3(), _y = V3(), _z = V3(), _sc = V3(), _r = V3(), _rw = V3(), _lp = V3(), _pl = V3();
 const _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _q = new THREE.Quaternion(), _qs = new THREE.Quaternion();
 const _col = new THREE.Color();
+const _u = V3(), _hz = V3();
 
 // CHITIN SHEEN (polish-brooder): a pale, subsurface-ish rim on the arms, legs and mouth.
 // A view-grazing Fresnel of the PERTURBED normal, scaled by the diffuse light the surface
@@ -332,7 +345,7 @@ export function makeBrooder(idx, cfg) {
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
-    else if (name === 'place') placeAt(L, arg.pos, arg.yaw);
+    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); fitSkirt(L); } }
     return L.probe();
   };
   L.probe = () => ({
@@ -346,7 +359,121 @@ export function makeBrooder(idx, cfg) {
   setLive(L);
   setWardTargets(-1, null);
   poseAll(L, 0, null);
+  buildSkirt(L);
   return L;
+}
+
+// ---- THE SILT DRIFT (polish-followups) ----
+// Asleep on the rift lip she sits over hollow ground: the floor falls away under her flanks
+// and tail by up to a third of her width, and through that gap she read as a crab on its
+// legs. A bank of silt now drifts up against her all round, from the floor to the underside
+// of her rim, as years of settling sediment would. It is drawn in the SEABED'S OWN
+// MATERIAL (world-space triplanar, same zone palette, same program) with the seabed's own
+// vertex channels resampled from the terrain mesh, so the drift is continuous with the
+// floor it grows out of; only the AO channel darkens toward her, where silt meets shell.
+// Its outer edge is buried a hair under the floor (the heightfield mesh is a linear
+// sampling of terrainH; the edge must never float). Built at placement (not per frame);
+// as she rises it sinks away under the silt pouring off her back, and once she has stood
+// it is gone for good. The seabed material is SHARED: it is lifted out of L.grp before
+// disposeSleeper can free it.
+const SK_COLS = 128, SK_RINGS = 9;
+function buildSkirt(L) {
+  const tm = terrainMeshes[L.idx];
+  if (!tm) return;
+  const n = SK_COLS * SK_RINGS, g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  const idx = [];
+  for (let i = 0; i < SK_RINGS - 1; i++) for (let j = 0; j < SK_COLS; j++) {
+    const a = i * SK_COLS + j, b = i * SK_COLS + (j + 1) % SK_COLS, c = a + SK_COLS, d = b + SK_COLS;
+    idx.push(a, b, c, b, d, c);
+  }
+  g.setIndex(idx);
+  const m = new THREE.Mesh(g, tm.material);
+  m.receiveShadow = true;
+  m.frustumCulled = true;
+  L.grp.add(m);
+  L.skirt = m;
+  fitSkirt(L);
+  const prev = L.onDispose;
+  L.onDispose = () => { if (m.parent) m.parent.remove(m); g.dispose(); if (prev) prev(); };
+}
+
+// bilinear sample of the seabed mesh's vertex colour at world x,z (its grid is separable)
+function seabedColor(tm, x, z, out) {
+  const P = tm.geometry.attributes.position.array, C = tm.geometry.attributes.color.array;
+  const n = Math.round(Math.sqrt(P.length / 3));
+  const find = (v, stride, off) => {                  // largest k with axis[k] <= v
+    let lo = 0, hi = n - 2;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (P[mid * stride + off] <= v) lo = mid; else hi = mid - 1; }
+    return lo;
+  };
+  const k = find(x, 3, 0), j = find(z, n * 3, 2);
+  const x0 = P[k * 3], x1 = P[(k + 1) * 3], z0 = P[j * n * 3 + 2], z1 = P[(j + 1) * n * 3 + 2];
+  const u = clamp((x - x0) / (x1 - x0), 0, 1), v = clamp((z - z0) / (z1 - z0), 0, 1);
+  for (let c = 0; c < 3; c++) {
+    const a = C[(j * n + k) * 3 + c], b = C[(j * n + k + 1) * 3 + c], e = C[((j + 1) * n + k) * 3 + c], f = C[((j + 1) * n + k + 1) * 3 + c];
+    out[c] = (a * (1 - u) + b * u) * (1 - v) + (e * (1 - u) + f * u) * v;
+  }
+  return out;
+}
+
+function fitSkirt(L) {
+  const m = L.skirt;
+  if (!m) return;
+  const tm = terrainMeshes[L.idx], g = m.geometry, P = g.attributes.position, C = g.attributes.color;
+  const mw = L.body.matrixWorld, R = L.R, rgb = [0, 0, 0];
+  // the gap under the rim, per bearing, smoothed round the ring (a drift has no corners)
+  const gap = new Float32Array(SK_COLS), gs = new Float32Array(SK_COLS);
+  for (let j = 0; j < SK_COLS; j++) {
+    const th = j / SK_COLS * Math.PI * 2, rr = G.rimR(th);
+    _v.set(Math.cos(th) * rr * 0.97, -0.02, Math.sin(th) * rr * 0.97).applyMatrix4(mw);
+    gap[j] = _v.y - terrainH(_v.x, _v.z, L.idx);
+  }
+  for (let j = 0; j < SK_COLS; j++) {
+    let a = 0;
+    for (let q = -3; q <= 3; q++) a += gap[(j + q + SK_COLS) % SK_COLS];
+    gs[j] = Math.min(gap[j], a / 7);
+  }
+  for (let j = 0; j < SK_COLS; j++) {
+    const th = j / SK_COLS * Math.PI * 2, rr = G.rimR(th), c = Math.cos(th), sn = Math.sin(th);
+    const gp = gs[j], w = clamp(gp * 1.7, 1.6, 9.5) / R;        // repose: ~30 degrees, wider for a deeper hollow
+    for (let i = 0; i < SK_RINGS; i++) {
+      let rho, ly = -0.02, s = 0;
+      if (i === 0) { rho = 0.80; ly = -0.10; }
+      else if (i === 1) rho = 0.97;
+      else { s = (i - 1) / (SK_RINGS - 2); rho = 0.97 + w * s; }
+      _v.set(c * rr * rho, ly, sn * rr * rho).applyMatrix4(mw);
+      const th0 = terrainH(_v.x, _v.z, L.idx);
+      let y = _v.y;
+      if (i >= 2) {
+        const prof = Math.pow(1 - s, 1.6) * (1 + 0.5 * s);
+        const rip = (fbm(_v.x * 0.35, _v.z * 0.35) - 0.5) * 0.9 * s * (1 - s) * Math.min(1, gp / 2);
+        y = th0 + Math.max(0, gp) * prof + rip - 0.08 * s * s;
+        if (i === SK_RINGS - 1) y = th0 - 0.10;
+      }
+      if (y < th0 - 0.12 && i >= 1) y = th0 - 0.12;             // where the floor stands over her rim, the drift is under it
+      P.setXYZ(i * SK_COLS + j, _v.x, y, _v.z);
+      seabedColor(tm, _v.x, _v.z, rgb);
+      const dk = i < 2 ? 0.42 : 0.42 + 0.58 * Math.pow(s, 0.6);  // darker where silt meets shell
+      C.setXYZ(i * SK_COLS + j, rgb[0] * dk, rgb[1], rgb[2]);
+    }
+  }
+  P.needsUpdate = C.needsUpdate = true;
+  g.computeVertexNormals();
+  // the seabed material is FrontSide: make sure the drift faces up
+  const N = g.attributes.normal;
+  let ny = 0;
+  for (let i = 0; i < N.count; i++) ny += N.getY(i);
+  if (ny < 0) {
+    const ix = g.index.array;
+    for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; }
+    g.index.needsUpdate = true;
+    g.computeVertexNormals();
+  }
+  g.computeBoundingSphere();
+  m.position.y = 0;
+  m.visible = true;
 }
 
 function countTris(root) {
@@ -420,7 +547,7 @@ function placeAt(L, pos, yaw) {
 function restWorld(L, li, out) {
   const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, st = L.standE;
   // asleep the legs fold UNDER the shell: a ridge, not a crab
-  const reach = lerp(0.80, 1.02, st) * lg.k, a = lg.splay * lerp(1.15, 0.85, st);
+  const reach = lerp(0.80, 1.02, st) * lg.k - DORM.tuck * lg.k * (1 - st), a = lg.splay * lerp(1.15, 0.85, st);
   const lx = lg.hip[0] * sd + Math.cos(a) * reach * sd, lz = lg.hip[2] + Math.sin(a) * reach;
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   out.set(L.pos.x + (lx * cy + lz * sy) * L.R, 0, L.pos.z + (-lx * sy + lz * cy) * L.R);
@@ -452,16 +579,25 @@ function poseLeg(L, li, footL) {
   _d.set(footL.x - _hip.x, 0, footL.z - _hip.z);
   if (_d.lengthSq() < 1e-6) _d.set(sd, 0, 0);
   _d.normalize();
-  _pn.crossVectors(_d, UP).normalize();
+  // the knee plane: vertical standing (U is UP itself, so that path is untouched); asleep it
+  // lies down toward the horizontal, the knee turned toward the middle of the flank
+  let U = UP;
+  const f = (1 - L.standE) * DORM.fold;
+  if (f > 0) {
+    _hz.crossVectors(UP, _d);
+    if (_hz.z * lg.hip[2] > 0) _hz.negate();
+    U = _u.copy(UP).multiplyScalar(1 - f).addScaledVector(_hz, f).normalize();
+  }
+  _pn.crossVectors(_d, U).normalize();
   _j1.copy(_hip).addScaledVector(_d, SEG.coxa * 0.98).addScaledVector(UP, -SEG.coxa * 0.2);
-  _ank.copy(footL).addScaledVector(UP, SEG.dactyl * k * 0.93).addScaledVector(_d, -SEG.dactyl * k * 0.36);
+  _ank.copy(footL).addScaledVector(U, SEG.dactyl * k * 0.93).addScaledVector(_d, -SEG.dactyl * k * 0.36);
   const l1 = SEG.femur * k, l2 = SEG.tibia * k;
   _v.subVectors(_ank, _j1);
-  const qx = _v.x * _d.x + _v.z * _d.z, qy = _v.y;
+  const qx = _v.x * _d.x + _v.z * _d.z, qy = U === UP ? _v.y : _v.dot(U);
   const D = clamp(Math.hypot(qx, qy), Math.abs(l1 - l2) + 1e-3, l1 + l2 - 1e-3);
   const base = Math.atan2(qy, qx);
   const th1 = base + Math.acos(clamp((l1 * l1 + D * D - l2 * l2) / (2 * l1 * D), -1, 1));
-  _knee.copy(_j1).addScaledVector(_d, Math.cos(th1) * l1).addScaledVector(UP, Math.sin(th1) * l1);
+  _knee.copy(_j1).addScaledVector(_d, Math.cos(th1) * l1).addScaledVector(U, Math.sin(th1) * l1);
   segMat(L.legs.coxa, li, _hip, _j1, _pn);
   segMat(L.legs.femur, li, _j1, _knee, _pn);
   _ank2.copy(_knee).addScaledVector(_v.subVectors(_ank, _knee).normalize(), l2);
@@ -494,7 +630,20 @@ function poseClaws(L) {
       c.pj.rotation.set(0, -sd * 0.45, -0.55 + tr);
       c.dj.rotation.z = 0.10 + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th;
     }
+    // asleep: folded back flat under the prow, pincers shut
+    const d = 1 - st;
+    if (d > 0) {
+      const T = c.major ? DORM.major : DORM.minor;
+      tuckJoint(c.root, T.root, -Math.PI / 2, sd, d); tuckJoint(c.cj, T.cj, 0, sd, d); tuckJoint(c.pj, T.pj, 0, sd, d);
+      c.dj.rotation.z += (T.dj - c.dj.rotation.z) * d;
+    }
   }
+}
+// x + (target - x) * d: at d = 0 nothing moves. y is mirrored by side (-sd turns inward)
+// about the joint's own base heading (the root's is -PI/2: the arm aims forward).
+function tuckJoint(j, T, base, sd, d) {
+  const r = j.rotation;
+  r.set(r.x + (T[0] - r.x) * d, r.y + (base - sd * T[1] - r.y) * d, r.z + (T[2] - r.z) * d);
 }
 
 function poseAll(L, dt, player) {
@@ -505,7 +654,7 @@ function poseAll(L, dt, player) {
   const gL = terrainH(L.pos.x + cy * o, L.pos.z - sy * o, L.idx), gR = terrainH(L.pos.x - cy * o, L.pos.z + sy * o, L.idx);
   const gC = terrainH(L.pos.x, L.pos.z, L.idx);
   const gy = (gF + gB + gL + gR + gC) / 5;
-  L.bodyY = gy + R * (lerp(0.06, 0.44, st) + 0.10 * L.threatE + 0.012 * Math.sin(L.t * 0.45) * (1 - st));
+  L.bodyY = gy + R * (lerp(0.06, 0.44, st) + 0.10 * L.threatE + 0.012 * Math.sin(L.t * 0.45) * (1 - st) - DORM.drop * (1 - st));
   b.position.set(L.pos.x, L.bodyY, L.pos.z);
   // hunched: standing, the front drops over the diver; threat lifts it to show the face
   b.rotation.set(-Math.atan2(gF - gB, 2 * o) + 0.06 * st + 0.12 * L.threatE, L.yaw, Math.atan2(gL - gR, 2 * o));
@@ -570,6 +719,11 @@ export function updateBrooder(L, dt, t, player) {
   const rate = L.standTarget > L.stand ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
+  // the drift sinks away as she rises out of it, and is gone once she has stood
+  if (L.skirt && L.skirt.visible) {
+    L.skirt.position.y = -L.standE * L.R * 0.3;
+    if (!L.dormant && L.standE > 0.97) L.skirt.visible = false;
+  }
   // she rears on her own when the diver comes close (the lab's hold/rear override it)
   if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pd < L.R * 2.4 ? 1 : 0;
   // the hammer cycle: a slow wind-up, a fast fall (only means anything in threat)

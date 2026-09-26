@@ -14,7 +14,7 @@ import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // drives the breath cadence. (No cycles: neither module imports the diver.)
 import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet } from '../lib/textures.js';
+import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet, canvasSet } from '../lib/textures.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -144,7 +144,7 @@ const lead = new THREE.MeshStandardMaterial({
   metalness: 0.55, roughness: 1, envMap: envTex, envMapIntensity: 0.22
 });
 const cloth = new THREE.MeshStandardMaterial({
-  color: 0x1f3c96, roughness: 0.92, metalness: 0.02, vertexColors: true, envMap: envTex, envMapIntensity: 0.12
+  color: 0x22398c, roughness: 0.92, metalness: 0.02, vertexColors: true, envMap: envTex, envMapIntensity: 0.12
 });
 const trim = new THREE.MeshStandardMaterial({
   color: 0xe4ddca, roughness: 0.84, metalness: 0.02, envMap: envTex, envMapIntensity: 0.14
@@ -353,7 +353,7 @@ uniform float uSalRootY;`;
 const SUIT_FS_COMMON = `
 uniform sampler2D tSalTw; uniform sampler2D tSalTwN;
 uniform float uSalTile; uniform float uSalWeave; uniform float uSalWeaveAlb; uniform float uSalWetDark;
-uniform float uSalWet; uniform float uPaintK;
+uniform float uSalWet; uniform float uPaintK; uniform float uSalTapeMode;
 uniform vec3 uSalWearCol; uniform vec3 uSalTapeCol;
 uniform mat3 normalMatrix;
 varying vec3 vSalP; varying vec3 vSalN; varying vec3 vSalA; varying float vSalY;
@@ -373,7 +373,7 @@ vec3 salBump(vec3 sp, vec3 sn, vec2 dh) {
   return normalize(abs(det) * sn - sign(det) * (dh.x * r1 + dh.y * r2));
 }
 vec3 salNo; vec3 salW; vec3 salPp; vec4 salPk;
-float salMot; float salTape; float salStitch; float salWear; float salWetK; float salPatch; float salPEdge;`;
+float salMot; float salTape; float salStitch; float salWear; float salWetK; float salPatch; float salPEdge; float salTH;`;
 const SUIT_FS_COLOR = `
 salNo = normalize(vSalN);
 salW = pow(abs(salNo), vec3(4.0)); salW /= (salW.x + salW.y + salW.z);
@@ -391,6 +391,24 @@ salMot = salTri(tSalTw, vSalP * (uSalTile * 0.071) + 0.37, salW).g;
   salPatch = 1.0 - smoothstep(-pa, pa, vSalA.z);
   salPEdge = 1.0 - smoothstep(0.0045 - pa, 0.0045 + pa, abs(vSalA.z + 0.0045));
 }
+// TAPE MODE (the white trim): salAux is the tape's own frame, y = across (-1..1 edge to
+// edge), z = along in weave repeats. A herringbone twill tape: diagonal ribs that turn
+// at the centre line, rolled selvedges, and a lock-stitch row sewn down each side.
+salTH = 0.0;
+if (uSalTapeMode > 0.5) {
+  float tc = abs(vSalA.y), ta = vSalA.z;
+  float dd = ta + tc * 5.0;
+  float rib = 0.5 + 0.5 * sin(dd * 6.2831853) * (1.0 - smoothstep(0.35, 0.7, fwidth(dd)));
+  float sel = smoothstep(0.80, 0.97, tc);
+  float ca = max(fwidth(tc), 1e-4);
+  float srow = 1.0 - smoothstep(0.045 - ca, 0.045 + ca, abs(tc - 0.64));
+  float sl = ta * 0.5;
+  float sdash = smoothstep(0.16, 0.28, fract(sl)) * (1.0 - smoothstep(0.62, 0.74, fract(sl)));
+  salStitch = srow * sdash * (1.0 - smoothstep(0.3, 0.6, fwidth(sl)));
+  salTape = 0.0; salPEdge = 0.0; salPatch = 0.0;
+  salTH = rib * 0.45 + sel * 0.55;
+  diffuseColor.rgb *= (0.84 + 0.26 * rib) * (1.0 - 0.10 * sel);
+}
 salWear = smoothstep(0.12, 0.85, vSalA.x + (salMot - 0.5) * 0.8) * (0.5 + 0.5 * salPk.r);
 salWetK = clamp(uSalWet * 1.6 - vSalY * 0.22, 0.0, 1.0);
 diffuseColor.rgb *= mix(1.0 - uSalWeaveAlb, 1.0 + uSalWeaveAlb, salPk.r * 0.55 + salPk.b * 0.45) * (0.80 + 0.40 * salMot);
@@ -407,16 +425,17 @@ roughnessFactor = mix(roughnessFactor, 0.30, salWetK * 0.8);
 roughnessFactor = clamp(roughnessFactor, 0.08, 1.0);`;
 const SUIT_FS_NORMAL = `
 {
-  float ws = uSalWeave * (1.0 - 0.65 * uPaintK) * (1.0 - 0.75 * salTape);
+  float ws = uSalWeave * (1.0 - 0.65 * uPaintK) * (1.0 - 0.75 * salTape) * (1.0 - 0.6 * uSalTapeMode);
   vec3 nt = normalize(salNo + salTriN(salPp, salW) * ws);
   normal = normalize(normalMatrix * nt);
-  float bh = salTape * 0.7 + salPEdge * 0.6 - salStitch * 0.5;
+  float bh = salTape * 0.7 + salPEdge * 0.6 - salStitch * 0.5 + salTH * 0.6;
   normal = salBump(-vViewPosition, normal, vec2(dFdx(bh), dFdy(bh)) * 0.55);
 }`;
 const _tw = twillSet();
 function suitify(m, o) {
+  const tw = o.set || _tw;                                  // the fabric (same packing: twillSet / canvasSet)
   const U = {
-    tSalTw: { value: _tw.pack }, tSalTwN: { value: _tw.nrm },
+    tSalTw: { value: tw.pack }, tSalTwN: { value: tw.nrm }, uSalTapeMode: { value: o.tapeMode || 0 },
     uSalTile: { value: o.tile }, uSalWeave: { value: o.weave }, uSalWeaveAlb: { value: o.alb },
     uSalWetDark: { value: o.wetDark }, uSalWearCol: { value: new THREE.Color(o.wear) },
     uSalTapeCol: { value: new THREE.Vector3(...o.tape) },   // a LINEAR multiplier, not a colour
@@ -440,8 +459,10 @@ function suitify(m, o) {
 }
 // thread pitch ~2 mm on the dress (tile 0.077 u); the webbing straps a finer, fainter weave
 suitify(leather, { tile: 13.0, weave: 0.60, alb: 0.13, wetDark: 0.40, wear: 0xb49c7c, tape: [0.74, 0.68, 0.60] });
-suitify(cloth, { tile: 13.0, weave: 0.60, alb: 0.14, wetDark: 0.42, wear: 0x5a72b0, tape: [0.72, 0.74, 0.80] });
-suitify(trim, { tile: 15.0, weave: 0.50, alb: 0.10, wetDark: 0.30, wear: 0xefe9dc, tape: [0.82, 0.80, 0.76] });
+// the blue underlayer is HEAVY DUCK (canvasSet, a 2/2 basket of doubled yarns, ~3 mm pitch),
+// not the dress twill; the trim is a woven herringbone TAPE with stitched edges (tape mode)
+suitify(cloth, { set: canvasSet(), tile: 11.0, weave: 0.95, alb: 0.24, wetDark: 0.42, wear: 0x7a8cc0, tape: [0.72, 0.74, 0.80] });
+suitify(trim, { tile: 22.0, weave: 0.30, alb: 0.06, wetDark: 0.30, wear: 0xefe9dc, tape: [0.82, 0.80, 0.76], tapeMode: 1 });
 suitify(darkLeather, { tile: 18.0, weave: 0.40, alb: 0.08, wetDark: 0.28, wear: 0x86603f, tape: [0.80, 0.76, 0.72] });
 
 // PAINT LAW (lib/paint.js). The suit goes matte with the dial: cloth, trim, leathers,
@@ -650,6 +671,92 @@ function seamTube(pts, zs, r, sign = 1, xoff = 0, rad = 0.014) {
 // Flattened ring band (sock cuffs, thigh straps, gauntlet bands).
 const band = (r, h, t = 0.9, seg = 14) => new THREE.CylinderGeometry(r, r, h, seg, 1, true).scale(1, 1, t);
 
+// WOVEN TAPE (the white trim; polish-followups). Not an open cylinder: a strip with a
+// thickness, its two selvedges rolled over and tucked into the cloth under it, lying a
+// little slack round the limb (never a perfect ring). salAux is the tape's own frame for
+// the dress shader's TAPE MODE: y = across (-1 .. 1, edge to edge), z = along, in weave
+// repeats — an integer round the ring, so the herringbone closes on itself.
+function tapeBand(r, h, zs = 0.95, t = 0.0065, seg = 26, ph = 0) {
+  const hh = h / 2;
+  const prof = [[r - t * 0.6, -hh + t * 0.1], [r + t * 0.55, -hh + t * 0.3], [r + t, -hh * 0.3],
+    [r + t, hh * 0.3], [r + t * 0.55, hh - t * 0.3], [r - t * 0.6, hh - t * 0.1]];
+  const g = lathe(prof, seg), pos = g.attributes.position, uv = g.attributes.uv;
+  const reps = Math.max(8, Math.round(TAU * r / 0.012));
+  const a = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i), th = Math.atan2(z, x);
+    const k = 1 + 0.010 * Math.sin(3 * th + ph) + 0.006 * Math.sin(5 * th + 2 * ph);   // slack, not turned
+    pos.setXYZ(i, x * k, y + 0.0025 * Math.sin(2 * th + ph), z * k);
+    a[i * 3] = 0.25 * Math.max(0, Math.sin(th + ph));                              // rubbed on one side
+    a[i * 3 + 1] = clamp(y / hh, -1, 1);
+    a[i * 3 + 2] = uv.getX(i) * reps;
+  }
+  g.setAttribute('salAux', new THREE.BufferAttribute(a, 3));
+  g.computeVertexNormals();
+  return g.scale(1, 1, zs);
+}
+
+// A PLEATED CUFF (wrists and ankles; polish-followups): canvas gathered by a drawstring.
+// keys = [[y, r], ...] top to bottom; yg is the gather line. The radius folds into `n`
+// knife pleats — a long slope and a short sharp return, so each fold throws a crease
+// shadow and breaks the silhouette — whose depth is zero at the cord and opens out either
+// side of it (fade(y) can close them again where a tape or a welt binds the edge).
+// Returns the cuff (position/normal/uv/colour, the attribute set the cloth bucket merges)
+// and the cord: a tarred drawstring riding the pleat crests, a knot and two short tails.
+function pleatCuff(keys, yg, n, depth, fade = () => 1, cordR = 0.0055, seg = 0, rows = 8, zs = 0.95) {
+  seg = seg || n * 4;
+  const ks = keys.slice().sort((a, b) => a[0] - b[0]);
+  const rAt = y => {
+    let i = 1;
+    while (i < ks.length - 1 && ks[i][0] < y) i++;
+    const [y0, r0] = ks[i - 1], [y1, r1] = ks[i], u = clamp((y - y0) / (y1 - y0), 0, 1);
+    return r0 + (r1 - r0) * u * u * (3 - 2 * u);
+  };
+  const yT = ks[ks.length - 1][0], yB = ks[0][0], span = yT - yB;
+  const pleat = th => { const w = ((th / TAU * n) % 1 + 1) % 1; return w < 0.78 ? w / 0.78 : (1 - w) / 0.22; };   // 0 valley .. 1 crest
+  const pos = [], uv = [], col = [], idx = [];
+  for (let i = 0; i <= rows; i++) {
+    const y = yT - span * i / rows, dg = Math.abs(y - yg);
+    const open = ss(0.004, 0.045, dg) * fade(y), r = rAt(y);
+    for (let j = 0; j <= seg; j++) {
+      const th = (j % seg) / seg * TAU + 0.10 * (y - yg) / span * Math.sin(3 * j / seg * TAU);   // pleats drift a little
+      const pl = pleat(th), rr = r + (pl - 0.55) * depth * open;
+      pos.push(Math.cos(th) * rr, y, Math.sin(th) * rr * zs);
+      uv.push(j / seg, i / rows);
+      const g = 0.74 * (0.72 + 0.36 * (open > 0.05 ? pl : 0.6) - 0.10 * (1 - open));
+      col.push(g, g * 0.98, g * 0.93);
+    }
+  }
+  for (let i = 0; i < rows; i++) for (let j = 0; j < seg; j++) {
+    const a = i * (seg + 1) + j, b = a + seg + 1;
+    idx.push(a, a + 1, b, b, a + 1, b + 1);                // rows run top to bottom: faces out
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  // the cord: round the gather, standing just proud of the cinched canvas
+  const rc = rAt(yg) + cordR * 0.9, q = [];
+  for (let k = 0; k < 24; k++) {
+    const th = k / 24 * TAU;
+    q.push(V3(Math.cos(th) * rc, yg + 0.0015 * Math.sin(n * th), Math.sin(th) * rc * zs));
+  }
+  const parts = [new THREE.TubeGeometry(new THREE.CatmullRomCurve3(q, true), 28, cordR, 4, true)];
+  // the knot on the outside, and two tails hanging off it, one longer
+  const kx = rc * 1.02, kz = 0;
+  parts.push(new THREE.SphereGeometry(cordR * 2.0, 6, 4).scale(1, 0.8, 1.1).translate(kx + cordR, yg, kz));
+  for (const [dz, L] of [[-0.010, 0.040], [0.009, 0.028]]) {
+    const c = new THREE.CatmullRomCurve3([V3(kx + cordR * 1.4, yg - cordR, kz + dz * 0.4),
+      V3(kx + cordR * 2.2, yg - L * 0.5, kz + dz), V3(kx + cordR * 2.0, yg - L, kz + dz * 1.3)]);
+    parts.push(new THREE.TubeGeometry(c, 4, cordR * 0.95, 4, false));
+    parts.push(new THREE.SphereGeometry(cordR * 1.3, 4, 3).translate(kx + cordR * 2.0, yg - L, kz + dz * 1.3));   // whipped end
+  }
+  const cord = mergeGeometries(parts.map(q2 => q2.index ? q2.toNonIndexed() : q2));
+  return { cuff: g, cord };
+}
+
 // ---- limb sculpting ----
 // A LIMB IS NOT A TUBE. Every segment is a solid of revolution whose radius is keyed
 // along its length, so the girth story reads at nine units (the only distance any deck
@@ -706,9 +813,20 @@ function tint(geo, g) {
 function bunch(p, mat, r, y, n = 3, dy = 0.052, tube = 0.019, zs = 0.95) {
   const mid = (n - 1) / 2;
   for (let i = 0; i < n; i++) {
-    const k = 1 - Math.abs(i - mid) / n;
-    const g = new THREE.TorusGeometry(r * 0.985, tube * (0.7 + 0.6 * k), 5, 18)
-      .rotateX(Math.PI / 2).scale(1, 1, zs);
+    const k = 1 - Math.abs(i - mid) / n, R = r * 0.985, ph = i * 2.1 + r * 37 + y * 13;
+    const g = new THREE.TorusGeometry(R, tube * (0.7 + 0.6 * k), 5, 18).rotateX(Math.PI / 2);
+    // (polish-followups) a fold, not a hose ring: the slack swells and pinches out round
+    // the limb and rides up and down it, so adjacent gathers cross and merge like canvas
+    const pos = g.attributes.position;
+    for (let v = 0; v < pos.count; v++) {
+      const x = pos.getX(v), yy = pos.getY(v), z = pos.getZ(v), th = Math.atan2(z, x);
+      const cx = Math.cos(th) * R, cz = Math.sin(th) * R;
+      const sw = clamp(0.62 + 0.30 * Math.sin(2 * th + ph) + 0.22 * Math.sin(5 * th + ph * 1.7), 0.18, 1.2);
+      const lift = tube * (0.9 * Math.sin(th + ph) + 0.4 * Math.sin(3 * th + ph * 0.6));
+      pos.setXYZ(v, cx + (x - cx) * sw, yy * sw * 0.85 + lift, cz + (z - cz) * sw);
+    }
+    g.computeVertexNormals();
+    g.scale(1, 1, zs);
     const gg = tint(xf(g, 0, y + (i - mid) * dy), 0.80);
     p.add(p.auxFn ? aux(gg, p.auxFn) : gg, mat);
   }
@@ -1015,9 +1133,35 @@ export const diver = (() => {
     // Dress torso: slightly broader in x than the corselet so it reads at the sides. The
     // dress is AIR-FILLED, so the belly and flank balloon out below the corselet while
     // the twill pulls tauter across the shoulders where the breastplate pins it down.
-    const t = lathe([[0.000, -0.16], [0.336, -0.17], [0.398, -0.06], [0.464, 0.10], [0.536, 0.30], [0.582, 0.470], [0.556, 0.560], [0.000, 0.572]], 26);
+    // (polish-followups) the profile is resampled finely enough to carry the BLOUSING: the
+    // air-filled canvas between the corselet skirt and the belt is pushed down onto the
+    // belt and folds over itself in soft horizontal creases that wander round the body —
+    // the heavy duck (canvasSet) shows its weave on them, and they rub pale on the crests.
+    const tk = [[0.000, -0.16], [0.336, -0.17], [0.398, -0.06], [0.464, 0.10], [0.536, 0.30], [0.582, 0.470], [0.556, 0.560], [0.000, 0.572]];
+    const tp = [tk[0]];
+    for (let i = 1; i < tk.length; i++) {
+      const m = (i === 1 || i === tk.length - 1) ? 1 : (tk[i][1] < 0.35 ? 5 : 1);
+      for (let k = 1; k <= m; k++) tp.push([tk[i - 1][0] + (tk[i][0] - tk[i - 1][0]) * k / m, tk[i - 1][1] + (tk[i][1] - tk[i - 1][1]) * k / m]);
+    }
+    const t = lathe(tp, 30);
+    {
+      const tpz = t.attributes.position;
+      for (let i = 0; i < tpz.count; i++) {
+        const x = tpz.getX(i), y = tpz.getY(i), z = tpz.getZ(i), rr = Math.hypot(x, z);
+        if (rr < 1e-4) continue;
+        const th = Math.atan2(z, x), env = ss(-0.15, -0.08, y) * (1 - ss(0.16, 0.30, y));
+        const cr = Math.sin(y * 88 + 1.3 * Math.sin(2 * th + 0.4) + 0.7 * Math.sin(5 * th)) ;
+        const k = 1 + env * (0.020 * Math.sign(cr) * Math.pow(Math.abs(cr), 0.6) + 0.012) / 0.5;
+        tpz.setXYZ(i, x * k, y, z * k);
+      }
+      t.computeVertexNormals();
+    }
     t.scale(1, 1, 0.66);
-    p.add(aux(fold(t, 0.030, 7.5, 0.74), (x, y, z, o) => { o[1] = seamD(x, z, 1); }), cloth);
+    p.add(aux(fold(t, 0.022, 7.5, 0.74), (x, y, z, o) => {
+      o[1] = seamD(x, z, 1);
+      const cr = Math.sin(y * 88 + 1.3 * Math.sin(2 * Math.atan2(z / 0.66, x) + 0.4) + 0.7 * Math.sin(5 * Math.atan2(z / 0.66, x)));
+      o[0] = 0.55 * Math.max(0, cr) * ss(-0.15, -0.08, y) * (1 - ss(0.16, 0.30, y));
+    }), cloth);
     p.bake();
   }
 
@@ -1173,7 +1317,7 @@ export const diver = (() => {
     if (inward) {
       pu.add(fold(xf(new THREE.CapsuleGeometry(r * 0.42, upLen * 0.44, 5, 10), inward * r * 0.80, -upLen * 0.54, 0), 0.020, 13, 0.74), cloth);
       // clears the sleeve's fold displacement so the band never breaks into patches
-      pu.add(xf(band(r * upProf(0.20) * 1.10, 0.06, 0.98, 16), 0, -upLen * 0.20), trim);
+      pu.add(xf(tapeBand(r * upProf(0.20) * 1.09, 0.058, 0.98, 0.0065, 26, x * 7), 0, -upLen * 0.20), trim);
     }
     // the joint filler is the SAME canvas as the sleeve: in blue it poked through the
     // folded segment caps as a jagged zig-zag at every knee and elbow
@@ -1235,14 +1379,17 @@ export const diver = (() => {
   // read as a man; a rounded stump at the end of a sleeve reads as a mannequin.
   for (const [arm, s] of [[g.armR, -1], [g.armL, 1]]) {
     const p = Part(arm.end);
-    // the cuff bell: canvas gathered up off the wrist and laced down
-    p.add(fold(lathe([
-      [0.090, 0.140], [0.112, 0.110], [0.140, 0.076], [0.152, 0.040], [0.150, 0.012], [0.126, -0.012], [0.114, -0.034]
-    ], 16), 0.010, 16, 0.74), cloth);
-    p.add(xf(new THREE.TorusGeometry(0.152, 0.016, 5, 16).rotateX(Math.PI / 2), 0, 0.040), trim);   // lace band
+    // the cuff bell: canvas gathered at the wrist by a drawstring (a ruffle above the cord,
+    // knife pleats flaring below it), its lower edge bound in a woven tape that carries
+    // the lace eyelets (polish-followups: real pleats, not a smooth lathe and a torus)
+    const wc = pleatCuff([[0.150, 0.098], [0.118, 0.101], [0.100, 0.118], [0.060, 0.146], [0.030, 0.148],
+      [0.004, 0.140], [-0.018, 0.126], [-0.034, 0.114]], 0.118, 12, 0.020, y => ss(0.030, 0.056, y), 0.0055, 48, 8, 1);
+    p.add(wc.cuff, cloth);
+    p.add(wc.cord.rotateY(s > 0 ? 0.5 : Math.PI - 0.5), darkLeather);
+    p.add(xf(tapeBand(0.150, 0.032, 1, 0.0065, 26, s * 3), 0, 0.034), trim);   // lace tape
     for (let i = 0; i < 6; i++) {                            // lace eyelets
       const a = i / 6 * TAU;
-      p.add(xf(new THREE.SphereGeometry(0.013, 5, 4), Math.cos(a) * 0.153, 0.040, Math.sin(a) * 0.153), brass);
+      p.add(xf(new THREE.TorusGeometry(0.0085, 0.0034, 5, 8).rotateY(-a + Math.PI / 2), Math.cos(a) * 0.1575, 0.034, Math.sin(a) * 0.1575), brass);
     }
     p.add(xf(new THREE.TorusGeometry(0.126, 0.015, 5, 14).rotateX(Math.PI / 2), 0, -0.032), darkLeather);   // cuff welt
     p.add(xf(new THREE.CylinderGeometry(0.120, 0.112, 0.05, 12), 0, -0.058), rubber);                       // glove mouth
@@ -1269,8 +1416,14 @@ export const diver = (() => {
     const p = Part(leg.end);
     // sock and trim ride just OUTSIDE the shank's folded bottom, which used to bite them
     // into a jagged blue-and-white zig-zag round every ankle
-    p.add(fold(xf(band(0.140, 0.15, 0.95, 22), 0, -0.018), 0.002, 15, 0.74), cloth);
-    p.add(xf(band(0.152, 0.046, 0.95, 22), 0, 0.058), trim);
+    // (polish-followups) a pleated canvas gaiter over the boot top: gathered at the ankle by a
+    // drawstring, a ruffle standing above the cord, knife pleats flaring below it into a
+    // woven tape that binds its lower edge over the boot's cuff
+    const ac = pleatCuff([[0.100, 0.122], [0.066, 0.132], [0.036, 0.118], [0.000, 0.140], [-0.045, 0.146], [-0.080, 0.140]],
+      0.036, 14, 0.022, y => 1 - ss(0.028, 0.040, -y), 0.0058, 56, 8, 0.95);
+    p.add(ac.cuff, cloth);
+    p.add(ac.cord.rotateY(leg === g.legL ? 0.35 : Math.PI - 0.35), darkLeather);
+    p.add(xf(tapeBand(0.150, 0.040, 0.95, 0.0065, 26, leg === g.legL ? 1 : 4), 0, -0.058), trim);
     // Ankle flare: the boot's leather cuff opening out from the narrow ankle. A CLOSED
     // solid, not an open lathe skirt — an open lathe here showed its back faces through
     // the mouth and read as a lampshade hung round the leg.
