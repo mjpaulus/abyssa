@@ -363,6 +363,10 @@ function resolveStack(airK) {
   return lookLerp(zone, zone, wx, wxK);
 }
 function updateGrade(airK) {
+  // Grain is texture for the MURK. On deck in daylight the same amount read as ISO-6400
+  // noise across every plank in the polish audit (2026-09-25): fade it to a quarter in
+  // air, so the deck is clean and the water keeps its film.
+  grain.uniforms.get('uAmount').value = 0.045 * (1 - 0.75 * airK);
   const k = Math.max(0, Math.min(1, __grade.amount));
   const ks = Math.max(0, Math.min(1, styleK('grade')));
   // The stack applies even with the legacy depth CDL at 0 -- Flow commits.
