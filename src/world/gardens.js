@@ -46,6 +46,7 @@ import { activeVents } from './vents.js';
 import { rockColliders, F_TRANS } from './flora.js';
 import { bladeMapSet } from '../lib/textures.js';
 import { windState } from './water.js';
+import { uPush, uPushV, uJolt, PUSH_GLSL, PUSH_N, tickStir } from './stir.js';
 
 const TAU = Math.PI * 2;
 
@@ -68,7 +69,7 @@ const sstep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t 
 // ---------------------------------------------------------------- shaders ----
 // One family. Same vertex program body for every type (the defines only add), so the
 // whole garden sways to a single uTime / uCur write per frame.
-const uni = { uTime: { value: 0 }, uCur: { value: new THREE.Vector2(1, 0) }, uFogD: { value: 0.02 } };
+const uni = { uTime: { value: 0 }, uCur: { value: new THREE.Vector2(1, 0) }, uFogD: { value: 0.02 }, uPush, uPushV, uJolt };
 
 const V_HEAD = `
 attribute vec4 aVA;     // flex, normalised height, part mask, part phase
@@ -78,25 +79,75 @@ uniform float uTime; uniform vec2 uCur; uniform vec2 uCull;
 uniform float uSway; uniform float uFreq; uniform float uFogD;
 varying vec4 vGd; varying vec3 vGl;
 attribute vec2 aBU;     // blade uv (across, along + 1); (0,0) off-blade
-varying vec3 vBl;`;
+varying vec3 vBl;
+uniform vec4 uJolt;
+${PUSH_GLSL}`;
 
 const V_BODY = `
-float gw = uTime * uFreq + aInst.x;
-float gs1 = sin(gw - aVA.y * 3.1), gs2 = sin(gw * 1.71 - aVA.y * 5.7 + 1.3);
-vec2 gd = (uCur * (0.34 + 0.66 * gs1) + vec2(-uCur.y, uCur.x) * (0.4 * gs2)) * (aInst.y * uSway * aVA.x);
-transformed.xz += gd;
+// THE CURRENT FIELD (anim-fauna). One slowly-varying world-space flow drives every
+// plant, so a meadow moves TOGETHER: the surge (the back-and-forth of the swell) is a
+// wave travelling DOWNSTREAM through the beds at ~4 u/s, so neighbours sway in phase and
+// a stand ripples from its upstream edge; gusts are a longer, faster envelope (~12 u/s)
+// that leans a whole stand over and lets it recover; tips lag their base. The instance
+// phase is only a small stiffness/phase jitter now, never the whole motion.
+vec3 cfIw = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+float cfMag = length(uCur);
+vec2 cfD = cfMag > 1e-5 ? uCur / cfMag : vec2(1.0, 0.0);
+vec2 cfP = vec2(-cfD.y, cfD.x);
+float cfAl = dot(cfIw.xz, cfD), cfAc = dot(cfIw.xz, cfP);
+float cfNat = uFreq * (0.92 + 0.16 * fract(aInst.x * 0.159));
+float cfPh = uTime * cfNat - cfAl * 0.16 + sin(cfAc * 0.05) * 0.8 + aInst.x * 0.12;
+float cfG = 0.5 + 0.5 * sin(cfAl * 0.035 - uTime * 0.42 + sin(cfAc * 0.021 + uTime * 0.05) * 2.0);
+cfG = cfG * cfG * (3.0 - 2.0 * cfG);
+float cfS1 = sin(cfPh - aVA.y * 1.6), cfS2 = sin(cfPh * 1.71 - aVA.y * 3.2 + 1.3 + cfAc * 0.09);
+vec2 cfDisp = (cfD * cfMag * (0.30 + 0.45 * cfG + (0.25 + 0.30 * cfG) * cfS1) + cfP * cfMag * (0.3 * cfS2 * (0.5 + 0.5 * cfG))) * (aInst.y * uSway * aVA.x);
+// The flow is a WORLD direction: take it into this instance's frame (each plant is
+// yawed at random, and a local-space lean would point every one a different way).
+// M^T w over each column's length squared is exact for rotation x per-axis scale; the
+// length(M[0]) factor keeps the authored local amplitude.
+mat3 cfM = mat3(modelMatrix * instanceMatrix);
+vec3 cfC2 = max(vec3(dot(cfM[0], cfM[0]), dot(cfM[1], cfM[1]), dot(cfM[2], cfM[2])), vec3(1e-6));
+vec3 cfL = (transpose(cfM) * vec3(cfDisp.x, 0.0, cfDisp.y)) / cfC2 * sqrt(cfC2.x);
+float gw = cfPh;
+vec2 gd = cfL.xz;
+transformed += cfL;
 transformed.y -= dot(gd, gd) * aInst.z;
 if (aFlut > 0.0) {
   float gf = gw * 2.2 + aVA.w;
   transformed += vec3(sin(gf) * 0.7, cos(gf * 1.31) * 0.5, sin(gf * 0.73 + 2.1) * 0.7) * aFlut;
 }
+// FLINCH (anim-fauna): the nearest push sphere (Sal, a big animal) and the last jolt
+// (sonar front, footfall, slam: stir.js uJolt) make the animal-plants withdraw.
+// 0 = open, 1 = fully withdrawn. Snap-in is the approach itself; the slow re-emergence
+// is the jolt's own decay, so a ping empties a whole field of plumes and they bloom back.
+float gFl = 0.0;
+#if defined(GD_WORM) || defined(GD_FLINCH)
+  for (int i = 0; i < ${PUSH_N}; i++) {
+    vec4 ps = uPush[i];
+    if (ps.w <= 0.0) continue;
+    float dd = distance(cfIw, ps.xyz);
+    gFl = max(gFl, 1.0 - smoothstep(ps.w * 2.0, ps.w * 4.5, dd));
+  }
+  gFl = max(gFl, uJolt.w * (1.0 - smoothstep(uJolt.z * 0.85, uJolt.z + 2.0, distance(cfIw.xz, uJolt.xy))));
+#endif
 #ifdef GD_WORM
   // Plume retraction: each tube (aVA.w) pulls its red crown down into the white tube
-  // for a short stretch of a slow cycle, then it blooms back. aVA.z = plume weight.
-  float grc = smoothstep(0.62, 0.92, sin(uTime * 0.17 + aVA.w));
+  // for a short stretch of a slow cycle, then it blooms back — and ALL of them snap in
+  // when something big comes near or the ground jolts. aVA.z = plume weight.
+  float grc = max(smoothstep(0.62, 0.92, sin(uTime * 0.17 + aVA.w)), gFl * (0.85 + 0.15 * fract(aVA.w * 3.7)));
   transformed.xz *= 1.0 - 0.85 * aVA.z * grc;
   transformed.y -= aVA.z * grc * 0.42;
 #endif
+#ifdef GD_FLINCH
+  // anemone tentacles / crinoid arms: curl in toward the axis and down
+  transformed.xz *= 1.0 - 0.45 * gFl * aVA.x;
+  transformed.y -= 0.25 * gFl * aVA.x * aVA.y;
+#endif
+// PARTING: pushed aside by whatever brushes through (stir.js spheres).
+if (uSway > 0.0) {
+  vec3 gWp = stirPush((modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz, aVA.x);
+  transformed += (transpose(cfM) * gWp) / cfC2;
+}
 vBl = vec3(aBU, aVA.w);
 #ifdef GD_BLADE
   if (aBU.y > 0.5) {   // margin ripple on the blade's own phase (flora.js idiom)
@@ -104,7 +155,7 @@ vBl = vec3(aBU, aVA.w);
     transformed += objectNormal * (sin(uTime * 2.6 + gal * 15.0 + aVA.w * 5.0) * gea * gea * (0.3 + gal) * 0.006);
   }
 #endif
-vec3 giw = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+vec3 giw = cfIw;
 float gdd = distance(giw, cameraPosition);
 float gfade = 1.0 - smoothstep(uCull.x, uCull.y, gdd);
 // Fully faded instances collapse to a point: no fragments at all past the band.
@@ -840,10 +891,10 @@ function makeMats() {
     grass: gardenMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.2, cull: CULL.grass, sss: 0.45, def: ['SSS', 'BLADE'], trans: 0.9 }),
     stag: gardenMat({ key: 'stag', rough: 0.62, sway: 1, freq: 0.5, cull: CULL.stag, pale: 0xf2ece0, def: ['PALE'] }),
     barrel: gardenMat({ key: 'barrel', side: THREE.DoubleSide, rough: 0.82, sway: 1, freq: 0.5, cull: CULL.barrel, def: ['INNER', 'PIT'] }),
-    anem: gardenMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: CULL.anem, sss: 0.35, pale: 0xfff0e0, def: ['SSS', 'PALE'] }),
+    anem: gardenMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: CULL.anem, sss: 0.35, pale: 0xfff0e0, def: ['SSS', 'PALE', 'FLINCH'] }),
     worm: gardenMat({ key: 'worm', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.6, cull: CULL.worm, def: ['WORM', 'INNER'] }),
     mat: gardenMat({ key: 'mat', rough: 0.95, sway: 0, cull: CULL.mat, pale: 0xf3ecd8, pale2: 0x9a4e28, def: ['MAT'] }),
-    crin: gardenMat({ key: 'crin', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.7, cull: CULL.crin, sss: 0.3, def: ['SSS'] }),
+    crin: gardenMat({ key: 'crin', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.7, cull: CULL.crin, sss: 0.3, def: ['SSS', 'FLINCH'] }),
     pen: gardenMat({ key: 'pen', side: THREE.DoubleSide, rough: 0.75, sway: 1, freq: 0.55, cull: CULL.pen, sss: 0.3, def: ['SSS', 'BLADE', 'COMB'], trans: 0.6 }),
     glass: gardenMat({ key: 'glass', side: THREE.DoubleSide, rough: 0.35, metal: 0.05, sway: 1, freq: 0.4, cull: CULL.glass, sss: 0.6, def: ['SSS'] }),
     whip: gardenMat({ key: 'whip', rough: 0.7, sway: 1, freq: 0.45, cull: CULL.whip }),
@@ -1061,6 +1112,7 @@ function layout() {
 // ------------------------------------------------------------------ frame ----
 export function updateGardens(dt, t) {
   if (!built) return;
+  tickStir(dt, t);
   uni.uTime.value = t;
   // Base current (flora's slow-veering CUR0) plus the eased wind published by water.js,
   // so the gardens lean the way the undercurrent pushes Sal.
