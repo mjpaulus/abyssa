@@ -2508,7 +2508,8 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
 // ===========================================================================
 // Live knobs (-1 = auto). vp is the valve pose (Lsx, Lsz, Lsy, Le): the hand to the
 // bonnet's side port, tuned on the rig from a contact sheet of six candidates.
-const SAL = { look: true, react: 1, lean: 1, valve: -1, slope: true, grab: -1, vp: [-1.35, 1.2, -0.85, -2.05] };
+const SAL = { look: true, react: 1, lean: 1, valve: -1, peer: -1, slope: true, grab: -1, vp: [-1.35, 1.2, -0.85, -2.05],
+  pp: [-1.3, -0.1, 0.3, -0.7] };   // pp: the peer pose (Rsx, Rsz, Rsy, Re) — lantern up and forward
 window.__sal = SAL;
 // look-at: game.js hands over the nearest thing worth looking at (or null)
 const lookT = V3();
@@ -2539,6 +2540,8 @@ export function diverGrab(on) { grabOn = !!on; }
 function poMix(ch, v, w) { po[ch] += (v - po[ch]) * w; }
 let idleT = 0, valveT = -1, valveNext = 11, valveIdx = 0, valveW = 0;
 const VALVE_DUR = 2.7;
+let peerT = -1, peerW = 0;
+const PEER_DUR = 4.2;
 let prevBurstT = 0, burstW = 0;
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
@@ -2794,15 +2797,32 @@ export function updateDiver(dt, t, player) {
     // intervals (never Math.random), cancelled by any movement, never during a slash.
     const still = gaitState === 0 && amp < 0.05 && slashT < 0 && grabW < 0.05 && ladderF < 0.05;
     idleT = still ? idleT + dt : 0;
-    if (valveT < 0 && idleT > valveNext) {
-      valveT = 0; valveIdx++;
+    // Two idle gestures share the one clock: the valve check, and (a bit under half the
+    // time) THE PEER — the lantern comes up and forward, and the helmet sweeps slowly
+    // across the dark it lights, then the arm sinks back.
+    if (valveT < 0 && peerT < 0 && idleT > valveNext) {
+      valveIdx++;
+      if (sHash(valveIdx, 42) < 0.42) peerT = 0; else valveT = 0;
       valveNext = idleT + 9 + 16 * sHash(valveIdx, 41);
     }
-    let vw = 0;
+    let vw = 0, pw2 = 0;
     if (valveT >= 0) {
       valveT += dt;
       vw = ss(0, 0.7, valveT) * (1 - ss(VALVE_DUR - 0.8, VALVE_DUR, valveT));
       if (valveT >= VALVE_DUR || !still) valveT = -1;
+    }
+    if (peerT >= 0) {
+      peerT += dt;
+      pw2 = ss(0, 0.9, peerT) * (1 - ss(PEER_DUR - 1.0, PEER_DUR, peerT));
+      if (peerT >= PEER_DUR || !still) peerT = -1;
+    }
+    if (SAL.peer >= 0) pw2 = SAL.peer;
+    peerW += (pw2 - peerW) * Math.min(1, 5 * dt);
+    if (peerW > 1e-3) {
+      const w = peerW, P = SAL.pp;
+      const scan = peerT > 0.9 ? Math.sin((peerT - 0.9) * 1.5) * 0.30 : 0;   // one slow sweep
+      poMix(CH.Rsx, P[0], w); poMix(CH.Rsz, P[1], w); poMix(CH.Rsy, P[2], w); poMix(CH.Re, P[3], w);
+      po[CH.sYaw] -= 0.10 * w; po[CH.nYaw] += (-0.12 + scan) * w; po[CH.nPitch] -= 0.04 * w;
     }
     // low air: the hand keeps going back to it
     vw = Math.max(vw, airLow * 0.75 * (1 - amp));
