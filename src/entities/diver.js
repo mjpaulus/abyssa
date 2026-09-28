@@ -2109,7 +2109,8 @@ function foot() {
     ax: 0, ay: 0, az: 0,           // contact point in the ground frame
     duty: DUTY, stride: 1, lat: 0, // this step's variation draws
     slip: 0,                       // accumulated travel through the flat window (the probe)
-    wx: 0, wy: 0, wz: 0            // last resolved world contact (probe + re-plant seed)
+    wx: 0, wy: 0, wz: 0,           // last resolved world contact (probe + re-plant seed)
+    stT: -1, dur: 0.42, sfx: 0, sfz: 0, stx: 0, stz: 0, lift: 0, d2: 0   // turn step: from angle/radius, sweep/radius
   };
 }
 const ftR = foot(), ftL = foot();
@@ -2260,6 +2261,8 @@ function rollThrough(u, out) {
   return out.set(th, cz, 0);
 }
 
+const SHUF_DUR = 0.42, SHUF_LIFT = 0.075;
+let shufX = 0;                     // weight roll onto the planted boot during a shuffle step
 // hoisted: two array literals per frame were the rig's last allocations
 const LEGS = [diver.legR, diver.legL], FTS = [ftR, ftL];
 // ---- the ground is boss ----
@@ -2364,28 +2367,60 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     }
     // THE SHUFFLE. Standing still, the anchors are absolute — so turning on the spot, or
     // being pushed off a wreck, would drag the boots sideways under him and twist the legs
-    // out of the rig. When a planted foot ends up more than ~0.3 u from where the hip now
-    // wants it, the anchor CREEPS back toward neutral at 2.2 u/s. Releasing and re-claiming
-    // instead would teleport the boot; creeping is a man scuffing his feet round to face a
-    // new way, which is exactly what he is doing.
+    // out of the rig. When a planted foot ends up more than ~0.27 u from where the hip now
+    // wants it, he STEPS it there: the boot that is further out goes first (never both),
+    // lifts a few centimetres — lead boots do not get picked up high — travels on a soft
+    // ease with a little overshoot into the turn, and lands as a real footfall. The weight
+    // rolls onto the other boot while it is in the air. (This replaced a 2.2 u/s creep:
+    // honest to the anchors, but it read as a man sliding on ice.)
     if (standing && ft.planted) {
       const latL = sgn * HIP_X + ft.lat;
       const nx = player.pos.x + cy * latL, nz = player.pos.z - sy * latL;
       const dx = nx - (ft.ax + ox), dz = nz - (ft.az + oz);
       const d2 = dx * dx + dz * dz;
-      if (d2 > 0.09) {
-        const k = Math.min(1, 2.2 * dt / Math.sqrt(d2));
-        ft.ax += dx * k; ft.az += dz * k;
+      ft.d2 = d2;
+      const other = i ? ftR : ftL;
+      // The other boot may be in its last third (all but down) — a fast turn is a quick
+      // run of steps, never both boots off the ground.
+      const otherDown = other.stT < 0 || other.stT > other.dur * 0.66;
+      if (ft.stT < 0 && otherDown && d2 > 0.075 && (d2 >= other.d2 * 0.8 || other.stT >= 0)) {
+        // further to go, quicker step: 0.42 s for a nudge, down to 0.30 s for a big turn
+        ft.dur = SHUF_DUR - 0.12 * clamp((Math.sqrt(d2) - 0.27) / 0.4, 0, 1);
+        // The boot travels ROUND him, not across: the path is interpolated in polar form
+        // about his centre (angle and radius separately), so a big turn cannot drag one
+        // boot through the other leg. One step turns at most ~50 degrees; a bigger turn
+        // is a run of them.
+        ft.stT = 0;
+        const ax0 = ft.ax + ox - player.pos.x, az0 = ft.az + oz - player.pos.z;
+        const os = 0.12 + clamp(Math.abs(yawRate) * 0.06, 0, 0.18);   // lead into a turn that is still going
+        const ax1 = nx + dx * os - player.pos.x, az1 = nz + dz * os - player.pos.z;
+        ft.sfx = Math.atan2(ax0, az0); ft.sfz = Math.hypot(ax0, az0);
+        let dA = Math.atan2(ax1, az1) - ft.sfx;
+        dA = Math.atan2(Math.sin(dA), Math.cos(dA));
+        ft.stx = clamp(dA, -0.9, 0.9); ft.stz = Math.hypot(ax1, az1);
+      }
+      if (ft.stT >= 0) {
+        ft.stT += dt;
+        const u = Math.min(1, ft.stT / ft.dur), e = u * u * u * (u * (u * 6 - 15) + 10);
+        const ang = ft.sfx + ft.stx * e, rad = ft.sfz + (ft.stz - ft.sfz) * e;
+        ft.ax = player.pos.x + Math.sin(ang) * rad - ox; ft.az = player.pos.z + Math.cos(ang) * rad - oz;
+        ft.lift = SHUF_LIFT * Math.sin(Math.PI * u) * (1 - 0.35 * u);
+        shufX = -sgn * 0.034 * Math.sin(Math.PI * u);
+        if (u >= 1) {
+          ft.stT = -1; ft.lift = 0; shufX = 0;
+          settle.v -= 1.1; kneeSoft.v += 2.2; kneeSide = i;
+          if (gb > 0.5) steps++;           // a boot put down is a footfall: sound, silt, print
+        }
       }
       ft.ay = soleY + groundD(ft.ax + ox, ft.az + oz) - oy;   // keeps its footing as the deck heaves
-    }
+    } else if (ft.stT >= 0) { ft.stT = -1; ft.lift = 0; shufX = 0; }
 
     // ---- TARGET. One world-space ankle point, however it was arrived at. ----
     let th, cz, wIK;
     if (inStance) {
       rollThrough(sp, _vB); th = _vB.x + groundPitch(ft.ax + ox, ft.az + oz); cz = _vB.y;
       ankleOverContact(th, cz, _vC);
-      _vD.set(ft.ax + ox + sy * _vC.z, ft.ay + oy + _vC.y, ft.az + oz + cy * _vC.z);
+      _vD.set(ft.ax + ox + sy * _vC.z, ft.ay + oy + _vC.y + ft.lift, ft.az + oz + cy * _vC.z);
       // Hand the last tenth of stance back to the curves so toe-off is continuous: the
       // solver inverts the forward pose exactly, so at wIK = 0 it reproduces the authored
       // angles and there is no seam between contact and swing.
@@ -2536,7 +2571,10 @@ export function updateDiver(dt, t, player) {
 
   if (!yawInit) { yawF = player.yaw; yawInit = true; }
   // the body trails the look direction: tight on the seafloor, loose and laggy in water
-  yawF = lerp(yawF, player.yaw, Math.min(1, (player.grounded ? 9 : 2.6) * dt));
+  // Standing, the body comes round SLOWER than walking (4.5/s against 9): a man in lead
+  // boots turns by stepping, and the look direction runs ahead of him — the helmet and
+  // shoulders take up the difference (turn anticipation, in the life layer below).
+  yawF = lerp(yawF, player.yaw, Math.min(1, (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * dt));
   diver.rotation.y = yawF;
 
   // Stepping onto planks kills the aquatic motion in ~0.15 s rather than half a second:
@@ -2924,7 +2962,7 @@ export function updateDiver(dt, t, player) {
   // mid-stance has knee headroom and the solver never sits against its reach clamp; and
   // the heel-strike settle is allowed to travel twice as far, because the knees can now
   // genuinely absorb it against the ground instead of pushing the whole man through it.
-  b.position.set(pc[CH.shiftX], LIFT - (IK_DROP_IDLE * ikOn + (IK_DROP - IK_DROP_IDLE) * gw) + pc[CH.bobY]
+  b.position.set(pc[CH.shiftX] + shufX, LIFT - (IK_DROP_IDLE * ikOn + (IK_DROP - IK_DROP_IDLE) * gw) + pc[CH.bobY]
     + settle.x * (0.045 + 0.045 * ikOn) + slopeDrop.x + rcD.x * 0.45 * gb, pc[CH.shiftZ]);
   // Lead boots below, a copper helmet full of air above: the centres of gravity and
   // buoyancy are a metre apart, so the righting moment is an order of magnitude larger
