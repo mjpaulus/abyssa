@@ -1663,7 +1663,7 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
         // Ambient share follows the water's own radiance at the camera (uAmb, 1 in the
         // bright shallows, ~0.05 on the zone-2 floor), so the deep reads BLACK between
         // lit flakes instead of a uniform starfield; the flame's share is warm.
-        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 * uAmb.x ) + abyssaLampAC.rgb * ( 0.16 * lb );
+        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 * uAmb.x ) + abyssaLampAC.rgb * ( 1.1 * lb );
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `varying float vA; varying vec3 vC;
@@ -3408,7 +3408,9 @@ export function buildWater() {
   buildRays();
   snow = new THREE.Group();
   // near grit gives the parallax that sells "I am inside a medium"
-  snow.add(snowLayer(2400, 30, 0.020, 0.36, 0.55, [0.55, 0.75, 0.85], [0.80, 0.86, 0.78]));
+  // Size 0.020 -> 0.026: at the 1940-px canvas the near grit resolved as 1-px pin-pricks
+  // and read as noise rather than as matter drifting in front of the lens.
+  snow.add(snowLayer(2400, 30, 0.026, 0.36, 0.55, [0.55, 0.75, 0.85], [0.80, 0.86, 0.78]));
   // far snow: bigger, slower, with a few large detritus flakes from the size^2 bias.
   // Box 170 -> 300 (fade band 150..96 instead of 85..54) and 3200 -> 4200 points to
   // hold the same density in the larger volume. At 250 units in the zone-0 clear band

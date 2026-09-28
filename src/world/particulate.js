@@ -101,14 +101,14 @@ export function buildParticulate(scene, shared) {
           // Forward glint: a mote between the flame and the lens lights up most.
           float mu = dot( normalize( dl ), normalize( uCam - w ) );
           float ph = 0.30 + 1.6 * pow( 0.5 + 0.5 * mu, 3.0 );
-          vC = uAmb * 0.55 + abyssaLampAC.rgb * ( E * ph * 0.020 );
+          vC = uAmb * 0.35 + abyssaLampAC.rgb * ( E * ph * 0.020 );
           // Energy spreads over the disc: a bigger blur is a fainter one.
           float spread = 1.0 / ( 1.0 + gl_PointSize * gl_PointSize * 0.0016 );
           vA = uK * spread
              * smoothstep( 0.5, 1.4, dist ) * ( 1.0 - smoothstep( 4.5, 7.0, dist ) )
              * ( 1.0 - smoothstep( -0.6, 0.0, w.y ) )          // water-borne only
              * ( 0.55 + 0.45 * aSeed.z );
-          vRim = 0.25 + 0.5 * aSeed.y;
+          vRim = 0.10 + 0.22 * aSeed.y;   // a faint rim: more than that and a mote reads as a bubble
           gl_Position = projectionMatrix * mv;
         }`,
       fragmentShader: `varying vec3 vC; varying float vA, vRim;
