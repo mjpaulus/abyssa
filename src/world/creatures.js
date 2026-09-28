@@ -13,6 +13,7 @@ import { glowTex } from '../lib/textures.js';
 import { terrainH } from './terrain.js';
 import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
+import { MV, MOVER_N, moverLive, pulseAt, PULSE_DIR, LANT, tickStir } from './stir.js';
 import { player } from '../player.js';
 
 // Build/reseed-scoped random stream (THE CHART's reseed path), same idiom as flora.js:
@@ -213,19 +214,37 @@ function fishMaterial(sp) {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
-        attribute vec3 aTint; attribute vec2 aFish; attribute vec3 aSurf;
-        uniform float uPhase; uniform float uAmp;
+        attribute vec3 aTint; attribute vec4 aFish; attribute float aFishK; attribute vec3 aSurf;
+        uniform float uPhase; uniform float uAmp; uniform float uTime;
         varying vec2 vFuv; varying vec3 vTint; varying float vPh; varying vec3 vSurf;`)
+      // anim-fauna: EVERY FISH ITS OWN ANIMAL. aFish = (beat phase, beat amplitude,
+      // turn bend, pectoral scull), integrated per fish on the CPU from its own speed,
+      // effort, turn rate and startle state; aFishK is the fish's fixed seed. The wave
+      // still travels head to tail (carangiform: the fore-body nearly still, the
+      // amplitude growing as bT^2) but its rate and height now follow the animal —
+      // bursts, glides, a C-start that throws the whole body into a curl.
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
         float bT = uv.x;
-        float amp = uAmp * (bT*bT*0.94 + 0.05);
-        float ph = uPhase * aFish.y + aFish.x;
-        float slope = cos(bT*5.0 - ph) * amp * 5.0;
+        float amp = aFish.y * (bT*bT*0.94 + 0.05);
+        float ph = aFish.x;
+        float bc = bT - 0.30;
+        float slope = cos(bT*5.0 - ph) * amp * 5.0 + aFish.z * 2.0 * bc;
         objectNormal = normalize(vec3(objectNormal.x, objectNormal.y, objectNormal.z + slope*objectNormal.x));`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        transformed.x += sin(bT*5.0 - ph) * amp;
-        transformed.y += sin(ph*0.5 + aFish.x)*0.012;
-        vFuv = uv; vTint = aTint; vPh = aFish.x; vSurf = aSurf;`);
+        // travelling wave + the turn bend: a parabola about the shoulder, so the head
+        // leads into the turn and the tail swings wide (the C of a startle at full k)
+        transformed.x += sin(bT*5.0 - ph) * amp + aFish.z * (bc*bc - 0.04);
+        // pectorals: fins off the midline in the shoulder band. aSurf.x runs root -> edge,
+        // so the scull is a hinge: sculling when the fish hovers, tucked flat at speed.
+        if (uv.y > 1.5 && abs(position.x) > 0.05 && bT > 0.28 && bT < 0.5) {
+          float fs = aSurf.x, sd = sign(position.x);
+          float sc = sin(uTime * 7.0 + aFishK * 3.0 + sd * 0.9);
+          transformed.y += sc * aFish.w * fs * 0.11;
+          transformed.z += cos(uTime * 7.0 + aFishK * 3.0 + sd * 0.9) * aFish.w * fs * 0.05;
+          transformed.x -= sd * fs * (1.0 - aFish.w) * 0.035;
+        }
+        transformed.y += sin(ph*0.5 + aFishK)*0.012;
+        vFuv = uv; vTint = aTint; vPh = aFishK; vSurf = aSurf;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uGlow; uniform float uCount; uniform float uTime; uniform float uBase;
@@ -411,17 +430,28 @@ function buildSchool(sp, seed) {
   inst.castShadow = false;
   inst.receiveShadow = false;
 
-  const tint = new Float32Array(n * 3), fdat = new Float32Array(n * 2);
+  const tint = new Float32Array(n * 3), fdat = new Float32Array(n * 4), fkey = new Float32Array(n);
   const sz = new Float32Array(n);
   const P = new Float32Array(n * 3), V = new Float32Array(n * 3), F = new Float32Array(n * 3);
   geo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tint, 3));
-  geo.setAttribute('aFish', new THREE.InstancedBufferAttribute(fdat, 2));
+  const aFish = new THREE.InstancedBufferAttribute(fdat, 4);
+  aFish.setUsage(THREE.DynamicDrawUsage);
+  geo.setAttribute('aFish', aFish);
+  geo.setAttribute('aFishK', new THREE.InstancedBufferAttribute(fkey, 1));
   scene.add(inst);
 
   const S = {
     inst, mat, n, zi: sp.zi, sp, P, V, F, sz, seed,
-    tint: geo.attributes.aTint, fdat: geo.attributes.aFish,
+    tint: geo.attributes.aTint, fdat: geo.attributes.aFish, fkey: geo.attributes.aFishK,
     bank: new Float32Array(n), phs: new Float32Array(n),
+    // anim-fauna per-fish motion state: beat phase, beat-rate multiplier, smoothed
+    // effort, turn bend, startle clock (+ its direction), glide clock, scull
+    bp: new Float32Array(n), rate: new Float32Array(n), eff: new Float32Array(n), bend: new Float32Array(n),
+    stl: new Float32Array(n), sdir: new Float32Array(n * 3), glide: new Float32Array(n), gcnt: new Uint16Array(n),
+    scull: new Float32Array(n), yawR: new Float32Array(n),
+    // the school's threat list this frame, in school-local space: x y z R vx vy vz fear
+    th: new Float32Array(10 * 8), thN: 0,
+    mill: 0, millT: 0, millDir: seed % 2 ? 1 : -1, alarm: 0,
     // per-fish proportion variety: depth (up-basis) and length (heading) multipliers
     szY: new Float32Array(n), szL: new Float32Array(n),
     center: V3(), cvel: V3(), goal: V3(), goalT: 0,
@@ -438,14 +468,18 @@ function buildSchool(sp, seed) {
 // build; capacities never change (n is the species' authored count).
 function layoutSchool(S) {
   const sp = S.sp, n = S.n;
-  const tint = S.tint.array, fdat = S.fdat.array;
+  const tint = S.tint.array, fdat = S.fdat.array, fkey = S.fkey.array;
   const base = new THREE.Color(sp.col), c = new THREE.Color();
   const P = S.P, V = S.V, F = S.F, sz = S.sz;
   for (let i = 0; i < n; i++) {
     c.copy(base).offsetHSL(rr(-0.03, 0.03), rr(-0.12, 0.12), rr(-sp.jit, sp.jit));
     tint[i * 3] = c.r; tint[i * 3 + 1] = c.g; tint[i * 3 + 2] = c.b;
-    fdat[i * 2] = _cr() * 6.283;
-    fdat[i * 2 + 1] = rr(0.85, 1.2);
+    // same two draws as ever (the layout stream order is contract): the seed, the rate
+    fkey[i] = _cr() * 6.283;
+    S.rate[i] = rr(0.85, 1.2);
+    S.bp[i] = fkey[i]; S.eff[i] = 0.5; S.bend[i] = 0; S.stl[i] = 0; S.scull[i] = 0; S.yawR[i] = 0;
+    S.glide[i] = hash01(i, S.seed) * 2 - 1; S.gcnt[i] = 0;
+    fdat[i * 4] = fkey[i]; fdat[i * 4 + 1] = sp.amp; fdat[i * 4 + 2] = 0; fdat[i * 4 + 3] = 0;
     sz[i] = rr(sp.sz[0], sp.sz[1]);
     // free silhouette variety: deep-bodied vs slender, stubby vs elongate
     S.szY[i] = rr(0.88, 1.18);
@@ -458,7 +492,8 @@ function layoutSchool(S) {
     S.bank[i] = 0;
     S.phs[i] = _cr() * 6.283;
   }
-  S.tint.needsUpdate = true; S.fdat.needsUpdate = true;
+  S.tint.needsUpdate = true; S.fdat.needsUpdate = true; S.fkey.needsUpdate = true;
+  S.mill = 0; S.millT = 0; S.alarm = 0;
 
   // Shoal centre: the authored spiral of the shipped world, but the bearing and the
   // radius now come off the site stream, so each anchorage is peopled differently.
@@ -477,24 +512,95 @@ function layoutSchool(S) {
   S.inst.boundingSphere.center.copy(S.center);
 }
 
+// Behavioural randomness that must NOT touch the layout stream: a hash of (fish, count).
+function hash01(a, b) { const s = Math.sin(a * 127.1 + b * 311.7 + 17.13) * 43758.5453; return s - Math.floor(s); }
+
+// ---------------------------------------------------------------------------
+// THE SCHOOL (anim-fauna). What real schools do, and what this now does:
+//   POLARISED TRAVEL — on the move every fish points the school's way; the scatter is
+//     a few degrees, and fish still shuffle inside the shoal (no lockstep).
+//   MILLING — at a goal the school stops travelling and TURNS: a slow torus about the
+//     vertical, each school its own hand. Fish scull on their pectorals as they slow.
+//   SPLIT AND REJOIN — a big body (Sal, a shark, the sleeper, the ray) inside the
+//     school opens a HOLE in it: fish dodge sideways off the intruder's line of travel
+//     (the fountain effect) and cohesion to the centre is relaxed near it, so the
+//     school parts round him and closes behind.
+//   STARTLE — a C-start: the body snaps into a curl, then a burst of fast tail beats
+//     away. Triggered by a sonar front crossing the fish, a strike or slam nearby, or
+//     an intruder closing fast; it SPREADS to topological neighbours ~70 ms later, so a
+//     flash-expansion ripples through the school instead of every fish flinching at once.
+//   DENSITY/AGITATION WAVE — with a predator about, a roll wave runs across the school
+//     (the silver flanks flash in a travelling band, the shimmer of a baitball).
+//   BURST AND GLIDE — each fish beats in bouts and coasts between them on its own clock;
+//     beat rate and amplitude follow ITS speed and effort, not a school-wide phase.
+//   TURNING — heading is rate-limited (no snapping); the body bends into the turn and
+//     banks, the bend feeding the vertex wave.
+// ---------------------------------------------------------------------------
+function schoolThreats(S) {
+  const c = S.center;
+  S.thN = 0;
+  const th = S.th, reach = S.fear * 2.6;
+  for (let s = 0; s < MOVER_N; s++) {
+    if (!moverLive(s)) continue;
+    const o = s * 9;
+    const x = MV[o] - c.x, y = MV[o + 1] - c.y, z = MV[o + 2] - c.z;
+    const R = S.fear * (0.12 + 0.62 * MV[o + 7] * MV[o + 7]) + MV[o + 3] * 2.2;
+    if (x * x + y * y + z * z > (reach + R) * (reach + R)) continue;
+    const k = S.thN++ * 8;
+    th[k] = x; th[k + 1] = y; th[k + 2] = z; th[k + 3] = R;
+    th[k + 4] = MV[o + 4]; th[k + 5] = MV[o + 5]; th[k + 6] = MV[o + 6]; th[k + 7] = MV[o + 7];
+    if (S.thN >= 9) break;
+  }
+  // the lantern: zones 1-2 are light-shy. A soft sphere, never a panic.
+  if (S.zi > 0 && LANT.k > 0.2 && S.thN < 10) {
+    const x = LANT.x - c.x, y = LANT.y - c.y, z = LANT.z - c.z;
+    if (x * x + y * y + z * z < (reach + 8) * (reach + 8)) {
+      const k = S.thN++ * 8;
+      th[k] = x; th[k + 1] = y; th[k + 2] = z; th[k + 3] = 5 + 3 * LANT.k; th[k + 4] = th[k + 5] = th[k + 6] = 0; th[k + 7] = 0.15;
+    }
+  }
+}
+
 function updateSchool(S, dt, t) {
   const c = S.center, cv = S.cvel, sp = S.sp;
 
-  // ---- school centre: wander goal + terrain/zone containment + panic ----
+  // ---- school centre: travel to a goal, then MILL there a while ----
   S.goalT -= dt;
-  if (S.goalT <= 0 || tmpV.copy(S.goal).sub(c).lengthSq() < 64) pickGoal(S);
-  tmpV.copy(S.goal).sub(c);
-  const gd = tmpV.length() || 1;
-  cv.addScaledVector(tmpV.divideScalar(gd), S.speed * 0.7 * dt);
-
-  const pd = c.distanceTo(player.pos);
-  const panicR = S.fear * 2.4;
-  if (pd < panicR) {
-    tmpV2.copy(c).sub(player.pos);
-    if (tmpV2.lengthSq() < 1e-4) tmpV2.set(1, 0, 0);
-    cv.addScaledVector(tmpV2.normalize(), (1 - pd / panicR) * S.speed * 3.2 * dt);
+  const atGoal = tmpV.copy(S.goal).sub(c).lengthSq() < 64;
+  if (S.millT > 0) {
+    S.millT -= dt;
+    if (S.millT <= 0) pickGoal(S);
+  } else if (atGoal || S.goalT <= 0) {
+    // about half the arrivals turn into a mill; the rest press straight on
+    if (hash01(S.seed * 31 + (t | 0), 7.7) < 0.55) S.millT = 8 + hash01(S.seed, t) * 14;
+    else pickGoal(S);
   }
-  cv.multiplyScalar(Math.pow(0.45, dt));
+  S.mill += ((S.millT > 0 ? 1 : 0) - S.mill) * Math.min(1, dt * 0.5);
+  if (S.millT <= 0) {
+    tmpV.copy(S.goal).sub(c);
+    const gd = tmpV.length() || 1;
+    cv.addScaledVector(tmpV.divideScalar(gd), S.speed * 0.7 * dt);
+  }
+
+  schoolThreats(S);
+  // a threat that sits inside the school's reach pushes the whole shoal off (and
+  // raises the alarm that drives the agitation wave)
+  let alarmT = 0;
+  const th = S.th;
+  for (let k = 0; k < S.thN; k++) {
+    const o = k * 8;
+    const d = Math.sqrt(th[o] * th[o] + th[o + 1] * th[o + 1] + th[o + 2] * th[o + 2]) + 1e-3;
+    // the SHOAL moves off only for real danger (the fear term squared: a shark or a
+    // sleeper shifts the whole school, a drifting diver is met fish by fish and the
+    // school opens round him instead of sliding away as a block)
+    const R = th[o + 3] * 1.5;
+    if (d < R) {
+      const s = (1 - d / R) * th[o + 7] * th[o + 7];
+      cv.x -= th[o] / d * s * S.speed * 3.2 * dt; cv.y -= th[o + 1] / d * s * S.speed * 1.2 * dt; cv.z -= th[o + 2] / d * s * S.speed * 3.2 * dt;
+      if (th[o + 7] > 0.6 && s > alarmT) alarmT = s;
+    }
+  }
+  cv.multiplyScalar(Math.pow(S.millT > 0 ? 0.25 : 0.45, dt));
   const cs = cv.length();
   if (cs > S.speed) cv.multiplyScalar(S.speed / cs);
   c.addScaledVector(cv, dt);
@@ -502,7 +608,7 @@ function updateSchool(S, dt, t) {
   const hr = Math.hypot(c.x, c.z);
   if (hr > WORLD_R * 0.72) {
     const k = WORLD_R * 0.72 / hr;
-    c.x *= k; c.z *= k; cv.x *= -0.35; cv.z *= -0.35; S.goalT = 0;
+    c.x *= k; c.z *= k; cv.x *= -0.35; cv.z *= -0.35; S.goalT = 0; S.millT = 0;
   }
   const floor = terrainH(c.x, c.z, S.zi);
   const yLo = Math.max(zoneBottom(S.zi) + 8, floor + S.radius + 5);
@@ -513,6 +619,7 @@ function updateSchool(S, dt, t) {
   S.inst.boundingSphere.center.copy(c);
 
   // ---- distance cull: past the fog wall nothing is visible ----
+  const pd = c.distanceTo(player.pos);
   if (pd > cullR + S.radius) {
     if (S.inst.visible) S.inst.visible = false;
     return;
@@ -521,24 +628,31 @@ function updateSchool(S, dt, t) {
 
   // ---- boids, in school-local space so the whole flock translates for free ----
   const P = S.P, V = S.V, F = S.F, BK = S.bank, PH = S.phs, n = S.n;
-  const arr = S.inst.instanceMatrix.array;
-  const px = player.pos.x - c.x, py = player.pos.y - c.y, pz = player.pos.z - c.z;
-  const fear = S.fear, fear2 = fear * fear;
+  const BP = S.bp, EF = S.eff, BD = S.bend, ST = S.stl, SD = S.sdir, GL = S.glide, SC = S.scull, YR = S.yawR;
+  const arr = S.inst.instanceMatrix.array, fd = S.fdat.array;
   const sepR2 = (sp.sz[1] * 3.2) ** 2, nbR2 = (sp.sz[1] * 12) ** 2;
   const roll = S.roll = (S.roll + 5) % n;
   const floorLocal = floor + 2.5 - c.y;
+  const mill = S.mill, travel = 1 - mill;
+  const cvl = Math.sqrt(cv.x * cv.x + cv.y * cv.y + cv.z * cv.z);
+  const topSpeed = S.speed + S.local * 2;
   let panic = 0;
+  S.alarm = Math.max(S.alarm - dt * 0.33, alarmT);
+  const wave = S.alarm;
 
   for (let i = 0; i < n; i++) {
     const i3 = i * 3;
     const x = P[i3], y = P[i3 + 1], z = P[i3 + 2];
     let ax = 0, ay = 0, az = 0;
+    let nbStartle = 0;
 
     for (let k = 0; k < 6; k++) {
-      const j3 = ((i + NB[k] + roll) % n) * 3;
+      const j = (i + NB[k] + roll) % n, j3 = j * 3;
       const dx = P[j3] - x, dy = P[j3 + 1] - y, dz = P[j3 + 2] - z;
       const d2 = dx * dx + dy * dy + dz * dz + 1e-4;
       if (d2 > nbR2) continue;
+      // a neighbour that bolted ~70 ms ago: the startle travels (flash expansion)
+      if (ST[j] > 0.30 && ST[j] < 0.40 && ST[i] <= 0) nbStartle = Math.max(nbStartle, 1);
       if (d2 < sepR2) {
         const inv = 2.6 / d2;
         ax -= dx * inv; ay -= dy * inv; az -= dz * inv;
@@ -549,31 +663,95 @@ function updateSchool(S, dt, t) {
       }
     }
 
-    // cohesion toward the school centre, flattened vertically (schools are discs)
-    const rr = Math.sqrt(x * x + y * y + z * z) + 1e-4;
-    const pull = 0.55 + Math.max(0, rr - S.radius) * 0.8;
-    ax -= x / rr * pull; ay -= y / rr * pull * 2.4; az -= z / rr * pull;
-
-    // wander
-    const ph = PH[i];
-    ax += Math.sin(t * 0.9 + ph) * 1.1;
-    ay += Math.sin(t * 0.63 + ph * 1.7) * 0.5;
-    az += Math.cos(t * 1.13 + ph * 0.6) * 1.1;
-
-    // scatter from the diver
-    const fx = x - px, fy = y - py, fz = z - pz;
-    const fd2 = fx * fx + fy * fy + fz * fz;
-    if (fd2 < fear2) {
-      const fd = Math.sqrt(fd2) + 0.01;
-      const s = 1 - fd / fear;
-      if (s > panic) panic = s;
-      const k = s * s * 60 / fd;
-      ax += fx * k; ay += fy * k; az += fz * k;
+    // intruders: dodge SIDEWAYS off their line (fountain), and let go of the centre
+    // near them so the school opens round the body instead of re-forming inside it
+    let hole = 0, qx = 0, qy = 0, qz = 0, sk = 0;
+    for (let k = 0; k < S.thN; k++) {
+      const o = k * 8;
+      const fx = x - th[o], fy = y - th[o + 1], fz = z - th[o + 2];
+      const R = th[o + 3], fd2 = fx * fx + fy * fy + fz * fz;
+      if (fd2 > R * R) continue;
+      const fdd = Math.sqrt(fd2) + 0.01, s = 1 - fdd / R;
+      const vx = th[o + 4], vy = th[o + 5], vz = th[o + 6];
+      const vl = Math.sqrt(vx * vx + vy * vy + vz * vz);
+      let ux = fx / fdd, uy = fy / fdd, uz = fz / fdd;
+      if (vl > 0.5) {
+        // remove most of the along-track component: fish peel off to the sides
+        const along = (ux * vx + uy * vy + uz * vz) / vl;
+        ux -= vx / vl * along * 0.7; uy -= vy / vl * along * 0.7; uz -= vz / vl * along * 0.7;
+        const ul = Math.sqrt(ux * ux + uy * uy + uz * uz) + 1e-4; ux /= ul; uy /= ul; uz /= ul;
+      }
+      const k2 = s * s * 60 * th[o + 7] + s * 6;
+      ax += ux * k2; ay += uy * k2 * 0.6; az += uz * k2;
+      if (s > hole) hole = s;
+      const pn = s * th[o + 7];
+      if (pn > panic) panic = pn;
+      // an intruder CLOSING on this fish fast, well inside its bubble, makes it bolt
+      const close = -(fx * vx + fy * vy + fz * vz) / fdd;
+      const trig = s * th[o + 7] * Math.min(1, Math.max(0, close) / 4);
+      if (trig > sk) { sk = trig; qx = ux; qy = uy; qz = uz; }
     }
 
+    // world-space startle sources (sonar front, strike, slam, footfall)
+    const wx0 = c.x + x, wy0 = c.y + y, wz0 = c.z + z;
+    const pk = pulseAt(wx0, wy0, wz0);
+    if (pk > sk) { sk = pk; qx = PULSE_DIR.x; qy = PULSE_DIR.y; qz = PULSE_DIR.z; }
+    if (ST[i] <= 0) {
+      let go = sk > 0.35;
+      if (!go && nbStartle > 0 && hash01(i + S.gcnt[i] * 13, t * 7.3) < 0.7) {
+        go = true;
+        // a relayed startle follows the neighbour's bolt, jittered
+        const j = (i + NB[0] + roll) % n;
+        qx = SD[j * 3] + (hash01(i, 1.1) - 0.5) * 0.8; qy = SD[j * 3 + 1] * 0.5; qz = SD[j * 3 + 2] + (hash01(i, 2.3) - 0.5) * 0.8;
+      }
+      if (go) {
+        const ql = Math.sqrt(qx * qx + qy * qy + qz * qz) + 1e-4;
+        SD[i3] = qx / ql; SD[i3 + 1] = qy / ql; SD[i3 + 2] = qz / ql;
+        ST[i] = 0.42;
+        S.gcnt[i]++;
+        // stage 1 of the C-start: curl AWAY from the heading we are about to take
+        const side = F[i3 + 2] * SD[i3] - F[i3] * SD[i3 + 2];
+        BD[i] = side >= 0 ? -0.9 : 0.9;
+        V[i3] += SD[i3] * S.local * 3.2; V[i3 + 1] += SD[i3 + 1] * S.local * 1.6; V[i3 + 2] += SD[i3 + 2] * S.local * 3.2;
+      }
+    }
+    const startled = ST[i] > 0;
+    if (startled) {
+      ST[i] -= dt;
+      const k2 = 18 * ST[i];
+      ax += SD[i3] * k2; ay += SD[i3 + 1] * k2 * 0.5; az += SD[i3 + 2] * k2;
+      if (ST[i] <= 0) ST[i] = -0.8;   // refractory: a fish cannot bolt again at once
+    } else if (ST[i] < 0) ST[i] = Math.min(0, ST[i] + dt);
+
+    // cohesion toward the school centre, flattened vertically (schools are discs); in a
+    // mill the pull is to a RING (the torus), with the swirl tangent about the vertical
+    const rl = Math.sqrt(x * x + y * y + z * z) + 1e-4;
+    const let_go = 1 - hole * 0.85;
+    if (mill > 0.02) {
+      const hr2 = Math.sqrt(x * x + z * z) + 1e-4, ring = S.radius * 0.7;
+      const rad = (ring - hr2) * 0.9 * mill * let_go;
+      ax += x / hr2 * rad; az += z / hr2 * rad; ay -= y * 0.9 * mill * let_go;
+      const tw = S.local * 1.15 * S.millDir;
+      ax += ((-z / hr2) * tw - V[i3]) * 0.8 * mill; az += ((x / hr2) * tw - V[i3 + 2]) * 0.8 * mill;
+    }
+    const pull = (0.55 + Math.max(0, rl - S.radius) * 0.8) * let_go * (0.35 + 0.65 * travel);
+    ax -= x / rl * pull; ay -= y / rl * pull * 2.4; az -= z / rl * pull;
+
+    // wander: smaller while polarised, so a travelling school points one way
+    const ph = PH[i], wk = 0.7 + 0.5 * mill;
+    ax += Math.sin(t * 0.9 + ph) * 1.1 * wk;
+    ay += Math.sin(t * 0.63 + ph * 1.7) * 0.5 * wk;
+    az += Math.cos(t * 1.13 + ph * 0.6) * 1.1 * wk;
+
+    // burst and glide: the glide clock runs negative while coasting
+    GL[i] += dt;
+    if (GL[i] > 0 && GL[i] > 0.5 + hash01(i, S.gcnt[i] + 0.5) * 0.9) { GL[i] = -(0.35 + hash01(i, S.gcnt[i] + 3.1) * 1.0); S.gcnt[i]++; }
+    const gliding = GL[i] < 0 && !startled && panic < 0.2;
+
     let vx = V[i3] + ax * dt, vy = V[i3 + 1] + ay * dt, vz = V[i3 + 2] + az * dt;
+    if (gliding) { const g = Math.pow(0.7, dt); vx *= g; vy *= g; vz *= g; }
     const spd = Math.sqrt(vx * vx + vy * vy + vz * vz) + 1e-5;
-    const maxS = S.local * (1 + panic * 3.5), minS = S.local * 0.3;
+    const maxS = S.local * (1 + panic * 3.5 + (startled ? 3 : 0)), minS = S.local * 0.2;
     const cl = spd > maxS ? maxS / spd : (spd < minS ? minS / spd : 1);
     vx *= cl; vy *= cl; vz *= cl;
 
@@ -588,23 +766,60 @@ function updateSchool(S, dt, t) {
       const kk = lr / Math.sqrt(ld2);
       P[i3] *= kk; P[i3 + 1] *= kk; P[i3 + 2] *= kk;
     }
+    const dvx = vx - V[i3], dvy = vy - V[i3 + 1], dvz = vz - V[i3 + 2];
     V[i3] = vx; V[i3 + 1] = vy; V[i3 + 2] = vz;
 
-    // heading includes the school's travel: fish visually lead the shoal
+    // world velocity: in a mill the school's own drift is small and the swirl leads
     const wx = vx + cv.x, wy = vy + cv.y, wz = vz + cv.z;
     const wl = Math.sqrt(wx * wx + wy * wy + wz * wz) + 1e-5;
-    const hx = wx / wl, hy = wy / wl, hz = wz / wl;
+    let dx = wx / wl, dy = wy / wl, dz = wz / wl;
+    dy = clamp(dy, -0.6, 0.6);
 
-    // bank into the turn: roll so "up" tilts toward the turn centre
-    const turn = F[i3 + 2] * hx - F[i3] * hz;
+    // rate-limited turn toward the travel direction (slerp by at most maxA)
+    const fx0 = F[i3], fy0 = F[i3 + 1], fz0 = F[i3 + 2];
+    const cosA = clamp(fx0 * dx + fy0 * dy + fz0 * dz, -1, 1), ang = Math.acos(cosA);
+    const maxA = (2.6 + (startled ? 14 : 0) + panic * 5) * dt;
+    let hx, hy, hz;
+    if (ang > maxA && ang > 1e-4) {
+      const sA = Math.sin(ang), k0 = Math.sin(ang - maxA) / sA, k1 = Math.sin(maxA) / sA;
+      hx = fx0 * k0 + dx * k1; hy = fy0 * k0 + dy * k1; hz = fz0 * k0 + dz * k1;
+    } else { hx = dx; hy = dy; hz = dz; }
+    const hl = Math.sqrt(hx * hx + hy * hy + hz * hz) + 1e-6; hx /= hl; hy /= hl; hz /= hl;
+    // signed yaw rate (rad/s), + = turning left seen from above
+    const turn = (fz0 * hx - fx0 * hz) / Math.max(dt, 1e-3);
     F[i3] = hx; F[i3 + 1] = hy; F[i3 + 2] = hz;
-    const bt = clamp(turn / Math.max(dt, 1e-3) * 0.42, -1.0, 1.0);
+    YR[i] += (turn - YR[i]) * Math.min(1, dt * 10);
+
+    // bank into the turn, plus the agitation wave rolling across the school
+    const waveR = wave > 0.02 ? wave * 0.55 * Math.sin((x * 0.55 + z * 0.35) - t * 7.0) : 0;
+    const bt = clamp(YR[i] * 0.3, -1.0, 1.0) + waveR;
     const b = BK[i] += (bt - BK[i]) * Math.min(1, dt * 8);
 
+    // ---- the swimming body: effort from the thrust the fish is actually making ----
+    const fwdAcc = (dvx * hx + dvy * hy + dvz * hz) / Math.max(dt, 1e-3);
+    const sn = clamp(wl / topSpeed, 0, 1.5);
+    let effT = 0.35 + sn * 0.75 + clamp(fwdAcc / 10, 0, 0.8) + Math.abs(YR[i]) * 0.12;
+    if (gliding) effT *= 0.18;
+    if (startled) effT = 2.2;
+    EF[i] += (effT - EF[i]) * Math.min(1, dt * (startled ? 20 : 5));
+    BP[i] += dt * sp.beat * S.rate[i] * (0.35 + 0.75 * Math.min(EF[i], 2.4));
+    if (BP[i] > 6283.18) BP[i] -= 6283.18;
+    // the bend: the C-start curl relaxes into the turn bend
+    const bendT = clamp(-YR[i] * 0.06, -0.35, 0.35);
+    BD[i] += (bendT - BD[i]) * Math.min(1, dt * (startled && ST[i] < 0.34 ? 14 : 6));
+    // pectorals scull when the fish is slow or holding station
+    const scT = clamp(1 - sn * 3.2, 0, 1) * (startled ? 0 : 1);
+    SC[i] += (scT - SC[i]) * Math.min(1, dt * 3);
+    const q = i * 4;
+    fd[q] = BP[i];
+    fd[q + 1] = sp.amp * clamp(0.25 + 0.7 * EF[i], 0.08, 1.9);
+    fd[q + 2] = BD[i];
+    fd[q + 3] = SC[i];
+
     // right = up x fwd, up = fwd x right, then rolled by b about fwd
-    let rx = hz, rz = -hx, rl = Math.hypot(rx, rz);
-    if (rl < 1e-4) { rx = 1; rz = 0; rl = 1; }   // fish swimming straight up/down
-    rx /= rl; rz /= rl;
+    let rx = hz, rz = -hx, rlen = Math.hypot(rx, rz);
+    if (rlen < 1e-4) { rx = 1; rz = 0; rlen = 1; }   // fish swimming straight up/down
+    rx /= rlen; rz /= rlen;
     const ux = hy * rz, uy = hz * rx - hx * rz, uz = -hy * rx;
     const cb = Math.cos(b), sb = Math.sin(b), s = S.sz[i];
     const sy = s * S.szY[i], sl = s * S.szL[i];   // per-fish depth / length variety
@@ -615,13 +830,8 @@ function updateSchool(S, dt, t) {
     arr[o + 12] = c.x + P[i3]; arr[o + 13] = c.y + P[i3 + 1]; arr[o + 14] = c.z + P[i3 + 2]; arr[o + 15] = 1;
   }
   S.inst.instanceMatrix.needsUpdate = true;
-
-  // tail beat accelerates with alarm; integrate phase so the rate change never pops
+  S.fdat.needsUpdate = true;
   S.panic += (panic - S.panic) * Math.min(1, dt * 4);
-  S.beatPh += dt * sp.beat * (1 + S.panic * 1.6);
-  if (S.beatPh > 6283.18) S.beatPh -= 6283.18;   // keep float32 phase precision
-  S.mat.userData.u.uPhase.value = S.beatPh;
-  S.mat.userData.u.uAmp.value = sp.amp * (1 + S.panic * 0.7);
 }
 
 // ---------------------------------------------------------------------------
@@ -1235,6 +1445,7 @@ export function reseedCreatures() {
 }
 
 export function updateCreatures(dt, t) {
+  tickStir(dt, t);
   uTime.value = t;
   if (scene.fog) {
     uFogD.value = scene.fog.density;
