@@ -655,7 +655,11 @@ function poseClaws(L) {
     // never quite still: slow drift in two axes (noise, not a metronome), a heavier and
     // slower sway on the crusher, and a slow open/close of the pincers
     const kM = c.major ? 0.7 : 1.25;
-    const dz = (0.035 * nz(t * 0.37 * kM, sd * 3) + 0.012 * nz(t * 1.9 * kM, sd * 7)) * st;
+    // secondary motion: the heavy claws lag the shell's bob and pitch (they rise as it
+    // drops onto a footfall, dip as it rears), the crusher more than the cutter
+    const lagK = c.major ? 1.3 : 0.8;
+    const lag = (0.6 * L.bP.x - 0.3 * L.bY.v / L.R) * lagK * st;
+    const dz = (0.035 * nz(t * 0.37 * kM, sd * 3) + 0.012 * nz(t * 1.9 * kM, sd * 7)) * st + lag;
     const dy = 0.03 * nz(t * 0.29 * kM, sd * 5 + 1) * st;
     const gape = (0.5 + 0.5 * nz(t * 0.23 * kM, sd * 11)) * st;
     const snap = Math.pow(Math.max(0, Math.sin(t * 0.7 + sd * 1.3)), 8) * 0.12 * st;
@@ -725,7 +729,7 @@ function poseAll(L, dt, player) {
   // hunched: standing, the front drops over the diver; threat lifts it to show the face.
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
-  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
+  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h - (L.lookP || 0) + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
 
@@ -774,6 +778,15 @@ function quake(L, ev, x, z, k, player) {
   const q = k * (1 - smooth(d, 8, 70));
   if (q > ev.quake) ev.quake = q;
 }
+// Silt on HER scale: the shared puff pool (footfx, 420 particles, also the diver's boots)
+// spawns every burst within ~0.3 u, so a colossus's impact is a ring of k small bursts
+// spread over radius r, big particles, few of them (a budget, not a firehose).
+function silt(x, y, z, k, n, str, r) {
+  for (let i = 0; i < k; i++) {
+    const a = (i + Math.random() * 0.6) / k * Math.PI * 2, rr = r * (0.4 + 0.6 * Math.random());
+    emitDust(x + Math.cos(a) * rr, y, z + Math.sin(a) * rr, n, str);
+  }
+}
 const LEG_DELAY = new Float32Array(8);
 WAKE_ORDER.forEach((li, o) => { LEG_DELAY[li] = 0.08 + o * 0.055; });
 const _busy = new Int8Array(2);
@@ -806,14 +819,14 @@ export function updateBrooder(L, dt, t, player) {
     const was = L.legSt[li];
     L.legSt[li] = win(u, LEG_DELAY[li], LEG_DELAY[li] + 0.30);
     // a leg dragging itself out of the silt throws a puff at the foot
-    if (rising && was < 0.12 && L.legSt[li] >= 0.12) { const f = L.feet[li].cur; emitDust(f.x, f.y + 0.3, f.z, 22, 2.4); }
+    if (rising && was < 0.12 && L.legSt[li] >= 0.12) { const f = L.feet[li].cur; silt(f.x, f.y + 0.3, f.z, 3, 3, 2.6, 1.2); }
   }
   L.clawSt = win(u, 0.55, 0.95);
   const heaveT = win(u, 0.45, 0.88) - (rising ? 0.12 * Math.sin(Math.PI * win(u, 0.22, 0.50)) : 0);
   const hv0 = L.heave.x;
   spr(L.heave, heaveT, 2.6, rising ? 0.42 : 0.55, dt);
   // settling, the shell lands: the moment the fall stops it thumps the floor
-  if (!rising && hv0 > 0.02 && L.heave.x <= 0.02 && L.heave.v < -0.05) { quake(L, ev, L.pos.x, L.pos.z, 0.5, player); emitDust(L.pos.x, L.bodyY - R * 0.1, L.pos.z, 40, 3); }
+  if (!rising && hv0 > 0.02 && L.heave.x <= 0.02 && L.heave.v < -0.05) { quake(L, ev, L.pos.x, L.pos.z, 0.5, player); silt(L.pos.x, L.bodyY - R * 0.1, L.pos.z, 8, 3, 3.4, R * 0.9); }
   // the shudder as she wakes: the whole shell trembles while the silt pours
   const shud = rising ? Math.sin(Math.PI * win(u, 0.0, 0.40)) : 0;
   if (shud > 0.05) {
@@ -825,10 +838,10 @@ export function updateBrooder(L, dt, t, player) {
   if (!L.dormant && u < 1 && rising) {
     L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud);
     if (L.dustT <= 0) {
-      L.dustT = 0.08;
+      L.dustT = 0.09;
       const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
       const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
-      emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 18, 2.6);
+      emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 6, 3.4);
     }
   }
   // the drift sinks away as she rises out of it, and is gone once she has stood
@@ -864,7 +877,7 @@ export function updateBrooder(L, dt, t, player) {
       const c = L.claws[1].major ? L.claws[1] : L.claws[0];
       c.dj.getWorldPosition(_ft);
       const gy = terrainH(_ft.x, _ft.z, L.idx);
-      emitDust(_ft.x, gy + 0.3, _ft.z, 36, 3.4);
+      silt(_ft.x, gy + 0.3, _ft.z, 5, 5, 3.6, 2.2);
       L.bY.v -= R * 0.10 * L.threatE;
       L.bP.v += 0.9 * L.threatE;
       quake(L, ev, _ft.x, _ft.z, 0.7 * L.threatE, player);
@@ -938,7 +951,7 @@ export function updateBrooder(L, dt, t, player) {
       rollT -= sd * 0.016 * lift; pitchT += (k < 2 ? 0.011 : -0.008) * lift; yT += 0.006 * lift;
       if (f.t >= 1) {
         f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to);
-        emitDust(f.cur.x, f.cur.y + 0.2, f.cur.z, 12 + 10 * f.h / 0.30, 1.4 + 1.6 * f.h / 0.30);
+        silt(f.cur.x, f.cur.y + 0.2, f.cur.z, f.h > 0.2 ? 3 : 1, 3, 1.4 + 1.4 * f.h / 0.30, 0.9);
         L.bY.v -= R * 0.10 * f.h / 0.30;
         L.bR.v += sd * 0.10 * f.h / 0.30;
         quake(L, ev, f.cur.x, f.cur.z, 0.16 * f.h / 0.30, player);
@@ -970,6 +983,16 @@ export function updateBrooder(L, dt, t, player) {
   spr(L.bP, pitchT, 4.2, 0.40, dt);
   spr(L.bR, rollT, 4.2, 0.40, dt);
   spr(L.hurt, 0, 6.5, 0.32, dt);
+  // she LOOKS at him with her whole front: a diver above her brow makes her rear to keep
+  // him in her eyes, one below makes her crouch (awake, not calmed; a slow follower)
+  {
+    let lk = 0;
+    if (!L.dormant && !L.calmed && !L.hold && L.standE > 0.8 && pd < 60) {
+      const el = Math.atan2(player.pos.y - L.head.y, Math.max(4, Math.hypot(player.pos.x - L.head.x, player.pos.z - L.head.z)));
+      lk = clamp(el * 0.35, -0.06, 0.16);
+    }
+    L.lookP = (L.lookP || 0) + (lk - (L.lookP || 0)) * Math.min(1, 1.2 * dt);
+  }
 
   poseAll(L, dt, player);
 

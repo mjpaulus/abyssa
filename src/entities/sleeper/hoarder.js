@@ -607,7 +607,7 @@ export function updateHoarder(L, dt, t, player) {
     // the exhale: when she lies on the floor it blows the silt out from under the siphon
     _p.copy(SIPHON).applyMatrix4(L.body.matrixWorld);
     const gy = terrainH(_p.x, _p.z, L.idx);
-    if (_p.y - gy < L.R * 0.6) emitDust(_p.x, gy + 0.3, _p.z, 10 + (L.dormant ? 0 : 8), 1.2 + 0.8 * L.riseE);
+    if (_p.y - gy < L.R * 0.6) emitDust(_p.x, gy + 0.3, _p.z, 5 + (L.dormant ? 0 : 3), 1.4 + 0.8 * L.riseE);
   }
   L.blinkT += dt;
   if (L.blinkT > L.blinkN) { L.blinkT = 0; L.blinkN = 2.5 + Math.random() * 5; }
