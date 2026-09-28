@@ -10,7 +10,7 @@ import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } fro
 import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
 import { wreckSites, driftSkirt, leeOf } from './wrecks.js';
 import { siteParams } from './site.js';
-import { tickStir, uPush, uPushV, PUSH_GLSL } from './stir.js';
+import { tickStir, uPush, uPushV, PUSH_GLSL, PUSH_N } from './stir.js';
 
 const TAU = Math.PI * 2;
 
@@ -121,6 +121,19 @@ if (aFlut > 0.0) {
   float f = w * 2.2 + aVA.w;
   transformed += vec3(sin(f) * 0.7, cos(f * 1.31) * 0.5, sin(f * 0.73 + 2.1) * 0.7) * aFlut;
 }
+#ifdef FLORA_FLINCH
+  // anemone tentacles curl in toward the column when something big comes near
+  {
+    float fl = 0.0;
+    for (int i = 0; i < ${PUSH_N}; i++) {
+      vec4 ps = uPush[i];
+      if (ps.w <= 0.0) continue;
+      fl = max(fl, 1.0 - smoothstep(ps.w * 2.0, ps.w * 4.5, distance(cfIw, ps.xyz)));
+    }
+    transformed.xz *= 1.0 - 0.45 * fl * aVA.x;
+    transformed.y -= 0.25 * fl * aVA.x * aVA.y;
+  }
+#endif
 // PARTING: Sal and the big animals push the flexible parts aside as they pass
 // (stir.js spheres, world space, rotated back into this instance's frame).
 if (uSway > 0.0) {
@@ -1213,7 +1226,7 @@ function buildZoneMats() {
     fan: floraMat({ key: 'fan', side: THREE.DoubleSide, rough: 0.7, sway: 1, freq: 0.8, cull: 105, sss: 0.55, glow: P.glow, def: ['SSS', 'FAN'], blade: true, trans: 1.0, ripple: 0, cut: 0 }),
     brain: floraMat({ key: 'brain', rough: 0.66, sway: 0, cull: 105, glow: P.glow, env: 0.16, def: ['BRAIN'], maze: true }),
     sponge: floraMat({ key: 'sponge', side: THREE.DoubleSide, rough: 0.78, sway: 1, freq: 0.65, cull: 100, glow: P.glow, def: ['INNER', 'PIT'] }),
-    anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS'] }),
+    anem: floraMat({ key: 'anem', side: THREE.DoubleSide, rough: 0.55, sway: 1, freq: 1.0, cull: 90, sss: 0.35, glow: P.glow, def: ['SSS', 'FLINCH'] }),
     // Rock structure: a generated map set (lib/textures.js rockMapSet) projected
     // triplanar by world normal, multiplied INTO the zone hue below. Zone 0 gets the
     // weathered basalt/limestone bake and a wet sheen; the two deep zones share the

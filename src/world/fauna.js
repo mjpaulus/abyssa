@@ -1615,7 +1615,7 @@ export function buildFauna() {
   }), { gx: 0, gz: 0, gh: 8, gt: 0, step: rayStep, layout: rayLayout });
 
   makeGroup('TURTLE', 0, 2, turtleGeometry(), faunaMaterial({
-    rough: 0.8, mot: [0.02, 0, 0, 0.55], body: [2, 1.2, 0.5, 2], hinge: [0, 0, 0.85, 0], skin: [2, 1.35, 0.014, 0]
+    rough: 0.8, mot: [0.02, 0, 0, 0.47], body: [2, 1.2, 0.5, 2], hinge: [0, 0, 0.85, 0], skin: [2, 1.35, 0.014, 0]
   }), { ...arrs(2, ['gx', 'gz', 'gh', 'gt', 'cyc', 'jt']), step: turtleStep, layout: turtleLayout });
 
   makeGroup('MORAY', 0, 3, morayGeometry(), faunaMaterial({
