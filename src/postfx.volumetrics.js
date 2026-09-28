@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
 import { camera, scene } from './core.js';
-import { sun } from './lighting.js';
+import { sun, LOOK } from './lighting.js';
 import { GLASS } from './config.js';
 
 // THE FLOW LEAN (roadmap/flow-lean-style.md, item 12): the medium stays lit. Same dial
@@ -458,7 +458,12 @@ export class VolumetricLightPass extends Pass {
     // sun.intensity already carries the depth-stop blend AND the weather day/storm/
     // flash modulation applied by lighting.js updateLighting(), so the shafts follow
     // night, storms and lightning for free with no extra wiring.
-    const sunK = Math.max(0, sun.intensity) / SUN_REF_I;
+    // lighting.js's relight() multiplies the underwater sun by LOOK.water.xSun (x3) so
+    // SURFACES separate by value in the lit zone; that is a surface-response choice, not
+    // more light in the water, so the shafts divide it back out -- or the whole column
+    // triples and the shallows wash out to cyan-white (measured after the merge).
+    const xs = LOOK && LOOK.on && LOOK.water && LOOK.water.xSun > 0 ? LOOK.water.xSun : 1;
+    const sunK = Math.max(0, sun.intensity) / (SUN_REF_I * xs);
     // Nothing to add: skip entirely and leave the chain byte-identical.
     if (!(sunK > 0.004) || camera.position.y < -340) {
       this.needsSwap = false;

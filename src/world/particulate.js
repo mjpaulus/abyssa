@@ -226,12 +226,12 @@ function buildSpray(scene, shared) {
         p.xz += ( jit - 0.5 ) * ${(SPRAY_L).toFixed(1)};
         // downwind carry and a ballistic arc (peak ~1.2..3 units)
         p.xz += uWind.xy * ( k * per ) * ( 2.5 + 5.0 * uWind.z );
-        p.y = 0.25 + ( 1.2 + 1.8 * aSeed.z ) * 4.0 * k * ( 1.0 - k ) * ( 0.5 + 0.8 * uWind.z );
+        p.y = 0.1 + ( 0.5 + 1.1 * aSeed.z * aSeed.z ) * 4.0 * k * ( 1.0 - k ) * ( 0.4 + 0.6 * uWind.z );
         vec3 w = vec3( mod( p.x - uCam.x + ${(SPRAY_L * 0.5).toFixed(1)}, ${SPRAY_L.toFixed(1)} ) - ${(SPRAY_L * 0.5).toFixed(1)} + uCam.x, p.y,
                        mod( p.z - uCam.z + ${(SPRAY_L * 0.5).toFixed(1)}, ${SPRAY_L.toFixed(1)} ) - ${(SPRAY_L * 0.5).toFixed(1)} + uCam.z );
         vec4 mv = viewMatrix * vec4( w, 1.0 );
         float dist = -mv.z;
-        gl_PointSize = clamp( ( 0.08 + 0.16 * aSeed.x * aSeed.x ) * uPix / max( dist, 0.5 ), 1.5, 36.0 );
+        gl_PointSize = clamp( ( 0.035 + 0.07 * aSeed.x * aSeed.x ) * uPix / max( dist, 0.5 ), 1.0, 14.0 );
         // a droplet is born and dies at the sea: fade in/out across the hop
         float life = smoothstep( 0.0, 0.15, k ) * ( 1.0 - smoothstep( 0.7, 1.0, k ) );
         vA = uK * life * smoothstep( 1.0, 4.0, dist )
@@ -243,7 +243,7 @@ function buildSpray(scene, shared) {
     fragmentShader: `varying float vA; varying vec3 vC;
       void main(){
         vec2 q = gl_PointCoord - 0.5;
-        float a = exp( -dot( q, q ) * 10.0 ) * vA;
+        float a = exp( -dot( q, q ) * 14.0 ) * vA;
         if ( a < 0.004 ) discard;
         gl_FragColor = vec4( vC, a );
       }`
@@ -265,11 +265,11 @@ export function updateSpray(air, windSpeed, dx, dz, storm, hor) {
   if (!spray) return;
   const gust = Math.max(windSpeed, storm);
   const k = Math.min(1, Math.max(0, (gust - 0.45) / 0.45)) * (air > 0.5 ? 1 : 0);
-  uSprayK.value = k * 0.8;
+  uSprayK.value = k * 0.45;
   spray.visible = k > 0.01;
   uWind.value.set(dx, dz, Math.min(1, gust));
   // sky-lit droplets, a touch brighter than the horizon they sit against
-  uSprayCol.value.set(hor[0] * 1.1, hor[1] * 1.1, hor[2] * 1.1);
+  uSprayCol.value.set(hor[0] * 0.95, hor[1] * 0.97, hor[2]);
 }
 
 // Called once a frame from water.js updateAtmosphere, after game.js has placed the
