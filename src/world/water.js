@@ -15,10 +15,11 @@ import { scatter } from './flora.js';
 // THE SUN'S SHADOW MAP, read-only. lighting.js imports airAmbience from here, so this
 // closes an import cycle — safe because BOTH sides only touch the other's bindings
 // inside per-frame functions, never at module evaluation. `sun` is never written here.
-import { sun } from '../lighting.js';
+import { sun, lanternLight, playerLightSrc } from '../lighting.js';
 // The vents' warm columns, for the marine snow: a preallocated Float32Array + count,
 // filled by vents.js once per reseed and handed to the snow material as uniforms.
 import { ventColumns, ventColumnCount, VENT_COLS_MAX } from './vents.js';
+import { buildParticulate, updateParticulate, particulateState } from './particulate.js';
 
 export let surface = null;
 export const rays = [];
@@ -169,6 +170,31 @@ export function setBoltParams(r, g, b, floor, depthK) {
   BOLT_K_U[0] = floor; BOLT_K_U[1] = depthK;
 }
 export function boltUniforms() { return { b0: BOLT0_U, b1: BOLT1_U, col: BOLT_COL_U, k: BOLT_K_U }; }
+
+// THE LAMP IN THE MURK (atmos track). Single-scattering in-scatter from point lights,
+// integrated in CLOSED FORM along every view ray by the fog chunk and the dome, so Sal's
+// lantern carves a glowing volume out of the water and anything between the eye and the
+// flame stands silhouetted against it. Two slots, installed on the fog chunk exactly the
+// way the bolt uniforms are (a program never handed them reads zeros and the block is
+// one uniform compare):
+//   LAMP_A  xyz = the lantern's world position, w = its intensity (0 = slot off)
+//   LAMP_AC rgb = its colour, w = its range (the same window three lights the scene with)
+//   LAMP_B / LAMP_BC  the strongest OTHER submerged point light near the camera (the
+//           vent throat, a lit ward, the hoard lamp) — picked on the CPU each frame
+//   LAMP_K  rgb = the water's LOCAL extinction at the eye per unit (the same
+//           rhoClear*KMOL + silt*KPART the chunk integrates, storm gain included), so the
+//           beam reddens and dies with distance exactly as the fog does; w = gain
+// Written by updateAtmosphere (after game.js has placed and flickered the lantern).
+const LAMPA_U = new Float32Array(4), LAMPAC_U = new Float32Array(4);
+const LAMPB_U = new Float32Array(4), LAMPBC_U = new Float32Array(4);
+const LAMPK_U = new Float32Array(4);
+// Look knobs, live-pokeable through window.__atmos.
+export const ATMOS = {
+  lampGain: 0.22,      // lantern in-scatter gain (x the physical sigma_s * I * phase)
+  lampGainB: 0.22,     // second slot (vent / ward / hoard lamp)
+  lampOn: true,
+  bokeh: true
+};
 
 const f = v => v.toFixed(5);
 const v3 = a => `vec3(${f(a[0])},${f(a[1])},${f(a[2])})`;
@@ -328,6 +354,59 @@ vec3 boltLight( vec3 P, vec3 N, vec4 B, float storm ){
   float Lw   = -yw / max( B.y - P.y, 1.0 ) * dist;
   vec3  trw  = exp( -Lw * rhoClearAt( 0.5 * yw ) * storm * abyssaBoltK.y * KMOL );
   return abyssaBoltCol.rgb * ( B.w * ndl * att ) * trw;
+}`;
+
+// THE LAMP IN THE MURK — the closed-form airlight of a point source (the Sun et al. 2005
+// family, reduced to what a lantern in water needs). Along the view ray x(t) = o + v t,
+// with the lamp at perpendicular distance h and closest approach tc, substitute
+// t - tc = h tan(th): the inverse-square in-scatter dt / d^2 becomes dth / h EXACTLY, and
+// the scattering cosine toward the eye is mu = -sin(th). Water scatters mostly
+// FORWARD, which is why a lamp in murk is a halo round the flame and not a lit fog bank,
+// so the phase is p(mu) = 0.25 + 0.75 (1 + mu)^4 / 3.2 (sphere mean 1; 3.9 dead ahead,
+// 0.48 at right angles, 0.25 behind), and the integral over [0, L] is still elementary:
+// with s = sin th, c = cos th,
+//   F4(th) = 4.375 th + 8 c - (4/3) c^3 - 3.5 s c + s c (c^2 - s^2) / 8   (= int (1-s)^4)
+//   F(th)  = 0.25 th + (0.75 / 3.2) F4(th),    in-scatter = (F(th1) - F(th0)) / h
+// and sin/cos come back algebraically from u = tan(th), so the only transcendentals are
+// two atan. The extinction exp(-sigma (t + d)) is taken at the ray's closest point to the
+// lamp (clamped to the segment) -- the integrand is concentrated within +-h of it, and h
+// for a lantern held beside the camera is a few units, so the error is a small fraction of
+// one mean free path. Every exp() argument is -sigma * (non-negative), so <= 0.
+// The window is three's own range falloff (1 - (d/R)^4)^2 at that same closest point, so
+// the glow can never reach water the lamp does not light on surfaces.
+// Requires LAMPK_U etc. installed as uniforms (patchFog / the dome).
+const GLSL_LAMP = `
+uniform vec4 abyssaLampA, abyssaLampAC, abyssaLampB, abyssaLampBC, abyssaLampK;
+float lampF( float u ){
+  float c = inversesqrt( 1.0 + u * u ), s = u * c, th = atan( u );
+  float f4 = 4.375 * th + c * ( 8.0 - 1.3333333 * c * c )
+           + s * c * ( 0.125 * ( c * c - s * s ) - 3.5 );
+  return 0.25 * th + 0.234375 * f4;
+}
+vec3 lampScatter( vec3 ro, vec3 v, float L, vec4 P, vec4 C ){
+  vec3  dp  = P.xyz - ro;
+  float tc  = dot( dp, v );
+  float h2  = max( dot( dp, dp ) - tc * tc, 0.09 );
+  float tm  = clamp( tc, 0.0, L );
+  float dm2 = h2 + ( tm - tc ) * ( tm - tc );
+  float q   = dm2 / max( C.w * C.w, 1.0 );
+  // Out of the lamp's reach along the whole segment: no atan, no exp.
+  if ( q >= 1.0 ) return vec3( 0.0 );
+  float win = 1.0 - q * q;
+  float ih  = inversesqrt( h2 );
+  float geo = max( lampF( ( L - tc ) * ih ) - lampF( -tc * ih ), 0.0 ) * ih;
+  vec3  trl = exp( -abyssaLampK.rgb * ( tm + sqrt( dm2 ) ) );
+  return C.rgb * ( P.w * geo * win * win ) * trl;
+}
+// Both slots, scaled by the scattering coefficient (green local extinction, the channel
+// the silt line is calibrated on) and the gain, then rolled off by a soft shoulder so a
+// ray grazing the flame can never clip: x / (1 + mean(x)) keeps the hue of the beam.
+vec3 lampAirlight( vec3 ro, vec3 v, float L ){
+  vec3 x = vec3( 0.0 );
+  if ( abyssaLampA.w > 0.0 ) x += lampScatter( ro, v, L, abyssaLampA, abyssaLampAC );
+  if ( abyssaLampB.w > 0.0 ) x += lampScatter( ro, v, L, abyssaLampB, abyssaLampBC );
+  x *= abyssaLampK.g * abyssaLampK.w;
+  return x / ( 1.0 + dot( x, vec3( 0.3333 ) ) );
 }`;
 
 // THE SKY. One function, used by the ocean surface on BOTH sides of the interface and by
@@ -892,12 +971,20 @@ const AIR_U = new Float32Array(4);
   THREE.UniformsLib.fog.abyssaBolt1 = { value: BOLT1_U };
   THREE.UniformsLib.fog.abyssaBoltCol = { value: BOLT_COL_U };
   THREE.UniformsLib.fog.abyssaBoltK = { value: BOLT_K_U };
+  THREE.UniformsLib.fog.abyssaLampA = { value: LAMPA_U };
+  THREE.UniformsLib.fog.abyssaLampAC = { value: LAMPAC_U };
+  THREE.UniformsLib.fog.abyssaLampB = { value: LAMPB_U };
+  THREE.UniformsLib.fog.abyssaLampBC = { value: LAMPBC_U };
+  THREE.UniformsLib.fog.abyssaLampK = { value: LAMPK_U };
   for (const k in THREE.ShaderLib) {
     const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
     if (u && u.fogColor) {
       u.abyssaAir = { value: AIR_U }; u.abyssaStyle = { value: STYLE_U };
       u.abyssaBolt0 = { value: BOLT0_U }; u.abyssaBolt1 = { value: BOLT1_U };
       u.abyssaBoltCol = { value: BOLT_COL_U }; u.abyssaBoltK = { value: BOLT_K_U };
+      u.abyssaLampA = { value: LAMPA_U }; u.abyssaLampAC = { value: LAMPAC_U };
+      u.abyssaLampB = { value: LAMPB_U }; u.abyssaLampBC = { value: LAMPBC_U };
+      u.abyssaLampK = { value: LAMPK_U };
     }
   }
   // THE BOLT NEEDS A NORMAL, and the fog chunk is shared by materials that have one and
@@ -936,6 +1023,7 @@ ${GLSL_AMBIENT}
 ${GLSL_WATER}
 ${GLSL_AIR}
 ${GLSL_BOLT}
+${GLSL_LAMP}
 #endif`;
   // The inscatter is dominated by the near end of a long ray, so weight the sample
   // height by extinction: wgt = 1/a - 1/(e^a - 1), which tends to 1/2 for short rays
@@ -1040,6 +1128,18 @@ ${GLSL_BOLT}
     vec3 J = siltTint( abyssaAmbient( fogColor, ay ), murkFracAt( ay, yf, hs, amp ) );
     vec3 c = gl_FragColor.rgb * tr + J * ( 1.0 - tr );
 
+    // --- THE LAMP IN THE MURK ------------------------------------------------
+    // Light the lantern scatters toward the eye from the water IN FRONT of this
+    // fragment -- added after the extinction, because it is born along the path. A
+    // fragment in front of the flame therefore gets only the near half of the glow and
+    // stands out against the full glow behind it. One uniform compare when both slots
+    // are off (every frame the eye is in air).
+    if ( abyssaLampA.w + abyssaLampB.w > 0.0 ) {
+      vec3 lrv = vFogP - cameraPosition;
+      float lL = length( lrv );
+      c += lampAirlight( cameraPosition, lrv / max( lL, 1e-4 ), lL );
+    }
+
     // The air leg. Skipped outright when the ray never leaves the water, which is every
     // frame the game itself renders -- so the underwater path pays nothing for the sky,
     // not even the three exp() this costs, and c is left byte-identical.
@@ -1071,6 +1171,10 @@ const uCam = { value: new THREE.Vector3() };
 const uExtG = { value: 0.024 };          // green-channel extinction, for manual fades
 const uRayFade = { value: 0.55 };
 const uLightPos = { value: new THREE.Vector3() };
+// x = ambient share for the grit (1 in the lit shallows, falls with the water's radiance)
+const uSnowAmb = { value: new THREE.Vector3(1, 0, 0) };
+const uPixP = { value: 900 };
+const _ambP = { r: 0, g: 0, b: 0 };   // pixel scale for particulate.js, refreshed per frame
 // Sky state, SHARED by the ocean surface and the background dome. One set of uniform
 // objects, written once per frame in updateWater: the two materials cannot disagree about
 // what the sky is doing, which is the whole reason the sky seen from the air and the sky
@@ -1195,6 +1299,9 @@ function buildDome() {
       uSurf: { value: new THREE.Vector3(...SURF_LIGHT) },
       uReach: { value: 46 }, uTime, uSunGlow: { value: new THREE.Vector3() },
       uSkyZen, uSkyHor, uSunCol, uSunDir: uSunDirU, uSunSize, uAir,
+      abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U },
+      abyssaLampB: { value: LAMPB_U }, abyssaLampBC: { value: LAMPBC_U },
+      abyssaLampK: { value: LAMPK_U },
       ...SKY_UNIFORMS
     },
     side: THREE.BackSide, depthWrite: false, fog: false,
@@ -1212,6 +1319,7 @@ function buildDome() {
       ${GLSL_WATER}
       ${GLSL_AIR}
       ${GLSL_SKY}
+      ${GLSL_LAMP}
 
       // The far field on the AIR side. Below the horizon it is open sea at grazing
       // incidence — which is the reflected horizon sky closed by haze, i.e. the airlight
@@ -1259,6 +1367,10 @@ function buildDome() {
         vec2 q = d.xz / max( 0.30, abs( d.y ) + 0.22 );
         float na = 0.16 * smoothstep( 0.05, 0.42, abs( d.y ) );
         c *= 1.0 - na * 0.5 + na * fbm2( q * 2.0 + vec2( uTime * 0.012, uTime * 0.008 ) );
+        // The lamp's glow on rays that hit nothing: the same closed form the fog chunk
+        // runs, with the segment open to infinity (atan saturates, nothing diverges), so
+        // the glow is continuous across every silhouette against open water.
+        if ( abyssaLampA.w + abyssaLampB.w > 0.0 ) c += lampAirlight( cameraPosition, d, 1.0e4 );
         // The crossing band. Skipped entirely at air == 0.0, which is every frame the
         // game can produce, so the water dome below the waterline is untouched.
         if ( air > 0.0 ) c = mix( c, skyDome( d, airLight( uSurf ) ), air );
@@ -1445,6 +1557,10 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
     uFall: { value: fall }, uPix: { value: 900 }, uDepth: { value: 0.5 },
     uExtK: { value: extK },
     uColA: { value: new THREE.Vector3(...colA) }, uColB: { value: new THREE.Vector3(...colB) },
+    // Lit by the lantern slot the fog chunk's in-scatter reads (see GLSL_LAMP), and by
+    // the water's own ambient at the camera: in the dark zones the grit is invisible
+    // until the flame reaches it, which is the whole look.
+    abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U }, uAmb: uSnowAmb,
     // The vents' warm columns: the SAME Float32Array vents.js fills per reseed (flat
     // xyzr per vent; three uploads a flat typed array as-is, no per-frame flatten) and
     // the same count object, so the snow can never disagree with the chimneys.
@@ -1453,7 +1569,8 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
   const mat = new THREE.ShaderMaterial({
     uniforms: u, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, fog: false,
-    vertexShader: `uniform vec3 uCam, uLightPos, uColA, uColB;
+    vertexShader: `uniform vec3 uCam, uLightPos, uColA, uColB, uAmb;
+      uniform vec4 abyssaLampA, abyssaLampAC;
       uniform float uTime, uL, uSize, uAlpha, uFall, uPix, uExtG, uDepth, uExtK;
       uniform vec4 uVentCols[${VENT_COLS_MAX}];
       uniform int uVentN;
@@ -1495,8 +1612,16 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
         float dist = -mv.z;
         gl_PointSize = clamp( ( 0.25 + aSeed.x * aSeed.x * 2.0 ) * uSize * uPix / max( dist, 0.4 ), 0.7, 22.0 )
                      * ( 1.0 - 0.35 * warm );
-        vec3 dl = w - uLightPos;
-        float lb = exp( -dot( dl, dl ) * 0.006 );   // the lantern picking grit out of the dark
+        // THE LANTERN PICKING GRIT OUT OF THE DARK. The same inverse-square and range
+        // window the fog chunk's lamp in-scatter uses, with a forward glint: a flake
+        // between the flame and the lens catches it hardest, as real snow does.
+        vec3 dl = w - abyssaLampA.xyz;
+        float dl2 = dot( dl, dl );
+        float lq = dl2 / max( abyssaLampAC.w * abyssaLampAC.w, 1.0 );
+        float lw = clamp( 1.0 - lq * lq, 0.0, 1.0 );
+        float lE = abyssaLampA.w * lw * lw / max( dl2, 0.8 );
+        float lmu = dot( dl * inversesqrt( max( dl2, 1e-4 ) ), normalize( uCam - w ) );
+        float lb = lE * ( 0.35 + 1.5 * pow( 0.5 + 0.5 * lmu, 3.0 ) );
         vA = uAlpha * uDepth
            // Marine snow is water-borne. The wrap box follows the camera, so an eye at
            // the surface used to fill the AIR with drifting grit. Exactly 1.0 for
@@ -1508,7 +1633,10 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
            * smoothstep( 0.5, 3.0, dist )
            * exp( -dist * uExtG * uExtK )
            * warmA;
-        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 + 2.6 * lb );
+        // Ambient share follows the water's own radiance at the camera (uAmb, 1 in the
+        // bright shallows, ~0.05 on the zone-2 floor), so the deep reads BLACK between
+        // lit flakes instead of a uniform starfield; the flame's share is warm.
+        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 * uAmb.x ) + abyssaLampAC.rgb * ( 0.16 * lb );
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `varying float vA; varying vec3 vC;
@@ -2135,7 +2263,17 @@ export function renderRefraction() {
   // transmitted ray reads as open water, which is what an unbounded ray would find.
   renderer.setClearColor(scene.background && scene.background.isColor ? scene.background : _prevClear, 1);
   renderer.clear(true, true, false);
+  // THE DOME DRAWS THE FAR SIDE'S MEDIUM. It is not clipped (a plain ShaderMaterial),
+  // so it lands in every texel no geometry covers -- and it picks sky or water from uAir,
+  // i.e. from the CAMERA's side. From the deck that painted open SKY into the target
+  // wherever the transmitted ray found no terrain, and the sea showed a white, sky-
+  // coloured blob standing on the horizon with the far seabed ridges cut out of its
+  // lower edge (measured on the noon deck frame, P-bypass too). A ray that has crossed
+  // the interface is in the other medium, so for this one render the dome is told so.
+  const airWas = uAir.value;
+  uAir.value = air ? 0 : 1;
   renderer.render(scene, camera);
+  uAir.value = airWas;
   renderer.setRenderTarget(prevRT);
   renderer.clippingPlanes = [];
   renderer.shadowMap.autoUpdate = prevShadow;
@@ -3251,6 +3389,7 @@ export function buildWater() {
   // nothing at all between 85 and 205 units.
   snow.add(snowLayer(4200, 300, 0.075, 0.30, 0.35, [0.50, 0.70, 0.85], [0.86, 0.80, 0.62], 0.45));
   scene.add(snow);
+  buildParticulate(scene, { uTime, uCam, uExtG, uPix: uPixP, lampA: LAMPA_U, lampAC: LAMPAC_U });
   buildBubbles();
   // Prime fog / background before the title screen renders. game.js only calls
   // updateAtmosphere in the play and won branches, so this ONE call is what the entire
@@ -3678,9 +3817,8 @@ export function updateWater(dt, t) {
   snowLayers[0].uDepth.value = 0.42 + 0.95 * mf;
   snowLayers[1].uDepth.value = 0.36 + 1.10 * mf;
 
-  // the lantern rides roughly where the camera looks, ~8.5 units ahead
-  camera.getWorldDirection(_tmp);
-  uLightPos.value.copy(camera.position).addScaledVector(_tmp, 8.5);
+  // The grit catches the REAL lantern now (it used to be a stand-in 8.5 units ahead of
+  // the lens): written in updateAtmosphere, after game.js has placed the flame.
 
   dome.material.uniforms.uSurf.value.set(_pSurf[0], _pSurf[1], _pSurf[2]);
   dome.material.uniforms.uReach.value = 1 / uExtG.value;
@@ -3717,7 +3855,89 @@ export function updateAtmosphere(depth01, camY = camera.position.y) {
   // standing player-depth vs camera-depth disagreement (CAM_UP 2.4 / CAM_BACK 9 on a
   // lagging spring), and it is what makes the background match the fog's asymptote.
   scene.background = ambientAt(camY, _outCol);
+  uLightPos.value.copy(lanternLight.position);
+  updateLamps(camY, storm);
+  // The grit's ambient share: the water's own radiance at the camera against the zone-0
+  // floor (~0.029 luminance), where the shipped grit was tuned -- so the zone-0 bottom
+  // is unchanged and the deep zones fall to a trace. Floored so a flake is never
+  // mathematically black, capped so the bright shallows do not overexpose it.
+  const aLum = 0.2126 * _outCol.r + 0.7152 * _outCol.g + 0.0722 * _outCol.b;
+  uSnowAmb.value.x = clamp(aLum / 0.029, 0.04, 1.25);
+  _ambP.r = _outCol.r * 5; _ambP.g = _outCol.g * 5; _ambP.b = _outCol.b * 5;
+  uPixP.value = pixScale(renderer, camera);
+  updateParticulate(uTime.value, lanternLight.position, _ambP, camY, ATMOS.bokeh);
   return _outCol;
+}
+
+// ---------------------------------------------------------------------------
+// THE LAMP IN THE MURK — CPU side. Fills the five lamp uniforms GLSL_LAMP reads.
+// Zero allocation: the candidate list is a module array refilled in place by a prebuilt
+// traverse callback every 2 s (the sleeper's ward pool and the vent light are built per
+// zone), and every position read goes through one scratch vector.
+const _lampCands = [];
+let _lampScanT = 1e9, _lampLast = 0;
+const _lp = new THREE.Vector3();
+const _lampCollect = o => {
+  if (o.isPointLight && o !== lanternLight && o !== playerLightSrc) _lampCands.push(o);
+};
+function updateLamps(camY, storm) {
+  // Local extinction at the eye, per channel: exactly the density the fog chunk opens
+  // its integral with (clear column + silt at the camera, storm gain folded in).
+  const n = nephAt(camY), rc = rhoClearAt(camY), sh = nephShape(camY, n);
+  LAMPK_U[0] = (rc * K_EXT[0] + sh * K_PART[0]) * storm;
+  LAMPK_U[1] = (rc * K_EXT[1] + sh * K_PART[1]) * storm;
+  LAMPK_U[2] = (rc * K_EXT[2] + sh * K_PART[2]) * storm;
+  LAMPK_U[3] = ATMOS.lampGain;
+  // In air the scatter would be the marine haze's, three orders thinner: both slots
+  // off, and the chunk's whole lamp block is one compare. The lantern also has to be IN
+  // the water: on the deck it hangs in air even when the camera dips below a crest.
+  const wet = camY < -0.3 && ATMOS.lampOn;
+  const L = lanternLight;
+  if (wet && L.position.y < 0 && L.intensity > 0.01) {
+    LAMPA_U[0] = L.position.x; LAMPA_U[1] = L.position.y; LAMPA_U[2] = L.position.z;
+    LAMPA_U[3] = L.intensity;
+    LAMPAC_U[0] = L.color.r; LAMPAC_U[1] = L.color.g; LAMPAC_U[2] = L.color.b;
+    LAMPAC_U[3] = L.distance > 0 ? L.distance : 60;
+  } else LAMPA_U[3] = 0;
+
+  // Slot B: the strongest other submerged point light as seen from the camera.
+  const now = performance.now();
+  if (now - _lampScanT > 2000 || now < _lampScanT) {
+    _lampScanT = now; _lampCands.length = 0; scene.traverse(_lampCollect);
+  }
+  let best = null, bestS = 0;
+  if (wet) {
+    const cp = camera.position;
+    for (let i = 0; i < _lampCands.length; i++) {
+      const o = _lampCands[i];
+      if (!o.visible || !(o.intensity > 0.05) || !o.parent) continue;
+      o.getWorldPosition(_lp);
+      if (_lp.y > -0.5) continue;
+      const R = o.distance > 0 ? o.distance : 60;
+      const d2 = _lp.distanceToSquared(cp);
+      if (d2 > (R + 40) * (R + 40)) continue;
+      const sc = o.intensity * (o.color.r + o.color.g + o.color.b) / Math.max(d2, 4);
+      if (sc > bestS) { bestS = sc; best = o; }
+    }
+  }
+  if (best) {
+    best.getWorldPosition(_lp);
+    LAMPB_U[0] = _lp.x; LAMPB_U[1] = _lp.y; LAMPB_U[2] = _lp.z;
+    // Its gain rides on its intensity so the chunk keeps one gain uniform.
+    LAMPB_U[3] = best.intensity * ATMOS.lampGainB / Math.max(ATMOS.lampGain, 1e-4);
+    LAMPBC_U[0] = best.color.r; LAMPBC_U[1] = best.color.g; LAMPBC_U[2] = best.color.b;
+    LAMPBC_U[3] = best.distance > 0 ? best.distance : 60;
+  } else LAMPB_U[3] = 0;
+  _lampLast = best;
+}
+if (typeof window !== 'undefined') {
+  window.__atmos = {
+    ATMOS,
+    lamps: () => ({ a: Array.from(LAMPA_U), ac: Array.from(LAMPAC_U), b: Array.from(LAMPB_U),
+      bc: Array.from(LAMPBC_U), k: Array.from(LAMPK_U), bObj: _lampLast && (_lampLast.name || _lampLast.uuid.slice(0, 8)),
+      cands: _lampCands.length }),
+    part: particulateState
+  };
 }
 
 export { clamp };
