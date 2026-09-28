@@ -627,12 +627,12 @@ export function updateLighting(depth01) {
 //  - THE RIM GIVES ENERGY BACK TO THE SILHOUETTE. The directional comes down (xRim) and
 //    the shared backscatter rim in lib/surface.js — edge-only, so it never floods a
 //    floor — carries the separation, for EVERY light behind EVERY object, not just Sal.
-//  - THE SUN SHAPES. Downwelling key up (xSun), omni ambient down (xAmb), so up-facing
+//  - THE SUN SHAPES. Downwelling key x3 (xSun), omni ambient x0.55 (xAmb), so up-facing
 //    and side-facing surfaces separate by value in the lit zone.
 // Every factor rides (1 - air) or air explicitly, and LOOK.on = 0 is the pre-pass frame.
 export const LOOK = {
   on: 1,
-  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.34, fillDist: 15, fillWarm: 0.6, xRim: 0.45, xSun: 2.0, xAmb: 0.45, xHemi: 0.85, deepFill: 0.5 },
+  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.34, fillDist: 15, fillWarm: 0.6, xRim: 0.45, xSun: 3.0, xAmb: 0.55, xHemi: 0.95, deepFill: 0.5 },
   air:   { xLant: 1.0, xLantDeep: 0.0, lantDecay: 1.9,  xFill: 0.10, fillDist: 11, fillWarm: 0.0, xRim: 0.7,  xSun: 1.35, xAmb: 0.55, xHemi: 0.92, deepFill: 0.0 },
   // THE DECK (air only): the key goes to sunlit white-gold, the omni fill to the sky's own
   // neutral (it was the shallows' teal, dyeing timber), and the hemisphere's lower end
