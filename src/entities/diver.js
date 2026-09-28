@@ -8,7 +8,7 @@ import { registerPaint, styleUniforms } from '../lib/paint.js';
 // The deck is a MOVING GROUND. A stance anchor claimed on planks is stored relative to
 // raft.position so it heaves and surges with the boat; a world-space anchor would leave
 // the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
-import { raft } from '../systems/raft.js';
+import { raft, pumpPos } from '../systems/raft.js';
 import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // Exhaust bubbles die INTO the swell, not at a flat plane; survival's air fraction
 // drives the breath cadence. (No cycles: neither module imports the diver.)
@@ -2542,6 +2542,7 @@ const VALVE_DUR = 2.7;
 let prevBurstT = 0, burstW = 0;
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
+let hoseLean = 0, hoseRoll = 0, hoseTautWas = 0;
 const accLean = { x: 0, v: 0 };
 const lkY = { x: 0, v: 0 }, lkX = { x: 0, v: 0 };
 // slope adaptation state
@@ -2844,6 +2845,27 @@ export function updateDiver(dt, t, player) {
     } else grabT = 0;
   }
   {
+    // THE HOSE. At the end of the line the umbilical is a bar pulling him back toward
+    // the raft: he leans into it, head down, and the moment it comes up hard he is
+    // yanked — a jolt through the torso and the helmet from the side the hose is on.
+    const taut = survival.tautness || 0;
+    const k = ss(0.88, 1.0, taut);
+    hoseLean = 0; hoseRoll = 0;
+    if (k > 1e-3) {
+      const hx = pumpPos.x - player.pos.x, hz = pumpPos.z - player.pos.z, hn = Math.hypot(hx, hz) || 1;
+      const sy = Math.sin(yawF), cy = Math.cos(yawF);
+      const back = -(hx * sy + hz * cy) / hn, lat = (hx * cy - hz * sy) / hn;
+      const strain = k * (0.35 + 0.65 * clamp(amp * 2 + (1 - gb) * clamp(speed * 0.3, 0, 1), 0, 1));
+      hoseLean = 0.14 * strain * Math.max(0, back);
+      hoseRoll = -0.07 * strain * lat;
+      po[CH.sPitch] += 0.07 * strain; po[CH.nPitch] += 0.10 * strain;
+      if (taut > 0.995 && hoseTautWas <= 0.995) {
+        rcP.v -= 1.5 * back * SAL.react; rcR.v += 1.0 * lat * SAL.react; rcH.v -= 1.2 * SAL.react;
+      }
+    }
+    hoseTautWas = taut;
+  }
+  {
     // LOW AIR: the posture goes before the man does. Shoulders round, the head drops and
     // then jerks up — looking for the surface he cannot see — on the panic breath clock.
     if (airLow > 0.01) {
@@ -2946,7 +2968,7 @@ export function updateDiver(dt, t, player) {
     // Climbing, he leans into the hill; descending, he sits back against it.
     const sx = Math.sin(yawF) * 0.5, sz = Math.cos(yawF) * 0.5;
     const hill = gdOn ? Math.atan(groundD(player.pos.x + sx, player.pos.z + sz) - groundD(player.pos.x - sx, player.pos.z - sz)) : 0;
-    spring(accLean, (clamp(accF * 0.045, -0.11, 0.10) + 0.035 * amp + 0.30 * hill * amp) * gb * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
+    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + 0.035 * amp + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
   }
   // Slope: the downhill boot needs ground below the centre floor; the pelvis drops so
   // that leg can reach it, and the uphill knee takes up the difference.
@@ -2992,7 +3014,7 @@ export function updateDiver(dt, t, player) {
       : gaitState === 3 ? 0.085                            // STOP: pitch into the catch step
         : 0,
     dt, 7.5, 0.62);
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x, 0, sRollT.x + bankG + rcR.x);
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x, 0, sRollT.x + bankG + rcR.x + hoseRoll);
 
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);
