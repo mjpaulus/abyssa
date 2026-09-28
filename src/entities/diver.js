@@ -2308,6 +2308,8 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     const hit = clamp(-player.vel.y * 0.55, 0, 4.2);
     settle.v -= 1.2 + hit;
     landImp = hit;
+    // the arms come out for balance and the bonnet nods into the impact
+    rcA.v += 0.9 * hit * SAL.react; rcH.v += 0.6 * hit * SAL.react; rcD.v -= 0.5 * hit * SAL.react;
     ftR.planted = ftL.planted = false;
   }
   prevGrounded = !!player.grounded;

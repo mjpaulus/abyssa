@@ -662,7 +662,7 @@ Object.defineProperties(window, {
 const camVel = V3(), camAim = V3(), camDesired = V3(), camLook = V3();
 const camBack = V3(), camTo = V3(), camRight = V3();   // hot-path temps, never allocated per frame
 const camUpAxis = V3(0, 1, 0);
-let camDist = 9, camRoll = 0, camFov = 70;
+let camDist = 9, camDistV = 0, camRoll = 0, camFov = 70;
 // A respawn TELEPORTS the diver, and the spring then flew the camera the whole way after
 // him — measured 210 units in ~1.2 s, during which the frame peaked at 3.15x its normal
 // luminance and fell back. That bright wash is the camera crossing the entire water
@@ -849,7 +849,11 @@ function updateCamera(dt, t, fwd) {
 
   buildDynCols();
   const want = clearCamDistance(player.pos, camBack, CAM_BACK, zi);
-  camDist += (want - camDist) * Math.min(1, (want < camDist ? 14 : 4) * dt);
+  // In fast (an obstacle must never be clipped through), out on a critically-damped
+  // spring: the old first-order ease left the wall at full speed, a visible kink every
+  // time a rock slid out of the line of sight. The spring leaves it at rest.
+  if (want < camDist) { camDist += (want - camDist) * Math.min(1, 14 * dt); camDistV = 0; }
+  else { const w = 4.5; camDistV += (w * w * (want - camDist) - 2 * w * camDistV) * Math.min(dt, 0.05); camDist += camDistV * Math.min(dt, 0.05); if (camDist > want) { camDist = want; camDistV = 0; } }
 
   camDesired.copy(player.pos).addScaledVector(camBack, camDist);
   camDesired.y += CAM_UP;
@@ -958,7 +962,7 @@ function updateCamera(dt, t, fwd) {
     camera.position.copy(camDesired);
     camVel.set(0, 0, 0);
     camLook.copy(player.pos).addScaledVector(fwd, 6);
-    camDist = want;
+    camDist = want; camDistV = 0;
   }
 
   // critically-damped spring: settles without the rubber-band of a raw lerp
