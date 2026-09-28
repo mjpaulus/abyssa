@@ -163,9 +163,13 @@ const port = new THREE.MeshStandardMaterial({
   color: 0x121519, metalness: 0.55, roughness: 0.42, envMap: envTex, envMapIntensity: 0.3,
   roughnessMap: copperM.rough, normalMap: copperM.nrm, normalScale: new THREE.Vector2(0.3, 0.3)
 });
-const blueLit = new THREE.MeshStandardMaterial({
-  color: 0x0e2c44, emissive: 0x4db8ff, emissiveIntensity: 2.4, roughness: 0.3, metalness: 0.1,
-  envMap: envTex, envMapIntensity: 0.3
+// The regulator's gauge face: aged ivory enamel under glass. It used to be `blueLit`, an
+// emissive 0x4db8ff lens at 2.4 plus a blue glow sprite — a prototype leftover that read
+// as neon on the back of a brass-age suit (lighting audit). A gauge does not glow; it
+// catches the lantern and the column's light like the rest of the brass.
+const gaugeFace = new THREE.MeshStandardMaterial({
+  color: 0xb9ab88, roughness: 0.28, metalness: 0.0,
+  envMap: envTex, envMapIntensity: 0.55
 });
 const rubber = new THREE.MeshStandardMaterial({
   map: rubberM.map, roughnessMap: rubberM.rough, normalMap: rubberM.nrm, normalScale: new THREE.Vector2(0.8, 0.8),
@@ -480,7 +484,7 @@ hoseMat.onBeforeCompile = sh => {
 };
 hoseMat.customProgramCacheKey = () => 'salHose1';
 for (const m of [steel, lead, cloth, trim, leather, darkLeather, rubber, hoseMat]) registerPaint(m);
-for (const m of [copper, brass, port, blueLit, glassMat, lantGlass]) registerPaint(m, { hero: true });
+for (const m of [copper, brass, port, gaugeFace, glassMat, lantGlass]) registerPaint(m, { hero: true });
 // the blade's water-drag streak: additive, opacity animated by the slash clock
 const dragMat = new THREE.MeshBasicMaterial({
   color: 0x9fd8f0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
@@ -1230,7 +1234,7 @@ export const diver = (() => {
     p.bake();
   }
 
-  // ---- backpack apparatus: tank, bottle, regulator box, one blue tell-tale ----
+  // ---- backpack apparatus: tank, bottle, regulator box and its gauge ----
   {
     const pk = new THREE.Group(); pk.position.set(0, 0.40, -0.435); spine.add(pk);
     g.pack = pk;
@@ -1245,14 +1249,12 @@ export const diver = (() => {
     p.add(xf(new THREE.BoxGeometry(0.30, 0.17, 0.16), -0.02, 0.30, -0.02), steel);          // regulator box
     p.add(xf(new THREE.BoxGeometry(0.32, 0.035, 0.175), -0.02, 0.375, -0.02), darkLeather);
     for (const sx of [-1, 1]) p.add(xf(new THREE.BoxGeometry(0.055, 0.62, 0.02), sx * 0.20, 0.02, 0.115), darkLeather);
-    // the one glowing element: blue lens ring on the regulator's upper corner
+    // the regulator's pressure gauge on its upper corner: brass bezel, ivory face, a
+    // dark needle standing at working pressure. No emissive, no glow sprite.
     p.add(xf(new THREE.TorusGeometry(0.054, 0.015, 6, 16), 0.195, 0.352, -0.158), brass);
-    p.add(xf(new THREE.CylinderGeometry(0.047, 0.047, 0.06, 16).rotateX(Math.PI / 2), 0.195, 0.352, -0.146), blueLit);
+    p.add(xf(new THREE.CylinderGeometry(0.047, 0.047, 0.06, 16).rotateX(Math.PI / 2), 0.195, 0.352, -0.146), gaugeFace);
+    p.add(xf(new THREE.BoxGeometry(0.0055, 0.034, 0.004).translate(0, 0.014, 0), 0.195, 0.352, -0.1775, 0, 0, -0.6), darkLeather);
     p.bake();
-    const gl = makeGlow(0x7fd0ff, 0.46);
-    gl.position.set(0.195, 0.352, -0.196);
-    gl.material.opacity = 0.55;
-    pk.add(gl);
     // hose attachment point: shoulder/top of the main tank, where the feed hose rises off
     const hoseInlet = new THREE.Group();
     hoseInlet.position.set(-0.03, 0.33, -0.15);
@@ -2548,6 +2550,7 @@ const PEER_DUR = 4.2;
 let prevBurstT = 0, burstW = 0;
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
+const strafeS = { x: 0, v: 0 };
 let hoseLean = 0, hoseRoll = 0, hoseTautWas = 0;
 const accLean = { x: 0, v: 0 };
 const lkY = { x: 0, v: 0 }, lkX = { x: 0, v: 0 };
@@ -2581,7 +2584,25 @@ export function updateDiver(dt, t, player) {
   // Standing, the body comes round SLOWER than walking (4.5/s against 9): a man in lead
   // boots turns by stepping, and the look direction runs ahead of him — the helmet and
   // shoulders take up the difference (turn anticipation, in the life layer below).
-  yawF = lerp(yawF, player.yaw, Math.min(1, (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * dt));
+  // STRAFE BLEND. Walking sideways on forward-keyed legs flung the boots out at the
+  // hip (measured on a contact sheet: a leg abducted near 45 degrees every other step).
+  // A man in lead boots does not side-step across a seabed, he turns his hips to the
+  // way he is going and keeps his eyes where he was looking. So the BODY heading bends
+  // toward the travel direction (up to ~70 degrees), and the look-lead below counter-
+  // rotates the spine and helmet back onto player.yaw. Backing up keeps its facing and
+  // only takes a diagonal's share. Grounded walking only; swimming sculls instead.
+  {
+    let off = 0;
+    const fl = Math.hypot(player.vel.x, player.vel.z);
+    if (player.grounded && fl > 0.25) {
+      let a = Math.atan2(player.vel.x, player.vel.z) - player.yaw;
+      a = Math.atan2(Math.sin(a), Math.cos(a));
+      off = Math.abs(a) < 2.0 ? clamp(a, -1.2, 1.2) : clamp(a - Math.sign(a) * Math.PI, -0.5, 0.5);
+      off *= clamp(fl * 1.2 - 0.3, 0, 1);
+    }
+    spring(strafeS, off, dt, 5, 1);
+  }
+  yawF = lerp(yawF, player.yaw + strafeS.x, Math.min(1, (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * dt));
   diver.rotation.y = yawF;
 
   // Stepping onto planks kills the aquatic motion in ~0.15 s rather than half a second:
@@ -2764,7 +2785,7 @@ export function updateDiver(dt, t, player) {
     // yawF is the body's own lagging heading, so its gap to the look direction IS the
     // turn he is about to make. The head leads into it, the spine takes a share, the
     // pelvis holds back — a turn becomes a ripple down the body instead of a turret.
-    const lead = clamp(dYaw, -0.9, 0.9);
+    const lead = clamp(dYaw, -1.25, 1.25);
     let hy = lead * 0.85, hp = 0;
     // LOOK-AT. Whatever game.js says is worth noticing (a creature, the sleeper, a light
     // in the dark). Heaviest at a standstill, lighter on the move, gone while he fights.
