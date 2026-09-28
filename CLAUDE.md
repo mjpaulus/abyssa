@@ -404,6 +404,23 @@ Hidden or driven (`__power.drive`) frames never enter the window. `__perf.state(
 `__perf.log()` show the judge's reading and every transition; `?lab` adds
 `__perf.load` (ms busy-wait per frame) and `__perf.judgeHidden` for testing.
 
+### AAA pass 2 (2026-09-28, roadmap/aaa-motion-atmos.md)
+- DYNAMIC RESOLUTION: `core.js` RES_SCALE is the CEILING now; `setRenderScale` moves the
+  live scale (floor 0.85) through the same coalesced applySize/flushSize path as a window
+  resize. `postfx.js` `updateResScale` (inside samplePerf, so hidden/driven/idle-cap frames
+  never steer it) holds the GPU median at 55-78% of the governor slot. Acts before the
+  quality ladder. `__drs.state()`, `__drs.pin(x)` (pins and turns it off). To judge perf
+  in the pane: `__power.drive(false)` and `__power.set(60,60)`, or the judge sees nothing.
+- `lib/surface.js` is a GLOBAL patch on the lights chunks (path extinction, wrap, rim, wet
+  film, thin-sheet transmission, medium env, horizon occlusion, specular AA). Zero
+  variants; every term gated by a shared uniform. `abyssaPath.w` = specular-AA gain.
+- `world/stir.js` is the shared disturbance bus (movers + startle pulses) every animal and
+  plant reads; game.js pushes sleeper blows into it with `stirPulse`.
+- `world/particulate.js` (bokeh, plankton, spray) and the lamp in-scatter in water.js's fog
+  chunk (`syncLamps()` after updateLighting) belong to the atmosphere.
+- Sleepers publish `ev.quake` (camera shake). Sal takes `diverImpulse`/`diverGrab`/
+  `diverLookAt` from game.js.
+
 ### 2026-09 campaign (see roadmap/everything-better.md)
 Skill-pack sweeps (shaders/textures/lighting/geometry/postfx/animation), a design
 evaluation (roadmap/eval-*.md, all shipped), and two campaign waves. New systems:
