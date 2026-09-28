@@ -3043,7 +3043,9 @@ export function updateDiver(dt, t, player) {
 
   // brass helmet lags the torso, then over-settles
   spring(hdY, -0.5 * pc[CH.sYaw] + pc[CH.nYaw], dt, 7, 0.55);
-  spring(hdX, -0.35 * pc[CH.sPitch] + pc[CH.nPitch], dt, 6.5, 0.6);
+  // ...and the weight of it: each heel strike's settle nods the bonnet forward a beat
+  // late (the under-damped spring supplies the lag and the one small rebound).
+  spring(hdX, -0.35 * pc[CH.sPitch] + pc[CH.nPitch] - settle.x * 0.12, dt, 6.5, 0.6);
   diver.neck.rotation.set(hdX.x + rcH.x, hdY.x - 0.4 * rcY.x, 0.25 * rcR.x);
 
   // ---- THE LEGS. Everything above is authored; from here the GROUND is boss. ----
