@@ -1876,6 +1876,23 @@ function poseSwim(o, p, t, drive) {
   o[CH.Re] = -(0.85 + dragS(td * 0.8 + 0.6) * 0.10);
   o[CH.Lsx] = -0.22 + dragS(td * 0.66 + 2) * 0.30; o[CH.Lsz] = 0.42 + dragS(td * 0.5) * 0.10; o[CH.Lsy] = 0.18;
   o[CH.Le] = -(0.55 + dragS(td * 0.66 + 1.2) * 0.28);
+  // THE FREE HAND SCULLS WITH THE KICK. As the knees draw up (recovery) the left hand
+  // reaches forward with the elbow bent; on the snap it pulls down and back past the
+  // hip, straightening; through the glide it trails. Keyed off the kick's own warped
+  // phase a beat early (the arm leads the legs), so the stroke IS the push the player
+  // feels in player.js, not a second clock. The lantern arm only answers it a little.
+  // Hanging in the column with no way on, nothing is locked: the knees soften and the
+  // legs sit a little forward of the hips, the way a relaxed body floats.
+  const relax = 1 - drive;
+  o[CH.Rhx] -= 0.10 * relax; o[CH.Lhx] -= 0.06 * relax;
+  o[CH.Rk] += 0.22 * relax; o[CH.Lk] += 0.30 * relax;
+  const st = S.hip(pk + 0.06), sk = S.knee(pk + 0.06) / 1.45;
+  const dv = 0.35 + 0.65 * drive;
+  o[CH.Lsx] += dv * (0.28 - 0.80 * st);
+  o[CH.Le] -= dv * 0.55 * sk;
+  o[CH.Lsz] += dv * 0.14 * st;
+  o[CH.Rsx] += dv * (0.08 - 0.22 * st);
+  o[CH.Re] -= dv * 0.15 * sk;
 }
 
 // ---- knife slash: a one-shot keyed overlay on the LEFT arm ----
@@ -2243,9 +2260,11 @@ function rollThrough(u, out) {
   return out.set(th, cz, 0);
 }
 
+// hoisted: two array literals per frame were the rig's last allocations
+const LEGS = [diver.legR, diver.legL], FTS = [ftR, ftL];
 // ---- the ground is boss ----
 function driveLegs(dt, player, ikOn, amp, stepRate) {
-  const legs = [diver.legR, diver.legL], fts = [ftR, ftL];
+  const legs = LEGS, fts = FTS;
 
   // The hips' world matrix, composed by hand from the three transforms we just wrote.
   // Everything above the pelvis is authored and already final, so this is exact — and it
@@ -2481,6 +2500,8 @@ export function diverImpulse(kind, dx = 0, dz = 0, mag = 1) {
   rcD.v -= 2.2 * k;                   // the knees buckle under it
 }
 export function diverGrab(on) { grabOn = !!on; }
+// blend one composed channel toward a target (module function: no per-frame closure)
+function poMix(ch, v, w) { po[ch] += (v - po[ch]) * w; }
 let idleT = 0, valveT = -1, valveNext = 11, valveIdx = 0, valveW = 0;
 const VALVE_DUR = 2.7;
 let prevBurstT = 0, burstW = 0;
@@ -2653,22 +2674,43 @@ export function updateDiver(dt, t, player) {
     const w = ladderF;
     const s = Math.sin(player.pos.y * 3.4);        // +1 = right hand reaching for the next rung
     const rUp = 0.5 + 0.5 * s, lUp = 1 - rUp;
-    const mix = (ch, v) => { po[ch] += (v - po[ch]) * w; };
+    const mix = poMix;   // (ch, v, w) — module function, no per-frame closure
     // squared to the rungs: swim bob, sway and roll die under the grip
-    mix(CH.bobY, 0); mix(CH.shiftX, 0); mix(CH.pYaw, 0); mix(CH.pRoll, 0);
-    mix(CH.pPitch, 0.10); mix(CH.sPitch, -0.16); mix(CH.sRoll, 0);
-    mix(CH.nPitch, 0.22);                          // eyes up the ladder, where he is going
+    mix(CH.bobY, 0, w); mix(CH.shiftX, 0, w); mix(CH.pYaw, 0, w); mix(CH.pRoll, 0, w);
+    mix(CH.pPitch, 0.10, w); mix(CH.sPitch, -0.16, w); mix(CH.sRoll, 0, w);
+    mix(CH.nPitch, 0.22, w);                          // eyes up the ladder, where he is going
     // arms: the reaching arm goes long overhead, the holding arm stays bent on its rung
-    mix(CH.Rsx, -1.15 - 0.75 * rUp); mix(CH.Rsz, 0.16); mix(CH.Rsy, -0.06);
-    mix(CH.Re, -(0.95 - 0.60 * rUp));
-    mix(CH.Lsx, -1.15 - 0.75 * lUp); mix(CH.Lsz, 0.16); mix(CH.Lsy, 0.06);
-    mix(CH.Le, -(0.95 - 0.60 * lUp));
+    mix(CH.Rsx, -1.15 - 0.75 * rUp, w); mix(CH.Rsz, 0.16, w); mix(CH.Rsy, -0.06, w);
+    mix(CH.Re, -(0.95 - 0.60 * rUp), w);
+    mix(CH.Lsx, -1.15 - 0.75 * lUp, w); mix(CH.Lsz, 0.16, w); mix(CH.Lsy, 0.06, w);
+    mix(CH.Le, -(0.95 - 0.60 * lUp), w);
     // legs: knees tucked, stepping contralaterally (right hand up, left knee up)
-    mix(CH.Rhx, -0.35 - 0.30 * lUp); mix(CH.Rhz, 0.07); mix(CH.Rk, 0.65 + 0.35 * lUp); mix(CH.Ra, 0.25);
-    mix(CH.Lhx, -0.35 - 0.30 * rUp); mix(CH.Lhz, 0.07); mix(CH.Lk, 0.65 + 0.35 * rUp); mix(CH.La, 0.25);
+    mix(CH.Rhx, -0.35 - 0.30 * lUp, w); mix(CH.Rhz, 0.07, w); mix(CH.Rk, 0.65 + 0.35 * lUp, w); mix(CH.Ra, 0.25, w);
+    mix(CH.Lhx, -0.35 - 0.30 * rUp, w); mix(CH.Lhz, 0.07, w); mix(CH.Lk, 0.65 + 0.35 * rUp, w); mix(CH.La, 0.25, w);
   }
 
   // ---- THE LIFE LAYER: intent (see the block above diverLookAt) ----
+  {
+    // DRAG AND DESCENT, off the ground only. Moving fast, the water takes the legs back
+    // behind him; sinking, the knees come up and the arms lift out for the landing he
+    // can see coming, the helmet tipping down toward it in the last few units.
+    const off = 1 - gb;
+    if (off > 1e-3) {
+      const hs = Math.hypot(player.vel.x, player.vel.z);
+      const trail = clamp(hs / 14, 0, 1) * off;
+      po[CH.Rhx] += 0.24 * trail; po[CH.Lhx] += 0.24 * trail;
+      po[CH.Rk] += 0.10 * trail; po[CH.Lk] += 0.10 * trail;
+      po[CH.Ra] -= 0.25 * trail; po[CH.La] -= 0.25 * trail;
+      const sink = clamp((-player.vel.y - 0.5) / 3.0, 0, 1) * off;
+      if (sink > 1e-3) {
+        const near = 1 - ss(1.5, 6, player.pos.y - (player.groundY ?? -1e9));   // groundY is the standing eye height
+        po[CH.Rhx] -= (0.22 + 0.25 * near) * sink; po[CH.Lhx] -= (0.18 + 0.25 * near) * sink;
+        po[CH.Rk] += (0.30 + 0.35 * near) * sink; po[CH.Lk] += (0.26 + 0.35 * near) * sink;
+        po[CH.Rsz] += 0.30 * sink; po[CH.Lsz] += 0.30 * sink;
+        po[CH.nPitch] += 0.30 * near * sink;
+      }
+    }
+  }
   const airLow = 1 - clamp(survival.oxygen / 0.35, 0, 1);
   let dYaw = player.yaw - yawF;
   dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
@@ -2787,12 +2829,11 @@ export function updateDiver(dt, t, player) {
     burstW += ((bt > 0 ? 1 : 0) - burstW) * Math.min(1, (bt > 0 ? 9 : 2.2) * dt);
     if (burstW > 1e-3) {
       const w = burstW * (1 - ladderF);
-      const m = (ch, v) => { po[ch] += (v - po[ch]) * w; };
-      m(CH.Rsx, 0.55); m(CH.Rsz, 0.22); m(CH.Re, -0.30);
-      if (slashT < 0) { m(CH.Lsx, 0.55); m(CH.Lsz, 0.18); m(CH.Le, -0.25); }
-      m(CH.Rhx, 0.12); m(CH.Rk, 0.10); m(CH.Ra, -0.45);
-      m(CH.Lhx, 0.18); m(CH.Lk, 0.16); m(CH.La, -0.40);
-      m(CH.nPitch, -0.18);
+      poMix(CH.Rsx, 0.55, w); poMix(CH.Rsz, 0.22, w); poMix(CH.Re, -0.30, w);
+      if (slashT < 0) { poMix(CH.Lsx, 0.55, w); poMix(CH.Lsz, 0.18, w); poMix(CH.Le, -0.25, w); }
+      poMix(CH.Rhx, 0.12, w); poMix(CH.Rk, 0.10, w); poMix(CH.Ra, -0.45, w);
+      poMix(CH.Lhx, 0.18, w); poMix(CH.Lk, 0.16, w); poMix(CH.La, -0.40, w);
+      poMix(CH.nPitch, -0.18, w);
     }
   }
 
