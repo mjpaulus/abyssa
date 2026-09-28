@@ -60,6 +60,7 @@ import { rockColliders } from './flora.js';
 import { activeVents } from './vents.js';
 import { siteParams, stream } from './site.js';
 import { player } from '../player.js';
+import { setMover, pulseAt, PULSE_DIR, M_RAY, M_TURTLE0, M_TURTLE1 } from './stir.js';
 
 const TAU = Math.PI * 2;
 
@@ -184,6 +185,10 @@ vec3 skCatch(vec3 n, vec3 v, vec3 vpos){
 // Layout stream: installed fresh from siteParams('fauna') by build and reseed.
 let _fr = Math.random;
 const rr = (a, b) => a + _fr() * (b - a);
+// Behaviour-time randomness (glide bouts): its own stream, so stepping never consumes the
+// layout stream and a reseed stays a pure function of the site.
+const BEH = stream(0xBE4A7105);
+const rr2 = (a, b) => a + BEH() * (b - a);
 // Geometry is built once and never reseeded, so it draws from its own fixed stream —
 // otherwise the first build's layout would differ from an arrive() back to the site.
 const GEO = stream(0xFA0BA5E1);
@@ -577,16 +582,29 @@ if (fnPart < 1.5) {
   // wave-wing: a travelling wave out along the span, root still, tip loose
   float fnS = abs(fnP.z) / uBody.w;
   float fnK = smoothstep(0.05, 1.0, fnS);
-  float fnArg = fnStroke - fnS * uMot.z + fnP.x * 0.4 + aPhase;
+  // anim-fauna: + a CHORDWISE wave (uHinge.y, ray only): the leading edge leads, the
+  // flap rolls back across the wing like a mobulid's, instead of only out along it
+  float fnArg = fnStroke - fnS * uMot.z + fnP.x * (0.4 + uHinge.y) + aPhase;
   float fnA = uMot.y * fnK * fnK * (0.35 + 0.65*fnEff);
   fnP.y += sin(fnArg) * fnA;
   fnN.z -= cos(fnArg) * fnA * uMot.z * sign(fnP.z) * 0.6;
+  fnN.x -= cos(fnArg) * fnA * uHinge.y * 0.5;
 } else if (fnPart < 3.5) {
-  // legs: a shuffle keyed per leg by aPhase, only while walking (effort)
+  // legs: a step cycle keyed per leg by aPhase, only while walking (effort). The foot
+  // strokes along the travel axis on the ground and lifts on the return: uHinge.x
+  // picks the axis (0 = fore-aft, the isopod; 1 = sideways, the crab).
   float fnL = clamp(1.0 - fnP.y / 0.35, 0.0, 1.0);
   float fnArg = fnStroke + aPhase;
-  fnP.x += sin(fnArg) * uMot.w * fnEff * fnL;
-  fnP.y += max(0.0, cos(fnArg)) * uMot.w * 0.6 * fnEff * fnL;
+  float fnStep = sin(fnArg) * uMot.w * fnEff * fnL;
+  float fnSide = sign(fnP.z);
+  fnP.x += fnStep * (1.0 - uHinge.x);
+  fnP.z += fnStep * uHinge.x * fnSide * fnSide;
+  fnP.y += max(0.0, cos(fnArg)) * uMot.w * 0.8 * fnEff * fnL;
+  // crab CLAWS (aPhase = +-1.3): the threat display lifts and spreads the chelae
+  // (aInst.z carries the display for crabs, 0..1)
+  float fnClaw = (1.0 - step(0.06, abs(abs(aPhase) - 1.3))) * uHinge.x;
+  float fnLift = aInst.z * fnClaw * max(0.0, fnP.x - 0.3);
+  fnP.y += fnLift * 0.9; fnP.z += sign(fnP.z) * fnLift * 0.35; fnP.x -= fnLift * 0.25;
 } else if (fnPart < 4.5) {
   // jaw: hinge about a line parallel to z through uHinge.xy, opening downward
   float fnAng = -aInst.z * uHinge.w;
@@ -595,10 +613,13 @@ if (fnPart < 1.5) {
   fnP.xy = uHinge.xy + vec2(fnD.x*fnC - fnD.y*fnS2, fnD.x*fnS2 + fnD.y*fnC);
   fnN.xy = vec2(fnN.x*fnC - fnN.y*fnS2, fnN.x*fnS2 + fnN.y*fnC);
 } else if (fnPart < 5.5) {
-  // lure: the stalk sways, more toward the tip
+  // lure: the stalk sways, more toward the tip — and every few seconds it TWITCHES,
+  // a quick jig of the esca the way a real angler works its bait
   float fnH = clamp((fnP.y - uHinge.z) * 0.8, 0.0, 1.5);
-  fnP.z += sin(uTime * 0.9 + aInst.x * 0.2) * 0.07 * fnH;
-  fnP.x += sin(uTime * 0.6 + 1.3) * 0.04 * fnH;
+  float fnTw = pow(max(0.0, sin(uTime * 0.83 + aInst.x * 0.07)), 18.0);
+  fnP.z += (sin(uTime * 0.9 + aInst.x * 0.2) * 0.07 + sin(uTime * 23.0) * 0.05 * fnTw) * fnH;
+  fnP.x += (sin(uTime * 0.6 + 1.3) * 0.04 + cos(uTime * 19.0) * 0.03 * fnTw) * fnH;
+  fnP.y += sin(uTime * 1.7 + aInst.x * 0.11) * 0.02 * fnH - fnTw * 0.03 * fnH;
 } else if (fnPart < 6.5) {
   // umbrella: radial contraction rolling from the mantle to the rim
   float fnR = length(fnP.xz);
@@ -607,12 +628,21 @@ if (fnPart < 1.5) {
   fnP.xz *= 1.0 - uMot.y * fnCt * fnT;
   fnP.y += fnCt * uMot.z * fnT - fnCt * 0.06 * (1.0 - fnT);
 } else {
-  // rigid flipper: rotate about the root line (|z| = uHinge.z) through the stroke
+  // flipper, the turtle's FLYING stroke: the fore pair (aPhase 0) beats like wings —
+  // a quick powered downstroke with the leading edge twisted down (pronation) and a
+  // slower recovery; the hind pair (aPhase pi) only steer and trim. Gliding, the fore
+  // flippers sweep back along the shell.
   float fnS = max(0.0, abs(fnP.z) - uHinge.z);
-  float fnArg = fnStroke + aPhase;
-  fnP.y += sin(fnArg) * uMot.w * fnEff * fnS;
-  fnP.x -= max(0.0, cos(fnArg)) * uMot.w * 0.25 * fnEff * fnS;
-  fnN.z -= sin(fnArg) * uMot.w * fnEff * 0.4 * sign(fnP.z);
+  float fnFore = 1.0 - step(1.0, aPhase);
+  float fnArg = fnStroke;
+  float fnW = sin(fnArg + 0.55 * sin(fnArg));           // skewed: fast down, slow up
+  float fnAmp = uMot.w * fnEff * mix(0.28, 1.0, fnFore);
+  float fnChord = fnP.x - (fnFore > 0.5 ? 0.2 : -0.8);   // + = leading side of the flipper
+  fnP.y += fnW * fnAmp * fnS - cos(fnArg) * fnAmp * 0.35 * fnChord * fnS * fnFore;
+  fnP.x -= max(0.0, cos(fnArg)) * fnAmp * 0.25 * fnS;
+  fnP.x -= (1.0 - fnEff) * fnFore * fnS * 0.45;         // the glide tuck
+  fnP.z -= sign(fnP.z) * (1.0 - fnEff) * fnFore * fnS * 0.18;
+  fnN.z -= fnW * fnAmp * 0.4 * sign(fnP.z);
 }
 objectNormal = normalize(fnN);`;
 
@@ -1000,6 +1030,7 @@ function rayLayout(G) {
   st[0] = x; st[1] = terrainH(x, z, 0) + 9; st[2] = z;
   st[3] = rr(0, TAU); st[4] = 0; st[5] = 0; st[6] = rr(0, TAU); st[7] = 0.5; st[8] = 0; st[9] = 0;
   G.sc[0] = rr(0.92, 1.1);
+  G.alarm = 0; G.adx = 1; G.adz = 0; G.gl = 0; G.glT = 0; G.spd = 2.7;
   rayGoal(G);
 }
 function rayGoal(G) {
@@ -1018,9 +1049,20 @@ function rayStep(G) {
   // keep a giant's distance from the diver, unhurried
   const px = x - _pp.x, pz = z - _pp.z, pd = Math.hypot(px, pz);
   if (pd < 9) want = Math.atan2(-pz, px);
-  h = turnTo(h, want, 0.32 * dt);
+  // a jolt (sonar, strike, footfall) banks it away in a few hard strokes
+  const pk = pulseAt(x, y, z);
+  if (pk > 0.3) { G.alarm = Math.max(G.alarm || 0, pk); G.adx = PULSE_DIR.x; G.adz = PULSE_DIR.z; }
+  G.alarm = Math.max(0, (G.alarm || 0) - dt * 0.4);
+  if (G.alarm > 0.1) want = Math.atan2(-G.adz, G.adx);
+  h = turnTo(h, want, (0.32 + G.alarm * 0.6) * dt);
   const turnRate = _turn / dt;
-  const speed = 2.7;
+  // FLAP AND GLIDE (anim-fauna): bouts of slow wingbeats, then long glides on
+  // outstretched wings — the rhythm of a manta over a reef
+  G.glT = (G.glT || 0) - dt;
+  if (G.glT <= 0) { G.gl = G.gl ? 0 : 1; G.glT = G.gl ? rr2(3.5, 6.5) : rr2(4, 8); }
+  const gliding = G.gl && G.alarm < 0.1 && Math.abs(turnRate) < 0.12;
+  G.spd = (G.spd || 2.7) + (((gliding ? 2.2 : 2.9) + G.alarm * 2.5) - (G.spd || 2.7)) * Math.min(1, dt * 0.4);
+  const speed = G.spd;
   x += Math.cos(h) * speed * dt; z += -Math.sin(h) * speed * dt;
   // altitude: goal height over the floor, never under a rock's crown
   const floor = terrainH(x, z, 0);
@@ -1033,10 +1075,13 @@ function rayStep(G) {
   st[4] += (clamp(vy * 0.35, -0.4, 0.4) - st[4]) * Math.min(1, dt * 2);
   st[5] += (clamp(turnRate * 2.2, -0.55, 0.55) - st[5]) * Math.min(1, dt * 1.6);
   // effort: climbing and turning cost strokes; a level glide is a slow beat
-  const eff = clamp(0.35 + Math.max(0, vy) * 0.5 + Math.abs(turnRate) * 1.5, 0.3, 1);
-  st[7] += (eff - st[7]) * Math.min(1, dt * 1.5);
-  st[6] += dt * (0.9 + st[7] * 1.6);
+  let eff = clamp(0.35 + Math.max(0, vy) * 0.5 + Math.abs(turnRate) * 1.5 + G.alarm, 0.3, 1);
+  if (gliding) eff = 0.06;
+  st[7] += (eff - st[7]) * Math.min(1, dt * (gliding ? 0.8 : 1.5));
+  // the wings settle to a held, barely-rippling span in a glide (the beat slows, not stops)
+  st[6] += dt * (0.25 + st[7] * 2.2);
   if (st[6] > 6283) st[6] -= 6283;
+  setMover(M_RAY, x, y, z, 3.5 * G.sc[0], Math.cos(h) * speed, vy, -Math.sin(h) * speed, 0.7);
 }
 
 // ---- TURTLE: stroke / glide, flees a close diver ----
@@ -1048,7 +1093,7 @@ function turtleLayout(G) {
     st[o] = x; st[o + 1] = terrainH(x, z, 0) + rr(3, 7); st[o + 2] = z;
     st[o + 3] = rr(0, TAU); st[o + 4] = 0; st[o + 5] = 0; st[o + 6] = rr(0, TAU); st[o + 7] = 0.5; st[o + 8] = 0; st[o + 9] = 0;
     G.sc[i] = rr(0.85, 1.15);
-    G.cyc[i] = rr(0, 6);
+    G.cyc[i] = rr(0, 6); G.jt[i] = 0;
     turtleGoal(G, i);
   }
 }
@@ -1066,8 +1111,12 @@ function turtleStep(G) {
     if (G.gt[i] <= 0 || gdx * gdx + gdz * gdz < 36) turtleGoal(G, i);
     let want = Math.atan2(-gdz, gdx);
     const px = x - _pp.x, py = y - _pp.y, pz = z - _pp.z, pd = Math.sqrt(px * px + py * py + pz * pz);
-    const scared = pd < 7;
-    if (scared) want = Math.atan2(-pz, px);
+    // a jolt (sonar, strike, footfall) sends it off in a burst of hard strokes
+    if (pulseAt(x, y, z) > 0.3) G.jt[i] = 2.5;
+    G.jt[i] = Math.max(0, G.jt[i] - dt);
+    const jolted = G.jt[i] > 0;
+    const scared = pd < 7 || jolted;
+    if (scared) want = jolted && pd >= 7 ? h : Math.atan2(-pz, px);
     // rocks: steer out of them
     rockPush(x, y, z, 1.2, true); if (_prox > 0.25) want = Math.atan2(-_v.z, _v.x);
     h = turnTo(h, want, (scared ? 0.9 : 0.5) * dt);
@@ -1086,8 +1135,10 @@ function turtleStep(G) {
     st[o] = x; st[o + 1] = y; st[o + 2] = z; st[o + 3] = h;
     st[o + 4] += (clamp(vy * 0.5, -0.4, 0.4) - st[o + 4]) * Math.min(1, dt * 2);
     st[o + 5] += (clamp(turnRate * 1.4, -0.4, 0.4) - st[o + 5]) * Math.min(1, dt * 2);
-    st[o + 6] += dt * (1.2 + st[o + 7] * 4.2 + (scared ? 3 : 0));
+    // the stroke clock only advances while it strokes: gliding, the flippers hold
+    st[o + 6] += dt * (0.3 + st[o + 7] * 3.6 + (scared ? 3 : 0));
     if (st[o + 6] > 6283) st[o + 6] -= 6283;
+    if (i < 2) setMover(i ? M_TURTLE1 : M_TURTLE0, x, y, z, 1.3 * G.sc[i], Math.cos(h) * speed, vy, -Math.sin(h) * speed, 0.45);
   }
 }
 
@@ -1118,7 +1169,7 @@ function morayLayout(G) {
       G.bx[i] = Math.cos(a) * r; G.bz[i] = Math.sin(a) * r; G.by[i] = terrainH(G.bx[i], G.bz[i], 0) + 0.3;
       G.dx[i] = dx; G.dz[i] = dz; G.rr[i] = 1.2;
     }
-    G.out[i] = 1;
+    G.out[i] = 1; G.lg[i] = 0; G.lc[i] = 0; G.lt[i] = 0;
     st[o + 3] = Math.atan2(-dz, dx); st[o + 4] = rr(0.05, 0.2); st[o + 5] = 0;
     st[o + 6] = rr(0, TAU); st[o + 7] = 0.2; st[o + 8] = 0.2; st[o + 9] = 0;
     G.sc[i] = rr(0.9, 1.25);
@@ -1128,8 +1179,9 @@ function morayLayout(G) {
 }
 function morayPlace(G, i) {
   const o = i * STN, r = G.rr[i], s = G.sc[i];
-  // out = 1: the head ~0.5u proud of the rock's flank; out = 0: withdrawn inside it
-  const reach = r * 0.45 + 0.5 * s - (1 - G.out[i]) * 1.6 * s;
+  // out = 1: the head ~0.5u proud of the rock's flank; out = 0: withdrawn inside it;
+  // lg = the lunge, a fast extra metre out of the hole
+  const reach = r * 0.45 + 0.5 * s - (1 - G.out[i]) * 1.6 * s + G.lg[i] * 1.25 * s;
   G.st[o] = G.bx[i] + G.dx[i] * reach; G.st[o + 2] = G.bz[i] + G.dz[i] * reach;
   G.st[o + 1] = G.by[i];
 }
@@ -1138,13 +1190,31 @@ function morayStep(G) {
   for (let i = 0; i < G.n; i++) {
     const o = i * STN;
     const px = st[o] - _pp.x, py = st[o + 1] - _pp.y, pz = st[o + 2] - _pp.z;
-    const near = px * px + py * py + pz * pz < 81;
+    const d2 = px * px + py * py + pz * pz;
+    // THE LUNGE (anim-fauna): a diver who comes within reach of a moray that is out
+    // gets struck at — a snap a metre out of the hole with the jaws wide — before it
+    // pulls back in. One lunge, then a long cooldown.
+    G.lc[i] = Math.max(0, G.lc[i] - dt);
+    const jolt = pulseAt(st[o], st[o + 1], st[o + 2]);
+    if (G.lc[i] <= 0 && G.out[i] > 0.8 && d2 < 30 && d2 > 4) { G.lc[i] = 14; G.lt[i] = 0.55; }
+    if (G.lt[i] > 0) G.lt[i] -= dt;
+    const lunging = G.lt[i] > 0;
+    // strike out fast (first 0.14 s), hold, recoil
+    const lgT = lunging ? (G.lt[i] > 0.41 ? 1 : G.lt[i] > 0.2 ? 0.85 : 0) : 0;
+    G.lg[i] += (lgT - G.lg[i]) * Math.min(1, dt * (lgT > G.lg[i] ? 22 : 7));
+    const near = (d2 < 81 && !lunging) || jolt > 0.3;
     G.out[i] += ((near ? 0 : 1) - G.out[i]) * Math.min(1, dt * (near ? 3.2 : 0.5));
     morayPlace(G, i);
-    // the mouth: a slow open-close rhythm (respiration), shut when withdrawn
-    G.cyc[i] += dt; if (G.cyc[i] > 8) G.cyc[i] -= 8;
-    const g = (0.35 + 0.65 * Math.max(0, Math.sin(G.cyc[i] * 0.9))) * (0.15 + 0.85 * G.out[i]);
-    st[o + 8] += (g - st[o + 8]) * Math.min(1, dt * 3);
+    // it WATCHES: the head swings to follow the diver within its neck's reach, and sways
+    // slowly as it breathes when there is nothing to watch
+    const base = Math.atan2(-G.dz[i], G.dx[i]);
+    let look = Math.sin(G.cyc[i] * 0.55 + i) * 0.14;
+    if (d2 < 625) { let a = Math.atan2(pz, -px) - base; a -= Math.floor((a + Math.PI) / TAU) * TAU; look = clamp(a, -0.75, 0.75); }
+    st[o + 3] = turnTo(st[o + 3], base + look, (lunging ? 6 : 1.4) * dt);
+    // the mouth: a slow open-close rhythm (respiration), shut when withdrawn, WIDE in a lunge
+    G.cyc[i] += dt; if (G.cyc[i] > 8 * Math.PI) G.cyc[i] -= 8 * Math.PI;
+    const g = Math.max((0.35 + 0.65 * Math.max(0, Math.sin(G.cyc[i] * 0.9))) * (0.15 + 0.85 * G.out[i]), G.lg[i] * 1.45);
+    st[o + 8] += (g - st[o + 8]) * Math.min(1, dt * (lunging ? 18 : 3));
     st[o + 7] = 0.25 + (near ? 0.5 : 0);
     st[o + 6] += dt * 1.6;
     if (st[o + 6] > 6283) st[o + 6] -= 6283;
@@ -1170,7 +1240,7 @@ function crabLayout(G) {
     st[o] = x; st[o + 2] = z; st[o + 1] = terrainH(x, z, 0) + 0.02;
     st[o + 3] = rr(0, TAU); st[o + 4] = 0; st[o + 5] = 0; st[o + 6] = rr(0, TAU); st[o + 7] = 0; st[o + 8] = 0; st[o + 9] = 0;
     G.sc[i] = rr(0.7, 1.3);
-    G.mode[i] = 0; G.mt[i] = rr(1, 8); G.side[i] = rr(0, 1) < 0.5 ? -1 : 1;
+    G.mode[i] = 0; G.mt[i] = rr(1, 8); G.side[i] = rr(0, 1) < 0.5 ? -1 : 1; G.run[i] = 0;
   }
 }
 function crabStep(G) {
@@ -1179,7 +1249,15 @@ function crabStep(G) {
     const o = i * STN;
     let x = st[o], y = st[o + 1], z = st[o + 2], h = st[o + 3];
     const px = x - _pp.x, pz = z - _pp.z, pd2 = px * px + pz * pz;
-    const scared = pd2 < 25;
+    // a footfall or a strike close by sends every crab in reach running
+    if (pulseAt(x, y, z) > 0.3) G.run[i] = 1.6;
+    G.run[i] = Math.max(0, G.run[i] - dt);
+    const scared = pd2 < 6.25 || G.run[i] > 0;
+    // THE DISPLAY (anim-fauna): a diver at a stride's distance is faced and threatened —
+    // the crab rears its claws up and wide and holds its ground; closer, it runs
+    const display = !scared && pd2 < 36;
+    st[o + 8] += ((display ? 1 : 0) - st[o + 8]) * Math.min(1, dt * (display ? 5 : 2.5));
+    if (display) { h = turnTo(h, Math.atan2(pz, -px), 3.0 * dt); G.mode[i] = 0; G.mt[i] = Math.max(G.mt[i], 0.6); }
     G.mt[i] -= dt;
     if (G.mt[i] <= 0) {
       if (G.mode[i] === 0) { G.mode[i] = 1; G.mt[i] = rr(1.2, 3); G.side[i] = rr(0, 1) < 0.5 ? -1 : 1; }
@@ -1230,7 +1308,7 @@ function floorLayout(G, zi, rMin, rMax, lift) {
 const NB = [1, 2, 3, 5, 8];
 function shoalLayout(G, cx, cz, cy, zi) {
   const st = G.st;
-  G.cx = cx; G.cy = cy; G.cz = cz; G.cvx = 0; G.cvy = 0; G.cvz = 0;
+  G.cx = cx; G.cy = cy; G.cz = cz; G.cvx = 0; G.cvy = 0; G.cvz = 0; G.jolt = 0;
   for (let i = 0; i < G.n; i++) {
     const o = i * STN;
     G.P[i * 3] = rr(-G.radius, G.radius); G.P[i * 3 + 1] = rr(-G.radius, G.radius) * 0.4; G.P[i * 3 + 2] = rr(-G.radius, G.radius);
@@ -1256,6 +1334,10 @@ function shoalStep(G, zi) {
   let gd = Math.sqrt(gx * gx + gy * gy + gz * gz) + 1e-4;
   if (G.gt <= 0 || gd < 5) { shoalGoal(G, zi); gx = G.gx - G.cx; gy = G.gy - G.cy; gz = G.gz - G.cz; gd = Math.sqrt(gx * gx + gy * gy + gz * gz) + 1e-4; }
   G.cvx += gx / gd * G.speed * 0.7 * dt; G.cvy += gy / gd * G.speed * 0.7 * dt; G.cvz += gz / gd * G.speed * 0.7 * dt;
+  // a jolt scatters the shoal outward and drives the beat (per-fish below via panic)
+  const pk = pulseAt(G.cx, G.cy, G.cz);
+  if (pk > 0.25) { G.jolt = Math.max(G.jolt || 0, pk); G.cvx += PULSE_DIR.x * G.speed * 2 * pk; G.cvz += PULSE_DIR.z * G.speed * 2 * pk; }
+  G.jolt = Math.max(0, (G.jolt || 0) - dt * 0.8);
   // the whole shoal shies off the diver
   const px = G.cx - _pp.x, py = G.cy - _pp.y, pz = G.cz - _pp.z, pd = Math.sqrt(px * px + py * py + pz * pz) + 1e-4;
   const panicR = G.fear * 2;
@@ -1272,11 +1354,13 @@ function shoalStep(G, zi) {
   const fear2 = G.fear * G.fear, sepR2 = 1.2, nbR2 = 40;
   const roll = G.roll = (G.roll + 3) % n;
   const floorLocal = floor + 1.2 - G.cy;
-  let panic = 0;
+  let panic = G.jolt || 0;
   for (let i = 0; i < n; i++) {
     const i3 = i * 3, o = i * STN;
     const x = P[i3], y = P[i3 + 1], z = P[i3 + 2];
     let ax = 0, ay = 0, az = 0;
+    // flash expansion: while jolted every fish bursts radially off the shoal centre
+    if (G.jolt > 0.05) { const rl0 = Math.sqrt(x * x + y * y + z * z) + 0.3; const kj = G.jolt * 26 / rl0; ax += x * kj; ay += y * kj * 0.5; az += z * kj; }
     for (let k = 0; k < 5; k++) {
       const j3 = ((i + NB[k] + roll) % n) * 3;
       const dx = P[j3] - x, dy = P[j3 + 1] - y, dz = P[j3 + 2] - z;
@@ -1527,20 +1611,20 @@ export function buildFauna() {
 
   // zone 0
   makeGroup('RAY', 0, 1, rayGeometry(), faunaMaterial({
-    rough: 0.62, mot: [0.06, 0.55, 2.6, 0], body: [4, 3, 0.35, 7.3], hinge: [0, 0, 0, 0], skin: [1, 3.1, 0.022, 0]
+    rough: 0.62, mot: [0.06, 0.55, 1.1, 0], body: [4, 3, 0.35, 7.3], hinge: [0, 0.25, 0, 0], skin: [1, 3.1, 0.022, 0]
   }), { gx: 0, gz: 0, gh: 8, gt: 0, step: rayStep, layout: rayLayout });
 
   makeGroup('TURTLE', 0, 2, turtleGeometry(), faunaMaterial({
     rough: 0.8, mot: [0.02, 0, 0, 0.55], body: [2, 1.2, 0.5, 2], hinge: [0, 0, 0.85, 0], skin: [2, 1.35, 0.014, 0]
-  }), { ...arrs(2, ['gx', 'gz', 'gh', 'gt', 'cyc']), step: turtleStep, layout: turtleLayout });
+  }), { ...arrs(2, ['gx', 'gz', 'gh', 'gt', 'cyc', 'jt']), step: turtleStep, layout: turtleLayout });
 
   makeGroup('MORAY', 0, 3, morayGeometry(), faunaMaterial({
     rough: 0.55, metal: 0.05, mot: [0.10, 0, 0, 0], body: [4.2, 0.6, 1.3, 1], hinge: [0.45, -0.02, 0, 0.55], skin: [3, 1.0, 0.010, 0]
-  }), { ...arrs(3, ['bx', 'by', 'bz', 'dx', 'dz', 'rr', 'out', 'cyc']), cand: new Int32Array(2048), step: morayStep, layout: morayLayout });
+  }), { ...arrs(3, ['bx', 'by', 'bz', 'dx', 'dz', 'rr', 'out', 'cyc', 'lg', 'lc', 'lt']), cand: new Int32Array(2048), step: morayStep, layout: morayLayout });
 
   makeGroup('CRAB', 0, 20, crabGeometry(), faunaMaterial({
-    rough: 0.7, mot: [0, 0, 0, 0.09], body: [1, 0, 0, 1], hinge: [0, 0, 0, 0], skin: [4, 0.55, 0.005, 0]
-  }), { ...arrs(20, ['mt', 'side']), mode: new Int8Array(20), cand: new Int32Array(2048), step: crabStep, layout: crabLayout });
+    rough: 0.7, mot: [0, 0, 0, 0.11], body: [1, 0, 0, 1], hinge: [1, 0, 0, 0], skin: [4, 0.55, 0.005, 0]
+  }), { ...arrs(20, ['mt', 'side', 'run']), mode: new Int8Array(20), cand: new Int32Array(2048), step: crabStep, layout: crabLayout });
 
   makeGroup('SEA STAR', 0, 40, starGeometry(), faunaMaterial({ rough: 0.85, skin: [5, 0.7, 0.008, 0] }), { stat: true, layout: G => floorLayout(G, 0, 12, 150, 0.0) });
   makeGroup('URCHIN', 0, 30, urchinGeometry(), faunaMaterial({ rough: 0.6, metal: 0.1, skin: [6, 0.75, 0.006, 0] }), { stat: true, layout: G => floorLayout(G, 0, 12, 150, 0.0) });
