@@ -31,6 +31,23 @@ const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
 const sst = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 const UP = V3(0, 1, 0);
+// ---- MOTION (anim-sleepers) ----------------------------------------------------------
+// Mhor swims like a squid, not a torpedo on a rail: a JET cycle (the mantle contracts, he
+// surges, then coasts on drag while it refills - same mean speed as the old constant one),
+// fins that undulate as a travelling wave in the vertex shader, arms that are verlet
+// chains pulled toward a pose (so they trail, lag in a turn, bunch on the pulse and flare
+// into a basket before a hit), tentacles that fire ballistically at the diver and snap
+// back, a body that BANKS into its turns (up leans toward the centre of the turn), and a
+// stun that convulses and then goes limp (arms hang under gravity, the body lolls).
+const JET_K = 0.6;                                     // coast drag (1/s)
+const EVH = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, warm: false };
+function sprH(o, target, w, z, dt) {
+  o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
+  o.x += o.v * dt;
+  return o.x;
+}
+const nzH = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
+const _acc = V3(), _up = V3(), _bx = V3(), _by = V3(), _tv = V3(), _fp = V3(), _g = V3();
 const ML_OF_SIZE = 3.6, NA = 10, RINGS = 56, RADIAL = 20, SUCK = 14;
 const FEED_COST = 2, FEED_R = 5, POCKET_R = 28, FLARE_R = 22;
 const _a = V3(), _b = V3(), _c = V3(), _d = V3(), _t = V3(), _p = V3(), _f = V3(), _r = V3(), _w = V3();
@@ -137,9 +154,19 @@ function finMaps(S = 256) {
 }
 // The membrane shader: light passes through the thin outer fin (a warm scatter scaled by
 // what the surface receives, so never a glow in the dark), and the veins stay opaque.
-function membrane(m) {
+function membrane(m, U) {
   m.customProgramCacheKey = () => 'abyssa-mhor-fin';
   m.onBeforeCompile = sh => {
+    // the fin undulates: a wave running from the fin's front root to its tail tip, growing
+    // toward the free edge; the normal tilts with the wave's slope
+    sh.uniforms.uFin = U.uFin;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uFin;')
+      .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
+        float fnU = pow(uv.x, 1.3), fnA = uv.y * 7.54 - uFin.x;
+        objectNormal = normalize(objectNormal + vec3(0.0, 0.0, -uFin.y * fnU * cos(fnA) * 20.4) * sign(objectNormal.y));`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        transformed.y += uFin.y * fnU * sin(fnA) + uFin.z * uv.x * uv.x;`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', /* glsl */`{
         float fnThin = smoothstep(0.35, 1.0, vMapUv.x);
         vec3 fnLit = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
@@ -369,7 +396,8 @@ export function makeHunter(idx, cfg) {
     sonarWards: false, guardWards: true, reveal: 0, rang: false, hinted: false, pendingMsg: null,
     reach: 6, collR: ML * 0.09, flare: 0, dormant: true,
     state: 'absent', stT: 0, pos: V3(0, -9999, 0), vel: V3(), fwd: V3(0, 0, 1), head: V3(), spine: [V3(), V3(), V3(), V3(), V3()],
-    sigils: [], arms: [], stun: 0, pulse: 0, orbitA: 0, strikeFrom: V3(), strikeTo: V3(), _pd: 1e9
+    sigils: [], arms: [], stun: 0, pulse: 0, orbitA: 0, strikeFrom: V3(), strikeTo: V3(), _pd: 1e9,
+    spd: 0, jetPh: 0, contract: 0, inflate: 0, spread: 1, finPh: 0, accS: V3(), fwdPrev: V3(0, 0, 1), stunT: 0, loll: { x: 0, v: 0 }, tip: [{ x: 0, v: 0 }, { x: 0, v: 0 }], armsInit: false
   };
 
   // ---- the field: the last furnace, cold stumps, scorch ----
@@ -424,11 +452,33 @@ export function makeHunter(idx, cfg) {
   }), 'abyssa-mhor-skin', 0));
   L.skin = skin;
   const mg = mantleGeo();
-  const mantle = new THREE.Mesh(mg, skin);
+  // the mantle has its own copy of the skin program with the JET in its vertex stage: the
+  // barrel contracts and inflates radially, a peristaltic ripple running down it
+  L.mU = { uContract: { value: new THREE.Vector3() } };
+  const mskin = registerPaint(K.wetSkin(new THREE.MeshStandardMaterial({
+    map: hide.map, normalMap: hide.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: hide.roughnessMap, vertexColors: true,
+    roughness: 1.1, metalness: 0, envMap: envTex, envMapIntensity: 0.25,
+    emissive: 0xff8a3a, emissiveMap: hide.emissiveMap, emissiveIntensity: 0, side: THREE.FrontSide
+  }), 'abyssa-mhor-mantle', 0));
+  {
+    const ob = mskin.onBeforeCompile;
+    mskin.onBeforeCompile = (sh, r) => {
+      ob(sh, r);
+      sh.uniforms.uContract = L.mU.uContract;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform vec3 uContract;')
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          float mcK = smoothstep(0.10, 0.30, position.z) * (1.0 - smoothstep(0.78, 0.98, position.z));
+          transformed.xy *= 1.0 + uContract.x * mcK + uContract.y * mcK * sin(position.z * 25.0 - uContract.z);`);
+    };
+  }
+  L.mskin = mskin;
+  const mantle = new THREE.Mesh(mg, mskin);
   mantle.castShadow = true;
   body.add(mantle);
+  L.finU = { uFin: { value: new THREE.Vector3() } };
   const finMat = registerPaint(membrane(new THREE.MeshStandardMaterial({ color: 0xffffff, map: fm.map, normalMap: fm.normalMap, roughness: 0.42, metalness: 0,
-    side: THREE.DoubleSide, forceSinglePass: true, transparent: false, envMap: envTex, envMapIntensity: 0.35, emissive: 0xff8a3a, emissiveIntensity: 0 })));
+    side: THREE.DoubleSide, forceSinglePass: true, transparent: false, envMap: envTex, envMapIntensity: 0.35, emissive: 0xff8a3a, emissiveIntensity: 0 }), L.finU));
   L.finMat = finMat;
   L.fins = [];
   for (const sd of [-1, 1]) {
@@ -458,7 +508,8 @@ export function makeHunter(idx, cfg) {
     L.arms.push({
       geo, mesh, tent, ang: tent ? (a === 8 ? -0.35 : 0.35) : (a + 0.5) / 8 * TAU,
       len: ML * (tent ? 0.95 : 0.42), r0: ML * (tent ? 0.012 : 0.022), shoot: 0,
-      pts: Array.from({ length: RINGS + 1 }, () => V3()), U: Array.from({ length: RINGS + 1 }, () => V3())
+      pts: Array.from({ length: RINGS + 1 }, () => V3()), U: Array.from({ length: RINGS + 1 }, () => V3()),
+      prev: Array.from({ length: RINGS + 1 }, () => V3())
     });
   }
   // tentacle clubs: flattened spindles with a ring of hooks and a sucker palm
@@ -502,6 +553,7 @@ export function makeHunter(idx, cfg) {
     const w = makeWard(L, i, 3.6);
     const [side, s] = WS[(i - 1) % WS.length];
     w.local = V3(side * 1.0, 0.085, s);                               // on the dorsal barrel
+    w.local0 = w.local.clone();
     w.q = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), V3(side * 0.6, 1, 0).normalize());
     L.sigils.push(w);
   }
@@ -537,6 +589,7 @@ export function makeHunter(idx, cfg) {
     kind: 'hunter', state: L.state, furnace: L.furnace.lit, heat: +L.furnace.heat.toFixed(2), stun: +L.stun.toFixed(1),
     pos: L.pos.toArray().map(v => +v.toFixed(1)), calmed: L.calmed, wards: L.sigils.map(g => ({ lit: g.lit, kept: wardGuardCount(L.sigils.indexOf(g)) }))
   });
+  if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
@@ -553,39 +606,87 @@ function arrive(L) {
   for (const A of L.arms) A.mesh.visible = true;
   for (const cl of L.clubs) cl.visible = true;
   L.suckers.visible = true;
+  L.armsInit = false; L.spd = L.speed * 1.2; L.fwdPrev.copy(L.fwd);
 }
 function startStrike(L, target) {
-  L.state = 'strike'; L.stT = 0;
+  L.state = 'strike'; L.stT = 0; L.dashed = false; L.tentFire = -1;
   L.strikeFrom.copy(L.pos);
   L.strikeTo.copy(target || L.aim);
 }
 function stunHim(L) {
-  L.state = 'stunned'; L.stT = 0; L.stun = 10;
+  L.state = 'stunned'; L.stT = 0; L.stun = 10; L.stunT = 0;
+  L.loll.v += 1.5;
   L.pendingMsg = L.pendingMsg || 'THE FIRE BLINDS HIM. HIS SHOAL SCATTERS. HE HANGS IN THE GLOW.';
 }
 
 // Arms trail behind the head (the head leads when he strikes; when cruising he swims
-// mantle-first and they stream). Tentacles shoot out on a strike.
+// mantle-first and they stream). Each arm is a verlet chain pulled toward that pose, so it
+// carries momentum: it lags in a turn, trails on the surge, whips when he stops. The pose
+// itself bunches on the jet and flares into a basket before a hit. Tentacles fire at the
+// strike point ballistically (a quadratic arc, overshoot, snap back).
 function buildArms(L, dt) {
   const b = L.body, head = _a.set(0, 0, 0.02).applyMatrix4(b.matrixWorld);
-  // the arms stream from the head AWAY from the tail: trailing when he cruises tail-first,
-  // leading when he strikes head-first
-  const armDir = _c.copy(L.fwd).multiplyScalar(L.state === 'strike' ? 1 : -1);
-  _w.crossVectors(L.fwd, UP).normalize();
-  _p.crossVectors(_w, L.fwd).normalize();                           // body up
+  const strike = L.state === 'strike', stun = L.stun > 0;
+  const armDir = _c.copy(L.bz).negate();                          // out of the head, away from the tail
+  // side and up from the body's own (banked) frame
+  _w.setFromMatrixColumn(b.matrixWorld, 0).normalize();
+  _p.setFromMatrixColumn(b.matrixWorld, 1).normalize();
+  const k60 = Math.min(3, dt * 60), init = !L.armsInit;
+  const conv = stun ? Math.max(0, 1 - L.stunT / 1.6) : 0, limp = stun ? sst(0.8, 2.5, L.stunT) : 0;
+  const damp = Math.pow(stun ? 0.97 : 0.88, k60);
   for (let a = 0; a < NA; a++) {
     const A = L.arms[a];
-    const sp = A.tent ? 0.10 : 0.30, ca = Math.cos(A.ang), sa = Math.sin(A.ang);
+    const sp = (A.tent ? 0.10 : 0.30) * (A.tent ? 1 : L.spread), ca = Math.cos(A.ang), sa = Math.sin(A.ang);
     const spread = _d.copy(_w).multiplyScalar(ca * sp).addScaledVector(_p, sa * sp);
     const shoot = A.tent ? A.shoot : 0;
-    const len = A.len * (A.tent ? 0.35 + 0.65 * shoot : 1);
+    const len = A.len * (A.tent ? 0.35 + 0.65 * shoot : 1), seg = len / RINGS;
+    const aim = A.tent && shoot > 0.02;
+    if (aim) {
+      // the arc: out along the body axis, then curving onto the strike point
+      _fp.copy(head).addScaledVector(armDir, len * 0.45).addScaledVector(spread, len * 0.3);
+    }
+    const kS = stun ? lerp(0.30, 0.02, limp) : 1;
+    const P = A.pts, Q = A.prev;
     for (let i = 0; i <= RINGS; i++) {
       const s = i / RINGS;
-      const wv = Math.sin(L.t * 3.2 - s * 6 + a * 1.7) * len * 0.05 * s * (L.stun > 0 ? 0.3 : 1);
-      A.pts[i].copy(head).addScaledVector(armDir, len * s)
-        .addScaledVector(spread, len * s * (1 - 0.5 * s)).addScaledVector(_w, wv).addScaledVector(_p, wv * 0.6);
-      if (L.stun > 0) A.pts[i].y -= len * 0.25 * s * s;              // limp: the arms hang
+      // the pose this arm is being pulled toward
+      const wv = Math.sin(L.t * 3.2 - s * 6 + a * 1.7) * len * 0.05 * s * (stun ? 0.3 : 1);
+      _tv.set(0, 0, 0);
+      if (aim) {
+        const m = 1 - s;
+        _g.copy(head).multiplyScalar(m * m).addScaledVector(_fp, 2 * m * s);
+        _tv.copy(L.strikeTo).sub(head);
+        const dl = _tv.length() || 1;
+        _tv.multiplyScalar(Math.min(1.15, len / dl)).add(head);
+        _g.addScaledVector(_tv, s * s);
+      } else {
+        _g.copy(head).addScaledVector(armDir, len * s)
+          .addScaledVector(spread, len * s * (1 - 0.5 * s)).addScaledVector(_w, wv).addScaledVector(_p, wv * 0.6);
+      }
+      if (conv > 0) {
+        const j = conv * len * 0.16 * s;
+        _g.x += nzH(L.t * 14, a * 3 + i * 0.07) * j; _g.y += nzH(L.t * 12, a * 5 + 1 + i * 0.05) * j; _g.z += nzH(L.t * 13, a * 7 + 2) * j;
+      }
+      if (i === 0 || init) { P[i].copy(_g); Q[i].copy(_g); continue; }
+      // verlet: carry the velocity, fall a little when he is limp, then pull toward the pose
+      _tv.subVectors(P[i], Q[i]).multiplyScalar(damp);
+      Q[i].copy(P[i]);
+      P[i].add(_tv);
+      if (limp > 0) P[i].y -= 14 * limp * dt * dt * 60 * s;
+      const k = (aim ? 0.85 : lerp(0.35, 0.10, Math.pow(s, 0.7))) * kS;
+      P[i].lerp(_g, 1 - Math.pow(1 - k, k60));
     }
+    // inextensible: follow-the-leader from the root (two passes)
+    // (the correction is also applied to the previous position, so the constraint moves
+    // the chain without injecting velocity - the classic FTL jitter)
+    for (let it = 0; it < 2; it++) for (let i = 1; i <= RINGS; i++) {
+      _tv.subVectors(P[i], P[i - 1]);
+      const l = _tv.length() || 1e-4;
+      _g.copy(P[i]);
+      P[i].copy(P[i - 1]).addScaledVector(_tv, seg / l);
+      Q[i].add(_g.subVectors(P[i], _g).multiplyScalar(0.9));
+    }
+    if (stun) for (let i = 4; i <= RINGS; i += 1) { const gy = terrainH(P[i].x, P[i].z, L.idx) + 0.6; if (P[i].y < gy) P[i].y = gy; }
     // frames + tube: the dorsal U faces away from the crown's axis, so the oral face (-U,
     // pale, suckered) always looks in toward the other arms
     const pos = A.geo.attributes.position.array, nor = A.geo.attributes.normal.array, row = RADIAL + 1;
@@ -636,29 +737,81 @@ function buildArms(L, dt) {
     }
   }
   L.suckers.instanceMatrix.needsUpdate = true;
+  L.armsInit = true;
 }
 
-function place(L) {
+function place(L, dt) {
   const b = L.body;
   // the mantle's +Z (tail) points AWAY from the direction of travel when striking, and
   // along it when cruising (squid cruise tail-first): body +Z = -fwd in strike, +fwd cruising
   _t.copy(L.fwd);
   if (L.state === 'strike') _t.negate();
-  _q.setFromUnitVectors(_z, _t);
-  b.quaternion.copy(_q);
-  // keep him upright-ish: roll the body so its +Y stays toward world up
+  // The body axis TURNS to its new heading (it used to snap end for end when a strike began):
+  // a rate-limited swing through the side, never through a degenerate half-turn
+  if (!(dt > 0) || !L.bz) L.bz = _t.clone();
+  else {
+    if (L.bz.dot(_t) < -0.8) { _g.crossVectors(UP, L.bz); if (_g.lengthSq() < 1e-4) _g.set(1, 0, 0); _t.addScaledVector(_g.normalize(), 0.8).normalize(); }
+    L.bz.lerp(_t, 1 - Math.exp(-(L.state === 'strike' && L.stT < 0.9 ? 5 : 3) * dt)).normalize();
+    _t.copy(L.bz);
+  }
+  // BANKING: the body's up leans toward the centre of the turn, by the (smoothed) lateral
+  // acceleration of the heading, like anything with fins at speed. Stunned, he lolls.
+  if (dt > 0) {
+    _acc.subVectors(L.fwd, L.fwdPrev).multiplyScalar(Math.max(0.5, L.spd) / dt);
+    _acc.addScaledVector(L.fwd, -_acc.dot(L.fwd));
+    L.accS.lerp(_acc, 1 - Math.exp(-3 * dt));
+  }
+  L.fwdPrev.copy(L.fwd);
+  // (tilt = atan(0.05 a), capped near 27 degrees)
+  _g.copy(L.accS).multiplyScalar(0.05);
+  if (_g.lengthSq() > 0.25) _g.setLength(0.5);
+  _up.copy(UP).add(_g);
+  if (L.stun > 0) {
+    // convulsing, then limp: the body rolls over a little and the head sags
+    const conv = Math.max(0, 1 - L.stunT / 1.6);
+    _up.x += nzH(L.t * 11, 3) * 0.5 * conv + 0.35 * L.loll.x; _up.z += nzH(L.t * 9, 5) * 0.5 * conv;
+  }
+  _up.addScaledVector(_t, -_up.dot(_t));
+  if (_up.lengthSq() < 1e-6) _up.set(0, 1, 0).addScaledVector(_t, -_t.y);
+  _up.normalize();
+  _bx.crossVectors(_up, _t).normalize();
+  _by.crossVectors(_t, _bx);
+  _m.makeBasis(_bx, _by, _t);
+  b.quaternion.setFromRotationMatrix(_m);
+  if (L.stun > 0) { _q.setFromAxisAngle(_bx, 0.25 * L.loll.x); b.quaternion.premultiply(_q); }
   b.position.copy(L.pos);
   b.updateMatrixWorld(true);
   for (let k = 0; k < L.spine.length; k++) L.spine[k].set(0, 0, 0.1 + k * 0.18).applyMatrix4(b.matrixWorld);
   L.head.set(0, 0, 0.05).applyMatrix4(b.matrixWorld);
+  // the wards ride the skin, which the jet moves in and out (same curve as the shader)
+  const cx = L.mU.uContract.value.x;
   for (const g of L.sigils) {
+    const z = g.local0.z, mk = sst(0.10, 0.30, z) * (1 - sst(0.78, 0.98, z)), kk = 1 + cx * mk;
+    g.local.set(g.local0.x * kk, g.local0.y * kk, z);
     g.grp.position.copy(g.local).applyMatrix4(b.matrixWorld);
     g.grp.quaternion.copy(b.quaternion).multiply(g.q);
   }
 }
 
+// One jet cycle of period T: the mantle contracts over the first fifth (thrust, a sine
+// pulse), then refills slowly while he coasts. `mean` is the speed the cycle averages
+// against JET_K drag. Returns nothing; writes L.spd, L.contract, L.inflate, L.jetPh.
+function jet(L, dt, mean, T) {
+  const tc = 0.22;
+  L.jetPh += dt / T;
+  if (L.jetPh >= 1) L.jetPh -= 1;
+  const ph = L.jetPh;
+  const A = mean * JET_K * T * Math.PI / (2 * tc * T);
+  if (ph < tc) L.spd += A * Math.sin(Math.PI * ph / tc) * dt;
+  L.spd *= Math.exp(-JET_K * dt);
+  // contraction is fast, the refill slow and eased (the mantle swells back)
+  L.contract = ph < tc ? Math.sin(0.5 * Math.PI * ph / tc) : 1 - sst(tc, 0.85, ph);
+  L.inflate = sst(0.5, 0.95, ph);
+}
+
 export function updateHunter(L, dt, t, player) {
-  const ev = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null };
+  const ev = EVH;
+  ev.sigilLit = 0; ev.calmed = false; ev.lightDrain = 0; ev.slam = false; ev.remaining = 0; ev.msg = null; ev.woke = false; ev.warm = false;
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
   if (L.woke) { L.woke = false; ev.woke = true; }
   if (!L.pPrev) L.pPrev = player.pos.clone();
@@ -697,11 +850,14 @@ export function updateHunter(L, dt, t, player) {
   for (const s of L.spine) { const d = s.distanceTo(player.pos); if (d < pd) pd = d; }
   L._pd = pd;
   const speedK = L.speed;
+  let spreadT = 1, finAmp = 0.014, finRate = 4, fold = 0, tentOut = false;
   if (L.state === 'arrive') {
     _t.set(F.x + Math.cos(L.orbitA) * 70, F.y + 30, F.z + Math.sin(L.orbitA) * 70).sub(L.pos);
     const d = _t.length();
     L.fwd.lerp(_t.normalize(), Math.min(1, dt * 0.8)).normalize();
-    L.pos.addScaledVector(L.fwd, speedK * 1.2 * dt);
+    jet(L, dt, speedK * 1.2, 1.3);
+    L.pos.addScaledVector(L.fwd, L.spd * dt);
+    spreadT = 1 + 0.25 * L.inflate - 0.6 * L.contract;
     if (d < 15 || L.stT > 12) { L.state = 'circle'; L.stT = 0; }
   } else if (L.state === 'circle') {
     // circle the diver out in the dark, closing, then strike
@@ -709,19 +865,40 @@ export function updateHunter(L, dt, t, player) {
     const R = 55 - Math.min(20, L.stT * 2);
     _t.set(player.pos.x + Math.cos(L.orbitA) * R, player.pos.y + 8 + 6 * Math.sin(L.t * 0.4), player.pos.z + Math.sin(L.orbitA) * R).sub(L.pos);
     L.fwd.lerp(_t.normalize(), Math.min(1, dt * 1.2)).normalize();
-    L.pos.addScaledVector(L.fwd, speedK * dt);
+    jet(L, dt, speedK, 1.6);
+    L.pos.addScaledVector(L.fwd, L.spd * dt);
+    spreadT = 1 + 0.25 * L.inflate - 0.6 * L.contract;
+    finAmp = 0.012 + 0.010 * (1 - L.contract); finRate = 3.5 + 3 * L.contract;
     if (L.stT > 7 && !L.calmed) { L.aim = player.pos.clone(); startStrike(L); }
   } else if (L.state === 'strike') {
     // drive through where the diver was, arms-first, tentacles out
     _t.copy(L.strikeTo).sub(L.pos);
     const d = _t.length();
     if (L.stT < 0.9) {
-      // wind-up: turn to face him, drift back
+      // wind-up: turn to face him, back off, draw the whole mantle full, arms bunched to a
+      // spear; the fins beat hard to hold him there
       L.fwd.lerp(_t.normalize(), Math.min(1, dt * 4)).normalize();
-      L.pos.addScaledVector(L.fwd, -speedK * 0.3 * dt);
+      L.spd += (-speedK * 0.3 - L.spd) * Math.min(1, 3 * dt);
+      L.contract += (0 - L.contract) * Math.min(1, 8 * dt);
+      L.inflate = sst(0.0, 0.7, L.stT) * 1.4;
+      L.pos.addScaledVector(L.fwd, L.spd * dt);
+      spreadT = 0.3; finAmp = 0.022; finRate = 9;
     } else {
-      L.pos.addScaledVector(L.fwd, speedK * 3.4 * dt);
-      for (let k = 8; k < 10; k++) L.arms[k].shoot = Math.min(1, L.arms[k].shoot + dt * 3);
+      // THE JET: the whole breath at once
+      // (4.2x decaying at 0.45/s covers the same ground in the first second as the old
+      // constant 3.4x: the hit window is where it was, the dash now has a shape)
+      if (!L.dashed) { L.dashed = true; L.spd = speedK * 4.2; }
+      L.spd = Math.max(speedK * 1.2, L.spd * Math.exp(-0.45 * dt));
+      L.contract = L.stT < 1.05 ? sst(0.9, 1.05, L.stT) : 1 - sst(1.6, 2.6, L.stT);
+      L.inflate *= Math.exp(-6 * dt);
+      L.pos.addScaledVector(L.fwd, L.spd * dt);
+      // the tentacles fire when the strike point comes into their reach, and are hauled
+      // back in 0.7 s later whatever they caught
+      if (L.tentFire < 0 && L.head.distanceTo(L.strikeTo) < L.arms[8].len * 1.1) L.tentFire = L.stT;
+      tentOut = L.tentFire >= 0 && L.stT - L.tentFire < 0.7;
+      // arms spear in tight, then open into a basket as he arrives
+      spreadT = d < 18 || L.hitThisStrike ? 2.1 : 0.45;
+      finAmp = 0.004; finRate = 6; fold = 0.035;
       // the fire: a strike that runs through the flare blinds him
       if (Fz.heat > 0.6 && L.head.distanceTo(Fz.top) < FLARE_R) { stunHim(L); }
       // ink in his line breaks the strike
@@ -736,28 +913,54 @@ export function updateHunter(L, dt, t, player) {
       if (L.stT > 3.2 || (d < 4 && L.stT > 1.5)) { L.state = 'circle'; L.stT = 0; L.hitThisStrike = false; }
     }
   } else if (L.state === 'stunned') {
-    // hanging in the glow, sinking slowly, the fire in his eyes
+    // hanging in the glow, sinking slowly, the fire in his eyes: first he CONVULSES (the
+    // mantle spasming, arms thrashing), then he goes limp and drifts
     L.stun -= dt;
+    L.stunT += dt;
+    const conv = Math.max(0, 1 - L.stunT / 1.6);
+    L.spd *= Math.exp(-3 * dt);
+    L.pos.addScaledVector(L.fwd, L.spd * dt);
     L.pos.y -= dt * 1.2;
     L.pos.y = Math.max(L.pos.y, terrainH(L.pos.x, L.pos.z, L.idx) + 6);
+    L.contract = conv * (0.5 + 0.5 * Math.sin(L.t * 17)) * 0.8;
+    L.inflate = -0.6 * sst(0.8, 3, L.stunT);                         // limp: the mantle slack
+    sprH(L.loll, sst(0.8, 3.0, L.stunT), 1.4, 0.55, dt);
+    spreadT = 1.3; finAmp = conv > 0 ? 0.02 * conv * nzH(L.t * 20, 1) : 0.002; finRate = conv > 0 ? 20 : 0.8;
     if (L.stun <= 0) { L.state = 'circle'; L.stT = 0; ev.msg = ev.msg || 'HE SHAKES OFF THE FIRE.'; }
   } else if (L.state === 'leave') {
     L.fwd.lerp(_dn, Math.min(1, dt)).normalize();
-    L.pos.addScaledVector(L.fwd, speedK * 0.8 * dt);
+    jet(L, dt, speedK * 0.8, 2.0);
+    L.pos.addScaledVector(L.fwd, L.spd * dt);
+    spreadT = 1 + 0.25 * L.inflate - 0.6 * L.contract;
     if (L.stT > 16) { L.body.visible = false; for (const A of L.arms) A.mesh.visible = false; for (const c of L.clubs) c.visible = false; L.suckers.visible = false; }
   }
-  for (let k = 8; k < 10; k++) if (L.state !== 'strike') L.arms[k].shoot = Math.max(0, L.arms[k].shoot - dt * 1.5);
+  if (L.state !== 'stunned') sprH(L.loll, 0, 2, 0.8, dt);
+  // the tentacles: fired (a stiff, underdamped spring: they overshoot and quiver) and
+  // hauled back in on a slower, damped one
+  for (let k = 0; k < 2; k++) {
+    const T = L.tip[k];
+    if (tentOut) sprH(T, 1, 14, 0.32, dt); else sprH(T, 0, 5, 0.95, dt);
+    L.arms[8 + k].shoot = Math.max(0, T.x);
+  }
+  L.spread += (spreadT - L.spread) * Math.min(1, 5 * dt);
   // never through the seabed
   const gy = terrainH(L.pos.x, L.pos.z, L.idx) + 5;
   if (L.pos.y < gy) L.pos.y = gy;
 
-  place(L);
+  // the mantle (shader): contract on the jet, swell on the refill, a ripple down it
+  L.mU.uContract.value.set(0.07 * L.inflate - 0.13 * L.contract, 0.012 * L.contract, L.t * 7);
+  // the fins: a wave running down them, beating harder as he steers the glide
+  L.finPh += dt * finRate;
+  L.finU.uFin.value.set(L.finPh, finAmp, -fold);
+
+  place(L, dt);
   buildArms(L, dt);
 
   // photophores: they pulse when he hunts, gutter when stunned, go dark when calmed
   const hunt = L.state === 'strike' ? 1 : L.state === 'circle' ? 0.6 : 0.4;
   const ph = L.calmed ? 0.1 : L.stun > 0 ? 0.15 * (Math.sin(L.t * 17) > 0.6 ? 1 : 0) : hunt * (0.55 + 0.45 * Math.sin(L.t * (2 + 4 * hunt)));
   L.skin.emissiveIntensity = 1.8 * ph;
+  L.mskin.emissiveIntensity = L.skin.emissiveIntensity;
   L.finMat.emissiveIntensity = 0.3 * ph;
   // the GLOW reads across the murk: fog-off points on their own distance curve, swelling
   // with range (murk grows halos), gone past ~200 u
@@ -766,8 +969,8 @@ export function updateHunter(L, dt, t, player) {
     L.glowMat.opacity = Math.min(1, 1.5 * ph) * (0.35 + 0.65 * far) * (dG > 200 ? 0 : 1);
     L.glowMat.size = 1.9 * (1 + Math.min(3, dG * 0.03));
   }
-  // fins ripple
-  for (const f of L.fins) f.fin.rotation.z = f.sd * 0.25 * Math.sin(L.t * (L.state === 'strike' ? 9 : 3));
+  // fins: a slow flap under the travelling wave, swept back against the body on the dash
+  for (const f of L.fins) f.fin.rotation.z = f.sd * (0.10 * Math.sin(L.finPh * 0.5) * Math.min(1, finAmp * 60) - 3 * fold);
   // eyeshine
   _p.copy(player.pos).sub(L.head);
   const dist = _p.length() || 1;
@@ -793,7 +996,9 @@ export function updateHunter(L, dt, t, player) {
     }
     // the keepers ride his wards — except in the fire, which scatters the shoal
     if (L.state === 'stunned') setWardTargets(-1, null); else setWardTargets(L.idx, L.sigils);
-    ev.remaining = L.sigils.filter(q => !q.lit).length;
+    let rem = 0;
+    for (const q of L.sigils) if (!q.lit) rem++;
+    ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true;
       L.state = 'leave'; L.stT = 0; L.stun = 0;
