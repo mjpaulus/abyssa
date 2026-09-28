@@ -19,7 +19,7 @@
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
 import { camera, scene } from './core.js';
-import { sun } from './lighting.js';
+import { sun, LOOK } from './lighting.js';
 import { GLASS } from './config.js';
 
 // THE FLOW LEAN (roadmap/flow-lean-style.md, item 12): the medium stays lit. Same dial
@@ -60,7 +60,7 @@ const MAX_DIST = 320;
 // Evaluating it inline measured 4.5-6 ms; one texture fetch is ~free. CAUST_TILE
 // world units map to the full texture, and shafts are only visible out to ~200
 // units, so the repeat is never in frame twice.
-const CAUST_RES = 512;
+const CAUST_RES = 1024;  // 2 texels per unit: the caustic filaments are ~1 unit wide
 const CAUST_TILE = 512;   // world units per texture repeat
 const CAUST_PER = 28;     // coarse lattice cells across the tile (must be an integer)
 const CAUST_PER2 = 88;    // fine lattice cells across the tile (must be an integer)
@@ -87,11 +87,34 @@ float vnp(vec2 p,float per){vec2 i=floor(p),g=fract(p);g=g*g*(3.0-2.0*g);
 float fbmp(vec2 p,float per){float v=0.0,a=0.5;
   for(int i=0;i<4;i++){v+=a*vnp(p,per);p*=2.0;per*=2.0;a*=0.5;}return v;}
 void main(){
+  // THE SWELL SWAYS THE SHAFTS. A shaft is the column of water under one bright cell
+  // of the surface's caustic net, so when a swell passes overhead the whole net leans
+  // and the shafts sway together, slowly, in ribbons. Integer wavenumbers keep the warp
+  // periodic on the tile (it still tiles seamlessly); ~1.6 world units of throw.
+  vec2 uv = vUv;
+  uv += vec2( sin( uTime * 0.55 + uv.y * 18.849556 ), sin( uTime * 0.43 + uv.x * 12.566371 + 1.7 ) ) * 0.0032;
   // Two drift rates, so the beams both slide and breathe rather than translate rigidly.
-  float c = fbmp( vUv * ${f(CAUST_PER)} + vec2( uTime * 0.030, -uTime * 0.024 ), ${f(CAUST_PER)} ) * 0.85
-          + vnp( vUv * ${f(CAUST_PER2)} + vec2( -uTime * 0.055, uTime * 0.046 ), ${f(CAUST_PER2)} ) * 0.32;
-  float shaft = smoothstep( 0.40, 0.88, c );
-  gl_FragColor = vec4( shaft * shaft, 0.0, 0.0, 1.0 );
+  float c = fbmp( uv * ${f(CAUST_PER)} + vec2( uTime * 0.030, -uTime * 0.024 ), ${f(CAUST_PER)} ) * 0.85
+          + vnp( uv * ${f(CAUST_PER2)} + vec2( -uTime * 0.055, uTime * 0.046 ), ${f(CAUST_PER2)} ) * 0.32;
+  float col = smoothstep( 0.40, 0.88, c );
+  // CAUSTIC FILAMENTS. The broad columns alone read as soft fog lobes -- lit, but not
+  // SHAFTS. Real underwater rays are the surface caustic network extruded down the sun
+  // direction: thin bright sheets with dark water between. The iso-line n = 0.5 of a
+  // value-noise field is exactly such a net (closed, wandering, never ending), so each
+  // layer is a thin band round that contour; two layers at different scales drifting
+  // against each other give the filaments (their sum) and brighter knots where they
+  // cross (their product). Mean-normalised so the column's total light is unchanged
+  // (the pass's intensity was tuned against the broad field): E[rid] = 0.125, measured
+  // by Monte Carlo over this noise, so E[0.5 + 4 rid] = 1.
+  float n1 = vnp( uv * 64.0 + vec2( uTime * 0.040, uTime * 0.021 ), 64.0 );
+  float n2 = vnp( uv * 44.0 + vec2( -uTime * 0.026, uTime * 0.035 ) + 7.3, 44.0 );
+  float r1 = 1.0 - smoothstep( 0.0, 0.07, abs( n1 - 0.5 ) );
+  float r2 = 1.0 - smoothstep( 0.0, 0.07, abs( n2 - 0.5 ) );
+  float rid = 0.5 * ( r1 + r2 ) + r1 * r2;
+  float shaft = col * col * ( 0.5 + 4.0 * rid );
+  // Stored at quarter scale so the brightest knots (8.5x) survive the 8-bit tile; the
+  // march multiplies by 4 on the fetch.
+  gl_FragColor = vec4( clamp( shaft * 0.25, 0.0, 1.0 ), 0.0, 0.0, 1.0 );
 }`;
 
 const MARCH_FRAG = `
@@ -186,9 +209,9 @@ void main(){
     fade *= fade;
 
     if ( fade > 0.002 && p.y < 0.0 ) {
-      float shaft = texture2D( tCaust, q ).r;
+      float shaft = texture2D( tCaust, q ).r * 4.0;
 
-      if ( shaft > 0.004 ) {
+      if ( shaft > 0.008 ) {
         float occ = 1.0;
         if ( uOcclude > 0.5 && ( i / OCC_EVERY ) * OCC_EVERY == i ) {
           // Screen-space shadow march toward the sun. Geometric step growth so a
@@ -230,6 +253,11 @@ void main(){
   // diver standing on the zone-0 upper wall (y = -193, the clear band) could not see
   // the floor under his own boots for cyan. Normalised to the surface density the pass
   // was tuned at, so at y = 0 this multiplies by ~1.0 and changes nothing.
+  // The same shallow chroma roll-off water.js applies to the column's own in-scatter
+  // (GLSL_AMBIENT), so the shafts are made of the same pale teal as the water round them
+  // rather than a saturated cyan laid over it.
+  float accL = dot( acc, vec3( 0.2126, 0.7152, 0.0722 ) );
+  acc = mix( acc, accL * vec3( 0.70, 0.92, 1.14 ), 0.28 * ( 1.0 - smoothstep( 0.0, 300.0, -uCamPos.y ) ) );
   gl_FragColor = vec4( acc * ( dt * rlen * uSunK * uDensK ), tS );
 }`;
 
@@ -430,7 +458,12 @@ export class VolumetricLightPass extends Pass {
     // sun.intensity already carries the depth-stop blend AND the weather day/storm/
     // flash modulation applied by lighting.js updateLighting(), so the shafts follow
     // night, storms and lightning for free with no extra wiring.
-    const sunK = Math.max(0, sun.intensity) / SUN_REF_I;
+    // lighting.js's relight() multiplies the underwater sun by LOOK.water.xSun (x3) so
+    // SURFACES separate by value in the lit zone; that is a surface-response choice, not
+    // more light in the water, so the shafts divide it back out -- or the whole column
+    // triples and the shallows wash out to cyan-white (measured after the merge).
+    const xs = LOOK && LOOK.on && LOOK.water && LOOK.water.xSun > 0 ? LOOK.water.xSun : 1;
+    const sunK = Math.max(0, sun.intensity) / (SUN_REF_I * xs);
     // Nothing to add: skip entirely and leave the chain byte-identical.
     if (!(sunK > 0.004) || camera.position.y < -340) {
       this.needsSwap = false;

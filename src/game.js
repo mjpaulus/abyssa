@@ -8,7 +8,7 @@ import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLant
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM } from './world/stir.js';
-import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, syncLamps, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
@@ -1240,7 +1240,7 @@ function update(dt, t) {
     if (voyageT >= 6.2) { state = 'play'; $voyage.style.opacity = 0; }
     updateRaft(dt, t);
     updateAtmosphere(0, camera.position.y);
-    updateLighting(0);
+    updateLighting(0); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
     return;
   }
 
@@ -1253,7 +1253,7 @@ function update(dt, t) {
     updateTether(dt, player, zone);
     const d01 = clamp(-player.pos.y / 900, 0, 1);
     updateAtmosphere(d01, camera.position.y);
-    updateLighting(d01);
+    updateLighting(d01); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
     camera.position.y += dt * 0.4;
     camera.lookAt(player.pos);
     return;
@@ -1270,7 +1270,7 @@ function update(dt, t) {
     updateRaft(dt, t);
     updateVentLife(dt, t);   // the boiler-room flythrough is inhabited, not a still
     updateAtmosphere(d01, camera.position.y);
-    updateLighting(d01);
+    updateLighting(d01); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
     setDepth(d01);
     return;
   }
@@ -1681,7 +1681,7 @@ function update(dt, t) {
   // what the eye is sitting in decides the optics. updateCamera runs below, so this reads
   // last frame's position — half a unit at full swim speed, against a 24-unit scale height.
   updateAtmosphere(depth01, camera.position.y);
-  updateLighting(depth01);
+  updateLighting(depth01); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
 
   updateCamera(dt, t, fwd);
 
