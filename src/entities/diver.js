@@ -8,12 +8,14 @@ import { registerPaint, styleUniforms } from '../lib/paint.js';
 // The deck is a MOVING GROUND. A stance anchor claimed on planks is stored relative to
 // raft.position so it heaves and surges with the boat; a world-space anchor would leave
 // the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
-import { raft } from '../systems/raft.js';
+import { raft, pumpPos } from '../systems/raft.js';
 import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // Exhaust bubbles die INTO the swell, not at a flat plane; survival's air fraction
 // drives the breath cadence. (No cycles: neither module imports the diver.)
 import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
+// Per-foot ground height on the seabed (slope adaptation). terrain.js does not import us.
+import { terrainH } from '../world/terrain.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet, canvasSet } from '../lib/textures.js';
 
 const TAU = Math.PI * 2;
@@ -161,9 +163,13 @@ const port = new THREE.MeshStandardMaterial({
   color: 0x121519, metalness: 0.55, roughness: 0.42, envMap: envTex, envMapIntensity: 0.3,
   roughnessMap: copperM.rough, normalMap: copperM.nrm, normalScale: new THREE.Vector2(0.3, 0.3)
 });
-const blueLit = new THREE.MeshStandardMaterial({
-  color: 0x0e2c44, emissive: 0x4db8ff, emissiveIntensity: 2.4, roughness: 0.3, metalness: 0.1,
-  envMap: envTex, envMapIntensity: 0.3
+// The regulator's gauge face: aged ivory enamel under glass. It used to be `blueLit`, an
+// emissive 0x4db8ff lens at 2.4 plus a blue glow sprite — a prototype leftover that read
+// as neon on the back of a brass-age suit (lighting audit). A gauge does not glow; it
+// catches the lantern and the column's light like the rest of the brass.
+const gaugeFace = new THREE.MeshStandardMaterial({
+  color: 0xb9ab88, roughness: 0.28, metalness: 0.0,
+  envMap: envTex, envMapIntensity: 0.55
 });
 const rubber = new THREE.MeshStandardMaterial({
   map: rubberM.map, roughnessMap: rubberM.rough, normalMap: rubberM.nrm, normalScale: new THREE.Vector2(0.8, 0.8),
@@ -478,7 +484,7 @@ hoseMat.onBeforeCompile = sh => {
 };
 hoseMat.customProgramCacheKey = () => 'salHose1';
 for (const m of [steel, lead, cloth, trim, leather, darkLeather, rubber, hoseMat]) registerPaint(m);
-for (const m of [copper, brass, port, blueLit, glassMat, lantGlass]) registerPaint(m, { hero: true });
+for (const m of [copper, brass, port, gaugeFace, glassMat, lantGlass]) registerPaint(m, { hero: true });
 // the blade's water-drag streak: additive, opacity animated by the slash clock
 const dragMat = new THREE.MeshBasicMaterial({
   color: 0x9fd8f0, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
@@ -1228,7 +1234,7 @@ export const diver = (() => {
     p.bake();
   }
 
-  // ---- backpack apparatus: tank, bottle, regulator box, one blue tell-tale ----
+  // ---- backpack apparatus: tank, bottle, regulator box and its gauge ----
   {
     const pk = new THREE.Group(); pk.position.set(0, 0.40, -0.435); spine.add(pk);
     g.pack = pk;
@@ -1243,14 +1249,12 @@ export const diver = (() => {
     p.add(xf(new THREE.BoxGeometry(0.30, 0.17, 0.16), -0.02, 0.30, -0.02), steel);          // regulator box
     p.add(xf(new THREE.BoxGeometry(0.32, 0.035, 0.175), -0.02, 0.375, -0.02), darkLeather);
     for (const sx of [-1, 1]) p.add(xf(new THREE.BoxGeometry(0.055, 0.62, 0.02), sx * 0.20, 0.02, 0.115), darkLeather);
-    // the one glowing element: blue lens ring on the regulator's upper corner
+    // the regulator's pressure gauge on its upper corner: brass bezel, ivory face, a
+    // dark needle standing at working pressure. No emissive, no glow sprite.
     p.add(xf(new THREE.TorusGeometry(0.054, 0.015, 6, 16), 0.195, 0.352, -0.158), brass);
-    p.add(xf(new THREE.CylinderGeometry(0.047, 0.047, 0.06, 16).rotateX(Math.PI / 2), 0.195, 0.352, -0.146), blueLit);
+    p.add(xf(new THREE.CylinderGeometry(0.047, 0.047, 0.06, 16).rotateX(Math.PI / 2), 0.195, 0.352, -0.146), gaugeFace);
+    p.add(xf(new THREE.BoxGeometry(0.0055, 0.034, 0.004).translate(0, 0.014, 0), 0.195, 0.352, -0.1775, 0, 0, -0.6), darkLeather);
     p.bake();
-    const gl = makeGlow(0x7fd0ff, 0.46);
-    gl.position.set(0.195, 0.352, -0.196);
-    gl.material.opacity = 0.55;
-    pk.add(gl);
     // hose attachment point: shoulder/top of the main tank, where the feed hose rises off
     const hoseInlet = new THREE.Group();
     hoseInlet.position.set(-0.03, 0.33, -0.15);
@@ -1810,31 +1814,35 @@ function poseWalk(o, p, a, t, deck) {
   const wsh = Math.tanh(2.2 * Math.sin(t * 0.21)) / TANH22;  // +1 = weight on his left foot
   const look = 0.30 * ss(0.88, 1, Math.sin(t * 0.137)) - 0.26 * ss(0.88, 1, Math.sin(t * 0.0912 + 2.1));
   const dk = deck * idle, sw = (1 - deck) * idle;
+  // The seabed gets the weight shift too, at 60% — the column's sway rides on top of it.
+  // Standing in lead boots is standing; the planks were never the only floor he had.
+  const ws = dk + 0.6 * sw;
 
   o[CH.bobY] = W.bob(p) * a + Math.sin(t * 1.15) * 0.007 * sw;
-  o[CH.shiftX] = W.sway(p) * a + wob * 0.028 * sw + wsh * 0.030 * dk;
+  o[CH.shiftX] = W.sway(p) * a + wob * 0.028 * sw + wsh * 0.030 * ws;
   o[CH.shiftZ] = 0;
-  o[CH.pYaw] = W.yaw(p) * a + wsh * 0.020 * dk;
-  o[CH.pRoll] = W.list(p) * a + wob * 0.032 * sw + wsh * 0.038 * dk;
+  o[CH.pYaw] = W.yaw(p) * a + wsh * 0.020 * ws;
+  o[CH.pRoll] = W.list(p) * a + wob * 0.032 * sw + wsh * 0.038 * ws;
   o[CH.pPitch] = 0;
-  o[CH.sYaw] = -1.5 * W.yaw(p - SH_LAG) * a - wsh * 0.030 * dk + brS * 0.006 * dk * breathAmp;
+  o[CH.sYaw] = -1.5 * W.yaw(p - SH_LAG) * a - wsh * 0.030 * ws + brS * 0.006 * dk * breathAmp;
   // Breathing reads at the SHOULDERS (rigid canvas and brass over the chest): the same
   // phase that times the exhaust bursts, scaled by breathAmp so low air shallows it.
   o[CH.sPitch] = -(0.07 + 0.11 * a) + Math.sin(t * 1.15 + 0.6) * 0.022 * sw + brS * (0.020 * dk + 0.011 * sw) * breathAmp;
-  o[CH.sRoll] = -0.6 * W.list(p - SH_LAG * 0.7) * a - wsh * 0.021 * dk;
-  o[CH.nYaw] = look * dk; o[CH.nPitch] = 0.05 * a - 0.02 * Math.abs(look) * dk;
+  o[CH.sRoll] = -0.6 * W.list(p - SH_LAG * 0.7) * a - wsh * 0.021 * ws;
+  o[CH.nYaw] = look * (dk + sw); o[CH.nPitch] = 0.05 * a - 0.02 * Math.abs(look) * (dk + sw)
+    - 0.20 * ss(0.93, 1, Math.sin(t * 0.061 + 0.8)) * sw;   // now and then, a look up the line toward the light
   o[CH.Rhx] = -W.hip(p) * a; o[CH.Rhz] = 0.075;
-  o[CH.Rk] = W.knee(p) * a + 0.07 * idle + 0.022 * wsh * dk; o[CH.Ra] = W.ankle(p) * a;
+  o[CH.Rk] = W.knee(p) * a + 0.07 * idle + 0.022 * wsh * ws; o[CH.Ra] = W.ankle(p) * a;
   o[CH.Lhx] = -W.hip(p + 0.5) * a; o[CH.Lhz] = 0.075;
-  o[CH.Lk] = W.knee(p + 0.5) * a + 0.07 * idle - 0.022 * wsh * dk; o[CH.La] = W.ankle(p + 0.5) * a;
+  o[CH.Lk] = W.knee(p + 0.5) * a + 0.07 * idle - 0.022 * wsh * ws; o[CH.La] = W.ankle(p + 0.5) * a;
   // Arms trail the opposing leg on W.arm's eased pendulum profile. Centre and half-range
   // reproduce the old -W.hip() swing exactly, so the reach of the swing is unchanged; what
   // changed is WHEN it gets there and how it turns around.
   const ra = (0.445 * W.arm(p - 0.08 - ARM_LAG) - 0.09) * a;
   const la = (0.445 * W.arm(p + 0.42 - ARM_LAG) - 0.09) * a;
-  o[CH.Rsx] = -ra * 0.34 - 0.10 - wsh * 0.012 * dk; o[CH.Rsz] = 0.18; o[CH.Rsy] = -0.10;
+  o[CH.Rsx] = -ra * 0.34 - 0.10 - wsh * 0.012 * ws; o[CH.Rsz] = 0.18; o[CH.Rsy] = -0.10;
   o[CH.Re] = -(0.44 + Math.max(0, -ra) * 0.35);
-  o[CH.Lsx] = -la * 0.62 + wsh * 0.012 * dk; o[CH.Lsz] = 0.15; o[CH.Lsy] = 0.05;
+  o[CH.Lsx] = -la * 0.62 + wsh * 0.012 * ws; o[CH.Lsz] = 0.15; o[CH.Lsy] = 0.05;
   o[CH.Le] = -(0.20 + Math.max(0, -la) * 0.5);
 }
 
@@ -1870,6 +1878,23 @@ function poseSwim(o, p, t, drive) {
   o[CH.Re] = -(0.85 + dragS(td * 0.8 + 0.6) * 0.10);
   o[CH.Lsx] = -0.22 + dragS(td * 0.66 + 2) * 0.30; o[CH.Lsz] = 0.42 + dragS(td * 0.5) * 0.10; o[CH.Lsy] = 0.18;
   o[CH.Le] = -(0.55 + dragS(td * 0.66 + 1.2) * 0.28);
+  // THE FREE HAND SCULLS WITH THE KICK. As the knees draw up (recovery) the left hand
+  // reaches forward with the elbow bent; on the snap it pulls down and back past the
+  // hip, straightening; through the glide it trails. Keyed off the kick's own warped
+  // phase a beat early (the arm leads the legs), so the stroke IS the push the player
+  // feels in player.js, not a second clock. The lantern arm only answers it a little.
+  // Hanging in the column with no way on, nothing is locked: the knees soften and the
+  // legs sit a little forward of the hips, the way a relaxed body floats.
+  const relax = 1 - drive;
+  o[CH.Rhx] -= 0.10 * relax; o[CH.Lhx] -= 0.06 * relax;
+  o[CH.Rk] += 0.22 * relax; o[CH.Lk] += 0.30 * relax;
+  const st = S.hip(pk + 0.06), sk = S.knee(pk + 0.06) / 1.45;
+  const dv = 0.35 + 0.65 * drive;
+  o[CH.Lsx] += dv * (0.28 - 0.80 * st);
+  o[CH.Le] -= dv * 0.55 * sk;
+  o[CH.Lsz] += dv * 0.14 * st;
+  o[CH.Rsx] += dv * (0.08 - 0.22 * st);
+  o[CH.Re] -= dv * 0.15 * sk;
 }
 
 // ---- knife slash: a one-shot keyed overlay on the LEFT arm ----
@@ -2086,7 +2111,8 @@ function foot() {
     ax: 0, ay: 0, az: 0,           // contact point in the ground frame
     duty: DUTY, stride: 1, lat: 0, // this step's variation draws
     slip: 0,                       // accumulated travel through the flat window (the probe)
-    wx: 0, wy: 0, wz: 0            // last resolved world contact (probe + re-plant seed)
+    wx: 0, wy: 0, wz: 0,           // last resolved world contact (probe + re-plant seed)
+    stT: -1, dur: 0.42, sfx: 0, sfz: 0, stx: 0, stz: 0, lift: 0, d2: 0   // turn step: from angle/radius, sweep/radius
   };
 }
 const ftR = foot(), ftL = foot();
@@ -2237,9 +2263,13 @@ function rollThrough(u, out) {
   return out.set(th, cz, 0);
 }
 
+const SHUF_DUR = 0.42, SHUF_LIFT = 0.075;
+let shufX = 0;                     // weight roll onto the planted boot during a shuffle step
+// hoisted: two array literals per frame were the rig's last allocations
+const LEGS = [diver.legR, diver.legL], FTS = [ftR, ftL];
 // ---- the ground is boss ----
 function driveLegs(dt, player, ikOn, amp, stepRate) {
-  const legs = [diver.legR, diver.legL], fts = [ftR, ftL];
+  const legs = LEGS, fts = FTS;
 
   // The hips' world matrix, composed by hand from the three transforms we just wrote.
   // Everything above the pelvis is authored and already final, so this is exact — and it
@@ -2258,6 +2288,21 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
   const ox = onDeck ? raft.position.x : 0, oy = onDeck ? raft.position.y : 0, oz = onDeck ? raft.position.z : 0;
   const cy = Math.cos(yawF), sy = Math.sin(yawF);
 
+  // SLOPE. The collision floor is one height at his centre; on a 25% grade the downhill
+  // boot wants ground 10-15 cm under that and the uphill boot above it. The rig samples
+  // the seabed under each boot and plants it there. Only on the bare seabed: a rock top
+  // or a wreck deck is not terrain, and there the centre height stops matching the
+  // floor, which is exactly the test that switches this off.
+  gdOn = false;
+  if (SAL.slope && !onDeck && player.grounded) {
+    const px = player.pos.x, pz = player.pos.z;
+    let hC = terrainH(px, pz, slopeZi);
+    if (Math.abs(hC - soleY) > 0.6) {
+      for (let z = 0; z < 3; z++) { const h = terrainH(px, pz, z); if (Math.abs(h - soleY) < Math.abs(hC - soleY)) { hC = h; slopeZi = z; } }
+    }
+    if (Math.abs(hC - soleY) < 0.6) { gdOn = true; gdC = hC; gdFx = sy; gdFz = cy; }
+  }
+
   // Landing. The knees can genuinely absorb now — the feet are pinned and the pelvis is
   // free to drop between them — so a drop to the seabed gets a real impulse instead of a
   // cosmetic dip, and both boots re-find the ground on contact rather than blending to it.
@@ -2265,6 +2310,8 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     const hit = clamp(-player.vel.y * 0.55, 0, 4.2);
     settle.v -= 1.2 + hit;
     landImp = hit;
+    // the arms come out for balance and the bonnet nods into the impact
+    rcA.v += 0.9 * hit * SAL.react; rcH.v += 0.6 * hit * SAL.react; rcD.v -= 0.5 * hit * SAL.react;
     ftR.planted = ftL.planted = false;
   }
   prevGrounded = !!player.grounded;
@@ -2307,7 +2354,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
         ft.wx = player.pos.x + cy * latL; ft.wz = player.pos.z - sy * latL;
         ft.seed = true;
       }
-      ft.ax = ft.wx - ox; ft.ay = soleY - oy; ft.az = ft.wz - oz;
+      ft.ax = ft.wx - ox; ft.ay = soleY + groundD(ft.wx, ft.wz) - oy; ft.az = ft.wz - oz;
       ft.deck = onDeck; ft.planted = true;
     } else if (!inStance && ft.planted) {
       ft.planted = false;
@@ -2324,28 +2371,60 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     }
     // THE SHUFFLE. Standing still, the anchors are absolute — so turning on the spot, or
     // being pushed off a wreck, would drag the boots sideways under him and twist the legs
-    // out of the rig. When a planted foot ends up more than ~0.3 u from where the hip now
-    // wants it, the anchor CREEPS back toward neutral at 2.2 u/s. Releasing and re-claiming
-    // instead would teleport the boot; creeping is a man scuffing his feet round to face a
-    // new way, which is exactly what he is doing.
+    // out of the rig. When a planted foot ends up more than ~0.27 u from where the hip now
+    // wants it, he STEPS it there: the boot that is further out goes first (never both),
+    // lifts a few centimetres — lead boots do not get picked up high — travels on a soft
+    // ease with a little overshoot into the turn, and lands as a real footfall. The weight
+    // rolls onto the other boot while it is in the air. (This replaced a 2.2 u/s creep:
+    // honest to the anchors, but it read as a man sliding on ice.)
     if (standing && ft.planted) {
       const latL = sgn * HIP_X + ft.lat;
       const nx = player.pos.x + cy * latL, nz = player.pos.z - sy * latL;
       const dx = nx - (ft.ax + ox), dz = nz - (ft.az + oz);
       const d2 = dx * dx + dz * dz;
-      if (d2 > 0.09) {
-        const k = Math.min(1, 2.2 * dt / Math.sqrt(d2));
-        ft.ax += dx * k; ft.az += dz * k;
+      ft.d2 = d2;
+      const other = i ? ftR : ftL;
+      // The other boot may be in its last third (all but down) — a fast turn is a quick
+      // run of steps, never both boots off the ground.
+      const otherDown = other.stT < 0 || other.stT > other.dur * 0.66;
+      if (ft.stT < 0 && otherDown && d2 > 0.075 && (d2 >= other.d2 * 0.8 || other.stT >= 0)) {
+        // further to go, quicker step: 0.42 s for a nudge, down to 0.30 s for a big turn
+        ft.dur = SHUF_DUR - 0.12 * clamp((Math.sqrt(d2) - 0.27) / 0.4, 0, 1);
+        // The boot travels ROUND him, not across: the path is interpolated in polar form
+        // about his centre (angle and radius separately), so a big turn cannot drag one
+        // boot through the other leg. One step turns at most ~50 degrees; a bigger turn
+        // is a run of them.
+        ft.stT = 0;
+        const ax0 = ft.ax + ox - player.pos.x, az0 = ft.az + oz - player.pos.z;
+        const os = 0.12 + clamp(Math.abs(yawRate) * 0.06, 0, 0.18);   // lead into a turn that is still going
+        const ax1 = nx + dx * os - player.pos.x, az1 = nz + dz * os - player.pos.z;
+        ft.sfx = Math.atan2(ax0, az0); ft.sfz = Math.hypot(ax0, az0);
+        let dA = Math.atan2(ax1, az1) - ft.sfx;
+        dA = Math.atan2(Math.sin(dA), Math.cos(dA));
+        ft.stx = clamp(dA, -0.9, 0.9); ft.stz = Math.hypot(ax1, az1);
       }
-      ft.ay = soleY - oy;                    // and it keeps its footing as the deck heaves
-    }
+      if (ft.stT >= 0) {
+        ft.stT += dt;
+        const u = Math.min(1, ft.stT / ft.dur), e = u * u * u * (u * (u * 6 - 15) + 10);
+        const ang = ft.sfx + ft.stx * e, rad = ft.sfz + (ft.stz - ft.sfz) * e;
+        ft.ax = player.pos.x + Math.sin(ang) * rad - ox; ft.az = player.pos.z + Math.cos(ang) * rad - oz;
+        ft.lift = SHUF_LIFT * Math.sin(Math.PI * u) * (1 - 0.35 * u);
+        shufX = -sgn * 0.034 * Math.sin(Math.PI * u);
+        if (u >= 1) {
+          ft.stT = -1; ft.lift = 0; shufX = 0;
+          settle.v -= 1.1; kneeSoft.v += 2.2; kneeSide = i;
+          if (gb > 0.5) steps++;           // a boot put down is a footfall: sound, silt, print
+        }
+      }
+      ft.ay = soleY + groundD(ft.ax + ox, ft.az + oz) - oy;   // keeps its footing as the deck heaves
+    } else if (ft.stT >= 0) { ft.stT = -1; ft.lift = 0; shufX = 0; }
 
     // ---- TARGET. One world-space ankle point, however it was arrived at. ----
     let th, cz, wIK;
     if (inStance) {
-      rollThrough(sp, _vB); th = _vB.x; cz = _vB.y;
+      rollThrough(sp, _vB); th = _vB.x + groundPitch(ft.ax + ox, ft.az + oz); cz = _vB.y;
       ankleOverContact(th, cz, _vC);
-      _vD.set(ft.ax + ox + sy * _vC.z, ft.ay + oy + _vC.y, ft.az + oz + cy * _vC.z);
+      _vD.set(ft.ax + ox + sy * _vC.z, ft.ay + oy + _vC.y + ft.lift, ft.az + oz + cy * _vC.z);
       // Hand the last tenth of stance back to the curves so toe-off is continuous: the
       // solver inverts the forward pose exactly, so at wIK = 0 it reproduces the authored
       // angles and there is no seam between contact and swing.
@@ -2359,13 +2438,11 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       const tRem = clamp((1 - lp) / Math.max(stepRate, 0.25), 0, 0.9);
       const ahead = DUTY * STRIDE_U * ft.stride * 0.5 + (gaitState === 3 ? 0.18 : 0);
       const latL = sgn * HIP_X + ft.lat;
-      th = TH_STRIKE; cz = CZ_HEEL;
+      const lx = player.pos.x + player.vel.x * tRem + sy * ahead + cy * latL;
+      const lz = player.pos.z + player.vel.z * tRem + cy * ahead - sy * latL;
+      th = TH_STRIKE + groundPitch(lx, lz); cz = CZ_HEEL;
       ankleOverContact(th, cz, _vC);
-      _vD.set(
-        player.pos.x + player.vel.x * tRem + sy * ahead + cy * latL + sy * _vC.z,
-        soleY + _vC.y,
-        player.pos.z + player.vel.z * tRem + cy * ahead - sy * latL + cy * _vC.z
-      );
+      _vD.set(lx + sy * _vC.z, soleY + groundD(lx, lz) + _vC.y, lz + cy * _vC.z);
       // Ease onto the landing line over the back half of the swing: early swing is pure
       // authored curve (which is good in the air), late swing is pure ground truth.
       wIK = ss(0.40, 0.97, swp);
@@ -2416,6 +2493,86 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
   ikDebug.state = gaitState; ikDebug.stepSeq = stepSeq;
 }
 
+// ===========================================================================
+// THE LIFE LAYER — intention, reaction and distress, on top of the gait.
+//
+// Everything above makes Sal MOVE correctly. None of it makes him a man with a reason:
+// the head only ever turned on a sine gate, a shark bite landed in the lens and the
+// lantern but not in his body, the thruster shoved a statue, a grab by an arm the size
+// of a mast left him standing in his walk pose, and running out of air changed nothing
+// but the breathing rate. This layer is those, in two kinds:
+//   INTENT  (written into `po`, so the compliance springs carry it like any authored
+//            pose): look-at, turn anticipation, the valve check, grab struggle, low-air
+//            hunch, the burst streamline, idle weight shifts on the seabed.
+//   REACTION (post-compliance, additive, under-damped springs kicked by impulses):
+//            recoil and recovery. Impulses are velocities, never positions, so nothing
+//            can pop — a hit arrives as acceleration and leaves through the spring.
+// Contracts it keeps: the slash overlay is applied AFTER intent so the blade still
+// owns the left arm through contact, and reactions skip the left arm while it swings.
+// ===========================================================================
+// Live knobs (-1 = auto). vp is the valve pose (Lsx, Lsz, Lsy, Le): the hand to the
+// bonnet's side port, tuned on the rig from a contact sheet of six candidates.
+const SAL = { look: true, react: 1, lean: 1, valve: -1, peer: -1, slope: true, grab: -1, vp: [-1.35, 1.2, -0.85, -2.05],
+  pp: [-1.3, -0.1, 0.3, -0.7] };   // pp: the peer pose (Rsx, Rsz, Rsy, Re) — lantern up and forward
+window.__sal = SAL;
+// look-at: game.js hands over the nearest thing worth looking at (or null)
+const lookT = V3();
+let lookHave = false, lookW = 0;
+export function diverLookAt(p) { if (p) { lookT.copy(p); lookHave = true; } else lookHave = false; }
+// reactions
+const rcP = { x: 0, v: 0 }, rcR = { x: 0, v: 0 }, rcY = { x: 0, v: 0 };
+const rcH = { x: 0, v: 0 }, rcA = { x: 0, v: 0 }, rcD = { x: 0, v: 0 };
+let grabOn = false, grabW = 0, grabT = 0;
+// hit: (dx, dz) is the world direction FROM Sal TOWARD what struck him. mag ~1 = a bite.
+export function diverImpulse(kind, dx = 0, dz = 0, mag = 1) {
+  const k = mag * SAL.react;
+  if (kind === 'grab') { rcA.v += 3.0 * k; rcH.v -= 2.4 * k; rcP.v += 1.2 * k; return; }
+  const n = Math.hypot(dx, dz);
+  const cy = Math.cos(yawF), sy = Math.sin(yawF);
+  // local frame: +z forward (sin yaw, cos yaw), +x his left (cos yaw, -sin yaw)
+  let fz = 0.6, lx = 0;
+  if (n > 1e-4) { fz = (dx * sy + dz * cy) / n; lx = (dx * cy - dz * sy) / n; }
+  rcP.v -= 3.3 * fz * k;              // struck from ahead: rocks back; from behind: pitched on
+  rcR.v += 2.8 * lx * k;              // struck from his left: the top goes right
+  rcY.v -= 3.2 * lx * k;              // the shoulders twist away from it
+  rcH.v -= 4.4 * fz * k + 1.0 * k;    // the helmet whips a beat later and further
+  rcA.v += 3.6 * k;                   // arms thrown out for balance
+  rcD.v -= 2.2 * k;                   // the knees buckle under it
+}
+export function diverGrab(on) { grabOn = !!on; }
+// blend one composed channel toward a target (module function: no per-frame closure)
+function poMix(ch, v, w) { po[ch] += (v - po[ch]) * w; }
+let idleT = 0, valveT = -1, valveNext = 11, valveIdx = 0, valveW = 0;
+const VALVE_DUR = 2.7;
+const HEAD_CTR = 0.8;           // how much of the spine's yaw the neck takes back out
+let peerT = -1, peerW = 0;
+const PEER_DUR = 4.2;
+let prevBurstT = 0, burstW = 0;
+const brP = { x: 0, v: 0 };
+let fwdSpdPrev = 0, accF = 0;
+const strafeS = { x: 0, v: 0 };
+let hoseLean = 0, hoseRoll = 0, hoseTautWas = 0;
+const accLean = { x: 0, v: 0 };
+const lkY = { x: 0, v: 0 }, lkX = { x: 0, v: 0 };
+// slope adaptation state
+let slopeZi = 0;
+const slopeDrop = { x: 0, v: 0 };
+let gdOn = false, gdC = 0, gdFx = 0, gdFz = 0;
+
+// Where the seabed is under (x, z), RELATIVE to where player.js put the floor. Relative,
+// because player.js owns the absolute floor (colliders, the deck, groundY smoothing); the
+// rig only adds what the slope does between one boot and the other.
+function groundD(x, z) {
+  if (!gdOn) return 0;
+  return clamp(terrainH(x, z, slopeZi) - gdC, -0.42, 0.42);
+}
+// Absolute foot pitch that lays a sole on the slope along his heading (toe-down +).
+function groundPitch(x, z) {
+  if (!gdOn) return 0;
+  const a = terrainH(x + gdFx * 0.22, z + gdFz * 0.22, slopeZi), b = terrainH(x - gdFx * 0.22, z - gdFz * 0.22, slopeZi);
+  return clamp(-Math.atan((a - b) / 0.44), -0.45, 0.45);
+}
+
 // Pose the diver from player state. grounded => weighted lead-boot walk; else => frog kick.
 export function updateDiver(dt, t, player) {
   diver.position.copy(player.pos);
@@ -2424,7 +2581,28 @@ export function updateDiver(dt, t, player) {
 
   if (!yawInit) { yawF = player.yaw; yawInit = true; }
   // the body trails the look direction: tight on the seafloor, loose and laggy in water
-  yawF = lerp(yawF, player.yaw, Math.min(1, (player.grounded ? 9 : 2.6) * dt));
+  // Standing, the body comes round SLOWER than walking (4.5/s against 9): a man in lead
+  // boots turns by stepping, and the look direction runs ahead of him — the helmet and
+  // shoulders take up the difference (turn anticipation, in the life layer below).
+  // STRAFE BLEND. Walking sideways on forward-keyed legs flung the boots out at the
+  // hip (measured on a contact sheet: a leg abducted near 45 degrees every other step).
+  // A man in lead boots does not side-step across a seabed, he turns his hips to the
+  // way he is going and keeps his eyes where he was looking. So the BODY heading bends
+  // toward the travel direction (up to ~70 degrees), and the look-lead below counter-
+  // rotates the spine and helmet back onto player.yaw. Backing up keeps its facing and
+  // only takes a diagonal's share. Grounded walking only; swimming sculls instead.
+  {
+    let off = 0;
+    const fl = Math.hypot(player.vel.x, player.vel.z);
+    if (player.grounded && fl > 0.25) {
+      let a = Math.atan2(player.vel.x, player.vel.z) - player.yaw;
+      a = Math.atan2(Math.sin(a), Math.cos(a));
+      off = Math.abs(a) < 2.0 ? clamp(a, -1.2, 1.2) : clamp(a - Math.sign(a) * Math.PI, -0.5, 0.5);
+      off *= clamp(fl * 1.2 - 0.3, 0, 1);
+    }
+    spring(strafeS, off, dt, 5, 1);
+  }
+  yawF = lerp(yawF, player.yaw + strafeS.x, Math.min(1, (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * dt));
   diver.rotation.y = yawF;
 
   // Stepping onto planks kills the aquatic motion in ~0.15 s rather than half a second:
@@ -2562,19 +2740,205 @@ export function updateDiver(dt, t, player) {
     const w = ladderF;
     const s = Math.sin(player.pos.y * 3.4);        // +1 = right hand reaching for the next rung
     const rUp = 0.5 + 0.5 * s, lUp = 1 - rUp;
-    const mix = (ch, v) => { po[ch] += (v - po[ch]) * w; };
+    const mix = poMix;   // (ch, v, w) — module function, no per-frame closure
     // squared to the rungs: swim bob, sway and roll die under the grip
-    mix(CH.bobY, 0); mix(CH.shiftX, 0); mix(CH.pYaw, 0); mix(CH.pRoll, 0);
-    mix(CH.pPitch, 0.10); mix(CH.sPitch, -0.16); mix(CH.sRoll, 0);
-    mix(CH.nPitch, 0.22);                          // eyes up the ladder, where he is going
+    mix(CH.bobY, 0, w); mix(CH.shiftX, 0, w); mix(CH.pYaw, 0, w); mix(CH.pRoll, 0, w);
+    mix(CH.pPitch, 0.10, w); mix(CH.sPitch, -0.16, w); mix(CH.sRoll, 0, w);
+    mix(CH.nPitch, 0.22, w);                          // eyes up the ladder, where he is going
     // arms: the reaching arm goes long overhead, the holding arm stays bent on its rung
-    mix(CH.Rsx, -1.15 - 0.75 * rUp); mix(CH.Rsz, 0.16); mix(CH.Rsy, -0.06);
-    mix(CH.Re, -(0.95 - 0.60 * rUp));
-    mix(CH.Lsx, -1.15 - 0.75 * lUp); mix(CH.Lsz, 0.16); mix(CH.Lsy, 0.06);
-    mix(CH.Le, -(0.95 - 0.60 * lUp));
+    mix(CH.Rsx, -1.15 - 0.75 * rUp, w); mix(CH.Rsz, 0.16, w); mix(CH.Rsy, -0.06, w);
+    mix(CH.Re, -(0.95 - 0.60 * rUp), w);
+    mix(CH.Lsx, -1.15 - 0.75 * lUp, w); mix(CH.Lsz, 0.16, w); mix(CH.Lsy, 0.06, w);
+    mix(CH.Le, -(0.95 - 0.60 * lUp), w);
     // legs: knees tucked, stepping contralaterally (right hand up, left knee up)
-    mix(CH.Rhx, -0.35 - 0.30 * lUp); mix(CH.Rhz, 0.07); mix(CH.Rk, 0.65 + 0.35 * lUp); mix(CH.Ra, 0.25);
-    mix(CH.Lhx, -0.35 - 0.30 * rUp); mix(CH.Lhz, 0.07); mix(CH.Lk, 0.65 + 0.35 * rUp); mix(CH.La, 0.25);
+    mix(CH.Rhx, -0.35 - 0.30 * lUp, w); mix(CH.Rhz, 0.07, w); mix(CH.Rk, 0.65 + 0.35 * lUp, w); mix(CH.Ra, 0.25, w);
+    mix(CH.Lhx, -0.35 - 0.30 * rUp, w); mix(CH.Lhz, 0.07, w); mix(CH.Lk, 0.65 + 0.35 * rUp, w); mix(CH.La, 0.25, w);
+  }
+
+  // ---- THE LIFE LAYER: intent (see the block above diverLookAt) ----
+  {
+    // DRAG AND DESCENT, off the ground only. Moving fast, the water takes the legs back
+    // behind him; sinking, the knees come up and the arms lift out for the landing he
+    // can see coming, the helmet tipping down toward it in the last few units.
+    const off = 1 - gb;
+    if (off > 1e-3) {
+      const hs = Math.hypot(player.vel.x, player.vel.z);
+      const trail = clamp(hs / 14, 0, 1) * off;
+      po[CH.Rhx] += 0.24 * trail; po[CH.Lhx] += 0.24 * trail;
+      po[CH.Rk] += 0.10 * trail; po[CH.Lk] += 0.10 * trail;
+      po[CH.Ra] -= 0.25 * trail; po[CH.La] -= 0.25 * trail;
+      const sink = clamp((-player.vel.y - 0.5) / 3.0, 0, 1) * off;
+      if (sink > 1e-3) {
+        const near = 1 - ss(1.5, 6, player.pos.y - (player.groundY ?? -1e9));   // groundY is the standing eye height
+        po[CH.Rhx] -= (0.22 + 0.25 * near) * sink; po[CH.Lhx] -= (0.18 + 0.25 * near) * sink;
+        po[CH.Rk] += (0.30 + 0.35 * near) * sink; po[CH.Lk] += (0.26 + 0.35 * near) * sink;
+        po[CH.Rsz] += 0.30 * sink; po[CH.Lsz] += 0.30 * sink;
+        po[CH.nPitch] += 0.30 * near * sink;
+      }
+    }
+  }
+  const airLow = 1 - clamp(survival.oxygen / 0.35, 0, 1);
+  let dYaw = player.yaw - yawF;
+  dYaw = Math.atan2(Math.sin(dYaw), Math.cos(dYaw));
+  {
+    // TURN ANTICIPATION. The eyes go first, the shoulders follow, the hips come last:
+    // yawF is the body's own lagging heading, so its gap to the look direction IS the
+    // turn he is about to make. The head leads into it, the spine takes a share, the
+    // pelvis holds back — a turn becomes a ripple down the body instead of a turret.
+    const lead = clamp(dYaw, -1.25, 1.25);
+    let hy = lead * 0.85, hp = 0;
+    // LOOK-AT. Whatever game.js says is worth noticing (a creature, the sleeper, a light
+    // in the dark). Heaviest at a standstill, lighter on the move, gone while he fights.
+    const wantL = SAL.look && lookHave ? (0.95 - 0.55 * amp) * (1 - grabW) * (1 - ladderF) : 0;
+    lookW += (wantL - lookW) * Math.min(1, 1.6 * dt);
+    if (lookW > 1e-3) {
+      const vx = lookT.x - diver.position.x, vy = lookT.y - (diver.position.y + 0.45), vz = lookT.z - diver.position.z;
+      let ly = Math.atan2(vx, vz) - yawF;
+      ly = Math.atan2(Math.sin(ly), Math.cos(ly));
+      // behind him: he does not wrench his neck round, he gives up on it
+      const behind = 1 - ss(1.5, 2.2, Math.abs(ly));
+      const lp = Math.atan2(vy, Math.hypot(vx, vz));
+      hy += clamp(ly, -1.15, 1.15) * lookW * behind;
+      hp += clamp(lp, -0.45, 0.35) * lookW * behind;
+    }
+    // Head yaw/pitch are sprung here so the look drifts on rather than tracking a target
+    // frame-perfectly — a man in a 25 kg helmet turns it slowly.
+    spring(lkY, hy, dt, 4.2, 0.9);
+    spring(lkX, hp, dt, 3.6, 0.9);
+    // Share out: the helmet can only turn so far on the corselet before the shoulders
+    // have to come round too.
+    const sY = clamp(lkY.x * 0.38, -0.34, 0.34);
+    po[CH.sYaw] += sY;
+    po[CH.nYaw] += lkY.x - sY * (1 - HEAD_CTR);
+    po[CH.pYaw] -= lead * 0.12 * gb;
+    po[CH.nPitch] -= lkX.x * 0.85;    // nPitch + is chin down
+    po[CH.sPitch] -= lkX.x * 0.15;
+  }
+  {
+    // THE VALVE CHECK. A hard-hat diver's hand goes to his air every so often without
+    // thinking about it: stood still on the bottom for a while, the left hand comes up
+    // to the side of the bonnet, rests there, turns a half-thought, comes down. Hashed
+    // intervals (never Math.random), cancelled by any movement, never during a slash.
+    const still = gaitState === 0 && amp < 0.05 && slashT < 0 && grabW < 0.05 && ladderF < 0.05;
+    idleT = still ? idleT + dt : 0;
+    // Two idle gestures share the one clock: the valve check, and (a bit under half the
+    // time) THE PEER — the lantern comes up and forward, and the helmet sweeps slowly
+    // across the dark it lights, then the arm sinks back.
+    if (valveT < 0 && peerT < 0 && idleT > valveNext) {
+      valveIdx++;
+      if (sHash(valveIdx, 42) < 0.42) peerT = 0; else valveT = 0;
+      valveNext = idleT + 9 + 16 * sHash(valveIdx, 41);
+    }
+    let vw = 0, pw2 = 0;
+    if (valveT >= 0) {
+      valveT += dt;
+      vw = ss(0, 0.7, valveT) * (1 - ss(VALVE_DUR - 0.8, VALVE_DUR, valveT));
+      if (valveT >= VALVE_DUR || !still) valveT = -1;
+    }
+    if (peerT >= 0) {
+      peerT += dt;
+      pw2 = ss(0, 0.9, peerT) * (1 - ss(PEER_DUR - 1.0, PEER_DUR, peerT));
+      if (peerT >= PEER_DUR || !still) peerT = -1;
+    }
+    if (SAL.peer >= 0) pw2 = SAL.peer;
+    peerW += (pw2 - peerW) * Math.min(1, 5 * dt);
+    if (peerW > 1e-3) {
+      const w = peerW, P = SAL.pp;
+      const scan = peerT > 0.9 ? Math.sin((peerT - 0.9) * 1.5) * 0.30 : 0;   // one slow sweep
+      poMix(CH.Rsx, P[0], w); poMix(CH.Rsz, P[1], w); poMix(CH.Rsy, P[2], w); poMix(CH.Re, P[3], w);
+      po[CH.sYaw] -= 0.10 * w; po[CH.nYaw] += (-0.12 + scan) * w; po[CH.nPitch] -= 0.04 * w;
+    }
+    // low air: the hand keeps going back to it
+    vw = Math.max(vw, airLow * 0.75 * (1 - amp));
+    if (SAL.valve >= 0) vw = SAL.valve;
+    valveW += (vw - valveW) * Math.min(1, 6 * dt);
+    if (valveW > 1e-3) {
+      const w = valveW;
+      const twist = valveT > 0.8 ? Math.sin((valveT - 0.8) * 7) * 0.08 * (1 - ss(1.6, 2.0, valveT)) : 0;
+      const V = SAL.vp;
+      po[CH.Lsx] += (V[0] - po[CH.Lsx]) * w;
+      po[CH.Lsz] += (V[1] - po[CH.Lsz]) * w;
+      po[CH.Lsy] += (V[2] - po[CH.Lsy]) * w;
+      po[CH.Le] += (V[3] + twist - po[CH.Le]) * w;
+      po[CH.nYaw] += 0.16 * w;          // the head cocks toward the hand
+      po[CH.nPitch] += 0.05 * w;
+      po[CH.sRoll] -= 0.04 * w;
+    }
+  }
+  {
+    // GRAB: he fights it. Irregular, not a loop — four incommensurate rates per channel —
+    // arms clawing, shoulders wrenching, the legs kicking at nothing. SAL.grab forces it.
+    const g = SAL.grab >= 0 ? SAL.grab : grabOn ? 1 : 0;
+    grabW += (g - grabW) * Math.min(1, (g > grabW ? 5 : 1.6) * dt);
+    if (grabW > 1e-3) {
+      grabT += dt;
+      const w = grabW, q = grabT;
+      const n1 = Math.sin(q * 5.3) + 0.6 * Math.sin(q * 8.9 + 1.3);
+      const n2 = Math.sin(q * 4.1 + 2.0) + 0.6 * Math.sin(q * 7.3 + 0.4);
+      const n3 = Math.sin(q * 3.3 + 0.7) + 0.5 * Math.sin(q * 11.1 + 2.2);
+      po[CH.sYaw] += 0.30 * n1 * w; po[CH.sRoll] += 0.14 * n2 * w; po[CH.sPitch] += (0.12 + 0.08 * n3) * w;
+      po[CH.pYaw] -= 0.14 * n1 * w; po[CH.pRoll] += 0.08 * n3 * w;
+      po[CH.nYaw] += 0.35 * n2 * w; po[CH.nPitch] -= (0.10 + 0.10 * n1) * w;
+      po[CH.Rsx] += (-1.2 + 0.55 * n2 - po[CH.Rsx]) * w * 0.8; po[CH.Rsz] += (0.55 + 0.25 * n3) * w;
+      po[CH.Re] += (-1.3 + 0.45 * n1 - po[CH.Re]) * w * 0.8;
+      po[CH.Lsx] += (-0.9 - 0.6 * n1 - po[CH.Lsx]) * w * 0.8; po[CH.Lsz] += (0.5 + 0.25 * n2) * w;
+      po[CH.Le] += (-1.1 - 0.5 * n3 - po[CH.Le]) * w * 0.8;
+      const kick = Math.sin(q * 6.2), kick2 = Math.sin(q * 6.2 + 2.6);
+      po[CH.Rhx] += (-0.35 - 0.35 * kick) * w * (1 - gb * 0.7); po[CH.Rk] += (0.5 + 0.45 * kick) * w * (1 - gb * 0.7);
+      po[CH.Lhx] += (-0.35 - 0.35 * kick2) * w * (1 - gb * 0.7); po[CH.Lk] += (0.5 + 0.45 * kick2) * w * (1 - gb * 0.7);
+    } else grabT = 0;
+  }
+  {
+    // THE HOSE. At the end of the line the umbilical is a bar pulling him back toward
+    // the raft: he leans into it, head down, and the moment it comes up hard he is
+    // yanked — a jolt through the torso and the helmet from the side the hose is on.
+    const taut = survival.tautness || 0;
+    const k = ss(0.88, 1.0, taut);
+    hoseLean = 0; hoseRoll = 0;
+    if (k > 1e-3) {
+      const hx = pumpPos.x - player.pos.x, hz = pumpPos.z - player.pos.z, hn = Math.hypot(hx, hz) || 1;
+      const sy = Math.sin(yawF), cy = Math.cos(yawF);
+      const back = -(hx * sy + hz * cy) / hn, lat = (hx * cy - hz * sy) / hn;
+      const strain = k * (0.35 + 0.65 * clamp(amp * 2 + (1 - gb) * clamp(speed * 0.3, 0, 1), 0, 1));
+      hoseLean = 0.14 * strain * Math.max(0, back);
+      hoseRoll = -0.07 * strain * lat;
+      po[CH.sPitch] += 0.07 * strain; po[CH.nPitch] += 0.10 * strain;
+      if (taut > 0.995 && hoseTautWas <= 0.995) {
+        rcP.v -= 1.5 * back * SAL.react; rcR.v += 1.0 * lat * SAL.react; rcH.v -= 1.2 * SAL.react;
+      }
+    }
+    hoseTautWas = taut;
+  }
+  {
+    // LOW AIR: the posture goes before the man does. Shoulders round, the head drops and
+    // then jerks up — looking for the surface he cannot see — on the panic breath clock.
+    if (airLow > 0.01) {
+      const gasp = Math.max(0, Math.sin(breathPh)) ** 3;
+      po[CH.sPitch] += 0.16 * airLow;
+      po[CH.nPitch] += (0.16 - 0.42 * gasp) * airLow;
+      po[CH.Rsz] += 0.10 * airLow; po[CH.Rk] += 0.10 * airLow * gb; po[CH.Lk] += 0.10 * airLow * gb;
+    }
+  }
+  {
+    // BURST: the bottle dumps through the thruster on his back, so the rig is shoved from
+    // BEHIND. The torso takes it, the helmet and limbs are left behind by it and trail
+    // into a streamline for as long as the blowdown lasts, then swing back.
+    const bt = player.burstT || 0;
+    if (bt > prevBurstT + 0.05) {
+      brP.v += 3.2 * SAL.react;           // pitch into the shove
+      rcH.v -= 3.6 * SAL.react;            // the helmet snaps back
+      rcA.v -= 2.2 * SAL.react;            // arms flung back along the body
+    }
+    prevBurstT = bt;
+    burstW += ((bt > 0 ? 1 : 0) - burstW) * Math.min(1, (bt > 0 ? 9 : 2.2) * dt);
+    if (burstW > 1e-3) {
+      const w = burstW * (1 - ladderF);
+      poMix(CH.Rsx, 0.55, w); poMix(CH.Rsz, 0.22, w); poMix(CH.Re, -0.30, w);
+      if (slashT < 0) { poMix(CH.Lsx, 0.55, w); poMix(CH.Lsz, 0.18, w); poMix(CH.Le, -0.25, w); }
+      poMix(CH.Rhx, 0.12, w); poMix(CH.Rk, 0.10, w); poMix(CH.Ra, -0.45, w);
+      poMix(CH.Lhx, 0.18, w); poMix(CH.Lk, 0.16, w); poMix(CH.La, -0.40, w);
+      poMix(CH.nPitch, -0.18, w);
+    }
   }
 
   // Slash overlay: blends over the left-arm channels (plus a touch of spine twist) rather
@@ -2632,13 +2996,40 @@ export function updateDiver(dt, t, player) {
   compliance(pc, po, dt, 1 - 0.30 * (1 - gb), slashW);
 
   const b = diver.body;
+  // ---- THE LIFE LAYER: reaction springs (post-compliance, additive, impulse-driven) ----
+  const wf = 0.75 + 0.25 * gb;            // water slows every recovery
+  spring(rcP, 0, dt, 5.0 * wf, 0.32); spring(rcR, 0, dt, 5.0 * wf, 0.32); spring(rcY, 0, dt, 5.5 * wf, 0.35);
+  spring(rcH, 0, dt, 7.5 * wf, 0.28); spring(rcA, 0, dt, 4.5 * wf, 0.40); spring(rcD, 0, dt, 6.0, 0.45);
+  spring(brP, 0, dt, 4.5, 0.40);
+  // ACCELERATION LEAN. Lead boots and a column of water: to get going he leans into it,
+  // to stop he has to sit back against his own momentum. Plus a constant lean into the
+  // water's drag at walking pace. Read along his own heading, smoothed, sprung.
+  {
+    const fs = player.vel.x * Math.sin(yawF) + player.vel.z * Math.cos(yawF);
+    const a = dt > 1e-5 ? (fs - fwdSpdPrev) / dt : 0;
+    fwdSpdPrev = fs;
+    accF += (clamp(a, -6, 6) - accF) * Math.min(1, 5 * dt);
+    // Climbing, he leans into the hill; descending, he sits back against it.
+    const sx = Math.sin(yawF) * 0.5, sz = Math.cos(yawF) * 0.5;
+    const hill = gdOn ? Math.atan(groundD(player.pos.x + sx, player.pos.z + sz) - groundD(player.pos.x - sx, player.pos.z - sz)) : 0;
+    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + 0.035 * amp + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
+  }
+  // Slope: the downhill boot needs ground below the centre floor; the pelvis drops so
+  // that leg can reach it, and the uphill knee takes up the difference.
+  {
+    // ...and where the next boot is going (a quarter-second of travel ahead), so a step
+    // downhill finds the pelvis already sinking toward it rather than chasing it.
+    const dR = groundD(ftR.wx, ftR.wz), dL = groundD(ftL.wx, ftL.wz);
+    const dA = groundD(player.pos.x + player.vel.x * 0.3, player.pos.z + player.vel.z * 0.3);
+    spring(slopeDrop, -Math.max(0, -Math.min(dR, dL, dA)) * ikOn, dt, 9, 1);
+  }
   // LIFT plants the soles on player.pos - 1.35 (the collision floor) in the rest pose.
   // IK_DROP takes the pelvis down a further 45 mm the moment the feet are nailed, so
   // mid-stance has knee headroom and the solver never sits against its reach clamp; and
   // the heel-strike settle is allowed to travel twice as far, because the knees can now
   // genuinely absorb it against the ground instead of pushing the whole man through it.
-  b.position.set(pc[CH.shiftX], LIFT - (IK_DROP_IDLE * ikOn + (IK_DROP - IK_DROP_IDLE) * gw) + pc[CH.bobY]
-    + settle.x * (0.045 + 0.045 * ikOn), pc[CH.shiftZ]);
+  b.position.set(pc[CH.shiftX] + shufX, LIFT - (IK_DROP_IDLE * ikOn + (IK_DROP - IK_DROP_IDLE) * gw) + pc[CH.bobY]
+    + settle.x * (0.045 + 0.045 * ikOn) + slopeDrop.x + rcD.x * 0.45 * gb, pc[CH.shiftZ]);
   // Lead boots below, a copper helmet full of air above: the centres of gravity and
   // buoyancy are a metre apart, so the righting moment is an order of magnitude larger
   // than any couple he can generate — and it GROWS with every litre in the dress. He
@@ -2667,17 +3058,23 @@ export function updateDiver(dt, t, player) {
       : gaitState === 3 ? 0.085                            // STOP: pitch into the catch step
         : 0,
     dt, 7.5, 0.62);
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb, 0, sRollT.x + bankG);
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x, 0, sRollT.x + bankG + rcR.x + hoseRoll);
 
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);
   const sp = diver.spine;
-  sp.rotation.set(pc[CH.sPitch], pc[CH.sYaw], pc[CH.sRoll]);
+  sp.rotation.set(pc[CH.sPitch] - 0.4 * rcP.x, pc[CH.sYaw] + rcY.x, pc[CH.sRoll] + 0.3 * rcR.x);
 
   // brass helmet lags the torso, then over-settles
-  spring(hdY, -0.5 * pc[CH.sYaw] + pc[CH.nYaw], dt, 7, 0.55);
-  spring(hdX, -0.35 * pc[CH.sPitch] + pc[CH.nPitch], dt, 6.5, 0.6);
-  diver.neck.rotation.set(hdX.x, hdY.x, 0);
+  // Gaze stabilisation: the shoulders counter-rotate the pelvis every step, and at
+  // -0.5 the bonnet went along with half of it — from behind he swung his whole head
+  // left-right on every stride like a man scanning. A walker holds his gaze on the
+  // heading; -0.8 leaves the helmet a little of the torso's roll of motion and no more.
+  spring(hdY, -HEAD_CTR * pc[CH.sYaw] + pc[CH.nYaw], dt, 7, 0.55);
+  // ...and the weight of it: each heel strike's settle nods the bonnet forward a beat
+  // late (the under-damped spring supplies the lag and the one small rebound).
+  spring(hdX, -0.35 * pc[CH.sPitch] + pc[CH.nPitch] - settle.x * 0.12, dt, 6.5, 0.6);
+  diver.neck.rotation.set(hdX.x + rcH.x, hdY.x - 0.4 * rcY.x, 0.25 * rcR.x);
 
   // ---- THE LEGS. Everything above is authored; from here the GROUND is boss. ----
   driveLegs(dt, player, ikOn, amp, stepRate);
@@ -2687,6 +3084,16 @@ export function updateDiver(dt, t, player) {
   AR.mid.rotation.x = pc[CH.Re];
   AL.root.rotation.set(pc[CH.Lsx], pc[CH.Lsy], pc[CH.Lsz]);
   AL.mid.rotation.x = pc[CH.Le];
+  // arms thrown out by a hit (rcA > 0) or flung back by a burst (rcA < 0)
+  if (rcA.x > 1e-3 || rcA.x < -1e-3) {
+    const ra = rcA.x;
+    AR.root.rotation.x += ra < 0 ? -ra * 0.5 : -ra * 0.35; AR.root.rotation.z -= Math.max(0, ra) * 0.45;
+    AR.mid.rotation.x -= Math.abs(ra) * 0.25;
+    if (slashT < 0) {
+      AL.root.rotation.x += ra < 0 ? -ra * 0.5 : -ra * 0.30; AL.root.rotation.z += Math.max(0, ra) * 0.45;
+      AL.mid.rotation.x -= Math.abs(ra) * 0.25;
+    }
+  }
   // wrists relax after the elbow, measured from the rest fold so nothing static moves.
   // Fed the COMPLIANT elbow now, so the lag compounds down the chain: shoulder, then
   // elbow a beat later, then the wrist after that — which is the ripple Michael was

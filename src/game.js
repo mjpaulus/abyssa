@@ -11,7 +11,7 @@ import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherE
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash, breathPhase, breathCount, breathStress } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
@@ -662,7 +662,7 @@ Object.defineProperties(window, {
 const camVel = V3(), camAim = V3(), camDesired = V3(), camLook = V3();
 const camBack = V3(), camTo = V3(), camRight = V3();   // hot-path temps, never allocated per frame
 const camUpAxis = V3(0, 1, 0);
-let camDist = 9, camRoll = 0, camFov = 70;
+let camDist = 9, camDistV = 0, camRoll = 0, camFov = 70;
 // A respawn TELEPORTS the diver, and the spring then flew the camera the whole way after
 // him — measured 210 units in ~1.2 s, during which the frame peaked at 3.15x its normal
 // luminance and fell back. That bright wash is the camera crossing the entire water
@@ -686,7 +686,16 @@ const MASTER_VOL = 0.62;   // audio.js K.MASTER's shipped value; M toggles betwe
 //         footfalls exist in the hands, not just in Sal's knees.
 // Millimetres, not screen shake — the game stays quiet. window.__feel A/Bs it live.
 let speedEMA = 0, camStepDip = 0;
-const FEEL = { on: true, surgeK: 1.35, stepDip: 0.05 };
+const FEEL = { on: true, surgeK: 1.35, stepDip: 0.05, bedDip: 0.035, landK: 0.07, lead: 0.55, leadMax: 1.4 };
+// Seabed footfalls and landings reach the lens too (the deck already had its dip): the
+// camera reads stepCount() itself so it needs nothing from the frame loop. The landing
+// is a sprung sag — the eye drops with the knees and comes back up past level once.
+// LOOK-AHEAD: a slow-smoothed horizontal velocity leads the framing, so a walk or a swim
+// has room ahead of him in frame instead of being dragged from the centre.
+let camStepSeen = -1, camWasGrounded = true, camFallV = 0;
+const camLand = { x: 0, v: 0 };
+const camLead = V3();
+let diverLookCool = 0;
 window.__feel = FEEL;
 // ---- THE FLOW LEAN: a camera with a point of view (roadmap/flow-lean-style.md, item 6)
 // styleK reads GLASS.style: a sub-knob of -1 follows the master flowLean. Local on
@@ -795,6 +804,19 @@ function buildDynCols() {
 }
 window.__camCols = () => dynN;
 
+// Sal's body reacts to what struck him FROM THE SIDE it came from: the nearest of a list
+// of points (sharks carry .pos, the sleeper's spine is bare vectors). No allocation.
+function hitFrom(list, mag, hasPos) {
+  let bx = 0, bz = 0, bd = Infinity;
+  if (list) for (let i = 0; i < list.length; i++) {
+    const q = hasPos ? list[i].pos : list[i];
+    if (!q) continue;
+    const dx = q.x - player.pos.x, dz = q.z - player.pos.z, d = dx * dx + dz * dz + (q.y - player.pos.y) ** 2;
+    if (d < bd) { bd = d; bx = dx; bz = dz; }
+  }
+  diverImpulse('hit', bx, bz, mag);
+}
+
 function clearCamDistance(from, dir, want, zi) {
   const STEPS = 8, MARGIN = 0.8;
   for (let i = 1; i <= STEPS; i++) {
@@ -827,7 +849,11 @@ function updateCamera(dt, t, fwd) {
 
   buildDynCols();
   const want = clearCamDistance(player.pos, camBack, CAM_BACK, zi);
-  camDist += (want - camDist) * Math.min(1, (want < camDist ? 14 : 4) * dt);
+  // In fast (an obstacle must never be clipped through), out on a critically-damped
+  // spring: the old first-order ease left the wall at full speed, a visible kink every
+  // time a rock slid out of the line of sight. The spring leaves it at rest.
+  if (want < camDist) { camDist += (want - camDist) * Math.min(1, 14 * dt); camDistV = 0; }
+  else { const w = 4.5; camDistV += (w * w * (want - camDist) - 2 * w * camDistV) * Math.min(dt, 0.05); camDist += camDistV * Math.min(dt, 0.05); if (camDist > want) { camDist = want; camDistV = 0; } }
 
   camDesired.copy(player.pos).addScaledVector(camBack, camDist);
   camDesired.y += CAM_UP;
@@ -846,9 +872,24 @@ function updateCamera(dt, t, fwd) {
       const surge = (spd - speedEMA) / Math.max(speedEMA, 1);
       camDesired.addScaledVector(camBack, -FEEL.surgeK * clamp(surge, -0.6, 0.6));
     }
+    const scNow = stepCount();
+    if (scNow !== camStepSeen) {
+      if (camStepSeen >= 0 && !player.onDeck && player.grounded) camStepDip = Math.max(camStepDip, FEEL.bedDip / FEEL.stepDip);
+      camStepSeen = scNow;
+    }
     camStepDip = Math.max(0, camStepDip - dt / 0.22);
     camDesired.y -= FEEL.stepDip * camStepDip;
-  }
+    if (player.grounded && !camWasGrounded && camFallV > 1.2) camLand.v -= Math.min(2.2, camFallV * FEEL.landK * 4);
+    camWasGrounded = player.grounded;
+    camFallV = player.grounded ? 0 : Math.max(0, -player.vel.y);
+    { const w = 7.5, z = 0.45; camLand.v += (-w * w * camLand.x - 2 * z * w * camLand.v) * Math.min(dt, 0.033); camLand.x += camLand.v * Math.min(dt, 0.033); }
+    camDesired.y += camLand.x;
+    const lk = Math.min(1, 1.4 * dt);
+    camLead.x += (player.vel.x * FEEL.lead - camLead.x) * lk;
+    camLead.z += (player.vel.z * FEEL.lead - camLead.z) * lk;
+    const ll = Math.hypot(camLead.x, camLead.z);
+    if (ll > FEEL.leadMax) { camLead.x *= FEEL.leadMax / ll; camLead.z *= FEEL.leadMax / ll; }
+  } else camLead.set(0, 0, 0);
   // THE HANDHELD (Flow lean item 6). Mix weights by state, integrate each layer's
   // phase by dt, sum position offsets into the spring target. Look and roll terms
   // are computed here and applied after lookAt below. Nothing runs at styleK 0.
@@ -921,7 +962,7 @@ function updateCamera(dt, t, fwd) {
     camera.position.copy(camDesired);
     camVel.set(0, 0, 0);
     camLook.copy(player.pos).addScaledVector(fwd, 6);
-    camDist = want;
+    camDist = want; camDistV = 0;
   }
 
   // critically-damped spring: settles without the rubber-band of a raw lerp
@@ -965,7 +1006,14 @@ function updateCamera(dt, t, fwd) {
   // aim slightly ahead of travel so fast movement leads the frame
   // Aim tracks the look direction almost immediately. Heavy smoothing here reads as
   // mouse lag, which is far more objectionable than a little jitter.
-  camAim.copy(player.pos).addScaledVector(fwd, 6).addScaledVector(player.vel, 0.10);
+  camAim.copy(player.pos).addScaledVector(fwd, 6).addScaledVector(player.vel, 0.10).add(camLead);
+  // Sal looks at what the lens would notice: the nearest life in front, re-picked four
+  // times a second (the search walks every fauna buffer; the look itself is sprung).
+  diverLookCool -= dt;
+  if (diverLookCool <= 0) {
+    diverLookCool = 0.25;
+    diverLookAt(hhNearestLife(fwd) < Infinity ? hhTmp : null);
+  }
   camLook.lerp(camAim, Math.min(1, 40 * dt));
   camera.lookAt(camLook);
   if (hk > 0) {
@@ -1313,7 +1361,8 @@ function update(dt, t) {
   if (lev) {
     const ev = updateLeviathan(lev, dt, t, player);
     if (ev.woke) { showMsg(lev.name, 5, 2); growl(); shake = 1; }
-    if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); }
+    if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); diverImpulse('grab'); }
+    diverGrab(!!lev.grab);
     if (ev.quake) shake = Math.max(shake, ev.quake);   // her footfalls, hammer, settle thump
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
@@ -1322,6 +1371,7 @@ function update(dt, t) {
       // Contact is per-frame; the tear is per collision. Rising edge only.
       if (!slamWas) {
         kickLantern(1.2);
+        hitFrom(lev.spine, 1.5);   // Sal's body takes the slam too (diver.js life layer)
         lightDip = Math.max(lightDip, 0.7);
         if (tearDress()) showMsg('AIR IS LEAKING — THE DRESS IS TORN', 4);
       }
@@ -1562,6 +1612,7 @@ function update(dt, t) {
     shake = Math.min(1, shake + 0.5);
     slam();
     kickLantern(1.2);
+    hitFrom(window.pred && window.pred.sharks, 1, true);
     lightDip = 1;
     // A torn dress is the stake: the tenders cannot out-pump the hole, so for the next
     // TORN_SEC the line refills at half rate and 'AIR IS LEAKING' is true.
@@ -1596,7 +1647,7 @@ function update(dt, t) {
     // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
     // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
     // the sound and nothing else.
-    if (!player.onDeck) spawnFootfall(player.pos, player.yaw, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);
+    if (!player.onDeck) spawnFootfall(player.pos, diver.rotation.y, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);   // the boots' heading (strafe turns the hips off the look)
   }
   // Landing after a drop kicks up a bigger cloud under both boots.
   // Terminal sink is 5.1 u/s vented (10.2 with the exhaust held open), not the 18 u/s
