@@ -191,7 +191,7 @@ const LAMPK_U = new Float32Array(4);
 // Look knobs, live-pokeable through window.__atmos.
 export const ATMOS = {
   lampGain: 0.22,      // lantern in-scatter gain (x the physical sigma_s * I * phase)
-  lampGainB: 0.22,     // second slot (vent / ward / hoard lamp)
+  lampGainB: 0.6,      // second slot (vent throat / ward / hoard lamp): the furnace glow in the boiler room
   lampOn: true,
   bokeh: true
 };
@@ -208,6 +208,7 @@ float fbm2(vec2 p){float v=0.0,a=0.5;for(int i=0;i<4;i++){v+=a*vn(p);p*=2.07;a*=
 
 // Ambient (fully scattered) water radiance at world height y. Evaluated per fragment,
 // so one frame can show teal overhead and ink below at the same time.
+const SHALLOW_DESAT = 0.28;
 const GLSL_AMBIENT = `
 vec3 zoneGlow(float y){
   float t=clamp(-y/900.0,0.0,1.0);
@@ -219,7 +220,16 @@ vec3 zoneGlow(float y){
   return g*(0.15+0.85*smoothstep(0.03,0.30,t));
 }
 vec3 abyssaAmbient(vec3 surf,float y){
-  return surf*exp(${v3(K_ABS)}*min(y,0.0))+zoneGlow(y);
+  vec3 a=surf*exp(${v3(K_ABS)}*min(y,0.0))+zoneGlow(y);
+  // SHALLOW CHROMA ROLL-OFF (atmos track). Single-scatter Beer-Lambert leaves the lit
+  // shallows with red at ~0 against green and blue, which the display renders as the
+  // most saturated cyan it has: measured (43,207,213) sRGB for open water at y = -60,
+  // clipping to 250 in the window -- neon, the one thing the brief forbids. Real sunlit
+  // water is multiply scattered and skylit, which pulls it toward a paler, bluer teal.
+  // Up to ${f(SHALLOW_DESAT)} of the chroma folds into a cool blue-grey (~0.9 of the luminance) at the
+  // surface, fading out by y = -300 so the deep zones keep their authored darkness.
+  float l=dot(a,vec3(0.2126,0.7152,0.0722));
+  return mix(a,l*vec3(0.70,0.92,1.14),${f(SHALLOW_DESAT)}*(1.0-smoothstep(0.0,300.0,-y)));
 }`;
 
 // The stratified water profile, shared VERBATIM by the fog chunk and the background
@@ -362,11 +372,11 @@ vec3 boltLight( vec3 P, vec3 N, vec4 B, float storm ){
 // t - tc = h tan(th): the inverse-square in-scatter dt / d^2 becomes dth / h EXACTLY, and
 // the scattering cosine toward the eye is mu = -sin(th). Water scatters mostly
 // FORWARD, which is why a lamp in murk is a halo round the flame and not a lit fog bank,
-// so the phase is p(mu) = 0.25 + 0.75 (1 + mu)^4 / 3.2 (sphere mean 1; 3.9 dead ahead,
-// 0.48 at right angles, 0.25 behind), and the integral over [0, L] is still elementary:
+// so the phase is p(mu) = 0.15 + 0.85 (1 + mu)^4 / 3.2 (sphere mean 1; 4.4 dead ahead,
+// 0.42 at right angles, 0.15 behind), and the integral over [0, L] is still elementary:
 // with s = sin th, c = cos th,
 //   F4(th) = 4.375 th + 8 c - (4/3) c^3 - 3.5 s c + s c (c^2 - s^2) / 8   (= int (1-s)^4)
-//   F(th)  = 0.25 th + (0.75 / 3.2) F4(th),    in-scatter = (F(th1) - F(th0)) / h
+//   F(th)  = 0.15 th + (0.85 / 3.2) F4(th),    in-scatter = (F(th1) - F(th0)) / h
 // and sin/cos come back algebraically from u = tan(th), so the only transcendentals are
 // two atan. The extinction exp(-sigma (t + d)) is taken at the ray's closest point to the
 // lamp (clamped to the segment) -- the integrand is concentrated within +-h of it, and h
@@ -381,7 +391,7 @@ float lampF( float u ){
   float c = inversesqrt( 1.0 + u * u ), s = u * c, th = atan( u );
   float f4 = 4.375 * th + c * ( 8.0 - 1.3333333 * c * c )
            + s * c * ( 0.125 * ( c * c - s * s ) - 3.5 );
-  return 0.25 * th + 0.234375 * f4;
+  return 0.15 * th + 0.265625 * f4;
 }
 vec3 lampScatter( vec3 ro, vec3 v, float L, vec4 P, vec4 C ){
   vec3  dp  = P.xyz - ro;
@@ -446,7 +456,22 @@ float gHaloK = 1.0;
 float gOcc = 1.0;
 vec3 skyRadiance( vec3 d ){
   float up = clamp( d.y, 0.0, 1.0 );
-  vec3 c = mix( uSkyHor, uSkyZen, sqrt( up ) );
+  // THE GRADIENT HUGS THE HORIZON. sqrt(up) put the half-way point at 15 degrees, so
+  // the pale horizon radiance (6x the zenith at noon) washed the lower third of every
+  // sky and the deck read milky under a white lid. A real clear sky brightens only in
+  // the last ~10 degrees -- the optical air mass climbs as 1/sin(elevation) and only
+  // gets large right at the horizon -- so the blend runs on 1 - (1 - up)^5: the SAME
+  // horizon value at up = 0 (the airlight, the fog chunk's asymptote and the ocean
+  // rim still meet on one number) and the same zenith, with the blue claimed from ~20
+  // degrees up (0.67 of the way at 12 degrees against sqrt's 0.46).
+  float hz = 1.0 - up; hz *= hz; hz *= hz * ( 1.0 - up );
+  vec3 c = mix( uSkyHor, uSkyZen, 1.0 - hz );
+  // A broad forward (Mie) glow round the sun: the aerosol the marine haze is made of
+  // scatters forward, so the sky is brighter and warmer toward the sun and the whole
+  // dome gains a direction instead of being a radial gradient. Uses the disc colour,
+  // scaled far below it: 0.9% of the disc dead on the sun, 0.2% at 40 degrees off.
+  float sdm = max( 0.0, dot( d, uSunDir ) );
+  c += uSunCol * uDiscK * ( 0.009 * sdm * sdm * sdm );
 
   float amt = 0.0;
   if ( uCloudCov > 0.005 ) {
@@ -911,12 +936,14 @@ palette(2, 0);
 function ambientAt(y, out) {
   const t = clamp(-y / 900, 0, 1);
   const a = ms(t, 0.20, 0.52), b = ms(t, 0.62, 0.92), c = ms(t, 0.03, 0.30), d = Math.min(0, y);
-  return out.setRGB(
-    _pSurf[0] * Math.exp(K_ABS[0] * d) + ml(ml(0.0020, 0.0064, a), 0.0123, b) * c,
-    _pSurf[1] * Math.exp(K_ABS[1] * d) + ml(ml(0.0073, 0.0027, a), 0.0042, b) * c,
-    _pSurf[2] * Math.exp(K_ABS[2] * d) + ml(ml(0.0115, 0.0127, a), 0.0025, b) * c,
-    THREE.LinearSRGBColorSpace
-  );
+  let r = _pSurf[0] * Math.exp(K_ABS[0] * d) + ml(ml(0.0020, 0.0064, a), 0.0123, b) * c;
+  let g = _pSurf[1] * Math.exp(K_ABS[1] * d) + ml(ml(0.0073, 0.0027, a), 0.0042, b) * c;
+  let bl = _pSurf[2] * Math.exp(K_ABS[2] * d) + ml(ml(0.0115, 0.0127, a), 0.0025, b) * c;
+  // Mirror of the shallow chroma roll-off in GLSL_AMBIENT (same constants, same curve).
+  const l = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  const k = SHALLOW_DESAT * (1 - ms(-y, 0, 300));
+  r += (l * 0.70 - r) * k; g += (l * 0.92 - g) * k; bl += (l * 1.14 - bl) * k;
+  return out.setRGB(r, g, bl, THREE.LinearSRGBColorSpace);
 }
 
 // CPU mirror of GLSL_WATER — ONE source of truth: both read the same constants above,
