@@ -44,6 +44,7 @@ import { terrainH } from './terrain.js';
 import { rockColliders } from './flora.js';
 import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
+import { setMover, stirPulse, setLantern, M_SHARK0, M_SHARK1, M_SQUID, P_BITE, P_STRIKE } from './stir.js';
 
 // CHART V2 determinism (same contract as flora/creatures): every placement/phase draw
 // routes through site-seeded streams, never Math.random.
@@ -396,6 +397,8 @@ function sharkGeometry() {
 function sharkMaterial(cfg) {
   const u = {
     uPhase: { value: 0 }, uAmp: { value: 0.045 }, uArch: { value: 0 }, uTime,
+    // anim-fauna: head sweep gain, the wind-up hunch, the strike gape (0..1)
+    uHead: { value: 0.55 }, uHunch: { value: 0 }, uGape: { value: 0 },
     uDark: { value: new THREE.Color(cfg.dark) },
     uPale: { value: new THREE.Color(cfg.pale) },
     uSheen: { value: cfg.sheen },
@@ -416,24 +419,50 @@ function sharkMaterial(cfg) {
       .replace('#include <common>', `#include <common>
         attribute vec3 aSurf;
         uniform float uPhase; uniform float uAmp; uniform float uArch;
+        uniform float uHead; uniform float uHunch; uniform float uGape;
         varying vec2 vSuv; varying vec3 vSsurf; varying vec3 vAxis;`)
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
         float bT = uv.x;
         float env = 0.02 + 0.98 * pow(clamp(bT, 0.0, 1.3), 2.35);
         float amp = uAmp * env;
+        // HEAD SWEEP (anim-fauna): the skull yaws against the tail's thrust — the
+        // recoil that makes a swimming shark's snout swing, gone by the pectorals
+        float headK = uHead * uAmp * pow(max(0.0, 1.0 - bT / 0.34), 2.0);
         float slope = cos(bT*4.6 - uPhase) * amp * 4.6;
         objectNormal = normalize(vec3(objectNormal.x, objectNormal.y, objectNormal.z + slope*objectNormal.x));`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        transformed.x += sin(bT*4.6 - uPhase) * amp;
-        // strike arch: the whole body bows, so the turn-in reads before it happens
+        transformed.x += sin(bT*4.6 - uPhase) * amp + sin(0.9 - uPhase) * headK;
+        // strike arch / turn bend: the whole body bows into the turn
         transformed.x += uArch * env * 0.16;
         transformed.y += sin(uPhase*0.37) * 0.006;
+        // THE WIND-UP HUNCH: back arched, snout lifted, pectorals thrown down — the
+        // agonistic display a reef shark gives before it commits
+        float hb = sin(3.14159 * clamp(bT, 0.0, 1.0));
+        transformed.y += uHunch * (0.030 * hb + 0.030 * max(0.0, 0.25 - bT) / 0.25);
+        if (uv.y > 1.5 && uv.y < 2.5 && bT > 0.2 && bT < 0.45 && abs(position.x) > 0.06)
+          transformed.y -= uHunch * 0.55 * (abs(position.x) - 0.06);
+        // THE GAPE: the lower jaw drops about its joint and the upper jaw protrudes
+        // down and forward past the snout. Around-angle from aSurf (body rows only).
+        if (uGape > 0.001) {
+          if (uv.y < 1.5) {
+            float ga = aSurf.y * 6.2831853, gc = cos(ga), gs = sin(ga);
+            float mt = 0.066 + 0.042 * gc * gc;
+            float under = (1.0 - smoothstep(-0.45, -0.15, gs)) * (1.0 - smoothstep(0.85, 0.95, abs(gc)));
+            float lower = step(mt, bT) * (1.0 - smoothstep(mt, 0.2, bT));
+            float upper = (1.0 - step(mt, bT)) * smoothstep(mt - 0.06, mt, bT);
+            transformed.y -= uGape * under * (0.055 * lower + 0.014 * upper);
+            transformed.z += uGape * under * upper * 0.010;
+          } else if (uv.y > 2.5) {
+            transformed.y -= uGape * 0.03;
+          }
+        }
         vSuv = uv; vSsurf = aSurf;
         // the body axis, bent by the same wave: the grain the denticles lie along
         vAxis = normalize((modelViewMatrix * vec4(-slope, 0.0, 1.0, 0.0)).xyz);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uDark; uniform vec3 uPale; uniform float uSheen; uniform float uScar; uniform float uTime;
+        uniform float uGape;
         varying vec2 vSuv; varying vec3 vSsurf; varying vec3 vAxis;
         ${SKIN_COMMON}
         // distance from p to segment ab (scar strokes in t / around space)
@@ -511,6 +540,8 @@ function sharkMaterial(cfg) {
         float eyeIn = 1.0 - smoothstep(0.78, 0.9, eyeD);
         float irisR = (1.0 - smoothstep(0.55, 0.7, eyeD)) * (1.0 - smoothstep(0.0, 0.1, 0.55 - eyeD));
         vec3 eyeC = mix(vec3(0.012, 0.014, 0.018), vec3(0.16, 0.13, 0.08), irisR * 0.5);
+        // at the bite the eye rolls back in its orbit: the dome goes pale (anim-fauna)
+        eyeC = mix(eyeC, vec3(0.62, 0.60, 0.56), smoothstep(0.45, 0.9, uGape));
         hide = mix(hide, eyeC, eyeIn);
         hide *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.25, abs(eyeD - 1.0)));   // orbit fold
         wet = eyeIn * body;
@@ -518,6 +549,8 @@ function sharkMaterial(cfg) {
         vec3 finc = mix(uPale, uDark, 0.72) * (1.0 - 0.3 * smoothstep(0.55, 1.0, vSsurf.y) * smoothstep(0.3, 1.0, vSsurf.x));
         vec3 alb = mix(finc, hide, body);
         alb = mix(alb, vec3(0.86, 0.84, 0.76), tooth);
+        // the inside of the gape (back faces seen through the open jaw) is dark gum
+        alb = mix(alb, vec3(0.09, 0.025, 0.028), body * step(faceDirection, 0.0));
         diffuseColor.rgb *= alb;
         normal = skBump(-vViewPosition, normal, h * 0.0012, faceDirection);
         roughnessFactor = mix(roughnessFactor, 0.05, wet);
@@ -579,7 +612,9 @@ function buildShark(cfg) {
     center: V3(0, zoneMidY(cfg.zi), 0),
     state: 'patrol', tState: 0, arousal: 0, cool: 0, cruised: 0,
     orbitPh: a, orbitR: cfg.patrolR, speed: SH.patrolSpeed,
-    beat: Math.random() * 30, arch: 0, roll: 0, bit: false, blinded: 0
+    beat: Math.random() * 30, arch: 0, roll: 0, bit: false, blinded: 0,
+    // anim-fauna: glide bouts, the hunch, the gape, the post-strike roll, yaw rate
+    glide: 0, glideT: 3, hunch: 0, gape: 0, rollKick: 0, yawR: 0, beatAmp: 1
   };
   sharks.push(S);
   return S;
@@ -637,6 +672,7 @@ function updateShark(S, dt, t, p) {
     case 'strike':
       if (!S.bit && dist < SH.biteR) {
         S.bit = true; ev.bite = 1;
+        stirPulse(S.pos.x, S.pos.y, S.pos.z, 30, 0, 1, P_BITE);   // the whole reef flinches
         sharkSetState(S, 'flee');
       } else if (S.tState > SH.strikeT) sharkSetState(S, 'flee');
       break;
@@ -695,9 +731,20 @@ function updateShark(S, dt, t, p) {
   const aFloor = terrainH(_a.x, _a.z, cfg.zi) + cfg.size * 0.55 + 3;
   _a.y = clamp(_a.y, aFloor, zoneTop(cfg.zi) - 8);
 
+  // CRUISING GLIDES (anim-fauna): a patrolling shark beats for a few seconds, then
+  // coasts on its momentum with the tail held nearly still, then beats again
+  S.glideT -= dt;
+  if (S.glideT <= 0) { S.glide = S.glide > 0.5 ? 0 : 1; S.glideT = S.glide ? 1.8 + Math.random() * 2.4 : 2.6 + Math.random() * 3.2; }
+  const gliding = S.glide > 0.5 && (st === 'patrol' || st === 'interest');
+  if (gliding) speed *= 0.82;
+
   _b.copy(_a).sub(S.pos);
+  const ofx = S.fwd.x, ofz = S.fwd.z;
   steer(S.fwd, _b, turn, dt);
-  S.speed += (speed - S.speed) * Math.min(1, dt * (st === 'strike' ? 5.0 : 2.2));
+  // signed yaw rate from the actual heading change: feeds the body bend and the bank
+  const yaw = (ofz * S.fwd.x - ofx * S.fwd.z) / Math.max(dt, 1e-3);
+  S.yawR += (yaw - S.yawR) * Math.min(1, dt * 6);
+  S.speed += (speed - S.speed) * Math.min(1, dt * (st === 'strike' ? 5.0 : gliding ? 0.35 : 2.2));
   S.pos.addScaledVector(S.fwd, S.speed * dt);
 
   // hard terrain floor — nothing swims through the seabed
@@ -710,7 +757,12 @@ function updateShark(S, dt, t, p) {
 
   // ---- pose: heading + bank into the turn ----
   const bankWant = clamp(-(S.fwd.z * _b.x - S.fwd.x * _b.z) / Math.max(1, _b.length()) * 1.5, -0.7, 0.7);
-  S.roll += (bankWant - S.roll) * Math.min(1, dt * 3);
+  // POST-STRIKE ROLL: out of a strike the shark throws itself over onto its flank as it
+  // wheels away (kick set on the strike->flee edge, decays over ~1.3 s)
+  if (st === 'flee' && S.tState < dt * 1.5 && S.rollKick === 0) S.rollKick = (bankWant >= 0 ? 1 : -1) * 1.35;
+  if (st !== 'flee') S.rollKick = 0;
+  const kick = S.rollKick * Math.max(0, 1 - S.tState / 1.3) * Math.min(1, S.tState * 6);
+  S.roll += (bankWant + kick - S.roll) * Math.min(1, dt * (kick !== 0 ? 6 : 3));
   _m.lookAt(_c.set(0, 0, 0), _d.copy(S.fwd).negate(), UP);
   _q.setFromRotationMatrix(_m);
   S.mesh.position.copy(S.pos);
@@ -718,13 +770,32 @@ function updateShark(S, dt, t, p) {
   S.mesh.rotateZ(S.roll);
 
   // tail beat accelerates with intent; integrate phase so rate changes never pop
-  const beatRate = 2.6 + S.speed * 0.55;
+  // the wind-up: hunch builds over the telegraph and snaps flat as it commits;
+  // the tail beats jerky and wide while it displays
+  const hunchT = st === 'windup' ? Math.min(1, S.tState / (SH.windupT * 0.6)) : 0;
+  S.hunch += (hunchT - S.hunch) * Math.min(1, dt * (hunchT > S.hunch ? 3 : 7));
+  // the gape: opens over the last metres of the run, holds through the bite, closes
+  // as it wheels away
+  let gapeT = 0;
+  if (st === 'strike') gapeT = clamp(1.25 - dist / 9, 0, 1);
+  else if (st === 'flee' && S.tState < 0.5 && S.bit) gapeT = 0.7 * (1 - S.tState / 0.5);
+  S.gape += (gapeT - S.gape) * Math.min(1, dt * (gapeT > S.gape ? 9 : 4));
+  const beatAmpT = gliding ? 0.22 : (st === 'windup' ? 1.35 + 0.25 * Math.sin(t * 9) : 1);
+  S.beatAmp += (beatAmpT - S.beatAmp) * Math.min(1, dt * (gliding ? 1.2 : 3));
+  const beatRate = (2.6 + S.speed * 0.55) * (0.35 + 0.65 * Math.min(1, S.beatAmp));
   S.beat += dt * beatRate;
   if (S.beat > 6283.18) S.beat -= 6283.18;
-  S.arch += (wantArch - S.arch) * Math.min(1, dt * 4);
+  // turn bend: the body curves INTO the turn on top of any strike arch
+  const bendT = wantArch + clamp(-S.yawR * 0.55, -0.5, 0.5);
+  S.arch += (bendT - S.arch) * Math.min(1, dt * 4);
   S.u.uPhase.value = S.beat;
-  S.u.uAmp.value = 0.030 + 0.032 * clamp(S.speed / SH.strikeSpeed, 0, 1) + S.arch * 0.020;
+  S.u.uAmp.value = (0.030 + 0.032 * clamp(S.speed / SH.strikeSpeed, 0, 1)) * S.beatAmp + Math.abs(wantArch) * 0.020;
   S.u.uArch.value = S.arch;
+  S.u.uHunch.value = S.hunch;
+  S.u.uGape.value = S.gape;
+  // publish the body to the shared field: schools part, plants bend, worms flinch
+  setMover(cfg.zi === 0 ? M_SHARK0 : M_SHARK1, S.pos.x, S.pos.y, S.pos.z, cfg.size * 0.3,
+    S.fwd.x * S.speed, S.fwd.y * S.speed, S.fwd.z * S.speed, st === 'patrol' ? 0.8 : 1);
 
   // Fade at the cull edge instead of a hard visible-pop (house pattern: ventlife's
   // uVis shrink). Scale-to-zero — no material/uniform churn. The band is 8 units
@@ -2386,6 +2457,7 @@ export function updatePredators(dt, t, p, lanternPos) {
   // the origin — fall back to the diver himself rather than luring everything to (0,0,0).
   if (lanternPos && lanternPos.lengthSq() > 1) _lp.copy(lanternPos);
   else _lp.copy(p.pos);
+  setLantern(_lp, p.light);   // anim-fauna: the light every animal reads (stir.js)
 
   for (let i = 0; i < sharks.length; i++) {
     const S = sharks[i];
@@ -2422,6 +2494,8 @@ const slashResult = { killed: '', at: V3() };
 // would cheapen both. They react instead — the swing registers as a threat, not damage.
 export function slash(pos, fwd, range = 3.4) {
   const r2 = range * range;
+  // a knife stroke in the water is a small hard jolt: fish in reach bolt, plumes snap in
+  stirPulse(pos.x + fwd.x * 1.5, pos.y + fwd.y * 1.5, pos.z + fwd.z * 1.5, 12, 0, 0.8, P_STRIKE);
 
   let best = null, bd = 1e9;
   if (activeZone === 2) {
