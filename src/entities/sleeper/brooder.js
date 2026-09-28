@@ -57,7 +57,7 @@ const SOCKETS = [
 // stop at the belly and a diver can pass UNDER her when she stands.
 const COLL = [[0, 0.17, 0]];
 for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; COLL.push([Math.cos(a) * 0.55, 0.15, Math.sin(a) * 0.50]); }
-const STRIDE = 0.30, SWING_T = 0.55, RISE_T = 6, SETTLE_T = 4;
+const STRIDE = 0.30, SWING_T = 0.80, RISE_T = 6, SETTLE_T = 4;   // a colossus's step is slow (was 0.55)
 // ASLEEP SHE IS A RIDGE (polish-followups). Every term below is scaled by (1 - standE), so
 // the standing pose is bit-identical: x - k * 0 === x. `tuck` pulls each rest foot in under
 // the shell, `fold` lays the leg plane flat (knee sideways, not up, so no knee stands
@@ -70,6 +70,36 @@ export const DORM = {
   major: { root: [0, 1.0, -0.08], cj: [0, 1.2, 0.05], pj: [0, 1.6, -0.10], dj: -0.3 },
   minor: { root: [0, 1.0, -0.08], cj: [0, 1.2, 0.05], pj: [0, 1.0, -0.10], dj: -0.3 }
 };
+
+// ---- MOTION (anim-sleepers) ----------------------------------------------------------
+// Nothing she does moves at constant velocity. Every visual degree of freedom that used
+// to be a ramp or a sine is a damped spring (implicit integration: stable at any dt) fed
+// by what her feet and claws are actually doing:
+//   * the body rides its planted feet: height and pitch/roll off the foot plane, a dip on
+//     every footfall and while a tetrapod is in the air, a sway toward the supporting side
+//     phase-lagged behind the gait, and a translational lag (she surges and checks)
+//   * the wake is a SEQUENCE on the rise clock, not a scale: she shudders, the silt pours,
+//     her legs unfold one at a time in a crab's order, she sinks into them and HEAVES,
+//     overshoots and settles; the claws come out last
+//   * the hammer is anticipation - rear, cock, hold (trembling) - then the slam and a
+//     recoil that bounces; the impact kicks dust, a body dip and a quake
+//   * eyes saccade onto the diver; claws idle open/close with the weight on the crusher
+// ev.quake (0..1, distance-weighted) is published for the game's camera shake.
+const WAKE_ORDER = [0, 5, 2, 7, 1, 4, 3, 6];         // leg unfold order (li), alternating sides
+const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;   // hammer cycle phases
+const HAMMER_T = 2.6;
+// implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
+function spr(o, target, w, z, dt) {
+  o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
+  o.x += o.v * dt;
+  return o.x;
+}
+const S = () => ({ x: 0, v: 0 });
+// cheap smooth 1D value noise in [-1, 1] (two incommensurate sines per octave)
+const nz = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
+const ease = x => x * x * (3 - 2 * x);
+const win = (x, a, b) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0 };
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
@@ -114,7 +144,11 @@ export function makeBrooder(idx, cfg) {
     reach: 5, collR: 0.33 * R, flare: 0,
     pos: V3(), yaw: 0, vel: V3(), stand: 0, standE: 0, standTarget: 0, threat: 0, threatE: 0, threatTarget: 0,
     walkTo: null, bodyY: 0, head: V3(), spine: COLL.map(() => V3()), sigils: [], feet: [], _pd: 1e9,
-    uni: { uTime: { value: 0 } }
+    uni: { uTime: { value: 0 } },
+    // motion state (anim-sleepers): springs, per-leg unfold, the hammer, the flinch
+    legSt: new Float32Array(8), clawSt: 0, heave: S(), bY: S(), bP: S(), bR: S(), offX: S(), offZ: S(),
+    yawV: 0, velPrev: V3(), cock: 0, swing: 0, impT: 9, hamPh: 0, hurt: S(), shuffleT: 3, quake: 0,
+    mPh: 0
   };
 
   // ---- materials ----
@@ -209,7 +243,7 @@ export function makeBrooder(idx, cfg) {
   L.legs = legs;
   for (let li = 0; li < 8; li++) {
     const sd = li < 4 ? 1 : -1, k = li & 3;
-    L.feet.push({ planted: V3(), from: V3(), to: V3(), cur: V3(), t: -1, group: (k + (sd > 0 ? 0 : 1)) & 1 });
+    L.feet.push({ planted: V3(), from: V3(), to: V3(), cur: V3(), t: -1, h: 0.30, group: (k + (sd > 0 ? 0 : 1)) & 1 });
   }
 
   // Round 3 arms, after the reference: two huge armoured arms held forward like a guard,
@@ -340,7 +374,8 @@ export function makeBrooder(idx, cfg) {
   }
 
   L.cmd = (name, arg) => {
-    if (name === 'stand') L.standTarget = 1;
+    if (name === 'wake') { if (L.dormant) wakeBrooder(L); }
+    else if (name === 'stand') L.standTarget = 1;
     else if (name === 'settle') { L.standTarget = 0; L.walkTo = null; }
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
@@ -355,6 +390,7 @@ export function makeBrooder(idx, cfg) {
     tris: countTris(L.body)
   });
 
+  if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
@@ -545,7 +581,7 @@ function placeAt(L, pos, yaw) {
 
 // Rest spot of foot li: local (yaw only) -> world, on the terrain.
 function restWorld(L, li, out) {
-  const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, st = L.standE;
+  const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, st = L.legSt[li];      // each leg unfolds on its own beat
   // asleep the legs fold UNDER the shell: a ridge, not a crab
   const reach = lerp(0.80, 1.02, st) * lg.k - DORM.tuck * lg.k * (1 - st), a = lg.splay * lerp(1.15, 0.85, st);
   const lx = lg.hip[0] * sd + Math.cos(a) * reach * sd, lz = lg.hip[2] + Math.sin(a) * reach;
@@ -582,7 +618,7 @@ function poseLeg(L, li, footL) {
   // the knee plane: vertical standing (U is UP itself, so that path is untouched); asleep it
   // lies down toward the horizontal, the knee turned toward the middle of the flank
   let U = UP;
-  const f = (1 - L.standE) * DORM.fold;
+  const f = (1 - L.legSt[li]) * DORM.fold;
   if (f > 0) {
     _hz.crossVectors(UP, _d);
     if (_hz.z * lg.hip[2] > 0) _hz.negate();
@@ -610,25 +646,36 @@ function poseLeg(L, li, footL) {
 // prow, forearms turned in, the hooked pincers hanging open-mouthed before her face.
 // Threat lifts both hands to the height of her brow and gapes them wide.
 function poseClaws(L) {
-  const th = L.threatE, t = L.t, st = L.standE;
+  const th = L.threatE, t = L.t, st = L.clawSt, h = L.hurt.x;
+  // the hammer's anticipation: cocked high and back, holding with a tremble, then the fall
+  const ck = L.cock * th, hold = ck > 0.98 ? 1 : 0;
+  const trem = hold * 0.022 * Math.sin(t * 71) * Math.sin(t * 13.3);
   for (const c of L.claws) {
     const sd = c.sd;
-    const tr = 0.025 * Math.sin(t * 2.3 + sd * 2.1) * Math.sin(t * 0.61) * st;     // never quite still
+    // never quite still: slow drift in two axes (noise, not a metronome), a heavier and
+    // slower sway on the crusher, and a slow open/close of the pincers
+    const kM = c.major ? 0.7 : 1.25;
+    const dz = (0.035 * nz(t * 0.37 * kM, sd * 3) + 0.012 * nz(t * 1.9 * kM, sd * 7)) * st;
+    const dy = 0.03 * nz(t * 0.29 * kM, sd * 5 + 1) * st;
+    const gape = (0.5 + 0.5 * nz(t * 0.23 * kM, sd * 11)) * st;
     const snap = Math.pow(Math.max(0, Math.sin(t * 0.7 + sd * 1.3)), 8) * 0.12 * st;
     if (c.major) {
-      // the strike: the great claw comes up to head height and gapes, cocked to swing
-      // ...and every couple of seconds it comes DOWN: a hammer blow across her front
+      // the strike: the great claw comes up to head height and gapes; then it COCKS -
+      // up and back, the pincer wide - holds trembling, and comes DOWN across her front
       const sw = L.swing * th;
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw, lerp(-0.30 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + tr);
-      c.cj.rotation.set(0, -sd * lerp(0.95, 0.40, th), lerp(0.30, 0.30, th) - 0.25 * sw);
-      c.pj.rotation.set(0, -sd * lerp(0.45, 0.15, th), lerp(-0.55, -0.30, th) + 0.2 * sw + tr);
-      c.dj.rotation.z = 0.10 + snap + 1.00 * th * (1 - 0.9 * sw);
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw + sd * 0.30 * ck + dy - sd * 0.2 * h,
+        lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h);
+      c.cj.rotation.set(0, -sd * lerp(0.95, 0.40, th), 0.30 - 0.25 * sw + 0.25 * ck);
+      c.pj.rotation.set(0, -sd * lerp(0.45, 0.15, th), lerp(-0.55, -0.30, th) + 0.2 * sw - 0.25 * ck + 0.6 * dz);
+      c.dj.rotation.z = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
     } else {
-      // the minor stays low and close, a guard across the mouth, working
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th), lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + tr);
-      c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th), 0.30);
-      c.pj.rotation.set(0, -sd * 0.45, -0.55 + tr);
-      c.dj.rotation.z = 0.10 + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th;
+      // the minor stays low and close, a guard across the mouth, working; it spreads
+      // wide as the crusher cocks (the body opens up behind the blow)
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th) + sd * 0.28 * ck + dy - sd * 0.2 * h,
+        lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h);
+      c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th) + sd * 0.3 * ck, 0.30);
+      c.pj.rotation.set(0, -sd * 0.45, -0.55 + 0.6 * dz);
+      c.dj.rotation.z = (0.08 + 0.28 * gape + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th + 0.3 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
     }
     // asleep: folded back flat under the prow, pincers shut
     const d = 1 - st;
@@ -647,17 +694,38 @@ function tuckJoint(j, T, base, sd, d) {
 }
 
 function poseAll(L, dt, player) {
-  const b = L.body, R = L.R, st = L.standE;
-  // body on the ground: mean of five samples, pitch/roll from the fore-aft/side slopes
+  const b = L.body, R = L.R, st = L.standE, hv = L.heave.x, hc = clamp(hv, 0, 1), h = L.hurt.x, ck = L.cock * L.threatE;
+  // body on the ground: mean of five samples, pitch/roll from the fore-aft/side slopes...
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw), o = 0.7 * R;
   const gF = terrainH(L.pos.x + sy * o, L.pos.z + cy * o, L.idx), gB = terrainH(L.pos.x - sy * o, L.pos.z - cy * o, L.idx);
   const gL = terrainH(L.pos.x + cy * o, L.pos.z - sy * o, L.idx), gR = terrainH(L.pos.x - cy * o, L.pos.z + sy * o, L.idx);
   const gC = terrainH(L.pos.x, L.pos.z, L.idx);
-  const gy = (gF + gB + gL + gR + gC) / 5;
-  L.bodyY = gy + R * (lerp(0.06, 0.44, st) + 0.10 * L.threatE + 0.012 * Math.sin(L.t * 0.45) * (1 - st) - DORM.drop * (1 - st));
-  b.position.set(L.pos.x, L.bodyY, L.pos.z);
-  // hunched: standing, the front drops over the diver; threat lifts it to show the face
-  b.rotation.set(-Math.atan2(gF - gB, 2 * o) + 0.06 * st + 0.12 * L.threatE, L.yaw, Math.atan2(gL - gR, 2 * o));
+  let gy = (gF + gB + gL + gR + gC) / 5, pit = -Math.atan2(gF - gB, 2 * o), rol = Math.atan2(gL - gR, 2 * o);
+  // ...and standing, she rides her PLANTED FEET instead: height off their mean, pitch and
+  // roll off the plane they make (a foot in the air carries no weight)
+  if (hc > 0) {
+    let fy = 0, ff = 0, fb = 0, fl = 0, fr = 0;
+    for (let li = 0; li < 8; li++) {
+      const y = L.feet[li].planted.y, k = li & 3;
+      fy += y; if (k < 2) ff += y; else fb += y;
+      if (li < 4) fl += y; else fr += y;
+    }
+    const span = 1.3 * R;
+    gy = lerp(gy, fy / 8, hc);
+    pit = lerp(pit, -Math.atan2((ff - fb) / 4, span * 0.55), hc);
+    rol = lerp(rol, Math.atan2((fl - fr) / 4, span * 1.6), hc);
+  }
+  // the support estimate changes in jumps (a foot lands on higher ground): the shell
+  // takes it up through a critically damped follower, never a snap
+  if (!(dt > 0) || !L.gG) { L.gG = { x: gy, v: 0 }; L.gP = { x: pit, v: 0 }; L.gRl = { x: rol, v: 0 }; }
+  else { gy = spr(L.gG, gy, 4.5, 1, dt); pit = spr(L.gP, pit, 4.5, 1, dt); rol = spr(L.gRl, rol, 4.5, 1, dt); }
+  const breath = (0.012 * Math.sin(L.t * 0.45) + 0.004 * Math.sin(L.t * 1.07 + 1)) * (1 - hc);
+  L.bodyY = gy + R * (lerp(0.06, 0.44, hv) + 0.10 * L.threatE + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
+  // hunched: standing, the front drops over the diver; threat lifts it to show the face.
+  // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
+  // toward the crusher (+X), its weight
+  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
 
@@ -677,9 +745,13 @@ function poseAll(L, dt, player) {
   }
   L.eyeMat.emissiveIntensity = 0.08 * st + 2.2 * shine * (0.35 + 0.65 * st);
   // the mouthparts: five pairs working out of phase, faster when roused
+  // (a sawtooth-ish stroke: a quick pull in, a slower open; the rhythm stutters and
+  // pauses on a slow noise, and the outer pairs sweep wider)
+  const mAct = (0.3 + 0.7 * st) * (0.55 + 0.45 * Math.max(0, nz(L.t * 0.31, 17)) + 0.5 * L.agitation);
   for (const m of L.mouth) {
-    const w = L.t * (3.4 + 3 * L.agitation) + m.k * 2.1 + (m.sd > 0 ? 0 : Math.PI);
-    m.hinge.rotation.set(0, -Math.PI / 2 - m.sd * 0.35, -0.9 + 0.22 * Math.sin(w) * (0.3 + 0.7 * st));
+    const w = L.mPh + m.k * 2.1 + (m.sd > 0 ? 0 : Math.PI);
+    const stroke = Math.sin(w) + 0.32 * Math.sin(2 * w + 0.6);
+    m.hinge.rotation.set(0.05 * m.sd * Math.sin(w * 0.5 + m.k), -Math.PI / 2 - m.sd * (0.35 + 0.04 * m.k * Math.sin(w)), -0.9 + 0.20 * stroke * mAct);
   }
 
   // wards, collision centres, head
@@ -692,21 +764,24 @@ function poseAll(L, dt, player) {
   L.head.set(0, 0.10, 0.80).applyMatrix4(b.matrixWorld);
 }
 
+function resetEv() {
+  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0;
+  return EV;
+}
+// a ground shock at world x,z of strength k (0..1): the game's camera shake, by distance
+function quake(L, ev, x, z, k, player) {
+  const d = Math.hypot(player.pos.x - x, player.pos.z - z);
+  const q = k * (1 - smooth(d, 8, 70));
+  if (q > ev.quake) ev.quake = q;
+}
+const LEG_DELAY = new Float32Array(8);
+WAKE_ORDER.forEach((li, o) => { LEG_DELAY[li] = 0.08 + o * 0.055; });
+const _busy = new Int8Array(2);
+
 export function updateBrooder(L, dt, t, player) {
-  const ev = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null };
+  const ev = resetEv();
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
-  if (L.woke) { L.woke = false; ev.woke = true; }
-  if (L.riseDust > 0) {
-    // silt pours off her back as she rises
-    L.riseDust -= dt;
-    L.dustT = (L.dustT || 0) - dt;
-    if (L.dustT <= 0) {
-      L.dustT = 0.08;
-      const a = Math.random() * Math.PI * 2, r = L.R * (0.7 + 0.4 * Math.random());
-      const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
-      emitDust(x, L.bodyY - L.R * 0.05, z, 16, 2.5);
-    }
-  }
+  if (L.woke) { L.woke = false; ev.woke = true; L.bY.v -= L.R * 0.25; }    // the first jolt: she tenses into the silt
   if (L.brood) {
     L.brood.update(dt, player, ev);
     if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = 'THE RIDGE IS WARM UNDER YOUR HAND.'; }
@@ -714,11 +789,48 @@ export function updateBrooder(L, dt, t, player) {
   if (!L.pPrev) L.pPrev = player.pos.clone();
   L.t += dt;
   L.uni.uTime.value = L.t;
+  const R = L.R;
+  // the mouthparts' own clock: rate varies without phase jumps
+  L.mPh = L.mPh + dt * (3.0 + 3.2 * L.agitation) * (0.8 + 0.3 * nz(L.t * 0.2, 23));
 
   // ---- stand / threat easing: she takes ~6 s to rise and ~4 s to settle ----
-  const rate = L.standTarget > L.stand ? 1 / RISE_T : 1 / SETTLE_T;
+  const rising = L.standTarget > L.stand;
+  const rate = rising ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
+  // THE WAKE, as a sequence on the rise clock: legs unfold one at a time (a crab's
+  // alternating order), she sinks into them, then HEAVES (an underdamped spring: she
+  // overshoots and settles), and the claws come out last. Settling runs it backwards.
+  const u = L.stand;
+  for (let li = 0; li < 8; li++) {
+    const was = L.legSt[li];
+    L.legSt[li] = win(u, LEG_DELAY[li], LEG_DELAY[li] + 0.30);
+    // a leg dragging itself out of the silt throws a puff at the foot
+    if (rising && was < 0.12 && L.legSt[li] >= 0.12) { const f = L.feet[li].cur; emitDust(f.x, f.y + 0.3, f.z, 22, 2.4); }
+  }
+  L.clawSt = win(u, 0.55, 0.95);
+  const heaveT = win(u, 0.45, 0.88) - (rising ? 0.12 * Math.sin(Math.PI * win(u, 0.22, 0.50)) : 0);
+  const hv0 = L.heave.x;
+  spr(L.heave, heaveT, 2.6, rising ? 0.42 : 0.55, dt);
+  // settling, the shell lands: the moment the fall stops it thumps the floor
+  if (!rising && hv0 > 0.02 && L.heave.x <= 0.02 && L.heave.v < -0.05) { quake(L, ev, L.pos.x, L.pos.z, 0.5, player); emitDust(L.pos.x, L.bodyY - R * 0.1, L.pos.z, 40, 3); }
+  // the shudder as she wakes: the whole shell trembles while the silt pours
+  const shud = rising ? Math.sin(Math.PI * win(u, 0.0, 0.40)) : 0;
+  if (shud > 0.05) {
+    L.bR.v += nz(L.t * 9, 1) * 0.9 * shud * dt * 60 * 0.02;
+    L.bP.v += nz(L.t * 8, 2) * 0.6 * shud * dt * 60 * 0.02;
+    if (!ev.quake) quake(L, ev, L.pos.x, L.pos.z, 0.12 * shud, player);
+  }
+  // silt pours off her back as she rises: from the rim, faster while the shell is moving
+  if (!L.dormant && u < 1 && rising) {
+    L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud);
+    if (L.dustT <= 0) {
+      L.dustT = 0.08;
+      const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
+      const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
+      emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 18, 2.6);
+    }
+  }
   // the drift sinks away as she rises out of it, and is gone once she has stood
   if (L.skirt && L.skirt.visible) {
     L.skirt.position.y = -L.standE * L.R * 0.3;
@@ -726,11 +838,38 @@ export function updateBrooder(L, dt, t, player) {
   }
   // she rears on her own when the diver comes close (the lab's hold/rear override it)
   if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pd < L.R * 2.4 ? 1 : 0;
-  // the hammer cycle: a slow wind-up, a fast fall (only means anything in threat)
-  L.swingT = (L.swingT || 0) + dt;
-  { const ph = (L.swingT % 2.6) / 2.6; L.swing = ph < 0.8 ? 0 : Math.sin((ph - 0.8) / 0.2 * Math.PI); }
+  // a fresh threat starts the hammer at the top of its guard, so the first blow is
+  // always preceded by the full wind-up
+  if (L.threatTarget > 0.5 && L.threat < 0.02) L.swingT = 0;
   L.threat += clamp(L.threatTarget - L.threat, -1.5 * dt, 1.5 * dt);
   L.threatE = smooth(L.threat, 0, 1) * L.standE;
+  // THE HAMMER (2.6 s, as before; the blow lands at the same point of the cycle):
+  // guard -> COCK (up and back, the body rears) -> HOLD (trembling) -> the FALL (accelerating)
+  // -> impact -> a recoil that bounces and settles
+  L.swingT = (L.swingT || 0) + dt;
+  {
+    const ph = (L.swingT % HAMMER_T) / HAMMER_T, prev = L.hamPh;
+    L.hamPh = ph;
+    L.cock = ph < PH_COCK0 ? 0 : ph < PH_COCK1 ? ease((ph - PH_COCK0) / (PH_COCK1 - PH_COCK0)) : ph < PH_SLAM0 ? 1
+      : ph < PH_SLAM1 ? 1 - Math.pow((ph - PH_SLAM0) / (PH_SLAM1 - PH_SLAM0), 1.6) : 0;
+    if (ph >= PH_SLAM1 && prev < PH_SLAM1) L.impT = 0;
+    if (ph >= PH_SLAM0 && ph < PH_SLAM1) L.swing = Math.pow((ph - PH_SLAM0) / (PH_SLAM1 - PH_SLAM0), 2.2);
+    else if (L.impT < 3) {
+      L.impT += dt;
+      const k = Math.max(0, L.impT - 0.10);                // pinned on the floor, then the bounce
+      L.swing = L.impT < 0.10 ? 1 : Math.exp(-4.5 * k) * Math.cos(7 * k);
+    } else L.swing = 0;
+    // the blow lands: dust under the fingers, the body drops onto it, the ground jumps
+    if (L.impT === 0 && L.threatE > 0.5) {
+      const c = L.claws[1].major ? L.claws[1] : L.claws[0];
+      c.dj.getWorldPosition(_ft);
+      const gy = terrainH(_ft.x, _ft.z, L.idx);
+      emitDust(_ft.x, gy + 0.3, _ft.z, 36, 3.4);
+      L.bY.v -= R * 0.10 * L.threatE;
+      L.bP.v += 0.9 * L.threatE;
+      quake(L, ev, _ft.x, _ft.z, 0.7 * L.threatE, player);
+    }
+  }
 
   // ---- heading and locomotion ----
   let pd = 1e9;
@@ -747,13 +886,18 @@ export function updateBrooder(L, dt, t, player) {
   } else if (!L.calmed && !L.hold && !L.dormant && L.standE > 0.5 && pd < 90) {
     want = Math.atan2(player.pos.x - L.pos.x, player.pos.z - L.pos.z);
   }
+  // the turn has inertia: angular velocity eases toward what the error asks for (same
+  // 0.35 rad/s ceiling), so she swings into a turn and out of it instead of pivoting
+  let yawWant = 0;
   if (want !== null) {
     let dA = want - L.yaw;
     while (dA > Math.PI) dA -= Math.PI * 2;
     while (dA < -Math.PI) dA += Math.PI * 2;
-    L.yaw += clamp(dA, -0.35 * dt, 0.35 * dt);
+    yawWant = clamp(dA * 1.4, -0.35, 0.35);
     if (Math.abs(dA) > 0.6) speed *= 0.2;                // turn on the spot before striding off
   }
+  L.yawV += (yawWant - L.yawV) * Math.min(1, 1.6 * dt);
+  L.yaw += L.yawV * dt;
   let vx = Math.sin(L.yaw) * speed, vz = Math.cos(L.yaw) * speed;
   // STALK: awake and not yet striking, she circles the diver crab-fashion — sideways,
   // face locked on him — and changes direction every few seconds.
@@ -763,36 +907,69 @@ export function updateBrooder(L, dt, t, player) {
     const ss = L.speed * 0.22 * L.strafeDir;
     vx += Math.cos(L.yaw) * ss; vz -= Math.sin(L.yaw) * ss;
   }
-  L.vel.x = lerp(L.vel.x, vx, Math.min(1, 2 * dt));
-  L.vel.z = lerp(L.vel.z, vz, Math.min(1, 2 * dt));
+  L.velPrev.copy(L.vel);
+  L.vel.x = lerp(L.vel.x, vx, Math.min(1, 1.5 * dt));
+  L.vel.z = lerp(L.vel.z, vz, Math.min(1, 1.5 * dt));
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
 
   // ---- feet: alternating tetrapod gait on planted feet ----
-  const busy = [0, 0];
-  for (const f of L.feet) if (f.t >= 0) busy[f.group]++;
+  // The swing is a real arc: the foot peels up fast, carries forward, and STABS down
+  // (the lift peaks early, so the descent is steep); a landing kicks silt, drops the
+  // body onto it and shakes the ground. Standing still she shifts her weight now and then.
+  _busy[0] = _busy[1] = 0;
+  for (const f of L.feet) if (f.t >= 0) _busy[f.group]++;
+  let rollT = 0, pitchT = 0, yT = 0;
+  L.shuffleT -= dt;
+  let shuffle = -1;
+  if (L.shuffleT <= 0 && L.standE > 0.9 && !_busy[0] && !_busy[1] && Math.hypot(L.vel.x, L.vel.z) < 0.3) {
+    L.shuffleT = 2.5 + Math.random() * 4;
+    shuffle = (Math.random() * 8) | 0;
+  }
   for (let li = 0; li < 8; li++) {
-    const f = L.feet[li];
+    const f = L.feet[li], sd = li < 4 ? 1 : -1, k = li & 3;
     restWorld(L, li, _rw);
     if (f.t >= 0) {
       f.t = Math.min(1, f.t + dt / SWING_T);
-      const e = smooth(f.t, 0, 1);
+      const e = win(f.t, 0.12, 0.92), lift = Math.sin(Math.PI * Math.pow(f.t, 0.72));
       f.cur.lerpVectors(f.from, f.to, e);
-      f.cur.y += Math.sin(Math.PI * f.t) * 0.30 * L.R * L.standE;
-      if (f.t >= 1) { f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to); emitDust(f.cur.x, f.cur.y, f.cur.z, 10, 1.6); }
+      f.cur.y += lift * f.h * L.R * L.standE;
+      // weight comes off this corner: the body lists toward it and away from the step
+      rollT -= sd * 0.016 * lift; pitchT += (k < 2 ? 0.011 : -0.008) * lift; yT += 0.006 * lift;
+      if (f.t >= 1) {
+        f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to);
+        emitDust(f.cur.x, f.cur.y + 0.2, f.cur.z, 12 + 10 * f.h / 0.30, 1.4 + 1.6 * f.h / 0.30);
+        L.bY.v -= R * 0.10 * f.h / 0.30;
+        L.bR.v += sd * 0.10 * f.h / 0.30;
+        quake(L, ev, f.cur.x, f.cur.z, 0.16 * f.h / 0.30, player);
+      }
     } else if (L.standE > 0.35) {
-      if (busy[f.group ^ 1] === 0 && f.planted.distanceTo(_rw) > STRIDE * L.R) {
+      const d = f.planted.distanceTo(_rw);
+      if (!_busy[f.group ^ 1] && (d > STRIDE * L.R || li === shuffle)) {
         f.from.copy(f.planted);
         f.to.copy(_rw).addScaledVector(L.vel, SWING_T * 0.6);
+        if (li === shuffle) { f.to.x += (Math.random() - 0.5) * 0.06 * R; f.to.z += (Math.random() - 0.5) * 0.06 * R; }
         f.to.y = terrainH(f.to.x, f.to.z, L.idx);
+        // a shuffle is a small, low step; a stride lifts high
+        f.h = li === shuffle && d < STRIDE * L.R ? 0.09 : 0.30;
         f.t = 0;
-        busy[f.group]++;
+        _busy[f.group]++;
       }
     } else {
       f.planted.lerp(_rw, 1 - Math.pow(0.05, dt));      // the sprawl slides with the settle
       f.cur.copy(f.planted);
     }
   }
+  // the body's springs: bob, list and pitch lag the gait (underdamped: it sways), and the
+  // shell trails the legs when she starts and surges past them when she stops
+  const idt = dt > 0 ? 1 / dt : 0;
+  const ax = (L.vel.x - L.velPrev.x) * idt, az = (L.vel.z - L.velPrev.z) * idt, lim = 0.06 * R;
+  spr(L.offX, clamp(-ax * 0.9, -lim, lim), 2.4, 0.55, dt);
+  spr(L.offZ, clamp(-az * 0.9, -lim, lim), 2.4, 0.55, dt);
+  spr(L.bY, yT * R, 6.5, 0.45, dt);
+  spr(L.bP, pitchT, 4.2, 0.40, dt);
+  spr(L.bR, rollT, 4.2, 0.40, dt);
+  spr(L.hurt, 0, 6.5, 0.32, dt);
 
   poseAll(L, dt, player);
 
@@ -838,7 +1015,9 @@ export function updateBrooder(L, dt, t, player) {
         if (L.standE > 0.6) {
           // THE BROOD RULE: her last ward will not light while any egg is out of the
           // nest; with the clutch whole again it lights on its own.
-          const last = L.sigils.filter(q => !q.lit).length === 1;
+          let dark = 0;
+          for (const q of L.sigils) if (!q.lit) dark++;
+          const last = dark === 1;
           if (last && L.brood && L.brood.out() > 0) {
             if (g.grp.position.distanceTo(player.pos) < L.reach * 1.2 && !L.broodHint) {
               L.broodHint = true;
@@ -850,7 +1029,9 @@ export function updateBrooder(L, dt, t, player) {
         }
       }
     }
-    ev.remaining = L.sigils.filter(q => !q.lit).length;
+    let rem = 0;
+    for (const q of L.sigils) if (!q.lit) rem++;
+    ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
       // she goes home: back to the nest to settle over her brood, off the rift
@@ -866,6 +1047,8 @@ export function updateBrooder(L, dt, t, player) {
       g.halo.position.copy(g.grp.position);
     }
   }
+  // a ward lit is a wound: she flinches - rears back, claws snatched in - and it rings out
+  if (ev.sigilLit) { L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
   wardFlashes(L, dt, null);
   L.pPrev.copy(player.pos);
   return ev;

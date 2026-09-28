@@ -232,6 +232,7 @@ export function makeHoarder(idx, cfg) {
     wards: L.sigils.map(g => ({ lit: g.lit, rev: +g.rev.toFixed(2) }))
   });
 
+  if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);

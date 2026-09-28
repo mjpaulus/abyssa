@@ -537,6 +537,7 @@ export function makeHunter(idx, cfg) {
     kind: 'hunter', state: L.state, furnace: L.furnace.lit, heat: +L.furnace.heat.toFixed(2), stun: +L.stun.toFixed(1),
     pos: L.pos.toArray().map(v => +v.toFixed(1)), calmed: L.calmed, wards: L.sigils.map(g => ({ lit: g.lit, kept: wardGuardCount(L.sigils.indexOf(g)) }))
   });
+  if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
