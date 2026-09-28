@@ -621,9 +621,9 @@ export function updateLighting(depth01) {
 //  - THE LANTERN IS THE KEY. xLant on its intensity, a softer decay (the water's own
 //    per-channel extinction on the light leg, lib/surface.js, now supplies the falloff
 //    physics a steeper exponent was faking), warm core.
-//  - THE FILL IS A WHISPER. Short range (fillDist) so it lifts Sal's own shadow side
-//    and stops painting the floor; under water only — in air it goes (the deck is lit
-//    by the sky).
+//  - THE FILL IS THE LANTERN'S BOUNCE. A third of its old level over 15 units instead
+//    of 60, in the flame's colour: it keeps the ground around Sal readable (gameplay)
+//    without being a second, cyan key; in air it goes (the deck is lit by the sky).
 //  - THE RIM GIVES ENERGY BACK TO THE SILHOUETTE. The directional comes down (xRim) and
 //    the shared backscatter rim in lib/surface.js — edge-only, so it never floods a
 //    floor — carries the separation, for EVERY light behind EVERY object, not just Sal.
@@ -632,8 +632,8 @@ export function updateLighting(depth01) {
 // Every factor rides (1 - air) or air explicitly, and LOOK.on = 0 is the pre-pass frame.
 export const LOOK = {
   on: 1,
-  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.22, fillDist: 11, xRim: 0.45, xSun: 2.0, xAmb: 0.45, xHemi: 0.85 },
-  air:   { xLant: 1.0, xLantDeep: 0.0, lantDecay: 1.9,  xFill: 0.10, fillDist: 11, xRim: 0.7,  xSun: 1.35, xAmb: 0.55, xHemi: 0.92 },
+  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.34, fillDist: 15, fillWarm: 0.6, xRim: 0.45, xSun: 2.0, xAmb: 0.45, xHemi: 0.85 },
+  air:   { xLant: 1.0, xLantDeep: 0.0, lantDecay: 1.9,  xFill: 0.10, fillDist: 11, fillWarm: 0.0, xRim: 0.7,  xSun: 1.35, xAmb: 0.55, xHemi: 0.92 },
   // THE DECK (air only): the key goes to sunlit white-gold, the omni fill to the sky's own
   // neutral (it was the shallows' teal, dyeing timber), and the hemisphere's lower end
   // becomes the SEA'S BOUNCE -- a lifted green-blue, because the deck's undersides and
@@ -641,7 +641,7 @@ export const LOOK = {
   sunWarm: 0.55, ambNeutral: 1.0, seaBounce: 0.7
 };
 const SUN_NOON = new THREE.Color(0xfff0d8), AMB_AIR = new THREE.Color(0x9aa6ae), SEA_BOUNCE = new THREE.Color(0x3e6466);
-const _lk = { xLant: 1, xLantDeep: 0, lantDecay: 1.9, xFill: 1, fillDist: 60, xRim: 1, xSun: 1, xAmb: 1, xHemi: 1 };
+const _lk = { xLant: 1, xLantDeep: 0, lantDecay: 1.9, xFill: 1, fillDist: 60, fillWarm: 0, xRim: 1, xSun: 1, xAmb: 1, xHemi: 1 };
 function relight(air, depth01) {
   if (!LOOK.on) {
     if (lanternLight.decay !== 1.9) { lanternLight.decay = 1.9; playerLightSrc.distance = 60; }
@@ -655,6 +655,10 @@ function relight(air, depth01) {
   lanternLight.decay = _lk.lantDecay;
   playerLightSrc.intensity *= _lk.xFill;
   playerLightSrc.distance = _lk.fillDist;
+  // What is left of the fill is the LANTERN'S OWN BOUNCE: light off the sand and the
+  // water around Sal, so it takes the flame's colour (then the medium's, by the path
+  // extinction) instead of being a second, cyan light source.
+  playerLightSrc.color.lerp(lanternLight.color, _lk.fillWarm);
   rim.intensity *= _lk.xRim;
   sun.intensity *= _lk.xSun;
   ambient.intensity *= _lk.xAmb;
