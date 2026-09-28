@@ -7,6 +7,7 @@ import { render, samplePerf, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, se
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
+import { stirPulse, P_SLAM } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
@@ -1364,12 +1365,15 @@ function update(dt, t) {
     if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); diverImpulse('grab'); }
     diverGrab(!!lev.grab);
     if (ev.quake) shake = Math.max(shake, ev.quake);   // her footfalls, hammer, settle thump
+    // big blows startle the reef too (footfalls already reach it through stir.js)
+    if (ev.quake > 0.3 && lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, Math.min(1, ev.quake + 0.3), P_SLAM);
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
     if (ev.slam) {
       shake = Math.min(1, shake + 2 * dt); slam();
       // Contact is per-frame; the tear is per collision. Rising edge only.
       if (!slamWas) {
+        if (lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, 1, P_SLAM);
         kickLantern(1.2);
         hitFrom(lev.spine, 1.5);   // Sal's body takes the slam too (diver.js life layer)
         lightDip = Math.max(lightDip, 0.7);
