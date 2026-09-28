@@ -632,8 +632,8 @@ export function updateLighting(depth01) {
 // Every factor rides (1 - air) or air explicitly, and LOOK.on = 0 is the pre-pass frame.
 export const LOOK = {
   on: 1,
-  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.34, fillDist: 15, fillWarm: 0.6, xRim: 0.45, xSun: 2.0, xAmb: 0.45, xHemi: 0.85 },
-  air:   { xLant: 1.0, xLantDeep: 0.0, lantDecay: 1.9,  xFill: 0.10, fillDist: 11, fillWarm: 0.0, xRim: 0.7,  xSun: 1.35, xAmb: 0.55, xHemi: 0.92 },
+  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.34, fillDist: 15, fillWarm: 0.6, xRim: 0.45, xSun: 2.0, xAmb: 0.45, xHemi: 0.85, deepFill: 0.5 },
+  air:   { xLant: 1.0, xLantDeep: 0.0, lantDecay: 1.9,  xFill: 0.10, fillDist: 11, fillWarm: 0.0, xRim: 0.7,  xSun: 1.35, xAmb: 0.55, xHemi: 0.92, deepFill: 0.0 },
   // THE DECK (air only): the key goes to sunlit white-gold, the omni fill to the sky's own
   // neutral (it was the shallows' teal, dyeing timber), and the hemisphere's lower end
   // becomes the SEA'S BOUNCE -- a lifted green-blue, because the deck's undersides and
@@ -641,7 +641,7 @@ export const LOOK = {
   sunWarm: 0.55, ambNeutral: 1.0, seaBounce: 0.7
 };
 const SUN_NOON = new THREE.Color(0xfff0d8), AMB_AIR = new THREE.Color(0x9aa6ae), SEA_BOUNCE = new THREE.Color(0x3e6466);
-const _lk = { xLant: 1, xLantDeep: 0, lantDecay: 1.9, xFill: 1, fillDist: 60, fillWarm: 0, xRim: 1, xSun: 1, xAmb: 1, xHemi: 1 };
+const _lk = { deepFill: 0, xLant: 1, xLantDeep: 0, lantDecay: 1.9, xFill: 1, fillDist: 60, fillWarm: 0, xRim: 1, xSun: 1, xAmb: 1, xHemi: 1 };
 function relight(air, depth01) {
   if (!LOOK.on) {
     if (lanternLight.decay !== 1.9) { lanternLight.decay = 1.9; playerLightSrc.distance = 60; }
@@ -661,8 +661,13 @@ function relight(air, depth01) {
   playerLightSrc.color.lerp(lanternLight.color, _lk.fillWarm);
   rim.intensity *= _lk.xRim;
   sun.intensity *= _lk.xSun;
-  ambient.intensity *= _lk.xAmb;
-  hemi.intensity *= _lk.xHemi;
+  // The omni cut is for the LIT zone, where the sun can do the shaping. In the abyss there
+  // is no sun, and the same cut left rock beyond the lantern pure black -- no shape, no
+  // dread, just nothing. deepFill walks both fills back toward (and the hemisphere past)
+  // their authored level with depth, so far rock keeps a cold indigo read.
+  const dk = _lk.deepFill * depth01;
+  ambient.intensity *= _lk.xAmb + (1 - _lk.xAmb) * dk;
+  hemi.intensity *= _lk.xHemi + (1.4 - _lk.xHemi) * dk;
   if (air > 0.001) {
     // the low-sun apricot the Flow lean already applied is kept: this only warms what is
     // still cool-white, and it fades as the sun sinks (the dusk key is its own colour)
