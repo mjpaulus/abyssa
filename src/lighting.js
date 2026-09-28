@@ -12,6 +12,11 @@ import { V3, clamp } from './lib/math.js';
 // the vents' single shared PointLight exists to avoid. The moon lifts the hemisphere and
 // the ambient, and nothing else.
 import { airAmbience } from './world/water.js';
+// THE SHARED SURFACE RESPONSE (lib/surface.js): one global patch on three's lighting
+// chunks — wrap, backscatter rim, wet film, the medium as environment, horizon
+// occlusion, and the light leg's per-channel extinction. Its uniforms are driven from
+// here, once per frame, off the same air/depth blend as every other light term.
+import { SURF, setSurface, setPath, surfaceState } from './lib/surface.js';
 
 // THE SUN IS LIVE. This used to be baked from SUN_ELEV_DEG at module load; it is now a
 // mirror of config.js's SUN.dir, rewritten IN PLACE by updateLighting every frame the
@@ -373,6 +378,28 @@ function trackSun() {
   if (Math.abs(SUN.elevDeg - aimElev) + Math.abs(SUN.azimDeg - aimAzim) > 2) floorFrame = 1e9;
 }
 
+// ---- SURFACE KNOBS (lib/surface.js) ---------------------------------------------------
+// Water values ride (1 - air), air values ride air; depth scales nothing here because
+// the terms are all RATIOS of light that is already dimming with depth. `path` is a
+// per-channel multiplier on scene.fog.density (the true local extinction at the eye):
+// red dies ~2.5x faster than green on the lantern's way to the rock, the same spectrum
+// water.js uses for the eye leg, so the two legs agree.
+export const SURFK = {
+  on: 1,
+  water: { wrap: 0.30, env: 1.0, horizon: 1.4, wet: 0.18, rim: 0.65, rimPow: 4.0, wetRough: 0.42, trans: 0.9 },
+  air:   { wrap: 0.00, env: 0.55, horizon: 1.4, wet: 0.00, rim: 0.00, rimPow: 4.0, wetRough: 0.30, trans: 0.4 },
+  path: [2.6, 1.45, 1.05], pathK: 1.0
+};
+const _surfO = { wrap: 0, env: 0, horizon: 0, wet: 0, rim: 0, rimPow: 4, wetRough: 0.3, trans: 0 };
+function driveSurface(air) {
+  const W = SURFK.water, A = SURFK.air, on = SURFK.on ? 1 : 0;
+  for (const k in _surfO) _surfO[k] = (W[k] + (A[k] - W[k]) * air) * (k === 'rimPow' || k === 'wetRough' ? 1 : on);
+  setSurface(_surfO);
+  const d = (scene.fog && scene.fog.density ? scene.fog.density : 0) * SURFK.pathK * (1 - air) * on;
+  setPath(SURFK.path[0] * d, SURFK.path[1] * d, SURFK.path[2] * d);
+}
+if (typeof window !== 'undefined') window.__surf = { K: SURFK, state: surfaceState, patched: () => SURF.patched };
+
 // Called each frame with normalized depth 0..1 so lighting can respond to descent.
 export function updateLighting(depth01) {
   rig.depth01 = depth01;
@@ -410,6 +437,7 @@ export function updateLighting(depth01) {
   // Blended over 1.6 units across the surface, so nothing pops as Sal steps off; below
   // the interface every frame is bit-identical to before.
   const air = clamp((camera.position.y - SURFACE_Y + 0.6) / 1.6, 0, 1);
+  driveSurface(air);
   mixInto(ambient.color, a, b, 'amb', t);
   // Item 10, shadow-side lift: in air the omni fade eases from 74% to 54% and the
   // hemisphere's from 42% to 28% at full lean, so the deck's shadows are filled by sky
@@ -580,7 +608,76 @@ export function updateLighting(depth01) {
     }
   }
   rim.position.copy(rimPos);
+  relight(air, depth01);
 }
+
+// ---- THE RELIGHT (light/atmosphere pass, 2026-09) ------------------------------------
+// Measured before this pass, at the zone-0 wreck: the cyan fill that rides Sal was
+// intensity 35 over 60 units — FOUR TIMES the lantern — so every pool of light on the
+// seabed was cyan-white and the lantern read as a garnish; and the steered rim, a
+// DirectionalLight at 3.4, out-lit the downwelling sun (1.3) on every up-facing surface
+// in the world, which is what flattened the zone into one teal value. Nothing here adds
+// or removes a light: intensities, distances and decays are uniforms.
+//  - THE LANTERN IS THE KEY. xLant on its intensity, a softer decay (the water's own
+//    per-channel extinction on the light leg, lib/surface.js, now supplies the falloff
+//    physics a steeper exponent was faking), warm core.
+//  - THE FILL IS THE LANTERN'S BOUNCE. A third of its old level over 15 units instead
+//    of 60, in the flame's colour: it keeps the ground around Sal readable (gameplay)
+//    without being a second, cyan key; in air it goes (the deck is lit by the sky).
+//  - THE RIM GIVES ENERGY BACK TO THE SILHOUETTE. The directional comes down (xRim) and
+//    the shared backscatter rim in lib/surface.js — edge-only, so it never floods a
+//    floor — carries the separation, for EVERY light behind EVERY object, not just Sal.
+//  - THE SUN SHAPES. Downwelling key x3 (xSun), omni ambient x0.55 (xAmb), so up-facing
+//    and side-facing surfaces separate by value in the lit zone.
+// Every factor rides (1 - air) or air explicitly, and LOOK.on = 0 is the pre-pass frame.
+export const LOOK = {
+  on: 1,
+  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.34, fillDist: 15, fillWarm: 0.6, xRim: 0.45, xSun: 3.0, xAmb: 0.55, xHemi: 0.95, deepFill: 0.5 },
+  air:   { xLant: 1.0, xLantDeep: 0.0, lantDecay: 1.9,  xFill: 0.10, fillDist: 11, fillWarm: 0.0, xRim: 0.7,  xSun: 1.35, xAmb: 0.55, xHemi: 0.92, deepFill: 0.0 },
+  // THE DECK (air only): the key goes to sunlit white-gold, the omni fill to the sky's own
+  // neutral (it was the shallows' teal, dyeing timber), and the hemisphere's lower end
+  // becomes the SEA'S BOUNCE -- a lifted green-blue, because the deck's undersides and
+  // the bulwarks' inner faces are lit by the water around the raft, not by black.
+  sunWarm: 0.55, ambNeutral: 1.0, seaBounce: 0.7
+};
+const SUN_NOON = new THREE.Color(0xfff0d8), AMB_AIR = new THREE.Color(0x9aa6ae), SEA_BOUNCE = new THREE.Color(0x3e6466);
+const _lk = { deepFill: 0, xLant: 1, xLantDeep: 0, lantDecay: 1.9, xFill: 1, fillDist: 60, fillWarm: 0, xRim: 1, xSun: 1, xAmb: 1, xHemi: 1 };
+function relight(air, depth01) {
+  if (!LOOK.on) {
+    if (lanternLight.decay !== 1.9) { lanternLight.decay = 1.9; playerLightSrc.distance = 60; }
+    return;
+  }
+  const W = LOOK.water, A = LOOK.air;
+  for (const k in _lk) _lk[k] = W[k] + (A[k] - W[k]) * air;
+  // Deeper = more of the frame is the lantern's: there is no sun left to share it with,
+  // and the exposure clamp tightens with depth, so the key has to carry the zone itself.
+  lanternLight.intensity *= _lk.xLant + _lk.xLantDeep * depth01;
+  lanternLight.decay = _lk.lantDecay;
+  playerLightSrc.intensity *= _lk.xFill;
+  playerLightSrc.distance = _lk.fillDist;
+  // What is left of the fill is the LANTERN'S OWN BOUNCE: light off the sand and the
+  // water around Sal, so it takes the flame's colour (then the medium's, by the path
+  // extinction) instead of being a second, cyan light source.
+  playerLightSrc.color.lerp(lanternLight.color, _lk.fillWarm);
+  rim.intensity *= _lk.xRim;
+  sun.intensity *= _lk.xSun;
+  // The omni cut is for the LIT zone, where the sun can do the shaping. In the abyss there
+  // is no sun, and the same cut left rock beyond the lantern pure black -- no shape, no
+  // dread, just nothing. deepFill walks both fills back toward (and the hemisphere past)
+  // their authored level with depth, so far rock keeps a cold indigo read.
+  const dk = _lk.deepFill * depth01;
+  ambient.intensity *= _lk.xAmb + (1 - _lk.xAmb) * dk;
+  hemi.intensity *= _lk.xHemi + (1.4 - _lk.xHemi) * dk;
+  if (air > 0.001) {
+    // the low-sun apricot the Flow lean already applied is kept: this only warms what is
+    // still cool-white, and it fades as the sun sinks (the dusk key is its own colour)
+    const hi = clamp((SUN.elevDeg - 12) / 30, 0, 1);
+    sun.color.lerp(SUN_NOON, air * LOOK.sunWarm * hi);
+    ambient.color.lerp(AMB_AIR, air * LOOK.ambNeutral);
+    hemi.groundColor.lerp(SEA_BOUNCE, air * LOOK.seaBounce * (0.35 + 0.65 * hi));
+  }
+}
+if (typeof window !== 'undefined') window.__look = LOOK;
 
 // Adaptive-quality fallback: drop the shadow map (6 cube faces) and the rim light,
 // then lean on the hemisphere term so the scene stays readable without them.

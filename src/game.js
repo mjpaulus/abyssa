@@ -1314,6 +1314,7 @@ function update(dt, t) {
     const ev = updateLeviathan(lev, dt, t, player);
     if (ev.woke) { showMsg(lev.name, 5, 2); growl(); shake = 1; }
     if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); }
+    if (ev.quake) shake = Math.max(shake, ev.quake);   // her footfalls, hammer, settle thump
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
     if (ev.slam) {

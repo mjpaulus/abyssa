@@ -180,6 +180,7 @@ class GradeEffect extends Effect {
       uniform float uSat;
       uniform vec2 uSat2;
       uniform vec4 uWash; uniform vec3 uCool; uniform float uCoolW; uniform vec2 uBand;
+      uniform vec4 uFilm; uniform vec3 uToe;
       void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
         vec3 c = max(inputColor.rgb, 0.0);
         c = pow(c, vec3(0.4545454));
@@ -221,6 +222,22 @@ class GradeEffect extends Effect {
           c = mix( c, uWash.rgb * lw, uWash.w * md * ( 1.0 - keepW ) );
           c = mix( c, uCool * lw, uCoolW * sh * ( 1.0 - keepC ) );
         }
+        // THE FILM FINISH (light/atmosphere pass). Luminance-only contrast about a pivot
+        // (hue is untouched: the whole pixel scales by the new/old luminance ratio), a
+        // COLOURED toe so the deepest values keep the zone's hue instead of going grey-
+        // black, and saturation eased out of the shadows so murk reads as murk and the
+        // lit things carry the colour. uFilm = (contrast, pivot, toe weight, shadow sat);
+        // (1, *, 0, 1) is the identity and skips the block whole.
+        if ( uFilm.x != 1.0 || uFilm.z != 0.0 || uFilm.w != 1.0 ) {
+          float fl = max( luminance( c ), 1e-5 );
+          float fk = uFilm.y * pow( fl / uFilm.y, uFilm.x );
+          // shoulder: above the pivot the curve eases back toward 1 so contrast never clips
+          fk = fk > uFilm.y ? mix( fk, fl, smoothstep( uFilm.y, 1.0, fl ) * 0.6 ) : fk;
+          c *= fk / fl;
+          c += uToe * ( uFilm.z * ( 1.0 - smoothstep( 0.0, 0.16, fk ) ) );
+          float fl2 = luminance( c );
+          c = mix( vec3( fl2 ), c, mix( uFilm.w, 1.0, smoothstep( 0.04, 0.30, fl2 ) ) );
+        }
         outputColor = vec4(pow(max(c, 0.0), vec3(2.2)), inputColor.a);
       }`, {
       blendFunction: BlendFunction.NORMAL,
@@ -234,7 +251,9 @@ class GradeEffect extends Effect {
         ['uWash', new THREE.Uniform(new THREE.Vector4(1, 1, 1, 0))],
         ['uCool', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
         ['uCoolW', new THREE.Uniform(0)],
-        ['uBand', new THREE.Uniform(new THREE.Vector2(0.22, 0.60))]
+        ['uBand', new THREE.Uniform(new THREE.Vector2(0.22, 0.60))],
+        ['uFilm', new THREE.Uniform(new THREE.Vector4(1, 0.3, 0, 1))],
+        ['uToe', new THREE.Uniform(new THREE.Vector3(0, 0, 0))]
       ])
     });
   }
@@ -262,7 +281,9 @@ const _gradeU = {
   wash: grade.uniforms.get('uWash'),
   cool: grade.uniforms.get('uCool'),
   coolW: grade.uniforms.get('uCoolW'),
-  band: grade.uniforms.get('uBand')
+  band: grade.uniforms.get('uBand'),
+  film: grade.uniforms.get('uFilm'),
+  toe: grade.uniforms.get('uToe')
 };
 const _gradeKeys = ['slope', 'offset', 'power'];
 
@@ -278,11 +299,17 @@ const _gradeKeys = ['slope', 'offset', 'power'];
 // x), so at k = 0 the legacy numbers are multiplied by exactly 1.0 / offset by 0.0.
 const ZONE_LOOKS = [
   // reef -- mossy teal
-  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.16, satDn: -0.22, wash: 0.22, cool: [0.08, 0.36, 0.40] },
+  { slope: [0.90, 1.05, 0.99], offset: [-0.004, 0.012, 0.008], power: [1.06, 0.97, 1.01], mood: [0.10, 0.80, 0.62], satUp: 0.16, satDn: -0.22, wash: 0.22, cool: [0.08, 0.36, 0.40],
+    film: [1.14, 0.32, 0.07, 0.80], toe: [0.10, 0.42, 0.40] },
   // boiler room -- sulphur-amber
-  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.42, cool: [0.18, 0.26, 0.46], band: [0.03, 0.20] },
-  // abyss -- violet-black
-  { slope: [0.97, 0.89, 1.06], offset: [0.004, -0.002, 0.012], power: [1.06, 1.10, 0.97], mood: [0.58, 0.18, 1.00], satUp: 0.20, satDn: -0.30, wash: 0.30, cool: [0.16, 0.10, 0.44] }
+  { slope: [1.08, 0.99, 0.84], offset: [0.012, 0.006, -0.004], power: [0.96, 1.00, 1.10], mood: [1.00, 0.68, 0.12], satUp: 0.28, satDn: -0.26, wash: 0.42, cool: [0.18, 0.26, 0.46], band: [0.03, 0.20],
+    film: [1.10, 0.28, 0.06, 0.85], toe: [0.42, 0.26, 0.10] },
+  // abyss -- violet-black. LIGHT PASS (2026-09): the violet read as neon magenta on the
+  // kelp and the lifted blue offset greyed the blacks; the push is now an indigo-slate
+  // with the colour held DOWN (satUp 0.20 -> 0.06, wash 0.30 -> 0.18), the blacks
+  // pulled back (offset b 0.012 -> 0.005) and the hue carried by the film toe instead.
+  { slope: [0.97, 0.93, 1.03], offset: [0.002, 0.000, 0.005], power: [1.07, 1.08, 1.00], mood: [0.46, 0.34, 1.00], satUp: 0.06, satDn: -0.36, wash: 0.18, cool: [0.16, 0.14, 0.40],
+    film: [1.18, 0.30, 0.08, 0.62], toe: [0.16, 0.16, 0.44] }
 ];
 // LOOK-DEV PUSH (2026-09-05): the tables above were authored timid -- at the default
 // dial the probe read slope 0.99..1.01 and a 1% saturation move, which no eye registers.
@@ -294,17 +321,26 @@ const ZONE_LOOKS = [
 // saturation pair; coolK: the shadows' cool weight relative to the look's wash.
 // coolAir: the shadow cool is weighted UP in air -- the deck's shadow side must read cool
 // against the apricot key (Flow's dusk), where under water the medium already is cool.
+// THE FILM FINISH's master (light pass): on = 1 applies each look's `film`/`toe`;
+// 0 is the pre-pass grade exactly (the shader block is skipped at identity).
+const FILM_K = { on: 1 };
+if (typeof window !== 'undefined') window.__film = FILM_K;
 const TUNE = { push: 1.15, pushSat: 1.0, coolK: 1.0, coolMax: 0.5, coolAir: 1.5, bandWater: [0.20, 0.55], bandAir: [0.10, 0.40] };
 const WX_LOOKS = {
   // night -- cold ink, colour drained
-  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.26, cool: [0.14, 0.24, 0.54], air: [0.62, 0.70, 0.92] },
+  night: { slope: [0.92, 0.96, 1.07], offset: [0.000, 0.003, 0.010], power: [1.05, 1.03, 0.98], mood: [0.20, 0.45, 1.00], satUp: 0.06, satDn: -0.28, wash: 0.26, cool: [0.14, 0.24, 0.54], air: [0.62, 0.70, 0.92],
+    film: [1.06, 0.30, 0.06, 0.78], toe: [0.10, 0.16, 0.40] },
   // dawn / dusk -- gold / apricot on the deck (the capybara sunset)
-  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.26, cool: [0.22, 0.38, 0.64], air: [1.00, 0.66, 0.30] },
+  dawn: { slope: [1.08, 1.00, 0.88], offset: [0.014, 0.006, -0.006], power: [0.95, 1.00, 1.08], mood: [1.00, 0.62, 0.22], satUp: 0.30, satDn: -0.18, wash: 0.26, cool: [0.22, 0.38, 0.64], air: [1.00, 0.66, 0.30],
+    film: [1.08, 0.36, 0.03, 0.92], toe: [0.30, 0.16, 0.30] },
   // noon -- the marine blue stays legible: a light hand
-  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.34, cool: [0.24, 0.42, 0.70], air: [1.00, 0.86, 0.64] },
-  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.26, cool: [0.20, 0.36, 0.66], air: [1.00, 0.60, 0.26] },
+  noon: { slope: [0.98, 1.00, 1.03], offset: [0.000, 0.002, 0.004], power: [1.02, 1.00, 0.99], mood: [0.16, 0.50, 1.00], satUp: 0.10, satDn: -0.12, wash: 0.34, cool: [0.24, 0.42, 0.70], air: [1.00, 0.86, 0.64],
+    film: [1.12, 0.38, 0.00, 0.95], toe: [0.0, 0.0, 0.0] },
+  dusk: { slope: [1.10, 0.98, 0.86], offset: [0.016, 0.005, -0.006], power: [0.94, 1.00, 1.10], mood: [1.00, 0.56, 0.20], satUp: 0.32, satDn: -0.20, wash: 0.26, cool: [0.20, 0.36, 0.66], air: [1.00, 0.60, 0.26],
+    film: [1.08, 0.36, 0.03, 0.92], toe: [0.30, 0.14, 0.32] },
   // gale -- slate, recognisable: values compressed, colour held down everywhere
-  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.22, cool: [0.34, 0.42, 0.54], air: [0.70, 0.72, 0.76] }
+  storm: { slope: [0.95, 0.98, 1.00], offset: [0.004, 0.005, 0.006], power: [1.03, 1.02, 1.00], mood: [0.42, 0.56, 0.62], satUp: 0.04, satDn: -0.26, wash: 0.22, cool: [0.34, 0.42, 0.54], air: [0.70, 0.72, 0.76],
+    film: [1.06, 0.34, 0.02, 0.82], toe: [0.20, 0.24, 0.28] }
 };
 const WX_RING = [WX_LOOKS.night, WX_LOOKS.dawn, WX_LOOKS.noon, WX_LOOKS.dusk, WX_LOOKS.night];
 // Mood colours -> unit chroma directions (colour minus its luminance, normalised), once.
@@ -321,8 +357,10 @@ for (const L of [...ZONE_LOOKS, ...Object.values(WX_LOOKS)]) {
   L.airT = [a[0] / la, a[1] / la, a[2] / la];
 }
 // Working accumulators (zero-alloc): slope, offset, power, mood, satUp, satDn.
-const _stk = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
-const _stkTmp = { slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
+const _stk = { film: [1, 0.3, 0, 1], toe: [0, 0, 0], slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
+const _stkTmp = { film: [1, 0.3, 0, 1], toe: [0, 0, 0], slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
+// The film finish's identity: contrast 1 about 0.3, no toe, full shadow saturation.
+const FILM0 = [1, 0.3, 0, 1], TOE0 = [0, 0, 0];
 function lookLerp(out, a, b, t) {
   for (let i = 0; i < 3; i++) {
     out.slope[i] = a.slope[i] + (b.slope[i] - a.slope[i]) * t;
@@ -333,6 +371,9 @@ function lookLerp(out, a, b, t) {
     out.coolT[i] = a.coolT[i] + (b.coolT[i] - a.coolT[i]) * t;
     out.airT[i] = a.airT[i] + (b.airT[i] - a.airT[i]) * t;
   }
+  const fa = a.film || FILM0, fb = b.film || FILM0, ta = a.toe || TOE0, tb = b.toe || TOE0;
+  for (let i = 0; i < 4; i++) out.film[i] = fa[i] + (fb[i] - fa[i]) * t;
+  for (let i = 0; i < 3; i++) out.toe[i] = ta[i] + (tb[i] - ta[i]) * t;
   out.satUp = a.satUp + (b.satUp - a.satUp) * t;
   out.satDn = a.satDn + (b.satDn - a.satDn) * t;
   out.wash = a.wash + (b.wash - a.wash) * t;
@@ -362,6 +403,22 @@ function resolveStack(airK) {
   const wxK = airK + (1 - airK) * 0.65 * (1 - Math.max(0, Math.min(1, -y / 300)));
   return lookLerp(zone, zone, wx, wxK);
 }
+// AO BY REGIME (light pass). The deck's 1.0 radius was tuned for 0.1-0.5 u props on
+// planking; under water the things that need seating are hulls, rocks and sleepers at
+// 2-20 u, and at radius 1 a wreck sat ON the sand instead of IN it. The water radius
+// opens and the falloff tightens so the occlusion gathers under keels and in rock
+// clefts without greying open sand. Uniform-only config keys (n8ao rebuilds nothing for
+// these); written only when they move by more than a hair.
+const AOK = { on: 1, water: { r: 2.4, fall: 3.5, i: 3.2 }, air: { r: 1.0, fall: 5.0, i: 3.0 } };
+if (typeof window !== 'undefined') window.__aok = AOK;
+function updateAO(airK) {
+  if (!n8aoPass || !AOK.on) return;
+  const c = n8aoPass.configuration, W = AOK.water, A = AOK.air;
+  const r = W.r + (A.r - W.r) * airK, f = W.fall + (A.fall - W.fall) * airK, i = W.i + (A.i - W.i) * airK;
+  if (Math.abs(c.aoRadius - r) > 0.02) c.aoRadius = r;
+  if (Math.abs(c.distanceFalloff - f) > 0.02) c.distanceFalloff = f;
+  if (Math.abs(c.intensity - i) > 0.02) c.intensity = i;
+}
 function updateGrade(airK) {
   // Grain is texture for the MURK. On deck in daylight the same amount read as ISO-6400
   // noise across every plank in the polish audit (2026-09-25): fade it to a quarter in
@@ -374,6 +431,7 @@ function updateGrade(airK) {
     _gradeU.slope.value.set(1, 1, 1); _gradeU.offset.value.set(0, 0, 0);
     _gradeU.power.value.set(1, 1, 1); _gradeU.sat.value = 1;
     _gradeU.sat2.value.set(0, 0);
+    _gradeU.film.value.set(1, 0.3, 0, 1);
     return;
   }
   if (ks > 0.001) {
@@ -385,7 +443,10 @@ function updateGrade(airK) {
     _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK * (1 + (TUNE.coolAir - 1) * airK)) * ks;
     const bw = S.band, ba = TUNE.bandAir;
     _gradeU.band.value.set(bw[0] + (ba[0] - bw[0]) * airK, bw[1] + (ba[1] - bw[1]) * airK);
-  } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; _gradeU.coolW.value = 0; }
+    const F = S.film, fk = FILM_K.on;
+    _gradeU.film.value.set(1 + (F[0] - 1) * fk, F[1], F[2] * fk, 1 + (F[3] - 1) * fk);
+    _gradeU.toe.value.set(S.toe[0], S.toe[1], S.toe[2]);
+  } else { _gradeU.sat2.value.set(0, 0); _gradeU.wash.value.w = 0; _gradeU.coolW.value = 0; _gradeU.film.value.set(1, 0.3, 0, 1); }
   // Depth ramp runs the full column (~-900), not just to -650: the shipped look
   // lands unchanged at -650 (d = 1 there), then drifts a touch deeper and quieter
   // to -900 — the abyss keeps darkening character without changing hue.
@@ -698,6 +759,9 @@ let capBuf = null;
 // frame just drawn (a microtask after the loop's callback batch is too late on some
 // frames -- the first readbacks after a fresh load came back all zeros).
 function afterFrames(n, fn) { return new Promise(res => capQ.push({ n, res, fn })); }
+// Look-dev surface: run fn inside the frame hook n rendered frames from now (the frame's
+// own drawing buffer, bypass or not) -- canvas.toDataURL from here is the true frame.
+if (typeof window !== 'undefined') window.__afterFrames = afterFrames;
 function pumpCaptures() {
   if (!capQ.length) return;
   const c = capQ[0];
@@ -803,6 +867,7 @@ export function render(dt) {
   dof.bokehScale = 1.35 * (1 + 0.45 * kd) * (1 - air) + 0.15 * air;
   updateHalation();
   updateGrade(air);
+  updateAO(air);
   // Exposure is set BEFORE the scene renders: three bakes it into every material.
   if (expPass) expPass.update(dt || 0.016, renderer, air);
   composer.render(dt);
