@@ -30,7 +30,11 @@ const BOKEH_N = 260, BOKEH_L = 8.0;
 const PLANK_N = 3400, PLANK_L = 12.0;
 const TRAIL_N = 12, TRAIL_DT = 0.12, TRAIL_TAU = 1.9;
 
-let bokeh = null, plank = null;
+let bokeh = null, plank = null, spray = null;
+const SPRAY_N = 2600, SPRAY_L = 40.0;
+const uSprayK = { value: 0 };
+const uWind = { value: new THREE.Vector3(1, 0, 0) };   // xz = downwind unit, z... see below
+const uSprayCol = { value: new THREE.Vector3(0.6, 0.62, 0.64) };
 const trail = new Float32Array(TRAIL_N * 4);     // uploaded as vec4[TRAIL_N]
 const trailT = new Float32Array(TRAIL_N);        // sample time per slot
 const trailS = new Float32Array(TRAIL_N);        // hand speed per slot
@@ -191,6 +195,81 @@ export function buildParticulate(scene, shared) {
     plank.visible = false;
     scene.add(plank);
   }
+
+  buildSpray(scene, shared);
+}
+
+// ---- 3. SEA SPRAY (air side) ---------------------------------------------------------
+// Spindrift torn off the crests: a layer of fine droplets hugging the sea within ~3 units
+// of the surface, each on a short ballistic hop (lifted off a crest, carried downwind,
+// dropping back), respawning at a fresh spot every hop. Amount follows the wind and the
+// storm envelope, so a calm noon has none and a gale smokes. Lit by the horizon sky (the
+// light a droplet in open air actually sees), normal alpha so it veils rather than glows.
+// Only drawn while the camera is in air; the sea (depthWrite on from above) occludes the
+// part of a hop that dips under a crest.
+function buildSpray(scene, shared) {
+  const { uTime, uCam, uPix } = shared;
+  const u = { uTime, uCam, uPix, uK: uSprayK, uWind, uCol: uSprayCol };
+  const mat = new THREE.ShaderMaterial({
+    uniforms: u, transparent: true, depthWrite: false, fog: false,
+    vertexShader: `uniform vec3 uCam, uWind, uCol; uniform float uTime, uPix, uK;
+      attribute vec3 aSeed;
+      varying float vA; varying vec3 vC;
+      void main(){
+        // Hop clock: 1.6..3.2 s per hop, per-droplet phase. Each hop starts at a new
+        // lattice spot (the hop index reseeds the offset), so nothing ever loops visibly.
+        float per = 1.6 + 1.6 * aSeed.y;
+        float ph = uTime / per + aSeed.x * 17.0;
+        float hop = floor( ph ), k = fract( ph );
+        vec2 jit = fract( vec2( sin( hop * 12.9898 + aSeed.z * 78.233 ), sin( hop * 39.346 + aSeed.x * 11.135 ) ) * 43758.5453 );
+        vec3 p = position;
+        p.xz += ( jit - 0.5 ) * ${(SPRAY_L).toFixed(1)};
+        // downwind carry and a ballistic arc (peak ~1.2..3 units)
+        p.xz += uWind.xy * ( k * per ) * ( 2.5 + 5.0 * uWind.z );
+        p.y = 0.25 + ( 1.2 + 1.8 * aSeed.z ) * 4.0 * k * ( 1.0 - k ) * ( 0.5 + 0.8 * uWind.z );
+        vec3 w = vec3( mod( p.x - uCam.x + ${(SPRAY_L * 0.5).toFixed(1)}, ${SPRAY_L.toFixed(1)} ) - ${(SPRAY_L * 0.5).toFixed(1)} + uCam.x, p.y,
+                       mod( p.z - uCam.z + ${(SPRAY_L * 0.5).toFixed(1)}, ${SPRAY_L.toFixed(1)} ) - ${(SPRAY_L * 0.5).toFixed(1)} + uCam.z );
+        vec4 mv = viewMatrix * vec4( w, 1.0 );
+        float dist = -mv.z;
+        gl_PointSize = clamp( ( 0.08 + 0.16 * aSeed.x * aSeed.x ) * uPix / max( dist, 0.5 ), 1.5, 36.0 );
+        // a droplet is born and dies at the sea: fade in/out across the hop
+        float life = smoothstep( 0.0, 0.15, k ) * ( 1.0 - smoothstep( 0.7, 1.0, k ) );
+        vA = uK * life * smoothstep( 1.0, 4.0, dist )
+           * ( 1.0 - smoothstep( ${(SPRAY_L * 0.30).toFixed(1)}, ${(SPRAY_L * 0.5).toFixed(1)}, length( w.xz - uCam.xz ) ) )
+           * step( aSeed.y, 0.35 + 0.65 * uK );   // thin the population as well as the alpha
+        vC = uCol;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `varying float vA; varying vec3 vC;
+      void main(){
+        vec2 q = gl_PointCoord - 0.5;
+        float a = exp( -dot( q, q ) * 10.0 ) * vA;
+        if ( a < 0.004 ) discard;
+        gl_FragColor = vec4( vC, a );
+      }`
+  });
+  const g = seededPoints(SPRAY_N, 1, 0x5B7A1);
+  // positions carry only the per-droplet base; x/z spread comes from the hop jitter
+  const pa = g.getAttribute('position');
+  for (let i = 0; i < SPRAY_N; i++) pa.setXYZ(i, 0, 0, 0);
+  spray = new THREE.Points(g, mat);
+  spray.frustumCulled = false;
+  spray.renderOrder = 3;
+  spray.visible = false;
+  scene.add(spray);
+}
+
+// Called once a frame from water.js (syncLamps) with the eased wind and the sky's
+// horizon radiance. air = 1 when the camera is above the surface.
+export function updateSpray(air, windSpeed, dx, dz, storm, hor) {
+  if (!spray) return;
+  const gust = Math.max(windSpeed, storm);
+  const k = Math.min(1, Math.max(0, (gust - 0.45) / 0.45)) * (air > 0.5 ? 1 : 0);
+  uSprayK.value = k * 0.8;
+  spray.visible = k > 0.01;
+  uWind.value.set(dx, dz, Math.min(1, gust));
+  // sky-lit droplets, a touch brighter than the horizon they sit against
+  uSprayCol.value.set(hor[0] * 1.1, hor[1] * 1.1, hor[2] * 1.1);
 }
 
 // Called once a frame from water.js updateAtmosphere, after game.js has placed the
@@ -232,5 +311,6 @@ export function updateParticulate(t, hand, amb, camY, bokehOn) {
 
 export function particulateState() {
   return { bokeh: !!(bokeh && bokeh.visible), plank: !!(plank && plank.visible), plankK: uPlankK.value,
+    spray: !!(spray && spray.visible), sprayK: uSprayK.value,
     trailW: Array.from({ length: TRAIL_N }, (_, i) => +trail[i * 4 + 3].toFixed(3)) };
 }
