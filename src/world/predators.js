@@ -44,7 +44,7 @@ import { terrainH } from './terrain.js';
 import { rockColliders } from './flora.js';
 import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
-import { setMover, stirPulse, setLantern, M_SHARK0, M_SHARK1, M_SQUID, P_BITE, P_STRIKE } from './stir.js';
+import { setMover, stirPulse, setLantern, pulseAt, M_SHARK0, M_SHARK1, M_SQUID, P_BITE, P_STRIKE } from './stir.js';
 
 // CHART V2 determinism (same contract as flora/creatures): every placement/phase draw
 // routes through site-seeded streams, never Math.random.
@@ -890,7 +890,7 @@ function octopusGeometry() {
 const OCT_DEFORM = /* glsl */`
   attribute vec4 aOct;
   uniform float uReach; uniform float uSeed; uniform float uActive; uniform float uGrab;
-  uniform vec3 uDir;
+  uniform vec3 uDir; uniform float uJet;
   varying float vOctT; varying float vOctK; varying float vOctA; varying float vOctR;
   // the ring / azimuth angle as a unit vector: an angle varying wraps 2pi -> 0 across
   // one strip of the closed tube and interpolates backwards; cos/sin do not
@@ -903,6 +903,9 @@ const OCT_DEFORM = /* glsl */`
       float br = sin(uTime*0.9 + uSeed)*0.020;
       float flatten = 1.0 - uReach;
       P = position * vec3(1.0 + br + flatten*0.16, (1.0 - br) * (1.0 - flatten*0.34), 1.0 + br + flatten*0.16);
+      // the jet: the mantle clenches and lengthens as water is driven out of the siphon
+      P.xz *= 1.0 - 0.22 * uJet;
+      P.y *= 1.0 + 0.12 * uJet;
       P.y += uReach*0.22 + 0.34;
       N = normalize(normal);
     } else {
@@ -958,6 +961,8 @@ function octopusMaterial(zi) {
   const u = {
     uTime, uReach: { value: 0 }, uSeed: { value: _pr() * 6.283 },
     uActive: { value: 0 }, uGrab: { value: 0 }, uDir: { value: V3(1, 0, 0) },
+    // anim-fauna: mantle squeeze of a jet pulse (0..1) and the alarm blanch (0..1)
+    uJet: { value: 0 }, uBlanch: { value: 0 },
     uSkin: { value: new THREE.Color(P.skin) },
     uHot: { value: new THREE.Color(P.hot) },
     uGlow: { value: new THREE.Color(P.glow) }
@@ -981,7 +986,7 @@ function octopusMaterial(zi) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uSkin; uniform vec3 uHot; uniform vec3 uGlow;
-        uniform float uActive; uniform float uGrab; uniform float uTime;
+        uniform float uActive; uniform float uGrab; uniform float uTime; uniform float uBlanch;
         varying float vOctT; varying float vOctK; varying float vOctA; varying float vOctR;
         varying vec2 vOctCS;
         ${SKIN_COMMON}`)
@@ -993,6 +998,9 @@ function octopusMaterial(zi) {
         float oAng = atan(vOctCS.y, vOctCS.x);          // -pi..pi, seam-free
         // at rest the skin sits on the silt palette; rousing flushes it warmer
         vec3 skin = mix(uSkin, uHot, uActive*0.75);
+        // ALARM BLANCH (anim-fauna): the chromatophores slam shut and the animal goes
+        // pale all over for a beat — the flash before it flushes dark and runs
+        skin = mix(skin, vec3(0.80, 0.76, 0.68), uBlanch * 0.85);
         // skin coordinate: (along, around) — arm T x ring angle, or mantle v x azimuth
         vec2 sq = isArm > 0.5 ? vec2(vOctT * 22.0, oAng * 1.2732395) : vec2(vOctT * 13.0, oAng * 2.5464791);
         // PAPILLAE: soft warts that stand up as the animal rouses
@@ -1000,7 +1008,7 @@ function octopusMaterial(zi) {
         float pap = (1.0 - smoothstep(0.0, 0.42, pv.x)) * (0.35 + 0.65 * uActive);
         // CHROMATOPHORES: pigment sacs that open (grow) when it flushes, closed dots at rest
         vec3 cv = skVor(sq * 6.5 + 3.1);
-        float cr = mix(0.08, 0.34, uActive) * (0.6 + 0.8 * cv.z);
+        float cr = mix(0.08, 0.34, uActive) * (0.6 + 0.8 * cv.z) * (1.0 - 0.8 * uBlanch);
         float chrom = 1.0 - smoothstep(cr, cr + 0.1, cv.x);
         vec3 chromC = mix(vec3(0.34, 0.12, 0.06), vec3(0.62, 0.36, 0.12), step(0.6, cv.z));
         skin *= 0.52 + 0.3 * pap;
@@ -1107,12 +1115,15 @@ function buildOctopuses() {
       octos.push({
         zi, mesh, mat, u: mat.userData.u,
         den: V3(x, y, z), pos: V3(x, y, z), jet: V3(), mouth: V3(mx, terrainH(mx, mz, zi) + 0.35, mz),
-        state: 'den', tState: 0, cool: rng(0, 10), reach: 0, active: 0, grab: 0, thief: false
+        state: 'den', tState: 0, cool: rng(0, 10), reach: 0, active: 0, grab: 0, thief: false,
+        // anim-fauna: jet pulse clock/strength, alarm blanch, body orientation
+        jetT: 0, jetK: 0, blanch: 0, orient: new THREE.Quaternion()
       });
     }
   }
 }
 
+const _oq = new THREE.Quaternion();
 function octSet(O, s) { O.state = s; O.tState = 0; }
 
 function updateOctopus(O, dt, t, p, lp) {
@@ -1166,6 +1177,7 @@ function updateOctopus(O, dt, t, p, lp) {
         _b.normalize();
         spawnInk(O.pos, _b, 30, O.zi);
         O.jet.copy(_b).multiplyScalar(11).setY(3.2);
+        O.jetK = 1; O.jetT = 0.5; O.blanch = 1;
         octSet(O, 'flee');
       }
       break;
@@ -1176,16 +1188,29 @@ function updateOctopus(O, dt, t, p, lp) {
       // trailing the jet (the squid's SQ_DEFORM pulse is the reference read): reach
       // stays pinned near the grab's 1.0 and uDir eases from the lantern to the jet's
       // wake, then the whole thing relaxes to the drift pose. Existing uniforms only.
-      const jp = 1 - Math.min(1, O.tState / 0.6);
-      wantActive = 0.6 + 0.4 * jp;
-      wantReach = 0.18 + 0.82 * jp * jp;
-      if (jp > 0 && O.jet.lengthSq() > 1e-4) {
-        _a.copy(O.jet).multiplyScalar(-1).normalize();
-        O.u.uDir.value.lerp(_a, Math.min(1, dt * 8)).normalize();
+      // anim-fauna: JET PULSES. An octopus does not glide off on one shove: it pumps.
+      // Every ~0.55 s the mantle clenches (uJet), a fresh impulse drives it mantle-first
+      // away from the diver, the arms snap into a streamlined bundle behind; between
+      // pulses it coasts and the bundle loosens. Three or four pulses, then it tires.
+      O.jetT -= dt;
+      if (O.jetT <= 0 && O.tState < OC.fleeT - 0.9) {
+        O.jetT = 0.5 + 0.12 * Math.sin(O.tState * 7.1);
+        O.jetK = 1;
+        _b.copy(O.pos).sub(p.pos); _b.y = Math.max(_b.y, 0) + 1.2;
+        if (_b.lengthSq() < 1e-4) _b.set(1, 0.3, 0);
+        _b.normalize();
+        O.jet.addScaledVector(_b, 7.0 * (1 - O.tState / OC.fleeT * 0.5));
       }
+      O.jetK = Math.max(0, O.jetK - dt * 3.2);
+      const tire = Math.min(1, O.tState / OC.fleeT);
+      wantActive = 0.95 - 0.35 * tire;
+      // streamlined bundle during the squeeze, a looser trail between pulses
+      wantReach = (0.72 + 0.28 * O.jetK) * (1 - tire * 0.6);
+      // the arms trail BEHIND the mantle: straight down its own axis (local -Y)
+      O.u.uDir.value.set(0.001, -1, 0.0005);
       O.pos.addScaledVector(O.jet, dt);
-      O.jet.multiplyScalar(Math.pow(0.35, dt));
-      O.jet.y -= 3.0 * dt;
+      O.jet.multiplyScalar(Math.pow(0.18, dt));
+      O.jet.y -= 2.0 * dt;
       if (O.tState > OC.fleeT) octSet(O, 'return');
       break;
     }
@@ -1221,12 +1246,29 @@ function updateOctopus(O, dt, t, p, lp) {
   if (O.pos.y < floor) { O.pos.y = floor; if (O.jet.y < 0) O.jet.y = 0; }
   O.mesh.position.copy(O.pos);
 
-  O.reach += (wantReach - O.reach) * Math.min(1, dt * 2.6);
+  // alarm: a sonar front, a strike or a sleeper's step nearby, or the lantern arriving,
+  // makes it blanch white for a beat (the deimatic flash) before it flushes dark
+  const pk = pulseAt(O.pos.x, O.pos.y, O.pos.z);
+  if (pk > 0.25) O.blanch = Math.max(O.blanch, pk);
+  if (O.state === 'wake' && O.tState < dt * 1.5) O.blanch = Math.max(O.blanch, 0.8);
+  O.blanch = Math.max(0, O.blanch - dt * 0.9);
+
+  O.reach += (wantReach - O.reach) * Math.min(1, dt * (O.state === 'flee' ? 7 : 2.6));
   O.active += (wantActive - O.active) * Math.min(1, dt * 2.0);
   O.grab += (wantGrab - O.grab) * Math.min(1, dt * 4.0);
   O.u.uReach.value = O.reach;
   O.u.uActive.value = O.active;
   O.u.uGrab.value = O.grab;
+  O.u.uJet.value = O.jetK * O.jetK;
+  O.u.uBlanch.value = Math.min(1, O.blanch);
+  // MANTLE-FIRST: while jetting the body tips over so the crown leads along the jet and
+  // the arms stream out behind; it rights itself as it slows and settles to crawl home
+  if (O.state === 'flee' && O.jet.lengthSq() > 0.5) {
+    _a.copy(O.jet).normalize();
+    _oq.setFromUnitVectors(UP, _a);
+  } else _oq.identity();
+  O.orient.slerp(_oq, Math.min(1, dt * (O.state === 'flee' ? 6 : 2.2)));
+  O.mesh.quaternion.copy(O.orient);
 
   // 130 predates the stratified fog; track the live sight wall (dens sit in the silt,
   // so this usually lands near the old figure, but never pops inside visible range).

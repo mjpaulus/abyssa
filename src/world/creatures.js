@@ -970,6 +970,7 @@ const TRAIL_VERT = `
 attribute vec4 aA; attribute vec4 aB;
 attribute float aPhase; attribute float aRate; attribute float aSeed; attribute vec3 aTint;
 attribute float aLenMul;
+attribute vec3 aVel;          // anim-fauna: the bell's world velocity (drag on the trailers)
 uniform float uTime;
 varying float vT; varying float vSide; varying float vKind;
 varying vec3 vTint; varying float vC; varying float vFog; varying float vSeed;
@@ -998,6 +999,13 @@ void main(){
   wdir = wl > 1e-4 ? wdir/wl : vec3(1.0,0.0,0.0);
   float ruffle = kind > 0.5 ? (1.0 + 0.45*sin(T*22.0 + si + uTime*0.9)) : 1.0;
   wp.xyz += wdir * side * w0 * (1.0 - pow(T, 0.75)*0.88) * ruffle * sc;
+  // DRAG LAG: the strands stream back along the bell's wake as it swims, the tips most,
+  // and each strand lags the one before it a little (the whip of a real tentacle mass).
+  // Bounded so a fast jolt never turns them into rods.
+  float vl = length(aVel);
+  vec3 wake = vl > 1e-3 ? -aVel / vl : vec3(0.0);
+  float dragK = min(vl * 0.55, 1.1) * pow(T, 1.5) * len * sc * 0.42;
+  wp.xyz += wake * dragK * (0.85 + 0.15 * sin(si * 2.1 + uTime * aRate * 6.0));
   vT = T; vSide = side; vKind = kind; vTint = aTint; vC = c; vSeed = aSeed + si;
   vFog = fogVis(wp.xyz);
   gl_Position = projectionMatrix * viewMatrix * wp;
@@ -1081,7 +1089,9 @@ function buildJellies() {
   const aPhase = new Float32Array(N), aRate = new Float32Array(N), aSeed = new Float32Array(N);
   const aTint = new Float32Array(N * 3), aRibs = new Float32Array(N), aLenMul = new Float32Array(N);
   const gCol = new Float32Array(N * 3);
-  JB = { N, aPhase, aRate, aSeed, aTint, aRibs, aLenMul, gCol, attrs: [] };
+  const aVel = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
+  aVel.setUsage(THREE.DynamicDrawUsage);
+  JB = { N, aPhase, aRate, aSeed, aTint, aRibs, aLenMul, gCol, attrs: [], aVel };
 
   for (let zi = 0; zi < 3; zi++) for (let k = 0; k < 7; k++) {
     jellies.push({
@@ -1106,6 +1116,7 @@ function buildJellies() {
   };
   instAttr(bellGeo, shared());
   instAttr(trailGeo, shared());
+  trailGeo.setAttribute('aVel', aVel);
 
   const mkBell = (frag, side, blending, order) => {
     const m = new THREE.ShaderMaterial({
@@ -1229,6 +1240,9 @@ function updateJellies(dt, t) {
       J.axis.lerp(tmpV2, Math.min(1, dt * s * 1.4)).normalize();
       J.alarm = Math.max(J.alarm, s);
     }
+    // a sonar front or a strike nearby: the bell clamps into a run of hard pulses
+    const pj = pulseAt(J.pos.x, J.pos.y, J.pos.z);
+    if (pj > 0.2) J.alarm = Math.max(J.alarm, pj);
     J.alarm = Math.max(0, J.alarm - dt * 0.35);
     J.rate = J.baseRate * (1 + J.alarm * 1.9);
 
@@ -1250,10 +1264,15 @@ function updateJellies(dt, t) {
     for (let k = 0; k < 16; k++) bm[o + k] = e[k];
 
     const i3 = J.i * 3;
+    // the wake the trailers stream into (smoothed: strands answer the bell late)
+    const va = JB.aVel.array;
+    const kv = Math.min(1, dt * 1.6);
+    va[i3] += (J.vel.x - va[i3]) * kv; va[i3 + 1] += (J.vel.y - va[i3 + 1]) * kv; va[i3 + 2] += (J.vel.z - va[i3 + 2]) * kv;
     gp[i3] = J.pos.x; gp[i3 + 1] = J.pos.y - J.scale * 0.2; gp[i3 + 2] = J.pos.z;
     gs[J.i] = J.scale * (2.6 + 2.4 * c) * (1 + J.alarm * 0.5);
   }
   bellIn.instanceMatrix.needsUpdate = true;
+  JB.aVel.needsUpdate = true;
   jellyGlow.geometry.attributes.aPos.needsUpdate = true;
   jellyGlow.geometry.attributes.aSize.needsUpdate = true;
 }
