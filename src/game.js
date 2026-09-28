@@ -1646,7 +1646,7 @@ function update(dt, t) {
     // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
     // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
     // the sound and nothing else.
-    if (!player.onDeck) spawnFootfall(player.pos, player.yaw, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);
+    if (!player.onDeck) spawnFootfall(player.pos, diver.rotation.y, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);   // the boots' heading (strafe turns the hips off the look)
   }
   // Landing after a drop kicks up a bigger cloud under both boots.
   // Terminal sink is 5.1 u/s vented (10.2 with the exhaust held open), not the 18 u/s
