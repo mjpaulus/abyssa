@@ -38,6 +38,7 @@ import { clamp } from '../lib/math.js';
 import { terrainH } from './terrain.js';
 import { activeVents } from './vents.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
+import { uPush, uPushV, uJolt, PUSH_GLSL, PUSH_N } from './stir.js';
 
 const TAU = Math.PI * 2;
 const ZI = 1;
@@ -84,7 +85,29 @@ const rng = (a, b) => a + rnd() * (b - a);
 // state
 // ---------------------------------------------------------------------------
 let built = false;
-const uni = { uTime: { value: 0 }, uVis: { value: 0 } };
+// anim-fauna: the swarm's fear, world space. Every live push sphere (Sal, a big
+// animal) blows the animals within ~4 of its radius out of the way, and a jolt front
+// (sonar, footfall, strike) bursts them outward from its source for a beat.
+const SCATTER_GLSL = `
+${PUSH_GLSL}
+uniform vec4 uJolt;
+vec3 vlScatter(vec3 w){
+  vec3 o = vec3(0.0);
+  for (int i = 0; i < ${PUSH_N}; i++) {
+    vec4 s = uPush[i];
+    if (s.w <= 0.0) continue;
+    vec3 d = w - s.xyz; float dl = length(d) + 1e-3;
+    float R = s.w * 3.2;
+    float k = 1.0 - smoothstep(s.w * 0.5, R, dl);
+    o += d / dl * k * k * R * 0.9;
+  }
+  vec2 jd = w.xz - uJolt.xy; float jl = length(jd) + 1e-3;
+  float jk = uJolt.w * (1.0 - smoothstep(uJolt.z * 0.85, uJolt.z + 2.0, jl)) * (1.0 - smoothstep(20.0, 60.0, jl));
+  o.xz += jd / jl * jk * 2.4; o.y += jk * 0.8;
+  return o;
+}`;
+
+const uni = { uTime: { value: 0 }, uVis: { value: 0 }, uPush, uPushV, uJolt };
 let shrimp = null, crabs = null;
 let shrimpMat = null, crabMat = null;
 let aShrimpA = null, aShrimpB = null, aCrab = null;
@@ -227,7 +250,8 @@ function shrimpMaterial() {
         attribute vec4 aBody;    // x: size   y: bob rate  z: bob phase  w: radial wobble
         uniform float uTime; uniform float uVis;
         varying float vShade; varying vec2 vVl; varying vec3 vVlP;
-        mat2 vlYaw(float s, float c){ return mat2(c, -s, s, c); }`)
+        mat2 vlYaw(float s, float c){ return mat2(c, -s, s, c); }
+        ${SCATTER_GLSL}`)
       // beginnormal_vertex runs first and its locals stay in scope for
       // begin_vertex below — one swirl evaluation serves both.
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
@@ -252,6 +276,13 @@ function shrimpMaterial() {
         transformed.x += vlCa * vlR;
         transformed.z += vlSa * vlR;
         transformed.y += aSwirl.w + sin(uTime * aBody.y + aBody.z) * 0.22;
+        // the swarm parts round whatever comes through it (per shrimp, off its centre)
+        {
+          vec3 vlC = vec3(vlCa * vlR, aSwirl.w, vlSa * vlR);
+          mat3 vlM = mat3(modelMatrix * instanceMatrix);
+          vec3 vlO = vlScatter((modelMatrix * instanceMatrix * vec4(vlC, 1.0)).xyz);
+          transformed += (transpose(vlM) * vlO) / max(dot(vlM[0], vlM[0]), 1e-6);
+        }
         vShade = 0.74 + 0.34 * fract(aSwirl.x * 3.7);
         vVl = uv; vVlP = position;`);
     sh.fragmentShader = sh.fragmentShader
@@ -301,7 +332,8 @@ function crabMaterial() {
       .replace('#include <common>', `#include <common>
         attribute vec2 aCrab;    // x: phase  y: rate
         uniform float uTime; uniform float uVis;
-        varying float vShade; varying vec2 vVl; varying vec3 vVlP;`)
+        varying float vShade; varying vec2 vVl; varying vec3 vVlP;
+        ${SCATTER_GLSL}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vVl = uv; vVlP = position;
         // Mostly still. A slow rock on the carapace and a leg shuffle that only
@@ -314,7 +346,12 @@ function crabMaterial() {
         transformed.y += sin(vlP * 0.9) * 0.012;
         // occasional claw lift: only the claw verts (x > 0.15), on a slow beat —
         // a threat display held for a breath, then lowered
-        transformed.y += max(0.0, sin(vlP * 0.5)) * 0.06 * step(0.15, position.x);
+        // ...and held HIGH while something big is close or the ground has just jolted:
+        // the crab rears and freezes (the leg shuffle stops)
+        float vlThreat = min(1.0, length(vlScatter((modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz)) * 0.6);
+        transformed.x -= sin(vlP * 3.1) * 0.035 * vlLeg * vlThreat;
+        transformed.z -= cos(vlP * 2.3) * 0.025 * vlLeg * vlThreat;
+        transformed.y += max(max(0.0, sin(vlP * 0.5)) * 0.06, vlThreat * 0.16) * step(0.15, position.x);
         transformed *= uVis;
         vShade = 0.80 + 0.28 * fract(aCrab.x * 2.9);`);
     sh.fragmentShader = sh.fragmentShader

@@ -2048,6 +2048,9 @@ function updateSquid(dt, t, p, lp) {
     // A kill outranks everything: the shoal will not come back to the light until the
     // panic has burned off, which is what makes one squid cost you the next few.
     const posted = Q.ward >= 0;          // a keeper with a ward to keep
+    // anim-fauna: a sonar front or a strike close by makes a free squid bolt (the
+    // shoal's own scatter beat); keepers flinch but hold their post
+    if (!posted && Q.state !== 'scatter' && pulseAt(Q.pos.x, Q.pos.y, Q.pos.z) > 0.45) { Q.state = 'scatter'; Q.tState = SQ.scatterT * 0.5; Q.jetT = 0; }
     if (Q.state === 'scatter') {
       if (Q.tState > SQ.scatterT) { Q.state = posted ? 'guard' : lit ? 'approach' : 'flee'; Q.tState = 0; }
     }
