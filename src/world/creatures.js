@@ -47,6 +47,7 @@ let cullR = 205;
 const tmpV = V3(), tmpV2 = V3(), tmpQ = new THREE.Quaternion(), tmpM = new THREE.Matrix4();
 const spinQ = new THREE.Quaternion();
 const AXIS_Y = V3(0, 1, 0);
+const TAU = Math.PI * 2;
 
 // ---------------------------------------------------------------------------
 // shared shader fragments
@@ -657,9 +658,10 @@ function updateSchool(S, dt, t) {
         const inv = 2.6 / d2;
         ax -= dx * inv; ay -= dy * inv; az -= dz * inv;
       } else {
-        ax += (V[j3] - V[i3]) * 0.9 + dx * 0.05;
-        ay += (V[j3 + 1] - V[i3 + 1]) * 0.9 + dy * 0.05;
-        az += (V[j3 + 2] - V[i3 + 2]) * 0.9 + dz * 0.05;
+        const al = 0.9 * (1 - 0.8 * mill);
+        ax += (V[j3] - V[i3]) * al + dx * 0.05;
+        ay += (V[j3 + 1] - V[i3 + 1]) * al + dy * 0.05;
+        az += (V[j3 + 2] - V[i3 + 2]) * al + dz * 0.05;
       }
     }
 
@@ -728,11 +730,17 @@ function updateSchool(S, dt, t) {
     const rl = Math.sqrt(x * x + y * y + z * z) + 1e-4;
     const let_go = 1 - hole * 0.85;
     if (mill > 0.02) {
-      const hr2 = Math.sqrt(x * x + z * z) + 1e-4, ring = S.radius * 0.7;
-      const rad = (ring - hr2) * 0.9 * mill * let_go;
-      ax += x / hr2 * rad; az += z / hr2 * rad; ay -= y * 0.9 * mill * let_go;
-      const tw = S.local * 1.15 * S.millDir;
-      ax += ((-z / hr2) * tw - V[i3]) * 0.8 * mill; az += ((x / hr2) * tw - V[i3 + 2]) * 0.8 * mill;
+      // each fish pursues its own slot on the torus: slots spread evenly round the ring
+      // (so the mill is a ring, never a clump orbiting the centre), each on its own
+      // radius and height band, all turning together at the school's hand
+      const ring = S.radius * 0.7;
+      const ri = ring * (0.6 + 0.6 * hash01(i, 5.5)), yi = (hash01(i, 9.1) - 0.5) * S.radius * 0.5;
+      const om = S.local * 1.1 / ring * S.millDir;
+      const th0 = i / n * TAU + t * om;
+      const cx0 = Math.cos(th0) * ri, cz0 = Math.sin(th0) * ri;
+      const dvx = (cx0 - x) * 0.9 - Math.sin(th0) * ri * om, dvy = (yi - y) * 0.6, dvz = (cz0 - z) * 0.9 + Math.cos(th0) * ri * om;
+      const mk = 1.6 * mill * let_go;
+      ax += (dvx - V[i3]) * mk; ay += (dvy - V[i3 + 1]) * mk; az += (dvz - V[i3 + 2]) * mk;
     }
     const pull = (0.55 + Math.max(0, rl - S.radius) * 0.8) * let_go * (0.35 + 0.65 * travel);
     ax -= x / rl * pull; ay -= y / rl * pull * 2.4; az -= z / rl * pull;
