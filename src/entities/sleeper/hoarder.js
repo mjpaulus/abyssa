@@ -31,6 +31,7 @@ import {
 } from './common.js';
 import * as G from './hoarderGeo.js';
 import { makeHoard } from './hoard.js';
+import { emitDust } from '../../world/footfx.js';
 
 const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
@@ -40,6 +41,30 @@ const UP = V3(0, 1, 0);
 
 const _a = V3(), _b = V3(), _c = V3(), _d = V3(), _t = V3(), _u = V3(), _w = V3(), _p = V3(), _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4(), _s = V3(), _zp = V3(0, 0, 1), _yp = V3(0, 1, 0), _mi = new THREE.Matrix4(), _l = V3();
+// ---- MOTION (anim-sleepers) ----------------------------------------------------------
+// An octopus arm is a muscular hydrostat, not a rope on a spline. Each arm is now:
+//   the old cubic toward its tip goal (the intent), then a CURL integrated down the distal
+//   half toward the sucker face, its curvature a wave travelling base to tip (so the tips
+//   coil, uncoil and are never still), then a verlet chain pulled toward that shape, stiff
+//   at the root and loose at the tip (so the arm has follow-through and drag).
+//   The tip goal is a damped spring: idle it drifts, a LASH cocks back and coils first
+//   (0.35 s of the old 1.4 s window, a telegraph) then strikes; a GRAB wraps the distal
+//   arm round the diver in a tightening helix; a FLINCH rolls the arm base-first (the roll
+//   runs down it) and coils it away from the light.
+// Her eyes track the diver in saccades, the mantle breathes on an exhale/inhale curve with
+// the siphon puffing silt when she lies on the floor, and the skin carries PASSING CLOUDS
+// (dark chromatophore bands sweeping the body, the photophores flaring in their wake)
+// whose speed and depth are her mood.
+const EVO = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, grabbed: false };
+const LASH_T = 1.4, COCK_T = 0.35;
+const nzO = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
+function sprO(o, target, w, z, dt) {
+  o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
+  o.x += o.v * dt;
+  return o.x;
+}
+const _e1 = V3(), _e2 = V3(), _tg = V3(), _dv = V3();
+const SIPHON = V3(-0.80, -0.36, 0.44);
 
 // ---- the arm's cross-section (unit), per side vertex: dorsal U at a = 0, the oral face
 // at a = PI flattened to ~0.76 with a shallow furrow down its middle, a dorsal ridge, and
@@ -86,6 +111,7 @@ export function makeHoarder(idx, cfg) {
     ...c, idx, R: Rm, AL, size: c.size, grp, body, t: 0, agitation: 0, calmed: false, calmT: 0,
     sonarWards: true, guardWards: false, reveal: 0, rang: false, hinted: false, pendingMsg: null,
     reach: 5, collR: Rm * 0.85, flare: 0, dormant: true, rise: 0, riseE: 0, riseTarget: 0,
+    yawV: 0, crawl: 0, blinkT: 9, blinkN: 3, look: { y: { x: 0, v: 0 }, p: { x: 0, v: 0 }, ty: 0, tp: 0, next: 0 }, brPh: 0, cloudPh: 0, mood: 0, armsInit: false,
     pos: V3(), yaw: 0, bodyY: 0, head: V3(), spine: [V3(), V3(), V3(), V3()], sigils: [], arms: [],
     grab: null, lashCd: 3, _pd: 1e9
   };
@@ -102,6 +128,34 @@ export function makeHoarder(idx, cfg) {
     emissive: 0x6b58d8, emissiveMap: sk.emissiveMap, emissiveIntensity: 0.25
   }), 'abyssa-orune-skin', 1, true));
   L.skin = skin;
+  // passing clouds (chromatophores) and the siphon's pulse, patched over wetSkin
+  L.cloudU = { uCloud: { value: new THREE.Vector4(0, 0.25, 0.4, 0.5) }, uSiph: { value: 0 } };
+  {
+    const ob = skin.onBeforeCompile;
+    skin.customProgramCacheKey = () => 'abyssa-orune-skin-m';
+    skin.onBeforeCompile = (sh, r) => {
+      ob(sh, r);
+      sh.uniforms.uCloud = L.cloudU.uCloud;
+      sh.uniforms.uSiph = L.cloudU.uSiph;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform float uSiph;\nvarying vec3 vCloudW;')
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          {
+            vec3 sq = position - vec3(-0.80, -0.36, 0.44);
+            transformed += normal * uSiph * exp(-dot(sq, sq) / 0.035);
+          }`)
+        .replace('#include <project_vertex>', '#include <project_vertex>\nvCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform vec4 uCloud;\nvarying vec3 vCloudW;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          float ocA = dot(vCloudW, vec3(0.071, 0.043, 0.052)) * uCloud.w;
+          float ocB = sin(ocA - uCloud.x) + 0.35 * sin(ocA * 2.3 + 1.7 - uCloud.x * 1.3);
+          float ocBand = smoothstep(0.55, 1.2, ocB);
+          diffuseColor.rgb *= 1.0 - uCloud.y * ocBand;`)
+        .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+          totalEmissiveRadiance *= 1.0 + uCloud.z * smoothstep(0.3, 1.1, sin(ocA - uCloud.x + 0.9));`);
+    };
+  }
   // one program for all of her skin: the mantle's biplanar blend is carried by attributes
   // (uvB, wB) that every other skin geometry sets to its own UV with weight 0
   L.skinM = skin;
@@ -127,7 +181,7 @@ export function makeHoarder(idx, cfg) {
     const lidB = new THREE.Mesh(lidBG, lidMat);
     e.add(lidT, lidB);
     body.add(e);
-    L.eyes.push({ e, lidT, lidB });
+    L.eyes.push({ e, lidT, lidB, ball, sd, yaw0: sd * 0.75 });
   }
 
   // ---- arms ----
@@ -148,6 +202,7 @@ export function makeHoarder(idx, cfg) {
       mesh, geo, ang, pts: Array.from({ length: RINGS + 1 }, () => V3()),
       U: Array.from({ length: RINGS + 1 }, () => V3()), B: Array.from({ length: RINGS + 1 }, () => V3()),
       base: V3(), drape: V3(), tip: V3(), tipGoal: V3(), lift: 0, recoil: 0, lash: 0, phase: a * 1.37,
+      tipV: V3(), tgt: Array.from({ length: RINGS + 1 }, () => V3()), prv: Array.from({ length: RINGS + 1 }, () => V3()), wrap: 0, curl: 10,
       r0: Rm * 0.26, len: AL * (0.85 + 0.25 * ((a * 0.618) % 1)),
       // render-tube state (polish-sleepers2)
       Pf: new Float32Array((RR + 1) * 3), Uf: new Float32Array((RR + 1) * 3), Bf: new Float32Array((RR + 1) * 3),
@@ -222,7 +277,7 @@ export function makeHoarder(idx, cfg) {
   L.cmd = (name, arg) => {
     if (name === 'stand' || name === 'wake') { if (L.dormant) wakeHoarder(L); }
     else if (name === 'settle') L.riseTarget = 0;
-    else if (name === 'place') { L.pos.set(arg.pos.x, 0, arg.pos.z); L.yaw = arg.yaw; }
+    else if (name === 'place') { L.pos.set(arg.pos.x, 0, arg.pos.z); L.yaw = arg.yaw; L.armsInit = false; }
     else if (name === 'rear') L.lashCd = 0;
     return L.probe();
   };
@@ -248,10 +303,13 @@ function wakeHoarder(L) {
 }
 
 // Per-arm shape: a cubic from the crown out to the tip, arched off the body, writhing,
-// never through the seabed. Then parallel-transported frames (U = dorsal, B = side) and
-// the tube written into the arm's buffer. The sucker face is -U.
-function buildArm(L, A, dt) {
-  const n = RINGS, P = A.pts;
+// then CURLED down its distal half toward the sucker face (a curvature wave running base
+// to tip), wrapped round the diver when it holds him, and followed by a verlet chain
+// (stiff root, loose tip). Never through the seabed. Then parallel-transported frames
+// (U = dorsal, B = side), rolled BASE-FIRST by a flinch, and the tube written into the
+// arm's buffer. The sucker face is -U.
+function buildArm(L, A, dt, player) {
+  const n = RINGS, T = A.tgt, P = A.pts;
   // control points: out of the crown, arching up, down to the tip
   _a.copy(A.base);
   _d.copy(A.tip);
@@ -262,19 +320,85 @@ function buildArm(L, A, dt) {
   _w.set(-_t.z, 0, _t.x).normalize();                             // side-to-side
   for (let i = 0; i <= n; i++) {
     const s = i / n, m = 1 - s;
-    P[i].set(0, 0, 0)
+    T[i].set(0, 0, 0)
       .addScaledVector(_a, m * m * m).addScaledVector(_b, 3 * m * m * s)
       .addScaledVector(_c, 3 * m * s * s).addScaledVector(_d, s * s * s);
     const wv = Math.sin(wt - s * 5.5) * writhe * s * s;
-    P[i].addScaledVector(_w, wv);
-    P[i].y += Math.sin(wt * 0.8 - s * 4.1) * writhe * 0.5 * s * s * A.lift;
-    // the tip curls on itself when she is idle
-    if (s > 0.8) { const k = (s - 0.8) / 0.2; P[i].y += Math.sin(k * Math.PI) * A.r0 * 0.8 * (0.3 + A.lift); }
-    const r = A.r0 * Math.pow(1 - s, 0.85) + 0.12;
-    const gy = terrainH(P[i].x, P[i].z, L.idx) + r * 0.85;
-    if (P[i].y < gy) P[i].y = gy;
+    T[i].addScaledVector(_w, wv);
+    T[i].y += Math.sin(wt * 0.8 - s * 4.1) * writhe * 0.5 * s * s * A.lift;
   }
-  // frames: dorsal U starts as world up, rolled by the recoil (the flinch bares the suckers)
+  // frames along the intent (parallel transport; U starts as world up)
+  for (let i = 0; i <= n; i++) {
+    _t.subVectors(T[Math.min(n, i + 1)], T[Math.max(0, i - 1)]).normalize();
+    const Ui = A.U[i];
+    if (i === 0) Ui.copy(UP); else Ui.copy(A.U[i - 1]);
+    Ui.addScaledVector(_t, -Ui.dot(_t)).normalize();
+    A.B[i].crossVectors(_t, Ui).normalize();
+  }
+  // THE CURL: rebuild the distal half by integrating a bend toward the sucker face (-U)
+  // with a little sideways (B) twist; curvature is a wave travelling down the arm
+  const i0 = (n * 0.40) | 0;
+  let phi = 0, psi = 0;
+  _e1.copy(T[i0]);                                                  // the curled cursor
+  _l.copy(T[i0]);                                                   // the previous intent point
+  for (let i = i0 + 1; i <= n; i++) {
+    const s = i / n, w = Math.pow(THREE.MathUtils.smoothstep(s, 0.40, 1.0), 1.4);
+    const wave = 0.65 + 0.45 * Math.sin(L.t * 1.1 + A.phase * 1.7 - s * 7.5);
+    phi += A.curl * w * wave / n;
+    psi += 3.0 * w * Math.sin(L.t * 0.7 + A.phase - s * 5) / n;
+    _t.subVectors(T[i], _l);
+    const seg = _t.length() || 1e-4;
+    _t.divideScalar(seg);
+    const cf = Math.cos(phi), sf = Math.sin(phi), cp = Math.cos(psi), sp = Math.sin(psi);
+    _dv.copy(_t).multiplyScalar(cf * cp).addScaledVector(A.U[i], -sf * cp).addScaledVector(A.B[i], sp).normalize();
+    _l.copy(T[i]);
+    _e1.addScaledVector(_dv, seg);
+    T[i].copy(_e1);
+  }
+  // THE WRAP: the distal arm coils round the diver in a tightening helix
+  if (A.wrap > 0.001 && player) {
+    _e1.set(1, 0, 0); _e2.set(0, 0, 1);
+    for (let i = 0; i <= n; i++) {
+      const s = i / n;
+      if (s < 0.50) continue;
+      const u = (s - 0.50) / 0.50, k = A.wrap * THREE.MathUtils.smoothstep(s, 0.50, 0.66);
+      const th = u * 2.4 * TAU + L.t * 0.8 + A.phase, rr = 1.25 + 0.5 * (1 - u) - 0.25 * A.wrap;
+      _tg.copy(player.pos).addScaledVector(_e1, Math.cos(th) * rr).addScaledVector(_e2, Math.sin(th) * rr);
+      _tg.y += 1.1 - 2.4 * u;
+      T[i].lerp(_tg, k);
+    }
+  }
+  // the tip curls up off the silt when she is idle; the arm never goes through the floor
+  for (let i = 0; i <= n; i++) {
+    const s = i / n, r = A.r0 * Math.pow(1 - s, 0.85) + 0.12;
+    const gy = terrainH(T[i].x, T[i].z, L.idx) + r * 0.85;
+    if (T[i].y < gy) T[i].y = gy;
+  }
+  // the verlet chain: carry momentum, pull toward the shape (stiff root, loose tip),
+  // inextensible by follow-the-leader (corrections also move the previous point: no jitter)
+  const k60 = Math.min(3, dt * 60), init = !L.armsInit || !(dt > 0);
+  const damp = Math.pow(0.9, k60), hold = A.wrap > 0.5;
+  for (let i = 0; i <= n; i++) {
+    if (i === 0 || init) { P[i].copy(T[i]); A.prv[i].copy(T[i]); continue; }
+    const s = i / n;
+    _dv.subVectors(P[i], A.prv[i]).multiplyScalar(damp);
+    A.prv[i].copy(P[i]);
+    P[i].add(_dv);
+    const k = hold ? 0.6 : lerp(0.55, 0.14, Math.pow(s, 0.8));
+    P[i].lerp(T[i], 1 - Math.pow(1 - k, k60));
+  }
+  if (!init) for (let i = 1; i <= n; i++) {
+    const seg = T[i].distanceTo(T[i - 1]) || 1e-3;
+    _dv.subVectors(P[i], P[i - 1]);
+    const l = _dv.length() || 1e-4;
+    _tg.copy(P[i]);
+    P[i].copy(P[i - 1]).addScaledVector(_dv, seg / l);
+    A.prv[i].add(_tg.subVectors(P[i], _tg).multiplyScalar(0.9));
+    const r = A.r0 * Math.pow(1 - i / n, 0.85) + 0.12;
+    const gy = terrainH(P[i].x, P[i].z, L.idx) + r * 0.8;
+    if (P[i].y < gy) { P[i].y = gy; }
+  }
+  // frames on the live chain; the flinch roll runs down the arm from the root
   for (let i = 0; i <= n; i++) {
     _t.subVectors(P[Math.min(n, i + 1)], P[Math.max(0, i - 1)]).normalize();
     const Ui = A.U[i];
@@ -282,18 +406,17 @@ function buildArm(L, A, dt) {
     Ui.addScaledVector(_t, -Ui.dot(_t)).normalize();
     A.B[i].crossVectors(_t, Ui).normalize();
   }
-  const roll = A.recoil * Math.PI * 0.85;
-  const cr = Math.cos(roll), sr = Math.sin(roll);
   for (let i = 0; i <= n; i++) {
-    const U = A.U[i], B = A.B[i];
-    // apply the roll to this ring's frame; stash the rolled frame for suckers and wards
+    const s = i / n, rk = Math.min(1, Math.max(0, A.recoil * 1.6 - s * 0.6));
+    const roll = rk * Math.PI * 0.85;
+    if (roll === 0) continue;
+    const U = A.U[i], B = A.B[i], cr = Math.cos(roll), sr = Math.sin(roll);
     const ux = U.x * cr + B.x * sr, uy = U.y * cr + B.y * sr, uz = U.z * cr + B.z * sr;
     const bx = B.x * cr - U.x * sr, by = B.y * cr - U.y * sr, bz = B.z * cr - U.z * sr;
     U.set(ux, uy, uz); B.set(bx, by, bz);
   }
   buildTube(A);
 }
-
 // The render tube off the logic spine: Catmull-Rom rings, frames lerped from the rolled
 // logic frames and re-orthogonalised, the section scaled by the static folds and by
 // transverse WRINKLES whose depth is the local bend strain (curvature x radius) and which
@@ -360,11 +483,14 @@ function buildTube(A) {
 function poseHoarder(L, dt, player) {
   const b = L.body, R = L.R;
   const gy = terrainH(L.pos.x, L.pos.z, L.idx);
-  L.bodyY = gy + R * (0.35 + 0.75 * L.riseE) + R * 0.04 * Math.sin(L.t * 0.35) ;
+  // BREATHING: a slow swell (inhale, eased) and a quicker squeeze out through the siphon;
+  // the siphon flares on the exhale and the whole head rides the breath
+  const ph = L.brPh, bv = ph < 0.7 ? THREE.MathUtils.smootherstep(ph, 0, 0.7) : 1 - THREE.MathUtils.smootherstep(ph, 0.7, 1.0);
+  L.cloudU.uSiph.value = ph > 0.68 ? 0.035 * Math.sin(Math.PI * Math.min(1, (ph - 0.68) / 0.32)) : 0;
+  L.bodyY = gy + R * (0.35 + 0.75 * L.riseE) + R * 0.04 * Math.sin(L.t * 0.35) + R * 0.025 * bv;
   b.position.set(L.pos.x, L.bodyY, L.pos.z);
-  b.rotation.set(-0.10 * L.riseE + 0.03 * Math.sin(L.t * 0.35), L.yaw, 0);
-  // breathing: the sac swells and falls
-  const br = 1 + 0.035 * Math.sin(L.t * (L.dormant ? 0.35 : 0.9));
+  b.rotation.set(-0.10 * L.riseE + 0.03 * Math.sin(L.t * 0.35) - 0.02 * bv, L.yaw, 0.015 * nzO(L.t * 0.3, 2));
+  const br = 1 + 0.05 * (bv - 0.5);
   L.mantle.scale.set(br, 1 + (br - 1) * 1.4, br);
   b.updateMatrixWorld(true);
 
@@ -375,7 +501,7 @@ function poseHoarder(L, dt, player) {
     const A = L.arms[a];
     _p.set(Math.sin(A.ang) * 0.52, -0.42, Math.cos(A.ang) * 0.52 + 0.10).applyMatrix4(b.matrixWorld);
     A.base.copy(_p);
-    buildArm(L, A, dt);
+    buildArm(L, A, dt, player);
     // suckers: two staggered rows on the oral face (-U), crowding and shrinking to the tip,
     // seated on the render tube's face
     for (let k = 0; k < SUCK; k++) {
@@ -405,9 +531,28 @@ function poseHoarder(L, dt, player) {
 
   // eyes: lids shut to a slit asleep; open awake. Eyeshine when the lantern faces them.
   const open = L.riseE;
+  // (a blink every few seconds awake: the lids close fast and open slower)
+  const bl = L.blinkT < 0.28 ? Math.sin(Math.PI * Math.pow(L.blinkT / 0.28, 0.6)) : 0;
+  const lo = open * (1 - 0.9 * bl);
   for (const e of L.eyes) {
-    e.lidT.rotation.x = -0.1 - 1.25 * open;
-    e.lidB.rotation.x = 0.1 + 1.25 * open;
+    e.lidT.rotation.x = -0.1 - 1.25 * lo;
+    e.lidB.rotation.x = 0.1 + 1.25 * lo;
+  }
+  // THE LOOK: each eyeball turns in its socket toward the diver, in saccades - it holds,
+  // then JUMPS (a stiff spring) when the error grows or a moment has passed
+  if (player && dt > 0) {
+    const Lk = L.look;
+    Lk.next -= dt;
+    for (const e of L.eyes) {
+      _l.copy(player.pos);
+      e.e.worldToLocal(_l);
+      const ty = clamp(Math.atan2(_l.x, _l.z), -0.45, 0.45) * open, tp = clamp(Math.atan2(_l.y, Math.hypot(_l.x, _l.z)), -0.3, 0.3) * open;
+      if (e.ly === undefined) { e.ly = { x: 0, v: 0 }; e.lp = { x: 0, v: 0 }; e.ty = 0; e.tp = 0; }
+      if (Lk.next <= 0 || Math.abs(ty - e.ty) > 0.18 || Math.abs(tp - e.tp) > 0.15) { e.ty = ty + 0.03 * nzO(L.t * 3, e.sd); e.tp = tp + 0.02 * nzO(L.t * 2.7, e.sd + 4); }
+      sprO(e.ly, e.ty, 26, 0.9, dt); sprO(e.lp, e.tp, 26, 0.9, dt);
+      e.ball.rotation.set(-e.lp.x, e.ly.x, 0);
+    }
+    if (Lk.next <= 0) Lk.next = 0.5 + Math.random() * 1.6;
   }
   let shine = 0;
   if (player) {
@@ -419,6 +564,9 @@ function poseHoarder(L, dt, player) {
   L.eyeMat.emissiveIntensity = (0.05 + 2.0 * shine) * open;
   // the freckles breathe slowly asleep, run brighter and quicker when she is roused
   L.skin.emissiveIntensity = L.calmed ? 0.18 : (0.16 + 0.10 * Math.sin(L.t * (L.dormant ? 0.4 : 1.6))) * (1 + 1.2 * L.riseE);
+  // passing clouds: their speed, depth and flare are her mood
+  const md = L.mood;
+  L.cloudU.uCloud.value.set(L.cloudPh, 0.14 + 0.36 * md, 0.25 + 1.3 * md, 0.45 + 0.45 * md);
   L.skinM.emissiveIntensity = L.skin.emissiveIntensity;
 
   // collision centres (the mantle) and the head
@@ -430,9 +578,10 @@ function poseHoarder(L, dt, player) {
 }
 
 export function updateHoarder(L, dt, t, player) {
-  const ev = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null };
+  const ev = EVO;
+  ev.sigilLit = 0; ev.calmed = false; ev.lightDrain = 0; ev.slam = false; ev.remaining = 0; ev.msg = null; ev.woke = false; ev.grabbed = false;
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
-  if (L.woke) { L.woke = false; ev.woke = true; }
+  if (L.woke) { L.woke = false; ev.woke = true; L.mood = 1; }
   if (!L.pPrev) L.pPrev = player.pos.clone();
   L.t += dt;
   L.hoard.update(dt, player, ev);
@@ -450,19 +599,41 @@ export function updateHoarder(L, dt, t, player) {
       L.hoard.found.arms = true; ev.msg = 'THE CARGO CHAIN IS WARM. IT IS NOT CHAIN.'; break;
     }
   }
+  // breath, blink, mood (anim-sleepers)
+  const brRate = L.dormant ? 1 / 11 : L.calmed ? 1 / 8 : 1 / (5.5 - 2.5 * L.mood);
+  const brWas = L.brPh;
+  L.brPh = (L.brPh + dt * brRate) % 1;
+  if (brWas < 0.7 && L.brPh >= 0.7) {
+    // the exhale: when she lies on the floor it blows the silt out from under the siphon
+    _p.copy(SIPHON).applyMatrix4(L.body.matrixWorld);
+    const gy = terrainH(_p.x, _p.z, L.idx);
+    if (_p.y - gy < L.R * 0.6) emitDust(_p.x, gy + 0.3, _p.z, 10 + (L.dormant ? 0 : 8), 1.2 + 0.8 * L.riseE);
+  }
+  L.blinkT += dt;
+  if (L.blinkT > L.blinkN) { L.blinkT = 0; L.blinkN = 2.5 + Math.random() * 5; }
+  let moodT = L.dormant ? 0.05 : L.calmed ? 0.12 : 0.45 + 0.35 * (1 - smooth(pd, L.R, L.AL * 0.9));
+  if (L.grab) moodT = 1;
+  L.mood += (moodT - L.mood) * Math.min(1, (moodT > L.mood ? 2.5 : 0.35) * dt);
+  L.cloudPh += dt * (0.35 + 2.8 * L.mood);
 
-  // ---- heading: awake, she turns to him ----
+  // ---- heading: awake, she turns to him (the turn eases in and out) ----
+  let yawWant = 0, crawlT = 0;
   if (!L.dormant && !L.calmed) {
     const want = Math.atan2(player.pos.x - L.pos.x, player.pos.z - L.pos.z);
     let dA = want - L.yaw;
     while (dA > Math.PI) dA -= TAU;
     while (dA < -Math.PI) dA += TAU;
-    L.yaw += clamp(dA, -0.3 * dt, 0.3 * dt);
+    yawWant = clamp(dA * 1.2, -0.3, 0.3);
     // she pours toward him over the silt when he keeps his distance
-    if (pd > L.AL * 0.7) {
-      const sp = L.speed * 0.18 * dt;
-      L.pos.x += Math.sin(L.yaw) * sp; L.pos.z += Math.cos(L.yaw) * sp;
-    }
+    if (pd > L.AL * 0.7) crawlT = L.speed * 0.18;
+  }
+  L.yawV += (yawWant - L.yawV) * Math.min(1, 1.5 * dt);
+  L.yaw += L.yawV * dt;
+  // (the pour surges with the breath: a mantle-driven crawl, not a conveyor)
+  L.crawl += (crawlT - L.crawl) * Math.min(1, 0.8 * dt);
+  if (L.crawl > 1e-3) {
+    const sp = L.crawl * (0.55 + 0.9 * (L.brPh > 0.7 ? 1 : 0.4)) * dt;
+    L.pos.x += Math.sin(L.yaw) * sp; L.pos.z += Math.cos(L.yaw) * sp;
   }
 
   // ---- arms: drape, writhe, lash, grab, flinch ----
@@ -475,29 +646,54 @@ export function updateHoarder(L, dt, t, player) {
     // flinch: the lit lantern near the arm's inner third
     const near = A.pts[RINGS >> 2].distanceTo(player.pos);
     const flinch = !L.dormant && !L.calmed && lit && near < 11 ? 1 : 0;
+    if (flinch && A.recoil < 0.1) L.mood = Math.min(1, L.mood + 0.3);
     A.recoil += clamp(flinch - A.recoil, -dt * 0.6, dt * 2.5);
-    // tip goal
-    if (L.grab && L.grab.arm === a) {
+    // tip goal, and how the tip chases it (w, z of its spring) and how tightly it coils
+    const held = L.grab && L.grab.arm === a;
+    let w = 1.6, z = 1, curlT = L.dormant ? 7 : L.calmed ? 9 : 15;
+    if (held) {
       A.tipGoal.copy(player.pos);
+      w = 7; curlT = 3;
     } else if (A.lash > 0) {
       A.lash -= dt;
-      A.tipGoal.copy(player.pos);
-      if (A.tip.distanceTo(player.pos) < 3.2 && !L.grab && A.recoil < 0.4) {
-        // a grab is the DRAG, not a slam: no dress tear, the line is the teaching
-        L.grab = { arm: a, t: 0 };
-        ev.grabbed = true;
-        ev.msg = ev.msg || 'IT HAS YOU. CUT IT.';
+      if (A.lash > LASH_T - COCK_T) {
+        // THE COCK: the arm draws back and up over her, coiling - the telegraph
+        _p.copy(A.base).sub(player.pos).setY(0).normalize();
+        A.tipGoal.copy(A.base).addScaledVector(_p, L.R * 1.4);
+        A.tipGoal.y += L.R * 2.4;
+        w = 5; z = 0.8; curlT = 24;
+      } else {
+        // THE STRIKE: the coil throws open at him
+        A.tipGoal.copy(player.pos);
+        w = 7; z = 0.8; curlT = 1.5;
+        if (A.tip.distanceTo(player.pos) < 3.2 && !L.grab && A.recoil < 0.4) {
+          // a grab is the DRAG, not a slam: no dress tear, the line is the teaching
+          L.grab = { arm: a, t: 0 };
+          ev.grabbed = true;
+          ev.msg = ev.msg || 'IT HAS YOU. CUT IT.';
+        }
       }
     } else if (L.dormant || L.calmed) {
+      // asleep the tips still creep a little over the silt
       A.tipGoal.copy(A.drape);
+      A.tipGoal.x += nzO(L.t * 0.13, a * 3) * 0.8; A.tipGoal.z += nzO(L.t * 0.11, a * 5 + 1) * 0.8;
+      w = 0.8;
     } else {
       // awake idle: tips raised and hunting round her, higher when she is roused
       const ang = L.yaw + A.ang + Math.sin(L.t * 0.3 + A.phase) * 0.3;
       const rr = A.len * (0.55 + 0.1 * Math.sin(L.t * 0.5 + A.phase));
       A.tipGoal.set(L.pos.x + Math.sin(ang) * rr, L.bodyY + L.R * (0.8 + 0.8 * Math.sin(L.t * 0.7 + A.phase)) + A.recoil * L.R * 2, L.pos.z + Math.cos(ang) * rr);
     }
-    const tipK = (A.lash > 0 || (L.grab && L.grab.arm === a)) ? 5 : 1.2;
-    A.tip.lerp(A.tipGoal, Math.min(1, tipK * dt));
+    // a flinching arm coils away from the light
+    curlT += 10 * A.recoil;
+    A.curl += (curlT - A.curl) * Math.min(1, 4 * dt);
+    A.wrap += clamp((held ? 1 : 0) - A.wrap, -dt * 1.5, dt * 2.2);
+    // the tip: a damped spring toward its goal (was a constant-rate lerp)
+    for (let c = 0; c < 3; c++) {
+      const x = A.tip.getComponent(c), v = A.tipV.getComponent(c), g = A.tipGoal.getComponent(c);
+      const nv = (v + w * w * dt * (g - x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
+      A.tipV.setComponent(c, nv); A.tip.setComponent(c, x + nv * dt);
+    }
   }
   // a new lash: the nearest arm that is not flinching, when he is inside her reach
   if (!L.dormant && !L.calmed && !L.grab && L.lashCd <= 0 && pd < L.AL * 0.85) {
@@ -508,7 +704,7 @@ export function updateHoarder(L, dt, t, player) {
       const d = A.tip.distanceTo(player.pos);
       if (d < bd) { bd = d; best = a; }
     }
-    if (best >= 0) { L.arms[best].lash = 1.4; L.lashCd = 3 + Math.random() * 2.5; }
+    if (best >= 0) { L.arms[best].lash = LASH_T; L.lashCd = 3 + Math.random() * 2.5; L.mood = Math.min(1, L.mood + 0.25); }
   }
   // the grab: dragged toward the beak, light going, until cut or she tires of him
   if (L.grab) {
@@ -521,6 +717,7 @@ export function updateHoarder(L, dt, t, player) {
   }
 
   poseHoarder(L, dt, player);
+  L.armsInit = true;
 
   // contact: the mantle shoves
   if (pd < L.collR) {
@@ -545,7 +742,9 @@ export function updateHoarder(L, dt, t, player) {
       wardIdle(g, dt, haloK);
       if (!L.dormant) wardTouch(L, i, g, player, ev);
     }
-    ev.remaining = L.sigils.filter(q => !q.lit).length;
+    let rem = 0;
+    for (const q of L.sigils) if (!q.lit) rem++;
+    ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.grab = null;
       L.riseTarget = 0.25;                                           // she coils back round the wreck
