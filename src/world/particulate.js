@@ -101,7 +101,7 @@ export function buildParticulate(scene, shared) {
           // Forward glint: a mote between the flame and the lens lights up most.
           float mu = dot( normalize( dl ), normalize( uCam - w ) );
           float ph = 0.30 + 1.6 * pow( 0.5 + 0.5 * mu, 3.0 );
-          vC = uAmb * 0.35 + abyssaLampAC.rgb * ( E * ph * 0.020 );
+          vC = uAmb * 0.35 + abyssaLampAC.rgb * ( E * ph * 0.006 );
           // Energy spreads over the disc: a bigger blur is a fainter one.
           float spread = 1.0 / ( 1.0 + gl_PointSize * gl_PointSize * 0.0016 );
           vA = uK * spread

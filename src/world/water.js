@@ -15,7 +15,7 @@ import { scatter } from './flora.js';
 // THE SUN'S SHADOW MAP, read-only. lighting.js imports airAmbience from here, so this
 // closes an import cycle — safe because BOTH sides only touch the other's bindings
 // inside per-frame functions, never at module evaluation. `sun` is never written here.
-import { sun, lanternLight, playerLightSrc } from '../lighting.js';
+import { sun, lanternLight, playerLightSrc, SURFK } from '../lighting.js';
 // The vents' warm columns, for the marine snow: a preallocated Float32Array + count,
 // filled by vents.js once per reseed and handed to the snow material as uniforms.
 import { ventColumns, ventColumnCount, VENT_COLS_MAX } from './vents.js';
@@ -188,9 +188,17 @@ export function boltUniforms() { return { b0: BOLT0_U, b1: BOLT1_U, col: BOLT_CO
 const LAMPA_U = new Float32Array(4), LAMPAC_U = new Float32Array(4);
 const LAMPB_U = new Float32Array(4), LAMPBC_U = new Float32Array(4);
 const LAMPK_U = new Float32Array(4);
+// The LIGHT leg's per-channel extinction (lamp -> scattering point): the SAME numbers
+// lib/surface.js puts on every lit surface (lighting.js SURFK.path x fog.density), so the
+// beam in the water and the pool on the sand redden and go teal at one rate -- a warm
+// core, a teal-green edge, in the volume exactly as on the rock.
+const LAMPP_U = new Float32Array(4);
 // Look knobs, live-pokeable through window.__atmos.
 export const ATMOS = {
-  lampGain: 0.22,      // lantern in-scatter gain (x the physical sigma_s * I * phase)
+  // Lantern in-scatter gain (x the physical sigma_s * I * phase). Tuned against the
+  // RELIT lantern (lighting.js relight(): underwater intensity x2.4..4, ~25-40): the
+  // glow is a halo round the flame that falls to black by ~15 units, not a fog bank.
+  lampGain: 0.055,
   lampGainB: 0.6,      // second slot (vent throat / ward / hoard lamp): the furnace glow in the boiler room
   lampOn: true,
   bokeh: true
@@ -378,15 +386,17 @@ vec3 boltLight( vec3 P, vec3 N, vec4 B, float storm ){
 //   F4(th) = 4.375 th + 8 c - (4/3) c^3 - 3.5 s c + s c (c^2 - s^2) / 8   (= int (1-s)^4)
 //   F(th)  = 0.15 th + (0.85 / 3.2) F4(th),    in-scatter = (F(th1) - F(th0)) / h
 // and sin/cos come back algebraically from u = tan(th), so the only transcendentals are
-// two atan. The extinction exp(-sigma (t + d)) is taken at the ray's closest point to the
-// lamp (clamped to the segment) -- the integrand is concentrated within +-h of it, and h
+// two atan. The extinction exp(-sigma_eye t - sigma_light d) -- the eye leg at the fog's
+// own local extinction, the light leg at lib/surface.js's path extinction so the beam and
+// the lit pool agree -- is taken at the ray's closest point to the lamp (clamped to the
+// segment) -- the integrand is concentrated within +-h of it, and h
 // for a lantern held beside the camera is a few units, so the error is a small fraction of
 // one mean free path. Every exp() argument is -sigma * (non-negative), so <= 0.
 // The window is three's own range falloff (1 - (d/R)^4)^2 at that same closest point, so
 // the glow can never reach water the lamp does not light on surfaces.
 // Requires LAMPK_U etc. installed as uniforms (patchFog / the dome).
 const GLSL_LAMP = `
-uniform vec4 abyssaLampA, abyssaLampAC, abyssaLampB, abyssaLampBC, abyssaLampK;
+uniform vec4 abyssaLampA, abyssaLampAC, abyssaLampB, abyssaLampBC, abyssaLampK, abyssaLampP;
 float lampF( float u ){
   float c = inversesqrt( 1.0 + u * u ), s = u * c, th = atan( u );
   float f4 = 4.375 * th + c * ( 8.0 - 1.3333333 * c * c )
@@ -405,7 +415,7 @@ vec3 lampScatter( vec3 ro, vec3 v, float L, vec4 P, vec4 C ){
   float win = 1.0 - q * q;
   float ih  = inversesqrt( h2 );
   float geo = max( lampF( ( L - tc ) * ih ) - lampF( -tc * ih ), 0.0 ) * ih;
-  vec3  trl = exp( -abyssaLampK.rgb * ( tm + sqrt( dm2 ) ) );
+  vec3  trl = exp( -abyssaLampK.rgb * tm - abyssaLampP.rgb * sqrt( dm2 ) );
   return C.rgb * ( P.w * geo * win * win ) * trl;
 }
 // Both slots, scaled by the scattering coefficient (green local extinction, the channel
@@ -1003,6 +1013,7 @@ const AIR_U = new Float32Array(4);
   THREE.UniformsLib.fog.abyssaLampB = { value: LAMPB_U };
   THREE.UniformsLib.fog.abyssaLampBC = { value: LAMPBC_U };
   THREE.UniformsLib.fog.abyssaLampK = { value: LAMPK_U };
+  THREE.UniformsLib.fog.abyssaLampP = { value: LAMPP_U };
   for (const k in THREE.ShaderLib) {
     const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
     if (u && u.fogColor) {
@@ -1011,7 +1022,7 @@ const AIR_U = new Float32Array(4);
       u.abyssaBoltCol = { value: BOLT_COL_U }; u.abyssaBoltK = { value: BOLT_K_U };
       u.abyssaLampA = { value: LAMPA_U }; u.abyssaLampAC = { value: LAMPAC_U };
       u.abyssaLampB = { value: LAMPB_U }; u.abyssaLampBC = { value: LAMPBC_U };
-      u.abyssaLampK = { value: LAMPK_U };
+      u.abyssaLampK = { value: LAMPK_U }; u.abyssaLampP = { value: LAMPP_U };
     }
   }
   // THE BOLT NEEDS A NORMAL, and the fog chunk is shared by materials that have one and
@@ -1328,7 +1339,7 @@ function buildDome() {
       uSkyZen, uSkyHor, uSunCol, uSunDir: uSunDirU, uSunSize, uAir,
       abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U },
       abyssaLampB: { value: LAMPB_U }, abyssaLampBC: { value: LAMPBC_U },
-      abyssaLampK: { value: LAMPK_U },
+      abyssaLampK: { value: LAMPK_U }, abyssaLampP: { value: LAMPP_U },
       ...SKY_UNIFORMS
     },
     side: THREE.BackSide, depthWrite: false, fog: false,
@@ -1663,7 +1674,7 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
         // Ambient share follows the water's own radiance at the camera (uAmb, 1 in the
         // bright shallows, ~0.05 on the zone-2 floor), so the deep reads BLACK between
         // lit flakes instead of a uniform starfield; the flame's share is warm.
-        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 * uAmb.x ) + abyssaLampAC.rgb * ( 1.1 * lb );
+        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 * uAmb.x ) + abyssaLampAC.rgb * ( 0.32 * lb );
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `varying float vA; varying vec3 vC;
@@ -3884,6 +3895,19 @@ export function updateAtmosphere(depth01, camY = camera.position.y) {
   // standing player-depth vs camera-depth disagreement (CAM_UP 2.4 / CAM_BACK 9 on a
   // lagging spring), and it is what makes the background match the fog's asymptote.
   scene.background = ambientAt(camY, _outCol);
+  _atmCamY = camY; _atmStorm = storm;
+  // The lamp slots and the particulate read the lantern AFTER lighting.js has relit it
+  // (relight() scales its intensity and decay per zone), so game.js calls syncLamps()
+  // right after updateLighting. The boot/title prime has no lighting pass after it, so
+  // it syncs here once; every later frame's call from game.js simply overwrites.
+  if (!_lampsWired) syncLamps();
+  return _outCol;
+}
+let _atmCamY = 0, _atmStorm = 1, _lampsWired = false;
+// Called by game.js once a frame, AFTER updateLighting (see updateAtmosphere).
+export function syncLamps() {
+  _lampsWired = true;
+  const camY = _atmCamY, storm = _atmStorm;
   uLightPos.value.copy(lanternLight.position);
   updateLamps(camY, storm);
   // The grit's ambient share: the water's own radiance at the camera against the zone-0
@@ -3895,7 +3919,6 @@ export function updateAtmosphere(depth01, camY = camera.position.y) {
   _ambP.r = _outCol.r * 5; _ambP.g = _outCol.g * 5; _ambP.b = _outCol.b * 5;
   uPixP.value = pixScale(renderer, camera);
   updateParticulate(uTime.value, lanternLight.position, _ambP, camY, ATMOS.bokeh);
-  return _outCol;
 }
 
 // ---------------------------------------------------------------------------
@@ -3917,6 +3940,14 @@ function updateLamps(camY, storm) {
   LAMPK_U[1] = (rc * K_EXT[1] + sh * K_PART[1]) * storm;
   LAMPK_U[2] = (rc * K_EXT[2] + sh * K_PART[2]) * storm;
   LAMPK_U[3] = ATMOS.lampGain;
+  {
+    const on = SURFK && SURFK.on ? 1 : 0, pk = SURFK ? SURFK.pathK : 0;
+    const d = scene.fog ? scene.fog.density * pk * on : 0;
+    // With the surface patch off the light leg falls back to the eye leg's own numbers.
+    LAMPP_U[0] = on ? SURFK.path[0] * d : LAMPK_U[0];
+    LAMPP_U[1] = on ? SURFK.path[1] * d : LAMPK_U[1];
+    LAMPP_U[2] = on ? SURFK.path[2] * d : LAMPK_U[2];
+  }
   // In air the scatter would be the marine haze's, three orders thinner: both slots
   // off, and the chunk's whole lamp block is one compare. The lantern also has to be IN
   // the water: on the deck it hangs in air even when the camera dips below a crest.
