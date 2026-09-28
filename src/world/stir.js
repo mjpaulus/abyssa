@@ -50,7 +50,13 @@ let pHead = 0;
 export const P_SONAR = 1, P_STRIKE = 2, P_SLAM = 3, P_STEP = 4, P_BITE = 5;
 for (let i = 0; i < PULSE_N; i++) PU[i * 8 + 3] = -1e9;
 
+// uJolt: the last strong pulse for GPU readers (x, z, current front radius, strength).
+// A sonar front grows outward at its speed; the strength holds briefly then decays over
+// ~3.5 s, which is the slow re-emergence of everything that flinched.
+export const uJolt = { value: new THREE.Vector4(0, 0, 0, 0) };
+let jT0 = -1e9, jX = 0, jZ = 0, jReach = 0, jSpeed = 0, jK = 0;
 export function stirPulse(x, y, z, reach, speed, k, kind) {
+  if (k >= 0.5) { jT0 = now; jX = x; jZ = z; jReach = reach; jSpeed = speed; jK = Math.min(1, k); }
   const o = pHead * 8;
   PU[o] = x; PU[o + 1] = y; PU[o + 2] = z; PU[o + 3] = now; PU[o + 4] = speed; PU[o + 5] = reach; PU[o + 6] = k; PU[o + 7] = kind;
   pHead = (pHead + 1) % PULSE_N;
@@ -160,9 +166,15 @@ export function tickStir(dt, t) {
       // back-date the front so it is where the ring is now
       stirPulse(_ppos.x, _ppos.y, _ppos.z, 120, 36, 1, P_SONAR);
       PU[((pHead + PULSE_N - 1) % PULSE_N) * 8 + 3] = now - a;
+      jT0 = now - a;
     }
     sonarAge = a;
   }
+
+  // the jolt front for the plants
+  const ja = now - jT0;
+  uJolt.value.set(jX, jZ, jSpeed > 0 ? Math.min(jReach, ja * jSpeed) : jReach,
+    ja < 0 ? 0 : jK * (ja < 0.25 ? 1 : Math.max(0, 1 - (ja - 0.25) / 3.5)) * (jSpeed > 0 ? 1 : 0.8));
 
   // plant push spheres: the six live movers nearest the camera's subject (Sal)
   let k = 0;

@@ -10,6 +10,7 @@ import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } fro
 import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
 import { wreckSites, driftSkirt, leeOf } from './wrecks.js';
 import { siteParams } from './site.js';
+import { tickStir, uPush, uPushV, PUSH_GLSL } from './stir.js';
 
 const TAU = Math.PI * 2;
 
@@ -72,6 +73,7 @@ attribute vec4 aInst;   // phase, sway amp, arc-shorten k, glow
 uniform float uTime; uniform vec2 uCur; uniform vec2 uCull;
 uniform float uSway; uniform float uFreq;
 varying vec3 vFlora; varying vec3 vLocal;
+${PUSH_GLSL}
 attribute vec2 aBU;     // blade uv (across, along + 1); (0,0) on every non-blade part
 varying vec3 vBl;       // blade uv + the part's own phase
 #ifdef FLORA_BLADE
@@ -91,9 +93,25 @@ vBl = vec3(aBU, aVA.w);
     transformed += objectNormal * (sin(uTime * 2.3 + al * 17.0 + aVA.w * 5.0) * ea * ea * (0.3 + al) * uRipple);
   }
 #endif
-float w = uTime * uFreq + aInst.x;
-float s1 = sin(w - aVA.y * 3.1), s2 = sin(w * 1.71 - aVA.y * 5.7 + 1.3);
-vec2 d = (uCur * (0.34 + 0.66 * s1) + vec2(-uCur.y, uCur.x) * (0.4 * s2)) * (aInst.y * uSway * aVA.x);
+// THE CURRENT FIELD (anim-fauna). One slowly-varying world-space flow drives every
+// plant, so a meadow moves TOGETHER: the surge (the back-and-forth of the swell) is a
+// wave travelling DOWNSTREAM through the beds at ~4 u/s, so neighbours sway in phase and
+// a stand ripples from its upstream edge; gusts are a longer, faster envelope (~12 u/s)
+// that leans a whole stand over and lets it recover; tips lag their base. The instance
+// phase is only a small stiffness/phase jitter now, never the whole motion.
+vec3 cfIw = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+float cfMag = length(uCur);
+vec2 cfD = cfMag > 1e-5 ? uCur / cfMag : vec2(1.0, 0.0);
+vec2 cfP = vec2(-cfD.y, cfD.x);
+float cfAl = dot(cfIw.xz, cfD), cfAc = dot(cfIw.xz, cfP);
+float cfNat = uFreq * (0.92 + 0.16 * fract(aInst.x * 0.159));
+float cfPh = uTime * cfNat - cfAl * 0.16 + sin(cfAc * 0.05) * 0.8 + aInst.x * 0.12;
+float cfG = 0.5 + 0.5 * sin(cfAl * 0.035 - uTime * 0.42 + sin(cfAc * 0.021 + uTime * 0.05) * 2.0);
+cfG = cfG * cfG * (3.0 - 2.0 * cfG);
+float cfS1 = sin(cfPh - aVA.y * 1.6), cfS2 = sin(cfPh * 1.71 - aVA.y * 3.2 + 1.3 + cfAc * 0.09);
+vec2 cfDisp = (cfD * cfMag * (0.30 + 0.45 * cfG + (0.25 + 0.30 * cfG) * cfS1) + cfP * cfMag * (0.3 * cfS2 * (0.5 + 0.5 * cfG))) * (aInst.y * uSway * aVA.x);
+float w = cfPh;
+vec2 d = cfDisp;
 transformed.xz += d;
 transformed.y -= dot(d, d) * aInst.z;
 #ifdef FLORA_FAN
@@ -103,8 +121,15 @@ if (aFlut > 0.0) {
   float f = w * 2.2 + aVA.w;
   transformed += vec3(sin(f) * 0.7, cos(f * 1.31) * 0.5, sin(f * 0.73 + 2.1) * 0.7) * aFlut;
 }
+// PARTING: Sal and the big animals push the flexible parts aside as they pass
+// (stir.js spheres, world space, rotated back into this instance's frame).
+if (uSway > 0.0) {
+  mat3 cfM = mat3(modelMatrix * instanceMatrix);
+  vec3 cfW = stirPush((modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz, aVA.x);
+  transformed += (transpose(cfM) * cfW) / max(dot(cfM[0], cfM[0]), 1e-6);
+}
 // Distance LOD: collapse the instance to a degenerate point well inside the fog wall.
-vec3 iw = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+vec3 iw = cfIw;
 transformed *= 1.0 - smoothstep(uCull.x, uCull.y, distance(iw, cameraPosition));
 vFlora = vec3(aVA.z * aInst.w, aVA.y, aInst.x);
 vLocal = position;
@@ -449,6 +474,7 @@ function floraMat(o) {
   const cull = o.cull ?? 105;
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, uni, {
+      uPush, uPushV,
       uCull: { value: new THREE.Vector2(cull * 0.8, cull) },
       uSway: { value: o.sway ?? 0 }, uFreq: { value: o.freq ?? 0.85 },
       uGlowCol: { value: new THREE.Color(o.glow ?? 0x000000) },
@@ -1475,6 +1501,7 @@ export function reseedFlora() {
 }
 
 export function updateFlora(dt, t) {
+  tickStir(dt, t);   // anim-fauna: the shared disturbance field, first thing in the frame
   uni.uTime.value = t;
   styleTick();   // the ONE per-frame poll of the style dial (lib/paint.js)
   const a = CUR0 + 0.5 * Math.sin(t * 0.055);
