@@ -386,11 +386,11 @@ function trackSun() {
 // water.js uses for the eye leg, so the two legs agree.
 export const SURFK = {
   on: 1,
-  water: { wrap: 0.30, env: 1.0, horizon: 1.4, wet: 0.18, rim: 0.65, rimPow: 4.0, wetRough: 0.42 },
-  air:   { wrap: 0.00, env: 0.55, horizon: 1.4, wet: 0.00, rim: 0.00, rimPow: 4.0, wetRough: 0.30 },
+  water: { wrap: 0.30, env: 1.0, horizon: 1.4, wet: 0.18, rim: 0.65, rimPow: 4.0, wetRough: 0.42, trans: 0.9 },
+  air:   { wrap: 0.00, env: 0.55, horizon: 1.4, wet: 0.00, rim: 0.00, rimPow: 4.0, wetRough: 0.30, trans: 0.4 },
   path: [2.6, 1.45, 1.05], pathK: 1.0
 };
-const _surfO = { wrap: 0, env: 0, horizon: 0, wet: 0, rim: 0, rimPow: 4, wetRough: 0.3 };
+const _surfO = { wrap: 0, env: 0, horizon: 0, wet: 0, rim: 0, rimPow: 4, wetRough: 0.3, trans: 0 };
 function driveSurface(air) {
   const W = SURFK.water, A = SURFK.air, on = SURFK.on ? 1 : 0;
   for (const k in _surfO) _surfO[k] = (W[k] + (A[k] - W[k]) * air) * (k === 'rimPow' || k === 'wetRough' ? 1 : on);
@@ -632,7 +632,7 @@ export function updateLighting(depth01) {
 // Every factor rides (1 - air) or air explicitly, and LOOK.on = 0 is the pre-pass frame.
 export const LOOK = {
   on: 1,
-  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.22, fillDist: 11, xRim: 0.45, xSun: 1.45, xAmb: 0.6, xHemi: 1.0 },
+  water: { xLant: 2.4, xLantDeep: 1.6, lantDecay: 1.45, xFill: 0.22, fillDist: 11, xRim: 0.45, xSun: 2.0, xAmb: 0.45, xHemi: 0.85 },
   air:   { xLant: 1.0, xLantDeep: 0.0, lantDecay: 1.9,  xFill: 0.10, fillDist: 11, xRim: 0.7,  xSun: 1.35, xAmb: 0.55, xHemi: 0.92 },
   // THE DECK (air only): the key goes to sunlit white-gold, the omni fill to the sky's own
   // neutral (it was the shallows' teal, dyeing timber), and the hemisphere's lower end

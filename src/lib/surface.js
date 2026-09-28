@@ -31,6 +31,8 @@
 //  4. WET FILM (RE_Direct_Physical). A second, tighter GGX lobe on ROUGH dielectrics
 //     only (smoothstep on roughness, x (1 - metalness)): chitin, wet rock, slick kelp
 //     catch a narrow sheen off the lantern without the whole surface going plastic.
+//  4b. THIN-SHEET TRANSMISSION (RE_Direct_Physical, DOUBLE_SIDED programs only). Light
+//     from behind a leaf, fin or sail comes through it, coloured by the sheet itself.
 //  5. THE MEDIUM AS ENVIRONMENT (lights_fragment_maps). Materials without an envMap had
 //     ZERO indirect specular, so metal and wet surfaces went dead black away from a
 //     direct light, and grazing silhouettes had no Fresnel at all. The hemisphere light
@@ -49,7 +51,7 @@ import * as THREE from 'three';
 // material that clones these entries shares the same four numbers and one write per
 // frame reaches all of them. water.js uses the same trick for its fog uniforms.
 const SURF_U = new Float32Array([0, 0, 0, 0]);   // x wrap, y env gain, z horizon k, w wet film gain
-const SURF2_U = new Float32Array([0, 0, 0, 0]);  // x rim gain, y rim fwd power, z wet roughness, w unused
+const SURF2_U = new Float32Array([0, 0, 0, 0]);  // x rim gain, y rim fwd power, z wet roughness, w thin transmission
 const PATH_U = new Float32Array([0, 0, 0, 0]);   // rgb per-unit extinction on the light leg
 
 export const SURF = {
@@ -61,11 +63,11 @@ export const SURF = {
 // Called by lighting.js every frame (plain number writes into the shared arrays).
 export function setSurface(o) {
   SURF_U[0] = o.wrap; SURF_U[1] = o.env; SURF_U[2] = o.horizon; SURF_U[3] = o.wet;
-  SURF2_U[0] = o.rim; SURF2_U[1] = o.rimPow; SURF2_U[2] = o.wetRough;
+  SURF2_U[0] = o.rim; SURF2_U[1] = o.rimPow; SURF2_U[2] = o.wetRough; SURF2_U[3] = o.trans;
 }
 export function setPath(r, g, b) { PATH_U[0] = r; PATH_U[1] = g; PATH_U[2] = b; }
 export function surfaceState() {
-  return { wrap: SURF_U[0], env: SURF_U[1], horizon: SURF_U[2], wet: SURF_U[3], rim: SURF2_U[0], rimPow: SURF2_U[1], wetRough: SURF2_U[2], path: [PATH_U[0], PATH_U[1], PATH_U[2]], patched: SURF.patched };
+  return { wrap: SURF_U[0], env: SURF_U[1], horizon: SURF_U[2], wet: SURF_U[3], rim: SURF2_U[0], rimPow: SURF2_U[1], wetRough: SURF2_U[2], trans: SURF2_U[3], path: [PATH_U[0], PATH_U[1], PATH_U[2]], patched: SURF.patched };
 }
 
 (function patchSurface() {
@@ -120,6 +122,17 @@ export function surfaceState() {
 		abEdge *= abEdge; abEdge *= abEdge;
 		abDiff += directLight.color * ( abyssaSurf2.x * abEdge * pow( abFwd, abyssaSurf2.y ) );
 		reflectedLight.directDiffuse += abDiff * BRDF_Lambert( material.diffuseContribution );
+		// thin-sheet transmission: a DOUBLE_SIDED surface lit from its far side passes some
+		// of that light through, deepened in its own colour (albedo squared) and biased
+		// forward toward the eye. DOUBLE_SIDED is already a program define, so this adds
+		// no variant; leaves, fins, sails and nets are exactly the double-sided things.
+		#ifdef DOUBLE_SIDED
+		if ( abyssaSurf2.w > 0.0 && abNL < 0.0 ) {
+			float abT = ( - abNL ) * ( 0.35 + 0.65 * abFwd * abFwd );
+			vec3 abAlb = material.diffuseContribution;
+			reflectedLight.directDiffuse += directLight.color * ( abyssaSurf2.w * abT ) * BRDF_Lambert( min( abAlb * abAlb * 3.0, vec3( 1.0 ) ) );
+		}
+		#endif
 		// wet film: tight lobe on rough dielectrics only
 		if ( abyssaSurf.w > 0.0 && abNL > 0.0 ) {
 			float abWk = abyssaSurf.w * smoothstep( 0.45, 0.85, material.roughness ) * ( 1.0 - material.metalness );

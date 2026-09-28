@@ -403,6 +403,22 @@ function resolveStack(airK) {
   const wxK = airK + (1 - airK) * 0.65 * (1 - Math.max(0, Math.min(1, -y / 300)));
   return lookLerp(zone, zone, wx, wxK);
 }
+// AO BY REGIME (light pass). The deck's 1.0 radius was tuned for 0.1-0.5 u props on
+// planking; under water the things that need seating are hulls, rocks and sleepers at
+// 2-20 u, and at radius 1 a wreck sat ON the sand instead of IN it. The water radius
+// opens and the falloff tightens so the occlusion gathers under keels and in rock
+// clefts without greying open sand. Uniform-only config keys (n8ao rebuilds nothing for
+// these); written only when they move by more than a hair.
+const AOK = { on: 1, water: { r: 2.4, fall: 3.5, i: 3.2 }, air: { r: 1.0, fall: 5.0, i: 3.0 } };
+if (typeof window !== 'undefined') window.__aok = AOK;
+function updateAO(airK) {
+  if (!n8aoPass || !AOK.on) return;
+  const c = n8aoPass.configuration, W = AOK.water, A = AOK.air;
+  const r = W.r + (A.r - W.r) * airK, f = W.fall + (A.fall - W.fall) * airK, i = W.i + (A.i - W.i) * airK;
+  if (Math.abs(c.aoRadius - r) > 0.02) c.aoRadius = r;
+  if (Math.abs(c.distanceFalloff - f) > 0.02) c.distanceFalloff = f;
+  if (Math.abs(c.intensity - i) > 0.02) c.intensity = i;
+}
 function updateGrade(airK) {
   // Grain is texture for the MURK. On deck in daylight the same amount read as ISO-6400
   // noise across every plank in the polish audit (2026-09-25): fade it to a quarter in
@@ -851,6 +867,7 @@ export function render(dt) {
   dof.bokehScale = 1.35 * (1 + 0.45 * kd) * (1 - air) + 0.15 * air;
   updateHalation();
   updateGrade(air);
+  updateAO(air);
   // Exposure is set BEFORE the scene renders: three bakes it into every material.
   if (expPass) expPass.update(dt || 0.016, renderer, air);
   composer.render(dt);
