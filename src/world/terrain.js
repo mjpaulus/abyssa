@@ -498,11 +498,15 @@ function compileTerrain(sh) {
       // so only ground within a few metres of the diver carries the extra detail.
       float dCam = length(vWPos - cameraPosition);
       float mf = 1.0 - smoothstep(10.0, 56.0, dCam);
+      // Footprint fade for the fine grain (repeat 1.6 u): once a texel of it is smaller
+      // than a pixel it aliases into per-pixel speckle -- the sand's share of the 'grainy'
+      // report. Taken here, outside the branch, so the derivatives stay defined.
+      float gfp = 1.0 - smoothstep(0.35, 1.0, length(fwidth(vWPos.xz * 0.63)) * 24.0);
       if (mf > 0.01) {
         vec3 r1 = texture2D(uRipple, vWPos.xz * 0.085).xyz * 2.0 - 1.0;
         vec3 r2 = texture2D(uRipple, vWPos.zx * 0.63).xyz * 2.0 - 1.0;
         float k = mf * (0.22 + 1.05 * siltW);
-        tN = normalize(tN + vec3(r1.x * 1.15 + r2.x * 0.45, 0.0, r1.y * 1.15 + r2.y * 0.45) * k);
+        tN = normalize(tN + vec3(r1.x * 1.15 + r2.x * 0.45 * gfp, 0.0, r1.y * 1.15 + r2.y * 0.45 * gfp) * k);
       }`)
     // The sky light is blocked too: under a boulder or the Brooder's belly the
     // hemisphere and ambient terms are what remain once the direct sun is gone, and at

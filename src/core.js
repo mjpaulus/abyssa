@@ -10,6 +10,22 @@ export const renderer = new THREE.WebGLRenderer({ antialias: false, stencil: fal
 // and reallocated its render targets every single frame — which shows up as black
 // rectangles flashing and changing size.
 export const RES_SCALE = Math.min(devicePixelRatio || 1, 1.5);
+// DYNAMIC RESOLUTION (2026-09-28). RES_SCALE is now the CEILING; the live scale moves
+// between RES_FLOOR and it, driven by the GPU timer in postfx.js (updateResScale). At 1.5x
+// on a Retina laptop the frame is ~3.3 MP and the GPU median sat at ~19 ms against a
+// 16.7 ms slot -- the machine ran flat out. Dropping to 1.0x saves ~6 ms. Buffer dims stay
+// INTEGER (the black-rectangle rule above); a change goes through the same coalesced
+// applySize -> flushSize path as a window resize, so every render target is rebuilt once.
+export const RES_FLOOR = Math.min(1, RES_SCALE) * 0.85;
+let resScale = RES_SCALE;
+export function getRenderScale() { return resScale; }
+export function setRenderScale(s) {
+  s = Math.max(RES_FLOOR, Math.min(RES_SCALE, s));
+  if (Math.abs(s - resScale) < 0.01) return resScale;
+  resScale = s;
+  applySize();
+  return resScale;
+}
 renderer.setPixelRatio(1);
 renderer.setSize(Math.round(innerWidth * RES_SCALE), Math.round(innerHeight * RES_SCALE), false);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -96,8 +112,8 @@ function applySize() {
   // every render target twice and flashes black across the frame, so hold the last
   // good size instead and pick the real one up when layout returns.
   if (cssW < 2 || cssH < 2) return;
-  const w = Math.max(1, Math.round(cssW * RES_SCALE));
-  const h = Math.max(1, Math.round(cssH * RES_SCALE));
+  const w = Math.max(1, Math.round(cssW * resScale));
+  const h = Math.max(1, Math.round(cssH * resScale));
   if (w === lastW && h === lastH) return;   // never resize on an unchanged frame
   lastW = w; lastH = h;
   camera.aspect = cssW / cssH;

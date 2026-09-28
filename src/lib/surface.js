@@ -66,6 +66,9 @@ export function setSurface(o) {
   SURF2_U[0] = o.rim; SURF2_U[1] = o.rimPow; SURF2_U[2] = o.wetRough; SURF2_U[3] = o.trans;
 }
 export function setPath(r, g, b) { PATH_U[0] = r; PATH_U[1] = g; PATH_U[2] = b; }
+// Specular AA gain (patch 7): 1 on, 0 = stock three. window.__specAA for A/B.
+export function setSpecAA(k) { PATH_U[3] = k; return k; }
+if (typeof window !== 'undefined') window.__specAA = setSpecAA;
 export function surfaceState() {
   return { wrap: SURF_U[0], env: SURF_U[1], horizon: SURF_U[2], wet: SURF_U[3], rim: SURF2_U[0], rimPow: SURF2_U[1], wetRough: SURF2_U[2], trans: SURF2_U[3], path: [PATH_U[0], PATH_U[1], PATH_U[2]], patched: SURF.patched };
 }
@@ -183,5 +186,28 @@ export function surfaceState() {
 #endif`;
     ok++;
   }
-  SURF.patched = ok === 3;
+  // --- 7. specular anti-aliasing (2026-09-28, the "everything looks grainy" pass) ------
+  // three's geometryRoughness only reads the GEOMETRIC normal's derivatives, so a normal
+  // map finer than a pixel (spun helmet ridges, patina, chitin, sand grain) keeps its full
+  // gloss and each pixel lands on a different highlight: sparkle that reads as grain,
+  // worst at 1.5x render scale and under the new wet film. Kaplanyan-Hoffman: widen the
+  // lobe by the screen-space variance of the SHADED normal (sigma^2 0.25, kappa 0.18).
+  // abyssaPath.w is the gain (1 = on, 0 = stock three); it rides the path uniform because
+  // that one is already declared in every lit program by patch 1.
+  {
+    const s = C.lights_physical_fragment;
+    const a = 'material.roughness = min( material.roughness, 1.0 );';
+    if (ok >= 1 && s.includes(a)) {
+      C.lights_physical_fragment = s.replace(a, a + /* glsl */`
+{
+	vec3 abDn = fwidth( normal );
+	float abVar = 0.25 * dot( abDn, abDn ) * abyssaPath.w;
+	float abR2 = material.roughness * material.roughness;
+	material.roughness = min( sqrt( abR2 + min( 2.0 * abVar, 0.18 ) ), 1.0 );
+}`);
+      PATH_U[3] = 1;
+      ok++;
+    } else fail('specular AA');
+  }
+  SURF.patched = ok === 4;
 })();

@@ -14,7 +14,7 @@ import {
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { SURFACE_Y, GLASS, SKY, ZONE_H, ZONE_GAP } from './config.js';
-import { renderer, scene, camera, onResize } from './core.js';
+import { renderer, scene, camera, onResize, RES_SCALE, RES_FLOOR, getRenderScale, setRenderScale } from './core.js';
 import { playerLightSrc, parkSunShadow, unparkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
@@ -423,7 +423,10 @@ function updateGrade(airK) {
   // Grain is texture for the MURK. On deck in daylight the same amount read as ISO-6400
   // noise across every plank in the polish audit (2026-09-25): fade it to a quarter in
   // air, so the deck is clean and the water keeps its film.
-  grain.uniforms.get('uAmount').value = 0.045 * (1 - 0.75 * airK);
+  // 0.045 -> 0.026 (2026-09-28): Michael, "everything looks a little grainy", once the
+  // lighting pass brightened the shallows and the film finish steepened contrast, the
+  // same amplitude read as sensor noise rather than film.
+  grain.uniforms.get('uAmount').value = 0.026 * (1 - 0.75 * airK);
   const k = Math.max(0, Math.min(1, __grade.amount));
   const ks = Math.max(0, Math.min(1, styleK('grade')));
   // The stack applies even with the legacy depth CDL at 0 -- Flow commits.
@@ -1118,6 +1121,28 @@ function clearWindow() { wallN = 0; wallAt = 0; badT = 0; goodT = 0; sinceJudge 
 
 // dt is unused (kept for the call-site contract); `active` gates the sample; `cap` is
 // the governor's fps cap in force (0 = uncapped -> a 60 fps budget).
+// DYNAMIC RESOLUTION. The softest lever, so it acts long before the quality ladder:
+// hold the GPU median inside a band of the governor's frame slot by moving the render
+// scale (core.js). Cost goes with pixel count, so the step is sized from the square
+// root of the overshoot, quantised to 1/16 so the buffer dims repeat. A change waits
+// HOLD ms (the 64-frame GPU window must refill with the new size's frames first).
+// __drs.state() / __drs.on = 0 (pins the ceiling) for A/B.
+const DRS = { on: 1, lo: 0.55, hi: 0.78, target: 0.66, hold: 2500, t: 0, last: null };
+function updateResScale(now, cap) {
+  if (!DRS.on || !gpuSupported || gpuN < 48 || now - DRS.t < DRS.hold) return;
+  const g = gpuMedian(); if (g == null) return;
+  const budget = cap > 0 ? 1000 / cap : 1000 / 60, load = g / budget, s = getRenderScale();
+  if (load > DRS.hi || (load < DRS.lo && s < RES_SCALE - 0.01)) {
+    const want = Math.round(s * Math.sqrt(DRS.target / load) * 16) / 16;
+    const next = setRenderScale(Math.max(s - 0.25, Math.min(s + 0.125, want)));
+    if (next !== s) { DRS.t = now; DRS.last = { from: s, to: next, gpu: +g.toFixed(2), budget: +budget.toFixed(2) }; gpuN = 0; gpuAt = 0; }
+  }
+}
+if (typeof window !== 'undefined') window.__drs = Object.assign(DRS, {
+  state: () => ({ on: DRS.on, scale: getRenderScale(), ceil: RES_SCALE, floor: RES_FLOOR, gpu: gpuMedian(), last: DRS.last }),
+  pin: (x) => { DRS.on = 0; return setRenderScale(x == null ? RES_SCALE : x); }
+});
+
 export function samplePerf(dt, active, cap = 0) {
   if (perfDone) return;
   // Reset the clock whenever sampling is not running, or the gap across a title screen
@@ -1137,6 +1162,7 @@ export function samplePerf(dt, active, cap = 0) {
   // a timer while hidden). Those frames say nothing about the GPU.
   if ((document.hidden && !(DEV_LAB && window.__perf.judgeHidden)) || real > 0.25) return;
   if (warmT < WARMUP) { warmT += real; return; }
+  updateResScale(now, cap);
 
   wallWin[wallAt] = real * 1000; wallAt = (wallAt + 1) % WIN; if (wallN < WIN) wallN++;
   // The cooldown fills the window (those frames are the new chain's) but is not
