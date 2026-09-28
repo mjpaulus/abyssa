@@ -2542,6 +2542,7 @@ export function diverGrab(on) { grabOn = !!on; }
 function poMix(ch, v, w) { po[ch] += (v - po[ch]) * w; }
 let idleT = 0, valveT = -1, valveNext = 11, valveIdx = 0, valveW = 0;
 const VALVE_DUR = 2.7;
+const HEAD_CTR = 0.8;           // how much of the spine's yaw the neck takes back out
 let peerT = -1, peerW = 0;
 const PEER_DUR = 4.2;
 let prevBurstT = 0, burstW = 0;
@@ -2787,7 +2788,7 @@ export function updateDiver(dt, t, player) {
     // have to come round too.
     const sY = clamp(lkY.x * 0.38, -0.34, 0.34);
     po[CH.sYaw] += sY;
-    po[CH.nYaw] += lkY.x - sY * 0.5;
+    po[CH.nYaw] += lkY.x - sY * (1 - HEAD_CTR);
     po[CH.pYaw] -= lead * 0.12 * gb;
     po[CH.nPitch] -= lkX.x * 0.85;    // nPitch + is chin down
     po[CH.sPitch] -= lkX.x * 0.15;
@@ -3044,7 +3045,11 @@ export function updateDiver(dt, t, player) {
   sp.rotation.set(pc[CH.sPitch] - 0.4 * rcP.x, pc[CH.sYaw] + rcY.x, pc[CH.sRoll] + 0.3 * rcR.x);
 
   // brass helmet lags the torso, then over-settles
-  spring(hdY, -0.5 * pc[CH.sYaw] + pc[CH.nYaw], dt, 7, 0.55);
+  // Gaze stabilisation: the shoulders counter-rotate the pelvis every step, and at
+  // -0.5 the bonnet went along with half of it — from behind he swung his whole head
+  // left-right on every stride like a man scanning. A walker holds his gaze on the
+  // heading; -0.8 leaves the helmet a little of the torso's roll of motion and no more.
+  spring(hdY, -HEAD_CTR * pc[CH.sYaw] + pc[CH.nYaw], dt, 7, 0.55);
   // ...and the weight of it: each heel strike's settle nods the bonnet forward a beat
   // late (the under-damped spring supplies the lag and the one small rebound).
   spring(hdX, -0.35 * pc[CH.sPitch] + pc[CH.nPitch] - settle.x * 0.12, dt, 6.5, 0.6);
