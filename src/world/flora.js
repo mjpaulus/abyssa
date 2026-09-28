@@ -110,9 +110,16 @@ float cfG = 0.5 + 0.5 * sin(cfAl * 0.035 - uTime * 0.42 + sin(cfAc * 0.021 + uTi
 cfG = cfG * cfG * (3.0 - 2.0 * cfG);
 float cfS1 = sin(cfPh - aVA.y * 1.6), cfS2 = sin(cfPh * 1.71 - aVA.y * 3.2 + 1.3 + cfAc * 0.09);
 vec2 cfDisp = (cfD * cfMag * (0.30 + 0.45 * cfG + (0.25 + 0.30 * cfG) * cfS1) + cfP * cfMag * (0.3 * cfS2 * (0.5 + 0.5 * cfG))) * (aInst.y * uSway * aVA.x);
+// The flow is a WORLD direction: take it into this instance's frame (each plant is
+// yawed at random, and a local-space lean would point every one a different way).
+// M^T w over each column's length squared is exact for rotation x per-axis scale; the
+// length(M[0]) factor keeps the authored local amplitude.
+mat3 cfM = mat3(modelMatrix * instanceMatrix);
+vec3 cfC2 = max(vec3(dot(cfM[0], cfM[0]), dot(cfM[1], cfM[1]), dot(cfM[2], cfM[2])), vec3(1e-6));
+vec3 cfL = (transpose(cfM) * vec3(cfDisp.x, 0.0, cfDisp.y)) / cfC2 * sqrt(cfC2.x);
 float w = cfPh;
-vec2 d = cfDisp;
-transformed.xz += d;
+vec2 d = cfL.xz;
+transformed += cfL;
 transformed.y -= dot(d, d) * aInst.z;
 #ifdef FLORA_FAN
   transformed.z += sin(uTime * 1.5 + transformed.x * 7.0 + aInst.x) * aVA.x * 0.1;
@@ -135,11 +142,11 @@ if (aFlut > 0.0) {
   }
 #endif
 // PARTING: Sal and the big animals push the flexible parts aside as they pass
-// (stir.js spheres, world space, rotated back into this instance's frame).
+// (stir.js spheres, world space, taken back into this instance's frame: M^T w over each
+// column's length squared is exact for rotation x per-axis scale — tall kelp is non-uniform).
 if (uSway > 0.0) {
-  mat3 cfM = mat3(modelMatrix * instanceMatrix);
   vec3 cfW = stirPush((modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz, aVA.x);
-  transformed += (transpose(cfM) * cfW) / max(dot(cfM[0], cfM[0]), 1e-6);
+  transformed += (transpose(cfM) * cfW) / cfC2;
 }
 // Distance LOD: collapse the instance to a degenerate point well inside the fog wall.
 vec3 iw = cfIw;

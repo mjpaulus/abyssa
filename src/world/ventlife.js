@@ -281,7 +281,7 @@ function shrimpMaterial() {
           vec3 vlC = vec3(vlCa * vlR, aSwirl.w, vlSa * vlR);
           mat3 vlM = mat3(modelMatrix * instanceMatrix);
           vec3 vlO = vlScatter((modelMatrix * instanceMatrix * vec4(vlC, 1.0)).xyz);
-          transformed += (transpose(vlM) * vlO) / max(dot(vlM[0], vlM[0]), 1e-6);
+          transformed += (transpose(vlM) * vlO) / max(vec3(dot(vlM[0], vlM[0]), dot(vlM[1], vlM[1]), dot(vlM[2], vlM[2])), vec3(1e-6));
         }
         vShade = 0.74 + 0.34 * fract(aSwirl.x * 3.7);
         vVl = uv; vVlP = position;`);
