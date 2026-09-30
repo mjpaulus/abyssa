@@ -287,6 +287,34 @@ float gmask = vFlora.x;
     bc *= 1.0 - 0.18 * bp.b;
     diffuseColor.rgb = mix(diffuseColor.rgb, bc, isB);
     float ea = abs(bu.x - 0.5) * 2.0;
+#ifdef FLORA_KELP
+    {
+      // KELP COLOUR STRUCTURE. The blade used to be one colour end to end (the vertex
+      // colour only steps with the whole plant's height) and, with an emissive SSS term
+      // on top, it read as flat orange card in the dark zones. A kelp blade is dense and
+      // dark where it leaves the stipe, clears to its own colour through the working
+      // lamina, and dries paler and strawier toward the old eroding tip; the lamina
+      // buckles into corrugations that carry the colour, fine striations run its length,
+      // the veins read paler, and the margins are thinner and lighter. Hue stays the
+      // zone palette's; this only structures it.
+      float al = bu.y;
+      vec3 k0 = diffuseColor.rgb;
+      float klum = dot(k0, vec3(0.30, 0.59, 0.11));
+      vec3 kBase = k0 * vec3(0.58, 0.47, 0.44);
+      vec3 kTip = mix(k0, vec3(klum) * vec3(1.20, 1.07, 0.80), 0.42) * 1.10;
+      vec3 kc = mix(kBase, k0, smoothstep(0.0, 0.38, al));
+      kc = mix(kc, kTip, smoothstep(0.58, 1.0, al));
+      kc *= mix(0.80, 1.07, bp.b);
+      float kRes = 1.0 - smoothstep(0.35, 1.1, fwidth(bu.x) * 70.0);
+      float kStr = 0.5 + 0.5 * sin(bu.x * 70.0 + sin(al * 9.0 + vBl.z * 2.0) * 1.7);
+      kc *= 1.0 - 0.12 * kStr * kRes;
+      kc = mix(kc, kc * vec3(1.16, 1.08, 0.88), bp.r * 0.55);
+      kc *= 1.0 + 0.14 * ea * ea;
+      diffuseColor.rgb = mix(diffuseColor.rgb, kc, isB);
+      // bioluminescence (the rare lit plant) rides the veins, never the whole sheet
+      gmask *= mix(1.0, 0.15 + 0.85 * smoothstep(0.25, 0.8, bp.r), isB);
+    }
+#endif
     float edge = 0.95 - 0.16 * tip - 0.035 * sin(bu.y * 71.0 + vBl.z * 3.0) - 0.03 * sin(bu.y * 29.0 + vBl.z) - 0.05 * tip * sin(bu.y * 140.0);
     if (isB > 0.5 && uCut > 0.5 && ea > edge) discard;
     floraThin = isB * (1.0 - bp.g * 0.75);
@@ -456,7 +484,7 @@ float gmask = vFlora.x;
   diffuseColor.rgb = mix(diffuseColor.rgb, uSilt, smoothstep(0.4, 0.97, up) * 0.5);
   diffuseColor.rgb *= mix(0.4, 1.0, smoothstep(-0.85, 0.15, up));
 #endif
-#ifdef FLORA_SSS
+#if defined( FLORA_SSS ) && !defined( FLORA_SSSL )
   float fr = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 2.0);
   totalEmissiveRadiance += diffuseColor.rgb * uSSS * (0.18 + 0.82 * vFlora.y) * (0.3 + 0.7 * fr);
 #endif
@@ -469,6 +497,18 @@ totalEmissiveRadiance += uGlowCol * gmask * (0.4 + 0.6 * (0.5 + 0.5 * sin(uTime 
 // so it rides the key light's own colour and intensity (depth fade, day cycle, storm
 // dim — lighting.js owns all of that); no new light. gardens.js injects the same term.
 export const F_TRANS = `
+#ifdef FLORA_SSSL
+{
+  // LIT SUBSURFACE (kelp, seagrass): the scatter a thin living blade adds is light it
+  // RECEIVED — lantern, key and the medium's ambient — re-emitted softly, thinner blade
+  // and grazing view more. It was an emissive (albedo x uSSS, lighting-independent),
+  // which is why zone 2's kelp glowed flat orange in water with no light in it.
+  // (direct + indirect diffuse) / albedo is the irradiance the lamina actually got.
+  vec3 sIrr = (reflectedLight.directDiffuse + reflectedLight.indirectDiffuse) / max(diffuseColor.rgb, vec3(0.04));
+  float sFr = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 2.0);
+  reflectedLight.indirectDiffuse += diffuseColor.rgb * sIrr * uSSS * (0.18 + 0.82 * vFlora.y) * (0.3 + 0.7 * sFr) * (0.45 + 0.55 * floraThin);
+}
+#endif
 #if defined( FLORA_BLADE ) || defined( GD_BLADE )
 #if NUM_DIR_LIGHTS > 0
 {
@@ -1225,8 +1265,8 @@ function buildZoneMats() {
     const CR = [[0x5a3a46, 0x55523a, 1], [0x4a4452, 0x3c3c46, 0], [0x5a3e2c, 0x463a30, 0]][zi];
     const RX = { crustA: CR[0], crustB: CR[1], moss: CR[2] };
     return {
-    kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS'], blade: true, trans: 1.3, ripple: 0.018 }),
-    grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS'], blade: true, trans: 0.9, ripple: 0.006 }),
+    kelp: floraMat({ key: 'kelp', side: THREE.DoubleSide, rough: 0.72, sway: 1, freq: 0.7, cull: 130, sss: 0.38, glow: P.glow, def: ['SSS', 'SSSL', 'KELP'], blade: true, trans: 1.3, ripple: 0.018 }),
+    grass: floraMat({ key: 'grass', side: THREE.DoubleSide, rough: 0.8, sway: 1, freq: 1.15, cull: 85, sss: 0.4, glow: P.glow, def: ['SSS', 'SSSL'], blade: true, trans: 0.9, ripple: 0.006 }),
     // POLISH-VENTS: staghorn AND the new table coral share this one material/program
     // (FLORA_CORAL: corallite cups + bleached tips). Stony coral is rigid: sway 0.
     stag: floraMat({ key: 'stag', rough: 0.7, sway: 0, freq: 0.55, cull: 105, glow: P.glow, env: 0.14, def: ['CORAL'] }),
