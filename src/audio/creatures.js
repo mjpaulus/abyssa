@@ -92,7 +92,7 @@ function clicks(E, dest, t, n, dt0, dt1, f, q, lvl) {
 // VELKATH
 // ---------------------------------------------------------------------------
 function velkathFoot(E, x, y, z, w) {
-  const t = E.now() + 0.005, vg = E.emit('cre', x, y, z, 1.6, 1); if (!vg) return;
+  const t = E.now() + 0.005, vg = E.emit('cre', x, y, z, 1.6, 1); if (!vg) return; E.log('velkathFoot');
   const k = KC.BROODER * cl01(w) * E.startle;
   thump(E, vg, t, 46, 22, 0.9, 0.55 * k);
   noiseHit(E, vg, t, 'brown', 'lowpass', 320, 0.8, 0.008, 0.45, 0.3 * k, 120);
@@ -101,7 +101,7 @@ function velkathFoot(E, x, y, z, w) {
   if (w > 0.6) E.duck('amb', mix(1, 0.8, w), 0.02, 0.6, t);
 }
 function velkathCock(E, L) {
-  const p = L.head || L.pos, t = E.now() + 0.005, vg = E.emit('cre', p.x, p.y, p.z, 2.4, 2, p); if (!vg) return;
+  const p = L.head || L.pos, t = E.now() + 0.005, vg = E.emit('cre', p.x, p.y, p.z, 2.4, 2, p); if (!vg) return; E.log('velkathCock');
   grind(E, vg, t, 1.9, 0.5 * KC.BROODER, 22, 70, [[380, 8, 1], [960, 11, 0.7], [2300, 14, 0.35]]);
   const g = E.g(0, vg), lp = E.f('lowpass', 200, 2, g), o = E.o('sawtooth', 48, lp);   // the body taking the weight
   o.frequency.setValueAtTime(48, t); o.frequency.exponentialRampToValueAtTime(58, t + 1.8);
@@ -136,7 +136,7 @@ function velkathWake(E, L) {
 // ORUNE
 // ---------------------------------------------------------------------------
 function oruneExhale(E, L, big) {
-  const p = L.pos, t = E.now() + 0.01, dur = big ? 3.2 : 2.2, vg = E.emit('cre', p.x, p.y, p.z, dur + 1, 1); if (!vg) return;
+  const p = L.pos, t = E.now() + 0.01, dur = big ? 3.2 : 2.2, vg = E.emit('cre', p.x, p.y, p.z, dur + 1, 1); if (!vg) return; E.log('oruneExhale');
   const k = KC.HOARDER * (big ? 1 : 0.45);
   // the siphon's resonance: a low tube driven by breath
   const g = E.g(0, vg), f1 = E.f('bandpass', 92, 3, g), f2 = E.f('bandpass', 230, 2.2, g);
@@ -152,7 +152,7 @@ function oruneExhale(E, L, big) {
   for (let i = 0; i < n; i++) { const f = E.r(80, 240); E.bubble(t + E.r(0.2, dur * 0.8), f, f * E.r(1.4, 2), E.r(0.08, 0.2), E.r(0.05, 0.13) * k, vg); }
 }
 function oruneLash(E, A, delay = 0) {
-  const p = A.tip, t = E.now() + 0.005 + delay, vg = E.emit('cre', p.x, p.y, p.z, 1.8 + delay, 2, p); if (!vg) return;
+  const p = A.tip, t = E.now() + 0.005 + delay, vg = E.emit('cre', p.x, p.y, p.z, 1.8 + delay, 2, p); if (!vg) return; E.log('oruneLash');
   const k = KC.HOARDER;
   noiseHit(E, vg, t, 'pink', 'bandpass', 700, 1.4, 0.12, 1.2, 0.18 * k, 230);   // the slither
   for (let i = 0; i < 8; i++) {                                                 // suckers letting go
@@ -164,7 +164,7 @@ function oruneLash(E, A, delay = 0) {
 }
 function oruneGrab(E, L, on) {
   const p = L.pos, I = E.in, t = E.now() + 0.005;
-  const vg = E.emit('cre', I.px, I.py, I.pz, on ? 1.6 : 1, 3); if (!vg) return;
+  const vg = E.emit('cre', I.px, I.py, I.pz, on ? 1.6 : 1, 3); if (!vg) return; E.log('oruneGrab');
   if (on) {
     thump(E, vg, t, 95, 40, 0.4, 0.45 * E.startle);
     noiseHit(E, vg, t, 'brown', 'lowpass', 700, 1.5, 0.003, 0.35, 0.3 * E.startle, 200);   // the clamp: wet, sealing
@@ -187,7 +187,7 @@ function oruneWake(E, L) {
 // MHOR
 // ---------------------------------------------------------------------------
 function mhorJet(E, L, k) {
-  const p = L.pos, t = E.now() + 0.003, vg = E.emit('cre', p.x, p.y, p.z, 1.2, 1, p); if (!vg) return;
+  const p = L.pos, t = E.now() + 0.003, vg = E.emit('cre', p.x, p.y, p.z, 1.2, 1, p); if (!vg) return; E.log('mhorJet');
   const s = KC.HUNTER * k;
   noiseHit(E, vg, t, 'brown', 'lowpass', 300, 1.2, 0.03, 0.55, 0.45 * s, 110);
   thump(E, vg, t, 52, 30, 0.45, 0.3 * s);
@@ -195,7 +195,7 @@ function mhorJet(E, L, k) {
 }
 function mhorClicks(E, L, urgency) {
   const p = L.head || L.pos, t = E.now() + 0.003, n = 6 + Math.floor(urgency * 10);
-  const vg = E.emit('cre', p.x, p.y, p.z, 2.5, 1, p); if (!vg) return;
+  const vg = E.emit('cre', p.x, p.y, p.z, 2.5, 1, p); if (!vg) return; E.log('mhorClicks');
   const dt0 = mix(0.11, 0.05, urgency);
   clicks(E, vg, t, n, dt0, dt0 * mix(0.9, 0.5, urgency), E.r(1050, 1450), 7, 0.22 * KC.HUNTER);
   // under each train, a low wet tick: the beak
@@ -227,7 +227,7 @@ function mhorStrike(E, L) {
   E.log('mhorStrike');
 }
 function mhorStun(E, L) {
-  const p = L.pos, t = E.now() + 0.005, vg = E.emit('cre', p.x, p.y, p.z, 3, 2, p); if (!vg) return;
+  const p = L.pos, t = E.now() + 0.005, vg = E.emit('cre', p.x, p.y, p.z, 3, 2, p); if (!vg) return; E.log('mhorStun');
   let tt = t;
   for (let i = 0; i < 4; i++) tt = clicks(E, vg, tt + E.r(0.05, 0.3), 3 + Math.floor(E.r(0, 5)), E.r(0.02, 0.06), E.r(0.05, 0.12), E.r(800, 1600), 5, 0.15);
   const g = E.g(0, vg), lp = E.f('lowpass', 220, 2, g), o = E.o('sawtooth', 72, lp);
@@ -238,7 +238,7 @@ function mhorStun(E, L) {
 // His arrival from the deep: something far below calling up — a low, throat-less tone
 // that bends, and clicks under it.
 function mhorArrive(E, L) {
-  const p = L.pos, t = E.now() + 0.01, vg = E.emit('cre', p.x, p.y, p.z, 6, 3, p); if (!vg) return;
+  const p = L.pos, t = E.now() + 0.01, vg = E.emit('cre', p.x, p.y, p.z, 6, 3, p); if (!vg) return; E.log('mhorArrive');
   const g = E.g(0, vg), bp = E.f('bandpass', 380, 4, g), o = E.o('sawtooth', 58, bp);
   o.frequency.setValueAtTime(58, t); o.frequency.exponentialRampToValueAtTime(92, t + 1.6); o.frequency.exponentialRampToValueAtTime(49, t + 4.5);
   E.mod(6.5, 0.3, g.gain, t, t + 4.6);
@@ -422,13 +422,13 @@ function sharkPass(E, x, y, z, sp) {
   E.log('sharkPass');
 }
 function wingbeat(E, x, y, z) {
-  const t = E.now() + 0.005, vg = E.emit('cre', x, y, z, 0.9, 0); if (!vg) return;
+  const t = E.now() + 0.005, vg = E.emit('cre', x, y, z, 0.9, 0); if (!vg) return; E.log('wingbeat');
   const g = E.g(0, vg), lp = E.f('lowpass', 190, 1.2, g);
   E.ahr(g.gain, t, 0.18, 0.05, 0.45, 0.18 * KC.FAUNA);
   E.fire(E.n('brown', 1, lp), t, t + 0.7, [lp, g]);
 }
 function schoolSwish(E, C) {
-  const t = E.now() + 0.005, vg = E.emit('cre', C.x, C.y, C.z, 1.2, 0); if (!vg) return;
+  const t = E.now() + 0.005, vg = E.emit('cre', C.x, C.y, C.z, 1.2, 0); if (!vg) return; E.log('schoolSwish');
   const n = 1 + Math.floor(E.r(0, 3));
   for (let i = 0; i < n; i++) {
     const tt = t + i * E.r(0.08, 0.2), g = E.g(0, vg), bp = E.f('bandpass', 1400, 1.6, g);
