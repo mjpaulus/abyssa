@@ -621,7 +621,15 @@ export const ventColliders = [];
 let built = false;
 
 const uni = { uTime: { value: 0 }, uVis: { value: 0 }, uFogD: { value: 0.01 } };
-let plumePts = null, shimmerPts = null, ventLight = null;
+let plumePts = null, shimmerPts = null, ventLight = null, ventLent = false, ventVis = 0;
+// The shared throat light, lent for this frame when the vent field is asleep (else null).
+// The borrower sets position/colour/intensity/distance itself and must call it EVERY frame
+// it wants it; restoring colour and range is done here when the field takes it back.
+export function lendVentLight() {
+  if (!ventLight || ventVis > 0) return null;
+  ventLent = true;
+  return ventLight;
+}
 let root = null;          // the merged chimney/fumarole/crust group — disposed+regrown on reseed
 let chimneyMat = null;    // the ONE MeshStandardMaterial every solid piece shares — REUSED across reseeds, never recreated (zero recompiles)
 export const activeVents = [];   // {x,y,z,baseR} throat positions, non-dead — ventlife.js anchors its swarms here (array keeps identity across reseeds)
@@ -971,6 +979,11 @@ export function updateVents(dt, t) {
   const outK = clamp((camY - FADE_OUT1) / (FADE_OUT0 - FADE_OUT1), 0, 1);
   const vis = Math.min(inK, outK);
   uni.uVis.value = vis;
+  ventVis = vis;
+  if (vis > 0 && ventLight && ventLight.userData.lent) {
+    ventLight.userData.lent = false; ventLight.color.setHex(0xff7a3c); ventLight.distance = 13; ventLight.decay = 2.0;
+    ventLight.userData.scatter = undefined; ventLight.userData.lampBias = undefined;
+  }
 
   const awake = camY < FADE_IN0 && camY > FADE_OUT1;
   if (plumePts) plumePts.visible = awake;
@@ -1002,6 +1015,13 @@ export function updateVents(dt, t) {
   // The shared light follows the nearest hot throat. Slow uneven flicker — a vent
   // breathes, it does not strobe — and the same 25-unit approach curve as the sprite,
   // so light and glow arrive together.
+  // Out of the vent field (vis 0: zones 0 and 2) the throat light has nothing to do, and a
+  // sleeper's lair may BORROW it for its own fire (Mhor's furnace): lendVentLight() hands
+  // it over for the frame. The light count never changes; the owner here just stops
+  // writing it while it is lent, and takes it back the moment the field wakes.
+  if (vis > 0) ventLent = false;
+  if (ventLent) { ventLent = false; return; }
+  if (ventLight && vis <= 0) { ventLight.intensity = 0; return; }
   if (ventLight && best >= 0) {
     const v = hotVents[best];
     ventLight.position.set(v.x, v.y + 0.3, v.z);

@@ -44,8 +44,9 @@ export function makeHoard(L, idx, center, trailFrom) {
   // TWO instanced draws (brass, glass) where they were 34 meshes.
   const brass = registerPaint(new THREE.MeshStandardMaterial({ color: 0xc09a58, vertexColors: true, roughness: 0.38, metalness: 0.85, envMap: envTex, envMapIntensity: 1.0 }));
   const glass = grimeGlow(new THREE.MeshStandardMaterial({ color: 0x3a3226, vertexColors: true, roughness: 0.08, metalness: 0, envMap: envTex, envMapIntensity: 1.2, emissive: 0xffb45a, emissiveIntensity: 0.9 }));
-  H.glass = glass;
+  H.glass = glass; H.brass = brass;
   const LP = lanternParts(), mats = [], dummy = new THREE.Object3D();
+  H.LP = LP;
   const put = (x, z, s, tilt, bright) => {
     const y = terrainH(x, z, idx);
     dummy.position.set(x, y - 0.05 * s, z);
@@ -98,10 +99,13 @@ export function makeHoard(L, idx, center, trailFrom) {
   lampLens.position.copy(H.lamp.position);
   lampLens.rotation.y = crate.rotation.y;
   grp.add(lampLens);
-  const lampGlow = makeGlow(0xffc070, 7);
+  // (encounter pass: was a fixed 7-unit disc at 0.75 — a flat orange plate standing on
+  // the altar at every range. Now a tight corona that swells with range like the rest.)
+  const lampGlow = makeGlow(0xffc070, 2.4);
   lampGlow.material.fog = false;
   lampGlow.position.set(H.center.x, H.center.y + 1.3 + 0.8, H.center.z);
-  lampGlow.material.opacity = 0.75;
+  lampGlow.material.opacity = 0.5;
+  H.lampGlow = lampGlow;
   grp.add(lampGlow);
   H.lampParts = [H.lamp, lampLens, lampGlow];
   H.lampPos = lampGlow.position.clone();
@@ -142,10 +146,13 @@ export function makeHoard(L, idx, center, trailFrom) {
       const d = q.glow.position.distanceTo(player.pos);
       const far = 1 - Math.min(1, Math.max(0, (d - 40) / 110));
       q.glow.material.opacity = q.base * q.on * flick * (0.35 + 0.65 * far) * (d > 150 ? 0 : 1);
-      q.glow.scale.setScalar(q.s * (2.2 + Math.min(4, d * 0.035)));
+      // a tight corona near (the bloom does the halation; at 2.2x the lantern's size it
+      // read as a flat orange disc with the lantern cut out of it), swelling with range
+      q.glow.scale.setScalar(q.s * (1.05 + Math.min(3.4, d * 0.03)));
       q.glow.visible = q.on > 0.01;
     }
     glass.emissiveIntensity = 0.9 * (H.dark < 0 ? 1 : Math.max(0.05, 1 - H.dark / (H.lights.length * 0.5)));
+    if (!H.lampTaken) { const d = H.lampGlow.position.distanceTo(player.pos); H.lampGlow.scale.setScalar(2.4 + Math.min(5, d * 0.035)); }
     if (ev.msg) return;
     const p = player.pos, F = H.found;
     const near = (q, r) => Math.hypot(p.x - q.x, p.z - q.z) < r && Math.abs(p.y - q.y) < 12;

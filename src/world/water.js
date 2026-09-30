@@ -1713,7 +1713,7 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
     // Lit by the lantern slot the fog chunk's in-scatter reads (see GLSL_LAMP), and by
     // the water's own ambient at the camera: in the dark zones the grit is invisible
     // until the flame reaches it, which is the whole look.
-    abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U }, uAmb: uSnowAmb, uZone: uSnowZone,
+    abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U }, abyssaLampB: { value: LAMPB_U }, abyssaLampBC: { value: LAMPBC_U }, uAmb: uSnowAmb, uZone: uSnowZone,
     // The vents' warm columns: the SAME Float32Array vents.js fills per reseed (flat
     // xyzr per vent; three uploads a flat typed array as-is, no per-frame flatten) and
     // the same count object, so the snow can never disagree with the chimneys.
@@ -1723,7 +1723,7 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
     uniforms: u, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, fog: false,
     vertexShader: `uniform vec3 uCam, uLightPos, uColA, uColB, uAmb;
-      uniform vec4 abyssaLampA, abyssaLampAC, uZone;
+      uniform vec4 abyssaLampA, abyssaLampAC, abyssaLampB, abyssaLampBC, uZone;
       uniform float uTime, uL, uSize, uAlpha, uFall, uPix, uExtG, uDepth, uExtK;
       uniform vec4 uVentCols[${VENT_COLS_MAX}];
       uniform int uVentN;
@@ -1793,7 +1793,21 @@ function snowLayer(N, L, sizeMul, alpha, fall, colA, colB, extK = 0.75) {
         // Ambient share follows the water's own radiance at the camera (uAmb, 1 in the
         // bright shallows, ~0.05 on the zone-2 floor), so the deep reads BLACK between
         // lit flakes instead of a uniform starfield; the flame's share is warm.
-        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 * uAmb.x ) + abyssaLampAC.rgb * ( 0.32 * lb );
+        // THE SECOND LAMP IN THE GRIT: slot B (a sleeper's body glow, the hoard, a lit ward,
+        // the vent throat) picks flakes out of the dark round ITSELF, so a thing passing in
+        // the murk carries a drifting cloud of lit motes that parallax against the black --
+        // the water showing its volume. Same falloff and window; no glint (the source is
+        // rarely between flake and lens). The gain folds lampGainB's ratio back out so a
+        // B light of intensity I lights grit as a lantern of intensity I would.
+        float bB = 0.0;
+        if ( abyssaLampB.w > 0.0 ) {
+          vec3 db = w - abyssaLampB.xyz;
+          float db2 = dot( db, db );
+          float bq = db2 / max( abyssaLampBC.w * abyssaLampBC.w, 1.0 );
+          float bw = clamp( 1.0 - bq * bq, 0.0, 1.0 );
+          bB = abyssaLampB.w * 0.09 * bw * bw / max( db2, 0.8 );
+        }
+        vC = mix( uColA, uColB, aSeed.z ) * ( 0.45 * uAmb.x ) + abyssaLampAC.rgb * ( 0.32 * lb ) + abyssaLampBC.rgb * ( 0.32 * bB );
         gl_Position = projectionMatrix * mv;
       }`,
     fragmentShader: `varying float vA; varying vec3 vC;
@@ -4113,7 +4127,10 @@ function updateLamps(camY, storm) {
       const R = o.distance > 0 ? o.distance : 60;
       const d2 = _lp.distanceToSquared(cp);
       if (d2 > (R + 40) * (R + 40)) continue;
-      const sc = o.intensity * (o.color.r + o.color.g + o.color.b) / Math.max(d2, 4);
+      // A light may carry an authored weight (userData.lampBias: the ENCOUNTER's key light
+      // outranks a brighter prop, so the creature keeps the one slot while it is in play).
+      const ud = o.userData, bias = ud.lampBias !== undefined ? ud.lampBias : 1;
+      const sc = bias * o.intensity * (o.color.r + o.color.g + o.color.b) / Math.max(d2, 4);
       if (sc > bestS) { bestS = sc; best = o; }
     }
   }
@@ -4121,7 +4138,10 @@ function updateLamps(camY, storm) {
     best.getWorldPosition(_lp);
     LAMPB_U[0] = _lp.x; LAMPB_U[1] = _lp.y; LAMPB_U[2] = _lp.z;
     // Its gain rides on its intensity so the chunk keeps one gain uniform.
-    LAMPB_U[3] = best.intensity * ATMOS.lampGainB / Math.max(ATMOS.lampGain, 1e-4);
+    // (userData.scatter scales one light's share: a ward's white-hot flash is a point on the
+    // skin, not a lamp in the water, and a creature's cold body glow is mostly in-scatter)
+    const us = best.userData.scatter !== undefined ? best.userData.scatter : 1;
+    LAMPB_U[3] = best.intensity * us * ATMOS.lampGainB / Math.max(ATMOS.lampGain, 1e-4);
     LAMPBC_U[0] = best.color.r; LAMPBC_U[1] = best.color.g; LAMPBC_U[2] = best.color.b;
     LAMPBC_U[3] = best.distance > 0 ? best.distance : 60;
   } else LAMPB_U[3] = 0;

@@ -164,6 +164,10 @@ export function disposeSleeper(L) {
   if (!L) return;
   if (live === L) { live = null; setWardTargets(-1, null); }
   for (const g of L.sigils) g.light.intensity = 0;
+  // Kinds that STAGE the pool (hoarder, hunter: a light that is not a ward's rides the
+  // hoard or the body) retint and re-range it; hand every pool light back as built so the
+  // next kind (and the serpent, which never restages) inherits the shipped rig exactly.
+  for (const pl of sigilPool) { pl.intensity = 0; pl.color.setHex(0xffe8a8); pl.distance = 50; pl.decay = 2.0; pl.userData.scatter = undefined; pl.userData.lampBias = undefined; }
   scene.remove(L.grp);
   if (L.onDispose) L.onDispose();
   L.grp.traverse(o => {
@@ -215,11 +219,30 @@ export function makeWard(L, i, scale) {
   light.intensity = 0;
   const halo = makeGlow(0xffe8a8, 0);
   L.grp.add(halo, sg);
-  return { lit: false, grp: sg, mesh: sg, rune, light, halo, pulse: Math.random() * 7, flashT: 9, rev: 1, note: 352 + i * 40, scale };
+  // THE SIGIL STYLE (L.sigilStyle, opted into per kind): a ward reads as a RUNE, not a sun.
+  // The glyph carries the read (brighter, over-unity when lit so bloom does the halation);
+  // the halo sprite shrinks to a tight bloom round the ring; the borrowed light still
+  // lights the hide round it but barely scatters into the water (a lit ward used to be the
+  // strongest lamp-B source in the zone and washed the whole frame yellow-green).
+  const sig = !!L.sigilStyle;
+  if (sig) { halo.material.opacity = 0; light.userData.scatter = 0.04; }
+  return { lit: false, grp: sg, mesh: sg, rune, light, halo, pulse: Math.random() * 7, flashT: 9, rev: 1, note: 352 + i * 40, scale, sig };
 }
 export function wardIdle(g, dt, haloK) {
   g.pulse += dt;
   const rv = g.rev;
+  if (g.sig) {
+    const w = Math.sin(g.pulse * 2);
+    g.rune.material.opacity = (0.55 + 0.25 * w) * rv;
+    g.rune.material.color.setRGB(1, 0.91, 0.66);
+    g.light.intensity = (8 + 5 * w) * rv;
+    g.light.userData.scatter = 0.04;
+    g.halo.scale.setScalar(Math.max(0.001, haloK * (0.34 + 0.04 * w) * rv));
+    g.halo.material.opacity = 0.32 * rv;
+    g.light.position.copy(g.grp.position);
+    g.halo.position.copy(g.grp.position);
+    return;
+  }
   g.rune.material.opacity = (0.22 + 0.16 * Math.sin(g.pulse * 2)) * rv;
   g.light.intensity = (8 + 5 * Math.sin(g.pulse * 2)) * rv;
   g.halo.scale.setScalar(Math.max(0.001, (haloK * 1.2 + Math.sin(g.pulse * 2) * 0.6) * rv));
@@ -231,7 +254,14 @@ export function wardLitPose(g, dt, haloK) {
   g.rune.material.opacity = 1;
   g.grp.scale.setScalar(g.scale * (1 + 0.04 * Math.sin(g.pulse * 3)));
   g.light.intensity = 140 + 40 * Math.sin(g.pulse * 3);
-  g.halo.scale.setScalar(haloK * 3);
+  if (g.sig) {
+    // lit: the glyph burns over-unity (bloom haloes it), the sprite stays a tight corona
+    const k = 1.55 + 0.25 * Math.sin(g.pulse * 3);
+    g.rune.material.color.setRGB(k, k * 0.9, k * 0.66);
+    g.light.userData.scatter = 0.04;
+    g.halo.scale.setScalar(haloK * 0.62);
+    g.halo.material.opacity = 0.42;
+  } else g.halo.scale.setScalar(haloK * 3);
   g.light.position.copy(g.grp.position);
   g.halo.position.copy(g.grp.position);
 }

@@ -27,7 +27,7 @@ import { terrainH } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import { wreckSites } from '../../world/wrecks.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
+  setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
 } from './common.js';
 import * as G from './hoarderGeo.js';
 import { makeHoard } from './hoard.js';
@@ -60,6 +60,9 @@ const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
 const RM_OF_SIZE = 0.95, ARM_OF_SIZE = 5.0, NA = 8, RINGS = 40, RR = 128, RAD = 28, SUCK = 36;
 const WARD_ARMS = [0, 2, 4, 6], WARD_S = 0.22;
+// Her own light: a cold, pale, sea-green phosphor (period-correct foxfire, never violet),
+// and the hoard's warm lamp-flame she lies among.
+const ORUNE_PHOTO = 0x8fb49a, FLAME = 0xff8e3c, WARD_COL = 0xffe8a8;
 const UP = V3(0, 1, 0);
 
 const _a = V3(), _b = V3(), _c = V3(), _d = V3(), _t = V3(), _u = V3(), _w = V3(), _p = V3(), _q = new THREE.Quaternion();
@@ -136,7 +139,8 @@ export function makeHoarder(idx, cfg) {
     reach: 5, collR: Rm * 0.85, flare: 0, dormant: true, rise: 0, riseE: 0, riseTarget: 0,
     yawV: 0, crawl: 0, blinkT: 9, blinkN: 3, look: { y: { x: 0, v: 0 }, p: { x: 0, v: 0 }, ty: 0, tp: 0, next: 0 }, brPh: 0, cloudPh: 0, mood: 0, armsInit: false,
     pos: V3(), yaw: 0, bodyY: 0, head: V3(), spine: [V3(), V3(), V3(), V3()], sigils: [], arms: [],
-    grab: null, lashCd: 3, _pd: 1e9, suckK: 0.27, suckSink: 0, hideK: 1, lidK: 1.25, lidKb: 1.25, sculpted: false
+    grab: null, lashCd: 3, _pd: 1e9, suckK: 0.27, suckSink: 0, hideK: 1, lidK: 1.25, lidKb: 1.25, sculpted: false,
+    sigilStyle: true, webK: 0.35, webSeats: null, clutch: [], stage: null
   };
 
   // ---- skin ----
@@ -147,8 +151,9 @@ export function makeHoarder(idx, cfg) {
   const skin = registerPaint(G.wetSkin(new THREE.MeshStandardMaterial({
     map: sk.map, normalMap: sk.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: sk.roughnessMap, vertexColors: true,
     roughness: 1.55, metalness: 0, envMap: envTex, envMapIntensity: 0.28,
-    // faint violet photophores: in the dark zone the only way to see the size of her
-    emissive: 0x6b58d8, emissiveMap: sk.emissiveMap, emissiveIntensity: 0.25
+    // her photophores: a cold pale sea-green, faint (encounter pass: they were violet-blue
+    // 0x6b58d8 at 0.25-0.57 and read as neon specks; the hoard's lanterns now show her size)
+    emissive: ORUNE_PHOTO, emissiveMap: sk.emissiveMap, emissiveIntensity: 0.08
   }), 'abyssa-orune-skin', 1, true));
   L.skin = skin;
   // passing clouds (chromatophores) and the siphon's pulse, patched over wetSkin
@@ -303,6 +308,64 @@ export function makeHoarder(idx, cfg) {
     A.tip.copy(A.drape);
   }
 
+  // ---- THE LAMPS SHE LIES AMONG (encounter pass) ------------------------------------
+  // The hoard used to sit 30 u off her lair, so in a lightless zone she was a black ridge
+  // beside a pool of light. Now four drowned lanterns lie IN her coils, one beside each
+  // sprawled ward arm, on the silt, burning low: each is a real light (a borrowed ward-pool
+  // light while that ward sleeps dark), so her arms are lit from below along their length
+  // and her mass is read against the pools. When she wakes they are the first to go out.
+  {
+    const H = L.hoard, dm = new THREE.Object3D(), mats = [];
+    for (let k = 0; k < WARD_ARMS.length; k++) {
+      const A = L.arms[WARD_ARMS[k]];
+      const dx = A.drape.x - lair.x, dz = A.drape.z - lair.z, dl = Math.hypot(dx, dz) || 1;
+      const f = 0.42 + 0.08 * k, sd = (k & 1) ? 1 : -1, off = 3.1 + 0.5 * k;
+      const x = lair.x + dx * f - dz / dl * off * sd, z = lair.z + dz * f + dx / dl * off * sd;
+      const y = terrainH(x, z, idx), sc = 1.15;
+      dm.position.set(x, y - 0.05 * sc, z);
+      dm.scale.setScalar(sc);
+      dm.rotation.set(k === 2 ? 1.25 : 0.12 * sd, k * 1.9, 0.08);            // one lies on its side
+      dm.updateMatrix();
+      mats.push(dm.matrix.clone());
+      L.clutch.push({ pos: V3(x, y + (k === 2 ? 0.5 : 0.95) * sc, z), on: 1, k });
+    }
+    // THE HEAP: her oldest lanterns, piled BEHIND her in the lee of her mantle. A diver
+    // comes in from the raft's side, and she lies facing him with the trawler and the
+    // hoard in front of her — so this is the one light that can sit behind her from where
+    // he looks. It is the lamp-B source: a wide amber haze in the water past her, and she
+    // reads first as a black mass against it (silhouette, then scale, then detail). It
+    // is the last light to go out when she rises.
+    {
+      // (the lowest ground in an arc behind her: on a bank the heap stood ABOVE her mantle,
+      // a lamp in the sky, instead of in her lee where her body can eclipse it)
+      let hx = 0, hz = 0, lo = 1e9;
+      for (let k = -4; k <= 4; k++) {
+        const a = k * 0.22, ca = Math.cos(a), sa = Math.sin(a), d = Rm * 1.3 + 3;
+        const dx = out.x * ca + perp.x * sa, dz = out.z * ca + perp.z * sa;
+        const x = lair.x + dx * d, z = lair.z + dz * d, h = terrainH(x, z, idx) + Math.abs(k) * 0.4;
+        if (h < lo) { lo = h; hx = x; hz = z; }
+      }
+      for (let k = 0; k < 6; k++) {
+        const a = k / 6 * TAU + 0.4, r = k === 0 ? 0 : 1.2 + 0.5 * (k & 1);
+        const x = hx + Math.cos(a) * r, z = hz + Math.sin(a) * r, y = terrainH(x, z, idx), sc = 0.95 + 0.12 * (k % 3);
+        dm.position.set(x, y - 0.05 + (k === 0 ? 0.5 : 0), z);
+        dm.scale.setScalar(sc);
+        dm.rotation.set(k % 2 ? 1.3 : 0.2, k * 2.3, k % 3 ? 0.3 : -1.1);
+        dm.updateMatrix();
+        mats.push(dm.matrix.clone());
+      }
+      // the light rides at her mantle's height where the ground allows: her body eclipses
+      // its core and the haze round it rims her
+      L.heap = { pos: V3(hx, Math.max(terrainH(hx, hz, idx) + 2.4, floor0 + Rm * 0.45), hz), on: 1 };
+    }
+    const cb = new THREE.InstancedMesh(H.LP.brass, H.brass, mats.length), cg = new THREE.InstancedMesh(H.LP.glass, H.glass, mats.length);
+    for (let k = 0; k < mats.length; k++) { cb.setMatrixAt(k, mats[k]); cg.setMatrixAt(k, mats[k]); }
+    cb.castShadow = true;
+    grp.add(cb, cg);
+    // the pool, staged: slot -> which source it serves, and its eased intensity
+    L.stage = sigilPool.map(() => ({ src: -1, cur: 0 }));
+  }
+
   L.onSlash = (pos, fwd) => {
     if (!L.grab) return;
     const A = L.arms[L.grab.arm];
@@ -358,7 +421,9 @@ function cloudPatch(m, L, key, orm) {
           transformed += normal * uSiph * exp(-dot(sq, sq) / 0.035);
         }`)
       .replace('#include <project_vertex>', '#include <project_vertex>\nvCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-    if (orm) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', THREE.ShaderChunk.emissivemap_fragment.replace('emissiveColor.rgb', 'emissiveColor.bbb * smoothstep(0.08, 0.3, emissiveColor.b)'));
+    // (encounter pass: the mask's soft skirts lit too, so every photophore read as a fat
+    // speck; only the lens cores glow now)
+    if (orm) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', THREE.ShaderChunk.emissivemap_fragment.replace('emissiveColor.rgb', 'emissiveColor.bbb * smoothstep(0.3, 0.7, emissiveColor.b)'));
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform vec4 uCloud;\nvarying vec3 vCloudW;')
       .replace('#include <color_fragment>', `#include <color_fragment>
@@ -377,7 +442,7 @@ function sculptSkin(maps, key, L, extra) {
   const m = registerPaint(G.wetSkin(new THREE.MeshStandardMaterial(Object.assign({
     map: maps.map, normalMap: maps.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: maps.ormMap, aoMap: maps.ormMap, aoMapIntensity: 1,
     roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.28,
-    emissive: 0x6b58d8, emissiveMap: maps.ormMap, emissiveIntensity: 0.25
+    emissive: ORUNE_PHOTO, emissiveMap: maps.ormMap, emissiveIntensity: 0.08
   }, extra || {})), key, 0, false));
   return cloudPatch(m, L, key + '-m', true);
 }
@@ -449,7 +514,12 @@ function installSculpt(L, A) {
   L.keepGeo.add(lp.brass); L.keepGeo.add(lp.glass);
   const S = (meta.lanterns || []).map(h => ({ p: new THREE.Vector3(...h.p), n: new THREE.Vector3(...h.n) }));
   const brassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x8a6a3a, vertexColors: true, roughness: 0.6, metalness: 0.65, envMap: envTex, envMapIntensity: 0.45 }));
-  const glassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x3a342a, vertexColors: true, roughness: 0.12, metalness: 0, envMap: envTex, envMapIntensity: 1.0 }));
+  // (encounter pass: not quite dead — the ones in her web KINDLE as the hoard goes out, the
+  // light she drew in; emissive driven by L.webK, and a borrowed pool light rides seat 0)
+  const glassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x3a342a, vertexColors: true, roughness: 0.12, metalness: 0, envMap: envTex, envMapIntensity: 1.0,
+    emissive: FLAME, emissiveIntensity: 0 }));
+  L.webGlass = glassM;
+  L.webSeats = S.map(h => h.p.clone().addScaledVector(h.n, 0.55 / L.R));
   // (the flame lathe rides in the glass geometry: dead lanterns show it as a dark stub)
   const lb = new THREE.InstancedMesh(lp.brass, brassM, S.length), lg = new THREE.InstancedMesh(lp.glass, glassM, S.length);
   const q = new THREE.Quaternion(), qt = new THREE.Quaternion(), sc = new THREE.Vector3(), mm = new THREE.Matrix4();
@@ -533,7 +603,11 @@ function buildArm(L, A, dt, player) {
       const s = i / n;
       if (s < 0.50) continue;
       const u = (s - 0.50) / 0.50, k = A.wrap * THREE.MathUtils.smoothstep(s, 0.50, 0.66);
-      const th = u * 2.4 * TAU + L.t * 0.8 + A.phase, rr = 1.25 + 0.5 * (1 - u) - 0.25 * A.wrap;
+      // (encounter pass: the coil radius now clears the arm's own girth. At 1.25 u a 2 u
+      // thick arm swallowed him whole: the camera saw a pale cup of sucker-face with his
+      // lantern burning inside it — the "glowing block with dark holes" in front of her.)
+      const rs = A.r0 * Math.pow(1 - s, 0.85) + 0.12;
+      const th = u * 2.4 * TAU + L.t * 0.8 + A.phase, rr = 1.0 + 0.4 * (1 - u) - 0.2 * A.wrap + rs * 1.05;
       _tg.copy(player.pos).addScaledVector(_e1, Math.cos(th) * rr).addScaledVector(_e2, Math.sin(th) * rr);
       _tg.y += 1.1 - 2.4 * u;
       T[i].lerp(_tg, k);
@@ -743,7 +817,9 @@ function poseHoarder(L, dt, player) {
   }
   L.eyeMat.emissiveIntensity = (0.05 + 2.0 * shine) * open;
   // the freckles breathe slowly asleep, run brighter and quicker when she is roused
-  L.skin.emissiveIntensity = L.calmed ? 0.18 : (0.16 + 0.10 * Math.sin(L.t * (L.dormant ? 0.4 : 1.6))) * (1 + 1.2 * L.riseE);
+  // (encounter pass: a breath of cold phosphor, not a starfield; the passing clouds'
+  // flare, uCloud.z, still carries her mood across them)
+  L.skin.emissiveIntensity = L.calmed ? 0.10 : (0.07 + 0.04 * Math.sin(L.t * (L.dormant ? 0.4 : 1.6))) * (1 + 0.8 * L.riseE);
   // passing clouds: their speed, depth and flare are her mood
   const md = L.mood;
   L.cloudU.uCloud.value.set(L.cloudPh, 0.14 + 0.36 * md, 0.25 + 1.3 * md, 0.45 + 0.45 * md);
@@ -937,11 +1013,93 @@ export function updateHoarder(L, dt, t, player) {
       g.light.intensity = Math.max(55, 120 - L.calmT * 8) + 6 * Math.sin(g.pulse * 1.3);
       g.light.position.copy(g.grp.position);
       g.halo.position.copy(g.grp.position);
-      g.halo.scale.setScalar(haloK * 2.4);
+      g.halo.scale.setScalar(haloK * 0.55);
+      g.halo.material.opacity = 0.4;
       g.rune.material.opacity = 0.9;
+      g.light.userData.scatter = 0.05;
     }
   }
   wardFlashes(L, dt, null);
+  stageHoard(L, dt);
   L.pPrev.copy(player.pos);
   return ev;
+}
+
+// ---- THE STAGING (encounter pass) ---------------------------------------------------
+// No light is ever added (the count is sacred). The ward pool's five lights are STAGED:
+// a ward that needs its light (rung by the sonar, lit, flashing, calmed) owns it; while it
+// sleeps dark its light serves the hoard instead. Slot 5 (she has four wards) is always
+// hers: the lantern cradled in her web.
+//   ASLEEP: four lanterns burn low in her coils (slots 1-4) and one in her web under her
+//     face (slot 5): she is a sleeping mass lit from below by the lights she keeps.
+//   WAKING (the rite): the coil lanterns go out first, one by one, then the hoard; as they
+//     die the lanterns caught in her web KINDLE — she has drawn the light in. Awake she
+//     carries it: uplit from inside her web, her arms black against her own glow.
+//   CALMED: the web settles to an ember and the wards take the lighthouse.
+// A slot changing source fades out where it is, jumps, and fades in: never a pop.
+const _sw = V3();
+// the rig's numbers in one place (window.__stageO for look-dev)
+const SO = { heapI: 90, heapR: 32, heapS: 1.0, webI: 110, webS: 0.25, cradleI: 40, coilI: 42, coilR: 26, coilS: 0.1, seatI: 40 };
+if (typeof window !== 'undefined') window.__stageO = SO;
+function stageHoard(L, dt) {
+  const H = L.hoard, st = L.stage;
+  if (!st) return;
+  // the web: its kindling follows the hoard going out
+  const dark = H.dark < 0 ? 0 : smooth(H.dark, 6.0, 11.0);
+  // the heap behind her holds out longest: it gutters while she rises and dies as she stands
+  if (L.heap && H.dark > 7.5) L.heap.on = Math.max(0, L.heap.on - dt * 0.7);
+  const webT = L.calmed ? 0.3 : L.dormant ? 0.35 : 0.35 + 0.65 * dark;
+  L.webK += (webT - L.webK) * Math.min(1, dt * 0.8);
+  const flick = 0.86 + 0.08 * Math.sin(L.t * 7.1) * Math.sin(L.t * 2.3) + 0.06 * Math.sin(L.t * 13.7);
+  if (L.webGlass) L.webGlass.emissiveIntensity = 2.2 * L.webK * flick;
+  // the coil lanterns: out first, a beat apart, as she stirs
+  for (let k = 0; k < L.clutch.length; k++) {
+    const c = L.clutch[k];
+    if (H.dark >= 0 && H.dark > 0.2 + k * 0.55) c.on = Math.max(0, c.on - dt * 1.4);
+  }
+  for (let i = 0; i < st.length; i++) {
+    const pl = sigilPool[i], s = st[i], g = i < L.sigils.length ? L.sigils[i] : null;
+    if (g && (g.lit || g.rev > 0.01 || g.flashT < 1.5 || L.calmed)) {
+      // the ward has it (its own code set intensity and position this frame)
+      if (s.src !== -2) { s.src = -2; s.cur = 0; pl.color.setHex(WARD_COL); pl.distance = 50; pl.userData.lampBias = undefined; }
+      // lifted off the sucker face (a light on the skin only grazes it)
+      pl.position.copy(g.grp.position).addScaledVector(_sw.set(0, 0, 1).applyQuaternion(g.grp.quaternion), 1.6);
+      continue;
+    }
+    // what this slot should be serving: 0-3 the coil lantern k, 10-12 a web seat (11 is the
+    // one in the web at her front: the key), 13 the cradle under her beak, 30 the heap
+    let want = -1, I = 0;
+    if (i === 4) {
+      // THE HEAP behind her (the backlight, lamp-B's source) until it gutters out in the
+      // rite; then this slot moves into her web, the light she drew in.
+      if (L.heap && L.heap.on > 0.02 && !L.calmed) { want = 30; I = SO.heapI * L.heap.on * (0.93 + 0.07 * Math.sin(L.t * 3.1)); }
+      else { want = 11; I = SO.webI * L.webK * flick; }     // the lantern caught in the web at her front
+    } else if (i === 3 && L.dormant) { want = 13; I = SO.cradleI * L.webK * flick; }       // the cradled lantern under her face
+    else if (L.dormant || (L.clutch[i] && L.clutch[i].on > 0.02)) { want = i; I = SO.coilI * (L.clutch[i] ? L.clutch[i].on : 0) * (0.9 + 0.1 * Math.sin(L.t * 6.3 + i * 2.1)); }
+    else if (i < 2 && L.webSeats && L.webSeats.length > 2) { want = i === 0 ? 10 : 12; I = SO.seatI * L.webK * flick * (L.calmed ? 0.5 : 1); }
+    if (s.src !== want) {
+      s.cur = Math.max(0, s.cur - dt * 60);
+      if (s.cur <= 0) { s.src = want; }
+    } else s.cur += clamp(I - s.cur, -dt * 60, dt * 40);
+    pl.intensity = s.cur;
+    if (s.src < 0) continue;
+    pl.color.setHex(FLAME);
+    pl.decay = 2.0;
+    if (s.src === 30) {
+      pl.position.copy(L.heap.pos);
+      pl.distance = SO.heapR;
+      pl.userData.scatter = SO.heapS; pl.userData.lampBias = 4;
+    } else if (s.src < 10) {
+      pl.position.copy(L.clutch[s.src].pos);
+      pl.distance = SO.coilR;
+      pl.userData.scatter = SO.coilS; pl.userData.lampBias = undefined;
+    } else {
+      const seat = s.src < 13 && L.webSeats && L.webSeats[s.src - 10];
+      if (seat) pl.position.copy(_sw.copy(seat).applyMatrix4(L.body.matrixWorld));
+      else pl.position.copy(_sw.set(0, -0.5, 0.84).applyMatrix4(L.body.matrixWorld));
+      pl.distance = 30;
+      // the web lantern is the encounter's key: it holds the in-scatter slot while she is up
+      pl.userData.scatter = SO.webS; pl.userData.lampBias = s.src === 11 ? 3 : undefined;
+    }
+  }
 }
