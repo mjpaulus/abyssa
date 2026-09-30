@@ -22,7 +22,7 @@
 // ---------------------------------------------------------------------------
 import { cl01, mix } from './engine.js';
 
-export const KM = { BRASS: 0.035, BOWED: 0.018, TENSION: 0.02, PHRASE_MIN: 55, PHRASE_MAX: 125, CH: { pickup: 0.9, craft: 0.8, ward: 1, calm: 1, voyage: 1.1, ending: 1.1, spark: 1 } };
+export const KM = { BRASS: 0.022, BOWED: 0.014, TENSION: 0.02, PHRASE_MIN: 55, PHRASE_MAX: 125, CH: { pickup: 0.9, craft: 0.8, ward: 1, calm: 1, voyage: 1.1, ending: 1.1, spark: 1 } };
 
 export const SCALES = [
   { root: 146.83, deg: [0, 2, 3, 5, 7, 8, 10] },
