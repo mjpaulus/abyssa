@@ -1039,7 +1039,7 @@ export function updateHoarder(L, dt, t, player) {
 // A slot changing source fades out where it is, jumps, and fades in: never a pop.
 const _sw = V3();
 // the rig's numbers in one place (window.__stageO for look-dev)
-const SO = { heapI: 90, heapR: 38, heapS: 0.9, webI: 72, webS: 0.08, cradleI: 40, coilI: 42, coilR: 26, coilS: 0.1, seatI: 40 };
+const SO = { heapI: 90, heapR: 32, heapS: 1.0, webI: 110, webS: 0.25, cradleI: 40, coilI: 42, coilR: 26, coilS: 0.1, seatI: 40 };
 if (typeof window !== 'undefined') window.__stageO = SO;
 function stageHoard(L, dt) {
   const H = L.hoard, st = L.stage;
@@ -1066,16 +1066,17 @@ function stageHoard(L, dt) {
       pl.position.copy(g.grp.position).addScaledVector(_sw.set(0, 0, 1).applyQuaternion(g.grp.quaternion), 1.6);
       continue;
     }
-    // what this slot should be serving: 0-3 the coil lantern k, 10+ a web seat, 30 the heap
+    // what this slot should be serving: 0-3 the coil lantern k, 10-12 a web seat (11 is the
+    // one in the web at her front: the key), 13 the cradle under her beak, 30 the heap
     let want = -1, I = 0;
     if (i === 4) {
       // THE HEAP behind her (the backlight, lamp-B's source) until it gutters out in the
       // rite; then this slot moves into her web, the light she drew in.
       if (L.heap && L.heap.on > 0.02 && !L.calmed) { want = 30; I = SO.heapI * L.heap.on * (0.93 + 0.07 * Math.sin(L.t * 3.1)); }
-      else { want = 10; I = SO.webI * L.webK * flick; }
-    } else if (i === 3 && L.dormant) { want = 10; I = SO.cradleI * L.webK * flick; }       // the cradled lantern under her face
+      else { want = 11; I = SO.webI * L.webK * flick; }     // the lantern caught in the web at her front
+    } else if (i === 3 && L.dormant) { want = 13; I = SO.cradleI * L.webK * flick; }       // the cradled lantern under her face
     else if (L.dormant || (L.clutch[i] && L.clutch[i].on > 0.02)) { want = i; I = SO.coilI * (L.clutch[i] ? L.clutch[i].on : 0) * (0.9 + 0.1 * Math.sin(L.t * 6.3 + i * 2.1)); }
-    else if (i < 2 && L.webSeats && L.webSeats.length > i + 1) { want = 11 + i; I = SO.seatI * L.webK * flick * (L.calmed ? 0.5 : 1); }
+    else if (i < 2 && L.webSeats && L.webSeats.length > 2) { want = i === 0 ? 10 : 12; I = SO.seatI * L.webK * flick * (L.calmed ? 0.5 : 1); }
     if (s.src !== want) {
       s.cur = Math.max(0, s.cur - dt * 60);
       if (s.cur <= 0) { s.src = want; }
@@ -1093,12 +1094,12 @@ function stageHoard(L, dt) {
       pl.distance = SO.coilR;
       pl.userData.scatter = SO.coilS; pl.userData.lampBias = undefined;
     } else {
-      const seat = L.webSeats && L.webSeats[s.src - 10];
+      const seat = s.src < 13 && L.webSeats && L.webSeats[s.src - 10];
       if (seat) pl.position.copy(_sw.copy(seat).applyMatrix4(L.body.matrixWorld));
-      else pl.position.copy(_sw.set(0, -0.42, 0.78).applyMatrix4(L.body.matrixWorld));
+      else pl.position.copy(_sw.set(0, -0.5, 0.84).applyMatrix4(L.body.matrixWorld));
       pl.distance = 30;
       // the web lantern is the encounter's key: it holds the in-scatter slot while she is up
-      pl.userData.scatter = SO.webS; pl.userData.lampBias = s.src === 10 ? 3 : undefined;
+      pl.userData.scatter = SO.webS; pl.userData.lampBias = s.src === 11 ? 3 : undefined;
     }
   }
 }
