@@ -75,7 +75,7 @@ function massSpec() {
     PP([0, 0.28, 0.66], [0.22, 1, 0.95]), PP([0, 0.27, 0.66], [-0.26, 1, 0.95]),
     PP([0, 0.20, -0.52], [0, 1, -1.05]),
     PP([0.97, 0, 0], [1, 0.30, 0.05]), PP([-0.92, 0, 0], [-1, 0.34, 0.05]),
-    Pl([0, -1, 0], 0.115));
+    Pl([0, -1, 0], 0.098));      // the belly plane: every ward socket (y -0.105 .. -0.135) sits proud of it
   // the V prow, ON the cut: two heavy slabs meeting in a point over the face, their
   // undersides a visor that keeps the face in shadow (the painting's brow)
   const prow = [], T = [0, 0.06, 1.0];
@@ -84,7 +84,15 @@ function massSpec() {
     prow.push(Bx([T[0] + X[0] * L, T[1] + X[1] * L, T[2] + X[2] * L], [L, 0.038, 0.13], 0.012, M.SHELL, null, basis(X, [0, 1, 0.35])));
   }
   body = U(0.03, body, ...prow);
-  return body;
+  // the prow's edge is broken: bites out of its front lip
+  const nr = mulberry(0x9A0);
+  const bites = [];
+  for (const sd of [1, -1]) for (let k = 0; k < 3; k++) {
+    const t = 0.15 + 0.28 * k + 0.08 * nr(), X = norm([sd * 0.80, 0.10, -0.60]);
+    const c = [T[0] + X[0] * t, T[1] + X[1] * t + 0.01, T[2] + X[2] * t + 0.10 + 0.02 * nr()];
+    bites.push(E(c, [0.05 + 0.03 * nr(), 0.05, 0.05 + 0.03 * nr()], M.SCAR));
+  }
+  return Sub(0.012, body, ...bites);
 }
 
 // Surface probe on the MASS (the plates and spines are placed on it).
@@ -237,7 +245,7 @@ function faceSpec() {
 // The belly (sternites) and the brood apron, the coxal sockets the legs seat in.
 export const HIPS = [[0.80, -0.07, 0.36], [0.86, -0.07, 0.10], [0.84, -0.07, -0.16], [0.74, -0.07, -0.42]];
 function bellySpec() {
-  const apron = E([0, -0.118, -0.24], [0.36, 0.028, 0.34], M.BELLY);
+  const apron = E([0, -0.103, -0.24], [0.36, 0.022, 0.34], M.BELLY);
   const sockets = [];
   for (const sd of [1, -1]) for (const [x, y, z] of HIPS) sockets.push(E([sd * (x + 0.03), y - 0.01, z], [0.10, 0.075, 0.10], M.MEMB));
   const chel = [];
@@ -276,9 +284,10 @@ export function bodySpec(seed = 0xB700D5E7) {
       { type: 'barn', bake: true, amp: 0.012, f: 26, dens: 0.42, seed: 16, mask: [['n', 1.8, 0.45, 0.66, 17]] },
       { type: 'pits', bake: true, amp: 0.022, f: 5.5, dens: 0.14, r: 0.30, seed: 18, mask: [['ax', 1, 0.0, 0.1]] },
       { type: 'pits', bake: true, amp: 0.006, f: 16, dens: 0.25, r: 0.22, seed: 23 },
-      { type: 'bands', bake: true, amp: 0.0025, f: 70, ax: [0.1, 1, 0.3] },
+      { type: 'bands', bake: true, amp: 0.004, f: 70, ax: [0.1, 1, 0.3] },
+      { type: 'cracks', bake: true, amp: 0.003, f: 14, w: 0.03, seed: 24, mask: [['n', 2.5, 0.55, 0.7, 25]] },
       { type: 'ridged', bake: true, amp: 0.006, f: 16, oct: 3, seed: 20, mask: [rear] },
-      { type: 'fbm', bake: true, amp: 0.0025, f: 40, oct: 3, seed: 21 }
+      { type: 'fbm', bake: true, amp: 0.004, f: 40, oct: 3, seed: 21 }
     ], ch: [{ t: 'erode', amt: 0.012, r: 0.02, mask: [rear], ch: [shell] }]
   };
   return shell;
@@ -291,9 +300,9 @@ export function bodySpec(seed = 0xB700D5E7) {
 export const PAINT = {
   kScale: 0.02, aoAlb: 0.55,
   mats: {
-    [M.SHELL]: { c: [0.34, 0.35, 0.29], ro: 0.62 },
+    [M.SHELL]: { c: [0.23, 0.25, 0.19], ro: 0.62 },
     [M.BELLY]: { c: [0.56, 0.53, 0.47], ro: 0.70 },
-    [M.PLATE]: { c: [0.31, 0.33, 0.31], ro: 0.50 },
+    [M.PLATE]: { c: [0.20, 0.23, 0.22], ro: 0.50 },
     [M.FACE]: { c: [0.11, 0.10, 0.09], ro: 0.45 },
     [M.HORN]: { c: [0.52, 0.49, 0.42], ro: 0.40 },
     [M.SCAR]: { c: [0.50, 0.47, 0.40], ro: 0.72 },
@@ -302,7 +311,9 @@ export const PAINT = {
     [M.EYE]: { c: [0.02, 0.02, 0.02], ro: 0.1 }
   },
   layers: [
-    { c: [0.28, 0.33, 0.20], a: 0.55, ro: 0.8, m: [['n', 3, 0.45, 0.7, 31], ['nd', [0, 1, 0], 0.2, 0.7], ['inv', ['mat', 3]]] },          // olive film on top
+    { c: [0.26, 0.31, 0.15], a: 0.75, ro: 0.8, m: [['n', 3, 0.40, 0.7, 31], ['nd', [0, 1, 0], 0.1, 0.7], ['inv', ['mat', 3]]] },          // olive film on top
+    { c: [0.12, 0.13, 0.10], a: 0.55, ro: 0.7, m: [['n', 7, 0.55, 0.75, 36], ['inv', ['mat', 3]]] },                                         // dark mottle
+    { c: [0.42, 0.20, 0.08], a: 0.45, ro: 0.8, m: [['n', 2.2, 0.62, 0.8, 37], ['nd', [0, 1, 0], -0.4, 0.3]] },                               // rust bloom down the flanks
     { c: [0.20, 0.27, 0.10], a: 0.7, ro: 0.9, m: [['cav', 0.05, 0.4], ['nd', [0, 1, 0], 0.0, 0.5], ['n', 5, 0.4, 0.65, 32]] },               // moss in the low spots
     { c: [0.56, 0.24, 0.08], a: 0.85, ro: 0.75, m: [['mat', 2], ['cvx', 0.25, 0.9]] },                                                       // rust-edged shale
     { c: [0.46, 0.19, 0.07], a: 0.55, ro: 0.8, m: [['mat', 2], ['n', 7, 0.5, 0.75, 33]] },                                                   // rust bloom on the plates
@@ -362,7 +373,7 @@ function legSegSpec({ L, r0, r1, flat = 0.62, spines = 0, vspines = 0, seed = 1,
   const sp = [];
   for (let k = 0; k < spines; k++) {
     const x = L * (0.18 + 0.64 * (k + 0.3 * rnd()) / spines), rr = r(x), h = rr * (0.55 + 0.45 * rnd());
-    sp.push(Cap([x, rr * 0.9, 0], [x + h * 0.9, rr + h, (rnd() - 0.5) * rr * 0.3], rr * 0.20, 0.003, M.HORN));
+    sp.push(Cap([x, rr * 0.85, 0], [x + h * 0.9, rr + h, (rnd() - 0.5) * rr * 0.3], rr * 0.30, 0.004, M.HORN));
   }
   for (let k = 0; k < vspines; k++) {
     const x = L * (0.2 + 0.6 * (k + 0.5) / vspines), rr = r(x), h = rr * 0.35;
@@ -561,10 +572,10 @@ export function limbPaint(opts = {}) {
   return {
     kScale: 0.012, aoAlb: 0.5,
     mats: {
-      [M.CHITIN]: { c: legs ? [0.13, 0.14, 0.14] : [0.36, 0.44, 0.44], ro: 0.38 },
+      [M.CHITIN]: { c: legs ? [0.085, 0.09, 0.09] : [0.22, 0.29, 0.29], ro: 0.38 },
       [M.PLATE]: { c: [0.40, 0.44, 0.42], ro: 0.4 },
       [M.MEMB]: { c: [0.62, 0.55, 0.50], ro: 0.8 },
-      [M.HORN]: { c: legs ? [0.30, 0.28, 0.25] : [0.66, 0.65, 0.58], ro: 0.45 },
+      [M.HORN]: { c: legs ? [0.24, 0.22, 0.20] : [0.60, 0.59, 0.52], ro: 0.45 },
       [M.EYE]: { c: [0.015, 0.016, 0.016], ro: 0.06 }
     },
     layers: eye ? [layers[0], layers[5]] : layers
@@ -583,8 +594,8 @@ export function pipeline() {
     pieces: [
       { name: 'body', set: 'body', sdf: bodySpec(), hi: { h: 0.004 }, lo: { h: 0.009, tris: 70000 }, paint: PAINT, kEps: 0.012, ao: { r: 0.07, n: 4 }, cage: 0.02, ray: 0.05 },
       limb('leg_coxa', legSegSpec({ L: SEG_L.coxa, r0: 0.125, r1: 0.118, seed: 101 }), 0.0022, 2500, legP),
-      limb('leg_femur', legSegSpec({ L: SEG_L.femur, r0: 0.122, r1: 0.092, spines: 7, vspines: 5, seed: 102 }), 0.0022, 5000, legP),
-      limb('leg_tibia', legSegSpec({ L: SEG_L.tibia, r0: 0.090, r1: 0.062, spines: 5, vspines: 4, seed: 103 }), 0.002, 4000, legP),
+      limb('leg_femur', legSegSpec({ L: SEG_L.femur, r0: 0.122, r1: 0.092, spines: 4, vspines: 0, seed: 102 }), 0.0022, 5000, legP),
+      limb('leg_tibia', legSegSpec({ L: SEG_L.tibia, r0: 0.090, r1: 0.062, spines: 3, vspines: 0, seed: 103 }), 0.002, 4000, legP),
       limb('leg_dactyl', legSegSpec({ L: SEG_L.dactyl, r0: 0.060, r1: 0, tip: true, curl: 0.16, seed: 104 }), 0.0018, 2000, limbPaint({ legs: true, finger: true, L: SEG_L.dactyl })),
       limb('major_merus', armSegSpec({ L: 0.40, r0: 0.130, r1: 0.118, x0: -0.35, knobs: 5, spines: 3, seed: 201, out: -1 }), 0.0025, 6000, limbPaint()),
       limb('major_carpus', armSegSpec({ L: 0.24, r0: 0.118, r1: 0.128, x0: -0.07, knobs: 2, spines: 1, seed: 202, out: -1 }), 0.0025, 4000, limbPaint()),

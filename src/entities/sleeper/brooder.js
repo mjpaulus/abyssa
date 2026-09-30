@@ -630,7 +630,7 @@ function installSculpt(L, A) {
     });
     const rg = G.reefGeo(0x4EEF + L.idx);
     P.reef.geometry.dispose(); P.reef.geometry = rg;
-    const wm = G.weedMatrices(P.weed.count, 0x77EED + L.idx);
+    const wm = G.weedMatrices(Math.min(P.weed.count, 60), 0x77EED + L.idx);
     wm.forEach((m, i) => P.weed.setMatrixAt(i, m));
     P.weed.count = wm.length;
     P.weed.instanceMatrix.needsUpdate = true;
