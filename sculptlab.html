@@ -43,7 +43,36 @@ const rim = new THREE.DirectionalLight(0x9fc4ff, 1.4); rim.position.set(-3, 1.5,
 const hud = document.getElementById('hud');
 
 const lab = window.lab = { meshes: [], res: null };
+// ?asset=<name>: the pipeline's baked output (assets/sleepers/<name>/), every piece laid out
+async function loadAsset(name) {
+  const { loadSculpted } = await import('./src/lib/assets.js');
+  const a = await loadSculpted('assets/sleepers/' + name + '/', name);
+  lab.asset = a;
+  const mats = {};
+  for (const set in a.maps) {
+    const t = a.maps[set];
+    mats[set] = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.ormMap, aoMap: t.ormMap, roughness: 1, metalness: 0 });
+  }
+  lab.mats = { lit: null, flat: new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 0.6 }), wire: new THREE.MeshBasicMaterial({ color: 0xcccccc, wireframe: true }) };
+  const setOf = {};
+  for (const [k, v] of Object.entries(a.meta.stats.pieces)) setOf[k] = k === 'body' ? 'body' : 'limbs';
+  let x = 0, z = 0, row = 0, tris = 0;
+  for (const [n, g] of Object.entries(a.geos)) {
+    const m = new THREE.Mesh(g, mats[setOf[n] || 'limbs']);
+    m.userData.lit = m.material;
+    g.computeBoundingBox();
+    const bb = g.boundingBox, w = bb.max.x - bb.min.x;
+    if (n === 'body') m.position.set(0, 0, -1.6);
+    else { m.position.set(x - bb.min.x - 1.6, 0, z); x += w + 0.12; row = Math.max(row, bb.max.z - bb.min.z); if (x > 3.2) { x = 0; z += row + 0.15; row = 0; } }
+    m.name = n; scene.add(m); lab.meshes.push(m); tris += g.index.count / 3;
+  }
+  hud.textContent = 'asset ' + name + '  pieces ' + lab.meshes.length + '  tris ' + tris + '  load ' + a.ms.toFixed(0) + ' ms';
+  lab.view = mode => { for (const m of lab.meshes) m.material = mode === 'lit' ? m.userData.lit : lab.mats[mode]; return mode; };
+  lab.solo = n => { for (const m of lab.meshes) m.visible = !n || m.name === n; };
+  lab.ready = true;
+}
 async function load() {
+  if (q.get('asset')) return loadAsset(q.get('asset'));
   const spec = q.get('job') || './src/entities/sleeper/brooderSculpt.js#bodyJob';
   const [path, name] = spec.split('#');
   const mod = await import(path);
@@ -66,7 +95,7 @@ async function load() {
     const bb = g.boundingBox;
     const lay = job.layout && job.layout[n];
     if (lay) m.position.fromArray(lay); else { m.position.x = x - bb.min.x; x += bb.max.x - bb.min.x + 0.1; }
-    scene.add(m); lab.meshes.push(m);
+    m.name = n; scene.add(m); lab.meshes.push(m);
     tris += g.index.count / 3;
   }
   const st = res.stats;
@@ -74,7 +103,15 @@ async function load() {
     Object.entries(st.parts).map(([k, v]) => `${k}: field ${v.fieldMs.toFixed(0)} mesh ${v.meshMs.toFixed(0)} dec ${v.decMs.toFixed(0)} raw ${v.rawTris} -> ${v.tris}`).join('\n');
   lab.ready = true;
 }
-lab.view = mode => { for (const m of lab.meshes) m.material = lab.mats[mode]; return mode; };
+if (!lab.view) lab.view = mode => { for (const m of lab.meshes) m.material = lab.mats[mode]; return mode; };
+// frame every visible mesh from direction d (optionally just the named one)
+lab.fit = (d = [1, 0.6, 1.2], name, zoom = 1) => {
+  const bb = new THREE.Box3();
+  for (const m of lab.meshes) if (m.visible && (!name || m.name === name)) bb.expandByObject(m);
+  const c = bb.getCenter(new THREE.Vector3()), r = bb.getSize(new THREE.Vector3()).length() * 0.5;
+  const dir = new THREE.Vector3(...d).normalize(), dist = r / Math.sin(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 0.9 / zoom;
+  lab.cam(c.clone().addScaledVector(dir, dist).toArray(), c.toArray());
+};
 lab.cam = (p, l) => { camera.position.fromArray(p); ctl.target.fromArray(l); ctl.update(); };
 lab.shot = async name => {
   renderer.render(scene, camera);

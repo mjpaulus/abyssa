@@ -21,7 +21,20 @@
 //                                                 results cached in memory by job key
 // toGeometry(THREE, part) -> BufferGeometry       position/normal/uv/index (+ color = AO)
 // toTextures(THREE, maps) -> { map, normalMap, ormMap }   mipmapped DataTextures
-// compile(spec) -> { f(x,y,z), bb }               a spec as a callable SDF (probes, tests)
+// compile(spec, forMesh?) -> { f(x,y,z), bb }     a spec as a callable SDF (probes, tests)
+//
+// OFFLINE (tools/blender pipeline, node): the heavy path for hero assets
+// meshSDF(spec, h, { forMesh?, mesher?, lip? }) -> { pos, idx, field }   dense DC mesh
+// shadeVertices(field, pos, paint, { kEps, ao }) -> { normal, rgba }     per-vertex paint
+// decimate(pos, idx, tris, err) -> { pos, idx }                          QEM
+// unwrapSet([{ pos, idx }], size, gutter) -> { meshes: [{ pos, idx, uv }], coverage }
+// plyBytes(pos, idx, normal?, rgba?, swizzle = true, uv?) -> Uint8Array  binary PLY
+//
+// WHERE TO RUN WHAT (measured): a hero body's full spec costs ~7 us per evaluation (60
+// plates, worley barnacles, erosion taps), so its 2048 bake is ~1 min in a browser
+// worker — ship it through the Blender pipeline (README there). runJob/sculptAsync at
+// runtime suit small, cheap specs (props, crumbs) where a few hundred ms in a worker is
+// fine; results are cached per job key.
 //
 // JOB
 //   { key?, parts: [PART...], atlas: ATLAS, probes?: [PROBE...] }
@@ -43,7 +56,7 @@
 //   { t:'sphere', c:[x,y,z], r }
 //   { t:'ellip',  c, r:[rx,ry,rz], e?:[ex,ey,ez] }          e = Euler XYZ radians, or
 //                                                     R: [9] row-major local->world matrix
-//                                                     (box, ellip, torus and xf take it too)
+//                                                     (box, ellip, xf take it; torus: rot)
 //   { t:'box',    c, h:[hx,hy,hz], r: rounding, e? }
 //   { t:'cap',    a:[..], b:[..], r } | { t:'cap', a, b, ra, rb }   capsule / round cone
 //   { t:'cone',   a, b, ra, rb }                              capped cone, sharp rims
@@ -275,7 +288,7 @@ function node(s) {
       });
     }
     case 'torus': {
-      const [cx, cy, cz] = s.c, RR = s.R, r = s.r, R = s.R || eulerMat(s.e);
+      const [cx, cy, cz] = s.c, RR = s.R, r = s.r, R = s.rot || eulerMat(s.e);
       return leaf(bbOfRotated(R, RR + r, r, RR + r, cx, cy, cz, 0), (x, y, z) => {
         MA = MB = m; MW = 0;
         const px = x - cx, py = y - cy, pz = z - cz;
@@ -945,7 +958,7 @@ function chartMesh(pos, idx, texel) {
   for (let seed = 0; seed < nf; seed++) {
     if (chartOf[seed] >= 0) continue;
     pending = true;
-    const ax = axisOf[seed], [U, V] = UVB[ax], id = charts.length;
+    const ax = axisOf[seed], [U, V] = UVB[ax], id = charts.length, AX = AXES[ax];
     const cov = new Map();
     const faces = [];
     const queue = [seed];
@@ -975,13 +988,60 @@ function chartMesh(pos, idx, texel) {
       faces.push(f);
       for (let e = 0; e < 3; e++) {
         const g = adj[f * 3 + e];
-        if (g >= 0 && chartOf[g] < 0 && axisOf[g] === ax) { chartOf[g] = id; queue.push(g); }
+        // grow into same-axis faces, and ABSORB any neighbour that still projects cleanly
+        // onto this axis (noisy borders otherwise shatter into one-face charts)
+        if (g >= 0 && chartOf[g] < 0 && (axisOf[g] === ax || N[g * 3] * AX[0] + N[g * 3 + 1] * AX[1] + N[g * 3 + 2] * AX[2] > 0.3)) { chartOf[g] = id; queue.push(g); }
       }
     }
-    charts.push({ ax, faces });
+    charts.push({ ax, faces, cov });
   }
   }
-  return { charts, N };
+  // merge the crumbs: a chart of a few faces moves face by face into any neighbouring
+  // chart whose axis it projects onto without folding or overlapping
+  const dotAx = (f, ax) => N[f * 3] * AXES[ax][0] + N[f * 3 + 1] * AXES[ax][1] + N[f * 3 + 2] * AXES[ax][2];
+  const cellsOf = (f, ax, out) => {
+    const [U, V] = UVB[ax];
+    const P = i => [(pos[i * 3] * U[0] + pos[i * 3 + 1] * U[1] + pos[i * 3 + 2] * U[2]) / cell, (pos[i * 3] * V[0] + pos[i * 3 + 1] * V[1] + pos[i * 3 + 2] * V[2]) / cell];
+    const [ua, va] = P(idx[f * 3]), [ub, vb] = P(idx[f * 3 + 1]), [uc, vc] = P(idx[f * 3 + 2]);
+    const area2 = (ub - ua) * (vc - va) - (uc - ua) * (vb - va);
+    if (area2 <= 1e-9) return false;
+    out.length = 0;
+    const i0 = Math.floor(Math.min(ua, ub, uc)), i1 = Math.ceil(Math.max(ua, ub, uc)), j0 = Math.floor(Math.min(va, vb, vc)), j1 = Math.ceil(Math.max(va, vb, vc));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const x = i + 0.5, y = j + 0.5;
+      const w0 = ((ub - x) * (vc - y) - (uc - x) * (vb - y)) / area2, w1 = ((uc - x) * (va - y) - (ua - x) * (vc - y)) / area2, w2 = 1 - w0 - w1;
+      if (w0 > 0.02 && w1 > 0.02 && w2 > 0.02) out.push(i * 73856093 ^ j * 19349663);
+    }
+    return true;
+  };
+  const tmp = [];
+  for (let pass = 0; pass < 6; pass++) {
+    let moved = 0;
+    for (let ci = 0; ci < charts.length; ci++) {
+      const c = charts[ci];
+      if (!c.faces.length || c.faces.length > 40) continue;
+      for (let fi = c.faces.length - 1; fi >= 0; fi--) {
+        const f = c.faces[fi];
+        for (let e = 0; e < 3; e++) {
+          const g = adj[f * 3 + e];
+          if (g < 0) continue;
+          const tc = chartOf[g];
+          if (tc === ci || tc < 0 || charts[tc].faces.length <= c.faces.length) continue;
+          const T = charts[tc];
+          if (dotAx(f, T.ax) < 0.02 || !cellsOf(f, T.ax, tmp)) continue;
+          let clash = 0;
+          for (const k of tmp) if (T.cov.has(k)) clash++;
+          if (clash > 1) continue;
+          for (const k of tmp) T.cov.set(k, 1);
+          T.faces.push(f); chartOf[f] = tc; c.faces.splice(fi, 1); moved++;
+          break;
+        }
+      }
+    }
+    if (!moved) break;
+  }
+  for (const c of charts) delete c.cov;
+  return { charts: charts.filter(c => c.faces.length), N };
 }
 
 // Build the per-part seam-split meshes with chart UVs in world units, then pack.
@@ -1001,10 +1061,12 @@ function packAtlas(parts, size, gutter) {
   const tryPack = dens => {
     let x = gutter, y = gutter, rowH = 0;
     for (const r of order) {
-      const w = Math.ceil(r.w * dens) + 2 * gutter, h = Math.ceil(r.h * dens) + 2 * gutter;
+      // a crumb of a chart gets a thin gutter: a full one per crumb wasted most of the atlas
+      const g = Math.max(2, Math.min(gutter, Math.ceil(Math.max(r.w, r.h) * dens / 8)));
+      const w = Math.ceil(r.w * dens) + 2 * g, h = Math.ceil(r.h * dens) + 2 * g;
       if (x + w > size) { x = gutter; y += rowH; rowH = 0; }
       if (w > size) return false;
-      r.x = x + gutter; r.y = y + gutter;
+      r.x = x + g; r.y = y + g;
       x += w; rowH = Math.max(rowH, h);
       if (y + rowH > size) return false;
     }
@@ -1113,16 +1175,7 @@ function bake(job, parts, pack, out) {
         const ao = clamp01(1 - occ / wsum * 1.4);
         // paint
         S.x = x; S.y = y; S.z = z; S.nx = nx; S.ny = ny; S.nz = nz; S.k = kap * paint.kScale; S.ao = ao; S.ma = MA0; S.mb = MB0; S.mw = MW0;
-        const mA = paint.mats[MA0] || paint.fallback, mB = paint.mats[MB0] || paint.fallback;
-        col[0] = mA.c[0] + (mB.c[0] - mA.c[0]) * MW0; col[1] = mA.c[1] + (mB.c[1] - mA.c[1]) * MW0; col[2] = mA.c[2] + (mB.c[2] - mA.c[2]) * MW0;
-        let ro = mA.ro + (mB.ro - mA.ro) * MW0;
-        for (const L of paint.layers) {
-          let a = L.a;
-          for (let q = 0; q < L.m.length && a > 0; q++) a *= L.m[q](S);
-          if (a <= 0) continue;
-          col[0] += (L.c[0] - col[0]) * a; col[1] += (L.c[1] - col[1]) * a; col[2] += (L.c[2] - col[2]) * a;
-          if (L.ro != null) ro += (L.ro - ro) * a;
-        }
+        const ro = paintAt(paint, S, col);
         const ak = 1 - paint.aoAlb * (1 - ao);
         const j = o * 4;
         alb[j] = linToSrgb(col[0] * ak) * 255 + 0.5; alb[j + 1] = linToSrgb(col[1] * ak) * 255 + 0.5; alb[j + 2] = linToSrgb(col[2] * ak) * 255 + 0.5; alb[j + 3] = 255;
@@ -1187,6 +1240,126 @@ function bake(job, parts, pack, out) {
   }
   out.maps = { size, albedo: alb, normal: nrm, orm: ormOut, ormSize };
   return evals;
+}
+
+// ---------------------------------------------------------------- offline (node) path
+// The Blender pipeline (tools/blender/) meshes the FULL-detail field densely here, paints
+// every vertex with the same shading the in-engine bake uses, and hands Blender a high-
+// poly to bake from and a low-poly source (bake-only layers left out) to decimate.
+export function meshSDF(spec, h, opts = {}) {
+  const root = compile(spec, !!opts.forMesh);
+  const F = makeField(root, h, opts.lip || 1.6);
+  fillField(F);
+  const m = meshField(F, opts.mesher || 'dc');
+  return { pos: m.pos, idx: m.idx, field: F, stats: { evals: F.evals, blocks: F.kept } };
+}
+export { decimate };
+// Chart + pack a SET of meshes into one atlas and split vertices per chart. Returns the
+// meshes with uv (0..1) and the pack's texel size; coverage = charted fraction of the
+// atlas (the Blender pipeline's gate: Smart UV Project managed 0.20 on the shell).
+export function unwrapSet(meshes, size, gutter = 6) {
+  let area = 0;
+  for (const m of meshes) { const { A: fa } = faceNormals(m.pos, m.idx); for (let f = 0; f < fa.length; f++) area += fa[f]; }
+  const texel = Math.sqrt(area / (size * size * 0.55));
+  const parts = meshes.map(m => ({ pos: m.pos, idx: m.idx, charts: chartMesh(m.pos, m.idx, texel) }));
+  const pack = packAtlas(parts, size, gutter);
+  let used = 0;
+  const out = parts.map(p => {
+    const rects = pack.rects.filter(r => r.part === p), map = new Map(), P = [], UV = [], IDX = [];
+    for (const r of rects) {
+      map.clear();
+      for (const f of r.c.faces) for (let k = 0; k < 3; k++) {
+        const i = p.idx[f * 3 + k];
+        let v = map.get(i);
+        if (v === undefined) {
+          v = P.length / 3; map.set(i, v);
+          const x = p.pos[i * 3], y = p.pos[i * 3 + 1], z = p.pos[i * 3 + 2];
+          P.push(x, y, z);
+          UV.push(((x * r.U[0] + y * r.U[1] + z * r.U[2] - r.u0) * pack.dens + r.x) / size, ((x * r.V[0] + y * r.V[1] + z * r.V[2] - r.v0) * pack.dens + r.y) / size);
+        }
+        IDX.push(v);
+      }
+    }
+    const uv = new Float32Array(UV), idx = new Uint32Array(IDX);
+    for (let t = 0; t < idx.length; t += 3) {
+      const a = idx[t] * 2, b = idx[t + 1] * 2, c = idx[t + 2] * 2;
+      used += Math.abs((uv[b] - uv[a]) * (uv[c + 1] - uv[a + 1]) - (uv[c] - uv[a]) * (uv[b + 1] - uv[a + 1])) / 2;
+    }
+    return { pos: new Float32Array(P), idx, uv, charts: rects.length };
+  });
+  return { meshes: out, texel: 1 / pack.dens, coverage: used };
+}
+
+// Per-vertex normal (SDF gradient) and paint: RGBA8 = sRGB albedo (SDF-marched AO folded
+// in by paint.aoAlb) + roughness in alpha.
+export function shadeVertices(field, pos, paintSpec, opts = {}) {
+  const paint = compilePaint(paintSpec), at = field.at, h = field.h;
+  const eps = opts.eps || h * 0.5, kEps = opts.kEps || 0.012, aoR = (opts.ao && opts.ao.r) || 0.06, aoN = (opts.ao && opts.ao.n) || 4;
+  const n = pos.length / 3, nrm = new Float32Array(n * 3), rgba = new Uint8Array(n * 4);
+  const S = { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, k: 0, ao: 1, ma: 0, mb: 0, mw: 0 }, col = [0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
+    const g = tetra(at, x, y, z, eps), nx = g.x, ny = g.y, nz = g.z;
+    nrm[i * 3] = nx; nrm[i * 3 + 1] = ny; nrm[i * 3 + 2] = nz;
+    const kd = at(x, y, z);
+    const MA0 = MA, MB0 = MB, MW0 = MW;
+    const gk = tetra(at, x, y, z, kEps);
+    const kap = (gk.s - 4 * kd) / (4 * kEps * kEps);
+    let occ = 0, wsum = 0;
+    for (let q = 1; q <= aoN; q++) {
+      const s = aoR * q / aoN, w = 1 / q;
+      const d = at(x + nx * s, y + ny * s, z + nz * s);
+      occ += w * clamp01((s - d) / s); wsum += w;
+    }
+    const ao = clamp01(1 - occ / wsum * 1.4);
+    S.x = x; S.y = y; S.z = z; S.nx = nx; S.ny = ny; S.nz = nz; S.k = kap * paint.kScale; S.ao = ao; S.ma = MA0; S.mb = MB0; S.mw = MW0;
+    const ro = paintAt(paint, S, col);
+    const ak = 1 - paint.aoAlb * (1 - ao);
+    rgba[i * 4] = linToSrgb(col[0] * ak) * 255 + 0.5; rgba[i * 4 + 1] = linToSrgb(col[1] * ak) * 255 + 0.5; rgba[i * 4 + 2] = linToSrgb(col[2] * ak) * 255 + 0.5;
+    rgba[i * 4 + 3] = clamp01(ro) * 255 + 0.5;
+  }
+  return { normal: nrm, rgba };
+}
+function paintAt(paint, S, col) {
+  const mA = paint.mats[S.ma] || paint.fallback, mB = paint.mats[S.mb] || paint.fallback, w = S.mw;
+  col[0] = mA.c[0] + (mB.c[0] - mA.c[0]) * w; col[1] = mA.c[1] + (mB.c[1] - mA.c[1]) * w; col[2] = mA.c[2] + (mB.c[2] - mA.c[2]) * w;
+  let ro = mA.ro + (mB.ro - mA.ro) * w;
+  for (const L of paint.layers) {
+    let a = L.a;
+    for (let q = 0; q < L.m.length && a > 0; q++) a *= L.m[q](S);
+    if (a <= 0) continue;
+    col[0] += (L.c[0] - col[0]) * a; col[1] += (L.c[1] - col[1]) * a; col[2] += (L.c[2] - col[2]) * a;
+    if (L.ro != null) ro += (L.ro - ro) * a;
+  }
+  return ro;
+}
+// Binary little-endian PLY: position, normal, RGBA8, triangles. `swizzle` writes the
+// coordinates in Blender's frame (x, -z, y) so the glTF exporter's +Y-up round trip
+// returns them to the game's frame exactly.
+export function plyBytes(pos, idx, normal, rgba, swizzle = true, uv = null) {
+  const n = pos.length / 3, m = idx.length / 3;
+  const head = 'ply\nformat binary_little_endian 1.0\nelement vertex ' + n + '\nproperty float x\nproperty float y\nproperty float z\n' +
+    (normal ? 'property float nx\nproperty float ny\nproperty float nz\n' : '') +
+    (rgba ? 'property uchar red\nproperty uchar green\nproperty uchar blue\nproperty uchar alpha\n' : '') +
+    (uv ? 'property float s\nproperty float t\n' : '') +
+    'element face ' + m + '\nproperty list uchar int vertex_indices\nend_header\n';
+  const hb = new TextEncoder().encode(head);
+  const vs = 12 + (normal ? 12 : 0) + (rgba ? 4 : 0) + (uv ? 8 : 0);
+  const buf = new ArrayBuffer(hb.length + n * vs + m * 13), dv = new DataView(buf), u8 = new Uint8Array(buf);
+  u8.set(hb, 0);
+  let o = hb.length;
+  const W = (a, i) => swizzle ? [a[i * 3], -a[i * 3 + 2], a[i * 3 + 1]] : [a[i * 3], a[i * 3 + 1], a[i * 3 + 2]];
+  for (let i = 0; i < n; i++) {
+    const p = W(pos, i);
+    dv.setFloat32(o, p[0], true); dv.setFloat32(o + 4, p[1], true); dv.setFloat32(o + 8, p[2], true); o += 12;
+    if (normal) { const q = W(normal, i); dv.setFloat32(o, q[0], true); dv.setFloat32(o + 4, q[1], true); dv.setFloat32(o + 8, q[2], true); o += 12; }
+    if (rgba) { u8[o] = rgba[i * 4]; u8[o + 1] = rgba[i * 4 + 1]; u8[o + 2] = rgba[i * 4 + 2]; u8[o + 3] = rgba[i * 4 + 3]; o += 4; }
+    if (uv) { dv.setFloat32(o, uv[i * 2], true); dv.setFloat32(o + 4, uv[i * 2 + 1], true); o += 8; }
+  }
+  for (let f = 0; f < m; f++) {
+    u8[o] = 3; dv.setInt32(o + 1, idx[f * 3], true); dv.setInt32(o + 5, idx[f * 3 + 1], true); dv.setInt32(o + 9, idx[f * 3 + 2], true); o += 13;
+  }
+  return u8;
 }
 
 // ---------------------------------------------------------------- job

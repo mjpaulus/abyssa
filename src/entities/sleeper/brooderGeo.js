@@ -90,8 +90,19 @@ export function shellAt(x, z, out) {
   return out;
 }
 
+// THE SCULPTED SHELL (tools/blender pipeline): when the baked body is installed, props
+// that seat on the shell (reef, weed) read its real top surface through this override
+// instead of the analytic heightfield. null = the procedural shell.
+let HF = null;
+export function setShellHeight(fn) { HF = fn; }
+const topH = (x, z, sh) => { if (HF) { const y = HF(x, z); if (y != null) return y; } return shellAt(x, z, sh).h; };
 const _s1 = {}, _s2 = {};
 export function shellNormal(x, z, out) {
+  if (HF) {
+    const e = 0.02, sh = {};
+    const hx = (topH(x + e, z, sh) - topH(x - e, z, sh)) / (2 * e), hz = (topH(x, z + e, sh) - topH(x, z - e, sh)) / (2 * e);
+    return out.set(-hx, 1, -hz).normalize();
+  }
   const e = 0.004;
   const hx = (shellAt(x + e, z, _s1).h - shellAt(x - e, z, _s2).h) / (2 * e);
   const hz = (shellAt(x, z + e, _s1).h - shellAt(x, z - e, _s2).h) / (2 * e);
@@ -816,12 +827,12 @@ export function weedMatrices(n, seed) {
     const th = rnd() * TAU, rho = 0.80 + 0.17 * rnd();
     if (Math.sin(th) > 0.25 && rnd() > 0.2) continue;
     const rr = rimR(th), x = Math.cos(th) * rr * rho, z = Math.sin(th) * rr * rho;
-    shellAt(x, z, sh);
+    const wy = topH(x, z, sh);
     shellNormal(x, z, _nn);
     _nn.x += Math.cos(th) * 0.5; _nn.z += Math.sin(th) * 0.5; _nn.normalize();
     _qq.setFromUnitVectors(_up, _nn).multiply(_qt.setFromAxisAngle(_up, rnd() * TAU));
     const k = 0.6 + 0.9 * rnd();
-    m.push(new THREE.Matrix4().compose(_pp.set(x, sh.h - 0.003, z), _qq, _ss.set(k, k, k)));
+    m.push(new THREE.Matrix4().compose(_pp.set(x, wy - 0.003, z), _qq, _ss.set(k, k, k)));
   }
   return m;
 }
@@ -1130,7 +1141,7 @@ function tubes(rnd, cx, cz, n, rMin, rMax, hMin, hMax, spread, hex) {
       return shade * inside * (0.75 + 0.35 * sst(0, h, y));
     });
     t.rotateX((rnd() - 0.5) * 0.6); t.rotateZ((rnd() - 0.5) * 0.6);
-    t.translate(x, shellAt(x, z, sh).h - 0.012, z);
+    t.translate(x, topH(x, z, sh) - 0.012, z);
     parts.push(t);
   }
   return parts;
@@ -1139,7 +1150,7 @@ function tubes(rnd, cx, cz, n, rMin, rMax, hMin, hMax, spread, hex) {
 // the branches fused sideways into a LATTICE (each branch node bridged to its nearest
 // neighbours), so the fan is a net with holes through it, as in the painting.
 function fan(rnd, cx, cz, size, hex) {
-  const sh = {}, y0 = shellAt(cx, cz, sh).h - 0.006, yaw = rnd() * TAU, parts = [], nodes = [];
+  const sh = {}, y0 = topH(cx, cz, sh) - 0.006, yaw = rnd() * TAU, parts = [], nodes = [];
   const bar = (x0, y0b, x1, y1, r0, r1, k) => {
     const len = Math.hypot(x1 - x0, y1 - y0b);
     if (len < 1e-4) return;
@@ -1186,7 +1197,7 @@ function crust(rnd, cx, cz, rad, hex) {
     let bump = rad * Math.sqrt(Math.max(0, 1 - rr * rr)) * (0.10 + 0.30 * sst(0.35, 0.8, lump) + 0.08 * fine);
     let k = (0.55 + 0.6 * lump) * (0.8 + 0.3 * fine);
     for (const [px, pz, pr] of pores) { const d = Math.hypot(lx - px, lz - pz); if (d < pr) { bump -= rad * 0.06 * (1 - d / pr); k *= 0.25; } }
-    pos.push(x, shellAt(x, z, sh).h - 0.004 + bump, z); uv.push(rr, j / A);
+    pos.push(x, topH(x, z, sh) - 0.004 + bump, z); uv.push(rr, j / A);
     col.push(_rc.r * k, _rc.g * k, _rc.b * k);
   }
   for (let i = 0; i < R; i++) for (let j = 0; j < A; j++) {

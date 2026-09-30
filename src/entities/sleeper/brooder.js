@@ -26,6 +26,16 @@ import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
 import { riftPos } from '../../config.js';
 import { emitDust } from '../../world/footfx.js';
+import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+
+// THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
+// baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
+// The fetch starts HERE, at import, off the boot's critical path; makeBrooder installs the
+// sculpt if it has landed and otherwise builds the procedural body below and upgrades it
+// in place when it does. A failed load leaves the procedural Brooder — nothing else changes.
+const SCULPT = loadSculpted('assets/sleepers/brooder/', 'brooder');
+let SC = null;
+SCULPT.then(a => { SC = a; });
 
 const UP = V3(0, 1, 0);
 const smooth = THREE.MathUtils.smoothstep;
@@ -148,7 +158,7 @@ export function makeBrooder(idx, cfg) {
     // motion state (anim-sleepers): springs, per-leg unfold, the hammer, the flinch
     legSt: new Float32Array(8), clawSt: 0, heave: S(), bY: S(), bP: S(), bR: S(), offX: S(), offZ: S(),
     yawV: 0, velPrev: V3(), cock: 0, swing: 0, impT: 9, hamPh: 0, hurt: S(), shuffleT: 3, quake: 0,
-    mPh: 0
+    mPh: 0, segL0: { coxa: 1, femur: 1, tibia: 1, dactyl: 1 }, sculpted: false, eyeSt: null
   };
 
   // ---- materials ----
@@ -179,12 +189,14 @@ export function makeBrooder(idx, cfg) {
   }));
 
   // ---- shell ----
+  G.setShellHeight(null);
   const shell = new THREE.Mesh(G.carapaceGeo(), shellMat);
   shell.castShadow = shell.receiveShadow = true;
   body.add(shell);
   const belly = new THREE.Mesh(G.bellyGeo(), bellyMat);
   belly.castShadow = belly.receiveShadow = true;
   body.add(belly);
+  L.parts = { shell, belly };
 
   // ---- crust: barnacles and weed ----
   const bar = G.barnacleMatrices(36, 0xBA2AC1E5 + idx);
@@ -195,6 +207,7 @@ export function makeBrooder(idx, cfg) {
   if (barn.instanceColor) barn.instanceColor.needsUpdate = true;
   barn.castShadow = true;
   body.add(barn);
+  L.parts.barn = barn;
 
   // a frond, not a paper strip: tapered to a point, folded along its midrib, curling
   const weedGeo = new THREE.PlaneGeometry(0.014, 0.14, 2, 5);
@@ -226,6 +239,7 @@ export function makeBrooder(idx, cfg) {
   wm.forEach((m, i) => weed.setMatrixAt(i, m));
   weed.instanceMatrix.needsUpdate = true;
   body.add(weed);
+  L.parts.weed = weed;
 
   // ---- walking legs: one InstancedMesh per segment type, eight instances each ----
   const legs = {
@@ -297,6 +311,7 @@ export function makeBrooder(idx, cfg) {
     })));
     m.castShadow = true;
     body.add(m);
+    L.parts.reef = m;
   }
 
   // ---- the face: a cluster of eight black eyes under the brow, no glow — only
@@ -327,6 +342,7 @@ export function makeBrooder(idx, cfg) {
   }
   eyes.instanceMatrix.needsUpdate = true;
   body.add(eyes);
+  L.parts.eyes = eyes;
   // mouthparts: the chitin, but wetter (one program with the arms: only uniforms differ)
   const mouthMat = registerPaint(chitinSheen(new THREE.MeshStandardMaterial({
     color: 0x8c8580, map: chit.map, normalMap: chit.normalMap, roughnessMap: chit.roughnessMap,
@@ -340,8 +356,9 @@ export function makeBrooder(idx, cfg) {
     const hook = new THREE.Mesh(G.hornGeo({ len: 0.16 - 0.018 * k, r0: 0.026, curve: -0.35, bite: -1, teeth: 'saw', rows: 12, radial: 8, fringe: 12 }), mouthMat);
     hinge.add(hook);
     body.add(hinge);
-    L.mouth.push({ hinge, sd, k });
+    L.mouth.push({ hinge, sd, k, hook });
   }
+  L.chitMats = { limbMat, armMat, mouthMat };
 
   // ---- wards ----
   const wardScale = 4.2;
@@ -387,7 +404,8 @@ export function makeBrooder(idx, cfg) {
     kind: 'brooder', dormant: !!L.dormant, eggsOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
     wards: L.sigils.map(g => ({ lit: g.lit, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
-    tris: countTris(L.body)
+    tris: countTris(L.body), sculpted: L.sculpted,
+    eyes: L.eyeSt ? L.eyeSt.map(e => ({ errDeg: +(e.err * 57.3).toFixed(1), saccades: e.n })) : null
   });
 
   if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
@@ -396,6 +414,10 @@ export function makeBrooder(idx, cfg) {
   setWardTargets(-1, null);
   poseAll(L, 0, null);
   buildSkirt(L);
+  if (SC) installSculpt(L, SC);
+  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); } });
+  const pd = L.onDispose;
+  L.onDispose = () => { L.gone = true; if (pd) pd(); };
   return L;
 }
 
@@ -556,7 +578,176 @@ function buildClaw(body, mat, sd, k) {
   const dact = new THREE.Mesh(G.hornGeo({ len: 0.66, r0: 0.105, curve: -0.34, bite: -1, teeth: 'fang', knobs: 4 }), mat);
   dact.castShadow = true;
   dj.add(dact);
-  return { root, cj, pj, dj, sd, major: k >= 1 };
+  return { root, cj, pj, dj, sd, major: k >= 1, merus, carpus, palm, dact };
+}
+
+// ---- THE SCULPT, installed ---------------------------------------------------------------
+// Swaps the procedural body for the pipeline's baked meshes, in place (at build, or later
+// if the load lands after she was built). Rig, gameplay anchors, wards and collision are
+// untouched: every piece was sculpted in the frame of the joint it rides.
+const _eyeZ = V3(0, 0, 1);
+function sculptMat(maps, extra) {
+  return new THREE.MeshStandardMaterial(Object.assign({
+    map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.ormMap, aoMap: maps.ormMap, aoMapIntensity: 1,
+    normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.4
+  }, extra || {}));
+}
+// retire a procedural part: its geometry, its material, and any texture it owned that
+// nothing else keeps (the belly's cloned mottle), so a swap leaks nothing
+function drop(L, o) {
+  if (!o) return;
+  if (o.parent) o.parent.remove(o);
+  o.geometry.dispose();
+  const m = o.material;
+  for (const k in m) { const v = m[k]; if (v && v.isTexture && v !== envTex && !L.keepTex.has(v)) v.dispose(); }
+  m.dispose();
+}
+function installSculpt(L, A) {
+  const g = A.geos, meta = A.meta.meta || {};
+  if (!g.body || !A.maps.body || !A.maps.limbs || L.sculpted) return;
+  L.sculpted = true;
+  L.keepTex = new Set([...L.keepTex, ...assetTextures(A)]);
+  L.keepGeo = assetGeos(A);
+  const P = L.parts, body = L.body;
+  // the fused shell replaces the scute shell, the belly, the barnacles and the shingles
+  const bodyMat = registerPaint(sculptMat(A.maps.body, { envMapIntensity: 0.35 }));
+  P.shell.geometry.dispose(); P.shell.material.dispose();
+  P.shell.geometry = g.body; P.shell.material = bodyMat;
+  drop(L, P.belly); drop(L, P.barn);
+  for (const b of L.blades) drop(L, b);
+  L.blades = [];
+  // the reef and the weed re-seat on the sculpted top surface (probe from the pipeline)
+  const top = A.meta.probes && A.meta.probes.top;
+  if (top) {
+    const { x0, x1, z0, z1, n, h } = top;
+    G.setShellHeight((x, z) => {
+      const fx = (x - x0) / (x1 - x0) * (n - 1), fz = (z - z0) / (z1 - z0) * (n - 1);
+      if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) return null;
+      const i = Math.min(n - 2, fx | 0), j = Math.min(n - 2, fz | 0), tx = fx - i, tz = fz - j;
+      const a = h[j * n + i], b = h[j * n + i + 1], c = h[(j + 1) * n + i], d = h[(j + 1) * n + i + 1];
+      if (a == null || b == null || c == null || d == null) return a != null ? a : b != null ? b : c != null ? c : d;
+      return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+    });
+    const rg = G.reefGeo(0x4EEF + L.idx);
+    P.reef.geometry.dispose(); P.reef.geometry = rg;
+    const wm = G.weedMatrices(P.weed.count, 0x77EED + L.idx);
+    wm.forEach((m, i) => P.weed.setMatrixAt(i, m));
+    P.weed.count = wm.length;
+    P.weed.instanceMatrix.needsUpdate = true;
+    G.setShellHeight(null);
+  }
+  // limbs: one shared atlas, the chitin sheen program the procedural limbs used
+  const lm = A.maps.limbs;
+  const legMat = registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 0.45 })));
+  const armMat = registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 0.7, metalness: 0.06 })));
+  const SEG_L = meta.segL || { coxa: 0.14, femur: 0.48, tibia: 0.42, dactyl: 0.28 };
+  for (const k of ['coxa', 'femur', 'tibia', 'dactyl']) {
+    const im = L.legs[k];
+    im.geometry.dispose();
+    im.geometry = g['leg_' + k]; im.material = legMat;
+    L.segL0[k] = SEG_L[k];
+  }
+  L.chitMats.limbMat.dispose();
+  for (const c of L.claws) {
+    const side = c.major ? 'major' : 'minor', H = (meta.hand || {})[side];
+    for (const [mesh, piece] of [[c.merus, 'merus'], [c.carpus, 'carpus'], [c.palm, 'palm'], [c.dact, 'dactyl']]) {
+      mesh.geometry.dispose();
+      mesh.geometry = g[side + '_' + piece];
+      mesh.material = armMat;
+      mesh.scale.set(1, 1, 1);
+    }
+    if (H) c.dj.position.fromArray(H.hinge);
+  }
+  L.chitMats.armMat.dispose();
+  // mouthparts: the sculpted palp at each hinge, scaled to the old lengths
+  const mouthMat = registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 1.1, roughness: 0.8 })));
+  const ML = meta.mouthL || 0.16;
+  for (const m of L.mouth) {
+    m.hook.geometry.dispose();
+    m.hook.geometry = g.mouthpart;
+    m.hook.material = mouthMat;
+    m.hook.scale.setScalar((0.16 - 0.018 * m.k) / ML);
+  }
+  L.chitMats.mouthMat.dispose();
+  // THE EYES: two stalked compound eyes that track the diver in saccades; the pinpoint
+  // ocelli stay in their pits in the brow (the old eye cluster, down to four)
+  const oc = meta.ocelli || [];
+  const eyes = P.eyes;
+  let ei = 0;
+  for (const [x, y, z, r] of oc) for (const sd of [-1, 1]) {
+    _q.setFromUnitVectors(_x.set(0, 0, 1), _y.set(x * sd * 2.5, 0.1, 1).normalize());
+    eyes.setMatrixAt(ei++, _m.compose(_v.set(x * sd, y, z), _q, _sc.set(r, r, r)));
+  }
+  eyes.count = ei;
+  eyes.instanceMatrix.needsUpdate = true;
+  // the eyeshine lives on the cornea only: the atlas paints it near-black and glassy
+  const stalkMat = registerPaint(sculptMat(lm, { envMapIntensity: 1.2, emissive: 0xcfe9d6, emissiveIntensity: 0 }));
+  stalkMat.customProgramCacheKey = () => 'abyssa-brooder-stalk';
+  stalkMat.onBeforeCompile = sh => {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      totalEmissiveRadiance *= 1.0 - smoothstep(0.012, 0.05, dot(diffuseColor.rgb, vec3(0.3333)));`);
+  };
+  const stalks = new THREE.InstancedMesh(g.eyestalk, stalkMat, 2);
+  stalks.frustumCulled = false;
+  stalks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  body.add(stalks);
+  P.stalks = stalks;
+  L.stalkMat = stalkMat;
+  const piv = meta.eyestalk || [0.155, -0.075, 0.905];
+  L.eyeSt = [-1, 1].map(sd => ({ sd, piv: V3(piv[0] * sd, piv[1], piv[2]), cur: V3(sd * 0.9, 0.1, -0.4).normalize(), from: V3(), to: V3(), t: 1, dur: 0.1, hold: 0.3, want: V3(0, 0, 1), err: 0, n: 0 }));
+  L.stalkL = meta.stalkL || 0.12;
+}
+
+// Stalked eyes (called from poseAll, body-local). Asleep they lie folded along the brow
+// in their orbits; waking they rise; awake they FIXATE on the diver and move in saccades:
+// hold still while the error is small, then snap to the new target in a short eased jump
+// whose duration grows with its amplitude (the main-sequence of real eyes), with a small
+// undershoot corrected by a follow-up. No target (calmed, far, asleep): they scan.
+const _et = V3(), _ew = V3(), _eq = new THREE.Quaternion();
+function poseEyes(L, dt, player) {
+  const E = L.eyeSt;
+  if (!E) return;
+  const up = win(L.stand, 0.18, 0.55);                       // they come up early in the wake
+  const track = player && !L.dormant && !L.calmed && L._pd < 70;
+  if (track) { _et.copy(player.pos); _et.y += 1.2; _et.applyMatrix4(_inv); }
+  for (const e of E) {
+    // what this eye wants
+    if (track) e.want.copy(_et).sub(e.piv).normalize();
+    else if ((e.scanT = (e.scanT || 0) - dt) <= 0) {
+      e.scanT = 1.2 + Math.random() * 2.5;
+      e.want.set(e.sd * (0.2 + 0.6 * Math.random()), -0.1 + 0.4 * Math.random(), 0.6 + 0.4 * Math.random()).normalize();
+    }
+    // the stalk's reach: forward half-space, a little past the midline
+    if (e.want.z < 0.05) { e.want.z = 0.05; e.want.normalize(); }
+    if (e.want.x * e.sd < -0.35) { e.want.x = -0.35 * e.sd; e.want.normalize(); }
+    const err = Math.acos(clamp(e.cur.dot(e.want), -1, 1));
+    e.err = err;
+    if (e.t < 1) {
+      e.t = Math.min(1, e.t + dt / e.dur);
+      const k = 1 - Math.pow(1 - e.t, 3);                     // fast out, soft landing
+      e.cur.copy(e.from).lerp(e.to, k).normalize();
+    } else {
+      e.hold -= dt;
+      const thr = track ? 0.05 : 0.02;
+      if ((err > thr && e.hold <= 0) || err > 0.5) {
+        e.from.copy(e.cur);
+        // land 90% of the way on big jumps (the follow-up corrects it), exactly on small
+        const land = err > 0.2 ? 0.9 : 1;
+        e.to.copy(e.cur).lerp(e.want, land).normalize();
+        e.dur = (0.05 + 0.12 * Math.min(1, err / 1.2)) * (1.4 - 0.4 * L.standE);
+        e.t = 0; e.n++;
+        e.hold = err > 0.2 ? 0.06 : 0.25 + Math.random() * (track ? 0.6 : 1.2);
+      } else if (track) {
+        // fixational tremor: the tiniest drift while it holds
+        e.cur.x += 0.0015 * Math.sin(L.t * 23 + e.sd); e.cur.y += 0.0015 * Math.sin(L.t * 19 + 2 * e.sd); e.cur.normalize();
+      }
+    }
+    // folded: lying back along the brow groove
+    _ew.set(e.sd * 0.96, 0.05, -0.28).normalize().lerp(e.cur, up).normalize();
+    _eq.setFromUnitVectors(_eyeZ, _ew);
+    L.parts.stalks.setMatrixAt(e.sd < 0 ? 0 : 1, _m.compose(e.piv, _eq, _sc.set(1, 1, 1)));
+  }
+  L.parts.stalks.instanceMatrix.needsUpdate = true;
 }
 
 // She wakes: the name, the rise, the silt pouring off her back for as long as it takes.
@@ -593,7 +784,9 @@ function restWorld(L, li, out) {
 
 // Rigid segment a->b in body-local space as an instance matrix: X along the bone, Z the
 // leg-plane normal (so the flattened section faces fore-aft), Y the in-plane up.
-function segMat(im, i, a, b, pn) {
+// L0 is the geometry's rest length along X (1 for the procedural unit segments, the true
+// bone length for the sculpted ones, which then stretch only by k and the IK's slack).
+function segMat(im, i, a, b, pn, L0 = 1) {
   _x.subVectors(b, a);
   const len = _x.length() || 1e-4;
   _x.divideScalar(len);
@@ -601,7 +794,7 @@ function segMat(im, i, a, b, pn) {
   _y.crossVectors(_z, _x).normalize();
   _z.crossVectors(_x, _y);
   _m.makeBasis(_x, _y, _z);
-  _m.scale(_sc.set(len, 1, 1));
+  _m.scale(_sc.set(len / L0, 1, 1));
   _m.setPosition(a);
   im.setMatrixAt(i, _m);
 }
@@ -634,12 +827,13 @@ function poseLeg(L, li, footL) {
   const base = Math.atan2(qy, qx);
   const th1 = base + Math.acos(clamp((l1 * l1 + D * D - l2 * l2) / (2 * l1 * D), -1, 1));
   _knee.copy(_j1).addScaledVector(_d, Math.cos(th1) * l1).addScaledVector(U, Math.sin(th1) * l1);
-  segMat(L.legs.coxa, li, _hip, _j1, _pn);
-  segMat(L.legs.femur, li, _j1, _knee, _pn);
+  const S0 = L.segL0;
+  segMat(L.legs.coxa, li, _hip, _j1, _pn, S0.coxa);
+  segMat(L.legs.femur, li, _j1, _knee, _pn, S0.femur);
   _ank2.copy(_knee).addScaledVector(_v.subVectors(_ank, _knee).normalize(), l2);
-  segMat(L.legs.tibia, li, _knee, _ank2, _pn);
+  segMat(L.legs.tibia, li, _knee, _ank2, _pn, S0.tibia);
   _ft.copy(_ank2).addScaledVector(_v.subVectors(footL, _ank2).normalize(), SEG.dactyl * k);
-  segMat(L.legs.dactyl, li, _ank2, _ft, _pn);
+  segMat(L.legs.dactyl, li, _ank2, _ft, _pn, S0.dactyl);
 }
 
 // Arm pose, after the reference: a forward guard — upper arms reaching ahead under the
@@ -736,6 +930,7 @@ function poseAll(L, dt, player) {
   for (let li = 0; li < 8; li++) poseLeg(L, li, _lp.copy(L.feet[li].cur).applyMatrix4(_inv));
   for (const k in L.legs) L.legs[k].instanceMatrix.needsUpdate = true;
   poseClaws(L);
+  poseEyes(L, dt, player);
 
   // EYESHINE: the eyes are dark until the diver's lantern finds them, then they throw it
   // back — pale green-white pinpoints, the one moment you see her looking at you.
@@ -748,6 +943,18 @@ function poseAll(L, dt, player) {
     shine = Math.pow(facing, 3) * (1 - smooth(dist, 25, 90)) * Math.max(0, player.light == null ? 1 : player.light);
   }
   L.eyeMat.emissiveIntensity = 0.08 * st + 2.2 * shine * (0.35 + 0.65 * st);
+  if (L.stalkMat) {
+    // the stalked eyes throw it back by where THEY point, not the body
+    let s2 = 0;
+    if (player && L.eyeSt) {
+      const e = L.eyeSt[0];
+      _x.copy(e.cur).transformDirection(b.matrixWorld);
+      _v.copy(player.pos).sub(L.head);
+      const dist = _v.length() || 1;
+      s2 = Math.pow(Math.max(0, _x.dot(_v) / dist), 4) * (1 - smooth(dist, 25, 90)) * Math.max(0, player.light == null ? 1 : player.light);
+    }
+    L.stalkMat.emissiveIntensity = 0.05 * st + 2.6 * s2 * (0.35 + 0.65 * st);
+  }
   // the mouthparts: five pairs working out of phase, faster when roused
   // (a sawtooth-ish stroke: a quick pull in, a slower open; the rhythm stutters and
   // pauses on a slow noise, and the outer pairs sweep wider)
