@@ -1693,6 +1693,10 @@ function update(dt, t) {
   setLampOccluders(diverOccluders(lampOcc));   // Sal's chest and bonnet shadow the glow
 
   updateCamera(dt, t, fwd);
+  // Look-dev camera pin (dev only; nothing ships setting it): window.__camPin =
+  // { pos: [x,y,z], look: [x,y,z] } holds the lens there for macro captures.
+  const cp = window.__camPin;
+  if (cp) { camera.position.fromArray(cp.pos); camera.lookAt(cp.look[0], cp.look[1], cp.look[2]); }
 
   // wayfinding: raft always, the sleeper until calmed, the rift once open
   setBearing($bm.raft, raft.position.x, raft.position.y, raft.position.z, true);

@@ -158,7 +158,8 @@ export function updateEmbers(L, dt) {
 // Generic teardown: park the borrowed ward lights (never remove them — the pool exists
 // to keep the scene's light count constant), drop the group, let the creature release
 // anything outside it (L.onDispose), then free every geometry/material/texture under
-// grp except the shared glow/env maps and anything the creature caches (L.keepTex).
+// grp except the shared glow/env maps and anything the creature caches (L.keepTex, and
+// L.keepGeo for loaded or cached geometry that outlives one build).
 export function disposeSleeper(L) {
   if (!L) return;
   if (live === L) { live = null; setWardTargets(-1, null); }
@@ -166,7 +167,7 @@ export function disposeSleeper(L) {
   scene.remove(L.grp);
   if (L.onDispose) L.onDispose();
   L.grp.traverse(o => {
-    if (o.geometry && !o.isSprite) o.geometry.dispose();
+    if (o.geometry && !o.isSprite && !(L.keepGeo && L.keepGeo.has(o.geometry))) o.geometry.dispose();
     const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
     for (const m of mats) {
       for (const k in m) {
