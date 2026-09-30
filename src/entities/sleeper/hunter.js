@@ -14,9 +14,9 @@
 // that is when his wards (on the mantle, kept by his squid as zone 2 always was) can be
 // reached. Calmed, he sinks back into the deep; the furnace burns on.
 import * as THREE from 'three';
-import { scene, envTexDeep as envTex } from '../../core.js';
+import { scene, camera, renderer, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp } from '../../lib/math.js';
-import { seededRand, makeGlow, glowTex } from '../../lib/textures.js';
+import { seededRand, makeGlow } from '../../lib/textures.js';
 import * as K from './hoarderGeo.js';
 import { registerPaint } from '../../lib/paint.js';
 import { terrainH } from '../../world/terrain.js';
@@ -24,9 +24,10 @@ import { setWardTargets, wardGuardCount } from '../../world/predators.js';
 import { riftPos, WORLD_R } from '../../config.js';
 import { survival } from '../../systems/survival.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
+  setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
 } from './common.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+import { lendVentLight } from '../../world/vents.js';
 
 // THE SCULPT (tools/blender pipeline; hunterSculpt.js has the design). THE SPLIT:
 //   the MANTLE is one rigid sculpt (50k tris, 2048 bake, photophores in the ORM's blue);
@@ -70,8 +71,16 @@ const ML_OF_SIZE = 3.6, NA = 10, RINGS = 56, RADIAL = 20, SUCK = 14;
 const FEED_COST = 2, FEED_R = 5, POCKET_R = 28, FLARE_R = 22;
 const _a = V3(), _b = V3(), _c = V3(), _d = V3(), _t = V3(), _p = V3(), _f = V3(), _r = V3(), _w = V3();
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = V3(), _z = V3(0, 0, 1), _y = V3(0, 1, 0), _in = V3(), _sd = V3(), _dn = V3(0.3, -1, 0.2).normalize();
-// the photophore glow: 24 stations on the flanks (two rows each side) and the belly
-const GLOW_N = 24;
+// HIS LIGHT IS COLD (encounter pass). The thing that hunts heat carries none: his
+// photophores are a pale sea-green phosphor against the furnace's orange and Sal's lamp,
+// so at range the eye separates him from every warm light in the zone. Never cyan-neon:
+// desaturated, and most of it is the water's own tint on a near-white.
+const PHOTO = 0xb4d8c4, PHOTO_R = 0.71, PHOTO_G = 0.85, PHOTO_B = 0.77, FIRE = 0xff6a26, WARD_COL = 0xffe8a8;
+// the LIGHT his body throws is warmer than the lens colour: the water eats red first, so a
+// source already sea-green arrives cyan (neon) in the haze a few units out; this one
+// arrives as the pale green of the lenses
+const PHOTO_LIGHT = 0xcce8b0;
+const FIRE_OP = [0.5, 0.16, 0.07, 0.03];
 const CA = new Float32Array(RADIAL + 1), SA = new Float32Array(RADIAL + 1);
 for (let j = 0; j <= RADIAL; j++) { const an = (j % RADIAL) / RADIAL * TAU; CA[j] = Math.cos(an); SA[j] = Math.sin(an); }
 
@@ -440,6 +449,7 @@ export function makeHunter(idx, cfg) {
     reach: 6, collR: ML * 0.09, flare: 0, dormant: true,
     state: 'absent', stT: 0, pos: V3(0, -9999, 0), vel: V3(), fwd: V3(0, 0, 1), head: V3(), spine: [V3(), V3(), V3(), V3(), V3()],
     sigils: [], arms: [], stun: 0, pulse: 0, orbitA: 0, strikeFrom: V3(), strikeTo: V3(), _pd: 1e9,
+    sigilStyle: true, stage: null, photo: 0, fireL: 0,
     suckK: 0.19, sculpted: false, spd: 0, jetPh: 0, contract: 0, inflate: 0, spread: 1, finPh: 0, accS: V3(), fwdPrev: V3(0, 0, 1), stunT: 0, loll: { x: 0, v: 0 }, tip: [{ x: 0, v: 0 }, { x: 0, v: 0 }], armsInit: false
   };
 
@@ -491,7 +501,7 @@ export function makeHunter(idx, cfg) {
   const skin = registerPaint(K.wetSkin(new THREE.MeshStandardMaterial({
     map: hide.map, normalMap: hide.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: hide.roughnessMap, vertexColors: true,
     roughness: 1.1, metalness: 0, envMap: envTex, envMapIntensity: 0.25,
-    emissive: 0xff8a3a, emissiveMap: hide.emissiveMap, emissiveIntensity: 0, side: THREE.FrontSide
+    emissive: PHOTO, emissiveMap: hide.emissiveMap, emissiveIntensity: 0, side: THREE.FrontSide
   }), 'abyssa-mhor-skin', 0));
   L.skin = skin;
   const mg = mantleGeo();
@@ -501,7 +511,7 @@ export function makeHunter(idx, cfg) {
   const mskin = registerPaint(K.wetSkin(new THREE.MeshStandardMaterial({
     map: hide.map, normalMap: hide.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: hide.roughnessMap, vertexColors: true,
     roughness: 1.1, metalness: 0, envMap: envTex, envMapIntensity: 0.25,
-    emissive: 0xff8a3a, emissiveMap: hide.emissiveMap, emissiveIntensity: 0, side: THREE.FrontSide
+    emissive: PHOTO, emissiveMap: hide.emissiveMap, emissiveIntensity: 0, side: THREE.FrontSide
   }), 'abyssa-mhor-mantle', 0));
   {
     const ob = mskin.onBeforeCompile;
@@ -521,7 +531,7 @@ export function makeHunter(idx, cfg) {
   body.add(mantle);
   L.finU = { uFin: { value: new THREE.Vector3() } };
   const finMat = registerPaint(membrane(new THREE.MeshStandardMaterial({ color: 0xffffff, map: fm.map, normalMap: fm.normalMap, roughness: 0.42, metalness: 0,
-    side: THREE.DoubleSide, forceSinglePass: true, transparent: false, envMap: envTex, envMapIntensity: 0.35, emissive: 0xff8a3a, emissiveIntensity: 0 }), L.finU));
+    side: THREE.DoubleSide, forceSinglePass: true, transparent: false, envMap: envTex, envMapIntensity: 0.35, emissive: PHOTO, emissiveIntensity: 0 }), L.finU));
   L.finMat = finMat;
   L.fins = [];
   for (const sd of [-1, 1]) {
@@ -571,24 +581,83 @@ export function makeHunter(idx, cfg) {
   L.suckers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   L.suckers.visible = false;
   grp.add(L.suckers);
-  // the photophore GLOW: pooled additive points (fog off, their own distance curve) in the
-  // body frame, so they cost one draw and no per-frame writes but two floats
-  const gp = new Float32Array(GLOW_N * 3);
-  for (let k = 0; k < GLOW_N; k++) {
-    let a, s;
-    if (k < 20) { const side = k < 10 ? 0 : Math.PI, row = (k % 10) < 5 ? 0.22 : -0.22; a = side + (side ? -row : row); s = 0.18 + 0.13 * (k % 5) + (row > 0 ? 0 : 0.06); }
-    else { a = -Math.PI / 2 + ((k - 20) - 1.5) * 0.35; s = 0.30 + 0.09 * (k - 20); }
-    const r = prof(s) * 1.06;
-    gp[k * 3] = Math.cos(a) * r * 1.04; gp[k * 3 + 1] = Math.sin(a) * r; gp[k * 3 + 2] = s;
+  // THE PHOTOPHORES AS POINTS (encounter pass). They were 24 soft additive sprites that
+  // SWELLED with range to 5-7 u each: at hunting distance the frame showed a string of
+  // orange bokeh balls and no animal. Now ~150 crisp lens points on his real rows — two
+  // flank rows a side, three counter-illumination rows down the belly, a ring round each
+  // eye — each sized to the lens (0.3 u), never under ~1.6 px, brightness conserved when
+  // the size clamps. The bloom does the halation. They ride the jet (the same contraction
+  // as the mantle shader) and are depth-tested against his own body, so the far rows are
+  // eclipsed and the near rows OUTLINE his silhouette in the dark: you see the shape of
+  // him drawn in cold light long before the lantern finds him.
+  {
+    const P = [], A = [];                                       // xyz, (phase, kind, size, seed)
+    const on = (s, a, rMul, kind, sz, ph) => { const r = prof(s) * rMul; P.push(Math.cos(a) * r * 1.04, Math.sin(a) * r, s); A.push(ph, kind, sz, Math.random()); };
+    for (const side of [0, Math.PI]) for (const row of [0.20, -0.14]) {
+      for (let s2 = 0.15; s2 <= 0.80; s2 += 0.028) on(s2 + (row > 0 ? 0 : 0.014), side + (side ? -row : row), 1.03, 0, 1.0, s2);
+    }
+    for (const a of [-Math.PI / 2 - 0.42, -Math.PI / 2, -Math.PI / 2 + 0.42]) {
+      for (let s2 = 0.12; s2 <= 0.84; s2 += 0.032) on(s2 + (a === -Math.PI / 2 ? 0.016 : 0), a, 1.03, 1, 0.85, s2);
+    }
+    for (const sd of [-1, 1]) for (let k = 0; k < 12; k++) {
+      const t = k / 12 * TAU, r = 0.056;
+      P.push(EYE_L[0] * sd * 1.12, EYE_L[1] + Math.sin(t) * r * 0.85, EYE_L[2] + Math.cos(t) * r); A.push(k / 12, 2, 0.7, Math.random());
+    }
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    gg.setAttribute('aP', new THREE.Float32BufferAttribute(A, 4));
+    gg.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0.5), 0.8);
+    L.photoU = {
+      uLvl: { value: new THREE.Vector4() },                     // x flank, y belly, z eye, w chase speed
+      uT: { value: 0 }, uPix: { value: 900 }, uExt: { value: 0.01 }, uSize: { value: 0.42 / ML },
+      uContract: L.mU.uContract, uCol: { value: new THREE.Vector3(PHOTO_R, PHOTO_G, PHOTO_B) }
+    };
+    L.glowMat = new THREE.ShaderMaterial({
+      uniforms: L.photoU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false,
+      vertexShader: /* glsl */`
+        attribute vec4 aP;
+        uniform vec4 uLvl; uniform float uT, uPix, uExt, uSize; uniform vec3 uContract;
+        varying float vI;
+        void main(){
+          vec3 p = position;
+          // ride the jet: the mantle shader's contraction, same curve
+          float mcK = smoothstep(0.10, 0.30, p.z) * (1.0 - smoothstep(0.78, 0.98, p.z));
+          if (aP.y < 1.5) p.xy *= 1.0 + uContract.x * mcK + uContract.y * mcK * sin(p.z * 25.0 - uContract.z);
+          vec4 mv = modelViewMatrix * vec4(p, 1.0);
+          gl_Position = projectionMatrix * mv;
+          float d = max(-mv.z, 0.5);
+          // world size from the body scale (column length of the model matrix)
+          float ws = uSize * aP.z * length(modelMatrix[0].xyz);
+          float px = ws * uPix / d;
+          float ps = clamp(px, 2.2, 8.0);
+          gl_PointSize = ps;
+          // row levels; the flank rows carry a chase wave when he hunts
+          float lv = aP.y < 0.5 ? uLvl.x * (0.55 + 0.45 * sin(uT * uLvl.w - aP.x * 38.0))
+                   : aP.y < 1.5 ? uLvl.y * (0.85 + 0.15 * sin(uT * 1.3 + aP.w * 6.28))
+                   : uLvl.z * (0.7 + 0.3 * sin(uT * 2.0 + aP.x * 6.28));
+          // energy kept when the lens is under the clamp; the murk's own extinction, halved
+          // (a point source in turbid water survives further than the flank it sits on)
+          float cons = min(1.0, (px * px) / (ps * ps) * 4.0);
+          vI = lv * cons * exp(-d * uExt) * (1.0 - smoothstep(170.0, 230.0, d));
+        }`,
+      fragmentShader: /* glsl */`
+        uniform vec3 uCol;
+        varying float vI;
+        void main(){
+          if (vI <= 0.002) discard;
+          vec2 q = gl_PointCoord * 2.0 - 1.0;
+          float r2 = dot(q, q);
+          if (r2 > 1.0) discard;
+          float a = exp(-r2 * 4.5);
+          gl_FragColor = vec4(uCol * (vI * a * 3.6), 1.0);
+        }`
+    });
+    L.glowMat.customProgramCacheKey = () => 'abyssa-mhor-photo';
+    L.glow = new THREE.Points(gg, L.glowMat);
+    L.glow.frustumCulled = false;
+    L.glow.renderOrder = 2;
+    body.add(L.glow);
   }
-  const gg = new THREE.BufferGeometry();
-  gg.setAttribute('position', new THREE.BufferAttribute(gp, 3));
-  L.glowMat = new THREE.PointsMaterial({ map: glowTex, color: 0xff8a3a, size: 3, sizeAttenuation: true, transparent: true, opacity: 0,
-    depthWrite: false, blending: THREE.AdditiveBlending, fog: false });
-  L.glowMat.color.setRGB(2.6, 1.05, 0.34);                            // over-unity: a lensed point, not a smudge
-  L.glow = new THREE.Points(gg, L.glowMat);
-  L.glow.frustumCulled = false;
-  body.add(L.glow);
 
   // ---- wards: five on the mantle, kept by the squid (the zone-2 rule) ----
   const WS = [[0.10, 0.25], [-0.10, 0.40], [0.10, 0.55], [-0.10, 0.68], [0, 0.32]];
@@ -679,7 +748,7 @@ function sculptHide(maps, key, extra) {
   const m = K.wetSkin(new THREE.MeshStandardMaterial(Object.assign({
     map: maps.map, normalMap: maps.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: maps.ormMap, aoMap: maps.ormMap,
     roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.25,
-    emissive: 0xff8a3a, emissiveMap: maps.ormMap, emissiveIntensity: 0
+    emissive: PHOTO, emissiveMap: maps.ormMap, emissiveIntensity: 0
   }, extra || {})), key, 0);
   const ob = m.onBeforeCompile;
   m.onBeforeCompile = (sh, r) => {
@@ -723,7 +792,7 @@ function installSculpt(L, A) {
   L.mskin = mm;
   // THE FINS: ribbed, torn; the membrane program, its wave on `fuv`
   const fm = registerPaint(membrane(new THREE.MeshStandardMaterial({ color: 0xffffff, map: A.maps.limbs.map, normalMap: A.maps.limbs.normalMap, roughnessMap: A.maps.limbs.ormMap, aoMap: A.maps.limbs.ormMap,
-    roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.35, emissive: 0xff8a3a, emissiveIntensity: 0 }), L.finU, true));
+    roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.35, emissive: PHOTO, emissiveIntensity: 0 }), L.finU, true));
   const finR = finFuv(g.fin), finL = finFuv(mirrorX(g.fin));
   L.keepGeo.add(finR);
   for (const f of L.fins) { oldGeos.add(f.fin.geometry); f.fin.geometry = f.sd > 0 ? finR : finL; f.fin.scale.x = 1; f.fin.material = fm; }
@@ -985,12 +1054,27 @@ export function updateHunter(L, dt, t, player) {
   // ---- the furnace ----
   Fz.heat += clamp((Fz.lit ? 1 : 0) - Fz.heat, -dt * 0.2, dt * 0.35);
   L.smokerMat.emissiveIntensity = 0.9 * Fz.heat * (0.85 + 0.15 * Math.sin(L.t * 3.1) * Math.sin(L.t * 1.3));
+  // (encounter pass: the four throat sprites were 9-27 u across and stacked into a flat
+  // orange paddle standing on the chimney; the shimmer strip's streaks printed through it as
+  // a dotted pattern. The fire is a LIGHT now — the vents' throat light, borrowed while the
+  // vent field sleeps — and the sprites are the tight glow at the bore.)
   for (let k = 0; k < L.fire.length; k++) {
     const gl = L.fire[k], d = gl.position.distanceTo(player.pos);
-    gl.material.opacity = Fz.heat * (0.8 - k * 0.15) * (0.85 + 0.15 * Math.sin(L.t * 5 + k));
-    gl.scale.setScalar((9 - k * 1.5) * (1 + Math.min(3, d * 0.02)));
+    gl.material.opacity = Fz.heat * FIRE_OP[k] * (0.85 + 0.15 * Math.sin(L.t * 5 + k));
+    gl.scale.setScalar((3.6 - k * 0.6) * (1 + Math.min(2.2, d * 0.016)));
   }
-  L.shimmer.material.opacity = 0.30 * Fz.heat;
+  L.shimmer.material.opacity = 0.05 * Fz.heat;
+  {
+    const fl = Fz.heat > 0.01 ? lendVentLight() : null;
+    if (fl) {
+      fl.userData.lent = true;
+      fl.color.setHex(FIRE); fl.distance = 60; fl.decay = 2.0;
+      fl.position.set(Fz.top.x, Fz.top.y + 3, Fz.top.z);
+      L.fireL = Fz.heat * (0.86 + 0.08 * Math.sin(L.t * 3.1) * Math.sin(L.t * 1.3) + 0.06 * Math.sin(L.t * 7.7));
+      fl.intensity = SM.fireI * L.fireL;
+      fl.userData.scatter = SM.fireS; fl.userData.lampBias = 1;
+    }
+  }
   L.shimmer.material.map.offset.y -= dt * 0.22;
   const dF = Math.hypot(player.pos.x - F.x, player.pos.z - F.z);
   // the warm pocket: near the lit furnace the air comes easy
@@ -1127,12 +1211,16 @@ export function updateHunter(L, dt, t, player) {
   L.mskin.emissiveIntensity = L.skin.emissiveIntensity;
   if (L.skinX) for (const m of L.skinX) m.emissiveIntensity = L.skin.emissiveIntensity;
   L.finMat.emissiveIntensity = 0.3 * ph;
-  // the GLOW reads across the murk: fog-off points on their own distance curve, swelling
-  // with range (murk grows halos), gone past ~200 u
+  // the lens points: counter-illumination steady, the flank rows chasing when he hunts,
+  // the eye rings brightest when he looks at you; they gutter with the stun
   {
-    const dG = L.head.distanceTo(player.pos), far = 1 - Math.min(1, Math.max(0, (dG - 60) / 140));
-    L.glowMat.opacity = Math.min(1, 1.5 * ph) * (0.35 + 0.65 * far) * (dG > 200 ? 0 : 1);
-    L.glowMat.size = 1.9 * (1 + Math.min(3, dG * 0.03));
+    const U = L.photoU, lvl = L.calmed ? Math.max(0, 0.3 - L.calmT * 0.02) : L.stun > 0 ? ph * 2 : 0.45 + 0.55 * ph;
+    U.uLvl.value.set(lvl * SM.flank, lvl * SM.belly * (L.stun > 0 ? 0.6 : 1), lvl * SM.eye, 2 + 7 * hunt);
+    U.uT.value = L.t;
+    renderer.getDrawingBufferSize(_px);
+    U.uPix.value = _px.y / (2 * Math.tan(camera.fov * Math.PI / 360));
+    U.uExt.value = scene.fog ? scene.fog.density * SM.ext : 0.01;
+    L.photo = lvl;
   }
   // fins: a slow flap under the travelling wave, swept back against the body on the dash
   for (const f of L.fins) f.fin.rotation.z = f.sd * (0.10 * Math.sin(L.finPh * 0.5) * Math.min(1, finAmp * 60) - 3 * fold);
@@ -1155,6 +1243,9 @@ export function updateHunter(L, dt, t, player) {
         // stunned, his wards wake hot and throw light across his hide: the moment you SEE
         // the size of him (borrowed pool lights — the light count never changes)
         g.light.intensity = 55 + 20 * Math.sin(L.t * 3 + i);
+        // (encounter pass: the burning wards breathe a little warmth into the water over
+        // his back — the one time his own light is warm)
+        g.light.userData.scatter = 0.14;
         L.guardWards = false; wardTouch(L, i, g, player, ev); L.guardWards = true;
       }
       else if (!L.hinted && g.grp.position.distanceTo(player.pos) < L.reach) { L.hinted = true; ev.msg = ev.msg || 'HE WILL NOT HOLD STILL. NOT OUT HERE IN THE DARK.'; }
@@ -1174,11 +1265,64 @@ export function updateHunter(L, dt, t, player) {
     for (const g of L.sigils) {
       g.pulse += dt;
       g.light.intensity = Math.max(0, 120 - L.calmT * 7);
+      g.light.userData.scatter = 0.04;
       g.light.position.copy(g.grp.position);
       g.halo.position.copy(g.grp.position);
+      g.halo.scale.setScalar(haloK * 0.55);
+      g.halo.material.opacity = 0.4;
     }
   }
   wardFlashes(L, dt, null);
+  stageHunter(L, dt);
   L.pPrev.copy(player.pos);
   return ev;
+}
+
+// ---- THE STAGING (encounter pass) ---------------------------------------------------
+// He carries his own light. No light is added: while a ward does not need its borrowed
+// pool light (it is lit, flashing, he is stunned, or calmed), the light rides HIS BODY —
+// four under the belly and one in the crown of his arms, cold, pulsing with the
+// photophores. They light his underside, the arms trailing under him and the water round
+// him; the middle one is the encounter's lamp-B source (userData.lampBias), so the murk
+// itself brightens where he passes and his dark dorsal line reads against his own glow.
+// Stunned, the wards take the lights (warm, on his back) and his body lights gutter: the
+// moment you see the size of him is lit from the furnace and his own burning wards.
+const _px = new THREE.Vector2(), _sp = V3();
+const SM = { flank: 1.0, belly: 0.8, eye: 1.2, ext: 0.45, bodyI: 26, bodyR: 18, keyI: 80, keyR: 44, keyS: 1.6, fireI: 70, fireS: 0.18 };
+if (typeof window !== 'undefined') window.__stageM = SM;
+// body-frame stations (x is flipped to the flank that faces the lens: his rows run down
+// both flanks, and the one you can see is the one whose light you should see on his hide)
+//   0 the crown of his arms   1,3 the near flank, fore and aft, just below the rows
+//   2 the key, ON HIS AXIS: its surface light never leaves his body, but its in-scatter
+//     does — the haze's bright core is eclipsed by him and what shows is a halo round his
+//     outline, strongest where he is thinnest (the rim he never had)   4 under the tail
+const BODY_AT = [[0, -0.02, -0.07], [0.125, -0.06, 0.22], [0, 0, 0.40], [0.11, -0.05, 0.60], [0, -0.10, 0.80]];
+function stageHunter(L, dt) {
+  if (!L.stage) L.stage = sigilPool.map(() => ({ src: -1, cur: 0 }));
+  const here = L.body.visible && L.state !== 'absent';
+  const m = L.body.matrixWorld.elements;
+  const near = ((camera.position.x - m[12]) * m[0] + (camera.position.y - m[13]) * m[1] + (camera.position.z - m[14]) * m[2]) >= 0 ? 1 : -1;
+  for (let i = 0; i < L.stage.length; i++) {
+    const pl = sigilPool[i], s = L.stage[i], g = i < L.sigils.length ? L.sigils[i] : null;
+    if (g && (g.lit || g.flashT < 1.5 || L.state === 'stunned' || L.calmed)) {
+      if (s.src !== -2) { s.src = -2; s.cur = 0; pl.color.setHex(WARD_COL); pl.distance = 50; pl.userData.lampBias = undefined; }
+      // lifted off the hide along the ward's face: a light ON the skin only grazes it (the
+      // burning wards used to light nothing round them); 2.5 u out it pools on his back
+      pl.position.copy(g.grp.position).addScaledVector(_sp.set(0, 0, 1).applyQuaternion(g.grp.quaternion), 2.5);
+      continue;
+    }
+    const want = here ? i : -1, key = i === 2;
+    const I = here ? (key ? SM.keyI : SM.bodyI) * (0.35 + 0.65 * L.photo) : 0;
+    if (s.src !== want) { s.cur = Math.max(0, s.cur - dt * 80); if (s.cur <= 0) s.src = want; }
+    else s.cur += clamp(I - s.cur, -dt * 80, dt * 60);
+    pl.intensity = s.cur;
+    if (s.src < 0) continue;
+    const b = BODY_AT[s.src];
+    pl.position.copy(_sp.set(b[0] * near, b[1], b[2]).applyMatrix4(L.body.matrixWorld));
+    pl.color.setHex(PHOTO_LIGHT);
+    pl.decay = 2.0;
+    pl.distance = key ? SM.keyR : SM.bodyR;
+    pl.userData.scatter = key ? SM.keyS : 0.06;
+    pl.userData.lampBias = key ? 4 : undefined;
+  }
 }

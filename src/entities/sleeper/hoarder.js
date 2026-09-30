@@ -1062,6 +1062,8 @@ function stageHoard(L, dt) {
     if (g && (g.lit || g.rev > 0.01 || g.flashT < 1.5 || L.calmed)) {
       // the ward has it (its own code set intensity and position this frame)
       if (s.src !== -2) { s.src = -2; s.cur = 0; pl.color.setHex(WARD_COL); pl.distance = 50; pl.userData.lampBias = undefined; }
+      // lifted off the sucker face (a light on the skin only grazes it)
+      pl.position.copy(g.grp.position).addScaledVector(_sw.set(0, 0, 1).applyQuaternion(g.grp.quaternion), 1.6);
       continue;
     }
     // what this slot should be serving: 0-3 the coil lantern k, 10+ a web seat, 30 the heap
