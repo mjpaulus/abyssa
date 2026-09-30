@@ -385,15 +385,16 @@ function suckerSpec() {
 export const SUCKER_PAINT = {
   kScale: 0.004, aoAlb: 0.5,
   mats: {
-    [M.MEMB]: { c: [0.46, 0.30, 0.29], ro: 0.45 },
-    [M.WART]: { c: [0.64, 0.49, 0.45], ro: 0.40 },
-    [M.LIP]: { c: [0.56, 0.38, 0.39], ro: 0.25 },
+    [M.MEMB]: { c: [0.40, 0.26, 0.25], ro: 0.45 },
+    [M.WART]: { c: [0.58, 0.49, 0.46], ro: 0.40 },
+    [M.LIP]: { c: [0.46, 0.30, 0.31], ro: 0.25 },
     [M.CHITIN]: { c: [0.36, 0.23, 0.09], ro: 0.30 },
     [M.BEAK]: { c: [0.08, 0.03, 0.03], ro: 0.2 }
   },
   layers: [
     { c: [0.62, 0.52, 0.34], a: 0.75, m: [['mat', M.CHITIN], ['cvx', 0.3, 1.2]] },          // worn chitin, pale at its crowns
-    { c: [0.74, 0.62, 0.57], a: 0.45, m: [['mat', M.WART], ['cvx', 0.4, 1.4]] },
+    { c: [0.70, 0.63, 0.59], a: 0.45, m: [['mat', M.WART], ['cvx', 0.4, 1.4]] },
+    { c: [0.30, 0.18, 0.17], a: 0.5, m: [['mat', M.WART], ['n', 5, 0.45, 0.7, 96]] },
     { c: [0.30, 0.14, 0.14], a: 0.6, m: [['cav', 0.2, 0.8]] },
     { c: [0.04, 0.02, 0.02], a: 0.8, m: [['ao', 0.5, 0.95]] }
   ]
@@ -487,7 +488,7 @@ export function pipeline() {
       { name: 'mantle', set: 'body', sdf: mantleSpec(), hi: { h: 0.0042 }, lo: { h: 0.010, tris: 60000 }, paint: PAINT, kEps: 0.012, ao: { r: 0.07, n: 4 }, cage: 0.025, ray: 0.06, emit: mantleEmit },
       { name: 'lid_top', set: 'body', sdf: lidSpec(false), hi: { h: 0.0016 }, lo: { h: 0.004, tris: 3000 }, paint: PAINT, kEps: 0.004, ao: { r: 0.02, n: 4 }, cage: 0.008, ray: 0.02 },
       { name: 'lid_bot', set: 'body', sdf: lidSpec(true), hi: { h: 0.0016 }, lo: { h: 0.004, tris: 2600 }, paint: PAINT, kEps: 0.004, ao: { r: 0.02, n: 4 }, cage: 0.008, ray: 0.02 },
-      { name: 'sucker', set: 'sucker', sdf: suckerSpec(), hi: { h: 0.008 }, lo: { h: 0.035, tris: 400, err: 0.09 }, paint: SUCKER_PAINT, kEps: 0.03, ao: { r: 0.2, n: 4 }, cage: 0.04, ray: 0.12 }
+      { name: 'sucker', set: 'sucker', sdf: suckerSpec(), hi: { h: 0.008 }, lo: { h: 0.035, tris: 360, err: 0.1 }, paint: SUCKER_PAINT, kEps: 0.03, ao: { r: 0.2, n: 4 }, cage: 0.04, ray: 0.12 }
     ],
     strips: [armStrip()],
     meta: { eyeAt: EYE_AT, siphon: SIPHON, armPairs: ARM_PAIRS, armSV: ARM_SV, suckK: SUCK_K }

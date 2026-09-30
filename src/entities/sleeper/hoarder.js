@@ -330,8 +330,10 @@ export function makeHoarder(idx, cfg) {
   setLive(L);
   setWardTargets(-1, null);
   poseHoarder(L, 0, null);
-  if (SC) installSculpt(L, SC);
-  else sculpt().then(a => { if (a && !L.gone) { installSculpt(L, a); poseHoarder(L, 0, null); } });
+  // (window.__noSculpt: dev A/B — build the procedural body and leave it)
+  const want = !(typeof window !== 'undefined' && window.__noSculpt);
+  if (SC && want) installSculpt(L, SC);
+  else if (want) sculpt().then(a => { if (a && !L.gone) { installSculpt(L, a); poseHoarder(L, 0, null); } });
   const pd = L.onDispose;
   L.onDispose = () => { L.gone = true; if (pd) pd(); };
   return L;
@@ -356,7 +358,7 @@ function cloudPatch(m, L, key, orm) {
           transformed += normal * uSiph * exp(-dot(sq, sq) / 0.035);
         }`)
       .replace('#include <project_vertex>', '#include <project_vertex>\nvCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-    if (orm) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', THREE.ShaderChunk.emissivemap_fragment.replace('emissiveColor.rgb', 'emissiveColor.bbb'));
+    if (orm) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', THREE.ShaderChunk.emissivemap_fragment.replace('emissiveColor.rgb', 'emissiveColor.bbb * smoothstep(0.08, 0.3, emissiveColor.b)'));
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\nuniform vec4 uCloud;\nvarying vec3 vCloudW;')
       .replace('#include <color_fragment>', `#include <color_fragment>
@@ -435,6 +437,39 @@ function installSculpt(L, A) {
   L.suckSink = 0.09;                       // the stalk sits down in its collar
   old.dispose();
   L.skin = bodyMat; L.skinM = armMat;
+  // THE HOARD SHE WEARS: drowned lanterns tangled in her — two caught in the web between
+  // her arm roots, one snagged where the trawler's chain is grown into her shoulder. Dead
+  // (sooted glass, no flame): the lit ones are in the hoard. Seated by a ray onto the sculpt.
+  const lp = G.lanternParts();
+  const ray = new THREE.Raycaster(), probe = new THREE.Mesh(g.mantle);
+  // a ray from outside (along `out` from `at`) back onto the skin: the lantern seats where it hits
+  const seat = (out, at) => {
+    const o = new THREE.Vector3(...out).normalize();
+    ray.set(new THREE.Vector3(...at).addScaledVector(o, 3), o.clone().negate());
+    const h = ray.intersectObject(probe, false)[0];
+    return h ? { p: h.point, n: h.face.normal.clone() } : null;
+  };
+  const S = [
+    seat([-0.7, 0.7, 0.1], [-0.62, 0.55, 0.0]),                    // the left shoulder, in the chain
+    seat([0.6, -0.3, 0.55], [0.62, -0.50, 0.60]),                  // the web, front right
+    seat([-0.5, -0.3, -0.6], [-0.50, -0.50, -0.45])                // the web, back left
+  ].filter(Boolean);
+  const brassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x8a6a3a, vertexColors: true, roughness: 0.6, metalness: 0.65, envMap: envTex, envMapIntensity: 0.45 }));
+  const glassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x3a342a, vertexColors: true, roughness: 0.12, metalness: 0, envMap: envTex, envMapIntensity: 1.0 }));
+  // (the flame lathe rides in the glass geometry: dead lanterns show it as a dark stub)
+  const lb = new THREE.InstancedMesh(lp.brass, brassM, S.length), lg = new THREE.InstancedMesh(lp.glass, glassM, S.length);
+  const q = new THREE.Quaternion(), qt = new THREE.Quaternion(), sc = new THREE.Vector3(), mm = new THREE.Matrix4();
+  S.forEach((h, i) => {
+    q.setFromUnitVectors(_yp, h.n);
+    qt.setFromAxisAngle(new THREE.Vector3(1, 0, 0.4).normalize(), 0.6 + 0.4 * i);           // fallen over, askew
+    q.multiply(qt);
+    const k = (0.75 + 0.15 * i) / L.R;
+    mm.compose(h.p.clone().addScaledVector(h.n, -0.25 * k), q, sc.set(k, k, k));
+    lb.setMatrixAt(i, mm); lg.setMatrixAt(i, mm);
+  });
+  lb.castShadow = true;
+  L.body.add(lb, lg);
+  L.caught = S.length;
 }
 
 function wakeHoarder(L) {

@@ -26,6 +26,24 @@ import { survival } from '../../systems/survival.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
 } from './common.js';
+import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+
+// THE SCULPT (tools/blender pipeline; hunterSculpt.js has the design). THE SPLIT:
+//   the MANTLE is one rigid sculpt (50k tris, 2048 bake, photophores in the ORM's blue);
+//   the jet still moves it in the vertex shader — the contraction scales xy by a function
+//   of z, which holds for any mesh in the lathe's frame, so the wards (placed by the same
+//   curve) still ride the skin. The FIN is a rigid sculpt the undulation still moves in the
+//   vertex shader: its wave coordinates (out across the fin, along the root) are computed
+//   from position at install (`fuv`), since its atlas UVs are charts, not a grid. The CLUB
+//   rides the tentacle tip as before. The eight arms and two tentacles are verlet chains
+//   rebuilt every frame (57 x 21 tubes): they keep that and get TILEABLE STRIPS, the arm's
+//   u keyed to its sucker stations, the tentacle's conformal. One sucker, instanced 224x.
+let SCULPT = null, SC = null;
+function sculpt() {
+  if (!SCULPT) { SCULPT = loadSculpted('assets/sleepers/hunter/', 'hunter'); SCULPT.then(a => { SC = a; }); }
+  return SCULPT;
+}
+if (typeof window !== 'undefined') setTimeout(sculpt, 3500);
 
 const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
@@ -154,19 +172,24 @@ function finMaps(S = 256) {
 }
 // The membrane shader: light passes through the thin outer fin (a warm scatter scaled by
 // what the surface receives, so never a glow in the dark), and the veins stay opaque.
-function membrane(m, U) {
-  m.customProgramCacheKey = () => 'abyssa-mhor-fin';
+function membrane(m, U, fuv = false) {
+  // fuv: the sculpted fin carries its wave coordinates in their own attribute (its uv is an
+  // atlas chart); the procedural fin's uv IS that grid
+  const W = fuv ? 'fuv' : 'uv';
+  m.customProgramCacheKey = () => 'abyssa-mhor-fin' + (fuv ? '-s' : '');
   m.onBeforeCompile = sh => {
     // the fin undulates: a wave running from the fin's front root to its tail tip, growing
     // toward the free edge; the normal tilts with the wave's slope
     sh.uniforms.uFin = U.uFin;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 uFin;')
+      .replace('#include <common>', '#include <common>\nuniform vec3 uFin;\nvarying vec2 vFuv;' + (fuv ? '\nattribute vec2 fuv;' : ''))
       .replace('#include <beginnormal_vertex>', `#include <beginnormal_vertex>
-        float fnU = pow(uv.x, 1.3), fnA = uv.y * 7.54 - uFin.x;
+        vFuv = ${W};
+        float fnU = pow(${W}.x, 1.3), fnA = ${W}.y * 7.54 - uFin.x;
         objectNormal = normalize(objectNormal + vec3(0.0, 0.0, -uFin.y * fnU * cos(fnA) * 20.4) * sign(objectNormal.y));`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        transformed.y += uFin.y * fnU * sin(fnA) + uFin.z * uv.x * uv.x;`);
+        transformed.y += uFin.y * fnU * sin(fnA) + uFin.z * ${W}.x * ${W}.x;`);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec2 vFuv;');
     // THE FIN'S GLOW IS THE BODY'S LIGHT SEEN THROUGH IT, not a lamp in the membrane.
     // It used to be a flat, unmapped emissive over the whole sheet plus a 1.5x boost at the
     // thin outer edge: at a hunting pulse (ph up to 1) the membrane was an orange panel
@@ -177,12 +200,12 @@ function membrane(m, U) {
     // are muscle, block it; the edge gets none. Same uniform, same pulse, same program.
     sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
       {
-        float fnRoot = 1.0 - smoothstep(0.02, 0.55, vMapUv.x);
+        float fnRoot = 1.0 - smoothstep(0.02, 0.55, vFuv.x);
         float fnMem = smoothstep(0.05, 0.16, diffuseColor.r);
         totalEmissiveRadiance *= fnRoot * fnRoot * (0.25 + 0.75 * fnMem);
       }`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', /* glsl */`{
-        float fnThin = smoothstep(0.35, 1.0, vMapUv.x);
+        float fnThin = smoothstep(0.35, 1.0, vFuv.x);
         vec3 fnLit = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
         vec3 fnIrr = fnLit / max(diffuseColor.rgb, vec3(0.08));
         float fnV = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
@@ -256,7 +279,9 @@ function hideMaps(S = 1024) {
   _hide.ms = performance.now() - t0;
   return _hide;
 }
-// The great eye: a black pupil filling most of it, a thin GOLD ring, a silvered iris.
+// The great eye (sculpt pass: "huge dark eyes with a faint photophore ring"): a black pupil
+// filling most of it with a dim tapetal sheen, a near-black iris shot with faint silver
+// fibres, a thin tarnished-brass limbal ring, and outside it a ring of small photophores.
 let _meye = null;
 function eyeMaps(S = 256) {
   if (_meye) return _meye;
@@ -265,10 +290,15 @@ function eyeMaps(S = 256) {
     const px = (x + 0.5) / S * 2 - 1, py = (y + 0.5) / S * 2 - 1, r = Math.hypot(px * 0.92, py), th = Math.atan2(py, px), j = (y * S + x) * 4;
     const f = 0.75 + 0.5 * K.nt(TB, th / TAU * 12, r * 4);
     let c, e;
-    if (r < 0.52) { c = [0.006, 0.006, 0.008]; e = 0.30 * (1 - sst(0.2, 0.52, r)) + 0.05; }
-    else if (r < 0.60) { const k = Math.sin((r - 0.52) / 0.08 * Math.PI); c = [0.85 * k * f, 0.62 * k * f, 0.20 * k * f]; e = 0.45 * k; }
-    else if (r < 0.86) { const m = 0.5 + 0.5 * K.nt(TA, th / TAU * 20, r * 6); c = [0.40 * m, 0.40 * m, 0.42 * m].map(q => q * (1 - 0.6 * sst(0.7, 0.86, r))); e = 0.08; }
-    else { c = [0.08, 0.03, 0.03]; e = 0; }
+    if (r < 0.60) { c = [0.004, 0.004, 0.006]; e = 0.22 * (1 - sst(0.15, 0.60, r)) + 0.03; }
+    else if (r < 0.82) { const m = 0.5 + 0.5 * K.nt(TA, th / TAU * 26, r * 7); c = [0.05 * m + 0.02, 0.045 * m + 0.02, 0.05 * m + 0.025].map(q => q * f); e = 0.04; }
+    else if (r < 0.87) { const k = Math.sin((r - 0.82) / 0.05 * Math.PI); c = [0.42 * k * f, 0.32 * k * f, 0.13 * k * f]; e = 0.12 * k; }
+    else {
+      c = [0.06, 0.02, 0.02];
+      const a = ((th / TAU * 16) % 1 + 1) % 1, d = Math.hypot((a - 0.5) * TAU * 0.93 / 16 * 9, (r - 0.93) * 9);
+      const dot = 1 - sst(0.10, 0.22, d);
+      c = c.map((q, i) => q + ([0.55, 0.50, 0.45][i] - q) * dot * 0.6); e = 0.9 * dot;
+    }
     for (let k = 0; k < 3; k++) { alb[j + k] = Math.min(255, c[k] * 255); emi[j + k] = Math.min(255, e * 255); }
     alb[j + 3] = emi[j + 3] = 255;
   }
@@ -410,7 +440,7 @@ export function makeHunter(idx, cfg) {
     reach: 6, collR: ML * 0.09, flare: 0, dormant: true,
     state: 'absent', stT: 0, pos: V3(0, -9999, 0), vel: V3(), fwd: V3(0, 0, 1), head: V3(), spine: [V3(), V3(), V3(), V3(), V3()],
     sigils: [], arms: [], stun: 0, pulse: 0, orbitA: 0, strikeFrom: V3(), strikeTo: V3(), _pd: 1e9,
-    spd: 0, jetPh: 0, contract: 0, inflate: 0, spread: 1, finPh: 0, accS: V3(), fwdPrev: V3(0, 0, 1), stunT: 0, loll: { x: 0, v: 0 }, tip: [{ x: 0, v: 0 }, { x: 0, v: 0 }], armsInit: false
+    suckK: 0.19, sculpted: false, spd: 0, jetPh: 0, contract: 0, inflate: 0, spread: 1, finPh: 0, accS: V3(), fwdPrev: V3(0, 0, 1), stunT: 0, loll: { x: 0, v: 0 }, tip: [{ x: 0, v: 0 }, { x: 0, v: 0 }], armsInit: false
   };
 
   // ---- the field: the last furnace, cold stumps, scorch ----
@@ -606,7 +636,128 @@ export function makeHunter(idx, cfg) {
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
+  // (window.__noSculpt: dev A/B — build the procedural body and leave it)
+  const want = !(typeof window !== 'undefined' && window.__noSculpt);
+  if (SC && want) installSculpt(L, SC);
+  else if (want) sculpt().then(a => { if (a && !L.gone) installSculpt(L, a); });
+  const pd = L.onDispose;
+  L.onDispose = () => { L.gone = true; if (pd) pd(); };
   return L;
+}
+
+// ---- THE SCULPT, installed in place --------------------------------------------------------
+// the fin's outline (finGeo's quadratic, and hunterSculpt's): width across at z
+const FINQ = (() => { const Q = []; for (let k = 0; k <= 64; k++) { const t = k / 64, m = 1 - t; Q.push([2 * m * t * 0.14 + t * t * 0.10, m * m * 0.62 + 2 * m * t * 0.80 + t * t * 0.97]); } return Q; })();
+function finWidth(z) {
+  if (z >= 0.97) return 0.10 * Math.max(0, 0.99 - z) / 0.02;
+  for (let k = 1; k < FINQ.length; k++) if (FINQ[k][1] >= z) { const f = (z - FINQ[k - 1][1]) / (FINQ[k][1] - FINQ[k - 1][1]); return FINQ[k - 1][0] + (FINQ[k][0] - FINQ[k - 1][0]) * f; }
+  return 0;
+}
+// the fin's wave coordinates from position (u out across it, v along its root), and the
+// mirrored copy for the -X side (a negative scale would turn the tangent frame inside out)
+function finFuv(g) {
+  const p = g.attributes.position, n = p.count, f = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) {
+    const x = Math.abs(p.getX(i)), z = p.getZ(i), w = Math.max(0.004, finWidth(Math.min(0.99, Math.max(0.62, z))));
+    f[i * 2] = Math.min(1, Math.max(0, x / w)); f[i * 2 + 1] = Math.min(1, Math.max(0, (z - 0.62) / 0.37));
+  }
+  g.setAttribute('fuv', new THREE.BufferAttribute(f, 2));
+  return g;
+}
+function mirrorX(g0) {
+  const g = g0.clone();
+  for (const k of ['position', 'normal']) { const a = g.attributes[k]; for (let i = 0; i < a.count; i++) a.setX(i, -a.getX(i)); }
+  const t = g.attributes.tangent;
+  if (t) for (let i = 0; i < t.count; i++) { t.setX(i, -t.getX(i)); t.setW(i, -t.getW(i)); }
+  const ix = g.index.array;
+  for (let i = 0; i < ix.length; i += 3) { const q = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = q; }
+  g.computeBoundingSphere();
+  return g;
+}
+// hide: wet skin, photophores = the ORM's blue (the pipeline's R AO / G rough / B emissive)
+function sculptHide(maps, key, extra) {
+  const m = K.wetSkin(new THREE.MeshStandardMaterial(Object.assign({
+    map: maps.map, normalMap: maps.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: maps.ormMap, aoMap: maps.ormMap,
+    roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.25,
+    emissive: 0xff8a3a, emissiveMap: maps.ormMap, emissiveIntensity: 0
+  }, extra || {})), key, 0);
+  const ob = m.onBeforeCompile;
+  m.onBeforeCompile = (sh, r) => {
+    ob(sh, r);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', THREE.ShaderChunk.emissivemap_fragment.replace('emissiveColor.rgb', 'emissiveColor.bbb * smoothstep(0.08, 0.3, emissiveColor.b)'));
+  };
+  return registerPaint(m);
+}
+// arm u keyed to the sucker stations (t = ((s - 0.16) / 0.76)^1.25 is the station index / 14,
+// continued linearly past both ends); tentacle u conformal (d u = ds len / (Lu r))
+function armU(s) {
+  if (s < 0.16) return (s - 0.16) * 0.678;
+  if (s > 0.92) return 1 + (s - 0.92) * 1.645;
+  return Math.pow((s - 0.16) / 0.76, 1.25);
+}
+function installSculpt(L, A) {
+  const g = A.geos, meta = A.meta.meta || {};
+  if (!g.mantle || !g.fin || !g.club || !g.sucker || !A.maps.body || !A.maps.limbs || !A.maps.arm || !A.maps.tent || L.sculpted) return;
+  L.sculpted = true;
+  L.keepTex = new Set([...L.keepTex, ...assetTextures(A)]);
+  L.keepGeo = assetGeos(A);
+  for (const set of ['arm', 'tent']) for (const t of Object.values(A.maps[set])) if (t.wrapS !== THREE.RepeatWrapping) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; }
+  const oldMats = new Set([L.skin, L.mskin, L.finMat, L.suckMat]), oldGeos = new Set();
+  // THE MANTLE: the jet's contraction patched over the sculpt's hide (same curve as before)
+  const mm = sculptHide(A.maps.body, 'abyssa-mhor-sculpt-mantle');
+  {
+    const ob = mm.onBeforeCompile;
+    mm.onBeforeCompile = (sh, r) => {
+      ob(sh, r);
+      sh.uniforms.uContract = L.mU.uContract;
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', '#include <common>\nuniform vec3 uContract;')
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          float mcK = smoothstep(0.10, 0.30, position.z) * (1.0 - smoothstep(0.78, 0.98, position.z));
+          transformed.xy *= 1.0 + uContract.x * mcK + uContract.y * mcK * sin(position.z * 25.0 - uContract.z);`);
+    };
+  }
+  const mantle = L.body.children.find(o => o.isMesh && o.material === L.mskin);
+  oldGeos.add(mantle.geometry);
+  mantle.geometry = g.mantle; mantle.material = mm;
+  L.mskin = mm;
+  // THE FINS: ribbed, torn; the membrane program, its wave on `fuv`
+  const fm = registerPaint(membrane(new THREE.MeshStandardMaterial({ color: 0xffffff, map: A.maps.limbs.map, normalMap: A.maps.limbs.normalMap, roughnessMap: A.maps.limbs.ormMap, aoMap: A.maps.limbs.ormMap,
+    roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.35, emissive: 0xff8a3a, emissiveIntensity: 0 }), L.finU, true));
+  const finR = finFuv(g.fin), finL = finFuv(mirrorX(g.fin));
+  L.keepGeo.add(finR);
+  for (const f of L.fins) { oldGeos.add(f.fin.geometry); f.fin.geometry = f.sd > 0 ? finR : finL; f.fin.scale.x = 1; f.fin.material = fm; }
+  L.finMat = fm;
+  // ARMS and TENTACLES: the strips
+  const armMat = sculptHide(A.maps.arm, 'abyssa-mhor-sculpt-limb');
+  const tentMat = sculptHide(A.maps.tent, 'abyssa-mhor-sculpt-limb');
+  const pairs = meta.armPairs || 7, tLu = meta.tentLu || 8;
+  for (let a = 0; a < L.arms.length; a++) {
+    const Ar = L.arms[a], row = RADIAL + 1, uv = new Float32Array((RINGS + 1) * row * 2);
+    let u = 0;
+    for (let i = 0; i <= RINGS; i++) {
+      const s = i / RINGS;
+      if (Ar.tent) {
+        if (i > 0) { const sm = (i - 0.5) / RINGS, r = Ar.r0 * Math.pow(1 - sm, 0.7) + 0.08 + (sm > 0.85 ? Ar.r0 * 0.6 : 0); u += Ar.len * 0.6 / RINGS / (tLu * r); }
+      } else u = armU(s) * 14 / pairs + ((a * 3) % pairs) / pairs;
+      for (let j = 0; j <= RADIAL; j++) { const q = (i * row + j) * 2; uv[q] = u; uv[q + 1] = j / RADIAL; }
+    }
+    Ar.geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    Ar.mesh.material = Ar.tent ? tentMat : armMat;
+  }
+  // THE CLUBS: the swivel hooks
+  const cm = sculptHide(A.maps.limbs, 'abyssa-mhor-sculpt-limb', { envMapIntensity: 0.5 });
+  for (const c of L.clubs) { oldGeos.add(c.geometry); c.geometry = g.club; c.material = cm; }
+  // THE SUCKERS: stalked cups with their toothed rings
+  const sm = registerPaint(new THREE.MeshStandardMaterial({ map: A.maps.sucker.map, normalMap: A.maps.sucker.normalMap, roughnessMap: A.maps.sucker.ormMap, aoMap: A.maps.sucker.ormMap,
+    roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.4 }));
+  oldGeos.add(L.suckers.geometry);
+  L.suckers.geometry = g.sucker; L.suckers.material = sm; L.suckMat = sm;
+  L.suckK = meta.suckK || 0.19;
+  for (const q of oldGeos) q.dispose();
+  for (const m of oldMats) if (m) m.dispose();
+  L.skin = armMat;
+  L.skinX = [tentMat, cm];
 }
 
 function arrive(L) {
@@ -744,7 +895,7 @@ function buildArms(L, dt) {
         _sd.crossVectors(_t, _in);
         _r.copy(A.pts[i0]).lerp(A.pts[i0 + 1], f).addScaledVector(_in, r * 0.84).addScaledVector(_sd, (row2 ? 0.26 : -0.26) * r);
         _q.setFromUnitVectors(_y, _in);
-        const sz = r * 0.19;
+        const sz = r * L.suckK;
         L.suckers.setMatrixAt(a * SUCK * 2 + k, _m.compose(_r, _q, _s.set(sz, sz, sz)));
       }
     }
@@ -974,6 +1125,7 @@ export function updateHunter(L, dt, t, player) {
   const ph = L.calmed ? 0.1 : L.stun > 0 ? 0.15 * (Math.sin(L.t * 17) > 0.6 ? 1 : 0) : hunt * (0.55 + 0.45 * Math.sin(L.t * (2 + 4 * hunt)));
   L.skin.emissiveIntensity = 1.8 * ph;
   L.mskin.emissiveIntensity = L.skin.emissiveIntensity;
+  if (L.skinX) for (const m of L.skinX) m.emissiveIntensity = L.skin.emissiveIntensity;
   L.finMat.emissiveIntensity = 0.3 * ph;
   // the GLOW reads across the murk: fog-off points on their own distance curve, swelling
   // with range (murk grows halos), gone past ~200 u
