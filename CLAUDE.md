@@ -9,6 +9,12 @@ sprites, audio, everything — authored procedurally in code by Claude. No downl
 models, no image files, no sample libraries. The bar does not drop because of this
 rule; it rises: procedural is the craft, not the excuse. (This retired the external
 Mark V helmet .glb plan — the helmet is generated now like everything else.)**
+**Blender clarification (2026-09-30): headless Blender driven by Claude-written scripts
+is a GENERATOR, not a source — `tools/blender/` bakes the sculpt pipeline's SDF creatures
+(src/lib/sculpt.js) high-to-low into assets/sleepers/*. Allowed because every byte
+rebuilds from committed code with fixed seeds (`node tools/blender/build.mjs <creature>`).
+Never hand-model, never import downloaded meshes/textures, and every loaded asset keeps a
+procedural fallback (lib/assets.js loadSculpted never throws).**
 
 ## Run / verify
 
