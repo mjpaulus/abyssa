@@ -175,7 +175,36 @@ for set_name, sconf in sets.items():
                                 normal_space='TANGENT')
             first = False
         log('  baked', key, '%.1fs' % (time.time() - tp))
-    for o in bpy.context.view_layer.objects:
+    # ---- EMISSIVE (optional, additive): pieces whose export carried an emit paint
+    # (<piece>_hiE.ply, the same high painted with the mask) bake it into the ORM's B.
+    emit = None
+    epieces = [p for p in pieces if p.get('hiE')]
+    if epieces:
+        tp = time.time()
+        imgs['emit'] = new_img(set_name + '_emit', size, True)
+        inode.image = imgs['emit']
+        scene.cycles.samples = 8
+        for l in list(hl):
+            if l.to_node == em and l.to_socket.name == 'Color':
+                hl.remove(l)
+        hl.new(ca.outputs['Color'], em.inputs['Color'])
+        for p in epieces:
+            he, lo = imp(p['hiE'], p['name'] + '_hiE'), los[p['name']]
+            he.data.materials.clear()
+            he.data.materials.append(hmat)
+            for o in bpy.context.view_layer.objects:
+                o.hide_render = o not in (he, lo)
+            deselect()
+            he.select_set(True)
+            lo.select_set(True)
+            bpy.context.view_layer.objects.active = lo
+            bpy.ops.object.bake(type='EMIT', use_selected_to_active=True, cage_extrusion=p['cage'], max_ray_distance=p['ray'],
+                                margin=gutter, margin_type='EXTEND', use_clear=False, target='IMAGE_TEXTURES')
+            bpy.data.objects.remove(he, do_unlink=True)
+        emit = np.empty(size * size * 4, np.float32)
+        imgs['emit'].pixels.foreach_get(emit)
+        log('  baked emit', [p['name'] for p in epieces], '%.1fs' % (time.time() - tp))
+    for o in bpy.data.objects:
         o.hide_render = False
     # ---- write the maps
     files = {}
@@ -189,7 +218,7 @@ for set_name, sconf in sets.items():
     orm = np.empty(n, np.float32)
     orm[0::4] = ao[0::4]
     orm[1::4] = ro[0::4]
-    orm[2::4] = 0.0
+    orm[2::4] = emit[0::4] if emit is not None else 0.0
     orm[3::4] = 1.0
     om = new_img(set_name + '_orm', size, True)
     om.pixels.foreach_set(orm)
@@ -201,6 +230,23 @@ for set_name, sconf in sets.items():
         bpy.data.objects.remove(o, do_unlink=True)
     all_lo += list(los.values())
     log('  wrote', set_name, files)
+
+# ---- STRIPS (optional, additive): tileable maps baked in node (strip.mjs), written here
+# as WebP. Raw rows are v-ordered top-first (the file's order); Blender's buffer is
+# bottom-first, so the rows are reversed going in.
+for sname, st in (man.get('strips') or {}).items():
+    if ONLY and sname not in ONLY:
+        continue
+    W, H = st['W'], st['H']
+    files = {}
+    for k, q in (('albedo', 92), ('normal', 95), ('orm', 92)):
+        raw = np.fromfile(os.path.join(BUILD, sname + '_' + k + '.raw'), dtype=np.uint8).reshape(H, W, 4)[::-1]
+        im = bpy.data.images.new(sname + '_' + k, W, H, alpha=False, float_buffer=False)
+        im.colorspace_settings.name = 'sRGB' if k == 'albedo' else 'Non-Color'
+        im.pixels.foreach_set((raw.astype(np.float32) / 255.0).ravel())
+        files[k] = save_webp(im, os.path.join(OUT, sname + '_' + k + '.webp'), q)
+    stats['sets'][sname] = {'size': W, 'h': H, 'strip': True, 'bytes': files}
+    log('  wrote strip', sname, W, H, files)
 
 # ---- the game mesh: every low, one .glb
 deselect()
@@ -214,6 +260,7 @@ bpy.ops.export_scene.gltf(filepath=glb, export_format='GLB', use_selection=True,
                           export_normals=True, export_texcoords=True, export_materials='NONE', export_apply=True)
 stats['glbBytes'] = os.path.getsize(glb)
 meta = {'name': man['name'], 'meta': man.get('meta', {}), 'probes': man.get('probes', {}), 'stats': stats,
-        'sets': {k: {'size': v.get('size', 1024)} for k, v in sets.items()}}
+        'sets': dict({k: {'size': v.get('size', 1024)} for k, v in sets.items()},
+                     **{k: {'size': v['W'], 'h': v['H'], 'strip': True} for k, v in (man.get('strips') or {}).items()})}
 json.dump(meta, open(os.path.join(OUT, man['name'] + '.json'), 'w'))
 log('DONE', glb, stats['glbBytes'])

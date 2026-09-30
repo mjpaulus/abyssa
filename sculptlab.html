@@ -116,7 +116,7 @@ lab.cam = (p, l) => { camera.position.fromArray(p); ctl.target.fromArray(l); ctl
 lab.shot = async name => {
   renderer.render(scene, camera);
   const url = renderer.domElement.toDataURL('image/jpeg', 0.92);
-  await fetch('http://127.0.0.1:8839/' + name, { method: 'POST', body: url });
+  await fetch('http://127.0.0.1:' + (q.get('cap') || 8839) + '/' + name, { method: 'POST', body: url });
   return name;
 };
 (function loop() { requestAnimationFrame(loop); ctl.update(); renderer.render(scene, camera); })();
