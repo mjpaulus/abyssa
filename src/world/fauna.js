@@ -196,6 +196,8 @@ const gr = (a, b) => a + GEO() * (b - a);
 
 // Shared uniforms — written once per frame.
 const uTime = { value: 0 };
+// The diver's head for the GAZE (world xyz, w = gain); shared by every fauna material.
+const uGaze = { value: new THREE.Vector4(0, -1e5, 0, 0) };
 const uFogD = { value: 0.016 };
 const uCull = { value: 205 };
 const CULL_MAX = 420;
@@ -337,7 +339,8 @@ function ell(pos, scale, color, o = {}) {
 function eyes(parts, x, y, z, r, o = {}) {
   for (const s of [-1, 1]) {
     parts.push(ell([x, y, z * s], [r, r * 0.95, r * 0.5], o.rim || 0x4a4132, { detail: 10, part: o.part || 0, kind: SK.iris }));
-    parts.push(ell([x + r * 0.1, y, z * s + s * r * 0.3], [r * 0.7, r * 0.72, r * 0.35], 0x07090a, { detail: 10, part: o.part || 0, noise: 0, kind: SK.cornea }));
+    // phase carries the eye's radius to the shader (the GAZE shift; part 0 never reads aPhase)
+    parts.push(ell([x + r * 0.1, y, z * s + s * r * 0.3], [r * 0.7, r * 0.72, r * 0.35], 0x07090a, { detail: 10, part: o.part || 0, noise: 0, kind: SK.cornea, phase: r }));
   }
 }
 
@@ -369,7 +372,12 @@ function gape(parts, x, y, ry, rz, depth, color, teeth, hy = y) {
 function merge(parts, scale) {
   const g = mergeGeometries(parts, false);
   for (const p of parts) p.dispose();
-  if (scale) g.scale(scale, scale, scale);
+  if (scale) {
+    g.scale(scale, scale, scale);
+    // the cornea's aPhase is the eye radius (the GAZE shift) and has to scale with it
+    const kd = g.attributes.aKind, ph = g.attributes.aPhase;
+    if (kd && ph) for (let i = 0; i < kd.count; i++) if (kd.getX(i) === SK.cornea) ph.setX(i, ph.getX(i) * scale);
+  }
   g.computeBoundingSphere();
   return g;
 }
@@ -562,7 +570,7 @@ function lanternfishGeometry() {
 const VERT_COMMON = `#include <common>
 attribute float aPart; attribute float aPhase; attribute float aGlow; attribute vec4 aInst; attribute float aKind;
 uniform float uTime; uniform float uCull; uniform float uFogD;
-uniform vec4 uMot; uniform vec4 uHinge; uniform vec4 uBody;
+uniform vec4 uMot; uniform vec4 uHinge; uniform vec4 uBody; uniform vec4 uGaze;
 varying float vGlow; varying float vFade;
 varying float vKind; varying vec3 vObj; varying vec3 vObjN; varying vec2 vFuv;
 float fnContract(float x){ x = fract(x); return x < 0.28 ? 0.5 - 0.5*cos(x*11.2199) : 0.5 + 0.5*cos((x-0.28)*4.3633); }`;
@@ -644,6 +652,21 @@ if (fnPart < 1.5) {
   fnP.z -= sign(fnP.z) * (1.0 - fnEff) * fnFore * fnS * 0.18;
   fnN.z -= fnW * fnAmp * 0.4 * sign(fnP.z);
 }
+// THE GAZE. An animal that has noticed you LOOKS at you: the pupil dome slides in its
+// eye toward the diver (forward/back and up/down in the eye's own plane, up to ~a
+// quarter of the eye), on the eye that can see him — the far eye relaxes to centre.
+// Fades out past ~30 u where no eye reads. Cornea vertices only (aKind 1), whose aPhase
+// carries the eye's radius; uGaze.xyz is the diver's head (world), w the master gain.
+#ifdef USE_INSTANCING
+if (abs(aKind - 1.0) < 0.5 && uGaze.w > 0.0) {
+  mat4 gMM = modelMatrix * instanceMatrix;
+  vec3 gd = uGaze.xyz - gMM[3].xyz;
+  float gL = length(gd);
+  vec3 gl = normalize(transpose(mat3(gMM)) * gd);
+  float gw = smoothstep(-0.25, 0.35, gl.z * sign(position.z)) * (1.0 - smoothstep(18.0, 30.0, gL)) * uGaze.w;
+  fnP.xy += clamp(gl.xy, vec2(-0.8), vec2(0.8)) * aPhase * 0.30 * gw;
+}
+#endif
 objectNormal = normalize(fnN);`;
 
 const VERT_BEGIN = `#include <begin_vertex>
@@ -874,7 +897,7 @@ function faunaMaterial(o) {
     uBody: { value: new THREE.Vector4(...(o.body || [1, 0.5, 2, 1])) },
     uGlowCol: { value: new THREE.Color(o.glow || 0).multiplyScalar(o.glowI || 0) },
     uSkin: { value: new THREE.Vector4(...(o.skin || [0, 1, 0, 0])) },
-    uTime, uCull, uFogD
+    uTime, uCull, uFogD, uGaze
   };
   const m = new THREE.MeshStandardMaterial({
     vertexColors: true, roughness: o.rough === undefined ? 0.72 : o.rough, metalness: o.metal || 0,
@@ -1754,6 +1777,7 @@ export function updateFauna(dt, t) {
   const cy = camera.position.y;
   const cull = uCull.value;
   _pp.x = player.pos.x; _pp.y = player.pos.y; _pp.z = player.pos.z;
+  uGaze.value.set(player.pos.x, player.pos.y + 0.45, player.pos.z, 1);
 
   // Zone band gate (terrain's rule), then a range gate on the group's centre.
   for (const G of groups) {

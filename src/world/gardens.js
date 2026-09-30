@@ -325,7 +325,10 @@ function tipMat(o) {
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + F_DITHER)
       .replace('#include <opaque_fragment>', `
         float gpl = 0.55 + 0.45 * sin(uTime * 0.7 + vGd.w * 6.2831 + vGd.y * 4.0);
-        outgoingLight *= vGl.x * gpl * ${(o.gain ?? 0.5).toFixed(3)};
+        // a soft round point of light, not the quad (vBl.xy is the quad's uv, v + 1)
+        float gtr = length(vBl.xy - vec2(0.5, 1.5)) * 2.0;
+        float gtd = 1.0 - smoothstep(0.0, 1.0, gtr);
+        outgoingLight *= vGl.x * gpl * gtd * gtd * ${(o.gain ?? 0.5).toFixed(3)};
         #include <opaque_fragment>`);
   };
   m.customProgramCacheKey = () => 'gardens|tip';
@@ -353,9 +356,13 @@ class Build {
     g.dispose();
     return this;
   }
-  done(fn) {
+  // span: an optional { lo, hi } height frame to normalise h against, so a part built as
+  // its own geometry (the sea-pen tips) sways on its parent's frame, not its own.
+  done(fn, span0 = null) {
     let lo = Infinity, hi = -Infinity;
     for (let k = 1; k < this.p.length; k += 3) { if (this.p[k] < lo) lo = this.p[k]; if (this.p[k] > hi) hi = this.p[k]; }
+    this.lo = lo; this.hi = hi;
+    if (span0) { lo = span0.lo; hi = span0.hi; }
     const span = Math.max(1e-4, hi - lo);
     const col = new Float32Array(this.v * 3), va = new Float32Array(this.v * 4), fl = new Float32Array(this.v);
     const o = { c: [1, 1, 1], flex: 0, mask: 0, flut: 0, ph: 0 };
@@ -715,7 +722,7 @@ function seaPenGeo() {
     B.add(f, xf(0.02 * s.y, s.y, 0, 0, sd * 1.25, 0), { t: 'p', ph: s.ph, len: s.len, by: s.y, bu: true });
     f.dispose();
   }
-  return B.done((x, y, z, h, m, o) => {
+  const g = B.done((x, y, z, h, m, o) => {
     if (m.t === 'q') {
       const s = 0.45 + 0.4 * h;
       o.c[0] = s * 0.9; o.c[1] = s * 0.7; o.c[2] = s * 0.62;
@@ -726,19 +733,32 @@ function seaPenGeo() {
       o.flex = Math.pow(h, 1.4) * 0.8 + u * 0.15; o.flut = 0.012 * u; o.mask = u;
     }
   });
+  PEN_Y = { lo: B.lo, hi: B.hi };
+  return g;
 }
+// The pinna tips' glow. These used to be placed on a guessed arc (x mirrored, no lean,
+// the wrong angle) that missed every pinna, and drawn as hard additive SQUARES — the
+// staircase of pale blue blocks hanging beside each pen in zone 2. Now each dot sits on
+// its pinna's real tip (the same bladeGeo end point through the same xf), sways on the
+// pen's own height frame with the pinna's own flex/flutter at that point, and is a soft
+// round falloff (tipMat reads the quad's uv).
+let PEN_Y = null;
+const _penTip = new THREE.Vector3();
 function penTipGeo() {
   const B = new Build();
   const q = new THREE.PlaneGeometry(0.05, 0.05);
   for (const s of PEN_SPEC) for (const sd of [-1, 1]) {
-    const tx = sd * (s.len * 0.94) * Math.cos(0.32), ty = s.y + s.len * 0.94 * Math.sin(0.32) + 0.02 * s.y;
-    B.add(q, xf(tx, ty, 0, 0, 0, 0, 1, 1, 1), { ph: s.ph, by: s.y, len: s.len });
+    // bladeGeo(h, w, lean): tip at (0, h (1 - 0.19), lean); the pen builds it with
+    // h = len, lean = 0.25 len, rotated sd * 1.25 about Z and set on the rachis
+    _penTip.set(0, s.len * 0.81, s.len * 0.25).applyMatrix4(xf(0.02 * s.y, s.y, 0, 0, sd * 1.25, 0));
+    B.add(q, xf(_penTip.x, _penTip.y, _penTip.z, 0, 0, 0, 1, 1, 1), { ph: s.ph, by: s.y, len: s.len, bu: true });
   }
   q.dispose();
   return B.done((x, y, z, h, m, o) => {
     o.c[0] = 0.55; o.c[1] = 0.85; o.c[2] = 1.0;
-    o.flex = Math.pow(h, 1.4) * 0.8 + 0.15; o.flut = 0.012; o.mask = 1;
-  });
+    const u = clamp(Math.hypot(x, y - m.by) / m.len, 0, 1);
+    o.flex = Math.pow(h, 1.4) * 0.8 + u * 0.15; o.flut = 0.012 * u; o.mask = 1;
+  }, PEN_Y);
 }
 
 // Glass sponge: a lattice basket — vertical ribs on a vase profile, horizontal hoops.

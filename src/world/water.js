@@ -200,6 +200,13 @@ const LAMPP_U = new Float32Array(4);
 // integrates the extra detail). 0 = bit-identical sampling. Same shared-array install
 // as every uniform below.
 export const TAA_U = new Float32Array(4);
+// The diver's two shadow spheres for the lantern's in-scatter (see GLSL_LAMP).
+const OCCA_U = new Float32Array(4), OCCB_U = new Float32Array(4);
+// game.js hands these over each frame from the rig (chest, helmet: centre + radius).
+export function setLampOccluders(o) {
+  for (let i = 0; i < 4; i++) { OCCA_U[i] = o[i]; OCCB_U[i] = o[4 + i]; }
+  if (!ATMOS.lampOcc) OCCA_U[3] = OCCB_U[3] = 0;
+}
 // Look knobs, live-pokeable through window.__atmos.
 export const ATMOS = {
   // Lantern in-scatter gain (x the physical sigma_s * I * phase). Tuned against the
@@ -208,6 +215,7 @@ export const ATMOS = {
   lampGain: 0.055,
   lampGainB: 0.6,      // second slot (vent throat / ward / hoard lamp): the furnace glow in the boiler room
   lampOn: true,
+  lampOcc: true,       // Sal's body shadows the lantern's glow (A/B: __atmos.ATMOS.lampOcc = false)
   bokeh: true,
   spray: 1            // sea-spray amount multiplier (0 = off)
 };
@@ -403,35 +411,97 @@ vec3 boltLight( vec3 P, vec3 N, vec4 B, float storm ){
 // The window is three's own range falloff (1 - (d/R)^4)^2 at that same closest point, so
 // the glow can never reach water the lamp does not light on surfaces.
 // Requires LAMPK_U etc. installed as uniforms (patchFog / the dome).
+// THE DIVER'S SHADOW IN THE GLOW. The lantern hangs at Sal's side, so his own body
+// stands in its light: the water behind his chest and helmet (as seen from the flame)
+// is NOT lit, and a ray through that water collects no glow there. Without this the
+// halo painted straight over his back whenever the lamp was on his far side, and the
+// murk on his unlit flank glowed like the lit one. The occluders are two analytic
+// spheres (chest, helmet: abyssaOccA/B, xyz + radius, written by game.js from the rig
+// each frame; r = 0 turns one off). A sphere's shadow from a point source is the
+// forward nappe of a cone (apex at the flame, half-angle asin(r/D)) beyond the
+// sphere: a quadric, so a view ray crosses it in ONE interval, found in closed form.
+// The in-scatter over that interval is the same elementary integral as the lit
+// segment's (lampSeg, two more atan), and it is subtracted; where the two shadow
+// intervals overlap the overlap is added back once. Slot A (the lantern) only.
 const GLSL_LAMP = `
 uniform vec4 abyssaLampA, abyssaLampAC, abyssaLampB, abyssaLampBC, abyssaLampK, abyssaLampP;
+uniform vec4 abyssaOccA, abyssaOccB;
 float lampF( float u ){
   float c = inversesqrt( 1.0 + u * u ), s = u * c, th = atan( u );
   float f4 = 4.375 * th + c * ( 8.0 - 1.3333333 * c * c )
            + s * c * ( 0.125 * ( c * c - s * s ) - 3.5 );
   return 0.15 * th + 0.265625 * f4;
 }
-vec3 lampScatter( vec3 ro, vec3 v, float L, vec4 P, vec4 C ){
+// In-scatter from the segment [t0, t1] of the ray (t0 = 0, t1 = L is the whole path).
+vec3 lampSeg( vec3 ro, vec3 v, float t0, float t1, vec4 P, vec4 C ){
   vec3  dp  = P.xyz - ro;
   float tc  = dot( dp, v );
   float h2  = max( dot( dp, dp ) - tc * tc, 0.09 );
-  float tm  = clamp( tc, 0.0, L );
+  float tm  = clamp( tc, t0, t1 );
   float dm2 = h2 + ( tm - tc ) * ( tm - tc );
   float q   = dm2 / max( C.w * C.w, 1.0 );
   // Out of the lamp's reach along the whole segment: no atan, no exp.
   if ( q >= 1.0 ) return vec3( 0.0 );
   float win = 1.0 - q * q;
   float ih  = inversesqrt( h2 );
-  float geo = max( lampF( ( L - tc ) * ih ) - lampF( -tc * ih ), 0.0 ) * ih;
+  float geo = max( lampF( ( t1 - tc ) * ih ) - lampF( ( t0 - tc ) * ih ), 0.0 ) * ih;
   vec3  trl = exp( -abyssaLampK.rgb * tm - abyssaLampP.rgb * sqrt( dm2 ) );
   return C.rgb * ( P.w * geo * win * win ) * trl;
+}
+vec3 lampScatter( vec3 ro, vec3 v, float L, vec4 P, vec4 C ){ return lampSeg( ro, v, 0.0, L, P, C ); }
+// The interval of [0, L] inside sphere S's shadow from the point P (empty: x >= y).
+vec2 lampShadow( vec3 ro, vec3 v, float L, vec3 P, vec4 S ){
+  vec2 no = vec2( 1.0, 0.0 );
+  if ( S.w <= 0.0 ) return no;
+  vec3  a  = S.xyz - P;
+  float D2 = dot( a, a ), r2 = S.w * S.w;
+  if ( D2 <= r2 * 1.05 ) return no;               // flame at or inside the occluder
+  float D  = sqrt( D2 );
+  vec3  ax = a / D;
+  float k  = 1.0 - r2 / D2;                        // cos^2 of the cone's half-angle
+  vec3  w  = ro - P;
+  float dv = dot( v, ax ), dw = dot( w, ax );
+  // f(t) = (ax.(x - P))^2 - k |x - P|^2 >= 0 inside the double cone
+  float A = dv * dv - k, B = dv * dw - k * dot( v, w ), Cq = dw * dw - k * dot( w, w );
+  float disc = B * B - A * Cq;
+  vec2 sp;
+  if ( abs( A ) < 1e-5 || disc < 0.0 ) {
+    // parallel to the cone's wall, or never crossing it: inside all along or not at all
+    if ( Cq < 0.0 || dw < 0.0 ) return no;
+    sp = vec2( -1e9, 1e9 );
+  } else {
+    float sq = sqrt( disc );
+    float r1 = ( -B - sq ) / A, r2b = ( -B + sq ) / A;
+    float lo = min( r1, r2b ), hi = max( r1, r2b );
+    if ( A < 0.0 ) {
+      if ( dw + dv * 0.5 * ( lo + hi ) < 0.0 ) return no;   // that is the back nappe
+      sp = vec2( lo, hi );
+    } else {
+      sp = ( dw + dv * ( hi + 1.0 ) > 0.0 ) ? vec2( hi, 1e9 ) : vec2( -1e9, lo );
+    }
+  }
+  // only BEHIND the occluder (beyond the plane through its centre, facing the flame)
+  if ( abs( dv ) > 1e-5 ) {
+    float th = ( D - dw ) / dv;
+    if ( dv > 0.0 ) sp.x = max( sp.x, th ); else sp.y = min( sp.y, th );
+  } else if ( dw < D ) return no;
+  return vec2( max( sp.x, 0.0 ), min( sp.y, L ) );
 }
 // Both slots, scaled by the scattering coefficient (green local extinction, the channel
 // the silt line is calibrated on) and the gain, then rolled off by a soft shoulder so a
 // ray grazing the flame can never clip: x / (1 + mean(x)) keeps the hue of the beam.
 vec3 lampAirlight( vec3 ro, vec3 v, float L ){
   vec3 x = vec3( 0.0 );
-  if ( abyssaLampA.w > 0.0 ) x += lampScatter( ro, v, L, abyssaLampA, abyssaLampAC );
+  if ( abyssaLampA.w > 0.0 ) {
+    x += lampScatter( ro, v, L, abyssaLampA, abyssaLampAC );
+    vec2 sa = lampShadow( ro, v, L, abyssaLampA.xyz, abyssaOccA );
+    vec2 sb = lampShadow( ro, v, L, abyssaLampA.xyz, abyssaOccB );
+    if ( sa.x < sa.y ) x -= lampSeg( ro, v, sa.x, sa.y, abyssaLampA, abyssaLampAC );
+    if ( sb.x < sb.y ) x -= lampSeg( ro, v, sb.x, sb.y, abyssaLampA, abyssaLampAC );
+    float o0 = max( sa.x, sb.x ), o1 = min( sa.y, sb.y );
+    if ( sa.x < sa.y && sb.x < sb.y && o0 < o1 ) x += lampSeg( ro, v, o0, o1, abyssaLampA, abyssaLampAC );
+    x = max( x, vec3( 0.0 ) );
+  }
   if ( abyssaLampB.w > 0.0 ) x += lampScatter( ro, v, L, abyssaLampB, abyssaLampBC );
   x *= abyssaLampK.g * abyssaLampK.w;
   return x / ( 1.0 + dot( x, vec3( 0.3333 ) ) );
@@ -1028,6 +1098,8 @@ const AIRZ_U = new Float32Array(4);
   THREE.UniformsLib.fog.abyssaLampK = { value: LAMPK_U };
   THREE.UniformsLib.fog.abyssaLampP = { value: LAMPP_U };
   THREE.UniformsLib.fog.abyssaTaa = { value: TAA_U };
+  THREE.UniformsLib.fog.abyssaOccA = { value: OCCA_U };
+  THREE.UniformsLib.fog.abyssaOccB = { value: OCCB_U };
   for (const k in THREE.ShaderLib) {
     const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
     if (u && u.fogColor) {
@@ -1038,6 +1110,7 @@ const AIRZ_U = new Float32Array(4);
       u.abyssaLampB = { value: LAMPB_U }; u.abyssaLampBC = { value: LAMPBC_U };
       u.abyssaLampK = { value: LAMPK_U }; u.abyssaLampP = { value: LAMPP_U };
       u.abyssaTaa = { value: TAA_U };
+      u.abyssaOccA = { value: OCCA_U }; u.abyssaOccB = { value: OCCB_U };
     }
   }
   // THE BOLT NEEDS A NORMAL, and the fog chunk is shared by materials that have one and
@@ -1381,6 +1454,7 @@ function buildDome() {
       abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U },
       abyssaLampB: { value: LAMPB_U }, abyssaLampBC: { value: LAMPBC_U },
       abyssaLampK: { value: LAMPK_U }, abyssaLampP: { value: LAMPP_U },
+      abyssaOccA: { value: OCCA_U }, abyssaOccB: { value: OCCB_U },
       ...SKY_UNIFORMS
     },
     side: THREE.BackSide, depthWrite: false, fog: false,

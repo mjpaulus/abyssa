@@ -1641,14 +1641,29 @@ registerPaint(bubMat, { hero: true });   // a bubble is a mirror at grazing inci
 // emissive rim (NOT additive glow: it still fogs, still darkens with depth via the
 // per-channel fog chunk applied after) puts a bright edge on every bubble that
 // catches whatever the water's own light is doing. No backticks live in this GLSL.
+// The rim is REFLECTED light, so it scales with the light the bubble receives (the same
+// diffuse irradiance proxy the kelp uses: lit diffuse / albedo), not a constant: as a
+// fixed emissive it lit every bubble the same pale blue-white in zone 2's black water,
+// where a lead bubble passing the lens read as a glowing white polygon. Beside the
+// lantern the rim now catches the flame; in the dark it is gone. The ball is 12 x 8
+// (was 7 x 5, whose heptagon silhouette showed on every bubble near the camera).
+// uBubAmb: the water's own radiance at the camera against the zone-0 floor (1 there, a
+// trace in the deep zones) — the same normalisation the marine snow uses — so the
+// shallows keep the rim they were tuned with and the abyss does not.
+const uBubAmb = { value: 1 };
 bubMat.onBeforeCompile = (sh) => {
-  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
-    '#include <emissivemap_fragment>\n' +
+  sh.uniforms.uBubAmb = uBubAmb;
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uBubAmb;')
+    .replace('#include <lights_fragment_end>',
+    '#include <lights_fragment_end>\n' +
     'float bubFr = pow( 1.0 - abs( dot( normalize( vNormal ), normalize( vViewPosition ) ) ), 3.0 );\n' +
-    'totalEmissiveRadiance += vec3( 0.60, 0.71, 0.80 ) * bubFr * 0.60;');
+    'vec3 bubIrr = ( reflectedLight.directDiffuse + reflectedLight.indirectDiffuse ) / max( diffuseColor.rgb, vec3( 0.05 ) );\n' +
+    'float bubD = min( dot( reflectedLight.directDiffuse / max( diffuseColor.rgb, vec3( 0.05 ) ), vec3( 0.2126, 0.7152, 0.0722 ) ) * 3.1416, 1.2 );\n' +
+    'reflectedLight.indirectSpecular += vec3( 0.60, 0.71, 0.80 ) * bubFr * 0.60 * uBubAmb\n' +
+    '  + bubIrr / max( dot( bubIrr, vec3( 0.333 ) ), 1e-4 ) * bubFr * 0.45 * bubD;');
 };
 bubMat.customProgramCacheKey = () => 'salBubbleRim';
-const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 7, 5), bubMat, BUBN);
+const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 8), bubMat, BUBN);
 bubbles.frustumCulled = false;
 bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 bubbles.castShadow = bubbles.receiveShadow = false;
@@ -2107,7 +2122,7 @@ function ankleOverContact(th, cz, out) {
 // what makes a step onto a slope keep its own level instead of dragging.
 function foot() {
   return {
-    planted: false, deck: false, seed: false, step: 0,
+    planted: false, deck: false, seed: false, step: 0, span: false,
     ax: 0, ay: 0, az: 0,           // contact point in the ground frame
     duty: DUTY, stride: 1, lat: 0, // this step's variation draws
     slip: 0,                       // accumulated travel through the flat window (the probe)
@@ -2122,6 +2137,25 @@ let strideK = 1;                   // the live step's stride multiplier, read by
 // ---- gait state machine: transitions are EVENTS, not fades ----
 // 0 = standing, 1 = start lean (anticipation), 2 = walking, 3 = catch step (stopping).
 let gaitState = 0, gaitT = 0, catchFrom = 0, catchTo = 0;
+// BACKING UP IS FORWARD WALKING RUN BACKWARDS IN TIME. That is not a shortcut, it is
+// the biomechanics: the joint-angle traces of backward walking are close to the time
+// reversal of forward walking (Thorstensson 1986; Grasso et al. 1998). So the phase
+// clock simply runs the other way. What the reversal gets right for free: the swing
+// foot reaches BEHIND, lands on the ball of the foot with the heel up (the roll-through
+// curve read from its far end), rolls down to the flat, and leaves the ground heel-last
+// out in front. The body-relative foot track at any phase is the same in both
+// directions, so the inverted-pendulum reach budget holds unchanged.
+// What it does NOT get for free, and is handled where it lives: the IK hand-off windows
+// (they sit at the far end of each phase span), the swing's landing target (behind,
+// toe-down), the catch step's target phase, and the footfall event (a reverse plant is
+// at lp = DUTY, not lp = 0 — the strike clock below re-bases for it).
+// gaitDir is the clock's sign; revF eases 0..1 for the few pose terms that must blend.
+let gaitDir = 1, revF = 0, wgtNow = 1;
+const revS = { x: 0, v: 0 };
+// The strike clock: 0 and 0.5 are footfalls in either direction (to within the per-step
+// duty draw — the exact reverse footfall fires on the plant). Forward it IS walkP.
+// Published to player.js, which lands the per-stride water resistance on it.
+const strikeP = () => gaitDir > 0 ? walkP : (walkP - DUTY + 1) % 1;
 const START_LEAN = 0.15, CATCH_DUR = 0.30;
 const leanP = { x: 0, v: 0 };      // body pitch for lean/catch, in radians
 let bankG = 0;                     // grounded bank into a turn
@@ -2341,6 +2375,10 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       ft.step = stepSeq;
       // NOTHING IS CLOCKWORK. Small, deterministic, keyed on the step index alone.
       ft.duty = DUTY * (1 + 0.08 * sSym(stepSeq, 1));      // stance duration +/-8%
+      // Backing, the claim happens at the TOP of the stance span (lp falling through
+      // duty), so a fresh, shorter draw would drop the foot straight back out of stance
+      // and re-plant it a frame later. The span can never start below where it started.
+      if (gaitDir < 0 && ft.duty < lp) ft.duty = lp + 1e-4;
       ft.stride = 1 + 0.06 * sSym(stepSeq, 2);             // stride length +/-6%
       ft.lat = 0.05 * sSym(stepSeq, 3) + sgn * turnWide + turnBias;   // placement +/-0.05
       ft.slip = 0;
@@ -2356,9 +2394,23 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       }
       ft.ax = ft.wx - ox; ft.ay = soleY + groundD(ft.wx, ft.wz) - oy; ft.az = ft.wz - oz;
       ft.deck = onDeck; ft.planted = true;
+      // A reverse plant IS the footfall (toe down behind him), and it lands at lp = duty,
+      // which the per-step duty draw moves — so backing up fires its footfall here, on
+      // the claim itself, rather than off a phase boundary. Same weight, same knee, same
+      // counter: audio, silt and prints stay on the frame the boot goes down.
+      // Only the FIRST claim of a stance span is a footfall: a boot released for overreach
+      // is re-claimed inside the same span (the walk-off from a stand does this for a
+      // few frames), and that is a foot re-finding its grip, not another step.
+      if (gaitDir < 0 && !ft.span && !standing && (gaitState === 2 || gaitState === 3)) {
+        settle.v -= 2.25 * (0.45 + 0.75 * wgtNow) * gb * amp;
+        kneeSoft.v += 4.0 * gb * amp;
+        kneeSide = i;
+        if (gb > 0.5 && amp > 0.08) steps++;
+      }
     } else if (!inStance && ft.planted) {
       ft.planted = false;
     }
+    ft.span = inStance;
     // A ground that changed frame under a planted foot (stepping off the deck) has to be
     // re-based or the boot is left standing on a memory of the raft.
     if (ft.planted && ft.deck !== onDeck) { ft.planted = false; }
@@ -2428,24 +2480,30 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // Hand the last tenth of stance back to the curves so toe-off is continuous: the
       // solver inverts the forward pose exactly, so at wIK = 0 it reproduces the authored
       // angles and there is no seam between contact and swing.
-      wIK = 1 - ss(0.90, 1.0, sp);
+      // Backing, the foot LEAVES at sp = 0 (heel-last, out in front), so the hand-back
+      // window is the first tenth of the span instead of the last.
+      wIK = 1 - ss(0.90, 1.0, sp) + (ss(0.0, 0.10, sp) - 1 + ss(0.90, 1.0, sp)) * revF;
     } else {
       // ---- SWING. Authored in the air, aimed at the ground. ----
       // The next plant is where the root will BE when this foot lands (velocity x the
       // swing time still to run) plus half a stance's worth of ground ahead of it — which
       // is exactly the offset that makes the coming stance hold still.
       const swp = (lp - ft.duty) / (1 - ft.duty);
-      const tRem = clamp((1 - lp) / Math.max(stepRate, 0.25), 0, 0.9);
-      const ahead = DUTY * STRIDE_U * ft.stride * 0.5 + (gaitState === 3 ? 0.18 : 0);
+      // Backing, the clock runs down: the swing ends at lp = duty, not at 1, and the boot
+      // lands BEHIND him, toe first with the heel still up — exactly the pose the stance
+      // roll-through opens with when it is read from its far end (sp = 1).
+      const rev = gaitDir < 0;
+      const tRem = clamp((rev ? lp - ft.duty : 1 - lp) / Math.max(stepRate, 0.25), 0, 0.9);
+      const ahead = (DUTY * STRIDE_U * ft.stride * 0.5 + (gaitState === 3 ? 0.18 : 0)) * (1 - 2 * revF);
       const latL = sgn * HIP_X + ft.lat;
       const lx = player.pos.x + player.vel.x * tRem + sy * ahead + cy * latL;
       const lz = player.pos.z + player.vel.z * tRem + cy * ahead - sy * latL;
-      th = TH_STRIKE + groundPitch(lx, lz); cz = CZ_HEEL;
+      th = TH_STRIKE + (TH_OFF - TH_STRIKE) * revF + groundPitch(lx, lz); cz = CZ_HEEL + (CZ_BALL - CZ_HEEL) * revF;
       ankleOverContact(th, cz, _vC);
       _vD.set(lx + sy * _vC.z, soleY + groundD(lx, lz) + _vC.y, lz + cy * _vC.z);
       // Ease onto the landing line over the back half of the swing: early swing is pure
       // authored curve (which is good in the air), late swing is pure ground truth.
-      wIK = ss(0.40, 0.97, swp);
+      wIK = ss(0.40, 0.97, swp) + (ss(0.40, 0.97, 1 - swp) - ss(0.40, 0.97, swp)) * revF;
     }
     _vD.applyMatrix4(_mHi);
 
@@ -2467,6 +2525,10 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     // meant to run right up against full extension (that is what a straightening leg IS),
     // and releasing there re-anchored every frame and chewed through the per-step
     // variation draws for nothing.
+    // The guard is on PHASE, not on time-in-stance: the overrun it forgives is the
+    // geometry of sp < 0.18 (foot far ahead, pelvis in its dip), which backing up reaches
+    // at the END of its stance, just before the heel leaves. Releasing there re-claimed
+    // the same boot a frame later and doubled the footfall.
     if (inStance && ikOver > 0.06 && sp > 0.18 && !standing) ft.planted = false;
 
     seg.root.rotation.set(_ik[0], 0, _ik[1]);
@@ -2602,7 +2664,24 @@ export function updateDiver(dt, t, player) {
     }
     spring(strafeS, off, dt, 5, 1);
   }
-  yawF = lerp(yawF, player.yaw + strafeS.x, Math.min(1, (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * dt));
+  // THE SLASH SQUARES HIM UP. game.js checks the hit along the LOOK (forwardVec) at
+  // t+0.22; the swing is authored in the BODY frame, and with the strafe blend (or the
+  // loose swim yaw) the body can sit ~70 degrees off the look — the knife visibly cut
+  // one way while the hit landed another. The one correct answer is that the man turns
+  // into the cut: the draw and windup (0 -> 0.15 s) are exactly the time a fighter uses
+  // to square his shoulders, so the body heading is driven hard onto the look through
+  // the windup, held through contact and follow-through, and handed back to the strafe
+  // blend during the slow recovery. The feet follow on their own: planted boots stay
+  // nailed and the IK twists the legs under the turning hips; a standing turn this big
+  // triggers the shuffle step, which is what a real squaring-up does. The hit timing
+  // and the swing curves are untouched — only WHERE the swing points moves.
+  const sqW = slashT >= 0 ? ss(0, 0.12, slashT) * (1 - ss(0.40, SLASH_DUR, slashT)) : 0;
+  {
+    let d = player.yaw + strafeS.x * (1 - sqW) - yawF;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    const rate = (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * (1 - sqW) + 26 * sqW;
+    yawF += d * Math.min(1, rate * dt);
+  }
   diver.rotation.y = yawF;
 
   // Stepping onto planks kills the aquatic motion in ~0.15 s rather than half a second:
@@ -2616,6 +2695,7 @@ export function updateDiver(dt, t, player) {
   // A_BUOY_MIN -1.83); duplicated as two literals rather than imported, because diver.js
   // is a pose module and must stay loadable behind the title with no physics running.
   const wgt = player.onDeck ? 1 : clamp((0.9 - (player.buoy || 0)) / 2.73, 0, 1);
+  wgtNow = wgt;
 
   // Gait amplitude envelope: a short attack (he leans into the walk) and a longer release
   // (he settles out of it and the last stride finishes). Hoisted above the phase clock
@@ -2644,6 +2724,21 @@ export function updateDiver(dt, t, player) {
   // and the catch step fires its own footfall exactly like any other plant.
   const wantWalk = ampT > 0.02;
   let stepRate = 0;
+  // Which way the clock turns: ground covered along the BODY's heading (the strafe blend
+  // has already turned the hips toward a sideways walk, so only a genuine back-up reads
+  // negative here). Chosen freely while he stands or leans in; mid-walk it needs a clear
+  // reversal (hysteresis), and the flip is a pure time reversal — every planted boot
+  // stays planted, every swinging boot goes back the way it came.
+  {
+    const fAlong = player.vel.x * Math.sin(yawF) + player.vel.z * Math.cos(yawF);
+    const nd = gaitState <= 1 ? (fAlong < -0.02 ? -1 : 1)
+      : fAlong < -0.35 ? -1 : fAlong > 0.35 ? 1 : gaitDir;
+    if (nd !== gaitDir) {
+      gaitDir = nd;
+      // the strike clock re-bases by DUTY on a flip; do not let that read as a footfall
+      lastStepSide = strikeP() < 0.5 ? 0 : 1;
+    }
+  }
   if (gaitState === 0) {
     if (wantWalk) { gaitState = 1; gaitT = 0; }
   } else if (gaitState === 1) {
@@ -2653,14 +2748,18 @@ export function updateDiver(dt, t, player) {
       // Push-off. walkP 0.5 IS the left heel strike: he steps forward onto the leading
       // foot, both boots are briefly down, and the right toes off out of that double
       // support. Landing exactly on the strike keeps the footfall audio honest.
-      gaitState = 2; walkP = 0.5; gaitT = 0;
+      // Backing off from a stand is the mirror: the left boot has just gone down BEHIND
+      // (reverse plant at lp = DUTY) and the right is about to leave heel-last.
+      gaitState = 2; walkP = gaitDir > 0 ? 0.5 : DUTY + 0.5 - 1 - 1e-3; gaitT = 0;
     }
   } else if (gaitState === 2) {
     stepRate = clamp(flat / (STRIDE_U * strideK), 0, 2.1);
     if (!wantWalk) {
       // Finish the step that is in the air, on a fixed clock, and land it long.
       gaitState = 3; gaitT = 0; catchFrom = walkP;
-      catchTo = walkP < 0.5 ? 0.5 : 1.0;
+      // Backing, the next plant is the next lp = DUTY crossing going DOWN.
+      if (gaitDir > 0) catchTo = walkP < 0.5 ? 0.5 : 1.0;
+      else catchTo = walkP > DUTY ? DUTY : walkP > DUTY - 0.5 ? DUTY - 0.5 : DUTY - 1.0;
     }
   } else {
     gaitT += dt;
@@ -2672,13 +2771,15 @@ export function updateDiver(dt, t, player) {
       // pitched into the step for the last 300 ms — is released to rock back through
       // upright and settle. The under-damped spring does the settle; this is just the
       // shove that makes it a recoil rather than a fade.
-      gaitState = 0; walkP %= 1;
-      leanP.v -= 0.85;
+      gaitState = 0; walkP = (walkP % 1 + 1) % 1;
+      leanP.v -= 0.85 * gaitDir;
       settle.v -= 2.6;
     }
   }
-  if (gaitState === 2) walkP = (walkP + stepRate * dt) % 1;
-  else if (gaitState === 3) walkP %= 1;
+  if (gaitState === 2) walkP = ((walkP + gaitDir * stepRate * dt) % 1 + 1) % 1;
+  else if (gaitState === 3) walkP = (walkP % 1 + 1) % 1;
+  spring(revS, gaitDir > 0 ? 0 : 1, dt, 14, 1);
+  revF = clamp(revS.x, 0, 1);
   // Stroke commitment: from a near-standstill with way coming on, the kick cycle
   // spins up ~2.6x until the body reaches the speed the effort implies — pressing
   // forward means a kick NOW, not a throttle fading in. At cruise the term is zero
@@ -2706,7 +2807,7 @@ export function updateDiver(dt, t, player) {
   // Published to player.js, which shapes the forward thrust on swimP (the visible kick IS
   // the push) and lands the per-stride water resistance on walkP's heel strike. Two scalar
   // stores; no allocation, no new clock, no second source of truth.
-  player.walkP = walkP; player.swimP = swimP;
+  player.walkP = strikeP(); player.swimP = swimP;
 
   poseWalk(pw, walkP, amp, t, deckF);
   poseSwim(psw, swimP, t, clamp(speed * 0.09, 0, 1));
@@ -2798,12 +2899,14 @@ export function updateDiver(dt, t, player) {
       // behind him: he does not wrench his neck round, he gives up on it
       const behind = 1 - ss(1.5, 2.2, Math.abs(ly));
       const lp = Math.atan2(vy, Math.hypot(vx, vz));
-      hy += clamp(ly, -1.15, 1.15) * lookW * behind;
-      hp += clamp(lp, -0.45, 0.35) * lookW * behind;
+      // ...and while he cuts, his eyes are on the cut.
+      hy += clamp(ly, -1.15, 1.15) * lookW * behind * (1 - sqW);
+      hp += clamp(lp, -0.45, 0.35) * lookW * behind * (1 - sqW);
     }
     // Head yaw/pitch are sprung here so the look drifts on rather than tracking a target
     // frame-perfectly — a man in a 25 kg helmet turns it slowly.
-    spring(lkY, hy, dt, 4.2, 0.9);
+    // Squaring up for a slash the whole column turns as one, fast.
+    spring(lkY, hy, dt, 4.2 + 12 * sqW, 0.9);
     spring(lkX, hp, dt, 3.6, 0.9);
     // Share out: the helmet can only turn so far on the corselet before the shoulders
     // have to come round too.
@@ -2969,7 +3072,8 @@ export function updateDiver(dt, t, player) {
   }
 
   // a heel strike drops a little extra weight through the frame — the "settle"
-  const side = walkP < 0.5 ? 0 : 1;
+  const side = strikeP() < 0.5 ? 0 : 1;
+  if (side !== lastStepSide && gaitDir < 0) lastStepSide = side;   // backing: fired at the plant (driveLegs)
   if (side !== lastStepSide) {
     lastStepSide = side;
     // Weight through the frame, not a fixed thump: a vented dress puts the whole 170 kg
@@ -2979,6 +3083,7 @@ export function updateDiver(dt, t, player) {
     settle.v -= 2.25 * (0.45 + 0.75 * wgt) * gb * amp;
     // the landing leg takes the weight: a short knee soften, ~5 degrees, peaking ~78 ms in
     kneeSoft.v += 4.0 * gb * amp;
+    // Backing, the strike clock is re-based by DUTY so side 1 opens on the RIGHT plant.
     kneeSide = side;
     // Audio keys off the same event that drops the visual weight, so boot sounds can
     // never drift from the animation no matter how the gait is retimed.
@@ -3012,7 +3117,7 @@ export function updateDiver(dt, t, player) {
     // Climbing, he leans into the hill; descending, he sits back against it.
     const sx = Math.sin(yawF) * 0.5, sz = Math.cos(yawF) * 0.5;
     const hill = gdOn ? Math.atan(groundD(player.pos.x + sx, player.pos.z + sz) - groundD(player.pos.x - sx, player.pos.z - sz)) : 0;
-    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + 0.035 * amp + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
+    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + 0.035 * amp * (1 - 2 * revF) + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
   }
   // Slope: the downhill boot needs ground below the centre floor; the pelvis drops so
   // that leg can reach it, and the uphill knee takes up the difference.
@@ -3054,8 +3159,10 @@ export function updateDiver(dt, t, player) {
   // The lean/catch clock: a start pitches him forward BEFORE the first push-off, a stop
   // pitches him into the catch step and rocks back upright over ~0.4 s.
   spring(leanP,
-    gaitState === 1 ? 0.10 * ss(0, START_LEAN, gaitT)      // START: lean, THEN push off
-      : gaitState === 3 ? 0.085                            // STOP: pitch into the catch step
+    // Backing, the weight goes onto the heels first, and less of it: he cannot see
+    // where he is putting his boots, so the commitment is smaller.
+    gaitState === 1 ? (gaitDir > 0 ? 0.10 : -0.05) * ss(0, START_LEAN, gaitT)   // START: lean, THEN push off
+      : gaitState === 3 ? (gaitDir > 0 ? 0.085 : -0.045)                       // STOP: pitch into the catch step
         : 0,
     dt, 7.5, 0.62);
   b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x, 0, sRollT.x + bankG + rcR.x + hoseRoll);
@@ -3132,6 +3239,10 @@ export function updateDiver(dt, t, player) {
   // deck it dries over ~75 s, helmet first (the shader dries it top-down). Two float
   // writes, no allocation, and nothing here feeds the breath clock below.
   salShared.uSalRootY.value = diver.position.y - EYE_H;
+  {
+    const bg = scene.background;
+    if (bg && bg.isColor) uBubAmb.value = clamp((0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b) / 0.029, 0.04, 1.25);
+  }
   salShared.uSalWet.value = submerged ? Math.min(1, salShared.uSalWet.value + dt * 2.0)
     : Math.max(0, salShared.uSalWet.value - dt / 75);
   // beads on the port glass exist only in air: gone under water, thick just after he
@@ -3224,6 +3335,22 @@ export function updateDiver(dt, t, player) {
 export function lanternWorldPos(target) {
   diver.lant.getWorldPosition(target);
   return target;
+}
+
+// The two spheres that shadow the lantern's glow in the water (water.js GLSL_LAMP):
+// the chest (corselet + breastplate) and the bonnet, world centre + radius, written
+// into out[0..7]. Radii are the rig's own extents (bonnet bbox 1.14 wide, corselet
+// ~0.95), slightly inside them so the shadow never reads wider than the man.
+const _occV = V3();
+export function diverOccluders(out) {
+  const sw = diver.visible ? 1 : 0;
+  diver.spine.updateWorldMatrix(true, false);
+  _occV.set(0, 0.36, 0); diver.spine.localToWorld(_occV);
+  out[0] = _occV.x; out[1] = _occV.y; out[2] = _occV.z; out[3] = 0.44 * sw;
+  diver.neck.updateWorldMatrix(true, false);
+  _occV.set(0, 0.44, 0); diver.neck.localToWorld(_occV);
+  out[4] = _occV.x; out[5] = _occV.y; out[6] = _occV.z; out[7] = 0.40 * sw;
+  return out;
 }
 
 export function airInletWorldPos(target) {

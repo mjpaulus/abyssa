@@ -252,14 +252,50 @@ export function makeHoarder(idx, cfg) {
   L.rite = L.hoard;
   L.lairWhere = 'IN THE WRECK';
   L.hoard.onTake = () => { if (L.dormant) wakeHoarder(L); };
-  // draped tips: three over and through the wreck, the rest fanned across the silt
+  // draped tips: three over and through the wreck, the rest fanned across the silt.
+  // A sleeping arm lies DOWNHILL of nothing: it is a hundred-weight of muscle at rest,
+  // so it goes where the ground lets it lie. The fan bearing is searched (its own
+  // bearing first, then swung either way) for the longest reach whose ground never
+  // climbs faster than a sprawled arm could lie on (rise <= 0.30 x run, 17 degrees, and
+  // never more than 6 u over the lair floor). The old fixed 0.72 x len put one tip 38 u
+  // up a 55-degree bank beside the trawler: an arm standing on end. Deterministic now
+  // too (the wreck arms were Math.random): a pure function of the lair, so a reseed
+  // or a zone re-entry lays her down the same way every time.
+  const floor0 = terrainH(lair.x, lair.z, idx);
+  const lies = (ang, d) => {
+    for (let k = 1; k <= 8; k++) {
+      const r = d * k / 8, h = terrainH(lair.x + Math.sin(ang) * r, lair.z + Math.cos(ang) * r, idx) - floor0;
+      if (h > Math.min(6, 0.30 * r + 1.0)) return false;
+    }
+    return true;
+  };
+  const SWING = [0, 0.22, -0.22, 0.44, -0.44, 0.66, -0.66];
   for (let a = 0; a < NA; a++) {
     const A = L.arms[a], wreckArm = a === 1 || a === 3 || a === 5;
     if (wreckArm) {
-      A.drape.set(W.x + (Math.random() - 0.5) * 14, 0, W.z + (Math.random() - 0.5) * 14);
+      const h1 = ((Math.sin(a * 12.9898 + idx * 78.233) * 43758.5453) % 1 + 1) % 1;
+      const h2 = ((Math.sin(a * 39.3468 + idx * 11.135) * 24634.6345) % 1 + 1) % 1;
+      A.drape.set(W.x + (h1 - 0.5) * 14, 0, W.z + (h2 - 0.5) * 14);
     } else {
-      const ang = L.yaw + A.ang;
-      A.drape.set(lair.x + Math.sin(ang) * A.len * 0.72, 0, lair.z + Math.cos(ang) * A.len * 0.72);
+      let bestA = L.yaw + A.ang, bestD = 0;
+      for (const sw of SWING) {
+        const ang = L.yaw + A.ang + sw;
+        for (let f = 0.72; f >= 0.34; f -= 0.06) {
+          if (f * A.len <= bestD + 1e-3) break;
+          if (lies(ang, f * A.len)) { bestA = ang; bestD = f * A.len; break; }
+        }
+      }
+      // Walled in on this side (a bank right against her): the arm folds back along the
+      // lowest ground in a wider arc, short, rather than climbing.
+      if (bestD === 0) {
+        let lo = 1e9;
+        for (let k = -8; k <= 8; k++) {
+          const ang = L.yaw + A.ang + k * 0.18, d = A.len * 0.36;
+          const h = terrainH(lair.x + Math.sin(ang) * d, lair.z + Math.cos(ang) * d, idx);
+          if (h < lo) { lo = h; bestA = ang; bestD = d; }
+        }
+      }
+      A.drape.set(lair.x + Math.sin(bestA) * bestD, 0, lair.z + Math.cos(bestA) * bestD);
     }
     A.drape.y = terrainH(A.drape.x, A.drape.z, idx) + 0.6;
     A.tip.copy(A.drape);
@@ -368,10 +404,19 @@ function buildArm(L, A, dt, player) {
       T[i].lerp(_tg, k);
     }
   }
-  // the tip curls up off the silt when she is idle; the arm never goes through the floor
+  // the arm never goes through the floor — and a RESTING arm lies on it. The cubic
+  // arches out of the crown by the body's radius (right for the root, which has to clear
+  // her), but past the first third a sleeping arm has nothing holding it up: it used to
+  // ride the arch 5-10 u over the silt all the way to the tip. Weighted by how far she
+  // is from lifting (A.lift 0 = asleep, calmed rests at 0.15) and ramped in along the arm,
+  // the shape settles onto the ground it crosses, so the curl lies as a coil on the
+  // silt. Same terrain sample the floor clamp already paid for: no extra cost.
+  const rest = (1 - A.lift) * (1 - A.wrap);
   for (let i = 0; i <= n; i++) {
     const s = i / n, r = A.r0 * Math.pow(1 - s, 0.85) + 0.12;
     const gy = terrainH(T[i].x, T[i].z, L.idx) + r * 0.85;
+    const lay = rest * THREE.MathUtils.smoothstep(s, 0.22, 0.50);
+    if (lay > 0 && T[i].y > gy) T[i].y += (gy - T[i].y) * lay;
     if (T[i].y < gy) T[i].y = gy;
   }
   // the verlet chain: carry momentum, pull toward the shape (stiff root, loose tip),
