@@ -21,7 +21,7 @@ const mod = await import(path.join(ROOT, 'src/entities/sleeper', creature + 'Scu
 const P = mod.pipeline();
 const build = path.join(ROOT, 'tools/blender/.build', creature);
 fs.mkdirSync(build, { recursive: true });
-const man = { name: P.name, out: P.out, sets: P.sets, pieces: [], meta: P.meta || {}, probes: {} };
+const man = { name: P.name, out: P.out, sets: P.sets, pieces: [], meta: P.meta || {}, probes: {}, compress: P.compress || null };   // compress: optional, see bake.py
 const t00 = Date.now();
 // HIGH polys (the expensive part; `piece ...` args limit it to those pieces)
 for (const pc of P.pieces) {

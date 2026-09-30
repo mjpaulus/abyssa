@@ -27,6 +27,7 @@ import { makeBrood } from './brood.js';
 import { riftPos } from '../../config.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -75,7 +76,7 @@ const STRIDE = 0.30, SWING_T = 0.80, RISE_T = 6, SETTLE_T = 4;   // a colossus's
 // claws fold back under the prow (targets per joint, x/y/z Euler in the YZX order the arm
 // uses; y is mirrored by side). Exported so the lab can tune it live.
 export const DORM = {
-  tuck: 0.76, fold: 1.0, drop: 0.035,
+  tuck: 0.76, fold: 1.0, drop: 0.0,        // brooder2: 0.035 -> 0 (the sculpt sat flush with the silt; her brow and keel crest now break it)
   // (searched: every joint inside 0.86 of the rim, nothing past the prow, below the shell)
   major: { root: [0, 1.0, -0.08], cj: [0, 1.2, 0.05], pj: [0, 1.6, -0.10], dj: -0.3 },
   minor: { root: [0, 1.0, -0.08], cj: [0, 1.2, 0.05], pj: [0, 1.0, -0.10], dj: -0.3 }
@@ -592,6 +593,14 @@ function sculptMat(maps, extra) {
     normalScale: new THREE.Vector2(1, 1), roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.4
   }, extra || {}));
 }
+// brooder2: the last wraps on a sculpt material, in this order (lib/microDetail.js): the
+// shared micro-detail layer (masked by ORM.B cavity when the bake carries it), then the Z
+// rebuild for two-channel KTX2 normals
+function finishSculpt(m, maps, set, micro) {
+  if (micro) applyMicroDetail(m, Object.assign({ cav: !!(set && set.ormB === 'cavity') }, micro));
+  if (maps.normalMap && maps.normalMap.userData.rg) patchNormalRG(m);
+  return m;
+}
 // retire a procedural part: its geometry, its material, and any texture it owned that
 // nothing else keeps (the belly's cloned mottle), so a swap leaks nothing
 function drop(L, o) {
@@ -606,11 +615,15 @@ function installSculpt(L, A) {
   const g = A.geos, meta = A.meta.meta || {};
   if (!g.body || !A.maps.body || !A.maps.limbs || L.sculpted) return;
   L.sculpted = true;
-  L.keepTex = new Set([...L.keepTex, ...assetTextures(A)]);
+  L.keepTex = new Set([...L.keepTex, ...assetTextures(A), microTexture()]);   // the micro layer is shared by every creature
   L.keepGeo = assetGeos(A);
   const P = L.parts, body = L.body;
   // the fused shell replaces the scute shell, the belly, the barnacles and the shingles
-  const bodyMat = registerPaint(sculptMat(A.maps.body, { envMapIntensity: 0.35 }));
+  const sets = (A.meta && A.meta.sets) || {};
+  // the shell's micro layer: a 0.77 u tile (20 per shell unit), crevice grit, polished edges;
+  // her AO no longer doubles up on the paint's (the bores read deep, not punched to black)
+  const bodyMat = finishSculpt(registerPaint(sculptMat(A.maps.body, { envMapIntensity: 0.35, aoMapIntensity: 0.8 })), A.maps.body, sets.body,
+    { scale: 20, normal: 0.9, cavity: 0.45, rough: 0.3 });
   P.shell.geometry.dispose(); P.shell.material.dispose();
   P.shell.geometry = g.body; P.shell.material = bodyMat;
   drop(L, P.belly); drop(L, P.barn);
@@ -638,8 +651,9 @@ function installSculpt(L, A) {
   }
   // limbs: one shared atlas, the chitin sheen program the procedural limbs used
   const lm = A.maps.limbs;
-  const legMat = registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 0.45 })));
-  const armMat = registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 0.7, metalness: 0.06 })));
+  const lset = sets.limbs, limbMicro = { scale: 30, normal: 0.6, cavity: 0.35, rough: 0.22 };
+  const legMat = finishSculpt(registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 0.45 }))), lm, lset, limbMicro);
+  const armMat = finishSculpt(registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 0.7, metalness: 0.06 }))), lm, lset, limbMicro);
   const SEG_L = meta.segL || { coxa: 0.14, femur: 0.48, tibia: 0.42, dactyl: 0.28 };
   for (const k of ['coxa', 'femur', 'tibia', 'dactyl']) {
     const im = L.legs[k];
@@ -659,14 +673,31 @@ function installSculpt(L, A) {
     if (H) c.dj.position.fromArray(H.hinge);
   }
   L.chitMats.armMat.dispose();
-  // mouthparts: the sculpted palp at each hinge, scaled to the old lengths
-  const mouthMat = registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 1.1, roughness: 0.8 })));
-  const ML = meta.mouthL || 0.16;
-  for (const m of L.mouth) {
-    m.hook.geometry.dispose();
-    m.hook.geometry = g.mouthpart;
-    m.hook.material = mouthMat;
-    m.hook.scale.setScalar((0.16 - 0.018 * m.k) / ML);
+  // THE MOUTH (brooder2): layered maxillipeds and mandibles (meta.mouth maps the rig's five
+  // pairs onto the pieces and re-seats their hinges); the motion is the rig's own. The left
+  // side is the right MIRRORED (scale.z = -1): three flips the winding for a negative
+  // determinant, and the mirrored material's normalScale.y = -1 keeps the baked normals'
+  // bitangent right. Older assets (one 'mouthpart' palp) keep the old path.
+  const mouthMat = finishSculpt(registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 1.1, roughness: 0.9 }))), lm, lset, { scale: 60, normal: 0.35, cavity: 0.25, rough: 0.2 });
+  const MOUTH = meta.mouth;
+  if (MOUTH && MOUTH.every(q => g[q.piece])) {
+    const mouthMatM = finishSculpt(registerPaint(chitinSheen(sculptMat(lm, { envMapIntensity: 1.1, roughness: 0.9, normalScale: new THREE.Vector2(1, -1) }))), lm, lset, { scale: 60, normal: 0.35, cavity: 0.25, rough: 0.2 });
+    for (const m of L.mouth) {
+      const q = MOUTH[m.k];
+      m.hook.geometry.dispose();
+      m.hook.geometry = g[q.piece];
+      m.hook.material = m.sd > 0 ? mouthMat : mouthMatM;
+      m.hook.scale.set(q.s, q.s, q.s * m.sd);
+      m.hinge.position.set(q.hinge[0] * m.sd, q.hinge[1], q.hinge[2]);
+    }
+  } else {
+    const ML = meta.mouthL || 0.16;
+    for (const m of L.mouth) {
+      m.hook.geometry.dispose();
+      m.hook.geometry = g.mouthpart;
+      m.hook.material = mouthMat;
+      m.hook.scale.setScalar((0.16 - 0.018 * m.k) / ML);
+    }
   }
   L.chitMats.mouthMat.dispose();
   // THE EYES: two stalked compound eyes that track the diver in saccades; the pinpoint
@@ -680,13 +711,35 @@ function installSculpt(L, A) {
   }
   eyes.count = ei;
   eyes.instanceMatrix.needsUpdate = true;
-  // the eyeshine lives on the cornea only: the atlas paints it near-black and glassy
-  const stalkMat = registerPaint(sculptMat(lm, { envMapIntensity: 1.2, emissive: 0xcfe9d6, emissiveIntensity: 0 }));
-  stalkMat.customProgramCacheKey = () => 'abyssa-brooder-stalk';
+  // brooder2, THE EYES READ WITHOUT GOING NEON. The eyeshine is a PSEUDOPUPIL: a small
+  // spot on the cornea where its facets look straight back down the viewer's ray (so it
+  // slides across the eye as she turns, like a real crustacean's), not the whole cornea lit.
+  // The cornea is found by its baked ROUGHNESS (glassy), not by darkness (the pigment band
+  // is dark too). A cold rim scaled by the light the eye actually receives lifts its form
+  // off the dark face at game distance, and is nothing in the dark. Intensity is scaled down
+  // (L.stalkK, L.ocK) because the spot now carries it.
+  const stalkMat = registerPaint(sculptMat(lm, { envMapIntensity: 1.4, emissive: 0xd9e6c4, emissiveIntensity: 0 }));
+  stalkMat.customProgramCacheKey = () => 'abyssa-brooder-stalk2';
+  const eyeRim = { value: 0.45 };
   stalkMat.onBeforeCompile = sh => {
-    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-      totalEmissiveRadiance *= 1.0 - smoothstep(0.012, 0.05, dot(diffuseColor.rgb, vec3(0.3333)));`);
+    sh.uniforms.uEyeRim = eyeRim;
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform float uEyeRim;')
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      float eyC = 1.0 - smoothstep(0.12, 0.22, roughnessFactor);
+      float eyV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+      totalEmissiveRadiance *= eyC * pow(eyV, 36.0) * 1.4;`)
+      .replace('#include <opaque_fragment>', `{
+        float eyF = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+        eyF = eyF * eyF * eyF * eyF * eyF;
+        vec3 eyIrr = (reflectedLight.directDiffuse + reflectedLight.indirectDiffuse) / max(diffuseColor.rgb, vec3(0.12));
+        outgoingLight += eyF * eyIrr * uEyeRim * vec3(0.80, 0.92, 1.0);
+      }
+      #include <opaque_fragment>`);
   };
+  L.eyeRim = eyeRim;
+  L.stalkK = meta.mouth ? 0.6 : 1;
+  L.ocK = meta.mouth ? 0.1 : 1;
   const stalks = new THREE.InstancedMesh(g.eyestalk, stalkMat, 2);
   stalks.frustumCulled = false;
   stalks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -942,7 +995,7 @@ function poseAll(L, dt, player) {
     const facing = Math.max(0, _x.dot(_v) / dist);
     shine = Math.pow(facing, 3) * (1 - smooth(dist, 25, 90)) * Math.max(0, player.light == null ? 1 : player.light);
   }
-  L.eyeMat.emissiveIntensity = 0.08 * st + 2.2 * shine * (0.35 + 0.65 * st);
+  L.eyeMat.emissiveIntensity = (0.08 * st + 2.2 * shine * (0.35 + 0.65 * st)) * (L.ocK ?? 1);
   if (L.stalkMat) {
     // the stalked eyes throw it back by where THEY point, not the body
     let s2 = 0;
@@ -953,7 +1006,7 @@ function poseAll(L, dt, player) {
       const dist = _v.length() || 1;
       s2 = Math.pow(Math.max(0, _x.dot(_v) / dist), 4) * (1 - smooth(dist, 25, 90)) * Math.max(0, player.light == null ? 1 : player.light);
     }
-    L.stalkMat.emissiveIntensity = 0.05 * st + 2.6 * s2 * (0.35 + 0.65 * st);
+    L.stalkMat.emissiveIntensity = (0.05 * st + 2.6 * s2 * (0.35 + 0.65 * st)) * (L.stalkK ?? 1);
   }
   // the mouthparts: five pairs working out of phase, faster when roused
   // (a sawtooth-ish stroke: a quick pull in, a slower open; the rhythm stutters and

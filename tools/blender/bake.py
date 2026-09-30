@@ -13,8 +13,17 @@
 #      (normals, UVs, tangents; no materials — the game builds its own), plus <name>.json
 #      (manifest meta, probes, stats).
 # Deterministic given the PLYs (Decimate and Smart UV Project are deterministic).
+#
+# ADDITIVE (brooder2): ORM.B now carries CAVITY (0.5 flat, > 0.5 concave, < 0.5 convex),
+# derived from the baked tangent-space normal map's divergence at two scales; the .json
+# marks it (sets[s].ormB = 'cavity'), so a runtime that never reads B is unchanged.
+# manifest.compress (optional, from the creature's pipeline().compress):
+#   mesh: 'draco'  -> the .glb is Draco-compressed (three's DRACOLoader decodes it)
+#   tex:  'ktx2'   -> raw RGBA8 dumps of every map land in the build dir for ktx2.mjs,
+#                     which writes block-compressed KTX2 beside the WebP (kept as fallback)
 import bpy, sys, os, json, math, time
 import numpy as np
+ORMB = {}   # set -> what ORM.B carries ('emit' | 'cavity')
 
 argv = sys.argv[sys.argv.index('--') + 1:]
 BUILD, ROOT = argv[0], argv[1]
@@ -79,6 +88,37 @@ def new_img(name, size, noncolor):
     img = bpy.data.images.new(name, size, size, alpha=False, float_buffer=False)
     img.colorspace_settings.name = 'Non-Color' if noncolor else 'sRGB'
     return img
+
+def box_blur(a, r):
+    # separable box blur with wrap (charts sit in gutters; wrap never reaches an island)
+    if r <= 0:
+        return a
+    k = 2 * r + 1
+    c = np.cumsum(np.concatenate([a[:, -r - 1:], a, a[:, :r]], axis=1), axis=1)
+    a = (c[:, k:] - c[:, :-k]) / k
+    c = np.cumsum(np.concatenate([a[-r - 1:, :], a, a[:r, :]], axis=0), axis=0)
+    return (c[k:, :] - c[:-k, :]) / k
+
+def cavity_from_normal(npx, size):
+    # divergence of the tangent-space normal's XY (OpenGL: +x along u, +y along v, rows
+    # run with v): positive where the surface is convex. Fine scale + broad scale, then
+    # normalised by a robust percentile so every set lands in the same range.
+    n = npx.reshape(size, size, 4)
+    nx = n[:, :, 0] * 2.0 - 1.0
+    ny = n[:, :, 1] * 2.0 - 1.0
+    div = 0.5 * (np.roll(nx, -1, 1) - np.roll(nx, 1, 1)) + 0.5 * (np.roll(ny, -1, 0) - np.roll(ny, 1, 0))
+    s = max(1, size // 1024)
+    d = 0.6 * box_blur(div, s) + 0.4 * box_blur(div, 6 * s) * 3.0
+    q = float(np.percentile(np.abs(d), 98)) or 1.0
+    cav = np.clip(0.5 - 0.45 * d / q, 0.0, 1.0)
+    return cav.reshape(-1)
+
+def dump_raw(img, path, w):
+    # top-down RGBA8 rows (Blender stores bottom-up; the WebP is top-down), for ktx2.mjs
+    px = np.empty(w * w * 4, np.float32)
+    img.pixels.foreach_get(px)
+    a = (np.clip(px, 0, 1) * 255 + 0.5).astype(np.uint8).reshape(w, w, 4)[::-1]
+    a.tofile(path)
 
 def save_webp(img, path, quality):
     img.filepath_raw = path
@@ -218,13 +258,27 @@ for set_name, sconf in sets.items():
     orm = np.empty(n, np.float32)
     orm[0::4] = ao[0::4]
     orm[1::4] = ro[0::4]
-    orm[2::4] = emit[0::4] if emit is not None else 0.0
+    # ORM.B is shared: a set with baked emission keeps it there (Orune, Mhor); otherwise it
+    # carries cavity for the micro-detail layer (Velkath). meta 'ormB' says which.
+    if emit is not None:
+        orm[2::4] = emit[0::4]
+        ORMB[set_name] = 'emit'
+    else:
+        nrm = np.empty(n, np.float32)
+        imgs['normal'].pixels.foreach_get(nrm)
+        orm[2::4] = cavity_from_normal(nrm, size)
+        ORMB[set_name] = 'cavity'
     orm[3::4] = 1.0
     om = new_img(set_name + '_orm', size, True)
     om.pixels.foreach_set(orm)
     if sconf.get('ormHalf', True):
         om.scale(size // 2, size // 2)
     files['orm'] = save_webp(om, os.path.join(OUT, set_name + '_orm.webp'), 92)
+    if (man.get('compress') or {}).get('tex') == 'ktx2':
+        dump_raw(imgs['albedo'], os.path.join(BUILD, set_name + '_albedo.rgba'), size)
+        dump_raw(imgs['normal'], os.path.join(BUILD, set_name + '_normal.rgba'), size)
+        dump_raw(om, os.path.join(BUILD, set_name + '_orm.rgba'), om.size[0])
+        json.dump({'size': size, 'orm': om.size[0]}, open(os.path.join(BUILD, set_name + '_raw.json'), 'w'))
     stats['sets'][set_name] = {'size': size, 'bytes': files}
     for o in his.values():
         bpy.data.objects.remove(o, do_unlink=True)
@@ -256,11 +310,20 @@ for o in all_lo:
         setattr(o, k, True)
     o.select_set(True)
 glb = os.path.join(OUT, man['name'] + ('_' + '_'.join(sorted(ONLY)) if ONLY else '') + '.glb')
-bpy.ops.export_scene.gltf(filepath=glb, export_format='GLB', use_selection=True, export_yup=True, export_tangents=True,
-                          export_normals=True, export_texcoords=True, export_materials='NONE', export_apply=True)
+gopt = dict(filepath=glb, export_format='GLB', use_selection=True, export_yup=True, export_tangents=True,
+            export_normals=True, export_texcoords=True, export_materials='NONE', export_apply=True)
+if (man.get('compress') or {}).get('mesh') == 'draco':
+    # positions 14 bits (~0.1 mm per shell unit), UVs 14 (an eighth of a texel at 2048),
+    # normals/tangents 10; the decoder is three's DRACOLoader from the importmap's CDN
+    gopt.update(export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=7,
+                export_draco_position_quantization=14, export_draco_normal_quantization=10,
+                export_draco_texcoord_quantization=14, export_draco_generic_quantization=12)
+bpy.ops.export_scene.gltf(**gopt)
 stats['glbBytes'] = os.path.getsize(glb)
 meta = {'name': man['name'], 'meta': man.get('meta', {}), 'probes': man.get('probes', {}), 'stats': stats,
-        'sets': dict({k: {'size': v.get('size', 1024)} for k, v in sets.items()},
+        'sets': dict({k: {'size': v.get('size', 1024), 'ormB': ORMB.get(k, 'cavity')} for k, v in sets.items()},
                      **{k: {'size': v['W'], 'h': v['H'], 'strip': True} for k, v in (man.get('strips') or {}).items()})}
+if man.get('compress'):
+    meta['compress'] = man['compress']
 json.dump(meta, open(os.path.join(OUT, man['name'] + '.json'), 'w'))
 log('DONE', glb, stats['glbBytes'])

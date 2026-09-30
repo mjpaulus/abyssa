@@ -48,6 +48,8 @@ import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
 import { setSite, currentSite, currentSiteIndex, siteAt } from './world/site.js';
 import { openChart, closeChart, isChartOpen } from './ui/chartOverlay.js';
+// dev look-dev hooks are live only under ?lab (the lab's own flag)
+const DEV_CAMPIN = typeof location !== 'undefined' && location.search.includes('lab');
 
 // ---- THE CHART's memory -----------------------------------------------------------
 // Loaded BEFORE the world builds, so a saved anchorage builds directly — no reseed at
@@ -1693,10 +1695,13 @@ function update(dt, t) {
   setLampOccluders(diverOccluders(lampOcc));   // Sal's chest and bonnet shadow the glow
 
   updateCamera(dt, t, fwd);
-  // Look-dev camera pin (dev only; nothing ships setting it): window.__camPin =
-  // { pos: [x,y,z], look: [x,y,z] } holds the lens there for macro captures.
-  const cp = window.__camPin;
-  if (cp) { camera.position.fromArray(cp.pos); camera.lookAt(cp.look[0], cp.look[1], cp.look[2]); }
+  // Look-dev camera pin, ?lab ONLY (DEV_CAMPIN is false in a shipped URL, so the read
+  // never happens): window.__camPin = { pos: [x,y,z], look: [x,y,z] } holds the lens
+  // there for macro captures.
+  if (DEV_CAMPIN) {
+    const cp = window.__camPin;
+    if (cp) { camera.position.fromArray(cp.pos); camera.lookAt(cp.look[0], cp.look[1], cp.look[2]); }
+  }
 
   // wayfinding: raft always, the sleeper until calmed, the rift once open
   setBearing($bm.raft, raft.position.x, raft.position.y, raft.position.z, true);
