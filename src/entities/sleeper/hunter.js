@@ -167,13 +167,26 @@ function membrane(m, U) {
         objectNormal = normalize(objectNormal + vec3(0.0, 0.0, -uFin.y * fnU * cos(fnA) * 20.4) * sign(objectNormal.y));`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         transformed.y += uFin.y * fnU * sin(fnA) + uFin.z * uv.x * uv.x;`);
+    // THE FIN'S GLOW IS THE BODY'S LIGHT SEEN THROUGH IT, not a lamp in the membrane.
+    // It used to be a flat, unmapped emissive over the whole sheet plus a 1.5x boost at the
+    // thin outer edge: at a hunting pulse (ph up to 1) the membrane was an orange panel
+    // bright enough that ACES rolled it to white, and seen from below — where the mantle
+    // no longer hides the fin — it flashed as a blank white card. Measured: the emissive
+    // was 75-80% of the fin's on-screen value. Now the photophore light enters at the
+    // ROOT (where the flank rows are) and dies out across the fin, and the veins, which
+    // are muscle, block it; the edge gets none. Same uniform, same pulse, same program.
+    sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
+      {
+        float fnRoot = 1.0 - smoothstep(0.02, 0.55, vMapUv.x);
+        float fnMem = smoothstep(0.05, 0.16, diffuseColor.r);
+        totalEmissiveRadiance *= fnRoot * fnRoot * (0.25 + 0.75 * fnMem);
+      }`);
     sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', /* glsl */`{
         float fnThin = smoothstep(0.35, 1.0, vMapUv.x);
         vec3 fnLit = reflectedLight.directDiffuse + reflectedLight.indirectDiffuse;
         vec3 fnIrr = fnLit / max(diffuseColor.rgb, vec3(0.08));
         float fnV = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
         outgoingLight += fnThin * vec3(0.95, 0.30, 0.16) * fnIrr * (0.20 + 0.45 * fnV) * clamp(diffuseColor.r * 3.0, 0.0, 1.0);
-        outgoingLight += fnThin * fnThin * totalEmissiveRadiance * 1.5;
       }
       #include <opaque_fragment>`);
   };
