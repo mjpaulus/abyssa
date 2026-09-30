@@ -572,6 +572,8 @@ export function setTAA(on) {
   useDepthCopy();
   return on;
 }
+// Rigid movers get exact per-mesh motion vectors in the TAA resolve (Sal, the raft).
+export function addTemporalMover(root) { if (taaPass) taaPass.addMover(root); }
 export function resetTemporal(why) { if (taaPass) taaPass.reset(why || 'external'); }
 
 // composer.addPass() rewires every pass to the live depth attachment, so this must
@@ -674,6 +676,7 @@ if (typeof window !== 'undefined') {
     on: (v) => { if (v !== undefined) setTAA(v); return !!(TAA.on && taaPass); },
     reset: () => resetTemporal('manual'),
     set camProbe(fn) { TAA.camProbe = fn || null; },
+    vel: (v) => { if (taaPass && v !== undefined) taaPass.velOn = !!v; return taaPass ? { on: taaPass.velOn, proxies: taaPass.proxies.length, drawn: taaPass.velDrawn } : null; },
     grain: (k) => { if (k !== undefined) TAA.grainK = k; return TAA.grainK; },
     floor: (f) => { if (f !== undefined) { TAA.floor = f; syncTAAFloor(); } return getRenderFloor(); },
     pass: () => taaPass,

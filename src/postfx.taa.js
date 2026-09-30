@@ -43,6 +43,8 @@ const RESOLVE_FRAG = /* glsl */`
   uniform sampler2D tCur;
   uniform sampler2D tDepth;
   uniform sampler2D tHist;
+  uniform sampler2D tVel;
+  uniform float uVelOn;
   uniform vec2 uIn;
   uniform vec2 uOut;
   uniform vec2 uJit;
@@ -93,12 +95,13 @@ const RESOLVE_FRAG = /* glsl */`
     vec3 sum = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0);
     vec3 bmn = vec3(1e5), bmx = vec3(-1e5);
     float wsum = 0.0, wmax = 0.0, dmin = 1.0;
+    ivec2 tmin = ic;
     for (int y = -1; y <= 1; y++) {
       for (int x = -1; x <= 1; x++) {
         ivec2 t = clamp(ic + ivec2(x, y), ivec2(0), hi);
         vec3 c = texelFetch(tCur, t, 0).rgb;
         float d = texelFetch(tDepth, t, 0).r;
-        dmin = min(dmin, d);
+        if (d < dmin) { dmin = d; tmin = t; }
         vec2 o = vec2(t) + 0.5 - pIn;
         float w = exp(-2.29 * dot(o, o));
         vec3 yc = toYC(c);
@@ -117,6 +120,11 @@ const RESOLVE_FRAG = /* glsl */`
     vec4 pc = uRe * vec4(vUv * 2.0 - 1.0, dmin * 2.0 - 1.0, 1.0);
     vec2 pUv = pc.xy / pc.w * 0.5 + 0.5;
     float pZ = pc.w * z;
+    // A rigid mover under the (dilated) texel: its own motion replaces the camera's.
+    if (uVelOn > 0.5) {
+      vec4 mv = texelFetch(tVel, tmin, 0);
+      if (mv.b > 0.5) { pUv = vUv - mv.xy; pZ = mv.a * z; }
+    }
     float velPx = length((vUv - pUv) * uOut);
 
     float a = clamp(uK.x * wmax, uK.y, 1.0);
@@ -190,7 +198,46 @@ const OUT_FRAG = /* glsl */`
     #include <colorspace_fragment>
   }`;
 
+// OBJECT MOTION for RIGID movers (Sal, the raft). Their meshes carry no vertex
+// deformation (checked: diver.js patches only varyings), so a per-mesh previous
+// modelMatrix gives exact motion vectors. Each mover mesh gets a PROXY in a private
+// scene (shared geometry, own tiny ShaderMaterial clone, matrixWorld copied from the
+// real mesh), so the velocity draw never touches the real scene graph, its lights or
+// the shadow map. The proxies draw with the CURRENT (jittered) projection so they land on
+// the same texels as the scene; a fragment behind the scene's own depth is discarded
+// (occluded mover). Output: rg = uv motion (current - previous, unjittered), b = 1 flag,
+// a = previous clip w / current clip w (the disocclusion test's expected depth ratio).
+const VEL_VERT = /* glsl */`
+  uniform mat4 uCurVP;
+  uniform mat4 uPrevVP;
+  uniform mat4 uPrevModel;
+  varying vec4 vCur;
+  varying vec4 vPrev;
+  void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vCur = uCurVP * wp;
+    vPrev = uPrevVP * (uPrevModel * vec4(position, 1.0));
+    gl_Position = projectionMatrix * viewMatrix * wp;
+  }`;
+const VEL_FRAG = /* glsl */`
+  precision highp float;
+  uniform sampler2D tDepth;
+  uniform vec2 uIn;
+  uniform vec2 uNF;
+  varying vec4 vCur;
+  varying vec4 vPrev;
+  float viewDist(float d) { return uNF.x * uNF.y / (uNF.y - d * (uNF.y - uNF.x)); }
+  void main() {
+    float sd = texelFetch(tDepth, ivec2(gl_FragCoord.xy), 0).r;
+    float fz = viewDist(gl_FragCoord.z), sz = viewDist(sd);
+    if (fz > sz * 1.01 + 0.02) discard;
+    vec2 v = (vCur.xy / vCur.w - vPrev.xy / vPrev.w) * 0.5;
+    gl_FragColor = vec4(v, 1.0, vPrev.w / max(vCur.w, 1e-4));
+  }`;
+
 const _vp = new THREE.Matrix4(), _ivp = new THREE.Matrix4(), _prevVP = new THREE.Matrix4();
+const _mv = new THREE.Vector3(), _clr = new THREE.Color();
+function worldVisible(o) { while (o) { if (!o.visible) return false; o = o.parent; } return true; }
 const _camPos = new THREE.Vector3(), _prevPos = new THREE.Vector3();
 const _dir = new THREE.Vector3(), _prevDir = new THREE.Vector3();
 
@@ -228,6 +275,85 @@ export class TemporalAAPass extends Pass {
       }
     });
     this.fullscreenMaterial = this.resolveMat;
+    // Rigid movers (see VEL_VERT). velRT has its OWN depth renderbuffer -- never shared.
+    this.movers = []; this.proxies = []; this.proxyOf = new Map(); this.moverScan = 0;
+    this.velScene = new THREE.Scene(); this.velScene.matrixWorldAutoUpdate = false;
+    this.velRT = null; this.velOn = true; this.velDrawn = 0;
+    this.velBase = new THREE.ShaderMaterial({
+      name: 'AbyssaTAAVelocity', vertexShader: VEL_VERT, fragmentShader: VEL_FRAG, toneMapped: false,
+      uniforms: { uCurVP: { value: null }, uPrevVP: { value: null }, uPrevModel: { value: null },
+        tDepth: { value: null }, uIn: { value: null }, uNF: { value: null } }
+    });
+    this.curVP = new THREE.Matrix4(); this.prevVP = new THREE.Matrix4();
+    this.velIn = new THREE.Vector2(1, 1);
+    this.resolveMat.uniforms.tVel = { value: null };
+    this.resolveMat.uniforms.uVelOn = { value: 0 };
+    this._scanFn = (o) => {
+      if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || !o.geometry || this.proxyOf.has(o)) return;
+      const m = this.velBase.clone();
+      const u = m.uniforms;
+      u.uCurVP.value = this.curVP; u.uPrevVP.value = this.prevVP; u.uPrevModel.value = new THREE.Matrix4().copy(o.matrixWorld);
+      u.uIn.value = this.velIn; u.uNF.value = this.resolveMat.uniforms.uNF.value;
+      m.side = o.material && o.material.side !== undefined ? o.material.side : THREE.FrontSide;
+      const px = new THREE.Mesh(o.geometry, m);
+      px.matrixAutoUpdate = false; px.matrixWorldAutoUpdate = false; px.frustumCulled = o.frustumCulled;
+      px.userData.src = o; px.userData.fresh = true;
+      this.velScene.add(px); this.proxies.push(px); this.proxyOf.set(o, px);
+    };
+  }
+
+  // Register a rigid mover's root (whole hierarchy). Meshes added under it later are
+  // picked up by a rescan every 30 frames; removed ones are dropped the same way.
+  addMover(root) { if (root && this.movers.indexOf(root) < 0) { this.movers.push(root); root.traverse(this._scanFn); } }
+  _rescan() {
+    for (let i = 0; i < this.movers.length; i++) this.movers[i].traverse(this._scanFn);
+    for (let i = this.proxies.length - 1; i >= 0; i--) {
+      const px = this.proxies[i], src = px.userData.src;
+      let o = src; while (o && this.movers.indexOf(o) < 0) o = o.parent;
+      if (!o) { this.velScene.remove(px); px.material.dispose(); this.proxies.splice(i, 1); this.proxyOf.delete(src); }
+    }
+  }
+  _renderVelocity(renderer) {
+    if (!this.velOn || !this.proxies.length && !this.movers.length) return false;
+    if ((this.moverScan++ % 30) === 0) this._rescan();
+    if (!this.velRT || this.velRT.width !== this.inW || this.velRT.height !== this.inH) {
+      if (this.velRT) this.velRT.dispose();
+      this.velRT = new THREE.WebGLRenderTarget(this.inW, this.inH, {
+        type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter,
+        magFilter: THREE.NearestFilter, depthBuffer: true, stencilBuffer: false, generateMipmaps: false
+      });
+      this.velRT.texture.name = 'TAA.Velocity';
+    }
+    this.velIn.set(this.inW, this.inH);
+    const cam = this.mainCam;
+    cam.getWorldPosition(_mv);
+    let n = 0;
+    for (let i = 0; i < this.proxies.length; i++) {
+      const px = this.proxies[i], src = px.userData.src;
+      const vis = worldVisible(src) && src.matrixWorld.elements[12] !== undefined
+        && Math.hypot(src.matrixWorld.elements[12] - _mv.x, src.matrixWorld.elements[13] - _mv.y, src.matrixWorld.elements[14] - _mv.z) < 160;
+      px.visible = vis;
+      px.matrixWorld.copy(src.matrixWorld);
+      const u = px.material.uniforms;
+      u.tDepth.value = this.depthTexture;
+      if (px.userData.fresh || !this.valid) { u.uPrevModel.value.copy(src.matrixWorld); px.userData.fresh = false; }
+      if (vis) n++;
+    }
+    this.velDrawn = n;
+    if (!n) return false;
+    const sm = renderer.shadowMap.autoUpdate, cc = renderer.getClearColor(_clr), ca = renderer.getClearAlpha();
+    renderer.shadowMap.autoUpdate = false;
+    renderer.setRenderTarget(this.velRT);
+    renderer.setClearColor(0x000000, 0);
+    renderer.clear(true, true, false);
+    renderer.render(this.velScene, cam);
+    renderer.setClearColor(cc, ca);
+    renderer.shadowMap.autoUpdate = sm;
+    for (let i = 0; i < this.proxies.length; i++) {
+      const px = this.proxies[i];
+      px.material.uniforms.uPrevModel.value.copy(px.userData.src.matrixWorld);
+    }
+    return true;
   }
 
   setDepthTexture(t) { if (t && t !== this.depthTexture && t.isTexture && t.name === 'DepthCopyPass.Target') this.depthTexture = t; }
@@ -262,6 +388,7 @@ export class TemporalAAPass extends Pass {
     if (this.valid) u.uRe.value.multiplyMatrices(_prevVP, _ivp.copy(_vp).invert());
     else u.uRe.value.identity();
     u.uReset.value = this.valid ? 0 : 1;
+    this.prevVP.copy(this.valid ? _prevVP : _vp); this.curVP.copy(_vp);
     _prevVP.copy(_vp); _prevPos.copy(_camPos); _prevDir.copy(_dir);
     const k = (this.frame++) % HALTON_N;
     this.jx = HALTON[k * 2] * this.K.jitter; this.jy = HALTON[k * 2 + 1] * this.K.jitter;
@@ -286,6 +413,9 @@ export class TemporalAAPass extends Pass {
   render(renderer, inputBuffer) {
     if (!this.hist[0]) return;
     const K = this.K, u = this.resolveMat.uniforms;
+    const velLive = this._renderVelocity(renderer);
+    u.uVelOn.value = velLive ? 1 : 0;
+    u.tVel.value = velLive ? this.velRT.texture : null;
     const src = this.hist[this.cur], dst = this.hist[1 - this.cur];
     u.tCur.value = inputBuffer.texture;
     u.tDepth.value = this.depthTexture;
@@ -316,6 +446,8 @@ export class TemporalAAPass extends Pass {
 
   dispose() {
     for (const h of this.hist) if (h) h.dispose();
+    if (this.velRT) this.velRT.dispose();
+    for (const px of this.proxies) px.material.dispose();
     this.resolveMat.dispose(); this.outMat.dispose();
   }
 }
