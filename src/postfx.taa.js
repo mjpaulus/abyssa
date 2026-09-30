@@ -45,6 +45,7 @@ const RESOLVE_FRAG = /* glsl */`
   uniform sampler2D tHist;
   uniform sampler2D tVel;
   uniform float uVelOn;
+  uniform vec4 uVelRect;
   uniform vec2 uIn;
   uniform vec2 uOut;
   uniform vec2 uJit;
@@ -92,7 +93,8 @@ const RESOLVE_FRAG = /* glsl */`
     vec2 pIn = vUv * uIn + uJit;
     ivec2 ic = ivec2(floor(pIn));
     ivec2 hi = ivec2(uIn) - 1;
-    vec3 sum = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0);
+    vec3 sum = vec3(0.0), sumW = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0);
+    float wsumW = 0.0;
     vec3 bmn = vec3(1e5), bmx = vec3(-1e5);
     float wsum = 0.0, wmax = 0.0, dmin = 1.0;
     ivec2 tmin = ic;
@@ -108,6 +110,10 @@ const RESOLVE_FRAG = /* glsl */`
         // Firefly taming: the spatial filter weights by 1/(1+luma), undone after.
         float wl = w / (1.0 + yc.x);
         sum += c * wl; wsum += wl; wmax = max(wmax, w);
+        // A WIDE twin of the same kernel (sigma x1.6): what a pixel with no usable history
+        // shows, so a disocclusion under upscaling reads soft for a frame, not blocky.
+        float ww = exp(-0.9 * dot(o, o)) / (1.0 + yc.x);
+        sumW += c * ww; wsumW += ww;
         m1 += yc; m2 += yc * yc;
         bmn = min(bmn, yc); bmx = max(bmx, yc);
       }
@@ -121,7 +127,7 @@ const RESOLVE_FRAG = /* glsl */`
     vec2 pUv = pc.xy / pc.w * 0.5 + 0.5;
     float pZ = pc.w * z;
     // A rigid mover under the (dilated) texel: its own motion replaces the camera's.
-    if (uVelOn > 0.5) {
+    if (uVelOn > 0.5 && tmin.x >= int(uVelRect.x) && tmin.y >= int(uVelRect.y) && tmin.x < int(uVelRect.z) && tmin.y < int(uVelRect.w)) {
       vec4 mv = texelFetch(tVel, tmin, 0);
       if (mv.b > 0.5) { pUv = vUv - mv.xy; pZ = mv.a * z; }
     }
@@ -130,7 +136,7 @@ const RESOLVE_FRAG = /* glsl */`
     float a = clamp(uK.x * wmax, uK.y, 1.0);
     a = max(a, uK2.x * clamp(velPx * uK2.y, 0.0, 1.0));
     bool off = pUv.x < 0.0 || pUv.y < 0.0 || pUv.x > 1.0 || pUv.y > 1.0 || uReset > 0.5;
-    vec3 outC = cur;
+    vec3 outC = sumW / max(wsumW, 1e-6);
     if (!off) {
       // Disocclusion: the history alpha is the view distance it was resolved at.
       vec2 hp = pUv * uOut - 0.5;
@@ -147,7 +153,15 @@ const RESOLVE_FRAG = /* glsl */`
       vec3 sg = sqrt(max(m2 * (1.0 / 9.0) - mu * mu, vec3(0.0)));
       vec3 lo = max(bmn, mu - uK.z * sg), up = min(bmx, mu + uK.z * sg);
       lo = min(lo, cy); up = max(up, cy);
-      hy = clipBox(lo, up, hy);
+      vec3 hc = clipBox(lo, up, hy);
+      // Anti-ghost: history that had to be clipped far (a fish that swam off, a sprite
+      // that moved) is trusted less, in proportion to how far it was pulled, relative to
+      // the neighbourhood's own spread.
+      float pulled = length((hy - hc).x) / (0.02 + sg.x * 2.0 + 0.1 * mu.x);
+      hy = hc;
+      a = max(a, uK2.x * 2.0 * clamp(pulled - 0.5, 0.0, 1.0));
+      cur = mix(cur, outC, occl);
+      cy = toYC(cur);
       a = mix(a, 1.0, occl);
       float wc = a / (1.0 + cy.x), wh = (1.0 - a) / (1.0 + max(hy.x, 0.0));
       outC = fromYC((cy * wc + hy * wh) / max(wc + wh, 1e-6));
@@ -236,7 +250,7 @@ const VEL_FRAG = /* glsl */`
   }`;
 
 const _vp = new THREE.Matrix4(), _ivp = new THREE.Matrix4(), _prevVP = new THREE.Matrix4();
-const _mv = new THREE.Vector3(), _clr = new THREE.Color();
+const _mv = new THREE.Vector3(), _mv2 = new THREE.Vector3(), _clr = new THREE.Color();
 function worldVisible(o) { while (o) { if (!o.visible) return false; o = o.parent; } return true; }
 const _camPos = new THREE.Vector3(), _prevPos = new THREE.Vector3();
 const _dir = new THREE.Vector3(), _prevDir = new THREE.Vector3();
@@ -253,7 +267,7 @@ export class TemporalAAPass extends Pass {
     this.jx = 0; this.jy = 0;
     // Knobs (window.__taa.K): alpha gain, alpha floor, clip gamma, disocclusion tolerance,
     // motion alpha cap + per-pixel gain, sharpen, cut distance (units per frame).
-    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.25, cut: 5, jitter: 1 };
+    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.25, cut: 5, jitter: 1, velDepth: 0 };
     this.savedProj = new THREE.Matrix4(); this.savedProjInv = new THREE.Matrix4(); this.jittered = false;
     this.resolveMat = new THREE.ShaderMaterial({
       name: 'AbyssaTAAResolve', vertexShader: VERT, fragmentShader: RESOLVE_FRAG,
@@ -275,7 +289,9 @@ export class TemporalAAPass extends Pass {
       }
     });
     this.fullscreenMaterial = this.resolveMat;
-    // Rigid movers (see VEL_VERT). velRT has its OWN depth renderbuffer -- never shared.
+    // Rigid movers (see VEL_VERT). velRT is colour-only by default (K.velDepth = 1 gives it
+    // its OWN depth renderbuffer -- never a shared attachment); occlusion is the depth-copy
+    // compare in VEL_FRAG either way.
     this.movers = []; this.proxies = []; this.proxyOf = new Map(); this.moverScan = 0;
     this.velScene = new THREE.Scene(); this.velScene.matrixWorldAutoUpdate = false;
     this.velRT = null; this.velOn = true; this.velDrawn = 0;
@@ -286,8 +302,10 @@ export class TemporalAAPass extends Pass {
     });
     this.curVP = new THREE.Matrix4(); this.prevVP = new THREE.Matrix4();
     this.velIn = new THREE.Vector2(1, 1);
+    this.velRect = new THREE.Vector4();
     this.resolveMat.uniforms.tVel = { value: null };
     this.resolveMat.uniforms.uVelOn = { value: 0 };
+    this.resolveMat.uniforms.uVelRect = { value: this.velRect };
     this._scanFn = (o) => {
       if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || !o.geometry || this.proxyOf.has(o)) return;
       const m = this.velBase.clone();
@@ -316,11 +334,12 @@ export class TemporalAAPass extends Pass {
   _renderVelocity(renderer) {
     if (!this.velOn || !this.proxies.length && !this.movers.length) return false;
     if ((this.moverScan++ % 30) === 0) this._rescan();
-    if (!this.velRT || this.velRT.width !== this.inW || this.velRT.height !== this.inH) {
+    const wantDepth = !!this.K.velDepth;
+    if (!this.velRT || this.velRT.width !== this.inW || this.velRT.height !== this.inH || this.velRT.depthBuffer !== wantDepth) {
       if (this.velRT) this.velRT.dispose();
       this.velRT = new THREE.WebGLRenderTarget(this.inW, this.inH, {
         type: THREE.HalfFloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter,
-        magFilter: THREE.NearestFilter, depthBuffer: true, stencilBuffer: false, generateMipmaps: false
+        magFilter: THREE.NearestFilter, depthBuffer: wantDepth, stencilBuffer: false, generateMipmaps: false
       });
       this.velRT.texture.name = 'TAA.Velocity';
     }
@@ -328,6 +347,11 @@ export class TemporalAAPass extends Pass {
     const cam = this.mainCam;
     cam.getWorldPosition(_mv);
     let n = 0;
+    // Screen rect of every visible mover (bounding spheres, projected): the clear and the
+    // draw are SCISSORED to it and the resolve ignores velocity outside it, so the pass
+    // costs Sal's footprint, not a full-screen target clear.
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    const pe = this.savedProj.elements, ve = cam.matrixWorldInverse.elements;
     for (let i = 0; i < this.proxies.length; i++) {
       const px = this.proxies[i], src = px.userData.src;
       const vis = worldVisible(src) && src.matrixWorld.elements[12] !== undefined
@@ -337,16 +361,40 @@ export class TemporalAAPass extends Pass {
       const u = px.material.uniforms;
       u.tDepth.value = this.depthTexture;
       if (px.userData.fresh || !this.valid) { u.uPrevModel.value.copy(src.matrixWorld); px.userData.fresh = false; }
-      if (vis) n++;
+      if (!vis) continue;
+      n++;
+      const bs = src.geometry.boundingSphere || (src.geometry.computeBoundingSphere(), src.geometry.boundingSphere);
+      _mv2.copy(bs.center).applyMatrix4(src.matrixWorld);
+      const me = src.matrixWorld.elements;
+      const sc = Math.sqrt(Math.max(me[0] * me[0] + me[1] * me[1] + me[2] * me[2], me[4] * me[4] + me[5] * me[5] + me[6] * me[6], me[8] * me[8] + me[9] * me[9] + me[10] * me[10]));
+      const r = bs.radius * sc;
+      const vx = ve[0] * _mv2.x + ve[4] * _mv2.y + ve[8] * _mv2.z + ve[12];
+      const vy = ve[1] * _mv2.x + ve[5] * _mv2.y + ve[9] * _mv2.z + ve[13];
+      const vz = ve[2] * _mv2.x + ve[6] * _mv2.y + ve[10] * _mv2.z + ve[14];
+      const w = -vz;
+      if (w - r < 0.05) { x0 = 0; y0 = 0; x1 = 1; y1 = 1; continue; }   // camera inside or near: full screen
+      const cx = (pe[0] * vx + pe[8] * vz) / w, cy = (pe[5] * vy + pe[9] * vz) / w;
+      const rx = pe[0] * r / (w - r), ry = pe[5] * r / (w - r);
+      x0 = Math.min(x0, (cx - rx) * 0.5 + 0.5); x1 = Math.max(x1, (cx + rx) * 0.5 + 0.5);
+      y0 = Math.min(y0, (cy - ry) * 0.5 + 0.5); y1 = Math.max(y1, (cy + ry) * 0.5 + 0.5);
     }
     this.velDrawn = n;
     if (!n) return false;
+    const W = this.inW, H = this.inH;
+    const rx0 = Math.max(0, Math.floor(x0 * W) - 4), ry0 = Math.max(0, Math.floor(y0 * H) - 4);
+    const rx1 = Math.min(W, Math.ceil(x1 * W) + 4), ry1 = Math.min(H, Math.ceil(y1 * H) + 4);
+    if (rx1 <= rx0 || ry1 <= ry0) return false;
+    this.velRect.set(rx0, ry0, rx1, ry1);
     const sm = renderer.shadowMap.autoUpdate, cc = renderer.getClearColor(_clr), ca = renderer.getClearAlpha();
     renderer.shadowMap.autoUpdate = false;
     renderer.setRenderTarget(this.velRT);
+    this.velRT.scissor.set(rx0, ry0, rx1 - rx0, ry1 - ry0);
+    this.velRT.scissorTest = true;
+    renderer.setRenderTarget(this.velRT);
     renderer.setClearColor(0x000000, 0);
-    renderer.clear(true, true, false);
+    renderer.clear(true, wantDepth, false);
     renderer.render(this.velScene, cam);
+    this.velRT.scissorTest = false;
     renderer.setClearColor(cc, ca);
     renderer.shadowMap.autoUpdate = sm;
     for (let i = 0; i < this.proxies.length; i++) {
