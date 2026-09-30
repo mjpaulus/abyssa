@@ -1641,14 +1641,29 @@ registerPaint(bubMat, { hero: true });   // a bubble is a mirror at grazing inci
 // emissive rim (NOT additive glow: it still fogs, still darkens with depth via the
 // per-channel fog chunk applied after) puts a bright edge on every bubble that
 // catches whatever the water's own light is doing. No backticks live in this GLSL.
+// The rim is REFLECTED light, so it scales with the light the bubble receives (the same
+// diffuse irradiance proxy the kelp uses: lit diffuse / albedo), not a constant: as a
+// fixed emissive it lit every bubble the same pale blue-white in zone 2's black water,
+// where a lead bubble passing the lens read as a glowing white polygon. Beside the
+// lantern the rim now catches the flame; in the dark it is gone. The ball is 12 x 8
+// (was 7 x 5, whose heptagon silhouette showed on every bubble near the camera).
+// uBubAmb: the water's own radiance at the camera against the zone-0 floor (1 there, a
+// trace in the deep zones) — the same normalisation the marine snow uses — so the
+// shallows keep the rim they were tuned with and the abyss does not.
+const uBubAmb = { value: 1 };
 bubMat.onBeforeCompile = (sh) => {
-  sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>',
-    '#include <emissivemap_fragment>\n' +
+  sh.uniforms.uBubAmb = uBubAmb;
+  sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uBubAmb;')
+    .replace('#include <lights_fragment_end>',
+    '#include <lights_fragment_end>\n' +
     'float bubFr = pow( 1.0 - abs( dot( normalize( vNormal ), normalize( vViewPosition ) ) ), 3.0 );\n' +
-    'totalEmissiveRadiance += vec3( 0.60, 0.71, 0.80 ) * bubFr * 0.60;');
+    'vec3 bubIrr = ( reflectedLight.directDiffuse + reflectedLight.indirectDiffuse ) / max( diffuseColor.rgb, vec3( 0.05 ) );\n' +
+    'float bubD = min( dot( reflectedLight.directDiffuse / max( diffuseColor.rgb, vec3( 0.05 ) ), vec3( 0.2126, 0.7152, 0.0722 ) ) * 3.1416, 1.2 );\n' +
+    'reflectedLight.indirectSpecular += vec3( 0.60, 0.71, 0.80 ) * bubFr * 0.60 * uBubAmb\n' +
+    '  + bubIrr / max( dot( bubIrr, vec3( 0.333 ) ), 1e-4 ) * bubFr * 0.45 * bubD;');
 };
 bubMat.customProgramCacheKey = () => 'salBubbleRim';
-const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 7, 5), bubMat, BUBN);
+const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 8), bubMat, BUBN);
 bubbles.frustumCulled = false;
 bubbles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 bubbles.castShadow = bubbles.receiveShadow = false;
@@ -3224,6 +3239,10 @@ export function updateDiver(dt, t, player) {
   // deck it dries over ~75 s, helmet first (the shader dries it top-down). Two float
   // writes, no allocation, and nothing here feeds the breath clock below.
   salShared.uSalRootY.value = diver.position.y - EYE_H;
+  {
+    const bg = scene.background;
+    if (bg && bg.isColor) uBubAmb.value = clamp((0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b) / 0.029, 0.04, 1.25);
+  }
   salShared.uSalWet.value = submerged ? Math.min(1, salShared.uSalWet.value + dt * 2.0)
     : Math.max(0, salShared.uSalWet.value - dt / 75);
   // beads on the port glass exist only in air: gone under water, thick just after he
