@@ -17,10 +17,23 @@ export const RES_SCALE = Math.min(devicePixelRatio || 1, 1.5);
 // INTEGER (the black-rectangle rule above); a change goes through the same coalesced
 // applySize -> flushSize path as a window resize, so every render target is rebuilt once.
 export const RES_FLOOR = Math.min(1, RES_SCALE) * 0.85;
+// TEMPORAL UPSCALING (postfx.taa.js). With TAAU live the renderer's size (and so every
+// composer target, getSize, getDrawingBufferSize, every uPix) is the INTERNAL resolution,
+// and the canvas's drawing buffer is the OUTPUT resolution (css x RES_SCALE, fixed by the
+// window, never by DRS). postfx.js owns the canvas dims per frame (syncCanvas); the TAA
+// resolve reconstructs internal -> output. The live floor is lowered while TAAU runs,
+// because a lower internal scale no longer means a soft picture.
+let resFloor = RES_FLOOR;
+export function getRenderFloor() { return resFloor; }
+export function setRenderFloor(f) {
+  resFloor = Math.max(0.4, Math.min(RES_SCALE, f));
+  if (resScale < resFloor) setRenderScale(resFloor);
+  return resFloor;
+}
 let resScale = RES_SCALE;
 export function getRenderScale() { return resScale; }
 export function setRenderScale(s) {
-  s = Math.max(RES_FLOOR, Math.min(RES_SCALE, s));
+  s = Math.max(resFloor, Math.min(RES_SCALE, s));
   if (Math.abs(s - resScale) < 0.01) return resScale;
   resScale = s;
   applySize();
@@ -99,7 +112,9 @@ export function onResize(fn) { resizeHandlers.push(fn); }
 // ResizeObserver also catches the cases a resize event misses — bookmark bars appearing,
 // zoom changes, devtools docking — any of which previously left the canvas a different
 // size from its drawing buffer, so part of the window went unpainted.
-let lastW = 0, lastH = 0;
+let lastW = 0, lastH = 0, outW = 0, outH = 0;
+// The OUTPUT size (canvas drawing buffer while TAAU runs): css x RES_SCALE, integer.
+export function getOutputSize(v) { v.x = outW; v.y = outH; return v; }
 // Resizes are COALESCED: a drag fires the resize event and the ResizeObserver many times
 // a frame, and each setSize reallocates every render target. applySize only records the
 // wanted size (the aspect is immediate — it is one matrix); flushSize, called once by the
@@ -114,8 +129,9 @@ function applySize() {
   if (cssW < 2 || cssH < 2) return;
   const w = Math.max(1, Math.round(cssW * resScale));
   const h = Math.max(1, Math.round(cssH * resScale));
-  if (w === lastW && h === lastH) return;   // never resize on an unchanged frame
-  lastW = w; lastH = h;
+  const ow = Math.max(1, Math.round(cssW * RES_SCALE)), oh = Math.max(1, Math.round(cssH * RES_SCALE));
+  if (w === lastW && h === lastH && ow === outW && oh === outH) return;   // never resize on an unchanged frame
+  lastW = w; lastH = h; outW = ow; outH = oh;
   camera.aspect = cssW / cssH;
   camera.updateProjectionMatrix();
   pendingW = w; pendingH = h;
