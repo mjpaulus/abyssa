@@ -685,7 +685,8 @@ if (typeof window !== 'undefined') {
       return { on: !!TAA.on, valid: p.valid, frame: p.frame, resets: p.resets, lastReset: p.lastReset,
         internal: [p.inW, p.inH], output: [p.outW, p.outH], ratio: +(p.outW / Math.max(1, p.inW)).toFixed(3),
         jitter: [+p.jx.toFixed(3), +p.jy.toFixed(3)], canvas: [renderer.domElement.width, renderer.domElement.height],
-        scale: getRenderScale(), floor: getRenderFloor(), K: { ...p.K } };
+        scale: getRenderScale(), floor: getRenderFloor(), mipBias: +TAA_U[0].toFixed(3),
+        movers: { proxies: p.proxies.length, drawn: p.velDrawn, rect: p.velRect.toArray() }, K: { ...p.K } };
     }
   };
 }
