@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ABYSSA sculpt lab</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b1d1f; color: #cfc8b8; font: 12px/1.4 monospace; overflow: hidden; }
+  #hud { position: fixed; left: 8px; top: 8px; white-space: pre; pointer-events: none; }
+  canvas { display: block; }
+</style>
+</head>
+<body>
+<div id="hud">loading...</div>
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.184.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.184.0/examples/jsm/"
+}}
+</script>
+<script type="module">
+// SCULPT LAB (dev only): a neutral studio for lib/sculpt.js jobs. Not part of the game.
+//   ?job=<module path>#<export>   the export is a job object or a function returning one
+//   window.lab: { res, meshes, view(mode), cam(pos, look), shot(name) }
+//   view modes: 'lit' (baked maps), 'flat' (no maps: the bare game mesh), 'normal'
+//   (world normals from the normal map), 'ao', 'wire'
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { sculptAsync, toGeometry, toTextures } from './src/lib/sculpt.js';
+
+const q = new URLSearchParams(location.search);
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x2a2d30);
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.01, 100);
+camera.position.set(1.6, 1.2, 2.4);
+const ctl = new OrbitControls(camera, renderer.domElement);
+scene.add(new THREE.HemisphereLight(0xbfd4e6, 0x3a3228, 0.9));
+const key = new THREE.DirectionalLight(0xfff1dc, 2.6); key.position.set(3, 4, 2); scene.add(key);
+const rim = new THREE.DirectionalLight(0x9fc4ff, 1.4); rim.position.set(-3, 1.5, -3); scene.add(rim);
+const hud = document.getElementById('hud');
+
+const lab = window.lab = { meshes: [], res: null };
+async function load() {
+  const spec = q.get('job') || './src/entities/sleeper/brooderSculpt.js#bodyJob';
+  const [path, name] = spec.split('#');
+  const mod = await import(path);
+  let job = mod[name || 'default'];
+  if (typeof job === 'function') job = job();
+  const t0 = performance.now();
+  const res = await sculptAsync(job);
+  lab.res = res; lab.ms = performance.now() - t0;
+  const tex = toTextures(THREE, res.maps);
+  lab.tex = tex;
+  const mat = new THREE.MeshStandardMaterial({ map: tex.map, normalMap: tex.normalMap, roughnessMap: tex.ormMap, aoMap: tex.ormMap, roughness: 1, metalness: 0 });
+  lab.mats = { lit: mat, flat: new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 0.6 }),
+    normal: new THREE.MeshNormalMaterial({ normalMap: tex.normalMap }), wire: new THREE.MeshBasicMaterial({ color: 0xcccccc, wireframe: true }),
+    ao: new THREE.MeshBasicMaterial({ map: tex.ormMap }) };
+  let x = 0, tris = 0;
+  const names = Object.keys(res.parts);
+  for (const n of names) {
+    const g = toGeometry(THREE, res.parts[n]);
+    const m = new THREE.Mesh(g, mat);
+    const bb = g.boundingBox;
+    const lay = job.layout && job.layout[n];
+    if (lay) m.position.fromArray(lay); else { m.position.x = x - bb.min.x; x += bb.max.x - bb.min.x + 0.1; }
+    scene.add(m); lab.meshes.push(m);
+    tris += g.index.count / 3;
+  }
+  const st = res.stats;
+  hud.textContent = `job ${spec}\n${lab.ms.toFixed(0)} ms wall (worker total ${st.totalMs.toFixed(0)})\ntris ${tris}  atlas ${res.maps.size}  texel ${st.texel.toFixed(4)}\nbake ${st.bakeMs.toFixed(0)} ms  evals ${st.bakeEvals}\n` +
+    Object.entries(st.parts).map(([k, v]) => `${k}: field ${v.fieldMs.toFixed(0)} mesh ${v.meshMs.toFixed(0)} dec ${v.decMs.toFixed(0)} raw ${v.rawTris} -> ${v.tris}`).join('\n');
+  lab.ready = true;
+}
+lab.view = mode => { for (const m of lab.meshes) m.material = lab.mats[mode]; return mode; };
+lab.cam = (p, l) => { camera.position.fromArray(p); ctl.target.fromArray(l); ctl.update(); };
+lab.shot = async name => {
+  renderer.render(scene, camera);
+  const url = renderer.domElement.toDataURL('image/jpeg', 0.92);
+  await fetch('http://127.0.0.1:8839/' + name, { method: 'POST', body: url });
+  return name;
+};
+(function loop() { requestAnimationFrame(loop); ctl.update(); renderer.render(scene, camera); })();
+load().catch(e => { hud.textContent = 'FAILED ' + e.stack; console.error(e); });
+</script>
+</body>
+</html>
