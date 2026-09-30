@@ -73,3 +73,25 @@ export function pipeline() {
   Blender output under neutral light).
 
 Build scratch (`.build/`) is gitignored; the outputs under `assets/` are committed.
+
+## Additive extensions (sculpt2: Orune + Mhor)
+
+All optional; a creature that uses none of them builds exactly as before.
+
+- **Emissive** — a piece may carry `emit: S => 0..1` (S: x, y, z, nx, ny, nz of each high
+  vertex). export_hi writes a second painted high (`<piece>_hiE.ply`); bake.py bakes it
+  (EMIT, through the same cage) into the **ORM's blue** channel, which used to be 0. The
+  game reads it by patching `emissivemap_fragment` to `emissiveColor.bbb` with the ORM as
+  the emissive map (gated `smoothstep(0.08, 0.3, b)` so half-res chart edges never glow).
+- **Paint mask `['fn', S => 0..1]`** (sculpt.js) — a creature's own analytic placement
+  (photophore stations, lens rims) usable in any paint layer.
+- **Strips** (`strip.mjs`) — `pipeline().strips: [{ name, W, H, Lu, Lv, field, paint, ao }]`:
+  tileable heightfield bakes for geometry that must stay procedural (verlet arm tubes).
+  u along the tube, v once round it; exactly periodic by construction. Normals are in the
+  frame three derives from the mesh uv (tangent x = +u, y = +v; no tangent attribute),
+  maps load flipY = false, ORM as above. Written as `<strip>_albedo/normal/orm.webp` and
+  listed in the meta's `sets` with `strip: true` (the game sets RepeatWrapping).
+  Orune's arm strip keys u to the sucker stations (one tile = 4 pairs), Mhor's arm strip
+  to his (7 pairs), his tentacles are conformal (du = ds len / (Lu r)).
+- `meta` values may be getters (JSON.stringify evaluates them at export): Orune's caught
+  lanterns are seated there by marching the full SDF, so the game does no raycasts.

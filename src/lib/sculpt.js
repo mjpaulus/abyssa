@@ -90,7 +90,8 @@
 //   ['rad', lo, hi]      smoothstep of the xz radius
 //   bake-only terms (paint masks): ['cav', lo, hi] concavity, ['cvx', lo, hi] convexity
 //   (curvature * kScale), ['ao', lo, hi] occlusion, ['nd', [dir], lo, hi] facing,
-//   ['mat', id] dominant material, ['wor', f, w, seed] worley border lines, ['inv', TERM]
+//   ['mat', id] dominant material, ['wor', f, w, seed] worley border lines, ['inv', TERM],
+//   ['fn', S => 0..1] a creature's own function of the paint state (analytic placements)
 // PAINT
 //   { mats: { id: { c:[r,g,b] sRGB 0..1, ro: roughness } }, kScale: 0.03,
 //     layers: [ { c, a: opacity, ro?, m: MASK } ... ],  aoAlb: 0.5 (AO into albedo) }
@@ -1103,6 +1104,7 @@ function compilePaint(paint) {
     if (k === 'n') { const P = perm(t[4] || 1), f = t[1]; return s => sst(t[2], t[3], 0.5 + 0.5 * fbm3(P, s.x * f, s.y * f, s.z * f, t[5] || 4)); }
     if (k === 'wor') { const f = t[1], w = t[2], sd = t[3] || 1; return s => { const q = worley(s.x * f, s.y * f, s.z * f, sd); return 1 - sst(0, w, q.f2 - q.f1); }; }
     if (k === 'inv') { const g = term(t[1]); return s => 1 - g(s); }
+    if (k === 'fn') return t[1];                   // a creature's own mask: fn(S) -> 0..1 (S: x,y,z,nx,ny,nz,k,ao,ma)
     throw new Error('sculpt: unknown mask term ' + k);
   };
   const layers = paint.layers.map(l => ({ c: l.c.map(srgbToLin), a: l.a != null ? l.a : 1, ro: l.ro, m: (l.m || []).map(term) }));

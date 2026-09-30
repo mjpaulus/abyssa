@@ -32,6 +32,29 @@ import {
 import * as G from './hoarderGeo.js';
 import { makeHoard } from './hoard.js';
 import { emitDust } from '../../world/footfx.js';
+import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+
+// THE SCULPT (tools/blender pipeline; hoarderSculpt.js has the design). THE SPLIT, and why:
+//   RIGID or SHADER-MOVED -> sculpted, baked high-to-low: the mantle + head + web + beak +
+//     siphon (breath is a uniform scale of the mesh; the siphon pulse is a vertex bump keyed
+//     on SIPHON, which the sculpt keeps), both lids (rigid rotations), and ONE sucker,
+//     instanced 288x. Measured: the mantle was a 24.6k-tri deformed sphere + a 1024^2
+//     runtime JS skin bake; it is now a 60k-tri decimated sculpt with a 2048 Cycles bake.
+//   DEFORMING -> stays procedural: the eight arms are 41-point verlet chains with a curl
+//     wave, a wrap helix and a base-first flinch roll, rebuilt as 129 x 28 tubes per frame.
+//     No rigid or skinned mesh survives that (a curl rolls the section through 180 degrees
+//     in a few rings). Their sculpt is a TILEABLE STRIP (strip.mjs: a heightfield over the
+//     tube's own (u, v)), whose u is keyed to the sucker stations so every baked socket sits
+//     under its instanced sucker whatever the chain does. The motion code is untouched.
+// Loaded off the boot's critical path (a short idle delay after import); makeHoarder
+// installs it if it has landed and otherwise upgrades the procedural Orune in place when it
+// does. A failed load leaves the procedural build — nothing else changes.
+let SCULPT = null, SC = null, LANTERN_GEO = null;
+function sculpt() {
+  if (!SCULPT) { SCULPT = loadSculpted('assets/sleepers/hoarder/', 'hoarder'); SCULPT.then(a => { SC = a; }); }
+  return SCULPT;
+}
+if (typeof window !== 'undefined') setTimeout(sculpt, 2500);
 
 const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
@@ -113,7 +136,7 @@ export function makeHoarder(idx, cfg) {
     reach: 5, collR: Rm * 0.85, flare: 0, dormant: true, rise: 0, riseE: 0, riseTarget: 0,
     yawV: 0, crawl: 0, blinkT: 9, blinkN: 3, look: { y: { x: 0, v: 0 }, p: { x: 0, v: 0 }, ty: 0, tp: 0, next: 0 }, brPh: 0, cloudPh: 0, mood: 0, armsInit: false,
     pos: V3(), yaw: 0, bodyY: 0, head: V3(), spine: [V3(), V3(), V3(), V3()], sigils: [], arms: [],
-    grab: null, lashCd: 3, _pd: 1e9
+    grab: null, lashCd: 3, _pd: 1e9, suckK: 0.27, suckSink: 0, hideK: 1, lidK: 1.25, lidKb: 1.25, sculpted: false
   };
 
   // ---- skin ----
@@ -130,32 +153,7 @@ export function makeHoarder(idx, cfg) {
   L.skin = skin;
   // passing clouds (chromatophores) and the siphon's pulse, patched over wetSkin
   L.cloudU = { uCloud: { value: new THREE.Vector4(0, 0.25, 0.4, 0.5) }, uSiph: { value: 0 } };
-  {
-    const ob = skin.onBeforeCompile;
-    skin.customProgramCacheKey = () => 'abyssa-orune-skin-m';
-    skin.onBeforeCompile = (sh, r) => {
-      ob(sh, r);
-      sh.uniforms.uCloud = L.cloudU.uCloud;
-      sh.uniforms.uSiph = L.cloudU.uSiph;
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nuniform float uSiph;\nvarying vec3 vCloudW;')
-        .replace('#include <begin_vertex>', `#include <begin_vertex>
-          {
-            vec3 sq = position - vec3(-0.80, -0.36, 0.44);
-            transformed += normal * uSiph * exp(-dot(sq, sq) / 0.035);
-          }`)
-        .replace('#include <project_vertex>', '#include <project_vertex>\nvCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', '#include <common>\nuniform vec4 uCloud;\nvarying vec3 vCloudW;')
-        .replace('#include <color_fragment>', `#include <color_fragment>
-          float ocA = dot(vCloudW, vec3(0.071, 0.043, 0.052)) * uCloud.w;
-          float ocB = sin(ocA - uCloud.x) + 0.35 * sin(ocA * 2.3 + 1.7 - uCloud.x * 1.3);
-          float ocBand = smoothstep(0.55, 1.2, ocB);
-          diffuseColor.rgb *= 1.0 - uCloud.y * ocBand;`)
-        .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
-          totalEmissiveRadiance *= 1.0 + uCloud.z * smoothstep(0.3, 1.1, sin(ocA - uCloud.x + 0.9));`);
-    };
-  }
+  cloudPatch(skin, L, 'abyssa-orune-skin-m', false);
   // one program for all of her skin: the mantle's biplanar blend is carried by attributes
   // (uvB, wB) that every other skin geometry sets to its own UV with weight 0
   L.skinM = skin;
@@ -218,13 +216,17 @@ export function makeHoarder(idx, cfg) {
         A.fold[f * (RAD + 1) + j] = 0.024 * Math.sin(an * 7 + s * 9 + A.phase * 2.3) * (1 - SEC_PALE[j]) * (0.6 + 0.4 * Math.sin(s * 23 + an * 2));
       }
     }
-    // sucker stations: spaced by the local radius, so they crowd and shrink to the tip
-    const rs = s => (A.r0 * Math.pow(1 - s, 0.85) + 0.12);
+    // sucker stations: spaced by the local radius, so they crowd and shrink to the tip.
+    // (sculpt pass: the search used to overshoot s = 1, where pow() of a negative base is
+    // NaN, and NaN > 0.95 is false — so it ran up to its bound of 4 radii a step: 11 of the
+    // 36 suckers landed on the arm and the other 25 were NaN matrices. Clamped, it finds the
+    // intended ~1.04 and all 36 sit between s = 0.05 and 0.95.)
+    const rs = s => (A.r0 * Math.pow(Math.max(0, 1 - s), 0.85) + 0.12);
     let lo = 0, hi = 4;
     for (let it = 0; it < 30; it++) {
       const c2 = (lo + hi) / 2; let s = 0.05;
       for (let k = 1; k < SUCK; k++) s += c2 * rs(s) / A.len;
-      if (s > 0.95) hi = c2; else lo = c2;
+      if (!(s <= 0.95)) hi = c2; else lo = c2;
     }
     let s = 0.05;
     for (let k = 0; k < SUCK; k++) { A.suckS[k] = s; s += lo * rs(s) / A.len; }
@@ -328,7 +330,140 @@ export function makeHoarder(idx, cfg) {
   setLive(L);
   setWardTargets(-1, null);
   poseHoarder(L, 0, null);
+  // (window.__noSculpt: dev A/B — build the procedural body and leave it)
+  const want = !(typeof window !== 'undefined' && window.__noSculpt);
+  if (SC && want) installSculpt(L, SC);
+  else if (want) sculpt().then(a => { if (a && !L.gone) { installSculpt(L, a); poseHoarder(L, 0, null); } });
+  const pd = L.onDispose;
+  L.onDispose = () => { L.gone = true; if (pd) pd(); };
   return L;
+}
+
+// PASSING CLOUDS (chromatophores) and the siphon's pulse over a wetSkin program: dark bands
+// sweep the body in world space (their speed, depth and photophore flare are her mood), and
+// the siphon swells on the exhale. `orm`: the emissive mask is the sculpt's ORM blue (the
+// pipeline's layout: R = AO, G = roughness, B = emissive), not an emissive colour map.
+function cloudPatch(m, L, key, orm) {
+  const ob = m.onBeforeCompile;
+  m.customProgramCacheKey = () => key;
+  m.onBeforeCompile = (sh, r) => {
+    ob(sh, r);
+    sh.uniforms.uCloud = L.cloudU.uCloud;
+    sh.uniforms.uSiph = L.cloudU.uSiph;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform float uSiph;\nvarying vec3 vCloudW;')
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        {
+          vec3 sq = position - vec3(-0.80, -0.36, 0.44);
+          transformed += normal * uSiph * exp(-dot(sq, sq) / 0.035);
+        }`)
+      .replace('#include <project_vertex>', '#include <project_vertex>\nvCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    if (orm) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', THREE.ShaderChunk.emissivemap_fragment.replace('emissiveColor.rgb', 'emissiveColor.bbb * smoothstep(0.08, 0.3, emissiveColor.b)'));
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec4 uCloud;\nvarying vec3 vCloudW;')
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float ocA = dot(vCloudW, vec3(0.071, 0.043, 0.052)) * uCloud.w;
+        float ocB = sin(ocA - uCloud.x) + 0.35 * sin(ocA * 2.3 + 1.7 - uCloud.x * 1.3);
+        float ocBand = smoothstep(0.55, 1.2, ocB);
+        diffuseColor.rgb *= 1.0 - uCloud.y * ocBand;`)
+      .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
+        totalEmissiveRadiance *= 1.0 + uCloud.z * smoothstep(0.3, 1.1, sin(ocA - uCloud.x + 0.9));`);
+  };
+  return m;
+}
+
+// ---- THE SCULPT, installed in place ------------------------------------------------------
+function sculptSkin(maps, key, L, extra) {
+  const m = registerPaint(G.wetSkin(new THREE.MeshStandardMaterial(Object.assign({
+    map: maps.map, normalMap: maps.normalMap, normalScale: new THREE.Vector2(1, 1), roughnessMap: maps.ormMap, aoMap: maps.ormMap, aoMapIntensity: 1,
+    roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.28,
+    emissive: 0x6b58d8, emissiveMap: maps.ormMap, emissiveIntensity: 0.25
+  }, extra || {})), key, 0, false));
+  return cloudPatch(m, L, key + '-m', true);
+}
+function installSculpt(L, A) {
+  const g = A.geos, meta = A.meta.meta || {};
+  if (!g.mantle || !g.sucker || !A.maps.body || !A.maps.sucker || !A.maps.arm || L.sculpted) return;
+  L.sculpted = true;
+  L.keepTex = new Set([...L.keepTex, ...assetTextures(A)]);
+  L.keepGeo = assetGeos(A);
+  // the strip tiles along the arm and round it
+  for (const t of Object.values(A.maps.arm)) if (t.wrapS !== THREE.RepeatWrapping) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; }
+  const old = L.skin;
+  const bodyMat = sculptSkin(A.maps.body, 'abyssa-orune-sculpt', L);
+  const armMat = sculptSkin(A.maps.arm, 'abyssa-orune-sculpt', L, { envMapIntensity: 0.3 });
+  // the mantle, head, web, beak and siphon: one mesh (breath still scales it; the siphon
+  // pulse still keys on SIPHON — the sculpt keeps the funnel there)
+  L.mantle.geometry.dispose();
+  L.mantle.geometry = g.mantle;
+  L.mantle.material = bodyMat;
+  // the lids: thick, rolled, rotating as before (heavier: they never quite clear the iris)
+  const oldLids = new Set();
+  for (const e of L.eyes) {
+    oldLids.add(e.lidT.geometry); oldLids.add(e.lidB.geometry);
+    e.lidT.geometry = g.lid_top; e.lidB.geometry = g.lid_bot;
+    e.lidT.material = e.lidB.material = bodyMat;
+  }
+  for (const q of oldLids) q.dispose();
+  L.lidK = 1.02; L.lidKb = 1.1;
+  // arms: the strip, its u keyed to the sucker stations (tile = armPairs pairs; each arm
+  // starts on its own whole pair, so the eight never show the same stretch side by side)
+  const pairs = meta.armPairs || 4;
+  for (let a = 0; a < L.arms.length; a++) {
+    const Ar = L.arms[a], S = Ar.suckS, n = S.length, row = RAD + 1;
+    const uv = new Float32Array((RR + 1) * row * 2), off = (a * 3) % pairs;
+    for (let f = 0; f <= RR; f++) {
+      const s = f / RR;
+      let k;
+      if (s <= S[0]) k = (s - S[0]) / (S[1] - S[0]);
+      else if (s >= S[n - 1]) k = n - 1 + (s - S[n - 1]) / (S[n - 1] - S[n - 2]);
+      else { let i = 0; while (S[i + 1] < s) i++; k = i + (s - S[i]) / (S[i + 1] - S[i]); }
+      const u = (k + 2 * off) / (2 * pairs);
+      for (let j = 0; j <= RAD; j++) { const q = (f * row + j) * 2; uv[q] = u; uv[q + 1] = j / RAD; }
+    }
+    Ar.geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    Ar.mesh.material = armMat;
+  }
+  // the sucker: the sculpted cup with its worn chitin ring, sized to the strip's sockets
+  const sm = registerPaint(new THREE.MeshStandardMaterial({
+    map: A.maps.sucker.map, normalMap: A.maps.sucker.normalMap, roughnessMap: A.maps.sucker.ormMap, aoMap: A.maps.sucker.ormMap,
+    roughness: 1, metalness: 0, envMap: envTex, envMapIntensity: 0.4
+  }));
+  L.suckers.geometry.dispose();
+  L.suckers.material.dispose();
+  L.suckers.geometry = g.sucker;
+  L.suckers.material = sm;
+  L.suckK = meta.suckK || 0.34;
+  L.suckSink = 0.09;                       // the stalk sits down in its collar
+  // the strip bakes a socket under every station, so a hidden sucker leaves an empty socket:
+  // hide only those truly inside the sculpt (the old test was a generous ellipsoid)
+  L.hideK = 0.62;
+  old.dispose();
+  L.skin = bodyMat; L.skinM = armMat;
+  // THE HOARD SHE WEARS: drowned lanterns tangled in her — two caught in the web between
+  // her arm roots, one snagged where the trawler's chain is grown into her shoulder. Dead
+  // (sooted glass, no flame): the lit ones are in the hoard. Seated by a ray onto the sculpt.
+  // (seats are computed offline on the full SDF: hoarderSculpt LANTERN_SEATS -> meta)
+  if (!LANTERN_GEO) LANTERN_GEO = G.lanternParts();
+  const lp = LANTERN_GEO;
+  L.keepGeo.add(lp.brass); L.keepGeo.add(lp.glass);
+  const S = (meta.lanterns || []).map(h => ({ p: new THREE.Vector3(...h.p), n: new THREE.Vector3(...h.n) }));
+  const brassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x8a6a3a, vertexColors: true, roughness: 0.6, metalness: 0.65, envMap: envTex, envMapIntensity: 0.45 }));
+  const glassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x3a342a, vertexColors: true, roughness: 0.12, metalness: 0, envMap: envTex, envMapIntensity: 1.0 }));
+  // (the flame lathe rides in the glass geometry: dead lanterns show it as a dark stub)
+  const lb = new THREE.InstancedMesh(lp.brass, brassM, S.length), lg = new THREE.InstancedMesh(lp.glass, glassM, S.length);
+  const q = new THREE.Quaternion(), qt = new THREE.Quaternion(), sc = new THREE.Vector3(), mm = new THREE.Matrix4();
+  S.forEach((h, i) => {
+    q.setFromUnitVectors(_yp, h.n);
+    qt.setFromAxisAngle(new THREE.Vector3(1, 0, 0.4).normalize(), 0.6 + 0.4 * i);           // fallen over, askew
+    q.multiply(qt);
+    const k = (0.75 + 0.15 * i) / L.R;
+    mm.compose(h.p.clone().addScaledVector(h.n, -0.25 * k), q, sc.set(k, k, k));
+    lb.setMatrixAt(i, mm); lg.setMatrixAt(i, mm);
+  });
+  lb.castShadow = true;
+  L.body.add(lb, lg);
+  L.caught = S.length;
 }
 
 function wakeHoarder(L) {
@@ -555,12 +690,12 @@ function poseHoarder(L, dt, player) {
       _u.set(-(A.Uf[o0] + (A.Uf[o1] - A.Uf[o0]) * t), -(A.Uf[o0 + 1] + (A.Uf[o1 + 1] - A.Uf[o0 + 1]) * t), -(A.Uf[o0 + 2] + (A.Uf[o1 + 2] - A.Uf[o0 + 2]) * t)).normalize();
       _w.set(A.Bf[o0] + (A.Bf[o1] - A.Bf[o0]) * t, A.Bf[o0 + 1] + (A.Bf[o1 + 1] - A.Bf[o0 + 1]) * t, A.Bf[o0 + 2] + (A.Bf[o1 + 2] - A.Bf[o0 + 2]) * t);
       _p.set(A.Pf[o0] + (A.Pf[o1] - A.Pf[o0]) * t, A.Pf[o0 + 1] + (A.Pf[o1 + 1] - A.Pf[o0 + 1]) * t, A.Pf[o0 + 2] + (A.Pf[o1 + 2] - A.Pf[o0 + 2]) * t)
-        .addScaledVector(_u, r * (SUCK_DEPTH - 0.02)).addScaledVector(_w, side * 1.04 * r);
+        .addScaledVector(_u, r * (SUCK_DEPTH - 0.02 - L.suckSink)).addScaledVector(_w, side * 1.04 * r);
       _q.setFromUnitVectors(_yp, _u);
       // a sucker whose seat is inside the mantle (the arm roots arch up through it) is hidden
       _l.copy(_p).applyMatrix4(_mi);
-      const inside = (_l.x / 0.86) ** 2 + ((_l.y - 0.1) / 0.75) ** 2 + ((_l.z + 0.15) / 1.05) ** 2 < 1;
-      const sz = inside ? 0 : r * 0.27;
+      const inside = (_l.x / 0.86) ** 2 + ((_l.y - 0.1) / 0.75) ** 2 + ((_l.z + 0.15) / 1.05) ** 2 < L.hideK;
+      const sz = inside ? 0 : r * L.suckK;
       L.suckers.setMatrixAt(si++, _m.compose(_p, _q, _s.set(sz, sz, sz)));
     }
   }
@@ -580,8 +715,8 @@ function poseHoarder(L, dt, player) {
   const bl = L.blinkT < 0.28 ? Math.sin(Math.PI * Math.pow(L.blinkT / 0.28, 0.6)) : 0;
   const lo = open * (1 - 0.9 * bl);
   for (const e of L.eyes) {
-    e.lidT.rotation.x = -0.1 - 1.25 * lo;
-    e.lidB.rotation.x = 0.1 + 1.25 * lo;
+    e.lidT.rotation.x = -0.1 - L.lidK * lo;
+    e.lidB.rotation.x = 0.1 + L.lidKb * lo;
   }
   // THE LOOK: each eyeball turns in its socket toward the diver, in saccades - it holds,
   // then JUMPS (a stiff spring) when the error grows or a moment has passed

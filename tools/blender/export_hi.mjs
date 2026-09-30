@@ -12,6 +12,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { meshSDF, shadeVertices, plyBytes, compile, decimate, unwrapSet } from '../../src/lib/sculpt.js';
+import { bakeStrip } from './strip.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const [creature, ...only] = process.argv.slice(2);
@@ -24,7 +25,7 @@ const man = { name: P.name, out: P.out, sets: P.sets, pieces: [], meta: P.meta |
 const t00 = Date.now();
 // HIGH polys (the expensive part; `piece ...` args limit it to those pieces)
 for (const pc of P.pieces) {
-  const entry = { name: pc.name, set: pc.set, tris: pc.lo.tris, cage: pc.cage || pc.hi.h * 3, ray: pc.ray || pc.hi.h * 8, hi: pc.name + '_hi.ply', lo: pc.name + '_lo.ply' };
+  const entry = { name: pc.name, set: pc.set, hiE: pc.emit ? pc.name + '_hiE.ply' : undefined, tris: pc.lo.tris, cage: pc.cage || pc.hi.h * 3, ray: pc.ray || pc.hi.h * 8, hi: pc.name + '_hi.ply', lo: pc.name + '_lo.ply' };
   man.pieces.push(entry);
   if (only.length && !only.includes(pc.name)) continue;
   const t0 = Date.now();
@@ -32,6 +33,22 @@ for (const pc of P.pieces) {
   const sh = shadeVertices(hi.field, hi.pos, pc.paint, { kEps: pc.kEps, ao: pc.ao });
   fs.writeFileSync(path.join(build, entry.hi), plyBytes(hi.pos, hi.idx, sh.normal, sh.rgba));
   entry.hiTris = hi.idx.length / 3;
+  // EMISSIVE (optional, additive): pc.emit(S) -> 0..1 per high vertex (S: x,y,z,nx,ny,nz),
+  // written as a second painted high that bake.py bakes into the ORM's B channel. The
+  // value goes in sRGB-encoded: Blender linearises byte colours, so the non-colour bake
+  // then stores the value itself.
+  if (pc.emit) {
+    const n = hi.pos.length / 3, rgba = new Uint8Array(n * 4), S = {};
+    for (let i = 0; i < n; i++) {
+      S.x = hi.pos[i * 3]; S.y = hi.pos[i * 3 + 1]; S.z = hi.pos[i * 3 + 2];
+      S.nx = sh.normal[i * 3]; S.ny = sh.normal[i * 3 + 1]; S.nz = sh.normal[i * 3 + 2];
+      let e = pc.emit(S); e = e < 0 ? 0 : e > 1 ? 1 : e;
+      const g = e <= 0.0031308 ? e * 12.92 : 1.055 * Math.pow(e, 1 / 2.4) - 0.055;
+      rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = g * 255 + 0.5; rgba[i * 4 + 3] = 255;
+    }
+    entry.hiE = pc.name + '_hiE.ply';
+    fs.writeFileSync(path.join(build, entry.hiE), plyBytes(hi.pos, hi.idx, sh.normal, rgba));
+  }
   console.log(pc.name, 'hi', entry.hiTris, ((Date.now() - t0) / 1000).toFixed(1) + ' s');
 }
 // LOW polys, per texture set: the mesh field (bake-only layers left out) DC-meshed,
@@ -66,6 +83,17 @@ for (const pr of P.probes || []) {
     H.push(hit);
   }
   man.probes[pr.name] = { x0: pr.x0, x1: pr.x1, z0: pr.z0, z1: pr.z1, n, h: H };
+}
+// STRIPS (optional, additive): tileable detail maps for procedural, deforming tubes
+// (strip.mjs). Raw RGBA8 here; bake.py writes them as <strip>_albedo/normal/orm.webp and
+// lists them in the meta's sets with strip: true (the game wraps them RepeatWrapping).
+man.strips = {};
+for (const st of P.strips || []) {
+  if (only.length && !only.includes(st.name)) { man.strips[st.name] = { W: st.W, H: st.H }; continue; }
+  const b = bakeStrip(st);
+  for (const k of ['albedo', 'normal', 'orm']) fs.writeFileSync(path.join(build, st.name + '_' + k + '.raw'), b[k]);
+  man.strips[st.name] = { W: st.W, H: st.H };
+  console.log('strip', st.name, st.W + 'x' + st.H, (b.ms / 1000).toFixed(1) + ' s');
 }
 fs.writeFileSync(path.join(build, 'manifest.json'), JSON.stringify(man, null, 1));
 console.log('export done', ((Date.now() - t00) / 1000).toFixed(1) + ' s ->', build);
