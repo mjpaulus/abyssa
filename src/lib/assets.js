@@ -81,9 +81,17 @@ async function load(base, name) {
   const gltf = await gl.loadAsync(base + name + '.glb');
   const geos = {};
   gltf.scene.traverse(o => { if (o.isMesh) geos[o.name] = o.geometry; });
-  const tl = new THREE.TextureLoader();
+  // WebP maps decode OFF the main thread through createImageBitmap (brooder2): through an
+  // <img> the decode ran inside the first texImage2D, ~60 ms per 1024 map and ~70 per 2048
+  // on the frame she first drew. Bytes are untouched: no premultiply, no colour conversion,
+  // no flip (glTF convention).
+  const tl = typeof createImageBitmap === 'function'
+    ? new THREE.ImageBitmapLoader().setOptions({ imageOrientation: 'none', premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
+    : new THREE.TextureLoader();
   const tex = async (file, srgb) => {
-    const t = await tl.loadAsync(base + file);
+    const got = await tl.loadAsync(base + file);
+    const t = got.isTexture ? got : new THREE.Texture(got);
+    if (!got.isTexture) t.addEventListener('dispose', () => { if (got.close) got.close(); });
     t.flipY = false;
     t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
     t.anisotropy = maxAniso();
