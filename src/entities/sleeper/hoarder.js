@@ -49,7 +49,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 // Loaded off the boot's critical path (a short idle delay after import); makeHoarder
 // installs it if it has landed and otherwise upgrades the procedural Orune in place when it
 // does. A failed load leaves the procedural build — nothing else changes.
-let SCULPT = null, SC = null;
+let SCULPT = null, SC = null, LANTERN_GEO = null;
 function sculpt() {
   if (!SCULPT) { SCULPT = loadSculpted('assets/sleepers/hoarder/', 'hoarder'); SCULPT.then(a => { SC = a; }); }
   return SCULPT;
@@ -136,7 +136,7 @@ export function makeHoarder(idx, cfg) {
     reach: 5, collR: Rm * 0.85, flare: 0, dormant: true, rise: 0, riseE: 0, riseTarget: 0,
     yawV: 0, crawl: 0, blinkT: 9, blinkN: 3, look: { y: { x: 0, v: 0 }, p: { x: 0, v: 0 }, ty: 0, tp: 0, next: 0 }, brPh: 0, cloudPh: 0, mood: 0, armsInit: false,
     pos: V3(), yaw: 0, bodyY: 0, head: V3(), spine: [V3(), V3(), V3(), V3()], sigils: [], arms: [],
-    grab: null, lashCd: 3, _pd: 1e9, suckK: 0.27, suckSink: 0, lidK: 1.25, lidKb: 1.25, sculpted: false
+    grab: null, lashCd: 3, _pd: 1e9, suckK: 0.27, suckSink: 0, hideK: 1, lidK: 1.25, lidKb: 1.25, sculpted: false
   };
 
   // ---- skin ----
@@ -435,25 +435,19 @@ function installSculpt(L, A) {
   L.suckers.material = sm;
   L.suckK = meta.suckK || 0.34;
   L.suckSink = 0.09;                       // the stalk sits down in its collar
+  // the strip bakes a socket under every station, so a hidden sucker leaves an empty socket:
+  // hide only those truly inside the sculpt (the old test was a generous ellipsoid)
+  L.hideK = 0.62;
   old.dispose();
   L.skin = bodyMat; L.skinM = armMat;
   // THE HOARD SHE WEARS: drowned lanterns tangled in her — two caught in the web between
   // her arm roots, one snagged where the trawler's chain is grown into her shoulder. Dead
   // (sooted glass, no flame): the lit ones are in the hoard. Seated by a ray onto the sculpt.
-  const lp = G.lanternParts();
-  const ray = new THREE.Raycaster(), probe = new THREE.Mesh(g.mantle);
-  // a ray from outside (along `out` from `at`) back onto the skin: the lantern seats where it hits
-  const seat = (out, at) => {
-    const o = new THREE.Vector3(...out).normalize();
-    ray.set(new THREE.Vector3(...at).addScaledVector(o, 3), o.clone().negate());
-    const h = ray.intersectObject(probe, false)[0];
-    return h ? { p: h.point, n: h.face.normal.clone() } : null;
-  };
-  const S = [
-    seat([-0.7, 0.7, 0.1], [-0.62, 0.55, 0.0]),                    // the left shoulder, in the chain
-    seat([0.6, -0.3, 0.55], [0.62, -0.50, 0.60]),                  // the web, front right
-    seat([-0.5, -0.3, -0.6], [-0.50, -0.50, -0.45])                // the web, back left
-  ].filter(Boolean);
+  // (seats are computed offline on the full SDF: hoarderSculpt LANTERN_SEATS -> meta)
+  if (!LANTERN_GEO) LANTERN_GEO = G.lanternParts();
+  const lp = LANTERN_GEO;
+  L.keepGeo.add(lp.brass); L.keepGeo.add(lp.glass);
+  const S = (meta.lanterns || []).map(h => ({ p: new THREE.Vector3(...h.p), n: new THREE.Vector3(...h.n) }));
   const brassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x8a6a3a, vertexColors: true, roughness: 0.6, metalness: 0.65, envMap: envTex, envMapIntensity: 0.45 }));
   const glassM = registerPaint(new THREE.MeshStandardMaterial({ color: 0x3a342a, vertexColors: true, roughness: 0.12, metalness: 0, envMap: envTex, envMapIntensity: 1.0 }));
   // (the flame lathe rides in the glass geometry: dead lanterns show it as a dark stub)
@@ -700,7 +694,7 @@ function poseHoarder(L, dt, player) {
       _q.setFromUnitVectors(_yp, _u);
       // a sucker whose seat is inside the mantle (the arm roots arch up through it) is hidden
       _l.copy(_p).applyMatrix4(_mi);
-      const inside = (_l.x / 0.86) ** 2 + ((_l.y - 0.1) / 0.75) ** 2 + ((_l.z + 0.15) / 1.05) ** 2 < 1;
+      const inside = (_l.x / 0.86) ** 2 + ((_l.y - 0.1) / 0.75) ** 2 + ((_l.z + 0.15) / 1.05) ** 2 < L.hideK;
       const sz = inside ? 0 : r * L.suckK;
       L.suckers.setMatrixAt(si++, _m.compose(_p, _q, _s.set(sz, sz, sz)));
     }

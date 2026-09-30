@@ -425,7 +425,7 @@ function armStrip() {
         if (d < sd) sd = d;
         if (d < 2.4) {
           col += Math.exp(-(((d - 1.15) / 0.28) ** 2));
-          crease += (1 - sst(1.3, 2.3, d)) * sst(0.9, 1.3, d) * Math.pow(Math.abs(Math.sin(Math.atan2(dv, du) * 7 + su * 40)), 6);
+          crease += (1 - sst(1.3, 2.0, d)) * sst(0.95, 1.3, d) * Math.pow(Math.abs(Math.sin(Math.atan2(dv, du) * 5 + su * 40 + 2 * N.fbm(u, v, 8, 6, 2))), 4) * 0.5;
         }
       }
       // the oral furrow between the rows, fine transverse wrinkles over the oral face
@@ -440,14 +440,14 @@ function armStrip() {
       N.cells(wu, wv, 40, 22, 0.9, 2, cp, Lv / Lu * 40 / 22);
       const pap = cp.id < 0.3 ? Math.max(0, 1 - (cp.f1 / 0.28) ** 2) : 0;
       N.cells(wu, wv, 18, 11, 0.95, 3, cc, Lv / Lu * 18 / 11);
-      const net = (1 - sst(0.0, 0.22, cc.f2 - cc.f1)) * (0.6 + 0.4 * N.fbm(u, v, 8, 6, 2));
+      const net = (1 - sst(0.0, 0.30, cc.f2 - cc.f1)) * (0.3 + 0.7 * sst(0.4, 0.8, N.fbm(u, v, 6, 4, 3)));
       const crest = Math.exp(-(((wrapd(v) * Lv) / 0.12) ** 2));
       const flankFold = Math.pow(Math.abs(Math.sin(v * TAU * 3 + 1.7 * N.fbm(u, v, 3, 4, 3))), 12) * (1 - oral);
       const lump = N.fbm(u, v, 3, 3, 4);
       S.oral = oral; S.dors = dors; S.col = col; S.crease = crease; S.furrow = furrow; S.wart = wart * (1 - oral); S.pap = pap * (1 - oral);
       S.net = net * (1 - oral); S.sd = sd; S.crest = crest;
       S.blot = sst(0.52, 0.62, N.fbm(u + 0.2, v, 5, 3, 4));
-      S.h = 0.06 * (lump - 0.5) + (1 - oral) * (0.07 * wart * wart + 0.022 * pap - 0.010 * net) + 0.02 * crest
+      S.h = 0.06 * (lump - 0.5) + (1 - oral) * (0.07 * wart * wart + 0.022 * pap - 0.006 * net) + 0.02 * crest
         - 0.02 * flankFold + oral * (0.010 * wr - 0.04 * furrow) + 0.085 * col - 0.02 * crease;
       S.ph = photoStrip(u, v, N, cs, Lu, Lv) * dors;
     },
@@ -459,10 +459,10 @@ function armStrip() {
       for (let i = 0; i < 3; i++) {
         c[i] *= 0.85 + 0.3 * mot2;
         c[i] += ([0.58, 0.44, 0.38][i] - c[i]) * (S.wart * 0.7 + S.pap * 0.4);
-        c[i] *= 1 - 0.28 * S.net;
+        c[i] *= 1 - 0.18 * S.net;
         c[i] = c[i] * (1 - 0.45 * S.blot * (1 - S.oral)) + 0.02 * S.blot;
-        c[i] += ([0.74, 0.60, 0.55][i] - c[i]) * Math.min(1, S.col * 0.8) * S.oral;
-        c[i] *= 1 - 0.35 * S.crease - 0.3 * S.furrow;
+        c[i] += ([0.70, 0.58, 0.54][i] - c[i]) * Math.min(1, S.col * 0.45) * S.oral;
+        c[i] *= 1 - 0.2 * S.crease - 0.3 * S.furrow;
         c[i] += ([0.40, 0.38, 0.52][i] - c[i]) * S.ph * 0.6;
         c[i] *= 0.45 + 0.55 * S.ao;
       }
@@ -479,6 +479,25 @@ function photoStrip(u, v, N, out, Lu, Lv) {
   return 1 - sst(0.10, 0.16, out.f1);
 }
 
+// the caught lanterns' seats: a ray from outside (along `out`) back onto the full sculpt
+export const LANTERN_SEATS = [
+  [[-0.7, 0.7, 0.1], [-0.62, 0.55, 0.0]],                  // the left shoulder, in the chain
+  [[0.5, 0.6, 0.5], [0.52, -0.40, 0.56]],                  // the web, front right
+  [[-0.4, 0.6, -0.5], [-0.52, -0.46, -0.40]]               // the web, back left
+];
+function lanternSeats(spec) {
+  const f = compile(spec).f, out = [];
+  for (const [o, at] of LANTERN_SEATS) {
+    const d = norm(o);
+    let t = 0, p = add(at, d, 1.5);
+    for (let i = 0; i < 300; i++) { const v = f(p[0], p[1], p[2]); if (v < 1e-4) break; t += v * 0.8; p = add(add(at, d, 1.5), d, -t); if (t > 3) { p = null; break; } }
+    if (!p) continue;
+    const e = 0.004, n = norm([f(p[0] + e, p[1], p[2]) - f(p[0] - e, p[1], p[2]), f(p[0], p[1] + e, p[2]) - f(p[0], p[1] - e, p[2]), f(p[0], p[1], p[2] + e) - f(p[0], p[1], p[2] - e)]);
+    out.push({ p: p.map(v => +v.toFixed(4)), n: n.map(v => +v.toFixed(4)) });
+  }
+  return out;
+}
+
 // ---- the offline pipeline (tools/blender) -----------------------------------------------------
 export function pipeline() {
   return {
@@ -491,7 +510,7 @@ export function pipeline() {
       { name: 'sucker', set: 'sucker', sdf: suckerSpec(), hi: { h: 0.008 }, lo: { h: 0.035, tris: 360, err: 0.1 }, paint: SUCKER_PAINT, kEps: 0.03, ao: { r: 0.2, n: 4 }, cage: 0.04, ray: 0.12 }
     ],
     strips: [armStrip()],
-    meta: { eyeAt: EYE_AT, siphon: SIPHON, armPairs: ARM_PAIRS, armSV: ARM_SV, suckK: SUCK_K }
+    meta: { eyeAt: EYE_AT, siphon: SIPHON, armPairs: ARM_PAIRS, armSV: ARM_SV, suckK: SUCK_K, get lanterns() { return lanternSeats(mantleSpec()); } }
   };
 }
 
