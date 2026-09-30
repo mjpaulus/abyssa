@@ -450,8 +450,11 @@ function sharkMaterial(cfg) {
             float under = (1.0 - smoothstep(-0.45, -0.15, gs)) * (1.0 - smoothstep(0.85, 0.95, abs(gc)));
             float lower = step(mt, bT) * (1.0 - smoothstep(mt, 0.2, bT));
             float upper = (1.0 - step(mt, bT)) * smoothstep(mt - 0.06, mt, bT);
-            transformed.y -= uGape * under * (0.055 * lower + 0.014 * upper);
-            transformed.z += uGape * under * upper * 0.010;
+            // Read at gameplay range (8-15 u) the old 0.055 drop was a lip twitch; a
+            // biting shark opens to ~8-9% of body length with the upper jaw thrown well
+            // clear of the snout. The dark gum and teeth inside do the rest.
+            transformed.y -= uGape * under * (0.085 * lower + 0.022 * upper);
+            transformed.z += uGape * under * upper * 0.018;
           } else if (uv.y > 2.5) {
             transformed.y -= uGape * 0.03;
           }
@@ -963,6 +966,8 @@ function octopusMaterial(zi) {
     uActive: { value: 0 }, uGrab: { value: 0 }, uDir: { value: V3(1, 0, 0) },
     // anim-fauna: mantle squeeze of a jet pulse (0..1) and the alarm blanch (0..1)
     uJet: { value: 0 }, uBlanch: { value: 0 },
+    // the GAZE: object-space unit direction to the diver (xyz) and its weight (w)
+    uGaze: { value: new THREE.Vector4(0, 0, 0, 0) },
     uSkin: { value: new THREE.Color(P.skin) },
     uHot: { value: new THREE.Color(P.hot) },
     uGlow: { value: new THREE.Color(P.glow) }
@@ -987,6 +992,7 @@ function octopusMaterial(zi) {
       .replace('#include <common>', `#include <common>
         uniform vec3 uSkin; uniform vec3 uHot; uniform vec3 uGlow;
         uniform float uActive; uniform float uGrab; uniform float uTime; uniform float uBlanch;
+        uniform vec4 uGaze;
         varying float vOctT; varying float vOctK; varying float vOctA; varying float vOctR;
         varying vec2 vOctCS;
         ${SKIN_COMMON}`)
@@ -1040,8 +1046,16 @@ function octopusMaterial(zi) {
         vec2 el = vec2(ea / 0.15, (vOctT - 0.42) / 0.08);
         float ed = length(el);
         float eIn = (1.0 - isArm) * (1.0 - smoothstep(0.82, 1.0, ed));
-        float slit = (1.0 - smoothstep(0.58, 0.68, abs(el.x))) * (1.0 - smoothstep(0.14, 0.22, abs(el.y) - 0.03 * uActive));
-        vec3 iris = vec3(0.36, 0.30, 0.17) * (0.65 + 0.5 * skN2(vec2(atan(el.y, el.x) * 5.0, ed * 9.0)));
+        // THE GAZE: the iris and its slit slide inside the eye toward the diver (the slit
+        // stays horizontal: an octopus levels its pupil by the statocyst whatever it looks
+        // at). Signed across-eye coordinate, positive toward object +z on both eyes; only
+        // the eye that faces him follows, the far one relaxes to centre.
+        float eSd = abs(oAng) < 1.5707963 ? 1.0 : -1.0;
+        float eLz = eSd > 0.0 ? oAng : (3.1415927 - abs(oAng)) * sign(oAng);
+        float eGw = uGaze.w * smoothstep(-0.2, 0.45, uGaze.x * eSd);
+        vec2 elp = vec2(eLz / 0.15, el.y) - vec2(clamp(uGaze.z, -1.0, 1.0), clamp(uGaze.y, -1.0, 1.0)) * vec2(0.34, 0.30) * eGw;
+        float slit = (1.0 - smoothstep(0.58, 0.68, abs(elp.x))) * (1.0 - smoothstep(0.14, 0.22, abs(elp.y) - 0.03 * uActive));
+        vec3 iris = vec3(0.36, 0.30, 0.17) * (0.65 + 0.5 * skN2(vec2(atan(elp.y, elp.x) * 5.0, length(elp) * 9.0)));
         skin = mix(skin, mix(iris, vec3(0.01, 0.01, 0.012), slit), eIn);
         skin *= 1.0 - 0.45 * (1.0 - isArm) * (1.0 - smoothstep(0.0, 0.14, abs(ed - 1.05)));   // lid fold
         h = mix(h, sqrt(max(0.0, 1.0 - ed * ed)) * 2.5, eIn);
@@ -1123,7 +1137,7 @@ function buildOctopuses() {
   }
 }
 
-const _oq = new THREE.Quaternion();
+const _oq = new THREE.Quaternion(), _oqi = new THREE.Quaternion();
 function octSet(O, s) { O.state = s; O.tState = 0; }
 
 function updateOctopus(O, dt, t, p, lp) {
@@ -1269,6 +1283,16 @@ function updateOctopus(O, dt, t, p, lp) {
   } else _oq.identity();
   O.orient.slerp(_oq, Math.min(1, dt * (O.state === 'flee' ? 6 : 2.2)));
   O.mesh.quaternion.copy(O.orient);
+  // the GAZE: where the diver's head is, in the mantle's own frame; it watches him once
+  // roused (and a little even in the den, when he is close), not across the reef
+  {
+    _k1.set(p.pos.x - O.pos.x, p.pos.y + 0.45 - O.pos.y - O.mesh.scale.y * 0.5, p.pos.z - O.pos.z);
+    const gd = _k1.length();
+    _oqi.copy(O.orient).invert();
+    _k1.applyQuaternion(_oqi).multiplyScalar(1 / Math.max(gd, 1e-4));
+    const gw = Math.min(1, 0.35 + O.active) * (1 - Math.min(1, Math.max(0, (gd - 16) / 12)));
+    O.u.uGaze.value.set(_k1.x, _k1.y, _k1.z, gw);
+  }
 
   // 130 predates the stratified fog; track the live sight wall (dens sit in the silt,
   // so this usually lands near the old figure, but never pops inside visible range).
