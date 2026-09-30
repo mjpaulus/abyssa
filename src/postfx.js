@@ -14,11 +14,13 @@ import {
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
 import { SURFACE_Y, GLASS, SKY, ZONE_H, ZONE_GAP } from './config.js';
-import { renderer, scene, camera, onResize, RES_SCALE, RES_FLOOR, getRenderScale, setRenderScale } from './core.js';
+import { renderer, scene, camera, onResize, RES_SCALE, RES_FLOOR, getRenderScale, setRenderScale, getRenderFloor, setRenderFloor, getOutputSize } from './core.js';
+// TEMPORAL AA + UPSCALING (postfx.taa.js): replaces the SMAA/vignette/grain tail when on.
+import { TemporalAAPass } from './postfx.taa.js';
 import { playerLightSrc, parkSunShadow, unparkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
-import { degradeRefraction, reduceRefraction, restoreRefraction, stormLevel } from './world/water.js';
+import { degradeRefraction, reduceRefraction, restoreRefraction, stormLevel, TAA_U } from './world/water.js';
 // --- END VOLUMETRICS INTEGRATION ---
 // CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
 // underwater volumetrics and before the main EffectPass so bloom/grade see it.
@@ -426,7 +428,7 @@ function updateGrade(airK) {
   // 0.045 -> 0.026 (2026-09-28): Michael, "everything looks a little grainy", once the
   // lighting pass brightened the shallows and the film finish steepened contrast, the
   // same amplitude read as sensor noise rather than film.
-  grain.uniforms.get('uAmount').value = 0.026 * (1 - 0.75 * airK);
+  grain.uniforms.get('uAmount').value = 0.026 * (1 - 0.75 * airK) * TAA.grainK;
   const k = Math.max(0, Math.min(1, __grade.amount));
   const ks = Math.max(0, Math.min(1, styleK('grade')));
   // The stack applies even with the legacy depth CDL at 0 -- Flow commits.
@@ -532,7 +534,47 @@ composer.addPass(effectPass);
 // pass, listed AFTER it — the library runs effects in the order GIVEN (it does not
 // sort convolutions first), so this argument order is what keeps grain unblurred.
 const smaaPass = new EffectPass(camera, smaa, vignette, grain);
-composer.addPass(smaaPass);
+// THE TAIL. Exactly one of these two is the composer's last pass: the SMAA pass (the
+// shipped path, and the TAA kill switch) or the temporal pass, which resolves to an
+// OUTPUT-resolution history and draws the finish to the canvas itself. TAA is on by
+// default; __taa.on(false) is the A/B.
+let taaPass = null;
+try { taaPass = new TemporalAAPass(camera); }
+catch (e) { console.warn('TAA unavailable:', e); taaPass = null; }
+const TAA = { on: taaPass ? 1 : 0, floor: 0.5, grainK: 1, camProbe: null };   // grainK: measurement knob (0 = no grain, both paths)   // floor: TAAU internal floor as a fraction of RES_SCALE
+function finalPass() { return TAA.on && taaPass ? taaPass : smaaPass; }
+composer.addPass(finalPass());
+const _outV = new THREE.Vector2(), _inV = new THREE.Vector2();
+function syncTAAFloor() { setRenderFloor(TAA.on && taaPass ? Math.max(0.5, RES_SCALE * TAA.floor) : RES_FLOOR); }
+syncTAAFloor();
+function syncOutput() {
+  if (!taaPass) return;
+  getOutputSize(_outV);
+  if (_outV.x > 0) taaPass.setOutputSize(_outV.x, _outV.y);
+}
+// The canvas's drawing buffer: OUTPUT dims while the temporal pass draws the frame, the
+// renderer's own (internal) dims otherwise (SMAA path, P bypass). Changes only on a
+// resize or a mode switch -- assigning canvas.width reallocates the default framebuffer.
+function syncCanvas(taaLive) {
+  const cv = renderer.domElement;
+  if (taaLive) getOutputSize(_outV); else renderer.getDrawingBufferSize(_outV);
+  if (_outV.x < 1 || _outV.y < 1) return;
+  if (cv.width !== _outV.x || cv.height !== _outV.y) { cv.width = _outV.x; cv.height = _outV.y; }
+}
+export function setTAA(on) {
+  on = !!on && !!taaPass;
+  if (!!TAA.on === on) return on;
+  composer.removePass(finalPass());
+  TAA.on = on ? 1 : 0;
+  composer.addPass(finalPass());
+  if (on) { syncOutput(); taaPass.reset('enabled'); }
+  syncTAAFloor();
+  useDepthCopy();
+  return on;
+}
+// Rigid movers get exact per-mesh motion vectors in the TAA resolve (Sal, the raft).
+export function addTemporalMover(root) { if (taaPass) taaPass.addMover(root); }
+export function resetTemporal(why) { if (taaPass) taaPass.reset(why || 'external'); }
 
 // composer.addPass() rewires every pass to the live depth attachment, so this must
 // run after ANY addPass that creates or re-adds a depth-sampling pass.
@@ -541,6 +583,7 @@ function useDepthCopy() {
   if (expPass) expPass.setDepthTexture(depthCopy.texture);
   if (volPass) volPass.setDepthTexture(depthCopy.texture);
   if (raysPass) raysPass.setDepthTexture(depthCopy.texture);
+  if (taaPass) taaPass.useDepth(depthCopy.texture);
 }
 
 // --- VOLUMETRICS INTEGRATION (pass insertion + kill switch) ---
@@ -625,7 +668,28 @@ export function getVolumetrics() { return !!volPass; }
 export function getVolumetricPass() { return volPass; }
 // --- END VOLUMETRICS INTEGRATION ---
 
-onResize((w, h) => composer.setSize(w, h, false));
+onResize((w, h) => { composer.setSize(w, h, false); if (TAA.on) syncOutput(); });
+syncOutput();
+if (typeof window !== 'undefined') {
+  window.__taa = {
+    get K() { return taaPass ? taaPass.K : null; },
+    on: (v) => { if (v !== undefined) setTAA(v); return !!(TAA.on && taaPass); },
+    reset: () => resetTemporal('manual'),
+    set camProbe(fn) { TAA.camProbe = fn || null; },
+    vel: (v) => { if (taaPass && v !== undefined) taaPass.velOn = !!v; return taaPass ? { on: taaPass.velOn, proxies: taaPass.proxies.length, drawn: taaPass.velDrawn } : null; },
+    grain: (k) => { if (k !== undefined) TAA.grainK = k; return TAA.grainK; },
+    floor: (f) => { if (f !== undefined) { TAA.floor = f; syncTAAFloor(); } return getRenderFloor(); },
+    pass: () => taaPass,
+    state: () => {
+      const p = taaPass; if (!p) return { available: false };
+      return { on: !!TAA.on, valid: p.valid, frame: p.frame, resets: p.resets, lastReset: p.lastReset,
+        internal: [p.inW, p.inH], output: [p.outW, p.outH], ratio: +(p.outW / Math.max(1, p.inW)).toFixed(3),
+        jitter: [+p.jx.toFixed(3), +p.jy.toFixed(3)], canvas: [renderer.domElement.width, renderer.domElement.height],
+        scale: getRenderScale(), floor: getRenderFloor(), mipBias: +TAA_U[0].toFixed(3),
+        movers: { proxies: p.proxies.length, drawn: p.velDrawn, rect: p.velRect.toArray() }, K: { ...p.K } };
+    }
+  };
+}
 
 // Focus tracks the diver (playerLightSrc rides him) with a lens-like lag.
 const focusTarget = new THREE.Vector3();
@@ -827,7 +891,10 @@ export function getPostBypass() { return bypass; }
 
 export function render(dt) {
   if (bypass) {
+    TAA_U[0] = 0;
     if (expPass) expPass.reset(renderer);   // no auto-exposure without the post chain
+    if (taaPass) taaPass.reset('bypass');
+    syncCanvas(false);
     renderer.setRenderTarget(null);
     renderer.render(scene, camera);
     pumpCaptures();
@@ -873,7 +940,22 @@ export function render(dt) {
   updateAO(air);
   // Exposure is set BEFORE the scene renders: three bakes it into every material.
   if (expPass) expPass.update(dt || 0.016, renderer, air);
-  composer.render(dt);
+  const taaLive = !!(TAA.on && taaPass);
+  // Texture LOD bias while TAAU renders below the output (0 at 1:1 and on the SMAA path).
+  // Set here, before the composer, so the scene pass samples with it; the refraction
+  // pass that ran earlier this frame used last frame's value (same scale but for a DRS step).
+  TAA_U[0] = taaLive ? Math.min(0, Math.log2(Math.max(1, taaPass.inW) / Math.max(1, taaPass.outW || taaPass.inW))) * taaPass.K.mip : 0;
+  // Measurement hook (__taa.camProbe = fn(camera)): lets a probe add a controlled
+  // sub-pixel camera motion on top of the game's camera, for shimmer/ghosting tests.
+  if (TAA.camProbe) TAA.camProbe(camera);
+  syncCanvas(taaLive);
+  if (taaLive) {
+    taaPass.outMat.uniforms.uGrain.value = grain.uniforms.get('uAmount').value;
+    taaPass.outMat.uniforms.uTime.value += dt;
+    taaPass.begin(camera);
+  }
+  try { composer.render(dt); }
+  finally { if (taaLive) taaPass.end(camera); }
   pumpCaptures();
   if (DEV_LAB && window.__perf && window.__perf.load > 0) { const e = performance.now() + window.__perf.load; while (performance.now() < e) { /* dev load */ } }
 }
@@ -1029,11 +1111,11 @@ function degradeQuality() {
   if (normalPass) {
     composer.removePass(effectPass);
     composer.removePass(normalPass);
-    composer.removePass(smaaPass);
+    composer.removePass(finalPass());
     normalPass = null;
     effectPass = new EffectPass(camera, dof, bloom, chroma, grade, finite);
     composer.addPass(effectPass);
-    composer.addPass(smaaPass);   // re-append so SMAA (+ vignette/grain) stays last
+    composer.addPass(finalPass());   // re-append so the tail (SMAA or TAA) stays last
   }
   useDepthCopy();
   console.info('ABYSSA: reduced quality mode (AO/shadows off)');
@@ -1139,7 +1221,7 @@ function updateResScale(now, cap) {
   }
 }
 if (typeof window !== 'undefined') window.__drs = Object.assign(DRS, {
-  state: () => ({ on: DRS.on, scale: getRenderScale(), ceil: RES_SCALE, floor: RES_FLOOR, gpu: gpuMedian(), last: DRS.last }),
+  state: () => ({ on: DRS.on, scale: getRenderScale(), ceil: RES_SCALE, floor: getRenderFloor(), taa: !!TAA.on, gpu: gpuMedian(), last: DRS.last }),
   pin: (x) => { DRS.on = 0; return setRenderScale(x == null ? RES_SCALE : x); }
 });
 

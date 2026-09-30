@@ -411,6 +411,23 @@ Hidden or driven (`__power.drive`) frames never enter the window. `__perf.state(
   never steer it) holds the GPU median at 55-78% of the governor slot. Acts before the
   quality ladder. `__drs.state()`, `__drs.pin(x)` (pins and turns it off). To judge perf
   in the pane: `__power.drive(false)` and `__power.set(60,60)`, or the judge sees nothing.
+- TEMPORAL AA + UPSCALING (`postfx.taa.js`, branch `taa`): the composer's LAST pass. The
+  renderer's size (every composer target, `getSize`, `getDrawingBufferSize`, every uPix)
+  is the INTERNAL resolution; the canvas drawing buffer is the OUTPUT resolution
+  (css x RES_SCALE) and `postfx.syncCanvas` owns it per frame (internal dims on the SMAA
+  path and under P bypass). Halton(2,3) x16 jitter on the projection for the whole chain,
+  removed after it (`begin`/`end`); resolve = 3x3 Blackman-Harris reconstruction, closest-
+  depth CAMERA reprojection, Catmull-Rom history, disocclusion by the view distance kept
+  in history ALPHA, YCoCg variance clip, Karis blend; then RCAS + vignette + grain to the
+  canvas. SAL AND THE RAFT get exact motion vectors (rigid hierarchies; proxies in a
+  private scene, scissored colour-only velocity target, occluded against the depth copy)
+  -- `addTemporalMover(root)`. Fish/creatures are vertex-animated: variance clip + clip-
+  distance anti-ghost only. DRS moves only the INTERNAL res (floor 0.5 x RES_SCALE while
+  TAAU runs); history lives at output res and survives every DRS step. Texture LOD bias
+  = log2(internal/output) via `abyssaTaa` (water.js patchFog) + `ABYSSA_TEX` in the map
+  chunks and triplanar. Resets: camera cut (>5 u/frame or >45 deg), reseed, P, resize.
+  Kill switch / A-B: `__taa.on(false)` (the old SMAA tail), `__taa.state()`, `__taa.K`,
+  `__taa.vel(false)`, `__taa.floor(f)`. Never shed by degradeQuality: with DRS it SAVES GPU.
 - `lib/surface.js` is a GLOBAL patch on the lights chunks (path extinction, wrap, rim, wet
   film, thin-sheet transmission, medium env, horizon occlusion, specular AA). Zero
   variants; every term gated by a shared uniform. `abyssaPath.w` = specular-AA gain.

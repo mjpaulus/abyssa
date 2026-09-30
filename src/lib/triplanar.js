@@ -63,7 +63,20 @@ export const pbrUniforms = {
 // scales are only ever near 50/50 inside narrow transition bands (a constant 0.5
 // blend would halve contrast everywhere).
 // ---------------------------------------------------------------------------
-export const PBR_GLSL = EDGE_GLSL + /* glsl */`
+// ABYSSA_TEX: the temporal upscaler's mip bias (postfx.taa.js TAA_TEX_DECL -- the same
+// include-guarded block, repeated here so this string compiles wherever it is injected).
+const TAA_TEX = `
+#ifndef ABYSSA_TAA_DECL
+#define ABYSSA_TAA_DECL
+#ifdef USE_FOG
+uniform vec4 abyssaTaa;
+#define ABYSSA_TEX( t, uv ) texture( t, uv, abyssaTaa.x )
+#else
+#define ABYSSA_TEX( t, uv ) texture2D( t, uv )
+#endif
+#endif
+`;
+export const PBR_GLSL = EDGE_GLSL + TAA_TEX + /* glsl */`
 uniform sampler2D uPAlb, uPRgh, uPNS, uPNG, uPNR;
 uniform float uTexAmt; uniform float uPaintK;
 
@@ -73,12 +86,12 @@ const float PBR_FAR  = 0.0222;  // 1 repeat / 45 world units
 // One projection plane, both octaves. Flat ground takes the early out and pays
 // two taps; only cliff faces pay all six.
 vec3 pbrPlane(sampler2D t, vec3 p, vec3 bw, float f) {
-  vec3 a = texture2D(t, p.xz * PBR_NEAR).rgb;
-  vec3 b = texture2D(t, p.xz * PBR_FAR).rgb;
+  vec3 a = ABYSSA_TEX(t, p.xz * PBR_NEAR).rgb;
+  vec3 b = ABYSSA_TEX(t, p.xz * PBR_FAR).rgb;
   vec3 s = mix(a, b, f);
   if (bw.y > 0.93) return s;
-  vec3 sx = mix(texture2D(t, p.zy * PBR_NEAR).rgb, texture2D(t, p.zy * PBR_FAR).rgb, f);
-  vec3 sz = mix(texture2D(t, p.xy * PBR_NEAR).rgb, texture2D(t, p.xy * PBR_FAR).rgb, f);
+  vec3 sx = mix(ABYSSA_TEX(t, p.zy * PBR_NEAR).rgb, ABYSSA_TEX(t, p.zy * PBR_FAR).rgb, f);
+  vec3 sz = mix(ABYSSA_TEX(t, p.xy * PBR_NEAR).rgb, ABYSSA_TEX(t, p.xy * PBR_FAR).rgb, f);
   return s * bw.y + sx * bw.x + sz * bw.z;
 }
 
@@ -86,9 +99,9 @@ vec3 pbrPlane(sampler2D t, vec3 p, vec3 bw, float f) {
 // whiteout-blended: blending after would mix normals expressed in different frames.
 vec3 pbrNrmUV(vec2 uv, vec3 w, float f) {
   vec3 v = vec3(0.0);
-  if (w.x > 0.004) v += mix(texture2D(uPNS, uv * PBR_NEAR).xyz, texture2D(uPNS, uv * PBR_FAR).xyz, f) * w.x;
-  if (w.y > 0.004) v += mix(texture2D(uPNG, uv * PBR_NEAR).xyz, texture2D(uPNG, uv * PBR_FAR).xyz, f) * w.y;
-  if (w.z > 0.004) v += mix(texture2D(uPNR, uv * PBR_NEAR).xyz, texture2D(uPNR, uv * PBR_FAR).xyz, f) * w.z;
+  if (w.x > 0.004) v += mix(ABYSSA_TEX(uPNS, uv * PBR_NEAR).xyz, ABYSSA_TEX(uPNS, uv * PBR_FAR).xyz, f) * w.x;
+  if (w.y > 0.004) v += mix(ABYSSA_TEX(uPNG, uv * PBR_NEAR).xyz, ABYSSA_TEX(uPNG, uv * PBR_FAR).xyz, f) * w.y;
+  if (w.z > 0.004) v += mix(ABYSSA_TEX(uPNR, uv * PBR_NEAR).xyz, ABYSSA_TEX(uPNR, uv * PBR_FAR).xyz, f) * w.z;
   return v * 2.0 - (w.x + w.y + w.z);
 }
 
