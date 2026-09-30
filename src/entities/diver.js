@@ -2649,7 +2649,24 @@ export function updateDiver(dt, t, player) {
     }
     spring(strafeS, off, dt, 5, 1);
   }
-  yawF = lerp(yawF, player.yaw + strafeS.x, Math.min(1, (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * dt));
+  // THE SLASH SQUARES HIM UP. game.js checks the hit along the LOOK (forwardVec) at
+  // t+0.22; the swing is authored in the BODY frame, and with the strafe blend (or the
+  // loose swim yaw) the body can sit ~70 degrees off the look — the knife visibly cut
+  // one way while the hit landed another. The one correct answer is that the man turns
+  // into the cut: the draw and windup (0 -> 0.15 s) are exactly the time a fighter uses
+  // to square his shoulders, so the body heading is driven hard onto the look through
+  // the windup, held through contact and follow-through, and handed back to the strafe
+  // blend during the slow recovery. The feet follow on their own: planted boots stay
+  // nailed and the IK twists the legs under the turning hips; a standing turn this big
+  // triggers the shuffle step, which is what a real squaring-up does. The hit timing
+  // and the swing curves are untouched — only WHERE the swing points moves.
+  const sqW = slashT >= 0 ? ss(0, 0.12, slashT) * (1 - ss(0.40, SLASH_DUR, slashT)) : 0;
+  {
+    let d = player.yaw + strafeS.x * (1 - sqW) - yawF;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    const rate = (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * (1 - sqW) + 26 * sqW;
+    yawF += d * Math.min(1, rate * dt);
+  }
   diver.rotation.y = yawF;
 
   // Stepping onto planks kills the aquatic motion in ~0.15 s rather than half a second:
@@ -2867,12 +2884,14 @@ export function updateDiver(dt, t, player) {
       // behind him: he does not wrench his neck round, he gives up on it
       const behind = 1 - ss(1.5, 2.2, Math.abs(ly));
       const lp = Math.atan2(vy, Math.hypot(vx, vz));
-      hy += clamp(ly, -1.15, 1.15) * lookW * behind;
-      hp += clamp(lp, -0.45, 0.35) * lookW * behind;
+      // ...and while he cuts, his eyes are on the cut.
+      hy += clamp(ly, -1.15, 1.15) * lookW * behind * (1 - sqW);
+      hp += clamp(lp, -0.45, 0.35) * lookW * behind * (1 - sqW);
     }
     // Head yaw/pitch are sprung here so the look drifts on rather than tracking a target
     // frame-perfectly — a man in a 25 kg helmet turns it slowly.
-    spring(lkY, hy, dt, 4.2, 0.9);
+    // Squaring up for a slash the whole column turns as one, fast.
+    spring(lkY, hy, dt, 4.2 + 12 * sqW, 0.9);
     spring(lkX, hp, dt, 3.6, 0.9);
     // Share out: the helmet can only turn so far on the corselet before the shoulders
     // have to come round too.
