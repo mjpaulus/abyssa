@@ -29,6 +29,39 @@
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
 
+// TEXTURE MIP BIAS under upscaling. abyssaTaa (installed by world/water.js patchFog on
+// every fogged program, the abyssaAir way) carries x = LOD bias; the built-in map chunks
+// sample through ABYSSA_TEX, which applies it only where the uniform exists (USE_FOG).
+// The declaration rides the map pars chunks behind an include guard, so any order or
+// repetition of the chunks (and lib/triplanar.js, which carries the same guard) is safe.
+export const TAA_TEX_DECL = `
+#ifndef ABYSSA_TAA_DECL
+#define ABYSSA_TAA_DECL
+#ifdef USE_FOG
+uniform vec4 abyssaTaa;
+#define ABYSSA_TEX( t, uv ) texture( t, uv, abyssaTaa.x )
+#else
+#define ABYSSA_TEX( t, uv ) texture2D( t, uv )
+#endif
+#endif
+`;
+(function patchMipBias() {
+  const C = THREE.ShaderChunk;
+  for (const k of ['map_pars_fragment', 'normalmap_pars_fragment', 'roughnessmap_pars_fragment', 'metalnessmap_pars_fragment', 'emissivemap_pars_fragment']) {
+    if (typeof C[k] === 'string') C[k] = TAA_TEX_DECL + C[k];
+  }
+  const rep = (k, a, b) => {
+    const t = C[k];
+    if (typeof t !== 'string' || t.indexOf(a) < 0) { console.warn('TAA mip bias: chunk ' + k + ' did not match; left unbiased'); return; }
+    C[k] = t.split(a).join(b);
+  };
+  rep('map_fragment', 'texture2D( map, vMapUv )', 'ABYSSA_TEX( map, vMapUv )');
+  rep('normal_fragment_maps', 'texture2D( normalMap, vNormalMapUv )', 'ABYSSA_TEX( normalMap, vNormalMapUv )');
+  rep('roughnessmap_fragment', 'texture2D( roughnessMap, vRoughnessMapUv )', 'ABYSSA_TEX( roughnessMap, vRoughnessMapUv )');
+  rep('metalnessmap_fragment', 'texture2D( metalnessMap, vMetalnessMapUv )', 'ABYSSA_TEX( metalnessMap, vMetalnessMapUv )');
+  rep('emissivemap_fragment', 'texture2D( emissiveMap, vEmissiveMapUv )', 'ABYSSA_TEX( emissiveMap, vEmissiveMapUv )');
+})();
+
 const HALTON_N = 16;
 const HALTON = new Float32Array(HALTON_N * 2);
 function halton(i, b) { let f = 1, r = 0; while (i > 0) { f /= b; r += f * (i % b); i = Math.floor(i / b); } return r; }
@@ -267,7 +300,7 @@ export class TemporalAAPass extends Pass {
     this.jx = 0; this.jy = 0;
     // Knobs (window.__taa.K): alpha gain, alpha floor, clip gamma, disocclusion tolerance,
     // motion alpha cap + per-pixel gain, sharpen, cut distance (units per frame).
-    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.25, cut: 5, jitter: 1, velDepth: 0 };
+    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.35, cut: 5, jitter: 1, velDepth: 0, mip: 1 };
     this.savedProj = new THREE.Matrix4(); this.savedProjInv = new THREE.Matrix4(); this.jittered = false;
     this.resolveMat = new THREE.ShaderMaterial({
       name: 'AbyssaTAAResolve', vertexShader: VERT, fragmentShader: RESOLVE_FRAG,

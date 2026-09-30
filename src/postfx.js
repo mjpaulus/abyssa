@@ -20,7 +20,7 @@ import { TemporalAAPass } from './postfx.taa.js';
 import { playerLightSrc, parkSunShadow, unparkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
-import { degradeRefraction, reduceRefraction, restoreRefraction, stormLevel } from './world/water.js';
+import { degradeRefraction, reduceRefraction, restoreRefraction, stormLevel, TAA_U } from './world/water.js';
 // --- END VOLUMETRICS INTEGRATION ---
 // CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
 // underwater volumetrics and before the main EffectPass so bloom/grade see it.
@@ -890,6 +890,7 @@ export function getPostBypass() { return bypass; }
 
 export function render(dt) {
   if (bypass) {
+    TAA_U[0] = 0;
     if (expPass) expPass.reset(renderer);   // no auto-exposure without the post chain
     if (taaPass) taaPass.reset('bypass');
     syncCanvas(false);
@@ -939,6 +940,10 @@ export function render(dt) {
   // Exposure is set BEFORE the scene renders: three bakes it into every material.
   if (expPass) expPass.update(dt || 0.016, renderer, air);
   const taaLive = !!(TAA.on && taaPass);
+  // Texture LOD bias while TAAU renders below the output (0 at 1:1 and on the SMAA path).
+  // Set here, before the composer, so the scene pass samples with it; the refraction
+  // pass that ran earlier this frame used last frame's value (same scale but for a DRS step).
+  TAA_U[0] = taaLive ? Math.min(0, Math.log2(Math.max(1, taaPass.inW) / Math.max(1, taaPass.outW || taaPass.inW))) * taaPass.K.mip : 0;
   // Measurement hook (__taa.camProbe = fn(camera)): lets a probe add a controlled
   // sub-pixel camera motion on top of the game's camera, for shimmer/ghosting tests.
   if (TAA.camProbe) TAA.camProbe(camera);

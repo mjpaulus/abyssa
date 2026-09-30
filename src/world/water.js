@@ -193,6 +193,13 @@ const LAMPK_U = new Float32Array(4);
 // beam in the water and the pool on the sand redden and go teal at one rate -- a warm
 // core, a teal-green edge, in the volume exactly as on the rock.
 const LAMPP_U = new Float32Array(4);
+// TEMPORAL UPSCALING's texture mip bias (postfx.taa.js): x = LOD bias every fogged
+// program's map / normalMap / roughness / metalness / emissive taps and the triplanar
+// sediment take while TAAU renders below the output resolution (log2 internal/output,
+// so a texture is filtered for the pixel the player SEES, and the temporal resolve
+// integrates the extra detail). 0 = bit-identical sampling. Same shared-array install
+// as every uniform below.
+export const TAA_U = new Float32Array(4);
 // Look knobs, live-pokeable through window.__atmos.
 export const ATMOS = {
   // Lantern in-scatter gain (x the physical sigma_s * I * phase). Tuned against the
@@ -1020,6 +1027,7 @@ const AIRZ_U = new Float32Array(4);
   THREE.UniformsLib.fog.abyssaLampBC = { value: LAMPBC_U };
   THREE.UniformsLib.fog.abyssaLampK = { value: LAMPK_U };
   THREE.UniformsLib.fog.abyssaLampP = { value: LAMPP_U };
+  THREE.UniformsLib.fog.abyssaTaa = { value: TAA_U };
   for (const k in THREE.ShaderLib) {
     const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
     if (u && u.fogColor) {
@@ -1029,6 +1037,7 @@ const AIRZ_U = new Float32Array(4);
       u.abyssaLampA = { value: LAMPA_U }; u.abyssaLampAC = { value: LAMPAC_U };
       u.abyssaLampB = { value: LAMPB_U }; u.abyssaLampBC = { value: LAMPBC_U };
       u.abyssaLampK = { value: LAMPK_U }; u.abyssaLampP = { value: LAMPP_U };
+      u.abyssaTaa = { value: TAA_U };
     }
   }
   // THE BOLT NEEDS A NORMAL, and the fog chunk is shared by materials that have one and
