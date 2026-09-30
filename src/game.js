@@ -21,7 +21,8 @@ import {
 import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
   setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady, setPump,
-  syncBreath, voyage, setAbove, setWind, setMaster
+  syncBreath, voyage, setAbove, setWind, setMaster,
+  audioFrame, audioSleeper, setPaused, sonar, knife, knifeHit, land
 } from './audio.js';
 import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
@@ -316,7 +317,7 @@ addEventListener('keydown', e => {
   // T: sonar pulse (once the set is recovered from the shallows wreck)
   if (e.code === 'KeyT' && state === 'play' && survival.hasSonar) {
     if (sonarPing(player.pos, zone < 0 ? 0 : zone)) {
-      chime(1174, 2.2, 0.16, 'pickup');   // NOT a ward: the sigil motif must only advance on wards
+      sonar();   // the sounding set: a ping and the dark's answers (audio places the echoes)
       // THE DEEP SOUND CHANNEL: a ping from zone 2 carries far enough to sound
       // ground the chart's owner never reached. Once, ever, per hidden anchorage.
       if (zone === 2 && !chartFound[3]) {
@@ -378,7 +379,7 @@ addEventListener('contextmenu', e => { if (locked) e.preventDefault(); });
 // Left-click while locked: knife slash. The anim gates repeats; the hit lands on the
 // contact frame via pendingSlash so the blade connects when it visually connects.
 let pendingSlash = 0;
-function doSlash() { if (triggerSlash()) pendingSlash = 0.22; }   // contact ~0.22s into the swing
+function doSlash() { if (triggerSlash()) { pendingSlash = 0.22; knife(); } }   // contact ~0.22s into the swing
 function doSpear() {
   if (!survival.hasSpear) return;
   if (survival.spears > 0 && fireSpear(player.pos, forwardVec())) {
@@ -1280,6 +1281,7 @@ function update(dt, t) {
   // THE PAUSE: no pointer lock and no chart means no helm. See the note at `paused`.
   // window.__helm: the review harness has no pointer lock; it takes the helm by flag.
   paused = !window.__helm && (!locked || blurred) && !isChartOpen();
+  setPaused(paused);   // audio: Esc/blur suspends the context
   pauseT = paused ? pauseT + dt : 0;
   // the line waits a beat so the lock's own latency never flashes it
   $pause.classList.toggle('on', paused && pauseT > 0.35);
@@ -1300,8 +1302,7 @@ function update(dt, t) {
   const aboveWater = player.pos.y > localSurfaceY();
   if (wasAboveWater && !aboveWater) {
     const impact = Math.min(1, Math.abs(player.vel.y) / 6);
-    slam();
-    airVent(0.5 + 0.5 * impact);
+    // (audio hears the crossing itself: audio/sal.js splash(), keyed on the same surface)
     shake = Math.max(shake, 0.35 + 0.5 * impact);
     camKick = Math.max(camKick, 0.5);
     showMsg('VENT THE DRESS TO GO DOWN', 3.5);
@@ -1361,6 +1362,7 @@ function update(dt, t) {
 
   if (lev) {
     const ev = updateLeviathan(lev, dt, t, player);
+    audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
     if (ev.woke) { showMsg(lev.name, 5, 2); growl(); shake = 1; }
     if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); diverImpulse('grab'); }
     diverGrab(!!lev.grab);
@@ -1570,7 +1572,7 @@ function update(dt, t) {
       const kill = slash(player.pos, forwardVec(), 3.4);
       if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec());   // the Hoarder lets go of a cut arm
       if (kill) {
-        chime(880, 0.5, 0.22, 'pickup');
+        knifeHit('flesh');
         shake = Math.min(1, shake + 0.25);
         if (kill.killed === 'squid') showMsg('THE SHOAL SCATTERS — IT DROPPED SOMETHING', 3);
       }
@@ -1635,6 +1637,7 @@ function update(dt, t) {
     dread = clamp(1 - near / (lev.size * 9), 0, 1);
   }
   setProximity(Math.max(dread, pev.threat));
+  audioFrame(dt, pev, wx);   // audio: listener, breath clock, creature/fauna/thunder edges
   // Debris reacts to the diver's push and the leviathan's sweep.
   updatePhysics(dt, player.pos, player.vel, lev ? lev.spine : null);
 
@@ -1659,6 +1662,7 @@ function update(dt, t) {
   if (player.grounded && !wasGrounded && landVel > 1.8 && !player.onDeck) {
     const zi = zone < 0 ? 0 : zone;
     const p = Math.min(2.2, landVel * 0.42);
+    land(p);
     spawnFootfall(player.pos, player.yaw, 1, zi, p);
     spawnFootfall(player.pos, player.yaw, -1, zi, p);
   }
