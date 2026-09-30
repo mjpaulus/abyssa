@@ -15,3 +15,10 @@ if (!creature) { console.error('usage: build.mjs <creature> [--sets a,b] [--piec
 const run = (cmd, a) => { const r = spawnSync(cmd, a, { stdio: 'inherit', cwd: ROOT }); if (r.status !== 0) process.exit(r.status || 1); };
 if (!args.includes('--skip-export')) run(process.execPath, [path.join(HERE, 'export_hi.mjs'), creature, ...(opt('--pieces') ? opt('--pieces').split(',') : [])]);
 run(BLENDER, ['-b', '--factory-startup', '--python', path.join(HERE, 'bake.py'), '--', path.join(HERE, '.build', creature), ROOT, ...(opt('--sets') ? opt('--sets').split(',') : [])]);
+// 3 (optional, the creature's pipeline().compress.tex === 'ktx2'): block-compressed KTX2
+// maps from the raw dumps bake.py left in the build dir (WebP stays as the fallback)
+{
+  const fs = await import('fs');
+  const man = JSON.parse(fs.readFileSync(path.join(HERE, '.build', creature, 'manifest.json'), 'utf8'));
+  if (man.compress && man.compress.tex === 'ktx2') run(process.execPath, [path.join(HERE, 'ktx2.mjs'), path.join(HERE, '.build', creature), path.join(ROOT, man.out), ...(opt('--sets') ? opt('--sets').split(',') : [])]);
+}

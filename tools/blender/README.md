@@ -39,6 +39,28 @@ Blender: `/Applications/Blender.app/Contents/MacOS/Blender` (5.2 LTS; `BLENDER=`
    - composes ORM, writes WebP, exports the .glb with tangents.
    Measured on an M5 Max: body 2M→70k + limbs (14 pieces) in ~75 s.
 
+3. **ktx2.mjs (node, optional)** — when the creature's `pipeline()` sets
+   `compress: { tex: 'ktx2' }`, bake.py leaves raw RGBA8 dumps in the build dir and this
+   writes `<set>_albedo.ktx2` (BC1, sRGB) and `<set>_normal.ktx2` (BC5: normal XY, the
+   shader rebuilds Z) with full mip chains (albedo filtered in linear light, normals
+   renormalised), zstd-supercompressed. Encoders are ours (principal-axis BC1 + two
+   least-squares passes; min/max BC4/BC5): no basisu/toktx. ORM stays WebP (BC1 on three
+   independent channels measured RMSE 10-16/255). The WebP maps are always written too:
+   `assets.js` uses the KTX2 only where the GPU has S3TC(+sRGB)+RGTC, and falls back per
+   map (and under `?noktx`).
+   Measured on Velkath: GPU texture memory 96 MB -> ~27 MB; the first-render upload stall
+   (WebP decode + mip generation on the main thread) 350-660 ms -> ~20 ms; download
+   4.7 MB of WebP -> 10.9 MB of KTX2+ORM WebP (the BC5 normals are high-entropy).
+
+Additive outputs (brooder2), all backward compatible — a runtime that ignores them sees
+exactly the old asset:
+- **ORM.B = cavity** (0.5 flat, > 0.5 concave, < 0.5 convex), from the baked normal map's
+  divergence at two scales; the .json marks it `sets.<s>.ormB = 'cavity'`.
+  `src/lib/microDetail.js` masks its detail layer with it.
+- `compress: { mesh: 'draco' }` exports the .glb Draco-compressed (positions 14 bits,
+  UVs 14, normals 10); `assets.js` decodes it with three's DRACOLoader (decoder from the
+  importmap's three/addons). Velkath: 5.4 MB -> 1.16 MB.
+
 Why the SDF stays in JS: it is the reusable part (the same specs preview in-browser in
 `sculptlab.html?lab&job=...#preview`, run in node offline, and can run at runtime in a
 worker for cheap things), dual contouring there is fast (a 2M-tri high in seconds), and

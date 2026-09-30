@@ -189,6 +189,25 @@ function platesSpec(seed) {
     const X = norm([x * 0.5, 0.42 + 0.12 * rnd(), -1]);
     out.push(Xf(basis(X, [0, 1, 0]), [x, y - 0.03, z], plateSpec(rnd, len, len * 0.5, 0.036, M.PLATE)));
   }
+  // THE KEEL CREST (brooder2): a row of broken shale fins stood up along the keel from the
+  // brow to the rear crest, raking back like the painting's rear plates. Asleep in the silt
+  // this is the read: a saw-backed ridge of dark stone on the rift lip, not a pale slab. The
+  // fins stand ON EDGE (thickness sideways), alternate a hair either side of the keel
+  // (x = 0.026, where the two roof planes meet), grow toward the rear, and one near the old
+  // break is snapped low.
+  const crest = mulberry(seed ^ 0xC4E57);
+  for (let k = 0; k < 7; k++) {
+    const t = k / 6, z = 0.42 - 0.72 * t + (crest() - 0.5) * 0.03;
+    const x = 0.026 + (k & 1 ? 1 : -1) * (0.018 + 0.02 * crest());
+    const y = massTop(x, z);
+    if (y == null) continue;
+    let len = (0.22 + 0.16 * t) * (0.85 + 0.3 * crest());
+    if (k === 2) len *= 0.5;                                // snapped where the break runs
+    const X = norm([(crest() - 0.5) * 0.25, 0.58 + 0.16 * crest() + 0.14 * t, -1]);
+    const R = basis(X, [1, 0.12 * (k & 1 ? 1 : -1), 0]);     // on edge: local Y is sideways
+    const p = [x - X[0] * len * 0.18, y - 0.02 - X[1] * len * 0.18, z - X[2] * len * 0.18];
+    out.push(Xf(R, p, plateSpec(crest, len, len * (0.55 + 0.15 * crest()), 0.030 + 0.008 * crest(), M.PLATE)));
+  }
   return out;
 }
 
@@ -236,8 +255,12 @@ function faceSpec() {
   const extra = [];
   for (const sd of [1, -1]) {
     for (const [x, y, z, r] of OCELLI) extra.push({ t: 'torus', c: [sd * x, y, z + r * 0.35], R: r * 1.45, r: r * 0.32, m: M.FACE, e: [Math.PI / 2, 0, 0] });
-    extra.push(Bx([sd * 0.105, -0.235, 0.87], [0.045, 0.055, 0.02], 0.012, M.CHITIN, [0.25, sd * 0.25, 0]));
+    // the pterygostomial frame down either side of the mouth (the working maxillipeds
+    // hang inside it; brooder2 retired the two boxy plates that stood here)
+    extra.push(Tube([[sd * 0.150, -0.172, 0.895], [sd * 0.158, -0.228, 0.905], [sd * 0.140, -0.278, 0.878]], 0.015, 0.011, 10, M.FACE));
   }
+  // the epistome: a heavy lip ridge across the top of the mouth, under the ocelli
+  extra.push(Tube([[-0.15, -0.176, 0.902], [0, -0.166, 0.938], [0.15, -0.176, 0.902]], 0.016, 0.016, 12, M.FACE));
   return U(0.01, f, ...extra);
 }
 
@@ -282,7 +305,9 @@ export function bodySpec(seed = 0xB700D5E7) {
       // bake-only: barnacle colonies, sponge bores with bleached rims, shale strata, pits
       { type: 'barn', bake: true, amp: 0.030, f: 9, dens: 0.30, seed: 14, mask: [['n', 1.3, 0.55, 0.72, 15], ['ax', 1, -0.02, 0.1]] },
       { type: 'barn', bake: true, amp: 0.012, f: 26, dens: 0.42, seed: 16, mask: [['n', 1.8, 0.45, 0.66, 17]] },
-      { type: 'pits', bake: true, amp: 0.022, f: 5.5, dens: 0.14, r: 0.30, seed: 18, mask: [['ax', 1, 0.0, 0.1]] },
+      // (brooder2: 0.022 -> 0.014 deep: at 0.022 a bore went clean through a shale plate
+      // in the high poly and the bake's rays found nothing behind it: black discs)
+      { type: 'pits', bake: true, amp: 0.014, f: 5.5, dens: 0.14, r: 0.30, seed: 18, mask: [['ax', 1, 0.0, 0.1]] },
       { type: 'pits', bake: true, amp: 0.006, f: 16, dens: 0.25, r: 0.22, seed: 23 },
       { type: 'bands', bake: true, amp: 0.004, f: 70, ax: [0.1, 1, 0.3] },
       { type: 'cracks', bake: true, amp: 0.003, f: 14, w: 0.03, seed: 24, mask: [['n', 2.5, 0.55, 0.7, 25]] },
@@ -298,31 +323,37 @@ export function bodySpec(seed = 0xB700D5E7) {
 // edge of the shale, pale bleached barnacle rims, silt settled in crevices and on the
 // up-facing ledges, a near-black face, a corpse-pale belly.
 export const PAINT = {
-  kScale: 0.02, aoAlb: 0.55,
+  // brooder2: darker stone under the silt (the asleep ridge must read as rock, not a pale
+  // slab), rust pulled back from salmon to the painting's burnt umber, and the sponge
+  // bores painted as what lives in them (dull ochre boring sponge, Cliona) with only the
+  // deepest pinhole going dark: they read deep, not as holes punched to black.
+  kScale: 0.02, aoAlb: 0.35,
   mats: {
-    [M.SHELL]: { c: [0.23, 0.25, 0.19], ro: 0.62 },
+    [M.SHELL]: { c: [0.20, 0.22, 0.17], ro: 0.62 },
     [M.BELLY]: { c: [0.56, 0.53, 0.47], ro: 0.70 },
-    [M.PLATE]: { c: [0.20, 0.23, 0.22], ro: 0.50 },
+    [M.PLATE]: { c: [0.16, 0.18, 0.17], ro: 0.50 },
     [M.FACE]: { c: [0.11, 0.10, 0.09], ro: 0.45 },
     [M.HORN]: { c: [0.52, 0.49, 0.42], ro: 0.40 },
-    [M.SCAR]: { c: [0.50, 0.47, 0.40], ro: 0.72 },
-    [M.MEMB]: { c: [0.40, 0.33, 0.30], ro: 0.80 },
+    [M.SCAR]: { c: [0.46, 0.43, 0.37], ro: 0.72 },
+    [M.MEMB]: { c: [0.36, 0.30, 0.27], ro: 0.80 },
     [M.CHITIN]: { c: [0.30, 0.37, 0.37], ro: 0.40 },
     [M.EYE]: { c: [0.02, 0.02, 0.02], ro: 0.1 }
   },
   layers: [
-    { c: [0.26, 0.31, 0.15], a: 0.75, ro: 0.8, m: [['n', 3, 0.40, 0.7, 31], ['nd', [0, 1, 0], 0.1, 0.7], ['inv', ['mat', 3]]] },          // olive film on top
-    { c: [0.12, 0.13, 0.10], a: 0.55, ro: 0.7, m: [['n', 7, 0.55, 0.75, 36], ['inv', ['mat', 3]]] },                                         // dark mottle
-    { c: [0.42, 0.20, 0.08], a: 0.45, ro: 0.8, m: [['n', 2.2, 0.62, 0.8, 37], ['nd', [0, 1, 0], -0.4, 0.3]] },                               // rust bloom down the flanks
-    { c: [0.20, 0.27, 0.10], a: 0.7, ro: 0.9, m: [['cav', 0.05, 0.4], ['nd', [0, 1, 0], 0.0, 0.5], ['n', 5, 0.4, 0.65, 32]] },               // moss in the low spots
-    { c: [0.56, 0.24, 0.08], a: 0.85, ro: 0.75, m: [['mat', 2], ['cvx', 0.25, 0.9]] },                                                       // rust-edged shale
-    { c: [0.46, 0.19, 0.07], a: 0.55, ro: 0.8, m: [['mat', 2], ['n', 7, 0.5, 0.75, 33]] },                                                   // rust bloom on the plates
-    { c: [0.30, 0.12, 0.05], a: 0.6, ro: 0.85, m: [['cav', 0.2, 0.7], ['ao', 0.25, 0.7]] },                                                  // dark rust pooled in seams
-    { c: [0.70, 0.68, 0.60], a: 0.75, ro: 0.85, m: [['cvx', 0.6, 1.5], ['n', 9, 0.35, 0.6, 34]] },                                           // bleached barnacle rims / worn edges
-    { c: [0.48, 0.44, 0.36], a: 0.85, ro: 0.95, m: [['cav', 0.1, 0.5], ['nd', [0, 1, 0], 0.35, 0.8]] },                                      // silt settled in crevices
-    { c: [0.46, 0.43, 0.36], a: 0.5, ro: 0.95, m: [['ax', 2, -0.2, -0.8], ['nd', [0, 1, 0], 0.2, 0.9]] },                                    // silt blanket over the eroded rear
-    { c: [0.60, 0.56, 0.47], a: 0.5, ro: 0.8, m: [['mat', 5], ['n', 12, 0.3, 0.7, 35]] },                                                    // scar tissue mottle
-    { c: [0.08, 0.07, 0.06], a: 0.9, ro: 0.7, m: [['ao', 0.55, 0.95]] }                                                                      // deep holes go black
+    { c: [0.24, 0.29, 0.15], a: 0.70, ro: 0.8, m: [['n', 3, 0.40, 0.7, 31], ['nd', [0, 1, 0], 0.1, 0.7], ['inv', ['mat', 3]]] },          // olive film on top
+    { c: [0.10, 0.11, 0.09], a: 0.60, ro: 0.7, m: [['n', 7, 0.55, 0.75, 36], ['inv', ['mat', 3]]] },                                         // dark mottle
+    { c: [0.34, 0.18, 0.09], a: 0.40, ro: 0.8, m: [['n', 2.2, 0.62, 0.8, 37], ['nd', [0, 1, 0], -0.4, 0.3]] },                               // rust bloom down the flanks
+    { c: [0.18, 0.24, 0.10], a: 0.65, ro: 0.9, m: [['cav', 0.05, 0.4], ['nd', [0, 1, 0], 0.0, 0.5], ['n', 5, 0.4, 0.65, 32]] },              // moss in the low spots
+    { c: [0.40, 0.19, 0.09], a: 0.75, ro: 0.75, m: [['mat', 2], ['cvx', 0.35, 1.0]] },                                                       // rust-edged shale
+    { c: [0.30, 0.15, 0.08], a: 0.45, ro: 0.8, m: [['mat', 2], ['n', 7, 0.5, 0.75, 33]] },                                                   // umber bloom on the plates
+    { c: [0.20, 0.11, 0.06], a: 0.55, ro: 0.85, m: [['cav', 0.2, 0.7], ['ao', 0.25, 0.7]] },                                                 // dark rust pooled in seams
+    { c: [0.66, 0.64, 0.56], a: 0.60, ro: 0.85, m: [['cvx', 0.6, 1.5], ['n', 9, 0.35, 0.6, 34]] },                                           // bleached barnacle rims / worn edges
+    { c: [0.40, 0.37, 0.31], a: 0.60, ro: 0.95, m: [['cav', 0.15, 0.55], ['nd', [0, 1, 0], 0.35, 0.8]] },                                     // silt settled in crevices
+    { c: [0.36, 0.34, 0.28], a: 0.12, ro: 0.95, m: [['ax', 2, -0.2, -0.8], ['nd', [0, 1, 0], 0.2, 0.9]] },                                   // a breath of silt over the eroded rear (it read as a pale slab)
+    { c: [0.56, 0.52, 0.44], a: 0.5, ro: 0.8, m: [['mat', 5], ['n', 12, 0.3, 0.7, 35]] },                                                    // scar tissue mottle
+    { c: [0.44, 0.34, 0.13], a: 0.75, ro: 0.92, m: [['cav', 0.25, 0.8], ['ao', 0.15, 0.55], ['n', 4, 0.38, 0.6, 38]] },                      // boring sponge lining the bores
+    { c: [0.30, 0.23, 0.10], a: 0.55, ro: 0.95, m: [['ao', 0.3, 0.7], ['cav', 0.4, 1.0]] },                                                   // its darker papillae deeper in
+    { c: [0.13, 0.10, 0.08], a: 0.55, ro: 0.7, m: [['ao', 0.72, 1.0]] }                                                                      // only the deepest pinhole goes dark
   ]
 };
 
@@ -520,38 +551,148 @@ function dactylSpec(kind, seed) {
   };
 }
 
-// A stalked compound eye: the stalk pivots at the origin (the orbit) and points along +Z;
-// a ringed peduncle, a collar, and the corneal bulb (black, glassy, faceted) at the tip.
+// A stalked compound eye: the stalk pivots at the origin (the orbit) and points along +Z.
+// brooder2, for the read at game distance (one unit of eye at thirty units of water): two
+// ringed articles thickening toward the eye, a PALE COLLAR under the cornea (the value
+// break that separates eye from stalk when nothing is lit), a dark pigment band, a bigger
+// kidney-shaped cornea that wraps back over the outer side, and an eye-style: a dark horn
+// standing past the cornea (the ghost crab's), which is what the silhouette says first.
 export const STALK_L = 0.12;
 function eyestalkSpec() {
   const L = STALK_L;
   const kids = [
-    Cap([0, 0, -0.01], [0, 0.004, L * 0.45], 0.024, 0.019, M.CHITIN),
-    Cap([0, 0.004, L * 0.45], [0, 0.002, L * 0.82], 0.019, 0.021, M.CHITIN),
-    { t: 'torus', c: [0, 0.004, L * 0.45], R: 0.019, r: 0.004, m: M.HORN, e: [Math.PI / 2, 0, 0] },
-    E([0, 0.003, L * 0.86], [0.030, 0.028, 0.022], M.CHITIN),
-    E([0, 0.006, L * 1.0], [0.033, 0.031, 0.028], M.EYE)
+    Cap([0, 0, -0.012], [0, 0.003, L * 0.40], 0.026, 0.020, M.CHITIN),                    // basal article
+    { t: 'torus', c: [0, 0.003, L * 0.40], R: 0.020, r: 0.0045, m: M.HORN, e: [Math.PI / 2, 0, 0] },
+    Cap([0, 0.003, L * 0.42], [0, 0.005, L * 0.74], 0.019, 0.025, M.CHITIN),              // distal article, swelling
+    { t: 'torus', c: [0, 0.005, L * 0.745], R: 0.026, r: 0.0055, m: M.HORN, e: [Math.PI / 2, 0, 0] },   // the pale collar
+    E([0, 0.006, L * 0.80], [0.031, 0.030, 0.018], M.CHITIN),                             // pigment band seat
+    E([0, 0.008, L * 0.97], [0.040, 0.037, 0.033], M.EYE),                                // the cornea
+    E([0, 0.017, L * 0.86], [0.036, 0.028, 0.030], M.EYE),                                // ...wrapping back up the dorsal side
+    Cap([0, 0.022, L * 0.98], [0, 0.040, L * 1.45], 0.0095, 0.0018, M.PLATE)              // the eye-style, a dark horn
   ];
   return {
     t: 'disp', L: [
-      { type: 'bands', amp: 0.0012, f: 300, ax: [0, 0, 1], mask: [['ax', 2, 0.02, 0.05], ['ax', 2, 0.10, 0.07]] },
-      { type: 'pits', bake: true, amp: 0.0008, f: 520, dens: 1.0, r: 0.42, seed: 91, mask: [['ax', 2, L * 0.9, L * 0.96]] },   // ommatidia
-      { type: 'grain', bake: true, amp: 0.0006, f: 200, seed: 92 }
-    ], ch: [U(0.012, ...kids)]
+      { type: 'bands', amp: 0.0012, f: 300, ax: [0, 0, 1], mask: [['ax', 2, 0.02, 0.05], ['ax', 2, 0.085, 0.06]] },
+      // ommatidia: a whisper (at 0.0007 the facets scattered the cornea's normals so far that
+      // its mirror highlight smeared into a pale sheen over the whole eye)
+      { type: 'pits', bake: true, amp: 0.00018, f: 480, dens: 1.0, r: 0.42, seed: 91, mask: [['ax', 2, L * 0.78, L * 0.86]] },
+      { type: 'grain', bake: true, amp: 0.0004, f: 200, seed: 92 }
+    ], ch: [U(0.010, ...kids)]
   };
 }
-// A mouthpart (third maxilliped palp): hinged at the origin, along +X, hooking down, a comb
-// of setae on the lower edge and a saw of small teeth.
-export const MOUTH_L = 0.16;
-function mouthSpec() {
-  const L = MOUTH_L, P = [[-0.01, 0, 0], [L * 0.5, -0.012, 0], [L, -0.35 * L, 0]];
-  const kids = [Tube(P, 0.026, 0.004, 12, M.CHITIN)];
-  for (let k = 0; k < 9; k++) {
-    const t = 0.1 + 0.8 * k / 8, x = L * t, y = -0.35 * L * t * t, r = 0.026 * (1 - 0.8 * t);
-    kids.push(Cap([x, y - r * 0.7, 0], [x - 0.004, y - r - 0.018 - 0.01 * Math.sin(k * 2.3), (k % 3 - 1) * 0.006], 0.0035, 0.0012, M.MEMB));
+
+// ---- THE MOUTH (brooder2) -------------------------------------------------------------------
+// Layered crustacean mouthparts in place of the one hooked palp the rig used to repeat five
+// times (it read as rust carrots). Every piece is hinged at the origin and lies along +X; +Y
+// is its OUTER face (toward the viewer once the rig hangs it down-and-forward), +Z its INNER
+// margin (toward the midline: brooder.js mirrors the left side by scale.z = -1). Outermost
+// first, as you see them: the THIRD MAXILLIPEDS are the doors, broad granular plates
+// (ischium + merus) with a toothed inner crest and a fringe of setae, a folded palp and a
+// slim exopod; behind them the second maxillipeds (a jointed palp with a hooked tip and a
+// setal brush), the first (a thin setose leaf), and deepest the MANDIBLES (a squat
+// calcified body with a dark chisel incisor and a small palp). The rig's five pairs map
+// onto these (meta.mouth), so the existing mouth motion now works a real mouth: doors
+// swinging on their hinges while the inner parts flicker between them.
+const rotZ = a => { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; };
+function setae(out, n, p0, p1, dir, len, r, m = M.MEMB, rnd = Math.random) {
+  for (let k = 0; k < n; k++) {
+    const t = n > 1 ? k / (n - 1) : 0, a = [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t, p0[2] + (p1[2] - p0[2]) * t];
+    const l = len * (0.75 + 0.5 * rnd());
+    out.push(Cap(a, [a[0] + dir[0] * l + (rnd() - 0.5) * 0.004, a[1] + dir[1] * l, a[2] + dir[2] * l], r, r * 0.35, m));
   }
-  return { t: 'disp', L: [{ type: 'grain', bake: true, amp: 0.0006, f: 200, seed: 93 }], ch: [U(0.006, ...kids)] };
 }
+function mxp3Spec(seed) {
+  const rnd = mulberry(seed), kids = [];
+  // the ischium: a domed, granular plate
+  const dome = (x, z) => -0.030 + 0.042 * Math.sqrt(Math.max(0, 1 - ((x - 0.058) / 0.075) ** 2 - ((z - 0.004) / 0.042) ** 2));
+  kids.push(I(0.006, Bx([0.058, -0.002, 0.004], [0.058, 0.014, 0.030], 0.008, M.CHITIN), E([0.058, -0.030, 0.004], [0.075, 0.045, 0.042], M.CHITIN)));
+  // the merus, bent down a little at a membranous joint, its inner distal corner lobed
+  kids.push(Xf(rotZ(-0.22), [0.112, 0.002, 0.002], I(0.005, Bx([0.027, -0.001, 0.003], [0.027, 0.011, 0.026], 0.008, M.CHITIN), E([0.024, -0.024, 0.006], [0.040, 0.034, 0.034], M.CHITIN))));
+  kids.push(Cap([0.109, -0.004, -0.020], [0.109, -0.004, 0.022], 0.0058, 0.0058, M.FACE));
+  // the palp folded over the merus tip, and the slim exopod down the outer margin
+  kids.push(Tube([[0.150, -0.004, 0.002], [0.176, 0.004, 0.012], [0.170, 0.012, 0.032]], 0.0085, 0.004, 10, M.CHITIN));
+  kids.push(Tube([[0.006, -0.004, -0.030], [0.060, -0.002, -0.041], [0.112, -0.006, -0.037]], 0.0065, 0.0042, 10, M.CHITIN));
+  kids.push(Tube([[0.110, -0.006, -0.037], [0.132, -0.012, -0.031], [0.146, -0.022, -0.020]], 0.0036, 0.0012, 8, M.CHITIN));
+  let g = U(0.004, ...kids);
+  const bits = [];
+  // crista dentata: a row of blunt teeth along the ischium's inner margin
+  for (let k = 0; k < 7; k++) { const x = 0.012 + 0.0145 * k; bits.push(Cap([x, 0.000, 0.028], [x + 0.004, -0.001, 0.040], 0.0048, 0.0012, M.HORN)); }
+  // granules on the outer face (the painting's knobbed plates)
+  for (let k = 0; k < 28; k++) {
+    const x = 0.010 + 0.094 * rnd(), z = -0.024 + 0.048 * rnd(), r = 0.0020 + 0.0022 * rnd(), y = Math.min(0.012, dome(x, z));
+    if (y < -0.004) continue;
+    bits.push({ t: 'sphere', c: [x, y + r * 0.1, z], r, m: M.HORN });
+  }
+  g = U(0.003, g, ...bits);
+  // setae: the inner fringe (combing toward the midline) and a brush at the palp's tip
+  const hair = [];
+  setae(hair, 16, [0.016, -0.006, 0.030], [0.150, -0.022, 0.028], [0.15, -0.35, 0.92], 0.026, 0.0017, M.MEMB, rnd);
+  setae(hair, 5, [0.166, 0.010, 0.030], [0.170, 0.012, 0.036], [0.3, 0.5, 0.8], 0.016, 0.0016, M.MEMB, rnd);
+  g = U(0.002, g, ...hair);
+  return {
+    t: 'disp', L: [
+      { type: 'fbm', amp: 0.0012, f: 60, oct: 3, seed: seed + 1 },
+      { type: 'pits', bake: true, amp: 0.0008, f: 240, dens: 0.35, r: 0.28, seed: seed + 2 },
+      { type: 'grain', bake: true, amp: 0.0006, f: 260, seed: seed + 3 }
+    ], ch: [g]
+  };
+}
+function mxp2Spec(seed) {
+  const rnd = mulberry(seed), kids = [];
+  kids.push(I(0.004, E([0.030, -0.002, 0.012], [0.036, 0.010, 0.022], M.CHITIN), Bx([0.030, -0.002, 0.012], [0.034, 0.007, 0.024], 0.004, M.CHITIN)));   // the basal endite
+  kids.push(Cap([0.000, 0.000, 0.000], [0.046, 0.002, 0.004], 0.0115, 0.0098, M.CHITIN));
+  kids.push(E([0.048, 0.002, 0.004], [0.010, 0.011, 0.010], M.CHITIN));                                     // a joint knob
+  kids.push(Cap([0.050, 0.002, 0.004], [0.090, -0.004, 0.010], 0.0092, 0.0072, M.CHITIN));
+  kids.push(Cap([0.092, -0.004, 0.010], [0.117, -0.012, 0.016], 0.0064, 0.0046, M.CHITIN));
+  kids.push(Tube([[0.116, -0.012, 0.016], [0.128, -0.018, 0.019], [0.132, -0.030, 0.021]], 0.0045, 0.0010, 8, M.PLATE));   // the hooked dactyl
+  let g = U(0.004, ...kids);
+  const hair = [];
+  setae(hair, 9, [0.056, -0.006, 0.012], [0.112, -0.016, 0.018], [0.1, -0.45, 0.88], 0.022, 0.0018, M.MEMB, rnd);
+  setae(hair, 7, [0.010, -0.004, 0.030], [0.058, -0.006, 0.032], [0.2, -0.3, 0.93], 0.016, 0.0016, M.MEMB, rnd);
+  g = U(0.002, g, ...hair);
+  return { t: 'disp', L: [{ type: 'fbm', amp: 0.0008, f: 80, oct: 3, seed: seed + 1 }, { type: 'grain', bake: true, amp: 0.0005, f: 260, seed: seed + 3 }], ch: [g] };
+}
+function mxp1Spec(seed) {
+  const rnd = mulberry(seed);
+  let leaf = I(0.003, E([0.052, 0, 0.012], [0.058, 0.016, 0.030], M.CHITIN), Bx([0.052, 0, 0.012], [0.056, 0.0048, 0.030], 0.003, M.CHITIN));
+  leaf = Sub(0.004, leaf, E([0.086, 0, 0.030], [0.016, 0.02, 0.012], M.CHITIN));          // the notch between its two lobes
+  const g0 = U(0.004, leaf, Cap([0, 0, 0], [0.020, 0, 0.004], 0.009, 0.007, M.MEMB));
+  const hair = [];
+  setae(hair, 14, [0.022, -0.002, 0.040], [0.108, -0.002, 0.024], [0.25, -0.2, 0.95], 0.020, 0.0017, M.MEMB, rnd);
+  setae(hair, 6, [0.104, -0.002, 0.010], [0.110, -0.002, -0.012], [0.95, -0.2, 0.1], 0.018, 0.0016, M.MEMB, rnd);
+  return { t: 'disp', L: [{ type: 'grain', bake: true, amp: 0.0005, f: 260, seed: seed + 3 }], ch: [U(0.002, g0, ...hair)] };
+}
+function mandibleSpec(seed) {
+  const rnd = mulberry(seed);
+  const body = U(0.008,
+    E([0.024, 0.000, 0.004], [0.032, 0.021, 0.024], M.CHITIN),
+    Cap([0.020, 0.000, 0.004], [0.052, -0.004, 0.018], 0.018, 0.013, M.CHITIN));
+  // the incisor: a dark calcified chisel angled to the midline, with three teeth on its edge
+  const inc = I(0.002, Tube([[0.040, -0.003, 0.012], [0.060, -0.006, 0.024], [0.070, -0.010, 0.036]], 0.013, 0.005, 10, M.PLATE),
+    Pl(norm([0, 1, 0]), 0.004, M.PLATE), Pl(norm([0, -1, 0]), 0.016, M.PLATE));
+  const teeth = [];
+  for (let k = 0; k < 3; k++) { const t = 0.35 + 0.3 * k; teeth.push(Cap([0.046 + 0.022 * t, -0.006 - 0.004 * t, 0.018 + 0.016 * t], [0.050 + 0.024 * t, -0.008 - 0.004 * t, 0.030 + 0.016 * t], 0.0042, 0.001, M.PLATE)); }
+  // the palp, curled up over the outer face
+  const palp = Tube([[0.014, 0.016, 0.000], [0.034, 0.032, -0.004], [0.054, 0.030, 0.006]], 0.0055, 0.0030, 10, M.CHITIN);
+  const hair = [];
+  setae(hair, 5, [0.044, 0.030, 0.004], [0.054, 0.030, 0.008], [0.4, 0.6, 0.7], 0.012, 0.0015, M.MEMB, rnd);
+  return {
+    t: 'disp', L: [{ type: 'fbm', amp: 0.0010, f: 70, oct: 3, seed: seed + 1 }, { type: 'grain', bake: true, amp: 0.0005, f: 260, seed: seed + 3 }],
+    ch: [U(0.002, U(0.004, body, inc, ...teeth), palp, ...hair)]
+  };
+}
+// The rig's five pairs (k = 0 innermost ... 4) onto the layered pieces: hinge (right side;
+// the left mirrors x), piece, uniform scale. The two outermost pairs are both third
+// maxillipeds, a shingled pair of doors: the front one smaller and lower, the back one
+// larger and higher, overlapping as they swing.
+export const MOUTH = [
+  { piece: 'mouth_mandible', hinge: [0.030, -0.198, 0.862], s: 1.0 },
+  { piece: 'mouth_mxp1', hinge: [0.040, -0.204, 0.878], s: 1.0 },
+  { piece: 'mouth_mxp2', hinge: [0.052, -0.208, 0.892], s: 1.0 },
+  { piece: 'mouth_mxp3', hinge: [0.068, -0.214, 0.912], s: 0.80 },
+  { piece: 'mouth_mxp3', hinge: [0.092, -0.206, 0.892], s: 0.92 }
+];
+export const MOUTH_L = 0.16;
 
 // ---- limb paint: grey-teal chitin (near-black on the walking legs), pale membranes,
 // pale knobs, fingers running to rust and dark horn at the points, a black glassy cornea
@@ -582,17 +723,64 @@ export function limbPaint(opts = {}) {
   };
 }
 
+// brooder2 paints. The MOUTH after the painting: granular grey-green plates, pale bone
+// granules and tooth rims, pale straw setae, dark horn incisors, wet dark umber in the
+// seams and on the inner faces. No rust (the old palp's rust-to-tip is what read as
+// carrots). The EYE: teal-grey stalk, a pale collar, a dark pigment band, a glassy
+// near-black cornea (the runtime eyeshine keys off its ROUGHNESS, not its colour), a dark
+// horn eye-style.
+export function mouthPaint() {
+  return {
+    kScale: 0.010, aoAlb: 0.40,
+    mats: {
+      [M.CHITIN]: { c: [0.25, 0.29, 0.26], ro: 0.42 },
+      [M.PLATE]: { c: [0.085, 0.070, 0.058], ro: 0.28 },
+      [M.MEMB]: { c: [0.62, 0.55, 0.40], ro: 0.62 },
+      [M.HORN]: { c: [0.60, 0.58, 0.50], ro: 0.45 },
+      [M.FACE]: { c: [0.14, 0.11, 0.10], ro: 0.55 }
+    },
+    layers: [
+      { c: [0.20, 0.30, 0.30], a: 0.35, ro: 0.4, m: [['n', 40, 0.5, 0.75, 51], ['mat', M.CHITIN]] },          // teal patches
+      { c: [0.66, 0.64, 0.56], a: 0.55, ro: 0.5, m: [['mat', M.HORN], ['cvx', 0.3, 1.2]] },                   // bone granules
+      { c: [0.72, 0.72, 0.66], a: 0.35, m: [['n', 120, 0.72, 0.8, 52], ['mat', M.CHITIN]] },                  // pale flecks
+      { c: [0.13, 0.09, 0.07], a: 0.55, ro: 0.3, m: [['nd', [0, 0, 1], 0.2, 0.9], ['mat', M.CHITIN]] },       // wet dark inner faces
+      { c: [0.16, 0.10, 0.07], a: 0.60, ro: 0.35, m: [['cav', 0.1, 0.6]] },                                    // umber in the seams
+      { c: [0.07, 0.06, 0.05], a: 0.6, m: [['ao', 0.6, 0.95]] }
+    ]
+  };
+}
+export function eyePaint() {
+  return {
+    kScale: 0.008, aoAlb: 0.40,
+    mats: {
+      [M.CHITIN]: { c: [0.21, 0.26, 0.26], ro: 0.40 },
+      [M.HORN]: { c: [0.72, 0.69, 0.60], ro: 0.50 },
+      [M.PLATE]: { c: [0.09, 0.08, 0.07], ro: 0.32 },
+      [M.EYE]: { c: [0.030, 0.034, 0.040], ro: 0.06 }
+    },
+    layers: [
+      { c: [0.70, 0.70, 0.64], a: 0.4, m: [['n', 90, 0.72, 0.8, 61], ['mat', M.CHITIN]] },                                   // pale flecks on the stalk
+      { c: [0.13, 0.10, 0.08], a: 0.85, ro: 0.4, m: [['ax', 2, 0.086, 0.094], ['ax', 2, 0.104, 0.098], ['inv', ['mat', M.EYE]]] },   // the pigment band
+      { c: [0.07, 0.06, 0.05], a: 0.5, m: [['ao', 0.6, 0.95], ['inv', ['mat', M.EYE]]] }
+    ]
+  };
+}
+
 // ---- the offline pipeline (tools/blender) ------------------------------------------------
 // Pieces are baked high-to-low in Blender into two texture sets: 'body' (the fused shell,
 // 2048) and 'limbs' (legs, claws, eyes, mouthparts, one shared 2048 atlas).
 export function pipeline() {
   const limb = (name, sdf, h, tris, paint, extra = {}) => ({ name, set: 'limbs', sdf, hi: { h }, lo: { h: h * 2.2, tris }, paint, kEps: 0.006, ao: { r: 0.03, n: 4 }, cage: h * 4, ray: h * 10, ...extra });
-  const legP = limbPaint({ legs: true });
+  const legP = limbPaint({ legs: true }), mP = mouthPaint();
+  const mouth = (name, sdf, tris) => limb(name, sdf, 0.0007, tris, mP, { kEps: 0.0025, ao: { r: 0.010, n: 4 }, lo: { h: 0.0011, tris }, cage: 0.003, ray: 0.008 });
   return {
     name: 'brooder', out: 'assets/sleepers/brooder',
     sets: { body: { size: 2048, gutter: 6, aoDist: 0.10, aoSamples: 64 }, limbs: { size: 2048, gutter: 6, aoDist: 0.05, aoSamples: 64 } },
     pieces: [
-      { name: 'body', set: 'body', sdf: bodySpec(), hi: { h: 0.004 }, lo: { h: 0.009, tris: 70000 }, paint: PAINT, kEps: 0.012, ao: { r: 0.07, n: 4 }, cage: 0.02, ray: 0.05 },
+      // cage/ray (brooder2, measured both ways): at 0.02 / 0.05 the rays ran out before the
+      // floors of the deeper cavities (bores, plate bites over the shell) and those texels
+      // kept the bake's clear colour: the near-black holes. 0.034 / 0.10 reaches them.
+      { name: 'body', set: 'body', sdf: bodySpec(), hi: { h: 0.004 }, lo: { h: 0.009, tris: 70000 }, paint: PAINT, kEps: 0.012, ao: { r: 0.07, n: 4 }, cage: 0.034, ray: 0.10 },
       limb('leg_coxa', legSegSpec({ L: SEG_L.coxa, r0: 0.125, r1: 0.118, seed: 101 }), 0.0022, 2500, legP),
       limb('leg_femur', legSegSpec({ L: SEG_L.femur, r0: 0.122, r1: 0.092, spines: 4, vspines: 0, seed: 102 }), 0.0022, 5000, legP),
       limb('leg_tibia', legSegSpec({ L: SEG_L.tibia, r0: 0.090, r1: 0.062, spines: 3, vspines: 0, seed: 103 }), 0.002, 4000, legP),
@@ -605,10 +793,17 @@ export function pipeline() {
       limb('minor_carpus', armSegSpec({ L: 0.24, r0: 0.108, r1: 0.112, x0: -0.07, knobs: 2, spines: 2, seed: 302 }), 0.0025, 3500, limbPaint()),
       limb('minor_palm', palmSpec('minor', 303), 0.0026, 8000, limbPaint()),
       limb('minor_dactyl', dactylSpec('minor', 304), 0.002, 5000, limbPaint({ finger: true, L: 0.66 })),
-      limb('eyestalk', eyestalkSpec(), 0.0009, 3000, limbPaint({ eye: true }), { kEps: 0.003, ao: { r: 0.015, n: 4 } }),
-      limb('mouthpart', mouthSpec(), 0.0009, 1500, limbPaint({ finger: true, L: MOUTH_L }), { kEps: 0.003, ao: { r: 0.012, n: 4 } })
+      limb('eyestalk', eyestalkSpec(), 0.0008, 4000, eyePaint(), { kEps: 0.003, ao: { r: 0.015, n: 4 }, lo: { h: 0.0016, tris: 4000 } }),
+      // the mouth: fine enough in the LOW mesh that the setae fringes stand in silhouette
+      mouth('mouth_mxp3', mxp3Spec(401), 4500),
+      mouth('mouth_mxp2', mxp2Spec(402), 2800),
+      mouth('mouth_mxp1', mxp1Spec(403), 2200),
+      mouth('mouth_mandible', mandibleSpec(404), 2200)
     ],
-    meta: { segL: SEG_L, hand: HAND, stalkL: STALK_L, mouthL: MOUTH_L, eyestalk: EYESTALK, ocelli: OCELLI },
+    // brooder2 (additive; the pipeline ignores what it does not know): compress the glb
+    // with Draco and ship block-compressed KTX2 maps beside the WebP (tools/blender/ktx2.mjs)
+    compress: { mesh: 'draco', tex: 'ktx2' },
+    meta: { segL: SEG_L, hand: HAND, stalkL: STALK_L, mouthL: MOUTH_L, mouth: MOUTH, eyestalk: EYESTALK, ocelli: OCELLI },
     probes: [{ name: 'top', part: 'body', x0: -1.1, x1: 1.1, z0: -1.0, z1: 1.1, n: 64 }]
   };
 }
