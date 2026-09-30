@@ -3318,6 +3318,22 @@ export function lanternWorldPos(target) {
   return target;
 }
 
+// The two spheres that shadow the lantern's glow in the water (water.js GLSL_LAMP):
+// the chest (corselet + breastplate) and the bonnet, world centre + radius, written
+// into out[0..7]. Radii are the rig's own extents (bonnet bbox 1.14 wide, corselet
+// ~0.95), slightly inside them so the shadow never reads wider than the man.
+const _occV = V3();
+export function diverOccluders(out) {
+  const sw = diver.visible ? 1 : 0;
+  diver.spine.updateWorldMatrix(true, false);
+  _occV.set(0, 0.36, 0); diver.spine.localToWorld(_occV);
+  out[0] = _occV.x; out[1] = _occV.y; out[2] = _occV.z; out[3] = 0.44 * sw;
+  diver.neck.updateWorldMatrix(true, false);
+  _occV.set(0, 0.44, 0); diver.neck.localToWorld(_occV);
+  out[4] = _occV.x; out[5] = _occV.y; out[6] = _occV.z; out[7] = 0.40 * sw;
+  return out;
+}
+
 export function airInletWorldPos(target) {
   diver.hoseInlet.getWorldPosition(target);
   return target;

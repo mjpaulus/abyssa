@@ -8,11 +8,11 @@ import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLant
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM } from './world/stir.js';
-import { buildWater, updateWater, updateAtmosphere, syncLamps, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { diver, updateDiver, lanternWorldPos, stepCount, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
@@ -378,6 +378,7 @@ addEventListener('contextmenu', e => { if (locked) e.preventDefault(); });
 // Left-click while locked: knife slash. The anim gates repeats; the hit lands on the
 // contact frame via pendingSlash so the blade connects when it visually connects.
 let pendingSlash = 0;
+const lampOcc = new Float32Array(8);   // diverOccluders -> setLampOccluders, every frame
 function doSlash() { if (triggerSlash()) pendingSlash = 0.22; }   // contact ~0.22s into the swing
 function doSpear() {
   if (!survival.hasSpear) return;
@@ -1682,6 +1683,7 @@ function update(dt, t) {
   // last frame's position — half a unit at full swim speed, against a 24-unit scale height.
   updateAtmosphere(depth01, camera.position.y);
   updateLighting(depth01); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
+  setLampOccluders(diverOccluders(lampOcc));   // Sal's chest and bonnet shadow the glow
 
   updateCamera(dt, t, fwd);
 
