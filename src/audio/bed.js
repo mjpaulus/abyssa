@@ -20,14 +20,14 @@
 import { mix, cl01 } from './engine.js';
 
 export const KB = {
-  DRONE: 0.3, WATER: 0.55, SURF: 0.2, SHIM: 0.02,
+  DRONE: 0.22, WATER: 0.4, SURF: 0.2, SHIM: 0.02,
   REEF_FAR: 0.55, REEF_NEAR: 0.35, REEF_RATE: 420,
-  BOIL_RUMBLE: 0.08, BOIL_BUB: 0.5, VENT: 0.2,
+  BOIL_RUMBLE: 0.045, BOIL_BUB: 0.5, VENT: 0.1,
   ABYSS_SUB: 0.3, ABYSS_AIR: 0.01,
   DECK_WIND: 0.10, DECK_GUST: 0.03, DECK_LAP: 0.05, DECK_SLAP: 0.09, DECK_CREAK: 0.06,
-  RAIN_DECK: 0.12, RAIN_UNDER: 0.12,
+  RAIN_DECK: 0.06, RAIN_UNDER: 0.12,
   PUMP: 0.32, PUMP_HOSE: 0.5,
-  THUNDER: 0.9,
+  THUNDER: 2.6,
   GULL: 0.028, GULL_ON: 1,
   CALL: 1, GROAN: 1, KNOCK: 1, TICK: 1
 };
@@ -80,7 +80,7 @@ export function buildBed(E) {
   // ---- rain: on timber above (worklet drops + a hiss), and heard from below as the
   // high bubble hiss that rain really makes under the surface ----
   b.rainDeckG = E.g(0.0001, B.deck);
-  b.rainDeck = E.texture(2, b.rainDeckG, { rate: 0, level: 0.6, fLo: 1800, fHi: 6000, bright: 0.7 });
+  b.rainDeck = E.texture(2, b.rainDeckG, { rate: 0, level: 0.6, fLo: 1100, fHi: 4200, bright: 0.5 });
   { const f = E.f('bandpass', 3500, 0.5, b.rainDeckG); b.rainHiss = E.g(0, f); E.loop(E.n('pink', 1.1, b.rainHiss)); }
   b.rainUnderG = E.g(0.0001, B.bed);
   b.rainUnder = E.texture(1, b.rainUnderG, { rate: 0, level: 0.25, fLo: 9000, fHi: 15500 });
@@ -152,7 +152,7 @@ export function mixBed(E) {
   const rain = S.rain;
   G('rd', b.rainDeckG, KB.RAIN_DECK * a * rain, 0.6);
   b.rainDeck.p.rate.setTargetAtTime(rain * 1400, E.now(), 0.8);
-  R('rh', b.rainHiss.gain, 0.025 * rain * rain, 0.8);
+  R('rh', b.rainHiss.gain, 0.012 * rain * rain, 0.8);
   G('ru', b.rainUnderG, KB.RAIN_UNDER * u * rain * Math.pow(cl01(1 - d / 0.08), 2), 0.8);
   b.rainUnder.p.rate.setTargetAtTime(rain * 900, E.now(), 0.8);
   // deck
@@ -428,7 +428,10 @@ export function thunder(E, x, z, amp) {
   if (I.py < -120) return;
   const t = E.now() + Math.min(9, dist / 114), near = cl01(1 - dist / 700), lvl = KB.THUNDER * amp * mix(0.35, 1, near) * E.startle;
   const roll = E.r(3, 7) * mix(1.3, 0.8, near);
-  const vg = E.emit('sfx', x, 180, z, (t - E.now()) + roll + 1.5, 2); if (!vg) return;
+  // placed on the bolt's true bearing but at a virtual 40 units: the emitter's distance
+  // law is for things in the water; thunder's range is carried by near/far above
+  const vd = 40 / Math.max(1, dist);
+  const vg = E.emit('sfx', I.px + dx * vd, I.py + (200 - I.py) * vd, I.pz + dz * vd, (t - E.now()) + roll + 1.5, 2); if (!vg) return;
   if (near > 0.45) {
     const cg = E.g(0, vg), hp = E.f('highpass', 1800, 0.7, cg);
     E.env(cg.gain, t, 0.002, 0.08, lvl * 0.8);

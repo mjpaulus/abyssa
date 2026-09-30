@@ -141,7 +141,7 @@ function oruneExhale(E, L, big) {
   // the siphon's resonance: a low tube driven by breath
   const g = E.g(0, vg), f1 = E.f('bandpass', 92, 3, g), f2 = E.f('bandpass', 230, 2.2, g);
   const src = E.n('brown', 0.9); src.connect(f1); src.connect(f2);
-  E.ahr(g.gain, t, dur * 0.2, dur * 0.2, dur * 0.6, 0.9 * k);
+  E.ahr(g.gain, t, dur * 0.2, dur * 0.2, dur * 0.6, 0.5 * k);
   E.fire(src, t, t + dur + 0.05, [f1, f2, g]);
   const tg = E.g(0, vg), lp = E.f('lowpass', 150, 4, tg), o = E.o('sawtooth', 39, lp);
   o.frequency.setValueAtTime(41, t); o.frequency.exponentialRampToValueAtTime(34, t + dur);
@@ -197,7 +197,7 @@ function mhorClicks(E, L, urgency) {
   const p = L.head || L.pos, t = E.now() + 0.003, n = 6 + Math.floor(urgency * 10);
   const vg = E.emit('cre', p.x, p.y, p.z, 2.5, 1, p); if (!vg) return; E.log('mhorClicks');
   const dt0 = mix(0.11, 0.05, urgency);
-  clicks(E, vg, t, n, dt0, dt0 * mix(0.9, 0.5, urgency), E.r(1050, 1450), 7, 0.22 * KC.HUNTER);
+  clicks(E, vg, t, n, dt0, dt0 * mix(0.9, 0.5, urgency), E.r(1050, 1450), 7, 0.3 * KC.HUNTER);
   // under each train, a low wet tick: the beak
   noiseHit(E, vg, t, 'brown', 'lowpass', 260, 2, 0.002, 0.05, 0.1);
 }
@@ -214,7 +214,7 @@ function mhorStrike(E, L) {
   f2.frequency.setValueAtTime(1500, t); f2.frequency.exponentialRampToValueAtTime(3100, t + wind);
   const gate = E.mod(18, 0.5, am.gain, t, t + wind + 0.02, 'square');
   gate.frequency.setValueAtTime(18, t); gate.frequency.exponentialRampToValueAtTime(210, t + wind);
-  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.35 * s, t + wind * 0.92); g.gain.linearRampToValueAtTime(0, t + wind + 0.01);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.5 * s, t + wind * 0.92); g.gain.linearRampToValueAtTime(0, t + wind + 0.01);
   E.fire(E.n('white', 1, am), t, t + wind + 0.03, [am, f1, f2, g]);
   for (const [f, a] of [[1370, 1], [2210, 0.6], [3460, 0.35]]) {
     const mg = E.g(0, vg), o = E.o('sine', f, mg);
