@@ -613,7 +613,7 @@ export function pipeline() {
   };
 }
 
-// Look-dev preview for sculptlab.html (?job=./src/entities/sleeper/brooderSculpt.js#preview
+// Look-dev preview for sculptlab.html (?lab&job=./src/entities/sleeper/brooderSculpt.js#preview
 // &p=name1,name2): the pipeline's pieces through the in-browser runJob at preview density
 // (seconds, not the Blender round trip). Form and paint only; the shipped maps come from
 // the Cycles bake.

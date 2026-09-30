@@ -40,7 +40,7 @@ Blender: `/Applications/Blender.app/Contents/MacOS/Blender` (5.2 LTS; `BLENDER=`
    Measured on an M5 Max: body 2M→70k + limbs (14 pieces) in ~75 s.
 
 Why the SDF stays in JS: it is the reusable part (the same specs preview in-browser in
-`sculptlab.html?job=...#preview`, run in node offline, and can run at runtime in a
+`sculptlab.html?lab&job=...#preview`, run in node offline, and can run at runtime in a
 worker for cheap things), dual contouring there is fast (a 2M-tri high in seconds), and
 DC measured better than surface nets for crisp plate edges at equal cost (mean vertex
 distance error 0.015h vs 0.029h, p95 normal error 13.1 vs 22.9 degrees at h = 0.02).
@@ -68,8 +68,8 @@ export function pipeline() {
   times that.
 - Coordinates: game frame (+Y up, +Z front). The PLY writer swizzles to Blender's and
   the glTF exporter's +Y-up conversion returns them exactly.
-- Look-dev: `sculptlab.html?job=./src/entities/sleeper/<name>Sculpt.js%23preview&p=<pieces>`
-  (in-browser preview bake, seconds) and `sculptlab.html?asset=<name>` (the shipped
+- Look-dev: `sculptlab.html?lab&job=./src/entities/sleeper/<name>Sculpt.js%23preview&p=<pieces>`
+  (in-browser preview bake, seconds) and `sculptlab.html?lab&asset=<name>` (the shipped
   Blender output under neutral light).
 
 Build scratch (`.build/`) is gitignored; the outputs under `assets/` are committed.

@@ -28,6 +28,12 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { sculptAsync, toGeometry, toTextures } from './src/lib/sculpt.js';
 
 const q = new URLSearchParams(location.search);
+// DEV ONLY, behind ?lab like the game's own lab: a bare URL does nothing (nothing in the
+// game links here; tools/blender/README.md gives the lab URLs)
+if (!q.has('lab')) {
+  document.getElementById('hud').textContent = 'ABYSSA sculpt lab: a dev tool. Open with ?lab&job=... or ?lab&asset=... (tools/blender/README.md).';
+  throw new Error('sculptlab: ?lab required');
+}
 const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
