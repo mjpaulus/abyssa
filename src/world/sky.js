@@ -62,8 +62,9 @@ const lum = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
 // ---------------------------------------------------------------------------------------
 export const VSKY = {
   on: 1,               // 0 = the shipped painted sky + puffs path (A/B)
-  div: 2,              // march resolution divisor (degrade rung raises it)
-  steps: 56,           // view steps through the shell
+  div: 2,              // minimum march resolution divisor
+  marchPx: 360000,     // pixel budget of the march target: the divisor rises to hold it (degrade lowers it)
+  steps: 52,           // view steps through the shell
   lsteps: 6,           // light-march steps
   base: 230,           // cloud base altitude (world units, 1 u = 3 m) in fair weather
   baseStorm: 130,      // ... under a full storm (the bolts leave the deck at ~95)
@@ -628,11 +629,33 @@ uniform vec4 uVolK;      // on, mode (0 screen, 1 pano), star gain, physical sun
 uniform vec4 uVolDisc;   // disc rgb (transmitted, normalised), angular radius
 ${GLSL_VOL_ATMO}
 float vStarHash( vec3 p ){ p = fract( p * 0.3183099 + 0.1 ); p *= 17.0; return fract( p.x * p.y * p.z * ( p.x + p.y + p.z ) ); }
+// Catmull-Rom upsample of the low-res cloud target in 5 bilinear taps (the corners of
+// the 4x4 kernel are dropped): keeps the edges of a third-res march crisp where a plain
+// bilinear lookup reads as a soft blur.
+vec4 volCR( sampler2D t, vec2 uv ){
+  vec2 ts = vec2( textureSize( t, 0 ) );
+  vec2 p = uv * ts - 0.5, f = fract( p ), c0 = floor( p );
+  vec2 w0 = f * ( -0.5 + f * ( 1.0 - 0.5 * f ) );
+  vec2 w1 = 1.0 + f * f * ( -2.5 + 1.5 * f );
+  vec2 w2 = f * ( 0.5 + f * ( 2.0 - 1.5 * f ) );
+  vec2 w3 = f * f * ( -0.5 + 0.5 * f );
+  vec2 w12 = w1 + w2;
+  vec2 tc0 = ( c0 - 0.5 ) / ts, tc3 = ( c0 + 2.5 ) / ts, tc12 = ( c0 + 0.5 + w2 / w12 ) / ts;
+  vec4 r = texture2D( t, vec2( tc12.x, tc0.y ) ) * ( w12.x * w0.y )
+         + texture2D( t, vec2( tc0.x, tc12.y ) ) * ( w0.x * w12.y )
+         + texture2D( t, tc12 ) * ( w12.x * w12.y )
+         + texture2D( t, vec2( tc3.x, tc12.y ) ) * ( w3.x * w12.y )
+         + texture2D( t, vec2( tc12.x, tc3.y ) ) * ( w12.x * w3.y );
+  float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+  return max( r / ws, vec4( 0.0 ) );
+}
 vec4 volCloudAt( vec3 d ){
   if ( uVolK.y < 0.5 ) {
     vec4 c = uVolVP * vec4( d, 0.0 );
     if ( c.w <= 0.0 ) return vec4( 0.0, 0.0, 0.0, 1.0 );
-    return texture2D( tVolCloud, c.xy / c.w * 0.5 + 0.5 );
+    vec4 v = volCR( tVolCloud, c.xy / c.w * 0.5 + 0.5 );
+    v.a = min( v.a, 1.0 );
+    return v;
   }
   float u = atan( d.z, d.x ) / 6.28318531 + 0.5;
   float v = sqrt( clamp( d.y, 0.0, 1.0 ) );
@@ -1184,7 +1207,7 @@ export function updateSky(dt, t) {
   u.uWind.value.set(-dx / V.shapeTile, -dz / V.shapeTile, -dx * 1.25 / V.detailTile, -dz * 1.25 / V.detailTile);
   const tanH = Math.tan(camera.fov * D2R * 0.5);
   renderer.getSize(_size);
-  const hres = Math.max(1, Math.floor(_size.y / V.div));
+  const hres = Math.max(1, Math.floor(_size.y / curDiv));
   u.uEvo.value.set(tin * 0.00012, V.curlK, V.powder, 2 * tanH / hres);
   u.uPhase.value.set(V.g1, V.g2, V.gMix, V.haze / (0.5 + 0.5 * hazeMul - 1.0 * storm) * (1 - 0.7 * fog));
   u.uMS.value.set(V.msA, V.msB, V.msC, 1);
@@ -1229,8 +1252,37 @@ function coverMean() { return clamp(dayA.cover * 0.8 + wxStorm, 0, 1); }
 // ---------------------------------------------------------------------------------------
 // PER FRAME (GPU): call before renderRefraction / the composer.
 // ---------------------------------------------------------------------------------------
+// GPU PROFILER (dev): a TIME_ELAPSED query around renderSky only. The frame-level
+// timer (__gpu) must be parked first, one query per context: __rays.profile(true) does
+// that. __vsky.profile(true) then __vsky.cost().
+const prof = { on: false, ext: null, q: [], ms: [] };
+function profPoll(gl) {
+  while (prof.q.length) {
+    const q = prof.q[0];
+    if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+    const dis = gl.getParameter(prof.ext.GPU_DISJOINT_EXT);
+    const ns = gl.getQueryParameter(q, gl.QUERY_RESULT);
+    gl.deleteQuery(q); prof.q.shift();
+    if (!dis) { prof.ms.push(ns / 1e6); if (prof.ms.length > 240) prof.ms.shift(); }
+  }
+}
 export function renderSky() {
   if (!built || !VSKY.on) return;
+  if (prof.on && prof.ext) {
+    const gl = renderer.getContext();
+    profPoll(gl);
+    const q = gl.createQuery();
+    gl.beginQuery(prof.ext.TIME_ELAPSED_EXT, q);
+    try { renderSkyInner(); } finally { gl.endQuery(prof.ext.TIME_ELAPSED_EXT); prof.q.push(q); }
+    return;
+  }
+  renderSkyInner();
+  // dev: __vsky.bench(k) re-runs the passes k extra times a frame, so a paired A/B of
+  // the frame timer can resolve a cost smaller than the noise of a shared machine
+  for (let i = 0; i < benchK; i++) renderSkyInner();
+}
+let benchK = 0, skipMask = 0, curDiv = 2;
+function renderSkyInner() {
   const V = VSKY;
   frameN++;
   const prevT = renderer.getRenderTarget();
@@ -1238,8 +1290,8 @@ export function renderSky() {
   renderer.autoClear = false;
   const deep = camera.position.y < -60;
   // weather map + shadow (shadow only matters in the top of the column)
-  renderer.setRenderTarget(weatherRT); renderer.render(qWeather, fsCam);
-  if (!deep) {
+  if (!(skipMask & 1)) { renderer.setRenderTarget(weatherRT); renderer.render(qWeather, fsCam); }
+  if (!deep && !(skipMask & 2)) {
     renderer.setRenderTarget(shadowRT); renderer.render(qShadow, fsCam);
     probeIssue();
   }
@@ -1248,7 +1300,11 @@ export function renderSky() {
   if (camera.position.y > -40) {
     // --- screen march ---
     renderer.getSize(_size);
-    const w = Math.max(8, Math.ceil(_size.x / V.div)), hh = Math.max(8, Math.ceil(_size.y / V.div));
+    // THE DIVISOR holds a pixel budget, not a ratio: the march costs per pixel, and the
+    // internal resolution moves with the window, the DPR and DRS.
+    const dv = Math.max(V.div, Math.sqrt(_size.x * _size.y / V.marchPx));
+    curDiv = dv;
+    const w = Math.max(8, Math.ceil(_size.x / dv)), hh = Math.max(8, Math.ceil(_size.y / dv));
     if (w !== lastW || hh !== lastH) {
       curRT.setSize(w, hh); histRT[0].setSize(w, hh); histRT[1].setSize(w, hh);
       lastW = w; lastH = hh; histValid = false;
@@ -1258,7 +1314,7 @@ export function renderSky() {
     mu.uCamRot.value.setFromMatrix4(camera.matrixWorld);
     mu.uSteps.value.z = 0;
     mu.uSteps.value.x = V.steps;
-    renderer.setRenderTarget(curRT); renderer.render(qMarch, fsCam);
+    if (!(skipMask & 4)) { renderer.setRenderTarget(curRT); renderer.render(qMarch, fsCam); }
     // --- resolve into the other history ---
     const src = histRT[hist], dst = histRT[hist ^ 1];
     const ru = matResolve.uniforms;
@@ -1277,7 +1333,7 @@ export function renderSky() {
   }
 
   // --- pano strip (a quarter of the rows per frame) ---
-  if (!deep || !SKY_ENV.valid) {
+  if ((!deep || !SKY_ENV.valid) && !(skipMask & 16)) {
     mu.uSteps.value.z = 1;
     mu.uSteps.value.x = Math.max(24, V.steps >> 1);
     const s = panoStrip & 3;
@@ -1346,15 +1402,15 @@ export function warmUpSky() {
 let rung = 0;
 export function degradeSky() {
   rung++;
-  if (rung === 1) { VSKY.div = 3; VSKY.steps = 44; VSKY.lsteps = 5; }
-  else if (rung === 2) { VSKY.div = 4; VSKY.steps = 36; VSKY.lsteps = 4; }
+  if (rung === 1) { VSKY.marchPx = 240000; VSKY.steps = 44; VSKY.lsteps = 5; }
+  else if (rung === 2) { VSKY.marchPx = 150000; VSKY.steps = 36; VSKY.lsteps = 4; }
   else { rung = 3; }
   return rung;
 }
 export function restoreSky() {
   rung = Math.max(0, rung - 1);
-  if (rung === 0) { VSKY.div = 2; VSKY.steps = 56; VSKY.lsteps = 6; }
-  else if (rung === 1) { VSKY.div = 3; VSKY.steps = 44; VSKY.lsteps = 5; }
+  if (rung === 0) { VSKY.marchPx = 360000; VSKY.steps = 52; VSKY.lsteps = 6; }
+  else if (rung === 1) { VSKY.marchPx = 240000; VSKY.steps = 44; VSKY.lsteps = 5; }
   return rung;
 }
 
@@ -1363,7 +1419,7 @@ if (typeof window !== 'undefined') {
     V: VSKY, stats, atm, lutR, lutM,
     on(b) { VSKY.on = b === undefined ? 1 : (b ? 1 : 0); DOME_U.uVolK.value.x = VSKY.on; return VSKY.on; },
     state() {
-      return { built, bootMs: +bootMs.toFixed(1), div: VSKY.div, steps: VSKY.steps, w: lastW, h: lastH,
+      return { built, bootMs: +bootMs.toFixed(1), div: +curDiv.toFixed(2), steps: VSKY.steps, w: lastW, h: lastH,
         physElev: +physElev.toFixed(2), K: +Ksm.toExponential(3), hazeMul: +hazeMul.toFixed(2),
         sunVis: +shadowSunVis.toFixed(3), camSunVis: +camSunVis.toFixed(3),
         light: lightCol.map(v => +v.toFixed(4)), ambTop: ambTop.map(v => +v.toFixed(4)),
@@ -1372,6 +1428,36 @@ if (typeof window !== 'undefined') {
         env: SKY_ENV.valid, envVer: SKY_ENV.version, rung };
     },
     degrade: degradeSky, restore: restoreSky,
+    bench(k) { benchK = Math.max(0, k | 0); return benchK; },
+    // dev: synchronous GPU time of the passes, gl.finish-bracketed, median of `reps`
+    // batches of n (stalls the pipeline: never in a shipped path)
+    time(n, reps, mask) {
+      const gl = renderer.getContext();
+      n = n || 10; reps = reps || 7; skipMask = mask | 0;
+      const out = [];
+      for (let r = 0; r < reps; r++) {
+        gl.finish();
+        const t0 = performance.now();
+        for (let i = 0; i < n; i++) renderSkyInner();
+        gl.finish();
+        out.push((performance.now() - t0) / n);
+      }
+      skipMask = 0;
+      out.sort((x, y) => x - y);
+      return { median: +out[reps >> 1].toFixed(3), min: +out[0].toFixed(3), w: lastW, h: lastH };
+    },
+    skip(m) { skipMask = m | 0; return skipMask; },
+    profile(on) {
+      prof.on = on === undefined ? true : !!on;
+      if (prof.on && !prof.ext) prof.ext = renderer.getContext().getExtension('EXT_disjoint_timer_query_webgl2');
+      prof.ms.length = 0;
+      return !!prof.ext;
+    },
+    cost() {
+      if (!prof.ms.length) return null;
+      const a = prof.ms.slice().sort((x, y) => x - y);
+      return { n: a.length, median: +a[a.length >> 1].toFixed(3), p90: +a[Math.floor(a.length * 0.9)].toFixed(3) };
+    },
     // read back a few pano texels / the march target (dev only: stalls the GPU)
     // fraction of the upper sky (above 5 degrees) with cloud transmittance under 0.5,
     // from the pano (dev only: a full readback)
