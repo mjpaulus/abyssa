@@ -2478,6 +2478,10 @@ function buildSurface() {
         // air side. Asking dot(V, N) instead flipped grazing back-facets of the detail
         // normals into the underwater branch, which drew dark slivers across the far sea.
         bool below = !gl_FrontFacing;
+        // FROM BELOW the short chop is filtered (the shipped detailBelow idea, applied to
+        // the spectrum's bands): it shatters Snell's window into confetti at the depths
+        // Sal looks up from, and the diver's wayfinding needs the window whole.
+        if ( below ) dh = s0.xy + s1.xy * g1 * 0.65 + s2.xy * gust * uDet.w;
         // Unresolved roughness: the filtered variance, plus the capillaries finer than
         // cascade 2's Nyquist (uOcK.w grows with the wind).
         float mssU = varU + uOcK.w;
@@ -2541,6 +2545,9 @@ function buildSurface() {
             float tn = vn( vW.xz * 2.6 + vec2( uTime * 0.7, -uTime * 0.45 ) ) * 0.6
                      + vn( vW.xz * 7.0 - vec2( uTime * 1.3, uTime * 0.9 ) ) * 0.4;
             hull = band * smoothstep( 0.30, 0.75, tn * ( 0.55 + 0.9 * band ) ) * ( 0.55 + 0.45 * min( 1.0, uRaftC.w * 2.0 + seaS ) );
+            // Seen from below the collar is a thin bubble line against the bright window,
+            // and a full-strength one drew the hull's rectangle in white chalk.
+            if ( !gl_FrontFacing ) hull *= 0.3 * smoothstep( 0.35, 0.65, vn( vW.xz * 1.1 + uTime * 0.2 ) );
           }
         }
 
