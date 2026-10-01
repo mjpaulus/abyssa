@@ -26,6 +26,7 @@ import { setOceanRate } from './world/ocean.js';
 // CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
 // underwater volumetrics and before the main EffectPass so bloom/grade see it.
 import { SkyRaysPass } from './postfx.skyrays.js';
+import { warmUpSky, degradeSky, restoreSky } from './world/sky.js';
 // AUTO-EXPOSURE (roadmap/ref-auto-exposure.md): a metering shell around three tiny RTs.
 import { ExposurePass } from './postfx.exposure.js';
 // Read-only subject sources for the Flow-lean focus pull (item 5). creatures.js has no
@@ -1085,13 +1086,15 @@ function degradeQuality() {
   judgeNote(-1);
   if (degradeStage === 1) {
     reduceRefraction();
-    console.info('ABYSSA: perf tier 1 — refraction target quartered');
+    degradeSky();   // volumetric clouds: third-res march, fewer steps
+    console.info('ABYSSA: perf tier 1 — refraction target quartered, cloud march third-res');
     return false;
   }
   if (degradeStage === 2) {
     cheapenVolumetrics(true);
     setOceanRate(2);     // the FFT sea simulates at half rate (same sea, sampled at 30 Hz)
-    console.info('ABYSSA: perf tier 2 — volumetrics cheapened (no occlusion, third-res)');
+    degradeSky();   // volumetric clouds: quarter-res march
+    console.info('ABYSSA: perf tier 2 — volumetrics cheapened (no occlusion, third-res), cloud march quarter-res, ocean sim half-rate');
     return false;
   }
   if (degradeStage === 3) {
@@ -1145,10 +1148,12 @@ function restoreQuality() {
   if (from === 2) {
     cheapenVolumetrics(false);
     setOceanRate(1);
+    restoreSky();
     console.info('ABYSSA: perf tier 2 lifted — volumetrics at full quality');
     return true;
   }
   restoreRefraction();
+  restoreSky();
   console.info('ABYSSA: perf tier 1 lifted — refraction target at half-res');
   return true;
 }
@@ -1321,6 +1326,7 @@ export function warmUp() {
   try { renderer.compile(scene, camera); } catch (e) { console.warn('ABYSSA: precompile failed', e); }
   for (const o of hidden) o.visible = false;
   if (raysPass) raysPass.warmUp(renderer);   // the cloud occluder exists only once the world is built
+  warmUpSky();
   return renderer.info.programs.length;
 }
 // The same warm-up, asynchronous: r184's compileAsync uses KHR_parallel_shader_compile
@@ -1333,5 +1339,6 @@ export async function warmUpAsync() {
   try { await renderer.compileAsync(scene, camera); }
   finally { for (const o of hidden) o.visible = false; }
   if (raysPass) raysPass.warmUp(renderer);
+  warmUpSky();
   return renderer.info.programs.length;
 }

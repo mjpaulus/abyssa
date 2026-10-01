@@ -1,4 +1,6 @@
 // PUFF-CLUSTER CLOUDS — real 3D clouds in the air over the sea. OWNED BY: clouds agent.
+// RETIRED while world/sky.js's volumetric sky is on (2026-10-01): the puffs are parked
+// by setPuffsVisible(false) and stay built as the A/B (__vsky.on(0) brings them back).
 //
 // THE RULING that made this file: the painted dome layer (water.js skyRadiance) was
 // taken through a shaping pass and a dimension pass and Michael still read it as "a flat
@@ -455,6 +457,8 @@ export function buildClouds() {
 // The occluder scene for postfx.skyrays.js (render it with the main camera into the
 // mask target). null until buildClouds has run. `occK(high, low)` weights the layers.
 export function cloudOccluder() { return occScene; }
+// The volumetric sky (world/sky.js) retires the puffs; this parks them without a deal.
+export function setPuffsVisible(b) { if (mesh) { mesh.visible = !!b && mesh.visible; occMesh.visible = mesh.visible; if (!b) geo.instanceCount = 0; } }
 export function cloudOccK(high, low) { if (matOcc) matOcc.uniforms.uOccK.value.set(high, low); }
 
 // Called by game.js beside setWeatherHand. Storage only — the hand object is the one

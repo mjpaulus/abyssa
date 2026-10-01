@@ -490,6 +490,10 @@ export function updateLighting(depth01) {
     // which is correct — a fog morning casts no shadows.
     sun.intensity *= 1 - 0.86 * fogK;
   }
+  // CLOUD SHADOW (world/sky.js): the volumetric deck's sun transmittance over the raft,
+  // read back from its shadow map. In air only, so below the interface nothing moves.
+  const sunVis = airAmbience.sunVis;
+  if (sunVis !== undefined && sunVis < 0.999) sun.intensity *= 1 - (1 - sunVis) * air;
   // A bright moon lifts the night, it does not light it: hemisphere and ambient only,
   // and only in the top of the column (surf), so the abyss is moon-blind exactly the way
   // it is weather-blind.

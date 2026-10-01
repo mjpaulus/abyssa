@@ -40,8 +40,9 @@ import { Pass } from 'postprocessing';
 import { camera, renderer as coreRenderer } from './core.js';
 import { sun, LOOK } from './lighting.js';
 import { GLASS, SUN } from './config.js';
-import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, cloudLook, localSurfaceY, styleState } from './world/water.js';
+import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, cloudLook, localSurfaceY, styleState, airAmbience } from './world/water.js';
 import { cloudOccluder, cloudOccK } from './world/clouds.js';
+import { DOME_U as VOL_U } from './world/sky.js';
 
 const SUN_REF_I = 2.60;     // lighting.js STOPS[0].sunI, the same reference volumetrics uses
 const K_AIR_G = 0.0040;     // water.js K_AIR green: the marine haze the rays are made of
@@ -59,6 +60,12 @@ uniform sampler2D tDepth;
 uniform mat4 uCamW;
 uniform vec2 uTanHalf;
 uniform float uDomeK, uHorizon;
+// THE VOLUMETRIC DECK (world/sky.js): when it is live the mask is its own view-ray
+// transmittance, the same texture the dome composites, so the hole the fan pours out of
+// is exactly the gap the eye sees between real clouds.
+uniform sampler2D tVolCloud;
+uniform mat4 uVolVP;
+uniform vec4 uVolK;
 ${GLSL_SKY_DECL}
 varying vec2 vUv;
 ${GLSL_NOISE}
@@ -72,7 +79,11 @@ void main(){
   float sky = step( 0.99995, z );
   // The bottom of the fan: the dome below the waterline is not sky either.
   sky *= smoothstep( -0.02, uHorizon, d.y );
-  float amt = skyCloudAmt( d ) * uDomeK;
+  float amt;
+  if ( uVolK.x > 0.5 ) {
+    vec4 vc = uVolVP * vec4( d, 0.0 );
+    amt = vc.w > 0.0 ? 1.0 - texture2D( tVolCloud, vc.xy / vc.w * 0.5 + 0.5 ).a : 0.0;
+  } else amt = skyCloudAmt( d ) * uDomeK;
   gl_FragColor = vec4( vec3( sky * ( 1.0 - amt ) ), 1.0 );
 }`;
 
@@ -184,6 +195,7 @@ export class SkyRaysPass extends Pass {
         uCamW: { value: new THREE.Matrix4() },
         uTanHalf: { value: new THREE.Vector2(1, 1) },
         uDomeK: { value: 0.85 }, uHorizon: { value: 0.03 },
+        tVolCloud: VOL_U.tVolCloud, uVolVP: VOL_U.uVolVP, uVolK: VOL_U.uVolK,
         ...SKY_UNIFORMS
       },
       vertexShader: VERT, fragmentShader: MASK_FRAG, depthTest: false, depthWrite: false, toneMapped: false
@@ -298,7 +310,10 @@ export class SkyRaysPass extends Pass {
     // relight() scales the in-air sun by LOOK.air.xSun for the deck's surfaces; the sky's
     // fan is made of the sky's light, not the deck key, so that gain is divided back out.
     const xs = LOOK && LOOK.on && LOOK.air && LOOK.air.xSun > 0 ? LOOK.air.xSun : 1;
-    const sunK = Math.max(0, sun.intensity) / (SUN_REF_I * xs);
+    // ...and the volumetric deck's shadow over the raft is divided out too: the fan is
+    // the sun in the AIR beyond the cloud, and a shadowed deck is exactly when it shows.
+    const sv = airAmbience.sunVis > 0.05 ? airAmbience.sunVis : 0.05;
+    const sunK = Math.max(0, sun.intensity) / (SUN_REF_I * xs * sv);
     S.sunK = sunK;
     if (!(sunK > 0.02) || SUN.dir.y < 0.035 || skyState.discK < 0.05) return skip('night');
     const cov = skyState.cov;

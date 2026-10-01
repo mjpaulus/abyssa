@@ -9,6 +9,9 @@ import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
 // GLASS.stops, and config.js is the only module both already import. Plain mutable data:
 // poke it live and the next frame picks it up.
 export { GLASS } from '../config.js';
+// THE VOLUMETRIC SKY (world/sky.js) draws through the dome: its GLSL and uniforms are
+// spliced into buildDome, and captureSkyEnv renders it from its panorama.
+import { GLSL_VOL_DOME, DOME_U as VOL_DOME_U, volCaptureMode } from './sky.js';
 import { rng, clamp } from '../lib/math.js';
 import { maxAniso } from '../lib/textures.js';
 // THE SPECTRAL OCEAN: the wave field, its textures, the clipmap and the CPU height query.
@@ -813,7 +816,8 @@ export function setWeatherHand(hand, wind) {
 }
 // Read by lighting.js (see the note there): the marine layer's flat white light and a
 // bright moon's lift are AMBIENCE, not new Light objects.
-export const airAmbience = { fog: 0, moon: 0 };
+// sunVis: the volumetric deck's sun transmittance over the raft (world/sky.js), 1 = clear.
+export const airAmbience = { fog: 0, moon: 0, sunVis: 1 };
 
 // Dev surface, namespaced and kept (the convention in CLAUDE.md). `sync()` snapshots the
 // live hand/wind off window.weather and installs it, which is what lets a probe FORCE a
@@ -1432,7 +1436,8 @@ function buildDome() {
       abyssaLampB: { value: LAMPB_U }, abyssaLampBC: { value: LAMPBC_U },
       abyssaLampK: { value: LAMPK_U }, abyssaLampP: { value: LAMPP_U },
       abyssaOccA: { value: OCCA_U }, abyssaOccB: { value: OCCB_U },
-      ...SKY_UNIFORMS
+      ...SKY_UNIFORMS,
+      ...VOL_DOME_U
     },
     side: THREE.BackSide, depthWrite: false, fog: false,
     vertexShader: `varying vec3 vDir;
@@ -1451,6 +1456,7 @@ function buildDome() {
       ${GLSL_SKY}
       uniform vec4 uOcSea, uRough; uniform vec2 uGlit;
       ${GLSL_FARSEA}
+      ${GLSL_VOL_DOME}
       ${GLSL_LAMP}
 
       // The far field on the AIR side. Below the horizon it is open sea at grazing
@@ -1478,6 +1484,11 @@ function buildDome() {
           c = mix( hz, c, exp( -La * KAIR ) );
           return airFog( c, 0.0, 1.0 );
         }
+        // THE VOLUMETRIC SKY (world/sky.js): atmosphere LUT + marched clouds + disc,
+        // easing into the same airlight over the last 1.3 degrees instead of 3.4 (the
+        // airlight IS the physical horizon now, so the ease has nothing left to hide).
+        if ( uVolK.x > 0.5 )
+          return airFog( mix( volSky( d ), hz, 1.0 - smoothstep( 0.0, 0.022, d.y ) ), d.y, 1.0 );
         return airFog( mix( skyRadiance( d ), hz, 1.0 - smoothstep( 0.0, 0.060, d.y ) ),
                        d.y, 1.0 );
       }
@@ -1570,7 +1581,9 @@ function captureSkyEnv() {
   // the spectrum's roughness), and a blurred disc in the prefiltered sky would draw it
   // twice. The raft's metal takes its sun from the real key light.
   uDiscK.value = 0;
+  volCaptureMode(true);
   envCam.update(renderer, envScene);
+  volCaptureMode(false);
   uAir.value = prevAir; uDiscK.value = prevDisc;
   const old = envRT;
   envRT = envPM.fromCubemap(envCubeRT.texture);
@@ -2878,6 +2891,22 @@ const _cLit = [0, 0, 0], _cBase = [0, 0, 0], _ember = [0, 0, 0], _pRing = [0, 0,
 // palette exactly the way the dome is — that is the whole reason the two read as one
 // sky rather than as two cloud systems. `lit`/`base` are the LIVE uniform vectors, so
 // there is nothing to keep in sync and nothing copied per frame.
+// THE VOLUMETRIC SKY'S HOOKS (world/sky.js). skyPalette() hands it this frame's authored
+// palette (the LEVEL it normalises its physical sky to); setSkyRing() hands back the
+// physical horizon and zenith, which then become the ring the sea mirrors and the
+// airlight the fog chunk and the far sea converge on: one horizon number, now weather.
+// Called after updateWater every frame; skyDrama rewrites the palette first next frame.
+const _palOut = { zen: _pZen, hor: _pRing, disc: _pDisc };
+export function skyPalette() { return _palOut; }
+export function setSkyRing(hor, zen, cov) {
+  uSkyHor.value.set(hor[0], hor[1], hor[2]);
+  uSkyZen.value.set(zen[0], zen[1], zen[2]);
+  AIR_U[0] = hor[0]; AIR_U[1] = hor[1]; AIR_U[2] = hor[2]; AIR_U[3] = 1;
+  const ck = clamp(cov, 0, 1) * 0.8;
+  for (let i = 0; i < 3; i++) AIRZ_U[i] = zen[i] + (0.5 * (_cBase[i] + _cLit[i]) - zen[i]) * ck;
+  AIRZ_U[3] = 1;
+  skyState.hor[0] = hor[0]; skyState.hor[1] = hor[1]; skyState.hor[2] = hor[2];
+}
 export const cloudLook = {
   lit: uCloudLit.value, base: uCloudBase.value, bak: 0, storm: 0, dome: 1, lid: 0
 };
