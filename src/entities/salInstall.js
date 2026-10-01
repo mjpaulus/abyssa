@@ -41,7 +41,8 @@
 //    canvasSet, shared, no new textures) TRIPLANAR in the bone's space on the cloth texels
 //    (non-metal, and canvas-tan or duck-blue by the baked albedo: leather and rubber are
 //    left alone), faded out by screen footprint so it never shimmers at game distance.
-// Cost: 3 sets x (BC1 albedo + BC5 normal + RGBA8 ORM half-res) ~ 3 x 13.3 MB GPU.
+// Cost: helm 2048 set ~13.6 MB GPU + body/limbs 1024 sets ~3.2 MB each = ~20 MB; download
+// 8.3 MB on the KTX2 path (3.7 MB WebP fallback).
 import * as THREE from 'three';
 import { envTex } from '../core.js';
 import { registerPaint, styleUniforms } from '../lib/paint.js';

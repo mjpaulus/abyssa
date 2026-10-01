@@ -754,8 +754,8 @@ function foreArmSpec(rig) {
 function gloveWear(lantern) {
   const rub = S => isM(S, M.RUBBER);
   if (!lantern) return [
-    { c: [0.34, 0.34, 0.35], a: 0.75, ro: 0.4, m: [['fn', S => rub(S) * sst(0.025, 0.06, S.x) * sst(-0.27, -0.16, S.y) * sst(0.40, 0.62, fbm(S.x, S.y, S.z, 60, 401, 3))]] },
-    { c: [0.30, 0.30, 0.31], a: 0.6, ro: 0.45, m: [['fn', S => rub(S) * sst(0.55, 0.72, fbm(S.x, S.y, S.z, 35, 402, 3))]] },
+    { c: [0.27, 0.27, 0.28], a: 0.5, ro: 0.42, m: [['fn', S => rub(S) * sst(0.025, 0.06, S.x) * sst(-0.27, -0.16, S.y) * sst(0.40, 0.62, fbm(S.x, S.y, S.z, 60, 401, 3))]] },
+    { c: [0.24, 0.24, 0.25], a: 0.35, ro: 0.48, m: [['fn', S => rub(S) * sst(0.58, 0.74, fbm(S.x, S.y, S.z, 35, 402, 3))]] },
     { c: [0.30, 0.26, 0.20], a: 0.5, m: [['mat', M.TAPE], ['fn', S => sst(0.45, 0.7, fbm(S.x, S.y, S.z, 25, 403, 3))]] }
   ];
   return [
