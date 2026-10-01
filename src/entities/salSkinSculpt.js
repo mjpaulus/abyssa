@@ -31,8 +31,8 @@
 // SETS: helm 2048 (helmet, corselet) | dress 2048 (trunk, sleeveL, sleeveR; + wrinkle map)
 //       gear 1024 (belt, pack, handL, handR, boot)
 import {
-  readRig, profOf, M, METAL, PAINT, metalEmit, helmetSpec, corseletSpec, packSpec, fbm, vn, isM,
-  Sph, E, Box, Cap, Cone, Tor, U, Sub, I, Xf, Pl, Fn, Disp, yTo, zTo, eul, norm, add, sub, cross, crPts, Path, Ring,
+  readRig, profOf, M, METAL, PAINT, metalEmit, helmetSpec, corseletSpec, packSpec, fbm, vn, isM, HELM_CAV, HELM_PORT0,
+  Sph, E, Box, Cap, Cone, Tor, U, Sub, I, Xf, Pl, Fn, Disp, yTo, zTo, eul, norm, add, sub, cross, dot, crPts, Path, Ring,
   polySDF, smoothProf, Lathe, Slab, Band, Hex, Buckle, ETor, crease, win, folds, clamp, sst, gau, TAU, compile
 } from './salSculpt.js';
 
@@ -58,6 +58,12 @@ export function plan(rig) {
     shX: am.x, shY: rig.spineY + am.y, aUp: am.up, aLo: am.lo, ar: am.r, aL: am.up + am.lo,
     Pth: profOf(rig.P.thigh), Psh: profOf(rig.P.shank), Pua: profOf(rig.P.upArm), Pfa: profOf(rig.P.foreArm)
   };
+  // (salprop) the corselet is shrunk by HELM_S about the shoulder line (spine y CORS_Y): a
+  // spine-frame point under the brass maps y -> CORS_Y + S (y - CORS_Y), r -> S r
+  P.hS = rig.helmS || 1; P.corsY = rig.corsY != null ? rig.corsY : 0.615;
+  P.cy = y => P.corsY + P.hS * (y - P.corsY);          // spine-frame height under the shrink
+  P.skirtY = P.cy(0.395);                              // the breastplate's skirt (spine frame)
+  P.studY = P.cy(0.425);                               // the brail studs the suspenders hook on
   // the weight belt (rigid, hips frame): its centre line, height and the dress radius under it
   P.beltY = P.spY + 0.07; P.beltH = 0.15; P.beltRx = 0.372; P.beltZr = 0.86;
   // the boot SHAFT (leather, laced, part of the dress mesh, riding the SHIN: the rig's ankle
@@ -76,10 +82,13 @@ export function plan(rig) {
 // its skirt (spine 0.395 = hips 0.595); BLOUSED out under the skirt (air and slack canvas),
 // cinched hard under the belt, full again over the hips, closing between the legs.
 function trunkProfile(P) {
-  const b = P.beltY;
+  const b = P.beltY, S = P.hS, cy = P.cy;
+  // (salprop) everything up under the brass shrinks with it; the blouse below the skirt is
+  // drawn in a little (it may stand a hair proud of the smaller skirt — slack canvas does)
+  const bl = 1 - 0.55 * (1 - S);
   return [
-    [P.spY + 0.80, 0.30, 0.80], [P.spY + 0.70, 0.46, 0.80], [P.spY + 0.55, 0.505, 0.78], [P.spY + 0.40, 0.51, 0.78],
-    [P.spY + 0.31, 0.495, 0.80], [P.spY + 0.235, 0.455, 0.81], [b + P.beltH / 2 + 0.01, 0.392, 0.84], [b, P.beltRx - 0.016, P.beltZr],
+    [P.spY + cy(0.80), 0.30 * S, 0.80], [P.spY + cy(0.70), 0.46 * S, 0.80], [P.spY + cy(0.55), 0.505 * S, 0.78], [P.spY + cy(0.40), 0.51 * S, 0.78],
+    [P.spY + 0.31, 0.495 * bl, 0.80], [P.spY + 0.235, 0.455 * (1 - 0.3 * (1 - S)), 0.81], [b + P.beltH / 2 + 0.01, 0.392, 0.84], [b, P.beltRx - 0.016, P.beltZr],
     [b - P.beltH / 2 - 0.01, 0.378, 0.84], [P.spY - 0.07, 0.402, 0.79], [-0.02, 0.405, 0.75], [-0.13, 0.385, 0.72],
     [-0.22, 0.30, 0.70], [-0.27, 0.12, 0.70], [-0.285, 0.0, 0.70]
   ];
@@ -186,9 +195,9 @@ function trunkMod(P) {
   const b = P.beltY, top = b + P.beltH / 2, bot = b - P.beltH / 2;
   return (th, y) => {
     let o = 0;
-    const wA = win(y, P.spY + 0.36, top - 0.005, 0.03);
+    const wA = win(y, P.spY + P.skirtY - 0.035, top - 0.005, 0.03);
     if (wA > 0) {
-      const g = sst(P.spY + 0.36, top + 0.02, y);
+      const g = sst(P.spY + P.skirtY - 0.035, top + 0.02, y);
       const k = 1 - g;
       o += 0.014 * wA * (0.35 + 0.65 * k) * drape(y * 1.5, th, 8, 61);
       o += 0.010 * wA * k;                   // overhang: the blouse rolls out over the belt
@@ -347,7 +356,7 @@ function wrinkleLayer(P, sleeve) {
     } else {
       // belly (bending forward): folds across the front between belt and breastplate
       const fr = Math.pow(Math.max(0, Math.sin(c.th)), 1.3);
-      o += 0.012 * win(c.u, P.spY + 0.38, P.beltY - 0.06, 0.05) * fr * bfold(c.u, c.th, 0.055, 0.9, sd + 9);
+      o += 0.012 * win(c.u, P.spY + P.skirtY - 0.015, P.beltY - 0.06, 0.05) * fr * bfold(c.u, c.th, 0.055, 0.9, sd + 9);
       o += 0.008 * gau((c.u + 0.04) / 0.08) * fr * bfold(c.u, c.th, 0.05, 1.4, sd + 11);
     }
     return o;
@@ -443,7 +452,7 @@ function beltSpec(P) {
   for (const th of [FRONT - 0.42, FRONT + 0.42, BACK - 0.45, BACK + 0.45]) {
     const pts = [];
     for (let k = 0; k <= 8; k++) {
-      const yy = y + h / 2 - 0.01 + (P.spY + 0.39 - (y + h / 2 - 0.01)) * k / 8;
+      const yy = y + h / 2 - 0.01 + (P.spY + P.studY - 0.035 - (y + h / 2 - 0.01)) * k / 8;
       const r = interp(T, yy, 1) + 0.03 + 0.012 * Math.sin(Math.PI * k / 8), zz = interp(T, yy, 2);
       pts.push([Math.cos(th) * r, yy, Math.sin(th) * r * zz]);
     }
@@ -460,14 +469,153 @@ function beltSpec(P) {
 
 // ------------------------------------------------------------------------------------------
 // THE HAND (wrist frame, authored LEFT; the right is the mirror at runtime): a working man's
-// bare hand closed round a bar along Z at C (the lantern bail / the knife grip pass through
-// it), out of a clamped RUBBER WRIST CUFF — the Mark V seal: the sleeve ends in a vulcanised
-// rubber cuff, held tight on the wrist by a rolled rubber ring.
-// Back of the hand outboard (+X), palm inboard, fingers along -Y curling round the bar.
+// bare hand out of a clamped RUBBER WRIST CUFF — the Mark V seal: the sleeve ends in a
+// vulcanised rubber cuff, held tight on the wrist by a rolled rubber ring.
+// Back of the hand outboard (+X), palm inboard (-X), fingers along -Y, thumb to the front (+Z).
+//
+// (salprop) THE HAND IS RIGGED. It was one fixed fist closed round a bar, whatever the man
+// was doing. Now it is sculpted OPEN (a relaxed hand, fingers a little apart, so bone heat
+// cannot bleed one finger into the next) and skinned to 16 finger bones (palm + three per
+// finger + three in the thumb, bake.py's bone heat); the game blends four poses by state —
+// GRIP (the lantern bail), KNIFE (the hilt), RELAX (an empty hand at his side) and SPREAD
+// (sculling, swimming). Why bones, not swapped sculpted variants (evidence):
+//   - a variant per pose is a separate DC mesh (different topology), so poses cannot BLEND —
+//     every change of state would pop the whole hand, and the knife draw lasts 85 ms;
+//   - four variants x two hands would be 8 hand charts in the 1024 gear set (measured on the
+//     current pack: the two fists take 9% of it; x4 halves the texel density of every hand);
+//   - the bones cost 16 joints x 2 skeletons of palette (two 64-texel bone textures), +0 draws,
+//     and postfx.taa.js already writes exact motion vectors for any SkinnedMesh.
+// The poses are SOLVED here, not keyed by eye: each finger's flexion is fitted so its joints
+// wrap a bar of the right radius at the lantern bail / the knife hilt (meta.hand.poses).
 // ------------------------------------------------------------------------------------------
-const GRIP = [0.006, -0.205, 0.075];
+const GRIP = [0.004, -0.200, 0.062];             // the lantern bail's top (diver.js lantPivot + 0.085)
+const KNIFE_C = [0.014, -0.206, 0.064];          // the knife hilt's axis (diver.js knifeHeld)
+// [name, MCP knuckle, phalanx lengths, radius, rest abduction (rad, + toward the thumb), rest flexion x3]
+const FING = [
+  ['i', [0.028, -0.152, 0.104], [0.066, 0.041, 0.030], 0.0166, 0.17, [0.18, 0.26, 0.14]],
+  ['m', [0.030, -0.158, 0.075], [0.072, 0.045, 0.032], 0.0172, 0.03, [0.20, 0.30, 0.15]],
+  ['r', [0.028, -0.154, 0.046], [0.067, 0.043, 0.030], 0.0163, -0.11, [0.23, 0.33, 0.16]],
+  ['l', [0.024, -0.143, 0.018], [0.053, 0.033, 0.026], 0.0142, -0.26, [0.27, 0.36, 0.18]]
+];
+const THUMB = { base: [-0.006, -0.050, 0.082], len: [0.060, 0.048, 0.036], rad: [0.0215, 0.0185, 0.0158],
+  dir: [-0.30, -0.80, 0.52], bend: [-0.55, -0.05, -0.83], rest: [0.12, 0.18, 0.14] };
+// Rodrigues (v perpendicular to the unit axis a)
+const rotP = (v, a, t) => add(v.map(q => q * Math.cos(t)), cross(a, v), Math.sin(t));
+const rotA = (v, a, t) => {           // general axis-angle
+  const c = Math.cos(t), s = Math.sin(t), d = dot(a, v), x = cross(a, v);
+  return [v[0] * c + x[0] * s + a[0] * d * (1 - c), v[1] * c + x[1] * s + a[1] * d * (1 - c), v[2] * c + x[2] * s + a[2] * d * (1 - c)];
+};
+// a finger's frame: d0 its rest direction (abduction applied), flex axis (curls toward -X)
+function fingFrame(f, dAbd = 0) {
+  const ab = f[4] + dAbd, d0 = [0, -Math.cos(ab), Math.sin(ab)];
+  return { d0, ax: norm(cross(d0, [-1, 0, 0])) };
+}
+// joint points of a finger at (abduction offset, flexions)
+function fingPts(f, dAbd, th) {
+  const { d0, ax } = fingFrame(f, dAbd), P = [f[1]];
+  let phi = 0;
+  for (let k = 0; k < 3; k++) { phi += th[k]; P.push(add(P[k], rotP(d0, ax, phi), f[2][k])); }
+  return P;
+}
+function thumbFrame(dSw = 0) {
+  const d0r = norm(THUMB.dir), b = norm(add(THUMB.bend, d0r, -dot(THUMB.bend, d0r)));
+  const ax = norm(cross(d0r, b)), sw = norm(cross(d0r, ax));
+  return { d0: rotA(d0r, sw, dSw), ax: rotA(ax, sw, dSw), sw };
+}
+function thumbPts(dSw, th) {
+  const { d0, ax } = thumbFrame(dSw), P = [THUMB.base];
+  let phi = 0;
+  for (let k = 0; k < 3; k++) { phi += th[k]; P.push(add(P[k], rotP(d0, ax, phi), THUMB.len[k])); }
+  return P;
+}
+// THE BONES (hand frame, rest pose): name, parent, head, tail, flex axis, swing axis
+export function handBones() {
+  const B = [{ name: 'hpalm', head: [0.006, 0.010, 0.040], tail: [0.010, -0.125, 0.062], ax: [0, 0, 1], sw: [1, 0, 0] }];
+  for (const f of FING) {
+    const P = fingPts(f, 0, f[5]), { ax } = fingFrame(f);
+    for (let k = 0; k < 3; k++) B.push({ name: f[0] + (k + 1), parent: k ? f[0] + k : 'hpalm', head: P[k], tail: P[k + 1], ax, sw: [1, 0, 0] });
+  }
+  const T = thumbPts(0, THUMB.rest), tf = thumbFrame();
+  for (let k = 0; k < 3; k++) B.push({ name: 't' + (k + 1), parent: k ? 't' + k : 'hpalm', head: T[k], tail: T[k + 1], ax: tf.ax, sw: tf.sw });
+  return B;
+}
+// POSE SOLVE: the finger's flexions that lay its joints on a circle of radius rc round a bar
+// along Z through C (hammer grip). Grid + refine, deterministic.
+function wrapFinger(f, C, rc) {
+  const dAbd = -f[4] * 0.85, cost = th => {
+    const P = fingPts(f, dAbd, th);
+    let e = 0;
+    for (let k = 1; k <= 3; k++) e += (Math.hypot(P[k][0] - C[0], P[k][1] - C[1]) - rc) ** 2 * (k === 3 ? 1.4 : 1);
+    // the tip must come round under the bar onto the palm side, not stop on top of it
+    if (P[3][0] > C[0]) e += (P[3][0] - C[0]) ** 2 * 2;
+    for (let k = 0; k < 3; k++) if (th[k] < 0.05) e += (0.05 - th[k]) ** 2 * 0.05;   // no hyperextended joint in a fist
+    return e;
+  };
+  let best = null;
+  for (let a = 0; a <= 1.9; a += 0.05) for (let b = 0.2; b <= 2.0; b += 0.05) for (let c = 0.1; c <= 1.6; c += 0.05) {
+    const e = cost([a, b, c]);
+    if (!best || e < best.e) best = { e, th: [a, b, c] };
+  }
+  let st = 0.025;
+  for (let it = 0; it < 60; it++) {
+    let moved = false;
+    for (let j = 0; j < 3; j++) for (const sg of [-1, 1]) {
+      const th = best.th.slice(); th[j] += sg * st; const e = cost(th);
+      if (e < best.e) { best = { e, th }; moved = true; }
+    }
+    if (!moved) st *= 0.5;
+  }
+  return { dAbd, th: best.th, err: Math.sqrt(best.e / 3) };
+}
+function wrapThumb(tip, mid) {
+  const cost = q => { const P = thumbPts(q[0], [q[1], q[2], q[3]]); return Math.hypot(...sub(P[3], tip)) ** 2 + 0.4 * Math.hypot(...sub(P[2], mid)) ** 2; };
+  let best = { e: 1e9, q: [0, 0.3, 0.3, 0.3] };
+  for (let s = -0.6; s <= 0.8; s += 0.1) for (let a = 0; a <= 1.2; a += 0.1) for (let b = 0; b <= 1.4; b += 0.1) for (let c = 0; c <= 1.4; c += 0.1) {
+    const e = cost([s, a, b, c]); if (e < best.e) best = { e, q: [s, a, b, c] };
+  }
+  let st = 0.05;
+  for (let it = 0; it < 80; it++) {
+    let moved = false;
+    for (let j = 0; j < 4; j++) for (const sg of [-1, 1]) { const q = best.q.slice(); q[j] += sg * st; const e = cost(q); if (e < best.e) { best = { e, q }; moved = true; } }
+    if (!moved) st *= 0.5;
+  }
+  return { q: best.q, err: Math.sqrt(best.e) };
+}
+// A pose = per bone [swing, flex] OFFSETS from the rest pose, in handBones() order
+export function handPoses() {
+  const out = {}, rest = b => b;
+  const fist = (C, rc, tipOff, midOff) => {
+    const p = [[0, 0]];
+    const errs = [];
+    FING.forEach((f, i) => {
+      // the little finger closes tighter round the end of the bar (shorter, and the palm tapers)
+      const w = wrapFinger(f, [C[0], C[1] + (i === 3 ? 0.012 : 0), C[2]], rc * [1, 1, 0.96, 0.82][i]); errs.push(+w.err.toFixed(4));
+      for (let k = 0; k < 3; k++) p.push([k ? 0 : w.dAbd, w.th[k] - f[5][k]]);
+    });
+    const t = wrapThumb(add(C, tipOff), add(C, midOff)); errs.push(+t.err.toFixed(4));
+    for (let k = 0; k < 3; k++) p.push([k ? 0 : t.q[0], t.q[k + 1] - THUMB.rest[k]]);
+    return { p, errs };
+  };
+  const g = fist(GRIP, 0.036, [0.004, 0.012, 0.046], [-0.026, 0.044, 0.050]);
+  const k = fist(KNIFE_C, 0.040, [0.006, 0.012, 0.048], [-0.026, 0.044, 0.052]);
+  out.grip = g.p; out.knife = k.p; out.fitErr = { grip: g.errs, knife: k.errs };
+  // RELAX: an empty working hand at his side — curled a little more than the sculpt, the
+  // fingers drawn together, each one a touch further than the last (the little finger most)
+  const r = [[0, 0]];
+  FING.forEach((f, i) => { const c = 0.10 + 0.05 * i; r.push([-f[4] * 0.45, 0.18 + c], [0, 0.30 + c], [0, 0.16 + c * 0.5]); });
+  r.push([0.10, 0.10], [0, 0.18], [0, 0.10]);
+  out.relax = r;
+  // SPREAD: sculling — the fingers straightened and splayed, the thumb out
+  const s = [[0, 0]];
+  FING.forEach(f => s.push([f[4] * 0.55 + Math.sign(f[4] || 1) * 0.04, -f[5][0] * 0.9 - 0.05], [0, -f[5][1] * 0.85], [0, -f[5][2] * 0.7]));
+  s.push([-0.35, -0.10], [0, -0.15], [0, -0.10]);
+  out.spread = s;
+  void rest;
+  return out;
+}
+
 function handSpec(left) {
-  const ch = [], C = GRIP;
+  const ch = [];
   // ---- CUFF: a rubber tube from under the sleeve's end down onto the wrist, a rolled
   // retaining ring over it, and the cuff's lip turned out at the wrist
   const cuff = [[0.104, 0.115], [0.100, 0.085], [0.088, 0.045], [0.075, 0.015], [0.068, -0.005], [0.066, -0.020]];
@@ -476,62 +624,52 @@ function handSpec(left) {
   Lathe(smoothProf(cuff.map(q => [q[0], q[1]]), 3), M.RUBBER, { sz: 0.92 })));
   ch.push(ETor(0.077, 0.0095, 0.028, M.RUBBER, 1, 0.92));                 // the rolled ring
   ch.push(ETor(0.069, 0.0055, -0.016, M.RUBBER, 1, 0.92));                // the cuff's lip
-  // ---- THE HAND. Wrist (forearm end) at y ~ -0.02, palm ~0.17 long, a big working hand.
+  // ---- THE HAND, open (the rest pose the bones are laid in)
   const H = [];
-  // wrist and the heel of the hand
-  H.push(E([0.0, -0.035, 0.022], [0.042, 0.052, 0.048], M.SKIN));
-  // palm block: back of the hand faces +X, slightly cupped, wider at the knuckles
-  H.push(Box([0.010, -0.105, 0.058], [0.024, 0.060, 0.056], 0.022, M.SKIN, [0, 0, 0.06]));
-  H.push(E([-0.012, -0.090, 0.025], [0.026, 0.050, 0.034], M.SKIN));   // thenar/hypothenar pad
-  // fingers: index (front, +Z) to little; knuckle (MCP) on the back side above the bar,
-  // each finger wraps the bar on a circle round C: down the outboard side, under, up inside
-  const Rc = 0.046, fz = [0.107, 0.077, 0.048, 0.020], len = [1.0, 1.06, 0.98, 0.80], rad = [0.0168, 0.0172, 0.0162, 0.0140];
-  const curl = [0, 0, 3, 7];                    // the little finger curls a touch tighter
-  const JT = [];                                 // finger joints: [centre, axis] for the skin creases
-  for (let i = 0; i < 4; i++) {
-    const z = fz[i], sc = len[i], r0 = rad[i];
-    const K = [0.030, -0.158 + (1 - sc) * 0.030, z];                     // MCP knuckle
-    const ang = [40, -12 - curl[i], -78 - curl[i], -140 - 2 * curl[i]].map(a => a * Math.PI / 180);
-    const pts = [K];
-    for (let k = 1; k < 4; k++) pts.push([C[0] + Math.cos(ang[k]) * Rc * (0.94 + 0.06 * sc), C[1] + Math.sin(ang[k]) * Rc * (0.94 + 0.06 * sc) - (1 - sc) * 0.012, z]);
-    const rr = [r0 * 1.08, r0, r0 * 0.93, r0 * 0.84];
-    for (let k = 0; k < 3; k++) H.push(Cap(pts[k], pts[k + 1], rr[k], rr[k + 1], M.SKIN));
-    for (let k = 1; k < 3; k++) JT.push([pts[k], norm(sub(pts[k + 1], pts[k - 1]))]);
-    H.push(Sph(K, r0 * 1.22, M.SKIN));                                    // the knuckle
-    H.push(Sph(pts[1], rr[1] * 1.10, M.SKIN));                            // PIP
-    H.push(Sph(pts[2], rr[2] * 1.06, M.SKIN));                            // DIP
-    // the nail: on the back of the last phalanx (the side away from the bar)
-    const A = pts[2], B = pts[3], dir = norm(sub(B, A)), outw = norm(sub(add(A, dir, 0.5 * Math.hypot(...sub(B, A))), C));
-    const nc = add(add(A, sub(B, A), 0.62), outw, rr[3] * 0.80);
+  H.push(E([0.0, -0.035, 0.024], [0.040, 0.052, 0.046], M.SKIN));                     // wrist + heel
+  H.push(Box([0.009, -0.100, 0.061], [0.021, 0.056, 0.050], 0.019, M.SKIN, [0, 0, 0.05]));   // palm
+  H.push(E([-0.012, -0.078, 0.080], [0.022, 0.040, 0.026], M.SKIN));                  // thenar pad
+  H.push(E([-0.010, -0.112, 0.026], [0.019, 0.044, 0.022], M.SKIN));                  // hypothenar
+  const JT = [];                                  // finger joints: [centre, axis] for the creases
+  const F = [];
+  for (const f of FING) {
+    const P = fingPts(f, 0, f[5]), r0 = f[3], rr = [r0 * 1.06, r0, r0 * 0.92, r0 * 0.82];
+    const parts = [];
+    for (let k = 0; k < 3; k++) parts.push(Cap(P[k], P[k + 1], rr[k], rr[k + 1], M.SKIN));
+    parts.push(Sph(P[0], r0 * 1.20, M.SKIN), Sph(P[1], rr[1] * 1.08, M.SKIN), Sph(P[2], rr[2] * 1.05, M.SKIN));
+    for (let k = 1; k < 3; k++) JT.push([P[k], norm(sub(P[k + 1], P[k - 1]))]);
+    // the nail on the back of the last phalanx (+X side, away from the palm)
+    const A = P[2], Bp = P[3], dir = norm(sub(Bp, A)), { ax } = fingFrame(f), outw = norm(cross(dir, ax));
+    const nc = add(add(A, sub(Bp, A), 0.60), outw, rr[3] * 0.82);
     const Y = dir, Z = outw, X = norm(cross(Y, Z));
-    H.push(Box(nc, [r0 * 0.62, Math.hypot(...sub(B, A)) * 0.30, 0.0022], 0.002, M.NAIL, null, [X[0], Y[0], Z[0], X[1], Y[1], Z[1], X[2], Y[2], Z[2]]));
+    parts.push(Box(nc, [r0 * 0.60, Math.hypot(...sub(Bp, A)) * 0.30, 0.0022], 0.002, M.NAIL, null, [X[0], Y[0], Z[0], X[1], Y[1], Z[1], X[2], Y[2], Z[2]]));
+    F.push(U(0.004, ...parts));
   }
-  // thumb: from the heel of the hand (inboard, front), across the front of the bar and
-  // pressed over the middle phalanges of the index and middle fingers
-  const T0 = [-0.012, -0.050, 0.088], T1 = [-0.030, -0.110, 0.130], T2 = [-0.020, -0.170, 0.136], T3 = [0.004, -0.208, 0.128];
-  H.push(Cap(T0, T1, 0.024, 0.020, M.SKIN), Cap(T1, T2, 0.020, 0.0175, M.SKIN), Cap(T2, T3, 0.0175, 0.0150, M.SKIN));
-  H.push(Sph(T1, 0.021, M.SKIN), Sph(T2, 0.018, M.SKIN));
   {
-    const dir = norm(sub(T3, T2)), outw = norm([0.25, 0.1, 1]), X = norm(cross(dir, outw)), Z = cross(X, dir);
-    H.push(Box(add(add(T2, sub(T3, T2), 0.6), Z, 0.0125), [0.0105, 0.012, 0.0022], 0.002, M.NAIL, null, [X[0], dir[0], Z[0], X[1], dir[1], Z[1], X[2], dir[2], Z[2]]));
+    const T = thumbPts(0, THUMB.rest), r = THUMB.rad, parts = [];
+    for (let k = 0; k < 3; k++) parts.push(Cap(T[k], T[k + 1], r[k], k < 2 ? r[k + 1] : r[2] * 0.86, M.SKIN));
+    parts.push(Sph(T[1], r[1] * 1.08, M.SKIN), Sph(T[2], r[2] * 1.05, M.SKIN));
+    const { ax } = thumbFrame(), dir = norm(sub(T[3], T[2])), outw = norm(cross(dir, ax));
+    const X = norm(cross(dir, outw)), Z = outw;
+    parts.push(Box(add(add(T[2], sub(T[3], T[2]), 0.6), Z, r[2] * 0.80), [0.0105, 0.012, 0.0022], 0.002, M.NAIL, null, [X[0], dir[0], Z[0], X[1], dir[1], Z[1], X[2], dir[2], Z[2]]));
+    F.push(U(0.004, ...parts));
   }
-  // the hand's skin: tendons on the back, knuckle creases, the finger joint creases, pores
+  // fingers join the palm softly, but never each other: the palm takes k 0.010, the
+  // fingers are a HARD union among themselves (bone heat must not see them as one web)
+  const hand = U(0.010, U(0.008, ...H), U(0, ...F));
   const skin = Disp([
     { type: 'fn', bake: true, amp: 0.0014, fn: (x, y, z) => {
       let o = 0;
-      // extensor tendons fanning over the back of the hand to each knuckle
       if (x > 0.015 && y < -0.03 && y > -0.17) for (let i = 0; i < 4; i++) {
-        const zt = 0.040 + (fz[i] - 0.040) * clamp((-y - 0.03) / 0.13, 0, 1);
+        const zt = 0.040 + (FING[i][1][2] - 0.040) * clamp((-y - 0.03) / 0.12, 0, 1);
         o += 0.0010 * gau((z - zt) / 0.0045) * sst(-0.035, -0.08, y);
       }
-      // creases across every finger joint (PIP, DIP): a few deep lines, only at the joint
       for (const [c, a] of JT) {
         const dx = x - c[0], dy = y - c[1], dz = z - c[2], d = Math.hypot(dx, dy, dz);
         if (d > 0.03) continue;
         const along = dx * a[0] + dy * a[1] + dz * a[2];
         o -= 0.0007 * gau(d / 0.016) * Math.pow(Math.abs(Math.sin(along * 380)), 6);
       }
-      // two veins over the back of the hand, wandering toward the knuckles
       if (x > 0.02) for (const [z0, z1, ph] of [[0.035, 0.085, 0.3], [0.060, 0.030, 1.7]]) {
         const t = clamp((-y - 0.04) / 0.10, 0, 1), zv = z0 + (z1 - z0) * t + 0.006 * Math.sin(t * 9 + ph);
         o += 0.0008 * gau((z - zv) / 0.0035) * sst(-0.04, -0.06, y) * (1 - sst(-0.13, -0.15, y));
@@ -539,7 +677,7 @@ function handSpec(left) {
       return o;
     } },
     { type: 'fbm', bake: true, amp: 0.00022, f: 260, oct: 2, seed: left ? 211 : 212 }
-  ], U(0.010, ...H));
+  ], hand);
   ch.push(skin);
   return U(0.004, ...ch);
 }
@@ -609,6 +747,135 @@ function bootSpec2(rig) {
   ch.push(Path(wl, 0.0105, M.LEATHER));
   for (let i = 0; i < 14; i++) { const q = full[Math.floor(i / 14 * full.length)]; ch.push(Sph([q[0] * 1.045, SOLE + DEP * 0.62, q[1] * 1.045], 0.0068, M.BRASS)); }
   return U(0.005, ...ch);
+}
+
+// ------------------------------------------------------------------------------------------
+// THE FACE (salprop). A man inside the bonnet, seen through the front light: a weathered
+// working diver of the 1920s-40s — a heavy moustache, a week of stubble, a face that has
+// been out in the weather, deep-set eyes. Sculpted in CENTIMETRES about the point between
+// his eyes and placed into the helmet frame by one scaled transform (FACE.k = 1 cm in helmet
+// units: the helmet frame is shrunk by HELM_S and 1 u ~ 0.6 m, so 1 cm = 1 / (60 x 0.85)).
+// Only the front of the head exists: the bonnet is solid copper behind z = FACE.cut (the
+// helmet sculpt's front cavity ends there), so the back of the skull would be wasted
+// triangles. The eyes are NOT here — they are two procedural eyeballs (salInstall.js) that
+// glance and blink; this sculpt carves the sockets they sit in and the lids round them.
+// Coordinates: +x his left, +y up, +z out of the faceplate; eyes at (+-EYE.x, 0, EYE.z).
+// ------------------------------------------------------------------------------------------
+export const FACE = { k: 1 / 51, at: [0, 0.468, 0.262], cut: -10.6 };
+export const EYE = { x: 3.15, y: 0.0, z: -1.15, r: 1.2 };
+const mirX = n => ({ t: 'mir', ax: 0, ch: [n] });
+function headCm() {
+  const S = M.SKIN, F = [];
+  // THE MASSES, sculptor's order: an egg of a cranium, the face's block hung under it, the jaw,
+  // the chin, blended big (k 1.6) so the planes turn into each other
+  F.push(E([0, 2.4, -8.0], [7.1, 9.0, 9.3], S));                                     // cranium
+  F.push(E([0, -4.4, -3.4], [4.5, 5.0, 4.0], S));                                    // the face's block
+  F.push(E([0, -7.3, -4.6], [4.7, 2.5, 4.0], S));                                    // jaw
+  F.push(E([0, -9.15, -0.9], [2.3, 1.45, 1.8], S));                                  // chin
+  F.push(mirX(E([3.9, -2.1, -2.0], [1.75, 1.2, 1.9], S)));                           // cheekbones
+  F.push(Cap([-3.9, 1.7, -0.2], [3.9, 1.7, -0.2], 1.15, 1.15, S));                   // brow ridge
+  F.push(mirX(E([EYE.x, 0.12, EYE.z + 0.2], [1.5, 1.3, 1.4], S)));                  // lids
+  // the mouth: upper lip (under the moustache), lower lip
+  F.push(E([0, -6.0, 0.35], [2.3, 0.8, 1.15], S));
+  F.push(E([0, -7.0, -0.15], [1.9, 0.55, 0.95], S));
+  // THE NOSE: a long bridge with a bump (broken once), a heavy tip, flared alae
+  F.push(Cap([0, 0.4, 0.5], [0, -1.6, 1.55], 0.74, 0.80, S));
+  F.push(Cap([0, -1.6, 1.55], [0.08, -3.55, 2.6], 0.80, 0.90, S));
+  F.push(Sph([0.06, -1.65, 1.72], 0.6, S));                                          // the bump
+  F.push(Sph([0.05, -3.9, 2.5], 1.08, S));                                           // tip
+  F.push(mirX(E([1.25, -4.3, 1.25], [0.9, 0.75, 0.95], S)));                         // alae
+  F.push(E([0, -4.75, 1.55], [0.5, 0.4, 0.85], S));                                  // columella
+  F.push(Cap([0, -8, -5.6], [0, -16, -6.4], 4.4, 4.8, S));                           // the neck
+  let head = U(1.0, U(1.6, ...F.slice(0, 5)), ...F.slice(5));
+  // the temples narrow in above the cheekbones
+  head = Sub(1.4, head, mirX(E([7.6, 1.2, -3.6], [1.6, 2.6, 2.8], S)));
+  // carve: nostrils, the mouth line, the eye openings (the lids' almond), and the hollow
+  // of each orbit the eyeball sits in
+  head = Sub(0.18, head,
+    mirX(E([0.72, -4.95, 1.75], [0.40, 0.26, 0.62], S)),
+    Box([0, -6.6, 1.0], [1.95, 0.07, 1.4], 0.06, S),
+    mirX(E([EYE.x, 0.02, EYE.z + 1.55], [1.46, 0.57, 1.6], S)),
+    mirX(Sph([EYE.x, EYE.y, EYE.z], EYE.r + 0.06, S)));
+  // THE MOUSTACHE: a heavy walrus, out over the lip and down past the corners of the mouth
+  const ms = U(0.45,
+    E([0, -5.5, 1.8], [2.2, 1.05, 1.0], S),
+    mirX(Cap([1.2, -5.8, 1.6], [2.7, -6.75, 1.0], 0.95, 0.62, S)),
+    mirX(Cap([2.7, -6.75, 1.0], [2.95, -7.5, 0.5], 0.62, 0.34, S)));
+  // eyebrows: low ridges of hair on the brow
+  const brows = mirX(Cap([1.4, 1.62, 1.0], [4.5, 1.8, 0.25], 0.30, 0.20, S));
+  head = U(0.25, head, ms, brows);
+  // the back is copper: cut flat behind the front cavity
+  head = I(0.2, head, Pl([0, 0, -1], -FACE.cut, S));
+  // AGE AND WEATHER, bake-only (texels, not triangles): forehead lines, crow's feet, the
+  // nasolabial fold, pores, stubble, and the moustache's hair
+  const C = FACE;
+  return Disp([
+    // the nasolabial fold and the mouth's corner creases: real geometry, a little
+    { type: 'fn', amp: 0.25, fn: (x, y, z) => {
+      const ax = Math.abs(x);
+      const t = clamp((-y - 3.6) / 3.2, 0, 1), xc = 2.0 + 1.0 * t;           // from the ala down past the mouth
+      return -0.22 * gau((ax - xc) / 0.35) * sst(-3.4, -4.2, y) * (1 - sst(-7.2, -7.8, y)) * sst(-1.5, 0.5, z);
+    } },
+    { type: 'fn', bake: true, amp: 0.12, fn: (x, y, z) => {
+      const ax = Math.abs(x);
+      let o = 0;
+      // forehead: three long wavering lines
+      if (y > 2.4 && y < 7.5 && z > -3) for (const yy of [3.3, 4.4, 5.6]) o -= 0.04 * gau((y - yy - 0.15 * Math.sin(x * 0.9 + yy)) / 0.13) * sst(5.2, 2.0, ax);
+      // crow's feet: a fan of creases at the outer corner of each eye
+      if (ax > 4.2 && ax < 6.2 && Math.abs(y) < 1.8) {
+        const a = Math.atan2(y, ax - 4.4);
+        o -= 0.035 * Math.pow(Math.abs(Math.sin(a * 5.5)), 8) * gau((Math.hypot(ax - 4.4, y) - 0.9) / 0.45);
+      }
+      // the bags under the eyes: a soft fold
+      o -= 0.05 * gau((Math.hypot((ax - EYE.x) / 1.6, (y + 1.25) / 0.25)) - 1) * sst(-2, 0, z);
+      // stubble: a dense pin field on the jaw, the chin, the cheeks below the bone and the lip
+      const beard = sst(-2.2, -3.4, y) * (y > -5 ? sst(2.4, 3.6, ax) : 1);
+      if (beard > 0) o += 0.03 * beard * Math.pow(vn(x * 9, y * 9, z * 9, 401), 4);
+      // moustache: hair combed down and out, strand grooves along it
+      const mz = gau((y + 5.6) / 0.9) * sst(0.0, 0.6, z) * (1 - sst(3.2, 3.6, ax));
+      if (mz > 0.01) o += 0.09 * mz * crease((x * 6.5 + Math.sign(x) * y * 3.0) + 2 * vn(x * 2, y * 2, z * 2, 402));
+      // brows: hair strands lying outward
+      const bz = gau((y - 1.65) / 0.45) * sst(1.2, 1.6, ax) * (1 - sst(4.6, 5.0, ax)) * sst(-0.5, 0.5, z);
+      if (bz > 0.01) o += 0.06 * bz * crease(ax * 9 - y * 4 + 2 * vn(x * 3, y * 3, 1, 403));
+      return o;
+    } },
+    { type: 'fbm', bake: true, amp: 0.012, f: 3.2, oct: 2, seed: 404 }       // pores
+  ], head);
+}
+function headSpec() {
+  return { t: 'xf', p: FACE.at, R: [1, 0, 0, 0, 1, 0, 0, 0, 1], s: FACE.k, ch: [headCm()] };
+}
+// paint (in the helmet frame: S.x/y/z are converted back to the face's centimetres)
+function headPaint() {
+  const k = FACE.k, A = FACE.at;
+  const cm = S => [(S.x - A[0]) / k, (S.y - A[1]) / k, (S.z - A[2]) / k];
+  const fnc = f => ['fn', S => { const [x, y, z] = cm(S); return f(x, y, z, S); }];
+  const P0 = PAINT([
+    // weathered: sun and wind on the nose, the cheekbones and the forehead
+    { c: [0.62, 0.30, 0.24], a: 0.45, m: [['mat', M.SKIN], fnc((x, y, z) => Math.max(gau(Math.hypot(x, y + 3.2) / 1.8), 0.8 * gau(Math.hypot(Math.abs(x) - 4.2, y + 2.2) / 1.6)) * sst(-1, 1.5, z))] },
+    { c: [0.48, 0.30, 0.22], a: 0.35, m: [['mat', M.SKIN], fnc((x, y) => sst(2.6, 4.5, y))] },
+    // mottled, freckled, broken veins on the cheeks
+    { c: [0.40, 0.24, 0.18], a: 0.35, m: [['mat', M.SKIN], ['fn', S => sst(0.55, 0.8, fbm(S.x, S.y, S.z, 90, 411, 3))]] },
+    // stubble: dark, peppered with grey, the jaw / chin / lower cheeks / upper lip
+    { c: [0.13, 0.11, 0.10], a: 0.78, ro: 0.75, m: [['mat', M.SKIN], fnc((x, y, z, S) => {
+      const ax = Math.abs(x), beard = sst(-2.4, -3.6, y) * (y > -5.2 ? sst(2.2, 3.6, ax) : 1) * (1 - gau(Math.hypot(x, (y + 6.5) / 0.6) / 1.9) * 0.6) * sst(-11.5, -10, y) * sst(-5.5, -3.5, z);
+      return beard * (0.55 + 0.45 * sst(0.35, 0.7, fbm(S.x, S.y, S.z, 160, 412, 2)));
+    })] },
+    { c: [0.46, 0.44, 0.42], a: 0.35, m: [['mat', M.SKIN], fnc((x, y, z, S) => sst(-2.4, -3.6, y) * sst(0.62, 0.75, fbm(S.x, S.y, S.z, 220, 413, 2)))] },
+    // the moustache: dark brown going grey, thick
+    { c: [0.12, 0.085, 0.065], a: 1.0, ro: 0.7, m: [['mat', M.SKIN], fnc((x, y, z) => Math.min(1, 1.3 * gau((y + 5.9 + 0.25 * Math.abs(x)) / 1.0)) * sst(0.4, 1.0, z) * (1 - sst(3.2, 3.6, Math.abs(x))))] },
+    { c: [0.48, 0.45, 0.42], a: 0.35, m: [['mat', M.SKIN], fnc((x, y, z, S) => gau((y + 5.65) / 0.95) * sst(0.1, 0.7, z) * (1 - sst(3.3, 3.7, Math.abs(x))) * sst(0.5, 0.75, fbm(S.x * 3, S.y, S.z, 120, 414, 2)))] },
+    // eyebrows
+    { c: [0.16, 0.12, 0.09], a: 0.9, ro: 0.7, m: [['mat', M.SKIN], fnc((x, y, z) => gau((y - 1.7) / 0.42) * sst(1.1, 1.6, Math.abs(x)) * (1 - sst(4.5, 5.0, Math.abs(x))) * sst(-0.6, 0.2, z))] },
+    // the hairline (receding, cropped short) at the top of the window
+    { c: [0.15, 0.12, 0.10], a: 0.85, ro: 0.8, m: [['mat', M.SKIN], fnc((x, y) => sst(6.4 + 0.25 * Math.abs(x), 7.2 + 0.25 * Math.abs(x), y))] },
+    // grime in the creases, a lick of red at the lids and lips
+    { c: [0.30, 0.17, 0.14], a: 0.5, m: [['mat', M.SKIN], ['cav', 0.03, 0.4]] },
+    { c: [0.55, 0.26, 0.22], a: 0.45, ro: 0.4, m: [['mat', M.SKIN], fnc((x, y, z) => gau(Math.hypot(x / 2.2, (y + 7.05) / 0.5)) + 0.6 * gau(Math.hypot((Math.abs(x) - EYE.x) / 1.4, y / 0.75)) * sst(-0.5, 0.3, z))] },
+    { c: [0.70, 0.52, 0.42], a: 0.35, ro: 0.38, m: [['mat', M.SKIN], ['cvx', 0.04, 0.4]] }
+  ]);
+  P0.mats[M.SKIN] = { c: [0.55, 0.37, 0.28], ro: 0.55 };
+  return P0;
 }
 
 // ------------------------------------------------------------------------------------------
@@ -725,7 +992,7 @@ function rigFromSource() {
   return readRig(fs.readFileSync(new URL('./diver.js', import.meta.url), 'utf8'));
 }
 export function pipeline() {
-  const rig = rigFromSource(), P = plan(rig), B = bones(P);
+  const rig = rigFromSource(), P = plan(rig), HB = handBones(), B = bones(P).concat(HB.map(b => ({ name: b.name, head: b.head, tail: b.tail, parent: b.parent }))), HP = handPoses();
   // no foot bones: the trouser and the boot shaft ride the shin (the foot pitches inside them)
   const legBones = ['hips', 'spine', 'thighL', 'shinL', 'thighR', 'shinR'];
   const pieces = [
@@ -740,23 +1007,47 @@ export function pipeline() {
       wrk: sleeveSpec(P, -1, true), cage: 0.02, ray: 0.045, skin: { allow: ['spine', 'upArmR', 'foreArmR', 'handR'] } }),
     piece('belt', 'gear', beltSpec(P), { tris: 6500, h: 0.0028, loH: 0.007, paint: gearPaint() }),
     piece('pack', 'gear', packSpec(), { tris: 5000, h: 0.003, paint: gearPaint() }),
-    piece('handL', 'gear', handSpec(true), { tris: 5200, h: 0.0018, loH: 0.0045, paint: handPaint(true) }),
-    piece('handR', 'gear', handSpec(false), { tris: 5200, h: 0.0018, loH: 0.0045, paint: handPaint(false) }),
+    // (salprop) the hands are skinned to their own 16 finger bones (handBones, wrist frame)
+    piece('handL', 'gear', handSpec(true), { tris: 6400, h: 0.0018, loH: 0.0042, paint: handPaint(true), skin: { allow: HB.map(b => b.name), smooth: 2 } }),
+    piece('handR', 'gear', handSpec(false), { tris: 6400, h: 0.0018, loH: 0.0042, paint: handPaint(false), skin: { allow: HB.map(b => b.name), smooth: 2 } }),
+    // (salprop) THE FACE behind the front light, its own 1024 set
+    piece('head', 'face', headSpec(), { tris: 9000, h: 0.0016, loH: 0.0040, paint: headPaint(), cage: 0.008, ray: 0.025 }),
     piece('boot', 'gear', bootSpec2(rig), { tris: 6500, h: 0.0025, loH: 0.006, paint: gearPaint() })
   ];
   return {
     name: 'salSkin', out: 'assets/salskin',
-    sets: { helm: SET, dress: Object.assign({}, SET, { wrinkle: true, wrinkleHalf: true }), gear: SET1K },
+    sets: { helm: SET, dress: Object.assign({}, SET, { wrinkle: true, wrinkleHalf: true }), gear: SET1K, face: SET1K },
     pieces,
     skin: { bones: B },
     meta: {
-      rig: { armL: rig.armL, legL: rig.legL, soleY: rig.soleY, pack: rig.pack, spineY: rig.spineY },
+      rig: { armL: rig.armL, legL: rig.legL, soleY: rig.soleY, pack: rig.pack, spineY: rig.spineY, neckY: rig.neckY, helmS: rig.helmS },
       mirror: ['handR', 'boot'],
       skinned: ['trunk', 'sleeveL', 'sleeveR'],
       bones: B.map(b => b.name),
       grip: GRIP, beltY: P.beltY, inBootY: -P.inBoot,
+      // (salprop) the hand rig (wrist frame, authored left) and its solved poses; the face's eyes
+      hand: { bones: HB.map(b => ({ name: b.name, parent: b.parent || null, head: b.head, ax: b.ax, sw: b.sw })), poses: { grip: HP.grip, knife: HP.knife, relax: HP.relax, spread: HP.spread }, fitErr: HP.fitErr },
+      face: { k: FACE.k, at: FACE.at, cut: FACE.cut, eye: EYE, cav: HELM_CAV, port: HELM_PORT0() },
       metal: 'ormB'
     },
     compress: { mesh: 'draco', tex: 'ktx2' }
+  };
+}
+
+// Look-dev preview for sculptlab.html (?lab&job=./src/entities/salSkinSculpt.js%23preview&p=head)
+// (no rig read: the head and the hands do not depend on it)
+export function preview() {
+  const q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+  const want = (q.get('p') || 'head').split(','), k = +(q.get('k') || 2);
+  const all = [piece('head', 'face', headSpec(), { tris: 9000, h: 0.0016, loH: 0.004, paint: headPaint() }),
+    piece('handL', 'gear', handSpec(true), { tris: 6400, h: 0.0018, loH: 0.0042, paint: handPaint(true) })];
+  // eyeball stand-ins (the game's eyes are procedural): white spheres where salInstall puts them
+  all.push(piece('eyes', 'face', { t: 'xf', p: FACE.at, R: [1, 0, 0, 0, 1, 0, 0, 0, 1], s: FACE.k, ch: [mirX(Sph([EYE.x, EYE.y, EYE.z], EYE.r, M.IVORY))] }, { tris: 800, h: 0.0016 }));
+  const parts = all.filter(p => want.includes(p.name));
+  return {
+    key: 'preview-salSkin-' + want.join('-') + '-' + k + '-' + Math.random(),
+    parts: parts.map(p => ({ name: p.name, sdf: p.sdf, h: p.hi.h * k, tris: p.lo.tris, err: p.lo.h })),
+    atlas: { size: +(q.get('s') || 1024), paint: parts[0].paint, kEps: parts[0].kEps, ao: parts[0].ao },
+    layout: Object.fromEntries(parts.map(p => [p.name, [0, 0, 0]]))
   };
 }

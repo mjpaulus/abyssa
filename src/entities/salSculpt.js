@@ -57,6 +57,8 @@ export function readRig(src) {
     pack: need(/pk\.position\.set\(([^)]*)\)/, 'pack position')[1].split(',').map(Number),
     armR: limb('armR', 'spine'), armL: limb('armL', 'spine'), legR: limb('legR', 'hips'), legL: limb('legL', 'hips'),
     soleY: +need(/const SOLE_Y\s*=\s*(-?[\d.]+)/, 'SOLE_Y')[1],
+    // (salprop) the helmet + corselet group scale and the shoulder line it shrinks about
+    helmS: +need(/const HELM_S\s*=\s*([\d.]+)/, 'HELM_S')[1], corsY: +need(/CORS_Y\s*=\s*([\d.]+)/, 'CORS_Y')[1],
     P: { upArm: prof('P_UPARM'), foreArm: prof('P_FOREARM'), thigh: prof('P_THIGH'), shank: prof('P_SHANK') }
   };
   // the gait's own constants must agree with the build's (diver.js keeps both)
@@ -395,6 +397,9 @@ export const hR = y => {
 const PORTS = [[0.198, 0, 0.455, 0.402, -0.08, 0, 12, false], [0.132, 0.376, 0.470, 0.128, 0, 1.245, 8, true],
   [0.132, -0.376, 0.470, 0.128, 0, -1.245, 8, true], [0.126, 0, 0.818, 0.172, -1.16, 0, 8, true]];
 const portAxis = q => mulRv(eul(q[4], q[5], 0), [0, 0, 1]);
+// the helmet's front cavity (salprop): centre, radii, and the faceplate bore through to it
+export const HELM_CAV = { c: [0, 0.47, 0.12], r: [0.405, 0.38, 0.30], bore: 0.163 };
+export const HELM_PORT0 = () => ({ c: PORTS[0].slice(1, 4), n: portAxis(PORTS[0]) });
 function portOff(q) {        // diver.js sOff: march out along the axis to the copper
   const a = portAxis(q);
   for (let t = -0.05; t < 0.2; t += 0.001) if (Math.hypot(q[1] + a[0] * t, q[3] + a[2] * t) > hR(q[2] + a[1] * t)) return t;
@@ -439,6 +444,13 @@ function helmetSpec() {
     return Sph(p, r, M.COPPER);
   });
   let bonnet = Sub(0.07, spun, ...dents);
+  // (salprop) THE FRONT LIGHT OPENS INTO THE HELMET. There is a man in here now (salSkinSculpt
+  // headSpec), so the bonnet is hollowed in front — an ellipsoidal cavity with a 2-4 cm copper
+  // wall — and the faceplate's bore cut through to it. The back stays solid (nothing shows
+  // through the side and top lights: they keep their dark recess discs). The installer lines
+  // the cavity with a dark tinned-copper skin and drops the front recess disc.
+  bonnet = Sub(0.006, bonnet, E(HELM_CAV.c, HELM_CAV.r, M.COPPER),
+    Cap(add(PORTS[0].slice(1, 4), portAxis(PORTS[0]), -0.10), add(PORTS[0].slice(1, 4), portAxis(PORTS[0]), 0.14), HELM_CAV.bore, HELM_CAV.bore, M.COPPER));
   bonnet = Disp([
     { type: 'fbm', amp: 0.0012, f: 4, oct: 2, seed: 5 },                                  // not quite true: raised by hand
     { type: 'pits', bake: true, amp: 0.00016, f: 45, dens: 0.85, r: 0.6, seed: 6 },      // planishing hammer
@@ -995,7 +1007,7 @@ export function pipeline() {
     pieces,
     // the rig this bake was sculpted to; salInstall.js checks it against the live rig
     meta: {
-      rig: { armL: rig.armL, legL: rig.legL, soleY: rig.soleY, pack: rig.pack },
+      rig: { armL: rig.armL, legL: rig.legL, soleY: rig.soleY, pack: rig.pack, spineY: rig.spineY, neckY: rig.neckY, helmS: rig.helmS },
       mirror: ['upperArm', 'foreArm', 'gloveR', 'thighR', 'shin', 'boot'],
       metal: 'ormB'
     },

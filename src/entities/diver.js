@@ -62,7 +62,16 @@ function curve(keys) {
 // 0.05, so the ball rocker gave the stance leg almost no extra reach and the stride could not
 // lengthen without the pelvis bouncing. It now sits 0.15 above the sole (10.8%), inside the
 // boot over the heel, with the shin 0.2165 longer: same hip-to-sole leg, same LIFT.
-const UP_L = 0.562, LO_L = 0.6815, HIP_X = 0.225;
+// THE THIGH (salprop, 2026-10-01): 0.562 -> 0.668. Hip-to-sole 1.39 -> 1.50 (+8% of the leg), all of it in
+// the femur: the thigh was 0.68 of knee-to-sole (a man's is ~0.86) — a low knee under a short thigh, the
+// proportion of a toy. The shank, the ankle and the boot are unchanged.
+const UP_L = 0.668, LO_L = 0.6815, HIP_X = 0.225;
+// THE HARD-HAT SCALE (salprop). The bonnet read 0.54 m wide (a Mark V's is ~0.43) and the breastplate
+// as wide again: the biggest remaining toy cue. Helmet and corselet are built (and sculpted) at their old
+// size and shrunk as one group, the corselet about the SHOULDER LINE (spine y CORS_Y), so the arm pivots
+// keep their height and the brass comes down over them; the neck pivot follows the collar. Literals: the
+// sculpt pipeline parses them (salSculpt readRig) and the installer refuses a bake made to another scale.
+const HELM_S = 0.85, CORS_Y = 0.615;
 // The lead sole plate's UNDERSIDE in the ankle frame — the IK plants on exactly this.
 const SOLE_Y = -0.15;
 // How far the boot rose up the ankle frame when the ankle came down (the boot was authored
@@ -71,7 +80,12 @@ const BOOT_D = 0.3665 + SOLE_Y;
 
 // Shared per-frame uniforms, written by updateDiver (two/three float writes a frame):
 // uSalWet (dress soak 0..1), uSalRootY (sole height, world), uSalDrop (beads on the glass).
-export const salShared = { uSalWet: { value: 0 }, uSalRootY: { value: 0 }, uSalDrop: { value: 0.15 } };
+export const salShared = { uSalWet: { value: 0 }, uSalRootY: { value: 0 }, uSalDrop: { value: 0.15 },
+  // (salprop) breath fogging the inside of the front light (0..1, the glass shader), the hands'
+  // pose weights [relax, grip, knife, spread] per side, and what the face inside is looking at
+  uSalFog: { value: 0 },
+  hand: { L: new Float32Array([1, 0, 0, 0]), R: new Float32Array([0, 1, 0, 0]) },
+  face: { have: false, x: 0, y: 0, z: 0, stress: 0, swim: 0 } };
 
 // ---- procedural PBR maps ----
 // One height field drives albedo, roughness and normal together, so verdigris and wear
@@ -323,9 +337,23 @@ metalize(lead, { set: castM, tile: 4.0, ns: 0.9, edge: 0.12, tarn: 0x9a9890, ver
 
 // ---- THE GLASS SHADER (port glass only) ----
 const GL_FS_COMMON = `
-uniform sampler2D tSalDrop; uniform float uSalDropK;
+uniform sampler2D tSalDrop; uniform float uSalDropK; uniform float uSalFog;
 varying vec3 vGlP; varying vec3 vGlN;
-float glDrop;`;
+float glDrop; float glFog;`;
+// (salprop) BREATH ON THE GLASS: each exhale fogs the inside of the FRONT light a little —
+// a soft bloom low in the port where the breath hits it, ragged at the edge, gone again on
+// the inhale. Lit like the glass (a pale diffuse film, never emissive), faint: the face
+// behind it must stay readable, and the faceplate must never go back to a white disc.
+const GL_FS_FOG = `
+{
+  float front = step(0.30, vGlP.z) * (1.0 - step(0.24, abs(vGlP.x))) * step(0.5, vColor.r);
+  vec2 q = vec2(vGlP.x, vGlP.y - 0.405);
+  float rag = 0.5 + 0.5 * sin(vGlP.x * 61.0 + sin(vGlP.y * 47.0) * 2.0) * sin(vGlP.y * 53.0 - vGlP.x * 23.0);
+  glFog = uSalFog * front * (1.0 - smoothstep(0.03 + 0.05 * uSalFog, 0.11 + 0.05 * uSalFog + 0.025 * rag, length(q)));
+  // the front light is looked THROUGH now (there is a face behind it): its own film is darker
+  diffuseColor.rgb *= 1.0 - 0.6 * front;
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.45, 0.44), glFog * 0.5);
+}`;
 const GL_FS_NORMAL = `
 {
   vec3 gn = normalize(vGlN);
@@ -341,16 +369,18 @@ const GL_FS_ALPHA = `
 {
   float fr = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 2.2);
   float rec = 1.0 - step(0.5, vColor.r);
-  diffuseColor.a = mix(clamp(mix(0.22, 0.94, fr) + glDrop * 0.35, 0.0, 1.0), 1.0, rec);
+  diffuseColor.a = mix(clamp(mix(0.22, 0.94, fr) + glDrop * 0.35 + glFog * 0.16, 0.0, 1.0), 1.0, rec);
 }`;
 const _drops = dropletSet();
 glassMat.onBeforeCompile = sh => {
-  Object.assign(sh.uniforms, { tSalDrop: { value: _drops.nrm }, uSalDropK: salShared.uSalDrop });
+  Object.assign(sh.uniforms, { tSalDrop: { value: _drops.nrm }, uSalDropK: salShared.uSalDrop, uSalFog: salShared.uSalFog });
   sh.vertexShader = sh.vertexShader
     .replace('#include <common>', '#include <common>\nvarying vec3 vGlP; varying vec3 vGlN;')
     .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGlP = position; vGlN = normal;');
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', '#include <common>\nuniform mat3 normalMatrix;\n' + GL_FS_COMMON)
+    .replace('#include <color_fragment>', '#include <color_fragment>\n' + GL_FS_FOG)
+    .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.55, glFog);')
     .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + GL_FS_NORMAL)
     .replace('#include <opaque_fragment>', GL_FS_ALPHA + '\n#include <opaque_fragment>');
 };
@@ -945,12 +975,17 @@ export const diver = (() => {
   const body = new THREE.Group(); g.add(body); g.body = body;
   const hips = new THREE.Group(); hips.position.y = -0.10; body.add(hips); g.hips = hips;
   const spine = new THREE.Group(); spine.position.y = 0.20; hips.add(spine); g.spine = spine;
-  const neck = new THREE.Group(); neck.position.y = 0.76; spine.add(neck); g.neck = neck;
+  // neck: the old 0.76 brought in with the corselet's collar: CORS_Y + (0.76 - CORS_Y) * HELM_S
+  const neck = new THREE.Group(); neck.position.y = 0.73825; spine.add(neck); g.neck = neck;
+  // the corselet group: everything that was the breastplate (and the dress under it), shrunk about the
+  // shoulder line (see HELM_S)
+  const cors = new THREE.Group(); cors.position.y = CORS_Y * (1 - HELM_S); cors.scale.setScalar(HELM_S); spine.add(cors); g.cors = cors;
 
   // ---- helmet: lathed bonnet with a real Mark V profile ----
   // Parented to its own group so an authored glTF helmet (entities/helmetSwap.js) can
   // replace it wholesale: hide this group, add the loaded model to `neck`.
   const helmGroup = new THREE.Group();
+  helmGroup.scale.setScalar(HELM_S);
   neck.add(helmGroup);
   g.helmGroup = helmGroup;
   {
@@ -1039,7 +1074,7 @@ export const diver = (() => {
     // brass crest strip, front faceplate to top port
     p.add(xf(new THREE.TorusGeometry(0.40, 0.019, 5, 20, 1.15).rotateZ(0.42).rotateY(Math.PI / 2), 0, 0.455, 0), brass);
     // exhaust valve, right of the faceplate — bubbles vent here
-    const ex = new THREE.Group(); ex.position.set(-0.352, 0.315, 0.245); neck.add(ex); g.exhaust = ex;
+    const ex = new THREE.Group(); ex.position.set(-0.352 * HELM_S, 0.315 * HELM_S, 0.245 * HELM_S); neck.add(ex); g.exhaust = ex;
     // THE EXHAUST VALVE as a fitting: a chamfered base flange sweated to the bonnet, the
     // valve barrel, a hex body, the knurled adjusting cap the diver screws down with his
     // chin-side hand, and the spitcock lever. Axis radial off the bonnet at the vent.
@@ -1103,7 +1138,7 @@ export const diver = (() => {
   {
     const ZS = 0.78, SX = 0.93, SKIRT = 0.395;
     // crevice depth = how close a fitting sits to the corselet's (elliptical) surface
-    const p = Part(spine, (x, y, z) => 1 - ss(0.004, 0.034, Math.hypot(x / SX, z / (SX * ZS)) - bpR(y)));
+    const p = Part(cors, (x, y, z) => 1 - ss(0.004, 0.034, Math.hypot(x / SX, z / (SX * ZS)) - bpR(y)));
     // the dress under the brass, full height
     p.add(aux(lathe(BP, 30).scale(SX * 0.985, 1, ZS * 0.985), (x, y, z, o) => { o[1] = seamD(x, z, 1); }), leather);
     // the brass shell: the same profile from the skirt up, spun smooth (40 segments)
@@ -1246,7 +1281,7 @@ export const diver = (() => {
 
   // ---- backpack shoulder straps + white trim flashes, lying on the carapace ----
   {
-    const p = Part(spine);
+    const p = Part(cors);
     for (const sx of [-1, 1]) {
       // the harness straps lie ON the brass now and end above the skirt (buckled), instead
       // of hanging a brass block into the air under it
@@ -1258,7 +1293,8 @@ export const diver = (() => {
 
   // ---- backpack apparatus: tank, bottle, regulator box and its gauge ----
   {
-    const pk = new THREE.Group(); pk.position.set(0, 0.40, -0.435); spine.add(pk);
+    // (salprop) moved in with the shrunk corselet's back: the old (0, 0.40, -0.435) about CORS_Y x HELM_S
+    const pk = new THREE.Group(); pk.position.set(0, 0.43225, -0.36975); spine.add(pk);
     g.pack = pk;
     const p = Part(pk);
     p.add(xf(new THREE.BoxGeometry(0.46, 0.60, 0.07), 0, 0.02, 0.075), darkLeather);      // back plate
@@ -1288,7 +1324,8 @@ export const diver = (() => {
   {
     const p = Part(spine);
     const c = new THREE.CatmullRomCurve3([
-      V3(-0.155, 0.755, -0.445), V3(-0.235, 0.885, -0.415), V3(-0.330, 1.035, -0.375), V3(-0.352, 1.118, -0.338)
+      // regulator (pack + (-0.155, 0.355, -0.01)) up to the gooseneck's lower nut (neck + HELM_S x P3)
+      V3(-0.155, 0.78725, -0.37975), V3(-0.215, 0.890, -0.360), V3(-0.282, 1.000, -0.318), V3(-0.2992, 1.0595, -0.2873)
     ]);
     p.add(new THREE.TubeGeometry(c, 24, 0.052, 12, false), hoseMat);
     // brass ferrules crimped on at both ends, and the union nut where it meets the regulator
@@ -1351,10 +1388,10 @@ export const diver = (() => {
     return { root, mid, end, pu, pl, r, upLen, loLen, taper, up: upProf, lo: loProf };
   }
   // the diver faces +Z, so his right side is -X
-  g.armR = limb(spine, -0.500, 0.615, 0.50, 0.42, 0.150, 0.86, 1, P_UPARM, P_FOREARM);
-  g.armL = limb(spine, 0.500, 0.615, 0.50, 0.42, 0.150, 0.86, -1, P_UPARM, P_FOREARM);
-  g.legR = limb(hips, -0.225, 0.0, 0.562, 0.6815, 0.186, 0.88, 0, P_THIGH, P_SHANK);
-  g.legL = limb(hips, 0.225, 0.0, 0.562, 0.6815, 0.186, 0.88, 0, P_THIGH, P_SHANK);
+  g.armR = limb(spine, -0.460, 0.615, 0.50, 0.42, 0.150, 0.86, 1, P_UPARM, P_FOREARM);
+  g.armL = limb(spine, 0.460, 0.615, 0.50, 0.42, 0.150, 0.86, -1, P_UPARM, P_FOREARM);
+  g.legR = limb(hips, -0.225, 0.0, 0.668, 0.6815, 0.186, 0.88, 0, P_THIGH, P_SHANK);
+  g.legL = limb(hips, 0.225, 0.0, 0.668, 0.6815, 0.186, 0.88, 0, P_THIGH, P_SHANK);
 
   // sleeves: piping down the outer seam, and the canvas bunching at the elbow
   for (const [arm, sx] of [[g.armR, -1], [g.armL, 1]]) {
@@ -1596,7 +1633,8 @@ export const diver = (() => {
   // ---- lantern: brass cage, glass panes, live flame ----
   {
     const pivot = new THREE.Group();
-    pivot.position.set(0, -0.278, 0.10);
+    // (salprop) under the middle of the fist: the bail's top is the rigged hand's grip bar
+    pivot.position.set(0.004, -0.285, 0.062);
     g.armR.end.add(pivot);
     g.lantPivot = pivot;
     const bail = new THREE.Mesh(new THREE.TorusGeometry(0.085, 0.011, 5, 14, Math.PI), brass);
@@ -2015,7 +2053,7 @@ function evalSlash(ts) {
 // ---- runtime state ----
 // Legs are 8% longer and the boots deeper than the old build, so LIFT is re-derived to keep
 // the soles planted on player.pos - 1.35 (the collision floor) in the rest pose.
-const LIFT = 0.163;
+const LIFT = 0.269;   // (salprop) +0.106 with the thigh
 // gb boots at 1 (standing), not 0: every session now opens with Sal on the raft's deck
 // behind the title, and a 0 boot meant the first thing anyone ever saw was the frog-kick
 // pose easing out — legs drawn up, boots half a metre off the planks he is standing on.
@@ -2096,7 +2134,9 @@ const CZ_HEEL = -0.16, CZ_FLAT = 0.02, CZ_BALL = 0.315;
 // stride, ~0.1 u: the bob is an output, not a style choice, and the slope, the deck,
 // the start, the stop and the shuffle all get it for free from their own anchors.
 // Live knobs: window.__gait.{stride, kMid, kIdle, kCap, soft}.
-const GAIT_STRIDE0 = 2.7;
+// 2.70 -> 2.90 (salprop, the longer thigh): measured on the fixed-step harness, the same
+// seabed run, 118 -> 110 steps/min, step / leg 0.89 -> 0.95 (the leg is 1.50 now, not 1.39).
+const GAIT_STRIDE0 = 2.9;
 const GAIT = { stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, rise: 30 };
 window.__gait = GAIT;
 // Hip-to-ankle reach at a knee angle (degrees): the law of cosines on the two bones.
@@ -2802,7 +2842,8 @@ const HEAD_CTR = 0.8;           // how much of the spine's yaw the neck takes ba
 // lateral shift; yawK = thorax counter-rotation (world) per unit of pelvis yaw; headK = the
 // share of the thorax's gait yaw/roll the neck takes back out; f/d = the trunk's spring;
 // lag/lagF = the carried bonnet's pitch lag behind the body's lean.
-const CHAIN = { on: 1, kH: 0.6, yawK: 0.5, headK: 0.8, f: 22, d: 0.9, lag: 0.5, lagF: 5 };
+// kH 0.6 -> 0.5 (salprop): the longer stride swung the bonnet to 31% of the hips; 0.5 holds it at ~22%
+const CHAIN = { on: 1, kH: 0.5, yawK: 0.5, headK: 0.8, f: 22, d: 0.9, lag: 0.5, lagF: 5 };
 window.__chain = CHAIN;
 const chR = { x: 0, v: 0 }, chY = { x: 0, v: 0 }, hdC = { x: 0, v: 0 };
 let peerT = -1, peerW = 0;
@@ -3490,7 +3531,7 @@ export function updateDiver(dt, t, player) {
   {
     const py = pc[CH.pYaw], pr = pc[CH.pRoll], sx = b.position.x;
     const pivX = sx - 0.20 * Math.sin(pr);
-    const thW = Math.asin(clamp((pivX - CHAIN.kH * sx) / 0.76, -0.3, 0.3));
+    const thW = Math.asin(clamp((pivX - CHAIN.kH * sx) / 0.738, -0.3, 0.3));   // 0.738: the neck pivot over the spine's
     spring(chR, (thW - pr) * gC, dt, CHAIN.f, CHAIN.d);
     spring(chY, -(1 + CHAIN.yawK) * py * gC, dt, CHAIN.f, CHAIN.d);
   }
@@ -3659,7 +3700,31 @@ export function updateDiver(dt, t, player) {
     }
   }
   updateBubbles(dt, t, player.vel);
+
+  // ---- (salprop) THE HANDS, THE FACE, THE BREATH ON THE GLASS (scalars for salInstall.js) ----
+  {
+    // left hand: the knife while it is out of the scabbard, a hand on the rung or the valve,
+    // spread to scull off the bottom, an empty working hand on it. The right keeps the lantern.
+    const kw = slashT >= 0 ? ss(0.05, 0.085, slashT) * (1 - ss(0.50, 0.535, slashT)) : 0;
+    const gw2 = Math.max(ladderF, 0.65 * valveW);
+    const sw2 = Math.max(1 - gb, grabW, burstW) * (1 - ladderF);
+    const L = salShared.hand.L, r = Math.min(1, (kw > L[2] ? 30 : 9) * dt);
+    const tg = _hTg;
+    tg[1] = Math.min(gw2, 1 - kw); tg[2] = kw;
+    tg[3] = Math.min(sw2, 1 - kw - tg[1]); tg[0] = Math.max(0, 1 - tg[1] - tg[2] - tg[3]);
+    for (let i = 0; i < 4; i++) L[i] += (tg[i] - L[i]) * (i === 2 ? Math.min(1, 30 * dt) : r);
+    const F = salShared.face;
+    F.have = lookHave && lookW > 0.05; F.x = lookT.x; F.y = lookT.y; F.z = lookT.z;
+    F.stress = breathStress(); F.swim = 1 - gb;
+    // the exhale fogs the front light; the inhale clears it (a little more in the cold deep)
+    const ph = breathPh % TAU, exh = ph > Math.PI && ph < Math.PI + 2.0;
+    fogV += ((exh ? 1 : 0) - fogV) * Math.min(1, (exh ? 1.8 : 0.8) * dt);
+    salShared.uSalFog.value = fogV * (submerged ? 0.5 : 0.35);
+  }
+  if (salShared.tick) salShared.tick(dt);   // salInstall: finger bones, the eyes
 }
+let fogV = 0;
+const _hTg = new Float32Array(4);
 
 // SALSCULPT HOOK (2/2): sculpted meshes replace the procedural ones group by group
 // (salInstall.js); the rig, every timing and every anchor above stay exactly as built.
@@ -3673,16 +3738,18 @@ export function lanternWorldPos(target) {
 // The two spheres that shadow the lantern's glow in the water (water.js GLSL_LAMP):
 // the chest (corselet + breastplate) and the bonnet, world centre + radius, written
 // into out[0..7]. Radii are the rig's own extents (bonnet bbox 1.14 wide, corselet
-// ~0.95), slightly inside them so the shadow never reads wider than the man.
+// ~0.95), slightly inside them so the shadow never reads wider than the man. Both are
+// measured in the frames of the groups that carry them (cors, helmGroup), so they shrink
+// with HELM_S: centres through the groups' transforms, radii x HELM_S.
 const _occV = V3();
 export function diverOccluders(out) {
   const sw = diver.visible ? 1 : 0;
-  diver.spine.updateWorldMatrix(true, false);
-  _occV.set(0, 0.36, 0); diver.spine.localToWorld(_occV);
-  out[0] = _occV.x; out[1] = _occV.y; out[2] = _occV.z; out[3] = 0.44 * sw;
-  diver.neck.updateWorldMatrix(true, false);
-  _occV.set(0, 0.44, 0); diver.neck.localToWorld(_occV);
-  out[4] = _occV.x; out[5] = _occV.y; out[6] = _occV.z; out[7] = 0.40 * sw;
+  diver.cors.updateWorldMatrix(true, false);
+  _occV.set(0, 0.36, 0); diver.cors.localToWorld(_occV);
+  out[0] = _occV.x; out[1] = _occV.y; out[2] = _occV.z; out[3] = 0.44 * HELM_S * sw;
+  diver.helmGroup.updateWorldMatrix(true, false);
+  _occV.set(0, 0.44, 0); diver.helmGroup.localToWorld(_occV);
+  out[4] = _occV.x; out[5] = _occV.y; out[6] = _occV.z; out[7] = 0.40 * HELM_S * sw;
   return out;
 }
 
