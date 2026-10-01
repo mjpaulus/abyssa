@@ -29,7 +29,8 @@
 //                Wrenninge multiple-scattering octaves, 6-step light march, ambient from
 //                the sky LUT, curl-distorted Worley erosion, per-type height gradients,
 //                lightning lighting the inside of the deck, cirrus plane above.
-//                Marched at 1/uDiv resolution, IGN-jittered, temporally accumulated in a
+//                Marched into a target held at a PIXEL BUDGET (VSKY.marchPx, ~360k: about
+//                third-res at a 3 MP internal frame), IGN-jittered, temporally accumulated in a
 //                low-res history (direction reprojection: the layer is hundreds of units
 //                away, so camera rotation is the only motion that matters).
 //   COMPOSITE    the background dome samples the history by projecting its own view

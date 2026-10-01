@@ -1,4 +1,6 @@
 // PUFF-CLUSTER CLOUDS — real 3D clouds in the air over the sea. OWNED BY: clouds agent.
+// RETIRED while world/sky.js's volumetric sky is on (2026-10-01): the puffs are parked
+// by setPuffsVisible(false) and stay built as the A/B (__vsky.on(0) brings them back).
 //
 // THE RULING that made this file: the painted dome layer (water.js skyRadiance) was
 // taken through a shaping pass and a dimension pass and Michael still read it as "a flat
