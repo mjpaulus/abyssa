@@ -17,6 +17,8 @@ import { survival } from '../systems/survival.js';
 // Per-foot ground height on the seabed (slope adaptation). terrain.js does not import us.
 import { terrainH } from '../world/terrain.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet, canvasSet } from '../lib/textures.js';
+// SALSCULPT HOOK (1/2): the pipeline-built Mark V swaps onto this rig when assets/sal loads
+import { installSalSculpt } from './salInstall.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -3331,6 +3333,10 @@ export function updateDiver(dt, t, player) {
   }
   updateBubbles(dt, t, player.vel);
 }
+
+// SALSCULPT HOOK (2/2): sculpted meshes replace the procedural ones group by group
+// (salInstall.js); the rig, every timing and every anchor above stay exactly as built.
+installSalSculpt(diver, salShared);
 
 export function lanternWorldPos(target) {
   diver.lant.getWorldPosition(target);

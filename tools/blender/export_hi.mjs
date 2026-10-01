@@ -17,7 +17,10 @@ import { bakeStrip } from './strip.mjs';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const [creature, ...only] = process.argv.slice(2);
 if (!creature) { console.error('usage: export_hi.mjs <creature> [piece ...]'); process.exit(1); }
-const mod = await import(path.join(ROOT, 'src/entities/sleeper', creature + 'Sculpt.js'));
+// a sleeper lives in src/entities/sleeper/; anything else (sal) in src/entities/
+const SRC = [path.join(ROOT, 'src/entities/sleeper', creature + 'Sculpt.js'), path.join(ROOT, 'src/entities', creature + 'Sculpt.js')].find(f => fs.existsSync(f));
+if (!SRC) { console.error('no sculpt module for', creature); process.exit(1); }
+const mod = await import(SRC);
 const P = mod.pipeline();
 const build = path.join(ROOT, 'tools/blender/.build', creature);
 fs.mkdirSync(build, { recursive: true });
@@ -30,7 +33,7 @@ for (const pc of P.pieces) {
   if (only.length && !only.includes(pc.name)) continue;
   const t0 = Date.now();
   const hi = meshSDF(pc.sdf, pc.hi.h, {});
-  const sh = shadeVertices(hi.field, hi.pos, pc.paint, { kEps: pc.kEps, ao: pc.ao });
+  const sh = shadeVertices(hi.field, hi.pos, pc.paint, { kEps: pc.kEps, ao: pc.ao, state: !!pc.emit });
   fs.writeFileSync(path.join(build, entry.hi), plyBytes(hi.pos, hi.idx, sh.normal, sh.rgba));
   entry.hiTris = hi.idx.length / 3;
   // EMISSIVE (optional, additive): pc.emit(S) -> 0..1 per high vertex (S: x,y,z,nx,ny,nz),
@@ -42,6 +45,8 @@ for (const pc of P.pieces) {
     for (let i = 0; i < n; i++) {
       S.x = hi.pos[i * 3]; S.y = hi.pos[i * 3 + 1]; S.z = hi.pos[i * 3 + 2];
       S.nx = sh.normal[i * 3]; S.ny = sh.normal[i * 3 + 1]; S.nz = sh.normal[i * 3 + 2];
+      // the vertex's paint state too (additive): material ids, blend, curvature, AO
+      S.ma = sh.state[i * 5]; S.mb = sh.state[i * 5 + 1]; S.mw = sh.state[i * 5 + 2]; S.k = sh.state[i * 5 + 3]; S.ao = sh.state[i * 5 + 4];
       let e = pc.emit(S); e = e < 0 ? 0 : e > 1 ? 1 : e;
       const g = e <= 0.0031308 ? e * 12.92 : 1.055 * Math.pow(e, 1 / 2.4) - 0.055;
       rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = g * 255 + 0.5; rgba[i * 4 + 3] = 255;

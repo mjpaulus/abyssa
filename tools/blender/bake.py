@@ -262,7 +262,7 @@ for set_name, sconf in sets.items():
     # carries cavity for the micro-detail layer (Velkath). meta 'ormB' says which.
     if emit is not None:
         orm[2::4] = emit[0::4]
-        ORMB[set_name] = 'emit'
+        ORMB[set_name] = sconf.get('ormB', 'emit')   # what the emit paint means (sal: 'metal')
     else:
         nrm = np.empty(n, np.float32)
         imgs['normal'].pixels.foreach_get(nrm)
