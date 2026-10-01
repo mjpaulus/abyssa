@@ -1827,8 +1827,7 @@ const pw = new Float32Array(CH.N), psw = new Float32Array(CH.N), po = new Float3
 
 // Phase offsets, in cycles. At a walking cadence of ~1.1 cycles/s these are the timings
 // that stop the gait reading as one rigid marionette: the pelvis leads, the shoulders
-// answer it a beat later, the arms trail further still.
-const SH_LAG = 0.085;      // shoulders lag the hips ~75 ms
+// answer it through THE SPINE CHAIN's spring, the arms trail further still.
 const ARM_LAG = 0.02;      // arms trail the opposing leg; the shoulder spring adds ~0.07 more
 
 // tanh(2.2) — normalises the weight-shift clip so the shift still reaches +/-1
@@ -1881,7 +1880,9 @@ function poseWalk(o, p, a, t, deck) {
   o[CH.pYaw] = W.yaw(p) * a * 0.8 + wsh * 0.020 * ws;
   o[CH.pRoll] = W.list(p) * a + wob * 0.032 * sw + wsh * 0.038 * ws;
   o[CH.pPitch] = 0;
-  o[CH.sYaw] = -1.2 * W.yaw(p - SH_LAG) * a - wsh * 0.030 * ws + brS * 0.006 * dk * breathAmp;
+  // The thorax's counter-rotation and lateral bend are no longer authored here: THE SPINE
+  // CHAIN (updateDiver, after compliance) derives them from the pelvis actually posed.
+  o[CH.sYaw] = brS * 0.006 * dk * breathAmp;
   // Breathing reads at the SHOULDERS (rigid canvas and brass over the chest): the same
   // phase that times the exhaust bursts, scaled by breathAmp so low air shallows it.
   // The walking term used to be -0.11 * a: the spine tipped BACK 6 deg the moment he
@@ -1889,7 +1890,7 @@ function poseWalk(o, p, a, t, deck) {
   // sitting down. Walking he now carries the corselet over his boots (the body's own
   // forward lean is added in accLean, where acceleration and slope already live).
   o[CH.sPitch] = -0.07 + 0.02 * a + Math.sin(t * 1.15 + 0.6) * 0.022 * sw + brS * (0.020 * dk + 0.011 * sw) * breathAmp;
-  o[CH.sRoll] = -0.6 * W.list(p - SH_LAG * 0.7) * a - wsh * 0.021 * ws;
+  o[CH.sRoll] = 0;
   o[CH.nYaw] = look * (dk + sw); o[CH.nPitch] = 0.05 * a - 0.02 * Math.abs(look) * (dk + sw)
     - 0.20 * ss(0.93, 1, Math.sin(t * 0.061 + 0.8)) * sw;   // now and then, a look up the line toward the light
   o[CH.Rhx] = -W.hip(p) * a; o[CH.Rhz] = 0.075;
@@ -2797,6 +2798,13 @@ function poMix(ch, v, w) { po[ch] += (v - po[ch]) * w; }
 let idleT = 0, valveT = -1, valveNext = 11, valveIdx = 0, valveW = 0;
 const VALVE_DUR = 2.7;
 const HEAD_CTR = 0.8;           // how much of the spine's yaw the neck takes back out
+// THE SPINE CHAIN's knobs (window.__chain): kH = how far the neck base follows the pelvis'
+// lateral shift; yawK = thorax counter-rotation (world) per unit of pelvis yaw; headK = the
+// share of the thorax's gait yaw/roll the neck takes back out; f/d = the trunk's spring;
+// lag/lagF = the carried bonnet's pitch lag behind the body's lean.
+const CHAIN = { on: 1, kH: 0.6, yawK: 0.5, headK: 0.8, f: 22, d: 0.9, lag: 0.5, lagF: 5 };
+window.__chain = CHAIN;
+const chR = { x: 0, v: 0 }, chY = { x: 0, v: 0 }, hdC = { x: 0, v: 0 };
 let peerT = -1, peerW = 0;
 const PEER_DUR = 4.2;
 let prevBurstT = 0, burstW = 0;
@@ -3455,20 +3463,54 @@ export function updateDiver(dt, t, player) {
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);
   const sp = diver.spine;
-  sp.rotation.set(pc[CH.sPitch] - 0.4 * rcP.x, pc[CH.sYaw] + rcY.x, pc[CH.sRoll] + 0.3 * rcR.x);
+  // ---- THE SPINE CHAIN ----
+  // Michael, 2026-10-01: "his upper body is rigid to his lower when he walks and it almost
+  // looks like he is going to fall over going left to right." It was: the thorax took the
+  // pelvis' list and shift whole (a 0.6 counter-roll, a beat late), so every step tipped
+  // a metre of corselet and 25 kg of bonnet out over the stance boot — measured from
+  // behind, the helmet swung 80% as far as the pelvis and rolled half as much, and its yaw
+  // followed the pelvis' (the -0.8 head counter only undid the SPINE's share).
+  // A walker's pelvis shifts and lists over the stance foot; above it the lumbar and
+  // thoracic spine bend the other way so the chest stays nearly upright and the head is
+  // carried over the centre of mass, the thorax counter-rotates against the pelvis (which
+  // is what swings the shoulders against the arms), and the neck holds the head level and
+  // on the heading — vestibular stabilisation. So, from the pelvis actually posed:
+  //  - LATERAL BEND: the thorax world roll that puts the neck base at CHAIN.kH of the
+  //    pelvis' shift (the spine pivot rides the list: x = shift - 0.20 sin(list));
+  //  - COUNTER-ROTATION: thorax world yaw = -CHAIN.yawK x pelvis yaw;
+  //  both on a stiff spring (the trunk's own inertia: a small lag, no wobble), and
+  //  - THE NECK cancels CHAIN.headK of whatever gait yaw and roll reaches the thorax, IN
+  //    PHASE (it reads the values posed this frame, not a spring), so the bonnet is level
+  //    and steady over the corselet. Its weight shows as a lag on starts and stops (the
+  //    carried-pitch spring below), never as a side-to-side wobble.
+  // Grounded only (gb), not on the ladder, not through a slash; the swim keeps its pendulum.
+  // While he squares up for a slash the column turns as one (sqW): the blade's direction
+  // at contact stays exactly where the slash and game.js's t+0.22 hit check agree it is.
+  const gC = gb * (1 - ladderF) * (1 - sqW) * CHAIN.on;
+  {
+    const py = pc[CH.pYaw], pr = pc[CH.pRoll], sx = b.position.x;
+    const pivX = sx - 0.20 * Math.sin(pr);
+    const thW = Math.asin(clamp((pivX - CHAIN.kH * sx) / 0.76, -0.3, 0.3));
+    spring(chR, (thW - pr) * gC, dt, CHAIN.f, CHAIN.d);
+    spring(chY, -(1 + CHAIN.yawK) * py * gC, dt, CHAIN.f, CHAIN.d);
+  }
+  sp.rotation.set(pc[CH.sPitch] - 0.4 * rcP.x, pc[CH.sYaw] + rcY.x + chY.x, pc[CH.sRoll] + 0.3 * rcR.x + chR.x);
   if (ikOn > 1e-3) b.position.y += pelvisDrop(dt, player, gw) * ikOn;
   else { pelS.x = 0; pelS.v = 0; pelInit = false; }
 
   // brass helmet lags the torso, then over-settles
-  // Gaze stabilisation: the shoulders counter-rotate the pelvis every step, and at
-  // -0.5 the bonnet went along with half of it — from behind he swung his whole head
-  // left-right on every stride like a man scanning. A walker holds his gaze on the
-  // heading; -0.8 leaves the helmet a little of the torso's roll of motion and no more.
+  // Gaze stabilisation: HEAD_CTR takes the spine's INTENT yaw (look-lead, slash, peer) back
+  // out as before; the gait's yaw is cancelled in phase below.
   spring(hdY, -HEAD_CTR * pc[CH.sYaw] + pc[CH.nYaw], dt, 7, 0.55);
   // ...and the weight of it: each heel strike's settle nods the bonnet forward a beat
   // late (the under-damped spring supplies the lag and the one small rebound).
   spring(hdX, -0.35 * pc[CH.sPitch] + pc[CH.nPitch] - settle.x * 0.12, dt, 6.5, 0.6);
-  diver.neck.rotation.set(hdX.x + rcH.x, hdY.x - 0.4 * rcY.x, 0.25 * rcR.x);
+  // CARRIED: the bonnet follows the body's lean into a start or a stop a beat late.
+  const bodyPitch = b.rotation.x;
+  spring(hdC, bodyPitch, dt, CHAIN.lagF, 1.0);
+  const carry = (hdC.x - bodyPitch) * CHAIN.lag * gb;
+  const gYaw = (pc[CH.pYaw] + chY.x) * CHAIN.headK * gC, gRoll = (pc[CH.pRoll] + chR.x) * CHAIN.headK * gC;
+  diver.neck.rotation.set(hdX.x + rcH.x + carry, hdY.x - 0.4 * rcY.x - gYaw, 0.25 * rcR.x - gRoll);
 
   // ---- THE LEGS. Everything above is authored; from here the GROUND is boss. ----
   driveLegs(dt, player, ikOn, amp, stepRate);
