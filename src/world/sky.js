@@ -71,13 +71,13 @@ export const VSKY = {
   planetR: 2.12e6,     // earth radius in units: the shell curves away at the horizon
   maxDist: 26000,      // march cap
   shapeTile: 1500,     // world units per shape-noise tile
-  detailTile: 130,     // world units per detail-noise tile
-  detailK: 0.48,       // erosion strength
+  detailTile: 75,      // world units per detail-noise tile
+  detailK: 0.58,       // erosion strength
   curlK: 0.55,         // curl distortion of the erosion (in detail texels)
   dens: 0.13,          // extinction per unit at density 1
   gain: 1.7,           // lit-cloud level relative to the palette horizon
   horK: 0.72,          // physical horizon set to this share of the palette's horizon
-  ambK: 0.7,           // sky-ambient gain on clouds
+  ambK: 0.5,           // sky-ambient gain on clouds
   powder: 0.55,        // powder darkening of thin edges away from the sun
   g1: 0.72, g2: -0.20, gMix: 0.25,     // dual-lobe Henyey-Greenstein
   msA: 0.50, msB: 0.40, msC: 0.45,      // multiple-scattering octave attenuation
@@ -248,13 +248,16 @@ vec3 field( vec2 xz, vec4 P, vec4 O ){
   // Coverage: a threshold on the combined field that walks from a few isolated clumps
   // (cover 0.1) to an unbroken deck (cover 1). The big field biases WHERE.
   float m = cl * 0.62 + big * 0.38;
-  float thr = 0.98 - cover * 0.65;
+  float thr = 0.655 - cover * 0.43;
   // a high-frequency tear so no cloud is a smooth ellipse in plan
   m += ( fbm2w( q / 520.0 + 7.1 ) - 0.5 ) * 0.22;
-  float c = smoothstep( thr - 0.08, thr + 0.14, m );
+  // a RAMP, not a plateau: coverage keeps climbing toward a cloud's middle, which (with
+  // the coverage-scaled height in the march) is what domes the crowns instead of
+  // cutting every cumulus off at one flat lid height
+  float c = smoothstep( thr - 0.08, thr + 0.30, m );
   // Coverage INSIDE a cloud stays under 1 on fair days, so the 3D noise carves it into
   // towers and bites; only an overcast deck runs solid.
-  c *= mix( 0.66, 1.0, smoothstep( 0.55, 0.95, cover ) );
+  c *= mix( 0.74, 1.0, smoothstep( 0.55, 0.95, cover ) );
   // Type: cumulus by default, stratus where the day carries a low deck (layers), more
   // towering on the humid days (P.y), a little spatial variety.
   float tv = fbm2w( q / 7000.0 + 11.0 );
@@ -370,12 +373,14 @@ float density( vec3 p, float h, vec4 w, float lod, bool full ){
   vec4 s = textureLod( tShape, q, lod );
   float lf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
   float base = vremap( s.r, lf - 1.0, 1.0, 0.0, 1.0 );
-  base *= hgrad( ( h - w.a ) / ( 1.0 - w.a ), w.g );
+  base *= hgrad( ( h - w.a ) / ( ( 1.0 - w.a ) * mix( 0.35, 1.0, clamp( cov * 1.4, 0.0, 1.0 ) ) ), w.g );
   base = clamp( vremap( base, 1.0 - cov, 1.0, 0.0, 1.0 ), 0.0, 1.0 ) * cov;
   if ( base <= 0.0 ) return 0.0;
   if ( full ) {
-    vec2 cu = texture2D( tNoise2, p.xz * uScale.y * 0.25 ).gb * 2.0 - 1.0;
-    vec3 dq = p * uScale.y + vec3( uWind.z, uEvo.x * 3.0, uWind.w ) + vec3( cu.x, 0.0, cu.y ) * uEvo.y * ( 1.0 - h );
+    // curl distortion: sampled on a slanted plane so it varies in y too, and NOT scaled by
+    // height (a height-scaled shift shears the noise into vertical streaks)
+    vec2 cu = texture2D( tNoise2, ( p.xz + p.y * vec2( 0.61, -0.47 ) ) * uScale.y * 0.2 ).gb * 2.0 - 1.0;
+    vec3 dq = p * uScale.y + vec3( uWind.z, uEvo.x * 3.0, uWind.w ) + vec3( cu.x, cu.x * cu.y, cu.y ) * uEvo.y;
     vec3 dn = textureLod( tDetail, dq, max( 0.0, lod - 1.0 ) ).rgb;
     float hf = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
     // wispy at the base, billowy on the crown
@@ -440,7 +445,9 @@ void main(){
               if ( float( k ) >= uSteps.y ) break;
               vec3 q = p + uLightDir * lt;
               float hq = ( altOf( q ) - uLayer.x ) / uLayer.y;
-              od += density( q, hq, wAt( q.xz ), lod + 1.0, false ) * ls;
+              // the first two steps carry the eroded detail: small-scale self-shadow is
+              // what puts the crevices between the cauliflower lobes
+              od += density( q, hq, wAt( q.xz ), k < 2 ? lod : lod + 1.0, k < 2 ) * ls;
               ls *= 1.6; lt += ls;
             }
             od *= uScale.w;
@@ -577,7 +584,7 @@ float density( vec3 p, float h, vec4 w ){
   vec3 q = p * uScale.x + vec3( uWind.x, uEvo.x, uWind.y );
   vec4 s = textureLod( tShape, q, 1.0 );
   float lf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
-  float base = vremap( s.r, lf - 1.0, 1.0, 0.0, 1.0 ) * hgrad( ( h - w.a ) / ( 1.0 - w.a ), w.g );
+  float base = vremap( s.r, lf - 1.0, 1.0, 0.0, 1.0 ) * hgrad( ( h - w.a ) / ( ( 1.0 - w.a ) * mix( 0.35, 1.0, clamp( cov * 1.4, 0.0, 1.0 ) ) ), w.g );
   return clamp( vremap( base, 1.0 - cov, 1.0, 0.0, 1.0 ), 0.0, 1.0 ) * cov * w.b;
 }
 void main(){
@@ -1036,12 +1043,13 @@ function mulberry(a) {
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
 }
-function fillDay(D, h) {
+function fillDay(D, h, seed) {
   D.idx = h.dayIndex;
   D.cover = clamp(0.08 + 0.80 * h.clouds, 0, 1);
   D.type = clamp(0.40 + 0.45 * h.cloudTex, 0, 1);
   D.layers = clamp(h.layers || 0, 0, 1);
   D.wdir = h.windDir0 || 0; D.wsp = h.windBase === undefined ? 0.4 : h.windBase;
+  if (!seed) return;   // the per-frame refresh allocates nothing
   const r = mulberry((0x5C1E5 ^ Math.imul(h.dayIndex | 0, 2654435761)) >>> 0);
   D.ox = (r() - 0.5) * 2e5; D.oz = (r() - 0.5) * 2e5;
 }
@@ -1071,7 +1079,7 @@ export function updateSky(dt, t) {
   if (!built) return;
   const V = VSKY;
   DOME_U.uVolK.value.x = V.on ? 1 : 0;
-  if (!V.on) return;
+  if (!V.on) { W.airAmbience.sunVis = 1; return; }
   const h = wxRef ? wxRef.hand : null;
   wxClock = wxRef ? wxRef.clock : t;
   wxStorm = wxRef ? wxRef.env.sky : 0;
@@ -1080,10 +1088,10 @@ export function updateSky(dt, t) {
 
   // --- the hand -> two day records (today, yesterday) ---
   if (h && h.dayIndex !== dayA.idx) {
-    fillDay(dayA, h);
+    fillDay(dayA, h, true);
     const pv = window.weather && window.weather.peek ? window.weather.peek(h.dayIndex - 1) : null;
-    if (pv) fillDay(dayB, pv); else Object.assign(dayB, dayA);
-  }
+    if (pv) fillDay(dayB, pv, true); else Object.assign(dayB, dayA);
+  } else if (h) fillDay(dayA, h);   // the live hand can be forced (lab presets): track it
   const tin = SKY.phase01 * CYCLE;                 // seconds into this day, a pure function of the clock
   const blend = sm(0, 40, tin);                    // the midnight cross-fade
   const fog = W.airAmbience.fog || 0;
@@ -1186,11 +1194,11 @@ export function updateSky(dt, t) {
   u.uCirrus.value.set(V.cirrus * clamp((h ? h.sunsetDrama : 0.3) * 0.9 + 0.1, 0, 1) * (1 - storm) * (1 - fog), 2600, 0, 0);
   u.uCirrusOff.value.set(-dx * 1.6, -dz * 1.6);
   // lightning: the same two slots the fog chunk lights the world with
-  const bu = W.boltUniforms();
+  const b0 = W.SKY_UNIFORMS.abyssaBolt0.value, b1 = W.SKY_UNIFORMS.abyssaBolt1.value;   // no per-frame object
   // The fog chunk's light sits on the channel; the deck's glow is where the channel
   // leaves the cloud, so the same xz is lifted into the base and given a wider reach.
-  u.uBolt0.value.set(bu.b0[0], base + 45, bu.b0[2], bu.b0[3] * V.boltK);
-  u.uBolt1.value.set(bu.b1[0], base + 45, bu.b1[2], bu.b1[3] * V.boltK);
+  u.uBolt0.value.set(b0[0], base + 45, b0[2], b0[3] * V.boltK);
+  u.uBolt1.value.set(b1[0], base + 45, b1[2], b1[3] * V.boltK);
   u.uBoltCol.value.set(0.75, 0.8, 1.0);
 
   // --- weather map uniforms ---
@@ -1365,6 +1373,15 @@ if (typeof window !== 'undefined') {
     },
     degrade: degradeSky, restore: restoreSky,
     // read back a few pano texels / the march target (dev only: stalls the GPU)
+    // fraction of the upper sky (above 5 degrees) with cloud transmittance under 0.5,
+    // from the pano (dev only: a full readback)
+    coverage() {
+      const b = new Uint16Array(256 * 64 * 4);
+      renderer.readRenderTargetPixels(panoRT, 0, 0, 256, 64, b);
+      let n = 0, c = 0;
+      for (let y = 15; y < 64; y++) for (let x = 0; x < 256; x++) { n++; if (THREE.DataUtils.fromHalfFloat(b[(y * 256 + x) * 4 + 3]) < 0.5) c++; }
+      return +(c / n).toFixed(3);
+    },
     readPano(x, y) {
       const b = new Uint16Array(4);
       renderer.readRenderTargetPixels(panoRT, x, y, 1, 1, b);
