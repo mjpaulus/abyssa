@@ -103,7 +103,7 @@ function sculptMat(maps, shared, o = {}) {
   const tw = twillSet(), dk = canvasSet();
   const m = new THREE.MeshStandardMaterial({
     map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.ormMap, aoMap: maps.ormMap, metalnessMap: maps.ormMap,
-    aoMapIntensity: o.ao != null ? o.ao : 0.85, normalScale: new THREE.Vector2(1, o.mirror ? -1 : 1),
+    aoMapIntensity: o.ao != null ? o.ao : 0.85, normalScale: new THREE.Vector2(o.ns || 1, (o.ns || 1) * (o.mirror ? -1 : 1)),
     roughness: 1, metalness: 1, envMap: envTex, envMapIntensity: o.env != null ? o.env : 0.5
   });
   const U = {
@@ -142,6 +142,7 @@ function retireable(o, keep) {
 const STATE = { installed: false, reason: ON ? 'loading' : 'off (?salproc)', ms: 0, meshes: [], stash: [], tris: 0, warn: [] };
 
 export function installSalSculpt(diver, shared) {
+  portGlass(diver);                 // the glass is kept procedural: fixed whether or not the sculpt lands
   ASSET.then(A => {
     if (!A) { STATE.reason = ON ? 'asset unavailable — procedural Sal kept' : STATE.reason; return; }
     try { install(diver, shared, A); } catch (e) { console.warn('ABYSSA: sculpted Sal failed to install, keeping the procedural build', e); STATE.reason = 'install threw: ' + e.message; }
@@ -150,9 +151,9 @@ export function installSalSculpt(diver, shared) {
 
 function install(diver, shared, A) {
   const g = A.geos, meta = A.meta.meta || {}, sets = A.meta.sets || {};
-  const need = ['helmet', 'corselet', 'hips', 'pack', 'upperArm', 'foreArm', 'glove', 'thighL', 'thighR', 'shin', 'boot'];
+  const need = ['helmet', 'corselet', 'hips', 'pack', 'upperArm', 'foreArm', 'gloveL', 'gloveR', 'thighL', 'thighR', 'shin', 'boot'];
   const miss = need.filter(k => !g[k]);
-  if (miss.length || !A.maps.helm || !A.maps.torso || !A.maps.limbs) { STATE.reason = 'asset incomplete: ' + miss.join(','); return; }
+  if (miss.length || !A.maps.helm || !A.maps.body || !A.maps.limbs) { STATE.reason = 'asset incomplete: ' + miss.join(','); return; }
   if (Object.values(sets).some(s => s.ormB !== 'metal')) { STATE.reason = 'asset ORM.B is not metalness'; return; }
   // ---- the rig check: the bake recorded the rig it was sculpted to ----
   const R = meta.rig || {}, dL = diver.legL, dA = diver.armL;
@@ -167,10 +168,14 @@ function install(diver, shared, A) {
   if (STATE.warn.length) console.warn('ABYSSA: sculpted Sal was baked to a different rig:\n' + STATE.warn.join('\n'));
   if (Object.values(stretch).some(s => s < 0.85 || s > 1.15)) { STATE.reason = 'rig changed too far from the bake (' + JSON.stringify(stretch) + ') — procedural kept; re-bake'; console.warn('ABYSSA: ' + STATE.reason); return; }
 
-  const helmMat = registerPaint(sculptMat(A.maps.helm, shared, { env: 0.6, ao: 0.9 }), { hero: true });
-  const torsoMat = registerPaint(sculptMat(A.maps.torso, shared, { env: 0.45 }));
-  const limbMat = registerPaint(sculptMat(A.maps.limbs, shared, { env: 0.4 }));
-  const limbMatM = registerPaint(sculptMat(A.maps.limbs, shared, { env: 0.4, mirror: true }));
+  // HERO under the paint law (review round 2): the dial's matte floor and its 0.61 normal
+  // scale flattened the sculpted folds at 9 u on the dry deck; Sal is the hero character
+  // and his relief is geometry, not a texture to be stylised away (the brass and copper
+  // were already hero on the procedural Sal)
+  const helmMat = registerPaint(sculptMat(A.maps.helm, shared, { env: 0.55, ao: 0.9 }), { hero: true });
+  const torsoMat = registerPaint(sculptMat(A.maps.body, shared, { env: 0.45 }), { hero: true });
+  const limbMat = registerPaint(sculptMat(A.maps.limbs, shared, { env: 0.4, ns: 1.15 }), { hero: true });
+  const limbMatM = registerPaint(sculptMat(A.maps.limbs, shared, { env: 0.4, ns: 1.15, mirror: true }), { hero: true });
 
   const swap = (node, geo, mat, o = {}) => {
     for (const c of node.children.slice()) if (retireable(c, o.keep)) {
@@ -189,14 +194,14 @@ function install(diver, shared, A) {
   };
   const ferrule = o => o.material && o.material.userData.salMetal && (o.geometry.boundingBox || (o.geometry.computeBoundingBox(), o.geometry.boundingBox)).getCenter(new THREE.Vector3()).y > 0.9;
   swap(diver.helmGroup, g.helmet, helmMat, { name: 'helmet' });
-  swap(diver.spine, g.corselet, torsoMat, { name: 'corselet', keep: ferrule });
+  swap(diver.spine, g.corselet, helmMat, { name: 'corselet', keep: ferrule });
   swap(diver.hips, g.hips, torsoMat, { name: 'hips' });
   swap(diver.pack, g.pack, torsoMat, { name: 'pack' });
   for (const [arm, R2] of [[diver.armL, false], [diver.armR, true]]) {
     const mat = R2 ? limbMatM : limbMat;
     swap(arm.root, g.upperArm, mat, { name: 'upperArm', mirror: R2, sy: stretch.armUp });
     swap(arm.mid, g.foreArm, mat, { name: 'foreArm', mirror: R2, sy: stretch.armLo });
-    swap(arm.end, g.glove, mat, { name: 'glove', mirror: R2 });
+    swap(arm.end, R2 ? g.gloveR : g.gloveL, mat, { name: R2 ? 'gloveR' : 'gloveL', mirror: R2 });
   }
   for (const [leg, R2] of [[diver.legL, false], [diver.legR, true]]) {
     const mat = R2 ? limbMatM : limbMat;
@@ -207,6 +212,33 @@ function install(diver, shared, A) {
   STATE.mats = [helmMat, torsoMat, limbMat, limbMatM];
   STATE.installed = true; STATE.reason = 'installed'; STATE.ms = +A.ms.toFixed(1); STATE.ktx2 = !!A.ktx2;
   STATE.tex = assetTextures(A).size;
+}
+
+// THE PORT GLASS (review round 2). The kept procedural glass (and the dark recess merged
+// into its draw) reflected the SURFACE sky env at 0.8 through two clearcoated layers:
+// measured face-on on the deck at noon, the faceplate centre went 180/255 (64 with the env
+// off) — a white disc on the procedural Sal too, and in zone 2, whose water is black, a
+// headlamp, because the env map is the one global sky at every depth. Now: a dim base
+// (0.10)
+// reflection, scaled every frame by the water's own radiance at the camera with the same
+// normalisation diver.js gives the bubble rims (background luminance over the zone-0
+// floor's, so the shallows keep their sky and the abyss loses it), floored low so the
+// lantern's own highlight and a trace of reflection always remain. One float a frame.
+// 0.10 measured: faceplate centre (30 px mean) on the deck at noon 180 -> 96, zone 0 64-74,
+// zone 2 ~35 — dark glass with the sky / lantern in it. (0.28 still read 119, white.)
+const GLASS_ENV = 0.10;
+function portGlass(diver) {
+  for (const o of diver.helmGroup.children) {
+    const m = o.material;
+    if (!o.isMesh || !m || !m.customProgramCacheKey || m.customProgramCacheKey() !== 'salGlass1') continue;
+    m.envMapIntensity = GLASS_ENV;
+    o.onBeforeRender = (r, scene) => {
+      const bg = scene.background;
+      const k = bg && bg.isColor ? Math.min(1, Math.max(0.06, (0.2126 * bg.r + 0.7152 * bg.g + 0.0722 * bg.b) / 0.029)) : 1;
+      m.envMapIntensity = GLASS_ENV * k;
+    };
+    STATE.glass = m;
+  }
 }
 
 // ---- dev surface ----

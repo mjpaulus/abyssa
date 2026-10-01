@@ -259,7 +259,7 @@ export function fbm(x, y, z, f, s, oct = 4) {
 const isM = (S, id) => (S.ma === id ? 1 - S.mw : 0) + (S.mb === id ? S.mw : 0);
 const metalOf = S => (METAL[S.ma] || 0) * (1 - S.mw) + (METAL[S.mb] || 0) * S.mw;
 // verdigris: copper and brass, in the crevices and in patches (mask shared with the emit)
-const verdK = S => (isM(S, M.COPPER) + isM(S, M.BRASS)) * clamp(sst(0.04, 0.45, -S.k + 0.45 * (1 - S.ao)) * sst(0.40, 0.62, fbm(S.x, S.y, S.z, 9, 101, 3))
+const verdK = S => (isM(S, M.COPPER) + isM(S, M.BRASS) + isM(S, M.SOLDER)) * clamp(sst(0.02, 0.35, -S.k + 0.65 * (1 - S.ao)) * sst(0.34, 0.56, fbm(S.x, S.y, S.z, 9, 101, 3))
   + 0.55 * sst(0.60, 0.74, fbm(S.x, S.y, S.z, 13, 103, 3)) * sst(0.2, -0.6, S.ny), 0, 1);
 // lead oxide bloom: white, in patches and the crevices
 const oxK = S => isM(S, M.LEAD) * clamp(0.28 * sst(0.5, 0.75, fbm(S.x, S.y, S.z, 22, 131, 3)) + 0.5 * sst(0.05, 0.5, -S.k), 0, 1);
@@ -270,7 +270,7 @@ function PAINT(extra = []) {
     kScale: 0.004, aoAlb: 0.45,
     mats: {
       [M.COPPER]: { c: [0.60, 0.35, 0.235], ro: 0.42 },
-      [M.BRASS]: { c: [0.66, 0.52, 0.285], ro: 0.40 },
+      [M.BRASS]: { c: [0.56, 0.435, 0.235], ro: 0.50 },
       [M.LEAD]: { c: [0.30, 0.30, 0.315], ro: 0.78 },
       [M.STEEL]: { c: [0.34, 0.35, 0.37], ro: 0.48 },
       [M.SOLDER]: { c: [0.44, 0.43, 0.41], ro: 0.62 },
@@ -314,9 +314,11 @@ function PAINT(extra = []) {
       { c: [0.46, 0.36, 0.18], a: 0.7, ro: 0.55, m: [['mat', M.BRASS], ['fn', S => sst(0.38, 0.70, fbm(S.x, S.y, S.z, 8, 22, 4))]] },
       { c: [0.50, 0.39, 0.20], a: 0.55, ro: 0.55, m: [['mat', M.BRASS], ['fn', S => sst(0.48, 0.70, fbm(S.x, S.y, S.z, 21, 30, 3))]] },
       { c: [0.36, 0.30, 0.17], a: 0.5, ro: 0.65, m: [['mat', M.BRASS], ['fn', S => sst(0.56, 0.76, fbm(S.x * 4, S.y * 0.5, S.z * 4, 8, 31, 3))]] },
-      { c: [0.30, 0.22, 0.09], a: 0.85, ro: 0.74, m: [['mat', M.BRASS], ['cav', 0.04, 0.5]] },
+      { c: [0.17, 0.12, 0.055], a: 0.92, ro: 0.82, m: [['mat', M.BRASS], ['cav', 0.03, 0.4]] },
+      // tarnish on the FLAT faces too: only edges and handled places stay bright
+      { c: [0.32, 0.25, 0.13], a: 0.62, ro: 0.66, m: [['mat', M.BRASS], ['inv', ['cvx', 0.05, 0.35]], ['fn', S => sst(0.30, 0.62, fbm(S.x, S.y, S.z, 11, 33, 3))]] },
       { c: [0.40, 0.32, 0.17], a: 0.55, ro: 0.62, m: [['mat', M.BRASS], ['fn', S => sst(0.5, 0.78, fbm(S.x * 0.7, S.y * 2.2, S.z * 0.7, 5, 26, 3)) * (0.4 + 0.6 * sst(0.3, -0.5, S.ny))]] },
-      { c: [0.95, 0.82, 0.52], a: 0.75, ro: 0.18, m: [['mat', M.BRASS], ['cvx', 0.10, 0.6]] },
+      { c: [0.92, 0.78, 0.48], a: 0.7, ro: 0.2, m: [['mat', M.BRASS], ['cvx', 0.16, 0.75]] },
       // verdigris (the emit takes the metal off it too)
       { c: [0.31, 0.54, 0.45], a: 0.9, ro: 0.88, m: [['fn', verdK]] },
       { c: [0.62, 0.62, 0.59], a: 0.75, ro: 0.95, m: [['fn', oxK]] },
@@ -746,6 +748,23 @@ function foreArmSpec(rig) {
 // THE GLOVE (wrist frame): a pleated duck cuff bell gathered by a drawstring, a lace tape
 // with brass eyelets, the welt, and a rubber gauntlet hand closed in a loose fist round a
 // bar along Z (the lantern bail / the knife grip pass through it)
+// glove wear: the KNIFE hand (L) is scuffed grey across the knuckles and the back of the
+// fingers; the LANTERN hand (R) carries lamp soot and oil on the fingers and palm, and the
+// bail has polished a band inside the fist
+function gloveWear(lantern) {
+  const rub = S => isM(S, M.RUBBER);
+  if (!lantern) return [
+    { c: [0.34, 0.34, 0.35], a: 0.75, ro: 0.4, m: [['fn', S => rub(S) * sst(0.025, 0.06, S.x) * sst(-0.27, -0.16, S.y) * sst(0.40, 0.62, fbm(S.x, S.y, S.z, 60, 401, 3))]] },
+    { c: [0.30, 0.30, 0.31], a: 0.6, ro: 0.45, m: [['fn', S => rub(S) * sst(0.55, 0.72, fbm(S.x, S.y, S.z, 35, 402, 3))]] },
+    { c: [0.30, 0.26, 0.20], a: 0.5, m: [['mat', M.TAPE], ['fn', S => sst(0.45, 0.7, fbm(S.x, S.y, S.z, 25, 403, 3))]] }
+  ];
+  return [
+    { c: [0.035, 0.03, 0.028], a: 0.8, ro: 0.35, m: [['fn', S => rub(S) * sst(0.0, -0.04, S.x) * sst(0.35, 0.6, fbm(S.x, S.y, S.z, 30, 411, 3))]] },
+    { c: [0.22, 0.21, 0.20], a: 0.7, ro: 0.18, m: [['fn', S => rub(S) * gau(Math.hypot(S.x - 0.006, S.y + 0.205) / 0.035 - 1) * 0.9]] },
+    { c: [0.20, 0.17, 0.12], a: 0.6, m: [['mat', M.TAPE], ['fn', S => sst(0.4, 0.65, fbm(S.x, S.y, S.z, 22, 413, 3))]] },
+    { c: [0.06, 0.08, 0.15], a: 0.5, m: [['mat', M.DUCK], ['fn', S => sst(0.45, 0.7, fbm(S.x, S.y, S.z, 18, 414, 3))]] }
+  ];
+}
 function gloveSpec() {
   const ch = [];
   const keys = [[0.150, 0.098], [0.118, 0.101], [0.100, 0.118], [0.060, 0.146], [0.030, 0.148], [0.004, 0.140], [-0.018, 0.126], [-0.034, 0.114]].sort((a, b) => a[0] - b[0]);
@@ -928,7 +947,11 @@ function bootSpec(rig) {
 // =============================================================================================
 // PIPELINE
 // =============================================================================================
+// TEXTURE BUDGET (review round 2): only the two parts read at macro on every shot — the
+// helmet and the corselet — get 2048; hips + pack and the limbs share 1024 sets. GPU:
+// 2048 set = BC1 2.7 + BC5 5.3 + ORM(1024^2 RGBA8) 5.6 MB; 1024 set = 0.7 + 1.3 + 1.4 MB.
 const SET = { size: 2048, gutter: 6, aoDist: 0.06, aoSamples: 64, ormB: 'metal' };
+const SET1K = { size: 1024, gutter: 4, packMargin: 3, aoDist: 0.06, aoSamples: 64, ormB: 'metal' };
 const piece = (name, set, sdf, o = {}) => ({
   name, set, sdf, paint: o.paint || PAINT(), emit: metalEmit,
   hi: { h: o.h || 0.003 }, lo: { h: o.loH || 0.008, tris: o.tris || 4000 },
@@ -943,12 +966,15 @@ export function pipeline() {
   const rig = rigFromSource();
   const pieces = [
     piece('helmet', 'helm', helmetSpec(), { tris: 16000, h: 0.0028 }),
-    piece('corselet', 'torso', corseletSpec(), { tris: 14000, h: 0.0032, loH: 0.009 }),
-    piece('hips', 'torso', hipsSpec(), { tris: 7000, h: 0.0032, loH: 0.009 }),
-    piece('pack', 'torso', packSpec(), { tris: 5000, h: 0.003 }),
+    piece('corselet', 'helm', corseletSpec(), { tris: 14000, h: 0.0032, loH: 0.009 }),
+    piece('hips', 'body', hipsSpec(), { tris: 7000, h: 0.0032, loH: 0.009 }),
+    piece('pack', 'body', packSpec(), { tris: 5000, h: 0.003 }),
     piece('upperArm', 'limbs', upperArmSpec(rig), { tris: 3200 }),
     piece('foreArm', 'limbs', foreArmSpec(rig), { tris: 3000 }),
-    piece('glove', 'limbs', gloveSpec(), { tris: 4600, h: 0.0025, loH: 0.006 }),
+    // two gloves: the same hand, different lives (the knife hand's scuffed knuckles, the
+    // lantern hand's soot and the bail's polish), so L and R stop being twins
+    piece('gloveL', 'limbs', gloveSpec(), { tris: 4200, h: 0.0025, loH: 0.006, paint: PAINT(gloveWear(false)) }),
+    piece('gloveR', 'limbs', gloveSpec(), { tris: 4200, h: 0.0025, loH: 0.006, paint: PAINT(gloveWear(true)) }),
     piece('thighL', 'limbs', thighSpec(rig, true), { tris: 3800 }),
     piece('thighR', 'limbs', thighSpec(rig, false), { tris: 3400 }),
     piece('shin', 'limbs', shinSpec(rig), { tris: 3600 }),
@@ -956,12 +982,12 @@ export function pipeline() {
   ];
   return {
     name: 'sal', out: 'assets/sal',
-    sets: { helm: SET, torso: SET, limbs: SET },
+    sets: { helm: SET, body: SET1K, limbs: SET1K },
     pieces,
     // the rig this bake was sculpted to; salInstall.js checks it against the live rig
     meta: {
       rig: { armL: rig.armL, legL: rig.legL, soleY: rig.soleY, pack: rig.pack },
-      mirror: ['upperArm', 'foreArm', 'glove', 'thighR', 'shin', 'boot'],
+      mirror: ['upperArm', 'foreArm', 'gloveR', 'thighR', 'shin', 'boot'],
       metal: 'ormB'
     },
     compress: { mesh: 'draco', tex: 'ktx2' }
