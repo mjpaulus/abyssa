@@ -24,11 +24,16 @@ const mod = await import(SRC);
 const P = mod.pipeline();
 const build = path.join(ROOT, 'tools/blender/.build', creature);
 fs.mkdirSync(build, { recursive: true });
-const man = { name: P.name, out: P.out, sets: P.sets, pieces: [], meta: P.meta || {}, probes: {}, compress: P.compress || null };   // compress: optional, see bake.py
+const man = { name: P.name, out: P.out, sets: P.sets, pieces: [], meta: P.meta || {}, probes: {}, compress: P.compress || null };
+// SKIN (optional, additive; salSkin): { bones: [{ name, head, tail, parent? }] } in the game
+// frame; bake.py builds the armature and bone-heat weights every piece that has `skin`
+if (P.skin) man.skin = P.skin;   // compress: optional, see bake.py
 const t00 = Date.now();
 // HIGH polys (the expensive part; `piece ...` args limit it to those pieces)
 for (const pc of P.pieces) {
   const entry = { name: pc.name, set: pc.set, hiE: pc.emit ? pc.name + '_hiE.ply' : undefined, tris: pc.lo.tris, cage: pc.cage || pc.hi.h * 3, ray: pc.ray || pc.hi.h * 8, hi: pc.name + '_hi.ply', lo: pc.name + '_lo.ply' };
+  if (pc.wrk) entry.hiW = pc.name + '_hiW.ply';           // (additive) see below
+  if (pc.skin) entry.skin = pc.skin;                       // (additive) bake.py weights it
   man.pieces.push(entry);
   if (only.length && !only.includes(pc.name)) continue;
   const t0 = Date.now();
@@ -54,7 +59,23 @@ for (const pc of P.pieces) {
     entry.hiE = pc.name + '_hiE.ply';
     fs.writeFileSync(path.join(build, entry.hiE), plyBytes(hi.pos, hi.idx, sh.normal, rgba));
   }
-  console.log(pc.name, 'hi', entry.hiTris, ((Date.now() - t0) / 1000).toFixed(1) + ' s');
+  // WRINKLE (optional, additive; salSkin): pc.wrk is a second full-detail field — the same
+  // piece with compression gathers sculpted into the inside of its joints. Meshed at the
+  // same h and written unpainted (only its normals are baked: bake.py -> <set>_wrinkle).
+  if (pc.wrk) {
+    const hw = meshSDF(pc.wrk, pc.hi.h, {});
+    const n = hw.pos.length / 3, nrm = new Float32Array(n * 3), e = pc.hi.h * 0.5, f = hw.field.at;
+    for (let i = 0; i < n; i++) {
+      const x = hw.pos[i * 3], y = hw.pos[i * 3 + 1], z = hw.pos[i * 3 + 2];
+      const gx = f(x + e, y, z) - f(x - e, y, z), gy = f(x, y + e, z) - f(x, y - e, z), gz = f(x, y, z + e) - f(x, y, z - e), l = Math.hypot(gx, gy, gz) || 1;
+      nrm[i * 3] = gx / l; nrm[i * 3 + 1] = gy / l; nrm[i * 3 + 2] = gz / l;
+    }
+    const rgba = new Uint8Array(n * 4).fill(255);
+    entry.hiW = pc.name + '_hiW.ply';
+    fs.writeFileSync(path.join(build, entry.hiW), plyBytes(hw.pos, hw.idx, nrm, rgba));
+    entry.hiWTris = hw.idx.length / 3;
+  }
+  console.log(pc.name, 'hi', entry.hiTris, entry.hiWTris ? 'wrinkle ' + entry.hiWTris : '', ((Date.now() - t0) / 1000).toFixed(1) + ' s');
 }
 // LOW polys, per texture set: the mesh field (bake-only layers left out) DC-meshed,
 // QEM-decimated to the piece's budget, then every piece of the set charted and packed into
