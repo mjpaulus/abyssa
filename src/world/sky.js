@@ -86,6 +86,7 @@ export const VSKY = {
   cirrus: 0.6,         // cirrus gain (hand.sunsetDrama sets the amount)
   history: 0.12,       // temporal blend (new sample weight)
   stars: 1.0,
+  boltK: 0.35,         // lightning glow inside the deck per unit of bolt light
   lightSat: 0.72,      // saturation kept in the low sun's colour on the clouds
   discR: 0.0085,       // sun disc angular radius, rad (a touch over the real 0.0047)
   discI: 9.0           // disc radiance relative to the normalised sky
@@ -295,6 +296,8 @@ uniform sampler2D tSkyR, tSkyM;
 uniform vec4 uAtmo;       // K, LUT cols, LUT rows, mie g
 uniform vec3 uAtmoSunXZ;  // physical sun azimuth (x, z) and its elevation sine
 uniform vec3 uVolSun;     // displayed sun direction (SUN.dir)
+uniform vec3 uPalHor, uPalZen;   // the authored palette's ring, for the night hand-over
+uniform float uNightMix;         // 0 = physical sky, 1 = the palette's night gradient
 float vMiePhase( float mu, float g ){
   float g2 = g * g;
   return 3.0 / ( 8.0 * 3.14159265 ) * ( ( 1.0 - g2 ) * ( 1.0 + mu * mu ) )
@@ -312,7 +315,15 @@ vec3 vAtmo( vec3 d ){
   vec2 uv = vSkyUv( d );
   vec3 R = texture2D( tSkyR, uv ).rgb, M = texture2D( tSkyM, uv ).rgb;
   float mu = dot( d, uVolSun );
-  return ( R + M * vMiePhase( mu, uAtmo.w ) ) * uAtmo.x;
+  vec3 c = ( R + M * vMiePhase( mu, uAtmo.w ) ) * uAtmo.x;
+  if ( uNightMix > 0.001 ) {
+    // NIGHT: with the sun far under the horizon the single-scatter model has nothing left
+    // but numerical residue; the sky is moonlight and airglow, which the palette authors.
+    float up = clamp( d.y, 0.0, 1.0 );
+    float hz = 1.0 - up; hz *= hz; hz *= hz * ( 1.0 - up );
+    c = mix( c, mix( uPalHor, uPalZen, 1.0 - hz ), uNightMix );
+  }
+  return c;
 }`;
 
 // --- the march ---
@@ -470,8 +481,8 @@ void main(){
             }
             // LIGHTNING from inside the deck: the two live bolt slots, inverse-square
             // with a floor, as isotropic in-scatter.
-            if ( uBolt0.w > 0.0 ) { vec3 r = p - uBolt0.xyz; Ls += uBoltCol * uBolt0.w / ( 1.0 + dot( r, r ) / 9000.0 ); }
-            if ( uBolt1.w > 0.0 ) { vec3 r = p - uBolt1.xyz; Ls += uBoltCol * uBolt1.w / ( 1.0 + dot( r, r ) / 9000.0 ); }
+            if ( uBolt0.w > 0.0 ) { vec3 r = p - uBolt0.xyz; Ls += uBoltCol * uBolt0.w / ( 1.0 + dot( r, r ) / 30000.0 ); }
+            if ( uBolt1.w > 0.0 ) { vec3 r = p - uBolt1.xyz; Ls += uBoltCol * uBolt1.w / ( 1.0 + dot( r, r ) / 30000.0 ); }
             float Ts = exp( -sigma * dt );
             res.rgb += res.a * Ls * ( 1.0 - Ts );
             dsum += res.a * ( 1.0 - Ts ) * t;
@@ -629,7 +640,7 @@ vec3 volSky( vec3 d ){
   vec4 cl = volCloudAt( dd );
   // NIGHT: stars, faded by the physical sun and by the marine layer.
   if ( uVolK.z > 0.001 ) {
-    vec3 sp = dd * 420.0;
+    vec3 sp = dd * 340.0;
     vec3 ci = floor( sp );
     float h = vStarHash( ci );
     if ( h > 0.9965 ) {
@@ -960,7 +971,9 @@ const ATMO_U = {
   tSkyR: { value: null }, tSkyM: { value: null },
   uAtmo: { value: new THREE.Vector4(1, LUT_W, LUT_H, MIE_G) },
   uAtmoSunXZ: { value: new THREE.Vector3(1, 0, 0.5) },
-  uVolSun: { value: new THREE.Vector3(0, 1, 0) }
+  uVolSun: { value: new THREE.Vector3(0, 1, 0) },
+  uPalHor: { value: new THREE.Vector3() }, uPalZen: { value: new THREE.Vector3() },
+  uNightMix: { value: 0 }
 };
 export const DOME_U = {
   ...ATMO_U,
@@ -1089,7 +1102,11 @@ export function updateSky(dt, t) {
   const P = W.skyPalette();
   const palLum = lum(P.hor[0], P.hor[1], P.hor[2]) * V.horK;
   const physLum = Math.max(1e-9, lum(atm.hor[0], atm.hor[1], atm.hor[2]));
-  const Kt = palLum / physLum;
+  const Kt = Math.min(palLum / physLum, 400);
+  const nightMix = 1 - sm(-8, -1.5, physElev);
+  ATMO_U.uNightMix.value = nightMix;
+  ATMO_U.uPalHor.value.set(P.hor[0], P.hor[1], P.hor[2]);
+  ATMO_U.uPalZen.value.set(P.zen[0], P.zen[1], P.zen[2]);
   Ksm = Ksm <= 0 ? Kt : Ksm + (Kt - Ksm) * Math.min(1, dt * 2);
   const K = Ksm;
   stats.K = K;
@@ -1097,7 +1114,10 @@ export function updateSky(dt, t) {
   const az = SUN.azimDeg * D2R;
   ATMO_U.uAtmoSunXZ.value.set(Math.cos(az), Math.sin(az), Math.sin(physElev * D2R));
   ATMO_U.uVolSun.value.set(SUN.dir.x, SUN.dir.y, SUN.dir.z);
-  for (let c = 0; c < 3; c++) { horN[c] = atm.hor[c] * K; zenN[c] = atm.zen[c] * K; }
+  for (let c = 0; c < 3; c++) {
+    horN[c] = atm.hor[c] * K + (P.hor[c] - atm.hor[c] * K) * nightMix;
+    zenN[c] = atm.zen[c] * K + (P.zen[c] - atm.zen[c] * K) * nightMix;
+  }
 
   // --- the light that lights the clouds: the sun, handing over to the moon ---
   const sunUp = sm(-4, 2, physElev);
@@ -1141,7 +1161,7 @@ export function updateSky(dt, t) {
     const k = V.discI * dl / 3.0 * vis * (1 - storm * 0.9);
     DOME_U.uVolDisc.value.set(sT[0] / sl * k, sT[1] / sl * k, sT[2] / sl * k, V.discR);
   }
-  DOME_U.uVolK.value.z = V.stars * (1 - sm(-9, -1, physElev)) * (1 - fog) * 0.05;
+  DOME_U.uVolK.value.z = V.stars * (1 - sm(-9, -1, physElev)) * (1 - fog) * 0.16;
   DOME_U.uVolK.value.w = physElev * D2R;
 
   // --- the shell and the noise frame ---
@@ -1167,8 +1187,10 @@ export function updateSky(dt, t) {
   u.uCirrusOff.value.set(-dx * 1.6, -dz * 1.6);
   // lightning: the same two slots the fog chunk lights the world with
   const bu = W.boltUniforms();
-  u.uBolt0.value.fromArray(bu.b0); u.uBolt1.value.fromArray(bu.b1);
-  u.uBolt0.value.w *= 0.010; u.uBolt1.value.w *= 0.010;
+  // The fog chunk's light sits on the channel; the deck's glow is where the channel
+  // leaves the cloud, so the same xz is lifted into the base and given a wider reach.
+  u.uBolt0.value.set(bu.b0[0], base + 45, bu.b0[2], bu.b0[3] * V.boltK);
+  u.uBolt1.value.set(bu.b1[0], base + 45, bu.b1[2], bu.b1[3] * V.boltK);
   u.uBoltCol.value.set(0.75, 0.8, 1.0);
 
   // --- weather map uniforms ---
