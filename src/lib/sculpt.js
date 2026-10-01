@@ -64,6 +64,7 @@
 //   { t:'tube',   p:[[..]x3|4], r:[r0, r1], n: segments, rr?: [radius per sample] }
 //                                                             bezier tube (round cones)
 //   { t:'plane',  n:[..], o: offset }                         dot(p, n) - o
+//   { t:'fn',     bb:[x0,y0,z0,x1,y1,z1], f:(x,y,z)=>d }      a piece's own analytic field
 // NODE — operators
 //   { t:'u', k, ch:[...] }       smooth union (k = blend radius, 0 = hard min)
 //   { t:'s', k, ch:[a, ...b] }   a minus every b (smooth); m? paints the cut faces
@@ -81,6 +82,7 @@
 //   { type:'cracks', amp, f, w, heal?, seed, mask? }  cell-border cracks; heal raises a
 //                                                  callus ridge either side (old breaks)
 //   { type:'bands', amp, f, ax:[x,y,z], mask? }    growth lines along an axis
+//   { type:'fn', amp, fn:(x,y,z)=>offset }         a piece's own analytic displacement
 //   any layer + bake: true -> left out of the game mesh, present in the baked maps (the
 //   high-to-low split: fine detail costs texels, not triangles, and never stalls QEM)
 // MASK — an array of terms, multiplied (positional terms work in the node's frame)
@@ -297,6 +299,12 @@ function node(s) {
         const q = Math.hypot(lx, lz) - RR;
         return Math.hypot(q, ly) - r;
       });
+    }
+    case 'fn': {
+      // a piece's own analytic field (salSculpt: lathes, fold-modulated limb segments):
+      // { t:'fn', bb:[x0,y0,z0,x1,y1,z1], f:(x,y,z) -> signed distance (roughly 1-Lipschitz), m }
+      const f = s.f;
+      return leaf(s.bb.slice(), (x, y, z) => { const d = f(x, y, z); MA = MB = m; MW = 0; return d; });
     }
     case 'plane': {
       const [nx, ny, nz] = s.n, o = s.o || 0, l = Math.hypot(nx, ny, nz);
@@ -539,6 +547,11 @@ function compileLayer(l) {
       return -amp * crack + heal * amp * callus;
     };
     amax = Math.abs(amp) * (1 + heal);
+  } else if (l.type === 'fn') {
+    // a piece's own displacement (salSculpt: cloth creases, hammer work): f(x,y,z) -> offset,
+    // |offset| <= amp
+    const fl = l.fn;
+    g = (x, y, z) => fl(x, y, z);
   } else throw new Error('sculpt: unknown layer ' + l.type);
   const fn = mask ? (x, y, z) => { const k = mask(x, y, z); return k > 0 ? k * g(x, y, z) : 0; } : g;
   return { f: fn, amax };
@@ -1298,6 +1311,9 @@ export function shadeVertices(field, pos, paintSpec, opts = {}) {
   const paint = compilePaint(paintSpec), at = field.at, h = field.h;
   const eps = opts.eps || h * 0.5, kEps = opts.kEps || 0.012, aoR = (opts.ao && opts.ao.r) || 0.06, aoN = (opts.ao && opts.ao.n) || 4;
   const n = pos.length / 3, nrm = new Float32Array(n * 3), rgba = new Uint8Array(n * 4);
+  // opts.state (additive, salSculpt): also return each vertex's paint state as
+  // [ma, mb, mw, k, ao] x n, so an emit mask can key off the material and the curvature
+  const st = opts.state ? new Float32Array(n * 5) : null;
   const S = { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, k: 0, ao: 1, ma: 0, mb: 0, mw: 0 }, col = [0, 0, 0];
   for (let i = 0; i < n; i++) {
     const x = pos[i * 3], y = pos[i * 3 + 1], z = pos[i * 3 + 2];
@@ -1316,11 +1332,12 @@ export function shadeVertices(field, pos, paintSpec, opts = {}) {
     const ao = clamp01(1 - occ / wsum * 1.4);
     S.x = x; S.y = y; S.z = z; S.nx = nx; S.ny = ny; S.nz = nz; S.k = kap * paint.kScale; S.ao = ao; S.ma = MA0; S.mb = MB0; S.mw = MW0;
     const ro = paintAt(paint, S, col);
+    if (st) { st[i * 5] = MA0; st[i * 5 + 1] = MB0; st[i * 5 + 2] = MW0; st[i * 5 + 3] = S.k; st[i * 5 + 4] = ao; }
     const ak = 1 - paint.aoAlb * (1 - ao);
     rgba[i * 4] = linToSrgb(col[0] * ak) * 255 + 0.5; rgba[i * 4 + 1] = linToSrgb(col[1] * ak) * 255 + 0.5; rgba[i * 4 + 2] = linToSrgb(col[2] * ak) * 255 + 0.5;
     rgba[i * 4 + 3] = clamp01(ro) * 255 + 0.5;
   }
-  return { normal: nrm, rgba };
+  return st ? { normal: nrm, rgba, state: st } : { normal: nrm, rgba };
 }
 function paintAt(paint, S, col) {
   const mA = paint.mats[S.ma] || paint.fallback, mB = paint.mats[S.mb] || paint.fallback, w = S.mw;

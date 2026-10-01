@@ -117,3 +117,20 @@ All optional; a creature that uses none of them builds exactly as before.
   to his (7 pairs), his tentacles are conformal (du = ds len / (Lu r)).
 - `meta` values may be getters (JSON.stringify evaluates them at export): Orune's caught
   lanterns are seated there by marching the full SDF, so the game does no raycasts.
+
+## Sal (salsculpt): the hero diver through the same pipeline
+
+`node tools/blender/build.mjs sal` — `src/entities/salSculpt.js` (export_hi looks in
+`src/entities/` when there is no sleeper of that name). Outputs `assets/sal/` (3 sets at
+2048: helm / torso / limbs; Draco + KTX2). Additive pieces it uses:
+- `{ t: 'fn', bb, f }` leaf node and `{ type: 'fn', fn, amp }` displacement layer in sculpt.js
+  (analytic lathes, fold-modulated limb segments, bake-only creases);
+- `shadeVertices(..., { state: true })` returns each vertex's paint state, so the emit mask
+  sees material ids/curvature/AO; Sal's emit is METALNESS (`sets.<s>.ormB = 'metal'` via the
+  set config) — one draw carries brass, copper, lead, canvas and leather;
+- the rig (limb lengths, offsets, radii, profiles, SOLE_Y) is PARSED out of diver.js at bake
+  time, recorded in `sal.json` meta.rig, and checked by `salInstall.js` against the live rig
+  (small drift: segments stretched + a console warning; >15%: procedural Sal kept). After
+  any proportion change in diver.js, re-run the one command.
+Bake: ~3.5 min on an M5 Max (hi meshes 0.16-1.5 M tris per piece). Reproducible: two runs give a
+byte-identical .glb and most maps; Cycles-GPU AO noise moves <0.1% of ORM texels by <= 7/255.
