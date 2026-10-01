@@ -588,8 +588,9 @@ function startWorker() {
 // Called once a frame from water.js, after setSeaState: keep the worker's spectrum in
 // step (4 Hz is far inside the wind's 5.5 s ease) and keep fields coming.
 let _fdt = 0.016, _lastFeedT = 0;
+let _feedOn = true;
 export function feedOceanWorker(t) {
-  if (!worker) return;
+  if (!worker || !_feedOn) return;
   // The lead adapts to the frame time: a field has to be computed, posted and received
   // (about two frames) before the clock reaches it, or "now" falls off the newest field.
   const fd = t - _lastFeedT; _lastFeedT = t;
@@ -735,7 +736,8 @@ export function analyticHeight(x, z, t) {
   for (let it = 0; it < 3; it++) { compEval(px, pz, t); px = x - _dOut[0]; pz = z - _dOut[1]; }
   return compEval(px, pz, t);
 }
-export function oceanTick(dt) { compAge += dt; }
+let _ticks = 0;
+export function oceanTick(dt) { compAge += dt; _ticks++; }
 // The two strongest components in terrain.js's (dir, k, amp, omega) caustic form:
 // h = amp sin((p.d) k + w t) travels toward -d, so d is the NEGATED bearing.
 export function dominantComponents(out) {
@@ -758,9 +760,10 @@ function putComp(out, q, o) {
 // Dev surface.
 if (typeof window !== 'undefined') {
   window.__ocean = {
-    OCEAN, SP, stats: () => ({ ..._sea, chop: _chop, workerOk, inflight, fftType, ...probeStats,
+    OCEAN, SP, ticks: () => _ticks, stats: () => ({ ..._sea, chop: _chop, workerOk, inflight, fftType, ...probeStats,
       fields: fields.map(f => +f.t.toFixed(3)) }),
     sim: setOceanSim,
+    feed(on) { _feedOn = !!on; },
     step(dt, t) { updateOcean(dt, t); },
     // ACCURACY vs THE DRAWN SURFACE (dev; allocates, synchronous readback -- never per
     // frame). The GPU probe evaluates the vertex shader's exact displacement (all three

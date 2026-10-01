@@ -99,6 +99,26 @@ against explicit contracts and reviewed on return.
   Physics that constrains everything here: brightness cannot buy distance — range
   scales with the LOG of it (1e6x brighter = +1088 units). A far field at r=3600
   renders at e^-100 no matter what you spend.
+- `world/ocean.js` (+ `ocean.spectrum.js`, `ocean.worker.js`) — THE SPECTRAL SEA (branch
+  ocean). GPU Tessendorf FFT: JONSWAP wind sea + narrow swell, generated per bin per frame
+  from weather uniforms (wind/storm reshape it with no CPU regen); 3 cascades 287/67/17 u,
+  disjoint k-bands, stacked 256x768 atlas, 16 Stockham passes MRT; merge per cascade ->
+  mip-mapped HalfFloat (disp+J, chop-corrected slope + slope^2 = unresolved variance ->
+  GGX roughness, Jacobian + PERSISTENT foam ping-pong). Surface = 8-level geomorphed
+  clipmap (`buildOceanGeometry`, one draw), displacement a pure function of (p, cam) so
+  levels meet crack-free; interface side = `gl_FrontFacing` (NOT dot(V,N)). Below the
+  horizon the dome draws `farSea()` (the same BRDF the mesh eases into) to the true
+  horizon. CPU HEIGHT = a module worker IFFTs the identical cascade 0+1 bins ahead of the
+  clock; main thread time-interpolates + Catmull-Roms + inverts the chop (4 us/query).
+  NEVER read back the GPU per frame: getBufferSubData of a fence-signalled PBO measured
+  7.5 ms main-thread stall on ANGLE/Metal. Accuracy vs drawn: `__ocean.verify()` /
+  `verifyExact()` (gale 0.024 u rms on 1.23 u rms sea). Half-texel rule: the GPU samples
+  uv = p/L, so the drawn field is the FFT shifted by half a texel. `__ocean` dev surface;
+  `OCEAN` knobs (windLo/Hi, stormU, swell*, chop*, foamThr*). Quality rung 2 = half-rate
+  sim (`setOceanRate`). Sky: reflects `getSkyEnv()` when the volumetric sky is up
+  (glint x env alpha toward the sun, cloud shadow on the sea), else analytic/PMREM.
+  Clear air K_AIR lowered ~3.5x (the 2.9 km haze hid the old 460 u disc rim); storm haze
+  rides STYLE_U[0] (AIR_STORM_K).
 - `world/terrain.js` + `lib/triplanar.js` — 3 heightfield meshes, ZONE-GATED by
   camera Y with flora's bands (−332k tris/frame; verified 0 visibility violations
   across the ending ascent and voyages). Rifts are flattened bowls, NOT holes;
