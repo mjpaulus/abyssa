@@ -2042,8 +2042,8 @@ const CZ_HEEL = -0.125, CZ_FLAT = 0.02, CZ_BALL = 0.21;
 //   - and never above GAIT.kMid of knee at mid-stance (kIdle standing): a heavy man does
 //     not lock out, he carries the weight on a soft knee.
 // Those ceilings are combined with a smooth minimum, so double support is a rounded
-// trough and not the compass gait's cusp; it falls at once (it is a ceiling — a late
-// fall is an overreach) and rises on a spring (a man rises over his boot, he does not
+// trough and not the compass gait's cusp; it falls fast (it is a ceiling — a late fall
+// is an overreach) and rises on a softer spring (a man rises over his boot, he does not
 // pop). The rise and fall that results is the TRUE pendulum of these legs at this
 // stride, ~0.1 u: the bob is an output, not a style choice, and the slope, the deck,
 // the start, the stop and the shuffle all get it for free from their own anchors.
@@ -2172,7 +2172,7 @@ let prevGrounded = true, landImp = 0;
 const _mH = new THREE.Matrix4(), _mHi = new THREE.Matrix4();
 const _vA = V3(), _vB = V3(), _vC = V3(), _vD = V3();
 // Live probe surface for the slip test — game.js never reads it, but the browser can.
-export const ikDebug = { slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0 };
+export const ikDebug = { slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0, gd: 0, gdd: 0 };
 
 // ===========================================================================
 // COMPLIANCE — the spring-driven skeleton.
@@ -2344,6 +2344,12 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     }
     if (Math.abs(hC - soleY) < 0.6) { gdOn = true; gdC = hC; gdFx = sy; gdFz = cy; }
   }
+  // On the bare seabed the boots stand on the SEABED, not on player.js's collision floor:
+  // that floor is smoothed and trails the terrain on a grade (measured on a 24% climb:
+  // planted boots 3-7 cm into the hill going up, 5 cm off it coming down). The pelvis
+  // reaches for wherever the boots really are.
+  const soleB = gdOn ? gdC : soleY;
+  soleBase = soleB; ikDebug.gd = gdOn ? 1 : 0; ikDebug.gdd = soleB - soleY;
 
   // Landing. The knees can genuinely absorb now — the feet are pinned and the pelvis is
   // free to drop between them — so a drop to the seabed gets a real impulse instead of a
@@ -2410,7 +2416,8 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // that lands on its heel is anchored a heel's length further on, so the heel it
       // landed on stays exactly where it touched down.
       const rs = ft.cz - CZ_FLAT;
-      ft.ax = ft.wx - sy * rs - ox; ft.ay = soleY + groundD(ft.wx, ft.wz) - oy; ft.az = ft.wz - cy * rs - oz;
+      ft.ax = ft.wx - sy * rs - ox; ft.az = ft.wz - cy * rs - oz;
+      ft.ay = soleB + groundD(ft.ax + ox, ft.az + oz) - oy;   // the ground at the ANCHOR (the rockers add the rest)
       ft.deck = onDeck; ft.planted = true; ft.ln = false;
       // A reverse plant IS the footfall (toe down behind him), and it lands at lp = duty,
       // which the per-step duty draw moves — so backing up fires its footfall here, on
@@ -2486,7 +2493,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
           if (gb > 0.5) steps++;           // a boot put down is a footfall: sound, silt, print
         }
       }
-      ft.ay = soleY + groundD(ft.ax + ox, ft.az + oz) - oy;   // keeps its footing as the deck heaves
+      ft.ay = soleB + groundD(ft.ax + ox, ft.az + oz) - oy;   // keeps its footing as the deck heaves
     } else if (ft.stT >= 0) { ft.stT = -1; ft.lift = 0; shufX = 0; }
 
     // ---- TARGET. One world-space ankle point, however it was arrived at. ----
@@ -2500,7 +2507,10 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // sole, which dragged the heel back 0.145 u through every strike (3.7 u/s, faster
       // than he walks) and the ball back 0.19 u through every push-off. Both measured.
       const rs = cz - CZ_FLAT;
-      _vD.set(ft.ax + ox + sy * (_vC.z + rs), ft.ay + oy + _vC.y + ft.lift, ft.az + oz + cy * (_vC.z + rs));
+      // ...and the ground under the rolling contact, not the anchor's: on a grade the heel
+      // and ball rest on seabed a few cm above or below the flat-foot point.
+      const gRoll = rs !== 0 ? groundD(ft.ax + ox + sy * rs, ft.az + oz + cy * rs) - groundD(ft.ax + ox, ft.az + oz) : 0;
+      _vD.set(ft.ax + ox + sy * (_vC.z + rs), ft.ay + oy + gRoll + _vC.y + ft.lift, ft.az + oz + cy * (_vC.z + rs));
       // The ground keeps the boot to the very end of stance, in either direction, and the
       // hand-back to the curves happens in the AIR (early swing, below). Handing back on
       // the ground let the authored pose push the ball 6-8 cm into the seabed at every
@@ -2523,7 +2533,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // hip: the flat-foot anchor half a stance ahead (less 0.05, which centres the ANKLE's
       // excursion once the heel and ball rockers are counted), and the heel — which is
       // what lands — a heel's length short of that. Backing up lands on the ball, behind.
-      const halfS = DUTY * GAIT.stride * ft.stride * 0.5;
+      const halfS = DUTY * GAIT.stride * ft.stride * slopeK * 0.5;
       const aF = halfS - 0.05 + (CZ_HEEL - CZ_FLAT), aR = -halfS - 0.05 + (CZ_BALL - CZ_FLAT);
       const ahead = aF + (aR - aF) * revF + (gaitState === 3 ? 0.18 : 0) * (1 - 2 * revF);
       const latL = sgn * HIP_X + ft.lat;
@@ -2557,7 +2567,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
         wIK = 1;
       }
       ankleOverContact(th, cz, _vC);
-      _vD.set(lx + sy * _vC.z, soleY + groundD(lx, lz) + _vC.y + lift, lz + cy * _vC.z);
+      _vD.set(lx + sy * _vC.z, soleB + groundD(lx, lz) + _vC.y + lift, lz + cy * _vC.z);
       // TOE-OFF, in the air: the boot leaves from where the stance left it (ball pivot,
       // heel up) and rises off it, handing over to the authored swing by 30% of the swing.
       const qs = rev ? 1 - swp : swp;
@@ -2587,9 +2597,11 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       _vB.set(tx, ty, tz).applyMatrix4(_mH);
       const fa = hxF + kF + pc[ch[3]], thE = fa + (th - fa) * w;
       const c = Math.cos(thE), s = Math.sin(thE);
-      const hA = Math.max(-(SOLE_Y * c - CZ_HEEL * s), -(SOLE_Y * c - CZ_BALL * s));
+      // heel and ball each over their OWN ground: on a climb the ball is over higher seabed
+      const zH = CZ_HEEL * c + SOLE_Y * s, zB = CZ_BALL * c + SOLE_Y * s;
+      const gH = groundD(_vB.x + sy * zH, _vB.z + cy * zH), gB = groundD(_vB.x + sy * zB, _vB.z + cy * zB);
       const clr = inStance ? 0 : 0.035 * ss(0.0, 0.15, ft.swp) * (1 - ss(0.85, 1.0, ft.swp));
-      const minY = soleY + groundD(_vB.x, _vB.z) + hA + clr;
+      const minY = soleB + clr + Math.max(gH - (SOLE_Y * c - CZ_HEEL * s), gB - (SOLE_Y * c - CZ_BALL * s));
       if (_vB.y < minY) {
         _vB.y = minY; _vB.applyMatrix4(_mHi);
         tx = _vB.x; ty = _vB.y; tz = _vB.z; lifted = true;
@@ -2705,6 +2717,8 @@ const lkY = { x: 0, v: 0 }, lkX = { x: 0, v: 0 };
 // slope adaptation state
 let slopeZi = 0;
 let gdOn = false, gdC = 0, gdFx = 0, gdFz = 0;
+let slopeK = 1;                    // stride shortening on a grade (1 = level)
+let soleBase = 0;                  // the ground the boots stand on at his centre (last driveLegs)
 
 // Where the seabed is under (x, z), RELATIVE to where player.js put the floor. Relative,
 // because player.js owns the absolute floor (colliders, the deck, groundY smoothing); the
@@ -2755,7 +2769,7 @@ function pelvisDrop(dt, player, gw) {
   // Mid-stance / standing ceiling: the knee never straighter than kMid walking, kIdle
   // standing, over the floor at his centre.
   const kM = GAIT.kIdle + (GAIT.kMid - GAIT.kIdle) * gw;
-  const hipTop = soleY - SOLE_Y + reachAt(kM);
+  const hipTop = (pelInit ? soleBase : soleY) - SOLE_Y + reachAt(kM);
   const dCap = reachAt(GAIT.kCap);
   let need = 1e9, hc = 0;
   for (let i = 0; i < 2; i++) {
@@ -2778,9 +2792,10 @@ function pelvisDrop(dt, player, gw) {
   // crouch for, it is one to release and re-take (driveLegs does, on overreach).
   tgt = clamp(tgt, -0.25, 0.02);
   if (!pelInit) { pelInit = true; pelS.x = tgt; pelS.v = 0; }
-  // A ceiling: it falls at once and rises on a spring.
-  if (tgt <= pelS.x) { pelS.v = Math.min(pelS.v, (tgt - pelS.x) / Math.max(dt, 1e-3)); pelS.x = tgt; }
-  else spring(pelS, tgt, dt, 32, 1.0);
+  // A ceiling: it falls fast (a late fall is an overreach, which the IK's reach clamp
+  // absorbs for a frame or two) and rises on a softer spring. Falling at once was a 5 cm
+  // single-frame drop whenever a step's claim landed.
+  spring(pelS, tgt, dt, tgt < pelS.x ? 42 : 30, 1.0);
   ikDebug.pel = pelS.x;
   return pelS.x;
 }
@@ -2873,6 +2888,15 @@ export function updateDiver(dt, t, player) {
   // stepCount()'s contract is untouched throughout: heel strikes are still walkP 0 and 0.5,
   // and the catch step fires its own footfall exactly like any other plant.
   const wantWalk = ampT > 0.02;
+  // ON A GRADE THE STEPS SHORTEN. Uphill the trailing boot is below him and the lead
+  // above; downhill the reverse. Either way the same stride costs the legs more reach,
+  // and a man shortens his step rather than crouch for it. Measured on a 24% climb at
+  // the level stride: the pelvis hit its floor and the trailing boot was re-taken.
+  {
+    const sx = Math.sin(yawF) * 0.5, sz = Math.cos(yawF) * 0.5;
+    const g = gdOn ? Math.abs(groundD(player.pos.x + sx, player.pos.z + sz) - groundD(player.pos.x - sx, player.pos.z - sz)) : 0;
+    slopeK += (1 / (1 + 1.3 * g) - slopeK) * Math.min(1, 3 * dt);
+  }
   let stepRate = 0;
   // Which way the clock turns: ground covered along the BODY's heading (the strafe blend
   // has already turned the hips toward a sideways walk, so only a genuine back-up reads
@@ -2904,7 +2928,7 @@ export function updateDiver(dt, t, player) {
       lastStepSide = strikeP() < 0.5 ? 0 : 1;   // a start is not a footfall
     }
   } else if (gaitState === 2) {
-    stepRate = clamp(flat / (GAIT.stride * strideK), 0, 2.1);
+    stepRate = clamp(flat / (GAIT.stride * strideK * slopeK), 0, 2.1);
     if (!wantWalk) {
       // Finish the step that is in the air, on a fixed clock, and land it long.
       gaitState = 3; gaitT = 0; catchFrom = walkP;
