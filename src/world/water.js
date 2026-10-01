@@ -142,7 +142,13 @@ const SUN_DISC = GLASS.stops.noon.disc;
 // rim: transmittance there is 0.159 green, so the last of the difference between the
 // sea and the dome behind it is under 4 sRGB code values.
 // Faintly blue-tilted (aerosol, not Rayleigh — a real marine haze is nearly grey).
-const K_AIR = [0.00380, 0.00400, 0.00440];
+// OCEAN ROUND: the 2.9 km haze was also what hid the old ocean disc's 460-unit rim.
+// The spectral sea runs to the true horizon now (the dome draws the far-sea BRDF past
+// camera.far), so clear air can be clear: ~10 km meteorological visibility on a fair
+// day, and the WEATHER thickens it (STYLE_U[0] carries the storm haze, so a gale closes
+// back to ~2.2 km of spray and rain). A white horizon band is now weather, not a seam.
+const K_AIR = [0.00110, 0.00118, 0.00132];
+const AIR_STORM_K = 3.2;
 
 // THE FLOW LEAN — atmosphere forward (roadmap/flow-lean-style.md item 3) and the matte
 // mirror (item 8). GLASS.style is the dial; each sub-knob follows the master at -1.
@@ -2426,6 +2432,7 @@ function buildSurface() {
         return smoothstep( 0.62 - 0.55 * cov, 0.80 - 0.45 * cov, n + 0.35 * cov );
       }
 
+      float seaS0(){ return uOcSea.w; }
       void main(){
         // Clipmap overlap band: the finer level owns everything inside its extent.
         if ( vHole.z > 0.0 ) {
@@ -2441,10 +2448,19 @@ function buildSurface() {
         // slope variance this pixel cannot show as a normal -- it becomes the roughness.
         vec2 q0 = vP0 / uOcL.x, q1 = vP0 / uOcL.y, q2 = vP0 / uOcL.z;
         vec4 s0 = texture2D( uOcSlope0, q0 ), s1 = texture2D( uOcSlope1, q1 ), s2 = texture2D( uOcSlope2, q2 );
-        vec2 dh = s0.xy + s1.xy + s2.xy;
+        // CAT'S PAWS. Wind over water is gusty: the short wind-sea (cascade 2, half of
+        // cascade 1) is patchy at the hundred-metre scale, darker ruffled patches drifting
+        // downwind over smoother water. Without it the chop is one uniform texture to the
+        // horizon -- the single strongest "tiled noise" tell. Slope AND its variance are
+        // scaled, so a calm patch is also a glassier patch.
+        vec2 gq = vP0 * 0.011 - uWindD * uTime * ( 0.04 + 0.10 * uWindS );
+        float gust = 0.40 + 1.15 * smoothstep( 0.20, 0.80, vn( gq ) * 0.7 + vn( gq * 2.7 + 5.1 ) * 0.3 );
+        gust = mix( gust, 1.0, 0.35 * seaS0() );
+        float g1 = mix( 1.0, gust, 0.5 );
+        vec2 dh = s0.xy + s1.xy * g1 + s2.xy * gust;
         float varU = max( s0.z - s0.x * s0.x, 0.0 ) + max( s0.w - s0.y * s0.y, 0.0 )
-                   + max( s1.z - s1.x * s1.x, 0.0 ) + max( s1.w - s1.y * s1.y, 0.0 )
-                   + max( s2.z - s2.x * s2.x, 0.0 ) + max( s2.w - s2.y * s2.y, 0.0 );
+                   + ( max( s1.z - s1.x * s1.x, 0.0 ) + max( s1.w - s1.y * s1.y, 0.0 ) ) * g1 * g1
+                   + ( max( s2.z - s2.x * s2.x, 0.0 ) + max( s2.w - s2.y * s2.y, 0.0 ) ) * gust * gust;
         vec4 j0 = texture2D( uOcFoam0, q0 ), j1 = texture2D( uOcFoam1, q1 ), j2 = texture2D( uOcFoam2, q2 );
         float Jxx = 1.0 + j0.x + j1.x + j2.x, Jzz = 1.0 + j0.y + j1.y + j2.y, Jxz = j0.z + j1.z + j2.z;
         float Jt = Jxx * Jzz - Jxz * Jxz;
@@ -2455,7 +2471,11 @@ function buildSurface() {
         float foamJ = max( foamLive, foamMem );
 
         vec3 N = normalize( vec3( -dh.x, 1.0, -dh.y ) );
-        bool below = dot( V, N ) > 0.0;
+        // Which side of the interface: the GEOMETRIC face, not the shading normal. Every
+        // triangle is wound counter-clockwise seen from above, so the front face is the
+        // air side. Asking dot(V, N) instead flipped grazing back-facets of the detail
+        // normals into the underwater branch, which drew dark slivers across the far sea.
+        bool below = !gl_FrontFacing;
         // Unresolved roughness: the filtered variance, plus the capillaries finer than
         // cascade 2's Nyquist (uOcK.w grows with the wind).
         float mssU = varU + uOcK.w;
@@ -2558,6 +2578,11 @@ function buildSurface() {
           // ---- THE SEA FROM ABOVE ------------------------------------------------
           vec2 dhA = dh + dhSpl;
           vec3 Na = normalize( vec3( -dhA.x, 1.0, -dhA.y ) );
+          // A shading normal facing away from the eye is a facet hidden behind its own
+          // wave: bend it back to grazing so it reflects the sky at the horizon instead
+          // of reflecting the sea (the classic normal-map horizon fix).
+          float vn0 = dot( V, Na );
+          if ( vn0 > -0.02 ) Na = normalize( Na - V * ( vn0 + 0.02 ) );
           float cta = clamp( -dot( V, Na ), 0.0, 1.0 );
           F = seaFresnel( V, Na, alpha );
           vec3 T = refract( V, Na, 1.0 / ETA );
@@ -2614,7 +2639,9 @@ function buildSurface() {
               // Thin crests let the most through: the face of a steep wave toward the sun.
               float face = clamp( dot( -Na.xz, sxz2 / max( sl2, 1e-3 ) ) * 2.5, 0.0, 1.0 );
               float seaG = uSss2.y + ( 1.0 - uSss2.y ) * smoothstep( 0.0, 0.85, seaS );
-              float amt = pow( h01, uSss.y ) * ( 0.6 + 0.8 * face ) * min( dayS, 1.0 ) * viewS * seaG
+              // Under a storm lid the light is diffuse: no beam through the swell's back.
+              float beam = 1.0 - 0.75 * smoothstep( 0.3, 0.9, uStorm );
+              float amt = pow( smoothstep( 0.35, 1.0, h01 ), uSss.y ) * ( 0.35 + 0.65 * face ) * min( dayS, 1.0 ) * viewS * seaG * beam
                         * ( 1.0 + uOpaq2.y * opq )
                         * ( 1.0 - smoothstep( 220.0, 430.0, dist ) ) * uNearK * uSss.x * sh;
               vec3 sssRaw = fogColor * exp( -${v3(K_EXT)} * uSss.z ) * uSss.w;
@@ -3075,7 +3102,7 @@ export function updateWater(dt, t) {
   // THE FLOW LEAN, resolved once a frame for every fogged program (see STYLE_U).
   {
     const hz = styleK('haze'), mt = styleK('matte');
-    STYLE_U[0] = 0.65 * hz;       // air: KAIR * (1 + 0.65 hz) -- 1.65x at full lean (2.4x drowned the sea in the sky's colour; 1.8x fogged noon)
+    STYLE_U[0] = 0.65 * hz + AIR_STORM_K * uStormU.value;   // + the storm's spray haze (see K_AIR)       // air: KAIR * (1 + 0.65 hz) -- 1.65x at full lean (2.4x drowned the sea in the sky's colour; 1.8x fogged noon)
     STYLE_U[1] = 0.45 * hz;       // nepheloid amp x1.45 at full lean (silt line structure kept)
     STYLE_U[2] = mt;              // the matte mirror (surface shader, from-above branch only)
     STYLE_U[3] = hz;              // lid ring share, read by skyDrama on the CPU

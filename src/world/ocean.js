@@ -238,10 +238,12 @@ void main(){
   o0 = vec4( 0.0 ); o1 = vec4( 0.0 );
   if ( kl < uKlo[ c ] || kl >= uKhi[ c ] || kl < 1e-6 || n == ${N / 2} || m == ${N / 2} ) return;
   // Bin area in (rad/m)^2 and the metres -> units conversion (1 u = 3 m).
+  // E|xi|^2 = 2 and every wave lands in BOTH its bin and the conjugate bin, so a bin
+  // carries 1/4 of E dk^2 per draw: the field's variance is then exactly integral E.
   float dk = 2.0 * PI / ( L * 3.0 );
   vec2 km = k / 3.0;
-  float aP = sqrt( 0.5 * specDensity( km ) ) * dk / 3.0;
-  float aM = sqrt( 0.5 * specDensity( -km ) ) * dk / 3.0;
+  float aP = sqrt( 0.25 * specDensity( km ) ) * dk / 3.0;
+  float aM = sqrt( 0.25 * specDensity( -km ) ) * dk / 3.0;
   vec2 xiP = texelFetch( uNoise, px, 0 ).xy;
   ivec2 pm = ivec2( ( ${N} - n ) % ${N}, c * ${N} + ( ${N} - m ) % ${N} );
   vec2 xiM = texelFetch( uNoise, pm, 0 ).xy;
@@ -466,12 +468,16 @@ export const OCEAN = {
   windLo: 3.5, windHi: 13.0, stormU: 8.0,      // m/s: U = lo + (hi-lo)*wind + storm*stormU
   fetch: 1.2e5, fetchStorm: 6e5,               // m, fetch-limited JONSWAP
   gamma: 3.3,
-  swellHs: 1.5, swellHsStorm: 2.5,             // m
-  swellTp: 11.0, swellTpStorm: 13.0,           // s
+  swellHs: 2.3, swellHsStorm: 3.2,             // m
+  swellTp: 10.0, swellTpStorm: 12.5,           // s
   swellDeg: 20, swellSpread: 22, swellGamma: 4.0,
   spread: 1.0, ampK: 1.0,
   chop: 1.05, chopStorm: 1.25,
   foamThr: 0.55, foamThrStorm: 0.80, foamGain: 2.2, foamDecay: 2.6, foamDecayStorm: 6.0,
+  // Per-cascade birth thresholds for the PERSISTENT foam, (calm, storm). Each cascade
+  // only sees its own band's Jacobian, and the long cascades carry the breaking swell
+  // with less compression per band than the sea as a whole, so their bar sits higher.
+  foamThrC: [[0.80, 0.93], [0.74, 0.90], [0.52, 0.70]],
   lodBias: 1.0
 };
 const _sea = { U: 0, Hs: 0, mss: 0, lamP: 0, state: 0 };
@@ -556,6 +562,8 @@ export function updateOcean(dt, t) {
   const next = mergeCur ^ 1;
   for (let c = 0; c < 3; c++) {
     mu.uC.value = c;
+    const tc = O.foamThrC[c];
+    mu.uM.value.y = tc[0] + (tc[1] - tc[0]) * storm;
     mu.uPrev.value = rtMerge[c][mergeCur].textures[2];
     renderer.setRenderTarget(rtMerge[c][next]);
     renderer.render(passScene, quadCam);
@@ -723,8 +731,8 @@ function refreshComponents() {
     if (mm === 0 && nn <= 0) continue;
     const kx = nn * 2 * Math.PI / L, kz = mm * 2 * Math.PI / L, kl = Math.hypot(kx, kz);
     if (kl >= K_EDGE[1]) continue;
-    const aP = Math.sqrt(0.5 * specDensity(kx / 3, kz / 3)) * dk / 3;
-    const aM = Math.sqrt(0.5 * specDensity(-kx / 3, -kz / 3)) * dk / 3;
+    const aP = Math.sqrt(0.25 * specDensity(kx / 3, kz / 3)) * dk / 3;
+    const aM = Math.sqrt(0.25 * specDensity(-kx / 3, -kz / 3)) * dk / 3;
     const tot = aP + aM;
     if (compN < TOPK || tot > minA) {
       const n = (nn + N) % N, m = mm % N, ni = (N - n) % N, mi = (N - m) % N;
