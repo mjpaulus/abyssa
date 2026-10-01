@@ -271,6 +271,7 @@ const VEL_FRAG = /* glsl */`
   uniform sampler2D tDepth;
   uniform vec2 uIn;
   uniform vec2 uNF;
+  uniform float uFlag;
   varying vec4 vCur;
   varying vec4 vPrev;
   float viewDist(float d) { return uNF.x * uNF.y / (uNF.y - d * (uNF.y - uNF.x)); }
@@ -279,7 +280,7 @@ const VEL_FRAG = /* glsl */`
     float fz = viewDist(gl_FragCoord.z), sz = viewDist(sd);
     if (fz > sz * 1.01 + 0.02) discard;
     vec2 v = (vCur.xy / vCur.w - vPrev.xy / vPrev.w) * 0.5;
-    gl_FragColor = vec4(v, 1.0, vPrev.w / max(vCur.w, 1e-4));
+    gl_FragColor = vec4(v, uFlag, vPrev.w / max(vCur.w, 1e-4));
   }`;
 
 // SKINNED movers (salreal: Sal's dress). The same proxy idea with the source's OWN skeleton:
@@ -335,7 +336,7 @@ export class TemporalAAPass extends Pass {
     this.jx = 0; this.jy = 0;
     // Knobs (window.__taa.K): alpha gain, alpha floor, clip gamma, disocclusion tolerance,
     // motion alpha cap + per-pixel gain, sharpen, cut distance (units per frame).
-    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.35, cut: 5, jitter: 1, velDepth: 0, mip: 1 };
+    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.35, cut: 5, jitter: 1, velDepth: 0, mip: 1, skinVel: 1 };
     this.savedProj = new THREE.Matrix4(); this.savedProjInv = new THREE.Matrix4(); this.jittered = false;
     this.resolveMat = new THREE.ShaderMaterial({
       name: 'AbyssaTAAResolve', vertexShader: VERT, fragmentShader: RESOLVE_FRAG,
@@ -366,7 +367,7 @@ export class TemporalAAPass extends Pass {
     this.velBase = new THREE.ShaderMaterial({
       name: 'AbyssaTAAVelocity', vertexShader: VEL_VERT, fragmentShader: VEL_FRAG, toneMapped: false,
       uniforms: { uCurVP: { value: null }, uPrevVP: { value: null }, uPrevModel: { value: null },
-        tDepth: { value: null }, uIn: { value: null }, uNF: { value: null } }
+        tDepth: { value: null }, uIn: { value: null }, uNF: { value: null }, uFlag: { value: 1 } }
     });
     this.curVP = new THREE.Matrix4(); this.prevVP = new THREE.Matrix4();
     this.velIn = new THREE.Vector2(1, 1);
@@ -377,7 +378,7 @@ export class TemporalAAPass extends Pass {
     this.velSkinBase = new THREE.ShaderMaterial({
       name: 'AbyssaTAAVelocitySkin', vertexShader: VEL_SKIN_VERT, fragmentShader: VEL_FRAG, toneMapped: false,
       uniforms: { uCurVP: { value: null }, uPrevVP: { value: null }, uPrevBones: { value: null },
-        tDepth: { value: null }, uIn: { value: null }, uNF: { value: null } }
+        tDepth: { value: null }, uIn: { value: null }, uNF: { value: null }, uFlag: { value: 1 } }
     });
     this.prevPal = new Map();      // Skeleton -> { arr, tex } last frame's bone palette
     this._scanFn = (o) => {
@@ -465,6 +466,10 @@ export class TemporalAAPass extends Pass {
         // no history yet: last frame's palette = this frame's (zero motion, not garbage)
         const pal = this._palette(src.skeleton);
         if (px.userData.fresh || !this.valid || pal.fresh) { pal.arr.set(src.skeleton.boneMatrices); pal.tex.needsUpdate = true; pal.fresh = false; px.userData.fresh = false; }
+        // K.skinVel 0 (A/B): the skin's vectors are written with flag 0.25, which the resolve
+        // ignores (b > 0.5) — exactly the pass before skinned movers existed — while a debug
+        // readback still sees the silhouette
+        u.uFlag.value = this.K.skinVel === 0 ? 0.25 : 1;
       } else if (px.userData.fresh || !this.valid) { u.uPrevModel.value.copy(src.matrixWorld); px.userData.fresh = false; }
       if (!vis) continue;
       n++;
@@ -568,6 +573,7 @@ export class TemporalAAPass extends Pass {
   render(renderer, inputBuffer) {
     if (!this.hist[0]) return;
     const K = this.K, u = this.resolveMat.uniforms;
+    this.lastIn = inputBuffer;            // debug readback (__taa.pass().lastIn): the frame's input, for ghost metrics
     const velLive = this._renderVelocity(renderer);
     u.uVelOn.value = velLive ? 1 : 0;
     u.tVel.value = velLive ? this.velRT.texture : null;
