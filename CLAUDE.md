@@ -54,7 +54,12 @@ against explicit contracts and reviewed on return.
   ratios caused artifacts), resize path (CSS → ResizeObserver → applySize →
   composer.setSize). Canvas z-index 0 / #ui z-index 1 is load-bearing.
 - `player.js` — locomotion. Walking is deliberately PONDEROUS (top ~2.6 u/s, slow
-  ramp, momentum carry) — the user rejected faster/snappier. Swim untouched.
+  ramp, momentum carry) — the user rejected faster/snappier. Swim is HEAVY (Michael,
+  2026-10-01, "make the swimming feel heavier"): added mass AM_H 2.40 / AM_V 1.90 (was
+  1.55 / 1.26) — same cruise speed, longer ramps and carry; the bottle burst is computed
+  against the shipped added mass so it keeps its punch and carries further; an unworked
+  diver settles (A_SETTLE -0.11, small beside the dress's -1.83..+2.61). diver.js: a
+  0.52 Hz kick (was 0.73), slower body yaw in water, a body pendulum under the helmet.
   Air thruster is a BURST model, not a drain: one shove per Shift press (`player.burstDir`
   / `player.burstT`, set by game.js's `tryBurst`), costing AIR_PER_BURST of the tank and
   a 5 s bottle recharge (`survival.thrustCharge`). Holding Shift never repeats it.

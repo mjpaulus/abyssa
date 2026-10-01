@@ -1886,21 +1886,26 @@ function poseWalk(o, p, a, t, deck) {
 const dragS = x => { const s = Math.sin(x); return s * (1.15 - 0.15 * s * s); };
 const SWIM_DRAG = 0.28;    // seconds the arms trail the body's roll/yaw
 
-function poseSwim(o, p, t, drive) {
+function poseSwim(o, p, t0, drive) {
+  // HEAVIER (2026-10-01). Every free oscillation of the floating body runs on a clock
+  // 0.72x the old one and at ~0.7 of the amplitude: a hundredweight of brass and lead
+  // hanging under an air-filled helmet does not bob and wander like a frogman. The kick
+  // itself is slowed in its own clock (swimP, updateDiver).
+  const t = t0 * 0.72;
   const td = t - SWIM_DRAG;
   // The kick's phase is warped so the tuck and the glide — the two extremes — take longer
   // than the transit between them. Pure reparametrisation: every S curve keeps its range.
   const pk = p - 0.022 * Math.sin(4 * Math.PI * (p - 0.45));
-  o[CH.bobY] = Math.sin(t * 0.9) * 0.035;
-  o[CH.shiftX] = Math.sin(t * 0.62) * 0.03;
+  o[CH.bobY] = Math.sin(t * 0.9) * 0.024;
+  o[CH.shiftX] = Math.sin(t * 0.62) * 0.02;
   o[CH.shiftZ] = 0;
-  o[CH.pYaw] = Math.sin(t * 0.5) * 0.05;
-  o[CH.pRoll] = Math.sin(t * 0.71) * 0.06;
+  o[CH.pYaw] = Math.sin(t * 0.5) * 0.035;
+  o[CH.pRoll] = Math.sin(t * 0.71) * 0.04;
   o[CH.pPitch] = -0.10 - S.hip(pk) * 0.10;
-  o[CH.sYaw] = Math.sin(t * 0.44 + 1) * 0.07;
+  o[CH.sYaw] = Math.sin(t * 0.44 + 1) * 0.05;
   o[CH.sPitch] = 0.10 + S.hip(pk) * 0.06;
-  o[CH.sRoll] = Math.sin(t * 0.58) * 0.07;
-  o[CH.nYaw] = Math.sin(t * 0.33) * 0.06; o[CH.nPitch] = -0.06;
+  o[CH.sRoll] = Math.sin(t * 0.58) * 0.05;
+  o[CH.nYaw] = Math.sin(t * 0.33) * 0.045; o[CH.nPitch] = -0.06;
   const k = 0.45 + 0.55 * drive;
   const kr = k * kAmpR, kl = k * kAmpL, pl = pk + kPhL;
   o[CH.Rhx] = -S.hip(pk) * kr; o[CH.Rhz] = 0.06 + S.abd(pk) * kr * kAbdR;
@@ -1919,9 +1924,12 @@ function poseSwim(o, p, t, drive) {
   // feels in player.js, not a second clock. The lantern arm only answers it a little.
   // Hanging in the column with no way on, nothing is locked: the knees soften and the
   // legs sit a little forward of the hips, the way a relaxed body floats.
+  // The boots are lead: with no way on they hang almost straight down under him, knees
+  // only a little soft — not the drawn-up float of a man in fins.
   const relax = 1 - drive;
-  o[CH.Rhx] -= 0.10 * relax; o[CH.Lhx] -= 0.06 * relax;
-  o[CH.Rk] += 0.22 * relax; o[CH.Lk] += 0.30 * relax;
+  o[CH.Rhx] -= 0.04 * relax; o[CH.Lhx] -= 0.02 * relax;
+  o[CH.Rk] += 0.16 * relax; o[CH.Lk] += 0.22 * relax;
+  o[CH.Ra] -= 0.10 * relax; o[CH.La] -= 0.08 * relax;
   const st = S.hip(pk + 0.06), sk = S.knee(pk + 0.06) / 1.45;
   const dv = 0.35 + 0.65 * drive;
   o[CH.Lsx] += dv * (0.28 - 0.80 * st);
@@ -2713,6 +2721,9 @@ let fwdSpdPrev = 0, accF = 0;
 const strafeS = { x: 0, v: 0 };
 let hoseLean = 0, hoseRoll = 0, hoseTautWas = 0;
 const accLean = { x: 0, v: 0 };
+// swim pendulum: last velocity, smoothed body-frame acceleration, and the two swings
+let pdVx = 0, pdVz = 0, pdAf = 0, pdAl = 0;
+const pendP = { x: 0, v: 0 }, pendR = { x: 0, v: 0 };
 const lkY = { x: 0, v: 0 }, lkX = { x: 0, v: 0 };
 // slope adaptation state
 let slopeZi = 0;
@@ -2844,7 +2855,7 @@ export function updateDiver(dt, t, player) {
   {
     let d = player.yaw + strafeS.x * (1 - sqW) - yawF;
     d = Math.atan2(Math.sin(d), Math.cos(d));
-    const rate = (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 2.6) * (1 - sqW) + 26 * sqW;
+    const rate = (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 1.6) * (1 - sqW) + 26 * sqW;   // in water: 1.6/s (was 2.6), the mass comes round late
     yawF += d * Math.min(1, rate * dt);
   }
   diver.rotation.y = yawF;
@@ -2961,7 +2972,10 @@ export function updateDiver(dt, t, player) {
   // and the cadence is the shipped one.
   const spinUp = 1 + 1.6 * clamp(1 - speed / 14, 0, 1) * clamp(flat * 0.4 + Math.abs(player.vel.y) * 0.2, 0, 1);
   const swPrev = swimP;
-  swimP = (swimP + (0.24 + speed * 0.028) * spinUp * dt) % 1;
+  // Slow, effortful strokes: 0.52 Hz at cruise (was 0.73). The thrust pulse in player.js
+  // is unit-mean per cycle, so a slower kick is a bigger shove with a longer glide after
+  // it — not a slower swimmer.
+  swimP = (swimP + (0.17 + speed * 0.020) * spinUp * dt) % 1;
   if (swimP < swPrev) drawKick(++kickIdx);   // one fresh pair of legs per kick
   // ---- breath clock: context-driven cadence, still drifting so it never metronomes.
   // Effort winds the rate up through an EMA — a sprint costs breaths for a while after
@@ -3328,7 +3342,27 @@ export function updateDiver(dt, t, player) {
       : gaitState === 3 ? (gaitDir > 0 ? 0.085 : -0.045)                       // STOP: pitch into the catch step
         : 0,
     dt, 7.5, 0.62);
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x, 0, sRollT.x + bankG + rcR.x + hoseRoll);
+  // THE PENDULUM. Off the bottom he hangs from an air-filled helmet with a hundredweight of
+  // lead at his feet, so every change of way swings the body under the bonnet: a stroke
+  // that gets him going leaves the boots behind and tips him into it, a stop swings them
+  // through under him and he rocks back, a hard turn swings them out. Smoothed body-frame
+  // acceleration drives an under-damped spring at roughly the period of a body that long.
+  {
+    const off = 1 - gb;
+    let afw = 0, alt = 0;
+    if (dt > 1e-5 && off > 1e-3) {
+      const ax = (player.vel.x - pdVx) / dt, az = (player.vel.z - pdVz) / dt;
+      const sy = Math.sin(yawF), cy = Math.cos(yawF);
+      afw = ax * sy + az * cy; alt = ax * cy - az * sy;
+    }
+    pdVx = player.vel.x; pdVz = player.vel.z;
+    pdAf += (clamp(afw, -40, 40) - pdAf) * Math.min(1, 3.5 * dt);
+    pdAl += (clamp(alt, -40, 40) - pdAl) * Math.min(1, 3.5 * dt);
+    spring(pendP, clamp(0.016 * pdAf, -0.26, 0.26) * off * (1 - ladderF), dt, 2.3, 0.32);
+    spring(pendR, clamp(-0.014 * pdAl, -0.20, 0.20) * off * (1 - ladderF), dt, 2.3, 0.32);
+  }
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x, 0,
+    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x);
 
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);
