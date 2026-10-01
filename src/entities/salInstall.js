@@ -311,8 +311,10 @@ const _rs = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
 function skDrive(diver) {
   const U = SK.U; if (!U) return;
   const b0 = U.uSkB0.value, b1 = U.uSkB1.value;
-  b0.set(_rs(0.12, 1.25, diver.legL.mid.rotation.x), _rs(0.12, 1.25, diver.legR.mid.rotation.x),
-    _rs(0.25, 1.45, -diver.armL.mid.rotation.x), _rs(0.25, 1.45, -diver.armR.mid.rotation.x));
+  // ranges from the live gait: a walking knee peaks ~0.65 rad in swing, the swim kick 1.45;
+  // the arms carry ~0.2 rad of rest bend (REST_RE/LE), so the elbow counts from there
+  b0.set(_rs(0.10, 0.85, diver.legL.mid.rotation.x), _rs(0.10, 0.85, diver.legR.mid.rotation.x),
+    _rs(0.22, 1.10, -diver.armL.mid.rotation.x), _rs(0.22, 1.10, -diver.armR.mid.rotation.x));
   // hip flexion: the thigh swings forward = root.rotation.x negative
   const hl = -diver.legL.root.rotation.x, hr = -diver.legR.root.rotation.x, w = diver.spine.rotation.x;
   b1.set(Math.sign(hl) * _rs(0.10, 0.95, Math.abs(hl)), Math.sign(hr) * _rs(0.10, 0.95, Math.abs(hr)), Math.sign(w) * _rs(0.04, 0.45, Math.abs(w)), 0);

@@ -449,6 +449,7 @@ function handSpec(left) {
   // each finger wraps the bar on a circle round C: down the outboard side, under, up inside
   const Rc = 0.046, fz = [0.107, 0.077, 0.048, 0.020], len = [1.0, 1.06, 0.98, 0.80], rad = [0.0168, 0.0172, 0.0162, 0.0140];
   const curl = [0, 0, 3, 7];                    // the little finger curls a touch tighter
+  const JT = [];                                 // finger joints: [centre, axis] for the skin creases
   for (let i = 0; i < 4; i++) {
     const z = fz[i], sc = len[i], r0 = rad[i];
     const K = [0.030, -0.158 + (1 - sc) * 0.030, z];                     // MCP knuckle
@@ -457,6 +458,7 @@ function handSpec(left) {
     for (let k = 1; k < 4; k++) pts.push([C[0] + Math.cos(ang[k]) * Rc * (0.94 + 0.06 * sc), C[1] + Math.sin(ang[k]) * Rc * (0.94 + 0.06 * sc) - (1 - sc) * 0.012, z]);
     const rr = [r0 * 1.08, r0, r0 * 0.93, r0 * 0.84];
     for (let k = 0; k < 3; k++) H.push(Cap(pts[k], pts[k + 1], rr[k], rr[k + 1], M.SKIN));
+    for (let k = 1; k < 3; k++) JT.push([pts[k], norm(sub(pts[k + 1], pts[k - 1]))]);
     H.push(Sph(K, r0 * 1.22, M.SKIN));                                    // the knuckle
     H.push(Sph(pts[1], rr[1] * 1.10, M.SKIN));                            // PIP
     H.push(Sph(pts[2], rr[2] * 1.06, M.SKIN));                            // DIP
@@ -484,8 +486,18 @@ function handSpec(left) {
         const zt = 0.040 + (fz[i] - 0.040) * clamp((-y - 0.03) / 0.13, 0, 1);
         o += 0.0010 * gau((z - zt) / 0.0045) * sst(-0.035, -0.08, y);
       }
-      // creases across every finger joint and the knuckles (fine, many)
-      o -= 0.0007 * Math.pow(Math.abs(Math.sin(y * 420 + z * 30)), 8) * sst(-0.13, -0.17, y);
+      // creases across every finger joint (PIP, DIP): a few deep lines, only at the joint
+      for (const [c, a] of JT) {
+        const dx = x - c[0], dy = y - c[1], dz = z - c[2], d = Math.hypot(dx, dy, dz);
+        if (d > 0.03) continue;
+        const along = dx * a[0] + dy * a[1] + dz * a[2];
+        o -= 0.0007 * gau(d / 0.016) * Math.pow(Math.abs(Math.sin(along * 380)), 6);
+      }
+      // two veins over the back of the hand, wandering toward the knuckles
+      if (x > 0.02) for (const [z0, z1, ph] of [[0.035, 0.085, 0.3], [0.060, 0.030, 1.7]]) {
+        const t = clamp((-y - 0.04) / 0.10, 0, 1), zv = z0 + (z1 - z0) * t + 0.006 * Math.sin(t * 9 + ph);
+        o += 0.0008 * gau((z - zv) / 0.0035) * sst(-0.04, -0.06, y) * (1 - sst(-0.13, -0.15, y));
+      }
       return o;
     } },
     { type: 'fbm', bake: true, amp: 0.00022, f: 260, oct: 2, seed: left ? 211 : 212 }
