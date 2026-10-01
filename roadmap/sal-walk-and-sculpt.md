@@ -2,7 +2,7 @@
 title: Sal: walk, heavy swim, grounded camera, sculpted model
 status: done
 tags: diver, animation, camera, quality
-updated: 2026-10-01
+updated: 2026-10-02
 ---
 Michael, 2026-10-01: "ok focus on Sal's walking...its really weird." / "also make the swimming feel heavier" / "also the camera feels floaty underwater and maybe sals model needs updated with blender".
 
@@ -15,3 +15,5 @@ Michael, 2026-10-01: "ok focus on Sal's walking...its really weird." / "also mak
 ## Log
 - 2026-10-01 — merged walk and salsculpt. Verified on main: console clean, 14 lights, sculpt installed with no rig warnings, step counter advances, sleeper fingerprints unchanged.
 - Open: cadence is still above target. The ankle pivot sits 0.37 u above the sole (28% of leg length); a lower ankle needs a rig change (longer shin, lower `SOLE_Y`) plus a small boot sculpt change. The left stance knee loads about 10° more than the right. Lantern and knife are still procedural. The swim pendulum and the locked camera need Michael's feel pass at 60 fps.
+- 2026-10-02 — Michael: "fix the ankle rig so his stride lengthens also his upper body is rigid to his lower when he walks and it almost looks like the is going to fall over going left to right. Also you can make his model more realistic. just looks robotic". Merged rig: ankle moved 0.3665 → 0.15 above the sole (shin 0.465 → 0.6815, two-piece boot), spine chain (chest counter-rotates, neck cancels). Cadence 136 → 113/min, step/leg 0.78 → 0.94, helmet sway 0.080 → 0.032, tilt 4.3° → 0.6°, slip 8.0 → 1.3 cm, sinking 7.5 → 1.4 cm. Merged salreal: a skinned continuous dress bound to diver.js's groups (Blender bone-heat weights), wrinkle normal map driven by joint bend, slight underwater ballooning, TAA skinned velocity, weight belt and braces, laced boots, bare hands in rubber cuffs, wear. Merged salprop: helmet and corselet ×0.85, shoulder x 0.50 → 0.46, thigh 0.562 → 0.668 (hip-to-sole 1.50), a sculpted weathered face behind the port glass (eyes glance and blink, breath fogs the glass, lit only through the ports), and hands skinned to 16 finger bones with grip/knife/relaxed/spread poses. Cadence 110/min, step/leg 0.95, helmet sway 0.23 of the hips. Sal: 29 draws, about 107k tris installed, about 39 MB GPU textures. Fallbacks `?salrigid`, `?salproc`. Verified on main: console clean, skinned Sal installed, 14 lights, fingerprints unchanged.
+- Open: the zone-0 sun through the top port leaves a bright patch on his cheek; the eye whites are a little bright; the helmet may read too steady (`__chain` kH, headK); foot slip 1.47 cm; the left hand is hidden while swimming; the rigid fallback shows more blue duck between brass and belt; ladder checked only visually. Needs Michael's feel pass at 60 fps.
