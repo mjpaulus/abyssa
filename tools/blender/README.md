@@ -134,3 +134,28 @@ All optional; a creature that uses none of them builds exactly as before.
   any proportion change in diver.js, re-run the one command.
 Bake: ~3.5 min on an M5 Max (hi meshes 0.16-1.5 M tris per piece). Reproducible: two runs give a
 byte-identical .glb and most maps; Cycles-GPU AO noise moves <0.1% of ORM texels by <= 7/255.
+
+## Skinned Sal (salreal): skin, wrinkle maps, gutter fill, welded normals
+
+`node tools/blender/build.mjs salSkin` — `src/entities/salSkinSculpt.js` -> `assets/salskin/`.
+The dress (trunk + trouser legs + boot shafts, two sleeves) is ONE garment authored in the
+hips frame in the rig's rest pose; salInstall.js binds it to diver.js's own groups (rigid
+`assets/sal` stays as the second fallback, the procedural man the third). All additive — a
+creature that uses none of these builds exactly as before:
+- **`pipeline().skin = { bones: [{ name, head, tail, parent? }] }`** (game frame) and a piece
+  `skin: { allow: [bone names], smooth? }`: bake.py builds the armature, weights each skinned
+  low by BONE HEAT on a welded copy (the low is split along its UV seams and heat cannot
+  cross a cut; solved at x10 — at 1x Blender's solve failed on every vertex), carries the
+  weights back by position, then cleans them in numpy (Laplacian smoothing over the welded
+  edges, 4 influences, normalised; empties -> nearest allowed bone). The .glb gets
+  JOINTS_0/WEIGHTS_0 + a skin; `assets.js` reports `skins[piece].bones` (joint names in
+  skinIndex order; GLTFLoader may suffix a duplicate name `_1`).
+- **piece `wrk`** (a second full-detail field: compression gathers in the insides of the
+  joints) -> `<piece>_hiW.ply` -> bake.py bakes its normals through the same low into
+  `<set>_wrinkle` (WebP + BC5 KTX2; set `wrinkleHalf: true` writes it at half size);
+  meta `sets.<s>.wrinkle = true`; `assets.js` loads `maps.<s>.wrinkleMap`.
+- **set `fill: true`**: push-pull fill of every map's background from the charts (no black
+  or roughness-0 gutters averaging into chart edges in the mips).
+- **set `weldNormals: true`**: one normal per position across UV seams, set as custom normals
+  before the bake (the tangent frame the maps are baked in is the game's) — no seam lines,
+  no cracks when a shader pushes along the normal.

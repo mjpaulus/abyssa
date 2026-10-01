@@ -15,6 +15,9 @@
 // and its dark recess (salGlass1), the braided feed hose and its brass ferrules, the knife
 // and scabbard, the lantern, the slash's water-drag arc, the exhaust bubbles.
 //
+// (salreal: the rigid build below is now the SECOND choice — the skinned dress, further down,
+// answers the two objections: skinned movers get motion vectors in postfx.taa.js, and the
+// inside of a closing joint takes its gathers from the wrinkle map + a corrective push.)
 // DEFORMATION — WHY RIGID SEGMENTS (evidence, not taste):
 //  - The walk is the procedural rig's segment hierarchy driven by IK (driveLegs) and
 //    curves; a SkinnedMesh would need a Skeleton of THREE.Bones mirroring those groups,
