@@ -746,7 +746,7 @@ export function pipeline() {
   ];
   return {
     name: 'salSkin', out: 'assets/salskin',
-    sets: { helm: SET, dress: Object.assign({}, SET, { wrinkle: true }), gear: SET1K },
+    sets: { helm: SET, dress: Object.assign({}, SET, { wrinkle: true, wrinkleHalf: true }), gear: SET1K },
     pieces,
     skin: { bones: B },
     meta: {

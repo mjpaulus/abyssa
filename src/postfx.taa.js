@@ -380,7 +380,8 @@ export class TemporalAAPass extends Pass {
       uniforms: { uCurVP: { value: null }, uPrevVP: { value: null }, uPrevBones: { value: null },
         tDepth: { value: null }, uIn: { value: null }, uNF: { value: null }, uFlag: { value: 1 } }
     });
-    this.prevPal = new Map();      // Skeleton -> { arr, tex } last frame's bone palette
+    this.prevPal = new Map();      // Skeleton -> { arr, tex, sk } last frame's bone palette
+    this.palList = [];             // the same, iterated per frame without an iterator object
     this._scanFn = (o) => {
       if (o.isSkinnedMesh && o.skeleton && o.geometry && !this.proxyOf.has(o)) { this._addSkinned(o); return; }
       if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || !o.geometry || this.proxyOf.has(o)) return;
@@ -404,8 +405,8 @@ export class TemporalAAPass extends Pass {
       arr.set(sk.boneMatrices);
       const tex = new THREE.DataTexture(arr, img.width, img.height, THREE.RGBAFormat, THREE.FloatType);
       tex.needsUpdate = true;
-      p = { arr, tex, fresh: true };
-      this.prevPal.set(sk, p);
+      p = { arr, tex, fresh: true, sk };
+      this.prevPal.set(sk, p); this.palList.push(p);
     }
     return p;
   }
@@ -430,7 +431,7 @@ export class TemporalAAPass extends Pass {
     for (let i = this.proxies.length - 1; i >= 0; i--) {
       const px = this.proxies[i], src = px.userData.src;
       let o = src; while (o && this.movers.indexOf(o) < 0) o = o.parent;
-      if (!o) { this.velScene.remove(px); px.material.dispose(); this.proxies.splice(i, 1); this.proxyOf.delete(src); if (px.userData.skin && ![...this.proxyOf.keys()].some(k => k.skeleton === src.skeleton)) { const p = this.prevPal.get(src.skeleton); if (p) p.tex.dispose(); this.prevPal.delete(src.skeleton); } }
+      if (!o) { this.velScene.remove(px); px.material.dispose(); this.proxies.splice(i, 1); this.proxyOf.delete(src); if (px.userData.skin && ![...this.proxyOf.keys()].some(k => k.skeleton === src.skeleton)) { const p = this.prevPal.get(src.skeleton); if (p) { p.tex.dispose(); this.palList.splice(this.palList.indexOf(p), 1); } this.prevPal.delete(src.skeleton); } }
     }
   }
   _renderVelocity(renderer) {
@@ -512,7 +513,7 @@ export class TemporalAAPass extends Pass {
       if (!px.userData.skin) px.material.uniforms.uPrevModel.value.copy(px.userData.src.matrixWorld);
     }
     // last frame's bone palettes for the skinned movers (per skeleton, not per mesh)
-    for (const [sk, pal] of this.prevPal) { pal.arr.set(sk.boneMatrices); pal.tex.needsUpdate = true; }
+    for (let i = 0; i < this.palList.length; i++) { const pal = this.palList[i]; pal.arr.set(pal.sk.boneMatrices); pal.tex.needsUpdate = true; }
     return true;
   }
 

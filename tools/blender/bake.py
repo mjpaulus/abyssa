@@ -349,7 +349,13 @@ for set_name, sconf in sets.items():
     files = {}
     files['albedo'] = save_webp(imgs['albedo'], os.path.join(OUT, set_name + '_albedo.webp'), 92)
     files['normal'] = save_webp(imgs['normal'], os.path.join(OUT, set_name + '_normal.webp'), 95)
+    wsize = size
     if wrk is not None:
+        # (wrinkleHalf) the compression folds are broad: half resolution holds them (a 2048
+        # BC5 is 5.3 MB of GPU memory, a 1024 one 1.3)
+        if sconf.get('wrinkleHalf'):
+            wsize = size // 2
+            wrk.scale(wsize, wsize)
         files['wrinkle'] = save_webp(wrk, os.path.join(OUT, set_name + '_wrinkle.webp'), 95)
     n = size * size * 4
     ao = np.empty(n, np.float32)
@@ -380,8 +386,8 @@ for set_name, sconf in sets.items():
         dump_raw(imgs['normal'], os.path.join(BUILD, set_name + '_normal.rgba'), size)
         dump_raw(om, os.path.join(BUILD, set_name + '_orm.rgba'), om.size[0])
         if wrk is not None:
-            dump_raw(wrk, os.path.join(BUILD, set_name + '_wrinkle.rgba'), size)
-        json.dump({'size': size, 'orm': om.size[0]}, open(os.path.join(BUILD, set_name + '_raw.json'), 'w'))
+            dump_raw(wrk, os.path.join(BUILD, set_name + '_wrinkle.rgba'), wsize)
+        json.dump(dict({'size': size, 'orm': om.size[0]}, **({'wrinkle': wsize} if wrk is not None else {})), open(os.path.join(BUILD, set_name + '_raw.json'), 'w'))
     stats['sets'][set_name] = {'size': size, 'bytes': files}
     if wrk is not None:
         WRINKLE.add(set_name)
