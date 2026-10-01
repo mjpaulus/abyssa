@@ -12,7 +12,7 @@ import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders,
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
@@ -1687,7 +1687,7 @@ function update(dt, t) {
     // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
     // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
     // the sound and nothing else.
-    if (!player.onDeck) spawnFootfall(player.pos, diver.rotation.y, sc % 2 === 0 ? 1 : -1, zone < 0 ? 0 : zone, 1);   // the boots' heading (strafe turns the hips off the look)
+    if (!player.onDeck) { const ff = lastFootfall(); spawnFootfall(player.pos, ff.yaw, ff.side, zone < 0 ? 0 : zone, 1, ff); }   // at the boot that went down, on its heading
   }
   // Landing after a drop kicks up a bigger cloud under both boots.
   // Terminal sink is 5.1 u/s vented (10.2 with the exhaust held open), not the 18 u/s
