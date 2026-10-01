@@ -73,23 +73,31 @@ export const VSKY = {
   planetR: 2.12e6,     // earth radius in units: the shell curves away at the horizon
   maxDist: 26000,      // march cap
   shapeTile: 1500,     // world units per shape-noise tile
-  detailTile: 75,      // world units per detail-noise tile
-  detailK: 0.58,       // erosion strength
+  detailTile: 150,      // world units per detail-noise tile
+  detailK: 0.6,       // erosion strength
   curlK: 0.25,         // curl distortion of the erosion (in detail texels)
   dens: 0.13,          // extinction per unit at density 1
   gain: 1.7,           // lit-cloud level relative to the palette horizon
   horK: 0.72,          // physical horizon set to this share of the palette's horizon
-  ambK: 0.5,           // sky-ambient gain on clouds
-  powder: 0.55,        // powder darkening of thin edges away from the sun
-  g1: 0.72, g2: -0.20, gMix: 0.25,     // dual-lobe Henyey-Greenstein
-  msA: 0.50, msB: 0.40, msC: 0.45,      // multiple-scattering octave attenuation
+  ambK: 0.4,           // sky-ambient gain on clouds
+  powder: 0.8,        // powder darkening of thin edges away from the sun
+  g1: 0.66, g2: -0.20, gMix: 0.25,     // dual-lobe Henyey-Greenstein
+  msA: 0.42, msB: 0.40, msC: 0.45,      // multiple-scattering octave attenuation
   haze: 11000,         // aerial perspective length for the cloud field (fair, dry air)
   drift: 5.0,          // cloud drift units/s at wind 1
   cirrus: 0.6,         // cirrus gain (hand.sunsetDrama sets the amount)
   history: 0.12,       // temporal blend (new sample weight)
   stars: 1.0,
+  edgeLo: 0.05, edgeHi: 0.45,   // cloud edge ramp (crisper silhouettes)
+  knee: 0.12,          // soft knee on scattered light (silver lining energy)
+  duskDesat: 0.48,     // sky saturation taken out at a low sun (brass-age, not neon)
+  rain: 1.0,           // rain-shaft gain under storm cores
+  scud: 1.0,           // torn scud under a storm base
+  stormHor: 0.4,       // how much the gale darkens the horizon airlight
+  stormHaze: 0.55,     // how much darker the air in front of a gale's deck is than its horizon
+  stormDim: 0.75,      // share of the deck's light a gale takes away
   boltK: 0.35,         // lightning glow inside the deck per unit of bolt light
-  lightSat: 0.72,      // saturation kept in the low sun's colour on the clouds
+  lightSat: 0.42,      // saturation kept in the low sun's colour on the clouds
   discR: 0.0085,       // sun disc angular radius, rad (a touch over the real 0.0047)
   discI: 9.0           // disc radiance relative to the normalised sky
 };
@@ -260,6 +268,10 @@ vec3 field( vec2 xz, vec4 P, vec4 O ){
   // Coverage INSIDE a cloud stays under 1 on fair days, so the 3D noise carves it into
   // towers and bites; only an overcast deck runs solid.
   c *= mix( 0.74, 1.0, smoothstep( 0.55, 0.95, cover ) );
+  // OVERCAST is a closed deck but not a sheet: thick rolls and thin troughs at the
+  // kilometre scale, which the lid light reads as grey structure.
+  float ov = smoothstep( 0.60, 0.90, cover );
+  c *= mix( 1.0, mix( 0.55, 1.0, smoothstep( 0.30, 0.75, fbm2w( q / 1300.0 + 51.0 ) ) ), ov );
   // Type: cumulus by default, stratus where the day carries a low deck (layers), more
   // towering on the humid days (P.y), a little spatial variety.
   float tv = fbm2w( q / 7000.0 + 11.0 );
@@ -282,7 +294,7 @@ void main(){
   // noise carve the base into rolls and the top into domes, so the underside has the
   // thick/thin structure that light from above reads through.
   float roll = fbm2w( ( xz + uAo.xy ) / 1100.0 + 13.0 );
-  f.r = mix( f.r, mix( 0.80, 1.0, max( core, roll * 0.6 ) ), smoothstep( 0.15, 0.85, s ) );
+  f.r = mix( f.r, mix( 0.52, 1.0, max( core, smoothstep( 0.35, 0.75, roll ) * 0.7 ) ), smoothstep( 0.15, 0.85, s ) );
   f.g = mix( f.g, mix( 0.50, 1.0, core ), smoothstep( 0.2, 0.9, s ) );
   f.b = 1.0 + s * ( 0.25 + 0.9 * core );
   // Marine fog days: a flat low stratus sheet takes the place of the cumulus.
@@ -291,7 +303,7 @@ void main(){
   // are nearly level (the condensation level is one height); a storm's underside hangs in
   // rolls and scud, which is most of what reads as weather from beneath it.
   float lift = fbm2w( ( xz + uAo.xy ) / 900.0 + 31.0 );
-  float bl = mix( 0.03, 0.22, smoothstep( 0.2, 0.9, s ) ) * lift;
+  float bl = mix( 0.03, 0.22, max( smoothstep( 0.2, 0.9, s ), 0.6 * smoothstep( 0.6, 0.9, uA.x ) ) ) * lift;
   gl_FragColor = vec4( f, bl );
 }`;
 
@@ -303,6 +315,7 @@ uniform vec3 uAtmoSunXZ;  // physical sun azimuth (x, z) and its elevation sine
 uniform vec3 uVolSun;     // displayed sun direction (SUN.dir)
 uniform vec3 uPalHor, uPalZen;   // the authored palette's ring, for the night hand-over
 uniform float uNightMix;         // 0 = physical sky, 1 = the palette's night gradient
+uniform float uSkySat;           // sky saturation (dusk restraint)
 float vMiePhase( float mu, float g ){
   float g2 = g * g;
   return 3.0 / ( 8.0 * 3.14159265 ) * ( ( 1.0 - g2 ) * ( 1.0 + mu * mu ) )
@@ -321,6 +334,7 @@ vec3 vAtmo( vec3 d ){
   vec3 R = texture2D( tSkyR, uv ).rgb, M = texture2D( tSkyM, uv ).rgb;
   float mu = dot( d, uVolSun );
   vec3 c = ( R + M * vMiePhase( mu, uAtmo.w ) ) * uAtmo.x;
+  c = mix( vec3( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ) ), c, uSkySat );
   if ( uNightMix > 0.001 ) {
     // NIGHT: with the sun far under the horizon the single-scatter model has nothing left
     // but numerical residue; the sky is moonlight and airglow, which the palette authors.
@@ -356,6 +370,10 @@ uniform vec4 uBolt0, uBolt1;
 uniform vec3 uBoltCol;
 uniform vec4 uCirrus;    // amount, altitude, -, -
 uniform vec2 uCirrusOff;
+uniform vec4 uStorm;     // storm, rain amount, scud amount, lid amount
+uniform vec2 uSharp;
+uniform vec4 uEvo2;      // scatter knee, -, -, -     // edge ramp: density below x is cut, full body by y
+uniform vec3 uHazeCol;   // the air between the eye and a closed deck (lid aerial perspective)
 
 float hgrad( float h, float ty ){
   float st = smoothstep( 0.0, 0.05, h ) * ( 1.0 - smoothstep( 0.09, 0.22, h ) );
@@ -385,9 +403,16 @@ float density( vec3 p, float h, vec4 w, float lod, bool full ){
     vec3 dq = p * uScale.y + vec3( uWind.z, uEvo.x * 3.0, uWind.w ) + vec3( cu.x, cu.x * cu.y, cu.y ) * uEvo.y;
     vec3 dn = textureLod( tDetail, dq, max( 0.0, lod - 1.0 ) ).rgb;
     float hf = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
+    // SECOND DETAIL OCTAVE at 2.9x (rotated so the two lattices never align): the
+    // small cauliflower lobes on the lobes. Faded out with distance, where it would only
+    // alias.
+    float o2 = textureLod( tDetail, dq.zxy * 2.9 + 0.37, max( 0.0, lod ) ).r;
+    hf = mix( hf, hf * 0.68 + o2 * 0.32, clamp( 1.5 - lod * 0.5, 0.0, 1.0 ) );
     // wispy at the base, billowy on the crown
     float hfm = mix( hf, 1.0 - hf, clamp( h * 6.0, 0.0, 1.0 ) );
     base = clamp( vremap( base, hfm * uScale.z, 1.0, 0.0, 1.0 ), 0.0, 1.0 );
+    // EDGE: a steeper ramp from nothing to body, so silhouettes are cut, not fogged
+    base = clamp( ( base - uSharp.x ) / ( uSharp.y - uSharp.x ), 0.0, 1.0 );
   }
   return base * w.b;
 }
@@ -420,6 +445,48 @@ void main(){
   vec4 res = vec4( 0.0, 0.0, 0.0, 1.0 );
   float cy = uCamPos.y;
   if ( dir.y > -0.015 && cy < uLayer.x ) {
+    // UNDER THE DECK (storm only): rain shafts hanging from the base where the weather
+    // map carries the storm's cores, and torn scud a little under the base. Front of
+    // the shell, so it is integrated first; nothing here runs on a fair day.
+    if ( uStorm.y > 0.01 || uStorm.z > 0.01 ) {
+      float tb = dir.y > 0.002 ? ( uLayer.x - cy ) / dir.y : 1.0e9;
+      float tEnd = min( tb, 5000.0 );
+      float N2 = 12.0;
+      float dt2 = ( tEnd - 30.0 ) / N2;
+      float t2 = 30.0 + dt2 * fract( ign( gl_FragCoord.yx ) + uWin.w * 0.75487767 );
+      vec3 rainCol = uHazeCol * 0.72;   // a curtain reads DARKER than the lit air behind it
+      for ( int i = 0; i < 12; i++ ) {
+        vec3 p = uCamPos + dir * t2;
+        float alt = altOf( p );
+        vec4 w = wAt( p.xz );
+        float core = clamp( ( w.b - 1.0 - 0.25 * uStorm.x ) / ( 0.9 * uStorm.x + 1.0e-3 ), 0.0, 1.0 );
+        // curtains: a streak field in plan, constant in height, so it hangs as sheets
+        vec2 sp = ( p.xz + uWind.xy * 900.0 ) / 260.0;
+        float streak = texture2D( tNoise2, sp * vec2( 2.6, 0.45 ) ).r * 0.7 + texture2D( tNoise2, sp * 0.31 ).r * 0.3;
+        // fine striation, constant in height: averaged by distance it is the vertical
+        // grain of a curtain rather than a smudge
+        float fine = texture2D( tNoise2, sp * vec2( 11.0, 7.0 ) ).r;
+        float rain = uStorm.y * smoothstep( 0.30, 0.75, core ) * smoothstep( 0.50, 0.62, streak ) * smoothstep( 0.35, 0.65, fine ) * 0.6
+             * ( 1.0 - smoothstep( uLayer.x - 90.0, uLayer.x + 10.0, alt ) ) * 0.0045;
+        // scud: torn low fragments in a band under the base, dark, wind-torn
+        float band = smoothstep( uLayer.x - 75.0, uLayer.x - 45.0, alt ) * ( 1.0 - smoothstep( uLayer.x - 25.0, uLayer.x - 5.0, alt ) );
+        float scud = 0.0;
+        if ( band > 0.0 && uStorm.z > 0.01 ) {
+          vec3 dq = p / 190.0 + vec3( uWind.z, 0.0, uWind.w ) * 0.4;
+          vec3 dn3 = textureLod( tDetail, dq, 0.0 ).rgb;
+          float sh = textureLod( tShape, p / 1100.0 + vec3( uWind.x, 0.3, uWind.y ), 0.0 ).g;
+          scud = uStorm.z * band * smoothstep( 0.62, 0.82, sh * 0.6 + dn3.r * 0.4 ) * 0.03;
+        }
+        float sig = rain + scud;
+        if ( sig > 1.0e-5 ) {
+          vec3 Lr = mix( rainCol, uAmbBot * 0.7 + uLightCol * 0.08, scud / max( sig, 1.0e-6 ) );
+          float Ts = exp( -sig * dt2 );
+          res.rgb += res.a * Lr * ( 1.0 - Ts );
+          res.a *= Ts;
+        }
+        t2 += dt2;
+      }
+    }
     float rc = uLayer.z + cy;
     float b = dir.y * rc;
     float t0 = shellT( b, rc, uLayer.x );
@@ -462,6 +529,10 @@ void main(){
               sc += a * pho * exp( -od * bb );
               a *= uMS.x; bb *= uMS.y; cc *= uMS.z;
             }
+            // ENERGY: the forward lobe is a 30x spike in 4 pi units; through thin edges
+            // stacked over many steps it clipped the low sun's hole to a flat white. A soft
+            // knee keeps the lining bright and the hole shaped.
+            sc = sc / ( 1.0 + sc * uEvo2.x );
             // POWDER: thin cloud seen away from the sun lacks the in-scatter that
             // builds up inside a thick body, so its sunlit faces read darker at the edge.
             float pw = 1.0 - uEvo.z * exp( -dn * uScale.w * 90.0 );
@@ -484,14 +555,31 @@ void main(){
             // DOWN through the deck and arrives in proportion to how thin the column
             // overhead is (diffuse transmission, not Beer). That is the rolling bright /
             // dark structure of a storm's underside. uSteps.w is the lid amount.
-            if ( uSteps.w > 0.01 ) {
-              float odUp = da * uScale.w * uLayer.y * 0.9 * ( 1.0 - h ) + dn * uScale.w * uLayer.y * 0.15;
-              Ls += ( uLightCol * 1.4 + uAmbTop * 2.0 ) * ( uSteps.w / ( 1.0 + 0.11 * odUp ) );
+            // The response is steep on purpose: a thin patch glows, a hanging core goes near
+            // black, and that contrast is the menace (a diffusion 1/(1+k tau) curve is too
+            // flat and read as a pale sheet).
+            if ( uStorm.w > 0.01 ) {
+              float odUp = da * uScale.w * uLayer.y * 0.9 * ( 1.0 - h ) + dn * uScale.w * uLayer.y * 0.25;
+              // brighter toward the hidden sun: the dark-to-lit gradient across a gale's lid
+              float sunSide = 0.55 + 0.9 * smoothstep( -0.2, 0.9, mu );
+              Ls += ( uLightCol * 1.2 * sunSide + uAmbTop * 1.1 ) * ( uStorm.w * exp( -odUp * 0.028 ) );
             }
             // LIGHTNING from inside the deck: the two live bolt slots, inverse-square
             // with a floor, as isotropic in-scatter.
-            if ( uBolt0.w > 0.0 ) { vec3 r = p - uBolt0.xyz; Ls += uBoltCol * uBolt0.w / ( 1.0 + dot( r, r ) / 30000.0 ); }
-            if ( uBolt1.w > 0.0 ) { vec3 r = p - uBolt1.xyz; Ls += uBoltCol * uBolt1.w / ( 1.0 + dot( r, r ) / 30000.0 ); }
+            // One occlusion tap a third of the way back toward the channel: cloud between
+            // the stroke and this sample shades it, so the flash lights LOBES, not a ball.
+            if ( uBolt0.w > 0.0 ) {
+              vec3 r = p - uBolt0.xyz; float rl = length( r );
+              vec3 q = mix( p, uBolt0.xyz, 0.35 );
+              float dq = density( q, ( altOf( q ) - uLayer.x ) / uLayer.y, wAt( q.xz ), lod, true );
+              Ls += uBoltCol * uBolt0.w * exp( -dq * uScale.w * min( rl, 500.0 ) * 0.9 ) / ( 1.0 + rl * rl / 30000.0 );
+            }
+            if ( uBolt1.w > 0.0 ) {
+              vec3 r = p - uBolt1.xyz; float rl = length( r );
+              vec3 q = mix( p, uBolt1.xyz, 0.35 );
+              float dq = density( q, ( altOf( q ) - uLayer.x ) / uLayer.y, wAt( q.xz ), lod + 1.0, false );
+              Ls += uBoltCol * uBolt1.w * exp( -dq * uScale.w * min( rl, 500.0 ) * 0.9 ) / ( 1.0 + rl * rl / 30000.0 );
+            }
             float Ts = exp( -sigma * dt );
             res.rgb += res.a * Ls * ( 1.0 - Ts );
             dsum += res.a * ( 1.0 - Ts ) * t;
@@ -507,8 +595,12 @@ void main(){
       if ( op > 1.0e-3 ) {
         float dm = dsum / op;
         float hz = 1.0 - exp( -dm / uPhase.w );
-        res.rgb *= 1.0 - hz;
-        res.a = 1.0 - op * ( 1.0 - hz );
+        // Fair sky: far cloud dissolves into the sky behind it. Under a LID there is no sky
+        // behind it: the far deck sinks into the dark air in front of it instead, and
+        // stays opaque (revealing the bright storm horizon is what made the gale pale).
+        float k = uStorm.w;
+        res.rgb = res.rgb * ( 1.0 - hz ) + uHazeCol * ( op * hz * k );
+        res.a = 1.0 - op * ( 1.0 - hz * ( 1.0 - k ) );
       }
       if ( res.a < 0.02 ) res.a = 0.0;
     }
@@ -980,7 +1072,9 @@ export function buildSky() {
     uMS: { value: new THREE.Vector4() }, uSteps: { value: new THREE.Vector4() },
     uBolt0: { value: new THREE.Vector4() }, uBolt1: { value: new THREE.Vector4() },
     uBoltCol: { value: new THREE.Vector3() },
-    uCirrus: { value: new THREE.Vector4() }, uCirrusOff: { value: new THREE.Vector2() }
+    uCirrus: { value: new THREE.Vector4() }, uCirrusOff: { value: new THREE.Vector2() },
+    uStorm: { value: new THREE.Vector4() }, uHazeCol: { value: new THREE.Vector3() },
+    uSharp: { value: new THREE.Vector2(0.02, 0.7) }, uEvo2: { value: new THREE.Vector4(0.12, 0, 0, 0) }
   });
   qMarch = mkQuad(matMarch);
   matResolve = mkMat(RESOLVE_FRAG, {
@@ -1009,7 +1103,7 @@ const ATMO_U = {
   uAtmoSunXZ: { value: new THREE.Vector3(1, 0, 0.5) },
   uVolSun: { value: new THREE.Vector3(0, 1, 0) },
   uPalHor: { value: new THREE.Vector3() }, uPalZen: { value: new THREE.Vector3() },
-  uNightMix: { value: 0 }
+  uNightMix: { value: 0 }, uSkySat: { value: 1 }
 };
 export const DOME_U = {
   ...ATMO_U,
@@ -1085,6 +1179,7 @@ function fillDay(D, h, seed) {
 const CYCLE = 720;
 
 let physElev = 30, hazeMul = 1, Ksm = 0;
+const _hor2 = [0, 0, 0];
 const lightCol = [0, 0, 0], ambTop = [0, 0, 0], ambBot = [0, 0, 0], horN = [0, 0, 0], zenN = [0, 0, 0];
 const _pal = { zen: null, hor: null, disc: null };
 let shadowSunVis = 1, camSunVis = 1;
@@ -1151,9 +1246,19 @@ export function updateSky(dt, t) {
   const az = SUN.azimDeg * D2R;
   ATMO_U.uAtmoSunXZ.value.set(Math.cos(az), Math.sin(az), Math.sin(physElev * D2R));
   ATMO_U.uVolSun.value.set(SUN.dir.x, SUN.dir.y, SUN.dir.z);
+  // DUSK RESTRAINT: a sun near the horizon drives the single-scatter sky to a saturated
+  // amber that reads as a filter; the house bar is brass-age and quiet.
+  const skySat = 1 - V.duskDesat * (1 - sm(4, 22, physElev)) * sm(-8, -1, physElev);
+  // ...and a gale's sky is grey wherever it shows through: no blue holes in a storm
+  const skySatS = Math.min(skySat, 1 - 0.85 * storm);
+  ATMO_U.uSkySat.value = skySatS;
   for (let c = 0; c < 3; c++) {
     horN[c] = atm.hor[c] * K + (P.hor[c] - atm.hor[c] * K) * nightMix;
     zenN[c] = atm.zen[c] * K + (P.zen[c] - atm.zen[c] * K) * nightMix;
+  }
+  {
+    const lh = lum(horN[0], horN[1], horN[2]), lz = lum(zenN[0], zenN[1], zenN[2]);
+    for (let c = 0; c < 3; c++) { horN[c] = lh + (horN[c] - lh) * skySat; zenN[c] = lz + (zenN[c] - lz) * skySat; }
   }
 
   // --- the light that lights the clouds: the sun, handing over to the moon ---
@@ -1180,12 +1285,12 @@ export function updateSky(dt, t) {
     lightCol[0] = mc.x * k; lightCol[1] = mc.y * k; lightCol[2] = mc.z * k;
   }
   // storm: the lid is lit from above through itself; the base sees a fraction
-  const sk = 1 - 0.55 * storm;
+  const sk = 1 - V.stormDim * storm;
   matMarch.uniforms.uLightCol.value.set(lightCol[0] * sk, lightCol[1] * sk, lightCol[2] * sk);
   // ambient: the zenith half of the sky from above, the sea's dull mirror from below
   for (let c = 0; c < 3; c++) {
-    ambTop[c] = (0.55 * zenN[c] + 0.45 * horN[c]) * 1.6 * V.ambK;
-    ambBot[c] = horN[c] * 0.35 * V.ambK;
+    ambTop[c] = (0.55 * zenN[c] + 0.45 * horN[c]) * 1.6 * V.ambK * (1 - 0.45 * storm);
+    ambBot[c] = horN[c] * 0.35 * V.ambK * (1 - 0.5 * storm);
   }
   matMarch.uniforms.uAmbTop.value.set(ambTop[0], ambTop[1], ambTop[2]);
   matMarch.uniforms.uAmbBot.value.set(ambBot[0], ambBot[1], ambBot[2]);
@@ -1217,7 +1322,14 @@ export function updateSky(dt, t) {
   u.uEvo.value.set(tin * 0.00012, V.curlK, V.powder, 2 * tanH / hres);
   u.uPhase.value.set(V.g1, V.g2, V.gMix, V.haze / (0.5 + 0.5 * hazeMul - 1.0 * storm) * (1 - 0.7 * fog));
   u.uMS.value.set(V.msA, V.msB, V.msC, 1);
-  u.uSteps.value.set(V.steps, V.lsteps, 0, Math.max(sm(0.2, 0.8, storm), sm(0.75, 0.98, dayA.cover)));
+  u.uSharp.value.set(V.edgeLo, V.edgeHi);
+  u.uEvo2.value.set(V.knee, 0, 0, 0);
+  const lidK = Math.max(sm(0.2, 0.8, storm), sm(0.75, 0.98, dayA.cover));
+  u.uSteps.value.set(V.steps, V.lsteps, 0, lidK);
+  u.uStorm.value.set(storm, V.rain * sm(0.35, 0.9, storm), V.scud * sm(0.3, 0.85, storm), lidK);
+  // the air in front of a closed deck: the horizon airlight, darkened by the storm
+  const hd = 1 - V.stormHaze * storm;
+  u.uHazeCol.value.set(horN[0] * hd, horN[1] * hd, horN[2] * hd);
   u.uWin.value.set(camera.position.x, camera.position.z, 1 / 48000, frameN);
   // cirrus: the sunset-drama days carry it
   u.uCirrus.value.set(V.cirrus * clamp((h ? h.sunsetDrama : 0.3) * 0.9 + 0.1, 0, 1) * (1 - storm) * (1 - fog), 2600, 0, 0);
@@ -1251,7 +1363,11 @@ export function updateSky(dt, t) {
   W.airAmbience.sunVis = sunUp > 0.02 ? 0.22 + 0.78 * shadowSunVis : 1;
 
   // --- hand the water.js palette our horizon/zenith (one horizon number for everyone) ---
-  W.setSkyRing(horN, zenN, coverMean());
+  // Under a gale the horizon slit darkens too: the airlight the far sea settles on is
+  // the light that got under the deck, not the clear-day horizon.
+  const hk = 1 - V.stormHor * storm;
+  _hor2[0] = horN[0] * hk; _hor2[1] = horN[1] * hk; _hor2[2] = horN[2] * hk;
+  W.setSkyRing(_hor2, zenN, coverMean());
 }
 function coverMean() { return clamp(dayA.cover * 0.8 + wxStorm, 0, 1); }
 
