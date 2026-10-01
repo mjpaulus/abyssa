@@ -672,7 +672,7 @@ Object.defineProperties(window, {
 const camVel = V3(), camAim = V3(), camDesired = V3(), camLook = V3();
 const camBack = V3(), camTo = V3(), camRight = V3();   // hot-path temps, never allocated per frame
 const camUpAxis = V3(0, 1, 0);
-let camDist = 9, camDistV = 0, camRoll = 0, camFov = 70;
+let camDist = 9, camDistV = 0, camRoll = 0, camFov = 70, camSpdS = 0;
 // A respawn TELEPORTS the diver, and the spring then flew the camera the whole way after
 // him — measured 210 units in ~1.2 s, during which the frame peaked at 3.15x its normal
 // luminance and fell back. That bright wash is the camera crossing the entire water
@@ -696,7 +696,10 @@ const MASTER_VOL = 0.62;   // audio.js K.MASTER's shipped value; M toggles betwe
 //         footfalls exist in the hands, not just in Sal's knees.
 // Millimetres, not screen shake — the game stays quiet. window.__feel A/Bs it live.
 let speedEMA = 0, camStepDip = 0;
-const FEEL = { on: true, surgeK: 1.35, stepDip: 0.05, bedDip: 0.035, landK: 0.07, lead: 0.55, leadMax: 1.4 };
+// GROUNDED (Michael, 2026-10-01: "the camera feels floaty underwater"). surgeK 1.35 -> 0:
+// the lens no longer breathes in and out with every kick; the stroke's surge is read off
+// the world going past a camera that is locked to him, which is what weight looks like.
+const FEEL = { on: true, surgeK: 0, stepDip: 0.05, bedDip: 0.035, landK: 0.07, lead: 0.55, leadMax: 1.4 };
 // Seabed footfalls and landings reach the lens too (the deck already had its dip): the
 // camera reads stepCount() itself so it needs nothing from the frame loop. The landing
 // is a sprung sag — the eye drops with the knees and comes back up past level once.
@@ -723,13 +726,18 @@ function styleK(name) {
 // block does nothing and the camera is bit-identical to the shipped one.
 // Everything integrates its own phase by dt, so the motion is framerate-independent.
 // The deck is Flow's boat: standstill only, no roll — the handheld lives in the water.
+// GROUNDED (2026-10-01): Michael found the underwater lens floaty, and measured it was —
+// the standstill and swim layers, the stroke roll and the interest drift kept the frame
+// wandering and rolling while Sal hung perfectly still. Every CONTINUOUS layer is now
+// zero; what remains is driven by real events only: the heel strike (heelRoll/heelX),
+// the flinch on a hit. The machinery stays, so the layers can be A/B'd from window.__hh.
 const HH = {
   // per-layer scale at styleK = 1: [pos x, y, z (units)], [yaw, pitch, roll (deg)], rate (Hz)
-  still: { pos: [0.05, 0.06, 0.03], look: [0.40, 0.30, 0.35], rate: 0.15 },
-  walk:  { pos: [0.08, 0.05, 0.04], look: [0.70, 0.50, 0.80], rate: 0.90, heelRoll: 0.55, heelX: 0.035, heelTau: 0.30 },
-  swim:  { pos: [0.07, 0.09, 0.05], look: [0.60, 0.50, 0.90], rate: 0.22, strokeRoll: 0.45 },
+  still: { pos: [0, 0, 0], look: [0, 0, 0], rate: 0.15 },          // was 0.05/0.06/0.03, 0.40/0.30/0.35 deg
+  walk:  { pos: [0, 0, 0], look: [0, 0, 0], rate: 0.90, heelRoll: 0.55, heelX: 0.035, heelTau: 0.30 },   // noise was 0.08 u / 0.8 deg
+  swim:  { pos: [0, 0, 0], look: [0, 0, 0], rate: 0.22, strokeRoll: 0 },   // was 0.09 u / 0.9 deg roll + 0.45 deg stroke roll
   fade: 0.4,           // layer crossfade, seconds
-  interestDeg: 3,      // max look bias toward the nearest living thing
+  interestDeg: 0,      // max look bias toward the nearest living thing (was 3: the lens drifted off him)
   interestTau: 2,      // seconds
   interestR: 45,       // notice things within this many units
   flinchDeg: 2.2,      // roll flinch per unit of shake impulse
@@ -868,10 +876,9 @@ function updateCamera(dt, t, fwd) {
   camDesired.copy(player.pos).addScaledVector(camBack, camDist);
   camDesired.y += CAM_UP;
   camDesired.y = Math.max(camDesired.y, terrainH(camDesired.x, camDesired.z, zi) + 1.2);
-  // idle breathing drift so the frame is never perfectly locked (none under reduced motion)
+  // (The idle "breathing" drift — 0.09 u vertical, 0.07 u lateral, forever — is gone: a
+  // locked frame on a still man is the point. Weight comes from Sal, not from the lens.)
   const rmK = reducedMotion() ? 0 : 1;
-  camDesired.y += Math.sin(t * 0.7) * 0.09 * rmK;
-  camDesired.x += Math.sin(t * 0.43) * 0.07 * rmK;
 
   // feel channel: swim surge + deck footfall (see the block at the constants)
   if (FEEL.on) {
@@ -961,10 +968,9 @@ function updateCamera(dt, t, fwd) {
   // when the old thruster was at full chat — so the camera made the effect LESS visible
   // at exactly the moment it fired. Lead the spring by that amount and punch in, but
   // only while the kick is live.
-  if (camKick > 0) {
-    camDesired.addScaledVector(player.vel, 0.3086 * camKick);
-    camDesired.addScaledVector(camBack, -2.6 * camKick);
-  }
+  // (The old velocity lead that made up the tracker's lag is not needed: the spring below
+  // carries Sal's own velocity, so it has no lag to make up. The punch-in stays.)
+  if (camKick > 0) camDesired.addScaledVector(camBack, -2.6 * camKick);
 
   // Cut, don't fly. Done before the spring so camVel never integrates the teleport.
   if (camSnap) {
@@ -975,10 +981,18 @@ function updateCamera(dt, t, fwd) {
     camDist = want; camDistV = 0;
   }
 
-  // critically-damped spring: settles without the rubber-band of a raw lerp
-  const stiff = 42, damp = 2 * Math.sqrt(stiff);
+  // Critically-damped spring WITH VELOCITY FEED-FORWARD. The old spring damped the
+  // camera's absolute velocity, so in steady motion it sat damp*v/stiff behind its target
+  // — 5 u at swimming speed — and that lag stretched and shrank with every kick: the lens
+  // floated after him on a rubber band. Damping the velocity RELATIVE to Sal's removes
+  // the steady-state lag entirely; the spring only answers changes (a turn, a landing, a
+  // collision push-in), and answers them a little firmer than before (60, was 42).
+  const stiff = 60, damp = 2 * Math.sqrt(stiff);
   camTo.copy(camDesired).sub(camera.position);
-  camVel.addScaledVector(camTo, stiff * dt).addScaledVector(camVel, -damp * dt);
+  camVel.addScaledVector(camTo, stiff * dt);
+  camVel.x -= (camVel.x - player.vel.x) * damp * dt;
+  camVel.y -= (camVel.y - player.vel.y) * damp * dt;
+  camVel.z -= (camVel.z - player.vel.z) * damp * dt;
   camera.position.addScaledVector(camVel, dt);
   // Leading the target is not enough on its own: the spring needs ~0.31 s to respond and
   // the whole burst is 0.26 s. Close the rest of the gap directly, scoped to the kick.
@@ -1016,7 +1030,9 @@ function updateCamera(dt, t, fwd) {
   // aim slightly ahead of travel so fast movement leads the frame
   // Aim tracks the look direction almost immediately. Heavy smoothing here reads as
   // mouse lag, which is far more objectionable than a little jitter.
-  camAim.copy(player.pos).addScaledVector(fwd, 6).addScaledVector(player.vel, 0.10).add(camLead);
+  // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
+  // went (it swung the aim with every kick's surge).
+  camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
   // Sal looks at what the lens would notice: the nearest life in front, re-picked four
   // times a second (the search walks every fauna buffer; the look itself is sprung).
   diverLookCool -= dt;
@@ -1060,14 +1076,19 @@ function updateCamera(dt, t, fwd) {
   // bank into lateral movement, and widen slightly with speed
   camRight.set(Math.sin(player.yaw - Math.PI / 2), 0, Math.cos(player.yaw - Math.PI / 2));
   const lateral = player.vel.dot(camRight);
-  camRoll += (clamp(-lateral * 0.012, -0.11, 0.11) * rmK - camRoll) * Math.min(1, 3 * dt);
+  // Bank into lateral movement — a hint, not a lean: was 0.012/u capped at 6.3 degrees, which
+  // rolled the horizon whenever he crabbed or the current set him sideways.
+  camRoll += (clamp(-lateral * 0.004, -0.035, 0.035) * rmK - camRoll) * Math.min(1, 3 * dt);
   camera.rotateZ(camRoll + hhRoll);
 
   // The 2.5/s lerp has a 0.4 s time constant, so it can only reach 48% of any target
   // inside a 0.26 s burst — which is why the existing +9 speed FOV was imperceptible.
   // Snap out, ease back. Capped at 86: the speed term and the kick peak together, and
   // 70 + 9 + 15 would be an 89-degree fisheye.
-  const wantFov = Math.min(86, 70 + clamp(speed * 0.32, 0, 9) + 11 * camKickPunch);
+  // Widen with the SMOOTHED speed: on the instantaneous one the field of view pumped with
+  // every kick. The burst punch is an event and stays sharp.
+  camSpdS += (speed - camSpdS) * Math.min(1, 0.8 * dt);
+  const wantFov = Math.min(86, 70 + clamp(camSpdS * 0.32, 0, 9) + 11 * camKickPunch);
   // Snap out only while a kick is live; the 2.5/s ease is otherwise exactly as shipped.
   const fovRate = camKickPunch > 0 && wantFov > camFov ? 20 : 2.5;
   camFov += (wantFov - camFov) * Math.min(1, fovRate * dt);
