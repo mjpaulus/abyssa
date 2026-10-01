@@ -72,6 +72,29 @@ def smooth(o):
     for p in o.data.polygons:
         p.use_smooth = True
 
+def weld_normals(o):
+    # the low arrives SPLIT along its UV seams (every chart its own island), so Blender's
+    # vertex normals are computed per island and disagree across every seam: a shading line
+    # along each chart edge, and a crack wherever a shader pushes along the normal (the
+    # dress's corrective push / underwater balloon). Normals are taken from a welded copy
+    # and set as custom normals BEFORE the bake, so the tangent frame the maps are baked in
+    # is the one the game uses. (Additive: set config weldNormals: true.)
+    import bmesh, mathutils
+    import mathutils.kdtree
+    me = bpy.data.meshes.new(o.name + '_weldN')
+    bm = bmesh.new()
+    bm.from_mesh(o.data)
+    bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
+    bm.to_mesh(me)
+    bm.free()
+    kd = mathutils.kdtree.KDTree(len(me.vertices))
+    for i, v in enumerate(me.vertices):
+        kd.insert(v.co, i)
+    kd.balance()
+    vn = [me.vertex_normals[i].vector.copy() for i in range(len(me.vertices))]
+    o.data.normals_split_custom_set_from_vertices([vn[kd.find(v.co)[1]] for v in o.data.vertices])
+    bpy.data.meshes.remove(me)
+
 def decimate(o, tris):
     n = len(o.data.polygons)
     if tris and n > tris:
@@ -114,6 +137,35 @@ def cavity_from_normal(npx, size):
     cav = np.clip(0.5 - 0.45 * d / q, 0.0, 1.0)
     return cav.reshape(-1)
 
+def push_pull(a, m):
+    # fill every texel outside the charts (m == 0) from the charts around it: average down
+    # a mip pyramid over the covered texels only, then pull the coarse colours back up into
+    # the holes. Charts are untouched; the gutter becomes a smooth continuation of them, so
+    # no mip level ever averages a chart edge with the empty (black) background.
+    if m.all():
+        return a
+    lv = [(a * m[..., None], m.astype(np.float64))]
+    while lv[-1][1].shape[0] > 1:
+        c, w = lv[-1]
+        h = c.shape[0] // 2
+        c2 = c[:2 * h, :2 * h].reshape(h, 2, h, 2, -1).sum(axis=(1, 3))
+        w2 = w[:2 * h, :2 * h].reshape(h, 2, h, 2).sum(axis=(1, 3))
+        lv.append((c2, w2))
+    col = lv[-1][0] / np.maximum(lv[-1][1], 1e-9)[..., None]
+    for c, w in reversed(lv[:-1]):
+        up = np.repeat(np.repeat(col, 2, axis=0), 2, axis=1)[:c.shape[0], :c.shape[1]]
+        own = c / np.maximum(w, 1e-9)[..., None]
+        col = np.where((w > 0)[..., None], own, up)
+    return np.where(m[..., None] > 0, a, col)
+
+def fill_img(img, size, mask):
+    px = np.empty(size * size * 4, np.float32)
+    img.pixels.foreach_get(px)
+    a = px.reshape(size, size, 4)[..., :3].astype(np.float64)
+    a = push_pull(a, mask)
+    px.reshape(size, size, 4)[..., :3] = a
+    img.pixels.foreach_set(px)
+
 def dump_raw(img, path, w):
     # top-down RGBA8 rows (Blender stores bottom-up; the WebP is top-down), for ktx2.mjs
     px = np.empty(w * w * 4, np.float32)
@@ -145,6 +197,8 @@ for set_name, sconf in sets.items():
         his[p['name']] = imp(p['hi'], p['name'] + '_hi')
         lo = imp(p['lo'], p['name'])       # decimated + unwrapped upstream (export_hi.mjs)
         smooth(lo)
+        if sconf.get('weldNormals'):
+            weld_normals(lo)
         los[p['name']] = lo
         stats['pieces'][p['name']] = {'lo': len(lo.data.polygons), 'hi': len(his[p['name']].data.polygons), 'uv': len(lo.data.uv_layers)}
         log(' ', p['name'], 'hi', len(his[p['name']].data.polygons), 'lo', len(lo.data.polygons), 'uv layers', len(lo.data.uv_layers))
@@ -275,6 +329,22 @@ for set_name, sconf in sets.items():
         log('  baked wrinkle', [p['name'] for p in wpieces], '%.1fs' % (time.time() - tp))
     for o in bpy.data.objects:
         o.hide_render = False
+    # ---- GUTTER FILL (optional, additive: set config fill: true; salSkin). The bake's
+    # margin is a few texels; KTX2/GPU mips average the black background into every chart
+    # edge (measured on the dress: dark albedo seams, and ORM roughness 0 seams that
+    # mirrored the sea as cyan cracks). Push-pull fills the whole background from the
+    # charts. Coverage = texels the albedo bake wrote (anything not exactly 0).
+    if sconf.get('fill'):
+        tp = time.time()
+        px = np.empty(size * size * 4, np.float32)
+        imgs['albedo'].pixels.foreach_get(px)
+        mask = (px.reshape(size, size, 4)[..., :3].max(axis=2) > 0)
+        for key in ('albedo', 'normal', 'ao', 'rough', 'emit', 'wrinkle'):
+            if key in imgs:
+                fill_img(imgs[key], size, mask)
+        if emit is not None:
+            imgs['emit'].pixels.foreach_get(emit)
+        log('  gutter fill %.1fs coverage %.3f' % (time.time() - tp, mask.mean()))
     # ---- write the maps
     files = {}
     files['albedo'] = save_webp(imgs['albedo'], os.path.join(OUT, set_name + '_albedo.webp'), 92)

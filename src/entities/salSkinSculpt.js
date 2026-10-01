@@ -678,8 +678,10 @@ export function bones(P) {
 // ------------------------------------------------------------------------------------------
 // PIPELINE
 // ------------------------------------------------------------------------------------------
-const SET = { size: 2048, gutter: 6, aoDist: 0.06, aoSamples: 64, ormB: 'metal' };
-const SET1K = { size: 1024, gutter: 4, packMargin: 3, aoDist: 0.06, aoSamples: 64, ormB: 'metal' };
+// fill: the bake's push-pull gutter fill (tools/blender/bake.py) — no black seams in the mips;
+// weldNormals: one normal per position across UV seams (no shading lines, no cracks under the push)
+const SET = { size: 2048, gutter: 6, aoDist: 0.06, aoSamples: 64, ormB: 'metal', fill: true, weldNormals: true };
+const SET1K = { size: 1024, gutter: 4, packMargin: 3, aoDist: 0.06, aoSamples: 64, ormB: 'metal', fill: true, weldNormals: true };
 const piece = (name, set, sdf, o = {}) => ({
   name, set, sdf, paint: o.paint || PAINT(), emit: metalEmit,
   hi: { h: o.h || 0.003 }, lo: { h: o.loH || 0.008, tris: o.tris || 4000 },

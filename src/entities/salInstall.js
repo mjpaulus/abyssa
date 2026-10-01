@@ -340,7 +340,10 @@ function dressMaterial(maps, shared, P) {
       .replace('#include <skinning_vertex>', SK_VS_MAIN + '\n#include <skinning_vertex>');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + SK_FS)
-      .replace('if (ssFade > 0.002) {\n  vec3 d = mix(ssTriN', SK_FS_NRM + 'if (ssFade > 0.002) {\n  vec3 d = mix(ssTriN');
+      .replace('if (ssFade > 0.002) {\n  vec3 d = mix(ssTriN', SK_FS_NRM + 'if (ssFade > 0.002) {\n  vec3 d = mix(ssTriN')
+      // wet rubberised canvas has a sheen, not a vinyl gloss (the rigid build's 0.30 read as
+      // plastic on the ballooned dress)
+      .replace('roughnessFactor = mix(roughnessFactor, 0.30, ssWet * 0.8 * nonMet);', 'roughnessFactor = mix(roughnessFactor, 0.48, ssWet * 0.8 * nonMet);');
   };
   const pk = m.customProgramCacheKey;
   m.customProgramCacheKey = () => pk.call(m) + '|salSkin1' + (maps.wrinkleMap ? 'w' : '');
