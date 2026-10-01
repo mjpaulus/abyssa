@@ -60,6 +60,12 @@ export function plan(rig) {
   };
   // the weight belt (rigid, hips frame): its centre line, height and the dress radius under it
   P.beltY = P.spY + 0.07; P.beltH = 0.15; P.beltRx = 0.372; P.beltZr = 0.86;
+  // the boot SHAFT (leather, laced, part of the dress mesh, riding the SHIN: the rig's ankle
+  // sits down in the boot, 0.15 over the sole, so the shaft cannot ride the foot — a pitched
+  // foot would swing it through the trouser). Its top is ~0.40 over the sole, as the shoe was.
+  P.shaftTop = Math.max(0.12, 0.40 + P.sole);      // above the ankle pivot
+  P.shaftR = 0.126;
+  P.inBoot = P.L - P.shaftTop;                     // u where the trouser goes into the boot
   return P;
 }
 
@@ -93,7 +99,10 @@ function interp(T, y, k) {
 function legRb(P, u) {
   const t = clamp(u, 0, P.L);
   const rT = P.lr * P.Pth(clamp(t / P.up, 0, 1)) * 1.10, rS = P.lr * P.Psh(clamp((t - P.up) / P.lo, 0, 1)) * 1.06;
-  return rT + (rS - rT) * sst(P.up - 0.07, P.up + 0.07, t) - 0.010 * sst(P.L - 0.17, P.L - 0.05, t);
+  const r = rT + (rS - rT) * sst(P.up - 0.07, P.up + 0.07, t);
+  // drawn in to go into the boot: the canvas is gathered by the lacing into the shaft
+  const rIn = P.shaftR - 0.016;
+  return r + (Math.min(r, rIn) - r) * sst(P.inBoot - 0.16, P.inBoot + 0.02, t);
 }
 function armRb(P, u) {
   const t = clamp(u, 0, P.aL);
@@ -138,15 +147,15 @@ function legFolds(P, s) {
     o += 0.0045 * a * gau((u - up) / 0.075) * Math.pow(0.5 + 0.5 * Math.cos(th - BACK), 1.4) * bfold(u, th, 0.048, 0.7, sd + 1);
     // bagged knee: slack canvas standing proud of the knee cap, more so on the right (worn)
     o += (0.013 + 0.004 * (s < 0)) * gau((u - up + 0.01) / 0.08) * Math.pow(0.5 + 0.5 * Math.cos(th - FRONT), 1.6);
-    // the trouser STACKED over the boot: three or four big buckles that spiral and slump
-    const st = sst(L - 0.22, L - 0.10, u);
+    // the trouser STACKED over the boot top: three or four big buckles that spiral and slump
+    const st = win(-u, -P.inBoot + 0.17, -P.inBoot - 0.03, 0.05);
     o += 0.0105 * a * st * (0.6 + 0.4 * Math.pow(0.5 + 0.5 * Math.cos(th - FRONT), 1)) * bfold(u, th, 0.070, 1.6, sd + 2);
     o += 0.006 * st;
     // the seat and the backs of the thighs sag
     o += 0.010 * gau((u - 0.06) / 0.09) * Math.pow(0.5 + 0.5 * Math.cos(th - BACK), 2);
     // calf LACING (Mark V legs are laced up the back of the calf to keep the air out of
     // the legs): the canvas is drawn in along the lacing and pleats run into it
-    const lw = win(-u, -up - 0.10, -L + 0.16, 0.04);
+    const lw = win(-u, -up - 0.10, -P.inBoot + 0.18, 0.04);
     if (lw > 0) {
       const d = dAng(th, BACK);
       o -= 0.011 * lw * gau(d / 0.22);
@@ -356,11 +365,40 @@ function knifeStraps(P) {
   }
   return Xf([P.hipX, 0, 0], eul(0, 0, 0), U(0.002, ...ch));
 }
+// the boot SHAFT round one ankle (s = +1 left), in the hips frame, part of the dress mesh
+// and weighted to the shin alone: leather, the trouser gathered into its rolled top, an
+// ankle strap with its buckle outboard, laced up the front over brass hooks
+function shaftSpec(P, s) {
+  const T = P.shaftTop, R = P.shaftR, ch = [];
+  const prof = [[R, -0.075], [R - 0.002, -0.02], [R - 0.005, 0.06], [R - 0.002, T * 0.6], [R + 0.006, T - 0.03], [R + 0.016, T]];
+  ch.push(Disp([{ type: 'fn', bake: true, amp: 0.0012, fn: (x, y, z) => 0.0012 * crease(Math.atan2(z, x) * 5 + y * 90 + 2 * Math.sin(y * 31)) * sst(0.4, 0.8, Math.sin(Math.atan2(z, x) * 3 + y * 13)) }],
+    Lathe(smoothProf(prof, 3), M.LEATHER, { sz: 1.0 })));
+  ch.push(ETor(R + 0.014, 0.013, T - 0.004, M.LEATHER, 1, 1));
+  const ya = 0.02;
+  ch.push(Band(() => R + 0.002, ya, 0.034, 0.005, M.LEATHER, { rr: 0.002, rmax: 0.2 }));
+  ch.push(Xf([s * (R + 0.008), ya, 0.0], zTo([s, 0, 0], Math.PI / 2), Buckle(0.044, 0.040, 0.0045)));
+  // laces: hooks either side of the front seam, crossings between them, tied off at the top
+  const nL = 6, y0 = -0.05, y1 = T - 0.035, hx = 0.046, zf = x => Math.sqrt(Math.max(0, R * R - x * x));
+  const row = [];
+  for (let i = 0; i < nL; i++) row.push(y0 + (y1 - y0) * i / (nL - 1));
+  row.forEach((y, i) => {
+    for (const sx of [1, -1]) ch.push(Sph([sx * hx, y, zf(hx) + 0.002], 0.0080, M.BRASS));
+    if (i < nL - 1) {
+      const y2 = row[i + 1];
+      ch.push(Path([[-hx, y, zf(hx) + 0.006], [0, (y + y2) / 2, R + 0.008], [hx, y2, zf(hx) + 0.006]], 0.0042, M.CORD, 6));
+      ch.push(Path([[hx, y, zf(hx) + 0.006], [0, (y + y2) / 2, R + 0.011], [-hx, y2, zf(hx) + 0.006]], 0.0042, M.CORD, 6));
+    }
+  });
+  const yt = row[nL - 1];
+  ch.push(E([0, yt + 0.006, R + 0.012], [0.014, 0.010, 0.010], M.CORD));
+  for (const sx of [-1, 1]) ch.push(Path([[0, yt + 0.006, R + 0.014], [sx * 0.03, yt - 0.03, R + 0.02], [sx * 0.04, yt - 0.075, R + 0.012]], 0.0040, M.CORD, 6));
+  return Xf([s * P.hipX, -P.L, 0], eul(0, 0, 0), U(0.004, ...ch));
+}
 function trunkSpec(P, wrinkle) {
   const body = U(0.075, trunkField(P), legField(P, 1), legField(P, -1));
   const L = dressBake(P, false, 3);
   if (wrinkle) L.push(wrinkleLayer(P, false));
-  return U(0.003, Disp(L, body), crotchStrap(P), knifeStraps(P));
+  return U(0.003, Disp(L, body), crotchStrap(P), knifeStraps(P), shaftSpec(P, 1), shaftSpec(P, -1));
 }
 function sleeveSpec(P, s, wrinkle) {
   const L = dressBake(P, true, s > 0 ? 5 : 9);
@@ -516,46 +554,39 @@ function handSpec(left) {
 function bootSpec2(rig) {
   const SOLE = rig.soleY, ch = [], A = -SOLE;           // A: ankle pivot height above the sole
   const yS = y => SOLE + y;                               // a height above the sole, ankle frame
-  const top = Math.min(0.10, 0.36 * A);                   // shaft top above the ankle pivot
-  // THE SHAFT: leather, round the ankle, a rolled top the trouser bunches into
-  const shaft = [[0.128, yS(0.12)], [0.120, yS(0.20)], [0.118, Math.min(yS(0.30), top - 0.06)], [0.128, top - 0.02], [0.142, top]];
-  ch.push(Disp([{ type: 'fn', bake: true, amp: 0.0012, fn: (x, y, z) => 0.0012 * crease(Math.atan2(z, x) * 5 + y * 90 + 2 * Math.sin(y * 31)) * sst(0.4, 0.8, Math.sin(Math.atan2(z, x) * 3 + y * 13)) }],
-    Lathe(smoothProf(shaft.map(q => [q[0], q[1]]), 3), M.LEATHER, { sz: 1.0 })));
-  ch.push(ETor(0.140, 0.014, top - 0.004, M.LEATHER, 1, 1));
-  // ankle strap and buckle
-  const ya = Math.max(yS(0.24), top - 0.075);
-  ch.push(Band(() => 0.128, ya, 0.036, 0.005, M.LEATHER, { rr: 0.002, rmax: 0.2 }));
-  ch.push(Xf([0.133, ya, 0.0], zTo([1, 0, 0], Math.PI / 2), Buckle(0.044, 0.040, 0.0045)));
+  // (the SHAFT is the dress's — shaftSpec, riding the shin; the foot pitches inside it)
+  // the THROAT: leather filling the opening at the ankle, so a pitched foot never shows a
+  // gap under the shaft's edge (the rig's foot pitches -17..+45 deg about the pivot)
+  ch.push(E([0, yS(0.1615), -0.01], [0.124, 0.110, 0.132], M.LEATHER));
   // the VAMP and the toe box
-  ch.push(U(0.03, E([0, yS(0.128), 0.040], [0.127, 0.108, 0.20], M.LEATHER), Box([0, yS(0.116), 0.06], [0.11, 0.07, 0.15], 0.06, M.LEATHER)));
-  ch.push(E([0, yS(0.122), 0.185], [0.136, 0.099, 0.156], M.LEATHER));
-  // laces up the front: crossings and brass hooks either side, seated on the leather by
-  // marching the upper's own field in from the front
+  // (leather grain, and the flex creases a walked-in boot keeps across the instep)
+  ch.push(Disp([{ type: 'fbm', bake: true, amp: 0.0004, f: 140, oct: 2, seed: 74 },
+    { type: 'fn', bake: true, amp: 0.0016, fn: (x, y, z) => -0.0016 * gau((z - 0.13) / 0.035) * Math.pow(Math.abs(Math.sin(z * 160 + 2 * Math.sin(x * 30))), 6) * sst(yS(0.12), yS(0.2), y) }],
+  U(0.03, E([0, yS(0.128), 0.040], [0.127, 0.108, 0.20], M.LEATHER), Box([0, yS(0.116), 0.06], [0.11, 0.07, 0.15], 0.06, M.LEATHER),
+    E([0, yS(0.122), 0.185], [0.136, 0.099, 0.156], M.LEATHER))));
+  // the lacing's lowest crossings, over the INSTEP in front of the shaft (the shaft carries
+  // the rest up the front), each hook seated on the vamp's top by marching down onto it
   {
-    const f = compile(U(0.03, ...ch)).f, nL = 6, y0 = yS(0.205), y1 = top - 0.035;
-    const seat = (x, y) => { let z = 0.40; for (let it = 0; it < 200; it++) { const d = f(x, y, z); if (d < 3e-4) break; z -= Math.max(d * 0.7, 4e-4); } return z; };
-    const row = [];
-    for (let i = 0; i < nL; i++) { const y = y0 + (y1 - y0) * i / (nL - 1); row.push([y, seat(0.050, y), seat(-0.050, y), seat(0, y)]); }
-    row.forEach(([y, zl, zr], i) => {
-      ch.push(Sph([0.052, y, zl + 0.002], 0.0085, M.BRASS), Sph([-0.052, y, zr + 0.002], 0.0085, M.BRASS));
-      if (i < nL - 1) {
-        const [y2, zl2, zr2, zc] = row[i + 1], zm = Math.max(row[i][3], zc) + 0.010;
-        ch.push(Path([[-0.050, y, zr + 0.006], [0, (y + y2) / 2, zm], [0.050, y2, zl2 + 0.006]], 0.0042, M.CORD, 6));
-        ch.push(Path([[0.050, y, zl + 0.006], [0, (y + y2) / 2, zm + 0.004], [-0.050, y2, zr2 + 0.006]], 0.0042, M.CORD, 6));
+    const f = compile(U(0.03, ...ch)).f, zs = [0.135, 0.175, 0.215];
+    const seat = (x, z) => { let y = yS(0.40); for (let it = 0; it < 300; it++) { const d = f(x, y, z); if (d < 3e-4) break; y -= Math.max(d * 0.7, 4e-4); } return y; };
+    const row = zs.map(z => [z, seat(0.044, z), seat(-0.044, z), seat(0, z)]);
+    row.forEach(([z, yl, yr], i) => {
+      ch.push(Sph([0.046, yl + 0.002, z], 0.0078, M.BRASS), Sph([-0.046, yr + 0.002, z], 0.0078, M.BRASS));
+      if (i < row.length - 1) {
+        const [z2, yl2, yr2, yc] = row[i + 1], ym = Math.max(row[i][3], yc) + 0.008;
+        ch.push(Path([[-0.044, yr + 0.005, z], [0, ym, (z + z2) / 2], [0.044, yl2 + 0.005, z2]], 0.0042, M.CORD, 6));
+        ch.push(Path([[0.044, yl + 0.005, z], [0, ym + 0.003, (z + z2) / 2], [-0.044, yr2 + 0.005, z2]], 0.0042, M.CORD, 6));
       }
     });
-    const [yt, zl, zr, zc] = row[nL - 1];
-    ch.push(E([0, yt + 0.006, zc + 0.012], [0.014, 0.010, 0.010], M.CORD));          // the knot
-    for (const sx of [-1, 1]) ch.push(Path([[0, yt + 0.006, zc + 0.014], [sx * 0.03, yt - 0.03, zc + 0.02], [sx * 0.04, yt - 0.075, zc + 0.012]], 0.0040, M.CORD, 6));
   }
   // the instep strap arched over the vamp, frame buckle outboard
   const yi = yS(0.130);
-  ch.push(Fn([-0.16, yi - 0.05, 0.06, 0.16, yi + 0.18, 0.17], (x, y, z) => {
+  ch.push(Fn([-0.16, yi - 0.05, 0.10, 0.16, yi + 0.18, 0.21], (x, y, z) => {
     const ex = x / 1.08, ey = (y - yi) / 0.94;
     const q = Math.hypot(ex, ey) - 0.130;
-    return Math.max(Math.hypot(Math.max(Math.abs(q) - 0.006, 0), Math.max(Math.abs(z - 0.112) - 0.022, 0)) + Math.min(Math.max(Math.abs(q) - 0.006, Math.abs(z - 0.112) - 0.022), 0), -(y - yi) - 0.03) * 0.85;
+    return Math.max(Math.hypot(Math.max(Math.abs(q) - 0.006, 0), Math.max(Math.abs(z - 0.150) - 0.022, 0)) + Math.min(Math.max(Math.abs(q) - 0.006, Math.abs(z - 0.150) - 0.022), 0), -(y - yi) - 0.03) * 0.85;
   }, M.LEATHER));
-  ch.push(Xf([0.144, yi + 0.014, 0.112], zTo(norm([1, 0.25, 0]), Math.PI / 2), Buckle(0.052, 0.046, 0.0045)));
+  ch.push(Xf([0.144, yi + 0.014, 0.150], zTo(norm([1, 0.25, 0]), Math.PI / 2), Buckle(0.052, 0.046, 0.0045)));
   // BRASS TOE CAP
   {
     const c = [0, yS(0.122), 0.185], R = [0.136 * 1.05, 0.099 * 1.05, 0.156 * 1.05];
@@ -695,7 +726,8 @@ function rigFromSource() {
 }
 export function pipeline() {
   const rig = rigFromSource(), P = plan(rig), B = bones(P);
-  const legBones = ['hips', 'spine', 'thighL', 'shinL', 'footL', 'thighR', 'shinR', 'footR'];
+  // no foot bones: the trouser and the boot shaft ride the shin (the foot pitches inside them)
+  const legBones = ['hips', 'spine', 'thighL', 'shinL', 'thighR', 'shinR'];
   const pieces = [
     piece('helmet', 'helm', helmetSpec(), { tris: 16000, h: 0.0028 }),
     piece('corselet', 'helm', corseletSpec({ mk5: true }), { tris: 11000, h: 0.0032, loH: 0.009 }),
@@ -722,7 +754,7 @@ export function pipeline() {
       mirror: ['handR', 'boot'],
       skinned: ['trunk', 'sleeveL', 'sleeveR'],
       bones: B.map(b => b.name),
-      grip: GRIP, beltY: P.beltY,
+      grip: GRIP, beltY: P.beltY, inBootY: -P.inBoot,
       metal: 'ormB'
     },
     compress: { mesh: 'draco', tex: 'ktx2' }

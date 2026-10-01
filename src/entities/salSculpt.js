@@ -877,7 +877,11 @@ function shinSpec(rig) {
 // with real mass, laces, instep and ankle straps, the BRASS TOE CAP, a stacked heel and the
 // LEAD SOLE — its underside exactly at SOLE_Y (the IK plants on it)
 function bootSpec(rig) {
-  const SOLE = rig.soleY, ch = [];
+  // (salreal) the rig branch moved the ankle pivot down into the boot (SOLE_Y -0.3665 ->
+  // -0.15, the shin longer by the same 0.2165): the boot is authored at its old heights and
+  // lifted whole by D, so it sits exactly where it was relative to the knee and the sole is
+  // at the new SOLE_Y. (The two-piece boot is salSkinSculpt's; this is the rigid fallback.)
+  const SOLE = -0.3665, D = rig.soleY - SOLE, ch = [];
   const keys = [[0.100, 0.122], [0.066, 0.132], [0.036, 0.118], [0.000, 0.140], [-0.045, 0.146], [-0.080, 0.140]].sort((a, b) => a[0] - b[0]);
   const rAt = y => { let i = 1; while (i < keys.length - 1 && keys[i][0] < y) i++; const [y0, r0] = keys[i - 1], [y1, r1] = keys[i], u = clamp((y - y0) / (y1 - y0), 0, 1); return r0 + (r1 - r0) * u * u * (3 - 2 * u); };
   const yg = 0.036, n = 14, depth = 0.022, prof = [];
@@ -946,7 +950,7 @@ function bootSpec(rig) {
   wl.push(wl[0]);
   ch.push(Path(wl, 0.0105, M.LEATHER));
   for (let i = 0; i < 14; i++) { const q = full[Math.floor(i / 14 * full.length)]; ch.push(Sph([q[0] * 1.045, SOLE + DEP * 0.62, q[1] * 1.045], 0.0068, M.BRASS)); }
-  return U(0.005, ...ch);
+  return D ? Xf([0, D, 0], eul(0, 0, 0), U(0.005, ...ch)) : U(0.005, ...ch);
 }
 
 // =============================================================================================

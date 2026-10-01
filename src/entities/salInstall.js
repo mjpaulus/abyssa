@@ -288,7 +288,7 @@ const SK_VS_MAIN = `
   transformed += rn * uSkK.y * (0.016 * (kL * b0.x + kR * b0.y) * bk + 0.012 * (eL * b0.z + eR * b0.w) * fr);
   // UNDERWATER the dress balloons a little (the air in it): everywhere the canvas is free,
   // not where the belt cinches it or the boots and cuffs hold it (uSkK.z: 0 dry .. 1 sunk)
-  float loose = (1.0 - skW(4.0) - skW(7.0) - skW(10.0) - skW(13.0)) * (1.0 - skG(rp.y - uSkG2.x, 0.10));
+  float loose = (1.0 - skW(10.0) - skW(13.0)) * (1.0 - skG(rp.y - uSkG2.x, 0.10)) * smoothstep(uSkG2.y - 0.02, uSkG2.y + 0.16, rp.y);
   transformed += rn * uSkK.z * 0.013 * loose;
 }`;
 const SK_FS = `
@@ -327,7 +327,7 @@ function dressMaterial(maps, shared, P) {
   const U = {
     tSkWrk: { value: maps.wrinkleMap || maps.normalMap },
     uSkB0: { value: new THREE.Vector4() }, uSkB1: { value: new THREE.Vector4() },
-    uSkG: { value: new THREE.Vector4(P.kneeY, P.elbowY, P.hipX, P.waistY) }, uSkG2: { value: new THREE.Vector4(P.beltY, 0, 0, 0) },
+    uSkG: { value: new THREE.Vector4(P.kneeY, P.elbowY, P.hipX, P.waistY) }, uSkG2: { value: new THREE.Vector4(P.beltY, P.inBootY, 0, 0) },
     uSkK: { value: new THREE.Vector4(1, 1, 0, 0) }
   };
   if (maps.wrinkleMap) m.defines = Object.assign(m.defines || {}, { SAL_WRK: '' });
@@ -396,7 +396,7 @@ function installSkinned(diver, shared, A) {
       si.needsUpdate = true; g[k].userData.skRemapped = true;
     }
   }
-  const P = { kneeY: -live.legUp, elbowY: diver.spine.position.y + live.shY - live.armUp, hipX: live.hipX, waistY: diver.spine.position.y + 0.28, beltY: meta.beltY != null ? meta.beltY : diver.spine.position.y + 0.07 };
+  const P = { kneeY: -live.legUp, elbowY: diver.spine.position.y + live.shY - live.armUp, hipX: live.hipX, waistY: diver.spine.position.y + 0.28, beltY: meta.beltY != null ? meta.beltY : diver.spine.position.y + 0.07, inBootY: meta.inBootY != null ? meta.inBootY : -live.legUp - live.legLo + 0.25 };
 
   const helmMat = registerPaint(sculptMat(A.maps.helm, shared, { env: 0.55, ao: 0.9 }), { hero: true });
   const dressMat = registerPaint(dressMaterial(A.maps.dress, shared, P), { hero: true });
