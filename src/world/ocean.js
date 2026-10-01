@@ -615,11 +615,15 @@ export function buildOceanGeometry() {
 // CPU HEIGHT QUERY
 // ---------------------------------------------------------------------------
 const PBO_RING = 4, PBO_LAG = 2;
-let gl = null, pbo = null, issued = 0, readN = 0, probeFailed = false;
+let gl = null, pbo = null, issued = 0, readN = 0, probeFailed = false, _lastProbeT = 0, _fdtAvg = 0.016;
 const pboMeta = Array.from({ length: PBO_RING }, () => new Float64Array(7));   // t, ax, az, as, bx, bz, bs
-const res = [new Float32Array(PROBE_W * PROBE_H * 4), new Float32Array(PROBE_W * PROBE_H * 4)];
-const resMeta = [new Float64Array(7), new Float64Array(7)];
-let resN = 0;   // number of results landed (res[(resN-1)&1] is newest)
+// The last THREE landed results: the CPU answer extrapolates the readback latency with
+// a quadratic through them (a linear one measured 0.08 u rms / 0.31 max in a gale at
+// 20 fps; the swell's curvature is most of that).
+const RES_K = 3;
+const res = Array.from({ length: RES_K }, () => new Float32Array(PROBE_W * PROBE_H * 4));
+const resMeta = Array.from({ length: RES_K }, () => new Float64Array(7));
+let resN = 0;   // number of results landed (res[(resN-1)%RES_K] is newest)
 const A_N = 64, B_N = 32;
 const WIN_SP = 0.5;
 let probeEvery = 1;
@@ -639,15 +643,23 @@ function probeSetup() {
 export function probeOcean(ax, az, bx, bz, t) {
   if (!ok || probeFailed) return;
   if (!pbo) { probeSetup(); if (probeFailed) return; }
-  // Map back everything old enough, oldest first.
-  while (issued - readN > PBO_LAG) {
-    const slot = readN % PBO_RING, dst = resN & 1;
+  // Map back everything old enough, oldest first. The lag adapts to the frame time: at
+  // 60 fps the GPU needs two frames' grace before a map is free, but a slow frame (the
+  // GPU long finished with the previous one) can take it one frame old and halve the
+  // extrapolation distance, which is where the error lives.
+  const fdt = t - _lastProbeT; _lastProbeT = t;
+  if (fdt > 0 && fdt < 0.5) _fdtAvg += (fdt - _fdtAvg) * 0.1;
+  const lag = _fdtAvg > 0.030 ? 1 : PBO_LAG;
+  while (issued - readN > lag) {
+    const slot = readN % PBO_RING, dst = resN % RES_K;
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo[slot]);
     gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, res[dst]);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     resMeta[dst].set(pboMeta[slot]);
     resN++; readN++;
+    if (track.on) trackLanded(res[dst], resMeta[dst]);
   }
+  if (track.on) trackPredict(t);
   if (issued - readN >= PBO_RING) return;
   if (frame % probeEvery) return;
   const half = A_N * WIN_SP * 0.5, halfB = B_N * WIN_SP * 0.5;
@@ -690,23 +702,47 @@ function bil(r, xo, fx, fz) {
   return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
 }
 export const probeStats = { hits: 0, misses: 0 };
+// DEV: latency-extrapolation error. Each frame the CPU answer at a tracked point is
+// recorded against the frame's clock; when the GPU value for that same clock lands two
+// frames later, the difference is exactly the error every consumer saw.
+const track = { on: false, x: 0, z: 0, tq: new Float64Array(16), hq: new Float64Array(16), n: 0, cnt: 0, sum2: 0, max: 0, amp: 0 };
+function trackPredict(t) { const i = track.n++ & 15; track.tq[i] = t; track.hq[i] = oceanHeightAt(track.x, track.z, t); }
+function trackLanded(r, m) {
+  const h = lookup(r, m, track.x, track.z);
+  if (h !== h) return;
+  for (let i = 0; i < 16; i++) if (track.tq[i] === m[0]) {
+    const e = Math.abs(track.hq[i] - h);
+    track.cnt++; track.sum2 += e * e; if (e > track.max) track.max = e;
+    track.amp = Math.max(track.amp, Math.abs(h));
+  }
+}
 // THE ONE CPU ANSWER: surface height (relative to SURFACE_Y) at world (x, z), time t.
 export function oceanHeightAt(x, z, t) {
   if (resN > 0) {
-    const n1 = (resN - 1) & 1;
-    const h1 = lookup(res[n1], resMeta[n1], x, z);
-    if (h1 === h1) {
+    const n2 = (resN - 1) % RES_K;
+    const h2 = lookup(res[n2], resMeta[n2], x, z);
+    if (h2 === h2) {
       probeStats.hits++;
+      const t2 = resMeta[n2][0], te = t2 + Math.min(Math.max(t - t2, 0), 0.2);
       if (resN > 1) {
-        const n0 = resN & 1, t1 = resMeta[n1][0], t0 = resMeta[n0][0];
-        const h0 = lookup(res[n0], resMeta[n0], x, z);
-        const span = t1 - t0;
-        if (h0 === h0 && span > 1e-3 && span < 0.25) {
-          const dtE = Math.min(Math.max(t - t1, 0), 0.15);
-          return h1 + (h1 - h0) * (dtE / span);
+        const n1 = (resN - 2) % RES_K, t1 = resMeta[n1][0];
+        const h1 = lookup(res[n1], resMeta[n1], x, z);
+        if (h1 === h1 && t2 - t1 > 1e-3 && t2 - t1 < 0.25) {
+          if (resN > 2) {
+            const n0 = (resN - 3) % RES_K, t0 = resMeta[n0][0];
+            const h0 = lookup(res[n0], resMeta[n0], x, z);
+            if (h0 === h0 && t1 - t0 > 1e-3 && t2 - t0 < 0.4) {
+              // Lagrange through (t0,h0) (t1,h1) (t2,h2), evaluated at te.
+              const a = (te - t1) * (te - t2) / ((t0 - t1) * (t0 - t2));
+              const b = (te - t0) * (te - t2) / ((t1 - t0) * (t1 - t2));
+              const c = (te - t0) * (te - t1) / ((t2 - t0) * (t2 - t1));
+              return h0 * a + h1 * b + h2 * c;
+            }
+          }
+          return h2 + (h2 - h1) * ((te - t2) / (t2 - t1));
         }
       }
-      return h1;
+      return h2;
     }
   }
   probeStats.misses++;
@@ -716,7 +752,7 @@ export function oceanHeightAt(x, z, t) {
 // ---------------------------------------------------------------------------
 // ANALYTIC FALLBACK + waveLow: the dominant components of the same spectrum.
 // ---------------------------------------------------------------------------
-const TOPK = 40;
+const TOPK = 128;
 const comp = new Float64Array(TOPK * 6);   // kx, kz, Re, Im (of the +k term net), w, |a|
 let compN = 0, compAge = 1e9;
 const _cand = new Float64Array(TOPK * 6);
@@ -807,6 +843,11 @@ if (typeof window !== 'undefined') {
   window.__ocean = {
     OCEAN, SP, stats: () => ({ ..._sea, chop: _chop, resN, issued, readN, probeFailed, fftType, ...probeStats }),
     sim: setOceanSim,
+    track(x, z) { Object.assign(track, { on: true, x, z, n: 0, cnt: 0, sum2: 0, max: 0, amp: 0 }); track.tq.fill(-1); },
+    trackStats() { return { n: track.cnt, rms: Math.sqrt(track.sum2 / Math.max(1, track.cnt)), max: track.max, maxAbsH: track.amp }; },
+    // The newest LANDED probe value at (x, z) and the clock it was evaluated at: the
+    // ground truth the extrapolated CPU answer is measured against.
+    rawAt(x, z) { if (!resN) return null; const n1 = (resN - 1) % RES_K; return [lookup(res[n1], resMeta[n1], x, z), resMeta[n1][0]]; },
     // Compare CPU answer vs the analytic fallback at a point.
     h: (x, z, t) => ({ probe: oceanHeightAt(x, z, t), analytic: analyticHeight(x, z, t) }),
     // Dev readback of one merged texture's mean/max (allocates; never per frame).
