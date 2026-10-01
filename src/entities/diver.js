@@ -350,7 +350,9 @@ const GL_FS_FOG = `
   vec2 q = vec2(vGlP.x, vGlP.y - 0.405);
   float rag = 0.5 + 0.5 * sin(vGlP.x * 61.0 + sin(vGlP.y * 47.0) * 2.0) * sin(vGlP.y * 53.0 - vGlP.x * 23.0);
   glFog = uSalFog * front * (1.0 - smoothstep(0.03 + 0.05 * uSalFog, 0.11 + 0.05 * uSalFog + 0.025 * rag, length(q)));
-  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.45, 0.44), glFog * 0.75);
+  // the front light is looked THROUGH now (there is a face behind it): its own film is darker
+  diffuseColor.rgb *= 1.0 - 0.6 * front;
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.45, 0.44), glFog * 0.5);
 }`;
 const GL_FS_NORMAL = `
 {
@@ -367,7 +369,7 @@ const GL_FS_ALPHA = `
 {
   float fr = pow(1.0 - clamp(abs(dot(normal, normalize(vViewPosition))), 0.0, 1.0), 2.2);
   float rec = 1.0 - step(0.5, vColor.r);
-  diffuseColor.a = mix(clamp(mix(0.22, 0.94, fr) + glDrop * 0.35 + glFog * 0.30, 0.0, 1.0), 1.0, rec);
+  diffuseColor.a = mix(clamp(mix(0.22, 0.94, fr) + glDrop * 0.35 + glFog * 0.16, 0.0, 1.0), 1.0, rec);
 }`;
 const _drops = dropletSet();
 glassMat.onBeforeCompile = sh => {
@@ -3717,7 +3719,7 @@ export function updateDiver(dt, t, player) {
     // the exhale fogs the front light; the inhale clears it (a little more in the cold deep)
     const ph = breathPh % TAU, exh = ph > Math.PI && ph < Math.PI + 2.0;
     fogV += ((exh ? 1 : 0) - fogV) * Math.min(1, (exh ? 1.8 : 0.8) * dt);
-    salShared.uSalFog.value = fogV * (submerged ? 0.85 : 0.6);
+    salShared.uSalFog.value = fogV * (submerged ? 0.5 : 0.35);
   }
   if (salShared.tick) salShared.tick(dt);   // salInstall: finger bones, the eyes
 }

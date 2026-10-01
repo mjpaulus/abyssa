@@ -508,7 +508,12 @@ if (typeof window !== 'undefined') {
       for (const m of STATE.meshes) m.visible = !on;
       return on ? 'procedural' : 'sculpted';
     },
-    weave(k) { for (const m of STATE.mats || []) m.userData.salSculpt.uSsK.value.z = k; return k; }
+    weave(k) { for (const m of STATE.mats || []) m.userData.salSculpt.uSsK.value.z = k; return k; },
+    // (salprop) the face: inside light (ambient share through the four lights, direct gain), and
+    // the hand pose weights / eye state as they stand this frame
+    faceLight: (amb, dir) => { if (FACE.U) { if (amb != null) FACE.U.uSalIn.value.x = amb; if (dir != null) FACE.U.uSalIn.value.y = dir; return FACE.U.uSalIn.value.toArray(); } return null; },
+    face: () => FACE.eyeU ? { yaw: FACE.yaw.map(v => +v.toFixed(3)), pit: FACE.pit.map(v => +v.toFixed(3)), lid: +FACE.eyeU.uLidY.value.toFixed(3), blinkT: +FACE.blinkT.toFixed(2) } : null,
+    hands: () => HANDS.sides.length ? HANDS.sides.map(S => S.side + ' ' + S.list[5].quaternion.toArray().map(v => +v.toFixed(3)).join(',')) : null
   };
 }
 
@@ -622,7 +627,7 @@ const FACE = { U: null, eyeU: null, mesh: null, eyes: null, C: [new THREE.Vector
 function apertureUniforms() {
   const pc = [], pn = [];
   for (let i = 0; i < 4; i++) { pc.push(new THREE.Vector4()); pn.push(new THREE.Vector3()); }
-  return { uSalPc: { value: pc }, uSalPn: { value: pn }, uSalIn: { value: new THREE.Vector2(0.16, 1.0) } };
+  return { uSalPc: { value: pc }, uSalPn: { value: pn }, uSalIn: { value: new THREE.Vector2(0.30, 1.5) } };
 }
 function withAperture(m, U, key) {
   const prev = m.onBeforeCompile;
@@ -668,7 +673,7 @@ if (vEye > 0.5) {
   vec3 ir = vec3(0.075, 0.105, 0.11) * (0.75 + 0.45 * (0.5 + 0.5 * sin(ang * 23.0) * sin(ang * 9.0 + 1.3)));
   ir *= mix(1.0, 0.45, smoothstep(0.30, 0.41, a));                       // limbal ring
   ir = mix(ir, vec3(0.16, 0.12, 0.06), (1.0 - smoothstep(0.16, 0.26, a)) * 0.6);   // a hazel collar
-  vec3 sc = mix(vec3(0.42, 0.37, 0.32), vec3(0.40, 0.20, 0.17), smoothstep(0.7, 1.4, a) * 0.6);   // old, a little bloodshot
+  vec3 sc = mix(vec3(0.27, 0.235, 0.20), vec3(0.26, 0.13, 0.11), smoothstep(0.7, 1.4, a) * 0.6);   // old, a little bloodshot
   vec3 col = mix(sc, ir, iris);
   col = mix(col, vec3(0.004), pupil);
   // the lids, in the head's frame (they do not turn with the eye); the upper lid's edge arcs
@@ -676,6 +681,8 @@ if (vEye > 0.5) {
   float up = uLidY - 0.22 * x2, lo = uLidLo + 0.25 * x2;
   float lid = clamp(smoothstep(up - 0.04, up + 0.04, vEyeH.y) + 1.0 - smoothstep(lo - 0.04, lo + 0.04, vEyeH.y), 0.0, 1.0);
   float lash = (1.0 - smoothstep(0.0, 0.10, abs(vEyeH.y - up))) * smoothstep(0.0, 0.3, vEyeH.z);
+  // the lids shade the eyeball under their edges (the eye sits in the socket's shadow)
+  col *= mix(0.45, 1.0, smoothstep(0.0, 0.35, min(up - vEyeH.y, vEyeH.y - lo)));
   col = mix(col, vec3(0.21, 0.12, 0.09), lid);
   col *= 1.0 - 0.75 * lash;
   diffuseColor.rgb = col;

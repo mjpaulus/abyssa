@@ -84,6 +84,10 @@ async function load(base, name) {
   // (additive, salSkin) a skinned piece also reports its joint names in skinIndex order, so
   // the caller can bind the geometry to its OWN rig (the glTF bones are never used)
   gltf.scene.traverse(o => { if (o.isMesh) geos[o.name] = o.geometry; if (o.isSkinnedMesh) skins[o.name] = { bones: o.skeleton.bones.map(b => b.name) }; });
+  // (salprop) GLTFLoader de-duplicates node names, and which of a bone and a mesh that share a name
+  // (salSkin: the body bone 'handR' and the skinned hand 'handR') gets the '_1' is load order —
+  // a mesh is always reported under its own name
+  for (const k of Object.keys(geos)) { const b = k.replace(/_\d+$/, ''); if (b !== k && !(b in geos)) { geos[b] = geos[k]; delete geos[k]; if (skins[k]) { skins[b] = skins[k]; delete skins[k]; } } }
   // WebP maps decode OFF the main thread through createImageBitmap (brooder2): through an
   // <img> the decode ran inside the first texImage2D, ~60 ms per 1024 map and ~70 per 2048
   // on the frame she first drew. Bytes are untouched: no premultiply, no colour conversion,

@@ -159,3 +159,17 @@ creature that uses none of these builds exactly as before:
 - **set `weldNormals: true`**: one normal per position across UV seams, set as custom normals
   before the bake (the tangent frame the maps are baked in is the game's) — no seam lines,
   no cracks when a shader pushes along the normal.
+
+## Proportions, rigged hands, the face (salprop)
+
+- **Helmet + corselet scale**: diver.js `HELM_S` (0.85) shrinks the helmet group and the corselet
+  group about the shoulder line `CORS_Y`; the sculpts are authored at the old size and ride those
+  groups. readRig parses both; meta.rig.helmS is checked by salInstall (skinned: any drift refuses).
+- **Hands** (salSkinSculpt): sculpted OPEN and skinned to 16 finger bones in the WRIST frame (they
+  share the armature with the body's hips-frame bones — harmless: each piece only allows its own).
+  `handPoses()` solves GRIP / KNIFE (fingers fitted to wrap a bar at the lantern bail / the hilt) and
+  keys RELAX / SPREAD; meta.hand carries bones + poses, the game blends them (salInstall handsTick).
+- **Face**: `head` piece, its own 1024 `face` set, sculpted in centimetres and placed by one scaled
+  `xf` (meta.face). helmetSpec hollows the bonnet's front and bores the faceplate through to it; the
+  installer adds the liner + procedural eyes and drops the front recess disc. Look-dev:
+  `sculptlab.html?lab&job=./src/entities/salSkinSculpt.js%23preview&p=head,eyes` (or `p=handL`).
