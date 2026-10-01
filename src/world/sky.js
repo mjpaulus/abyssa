@@ -1249,7 +1249,9 @@ export function updateSky(dt, t) {
   // DUSK RESTRAINT: a sun near the horizon drives the single-scatter sky to a saturated
   // amber that reads as a filter; the house bar is brass-age and quiet.
   const skySat = 1 - V.duskDesat * (1 - sm(4, 22, physElev)) * sm(-8, -1, physElev);
-  ATMO_U.uSkySat.value = skySat;
+  // ...and a gale's sky is grey wherever it shows through: no blue holes in a storm
+  const skySatS = Math.min(skySat, 1 - 0.85 * storm);
+  ATMO_U.uSkySat.value = skySatS;
   for (let c = 0; c < 3; c++) {
     horN[c] = atm.hor[c] * K + (P.hor[c] - atm.hor[c] * K) * nightMix;
     zenN[c] = atm.zen[c] * K + (P.zen[c] - atm.zen[c] * K) * nightMix;
