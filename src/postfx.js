@@ -21,6 +21,7 @@ import { playerLightSrc, parkSunShadow, unparkSunShadow } from './lighting.js';
 // --- VOLUMETRICS INTEGRATION (import) ---
 import { VolumetricLightPass } from './postfx.volumetrics.js';
 import { degradeRefraction, reduceRefraction, restoreRefraction, stormLevel, TAA_U } from './world/water.js';
+import { setOceanRate } from './world/ocean.js';
 // --- END VOLUMETRICS INTEGRATION ---
 // CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
 // underwater volumetrics and before the main EffectPass so bloom/grade see it.
@@ -1089,6 +1090,7 @@ function degradeQuality() {
   }
   if (degradeStage === 2) {
     cheapenVolumetrics(true);
+    setOceanRate(2);     // the FFT sea simulates at half rate (same sea, sampled at 30 Hz)
     console.info('ABYSSA: perf tier 2 — volumetrics cheapened (no occlusion, third-res)');
     return false;
   }
@@ -1142,6 +1144,7 @@ function restoreQuality() {
   }
   if (from === 2) {
     cheapenVolumetrics(false);
+    setOceanRate(1);
     console.info('ABYSSA: perf tier 2 lifted — volumetrics at full quality');
     return true;
   }

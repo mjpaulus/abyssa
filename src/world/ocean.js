@@ -473,11 +473,11 @@ export const OCEAN = {
   swellDeg: 20, swellSpread: 22, swellGamma: 4.0,
   spread: 1.0, ampK: 1.0,
   chop: 1.05, chopStorm: 1.25,
-  foamThr: 0.55, foamThrStorm: 0.80, foamGain: 2.2, foamDecay: 2.6, foamDecayStorm: 6.0,
+  foamThr: 0.50, foamThrStorm: 0.66, foamGain: 2.2, foamDecay: 2.6, foamDecayStorm: 6.0,
   // Per-cascade birth thresholds for the PERSISTENT foam, (calm, storm). Each cascade
   // only sees its own band's Jacobian, and the long cascades carry the breaking swell
   // with less compression per band than the sea as a whole, so their bar sits higher.
-  foamThrC: [[0.80, 0.93], [0.74, 0.90], [0.52, 0.70]],
+  foamThrC: [[0.80, 0.92], [0.72, 0.86], [0.45, 0.56]],
   lodBias: 1.0
 };
 const _sea = { U: 0, Hs: 0, mss: 0, lamP: 0, state: 0 };
@@ -524,11 +524,18 @@ export function seaStats() { return _sea; }
 // ---------------------------------------------------------------------------
 // Per-frame simulation.
 // ---------------------------------------------------------------------------
-let simOn = true;
+let simOn = true, simEvery = 1, simTick = 0, simDt = 0;
 export function setOceanSim(on) { simOn = on; }
+// QUALITY RUNG (postfx.degradeQuality tier 2): simulate every k-th frame. The field is a
+// pure function of t, so a decimated sea is the same sea sampled at 30 Hz, not a slower
+// one; foam integrates the skipped frames' dt; the probe stamps the SIM clock.
+export function setOceanRate(k) { simEvery = Math.max(1, k | 0); }
 const _prevVp = new THREE.Vector4();
 export function updateOcean(dt, t) {
   if (!ok || !simOn) return;
+  simDt += dt;
+  if ((simTick++ % simEvery) !== 0) return;
+  dt = simDt; simDt = 0;
   const prevRT = renderer.getRenderTarget();
   const prevShadow = renderer.shadowMap.autoUpdate;
   renderer.shadowMap.autoUpdate = false;
@@ -615,7 +622,7 @@ export function buildOceanGeometry() {
 // CPU HEIGHT QUERY
 // ---------------------------------------------------------------------------
 const PBO_RING = 4, PBO_LAG = 2;
-let gl = null, pbo = null, issued = 0, readN = 0, probeFailed = false, _lastProbeT = 0, _fdtAvg = 0.016;
+let gl = null, pbo = null, issued = 0, readN = 0, probeFailed = false, _lastProbeT = 0, _fdtAvg = 0.016, _probedSimT = -1;
 const pboMeta = Array.from({ length: PBO_RING }, () => new Float64Array(7));   // t, ax, az, as, bx, bz, bs
 // The last THREE landed results: the CPU answer extrapolates the readback latency with
 // a quadratic through them (a linear one measured 0.08 u rms / 0.31 max in a gale at
@@ -661,7 +668,8 @@ export function probeOcean(ax, az, bx, bz, t) {
   }
   if (track.on) trackPredict(t);
   if (issued - readN >= PBO_RING) return;
-  if (frame % probeEvery) return;
+  if (frame % probeEvery || lastT === _probedSimT) return;   // nothing new to read
+  _probedSimT = lastT;
   const half = A_N * WIN_SP * 0.5, halfB = B_N * WIN_SP * 0.5;
   const oax = Math.round((ax - half) / WIN_SP) * WIN_SP, oaz = Math.round((az - half) / WIN_SP) * WIN_SP;
   const obx = Math.round((bx - halfB) / WIN_SP) * WIN_SP, obz = Math.round((bz - halfB) / WIN_SP) * WIN_SP;
@@ -679,7 +687,7 @@ export function probeOcean(ax, az, bx, bz, t) {
     gl.readPixels(0, 0, PROBE_W, PROBE_H, gl.RGBA, gl.FLOAT, 0);
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     const m = pboMeta[slot];
-    m[0] = t; m[1] = oax; m[2] = oaz; m[3] = WIN_SP; m[4] = obx; m[5] = obz; m[6] = WIN_SP;
+    m[0] = lastT; m[1] = oax; m[2] = oaz; m[3] = WIN_SP; m[4] = obx; m[5] = obz; m[6] = WIN_SP;
     issued++;
   } catch (e) {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
@@ -843,6 +851,7 @@ if (typeof window !== 'undefined') {
   window.__ocean = {
     OCEAN, SP, stats: () => ({ ..._sea, chop: _chop, resN, issued, readN, probeFailed, fftType, ...probeStats }),
     sim: setOceanSim,
+    step(dt, t) { updateOcean(dt, t); },
     track(x, z) { Object.assign(track, { on: true, x, z, n: 0, cnt: 0, sum2: 0, max: 0, amp: 0 }); track.tq.fill(-1); },
     trackStats() { return { n: track.cnt, rms: Math.sqrt(track.sum2 / Math.max(1, track.cnt)), max: track.max, maxAbsH: track.amp }; },
     // The newest LANDED probe value at (x, z) and the clock it was evaluated at: the
@@ -860,7 +869,8 @@ if (typeof window !== 'undefined') {
       for (let i = 0; i < N * N; i++) for (let k = 0; k < 4; k++) {
         const v = h(buf[i * 4 + k]); s[k] += v; if (v > mx[k]) mx[k] = v; if (v < mn[k]) mn[k] = v;
       }
-      return { mean: s.map(v => v / (N * N)), max: mx, min: mn };
+      let cov = 0; for (let i = 0; i < N * N; i++) if (h(buf[i * 4 + 3]) > 0.3) cov++;
+      return { mean: s.map(v => v / (N * N)), max: mx, min: mn, cover03w: cov / (N * N) };
     }
   };
 }

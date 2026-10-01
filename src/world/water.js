@@ -2467,7 +2467,9 @@ function buildSurface() {
         // FOAM: born where the whole sea (all cascades together) folds NOW, kept where a
         // parcel folded within the last few seconds (each cascade's persistent channel).
         float foamLive = 1.0 - smoothstep( uOcK.x - uOcK.y, uOcK.x, Jt );
-        float foamMem = max( max( j0.w, j1.w ), j2.w * 0.7 );
+        // Cascade 2's memory tiles every 17 u, so it is broken up by the gust field and
+        // kept to a minor share: the short sea's foam is lace on the big crests' sheets.
+        float foamMem = max( max( j0.w, j1.w ), j2.w * 0.45 * gust );
         float foamJ = max( foamLive, foamMem );
 
         vec3 N = normalize( vec3( -dh.x, 1.0, -dh.y ) );
