@@ -11,7 +11,7 @@ import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
 export { GLASS } from '../config.js';
 // THE VOLUMETRIC SKY (world/sky.js) draws through the dome: its GLSL and uniforms are
 // spliced into buildDome, and captureSkyEnv renders it from its panorama.
-import { GLSL_VOL_DOME, DOME_U as VOL_DOME_U, volCaptureMode } from './sky.js';
+import { GLSL_VOL_DOME, DOME_U as VOL_DOME_U, volCaptureMode, getSkyEnv, getCloudShadow } from './sky.js';
 import { rng, clamp } from '../lib/math.js';
 import { maxAniso } from '../lib/textures.js';
 // THE SPECTRAL OCEAN: the wave field, its textures, the clipmap and the CPU height query.
@@ -1431,7 +1431,7 @@ function buildDome() {
       uSurf: { value: new THREE.Vector3(...SURF_LIGHT) },
       uReach: { value: 46 }, uTime, uSunGlow: { value: new THREE.Vector3() },
       uSkyZen, uSkyHor, uSunCol, uSunDir: uSunDirU, uSunSize, uAir,
-      uOcSea, uRough, uGlit,
+      uOcSea, uRough, uGlit, uSkyEnvT, uSkyEnvK, uCloudShT, uCloudShW,
       abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U },
       abyssaLampB: { value: LAMPB_U }, abyssaLampBC: { value: LAMPBC_U },
       abyssaLampK: { value: LAMPK_U }, abyssaLampP: { value: LAMPP_U },
@@ -1455,6 +1455,7 @@ function buildDome() {
       ${GLSL_AIR}
       ${GLSL_SKY}
       uniform vec4 uOcSea, uRough; uniform vec2 uGlit;
+      ${GLSL_SEA_SKY}
       ${GLSL_FARSEA}
       ${GLSL_VOL_DOME}
       ${GLSL_LAMP}
@@ -2191,6 +2192,44 @@ export function renderRefraction() {
 // clean line where they meet, and the sun's glitter path running all the way to it.
 // uOcSea = (Hs u, total mss, peak wavelength u, sea state). Needs GLSL_SKY + uSunDir,
 // uSunCol, uDiscK, uRough, uGlit in scope.
+// THE REAL SKY ON THE SEA (world/sky.js getSkyEnv / getCloudShadow). When the volumetric
+// sky is up the sea reflects ITS environment -- sky + marched clouds + aureole, no disc --
+// and the sun glint is multiplied by the cloud transmittance toward the sun, so the
+// glitter path goes out when a cloud crosses the sun. The cloud deck's top-down
+// transmittance shadows the sea (glint, crest glow, foam light, body). Both fall back
+// to the analytic painted sky when the volumetric sky is off. abyssaSkyEnv is
+// sky.js's own lookup (its contract: dir.y < 0 clamps to the horizon row).
+const uSkyEnvT = { value: null }, uSkyEnvK = { value: 0 };
+const uCloudShT = { value: null }, uCloudShW = { value: new THREE.Vector4(0, 0, 4096, 0) };
+const GLSL_SEA_SKY = `
+uniform sampler2D uSkyEnvT, uCloudShT;
+uniform float uSkyEnvK;
+uniform vec4 uCloudShW;
+vec4 abyssaSkyEnv( sampler2D t, vec3 dir ){
+  vec3 d = normalize( vec3( dir.x, max( dir.y, 0.0 ), dir.z ) );
+  return texture2D( t, vec2( atan( d.z, d.x ) / 6.28318531 + 0.5, sqrt( d.y ) ) );
+}
+// The environment is one level (no mips), so a rough facet's lobe is integrated by
+// hand: four taps on a cross of half-width r about R. r = 0 is the plain lookup.
+vec3 seaSkyEnvRough( vec3 R, float r ){
+  if ( r < 0.01 ) return abyssaSkyEnv( uSkyEnvT, R ).rgb;
+  vec3 t = normalize( cross( R, vec3( 0.0, 1.0, 0.0 ) ) + vec3( 1e-4 ) );
+  vec3 b = cross( t, R );
+  return 0.25 * ( abyssaSkyEnv( uSkyEnvT, R + t * r ).rgb + abyssaSkyEnv( uSkyEnvT, R - t * r ).rgb
+                + abyssaSkyEnv( uSkyEnvT, R + b * r ).rgb + abyssaSkyEnv( uSkyEnvT, R - b * r ).rgb );
+}
+// rgb: sky along R without the disc; a: cloud transmittance toward R.
+vec4 seaSky( vec3 R ){
+  if ( uSkyEnvK > 0.5 ) return abyssaSkyEnv( uSkyEnvT, R );
+  float gs = gSunK; gSunK = 0.0;
+  vec3 c = skyRadiance( R );
+  gSunK = gs;
+  return vec4( c, gOcc );
+}
+float cloudSun( vec2 xz ){
+  if ( uCloudShW.w < 0.5 ) return 1.0;
+  return texture2D( uCloudShT, clamp( ( xz - uCloudShW.xy ) / uCloudShW.z + 0.5, 0.002, 0.998 ) ).r;
+}`;
 const GLSL_FARSEA = `
 float oceanF( float c ){ return 0.020383 + 0.979617 * pow( 1.0 - c, 5.0 ); }
 float ggxD( float NoH, float a ){
@@ -2219,7 +2258,8 @@ vec3 seaGlitter( vec3 N, vec3 V, float alpha, float sh ){
   float Vis = smithGGXCorrelated( NoV, max( NoL, 1e-4 ), alpha );
   float Fs = oceanF( VoH );
   float gx = uGlit.y * uRough.w * D * Vis * NoL;
-  return uSunCol * ( uDiscK * gOcc * sh * Fs * ( 1.0 - exp( -gx ) ) );
+  float occ = uSkyEnvK > 0.5 ? abyssaSkyEnv( uSkyEnvT, uSunDir ).a : gOcc;
+  return uSunCol * ( uDiscK * occ * sh * Fs * ( 1.0 - exp( -gx ) ) );
 }
 // Reflected ray of a rough sea: lifted by the visible-facet tilt.
 vec3 seaReflDir( vec3 V, vec3 N, float alpha ){
@@ -2240,10 +2280,9 @@ vec3 farSea( vec3 V, vec3 surfIrr ){
   float alpha = clamp( sqrt( uOcSea.y + 0.003 ), 0.04, 0.6 );
   vec3 N = vec3( 0.0, 1.0, 0.0 );
   float F = seaFresnel( V, N, alpha );
-  gSunK = 0.0; gHaloK = 1.0;
   vec3 R = seaReflDir( V, N, alpha );
-  vec3 c = skyRadiance( R ) * F + farBody( surfIrr ) * ( 1.0 - F );
-  gSunK = 1.0;
+  vec3 sk = uSkyEnvK > 0.5 ? seaSkyEnvRough( R, 0.9 * alpha ) : seaSky( R ).rgb;
+  vec3 c = sk * F + farBody( surfIrr ) * ( 1.0 - F );
   c += seaGlitter( N, V, alpha, 1.0 );
   return c;
 }`;
@@ -2265,7 +2304,7 @@ function buildSurface() {
     uWindD, uWindS, uCap, uChop2, uSss, uSss2,
     uOpaq, uOpaq2, uBoil, uDet, uRough, uGlit,
     uSunShadow, uSunShadowMat, uShadowK,
-    uRaftC, uSeaEnv, uEnvK, uFarR
+    uRaftC, uSeaEnv, uEnvK, uFarR, uSkyEnvT, uSkyEnvK, uCloudShT, uCloudShW
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -2384,6 +2423,7 @@ function buildSurface() {
       const float F0  = 0.020383;   // ((n-1)/(n+1))^2 at n = 1.333; theta_c = 48.59 deg
 
       ${GLSL_SKY}
+      ${GLSL_SEA_SKY}
       ${GLSL_FARSEA}
 
       // What is above a total-internal-reflection ray: the water column below, darkening
@@ -2568,7 +2608,7 @@ function buildSurface() {
         vec3 foamCol = vec3( 0.86, 0.94, 1.00 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6;
         float airK = 0.0, farK = 0.0;
         vec3 col = vec3( 0.0 );
-        float sh = sunShadow( vW );
+        float sh = sunShadow( vW ) * cloudSun( vW.xz );
         bool dOff = uDbg > 0.5;
         bool dFoam = !dOff || abs( uDbg - 4.0 ) < 0.5;
         bool dHaze = !dOff || abs( uDbg - 6.0 ) < 0.5;
@@ -2626,7 +2666,8 @@ function buildSurface() {
             envW = uEnvK * smoothstep( 0.05, 0.22, aR );
           #endif
           vec3 sky = vec3( 0.0 );
-          if ( envW < 0.999 ) sky = skyRadiance( R );
+          if ( uSkyEnvK > 0.5 ) { sky = seaSkyEnvRough( R, 0.9 * aR ); envW = 0.0; }
+          else if ( envW < 0.999 ) sky = skyRadiance( R );
           #ifdef SEA_ENV
             if ( envW > 0.001 ) {
               vec3 env = textureCubeUV( uSeaEnv, vec3( -R.x, R.y, R.z ), clamp( aR * 1.4, 0.0, 1.0 ) ).rgb;
@@ -3270,6 +3311,14 @@ export function updateWater(dt, t) {
   // Clouds, marine layer and moon. After the palette copy above, because every colour it
   // resolves is made out of _pHor/_pDisc, and before anything reads the uniforms.
   skyDrama(dt, storm);
+  // The volumetric sky's environment and cloud shadow, for the sea (see GLSL_SEA_SKY).
+  {
+    const se = getSkyEnv();
+    if (se && se.valid && se.texture) { uSkyEnvT.value = se.texture; uSkyEnvK.value = 1; } else uSkyEnvK.value = 0;
+    const cs = getCloudShadow();
+    if (cs && cs.texture) { uCloudShT.value = cs.texture; uCloudShW.value.set(cs.window[0], cs.window[1], cs.window[2], 1); }
+    else uCloudShW.value.w = 0;
+  }
   // After skyDrama: every uniform the dome will be captured through is final for this
   // frame. Captures only fire on palette drift — see the SKY ENVIRONMENT MAP block.
   maybeRefreshSkyEnv(dt);
