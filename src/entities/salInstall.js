@@ -52,6 +52,7 @@ import { registerPaint, styleUniforms } from '../lib/paint.js';
 import { loadSculpted, assetTextures } from '../lib/assets.js';
 import { patchNormalRG } from '../lib/microDetail.js';
 import { twillSet, canvasSet } from '../lib/textures.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const ON = typeof location === 'undefined' || !/[?&]salproc\b/.test(location.search);
 const LAB = typeof location !== 'undefined' && /[?&]lab\b/.test(location.search);
@@ -187,6 +188,7 @@ function install(diver, shared, A) {
     stretch[k] = live[k] / baked[k];
     if (Math.abs(live[k] - baked[k]) > 1e-4) STATE.warn.push(k + ' baked ' + baked[k] + ' live ' + +live[k].toFixed(4) + ' — stretched; re-bake: node tools/blender/build.mjs sal');
   }
+  if (Math.abs((R.helmS != null ? R.helmS : 1) - diver.helmGroup.scale.x) > 1e-3) STATE.warn.push('helmet scale baked ' + (R.helmS != null ? R.helmS : 1) + ' live ' + diver.helmGroup.scale.x);
   if (STATE.warn.length) console.warn('ABYSSA: sculpted Sal was baked to a different rig:\n' + STATE.warn.join('\n'));
   if (Object.values(stretch).some(s => s < 0.85 || s > 1.15)) { STATE.reason = 'rig changed too far from the bake (' + JSON.stringify(stretch) + ') — procedural kept; re-bake'; console.warn('ABYSSA: ' + STATE.reason); return; }
 
@@ -214,9 +216,8 @@ function install(diver, shared, A) {
     STATE.tris += (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
     return m;
   };
-  const ferrule = o => o.material && o.material.userData.salMetal && (o.geometry.boundingBox || (o.geometry.computeBoundingBox(), o.geometry.boundingBox)).getCenter(new THREE.Vector3()).y > 0.9;
   swap(diver.helmGroup, g.helmet, helmMat, { name: 'helmet' });
-  swap(diver.spine, g.corselet, helmMat, { name: 'corselet', keep: ferrule });
+  swap(diver.cors, g.corselet, helmMat, { name: 'corselet' });
   swap(diver.hips, g.hips, torsoMat, { name: 'hips' });
   swap(diver.pack, g.pack, torsoMat, { name: 'pack' });
   for (const [arm, R2] of [[diver.armL, false], [diver.armR, true]]) {
@@ -358,6 +359,8 @@ function dressMaterial(maps, shared, P) {
 
 function undoSkinned() {
   for (const [node, c] of SK.stash) node.add(c);
+  HANDS.sides.length = 0; FACE.eyeU = null;
+  if (FACE.recess) { FACE.recess.o.geometry = FACE.recess.geo || FACE.recess.o.geometry; FACE.recess = null; }
   for (const m of SK.added) if (m.parent) m.parent.remove(m);
   SK.stash.length = 0; SK.added.length = 0; SK.meshes.length = 0; SK.U = null;
 }
@@ -372,9 +375,11 @@ function installSkinned(diver, shared, A) {
   // joint would bend the canvas in the wrong place. Any drift -> the rigid sculpt.
   const R = meta.rig || {}, dL = diver.legL, dA = diver.armL;
   const live = { armUp: -dA.mid.position.y, armLo: -dA.end.position.y, legUp: -dL.mid.position.y, legLo: -dL.end.position.y,
-    hipX: dL.root.position.x, shX: dA.root.position.x, shY: dA.root.position.y, spineY: diver.spine.position.y };
+    hipX: dL.root.position.x, shX: dA.root.position.x, shY: dA.root.position.y, spineY: diver.spine.position.y,
+    helmS: diver.helmGroup.scale.x, neckY: diver.neck.position.y };
   const baked = { armUp: R.armL && R.armL.up, armLo: R.armL && R.armL.lo, legUp: R.legL && R.legL.up, legLo: R.legL && R.legL.lo,
-    hipX: R.legL && R.legL.x, shX: R.armL && R.armL.x, shY: R.armL && R.armL.y, spineY: R.spineY };
+    hipX: R.legL && R.legL.x, shX: R.armL && R.armL.x, shY: R.armL && R.armL.y, spineY: R.spineY,
+    helmS: R.helmS != null ? R.helmS : 1, neckY: R.neckY };
   const off = [];
   for (const k in live) if (baked[k] == null || Math.abs(live[k] - baked[k]) > 2e-3) off.push(k + ' baked ' + baked[k] + ' live ' + +live[k].toFixed(4));
   if (off.length) { STATE.skinReason = 'rig differs from the skinned bake (' + off.join('; ') + ') — re-bake: node tools/blender/build.mjs salSkin'; console.warn('ABYSSA: ' + STATE.skinReason); return false; }
@@ -391,8 +396,14 @@ function installSkinned(diver, shared, A) {
   for (const k of ['trunk', 'sleeveL', 'sleeveR']) {
     // (GLTFLoader de-duplicates node names: the bone 'handL' beside the mesh 'handL' loads as 'handL_1')
     const names = A.skins[k].bones, map = names.map(n => SKIN_BONES.indexOf(SKIN_BONES.includes(n) ? n : n.replace(/_\d+$/, '')));
-    if (map.some((v, i) => v < 0 && names[i])) { STATE.skinReason = k + ': unknown joint ' + names.filter((n, i) => map[i] < 0); return false; }
     const si = g[k].attributes.skinIndex, sw = g[k].attributes.skinWeight;
+    // (salprop) the armature also carries the hands' finger bones: a joint the dress never
+    // weights may be unknown; one it does weight may not
+    {
+      let bad = '';
+      for (let i = 0; i < si.count && !bad && !g[k].userData.skRemapped; i++) for (let c = 0; c < 4; c++) if (sw.getComponent(i, c) > 0 && map[si.getComponent(i, c)] < 0) { bad = names[si.getComponent(i, c)]; break; }
+      if (bad) { STATE.skinReason = k + ': weighted to an unknown joint ' + bad; return false; }
+    }
     if (!g[k].userData.skRemapped) {
       for (let i = 0; i < si.count; i++) for (let c = 0; c < 4; c++) {
         const j = si.getComponent(i, c), w = sw.getComponent(i, c);
@@ -419,15 +430,19 @@ function installSkinned(diver, shared, A) {
     STATE.tris += (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
     return m;
   };
-  const ferrule = o => o.material && o.material.userData.salMetal && (o.geometry.boundingBox || (o.geometry.computeBoundingBox(), o.geometry.boundingBox)).getCenter(new THREE.Vector3()).y > 0.9;
-  retire(diver.helmGroup); retire(diver.spine, ferrule); retire(diver.hips); retire(diver.pack);
+  retire(diver.helmGroup); retire(diver.cors); retire(diver.hips); retire(diver.pack);
   for (const L of [diver.armL, diver.armR, diver.legL, diver.legR]) { retire(L.root); retire(L.mid); retire(L.end); }
   add(diver.helmGroup, g.helmet, helmMat, 'helmet');
-  add(diver.spine, g.corselet, helmMat, 'corselet');
+  add(diver.cors, g.corselet, helmMat, 'corselet');
   add(diver.hips, g.belt, gearMat, 'belt');
   add(diver.pack, g.pack, gearMat, 'pack');
-  add(dA.end, g.handL, gearMat, 'handL');
-  add(diver.armR.end, g.handR, gearMatM, 'handR', true);
+  // (salprop) rigged hands when the bake carries them; the old rigid fists otherwise
+  if (!installHands(diver, A, gearMat, gearMatM)) {
+    add(dA.end, g.handL, gearMat, 'handL');
+    add(diver.armR.end, g.handR, gearMatM, 'handR', true);
+  }
+  const face = installFace(diver, shared, A);
+  shared.tick = dt => { if (HANDS.sides.length) handsTick(shared); if (face) faceTick(diver, shared, dt); };
   add(dL.end, g.boot, gearMat, 'bootL');
   add(diver.legR.end, g.boot, gearMatM, 'bootR', true);
   const ident = new THREE.Matrix4();
@@ -495,4 +510,346 @@ if (typeof window !== 'undefined') {
     },
     weave(k) { for (const m of STATE.mats || []) m.userData.salSculpt.uSsK.value.z = k; return k; }
   };
+}
+
+// =============================================================================================
+// (salprop) THE RIGGED HANDS. Each hand is a SkinnedMesh on its own 16-bone skeleton (palm +
+// three per finger + the thumb), the bones plain THREE.Bones under a root on the wrist group
+// (the right root is mirrored, scale.x = -1, so the left-authored hand and its bones mirror
+// together and three flips the winding). The sculpt is the OPEN rest pose; four solved poses
+// (meta.hand.poses: per bone [swing, flex] offsets from rest) are blended by diver.js's weights
+// (salShared.hand.L / .R: relax, grip, knife, spread) once per frame in salShared.tick — before
+// the scene's matrix update, so the skeleton the renderer uploads is this frame's.
+// =============================================================================================
+const HANDS = { sides: [], poses: null, nb: 0 };
+const _hq = new THREE.Quaternion(), _hq2 = new THREE.Quaternion();
+function installHands(diver, A, matL, matR) {
+  const H = A.meta.meta && A.meta.meta.hand, g = A.geos;
+  if (!H || !A.skins.handL || !A.skins.handR || !g.handL.attributes.skinIndex) return false;
+  const P = H.poses, nb = H.bones.length;
+  HANDS.poses = [P.relax, P.grip, P.knife, P.spread]; HANDS.nb = nb;
+  for (const [end, geo, skin, mat, mirror, side] of [[diver.armL.end, g.handL, A.skins.handL, matL, false, 'L'], [diver.armR.end, g.handR, A.skins.handR, matR, true, 'R']]) {
+    const root = new THREE.Object3D();
+    root.name = 'salHand' + side;
+    if (mirror) root.scale.x = -1;
+    end.add(root); SK.added.push(root);
+    const by = {}, list = [], inv = [], ax = [], sw = [];
+    for (const b of H.bones) {
+      const o = new THREE.Bone(); o.name = b.name;
+      const ph = b.parent ? H.bones.find(q => q.name === b.parent).head : [0, 0, 0];
+      o.position.set(b.head[0] - ph[0], b.head[1] - ph[1], b.head[2] - ph[2]);
+      (b.parent ? by[b.parent] : root).add(o);
+      by[b.name] = o; list.push(o);
+      inv.push(new THREE.Matrix4().makeTranslation(-b.head[0], -b.head[1], -b.head[2]));
+      ax.push(new THREE.Vector3().fromArray(b.ax).normalize()); sw.push(new THREE.Vector3().fromArray(b.sw).normalize());
+    }
+    const skeleton = new THREE.Skeleton(list, inv);
+    // joint names (GLTFLoader may suffix a duplicate '_1') -> our bone order; a joint the hand
+    // never weights (the body's bones ride in the same armature) maps to 0 at weight 0
+    const names = skin.bones.map(n => n.replace(/_\d+$/, '')), map = names.map(n => H.bones.findIndex(b => b.name === n));
+    const si = geo.attributes.skinIndex, swt = geo.attributes.skinWeight;
+    if (!geo.userData.skRemapped) {
+      for (let i = 0; i < si.count; i++) for (let c = 0; c < 4; c++) {
+        const j = si.getComponent(i, c), w = swt.getComponent(i, c);
+        if (w > 0 && map[j] < 0) throw new Error('hand: weight on an unknown joint ' + names[j]);
+        si.setComponent(i, c, w > 0 ? map[j] : 0);
+      }
+      si.needsUpdate = true; geo.userData.skRemapped = true;
+    }
+    const m = new THREE.SkinnedMesh(geo, mat);
+    m.name = 'salSkin:hand' + side; m.castShadow = m.receiveShadow = true; m.frustumCulled = false;
+    root.add(m); m.bind(skeleton, new THREE.Matrix4());
+    SK.added.push(m); STATE.meshes.push(m); STATE.skinned.push(m);
+    STATE.tris += geo.index.count / 3;
+    HANDS.sides.push({ side, list, ax, sw, w: null });
+  }
+  return true;
+}
+function handsTick(shared) {
+  const P = HANDS.poses;
+  for (let s = 0; s < HANDS.sides.length; s++) {
+    const S = HANDS.sides[s], w = S.side === 'L' ? shared.hand.L : shared.hand.R;
+    for (let j = 1; j < HANDS.nb; j++) {
+      let swg = 0, flx = 0;
+      for (let p = 0; p < 4; p++) { const q = P[p][j]; swg += w[p] * q[0]; flx += w[p] * q[1]; }
+      _hq.setFromAxisAngle(S.sw[j], swg);
+      _hq2.setFromAxisAngle(S.ax[j], flx);
+      S.list[j].quaternion.multiplyQuaternions(_hq, _hq2);
+    }
+  }
+}
+
+// =============================================================================================
+// (salprop) THE FACE. A sculpted head (assets/salskin 'head', its own 1024 set) behind the front
+// light, a dark tinned-copper LINER over the helmet's front cavity, and two procedural EYES —
+// the liner and the eyes are one mesh and one draw (attribute salEye: 0 liner, 1/2 the eyes;
+// the vertex shader turns each eye about its centre, the fragment shader paints sclera, iris,
+// pupil and the LIDS, which close over the eyeball in the head's frame).
+// LIGHT INSIDE A HELMET: the scene's lights do not know about the copper, so every material in
+// here takes its direct light through THE APERTURE — a light reaches a fragment only along a
+// ray that leaves the helmet through one of its four lights (the front bore and the three
+// glazed ports, analytic discs in view space, uSalPc/uSalPn) — and its ambient/environment
+// scaled down to what four small windows let in (uSalIn.x). The lantern held up in front lights
+// his face; the cyan fill at his waist and the camera's rim light never do. Dim by physics,
+// not by a fudge, and it can never glow.
+// =============================================================================================
+const SAL_AP_PARS = `
+uniform vec4 uSalPc[4]; uniform vec3 uSalPn[4]; uniform vec2 uSalIn;
+float salAperture(vec3 p, vec3 l) {
+  float v = 0.0;
+  for (int i = 0; i < 4; i++) {
+    float dn = dot(l, uSalPn[i]);
+    if (dn > 0.02) {
+      float t = dot(uSalPc[i].xyz - p, uSalPn[i]) / dn;
+      vec3 q = p + l * t - uSalPc[i].xyz;
+      v += (1.0 - smoothstep(uSalPc[i].w * 0.75, uSalPc[i].w * 1.1, length(q))) * step(0.0, t);
+    }
+  }
+  return min(v, 1.0);
+}
+void salDirect(IncidentLight dl, const in vec3 gp, const in vec3 gn, const in vec3 gv, const in vec3 gc, const in PhysicalMaterial mt, inout ReflectedLight rl) {
+  dl.color *= salAperture(gp, dl.direction) * uSalIn.y;
+  RE_Direct_Physical(dl, gp, gn, gv, gc, mt, rl);
+}
+#undef RE_Direct
+#define RE_Direct( a, b, c, d, e, f, g ) salDirect( a, b, c, d, e, f, g )
+`;
+const SAL_AP_IND = `
+reflectedLight.indirectDiffuse *= uSalIn.x; reflectedLight.indirectSpecular *= uSalIn.x;
+#include <aomap_fragment>`;
+const FACE = { U: null, eyeU: null, mesh: null, eyes: null, C: [new THREE.Vector3(), new THREE.Vector3()], r: 0,
+  P: [], N: [], R: [], yaw: [0, 0], pit: [0, 0], sacc: [0, 0], saccT: 0, saccN: 0, blinkT: 2.5, blink: -1, dbl: false, lid: 0, t: 0 };
+function apertureUniforms() {
+  const pc = [], pn = [];
+  for (let i = 0; i < 4; i++) { pc.push(new THREE.Vector4()); pn.push(new THREE.Vector3()); }
+  return { uSalPc: { value: pc }, uSalPn: { value: pn }, uSalIn: { value: new THREE.Vector2(0.16, 1.0) } };
+}
+function withAperture(m, U, key) {
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = (sh, r) => {
+    if (prev) prev(sh, r);
+    Object.assign(sh.uniforms, U);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <lights_physical_pars_fragment>', '#include <lights_physical_pars_fragment>\n' + SAL_AP_PARS)
+      .replace('#include <aomap_fragment>', SAL_AP_IND);
+  };
+  const pk = m.customProgramCacheKey;
+  m.customProgramCacheKey = () => (pk ? pk.call(m) : '') + '|' + key;
+  return m;
+}
+// the eyes + liner shader
+const EYE_VS = `
+attribute float salEye;
+uniform mat3 uEyeR[2]; uniform vec3 uEyeC[2]; uniform float uEyeRad;
+varying float vEye; varying vec3 vEyeL; varying vec3 vEyeH;`;
+const EYE_VS_N = `
+vEye = salEye; vEyeL = vec3(0.0); vEyeH = vec3(0.0);
+mat3 eyeR = salEye > 1.5 ? uEyeR[1] : uEyeR[0];
+if (salEye > 0.5) objectNormal = eyeR * objectNormal;`;
+const EYE_VS_P = `
+if (salEye > 0.5) {
+  vec3 ec = salEye > 1.5 ? uEyeC[1] : uEyeC[0];
+  vec3 lp = position - ec;
+  vEyeL = lp / uEyeRad;
+  vec3 rp = eyeR * lp;
+  vEyeH = rp / uEyeRad;
+  transformed = ec + rp;
+}`;
+const EYE_FS = `
+uniform float uLidY; uniform float uLidLo;
+varying float vEye; varying vec3 vEyeL; varying vec3 vEyeH;
+float eyeLid;`;
+const EYE_FS_COL = `
+eyeLid = 1.0;
+if (vEye > 0.5) {
+  vec3 e = normalize(vEyeL);
+  float a = acos(clamp(e.z, -1.0, 1.0)), ang = atan(e.y, e.x);
+  float iris = 1.0 - smoothstep(0.38, 0.43, a), pupil = 1.0 - smoothstep(0.13, 0.16, a);
+  vec3 ir = vec3(0.075, 0.105, 0.11) * (0.75 + 0.45 * (0.5 + 0.5 * sin(ang * 23.0) * sin(ang * 9.0 + 1.3)));
+  ir *= mix(1.0, 0.45, smoothstep(0.30, 0.41, a));                       // limbal ring
+  ir = mix(ir, vec3(0.16, 0.12, 0.06), (1.0 - smoothstep(0.16, 0.26, a)) * 0.6);   // a hazel collar
+  vec3 sc = mix(vec3(0.42, 0.37, 0.32), vec3(0.40, 0.20, 0.17), smoothstep(0.7, 1.4, a) * 0.6);   // old, a little bloodshot
+  vec3 col = mix(sc, ir, iris);
+  col = mix(col, vec3(0.004), pupil);
+  // the lids, in the head's frame (they do not turn with the eye); the upper lid's edge arcs
+  float x2 = vEyeH.x * vEyeH.x;
+  float up = uLidY - 0.22 * x2, lo = uLidLo + 0.25 * x2;
+  float lid = clamp(smoothstep(up - 0.04, up + 0.04, vEyeH.y) + 1.0 - smoothstep(lo - 0.04, lo + 0.04, vEyeH.y), 0.0, 1.0);
+  float lash = (1.0 - smoothstep(0.0, 0.10, abs(vEyeH.y - up))) * smoothstep(0.0, 0.3, vEyeH.z);
+  col = mix(col, vec3(0.21, 0.12, 0.09), lid);
+  col *= 1.0 - 0.75 * lash;
+  diffuseColor.rgb = col;
+  eyeLid = lid;
+} else {
+  diffuseColor.rgb = vec3(0.020, 0.018, 0.016);                        // tinned copper, dark with use
+}`;
+const EYE_FS_ROUGH = `
+roughnessFactor = vEye > 0.5 ? mix(0.10, 0.55, eyeLid) : 0.62;`;
+const EYE_FS_MET = `
+metalnessFactor = vEye > 0.5 ? 0.0 : 0.35;`;
+
+function installFace(diver, shared, A) {
+  const meta = A.meta.meta || {}, Fm = meta.face, g = A.geos;
+  if (!Fm || !g.head || !A.maps.face) return false;
+  const k = Fm.k, at = Fm.at, E = Fm.eye;
+  // the head: its own sculpt material, no weave, no wet, aperture-lit
+  const hm = sculptMat(A.maps.face, shared, { env: 0.35, ao: 1 });
+  hm.userData.salSculpt.uSsK.value.set(13, 11, 0, 0);
+  hm.userData.salSculpt.uSalWet = { value: 0 };
+  const U = apertureUniforms();
+  withAperture(hm, U, 'salFace1');
+  registerPaint(hm, { hero: true });
+  const head = new THREE.Mesh(g.head, hm);
+  head.name = 'salSkin:head'; head.castShadow = false; head.receiveShadow = false;
+  diver.helmGroup.add(head); SK.added.push(head); STATE.meshes.push(head);
+  STATE.tris += g.head.index.count / 3;
+  // the liner + the eyes, one geometry
+  const geos = [];
+  {
+    const c = Fm.cav.c, r = Fm.cav.r, pc = new THREE.Vector3().fromArray(Fm.port.c), pn = new THREE.Vector3().fromArray(Fm.port.n).normalize();
+    const sp = new THREE.SphereGeometry(1, 44, 26), pos = sp.attributes.position, nrm = sp.attributes.normal, v = new THREE.Vector3();
+    for (let i = 0; i < pos.count; i++) {
+      v.set(pos.getX(i) * r[0] * 0.985 + c[0], pos.getY(i) * r[1] * 0.985 + c[1], pos.getZ(i) * r[2] * 0.985 + c[2]);
+      pos.setXYZ(i, v.x, v.y, v.z);
+      v.set(nrm.getX(i) / r[0], nrm.getY(i) / r[1], nrm.getZ(i) / r[2]).normalize().negate();   // facing in
+      nrm.setXYZ(i, v.x, v.y, v.z);
+    }
+    // drop the triangles in the faceplate's bore (the window looks in through there), flip the rest
+    const ix = sp.index.array, keep = [], a = new THREE.Vector3(), d = new THREE.Vector3();
+    for (let t = 0; t < ix.length; t += 3) {
+      a.set(0, 0, 0);
+      for (let q = 0; q < 3; q++) a.x += pos.getX(ix[t + q]) / 3, a.y += pos.getY(ix[t + q]) / 3, a.z += pos.getZ(ix[t + q]) / 3;
+      d.subVectors(a, pc); const al = d.dot(pn), rad = d.addScaledVector(pn, -al).length();
+      if (rad < Fm.cav.bore * 1.04 && al > -0.3) continue;
+      keep.push(ix[t], ix[t + 2], ix[t + 1]);
+    }
+    sp.setIndex(keep);
+    sp.setAttribute('salEye', new THREE.Float32BufferAttribute(new Float32Array(pos.count), 1));
+    sp.deleteAttribute('uv');
+    geos.push(sp);
+  }
+  FACE.r = E.r * k;
+  for (let s = 0; s < 2; s++) {
+    const sx = s ? -1 : 1;     // eye 1 = his left (+x), eye 2 = his right
+    FACE.C[s].set(at[0] + sx * E.x * k, at[1] + E.y * k, at[2] + E.z * k);
+    const eg = new THREE.SphereGeometry(FACE.r, 28, 18).rotateX(Math.PI / 2);   // poles front/back: the iris on a pole
+    eg.translate(FACE.C[s].x, FACE.C[s].y, FACE.C[s].z);
+    eg.deleteAttribute('uv');
+    eg.setAttribute('salEye', new THREE.Float32BufferAttribute(new Float32Array(eg.attributes.position.count).fill(s + 1), 1));
+    geos.push(eg);
+  }
+  const eyeGeo = mergeGeometries(geos);
+  const EU = { uEyeR: { value: [new THREE.Matrix3(), new THREE.Matrix3()] }, uEyeC: { value: FACE.C }, uEyeRad: { value: FACE.r },
+    uLidY: { value: 0.55 }, uLidLo: { value: -0.62 } };
+  const em = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6, metalness: 0, envMap: envTex, envMapIntensity: 0.6 });
+  em.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, EU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + EYE_VS)
+      .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n' + EYE_VS_N)
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n' + EYE_VS_P);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + EYE_FS)
+      .replace('#include <color_fragment>', '#include <color_fragment>\n' + EYE_FS_COL)
+      .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + EYE_FS_ROUGH)
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n' + EYE_FS_MET);
+  };
+  em.customProgramCacheKey = () => 'salEyes1';
+  withAperture(em, U, 'salFace1');
+  const eyes = new THREE.Mesh(eyeGeo, em);
+  eyes.name = 'salSkin:eyes'; eyes.castShadow = false; eyes.receiveShadow = false;
+  diver.helmGroup.add(eyes); SK.added.push(eyes); STATE.meshes.push(eyes);
+  STATE.tris += eyeGeo.index.count / 3;
+  FACE.U = U; FACE.eyeU = EU; FACE.mesh = head; FACE.eyes = eyes;
+  // the four lights, helmet frame: centre (at the copper), axis out, radius
+  const P0 = Fm.port, ports = [[add3(P0.c, P0.n, 0.045), P0.n, Fm.cav.bore],
+    [[0.376, 0.470, 0.128], [Math.sin(1.245), 0, Math.cos(1.245)], 0.104],
+    [[-0.376, 0.470, 0.128], [-Math.sin(1.245), 0, Math.cos(1.245)], 0.104],
+    [[0, 0.818, 0.172], [0, Math.sin(1.16), Math.cos(1.16)], 0.100]];
+  FACE.P = ports.map(p => new THREE.Vector4(p[0][0], p[0][1], p[0][2], p[2]));
+  FACE.N = ports.map(p => new THREE.Vector3().fromArray(p[1]).normalize());
+  head.onBeforeRender = (r, sc, cam) => faceView(diver, cam);
+  // the front light's dark recess disc goes: the window looks into the helmet now
+  dropFrontRecess(diver);
+  return true;
+}
+const add3 = (a, b, s) => [a[0] + b[0] * s, a[1] + b[1] * s, a[2] + b[2] * s];
+const _fm = new THREE.Matrix4(), _fn3 = new THREE.Matrix3(), _fv = new THREE.Vector3();
+function faceView(diver, cam) {
+  _fm.multiplyMatrices(cam.matrixWorldInverse, diver.helmGroup.matrixWorld);
+  _fn3.setFromMatrix4(_fm);
+  const s = diver.helmGroup.matrixWorld.getMaxScaleOnAxis(), U = FACE.U;
+  for (let i = 0; i < 4; i++) {
+    const p = FACE.P[i];
+    _fv.set(p.x, p.y, p.z).applyMatrix4(_fm);
+    U.uSalPc.value[i].set(_fv.x, _fv.y, _fv.z, p.w * s);
+    U.uSalPn.value[i].copy(FACE.N[i]).applyMatrix3(_fn3).normalize();
+  }
+}
+function dropFrontRecess(diver) {
+  for (const o of diver.helmGroup.children) {
+    const m = o.material;
+    if (!o.isMesh || !m || !m.customProgramCacheKey || m.customProgramCacheKey() !== 'salGlass1') continue;
+    const geo = o.geometry, pos = geo.attributes.position, col = geo.attributes.color;
+    if (!col) continue;
+    const drop = i => col.getX(i) < 0.5 && pos.getZ(i) > 0.3;
+    if (geo.index) {
+      const ix = geo.index.array, keep = [];
+      for (let t = 0; t < ix.length; t += 3) if (!(drop(ix[t]) && drop(ix[t + 1]) && drop(ix[t + 2]))) keep.push(ix[t], ix[t + 1], ix[t + 2]);
+      FACE.recess = { o, geo };
+      const g2 = geo.clone(); g2.setIndex(keep); o.geometry = g2;
+    } else {
+      const n = pos.count, keepV = [];
+      for (let t = 0; t < n; t += 3) if (!(drop(t) && drop(t + 1) && drop(t + 2))) keepV.push(t, t + 1, t + 2);
+      const g2 = geo.clone(); g2.setIndex(keepV); FACE.recess = { o, geo }; o.geometry = g2;
+    }
+  }
+}
+// once per frame (diver.js salShared.tick): where the eyes look, when they blink
+const _ft = new THREE.Vector3(), _fi = new THREE.Matrix4(), _fe = new THREE.Euler();
+const fh = n => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+function faceTick(diver, shared, dt) {
+  if (!FACE.eyeU) return;
+  const F = FACE, S = shared.face;
+  F.t += dt;
+  // saccades: a new small fixation offset every 0.4-2.5 s (more often under stress)
+  F.saccT -= dt;
+  if (F.saccT <= 0) {
+    F.saccN++;
+    F.saccT = (0.4 + 2.1 * fh(F.saccN * 3.1)) * (1 - 0.5 * S.stress);
+    const amp = S.have ? 0.05 : 0.16;
+    F.sacc[0] = (fh(F.saccN * 7.3) - 0.5) * 2 * amp; F.sacc[1] = (fh(F.saccN * 5.9) - 0.5) * 1.4 * amp - (S.have ? 0 : 0.05);
+  }
+  diver.helmGroup.updateWorldMatrix(true, false);
+  _fi.copy(diver.helmGroup.matrixWorld).invert();
+  if (S.have) _ft.set(S.x, S.y, S.z).applyMatrix4(_fi);
+  for (let i = 0; i < 2; i++) {
+    let yaw = 0, pit = -0.06 - 0.10 * S.swim;
+    if (S.have) {
+      const dx = _ft.x - F.C[i].x, dy = _ft.y - F.C[i].y, dz = _ft.z - F.C[i].z;
+      yaw = Math.atan2(dx, Math.max(dz, 0.05)); pit = Math.atan2(dy, Math.hypot(dx, dz));
+    }
+    yaw = Math.max(-0.55, Math.min(0.55, yaw + F.sacc[0])); pit = Math.max(-0.38, Math.min(0.32, pit + F.sacc[1]));
+    // an eye jumps (saccade), it does not drift: fast spring
+    const r = Math.min(1, 26 * dt);
+    F.yaw[i] += (yaw - F.yaw[i]) * r; F.pit[i] += (pit - F.pit[i]) * r;
+    _fe.set(-F.pit[i], F.yaw[i], 0, 'YXZ');
+    _fi.makeRotationFromEuler(_fe);
+    F.eyeU.uEyeR.value[i].setFromMatrix4(_fi);
+  }
+  // blinks: every 2-6 s (half that when he is labouring), now and then a double
+  F.blinkT -= dt;
+  if (F.blink < 0 && F.blinkT <= 0) { F.blink = 0; F.saccN++; F.dbl = fh(F.saccN * 11.7) < 0.15; }
+  let c = 0;
+  if (F.blink >= 0) {
+    F.blink += dt;
+    const u = F.blink;
+    c = u < 0.06 ? u / 0.06 : u < 0.09 ? 1 : Math.max(0, 1 - (u - 0.09) / 0.11);
+    if (u > 0.20) {
+      if (F.dbl) { F.dbl = false; F.blink = 0; } else { F.blink = -1; F.blinkT = (2.0 + 4.0 * fh(F.saccN * 2.3)) * (1 - 0.5 * S.stress); }
+    }
+  }
+  const pd = Math.max(0, -(F.pit[0] + F.pit[1]) * 0.5);      // the upper lid follows the eye down
+  F.eyeU.uLidY.value = 0.52 - 0.9 * pd + (-0.62 - (0.52 - 0.9 * pd)) * c;
+  F.eyeU.uLidLo.value = -0.62 + 0.0 * c;
 }
