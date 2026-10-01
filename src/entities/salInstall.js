@@ -292,9 +292,11 @@ const SK_VS_MAIN = `
   transformed += rn * uSkK.z * 0.013 * loose;
 }`;
 const SK_FS = `
-uniform sampler2D tSkWrk;
+uniform sampler2D tSkWrk; uniform vec4 uSkK;
 varying float vSkWrk; varying float vSkStr;`;
 const SK_FS_NRM = `
+// ballooned underwater, the canvas is pulled taut: its folds soften
+normal = normalize(mix(normal, nonPerturbedNormal, uSkK.z * 0.38));
 #ifdef SAL_WRK
 if (vSkWrk > 0.002 || vSkStr > 0.002) {
   vec3 wN = texture2D(tSkWrk, vNormalMapUv).xyz * 2.0 - 1.0;
