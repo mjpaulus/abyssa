@@ -206,10 +206,12 @@ function emitPuff(x, y, z, count, strength) {
 }
 
 // side: -1 left boot, +1 right. strength ~1 step, ~2 landing.
-export function spawnFootfall(playerPos, yaw, side, zi, strength = 1) {
+// at (optional): the boot's own sole centre {x, z} from the rig (diver.js lastFootfall);
+// without it the print goes at the old fixed offset from playerPos.
+export function spawnFootfall(playerPos, yaw, side, zi, strength = 1, at = null) {
   const rx = Math.sin(yaw - Math.PI / 2), rz = Math.cos(yaw - Math.PI / 2);
-  const fx = playerPos.x + rx * side * 0.26 + Math.sin(yaw) * 0.1;
-  const fz = playerPos.z + rz * side * 0.26 + Math.cos(yaw) * 0.1;
+  const fx = at ? at.x : playerPos.x + rx * side * 0.26 + Math.sin(yaw) * 0.1;
+  const fz = at ? at.z : playerPos.z + rz * side * 0.26 + Math.cos(yaw) * 0.1;
   const fy = terrainH(fx, fz, zi);
   emitPuff(fx, fy, fz, Math.min(20, 9 + (strength * 6) | 0), strength);
 

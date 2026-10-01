@@ -52,6 +52,23 @@ function curve(keys) {
   };
 }
 
+// ---- THE LEG RIG ----
+// Declared up here because the boot is built against them (the build runs before the gait
+// block below). Keep them LITERALS: salSculpt.readRig parses them out of this source.
+// THE ANKLE (2026-10-01, Michael: "fix the ankle rig so his stride lengthens"). The ankle
+// joint sat 0.3665 above the sole, 26% of the 1.3935 hip-to-sole leg (a man's is ~8-10%):
+// the joint was up at mid-shin, inside the gaiter, and every degree of foot pitch swung the
+// sole round a 37 cm lever. Heel-off then pushed the ankle FORWARD 0.25 u and lifted it only
+// 0.05, so the ball rocker gave the stance leg almost no extra reach and the stride could not
+// lengthen without the pelvis bouncing. It now sits 0.15 above the sole (10.8%), inside the
+// boot over the heel, with the shin 0.2165 longer: same hip-to-sole leg, same LIFT.
+const UP_L = 0.562, LO_L = 0.6815, HIP_X = 0.225;
+// The lead sole plate's UNDERSIDE in the ankle frame — the IK plants on exactly this.
+const SOLE_Y = -0.15;
+// How far the boot rose up the ankle frame when the ankle came down (the boot was authored
+// against the old -0.3665 sole and its parts are placed off that: old y + BOOT_D).
+const BOOT_D = 0.3665 + SOLE_Y;
+
 // Shared per-frame uniforms, written by updateDiver (two/three float writes a frame):
 // uSalWet (dress soak 0..1), uSalRootY (sole height, world), uSalDrop (beads on the glass).
 export const salShared = { uSalWet: { value: 0 }, uSalRootY: { value: 0 }, uSalDrop: { value: 0.15 } };
@@ -856,7 +873,10 @@ function piping(p, mat, len, r, prof, sx, sz = 0, rad = 0.013, n = 7) {
 const P_UPARM = profOf([[0, 1.00], [0.16, 1.17], [0.45, 1.00], [0.80, 0.86], [1, 0.80]]);   // deltoid/bicep -> elbow
 const P_FOREARM = profOf([[0, 0.80], [0.22, 0.93], [0.55, 0.80], [0.85, 0.66], [1, 0.60]]); // belly -> hard wrist taper
 const P_THIGH = profOf([[0, 1.06], [0.14, 1.14], [0.42, 1.02], [0.78, 0.85], [1, 0.80]]);
-const P_SHANK = profOf([[0, 0.80], [0.14, 0.86], [0.30, 0.95], [0.58, 0.80], [0.86, 0.64], [1, 0.60]]); // calf belly -> ankle
+// The shank is 0.6815 now (the ankle came down into the boot): the old calf keys are
+// rescaled by 0.465/0.6815 so the visible calf above the gaiter is the same leg, and the
+// last third tapers on inside the boot to the new, lower ankle.
+const P_SHANK = profOf([[0, 0.80], [0.095, 0.86], [0.205, 0.95], [0.396, 0.80], [0.587, 0.64], [0.682, 0.60], [1, 0.56]]); // calf belly -> ankle
 
 // ---- Sal's dive knife ----
 // Local frame: the grip's base sits at the origin, the blade runs down -Y. The same
@@ -1333,8 +1353,8 @@ export const diver = (() => {
   // the diver faces +Z, so his right side is -X
   g.armR = limb(spine, -0.500, 0.615, 0.50, 0.42, 0.150, 0.86, 1, P_UPARM, P_FOREARM);
   g.armL = limb(spine, 0.500, 0.615, 0.50, 0.42, 0.150, 0.86, -1, P_UPARM, P_FOREARM);
-  g.legR = limb(hips, -0.225, 0.0, 0.562, 0.465, 0.186, 0.88, 0, P_THIGH, P_SHANK);
-  g.legL = limb(hips, 0.225, 0.0, 0.562, 0.465, 0.186, 0.88, 0, P_THIGH, P_SHANK);
+  g.legR = limb(hips, -0.225, 0.0, 0.562, 0.6815, 0.186, 0.88, 0, P_THIGH, P_SHANK);
+  g.legL = limb(hips, 0.225, 0.0, 0.562, 0.6815, 0.186, 0.88, 0, P_THIGH, P_SHANK);
 
   // sleeves: piping down the outer seam, and the canvas bunching at the elbow
   for (const [arm, sx] of [[g.armR, -1], [g.armL, 1]]) {
@@ -1377,7 +1397,7 @@ export const diver = (() => {
     pl.add(xf(band(rL(0.43) * 1.05, 0.042, 0.95, 14), 0, -0.20), darkLeather);
     pl.add(xf(buckleGeo(0.056, 0.05, 0.005), 0, -0.20, rL(0.43) * 1.06), brass);
   }
-  for (const l of [g.armR, g.armL, g.legR, g.legL]) { l.pu.bake(); l.pl.bake(); }
+  for (const l of [g.armR, g.armL]) { l.pu.bake(); l.pl.bake(); }   // the legs bake after the boot (its cuff rides the shin)
 
   // GAUNTLETS. The forearm now tapers hard into a 0.090 wrist, so the cuff FLARES back
   // out over it — a laced canvas bell, a lace band with brass eyelets, then a mitten with
@@ -1416,64 +1436,75 @@ export const diver = (() => {
 
   // BOOTS. The shank now tapers to a 0.112 ankle, so the boot flares back out over it:
   // sock cuff, a lathed leather ankle flare, then a foot with actual form — a vamp, a
-  // domed toe box, a stacked heel block under a lead sole. The sole's underside stays at
-  // local y ~ -0.365: LIFT is derived against it to plant Sal on the collision floor.
+  // domed toe box, a stacked heel block under a lead sole. The sole's underside sits at
+  // exactly SOLE_Y in the ankle frame: LIFT is derived against it.
+  // THE BOOT IS TWO PIECES since the ankle came down (THE LEG RIG). Everything that is
+  // tied to the LEG — the pleated gaiter, its tape, the leather ankle flare, the ankle
+  // strap — rides the SHIN (leg.mid), because the joint is now below them; the FOOT — vamp,
+  // laces, instep strap, toe box and cap, heel, sole — rides the ankle (leg.end). Both are
+  // the old shapes at the old heights over the sole (old y + BOOT_D): the boot looks the
+  // same standing, and now creases at the instep when the foot pitches, like a boot.
   for (const leg of [g.legR, g.legL]) {
-    const p = Part(leg.end);
-    // sock and trim ride just OUTSIDE the shank's folded bottom, which used to bite them
-    // into a jagged blue-and-white zig-zag round every ankle
+    const p = Part(leg.end), pc = leg.pl;                   // the cuff merges into the shin's own buckets
+    const CY = -leg.loLen + BOOT_D;                          // the shin frame's y of an old ankle-frame 0
     // (polish-followups) a pleated canvas gaiter over the boot top: gathered at the ankle by a
     // drawstring, a ruffle standing above the cord, knife pleats flaring below it into a
     // woven tape that binds its lower edge over the boot's cuff
     const ac = pleatCuff([[0.100, 0.122], [0.066, 0.132], [0.036, 0.118], [0.000, 0.140], [-0.045, 0.146], [-0.080, 0.140]],
       0.036, 14, 0.022, y => 1 - ss(0.028, 0.040, -y), 0.0058, 56, 8, 0.95);
-    p.add(ac.cuff, cloth);
-    p.add(ac.cord.rotateY(leg === g.legL ? 0.35 : Math.PI - 0.35), darkLeather);
-    p.add(xf(tapeBand(0.150, 0.040, 0.95, 0.0065, 26, leg === g.legL ? 1 : 4), 0, -0.058), trim);
+    pc.add(ac.cuff.translate(0, CY, 0), cloth);
+    pc.add(ac.cord.rotateY(leg === g.legL ? 0.35 : Math.PI - 0.35).translate(0, CY, 0), darkLeather);
+    pc.add(xf(tapeBand(0.150, 0.040, 0.95, 0.0065, 26, leg === g.legL ? 1 : 4), 0, CY - 0.058), trim);
     // Ankle flare: the boot's leather cuff opening out from the narrow ankle. A CLOSED
     // solid, not an open lathe skirt — an open lathe here showed its back faces through
     // the mouth and read as a lampshade hung round the leg.
-    p.add(xf(new THREE.CylinderGeometry(0.120, 0.170, 0.20, 22, 1).scale(1, 1, 0.96), 0, -0.095), darkLeather);
-    p.add(xf(new THREE.TorusGeometry(0.168, 0.021, 6, 16).rotateX(Math.PI / 2).scale(1, 1, 0.96), 0, -0.176), darkLeather);
+    pc.add(xf(new THREE.CylinderGeometry(0.120, 0.170, 0.20, 22, 1).scale(1, 1, 0.96), 0, CY - 0.095), darkLeather);
+    pc.add(xf(new THREE.TorusGeometry(0.168, 0.021, 6, 16).rotateX(Math.PI / 2).scale(1, 1, 0.96), 0, CY - 0.176), darkLeather);
+    // ankle strap round the top of the boot, buckled on the outside
+    pc.add(xf(band(0.157, 0.040, 0.96, 24), 0, CY - 0.118), darkLeather);
+    pc.add(faceAlong(buckleGeo(0.048, 0.042, 0.0045), V3(0.160, CY - 0.118, 0.0), V3(1, 0, 0), Math.PI / 2), brass);
+    leg.pu.bake(); leg.pl.bake();
+    // ---- the foot, in the ankle frame: every old height + BOOT_D ----
+    const F = BOOT_D;
     // vamp: the body of the foot, broader at the ball than at the ankle. These are
     // WEIGHTED boots — a hundredweight of brass and lead between the two of them — so the
     // foot has to out-mass the ankle by a lot or it reads as a slipper under a heavy leg.
     const vamp = new THREE.CapsuleGeometry(0.120, 0.21, 6, 12).rotateX(Math.PI / 2);
     vamp.scale(1.06, 0.90, 1);
-    p.add(xf(vamp, 0, -0.238, 0.070), darkLeather);   // boots are leather, not dress canvas
+    p.add(xf(vamp, 0, F - 0.238, 0.070), darkLeather);   // boots are leather, not dress canvas
+    // the boot's throat over the ankle bone: fills the crease between the flare (on the
+    // shin) and the vamp (on the foot) so a pitched foot never opens a gap at the instep
+    p.add(xf(new THREE.SphereGeometry(0.128, 14, 9).scale(1.0, 0.85, 1.05), 0, F - 0.205, -0.01), darkLeather);
     for (let i = 0; i < 4; i++) {                            // laces over the instep
-      p.add(xf(new THREE.CylinderGeometry(0.011, 0.011, 0.21, 5).rotateZ(Math.PI / 2), 0, -0.150 + i * 0.012, 0.05 + i * 0.054, 0.28, 0, 0), darkLeather);
-      for (const sx of [1, -1]) p.add(xf(new THREE.SphereGeometry(0.015, 5, 4), sx * 0.106, -0.150 + i * 0.012, 0.05 + i * 0.054), brass);
+      p.add(xf(new THREE.CylinderGeometry(0.011, 0.011, 0.21, 5).rotateZ(Math.PI / 2), 0, F - 0.150 + i * 0.012, 0.05 + i * 0.054, 0.28, 0, 0), darkLeather);
+      for (const sx of [1, -1]) p.add(xf(new THREE.SphereGeometry(0.015, 5, 4), sx * 0.106, F - 0.150 + i * 0.012, 0.05 + i * 0.054), brass);
     }
     // instep strap: a real strap arched over the vamp, square frame buckle on the outside
-    p.add(xf(new THREE.TorusGeometry(0.128, 0.013, 4, 16, Math.PI).scale(1.08, 0.94, 2.3), 0, -0.236, 0.112), darkLeather);
-    p.add(faceAlong(buckleGeo(0.052, 0.046, 0.0045), V3(0.139, -0.222, 0.112), V3(1, 0.25, 0).normalize(), Math.PI / 2), brass);
-    // ankle strap round the top of the boot, buckled on the outside
-    p.add(xf(band(0.157, 0.040, 0.96, 24), 0, -0.118), darkLeather);
-    p.add(faceAlong(buckleGeo(0.048, 0.042, 0.0045), V3(0.160, -0.118, 0.0), V3(1, 0, 0), Math.PI / 2), brass);
+    p.add(xf(new THREE.TorusGeometry(0.128, 0.013, 4, 16, Math.PI).scale(1.08, 0.94, 2.3), 0, F - 0.236, 0.112), darkLeather);
+    p.add(faceAlong(buckleGeo(0.052, 0.046, 0.0045), V3(0.139, F - 0.222, 0.112), V3(1, 0.25, 0).normalize(), Math.PI / 2), brass);
     const toe = new THREE.SphereGeometry(0.124, 14, 9);       // toe box: wider than it is tall
     toe.scale(1.10, 0.80, 1.26);
-    p.add(xf(toe, 0, -0.244, 0.185), darkLeather);
+    p.add(xf(toe, 0, F - 0.244, 0.185), darkLeather);
     // BRASS TOE CAP: a spun shell over the front of the toe box, standing 5% proud of it
     // (a co-surfaced cap z-fights, which is why the old build fell back to a steel rand),
     // with a rolled rim and a line of cap rivets. It is the Mark V boot's signature.
     {
       const capG = new THREE.SphereGeometry(0.124, 18, 8, Math.PI * 0.10, Math.PI * 0.80, 0, Math.PI * 0.60);
       capG.scale(1.10 * 1.05, 0.80 * 1.05, 1.26 * 1.05);
-      p.add(cav(xf(capG, 0, -0.244, 0.185), (x, y, z) => 0.7 * (1 - ss(-0.33, -0.29, y)) + 0.5 * (1 - ss(0.13, 0.16, z))), brass);
+      p.add(cav(xf(capG, 0, F - 0.244, 0.185), (x, y, z) => 0.7 * (1 - ss(F - 0.33, F - 0.29, y)) + 0.5 * (1 - ss(0.13, 0.16, z))), brass);
       // rim: follows the cap's open edge (theta = 0.6 PI) round the front
       const rim = [];
       for (let i = 0; i <= 12; i++) {
         const ph = Math.PI * (0.10 + 0.80 * i / 12), th = Math.PI * 0.60, R = 0.124 * 1.05;
-        rim.push(V3(-R * Math.cos(ph) * Math.sin(th) * 1.10, -0.244 + R * Math.cos(th) * 0.80, 0.185 + R * Math.sin(ph) * Math.sin(th) * 1.26));
+        rim.push(V3(-R * Math.cos(ph) * Math.sin(th) * 1.10, F - 0.244 + R * Math.cos(th) * 0.80, 0.185 + R * Math.sin(ph) * Math.sin(th) * 1.26));
       }
       p.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(rim), 16, 0.006, 5, false), brass);
       for (let i = 1; i < 12; i += 2) p.add(xf(new THREE.SphereGeometry(0.0065, 5, 4), rim[i].x * 1.02, rim[i].y + 0.008, rim[i].z + 0.004), brass);
     }
-    p.add(xf(new THREE.BoxGeometry(0.210, 0.085, 0.150), 0, -0.286, -0.085), darkLeather);                // stacked heel block
+    p.add(xf(new THREE.BoxGeometry(0.210, 0.085, 0.150), 0, F - 0.286, -0.085), darkLeather);                // stacked heel block
     // THE LEAD SOLE: one casting in the outline of the foot (heel, waist, ball, toe),
     // chamfered all round, nailed through to the welt. Its underside is the contract:
-    // it sits at exactly SOLE_Y (-0.3665 in the ankle frame), which the IK plants on.
+    // it sits at exactly SOLE_Y in the ankle frame, which the IK plants on.
     {
       const sh = new THREE.Shape(), outline = [
         [0.000, -0.185], [0.070, -0.176], [0.100, -0.140], [0.104, -0.060], [0.098, 0.030], [0.122, 0.130],
@@ -1481,7 +1512,7 @@ export const diver = (() => {
       const pts = outline.concat(outline.slice(1, -1).reverse().map(q => [-q[0], q[1]]));
       sh.moveTo(pts[0][0], -pts[0][1]);
       sh.splineThru(pts.slice(1).map(q => new THREE.Vector2(q[0], -q[1])).concat([new THREE.Vector2(pts[0][0], -pts[0][1])]));
-      const SOLE = -0.3665, BT = 0.009, DEP = 0.048;   // SOLE === SOLE_Y below (declared after the build)
+      const SOLE = SOLE_Y, BT = 0.009, DEP = 0.048;
       const sole = new THREE.ExtrudeGeometry(sh, { depth: DEP, bevelEnabled: true, bevelThickness: BT, bevelSize: 0.008,
         bevelSegments: 2, curveSegments: 3, steps: 1 });
       sole.rotateX(-Math.PI / 2).translate(0, SOLE + BT, 0);
@@ -1996,6 +2027,9 @@ let ladderF = 0;
 // Ground covered by one full walk cycle (two steps) is GAIT.stride (below), read live.
 // History: 2.35 -> 2.27 -> 1.95, each time cut to fit a pelvis that had been lowered
 // into a permanent crouch. See THE PELVIS for why that budget was the wrong way round.
+// 2.24 -> 2.70 (2026-10-01, the ankle pass): 113 steps/min at the seabed's 2.47 u/s (was 134),
+// step 0.95 of leg length (was 0.79), pelvis bounce 0.10 (was 0.15). The longer step was
+// blocked by the ankle, not by taste: see THE LEG RIG and the roll-through constants.
 
 // ===========================================================================
 // FOOT PLANTING — the structural answer to "the movements aren't real".
@@ -2011,14 +2045,8 @@ let ladderF = 0;
 // the ground is, and the hip/knee/ankle bend to obey it.
 // ===========================================================================
 
-// Read off the rig, not chosen: limb(hips, +/-0.225, 0, 0.562, 0.465, ...) below, and the
-// boot's lead sole plate sits at local y = -0.3505 in the ankle frame.
-const UP_L = 0.562, LO_L = 0.465, HIP_X = 0.225;
-// MEASURED off the rig, not read off the source: the lead sole plate's UNDERSIDE is at
-// -0.3665 in the ankle frame (the -0.3505 in the boot builder is that plate's centre).
-// The 16 mm matters — it is the difference between a boot on the planks and a boot in
-// them.
-const SOLE_Y = -0.3665;
+// UP_L, LO_L, HIP_X and SOLE_Y live at the top of the file (THE LEG RIG): they must equal
+// limb(hips, +/-0.225, 0, 0.562, 0.6815, ...) and the boot's lead sole underside.
 const EYE_H = 1.35;                 // player.js's own constant: pos.y - EYE_H is the floor
 // Duty factor: the fraction of one cycle a foot spends on the ground. 0.60 puts 10% of the
 // cycle in each double support — a slow, deliberate walk under load (a man's normal walk
@@ -2026,9 +2054,18 @@ const EYE_H = 1.35;                 // player.js's own constant: pos.y - EYE_H i
 // stay at walkP 0 and 0.5 so stepCount() is untouched.
 const DUTY = 0.60;
 // Roll-through windows within stance, and the foot's absolute pitch at each.
-const HS_END = 0.10, HO_START = 0.62;   // heel rises from ~37% of the cycle, as a walker's does
-const TH_STRIKE = -0.30, TH_OFF = 0.62;
-const CZ_HEEL = -0.125, CZ_FLAT = 0.02, CZ_BALL = 0.21;
+// With the ankle down in the boot the foot is a real lever, and the lead sole is a RIGID
+// plate: it pivots on its heel's back edge as it lands and on its toe's front edge as it
+// leaves. Heel-off starts at 52% of stance (31% of the cycle, as a walker's does) and the heel
+// rises to 45 deg by toe-off on a q^1.5 ramp. The toe rocker is what buys the stride: at the
+// trailing foot's toe-off the ankle now rises 0.11 and comes forward 0.27 over the toe edge
+// (the old ball pivot under a high ankle gave 0.05 and 0.25), which is the reach the pelvis
+// used to drop 15 cm to find. Measured at the old stride: pelvis bounce 0.185 -> 0.101.
+const HS_END = 0.10, HO_START = 0.52, TH_POW = 1.5;
+const TH_STRIKE = -0.30, TH_OFF = 0.78;
+// Sole points along the foot (+z toe) in the ankle frame: the heel's back edge (the outline
+// ends at -0.185, rounded), the flat-foot reference, the toe's front edge (outline 0.338).
+const CZ_HEEL = -0.16, CZ_FLAT = 0.02, CZ_BALL = 0.315;
 
 // THE PELVIS — set by the legs, not authored onto them.
 //
@@ -2058,7 +2095,8 @@ const CZ_HEEL = -0.125, CZ_FLAT = 0.02, CZ_BALL = 0.21;
 // stride, ~0.1 u: the bob is an output, not a style choice, and the slope, the deck,
 // the start, the stop and the shuffle all get it for free from their own anchors.
 // Live knobs: window.__gait.{stride, kMid, kIdle, kCap, soft}.
-const GAIT = { stride: 2.24, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03 };
+const GAIT_STRIDE0 = 2.7;
+const GAIT = { stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, rise: 30 };
 window.__gait = GAIT;
 // Hip-to-ankle reach at a knee angle (degrees): the law of cosines on the two bones.
 const reachAt = deg => Math.sqrt(UP_L * UP_L + LO_L * LO_L + 2 * UP_L * LO_L * Math.cos(deg * Math.PI / 180));
@@ -2145,12 +2183,19 @@ function foot() {
     tx: 0, ty: 0, tz: 0, tw: 0,    // last world ANKLE target and its IK weight (the pelvis reads these)
     px: 0, pz: 0,                  // how far the root travels before that target is reached (swing)
     ox: 0, oy: 0, oz: 0, oth: 0, ocz: CZ_FLAT, swp: 0,   // the stance's last ankle target and pitch (toe-off)
-    ln: false, lnU: 0, lnX: 0, lnY: 0, lnZ: 0   // first step off a stand: launch point + swing progress at launch
+    ln: false, lnU: 0, lnX: 0, lnY: 0, lnZ: 0,  // first step off a stand: launch point + swing progress at launch
+    ex: 0, ez: 0, pin: false       // the slip probe's last anchor-equivalent point, and whether it was planted
   };
 }
 const ftR = foot(), ftL = foot();
 let stepSeq = 0;                   // monotonic plant index; seeds every per-step draw
 let strideK = 1;                   // the live step's stride multiplier, read by the clock
+// THE STRIDE FOLLOWS THE SPEED. GAIT.stride is the cycle at full walking pace; slower he
+// shortens his steps as well as slowing them (a walker's step length and cadence both fall
+// with speed), and backing up — blind, heel-first, with no toe rocker to vault off — he
+// takes shorter steps still, and crabbing (hips turned off the travel) a little shorter. Without this the long stride the low ankle bought was kept at
+// a dawdle, a back-up and a crab: measured, those three bounced 0.19-0.20 u.
+let strideNow = GAIT_STRIDE0;
 
 // ---- gait state machine: transitions are EVENTS, not fades ----
 // 0 = standing, 1 = start lean (anticipation), 2 = walking, 3 = catch step (stopping).
@@ -2180,6 +2225,14 @@ let bankG = 0;                     // grounded bank into a turn
 let prevGrounded = true, landImp = 0;
 
 const _mH = new THREE.Matrix4(), _mHi = new THREE.Matrix4();
+// THE SOLE IS LEVEL IN THE WORLD, not in the hips. The foot pitch used to be written as a
+// pitch relative to the hip chain alone, so the body's forward lean (3-4 deg at a walk), the
+// pelvis list (+/-4 deg) and the stance leg's abduction all tipped the planted sole: the
+// toe dug 7 cm into the seabed at every heel-off and the outside edge lifted. The planted
+// foot's orientation is now solved in the world (heading yaw, roll-through pitch, no roll)
+// and expressed back through the hips, thigh and shank. Module temps: no allocation.
+const _qH = new THREE.Quaternion(), _qA = new THREE.Quaternion(), _qB = new THREE.Quaternion(), _qC = new THREE.Quaternion();
+const _eA = new THREE.Euler(), _X1 = new THREE.Vector3(1, 0, 0);
 const _vA = V3(), _vB = V3(), _vC = V3(), _vD = V3();
 // Live probe surface for the slip test — game.js never reads it, but the browser can.
 export const ikDebug = { slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0, gd: 0, gdd: 0 };
@@ -2288,6 +2341,17 @@ let lastStepSide = 0;
 // sync with the animation, instead of guessing the cadence from a fixed frequency.
 let steps = 0;
 export function stepCount() { return steps; }
+// WHERE the boot went down on the last footfall: the sole's centre in the world, its heading
+// and side (+1 right, -1 left, footfx's convention). game.js puts the silt and the print
+// there instead of at a fixed offset from his centre — at a 1.35 u step that offset left the
+// print up to 0.6 u from the boot that made it.
+const footfallAt = { x: 0, z: 0, yaw: 0, side: 1 };
+export function lastFootfall() { return footfallAt; }
+const SOLE_MID = 0.077;            // the lead sole's centre along the foot (outline -0.185..0.338)
+function markFootfall(ft, sgn, ox, oz) {
+  const sy = Math.sin(yawF), cy = Math.cos(yawF), d = SOLE_MID - CZ_FLAT;
+  footfallAt.x = ft.ax + ox + sy * d; footfallAt.z = ft.az + oz + cy * d; footfallAt.yaw = yawF; footfallAt.side = -sgn;
+}
 
 // Channel index triples per leg, so driveLegs can run one body of code twice with no
 // branching on side and no array literal per frame.
@@ -2298,19 +2362,26 @@ const LEG_CH = [
 
 // The stance roll-through: absolute foot pitch and the point of the sole in contact,
 // as a function of progress through this foot's stance. Heel strikes, slaps flat, sits
-// flat for two thirds of the contact, then breaks at the heel and rolls over the ball.
+// flat for half the contact, then breaks at the heel and rolls over the toe.
+// THE SOLE IS A RIGID LEAD PLATE, so whenever the foot is pitched it stands on an EDGE: the
+// heel's back edge (toe up) or the toe's front edge (heel up), never a point that slides
+// along the sole between them. The contact therefore jumps straight to the edge — which is
+// seamless, because at zero pitch the ankle sits over the anchor whatever cz says (the
+// contact is anchor + cz - CZ_FLAT, the ankle is that minus cz). The old sliding contact
+// let the leading part of the sole rotate down through the ground: 4-7 cm of toe in the
+// seabed at every heel-off, measured once the toe was probed.
 // Written into _vA.x/_vA.y purely to avoid a return allocation.
 function rollThrough(u, out) {
   let th, cz;
   if (u < HS_END) {
     const q = u / HS_END, e = q * q * (3 - 2 * q);
-    th = TH_STRIKE * (1 - e); cz = CZ_HEEL + (CZ_FLAT - CZ_HEEL) * e;
+    th = TH_STRIKE * (1 - e); cz = CZ_HEEL;
   } else if (u < HO_START) {
     th = 0; cz = CZ_FLAT;
   } else {
-    const q = (u - HO_START) / (1 - HO_START), e = q * q * (3 - 2 * q);
-    th = TH_OFF * q * q;                                  // the heel breaks slowly, then goes
-    cz = CZ_FLAT + (CZ_BALL - CZ_FLAT) * e;
+    const q = (u - HO_START) / (1 - HO_START);
+    th = TH_OFF * Math.pow(q, TH_POW);                    // the heel breaks slowly, then goes
+    cz = CZ_BALL;
   }
   return out.set(th, cz, 0);
 }
@@ -2329,6 +2400,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
   diver.updateMatrix(); diver.body.updateMatrix(); diver.hips.updateMatrix();
   _mH.multiplyMatrices(diver.matrix, diver.body.matrix).multiply(diver.hips.matrix);
   _mHi.copy(_mH).invert();
+  _qH.setFromRotationMatrix(_mH);
 
   // The ground under the soles, and the FRAME the anchors live in. On planks that frame
   // is raft.position: player.js pins pos.y rigidly to raft.position.y + DECK_TOP and
@@ -2429,6 +2501,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       ft.ax = ft.wx - sy * rs - ox; ft.az = ft.wz - cy * rs - oz;
       ft.ay = soleB + groundD(ft.ax + ox, ft.az + oz) - oy;   // the ground at the ANCHOR (the rockers add the rest)
       ft.deck = onDeck; ft.planted = true; ft.ln = false;
+      if (!ft.span) markFootfall(ft, sgn, ox, oz);
       // A reverse plant IS the footfall (toe down behind him), and it lands at lp = duty,
       // which the per-step duty draw moves — so backing up fires its footfall here, on
       // the claim itself, rather than off a phase boundary. Same weight, same knee, same
@@ -2500,6 +2573,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
         if (u >= 1) {
           ft.stT = -1; ft.lift = 0; shufX = 0;
           settle.v -= 1.1; kneeSoft.v += 2.2; kneeSide = i;
+          markFootfall(ft, sgn, ox, oz);
           if (gb > 0.5) steps++;           // a boot put down is a footfall: sound, silt, print
         }
       }
@@ -2543,7 +2617,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // hip: the flat-foot anchor half a stance ahead (less 0.05, which centres the ANKLE's
       // excursion once the heel and ball rockers are counted), and the heel — which is
       // what lands — a heel's length short of that. Backing up lands on the ball, behind.
-      const halfS = DUTY * GAIT.stride * ft.stride * slopeK * 0.5;
+      const halfS = DUTY * strideNow * ft.stride * slopeK * 0.5;
       const aF = halfS - 0.05 + (CZ_HEEL - CZ_FLAT), aR = -halfS - 0.05 + (CZ_BALL - CZ_FLAT);
       const ahead = aF + (aR - aF) * revF + (gaitState === 3 ? 0.18 : 0) * (1 - 2 * revF);
       const latL = sgn * HIP_X + ft.lat;
@@ -2645,17 +2719,25 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     // air it eases toward toe-up for the coming strike.
     const fkAbs = hxF + kF + pc[ch[3]];
     const thAbs = fkAbs + (th - fkAbs) * w;
-    seg.end.rotation.x = thAbs - _ik[0] - _ik[2];
+    seg.end.rotation.set(thAbs - _ik[0] - _ik[2], 0, 0);
+    if (w > 1e-3) {
+      _qA.setFromEuler(_eA.set(_ik[0], 0, _ik[1], 'XYZ')).multiply(_qB.setFromAxisAngle(_X1, _ik[2])).premultiply(_qH);
+      _qB.setFromEuler(_eA.set(th, yawF, 0, 'YXZ'));
+      _qC.copy(_qA).invert().multiply(_qB);                 // the world-level foot, in the shank's frame
+      seg.end.quaternion.slerp(_qC, w);
+    }
 
     // Resolve the contact this pose actually produced, for the next claim and the probe.
     ankleOverContact(thAbs, cz, _vC);
     fkAnkle(_ik[0], _ik[1], _ik[2], _vA);
     _vB.set(sgn * HIP_X + _vA.x, _vA.y, _vA.z).applyMatrix4(_mH);
     const nx = _vB.x - sy * _vC.z, nz = _vB.z - cy * _vC.z;
-    if (inStance && sp > HS_END && sp < HO_START) {
-      const d = Math.hypot(nx - ft.wx, nz - ft.wz);
-      ft.slip += d;                                        // accumulated intra-stance travel
-    }
+    // The probe follows the ANCHOR-EQUIVALENT point (the contact less its roll along the
+    // sole), so the heel and toe rockers are measured too and the contact's jump onto an
+    // edge is not mistaken for travel. Whole stance, from the frame after the claim.
+    const ex = nx - sy * (cz - CZ_FLAT), ez = nz - cy * (cz - CZ_FLAT);
+    if (inStance && ft.pin) ft.slip += Math.hypot(ex - ft.ex, ez - ft.ez);   // accumulated intra-stance travel
+    ft.ex = ex; ft.ez = ez; ft.pin = inStance && ft.planted;
     ft.wx = nx; ft.wy = _vB.y - _vC.y; ft.wz = nz; ft.cz = cz;
     if (i === 0) { ikDebug.slipR = ft.slip; ikDebug.plR = (ft.planted ? 1 : 0) + (inStance ? 2 : 0); ikDebug.dR = ft.duty; }
     else { ikDebug.slipL = ft.slip; ikDebug.plL = (ft.planted ? 1 : 0) + (inStance ? 2 : 0); ikDebug.dL = ft.duty; }
@@ -2761,7 +2843,7 @@ function startPhase(player) {
   const fL = (ftL.wx - player.pos.x) * sy + (ftL.wz - player.pos.z) * cy;
   // Forward, the front boot has the most stance left to give; backing, the rear one.
   const R = gaitDir > 0 ? fR >= fL : fR <= fL, f = R ? fR : fL, st = R ? ftR : ftL, sw = R ? ftL : ftR;
-  const halfS = DUTY * GAIT.stride * 0.5, A = halfS - 0.05;
+  const halfS = DUTY * strideNow * 0.5, A = halfS - 0.05;
   // stance progress at which a flat foot sits f ahead of the hip: A at sp 0, A - 2*halfS at 1
   const sp0 = clamp((A - f) / (2 * halfS), 0.20, 0.78);
   const lp = sp0 * st.duty;
@@ -2808,7 +2890,7 @@ function pelvisDrop(dt, player, gw) {
   // A ceiling: it falls fast (a late fall is an overreach, which the IK's reach clamp
   // absorbs for a frame or two) and rises on a softer spring. Falling at once was a 5 cm
   // single-frame drop whenever a step's claim landed.
-  spring(pelS, tgt, dt, tgt < pelS.x ? 42 : 30, 1.0);
+  spring(pelS, tgt, dt, tgt < pelS.x ? 42 : GAIT.rise, 1.0);
   ikDebug.pel = pelS.x;
   return pelS.x;
 }
@@ -2910,6 +2992,10 @@ export function updateDiver(dt, t, player) {
     const g = gdOn ? Math.abs(groundD(player.pos.x + sx, player.pos.z + sz) - groundD(player.pos.x - sx, player.pos.z - sz)) : 0;
     slopeK += (1 / (1 + 1.3 * g) - slopeK) * Math.min(1, 3 * dt);
   }
+  {
+    const sT = GAIT.stride * (0.55 + 0.45 * clamp(flat / 2.47, 0, 1)) * (1 - 0.18 * revF) * (1 - 0.15 * Math.min(1, Math.abs(strafeS.x)));
+    strideNow += (sT - strideNow) * Math.min(1, 2.5 * dt);
+  }
   let stepRate = 0;
   // Which way the clock turns: ground covered along the BODY's heading (the strafe blend
   // has already turned the hips toward a sideways walk, so only a genuine back-up reads
@@ -2941,7 +3027,7 @@ export function updateDiver(dt, t, player) {
       lastStepSide = strikeP() < 0.5 ? 0 : 1;   // a start is not a footfall
     }
   } else if (gaitState === 2) {
-    stepRate = clamp(flat / (GAIT.stride * strideK * slopeK), 0, 2.1);
+    stepRate = clamp(flat / (strideNow * strideK * slopeK), 0, 2.1);
     if (!wantWalk) {
       // Finish the step that is in the air, on a fixed clock, and land it long.
       gaitState = 3; gaitT = 0; catchFrom = walkP;
