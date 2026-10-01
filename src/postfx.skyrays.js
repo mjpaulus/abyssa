@@ -40,7 +40,7 @@ import { Pass } from 'postprocessing';
 import { camera, renderer as coreRenderer } from './core.js';
 import { sun, LOOK } from './lighting.js';
 import { GLASS, SUN } from './config.js';
-import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, cloudLook, localSurfaceY, styleState } from './world/water.js';
+import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, cloudLook, localSurfaceY, styleState, airAmbience } from './world/water.js';
 import { cloudOccluder, cloudOccK } from './world/clouds.js';
 import { DOME_U as VOL_U } from './world/sky.js';
 
@@ -310,7 +310,10 @@ export class SkyRaysPass extends Pass {
     // relight() scales the in-air sun by LOOK.air.xSun for the deck's surfaces; the sky's
     // fan is made of the sky's light, not the deck key, so that gain is divided back out.
     const xs = LOOK && LOOK.on && LOOK.air && LOOK.air.xSun > 0 ? LOOK.air.xSun : 1;
-    const sunK = Math.max(0, sun.intensity) / (SUN_REF_I * xs);
+    // ...and the volumetric deck's shadow over the raft is divided out too: the fan is
+    // the sun in the AIR beyond the cloud, and a shadowed deck is exactly when it shows.
+    const sv = airAmbience.sunVis > 0.05 ? airAmbience.sunVis : 0.05;
+    const sunK = Math.max(0, sun.intensity) / (SUN_REF_I * xs * sv);
     S.sunK = sunK;
     if (!(sunK > 0.02) || SUN.dir.y < 0.035 || skyState.discK < 0.05) return skip('night');
     const cov = skyState.cov;

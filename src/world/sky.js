@@ -74,7 +74,7 @@ export const VSKY = {
   shapeTile: 1500,     // world units per shape-noise tile
   detailTile: 75,      // world units per detail-noise tile
   detailK: 0.58,       // erosion strength
-  curlK: 0.55,         // curl distortion of the erosion (in detail texels)
+  curlK: 0.25,         // curl distortion of the erosion (in detail texels)
   dens: 0.13,          // extinction per unit at density 1
   gain: 1.7,           // lit-cloud level relative to the palette horizon
   horK: 0.72,          // physical horizon set to this share of the palette's horizon
@@ -845,11 +845,13 @@ function buildLUT(elevDeg, haze) {
   };
   avgRow(7, atm.hor);   // ~1 degree: the sky the eye calls the horizon
   avgRow(LUT_H - 1, atm.zen);
-  transAt(0.3, Math.sin(es), atm.sunT);   // at the cloud deck, ~1 km
+  // at the cloud deck (~1 km): the deck sees the sun ~1.2 degrees longer than the sea
+  // does, which is why clouds keep their colour after the sun has gone from the water
+  transAt(1.0, Math.sin(es), atm.sunT);
   // WHITE BALANCE: the eye (and every AAA grade) calls the high sun white. The sky and the
   // sun are divided by the zenith sun's own transmittance, so noon is a white sun in a
   // blue sky and the warmth of a low sun is only what the extra air adds.
-  transAt(0.3, 1.0, _wb);
+  transAt(1.0, 1.0, _wb);
   for (let c = 0; c < 3; c++) atm.sunT[c] /= _wb[c];
   for (let k = 0; k < lutR.length; k += 4) for (let c = 0; c < 3; c++) { lutR[k + c] /= _wb[c]; lutM[k + c] /= _wb[c]; }
   for (let c = 0; c < 3; c++) { atm.hor[c] /= _wb[c]; atm.zen[c] /= _wb[c]; atm.mean[c] /= _wb[c]; }
@@ -1151,7 +1153,7 @@ export function updateSky(dt, t) {
   }
 
   // --- the light that lights the clouds: the sun, handing over to the moon ---
-  const sunUp = sm(-4, 2, physElev);
+  const sunUp = sm(-5, 1, physElev);
   // The disc and the clouds see the sun through the atmosphere at its PHYSICAL height.
   const sT = atm.sunT;
   const mc = W.SKY_UNIFORMS.uMoonCol.value, md = W.SKY_UNIFORMS.uMoonDir.value;
