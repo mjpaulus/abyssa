@@ -86,6 +86,7 @@ export const VSKY = {
   cirrus: 0.6,         // cirrus gain (hand.sunsetDrama sets the amount)
   history: 0.12,       // temporal blend (new sample weight)
   stars: 1.0,
+  lightSat: 0.72,      // saturation kept in the low sun's colour on the clouds
   discR: 0.0085,       // sun disc angular radius, rad (a touch over the real 0.0047)
   discI: 9.0           // disc radiance relative to the normalised sky
 };
@@ -271,12 +272,21 @@ void main(){
   // thickens it; the gale is one dark unbroken nimbostratus with cumulonimbus cores.
   float s = uSt.x;
   float core = smoothstep( 0.45, 0.8, fbm2w( ( xz + uAo.xy ) / 3800.0 + 41.0 ) );
-  f.r = mix( f.r, 1.0, smoothstep( 0.15, 0.85, s ) );
-  f.g = mix( f.g, mix( 0.55, 1.0, core ), smoothstep( 0.2, 0.9, s ) );
-  f.b = 1.0 + s * ( 1.2 + 1.3 * core );
+  // The lid is closed but NOT uniform: coverage under 1 between the cores lets the 3D
+  // noise carve the base into rolls and the top into domes, so the underside has the
+  // thick/thin structure that light from above reads through.
+  float roll = fbm2w( ( xz + uAo.xy ) / 1100.0 + 13.0 );
+  f.r = mix( f.r, mix( 0.80, 1.0, max( core, roll * 0.6 ) ), smoothstep( 0.15, 0.85, s ) );
+  f.g = mix( f.g, mix( 0.50, 1.0, core ), smoothstep( 0.2, 0.9, s ) );
+  f.b = 1.0 + s * ( 0.25 + 0.9 * core );
   // Marine fog days: a flat low stratus sheet takes the place of the cumulus.
   f.g = mix( f.g, 0.0, uSt.z );
-  gl_FragColor = vec4( f, 1.0 );
+  // A: BASE LIFT, the share of the shell the cloud base is raised by. A fair deck's bases
+  // are nearly level (the condensation level is one height); a storm's underside hangs in
+  // rolls and scud, which is most of what reads as weather from beneath it.
+  float lift = fbm2w( ( xz + uAo.xy ) / 900.0 + 31.0 );
+  float bl = mix( 0.03, 0.22, smoothstep( 0.2, 0.9, s ) ) * lift;
+  gl_FragColor = vec4( f, bl );
 }`;
 
 // --- atmosphere (shared: dome + pano) ---
@@ -349,7 +359,7 @@ float density( vec3 p, float h, vec4 w, float lod, bool full ){
   vec4 s = textureLod( tShape, q, lod );
   float lf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
   float base = vremap( s.r, lf - 1.0, 1.0, 0.0, 1.0 );
-  base *= hgrad( h, w.g );
+  base *= hgrad( ( h - w.a ) / ( 1.0 - w.a ), w.g );
   base = clamp( vremap( base, 1.0 - cov, 1.0, 0.0, 1.0 ), 0.0, 1.0 ) * cov;
   if ( base <= 0.0 ) return 0.0;
   if ( full ) {
@@ -437,9 +447,27 @@ void main(){
             float pw = 1.0 - uEvo.z * exp( -dn * uScale.w * 90.0 );
             pw = mix( pw, 1.0, smoothstep( 0.2, 0.95, mu ) );
             float sigma = dn * uScale.w;
-            vec3 amb = mix( uAmbBot, uAmbTop, clamp( h * 1.4, 0.0, 1.0 ) ) * uMS.w
-                     * ( 0.35 + 0.65 * exp( -dn * ( 1.0 - h ) * 2.0 ) );
+            // AMBIENT: sky light from above, dimmed by how much cloud stands over this
+            // point (the light march is a fair proxy while the light is high), plus the
+            // sea's dull mirror from below. This is what gives a closed lid its rolls.
+            // one cheap probe a fifth of the shell straight up: the cloud standing over
+            // this point, which is what darkens a hanging roll against the thin lid round it
+            vec3 qa = p + vec3( 0.0, uLayer.y * 0.2, 0.0 );
+            float da = density( qa, h + 0.2, w, lod + 1.0, false );
+            float above = exp( -od * 0.006 ) * exp( -da * uScale.w * uLayer.y * 0.35 );
+            vec3 amb = ( uAmbTop * clamp( h * 1.2 + 0.25, 0.0, 1.0 ) * ( 0.25 + 0.75 * above )
+                       + uAmbBot * ( 1.0 - h ) ) * uMS.w;
+            // diffuse transmission through a thick body (1 / (1 + 0.75 tau (1 - g)))
+            sc += 0.25 / ( 1.0 + 0.09 * od );
             vec3 Ls = uLightCol * sc * pw + amb;
+            // UNDER A LID the sun is everywhere above and nowhere direct: light diffuses
+            // DOWN through the deck and arrives in proportion to how thin the column
+            // overhead is (diffuse transmission, not Beer). That is the rolling bright /
+            // dark structure of a storm's underside. uSteps.w is the lid amount.
+            if ( uSteps.w > 0.01 ) {
+              float odUp = da * uScale.w * uLayer.y * 0.9 * ( 1.0 - h ) + dn * uScale.w * uLayer.y * 0.15;
+              Ls += ( uLightCol * 1.4 + uAmbTop * 2.0 ) * ( uSteps.w / ( 1.0 + 0.11 * odUp ) );
+            }
             // LIGHTNING from inside the deck: the two live bolt slots, inverse-square
             // with a floor, as isotropic in-scatter.
             if ( uBolt0.w > 0.0 ) { vec3 r = p - uBolt0.xyz; Ls += uBoltCol * uBolt0.w / ( 1.0 + dot( r, r ) / 9000.0 ); }
@@ -538,7 +566,7 @@ float density( vec3 p, float h, vec4 w ){
   vec3 q = p * uScale.x + vec3( uWind.x, uEvo.x, uWind.y );
   vec4 s = textureLod( tShape, q, 1.0 );
   float lf = s.g * 0.625 + s.b * 0.25 + s.a * 0.125;
-  float base = vremap( s.r, lf - 1.0, 1.0, 0.0, 1.0 ) * hgrad( h, w.g );
+  float base = vremap( s.r, lf - 1.0, 1.0, 0.0, 1.0 ) * hgrad( ( h - w.a ) / ( 1.0 - w.a ), w.g );
   return clamp( vremap( base, 1.0 - cov, 1.0, 0.0, 1.0 ), 0.0, 1.0 ) * cov * w.b;
 }
 void main(){
@@ -1086,6 +1114,9 @@ export function updateSky(dt, t) {
     const sl = Math.max(1e-4, lum(sT[0], sT[1], sT[2]));
     const k = palLum / V.horK * V.gain * sunUp / sl;
     for (let c = 0; c < 3; c++) lightCol[c] = sT[c] * k;
+    // the house palette is quiet: a horizon sun keeps its hue, not its full saturation
+    const ll = lum(lightCol[0], lightCol[1], lightCol[2]);
+    for (let c = 0; c < 3; c++) lightCol[c] = ll + (lightCol[c] - ll) * V.lightSat;
   } else {
     L.set(md.x, Math.max(0.05, md.y), md.z).normalize();
     const k = 0.10 * (1 - sunUp);
@@ -1121,15 +1152,15 @@ export function updateSky(dt, t) {
   // DRIFT is a pure function of the hand and the clock: wind of the day x time of day.
   const dx = Math.cos(dayA.wdir) * (0.3 + dayA.wsp) * V.drift * tin;
   const dz = Math.sin(dayA.wdir) * (0.3 + dayA.wsp) * V.drift * tin;
-  u.uScale.value.set(1 / V.shapeTile, 1 / V.detailTile, V.detailK, V.dens * (1 + 0.6 * storm));
+  u.uScale.value.set(1 / V.shapeTile, 1 / V.detailTile, V.detailK, V.dens * (1 - 0.35 * storm));
   u.uWind.value.set(-dx / V.shapeTile, -dz / V.shapeTile, -dx * 1.25 / V.detailTile, -dz * 1.25 / V.detailTile);
   const tanH = Math.tan(camera.fov * D2R * 0.5);
   renderer.getSize(_size);
   const hres = Math.max(1, Math.floor(_size.y / V.div));
   u.uEvo.value.set(tin * 0.00012, V.curlK, V.powder, 2 * tanH / hres);
-  u.uPhase.value.set(V.g1, V.g2, V.gMix, V.haze / Math.max(0.3, hazeMul) * (1 - 0.7 * fog));
+  u.uPhase.value.set(V.g1, V.g2, V.gMix, V.haze / (0.5 + 0.5 * hazeMul - 1.0 * storm) * (1 - 0.7 * fog));
   u.uMS.value.set(V.msA, V.msB, V.msC, 1);
-  u.uSteps.value.set(V.steps, V.lsteps, 0, 0);
+  u.uSteps.value.set(V.steps, V.lsteps, 0, Math.max(sm(0.2, 0.8, storm), sm(0.75, 0.98, dayA.cover)));
   u.uWin.value.set(camera.position.x, camera.position.z, 1 / 48000, frameN);
   // cirrus: the sunset-drama days carry it
   u.uCirrus.value.set(V.cirrus * clamp((h ? h.sunsetDrama : 0.3) * 0.9 + 0.1, 0, 1) * (1 - storm) * (1 - fog), 2600, 0, 0);
