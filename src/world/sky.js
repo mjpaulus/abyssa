@@ -73,28 +73,31 @@ export const VSKY = {
   planetR: 2.12e6,     // earth radius in units: the shell curves away at the horizon
   maxDist: 26000,      // march cap
   shapeTile: 1500,     // world units per shape-noise tile
-  detailTile: 75,      // world units per detail-noise tile
-  detailK: 0.58,       // erosion strength
+  detailTile: 150,      // world units per detail-noise tile
+  detailK: 0.6,       // erosion strength
   curlK: 0.25,         // curl distortion of the erosion (in detail texels)
   dens: 0.13,          // extinction per unit at density 1
   gain: 1.7,           // lit-cloud level relative to the palette horizon
   horK: 0.72,          // physical horizon set to this share of the palette's horizon
-  ambK: 0.5,           // sky-ambient gain on clouds
-  powder: 0.55,        // powder darkening of thin edges away from the sun
-  g1: 0.72, g2: -0.20, gMix: 0.25,     // dual-lobe Henyey-Greenstein
-  msA: 0.50, msB: 0.40, msC: 0.45,      // multiple-scattering octave attenuation
+  ambK: 0.4,           // sky-ambient gain on clouds
+  powder: 0.8,        // powder darkening of thin edges away from the sun
+  g1: 0.66, g2: -0.20, gMix: 0.25,     // dual-lobe Henyey-Greenstein
+  msA: 0.42, msB: 0.40, msC: 0.45,      // multiple-scattering octave attenuation
   haze: 11000,         // aerial perspective length for the cloud field (fair, dry air)
   drift: 5.0,          // cloud drift units/s at wind 1
   cirrus: 0.6,         // cirrus gain (hand.sunsetDrama sets the amount)
   history: 0.12,       // temporal blend (new sample weight)
   stars: 1.0,
+  edgeLo: 0.05, edgeHi: 0.45,   // cloud edge ramp (crisper silhouettes)
+  knee: 0.12,          // soft knee on scattered light (silver lining energy)
+  duskDesat: 0.32,     // sky saturation taken out at a low sun (brass-age, not neon)
   rain: 1.0,           // rain-shaft gain under storm cores
   scud: 1.0,           // torn scud under a storm base
   stormHor: 0.4,       // how much the gale darkens the horizon airlight
   stormHaze: 0.55,     // how much darker the air in front of a gale's deck is than its horizon
   stormDim: 0.75,      // share of the deck's light a gale takes away
   boltK: 0.35,         // lightning glow inside the deck per unit of bolt light
-  lightSat: 0.72,      // saturation kept in the low sun's colour on the clouds
+  lightSat: 0.52,      // saturation kept in the low sun's colour on the clouds
   discR: 0.0085,       // sun disc angular radius, rad (a touch over the real 0.0047)
   discI: 9.0           // disc radiance relative to the normalised sky
 };
@@ -265,6 +268,10 @@ vec3 field( vec2 xz, vec4 P, vec4 O ){
   // Coverage INSIDE a cloud stays under 1 on fair days, so the 3D noise carves it into
   // towers and bites; only an overcast deck runs solid.
   c *= mix( 0.74, 1.0, smoothstep( 0.55, 0.95, cover ) );
+  // OVERCAST is a closed deck but not a sheet: thick rolls and thin troughs at the
+  // kilometre scale, which the lid light reads as grey structure.
+  float ov = smoothstep( 0.60, 0.90, cover );
+  c *= mix( 1.0, mix( 0.55, 1.0, smoothstep( 0.30, 0.75, fbm2w( q / 1300.0 + 51.0 ) ) ), ov );
   // Type: cumulus by default, stratus where the day carries a low deck (layers), more
   // towering on the humid days (P.y), a little spatial variety.
   float tv = fbm2w( q / 7000.0 + 11.0 );
@@ -296,7 +303,7 @@ void main(){
   // are nearly level (the condensation level is one height); a storm's underside hangs in
   // rolls and scud, which is most of what reads as weather from beneath it.
   float lift = fbm2w( ( xz + uAo.xy ) / 900.0 + 31.0 );
-  float bl = mix( 0.03, 0.22, smoothstep( 0.2, 0.9, s ) ) * lift;
+  float bl = mix( 0.03, 0.22, max( smoothstep( 0.2, 0.9, s ), 0.6 * smoothstep( 0.6, 0.9, uA.x ) ) ) * lift;
   gl_FragColor = vec4( f, bl );
 }`;
 
@@ -308,6 +315,7 @@ uniform vec3 uAtmoSunXZ;  // physical sun azimuth (x, z) and its elevation sine
 uniform vec3 uVolSun;     // displayed sun direction (SUN.dir)
 uniform vec3 uPalHor, uPalZen;   // the authored palette's ring, for the night hand-over
 uniform float uNightMix;         // 0 = physical sky, 1 = the palette's night gradient
+uniform float uSkySat;           // sky saturation (dusk restraint)
 float vMiePhase( float mu, float g ){
   float g2 = g * g;
   return 3.0 / ( 8.0 * 3.14159265 ) * ( ( 1.0 - g2 ) * ( 1.0 + mu * mu ) )
@@ -326,6 +334,7 @@ vec3 vAtmo( vec3 d ){
   vec3 R = texture2D( tSkyR, uv ).rgb, M = texture2D( tSkyM, uv ).rgb;
   float mu = dot( d, uVolSun );
   vec3 c = ( R + M * vMiePhase( mu, uAtmo.w ) ) * uAtmo.x;
+  c = mix( vec3( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ) ), c, uSkySat );
   if ( uNightMix > 0.001 ) {
     // NIGHT: with the sun far under the horizon the single-scatter model has nothing left
     // but numerical residue; the sky is moonlight and airglow, which the palette authors.
@@ -362,6 +371,8 @@ uniform vec3 uBoltCol;
 uniform vec4 uCirrus;    // amount, altitude, -, -
 uniform vec2 uCirrusOff;
 uniform vec4 uStorm;     // storm, rain amount, scud amount, lid amount
+uniform vec2 uSharp;
+uniform vec4 uEvo2;      // scatter knee, -, -, -     // edge ramp: density below x is cut, full body by y
 uniform vec3 uHazeCol;   // the air between the eye and a closed deck (lid aerial perspective)
 
 float hgrad( float h, float ty ){
@@ -392,9 +403,16 @@ float density( vec3 p, float h, vec4 w, float lod, bool full ){
     vec3 dq = p * uScale.y + vec3( uWind.z, uEvo.x * 3.0, uWind.w ) + vec3( cu.x, cu.x * cu.y, cu.y ) * uEvo.y;
     vec3 dn = textureLod( tDetail, dq, max( 0.0, lod - 1.0 ) ).rgb;
     float hf = dn.r * 0.625 + dn.g * 0.25 + dn.b * 0.125;
+    // SECOND DETAIL OCTAVE at 2.9x (rotated so the two lattices never align): the
+    // small cauliflower lobes on the lobes. Faded out with distance, where it would only
+    // alias.
+    float o2 = textureLod( tDetail, dq.zxy * 2.9 + 0.37, max( 0.0, lod ) ).r;
+    hf = mix( hf, hf * 0.68 + o2 * 0.32, clamp( 1.5 - lod * 0.5, 0.0, 1.0 ) );
     // wispy at the base, billowy on the crown
     float hfm = mix( hf, 1.0 - hf, clamp( h * 6.0, 0.0, 1.0 ) );
     base = clamp( vremap( base, hfm * uScale.z, 1.0, 0.0, 1.0 ), 0.0, 1.0 );
+    // EDGE: a steeper ramp from nothing to body, so silhouettes are cut, not fogged
+    base = clamp( ( base - uSharp.x ) / ( uSharp.y - uSharp.x ), 0.0, 1.0 );
   }
   return base * w.b;
 }
@@ -511,6 +529,10 @@ void main(){
               sc += a * pho * exp( -od * bb );
               a *= uMS.x; bb *= uMS.y; cc *= uMS.z;
             }
+            // ENERGY: the forward lobe is a 30x spike in 4 pi units; through thin edges
+            // stacked over many steps it clipped the low sun's hole to a flat white. A soft
+            // knee keeps the lining bright and the hole shaped.
+            sc = sc / ( 1.0 + sc * uEvo2.x );
             // POWDER: thin cloud seen away from the sun lacks the in-scatter that
             // builds up inside a thick body, so its sunlit faces read darker at the edge.
             float pw = 1.0 - uEvo.z * exp( -dn * uScale.w * 90.0 );
@@ -1051,7 +1073,8 @@ export function buildSky() {
     uBolt0: { value: new THREE.Vector4() }, uBolt1: { value: new THREE.Vector4() },
     uBoltCol: { value: new THREE.Vector3() },
     uCirrus: { value: new THREE.Vector4() }, uCirrusOff: { value: new THREE.Vector2() },
-    uStorm: { value: new THREE.Vector4() }, uHazeCol: { value: new THREE.Vector3() }
+    uStorm: { value: new THREE.Vector4() }, uHazeCol: { value: new THREE.Vector3() },
+    uSharp: { value: new THREE.Vector2(0.02, 0.7) }, uEvo2: { value: new THREE.Vector4(0.12, 0, 0, 0) }
   });
   qMarch = mkQuad(matMarch);
   matResolve = mkMat(RESOLVE_FRAG, {
@@ -1080,7 +1103,7 @@ const ATMO_U = {
   uAtmoSunXZ: { value: new THREE.Vector3(1, 0, 0.5) },
   uVolSun: { value: new THREE.Vector3(0, 1, 0) },
   uPalHor: { value: new THREE.Vector3() }, uPalZen: { value: new THREE.Vector3() },
-  uNightMix: { value: 0 }
+  uNightMix: { value: 0 }, uSkySat: { value: 1 }
 };
 export const DOME_U = {
   ...ATMO_U,
@@ -1223,9 +1246,17 @@ export function updateSky(dt, t) {
   const az = SUN.azimDeg * D2R;
   ATMO_U.uAtmoSunXZ.value.set(Math.cos(az), Math.sin(az), Math.sin(physElev * D2R));
   ATMO_U.uVolSun.value.set(SUN.dir.x, SUN.dir.y, SUN.dir.z);
+  // DUSK RESTRAINT: a sun near the horizon drives the single-scatter sky to a saturated
+  // amber that reads as a filter; the house bar is brass-age and quiet.
+  const skySat = 1 - V.duskDesat * (1 - sm(4, 22, physElev)) * sm(-8, -1, physElev);
+  ATMO_U.uSkySat.value = skySat;
   for (let c = 0; c < 3; c++) {
     horN[c] = atm.hor[c] * K + (P.hor[c] - atm.hor[c] * K) * nightMix;
     zenN[c] = atm.zen[c] * K + (P.zen[c] - atm.zen[c] * K) * nightMix;
+  }
+  {
+    const lh = lum(horN[0], horN[1], horN[2]), lz = lum(zenN[0], zenN[1], zenN[2]);
+    for (let c = 0; c < 3; c++) { horN[c] = lh + (horN[c] - lh) * skySat; zenN[c] = lz + (zenN[c] - lz) * skySat; }
   }
 
   // --- the light that lights the clouds: the sun, handing over to the moon ---
@@ -1289,6 +1320,8 @@ export function updateSky(dt, t) {
   u.uEvo.value.set(tin * 0.00012, V.curlK, V.powder, 2 * tanH / hres);
   u.uPhase.value.set(V.g1, V.g2, V.gMix, V.haze / (0.5 + 0.5 * hazeMul - 1.0 * storm) * (1 - 0.7 * fog));
   u.uMS.value.set(V.msA, V.msB, V.msC, 1);
+  u.uSharp.value.set(V.edgeLo, V.edgeHi);
+  u.uEvo2.value.set(V.knee, 0, 0, 0);
   const lidK = Math.max(sm(0.2, 0.8, storm), sm(0.75, 0.98, dayA.cover));
   u.uSteps.value.set(V.steps, V.lsteps, 0, lidK);
   u.uStorm.value.set(storm, V.rain * sm(0.35, 0.9, storm), V.scud * sm(0.3, 0.85, storm), lidK);
