@@ -105,7 +105,7 @@ let genScene = null, genMesh = null;
 let matShapeGen, matDetailGen, matNoise2Gen, matWeather, matMarch, matResolve, matShadow, matProbe;
 let qWeather, qMarch, qResolve, qShadow, qProbe;
 let histValid = false, frameN = 0, panoStrip = 0, lastW = 0, lastH = 0;
-let bootMs = 0;
+let bootMs = 0, genMs = 0;
 const hand = { ref: null };
 let wxClock = 0, wxStorm = 0, wxDay = 1;
 const _v3 = new THREE.Vector3();
@@ -923,11 +923,16 @@ export function buildSky() {
   genMesh = new THREE.Mesh(fsGeo, matShapeGen); genMesh.frustumCulled = false;
   genScene = new THREE.Scene(); genScene.add(genMesh);
   const prev = renderer.getRenderTarget();
+  const tg0 = performance.now();
   genVolume(shapeRT, 128, matShapeGen);
   genVolume(detailRT, 32, matDetailGen);
   genMesh.material = matNoise2Gen;
   renderer.setRenderTarget(noise2RT); renderer.render(genScene, fsCam);
   renderer.setRenderTarget(prev);
+  // One finish, behind the loader: it turns the queued generation into a measured number
+  // (genMs, GPU + compile of the three generators) instead of a hitch on frame one.
+  renderer.getContext().finish();
+  genMs = performance.now() - tg0;
   // the generators are boot-only: free their programs
   matShapeGen.dispose(); matDetailGen.dispose(); matNoise2Gen.dispose();
 
@@ -994,8 +999,6 @@ export function buildSky() {
   DOME_U.tVolPano.value = panoRT.texture;
   built = true;
   bootMs = performance.now() - t0;
-  // the GPU work above is queued, not done: a sync readback of one shadow texel would
-  // measure it, but costs a stall; the boot figure is CPU-side submission + LUT build.
 }
 
 // Uniforms the dome (water.js buildDome) spreads into its material. Values are live.
@@ -1421,7 +1424,7 @@ if (typeof window !== 'undefined') {
     V: VSKY, stats, atm, lutR, lutM,
     on(b) { VSKY.on = b === undefined ? 1 : (b ? 1 : 0); DOME_U.uVolK.value.x = VSKY.on; return VSKY.on; },
     state() {
-      return { built, bootMs: +bootMs.toFixed(1), div: +curDiv.toFixed(2), steps: VSKY.steps, w: lastW, h: lastH,
+      return { built, bootMs: +bootMs.toFixed(1), genMs: +genMs.toFixed(1), div: +curDiv.toFixed(2), steps: VSKY.steps, w: lastW, h: lastH,
         physElev: +physElev.toFixed(2), K: +Ksm.toExponential(3), hazeMul: +hazeMul.toFixed(2),
         sunVis: +shadowSunVis.toFixed(3), camSunVis: +camSunVis.toFixed(3),
         light: lightCol.map(v => +v.toFixed(4)), ambTop: ambTop.map(v => +v.toFixed(4)),
