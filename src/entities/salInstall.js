@@ -52,7 +52,16 @@ import { twillSet, canvasSet } from '../lib/textures.js';
 
 const ON = typeof location === 'undefined' || !/[?&]salproc\b/.test(location.search);
 const LAB = typeof location !== 'undefined' && /[?&]lab\b/.test(location.search);
-const ASSET = ON ? loadSculpted('assets/sal/', 'sal') : Promise.resolve(null);
+// THREE BUILDS, best first (salreal): the SKINNED Sal (assets/salskin, salSkinSculpt.js) —
+// a continuous dress that bends and creases with the pose; if it is missing, incomplete or
+// baked to a different rig, the RIGID sculpt (assets/sal, salSculpt.js; fetched only then);
+// if that fails too, the procedural man. ?salrigid = A/B the rigid sculpt, ?salproc = the
+// procedural one.
+const RIGID_ONLY = typeof location !== 'undefined' && /[?&]salrigid\b/.test(location.search);
+const SKIN = ON && !RIGID_ONLY ? loadSculpted('assets/salskin/', 'salSkin') : Promise.resolve(null);
+let RIGID = null;
+const rigidAsset = () => RIGID || (RIGID = ON ? loadSculpted('assets/sal/', 'sal') : Promise.resolve(null));
+if (RIGID_ONLY) rigidAsset();
 
 const SS_VS = `
 varying vec3 vSsP; varying vec3 vSsN; varying float vSsY;
@@ -140,13 +149,22 @@ function retireable(o, keep) {
   return !(keep && keep(o));
 }
 
-const STATE = { installed: false, reason: ON ? 'loading' : 'off (?salproc)', ms: 0, meshes: [], stash: [], tris: 0, warn: [] };
+const STATE = { installed: false, mode: 'procedural', reason: ON ? 'loading' : 'off (?salproc)', skinReason: '', ms: 0, meshes: [], stash: [], tris: 0, warn: [], skinned: [] };
 
 export function installSalSculpt(diver, shared) {
   portGlass(diver);                 // the glass is kept procedural: fixed whether or not the sculpt lands
-  ASSET.then(A => {
-    if (!A) { STATE.reason = ON ? 'asset unavailable — procedural Sal kept' : STATE.reason; return; }
-    try { install(diver, shared, A); } catch (e) { console.warn('ABYSSA: sculpted Sal failed to install, keeping the procedural build', e); STATE.reason = 'install threw: ' + e.message; }
+  SKIN.then(A => {
+    if (A) {
+      try { if (installSkinned(diver, shared, A)) return; } catch (e) {
+        console.warn('ABYSSA: skinned Sal failed to install, falling back to the rigid sculpt', e);
+        STATE.skinReason = 'install threw: ' + e.message;
+        undoSkinned();
+      }
+    } else if (ON && !RIGID_ONLY) STATE.skinReason = 'skinned asset unavailable';
+    return rigidAsset().then(R => {
+      if (!R) { STATE.reason = ON ? 'asset unavailable — procedural Sal kept' : STATE.reason; return; }
+      try { install(diver, shared, R); } catch (e) { console.warn('ABYSSA: sculpted Sal failed to install, keeping the procedural build', e); STATE.reason = 'install threw: ' + e.message; }
+    });
   });
 }
 
@@ -211,8 +229,208 @@ function install(diver, shared, A) {
     swap(leg.end, g.boot, mat, { name: 'boot', mirror: R2 });
   }
   STATE.mats = [helmMat, torsoMat, limbMat, limbMatM];
-  STATE.installed = true; STATE.reason = 'installed'; STATE.ms = +A.ms.toFixed(1); STATE.ktx2 = !!A.ktx2;
+  STATE.installed = true; STATE.mode = 'rigid'; STATE.reason = 'installed'; STATE.ms = +A.ms.toFixed(1); STATE.ktx2 = !!A.ktx2;
   STATE.tex = assetTextures(A).size;
+}
+
+// =============================================================================================
+// THE SKINNED SAL (salreal). One continuous dress (trunk + trouser legs, and a sleeve each
+// side) as THREE.SkinnedMesh bound to diver.js's OWN rig groups — the Skeleton's "bones" are
+// the hips, spine and limb root/mid/end Groups the gait already drives, so no bone hierarchy
+// is duplicated and not one line of animation changes. The dress was authored and weighted
+// (Blender bone heat, cleaned) in the HIPS frame in the rig's rest pose (every rotation zero),
+// so each joint's bind inverse is just the inverse of its rest translation from the hips;
+// bindMatrix is identity and the mesh rides the hips group (AttachedBindMode turns the
+// skinned world positions back into hips space). Hard parts stay rigid on their group:
+// helmet, corselet, belt (hips), pack, hands (wrist), boots (ankle).
+//
+// POSE-RESPONSIVE CREASING: the dress set carries a second normal map, the WRINKLE map (the
+// same dress with deep compression gathers sculpted into the inside of every joint, baked
+// through the same low). Per vertex the shader finds which joint it belongs to from its own
+// skin weights (the bone indices are remapped to one fixed order, SKIN_BONES) and its rest
+// position; per frame each joint's bend is read off the rig (8 floats, onBeforeRender, no
+// allocation). The INSIDE of a closing joint blends to the wrinkle map and takes a little
+// occlusion in its folds; the OUTSIDE is stretched — its folds flatten toward the smooth
+// normal; and a small corrective push along the rest normal on the inside of the knee and
+// elbow keeps linear-blend skinning from collapsing the volume there.
+// TAA: postfx.taa.js renders skinned movers with last frame's bone palette (exact motion
+// vectors; the corrective push is not in the velocity — it is mm and changes slowly).
+// =============================================================================================
+const SKIN_BONES = ['hips', 'spine', 'thighL', 'shinL', 'footL', 'thighR', 'shinR', 'footR', 'upArmL', 'foreArmL', 'handL', 'upArmR', 'foreArmR', 'handR'];
+const SK = { U: null, meshes: [], added: [], stash: [], skeleton: null, frame: -1 };
+const SK_VS = `
+uniform vec4 uSkB0; uniform vec4 uSkB1; uniform vec4 uSkG; uniform vec4 uSkG2; uniform vec4 uSkK;
+varying float vSkWrk; varying float vSkStr;
+float skW(float k) { return dot(skinWeight, vec4(equal(skinIndex, vec4(k)))); }
+float skG(float d, float w) { return exp(-d * d / (w * w)); }`;
+// before skinning: rest position/normal are the authored hips-frame ones
+const SK_VS_MAIN = `
+{
+  vec3 rp = position, rn = normal;
+  float fr = smoothstep(-0.25, 0.55, rn.z), bk = smoothstep(-0.25, 0.55, -rn.z);
+  // knees (bones thigh+shin), elbows (upper arm+forearm): u.x knee y, u.y elbow y
+  float kL = (skW(2.0) + skW(3.0)) * skG(rp.y - uSkG.x, 0.13), kR = (skW(5.0) + skW(6.0)) * skG(rp.y - uSkG.x, 0.13);
+  float eL = (skW(8.0) + skW(9.0)) * skG(rp.y - uSkG.y, 0.12), eR = (skW(11.0) + skW(12.0)) * skG(rp.y - uSkG.y, 0.12);
+  // hip crease: thigh + pelvis near the hip joint (uSkG.z hip x), one side each
+  float hL = (skW(2.0) + 0.6 * skW(0.0)) * skG(rp.y + 0.04, 0.14) * smoothstep(-0.06, 0.08, rp.x);
+  float hR = (skW(5.0) + 0.6 * skW(0.0)) * skG(rp.y + 0.04, 0.14) * smoothstep(-0.06, 0.08, -rp.x);
+  // the belly: spine + pelvis between the belt and the breastplate (uSkG.w its centre y)
+  float wa = (skW(1.0) + skW(0.0)) * skG(rp.y - uSkG.w, 0.17);
+  vec4 b0 = uSkB0, b1 = uSkB1;
+  // knee and elbow close one way only: knees fold the back, elbows the front
+  float c = kL * b0.x * bk + kR * b0.y * bk + eL * b0.z * fr + eR * b0.w * fr;
+  float t = kL * b0.x * fr + kR * b0.y * fr + eL * b0.z * bk + eR * b0.w * bk;
+  // hips and waist: flexion folds the front, extension the back
+  c += hL * (max(b1.x, 0.0) * fr + max(-b1.x, 0.0) * bk) + hR * (max(b1.y, 0.0) * fr + max(-b1.y, 0.0) * bk) + wa * (max(b1.z, 0.0) * fr + max(-b1.z, 0.0) * bk);
+  t += hL * (max(b1.x, 0.0) * bk) + hR * (max(b1.y, 0.0) * bk) + wa * max(b1.z, 0.0) * bk;
+  vSkWrk = clamp(c * uSkK.x, 0.0, 1.0); vSkStr = clamp(t * uSkK.x, 0.0, 1.0);
+  // corrective volume on the inside of the knee and elbow (LBS collapses it)
+  transformed += rn * uSkK.y * (0.016 * (kL * b0.x + kR * b0.y) * bk + 0.012 * (eL * b0.z + eR * b0.w) * fr);
+}`;
+const SK_FS = `
+uniform sampler2D tSkWrk;
+varying float vSkWrk; varying float vSkStr;`;
+const SK_FS_NRM = `
+#ifdef SAL_WRK
+if (vSkWrk > 0.002 || vSkStr > 0.002) {
+  vec3 wN = texture2D(tSkWrk, vNormalMapUv).xyz * 2.0 - 1.0;
+  wN.z = sqrt(max(0.0, 1.0 - dot(wN.xy, wN.xy)));
+  wN.xy *= normalScale;
+  normal = normalize(mix(normal, normalize(tbn * wN), vSkWrk));
+  normal = normalize(mix(normal, nonPerturbedNormal, vSkStr * 0.5));
+  diffuseColor.rgb *= 1.0 - 0.45 * vSkWrk * clamp(1.0 - wN.z, 0.0, 1.0) * 4.0;
+}
+#endif
+`;
+// the per-frame drive: each joint's bend off the rig, normalised to 0..1 of "fully closed"
+const _rs = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+function skDrive(diver) {
+  const U = SK.U; if (!U) return;
+  const b0 = U.uSkB0.value, b1 = U.uSkB1.value;
+  b0.set(_rs(0.12, 1.25, diver.legL.mid.rotation.x), _rs(0.12, 1.25, diver.legR.mid.rotation.x),
+    _rs(0.25, 1.45, -diver.armL.mid.rotation.x), _rs(0.25, 1.45, -diver.armR.mid.rotation.x));
+  // hip flexion: the thigh swings forward = root.rotation.x negative
+  const hl = -diver.legL.root.rotation.x, hr = -diver.legR.root.rotation.x, w = diver.spine.rotation.x;
+  b1.set(Math.sign(hl) * _rs(0.10, 0.95, Math.abs(hl)), Math.sign(hr) * _rs(0.10, 0.95, Math.abs(hr)), Math.sign(w) * _rs(0.04, 0.45, Math.abs(w)), 0);
+}
+function dressMaterial(maps, shared, P) {
+  const m = sculptMat(maps, shared, { env: 0.35 });
+  const U = {
+    tSkWrk: { value: maps.wrinkleMap || maps.normalMap },
+    uSkB0: { value: new THREE.Vector4() }, uSkB1: { value: new THREE.Vector4() },
+    uSkG: { value: new THREE.Vector4(P.kneeY, P.elbowY, P.hipX, P.waistY) }, uSkG2: { value: new THREE.Vector4() },
+    uSkK: { value: new THREE.Vector4(1, 1, 0, 0) }
+  };
+  if (maps.wrinkleMap) m.defines = Object.assign(m.defines || {}, { SAL_WRK: '' });
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = (sh, r) => {
+    prev(sh, r);
+    Object.assign(sh.uniforms, U);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + SK_VS)
+      .replace('#include <skinning_vertex>', SK_VS_MAIN + '\n#include <skinning_vertex>');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + SK_FS)
+      .replace('if (ssFade > 0.002) {\n  vec3 d = mix(ssTriN', SK_FS_NRM + 'if (ssFade > 0.002) {\n  vec3 d = mix(ssTriN');
+  };
+  const pk = m.customProgramCacheKey;
+  m.customProgramCacheKey = () => pk.call(m) + '|salSkin1' + (maps.wrinkleMap ? 'w' : '');
+  SK.U = U;
+  return m;
+}
+
+function undoSkinned() {
+  for (const [node, c] of SK.stash) node.add(c);
+  for (const m of SK.added) if (m.parent) m.parent.remove(m);
+  SK.stash.length = 0; SK.added.length = 0; SK.meshes.length = 0; SK.U = null;
+}
+
+function installSkinned(diver, shared, A) {
+  const g = A.geos, meta = A.meta.meta || {}, sets = A.meta.sets || {};
+  const need = ['helmet', 'corselet', 'trunk', 'sleeveL', 'sleeveR', 'belt', 'pack', 'handL', 'handR', 'boot'];
+  const miss = need.filter(k => !g[k]);
+  if (miss.length || !A.maps.helm || !A.maps.dress || !A.maps.gear) { STATE.skinReason = 'asset incomplete: ' + miss.join(','); return false; }
+  for (const k of ['trunk', 'sleeveL', 'sleeveR']) if (!A.skins[k] || !g[k].attributes.skinIndex) { STATE.skinReason = k + ' carries no skin'; return false; }
+  // ---- the rig check: a skinned dress cannot be stretched to a different rig — a moved
+  // joint would bend the canvas in the wrong place. Any drift -> the rigid sculpt.
+  const R = meta.rig || {}, dL = diver.legL, dA = diver.armL;
+  const live = { armUp: -dA.mid.position.y, armLo: -dA.end.position.y, legUp: -dL.mid.position.y, legLo: -dL.end.position.y,
+    hipX: dL.root.position.x, shX: dA.root.position.x, shY: dA.root.position.y, spineY: diver.spine.position.y };
+  const baked = { armUp: R.armL && R.armL.up, armLo: R.armL && R.armL.lo, legUp: R.legL && R.legL.up, legLo: R.legL && R.legL.lo,
+    hipX: R.legL && R.legL.x, shX: R.armL && R.armL.x, shY: R.armL && R.armL.y, spineY: R.spineY };
+  const off = [];
+  for (const k in live) if (baked[k] == null || Math.abs(live[k] - baked[k]) > 2e-3) off.push(k + ' baked ' + baked[k] + ' live ' + +live[k].toFixed(4));
+  if (off.length) { STATE.skinReason = 'rig differs from the skinned bake (' + off.join('; ') + ') — re-bake: node tools/blender/build.mjs salSkin'; console.warn('ABYSSA: ' + STATE.skinReason); return false; }
+
+  // ---- the skeleton: diver.js's own groups, rest translations relative to the hips
+  const node = { hips: diver.hips, spine: diver.spine,
+    thighL: dL.root, shinL: dL.mid, footL: dL.end, thighR: diver.legR.root, shinR: diver.legR.mid, footR: diver.legR.end,
+    upArmL: dA.root, foreArmL: dA.mid, handL: dA.end, upArmR: diver.armR.root, foreArmR: diver.armR.mid, handR: diver.armR.end };
+  const restOf = o => { const v = new THREE.Vector3(); for (let n = o; n && n !== diver.hips; n = n.parent) v.add(n.position); return v; };
+  const bonesArr = SKIN_BONES.map(n => node[n]), inv = SKIN_BONES.map(n => new THREE.Matrix4().makeTranslation(restOf(node[n]).negate()));
+  const skeleton = new THREE.Skeleton(bonesArr, inv);
+  SK.skeleton = skeleton;
+  // every skinned geometry's joint indices -> SKIN_BONES order (the shader keys joints off them)
+  for (const k of ['trunk', 'sleeveL', 'sleeveR']) {
+    // (GLTFLoader de-duplicates node names: the bone 'handL' beside the mesh 'handL' loads as 'handL_1')
+    const names = A.skins[k].bones, map = names.map(n => SKIN_BONES.indexOf(SKIN_BONES.includes(n) ? n : n.replace(/_\d+$/, '')));
+    if (map.some((v, i) => v < 0 && names[i])) { STATE.skinReason = k + ': unknown joint ' + names.filter((n, i) => map[i] < 0); return false; }
+    const si = g[k].attributes.skinIndex, sw = g[k].attributes.skinWeight;
+    if (!g[k].userData.skRemapped) {
+      for (let i = 0; i < si.count; i++) for (let c = 0; c < 4; c++) {
+        const j = si.getComponent(i, c), w = sw.getComponent(i, c);
+        si.setComponent(i, c, w > 0 ? map[j] : 0);
+      }
+      si.needsUpdate = true; g[k].userData.skRemapped = true;
+    }
+  }
+  const P = { kneeY: -live.legUp, elbowY: diver.spine.position.y + live.shY - live.armUp, hipX: live.hipX, waistY: diver.spine.position.y + 0.28 };
+
+  const helmMat = registerPaint(sculptMat(A.maps.helm, shared, { env: 0.55, ao: 0.9 }), { hero: true });
+  const dressMat = registerPaint(dressMaterial(A.maps.dress, shared, P), { hero: true });
+  const gearMat = registerPaint(sculptMat(A.maps.gear, shared, { env: 0.45 }), { hero: true });
+  const gearMatM = registerPaint(sculptMat(A.maps.gear, shared, { env: 0.45, mirror: true }), { hero: true });
+
+  const retire = (n, keep) => {
+    for (const c of n.children.slice()) if (retireable(c, keep)) { n.remove(c); SK.stash.push([n, c]); }
+  };
+  const add = (n, geo, mat, name, mirror) => {
+    const m = new THREE.Mesh(geo, mat);
+    m.name = 'salSkin:' + name; m.castShadow = m.receiveShadow = true;
+    if (mirror) m.scale.x = -1;
+    n.add(m); SK.added.push(m); STATE.meshes.push(m);
+    STATE.tris += (geo.index ? geo.index.count : geo.attributes.position.count) / 3;
+    return m;
+  };
+  const ferrule = o => o.material && o.material.userData.salMetal && (o.geometry.boundingBox || (o.geometry.computeBoundingBox(), o.geometry.boundingBox)).getCenter(new THREE.Vector3()).y > 0.9;
+  retire(diver.helmGroup); retire(diver.spine, ferrule); retire(diver.hips); retire(diver.pack);
+  for (const L of [diver.armL, diver.armR, diver.legL, diver.legR]) { retire(L.root); retire(L.mid); retire(L.end); }
+  add(diver.helmGroup, g.helmet, helmMat, 'helmet');
+  add(diver.spine, g.corselet, helmMat, 'corselet');
+  add(diver.hips, g.belt, gearMat, 'belt');
+  add(diver.pack, g.pack, gearMat, 'pack');
+  add(dA.end, g.handL, gearMat, 'handL');
+  add(diver.armR.end, g.handR, gearMatM, 'handR', true);
+  add(dL.end, g.boot, gearMat, 'bootL');
+  add(diver.legR.end, g.boot, gearMatM, 'bootR', true);
+  const ident = new THREE.Matrix4();
+  for (const k of ['trunk', 'sleeveL', 'sleeveR']) {
+    const m = new THREE.SkinnedMesh(g[k], dressMat);
+    m.name = 'salSkin:' + k; m.castShadow = m.receiveShadow = true;
+    m.frustumCulled = false;                  // the bind-pose bounds don't follow the pose; he is always near the camera
+    m.bind(skeleton, ident);
+    diver.hips.add(m); SK.added.push(m); SK.meshes.push(m); STATE.meshes.push(m); STATE.skinned.push(m);
+    STATE.tris += g[k].index.count / 3;
+  }
+  // one drive per rendered frame (the first skinned draw of the frame reads the rig)
+  SK.meshes[0].onBeforeRender = (r) => { const f = r.info.render.frame; if (f !== SK.frame) { SK.frame = f; skDrive(diver); } };
+  SK.meshes[1].onBeforeRender = SK.meshes[2].onBeforeRender = SK.meshes[0].onBeforeRender;
+  if (!LAB) for (const [, c] of SK.stash) if (c.geometry) c.geometry.dispose();
+  STATE.stash = LAB ? SK.stash.slice() : [];
+  STATE.mats = [helmMat, dressMat, gearMat, gearMatM];
+  STATE.installed = true; STATE.mode = 'skinned'; STATE.reason = 'installed'; STATE.skinReason = 'installed';
+  STATE.ms = +A.ms.toFixed(1); STATE.ktx2 = !!A.ktx2; STATE.tex = assetTextures(A).size;
+  return true;
 }
 
 // THE PORT GLASS (review round 2). The kept procedural glass (and the dark recess merged
@@ -245,7 +463,11 @@ function portGlass(diver) {
 // ---- dev surface ----
 if (typeof window !== 'undefined') {
   window.__salSculpt = {
-    state: () => ({ installed: STATE.installed, reason: STATE.reason, ms: STATE.ms, ktx2: STATE.ktx2, meshes: STATE.meshes.length, tris: STATE.tris, warn: STATE.warn }),
+    state: () => ({ installed: STATE.installed, mode: STATE.mode, reason: STATE.reason, skinReason: STATE.skinReason, ms: STATE.ms, ktx2: STATE.ktx2, meshes: STATE.meshes.length, tris: STATE.tris, warn: STATE.warn, tex: STATE.tex }),
+    // the skinned dress's live joint bends (rad, signed) and the wrinkle/stretch drive
+    bends: () => SK.U ? { b0: SK.U.uSkB0.value.toArray().map(v => +v.toFixed(3)), b1: SK.U.uSkB1.value.toArray().map(v => +v.toFixed(3)), K: SK.U.uSkK.value.toArray() } : null,
+    wrinkle: k => { if (SK.U) SK.U.uSkK.value.x = k; return k; },        // wrinkle gain (1)
+    bulge: k => { if (SK.U) SK.U.uSkK.value.y = k; return k; },          // corrective volume gain (1)
     // ?lab only: put the procedural meshes back / take them away again (A/B in one tab)
     procedural(on) {
       if (!LAB) return 'needs ?lab';

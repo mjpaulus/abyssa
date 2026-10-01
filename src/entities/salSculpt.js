@@ -524,6 +524,7 @@ function helmetSpec() {
   // solder beads where the bonnet meets the breech ring
   return U(0.006, bonnet, ...fit);
 }
+export { helmetSpec, corseletSpec, hipsSpec, packSpec, bootSpec, gloveSpec, gloveWear, vn, isM, metalOf, verdK, METAL, ETor, LCap, segment, fineCreases, canvasGrain, piping, FRONT, BACK, INB, OUTB, BP, bpR };
 export { Sph, E, Box, Cap, Cone, Tor, U, Sub, SubM, I, Xf, Pl, Fn, Disp, yTo, zTo, eul, mulRv, crPts, Path, Ring, polySDF, smoothProf, Lathe, Slab, Band, Hex, WingNut, Buckle, PAINT, crease, win, folds, segProf, clamp, sst, gau, norm, cross, add, sub, dot, TAU, compile };
 
 // =============================================================================================
@@ -540,7 +541,10 @@ const bpR = y => {
   for (let i = 1; i < BP.length; i++) if (y <= BP[i][1]) { const [r0, y0] = BP[i - 1], [r1, y1] = BP[i]; return r0 + (r1 - r0) * (y - y0) / (y1 - y0); }
   return BP[BP.length - 1][0];
 };
-function corseletSpec() {
+// o.mk5 (salSkinSculpt, additive): the US Navy Mark V breastplate alone — no chest lead
+// (the Mark V carries its lead on the BELT), no webbing or harness straps on the brass, and
+// no dress under it (the skinned dress is its own mesh)
+function corseletSpec(o = {}) {
   const ZS = 0.78, SX = 0.93, SKIRT = 0.395, ch = [];
   // the brass: one spun-and-beaten shell, the same profile as diver.js, its rim ROLLED
   const up = [[bpR(SKIRT) + 0.004, SKIRT - 0.004]].concat(BP.filter(q => q[1] > SKIRT + 0.01)).concat([[0.268, 0.818]]);
@@ -571,6 +575,7 @@ function corseletSpec() {
   // the gasket: rubber squeezed out under the skirt
   ch.push(ETor(bpR(SKIRT) - 0.004, 0.011, SKIRT - 0.016, M.RUBBER, SX, ZS));
   // the dress canvas under the brass (shows at the arm holes and over the shoulders' flanks)
+  if (o.mk5) return U(0.005, ...ch);
   ch.push(Lathe(smoothProf(BP, 2), M.CANVAS, { sx: SX * 0.985, sz: ZS * 0.985 }));
   // THE DRESS TORSO, blue duck, air-filled: ballooning below the corselet, pushed down onto
   // the belt and folded over itself in creases that wander round the body

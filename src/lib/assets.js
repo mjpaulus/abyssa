@@ -5,8 +5,9 @@
 //     base 'assets/sleepers/brooder/', name 'brooder'. Never throws: a missing file, a bad
 //     decode or no network resolves null, and the caller keeps its procedural build.
 //     Cached per base for the page's lifetime (a rebuilt creature costs nothing).
-//   ASSET = { geos: { <piece>: BufferGeometry (position, normal, uv, tangent) },
-//             maps: { <set>: { map, normalMap, ormMap } },       ormMap: R = AO, G = rough
+//   ASSET = { geos: { <piece>: BufferGeometry (position, normal, uv, tangent[, skinIndex, skinWeight]) },
+//             skins: { <piece>: { bones: [joint names, skinIndex order] } }   (skinned pieces only)
+//             maps: { <set>: { map, normalMap, ormMap[, wrinkleMap] } }, ormMap: R = AO, G = rough
 //             meta: <name>.json (probes, hinges, stats) }
 //   assetTextures(a) / assetGeos(a) -> Sets, for a creature's keepTex / keepGeo
 //
@@ -79,8 +80,10 @@ async function load(base, name) {
   const gl = new GLTFLoader();
   if (comp.mesh === 'draco') gl.setDRACOLoader(draco());
   const gltf = await gl.loadAsync(base + name + '.glb');
-  const geos = {};
-  gltf.scene.traverse(o => { if (o.isMesh) geos[o.name] = o.geometry; });
+  const geos = {}, skins = {};
+  // (additive, salSkin) a skinned piece also reports its joint names in skinIndex order, so
+  // the caller can bind the geometry to its OWN rig (the glTF bones are never used)
+  gltf.scene.traverse(o => { if (o.isMesh) geos[o.name] = o.geometry; if (o.isSkinnedMesh) skins[o.name] = { bones: o.skeleton.bones.map(b => b.name) }; });
   // WebP maps decode OFF the main thread through createImageBitmap (brooder2): through an
   // <img> the decode ran inside the first texImage2D, ~60 ms per 1024 map and ~70 per 2048
   // on the frame she first drew. Bytes are untouched: no premultiply, no colour conversion,
@@ -119,8 +122,10 @@ async function load(base, name) {
       ? await Promise.all([ktex(s + '_albedo', true), ktex(s + '_normal', false, true), tex(s + '_orm.webp', false)])
       : await Promise.all([tex(s + '_albedo.webp', true), tex(s + '_normal.webp', false), tex(s + '_orm.webp', false)]);
     maps[s] = { map, normalMap, ormMap };
+    // (additive, salSkin) a set baked with a WRINKLE normal map (meta sets.<s>.wrinkle)
+    if (meta.sets[s].wrinkle) maps[s].wrinkleMap = useKtx ? await ktex(s + '_wrinkle', false, true) : await tex(s + '_wrinkle.webp', false);
   }));
-  const a = { geos, maps, meta, ms: performance.now() - t0, ktx2: useKtx };
+  const a = { geos, skins, maps, meta, ms: performance.now() - t0, ktx2: useKtx };
   return a;
 }
 

@@ -245,7 +245,7 @@ const OUT_FRAG = /* glsl */`
     #include <colorspace_fragment>
   }`;
 
-// OBJECT MOTION for RIGID movers (Sal, the raft). Their meshes carry no vertex
+// OBJECT MOTION for RIGID movers (Sal's hard parts, the raft). Their meshes carry no vertex
 // deformation (checked: diver.js patches only varyings), so a per-mesh previous
 // modelMatrix gives exact motion vectors. Each mover mesh gets a PROXY in a private
 // scene (shared geometry, own tiny ShaderMaterial clone, matrixWorld copied from the
@@ -280,6 +280,41 @@ const VEL_FRAG = /* glsl */`
     if (fz > sz * 1.01 + 0.02) discard;
     vec2 v = (vCur.xy / vCur.w - vPrev.xy / vPrev.w) * 0.5;
     gl_FragColor = vec4(v, 1.0, vPrev.w / max(vCur.w, 1e-4));
+  }`;
+
+// SKINNED movers (salreal: Sal's dress). The same proxy idea with the source's OWN skeleton:
+// the current position is skinned with this frame's bone palette (three uploads it as
+// boneTexture for the proxy, from the shared Skeleton), the previous one with LAST frame's
+// palette, kept per skeleton in a twin float texture (copied after each velocity draw, like
+// uPrevModel). In three's attached bind mode sum(w * bone * bindMatrix * p) is already the
+// world position, so no model matrix is involved. Exact for linear-blend skinning; a
+// material's own vertex tweaks on top of the skin (the dress's mm-scale corrective push)
+// are not in it.
+const VEL_SKIN_VERT = /* glsl */`
+  uniform mat4 uCurVP;
+  uniform mat4 uPrevVP;
+  uniform highp sampler2D uPrevBones;
+  varying vec4 vCur;
+  varying vec4 vPrev;
+  #include <skinning_pars_vertex>
+  mat4 prevBone(const in float i) {
+    int size = textureSize(uPrevBones, 0).x;
+    int j = int(i) * 4;
+    int x = j % size;
+    int y = j / size;
+    return mat4(texelFetch(uPrevBones, ivec2(x, y), 0), texelFetch(uPrevBones, ivec2(x + 1, y), 0),
+      texelFetch(uPrevBones, ivec2(x + 2, y), 0), texelFetch(uPrevBones, ivec2(x + 3, y), 0));
+  }
+  void main() {
+    #include <skinbase_vertex>
+    vec4 sv = bindMatrix * vec4(position, 1.0);
+    vec4 wp = (boneMatX * sv) * skinWeight.x + (boneMatY * sv) * skinWeight.y + (boneMatZ * sv) * skinWeight.z + (boneMatW * sv) * skinWeight.w;
+    vec4 pp = (prevBone(skinIndex.x) * sv) * skinWeight.x + (prevBone(skinIndex.y) * sv) * skinWeight.y
+      + (prevBone(skinIndex.z) * sv) * skinWeight.z + (prevBone(skinIndex.w) * sv) * skinWeight.w;
+    wp /= wp.w; pp /= pp.w;
+    vCur = uCurVP * wp;
+    vPrev = uPrevVP * pp;
+    gl_Position = projectionMatrix * viewMatrix * wp;
   }`;
 
 const _vp = new THREE.Matrix4(), _ivp = new THREE.Matrix4(), _prevVP = new THREE.Matrix4();
@@ -339,7 +374,14 @@ export class TemporalAAPass extends Pass {
     this.resolveMat.uniforms.tVel = { value: null };
     this.resolveMat.uniforms.uVelOn = { value: 0 };
     this.resolveMat.uniforms.uVelRect = { value: this.velRect };
+    this.velSkinBase = new THREE.ShaderMaterial({
+      name: 'AbyssaTAAVelocitySkin', vertexShader: VEL_SKIN_VERT, fragmentShader: VEL_FRAG, toneMapped: false,
+      uniforms: { uCurVP: { value: null }, uPrevVP: { value: null }, uPrevBones: { value: null },
+        tDepth: { value: null }, uIn: { value: null }, uNF: { value: null } }
+    });
+    this.prevPal = new Map();      // Skeleton -> { arr, tex } last frame's bone palette
     this._scanFn = (o) => {
+      if (o.isSkinnedMesh && o.skeleton && o.geometry && !this.proxyOf.has(o)) { this._addSkinned(o); return; }
       if (!o.isMesh || o.isInstancedMesh || o.isSkinnedMesh || !o.geometry || this.proxyOf.has(o)) return;
       const m = this.velBase.clone();
       const u = m.uniforms;
@@ -353,6 +395,32 @@ export class TemporalAAPass extends Pass {
     };
   }
 
+  _palette(sk) {
+    let p = this.prevPal.get(sk);
+    if (!p) {
+      if (sk.boneTexture === null) sk.computeBoneTexture();
+      const img = sk.boneTexture.image, arr = new Float32Array(img.data.length);
+      arr.set(sk.boneMatrices);
+      const tex = new THREE.DataTexture(arr, img.width, img.height, THREE.RGBAFormat, THREE.FloatType);
+      tex.needsUpdate = true;
+      p = { arr, tex, fresh: true };
+      this.prevPal.set(sk, p);
+    }
+    return p;
+  }
+  _addSkinned(o) {
+    const m = this.velSkinBase.clone(), u = m.uniforms;
+    u.uCurVP.value = this.curVP; u.uPrevVP.value = this.prevVP;
+    u.uIn.value = this.velIn; u.uNF.value = this.resolveMat.uniforms.uNF.value;
+    u.uPrevBones.value = this._palette(o.skeleton).tex;
+    m.side = o.material && o.material.side !== undefined ? o.material.side : THREE.FrontSide;
+    const px = new THREE.SkinnedMesh(o.geometry, m);
+    px.bind(o.skeleton, o.bindMatrix);
+    px.matrixAutoUpdate = false; px.matrixWorldAutoUpdate = false; px.frustumCulled = o.frustumCulled;
+    px.userData.src = o; px.userData.fresh = true; px.userData.skin = true;
+    this.velScene.add(px); this.proxies.push(px); this.proxyOf.set(o, px);
+  }
+
   // Register a rigid mover's root (whole hierarchy). Meshes added under it later are
   // picked up by a rescan every 30 frames; removed ones are dropped the same way.
   addMover(root) { if (root && this.movers.indexOf(root) < 0) { this.movers.push(root); root.traverse(this._scanFn); } }
@@ -361,7 +429,7 @@ export class TemporalAAPass extends Pass {
     for (let i = this.proxies.length - 1; i >= 0; i--) {
       const px = this.proxies[i], src = px.userData.src;
       let o = src; while (o && this.movers.indexOf(o) < 0) o = o.parent;
-      if (!o) { this.velScene.remove(px); px.material.dispose(); this.proxies.splice(i, 1); this.proxyOf.delete(src); }
+      if (!o) { this.velScene.remove(px); px.material.dispose(); this.proxies.splice(i, 1); this.proxyOf.delete(src); if (px.userData.skin && ![...this.proxyOf.keys()].some(k => k.skeleton === src.skeleton)) { const p = this.prevPal.get(src.skeleton); if (p) p.tex.dispose(); this.prevPal.delete(src.skeleton); } }
     }
   }
   _renderVelocity(renderer) {
@@ -393,7 +461,11 @@ export class TemporalAAPass extends Pass {
       px.matrixWorld.copy(src.matrixWorld);
       const u = px.material.uniforms;
       u.tDepth.value = this.depthTexture;
-      if (px.userData.fresh || !this.valid) { u.uPrevModel.value.copy(src.matrixWorld); px.userData.fresh = false; }
+      if (px.userData.skin) {
+        // no history yet: last frame's palette = this frame's (zero motion, not garbage)
+        const pal = this._palette(src.skeleton);
+        if (px.userData.fresh || !this.valid || pal.fresh) { pal.arr.set(src.skeleton.boneMatrices); pal.tex.needsUpdate = true; pal.fresh = false; px.userData.fresh = false; }
+      } else if (px.userData.fresh || !this.valid) { u.uPrevModel.value.copy(src.matrixWorld); px.userData.fresh = false; }
       if (!vis) continue;
       n++;
       const bs = src.geometry.boundingSphere || (src.geometry.computeBoundingSphere(), src.geometry.boundingSphere);
@@ -432,8 +504,10 @@ export class TemporalAAPass extends Pass {
     renderer.shadowMap.autoUpdate = sm;
     for (let i = 0; i < this.proxies.length; i++) {
       const px = this.proxies[i];
-      px.material.uniforms.uPrevModel.value.copy(px.userData.src.matrixWorld);
+      if (!px.userData.skin) px.material.uniforms.uPrevModel.value.copy(px.userData.src.matrixWorld);
     }
+    // last frame's bone palettes for the skinned movers (per skeleton, not per mesh)
+    for (const [sk, pal] of this.prevPal) { pal.arr.set(sk.boneMatrices); pal.tex.needsUpdate = true; }
     return true;
   }
 
@@ -529,6 +603,7 @@ export class TemporalAAPass extends Pass {
     for (const h of this.hist) if (h) h.dispose();
     if (this.velRT) this.velRT.dispose();
     for (const px of this.proxies) px.material.dispose();
+    for (const p of this.prevPal.values()) p.tex.dispose();
     this.resolveMat.dispose(); this.outMat.dispose();
   }
 }

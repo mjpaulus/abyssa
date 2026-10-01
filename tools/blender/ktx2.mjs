@@ -246,9 +246,11 @@ for (const set of Object.keys(man.sets)) {
   const { size } = JSON.parse(fs.readFileSync(rj, 'utf8'));
   const raw = n => new Uint8Array(fs.readFileSync(path.join(BUILD, set + '_' + n + '.rgba')));
   stats[set] = {};
-  for (const [name, w, fmt, srgb, mode, ch] of [
-    ['albedo', size, 'bc1', true, 'srgb', [0, 1, 2]],
-    ['normal', size, 'bc5', false, 'normal', [0, 1]]]) {
+  // (additive, salSkin) a set with a WRINKLE normal map (bake.py: <set>_wrinkle.rgba) gets
+  // it as BC5 too
+  const maps = [['albedo', size, 'bc1', true, 'srgb', [0, 1, 2]], ['normal', size, 'bc5', false, 'normal', [0, 1]]];
+  if (fs.existsSync(path.join(BUILD, set + '_wrinkle.rgba'))) maps.push(['wrinkle', size, 'bc5', false, 'normal', [0, 1]]);
+  for (const [name, w, fmt, srgb, mode, ch] of maps) {
     const t0 = Date.now();
     if (mode === 'srgb') { WR = 0.30; WG = 0.59; WB = 0.11; } else { WR = WG = WB = 1 / 3; }
     const L = chain(planes(raw(name), w, ch), w, mode);

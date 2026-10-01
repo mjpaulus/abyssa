@@ -24,6 +24,7 @@
 import bpy, sys, os, json, math, time
 import numpy as np
 ORMB = {}   # set -> what ORM.B carries ('emit' | 'cavity')
+WRINKLE = set()   # sets that carry a <set>_wrinkle normal map (additive, salSkin)
 
 argv = sys.argv[sys.argv.index('--') + 1:]
 BUILD, ROOT = argv[0], argv[1]
@@ -244,12 +245,42 @@ for set_name, sconf in sets.items():
         emit = np.empty(size * size * 4, np.float32)
         imgs['emit'].pixels.foreach_get(emit)
         log('  baked emit', [p['name'] for p in epieces], '%.1fs' % (time.time() - tp))
+    # ---- WRINKLE (optional, additive; salSkin): pieces exported with a second high (the
+    # same piece with compression gathers in the insides of its joints, <piece>_hiW.ply)
+    # bake its tangent normals, through the same low, into <set>_wrinkle — the game blends it
+    # over the normal map by the live joint bend
+    wrk = None
+    wpieces = [p for p in pieces if p.get('hiW')]
+    if wpieces:
+        tp = time.time()
+        imgs['wrinkle'] = new_img(set_name + '_wrinkle', size, True)
+        inode.image = imgs['wrinkle']
+        scene.cycles.samples = 8
+        first = True
+        for p in wpieces:
+            hw, lo = imp(p['hiW'], p['name'] + '_hiW'), los[p['name']]
+            hw.data.materials.clear()
+            hw.data.materials.append(hmat)
+            for o in bpy.context.view_layer.objects:
+                o.hide_render = o not in (hw, lo)
+            deselect()
+            hw.select_set(True)
+            lo.select_set(True)
+            bpy.context.view_layer.objects.active = lo
+            bpy.ops.object.bake(type='NORMAL', use_selected_to_active=True, cage_extrusion=p['cage'], max_ray_distance=p['ray'],
+                                margin=gutter, margin_type='EXTEND', use_clear=first, target='IMAGE_TEXTURES', normal_space='TANGENT')
+            first = False
+            bpy.data.objects.remove(hw, do_unlink=True)
+        wrk = imgs['wrinkle']
+        log('  baked wrinkle', [p['name'] for p in wpieces], '%.1fs' % (time.time() - tp))
     for o in bpy.data.objects:
         o.hide_render = False
     # ---- write the maps
     files = {}
     files['albedo'] = save_webp(imgs['albedo'], os.path.join(OUT, set_name + '_albedo.webp'), 92)
     files['normal'] = save_webp(imgs['normal'], os.path.join(OUT, set_name + '_normal.webp'), 95)
+    if wrk is not None:
+        files['wrinkle'] = save_webp(wrk, os.path.join(OUT, set_name + '_wrinkle.webp'), 95)
     n = size * size * 4
     ao = np.empty(n, np.float32)
     ro = np.empty(n, np.float32)
@@ -278,8 +309,12 @@ for set_name, sconf in sets.items():
         dump_raw(imgs['albedo'], os.path.join(BUILD, set_name + '_albedo.rgba'), size)
         dump_raw(imgs['normal'], os.path.join(BUILD, set_name + '_normal.rgba'), size)
         dump_raw(om, os.path.join(BUILD, set_name + '_orm.rgba'), om.size[0])
+        if wrk is not None:
+            dump_raw(wrk, os.path.join(BUILD, set_name + '_wrinkle.rgba'), size)
         json.dump({'size': size, 'orm': om.size[0]}, open(os.path.join(BUILD, set_name + '_raw.json'), 'w'))
     stats['sets'][set_name] = {'size': size, 'bytes': files}
+    if wrk is not None:
+        WRINKLE.add(set_name)
     for o in his.values():
         bpy.data.objects.remove(o, do_unlink=True)
     all_lo += list(los.values())
@@ -302,8 +337,146 @@ for sname, st in (man.get('strips') or {}).items():
     stats['sets'][sname] = {'size': W, 'h': H, 'strip': True, 'bytes': files}
     log('  wrote strip', sname, W, H, files)
 
+# ---- SKIN (optional, additive; salSkin): an armature generated from the creature's bone
+# list (the game rig's own pivots, rest pose), and every low whose piece carries `skin`
+# weighted to it by BONE HEAT (Blender's automatic weights: a heat-diffusion solve over the
+# surface from each bone, so the blend across a joint follows the cloth, not a radius),
+# then CLEANED: bones a piece may not follow never deform it (the sleeve can't take a leg
+# bone), weights smoothed across the joints, at most 4 influences, normalised; any vertex the
+# heat solve left empty takes its nearest allowed bone. The .glb then carries JOINTS_0 /
+# WEIGHTS_0 and a skin; the game maps the joint names onto its own rig groups.
+skin_stats = {}
+arm = None
+if man.get('skin') and not ONLY:
+    import mathutils
+    import mathutils.kdtree
+    # bone heat is solved at x10 scale (Blender's heat solve fails outright on a model a few
+    # units tall: measured, every vertex of the trunk came back empty at 1x) and the mesh and
+    # bones are put back to true size afterwards
+    HS = 10.0
+    sw = lambda v: mathutils.Vector((v[0] * HS, -v[2] * HS, v[1] * HS))      # game frame -> Blender (as the PLYs)
+    ad = bpy.data.armatures.new('rig')
+    arm = bpy.data.objects.new('rig', ad)
+    scene.collection.objects.link(arm)
+    deselect()
+    bpy.context.view_layer.objects.active = arm
+    arm.select_set(True)
+    bpy.ops.object.mode_set(mode='EDIT')
+    eb = {}
+    for b in man['skin']['bones']:
+        e = ad.edit_bones.new(b['name'])
+        e.head = sw(b['head'])
+        e.tail = sw(b['tail'])
+        eb[b['name']] = e
+    for b in man['skin']['bones']:
+        if b.get('parent'):
+            eb[b['name']].parent = eb[b['parent']]
+    bpy.ops.object.mode_set(mode='OBJECT')
+    segs = {b['name']: (np.array(sw(b['head'])), np.array(sw(b['tail']))) for b in man['skin']['bones']}
+    for p in man['pieces']:
+        if not p.get('skin'):
+            continue
+        lo = next((o for o in all_lo if o.name == p['name']), None)
+        if lo is None:
+            continue
+        allow = set(p['skin']['allow'])
+        names = sorted(allow)
+        for b in ad.bones:
+            b.use_deform = b.name in allow
+        # the low arrives split along its UV seams (every chart is its own island), and bone
+        # heat cannot diffuse across a cut: weight a WELDED copy (x HS) and carry the weights
+        # back by position
+        import bmesh
+        tmp = lo.copy()
+        tmp.data = lo.data.copy()
+        tmp.name = lo.name + '_weld'
+        scene.collection.objects.link(tmp)
+        bm = bmesh.new()
+        bm.from_mesh(tmp.data)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
+        bm.to_mesh(tmp.data)
+        bm.free()
+        tmp.vertex_groups.clear()
+        tmp.data.transform(mathutils.Matrix.Scale(HS, 4))
+        deselect()
+        tmp.select_set(True)
+        arm.select_set(True)
+        bpy.context.view_layer.objects.active = arm
+        bpy.ops.object.parent_set(type='ARMATURE_AUTO')
+        tv = tmp.data.vertices
+        gi = {}
+        for vg in tmp.vertex_groups:
+            if vg.name in allow:
+                gi[vg.index] = names.index(vg.name)
+        W = np.zeros((len(tv), len(names)))
+        for i, v in enumerate(tv):
+            for g in v.groups:
+                if g.group in gi:
+                    W[i, gi[g.group]] = g.weight
+        P = np.array([v.co[:] for v in tv])
+        empty = np.nonzero(W.sum(axis=1) < 1e-4)[0]
+        # empties (a failed heat solve) -> nearest allowed bone segment
+        if len(empty):
+            D = []
+            for nm in names:
+                a0, b2 = segs[nm]
+                ab = b2 - a0
+                t = np.clip(((P[empty] - a0) @ ab) / max(1e-9, ab @ ab), 0, 1)
+                D.append(np.linalg.norm(P[empty] - (a0 + t[:, None] * ab), axis=1))
+            W[empty, np.argmin(np.array(D), axis=0)] = 1.0
+        # CLEAN (numpy, deterministic): Laplacian smoothing over the welded edges (widens a
+        # too-sharp heat seam across a joint), the 4 largest influences, renormalised
+        E = np.array([e.vertices[:] for e in tmp.data.edges])
+        deg = np.bincount(E.ravel(), minlength=len(tv)).astype(float)
+        for _ in range(p['skin'].get('smooth', 3)):
+            acc = np.zeros_like(W)
+            np.add.at(acc, E[:, 0], W[E[:, 1]])
+            np.add.at(acc, E[:, 1], W[E[:, 0]])
+            W = 0.5 * W + 0.5 * acc / np.maximum(deg, 1)[:, None]
+        if W.shape[1] > 4:
+            cut = np.sort(W, axis=1)[:, -4][:, None]
+            W = np.where(W >= cut, W, 0.0)
+        W[W < 2e-3] = 0.0
+        W /= np.maximum(W.sum(axis=1, keepdims=True), 1e-9)
+        # back onto the split low by position
+        kd = mathutils.kdtree.KDTree(len(tv))
+        for i, v in enumerate(tv):
+            kd.insert(v.co / HS, i)
+        kd.balance()
+        vs = lo.data.vertices
+        src = np.array([kd.find(v.co)[1] for v in vs])
+        WL = W[src]
+        bpy.data.objects.remove(tmp, do_unlink=True)
+        lo.vertex_groups.clear()
+        for k, nm in enumerate(names):
+            vg = lo.vertex_groups.new(name=nm)
+            for i in np.nonzero(WL[:, k])[0]:
+                vg.add([int(i)], float(WL[i, k]), 'REPLACE')
+        lo.parent = arm
+        md = lo.modifiers.new('skin', 'ARMATURE')
+        md.object = arm
+        nz = [int((WL[i] > 1e-3).sum()) for i in range(len(vs))]
+        empty = list(empty)
+        skin_stats[p['name']] = {'verts': len(vs), 'empty': len(empty), 'maxInf': max(nz), 'meanInf': round(sum(nz) / len(nz), 2),
+                                 'groups': [vg.name for vg in lo.vertex_groups]}
+        log('  skinned', p['name'], skin_stats[p['name']])
+    for b in ad.bones:
+        b.use_deform = True
+    # bones back to true size
+    deselect()
+    bpy.context.view_layer.objects.active = arm
+    arm.select_set(True)
+    bpy.ops.object.mode_set(mode='EDIT')
+    for e in ad.edit_bones:
+        e.head = e.head / HS
+        e.tail = e.tail / HS
+    bpy.ops.object.mode_set(mode='OBJECT')
+    stats['skin'] = skin_stats
+
 # ---- the game mesh: every low, one .glb
 deselect()
+if arm is not None:
+    arm.select_set(True)
 for o in all_lo:
     o.data.materials.clear()
     for k in ('visible_camera', 'visible_diffuse', 'visible_glossy', 'visible_transmission', 'visible_volume_scatter', 'visible_shadow'):
@@ -321,7 +494,7 @@ if (man.get('compress') or {}).get('mesh') == 'draco':
 bpy.ops.export_scene.gltf(**gopt)
 stats['glbBytes'] = os.path.getsize(glb)
 meta = {'name': man['name'], 'meta': man.get('meta', {}), 'probes': man.get('probes', {}), 'stats': stats,
-        'sets': dict({k: {'size': v.get('size', 1024), 'ormB': ORMB.get(k, 'cavity')} for k, v in sets.items()},
+        'sets': dict({k: dict({'size': v.get('size', 1024), 'ormB': ORMB.get(k, 'cavity')}, **({'wrinkle': True} if k in WRINKLE else {})) for k, v in sets.items()},
                      **{k: {'size': v['W'], 'h': v['H'], 'strip': True} for k, v in (man.get('strips') or {}).items()})}
 if man.get('compress'):
     meta['compress'] = man['compress']
