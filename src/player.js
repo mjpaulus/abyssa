@@ -188,8 +188,22 @@ const LIN_V = 0.1955, DRAG_V = 0.0327;    // = horizontal * 0.327
 // Added mass: a body accelerating in water must accelerate the water around it. Dividing
 // BOTH the applied acceleration and the drag by AM cancels in the terminal-velocity
 // solution and multiplies the response time — a pure laginess knob that costs no speed.
-const AM_V = 1.26;        // C_a ~ 0.25 along the long axis: (170+45)/170
-const AM_H = 1.55;        // broadside; 1.00 is today's feel, 1.88 is the full physics
+// HEAVIER (Michael, 2026-10-01: "make the swimming feel heavier"). Both raised past the
+// textbook added mass to stand in for what the textbook leaves out — 170 kg of man,
+// brass and lead that the stroke has to get moving and that then keeps going. Terminal
+// speed is untouched (added mass divides force and drag alike); what changes is the
+// ramp both ways: ~1.4 s to 90% of cruise (was ~0.9), ~25 u of carry after the stroke
+// stops (was ~19), a 90-degree change of heading taking ~2.2 s to come round (was ~1.1).
+const AM_V = 1.90;        // was 1.26 (C_a ~ 0.25 along the long axis): rising and sinking are sluggish
+const AM_H = 2.40;        // was 1.55 (1.88 is the full broadside physics)
+// The bottle shove is computed against the SHIPPED added mass, so the burst keeps its
+// full punch — and on a heavier body it now carries ~45 u instead of ~29, which is what
+// makes it read as the one thing that can throw this much brass through the water.
+const AM_BURST_V = 1.26, AM_BURST_H = 1.55;
+// Unworked, he settles. A small downward bias while no stroke, scull or valve key is
+// held: ~0.3 u/s of slow sinking at neutral trim after several seconds. Small beside the
+// dress (the valve spans -1.83..+2.61), so fill and vent still decide where he goes.
+const A_SETTLE = -0.11;
 const G_W = 9.81;         // dry weight over mass — only used once he breaks the surface
 const Y_SUB = -2.15, EMERGE_H = 2.6, SURF_DAMP = 1.5;
 const GROUND_BUOY = 0.9;  // above this he cannot get purchase on the bottom
@@ -412,6 +426,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     if (keys['KeyD'] || keys['ArrowRight']) { player.vel.addScaledVector(right, acc * SCULL * dt); player.scullX = 1; }
     if (keys['Space']) ay += A_KICK;
     if (keys['ControlLeft'] || keys['KeyC']) ay -= A_KICK;
+    if (!(keys['KeyW'] || keys['ArrowUp'] || keys['KeyS'] || keys['ArrowDown'] || keys['KeyA'] || keys['ArrowLeft'] ||
+      keys['KeyD'] || keys['ArrowRight'] || keys['Space'] || keys['ControlLeft'] || keys['KeyC'])) ay += A_SETTLE * (1 - emerge);
 
     // Ambient current nudges him around; the world should never feel perfectly still.
     player.vel.addScaledVector(sampleCurrent(player.pos, t), dt * 0.5);
@@ -419,9 +435,9 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // added mass everything else shifts.
     if (burstA > 0) {
       const k = burstA * dt;
-      player.vel.x += player.burstDir.x * k / AM_H;
-      player.vel.y += player.burstDir.y * k / AM_V;
-      player.vel.z += player.burstDir.z * k / AM_H;
+      player.vel.x += player.burstDir.x * k / AM_BURST_H;
+      player.vel.y += player.burstDir.y * k / AM_BURST_V;
+      player.vel.z += player.burstDir.z * k / AM_BURST_H;
     }
     // Wave-making drag at the waterline, or he corks for half a minute.
     if (emerge > 0) ay -= player.vel.y * SURF_DAMP * emerge;

@@ -54,10 +54,20 @@ against explicit contracts and reviewed on return.
   ratios caused artifacts), resize path (CSS → ResizeObserver → applySize →
   composer.setSize). Canvas z-index 0 / #ui z-index 1 is load-bearing.
 - `player.js` — locomotion. Walking is deliberately PONDEROUS (top ~2.6 u/s, slow
-  ramp, momentum carry) — the user rejected faster/snappier. Swim untouched.
+  ramp, momentum carry) — the user rejected faster/snappier. Swim is HEAVY (Michael,
+  2026-10-01, "make the swimming feel heavier"): added mass AM_H 2.40 / AM_V 1.90 (was
+  1.55 / 1.26) — same cruise speed, longer ramps and carry; the bottle burst is computed
+  against the shipped added mass so it keeps its punch and carries further; an unworked
+  diver settles (A_SETTLE -0.11, small beside the dress's -1.83..+2.61). diver.js: a
+  0.52 Hz kick (was 0.73), slower body yaw in water, a body pendulum under the helmet.
   Air thruster is a BURST model, not a drain: one shove per Shift press (`player.burstDir`
   / `player.burstT`, set by game.js's `tryBurst`), costing AIR_PER_BURST of the tank and
   a 5 s bottle recharge (`survival.thrustCharge`). Holding Shift never repeats it.
+- Camera (`game.js` updateCamera) is GROUNDED (Michael, 2026-10-01, "floaty underwater"):
+  the follow spring damps velocity relative to Sal (zero steady-state lag), no idle drift,
+  the Flow handheld noise layers / stroke roll / interest drift are zeroed (knobs kept on
+  `__hh`), FEEL.surgeK 0, FOV on smoothed speed. Weight cues are EVENTS only: heel-strike
+  nudge/dip, landing sag, burst punch, shake + flinch. Don't re-add continuous wander.
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
   AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
