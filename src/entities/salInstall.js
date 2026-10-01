@@ -286,6 +286,10 @@ const SK_VS_MAIN = `
   vSkWrk = clamp(c * uSkK.x, 0.0, 1.0); vSkStr = clamp(t * uSkK.x, 0.0, 1.0);
   // corrective volume on the inside of the knee and elbow (LBS collapses it)
   transformed += rn * uSkK.y * (0.016 * (kL * b0.x + kR * b0.y) * bk + 0.012 * (eL * b0.z + eR * b0.w) * fr);
+  // UNDERWATER the dress balloons a little (the air in it): everywhere the canvas is free,
+  // not where the belt cinches it or the boots and cuffs hold it (uSkK.z: 0 dry .. 1 sunk)
+  float loose = (1.0 - skW(4.0) - skW(7.0) - skW(10.0) - skW(13.0)) * (1.0 - skG(rp.y - uSkG2.x, 0.10));
+  transformed += rn * uSkK.z * 0.013 * loose;
 }`;
 const SK_FS = `
 uniform sampler2D tSkWrk;
@@ -312,13 +316,16 @@ function skDrive(diver) {
   // hip flexion: the thigh swings forward = root.rotation.x negative
   const hl = -diver.legL.root.rotation.x, hr = -diver.legR.root.rotation.x, w = diver.spine.rotation.x;
   b1.set(Math.sign(hl) * _rs(0.10, 0.95, Math.abs(hl)), Math.sign(hr) * _rs(0.10, 0.95, Math.abs(hr)), Math.sign(w) * _rs(0.04, 0.45, Math.abs(w)), 0);
+  // the balloon: eases in over a couple of seconds after he goes under, out as he climbs out
+  const k = U.uSkK.value, sub = diver.matrixWorld.elements[13] < -1.2 ? 1 : 0;
+  k.z += (sub - k.z) * 0.02;
 }
 function dressMaterial(maps, shared, P) {
-  const m = sculptMat(maps, shared, { env: 0.35 });
+  const m = sculptMat(maps, shared, { env: 0.35, ns: 1.2 });
   const U = {
     tSkWrk: { value: maps.wrinkleMap || maps.normalMap },
     uSkB0: { value: new THREE.Vector4() }, uSkB1: { value: new THREE.Vector4() },
-    uSkG: { value: new THREE.Vector4(P.kneeY, P.elbowY, P.hipX, P.waistY) }, uSkG2: { value: new THREE.Vector4() },
+    uSkG: { value: new THREE.Vector4(P.kneeY, P.elbowY, P.hipX, P.waistY) }, uSkG2: { value: new THREE.Vector4(P.beltY, 0, 0, 0) },
     uSkK: { value: new THREE.Vector4(1, 1, 0, 0) }
   };
   if (maps.wrinkleMap) m.defines = Object.assign(m.defines || {}, { SAL_WRK: '' });
@@ -384,7 +391,7 @@ function installSkinned(diver, shared, A) {
       si.needsUpdate = true; g[k].userData.skRemapped = true;
     }
   }
-  const P = { kneeY: -live.legUp, elbowY: diver.spine.position.y + live.shY - live.armUp, hipX: live.hipX, waistY: diver.spine.position.y + 0.28 };
+  const P = { kneeY: -live.legUp, elbowY: diver.spine.position.y + live.shY - live.armUp, hipX: live.hipX, waistY: diver.spine.position.y + 0.28, beltY: meta.beltY != null ? meta.beltY : diver.spine.position.y + 0.07 };
 
   const helmMat = registerPaint(sculptMat(A.maps.helm, shared, { env: 0.55, ao: 0.9 }), { hero: true });
   const dressMat = registerPaint(dressMaterial(A.maps.dress, shared, P), { hero: true });
@@ -468,6 +475,7 @@ if (typeof window !== 'undefined') {
     bends: () => SK.U ? { b0: SK.U.uSkB0.value.toArray().map(v => +v.toFixed(3)), b1: SK.U.uSkB1.value.toArray().map(v => +v.toFixed(3)), K: SK.U.uSkK.value.toArray() } : null,
     wrinkle: k => { if (SK.U) SK.U.uSkK.value.x = k; return k; },        // wrinkle gain (1)
     bulge: k => { if (SK.U) SK.U.uSkK.value.y = k; return k; },          // corrective volume gain (1)
+    balloon: () => SK.U ? +SK.U.uSkK.value.z.toFixed(3) : null,          // 0 dry .. 1 under
     // ?lab only: put the procedural meshes back / take them away again (A/B in one tab)
     procedural(on) {
       if (!LAB) return 'needs ?lab';

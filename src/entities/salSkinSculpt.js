@@ -131,6 +131,9 @@ function legFolds(P, s) {
     // diagonal pull folds from the crotch down the inner thigh toward the outside of the knee
     o += 0.0055 * a * win(-u, -0.02, -up + 0.06, 0.06) * Math.pow(0.5 + 0.5 * Math.cos(th - INB + 0.4), 1.4)
       * crease(TAU * (u * 0.9 - 0.11 * (th - INB)) / 0.11 + 2 * (vn(u * 6, th, 1, sd + 9) - 0.5));
+    // the canvas's own creasing all down the leg: medium, irregular, mostly across it — the
+    // rubber coat keeps every fold it was ever pushed into
+    o += 0.0040 * a * bfold(u, th, 0.085, 1.1, sd + 4) * win(-u, -0.04, -L + 0.06, 0.06);
     // memory creases behind the knee
     o += 0.0045 * a * gau((u - up) / 0.075) * Math.pow(0.5 + 0.5 * Math.cos(th - BACK), 1.4) * bfold(u, th, 0.048, 0.7, sd + 1);
     // bagged knee: slack canvas standing proud of the knee cap, more so on the right (worn)
@@ -157,6 +160,7 @@ function armFolds(P, s) {
   return (th, y) => {
     const u = -y;
     let o = 0.0045 * a * drape(u, th, 3, sd) * win(-u, -0.06, -L + 0.10, 0.08);
+    o += 0.0032 * a * bfold(u, th, 0.075, 1.3, sd + 4) * win(-u, -0.04, -L + 0.06, 0.06);
     // the crook of the elbow: a few memory creases
     o += 0.0050 * a * gau((u - up) / 0.07) * Math.pow(0.5 + 0.5 * Math.cos(th - FRONT), 1.3) * bfold(u, th, 0.042, 0.8, sd + 1);
     // slack at the point of the elbow
@@ -294,9 +298,12 @@ function dressBake(P, sleeve, seed) {
   const C = {};
   return [
     { type: 'fbm', bake: true, amp: 0.00028, f: 170, oct: 2, seed },
-    { type: 'fn', bake: true, amp: 0.0022, fn: (x, y, z) => {
+    { type: 'fn', bake: true, amp: 0.0036, fn: (x, y, z) => {
       const c = dressCoords(P, x, y, z, Object.assign(C, { sleeve }));
-      let o = 0.0008 * crease(c.th * 9 + c.u * 55 + 2.2 * Math.sin(c.u * 21 + seed));
+      // fine creasing: two crossing families of short stress lines, broken up
+      const br = sst(0.35, 0.7, vn(x * 9, y * 9, z * 9, seed + 40)), br2 = sst(0.4, 0.75, vn(x * 7 + 3, y * 7, z * 7, seed + 41));
+      let o = 0.0011 * br * crease(c.th * 9 + c.u * 55 + 2.2 * Math.sin(c.u * 21 + seed))
+        + 0.0009 * br2 * crease(-c.th * 7 + c.u * 80 + 1.7 * Math.sin(c.th * 5 + seed));
       const pt = patchAt(P, x, y, z, sleeve);
       if (pt.m > 0) {
         o += 0.0014 * pt.m;
@@ -621,7 +628,12 @@ function gearPaint() {
   return P0;
 }
 function dressMats(p) {
-  p.mats[M.CANVAS] = { c: [0.47, 0.385, 0.27], ro: 0.88 };
+  // Navy rubberised twill weathers to a grey-khaki, not a toy tan
+  p.mats[M.CANVAS] = { c: [0.43, 0.37, 0.285], ro: 0.9 };
+  // heavier grime in every fold, and a darker mottle where the coat has soaked and dried
+  p.layers.splice(p.layers.length - 1, 0,
+    { c: [0.15, 0.12, 0.09], a: 0.6, ro: 0.95, m: [['mat', M.CANVAS], ['cav', 0.02, 0.35]] },
+    { c: [0.30, 0.26, 0.20], a: 0.45, m: [['mat', M.CANVAS], ['fn', S => sst(0.5, 0.72, fbm(S.x, S.y, S.z, 5, 81, 4))]] });
   p.mats[M.PATCH] = { c: [0.47, 0.40, 0.27], ro: 0.82 };
   p.mats[M.CORD] = { c: [0.20, 0.15, 0.10], ro: 0.8 };
   return p;
@@ -696,7 +708,7 @@ export function pipeline() {
       mirror: ['handR', 'boot'],
       skinned: ['trunk', 'sleeveL', 'sleeveR'],
       bones: B.map(b => b.name),
-      grip: GRIP,
+      grip: GRIP, beltY: P.beltY,
       metal: 'ormB'
     },
     compress: { mesh: 'draco', tex: 'ktx2' }
