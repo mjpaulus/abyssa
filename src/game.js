@@ -37,7 +37,8 @@ import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, reseedDens } from './world/predators.js';
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks, setKeepsakeState, nearKeepsake, takeKeepsake } from './world/wrecks.js';
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
-import { buildClouds, updateClouds, setCloudWeather } from './world/clouds.js';
+import { buildClouds, updateClouds, setCloudWeather, setPuffsVisible } from './world/clouds.js';
+import { buildSky, updateSky, renderSky, setSkyWeather, volSkyOn } from './world/sky.js';
 import { buildRain, updateRain, setRainWeather } from './world/rain.js';
 import { buildLightning, updateLightning, setBoltRibbons } from './world/lightning.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
@@ -125,6 +126,7 @@ buildTerrain();
 buildFlora();
 buildWater();
 buildClouds();   // instanced puff clusters in the air; must follow buildWater (palette + wind)
+buildSky();      // VOLUMETRIC SKY: noise volumes on the GPU, atmosphere LUT, cloud march targets
 buildRain();     // one instanced draw call of wind-slanted rain streaks, air side only
 buildLightning();   // bolt channels (one instanced draw) + the two-slot bolt light in the fog chunk
 buildCreatures();
@@ -1202,6 +1204,7 @@ function update(dt, t) {
   setWeatherEnv(wx.env);
   setWeatherHand(wx.hand, wx.wind);
   setCloudWeather(wx.hand, wx.env.sky);
+  setSkyWeather(wx);
   setRainWeather(wx.env, windState());   // the eased wind, so the streaks lean on the same curve as the chop
   // The storm's 45% cut to surface irradiance is DAY-GATED now (the sunlit-storm
   // principle, same as the palette desat): a noon gale keeps most of its light —
@@ -1225,7 +1228,10 @@ function update(dt, t) {
   safe('creatures', () => updateCreatures(dt, t));
   safe('fauna', () => updateFauna(dt, t));   // FAUNA PATCH
   updateWater(dt, t);    // NOT decorative: the surface height, optics and refraction key off it
-  safe('clouds', () => updateClouds(dt, t));   // after updateWater: reads its eased wind and its resolved cloud palette
+  // The volumetric sky retires the puffs (they stay built: the A/B, and __vsky.on(0)).
+  if (volSkyOn()) setPuffsVisible(false);
+  else safe('clouds', () => updateClouds(dt, t));   // after updateWater: reads its eased wind and its resolved cloud palette
+  safe('sky', () => updateSky(dt, t));         // after updateWater: reads its palette, hands back the horizon
   safe('rain', () => updateRain(dt, t));       // after updateWater: reads the surface height it just resolved
   updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm));
   updateRifts(dt, t, zone, !!(lev && lev.calmed));
@@ -1820,6 +1826,7 @@ function frame(now = performance.now()) {
     // interface. Runs after update (needs the frame's surface height and camera) and
     // before the composer, so the surface shader samples this frame, not the last one.
     gpuFrameBegin();     // one GPU timer query around the refraction pass + composer
+    renderSky();         // cloud march + history before anything draws the dome
     renderRefraction();
     render(dt);
     gpuFrameEnd();
