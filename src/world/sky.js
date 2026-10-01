@@ -90,14 +90,14 @@ export const VSKY = {
   stars: 1.0,
   edgeLo: 0.05, edgeHi: 0.45,   // cloud edge ramp (crisper silhouettes)
   knee: 0.12,          // soft knee on scattered light (silver lining energy)
-  duskDesat: 0.32,     // sky saturation taken out at a low sun (brass-age, not neon)
+  duskDesat: 0.48,     // sky saturation taken out at a low sun (brass-age, not neon)
   rain: 1.0,           // rain-shaft gain under storm cores
   scud: 1.0,           // torn scud under a storm base
   stormHor: 0.4,       // how much the gale darkens the horizon airlight
   stormHaze: 0.55,     // how much darker the air in front of a gale's deck is than its horizon
   stormDim: 0.75,      // share of the deck's light a gale takes away
   boltK: 0.35,         // lightning glow inside the deck per unit of bolt light
-  lightSat: 0.52,      // saturation kept in the low sun's colour on the clouds
+  lightSat: 0.42,      // saturation kept in the low sun's colour on the clouds
   discR: 0.0085,       // sun disc angular radius, rad (a touch over the real 0.0047)
   discI: 9.0           // disc radiance relative to the normalised sky
 };
