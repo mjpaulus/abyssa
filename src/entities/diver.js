@@ -1874,9 +1874,9 @@ function poseWalk(o, p, a, t, deck) {
   // out — but still swings +/-10 deg with the gait, the lantern's bail riding on it.
   const ra = W.arm(p - ARM_LAG - 0.02) * a;
   const la = W.arm(p + 0.5 - ARM_LAG) * a;
-  o[CH.Rsx] = -0.10 - 0.17 * ra - wsh * 0.012 * ws; o[CH.Rsz] = 0.15; o[CH.Rsy] = -0.10;
+  o[CH.Rsx] = -0.10 - 0.17 * ra - wsh * 0.012 * ws; o[CH.Rsz] = 0.15 - 0.04 * a; o[CH.Rsy] = -0.10;
   o[CH.Re] = -(0.44 + 0.14 * Math.max(0, ra) - 0.05 * Math.max(0, -ra));
-  o[CH.Lsx] = -0.33 * la + 0.03 * a + wsh * 0.012 * ws; o[CH.Lsz] = 0.15 - 0.03 * a; o[CH.Lsy] = 0.05;
+  o[CH.Lsx] = -0.33 * la + 0.03 * a + wsh * 0.012 * ws; o[CH.Lsz] = 0.15 - 0.05 * a; o[CH.Lsy] = 0.05;
   o[CH.Le] = -(0.20 + 0.06 * a + 0.30 * Math.max(0, la) * a);
 }
 
