@@ -259,7 +259,8 @@ export function fbm(x, y, z, f, s, oct = 4) {
 const isM = (S, id) => (S.ma === id ? 1 - S.mw : 0) + (S.mb === id ? S.mw : 0);
 const metalOf = S => (METAL[S.ma] || 0) * (1 - S.mw) + (METAL[S.mb] || 0) * S.mw;
 // verdigris: copper and brass, in the crevices and in patches (mask shared with the emit)
-const verdK = S => (isM(S, M.COPPER) + isM(S, M.BRASS)) * sst(0.06, 0.55, -S.k + 0.35 * (1 - S.ao)) * sst(0.45, 0.68, fbm(S.x, S.y, S.z, 9, 101, 3));
+const verdK = S => (isM(S, M.COPPER) + isM(S, M.BRASS)) * clamp(sst(0.04, 0.45, -S.k + 0.45 * (1 - S.ao)) * sst(0.40, 0.62, fbm(S.x, S.y, S.z, 9, 101, 3))
+  + 0.55 * sst(0.60, 0.74, fbm(S.x, S.y, S.z, 13, 103, 3)) * sst(0.2, -0.6, S.ny), 0, 1);
 // lead oxide bloom: white, in patches and the crevices
 const oxK = S => isM(S, M.LEAD) * clamp(0.28 * sst(0.5, 0.75, fbm(S.x, S.y, S.z, 22, 131, 3)) + 0.5 * sst(0.05, 0.5, -S.k), 0, 1);
 export const metalEmit = S => metalOf(S) * (1 - 0.85 * verdK(S)) * (1 - 0.7 * oxK(S));
@@ -269,11 +270,11 @@ function PAINT(extra = []) {
     kScale: 0.004, aoAlb: 0.45,
     mats: {
       [M.COPPER]: { c: [0.60, 0.35, 0.235], ro: 0.42 },
-      [M.BRASS]: { c: [0.72, 0.57, 0.31], ro: 0.36 },
+      [M.BRASS]: { c: [0.66, 0.52, 0.285], ro: 0.40 },
       [M.LEAD]: { c: [0.30, 0.30, 0.315], ro: 0.78 },
       [M.STEEL]: { c: [0.34, 0.35, 0.37], ro: 0.48 },
       [M.SOLDER]: { c: [0.44, 0.43, 0.41], ro: 0.62 },
-      [M.CANVAS]: { c: [0.47, 0.37, 0.27], ro: 0.86 },
+      [M.CANVAS]: { c: [0.50, 0.375, 0.245], ro: 0.86 },
       [M.DUCK]: { c: [0.16, 0.24, 0.49], ro: 0.92 },
       [M.TAPE]: { c: [0.83, 0.80, 0.72], ro: 0.82 },
       [M.LEATHER]: { c: [0.29, 0.18, 0.105], ro: 0.62 },
@@ -302,11 +303,19 @@ function PAINT(extra = []) {
       // edges the hands and the hose rub
       { c: [0.36, 0.19, 0.12], a: 0.75, ro: 0.58, m: [['mat', M.COPPER], ['fn', S => sst(0.36, 0.66, fbm(S.x, S.y, S.z, 6, 21, 4))]] },
       { c: [0.24, 0.13, 0.09], a: 0.5, ro: 0.7, m: [['mat', M.COPPER], ['fn', S => sst(0.55, 0.8, fbm(S.x * 0.6, S.y * 3, S.z * 0.6, 9, 24, 3)) * sst(-0.2, 0.4, -S.ny)]] },
+      // handled copper: mid-frequency oxide mottling, and the runs of water that dried
+      // down the bonnet in streaks (noise stretched along Y)
+      { c: [0.42, 0.22, 0.14], a: 0.65, ro: 0.55, m: [['mat', M.COPPER], ['fn', S => sst(0.48, 0.70, fbm(S.x, S.y, S.z, 19, 27, 3))]] },
+      { c: [0.30, 0.16, 0.10], a: 0.6, ro: 0.62, m: [['mat', M.COPPER], ['fn', S => sst(0.55, 0.75, fbm(S.x * 4, S.y * 0.5, S.z * 4, 7, 28, 3)) * (0.5 + 0.5 * sst(0.7, 0.2, S.y))]] },
+      { c: [0.40, 0.48, 0.40], a: 0.45, ro: 0.8, m: [['mat', M.COPPER], ['fn', S => sst(0.62, 0.78, fbm(S.x * 4, S.y * 0.6, S.z * 4, 9, 29, 3)) * sst(0.5, 0.1, S.y)]] },
       { c: [0.26, 0.13, 0.08], a: 0.85, ro: 0.72, m: [['mat', M.COPPER], ['cav', 0.04, 0.5]] },
       { c: [0.86, 0.56, 0.40], a: 0.7, ro: 0.2, m: [['mat', M.COPPER], ['cvx', 0.10, 0.6]] },
       // BRASS: dull mottling, tarnish in the crevices, bright on every rim and bolt head
       { c: [0.46, 0.36, 0.18], a: 0.7, ro: 0.55, m: [['mat', M.BRASS], ['fn', S => sst(0.38, 0.70, fbm(S.x, S.y, S.z, 8, 22, 4))]] },
+      { c: [0.50, 0.39, 0.20], a: 0.55, ro: 0.55, m: [['mat', M.BRASS], ['fn', S => sst(0.48, 0.70, fbm(S.x, S.y, S.z, 21, 30, 3))]] },
+      { c: [0.36, 0.30, 0.17], a: 0.5, ro: 0.65, m: [['mat', M.BRASS], ['fn', S => sst(0.56, 0.76, fbm(S.x * 4, S.y * 0.5, S.z * 4, 8, 31, 3))]] },
       { c: [0.30, 0.22, 0.09], a: 0.85, ro: 0.74, m: [['mat', M.BRASS], ['cav', 0.04, 0.5]] },
+      { c: [0.40, 0.32, 0.17], a: 0.55, ro: 0.62, m: [['mat', M.BRASS], ['fn', S => sst(0.5, 0.78, fbm(S.x * 0.7, S.y * 2.2, S.z * 0.7, 5, 26, 3)) * (0.4 + 0.6 * sst(0.3, -0.5, S.ny))]] },
       { c: [0.95, 0.82, 0.52], a: 0.75, ro: 0.18, m: [['mat', M.BRASS], ['cvx', 0.10, 0.6]] },
       // verdigris (the emit takes the metal off it too)
       { c: [0.31, 0.54, 0.45], a: 0.9, ro: 0.88, m: [['fn', verdK]] },
@@ -325,8 +334,11 @@ function PAINT(extra = []) {
 const crease = u => 2 * Math.abs(Math.sin(u * 0.5)) - 1;
 const win = (y, top, bot, fade) => sst(bot - fade, bot, y) * (1 - sst(top, top + fade, y));
 // spec: { drape: [{ n, amp, top, bot, fade, tw, fy, ph }], gath: [{ top, bot, fade, lam, amp, th, k, wv, ph }] }
+// FOLD_K: one gain over every sculpted fold (look-dev: at 1.0 the dress read smooth and
+// puffy under the deck sun; a hard-hat dress is heavy rubberised twill and folds deep)
+const FOLD_K = 1.75;
 function folds(spec) {
-  const D = spec.drape || [], G = spec.gath || [];
+  const D = (spec.drape || []).map(d => Object.assign({}, d, { amp: d.amp * FOLD_K })), G = (spec.gath || []).map(g => Object.assign({}, g, { amp: g.amp * FOLD_K }));
   return (th, y) => {
     let o = 0;
     for (let i = 0; i < D.length; i++) {
@@ -421,10 +433,10 @@ function helmetSpec() {
     mod: (th, y) => { let o = 0; for (const yy of ridges) o += 0.0022 * gau((y - yy) / 0.0055); return o * sst(0.1, 0.2, y); }
   });
   const dents = [[[-0.25, 0.70, -0.30], 0.07], [[0.36, 0.30, -0.25], 0.06], [[0.10, 0.86, -0.18], 0.05]].map(([c, r]) => {
-    const rr = hR(c[1]), k = (rr + r * 0.94) / Math.hypot(c[0], c[2]), p = [c[0] * k, c[1], c[2] * k];
+    const rr = hR(c[1]), k = (rr + r * 0.965) / Math.hypot(c[0], c[2]), p = [c[0] * k, c[1], c[2] * k];
     return Sph(p, r, M.COPPER);
   });
-  let bonnet = Sub(0.04, spun, ...dents);
+  let bonnet = Sub(0.07, spun, ...dents);
   bonnet = Disp([
     { type: 'fbm', amp: 0.0012, f: 4, oct: 2, seed: 5 },                                  // not quite true: raised by hand
     { type: 'pits', bake: true, amp: 0.00016, f: 45, dens: 0.85, r: 0.6, seed: 6 },      // planishing hammer
@@ -610,7 +622,7 @@ function corseletSpec() {
 function hipsSpec() {
   const ch = [];
   const drape = folds({ drape: [{ n: 7, amp: 0.004, top: 0.2, bot: -0.45, fade: 0.05, tw: 1.4, fy: 6, ph: 2 }] });
-  ch.push(LCap(0.02, 0.338, 0.16, M.DUCK, 0.86, drape, 0.006));
+  ch.push(LCap(0.02, 0.338, 0.16, M.DUCK, 0.86, drape, 0.014));
   // the seat sags where the air in the dress can't reach: canvas, rubbed pale
   ch.push(Disp([{ type: 'fn', bake: true, amp: 0.0016, fn: (x, y, z) => 0.0016 * crease(y * 120 + 4 * Math.sin(x * 14)) * sst(0, 0.2, -z) }],
     E([0, -0.140, -0.140], [0.268, 0.160, 0.172], M.CANVAS)));
@@ -618,7 +630,7 @@ function hipsSpec() {
     drape: [{ n: 6, amp: 0.0035, top: 0.0, bot: -0.40, fade: 0.05, tw: 1.0, fy: 5, ph: 0.4 }],
     gath: [{ top: -0.20, bot: -0.40, fade: 0.05, lam: 0.06, amp: 0.005, th: -Math.PI / 2, k: 0.25, wv: 1.6, ph: 0.7 }]
   });
-  ch.push(LCap(-0.10, 0.348, 0.13, M.CANVAS, 0.86, trunkFold, 0.008));
+  ch.push(LCap(-0.10, 0.348, 0.13, M.CANVAS, 0.86, trunkFold, 0.02));
   // THE WEIGHT BELT: bridle leather, welted edges, a cast frame buckle
   ch.push(Band(() => 0.368, 0.03, 0.20, 0.006, M.LEATHER, { sz: 0.90, rr: 0.003, rmax: 0.42 }));
   for (const yy of [-0.064, 0.124]) ch.push(ETor(0.374, 0.0085, 0.03 + yy, M.LEATHER, 1, 0.90));
@@ -668,12 +680,12 @@ function packSpec() {
 const FRONT = Math.PI / 2, BACK = -Math.PI / 2, INB = Math.PI, OUTB = 0;
 // fine creases, bake only: wrinkle lines across the limb near the joints, diagonal elsewhere
 function fineCreases(len, joints, seed) {
-  return { type: 'fn', bake: true, amp: 0.0016, fn: (x, y, z) => {
+  return { type: 'fn', bake: true, amp: 0.0024, fn: (x, y, z) => {
     const th = Math.atan2(z, x);
-    let o = 0.0006 * crease(th * 9 + y * 60 + 2.2 * Math.sin(y * 23 + seed));
+    let o = 0.0009 * crease(th * 9 + y * 60 + 2.2 * Math.sin(y * 23 + seed));
     for (const [yj, w, side] of joints) {
       const k = gau((y - yj) / w) * (0.4 + 0.6 * Math.pow(0.5 + 0.5 * Math.cos(th - side), 2));
-      o += 0.0012 * k * crease(y * 210 + 2.5 * Math.sin(th * 3 + seed) + 1.2 * Math.sin(th * 7 - seed));
+      o += 0.0015 * k * crease(y * 210 + 2.5 * Math.sin(th * 3 + seed) + 1.2 * Math.sin(th * 7 - seed));
     }
     return o;
   } };
@@ -683,7 +695,7 @@ const canvasGrain = seed => ({ type: 'fbm', bake: true, amp: 0.00025, f: 180, oc
 function segment(len, r, prof, fl, m, joints, seed, o = {}) {
   const P = segProf(len, r, prof, o.capT, o.capB);
   const Rb = y => r * prof(clamp(-y / len, 0, 1));
-  const node = Disp([fineCreases(len, joints, seed), canvasGrain(seed + 1)], Lathe(P, m, { mod: fl, amp: 0.012, lip: 0.62 }));
+  const node = Disp([fineCreases(len, joints, seed), canvasGrain(seed + 1)], Lathe(P, m, { mod: fl, amp: 0.022, lip: 0.55 }));
   return { node, R: (th, y) => Rb(y) + fl(th, y) };
 }
 // raised piping down a seam at angle th0, riding the folded surface

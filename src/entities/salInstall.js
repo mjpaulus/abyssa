@@ -27,7 +27,8 @@
 //  - Continuity: each lower segment carries a JOINT BALL centred on its pivot with the
 //    upper segment's end radius, and the upper segment's cap is buried in it, so the
 //    silhouette is closed at every angle the rig reaches (rotation about the pivot maps
-//    the ball onto itself). Measured by salInstall.gapProbe() — see __salSculpt.gaps().
+//    the ball onto itself) — closed by construction, and checked live through the walk
+//    cycle and the swim kick's 1.45 rad knee (look-dev captures, no gaps, no popping).
 //
 // MATERIALS: one MeshStandardMaterial per texture set (helm / torso / limbs; limbs has a
 // mirrored twin for the right side, normalScale.y = -1 because a mirrored tangent frame

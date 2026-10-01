@@ -155,6 +155,12 @@ against explicit contracts and reviewed on return.
   is RETIRED under the hard rule. Sal breathes on ONE clock (`breathPhase()`):
   shoulders, exhaust bursts from the real valve, and the audio regulator share it;
   bursts have character classes and the column boils the surface (`surfaceBoil`).
+  SCULPTED SAL (branch salsculpt): `salSculpt.js` sculpts every rigid part in its bone
+  space through tools/blender (`node tools/blender/build.mjs sal` -> assets/sal); diver.js
+  calls `installSalSculpt` (salInstall.js) which swaps meshes onto the UNTOUCHED rig and
+  keeps the procedural build as the fallback (`?salproc` = A/B; `__salSculpt.state()`,
+  `.procedural(on)` under ?lab). The bake reads limb lengths/profiles out of diver.js:
+  CHANGE PROPORTIONS -> RE-BAKE.
 - `entities/leviathan.js` — FACADE: dispatches on `cfg.kind` (config LEVIATHAN_CFG rows;
   a chart row or `__lev.swap(kind)` can override). Shared machinery in
   `entities/sleeper/common.js` (ward light pool of 5, rune, ward build/touch/flash,
