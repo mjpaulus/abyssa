@@ -20,7 +20,14 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
         pass
 
 
+class Server(ThreadingHTTPServer):
+    # The boot fires 140+ module requests at once; the default listen backlog of 5
+    # made the kernel reset some of them (ERR_CONNECTION_RESET, a failed boot).
+    request_queue_size = 256
+    daemon_threads = True
+
+
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8777
     root = sys.argv[2] if len(sys.argv) > 2 else "."
-    ThreadingHTTPServer(("127.0.0.1", port), partial(NoCacheHandler, directory=root)).serve_forever()
+    Server(("127.0.0.1", port), partial(NoCacheHandler, directory=root)).serve_forever()
