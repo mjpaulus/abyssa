@@ -10,7 +10,12 @@ import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
 // poke it live and the next frame picks it up.
 export { GLASS } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
-import { rippleNormalTex, maxAniso } from '../lib/textures.js';
+import { maxAniso } from '../lib/textures.js';
+// THE SPECTRAL OCEAN: the wave field, its textures, the clipmap and the CPU height query.
+import {
+  buildOcean, updateOcean, setSeaState, probeOcean, oceanHeightAt, oceanTick, dominantComponents,
+  buildOceanGeometry, updateOceanGrid, OCEAN_UNIFORMS, OCEAN_GLSL_DISP, GRID_LEVELS, uOcSea, seaStats
+} from './ocean.js';
 import { scatter } from './flora.js';
 // THE SUN'S SHADOW MAP, read-only. lighting.js imports airAmbience from here, so this
 // closes an import cycle — safe because BOTH sides only touch the other's bindings
@@ -871,44 +876,9 @@ if (typeof window !== 'undefined') {
         refrK: uRefrK.value, refrSide: uRefrSide.value, refrSkipped,
         // SURFACE FILTERING / FOAM ACCUMULATOR probe.
         det: uDet.value.toArray(), rough: uRough.value.toArray(), glit: [uGlit.value.x, uGlit.value.y],
-        acc: uAccA.value.toArray(), accK: uAccK.value.toArray(), accCur, ripple: !!uRipple.value
+        ocean: seaStats()
       };
     },
-    // FOAM ACCUMULATOR READBACK (dev only -- allocates, never call per frame). Mean and
-    // max of the foam (r) and bubble (g) channels over the live target, so persistence
-    // and windrows can be measured rather than eyeballed.
-    accStats() {
-      if (!accRT[accCur]) return null;
-      const n = ACC_N * ACC_N, buf = new Uint16Array(n * 4);
-      renderer.readRenderTargetPixels(accRT[accCur], 0, 0, ACC_N, ACC_N, buf);
-      const h = THREE.DataUtils.fromHalfFloat;
-      let sr = 0, sg = 0, mr = 0, mg = 0, cov = 0;
-      for (let i = 0; i < n; i++) {
-        const r = h(buf[i * 4]), g = h(buf[i * 4 + 1]);
-        sr += r; sg += g; if (r > mr) mr = r; if (g > mg) mg = g; if (r > 0.15) cov++;
-      }
-      return { meanFoam: sr / n, maxFoam: mr, cover15: cov / n, meanBub: sg / n, maxBub: mg, cur: accCur };
-    },
-    // THE INVERSE-MIRROR RESIDUAL, measured without a GPU readback. surfaceForwardAt is
-    // literally what the vertex shader does; feeding its world xz back through
-    // surfaceHeightAt's fixed point must return the height it wrote. The gap is the
-    // honest error every consumer of localSurfaceY() inherits.
-    chopResidual(n, storm, t) {
-      n = n || 200; storm = storm === undefined ? uStormU.value : storm;
-      t = t === undefined ? uTime.value : t;
-      const p = { x: 0, y: 0, z: 0 };
-      let mx = 0, s2 = 0, dmax = 0;
-      for (let i = 0; i < n; i++) {
-        const a = i * 2.399963, r = 40 * Math.sqrt(i / n);
-        const x = Math.cos(a) * r, z = Math.sin(a) * r;
-        surfaceForwardAt(p, x, z, t, storm);
-        dmax = Math.max(dmax, Math.hypot(p.x - x, p.z - z));
-        const e = Math.abs(surfaceHeightAt(p.x, p.z, t, storm) - p.y);
-        mx = Math.max(mx, e); s2 += e * e;
-      }
-      return { n, storm, chop: uChop.value.x * Math.max(ms(storm, 0, 0.9), uWindS.value),
-        maxDisp: dmax, max: mx, rms: Math.sqrt(s2 / n) };
-    }
   };
 }
 
@@ -1451,6 +1421,7 @@ function buildDome() {
       uSurf: { value: new THREE.Vector3(...SURF_LIGHT) },
       uReach: { value: 46 }, uTime, uSunGlow: { value: new THREE.Vector3() },
       uSkyZen, uSkyHor, uSunCol, uSunDir: uSunDirU, uSunSize, uAir,
+      uOcSea, uRough, uGlit,
       abyssaLampA: { value: LAMPA_U }, abyssaLampAC: { value: LAMPAC_U },
       abyssaLampB: { value: LAMPB_U }, abyssaLampBC: { value: LAMPBC_U },
       abyssaLampK: { value: LAMPK_U }, abyssaLampP: { value: LAMPP_U },
@@ -1472,6 +1443,8 @@ function buildDome() {
       ${GLSL_WATER}
       ${GLSL_AIR}
       ${GLSL_SKY}
+      uniform vec4 uOcSea, uRough; uniform vec2 uGlit;
+      ${GLSL_FARSEA}
       ${GLSL_LAMP}
 
       // The far field on the AIR side. Below the horizon it is open sea at grazing
@@ -1487,6 +1460,18 @@ function buildDome() {
       // whiting the sky and leaving the airlight band clear is exactly the seam this
       // function exists to prevent.
       vec3 skyDome( vec3 d, vec3 hz ){
+        // BELOW THE HORIZON, THE SEA GOES ON. The surface mesh stops at camera.far; past
+        // it every wave is unresolved and the sea is the far-sea BRDF the surface itself
+        // eases into, hazed by the same air leg the fog chunk runs (view-depth based,
+        // exactly as the chunk measures it), then the marine layer at full reach.
+        if ( d.y < 0.0 ) {
+          vec3 c = farSea( d, uSurf );
+          float camH = max( cameraPosition.y - ${f(SURFACE_Y)}, 0.3 );
+          vec3 fwd = -vec3( viewMatrix[ 0 ][ 2 ], viewMatrix[ 1 ][ 2 ], viewMatrix[ 2 ][ 2 ] );
+          float La = camH / max( -d.y, 1e-4 ) * max( dot( d, fwd ), 0.05 );
+          c = mix( hz, c, exp( -La * KAIR ) );
+          return airFog( c, 0.0, 1.0 );
+        }
         return airFog( mix( skyRadiance( d ), hz, 1.0 - smoothstep( 0.0, 0.060, d.y ) ),
                        d.y, 1.0 );
       }
@@ -1573,14 +1558,19 @@ function captureSkyEnv() {
   // uAir is forced to 1 for the capture so the dome renders its pure-sky branch: the
   // raft lives at the surface and its reflections are the sky, no matter how deep the
   // PLAYER's camera happens to be when a palette transition lands.
-  const prevAir = uAir.value;
+  const prevAir = uAir.value, prevDisc = uDiscK.value;
   uAir.value = 1;
+  // The disc is left OUT of the capture: on the sea it is the glitter lobe's job (GGX on
+  // the spectrum's roughness), and a blurred disc in the prefiltered sky would draw it
+  // twice. The raft's metal takes its sun from the real key light.
+  uDiscK.value = 0;
   envCam.update(renderer, envScene);
-  uAir.value = prevAir;
+  uAir.value = prevAir; uDiscK.value = prevDisc;
   const old = envRT;
   envRT = envPM.fromCubemap(envCubeRT.texture);
   if (old) old.dispose();
   for (let i = 0; i < envListeners.length; i++) envListeners[i](envRT.texture);
+  _seaEnvDome = envRT.texture; applySeaEnv();
   _envFinger[0] = _pRing[0]; _envFinger[1] = _pRing[1]; _envFinger[2] = _pRing[2];
   _envFinger[3] = _pZen[0]; _envFinger[4] = _pZen[1]; _envFinger[5] = _pZen[2];
   envCool = 2.5;
@@ -1950,119 +1940,22 @@ let _wForce = null;
 // two are compiled into one program, which is exactly what a shared uniform is for.
 const GLSL_WIND_DECL = `uniform vec2 uWindD, uWindK; uniform float uWindS;`;
 
-// CPU mirror of the VERTEX wave pass (the first 3 components — the ones the mesh actually
-// carries as geometry, so this is the height the surface really has). Evaluated at the
-// camera's own xz, where the distance taper is 1 by construction (dist = 0 < fr*0.5).
-//
-// This exists because "is the eye in air?" was being answered THREE different ways that
-// disagreed: the dome used a flat smoothstep(-0.85, 0.15, camY), the occlusion toggle
-// used a hard y > 0, and the surface shader used a correct per-fragment dot(V,N) > 0.
-// Measured consequences of that disagreement: the dome painted sky into the underwater
-// far field as a pale band with terrain silhouetted against it; an 81-123 code-value step
-// as the eye crossed, in the wrong direction (going under got BRIGHTER); and a camera
-// held still at the waterline STROBED by 59% frame-mean as waves swept past the flat
-// threshold. One shared answer, keyed on the real local surface, removes all three.
-const _wavePhase = WAVE.slice(0, 3).map(([lam, deg, a0, a1]) => {
-  const k = 2 * Math.PI / lam, a = deg * Math.PI / 180;
-  return { k, w: DISP * Math.sqrt(k), dx: Math.cos(a), dz: Math.sin(a), a0, a1 };
-});
-// MIRRORS THE WIND BIAS EXACTLY. It has to: game.js clamps the play camera against
-// localSurfaceY() and the refraction clip plane is placed on it, so if the CPU height
-// and the vertex height disagree the eye crosses the interface at the wrong moment and
-// the raft rides a swell the water is not making.
-//
-// THE INVERSE PROBLEM. With the choppy term on, the mesh no longer maps a grid point to
-// the column above it: the vertex shader evaluates the field at a PARAMETER point p and
-// writes the vertex to (p + D(p), h(p)). "What is the surface height at world (x,z)?"
-// is therefore asking for p such that p + D(p) = (x,z), which has no closed form.
-//
-// The standard answer, and the one used here, is the fixed point p <- (x,z) - D(p) from
-// p0 = (x,z). D is a contraction while sum(k_i*A_i)*chop < 1 (the same bound that keeps
-// the surface from folding through itself — see GLASS.chop.k), so it converges
-// geometrically at that ratio: ~0.65 at full storm, i.e. two iterations leave ~0.65^3 of
-// the initial parameter error, and the HEIGHT error is that times |grad h|. Measured
-// residual is reported on the card; two iterations is where it stops paying.
-//
-// Zero-allocation: the per-component wind-biased bearing and amplitude are resolved ONCE
-// into _cw and then reused by every iteration and by the final height sum.
-// `amp` is the DISPLACEMENT amplitude (shipped, unscaled by the gale) and `ampH` the
-// HEIGHT amplitude — see galeAmt() in GLSL_CHOP_DECL. Keeping them separate on the CPU
-// too is what makes this an exact mirror rather than a near one.
-const _cw = [0, 1, 2].map(() => ({ dx: 0, dz: 0, amp: 0, ampH: 0, k: 0, w: 0 }));
+// THE CPU ANSWER TO "HOW HIGH IS THE SEA HERE". The spectral ocean (world/ocean.js)
+// owns it: a probe pass evaluates the exact drawn displacement (same textures, same
+// LOD law, same inverse-displacement fixed point) around the player and the raft and
+// reads it back fence-free; outside those windows the dominant spectral components of
+// the same spectrum answer analytically. The storm argument is kept for the callers'
+// signature -- the field already carries the weather.
 export function surfaceHeightAt(x, z, t, storm) {
-  const sm = THREE.MathUtils.smoothstep(storm, 0, 0.90);
-  const aK = uWindK.value.x, mK = uWindK.value.y, S = uWindS.value;
-  const wx = uWindD.value.x, wz = uWindD.value.y;
-  for (let i = 0; i < 3; i++) {
-    const c = _wavePhase[i], o = _cw[i];
-    const sgn = c.dx * wx + c.dz * wz < 0 ? -1 : 1;
-    const k2 = aK * S;
-    let dx = c.dx + (wx * sgn - c.dx) * k2, dz = c.dz + (wz * sgn - c.dz) * k2;
-    const L = Math.hypot(dx, dz) || 1;
-    dx /= L; dz /= L;
-    const al = dx * wx + dz * wz, al2 = al * al;
-    o.dx = dx; o.dz = dz; o.k = c.k; o.w = c.w;
-    o.amp = (c.a0 + (c.a1 - c.a0) * sm)
-      * (1 + mK * S * (1 - 0.5 * sm))
-      * (1 + S * ((1 - aK) + 2 * aK * al2 - 1));
-    // MIRRORS galeAmt(): the two longest components carry the storm swell scale in their
-    // HEIGHT only. i >= 2 keeps ampH === amp, and at sm = 0 the factor is exactly 1.
-    o.ampH = i < 2 ? o.amp * (1 + (GLASS.chop.galeAmp - 1) * sm) : o.amp;
-  }
-  // EXACTLY the shader's gate (GLSL_WAVE_V/F): at storm 0 wind 0 this is 0 and every
-  // line below collapses to the shipped vertical-only sum.
-  const chop = GLASS.chop.k * Math.max(sm, S);
-  let px = x, pz = z;
-  if (chop > 1e-5) {
-    // SIX, up from four, because of the storm swell scale. The fixed point solves for the
-    // PARAMETER point and its contraction ratio is untouched by galeAmp (the displacement
-    // keeps the shipped amplitude on purpose) — but the HEIGHT error is that parameter
-    // error times |grad h|, and grad h is exactly what the gale scales. Measured at
-    // galeAmp 1.8, wind 0.9, storm 1: four iterations left max 0.050 u, which is the
-    // budget rather than under it; six leave 0.021. The loop early-outs on a converged
-    // step, so calm and moderate seas still run the three they always ran, and the whole
-    // function is evaluated ONCE A FRAME under the camera, not per vertex.
-    for (let it = 0; it < 6; it++) {
-      let dX = 0, dZ = 0;
-      for (let i = 0; i < 3; i++) {
-        const o = _cw[i];
-        const c = o.amp * chop * Math.cos((px * o.dx + pz * o.dz) * o.k + t * o.w);
-        dX += o.dx * c; dZ += o.dz * c;
-      }
-      const nx = x - dX, nz = z - dZ;
-      const step = Math.abs(nx - px) + Math.abs(nz - pz);
-      px = nx; pz = nz;
-      // Early out on a converged step. Measured contraction is ~0.48 at full chop, so
-      // this normally runs 3 of the 4 and the whole loop is 36 trig calls A FRAME — the
-      // function is evaluated once, under the camera, not per vertex. Two iterations left
-      // a 0.110 u worst-case height error against the true mesh; four leaves 0.030.
-      if (step < 1e-3) break;
-    }
-  }
-  let h = 0;
-  for (let i = 0; i < 3; i++) {
-    const o = _cw[i];
-    h += o.ampH * Math.sin((px * o.dx + pz * o.dz) * o.k + t * o.w);
-  }
-  return h;
+  return oceanHeightAt(x, z, t);
 }
-// Debug/verification surface: the FORWARD map, i.e. exactly what the vertex shader does.
-// Given a parameter point it returns the world xz the mesh puts there and the height it
-// writes. surfaceHeightAt(forward) must return that height back — that round trip IS the
-// residual measurement, and it needs no GPU readback.
-export function surfaceForwardAt(p, x, z, t, storm) {
-  const sm = THREE.MathUtils.smoothstep(storm, 0, 0.90);
-  surfaceHeightAt(x, z, t, storm);            // fills _cw for this (t, storm, wind)
-  const chop = GLASS.chop.k * Math.max(sm, uWindS.value);
-  let dX = 0, dZ = 0, h = 0;
-  for (let i = 0; i < 3; i++) {
-    const o = _cw[i], q = (x * o.dx + z * o.dz) * o.k + t * o.w;
-    const c = o.amp * chop * Math.cos(q);
-    dX += o.dx * c; dZ += o.dz * c; h += o.ampH * Math.sin(q);
-  }
-  p.x = x + dX; p.z = z + dZ; p.y = h;
-  return p;
-}
+// Raft hull collar for the surface shader: centre xz, half-size, |heave rate|.
+const uRaftC = { value: new THREE.Vector4(0, 0, 4.7, 0) };
+export function setRaftContact(x, z, half, vy) { uRaftC.value.set(x, z, half, Math.min(1.5, Math.abs(vy))); }
+const uSeaEnv = { value: null }, uEnvK = { value: 1 }, uFarR = { value: 700 };
+// The player window of the CPU height probe follows this point (game.js pushes Sal).
+const _focus = { x: 0, z: 0, set: false };
+export function setOceanFocus(x, z) { _focus.x = x; _focus.z = z; _focus.set = true; }
 // 0 = eye fully in water, 1 = fully in air. The band is half a helmet: narrow enough that
 // the transition is a moment, wide enough not to alias on a chopping surface.
 const AIR_BAND = 0.35;
@@ -2092,197 +1985,6 @@ export function surfaceBoil(x, z, strength) {
 // debug surface (kept, like window.pred / window.__helm)
 if (typeof window !== 'undefined') window.__boil = () => uBoil.value;
 
-// Unrolled from JS because GLSL ES 1.00 (what three compiles a plain ShaderMaterial as)
-// has no array constructors — `const float A[6] = float[6](...)` is a 3.00-only form.
-// `dist` retires each component before the mesh stops resolving it; see WAVE above and
-// the ring-spacing note in buildSurfaceGeo.
-//
-// THE CHOPPY TERM. Each component now also displaces the surface HORIZONTALLY along its
-// own bearing: D_i = dw_i * chop * A_i * cos(q_i). Its parameter derivative is
-// -A_i k_i chop sin(q_i), which is NEGATIVE at a crest (q = pi/2) and positive in a
-// trough — vertices crowd toward the crests and stretch across the backs, which is the
-// whole Gerstner trick and the entire difference between a rolling sine sea and the
-// steep-fronted one in Michael's poseidon frames. It is the classic form written for
-// this field's sin() phase convention (h = A sin(q) is A cos(q - pi/2), so the standard
-// -dir*Q*A*sin(theta) becomes +dir*Q*A*cos(q)).
-//
-// The Jacobian falls out of the same sin/cos pair for free. With s_i = -A_i k_i chop
-// sin(q_i), the horizontal displacement's Jacobian is sum(s_i * outer(dw_i, dw_i)) —
-// symmetric, three floats — and TWO things read it:
-//   * det(I + J) < 1 is the foam birth test (piece 2), and
-//   * the true surface normal, because the world-space gradient of a displaced surface
-//     is (I + J)^-1 * grad_p h, not grad_p h. Getting this wrong would leave the shading
-//     flat on exactly the steep fronts the displacement just built.
-// Note trace(J) = sum(s_i) because every dw is a unit vector, which is why the three
-// LAGGED compression samples cost one float each instead of three.
-function waveSum(n, mode) {
-  let s = '';
-  for (let i = 0; i < n; i++) {
-    const [lam, deg, a0, a1, fr] = WAVE[i];
-    const k = 2 * Math.PI / lam, w = DISP * Math.sqrt(k), a = deg * Math.PI / 180;
-    const dx = Math.cos(a), dz = Math.sin(a);
-    // d0 -> dw: the bearing dragged onto the wind axis, taking whichever SIGN of the
-    // wind vector is nearer so a component never has to swing through 180 degrees (and
-    // so a beam wind rotates the chop rather than reversing its travel).
-    s += `\n  { vec2 d0=${v2([dx, dz])};
-    vec2 dw=normalize( mix( d0, uWindD*(dot(d0,uWindD)<0.0?-1.0:1.0), uWindK.x*uWindS ) );
-    float al=dot(dw,uWindD); al*=al;
-    float amp=mix(${f(a0)},${f(a1)},sm)
-      *(1.0+uWindK.y*uWindS*(1.0-0.5*sm))
-      *(1.0+uWindS*(mix(1.0-uWindK.x,1.0+uWindK.x,al)-1.0))
-      *(1.0-smoothstep(${f(fr * 0.5)},${f(fr)},dist));
-    float q=dot(p,dw)*${f(k)}+t*${f(w)};
-    float sq=sin(q), cq=cos(q);
-    float ampH=amp${i < 2 ? '*gA' : ''};
-    h+=ampH*sq;`;
-    if (mode === 'v') {
-      s += `\n    D+=dw*(amp*chop*cq); }`;
-    } else if (mode === 's') {
-      // SPILL PROBE: the compression trace and its lags ONLY. trace(J) = sum(s_i)
-      // because every dw is a unit vector, so this answers "is/was this parcel
-      // folding" for the price of one sin/cos per component — no height, no
-      // gradient, no Jacobian inverse, no matrix solve.
-      s += `\n    float sc=-amp*${f(k)}*chop;
-    tr+=sc*sq;`;
-      for (let L = 0; L < CHOP_LAGS.length; L++) {
-        const tau = CHOP_LAGS[L];
-        s += `\n    t${L + 1}+=sc*(sq*${f(Math.cos(w * tau))}-cq*${f(Math.sin(w * tau))});`;
-      }
-      s += ` }`;
-    } else {
-      s += `\n    g+=dw*(ampH*${f(k)}*cq);
-    float sc=-amp*${f(k)}*chop;
-    float s0=sc*sq;
-    jx+=s0*dw.x*dw.x; jc+=s0*dw.x*dw.y; jz+=s0*dw.y*dw.y;`;
-      // Lagged compression, exactly: sin(q - w*tau) = sin q cos(w tau) - cos q sin(w tau).
-      // The parameter point p labels a water PARTICLE in a Gerstner field, so this is not
-      // an approximation of "did this patch fold recently" — it is that question answered.
-      for (let L = 0; L < CHOP_LAGS.length; L++) {
-        const tau = CHOP_LAGS[L];
-        s += `\n    t${L + 1}+=sc*(sq*${f(Math.cos(w * tau))}-cq*${f(Math.sin(w * tau))});`;
-      }
-      s += ` }`;
-    }
-  }
-  return s;
-}
-// The gate. chop is EXACTLY mirrored by surfaceHeightAt on the CPU; at storm 0 wind 0 it
-// is zero, D is zero, J is zero, det is 1 and every line here is the shipped field.
-const GLSL_CHOP_DECL = `uniform vec4 uChop, uChop2; uniform vec3 uLagW; uniform vec2 uChopX;
-uniform float uGale;
-float chopAmt( float sm ){ return uChop.x*max(sm,uWindS); }
-// STORM SWELL SCALE. GLASS.chop.galeAmp, faded in by the SAME storm smoothstep the wave
-// amplitudes themselves use, so at storm 0 this is exactly 1.0 and the calm field is
-// bit-identical. Applied to the two longest components' HEIGHT (and therefore to grad h)
-// and NOT to the Gerstner displacement or the Jacobian — a big swell is long and tall,
-// not steep, and keeping sum(k*A)*chop at its shipped value is what keeps the no-fold
-// bound, the CPU fixed point's contraction ratio and the foam birth test all unchanged.
-float galeAmt( float sm ){ return mix( 1.0, uGale, sm ); }
-// THE FOLD TEST, written the only way that is DEFINED.
-//
-// This block used to ask smoothstep( thr, thr-sf, det ) — a DECREASING ramp expressed by
-// putting the high edge first. The GLSL spec says results are undefined when
-// edge0 >= edge1, and it means it: measured live in this project's own browser pane, that
-// call returns EXACTLY 0.0 for every input, which silently deleted the whole Jacobian
-// foam (the live term AND all three lagged terms) with no error and no warning. A gale
-// was therefore wearing only the old height-led whitecap and the legacy wind streaks —
-// a large part of why the storm read to Michael as "there is no breaking".
-//
-// 1 - smoothstep(lo, hi, x) is the same function, exactly, and is defined everywhere. On
-// a driver where the reversed form happened to work, this is a bit-for-bit no-op.
-float foldK( float thr, float sf, float x ){ return 1.0 - smoothstep( thr - sf, thr, x ); }`;
-// Vertex pass: the three components the mesh can actually carry as geometry, now with the
-// horizontal displacement that steepens their faces.
-const GLSL_WAVE_V = `${GLSL_WIND_DECL}
-${GLSL_CHOP_DECL}
-float waveH( vec2 p, float t, float storm, float dist, out vec2 disp ){
-  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 D=vec2(0.0);
-  float chop=chopAmt(sm), gA=galeAmt(sm);${waveSum(3, 'v')}
-  disp=D; return h;
-}`;
-// Fragment pass: all six, height, the TRUE (displaced) gradient, and the Jacobian foam
-// intensity. The gradient is the normal, and the normal is the whole image — it decides
-// refraction, reflection and Fresnel at once.
-const GLSL_WAVE_F = `${GLSL_WIND_DECL}
-${GLSL_CHOP_DECL}
-float waveField( vec2 p, float t, float storm, float dist, out vec2 grad, out float foam ){
-  float sm=smoothstep(0.0,0.90,storm), h=0.0; vec2 g=vec2(0.0);
-  float chop=chopAmt(sm), gA=galeAmt(sm);
-  float jx=0.0, jc=0.0, jz=0.0, t1=0.0, t2=0.0, t3=0.0;${waveSum(6, 'f')}
-  // det(I + J). Floored well clear of zero: chop is held under the folding bound so the
-  // true det cannot reach 0, but a floor is one instruction and it makes the inverse
-  // below structurally safe rather than safe-by-argument.
-  float det=(1.0+jx)*(1.0+jz)-jc*jc;
-  float ds=max(det,0.12);
-  grad=vec2( ((1.0+jz)*g.x-jc*g.y)/ds, ((1.0+jx)*g.y-jc*g.x)/ds );
-  // FOAM: born where the surface is folding now, kept alive where this parcel folded in
-  // the last ~4 s. The lagged samples use the first-order det (1 + trace), which is the
-  // same test to the order that matters and costs one float per lag.
-  float thr=uChop.y, sf=max(uChop.z,0.02);
-  foam=foldK(thr,sf,det);
-  float lk=uChopX.y;
-  foam=max(foam,lk*uLagW.x*foldK(thr,sf,1.0+t1));
-  foam=max(foam,lk*uLagW.y*foldK(thr,sf,1.0+t2));
-  foam=max(foam,lk*uLagW.z*foldK(thr,sf,1.0+t3));
-  foam*=uChop.w;
-  return h;
-}`;
-// SPILLING BREAKERS — the fold question asked somewhere ELSE.
-//
-// Michael: "there is no breaking." Foam that only sits on the fold line is a crease,
-// not a breaker; the reference's violence is whitewater avalanching DOWN the leading
-// face of a collapsing crest. That is TRANSPORT, and the Gerstner field's Lagrangian
-// bookkeeping already carries it: a parcel a little UPSLOPE of this fragment that
-// folded tau seconds ago shed white water which has since slid downhill to here. So
-// the fragment samples the compression at points up its own gradient (+grad h is
-// uphill) and reads the LAGGED trace there — near point with the short lag, far point
-// with the long one. The band therefore persists and slides down-face as the wave
-// advances, with no history texture and no render target, exactly like the foam it
-// extends.
-//
-// Returns (live trace, lag1, lag2, lag3). det(I+J) to first order is 1 + trace, which
-// is the same test waveField's lagged samples already use.
-const GLSL_FOLD = `vec4 foldTrace( vec2 p, float t, float storm, float dist ){
-  float sm=smoothstep(0.0,0.90,storm), h=0.0;
-  float chop=chopAmt(sm), gA=galeAmt(sm);
-  float tr=0.0, t1=0.0, t2=0.0, t3=0.0;${waveSum(6, 's')}
-  return vec4(tr,t1,t2,t3);
-}`;
-
-// Camera-centred polar disc, exponentially spaced rings. The old uniform 820x820 grid
-// spent 34,848 triangles at a flat 6.21 u pitch: far too coarse at 5 units away (where
-// the diver actually meets the interface) and absurdly dense at 400 (where fog has eaten
-// it). This gives 0.085 u cells at r = 1.2 and 32 u at r = 460 in 22,400 triangles.
-// Ring spacing is 0.0708*r everywhere, so each WAVE component is kept at >= 4 vertices
-// per wavelength wherever it is at full amplitude and tapered to zero before it drops
-// under Nyquist — which matters more here than usual, because the mesh is camera-anchored
-// while the field is world-anchored, so any aliasing would CRAWL as the diver swims.
-// Sectors index modulo NS, so there is no duplicated seam ring and no crack at theta = 0.
-function buildSurfaceGeo() {
-  const R0 = 1.2, RMAX = 460, NR = 88, NS = 128;
-  const ratio = Math.pow(RMAX / R0, 1 / (NR - 1));
-  const pos = new Float32Array((NR * NS + 1) * 3);   // vertex 0 is the centre, at r = 0
-  for (let i = 0; i < NR; i++) {
-    const r = R0 * Math.pow(ratio, i);
-    for (let s = 0; s < NS; s++) {
-      const a = s * Math.PI * 2 / NS, o = (1 + i * NS + s) * 3;
-      pos[o] = Math.cos(a) * r; pos[o + 2] = Math.sin(a) * r;
-    }
-  }
-  const idx = new Uint16Array(NS * 3 + (NR - 1) * NS * 6);
-  let k = 0;
-  for (let s = 0; s < NS; s++) { idx[k++] = 0; idx[k++] = 1 + s; idx[k++] = 1 + (s + 1) % NS; }
-  for (let i = 0; i < NR - 1; i++) for (let s = 0; s < NS; s++) {
-    const a0 = 1 + i * NS + s, a1 = 1 + i * NS + (s + 1) % NS;
-    idx[k++] = a0; idx[k++] = a0 + NS; idx[k++] = a1 + NS;
-    idx[k++] = a0; idx[k++] = a1 + NS; idx[k++] = a1;
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  g.setIndex(new THREE.BufferAttribute(idx, 1));
-  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), RMAX * 1.05);
-  return g;
-}
 
 // ---------------------------------------------------------------------------
 // SCREEN-SPACE REFRACTION — the sea's transmission term becomes real.
@@ -2459,98 +2161,78 @@ export function renderRefraction() {
 }
 
 // ---------------------------------------------------------------------------
-// FOAM ACCUMULATOR (roadmap/ref-foam-accumulator.md). A 256^2 HalfFloat ping-pong
-// target, RepeatWrapping, tiled over ACC_TILE world units of PARAMETER space around
-// the camera. Each frame a fullscreen pass integrates our own fold source (foldTrace,
-// the same GLSL chunk the surface's spilling breakers read) as a RATE with exponential
-// decay -- equilibrium coverage rate*duty/decay, so only water that keeps breaking
-// goes white -- advected downwind by a uv offset, plus a slower bubble channel. The
-// lags stay the instant layer; this is the memory. Texel (u,v) stands for the world
-// point congruent to it mod ACC_TILE that lies nearest the camera, so as Sal moves the
-// texels leaving the window on one side re-enter on the other carrying a few seconds
-// of stale foam that decays out; the surface fades the mask before the window edge.
-// OWN attachments, depth NONE, never shared (GL_INVALID_OPERATION history). Zero
-// per-frame allocation: two targets built once, swapped by reference.
-const ACC_N = 256, ACC_TILE = 120;
-let accRT = [null, null], accCur = 0, accScene = null, accCam = null, accMat = null;
-// uAccK = (foamRate, foamAccDecay s, bubbleDecay s, invTile); uAccK2 = (advect u/s at wind 1, 0).
-const uAccPrev = { value: null }, uAccDt = { value: 0 };
-const uAccK = { value: new THREE.Vector4(1.6, 9, 20, 1 / ACC_TILE) }, uAccK2 = { value: new THREE.Vector2(0.6, 0) };
-function buildFoamAcc() {
-  for (let i = 0; i < 2; i++) {
-    const rt = new THREE.WebGLRenderTarget(ACC_N, ACC_N, {
-      type: THREE.HalfFloatType, format: THREE.RGBAFormat,
-      minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter,
-      wrapS: THREE.RepeatWrapping, wrapT: THREE.RepeatWrapping,
-      depthBuffer: false, stencilBuffer: false, generateMipmaps: false
-    });
-    accRT[i] = rt;
-  }
-  accMat = new THREE.ShaderMaterial({
-    uniforms: {
-      uPrev: uAccPrev, uDt: uAccDt, uAccK, uAccK2, uAccC, uTime, uStorm: uStormU,
-      uWindD, uWindS, uWindK, uChop, uChop2, uLagW, uChopX, uGale
-    },
-    depthTest: false, depthWrite: false,
-    vertexShader: `varying vec2 vUv;
-      void main(){ vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }`,
-    fragmentShader: `${GLSL_WIND_DECL}
-      ${GLSL_CHOP_DECL}
-      ${GLSL_FOLD}
-      uniform sampler2D uPrev; uniform vec4 uAccK; uniform vec2 uAccC, uAccK2;
-      uniform float uDt, uTime, uStorm;
-      varying vec2 vUv;
-      void main(){
-        float tile = 1.0 / uAccK.w;
-        // The world (parameter) point this texel stands for: congruent to vUv mod the
-        // tile, nearest the camera.
-        vec2 p = uAccC + ( fract( vUv - uAccC * uAccK.w + 0.5 ) - 0.5 ) * tile;
-        // dist 0: every component at full amplitude. The surface retires components
-        // with distance for its own mesh reasons; foam memory has no such reason.
-        vec4 ft = foldTrace( p, uTime, uStorm, 0.0 );
-        float thr = uChop.y, sf = max( uChop.z, 0.02 );
-        float fold = foldK( thr, sf, 1.0 + ft.x );
-        // Advection: what was here came from upwind.
-        vec2 adv = uWindD * ( uWindS * uAccK2.x * uDt * uAccK.w );
-        vec4 prev = texture2D( uPrev, vUv - adv );
-        // Entrainment is a RATE, not a level: integrating it gives an equilibrium
-        // coverage instead of snapping every touched texel to white.
-        float foam = prev.r * exp( -uDt / uAccK.y ) + fold * uAccK.x * uDt;
-        // A small linear bleed so the tail actually reaches zero (an exponential never
-        // does, and a 0.01 haze over the whole window read as dirt). 0.004/s takes
-        // 12 s to remove 0.05 -- well under the exponential's own share.
-        foam = max( foam - uDt * 0.004, 0.0 );
-        float bub = prev.g * exp( -uDt / uAccK.z ) + fold * uAccK.x * uDt * 0.55;
-        gl_FragColor = vec4( min( foam, 1.0 ), min( bub, 1.0 ), 0.0, 1.0 );
-      }`
-  });
-  accScene = new THREE.Scene();
-  accScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), accMat));
-  accCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-  uFoamAcc.value = accRT[0].texture;
+// THE FAR SEA — one BRDF, shared by the surface's far band and the dome below the
+// horizon, so the sea runs past camera.far to the true horizon with no seam.
+// ---------------------------------------------------------------------------
+// Past the last resolved wave every slope the spectrum carries is unresolved, so the
+// sea there IS a microfacet surface with roughness sqrt(total mss) (Bruneton et al.'s
+// geometry-to-BRDF hand-off). Two consequences drive the far look, and both are why
+// the old horizon was a white band:
+//   * the facets a grazing eye actually SEES are the ones tilted toward it, so the
+//     mean reflected ray climbs above the horizon by ~ the slope spread: the far sea
+//     reflects sky from a few degrees UP (bluer, darker than the horizon ring), not
+//     the horizon ring itself;
+//   * Fresnel is averaged over those facets, so it stops short of 1.0 at grazing.
+// The result is the real horizon: a sea darker than the sky directly above it, a
+// clean line where they meet, and the sun's glitter path running all the way to it.
+// uOcSea = (Hs u, total mss, peak wavelength u, sea state). Needs GLSL_SKY + uSunDir,
+// uSunCol, uDiscK, uRough, uGlit in scope.
+const GLSL_FARSEA = `
+float oceanF( float c ){ return 0.020383 + 0.979617 * pow( 1.0 - c, 5.0 ); }
+float ggxD( float NoH, float a ){
+  float a2 = a * a;
+  float d = ( NoH * a2 - NoH ) * NoH + 1.0;
+  return a2 / max( 3.14159265 * d * d, 1e-8 );
 }
-// Runs inside updateWater (after the wind ease, so the fold source and the surface read
-// the same wind). Skipped while the surface itself is retired or the eye is deep enough
-// that the ceiling foam has faded out; the targets then simply hold.
-function updateFoamAcc(dt) {
-  if (!accMat || !surface.visible || camera.position.y < -45 || GLASS.chop.foamAccK <= 0) return;
-  const CH = GLASS.chop;
-  uAccK.value.set(CH.foamRate, Math.max(0.2, CH.foamAccDecay), Math.max(0.2, CH.bubbleDecay), 1 / ACC_TILE);
-  uAccK2.value.set(CH.foamAdvect, 0);
-  uAccDt.value = Math.min(dt, 0.1);
-  uAccC.value.set(camera.position.x, camera.position.z);
-  const next = accCur ^ 1;
-  uAccPrev.value = accRT[accCur].texture;
-  const prevRT = renderer.getRenderTarget();
-  const prevShadow = renderer.shadowMap.autoUpdate;
-  renderer.shadowMap.autoUpdate = false;
-  renderer.setRenderTarget(accRT[next]);
-  renderer.render(accScene, accCam);
-  renderer.setRenderTarget(prevRT);
-  renderer.shadowMap.autoUpdate = prevShadow;
-  accCur = next;
-  uFoamAcc.value = accRT[accCur].texture;
+float smithGGXCorrelated( float NoV, float NoL, float a ){
+  float a2 = a * a;
+  float gv = NoL * sqrt( NoV * NoV * ( 1.0 - a2 ) + a2 );
+  float gl = NoV * sqrt( NoL * NoL * ( 1.0 - a2 ) + a2 );
+  return 0.5 / max( gv + gl, 1e-6 );
 }
+// The sun on a microfacet sea. alpha is the unresolved roughness; the painted disc's
+// half-angle widens the lobe and its solid angle normalises it (uGlit), and the soft
+// cap 1 - exp(-x) means a pixel can never carry more than the mirror answer L * F.
+vec3 seaGlitter( vec3 N, vec3 V, float alpha, float sh ){
+  float NoL = dot( N, uSunDir );
+  if ( NoL <= 0.0 ) return vec3( 0.0 );
+  vec3 H = normalize( uSunDir - V );
+  float NoH = max( dot( N, H ), 0.0 );
+  float VoH = max( -dot( V, H ), 1e-4 );
+  float NoV = max( -dot( V, N ), 1e-4 );
+  float aP = min( alpha + uGlit.x, 1.0 );
+  float D = ggxD( NoH, aP );
+  float Vis = smithGGXCorrelated( NoV, max( NoL, 1e-4 ), alpha );
+  float Fs = oceanF( VoH );
+  float gx = uGlit.y * uRough.w * D * Vis * NoL;
+  return uSunCol * ( uDiscK * gOcc * sh * Fs * ( 1.0 - exp( -gx ) ) );
+}
+// Reflected ray of a rough sea: lifted by the visible-facet tilt.
+vec3 seaReflDir( vec3 V, vec3 N, float alpha ){
+  vec3 R = reflect( V, N );
+  R.y = max( R.y, 0.55 * alpha * ( 1.0 - abs( V.y ) ) + 0.004 );
+  return normalize( R );
+}
+float seaFresnel( vec3 V, vec3 N, float alpha ){
+  return oceanF( clamp( max( -dot( V, N ), 0.45 * alpha ), 0.0, 1.0 ) );
+}
+// The water body seen from far above at grazing incidence: the column's own deep
+// colour, the same seaBody() grade the near surface uses.
+vec3 farBody( vec3 surfIrr ){
+  vec3 c = abyssaAmbient( surfIrr, -40.0 ) * 0.92;
+  return mix( c, vec3( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ) ), 0.35 ) * 0.46;
+}
+vec3 farSea( vec3 V, vec3 surfIrr ){
+  float alpha = clamp( sqrt( uOcSea.y + 0.003 ), 0.04, 0.6 );
+  vec3 N = vec3( 0.0, 1.0, 0.0 );
+  float F = seaFresnel( V, N, alpha );
+  gSunK = 0.0; gHaloK = 1.0;
+  vec3 R = seaReflDir( V, N, alpha );
+  vec3 c = skyRadiance( R ) * F + farBody( surfIrr ) * ( 1.0 - F );
+  gSunK = 1.0;
+  c += seaGlitter( N, V, alpha, 1.0 );
+  return c;
+}`;
 
 function buildSurface() {
   // uSkyZen/uSkyHor/uSunCol/uSunDir/uSunSize/uStorm + SKY_UNIFORMS are the module-scoped
@@ -2561,69 +2243,93 @@ function buildSurface() {
     uTime, uCam,
     uSunDir: uSunDirU, uSkyZen, uSkyHor, uSunCol, uSunSize, uStorm: uStormU,
     ...SKY_UNIFORMS,
+    ...OCEAN_UNIFORMS,
     uFlash: { value: 0 },
-    uMirrorK: { value: 1 }, uNearK: { value: 1 }, uFoamThr: { value: 0.34 },
-    uBright: { value: 1 }, uFade: { value: 1 }, uDbg,
+    uMirrorK: { value: 1 }, uNearK: { value: 1 },
+    uBright: { value: 1 }, uFade: { value: 1 }, uDbg, uAir,
     uRefr, uRefrK, uRefrSide, uRes,
-    uWindD, uWindS, uWindK, uCap, uChop, uChop2, uLagW, uChopX, uGale, uSss, uSss2,
-    uOpaq, uOpaq2, uSpill, uBoil,
-    uRipple, uDet, uRough, uGlit, uFoamAcc, uAccA, uAccC, uAccS,
-    uSunShadow, uSunShadowMat, uShadowK
+    uWindD, uWindS, uCap, uChop2, uSss, uSss2,
+    uOpaq, uOpaq2, uBoil, uDet, uRough, uGlit,
+    uSunShadow, uSunShadowMat, uShadowK,
+    uRaftC, uSeaEnv, uEnvK, uFarR
   });
-  uRipple.value = rippleNormalTex();
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
+    defines: {},
     vertexShader: `#include <fog_pars_vertex>
-      ${GLSL_WAVE_V}
-      uniform float uTime, uStorm; uniform vec3 uCam;
+      ${OCEAN_GLSL_DISP}
+      uniform vec2 uOcLevC[ ${GRID_LEVELS} ];
+      uniform vec3 uCam;
+      uniform float uAir;
       varying vec3 vW;
-      // THE PARAMETER POINT. vW is where the vertex ENDS UP; vP0 is the point of the wave
-      // field it came from. With horizontal displacement on, the two are no longer the
-      // same, and every wave quantity the fragment shader wants — height, gradient,
-      // Jacobian, foam — is a function of the PARAMETER point. Evaluating them at vW.xz
-      // instead would shade the surface with a field shifted up to ~1.4 u sideways: the
-      // normals would slide off the fronts they belong to and the foam would sit beside
-      // the fold instead of on it. World-space patterns (caustics, foam texture, splash
-      // lattices, distance) still read vW, because those live in the world.
+      // THE PARAMETER POINT. vW is where the vertex ENDS UP; vP0 is the point of the
+      // wave field it came from (the FFT textures are indexed by it). Every wave
+      // quantity the fragment wants -- slope, Jacobian, foam -- is a function of vP0;
+      // world-space patterns (caustics, splash lattices, distance) read vW.
       varying vec2 vP0;
+      varying vec2 vG;          // the UNMORPHED grid point, for the clipmap band discard
+      varying float vH;         // wave height (filtered at this vertex's LOD)
+      flat varying vec3 vHole;  // finer level's centre and half-extent (z < 0: none)
       void main(){
-        vec3 p = position;
-        float dist = length( position.xz );         // polar disc: the local radius IS r
-        p.x += uCam.x; p.z += uCam.z;               // the surface follows the diver
-        vP0 = p.xz;
-        vec2 disp;
-        float wh = waveH( p.xz, uTime, uStorm, dist, disp );
-        p.x += disp.x; p.z += disp.y;
-        p.y += ${f(SURFACE_Y)} + wh;
-        vW = p;
-        vec4 mvPosition = viewMatrix * vec4( p, 1.0 );
+        // CLIPMAP. position = (i, level, j) in the level's own cells about its snapped
+        // centre. Near each level's outer edge the vertices geomorph onto the next
+        // level's grid (odd ones slide onto their even neighbour), so at the seam both
+        // levels have the same vertices and -- because ocDisp is a pure function of the
+        // parameter point -- the same displaced positions: no cracks, no T-junctions.
+        int l = int( position.y + 0.5 );
+        float s = uOcGrid.x * exp2( float( l ) );
+        vec2 c = uOcLevC[ l ];
+        vec2 p = c + position.xz * s;
+        vG = p;
+        float R = uOcGrid.y * s;
+        vHole = l > 0 ? vec3( uOcLevC[ l - 1 ], 0.5 * R ) : vec3( 0.0, 0.0, -1.0 );
+        vec2 dc = abs( p - c );
+        float m = clamp( ( max( dc.x, dc.y ) / R - 0.70 ) / 0.22, 0.0, 1.0 );
+        p -= fract( p / ( 2.0 * s ) ) * ( 2.0 * s ) * m;
+        vec3 D = ocDisp( p, uCam.xz );
+        vP0 = p;
+        vH = D.y;
+        vec3 w = vec3( p.x + D.x, ${f(SURFACE_Y)} + D.y, p.y + D.z );
+        vW = w;
+        vec4 mvPosition = viewMatrix * vec4( w, 1.0 );
         gl_Position = projectionMatrix * mvPosition;
         #include <fog_vertex>
+        #ifdef USE_FOG
+          // The eye-to-surface path lies in ONE medium. The fog chunk splits paths at a
+          // flat y = 0, which with real swell would fog a trough seen from the deck as
+          // if the last metres of the ray were underwater. Pin the fragment's height to
+          // the camera's side of the interface.
+          vFogY = uAir > 0.5 ? max( vFogY, 0.001 ) : min( vFogY, -0.001 );
+        #endif
       }`,
     fragmentShader: `#include <fog_pars_fragment>
       ${GLSL_NOISE}
-      ${GLSL_WAVE_F}
-      ${GLSL_FOLD}
       uniform float uDbg;
       uniform float uTime, uBright, uFade, uStorm, uSunSize, uMirrorK, uNearK,
-                    uFoamThr, uFlash, uRefrK, uRefrSide;
-      uniform vec2 uCap, uOpaq2, uGlit, uAccC, uAccS;
-      uniform vec4 uSss, uSss2, uOpaq, uSpill, uBoil, uDet, uRough, uAccA;
-      uniform sampler2D uRipple, uFoamAcc;
+                    uFlash, uRefrK, uRefrSide, uEnvK, uFarR;
+      uniform vec2 uCap, uOpaq2, uGlit, uWindD;
+      uniform float uWindS;
+      uniform vec4 uChop2, uSss, uSss2, uOpaq, uBoil, uDet, uRough, uRaftC;
+      uniform vec4 uOcK, uOcSea;
+      uniform vec3 uOcL;
+      uniform sampler2D uOcSlope0, uOcSlope1, uOcSlope2, uOcFoam0, uOcFoam1, uOcFoam2;
       uniform vec3 uCam, uSunDir, uSkyZen, uSkyHor, uSunCol;
       ${GLSL_SKY_DECL}
       uniform sampler2D uRefr;
       uniform vec2 uRes;
       varying vec3 vW;
-      varying vec2 vP0;      // the wave-field parameter point — see the vertex shader
+      varying vec2 vP0;
+      varying vec2 vG;
+      varying float vH;
+      flat varying vec3 vHole;
+      #ifdef SEA_ENV
+        uniform sampler2D uSeaEnv;
+        #include <cube_uv_reflection_fragment>
+      #endif
 
       // THE RAFT'S SHADOW. The sun's depth map through a COMPARE sampler (three compiles
       // every non-raw ShaderMaterial as GLSL ES 3.00, so sampler2DShadow / texture()
       // are available here without a glslVersion switch). 1 = lit, 0 = in shadow.
-      // Five hardware-PCF taps (each one is already a 2x2 bilinear compare) in a plus,
-      // 1.5 texels apart: the map is 1024 over 18 units, so the penumbra is ~5 cm.
-      // The 18-unit ortho box is raft-only by design; the last 6% of it fades the
-      // shadow back to lit so the box edge can never draw a line on the sea.
       uniform highp sampler2DShadow uSunShadow;
       uniform mat4 uSunShadowMat;
       uniform float uShadowK;
@@ -2643,19 +2349,12 @@ function buildSurface() {
         return mix( 1.0, s * 0.2, uShadowK * smoothstep( 0.0, 0.06, e ) );
       }
 
-      // The scene through the interface, sampled from the far-side render. The offset
-      // is the view-space parallax between the refracted ray and the straight one plus
-      // a wobble from the wave gradient, which is what makes the transmitted world
-      // shimmer with the swell instead of sitting still under it. ok fades to 0 at the
-      // target's edges so the caller can ease back to the analytic answer where the
-      // screen simply does not know what the ray would hit.
+      // The scene through the interface, sampled from the far-side render (see
+      // renderRefraction). Offset hard-clamped at 0.035 NDC: an unbounded wobble in a gale
+      // smeared the transmitted scene into ghosts (a phantom davit leg, measured).
       vec3 refrSample( vec3 R, vec3 V, vec2 dh, out float ok ){
         vec3 Rv = normalize( ( viewMatrix * vec4( R, 0.0 ) ).xyz );
         vec3 Vv = normalize( ( viewMatrix * vec4( V, 0.0 ) ).xyz );
-        // The offset is CLAMPED, hard. In a gale the wave gradient reaches ~0.5 and an
-        // unbounded wobble smeared the whole transmitted scene into ghosts (measured:
-        // a phantom davit leg two metres from the real one). 0.035 NDC is ~30 px at
-        // 1080p — enough shimmer to say water, small enough that things stay themselves.
         vec2 off = ( Rv.xy / max( -Rv.z, 0.08 ) - Vv.xy / max( -Vv.z, 0.08 ) ) * 0.14
                  + dh * 0.05;
         float om = length( off );
@@ -2670,50 +2369,23 @@ function buildSurface() {
       const float ETA = 1.333;
       const float F0  = 0.020383;   // ((n-1)/(n+1))^2 at n = 1.333; theta_c = 48.59 deg
 
-      // Seen from BELOW, the entire upper hemisphere is squeezed into the 97-degree
-      // window, so the horizon lands on the window rim and the zenith at its centre;
-      // sqrt() biases the gradient toward the horizon, which is where that compression
-      // puts most of the sky. From ABOVE the identical function is evaluated on the
-      // true reflected direction. Same sky, both sides — see GLSL_SKY.
       ${GLSL_SKY}
+      ${GLSL_FARSEA}
 
-      // What is actually above a total-internal-reflection ray in THIS world: the water
-      // column below, which darkens with depth. That gradient is the horizon in the
-      // mirror — dark where R is steep (just outside the window rim, R.y = -0.661) and
-      // bright where R is shallow (toward the true horizon, R.y -> 0).
-      // The seabed is NOT in it and must not be faked in: measured, zone 0's floor is
-      // y = -240 to -317, so the shortest reflected path to it is 360+ units, where
-      // green transmittance is 0.016 — under 0.1% of the inscatter, not worth an ALU.
+      // What is above a total-internal-reflection ray: the water column below, darkening
+      // with depth, with the caustic sheet a few metres down sampled where R crosses it.
       vec3 mirrorRadiance( vec3 P, vec3 R, float t, float mk ){
         float Ry = min( R.y, -0.012 );
-        // Extinction-weighted mean sample height, the same closed form fog_fragment
-        // uses, so the mirror is made of exactly the water the diver is swimming in.
         float ea = clamp( fogDensity * ${f(K_EXT[1])} * 300.0, 1e-4, 30.0 );
         float wgt = ea < 0.6 ? 0.5 - ea * 0.0833333 + ea * ea * ea * 0.0013889
                              : 1.0 / ea - 1.0 / ( exp( ea ) - 1.0 );
         vec3 tr = exp( -fogDensity * ${v3(K_EXT)} * 300.0 );
         vec3 c = abyssaAmbient( fogColor, P.y + Ry * 300.0 * wgt ) * ( 1.0 - tr );
-        // Caustics: sunlight refracting through the wavy interface focuses into a sheet
-        // a few metres down, and it is the only thing with real contrast that a
-        // down-going ray can find at these depths. Sample the sheet where R actually
-        // CROSSES it — the crossing point sweeps ~10 units across the visible arc of the
-        // mirror, so the pattern shears and parallaxes with the view and with every wave
-        // that tilts the normal, which is what separates a reflection from a texture.
-        // Multiplicative, because a caustic modulates the light already there; that also
-        // preserves the R.y depth gradient underneath it. Cell scale 0.30 = 3.4-unit
-        // cells: any coarser and the visible arc of the mirror holds barely one blob and
-        // reads flat, which is exactly the failure this whole pass exists to remove.
         float sh = fbm2( ( P.xz + R.xz * min( 16.0 / -Ry, 200.0 ) ) * 0.30
                          + vec2( t * 0.09, -t * 0.07 ) );
-        // 0.45/1.65 is a 2.1x swing about unity — real caustic contrast is that strong,
-        // and anything weaker sank back into "constant colour times noise" on screen.
         return c * ( 1.0 - mk * ( 0.45 - 1.65 * sh * sh ) );
       }
 
-      // One expanding ring dimple per cell per beat. Rain read from below is a normal
-      // perturbation first (a brief lens in the window) and a brightness second, which
-      // is why it has to ride the displaced interface. Radius is capped under half a
-      // cell so a ring never crosses into its neighbour and we never pay a 3x3 lookup.
       float rainRing( vec2 p, float t, float sd, out vec2 grad ){
         vec2 c = floor( p ), fp = fract( p ) - 0.5;
         float ph = fract( t * 0.85 + h21( c + sd ) );
@@ -2723,28 +2395,8 @@ function buildSurface() {
         grad = ( fp / d ) * ( e * -600.0 * w );
         return e;
       }
-
-      // THE STOCHASTIC SPLASH FIELD — the AIR side's rain, and the only thing that
-      // replaces rainRing above. rainRing is untouched and still owns the from-below
-      // lens, where a lattice is invisible because you see the rings edge-on through the
-      // interface. From an eye 1.6 units over the water it was the tell: one ring, dead
-      // centre, in every cell of a square grid, all the same size, all beating on one
-      // clock. Three independent breaks, all off ONE hash (no extra noise samples — the
-      // three streams are fract() of the same value against incommensurate multipliers):
-      //   1. CENTRE JITTER. The strike lands anywhere in the middle 44% of its cell.
-      //      Jitter alone is not enough — a jittered grid still has one strike per cell,
-      //      and the eye reads the DENSITY as periodic even when the positions are not.
-      //   2. DEAD CELLS. splashDead of them never fire at all, so the spacing between
-      //      live strikes is irregular and there is no period to lock onto.
-      //   3. PER-CELL BEAT. Rate AND phase vary per cell, so neighbours never fire
-      //      together; the field never pulses as a sheet.
-      // Amplitude and reach vary per cell too, which is what stops the surviving rings
-      // reading as one rubber stamp. Reach is capped so jitter + radius + the ring's own
-      // tail stays inside the cell: a ring must never be clipped by its cell wall (a
-      // clipped arc is a straight edge, and a straight edge is a lattice you can see).
-      // Called on TWO lattices whose scales are not a small integer ratio and whose fine
-      // one is ROTATED, so the two grids share no axis and their beat frequencies do not
-      // resolve. Cost: identical to rainRing (one h21, one exp, one length per call).
+      // The air side's stochastic splash field (jittered, dead cells, per-cell beat), on
+      // two non-commensurate rotated lattices so no grid ever reads.
       float splash( vec2 p, float t, float sd, out vec2 grad ){
         vec2 c = floor( p );
         float h = h21( c + sd );
@@ -2759,218 +2411,87 @@ function buildSurface() {
         return e;
       }
 
-      // Down-looking is not up-looking. abyssaAmbient is the ISOTROPIC fully-scattered
-      // field -- what a diver is INSIDE -- and it is several times what actually escapes
-      // upward through the interface; real ocean irradiance reflectance is 2-6%. Left
-      // raw, the sea from above measured 0.080 scene-linear green against a horizon sky
-      // of 0.56 and read as a lit tropical lagoon. 0.46 is the level. The 0.35 pull
-      // toward luminance is what turns a teal pool into grey North-Atlantic water
-      // WITHOUT moving the hue off the game's own palette -- the same trick siltTint
-      // uses, for the same reason: desaturate, do not re-tint.
-      // Air side only. The from-below mirror is the diver's own medium and keeps its
-      // full radiance.
+      // Down-looking is not up-looking: what escapes the column upward is a few percent
+      // of the isotropic field a diver is inside, and grey North-Atlantic water is the
+      // palette desaturated, not re-tinted.
       vec3 seaBody( vec3 c ){
         return mix( c, vec3( dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ) ), 0.35 ) * 0.46;
       }
 
-      // ---- SURFACE FILTERING ----------------------------------------------------
-      // The retired 3-sine rippleGrad answered "is there short chop?" with three fixed
-      // sines faded on DISTANCE, which threw the detail away past 165 u however much
-      // of the frame the water filled, and left everything nearer as the same three
-      // stripes. What replaces it (technique from the abyssal-living-deep reference,
-      // every line ours) is a baked ripple NORMAL sampled with textureGrad at three
-      // incommensurate scales, each in its own rotated frame, faded on the pixel's
-      // FOOTPRINT on the water -- so detail lives exactly as far as the screen can
-      // resolve it and not one texel further, near or far, low eye or high.
-      //
-      // THE FOOTPRINT. dFdx/dFdy of the world position are the two axes of this
-      // pixel's patch of sea. You look at the sea nearly edge-on, so they differ by
-      // orders of magnitude: toward the horizon a pixel is centimetres across and
-      // metres deep. fpMinor is what anisotropic filtering still resolves and decides
-      // whether a wavelength is drawn; fpShade (the geometric mean) is the honest
-      // isotropic area the ROUGHNESS answers to -- charge roughness for the minor axis
-      // alone and the far sea goes mirror-smooth at grazing incidence and speckles.
-      const float ANISO = ${f(maxAniso())};
-      const vec3 DET_SC = vec3( 0.0406, 0.147, 0.411 );   // tiles per unit: 24.6 / 6.8 / 2.4 u
-      const vec3 DET_W  = vec3( 0.46, 0.33, 0.21 );
-      // 1024 texels per tile -> texels per world unit, per layer.
-      const vec3 DET_TX = DET_SC * 1024.0;
-      const mat2 ROT_A = mat2(  0.8339, 0.5519, -0.5519,  0.8339 );
-      const mat2 ROT_B = mat2( -0.2225, 0.9749, -0.9749, -0.2225 );
-
-      // Detail slope in world xz. microFade is the footprint fade shared with the
-      // roughness budget below (1 at a resolved footprint, 0 where the layer is under
-      // a pixel and belongs in the roughness lobe instead).
-      vec2 detailSlope( vec2 p, vec2 ddx, vec2 ddy, float microFade, float U ){
-        vec2 wd = uWindD;
-        // Each layer drifts downwind on its own clock; the three never lock.
-        vec2 drift = wd * uTime * ( 0.18 + 0.30 * uWindS );
-        vec2 pA = ROT_A * p, pB = ROT_B * p;
-        vec2 r0 = textureGrad( uRipple, p  * DET_SC.x + drift * ( 0.05 * DET_SC.x ),
-                               ddx * DET_SC.x, ddy * DET_SC.x ).xz * 2.0 - 1.0;
-        vec2 r1 = textureGrad( uRipple, pA * DET_SC.y - ( ROT_A * drift ) * ( 0.09 * DET_SC.y ),
-                               ROT_A * ddx * DET_SC.y, ROT_A * ddy * DET_SC.y ).xz * 2.0 - 1.0;
-        vec2 r2 = textureGrad( uRipple, pB * DET_SC.z + ( ROT_B * drift ) * ( 0.14 * DET_SC.z ),
-                               ROT_B * ddx * DET_SC.z, ROT_B * ddy * DET_SC.z ).xz * 2.0 - 1.0;
-        // Each layer's slope lives in its own rotated frame; carry it back with the
-        // TRANSPOSE (v * M is M^T * v in GLSL) or the ripples all lean the same wrong way.
-        vec2 micro = r0 * DET_W.x + ( r1 * ROT_A ) * DET_W.y + ( r2 * ROT_B ) * DET_W.z;
-        // Cat's paws: the ruffle is patchy, not corduroy. Same vn() the old block used.
-        float paws = 0.55 + 0.90 * vn( p * 0.055 + vec2( uTime * 0.021, -uTime * 0.017 ) );
-        return micro * ( microFade * ( uDet.y + uDet.z * U ) * paws * uDet.x );
-      }
-
-      // GGX / correlated Smith, for the sun glitter.
-      float ggxD( float NoH, float a ){
-        float a2 = a * a;
-        float d = ( NoH * a2 - NoH ) * NoH + 1.0;
-        return a2 / max( 3.14159265 * d * d, 1e-8 );
-      }
-      float smithGGXCorrelated( float NoV, float NoL, float a ){
-        float a2 = a * a;
-        float gv = NoL * sqrt( NoV * NoV * ( 1.0 - a2 ) + a2 );
-        float gl = NoV * sqrt( NoL * NoL * ( 1.0 - a2 ) + a2 );
-        return 0.5 / max( gv + gl, 1e-6 );
+      // Foam micro-structure: bubbles and lace. A cellular-ish pattern from two value
+      // noise octaves cut by the coverage itself, so thin foam is lace with holes and
+      // thick foam closes into a sheet.
+      float foamTex( vec2 p, float cov ){
+        float n = vn( p * 1.7 ) * 0.55 + vn( p * 4.3 + 7.1 ) * 0.30 + vn( p * 11.0 - 3.3 ) * 0.15;
+        return smoothstep( 0.62 - 0.55 * cov, 0.80 - 0.45 * cov, n + 0.35 * cov );
       }
 
       void main(){
+        // Clipmap overlap band: the finer level owns everything inside its extent.
+        if ( vHole.z > 0.0 ) {
+          vec2 hd = abs( vG - vHole.xy );
+          if ( max( hd.x, hd.y ) < vHole.z * 0.99999 ) discard;
+        }
         vec3 V = normalize( vW - uCam );
         float dist = distance( vW.xz, uCam.xz );
-        vec2 dh; float foamJ;
-        // Evaluated at the PARAMETER point, and dh comes back already pushed through
-        // the inverse Jacobian, so it is the true world-space slope of the displaced
-        // surface. At chop 0 the inverse is the identity and this is the shipped value.
-        float waveY = waveField( vP0, uTime, uStorm, dist, dh, foamJ );
 
-        // Which side of the interface this fragment is seen from, decided BEFORE the rain
-        // so the two sides can run different rain and neither pays for the other's. The
-        // rain gradient this drops is O(0.002) against a wave gradient that reaches
-        // O(0.5), so the sign it would have flipped is a fragment already exactly edge-on.
+        // ---- THE SPECTRUM AT THIS PIXEL ------------------------------------------
+        // Three cascades, trilinear + anisotropic. The slope texture carries (s, s^2):
+        // after the hardware averages a pixel's footprint, E[s^2] - E[s]^2 is exactly the
+        // slope variance this pixel cannot show as a normal -- it becomes the roughness.
+        vec2 q0 = vP0 / uOcL.x, q1 = vP0 / uOcL.y, q2 = vP0 / uOcL.z;
+        vec4 s0 = texture2D( uOcSlope0, q0 ), s1 = texture2D( uOcSlope1, q1 ), s2 = texture2D( uOcSlope2, q2 );
+        vec2 dh = s0.xy + s1.xy + s2.xy;
+        float varU = max( s0.z - s0.x * s0.x, 0.0 ) + max( s0.w - s0.y * s0.y, 0.0 )
+                   + max( s1.z - s1.x * s1.x, 0.0 ) + max( s1.w - s1.y * s1.y, 0.0 )
+                   + max( s2.z - s2.x * s2.x, 0.0 ) + max( s2.w - s2.y * s2.y, 0.0 );
+        vec4 j0 = texture2D( uOcFoam0, q0 ), j1 = texture2D( uOcFoam1, q1 ), j2 = texture2D( uOcFoam2, q2 );
+        float Jxx = 1.0 + j0.x + j1.x + j2.x, Jzz = 1.0 + j0.y + j1.y + j2.y, Jxz = j0.z + j1.z + j2.z;
+        float Jt = Jxx * Jzz - Jxz * Jxz;
+        // FOAM: born where the whole sea (all cascades together) folds NOW, kept where a
+        // parcel folded within the last few seconds (each cascade's persistent channel).
+        float foamLive = 1.0 - smoothstep( uOcK.x - uOcK.y, uOcK.x, Jt );
+        float foamMem = max( max( j0.w, j1.w ), j2.w * 0.7 );
+        float foamJ = max( foamLive, foamMem );
+
         vec3 N = normalize( vec3( -dh.x, 1.0, -dh.y ) );
-        // The camera really does cross the interface — player.js clamps the swim ceiling
-        // to y = -1.2 and game.js adds up to +2.4 of camera lift, so at the raft this
-        // plane is above the eye. Flipping the normal is what the old abs(dot(V,N)) was
-        // standing in for; doing it properly also lets the from-above case be right.
         bool below = dot( V, N ) > 0.0;
+        // Unresolved roughness: the filtered variance, plus the capillaries finer than
+        // cascade 2's Nyquist (uOcK.w grows with the wind).
+        float mssU = varU + uOcK.w;
+        float alpha = clamp( sqrt( mssU ), 0.02, 0.6 );
+        alpha = mix( 0.02, alpha, uRough.y );
 
-        // ---- FOOTPRINT, DETAIL, ROUGHNESS BUDGET ---------------------------------
-        vec2 fdx = dFdx( vW.xz ), fdy = dFdy( vW.xz );
-        float fpA = length( fdx ), fpB = length( fdy );
-        float fpMajor = max( fpA, fpB );
-        float fpMinor = max( max( min( fpA, fpB ), fpMajor / ANISO ), 1e-5 );
-        float fpShade = sqrt( fpMinor * fpMajor );
-        // Footprint fade in world units (1 u ~ 3 m): full under 0.10 u per pixel, gone
-        // by 0.75 -- the ripple tile's finest feature is ~0.014 u, its coarsest 2.2 u.
-        float microFade = 1.0 - smoothstep( 0.10, 0.75, fpShade );
-        // Wind in m/s for Cox-Munk; a dead calm still carries 0.5 m/s of capillaries.
-        float U = max( uRough.x * uWindS, 0.5 );
-        vec2 micro = vec2( 0.0 );
-        if ( microFade > 0.004 && uDet.x > 0.001 ) micro = detailSlope( vW.xz, fdx, fdy, microFade, U );
-        // COX-MUNK. Total mean-square slope 0.003 + 0.00512 U. The share the geometry
-        // and the three detail layers RESOLVE at this footprint is already in the
-        // normal; what they cannot resolve (each layer's LOD against its own texel
-        // density, weighted by the share of the slope variance that lives at its
-        // scale) becomes the GGX alpha of the specular lobe. Far water therefore stays
-        // textured-but-rough, and near calm water is glass.
-        float alpha = 0.02;
-        {
-          float mssTotal = 0.003 + 0.00512 * U;
-          vec3 lod = log2( max( vec3( fpShade ) * DET_TX, vec3( 1.0 ) ) );
-          float lost = dot( vec3( 0.10, 0.30, 0.60 ), clamp( lod / 6.0, 0.0, 1.0 ) );
-          lost = max( lost, 1.0 - microFade * 0.9 );
-          float mssUnres = mssTotal * lost + 0.0009;
-          alpha = mix( 0.02, clamp( sqrt( 2.0 * mssUnres ), 0.02, 0.6 ), uRough.y );
-        }
-        // FROM BELOW the detail is a fraction: it sharpens the TIR mirror and the
-        // window's rim without moving Snell's window or the foam threshold by much.
-        if ( below ) dh += micro * uDet.w;
+        float seaS = uOcSea.w;
+        float hRef = max( 0.5 * uOcSea.x, 0.12 );
+        float waveY = vH;
 
-        // Reference wave height and gradient for THIS sea state — the scale every
-        // "how tall / how steep is this fragment" question is asked against. Hoisted
-        // above the interface branch because the broad-body SSS (air side) needs it too.
-        // Both carry the storm swell scale: galeAmt() multiplies the two longest
-        // components' height and their contribution to grad h, so if these did not follow
-        // it the thin/tall gates would simply stop firing once the swell grew.
-        float gG = mix( 1.0, uGale, smoothstep( 0.0, 0.90, uStorm ) );
-        float hRef = 0.58 + 1.24 * uStorm * gG, gRef = 0.075 + 0.24 * uStorm * gG;
-
-        // ---- CHURNED-WATER OPACITY ---------------------------------------
-        // Michael's reference storm sea is a WALL. Ours reads as thin glass because
-        // the transmission term is a real screen-space render of the far side, and a
-        // real render is a real image no matter how hard the water is churning. So
-        // the IMAGE'S WEIGHT fades with sea state: entrained bubbles under a gale
-        // scatter the transmitted ray out within centimetres, and what is left is the
-        // water's own body plus what scatters back out of it. THICK, not black — the
-        // analytic body and the broad-body SSS are what remain, which is precisely
-        // the pair that was already underneath the refraction mix.
-        //
-        // ANCHOR: at storm 0 wind 0, churn is smoothstep(lo,hi,0) = 0 and foamJ is
-        // exactly 0 (chop 0 -> det 1), so opq is exactly 0 and every transmission
-        // line below is bit-identical to what shipped.
+        // ---- CHURNED-WATER OPACITY: bubbles close the window as the sea churns.
         float churn = smoothstep( uOpaq.y, uOpaq.z, max( uStorm, uWindS ) );
         float opq = clamp( uOpaq.x * max( churn, uOpaq.w * foamJ ), 0.0, 1.0 );
 
-        // ---- SPILLING BREAKERS -------------------------------------------
-        // Whitewater shed by a fold UPSLOPE of here, avalanched down to this
-        // fragment. See GLSL_FOLD. Two probes up the wave's own gradient, read at the
-        // two lags that match the time the water needed to get down here; the near
-        // one is denser (fresh, at the lip), the far one thinner (older, downslope).
-        // Biased onto the LEADING face — waves travel downwind, so the face pointing
-        // downwind is the one that collapses forward.
-        float spill = 0.0;
-        if ( uSpill.x > 0.001 && max( uStorm, uWindS ) > 0.02 ) {
-          float gl = length( dh );
-          if ( gl > 1e-4 ) {
-            vec2 up = dh / gl;                       // +grad h points UPHILL
-            float L = uSpill.y * ( 0.45 + 0.55 * gG ) * ( 0.35 + 0.65 * uStorm );
-            float thr = uChop.y, sf = max( uChop.z, 0.02 );
-            vec4 fA = foldTrace( vP0 + up * ( L * 0.45 ), uTime, uStorm, dist );
-            vec4 fB = foldTrace( vP0 + up * L,           uTime, uStorm, dist );
-            float sA = foldK( thr, sf, 1.0 + fA.y );   // lag 1: 1.35 s
-            float sB = foldK( thr, sf, 1.0 + fB.z );   // lag 2: 2.70 s
-            // Leading-face gate. Soft, and never fully closed on the back: a real
-            // crest throws some water over its own shoulder.
-            float fw = 0.25 + 0.75 * smoothstep( -0.20, 0.45, dot( -up, uWindD ) );
-            // The SAME decay weights the lingering fold-foam uses (uLagW = exp(-tau/
-            // foamDecay)): whitewater that slid this far down the face is that much
-            // older, so it has had exactly that long to dissolve. Without them the
-            // spill measured ~3x the coverage of the fold-born foam it extends, which
-            // is a sheet, not an avalanche.
-            spill = uSpill.x * fw * max( uSpill.z * uLagW.x * sA, uSpill.w * uLagW.y * sB );
-          }
-        }
-
-        float rain = 0.0;            // from-below lens, unchanged
-        float splashV = 0.0;         // air-side splash fleck
-        vec2 dhSpl = vec2( 0.0 );    // kept separate: the air side wants less of it
-        if ( uStorm > 0.02 ) {                       // uniform branch, fully coherent
-          // Only inside 26 units, because past that a strike is under a pixel and all it
-          // can do is alias. rk is the SAME intensity drive both sides read.
+        float rain = 0.0, splashV = 0.0;
+        vec2 dhSpl = vec2( 0.0 );
+        if ( uStorm > 0.02 ) {
           float rk = uStorm * uNearK * ( 1.0 - smoothstep( 6.0, 26.0, dist ) );
           vec2 g1, g2;
           if ( below ) {
-            // Cells of 0.45 and 0.22 units (1.4 m and 0.7 m), so a ring reads as a drop
-            // strike and not as a porthole. THE LENS IS FINE — do not touch it.
             float r1 = rainRing( vW.xz * 2.2, uTime, 0.0, g1 );
             float r2 = rainRing( vW.xz * 4.5, uTime * 1.27, 11.0, g2 );
             dh += ( g1 * 0.0022 + g2 * 0.0011 ) * rk;
             rain = ( r1 + 0.6 * r2 ) * rk;
           } else {
-            // Two lattices, the fine one rotated so they share no axis. See splash().
             vec2 pf = vW.xz * ${f(GLASS.rain.splashScales[1])};
             pf = vec2( pf.x * ${f(Math.cos(GLASS.rain.splashRot))} - pf.y * ${f(Math.sin(GLASS.rain.splashRot))},
                        pf.x * ${f(Math.sin(GLASS.rain.splashRot))} + pf.y * ${f(Math.cos(GLASS.rain.splashRot))} );
-            float s1 = splash( vW.xz * ${f(GLASS.rain.splashScales[0])}, uTime, 0.0, g1 );
-            float s2 = splash( pf, uTime * 1.31, 11.0, g2 );
+            float sa = splash( vW.xz * ${f(GLASS.rain.splashScales[0])}, uTime, 0.0, g1 );
+            float sb = splash( pf, uTime * 1.31, 11.0, g2 );
             dhSpl = ( g1 * 0.0030 + g2 * 0.0016 ) * rk;
-            splashV = ( s1 + 0.7 * s2 ) * rk;
+            splashV = ( sa + 0.7 * sb ) * rk;
           }
         }
 
-        // SURFACE BOIL, geometry half: expanding ripple rings radiating from the breach
-        // point, folded into dh BEFORE the normal re-forms so both sides of the
-        // interface see the water disturbed, not just repainted. Two rings on
-        // incommensurate clocks so the boil churns instead of pulsing.
+        // SURFACE BOIL, geometry half: ripple rings radiating from Sal's breach point.
         if ( uBoil.z > 0.004 ) {
           vec2 bd0 = vW.xz - uBoil.xy;
           float bl0 = max( length( bd0 ), 1e-3 );
@@ -2986,429 +2507,164 @@ function buildSurface() {
           }
         }
 
-        // Re-formed with the from-below lens folded in (the air side left dh alone and
-        // carries its splash in dhSpl, applied in its own branch below).
+        // THE HULL. Water piles and tears against the raft: a ragged white collar on
+        // the waterline, thicker where the hull is working (uRaftC.w = |heave rate|).
+        float hull = 0.0;
+        {
+          vec2 rq = abs( vW.xz - uRaftC.xy ) - vec2( uRaftC.z );
+          float rd = length( max( rq, 0.0 ) ) + min( max( rq.x, rq.y ), 0.0 );
+          if ( rd < 2.2 && rd > -0.4 ) {
+            float band = ( 1.0 - smoothstep( 0.0, 0.55 + 1.1 * uRaftC.w + 0.5 * seaS, rd ) )
+                       * smoothstep( -0.40, -0.05, rd );
+            float tn = vn( vW.xz * 2.6 + vec2( uTime * 0.7, -uTime * 0.45 ) ) * 0.6
+                     + vn( vW.xz * 7.0 - vec2( uTime * 1.3, uTime * 0.9 ) ) * 0.4;
+            hull = band * smoothstep( 0.30, 0.75, tn * ( 0.55 + 0.9 * band ) ) * ( 0.55 + 0.45 * min( 1.0, uRaftC.w * 2.0 + seaS ) );
+          }
+        }
+
         N = normalize( vec3( -dh.x, 1.0, -dh.y ) );
         vec3 Nf = below ? N : -N;
         float ct = dot( V, Nf ), F;
-        // Caustic detail dies with distance as well as depth: past ~120 units a 3.4-unit
-        // cell is under 4 pixels and the pattern would alias into a crawl.
         float mk = uMirrorK * ( 1.0 - smoothstep( 35.0, 120.0, dist ) );
-        // Foam colour, hoisted above the branch so the air side can reach it for wind
-        // streaks. Pure function of fogColor, so moving it changes nothing it did before.
-        // Foam from below is a bubble raft, not a highlight: it scatters isotropically,
-        // so it is lit by the surface irradiance and replaces BOTH the window and the
-        // mirror with the same dull grey-white. 4.6x the irradiance level puts a
-        // full-storm whitecap at ~0.33 scene-linear: just over BloomEffect's 0.28, so
-        // foam is the one thing on a storm ceiling that glows, and it goes dark on its
-        // own at night without a second uniform.
+        // Foam is lit like a rough white solid: the surface irradiance proxy (fogColor,
+        // which dims with night and storm on its own) plus the direct sun on its face.
         vec3 foamCol = vec3( 0.86, 0.94, 1.00 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6;
-        float rimK = 0.0;
-        // The marine layer's reach across the SEA. Stays 0 on the from-below path, so
-        // the underwater half of this shader cannot be touched by the fog beat at all.
-        float airK = 0.0;
+        float airK = 0.0, farK = 0.0;
         vec3 col = vec3( 0.0 );
-        // The raft's shadow on this fragment of sea. One sample cluster for both sides;
-        // exactly 1.0 (and no texture reads) whenever the sun's map is off.
         float sh = sunShadow( vW );
         bool dOff = uDbg > 0.5;
         bool dFoam = !dOff || abs( uDbg - 4.0 ) < 0.5;
-        bool dBub = !dOff || abs( uDbg - 7.0 ) < 0.5;
         bool dHaze = !dOff || abs( uDbg - 6.0 ) < 0.5;
         vec3 tRefl = vec3( 0.0 ), tBody = vec3( 0.0 ), tTrans = vec3( 0.0 ), tSss = vec3( 0.0 ), tGlit = vec3( 0.0 );
-        // Each side owns an fbm2. Gating them on F keeps the common fragment paying for
-        // one, not two: inside the window F is 0.02 so the mirror is invisible, outside it
-        // F is 1.0 so the sky is. The branches are spatially coherent (whole window vs
-        // whole mirror) and only diverge in the few degrees of the Fresnel rim.
         if ( below ) {
+          // ---- FROM BELOW: Snell's window, TIR mirror, the far-side render ----------
           float kk = 1.0 - ETA * ETA * ( 1.0 - ct * ct );
-          float ca = sqrt( max( kk, 0.0 ) );          // cosine on the AIR side
-          // Schlick on the air-side cosine: 0.020 at the zenith, 0.061 at 30 deg, 0.25
-          // at 44, exactly 1.0 at the critical angle. The reflection therefore takes
-          // over continuously across the last ~10 degrees and brightens itself in
-          // proportion to what is in the mirror — a horizon, where the 1.7-degree
-          // smoothstep plus 2.8-degree Gaussian this replaces gave a glowing wire.
+          float ca = sqrt( max( kk, 0.0 ) );
           F = kk <= 0.0 ? 1.0 : F0 + ( 1.0 - F0 ) * pow( 1.0 - ca, 5.0 );
-          // refract() returns exactly vec3(0) past the critical angle. F is 1.0 there so
-          // the sky term is multiplied out; skyRadiance(vec3(0)) is still well defined
-          // (pow(0.0, k) is 0.0 for k > 0 in GLSL), so no guard branch is needed.
-          // mf ramps the mirror in rather than switching it, so the gate cannot leave a
-          // step ring 8 degrees inside the rim; at F = 0.09 the term it drops is 0.01.
           float mf = smoothstep( 0.030, 0.090, F );
           if ( F < 0.998 ) {
             vec3 T = refract( V, -Nf, ETA );
             vec3 win = skyRadiance( T );
-            // Snell's window becomes a WINDOW: when the far-side target holds the air
-            // world (camera below, uRefrSide 0), the transmitted ray samples the actual
-            // raft, ladder and sky instead of an analytic gradient. Falls back to the
-            // analytic sky at the screen edges and whenever the pass is off, so the old
-            // frame is the floor, never the casualty.
-            // THE FROM-BELOW WINDOW THICKENS ONLY PARTLY (uOpaq2.x =
-            // GLASS.chop.opaqBelow, flagged for Michael). Physically bubbles do not
-            // care which way the light travels and this should match the air side;
-            // gameplay does care — Snell's window is the diver's only wayfinding near
-            // a storm ceiling and losing the raft through it is a worse frame than a
-            // slightly-too-clear one. 0.35 murks the ceiling without deleting it.
             float rk = uRefrK * ( 1.0 - uRefrSide ) * ( 1.0 - opq * uOpaq2.x );
             if ( rk > 0.001 ) {
               float ok; vec3 rs = refrSample( T, V, dh, ok );
               win = mix( win, rs, rk * ok );
             }
-            // FROM BELOW the shadow is the hull's dark patch on the ceiling: the sun
-            // is not entering the water there, so the window carries less of it and
-            // the caustic-lit mirror under it is dimmer too. Never to black — skylight
-            // still arrives from the whole hemisphere.
             col = win * ( 1.0 - F ) * ( 1.0 - 0.55 * ( 1.0 - sh ) );
           }
           if ( mf > 0.0 )  col += mirrorRadiance( vW, reflect( V, Nf ), uTime, mk ) * ( F * mf )
                                * ( 1.0 - 0.35 * ( 1.0 - sh ) );
         } else {
-          // ---- THE SEA FROM ABOVE ------------------------------------------
-          // air -> water, no TIR, and the roles swap. Nothing in this branch can run for
-          // a fragment the diver sees from below, so none of it can regress the window.
-          // The air side's rain is dhSpl — the stochastic splash field, not rainRing's
-          // lattice (see splash()). dh here is the pure wave gradient: the from-below
-          // lens was never added on this path, so nothing has to be subtracted back out.
-          vec2 dhA = dh + dhSpl + micro;
+          // ---- THE SEA FROM ABOVE ------------------------------------------------
+          vec2 dhA = dh + dhSpl;
           vec3 Na = normalize( vec3( -dhA.x, 1.0, -dhA.y ) );
           float cta = clamp( -dot( V, Na ), 0.0, 1.0 );
-          F = F0 + ( 1.0 - F0 ) * pow( 1.0 - cta, 5.0 );
-          // Fresnel does the whole job here: 0.020 looking straight down (you see into
-          // the water), 0.60 at the 5.7 degrees the raft subtends from an eye 1.6 up
-          // (mostly sky), 1.0 at the horizon. What is NOT sky is the body of the sea —
-          // the column below sampled along the REFRACTED ray by the same closed form the
-          // from-below mirror uses, so from the air you are looking into exactly the
-          // water Sal swims in, and it dims with the weather for free.
-          // Caustics at 0.55x: from below they are the only contrast a down-going ray can
-          // find; from above they are a garnish on a grey sea, and at full strength they
-          // read tropical.
+          F = seaFresnel( V, Na, alpha );
           vec3 T = refract( V, Na, 1.0 / ETA );
           vec3 body = seaBody( mirrorRadiance( vW, T, uTime, mk * 0.55 ) );
           vec3 bodyA = body;
-          // TRANSPARENCY. When the far-side target holds the underwater world (camera
-          // in air, uRefrSide 1), the transmission is the actual scene under the
-          // surface — drums, tether, Sal descending — already water-fogged by the
-          // shared Beer-Lambert chunk in that render. A 15% veil of the analytic body
-          // stays on top: even perfectly clear water scatters some of its own column
-          // into the eye, and the veil is also what keeps the hand-off seamless where
-          // the sample runs off screen and ok fades to the analytic answer.
-          // ...and it closes as the sea churns. (1 - opq) is the whole of Michael's
-          // opacity note: at storm 1 / wind 0.9 this weight is 0 and the sea from the
-          // deck is body + scatter with no transmitted image in it at all. The
-          // analytic body underneath is unchanged, so the sea goes THICK, not black.
           float rk = uRefrK * uRefrSide * ( 1.0 - opq );
           if ( rk > 0.001 ) {
             float ok; vec3 rs = refrSample( T, V, dhA, ok );
             body = mix( body, mix( rs, body, 0.15 ), rk * ok );
             tTrans = rs * ( 0.85 * rk * ok );
           }
-          // FROM ABOVE: the raft's shadow on the water beside it. The body darkens
-          // (less sun getting into the column there) and the sun's own glitter is
-          // multiplied out of the reflected sky through gSunK; the sky itself stays,
-          // as it does in any real shadow on water.
-          // GGX SUN GLITTER. The painted disc's pow(sd, uSunSize) is a mirror answer:
-          // it is only ever as wide as the disc, so a glassy noon sea carried one hard
-          // spot and a gale carried a soft one, and neither lengthened toward the
-          // horizon or narrowed with the wind the way a real glitter path does. With
-          // uRough.z (GLASS.chop.glitterLegacy) at 0 the disc is multiplied OUT of the
-          // reflected sky (the aureole stays: that is sky) and drawn as a microfacet
-          // lobe on the unresolved roughness instead, widened by the disc's own
-          // half-angle and normalised to the disc's integrated solid angle -- the
-          // lobe carries the SAME light the disc did, spread by the water's state.
-          float legacy = uRough.z;
-          gSunK = sh * legacy; gHaloK = sh;
           float bodyW = ( 1.0 - F ) * ( 1.0 - 0.45 * ( 1.0 - sh ) );
           tBody = bodyA * bodyW; tTrans *= bodyW;
-          // THE MATTE MIRROR (Flow lean item 8, abyssaStyle.z). The reflection's
-          // roughness floor comes up: the resolved micro ripple is pulled OUT of the
-          // reflection normal (the sea keeps its SWELL, loses its glass) and the sky is
-          // read through a lobe -- three taps at +-aM in elevation about the reflected
-          // ray, aM = max( alpha, 0.06 + 0.16 z ), so the horizon ring smears upward
-          // the way a painted sea's does instead of mirroring each ripple. Only the
-          // SKY term: the glitter below keeps Na and alpha (the GGX lobe stays sharp),
-          // the from-below TIR mirror is the other branch and never enters here, and the
-          // opaque gale is untouched because it is body + scatter with F's sky on top of
-          // a surface whose alpha is already over the floor. At z = 0 the branch is
-          // skipped and tRefl is the shipped expression, bit for bit.
-          // Gated by ( 1 - opq ): the churned gale is body + scatter under a lid, and
-          // the brief says it stays exactly what shipped.
-          float zM = abyssaStyle.z * ( 1.0 - opq );
-          if ( zM > 0.001 ) {
-            float z = zM;
-            vec2 dhR = dh + dhSpl + micro * ( 1.0 - 0.6 * z );
-            vec3 Nr = normalize( vec3( -dhR.x, 1.0, -dhR.y ) );
-            vec3 R = reflect( V, Nr );
-            float aM = max( alpha, 0.06 + 0.16 * z );
-            vec3 sU = skyRadiance( normalize( vec3( R.x, R.y + aM, R.z ) ) );
-            vec3 sD = skyRadiance( normalize( vec3( R.x, R.y - aM, R.z ) ) );
-            vec3 sR = skyRadiance( R );
-            tRefl = mix( sR, ( sR + sU + sD ) * 0.33333333, 0.85 * z ) * F;
-          } else {
-            tRefl = skyRadiance( reflect( V, Na ) ) * F;
-          }
+          // REFLECTION. The sky the real sea mirrors: the dome's own radiance along the
+          // facet-lifted reflected ray, sharp where the water is glassy, and the
+          // prefiltered sky environment at the spectrum's roughness where it is not
+          // (the matte-mirror lean raises the reflection's roughness floor).
+          float aR = max( alpha, ( 0.03 + 0.16 * abyssaStyle.z ) * ( 1.0 - opq ) );
+          vec3 R = seaReflDir( V, Na, aR );
+          // The painted disc is drawn by the glitter lobe below, not by the mirror.
+          gSunK = uRough.z; gHaloK = sh;
+          float envW = 0.0;
+          #ifdef SEA_ENV
+            envW = uEnvK * smoothstep( 0.05, 0.22, aR );
+          #endif
+          vec3 sky = vec3( 0.0 );
+          if ( envW < 0.999 ) sky = skyRadiance( R );
+          #ifdef SEA_ENV
+            if ( envW > 0.001 ) {
+              vec3 env = textureCubeUV( uSeaEnv, vec3( -R.x, R.y, R.z ), clamp( aR * 1.4, 0.0, 1.0 ) ).rgb;
+              sky = mix( sky, env, envW );
+            }
+          #endif
+          tRefl = sky * F;
           col = body * bodyW + tRefl;
           gSunK = 1.0; gHaloK = 1.0;
-          if ( legacy < 0.999 ) {
-            float NoL = dot( Na, uSunDir );
-            if ( NoL > 0.0 ) {
-              vec3 H = normalize( uSunDir - V );
-              float NoH = max( dot( Na, H ), 0.0 );
-              float VoH = max( -dot( V, H ), 1e-4 );
-              // Widened by the disc's half-angle and NOT renormalised by (a/aP)^2: that
-              // factor is the point-light correction and it drove the lobe to zero as
-              // the water went glassy (measured: the moon's whole glitter column
-              // vanished). ggxD integrates to 1 at any width, so the lobe carries the
-              // disc's energy uGlit.y * L at every roughness by construction, and in
-              // the glassy limit its peak is ~0.36 L F / NoV -- the painted disc's own
-              // mirror brightness at a moderate grazing angle.
-              // THE BRIGHTNESS. uGlit.y * D * Vis * NoL is the Cox-Munk glitter: the
-              // probability a facet in this pixel mirrors the disc, and it is honest --
-              // measured at the path's distance alpha runs ~0.2 and the answer is ~1/50
-              // of a mirror, which on a disc painted ~5x the sky (the real sun is 1e5x)
-              // is invisible. glitterK is that missing ratio: the disc's radiance is
-              // an art stop, the sun behind it is not. The SOFT CAP is the constraint:
-              // 1 - exp(-x) never passes 1, so a pixel can never carry more than L * F,
-              // the mirror answer and exactly the legacy disc's peak. Wide rough paths
-              // read; glassy noon can only ever be as bright as today.
-              float aP = min( alpha + uGlit.x, 1.0 );
-              float D = ggxD( NoH, aP );
-              float Vis = smithGGXCorrelated( max( cta, 1e-4 ), max( NoL, 1e-4 ), alpha );
-              float Fs = F0 + ( 1.0 - F0 ) * pow( 1.0 - VoH, 5.0 );
-              float gx = uGlit.y * uRough.w * D * Vis * NoL;
-              tGlit = uSunCol * ( uDiscK * gOcc * sh * Fs * ( 1.0 - legacy ) * ( 1.0 - exp( -gx ) ) );
-              col += tGlit;
-            }
+          if ( uRough.z < 0.999 ) {
+            tGlit = seaGlitter( Na, V, alpha, sh ) * ( 1.0 - uRough.z );
+            col += tGlit;
           }
 
-          // ---- BROAD-BODY SUBSURFACE SCATTERING ---------------------------
-          // The single dominant effect in Michael's poseidon reference: sunlight that
-          // entered the back of a swell, scattered through its MASS, and leaves the
-          // front as turquoise. Not a rim — a body. The dusk crest term further down is
-          // the narrow specialisation of the same physics and the two stack; this one is
-          // wide, and it is strongest exactly where that one is dead (a high sun).
-          //
-          // THREE FACTORS, in the order the physics writes them:
-          //  1. PATH THROUGH THE WATER. The higher a fragment sits on its own wave the
-          //     more lit mass is behind it, so the drive is h01 — the wave's own height
-          //     normalised by hRef — biased upward by sssPow. It is the wave's own
-          //     height, not the world height, so this reads the same on a calm swell and
-          //     a gale crest and never becomes a flat altitude wash.
-          //  2. HOW MUCH LIGHT THERE IS TO TRANSMIT. sin(solar elevation), over the
-          //     sssDayLo..sssDayHi gate, and NOTHING ELSE.
-          //     NOT the disc luminance, which is what the dusk rim term gates on and what
-          //     this term was first written to copy. That was a measured bug: uSunCol is
-          //     the DISC stop, the storm blend collapses it to [0.42,0.46,0.42], and the
-          //     rim term's smoothstep(0.50, 1.10, lum) therefore reads ZERO in a full
-          //     gale — the term switched itself off in precisely the weather it exists
-          //     for, and A/B banding across the whole frame measured a 0.3 code-value
-          //     difference. A storm dims the DISC because the sun is behind cloud; the
-          //     LIGHT still arrives, and a bright sunlit storm is the entire reference.
-          //     The moon is excluded by elevation instead: sssDayLo sits above the
-          //     elevNight floor (8 deg, sin 0.139), so night is exactly zero and dusk
-          //     (12 deg, sin 0.208) is near it, which is correct — dusk belongs to the
-          //     rim term and this one has no business there.
-          //  3. GEOMETRY. Broad on purpose: a floor of 0.30 for any across-the-swell
-          //     view, rising to 1.0 looking toward the sun, times a grazing term, because
-          //     transmitted light leaves a wave sideways and a top-down view sees the
-          //     column, not the glow. No pow() lobe — that is what makes the dusk term a
-          //     wire and this one a body.
-          //
-          // Weighted by (1 - F). Transmitted light arrives where the surface TRANSMITS,
-          // which is both physically correct and the bloom guard: on the grazing horizon
-          // fragments, where the reflected sky already sits at ~0.6 scene-linear, F is 1
-          // and this contributes exactly nothing. Nothing new crosses 0.28.
+          // ---- SUBSURFACE: the green glow of light through the wave's mass ----------
+          // Sunlight entering the back of a swell and leaving through its face, strongest
+          // where the fragment is high on its own wave (more lit mass behind it), toward
+          // the sun, and where the surface transmits (sqrt of 1 - F).
           if ( uSss.x > 0.001 ) {
-            float dayS = smoothstep( uSss2.z, uSss2.w, uSunDir.y );
+            float dayS = smoothstep( uSss2.z, uSss2.w, uSunDir.y ) + 0.6 * ( 1.0 - smoothstep( 0.02, 0.30, uSunDir.y ) ) * step( 0.02, uSunDir.y );
             if ( dayS > 0.002 ) {
-              float h01 = clamp( waveY / max( hRef, 1e-3 ) * 0.5 + 0.5, 0.0, 1.0 );
+              float h01 = clamp( waveY / hRef * 0.5 + 0.5, 0.0, 1.0 );
               vec2 sxz2 = uSunDir.xz;
               float sl2 = length( sxz2 );
               float tw = sl2 > 1e-3 ? dot( normalize( V.xz ), sxz2 / sl2 ) : 0.0;
-              float viewS = ( 0.30 + 0.70 * ( 0.5 + 0.5 * tw ) )
-                          * ( 0.35 + 0.65 * ( 1.0 - abs( V.y ) ) );
-              // Sea-state scale, floored at sssCalm — the calm anchor. Reads the SAME
-              // max(storm, wind) drive the chop gate does, so a windy fair day glows too.
-              float seaS = uSss2.y + ( 1.0 - uSss2.y )
-                         * smoothstep( 0.0, 0.85, max( uStorm, uWindS ) );
-              // Broad in DEPTH as well: the reference glows to the horizon. The dusk rim
-              // retires at 240; this holds to 430, where the sea is airlight anyway.
-              // OPACITY LIFT. As the window closes, the light that used to come
-              // through the sea has to come OUT of it instead — that is what an
-              // opaque churned sea actually is. 1 + opaqSssK*opq, so calm (opq = 0)
-              // is untouched to the bit and a full gale glows half again as hard.
-              float amt = pow( h01, uSss.y ) * dayS * viewS * seaS
+              float viewS = ( 0.30 + 0.70 * ( 0.5 + 0.5 * tw ) ) * ( 0.35 + 0.65 * ( 1.0 - abs( V.y ) ) );
+              // Thin crests let the most through: the face of a steep wave toward the sun.
+              float face = clamp( dot( -Na.xz, sxz2 / max( sl2, 1e-3 ) ) * 2.5, 0.0, 1.0 );
+              float seaG = uSss2.y + ( 1.0 - uSss2.y ) * smoothstep( 0.0, 0.85, seaS );
+              float amt = pow( h01, uSss.y ) * ( 0.6 + 0.8 * face ) * min( dayS, 1.0 ) * viewS * seaG
                         * ( 1.0 + uOpaq2.y * opq )
-                        * ( 1.0 - smoothstep( 220.0, 430.0, dist ) ) * uNearK * uSss.x
-                        * sh;   // no sun into the swell = no light to scatter out of it
-              // THE HUE IS DERIVED. fogColor is the palette's own surface irradiance;
-              // exp(-K_EXT * tau) is what this game's water does to light passing through
-              // it. Green-teal irradiance times a spectrum whose red dies and whose green
-              // and blue survive in near-equal measure IS the reference's turquoise.
-              // The ceiling is a SCALAR RESCALE, never a per-channel min(): clamping the
-              // channels independently is what turns a turquoise into a white the moment
-              // two of them saturate, and it did exactly that on the first build (a full
-              // whiteout of the gale, measured and screenshotted). Dividing the whole
-              // vector by its own peak keeps the derived hue whatever the ceiling is.
+                        * ( 1.0 - smoothstep( 220.0, 430.0, dist ) ) * uNearK * uSss.x * sh;
               vec3 sssRaw = fogColor * exp( -${v3(K_EXT)} * uSss.z ) * uSss.w;
               float sMax = max( sssRaw.r, max( sssRaw.g, sssRaw.b ) );
               vec3 sssCol = sssRaw * ( sMax > uSss2.x ? uSss2.x / sMax : 1.0 );
-              // sqrt of the transmittance, not the transmittance. (1 - F) alone is the
-              // literal Fresnel weight and it measured almost nothing: across the open
-              // sea the view is grazing, F runs 0.8-1.0, and a 20x crank on sssK moved
-              // the band by 1.4 code values. The literal factor is also only half the
-              // physics — light leaving at a grazing angle travelled a LONGER path
-              // through the lit body on the way out, so the internal radiance it carries
-              // is correspondingly higher, and the two effects partly cancel. sqrt is the
-              // cheap stand-in for that cancellation. It keeps the property the bloom
-              // argument actually needs: still exactly 0 at F = 1, so the horizon
-              // fragments, where the reflected sky already sits near 0.6 scene-linear,
-              // gain nothing at all.
-              // BLOOM. The TERM is capped at sssCap (0.18), comfortably under
-              // BloomEffect's 0.28, which is the rule this pass was given.
-              //
-              // A HEADROOM clamp -- only ever spending what a fragment still has under
-              // 0.28 -- was built first and measured, because it is a strictly stronger
-              // guarantee. It is unusable here, and the measurement says why: in a bright
-              // gale the sea band already renders at 155-168 code values, i.e. 0.33-0.39
-              // scene-linear, because the reflected storm sky puts it there. The headroom
-              // is ALREADY ZERO across most of the sea, so that clamp deleted the effect
-              // over exactly the water it was written for and left +2.4 code values.
-              // The sea being over threshold in a gale is a pre-existing property of the
-              // sky reflection, not something this term introduces.
               tSss = sssCol * clamp( amt, 0.0, 1.0 ) * sqrt( max( 1.0 - F, 0.0 ) );
               col += tSss;
             }
           }
-
-          // Wind streaks: storm foam blown into lines along the dominant swell's own
-          // bearing (WAVE[0], 20 degrees), sampled ~9:1 anisotropically so it reads as
-          // streaks and not as blobs. Two octaves multiplied, so the streaks break up
-          // instead of running the length of the frame.
           if ( dOff ) {
             if ( uDbg < 1.5 ) col = tRefl;
             else if ( uDbg < 2.5 ) col = tBody;
             else if ( uDbg < 3.5 ) col = tTrans;
             else if ( uDbg < 5.5 && uDbg > 4.5 ) col = tSss;
-            else if ( uDbg > 7.5 ) col = tGlit;
+            else if ( uDbg > 7.5 && uDbg < 8.5 ) col = tGlit;
+            else if ( uDbg > 8.5 ) col = vec3( alpha, sqrt( varU ), foamJ );
             else col = vec3( 0.0 );
           }
-          if ( uStorm > 0.02 && dFoam ) {
-            vec2 wr = vec2( vW.x * 0.93969 + vW.z * 0.34202,
-                           -vW.x * 0.34202 + vW.z * 0.93969 );
-            float sk = vn( vec2( wr.x * 0.030 - uTime * 0.30, wr.y * 0.27 ) )
-                     * vn( vec2( wr.x * 0.075 - uTime * 0.52, wr.y * 0.62 ) + 3.7 );
-            // uLagW.z is GLASS.chop.streakLegacy — 1.0 is the shipped look, exactly.
-            // It is a knob because this block and the Jacobian foam below now draw the
-            // same thing two different ways: this one paints straight unbroken bands
-            // along WAVE[0]'s fixed 20-degree bearing whether or not the water there is
-            // folding, and in a gale from height it reads as corduroy under the fold-born
-            // foam. Michael's call which wins; nothing here changes without his poke.
-            col = mix( col, foamCol, smoothstep( 0.16, 0.42, sk ) * uStorm * uStorm * 0.55
-                     * ( 1.0 - smoothstep( 90.0, 260.0, dist ) ) * uChopX.x );
-          }
-          // The disc stops at 460 units; the sea does not. Its last 30% eases into the
-          // same airlight the dome draws past the rim and the fog chunk converges on, so
-          // the three meet with no ring. Applied after the foam block below, or a storm
-          // whitecap at 400 units would sit on top of the horizon haze.
-          rimK = smoothstep( 320.0, 455.0, dist );
-          // The raft floats in white: water within a few units of the eye keeps its own
-          // colour, everything past ~220 units is gone. Same curve the eye reads on a
-          // real fog morning — the sea does not vanish under you, it vanishes around you.
+          // THE FAR BAND. The mesh ends at the camera's far plane; past it the dome draws
+          // farSea(). Over the last stretch the near shading eases into that same BRDF so
+          // the hand-off is a function meeting itself.
+          farK = smoothstep( uFarR * 0.70, uFarR * 0.97, dist );
           airK = smoothstep( 6.0, 220.0, dist );
         }
 
-        // Deriving foam from |grad h| means only the storm spectrum can ever steepen
-        // enough to break. Monte-Carlo over the spectrum (20k samples): calm p99 = 0.078
-        // and max 0.095, so a 0.30 calm threshold can never fire; storm p50 = 0.102,
-        // p90 = 0.189, max 0.306, so a 0.145 storm threshold covers ~22% of the ceiling.
-        // Mixed AFTER the Fresnel composite because it replaces what is underneath.
-        float foam = smoothstep( uFoamThr, uFoamThr + 0.05, length( dh ) )
-                   * ( 0.20 + 0.80 * uStorm )
-                   * ( 0.45 + 0.75 * vn( vW.xz * 0.55 + vec2( uTime * 0.12 ) ) );
-        if ( dFoam ) col = mix( col, foamCol, clamp( foam, 0.0, 0.85 ) * uNearK );
-
-        // JACOBIAN FOAM — this ABSORBS the wind round's height-led whitecap term.
-        //
-        // The old gate asked "is this fragment tall AND steep?", which is a proxy for
-        // breaking; this asks the actual question. det(I + dD/dp) is the local area
-        // scale factor of the surface: exactly 1 where the water is undisturbed, above 1
-        // on the stretched backs, and below 1 where the water crowds — which is where a
-        // real sea makes foam. It tracks a front through its whole life instead of
-        // flashing on the peak, and because foamJ carries three LAGGED samples of the
-        // same determinant (see waveField), foam BUILDS on the fold and DECAYS over
-        // ~4 s behind it, with no render target and no history texture.
-        //
-        // The wind gate survives as a BRIGHTENER, not as the source: folds make foam at
-        // any wind, a gale makes more of it.
-        //
-        // Written AFTER the Fresnel composite and outside the below/air branch, so a cap
-        // reads from the deck and from three units under looking up through the
-        // interface — the same torn white on both sides, which is the whole point of the
-        // interface being one shader.
-        //
-        // Scene-linear discipline: the colour is HARD CLAMPED at 0.26, under
-        // BloomEffect's 0.28. The storm foam above deliberately crosses it (it is the one
-        // thing on a storm ceiling that glows); FOAM NEVER DOES, or a gale becomes a
-        // field of fireworks. Desaturated white-green rather than the foam's blue-white:
-        // torn water carries the sea's own colour in it, not the sky's.
-        // The spill joins the fold-born foam HERE, before the texture, so an
-        // avalanche is torn by exactly the same procedural lace as the crest that
-        // shed it — and because the texture closes its own holes in proportion to
-        // the intensity, the band is solid at the lip and ragged at the tail for
-        // free. max(), not add: whitewater does not stack.
-        // FOAM ACCUMULATOR: the persistence layer. The lags are the INSTANT layer
-        // (a fold and its ~4 s wake); the accumulator is what a sea remembers longer --
-        // foam that was shed repeatedly, blown downwind into windrows. Sampled at the
-        // parameter point (the accumulator integrates foldTrace in parameter space),
-        // valid inside the window it covers around the camera, and laced along the
-        // wind at foamStretch:1 so it streaks instead of spattering (Langmuir rows).
-        vec2 acc = vec2( 0.0 );
-        if ( uAccA.y > 0.001 ) {
-          float accW = 1.0 - smoothstep( uAccA.z * 0.72, uAccA.z, distance( vP0, uAccC ) );
-          if ( accW > 0.002 ) {
-            acc = texture2D( uFoamAcc, vP0 * uAccA.x ).rg * accW;
-            vec2 wq = vec2( vP0.x * uWindD.x + vP0.y * uWindD.y,
-                           -vP0.x * uWindD.y + vP0.y * uWindD.x );
-            float lace = vn( vec2( wq.x * uAccS.x, wq.y ) * uAccS.y + vec2( uTime * 0.05, 0.0 ) );
-            acc.r *= uAccA.y * ( 0.25 + 1.25 * smoothstep( 0.30, 0.75, lace ) );
-            acc.g *= uAccA.w;
-          }
-        }
-        float fj = min( max( foamJ, spill ) + acc.r, 1.0 )
-                 * ( 1.0 - smoothstep( 130.0, 330.0, dist ) ) * uNearK;
-        // Entrained bubbles: a milky lift under the surface where crests broke a while
-        // ago, air side only (from below the ceiling already carries the foam raft).
-        if ( !below && acc.g > 0.002 && dBub ) col = mix( col, foamCol * 0.55, clamp( acc.g, 0.0, 0.45 ) );
+        // ---- WHITECAPS -------------------------------------------------------------
+        // The Jacobian of the FFT displacement: below 1 the water is crowding, below the
+        // threshold it is breaking. Live folds are solid; the persistent memory decays
+        // into lace and streaks behind the crest (it lives in parameter space, so it is
+        // left where the parcel broke while the wave moves on). Lit like a solid: sky
+        // irradiance plus the sun on its face, shadowed by the raft.
+        float fj = clamp( foamJ, 0.0, 1.0 ) * ( 1.0 - smoothstep( 160.0, 420.0, dist ) ) * uNearK;
+        fj = max( fj, hull );
         if ( fj > 0.003 && dFoam ) {
-          // PROCEDURAL FOAM TEXTURE. Three octaves of the same value noise everything
-          // else here is made of, in a wind-aligned frame: advected downwind so the
-          // pattern travels with the weather, and STRETCHED along the wind as it rises so
-          // foam turns from patches into streaks in a gale. The texture cuts holes in the
-          // foam (smoothstep on the pattern) rather than just dimming it — flat foam
-          // reads as paint, and paint is what the old term looked like up close.
-          vec2 wr = vec2( vW.x * uWindD.x + vW.z * uWindD.y,
-                         -vW.x * uWindD.y + vW.z * uWindD.x );
+          vec2 wr = vec2( vW.x * uWindD.x + vW.z * uWindD.y, -vW.x * uWindD.y + vW.z * uWindD.x );
           float st = 1.0 + uChop2.y * uWindS;
-          vec2 fp = vec2( ( wr.x - uTime * ( 0.30 + 1.20 * uWindS ) ) / st, wr.y ) * uChop2.x;
-          float ft = vn( fp ) * 0.60
-                   + vn( fp * 2.30 + 4.1 ) * 0.27
-                   + vn( fp * 5.10 - 2.7 ) * 0.13;
-          // Denser foam closes its own holes: a fresh fold is solid white, a decaying
-          // one breaks into lace. One multiply, and it is most of the "lingering" read.
-          float fm = smoothstep( 0.30, 0.74, ft * ( 0.50 + 0.90 * fj ) );
+          vec2 fp = vec2( wr.x / st, wr.y ) * uChop2.x;
+          float fm = foamTex( fp + vec2( -uTime * 0.05, 0.0 ), fj );
+          float NoLf = max( dot( N, uSunDir ), 0.0 );
+          float lum = dot( uSunCol, vec3( 0.2126, 0.7152, 0.0722 ) );
+          vec3 capCol = vec3( 0.90, 0.97, 0.95 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6
+                      * ( 0.62 + 0.38 * NoLf * sh * smoothstep( 0.5, 1.2, lum ) );
+          capCol = min( capCol, vec3( 0.34 ) );
           float capW = smoothstep( uCap.x, min( 0.98, uCap.x + 0.30 ), uWindS );
-          vec3 capCol = vec3( 0.90, 1.00, 0.94 )
-                      * min( dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6, 0.26 );
-          col = mix( col, capCol,
-                     clamp( fj * fm * uCap.y * ( 0.55 + 0.65 * capW ), 0.0, 0.90 ) );
+          col = mix( col, capCol, clamp( fj * fm * ( 0.75 + 0.25 * capW ), 0.0, 0.94 ) );
+          // A thin bubble veil under fresh foam: milky turquoise, not white.
+          if ( !below ) col += foamCol * 0.05 * fj * ( 1.0 - fm );
         }
 
-        // SURFACE BOIL, colour half: a churning white patch where Sal's exhaust breaks
-        // the surface. Written OUTSIDE the below/air branch, like the Jacobian foam, so
-        // the same boil reads from the deck looking down and from three units under
-        // looking up. Fast fine lace (two octaves on hostile clocks) cut by smoothstep
-        // so it seethes as holes open and close, not a painted disc. foamCol keeps the
-        // scene-linear discipline: clamped at 0.85 like the storm foam mix above.
+        // SURFACE BOIL, colour half: churning white where Sal's exhaust breaks through.
         if ( uBoil.z > 0.004 ) {
           vec2 bdc = vW.xz - uBoil.xy;
           float blc = length( bdc );
@@ -3422,65 +2678,63 @@ function buildSurface() {
           }
         }
 
-        // BACKLIT CREST SCATTER. A wave top is thin, and when the sun is low and BEYOND
-        // it the light that gets through is the green the water leaves — the one moment
-        // this sea is lit from inside rather than from above. Three gates, all of which
-        // must open: the sun low (dead at noon, full at the dawn/dusk ring stops), the
-        // view pointed at it in the horizontal plane (that is what "beyond the crest"
-        // means for a surface you are looking across), and the fragment thin — high on
-        // its own crest AND steep, which is the top of a front and nothing else.
-        // Night costs nothing: uSunCol is black then, so the whole term is zero.
-        // Air side only. Under the surface the sun already arrives through Snell's
-        // window and the mirror; a second transmission term there would double-count it.
+        // BACKLIT CREST SCATTER: low sun beyond a thin, steep crest -- the green the water
+        // leaves, the one moment the sea is lit from inside. Air side only.
         if ( !below && uChop2.z > 0.001 ) {
           float lum = dot( uSunCol, vec3( 0.2126, 0.7152, 0.0722 ) );
-          // uSunCol is the DISC stop, and at night the disc is the MOON — luminance 0.34
-          // against noon's 2.9 and dawn/dusk's ~1.9. Without this gate a moonlit gale
-          // still put a measured 5 code values of green on 65 pixels, which is not "zero
-          // at night", it is "invisible at night". The sun has to actually be up: the
-          // sea is not backlit by the moon, and moonlight has no green to give.
           float sunUp = smoothstep( 0.50, 1.10, lum );
           float lowSun = ( 1.0 - smoothstep( 0.08, 0.45, uSunDir.y ) ) * sunUp;
           vec2 sxz = uSunDir.xz;
           float sl = length( sxz );
           float toward = sl > 1e-3 ? max( dot( normalize( V.xz ), sxz / sl ), 0.0 ) : 0.0;
-          float thin = smoothstep( 0.42, 1.00, waveY / hRef )
+          float gRef = 0.06 + 0.25 * seaS;
+          float thin = smoothstep( 0.30, 1.00, waveY / hRef )
                      * smoothstep( 0.45, 1.25, length( dh ) / gRef );
           float sc = uChop2.z * lowSun * pow( toward, uChop2.w ) * thin
                    * ( 1.0 - smoothstep( 60.0, 240.0, dist ) ) * uNearK;
-          // 0.20 ceiling on the emitted colour: transmitted light is dimmer than the
-          // source by construction, and the sum must stay under BloomEffect's 0.28.
           if ( !dOff ) col += vec3( 0.18, 0.66, 0.46 ) * clamp( sc, 0.0, 1.0 ) * min( lum * 0.62, 0.20 );
         }
-        // From below the LENS is the effect and the fleck is a garnish. From above the
-        // splash fleck is back — it was muted to zero only because the field it drew was
-        // a regular lattice — at splashK, which puts a full-gale splash at ~0.066
-        // scene-linear against BloomEffect's 0.28. Rain never glows.
         if ( dFoam ) col += foamCol * ( below ? rain * 0.25 : splashV * ${f(GLASS.rain.splashK)} );
         if ( !dOff ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
-        // The bolt light (fog chunk): the sea is a mirror, not a wall, so it takes a
-        // fraction of the diffuse term -- the foam and the chop's roughness are what
-        // catch a flash; the sheet term above does the transmitted underside.
         gBoltK = 0.15;
-        if ( rimK > 0.0 && dHaze ) col = mix( col, airLight( fogColor ), rimK );
-        // AFTER the rim hand-off, so the sea, the dome past its rim and the horizon all
-        // white out together and the seam stays a seam of nothing.
+        if ( farK > 0.0 && dHaze ) col = mix( col, farSea( V, fogColor ), farK );
         if ( airK > 0.0 && dHaze ) col = airFog( col, 0.0, airK );
 
-        // uFade retires the surface as the diver descends. Without it the depth fog
-        // drives this plane to near-black while the dome behind stays lit, and the
-        // horizon reads as a hard black rectangle whenever you look up.
         gl_FragColor = vec4( col * uBright, uFade );
         #include <fog_fragment>
       }`
   });
   mat.transparent = true;
   mat.depthWrite = false;
-  surface = new THREE.Mesh(buildSurfaceGeo(), mat);
+  surface = new THREE.Mesh(buildOceanGeometry(), mat);
   surface.renderOrder = -1;          // behind everything; it is a ceiling, not an occluder
   surface.frustumCulled = false;
-  surface.onBeforeRender = (r, s, cam) => uCam.value.copy(cam.position);
+  surface.onBeforeRender = (r, s, cam) => {
+    uCam.value.copy(cam.position);
+    updateOceanGrid(cam.position.x, cam.position.z);
+    uFarR.value = cam.far;
+  };
   scene.add(surface);
+  applySeaEnv();
+}
+
+// The sky environment the rough sea reflects. The dome's PMREM capture (sun disc
+// excluded, so the glitter lobe is the only sun on the water) unless something better
+// is registered: setSeaEnv(pmremTexture) -- e.g. a volumetric-cloud sky capture -- takes
+// over, and setSeaEnv(null) hands back to the dome's.
+let _seaEnvExt = null, _seaEnvDome = null;
+export function setSeaEnv(tex) { _seaEnvExt = tex || null; applySeaEnv(); }
+function applySeaEnv() {
+  const t = _seaEnvExt || _seaEnvDome;
+  if (!surface || !t || !t.image) return;
+  const m = surface.material;
+  const H = t.image.height, maxMip = Math.log2(H) - 2;
+  const tw = 1 / (3 * Math.max(Math.pow(2, maxMip), 7 * 16)), th = 1 / H;
+  const want = { SEA_ENV: 1, ENVMAP_TYPE_CUBE_UV: 1, CUBEUV_TEXEL_WIDTH: tw, CUBEUV_TEXEL_HEIGHT: th, CUBEUV_MAX_MIP: maxMip.toFixed(1) };
+  let diff = false;
+  for (const k in want) if (m.defines[k] !== want[k]) { m.defines[k] = want[k]; diff = true; }
+  uSeaEnv.value = t;
+  if (diff) m.needsUpdate = true;
 }
 
 // ---------------------------------------------------------------------------
@@ -3546,7 +2800,7 @@ function buildBubbles() {
 // ---------------------------------------------------------------------------
 export function buildWater() {
   buildShadowFallback();   // before buildSurface: its uniform must never hold null
-  buildFoamAcc();          // same rule: uFoamAcc holds a real texture from frame 0
+  buildOcean();            // the wave field's targets exist before the surface samples them
   buildDome();
   buildSurface();
   buildRays();
@@ -3863,7 +3117,6 @@ export function updateWater(dt, t) {
     uSpill.value.set(CH.spillK, CH.spillLen, CH.spillLip, CH.spillTail);
     uDet.value.set(CH.detailK, CH.detailGain, CH.detailWind, CH.detailBelow);
     uRough.value.set(CH.windMps, CH.roughK, CH.glitterLegacy, CH.glitterK);
-    uAccA.value.set(1 / ACC_TILE, CH.foamAccK, ACC_TILE * 0.48, CH.bubbleK);
     uAccS.value.set(CH.foamStretch, CH.foamLaceScale);
     _windOut.speed = _wsp; _windOut.dx = uWindD.value.x; _windOut.dz = uWindD.value.y;
   }
@@ -3872,14 +3125,21 @@ export function updateWater(dt, t) {
   // by the background dome and the sea's occlusion. Computed first because both read it.
   // uStormU is set further down from wMurk; one frame of lag on the wave amplitude here
   // is invisible and avoids reordering the whole function.
+  // THE SPECTRAL OCEAN. The spectrum follows the eased wind and the storm envelope the
+  // sky is drawn with (one frame of lag on storm, as before); the GPU then evolves and
+  // inverts it, and the probe reads back the drawn height around Sal and the raft.
+  setSeaState(_wsp, uStormU.value, uWindD.value.x, uWindD.value.y, t);
+  updateOcean(dt, t);
+  probeOcean(_focus.set ? _focus.x : camera.position.x, _focus.set ? _focus.z : camera.position.z,
+    uRaftC.value.x, uRaftC.value.y, t);
+  oceanTick(dt);
   _surfH = SURFACE_Y + surfaceHeightAt(camera.position.x, camera.position.z, t, uStormU.value);
   // WAVE-SLOPE CAUSTICS (roadmap/ref-caustics-shadow.md). surfaceHeightAt has just
   // resolved _cw for this frame's storm and wind; publish the two longest components
   // (bearing, k, HEIGHT amplitude, omega) plus the clock so terrain.js can evaluate the
   // same low-frequency surface gradient per fragment. Plain floats into a fixed array:
   // no allocation, no import of terrain.js from here.
-  waveLow[0] = _cw[0].dx; waveLow[1] = _cw[0].dz; waveLow[2] = _cw[0].k; waveLow[3] = _cw[0].ampH; waveLow[4] = _cw[0].w;
-  waveLow[5] = _cw[1].dx; waveLow[6] = _cw[1].dz; waveLow[7] = _cw[1].k; waveLow[8] = _cw[1].ampH; waveLow[9] = _cw[1].w;
+  dominantComponents(waveLow);
   waveLow[10] = t;
   uAir.value = clamp((y - (_surfH - AIR_BAND)) / (2 * AIR_BAND), 0, 1);
 
@@ -3958,7 +3218,6 @@ export function updateWater(dt, t) {
   // 1.177 / sqrt(n), integrated solid angle 2 pi / (n + 1). These are what the GGX
   // glitter widens by and normalises to, so the lobe tracks the disc through a storm.
   uGlit.value.set(GLASS.chop.glitterDiscK * 1.177 / Math.sqrt(uSunSize.value), 6.2831853 / (uSunSize.value + 1));
-  updateFoamAcc(dt);
   // crepuscular-sky: publish this frame's resolved sky for postfx.skyrays.js.
   skyState.cov = uCloudCov.value;
   skyState.disc[0] = _pDisc[0]; skyState.disc[1] = _pDisc[1]; skyState.disc[2] = _pDisc[2];
@@ -3972,7 +3231,6 @@ export function updateWater(dt, t) {
     su.uBright.value = clamp(1 - d01 * 0.6, 0.45, 1) * (0.35 + 0.65 * sFade);
     // The bolt light carries the strike now; the sea's sheet keeps its `sheet` share.
     su.uFlash.value = wFlash * GLASS.lightning.sheet;
-    su.uFoamThr.value = ml(0.30, 0.145, storm);
     // The caustic sheet in the mirror and the foam/rain/flash detail are near-surface
     // phenomena; retire them well before uFade does, so the deep pays nothing for them.
     su.uMirrorK.value = clamp(1 + y / 70, 0, 1);

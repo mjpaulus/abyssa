@@ -22,7 +22,7 @@ import { V3 } from '../lib/math.js';
 import { makeGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftRopeSet, raftCanvasSet,
   raftLeatherSet, raftSetsBench } from '../lib/textures.js';
 import { survival } from './survival.js';
-import { surfaceHeightAt, stormLevel, onSkyEnv } from '../world/water.js';
+import { surfaceHeightAt, stormLevel, onSkyEnv, setRaftContact } from '../world/water.js';
 import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash, DECK_SENTINEL, chamferBox, weldBead } from './raft/kit.js';
 import { DECK_NAILS } from './raft/hull.js';
 import { buildHull } from './raft/hull.js';
@@ -571,7 +571,10 @@ export function updateRaft(dt, t) {
   // Framerate-independent ease (tether.js's MU_RATE idiom): dt/0.35 clamps at 1 and
   // over-tightens at low fps; the exp form is the same 0.35 s time constant everywhere.
   const ek = 1 - Math.exp(-dt / 0.35);
+  const rideY0 = rideY;
   rideY += (hTarget - rideY) * ek;
+  // The sea draws its hull collar from this: where the raft is and how hard it works.
+  setRaftContact(RAFT_POS.x, RAFT_POS.z, 4.75, dt > 0 ? (rideY - rideY0) / dt : 0);
   raft.position.y = rideY;
   raft.position.x = RAFT_POS.x + Math.sin(t * 0.37) * 0.16 * (1 + storm * 2.1);
   // pitch into the swell off the bow/beam height differentials, softly clamped
