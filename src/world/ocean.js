@@ -15,13 +15,15 @@
 //     after mip filtering IS the unresolved slope variance -> the specular roughness),
 //     and the Jacobian terms + PERSISTENT foam (ping-ponged, so whitecaps linger and
 //     decay where the parcel broke);
-//   * a CPU height query that agrees with what is DRAWN: a tiny probe pass evaluates the
-//     exact vertex displacement (same textures, same mip LOD law, inverse-displacement
-//     fixed point) on two windows (around the player and around the raft) and reads
-//     them back through a fence-free PBO ring; the CPU interpolates in space and
-//     extrapolates the two-frame latency in time. Outside the windows (or before the
-//     first readback lands) an analytic sum of the dominant spectral components of the
-//     same spectrum answers instead.
+//   * a CPU height query that agrees with what is DRAWN: a module worker
+//     (ocean.worker.js) inverse-FFTs the IDENTICAL bins of cascades 0 and 1 (same
+//     Gaussian draws, spectrum, quantised omegas, chop) ahead of the game clock; the
+//     main thread interpolates two bracketing fields in time, Catmull-Roms them in
+//     space and inverts the horizontal displacement. Only cascade 2's centimetre chop is
+//     missing. Before the first field lands an analytic sum of the dominant spectral
+//     components answers instead. (A GPU readback was built first and measured: 7.5 ms
+//     of main-thread stall per map on ANGLE/Metal. __ocean.verify() keeps the GPU probe
+//     as the ground truth for accuracy checks.)
 // Units: one world unit is 3 m (the project's long-standing convention: omega =
 // sqrt(g k / 3) with k per unit). The spectrum is evaluated in METRES and converted.
 // Zero per-frame allocation: every target, buffer and scratch array is built once.
@@ -29,18 +31,9 @@ import * as THREE from 'three';
 import { renderer, camera } from '../core.js';
 import { GLASS } from '../config.js';
 
-export const OCEAN_N = 256;
+import { GRAV, OCEAN_N, CASCADE_L, K_EDGE, T_REP, W0, specW as specWS, specDensity as specDensityS, fillNoise } from './ocean.spectrum.js';
+export { OCEAN_N, CASCADE_L };
 const N = OCEAN_N, LOGN = 8;
-export const CASCADE_L = [287.0, 67.0, 17.0];
-// Band edges in rad per world unit. A cascade keeps the waves its patch resolves with
-// at least six wavelengths across the NEXT patch; everything shorter belongs to the
-// next one. Disjoint, so no wavenumber is ever counted twice.
-const K_EDGE = [0.0, 6 * 2 * Math.PI / CASCADE_L[1], 6 * 2 * Math.PI / CASCADE_L[2], 1e9];
-const GRAV = 9.81;
-// Frequency quantisation: every omega is snapped to a multiple of 2 pi / T_REP, so the
-// whole field repeats every T_REP seconds and the shader's phase argument stays small
-// no matter how long the game has run (fp32 phase at t = 1e5 s would jitter).
-const T_REP = 400.0, W0 = 2 * Math.PI / T_REP;
 
 // Clipmap geometry constants, shared with water.js's surface material.
 export const GRID_S0 = 0.25;      // finest cell, world units (power of two: snapping is exact)
@@ -153,59 +146,10 @@ float specDensity( vec2 km ){
   return E * uSpA.w;
 }`;
 
-// JS twin of specDensity (same maths, same order).
-function lgammaS(x) {
-  return (x - 0.5) * Math.log(x) - x + 0.91893853 + 1 / (12 * x) - 1 / (360 * x * x * x);
-}
-function spreadD(cosT, s) {
-  const c2 = Math.min(1, Math.max(0, 0.5 + 0.5 * cosT));
-  const lq = 2 * lgammaS(s + 1) - lgammaS(2 * s + 1) + (2 * s - 1) * 0.69314718 - 1.14472989;
-  return Math.exp(lq + s * Math.log(Math.max(c2, 1e-12)));
-}
-function peakR(w, wp) {
-  const sg = w <= wp ? 0.07 : 0.09, x = (w - wp) / (sg * wp);
-  return Math.exp(-0.5 * x * x);
-}
+// The JS twin of the spectrum lives in ocean.spectrum.js (shared with the worker).
 const SP = { A: [8, 1e5, 3.3, 1], B: [1, 0, 1, 0], C: [0.4, 0.57, 4, 24], D: [1, 0.02, 0, 0] };
-// Omnidirectional S(w) in m^2 s (for stats), wind + swell.
-function specW(w) {
-  const [U0, F, gam] = SP.A, U = Math.max(U0, 0.5);
-  const alpha = 0.076 * Math.pow(U * U / (F * GRAV), 0.22);
-  const wp = 22 * Math.pow(GRAV * GRAV / (U * F), 1 / 3);
-  const r = wp / w, r2 = r * r;
-  let S = alpha * GRAV * GRAV / w ** 5 * Math.exp(-1.25 * r2 * r2) * Math.pow(gam, peakR(w, wp));
-  const [Hs, wps, gs] = SP.C;
-  if (Hs > 1e-3) {
-    const sp = wps / w, sp2 = sp * sp;
-    S += 0.3125 * Hs * Hs * wps ** 4 / w ** 5 * Math.exp(-1.25 * sp2 * sp2) * Math.pow(gs, peakR(w, wps)) * (1 - 0.287 * Math.log(gs));
-  }
-  const k = w * w / GRAV;
-  return S * Math.exp(-k * k * SP.D[1] * SP.D[1]) * SP.A[3];
-}
-function specDensity(kx, kz) {
-  const k = Math.hypot(kx, kz);
-  if (k < 1e-6) return 0;
-  const w = Math.sqrt(GRAV * k);
-  const [U0, F, gam, ampK] = SP.A, U = Math.max(U0, 0.5);
-  const alpha = 0.076 * Math.pow(U * U / (F * GRAV), 0.22);
-  const wp = 22 * Math.pow(GRAV * GRAV / (U * F), 1 / 3);
-  const r = wp / w, r2 = r * r;
-  const Sw = alpha * GRAV * GRAV / w ** 5 * Math.exp(-1.25 * r2 * r2) * Math.pow(gam, peakR(w, wp));
-  const wr = w / wp;
-  let sW = (wr < 1 ? 9 * wr ** 4 : 9 * wr ** -2.5) * SP.D[0];
-  sW = Math.min(40, Math.max(0.6, sW));
-  const dx = kx / k, dz = kz / k;
-  const Dw = spreadD(dx * SP.B[0] + dz * SP.B[1], sW);
-  let Ss = 0;
-  const [Hs, wps, gs, ss] = SP.C;
-  if (Hs > 1e-3) {
-    const sp = wps / w, sp2 = sp * sp;
-    Ss = 0.3125 * Hs * Hs * wps ** 4 / w ** 5 * Math.exp(-1.25 * sp2 * sp2) * Math.pow(gs, peakR(w, wps)) * (1 - 0.287 * Math.log(gs));
-    Ss *= spreadD(dx * SP.B[2] + dz * SP.B[3], ss);
-  }
-  const E = (Sw * Dw + Ss) * (GRAV / (2 * w)) / k;
-  return E * Math.exp(-k * k * SP.D[1] * SP.D[1]) * ampK;
-}
+const specW = (w) => specWS(SP, w);
+const specDensity = (kx, kz) => specDensityS(SP, kx, kz);
 
 // ---------------------------------------------------------------------------
 // GPU passes
@@ -355,25 +299,11 @@ let mergeCur = 0;
 let rtProbe = null, noiseTex = null;
 let lastT = 0, frame = 0;
 
-// Fixed Gaussian draws per bin, generated in code (mulberry32 + Box-Muller).
+// Fixed Gaussian draws per bin, generated in code (ocean.spectrum.js fillNoise: the
+// worker regenerates the identical numbers from the same seed).
 const NOISE = new Float32Array(N * 3 * N * 4);
 function buildNoise() {
-  let s = 0x0CEA11 >>> 0;
-  const rnd = () => {
-    s = (s + 0x6D2B79F5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  for (let i = 0; i < N * 3 * N; i++) {
-    const u1 = Math.max(rnd(), 1e-9), u2 = rnd(), u3 = Math.max(rnd(), 1e-9), u4 = rnd();
-    const r1 = Math.sqrt(-2 * Math.log(u1)), r2 = Math.sqrt(-2 * Math.log(u3));
-    NOISE[i * 4] = r1 * Math.cos(2 * Math.PI * u2);
-    NOISE[i * 4 + 1] = r1 * Math.sin(2 * Math.PI * u2);
-    NOISE[i * 4 + 2] = r2 * Math.cos(2 * Math.PI * u4);
-    NOISE[i * 4 + 3] = r2 * Math.sin(2 * Math.PI * u4);
-  }
+  fillNoise(NOISE);
   const t = new THREE.DataTexture(NOISE, N, 3 * N, THREE.RGBAFormat, THREE.FloatType);
   t.minFilter = t.magFilter = THREE.NearestFilter;
   t.needsUpdate = true;
@@ -418,6 +348,7 @@ export function buildOcean() {
   rtB = mkRT(N, 3 * N, 2, fftType, false);
   for (let c = 0; c < 3; c++) for (let i = 0; i < 2; i++) rtMerge[c][i] = mkRT(N, N, 3, THREE.HalfFloatType, true);
   rtProbe = mkRT(PROBE_W, PROBE_H, 1, fftType === THREE.FloatType ? THREE.FloatType : THREE.HalfFloatType, false);
+  startWorker();
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array([-1, -1, 0, 3, -1, 0, -1, 3, 0]), 3));
@@ -530,7 +461,6 @@ export function setOceanSim(on) { simOn = on; }
 // pure function of t, so a decimated sea is the same sea sampled at 30 Hz, not a slower
 // one; foam integrates the skipped frames' dt; the probe stamps the SIM clock.
 export function setOceanRate(k) { simEvery = Math.max(1, k | 0); }
-const _prevVp = new THREE.Vector4();
 export function updateOcean(dt, t) {
   if (!ok || !simOn) return;
   simDt += dt;
@@ -619,138 +549,117 @@ export function buildOceanGeometry() {
 }
 
 // ---------------------------------------------------------------------------
-// CPU HEIGHT QUERY
+// CPU HEIGHT QUERY — the worker's field (see ocean.worker.js for why not a readback).
 // ---------------------------------------------------------------------------
-const PBO_RING = 4, PBO_LAG = 2;
-let gl = null, pbo = null, issued = 0, readN = 0, probeFailed = false, _lastProbeT = 0, _fdtAvg = 0.016, _probedSimT = -1;
-const pboMeta = Array.from({ length: PBO_RING }, () => new Float64Array(7));   // t, ax, az, as, bx, bz, bs
-// The last THREE landed results: the CPU answer extrapolates the readback latency with
-// a quadratic through them (a linear one measured 0.08 u rms / 0.31 max in a gale at
-// 20 fps; the swell's curvature is most of that).
-const RES_K = 3;
-const res = Array.from({ length: RES_K }, () => new Float32Array(PROBE_W * PROBE_H * 4));
-const resMeta = Array.from({ length: RES_K }, () => new Float64Array(7));
-let resN = 0;   // number of results landed (res[(resN-1)%RES_K] is newest)
-const A_N = 64, B_N = 32;
-const WIN_SP = 0.5;
-let probeEvery = 1;
-function probeSetup() {
-  gl = renderer.getContext();
-  if (!gl.PIXEL_PACK_BUFFER || !gl.getBufferSubData) { probeFailed = true; return; }
-  pbo = [];
-  for (let i = 0; i < PBO_RING; i++) {
-    const b = gl.createBuffer();
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, b);
-    gl.bufferData(gl.PIXEL_PACK_BUFFER, PROBE_W * PROBE_H * 16, gl.STREAM_READ);
-    pbo.push(b);
-  }
-  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-}
-// Called once a frame after updateOcean. ax/az: the point the player window centres on.
-export function probeOcean(ax, az, bx, bz, t) {
-  if (!ok || probeFailed) return;
-  if (!pbo) { probeSetup(); if (probeFailed) return; }
-  // Map back everything old enough, oldest first. The lag adapts to the frame time: at
-  // 60 fps the GPU needs two frames' grace before a map is free, but a slow frame (the
-  // GPU long finished with the previous one) can take it one frame old and halve the
-  // extrapolation distance, which is where the error lives.
-  const fdt = t - _lastProbeT; _lastProbeT = t;
-  if (fdt > 0 && fdt < 0.5) _fdtAvg += (fdt - _fdtAvg) * 0.1;
-  const lag = _fdtAvg > 0.030 ? 1 : PBO_LAG;
-  while (issued - readN > lag) {
-    const slot = readN % PBO_RING, dst = resN % RES_K;
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo[slot]);
-    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, res[dst]);
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    resMeta[dst].set(pboMeta[slot]);
-    resN++; readN++;
-    if (track.on) trackLanded(res[dst], resMeta[dst]);
-  }
-  if (track.on) trackPredict(t);
-  if (issued - readN >= PBO_RING) return;
-  if (frame % probeEvery || lastT === _probedSimT) return;   // nothing new to read
-  _probedSimT = lastT;
-  const half = A_N * WIN_SP * 0.5, halfB = B_N * WIN_SP * 0.5;
-  const oax = Math.round((ax - half) / WIN_SP) * WIN_SP, oaz = Math.round((az - half) / WIN_SP) * WIN_SP;
-  const obx = Math.round((bx - halfB) / WIN_SP) * WIN_SP, obz = Math.round((bz - halfB) / WIN_SP) * WIN_SP;
-  const u = matProbe.uniforms;
-  u.uWA.value.set(oax, oaz, WIN_SP, 0);
-  u.uWB.value.set(obx, obz, WIN_SP, 0);
-  u.uCamXZ.value.set(camera.position.x, camera.position.z);
-  const prevRT = renderer.getRenderTarget();
-  passMesh.material = matProbe;
-  renderer.setRenderTarget(rtProbe);
-  renderer.render(passScene, quadCam);
-  const slot = issued % PBO_RING;
+// The worker returns cascades 0 and 1 as 128 x 128 grids of (Dy, lambda Dx, lambda Dz)
+// for a requested clock. Fields are requested LEAD seconds ahead of the game clock at
+// REQ_HZ, so two of them always bracket "now": the answer interpolates, it never
+// extrapolates. Spatially the grids are sampled with a periodic Catmull-Rom (2.24 u and
+// 0.52 u spacing against the shortest waves they carry, 11.8 u and 2.85 u), and the
+// horizontal displacement is inverted by the same fixed point the GPU probe used.
+// Zero per-frame allocation: grids live in a fixed pool and are TRANSFERRED to the
+// worker and back, never copied or created after boot.
+const GM = 128, GSZ = GM * GM * 3;
+const LEAD = 0.12, REQ_HZ = 24, FIELD_K = 4, POOL_K = FIELD_K + 3;
+const pool = [];
+const fields = Array.from({ length: FIELD_K }, () => ({ t: -1e9, g0: null, g1: null }));
+let _devField = null;
+let worker = null, workerOk = false, inflight = 0, lastReq = -1e9, paramT = -1e9, paramsSent = false;
+function startWorker() {
   try {
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo[slot]);
-    gl.readPixels(0, 0, PROBE_W, PROBE_H, gl.RGBA, gl.FLOAT, 0);
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    const m = pboMeta[slot];
-    m[0] = lastT; m[1] = oax; m[2] = oaz; m[3] = WIN_SP; m[4] = obx; m[5] = obz; m[6] = WIN_SP;
-    issued++;
-  } catch (e) {
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    probeFailed = true;
+    worker = new Worker(new URL('./ocean.worker.js', import.meta.url), { type: 'module' });
+  } catch (e) { console.warn('ABYSSA ocean: worker unavailable, analytic heights only', e); return; }
+  for (let i = 0; i < POOL_K; i++) pool.push([new Float32Array(GSZ), new Float32Array(GSZ)]);
+  worker.onmessage = (e) => {
+    const d = e.data;
+    inflight--;
+    if (d.type !== 'field') { pool.push([d.b0, d.b1]); return; }
+    if (d.gen === -1) { _devField = { t: d.t, g0: d.b0, g1: d.b1 }; return; }   // dev: verifyExact
+    // Replace the OLDEST slot (or an empty one); its buffers go back to the pool.
+    let oi = 0;
+    for (let i = 1; i < FIELD_K; i++) if (fields[i].t < fields[oi].t) oi = i;
+    const f = fields[oi];
+    if (f.g0) pool.push([f.g0, f.g1]);
+    f.t = d.t; f.g0 = d.b0; f.g1 = d.b1;
+    workerOk = true;
+  };
+  worker.onerror = (e) => { console.warn('ABYSSA ocean worker error', e.message); worker = null; workerOk = false; };
+}
+// Called once a frame from water.js, after setSeaState: keep the worker's spectrum in
+// step (4 Hz is far inside the wind's 5.5 s ease) and keep fields coming.
+let _fdt = 0.016, _lastFeedT = 0;
+export function feedOceanWorker(t) {
+  if (!worker) return;
+  // The lead adapts to the frame time: a field has to be computed, posted and received
+  // (about two frames) before the clock reaches it, or "now" falls off the newest field.
+  const fd = t - _lastFeedT; _lastFeedT = t;
+  if (fd > 0 && fd < 0.5) _fdt += (fd - _fdt) * 0.1;
+  if (!paramsSent || t - paramT > 0.25 || t < paramT) {
+    worker.postMessage({ type: 'params', SP, chop: _chop });
+    paramT = t; paramsSent = true;
   }
-  renderer.setRenderTarget(prevRT);
+  if (inflight >= 2 || !pool.length) return;
+  if (t - lastReq < Math.max(1 / REQ_HZ, 0.9 * _fdt) && t >= lastReq) return;
+  lastReq = t;
+  const pr = pool.pop();
+  inflight++;
+  worker.postMessage({ type: 'req', t: t + Math.max(LEAD, 3 * _fdt), b0: pr[0], b1: pr[1] }, [pr[0].buffer, pr[1].buffer]);
 }
-// Bilinear lookup in one landed result; NaN when (x, z) is outside both windows.
-function lookup(r, m, x, z) {
-  // window A
-  let fx = (x - m[1]) / m[3], fz = (z - m[2]) / m[3];
-  if (fx >= 0 && fz >= 0 && fx <= A_N - 1.001 && fz <= A_N - 1.001) return bil(r, 0, fx, fz);
-  fx = (x - m[4]) / m[6]; fz = (z - m[5]) / m[6];
-  if (fx >= 0 && fz >= 0 && fx <= B_N - 1.001 && fz <= B_N - 1.001) return bil(r, 64, fx, fz);
-  return NaN;
+// Periodic Catmull-Rom of one grid at world (x, z): adds its (Dy, Dx, Dz) into _acc * w.
+const _acc = new Float64Array(3);
+const _wx = new Float64Array(4), _wz = new Float64Array(4);
+function crW(t, out) {
+  const t2 = t * t, t3 = t2 * t;
+  out[0] = -0.5 * t3 + t2 - 0.5 * t;
+  out[1] = 1.5 * t3 - 2.5 * t2 + 1;
+  out[2] = -1.5 * t3 + 2 * t2 + 0.5 * t;
+  out[3] = 0.5 * t3 - 0.5 * t2;
 }
-function bil(r, xo, fx, fz) {
-  const i = Math.floor(fx), j = Math.floor(fz), u = fx - i, v = fz - j;
-  const at = (ii, jj) => r[jj * PROBE_W * 4 + xo + ii];
-  return (at(i, j) * (1 - u) + at(i + 1, j) * u) * (1 - v) + (at(i, j + 1) * (1 - u) + at(i + 1, j + 1) * u) * v;
+function sampleGrid(g, L, x, z, w) {
+  // The GPU samples its 256-texel field with uv = p / L, which puts texel u's CENTRE (the
+  // FFT sample at u L / 256) at p = (u + 0.5) L / 256: the drawn sea is the FFT field
+  // shifted by half a texel. The same shift here is the difference between 0.07 u and
+  // 0.01 u of disagreement on cascade 0 (half a texel is 0.56 u of a gale's swell slope).
+  const h = 0.5 / OCEAN_N;
+  const u = (x / L - h) * GM, v = (z / L - h) * GM;
+  const iu = Math.floor(u), iv = Math.floor(v);
+  crW(u - iu, _wx); crW(v - iv, _wz);
+  for (let b = 0; b < 4; b++) {
+    const row = (((iv + b - 1) % GM) + GM) % GM * GM;
+    const wz = _wz[b] * w;
+    for (let a = 0; a < 4; a++) {
+      const o = (row + ((((iu + a - 1) % GM) + GM) % GM)) * 3, ww = _wx[a] * wz;
+      _acc[0] += g[o] * ww; _acc[1] += g[o + 1] * ww; _acc[2] += g[o + 2] * ww;
+    }
+  }
+}
+let _fa = null, _fb = null, _fw = 0;
+function dispAt(x, z) {
+  _acc[0] = _acc[1] = _acc[2] = 0;
+  sampleGrid(_fa.g0, CASCADE_L[0], x, z, 1 - _fw); sampleGrid(_fa.g1, CASCADE_L[1], x, z, 1 - _fw);
+  if (_fw > 0) { sampleGrid(_fb.g0, CASCADE_L[0], x, z, _fw); sampleGrid(_fb.g1, CASCADE_L[1], x, z, _fw); }
 }
 export const probeStats = { hits: 0, misses: 0 };
-// DEV: latency-extrapolation error. Each frame the CPU answer at a tracked point is
-// recorded against the frame's clock; when the GPU value for that same clock lands two
-// frames later, the difference is exactly the error every consumer saw.
-const track = { on: false, x: 0, z: 0, tq: new Float64Array(16), hq: new Float64Array(16), n: 0, cnt: 0, sum2: 0, max: 0, amp: 0 };
-function trackPredict(t) { const i = track.n++ & 15; track.tq[i] = t; track.hq[i] = oceanHeightAt(track.x, track.z, t); }
-function trackLanded(r, m) {
-  const h = lookup(r, m, track.x, track.z);
-  if (h !== h) return;
-  for (let i = 0; i < 16; i++) if (track.tq[i] === m[0]) {
-    const e = Math.abs(track.hq[i] - h);
-    track.cnt++; track.sum2 += e * e; if (e > track.max) track.max = e;
-    track.amp = Math.max(track.amp, Math.abs(h));
-  }
-}
 // THE ONE CPU ANSWER: surface height (relative to SURFACE_Y) at world (x, z), time t.
 export function oceanHeightAt(x, z, t) {
-  if (resN > 0) {
-    const n2 = (resN - 1) % RES_K;
-    const h2 = lookup(res[n2], resMeta[n2], x, z);
-    if (h2 === h2) {
+  if (workerOk) {
+    // The newest field at or before t, and the oldest after it.
+    _fa = null; _fb = null;
+    for (let i = 0; i < FIELD_K; i++) {
+      const f = fields[i];
+      if (!f.g0) continue;
+      if (f.t <= t) { if (!_fa || f.t > _fa.t) _fa = f; }
+      else if (!_fb || f.t < _fb.t) _fb = f;
+    }
+    if (!_fa && _fb && _fb.t - t < 0.08) { _fa = _fb; _fb = null; }   // a hair early: take it
+    if (_fa && (_fb || t - _fa.t < 0.12)) {
+      _fw = _fb ? (t - _fa.t) / Math.max(_fb.t - _fa.t, 1e-6) : 0;
+      if (!_fb) _fb = _fa;
       probeStats.hits++;
-      const t2 = resMeta[n2][0], te = t2 + Math.min(Math.max(t - t2, 0), 0.2);
-      if (resN > 1) {
-        const n1 = (resN - 2) % RES_K, t1 = resMeta[n1][0];
-        const h1 = lookup(res[n1], resMeta[n1], x, z);
-        if (h1 === h1 && t2 - t1 > 1e-3 && t2 - t1 < 0.25) {
-          if (resN > 2) {
-            const n0 = (resN - 3) % RES_K, t0 = resMeta[n0][0];
-            const h0 = lookup(res[n0], resMeta[n0], x, z);
-            if (h0 === h0 && t1 - t0 > 1e-3 && t2 - t0 < 0.4) {
-              // Lagrange through (t0,h0) (t1,h1) (t2,h2), evaluated at te.
-              const a = (te - t1) * (te - t2) / ((t0 - t1) * (t0 - t2));
-              const b = (te - t0) * (te - t2) / ((t1 - t0) * (t1 - t2));
-              const c = (te - t0) * (te - t1) / ((t2 - t0) * (t2 - t1));
-              return h0 * a + h1 * b + h2 * c;
-            }
-          }
-          return h2 + (h2 - h1) * ((te - t2) / (t2 - t1));
-        }
-      }
-      return h2;
+      let px = x, pz = z;
+      for (let it = 0; it < 4; it++) { dispAt(px, pz); px = x - _acc[1]; pz = z - _acc[2]; }
+      dispAt(px, pz);
+      return _acc[0];
     }
   }
   probeStats.misses++;
@@ -837,26 +746,66 @@ export function dominantComponents(out) {
     if (i0 < 0 || a > comp[i0 * 6 + 5]) { i1 = i0; i0 = q; }
     else if (i1 < 0 || a > comp[i1 * 6 + 5]) i1 = q;
   }
-  const put = (q, o) => {
-    if (q < 0) { out[o] = 1; out[o + 1] = 0; out[o + 2] = 0.1; out[o + 3] = 0; out[o + 4] = 0; return; }
-    const kx = comp[q * 6], kz = comp[q * 6 + 1], kl = Math.hypot(kx, kz);
-    out[o] = -kx / kl; out[o + 1] = -kz / kl; out[o + 2] = kl;
-    out[o + 3] = 2 * comp[q * 6 + 5]; out[o + 4] = comp[q * 6 + 4];
-  };
-  put(i0, 0); put(i1, 5);
+  putComp(out, i0, 0); putComp(out, i1, 5);
+}
+function putComp(out, q, o) {
+  if (q < 0) { out[o] = 1; out[o + 1] = 0; out[o + 2] = 0.1; out[o + 3] = 0; out[o + 4] = 0; return; }
+  const kx = comp[q * 6], kz = comp[q * 6 + 1], kl = Math.hypot(kx, kz);
+  out[o] = -kx / kl; out[o + 1] = -kz / kl; out[o + 2] = kl;
+  out[o + 3] = 2 * comp[q * 6 + 5]; out[o + 4] = comp[q * 6 + 4];
 }
 
 // Dev surface.
 if (typeof window !== 'undefined') {
   window.__ocean = {
-    OCEAN, SP, stats: () => ({ ..._sea, chop: _chop, resN, issued, readN, probeFailed, fftType, ...probeStats }),
+    OCEAN, SP, stats: () => ({ ..._sea, chop: _chop, workerOk, inflight, fftType, ...probeStats,
+      fields: fields.map(f => +f.t.toFixed(3)) }),
     sim: setOceanSim,
     step(dt, t) { updateOcean(dt, t); },
-    track(x, z) { Object.assign(track, { on: true, x, z, n: 0, cnt: 0, sum2: 0, max: 0, amp: 0 }); track.tq.fill(-1); },
-    trackStats() { return { n: track.cnt, rms: Math.sqrt(track.sum2 / Math.max(1, track.cnt)), max: track.max, maxAbsH: track.amp }; },
-    // The newest LANDED probe value at (x, z) and the clock it was evaluated at: the
-    // ground truth the extrapolated CPU answer is measured against.
-    rawAt(x, z) { if (!resN) return null; const n1 = (resN - 1) % RES_K; return [lookup(res[n1], resMeta[n1], x, z), resMeta[n1][0]]; },
+    // ACCURACY vs THE DRAWN SURFACE (dev; allocates, synchronous readback -- never per
+    // frame). The GPU probe evaluates the vertex shader's exact displacement (all three
+    // cascades, the mesh's LOD law, the inverse-displacement fixed point) on a 64 x 64
+    // window round (cx, cz) at the sim clock; the CPU answer is asked the same question.
+    verify(cx = camera.position.x, cz = camera.position.z, sp = 0.5, noC2 = false) {
+      const u = matProbe.uniforms;
+      const ox = cx - 16 * sp * 2, oz = cz - 16 * sp * 2;
+      u.uWA.value.set(ox, oz, sp, 0); u.uWB.value.set(ox, oz, sp, 0);
+      u.uCamXZ.value.set(camera.position.x, camera.position.z);
+      const prev = renderer.getRenderTarget();
+      passMesh.material = matProbe;
+      const c2 = uOcDisp[2].value;
+      if (noC2) { const z = new THREE.DataTexture(new Float32Array(4), 1, 1, THREE.RGBAFormat, THREE.FloatType); z.needsUpdate = true; uOcDisp[2].value = z; }
+      renderer.setRenderTarget(rtProbe);
+      renderer.render(passScene, quadCam);
+      uOcDisp[2].value = c2;
+      const buf = new Float32Array(PROBE_W * PROBE_H * 4);
+      renderer.readRenderTargetPixels(rtProbe, 0, 0, PROBE_W, PROBE_H, buf);
+      renderer.setRenderTarget(prev);
+      let n = 0, s2 = 0, mx = 0, a2 = 0;
+      for (let j = 0; j < 64; j++) for (let i = 0; i < 64; i++) {
+        const g = buf[j * PROBE_W * 4 + i];
+        const c = oceanHeightAt(ox + i * sp, oz + j * sp, lastT);
+        const e = c - g; n++; s2 += e * e; a2 += g * g; mx = Math.max(mx, Math.abs(e));
+      }
+      return { n, rms: Math.sqrt(s2 / n), max: mx, heightRms: Math.sqrt(a2 / n), t: lastT };
+    },
+    // The same comparison with the time axis removed: freeze the GPU sim, ask the worker
+    // for a field at EXACTLY the sim clock, and compare against that field alone. What is
+    // left is the spatial/spectral agreement (interpolation, missing cascade 2, LOD).
+    async verifyExact(cx, cz, noC2 = false) {
+      simOn = false;
+      _devField = null; inflight++;
+      const b0 = new Float32Array(GSZ), b1 = new Float32Array(GSZ);
+      worker.postMessage({ type: 'req', t: lastT, gen: -1, b0, b1 }, [b0.buffer, b1.buffer]);
+      for (let i = 0; i < 100 && !_devField; i++) await new Promise(r => setTimeout(r, 20));
+      const save = fields.map(f => [f.t, f.g0, f.g1]);
+      for (const f of fields) { f.t = -1e9; f.g0 = null; }
+      fields[0].t = _devField.t; fields[0].g0 = _devField.g0; fields[0].g1 = _devField.g1;
+      const r = this.verify(cx, cz, 0.5, noC2);
+      fields.forEach((f, i) => { f.t = save[i][0]; f.g0 = save[i][1]; f.g1 = save[i][2]; });
+      simOn = true;
+      return r;
+    },
     // Compare CPU answer vs the analytic fallback at a point.
     h: (x, z, t) => ({ probe: oceanHeightAt(x, z, t), analytic: analyticHeight(x, z, t) }),
     // Dev readback of one merged texture's mean/max (allocates; never per frame).

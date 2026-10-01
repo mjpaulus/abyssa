@@ -13,7 +13,7 @@ import { rng, clamp } from '../lib/math.js';
 import { maxAniso } from '../lib/textures.js';
 // THE SPECTRAL OCEAN: the wave field, its textures, the clipmap and the CPU height query.
 import {
-  buildOcean, updateOcean, setSeaState, probeOcean, oceanHeightAt, oceanTick, dominantComponents,
+  buildOcean, updateOcean, setSeaState, feedOceanWorker, oceanHeightAt, oceanTick, dominantComponents,
   buildOceanGeometry, updateOceanGrid, OCEAN_UNIFORMS, OCEAN_GLSL_DISP, GRID_LEVELS, uOcSea, seaStats
 } from './ocean.js';
 import { scatter } from './flora.js';
@@ -1947,10 +1947,8 @@ let _wForce = null;
 const GLSL_WIND_DECL = `uniform vec2 uWindD, uWindK; uniform float uWindS;`;
 
 // THE CPU ANSWER TO "HOW HIGH IS THE SEA HERE". The spectral ocean (world/ocean.js)
-// owns it: a probe pass evaluates the exact drawn displacement (same textures, same
-// LOD law, same inverse-displacement fixed point) around the player and the raft and
-// reads it back fence-free; outside those windows the dominant spectral components of
-// the same spectrum answer analytically. The storm argument is kept for the callers'
+// owns it: a worker inverse-FFTs the identical long-wave bins the GPU draws, ahead of
+// the clock, and the main thread interpolates them (see ocean.worker.js). The storm argument is kept for the callers'
 // signature -- the field already carries the weather.
 export function surfaceHeightAt(x, z, t, storm) {
   return oceanHeightAt(x, z, t);
@@ -1959,9 +1957,6 @@ export function surfaceHeightAt(x, z, t, storm) {
 const uRaftC = { value: new THREE.Vector4(0, 0, 4.7, 0) };
 export function setRaftContact(x, z, half, vy) { uRaftC.value.set(x, z, half, Math.min(1.5, Math.abs(vy))); }
 const uSeaEnv = { value: null }, uEnvK = { value: 1 }, uFarR = { value: 700 };
-// The player window of the CPU height probe follows this point (game.js pushes Sal).
-const _focus = { x: 0, z: 0, set: false };
-export function setOceanFocus(x, z) { _focus.x = x; _focus.z = z; _focus.set = true; }
 // 0 = eye fully in water, 1 = fully in air. The band is half a helmet: narrow enough that
 // the transition is a moment, wide enough not to alias on a chopping surface.
 const AIR_BAND = 0.35;
@@ -3166,8 +3161,7 @@ export function updateWater(dt, t) {
   // inverts it, and the probe reads back the drawn height around Sal and the raft.
   setSeaState(_wsp, uStormU.value, uWindD.value.x, uWindD.value.y, t);
   updateOcean(dt, t);
-  probeOcean(_focus.set ? _focus.x : camera.position.x, _focus.set ? _focus.z : camera.position.z,
-    uRaftC.value.x, uRaftC.value.y, t);
+  feedOceanWorker(t);
   oceanTick(dt);
   _surfH = SURFACE_Y + surfaceHeightAt(camera.position.x, camera.position.z, t, uStormU.value);
   // WAVE-SLOPE CAUSTICS (roadmap/ref-caustics-shadow.md). surfaceHeightAt has just

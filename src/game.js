@@ -8,7 +8,7 @@ import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLant
 import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM } from './world/stir.js';
-import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setOceanFocus } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
@@ -1224,7 +1224,6 @@ function update(dt, t) {
   safe('footfx', () => updateFootFX(dt, t));
   safe('creatures', () => updateCreatures(dt, t));
   safe('fauna', () => updateFauna(dt, t));   // FAUNA PATCH
-  setOceanFocus(player.pos.x, player.pos.z);   // the CPU height probe's window rides with Sal
   updateWater(dt, t);    // NOT decorative: the surface height, optics and refraction key off it
   safe('clouds', () => updateClouds(dt, t));   // after updateWater: reads its eased wind and its resolved cloud palette
   safe('rain', () => updateRain(dt, t));       // after updateWater: reads the surface height it just resolved
