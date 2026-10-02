@@ -207,6 +207,15 @@ against explicit contracts and reviewed on return.
   species (variants by index hash, near/far LOD + range cull on the CPU) running gardens.js's sway
   program (batching-aware: aInst from a float texture). Host meshes are hidden, never disposed:
   `?plantproc` / `__plants.proc(true)` = the procedural A/B; `__plants.state()`.
+  PLANTS2: kelp + seagrass are BLADE CARDS (`plants/bladesSculpt.js` -> assets/blades, baked flat,
+  assembled at load into Macrocystis fronds with floats / bull kelp / Alaria / Laminaria and
+  seagrass patches, three LODs, kelp re-proportioned per instance by `kelpRemap`); sea pens
+  (+ Umbellula), whip corals (aspect-matched `whipRemap`), bacterial mats are new 3D species;
+  brain + table are EXPLICIT parametric lows (maze in geometry, real plate underside) with
+  explicit far LODs; every 3D species' far field is crossed-card IMPOSTORS (`plants/impSculpt.js`
+  -> assets/imp, one batch for all; `?noimp` A/B). Quiet bioluminescence: gardens.js GD_BIOLUM
+  (baked polyp mask, a wave down the colony, flash on stir push/jolt) on pens, a third of the
+  whips, GD_BIOTIP on crinoid arm tips. The build runs as a job queue under 4 ms/frame.
 - `world/fauna.js` — the animal vocabulary (loft/blade/limb/gape/eyes/photophores,
   part-id vertex animation, 30 Hz steering): ray, turtle, moray, crabs, stars/urchins;
   vent fish, flapjack, isopods; anglerfish, gulper, lanternfish. Own 'fauna' stream;

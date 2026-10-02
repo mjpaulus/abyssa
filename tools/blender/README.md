@@ -196,6 +196,35 @@ flora.js / gardens.js's own layouts). Additive pipeline pieces it uses:
 - `bake.py ... --sets a,b` rebakes only those sets but writes `<name>_<sets>.glb` and a json with
   partial stats: fine for paint-only iteration, finish with a full build.
 
+## Plants round 2 (plants2): explicit lows, blade cards, impostors
+
+All additive; a module that uses none of them builds exactly as before.
+- piece **`low: () => ({ pos, idx, uv[, normal] })`** — an EXPLICIT low with its UVs already laid
+  out (no DC, no QEM, no charting). Every piece of the set must be explicit and the set says
+  **`uvFixed: true`** (bake.py then skips the island repack). Used for parametric surfaces whose
+  UV map is analytic: the brain coral's polar grid ray-cast onto its field (one chart), the
+  table coral's top / underside / rim / stalk regions, the blade cards, the impostor cards.
+- piece **`farLow` / `farLow2`** — explicit far LODs in the SAME UV layout (the same parametric
+  surface at a lower resolution), exported as `<piece>_far` / `<piece>_far2` instead of a
+  collapse-decimated copy. They never stall at seams because they are not decimated.
+- **`build.mjs blades`** (`src/world/plants/bladesSculpt.js` -> `assets/blades/`): kelp and
+  seagrass. Every blade, stipe skin, float and haptera skin is sculpted FLAT on a bake plane (a
+  slab whose relief is the corrugation / midrib / veins / spinulose margin, cut in-plane by the
+  outline and the grazed holes) and baked onto a flat card (alpha set, coverage in ORM.B). The
+  plants are ASSEMBLED AT LOAD from those cards by `buildKelp` / `buildGrass` (pure arrays, three
+  LODs from one seeded skeleton) — the .glb only carries the cards the bake needed.
+- **`build.mjs imp`** (`src/world/plants/impSculpt.js` -> `assets/imp/`): crossed-card impostors of
+  every 3D species variant. Each piece is two cards crossing at the centre of the variant's
+  tight bounds; the cage pushes each card to the front of the bounds and the ray reaches back
+  through all of it, so the bake is an orthographic projection of the full sculpt (albedo, card-
+  relative normals, AO, coverage). plantKit draws all far plants as one batch.
+- bake.py writes a partial rebake's json as `<name>_<sets>.json` (beside its partial .glb) and
+  lists only the rebaked sets: the old behaviour overwrote `<name>.json`, and every other set's
+  ORM.B fell back to 'cavity' (round 1 shipped the crinoid's alpha vanes opaque that way).
+  `?plantsx=<sets>` overlays such a partial asset over the full one in the game (dev).
+- Headless Blender's Metal kernel compile needs to run outside the shell sandbox (it aborts on
+  a nil cache path otherwise).
+
 ## Fauna (fauna2): every animal through the same pipeline
 
 `node tools/blender/build.mjs <set>` for `school`, `reef`, `deep`, `octo`, `shark` (modules in

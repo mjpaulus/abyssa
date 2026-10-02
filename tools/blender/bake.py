@@ -205,15 +205,17 @@ for set_name, sconf in sets.items():
     # ---- repack: the JS charts (clean, large, fold-free) go through Blender's concave
     # island packer, which fits irregular charts far tighter than a shelf of bounding boxes
     # (measured on the shell: 0.27 -> 0.50 of the atlas covered)
-    deselect()
-    for o in los.values():
-        o.select_set(True)
-    bpy.context.view_layer.objects.active = next(iter(los.values()))
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.uv.pack_islands(rotate=True, margin_method='FRACTION', margin=sconf.get('packMargin', 4) / size, shape_method='CONCAVE')
-    bpy.ops.object.mode_set(mode='OBJECT')
-    log('  uv repacked')
+    # (additive, plants2) a uvFixed set brought its own atlas layout (explicit lows): keep it
+    if not sconf.get('uvFixed'):
+        deselect()
+        for o in los.values():
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = next(iter(los.values()))
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.uv.pack_islands(rotate=True, margin_method='FRACTION', margin=sconf.get('packMargin', 4) / size, shape_method='CONCAVE')
+        bpy.ops.object.mode_set(mode='OBJECT')
+        log('  uv repacked')
     # ---- materials: the lows bake into an image node; the highs emit their paint
     tgt = bpy.data.materials.new('target_' + set_name)
     tgt.use_nodes = True
@@ -595,9 +597,22 @@ if man.get('skin') and not ONLY:
 # collapse-decimated. UVs are per-loop data in Blender, so the weld keeps every chart's UVs
 # and the collapse interpolates them: the far mesh samples the SAME atlas as the near one.
 far_stats = {}
-if not ONLY:
+if True:
     import bmesh
     for p in man['pieces']:
+        if ONLY and p['set'] not in ONLY:
+            continue
+        # (plants2) an explicit far low (same UV layout as the near one, written by export_hi)
+        if p.get('farLo'):
+            fo = imp(p['farLo'], p['name'] + '_far')
+            smooth(fo)
+            far_stats[p['name']] = len(fo.data.polygons)
+            all_lo.append(fo)
+            if p.get('farLo2'):
+                f2 = imp(p['farLo2'], p['name'] + '_far2')
+                smooth(f2)
+                all_lo.append(f2)
+            continue
         if not p.get('far'):
             continue
         lo = next((o for o in all_lo if o.name == p['name']), None)
@@ -641,9 +656,12 @@ if (man.get('compress') or {}).get('mesh') == 'draco':
 bpy.ops.export_scene.gltf(**gopt)
 stats['glbBytes'] = os.path.getsize(glb)
 meta = {'name': man['name'], 'meta': man.get('meta', {}), 'probes': man.get('probes', {}), 'stats': stats,
-        'sets': dict({k: dict({'size': v.get('size', 1024), 'ormB': ORMB.get(k, 'cavity')}, **({'wrinkle': True} if k in WRINKLE else {})) for k, v in sets.items()},
+        'sets': dict({k: dict({'size': v.get('size', 1024), 'ormB': ORMB.get(k, 'cavity')}, **({'wrinkle': True} if k in WRINKLE else {})) for k, v in sets.items() if not ONLY or k in ONLY},
                      **{k: {'size': v['W'], 'h': v['H'], 'strip': True} for k, v in (man.get('strips') or {}).items()})}
 if man.get('compress'):
     meta['compress'] = man['compress']
-json.dump(meta, open(os.path.join(OUT, man['name'] + '.json'), 'w'))
+# (plants2) a partial rebake (--sets) writes its json beside its partial .glb: it used to
+# overwrite <name>.json with only the rebaked sets' ormB/stats (every other set fell back to
+# 'cavity' — the crinoid's alpha vanes shipped opaque that way)
+json.dump(meta, open(os.path.join(OUT, man['name'] + ('_' + '_'.join(sorted(ONLY)) if ONLY else '') + '.json'), 'w'))
 log('DONE', glb, stats['glbBytes'])

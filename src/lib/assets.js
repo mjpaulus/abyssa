@@ -67,9 +67,11 @@ export function bcSupported() {
 
 const CACHE = new Map();
 export function loadSculpted(base, name) {
-  if (CACHE.has(base)) return CACHE.get(base);
+  // keyed by base AND name (plants2: a partial rebake lives beside its full asset)
+  const key = base + '|' + name;
+  if (CACHE.has(key)) return CACHE.get(key);
   const p = load(base, name).catch(e => { console.warn('ABYSSA: sculpted asset ' + base + ' unavailable, keeping the procedural build', e && e.message); return null; });
-  CACHE.set(base, p);
+  CACHE.set(key, p);
   return p;
 }
 
