@@ -79,6 +79,7 @@ export function requestLock() {
 
 // Shared temps: these run every frame, so each returns a module-owned vector that is
 // valid until the same helper is called again. Copy it if you need to hold it.
+const TAU2 = Math.PI * 2;
 const _fwd = V3(), _flat = V3(), _right = V3(), _slide = V3(), _up = V3(0, 1, 0);
 export function forwardVec() {
   return _fwd.set(Math.cos(player.pitch) * Math.sin(player.yaw), Math.sin(player.pitch), Math.cos(player.pitch) * Math.cos(player.yaw));
@@ -195,7 +196,8 @@ const LIN_V = 0.1955, DRAG_V = 0.0327;    // = horizontal * 0.327
 // ramp both ways: ~1.4 s to 90% of cruise (was ~0.9), ~25 u of carry after the stroke
 // stops (was ~19), a 90-degree change of heading taking ~2.2 s to come round (was ~1.1).
 const AM_V = 1.90;        // was 1.26 (C_a ~ 0.25 along the long axis): rising and sinking are sluggish
-const AM_H = 2.40;        // was 1.55 (1.88 is the full broadside physics)
+const AM_H = 2.90;        // was 1.55, then 2.40 (1.88 is the full broadside physics). 2.90: the
+                          // weighted-suit pass — the haul has to get 90 kg of dress going.
 // The bottle shove is computed against the SHIPPED added mass, so the burst keeps its
 // full punch — and on a heavier body it now carries ~45 u instead of ~29, which is what
 // makes it read as the one thing that can throw this much brass through the water.
@@ -210,36 +212,56 @@ const GROUND_BUOY = 0.9;  // above this he cannot get purchase on the bottom
 
 // ---- WOOD GRIPS, SILT PRESSES ---------------------------------------------------
 // One walk law, two grounds, expressed as a single time constant TAU: an exponential
-// drag e^(-dt/TAU) plus an acceleration of WALK_TOP/TAU. Terminal speed is TOP by
-// construction on BOTH grounds, so the ponderous ruling (2.6 u/s) is arithmetic here,
-// not a value that can drift — what changes between planks and silt is only how long
-// it takes to get there and how far he carries after the key lifts.
-//   planks: 0.14 s. Dry timber and lead soles. He plants; the skate is gone.
-//   silt:   0.38 s vented, 0.85 s with a full dress. A blown-up dress barely touches
-//           the bottom, so it moon-walks: slow to gather, long to give it back.
+// drag e^(-dt/TAU) plus an acceleration of TOP/TAU. Terminal speed is that ground's TOP by
+// construction, so the ponderous ruling is arithmetic here, not a value that can drift.
+//   planks: 0.30 s (was 0.14). Dry timber and lead soles: he plants, and 90 kg takes time.
+//   silt:   0.50 s vented, 1.00 s with a full dress (was 0.38 / 0.85). A blown-up dress
+//           barely touches the bottom, so it moon-walks: slow to gather, long to give it back.
 // DEPTH IS DELIBERATELY ABSENT. The suit equalises; `buoy` is the only knob, which is
 // also the one the diver himself is holding (the valve).
-const WALK_TOP = 2.6;
-const TAU_DECK = 0.14;
-const TAU_SILT_HEAVY = 0.38, TAU_SILT_LIGHT = 0.85;
+// HEAVIER (Michael, 2026-10-01: "his swimming and walking still dont seem like a person in a
+// weighted suit would move"; docs/superpowers/specs/sal-weighted-suit-motion.md). The top speed
+// is now set by the GROUND, because the man is carrying a different weight on each:
+//   planks: 1.5 u/s (was 2.6). In air the full 90 kg of brass and lead hangs off his shoulders
+//           and hips. A dressed Mark V diver does not stroll a deck, he plods a few steps to the
+//           ladder (Men of Honor's qualifying test is twelve steps). The walk lane is 3 u long.
+//   silt:   2.15 u/s (was 2.6). In water the dress takes the weight off his shoulders, but he is
+//           still kept heavy, leaning into the drag. Fully submerged people walk at about 68
+//           steps/min (aquatic treadmill, neck depth), so the seabed walk buys its weight with a
+//           slow cadence and long double support rather than a much slower speed.
+// The time constants are longer on both grounds: 90 kg does not get going in a seventh of a second.
+const WALK_TOP_DECK = 1.5, WALK_TOP_BED = 2.15;
+const TAU_DECK = 0.30;
+const TAU_SILT_HEAVY = 0.50, TAU_SILT_LIGHT = 1.00;
+// Shift on the ground is a hurried plod, not a run (was 1.55x).
+const WALK_HURRY = 1.3;
 // Each stride shoves a 0.75 m^2 chest through water and the water shoves back. A small
 // impulse on the heel-strike the ANIMATION reports (diver.js publishes player.walkP off
 // distance travelled), so the resistance lands on the visible step, never on a timer.
-const STRIDE_DRAG = 0.048, STRIDE_DRAG_LIGHT = 0.040;
+// On the planks the same event is the dead stop of a lead boot taking 90 kg: a braking jolt.
+const STRIDE_DRAG = 0.085, STRIDE_DRAG_LIGHT = 0.060, STRIDE_DRAG_DECK = 0.070;
+// THE LURCH. A heavy walker does not glide: the body stalls while both boots are down and
+// the weight changes feet, then surges over the stance boot. The drive is shaped on the
+// step phase (q = 0 at each heel strike, peak at mid single support) with a unit mean, so the
+// average speed stays the top speed. The lurch is a property of the walk, not a timer: the
+// phase is distance-keyed in diver.js, so a slower step simply takes longer.
+const LURCH_DECK = 0.32, LURCH_BED = 0.65;
 
 // ---- THE STROKE IS THE PUSH ------------------------------------------------------
-// A frog kick is not a propeller. diver.js publishes player.swimP — the same phase that
-// draws the legs — and the forward thrust is shaped on it: near-nothing through the
-// tuck, everything through the snap at p ~ 0.55 (where S.knee falls 1.45 -> 0.06), then
-// a coast. The pulse is normalised to unit mean over the cycle, so the AVERAGE thrust,
-// and with it the distance covered in a minute, is exactly what it was.
-const KICK_P = 0.55, KICK_W = 0.185;
-// integral of exp(-((p)/KICK_W)^2) over one cycle = KICK_W * sqrt(pi)
+// He does not swim, he HAULS (the weighted-suit pass): diver.js publishes player.swimP — the
+// same phase that draws the two-handed sweep — and the forward thrust is shaped on it:
+// near-nothing through the reach and the recovery, everything through the pull at p ~ 0.36,
+// then a drift. The pulse is normalised to unit mean over the cycle, so the AVERAGE thrust,
+// and with it the distance covered in a minute, is set by the thrust alone.
+const KICK_P = 0.36, KICK_W = 0.20;
 const KICK_NORM = KICK_W * Math.sqrt(Math.PI);
 // 0.60 shipped first and Michael couldn't feel it — a ±27% swell over a whole kick
 // cycle is a tide, not a stroke. 0.88 drops the coast toward half the mean and makes
 // the snap a real SURGE. The camera now shows this (game.js swim-surge coupling).
-const KICK_DEPTH = 0.88;   // 0 = the old constant glide, 1 = pure impulse
+// The haul (weighted-suit pass) runs at ~0.38 Hz, half again as slow as the kick, so the
+// same depth swung him 11 -> 28 u/s every stroke: a rubber band, not a heavy man. 0.62 at
+// this period is still a surge you can see and feel, and the drift between hauls is long.
+const KICK_DEPTH = 0.62;   // 0 = the old constant glide, 1 = pure impulse
 // Drag is QUADRATIC, so a thrust that is unit-mean in force is NOT unit-mean in speed:
 // the peaks are taxed harder than the coasts are rebated and the average drops. This is
 // the measured make-good (mean 16.39 -> 17.6 against the old constant 17.72), applied to
@@ -326,9 +348,14 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     }
   }
   const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY);
+  // Published for diver.js: where the boots actually stand (the grounded snap below holds
+  // his centre up to 1.2 above it for a few frames while he settles).
+  player.floorY = overRift ? null : floorY;
 
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
-  const boost = sprinting ? 2 : 1;
+  // Off the bottom, holding Shift is hauling hard (2.2x, was 2x on a 42 thrust): the sprint
+  // stays above predators.js's 22 u/s shark strike now that the cruise haul is lighter.
+  const boost = sprinting ? 2.2 : 1;
   const fwd = forwardVec(), flat = flatVec(), right = rightVec();
   const normal = overRift ? _up : terrainNormal(player.pos.x, player.pos.z, zi);
   // On the deck the seafloor's slope is irrelevant — planks are planks.
@@ -363,8 +390,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   if (player.burstT > 0) player.burstT = Math.max(0, player.burstT - dt);
 
   if (player.grounded) {
-    // A man in a Mark V with lead soles PLODS: top speed 2.6 u/s, and that has not moved
-    // and is not going to. What used to be wrong was that ONE friction constant served
+    // A man in a Mark V with lead soles PLODS: 1.5 u/s on planks, 2.15 on the seabed (the
+    // weighted-suit pass; both were 2.6, and faster was rejected). What used to be wrong was that ONE friction constant served
     // planks and silt alike, so he skated on the deck and the seabed told him nothing
     // about the water above it. Below, the ground picks the time constant and the top
     // speed is held fixed against it.
@@ -374,13 +401,14 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     player.scullX = 0; player.scullZ = 0;
     const wgt = onDeck ? 1 : clamp((GROUND_BUOY - player.buoy) / (GROUND_BUOY - A_BUOY_MIN), 0, 1);
     const tau = onDeck ? TAU_DECK : TAU_SILT_LIGHT + (TAU_SILT_HEAVY - TAU_SILT_LIGHT) * wgt;
+    const top = onDeck ? WALK_TOP_DECK : WALK_TOP_BED;
     const fr = Math.exp(-dt / tau);
-    // Terminal speed is WALK_TOP on every ground, at every frame rate. The step here is
+    // Terminal speed is the ground's top on every ground, at every frame rate. The step here is
     // v <- (v + a*dt) * fr, whose fixed point is a*dt*fr/(1-fr); solving that for a
     // instead of writing the continuous a = TOP/tau is what makes the sentence true.
-    // (The old law's continuous 2.6 was really 2.55 at 60 Hz and 2.6 at 1000 — nobody
-    // wanted that, it was just what an exponent in a pow() does when nobody checks.)
-    const acc = WALK_TOP * (1 - fr) / (fr * Math.max(dt, 1e-4)) * (sprinting ? 1.55 : 1) * (walkable ? 1 : 0.25);
+    const q = (player.walkP * 2) % 1;
+    const lurch = 1 + (onDeck ? LURCH_DECK : LURCH_BED) * Math.cos(TAU2 * (q - 0.5));
+    const acc = top * (1 - fr) / (fr * Math.max(dt, 1e-4)) * (sprinting ? WALK_HURRY : 1) * (walkable ? 1 : 0.25) * lurch;
     if (keys['KeyW'] || keys['ArrowUp']) player.vel.addScaledVector(flat, acc * dt);
     if (keys['KeyS'] || keys['ArrowDown']) player.vel.addScaledVector(flat, -acc * dt * 0.7);
     if (keys['KeyA'] || keys['ArrowLeft']) player.vel.addScaledVector(right, -acc * dt * 0.8);
@@ -396,15 +424,15 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // lead boots, less whatever the dress is holding up
     player.vel.y -= clamp(22 - player.buoy * 2.2, 15, 28) * dt;
     player.vel.x *= fr; player.vel.z *= fr;
-    // THE STRIDE PRESSES. Underwater only — the resistance is the water, not the walk —
-    // and keyed on the heel strike diver.js reports, so it is felt on the step you see.
+    // THE STRIDE PRESSES, keyed on the heel strike diver.js reports, so it is felt on the step
+    // you see. Underwater it is the water; on the planks it is the boot stopping dead.
     // Scaled by speed so a standing man is not shoved by phantom footfalls.
-    if (!onDeck) {
+    {
       const side = player.walkP < 0.5 ? 0 : 1;
       if (side !== strideSide) {
         strideSide = side;
         const sp = Math.hypot(player.vel.x, player.vel.z);
-        const d = (STRIDE_DRAG * wgt + STRIDE_DRAG_LIGHT * (1 - wgt)) * clamp(sp / WALK_TOP, 0, 1);
+        const d = (onDeck ? STRIDE_DRAG_DECK : STRIDE_DRAG * wgt + STRIDE_DRAG_LIGHT * (1 - wgt)) * clamp(sp / top, 0, 1);
         player.vel.x -= player.vel.x * d; player.vel.z -= player.vel.z * d;
       }
     }
@@ -413,7 +441,10 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // W/S drive him along the FLAT heading at full thrust; only a small share of the
     // stroke goes vertical when he is pitched. Before this, holding W while looking down
     // was a -18 u/s jet and the valve below was decoration.
-    const acc = 42 * boost / AM_H;
+    // 33, was 42 (the weighted-suit pass): cruise ~15.5 u/s, was 17.6. A man hauling himself
+    // through the water in 90 kg of dress is drawn along, not driven; the bottle burst
+    // (untouched) is still the way to cover ground fast.
+    const acc = 33 * boost / AM_H;
     const sy = Math.sin(player.pitch);
     let ay = emerge > 0 ? (player.buoy + G_W) * (1 - emerge) - G_W : player.buoy;
     // The kick, not the throttle. Unit mean, so the minute-by-minute distance is the old
