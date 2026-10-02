@@ -1371,7 +1371,7 @@ function buildOnce() {
       if (!kelp.inst) kelp.inst = im;
       // (plants2) the sculpted kelp (blade cards, runtime-assembled giants / bull kelp /
       // understory) takes this layout over once its atlas is in; no stream draw
-      plantAdopt('f_kelp' + zi, 'kelp', im, { cap: [560, 430, 430][zi], glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 0.7, cull: 130, sss: 0.38, def: ['SSSL', 'THIN', 'RUFFLE'], trans: 1.3, ruffle: 0.014 } });
+      plantAdopt('f_kelp' + zi, 'kelp', im, { cap: [560, 430, 430][zi], glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 0.7, cull: 130, sss: 0.38, def: ['SSSL', 'THIN', 'RUFFLE'], trans: 2.2, ruffle: 0.03 } });
     }
     // ---- seagrass turf ----
     {

@@ -241,12 +241,21 @@ varying vec4 vGd; varying vec3 vGl; varying vec3 vBl;
 // Opaque, no sorting, no transparency; the far edge of every type dissolves into
 // grain and then into the fog wall.
 const F_DITHER = `
+#ifndef GD_NODITHER
 {
   float gdt = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
   if (gdt > vGd.z) discard;
-}`;
+}
+#endif`;
+// (kelp) GD_NODITHER: a program with NO discard anywhere keeps the GPU's early depth test /
+// hidden-surface removal — the kelp forest is mostly overdraw (blade behind blade behind
+// blade), and one discard in the shader made every hidden blade pay its full shading. Its
+// range end is the kit's own instance cull instead (a pop deep in the fog).
 
 const F_BODY = `
+#if defined(GD_THIN) && !defined(GD_ALPHA)
+  floraThin = 1.0;   // (kelp) an opaque thin sheet: the blade's outline is its geometry
+#endif
 #ifdef GD_ALPHA
   // (plants) an alpha card: ORM.B is the baked coverage (1 where the high exists — a fan's
   // net, a glass sponge's lattice, a crinoid's pinnules). Alpha-HASHED, not blended: opaque,

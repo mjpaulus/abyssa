@@ -45,7 +45,7 @@ function cell2(x, y, s) {
 // ============================================================================ ATLASES
 // (bake-plane units == UV units)
 const KL = [];
-for (let r = 0; r < 2; r++) for (let i = 0; i < 6; i++) KL.push({ k: 'mac', id: r * 6 + i, u0: 0.012 + i * 0.082, v0: r ? 0.455 : 0.012, w: 0.074, h: 0.43, old: r === 1 });
+for (let r = 0; r < 2; r++) for (let i = 0; i < 5; i++) KL.push({ k: 'mac', id: r * 5 + i, u0: 0.012 + i * 0.098, v0: r ? 0.455 : 0.012, w: 0.092, h: 0.43, old: r === 1 });
 for (let i = 0; i < 6; i++) KL.push({ k: 'ala', id: i, u0: 0.508 + i * 0.08, v0: 0.012, w: 0.07, h: 0.6, old: i >= 4 });
 for (let i = 0; i < 8; i++) KL.push({ k: 'bul', id: i, u0: 0.508 + i * 0.036, v0: 0.625, w: 0.03, h: 0.365, old: i >= 6 });
 KL.push({ k: 'sti', id: 0, u0: 0.80, v0: 0.625, w: 0.09, h: 0.365 });
@@ -87,20 +87,17 @@ const rect = (c, pad = 0.003) => (X, T, x, y) => Math.max(Math.abs(X) - c.w / 2 
 // pointing to the tip, a rugose surface (transverse bullations), old ones eroded at the tip,
 // grazed through, carrying bryozoan crust
 function macHW(c, T) {
+  // (kelp) BROAD: a short petiole off the float widening fast into a long oblong lamina,
+  // broadest past mid-length, a blunt rounded tip; the margin waves
   const s = c.id * 7.3;
-  const a = Math.pow(sst(0.0, 0.32, T), 0.8), b = 1 - 0.92 * Math.pow(sst(0.38, 1.0, T), 1.25);
-  return c.w / 2 * Math.max(0.09, a * b) * (0.93 + 0.07 * Math.sin(T * 6 + s));
+  const a = Math.pow(sst(0.0, 0.16, T), 0.7), b = 1 - 0.8 * Math.pow(sst(0.62, 1.0, T), 1.7);
+  return c.w / 2 * Math.max(0.08, a * b) * (0.94 + 0.06 * Math.sin(T * 13 + s));
 }
 function macOutline(c) {
-  const s = c.id * 31 + 5, tipCut = c.old ? 0.78 + 0.12 * h2(c.id, 3, 9) : 1.01;
+  const s = c.id * 31 + 5, tipCut = c.old ? 0.86 + 0.08 * h2(c.id, 3, 9) : 1.01;
   return (X, T, x, y) => {
-    const tooth = (T * 58 + h2(c.id, 1, 2) * 3) % 1;            // spinules lean toward the tip
-    let hw = macHW(c, T) - c.w * 0.03 * tooth * sst(0.06, 0.2, T);
-    let d = Math.max(Math.abs(X) - hw, c.v0 - y + 0.0005, y - c.v0 - c.h);
-    // the eroded old tip: a ragged line across the blade
-    if (c.old) d = Math.max(d, (T - tipCut - 0.035 * fbm2(X * 80, T * 9, s)) * c.h);
-    // grazed holes on old blades
-    if (c.old) { const [f1, id] = cell2(X * 55 + 3, y * 30, s); if (id < 0.09) d = Math.max(d, (0.12 + 0.6 * id - f1) / 55); }
+    let d = Math.max(Math.abs(X) - macHW(c, T), c.v0 - y + 0.0005, y - c.v0 - c.h);
+    if (c.old) d = Math.max(d, (T - tipCut - 0.03 * fbm2(X * 80, T * 9, s)) * c.h);
     return d;
   };
 }
@@ -111,10 +108,12 @@ function macRelief(c) {
     // bullations: transverse wrinkles broken into blisters
     // irregular transverse corrugation, broken by a warp and by blisters (cells), never a
     // regular stripe (a clean sine read as printed chevrons under the lamp)
-    const w = Math.sin(y * 170 + 7.0 * fbm2(X * 45, y * 18, s)) * (0.35 + 0.65 * Math.abs(fbm2(X * 60, y * 30, s + 3)));
-    const [cf] = cell2(X * 150 + 0.5 * fbm2(x * 40, y * 40, s + 9), y * 110, s + 5);
+    // the rugose lamina: strong transverse corrugations broken by a warp, blistered, and the
+    // margins thrown into ruffles
+    const w = Math.sin(y * 140 + 6.0 * fbm2(X * 40, y * 16, s)) * (0.45 + 0.55 * Math.abs(fbm2(X * 50, y * 26, s + 3)));
+    const [cf] = cell2(X * 120 + 0.5 * fbm2(x * 40, y * 40, s + 9), y * 90, s + 5);
     const blis = Math.max(0, 1 - cf / 0.62) ** 2;
-    let r = 0.0009 * w + 0.0016 * blis + 0.0005 * fbm2(X * 300, y * 300, s + 11);
+    let r = 0.0018 * w + 0.0016 * blis + 0.0005 * fbm2(X * 300, y * 300, s + 11) + 0.0026 * Math.sin(y * 110 + s) * q * q * q;
     r *= sst(0.04, 0.2, T) * (1 - 0.6 * q * q);
     r += 0.0011 * Math.exp(-((X / (c.w * 0.05)) ** 2)) * (1 - T);   // the faint central thickening
     r -= 0.0012 * q * q * q * q;                                    // margins thinner
@@ -267,16 +266,16 @@ const blade = c => c && (c.k === 'mac' || c.k === 'ala' || c.k === 'bul');
 const KELP_PAINT = {
   kScale: 0.0004, aoAlb: 0.55,
   mats: {
-    [PK.MAC]: { c: [0.46, 0.37, 0.17], ro: 0.4 },
+    [PK.MAC]: { c: [0.56, 0.41, 0.15], ro: 0.38 },
     [PK.ALA]: { c: [0.42, 0.36, 0.17], ro: 0.42 },
-    [PK.BUL]: { c: [0.44, 0.36, 0.18], ro: 0.4 },
+    [PK.BUL]: { c: [0.52, 0.39, 0.16], ro: 0.4 },
     [PK.STI]: { c: [0.30, 0.23, 0.12], ro: 0.55 },
     [PK.HOLD]: { c: [0.26, 0.20, 0.12], ro: 0.8 },
-    [PK.FLO]: { c: [0.52, 0.44, 0.22], ro: 0.3 }
+    [PK.FLO]: { c: [0.60, 0.48, 0.20], ro: 0.28 }
   },
   layers: [
     // per card hue: some blades olive, some golden, some ruddy
-    { c: [0.36, 0.38, 0.17], a: 0.45, m: [['fn', S => { const c = kAt(S); return blade(c) && c.id % 3 === 1 ? 1 : 0; }]] },
+    { c: [0.46, 0.38, 0.15], a: 0.4, m: [['fn', S => { const c = kAt(S); return blade(c) && c.id % 3 === 1 ? 1 : 0; }]] },
     { c: [0.50, 0.33, 0.16], a: 0.35, m: [['fn', S => { const c = kAt(S); return blade(c) && c.id % 4 === 2 ? 1 : 0; }]] },
     // dense and dark where the blade leaves its float/stipe
     { c: [0.19, 0.14, 0.07], a: 0.85, m: [['fn', S => { const c = kAt(S); return blade(c) ? 1 - sst(0.0, 0.2, kT(c, S)) : 0; }]] },
@@ -433,7 +432,7 @@ function ribbon(M, o) {
     // (fill-rate) the ribbon hugs the card's own outline row by row (conservatively: the
     // widest the outline gets between this row's neighbours), so alpha-hashed fragments are
     // not spent on the empty corners of every card
-    const fr = o.fit ? fitFrac(o.fit, c, Math.max(0, (j - 1) / rows), Math.min(1, (j + 1) / rows)) : 1;
+    const fr = o.fit ? (o.exact ? Math.min(1, o.fit(c, Math.min(0.995, Math.max(0.005, t))) / (c.w / 2) + 0.03) : fitFrac(o.fit, c, Math.max(0, (j - 1) / rows), Math.min(1, (j + 1) / rows))) : 1;
     for (let i = 0; i <= cols; i++) {
       const s = (-1 + 2 * i / cols) * fr, a = Math.abs(s);
       const off = o.fold * a * hw + o.ruf * a * a * Math.sin(t * L * o.rufF + o.ph + s * 1.7) * sst(0.05, 0.3, t);
@@ -500,10 +499,10 @@ function ellip(M, C, ax, ra, rr, sides, rings, c, sw, flut) {
 // re-picks a variant by H (understory under 6.6) and draws it at its true proportions,
 // (k, H / Href, k) — see kelpRemap below.
 export const KELP_VARIANTS = [
-  { type: 'mac', Href: 9, seed: 11, stipes: 6 },
-  { type: 'mac', Href: 13, seed: 22, stipes: 8 },
-  { type: 'mac', Href: 17.5, seed: 33, stipes: 9 },
-  { type: 'mac', Href: 12, seed: 44, stipes: 5 },
+  { type: 'mac', Href: 9, seed: 11, stipes: 4 },
+  { type: 'mac', Href: 13, seed: 22, stipes: 6 },
+  { type: 'mac', Href: 17.5, seed: 33, stipes: 7 },
+  { type: 'mac', Href: 12, seed: 44, stipes: 4 },
   { type: 'bull', Href: 10, seed: 55 },
   { type: 'bull', Href: 15.5, seed: 66 },
   { type: 'ala', Href: 3.2, seed: 77 },
@@ -528,9 +527,9 @@ export function kelpPick(i, H) {
 }
 
 const LODK = [
-  { rows: 4, cols: 2, every: 1, grow: 1, floats: true, sides: 5, ring: 0.5, hold: 2, fsides: 4, frings: 2 },
-  { rows: 2, cols: 1, every: 3, grow: 1.5, floats: false, sides: 3, ring: 1.2, hold: 1, fsides: 0 },
-  { rows: 1, cols: 1, every: 4, grow: 1.75, floats: false, sides: 3, ring: 2.4, hold: 0, fsides: 0 }
+  { rows: 7, cols: 3, every: 1, grow: 1, floats: true, sides: 5, ring: 0.45, hold: 2, fsides: 5, frings: 3 },
+  { rows: 3, cols: 1, every: 2, grow: 1.35, floats: true, sides: 3, ring: 1.0, hold: 1, fsides: 3, frings: 1 },
+  { rows: 2, cols: 1, every: 3, grow: 1.6, floats: false, sides: 3, ring: 2.2, hold: 0, fsides: 0 }
 ];
 const KC = k => byKind(KL, k);
 // the skeleton: every random draw happens here, once per variant, so the three LODs are the
@@ -552,37 +551,45 @@ function kelpSkel(vi) {
     if (R() < 0.6) { const a2 = a + (R() - 0.5) * 0.9; sk.haptera.push({ pts: [p1, [Math.cos(a2) * r1 * 0.95, 0.03, Math.sin(a2) * r1 * 0.95], [Math.cos(a2) * r1 * 1.25, -0.03, Math.sin(a2) * r1 * 1.25]], r: 0.014 * (hold / 0.34 + 0.4) }); }
   }
   const bladeAt = (stipe, t, side, len, wid, card, kind) => sk.blades.push({ stipe, t, side, len, wid, card, kind, ph: R() * TAU, el: 0.35 + 0.4 * R(), sweep: (R() - 0.5) * 0.6, twist: (R() - 0.5) * 1.6, fold: 0.12 + 0.12 * R(), ruf: 0.012 + 0.012 * R() });
+  // the current runs along local +x (plantKit turns every instance so): DOWNSTREAM
+  const DS = [1, 0, 0];
   if (K.type === 'mac') {
-    // a loose column of FRONDS off the holdfast: each a stipe carrying a blade on a float every
-    // third of a unit, the blades lying along the stipe (lifted by their floats) and leaning
-    // out 20-40 degrees, alternating; the tallest fronds arch over at the top into canopy.
+    // FRONDS: rope-like stipes rising off the holdfast and bending DOWNSTREAM with height, the
+    // tallest arching over into a trailing canopy; along each, every ~0.4 u a pear-shaped
+    // pneumatocyst carrying one broad, ruffled blade that streams downstream and droops.
     const young = KC('mac').filter(c => !c.old), old = KC('mac').filter(c => c.old);
     for (let s = 0; s < K.stipes; s++) {
-      const a = s / K.stipes * TAU + R() * 0.9, lean = 0.03 + 0.05 * R(), top = H * (s < 2 ? 0.95 + 0.05 * R() : 0.35 + 0.6 * R());
-      const base = [Math.cos(a) * 0.06, hold * 0.7, Math.sin(a) * 0.06];
-      const off = [Math.cos(a) * H * lean, 0, Math.sin(a) * H * lean], wob = R() * TAU, wa = 0.25 + 0.5 * R();
-      const arch = top > H * 0.85 ? 0.12 * H : 0.02 * H;
-      const P = [base, V.add(base, [off[0] * 0.2 + Math.cos(wob) * wa, top * 0.33, off[2] * 0.2 + Math.sin(wob) * wa]), V.add(base, [off[0] * 0.65 - Math.cos(wob) * wa * 0.7, top * 0.7, off[2] * 0.65 - Math.sin(wob) * wa * 0.7]), V.add(base, [off[0] + Math.cos(a + 0.6) * arch, top - hold - arch * 0.3, off[2] + Math.sin(a + 0.6) * arch])];
-      sk.stipes.push({ P, r0: 0.03, r1: 0.02, ph: R() * TAU });
-      const n = Math.floor((top - 0.6) / (0.3 + 0.05 * R()));
-      let az = R() * TAU;
+      const a = s / K.stipes * TAU + R() * 0.9, top = H * (s < 2 ? 0.92 + 0.08 * R() : 0.4 + 0.5 * R());
+      const base = [Math.cos(a) * 0.07, hold * 0.7, Math.sin(a) * 0.07];
+      const lean = 0.08 + 0.08 * R(), spread = (R() - 0.5) * 0.6, canopy = top > H * 0.8;
+      const P = [base,
+        V.add(base, [Math.cos(a) * 0.25, top * 0.33, Math.sin(a) * 0.25 + spread * 0.3]),
+        V.add(base, [top * lean * 0.6, top * 0.7, spread * 0.8]),
+        V.add(base, [top * lean + (canopy ? 0.16 * H : 0.03 * H), top - hold - (canopy ? 0.05 * H : 0), spread])];
+      sk.stipes.push({ P, r0: 0.036, r1: 0.026, ph: R() * TAU });
+      const n = Math.floor((top - 0.8) / (0.38 + 0.06 * R()));
+      let sd = R() < 0.5 ? 1 : -1;
+      // irregular, as grown: spacing jitters, a blade now and then on the same side, lengths
+      // and lifts and droops all their own (a regular ladder read as a fern frond)
       for (let k = 0; k < n; k++) {
-        const t = (0.45 + k * (top - 0.7) / n) / top, age = 1 - t;
-        az += Math.PI + (R() - 0.5) * 0.9;
-        const card = age > 0.5 && R() < 0.7 ? old[Math.floor(R() * old.length)] : young[Math.floor(R() * young.length)];
-        sk.blades.push({ stipe: s, t, side: az, len: 0.75 + 0.35 * age + 0.2 * R(), wid: 0.15 + 0.06 * R(), card, kind: 'mac', ph: R() * TAU, el: 0.35 + 0.35 * R(), sweep: (R() - 0.5) * 0.5, twist: (R() - 0.5) * 2.2, fold: 0.12 + 0.12 * R(), ruf: 0.016 + 0.016 * R() });
+        const t = (0.6 + (k + (R() - 0.5) * 0.6) * (top - 0.8) / n) / top, age = 1 - t;
+        if (R() < 0.75) sd = -sd;
+        const card = age > 0.45 && R() < 0.7 ? old[Math.floor(R() * old.length)] : young[Math.floor(R() * young.length)];
+        sk.blades.push({ stipe: s, t, side: sd * (0.6 + 0.6 * R()), len: (0.85 + 0.45 * age) * (0.75 + 0.6 * R()), wid: 0.22 + 0.12 * R(), card, kind: 'mac', ph: R() * TAU, el: -0.15 + 0.7 * R(), droop: 0.2 + 0.8 * R(), sweep: (R() - 0.5) * 0.9, twist: (R() - 0.5) * 2.0, fold: 0.06 + 0.1 * R(), ruf: 0.03 + 0.035 * R() });
       }
-      sk.blades.push({ stipe: s, t: 1, side: az + Math.PI, len: 0.6 + 0.15 * R(), wid: 0.12, card: young[Math.floor(R() * young.length)], kind: 'apex', ph: R() * TAU, el: 0.2, sweep: 0.6, twist: 0.8, fold: 0.2, ruf: 0.012 });
+      sk.blades.push({ stipe: s, t: 1, side: 1, len: 0.7 + 0.2 * R(), wid: 0.2, card: young[Math.floor(R() * young.length)], kind: 'apex', ph: R() * TAU, el: 0.1, sweep: 0.3, twist: 0.5, fold: 0.15, ruf: 0.03 });
     }
   } else if (K.type === 'bull') {
-    const a = R() * TAU, top = H - 0.9, base = [0, hold * 0.6, 0];
-    const P = [base, [Math.cos(a) * 0.2, top * 0.35, Math.sin(a) * 0.2], [Math.cos(a + 1) * 0.5, top * 0.7, Math.sin(a + 1) * 0.5], [Math.cos(a) * H * 0.07, top, Math.sin(a) * H * 0.07]];
-    sk.stipes.push({ P, r0: 0.016, r1: 0.04, ph: R() * TAU, bull: true });
+    // ONE long whip stipe arcing downstream to one big float, a mop of long ribbons streaming
+    // off it in the current and drooping
+    const top = H - 1.0, base = [0, hold * 0.6, 0], zz = (R() - 0.5) * 0.4;
+    const P = [base, [0.15, top * 0.35, zz * 0.3], [H * 0.08, top * 0.72, zz * 0.7], [H * 0.2, top, zz]];
+    sk.stipes.push({ P, r0: 0.018, r1: 0.045, ph: R() * TAU, bull: true });
     const bulb = bez(P, 1), up = bezD(P, 1);
-    sk.bulbs.push({ C: V.add(bulb, up, 0.1), A: up, ra: 0.15, rr: 0.12 });
-    const cards = KC('bul'), nb = 14 + Math.floor(R() * 5);
+    sk.bulbs.push({ C: V.add(bulb, up, 0.12), A: up, ra: 0.17, rr: 0.14 });
+    const cards = KC('bul'), nb = 16 + Math.floor(R() * 7);
     for (let k = 0; k < nb; k++) {
-      sk.blades.push({ stipe: 0, t: 1, side: k / nb * TAU + R() * 0.3, len: (0.3 + 0.18 * R()) * H, wid: 0.09 + 0.04 * R(), card: cards[Math.floor(R() * cards.length)], kind: 'bull', ph: R() * TAU, el: -0.2 + 0.7 * R(), sweep: (R() - 0.5) * 0.8, twist: (R() - 0.5) * 2.4, fold: 0.05, ruf: 0.02 + 0.02 * R() });
+      sk.blades.push({ stipe: 0, t: 1, side: k / nb * TAU + R() * 0.3, len: (0.3 + 0.2 * R()) * H, wid: 0.11 + 0.05 * R(), card: cards[Math.floor(R() * cards.length)], kind: 'bull', ph: R() * TAU, el: 0, sweep: (R() - 0.5) * 0.4, twist: (R() - 0.5) * 2.0, fold: 0.05, ruf: 0.035 + 0.025 * R() });
     }
   } else if (K.type === 'ala') {
     const cards = KC('ala'), spor = KC('mac').filter(c => !c.old), n = 3 + Math.floor(R() * 3);
@@ -597,7 +604,7 @@ function kelpSkel(vi) {
   } else {   // lam: a stout stipe, a palm, digits fanning in a plane
     // two or three individuals: a short stout stipe each, the lamina split into digits that
     // stream together off to one side (the current has combed them)
-    const ni = 2 + Math.floor(R() * 2), cards = KC('bul'), flow = R() * TAU;
+    const ni = 2 + Math.floor(R() * 2), cards = KC('bul'), flow = (R() - 0.5) * 0.6;   // downstream (+x)
     for (let s = 0; s < ni; s++) {
       const a = s / ni * TAU + R(), st = H * (0.14 + 0.1 * R()), base = [Math.cos(a) * 0.08, hold * 0.6, Math.sin(a) * 0.08];
       const P = [base, V.add(base, [Math.cos(a) * 0.03, st * 0.4, Math.sin(a) * 0.03]), V.add(base, [Math.cos(flow) * st * 0.12, st * 0.75, Math.sin(flow) * st * 0.12]), V.add(base, [Math.cos(flow) * st * 0.25, st, Math.sin(flow) * st * 0.25])];
@@ -642,39 +649,54 @@ export function buildKelp(vi, lod) {
     if (!keep) continue;
     if (b.kind === 'spor' && lod > 0) continue;
     const st = sk.stipes[b.stipe], A = bez(st.P, b.t), Ts = bezD(st.P, Math.min(0.999, b.t));
-    const out0 = V.norm(V.sub([Math.cos(b.side), 0, Math.sin(b.side)], V.scale(Ts, V.dot([Math.cos(b.side), 0, Math.sin(b.side)], Ts))));
+    const DS = [1, 0, 0], DN = [0, -1, 0];
     const grow = (b.kind === 'mac' ? Lq.grow : b.kind === 'apex' ? 1 : Math.sqrt(Lq.grow));
-    const len = b.len * grow, wid = b.wid * Math.min(1.35, grow);
-    let P0 = V.add(A, out0, st.r1 + 0.01), dir;
-    const hb = hN(P0[1]);
-    // the pneumatocyst at the base of every giant-kelp blade
-    if (b.kind === 'mac' && Lq.floats) {
-      const fa = V.norm(V.add(V.scale(Ts, 1.6), out0, 1));
-      const fC = V.add(P0, fa, 0.05);
-      ellip(M, fC, fa, 0.042, 0.03, Lq.fsides, Lq.frings, FLO, p => { const h = hN(p[1]); return [hb * hb, h, 0, b.ph]; }, 0.004);
-      P0 = V.add(fC, fa, 0.05);
-    } else if (b.kind === 'mac') P0 = V.add(P0, out0, 0.06);
-    if (b.kind === 'bull') {
-      const bl = sk.bulbs[0], o2 = V.norm(V.add(V.rot(V.norm(V.cross(bl.A, [Math.cos(b.side), 0.01, Math.sin(b.side)])), bl.A, 0), [0, 0, 0]));
-      const rad = V.norm(V.sub([Math.cos(b.side), 0, Math.sin(b.side)], V.scale(bl.A, V.dot([Math.cos(b.side), 0, Math.sin(b.side)], bl.A))));
-      P0 = V.add(bl.C, V.add(V.scale(rad, bl.rr * 0.8), bl.A, bl.ra * 0.5));
-      dir = V.norm(V.add(V.scale(rad, Math.cos(b.el)), bl.A, Math.sin(b.el)));
-      void o2;
+    const len = b.len * grow, wid = b.wid * Math.min(1.3, Math.sqrt(grow));
+    let P0, dir, d2, d3;
+    if (b.kind === 'mac' || b.kind === 'apex') {
+      // the float leaves the stipe to one side (alternating), the blade turns downstream at once
+      const side = V.norm(V.cross(Ts, DS).map((x, i) => x + (i === 2 ? 1e-4 : 0))), sv = V.scale(side, b.side);
+      const fa = V.norm(V.add(V.add(sv, DS, 0.7), Ts, 0.5));
+      P0 = V.add(A, sv, st.r1 + 0.01);
+      if (Lq.floats) {
+        const fC = V.add(P0, fa, 0.065);
+        ellip(M, fC, fa, 0.065, 0.04, Lq.fsides, Lq.frings, FLO, p => { const h = hN(p[1]); return [hN(A[1]) ** 2, h, 0, b.ph]; }, 0.004);
+        P0 = V.add(fC, fa, 0.06);
+      } else P0 = V.add(P0, fa, 0.12);
+      dir = V.norm(V.add(V.add(V.add(sv, DS, 0.9), [0, 1, 0], b.el), Ts, 0.3));
+      d2 = V.norm(V.add(V.add(DS, sv, 0.12 + b.sweep * 0.4), [0, 1, 0], 0.15 * b.sweep));
+      d3 = V.norm(V.add(V.add(DS, DN, 0.25 + 0.9 * (b.droop ?? 0.5)), sv, 0.08 + 0.2 * b.sweep));
+    } else if (b.kind === 'bull') {
+      const bl = sk.bulbs[0], rad0 = [0, Math.cos(b.side), Math.sin(b.side)];
+      const rad = V.norm(V.sub(rad0, V.scale(bl.A, V.dot(rad0, bl.A))));
+      P0 = V.add(bl.C, V.add(V.scale(rad, bl.rr * 0.7), bl.A, bl.ra * 0.4));
+      dir = V.norm(V.add(V.add(DS, rad, 0.55), [0, 1, 0], 0.1));
+      d2 = V.norm(V.add(DS, rad, 0.22 + b.sweep * 0.2));
+      d3 = V.norm(V.add(V.add(DS, DN, 0.55), rad, 0.15));
     } else if (b.kind === 'lam') {
       const fl = [Math.cos(b.side), 0, Math.sin(b.side)], side = V.norm(V.cross(Ts, fl));
       dir = V.norm(V.add(V.add(V.scale(Ts, 0.55), fl, 0.85), side, Math.sin(b.fan)));
       P0 = V.add(A, side, b.fan * 0.06);
-    } else if (b.kind === 'mac' || b.kind === 'apex') dir = V.norm(V.add(V.scale(Ts, Math.cos(b.el)), out0, Math.sin(b.el)));
-    else dir = V.norm(V.add(V.scale(out0, Math.cos(b.el)), Ts, Math.sin(b.el)));
-    // the blade's path: out and up, arching, the tip falling away (buoyant lamina, heavy tip)
-    const sideV = V.norm(V.cross(dir, [0, 1, 0]).map((x, i) => x + (i === 1 ? 1e-4 : 0)));
-    const d2 = V.norm(V.add(V.add(dir, [0, 1, 0], b.kind === 'bull' ? -0.2 : b.kind === 'mac' ? 0.05 : 0.25), sideV, b.sweep));
-    const d3 = V.norm(V.add(V.add(d2, [0, -1, 0], b.kind === 'bull' || b.kind === 'lam' || b.kind === 'ala' ? 0.9 : b.kind === 'mac' ? 0.35 : 0.55), sideV, b.sweep * 0.5));
-    const P = [P0, V.add(P0, dir, len * 0.33), V.add(V.add(P0, dir, len * 0.5), d2, len * 0.25), V.add(V.add(P0, dir, len * 0.45), d3, len * 0.55)];
-    const N0 = V.norm(V.cross(dir, V.norm(V.cross([0, 1, 0], dir).map((x, i) => x + (i === 0 ? 1e-4 : 0)))));
+      d2 = V.norm(V.add(V.add(dir, [0, 1, 0], 0.25), side, b.sweep));
+      d3 = V.norm(V.add(V.add(d2, DN, 0.9), side, b.sweep * 0.5));
+    } else {
+      const out0 = V.norm(V.sub([Math.cos(b.side), 0, Math.sin(b.side)], V.scale(Ts, V.dot([Math.cos(b.side), 0, Math.sin(b.side)], Ts))));
+      P0 = V.add(A, out0, st.r1 + 0.01);
+      dir = V.norm(V.add(V.add(V.scale(out0, Math.cos(b.el)), Ts, Math.sin(b.el)), DS, b.kind === 'ala' ? 0.5 : 0.2));
+      const sideV = V.norm(V.cross(dir, [0, 1, 0]).map((x, i) => x + (i === 1 ? 1e-4 : 0)));
+      d2 = V.norm(V.add(V.add(dir, [0, 1, 0], 0.25), sideV, b.sweep));
+      d3 = V.norm(V.add(V.add(d2, DN, b.kind === 'ala' ? 0.9 : 0.55), sideV, b.sweep * 0.5));
+    }
+    const hb = hN(P0[1]);
+    const P = [P0, V.add(P0, dir, len * 0.3), V.add(V.add(P0, dir, len * 0.4), d2, len * 0.3), V.add(V.add(P0, dir, len * 0.35), d3, len * 0.6)];
+    // giant/bull kelp blades stand edge-up in the flow (broad faces to the sides, a curtain seen
+    // across the current), each rolled a little its own way; the rest lie as before
+    const N0 = (b.kind === 'mac' || b.kind === 'apex' || b.kind === 'bull')
+      ? V.norm(V.rot(V.norm(V.cross(dir, [0, 1, 0]).map((x, i) => x + (i === 2 ? 1e-4 : 0))), dir, b.twist * 0.6 + (b.ph - Math.PI) * 0.15))
+      : V.norm(V.cross(dir, V.norm(V.cross([0, 1, 0], dir).map((x, i) => x + (i === 0 ? 1e-4 : 0)))));
     const rows = b.kind === 'bull' || b.kind === 'ala' || b.kind === 'lam' ? Math.max(Lq.rows, Math.round(Lq.rows * 1.5)) : Lq.rows;
     ribbon(M, {
-      P, N0, wid, len, card: b.card, rows, cols: Lq.cols, fit: FIT[b.card.k], twist: b.twist, fold: lod ? 0 : b.fold, ruf: lod ? 0 : b.ruf * (b.kind === 'ala' ? 1.4 : 1), rufF: 22, ph: b.ph,
+      P, N0, wid, len, card: b.card, rows, cols: Lq.cols, fit: FIT[b.card.k], exact: true, twist: b.twist, fold: lod ? 0 : b.fold, ruf: lod ? 0 : b.ruf * (b.kind === 'ala' ? 1.4 : 1), rufF: 16, ph: b.ph,
       sw: (t, p) => { const h = hN(p[1]); return [Math.min(1.2, hb * hb + (1.05 - hb * hb) * 0.55 * t), h, sst(0.45, 1, h) * 0.5 * t, b.ph]; },
       flut: t => 0.1 * t * t
     });
@@ -682,10 +704,13 @@ export function buildKelp(vi, lod) {
   return M.out();
 }
 // host (W, H, W) on a unit mesh -> our scale and sway terms (see plantKit sync)
+const KELP_CUR = [Math.cos(0.9), 0, Math.sin(0.9)];
 export function kelpRemap(i, sx, sy, amp, shrink) {
   const v = kelpPick(i, sy), Href = KELP_VARIANTS[v].Href;
   const k = clamp(Math.sqrt(sx / 1.7), 0.85, 1.18);
-  return { v, sx: k, sy: sy / Href, amp: amp * sx / k, shrink: 0.4 * k * k * Href / (sy * sy) };
+  // cur: the WORLD downstream heading (flora/gardens' base current, CUR0 = 0.9 rad in xz) the kit
+  // turns the plant's local +x onto
+  return { v, sx: k, sy: sy / Href, amp: amp * sx / k, shrink: 0.4 * k * k * Href / (sy * sy), cur: KELP_CUR };
 }
 
 // ---------------------------------------------------------------------------- SEAGRASS
