@@ -64,7 +64,8 @@ const SPEC = {
   // (plants2) RUNTIME-ASSEMBLED species (bladesSculpt.js): baked card atlases from the
   // 'blades' asset, plants built at load from their seeds at three LODs. `lods` are fixed
   // switch distances (u); `remap` re-picks the variant and the proportions per instance.
-  kelp: { lods: [12, 34], tint: 0.3, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades' },
+  // kelp: OPAQUE (no alpha, no dither: see gardens.js GD_NODITHER), drawn turned to the current
+  kelp: { lods: [14, 40], tint: 0.15, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades', opaque: true, def: ['NODITHER'] },
   grass: { lods: [11, 24], tint: 0.6, micro: 0, side: D2, build: buildGrass, nv: GRASS_VARIANTS.length, asset: 'blades' }
 };
 
@@ -162,7 +163,8 @@ function buildGroup(sp, hosts) {
   const def = new Set();
   for (const K of hosts) { K.off = cap; cap += K.opts.cap; cull = Math.max(cull, K.opts.mat.cull); for (const d of K.opts.mat.def || []) def.add(d); }
   const maps = A.maps[sp], ormB = A.meta.sets[sp].ormB;
-  if (ormB === 'alpha') def.add('ALPHA');
+  if (ormB === 'alpha' && !S.opaque) def.add('ALPHA');
+  for (const d of S.def || []) def.add(d);
   if (ormB === 'emit') def.add('BIOLUM');   // (plants2) the baked polyp mask glows (gardens.js GD_BIOLUM)
   const o0 = hosts[0].opts.mat, gz = hosts.find(K => K.opts.mat.glowZ);
   const mat = matFactory({
@@ -213,8 +215,18 @@ function sync(K) {
       // instance's own size, the basis rescaled, the sway terms carried into the new frame
       const R = S.remap(j, sx, sy, amp, shrink);
       G.var[j] = R.v;
-      const kx = R.sx / sx, ky = R.sy / sy, kz = R.sx / sz;
-      e[0] *= kx; e[1] *= kx; e[2] *= kx; e[4] *= ky; e[5] *= ky; e[6] *= ky; e[8] *= kz; e[9] *= kz; e[10] *= kz;
+      if (R.cur) {
+        // (kelp) turned so its local +x is DOWNSTREAM (the current's base heading): every plant
+        // in a forest streams the same way. The up axis (the slope stand) is kept; only the yaw
+        // changes — position and height are the host's.
+        const ux = e[4] / sy, uy = e[5] / sy, uz = e[6] / sy, d = R.cur[0] * ux + R.cur[2] * uz;
+        let xx = R.cur[0] - ux * d, xy = -uy * d, xz = R.cur[2] - uz * d; const xl = Math.hypot(xx, xy, xz) || 1; xx /= xl; xy /= xl; xz /= xl;
+        const zx = xy * uz - xz * uy, zy = xz * ux - xx * uz, zz = xx * uy - xy * ux;
+        e[0] = xx * R.sx; e[1] = xy * R.sx; e[2] = xz * R.sx; e[4] = ux * R.sy; e[5] = uy * R.sy; e[6] = uz * R.sy; e[8] = zx * R.sx; e[9] = zy * R.sx; e[10] = zz * R.sx;
+      } else {
+        const kx = R.sx / sx, ky = R.sy / sy, kz = R.sx / sz;
+        e[0] *= kx; e[1] *= kx; e[2] *= kx; e[4] *= ky; e[5] *= ky; e[6] *= ky; e[8] *= kz; e[9] *= kz; e[10] *= kz;
+      }
       amp = R.amp; shrink = R.shrink;
     }
     b.setMatrixAt(j, _m);
