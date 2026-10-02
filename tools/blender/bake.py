@@ -293,8 +293,11 @@ for set_name, sconf in sets.items():
             he.select_set(True)
             lo.select_set(True)
             bpy.context.view_layer.objects.active = lo
+            # (plants) an ALPHA set's emit is coverage: the margin would EXTEND every hit into the
+            # misses beside it (measured: a 1024 fan net's holes shrank to dots) — no margin; the
+            # chart-bounded fill below makes the gutter
             bpy.ops.object.bake(type='EMIT', use_selected_to_active=True, cage_extrusion=p['cage'], max_ray_distance=p['ray'],
-                                margin=gutter, margin_type='EXTEND', use_clear=False, target='IMAGE_TEXTURES')
+                                margin=0 if sconf.get('alpha') else gutter, margin_type='EXTEND', use_clear=False, target='IMAGE_TEXTURES')
             bpy.data.objects.remove(he, do_unlink=True)
         emit = np.empty(size * size * 4, np.float32)
         imgs['emit'].pixels.foreach_get(emit)
@@ -329,6 +332,43 @@ for set_name, sconf in sets.items():
         log('  baked wrinkle', [p['name'] for p in wpieces], '%.1fs' % (time.time() - tp))
     for o in bpy.data.objects:
         o.hide_render = False
+    # ---- ALPHA CARDS (optional, additive; plants: set config alpha: true). The set's
+    # pieces carry an emit paint of 1 on their high, so ORM.B = 1 wherever the high exists
+    # and 0 where the cage ray MISSED it: a sea fan's lattice, a glass sponge's sieve,
+    # a crinoid's pinnule comb, baked onto a plain low card/shell. The gutter fill must
+    # not close those holes, so the CHART mask (every texel under a low triangle, from a
+    # low-only emission bake) bounds the alpha's fill instead of the hit mask.
+    cov = None
+    if sconf.get('alpha') and emit is not None:
+        # the chart mask is RASTERISED from the lows' own UV triangles (numpy; a low-only
+        # Cycles bake of a white emitter came back empty: the lows are invisible to rays)
+        tp = time.time()
+        cov = np.zeros((size, size), bool)
+        for p in pieces:
+            me = los[p['name']].data
+            uvl = me.uv_layers.active.data
+            uv = np.empty(len(uvl) * 2, np.float32)
+            uvl.foreach_get('uv', uv)
+            uv = uv.reshape(-1, 2) * size
+            me.calc_loop_triangles()
+            lt = np.empty(len(me.loop_triangles) * 3, np.int32)
+            me.loop_triangles.foreach_get('loops', lt)
+            for t in lt.reshape(-1, 3):
+                A, B, C = uv[t[0]], uv[t[1]], uv[t[2]]
+                x0, x1 = int(max(0, np.floor(min(A[0], B[0], C[0])))), int(min(size - 1, np.ceil(max(A[0], B[0], C[0]))))
+                y0, y1 = int(max(0, np.floor(min(A[1], B[1], C[1])))), int(min(size - 1, np.ceil(max(A[1], B[1], C[1]))))
+                if x1 < x0 or y1 < y0:
+                    continue
+                X, Y = np.meshgrid(np.arange(x0, x1 + 1) + 0.5, np.arange(y0, y1 + 1) + 0.5)
+                d = (B[1] - C[1]) * (A[0] - C[0]) + (C[0] - B[0]) * (A[1] - C[1])
+                if abs(d) < 1e-12:
+                    continue
+                w0 = ((B[1] - C[1]) * (X - C[0]) + (C[0] - B[0]) * (Y - C[1])) / d
+                w1 = ((C[1] - A[1]) * (X - C[0]) + (A[0] - C[0]) * (Y - C[1])) / d
+                e = 1.0 / max(1.0, max(x1 - x0, y1 - y0))   # a texel's worth of slack on thin slivers
+                ins = (w0 >= -e) & (w1 >= -e) & (1 - w0 - w1 >= -e)
+                cov[y0:y1 + 1, x0:x1 + 1] |= ins
+        log('  chart mask for alpha %.1fs coverage %.3f' % (time.time() - tp, cov.mean()))
     # ---- GUTTER FILL (optional, additive: set config fill: true; salSkin). The bake's
     # margin is a few texels; KTX2/GPU mips average the black background into every chart
     # edge (measured on the dress: dark albedo seams, and ORM roughness 0 seams that
@@ -341,7 +381,7 @@ for set_name, sconf in sets.items():
         mask = (px.reshape(size, size, 4)[..., :3].max(axis=2) > 0)
         for key in ('albedo', 'normal', 'ao', 'rough', 'emit', 'wrinkle'):
             if key in imgs:
-                fill_img(imgs[key], size, mask)
+                fill_img(imgs[key], size, cov if (key == 'emit' and cov is not None) else mask)
         if emit is not None:
             imgs['emit'].pixels.foreach_get(emit)
         log('  gutter fill %.1fs coverage %.3f' % (time.time() - tp, mask.mean()))
@@ -548,6 +588,37 @@ if man.get('skin') and not ONLY:
         e.tail = e.tail / HS
     bpy.ops.object.mode_set(mode='OBJECT')
     stats['skin'] = skin_stats
+
+# ---- FAR LODs (optional, additive; plants): a piece with `far: <tris>` also exports
+# <piece>_far — a copy of its baked low, WELDED first (the low arrives split along its UV
+# seams; decimating the islands separately would open cracks between charts) and then
+# collapse-decimated. UVs are per-loop data in Blender, so the weld keeps every chart's UVs
+# and the collapse interpolates them: the far mesh samples the SAME atlas as the near one.
+far_stats = {}
+if not ONLY:
+    import bmesh
+    for p in man['pieces']:
+        if not p.get('far'):
+            continue
+        lo = next((o for o in all_lo if o.name == p['name']), None)
+        if lo is None:
+            continue
+        fo = lo.copy()
+        fo.data = lo.data.copy()
+        fo.name = p['name'] + '_far'
+        fo.data.name = p['name'] + '_far'
+        scene.collection.objects.link(fo)
+        bm = bmesh.new()
+        bm.from_mesh(fo.data)
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-6)
+        bm.to_mesh(fo.data)
+        bm.free()
+        n = decimate(fo, p['far'])
+        far_stats[p['name']] = n
+        all_lo.append(fo)
+    if far_stats:
+        stats['far'] = far_stats
+        log('  far LODs', far_stats)
 
 # ---- the game mesh: every low, one .glb
 deselect()
