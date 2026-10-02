@@ -1,0 +1,1 @@
+{"name": "school", "meta": {"species": ["herring"]}, "probes": {}, "stats": {"sets": {"school": {"size": 2048, "bytes": {"albedo": 147036, "normal": 557628, "orm": 154040}}}, "pieces": {"herring": {"lo": 5308, "hi": 239024, "uv": 1}}, "glbBytes": 64972}, "sets": {"school": {"size": 2048, "ormB": "cavity"}}, "compress": {"mesh": "draco"}}
