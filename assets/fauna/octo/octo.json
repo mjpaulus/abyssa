@@ -1,0 +1,1 @@
+{"name": "octo", "meta": {}, "probes": {}, "stats": {"sets": {"octo": {"size": 1024, "bytes": {"albedo": 48420, "normal": 224812, "orm": 57640}}}, "pieces": {"octMantle": {"lo": 3200, "hi": 489188, "uv": 1}, "squid": {"lo": 1600, "hi": 416084, "uv": 1}}, "glbBytes": 42452}, "sets": {"octo": {"size": 1024, "ormB": "cavity"}}, "compress": {"mesh": "draco"}}

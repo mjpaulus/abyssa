@@ -125,7 +125,7 @@ function mantaPaint() {
     const cx = 0.5 - 0.55 * u - 0.1 * Math.sin(u * Math.PI);
     const w = 0.13 * Math.sin(Math.PI * Math.pow(u, 0.7)) + 0.012;
     const d = Math.abs(S.x - cx) / w + 0.35 * Math.sin(az * 13 + S.x * 9) * (1 - u * 0.5);
-    return (1 - sst(0.75, 1.05, d)) * sst(0.36, 0.42, az) * (1 - sst(1.0, 1.12, az)) * sst(0.05, 0.3, S.ny);
+    return (1 - sst(0.6, 1.1, d)) * sst(0.36, 0.46, az) * (1 - sst(0.9, 1.12, az)) * sst(0.05, 0.3, S.ny);
   };
   const belly = S => 1 - sst(-0.35, 0.1, S.ny);
   // the underside's dark wing margins and the individual's belly spots
@@ -138,7 +138,8 @@ function mantaPaint() {
       { c: [0.80, 0.80, 0.76], a: 1, ro: 0.6, m: [mat(RM.SKIN), ['fn', belly]] },
       { c: [0.10, 0.10, 0.11], a: 0.85, m: [mat(RM.SKIN), ['fn', belly], ['fn', margin]] },
       { c: [0.12, 0.12, 0.13], a: 0.9, m: [mat(RM.SKIN), ['fn', belly], ['fn', spots]] },
-      { c: [0.58, 0.58, 0.55], a: 0.9, m: [mat(RM.SKIN), ['fn', chev]] },
+      { c: [0.46, 0.47, 0.45], a: 0.8, m: [mat(RM.SKIN), ['fn', chev]] },
+      { c: [0.10, 0.11, 0.12], a: 0.45, m: [mat(RM.SKIN), ['fn', chev], ['n', 14, 0.55, 0.8, 23]] },
       { c: [0.14, 0.15, 0.16], a: 0.35, m: [mat(RM.SKIN), ['fn', dors], ['n', 6, 0.45, 0.75, 21]] },
       { c: [0.30, 0.32, 0.32], a: 0.3, m: [['cvx', 0.3, 1.0]] },
       { c: [0.02, 0.02, 0.02], a: 0.7, m: [['ao', 0.3, 0.9]] },
@@ -181,8 +182,8 @@ function turtleBodySpec() {
     return dPlan > 0 ? Math.hypot(dPlan, Math.max(dy, 0)) : Math.max(dPlan, dy);
   }, RM.SHELL));
   // neck + head: a short thick neck folding out from under the shell, a blunt head
-  const neck = Tube([[0.62, -0.02, 0], [0.95, 0.03, 0], [1.2, 0.09, 0]], 0.13, 0.105, 10, RM.SKIN);
-  const head = U(0.06, E([1.46, 0.12, 0], [0.24, 0.135, 0.145], RM.SKIN), E([1.66, 0.09, 0], [0.11, 0.09, 0.1], RM.SKIN));
+  const neck = Tube([[0.62, -0.02, 0], [0.95, 0.04, 0], [1.22, 0.1, 0]], 0.17, 0.135, 10, RM.SKIN);
+  const head = U(0.07, E([1.44, 0.12, 0], [0.27, 0.155, 0.165], RM.SKIN), E([1.66, 0.095, 0], [0.12, 0.1, 0.11], RM.SKIN));
   let hd = U(0.05, neck, head);
   // the beak: a horny sheath, serrated lower jaw, a gape line
   hd = U(0.01, hd, E([1.74, 0.05, 0], [0.06, 0.06, 0.07], RM.MOUTH));
@@ -239,17 +240,18 @@ function turtleFlipSpec() {
   // the bake pares the mesh's edge floor (F_MIN) back to the true thin trailing edge
   const thin = (x, y, z) => {
     const az = Math.abs(z);
-    const fu = clamp((az - 0.45) / 1.42, 0, 1), fle = 0.55 - 0.15 * fu - 0.6 * fu * fu, fte = 0.05 - 0.55 * fu - 0.15 * Math.sin(fu * Math.PI) * 0.5;
+    const fu = clamp((az - 0.45) / 1.42, 0, 1), fxc = 0.3 - 0.45 * fu, fch = 0.5 * (1 - Math.pow(fu, 1.6)) + 0.012, fle = fxc + fch * 0.45, fte = fxc - fch * 0.55;
     const hu = clamp((az - 0.42) / 0.66, 0, 1), hle = -0.52 - 0.18 * hu, hte = -0.95 - 0.12 * hu + 0.25 * hu * hu;
     const fore = x > -0.45;
     const u = fore ? fu : hu, le = fore ? fle : hle, te = fore ? fte : hte, c = Math.max(1e-3, le - te), xi = clamp((x - te) / c, 0, 1);
     const T = (fore ? 0.06 : 0.05) * (1 - u) + 0.012, half = T * 2.6 * Math.sqrt(xi) * (1 - xi) * (1 - 0.3 * xi);
     return -Math.max(0, F_MIN - half) * sst(0.5, 0.65, az);
   };
+  // the fore flipper: long, swept back, tapering to a point (a wing, not a paddle)
+  const foreLE = u => { const xc = 0.3 - 0.45 * u, ch = 0.5 * (1 - Math.pow(u, 1.6)) + 0.012; return [xc + ch * 0.45, xc - ch * 0.55]; };
   const fore = (x, y, z) => {
-    // planform in (x, z): leading edge convex, trailing edge with a notch, tip at (-0.18, 1.86)
     const u = clamp((z - 0.45) / 1.42, 0, 1);
-    const le = 0.55 - 0.15 * u - 0.6 * u * u, te = 0.05 - 0.55 * u - 0.15 * Math.sin(u * Math.PI) * 0.5;
+    const [le, te] = foreLE(u);
     const c = Math.max(1e-3, le - te), xi = clamp((x - te) / c, 0, 1);
     const T = 0.06 * (1 - u) + 0.012, half = T * 2.6 * Math.sqrt(xi) * (1 - xi) * (1 - 0.3 * xi);
     const cam = -0.03 - 0.06 * u;
@@ -264,7 +266,7 @@ function turtleFlipSpec() {
     const dy = Math.abs(y + 0.02) - Math.max(half, F_MIN), dp = Math.max(x - le, te - x, z - 1.08, 0.42 - z) * 0.7;
     return dp > 0 || dy > 0 ? Math.hypot(Math.max(dp, 0), Math.max(dy, 0)) : Math.max(dp, dy);
   };
-  const claw = { t: 'cone', a: [0.42, -0.03, 0.82], b: [0.5, -0.05, 0.86], ra: 0.016, rb: 0.003, m: RM.CLAW };
+  const claw = { t: 'cone', a: [0.36, -0.03, 0.82], b: [0.42, -0.05, 0.87], ra: 0.016, rb: 0.003, m: RM.CLAW };
   const s = U(0.02, Fn([-0.75, -0.2, 0.4, 0.62, 0.15, 1.9], fore, RM.SKIN), Fn([-1.12, -0.12, 0.38, -0.45, 0.1, 1.1], hind, RM.SKIN), claw);
   return Disp([
     { type: 'fn', amp: 0.006, bake: true, fn: (x, y, z) => {
@@ -540,7 +542,7 @@ function urchinPaint() {
       [RM.MOUTH]: { c: [0.18, 0.12, 0.1], ro: 0.5 }, [RM.FOOT]: { c: [0.55, 0.26, 0.10], ro: 0.4 }
     },
     layers: [
-      { c: [0.42, 0.40, 0.38], a: 0.55, m: [mat(RM.SPINE), ['fn', band]] },
+      { c: [0.26, 0.25, 0.24], a: 0.4, m: [mat(RM.SPINE), ['fn', band]] },
       // the blue iridophore spots on the test between the ambulacra
       { c: [0.16, 0.24, 0.36], a: 0.6, m: [mat(RM.SHELL), ['n', 18, 0.62, 0.8, 91]] },
       { c: [0.02, 0.02, 0.02], a: 0.8, m: [['ao', 0.35, 0.9]] }
@@ -642,7 +644,7 @@ export function pipeline() {
       P('morayJaw', morayJawSpec(), morayPaint(), 0.004, 0.009, 600),
       P('crabBody', crabBodySpec(), crabPaint(), 0.005, 0.012, 900),
       P('crabLegs', crabLegsSpec(), crabPaint(), 0.004, 0.011, 1500),
-      P('urchin', urchinSpec(), urchinPaint(), 0.003, 0.007, 2600),
+      P('urchin', urchinSpec(), urchinPaint(), 0.003, 0.007, 2200),
       P('star', starSpec(), starPaint(), 0.005, 0.012, 1100)
     ],
     compress: { mesh: 'draco' },

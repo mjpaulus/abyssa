@@ -65,6 +65,7 @@ import { loadSculpted } from '../lib/assets.js';
 import { makeFish, labelVertex, toCanon } from '../entities/fishKit.js';
 import { FISH as SCHOOL_FISH } from '../entities/schoolSculpt.js';
 import { LABELS as REEF_LABELS } from '../entities/reefSculpt.js';
+import { LABELS as DEEP_LABELS } from '../entities/deepSculpt.js';
 
 const TAU = Math.PI * 2;
 
@@ -1649,7 +1650,7 @@ function gulperStep(G) {
 // plus the skin kit's light terms (fin transmission, wet catchlight, emission x glow).
 // ?faunaproc = the procedural A/B; window.__faunaSculpt.state().
 // ---------------------------------------------------------------------------
-const FS_SETS = { school: 'assets/fauna/school/', reef: 'assets/fauna/reef/' };
+const FS_SETS = { school: 'assets/fauna/school/', reef: 'assets/fauna/reef/', deep: 'assets/fauna/deep/' };
 const FS_LOD_R = 80;
 const fsState = { sets: {}, n: 0, ms: 0, on: true };
 const FRAG_SCULPT = `#include <emissivemap_fragment>
@@ -1662,7 +1663,7 @@ const FRAG_SCULPT = `#include <emissivemap_fragment>
   roughnessFactor = mix(roughnessFactor, 0.05, wet);
   totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * fin * 0.35;
   totalEmissiveRadiance += skCatch(normal, V, vViewPosition) * wet * vFade;
-  totalEmissiveRadiance += uGlowCol * vGlow * smoothstep(0.08, 0.3, ormS.b) * ormS.b * 2.0;
+  totalEmissiveRadiance += uGlowCol * vGlow * smoothstep(0.08, 0.3, ormS.b) * ormS.b * 1.1;
 }`;
 function faunaSculptMaterial(src, maps) {
   const u = src.userData.u;
@@ -1706,7 +1707,9 @@ function faunaSculptGeometry(parts, sc, procGeo) {
     }
     g.setAttribute('position', new THREE.BufferAttribute(P, 3));
     g.setAttribute('normal', new THREE.BufferAttribute(Float32Array.from(src.attributes.normal.array), 3));
-    g.setAttribute('uv', new THREE.BufferAttribute(Float32Array.from(src.attributes.uv.array), 2));
+    const uvA = new THREE.BufferAttribute(Float32Array.from(src.attributes.uv.array), 2);
+    g.setAttribute('uv', uvA);
+    g.setAttribute('uv1', uvA);   // a set's maps may ride channel 1 (creatures.js puts the school atlas there)
     g.setAttribute('aPart', new THREE.BufferAttribute(pa, 1));
     g.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
     g.setAttribute('aGlow', new THREE.BufferAttribute(gl, 1));
@@ -1745,7 +1748,12 @@ const FS_DEFS = {
   'MORAY': { set: 'reef', pieces: [['moray', () => REEF_LABELS.moray], ['morayJaw', () => REEF_LABELS.morayJaw]], scale: 1.0, lodR: -1 },
   'CRAB': { set: 'reef', pieces: [['crabBody', () => REEF_LABELS.crabBody], ['crabLegs', () => REEF_LABELS.crabLegs]], scale: 0.55, lodR: -1 },
   'URCHIN': { set: 'reef', pieces: [['urchin', () => REEF_LABELS.urchin]], scale: 0.75, lodR: -1 },
-  'SEA STAR': { set: 'reef', pieces: [['star', () => REEF_LABELS.star]], scale: 0.7, lodR: -1 }
+  'SEA STAR': { set: 'reef', pieces: [['star', () => REEF_LABELS.star]], scale: 0.7, lodR: -1 },
+  // the deep (entities/deepSculpt.js)
+  'ANGLER': { set: 'deep', pieces: [['angler', () => DEEP_LABELS.angler], ['anglerJaw', () => DEEP_LABELS.anglerJaw], ['anglerPec', () => DEEP_LABELS.anglerPec], ['anglerLure', () => DEEP_LABELS.anglerLure]], scale: 1.6, lodR: -1 },
+  'GULPER': { set: 'deep', pieces: [['gulper', () => DEEP_LABELS.gulper], ['gulperJaw', () => DEEP_LABELS.gulperJaw]], scale: 1.5, lodR: -1 },
+  'ISOPOD': { set: 'deep', pieces: [['isoBody', () => DEEP_LABELS.isoBody], ['isoLegs', () => DEEP_LABELS.isoLegs]], scale: 0.62, lodR: -1 },
+  'FLAPJACK': { set: 'deep', pieces: [['flapBody', () => DEEP_LABELS.flapBody], ['flapFins', () => DEEP_LABELS.flapFins]], scale: 1.1, lodR: -1 }
 };
 const _fsFish = {};
 function FS_FISH(k) { return _fsFish[k] || (_fsFish[k] = makeFish(SCHOOL_FISH[k])); }
