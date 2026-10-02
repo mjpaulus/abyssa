@@ -1750,7 +1750,8 @@ const FS_DEFS = {
   'MORAY': { set: 'reef', pieces: [['moray', () => REEF_LABELS.moray], ['morayJaw', () => REEF_LABELS.morayJaw]], scale: 1.0, lodR: -1 },
   'CRAB': { set: 'reef', pieces: [['crabBody', () => REEF_LABELS.crabBody], ['crabLegs', () => REEF_LABELS.crabLegs]], scale: 0.55, lodR: -1 },
   'URCHIN': { set: 'reef', pieces: [['urchin', () => REEF_LABELS.urchin]], scale: 0.75, lodR: -1 },
-  'SEA STAR': { set: 'reef', pieces: [['star', () => REEF_LABELS.star]], scale: 0.7, lodR: -1 },
+  // SEA STAR stays procedural: its shader ossicles out-read the baked star at every distance
+  // (judged side by side, fauna2); the 'star' piece remains in the atlas for a later pass
   // the deep (entities/deepSculpt.js)
   'ANGLER': { set: 'deep', pieces: [['angler', () => DEEP_LABELS.angler], ['anglerJaw', () => DEEP_LABELS.anglerJaw], ['anglerPec', () => DEEP_LABELS.anglerPec], ['anglerLure', () => DEEP_LABELS.anglerLure]], scale: 1.6, lodR: -1 },
   'GULPER': { set: 'deep', pieces: [['gulper', () => DEEP_LABELS.gulper], ['gulperJaw', () => DEEP_LABELS.gulperJaw]], scale: 1.5, lodR: -1 },
