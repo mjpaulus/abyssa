@@ -46,6 +46,7 @@ import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { loadSculpted } from '../lib/assets.js';
 import { octLabel } from '../entities/octoSculpt.js';
+import { sharkFish, labelShark } from '../entities/sharkSculpt.js';
 import { setMover, stirPulse, setLantern, pulseAt, M_SHARK0, M_SHARK1, M_SQUID, P_BITE, P_STRIKE } from './stir.js';
 
 // CHART V2 determinism (same contract as flora/creatures): every placement/phase draw
@@ -396,27 +397,9 @@ function sharkGeometry() {
 
 // Undulation is a travelling wave whose amplitude is near zero at the skull and peaks
 // at the tail — carangiform, i.e. tighter and stiffer than the leviathan's ribbon.
-function sharkMaterial(cfg) {
-  const u = {
-    uPhase: { value: 0 }, uAmp: { value: 0.045 }, uArch: { value: 0 }, uTime,
-    // anim-fauna: head sweep gain, the wind-up hunch, the strike gape (0..1)
-    uHead: { value: 0.55 }, uHunch: { value: 0 }, uGape: { value: 0 },
-    uDark: { value: new THREE.Color(cfg.dark) },
-    uPale: { value: new THREE.Color(cfg.pale) },
-    uSheen: { value: cfg.sheen },
-    uScar: { value: cfg.scar || 0 }
-  };
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: 0.46, metalness: 0.16,
-    side: THREE.DoubleSide, emissive: 0x000000
-  });
-  mat.userData.u = u;
-  // Three caches compiled programs by material type + parameters, NOT by the source
-  // onBeforeCompile produced. Without a distinct key the shark, octopus and squid — all
-  // MeshStandardMaterial — collide and get whichever program compiled first.
-  mat.customProgramCacheKey = () => 'abyssa-shark-skin';
-  mat.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, u);
+// (fauna2) the shark's shader in named parts, so the sculpted body can reuse the motion and
+// the light terms verbatim and swap only the albedo block
+function sharkVertex(sh) {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec3 aSurf;
@@ -464,8 +447,8 @@ function sharkMaterial(cfg) {
         vSuv = uv; vSsurf = aSurf;
         // the body axis, bent by the same wave: the grain the denticles lie along
         vAxis = normalize((modelViewMatrix * vec4(-slope, 0.0, 1.0, 0.0)).xyz);`);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
+}
+const SHARK_FRAG_COMMON = `#include <common>
         uniform vec3 uDark; uniform vec3 uPale; uniform float uSheen; uniform float uScar; uniform float uTime;
         uniform float uGape;
         varying vec2 vSuv; varying vec3 vSsurf; varying vec3 vAxis;
@@ -473,8 +456,8 @@ function sharkMaterial(cfg) {
         // distance from p to segment ab (scar strokes in t / around space)
         // distance to a healed scar stroke: tapered at both ends, the edge torn by noise
         float shSeg(vec2 p, vec2 a, vec2 b){ vec2 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-          float taper = 0.35 + 0.65 * sin(3.14159 * h); return length(pa - ba * h) / taper + (skN2(p * 900.0) - 0.5) * 0.0012; }`)
-      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+          float taper = 0.35 + 0.65 * sin(3.14159 * h); return length(pa - ba * h) / taper + (skN2(p * 900.0) - 0.5) * 0.0012; }`;
+const SHARK_FRAG_LIGHTS = `#include <lights_pars_begin>
         ${SKIN_LIGHTS}
         // DENTICLE SHEEN. Shark skin is tiled with tooth-like scales whose ridges all
         // run nose-to-tail, so its highlight is a Kajiya-Kay streak stretched ACROSS the
@@ -496,8 +479,8 @@ function sharkMaterial(cfg) {
           }
           #endif
           return s;
-        }`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        }`;
+const SHARK_FRAG_EMIT = `#include <emissivemap_fragment>
         float body = step(vSuv.y, 1.5);
         float tooth = step(2.5, vSuv.y);
         float yy = clamp(vSuv.y, 0.0, 1.0);
@@ -567,7 +550,34 @@ function sharkMaterial(cfg) {
         totalEmissiveRadiance += skCatch(normal, V, vViewPosition) * wet;
         // faint wet sheen along the lateral line keeps the silhouette legible in murk
         float lat = (1.0 - smoothstep(0.012, 0.075, abs(yy - 0.46))) * body;
-        totalEmissiveRadiance += uDark * lat * uSheen;`);
+        totalEmissiveRadiance += uDark * lat * uSheen;`;
+
+function sharkMaterial(cfg) {
+  const u = {
+    uPhase: { value: 0 }, uAmp: { value: 0.045 }, uArch: { value: 0 }, uTime,
+    // anim-fauna: head sweep gain, the wind-up hunch, the strike gape (0..1)
+    uHead: { value: 0.55 }, uHunch: { value: 0 }, uGape: { value: 0 },
+    uDark: { value: new THREE.Color(cfg.dark) },
+    uPale: { value: new THREE.Color(cfg.pale) },
+    uSheen: { value: cfg.sheen },
+    uScar: { value: cfg.scar || 0 }
+  };
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.46, metalness: 0.16,
+    side: THREE.DoubleSide, emissive: 0x000000
+  });
+  mat.userData.u = u;
+  // Three caches compiled programs by material type + parameters, NOT by the source
+  // onBeforeCompile produced. Without a distinct key the shark, octopus and squid — all
+  // MeshStandardMaterial — collide and get whichever program compiled first.
+  mat.customProgramCacheKey = () => 'abyssa-shark-skin';
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u);
+    sharkVertex(sh);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', SHARK_FRAG_COMMON)
+      .replace('#include <lights_pars_begin>', SHARK_FRAG_LIGHTS)
+      .replace('#include <emissivemap_fragment>', SHARK_FRAG_EMIT);
     injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js)
   };
   return registerPaint(mat);
@@ -2368,6 +2378,83 @@ function sculptBody(pg, kAttr, src, label, isBody) {
   return g;
 }
 
+// ---- the sculpted shark (fauna2; entities/sharkSculpt.js -> assets/fauna/shark/) ----------
+// The body/fins/teeth are the bake; the vertex motion is sharkMaterial's own (the same
+// chunk, run on the sculpt), fed the attributes it reads: uv = (body t, 0.5 + 0.5 sin(around)
+// on the body, 2 on a fin, 3 on a tooth), aSurf = (t, around, 0) / (s, q, 1). The colour is
+// still the animal's own uDark/uPale countershade over the baked (neutral) detail, so each
+// shark keeps its palette; the denticle sheen, the eye's catchlight and its roll-back at
+// the bite, the dark gum inside the gape all stay.
+const SHARK_SCULPT_FRAG = `#include <emissivemap_fragment>
+        float body = step(vSuv.y, 1.5);
+        float tooth = step(2.5, vSuv.y);
+        float yy = clamp(vSuv.y, 0.0, 1.0);
+        float t = vSuv.x, ar = vSsurf.y;
+        vec3 V = normalize(vViewPosition);
+        float ragged = (skN2(vec2(t * 26.0, ar * 9.0)) - 0.5) * 0.09;
+        float cs = smoothstep(0.30, 0.40, yy + ragged);
+        vec3 hide = mix(uPale, uDark * mix(1.12, 0.78, smoothstep(0.7, 1.0, yy)), cs);
+        vec3 col = mix(mix(uPale, uDark, 0.72), hide, body);
+        col = mix(col, vec3(1.0), tooth);
+        float wet = (1.0 - smoothstep(0.06, 0.12, roughnessFactor)) * body;
+        col = mix(col, vec3(1.0), wet);
+        col = mix(col, vec3(9.0), wet * smoothstep(0.45, 0.9, uGape));   // the eye rolls back at the bite
+        diffuseColor.rgb *= col * 1.55;
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.025, 0.028), body * step(faceDirection, 0.0));
+        roughnessFactor = mix(roughnessFactor, 0.3, tooth);
+        metalnessFactor = 0.0;
+        vec3 ax = normalize(vAxis - normal * dot(vAxis, normal));
+        totalEmissiveRadiance += shAniso(normal, ax, V, vViewPosition) * uPale * 0.22 * (1.0 - wet) * (1.0 - tooth);
+        totalEmissiveRadiance += skCatch(normal, V, vViewPosition) * wet;
+        float lat = (1.0 - smoothstep(0.012, 0.075, abs(yy - 0.46))) * body;
+        totalEmissiveRadiance += uDark * lat * uSheen;`;
+function sharkSculptMaterial(src, maps) {
+  for (const tx of [maps.map, maps.normalMap, maps.ormMap]) if (tx.channel !== 1) { tx.channel = 1; tx.needsUpdate = true; }
+  const m = new THREE.MeshStandardMaterial({ map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.ormMap, aoMap: maps.ormMap, aoMapIntensity: 0.85, roughness: 1, metalness: 0, side: THREE.DoubleSide, emissive: 0x000000 });
+  const u = src.userData.u;
+  m.userData.u = u;
+  m.customProgramCacheKey = () => 'abyssa-shark-sculpt';
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u);
+    sharkVertex(sh);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', SHARK_FRAG_COMMON)
+      .replace('#include <lights_pars_begin>', SHARK_FRAG_LIGHTS)
+      .replace('#include <emissivemap_fragment>', SHARK_SCULPT_FRAG);
+    injectStrokes(sh);
+  };
+  return registerPaint(m);
+}
+function installSharkSculpt(a) {
+  if (!a || !a.geos || !a.geos.shark) return;
+  const fish = sharkFish(), src = a.geos.shark, pos = src.attributes.position, n = pos.count;
+  const uv = new Float32Array(n * 2), surf = new Float32Array(n * 3), L = {};
+  for (let i = 0; i < n; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    labelShark(fish, x, y, z, L);
+    uv[i * 2] = 0.5 - z;
+    if (L.tooth) { uv[i * 2 + 1] = 3.0; surf[i * 3] = 0.5 - z; surf[i * 3 + 2] = 1; }
+    else if (L.fin >= 0) { uv[i * 2 + 1] = 2.0; surf[i * 3] = L.s; surf[i * 3 + 1] = L.q; surf[i * 3 + 2] = 1; }
+    else {
+      const t = Math.min(1, Math.max(0, 0.5 - z)), r = Math.max(0.02, sharkR(t)), snout = Math.max(0, 1 - t * 5);
+      const ga = Math.atan2(y / (r * 0.205), x / (r * 0.158 * (1 + 0.28 * snout)));
+      uv[i * 2 + 1] = 0.5 + 0.5 * Math.sin(ga);
+      surf[i * 3] = t; surf[i * 3 + 1] = ((ga / (Math.PI * 2)) + 1) % 1;
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', pos); g.setAttribute('normal', src.attributes.normal);
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2)); g.setAttribute('uv1', src.attributes.uv);
+  g.setAttribute('aSurf', new THREE.BufferAttribute(surf, 3));
+  g.setIndex(src.index);
+  g.boundingSphere = new THREE.Sphere(V3(0, 0, -0.15), 1.1);
+  for (const S of sharks) {
+    S.procGeo = S.mesh.geometry; S.procMat = S.mesh.material;
+    S.mesh.geometry = g; S.mesh.material = sharkSculptMaterial(S.mat, a.maps.shark);
+    ocs.shark = (ocs.shark || 0) + 1;
+  }
+}
+
 export function buildPredators() {
   _pr = siteParams('predators').rng;
   for (const cfg of SHARK_CFG) buildShark(cfg);
@@ -2378,6 +2465,8 @@ export function buildPredators() {
   buildSacs();
   if (!(typeof location !== 'undefined' && location.search.includes('octproc')))
     loadSculpted('assets/fauna/octo/', 'octo').then(installOctoSculpt);   // fauna2, off the critical path
+  if (!(typeof location !== 'undefined' && location.search.includes('sharkproc')))
+    loadSculpted('assets/fauna/shark/', 'shark').then(installSharkSculpt);
 
   // Namespaced dev surface: teleport to each predator, read state, read cost.
   window.pred = {
