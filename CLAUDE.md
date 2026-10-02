@@ -335,8 +335,13 @@ against explicit contracts and reviewed on return.
     stool, boots, helmet stand, slate rail, shelf, chart table, cleats). player.js takes
     his waist into the raft frame (pitch/roll/heave), pushes the 0.32 body circle out by
     closest point (two passes), removes only the inward velocity, carries the push back
-    out through the raft's axes. Probed: max penetration < 0.01, zero jitter against
-    every item. MOVE AN OBJECT, MOVE ITS COLLIDER LINE. Low things a boot steps over are
+    out through the raft's axes. Probed by walking (real W keydown) into every shape:
+    penetration <= 0.02 (sampling noise from the raft moving between frames), no
+    oscillation. NO-SLOT RULE: any gap narrower than a body (0.64) between two shapes is
+    a slot he presses into while two push-outs fight (= jitter) — so gaps are FILLED
+    (gear near a bulwark runs its shape to the timber, clusters are bridged), which is
+    why some shapes are larger than their object. MOVE AN OBJECT, MOVE ITS COLLIDER LINE,
+    then re-check for slots. Low things a boot steps over are
     deliberately absent. The camera does NOT collide with deck gear (it sits ~9 back,
     off the boat).
   - Board width is the whole deck read: at 8 boards across the span they were metre-

@@ -47,14 +47,21 @@ box('bulwark -X', -WC, 0, WT, 4.75);
   box('bulwark +X fwd', WC, (hi + 4.75) / 2, WT, (4.75 - hi) / 2);
 }
 
+// ---- THE NO-SLOT RULE -----------------------------------------------------------------
+// Two shapes closer than a body's breadth (2 x 0.32) make a slot he cannot fit but can
+// press into, and the two push-outs then fight: he jitters. So every gap narrower than
+// that is FILLED — gear standing near a bulwark runs its shape to the timber, a cluster
+// is bridged into one outline. `pinches()` in the lab probe (see the report on this
+// branch) must come back empty after any edit here. That is why some lines below are a
+// little bigger than the object they name.
+
 // ---- davit.js: the gallows, forward of the gap on the +X side. ---------------------
-for (const s of [-1, 1]) {
-  // raked leg from its gusseted foot (frame s*1.30, z 3.75) toward the knee (s*1.25, 3.90)
-  cap('gallows leg', RX(s * 1.30, 3.75), RZ(s * 1.30, 3.75), RX(s * 1.27, 3.86), RZ(s * 1.27, 3.86), 0.22);
-  // tie rod, deck ring (s*1.30, 1.92) up to (s*1.20, 3.35) at y 2.10: only the run below
-  // ~1.8 (a helmet's height) can meet him, so the capsule stops at frame z 3.12
-  cap('gallows tie rod', RX(s * 1.30, 1.92), RZ(s * 1.30, 1.92), RX(s * 1.22, 3.12), RZ(s * 1.22, 3.12), 0.07);
-}
+// aft leg (rig s = +1): tie rod from its deck ring (1.92, 1.60) to the leg foot, the
+// raked leg run on to the rail just forward of the gap's edge
+cap('gallows aft tie rod', RX(1.30, 1.92), RZ(1.30, 1.92), RX(1.30, 3.75), RZ(1.30, 3.75), 0.07);
+cap('gallows aft leg', RX(1.30, 3.75), RZ(1.30, 3.75), 4.60, 1.42, 0.22);
+// forward leg, its tie rod, the tackle's horn cleat and the corner cleat: one block
+box('gallows fwd foot', 3.30, 4.375, 1.45, 0.375);
 // ---- raft.js buildReel, in the rig frame: drum centre (0, 0.60), cheeks r 0.70 at x
 // +-0.46, standards at x +-0.60, crank out to 0.64.
 box('hose reel', RX(0, 0.60), RZ(0, 0.60), 0.72, 0.68);
@@ -62,26 +69,25 @@ box('hose reel', RX(0, 0.60), RZ(0, 0.60), 0.72, 0.68);
 // ---- pump.js: the oil engine + compressor block, PUMP_POS (0.15, -1.20). -----------
 box('pump', 0.22, -1.20, 1.36, 0.82);
 // ---- gear.js ------------------------------------------------------------------------
-box('pump servants', 0.06, -2.48, 0.78, 0.19);           // bucket, oil can, toolbox
-disc('water butt', -1.20, -3.00, 0.50);
-disc('bilge pump', -1.55, -4.12, 0.12);
-disc('bitumen barrel A', 3.45, -2.85, 0.38);
-disc('bitumen barrel B', 4.15, -3.55, 0.38);
-cap('tapped barrel + can', 3.55, -4.12, 3.97, -4.12, 0.40);
-disc('funnel', 3.15, -4.30, 0.17);
+box('pump servants', 0.06, -2.345, 0.78, 0.325);           // bucket, oil can, toolbox
+cap('water butt', -1.20, -3.00, -0.70, -2.50, 0.50);        // bridged to the servants
+cap('bilge pump', -1.55, -4.60, -1.30, -3.45, 0.14);        // rail to the butt
+box('fuel depot', 3.865, -3.95, 0.885, 0.80);               // barrel B, tapped barrel, can, funnel
+cap('bitumen barrel A', 3.45, -2.85, 3.95, -1.95, 0.38);    // bridged to the hose stock
 disc('hose stock', 3.95, -1.95, 0.42);
-box('lashed cargo', -1.12, 3.72, 0.64, 0.68);             // crates, cask, tarp (KX/KZ)
-for (const [x, z] of [[4.25, 4.25], [4.25, -4.25], [-4.25, 4.25], [-4.25, -4.25]]) disc('cleat', x, z, 0.13);
+box('hose stock (rail side)', 4.35, -2.175, 0.40, 0.975);   // to the timber, the gap's aft edge, the depot
+box('lashed cargo', -0.955, 3.895, 0.835, 0.855);           // crates, cask, tarp (KX/KZ), to the reel
+for (const [x, z] of [[-4.40, 4.40], [-4.40, -4.40]]) box('corner cleat', x, z, 0.35, 0.35);
 
 // ---- station.js: the dressing station, -X wing ---------------------------------------
-box('dressing bench + tarpaulin', -4.13, -1.22, 0.27, 1.11);
-cap('tender stool + spare line', -3.55, -1.10, -3.50, -0.85, 0.25);
-cap('kicked-off boots', -3.86, -2.85, -3.66, -2.62, 0.17);
-disc('helmet stand', -4.20, 0.90, 0.30);
-box('slate rail', -4.46, 0.72, 0.08, 0.44);
+// bench, tarpaulin, helmet stand and slate rail stand within a hand of each other and
+// of the wall: one outline
+box('dressing station', -4.305, -0.71, 0.445, 1.91);
+cap('tender stool + spare line', -3.90, -1.10, -3.50, -0.85, 0.25);
+cap('kicked-off boots', -4.60, -2.75, -3.66, -2.62, 0.17);
 // ---- shelf.js / chart.js --------------------------------------------------------------
 box('keepsake shelf', -4.51, 1.42, 0.10, 0.70);
-box('chart table', -4.00, 2.53, 0.40, 0.38);
+box('chart table', -4.175, 2.515, 0.575, 0.395);
 
 // Push a body circle at raft-local (p.x, p.z) out of every shape; v (raft-local x/z
 // velocity) loses only its inward component. Returns the number of contacts.
