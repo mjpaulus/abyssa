@@ -125,6 +125,41 @@ These are taste-checked as well as sourced. The aquatic-treadmill speed (0.45 m/
 4x slower, leg for leg, than any speed the game can live with, so the seabed keeps a
 playable speed. It buys the weight with cadence, double support, lean and lurch instead.
 
+## Achieved (branch `heavy`, fixed 60 Hz harness through the real updatePlayer + updateDiver)
+
+| | target | main (before) | heavy (after) |
+|---|---|---|---|
+| **DECK** speed, u/s | 1.5 top | 2.60 | 1.45 mean |
+| cadence /min | 75-82 | 107.8 | 77.0 |
+| step / L (forward) | 0.75-0.80 | 0.96 | 0.75 |
+| double support (time) | 0.36-0.42 | 0.22 | 0.38 |
+| trunk lean, deg | 7-10 | 2.5 | 9.2 |
+| helmet bob / sway, u | 0.04-0.06 / at most 0.05 | 0.130 / 0.021 | 0.063 / 0.049 |
+| hip sway, u | 0.10-0.13 | 0.106 | 0.137 |
+| speed lurch | 0.15-0.30 | 0 | 0.29 |
+| foot lift max, u | 0.18-0.25 | 0.44 | 0.31 |
+| arm out / swing p2p, deg | 15-22 / 8-15 | 6.5 / 37.9 | 18.3 / 13.0 |
+| **SEABED** speed, u/s | 2.15 top | 2.49 mean | 1.98 mean |
+| cadence /min | 85-92 | 108.8 | 93.3 |
+| step / L (forward) | 0.90-1.00 | 0.91 | 0.85 |
+| double support (time) | 0.30-0.36 | 0.21 | 0.33 (0.29 with a light dress) |
+| trunk lean, deg | 11-15 | 0.9 | 14.8 |
+| helmet bob, u | 0.05-0.08 | 0.104 | 0.100 |
+| speed lurch | 0.20-0.40 | 0.04 | 0.25 |
+| foot lift max, u | 0.28-0.38 | 0.45 | 0.39 |
+| arm out / swing p2p, deg | out / 10-18 | 5.9 / 37.5 | 15.4 / 18.0 |
+| stance slip mean / penetration, u | keep | 0.015 / 0.001 | 0.013 / 0.001 |
+| **OFF-BOTTOM** cruise, u/s | about 15 | 17.8 | 15.7-16.5 (stroke phase dependent) |
+| sprint (Shift held), u/s | at least 23 | 25.0 | 23.9-25.8 |
+| stroke | 0.35-0.42 Hz | frog kick 0.6 Hz | two-hand sweep 0.40 Hz |
+| speed swing in a stroke, u/s | | 12.3-25.5 | 12.8-20.6 |
+| body pitch at cruise, deg | 12-20 | 8.2 | 13.4 |
+| knee mean / p2p, deg | 10-25 / at most 35 | 38.5 / 82.7 | 26.8 / 26.7 |
+| arm sweep p2p, deg | 60-90 | 74.9 | 94.7 |
+| hanging: pitch / knee, deg | about 0 / soft | -2.0 / 24.4 | 5.3 / 11.8 |
+| distance in first 2 s, u | heavier | 22.2 | 15.6-22.3 (mean 18.0) |
+| **LOOK** helmet on corselet, 90 deg turn | at most 25% | 60.5 deg | 14.6 deg |
+
 ## Sources
 - [Standard diving dress, Wikipedia](https://en.wikipedia.org/wiki/Standard_diving_dress)
 - [Diving Manual, 1943, US Navy Bureau of Ships (Internet Archive)](https://archive.org/details/DivingManual1943). Chapters X (dressing), XI (descent), XIII (working on the bottom), XIV (ascent).
