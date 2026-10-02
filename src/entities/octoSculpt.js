@@ -174,7 +174,7 @@ function armStrip(name, A, squid) {
   const N = tnoise(squid ? 0x5A11 : 0x0C7A), cw = {}, cp = {}, cc = {};
   const Lu = A.Lu, Lv = TAU;
   return {
-    name, W: 512, H: 1024, Lu, Lv, kScale: 0.02, ao: { r: 0.18, dirs: 8, steps: 6 },
+    name, W: 256, H: 512, Lu, Lv, kScale: 0.02, ao: { r: 0.18, dirs: 8, steps: 6 },
     field(u, v, S) {
       const a = v * TAU, sn = -Math.sin(a);
       const oral = sst(0.30, 0.80, sn), dors = sst(0.0, 0.7, -sn);
