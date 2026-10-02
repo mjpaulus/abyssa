@@ -1651,7 +1651,8 @@ function gulperStep(G) {
 // plus the skin kit's light terms (fin transmission, wet catchlight, emission x glow).
 // ?faunaproc = the procedural A/B; window.__faunaSculpt.state().
 // ---------------------------------------------------------------------------
-const FS_SETS = { school: 'assets/fauna/school/', reef: 'assets/fauna/reef/', deep: 'assets/fauna/deep/' };
+const STAR_LABEL = (x, y, z, L) => { L.part = 0; };   // static: one part, plain skin
+const FS_SETS = { school: 'assets/fauna/school/', reef: 'assets/fauna/reef/', deep: 'assets/fauna/deep/', star: 'assets/fauna/star/' };
 const FS_LOD_R = 80;
 const fsState = { sets: {}, n: 0, ms: 0, on: true };
 const FRAG_SCULPT = `#include <emissivemap_fragment>
@@ -1750,8 +1751,9 @@ const FS_DEFS = {
   'MORAY': { set: 'reef', pieces: [['moray', () => REEF_LABELS.moray], ['morayJaw', () => REEF_LABELS.morayJaw]], scale: 1.0, lodR: -1 },
   'CRAB': { set: 'reef', pieces: [['crabBody', () => REEF_LABELS.crabBody], ['crabLegs', () => REEF_LABELS.crabLegs]], scale: 0.55, lodR: -1 },
   'URCHIN': { set: 'reef', pieces: [['urchin', () => REEF_LABELS.urchin]], scale: 0.75, lodR: -1 },
-  // SEA STAR stays procedural: its shader ossicles out-read the baked star at every distance
-  // (judged side by side, fauna2); the 'star' piece remains in the atlas for a later pass
+  // SEA STAR (fauna3): its own sculpt and 1024 set (entities/starSculpt.js) — the fauna2 bake in the
+  // reef atlas lost to the shader star and stays unused there
+  'SEA STAR': { set: 'star', pieces: [['star', () => STAR_LABEL]], scale: 0.7, lodR: -1 },
   // the deep (entities/deepSculpt.js)
   'ANGLER': { set: 'deep', pieces: [['angler', () => DEEP_LABELS.angler], ['anglerJaw', () => DEEP_LABELS.anglerJaw], ['anglerPec', () => DEEP_LABELS.anglerPec], ['anglerLure', () => DEEP_LABELS.anglerLure]], scale: 1.6, lodR: -1 },
   'GULPER': { set: 'deep', pieces: [['gulper', () => DEEP_LABELS.gulper], ['gulperJaw', () => DEEP_LABELS.gulperJaw]], scale: 1.5, lodR: -1 },
