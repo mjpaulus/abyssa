@@ -195,6 +195,9 @@ vGl = position;
 
 const F_HEAD = `
 uniform float uTime; uniform float uSSS; uniform vec3 uPale; uniform vec3 uPale2;
+#ifdef GD_GLOWZ
+  uniform vec3 uGlowZ0, uGlowZ1, uGlowZ2;
+#endif
 varying vec4 vGd; varying vec3 vGl; varying vec3 vBl;
 #ifdef GD_BLADE
   uniform sampler2D uBladePack, uBladeNrm; uniform float uTrans;
@@ -227,7 +230,7 @@ const F_BODY = `
   // unsorted, and at range the mip-averaged coverage turns into a stochastic screen-door
   // the TAA resolves, instead of the lattice vanishing under a fixed threshold.
   {
-    float gcv = texture2D(aoMap, vAoMapUv).b;
+    float gcv = smoothstep(0.3, 0.7, texture2D(aoMap, vAoMapUv).b);   // a partly covered mip stays a strand, not a haze
     float ghs = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
     if (gcv < 0.04 + 0.92 * ghs) discard;
     floraThin = 1.0;
@@ -264,6 +267,17 @@ const F_BODY = `
       if (isB > 0.5 && ea > edge) discard;
     #endif
     floraThin = max(isB * (1.0 - bp.g * 0.75), vGd.x * 0.9);
+  }
+#endif
+#ifdef GD_GLOWZ
+  // (plants) flora's bioluminescent instances (aInst.w = 4 (zone + 1) + glow on a sculpted
+  // batch): a dim pulse at the tips and rims, in the zone's glow colour — half flora's old
+  // strength, so it reads as life in the dark, not neon
+  if (vGd.w >= 4.0) {
+    float gz = floor(vGd.w / 4.0) - 1.0, gg = vGd.w - 4.0 * (gz + 1.0);
+    vec3 gc = gz < 0.5 ? uGlowZ0 : (gz < 1.5 ? uGlowZ1 : uGlowZ2);
+    float gm = max(vGd.x, smoothstep(0.7, 1.0, vGd.y));
+    totalEmissiveRadiance += gc * gg * gm * 0.45 * (0.4 + 0.6 * (0.5 + 0.5 * sin(uTime * 0.9 + vGd.w * 3.0)));
   }
 #endif
 #ifdef GD_PIT
@@ -329,6 +343,7 @@ function gardenMat(o) {
   m.defines = {};
   for (const d of o.def || []) m.defines['GD_' + d] = 1;
   if (SC) m.defines.GD_SCULPT = 1;
+  if (o.glowZ) m.defines.GD_GLOWZ = 1;
   if (m.defines.GD_BLADE) m.forceSinglePass = true;
   const cull = o.cull ?? 90;
   m.onBeforeCompile = sh => {
@@ -337,6 +352,7 @@ function gardenMat(o) {
       Object.assign(sh.uniforms, { uBladePack: { value: BS.pack }, uBladeNrm: { value: BS.nrm }, uTrans: { value: o.trans ?? 1 } });
     }
     if (m.userData.uInstTex) sh.uniforms.uInstTex = m.userData.uInstTex;
+    if (o.glowZ) for (let k = 0; k < 3; k++) sh.uniforms['uGlowZ' + k] = { value: new THREE.Color(o.glowZ[k]) };
     Object.assign(sh.uniforms, uni, {
       uCull: { value: new THREE.Vector2(cull * 0.72, cull) },
       uSway: { value: o.sway ?? 0 }, uFreq: { value: o.freq ?? 0.85 },

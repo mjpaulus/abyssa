@@ -1252,6 +1252,7 @@ function stand(n, blend, yaw) {
 }
 
 const CUR0 = 0.9;
+const GLOWZ = PAL.map(P => P.glow);   // (plants) the sculpted batches' per-zone glow colours
 
 // Per-zone material sets, built ONCE and reused across every reseed. Materials (and
 // the texture/env-map refs they hold) are site-INVARIANT — only geometry/placement is
@@ -1405,8 +1406,8 @@ function buildOnce() {
         else if (i % 8 === 2) put(it, kt++, stand(p.n, 0.2, yaw), S * 1.05, S * rr0(0.85, 1.1, i), p.x, p.y - S * 0.02, p.z, _c, ph, 0, 0, gl * 0.6);
       }
       seal(im, ks); seal(it, kt);
-      plantAdopt('f_stag' + zi, 'stag', im, { cap: 55, mat: { sway: 0, cull: 105 } });
-      plantAdopt('f_table' + zi, 'table', it, { cap: 28, mat: { sway: 0, cull: 105 } });
+      plantAdopt('f_stag' + zi, 'stag', im, { cap: 55, glowZone: zi, mat: { glowZ: GLOWZ, sway: 0, cull: 105 } });
+      plantAdopt('f_table' + zi, 'table', it, { cap: 28, glowZone: zi, mat: { glowZ: GLOWZ, sway: 0, cull: 105 } });
     }
     {
       const L = place(zi, 150, reef, 0.5, 0.95);
@@ -1419,7 +1420,7 @@ function buildOnce() {
           reefCol(i + 2), _fr() * TAU, 0.35 / S, 0.3, _fr() < 0.12 ? rr(0.25, 0.7) : 0);
       }
       seal(im, L.length);
-      plantAdopt('f_fan' + zi, 'fan', im, { cap: 150, mat: { sway: 1, freq: 0.8, cull: 105, sss: 0.4, def: ['SSSL'] } });
+      plantAdopt('f_fan' + zi, 'fan', im, { cap: 150, glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 0.8, cull: 105, sss: 0.4, def: ['SSSL'] } });
     }
     {
       const L = place(zi, 110, reef, 0.72);
@@ -1430,7 +1431,7 @@ function buildOnce() {
           coralCol(i + 1, 2), _fr() * TAU, 0, 0, _fr() < 0.3 ? rr(0.1, 0.45) : 0);
       }
       seal(im, L.length);
-      plantAdopt('f_brain' + zi, 'brain', im, { cap: 110, mat: { sway: 0, cull: 105 } });
+      plantAdopt('f_brain' + zi, 'brain', im, { cap: 110, glowZone: zi, mat: { glowZ: GLOWZ, sway: 0, cull: 105 } });
     }
     {
       const L = place(zi, 110, reef, 0.72);
@@ -1442,7 +1443,7 @@ function buildOnce() {
       }
       seal(im, L.length);
       // (plants) the sculpted tube sponges take this layout over once their asset is in
-      plantAdopt('f_tube' + zi, 'tube', im, { cap: 110, mat: { sway: 1, freq: 0.65, cull: 100, sss: 0.15, def: ['SSSL'] } });
+      plantAdopt('f_tube' + zi, 'tube', im, { cap: 110, glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 0.65, cull: 100, sss: 0.15, def: ['SSSL'] } });
     }
     const lit = [];
     {
@@ -1456,7 +1457,7 @@ function buildOnce() {
           reefCol(i + 2), _fr() * TAU, 0.25 / S, 0.3, glow);
       }
       seal(im, L.length);
-      plantAdopt('f_anem' + zi, 'anem', im, { cap: 190, mat: { sway: 1, freq: 1.0, cull: 90, sss: 0.3, def: ['SSSL', 'FLINCH'] } });
+      plantAdopt('f_anem' + zi, 'anem', im, { cap: 190, glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 1.0, cull: 90, sss: 0.3, def: ['SSSL', 'FLINCH'] } });
     }
     // Soft halos on the brightest polyp clusters — sells the bioluminescence at range.
     for (const [p, S] of lit) {

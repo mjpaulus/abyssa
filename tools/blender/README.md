@@ -173,3 +173,25 @@ creature that uses none of these builds exactly as before:
   `xf` (meta.face). helmetSpec hollows the bonnet's front and bores the faceplate through to it; the
   installer adds the liner + procedural eyes and drops the front recess disc. Look-dev:
   `sculptlab.html?lab&job=./src/entities/salSkinSculpt.js%23preview&p=head,eyes` (or `p=handL`).
+
+## Sessile life (plants): many small species, alpha cards, far LODs
+
+`node tools/blender/build.mjs plants` — `src/world/plants/plantsSculpt.js` (export_hi also looks in
+`src/world/plants/`) -> `assets/plants/`. Each SPECIES is its own set and has 3-4 seeded VARIANTS
+(pieces `<species>_v<i>`: `_v`, because assets.js folds a trailing `_<digits>` from GLTFLoader's
+de-dup). The runtime is `src/world/plants/plantKit.js` (one BatchedMesh per species, swapped under
+flora.js / gardens.js's own layouts). Additive pipeline pieces it uses:
+- piece **`far: <tris>`**: bake.py also exports `<piece>_far`, a WELDED copy of the baked low
+  collapse-decimated (UVs are loop data, so the far LOD samples the same atlas). Heavily charted
+  lows decimate poorly (seams are boundaries): keep the near low's chart count down (`loSdf`).
+- piece **`loSdf`**: a different field for the low than the high (an alpha card's plain shell; a
+  colony whose growth collars and plume lamellae belong in the normal map, not the mesh).
+- set **`alpha: true`** (with `ormB: 'alpha'`): every piece paints `emit = 1` on its high, so ORM.B
+  is 1 where the cage rays HIT the high and 0 where they missed — a sea fan's net, a glass sponge's
+  lattice, a crinoid's pinnule comb on a plain low. The gutter fill keeps those holes: the alpha's
+  fill is bounded by the CHART mask, rasterised in numpy from the lows' own UV triangles (a
+  low-only Cycles emission bake came back empty — the lows are invisible to rays). The game
+  alpha-HASHES it (gardens.js GD_ALPHA): opaque, unsorted, TAA-resolved at range.
+- set **`ormHalf: false`**: full-resolution ORM (the alpha cards' coverage lives there).
+- `bake.py ... --sets a,b` rebakes only those sets but writes `<name>_<sets>.glb` and a json with
+  partial stats: fine for paint-only iteration, finish with a full build.

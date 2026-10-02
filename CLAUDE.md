@@ -200,6 +200,13 @@ against explicit contracts and reviewed on return.
   staghorn/sponges/anemones; tube worms with retracting plumes on activeVents, mats,
   crinoids; sea pens/glass sponges/whips). Own siteParams('gardens') stream (site.js has
   no authored seed yet — falls back to a per-site stream). window.__noGardens = A/B.
+  SCULPTED PLANTS (branch plants): `world/plants/plantKit.js` swaps baked species
+  (`plantsSculpt.js` -> `node tools/blender/build.mjs plants` -> assets/plants) UNDER flora.js's and
+  gardens.js's own layouts: hosts call `plantAdopt(key, species, im, opts)` after every layout (no
+  stream draw — fingerprints untouched), the kit mirrors each host mesh into ONE BatchedMesh per
+  species (variants by index hash, near/far LOD + range cull on the CPU) running gardens.js's sway
+  program (batching-aware: aInst from a float texture). Host meshes are hidden, never disposed:
+  `?plantproc` / `__plants.proc(true)` = the procedural A/B; `__plants.state()`.
 - `world/fauna.js` — the animal vocabulary (loft/blade/limb/gape/eyes/photophores,
   part-id vertex animation, 30 Hz steering): ray, turtle, moray, crabs, stars/urchins;
   vent fish, flapjack, isopods; anglerfish, gulper, lanternfish. Own 'fauna' stream;

@@ -46,16 +46,16 @@ export function setPlantMaterial(fn) { matFactory = fn; }
 // than its grain)
 const F = THREE.FrontSide, D2 = THREE.DoubleSide;
 const SPEC = {
-  tube: { near: 22, tint: 0.6, micro: 14, side: F },
-  anem: { near: 16, tint: 0.55, micro: 22, side: F },
-  barrel: { near: 30, tint: 0.55, micro: 8, side: F },
-  worm: { near: 20, tint: 0.25, micro: 18, side: F },
-  stag: { near: 22, tint: 0.5, micro: 20, side: F },
-  brain: { near: 28, tint: 0.5, micro: 10, side: F },
-  table: { near: 30, tint: 0.5, micro: 12, side: F },
-  glass: { near: 26, tint: 0.2, micro: 0, side: D2 },
-  fan: { near: 26, tint: 0.45, micro: 0, side: D2 },
-  crin: { near: 18, tint: 0.5, micro: 0, side: D2 }
+  tube: { near: 14, tint: 0.6, micro: 14, side: F },
+  anem: { near: 11, tint: 0.55, micro: 22, side: F },
+  barrel: { near: 22, tint: 0.55, micro: 8, side: F },
+  worm: { near: 14, tint: 0.25, micro: 18, side: F },
+  stag: { near: 15, tint: 0.5, micro: 20, side: F },
+  brain: { near: 20, tint: 0.5, micro: 10, side: F },
+  table: { near: 20, tint: 0.5, micro: 12, side: F },
+  glass: { near: 18, tint: 0.2, micro: 0, side: D2 },
+  fan: { near: 18, tint: 0.45, micro: 0, side: D2 },
+  crin: { near: 12, tint: 0.5, micro: 0, side: D2 }
 };
 
 export function plantAdopt(key, species, im, opts) {
@@ -120,9 +120,9 @@ function buildGroup(sp, hosts) {
   for (const K of hosts) { K.off = cap; cap += K.opts.cap; cull = Math.max(cull, K.opts.mat.cull); for (const d of K.opts.mat.def || []) def.add(d); }
   const maps = asset.maps[sp], ormB = asset.meta.sets[sp].ormB;
   if (ormB === 'alpha') def.add('ALPHA');
-  const o0 = hosts[0].opts.mat;
+  const o0 = hosts[0].opts.mat, gz = hosts.find(K => K.opts.mat.glowZ);
   const mat = matFactory({
-    ...o0, sway: 1, cull, def: [...def], key: 'sc-' + sp, side: S.side,
+    ...o0, sway: 1, cull, def: [...def], key: 'sc-' + sp, side: S.side, glowZ: gz ? gz.opts.mat.glowZ : null,
     sculpt: { map: maps.map, normalMap: maps.normalMap, orm: maps.ormMap }
   });
   if (maps.normalMap.userData.rg) patchNormalRG(mat);
@@ -143,7 +143,7 @@ function buildGroup(sp, hosts) {
   mat.userData.uInstTex = { value: it };
   const G = {
     sp, hosts, batch: b, ids, nv, instTex: it, cap, near: S.near, S,
-    vis: new Uint8Array(cap), lod: new Uint8Array(cap).fill(255), var: new Uint8Array(cap), px: new Float32Array(cap * 3), cull2: new Float32Array(cap)
+    vis: new Uint8Array(cap), lod: new Uint8Array(cap).fill(255), var: new Uint8Array(cap), px: new Float32Array(cap * 3), cull2: new Float32Array(cap), near2: new Float32Array(cap)
   };
   for (let i = 0; i < cap; i++) G.var[i] = hashV(i, nv);
   for (const K of hosts) { K.G = G; K.n = 0; }
@@ -163,14 +163,22 @@ function sync(K) {
     b.setMatrixAt(j, _m);
     G.px[j * 3] = _m.elements[12]; G.px[j * 3 + 1] = _m.elements[13]; G.px[j * 3 + 2] = _m.elements[14];
     G.cull2[j] = c2;
+    // the near/far switch scales with the instance's own size (a 4 u table holds its detail
+    // further out than a 1 u anemone)
+    const sy = Math.hypot(_m.elements[4], _m.elements[5], _m.elements[6]), nk = G.near * Math.min(2, Math.max(0.7, sy / 1.6));
+    G.near2[j] = nk * nk;
     if (im.instanceColor) im.getColorAt(i, _c); else _c.setRGB(1, 1, 1);
     // soften the host's palette toward its own value: the bake carries the species' colour
     // structure; the tint only varies it (the procedural palettes were tuned for flat albedo)
     const l = 0.2126 * _c.r + 0.7152 * _c.g + 0.0722 * _c.b, k = S.tint;
     const r = l + (_c.r - l) * k, g = l + (_c.g - l) * k, bl = l + (_c.b - l) * k, nrm = 1 / Math.max(0.05, 0.2126 * r + 0.7152 * g + 0.0722 * bl);
-    const lk = Math.min(1.25, Math.max(0.55, l / 0.5));   // keep the host's per-instance brightness jitter
-    b.setColorAt(j, _v4.set(r * nrm * lk * 0.8, g * nrm * lk * 0.8, bl * nrm * lk * 0.8, 1));
-    td[j * 4] = ai[i * 4]; td[j * 4 + 1] = ai[i * 4 + 1]; td[j * 4 + 2] = ai[i * 4 + 2]; td[j * 4 + 3] = ai[i * 4 + 3];
+    // a gentle share of the host's per-instance brightness jitter (the bake carries the value)
+    const lk = Math.min(1.3, Math.max(0.8, 1.02 + 0.8 * (l - 0.3)));
+    b.setColorAt(j, _v4.set(r * nrm * lk, g * nrm * lk, bl * nrm * lk, 1));
+    td[j * 4] = ai[i * 4]; td[j * 4 + 1] = ai[i * 4 + 1]; td[j * 4 + 2] = ai[i * 4 + 2];
+    // w: flora's glow weight, tagged with its zone (gardens.js GD_GLOWZ); gardens hosts' w
+    // (a hue/pulse weight only the procedural tips read) is dropped
+    td[j * 4 + 3] = K.opts.glowZone != null && ai[i * 4 + 3] > 0 ? 4 * (K.opts.glowZone + 1) + Math.min(3.9, ai[i * 4 + 3]) : 0;
     G.lod[j] = 255;
   }
   for (let i = n; i < K.n; i++) { const j = o + i; if (G.vis[j]) { b.setVisibleAt(j, false); G.vis[j] = 0; } }
@@ -183,11 +191,11 @@ function sync(K) {
 // host's range; near/far by distance
 function lodPass(G, K, on) {
   const b = G.batch, cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
-  const n2 = G.near * G.near, P = G.px;
+  const P = G.px, N2 = G.near2;
   for (let i = K.off, e = K.off + K.n; i < e; i++) {
     let vis = 0;
     if (on) { const dx = P[i * 3] - cx, dy = P[i * 3 + 1] - cy, dz = P[i * 3 + 2] - cz, d2 = dx * dx + dy * dy + dz * dz; vis = d2 < G.cull2[i] ? 1 : 0;
-      if (vis) { const l = (lodOn && d2 > n2) ? 1 : 0; if (l !== G.lod[i]) { b.setGeometryIdAt(i, l ? G.ids.far[G.var[i]] : G.ids.near[G.var[i]]); G.lod[i] = l; } } }
+      if (vis) { const l = (lodOn && d2 > N2[i]) ? 1 : 0; if (l !== G.lod[i]) { b.setGeometryIdAt(i, l ? G.ids.far[G.var[i]] : G.ids.near[G.var[i]]); G.lod[i] = l; } } }
     if (vis !== G.vis[i]) { b.setVisibleAt(i, !!vis); G.vis[i] = vis; }
   }
 }

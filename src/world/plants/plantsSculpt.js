@@ -414,11 +414,11 @@ function brain(seed) {
     const n = fbm3n(wx * fq, y * fq * 0.9, wz * fq, s, 2);
     const f = Math.abs(n) / 0.16;
     // valley on the noise's zero set, a flat-topped ridge, a fine groove along each crest
-    return 0.014 * (sst(0, 1, f) - 0.5) - 0.004 * Math.exp(-(((f - 2.0) / 0.35) ** 2)) * sst(1.2, 2.0, f);
+    return 0.02 * (sst(0, 1, f) - 0.5) - 0.005 * Math.exp(-(((f - 2.0) / 0.35) ** 2)) * sst(1.2, 2.0, f);
   };
   const sdf = Disp([
     { type: 'fbm', amp: 0.01, f: 4, oct: 2, seed: s + 1 },
-    { type: 'fn', bake: true, amp: 0.024, fn: maze },
+    { type: 'fn', bake: true, amp: 0.03, fn: maze },
     { type: 'pits', bake: true, amp: 0.0015, f: 160, dens: 0.5, r: 0.3, seed: s + 2 },
     { type: 'grain', bake: true, amp: 0.0006, f: 300, seed: s + 3 }
   ], body);
@@ -429,7 +429,7 @@ const BC_PAINT = {
   mats: { [BC.CORAL]: { c: [0.72, 0.64, 0.50], ro: 0.6 } },
   layers: [
     { c: [0.62, 0.56, 0.40], a: 0.5, m: [['n', 6, 0.4, 0.8, 81]] },
-    { c: [0.40, 0.34, 0.24], a: 0.55, m: [['cav', 0.15, 1.0]] },           // valleys
+    { c: [0.46, 0.40, 0.30], a: 0.3, m: [['cav', 0.15, 1.0]] },            // valleys
     { c: [0.86, 0.80, 0.68], a: 0.55, m: [['cvx', 0.4, 1.2]] },
     { c: [0.30, 0.28, 0.24], a: 0.6, ro: 0.95, m: [['ax', 1, -0.02, -0.1]] },
     { c: [0.10, 0.08, 0.06], a: 0.8, m: [['ao', 0.4, 0.95]] }
@@ -495,7 +495,7 @@ function glass(seed, type) {
   const curve = (R() - 0.5) * 0.12;
   const cx = y => curve * y * y;
   const Rad = y => { const t = Math.max(0, Math.min(1, y / top)); return r0 * (0.45 + 0.55 * sst(0, 0.18, t)) * (1 + flare * t * t) * (1 - 0.06 * sst(0.9, 1, t)); };
-  const NV = vase ? 22 : 20, sh = vase ? 0.075 : 0.05, ws = 0.0026;
+  const NV = vase ? 16 : 14, sh = vase ? 0.1 : 0.07, ws = 0.0042;
   const lat = (x, y, z) => {
     const px = x - cx(y), rad = Math.hypot(px, z), a = Math.atan2(z, px), Ry = Rad(y);
     const dShell = Math.abs(rad - Ry) - 0.0035;
@@ -751,12 +751,12 @@ export const SPECIES = {
   glass: {
     variants: [{ seed: 901, type: 'basket' }, { seed: 902, type: 'basket' }, { seed: 903, type: 'vase' }, { seed: 904, type: 'vase' }],
     build: v => glass(v.seed, v.type), paint: GS_PAINT,
-    set: { size: 2048, alpha: true, ormB: 'alpha' }, hi: 0.0011, lo: 0.0065, tris: 1400, err: 0.01, far: 400, kEps: 0.003, ao: { r: 0.02, n: 3 }, cage: 0.016, ray: 0.03
+    set: { size: 1024, ormHalf: false, alpha: true, ormB: 'alpha' }, hi: 0.0011, lo: 0.0065, tris: 1400, err: 0.01, far: 400, kEps: 0.003, ao: { r: 0.02, n: 3 }, cage: 0.016, ray: 0.03
   },
   fan: {
     variants: [{ seed: 1001, type: 'wide' }, { seed: 1002, type: 'wide' }, { seed: 1003, type: 'tall' }, { seed: 1004, type: 'lobed' }],
     build: v => seaFan(v.seed, v.type), paint: GF_PAINT,
-    set: { size: 2048, alpha: true, ormB: 'alpha' }, hi: 0.0008, lo: 0.005, tris: 700, err: 0.008, far: 250, kEps: 0.003, ao: { r: 0.01, n: 3 }, cage: 0.012, ray: 0.024
+    set: { size: 1024, ormHalf: false, alpha: true, ormB: 'alpha' }, hi: 0.0008, lo: 0.005, tris: 700, err: 0.008, far: 250, kEps: 0.003, ao: { r: 0.01, n: 3 }, cage: 0.012, ray: 0.024
   },
   crin: {
     variants: [{ seed: 1101 }, { seed: 1102 }, { seed: 1103 }],
@@ -769,7 +769,7 @@ export const SPECIES = {
 export function pipeline() {
   const sets = {}, pieces = [], sk = {};
   for (const [name, S] of Object.entries(SPECIES)) {
-    sets[name] = { size: S.set.size, gutter: 6, aoDist: S.set.aoDist || 0.06, aoSamples: 64, fill: true, weldNormals: true, alpha: !!S.set.alpha, ...(S.set.ormB ? { ormB: S.set.ormB } : {}) };
+    sets[name] = { size: S.set.size, gutter: 6, aoDist: S.set.aoDist || 0.06, aoSamples: 64, fill: true, weldNormals: true, alpha: !!S.set.alpha, ormHalf: S.set.ormHalf !== false, ...(S.set.ormB ? { ormB: S.set.ormB } : {}) };
     sk[name] = [];
     S.variants.forEach((v, i) => {
       const b = S.build(v);

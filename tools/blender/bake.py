@@ -293,8 +293,11 @@ for set_name, sconf in sets.items():
             he.select_set(True)
             lo.select_set(True)
             bpy.context.view_layer.objects.active = lo
+            # (plants) an ALPHA set's emit is coverage: the margin would EXTEND every hit into the
+            # misses beside it (measured: a 1024 fan net's holes shrank to dots) — no margin; the
+            # chart-bounded fill below makes the gutter
             bpy.ops.object.bake(type='EMIT', use_selected_to_active=True, cage_extrusion=p['cage'], max_ray_distance=p['ray'],
-                                margin=gutter, margin_type='EXTEND', use_clear=False, target='IMAGE_TEXTURES')
+                                margin=0 if sconf.get('alpha') else gutter, margin_type='EXTEND', use_clear=False, target='IMAGE_TEXTURES')
             bpy.data.objects.remove(he, do_unlink=True)
         emit = np.empty(size * size * 4, np.float32)
         imgs['emit'].pixels.foreach_get(emit)
