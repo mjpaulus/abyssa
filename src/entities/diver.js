@@ -2163,7 +2163,7 @@ const GAIT = { stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, ri
   // pelvis keeps at mid-stance / standing; lift = swing arc; wide = extra half step-width;
   // top = mean walking speed used to normalise the gait amplitude; kneeSw = swing knee fold.
   deck: { stride: 2.30, duty: 0.67, kMid: 28, kIdle: 12, lift: 0.07, wide: 0.06, top: 1.40, kneeSw: 0.62 },
-  bed: { stride: 2.70, duty: 0.66, dutyLight: 0.61, kMid: 28, kIdle: 9, lift: 0.12, wide: 0.025, top: 2.02, kneeSw: 0.68 } };
+  bed: { stride: 2.70, duty: 0.66, dutyLight: 0.61, kMid: 28, kIdle: 9, lift: 0.12, wide: 0.025, top: 2.02, kneeSw: 0.60 } };
 window.__gait = GAIT;
 // the live, blended gait (written once per frame by gaitGround)
 let gStride = GAIT_STRIDE0, gKMid = 13, gKIdle = 8, gLift = 0.19, gWide = 0, gTop = 2.47, gKneeSw = 1, gDeck = 1;
@@ -3182,7 +3182,9 @@ export function updateDiver(dt, t, player) {
   player.walkP = strikeP(); player.swimP = swimP;
 
   poseWalk(pw, walkP, amp, t, deckF);
-  poseSwim(psw, swimP, t, clamp(speed * 0.09, 0, 1));
+  // The haul is driven by way made THROUGH the water, not by the dress lifting him: rising on
+  // a full dress he hangs and barely sculls; a slow climb or settle still works the arms a little.
+  poseSwim(psw, swimP, t, clamp(flat * 0.09 + Math.abs(player.vel.y) * 0.04, 0, 1));
   for (let i = 0; i < CH.N; i++) po[i] = psw[i] + (pw[i] - psw[i]) * gb;
 
   // ---- SCULLS. Backing up and crabbing sideways are not swimming, and they should not
@@ -3491,7 +3493,7 @@ export function updateDiver(dt, t, player) {
     // Climbing, he leans into the hill; descending, he sits back against it.
     const sx = Math.sin(yawF) * 0.5, sz = Math.cos(yawF) * 0.5;
     const hill = gdOn ? Math.atan(groundD(player.pos.x + sx, player.pos.z + sz) - groundD(player.pos.x - sx, player.pos.z - sz)) : 0;
-    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + (0.12 + 0.10 * (1 - deckF)) * amp * (1 - 2 * revF) + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
+    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + (0.15 + 0.12 * (1 - deckF)) * amp * (1 - 2 * revF) + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
   }
   // LIFT plants the soles on player.pos - 1.35 (the collision floor) with the legs at
   // full stretch. Off the ground the authored bob rides on it; on the ground THE PELVIS
