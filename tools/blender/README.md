@@ -238,3 +238,16 @@ shell/flippers, head/jaw, carapace/legs). Thin plates (fins, wings, flippers) ke
 of ~2 low-grid cells with a bake-only layer paring the high back (a thinner plate pinches dual
 contouring into non-manifold edges QEM cannot collapse). A/B: `?fishproc&faunaproc&octproc&sharkproc`
 or `__school.on / __faunaSculpt.on / pred.sculptOn` (same frame).
+
+## Fauna round 3 (fauna3): arms, the star, the vent fauna
+
+- `octo` now also bakes two STRIPS (strip.mjs): `octArm` and `sqArm` (256x512, normalised by the arm
+  radius: circumference 2 pi, one tile = 4 sucker stations per row). predators.js lays the arms' u
+  CONFORMALLY (`conformalU`: du = ds / (r Lu)) and duplicates the ring's seam column; ORM.B is the
+  sucker mask (rims warmed in the shader, not emissive). `pred.armStrip(false)` = A/B.
+- `star` (`src/entities/starSculpt.js`, own 1024 set): fauna.js FS_DEFS 'SEA STAR' swaps it in.
+- `vent` (`src/entities/ventSculpt.js`): Rimicaris body + Kiwa, labelled at install by ventlife.js
+  (uv = (kind, along)); the shrimp's legs/antennae stay generated ribbons (`shrimpAppendages`).
+  `?ventproc` / `__ventlife.sculpt(false)` = A/B.
+- Blender 5.2's Metal kernel compile occasionally aborts (`NSURL initFileURLWithPath: nil`) when another
+  Blender is baking on the machine; rerun with `--skip-export` (the highs are already written).

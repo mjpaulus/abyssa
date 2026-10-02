@@ -124,7 +124,9 @@ async function load(base, name) {
   };
   const maps = {};
   await Promise.all(Object.keys(meta.sets).map(async s => {
-    const [map, normalMap, ormMap] = useKtx
+    // strip sets (tools/blender/strip.mjs) ship WebP only -- asking for their .ktx2 404s
+    const kt = useKtx && !meta.sets[s].strip;
+    const [map, normalMap, ormMap] = kt
       ? await Promise.all([ktex(s + '_albedo', true), ktex(s + '_normal', false, true), tex(s + '_orm.webp', false)])
       : await Promise.all([tex(s + '_albedo.webp', true), tex(s + '_normal.webp', false), tex(s + '_orm.webp', false)]);
     maps[s] = { map, normalMap, ormMap };

@@ -16,6 +16,7 @@
 // with supraocular papillae "horns", warty papillae, skin ridges, the siphon, the web at the
 // arm crown); a loliginid / ommastrephid squid (a long muscular mantle with a dorsal
 // gladius ridge, rhomboid terminal fins, a collar, big eyes, a ventral funnel).
+import { tnoise } from '../../tools/blender/strip.mjs';
 const TAU = Math.PI * 2;
 const sst = (a, b, x) => { let t = (x - a) / (b - a); t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); };
 const clamp = (x, a, b) => x < a ? a : x > b ? b : x;
@@ -50,7 +51,10 @@ function warts(f, dens, amp, seed) {
 export const OCT_EYE = [0.45, 0.165, 0.0], OCT_EYER = 0.072;
 function octMantleSpec() {
   // the mantle sac rides up and back over a broad head
-  let s = U(0.14, E([0.0, 0.40, -0.05], [0.40, 0.34, 0.36], OM.SKIN, [-0.3, 0, 0]), E([0.0, 0.08, 0.02], [0.44, 0.25, 0.36], OM.SKIN));
+  // fauna3: the sac sits BEHIND the head (+z, away from the siphon) and flows into it through a wide
+  // blend — the old tight union (k 0.14, sac straight over the head) left a waist that read as a
+  // bun on a bun once the rest pose squashed it
+  let s = U(0.26, E([0.0, 0.40, 0.08], [0.39, 0.35, 0.40], OM.SKIN, [-0.3, 0, 0]), E([0.0, 0.08, 0.0], [0.44, 0.24, 0.36], OM.SKIN));
   // the eye turrets: raised orbits on the head's flanks, the ball sunk in them
   s = U(0.06, s, Mir(0, E([0.42, 0.17, 0.0], [0.1, 0.12, 0.12], OM.SKIN)));
   s = Sub(0.02, OM.SKIN, s, Mir(0, Sph(OCT_EYE, OCT_EYER * 0.96)));
@@ -136,6 +140,98 @@ function squidPaint() {
   };
 }
 
+// ---- the ARM STRIPS (fauna3) ---------------------------------------------------------------------
+// The arms stay generated in the vertex shader (reach, curl, grab, jet, the death curl), so their
+// skin is a TILEABLE STRIP (tools/blender/strip.mjs, Orune's approach): a heightfield over the
+// tube's own (u, v) — u along the arm, v once round it — baked periodic in both directions.
+// Units are NORMALISED BY THE ARM'S RADIUS (circumference Lv = 2 pi), and predators.js lays u
+// CONFORMALLY (du = ds / (r Lu)): as the arm tapers the suckers shrink with it and stay round, the
+// way a real arm's do. v = ring angle / 2 pi; the oral face (where the vertex shader flattens the
+// tube) is at angle 3 pi / 2, v = 0.75.
+// ORM: R = AO, G = roughness, B = the sucker mask (the shader warms the rims with it; NOT emissive).
+// Reference: O. vulgaris arm — two alternating rows of sessile suckers, each a raised rim round an
+// infundibulum with radial grooves and a central acetabular opening, standing on a short soft
+// collar; transverse wrinkles over the oral face; papillae and a reticulate groove net aboral.
+export const OCT_ARM = { pairs: 4, Lu: 2.6, rs: 0.30, rowA: 0.40 };
+export const SQ_ARM = { pairs: 4, Lu: 2.4, rs: 0.30, rowA: 0.44 };
+const wrapd = x => x - Math.round(x);
+function suckerField(u, v, A, S) {
+  // nearest sucker of the two staggered rows: d (in radii), angle round it, its id
+  const a = v * TAU;
+  let best = 9, bdu = 0, bdv = 0, id = 0;
+  for (let k = 0; k < 2; k++) {
+    const ac = 1.5 * Math.PI + (k ? A.rowA : -A.rowA);
+    const dv = wrapd((a - ac) / TAU) * TAU;                     // radius units round the tube
+    const uu = u * A.pairs - 0.5 * k;
+    const j = Math.round(uu), du = (uu - j) * A.Lu / A.pairs;   // radius units along it
+    const d = Math.hypot(du, dv);
+    if (d < best) { best = d; bdu = du; bdv = dv; id = ((j % A.pairs) + A.pairs) % A.pairs + k * 7; }
+  }
+  S.sd = best / A.rs; S.sang = Math.atan2(bdv, bdu); S.sid = id;
+  return S.sd;
+}
+function armStrip(name, A, squid) {
+  const N = tnoise(squid ? 0x5A11 : 0x0C7A), cw = {}, cp = {}, cc = {};
+  const Lu = A.Lu, Lv = TAU;
+  return {
+    name, W: 256, H: 512, Lu, Lv, kScale: 0.02, ao: { r: 0.18, dirs: 8, steps: 6 },
+    field(u, v, S) {
+      const a = v * TAU, sn = -Math.sin(a);
+      const oral = sst(0.30, 0.80, sn), dors = sst(0.0, 0.7, -sn);
+      const d = suckerField(u, v, A, S);
+      // sucker relief (radius units): the collar it stands on, the rim, the infundibulum dish with
+      // radial grooves, the acetabular opening. Squid: a stalked cup with a hard toothed ring.
+      let suck = 0, rim = 0, cup = 0, hole = 0;
+      if (d < 1.6) {
+        const collar = Math.max(0, 1 - (d / 1.45) ** 2);
+        rim = Math.exp(-(((d - 0.86) / (squid ? 0.10 : 0.14)) ** 2));
+        cup = 1 - sst(0.70, 0.88, d);
+        hole = 1 - sst(squid ? 0.30 : 0.18, squid ? 0.42 : 0.30, d);
+        const grooves = squid ? 0 : Math.pow(Math.abs(Math.cos(S.sang * 9 + S.sid)), 6) * sst(0.30, 0.45, d) * (1 - sst(0.62, 0.74, d));
+        const teeth = squid ? Math.pow(Math.abs(Math.cos(S.sang * 11 + S.sid * 2.1)), 4) * Math.exp(-(((d - 0.80) / 0.07) ** 2)) : 0;
+        suck = (squid ? 0.16 : 0.12) * collar + 0.10 * rim - 0.09 * cup * (1 - rim) - 0.012 * grooves - (squid ? 0.14 : 0.10) * hole + 0.03 * teeth;
+        S.teeth = teeth;
+      } else S.teeth = 0;
+      S.rim = rim * oral; S.cup = cup * oral; S.hole = hole * oral; S.sk = (d < 1.4 ? 1 : 0) * oral;
+      // the oral face between the suckers: a median furrow and transverse wrinkles
+      const furrow = Math.exp(-(((wrapd(v - 0.75) * Lv) / 0.10) ** 2));
+      const wr = Math.pow(Math.abs(Math.sin((u * Lu * 7.0 + 0.6 * N.fbm(u, v, 4, 8, 3)) * Math.PI)), 3) * (1 - sst(1.0, 1.5, d));
+      // aboral: papillae (few big, many small) and a reticulate groove net in a warped (still
+      // periodic) domain, longitudinal flank folds, the soft lumpy fbm
+      const wu = u + (N.fbm(u, v, 2, 3, 3) - 0.5) * 0.08, wv = v + (N.fbm(u + 0.5, v + 0.5, 2, 3, 3) - 0.5) * 0.05;
+      N.cells(wu, wv, 6, 14, 0.85, 1, cw, Lv / Lu * 6 / 14);
+      const wart = cw.id < (squid ? 0 : 0.45) ? Math.max(0, 1 - (cw.f1 / (0.22 + 0.2 * cw.id)) ** 2) : 0;
+      N.cells(wu, wv, 16, 36, 0.9, 2, cp, Lv / Lu * 16 / 36);
+      const pap = cp.id < (squid ? 0.0 : 0.35) ? Math.max(0, 1 - (cp.f1 / 0.3) ** 2) : 0;
+      N.cells(wu, wv, 8, 18, 0.95, 3, cc, Lv / Lu * 8 / 18);
+      const net = (1 - sst(0.0, 0.25, cc.f2 - cc.f1)) * (0.35 + 0.65 * sst(0.4, 0.8, N.fbm(u, v, 4, 6, 3)));
+      const fold = Math.pow(Math.abs(Math.sin(v * TAU * 4 + 1.5 * N.fbm(u, v, 2, 4, 3))), 10);
+      const lump = N.fbm(u, v, 2, 4, 4);
+      S.oral = oral; S.dors = dors; S.wart = wart * (1 - oral); S.pap = pap * (1 - oral); S.net = squid ? 0 : net * (1 - oral);
+      S.blot = sst(0.5, 0.64, N.fbm(u + 0.2, v, 3, 5, 4));
+      S.h = (squid ? 0.02 : 0.06) * (lump - 0.5) + (1 - oral) * (0.15 * wart * wart + 0.06 * pap - (squid ? 0 : 0.012) * net - 0.02 * fold)
+        + oral * (suck - 0.035 * furrow + 0.008 * wr * (1 - S.sk));
+    },
+    paint(S) {
+      const mot = N.fbm(S.u + 0.3, S.v + 0.1, 6, 12, 3);
+      // neutral luminance (the live chromatophores carry the hue): aboral mid, oral pale
+      let L = 0.50 + 0.14 * (mot - 0.5);
+      L = L + (0.70 - L) * S.oral;
+      L *= 1 + 0.25 * S.wart + 0.12 * S.pap;
+      L *= 1 - 0.14 * S.net;
+      L *= 1 - 0.30 * S.blot * (1 - S.oral);
+      L += (0.76 - L) * S.rim;                          // the pale raised rim
+      L *= 1 - 0.30 * S.cup * (1 - S.rim);              // the dish a shade darker
+      L *= 1 - 0.40 * S.hole;                           // the opening in shadow
+      if (squid) L *= 1 - 0.55 * S.teeth * S.oral;      // the chitin ring (dark)
+      L *= 0.40 + 0.60 * S.ao;
+      S.c = [L, L, L];
+      S.ro = 0.55 - 0.25 * S.rim - 0.15 * S.cup + 0.1 * S.pap + 0.12 * (1 - S.ao) - (squid ? 0.15 : 0);
+      S.e = Math.min(1, S.rim * 0.9 + S.cup * 0.35);
+    }
+  };
+}
+
 export function pipeline() {
   return {
     name: 'octo', out: 'assets/fauna/octo',
@@ -145,6 +241,7 @@ export function pipeline() {
       { name: 'squid', set: 'octo', sdf: squidSpec(), paint: squidPaint(), hi: { h: 0.0025 }, lo: { h: 0.006, tris: 1600, err: 0.018 }, kEps: 0.005, ao: { r: 0.03, n: 4 }, cage: 0.008, ray: 0.025 }
     ],
     compress: { mesh: 'draco', tex: 'ktx2' },
-    meta: {}
+    strips: [armStrip('octArm', OCT_ARM, false), armStrip('sqArm', SQ_ARM, true)],
+    meta: { octArm: OCT_ARM, sqArm: SQ_ARM }
   };
 }

@@ -39,6 +39,8 @@ import { terrainH } from './terrain.js';
 import { activeVents } from './vents.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { uPush, uPushV, uJolt, PUSH_GLSL, PUSH_N } from './stir.js';
+import { loadSculpted } from '../lib/assets.js';
+import { shrimpAppendages, kiwaKind } from '../entities/ventSculpt.js';
 
 const TAU = Math.PI * 2;
 const ZI = 1;
@@ -108,6 +110,18 @@ vec3 vlScatter(vec3 w){
 }`;
 
 const uni = { uTime: { value: 0 }, uVis: { value: 0 }, uPush, uPushV, uJolt };
+// fauna3: the sculpted bodies' maps (entities/ventSculpt.js -> assets/fauna/vent), sampled at the
+// baked atlas uv (aVuv; -1 on the generated appendages), normal applied in a cotangent frame
+const VS_FRAG = `
+uniform sampler2D uVA; uniform sampler2D uVN; uniform sampler2D uVO; varying vec2 vVuv;
+vec3 vlPerturb(vec3 n, vec3 p, vec2 uv, vec3 mapN, float faceDir){
+  mapN.z = sqrt(max(0.0, 1.0 - dot(mapN.xy, mapN.xy)));
+  vec3 dp1 = dFdx(p), dp2 = dFdy(p); vec2 du1 = dFdx(uv), du2 = dFdy(uv);
+  vec3 dp2p = cross(dp2, n), dp1p = cross(n, dp1);
+  vec3 T = dp2p * du1.x + dp1p * du2.x, B = dp2p * du1.y + dp1p * du2.y;
+  float im = inversesqrt(max(dot(T, T), dot(B, B)) + 1e-20);
+  return normalize(mat3(T * im * faceDir, B * im * faceDir, n) * mapN);
+}`;
 let shrimp = null, crabs = null;
 let shrimpMat = null, crabMat = null;
 let aShrimpA = null, aShrimpB = null, aCrab = null;
@@ -236,18 +250,20 @@ function crabGeometry() {
 // silently hands the second one the first one's compiled program (the
 // creatures.js hazard).
 // ---------------------------------------------------------------------------
-function shrimpMaterial() {
+function shrimpMaterial(maps) {
   const m = new THREE.MeshStandardMaterial({
     color: C_SHRIMP, roughness: 0.78, metalness: 0.0,
     side: THREE.DoubleSide, emissive: 0x000000
   });
-  m.customProgramCacheKey = () => 'abyssa-ventlife-shrimp';
+  m.customProgramCacheKey = () => maps ? 'abyssa-ventlife-shrimp-sculpt' : 'abyssa-ventlife-shrimp';
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, uni);
+    if (maps) Object.assign(sh.uniforms, { uVA: { value: maps.map }, uVN: { value: maps.normalMap }, uVO: { value: maps.ormMap } });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec4 aSwirl;   // x: phase  y: angular speed (signed)  z: orbit radius  w: height offset
         attribute vec4 aBody;    // x: size   y: bob rate  z: bob phase  w: radial wobble
+        ${maps ? 'attribute vec2 aVuv; varying vec2 vVuv;' : ''}
         uniform float uTime; uniform float uVis;
         varying float vShade; varying vec2 vVl; varying vec3 vVlP;
         mat2 vlYaw(float s, float c){ return mat2(c, -s, s, c); }
@@ -265,6 +281,9 @@ function shrimpMaterial() {
         mat2 vlRot = vlYaw(vlHs, vlHc);
         objectNormal.xz = vlRot * objectNormal.xz;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
+        ${maps ? `vVuv = aVuv;
+        // the legs and antennae are sub-pixel past ~10 u: collapse them (no micro-triangles)
+        if (uv.x > 1.5 && distance(cameraPosition, (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz) > 10.0) transformed = vec3(0.0);` : ''}
         float vlSz = aBody.x * uVis;
         // pleopod flick — the tail end sweeps, the head barely moves
         // Reversed-edge smoothstep is UB (0.0 on this driver) — the flick never moved
@@ -288,7 +307,8 @@ function shrimpMaterial() {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying float vShade; varying vec2 vVl; varying vec3 vVlP;
-        ${SKIN_COMMON}`)
+        ${SKIN_COMMON}
+        ${maps ? VS_FRAG : ''}`)
       .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
         ${SKIN_LIGHTS}`)
       // polish-fauna: a glassy caridean. Pale translucent carapace with the segment
@@ -296,7 +316,14 @@ function shrimpMaterial() {
       // chromatophores, black wet eyes. Still no glow: the only added term is light
       // the scene already has, TRANSMITTED through the body (the vent fire behind a
       // shrimp shows through it) — zero where there is no light.
-      .replace('#include <color_fragment>', `#include <color_fragment>
+      .replace('#include <color_fragment>', maps ? `#include <color_fragment>
+        float vlK = floor(vVl.x + 0.5);
+        float vlApp = step(1.5, vlK);
+        // fauna3 Rimicaris: the bake carries the inflated rust-stained carapace, the pale pink
+        // dorsal organ, the ringed abdomen and its gut; the generated legs/antennae are pale
+        vec3 vlC = mix(texture2D(uVA, vVuv).rgb * 1.3, vec3(1.12, 1.06, 1.0), vlApp);
+        float vlEye = 0.0;
+        diffuseColor.rgb *= vShade * vlC;` : `#include <color_fragment>
         float vlK = floor(vVl.x + 0.5);
         vec3 vp = vVlP;
         vec3 vlC = vec3(1.0);
@@ -314,6 +341,8 @@ function shrimpMaterial() {
         diffuseColor.rgb *= vShade * vlC;`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(0.42, 0.06, vlEye);`)
+      .replace('#include <normal_fragment_maps>', maps ? `#include <normal_fragment_maps>
+        if (vlApp < 0.5) normal = vlPerturb(normal, -vViewPosition, vVuv, texture2D(uVN, vVuv).xyz * 2.0 - 1.0, faceDirection);` : '#include <normal_fragment_maps>')
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * (1.0 - vlEye) * 0.55;
         totalEmissiveRadiance += skCatch(normal, normalize(vViewPosition), vViewPosition) * vlEye * 0.8;`);
@@ -321,26 +350,29 @@ function shrimpMaterial() {
   return m;
 }
 
-function crabMaterial() {
+function crabMaterial(maps) {
   const m = new THREE.MeshStandardMaterial({
     color: C_CRAB, roughness: 0.88, metalness: 0.0, emissive: 0x000000
   });
-  m.customProgramCacheKey = () => 'abyssa-ventlife-crab';
+  m.customProgramCacheKey = () => maps ? 'abyssa-ventlife-crab-sculpt' : 'abyssa-ventlife-crab';
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, uni);
+    if (maps) Object.assign(sh.uniforms, { uVA: { value: maps.map }, uVN: { value: maps.normalMap }, uVO: { value: maps.ormMap } });
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec2 aCrab;    // x: phase  y: rate
+        ${maps ? 'attribute vec2 aVuv; varying vec2 vVuv;' : ''}
         uniform float uTime; uniform float uVis;
         varying float vShade; varying vec2 vVl; varying vec3 vVlP;
         ${SCATTER_GLSL}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vVl = uv; vVlP = position;
+        ${maps ? 'vVuv = aVuv;' : ''}
         // Mostly still. A slow rock on the carapace and a leg shuffle that only
         // touches the vertices below the body — a crab holding station in the
         // warm water, not a crab walking somewhere.
         float vlP = uTime * aCrab.y + aCrab.x;
-        float vlLeg = step(position.y, 0.0);
+        float vlLeg = ${maps ? '(1.0 - smoothstep(-0.03, 0.06, position.y)) * smoothstep(0.09, 0.15, abs(position.z))' : 'step(position.y, 0.0)'};
         transformed.x += sin(vlP * 3.1) * 0.035 * vlLeg;
         transformed.z += cos(vlP * 2.3) * 0.025 * vlLeg;
         transformed.y += sin(vlP * 0.9) * 0.012;
@@ -351,19 +383,26 @@ function crabMaterial() {
         float vlThreat = min(1.0, length(vlScatter((modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz)) * 0.6);
         transformed.x -= sin(vlP * 3.1) * 0.035 * vlLeg * vlThreat;
         transformed.z -= cos(vlP * 2.3) * 0.025 * vlLeg * vlThreat;
-        transformed.y += max(max(0.0, sin(vlP * 0.5)) * 0.06, vlThreat * 0.16) * step(0.15, position.x);
+        transformed.y += max(max(0.0, sin(vlP * 0.5)) * 0.06, vlThreat * 0.16) * ${maps ? 'smoothstep(0.08, 0.30, position.x)' : 'step(0.15, position.x)'};
         transformed *= uVis;
         vShade = 0.80 + 0.28 * fract(aCrab.x * 2.9);`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying float vShade; varying vec2 vVl; varying vec3 vVlP;
-        ${SKIN_COMMON}`)
+        ${SKIN_COMMON}
+        ${maps ? VS_FRAG : ''}`)
       .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
         ${SKIN_LIGHTS}`)
       // polish-fauna: the reef crab's skin (fauna.js, skin 4) on the vent palette —
       // granular carapace with a darker frontal ridge, pale jointed legs with
       // arthrodial cuffs and dark dactyls, dark-tipped chelae, wet black eyes.
-      .replace('#include <color_fragment>', `#include <color_fragment>
+      .replace('#include <color_fragment>', maps ? `#include <color_fragment>
+        float vlK = floor(vVl.x + 0.5);
+        // fauna3 Kiwa: carapace striae, setae-furred chelipeds, the reduced eyes are the bake
+        vec3 vlC = texture2D(uVA, vVuv).rgb * 1.2;
+        float vlH = 0.0;
+        float vlEye = step(2.5, vlK);
+        diffuseColor.rgb *= vShade * vlC;` : `#include <color_fragment>
         float vlK = floor(vVl.x + 0.5);
         vec3 vp = vVlP;
         vec3 vlC = vec3(1.0);
@@ -390,9 +429,9 @@ function crabMaterial() {
         float vlEye = step(2.5, vlK);
         diffuseColor.rgb *= vShade * vlC;`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        normal = skBump(-vViewPosition, normal, vlH * 0.0025, faceDirection);`)
+        ${maps ? 'normal = vlPerturb(normal, -vViewPosition, vVuv, texture2D(uVN, vVuv).xyz * 2.0 - 1.0, faceDirection);' : 'normal = skBump(-vViewPosition, normal, vlH * 0.0025, faceDirection);'}`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = mix(roughnessFactor, 0.06, vlEye);`)
+        roughnessFactor = mix(${maps ? '0.4 + 0.5 * texture2D(uVO, vVuv).g' : 'roughnessFactor'}, 0.06, vlEye);`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += skCatch(normal, normalize(vViewPosition), vViewPosition) * vlEye * 0.8;`);
   };
@@ -443,7 +482,84 @@ export function buildVentLife() {
   }
 
   layout();
+  if (!(typeof location !== 'undefined' && location.search.includes('ventproc')))
+    loadSculpted('assets/fauna/vent/', 'vent').then(installVentSculpt);   // fauna3, off the critical path
 }
+
+// ---------------------------------------------------------------------------
+// SCULPTED BODIES (fauna3; entities/ventSculpt.js -> assets/fauna/vent). The baked Rimicaris body
+// (+ its generated legs/antennae) and the baked Kiwa replace the generated meshes UNDER the same
+// InstancedMeshes: same instance buffers (aSwirl/aBody/aCrab are shared, so reseeds keep writing
+// exactly what they did), same vertex motion (labels: uv = (kind, along)), one extra program each,
+// compiled once. The procedural meshes stay as the fallback; ?ventproc / __ventlife.sculpt(false).
+// ---------------------------------------------------------------------------
+const vs = { on: true, installed: false, ms: 0, shrimpTris: 0, crabTris: 0 };
+let shrimpProc = null, crabProc = null, shrimpSc = null, crabSc = null, shrimpScMat = null, crabScMat = null;
+function shrimpSculptGeometry(src) {
+  const sp = src.attributes.position, sn = src.attributes.normal, su = src.attributes.uv, nb = sp.count;
+  const A = shrimpAppendages(), na = A.P.length / 3;
+  const ag = new THREE.BufferGeometry();
+  ag.setAttribute('position', new THREE.Float32BufferAttribute(A.P, 3)); ag.setIndex(A.I); ag.computeVertexNormals();
+  const n = nb + na, P = new Float32Array(n * 3), N = new Float32Array(n * 3), UV = new Float32Array(n * 2), VU = new Float32Array(n * 2);
+  for (let i = 0; i < nb; i++) {
+    P[i * 3] = sp.getX(i); P[i * 3 + 1] = sp.getY(i); P[i * 3 + 2] = sp.getZ(i);
+    N[i * 3] = sn.getX(i); N[i * 3 + 1] = sn.getY(i); N[i * 3 + 2] = sn.getZ(i);
+    UV[i * 2] = 0; UV[i * 2 + 1] = clamp((0.5 - sp.getX(i)) / 1.2, 0, 1);
+    VU[i * 2] = su.getX(i); VU[i * 2 + 1] = su.getY(i);
+  }
+  P.set(A.P, nb * 3); N.set(ag.attributes.normal.array, nb * 3);
+  for (let i = 0; i < na; i++) { UV[(nb + i) * 2] = A.K[i * 2]; UV[(nb + i) * 2 + 1] = A.K[i * 2 + 1]; VU[(nb + i) * 2] = -1; VU[(nb + i) * 2 + 1] = -1; }
+  const I = Array.from(src.index.array); for (const q of A.I) I.push(q + nb);
+  ag.dispose();
+  return vlFinish(P, N, UV, VU, I);
+}
+function crabSculptGeometry(src) {
+  const sp = src.attributes.position, n = sp.count, UV = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) { const x = sp.getX(i), y = sp.getY(i), z = sp.getZ(i); UV[i * 2] = kiwaKind(x, y, z); UV[i * 2 + 1] = clamp((Math.abs(z) - 0.08) / 0.2, 0, 1); }
+  return vlFinish(Float32Array.from(sp.array), Float32Array.from(src.attributes.normal.array), UV, Float32Array.from(src.attributes.uv.array), Array.from(src.index.array));
+}
+function vlFinish(P, N, UV, VU, I) {
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+  g.setAttribute('normal', new THREE.BufferAttribute(N, 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(UV, 2));
+  g.setAttribute('aVuv', new THREE.BufferAttribute(VU, 2));
+  g.setIndex(I);
+  return g;
+}
+function installVentSculpt(a) {
+  if (!a || !a.geos || !a.geos.shrimp || !a.geos.kiwa || !a.maps.vent) return;
+  const t0 = performance.now();
+  shrimpProc = shrimp.geometry; crabProc = crabs.geometry;
+  shrimpSc = shrimpSculptGeometry(a.geos.shrimp);
+  shrimpSc.setAttribute('aSwirl', aShrimpA); shrimpSc.setAttribute('aBody', aShrimpB);
+  crabSc = crabSculptGeometry(a.geos.kiwa);
+  crabSc.setAttribute('aCrab', aCrab);
+  shrimpScMat = shrimpMaterial(a.maps.vent); crabScMat = crabMaterial(a.maps.vent);
+  vs.installed = true; vs.shrimpTris = shrimpSc.index.count / 3; vs.crabTris = crabSc.index.count / 3;
+  ventSculptOn(vs.on);
+  vs.ms = performance.now() - t0;
+}
+function ventSculptOn(v) {
+  vs.on = !!v;
+  if (!vs.installed) return vs.on;
+  shrimp.geometry = v ? shrimpSc : shrimpProc; shrimp.material = v ? shrimpScMat : shrimpMat;
+  crabs.geometry = v ? crabSc : crabProc; crabs.material = v ? crabScMat : crabMat;
+  return vs.on;
+}
+if (typeof window !== 'undefined') window.__ventlife = {
+  state: () => ({ ...vs, shrimp: shrimp ? shrimp.count : 0, crabs: crabs ? crabs.count : 0, visible: shrimp ? shrimp.visible : false }),
+  sculpt: ventSculptOn,
+  // captures: where shrimp i is now (the shader's swirl, scatter ignored), and a clock hold
+  shrimpAt: i => {
+    const A = aShrimpA.array, B = aShrimpB.array, M = shrimp.instanceMatrix.array, t = uni.uTime.value, o = i * 4;
+    const ang = A[o] + t * A[o + 1], R = A[o + 2] + Math.sin(t * B[o + 1] * 0.7 + A[o] * 3.1) * B[o + 3];
+    return [M[i * 16 + 12] + Math.cos(ang) * R, M[i * 16 + 13] + A[o + 3] + Math.sin(t * B[o + 1] + B[o + 2]) * 0.22, M[i * 16 + 14] + Math.sin(ang) * R, B[o], ang, A[o + 1]];
+  },
+  yOff: i => aShrimpA.array[i * 4 + 3],
+  crabAt: i => { const M = crabs.instanceMatrix.array; return [M[i * 16 + 12], M[i * 16 + 13], M[i * 16 + 14], Math.hypot(M[i * 16], M[i * 16 + 1], M[i * 16 + 2])]; },
+  hold: t => { vs.hold = t; return t; }
+};
 
 // ---------------------------------------------------------------------------
 // reseed — re-anchor in place. No new materials, no new geometry, no growth.
@@ -546,7 +662,7 @@ export function updateVentLife(dt, t) {
   const outK = clamp((camY - FADE_OUT1) / (FADE_OUT0 - FADE_OUT1), 0, 1);
   const vis = Math.min(inK, outK);
 
-  uni.uTime.value = t;
+  uni.uTime.value = vs.hold != null ? vs.hold : t;
   // uVis scales the model itself in the vertex shader, so the band edges shrink
   // the animals away instead of fading them — no transparency, no sorting, and
   // the material stays a plain opaque lit surface.
