@@ -29,8 +29,46 @@ function strut(P, mat, x0, y0, z0, x1, y1, z1, r0, r1 = r0, seg = 8) {
   return P.put(cyl(r0, r1, len, seg), mat, (x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2, _eu.x, _eu.y, _eu.z);
 }
 
+// ---- THE RIG FRAME --------------------------------------------------------------
+// Michael 2026-10-02: "lets move the ladder to the left side. The air hose rig is in the
+// way." The gallows used to straddle the bulwark gap on the +Z rail with the ladder hung
+// between its legs, so every boarding was a climb up through the rig and the hose hung
+// in Sal's face. Now the two are NEIGHBOURS on the +X rail (screen-left from the deck
+// camera's old heading): the ladder hangs in a gap centred on z = 0, and the gallows
+// stands forward of it, cantilevered over the same side so the umbilical still leads
+// over the side a couple of metres from the ladder — never across it.
+// Everything below is still AUTHORED in the old frame (x athwart the rig, +z outboard),
+// because every member was placed against that frame's clearance lines; the two frames
+// are then turned a quarter round Y and set down where they belong. A +PI/2 turn maps
+// frame +z -> raft +X and frame +x -> raft -z (toward the ladder, since the rig is
+// forward of it), which is why the tackle, fall and shot line are swung to frame -x
+// (SIDE) and the anchor lantern to +x: the lantern lights the gap, the tackle hangs
+// clear of it.
+export const RIG_Z = 2.90;            // raft-local z of the gallows' centre line
+export const LADDER_Z = 0.0;          // raft-local z of the ladder's centre line (gap centre)
+const SIDE = -1;                      // the side of the rig frame the tackle hangs on
+const _rigM = new THREE.Matrix4();
+function rigMatrix(z) {
+  return _rigM.makeRotationY(Math.PI / 2).setPosition(0, 0, z);
+}
+// Bake a frame-authored node's meshes into raft space: geometry takes the matrix, the
+// mesh lands as a direct, identity-transformed child of the raft so consolidate() can
+// still merge it across builders.
+function flatten(tmp, group, m) {
+  for (const c of tmp.children.slice()) {
+    if (c.isMesh) c.geometry.applyMatrix4(m);
+    else c.applyMatrix4(m);
+    group.add(c);
+  }
+}
+
+// For the reel (raft.js): anything authored in the rig frame lands with the gallows.
+export function flattenRig(tmp, group) { flatten(tmp, group, rigMatrix(RIG_Z)); }
+
 export function buildDavit(group, mats) {
-  const P = Part(group, { groundY: 0.11 });
+  const rig = new THREE.Group(), lad = new THREE.Group();
+  const P = Part(rig, { groundY: 0.11 });
+  const PL = Part(lad, { groundY: 0.11 });
   const { iron, brass, rope: ropeMat, lead, glass } = mats;
 
   // Weathering profiles. Only iron and rope carry vertex colours (brass, lead and
@@ -47,7 +85,10 @@ export function buildDavit(group, mats) {
   // is a sane height for a cantilevered head above a 0.11 deck, and the verlet tether
   // elsewhere in the game is tuned against this exact anchor — moving it would ripple
   // into physics nobody asked this file to retune. We rebuild everything AROUND it.
-  const HEAD = new THREE.Vector3(0, 3.30, 5.35);
+  // Rig frame z 5.60 (was 5.35): turned onto the +X side the sheave sits over the
+  // forward flotation drum, whose dished end reaches raft x 5.24, so the hose drop is
+  // carried 0.36 clear of it rather than 0.11.
+  const HEAD = new THREE.Vector3(0, 3.30, 5.60);
   const DECK_Y = 0.11;
   // GATE is the height/reach above which an overhead member may cross back over the
   // walk lane (x in [-1.1,1.1], z in [1.7,4.7]) — Sal's eye line is 1.46, so anything
@@ -119,7 +160,7 @@ export function buildDavit(group, mats) {
   // the man, not hung down his throat. TK_X clears BAY_X by the block's own half-width
   // plus a hand's breadth, so nothing here re-enters the climb line at any height.
   {
-    const TK_X = BAY_X + 0.25;
+    const TK_X = SIDE * (BAY_X + 0.25);
     const top = [TK_X, 2.85, 4.85], mid = [TK_X, 2.62, 4.85];
     grime(strut(P, iron, PEAK[0], PEAK[1], PEAK[2], top[0], top[1], top[2], 0.030, 0.028));
     const becket = P.put(new THREE.TorusGeometry(0.05, 0.014, 4, 8), iron, top[0], top[1], top[2], Math.PI / 2);
@@ -137,7 +178,7 @@ export function buildDavit(group, mats) {
     grime(hook);
     // fall of rope: hangs from the block, ducks under the walk-lane gate the same way
     // the guys do, and belays to a horn cleat by the leg foot.
-    const gate = [GATE_X + 0.15, GATE_Y, 3.90], cleatPos = [1.30, 0.20, 3.70];
+    const gate = [SIDE * (GATE_X + 0.15), GATE_Y, 3.90], cleatPos = [SIDE * 1.30, 0.20, 3.70];
     ropeGrime(strut(P, ropeMat, TK_X, 2.28, 4.85, gate[0], gate[1], gate[2], 0.022));
     ropeGrime(strut(P, ropeMat, gate[0], gate[1], gate[2], cleatPos[0], cleatPos[1], cleatPos[2], 0.022));
     const cbase = P.put(chamferBox(0.16, 0.05, 0.06, 0.012), iron, cleatPos[0], cleatPos[1], cleatPos[2]);
@@ -156,7 +197,7 @@ export function buildDavit(group, mats) {
   {
     const LX = 0.275, LZ = 4.78, Y0 = -1.6, Y1 = 0.85, RUNGS = 9, rad = 0.04;
     for (const sx of [-1, 1]) {
-      wetGrime(P.put(cyl(rad, rad, Y1 - Y0, 10, false), iron, sx * LX, (Y0 + Y1) / 2, LZ));
+      wetGrime(PL.put(cyl(rad, rad, Y1 - Y0, 10, false), iron, sx * LX, (Y0 + Y1) / 2, LZ));
     }
     // HAND WEAR. Sal boards by this ladder (player.js: W in the bulwark gap climbs him
     // from ladder-foot depth to the deck catch), and a climbing hand lands on every
@@ -195,14 +236,14 @@ export function buildDavit(group, mats) {
     for (let i = 0; i < RUNGS; i++) {
       const ry = Y0 + (i + 0.5) / RUNGS * (Y1 - Y0);
       const worn = i >= WEAR_FROM;
-      const rung = wetGrime(P.put(
+      const rung = wetGrime(PL.put(
         new THREE.CylinderGeometry(rad * 0.8, rad * 0.8, LX * 2, 10, worn ? 14 : 1, false),
         iron, 0, ry, LZ, 0, 0, Math.PI / 2));
       if (worn) polish(rung, ry, i);
       // weld collars where the top rungs meet the stringers — the dry rungs are the ones
       // read from a deck-height eye, so the fabrication detail goes where the eye is
       if (i >= RUNGS - 3) for (const sx of [-1, 1])
-        grime(P.put(new THREE.TorusGeometry(rad * 1.1, 0.011, 5, 10).rotateX(Math.PI / 2),
+        grime(PL.put(new THREE.TorusGeometry(rad * 1.1, 0.011, 5, 10).rotateX(Math.PI / 2),
           iron, sx * (LX - rad * 1.1), ry, LZ, 0, 0, Math.PI / 2));
     }
   }
@@ -211,11 +252,11 @@ export function buildDavit(group, mats) {
   {
     // Also swung starboard of the bay, alongside the tackle it hangs beside: at x 0.7 it
     // ran straight down through the climb line for its whole length.
-    const pts = [[1.42, 3.02, 4.92], [1.47, 0.50, 4.86], [1.52, -1.20, 4.80], [1.55, -2.50, 4.78]];
+    const pts = [[1.42, 3.02, 4.92], [1.47, 0.50, 4.86], [1.52, -1.20, 4.80], [1.55, -2.50, 4.78]].map(p => [SIDE * p[0], p[1], p[2]]);
     const c = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p)));
     const line = P.add(new THREE.TubeGeometry(c, 16, 0.028, 5, false), ropeMat);
     ropeWetGrime(line);
-    P.put(cyl(0.012, 0.06, 0.16, 8, false), lead, 1.55, -2.62, 4.78); // shot weight
+    P.put(cyl(0.012, 0.06, 0.16, 8, false), lead, SIDE * 1.55, -2.62, 4.78); // shot weight
   }
 
   // ---- the anchor lantern: brass housing, caged glass, vent cowl, bail ------------
@@ -228,7 +269,7 @@ export function buildDavit(group, mats) {
   // not a dimmer on the emissive (the orchestrator tunes bloom/glow separately).
   // Hung 0.12 higher than it was: its base cap sat 0.11 above the climb line's ceiling,
   // which is not a margin, it is a coincidence. Now it clears a climbing helmet by 0.23.
-  const BR = [-0.40, 3.28, 4.60], TOP = [-0.55, 3.10, 4.50];
+  const BR = [-SIDE * 0.40, 3.28, 4.60], TOP = [-SIDE * 0.55, 3.10, 4.50];
   grime(strut(P, iron, BR[0], BR[1], BR[2], TOP[0], TOP[1], TOP[2], 0.028, 0.024));
   const capY = TOP[1], cowlY = capY - 0.045, shoulderY = capY - 0.105, cageY = capY - 0.175, footY = capY - 0.255;
   P.put(cyl(0.05, 0.055, 0.04, 14, false), brass, TOP[0], capY, TOP[2]); // mount cap
@@ -254,9 +295,15 @@ export function buildDavit(group, mats) {
   const lampGlass = new THREE.Mesh(cyl(0.045, 0.045, 0.045, 10, false), glass);
   lampGlass.position.set(TOP[0], cageY, TOP[2]);
   lampGlass.castShadow = false;
-  group.add(lampGlass);
+  rig.add(lampGlass);
   const lampPos = new THREE.Vector3(TOP[0], cageY, TOP[2]);
 
   P.bake();
-  return { hoseHead: HEAD, lampGlass, lampPos };
+  PL.bake();
+  const headFrame = HEAD.clone();
+  const m = rigMatrix(RIG_Z);
+  HEAD.applyMatrix4(m); lampPos.applyMatrix4(m);
+  flatten(rig, group, m);
+  flatten(lad, group, rigMatrix(LADDER_Z));
+  return { hoseHead: HEAD, headFrame, lampGlass, lampPos };
 }
