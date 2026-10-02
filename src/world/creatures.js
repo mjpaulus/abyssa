@@ -427,7 +427,7 @@ export const fish = schools; // convenience alias
 // ?fishproc = the procedural A/B. window.__school.state().
 // ---------------------------------------------------------------------------
 const SCULPT_NAME = ['herring', 'snapper', 'butterfly', 'needlefish', 'scad', 'pomfret', 'bristlemouth', 'hatchet'];
-const SCULPT_LOD_R = 70;
+const SCULPT_LOD_R = 50;
 const sculpt = { asset: null, geos: {}, ms: 0, on: true, n: 0 };
 
 function labelFishGeometry(src, fish) {
@@ -531,6 +531,16 @@ function installSchoolSculpt(a) {
     for (const nm of ['aTint', 'aFish', 'aFishK']) g.setAttribute(nm, pg.attributes[nm]);
     S.procGeo = pg; S.procMat = S.inst.material;
     S.sculptGeo = g; S.sculptMat = fishSculptMaterial(S.sp, S.mat.userData.u, a.maps.school);
+    // the far LOD: the same animal at ~260 tris from its own small atlas
+    const fk = k + '_far';
+    if (a.geos[fk] && a.maps.schoolFar) {
+      if (!sculpt.geos[fk]) sculpt.geos[fk] = labelFishGeometry(a.geos[fk], fishes[k] || (fishes[k] = makeFish(FISH[k])));
+      const fg = new THREE.BufferGeometry(), fb = sculpt.geos[fk];
+      for (const nm in fb.attributes) fg.setAttribute(nm, fb.attributes[nm]);
+      fg.setIndex(fb.index); fg.boundingSphere = fb.boundingSphere;
+      for (const nm of ['aTint', 'aFish', 'aFishK']) fg.setAttribute(nm, pg.attributes[nm]);
+      S.farGeo = fg; S.farMat = fishSculptMaterial(S.sp, S.mat.userData.u, a.maps.schoolFar);
+    }
     sculpt.n++;
   }
   sculpt.ms = performance.now() - t0;
@@ -539,13 +549,15 @@ function installSchoolSculpt(a) {
 function schoolLod(S) {
   if (!S.sculptGeo) return;
   // the LENS's distance, not the diver's: what decides the read is the pixels
-  const near = sculpt.on && S.center.distanceTo(camera.position) < SCULPT_LOD_R + S.radius;
-  const g = near ? S.sculptGeo : S.procGeo, m = near ? S.sculptMat : S.procMat;
+  const near = S.center.distanceTo(camera.position) < SCULPT_LOD_R + S.radius;
+  let g = S.procGeo, m = S.procMat;
+  if (sculpt.on) { if (near || !S.farGeo) { g = S.sculptGeo; m = S.sculptMat; } else { g = S.farGeo; m = S.farMat; } }
   if (S.inst.geometry !== g) { S.inst.geometry = g; S.inst.material = m; }
 }
 if (typeof window !== 'undefined') window.__school = {
   state: () => ({ installed: sculpt.n, ms: +sculpt.ms.toFixed(1), on: sculpt.on, lodR: SCULPT_LOD_R,
     near: schools.filter(S => S.sculptGeo && S.inst.geometry === S.sculptGeo && S.inst.visible).length,
+    far: schools.filter(S => S.farGeo && S.inst.geometry === S.farGeo && S.inst.visible).length,
     tris: schools.reduce((t, S) => t + (S.inst.visible ? S.inst.geometry.index.count / 3 * S.n : 0), 0) }),
   on: v => { sculpt.on = !!v; for (const S of schools) schoolLod(S); return sculpt.on; }
 };

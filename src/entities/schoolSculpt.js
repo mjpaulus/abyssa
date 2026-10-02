@@ -321,6 +321,7 @@ const TRIS = { herring: 1100, snapper: 1300, butterfly: 1200, needlefish: 900, s
 // ---------------------------------------------------------------------------------------
 // the low's grid (canonical units) and the fin floor it implies (fishKit finMin)
 const LO_H = 0.0045;
+export const SCHOOL_KEYS = ['herring', 'snapper', 'butterfly', 'needlefish', 'scad', 'pomfret', 'bristlemouth', 'hatchet'];
 export function fishes() { const o = {}; for (const k in FISH) o[k] = makeFish(Object.assign({ finMin: LO_H * 1.45 }, FISH[k])); return o; }
 
 export function pipeline() {
@@ -334,9 +335,21 @@ export function pipeline() {
       emit: fish.S.photo ? photoEmit(fish) : undefined
     });
   }
+  // FAR LOD (the eight school species): the same sculpt decimated to ~260 tris in its own
+  // small atlas, so a school past the near radius keeps its true silhouette and colour
+  // instead of falling back to the procedural lozenge
+  for (const k of SCHOOL_KEYS) {
+    const fish = F[k];
+    pieces.push({
+      name: k + '_far', set: 'schoolFar', sdf: fishSpec(fish), paint: PAINT[k](fish),
+      hi: { h: 0.004 }, lo: { h: 0.0068, tris: 260, err: 0.03 },
+      kEps: 0.005, ao: { r: 0.03, n: 4 }, cage: 0.008, ray: 0.024,
+      emit: fish.S.photo ? photoEmit(fish) : undefined
+    });
+  }
   return {
     name: 'school', out: 'assets/fauna/school',
-    sets: { school: { size: 2048, gutter: 6, aoDist: 0.05, aoSamples: 48, fill: true } },
+    sets: { school: { size: 2048, gutter: 6, aoDist: 0.05, aoSamples: 48, fill: true }, schoolFar: { size: 512, gutter: 4, aoDist: 0.05, aoSamples: 32, fill: true } },
     pieces,
     compress: { mesh: 'draco', tex: 'ktx2' },
     meta: { species: Object.keys(FISH) }

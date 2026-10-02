@@ -118,14 +118,15 @@ function mantaPaint() {
   const dors = S => sst(-0.25, 0.25, S.ny);
   // the shoulder chevrons: white patches from behind the eyes out along the wing roots
   const chev = S => {
-    // a lens-shaped pale patch either side, from behind the spiracle out along the leading
-    // edge of the wing root, its inner end hooked toward the midline (the T of B. birostris)
+    // the shoulder patch: a pale triangle each side, its base along the back of the head
+    // (x 0.18..0.62 at |z| 0.34), its apex out along the wing root (x -0.05, |z| 1.2); the
+    // dark T of the head between the pair; freckled and ragged at the edges
     const az = Math.abs(S.z); if (S.ny < 0.05) return 0;
-    const u = clamp((az - 0.36) / 0.75, 0, 1);
-    const cx = 0.5 - 0.55 * u - 0.1 * Math.sin(u * Math.PI);
-    const w = 0.13 * Math.sin(Math.PI * Math.pow(u, 0.7)) + 0.012;
-    const d = Math.abs(S.x - cx) / w + 0.35 * Math.sin(az * 13 + S.x * 9) * (1 - u * 0.5);
-    return (1 - sst(0.6, 1.1, d)) * sst(0.36, 0.46, az) * (1 - sst(0.9, 1.12, az)) * sst(0.05, 0.3, S.ny);
+    const ax = 0.62, ay = 0.34, bx = 0.18, by = 0.34, cx = -0.05, cy = 1.2;
+    const den = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+    const w1 = ((by - cy) * (S.x - cx) + (cx - bx) * (az - cy)) / den, w2 = ((cy - ay) * (S.x - cx) + (ax - cx) * (az - cy)) / den, w3 = 1 - w1 - w2;
+    const e = Math.min(w1, w2, w3) * 9 + 0.25 * Math.sin(az * 17 + S.x * 13) + 0.15 * Math.sin(az * 41 - S.x * 29);
+    return sst(-0.1, 0.35, e) * sst(0.32, 0.38, az) * sst(0.05, 0.3, S.ny);
   };
   const belly = S => 1 - sst(-0.35, 0.1, S.ny);
   // the underside's dark wing margins and the individual's belly spots
