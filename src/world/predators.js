@@ -46,7 +46,7 @@ import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { loadSculpted } from '../lib/assets.js';
 import { patchNormalRG } from '../lib/microDetail.js';
-import { octLabel } from '../entities/octoSculpt.js';
+import { octLabel, OCT_ARM, SQ_ARM } from '../entities/octoSculpt.js';
 import { sharkFish, labelShark } from '../entities/sharkSculpt.js';
 import { setMover, stirPulse, setLantern, pulseAt, M_SHARK0, M_SHARK1, M_SQUID, P_BITE, P_STRIKE } from './stir.js';
 
@@ -833,12 +833,22 @@ function updateShark(S, dt, t, p) {
 // OCTOPUS — geometry
 // ---------------------------------------------------------------------------
 
+// fauna3: the strip coordinate along a tapering tube, laid conformally — u(T) = integral of
+// len dT / (r(T) Lu), r floored so the last few rings of the tip don't smear many tiles across
+// one segment. One tile of the strip is `pairs` sucker stations in each row.
+const sst01 = (a, b, x) => { let t = (x - a) / (b - a); t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); };
+function conformalU(rOf, len, Lu) {
+  const N = 400, tab = new Float32Array(N + 1);
+  for (let i = 1; i <= N; i++) { const T = (i - 0.5) / N; tab[i] = tab[i - 1] + len / N / (Math.max(0.022, rOf(T)) * Lu); }
+  return T => { const x = Math.min(N, Math.max(0, T * N)), i = Math.min(N - 1, Math.floor(x)); return tab[i] + (tab[i + 1] - tab[i]) * (x - i); };
+}
+
 // One merged geometry: a lathed mantle plus eight arm tubes. aOct packs
 // (T along arm, arm angle, ring angle, kind) — kind 0 = mantle, 1 = arm. Everything
 // about the pose is evaluated in the vertex shader from three uniforms, so eight
 // liquid arms cost the CPU exactly nothing.
 function octopusGeometry() {
-  const pos = [], nrm = [], oct = [], idx = [];
+  const pos = [], nrm = [], oct = [], idx = [], ouv = [];
 
   // ---- mantle: a closed egg-shaped sack, widest low, with two eye knobs ----
   // v = 0 at the underside pole, 1 at the crown. Closed at both ends so the animal
@@ -863,6 +873,7 @@ function octopusGeometry() {
       const dy = (mHeight(Math.min(1, v + 0.03)) - mHeight(Math.max(0, v - 0.03)));
       nrm.push(c * dy, -dr, s * dy);
       oct.push(v, ang, 0, 0);
+      ouv.push(-1, -1);
     }
   }
   for (let i = 0; i < MR; i++) for (let j = 0; j < MS; j++) {
@@ -870,23 +881,47 @@ function octopusGeometry() {
     idx.push(a, a + MS, b, b, a + MS, b + MS);
   }
 
-  // ---- arms: eight tapering tubes, 6-sided ----
-  const ARMS = 8, SEG = 30, SID = 12;
+  // ---- arms: eight tapering tubes ----
+  // fauna3: the ring carries a duplicated seam column (R runs 0 .. 2 pi), so the arm skin's
+  // strip coordinate (aOcUv: u laid CONFORMALLY along the arm — du = ds / (r Lu), the suckers
+  // shrink with the taper and stay round — v = R / 2 pi) never interpolates backwards; rings
+  // are packed toward the tip, where the curl bends hardest.
+  const ARMS = 8, SEG = 36, SID = 14, SC = SID + 1;
+  const uOf = conformalU(T => 0.150 - 0.142 * Math.pow(T, 0.8), 1.25, OCT_ARM.Lu);
   for (let k = 0; k < ARMS; k++) {
     const ang = (k + 0.5) / ARMS * TAU;
     const base = pos.length / 3;
     for (let i = 0; i <= SEG; i++) {
-      const T = i / SEG;
-      for (let j = 0; j < SID; j++) {
+      const T = 1 - Math.pow(1 - i / SEG, 1.35), U = uOf(T);
+      for (let j = 0; j <= SID; j++) {
         const r = j / SID * TAU;
         pos.push(0, 0, 0);        // fully generated in the vertex shader
         nrm.push(0, 1, 0);
         oct.push(T, ang, r, 1);
+        ouv.push(U, j / SID);
       }
     }
     for (let i = 0; i < SEG; i++) for (let j = 0; j < SID; j++) {
-      const a = base + i * SID + j, b = base + i * SID + (j + 1) % SID;
-      idx.push(a, a + SID, b, b, a + SID, b + SID);
+      const a = base + i * SC + j, b = a + 1;
+      idx.push(a, a + SC, b, b, a + SC, b + SC);
+    }
+  }
+  // ---- the WEB (fauna3): a membrane between each pair of neighbouring arms, built in the vertex
+  // shader from the two arms' own surfaces (kind 2: aOct = (T, arm angle, s across, 2)), so it
+  // rides every reach, curl and grab. Deep along the arm edges, scalloped shallow between them.
+  const WR = 7, WS = 10;
+  for (let k = 0; k < ARMS; k++) {
+    const ang = (k + 0.5) / ARMS * TAU;
+    const base = pos.length / 3;
+    for (let i = 0; i <= WR; i++) for (let j = 0; j <= WS; j++) {
+      const s = j / WS, Tw = 0.30 - 0.13 * Math.sin(Math.PI * s), T = Tw * i / WR;
+      pos.push(0, 0, 0); nrm.push(0, 1, 0);
+      oct.push(T, ang, s, 2);
+      ouv.push(uOf(T), 0.25 + (s - 0.5) * 0.12);
+    }
+    for (let i = 0; i < WR; i++) for (let j = 0; j < WS; j++) {
+      const a = base + i * (WS + 1) + j, b = a + 1, c = a + WS + 1;
+      idx.push(a, c, b, b, c, c + 1);
     }
   }
 
@@ -894,6 +929,7 @@ function octopusGeometry() {
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setAttribute('aOct', new THREE.Float32BufferAttribute(oct, 4));
+  g.setAttribute('aOcUv', new THREE.Float32BufferAttribute(ouv, 2));
   g.setIndex(idx);
   g.boundingSphere = new THREE.Sphere(V3(), 3);
   return g;
@@ -911,6 +947,44 @@ const OCT_DEFORM = /* glsl */`
   // the ring / azimuth angle as a unit vector: an angle varying wraps 2pi -> 0 across
   // one strip of the closed tube and interpolates backwards; cos/sin do not
   varying vec2 vOctCS;
+  // one arm's centreline frame at T: centre c (object space, crown offset applied), direction D,
+  // the ring frame (rt, up2) and the tube radius before the oral flattening
+  void octArm(float T, float A, out vec3 c, out vec3 D, out vec3 rt, out vec3 up2, out float rad){
+      vec3 ca = vec3(cos(A), 0.0, sin(A));
+      vec3 flatD = vec3(uDir.x, 0.0, uDir.z);
+      flatD = length(flatD) > 1e-4 ? normalize(flatD) : ca;
+      // only the arms facing the light commit to it; the rest hold station
+      float w = pow(max(0.0, dot(ca, flatD)), 3.0) * uReach;
+      // at rest the arms fold down and inward against the rock; roused, they splay,
+      // and the ones facing the light stretch toward it
+      // polish-fauna: at rest the arms lie OUT across the silt and curl, rather than
+      // hanging as stubs under the mantle (visual only: reach/grab are CPU-side)
+      vec3 restD = normalize(vec3(ca.x*1.15, -0.10, ca.z*1.15));
+      vec3 openD = normalize(vec3(ca.x, -0.18, ca.z));
+      vec3 actD  = normalize(mix(openD, normalize(uDir), w * 0.92));
+      D = normalize(mix(restD, actD, uReach));
+      float jitter = fract(sin(A*12.9898 + uSeed)*43758.5453);
+      float len = mix(0.98, 1.72, uReach) * (0.84 + 0.32*jitter);
+      rt = normalize(cross(D, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
+      up2 = cross(rt, D);
+      float ph = uTime*(1.15 + 0.55*uReach) + A*2.3 + uSeed;
+      // T^1.6 drag, two harmonics out of phase: a chain that lags itself, i.e. liquid
+      float drag = pow(T, 1.6);
+      float amp = (0.20 + 0.34*uReach) * (1.0 + uGrab*0.55);
+      float s1 = sin(T*4.4 - ph) * amp;
+      float s2 = cos(T*2.9 - ph*0.68 + jitter*6.28) * amp * 0.85;
+      c = D*(T*len) + rt*(s1*drag*len) + up2*(s2*drag*len);
+      // curl: arm tips coil under, hard when idle, loosely when reaching
+      c += up2 * (T*T*len * mix(-0.42, 0.16, uReach));
+      c.y -= drag * 0.62 * (1.0 - uReach);   // at rest the arms drape flat on the silt
+      // ...and lie ON it: a soft floor under the skirt, so a resting arm spreads and
+      // curls across the ground instead of standing the mantle up on stilts
+      float oFloor = -0.24 + (0.15 - 0.142 * T) * 0.9 + 0.02 * sin(T * 9.0 + A);
+      c.y = mix(c.y, max(c.y, oFloor), 1.0 - uReach);
+      rad = (0.150 - 0.142*pow(T, 0.8)) * mix(0.94, 1.08, uReach);
+      c.xz += ca.xz * 0.24;                          // arms leave from the skirt
+      c.y += 0.14;
+  }
   void octDeform(out vec3 P, out vec3 N){
     float kind = aOct.w;
     if (kind < 0.5) {
@@ -924,51 +998,35 @@ const OCT_DEFORM = /* glsl */`
       P.y *= 1.0 + 0.12 * uJet;
       P.y += uReach*0.22 + 0.34;
       N = normalize(normal);
-    } else {
+    } else if (kind < 1.5) {
       float T = aOct.x, A = aOct.y, R = aOct.z;
-      vec3 ca = vec3(cos(A), 0.0, sin(A));
-      vec3 flatD = vec3(uDir.x, 0.0, uDir.z);
-      flatD = length(flatD) > 1e-4 ? normalize(flatD) : ca;
-      // only the arms facing the light commit to it; the rest hold station
-      float w = pow(max(0.0, dot(ca, flatD)), 3.0) * uReach;
-      // at rest the arms fold down and inward against the rock; roused, they splay,
-      // and the ones facing the light stretch toward it
-      // polish-fauna: at rest the arms lie OUT across the silt and curl, rather than
-      // hanging as stubs under the mantle (visual only: reach/grab are CPU-side)
-      vec3 restD = normalize(vec3(ca.x*1.15, -0.10, ca.z*1.15));
-      vec3 openD = normalize(vec3(ca.x, -0.18, ca.z));
-      vec3 actD  = normalize(mix(openD, normalize(uDir), w * 0.92));
-      vec3 D = normalize(mix(restD, actD, uReach));
-      float jitter = fract(sin(A*12.9898 + uSeed)*43758.5453);
-      float len = mix(0.98, 1.72, uReach) * (0.84 + 0.32*jitter);
-      vec3 rt = normalize(cross(D, vec3(0.0, 1.0, 0.0)) + vec3(1e-4, 0.0, 0.0));
-      vec3 up2 = cross(rt, D);
-      float ph = uTime*(1.15 + 0.55*uReach) + A*2.3 + uSeed;
-      // T^1.6 drag, two harmonics out of phase: a chain that lags itself, i.e. liquid
-      float drag = pow(T, 1.6);
-      float amp = (0.20 + 0.34*uReach) * (1.0 + uGrab*0.55);
-      float s1 = sin(T*4.4 - ph) * amp;
-      float s2 = cos(T*2.9 - ph*0.68 + jitter*6.28) * amp * 0.85;
-      vec3 c = D*(T*len) + rt*(s1*drag*len) + up2*(s2*drag*len);
-      // curl: arm tips coil under, hard when idle, loosely when reaching
-      c += up2 * (T*T*len * mix(-0.42, 0.16, uReach));
-      c.y -= drag * 0.62 * (1.0 - uReach);   // at rest the arms drape flat on the silt
-      // ...and lie ON it: a soft floor under the skirt, so a resting arm spreads and
-      // curls across the ground instead of standing the mantle up on stilts
-      float oFloor = -0.24 + (0.15 - 0.142 * T) * 0.9 + 0.02 * sin(T * 9.0 + A);
-      c.y = mix(c.y, max(c.y, oFloor), 1.0 - uReach);
-      float rad = (0.150 - 0.142*pow(T, 0.8)) * mix(0.94, 1.08, uReach);
+      vec3 c; vec3 D; vec3 rt; vec3 up2; float rad;
+      octArm(T, A, c, D, rt, up2, rad);
       vec3 rn = rt*cos(R) + up2*sin(R);
       // the oral face is flattened, a keel runs along the aboral side: an arm, not a hose
       float oral = max(0.0, -sin(R));
       rad *= 1.0 - 0.22 * oral * oral + 0.06 * max(0.0, sin(R));
       P = c + rn*rad;
-      P.xz += ca.xz * 0.24;                          // arms leave from the skirt
-      P.y += 0.14;
       N = normalize(rn + D*0.12);
+    } else {
+      // the WEB between arm A and its neighbour: a membrane strung between the two arms' facing
+      // surfaces, bellied outward and down a little between them
+      float T = aOct.x, A = aOct.y, s = aOct.z;
+      vec3 c1; vec3 D1; vec3 r1; vec3 u1; float q1;
+      vec3 c2; vec3 D2; vec3 r2; vec3 u2; float q2;
+      octArm(T, A, c1, D1, r1, u1, q1);
+      octArm(T, A + 0.78539816, c2, D2, r2, u2, q2);
+      vec3 x12 = c2 - c1;
+      vec3 e1 = x12 - D1 * dot(x12, D1), e2 = -x12 + D2 * dot(x12, D2);
+      vec3 p1 = c1 + normalize(e1 + vec3(0.0, 1e-4, 0.0)) * q1 * 0.92;
+      vec3 p2 = c2 + normalize(e2 + vec3(0.0, 1e-4, 0.0)) * q2 * 0.92;
+      float bel = sin(3.1415927 * s);
+      vec3 outw = normalize(vec3(p1.x + p2.x, 0.0, p1.z + p2.z) + vec3(1e-4, 0.0, 0.0));
+      P = mix(p1, p2, s) + (outw * 0.05 - vec3(0.0, 0.035, 0.0)) * bel * (0.4 + 0.6 * uReach) * (T / 0.3);
+      N = normalize(cross(normalize(D1 + D2), p2 - p1) + vec3(0.0, 1e-4, 0.0));
     }
-    vOctT = aOct.x; vOctK = kind; vOctA = aOct.y; vOctR = aOct.z;
-    float csA = kind < 0.5 ? aOct.y : aOct.z;
+    vOctT = aOct.x; vOctK = min(kind, 1.0); vOctA = aOct.y; vOctR = aOct.z;
+    float csA = kind < 0.5 ? aOct.y : (kind < 1.5 ? aOct.z : 1.5707963 + (aOct.z - 0.5) * 0.7);
     vOctCS = vec2(cos(csA), sin(csA));
   }`;
 
@@ -1602,7 +1660,7 @@ function updateSacs(dt, t, p) {
 // the shoal reads as arms-first hovering. aSq packs (T, crownAngle, kind) — kind 0
 // mantle, 1 fin, 2 arm, 3 tentacle. Arms sway entirely in the vertex shader.
 function squidGeometry() {
-  const pos = [], nrm = [], sq = [], idx = [];
+  const pos = [], nrm = [], sq = [], idx = [], ouv = [];
 
   // polish-fauna: a denser mantle (24 x 16, seam column duplicated so the skin's
   // around-coordinate never runs backwards) that continues past the mantle collar
@@ -1630,6 +1688,7 @@ function squidGeometry() {
       pos.push(c * r * wide, s * r, z);
       nrm.push(c, s, v > 1 ? 0 : 0.15);
       sq.push(v, ang, 0, 0);
+      ouv.push(-1, -1);
     }
   }
   for (let i = 0; i < MR + MH; i++) for (let j = 0; j < MS; j++) {
@@ -1641,7 +1700,7 @@ function squidGeometry() {
   // them smoothly; T (the ripple's amplitude key) grows outward from the root
   const flag = (verts, tris, kind) => {
     const base = pos.length / 3;
-    for (const v of verts) { pos.push(v[0], v[1], v[2]); nrm.push(0, 1, 0); sq.push(v[3], v[4], 0, kind); }
+    for (const v of verts) { pos.push(v[0], v[1], v[2]); nrm.push(0, 1, 0); sq.push(v[3], v[4], 0, kind); ouv.push(-1, -1); }
     for (const tri of tris) idx.push(base + tri[0], base + tri[1], base + tri[2]);
   };
   const FA = 6, FO = 4;
@@ -1664,29 +1723,34 @@ function squidGeometry() {
     flag(verts, tris, 1);
   }
 
-  // arm crown: 8 arms + 2 long feeding tentacles with clubs, 7-sided tubes
-  const SSID = 7;
-  const mk = (n, kind, segs, off) => {
+  // arm crown: 8 arms + 2 long feeding tentacles with clubs. fauna3: 9 sides + a duplicated seam
+  // column, and the strip coordinate (aOcUv, conformal along the tube, v = ring / 2 pi) the arm
+  // strip is sampled at — the club's swelling widens the suckers with it
+  const SSID = 9, SC = SSID + 1;
+  const armR = T => 0.028 - 0.024 * T;
+  const clubR = T => (0.028 - 0.024 * T) * 0.7 * (1 + 1.6 * sst01(0.72, 0.86, T) * (1 - sst01(0.93, 1.0, T)));
+  const mk = (n, kind, segs, off, uOf) => {
     for (let k = 0; k < n; k++) {
       const ang = (k + off) / n * TAU;
       const base = pos.length / 3;
       for (let i = 0; i <= segs; i++) {
-        const T = i / segs;
-        for (let j = 0; j < SSID; j++) { pos.push(0, 0, 0); nrm.push(0, 1, 0); sq.push(T, ang, j / SSID * TAU, kind); }
+        const T = i / segs, U = uOf(T);
+        for (let j = 0; j <= SSID; j++) { pos.push(0, 0, 0); nrm.push(0, 1, 0); sq.push(T, ang, j / SSID * TAU, kind); ouv.push(U, j / SSID); }
       }
       for (let i = 0; i < segs; i++) for (let j = 0; j < SSID; j++) {
-        const a = base + i * SSID + j, b = base + i * SSID + (j + 1) % SSID;
-        idx.push(a, a + SSID, b, b, a + SSID, b + SSID);
+        const a = base + i * SC + j, b = a + 1;
+        idx.push(a, a + SC, b, b, a + SC, b + SC);
       }
     }
   };
-  mk(8, 2, 12, 0.5);
-  mk(2, 3, 18, 0.25);
+  mk(8, 2, 16, 0.5, conformalU(armR, 0.30, SQ_ARM.Lu));
+  mk(2, 3, 26, 0.25, conformalU(clubR, 0.62, SQ_ARM.Lu));
 
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
   g.setAttribute('aSq', new THREE.Float32BufferAttribute(sq, 4));
+  g.setAttribute('aOcUv', new THREE.Float32BufferAttribute(ouv, 2));
   g.setIndex(idx);
   g.computeVertexNormals();
   safeNormals(g);   // the arms are posed entirely in the vertex shader
@@ -2252,6 +2316,12 @@ let profN = 0, profSum = 0, profMax = 0;
 // cotangent frame (no tangents needed). The procedural build stays as the boot body and
 // the fallback; ?octproc = the A/B. Programs: one extra key per animal, compiled once.
 // ---------------------------------------------------------------------------
+// fauna3: the arm strips (assets/fauna/octo/octArm_*, sqArm_*; entities/octoSculpt.js armStrip)
+// sampled at the arms' conformal (u, v). ORM.B is the sucker mask (rim + dish), used to warm the
+// rims; it is not emissive. uArmOn (pred.armStrip(false)) = the A/B back to the shader suckers.
+const ARM_ON = { value: 1 };
+const ARM_FRAG_COMMON = `
+uniform sampler2D uArmA; uniform sampler2D uArmN; uniform sampler2D uArmO; uniform float uArmOn;`;
 const OCS_FRAG_COMMON = `
 uniform sampler2D uOcA; uniform sampler2D uOcN; varying vec2 vOcUv;
 vec3 ocPerturb(vec3 n, vec3 p, vec2 uv, vec3 mapN, float faceDir){
@@ -2264,62 +2334,112 @@ vec3 ocPerturb(vec3 n, vec3 p, vec2 uv, vec3 mapN, float faceDir){
 }`;
 // patch a built material's shader for a sculpted body: kind is the mantle test in the
 // fragment (octopus: arms have vOctK 1; squid: arms vSqK >= 2, fins 1)
-function sculptBodyMaterial(src, maps, key, patch) {
+function sculptBodyMaterial(src, maps, key, patch, arm) {
   const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: src.roughness, metalness: src.metalness, side: THREE.DoubleSide, emissive: 0x000000 });
   m.userData.u = src.userData.u;
-  const uS = { uOcA: { value: maps.map }, uOcN: { value: maps.normalMap } };
+  const uS = { uOcA: { value: maps.map }, uOcN: { value: maps.normalMap }, uArmA: { value: arm ? arm.map : null }, uArmN: { value: arm ? arm.normalMap : null }, uArmO: { value: arm ? arm.ormMap : null }, uArmOn: ARM_ON };
   const base = src.onBeforeCompile;
   m.customProgramCacheKey = () => key;
   m.onBeforeCompile = sh => {
     base(sh);
     Object.assign(sh.uniforms, uS);
     sh.vertexShader = sh.vertexShader.replace('void main() {', 'attribute vec2 aOcUv; varying vec2 vOcUv;\nvoid main() {\n  vOcUv = aOcUv;');
-    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_pars_begin>', OCS_FRAG_COMMON + '\n#include <lights_pars_begin>');
-    patch(sh);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <lights_pars_begin>', OCS_FRAG_COMMON + (arm ? ARM_FRAG_COMMON : '') + '\n#include <lights_pars_begin>');
+    patch(sh, !!arm);
   };
   return registerPaint(m);
 }
-function octSculptPatch(sh) {
+function octSculptPatch(sh, arm) {
+  // fauna3 REST POSE: the procedural egg squashed to a pancake at rest (y x 0.66, xz x 1.16), which
+  // on the sculpted mantle flattened the head, eyes and sac into a bun. A resting octopus keeps its
+  // eyes up; what settles is the MANTLE SAC, which slumps back over the head and spreads on the
+  // rock. So: a light squash of the whole, and the sac (above the eye line) pitched back and down.
+  const vRest = 'P = position * vec3(1.0 + br + flatten*0.16, (1.0 - br) * (1.0 - flatten*0.34), 1.0 + br + flatten*0.16);';
+  if (sh.vertexShader.includes(vRest)) sh.vertexShader = sh.vertexShader.replace(vRest, `P = position * vec3(1.0 + br + flatten*0.05, (1.0 - br) * (1.0 - flatten*0.10), 1.0 + br + flatten*0.05);
+      float oTh = 0.0;
+      {
+        // the sac always leans back a little and, as the animal settles, lies back over the
+        // rock (up to ~50 degrees) and spreads; the head and the eyes stay where they are
+        float sacW = smoothstep(0.16, 0.55, position.y);
+        float sac = sacW * flatten;
+        float th = sacW * (0.22 + 0.66 * flatten), cs = cos(th), sn = sin(th); oTh = th;
+        vec2 q = vec2(P.y - 0.18, P.z);
+        P.y = 0.18 + (q.x * cs - q.y * sn) * (1.0 - 0.18 * sac);
+        P.z = q.x * sn + q.y * cs;
+        P.x *= 1.0 + 0.12 * sac;
+      }`);
+  else console.warn('ABYSSA: octopus rest-pose patch did not match; the sculpt keeps the old squash');
+  const nRest = 'N = normalize(normal);\n    } else if (kind < 1.5) {';
+  if (sh.vertexShader.includes(nRest)) sh.vertexShader = sh.vertexShader.replace(nRest, 'N = normalize(normal); N.yz = vec2(N.y * cos(oTh) - N.z * sin(oTh), N.y * sin(oTh) + N.z * cos(oTh));\n    } else if (kind < 1.5) {');
   const f = sh.fragmentShader;
   const a = 'float isArm = step(0.5, vOctK);';
   const b = 'skin *= 0.52 + 0.3 * pap;';
   const c = 'float h = pap * 0.7 * skAA(sq * 2.2);';
   const d = 'normal = skBump(-vViewPosition, normal, h * 0.012, faceDirection);';
   if (![a, b, c, d].every(s => f.includes(s))) { console.warn('ABYSSA: octopus sculpt patch did not match; mantle keeps its procedural skin'); return; }
-  sh.fragmentShader = f
+  const e = 'float sK = isArm * smoothstep(0.55, 0.85, oral)';
+  const g = 'roughnessFactor = mix(roughnessFactor * 0.8, 0.05, wet);';
+  if (arm && ![e, g].every(q => f.includes(q))) { console.warn('ABYSSA: octopus arm-strip patch did not match; arms keep the shader suckers'); arm = false; }
+  const A = arm ? `
+        float arS = isArm * step(-0.5, vOcUv.x) * uArmOn;
+        float arL = dot(texture2D(uArmA, vOcUv).rgb, vec3(0.3333));
+        vec3 arO = texture2D(uArmO, vOcUv).rgb;` : '\n        float arS = 0.0, arL = 0.0; vec3 arO = vec3(1.0);';
+  let F = f
     .replace(a, a + `
         float ocM = step(0.0, vOcUv.x) * (1.0 - isArm);
         vec3 ocA = texture2D(uOcA, vOcUv).rgb;
-        float ocLum = dot(ocA, vec3(0.3333));`)
-    .replace(b, 'skin *= mix(0.52 + 0.3 * pap, 0.22 + 1.05 * ocLum, ocM);')
-    .replace(c, 'float h = pap * 0.7 * skAA(sq * 2.2) * (1.0 - ocM);')
+        float ocLum = dot(ocA, vec3(0.3333));` + A)
+    .replace(b, 'skin *= mix(mix(0.52 + 0.3 * pap, 0.22 + 1.05 * ocLum, ocM), 0.20 + 1.05 * arL, arS);')
+    // on the strip the chromatophores are what they are on a real arm: a fine grain under the
+    // mottle, not a print of bright dots over it
+    .replace('chrom * mix(0.45, 0.8, uActive)', 'chrom * mix(0.45, 0.8, uActive) * (1.0 - 0.6 * arS)')
+    .replace(c, 'float h = pap * 0.7 * skAA(sq * 2.2) * (1.0 - ocM) * (1.0 - arS);')
     .replace(d, `if (ocM > 0.5) normal = ocPerturb(normal, -vViewPosition, vOcUv, texture2D(uOcN, vOcUv).xyz * 2.0 - 1.0, faceDirection);
-        ` + d);
+        ` + (arm ? `if (arS > 0.5) normal = ocPerturb(normal, -vViewPosition, vOcUv, (texture2D(uArmN, vOcUv).xyz * 2.0 - 1.0) * vec3(1.5, 1.5, 1.0), faceDirection);
+        ` : '') + d);
+  if (arm) F = F
+    .replace(e, `skin = mix(skin, skin * 0.55 + vec3(0.40, 0.31, 0.26) * (0.75 + 0.35 * uActive), arO.b * arS * smoothstep(0.3, 0.8, oral) * (1.0 - smoothstep(0.9, 1.0, vOctT)));
+        float sK = (1.0 - arS) * isArm * smoothstep(0.55, 0.85, oral)`)
+    .replace(g, g + `
+        roughnessFactor = mix(roughnessFactor, 0.35 + 0.6 * arO.g, arS * (1.0 - wet));`);
+  sh.fragmentShader = F;
 }
-function squidSculptPatch(sh) {
+function squidSculptPatch(sh, arm) {
   const f = sh.fragmentShader;
   const a = 'vec3 skin = uSkin * (0.62 + 0.22*sin(sAng*5.0 + vSqT*11.0));';
   const d = 'normal = skBump(-vViewPosition, normal, sh * 0.02, faceDirection);';
-  if (![a, d].every(q => f.includes(q))) { console.warn('ABYSSA: squid sculpt patch did not match; the squid keeps its procedural skin'); return; }
+  const e = 'skin *= mix(1.0, 1.35, isArmS);';
+  if (![a, d, e].every(q => f.includes(q))) { console.warn('ABYSSA: squid sculpt patch did not match; the squid keeps its procedural skin'); return; }
   sh.fragmentShader = f
     .replace(a, a + `
         float ocM = step(0.0, vOcUv.x) * isMantle;
         float ocLum = dot(texture2D(uOcA, vOcUv).rgb, vec3(0.3333));
-        skin *= mix(1.0, 0.35 + 1.0 * ocLum, ocM);`)
+        skin *= mix(1.0, 0.35 + 1.0 * ocLum, ocM);` + (arm ? `
+        float arS = isArmS * step(-0.5, vOcUv.x) * uArmOn;
+        float arL = dot(texture2D(uArmA, vOcUv).rgb, vec3(0.3333));
+        vec3 arO = texture2D(uArmO, vOcUv).rgb;
+        skin *= mix(1.0, 0.30 + 1.1 * arL, arS);` : ''))
+    .replace(e, e + (arm ? `
+        skin = mix(skin, skin * 0.5 + vec3(0.30, 0.26, 0.26), arO.b * arS * 0.8);` : ''))
     .replace(d, `if (ocM > 0.5) normal = ocPerturb(normal, -vViewPosition, vOcUv, texture2D(uOcN, vOcUv).xyz * 2.0 - 1.0, faceDirection);
-        ` + d);
+        ` + (arm ? `if (arS > 0.5) normal = ocPerturb(normal, -vViewPosition, vOcUv, texture2D(uArmN, vOcUv).xyz * 2.0 - 1.0, faceDirection);
+        ` : '') + d);
 }
 const ocs = { n: 0, ms: 0, on: true };
 function installOctoSculpt(a) {
   if (!a || !a.geos || !a.geos.octMantle) return;
   const t0 = performance.now();
+  // fauna3: the arm strips tile (RepeatWrapping); an older asset without them keeps the shader suckers
+  const strip = k => { const m = a.maps[k]; if (!m || !m.map || !m.normalMap || !m.ormMap) return null; for (const t of [m.map, m.normalMap, m.ormMap]) if (t.wrapS !== THREE.RepeatWrapping) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.needsUpdate = true; } return m; };
+  const octArm = strip('octArm'), sqArm = strip('sqArm');
+  ocs.armStrip = !!octArm; ocs.sqStrip = !!sqArm;
   // octopus: drop the procedural mantle (aOct.w 0), keep the arms, append the sculpt
   const pg = octos.length ? octos[0].mesh.geometry : null;
   if (pg) {
     const g = sculptBody(pg, 'aOct', a.geos.octMantle, (x, y, z) => { const [v, an] = octLabel(x, y, z); return [v, an, 0, 0]; }, k => k < 0.5);
     for (const O of octos) {
       O.procGeo = O.mesh.geometry; O.procMat = O.mesh.material;
-      O.sculptGeo = g; O.sculptMat = sculptBodyMaterial(O.mat, a.maps.octo, 'abyssa-octopus-sculpt', octSculptPatch);
+      O.sculptGeo = g; O.sculptMat = sculptBodyMaterial(O.mat, a.maps.octo, octArm ? 'abyssa-octopus-sculpt-arm' : 'abyssa-octopus-sculpt', octSculptPatch, octArm);
       O.mesh.geometry = g; O.mesh.material = O.sculptMat;
       ocs.n++;
     }
@@ -2333,7 +2453,7 @@ function installOctoSculpt(a) {
     }, k => k < 0.5);
     squidMesh.userData.procGeo = squidMesh.geometry; squidMesh.userData.procMat = squidMesh.material;
     squidMesh.geometry = g;
-    squidMesh.material = sculptBodyMaterial(squidMat, a.maps.octo, 'abyssa-squid-sculpt', squidSculptPatch);
+    squidMesh.material = sculptBodyMaterial(squidMat, a.maps.octo, sqArm ? 'abyssa-squid-sculpt-arm' : 'abyssa-squid-sculpt', squidSculptPatch, sqArm);
     ocs.n++;
   }
   ocs.ms = performance.now() - t0;
@@ -2342,7 +2462,7 @@ function installOctoSculpt(a) {
 // triangles; the sculpt's vertices are appended with their own kind coordinates (label)
 // and the atlas uv (aOcUv; the kept arm vertices get -1, so the fragment leaves them alone)
 function sculptBody(pg, kAttr, src, label, isBody) {
-  const K = pg.attributes[kAttr], P = pg.attributes.position, N = pg.attributes.normal, I = pg.index.array;
+  const K = pg.attributes[kAttr], P = pg.attributes.position, N = pg.attributes.normal, I = pg.index.array, OU = pg.attributes.aOcUv;
   const keep = new Int32Array(K.count).fill(-1);
   let nk = 0;
   for (let i = 0; i < K.count; i++) if (!isBody(K.getW(i))) keep[i] = nk++;
@@ -2354,7 +2474,8 @@ function sculptBody(pg, kAttr, src, label, isBody) {
     pos[j * 3] = P.getX(i); pos[j * 3 + 1] = P.getY(i); pos[j * 3 + 2] = P.getZ(i);
     nrm[j * 3] = N.getX(i); nrm[j * 3 + 1] = N.getY(i); nrm[j * 3 + 2] = N.getZ(i);
     kk[j * 4] = K.getX(i); kk[j * 4 + 1] = K.getY(i); kk[j * 4 + 2] = K.getZ(i); kk[j * 4 + 3] = K.getW(i);
-    uv[j * 2] = -1; uv[j * 2 + 1] = -1;
+    // the kept arms keep their strip coordinate (fauna3); without one the fragment leaves them alone
+    uv[j * 2] = OU ? OU.getX(i) : -1; uv[j * 2 + 1] = OU ? OU.getY(i) : -1;
   }
   for (let i = 0; i < ns; i++) {
     const j = nk + i, x = sp.getX(i), y = sp.getY(i), z = sp.getZ(i);
@@ -2475,6 +2596,8 @@ export function buildPredators() {
   window.pred = {
     sharks, octos, squids,
     sculpt: () => ({ octo: { ...ocs } }),
+    // fauna3 A/B: the arm strips off (shader suckers back) and on, same frame
+    armStrip: v => { ARM_ON.value = v ? 1 : 0; return !!v; },
     // fauna2 A/B: every sculpted body back to its procedural build (and back), in place
     sculptOn: v => {
       ocs.on = !!v;
