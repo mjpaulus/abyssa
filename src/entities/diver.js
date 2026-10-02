@@ -1848,12 +1848,23 @@ const W = {
   arm: curve([[0, -1.0], [.06, -.96], [.14, -.78], [.25, 0], [.36, .78], [.44, .96],
   [.50, 1.0], [.56, .96], [.64, .78], [.75, 0], [.86, -.78], [.94, -.96]])
 };
-// frog kick: slow tuck (0-.45), snap (.45-.62), long glide
+// THE PADDLE (the weighted-suit pass). A Mark V diver does not swim: "the bulkiness of fit,
+// weighted boots and lack of fins made swimming impracticable", and "head-up vertical posture
+// was the normal position". Off the bottom he hangs feet-down from an air-filled bonnet and
+// hauls himself along with slow, wide, two-handed sweeps, as a man pulls himself along a line.
+// One stroke, phase 0..1:  REACH (0-.18) both hands forward and a little out, elbows nearly
+// straight -> SWEEP (.18-.56) the arms pull out, round and back to the hips (the push:
+// player.js centres the thrust on .36) -> RECOVER (.56-1) the elbows fold, the hands come in
+// past the chest and go forward again, slowly, against the water.
+// Sx: shoulder pitch (- = forward), Sz: abduction, E: elbow (- = bent). Wrapping Catmull-Rom.
 const S = {
-  hip: curve([[0, .10], [.22, .52], [.45, .92], [.55, .40], [.64, .04], [.80, .06], [.92, .08]]),
-  knee: curve([[0, .18], [.22, .78], [.45, 1.45], [.55, .60], [.64, .06], [.80, .10], [.92, .14]]),
-  abd: curve([[0, .05], [.22, .22], [.45, .44], [.55, .30], [.64, .04], [.80, .04], [.92, .05]]),
-  ankle: curve([[0, 0], [.30, -.30], [.48, -.34], [.58, .26], [.70, .06], [.88, .02]])
+  sx: curve([[0, -1.18], [0.12, -1.12], [0.24, -0.82], [0.36, -0.36], [0.47, 0.02], [0.56, 0.16], [0.66, 0.02], [0.78, -0.42], [0.90, -0.92]]),
+  sz: curve([[0, 0.34], [0.12, 0.44], [0.24, 0.68], [0.36, 0.80], [0.47, 0.62], [0.56, 0.34], [0.66, 0.20], [0.78, 0.18], [0.90, 0.26]]),
+  el: curve([[0, -0.32], [0.12, -0.26], [0.24, -0.22], [0.36, -0.20], [0.47, -0.30], [0.56, -0.62], [0.66, -1.20], [0.78, -1.30], [0.90, -0.80]]),
+  // the boots WADE: a slow alternating step in the water, thigh forward with a soft knee as the
+  // arms pull, swinging back straight as they recover. A heavy pendulum, not a kick.
+  thigh: curve([[0, 0.04], [0.25, 0.30], [0.50, 0.16], [0.75, -0.12]]),
+  knee: curve([[0, 0.22], [0.25, 0.58], [0.50, 0.40], [0.75, 0.12]])
 };
 
 const CH = {
@@ -1913,7 +1924,10 @@ function poseWalk(o, p, a, t, deck) {
   // Lateral sway at 65% and pelvic yaw at 80% of the old curves: +/-82 mm of sway on a
   // 1.39 u leg was 2.3x a man's, and it was half of the waddle that read as a toddler.
   // He still rolls over each boot — just as far as the boot's weight explains.
-  o[CH.shiftX] = W.sway(p) * a * 0.65 + wob * 0.028 * sw + wsh * 0.030 * ws;
+  // On the planks the base is wider and the whole load goes over each boot in turn: the
+  // weight transfer is a bigger SHIFT (the chain carries the trunk with it, see CHAIN.kHDeck),
+  // never a bigger roll — Michael read a rolling trunk as a man about to fall over.
+  o[CH.shiftX] = W.sway(p) * a * (0.65 + 0.20 * deck) + wob * 0.028 * sw + wsh * 0.030 * ws;
   o[CH.shiftZ] = 0;
   o[CH.pYaw] = W.yaw(p) * a * 0.8 + wsh * 0.020 * ws;
   o[CH.pRoll] = W.list(p) * a + wob * 0.032 * sw + wsh * 0.038 * ws;
@@ -1927,14 +1941,21 @@ function poseWalk(o, p, a, t, deck) {
   // walked, on top of the rest -0.07 — with the knees bent under him, that was a man
   // sitting down. Walking he now carries the corselet over his boots (the body's own
   // forward lean is added in accLean, where acceleration and slope already live).
-  o[CH.sPitch] = -0.07 + 0.02 * a + Math.sin(t * 1.15 + 0.6) * 0.022 * sw + brS * (0.020 * dk + 0.011 * sw) * breathAmp;
+  // THE WEIGHTED SUIT: the trunk goes over the load. Standing on the planks the corselet's
+  // weight already stoops him a little; walking, the spine adds its share of the lean that
+  // accLean starts at the ankles (in air over the load, in water into the drag).
+  o[CH.sPitch] = -0.07 + 0.035 * deck * idle + (0.075 + 0.015 * deck) * a + Math.sin(t * 1.15 + 0.6) * 0.022 * sw + brS * (0.020 * dk + 0.011 * sw) * breathAmp;
   o[CH.sRoll] = 0;
   o[CH.nYaw] = look * (dk + sw); o[CH.nPitch] = 0.05 * a - 0.02 * Math.abs(look) * (dk + sw)
     - 0.20 * ss(0.93, 1, Math.sin(t * 0.061 + 0.8)) * sw;   // now and then, a look up the line toward the light
-  o[CH.Rhx] = -W.hip(p) * a; o[CH.Rhz] = 0.075;
-  o[CH.Rk] = W.knee(p) * a + 0.07 * idle + 0.022 * wsh * ws; o[CH.Ra] = W.ankle(p) * a;
-  o[CH.Lhx] = -W.hip(p + 0.5) * a; o[CH.Lhz] = 0.075;
-  o[CH.Lk] = W.knee(p + 0.5) * a + 0.07 * idle - 0.022 * wsh * ws; o[CH.La] = W.ankle(p + 0.5) * a;
+  // Leg curves on the warped phase (stance share is per ground now); the swing knee folds
+  // less on the planks (a lead boot in air is lifted only just clear) than in water.
+  const pr = legP(p), pl = legP(p + 0.5);
+  const kfR = W.knee(pr), kfL = W.knee(pl);
+  o[CH.Rhx] = -W.hip(pr) * a; o[CH.Rhz] = 0.075;
+  o[CH.Rk] = (kfR > 0.25 ? 0.25 + (kfR - 0.25) * gKneeSw : kfR) * a + 0.07 * idle + 0.022 * wsh * ws; o[CH.Ra] = W.ankle(pr) * a;
+  o[CH.Lhx] = -W.hip(pl) * a; o[CH.Lhz] = 0.075;
+  o[CH.Lk] = (kfL > 0.25 ? 0.25 + (kfL - 0.25) * gKneeSw : kfL) * a + 0.07 * idle - 0.022 * wsh * ws; o[CH.La] = W.ankle(pl) * a;
   // ARMS. Each trails the opposing leg on W.arm's eased pendulum profile (+1 = forward).
   // Measured on the old build: the free arm swung +/-13 deg and peaked 0.21 cycle after
   // the opposite heel strike (0.125 of authored offset plus the shoulder spring's own
@@ -1944,12 +1965,16 @@ function poseWalk(o, p, a, t, deck) {
   // the opposite heel strike (ARM_LAG plus the spring); the elbow folds on the forward
   // swing and opens behind. The lantern arm keeps its carry — held a little forward and
   // out — but still swings +/-10 deg with the gait, the lantern's bail riding on it.
-  const ra = W.arm(p - ARM_LAG - 0.02) * a;
-  const la = W.arm(p + 0.5 - ARM_LAG) * a;
-  o[CH.Rsx] = -0.10 - 0.17 * ra - wsh * 0.012 * ws; o[CH.Rsz] = 0.15 - 0.04 * a; o[CH.Rsy] = -0.10;
-  o[CH.Re] = -(0.44 + 0.14 * Math.max(0, ra) - 0.05 * Math.max(0, -ra));
-  o[CH.Lsx] = -0.33 * la + 0.03 * a + wsh * 0.012 * ws; o[CH.Lsz] = 0.15 - 0.05 * a; o[CH.Lsy] = 0.05;
-  o[CH.Le] = -(0.20 + 0.06 * a + 0.30 * Math.max(0, la) * a);
+  // THE WEIGHTED SUIT: the arms stand OFF the body (the corselet flares under the armpits and
+  // he holds them out for balance) and they hardly swing: in air a stiff, short pendulum; in
+  // water carried a little forward, elbows bent, answering the step late through the drag.
+  const wet = 1 - deck, lag = ARM_LAG + 0.05 * wet;
+  const ra = W.arm(p - lag - 0.02) * a;
+  const la = W.arm(p + 0.5 - lag) * a;
+  o[CH.Rsx] = -0.12 - 0.05 * wet * a - (0.06 + 0.03 * wet) * ra - wsh * 0.012 * ws; o[CH.Rsz] = 0.27 + 0.05 * deck; o[CH.Rsy] = -0.10;
+  o[CH.Re] = -(0.50 + 0.10 * wet * a + 0.08 * Math.max(0, ra) - 0.03 * Math.max(0, -ra));
+  o[CH.Lsx] = -(0.09 + 0.05 * wet) * la - (0.06 + 0.12 * wet) * a + wsh * 0.012 * ws; o[CH.Lsz] = 0.27 + 0.05 * deck; o[CH.Lsy] = 0.05;
+  o[CH.Le] = -(0.28 + (0.10 + 0.22 * wet) * a + 0.12 * Math.max(0, la) * a);
 }
 
 // A limb dragging through water reverses SLOWLY — drag is largest exactly where the
@@ -1959,56 +1984,40 @@ const dragS = x => { const s = Math.sin(x); return s * (1.15 - 0.15 * s * s); };
 const SWIM_DRAG = 0.28;    // seconds the arms trail the body's roll/yaw
 
 function poseSwim(o, p, t0, drive) {
-  // HEAVIER (2026-10-01). Every free oscillation of the floating body runs on a clock
-  // 0.72x the old one and at ~0.7 of the amplitude: a hundredweight of brass and lead
-  // hanging under an air-filled helmet does not bob and wander like a frogman. The kick
-  // itself is slowed in its own clock (swimP, updateDiver).
+  // Every free oscillation of the hanging body is slow and small: a hundredweight of lead
+  // under an air-filled bonnet does not bob and wander.
   const t = t0 * 0.72;
   const td = t - SWIM_DRAG;
-  // The kick's phase is warped so the tuck and the glide — the two extremes — take longer
-  // than the transit between them. Pure reparametrisation: every S curve keeps its range.
-  const pk = p - 0.022 * Math.sin(4 * Math.PI * (p - 0.45));
-  o[CH.bobY] = Math.sin(t * 0.9) * 0.024;
-  o[CH.shiftX] = Math.sin(t * 0.62) * 0.02;
+  const k = 0.22 + 0.78 * drive;               // stroke amplitude: a small idle scull up to full sweeps
+  const sweep = Math.max(0, Math.sin(TAU * (p - 0.18) / 0.76));   // 0..1 through the pull
+  // the pull lifts him a little and pitches the chest over the hands; the reach lets him settle
+  o[CH.bobY] = Math.sin(t * 0.9) * 0.015 + 0.035 * k * Math.sin(TAU * (p - 0.30));
+  o[CH.shiftX] = Math.sin(t * 0.62) * 0.015;
   o[CH.shiftZ] = 0;
-  o[CH.pYaw] = Math.sin(t * 0.5) * 0.035;
-  o[CH.pRoll] = Math.sin(t * 0.71) * 0.04;
-  o[CH.pPitch] = -0.10 - S.hip(pk) * 0.10;
-  o[CH.sYaw] = Math.sin(t * 0.44 + 1) * 0.05;
-  o[CH.sPitch] = 0.10 + S.hip(pk) * 0.06;
-  o[CH.sRoll] = Math.sin(t * 0.58) * 0.05;
-  o[CH.nYaw] = Math.sin(t * 0.33) * 0.045; o[CH.nPitch] = -0.06;
-  const k = 0.45 + 0.55 * drive;
-  const kr = k * kAmpR, kl = k * kAmpL, pl = pk + kPhL;
-  o[CH.Rhx] = -S.hip(pk) * kr; o[CH.Rhz] = 0.06 + S.abd(pk) * kr * kAbdR;
-  o[CH.Rk] = S.knee(pk) * kr; o[CH.Ra] = S.ankle(pk) * kr;
-  o[CH.Lhx] = -S.hip(pl) * kl; o[CH.Lhz] = 0.06 + S.abd(pl) * kl * kAbdL;
-  o[CH.Lk] = S.knee(pl) * kl; o[CH.La] = S.ankle(pl) * kl;
-  // arms on the delayed clock: they answer the roll the torso had a third of a second ago
-  o[CH.Rsx] = -0.42 - dragS(td * 0.8) * 0.10; o[CH.Rsz] = 0.34; o[CH.Rsy] = -0.22;
-  o[CH.Re] = -(0.85 + dragS(td * 0.8 + 0.6) * 0.10);
-  o[CH.Lsx] = -0.22 + dragS(td * 0.66 + 2) * 0.30; o[CH.Lsz] = 0.42 + dragS(td * 0.5) * 0.10; o[CH.Lsy] = 0.18;
-  o[CH.Le] = -(0.55 + dragS(td * 0.66 + 1.2) * 0.28);
-  // THE FREE HAND SCULLS WITH THE KICK. As the knees draw up (recovery) the left hand
-  // reaches forward with the elbow bent; on the snap it pulls down and back past the
-  // hip, straightening; through the glide it trails. Keyed off the kick's own warped
-  // phase a beat early (the arm leads the legs), so the stroke IS the push the player
-  // feels in player.js, not a second clock. The lantern arm only answers it a little.
-  // Hanging in the column with no way on, nothing is locked: the knees soften and the
-  // legs sit a little forward of the hips, the way a relaxed body floats.
-  // The boots are lead: with no way on they hang almost straight down under him, knees
-  // only a little soft — not the drawn-up float of a man in fins.
-  const relax = 1 - drive;
-  o[CH.Rhx] -= 0.04 * relax; o[CH.Lhx] -= 0.02 * relax;
-  o[CH.Rk] += 0.16 * relax; o[CH.Lk] += 0.22 * relax;
-  o[CH.Ra] -= 0.10 * relax; o[CH.La] -= 0.08 * relax;
-  const st = S.hip(pk + 0.06), sk = S.knee(pk + 0.06) / 1.45;
-  const dv = 0.35 + 0.65 * drive;
-  o[CH.Lsx] += dv * (0.28 - 0.80 * st);
-  o[CH.Le] -= dv * 0.55 * sk;
-  o[CH.Lsz] += dv * 0.14 * st;
-  o[CH.Rsx] += dv * (0.08 - 0.22 * st);
-  o[CH.Re] -= dv * 0.15 * sk;
+  o[CH.pYaw] = Math.sin(t * 0.5) * 0.025;
+  o[CH.pRoll] = Math.sin(t * 0.71) * 0.025;
+  o[CH.pPitch] = 0.03 + 0.06 * k * sweep;
+  o[CH.sYaw] = Math.sin(t * 0.44 + 1) * 0.03;
+  o[CH.sPitch] = 0.06 + 0.07 * k * Math.max(0, -Math.sin(TAU * p));    // chest over the reach
+  o[CH.sRoll] = Math.sin(t * 0.58) * 0.03;
+  o[CH.nYaw] = Math.sin(t * 0.33) * 0.03; o[CH.nPitch] = -0.04;
+  // ARMS. The free (left) hand makes the full sweep; the lantern hand the same stroke a beat
+  // late and smaller, the lamp swinging on its bail. Per-stroke variation (drawKick): one
+  // sweep never quite repeats the last.
+  const kl = k * kAmpL, kr = k * 0.55 * kAmpR, pr = p - 0.035;
+  o[CH.Lsx] = -0.15 + (S.sx(p) + 0.15) * kl; o[CH.Lsz] = 0.22 + (S.sz(p) - 0.22) * kl * kAbdL; o[CH.Lsy] = 0.10;
+  o[CH.Le] = -0.40 + (S.el(p) + 0.40) * kl;
+  o[CH.Rsx] = -0.30 + (S.sx(pr) + 0.30) * kr; o[CH.Rsz] = 0.30 + (S.sz(pr) - 0.30) * kr * kAbdR; o[CH.Rsy] = -0.16;
+  o[CH.Re] = -0.60 + (S.el(pr) + 0.60) * kr * 0.8;
+  // drag wobble on the trailing clock, small
+  o[CH.Lsx] += dragS(td * 0.66 + 2) * 0.04; o[CH.Rsx] += dragS(td * 0.8) * 0.04;
+  // LEGS. The boots hang: hips nearly straight, knees soft, feet pointing down under the lead.
+  // A slow alternating wade rides on the stroke (one leg per stroke), scaled by the effort.
+  const w = 0.25 + 0.75 * drive, pl = p + 0.5 + kPhL;
+  o[CH.Rhx] = -(0.04 + S.thigh(p) * w); o[CH.Rhz] = 0.07;
+  o[CH.Rk] = 0.16 + (S.knee(p) - 0.16) * w; o[CH.Ra] = -0.18;
+  o[CH.Lhx] = -(0.03 + S.thigh(pl) * w); o[CH.Lhz] = 0.07;
+  o[CH.Lk] = 0.18 + (S.knee(pl) - 0.18) * w; o[CH.La] = -0.16;
 }
 
 // ---- knife slash: a one-shot keyed overlay on the LEFT arm ----
@@ -2059,7 +2068,7 @@ const LIFT = 0.269;   // (salprop) +0.106 with the thigh
 // pose easing out — legs drawn up, boots half a metre off the planks he is standing on.
 let walkP = 0, swimP = 0, gb = 1, yawF = 0, yawInit = false;
 // deckF boots at 1 for the same reason gb does: the title opens on Sal standing on planks.
-let deckF = 1, ampS = 0;
+let deckF = 1, ampS = 0, flatS = 0;
 // ladderF: blend weight for the boarding-ladder climb (player.onLadder). Blends in and
 // out over ~0.25 s so the grab and the step over the rail never snap.
 let ladderF = 0;
@@ -2091,7 +2100,7 @@ const EYE_H = 1.35;                 // player.js's own constant: pos.y - EYE_H i
 // cycle in each double support — a slow, deliberate walk under load (a man's normal walk
 // is ~0.62; 0.56 was a hurried one). Stance for the right foot is [0, DUTY); heel strikes
 // stay at walkP 0 and 0.5 so stepCount() is untouched.
-const DUTY = 0.60;
+let DUTY = 0.60;   // live: set per frame from the ground (gaitGround), see THE WEIGHTED SUIT
 // Roll-through windows within stance, and the foot's absolute pitch at each.
 // With the ankle down in the boot the foot is a real lever, and the lead sole is a RIGID
 // plate: it pivots on its heel's back edge as it lands and on its toe's front edge as it
@@ -2137,8 +2146,39 @@ const CZ_HEEL = -0.16, CZ_FLAT = 0.02, CZ_BALL = 0.315;
 // 2.70 -> 2.90 (salprop, the longer thigh): measured on the fixed-step harness, the same
 // seabed run, 118 -> 110 steps/min, step / leg 0.89 -> 0.95 (the leg is 1.50 now, not 1.39).
 const GAIT_STRIDE0 = 2.9;
-const GAIT = { stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, rise: 30 };
+const GAIT = { stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, rise: 30,
+  // THE WEIGHTED SUIT (Michael, 2026-10-01: "his swimming and walking still dont seem like a person
+  // in a weighted suit would move"; docs/superpowers/specs/sal-weighted-suit-motion.md). Every
+  // earlier number here was tuned toward a man's dry-land walk. A Mark V diver carries ~90 kg of
+  // brass and lead, and he carries it differently on each ground, so the gait is now PER GROUND
+  // and blended by deckF (and, on the seabed, by how heavy the dress has him):
+  //   DECK, in air: the whole load on his shoulders and hips. Short steps on a wide base, long
+  //   double support (load carriage: 29 -> 38% of the step), knees kept soft, boots lifted only
+  //   just clear, the trunk pitched over the load. ~78 steps/min at 1.5 u/s.
+  //   SEABED, in water: "the diver tends to lean forward against the drag of the water". Longer
+  //   steps, the lead boot lifted and planted, a slow cadence (submerged walking is ~68/min),
+  //   the body surging over each boot and stalling between them. ~90 steps/min at 2.15 u/s.
+  //   A light dress lengthens single stance (more buoyancy, less double support).
+  // stride = ground per cycle (two steps); duty = stance share; kMid/kIdle = the knee the
+  // pelvis keeps at mid-stance / standing; lift = swing arc; wide = extra half step-width;
+  // top = mean walking speed used to normalise the gait amplitude; kneeSw = swing knee fold.
+  deck: { stride: 2.30, duty: 0.67, kMid: 28, kIdle: 12, lift: 0.07, wide: 0.06, top: 1.40, kneeSw: 0.62 },
+  bed: { stride: 2.70, duty: 0.66, dutyLight: 0.61, kMid: 28, kIdle: 9, lift: 0.12, wide: 0.025, top: 2.02, kneeSw: 0.68 } };
 window.__gait = GAIT;
+// the live, blended gait (written once per frame by gaitGround)
+let gStride = GAIT_STRIDE0, gKMid = 13, gKIdle = 8, gLift = 0.19, gWide = 0, gTop = 2.47, gKneeSw = 1, gDeck = 1;
+function gaitGround(deck, wgt) {
+  const D = GAIT.deck, Bd = GAIT.bed, b = 1 - deck;
+  gDeck = deck;
+  gStride = D.stride * deck + Bd.stride * b;
+  DUTY = D.duty * deck + (Bd.dutyLight + (Bd.duty - Bd.dutyLight) * wgt) * b;
+  gKMid = D.kMid * deck + Bd.kMid * b; gKIdle = D.kIdle * deck + Bd.kIdle * b;
+  gLift = D.lift * deck + Bd.lift * b; gWide = D.wide * deck + Bd.wide * b;
+  gTop = D.top * deck + Bd.top * b; gKneeSw = D.kneeSw * deck + Bd.kneeSw * b;
+}
+// The authored leg curves are keyed for toe-off at 0.60. With the stance share now 0.61-0.70,
+// the phase is warped so stance maps onto the curves' stance and swing onto their swing.
+function legP(p) { p = ((p % 1) + 1) % 1; return p < DUTY ? p * 0.60 / DUTY : 0.60 + (p - DUTY) * 0.40 / (1 - DUTY); }
 // Hip-to-ankle reach at a knee angle (degrees): the law of cosines on the two bones.
 const reachAt = deg => Math.sqrt(UP_L * UP_L + LO_L * LO_L + 2 * UP_L * LO_L * Math.cos(deg * Math.PI / 180));
 // Polynomial smooth minimum (always <= min(a, b), so it can only lower the pelvis).
@@ -2530,7 +2570,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // zone teleport and the first contact out of a swim, where there is no history.
       const dx = ft.wx - player.pos.x, dz = ft.wz - player.pos.z;
       if (!ft.seed || dx * dx + dz * dz > 2.6) {
-        const latL = sgn * HIP_X + ft.lat;
+        const latL = sgn * (HIP_X + gWide) + ft.lat;
         ft.wx = player.pos.x + cy * latL; ft.wz = player.pos.z - sy * latL;
         ft.seed = true; ft.cz = CZ_FLAT;
       }
@@ -2579,7 +2619,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     // rolls onto the other boot while it is in the air. (This replaced a 2.2 u/s creep:
     // honest to the anchors, but it read as a man sliding on ice.)
     if (standing && ft.planted) {
-      const latL = sgn * HIP_X + ft.lat;
+      const latL = sgn * (HIP_X + gWide) + ft.lat;
       const nx = player.pos.x + cy * latL, nz = player.pos.z - sy * latL;
       const dx = nx - (ft.ax + ox), dz = nz - (ft.az + oz);
       const d2 = dx * dx + dz * dz;
@@ -2661,7 +2701,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       const halfS = DUTY * strideNow * ft.stride * slopeK * 0.5;
       const aF = halfS - 0.05 + (CZ_HEEL - CZ_FLAT), aR = -halfS - 0.05 + (CZ_BALL - CZ_FLAT);
       const ahead = aF + (aR - aF) * revF + (gaitState === 3 ? 0.18 : 0) * (1 - 2 * revF);
-      const latL = sgn * HIP_X + ft.lat;
+      const latL = sgn * (HIP_X + gWide) + ft.lat;
       let lx = player.pos.x + player.vel.x * tRem + sy * ahead + cy * latL;
       let lz = player.pos.z + player.vel.z * tRem + cy * ahead - sy * latL;
       th = TH_STRIKE + (TH_OFF - TH_STRIKE) * revF + groundPitch(lx, lz); cz = CZ_HEEL + (CZ_BALL - CZ_HEEL) * revF;
@@ -2669,7 +2709,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // boot down through mid-swing: measured, the swinging sole skimmed the seabed at 2.4
       // u/s at ~70% of every swing. The landing target rides on an arc that only comes
       // down over the last part of the swing, so the boot is carried, then set down.
-      let lift = 0.19 * (1 - ss(0.66, 1.0, swp)) * (1 - revF);
+      let lift = gLift * (1 - ss(0.66, 1.0, swp)) * (1 - revF);
       // the pelvis judges a landing against where the hips will BE when it lands
       ft.px = player.vel.x * tRem; ft.pz = player.vel.z * tRem;
       // Ease onto the landing line over the back half of the swing: early swing is pure
@@ -2843,7 +2883,9 @@ const HEAD_CTR = 0.8;           // how much of the spine's yaw the neck takes ba
 // share of the thorax's gait yaw/roll the neck takes back out; f/d = the trunk's spring;
 // lag/lagF = the carried bonnet's pitch lag behind the body's lean.
 // kH 0.6 -> 0.5 (salprop): the longer stride swung the bonnet to 31% of the hips; 0.5 holds it at ~22%
-const CHAIN = { on: 1, kH: 0.5, yawK: 0.5, headK: 0.8, f: 22, d: 0.9, lag: 0.5, lagF: 5 };
+// kHDeck: on the planks the trunk travels WITH the pelvis over each boot (a waddle is a whole-
+// body shift onto the loaded leg, not a hip swinging under a steady chest).
+const CHAIN = { on: 1, kH: 0.5, kHDeck: 0.55, yawK: 0.5, headK: 0.8, f: 22, d: 0.9, lag: 0.5, lagF: 5 };
 window.__chain = CHAIN;
 const chR = { x: 0, v: 0 }, chY = { x: 0, v: 0 }, hdC = { x: 0, v: 0 };
 let peerT = -1, peerW = 0;
@@ -2912,7 +2954,7 @@ function pelvisDrop(dt, player, gw) {
   const soleY = (player.grounded ? player.pos.y : player.groundY) - EYE_H;
   // Mid-stance / standing ceiling: the knee never straighter than kMid walking, kIdle
   // standing, over the floor at his centre.
-  const kM = GAIT.kIdle + (GAIT.kMid - GAIT.kIdle) * gw;
+  const kM = gKIdle + (gKMid - gKIdle) * gw;
   const hipTop = (pelInit ? soleBase : soleY) - SOLE_Y + reachAt(kM);
   const dCap = reachAt(GAIT.kCap);
   let need = 1e9, hc = 0;
@@ -3005,11 +3047,15 @@ export function updateDiver(dt, t, player) {
   // is a pose module and must stay loadable behind the title with no physics running.
   const wgt = player.onDeck ? 1 : clamp((0.9 - (player.buoy || 0)) / 2.73, 0, 1);
   wgtNow = wgt;
+  gaitGround(deckF, wgt);
+  // The walk now LURCHES (player.js): the speed swings ~30% over every step. The gait's
+  // amplitude and stride must follow the walk, not the lurch, so they read a smoothed speed.
+  flatS += (flat - flatS) * Math.min(1, 2.2 * dt);
 
   // Gait amplitude envelope: a short attack (he leans into the walk) and a longer release
   // (he settles out of it and the last stride finishes). Hoisted above the phase clock
   // because the state machine below keys its transitions off it.
-  const ampT = clamp(flat * 0.42 - 0.06, 0, 1);
+  const ampT = clamp(Math.max(flatS, flat * 0.75) / gTop * 1.04 - 0.06, 0, 1);
   ampS = lerp(ampS, ampT, Math.min(1, (ampT > ampS ? 8.3 : 4.0) * dt));   // ~0.12 s / ~0.25 s
   const amp = ampS;
   // How grounded he is, and whether the gait clock is turning at all. The pendulum below
@@ -3031,7 +3077,7 @@ export function updateDiver(dt, t, player) {
   //            ~5 deg, then settles back upright. It arrests; it does not dissolve.
   // stepCount()'s contract is untouched throughout: heel strikes are still walkP 0 and 0.5,
   // and the catch step fires its own footfall exactly like any other plant.
-  const wantWalk = ampT > 0.02;
+  const wantWalk = clamp(flat * 0.42 - 0.06, 0, 1) > 0.02;
   // ON A GRADE THE STEPS SHORTEN. Uphill the trailing boot is below him and the lead
   // above; downhill the reverse. Either way the same stride costs the legs more reach,
   // and a man shortens his step rather than crouch for it. Measured on a 24% climb at
@@ -3042,7 +3088,7 @@ export function updateDiver(dt, t, player) {
     slopeK += (1 / (1 + 1.3 * g) - slopeK) * Math.min(1, 3 * dt);
   }
   {
-    const sT = GAIT.stride * (0.55 + 0.45 * clamp(flat / 2.47, 0, 1)) * (1 - 0.18 * revF) * (1 - 0.15 * Math.min(1, Math.abs(strafeS.x)));
+    const sT = gStride * (0.55 + 0.45 * clamp(flatS / gTop, 0, 1)) * (1 - 0.18 * revF) * (1 - 0.15 * Math.min(1, Math.abs(strafeS.x)));
     strideNow += (sT - strideNow) * Math.min(1, 2.5 * dt);
   }
   let stepRate = 0;
@@ -3109,10 +3155,10 @@ export function updateDiver(dt, t, player) {
   // and the cadence is the shipped one.
   const spinUp = 1 + 1.6 * clamp(1 - speed / 14, 0, 1) * clamp(flat * 0.4 + Math.abs(player.vel.y) * 0.2, 0, 1);
   const swPrev = swimP;
-  // Slow, effortful strokes: 0.52 Hz at cruise (was 0.73). The thrust pulse in player.js
-  // is unit-mean per cycle, so a slower kick is a bigger shove with a longer glide after
-  // it — not a slower swimmer.
-  swimP = (swimP + (0.17 + speed * 0.020) * spinUp * dt) % 1;
+  // Slow, wide sweeps: ~0.38 Hz at cruise (the frog kick was 0.52, and 0.73 before that).
+  // The thrust pulse in player.js is unit-mean per cycle, so a slower stroke is a bigger
+  // haul with a longer drift after it, not a slower diver. Hanging still he barely sculls.
+  swimP = (swimP + (0.20 + speed * 0.012) * spinUp * dt) % 1;
   if (swimP < swPrev) drawKick(++kickIdx);   // one fresh pair of legs per kick
   // ---- breath clock: context-driven cadence, still drifting so it never metronomes.
   // Effort winds the rate up through an EMA — a sprint costs breaths for a while after
@@ -3188,14 +3234,15 @@ export function updateDiver(dt, t, player) {
     if (off > 1e-3) {
       const hs = Math.hypot(player.vel.x, player.vel.z);
       const trail = clamp(hs / 14, 0, 1) * off;
-      po[CH.Rhx] += 0.24 * trail; po[CH.Lhx] += 0.24 * trail;
+      po[CH.Rhx] += 0.10 * trail; po[CH.Lhx] += 0.10 * trail;   // was 0.24: a towed weight, not a flier
       po[CH.Rk] += 0.10 * trail; po[CH.Lk] += 0.10 * trail;
       po[CH.Ra] -= 0.25 * trail; po[CH.La] -= 0.25 * trail;
       const sink = clamp((-player.vel.y - 0.5) / 3.0, 0, 1) * off;
       if (sink > 1e-3) {
         const near = 1 - ss(1.5, 6, player.pos.y - (player.groundY ?? -1e9));   // groundY is the standing eye height
-        po[CH.Rhx] -= (0.22 + 0.25 * near) * sink; po[CH.Lhx] -= (0.18 + 0.25 * near) * sink;
-        po[CH.Rk] += (0.30 + 0.35 * near) * sink; po[CH.Lk] += (0.26 + 0.35 * near) * sink;
+        // Feet first: the lead boots lead the fall and the knees only unlock for the landing.
+        po[CH.Rhx] -= (0.08 + 0.18 * near) * sink; po[CH.Lhx] -= (0.06 + 0.18 * near) * sink;
+        po[CH.Rk] += (0.10 + 0.28 * near) * sink; po[CH.Lk] += (0.08 + 0.28 * near) * sink;
         po[CH.Rsz] += 0.30 * sink; po[CH.Lsz] += 0.30 * sink;
         po[CH.nPitch] += 0.30 * near * sink;
       }
@@ -3231,14 +3278,18 @@ export function updateDiver(dt, t, player) {
     // Squaring up for a slash the whole column turns as one, fast.
     spring(lkY, hy, dt, 4.2 + 12 * sqW, 0.9);
     spring(lkX, hp, dt, 3.6, 0.9);
-    // Share out: the helmet can only turn so far on the corselet before the shoulders
-    // have to come round too.
-    const sY = clamp(lkY.x * 0.38, -0.34, 0.34);
+    // Share out. THE BONNET IS BOLTED TO THE BREASTPLATE: "when you turn your head the helmet
+    // does not turn. Instead, you end up looking out a small side window." A Mark V diver
+    // looks round by turning his shoulders, and looks up by leaning back. So the TRUNK
+    // carries the look (was 38%, capped at 20 deg) and the bonnet only a fifth of it — the
+    // little the corselet rocks on his shoulders. His eyes behind the glass do the rest
+    // (salInstall's face glances at the look target).
+    const sY = clamp(lkY.x * 0.80, -0.80, 0.80);
     po[CH.sYaw] += sY;
     po[CH.nYaw] += lkY.x - sY * (1 - HEAD_CTR);
     po[CH.pYaw] -= lead * 0.12 * gb;
-    po[CH.nPitch] -= lkX.x * 0.85;    // nPitch + is chin down
-    po[CH.sPitch] -= lkX.x * 0.15;
+    po[CH.nPitch] -= lkX.x * 0.30;    // nPitch + is chin down
+    po[CH.sPitch] -= lkX.x * 0.70;
   }
   {
     // THE VALVE CHECK. A hard-hat diver's hand goes to his air every so often without
@@ -3440,7 +3491,7 @@ export function updateDiver(dt, t, player) {
     // Climbing, he leans into the hill; descending, he sits back against it.
     const sx = Math.sin(yawF) * 0.5, sz = Math.cos(yawF) * 0.5;
     const hill = gdOn ? Math.atan(groundD(player.pos.x + sx, player.pos.z + sz) - groundD(player.pos.x - sx, player.pos.z - sz)) : 0;
-    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + 0.065 * amp * (1 - 2 * revF) + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
+    spring(accLean, ((clamp(accF * 0.045, -0.11, 0.10) + (0.12 + 0.10 * (1 - deckF)) * amp * (1 - 2 * revF) + 0.30 * hill * amp) * gb + hoseLean) * (1 - ladderF) * SAL.lean, dt, 4.0, 0.85);
   }
   // LIFT plants the soles on player.pos - 1.35 (the collision floor) with the legs at
   // full stretch. Off the ground the authored bob rides on it; on the ground THE PELVIS
@@ -3454,10 +3505,14 @@ export function updateDiver(dt, t, player) {
   // than any couple he can generate — and it GROWS with every litre in the dress. He
   // leans; he never tips like a frogman. The lean also reads off horizontal speed only,
   // so the ending's pure-vertical ascent cannot drive it.
-  const upright = 0.22 + 0.30 * (1 - (player.fill || 0));
+  // THE WEIGHTED SUIT: head-up vertical is a Mark V diver's normal posture, and pitching
+  // over sends air into the legs of the dress, so where the camera looks barely tips him
+  // (was 0.22-0.52 of the camera pitch). Way on does: towed through the water by his own
+  // sweeps, the boots swing back and he hangs into the travel.
+  const upright = 0.08 + 0.12 * (1 - (player.fill || 0));
   const hsp = Math.hypot(player.vel.x, player.vel.z);
   // On the ladder he hangs vertical off the rungs whatever the camera pitch is doing.
-  const pitchTarget = (gb > 0.5 ? 0 : clamp(-player.pitch * upright + hsp * 0.010, -0.55, 0.55)) * (1 - ladderF);
+  const pitchTarget = (gb > 0.5 ? 0 : clamp(-player.pitch * upright + hsp * 0.0085, -0.40, 0.40)) * (1 - ladderF);
   spring(sPitch, pitchTarget, dt, 2.2, 0.90);
   // yaw rate, smoothed over ~0.25 s so a mouse jitter is not a bank
   if (!prevYawInit) { prevYaw = player.yaw; prevYawInit = true; }
@@ -3495,7 +3550,7 @@ export function updateDiver(dt, t, player) {
     pdVx = player.vel.x; pdVz = player.vel.z;
     pdAf += (clamp(afw, -40, 40) - pdAf) * Math.min(1, 3.5 * dt);
     pdAl += (clamp(alt, -40, 40) - pdAl) * Math.min(1, 3.5 * dt);
-    spring(pendP, clamp(0.016 * pdAf, -0.26, 0.26) * off * (1 - ladderF), dt, 2.3, 0.32);
+    spring(pendP, clamp(0.011 * pdAf, -0.20, 0.20) * off * (1 - ladderF), dt, 2.3, 0.32);
     spring(pendR, clamp(-0.014 * pdAl, -0.20, 0.20) * off * (1 - ladderF), dt, 2.3, 0.32);
   }
   b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x, 0,
@@ -3531,7 +3586,8 @@ export function updateDiver(dt, t, player) {
   {
     const py = pc[CH.pYaw], pr = pc[CH.pRoll], sx = b.position.x;
     const pivX = sx - 0.20 * Math.sin(pr);
-    const thW = Math.asin(clamp((pivX - CHAIN.kH * sx) / 0.738, -0.3, 0.3));   // 0.738: the neck pivot over the spine's
+    const kH = CHAIN.kH + (CHAIN.kHDeck - CHAIN.kH) * deckF;
+    const thW = Math.asin(clamp((pivX - kH * sx) / 0.738, -0.3, 0.3));   // 0.738: the neck pivot over the spine's
     spring(chR, (thW - pr) * gC, dt, CHAIN.f, CHAIN.d);
     spring(chY, -(1 + CHAIN.yawK) * py * gC, dt, CHAIN.f, CHAIN.d);
   }
