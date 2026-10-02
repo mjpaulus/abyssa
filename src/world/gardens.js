@@ -85,7 +85,7 @@ uniform vec4 uJolt;
 #ifdef GD_RUFFLE
   uniform float uRuffle;
 #endif
-#ifdef GD_BIOLUM
+#if defined(GD_BIOLUM) || defined(GD_BIOTIP)
   varying float vGfl;
 #endif
 // (plants) a BatchedMesh of sculpted species (plants/plantKit.js) runs this same program:
@@ -153,7 +153,7 @@ if (aFlut > 0.0) {
 // 0 = open, 1 = fully withdrawn. Snap-in is the approach itself; the slow re-emergence
 // is the jolt's own decay, so a ping empties a whole field of plumes and they bloom back.
 float gFl = 0.0;
-#if defined(GD_WORM) || defined(GD_FLINCH) || defined(GD_BIOLUM)
+#if defined(GD_WORM) || defined(GD_FLINCH) || defined(GD_BIOLUM) || defined(GD_BIOTIP)
   for (int i = 0; i < ${PUSH_N}; i++) {
     vec4 ps = uPush[i];
     if (ps.w <= 0.0) continue;
@@ -200,7 +200,7 @@ float gfade = 1.0 - smoothstep(uCull.x, uCull.y, gdd);
 // Fully faded instances collapse to a point: no fragments at all past the band.
 transformed *= step(0.002, gfade);
 vGd = vec4(aVA.z, aVA.y, gfade, gdInst.w);
-#ifdef GD_BIOLUM
+#if defined(GD_BIOLUM) || defined(GD_BIOTIP)
   vGfl = gFl;
 #endif
 vGl = position;
@@ -215,7 +215,7 @@ uniform float uTime; uniform float uSSS; uniform vec3 uPale; uniform vec3 uPale2
 #ifdef GD_GLOWZ
   uniform vec3 uGlowZ0, uGlowZ1, uGlowZ2;
 #endif
-#ifdef GD_BIOLUM
+#if defined(GD_BIOLUM) || defined(GD_BIOTIP)
   varying float vGfl; uniform vec3 uBioCol; uniform float uBioFrac;
 #endif
 varying vec4 vGd; varying vec3 vGl; varying vec3 vBl;
@@ -303,16 +303,20 @@ const F_BODY = `
     totalEmissiveRadiance += gc * gg * gm * 0.45 * (0.4 + 0.6 * (0.5 + 0.5 * sin(uTime * 0.9 + vGd.w * 3.0)));
   }
 #endif
-#ifdef GD_BIOLUM
+#if defined(GD_BIOLUM) || defined(GD_BIOTIP)
   // (plants2) BIOLUMINESCENCE, physically motivated and quiet: the baked polyp mask (ORM.B)
   // carries a dim resting glow and a slow wave that runs DOWN the colony (pennatulids
   // conduct their flash along the rachis); a touch — Sal's push sphere, a sonar jolt,
   // a sleeper's footfall — sets the whole colony alight for the length of the flinch.
   // Only uBioFrac of the instances are luminous (vGd.w is the instance's own draw).
   if (vGd.w < uBioFrac) {
-    float gbm = smoothstep(0.08, 0.5, texture2D(aoMap, vAoMapUv).b);
+    #ifdef GD_BIOTIP
+      float gbm = smoothstep(0.6, 1.0, vGd.x);   // the arm tips (a crinoid's sway mask)
+    #else
+      float gbm = smoothstep(0.08, 0.5, texture2D(aoMap, vAoMapUv).b);
+    #endif
     float gbw = 0.5 + 0.5 * sin(uTime * 0.65 + vGd.w * 40.0 + (1.0 - vGd.y) * 6.0);
-    totalEmissiveRadiance += uBioCol * gbm * (0.14 + 0.5 * gbw * gbw * gbw * gbw + 1.4 * vGfl);
+    totalEmissiveRadiance += uBioCol * gbm * (0.22 + 0.5 * gbw * gbw * gbw * gbw + 1.4 * vGfl);
   }
 #endif
 #ifdef GD_PIT
@@ -389,7 +393,7 @@ function gardenMat(o) {
     if (m.userData.uInstTex) sh.uniforms.uInstTex = m.userData.uInstTex;
     if (m.defines.GD_THIN && !m.defines.GD_BLADE) sh.uniforms.uTrans = { value: o.trans ?? 1 };
     if (m.defines.GD_RUFFLE) sh.uniforms.uRuffle = { value: o.ruffle ?? 0.012 };
-    if (m.defines.GD_BIOLUM) { sh.uniforms.uBioCol = { value: new THREE.Color(o.bioCol ?? 0x2f8f86) }; sh.uniforms.uBioFrac = { value: o.bioFrac ?? 1 }; }
+    if (m.defines.GD_BIOLUM || m.defines.GD_BIOTIP) { sh.uniforms.uBioCol = { value: new THREE.Color(o.bioCol ?? 0x2f8f86) }; sh.uniforms.uBioFrac = { value: o.bioFrac ?? 1 }; }
     if (o.glowZ) for (let k = 0; k < 3; k++) sh.uniforms['uGlowZ' + k] = { value: new THREE.Color(o.glowZ[k]) };
     Object.assign(sh.uniforms, uni, {
       uCull: { value: new THREE.Vector2(cull * 0.72, cull) },
@@ -1255,7 +1259,7 @@ function layout() {
   plantAdopt('g_barrel', 'barrel', IM.barrel, { cap: CAP.barrel, mat: { sway: 1, freq: 0.5, cull: CULL.barrel } });
   plantAdopt('g_anem', 'anem', IM.anem, { cap: CAP.anem, mat: { sway: 1, freq: 1.0, cull: CULL.anem, sss: 0.3, def: ['SSSL', 'FLINCH'] } });
   plantAdopt('g_worm', 'worm', IM.worm, { cap: CAP.worm, mat: { sway: 1, freq: 0.6, cull: CULL.worm, def: ['WORM'] } });
-  plantAdopt('g_crin', 'crin', IM.crin, { cap: CAP.crin, mat: { sway: 1, freq: 0.7, cull: CULL.crin, sss: 0.3, def: ['SSSL', 'FLINCH'] } });
+  plantAdopt('g_crin', 'crin', IM.crin, { cap: CAP.crin, bio: true, mat: { sway: 1, freq: 0.7, cull: CULL.crin, sss: 0.3, def: ['SSSL', 'FLINCH', 'BIOTIP'], bioCol: 0x3b8fb0, bioFrac: 0.3 } });
   plantAdopt('g_glass', 'glass', IM.glass, { cap: CAP.glass, mat: { sway: 1, freq: 0.4, cull: CULL.glass, sss: 0.4, def: ['SSSL'] } });
 }
 

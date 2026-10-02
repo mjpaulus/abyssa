@@ -608,6 +608,10 @@ if True:
             smooth(fo)
             far_stats[p['name']] = len(fo.data.polygons)
             all_lo.append(fo)
+            if p.get('farLo2'):
+                f2 = imp(p['farLo2'], p['name'] + '_far2')
+                smooth(f2)
+                all_lo.append(f2)
             continue
         if not p.get('far'):
             continue

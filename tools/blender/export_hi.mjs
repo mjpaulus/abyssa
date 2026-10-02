@@ -104,6 +104,11 @@ for (const set of Object.keys(P.sets)) {
         fs.writeFileSync(path.join(build, e.farLo), plyBytes(F.pos, F.idx, F.normal || null, null, true, F.uv));
         e.farTris = F.idx.length / 3;
       }
+      if (pc.farLow2) {
+        const F = typeof pc.farLow2 === 'function' ? pc.farLow2() : pc.farLow2;
+        e.farLo2 = pc.name + '_farlo2.ply';
+        fs.writeFileSync(path.join(build, e.farLo2), plyBytes(F.pos, F.idx, F.normal || null, null, true, F.uv));
+      }
     }
     man.unwrap[set] = { coverage: null, explicit: true };
     console.log('set', set, 'explicit lows', pcs.map(q => q.name).join(', '));

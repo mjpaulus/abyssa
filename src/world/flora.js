@@ -1252,7 +1252,10 @@ function stand(n, blend, yaw) {
 }
 
 const CUR0 = 0.9;
-const GLOWZ = PAL.map(P => P.glow);   // (plants) the sculpted batches' per-zone glow colours
+// (plants) the sculpted batches' per-zone glow colours. (plants2) Zone 0 is sunlit reef: nothing
+// there bioluminesces in a way the eye would see by day (a stony coral glowing mint-green under
+// the sun read as neon), so its slot is black; the deep zones keep their quiet glow.
+const GLOWZ = PAL.map((P, zi) => zi === 0 ? 0x000000 : P.glow);
 
 // Per-zone material sets, built ONCE and reused across every reseed. Materials (and
 // the texture/env-map refs they hold) are site-INVARIANT — only geometry/placement is
