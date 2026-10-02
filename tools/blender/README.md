@@ -195,3 +195,17 @@ flora.js / gardens.js's own layouts). Additive pipeline pieces it uses:
 - set **`ormHalf: false`**: full-resolution ORM (the alpha cards' coverage lives there).
 - `bake.py ... --sets a,b` rebakes only those sets but writes `<name>_<sets>.glb` and a json with
   partial stats: fine for paint-only iteration, finish with a full build.
+
+## Fauna (fauna2): every animal through the same pipeline
+
+`node tools/blender/build.mjs <set>` for `school`, `reef`, `deep`, `octo`, `shark` (modules in
+`src/entities/<set>Sculpt.js`, anatomy kit `src/entities/fishKit.js`) -> `assets/fauna/<set>/`
+(Draco + KTX2). The runtime keeps the procedural animals as the boot body, the fallback and
+(schools) nothing else; the sculpts carry the motion attributes the existing vertex shaders read,
+written at install by labellers exported from the same modules (fish: uv = body t + fin flag,
+aSurf; fauna: aPart/aPhase/aKind/aGlow per piece; octopus/squid: aOct/aSq with the arms kept
+procedural; shark: uv/aSurf + tooth flag). Pieces split where motion parts split (disc/tail,
+shell/flippers, head/jaw, carapace/legs). Thin plates (fins, wings, flippers) keep a mesh floor
+of ~2 low-grid cells with a bake-only layer paring the high back (a thinner plate pinches dual
+contouring into non-manifold edges QEM cannot collapse). A/B: `?fishproc&faunaproc&octproc&sharkproc`
+or `__school.on / __faunaSculpt.on / pred.sculptOn` (same frame).

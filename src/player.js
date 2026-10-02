@@ -9,6 +9,7 @@ import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
 import { ventColliders } from './world/vents.js';
 import { raft } from './systems/raft.js';
+import { resolveDeck, LADDER_Z, GAP_HZ } from './systems/raft/colliders.js';
 import { surfaceHeightAt, stormLevel } from './world/water.js';
 
 export const player = {
@@ -149,15 +150,18 @@ const DECK_HX = 4.7, DECK_HZ = 4.7, DECK_TOP = 0.11;
 // Up the boarding ladder. A man in 90 lb of dress does not vault a bulwark: 1.1 u/s is
 // a deliberate hand-over-hand, about three seconds from the waterline to the catch.
 const CLIMB_RATE = 1.1;
-// ---- THE BULWARK IS REAL --------------------------------------------------------
+// ---- THE BULWARK AND EVERYTHING ON DECK ARE REAL ---------------------------------
 // hull.js walls the deck on all four sides and leaves ONE gap: the boarding bay on the
-// +Z rail at |x| < 1.2, where the ladder hangs. Until now nothing in the physics knew
-// that — Sal walked off any edge he liked and the dive ritual was a formality. The rail
-// line is the footprint less a body's half-width, so his shoulder stops at the timber
-// rather than his eye. The push-back uses the collider idiom below: put him back on the
-// line and cancel the OUTWARD component of velocity only, so he slides along the rail.
-const RAIL_IN = 4.36;      // DECK_HX (4.7) - body half-width (0.34)
-const BAY_HX = 1.15;       // the one gap, a touch inside the ladder grab's 1.2
+// +X rail at |z - LADDER_Z| < 1.2, where the ladder hangs (moved off the +Z rail
+// 2026-10-02 — the gallows stood over it). The bulwark runs and every solid thing
+// standing on the planks are 2D shapes in systems/raft/colliders.js; the body circle is
+// pushed out of them in RAFT-LOCAL space and only the inward part of his velocity goes,
+// so he slides along a face and rounds a corner instead of stopping dead or jittering.
+const _deckInv = new THREE.Matrix4(), _deckP = new THREE.Vector3();
+const _deckL = { x: 0, z: 0 }, _deckV = { x: 0, z: 0 };
+// Rungs: the ladder hangs 0.08 outboard of the +X edge; the last metre of the climb
+// steps him inboard over the sill, onto the planks.
+const LADDER_X = 4.78, LADDER_SILL_X = 4.42;
 
 // ---------------------------------------------------------------- the suit as physics
 // A dressed Mark V is ~170 kg. Its displacement splits in two, and that split is the
@@ -323,15 +327,15 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // one-way platform's 0.7 catch, so without this the raft cannot be re-boarded at all —
   // measured: swimming at it passes clean under the deck, and the boarding ladder the
   // davit hangs into the water was scenery. The zone is the bulwark gap the ladder hangs
-  // in (raft-local |x| < 1.2, z 4.2..5.9, from ladder-foot depth up to the catch), and
-  // holding W toward the raft is the grab: he rises up the rungs at a climb, not a
-  // launch, until the deck check takes him. No new input to learn — swim at the ladder
-  // and keep swimming.
+  // in (raft-local x 4.2..5.9, |z - LADDER_Z| < 1.2, from ladder-foot depth up to the
+  // catch), and holding W toward the raft (facing -X) is the grab: he rises up the rungs
+  // at a climb, not a launch, until the deck check takes him. No new input to learn —
+  // swim at the ladder and keep swimming.
   player.onLadder = false;
-  if (!onDeck && dxr > -1.2 && dxr < 1.2 && dzr > 4.2 && dzr < 5.9) {
+  if (!onDeck && dxr > 4.2 && dxr < 5.9 && dzr > LADDER_Z - GAP_HZ && dzr < LADDER_Z + GAP_HZ) {
     const top = raft.position.y + DECK_TOP + EYE_H;
     if (player.pos.y > top - 4.2 && player.pos.y <= top - 0.68 &&
-        (keys['KeyW'] || keys['ArrowUp']) && Math.cos(player.yaw - Math.PI) > 0.1) {
+        (keys['KeyW'] || keys['ArrowUp']) && -Math.sin(player.yaw) > 0.1) {
       player.onLadder = true;
       player.pos.y += CLIMB_RATE * dt;
       // hold him against the rungs: kill the swim that was carrying him under the hull,
@@ -342,9 +346,9 @@ export function updatePlayer(dt, t, zone, riftOpen) {
       // is. Held there to the top he falls off the last rung forever (measured: climb
       // to 1.46, drop, climb again), so the last metre of climb steps him inboard over
       // the rail, which is also just what boarding looks like.
-      const zAim = player.pos.y > top - 1.15 ? 4.42 : 4.78;
-      player.pos.z -= clamp(dzr - zAim, -1.6 * dt, 1.6 * dt);
-      player.pos.x -= clamp(dxr, -0.5 * dt, 0.5 * dt);
+      const xAim = player.pos.y > top - 1.15 ? LADDER_SILL_X : LADDER_X;
+      player.pos.x -= clamp(dxr - xAim, -1.6 * dt, 1.6 * dt);
+      player.pos.z -= clamp(dzr - LADDER_Z, -0.5 * dt, 0.5 * dt);
     }
   }
   const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY);
@@ -488,22 +492,34 @@ export function updatePlayer(dt, t, zone, riftOpen) {
 
   player.pos.addScaledVector(player.vel, dt);
 
-  // ---- THE BULWARK ----------------------------------------------------------------
+  // ---- THE BULWARK AND THE DECK GEAR ---------------------------------------------------
   // Held at the rail on all four sides while he is on the deck, with ONE gap: the
-  // boarding bay on the +Z rail. Stepping off through that bay is the only way off the
-  // raft, which is exactly what the ladder and the davit were built around.
+  // boarding bay on the +X rail. Stepping off through that bay is the only way off the
+  // raft, which is exactly what the ladder and the davit were built around. And held off
+  // every solid thing standing on the planks (systems/raft/colliders.js).
   // Deck-side ONLY. Nothing here touches the water: swimming under the raft, the ladder
   // grab above, the one-way platform below and HOSE_REQ are all untouched, because this
   // block cannot run unless he was standing on the planks this frame.
+  // RAFT-LOCAL: his waist is taken into the raft's frame (its heave, surge, pitch and
+  // roll — updateRaft refreshed matrixWorld this frame), resolved there, and the push is
+  // carried back out through the raft's own axes.
   if (onDeck && player.grounded) {
-    const rx = player.pos.x - raft.position.x, rz = player.pos.z - raft.position.z;
-    if (rx > RAIL_IN) { player.pos.x = raft.position.x + RAIL_IN; if (player.vel.x > 0) player.vel.x = 0; }
-    else if (rx < -RAIL_IN) { player.pos.x = raft.position.x - RAIL_IN; if (player.vel.x < 0) player.vel.x = 0; }
-    if (rz < -RAIL_IN) { player.pos.z = raft.position.z - RAIL_IN; if (player.vel.z < 0) player.vel.z = 0; }
-    // The dive side: rail everywhere except across the ladder bay, where the timber is
-    // genuinely absent and he walks out over the edge and falls, as he should.
-    else if (rz > RAIL_IN && (rx > BAY_HX || rx < -BAY_HX)) {
-      player.pos.z = raft.position.z + RAIL_IN; if (player.vel.z > 0) player.vel.z = 0;
+    _deckInv.copy(raft.matrixWorld).invert();
+    _deckP.set(player.pos.x, raft.position.y + DECK_TOP + 0.9, player.pos.z).applyMatrix4(_deckInv);
+    const e = raft.matrixWorld.elements;
+    _deckL.x = _deckP.x; _deckL.z = _deckP.z;
+    // velocity into the raft's axes (the inverse of a rotation is its transpose; the
+    // raft carries no scale)
+    _deckV.x = e[0] * player.vel.x + e[1] * player.vel.y + e[2] * player.vel.z;
+    _deckV.z = e[8] * player.vel.x + e[9] * player.vel.y + e[10] * player.vel.z;
+    const vx0 = _deckV.x, vz0 = _deckV.z;
+    if (resolveDeck(_deckL, _deckV)) {
+      const dx = _deckL.x - _deckP.x, dz = _deckL.z - _deckP.z;
+      player.pos.x += e[0] * dx + e[8] * dz;
+      player.pos.z += e[2] * dx + e[10] * dz;
+      const dvx = _deckV.x - vx0, dvz = _deckV.z - vz0;
+      player.vel.x += e[0] * dvx + e[8] * dvz;
+      player.vel.z += e[2] * dvx + e[10] * dvz;
     }
   }
 

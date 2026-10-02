@@ -52,8 +52,8 @@ const lab = window.lab = { meshes: [], res: null };
 // ?asset=<name>: the pipeline's baked output (assets/sleepers/<name>/), every piece laid out
 async function loadAsset(name) {
   const { loadSculpted } = await import('./src/lib/assets.js');
-  // (additive, plants) &base=assets/plants/ for assets that live outside assets/sleepers/
-  const a = await loadSculpted(q.get('base') || ('assets/sleepers/' + name + '/'), name);
+  // ?dir= (fauna2: assets/fauna/); (additive, plants) &base=assets/plants/ names the folder outright
+  const a = await loadSculpted(q.get('base') || ((q.get('dir') || 'assets/sleepers/') + name + '/'), name);
   lab.asset = a;
   const mats = {};
   for (const set in a.maps) {
@@ -68,7 +68,7 @@ async function loadAsset(name) {
   for (const [n, g] of Object.entries(a.geos)) {
     // (additive, plants) a piece named <set>_... takes its own set's maps
     const pre = n.split('_')[0];
-    const m = new THREE.Mesh(g, mats[pre] || mats[setOf[n] || 'limbs']);
+    const m = new THREE.Mesh(g, mats[pre] || mats[setOf[n] || 'limbs'] || mats[Object.keys(mats)[0]]);
     m.userData.lit = m.material;
     g.computeBoundingBox();
     const bb = g.boundingBox, w = bb.max.x - bb.min.x;

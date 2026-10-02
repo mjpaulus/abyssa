@@ -320,11 +320,37 @@ against explicit contracts and reviewed on return.
     only, so animated sub-groups are untouched). Whole raft: ~10 static draw calls,
     ~56k tris (chamfered planks, lathed drums, hex bolts — the geometry pass).
   - THE FRAME, raft-local: deck top **y = +0.11**, footprint **x,z ∈ [-4.7, +4.7]** —
-    player.js hard-codes both. Waterline y = -0.55. +Z is the dive side. The walk lane
-    (x ∈ [-1.1,1.1], z ∈ [1.7,4.7]) and the bulwark gap at z = +4.7 are the dive
-    ritual; the boarding ladder hangs in that gap. There is NO per-object collision on
-    deck — the deck is one flat platform — so tall gear lives against the bulwarks
-    where nobody treads.
+    player.js hard-codes both. Waterline y = -0.55. **+X is the dive side** (moved off +Z
+    2026-10-02, Michael: "move the ladder to the left side. The air hose rig is in the
+    way" — left = screen-left from the old deck camera facing +Z, which is +X). The walk
+    lane (x ∈ [1.7,4.7], z ∈ [-1.1,1.1]) and the bulwark gap on the +X rail at
+    |z| < 1.2 (`LADDER_Z` 0, `GAP_HZ` 1.2 in raft/colliders.js) are the dive ritual; the
+    ladder hangs at x 4.78 in that gap, between the flotation drums (|z| >= 2.35 — a gap
+    elsewhere on a side rail would hang the ladder into a drum). Sal spawns at (2.6, 0)
+    facing +X (`DECK_SPAWN_YAW` in game.js; every camera snap follows his yaw). Ladder
+    grab: x 4.2..5.9, |z| < 1.2, facing -X. The GALLOWS stands BESIDE the gap, not over
+    it: davit.js still authors in its old frame (x athwart, +z outboard) and turns it
+    +PI/2 onto the +X rail at `RIG_Z` 2.9 (feet (3.75, 1.6)/(3.75, 4.2), sheave
+    (5.6, 3.3, 2.9) — 0.36 clear of the forward drum's end), tackle/shot line swung away
+    from the gap, anchor lantern toward it. The hose reel is built in the same rig frame
+    (raft (0.6, 2.9)), so its lead runs straight to the block. The +Z rail is whole now:
+    the lashed cargo moved there (centre (-1.12, 3.72)), the boat hook lies along it,
+    the hose stock moved aft of the gap (3.95, -1.95).
+  - DECK COLLISION IS REAL (raft/colliders.js, 2026-10-02): every solid thing on the
+    planks is a 2D box or capsule in raft-local x/z (bulwark runs with the gap, gallows
+    legs + tie rods, reel, pump, servants, barrels, butt, hose stock, cargo, bench,
+    stool, boots, helmet stand, slate rail, shelf, chart table, cleats). player.js takes
+    his waist into the raft frame (pitch/roll/heave), pushes the 0.32 body circle out by
+    closest point (two passes), removes only the inward velocity, carries the push back
+    out through the raft's axes. Probed by walking (real W keydown) into every shape:
+    penetration <= 0.02 (sampling noise from the raft moving between frames), no
+    oscillation. NO-SLOT RULE: any gap narrower than a body (0.64) between two shapes is
+    a slot he presses into while two push-outs fight (= jitter) — so gaps are FILLED
+    (gear near a bulwark runs its shape to the timber, clusters are bridged), which is
+    why some shapes are larger than their object. MOVE AN OBJECT, MOVE ITS COLLIDER LINE,
+    then re-check for slots. Low things a boot steps over are
+    deliberately absent. The camera does NOT collide with deck gear (it sits ~9 back,
+    off the boat).
   - Board width is the whole deck read: at 8 boards across the span they were metre-
     wide slabs and the deck rendered as facets. 44 rows, each `weather()`ed as a whole
     board (boards weather as boards, not as one sheet of noise).

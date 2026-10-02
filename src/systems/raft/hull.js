@@ -141,13 +141,15 @@ function buildDeck(P, wood, wood2, iron) {
 // ---- bulwark / toe rail -----------------------------------------------------------------
 // The single biggest silhouette change over the old pallet-deck: a solid low wall around
 // the edge in place of open planking, with scuppers cut through its base so a boarding
-// sea has somewhere to go. SHARED INVARIANT: no rail across x in [-1.1, 1.1] on the +Z
-// edge — that gap is Sal's dive step-off and davit.js hangs the boarding ladder there.
+// sea has somewhere to go. SHARED INVARIANT: no rail across z in [-1.2, 1.2] on the +X
+// edge — that gap is Sal's dive step-off and davit.js hangs the boarding ladder there
+// (moved off the +Z rail 2026-10-02, where the gallows stood over it; the +Z rail is
+// whole now). player.js's deck colliders carry the same two runs.
 function buildBulwark(P, wood, iron) {
-  wallRun(P, wood, iron, 'x', -FOOT, -1.20, FOOT, [{ at: -2.9 }]);
-  wallRun(P, wood, iron, 'x', 1.20, FOOT, FOOT, [{ at: 2.9 }]);
+  wallRun(P, wood, iron, 'x', -FOOT, FOOT, FOOT, [{ at: -2.9 }, { at: 0 }, { at: 2.9 }]);
   wallRun(P, wood, iron, 'x', -FOOT, FOOT, -FOOT, [{ at: -1.6 }, { at: 1.6 }]);
-  wallRun(P, wood, iron, 'z', -FOOT, FOOT, FOOT, [{ at: -2.0 }, { at: 2.0 }]);
+  wallRun(P, wood, iron, 'z', -FOOT, -1.20, FOOT, [{ at: -2.0 }]);
+  wallRun(P, wood, iron, 'z', 1.20, FOOT, FOOT, [{ at: 2.0 }]);
   wallRun(P, wood, iron, 'z', -FOOT, FOOT, -FOOT, [{ at: 1.4 }]);
 
   // corner posts only — the two ends flanking the dive gap are left as a plain cut wall
