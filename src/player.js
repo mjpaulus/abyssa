@@ -348,6 +348,9 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     }
   }
   const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY);
+  // Published for diver.js: where the boots actually stand (the grounded snap below holds
+  // his centre up to 1.2 above it for a few frames while he settles).
+  player.floorY = overRift ? null : floorY;
 
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
   // Off the bottom, holding Shift is hauling hard (2.2x, was 2x on a 42 thrust): the sprint

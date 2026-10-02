@@ -2489,7 +2489,11 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
   // very body he is standing with. Translation is the honest frame here — he heaves and
   // surges with the boat, which is the part the eye reads.
   const onDeck = !!player.onDeck;
-  const soleY = (player.grounded ? player.pos.y : player.groundY) - EYE_H;
+  // The REAL floor, not his centre: player.js grounds him up to 1.2 u above the bottom and
+  // eases him down at 10/s ("boots find the bottom a little before the body"), so a landing
+  // claimed its anchors in mid-water and the stance boot was pulled up to the hip (knee
+  // 140 deg for a second after every drifting landing). player.floorY is that floor.
+  const soleY = (player.grounded ? (player.floorY != null ? Math.min(player.pos.y, player.floorY) : player.pos.y) : player.groundY) - EYE_H;
   const ox = onDeck ? raft.position.x : 0, oy = onDeck ? raft.position.y : 0, oz = onDeck ? raft.position.z : 0;
   const cy = Math.cos(yawF), sy = Math.sin(yawF);
 
@@ -2524,6 +2528,11 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     // the arms come out for balance and the bonnet nods into the impact
     rcA.v += 0.9 * hit * SAL.react; rcH.v += 0.6 * hit * SAL.react; rcD.v -= 0.5 * hit * SAL.react;
     ftR.planted = ftL.planted = false;
+    // A boot that comes down mid-swing (he lands drifting, so the gait is already turning)
+    // is carried to its landing from WHERE IT IS. Its toe-off memory is from before he left
+    // the bottom — a stale point metres away — and blending toward it folded the knee to
+    // 140 deg and held the boot up at the hip for a second after every drifting landing.
+    for (let i = 0; i < 2; i++) { const f = FTS[i]; f.ln = true; f.lnU = -1; f.lnX = f.wx; f.lnY = f.wy; f.lnZ = f.wz; }
   }
   prevGrounded = !!player.grounded;
 
@@ -2951,7 +2960,11 @@ const _hj = V3();
 function pelvisDrop(dt, player, gw) {
   diver.updateMatrix(); diver.body.updateMatrix(); diver.hips.updateMatrix();
   _mH.multiplyMatrices(diver.matrix, diver.body.matrix).multiply(diver.hips.matrix);
-  const soleY = (player.grounded ? player.pos.y : player.groundY) - EYE_H;
+  // The REAL floor, not his centre: player.js grounds him up to 1.2 u above the bottom and
+  // eases him down at 10/s ("boots find the bottom a little before the body"), so a landing
+  // claimed its anchors in mid-water and the stance boot was pulled up to the hip (knee
+  // 140 deg for a second after every drifting landing). player.floorY is that floor.
+  const soleY = (player.grounded ? (player.floorY != null ? Math.min(player.pos.y, player.floorY) : player.pos.y) : player.groundY) - EYE_H;
   // Mid-stance / standing ceiling: the knee never straighter than kMid walking, kIdle
   // standing, over the floor at his centre.
   const kM = gKIdle + (gKMid - gKIdle) * gw;
