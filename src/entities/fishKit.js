@@ -84,7 +84,7 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 // Everything below works in the CANONICAL frame (head z = +0.5, length 1); the 'fauna' frame
 // maps in/out at the edges (toCanon / the spec's xf).
 export function makeFish(S) {
-  const K = S.prof, tmp = [0, 0, 0];
+  const K = S.prof, tmp = [0, 0, 0], tmpF = [0, 0, 0], finMin = S.finMin || 0;
   const fins = S.fins.map(f => {
     const F = Object.assign({ th: 0.004, rays: 12, scal: 0.18, spine: 0 }, f);
     if (F.med) { F.O = [0, 0, 0.5]; F.A = [0, 1, 0]; F.B = [0, 0, -1]; }
@@ -94,7 +94,12 @@ export function makeFish(S) {
     const r0 = F.pts[F.root[0]], r1 = F.pts[F.root[1]];
     F.r0 = r0; F.r1 = r1;
     let far = 1e-6;
-    for (const p of F.P) far = Math.max(far, segD(r0[0], r0[1], r1[0], r1[1], p[0], p[1]));
+    // dorsal/anal fins run along the body: root -> free edge is height off the skin
+    F.alongBody = !!F.med && !/caudal/.test(F.name);
+    for (const p of F.P) {
+      if (F.alongBody) { profAt(K, clamp(p[1], 0, 1), tmpF); far = Math.max(far, Math.abs(p[0]) - (p[0] >= 0 ? tmpF[0] : tmpF[1]) * 0.92); }
+      else far = Math.max(far, segD(r0[0], r0[1], r1[0], r1[1], p[0], p[1]));
+    }
     F.far = far;
     F.focus = F.focus || [(r0[0] + r1[0]) / 2 - (F.med ? Math.sign((r0[0] + r1[0]) / 2 || 1) * far * 0.25 : far * 0.25), (r0[1] + r1[1]) / 2];
     let amin = 9, amax = -9;
@@ -137,17 +142,23 @@ export function makeFish(S) {
   function finD(F, x, y, z) {
     const px = x - F.O[0], py = y - F.O[1], pz = z - F.O[2];
     const a = px * F.A[0] + py * F.A[1] + pz * F.A[2], b = px * F.B[0] + py * F.B[1] + pz * F.B[2], w = px * F.W[0] + py * F.W[1] + pz * F.W[2];
-    const s = clamp(segD(F.r0[0], F.r0[1], F.r1[0], F.r1[1], a, b) / F.far, 0, 1);
+    let s;
+    if (F.alongBody) { profAt(K, clamp(b, 0, 1), tmpF); const sy = a >= 0 ? tmpF[0] : tmpF[1]; s = clamp((Math.abs(a) - sy * 0.92) / F.far, 0, 1); }
+    else s = clamp(segD(F.r0[0], F.r0[1], F.r1[0], F.r1[1], a, b) / F.far, 0, 1);
     const ang = Math.atan2(b - F.focus[1], a - F.focus[0]);
     const q = clamp((ang - F.amin) / (F.amax - F.amin + 1e-6), 0, 1);
     const fq = q * F.rays, rq = fq - Math.floor(fq) - 0.5;
-    const ray = Math.exp(-(rq * rq) / (F.spine ? 0.018 : 0.010));
+    const ray = F.rays > 0 ? Math.exp(-(rq * rq) / (F.spine ? 0.018 : 0.010)) : 0.4;
     let d2 = polyD(F.P, a, b);
     // scallop: the membrane recedes between the rays near the free edge
     d2 += F.scal * F.far * 0.12 * (1 - ray) * sst(0.55, 1.0, s) * (F.spine ? 2.2 : 1);
     const th = F.th * (1 - 0.6 * s) * (1 + (F.spine ? 0.9 : 0.45) * ray);
-    const e = Math.abs(w) - th;
-    FL.a = a; FL.b = b; FL.w = w; FL.s = s; FL.q = q; FL.ray = ray; FL.d2 = d2;
+    // the MESH carries a fin at least finMin thick (two cells of the low's grid, so the
+    // dual contour gives each face its own vertices and QEM can decimate the plate); a
+    // bake-only layer (finThin) pares the high back to the true membrane
+    const thM = Math.max(th, finMin);
+    const e = Math.abs(w) - thM;
+    FL.a = a; FL.b = b; FL.w = w; FL.s = s; FL.q = q; FL.ray = ray; FL.d2 = d2; FL.th = th; FL.thM = thM;
     return d2 > 0 || e > 0 ? Math.hypot(Math.max(d2, 0), Math.max(e, 0)) : Math.max(d2, e);
   }
   // the eye: centre sunk into the flank, both sides (x = +-)
@@ -161,7 +172,9 @@ export function makeFish(S) {
     const r = S.eye.r, sink = S.eye.sink != null ? S.eye.sink : 0.38;
     eye = { c: [xs - n[0] * r * sink, S.eye.y - n[1] * r * sink, 0.5 - S.eye.t], n, r, look: S.eye.look ? norm(S.eye.look) : n };
   }
-  return { S, K, fins, body, finD, FL, eye, profAt: (t, o) => profAt(K, t, o) };
+  let photoR = 0.012;
+  if (S.photo) { photoR = 0; for (const p of S.photo) photoR += p.r / S.photo.length; }
+  return { S, K, fins, body, finD, FL, eye, photoR, profAt: (t, o) => profAt(K, t, o) };
 }
 
 // ---- the SDF spec (sculpt.js nodes) ---------------------------------------------------------
@@ -178,27 +191,30 @@ export function fishSpec(fish) {
   // paired fins are mirrored to the -x side
   const finNodes = fins.map((F, i) => F.pair ? { t: 'mir', ax: 0, ch: [finLeaves[i]] } : finLeaves[i]);
   let sp = { t: 'u', k: S.finK || 0.006, ch: [bodyLeaf, ...finNodes] };
-  // mouth: a gape groove from the snout to the corner, lips standing either side
-  if (S.mouth) {
-    const M = S.mouth, tc = M.t;
-    const len = tc + 0.02;
-    sp = { t: 's', k: 0.003, m: FM.MOUTH, ch: [sp, { t: 'mir', ax: 0, ch: [{ t: 'ellip', c: [0, M.y, 0.5 - tc * 0.5 + 0.01], r: [M.halfW || 0.06, M.w, len * 0.5 + 0.004], e: [M.tilt || 0, 0, 0], m: FM.MOUTH }] }] };
-  }
   // eyes: socket cut, eyeball in, an orbit rim
   if (eye) {
     const c = eye.c, r = eye.r, n = eye.n;
-    const sock = { t: 'mir', ax: 0, ch: [{ t: 'sphere', c: [c[0], c[1], c[2]], r: r * 1.10 }] };
-    sp = { t: 's', k: r * 0.25, m: FM.BODY, ch: [sp, sock] };
+    // the socket is cut a little SMALLER than the ball, so the ball fills it (a gap thinner
+    // than the low's grid pinches the dual contour into non-manifold edges QEM cannot touch)
+    // and the smooth cut leaves a soft orbit rim round it
+    const sock = { t: 'mir', ax: 0, ch: [{ t: 'sphere', c: [c[0], c[1], c[2]], r: r * 0.96 }] };
+    sp = { t: 's', k: r * 0.35, m: FM.BODY, ch: [sp, sock] };
     const ball = { t: 'mir', ax: 0, ch: [{ t: 'sphere', c, r, m: FM.EYE }] };
-    sp = { t: 'u', k: 0, ch: [sp, ball] };
+    sp = { t: 'u', k: r * 0.06, ch: [sp, ball] };
   }
   // displacement: operculum groove + gill-cover edge (mesh), scales + pores + grain (bake)
   const L = [];
   if (S.op) L.push({ type: 'fn', amp: 0.006, fn: opFn(fish) });
+  // the mouth as relief, not a cut: a shallow gape groove in the mesh, the deep dark line
+  // and the lips in the bake (a slit thinner than the grid pinches the low)
+  if (S.mouth) { L.push({ type: 'fn', amp: 0.004, fn: mouthFn(fish, 0.0025) }); L.push({ type: 'fn', amp: 0.006, bake: true, fn: mouthFn(fish, 0.0045, true) }); }
   if (S.scales) L.push({ type: 'fn', amp: S.scales.amp * 1.6, bake: true, fn: scaleFn(fish) });
   L.push({ type: 'fn', amp: 0.0016, bake: true, fn: finRayFn(fish) });
+  if (S.finMin) L.push({ type: 'fn', amp: S.finMin, bake: true, fn: finThinFn(fish) });
   if (S.lat) L.push({ type: 'fn', amp: 0.0012, bake: true, fn: latFn(fish) });
-  if (S.scutes) L.push({ type: 'fn', amp: 0.0035, fn: scuteFn(fish) });
+  if (S.scutes) L.push({ type: 'fn', amp: 0.0035, bake: true, fn: scuteFn(fish) });
+  if (S.photo) L.push({ type: 'fn', amp: 0.004, fn: (x, y, z) => { const c = canonPt(fish, x, y, z); const d = photoD(fish, c[0], c[1], c[2]); return d < 1.6 ? 0.0032 * fish.photoR * (d < 1 ? Math.sqrt(1 - d * d) : -0.25 * Math.sin((d - 1) / 0.6 * Math.PI)) / 0.012 : 0; } });
+  if (S.skin) L.push({ type: 'fbm', amp: S.skin.amp, f: S.skin.f, oct: 3, seed: 11, bake: true });
   L.push({ type: 'grain', amp: 0.0004, f: 260, seed: 7, bake: true });
   sp = { t: 'disp', L, ch: [sp] };
   return S.frame === 'fauna' ? toFaunaFrame(sp, S.faunaLen || 2) : sp;
@@ -217,6 +233,22 @@ export function toCanon(S, x, y, z) {
   return [-z / L, y / L, x / L];
 }
 
+// layers run inside the spec's canonical subtree (the fauna xf wraps them), so a layer's
+// point is already canonical
+function canonPt(fish, x, y, z) { return [x, y, z]; }
+// photophore stations: [{ t, yn, r }] on the skin (both sides); distance in station radii
+export function photoD(fish, x, y, z) {
+  const o = fish._pc || (fish._pc = {});
+  bodyCoord(fish, x, y, z, o);
+  if (o.k < 0.7 || o.k > 1.35) return 9;
+  let best = 9;
+  for (const st of fish.S.photo) {
+    const dt = o.t - st.t, dy = (o.yn - st.yn) * o.b;
+    const d = Math.hypot(dt, dy) / st.r;
+    if (d < best) best = d;
+  }
+  return best;
+}
 // where on the body a point is: t, the normalised height yn (-1 belly .. 1 back), the radial
 // ratio k (1 on the skin), the side angle
 function bodyCoord(fish, x, y, z, o) {
@@ -224,6 +256,22 @@ function bodyCoord(fish, x, y, z, o) {
   const a = P[2], b = (P[0] + P[1]) * 0.5, cy = (P[0] - P[1]) * 0.5;
   o.t = t; o.yn = (y - cy) / b; o.k = Math.hypot(x / a, (y - cy) / b); o.th = Math.atan2(y - cy, Math.abs(x)); o.b = b; o.a = a; o.cy = cy;
   return o;
+}
+// the gape: a groove along the mouth line from the snout tip back to the corner (tilted by
+// M.tilt: + downturned, - oblique/upturned), lips raised either side in the bake
+function mouthFn(fish, depth, lips) {
+  const M = fish.S.mouth, o = {}, tl = Math.tan(M.tilt || 0);
+  return (x, y, z) => {
+    bodyCoord(fish, x, y, z, o);
+    if (o.k < 0.6 || o.k > 1.4 || o.t > M.t + 0.03 || o.t < -0.02) return 0;
+    const yl = M.y + tl * (M.t - o.t) * 0.5;        // the line's height along the snout
+    const dy = y - yl;
+    const along = sst(-0.02, 0.01, o.t) * (1 - sst(M.t - 0.005, M.t + 0.012, o.t));
+    const w = Math.max(0.0015, M.w * 0.6);
+    const g = -depth * Math.exp(-((dy / w) ** 2));
+    const lip = lips ? 0.0008 * (Math.exp(-(((Math.abs(dy) - w * 1.6) / (w * 0.8)) ** 2))) : 0;
+    return (g + lip) * along;
+  };
 }
 function opFn(fish) {
   const op = fish.S.op, o = {};
@@ -294,6 +342,18 @@ function scuteFn(fish) {
     const u = (o.t - Sc.t0) / (Sc.t1 - Sc.t0) * Sc.n, f = u - Math.floor(u);
     const plate = sst(0.0, 0.7, f) * (1 - sst(0.85, 1.0, f));
     return Sc.h * band * (0.5 + 0.5 * plate);
+  };
+}
+function finThinFn(fish) {
+  const FL = fish.FL;
+  return (x, y, z) => {
+    if (fish.body(x, y, z) < 0.003) return 0;
+    let best = 1e9, o = 0;
+    for (const F of fish.fins) {
+      const d = fish.finD(F, F.pair ? Math.abs(x) : x, y, z);
+      if (d < best) { best = d; o = -(FL.thM - FL.th); }
+    }
+    return best < 0.012 ? o : 0;
   };
 }
 function finRayFn(fish) {

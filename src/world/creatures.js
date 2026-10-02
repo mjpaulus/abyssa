@@ -494,7 +494,7 @@ function fishSculptMaterial(sp, u, maps) {
         float wet = (1.0 - smoothstep(0.06, 0.12, roughnessFactor)) * step(0.25, vSurf.z) * body;
         float fr = pow(1.0 - clamp(abs(dot(normal, fV)), 0.0, 1.0), 2.2);
         vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (vec3(0.0, 0.33, 0.67) + fr * 0.85 + vPh * 0.05 + uSkinB.x));
-        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * (0.6 + 0.8 * irid), uSkinA.w * body * (1.0 - wet) * (0.15 + 0.6 * fr));
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * (0.7 + 0.6 * irid), uSkinA.w * body * (1.0 - wet) * (0.1 + 0.4 * fr));
         metalnessFactor = 0.0;
         // fin membrane: light from behind comes through, more toward the free edge
         totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * (1.0 - body) * (0.25 + 0.35 * vSurf.y) * 0.5;
