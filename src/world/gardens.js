@@ -47,6 +47,7 @@ import { rockColliders, F_TRANS } from './flora.js';
 import { bladeMapSet } from '../lib/textures.js';
 import { windState } from './water.js';
 import { uPush, uPushV, uJolt, PUSH_GLSL, PUSH_N, tickStir } from './stir.js';
+import { plantAdopt, plantTick, setPlantMaterial } from './plants/plantKit.js';
 
 const TAU = Math.PI * 2;
 
@@ -81,37 +82,54 @@ varying vec4 vGd; varying vec3 vGl;
 attribute vec2 aBU;     // blade uv (across, along + 1); (0,0) off-blade
 varying vec3 vBl;
 uniform vec4 uJolt;
+// (plants) a BatchedMesh of sculpted species (plants/plantKit.js) runs this same program:
+// its instance matrix comes from three's batching texture and its aInst from uInstTex
+#ifdef USE_BATCHING
+  uniform highp sampler2D uInstTex;
+  #define GD_IM batchingMatrix
+#else
+  #define GD_IM instanceMatrix
+#endif
 ${PUSH_GLSL}`;
 
 const V_BODY = `
+#ifdef USE_BATCHING
+  vec4 gdInst;
+  {
+    int gdi = int(getIndirectIndex(gl_DrawID)), gdw = textureSize(uInstTex, 0).x;
+    gdInst = texelFetch(uInstTex, ivec2(gdi % gdw, gdi / gdw), 0);
+  }
+#else
+  vec4 gdInst = aInst;
+#endif
 // THE CURRENT FIELD (anim-fauna). One slowly-varying world-space flow drives every
 // plant, so a meadow moves TOGETHER: the surge (the back-and-forth of the swell) is a
 // wave travelling DOWNSTREAM through the beds at ~4 u/s, so neighbours sway in phase and
 // a stand ripples from its upstream edge; gusts are a longer, faster envelope (~12 u/s)
 // that leans a whole stand over and lets it recover; tips lag their base. The instance
 // phase is only a small stiffness/phase jitter now, never the whole motion.
-vec3 cfIw = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+vec3 cfIw = (modelMatrix * GD_IM * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
 float cfMag = length(uCur);
 vec2 cfD = cfMag > 1e-5 ? uCur / cfMag : vec2(1.0, 0.0);
 vec2 cfP = vec2(-cfD.y, cfD.x);
 float cfAl = dot(cfIw.xz, cfD), cfAc = dot(cfIw.xz, cfP);
-float cfNat = uFreq * (0.92 + 0.16 * fract(aInst.x * 0.159));
-float cfPh = uTime * cfNat - cfAl * 0.16 + sin(cfAc * 0.05) * 0.8 + aInst.x * 0.12;
+float cfNat = uFreq * (0.92 + 0.16 * fract(gdInst.x * 0.159));
+float cfPh = uTime * cfNat - cfAl * 0.16 + sin(cfAc * 0.05) * 0.8 + gdInst.x * 0.12;
 float cfG = 0.5 + 0.5 * sin(cfAl * 0.035 - uTime * 0.42 + sin(cfAc * 0.021 + uTime * 0.05) * 2.0);
 cfG = cfG * cfG * (3.0 - 2.0 * cfG);
 float cfS1 = sin(cfPh - aVA.y * 1.6), cfS2 = sin(cfPh * 1.71 - aVA.y * 3.2 + 1.3 + cfAc * 0.09);
-vec2 cfDisp = (cfD * cfMag * (0.30 + 0.45 * cfG + (0.25 + 0.30 * cfG) * cfS1) + cfP * cfMag * (0.3 * cfS2 * (0.5 + 0.5 * cfG))) * (aInst.y * uSway * aVA.x);
+vec2 cfDisp = (cfD * cfMag * (0.30 + 0.45 * cfG + (0.25 + 0.30 * cfG) * cfS1) + cfP * cfMag * (0.3 * cfS2 * (0.5 + 0.5 * cfG))) * (gdInst.y * uSway * aVA.x);
 // The flow is a WORLD direction: take it into this instance's frame (each plant is
 // yawed at random, and a local-space lean would point every one a different way).
 // M^T w over each column's length squared is exact for rotation x per-axis scale; the
 // length(M[0]) factor keeps the authored local amplitude.
-mat3 cfM = mat3(modelMatrix * instanceMatrix);
+mat3 cfM = mat3(modelMatrix * GD_IM);
 vec3 cfC2 = max(vec3(dot(cfM[0], cfM[0]), dot(cfM[1], cfM[1]), dot(cfM[2], cfM[2])), vec3(1e-6));
 vec3 cfL = (transpose(cfM) * vec3(cfDisp.x, 0.0, cfDisp.y)) / cfC2 * sqrt(cfC2.x);
 float gw = cfPh;
 vec2 gd = cfL.xz;
 transformed += cfL;
-transformed.y -= dot(gd, gd) * aInst.z;
+transformed.y -= dot(gd, gd) * gdInst.z;
 if (aFlut > 0.0) {
   float gf = gw * 2.2 + aVA.w;
   transformed += vec3(sin(gf) * 0.7, cos(gf * 1.31) * 0.5, sin(gf * 0.73 + 2.1) * 0.7) * aFlut;
@@ -135,8 +153,15 @@ float gFl = 0.0;
   // for a short stretch of a slow cycle, then it blooms back — and ALL of them snap in
   // when something big comes near or the ground jolts. aVA.z = plume weight.
   float grc = max(smoothstep(0.62, 0.92, sin(uTime * 0.17 + aVA.w)), gFl * (0.85 + 0.15 * fract(aVA.w * 3.7)));
+  #ifdef GD_SCULPT
+    // (plants) a sculpted colony: each plume folds toward ITS OWN mouth (aBU = the mouth's
+    // xz) and sinks into its tube
+    transformed.xz = aBU + (transformed.xz - aBU) * (1.0 - 0.7 * aVA.z * grc);
+    transformed.y -= aVA.z * grc * 0.17;
+  #else
   transformed.xz *= 1.0 - 0.85 * aVA.z * grc;
   transformed.y -= aVA.z * grc * 0.42;
+  #endif
 #endif
 #ifdef GD_FLINCH
   // anemone tentacles / crinoid arms: curl in toward the axis and down
@@ -145,7 +170,7 @@ float gFl = 0.0;
 #endif
 // PARTING: pushed aside by whatever brushes through (stir.js spheres).
 if (uSway > 0.0) {
-  vec3 gWp = stirPush((modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz, aVA.x);
+  vec3 gWp = stirPush((modelMatrix * GD_IM * vec4(transformed, 1.0)).xyz, aVA.x);
   transformed += (transpose(cfM) * gWp) / cfC2;
 }
 vBl = vec3(aBU, aVA.w);
@@ -160,7 +185,7 @@ float gdd = distance(giw, cameraPosition);
 float gfade = 1.0 - smoothstep(uCull.x, uCull.y, gdd);
 // Fully faded instances collapse to a point: no fragments at all past the band.
 transformed *= step(0.002, gfade);
-vGd = vec4(aVA.z, aVA.y, gfade, aInst.w);
+vGd = vec4(aVA.z, aVA.y, gfade, gdInst.w);
 vGl = position;
 #ifdef GD_TIP
   // House law for additive glow: fade to black by the LOCAL fog density, never toward
@@ -196,6 +221,18 @@ const F_DITHER = `
 }`;
 
 const F_BODY = `
+#ifdef GD_ALPHA
+  // (plants) an alpha card: ORM.B is the baked coverage (1 where the high exists — a fan's
+  // net, a glass sponge's lattice, a crinoid's pinnules). Alpha-HASHED, not blended: opaque,
+  // unsorted, and at range the mip-averaged coverage turns into a stochastic screen-door
+  // the TAA resolves, instead of the lattice vanishing under a fixed threshold.
+  {
+    float gcv = texture2D(aoMap, vAoMapUv).b;
+    float ghs = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
+    if (gcv < 0.04 + 0.92 * ghs) discard;
+    floraThin = 1.0;
+  }
+#endif
 #ifdef GD_BLADE
   // THIN BLADE (polish-world, flora.js's idiom): rib + veins from bladeMapSet, a
   // derivative-frame normal, paler/yellower rib and tip, per-blade hue, a ruffled
@@ -267,13 +304,31 @@ const F_BODY = `
   totalEmissiveRadiance += diffuseColor.rgb * uSSS * (0.18 + 0.82 * vGd.y) * (0.3 + 0.7 * gfr);
 #endif`;
 
+// (plants) LIT subsurface for the sculpted species: flora.js's FLORA_SSSL idea (the scatter a
+// living tissue adds is light it RECEIVED, re-emitted softly) instead of GD_SSS's emissive,
+// which glows in a lightless zone. vGd.y = normalised height, so tips scatter more.
+const F_SSSL = `
+#ifdef GD_SSSL
+{
+  vec3 sIrr = (reflectedLight.directDiffuse + reflectedLight.indirectDiffuse) / max(diffuseColor.rgb, vec3(0.04));
+  float sFr = pow(1.0 - clamp(dot(normalize(vViewPosition), normal), 0.0, 1.0), 2.0);
+  reflectedLight.indirectDiffuse += diffuseColor.rgb * sIrr * uSSS * (0.25 + 0.75 * vGd.y) * (0.3 + 0.7 * sFr) * (0.5 + 0.5 * floraThin);
+}
+#endif`;
+
 function gardenMat(o) {
+  const SC = o.sculpt;   // (plants) baked maps for a sculpted species: plants/plantKit.js
   const m = new THREE.MeshStandardMaterial({
-    color: 0xffffff, vertexColors: true, roughness: o.rough ?? 0.85, metalness: o.metal ?? 0,
+    color: 0xffffff, vertexColors: !SC, roughness: SC ? 1 : (o.rough ?? 0.85), metalness: o.metal ?? 0,
     side: o.side ?? THREE.FrontSide
   });
+  if (SC) {
+    m.map = SC.map; m.normalMap = SC.normalMap; m.roughnessMap = SC.orm; m.aoMap = SC.orm;
+    m.aoMapIntensity = o.ao ?? 1; m.normalScale.set(1, 1);
+  }
   m.defines = {};
   for (const d of o.def || []) m.defines['GD_' + d] = 1;
+  if (SC) m.defines.GD_SCULPT = 1;
   if (m.defines.GD_BLADE) m.forceSinglePass = true;
   const cull = o.cull ?? 90;
   m.onBeforeCompile = sh => {
@@ -281,6 +336,7 @@ function gardenMat(o) {
       const BS = bladeMapSet();
       Object.assign(sh.uniforms, { uBladePack: { value: BS.pack }, uBladeNrm: { value: BS.nrm }, uTrans: { value: o.trans ?? 1 } });
     }
+    if (m.userData.uInstTex) sh.uniforms.uInstTex = m.userData.uInstTex;
     Object.assign(sh.uniforms, uni, {
       uCull: { value: new THREE.Vector2(cull * 0.72, cull) },
       uSway: { value: o.sway ?? 0 }, uFreq: { value: o.freq ?? 0.85 },
@@ -295,7 +351,7 @@ function gardenMat(o) {
       .replace('#include <common>', '#include <common>' + F_HEAD)
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + F_DITHER)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
-      .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS);
+      .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS + F_SSSL);
     injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): the plants are organic
   };
   m.customProgramCacheKey = () => 'gardens|' + o.key;
@@ -963,6 +1019,9 @@ const pick = (list, i, lo, hi) => _c.set(list[i % list.length]).multiplyScalar(r
 export function buildGardens() {
   if (built) return;
   built = true;
+  // (plants) the sculpted species sway in this program family: plantKit builds its batch
+  // materials through gardenMat (one per adopted key, once, at asset arrival)
+  setPlantMaterial(o => gardenMat(o));
   _ge = stream(0x6A4DE5);
   mats = makeMats();
   for (let zi = 0; zi < 3; zi++) { zones[zi] = new THREE.Group(); zones[zi].name = 'gardens' + zi; scene.add(zones[zi]); }
@@ -1127,6 +1186,18 @@ function layout() {
     }
     seal(im, L.length);
   }
+
+  // (plants) the sculpted species take these layouts over once their asset is in. Pure
+  // bookkeeping: no stream draw, nothing about the layout above changes. The material
+  // options mirror makeMats() (same sway / range / flinch); GD_SSS's emissive becomes the
+  // lit SSSL, and the alpha / sculpt defines are added by plantKit.
+  plantAdopt('g_fan', 'fan', IM.fan, { cap: CAP.fan, mat: { sway: 1, freq: 0.8, cull: CULL.fan, sss: 0.4, def: ['SSSL'] } });
+  plantAdopt('g_stag', 'stag', IM.stag, { cap: CAP.stag, mat: { sway: 1, freq: 0.5, cull: CULL.stag } });
+  plantAdopt('g_barrel', 'barrel', IM.barrel, { cap: CAP.barrel, mat: { sway: 1, freq: 0.5, cull: CULL.barrel } });
+  plantAdopt('g_anem', 'anem', IM.anem, { cap: CAP.anem, mat: { sway: 1, freq: 1.0, cull: CULL.anem, sss: 0.3, def: ['SSSL', 'FLINCH'] } });
+  plantAdopt('g_worm', 'worm', IM.worm, { cap: CAP.worm, mat: { sway: 1, freq: 0.6, cull: CULL.worm, def: ['WORM'] } });
+  plantAdopt('g_crin', 'crin', IM.crin, { cap: CAP.crin, mat: { sway: 1, freq: 0.7, cull: CULL.crin, sss: 0.3, def: ['SSSL', 'FLINCH'] } });
+  plantAdopt('g_glass', 'glass', IM.glass, { cap: CAP.glass, mat: { sway: 1, freq: 0.4, cull: CULL.glass, sss: 0.4, def: ['SSSL'] } });
 }
 
 // ------------------------------------------------------------------ frame ----
@@ -1145,6 +1216,7 @@ export function updateGardens(dt, t) {
   const y = camera.position.y, off = !!window.__noGardens;   // __noGardens = A/B kill switch
   for (let zi = 0; zi < 3; zi++)
     zones[zi].visible = !off && y < zoneTop(zi) + 120 && y > zoneBottom(zi) - 150;
+  plantTick();   // (plants) after the gates: the batches mirror their hosts' visibility
 }
 
 // Debug surface: instance counts, tri counts per type, the meshes themselves.

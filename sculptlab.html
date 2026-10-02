@@ -52,19 +52,23 @@ const lab = window.lab = { meshes: [], res: null };
 // ?asset=<name>: the pipeline's baked output (assets/sleepers/<name>/), every piece laid out
 async function loadAsset(name) {
   const { loadSculpted } = await import('./src/lib/assets.js');
-  const a = await loadSculpted('assets/sleepers/' + name + '/', name);
+  // (additive, plants) &base=assets/plants/ for assets that live outside assets/sleepers/
+  const a = await loadSculpted(q.get('base') || ('assets/sleepers/' + name + '/'), name);
   lab.asset = a;
   const mats = {};
   for (const set in a.maps) {
     const t = a.maps[set];
-    mats[set] = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.ormMap, aoMap: t.ormMap, roughness: 1, metalness: 0 });
+    mats[set] = new THREE.MeshStandardMaterial({ map: t.map, normalMap: t.normalMap, roughnessMap: t.ormMap, aoMap: t.ormMap, roughness: 1, metalness: 0, side: THREE.DoubleSide });
+    if (t.normalMap.userData.rg) { const { patchNormalRG } = await import('./src/lib/microDetail.js'); patchNormalRG(mats[set]); }
   }
   lab.mats = { lit: null, flat: new THREE.MeshStandardMaterial({ color: 0x9a9a92, roughness: 0.6 }), wire: new THREE.MeshBasicMaterial({ color: 0xcccccc, wireframe: true }) };
   const setOf = {};
   for (const [k, v] of Object.entries(a.meta.stats.pieces)) setOf[k] = k === 'body' ? 'body' : 'limbs';
   let x = 0, z = 0, row = 0, tris = 0;
   for (const [n, g] of Object.entries(a.geos)) {
-    const m = new THREE.Mesh(g, mats[setOf[n] || 'limbs']);
+    // (additive, plants) a piece named <set>_... takes its own set's maps
+    const pre = n.split('_')[0];
+    const m = new THREE.Mesh(g, mats[pre] || mats[setOf[n] || 'limbs']);
     m.userData.lit = m.material;
     g.computeBoundingBox();
     const bb = g.boundingBox, w = bb.max.x - bb.min.x;

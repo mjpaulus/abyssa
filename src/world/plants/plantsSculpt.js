@@ -1,0 +1,796 @@
+// THE SESSILE SCULPTS — the sea's plants and fixed animals through the sculpt pipeline
+// (lib/sculpt.js SDF specs -> tools/blender high-to-low bake). Pure data builders: no THREE,
+// no scene. `node tools/blender/build.mjs plants` -> assets/plants/.
+//
+// Every species is authored in the SAME local frame the procedural builder in flora.js /
+// gardens.js used (base on y = 0, the old bounding box), so the placement streams, the
+// instance matrices and the sway amplitudes carry over untouched: plantKit.js swaps the
+// geometry under the existing layout. Each species has several VARIANTS, each its own
+// seeded spec (`variant(seed)`), and every variant a near low and a far LOD (bake.py `far`).
+//
+// Each species is its own texture SET (one material per batched draw anyway, so a shared
+// atlas would buy no draw; per-species sets keep texel density honest and let a zone stream
+// only what it shows).
+//
+// The runtime also needs, per vertex, the SWAY data the old procedural meshes carried (flex,
+// normalised height, part mask, part phase, flutter). Those are pure functions of position
+// and the variant's skeleton, so each variant records its skeleton in the meta (`sk`) and
+// plantKit.js derives the attributes once at load (SWAY below is the shared definition).
+import { mulberry } from '../../lib/sculpt.js';
+
+const TAU = Math.PI * 2;
+const E = (c, r, m = 0, e) => ({ t: 'ellip', c, r, m, e });
+const Sph = (c, r, m = 0) => ({ t: 'sphere', c, r, m });
+const Cap = (a, b, ra, rb = ra, m = 0) => ({ t: 'cap', a, b, ra, rb, m });
+const U = (k, ...ch) => ({ t: 'u', k, ch });
+const Sub = (k, a, ...b) => ({ t: 's', k, ch: [a, ...b] });
+const SubM = (k, m, a, ...b) => ({ t: 's', k, m, ch: [a, ...b] });
+const I = (k, ...ch) => ({ t: 'i', k, ch });
+const Tube = (p, r0, r1, n = 8, m = 0, rr) => ({ t: 'tube', p, r: [r0, r1], n, m, rr });
+const Tor = (c, R, r, m, e) => ({ t: 'torus', c, R, r, m, e });
+const Disp = (L, ch) => ({ t: 'disp', L, ch: [ch] });
+const Fn = (bb, f, m = 0) => ({ t: 'fn', bb, f, m });
+const sst = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+const norm = v => { const l = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / l, v[1] / l, v[2] / l]; };
+const add = (a, b, k = 1) => [a[0] + b[0] * k, a[1] + b[1] * k, a[2] + b[2] * k];
+const lerp3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
+const r3 = v => v.map(x => +x.toFixed(4));
+function bez(P, t) {
+  const u = 1 - t;
+  if (P.length === 3) return [0, 1, 2].map(i => u * u * P[0][i] + 2 * u * t * P[1][i] + t * t * P[2][i]);
+  return [0, 1, 2].map(i => u * u * u * P[0][i] + 3 * u * u * t * P[1][i] + 3 * u * t * t * P[2][i] + t * t * t * P[3][i]);
+}
+
+// ============================================================================ TUBE SPONGE
+// Callyspongia / Aplysina: a cluster of fused hollow tubes off one encrusting base, each
+// curving up and flaring a little at a thick lip round its osculum; the wall is pored and
+// carries low conules and a fine fibrous grain (bake-only). Frame: flora.js spongeGeo —
+// base at y 0, tallest tube to y ~1, footprint ~0.3.
+const TS = { WALL: 0, LIP: 1, BASE: 2 };
+function tubeSponge(seed) {
+  const R = mulberry(seed);
+  const n = 3 + Math.floor(R() * 4), outer = [], bores = [], sk = [];
+  const a0 = R() * TAU;
+  for (let k = 0; k < n; k++) {
+    const a = a0 + k / n * TAU + (R() - 0.5) * 0.7, rb = 0.02 + R() * 0.06;
+    const tall = k === 0 ? 1 : 0.42 + R() * 0.5;
+    const H = 0.98 * tall, rt = 0.055 + R() * 0.03, tilt = (0.04 + R() * 0.2) * (k === 0 ? 0.35 : 1);
+    const b = [Math.cos(a) * rb, -0.04, Math.sin(a) * rb];
+    const dir = norm([Math.cos(a) * Math.sin(tilt), Math.cos(tilt), Math.sin(a) * Math.sin(tilt)]);
+    const bendA = R() * TAU, bend = 0.015 + R() * 0.035;
+    const c1 = add(b, dir, H * 0.35), c2 = add(add(b, dir, H * 0.7), [Math.cos(bendA) * bend, 0, Math.sin(bendA) * bend]);
+    const top = add(add(b, dir, H), [Math.cos(bendA) * bend * 1.6, 0, Math.sin(bendA) * bend * 1.6]);
+    const P = [b, c1, c2, top];
+    // radius along the tube: a narrower foot, near-uniform shaft, the faintest flare at the lip
+    const rr = [];
+    for (let i = 0; i <= 12; i++) { const t = i / 12; rr.push(rt * (0.8 + 0.2 * sst(0, 0.25, t) + 0.05 * sst(0.85, 1, t) + 0.04 * Math.sin(t * 9 + k))); }
+    outer.push(Tube(P, rt, rt, 12, TS.WALL, rr));
+    // the bore: the same path, open past the top; the wall thins toward the rim
+    const wall = 0.013 + R() * 0.005, up = norm([top[0] - c2[0], top[1] - c2[1], top[2] - c2[2]]);
+    const Pb = [lerp3(b, c1, 0.5), c1, c2, add(top, up, 0.1)];
+    const rb2 = rr.map((r, i) => Math.max(0.01, r - wall * (1 - 0.35 * sst(9, 12, i))));
+    bores.push(Tube(Pb, rt - wall, rt - wall, 12, TS.LIP, rb2));
+    sk.push({ b: r3(b), top: r3(top), r: +(rr[12]).toFixed(4) });
+  }
+  const base = E([0, -0.03, 0], [0.13, 0.05, 0.13], TS.BASE);
+  const body = Sub(0.004, U(0.04, base, ...outer), ...bores);
+  const sdf = Disp([
+    { type: 'fbm', amp: 0.005, f: 8, oct: 3, seed: seed + 1 },
+    { type: 'barn', amp: 0.0045, f: 42, dens: 0.42, seed: seed + 2, mask: [['ax', 1, 0.02, 0.1]] },   // conules
+    { type: 'pits', bake: true, amp: 0.0045, f: 80, dens: 0.6, r: 0.3, seed: seed + 3 },             // ostia
+    { type: 'ridged', bake: true, amp: 0.0022, f: 55, oct: 2, seed: seed + 4 },                      // fibrous skeleton
+    { type: 'grain', bake: true, amp: 0.0008, f: 240, seed: seed + 5 }
+  ], body);
+  return { sdf, sk: { tubes: sk } };
+}
+function frameUp(up) {
+  // rows of R (local -> world): local +Y onto `up`
+  const Y = norm(up), X0 = Math.abs(Y[0]) < 0.9 ? [1, 0, 0] : [0, 0, 1];
+  const Z = norm([X0[1] * Y[2] - X0[2] * Y[1], X0[2] * Y[0] - X0[0] * Y[2], X0[0] * Y[1] - X0[1] * Y[0]]);
+  const X = [Y[1] * Z[2] - Y[2] * Z[1], Y[2] * Z[0] - Y[0] * Z[2], Y[0] * Z[1] - Y[1] * Z[0]];
+  return [X[0], Y[0], Z[0], X[1], Y[1], Z[1], X[2], Y[2], Z[2]];
+}
+const TS_PAINT = {
+  kScale: 0.0015, aoAlb: 0.75,
+  mats: {
+    [TS.WALL]: { c: [0.70, 0.58, 0.48], ro: 0.86 },
+    [TS.LIP]: { c: [0.80, 0.70, 0.60], ro: 0.8 },
+    [TS.BASE]: { c: [0.46, 0.40, 0.34], ro: 0.92 }
+  },
+  layers: [
+    { c: [0.56, 0.44, 0.36], a: 0.55, m: [['n', 7, 0.45, 0.75, 11]] },                    // blotched growth
+    { c: [0.36, 0.28, 0.24], a: 0.7, m: [['cav', 0.15, 0.9]] },                          // pores, conule pits
+    { c: [0.86, 0.78, 0.68], a: 0.5, ro: 0.72, m: [['cvx', 0.4, 1.6]] },                 // worn conule crowns
+    { c: [0.30, 0.28, 0.25], a: 0.6, ro: 0.95, m: [['ax', 1, 0.14, 0.0]] },              // silted foot
+    { c: [0.18, 0.12, 0.10], a: 0.85, m: [['ao', 0.45, 0.95]] }                          // the bore's dark throat
+  ]
+};
+
+// ============================================================================ ANEMONE
+// A column with verrucae (sticky warts) up its side, a broad oral disc striped radially, a
+// raised mouth, and two or three rings of tapered tentacles that rise and curl outward —
+// some variants bubble-tipped (Entacmaea), some long and flowing, some short and dense.
+// Frame: gardens.js anemoneGeo / flora.js anemoneGeo — base y 0, crown to ~0.75, r ~0.45.
+const AN = { COL: 0, DISC: 1, TENT: 2, TIP: 3, MOUTH: 4 };
+export const AN_DISC_Y = 0.27;
+function anemone(seed, type) {
+  const R = mulberry(seed);
+  const D = AN_DISC_Y, colR = 0.12 + R() * 0.03;
+  const col = U(0.04, Cap([0, -0.02, 0], [0, D - 0.02, 0], colR * 0.86, colR * 1.08, AN.COL), E([0, 0.0, 0], [colR * 1.3, 0.035, colR * 1.3], AN.COL));
+  const disc = E([0, D, 0], [colR * 1.32, 0.04, colR * 1.32], AN.DISC);
+  const discCut = E([0, D + 0.05, 0], [colR * 1.05, 0.045, colR * 1.05], AN.DISC);
+  const lip = Tor([0, D + 0.012, 0], 0.03, 0.013, AN.MOUTH);
+  const slit = E([0, D + 0.03, 0], [0.026, 0.02, 0.008], AN.MOUTH);
+  const tents = [], sk = [];
+  const rings = type === 'dense' ? [[40, 1.2, 0.20, 0.28], [30, 0.92, 0.18, 0.25], [20, 0.64, 0.15, 0.21], [10, 0.38, 0.12, 0.16]]
+    : type === 'long' ? [[30, 1.16, 0.34, 0.46], [22, 0.84, 0.30, 0.40], [12, 0.52, 0.22, 0.3]]
+    : type === 'bubble' ? [[26, 1.14, 0.16, 0.22], [20, 0.84, 0.15, 0.2], [12, 0.54, 0.12, 0.16]]
+    : [[34, 1.18, 0.26, 0.36], [24, 0.88, 0.23, 0.32], [14, 0.58, 0.18, 0.25]];
+  const thick = type === 'bubble' ? 1.35 : type === 'dense' ? 0.9 : 1;
+  rings.forEach(([cnt, rk, l0, l1], ri) => {
+    for (let i = 0; i < cnt; i++) {
+      const a = (i + (ri % 2) * 0.5) / cnt * TAU + (R() - 0.5) * 0.14;
+      const r = colR * rk, len = l0 + R() * (l1 - l0);
+      const out = [Math.cos(a), 0, Math.sin(a)];
+      const b = [out[0] * r, D + 0.02 - ri * 0.004, out[2] * r];
+      // each tentacle rises at its ring's elevation (inner rings stand taller) and the
+      // elevation falls along it: the crown opens like a flower, tips curling out and over
+      const el0 = (type === 'long' ? 0.95 : 1.1) + 0.22 * ri + (R() - 0.5) * 0.3;
+      const fall = (type === 'long' ? 1.05 : 0.75) + R() * 0.45, sway = (R() - 0.5) * 0.5;
+      const pts = [b];
+      let p = b.slice();
+      for (let k = 1; k <= 3; k++) {
+        const t = k / 3, el = el0 - fall * t * t, az = a + sway * t;
+        const d = [Math.cos(az) * Math.cos(el), Math.sin(el), Math.sin(az) * Math.cos(el)];
+        p = add(p, d, len / 3);
+        pts.push(p);
+      }
+      const tip = pts[3];
+      const r0 = 0.012 * thick, r1 = 0.0055 * thick;
+      const rr = [];
+      for (let k = 0; k <= 8; k++) { const t = k / 8; rr.push(r0 + (r1 - r0) * Math.pow(t, 0.7)); }
+      if (type === 'bubble') { rr[5] *= 1.15; rr[6] *= 1.45; rr[7] *= 1.75; rr[8] *= 1.7; }
+      tents.push(Tube(pts, r0, r1, 8, AN.TENT, rr));
+      tents.push(Sph(tip, rr[8] * 1.1, AN.TIP));
+      sk.push({ b: r3(b), tip: r3(tip), len: +len.toFixed(3) });
+    }
+  });
+  let body = U(0.02, col, Sub(0.02, disc, discCut));
+  body = U(0.008, body, lip);
+  body = SubM(0.004, AN.MOUTH, body, slit);
+  body = U(0.012, body, U(0, ...tents));
+  const sdf = Disp([
+    { type: 'barn', amp: 0.007, f: 30, dens: 0.6, seed: seed + 7, mask: [['ax', 1, D - 0.03, 0.06], ['rad', colR * 0.7, colR * 0.85]] },   // verrucae
+    { type: 'fbm', amp: 0.003, f: 14, oct: 2, seed: seed + 8 },
+    { type: 'fbm', bake: true, amp: 0.0015, f: 40, oct: 2, seed: seed + 10, mask: [['ax', 1, D - 0.02, 0.03]] },   // the column's soft wrinkling
+    { type: 'grain', bake: true, amp: 0.0006, f: 300, seed: seed + 9 }
+  ], body);
+  return { sdf, sk: { disc: D, colR: +colR.toFixed(4), tents: sk } };
+}
+// radial stripes on the disc (the stripe count follows the tentacle ring)
+const discStripe = S => { if (S.y < AN_DISC_Y - 0.03) return 0; const a = Math.atan2(S.z, S.x); return sst(0.2, 0.9, Math.sin(a * 13) * 0.5 + 0.5) * (1 - sst(0.12, 0.2, Math.hypot(S.x, S.z))); };
+const tentTip = S => (S.ma === AN.TIP || S.mb === AN.TIP) ? 1 : 0;
+const AN_PAINT = {
+  kScale: 0.0012, aoAlb: 0.6,
+  mats: {
+    [AN.COL]: { c: [0.52, 0.40, 0.36], ro: 0.6 },
+    [AN.DISC]: { c: [0.62, 0.52, 0.44], ro: 0.45 },
+    [AN.TENT]: { c: [0.74, 0.64, 0.56], ro: 0.38 },
+    [AN.TIP]: { c: [0.88, 0.80, 0.70], ro: 0.3 },
+    [AN.MOUTH]: { c: [0.58, 0.36, 0.34], ro: 0.4 }
+  },
+  layers: [
+    { c: [0.40, 0.30, 0.28], a: 0.55, m: [['n', 18, 0.5, 0.8, 21], ['mat', AN.COL]] },
+    { c: [0.68, 0.56, 0.46], a: 0.5, m: [['fn', discStripe]] },
+    { c: [0.86, 0.78, 0.70], a: 0.6, m: [['mat', AN.TENT], ['ax', 1, AN_DISC_Y + 0.12, AN_DISC_Y + 0.38]] },   // paler tentacle ends
+    { c: [0.60, 0.50, 0.46], a: 0.5, m: [['fn', S => tentTip(S) * sst(0.5, 1, Math.sin(S.x * 140) * Math.sin(S.z * 140))]] },
+    { c: [0.30, 0.20, 0.20], a: 0.6, m: [['cav', 0.2, 1.0]] },
+    { c: [0.14, 0.08, 0.08], a: 0.8, m: [['ao', 0.5, 0.95]] }
+  ]
+};
+
+// ---- 2D/3D noise for the analytic fields (deterministic, periodic-free) --------------------
+function h2(x, y, s) { let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(s | 0, 1440662683); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function h3(x, y, z, s) { let h = Math.imul(x | 0, 374761393) ^ Math.imul(y | 0, 668265263) ^ Math.imul(z | 0, 1440662683) ^ Math.imul(s | 0, 144665); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
+function vn3(x, y, z, s) {
+  const X = Math.floor(x), Y = Math.floor(y), Z = Math.floor(z), fx = x - X, fy = y - Y, fz = z - Z;
+  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy), w = fz * fz * (3 - 2 * fz);
+  const L = (a, b, t) => a + (b - a) * t;
+  return L(L(L(h3(X, Y, Z, s), h3(X + 1, Y, Z, s), u), L(h3(X, Y + 1, Z, s), h3(X + 1, Y + 1, Z, s), u), v),
+    L(L(h3(X, Y, Z + 1, s), h3(X + 1, Y, Z + 1, s), u), L(h3(X, Y + 1, Z + 1, s), h3(X + 1, Y + 1, Z + 1, s), u), v), w) * 2 - 1;
+}
+const fbm3n = (x, y, z, s, o = 3) => { let a = 0, k = 1, t = 0, f = 1; for (let i = 0; i < o; i++) { a += k * vn3(x * f, y * f, z * f, s + i * 7); t += k; k *= 0.5; f *= 2.02; } return a / t; };
+// 2D cell borders: distance (in cell units) to the nearest Voronoi edge, ~ (F2 - F1) / 2
+function cellEdge2(x, y, s) {
+  const X = Math.floor(x), Y = Math.floor(y);
+  let f1 = 9, f2 = 9;
+  for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+    const cx = X + i, cy = Y + j, px = cx + 0.15 + 0.7 * h2(cx, cy, s), py = cy + 0.15 + 0.7 * h2(cx, cy, s + 31);
+    const d = Math.hypot(px - x, py - y);
+    if (d < f1) { f2 = f1; f1 = d; } else if (d < f2) f2 = d;
+  }
+  return (f2 - f1) * 0.5;
+}
+
+// ============================================================================ BARREL SPONGE
+// Xestospongia: a thick-walled vase, the wall thrown into deep meandering vertical ridges
+// (digitate toward the rim), a wide osculum, the throat dark; the skin pored and conuled.
+// Frame: gardens.js barrelGeo — base y 0, rim ~1.72, radius ~0.64.
+const BR = { WALL: 0, RIM: 1, IN: 2 };
+function barrel(seed) {
+  const R = mulberry(seed);
+  const top = 1.55 + R() * 0.2, wide = 0.56 + R() * 0.08, N = 9 + Math.floor(R() * 6), ph = R() * TAU, amp = 0.05 + R() * 0.035, s = seed;
+  const prof = y => { const t = Math.min(1, Math.max(0, y / top)); return wide * (0.5 + 0.5 * Math.sin(Math.min(1, t * 1.25) * Math.PI * 0.5)) * (1 - 0.1 * sst(0.8, 1, t)); };
+  const ridge = (a, y) => {
+    const w = a * N + ph + 1.6 * fbm3n(Math.cos(a) * 1.4, y * 1.3, Math.sin(a) * 1.4, s, 2);
+    const c = Math.abs(Math.sin(w * 0.5));                  // 1 on the crests, 0 in the valleys
+    return amp * (Math.pow(c, 2.2) - 0.35) * (0.35 + 0.65 * sst(0.1, 0.9, y / top));
+  };
+  const f = (x, y, z) => {
+    const rad = Math.hypot(x, z), a = Math.atan2(z, x);
+    const Ro = prof(y) + ridge(a, y), wall = 0.13 - 0.07 * sst(0.2, 1.0, y / top);
+    const lipY = top + 0.03 * Math.sin(a * 3 + ph) + 0.6 * ridge(a, top);
+    const dOut = (rad - Ro) * 0.62;
+    const dCav = Math.max(rad - (Ro - wall - Math.max(0, ridge(a, y))), 0.3 - y);   // < 0 inside the cavity
+    return Math.max(dOut, -dCav * 0.62, y - lipY, -0.06 - y);
+  };
+  const body = Fn([-0.8, -0.08, -0.8, 0.8, top + 0.12, 0.8], f, BR.WALL);
+  const sdf = Disp([
+    { type: 'fbm', amp: 0.012, f: 5, oct: 3, seed: s + 3 },
+    { type: 'barn', amp: 0.006, f: 22, dens: 0.4, seed: s + 4 },
+    { type: 'pits', bake: true, amp: 0.006, f: 45, dens: 0.6, r: 0.3, seed: s + 5 },
+    { type: 'ridged', bake: true, amp: 0.003, f: 30, oct: 2, seed: s + 6 },
+    { type: 'grain', bake: true, amp: 0.0012, f: 160, seed: s + 7 }
+  ], { t: 'round', r: 0.01, ch: [body] });
+  return { sdf, sk: { top: +top.toFixed(3) } };
+}
+const BR_PAINT = {
+  kScale: 0.003, aoAlb: 0.8,
+  mats: { [BR.WALL]: { c: [0.62, 0.42, 0.34], ro: 0.88 } },
+  layers: [
+    { c: [0.50, 0.32, 0.26], a: 0.5, m: [['n', 4, 0.4, 0.75, 51]] },
+    { c: [0.30, 0.18, 0.15], a: 0.75, m: [['cav', 0.1, 0.8]] },
+    { c: [0.78, 0.62, 0.50], a: 0.55, ro: 0.75, m: [['cvx', 0.3, 1.4]] },
+    { c: [0.32, 0.30, 0.26], a: 0.55, ro: 0.95, m: [['ax', 1, 0.22, 0.0]] },
+    { c: [0.10, 0.06, 0.05], a: 0.9, m: [['ao', 0.35, 0.9]] }
+  ]
+};
+
+// ============================================================================ TUBE WORMS
+// Riftia: a clump of chitin tubes off a sulphide-crusted mound, each tube banded by growth
+// collars and stained toward the base, crowned by a blood-red branchial plume of stacked
+// lamellae. The plume retracts INTO its own tube (plantKit's sway data carries each plume's
+// mouth). Frame: gardens.js tubewormGeo — base y 0, tallest crown ~1.14, radius ~0.45.
+const TW = { TUBE: 0, PLUME: 1, CRUST: 2, COLLAR: 3 };
+function worms(seed) {
+  const R = mulberry(seed);
+  const n = 11 + Math.floor(R() * 7), tubes = [], bores = [], plumes = [], sk = [], collars = [];
+  for (let k = 0; k < n; k++) {
+    const a = R() * TAU, r = Math.sqrt(R()) * 0.3;
+    const b = [Math.cos(a) * r, -0.05, Math.sin(a) * r];
+    const lean = norm([Math.cos(a) * r * 0.5 + (R() - 0.5) * 0.3, 1, Math.sin(a) * r * 0.5 + (R() - 0.5) * 0.3]);
+    const H = 0.42 + R() * 0.55, tr = 0.022 + R() * 0.012;
+    const bendA = R() * TAU, bend = 0.02 + R() * 0.05;
+    const c1 = add(b, lean, H * 0.33), c2 = add(add(b, lean, H * 0.66), [Math.cos(bendA) * bend, 0, Math.sin(bendA) * bend]);
+    const top = add(add(b, lean, H), [Math.cos(bendA) * bend * 1.3, 0, Math.sin(bendA) * bend * 1.3]);
+    const up = norm([top[0] - c2[0], top[1] - c2[1], top[2] - c2[2]]);
+    const rr = []; for (let i = 0; i <= 10; i++) { const t = i / 10; rr.push(tr * (0.85 + 0.15 * t + 0.06 * Math.sin(t * 17 + k))); }
+    tubes.push(Tube([b, c1, c2, top], tr, tr, 10, TW.TUBE, rr));
+    bores.push(Tube([lerp3(c2, top, 0.5), top, add(top, up, 0.06)], tr * 0.68, tr * 0.72, 3, TW.TUBE));
+    // growth collars: flared rims left by each growth spurt
+    const nc = 3 + Math.floor(R() * 4);
+    for (let c = 0; c < nc; c++) {
+      const t = 0.25 + 0.7 * (c + R() * 0.5) / nc, p = bez([b, c1, c2, top], t), p2 = bez([b, c1, c2, top], Math.min(1, t + 0.02));
+      collars.push({ t: 'xf', p, R: frameUp([p2[0] - p[0], p2[1] - p[1], p2[2] - p[2]]), ch: [Tor([0, 0, 0], tr * 1.02, tr * 0.22, TW.COLLAR)] });
+    }
+    // the plume: a crown of lamellae (grooves cut by the displacement below), rising from the mouth
+    const L = 0.1 + R() * 0.07, pc = add(top, up, L * 0.48 + 0.01);
+    plumes.push({ t: 'xf', p: pc, R: frameUp(up), ch: [E([0, 0, 0], [tr * 1.55, L * 0.55, tr * 1.55], TW.PLUME)] });
+    sk.push({ m: r3(top), up: r3(up), L: +L.toFixed(3), r: +tr.toFixed(4) });
+  }
+  // lamella grooves: radial fins around each plume's own axis
+  const lam = (x, y, z) => {
+    let best = 1e9, q = null;
+    for (const t of sk) { const d = (x - t.m[0]) ** 2 + (y - t.m[1]) ** 2 + (z - t.m[2]) ** 2; if (d < best) { best = d; q = t; } }
+    const px = x - q.m[0], py = y - q.m[1], pz = z - q.m[2], al = px * q.up[0] + py * q.up[1] + pz * q.up[2];
+    if (al < 0 || al > q.L * 1.2) return 0;
+    const rx = px - q.up[0] * al, ry = py - q.up[1] * al, rz = pz - q.up[2] * al;
+    // a stable angle about the axis
+    const X = Math.abs(q.up[0]) < 0.9 ? [1, 0, 0] : [0, 0, 1];
+    const zx = q.up[1] * X[2] - q.up[2] * X[1], zy = q.up[2] * X[0] - q.up[0] * X[2], zz = q.up[0] * X[1] - q.up[1] * X[0];
+    const xx = zy * q.up[2] - zz * q.up[1], xy = zz * q.up[0] - zx * q.up[2], xz = zx * q.up[1] - zy * q.up[0];
+    const ang = Math.atan2(rx * zx + ry * zy + rz * zz, rx * xx + ry * xy + rz * xz);
+    const fin = Math.abs(Math.sin(ang * 11 + al * 30));
+    return -0.006 * Math.pow(fin, 3) * sst(0.0, 0.25, al / q.L);
+  };
+  const plumeU = Disp([{ type: 'fn', amp: 0.006, fn: lam }, { type: 'grain', bake: true, amp: 0.0008, f: 260, seed: seed + 3 }], U(0.01, ...plumes));
+  const crust = E([0, -0.05, 0], [0.42, 0.09, 0.4], TW.CRUST);
+  let body = U(0.03, crust, U(0.004, ...tubes, ...collars));
+  body = Sub(0.003, body, ...bores);
+  body = U(0.006, body, plumeU);
+  const L = [
+    { type: 'fbm', amp: 0.004, f: 10, oct: 3, seed: seed + 1 },
+    { type: 'barn', amp: 0.01, f: 18, dens: 0.55, seed: seed + 2, mask: [['ax', 1, 0.06, -0.02]] },     // the mound's sulphide crust
+    { type: 'bands', bake: true, amp: 0.0012, f: 260, ax: [0, 1, 0], mask: [['ax', 1, 0.02, 0.08]] },    // the tubes' fine growth lines
+    { type: 'grain', bake: true, amp: 0.0007, f: 300, seed: seed + 4 }
+  ];
+  const sdf = Disp(L, body);
+  // the LOW leaves the collars and the lamellae to the bake (they are what kept QEM from
+  // reaching its budget: hundreds of tiny charts), keeping the tubes, mouths and plume bodies
+  const loSdf = Disp(L, U(0.006, Sub(0.003, U(0.03, crust, U(0.004, ...tubes)), ...bores), U(0.01, ...plumes)));
+  return { sdf, loSdf, sk: { tubes: sk } };
+}
+const plumeTip = S => (S.ma === TW.PLUME || S.mb === TW.PLUME) ? 1 : 0;
+const TW_PAINT = {
+  kScale: 0.0015, aoAlb: 0.65,
+  mats: {
+    [TW.TUBE]: { c: [0.86, 0.82, 0.72], ro: 0.55 },
+    [TW.COLLAR]: { c: [0.80, 0.74, 0.62], ro: 0.6 },
+    [TW.PLUME]: { c: [0.52, 0.05, 0.04], ro: 0.35 },
+    [TW.CRUST]: { c: [0.26, 0.22, 0.19], ro: 0.95 }
+  },
+  layers: [
+    { c: [0.55, 0.45, 0.32], a: 0.75, m: [['ax', 1, 0.28, 0.0], ['mat', TW.TUBE]] },                // sulphide staining up from the base
+    { c: [0.62, 0.52, 0.38], a: 0.45, m: [['n', 22, 0.5, 0.8, 61], ['mat', TW.TUBE]] },
+    { c: [0.70, 0.14, 0.10], a: 0.6, m: [['fn', plumeTip], ['cvx', 0.2, 1.0]] },                    // lamella edges brighter
+    { c: [0.25, 0.02, 0.02], a: 0.6, m: [['fn', plumeTip], ['cav', 0.1, 0.8]] },
+    { c: [0.86, 0.84, 0.78], a: 0.55, m: [['mat', TW.CRUST], ['n', 30, 0.6, 0.75, 62]] },          // bacterial frosting on the crust
+    { c: [0.14, 0.10, 0.08], a: 0.6, m: [['cav', 0.2, 1.0], ['inv', ['fn', plumeTip]]] },
+    { c: [0.05, 0.03, 0.03], a: 0.85, m: [['ao', 0.5, 0.95]] }
+  ]
+};
+
+// ============================================================================ STAGHORN
+// Acropora cervicornis: antler branches rising off an encrusting plate, forking at 30-50
+// degrees, knobbled by radial corallites (bake) with a pale axial corallite at every tip.
+// Frame: gardens.js staghornGeo / flora.js staghornGeo — base y 0, ~0.7 tall, ~0.42 wide.
+const SG = { BR: 0, TIP: 1, PLATE: 2 };
+function staghorn(seed) {
+  const R = mulberry(seed);
+  const caps = [], tips = [];
+  const grow = (p, d, len, r, lvl) => {
+    const pts = [p];
+    let q = p.slice(), dir = d.slice();
+    for (let k = 1; k <= 3; k++) {
+      dir = norm(add(add(dir, [0, 1, 0], 0.12 + R() * 0.12), [(R() - 0.5) * 0.25, 0, (R() - 0.5) * 0.25]));
+      q = add(q, dir, len / 3);
+      pts.push(q);
+    }
+    const r1 = r * 0.62;
+    caps.push(Tube(pts, r, r1, 6, SG.BR));
+    if (lvl <= 0 || len < 0.08) { tips.push(Sph(q, r1 * 1.04, SG.TIP)); return; }
+    const nk = lvl >= 2 ? 2 + (R() < 0.5 ? 1 : 0) : 1 + (R() < 0.6 ? 1 : 0);
+    for (let i = 0; i < nk; i++) {
+      const t = 0.45 + 0.45 * (i + R() * 0.6) / nk, b = bez(pts, t), az = R() * TAU;
+      const side = [Math.cos(az), 0, Math.sin(az)], off = 0.5 + R() * 0.35;
+      const tg = norm([pts[3][0] - pts[0][0], pts[3][1] - pts[0][1], pts[3][2] - pts[0][2]]);
+      const d2 = norm(add(tg.map(v => v * Math.cos(off)), side, Math.sin(off)));
+      grow(b, d2, len * (0.5 + R() * 0.2), r * (0.72 + 0.12 * (1 - t)), lvl - 1);
+    }
+    tips.push(Sph(q, r1 * 1.04, SG.TIP));
+  };
+  const nb = 3 + Math.floor(R() * 3), a0 = R() * TAU;
+  for (let b = 0; b < nb; b++) {
+    const az = a0 + b / nb * TAU + (R() - 0.5) * 0.6, tilt = 0.35 + R() * 0.55;
+    grow([Math.cos(az) * 0.04, 0.0, Math.sin(az) * 0.04], [Math.cos(az) * Math.sin(tilt), Math.cos(tilt), Math.sin(az) * Math.sin(tilt)], 0.36 + R() * 0.18, 0.03 + R() * 0.006, 2);
+  }
+  const plate = E([0, -0.01, 0], [0.16, 0.035, 0.15], SG.PLATE);
+  const body = U(0.012, plate, U(0.008, ...caps), U(0.004, ...tips));
+  const sdf = Disp([
+    { type: 'fbm', amp: 0.0025, f: 18, oct: 2, seed: seed + 1 },
+    { type: 'barn', amp: 0.0035, f: 70, dens: 0.6, seed: seed + 2 },                                  // radial corallites
+    { type: 'pits', bake: true, amp: 0.002, f: 150, dens: 0.6, r: 0.3, seed: seed + 3 },
+    { type: 'grain', bake: true, amp: 0.0006, f: 320, seed: seed + 4 }
+  ], body);
+  return { sdf, sk: {} };
+}
+const SG_PAINT = {
+  kScale: 0.0012, aoAlb: 0.7,
+  mats: { [SG.BR]: { c: [0.70, 0.60, 0.46], ro: 0.62 }, [SG.TIP]: { c: [0.92, 0.88, 0.80], ro: 0.5 }, [SG.PLATE]: { c: [0.46, 0.40, 0.32], ro: 0.8 } },
+  layers: [
+    { c: [0.60, 0.48, 0.36], a: 0.45, m: [['n', 12, 0.45, 0.8, 71]] },
+    { c: [0.88, 0.84, 0.74], a: 0.6, m: [['ax', 1, 0.3, 0.7]] },                  // the growing ends bleach
+    { c: [0.32, 0.26, 0.20], a: 0.7, m: [['cav', 0.2, 1.0]] },
+    { c: [0.92, 0.88, 0.80], a: 0.5, m: [['cvx', 0.6, 1.8]] },                    // corallite rims
+    { c: [0.12, 0.09, 0.07], a: 0.8, m: [['ao', 0.45, 0.95]] }
+  ]
+};
+
+// ============================================================================ BRAIN CORAL
+// Diploria: a dome tucked into the sand, its surface one continuous meander of valleys
+// between double-crested ridges (bake: the maze is texels, the dome is the mesh).
+// Frame: flora.js brainGeo — dome r ~0.5, crown ~0.42, rim rolled under to ~-0.12.
+const BC = { CORAL: 0 };
+function brain(seed) {
+  const R = mulberry(seed);
+  const sq = 0.72 + R() * 0.16, s = seed;
+  const dome = E([0, -0.12, 0], [0.5, 0.5 * sq + 0.06, 0.48], BC.CORAL);
+  const lumps = [];
+  for (let k = 0; k < 3; k++) { const a = R() * TAU, r = 0.15 + R() * 0.2; lumps.push(Sph([Math.cos(a) * r, 0.12 + R() * 0.12, Math.sin(a) * r], 0.16 + R() * 0.08, BC.CORAL)); }
+  const body = I(0.03, U(0.12, dome, ...lumps), { t: 'plane', n: [0, -1, 0], o: 0.12, m: BC.CORAL });
+  const fq = 17 + R() * 5;
+  const maze = (x, y, z) => {
+    const wx = x + 0.08 * fbm3n(x * 4, y * 4, z * 4, s + 9, 2), wz = z + 0.08 * fbm3n(z * 4 + 3, y * 4, x * 4, s + 10, 2);
+    const n = fbm3n(wx * fq, y * fq * 0.9, wz * fq, s, 2);
+    const f = Math.abs(n) / 0.16;
+    // valley on the noise's zero set, a flat-topped ridge, a fine groove along each crest
+    return 0.014 * (sst(0, 1, f) - 0.5) - 0.004 * Math.exp(-(((f - 2.0) / 0.35) ** 2)) * sst(1.2, 2.0, f);
+  };
+  const sdf = Disp([
+    { type: 'fbm', amp: 0.01, f: 4, oct: 2, seed: s + 1 },
+    { type: 'fn', bake: true, amp: 0.024, fn: maze },
+    { type: 'pits', bake: true, amp: 0.0015, f: 160, dens: 0.5, r: 0.3, seed: s + 2 },
+    { type: 'grain', bake: true, amp: 0.0006, f: 300, seed: s + 3 }
+  ], body);
+  return { sdf, sk: {} };
+}
+const BC_PAINT = {
+  kScale: 0.006, aoAlb: 0.85,
+  mats: { [BC.CORAL]: { c: [0.72, 0.64, 0.50], ro: 0.6 } },
+  layers: [
+    { c: [0.62, 0.56, 0.40], a: 0.5, m: [['n', 6, 0.4, 0.8, 81]] },
+    { c: [0.40, 0.34, 0.24], a: 0.55, m: [['cav', 0.15, 1.0]] },           // valleys
+    { c: [0.86, 0.80, 0.68], a: 0.55, m: [['cvx', 0.4, 1.2]] },
+    { c: [0.30, 0.28, 0.24], a: 0.6, ro: 0.95, m: [['ax', 1, -0.02, -0.1]] },
+    { c: [0.10, 0.08, 0.06], a: 0.8, m: [['ao', 0.4, 0.95]] }
+  ]
+};
+
+// ============================================================================ TABLE CORAL
+// Acropora hyacinthus: a short stalk flaring into a broad shallow table, the upper face a
+// dense pile of short upright branchlets (bake: their knobbed ends are texels), a lobed
+// growing rim, the underside ribbed radially and shadowed. Frame: flora.js tableGeo — stalk
+// to y ~0.4, the dish r ~0.58, its top ~0.62.
+const TB = { CORAL: 0, RIM: 1, STALK: 2 };
+function table(seed) {
+  const R = mulberry(seed);
+  const top = [0.03 + (R() - 0.5) * 0.04, 0.4, (R() - 0.5) * 0.04], Rr = 0.52 + R() * 0.08, ph1 = R() * TAU, ph2 = R() * TAU, s = seed;
+  const rim = a => Rr * (1 + 0.1 * Math.sin(3 * a + ph1) + 0.07 * Math.sin(5 * a + ph2) + 0.05 * Math.sin(9 * a + ph1 * 2));
+  const surf = (r, a) => top[1] + 0.04 + 0.16 * Math.pow(Math.min(r / rim(a), 1.1), 1.8) + 0.015 * Math.sin(a * 4 + ph2) * Math.min(1, r / rim(a));
+  const dish = Fn([-0.8, 0.2, -0.8, 0.8, 0.8, 0.8], (x, y, z) => {
+    const px = x - top[0], pz = z - top[2], r = Math.hypot(px, pz), a = Math.atan2(pz, px), R0 = rim(a), u = r / R0;
+    const th = 0.045 * (1 - 0.55 * Math.min(1, u)) + 0.012;
+    return Math.max(Math.abs(y - surf(r, a)) - th, (r - R0) * 0.8) * 0.85;
+  }, TB.CORAL);
+  const stalk = Cap([0, -0.02, 0], top, 0.085, 0.06, TB.STALK);
+  const foot = E([0, 0, 0], [0.16, 0.035, 0.16], TB.STALK);
+  // the branchlet pile on the top face and the radial ribs underneath, one displacement
+  const pile = (x, y, z) => {
+    const px = x - top[0], pz = z - top[2], r = Math.hypot(px, pz), a = Math.atan2(pz, px);
+    if (y > surf(r, a)) { const q = Math.abs(vn3(x * 70, z * 70, y * 10, s)); return 0.006 * (1 - Math.min(1, q * 3)); }
+    return -0.004 * Math.pow(Math.abs(Math.sin(a * 40 + r * 9)), 4);
+  };
+  const body = U(0.03, foot, stalk, dish);
+  const sdf = Disp([
+    { type: 'fbm', amp: 0.006, f: 7, oct: 2, seed: s + 1 },
+    { type: 'fn', bake: true, amp: 0.006, fn: pile },
+    { type: 'barn', bake: true, amp: 0.0025, f: 110, dens: 0.7, seed: s + 2 },
+    { type: 'grain', bake: true, amp: 0.0006, f: 300, seed: s + 3 }
+  ], body);
+  return { sdf, sk: {} };
+}
+const TB_PAINT = {
+  kScale: 0.002, aoAlb: 0.8,
+  mats: { [TB.CORAL]: { c: [0.70, 0.64, 0.50], ro: 0.62 }, [TB.STALK]: { c: [0.50, 0.44, 0.36], ro: 0.8 } },
+  layers: [
+    { c: [0.60, 0.56, 0.40], a: 0.5, m: [['n', 9, 0.4, 0.8, 111]] },
+    { c: [0.90, 0.86, 0.76], a: 0.6, m: [['fn', S => sst(0.45, 0.6, Math.hypot(S.x, S.z)) * sst(0.0, 0.5, S.ny)]] },   // the bleached growing rim
+    { c: [0.36, 0.30, 0.22], a: 0.6, m: [['cav', 0.2, 1.0]] },
+    { c: [0.30, 0.28, 0.24], a: 0.6, m: [['nd', [0, -1, 0], 0.2, 0.8]] },          // the shadowed, silted underside
+    { c: [0.10, 0.08, 0.07], a: 0.8, m: [['ao', 0.45, 0.95]] }
+  ]
+};
+
+// ============================================================================ GLASS SPONGE
+// Euplectella and its vase-shaped cousins: a basket of fused silica spicules — a square
+// lattice crossed by diagonals, oblique external ridges spiralling up it, a sieve plate on
+// top, a tuft of glassy root fibres. The LATTICE is the high; the LOW is a plain shell, and
+// the bake's misses become the holes (alpha, set alpha: true; plantKit alpha-hashes them).
+// Frame: gardens.js glassGeo — base y 0, top ~1, radius up to ~0.44.
+const GS = { SIL: 0 };
+function glass(seed, type) {
+  const R = mulberry(seed);
+  const top = 0.92 + R() * 0.08, vase = type === 'vase';
+  const r0 = vase ? 0.2 + R() * 0.05 : 0.11 + R() * 0.03, flare = vase ? 1.6 + R() * 0.5 : 0.55 + R() * 0.3;
+  const curve = (R() - 0.5) * 0.12;
+  const cx = y => curve * y * y;
+  const Rad = y => { const t = Math.max(0, Math.min(1, y / top)); return r0 * (0.45 + 0.55 * sst(0, 0.18, t)) * (1 + flare * t * t) * (1 - 0.06 * sst(0.9, 1, t)); };
+  const NV = vase ? 22 : 20, sh = vase ? 0.075 : 0.05, ws = 0.0026;
+  const lat = (x, y, z) => {
+    const px = x - cx(y), rad = Math.hypot(px, z), a = Math.atan2(z, px), Ry = Rad(y);
+    const dShell = Math.abs(rad - Ry) - 0.0035;
+    const arc = TAU * Ry / NV;
+    const u = a / TAU * NV, v = y / sh;
+    const dV = Math.abs(u - Math.round(u)) * arc, dH = Math.abs(v - Math.round(v)) * sh;
+    const dg = (u * arc / sh + v), dD1 = Math.abs(dg / 2 - Math.round(dg / 2)) * sh * 1.2, dg2 = (u * arc / sh - v), dD2 = Math.abs(dg2 / 2 - Math.round(dg2 / 2)) * sh * 1.2;
+    let d = Math.min(dV - ws, dH - ws, dD1 - ws * 0.6, vase ? 1 : dD2 - ws * 0.6);
+    // oblique external ridges (a raised spiral every few cells)
+    const sp = (u * arc * 0.8 + y * 0.6) / (sh * 3.2), dS = Math.abs(sp - Math.round(sp)) * sh * 3.2;
+    const ridge = Math.max(Math.abs(rad - Ry - 0.006) - 0.006, dS - ws * 1.3);
+    return Math.min(Math.max(dShell, d), ridge);
+  };
+  const shellLat = (x, y, z) => Math.max(lat(x, y, z), -y, y - top);
+  // the sieve plate across the top
+  const Rt = Rad(top);
+  const plate = (x, y, z) => {
+    const px = x - cx(top);
+    const dP = Math.abs(y - top) - 0.003, r = Math.hypot(px, z) - Rt;
+    const gu = px / (sh * 0.8), gv = z / (sh * 0.8), dG = Math.min(Math.abs(gu - Math.round(gu)), Math.abs(gv - Math.round(gv))) * sh * 0.8 - ws;
+    return Math.max(dP, r, dG);
+  };
+  const B = [-0.7, -0.2, -0.7, 0.7, top + 0.05, 0.7];
+  const hiParts = [Fn(B, shellLat, GS.SIL), Fn(B, plate, GS.SIL)];
+  // root tuft: glassy fibres splaying down into the sediment
+  for (let k = 0; k < 10; k++) { const a = R() * TAU, l = 0.08 + R() * 0.1; hiParts.push(Cap([Math.cos(a) * r0 * 0.3, 0.03, Math.sin(a) * r0 * 0.3], [Math.cos(a) * (r0 * 0.4 + l), -0.06, Math.sin(a) * (r0 * 0.4 + l)], 0.003, 0.0018, GS.SIL)); }
+  const hi = Disp([{ type: 'grain', bake: true, amp: 0.0005, f: 400, seed: seed + 1 }], U(0.002, ...hiParts));
+  // the low: a closed shell around the lattice, wall 0.012 either side of the lattice surface
+  const lo = Fn(B, (x, y, z) => {
+    const px = x - cx(y), Ry = Rad(Math.min(top, Math.max(0, y)));
+    return Math.max(Math.abs(Math.hypot(px, z) - Ry) - 0.011, -y - 0.01, y - top - 0.004);
+  }, GS.SIL);
+  const loTop = Fn(B, (x, y, z) => Math.max(Math.abs(y - top) - 0.011, Math.hypot(x - cx(top), z) - Rt - 0.004), GS.SIL);
+  return { sdf: hi, loSdf: U(0.006, lo, loTop), emit: () => 1, sk: { top: +top.toFixed(3) } };
+}
+const GS_PAINT = {
+  kScale: 0.001, aoAlb: 0.5,
+  mats: { [GS.SIL]: { c: [0.84, 0.83, 0.78], ro: 0.35 } },
+  layers: [
+    { c: [0.66, 0.66, 0.60], a: 0.5, m: [['n', 8, 0.45, 0.8, 91]] },
+    { c: [0.92, 0.94, 0.92], a: 0.5, m: [['cvx', 0.5, 2]] },
+    { c: [0.46, 0.44, 0.38], a: 0.5, ro: 0.8, m: [['ax', 1, 0.12, 0.0]] }     // silt on the root end
+  ]
+};
+
+// ============================================================================ SEA FAN
+// Gorgonia: a flat fan grown in one plane across the current — a short trunk, dichotomous
+// main branches thickening into a fine anastomosing NET; polyps stud every strand. Like the
+// glass sponge, the net is the high and the low a flat card (alpha holes from the bake).
+// Frame: gardens.js / flora.js fanGeo — the XY plane, base y 0, ~1.1 tall, ~0.45 half-width.
+const GF = { BR: 0, NET: 1 };
+function seaFan(seed, type) {
+  const R = mulberry(seed);
+  const H = 1.0 + R() * 0.1, W = type === 'tall' ? 0.3 + R() * 0.05 : 0.44 + R() * 0.05, s = seed;
+  const lobes = [];
+  const nl = type === 'lobed' ? 3 : 1;
+  for (let k = 0; k < nl; k++) {
+    const cx = nl === 1 ? 0 : (k - 1) * W * 0.55, cy = H * (nl === 1 ? 0.6 : 0.55 + 0.1 * (k === 1)), ax = nl === 1 ? W : W * 0.55, ay = H * (nl === 1 ? 0.42 : 0.42);
+    lobes.push([cx + (R() - 0.5) * 0.04, cy, ax, ay]);
+  }
+  // outline: union of ellipses + a short stalk; ~signed distance in the plane
+  const out2 = (x, y) => {
+    let d = 1e9;
+    for (const [cx, cy, ax, ay] of lobes) {
+      const e = Math.hypot((x - cx) / ax, (y - cy) / ay);
+      const wob = 0.035 * Math.sin(Math.atan2(y - cy, x - cx) * 7 + s);
+      d = Math.min(d, (e - 1 - wob) * Math.min(ax, ay));
+    }
+    const st = Math.max(Math.abs(x) - 0.03, y - H * 0.3, -y - 0.02);
+    return Math.min(d, st);
+  };
+  // branches: dichotomous growth in the plane
+  const caps = [];
+  const grow = (x, y, ang, len, r, d) => {
+    const ex = x - Math.sin(ang) * len, ey = y + Math.cos(ang) * len;
+    if (out2(ex, ey) > 0.02) { len *= 0.6; }
+    const mx = (x + ex) / 2 + (R() - 0.5) * len * 0.12, my = (y + ey) / 2;
+    caps.push(Tube([[x, y, 0], [mx, my, 0], [x - Math.sin(ang) * len, y + Math.cos(ang) * len, 0]], r, r * 0.8, 3, GF.BR));
+    if (d >= 4) return;
+    const n = d === 0 ? 3 : 2;
+    for (let i = 0; i < n; i++) grow(x - Math.sin(ang) * len, y + Math.cos(ang) * len, ang + (i - (n - 1) / 2) * (0.42 + R() * 0.3), len * (0.62 + R() * 0.15), r * 0.78, d + 1);
+  };
+  grow(0, -0.03, (R() - 0.5) * 0.1, 0.26, 0.012, 0);
+  const cell = type === 'tall' ? 0.04 : 0.05;
+  const net = Fn([-0.6, -0.05, -0.02, 0.6, H + 0.05, 0.02], (x, y, z) => {
+    const o = out2(x, y);
+    const e = cellEdge2(x / cell + 0.13 * vn3(x * 9, y * 9, 0, s), y / (cell * 1.25), s) * cell;   // strands run a little along the fan's height
+    return Math.max(Math.hypot(Math.max(0, e - 0.0008), z) - 0.0014, o + 0.006);
+  }, GF.NET);
+  const hi = Disp([
+    { type: 'barn', bake: true, amp: 0.0012, f: 260, dens: 0.6, seed: s + 1 },   // polyp bumps
+    { type: 'grain', bake: true, amp: 0.0004, f: 500, seed: s + 2 }
+  ], U(0.004, I(0.002, U(0, ...caps), Fn([-0.7, -0.1, -0.1, 0.7, H + 0.1, 0.1], (x, y, z) => out2(x, y) - 0.004)), net));
+  const lo = Fn([-0.7, -0.08, -0.03, 0.7, H + 0.08, 0.03], (x, y, z) => Math.max(Math.abs(z) - 0.0075, out2(x, y) - 0.003), GF.BR);
+  return { sdf: hi, loSdf: lo, emit: () => 1, sk: { H: +H.toFixed(3) } };
+}
+const GF_PAINT = {
+  kScale: 0.0008, aoAlb: 0.4,
+  mats: { [GF.BR]: { c: [0.66, 0.50, 0.46], ro: 0.6 }, [GF.NET]: { c: [0.74, 0.60, 0.54], ro: 0.6 } },
+  layers: [
+    { c: [0.56, 0.42, 0.40], a: 0.5, m: [['n', 10, 0.45, 0.8, 101]] },
+    { c: [0.90, 0.82, 0.74], a: 0.45, m: [['cvx', 0.5, 2.0]] },                   // polyp crowns
+    { c: [0.48, 0.38, 0.34], a: 0.5, m: [['ax', 1, 0.25, 0.0]] }
+  ]
+};
+
+// ============================================================================ CRINOID
+// A stalked sea lily: a jointed column (columnals, with whorls of cirri at the nodes), a
+// small calyx and ten feathered arms opening like a tulip. The pinnule comb along each arm
+// is an alpha vane (the arm's own low is a flattened ribbon; the high carries the pinnules).
+// Frame: gardens.js crinoidGeo — base y 0, crown to ~1.06, ~0.2 wide.
+const CR = { STALK: 0, ARM: 1, PIN: 2, CALYX: 3 };
+function crinoid(seed) {
+  const R = mulberry(seed);
+  const H = 0.62 + R() * 0.22, sw = (R() - 0.5) * 0.18;
+  const st = [[0, -0.02, 0], [sw * 0.4, H * 0.4, sw * 0.2], [sw, H * 0.75, sw * 0.4], [sw * 1.2, H, sw * 0.3]];
+  const top = st[3];
+  const parts = [Tube(st, 0.012, 0.009, 14, CR.STALK)];
+  // columnal joints: little ridged rings every ~0.02
+  for (let t = 0.04; t < 0.98; t += 0.024) { const p = bez(st, t), p2 = bez(st, t + 0.01); parts.push({ t: 'xf', p, R: frameUp([p2[0] - p[0], p2[1] - p[1], p2[2] - p[2]]), ch: [Tor([0, 0, 0], 0.0105, 0.0022, CR.STALK)] }); }
+  // cirri whorls
+  for (let w = 1; w <= 4; w++) {
+    const t = w * 0.19, p = bez(st, t);
+    for (let k = 0; k < 5; k++) {
+      const a = k / 5 * TAU + w, d = [Math.cos(a), -0.4, Math.sin(a)];
+      parts.push(Tube([p, add(p, d, 0.035), add(add(p, d, 0.06), [0, -0.035, 0])], 0.0042, 0.0028, 4, CR.STALK));
+    }
+  }
+  parts.push(E(add(top, [0, 0.02, 0]), [0.03, 0.03, 0.03], CR.CALYX));
+  const arms = [], vanes = [], pins = [], sk = [];
+  for (let k = 0; k < 10; k++) {
+    const a = k / 10 * TAU + (R() - 0.5) * 0.2, len = 0.26 + R() * 0.12, open = 0.55 + R() * 0.35;
+    const out = [Math.cos(a), 0, Math.sin(a)], side = [-Math.sin(a), 0, Math.cos(a)];
+    const b = add(add(top, [0, 0.03, 0]), out, 0.022);
+    const pts = [b];
+    let p = b.slice();
+    for (let i = 1; i <= 3; i++) {
+      const t = i / 3, el = 1.25 - open * t * 1.6;              // rise, open, the tips curl out and down
+      p = add(p, [out[0] * Math.cos(el), Math.sin(el), out[2] * Math.cos(el)], len / 3);
+      pts.push(p);
+    }
+    arms.push(Tube(pts, 0.0075, 0.003, 10, CR.ARM));
+    // pinnules: alternate either side, perpendicular to the arm, in the plane of the vane
+    for (let i = 2; i < 22; i++) {
+      const t = i / 22, c = bez(pts, t), c2 = bez(pts, Math.min(1, t + 0.02)), tg = norm([c2[0] - c[0], c2[1] - c[1], c2[2] - c[2]]);
+      const sd = i % 2 ? 1 : -1, pl = 0.045 * (1 - 0.55 * t);
+      const dir = norm(add(side.map(v => v * sd), tg, 0.45));
+      pins.push(Cap(c, add(c, dir, pl), 0.0022, 0.0011, CR.PIN));
+    }
+    // the vane (low only): a thin ribbon along the arm, as wide as the pinnules reach
+    for (let i = 0; i < 8; i++) {
+      const t0 = i / 8, t1 = (i + 1) / 8, c0 = bez(pts, t0), c1 = bez(pts, t1), m = lerp3(c0, c1, 0.5);
+      const tg = norm([c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2]]), w = 0.046 * (1 - 0.5 * (t0 + t1) / 2);
+      const nrm = norm([tg[1] * side[2] - tg[2] * side[1], tg[2] * side[0] - tg[0] * side[2], tg[0] * side[1] - tg[1] * side[0]]);
+      // rows of R: columns are local x (side), y (tangent), z (normal)
+      const Rm = [side[0], tg[0], nrm[0], side[1], tg[1], nrm[1], side[2], tg[2], nrm[2]];
+      vanes.push({ t: 'box', c: m, h: [w, Math.hypot(c1[0] - c0[0], c1[1] - c0[1], c1[2] - c0[2]) / 2 + 0.004, 0.006], r: 0.002, R: Rm, m: CR.ARM });
+    }
+    sk.push({ b: r3(b), tip: r3(p), len: +len.toFixed(3) });
+  }
+  const hi = Disp([{ type: 'grain', bake: true, amp: 0.0005, f: 400, seed: seed + 1 }], U(0.003, ...parts, ...arms, U(0.0015, ...pins)));
+  const lo = U(0.003, ...parts.slice(0, 1), ...parts.slice(-1), ...arms, ...vanes, ...parts.filter(q => q.t === 'tube'));
+  return { sdf: hi, loSdf: lo, emit: () => 1, sk: { top: r3(top), arms: sk } };
+}
+const CR_PAINT = {
+  kScale: 0.0008, aoAlb: 0.5,
+  mats: { [CR.STALK]: { c: [0.58, 0.48, 0.36], ro: 0.6 }, [CR.ARM]: { c: [0.76, 0.60, 0.38], ro: 0.5 }, [CR.PIN]: { c: [0.86, 0.72, 0.48], ro: 0.45 }, [CR.CALYX]: { c: [0.62, 0.46, 0.34], ro: 0.5 } },
+  layers: [
+    { c: [0.44, 0.34, 0.26], a: 0.6, m: [['cav', 0.2, 1.0]] },
+    { c: [0.94, 0.86, 0.66], a: 0.4, m: [['cvx', 0.5, 2.0]] }
+  ]
+};
+
+// ============================================================================ SWAY
+// The per-vertex data the shared sway shader reads (gardens.js / flora.js aVA, aFlut):
+// returns [flex, h, mask, phase, flut] for a vertex of `species` variant `sk`. Pure.
+const hashPh = (a, b) => { const s = Math.sin(a * 12.9898 + b * 78.233) * 43758.5453; return (s - Math.floor(s)) * TAU; };
+export const SWAY = {
+  tube(x, y, z, h, sk) { return [h * h, h, 0, 0, 0]; },
+  anem(x, y, z, h, sk) {
+    const D = sk.disc;
+    if (y < D - 0.01 || Math.hypot(x, z) < sk.colR * 0.45) return [0, h, 0, 0, 0];
+    // nearest tentacle root: the tentacle's own length normalises the flex
+    let best = 1e9, bt = null;
+    for (const t of sk.tents) { const d = (x - t.b[0]) ** 2 + (y - t.b[1]) ** 2 + (z - t.b[2]) ** 2; if (d < best) { best = d; bt = t; } }
+    const u = Math.min(1, Math.sqrt(best) / (bt.len * 1.05));
+    return [u * u, h, sst(0.6, 1, u), hashPh(bt.b[0], bt.b[2]), 0.04 * u * u];
+  },
+  barrel(x, y, z, h) { return [h * h * 0.25, h, 0, 0, 0]; },
+  // a plume vertex carries mask 1, its own tube's phase, and its MOUTH (aBU) to retract into
+  worm(x, y, z, h, sk) {
+    for (const t of sk.tubes) {
+      const px = x - t.m[0], py = y - t.m[1], pz = z - t.m[2], al = px * t.up[0] + py * t.up[1] + pz * t.up[2];
+      if (al < -0.004 || al > t.L * 1.25) continue;
+      const rx = px - t.up[0] * al, ry = py - t.up[1] * al, rz = pz - t.up[2] * al;
+      if (rx * rx + ry * ry + rz * rz > (t.r * 2.3) ** 2) continue;
+      return [h * h * 0.4, h, 1, hashPh(t.m[0], t.m[2]), 0.006, t.m[0], t.m[2]];
+    }
+    return [h * h * 0.15, h, 0, 0, 0];
+  },
+  stag(x, y, z, h) { return [h * h * 0.5, h, 0, 0, 0]; },
+  brain(x, y, z, h) { return [0, h, 0, 0, 0]; },
+  table(x, y, z, h) { return [0, h, 0, 0, 0]; },
+  glass(x, y, z, h) { return [h * h * 0.05, h, 0, 0, 0]; },
+  fan(x, y, z, h) { return [h * h, h, 0, 0, 0]; },
+  crin(x, y, z, h, sk) {
+    const T = sk.top, d = Math.hypot(x - T[0], y - T[1] - 0.02, z - T[2]);
+    if (y < T[1] + 0.01) return [h * h * 0.2, h, 0, 0, 0];
+    let len = 0.3; for (const a of sk.arms) len = Math.max(len, a.len);
+    const u = Math.min(1, d / len);
+    return [0.2 + Math.pow(u, 1.4) * 0.8, h, 0, hashPh(Math.round(Math.atan2(z - T[2], x - T[0]) * 1.59), 3), 0.025 * u];
+  }
+};
+
+// ============================================================================ SPECIES
+// name -> { variants: [ { seed, ...opts } ], build(seed, opts), paint, set size, h / budgets }
+export const SPECIES = {
+  tube: {
+    variants: [{ seed: 101 }, { seed: 202 }, { seed: 303 }, { seed: 404 }],
+    build: v => tubeSponge(v.seed), paint: TS_PAINT,
+    set: { size: 1024 }, hi: 0.0028, lo: 0.006, tris: 2400, err: 0.008, far: 600, kEps: 0.006, ao: { r: 0.03, n: 4 }, cage: 0.012, ray: 0.03
+  },
+  anem: {
+    variants: [{ seed: 11, type: 'std' }, { seed: 22, type: 'long' }, { seed: 33, type: 'bubble' }, { seed: 44, type: 'dense' }],
+    build: v => anemone(v.seed, v.type), paint: AN_PAINT,
+    set: { size: 1024 }, hi: 0.0018, lo: 0.0038, tris: 4200, err: 0.009, far: 1000, kEps: 0.004, ao: { r: 0.025, n: 4 }, cage: 0.008, ray: 0.024
+  },
+  barrel: {
+    variants: [{ seed: 501 }, { seed: 502 }, { seed: 503 }, { seed: 504 }],
+    build: v => barrel(v.seed), paint: BR_PAINT,
+    set: { size: 1024, aoDist: 0.12 }, hi: 0.005, lo: 0.012, tris: 3200, err: 0.014, far: 800, kEps: 0.012, ao: { r: 0.08, n: 4 }, cage: 0.03, ray: 0.08
+  },
+  worm: {
+    variants: [{ seed: 601 }, { seed: 602 }, { seed: 603 }],
+    build: v => worms(v.seed), paint: TW_PAINT,
+    set: { size: 1024 }, hi: 0.002, lo: 0.0045, tris: 4200, err: 0.012, far: 1100, kEps: 0.004, ao: { r: 0.03, n: 4 }, cage: 0.01, ray: 0.03
+  },
+  stag: {
+    variants: [{ seed: 701 }, { seed: 702 }, { seed: 703 }, { seed: 704 }],
+    build: v => staghorn(v.seed), paint: SG_PAINT,
+    set: { size: 1024 }, hi: 0.0018, lo: 0.005, tris: 3000, err: 0.006, far: 800, kEps: 0.004, ao: { r: 0.03, n: 4 }, cage: 0.008, ray: 0.024
+  },
+  brain: {
+    variants: [{ seed: 801 }, { seed: 802 }, { seed: 803 }],
+    build: v => brain(v.seed), paint: BC_PAINT,
+    set: { size: 1024, aoDist: 0.05 }, hi: 0.0025, lo: 0.012, tris: 1800, err: 0.012, far: 500, kEps: 0.005, ao: { r: 0.03, n: 4 }, cage: 0.025, ray: 0.06
+  },
+  table: {
+    variants: [{ seed: 1201 }, { seed: 1202 }, { seed: 1203 }],
+    build: v => table(v.seed), paint: TB_PAINT,
+    set: { size: 1024, aoDist: 0.08 }, hi: 0.0028, lo: 0.009, tris: 1600, err: 0.01, far: 450, kEps: 0.006, ao: { r: 0.04, n: 4 }, cage: 0.02, ray: 0.05
+  },
+  glass: {
+    variants: [{ seed: 901, type: 'basket' }, { seed: 902, type: 'basket' }, { seed: 903, type: 'vase' }, { seed: 904, type: 'vase' }],
+    build: v => glass(v.seed, v.type), paint: GS_PAINT,
+    set: { size: 2048, alpha: true, ormB: 'alpha' }, hi: 0.0011, lo: 0.0065, tris: 1400, err: 0.01, far: 400, kEps: 0.003, ao: { r: 0.02, n: 3 }, cage: 0.016, ray: 0.03
+  },
+  fan: {
+    variants: [{ seed: 1001, type: 'wide' }, { seed: 1002, type: 'wide' }, { seed: 1003, type: 'tall' }, { seed: 1004, type: 'lobed' }],
+    build: v => seaFan(v.seed, v.type), paint: GF_PAINT,
+    set: { size: 2048, alpha: true, ormB: 'alpha' }, hi: 0.0008, lo: 0.005, tris: 700, err: 0.008, far: 250, kEps: 0.003, ao: { r: 0.01, n: 3 }, cage: 0.012, ray: 0.024
+  },
+  crin: {
+    variants: [{ seed: 1101 }, { seed: 1102 }, { seed: 1103 }],
+    build: v => crinoid(v.seed), paint: CR_PAINT,
+    set: { size: 1024, alpha: true, ormB: 'alpha' }, hi: 0.001, lo: 0.0032, tris: 3200, err: 0.004, far: 900, kEps: 0.003, ao: { r: 0.012, n: 3 }, cage: 0.009, ray: 0.02
+  }
+};
+
+// ---- the offline pipeline -----------------------------------------------------------------
+export function pipeline() {
+  const sets = {}, pieces = [], sk = {};
+  for (const [name, S] of Object.entries(SPECIES)) {
+    sets[name] = { size: S.set.size, gutter: 6, aoDist: S.set.aoDist || 0.06, aoSamples: 64, fill: true, weldNormals: true, alpha: !!S.set.alpha, ...(S.set.ormB ? { ormB: S.set.ormB } : {}) };
+    sk[name] = [];
+    S.variants.forEach((v, i) => {
+      const b = S.build(v);
+      sk[name].push(b.sk);
+      pieces.push({ name: name + '_v' + i, set: name, sdf: b.sdf, loSdf: b.loSdf, hi: { h: S.hi }, lo: { h: S.lo, tris: S.tris, err: S.err }, far: S.far, paint: S.paint, kEps: S.kEps, ao: S.ao, cage: S.cage, ray: S.ray, emit: b.emit || S.emit });
+    });
+  }
+  return {
+    name: 'plants', out: 'assets/plants', sets, pieces,
+    compress: { mesh: 'draco', tex: 'ktx2' },
+    meta: { sk, species: Object.fromEntries(Object.entries(SPECIES).map(([k, S]) => [k, { variants: S.variants.length }])) }
+  };
+}
+
+export function preview() {
+  const q = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+  const want = (q.get('p') || 'tube_v0').split(','), k = +(q.get('k') || 2);
+  const P = pipeline(), parts = P.pieces.filter(p => want.includes(p.name));
+  return {
+    key: 'preview-' + want.join('-') + '-' + k + '-' + Math.random(),
+    parts: parts.map(p => ({ name: p.name, sdf: p.sdf, h: p.hi.h * k, tris: p.lo.tris, err: p.lo.h })),
+    atlas: { size: +(q.get('s') || 512), paint: parts[0].paint, kEps: parts[0].kEps, ao: parts[0].ao }
+  };
+}

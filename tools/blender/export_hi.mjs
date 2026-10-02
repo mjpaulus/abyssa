@@ -18,7 +18,8 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const [creature, ...only] = process.argv.slice(2);
 if (!creature) { console.error('usage: export_hi.mjs <creature> [piece ...]'); process.exit(1); }
 // a sleeper lives in src/entities/sleeper/; anything else (sal) in src/entities/
-const SRC = [path.join(ROOT, 'src/entities/sleeper', creature + 'Sculpt.js'), path.join(ROOT, 'src/entities', creature + 'Sculpt.js')].find(f => fs.existsSync(f));
+// (additive, plants) sessile life lives in src/world/plants/
+const SRC = [path.join(ROOT, 'src/entities/sleeper', creature + 'Sculpt.js'), path.join(ROOT, 'src/entities', creature + 'Sculpt.js'), path.join(ROOT, 'src/world/plants', creature + 'Sculpt.js')].find(f => fs.existsSync(f));
 if (!SRC) { console.error('no sculpt module for', creature); process.exit(1); }
 const mod = await import(SRC);
 const P = mod.pipeline();
@@ -34,6 +35,7 @@ for (const pc of P.pieces) {
   const entry = { name: pc.name, set: pc.set, hiE: pc.emit ? pc.name + '_hiE.ply' : undefined, tris: pc.lo.tris, cage: pc.cage || pc.hi.h * 3, ray: pc.ray || pc.hi.h * 8, hi: pc.name + '_hi.ply', lo: pc.name + '_lo.ply' };
   if (pc.wrk) entry.hiW = pc.name + '_hiW.ply';           // (additive) see below
   if (pc.skin) entry.skin = pc.skin;                       // (additive) bake.py weights it
+  if (pc.far) entry.far = pc.far;                          // (additive, plants) a far LOD: bake.py decimates a welded copy of the low to this many tris (UVs kept)
   man.pieces.push(entry);
   if (only.length && !only.includes(pc.name)) continue;
   const t0 = Date.now();
@@ -85,7 +87,9 @@ man.unwrap = {};
 for (const set of Object.keys(P.sets)) {
   const pcs = P.pieces.filter(q => q.set === set), t0 = Date.now(), lows = [];
   for (const pc of pcs) {
-    const lo = meshSDF(pc.sdf, pc.lo.h, { forMesh: true });
+    // (additive, plants) `loSdf`: a different field for the low — an alpha card's plain shell
+    // under a high that is all holes (bake.py set alpha: true)
+    const lo = meshSDF(pc.loSdf || pc.sdf, pc.lo.h, { forMesh: true });
     const d = decimate(lo.pos, lo.idx, pc.lo.tris, pc.lo.err != null ? pc.lo.err : pc.lo.h * 1.2);
     lows.push(d);
     man.pieces.find(e => e.name === pc.name).loSrcTris = lo.idx.length / 3;

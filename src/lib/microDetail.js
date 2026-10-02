@@ -137,6 +137,9 @@ vMdP = transformed * uMdParams.x;
   #ifdef USE_INSTANCING
     mdM = mdM * mat3( instanceMatrix );
   #endif
+  #ifdef USE_BATCHING
+    mdM = mdM * mat3( batchingMatrix );   // (additive, plants: BatchedMesh species)
+  #endif
   vMdX = mdM[ 0 ]; vMdY = mdM[ 1 ]; vMdZ = mdM[ 2 ];
 }
 `;
