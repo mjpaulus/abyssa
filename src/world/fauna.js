@@ -61,6 +61,12 @@ import { activeVents } from './vents.js';
 import { siteParams, stream } from './site.js';
 import { player } from '../player.js';
 import { setMover, pulseAt, PULSE_DIR, M_RAY, M_TURTLE0, M_TURTLE1 } from './stir.js';
+import { loadSculpted } from '../lib/assets.js';
+import { patchNormalRG } from '../lib/microDetail.js';
+import { makeFish, labelVertex, toCanon } from '../entities/fishKit.js';
+import { FISH as SCHOOL_FISH } from '../entities/schoolSculpt.js';
+import { LABELS as REEF_LABELS } from '../entities/reefSculpt.js';
+import { LABELS as DEEP_LABELS } from '../entities/deepSculpt.js';
 
 const TAU = Math.PI * 2;
 
@@ -582,7 +588,7 @@ float fnPart = aPart; float fnStroke = aInst.x; float fnEff = aInst.y;
 if (fnPart < 1.5) {
   // body/tail: lateral wave growing toward the tail (x negative), tail whips harder
   float fnT = clamp((uBody.y - fnP.x) / uBody.x, 0.0, 1.0);
-  float fnAmp = uMot.x * (fnT*fnT*0.9 + 0.04) * (0.3 + 0.7*fnEff) * (fnPart > 0.5 ? 1.7 : 1.0);
+  float fnAmp = uMot.x * (fnT*fnT*0.9 + 0.04) * (0.3 + 0.7*fnEff) * (1.0 + 0.7 * clamp(fnPart, 0.0, 1.0));   // fauna2: a sculpt ramps 0..1 into the tail (procedural parts are exactly 0 or 1: unchanged)
   float fnArg = fnStroke - fnP.x * uBody.z;
   fnP.z += sin(fnArg) * fnAmp;
   fnN.x -= cos(fnArg) * fnAmp * uBody.z * fnN.z;
@@ -664,7 +670,19 @@ if (abs(aKind - 1.0) < 0.5 && uGaze.w > 0.0) {
   float gL = length(gd);
   vec3 gl = normalize(transpose(mat3(gMM)) * gd);
   float gw = smoothstep(-0.25, 0.35, gl.z * sign(position.z)) * (1.0 - smoothstep(18.0, 30.0, gL)) * uGaze.w;
+  #ifdef FAUNA_SCULPT
+  // fauna2: a sculpted eye is a real ball in a socket — it TURNS toward the diver about its
+  // own centre (centre = vertex - normal * radius; aPhase carries the radius)
+  vec3 gC = position - normalize(normal) * aPhase;
+  vec3 gA = vec3(0.0, 0.0, sign(gC.z));
+  vec3 gT = normalize(mix(gA, gl, 0.45 * gw));
+  vec3 gK = cross(gA, gT); float gS = length(gK), gCo = dot(gA, gT);
+  if (gS > 1e-4) { gK /= gS; vec3 gv = fnP - gC;
+    fnP = gC + gv * gCo + cross(gK, gv) * gS + gK * dot(gK, gv) * (1.0 - gCo);
+    fnN = fnN * gCo + cross(gK, fnN) * gS + gK * dot(gK, fnN) * (1.0 - gCo); }
+  #else
   fnP.xy += clamp(gl.xy, vec2(-0.8), vec2(0.8)) * aPhase * 0.30 * gw;
+  #endif
 }
 #endif
 objectNormal = normalize(fnN);`;
@@ -1620,6 +1638,164 @@ function gulperStep(G) {
   st[9] = 0.5 + 0.5 * Math.sin(uTime.value * 0.4);
 }
 
+
+// ---------------------------------------------------------------------------
+// SCULPTED FAUNA (fauna2). Animals whose bodies are baked sculpts (entities/*Sculpt.js
+// through tools/blender -> assets/fauna/<set>/). The procedural build above stays as the
+// boot-time body, the fallback (loadSculpted never throws) and, for shoals, the far LOD.
+// Motion is untouched: ONE vertex shader (the same VERT_* chunks, plus FAUNA_SCULPT's
+// eyeball turn) reads the same aPart / aPhase / aGlow / aKind, written onto the sculpted
+// vertices by each animal's labeller from the SAME anatomy the bake was cut from. The
+// instanced aInst is the same attribute object on both geometries, so a swap moves no data.
+// Fragment: the baked albedo / normal / ORM (R AO, G roughness, B emission where baked)
+// plus the skin kit's light terms (fin transmission, wet catchlight, emission x glow).
+// ?faunaproc = the procedural A/B; window.__faunaSculpt.state().
+// ---------------------------------------------------------------------------
+const FS_SETS = { school: 'assets/fauna/school/', reef: 'assets/fauna/reef/', deep: 'assets/fauna/deep/' };
+const FS_LOD_R = 80;
+const fsState = { sets: {}, n: 0, ms: 0, on: true };
+const FRAG_SCULPT = `#include <emissivemap_fragment>
+{
+  float kd = floor(vKind + 0.5);
+  vec3 V = normalize(vViewPosition);
+  vec4 ormS = texture2D(uOrmS, vRoughnessMapUv);
+  float wet = (kd > 0.5 && kd < 1.5) ? 1.0 : 0.0;
+  float fin = (kd > 2.5 && kd < 3.5) ? 1.0 : 0.0;
+  roughnessFactor = mix(roughnessFactor, 0.05, wet);
+  totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * fin * 0.35;
+  totalEmissiveRadiance += skCatch(normal, V, vViewPosition) * wet * vFade;
+  totalEmissiveRadiance += uGlowCol * vGlow * smoothstep(0.08, 0.3, ormS.b) * ormS.b * 1.1;
+}`;
+function faunaSculptMaterial(src, maps) {
+  const u = src.userData.u;
+  const uS = { uOrmS: { value: maps.ormMap } };
+  const m = new THREE.MeshStandardMaterial({
+    map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.ormMap, aoMap: maps.ormMap, aoMapIntensity: 0.9,
+    roughness: 1, metalness: 0, side: THREE.DoubleSide, emissive: 0x000000, alphaHash: true
+  });
+  m.userData.u = u;
+  m.customProgramCacheKey = () => 'abyssa-fauna-sculpt';
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u, uS);
+    sh.vertexShader = '#define FAUNA_SCULPT\n' + sh.vertexShader
+      .replace('#include <common>', VERT_COMMON)
+      .replace('#include <beginnormal_vertex>', VERT_MOTION)
+      .replace('#include <begin_vertex>', VERT_BEGIN);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', FRAG_COMMON + '\nuniform sampler2D uOrmS;')
+      .replace('#include <color_fragment>', FRAG_COLOR)
+      .replace('#include <lights_pars_begin>', '#include <lights_pars_begin>\n' + SKIN_LIGHTS)
+      .replace('#include <emissivemap_fragment>', FRAG_SCULPT);
+    injectStrokes(sh, true);
+  };
+  if (maps.normalMap.userData.rg) patchNormalRG(m);
+  return registerPaint(m);
+}
+// Labelled geometry from a baked piece: positions scaled by the procedural build's merge
+// scale (so every uniform tuned for it — body length, hinge, span — still fits), and the
+// four motion attributes from def.label(x, y, z, L) in the AUTHORED (pre-scale) frame.
+function faunaSculptGeometry(parts, sc, procGeo) {
+  // parts: [{ src: BufferGeometry, label: fn }] — pieces of one animal, merged into one draw
+  const gs = parts.map(({ src, label }) => {
+    const g = new THREE.BufferGeometry(), pos = src.attributes.position, n = pos.count;
+    const P = new Float32Array(n * 3), pa = new Float32Array(n), ph = new Float32Array(n), gl = new Float32Array(n), kd = new Float32Array(n);
+    const L = { part: 0, phase: 0, glow: 0, kind: 0 };
+    for (let i = 0; i < n; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      L.part = 0; L.phase = 0; L.glow = 1; L.kind = 0;
+      label(x, y, z, L);
+      P[i * 3] = x * sc; P[i * 3 + 1] = y * sc; P[i * 3 + 2] = z * sc;
+      pa[i] = L.part; ph[i] = L.kind === SK.cornea ? L.phase * sc : L.phase; gl[i] = L.glow; kd[i] = L.kind;
+    }
+    g.setAttribute('position', new THREE.BufferAttribute(P, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(Float32Array.from(src.attributes.normal.array), 3));
+    const uvA = new THREE.BufferAttribute(Float32Array.from(src.attributes.uv.array), 2);
+    g.setAttribute('uv', uvA);
+    g.setAttribute('uv1', uvA);   // a set's maps may ride channel 1 (creatures.js puts the school atlas there)
+    g.setAttribute('aPart', new THREE.BufferAttribute(pa, 1));
+    g.setAttribute('aPhase', new THREE.BufferAttribute(ph, 1));
+    g.setAttribute('aGlow', new THREE.BufferAttribute(gl, 1));
+    g.setAttribute('aKind', new THREE.BufferAttribute(kd, 1));
+    g.setIndex(new THREE.BufferAttribute(Uint32Array.from(src.index.array), 1));
+    return g;
+  });
+  const g = gs.length === 1 ? gs[0] : mergeGeometries(gs, false);
+  if (gs.length > 1) for (const q of gs) q.dispose();
+  g.setAttribute('aInst', procGeo.attributes.aInst);
+  g.computeBoundingSphere();
+  return g;
+}
+// a fishKit fish in fauna's frame: tail ramp into part 1, pectorals = wave-wings (part 2,
+// phase = side), the eyeball = cornea (gaze turn), fins = membrane
+function fishLabel(fish) {
+  const o = {};
+  return (x, y, z, L) => {
+    const c = toCanon(fish.S, x, y, z);
+    labelVertex(fish, c[0], c[1], c[2], o);
+    const t = 0.5 - c[2];
+    L.part = Math.min(1, Math.max(0, (t - 0.88) / 0.12));
+    if (o.fin >= 0) {
+      L.kind = SK.fin;
+      if (fish.fins[o.fin].name === 'pectoral') { L.part = 2; L.phase = Math.sign(z) || 1; }
+    }
+    if (o.eye) { L.kind = SK.cornea; L.phase = fish.eye.r * (fish.S.faunaLen || 2); }
+  };
+}
+const FS_DEFS = {
+  'VENT FISH': { set: 'school', pieces: [['eelpout', () => fishLabel(FS_FISH('eelpout'))]], scale: 0.62 },
+  'LANTERNFISH': { set: 'school', pieces: [['lanternfish', () => fishLabel(FS_FISH('lanternfish'))]], scale: 0.7 },
+  // the reef (entities/reefSculpt.js): lone or spread animals are always the sculpt
+  'RAY': { set: 'reef', pieces: [['manta', () => REEF_LABELS.manta], ['mantaTail', () => REEF_LABELS.mantaTail]], scale: 3.1, lodR: -1 },
+  'TURTLE': { set: 'reef', pieces: [['turtleBody', () => REEF_LABELS.turtleBody], ['turtleFlip', () => REEF_LABELS.turtleFlip]], scale: 1.35, lodR: -1 },
+  'MORAY': { set: 'reef', pieces: [['moray', () => REEF_LABELS.moray], ['morayJaw', () => REEF_LABELS.morayJaw]], scale: 1.0, lodR: -1 },
+  'CRAB': { set: 'reef', pieces: [['crabBody', () => REEF_LABELS.crabBody], ['crabLegs', () => REEF_LABELS.crabLegs]], scale: 0.55, lodR: -1 },
+  'URCHIN': { set: 'reef', pieces: [['urchin', () => REEF_LABELS.urchin]], scale: 0.75, lodR: -1 },
+  // SEA STAR stays procedural: its shader ossicles out-read the baked star at every distance
+  // (judged side by side, fauna2); the 'star' piece remains in the atlas for a later pass
+  // the deep (entities/deepSculpt.js)
+  'ANGLER': { set: 'deep', pieces: [['angler', () => DEEP_LABELS.angler], ['anglerJaw', () => DEEP_LABELS.anglerJaw], ['anglerPec', () => DEEP_LABELS.anglerPec], ['anglerLure', () => DEEP_LABELS.anglerLure]], scale: 1.6, lodR: -1 },
+  'GULPER': { set: 'deep', pieces: [['gulper', () => DEEP_LABELS.gulper], ['gulperJaw', () => DEEP_LABELS.gulperJaw]], scale: 1.5, lodR: -1 },
+  'ISOPOD': { set: 'deep', pieces: [['isoBody', () => DEEP_LABELS.isoBody], ['isoLegs', () => DEEP_LABELS.isoLegs]], scale: 0.62, lodR: -1 },
+  'FLAPJACK': { set: 'deep', pieces: [['flapBody', () => DEEP_LABELS.flapBody], ['flapFins', () => DEEP_LABELS.flapFins]], scale: 1.1, lodR: -1 }
+};
+const _fsFish = {};
+function FS_FISH(k) { return _fsFish[k] || (_fsFish[k] = makeFish(SCHOOL_FISH[k])); }
+function installFaunaSculpt(set, a) {
+  if (!a || !a.geos) return;
+  const t0 = performance.now();
+  fsState.sets[set] = a.ms;
+  for (const name in FS_DEFS) {
+    const def = FS_DEFS[name], G = byName[name];
+    if (def.set !== set || !G || !def.pieces.every(p => a.geos[p[0]])) continue;
+    G.procGeo = G.mesh.geometry; G.procMat = G.mesh.material;
+    G.sculptGeo = faunaSculptGeometry(def.pieces.map(p => ({ src: a.geos[p[0]], label: p[1]() })), def.scale, G.procGeo);
+    G.sculptMat = faunaSculptMaterial(G.procMat, a.maps[set]);
+    G.sculptTris = G.sculptGeo.index.count / 3 * G.n;
+    G.lodR = def.lodR != null ? def.lodR : FS_LOD_R;
+    fsState.n++;
+  }
+  fsState.ms += performance.now() - t0;
+}
+function loadFaunaSculpts() {
+  if (typeof location !== 'undefined' && location.search.includes('faunaproc')) return;
+  for (const set in FS_SETS) loadSculpted(FS_SETS[set], set).then(a => installFaunaSculpt(set, a));
+}
+// near = sculpt, far = procedural (shoals swap on their centre; lone animals on themselves)
+function faunaLod(G) {
+  if (!G.sculptGeo) return;
+  let cx, cy, cz;
+  if (G.P) { cx = G.cx; cy = G.cy; cz = G.cz; } else { cx = G.st[0]; cy = G.st[1]; cz = G.st[2]; }
+  const dx = cx - camera.position.x, dy = cy - camera.position.y, dz = cz - camera.position.z, R = G.lodR + (G.radius || 0) * 2;
+  const near = fsState.on && (G.lodR < 0 || dx * dx + dy * dy + dz * dz < R * R);
+  const g = near ? G.sculptGeo : G.procGeo, m = near ? G.sculptMat : G.procMat;
+  if (G.mesh.geometry !== g) { G.mesh.geometry = g; G.mesh.material = m; }
+}
+if (typeof window !== 'undefined') window.__faunaSculpt = {
+  state: () => ({ installed: fsState.n, sets: fsState.sets, ms: +fsState.ms.toFixed(1), on: fsState.on,
+    groups: groups.filter(G => G.sculptGeo).map(G => ({ name: G.name, near: G.mesh.geometry === G.sculptGeo, tris: G.mesh.geometry.index.count / 3 * G.n, vis: G.mesh.visible })) }),
+  on: v => { fsState.on = !!v; for (const G of groups) faunaLod(G); return fsState.on; }
+};
+
 // ---------------------------------------------------------------------------
 // build — once, ever
 // ---------------------------------------------------------------------------
@@ -1701,6 +1877,7 @@ export function buildFauna() {
   });
 
   layoutAll();
+  loadFaunaSculpts();   // fauna2: baked bodies stream in after boot
 
   // dev surface
   window.__fauna = {
@@ -1793,6 +1970,7 @@ export function updateFauna(dt, t) {
     }
     G.active = vis && !G.stat;
     if (G.mesh.visible !== vis) G.mesh.visible = vis;
+    if (vis) faunaLod(G);
   }
 
   // fixed 30 Hz steering, capped so a throttled tab never spirals

@@ -173,3 +173,17 @@ creature that uses none of these builds exactly as before:
   `xf` (meta.face). helmetSpec hollows the bonnet's front and bores the faceplate through to it; the
   installer adds the liner + procedural eyes and drops the front recess disc. Look-dev:
   `sculptlab.html?lab&job=./src/entities/salSkinSculpt.js%23preview&p=head,eyes` (or `p=handL`).
+
+## Fauna (fauna2): every animal through the same pipeline
+
+`node tools/blender/build.mjs <set>` for `school`, `reef`, `deep`, `octo`, `shark` (modules in
+`src/entities/<set>Sculpt.js`, anatomy kit `src/entities/fishKit.js`) -> `assets/fauna/<set>/`
+(Draco + KTX2). The runtime keeps the procedural animals as the boot body, the fallback and
+(schools) nothing else; the sculpts carry the motion attributes the existing vertex shaders read,
+written at install by labellers exported from the same modules (fish: uv = body t + fin flag,
+aSurf; fauna: aPart/aPhase/aKind/aGlow per piece; octopus/squid: aOct/aSq with the arms kept
+procedural; shark: uv/aSurf + tooth flag). Pieces split where motion parts split (disc/tail,
+shell/flippers, head/jaw, carapace/legs). Thin plates (fins, wings, flippers) keep a mesh floor
+of ~2 low-grid cells with a bake-only layer paring the high back (a thinner plate pinches dual
+contouring into non-manifold edges QEM cannot collapse). A/B: `?fishproc&faunaproc&octproc&sharkproc`
+or `__school.on / __faunaSculpt.on / pred.sculptOn` (same frame).

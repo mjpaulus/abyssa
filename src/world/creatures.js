@@ -15,6 +15,10 @@ import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { MV, MOVER_N, moverLive, pulseAt, PULSE_DIR, LANT, tickStir } from './stir.js';
 import { player } from '../player.js';
+import { loadSculpted } from '../lib/assets.js';
+import { patchNormalRG } from '../lib/microDetail.js';
+import { makeFish, labelVertex } from '../entities/fishKit.js';
+import { FISH } from '../entities/schoolSculpt.js';
 
 // Build/reseed-scoped random stream (THE CHART's reseed path), same idiom as flora.js:
 // buildCreatures()/reseedCreatures() install a FRESH `siteParams('creatures').rng` here
@@ -192,27 +196,10 @@ const FISH_SKIN = [
   [32, 14, 0.010, 0.25, 0.45, 11, 0.10, 0.0, 0.5],    // z2 glass bodies
   [26, 14, 0.013, 0.35, 0.25, 13, 0.20, 0.0, 0.9]     // z2 hatchet
 ];
-function fishMaterial(sp) {
-  const sk = FISH_SKIN[Math.max(0, SPECIES.indexOf(sp))];
-  const sz = (sp.sz[0] + sp.sz[1]) * 0.5;
-  const u = {
-    uPhase: { value: 0 }, uAmp: { value: sp.amp }, uTime,
-    // polish-fauna: sunlit reef fish carry no photophores — zone 0's rows read as LED
-    // dashes by day, so there they fall to a faint reflective lateral stripe.
-    uGlow: { value: new THREE.Color(sp.glow).multiplyScalar(sp.glowI * (sp.zi === 0 ? 0.14 : 1)) },
-    uCount: { value: sp.dots }, uBase: { value: sp.base },
-    uSkinA: { value: new THREE.Vector4(sk[0], sk[1], sk[2] * sz, sk[3]) },
-    uSkinB: { value: new THREE.Vector4(sk[4], sk[5], sk[6], sk[7]) },
-    uSilver: { value: sk[8] }
-  };
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0xffffff, roughness: sp.rough, metalness: sp.metal,
-    side: THREE.DoubleSide, emissive: 0x000000
-  });
-  mat.userData.u = u;
-  mat.customProgramCacheKey = () => 'abyssa-fish-skin';
-  mat.onBeforeCompile = sh => {
-    Object.assign(sh.uniforms, u);
+// The school fish's vertex motion (anim-fauna), shared verbatim by the procedural and the
+// sculpted (fauna2) materials: it keys off uv (body t, fin flag) and aSurf, which the
+// sculpted meshes carry too (labelled from fishKit.js at install), so the motion is identical.
+function fishVertex(sh) {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec3 aTint; attribute vec4 aFish; attribute float aFishK; attribute vec3 aSurf;
@@ -246,6 +233,30 @@ function fishMaterial(sp) {
         }
         transformed.y += sin(ph*0.5 + aFishK)*0.012;
         vFuv = uv; vTint = aTint; vPh = aFishK; vSurf = aSurf;`);
+}
+
+function fishMaterial(sp) {
+  const sk = FISH_SKIN[Math.max(0, SPECIES.indexOf(sp))];
+  const sz = (sp.sz[0] + sp.sz[1]) * 0.5;
+  const u = {
+    uPhase: { value: 0 }, uAmp: { value: sp.amp }, uTime,
+    // polish-fauna: sunlit reef fish carry no photophores — zone 0's rows read as LED
+    // dashes by day, so there they fall to a faint reflective lateral stripe.
+    uGlow: { value: new THREE.Color(sp.glow).multiplyScalar(sp.glowI * (sp.zi === 0 ? 0.14 : 1)) },
+    uCount: { value: sp.dots }, uBase: { value: sp.base },
+    uSkinA: { value: new THREE.Vector4(sk[0], sk[1], sk[2] * sz, sk[3]) },
+    uSkinB: { value: new THREE.Vector4(sk[4], sk[5], sk[6], sk[7]) },
+    uSilver: { value: sk[8] }
+  };
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: sp.rough, metalness: sp.metal,
+    side: THREE.DoubleSide, emissive: 0x000000
+  });
+  mat.userData.u = u;
+  mat.customProgramCacheKey = () => 'abyssa-fish-skin';
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u);
+    fishVertex(sh);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uGlow; uniform float uCount; uniform float uTime; uniform float uBase;
@@ -403,6 +414,153 @@ const SPECIES = [
 
 export const schools = [];
 export const fish = schools; // convenience alias
+
+// ---------------------------------------------------------------------------
+// SCULPTED SCHOOLS (fauna2). Every species' body is a baked sculpt (entities/schoolSculpt.js
+// through tools/blender -> assets/fauna/school/: one atlas, so a school is still ONE draw).
+// The procedural fish above stays: it is the boot-time build, the fallback when the asset
+// is missing (loadSculpted never throws), and the FAR LOD (a school past SCULPT_LOD_R
+// swaps back to it; the instanced attributes are the SAME objects on both geometries, so
+// a swap moves no data). Motion is untouched: the sculpted vertices carry the attributes
+// the vertex shader reads (uv = body t + fin flag, aSurf = root->edge), labelled from the
+// same analytic anatomy the bake was cut from (fishKit labelVertex). Atlas uvs ride uv1.
+// ?fishproc = the procedural A/B. window.__school.state().
+// ---------------------------------------------------------------------------
+const SCULPT_NAME = ['herring', 'snapper', 'butterfly', 'needlefish', 'scad', 'pomfret', 'bristlemouth', 'hatchet'];
+const SCULPT_LOD_R = 50;
+const sculpt = { asset: null, geos: {}, ms: 0, on: true, n: 0 };
+
+function labelFishGeometry(src, fish) {
+  const g = new THREE.BufferGeometry();
+  const pos = src.attributes.position, n = pos.count;
+  g.setAttribute('position', pos);
+  g.setAttribute('normal', src.attributes.normal);
+  g.setAttribute('uv1', src.attributes.uv);
+  if (src.index) g.setIndex(src.index);
+  const uv = new Float32Array(n * 2), surf = new Float32Array(n * 3), L = { fin: -1, s: 0, q: 0, eye: 0 };
+  const P = [0, 0, 0];
+  for (let i = 0; i < n; i++) {
+    const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+    labelVertex(fish, x, y, z, L);
+    uv[i * 2] = 0.5 - z;
+    if (L.fin < 0) {
+      fish.profAt(Math.min(1, Math.max(0, 0.5 - z)), P);
+      const cy = (P[0] - P[1]) * 0.5;
+      const a = Math.atan2(y - cy, x);
+      uv[i * 2 + 1] = 0.5 + 0.5 * Math.sin(a);
+      surf[i * 3] = 0.5 - z; surf[i * 3 + 1] = (a / (Math.PI * 2) + 1) % 1; surf[i * 3 + 2] = L.eye ? 0.5 : 0;
+    } else {
+      const F = fish.fins[L.fin];
+      uv[i * 2 + 1] = 2.0;
+      // aSurf.x drives the pectoral scull hinge (vertex shader): pectorals only
+      surf[i * 3] = F.name === 'pectoral' ? L.s : 0; surf[i * 3 + 1] = L.s; surf[i * 3 + 2] = 1;
+    }
+  }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setAttribute('aSurf', new THREE.BufferAttribute(surf, 3));
+  g.computeBoundingSphere();
+  return g;
+}
+
+function fishSculptMaterial(sp, u, maps) {
+  // the atlas rides uv1 (uv is the motion's body coordinate)
+  for (const t of [maps.map, maps.normalMap, maps.ormMap]) if (t.channel !== 1) { t.channel = 1; t.needsUpdate = true; }
+  const mat = new THREE.MeshStandardMaterial({
+    map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.ormMap, aoMap: maps.ormMap,
+    roughness: 1, metalness: 0, side: THREE.DoubleSide, emissive: 0x000000, aoMapIntensity: 0.9
+  });
+  mat.userData.u = u;
+  const uS = { uBaseCol: { value: new THREE.Color(sp.col) }, uOrm: { value: maps.ormMap } };
+  mat.customProgramCacheKey = () => 'abyssa-fish-sculpt';
+  mat.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, u, uS);
+    fishVertex(sh);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform vec3 uGlow; uniform float uTime; uniform float uBase; uniform vec3 uBaseCol; uniform sampler2D uOrm;
+        uniform vec4 uSkinA; uniform vec4 uSkinB; uniform float uSilver;
+        varying vec2 vFuv; varying vec3 vTint; varying float vPh; varying vec3 vSurf;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
+        ${SKIN_LIGHTS}`)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        // the sculpt carries the anatomy and the pattern; this adds what light does to it
+        float body = step(vFuv.y, 1.5);
+        float fy = clamp(vFuv.y, 0.0, 1.0);
+        vec3 fV = normalize(vViewPosition);
+        vec4 ormS = texture2D(uOrm, vRoughnessMapUv);
+        // each fish its own: the layout's per-fish tint as a ratio to the species colour
+        diffuseColor.rgb *= clamp(mix(vec3(1.0), vTint / max(uBaseCol, vec3(0.02)), 0.55), 0.6, 1.5);
+        // the wet eye (baked mirror-smooth) and the cornea's catchlight
+        float wet = (1.0 - smoothstep(0.06, 0.12, roughnessFactor)) * step(0.25, vSurf.z) * body;
+        float fr = pow(1.0 - clamp(abs(dot(normal, fV)), 0.0, 1.0), 2.2);
+        vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (vec3(0.0, 0.33, 0.67) + fr * 0.85 + vPh * 0.05 + uSkinB.x));
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * (0.7 + 0.6 * irid), uSkinA.w * body * (1.0 - wet) * (0.1 + 0.4 * fr));
+        metalnessFactor = 0.0;
+        // fin membrane: light from behind comes through, more toward the free edge
+        totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * (1.0 - body) * (0.25 + 0.35 * vSurf.y) * 0.5;
+        // silver flank: the guanine mirror of the bright water above
+        totalEmissiveRadiance += skEnv(normal, fV) * (vec3(dot(diffuseColor.rgb, vec3(0.3333))) * 0.8 + 0.2) * uSilver * 1.1 * body * (1.0 - wet) * (0.5 + 0.5 * (1.0 - smoothstep(0.55, 0.95, fy)));
+        totalEmissiveRadiance += skCatch(normal, fV, vViewPosition) * wet;
+        // baked photophores (ORM.B): dim, breathing; zone 0 species bake none
+        float beat = 0.6 + 0.4 * sin(uTime * 2.2 + vPh * 3.0);
+        totalEmissiveRadiance += uGlow * smoothstep(0.08, 0.3, ormS.b) * ormS.b * beat * 1.6;
+        totalEmissiveRadiance += uGlow * uBase * body;`);
+    injectStrokes(sh);
+  };
+  if (maps.normalMap.userData.rg) patchNormalRG(mat);   // BC5 (KTX2): rebuild the normal's Z
+  return registerPaint(mat);
+}
+
+function installSchoolSculpt(a) {
+  const t0 = performance.now();
+  if (!a || !a.geos) return;
+  sculpt.asset = a;
+  const fishes = {};
+  for (const S of schools) {
+    const k = SCULPT_NAME[SPECIES.indexOf(S.sp)];
+    const src = k && a.geos[k];
+    if (!src || !FISH[k]) continue;
+    if (!sculpt.geos[k]) { fishes[k] = fishes[k] || makeFish(FISH[k]); sculpt.geos[k] = labelFishGeometry(src, fishes[k]); }
+    // a geometry per school (its own instanced attributes), sharing the labelled buffers
+    const g = new THREE.BufferGeometry(), base = sculpt.geos[k];
+    for (const nm in base.attributes) g.setAttribute(nm, base.attributes[nm]);
+    g.setIndex(base.index);
+    g.boundingSphere = base.boundingSphere;
+    const pg = S.inst.geometry;
+    for (const nm of ['aTint', 'aFish', 'aFishK']) g.setAttribute(nm, pg.attributes[nm]);
+    S.procGeo = pg; S.procMat = S.inst.material;
+    S.sculptGeo = g; S.sculptMat = fishSculptMaterial(S.sp, S.mat.userData.u, a.maps.school);
+    // the far LOD: the same animal at ~260 tris from its own small atlas
+    const fk = k + '_far';
+    if (a.geos[fk] && a.maps.schoolFar) {
+      if (!sculpt.geos[fk]) sculpt.geos[fk] = labelFishGeometry(a.geos[fk], fishes[k] || (fishes[k] = makeFish(FISH[k])));
+      const fg = new THREE.BufferGeometry(), fb = sculpt.geos[fk];
+      for (const nm in fb.attributes) fg.setAttribute(nm, fb.attributes[nm]);
+      fg.setIndex(fb.index); fg.boundingSphere = fb.boundingSphere;
+      for (const nm of ['aTint', 'aFish', 'aFishK']) fg.setAttribute(nm, pg.attributes[nm]);
+      S.farGeo = fg; S.farMat = fishSculptMaterial(S.sp, S.mat.userData.u, a.maps.schoolFar);
+    }
+    sculpt.n++;
+  }
+  sculpt.ms = performance.now() - t0;
+}
+// per frame, per visible school: near = sculpt, far (or ?fishproc) = the procedural build
+function schoolLod(S) {
+  if (!S.sculptGeo) return;
+  // the LENS's distance, not the diver's: what decides the read is the pixels
+  const near = S.center.distanceTo(camera.position) < SCULPT_LOD_R + S.radius;
+  let g = S.procGeo, m = S.procMat;
+  if (sculpt.on) { if (near || !S.farGeo) { g = S.sculptGeo; m = S.sculptMat; } else { g = S.farGeo; m = S.farMat; } }
+  if (S.inst.geometry !== g) { S.inst.geometry = g; S.inst.material = m; }
+}
+if (typeof window !== 'undefined') window.__school = {
+  state: () => ({ installed: sculpt.n, ms: +sculpt.ms.toFixed(1), on: sculpt.on, lodR: SCULPT_LOD_R,
+    near: schools.filter(S => S.sculptGeo && S.inst.geometry === S.sculptGeo && S.inst.visible).length,
+    far: schools.filter(S => S.farGeo && S.inst.geometry === S.farGeo && S.inst.visible).length,
+    tris: schools.reduce((t, S) => t + (S.inst.visible ? S.inst.geometry.index.count / 3 * S.n : 0), 0) }),
+  on: v => { sculpt.on = !!v; for (const S of schools) schoolLod(S); return sculpt.on; }
+};
 
 // Fixed topological neighbourhood — real flocks track ~7 neighbours, and fixed
 // index offsets keep the whole thing O(n) instead of O(n^2).
@@ -626,6 +784,7 @@ function updateSchool(S, dt, t) {
     return;
   }
   S.inst.visible = true;
+  schoolLod(S);
 
   // ---- boids, in school-local space so the whole flock translates for free ----
   const P = S.P, V = S.V, F = S.F, BK = S.bank, PH = S.phs, n = S.n;
@@ -1454,6 +1613,10 @@ export function buildCreatures() {
   _cr = siteParams('creatures').rng;
   let seed = 0;
   for (const sp of SPECIES) for (let k = 0; k < sp.copies; k++) buildSchool(sp, seed++);
+  // fauna2: the sculpted bodies stream in after boot; until then (and forever, if the
+  // asset is missing or ?fishproc) the procedural schools swim
+  if (!(typeof location !== 'undefined' && location.search.includes('fishproc')))
+    loadSculpted('assets/fauna/school/', 'school').then(installSchoolSculpt);
   buildJellies();
   buildDrifters();
   buildSparks();
