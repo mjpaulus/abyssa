@@ -5,7 +5,7 @@
 // hundred boids and ~21 jellyfish bodies; undulation, tentacle lag, ribbon
 // motion and glow all live in vertex shaders so the frame cost stays flat.
 import * as THREE from 'three';
-import { scene, camera } from '../core.js';
+import { scene, camera, renderer } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, V3 } from '../lib/math.js';
@@ -199,11 +199,19 @@ const FISH_SKIN = [
 // The school fish's vertex motion (anim-fauna), shared verbatim by the procedural and the
 // sculpted (fauna2) materials: it keys off uv (body t, fin flag) and aSurf, which the
 // sculpted meshes carry too (labelled from fishKit.js at install), so the motion is identical.
+// fauna3 PROPOSAL (default OFF; Michael's call): FAR-SCHOOL VISIBILITY. Past ~45 u true-size
+// school fish fall under a few pixels and the water takes their contrast, so a school dissolves
+// into faint specks. uFarVis = 1 (a) holds each fish to >= ~3 px of body length past 45 u (the
+// fish grows in place, at most x4 — the school keeps its shape and count, TAA keeps the dots
+// steady), and (b) lifts the silver flank flash with distance, the cue a real diver gets from
+// a far school (sculpt materials). window.__school.farVis(1|0) = the A/B.
+const FARVIS = { value: (typeof location !== 'undefined' && location.search.includes('schoolvis')) ? 1 : 0 };
 function fishVertex(sh) {
+    sh.uniforms.uFarVis = FARVIS; sh.uniforms.uJRes = uJRes;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec3 aTint; attribute vec4 aFish; attribute float aFishK; attribute vec3 aSurf;
-        uniform float uPhase; uniform float uAmp; uniform float uTime;
+        uniform float uPhase; uniform float uAmp; uniform float uTime; uniform float uFarVis; uniform float uJRes;
         varying vec2 vFuv; varying vec3 vTint; varying float vPh; varying vec3 vSurf;`)
       // anim-fauna: EVERY FISH ITS OWN ANIMAL. aFish = (beat phase, beat amplitude,
       // turn bend, pectoral scull), integrated per fish on the CPU from its own speed,
@@ -232,6 +240,13 @@ function fishVertex(sh) {
           transformed.x -= sd * fs * (1.0 - aFish.w) * 0.035;
         }
         transformed.y += sin(ph*0.5 + aFishK)*0.012;
+        if (uFarVis > 0.0) {
+          vec3 fW = (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
+          float fD = max(distance(fW, cameraPosition), 1.0);
+          float fPx = length(instanceMatrix[0].xyz) * projectionMatrix[1][1] * uJRes * 0.5 / fD;
+          float fK = 1.0 + uFarVis * smoothstep(40.0, 55.0, fD) * max(0.0, 3.0 / max(fPx, 0.75) - 1.0);
+          transformed *= min(fK, 4.0);
+        }
         vFuv = uv; vTint = aTint; vPh = aFishK; vSurf = aSurf;`);
 }
 
@@ -478,12 +493,13 @@ function fishSculptMaterial(sp, u, maps) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uGlow; uniform float uTime; uniform float uBase; uniform vec3 uBaseCol; uniform sampler2D uOrm;
-        uniform vec4 uSkinA; uniform vec4 uSkinB; uniform float uSilver;
+        uniform vec4 uSkinA; uniform vec4 uSkinB; uniform float uSilver; uniform float uFarVis;
         varying vec2 vFuv; varying vec3 vTint; varying float vPh; varying vec3 vSurf;
         ${SKIN_COMMON}`)
       .replace('#include <lights_pars_begin>', `#include <lights_pars_begin>
         ${SKIN_LIGHTS}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        float farFlash = 1.0 + uFarVis * 2.0 * smoothstep(40.0, 90.0, length(vViewPosition));
         // the sculpt carries the anatomy and the pattern; this adds what light does to it
         float body = step(vFuv.y, 1.5);
         float fy = clamp(vFuv.y, 0.0, 1.0);
@@ -500,7 +516,7 @@ function fishSculptMaterial(sp, u, maps) {
         // fin membrane: light from behind comes through, more toward the free edge
         totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * (1.0 - body) * (0.25 + 0.35 * vSurf.y) * 0.5;
         // silver flank: the guanine mirror of the bright water above
-        totalEmissiveRadiance += skEnv(normal, fV) * (vec3(dot(diffuseColor.rgb, vec3(0.3333))) * 0.8 + 0.2) * uSilver * 1.1 * body * (1.0 - wet) * (0.5 + 0.5 * (1.0 - smoothstep(0.55, 0.95, fy)));
+        totalEmissiveRadiance += skEnv(normal, fV) * (vec3(dot(diffuseColor.rgb, vec3(0.3333))) * 0.8 + 0.2) * uSilver * 1.1 * farFlash * body * (1.0 - wet) * (0.5 + 0.5 * (1.0 - smoothstep(0.55, 0.95, fy)));
         totalEmissiveRadiance += skCatch(normal, fV, vViewPosition) * wet;
         // baked photophores (ORM.B): dim, breathing; zone 0 species bake none
         float beat = 0.6 + 0.4 * sin(uTime * 2.2 + vPh * 3.0);
@@ -559,7 +575,8 @@ if (typeof window !== 'undefined') window.__school = {
     near: schools.filter(S => S.sculptGeo && S.inst.geometry === S.sculptGeo && S.inst.visible).length,
     far: schools.filter(S => S.farGeo && S.inst.geometry === S.farGeo && S.inst.visible).length,
     tris: schools.reduce((t, S) => t + (S.inst.visible ? S.inst.geometry.index.count / 3 * S.n : 0), 0) }),
-  on: v => { sculpt.on = !!v; for (const S of schools) schoolLod(S); return sculpt.on; }
+  on: v => { sculpt.on = !!v; for (const S of schools) schoolLod(S); return sculpt.on; },
+  farVis: v => { FARVIS.value = v ? 1 : 0; return FARVIS.value; }
 };
 
 // Fixed topological neighbourhood — real flocks track ~7 neighbours, and fixed
@@ -1006,193 +1023,409 @@ function updateSchool(S, dt, t) {
 // ---------------------------------------------------------------------------
 
 export const jellies = [];
-let bellIn = null, bellOut = null, trailers = null, jellyGlow = null;
-
-// One tentacle mesh serves all three zones; `trail` stretches it per instance so
-// the abyssal jellies drag far longer arms without a second geometry.
+// fauna3: REAL JELLIES. The old jelly was an additive lathe with a halo sprite: it glowed in
+// sunlit water, which is exactly "neon". Now every jelly is a LIT translucent animal — the sun,
+// the hemisphere and the lantern light it, light coming through it from behind shows (thin-sheet
+// transmission, the scene's own lights), a fresnel rim thickens it at the silhouette and a wet
+// specular glints on the bell — and only the deep species carry light of their own, where real
+// ones do: Atolla's "burglar alarm" ring along its coronal groove and Periphylla's flashes, faint
+// at rest and flaring only when startled. One species per zone:
+//   zone 0  MOON JELLY (Aurelia aurita): a flat clear saucer, 16 branching radial canals and the
+//           ring canal, eight rhopalia, four violet horseshoe gonads seen through it, a fringe of
+//           very short fine tentacles, four short frilled oral arms.
+//   zone 1  SEA NETTLE / COMPASS JELLY (Chrysaora): a rounded cream bell with sixteen brown
+//           compass V-bands and an apex ring, 32 lappets, long red-brown marginal tentacles and
+//           four long spiralling frilled oral arms that trail far behind.
+//   zone 2  ATOLLA (crimson crowned disc, coronal groove, thick pedalia, one long hypertrophied
+//           tentacle) and PERIPHYLLA (the tall purple-red helmet), variant per individual.
+// Geometry: ONE instanced mesh carries the subumbrella, the manubrium, the oral arms and the
+// exumbrella IN THAT INDEX ORDER (an instanced draw rasterises instance by instance, primitive
+// by primitive, so each jelly composites inside-out without any per-triangle sort), all
+// generated in the vertex shader from (part, u, v, w) and the species; a second instanced mesh
+// carries the tentacles as camera-facing ribbons held to >= 1 px with their alpha scaled by the
+// coverage they lost (thin lines that shimmer under TAA jitter are the classic flicker source).
+// The 21 instance SLOTS are re-sorted far-to-near whenever the order changes (a few hundred
+// floats, no allocation), so overlapping jellies composite correctly too.
+let bellMesh = null, tentMesh = null;
 const JELLY_ZONE = [
-  { hue: [0.48, 0.60], sat: 0.55, lum: 0.55, scale: [1.1, 2.3], glow: 5.0, ribs: 14, trail: 0.7 },
-  { hue: [0.72, 0.90], sat: 0.65, lum: 0.55, scale: [1.4, 3.0], glow: 7.5, ribs: 16, trail: 1.0 },
-  { hue: [0.36, 0.52], sat: 0.78, lum: 0.60, scale: [1.6, 3.6], glow: 11.0, ribs: 20, trail: 2.0 }
+  { hue: [0.55, 0.62], scale: [1.0, 2.0], trail: 1.0 },     // moon
+  { hue: [0.05, 0.10], scale: [1.2, 2.4], trail: 1.0 },     // sea nettle
+  { hue: [0.97, 1.02], scale: [1.0, 2.2], trail: 1.0 }      // atolla / periphylla
 ];
-const TRAIL_CFG = { tent: 18, arms: 4, tlen: [3.2, 5.0], alen: [5.0, 7.6] };
+const JU = 48, JV = 18;                     // bell resolution (around, apex -> margin)
+const ARM_T = 40, ARM_S = 4;                // oral arm ribbon (along, across)
+const TENT_N = 48, TENT_SEG = 14;           // tentacle strands per jelly (species use a prefix)
 
 function bellGeometry() {
-  const pts = [], DOME = 8;
-  for (let i = 0; i <= DOME; i++) {
-    const u = i / DOME, a = u * Math.PI * 0.5;
-    pts.push(new THREE.Vector2(Math.max(0.002, Math.pow(Math.sin(a), 0.72)), Math.pow(Math.cos(a), 1.35) * 0.9));
-  }
-  // flared margin curling under the bell
-  pts.push(new THREE.Vector2(1.06, -0.09), new THREE.Vector2(1.03, -0.19), new THREE.Vector2(0.93, -0.26));
-  return new THREE.LatheGeometry(pts, 36);
-}
-
-const BELL_VERT = `
-attribute float aPhase; attribute float aRate; attribute float aSeed;
-attribute vec3 aTint; attribute float aRibs;
-uniform float uTime;
-varying vec2 vUv; varying vec3 vN; varying vec3 vV; varying vec3 vTint;
-varying float vC; varying float vFog; varying float vRibs;
-${PULSE_GLSL}
-${FOG_GLSL}
-void main(){
-  float ph = uTime*aRate + aPhase;
-  float c = contractAt(ph - uv.y*0.11);
-  float k = smoothstep(0.03, 1.0, uv.y);
-  vec3 p = position;
-  float wob = 1.0 + sin(uv.x*18.85 + uTime*0.7 + aSeed)*0.035*k;
-  p.xz *= (1.0 - 0.33*c*k) * wob;
-  p.y = p.y*(1.0 + 0.44*c) - 0.22*c*k;
-  // margin scallop keyed to the zone's rib count: the lip lags the bell (extra
-  // phase lag on the pulse), so each contraction rolls through a fluted skirt.
-  float lipM = smoothstep(0.75, 1.0, uv.y);
-  float cLag = contractAt(ph - uv.y*0.11 - 0.16);
-  float scal = cos(uv.x*6.2831853*aRibs);
-  p.xz *= 1.0 + 0.06*scal*lipM*(0.45 + 0.90*cLag);
-  p.y -= (0.5 + 0.5*scal)*lipM*0.05*cLag;
-  vec4 wp = modelMatrix * instanceMatrix * vec4(p, 1.0);
-  vN = normalize(mat3(modelMatrix) * (mat3(instanceMatrix) * normal));
-  vV = normalize(cameraPosition - wp.xyz);
-  vUv = uv; vTint = aTint; vC = contractAt(ph); vRibs = aRibs;
-  vFog = fogVis(wp.xyz);
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}`;
-
-// Outer shell: fresnel rim, radial ribs, a hot ring at the margin on each pulse.
-const BELL_OUT_FRAG = `
-uniform float uInt;
-varying vec2 vUv; varying vec3 vN; varying vec3 vV; varying vec3 vTint;
-varying float vC; varying float vFog; varying float vRibs;
-void main(){
-  float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.6);
-  float ribs = pow(0.5 + 0.5*cos(vUv.x*6.28318*vRibs), 9.0) * smoothstep(0.12, 0.95, vUv.y);
-  float margin = smoothstep(0.80, 1.0, vUv.y);
-  vec3 col = vTint * (fres*1.15 + ribs*0.55 + 0.05);
-  col += vTint * margin * (0.35 + 1.25*vC);
-  // reversed-edge smoothstep = UB (0.0 on this driver): the apex/crown glow never drew.
-  // RETUNE with the term live: (0.12 + 0.5*vC) -> (0.06 + 0.25*vC) — at the authored
-  // weight the already-hot additive bell blew out to white at close range.
-  col += vTint * (1.0 - smoothstep(0.0, 0.4, vUv.y)) * (0.06 + 0.25*vC);
-  gl_FragColor = vec4(col * vFog * uInt, 1.0);
-  ${TONE_OUT}
-}`;
-
-// Inner surface seen through the bell: milky volume plus the four-lobed core.
-const BELL_IN_FRAG = `
-uniform float uInt;
-varying vec2 vUv; varying vec3 vN; varying vec3 vV; varying vec3 vTint;
-varying float vC; varying float vFog; varying float vRibs;
-void main(){
-  float thick = 1.0 - smoothstep(0.0, 0.85, vUv.y);
-  // reversed-edge smoothstep = UB (0.0 here): the four-lobed core never drew, which
-  // also zeroed its alpha term below.
-  float lobes = pow(abs(cos(vUv.x*12.566)), 4.0) * (1.0 - smoothstep(0.06, 0.55, vUv.y));
-  vec3 milk = mix(vTint, vec3(0.78, 0.90, 1.0), 0.55);
-  // RETUNE with the lobes live: color (0.5 + 1.6*vC) -> (0.3 + 0.9*vC), alpha
-  // lobes*0.35 -> lobes*0.22 — authored against a dead term, read hot when it lit.
-  vec3 col = milk * (0.16 + 0.30*vC) + vTint * lobes * (0.3 + 0.9*vC);
-  float a = (0.09 + 0.26*thick + lobes*0.22) * vFog;
-  gl_FragColor = vec4(col * uInt, a);
-  ${TONE_OUT}
-}`;
-
-// Rim tentacles + oral arms, both billboarded ribbons whose curl lags the bell.
-function trailerGeometry(cfg) {
-  const pos = [], A = [], B = [], idx = [];
-  let base = 0;
-  const strand = (segs, ang, len, r0, w, kind, si) => {
-    for (let i = 0; i <= segs; i++) {
-      const T = i / segs;
-      for (const side of [-1, 1]) {
-        pos.push(Math.cos(ang) * r0, -T * len, Math.sin(ang) * r0);
-        A.push(T, ang, side, kind);
-        B.push(len, r0, w, si);
-      }
+  const J = [], idx = [];
+  const grid = (part, nu, nv, uFn) => {
+    const base = J.length / 4, cols = nu + 1;
+    for (let i = 0; i <= nv; i++) for (let j = 0; j <= nu; j++) { const q = uFn(j / nu, i / nv); J.push(part, q[0], q[1], q[2]); }
+    for (let i = 0; i < nv; i++) for (let j = 0; j < nu; j++) {
+      const a = base + i * cols + j, b = a + 1;
+      idx.push(a, a + cols, b, b, a + cols, b + cols);
     }
-    for (let i = 0; i < segs; i++) {
-      const a = base + i * 2;
-      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
-    }
-    base += (segs + 1) * 2;
   };
-  const gr = (a, b) => a + GEO_RNG() * (b - a);
-  for (let s = 0; s < cfg.tent; s++) {
-    const ang = (s + 0.5) / cfg.tent * Math.PI * 2;
-    strand(9, ang, gr(cfg.tlen[0], cfg.tlen[1]), 0.99, gr(0.04, 0.075), 0, s * 1.37);
-  }
-  for (let s = 0; s < cfg.arms; s++) {
-    const ang = (s + 0.25) / cfg.arms * Math.PI * 2;
-    strand(12, ang, gr(cfg.alen[0], cfg.alen[1]), 0.20, gr(0.16, 0.24), 1, s * 2.1);
+  // 0 subumbrella (drawn first), 2 manubrium, 3 oral arms, 1 exumbrella (drawn last)
+  grid(0, JU, JV, (u, v) => [u, v, 0]);
+  grid(2, 16, 4, (u, v) => [u, v, 0]);
+  for (let k = 0; k < 4; k++) grid(3, ARM_S, ARM_T, (s, T) => [(k + 0.5) / 4, T, s * 2 - 1]);
+  grid(1, JU, JV, (u, v) => [u, v, 0]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(J.length / 4 * 3), 3));
+  g.setAttribute('aJ', new THREE.Float32BufferAttribute(J, 4));
+  g.setIndex(idx);
+  g.boundingSphere = new THREE.Sphere(V3(), 1e4);
+  return g;
+}
+function tentacleGeometry() {
+  const T = [], idx = [];
+  for (let s = 0; s < TENT_N; s++) {
+    const base = T.length / 4;
+    for (let i = 0; i <= TENT_SEG; i++) for (const side of [-1, 1]) T.push(i / TENT_SEG, s, side, 0);
+    for (let i = 0; i < TENT_SEG; i++) { const a = base + i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
   }
   const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('aA', new THREE.Float32BufferAttribute(A, 4));
-  g.setAttribute('aB', new THREE.Float32BufferAttribute(B, 4));
+  g.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(T.length / 4 * 3), 3));
+  g.setAttribute('aT', new THREE.Float32BufferAttribute(T, 4));
   g.setIndex(idx);
+  g.boundingSphere = new THREE.Sphere(V3(), 1e4);
   return g;
 }
 
-const TRAIL_VERT = `
-attribute vec4 aA; attribute vec4 aB;
-attribute float aPhase; attribute float aRate; attribute float aSeed; attribute vec3 aTint;
-attribute float aLenMul;
-attribute vec3 aVel;          // anim-fauna: the bell's world velocity (drag on the trailers)
-uniform float uTime;
-varying float vT; varying float vSide; varying float vKind;
-varying vec3 vTint; varying float vC; varying float vFog; varying float vSeed;
+// The bell surface, shared by both materials (the tentacles hang from its live margin).
+// sp: 0 moon, 1 nettle, 2 deep (var < 0.5 Atolla, >= 0.5 Periphylla). Local units: the bell
+// radius is 1 (the instance scale is the jelly's size).
+const JELLY_SURF = `
 ${PULSE_GLSL}
-${FOG_GLSL}
-void main(){
-  float T = aA.x, ang = aA.y, side = aA.z, kind = aA.w;
-  float len = aB.x * aLenMul, r0 = aB.y, w0 = aB.z, si = aB.w;
-  float ph = uTime*aRate + aPhase;
-  float c  = contractAt(ph - T*0.45);
-  float cb = contractAt(ph);
-  float rad = r0 * (1.0 - 0.34*c) - kind*0.06*cb;
-  float y = -T*len*(1.0 + 0.20*c) + 0.12*cb;
-  float wave = sin(T*4.4 - uTime*aRate*5.4 + si*1.7 + aSeed)
-             + 0.42*sin(T*9.1 + uTime*aRate*3.1 + si*2.3);
-  float sway = wave * T * len * (kind > 0.5 ? 0.10 : 0.06);
-  vec3 dir = vec3(cos(ang), 0.0, sin(ang));
-  vec3 tg  = vec3(-sin(ang), 0.0, cos(ang));
-  vec3 p = dir*rad + vec3(0.0, y, 0.0) + tg*sway + dir*T*T*(kind>0.5 ? 0.25 : 0.10)*len*0.15;
-  vec4 wp = modelMatrix * instanceMatrix * vec4(p, 1.0);
-  float sc = length(instanceMatrix[0].xyz);
-  vec3 axis = normalize((mat3(modelMatrix) * (mat3(instanceMatrix) * vec3(0.0,1.0,0.0))));
-  vec3 toCam = normalize(cameraPosition - wp.xyz);
-  vec3 wdir = cross(axis, toCam);
-  float wl = length(wdir);
-  wdir = wl > 1e-4 ? wdir/wl : vec3(1.0,0.0,0.0);
-  float ruffle = kind > 0.5 ? (1.0 + 0.45*sin(T*22.0 + si + uTime*0.9)) : 1.0;
-  wp.xyz += wdir * side * w0 * (1.0 - pow(T, 0.75)*0.88) * ruffle * sc;
-  // DRAG LAG: the strands stream back along the bell's wake as it swims, the tips most,
-  // and each strand lags the one before it a little (the whip of a real tentacle mass).
-  // Bounded so a fast jolt never turns them into rods.
-  float vl = length(aVel);
-  vec3 wake = vl > 1e-3 ? -aVel / vl : vec3(0.0);
-  float dragK = min(vl * 0.55, 1.1) * pow(T, 1.5) * len * sc * 0.42;
-  wp.xyz += wake * dragK * (0.85 + 0.15 * sin(si * 2.1 + uTime * aRate * 6.0));
-  vT = T; vSide = side; vKind = kind; vTint = aTint; vC = c; vSeed = aSeed + si;
-  vFog = fogVis(wp.xyz);
-  gl_Position = projectionMatrix * viewMatrix * wp;
+vec2 jProf(float v, float sp, float vr){
+  float a = v * 1.5707963, s = sin(a), c = cos(a);
+  vec2 p;
+  if (sp < 0.5) p = vec2(pow(s, 0.85), 0.28 * pow(c, 1.3));
+  else if (sp < 1.5) p = vec2(pow(s, 0.80), 0.64 * pow(c, 1.15));
+  else if (vr < 0.5) p = vec2(pow(s, 0.92), 0.30 * pow(c, 1.7) + 0.06 - 0.055 * exp(-pow((v - 0.50) / 0.05, 2.0)));
+  else p = vec2(0.80 * pow(s, 1.30), 1.30 * pow(c, 0.85) - 0.07 * exp(-pow((v - 0.64) / 0.05, 2.0)));
+  float m = smoothstep(0.86, 1.0, v);
+  p.x -= 0.05 * m; p.y -= 0.10 * m * m;
+  return p;
+}
+float jLobes(float sp, float vr){ return sp < 0.5 ? 16.0 : (sp < 1.5 ? 32.0 : (vr < 0.5 ? 22.0 : 16.0)); }
+// a point on the bell (outer surface; inner = 1 adds the mesoglea thickness) at the pulse phase
+vec3 jBell(float u, float v, float inner, float ph, float sp, float vr){
+  vec2 p = jProf(v, sp, vr);
+  float c = contractAt(ph - v * 0.11);
+  float k = smoothstep(0.03, 1.0, v);
+  float r = p.x * (1.0 - 0.30 * c * k);
+  float y = p.y * (1.0 + 0.40 * c) - 0.18 * c * k;
+  float lip = smoothstep(0.80, 1.0, v);
+  float cLag = contractAt(ph - v * 0.11 - 0.16);
+  float sc = cos(u * 6.2831853 * jLobes(sp, vr));
+  r *= 1.0 + 0.045 * sc * lip * (0.45 + 0.9 * cLag);
+  y -= (0.5 + 0.5 * sc) * lip * 0.05 * cLag;
+  // Atolla's crown: thick radial pedalia between the coronal groove and the margin
+  if (sp > 1.5 && vr < 0.5) y += 0.03 * max(0.0, sc) * smoothstep(0.52, 0.6, v) * (1.0 - smoothstep(0.86, 0.96, v));
+  // the mesoglea: thick at the apex, thin at the margin (Periphylla is all jelly)
+  float th = mix(sp > 1.5 && vr >= 0.5 ? 0.30 : 0.16, 0.02, pow(v, 0.8));
+  y -= inner * th; r *= 1.0 - inner * 0.06 * (1.0 - v);
+  float a = u * 6.2831853;
+  return vec3(cos(a) * r, y, sin(a) * r);
 }`;
 
-const TRAIL_FRAG = `
-uniform float uInt;
-varying float vT; varying float vSide; varying float vKind;
-varying vec3 vTint; varying float vC; varying float vFog; varying float vSeed;
-void main(){
-  float core = 1.0 - abs(vSide);
-  float fade = pow(1.0 - vT, 1.15) * smoothstep(0.0, 0.05, vT);
-  float glow = mix(0.22, 1.0, core*core);
-  float knots = vKind < 0.5 ? pow(0.5 + 0.5*sin(vT*26.0 - vSeed), 6.0) : 0.0;
-  vec3 col = vTint * (glow*(0.55 + 0.9*vC) + knots*0.8);
-  gl_FragColor = vec4(col * fade * vFog * uInt * (vKind > 0.5 ? 0.55 : 1.0), 1.0);
-  ${TONE_OUT}
+const BELL_VERT_COMMON = `#include <common>
+attribute vec4 aJ;       // part (0 sub, 1 ex, 2 manubrium, 3 oral arm), u, v (or T), w (arm across)
+attribute vec4 aJA;      // pulse phase (CPU-integrated: the same curve the thrust uses), seed, alarm, length
+attribute vec4 aJB;      // species, variant, hue (0..1), spare
+attribute vec3 aJV;      // world velocity (the drag the arms stream into)
+uniform float uTime;
+varying vec4 vJ; varying vec2 vJCS; varying vec4 vJB; varying float vJAl; varying vec3 vJL; varying float vJC;
+${JELLY_SURF}`;
+const BELL_VERT_MAIN = `
+vec3 jP; vec3 jN;
+{
+  float part = aJ.x, u = aJ.y, v = aJ.z, w = aJ.w;
+  float ph = aJA.x, sp = aJB.x, vr = aJB.y;
+  if (part < 1.5) {
+    float inner = 1.0 - part;
+    jP = jBell(u, v, inner, ph, sp, vr);
+    float e = 0.012;
+    vec3 du = jBell(u + e, v, inner, ph, sp, vr) - jBell(u - e, v, inner, ph, sp, vr);
+    vec3 dv = jBell(u, min(1.0, v + e), inner, ph, sp, vr) - jBell(u, max(0.0, v - e), inner, ph, sp, vr);
+    if (v < 0.02) dv = vec3(cos(u * 6.2831853), 0.0, sin(u * 6.2831853)) * 0.01;
+    jN = normalize(cross(du, dv) + vec3(0.0, 1e-5, 0.0));
+    if (inner > 0.5) jN = -jN;
+  } else {
+    vec3 apex = jBell(0.0, 0.0, 1.0, ph, sp, vr);
+    float c = contractAt(ph);
+    if (part < 2.5) {
+      // the manubrium: a short four-cornered mouth tube under the apex
+      float a = u * 6.2831853, rr = (0.085 + 0.025 * cos(a * 4.0)) * (1.0 - 0.35 * v) * (1.0 + 0.25 * c);
+      float lm = sp > 1.5 ? 0.20 : 0.28;
+      jP = apex + vec3(cos(a) * rr, -v * lm * (1.0 - 0.2 * c), sin(a) * rr);
+      jN = normalize(vec3(cos(a), 0.15, sin(a)));
+    } else {
+      // an oral arm: a frilled ribbon from the manubrium, lagging the bell, streaming in its wake
+      float T = v, k = floor(u * 4.0), ak = (k + 0.5) * 1.5707963;
+      float L = (sp < 0.5 ? 0.75 : (sp < 1.5 ? 3.4 : (vr < 0.5 ? 0.45 : 0.30))) * aJA.w;
+      float W = sp < 0.5 ? 0.14 : (sp < 1.5 ? 0.17 : 0.07);
+      float twist = sp < 0.5 ? 1.0 : (sp < 1.5 ? 3.2 : 0.5);
+      float cl = contractAt(ph - T * 0.5);
+      vec3 radial = vec3(cos(ak), 0.0, sin(ak));
+      vec3 cpt = apex + radial * (0.06 + 0.10 * T * min(L, 1.0)) + vec3(0.0, -0.22 - T * L * (1.0 + 0.12 * cl), 0.0);
+      float sw = T * T * L;
+      cpt.x += (sin(T * 3.1 - uTime * 0.85 + aJA.y + k * 1.7) * 0.16 + sin(T * 7.3 + uTime * 0.6 + k) * 0.05) * sw;
+      cpt.z += (cos(T * 2.7 - uTime * 0.75 + aJA.y * 1.3 + k) * 0.16) * sw;
+      mat3 im = mat3(instanceMatrix);
+      vec3 velL = transpose(im) * aJV / max(dot(im[0], im[0]), 1e-6);
+      float vl = length(velL);
+      if (vl > 1e-4) cpt += -velL / vl * min(vl * 0.55, 1.2) * pow(T, 1.4) * L * 0.45;
+      float th = ak + 1.5707963 + T * twist;
+      vec3 acr = vec3(cos(th), 0.0, sin(th));
+      vec3 nrm = normalize(cross(acr, vec3(0.0, -1.0, 0.0)));
+      float wd = W * (1.0 - 0.55 * T) * (0.85 + 0.15 * sin(T * 19.0 + k));
+      // the frill: the ribbon's edges ruffle out of its plane
+      float fr = sin(T * L * 14.0 + w * 1.5 + uTime * 1.1 + k) * w * w * wd * 0.45;
+      jP = cpt + acr * w * wd + nrm * fr;
+      jN = normalize(nrm + acr * w * 0.35 * cos(T * L * 14.0 + w * 1.5));
+    }
+  }
+  vJ = aJ; vJB = aJB; vJAl = aJA.z; vJL = jP; vJC = contractAt(ph);
+  vJCS = vec2(cos(aJ.y * 6.2831853), sin(aJ.y * 6.2831853));
+}`;
+const BELL_FRAG_COMMON = `#include <common>
+varying vec4 vJ; varying vec2 vJCS; varying vec4 vJB; varying float vJAl; varying vec3 vJL; varying float vJC;
+uniform float uTime;
+${SKIN_COMMON}`;
+// colour/alpha per part and species; the bell is a thin clear sheet, so alpha carries most of
+// the read: thicker (more opaque) toward the silhouette, the canals/gonads/pigment denser
+const BELL_FRAG_COLOR = `#include <color_fragment>
+float jPart = floor(vJ.x + 0.5), jSp = vJB.x, jVr = vJB.y;
+float jv = vJ.z, ju = atan(vJCS.y, vJCS.x) / 6.2831853 + 0.5;
+vec3 jV = normalize(vViewPosition);
+vec3 jCol = vec3(0.8); float jA = 0.1; float jLum = 0.0; float jWet = 1.0;
+float rr = length(vJL.xz);
+if (jPart > 2.5) {
+  // oral arms: frilled, denser at the edges
+  float edge = abs(vJ.w);
+  jCol = jSp < 0.5 ? vec3(0.80, 0.74, 0.86) : (jSp < 1.5 ? vec3(0.92, 0.78, 0.66) : vec3(0.42, 0.07, 0.08));
+  jA = (jSp < 1.5 ? 0.22 : 0.45) + 0.30 * smoothstep(0.55, 1.0, edge);
+  jA *= 1.0 - 0.95 * smoothstep(0.7, 1.0, jv);
+} else if (jPart > 1.5) {
+  jCol = jSp < 0.5 ? vec3(0.78, 0.72, 0.84) : (jSp < 1.5 ? vec3(0.86, 0.70, 0.58) : vec3(0.22, 0.03, 0.04));
+  jA = jSp > 1.5 ? 0.7 : 0.3;
+} else if (jSp < 0.5) {
+  // MOON JELLY
+  jCol = vec3(0.80, 0.85, 0.92);
+  jA = 0.05;
+  if (jPart > 0.5) {
+    float q = ju * 16.0, b = 0.33 * smoothstep(0.45, 1.0, jv);
+    float d = min(abs(fract(q + 0.5) - 0.5), min(abs(fract(q + 0.5 + b) - 0.5), abs(fract(q + 0.5 - b) - 0.5)));
+    float dist = d * 6.2831853 / 16.0 * max(rr, 0.05);
+    float canal = (1.0 - smoothstep(0.007, 0.016, dist)) * smoothstep(0.08, 0.2, jv) * skAA(vec2(q, jv * 30.0));
+    float ring = 1.0 - smoothstep(0.006, 0.014, abs(jv - 0.955) * 1.0);
+    vec2 rh = vec2((fract(ju * 8.0 + 0.5) - 0.5) * 6.2831853 / 8.0, jv - 0.985);
+    float rho = 1.0 - smoothstep(0.012, 0.02, length(rh * vec2(1.0, 1.4)));
+    jCol = mix(jCol, vec3(0.92, 0.88, 0.94), max(canal, ring));
+    jA += 0.20 * canal + 0.30 * ring + 0.55 * rho;
+    jCol = mix(jCol, vec3(0.62, 0.48, 0.30), rho);
+  } else {
+    // four violet horseshoe gonads, interradial, and the coronal muscle's fine rings
+    float gn = 0.0;
+    for (int k = 0; k < 4; k++) {
+      float ga = float(k) * 1.5707963;
+      vec2 c = vec2(cos(ga), sin(ga)) * 0.30;
+      vec2 dl = vJL.xz - c;
+      float ring = 1.0 - smoothstep(0.03, 0.055, abs(length(dl) - 0.15));
+      float open = smoothstep(0.35, 0.65, -dot(normalize(dl + 1e-4), normalize(c)) + 0.2);
+      gn = max(gn, ring * open);
+    }
+    float mus = 0.5 + 0.5 * sin(jv * 140.0);
+    jCol = mix(jCol, vec3(0.58, 0.30, 0.68), gn);
+    jA += 0.80 * gn + 0.025 * mus * smoothstep(0.4, 0.9, jv);
+  }
+} else if (jSp < 1.5) {
+  // SEA NETTLE
+  jCol = vec3(0.90, 0.82, 0.70);
+  jA = 0.10;
+  if (jPart > 0.5) {
+    float q = fract(ju * 16.0) - 0.5;
+    float vb = 1.0 - smoothstep(0.06, 0.11, abs(abs(q) - 0.30 * smoothstep(0.08, 1.0, jv)));
+    vb *= smoothstep(0.10, 0.2, jv) * (1.0 - smoothstep(0.88, 0.97, jv)) * skAA(vec2(ju * 16.0, jv * 8.0));
+    float apexR = 1.0 - smoothstep(0.02, 0.04, abs(jv - 0.12));
+    float lap = smoothstep(0.92, 0.99, jv);
+    vec3 cv = skVor(vec2(ju * 90.0, jv * 22.0));
+    float wart = (1.0 - smoothstep(0.08, 0.16, cv.x)) * step(0.6, cv.z) * skAA(vec2(ju * 90.0, jv * 22.0));
+    jCol = mix(jCol, vec3(0.46, 0.20, 0.10), max(vb, apexR) * 0.9);
+    jCol = mix(jCol, vec3(0.55, 0.26, 0.15), lap * 0.7);
+    jCol = mix(jCol, vec3(1.0, 0.96, 0.9), wart * 0.6);
+    jA += 0.35 * max(vb, apexR) + 0.25 * lap + 0.1 * wart;
+  } else {
+    float sect = pow(abs(cos(ju * 6.2831853 * 2.0)), 6.0) * smoothstep(0.1, 0.25, jv) * (1.0 - smoothstep(0.45, 0.6, jv));
+    jCol = mix(jCol, vec3(0.94, 0.86, 0.74), sect);
+    jA += 0.22 * sect;
+  }
+} else if (jVr < 0.5) {
+  // ATOLLA: a crimson crowned disc; the subumbrella's dark red stomach hides what it ate
+  jCol = vec3(0.52, 0.07, 0.08);
+  jA = 0.30;
+  if (jPart > 0.5) {
+    float groove = 1.0 - smoothstep(0.015, 0.035, abs(jv - 0.50));
+    float ped = pow(max(0.0, cos(ju * 6.2831853 * 22.0)), 3.0) * smoothstep(0.55, 0.62, jv) * (1.0 - smoothstep(0.86, 0.95, jv));
+    float dome = 1.0 - smoothstep(0.30, 0.48, jv);
+    jCol *= 0.75 + 0.35 * ped + 0.25 * dome;
+    jCol = mix(jCol, vec3(0.20, 0.02, 0.03), groove * 0.8);
+    jA += 0.15 * ped + 0.3 * groove;
+    // THE BURGLAR ALARM: discrete photophores along the groove; a ring of light that races
+    // round when the animal is startled, a barely-there ember otherwise
+    float spot = 1.0 - smoothstep(0.25, 0.45, length(vec2((fract(ju * 22.0 + 0.5) - 0.5) * 2.0, (jv - 0.50) / 0.025)));
+    float wave = pow(0.5 + 0.5 * sin(ju * 6.2831853 * 2.0 - uTime * 9.0), 6.0);
+    jLum = spot * (0.006 + vJAl * (0.05 + 0.16 * wave));
+  } else {
+    jCol = vec3(0.16, 0.02, 0.03);
+    jA = 0.55 + 0.2 * (1.0 - smoothstep(0.3, 0.6, jv));
+  }
+} else {
+  // PERIPHYLLA: the tall helmet, purple-red, the dark stomach a column inside it
+  jCol = vec3(0.40, 0.10, 0.22);
+  jA = 0.16;
+  if (jPart > 0.5) {
+    float groove = 1.0 - smoothstep(0.015, 0.03, abs(jv - 0.64));
+    jCol = mix(jCol, vec3(0.18, 0.03, 0.08), groove);
+    jA += 0.25 * groove;
+    vec3 cv = skVor(vec2(ju * 40.0, jv * 14.0));
+    float ph = (1.0 - smoothstep(0.05, 0.12, cv.x)) * step(0.72, cv.z) * smoothstep(0.2, 0.6, jv);
+    float flick = pow(0.5 + 0.5 * sin(uTime * 13.0 + cv.z * 40.0), 8.0);
+    jLum = ph * (0.004 + vJAl * 0.12 * flick);
+  } else {
+    jCol = vec3(0.20, 0.03, 0.06);
+    jA = 0.18 + 0.45 * (1.0 - smoothstep(0.35, 0.7, jv));
+  }
+}
+// hue jitter per individual
+jCol *= 0.92 + 0.16 * vJB.z;
+diffuseColor.rgb = jCol;
+diffuseColor.a = clamp(jA, 0.0, 0.92);`;
+const BELL_FRAG_EMIT = `#include <emissivemap_fragment>
+// light arriving through the sheet from behind it (sun, hemisphere, lantern), never its own
+totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * 0.22;
+totalEmissiveRadiance += vec3(0.30, 0.55, 1.0) * jLum;`;
+// the wet glint keeps its brightness on a clear sheet: specular lifts the alpha it is drawn at
+const BELL_FRAG_SPEC = `#include <aomap_fragment>
+{
+  // the bell reads thicker at its silhouette (the sheet seen edge-on)
+  float jFres = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 2.2);
+  diffuseColor.a += (jPart > 2.5 ? 0.10 : 0.22) * jFres;
+  float jSp = dot(reflectedLight.directSpecular + reflectedLight.indirectSpecular, vec3(0.3333));
+  diffuseColor.a = clamp(diffuseColor.a + jSp * (jPart > 2.5 ? 0.3 : 0.9) + dot(totalEmissiveRadiance, vec3(0.3333)) * 0.35, 0.0, 0.92);
 }`;
 
-// Camera-facing additive quads used for every soft halo in the scene.
+function jellyMaterial() {
+  const m = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.2, metalness: 0.0, transparent: true, depthWrite: false,
+    side: THREE.DoubleSide, forceSinglePass: true, emissive: 0x000000
+  });
+  m.customProgramCacheKey = () => 'abyssa-jelly-bell';
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uTime = uTime;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', BELL_VERT_COMMON)
+      .replace('#include <beginnormal_vertex>', BELL_VERT_MAIN + '\nvec3 objectNormal = jN;')
+      .replace('#include <begin_vertex>', 'vec3 transformed = jP;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', BELL_FRAG_COMMON)
+      .replace('#include <lights_pars_begin>', '#include <lights_pars_begin>\n' + SKIN_LIGHTS)
+      .replace('#include <color_fragment>', BELL_FRAG_COLOR)
+      .replace('#include <emissivemap_fragment>', BELL_FRAG_EMIT)
+      .replace('#include <aomap_fragment>', BELL_FRAG_SPEC);
+  };
+  return m;
+}
+
+// TENTACLES: camera-facing ribbons from the live margin, built in the instance's own space (the
+// camera taken into it), so the standard lit pipeline (fog, lights, TAA texture bias) applies.
+// Width is held to >= ~1.1 px with alpha scaled by the coverage that cost (no sub-pixel shimmer).
+const uJRes = { value: 1080 };
+const uJMinPx = { value: 0.55 };   // half-width floor in pixels (1.1 px wide); __jelly.minPx(0) = the A/B
+const TENT_VERT_COMMON = `#include <common>
+attribute vec4 aT;       // T along, strand index, side, spare
+attribute vec4 aJA; attribute vec4 aJB; attribute vec3 aJV;
+uniform float uTime; uniform float uJRes; uniform float uJMinPx;
+varying float vTT; varying float vTCov; varying float vTSide; varying vec4 vTB;
+${JELLY_SURF}`;
+const TENT_VERT_MAIN = `
+vec3 jP; vec3 jN;
+{
+  float T = aT.x, si = aT.y, side = aT.z;
+  float ph = aJA.x, sp = aJB.x, vr = aJB.y;
+  // species: how many strands, how long (bell radii), how thick
+  float n = sp < 0.5 ? 48.0 : (sp < 1.5 ? 24.0 : (vr < 0.5 ? 22.0 : 12.0));
+  float len = sp < 0.5 ? 0.22 : (sp < 1.5 ? 4.6 : (vr < 0.5 ? 1.3 : 2.2));
+  float wid = sp < 0.5 ? 0.0035 : (sp < 1.5 ? 0.006 : 0.007);
+  if (sp > 1.5 && vr < 0.5 && si < 0.5) { len = 6.0; wid = 0.010; }     // Atolla's long tentacle
+  len *= aJA.w * (0.85 + 0.3 * fract(si * 0.618 + aJA.y));
+  vec3 root = jBell((si + 0.5) / n, 1.0, 0.0, ph, sp, vr);
+  float c = contractAt(ph - T * 0.45);
+  float a = (si + 0.5) / n * 6.2831853;
+  vec3 dir = vec3(cos(a), 0.0, sin(a)), tg = vec3(-sin(a), 0.0, cos(a));
+  float wave = sin(T * 4.4 - uTime * 1.6 + si * 1.7 + aJA.y) + 0.42 * sin(T * 9.1 + uTime * 1.0 + si * 2.3);
+  float wave2 = cos(T * 3.3 - uTime * 1.2 + si * 2.9 + aJA.y) + 0.35 * cos(T * 8.0 + uTime * 0.8 + si);
+  vec3 p = root + vec3(0.0, -T * len * (1.0 + 0.18 * c), 0.0) + tg * wave * T * len * 0.09 + dir * (T * T * len * 0.05 + wave2 * T * len * 0.06);
+  mat3 im = mat3(instanceMatrix);
+  float s2 = max(dot(im[0], im[0]), 1e-6);
+  vec3 velL = transpose(im) * aJV / s2;
+  float vl = length(velL);
+  if (vl > 1e-4) p += -velL / vl * min(vl * 0.55, 1.1) * pow(T, 1.5) * len * 0.42 * (0.85 + 0.15 * sin(si * 2.1 + uTime * 2.0));
+  // collapse the strands this species does not have
+  if (si >= n) p = root;
+  // camera-facing, in instance space
+  vec3 camL = (inverse(modelMatrix * instanceMatrix) * vec4(cameraPosition, 1.0)).xyz;
+  vec3 toC = normalize(camL - p);
+  vec3 ax = vec3(0.0, 1.0, 0.0);
+  vec3 wd = cross(ax, toC); float wl = length(wd); wd = wl > 1e-4 ? wd / wl : vec3(1.0, 0.0, 0.0);
+  float w = wid * (1.0 - 0.75 * pow(T, 0.8));
+  // one pixel at this distance, in instance units
+  float dist = length((modelMatrix * instanceMatrix * vec4(p, 1.0)).xyz - cameraPosition);
+  float px = 2.0 * dist / (projectionMatrix[1][1] * uJRes) / sqrt(s2);
+  float wUse = max(w, px * uJMinPx);
+  vTCov = w / wUse;
+  jP = p + wd * side * wUse;
+  jN = toC;
+  vTT = T; vTSide = side; vTB = aJB;
+}`;
+const TENT_FRAG_COLOR = `#include <color_fragment>
+{
+  float sp = vTB.x;
+  vec3 tc = sp < 0.5 ? vec3(0.86, 0.86, 0.90) : (sp < 1.5 ? vec3(0.50, 0.20, 0.13) : vec3(0.40, 0.06, 0.07));
+  float core = 1.0 - abs(vTSide);
+  float a = (0.22 + 0.40 * core) * vTCov * (1.0 - smoothstep(0.7, 1.0, vTT)) * smoothstep(0.0, 0.04, vTT);
+  // nematocyst batteries: faint knots along the strand
+  a *= 0.85 + 0.3 * pow(0.5 + 0.5 * sin(vTT * 90.0), 6.0);
+  diffuseColor.rgb = tc;
+  diffuseColor.a = clamp(a, 0.0, 0.9);
+}`;
+function tentacleMaterial() {
+  const m = new THREE.MeshStandardMaterial({
+    color: 0xffffff, roughness: 0.35, metalness: 0.0, transparent: true, depthWrite: false,
+    side: THREE.DoubleSide, forceSinglePass: true, emissive: 0x000000
+  });
+  m.customProgramCacheKey = () => 'abyssa-jelly-tentacle';
+  m.onBeforeCompile = sh => {
+    sh.uniforms.uTime = uTime; sh.uniforms.uJRes = uJRes; sh.uniforms.uJMinPx = uJMinPx;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', TENT_VERT_COMMON)
+      .replace('#include <beginnormal_vertex>', TENT_VERT_MAIN + '\nvec3 objectNormal = jN;')
+      .replace('#include <begin_vertex>', 'vec3 transformed = jP;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying float vTT; varying float vTCov; varying float vTSide; varying vec4 vTB;
+        ${SKIN_COMMON}`)
+      .replace('#include <lights_pars_begin>', '#include <lights_pars_begin>\n' + SKIN_LIGHTS)
+      .replace('#include <color_fragment>', TENT_FRAG_COLOR)
+      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+        totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * 0.6;`);
+  };
+  return m;
+}
+
 function glowMaterial(extraVert = '', extraVary = '') {
   return new THREE.ShaderMaterial({
     uniforms: { uMap: { value: glowTex }, uTime, uFogD },
@@ -1238,109 +1471,42 @@ function glowField(n, mat) {
   return m;
 }
 
-function instAttr(geo, src) {
-  for (const k in src) geo.setAttribute(k, src[k]);
-}
-
-// Per-instance jelly buffers, allocated once at build and rewritten in place on reseed.
-// aPhase/aRate/aSeed/aTint/aRibs/aLenMul are ONE set of Float32Arrays wrapped by two
-// InstancedBufferAttribute pairs (bell + trailer geometry), so a reseed writes the
-// arrays once and flags both wrappers.
+// Per-jelly canonical data (layout) + per-SLOT instance buffers (rewritten in sorted order).
 let JB = null;
-
 function buildJellies() {
   const N = 7 * 3;
-  const bellGeo = bellGeometry();
-  const trailGeo = trailerGeometry(TRAIL_CFG);
-
-  const aPhase = new Float32Array(N), aRate = new Float32Array(N), aSeed = new Float32Array(N);
-  const aTint = new Float32Array(N * 3), aRibs = new Float32Array(N), aLenMul = new Float32Array(N);
-  const gCol = new Float32Array(N * 3);
-  const aVel = new THREE.InstancedBufferAttribute(new Float32Array(N * 3), 3);
-  aVel.setUsage(THREE.DynamicDrawUsage);
-  JB = { N, aPhase, aRate, aSeed, aTint, aRibs, aLenMul, gCol, attrs: [], aVel };
-
+  const mk = n => new THREE.InstancedBufferAttribute(new Float32Array(N * n), n).setUsage(THREE.DynamicDrawUsage);
+  JB = { N, aJA: mk(4), aJB: mk(4), aJV: mk(3), ord: new Int32Array(N), key: new Float32Array(N), seed: new Float32Array(N), lenMul: new Float32Array(N), hue: new Float32Array(N), vr: new Float32Array(N), vel: new Float32Array(N * 3), dirty: true };
+  for (let i = 0; i < N; i++) JB.ord[i] = i;
   for (let zi = 0; zi < 3; zi++) for (let k = 0; k < 7; k++) {
     jellies.push({
       i: zi * 7 + k, zi, pos: V3(), vel: V3(), axis: V3(0, 1, 0), wob: V3(1, 0, 0),
       scale: 1, spin: 0, spinA: 0, phase: 0, rate: 0.25, baseRate: 0.25, thrust: 12,
-      glow: JELLY_ZONE[zi].glow, alarm: 0, grp: null
+      alarm: 0, culled: false
     });
   }
   layoutJellies();
-
-  const shared = () => {
-    const set = {
-      aPhase: new THREE.InstancedBufferAttribute(aPhase, 1),
-      aRate: new THREE.InstancedBufferAttribute(aRate, 1),
-      aSeed: new THREE.InstancedBufferAttribute(aSeed, 1),
-      aTint: new THREE.InstancedBufferAttribute(aTint, 3),
-      aRibs: new THREE.InstancedBufferAttribute(aRibs, 1),
-      aLenMul: new THREE.InstancedBufferAttribute(aLenMul, 1)
-    };
-    for (const k in set) JB.attrs.push(set[k]);
-    return set;
-  };
-  instAttr(bellGeo, shared());
-  instAttr(trailGeo, shared());
-  trailGeo.setAttribute('aVel', aVel);
-
-  const mkBell = (frag, side, blending, order) => {
-    const m = new THREE.ShaderMaterial({
-      uniforms: { uTime, uFogD, uInt: { value: 1 } },
-      vertexShader: BELL_VERT, fragmentShader: frag,
-      transparent: true, depthWrite: false, side, blending
-    });
-    const im = new THREE.InstancedMesh(bellGeo, m, N);
-    im.frustumCulled = false;
-    im.renderOrder = order;
-    scene.add(im);
-    return im;
-  };
-  bellIn = mkBell(BELL_IN_FRAG, THREE.BackSide, THREE.NormalBlending, 1);
-  bellOut = mkBell(BELL_OUT_FRAG, THREE.FrontSide, THREE.AdditiveBlending, 3);
-
-  const trailMat = new THREE.ShaderMaterial({
-    uniforms: { uTime, uFogD, uInt: { value: 1 } },
-    vertexShader: TRAIL_VERT, fragmentShader: TRAIL_FRAG,
-    transparent: true, depthWrite: false, side: THREE.DoubleSide, blending: THREE.AdditiveBlending,
-    // r163+ splits transparent DoubleSide into a back-face + front-face pass; for a
-    // depthWrite:false additive ribbon that is two draw calls for the same fragments.
-    forceSinglePass: true
-  });
-  trailers = new THREE.InstancedMesh(trailGeo, trailMat, N);
-  trailers.frustumCulled = false;
-  trailers.renderOrder = 2;
-  scene.add(trailers);
-
-  // All three bodies share one transform buffer: write once, upload once.
-  bellOut.instanceMatrix = bellIn.instanceMatrix;
-  trailers.instanceMatrix = bellIn.instanceMatrix;
-
-  jellyGlow = glowField(N, glowMaterial());
-  jellyGlow.renderOrder = 4;
-  jellyGlow.geometry.attributes.aCol.array.set(gCol);
-  jellyGlow.geometry.attributes.aCol.needsUpdate = true;
-  scene.add(jellyGlow);
+  const bg = bellGeometry(), tg = tentacleGeometry();
+  for (const g of [bg, tg]) { g.setAttribute('aJA', JB.aJA); g.setAttribute('aJB', JB.aJB); g.setAttribute('aJV', JB.aJV); }
+  tentMesh = new THREE.InstancedMesh(tg, tentacleMaterial(), N);
+  bellMesh = new THREE.InstancedMesh(bg, jellyMaterial(), N);
+  tentMesh.instanceMatrix = bellMesh.instanceMatrix;
+  bellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  for (const m of [tentMesh, bellMesh]) { m.frustumCulled = false; scene.add(m); }
+  tentMesh.renderOrder = 2; bellMesh.renderOrder = 3;
 }
 
-// Jelly LAYOUT: hue inside the zone's authored band, pulse phase/rate, bell scale,
-// trail length and where in the column it floats. Zone identity (JELLY_ZONE) is fixed;
-// only the individuals change. Reused objects, reused buffers, no allocation.
+// Jelly LAYOUT: the SAME stream draws, in the same order, as before fauna3 (the site's layout
+// is a pure function of the stream; only their meaning per species changed).
 function layoutJellies() {
-  const { aPhase, aRate, aSeed, aTint, aRibs, aLenMul, gCol } = JB;
-  const c = new THREE.Color();
   for (const J of jellies) {
     const zi = J.zi, Z = JELLY_ZONE[zi], i = J.i;
-    c.setHSL(rr(Z.hue[0], Z.hue[1]), Z.sat, Z.lum);
-    aTint[i * 3] = c.r; aTint[i * 3 + 1] = c.g; aTint[i * 3 + 2] = c.b;
-    const gk = Z.glow * 0.13;
-    gCol[i * 3] = c.r * gk; gCol[i * 3 + 1] = c.g * gk; gCol[i * 3 + 2] = c.b * gk;
-    aPhase[i] = _cr();
-    aRate[i] = rr(0.20, 0.34) * (1 - zi * 0.15);
-    aSeed[i] = _cr() * 6.283;
-    aRibs[i] = Z.ribs;
-    aLenMul[i] = rr(0.8, 1.2) * Z.trail;
+    JB.hue[i] = (rr(Z.hue[0], Z.hue[1]) - Z.hue[0]) / Math.max(1e-6, Z.hue[1] - Z.hue[0]);
+    J.phase = _cr();
+    J.rate = J.baseRate = rr(0.20, 0.34) * (1 - zi * 0.15);
+    JB.seed[i] = _cr() * 6.283;
+    JB.lenMul[i] = rr(0.8, 1.2) * Z.trail;
+    JB.vr[i] = zi === 2 ? (fract01(JB.seed[i] * 7.31) < 0.6 ? 0 : 1) : 0;   // deep: Atolla 3 in 5
     const a = _cr() * Math.PI * 2, r = rr(16, WORLD_R * 0.7);
     J.pos.set(Math.cos(a) * r, rr(zoneBottom(zi) + 45, zoneTop(zi) - 25), Math.sin(a) * r);
     J.vel.set(rr(-.3, .3), 0, rr(-.3, .3));
@@ -1349,54 +1515,35 @@ function layoutJellies() {
     J.scale = rr(Z.scale[0], Z.scale[1]);
     J.spin = rr(-0.12, 0.12);
     J.spinA = _cr() * 6.283;
-    J.phase = aPhase[i];
-    J.rate = J.baseRate = aRate[i];
     J.thrust = rr(9, 15);
-    J.glow = Z.glow;
     J.alarm = 0;
+    JB.vel[i * 3] = JB.vel[i * 3 + 1] = JB.vel[i * 3 + 2] = 0;
   }
-  for (const at of JB.attrs) at.needsUpdate = true;
-  if (jellyGlow) {
-    jellyGlow.geometry.attributes.aCol.array.set(gCol);
-    jellyGlow.geometry.attributes.aCol.needsUpdate = true;
-  }
+  JB.dirty = true;
 }
+function fract01(x) { return x - Math.floor(x); }
 
+const _jm = new THREE.Matrix4();
 function updateJellies(dt, t) {
-  const bm = bellIn.instanceMatrix.array;
-  const gp = jellyGlow.geometry.attributes.aPos.array;
-  const gs = jellyGlow.geometry.attributes.aSize.array;
+  const cy = camera.position.y;
   for (const J of jellies) {
-    // Distance cull past the fog wall (jellies were the one population never culled:
-    // 21 bodies x 4 layers always drawn AND steered). Per-instance scale-to-zero —
-    // the instanced meshes stay one draw call, degenerate instances cost nothing.
-    // Hysteresis, +/-10 units around the wall: a single threshold made boundary
-    // jellies blink in and out as the fog wall moved with the player.
-    const jd = J.pos.distanceTo(player.pos) - J.scale * 10;
-    J.culled = J.culled ? jd > cullR - 10 : jd > cullR + 10;
-    if (J.culled) {
-      J.phase += dt * J.rate;              // keep the gait clock coherent
-      const oz = J.i * 16;
-      for (let k = 0; k < 15; k++) bm[oz + k] = 0;
-      bm[oz + 15] = 1;
-      gs[J.i] = 0;
-      continue;
-    }
+    // zone band (terrain/fauna's rule) + the fog wall, with hysteresis
+    const band = cy < zoneTop(J.zi) + 120 && cy > zoneBottom(J.zi) - 150;
+    const jd = J.pos.distanceTo(camera.position) - J.scale * 8;
+    J.culled = !band || (J.culled ? jd > cullR - 10 : jd > cullR + 10);
     const step = dt * J.rate;
     J.phase += step;
+    if (J.culled) continue;
     const c = contractAt(J.phase), c0 = contractAt(J.phase - step);
     const dc = (c - c0) / Math.max(dt, 1e-4);
-
     // the bell only pushes while it is contracting — that is the whole gait
     if (dc > 0) J.vel.addScaledVector(J.axis, dc * J.thrust * dt);
     J.vel.y -= 0.35 * dt;
     J.vel.multiplyScalar(Math.pow(0.30, dt));
-
     // slow tumble: the bell axis wanders, so jellies never track straight
     tmpV.set(J.wob.x * Math.sin(t * 0.13 + J.i) * 0.5, 1, J.wob.z * Math.cos(t * 0.11 + J.i) * 0.5).normalize();
     J.axis.lerp(tmpV, Math.min(1, dt * 0.35)).normalize();
-
-    // drift away from the diver, and flash-pulse when startled
+    // drift away from the diver, and pulse hard when startled
     const d = J.pos.distanceTo(player.pos);
     const R = 26 * J.scale * 0.5 + 14;
     if (d < R) {
@@ -1412,37 +1559,47 @@ function updateJellies(dt, t) {
     if (pj > 0.2) J.alarm = Math.max(J.alarm, pj);
     J.alarm = Math.max(0, J.alarm - dt * 0.35);
     J.rate = J.baseRate * (1 + J.alarm * 1.9);
-
     J.pos.addScaledVector(J.vel, dt);
     const hr = Math.hypot(J.pos.x, J.pos.z);
-    if (hr > WORLD_R * 0.85) {
-      const k = WORLD_R * 0.85 / hr;
-      J.pos.x *= k; J.pos.z *= k; J.vel.x *= -0.5; J.vel.z *= -0.5;
-    }
+    if (hr > WORLD_R * 0.85) { const k = WORLD_R * 0.85 / hr; J.pos.x *= k; J.pos.z *= k; J.vel.x *= -0.5; J.vel.z *= -0.5; }
     const lo = Math.max(zoneBottom(J.zi) + 22, terrainH(J.pos.x, J.pos.z, J.zi) + J.scale * 6 + 6);
     const hi = Math.max(lo + 4, zoneTop(J.zi) - 14);
     if (J.pos.y < lo) { J.pos.y = lo; J.vel.y = Math.abs(J.vel.y) * 0.4 + 0.6; }
     else if (J.pos.y > hi) { J.pos.y = hi; J.vel.y = -Math.abs(J.vel.y) * 0.4 - 0.4; }
-
     J.spinA += J.spin * dt;
-    tmpQ.setFromUnitVectors(AXIS_Y, J.axis).multiply(spinQ.setFromAxisAngle(AXIS_Y, J.spinA));
-    tmpM.compose(J.pos, tmpQ, tmpV2.setScalar(J.scale));
-    const e = tmpM.elements, o = J.i * 16;
-    for (let k = 0; k < 16; k++) bm[o + k] = e[k];
-
-    const i3 = J.i * 3;
-    // the wake the trailers stream into (smoothed: strands answer the bell late)
-    const va = JB.aVel.array;
-    const kv = Math.min(1, dt * 1.6);
-    va[i3] += (J.vel.x - va[i3]) * kv; va[i3 + 1] += (J.vel.y - va[i3 + 1]) * kv; va[i3 + 2] += (J.vel.z - va[i3 + 2]) * kv;
-    gp[i3] = J.pos.x; gp[i3 + 1] = J.pos.y - J.scale * 0.2; gp[i3 + 2] = J.pos.z;
-    gs[J.i] = J.scale * (2.6 + 2.4 * c) * (1 + J.alarm * 0.5);
+    // the wake the arms and tentacles stream into (smoothed: they answer the bell late)
+    const v3 = JB.vel, i3 = J.i * 3, kv = Math.min(1, dt * 1.6);
+    v3[i3] += (J.vel.x - v3[i3]) * kv; v3[i3 + 1] += (J.vel.y - v3[i3 + 1]) * kv; v3[i3 + 2] += (J.vel.z - v3[i3 + 2]) * kv;
   }
-  bellIn.instanceMatrix.needsUpdate = true;
-  JB.aVel.needsUpdate = true;
-  jellyGlow.geometry.attributes.aPos.needsUpdate = true;
-  jellyGlow.geometry.attributes.aSize.needsUpdate = true;
+  // slot order: far to near (insertion sort on a persistent permutation: no allocation, and
+  // nearly-sorted input from the last frame costs ~N compares)
+  const ord = JB.ord, key = JB.key, N = JB.N;
+  for (const J of jellies) key[J.i] = J.culled ? -1 : J.pos.distanceToSquared(camera.position);
+  for (let a = 1; a < N; a++) { const x = ord[a]; let b = a - 1; while (b >= 0 && key[ord[b]] < key[x]) { ord[b + 1] = ord[b]; b--; } ord[b + 1] = x; }
+  const bm = bellMesh.instanceMatrix.array, A = JB.aJA.array, B = JB.aJB.array, V = JB.aJV.array;
+  for (let s = 0; s < N; s++) {
+    const J = jellies[ord[s]], i = J.i, o = s * 16;
+    if (J.culled) { for (let k = 0; k < 15; k++) bm[o + k] = 0; bm[o + 15] = 1; continue; }
+    tmpQ.setFromUnitVectors(AXIS_Y, J.axis).multiply(spinQ.setFromAxisAngle(AXIS_Y, J.spinA));
+    _jm.compose(J.pos, tmpQ, tmpV2.setScalar(J.scale));
+    const e = _jm.elements;
+    for (let k = 0; k < 16; k++) bm[o + k] = e[k];
+    A[s * 4] = J.phase; A[s * 4 + 1] = JB.seed[i]; A[s * 4 + 2] = J.alarm; A[s * 4 + 3] = JB.lenMul[i];
+    B[s * 4] = J.zi; B[s * 4 + 1] = JB.vr[i]; B[s * 4 + 2] = JB.hue[i]; B[s * 4 + 3] = 0;
+    V[s * 3] = JB.vel[i * 3]; V[s * 3 + 1] = JB.vel[i * 3 + 1]; V[s * 3 + 2] = JB.vel[i * 3 + 2];
+  }
+  bellMesh.instanceMatrix.needsUpdate = true;
+  JB.aJA.needsUpdate = JB.aJB.needsUpdate = JB.aJV.needsUpdate = true;
+  renderer.getDrawingBufferSize(_jRes); uJRes.value = Math.max(1, _jRes.y);
 }
+const _jRes = new THREE.Vector2();
+if (typeof window !== 'undefined') window.__jelly = {
+  list: () => jellies.map(J => ({ i: J.i, zi: J.zi, pos: J.pos.toArray().map(v => +v.toFixed(1)), scale: +J.scale.toFixed(2), culled: J.culled, sp: J.zi === 2 ? (JB.vr[J.i] ? 'periphylla' : 'atolla') : J.zi ? 'nettle' : 'moon' })),
+  get: i => jellies[i],
+  minPx: v => { uJMinPx.value = v; return v; }
+};
+
+//
 
 // ---------------------------------------------------------------------------
 // abyssal drifters: siphonophore bead-chains and ghost ribbons
