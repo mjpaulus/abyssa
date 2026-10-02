@@ -28,7 +28,7 @@ import { DECK_NAILS } from './raft/hull.js';
 import { buildHull } from './raft/hull.js';
 import { buildStation } from './raft/station.js';
 import { buildGear } from './raft/gear.js';
-import { buildDavit } from './raft/davit.js';
+import { buildDavit, flattenRig } from './raft/davit.js';
 import { buildChart } from './raft/chart.js';
 import { buildShelf } from './raft/shelf.js';
 import { buildPump, updatePump, PUMP_POS } from './raft/pump.js';
@@ -272,16 +272,19 @@ function bakeDeckMap(group) {
     const a = LAT[z0 * 64 + x0], b = LAT[z0 * 64 + x1], c = LAT[z1 * 64 + x0], d = LAT[z1 * 64 + x1];
     return a + (b - a) * sx + (c - a) * sz + (a - b - c + d) * sx * sz;
   };
-  // the trails: boots go from the ladder gap up the lane, then round the reel to the
-  // stations. Distance to each segment, gaussian across, patchy along.
+  // the trails: boots go from the ladder gap (+X rail, z 0) in along the walk, then
+  // fan out round the pump to the stations — the chart table and dressing station to
+  // port, the fuel depot and hose stock aft, the reel's crank forward. Re-laid
+  // 2026-10-02 when the gap moved off the +Z rail. Distance to each segment, gaussian
+  // across, patchy along.
   const TRAILS = [
-    [0, 4.6, 0, 1.6, 1.0], [0, 1.6, -1.35, 1.25, 0.8], [-1.35, 1.25, -3.2, 2.9, 0.7],
-    [-1.35, 1.25, -1.45, -0.55, 0.7], [-1.45, -0.55, -3.4, -1.2, 0.6], [0, 1.6, 1.4, 1.25, 0.8],
-    [1.4, 1.25, 1.55, -0.9, 0.7], [1.55, -0.9, 1.9, -2.6, 0.55], [1.9, -2.6, 3.0, -3.1, 0.5],
-    [1.4, 1.25, 3.3, 0.2, 0.45], [1.55, -0.9, 0.9, -2.55, 0.5], [-1.45, -0.55, -1.0, -2.5, 0.4]
+    [4.6, 0, 2.0, 0.35, 1.0], [2.0, 0.35, -1.35, 1.25, 0.8], [-1.35, 1.25, -3.2, 2.9, 0.7],
+    [-1.35, 1.25, -1.45, -0.55, 0.7], [-1.45, -0.55, -3.4, -1.2, 0.6], [2.0, 0.35, 2.05, -1.2, 0.8],
+    [2.05, -1.2, 2.1, -2.4, 0.7], [2.1, -2.4, 3.0, -3.1, 0.55], [2.05, -1.2, 3.5, -1.65, 0.45],
+    [2.0, 0.35, 1.55, 2.0, 0.45], [2.1, -2.4, 1.05, -2.2, 0.5], [-1.45, -0.55, -1.0, -2.5, 0.4]
   ];
   // wet: the dive gap, and a fan round each scupper mouth (hull.js positions)
-  const SCUP = [[-2.9, 4.7], [2.9, 4.7], [-1.6, -4.7], [1.6, -4.7], [4.7, -2.0], [4.7, 2.0], [-4.7, 1.4]];
+  const SCUP = [[-2.9, 4.7], [0, 4.7], [2.9, 4.7], [-1.6, -4.7], [1.6, -4.7], [4.7, -2.0], [4.7, 2.0], [-4.7, 1.4]];
   const segD = (x, z, s) => {
     const dx = s[2] - s[0], dz = s[3] - s[1], l2 = dx * dx + dz * dz;
     const t = Math.max(0, Math.min(1, ((x - s[0]) * dx + (z - s[1]) * dz) / l2));
@@ -306,7 +309,7 @@ function bakeDeckMap(group) {
     pol *= (0.55 + 0.45 * n1) * (1 - Math.min(1, occS[k] * 1.4));
     // wet
     let wet = 0;
-    if (z > 3.2 && Math.abs(x) < 1.6) wet = Math.max(wet, Math.max(0, (z - 3.2) / 1.5) * Math.max(0, 1 - Math.abs(x) / 1.6) * (0.5 + 0.7 * n2));
+    if (x > 3.2 && Math.abs(z) < 1.6) wet = Math.max(wet, Math.max(0, (x - 3.2) / 1.5) * Math.max(0, 1 - Math.abs(z) / 1.6) * (0.5 + 0.7 * n2));
     for (const [sx, sz] of SCUP) {
       const dd = Math.hypot((x - sx) * (Math.abs(sz) > 4 ? 0.7 : 1.3), (z - sz) * (Math.abs(sz) > 4 ? 1.3 : 0.7));
       wet = Math.max(wet, Math.max(0, 1 - dd / 0.55) * (0.6 + 0.5 * n2));
@@ -448,9 +451,15 @@ export function buildRaft() {
   shelfSet = buildShelf(raft, mats);
   if (pendingKeeps) { shelfSet(pendingKeeps); pendingKeeps = null; }
 
-  const P = Part(raft, { groundY: DECK_TOP });
-  buildReel(P, mats, hoseHead);
+  // The reel is authored in the gallows' own frame (it stands inboard of the sheave on
+  // the rig's centre line, as it always did) and turned onto the +X side with it, so
+  // the lead it pays out runs straight up to the block. The head is passed in that
+  // same frame — the rig frame's head, not the raft's.
+  const reelG = new THREE.Group();
+  const P = Part(reelG, { groundY: DECK_TOP });
+  buildReel(P, mats, dav.headFrame);
   P.bake();
+  flattenRig(reelG, raft);
 
   const pumpGroup = new THREE.Group();
   raft.add(pumpGroup);

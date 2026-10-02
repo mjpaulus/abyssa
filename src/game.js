@@ -134,6 +134,9 @@ buildRifts();
 buildRaft();
 // TAA: Sal and the raft are rigid hierarchies -- exact motion vectors for both.
 addTemporalMover(diver); addTemporalMover(raft);
+// Deck spawn (deckSpawn below): raft-local, and his heading — toward the boarding gap.
+const DECK_SPAWN_X = 2.6, DECK_SPAWN_Z = 0;
+export const DECK_SPAWN_YAW = Math.PI / 2;
 buildTether(pumpPos);
 buildResources();
 buildProps();   // async; props pop in shortly after load, world never blocks on them
@@ -486,10 +489,19 @@ window.__lev = {
 // stills falls into an unmarked hole in the dark. Said once per zone, 20u below the rim.
 let riftShutSaid = false, riftRimY = 0;
 
-// Where a dressed diver waits before a dive: on the deck, clear of the pump block at
-// local z = -1.2, facing out over the water he is about to step into.
+// Where a dressed diver waits before a dive: on the deck at the inboard end of the walk
+// to the boarding gap, facing out over the water he is about to step into. The gap is on
+// the +X rail since 2026-10-02 (Michael: "move the ladder to the left side. The air
+// hose rig is in the way"), so he faces +X; the gallows stands forward of the gap, on
+// his right, instead of over it. Clear of the pump block (x <= 1.6) by a stride.
 export function deckSpawn(out) {
-  return out.set(raft.position.x, raft.position.y + 0.11 + 1.35, raft.position.z + 2.6);
+  return out.set(raft.position.x + DECK_SPAWN_X, raft.position.y + 0.11 + 1.35, raft.position.z + DECK_SPAWN_Z);
+}
+// The play camera's rest spot behind a man standing at the spawn heading (game.js cuts
+// to it on start, voyage arrival and rescue rather than letting the spring travel).
+function snapCamBehind(back) {
+  const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
+  camera.position.set(player.pos.x - sy * back, player.pos.y + CAM_UP, player.pos.z - cy * back);
 }
 
 export function start() {
@@ -499,16 +511,16 @@ export function start() {
   // of the surface round: you see the sea before you are under it.
   deckSpawn(player.pos);
   player.vel.set(0, 0, 0);
-  player.yaw = 0;                 // facing +z, out across the water
+  player.yaw = DECK_SPAWN_YAW;     // facing the boarding gap, out across the water
   player.pitch = -0.05;
   resetSuit(player.pos.y);
   reseatTether(player);
   // Snap the camera from the title portrait (in front of Sal) straight to the
   // play position behind him — letting the spring travel there would drag the
   // lens through his body.
-  camera.position.set(player.pos.x, player.pos.y + CAM_UP, player.pos.z - CAM_BACK);
+  snapCamBehind(CAM_BACK);
   camVel.set(0, 0, 0);
-  camLook.set(player.pos.x, player.pos.y, player.pos.z + 6);
+  camLook.set(player.pos.x + Math.sin(player.yaw) * 6, player.pos.y, player.pos.z + Math.cos(player.yaw) * 6);
   document.getElementById('title').classList.add('hidden');
   $hud.classList.remove('hidden');
   initAudio();
@@ -616,12 +628,12 @@ function reseedWorld(i) {
   enterZone(0);
   inkBeat = false;
   deckSpawn(player.pos);
-  player.vel.set(0, 0, 0); player.yaw = 0; player.pitch = -0.05;
+  player.vel.set(0, 0, 0); player.yaw = DECK_SPAWN_YAW; player.pitch = -0.05;
   resetSuit(player.pos.y);
   reseatTether(player);
   survival.oxygen = 1;
   survival.fuel = Math.max(survival.fuel, 0.3);   // the tender refits while she sails
-  camera.position.set(player.pos.x, player.pos.y + CAM_UP, player.pos.z - CAM_BACK);
+  snapCamBehind(CAM_BACK);
   camSnap = true;
   saveChart();
 }
@@ -1191,6 +1203,7 @@ function update(dt, t) {
     // puffing, lantern lit, hull riding the sea behind the title.
     updateRaft(dt, t);
     deckSpawn(player.pos);
+    player.yaw = DECK_SPAWN_YAW;
     // The rig poses off player state and updatePlayer never runs behind the title, so
     // grounded keeps its boot value of FALSE — which blended Sal into the swim posture,
     // treading water on top of his own deck. He is standing on planks; say so.
@@ -1202,14 +1215,18 @@ function update(dt, t) {
     // Three-quarter from the starboard bow, so the davit rakes across the frame behind
     // him and the pump's stack sits over his shoulder. Drifts slowly; the raft's own
     // bob rides underneath it, so the shot breathes twice at different rates.
+    // Authored in Sal's own frame (l = along his left, f = ahead of him) so the portrait
+    // follows the spawn heading: it was written when he faced +Z.
     const a = t * 0.05;
+    const fx = Math.sin(DECK_SPAWN_YAW), fz = Math.cos(DECK_SPAWN_YAW), lx = fz, lz = -fx;
+    const ol = 3.15 + Math.sin(a) * 0.55, of = 4.30 + Math.cos(a) * 0.40;
     camera.position.set(
-      player.pos.x + 3.15 + Math.sin(a) * 0.55,
+      player.pos.x + lx * ol + fx * of,
       player.pos.y + 1.05 + Math.sin(t * 0.5) * 0.06,
-      player.pos.z + 4.30 + Math.cos(a) * 0.40
+      player.pos.z + lz * ol + fz * of
     );
     // Look-target offset puts Sal in the right third of the frame, clear of the type.
-    camera.lookAt(player.pos.x - 1.35, player.pos.y + 0.30, player.pos.z);
+    camera.lookAt(player.pos.x - lx * 1.35, player.pos.y + 0.30, player.pos.z - lz * 1.35);
   }
 
   // Weather runs even behind the title so a session can open at dusk or mid-storm.
@@ -1558,7 +1575,7 @@ function update(dt, t) {
       // stood him on his feet; the dive starts again the way it started the first time,
       // by stepping over the side. Same pose as start().
       deckSpawn(player.pos);
-      player.yaw = 0;
+      player.yaw = DECK_SPAWN_YAW;
       player.pitch = -0.05;
       player.vel.set(0, 0, 0);
       player.light = 1;
@@ -1576,7 +1593,7 @@ function update(dt, t) {
       // Cut the camera with him. The y is set here as well as via camSnap because
       // updateAtmosphere runs BEFORE updateCamera in the frame, so leaving the eye 210
       // units down would key one more frame of fog off the death depth.
-      camera.position.set(player.pos.x, player.pos.y + CAM_UP, player.pos.z + CAM_BACK);
+      snapCamBehind(CAM_BACK);
       camSnap = true;
       // The rescue tops the pump up from the reserve can. Without this, drowning with
       // an empty tank and no bitumen strands you at the raft with 45s of air and all

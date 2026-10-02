@@ -67,18 +67,25 @@ export function buildGear(group, mats) {
   // A spare coil of umbilical, flaked down on deck against the starboard rail. Hose is
   // the other craftable and it's the diver's lifeline — it gets its own clear patch of
   // deck, not a corner shared with anything else.
-  coil(P, hose, 3.95, DY + 0.02, -0.05, 0.34, 4, 0.045, 0.05);
+  // Aft of the boarding gap (z -1.2..1.2 on this rail since 2026-10-02): it used to lie
+  // square in the walk to the ladder.
+  const HSZ = -1.95;
+  coil(P, hose, 3.95, DY + 0.02, HSZ, 0.34, 4, 0.045, 0.05);
   for (const x of [3.55, 4.30]) {
-    P.put(weather(chamferBox(0.10, 0.10, 0.28, 0.012), { tone: 0.85 }), wood2, x, DY + 0.05, -0.05, 0, 0, 0);
+    P.put(weather(chamferBox(0.10, 0.10, 0.28, 0.012), { tone: 0.85 }), wood2, x, DY + 0.05, HSZ, 0, 0, 0);
   }
 
   // ---- LASHED CARGO ------------------------------------------------------------------
   // Crates and a small cask, thrown-tarp over the top, the tarp actually made off to
   // ring bolts rather than just draped — a tarp with nothing holding it down reads as
   // a mistake the first time the raft rolls.
-  crate(P, wood2, 2.55, DY + 0.23, 1.10, 0.62, 0.46, 0.58, 0.15, 0.9);
-  crate(P, wood2, 3.05, DY + 0.18, 0.85, 0.46, 0.36, 0.42, -0.20, 0.82);
-  barrel(P, wood, iron, 2.85, DY + 0.30, 1.55, 0.30, 0.60, 0.5);
+  // Moved 2026-10-02 from the starboard wing (it stood across the new walk to the
+  // ladder gap) to the forward rail, where the old gap was: authored at its old spot and
+  // carried by (KX, KZ) so the drape solve below did not have to be re-tuned.
+  const KX = -3.94, KZ = 2.49;
+  crate(P, wood2, 2.55 + KX, DY + 0.23, 1.10 + KZ, 0.62, 0.46, 0.58, 0.15, 0.9);
+  crate(P, wood2, 3.05 + KX, DY + 0.18, 0.85 + KZ, 0.46, 0.36, 0.42, -0.20, 0.82);
+  barrel(P, wood, iron, 2.85 + KX, DY + 0.30, 1.55 + KZ, 0.30, 0.60, 0.5);
 
   // The tarp has to sit ON the crates, not hover a hand's breadth over them and overhang
   // them by a third of a metre on every side — at that size the crates read as legs and
@@ -89,10 +96,10 @@ export function buildGear(group, mats) {
   // from the nearest edge like a tent, down to the planks, with fold ripples wherever it
   // hangs free. A thin hem strip gives the edge a thickness to catch light.
   {
-    const DX = 0.95, DZ = 1.15, NX = 26, NZ = 30, cx = 2.74, cz = 1.26, ry = 0.08;
+    const DX = 0.95, DZ = 1.15, NX = 26, NZ = 30, cx = 2.74 + KX, cz = 1.26 + KZ, ry = 0.08;
     const cr = Math.cos(ry), sr = Math.sin(ry);
-    const rects = [[2.55, 1.10, 0.31, 0.29, 0.15, DY + 0.465], [3.05, 0.85, 0.23, 0.21, -0.20, DY + 0.365]];
-    const cask = [2.85, 1.55, 0.26, DY + 0.61];
+    const rects = [[2.55 + KX, 1.10 + KZ, 0.31, 0.29, 0.15, DY + 0.465], [3.05 + KX, 0.85 + KZ, 0.23, 0.21, -0.20, DY + 0.365]];
+    const cask = [2.85 + KX, 1.55 + KZ, 0.26, DY + 0.61];
     const g = new THREE.PlaneGeometry(DX, DZ, NX, NZ).rotateX(-Math.PI / 2);
     const gp = g.attributes.position;
     for (let i = 0; i < gp.count; i++) {
@@ -123,10 +130,11 @@ export function buildGear(group, mats) {
 
   const ringBoltDeck = (x, z) => P.put(weather(tor(0.045, 0.011, 4, 8), { tone: 0.85 }),
     iron, x, DY + 0.015, z, Math.PI / 2, 0, 0);
-  ringBoltDeck(2.15, 0.55); ringBoltDeck(3.45, 1.95);
-  ringBoltDeck(3.35, 0.55); ringBoltDeck(2.20, 1.95);
-  weather(rope(P, ropeMat, [[2.15, DY + 0.03, 0.55], [2.50, 0.66, 0.95], [2.95, 0.70, 1.50], [3.45, DY + 0.03, 1.95]], 0.020), { tone: 0.85 });
-  weather(rope(P, ropeMat, [[3.35, DY + 0.03, 0.55], [2.95, 0.68, 0.95], [2.55, 0.65, 1.50], [2.20, DY + 0.03, 1.95]], 0.020), { tone: 0.85 });
+  const K = pts => pts.map(p => [p[0] + KX, p[1], p[2] + KZ]);
+  ringBoltDeck(2.15 + KX, 0.55 + KZ); ringBoltDeck(3.45 + KX, 1.95 + KZ);
+  ringBoltDeck(3.35 + KX, 0.55 + KZ); ringBoltDeck(2.20 + KX, 1.95 + KZ);
+  weather(rope(P, ropeMat, K([[2.15, DY + 0.03, 0.55], [2.50, 0.66, 0.95], [2.95, 0.70, 1.50], [3.45, DY + 0.03, 1.95]]), 0.020), { tone: 0.85 });
+  weather(rope(P, ropeMat, K([[3.35, DY + 0.03, 0.55], [2.95, 0.68, 0.95], [2.55, 0.65, 1.50], [2.20, DY + 0.03, 1.95]]), 0.020), { tone: 0.85 });
 
   // ---- WATER BUTT --------------------------------------------------------------------
   // Drinking water, kept well clear of the bitumen — the two barrels should never read
@@ -178,17 +186,19 @@ export function buildGear(group, mats) {
   const ringBolt = (x, z) => P.put(weather(tor(0.045, 0.011, 4, 8), { tone: 0.85 }),
     iron, x, DY + 0.015, z, Math.PI / 2, 0, 0);
   for (const [x, z] of [[4.35, -1.5], [4.35, 2.6], [-4.35, -1.2], [-4.35, 1.4], [-4.35, 3.1],
-    [0.9, -4.35], [-0.9, -4.35], [-2.0, 4.35], [2.0, 4.35]]) ringBolt(x, z);
+    [0.9, -4.35], [-0.9, -4.35], [-2.0, 4.35], [2.7, 4.35]]) ringBolt(x, z);
 
-  for (const [x, z, ry] of [[4.40, -3.95, 0], [-4.40, -3.95, 0], [1.72, 4.35, 0.2], [-1.72, 4.35, -0.2]])
+  for (const [x, z, ry] of [[4.40, -3.95, 0], [-4.40, -3.95, 0], [4.35, 1.72, Math.PI / 2 - 0.2], [4.35, -1.72, Math.PI / 2 + 0.2]])
     P.put(weather(chamferBox(0.22, 0.13, 0.02, 0.005), { tone: 0.8, rust: 0.4 }), iron, x, DY + 0.075, z, 0, ry, 0);
 
   // ---- BOAT HOOK, stowed along the starboard rail --------------------------------------
   // A 2.2m pole would trip Sal if it stood up; laid flat against the bulwark it reads
   // as stowed gear instead of a barricade, and it's clear of the hose stock inboard.
-  P.put(weather(cyl(0.020, 0.020, 2.2, 6), { tone: 0.85 }), wood2, 4.42, DY + 0.045, 0.5, Math.PI / 2, 0, 0);
-  weather(rope(P, iron, [[4.42, DY + 0.09, 1.55], [4.50, DY + 0.20, 1.62], [4.44, DY + 0.28, 1.58]], 0.016), { tone: 0.8 });
-  for (const z of [-0.30, 1.00]) P.put(weather(tor(0.035, 0.010, 4, 8), { tone: 0.8 }), iron, 4.42, DY + 0.09, z);
+  // Since 2026-10-02 it lies along the forward (+Z) rail between the cargo and the reel
+  // — the starboard rail it used to lie on is the boarding gap now.
+  P.put(weather(cyl(0.020, 0.020, 2.2, 6), { tone: 0.85 }), wood2, 1.0, DY + 0.045, 4.42, 0, 0, Math.PI / 2);
+  weather(rope(P, iron, [[2.05, DY + 0.09, 4.42], [2.12, DY + 0.20, 4.50], [2.08, DY + 0.28, 4.44]], 0.016), { tone: 0.8 });
+  for (const x of [0.20, 1.50]) P.put(weather(tor(0.035, 0.010, 4, 8), { tone: 0.8 }), iron, x, DY + 0.09, 4.42, 0, Math.PI / 2, 0);
 
   // ---- BILGE PUMP HANDLE ----------------------------------------------------------------
   // The one slender vertical this side of the deck gets. Aft-port corner of the aft
