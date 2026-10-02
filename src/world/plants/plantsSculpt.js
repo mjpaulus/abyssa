@@ -116,10 +116,10 @@ const TS_PAINT = {
 // Frame: gardens.js / flora.js anemoneGeo — base y 0, crown to ~0.75, r ~0.45.
 const AN = { COL: 0, DISC: 1, TENT: 2, TIP: 3, MOUTH: 4 };
 const AN_T = {
-  std: { D: 0.24, colR: 0.13, disc: 1.05, thick: 1, rings: [[34, 0.98, 0.26, 0.36], [24, 0.76, 0.23, 0.32], [14, 0.52, 0.18, 0.25]] },
-  long: { D: 0.22, colR: 0.12, disc: 1.05, thick: 1, rings: [[30, 0.98, 0.34, 0.46], [22, 0.74, 0.30, 0.40], [12, 0.5, 0.22, 0.3]] },
-  bubble: { D: 0.2, colR: 0.13, disc: 1.05, thick: 1.35, rings: [[26, 0.98, 0.16, 0.22], [20, 0.74, 0.15, 0.2], [12, 0.5, 0.12, 0.16]] },
-  dense: { D: 0.15, colR: 0.15, disc: 1.08, thick: 0.9, rings: [[44, 0.98, 0.14, 0.2], [34, 0.8, 0.13, 0.18], [24, 0.6, 0.11, 0.16], [12, 0.38, 0.09, 0.12]] },
+  std: { D: 0.15, colR: 0.13, disc: 1.12, thick: 1, rings: [[36, 0.98, 0.3, 0.4], [26, 0.76, 0.26, 0.36], [14, 0.52, 0.2, 0.28]] },
+  long: { D: 0.14, colR: 0.12, disc: 1.12, thick: 1, rings: [[32, 0.98, 0.4, 0.52], [22, 0.74, 0.34, 0.46], [12, 0.5, 0.24, 0.32]] },
+  bubble: { D: 0.13, colR: 0.13, disc: 1.1, thick: 1.35, rings: [[28, 0.98, 0.18, 0.25], [20, 0.74, 0.16, 0.22], [12, 0.5, 0.13, 0.17]] },
+  dense: { D: 0.1, colR: 0.15, disc: 1.12, thick: 0.9, rings: [[46, 0.98, 0.16, 0.22], [34, 0.8, 0.15, 0.2], [24, 0.6, 0.12, 0.17], [12, 0.38, 0.1, 0.13]] },
   plume: { D: 0.44, colR: 0.095, disc: 2.6, thick: 0.45, lobes: 5, rings: [[90, 0.97, 0.05, 0.08], [70, 0.82, 0.05, 0.07], [50, 0.64, 0.04, 0.06]] },
   carpet: { D: 0.06, colR: 0.11, disc: 3.4, thick: 0.6, lobes: 9, rings: [] }
 };
@@ -129,13 +129,13 @@ function anemone(seed, type) {
   const discR = a => dR * (1 + (lobes ? 0.22 * Math.cos(a * lobes + lph) : 0.04 * Math.sin(a * 7 + lph)));
   const frill = (a, r) => lobes ? 0.035 * Math.sin(a * lobes * 2 + lph) * sst(0.5, 1, r) * (type === 'plume' ? 1 : 0.6) : 0;
   // the column: pedal disc -> waist -> swelling under the margin (a lathe with lumps)
-  const colProf = y => { const t = Math.min(1, Math.max(0, y / D)); return colR * (1.3 - 0.42 * sst(0.0, 0.45, t) + 0.16 * sst(0.7, 1.0, t)); };
+  const colProf = y => { const t = Math.min(1, Math.max(0, y / D)); return colR * (type === 'plume' ? 1.3 - 0.42 * sst(0.0, 0.45, t) + 0.16 * sst(0.7, 1.0, t) : 1.12 - 0.14 * sst(0.0, 0.5, t) + 0.08 * sst(0.7, 1.0, t)); };
   const col = Fn([-0.5, -0.06, -0.5, 0.5, D + 0.02, 0.5], (x, y, z) => {
     const r = Math.hypot(x, z), a = Math.atan2(z, x);
     const lump = 0.012 * Math.sin(a * 5 + y * 30 + lph) * sst(0.0, 0.3, y / D);
     return Math.max((r - colProf(y) - lump) * 0.85, -0.04 - y, y - D);
   }, AN.COL);
-  const pedal = E([0, -0.005, 0], [colR * 1.55, 0.03, colR * 1.4], AN.COL);
+  const pedal = E([0, -0.005, 0], [colR * (type === 'plume' ? 1.55 : 1.25), 0.025, colR * (type === 'plume' ? 1.4 : 1.18)], AN.COL);
   // the oral disc (lobed and frilled on the plume and the carpet), its margin rolled
   const disc = Fn([-0.75, D - 0.08, -0.75, 0.75, D + 0.1, 0.75], (x, y, z) => {
     const r = Math.hypot(x, z), a = Math.atan2(z, x), R0 = discR(a), q = r / R0;
@@ -152,8 +152,10 @@ function anemone(seed, type) {
       const R0 = discR(a) * rk, len = l0 + R() * (l1 - l0), out = [Math.cos(a), 0, Math.sin(a)];
       const q = rk, yb = D + 0.012 - 0.02 * (1 - q * q) + frill(a, q) + (type === 'plume' ? 0.04 * q * q : 0) + 0.008;
       const b = [out[0] * R0, yb, out[2] * R0];
-      const el0 = (type === 'long' ? 0.95 : type === 'plume' ? 0.7 : 1.1) + 0.22 * ri + (R() - 0.5) * 0.3;
-      const fall = (type === 'long' ? 1.05 : 0.75) + R() * 0.45, sway = (R() - 0.5) * 0.5;
+      // the outer ring leaves the margin low and falls over it (the crown hides the column);
+      // inner rings stand taller
+      const el0 = (type === 'long' ? 0.6 : type === 'plume' ? 0.7 : 0.75) + 0.3 * ri + (R() - 0.5) * 0.3;
+      const fall = (type === 'long' ? 1.25 : 1.0) + R() * 0.5 - 0.15 * ri, sway = (R() - 0.5) * 0.5;
       const pts = [b];
       let p = b.slice();
       for (let k = 1; k <= 3; k++) {
@@ -839,15 +841,15 @@ function seaPen(seed, type) {
     parts.push(Tube([[0, -0.06, 0], [lean * 0.2, 0.35, 0], [lean * 0.7, 0.75, 0.01], top], 0.011, 0.006, 16, PN.RACH));
     const np = 6 + Math.floor(R() * 4), nod = R() * TAU;
     for (let k = 0; k < np; k++) {
-      const a = nod + (k / np - 0.5) * 2.0, d = norm([Math.cos(a), -0.35 - 0.3 * R(), Math.sin(a)]), L = 0.07 + 0.03 * R();
+      const a = nod + (k / np - 0.5) * 2.0, d = norm([Math.cos(a), -0.35 - 0.3 * R(), Math.sin(a)]), L = 0.12 + 0.05 * R();
       const b = add(top, d, L);
-      parts.push(Cap(top, b, 0.008, 0.016, PN.PIN));
+      parts.push(Cap(top, b, 0.01, 0.028, PN.PIN));
       // eight pinnate tentacles round the polyp's mouth
       const t0 = norm(add(d, [0, 0.4, 0]));
       for (let q = 0; q < 8; q++) {
         const qa = q / 8 * TAU, X = norm([d[2], 0, -d[0]]), Y = norm([d[1] * X[2] - d[2] * X[1], d[2] * X[0] - d[0] * X[2], d[0] * X[1] - d[1] * X[0]]);
         const o = add(add(t0, X, Math.cos(qa) * 0.9), Y, Math.sin(qa) * 0.9);
-        polyps.push(Tube([b, add(b, o, 0.025), add(add(b, o, 0.04), d, 0.015)], 0.0035, 0.0018, 3, PN.POLYP));
+        polyps.push(Tube([b, add(b, o, 0.04), add(add(b, o, 0.065), d, 0.02)], 0.005, 0.0022, 3, PN.POLYP));
       }
       sk.pins.push({ c: r3(b), L: 0.12 });
     }

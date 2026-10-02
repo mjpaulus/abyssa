@@ -52,8 +52,8 @@ const SPEC = {
   barrel: { near: 22, tint: 0.55, micro: 8, side: F },
   worm: { noMid: true, near: 14, tint: 0.25, micro: 18, side: F },
   stag: { near: 15, tint: 0.5, micro: 20, side: F },
-  brain: { near: 20, tint: 0.5, micro: 10, side: F },
-  table: { near: 20, tint: 0.5, micro: 12, side: F },
+  brain: { near: 10, tint: 0.5, micro: 10, side: F },
+  table: { near: 10, tint: 0.5, micro: 12, side: F },
   glass: { near: 18, tint: 0.2, micro: 0, side: D2 },
   fan: { near: 18, tint: 0.45, micro: 0, side: D2 },
   crin: { near: 12, tint: 0.5, micro: 0, side: D2 },
@@ -64,7 +64,7 @@ const SPEC = {
   // (plants2) RUNTIME-ASSEMBLED species (bladesSculpt.js): baked card atlases from the
   // 'blades' asset, plants built at load from their seeds at three LODs. `lods` are fixed
   // switch distances (u); `remap` re-picks the variant and the proportions per instance.
-  kelp: { lods: [20, 55], tint: 0.3, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades' },
+  kelp: { lods: [12, 34], tint: 0.3, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades' },
   grass: { lods: [11, 24], tint: 0.6, micro: 0, side: D2, build: buildGrass, nv: GRASS_VARIANTS.length, asset: 'blades' }
 };
 

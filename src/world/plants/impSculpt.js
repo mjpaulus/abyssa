@@ -23,7 +23,7 @@ export const IMP = {
   worm: { h: 0.0035, flex: 0.3 }, stag: { h: 0.004, flex: 0.5 }, crin: { h: 0.0025, flex: 0.8 },
   pen: { h: 0.0032, flex: 0.8 }, brain: { h: 0.006, flex: 0 }, table: { h: 0.006, flex: 0 }
 };
-const COLS = 10, CELL = 1 / COLS, FILL = 0.92;
+const COLS = 6, CELL = 1 / COLS, FILL = 0.94;
 
 // the variant's tight bounds: a coarse raster of its field (compile's own bb is padded)
 function tightBounds(sdf) {

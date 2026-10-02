@@ -430,8 +430,12 @@ function ribbon(M, o) {
     const t = j / rows, C = bez(P, t), Tj = bezD(P, Math.min(0.999, Math.max(0.001, t)));
     S = V.norm(V.sub(S, V.scale(Tj, V.dot(S, Tj))));
     const Sr = V.rot(S, Tj, o.twist * t), N = V.cross(Sr, Tj);
+    // (fill-rate) the ribbon hugs the card's own outline row by row (conservatively: the
+    // widest the outline gets between this row's neighbours), so alpha-hashed fragments are
+    // not spent on the empty corners of every card
+    const fr = o.fit ? fitFrac(o.fit, c, Math.max(0, (j - 1) / rows), Math.min(1, (j + 1) / rows)) : 1;
     for (let i = 0; i <= cols; i++) {
-      const s = -1 + 2 * i / cols, a = Math.abs(s);
+      const s = (-1 + 2 * i / cols) * fr, a = Math.abs(s);
       const off = o.fold * a * hw + o.ruf * a * a * Math.sin(t * L * o.rufF + o.ph + s * 1.7) * sst(0.05, 0.3, t);
       const p = V.add(V.add(C, Sr, s * hw), N, off);
       pts.push(p);
@@ -449,6 +453,13 @@ function ribbon(M, o) {
   }
   for (let k = 0; k < pts.length; k++) { const nn = V.norm([n[k * 3], n[k * 3 + 1], n[k * 3 + 2]]); M.n[(b + k) * 3] = nn[0]; M.n[(b + k) * 3 + 1] = nn[1]; M.n[(b + k) * 3 + 2] = nn[2]; }
 }
+// the outline's half-width as a fraction of the card's, maxed over [t0, t1], plus a margin
+function fitFrac(fn, c, t0, t1) {
+  let m = 0;
+  for (let k = 0; k <= 6; k++) { const T = t0 + (t1 - t0) * k / 6, h = fn(c, T); if (h > m) m = h; }
+  return Math.min(1, m / (c.w / 2) + 0.1);
+}
+const FIT = { mac: macHW, ala: alaHW, bul: bulHW, sg: (c, T) => Math.max(0, sgHW(c, T)) };
 // A tube along a polyline (parallel-transported rings, a duplicated seam), skin from a
 // region card (around = u, along = mirrored repeat of v every `rep` units).
 function tube(M, pts, rad, sides, c, rep, sw, flut = () => 0) {
@@ -517,9 +528,9 @@ export function kelpPick(i, H) {
 }
 
 const LODK = [
-  { rows: 5, cols: 2, every: 1, grow: 1, floats: true, sides: 5, ring: 0.45, hold: 2, fsides: 5, frings: 3 },
-  { rows: 2, cols: 1, every: 2, grow: 1.3, floats: false, sides: 3, ring: 1.2, hold: 1, fsides: 0 },
-  { rows: 1, cols: 1, every: 3, grow: 1.55, floats: false, sides: 3, ring: 2.4, hold: 0, fsides: 0 }
+  { rows: 4, cols: 2, every: 1, grow: 1, floats: true, sides: 5, ring: 0.5, hold: 2, fsides: 4, frings: 2 },
+  { rows: 2, cols: 1, every: 3, grow: 1.5, floats: false, sides: 3, ring: 1.2, hold: 1, fsides: 0 },
+  { rows: 1, cols: 1, every: 4, grow: 1.75, floats: false, sides: 3, ring: 2.4, hold: 0, fsides: 0 }
 ];
 const KC = k => byKind(KL, k);
 // the skeleton: every random draw happens here, once per variant, so the three LODs are the
@@ -571,10 +582,10 @@ function kelpSkel(vi) {
     sk.bulbs.push({ C: V.add(bulb, up, 0.1), A: up, ra: 0.15, rr: 0.12 });
     const cards = KC('bul'), nb = 14 + Math.floor(R() * 5);
     for (let k = 0; k < nb; k++) {
-      sk.blades.push({ stipe: 0, t: 1, side: k / nb * TAU + R() * 0.3, len: (0.16 + 0.1 * R()) * H, wid: 0.085 + 0.035 * R(), card: cards[Math.floor(R() * cards.length)], kind: 'bull', ph: R() * TAU, el: 0.3 + 0.9 * R(), sweep: (R() - 0.5) * 0.8, twist: (R() - 0.5) * 2.4, fold: 0.05, ruf: 0.02 + 0.02 * R() });
+      sk.blades.push({ stipe: 0, t: 1, side: k / nb * TAU + R() * 0.3, len: (0.3 + 0.18 * R()) * H, wid: 0.09 + 0.04 * R(), card: cards[Math.floor(R() * cards.length)], kind: 'bull', ph: R() * TAU, el: -0.2 + 0.7 * R(), sweep: (R() - 0.5) * 0.8, twist: (R() - 0.5) * 2.4, fold: 0.05, ruf: 0.02 + 0.02 * R() });
     }
   } else if (K.type === 'ala') {
-    const cards = KC('ala'), spor = KC('mac').filter(c => !c.old), n = 2 + Math.floor(R() * 2);
+    const cards = KC('ala'), spor = KC('mac').filter(c => !c.old), n = 3 + Math.floor(R() * 3);
     for (let s = 0; s < n; s++) {
       const a = s / n * TAU + R(), st = 0.18 + 0.25 * R(), base = [Math.cos(a) * 0.04, hold * 0.6, Math.sin(a) * 0.04];
       const P = [base, V.add(base, [Math.cos(a) * 0.03, st * 0.4, Math.sin(a) * 0.03]), V.add(base, [Math.cos(a) * 0.06, st * 0.75, Math.sin(a) * 0.06]), V.add(base, [Math.cos(a) * 0.09, st, Math.sin(a) * 0.09])];
@@ -663,7 +674,7 @@ export function buildKelp(vi, lod) {
     const N0 = V.norm(V.cross(dir, V.norm(V.cross([0, 1, 0], dir).map((x, i) => x + (i === 0 ? 1e-4 : 0)))));
     const rows = b.kind === 'bull' || b.kind === 'ala' || b.kind === 'lam' ? Math.max(Lq.rows, Math.round(Lq.rows * 1.5)) : Lq.rows;
     ribbon(M, {
-      P, N0, wid, len, card: b.card, rows, cols: Lq.cols, twist: b.twist, fold: lod ? 0 : b.fold, ruf: lod ? 0 : b.ruf * (b.kind === 'ala' ? 1.4 : 1), rufF: 22, ph: b.ph,
+      P, N0, wid, len, card: b.card, rows, cols: Lq.cols, fit: FIT[b.card.k], twist: b.twist, fold: lod ? 0 : b.fold, ruf: lod ? 0 : b.ruf * (b.kind === 'ala' ? 1.4 : 1), rufF: 22, ph: b.ph,
       sw: (t, p) => { const h = hN(p[1]); return [Math.min(1.2, hb * hb + (1.05 - hb * hb) * 0.55 * t), h, sst(0.45, 1, h) * 0.5 * t, b.ph]; },
       flut: t => 0.1 * t * t
     });
@@ -707,13 +718,16 @@ export function buildGrass(vi, lod) {
     }
     return M.out();
   }
+  // (fill rate) the mid LOD keeps every other blade, a little wider: half the overdraw
   const rows = lod ? 3 : 6;
+  let bi = 0;
   for (const b of blades) {
+    if (lod && (bi++ & 1)) continue;
     const P0 = [Math.cos(b.a) * b.r, -0.02, Math.sin(b.a) * b.r], L = b.h, D = [Math.cos(b.la), 0, Math.sin(b.la)];
     const P = [P0, V.add(P0, [D[0] * b.lk * 0.1, L * 0.4, D[2] * b.lk * 0.1]), V.add(P0, [D[0] * b.lk * 0.6, L * 0.75, D[2] * b.lk * 0.6]), V.add(P0, [D[0] * b.lk * 1.2, L * (0.96 - 0.25 * b.lk), D[2] * b.lk * 1.2])];
     const N0 = [-D[2], 0, D[0]];
     ribbon(M, {
-      P, N0: V.norm(V.rot(N0, [0, 1, 0], b.tw * 0.3)), wid: b.w * (lod ? 1.15 : 1), len: L, card: b.card, rows, cols: 1, twist: b.tw, fold: 0, ruf: 0, rufF: 0, ph: b.ph,
+      P, N0: V.norm(V.rot(N0, [0, 1, 0], b.tw * 0.3)), wid: b.w * (lod ? 1.35 : 1), len: L, card: b.card, rows, cols: 1, fit: FIT.sg, twist: b.tw, fold: 0, ruf: 0, rufF: 0, ph: b.ph,
       sw: (t, p) => [Math.pow(t, 1.4), clamp(p[1], 0, 1), 0, b.ph], flut: t => 0.02 * t * t
     });
   }
