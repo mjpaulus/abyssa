@@ -510,7 +510,7 @@ export const F_TRANS = `
   reflectedLight.indirectDiffuse += diffuseColor.rgb * sIrr * uSSS * (0.18 + 0.82 * vFlora.y) * (0.3 + 0.7 * sFr) * (0.45 + 0.55 * floraThin);
 }
 #endif
-#if defined( FLORA_BLADE ) || defined( GD_BLADE )
+#if defined( FLORA_BLADE ) || defined( GD_BLADE ) || defined( GD_THIN )
 #if NUM_DIR_LIGHTS > 0
 {
   vec3 tL = directionalLights[ 0 ].direction;
@@ -1366,6 +1366,9 @@ function buildOnce() {
       seal(im, L.length);
       kelp.meshes.push(im);
       if (!kelp.inst) kelp.inst = im;
+      // (plants2) the sculpted kelp (blade cards, runtime-assembled giants / bull kelp /
+      // understory) takes this layout over once its atlas is in; no stream draw
+      plantAdopt('f_kelp' + zi, 'kelp', im, { cap: [560, 430, 430][zi], glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 0.7, cull: 130, sss: 0.38, def: ['SSSL', 'THIN', 'RUFFLE'], trans: 1.3, ruffle: 0.014 } });
     }
     // ---- seagrass turf ----
     {
@@ -1378,6 +1381,7 @@ function buildOnce() {
           _c, _fr() * TAU, H * 0.16 / W, 0.2, _fr() < 0.07 ? rr(0.2, 0.6) : 0);
       }
       seal(im, L.length);
+      plantAdopt('f_grass' + zi, 'grass', im, { cap: [2600, 1500, 900][zi], glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 1.15, cull: 85, sss: 0.4, def: ['SSSL', 'THIN'], trans: 0.9 } });
     }
     // ---- reef: staghorn / fans / brain / sponges / anemones ----
     const reefCol = i => _c.set(P.reef[i % P.reef.length]).multiplyScalar(rr(0.55, 1.1));

@@ -61,9 +61,26 @@ const sst = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a)))
 
 export function microTexture() {
   if (TEX) return TEX;
-  const t0 = performance.now();
-  const H = new Float32Array(N * N), Rg = new Float32Array(N * N);
-  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+  if (!GEN) GEN = microGen();
+  while (!GEN.next().done);
+  return TEX;
+}
+// (additive, plants2) the same generation in slices: microTextureStep(ms) advances it by about
+// `ms` of work and returns true once TEX exists — a caller with frames to spare (plantKit)
+// spreads the ~60-80 ms over idle frames instead of taking it in one; microTexture() still
+// finishes whatever is left synchronously, so the result is byte-identical either way.
+let GEN = null, GEN_MS = 0;
+export function microTextureStep(ms = 4) {
+  if (TEX) return true;
+  if (!GEN) GEN = microGen();
+  const t = performance.now();
+  while (performance.now() - t < ms) if (GEN.next().done) return true;
+  return !!TEX;
+}
+// one row of the height / roughness fields (a plain function: the generator below only
+// schedules rows; V8 optimises this, not the generator body)
+function microRow(j, H, Rg) {
+  for (let i = 0; i < N; i++) {
     const u = i / N, v = j / N;
     // calcified grain: four periodic octaves
     const grain = (vnoise(u, v, 16, 11) - 0.5) + 0.5 * (vnoise(u, v, 32, 12) - 0.5) + 0.25 * (vnoise(u, v, 64, 13) - 0.5) + 0.125 * (vnoise(u, v, 128, 14) - 0.5);
@@ -79,6 +96,15 @@ export function microTexture() {
     const crack = (1 - sst(0.0, 0.035, w.f2 - w.f1)) * sst(0.45, 0.6, vnoise(u, v, 4, 42));
     H[j * N + i] = 0.30 * grain + 0.55 * gran - 0.9 * pit - 0.45 * fine - 0.8 * crack;
     Rg[j * N + i] = 0.35 * (pit + crack) + 0.2 * fine - 0.25 * gran + 0.2 * grain;
+  }
+}
+function* microGen() {
+  const t0 = performance.now();
+  let tw = t0;
+  const H = new Float32Array(N * N), Rg = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) {
+    if ((j & 1) === 1) { GEN_MS += performance.now() - tw; yield; tw = performance.now(); }
+    microRow(j, H, Rg);
   }
   // slopes, normalised so the 95th-percentile slope is ~1 (a detail layer with character,
   // which applyMicroDetail's strength then scales)
@@ -106,8 +132,9 @@ export function microTexture() {
   TEX.anisotropy = 4;
   TEX.colorSpace = THREE.NoColorSpace;
   TEX.needsUpdate = true;
-  TEX.userData.genMs = performance.now() - t0;
-  return TEX;
+  GEN_MS += performance.now() - tw;
+  TEX.userData.genMs = GEN_MS;
+  TEX.userData.wallMs = performance.now() - t0;
 }
 
 // ---- the shader patch ---------------------------------------------------------------------

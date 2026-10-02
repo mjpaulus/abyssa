@@ -669,6 +669,179 @@ const CR_PAINT = {
   ]
 };
 
+// ============================================================================ SEA PEN
+// Pennatulids (plants2): a fleshy rachis rising from a buried bulb (peduncle), leaf-like
+// pinnae stacked up it like the plates of a quill, each curving up and carrying a row of
+// white autozooid polyps on its outer margin; the third form is Umbellula, the abyssal pen —
+// a long bare stalk with a nodding crown of a few large polyps. The polyps are the ones that
+// GLOW (real pennatulids flash blue-green when touched, the wave running down the colony):
+// the polyp material is painted into the emit channel (ORM.B, set ormB 'emit').
+// Frame: gardens.js seaPenGeo — base y 0 (bulb below), tip ~1.05, pinnae out to ~0.25.
+const PN = { RACH: 0, PIN: 1, POLYP: 2, BULB: 3 };
+function seaPen(seed, type) {
+  const R = mulberry(seed), parts = [], polyps = [], pins = [];
+  const sk = { type, pins: [] };
+  if (type === 'umb') {
+    const lean = (R() - 0.5) * 0.12, top = [lean, 1.0, 0.02];
+    parts.push(E([0, -0.04, 0], [0.03, 0.08, 0.03], PN.BULB));
+    parts.push(Tube([[0, -0.06, 0], [lean * 0.2, 0.35, 0], [lean * 0.7, 0.75, 0.01], top], 0.011, 0.006, 16, PN.RACH));
+    const np = 6 + Math.floor(R() * 4), nod = R() * TAU;
+    for (let k = 0; k < np; k++) {
+      const a = nod + (k / np - 0.5) * 2.0, d = norm([Math.cos(a), -0.35 - 0.3 * R(), Math.sin(a)]), L = 0.07 + 0.03 * R();
+      const b = add(top, d, L);
+      parts.push(Cap(top, b, 0.008, 0.016, PN.PIN));
+      // eight pinnate tentacles round the polyp's mouth
+      const t0 = norm(add(d, [0, 0.4, 0]));
+      for (let q = 0; q < 8; q++) {
+        const qa = q / 8 * TAU, X = norm([d[2], 0, -d[0]]), Y = norm([d[1] * X[2] - d[2] * X[1], d[2] * X[0] - d[0] * X[2], d[0] * X[1] - d[1] * X[0]]);
+        const o = add(add(t0, X, Math.cos(qa) * 0.9), Y, Math.sin(qa) * 0.9);
+        polyps.push(Tube([b, add(b, o, 0.025), add(add(b, o, 0.04), d, 0.015)], 0.0035, 0.0018, 3, PN.POLYP));
+      }
+      sk.pins.push({ c: r3(b), L: 0.12 });
+    }
+  } else {
+    const slender = type === 'slim', np = slender ? 18 : 13, y0 = slender ? 0.32 : 0.28, y1 = 0.95;
+    parts.push(E([0, -0.03, 0], [0.04, 0.1, 0.04], PN.BULB));
+    const cv = (R() - 0.5) * 0.05;
+    const rach = y => [cv * y * y, y, 0];
+    parts.push(Tube([[0, -0.08, 0], rach(0.35), rach(0.7), rach(1.04)], slender ? 0.018 : 0.026, 0.007, 18, PN.RACH));
+    for (let i = 0; i < np; i++) {
+      const t = i / (np - 1), y = y0 + (y1 - y0) * t;
+      const L = (slender ? 0.17 : 0.24) * Math.sin(Math.PI * (0.18 + 0.8 * t)) + 0.04;
+      for (const sd of [-1, 1]) {
+        const a = 0.42 + 0.35 * t + (R() - 0.5) * 0.12, dir = [sd * Math.cos(a), Math.sin(a), 0];
+        const W = (slender ? 0.045 : 0.065) * (0.75 + 0.25 * Math.sin(Math.PI * t)), th = slender ? 0.007 : 0.011;
+        const n = [-Math.sin(a), sd * Math.cos(a), 0];   // the leaf's thickness axis
+        const c = add(rach(y), dir, L * 0.5);
+        // rows of R: columns are local x (dir), y (thickness), z (across)
+        const Rm = [dir[0], n[0], 0, dir[1], n[1], 0, dir[2], n[2], 1];
+        pins.push({ t: 'ellip', c, r: [L * 0.55, th, W * 0.5], R: Rm, m: PN.PIN });
+        // the polyp row on the outer margin
+        const nq = 6 + Math.round(L * 30);
+        for (let q = 0; q < nq; q++) {
+          const tt = -1.25 + 2.5 * q / (nq - 1), pp = add(add(c, dir, Math.cos(tt) * L * 0.52), [0, 0, 1], Math.sin(tt) * W * 0.47);
+          polyps.push(Sph(add(pp, n, th * 0.6), 0.0055 + 0.002 * R(), PN.POLYP));
+        }
+        sk.pins.push({ y: +y.toFixed(3), L: +L.toFixed(3), sd });
+      }
+    }
+  }
+  const L = [
+    { type: 'fbm', amp: 0.0025, f: 14, oct: 2, seed: seed + 1 },
+    { type: 'barn', bake: true, amp: 0.002, f: 120, dens: 0.55, seed: seed + 2, mask: [['ax', 1, 0.05, 0.2]] },   // siphonozooid warts
+    { type: 'grain', bake: true, amp: 0.0006, f: 320, seed: seed + 3 }
+  ];
+  const body = pins.length ? U(0.012, ...parts, U(0.006, ...pins)) : U(0.012, ...parts);
+  return { sdf: Disp(L, U(0.003, body, U(0, ...polyps))), loSdf: Disp(L, body), sk,
+    emit: S => (S.ma === PN.POLYP ? 1 - S.mw : 0) + (S.mb === PN.POLYP ? S.mw : 0) };
+}
+const PN_PAINT = {
+  kScale: 0.0012, aoAlb: 0.6,
+  mats: { [PN.RACH]: { c: [0.78, 0.52, 0.36], ro: 0.45 }, [PN.PIN]: { c: [0.82, 0.50, 0.32], ro: 0.4 }, [PN.POLYP]: { c: [0.95, 0.90, 0.82], ro: 0.3 }, [PN.BULB]: { c: [0.60, 0.40, 0.30], ro: 0.6 } },
+  layers: [
+    { c: [0.70, 0.36, 0.22], a: 0.5, m: [['n', 10, 0.45, 0.8, 131]] },
+    { c: [0.92, 0.74, 0.56], a: 0.5, m: [['mat', PN.PIN], ['cvx', 0.3, 1.4]] },               // pinna rims paler
+    { c: [0.50, 0.26, 0.18], a: 0.5, m: [['cav', 0.2, 1.0]] },
+    { c: [0.38, 0.30, 0.26], a: 0.6, ro: 0.9, m: [['ax', 1, 0.08, -0.02]] },                  // the buried end silted
+    { c: [0.12, 0.06, 0.05], a: 0.7, m: [['ao', 0.45, 0.95]] }
+  ]
+};
+
+// ============================================================================ WHIP CORAL
+// Deep sea whips (plants2): Ellisella / Junceella rods tapering from a holdfast disc, polyps
+// all along them (bake), and two other silhouettes — a forked whip and Cirrhipathes, the
+// corkscrew wire coral. Authored at TRUE height `Href` (not a unit mesh): plantKit's remap
+// picks the variant nearest the instance's own aspect (H / S) and draws it (S, H / Href, S),
+// so the polyps are never stretched five-fold.
+const WP = { ROD: 0, FOOT: 1 };
+function whipCoral(seed, type, Href) {
+  const R = mulberry(seed), rods = [];
+  const r0 = 0.016, r1 = 0.0045;
+  const path = (n, f) => { const P = []; for (let i = 0; i <= n; i++) P.push(f(i / n)); return P; };
+  const swA = R() * TAU, swB = R() * TAU;
+  const main = t => {
+    if (type === 'spiral') { const a = t * TAU * Href * 0.9 + swA, rr = 0.07 * sst(0.05, 0.25, t); return [Math.cos(a) * rr, t * Href, Math.sin(a) * rr]; }
+    const sw = Math.sin(t * 3.0 + swA) * 0.05 * t * Href / 4, sw2 = Math.sin(t * 5.3 + swB) * 0.03 * t * Href / 4;
+    return [sw, t * Href * (1 - 0.04 * t * t), sw2];
+  };
+  const seg = (P, ra, rb, n) => { for (let i = 0; i < P.length - 1; i++) { const t0 = i / (P.length - 1), t1 = (i + 1) / (P.length - 1); rods.push(Cap(P[i], P[i + 1], ra + (rb - ra) * t0, ra + (rb - ra) * t1, WP.ROD)); } };
+  const nP = type === 'spiral' ? Math.round(Href * 14) : Math.round(Href * 6);
+  const MP = path(nP, main);
+  seg(MP, r0, r1);
+  if (type === 'fork') {
+    const tb = 0.3 + 0.15 * R(), b0 = main(tb), dA = R() * TAU;
+    const BP = path(Math.round(Href * 4), t => { const q = main(tb + (1 - tb) * t * 0.85); return [q[0] + Math.cos(dA) * 0.12 * Math.sqrt(t) * Href / 4, b0[1] + (q[1] - b0[1]) * 0.92, q[2] + Math.sin(dA) * 0.12 * Math.sqrt(t) * Href / 4]; });
+    seg(BP, r0 * 0.75, r1);
+  }
+  const foot = E([0, -0.005, 0], [0.05, 0.015, 0.05], WP.FOOT);
+  const L = [
+    { type: 'barn', bake: true, amp: 0.0022, f: 95, dens: 0.75, seed: seed + 1 },      // polyp calyces
+    { type: 'grain', bake: true, amp: 0.0005, f: 300, seed: seed + 2 },
+    { type: 'fbm', amp: 0.0015, f: 20, oct: 2, seed: seed + 3 }
+  ];
+  const body = U(0.01, foot, U(0, ...rods));
+  return { sdf: Disp(L, body), loSdf: Disp(L.slice(2), body), sk: { Href }, emit: S => sst(0.4, 1.4, S.k) * (1 - sst(0.2, 0.6, 1 - S.ao)) };
+}
+const WP_PAINT = {
+  kScale: 0.0015, aoAlb: 0.6,
+  mats: { [WP.ROD]: { c: [0.80, 0.52, 0.34], ro: 0.55 }, [WP.FOOT]: { c: [0.42, 0.34, 0.28], ro: 0.8 } },
+  layers: [
+    { c: [0.86, 0.80, 0.68], a: 0.55, m: [['n', 3, 0.5, 0.75, 141]] },                       // some colonies pale (Junceella)
+    { c: [0.94, 0.88, 0.76], a: 0.6, m: [['cvx', 0.4, 1.6]] },                               // polyp crowns
+    { c: [0.40, 0.20, 0.14], a: 0.5, m: [['cav', 0.2, 1.0]] },
+    { c: [0.08, 0.05, 0.04], a: 0.6, m: [['ao', 0.5, 0.95]] }
+  ]
+};
+
+// ============================================================================ BACTERIAL MAT
+// Beggiatoa / sulphur mats round the vents (plants2): a thin felted sheet draped on the crust,
+// lobed and ragged at its edge, torn through in places so the sediment shows, cottony
+// filament tufts (bake), zoned white at the heart through sulphur-yellow to an oxidised rust
+// rim. An ALPHA card set: the low is a plain shallow dome, the coverage is baked.
+// Frame: gardens.js matGeo — a disc of radius 0.5 at y ~0.03.
+const MT = { MAT: 0 };
+function bactMat(seed) {
+  const R = mulberry(seed), s = seed, ph = [R() * TAU, R() * TAU, R() * TAU];
+  const rim = a => 0.5 * (1 + 0.1 * Math.sin(5 * a + ph[0]) + 0.07 * Math.sin(9 * a + ph[1]) + 0.05 * Math.sin(14 * a + ph[2]));
+  const surf = (x, z) => 0.016 + 0.006 * fbm3n(x * 9, 0, z * 9, s, 3) + 0.005 * Math.max(0, fbm3n(x * 4, 1, z * 4, s + 2, 2));
+  const hi = Fn([-0.66, -0.03, -0.66, 0.66, 0.07, 0.66], (x, y, z) => {
+    const r = Math.hypot(x, z), a = Math.atan2(z, x), R0 = rim(a) * (1 + 0.08 * fbm3n(x * 12, 2, z * 12, s + 4, 2));
+    const th = 0.005 * (1 - sst(0.7, 1.0, r / R0)) + 0.0025;
+    let d = Math.max(Math.abs(y - surf(x, z)) - th, (r - R0) * 0.8);
+    // tears through the felt: sediment shows (more toward the rim)
+    const [f1, id] = cell2(x * 9 + 0.6 * fbm3n(x * 20, 3, z * 20, s + 6, 2), z * 9, s + 7);
+    if (id < 0.18 + 0.25 * sst(0.5, 1, r / R0)) d = Math.max(d, (0.22 - f1) / 9);
+    return d;
+  }, MT.MAT);
+  const sdf = Disp([
+    { type: 'fbm', bake: true, amp: 0.002, f: 60, oct: 3, seed: s + 9 },                     // felted filaments
+    { type: 'barn', bake: true, amp: 0.0018, f: 90, dens: 0.4, seed: s + 10 },               // cottony tufts
+    { type: 'grain', bake: true, amp: 0.0006, f: 400, seed: s + 11 }
+  ], hi);
+  const lo = Fn([-0.7, -0.03, -0.7, 0.7, 0.08, 0.7], (x, y, z) => Math.max(Math.abs(y - 0.018 + 0.01 * (x * x + z * z)) - 0.011, Math.hypot(x, z) - 0.62), MT.MAT);
+  return { sdf, loSdf: lo, emit: () => 1, sk: {} };
+}
+function cell2(x, y, s) {
+  const X = Math.floor(x), Y = Math.floor(y); let f1 = 9, id = 0;
+  for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+    const cx = X + i, cy = Y + j, px = cx + h2(cx, cy, s), py = cy + h2(cx, cy, s + 7), d = Math.hypot(px - x, py - y);
+    if (d < f1) { f1 = d; id = h2(cx, cy, s + 19); }
+  }
+  return [f1, id];
+}
+const matR = S => Math.hypot(S.x, S.z) / 0.5;
+const MT_PAINT = {
+  kScale: 0.0008, aoAlb: 0.5,
+  mats: { [MT.MAT]: { c: [0.92, 0.91, 0.86], ro: 0.9 } },
+  layers: [
+    { c: [0.86, 0.76, 0.36], a: 0.8, m: [['fn', S => sst(0.25, 0.65, matR(S) + 0.25 * fbm3n(S.x * 7, 0, S.z * 7, 151, 2))]] },   // sulphur
+    { c: [0.66, 0.36, 0.16], a: 0.85, m: [['fn', S => sst(0.65, 1.0, matR(S) + 0.2 * fbm3n(S.x * 9, 1, S.z * 9, 153, 2))]] },      // oxidised rim
+    { c: [0.55, 0.55, 0.52], a: 0.5, m: [['n', 7, 0.6, 0.78, 155]] },                                                               // grey patches
+    { c: [0.98, 0.97, 0.94], a: 0.5, m: [['cvx', 0.3, 1.5]] },                                                                      // tuft crowns
+    { c: [0.30, 0.22, 0.16], a: 0.5, m: [['cav', 0.2, 1.0]] }
+  ]
+};
+
 // ============================================================================ SWAY
 // The per-vertex data the shared sway shader reads (gardens.js / flora.js aVA, aFlut):
 // returns [flex, h, mask, phase, flut] for a vertex of `species` variant `sk`. Pure.
@@ -701,6 +874,13 @@ export const SWAY = {
   table(x, y, z, h) { return [0, h, 0, 0, 0]; },
   glass(x, y, z, h) { return [h * h * 0.05, h, 0, 0, 0]; },
   fan(x, y, z, h) { return [h * h, h, 0, 0, 0]; },
+  pen(x, y, z, h, sk) {
+    if (sk.type === 'umb') { const u = sst(0.85, 1.05, y); return [Math.pow(h, 1.4) * 0.8 + u * 0.2, h, u, 0, 0.012 * u]; }
+    const u = Math.min(1, Math.abs(x) / 0.25);
+    return [Math.pow(h, 1.4) * 0.8 + u * 0.15, h, u, hashPh(Math.round(y * 40), x > 0 ? 1 : 2), 0.012 * u];
+  },
+  whip(x, y, z, h) { return [Math.pow(h, 1.4), h, 0, 0, 0]; },
+  mat() { return [0, 0, 0, 0, 0]; },
   crin(x, y, z, h, sk) {
     const T = sk.top, d = Math.hypot(x - T[0], y - T[1] - 0.02, z - T[2]);
     if (y < T[1] + 0.01) return [h * h * 0.2, h, 0, 0, 0];
@@ -758,12 +938,38 @@ export const SPECIES = {
     build: v => seaFan(v.seed, v.type), paint: GF_PAINT,
     set: { size: 1024, ormHalf: false, alpha: true, ormB: 'alpha' }, hi: 0.0008, lo: 0.005, tris: 700, err: 0.008, far: 250, kEps: 0.003, ao: { r: 0.01, n: 3 }, cage: 0.012, ray: 0.024
   },
+  pen: {
+    variants: [{ seed: 1301, type: 'plump' }, { seed: 1302, type: 'slim' }, { seed: 1303, type: 'umb' }, { seed: 1304, type: 'plump' }],
+    build: v => seaPen(v.seed, v.type), paint: PN_PAINT,
+    set: { size: 1024, ormB: 'emit' }, hi: 0.0018, lo: 0.0045, tris: 2600, err: 0.008, far: 500, kEps: 0.004, ao: { r: 0.02, n: 4 }, cage: 0.012, ray: 0.03
+  },
+  whip: {
+    variants: [{ seed: 1401, type: 'rod', Href: 3 }, { seed: 1402, type: 'rod', Href: 5 }, { seed: 1403, type: 'rod', Href: 8 }, { seed: 1404, type: 'fork', Href: 4.5 }, { seed: 1405, type: 'spiral', Href: 5 }],
+    build: v => whipCoral(v.seed, v.type, v.Href), paint: WP_PAINT,
+    set: { size: 1024, ormB: 'emit' }, hi: 0.0018, lo: 0.006, tris: 700, err: 0.004, far: 140, kEps: 0.004, ao: { r: 0.015, n: 3 }, cage: 0.008, ray: 0.02
+  },
+  mat: {
+    variants: [{ seed: 1501 }, { seed: 1502 }, { seed: 1503 }],
+    build: v => bactMat(v.seed), paint: MT_PAINT,
+    set: { size: 1024, ormHalf: false, alpha: true, ormB: 'alpha' }, hi: 0.0016, lo: 0.008, tris: 300, err: 0.006, far: 80, kEps: 0.004, ao: { r: 0.01, n: 3 }, cage: 0.02, ray: 0.05
+  },
   crin: {
     variants: [{ seed: 1101 }, { seed: 1102 }, { seed: 1103 }],
     build: v => crinoid(v.seed), paint: CR_PAINT,
     set: { size: 1024, alpha: true, ormB: 'alpha' }, hi: 0.001, lo: 0.0032, tris: 3200, err: 0.004, far: 900, kEps: 0.003, ao: { r: 0.012, n: 3 }, cage: 0.009, ray: 0.02
   }
 };
+
+// (plants2) whip corals are authored at true height: pick the variant whose own height matches
+// the instance's aspect (the host lays a unit whip out as (S, H, S)), and carry the sway terms
+const ihash = (i, k) => { const q = Math.sin(i * 91.345 + k * 17.13) * 24634.6345; return q - Math.floor(q); };
+export function whipRemap(i, sx, sy, amp, shrink) {
+  const V = SPECIES.whip.variants, R = ihash(i, 5), want = R < 0.2 ? 'spiral' : R < 0.4 ? 'fork' : 'rod';
+  let best = 0, bd = 1e9;
+  V.forEach((v, k) => { if (v.type !== want) return; const d = Math.abs(Math.log(sy / sx / v.Href)); if (d < bd) { bd = d; best = k; } });
+  const Href = V[best].Href;
+  return { v: best, sx, sy: sy / Href, amp, shrink: shrink * Href };
+}
 
 // ---- the offline pipeline -----------------------------------------------------------------
 export function pipeline() {

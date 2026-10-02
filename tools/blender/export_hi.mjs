@@ -86,6 +86,29 @@ for (const pc of P.pieces) {
 man.unwrap = {};
 for (const set of Object.keys(P.sets)) {
   const pcs = P.pieces.filter(q => q.set === set), t0 = Date.now(), lows = [];
+  // (additive, plants2) EXPLICIT LOWS: a piece may bring its own low `low: () => ({ pos, idx,
+  // uv })` with its UVs already laid out (blade cards, a strip's tube regions): no DC, no QEM,
+  // no charting; the set must say uvFixed: true (bake.py then does not repack it) and every
+  // piece of it must be explicit
+  if (pcs.some(q => q.low)) {
+    if (!pcs.every(q => q.low) || !P.sets[set].uvFixed) throw new Error('set ' + set + ': explicit lows need every piece explicit and uvFixed');
+    for (const pc of pcs) {
+      const L = typeof pc.low === 'function' ? pc.low() : pc.low, e = man.pieces.find(q => q.name === pc.name);
+      fs.writeFileSync(path.join(build, e.lo), plyBytes(L.pos, L.idx, L.normal || null, null, true, L.uv));
+      e.loTris = L.idx.length / 3; e.loSrcTris = e.loTris; e.charts = 0;
+      // an explicit FAR LOD in the same UV layout (a parametric surface at a lower resolution):
+      // bake.py exports it as <piece>_far instead of collapse-decimating the near low
+      if (pc.farLow) {
+        const F = typeof pc.farLow === 'function' ? pc.farLow() : pc.farLow;
+        e.farLo = pc.name + '_farlo.ply';
+        fs.writeFileSync(path.join(build, e.farLo), plyBytes(F.pos, F.idx, F.normal || null, null, true, F.uv));
+        e.farTris = F.idx.length / 3;
+      }
+    }
+    man.unwrap[set] = { coverage: null, explicit: true };
+    console.log('set', set, 'explicit lows', pcs.map(q => q.name).join(', '));
+    continue;
+  }
   for (const pc of pcs) {
     // (additive, plants) `loSdf`: a different field for the low — an alpha card's plain shell
     // under a high that is all holes (bake.py set alpha: true)
