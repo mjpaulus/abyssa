@@ -362,7 +362,7 @@ export function pipeline() {
       P('flapBody', flapBodySpec(), flapPaint(), 0.006, 0.013, 2200),
       P('flapFins', flapFinsSpec(), flapPaint(), 0.005, 0.011, 300)
     ],
-    compress: { mesh: 'draco' },
+    compress: { mesh: 'draco', tex: 'ktx2' },
     meta: {}
   };
 }

@@ -499,8 +499,8 @@ function crabPaint() {
 const URC = { c: [0, 0.27, 0], r: [0.38, 0.27, 0.38] };
 export const URCHIN_SPINES = (() => {
   const S = [];
-  for (let i = 0; i < 130; i++) {
-    const y = 1 - (i + 0.5) / 130 * 1.75, a = i * 2.399963, r = Math.sqrt(Math.max(0, 1 - y * y));
+  for (let i = 0; i < 96; i++) {
+    const y = 1 - (i + 0.5) / 96 * 1.75, a = i * 2.399963, r = Math.sqrt(Math.max(0, 1 - y * y));
     if (y < -0.55) continue;                                      // the oral face is bare (tube feet, the mouth)
     const d = [Math.cos(a) * r, y, Math.sin(a) * r];
     const len = (0.42 + 0.38 * hash(i, 9)) * (0.6 + 0.4 * sst(-0.5, 0.3, y));
@@ -644,10 +644,10 @@ export function pipeline() {
       P('morayJaw', morayJawSpec(), morayPaint(), 0.004, 0.009, 600),
       P('crabBody', crabBodySpec(), crabPaint(), 0.005, 0.012, 900),
       P('crabLegs', crabLegsSpec(), crabPaint(), 0.004, 0.011, 1500),
-      P('urchin', urchinSpec(), urchinPaint(), 0.003, 0.007, 2200),
+      P('urchin', urchinSpec(), urchinPaint(), 0.003, 0.008, 1500),
       P('star', starSpec(), starPaint(), 0.005, 0.012, 1100)
     ],
-    compress: { mesh: 'draco' },
+    compress: { mesh: 'draco', tex: 'ktx2' },
     meta: { pieces: ['manta', 'mantaTail', 'turtleBody', 'turtleFlip', 'moray', 'morayJaw', 'crabBody', 'crabLegs', 'urchin', 'star'] }
   };
 }

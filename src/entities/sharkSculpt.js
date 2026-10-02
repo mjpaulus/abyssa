@@ -151,7 +151,7 @@ export function pipeline() {
     name: 'shark', out: 'assets/fauna/shark',
     sets: { shark: { size: 2048, gutter: 6, aoDist: 0.03, aoSamples: 48, fill: true } },
     pieces: [{ name: 'shark', set: 'shark', sdf: sp, paint: sharkPaint(fish), hi: { h: 0.0011 }, lo: { h: 0.003, tris: 5200, err: 0.006 }, kEps: 0.0025, ao: { r: 0.015, n: 4 }, cage: 0.003, ray: 0.01 }],
-    compress: { mesh: 'draco' },
+    compress: { mesh: 'draco', tex: 'ktx2' },
     meta: {}
   };
 }

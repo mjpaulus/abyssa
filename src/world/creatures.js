@@ -16,6 +16,7 @@ import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { MV, MOVER_N, moverLive, pulseAt, PULSE_DIR, LANT, tickStir } from './stir.js';
 import { player } from '../player.js';
 import { loadSculpted } from '../lib/assets.js';
+import { patchNormalRG } from '../lib/microDetail.js';
 import { makeFish, labelVertex } from '../entities/fishKit.js';
 import { FISH } from '../entities/schoolSculpt.js';
 
@@ -499,7 +500,7 @@ function fishSculptMaterial(sp, u, maps) {
         // fin membrane: light from behind comes through, more toward the free edge
         totalEmissiveRadiance += diffuseColor.rgb * skTransmit(normal, vViewPosition) * (1.0 - body) * (0.25 + 0.35 * vSurf.y) * 0.5;
         // silver flank: the guanine mirror of the bright water above
-        totalEmissiveRadiance += skEnv(normal, fV) * (diffuseColor.rgb * 0.8 + 0.2) * uSilver * 1.5 * body * (1.0 - wet) * (0.5 + 0.5 * (1.0 - smoothstep(0.55, 0.95, fy)));
+        totalEmissiveRadiance += skEnv(normal, fV) * (vec3(dot(diffuseColor.rgb, vec3(0.3333))) * 0.8 + 0.2) * uSilver * 1.1 * body * (1.0 - wet) * (0.5 + 0.5 * (1.0 - smoothstep(0.55, 0.95, fy)));
         totalEmissiveRadiance += skCatch(normal, fV, vViewPosition) * wet;
         // baked photophores (ORM.B): dim, breathing; zone 0 species bake none
         float beat = 0.6 + 0.4 * sin(uTime * 2.2 + vPh * 3.0);
@@ -507,6 +508,7 @@ function fishSculptMaterial(sp, u, maps) {
         totalEmissiveRadiance += uGlow * uBase * body;`);
     injectStrokes(sh);
   };
+  if (maps.normalMap.userData.rg) patchNormalRG(mat);   // BC5 (KTX2): rebuild the normal's Z
   return registerPaint(mat);
 }
 
@@ -545,7 +547,7 @@ if (typeof window !== 'undefined') window.__school = {
   state: () => ({ installed: sculpt.n, ms: +sculpt.ms.toFixed(1), on: sculpt.on, lodR: SCULPT_LOD_R,
     near: schools.filter(S => S.sculptGeo && S.inst.geometry === S.sculptGeo && S.inst.visible).length,
     tris: schools.reduce((t, S) => t + (S.inst.visible ? S.inst.geometry.index.count / 3 * S.n : 0), 0) }),
-  on: v => { sculpt.on = !!v; return sculpt.on; }
+  on: v => { sculpt.on = !!v; for (const S of schools) schoolLod(S); return sculpt.on; }
 };
 
 // Fixed topological neighbourhood — real flocks track ~7 neighbours, and fixed

@@ -62,6 +62,7 @@ import { siteParams, stream } from './site.js';
 import { player } from '../player.js';
 import { setMover, pulseAt, PULSE_DIR, M_RAY, M_TURTLE0, M_TURTLE1 } from './stir.js';
 import { loadSculpted } from '../lib/assets.js';
+import { patchNormalRG } from '../lib/microDetail.js';
 import { makeFish, labelVertex, toCanon } from '../entities/fishKit.js';
 import { FISH as SCHOOL_FISH } from '../entities/schoolSculpt.js';
 import { LABELS as REEF_LABELS } from '../entities/reefSculpt.js';
@@ -1687,6 +1688,7 @@ function faunaSculptMaterial(src, maps) {
       .replace('#include <emissivemap_fragment>', FRAG_SCULPT);
     injectStrokes(sh, true);
   };
+  if (maps.normalMap.userData.rg) patchNormalRG(m);
   return registerPaint(m);
 }
 // Labelled geometry from a baked piece: positions scaled by the procedural build's merge
@@ -1790,7 +1792,7 @@ function faunaLod(G) {
 if (typeof window !== 'undefined') window.__faunaSculpt = {
   state: () => ({ installed: fsState.n, sets: fsState.sets, ms: +fsState.ms.toFixed(1), on: fsState.on,
     groups: groups.filter(G => G.sculptGeo).map(G => ({ name: G.name, near: G.mesh.geometry === G.sculptGeo, tris: G.mesh.geometry.index.count / 3 * G.n, vis: G.mesh.visible })) }),
-  on: v => { fsState.on = !!v; return fsState.on; }
+  on: v => { fsState.on = !!v; for (const G of groups) faunaLod(G); return fsState.on; }
 };
 
 // ---------------------------------------------------------------------------

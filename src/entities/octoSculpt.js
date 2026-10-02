@@ -144,7 +144,7 @@ export function pipeline() {
       { name: 'octMantle', set: 'octo', sdf: octMantleSpec(), paint: octPaint(), hi: { h: 0.004 }, lo: { h: 0.01, tris: 3200, err: 0.03 }, kEps: 0.008, ao: { r: 0.05, n: 4 }, cage: 0.012, ray: 0.04 },
       { name: 'squid', set: 'octo', sdf: squidSpec(), paint: squidPaint(), hi: { h: 0.0025 }, lo: { h: 0.006, tris: 1600, err: 0.018 }, kEps: 0.005, ao: { r: 0.03, n: 4 }, cage: 0.008, ray: 0.025 }
     ],
-    compress: { mesh: 'draco' },
+    compress: { mesh: 'draco', tex: 'ktx2' },
     meta: {}
   };
 }

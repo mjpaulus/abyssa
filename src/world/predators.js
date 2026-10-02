@@ -45,6 +45,7 @@ import { rockColliders } from './flora.js';
 import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { loadSculpted } from '../lib/assets.js';
+import { patchNormalRG } from '../lib/microDetail.js';
 import { octLabel } from '../entities/octoSculpt.js';
 import { sharkFish, labelShark } from '../entities/sharkSculpt.js';
 import { setMover, stirPulse, setLantern, pulseAt, M_SHARK0, M_SHARK1, M_SQUID, P_BITE, P_STRIKE } from './stir.js';
@@ -2254,6 +2255,7 @@ let profN = 0, profSum = 0, profMax = 0;
 const OCS_FRAG_COMMON = `
 uniform sampler2D uOcA; uniform sampler2D uOcN; varying vec2 vOcUv;
 vec3 ocPerturb(vec3 n, vec3 p, vec2 uv, vec3 mapN, float faceDir){
+  mapN.z = sqrt(max(0.0, 1.0 - dot(mapN.xy, mapN.xy)));   // BC5 (KTX2) carries XY only
   vec3 dp1 = dFdx(p), dp2 = dFdy(p); vec2 du1 = dFdx(uv), du2 = dFdy(uv);
   vec3 dp2p = cross(dp2, n), dp1p = cross(n, dp1);
   vec3 T = dp2p * du1.x + dp1p * du2.x, B = dp2p * du1.y + dp1p * du2.y;
@@ -2423,6 +2425,7 @@ function sharkSculptMaterial(src, maps) {
       .replace('#include <emissivemap_fragment>', SHARK_SCULPT_FRAG);
     injectStrokes(sh);
   };
+  if (maps.normalMap.userData.rg) patchNormalRG(m);
   return registerPaint(m);
 }
 function installSharkSculpt(a) {
@@ -2472,6 +2475,14 @@ export function buildPredators() {
   window.pred = {
     sharks, octos, squids,
     sculpt: () => ({ octo: { ...ocs } }),
+    // fauna2 A/B: every sculpted body back to its procedural build (and back), in place
+    sculptOn: v => {
+      ocs.on = !!v;
+      for (const O of octos) if (O.sculptGeo) { O.mesh.geometry = v ? O.sculptGeo : O.procGeo; O.mesh.material = v ? O.sculptMat : O.procMat; }
+      for (const S of sharks) if (S.procGeo) { if (!S.sculptGeo) { S.sculptGeo = S.mesh.geometry === S.procGeo ? S.sculptGeo : S.mesh.geometry; S.sculptMat = S.mesh.material === S.procMat ? S.sculptMat : S.mesh.material; } S.mesh.geometry = v ? S.sculptGeo : S.procGeo; S.mesh.material = v ? S.sculptMat : S.procMat; }
+      if (squidMesh && squidMesh.userData.procGeo) { const u = squidMesh.userData; if (!u.sculptGeo) { u.sculptGeo = squidMesh.geometry; u.sculptMat = squidMesh.material; } squidMesh.geometry = v ? u.sculptGeo : u.procGeo; squidMesh.material = v ? u.sculptMat : u.procMat; }
+      return ocs.on;
+    },
     cost: () => ({
       frames: profN,
       avgMs: +(profSum / Math.max(1, profN)).toFixed(4),

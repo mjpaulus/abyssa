@@ -292,7 +292,7 @@ const PAINT = {
     marks: [{ c: [0.62, 0.58, 0.40], a: 0.3, f: stripe(0.24, 0.05, 0.2, 0.9) }] }),
   snapper: f => paintFor(f, { back: [0.44, 0.17, 0.12], flank: [0.68, 0.38, 0.25], belly: [0.86, 0.70, 0.62], fin: [0.62, 0.26, 0.16], finTip: [0.30, 0.08, 0.06], iris: [0.75, 0.22, 0.12], rough: 0.36, edge: [-0.1, 0.6],
     marks: [{ c: [0.80, 0.62, 0.26], a: 0.45, f: stripe(-0.05, 0.08, 0.25, 0.9) }, { c: [0.30, 0.10, 0.08], a: 0.5, f: o => Math.exp(-((((o.t - 0.62) / 0.05) ** 2) + (((o.yn - 0.35) / 0.25) ** 2))) * 0.0 }] }),
-  butterfly: f => paintFor(f, { back: [0.62, 0.48, 0.16], flank: [0.74, 0.58, 0.22], belly: [0.84, 0.78, 0.58], fin: [0.72, 0.55, 0.2], finTip: [0.08, 0.06, 0.04], iris: [0.4, 0.3, 0.12], rough: 0.34, edge: [0.6, 0.95], bellyEdge: [-0.9, -0.6],
+  butterfly: f => paintFor(f, { back: [0.54, 0.42, 0.16], flank: [0.64, 0.50, 0.20], belly: [0.78, 0.72, 0.56], fin: [0.62, 0.48, 0.2], finTip: [0.08, 0.06, 0.04], iris: [0.4, 0.3, 0.12], rough: 0.34, edge: [0.6, 0.95], bellyEdge: [-0.9, -0.6],
     marks: [
       // the eye-bar: a black band from nape to throat through the eye, edged pale
       { c: [0.04, 0.035, 0.03], a: 0.95, f: o => 1 - sst(0.014, 0.022, Math.abs(o.t - 0.15 - 0.03 * o.yn)) },
@@ -338,7 +338,7 @@ export function pipeline() {
     name: 'school', out: 'assets/fauna/school',
     sets: { school: { size: 2048, gutter: 6, aoDist: 0.05, aoSamples: 48, fill: true } },
     pieces,
-    compress: { mesh: 'draco' },
+    compress: { mesh: 'draco', tex: 'ktx2' },
     meta: { species: Object.keys(FISH) }
   };
 }
