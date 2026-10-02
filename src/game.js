@@ -252,8 +252,8 @@ function setBearing(el, tx, ty, tz, show) {
 // One press, one shove. Edge-triggered on keydown with !e.repeat, so HOLDING Shift can
 // never repeat the burst — that is the only reading of the input that fully kills flight.
 // Shift still means "swim hard" while held; cracking the bottle and finning hard are the
-// same panic gesture, and keeping the 2x swim boost preserves the marginal escape from a
-// striking shark (predators.js strikeSpeed 22 against a 25.2 u/s sprint).
+// same panic gesture, and keeping the swim boost (x2.2 since the weighted-suit pass) preserves
+// the marginal escape from a striking shark (predators.js strikeSpeed 22 against a ~24-26 u/s haul).
 function tryBurst() {
   if (player.grounded) return;                 // lead boots on the floor: nothing to push off
   if (survival.thrustCharge < 1) return;       // still repressurising

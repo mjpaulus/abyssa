@@ -53,8 +53,11 @@ against explicit contracts and reviewed on return.
 - `core.js` — renderer (pixelRatio pinned to 1, integer buffer dims — fractional
   ratios caused artifacts), resize path (CSS → ResizeObserver → applySize →
   composer.setSize). Canvas z-index 0 / #ui z-index 1 is load-bearing.
-- `player.js` — locomotion. Walking is deliberately PONDEROUS (top ~2.6 u/s, slow
-  ramp, momentum carry) — the user rejected faster/snappier. Swim is HEAVY (Michael,
+- `player.js` — locomotion. Walking is deliberately PONDEROUS and now WEIGHTED-SUIT
+  (Michael 2026-10-02, reference-built: docs/superpowers/specs/sal-weighted-suit-motion.md):
+  deck ~1.5 u/s, seabed top 2.15, Shift walk x1.3, per-ground gait (lean 9/15 deg, stance
+  0.61-0.70), off-bottom is a head-up two-handed haul (~16 u/s, Shift x2.2), never a kick.
+  The user rejected faster/snappier; motion targets come from Mark V reference, not human gait. Swim is HEAVY (Michael,
   2026-10-01, "make the swimming feel heavier"): added mass AM_H 2.40 / AM_V 1.90 (was
   1.55 / 1.26) — same cruise speed, longer ramps and carry; the bottle burst is computed
   against the shipped added mass so it keeps its punch and carries further; an unworked
