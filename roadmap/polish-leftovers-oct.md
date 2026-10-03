@@ -1,6 +1,6 @@
 ---
 title: October leftovers sweep
-status: wip
+status: done
 tags: polish, bugs
 updated: 2026-10-03
 ---
@@ -24,3 +24,4 @@ Small known defects left by the September and October passes: a sinking boot dow
 - 2026-10-03 — Gale foam under TAA (504a681): fixed, with a measured but partial gain. The sea draws its own motion vectors into the TAA velocity target (the clipmap at the true displaced surface, in one call; the raft and Sal draw over it), and the flag carries the sea's foam as a reactive mask (`__taa.K.seaA` 0.6 on whitecaps only; `K.sea/seaVec` for A/B). Paired probe of TAA input against output in whitecaps with a moving camera: 0.42 → 0.67 of the input's edge energy; the no-history bound is about 0.85. With the real follow camera and with a static camera the change is within run-to-run noise. Open-sea AA is unchanged. Orbital motion vectors (`K.seaOrb`) measured no help because the foam lace is anchored in world space. Left: the remaining softness is mostly the foam shader's own blobs plus TAA's reconstruction filter; it needs Michael's eye at 60 fps.
 - 2026-10-03 — Raft hose (5af00d1): fixed. raft/colliders.js resolveHoseNode pushes tether nodes near the raft out of the six gallows struts (3D capsules mirrored from davit.js), the planks (a node coming from under the hull goes back under it), and the deck gear as columns with top heights (the hose drapes over or slides round). It reuses the seabed's friction and allocates nothing. Probe at deck stations, on the merged tree: planks 0.30 / 0.10 u under → 0 and strut penetration 0.041 → 0. `tether.deck` for A/B.
 - 2026-10-03 — Cleanup (67c45f9): fixed. Checked that they were unused, then removed GLASS.chop k/foam-lag block/streakLegacy/galeAmp/spill*/foam-accumulator and windwater anisoK/ampK, together with their dead uniforms (uWindK, uChop, uLagW, uChopX, uGale, uSpill, uAcc*), probe fields and lab knobs; capThr/capK/currentK/decayH and the live shading knobs stay. postfx.skyrays.js now reads water.js K_AIR[1] (0.00118, gain STYLE_U[0]) instead of the old 0.0040 copy. Verified live: rays on, console clean.
+- 2026-10-03 — merged to main; verified in a fresh tab (storm + zone tour clean, 14 lights, TAA valid, fingerprints unchanged). Open for Michael's eye: gale foam under TAA is sharper with a moving camera but needs a 60 fps look.
