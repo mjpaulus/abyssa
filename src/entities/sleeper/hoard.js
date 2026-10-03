@@ -34,7 +34,7 @@ const _v = V3();
 
 export function makeHoard(L, idx, center, trailFrom) {
   const grp = L.grp, rnd = seededRand(0x40A2D + idx * 977);
-  const H = { lamp: null, lampTaken: false, lights: [], found: { trail: false, hoard: false, arms: false }, center: center.clone(), trailA: trailFrom.clone(), dark: -1, t: 0 };
+  const H = { lamp: null, lampTaken: false, lights: [], found: { trail: false, hoard: false, arms: false }, center: center.clone(), trailA: trailFrom.clone(), dark: -1, t: 0, hush: 1, hushE: 1 };
   H.center.y = terrainH(H.center.x, H.center.z, idx);
   H.trailA.y = terrainH(H.trailA.x, H.trailA.z, idx);
 
@@ -138,6 +138,9 @@ export function makeHoard(L, idx, center, trailFrom) {
   H.update = (dt, player, ev) => {
     H.t += dt;
     if (H.dark >= 0) H.dark += dt;
+    // THE HUSH (orune-menace): asleep, she draws on her lanterns as he nears the lamp —
+    // they sink and breathe with her (hoarder.js sets H.hush; eased here)
+    H.hushE += (H.hush - H.hushE) * Math.min(1, dt * 1.5);
     for (let k = 0; k < H.lights.length; k++) {
       const q = H.lights[k];
       if (H.dark >= 0 && H.dark > k * 0.5) q.on = Math.max(0, q.on - dt * 1.5);
@@ -145,13 +148,13 @@ export function makeHoard(L, idx, center, trailFrom) {
       // distance: dim and SWELLING with range (murk grows halos), gone past ~150 u
       const d = q.glow.position.distanceTo(player.pos);
       const far = 1 - Math.min(1, Math.max(0, (d - 40) / 110));
-      q.glow.material.opacity = q.base * q.on * flick * (0.35 + 0.65 * far) * (d > 150 ? 0 : 1);
+      q.glow.material.opacity = q.base * q.on * flick * H.hushE * (0.35 + 0.65 * far) * (d > 150 ? 0 : 1);
       // a tight corona near (the bloom does the halation; at 2.2x the lantern's size it
       // read as a flat orange disc with the lantern cut out of it), swelling with range
       q.glow.scale.setScalar(q.s * (1.05 + Math.min(3.4, d * 0.03)));
       q.glow.visible = q.on > 0.01;
     }
-    glass.emissiveIntensity = 0.9 * (H.dark < 0 ? 1 : Math.max(0.05, 1 - H.dark / (H.lights.length * 0.5)));
+    glass.emissiveIntensity = 0.9 * H.hushE * (H.dark < 0 ? 1 : Math.max(0.05, 1 - H.dark / (H.lights.length * 0.5)));
     if (!H.lampTaken) { const d = H.lampGlow.position.distanceTo(player.pos); H.lampGlow.scale.setScalar(2.4 + Math.min(5, d * 0.035)); }
     if (ev.msg) return;
     const p = player.pos, F = H.found;

@@ -65,7 +65,7 @@ const SPEC = {
   // 'blades' asset, plants built at load from their seeds at three LODs. `lods` are fixed
   // switch distances (u); `remap` re-picks the variant and the proportions per instance.
   // kelp: OPAQUE (no alpha, no dither: see gardens.js GD_NODITHER), drawn turned to the current
-  kelp: { lods: [14, 40], tint: 0.15, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades', opaque: true, def: ['NODITHER'] },
+  kelp: { lods: [14, 40], tint: 0.15, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades', opaque: true, def: ['NODITHER', 'KELPX'] },
   grass: { lods: [11, 24], tint: 0.6, micro: 0, side: D2, build: buildGrass, nv: GRASS_VARIANTS.length, asset: 'blades' }
 };
 
@@ -112,6 +112,7 @@ function runtimeGeo(species, v, lod) {
   g.setAttribute('aVA', new THREE.BufferAttribute(o.aVA, 4));
   g.setAttribute('aFlut', new THREE.BufferAttribute(o.aFlut, 1));
   g.setAttribute('aBU', new THREE.BufferAttribute(o.aBU, 2));
+  if (o.aKD) g.setAttribute('aKD', new THREE.BufferAttribute(o.aKD, 4));   // (lods) kelp LOD morph
   g.setIndex(new THREE.BufferAttribute(o.index, 1));
   _geoCache.set(name, g);
   return g;
@@ -141,6 +142,32 @@ function pieceGeo(species, v, far) {
   g.setAttribute('aBU', new THREE.BufferAttribute(bu, 2));
   _geoCache.set(name, g);
   return g;
+}
+
+// (lods) THE INDIRECT RE-UPLOAD. three's BatchedMesh.onBeforeRender rebuilds its draw list and
+// flags its indirect texture (draw -> instance id) needsUpdate on EVERY render, so every batch
+// re-uploaded a texture every frame even when nothing moved. On ANGLE/Metal that upload is the
+// batch's cost: measured (isolated, min of 16 alternating reps, zone-0 reef) the whole plant set
+// cost +1.06 ms over terrain alone, +0.24 ms with the upload skipped when the list is unchanged.
+// This wrapper runs three's own list build and then undoes the version bump when the list is
+// identical to the one last uploaded (the renderer compares versions, so no upload happens).
+// The draw list only changes when an instance enters/leaves the frustum or the visible set.
+let quietOn = true;
+const noDitherOn = !(typeof location !== 'undefined' && /[?&]plantdither\b/.test(location.search));   // (lods) ?plantdither = A/B
+function quietIndirect(b) {
+  const proto = Object.getPrototypeOf(b).onBeforeRender;
+  let last = new Int32Array(0), lastN = -1;
+  b.onBeforeRender = function (r, s, c, g, m, gr) {
+    const t = this._indirectTexture, v = t.version;
+    proto.call(this, r, s, c, g, m, gr);
+    const n = this._multiDrawCount, a = t.image.data;
+    let same = quietOn && n === lastN;
+    if (same) for (let i = 0; i < n; i++) if (a[i] !== last[i]) { same = false; break; }
+    if (same) { t.version = v; return; }
+    if (last.length < n) last = new Int32Array(Math.max(n, last.length * 2, 64));
+    for (let i = 0; i < n; i++) last[i] = a[i];
+    lastN = n;
+  };
 }
 
 function hashV(i, k) { const s = Math.sin(i * 91.345 + 17.13) * 24634.6345; return Math.floor((s - Math.floor(s)) * k) % k; }
@@ -173,11 +200,14 @@ function buildGroup(sp, hosts) {
   });
   if (maps.normalMap.userData.rg) patchNormalRG(mat);
   if (S.micro) applyMicroDetail(mat, { scale: S.micro, normal: 0.45, cavity: 0.3, rough: 0.2, cav: ormB === 'cavity' });
+  // (lods) the kelp morph bands: the last 4 u before the near switch, the last 6 before the far one
+  if (def.has('KELPX')) mat.userData.uKX = { value: new THREE.Vector4(S.lods[0] - 4, S.lods[0], S.lods[1] - 6, S.lods[1]) };
   const b = new THREE.BatchedMesh(cap, nvx, nix, mat);
   b.perObjectFrustumCulled = true;
   b.sortObjects = false;
   b.frustumCulled = false;
   b.name = 'plants:' + sp;
+  quietIndirect(b);
   const ids = levels.map(L => L.map(g => b.addGeometry(g)));
   // sway headroom: per-object culling uses the rest pose's sphere
   for (const L of ids) for (const id of L) { b.getBoundingSphereAt(id, _sph); const gi = b._geometryInfo && b._geometryInfo[id]; if (gi && gi.boundingSphere) gi.boundingSphere.radius *= 1.35; }
@@ -244,6 +274,10 @@ function sync(K) {
       // (plants2) species whose decimated far mesh stalled at its seams (still 1-4k triangles)
       // skip it: the near mesh holds a little longer, then the impostor takes over
       if (S.noMid && G.impB) { const d = Math.max(nk * 1.5, 16); G.near2[j] = G.mid2[j] = d * d; }
+      // (lods) with an impostor the batch hands over BEFORE the host's range fade starts (0.72 of
+      // its cull, gardens.js uCull), so the batch never needs the dithered fade and compiles
+      // without a discard (GD_NODITHER): hidden-surface removal back for the opaque reef
+      if (G.impB) { const fb = 0.72 * Math.sqrt(c2) - 1, f2 = fb * fb; if (G.mid2[j] > f2) G.mid2[j] = f2; if (G.near2[j] > f2) G.near2[j] = f2; }
     }
     if (im.instanceColor) im.getColorAt(i, _c); else _c.setRGB(1, 1, 1);
     // soften the host's palette toward its own value: the bake carries the species' colour
@@ -322,6 +356,7 @@ function buildImp() {
   if (maps.normalMap.userData.rg) patchNormalRG(mat);
   impB = new THREE.BatchedMesh(impCap, nvx, nix, mat);
   impB.perObjectFrustumCulled = true; impB.sortObjects = false; impB.frustumCulled = false; impB.name = 'plants:imp';
+  quietIndirect(impB);
   for (const [G, v, g] of geos) G.impIds[v] = impB.addGeometry(g);
   for (const G of gs) for (let i = 0; i < G.cap; i++) { impB.addInstance(G.impIds[G.var[i]]); impB.setVisibleAt(G.impOff + i, false); }
   const w = Math.ceil(Math.sqrt(impCap));
@@ -367,7 +402,13 @@ function tick() {
       for (const K of keys.values()) if (hasSpecies(K.species)) { if (!by.has(K.species)) by.set(K.species, []); by.get(K.species).push(K); }
       buildQ = [['micro', () => { if (!microTextureStep(BUILD_MS)) return 'again'; }]];
       for (const [sp, hosts] of by) buildQ.push(...jobsFor(sp, hosts));
-      if (assetI) buildQ.push(['imp batch', () => { buildImp(); for (const G of groups.values()) if (G.impB) { if (G.nl < 3) { G.ids.push(G.ids[G.nl - 1]); G.nl = 3; } for (const K of G.hosts) sync(K); } }]);
+      if (assetI) buildQ.push(['imp batch', () => { buildImp(); for (const G of groups.values()) if (G.impB) {
+        if (G.nl < 3) { G.ids.push(G.ids[G.nl - 1]); G.nl = 3; }
+        // (lods) the opaque species' batch loses its dither discard (see sync: it never reaches the fade)
+        const md = G.batch.material.defines;
+        if (!md.GD_ALPHA && !md.GD_NODITHER && noDitherOn) { md.GD_NODITHER = 1; G.batch.material.needsUpdate = true; }
+        for (const K of G.hosts) sync(K);
+      } }]);
       return;
     }
     if (buildQ.length) {
@@ -417,6 +458,9 @@ if (typeof window !== 'undefined') window.__plants = {
     groups: [...groups.values()].map(G => ({ sp: G.sp, cap: G.cap, hosts: G.hosts.map(K => K.key + ':' + K.n), shown: G.vis.reduce((a, b) => a + (b ? 1 : 0), 0), far: G.lod.reduce((a, b, i) => a + (G.vis[i] === 1 && b >= 1 ? 1 : 0), 0), imp: G.vis.reduce((a, b) => a + (b === 2 ? 1 : 0), 0) }))
   }),
   proc: on => { procForced = !!on; return procForced; },
-  lod: on => { lodOn = !!on; for (const G of groups.values()) G.lod.fill(255); return lodOn; },
+  lod: on => { lodOn = !!on; for (const G of groups.values()) { G.lod.fill(255); const u = G.batch.material.userData.uKX; if (u) u.value.set(on ? G.S.lods[0] - 4 : 1e5, on ? G.S.lods[0] : 1e5 + 1, on ? G.S.lods[1] - 6 : 1e5, on ? G.S.lods[1] : 1e5 + 1); } return lodOn; },
+  quiet: on => { quietOn = !!on; return quietOn; },
+  // (lods) A/B: true puts the dither discard back on the impostor-backed opaque batches
+  dither: on => { for (const G of groups.values()) if (G.impB) { const m = G.batch.material, md = m.defines; if (md.GD_ALPHA) continue; if (on) delete md.GD_NODITHER; else md.GD_NODITHER = 1; m.needsUpdate = true; } return !!on; },   // (lods) A/B: skip the unchanged indirect re-upload
   groups, root
 };

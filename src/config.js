@@ -97,6 +97,14 @@ setSun(SUN_ELEV_DEG, 26.565);
 // At day = 1, storm = 0 the ring lands exactly on it, so today's noon is reproduced
 // bit-for-bit. `night` is likewise exactly the old SKY_*_N / MOON_DISC pair, which is
 // what the old two-point night/day lerp reached at day = 0. Do not "improve" either.
+// THE ABYSS WEIGHT (world/abyss.js, GLASS.abyss): 0 above -640, 1 below -700 (the zone-2
+// top is -660), times GLASS.abyss.on. Pure, so every consumer can read it import-free.
+export function abyssK(camY) {
+  const A = GLASS.abyss;
+  if (!A || !(A.on > 0)) return 0;
+  const t = Math.max(0, Math.min(1, (-640 - camY) / 60));
+  return Math.min(1, A.on) * t * t * (3 - 2 * t);
+}
 export const GLASS = {
   sun: {
     elevNoon: SUN_ELEV_DEG,  // solar elevation at high noon — the shipped 58
@@ -400,6 +408,31 @@ export const GLASS = {
     lowShare: 0.5, lowYLo: 58, lowYHi: 84, lowFlat: 0.34, lowShade: 0.62, lowDrift: 0.55,
     lowSize: 1.55
   },
+  // THE ABYSS READS (roadmap/zone2-readability.md; world/abyss.js). Zone 2 at play
+  // distance, made legible by motivated light only. on = 0 is the pre-pass frame
+  // exactly (every consumer lerps by `on`), the canonical A/B: __abyss.on(0/1).
+  //   silt/grav/rock — the zone-2 floor palette: the abyssal plain is pale volcanic ash
+  //     over dark basalt, so a lit floor is a light ground that rocks, plants and animals
+  //     stand against in silhouette (the ROV-footage read), never a lifted black.
+  //   bio* — the reef's own light: while Mhor is absent his five borrowed pool lights
+  //     ride the five nearest bioluminescent colonies (sea pens, whips, crinoids), cold,
+  //     decay 2, range bioR, breathing with the polyp wave and flaring on a touch. Only
+  //     colonies bioNear..bioReach from Sal: inside the lantern's pool the flame out-lights
+  //     them 20:1 and the lit BRDF over the foreground was the lever's only GPU cost. At
+  //     bioI 5 the pocket was invisible past 10 u; 18 reads as a soft cold patch on the ash.
+  abyss: {
+    on: 1,
+    silt: 0x857565, grav: 0x4a3e37, rock: 0x22171a,
+    bioI: 18.0, bioR: 8.0, bioFlash: 30.0, bioCol: 0x5c9f96, bioScatter: 0.08, bioReach: 42, bioNear: 9, bioMinW: 2.5,
+    // the eye in the abyss (postfx.exposure.js): the zone-2 exposure fence and key
+    expLo: 0.90, expHi: 1.30, expKey: -4.4,
+    // the film finish for zone 2 (postfx.js): (contrast, pivot, toe weight, shadow sat), toe rgb
+    film: [1.20, 0.14, 0.06, 0.62], toe: [0.10, 0.13, 0.44],
+    // the lantern's glow in the murk (water.js lamp in-scatter) and its key (lighting.js)
+    lampK: 1.6, lantK: 1.0, lantDecay: 1.45, rimK: 0.4,
+    // AO under water in zone 2 (postfx.js updateAO)
+    aoI: 3.2, aoR: 2.4
+  },
   // POWER — the frame governor (game.js frame(); roadmap/battery-governor.md). A laptop
   // on battery cannot afford an uncapped loop: this box renders the full HalfFloat
   // chain at 120 fps on the title screen, forever. The governor holds the loop at `cap`
@@ -531,26 +564,17 @@ export const GLASS = {
   },
 
   // --- WIND ON THE WATER. The wave field, the whitecaps and the subsurface drift all
-  // read these. EVERY ONE OF THEM IS ZERO-SAFE: at wind.speed 0 the anisotropy mix, the
-  // amplitude gain, the cap term and the current all collapse to exactly what shipped,
+  // read these. EVERY ONE OF THEM IS ZERO-SAFE: at wind.speed 0 the cap term and the
+  // current collapse to exactly what shipped,
   // which is the regression anchor (calm windless noon must be indistinguishable).
-  // water.js pushes anisoK/ampK/capThr/capK into uniforms every frame, so all four are
-  // live-tunable; currentK/decayH are read by player.js each frame.
+  // water.js pushes capThr/capK into a uniform every frame (live-tunable); currentK/decayH
+  // are read by player.js each frame. (anisoK/ampK went with the Gerstner sea: the
+  // spectral ocean takes its wind shaping from ocean.js's own OCEAN knobs.)
   windwater: {
     // Wind speed at which torn crests begin. Below this the only foam is the storm
     // spectrum's own |grad h| term that shipped.
     capThr: 0.60,
     capK: 1.00,           // strength of the cap mix at wind 1 (colour is clamped separately)
-    // How far each wave component's bearing is dragged onto the wind axis, and how much
-    // the amplitude is redistributed onto the aligned components. The redistribution is
-    // MEAN-NEUTRAL — mix(1-anisoK, 1+anisoK, cos^2) averages to 1 over the spectrum's
-    // spread — so this re-aims the chop without inflating the field on its own.
-    anisoK: 0.45,
-    // Amplitude the wind adds ON TOP of the storm swell, at wind 1 in a dead calm. Held
-    // low and further halved under a full storm: WAVE's storm amplitudes are already
-    // capped because player.js clamps the swim ceiling to y = -1.2 and game.js lifts the
-    // camera 2.4 above it — a taller field puts the interface through the eye at the raft.
-    ampK: 0.30,
     // Subsurface drift: u/s^2 of wind-aligned push at the surface, at wind 1. Sits well
     // under the storm surge this rides alongside (that term reaches ~4.8) — it is a
     // drift, never a shove, and the swim feel is not up for renegotiation.
@@ -560,51 +584,13 @@ export const GLASS = {
     decayH: 60
   },
 
-  // --- THE CHOP (surface water bar: Gerstner displacement, Jacobian foam, backlit
-  // crests). All of it is pushed into uniforms by updateWater every frame, so every
-  // number here is live-pokeable from the console (GLASS.chop.k = 2.2 etc).
-  //
-  // THE ANCHOR: `k` multiplies max(smoothstep(storm,0,0.9), windSpeed), so at storm 0
-  // wind 0 the choppiness is EXACTLY zero — the horizontal displacement vanishes, the
-  // Jacobian is the identity, det = 1, and the whole apparatus collapses to the shipped
-  // vertical-only field, bit-for-bit, in the shader AND in surfaceHeightAt.
+  // --- THE CHOP: the sea SURFACE's shading knobs (foam texture, crest scatter, body
+  // SSS, churned-water opacity, surface filtering). All of it is pushed into uniforms by
+  // updateWater every frame, so every number here is live-pokeable from the console.
+  // The Gerstner-era knobs (k, the lagged-foam block, streakLegacy, galeAmp, the
+  // spilling breakers, the foam accumulator) died with that sea: the spectral ocean
+  // (ocean.js, OCEAN knobs) owns displacement, Jacobian foam and its persistence now.
   chop: {
-    // Gerstner choppiness. The no-self-intersection bound is sum(k_i * A_i) * chop < 1;
-    // at full storm that sum is 0.406, so the loop-free ceiling is ~2.46. 1.55 spends
-    // ~63% of it: the fronts steepen hard and the backs stretch, without the field ever
-    // folding through itself (a folded Gerstner surface renders as a shattered mirror
-    // and breaks the height mirror's fixed point at the same time).
-    k: 1.55,
-    // FOAM BIRTH. The determinant of (I + dD/dp) is 1 on undisturbed water and falls
-    // below 1 exactly where the surface crowds. Foam starts at foamThr and is full
-    // foamSoft below it. 0.86/0.34 puts foam on the steep FACE of a front rather than
-    // on its top, which is where Michael's poseidon frames put it.
-    // Tuned live in a full gale from 20 u up. 0.86 fired over ~90% of the surface (the
-    // determinant swings about 1 by ~0.8 at this choppiness, and the three lagged samples
-    // are max-combined on top) and the sea rendered as a white sheet; 0.65 puts foam on
-    // the folds and leaves the troughs green. Measured sea-band brightness against
-    // foam-off: 0.86 = +21.8 code values, 0.70 = +9.1, 0.65 = ~+6, 0.55 = +3.4.
-    foamThr: 0.65,
-    foamSoft: 0.24,
-    foamK: 1.00,          // master foam strength (colour is clamped separately, see below)
-    // FOAM PERSISTENCE, in seconds. Foam is a temporal state and this sea has no render
-    // target to keep it in — so it is recovered ANALYTICALLY. A Gerstner field is a
-    // LAGRANGIAN description: the parameter point p labels a water PARTICLE, and every
-    // component's phase at time t-tau is sin(q)cos(w*tau) - cos(q)sin(w*tau) off values
-    // the fragment already has. Three lagged evaluations of the compression therefore
-    // cost three multiply-adds per component and tell you, exactly, whether THIS PARCEL
-    // folded recently. No ping-pong RT, no state, no history texture.
-    foamDecay: 2.9,       // e-folding time of the lagged weights; lags are 1.35 s apart
-    // How much lingering foam there is against freshly-born foam. 1.0 is "the wake of a
-    // fold is as white as the fold"; lower it and foam becomes a flash on the break again.
-    foamLagK: 0.85,
-    // THE OLD WIND-STREAK BLOCK, kept at its shipped strength (1.0) and given a knob.
-    // It paints straight unbroken bands along WAVE[0]'s fixed 20-degree bearing whether
-    // or not the water there is folding — which is the same job the Jacobian foam now
-    // does properly, and from height in a gale the two together read as corduroy under
-    // lace. A MICHAEL DECISION, not the agent's: 0 hands the gale entirely to the
-    // fold-born foam. Screenshots of both are on the card.
-    streakLegacy: 1.0,
     // FOAM TEXTURE. Value-noise octaves in the existing vn() style, advected downwind and
     // stretched ALONG the wind as it rises, so foam becomes streaks in a gale instead of
     // blobs. texScale is cells per world unit; streakK is the along-wind stretch at wind 1.
@@ -682,18 +668,6 @@ export const GLASS = {
     // The gate is sssDayLo..sssDayHi below — the SAME window the body glow uses, so the
     // sky brightens, the desaturation lifts and the water starts to glow on one curve.
 
-    // --- STORM SWELL SCALE ---------------------------------------------------
-    // Multiplier on the STORM-scaled amplitude of the two LONGEST wave components (the
-    // 62 u and 41 u swells). Applied to the HEIGHT and its gradient only — the Gerstner
-    // horizontal displacement and the Jacobian keep the shipped amplitude, so sum(k*A)*chop
-    // is bit-identical, the no-fold bound is untouched, the CPU height mirror's fixed point
-    // contracts at exactly the rate it did, and the foam still fires where it always did.
-    // Physically this is the right split: a bigger swell is longer and taller, not steeper.
-    // Faded in by the same smoothstep(storm, 0, 0.9) as the storm amplitudes, so calm is
-    // exactly 1.0 and the calm anchor is structural, not tuned.
-    // 1.80 = 6.59 u peak-to-peak at full gale against the shipped 4.23 (1.56x).
-    galeAmp: 1.80,
-
     // --- CHURNED-WATER OPACITY (Michael: "maybe its the transparency that is
     // throwing it off"). His reference storm sea is a WALL, not a window: churned
     // water is full of entrained bubbles, and a bubble cloud is the most efficient
@@ -728,32 +702,6 @@ export const GLASS = {
     // 1 + this). The opaque sea has to go thick, not dark.
     opaqSssK: 0.50,
 
-    // --- SPILLING BREAKERS (Michael: "there is no breaking"). Whitewater does not
-    // sit on the fold line; it avalanches DOWN the leading face under a collapsing
-    // crest. No geometry change — this is foam TRANSPORT.
-    //
-    // The trick is the same Lagrangian one the Jacobian foam already uses. A parcel
-    // UPSLOPE of this fragment that folded tau seconds ago shed whitewater that has
-    // since slid downhill; so we ask the fold question at points up the wave's own
-    // gradient (+grad h is uphill) and read the LAGGED compression there — near
-    // sample with the 1.35 s lag, far sample with the 2.70 s lag. The band therefore
-    // PERSISTS and slides down-face as the wave advances, for two extra evaluations
-    // of the compression trace only (no height, no gradient, no Jacobian inverse).
-    //
-    // Calm anchor is structural again: chop 0 makes every compression term exactly
-    // 0, the fold test never fires, and the whole block is branch-gated off besides.
-    spillK: 1.00,         // master. 0 removes the avalanches exactly.
-    // Down-face reach of the spill, in world units, at full gale (scaled by the
-    // storm swell so a bigger wave wears a longer avalanche). 3.2 u is about half a
-    // crest face of the 41 u swell — long enough to read as a cascade from the deck,
-    // short enough that it never becomes a sheet.
-    spillLen: 3.20,
-    // Density at the lip against the tail. Denser near the fold, raggedly thinning
-    // downslope — the foam TEXTURE does the tearing (a weaker band closes fewer of
-    // its own noise holes), so these two numbers are the whole gradient.
-    spillLip: 1.00,
-    spillTail: 0.75,
-
     // --- SURFACE FILTERING (roadmap/ref-surface-filtering.md) -----------------
     // Baked ripple normal at three rotated scales, faded on pixel FOOTPRINT (never
     // distance); Cox-Munk roughness for whatever the footprint cannot resolve; GGX sun
@@ -766,22 +714,7 @@ export const GLASS = {
     roughK: 1.00,         // 0 pins alpha at 0.02 (mirror); 1 = the full footprint-aware budget
     glitterLegacy: 0,     // 1 = the shipped pow(sd, uSunSize) glitter, for a live A/B
     glitterK: 14.0,       // sun-over-disc brightness ratio feeding the lobe; the pixel is soft-capped at L*F (the legacy peak) regardless
-    glitterDiscK: 1.00,   // how much of the painted disc's half-angle widens the lobe
-
-    // --- FOAM ACCUMULATOR (roadmap/ref-foam-accumulator.md) -------------------
-    // 256^2 ping-pong memory of the fold source, 120 u around the camera. The lags are
-    // the instant layer; this sums on top as persistence and Langmuir windrows.
-    foamAccK: 1.00,       // master on the accumulated foam mask. 0 = pass skipped, lags only.
-    foamRate: 0.5,        // injection per second of full fold. Equilibrium coverage is
-                          // rate*duty*decay; the fold's measured duty on a gale crest is
-                          // ~0.14, so 0.5*12 s peaks near 0.85 and never snowfields (1.6
-                          // saturated the whole near field, measured; 0.25 peaked at 0.31).
-    foamAccDecay: 12.0,   // e-folding time of accumulated foam, seconds (foamDecay above is the lags')
-    bubbleDecay: 20.0,    // e-folding of the slower entrained-bubble channel, seconds
-    bubbleK: 0.35,        // milky lift the bubble channel puts under the surface (air side)
-    foamStretch: 0.22,    // windrow lace anisotropy: along-wind scale relative to across (0.22:1)
-    foamLaceScale: 0.55,  // cells per unit of the windrow lace
-    foamAdvect: 0.6       // downwind drift of the accumulated foam, units/s at wind 1
+    glitterDiscK: 1.00    // how much of the painted disc's half-angle widens the lobe
   },
 
   // --- RAIN. Two systems, one entry.

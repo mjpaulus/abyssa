@@ -206,8 +206,8 @@ function serialize() {
     `    col: ${trip(mo.col)}, hemiLift: ${n3(mo.hemiLift)}\n  },\n`;
   const ww = GLASS.windwater;
   out += '  windwater: {\n';
-  out += `    capThr: ${n3(ww.capThr)}, capK: ${n3(ww.capK)}, anisoK: ${n3(ww.anisoK)},\n` +
-    `    ampK: ${n3(ww.ampK)}, currentK: ${n3(ww.currentK)}, decayH: ${n3(ww.decayH)}\n  },\n`;
+  out += `    capThr: ${n3(ww.capThr)}, capK: ${n3(ww.capK)},\n` +
+    `    currentK: ${n3(ww.currentK)}, decayH: ${n3(ww.decayH)}\n  },\n`;
   const st = GLASS.style;
   out += '  style: {\n';
   out += `    flowLean: ${n3(st.flowLean)}, paint: ${n3(st.paint)}, edge: ${n3(st.edge)}, strokes: ${n3(st.strokes)},\n` +
@@ -511,8 +511,6 @@ function build() {
   knobGroup('wind / water', GLASS.windwater, BOOT.windwater, [
     { key: 'capThr', min: 0, max: 1, step: 0.01 },
     { key: 'capK', min: 0, max: 2, step: 0.01 },
-    { key: 'anisoK', min: 0, max: 1, step: 0.01 },
-    { key: 'ampK', min: 0, max: 1, step: 0.01 },
     { key: 'currentK', min: 0, max: 5, step: 0.05 },
     { key: 'decayH', min: 0, max: 300, step: 1 }
   ]);

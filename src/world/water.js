@@ -3,7 +3,7 @@
 // OWNED BY: water/atmosphere agent.
 import * as THREE from 'three';
 import { scene, camera, renderer } from '../core.js';
-import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
+import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY, abyssK } from '../config.js';
 // Re-exported so the coming lab (and the brief's contract) can reach the tuning surface
 // from here. It is DEFINED in config.js — weather.js needs GLASS.sun and this file needs
 // GLASS.stops, and config.js is the only module both already import. Plain mutable data:
@@ -150,7 +150,8 @@ const SUN_DISC = GLASS.stops.noon.disc;
 // camera.far), so clear air can be clear: ~10 km meteorological visibility on a fair
 // day, and the WEATHER thickens it (STYLE_U[0] carries the storm haze, so a gale closes
 // back to ~2.2 km of spray and rain). A white horizon band is now weather, not a seam.
-const K_AIR = [0.00110, 0.00118, 0.00132];
+// Exported: postfx.skyrays.js weights its fan by the same air (K_AIR[1], the green leg).
+export const K_AIR = [0.00110, 0.00118, 0.00132];
 const AIR_STORM_K = 3.2;
 
 // THE FLOW LEAN — atmosphere forward (roadmap/flow-lean-style.md item 3) and the matte
@@ -868,15 +869,13 @@ if (typeof window !== 'undefined') {
         wDay, wFlash, envMap: !!envRT,
         windS: uWindS.value, windD: [uWindD.value.x, uWindD.value.y],
         windT: [_wspT, _wdTX, _wdTZ], forced: !!_wForce,
-        windK: [uWindK.value.x, uWindK.value.y], cap: [uCap.value.x, uCap.value.y],
-        chop: uChop.value.toArray(), chop2: uChop2.value.toArray(),
-        lagW: uLagW.value.toArray(), surfH: _surfH, air: uAir.value,
+        cap: [uCap.value.x, uCap.value.y], chop2: uChop2.value.toArray(),
+        surfH: _surfH, air: uAir.value,
         // OPACITY / BREAKERS probe. `opq` is the global (foam-free) churned-water
         // opacity; `wAir`/`wBelow` are the transmission WEIGHTS the shader multiplies
         // the refracted scene by on each side, and `refrK` is the pass's own gate
         // (0 also means the pass was skipped this frame — see refrSkipped).
         opaq: uOpaq.value.toArray(), opaq2: [uOpaq2.value.x, uOpaq2.value.y],
-        spill: uSpill.value.toArray(),
         opq: (() => {
           const C = GLASS.chop;
           return C.opaqK * ms(Math.max(uStormU.value, uWindS.value), C.opaqLo, C.opaqHi);
@@ -1884,21 +1883,11 @@ const DISP = Math.sqrt(9.81 / 3);   // k is per world unit and a unit is 3 m: om
 // is what actually happens.
 const uWindD = { value: new THREE.Vector2(1, 0) };   // eased unit bearing (x, z)
 const uWindS = { value: 0 };                          // eased speed 0..1
-const uWindK = { value: new THREE.Vector2(GLASS.windwater.anisoK, GLASS.windwater.ampK) };
 const uCap = { value: new THREE.Vector2(GLASS.windwater.capThr, GLASS.windwater.capK) };
-// THE CHOP. (k, foamThr, foamSoft, foamK) and (texScale, streakK, scatterK, scatterPow).
-// Both refreshed from GLASS.chop every frame in updateWater, so the whole block is
+// THE CHOP's foam texture and crest scatter: (texScale, streakK, scatterK, scatterPow).
+// Refreshed from GLASS.chop every frame in updateWater, so the whole block is
 // live-pokeable from the console like the rest of the glass.
-const uChop = { value: new THREE.Vector4(GLASS.chop.k, GLASS.chop.foamThr, GLASS.chop.foamSoft, GLASS.chop.foamK) };
 const uChop2 = { value: new THREE.Vector4(GLASS.chop.texScale, GLASS.chop.streakK, GLASS.chop.scatterK, GLASS.chop.scatterPow) };
-// Weights of the three lagged compression samples. exp(-tau/foamDecay), resolved on the
-// CPU so foamDecay stays a live knob (the LAG TIMES themselves are compile-time — they
-// set the per-component phase-rotation constants baked into the shader).
-const uLagW = { value: new THREE.Vector3(1, 1, 1) };
-// (streakLegacy, foamLagK). The first scales the OLD wind-streak block; the second scales
-// the three lagged foam samples against the live one, i.e. how much lingering foam there
-// is relative to freshly-born foam.
-const uChopX = { value: new THREE.Vector2(GLASS.chop.streakLegacy, GLASS.chop.foamLagK) };
 
 // SURFACE BOIL. One externally-driven boil site (x, z, amp, radius) — the patch of sea
 // Sal's exhaust breaches. Fed by surfaceBoil() (diver.js calls it as each bubble dies
@@ -1906,8 +1895,6 @@ const uChopX = { value: new THREE.Vector2(GLASS.chop.streakLegacy, GLASS.chop.fo
 // surface shader as a foam patch + expanding ripple rings, and reads from BOTH sides of
 // the interface (the deck looking down and Sal looking up see the same boil).
 const uBoil = { value: new THREE.Vector4(0, 0, 0, 1.4) };
-// STORM SWELL SCALE — GLASS.chop.galeAmp. See galeAmt() in GLSL_CHOP_DECL.
-const uGale = { value: GLASS.chop.galeAmp };
 // BROAD-BODY SSS. (sssK, sssPow, sssTau, sssGain) and (sssCap, sssCalm, dayLo, dayHi).
 const uSss = { value: new THREE.Vector4(GLASS.chop.sssK, GLASS.chop.sssPow, GLASS.chop.sssTau, GLASS.chop.sssGain) };
 const uSss2 = { value: new THREE.Vector4(GLASS.chop.sssCap, GLASS.chop.sssCalm, GLASS.chop.sssDayLo, GLASS.chop.sssDayHi) };
@@ -1922,8 +1909,6 @@ const uSss2 = { value: new THREE.Vector4(GLASS.chop.sssCap, GLASS.chop.sssCalm, 
 const uDbg = { value: 0 };
 const uOpaq = { value: new THREE.Vector4(GLASS.chop.opaqK, GLASS.chop.opaqLo, GLASS.chop.opaqHi, GLASS.chop.opaqFoam) };
 const uOpaq2 = { value: new THREE.Vector2(GLASS.chop.opaqBelow, GLASS.chop.opaqSssK) };
-// SPILLING BREAKERS. (spillK, spillLen, spillLip, spillTail).
-const uSpill = { value: new THREE.Vector4(GLASS.chop.spillK, GLASS.chop.spillLen, GLASS.chop.spillLip, GLASS.chop.spillTail) };
 // SURFACE FILTERING (roadmap/ref-surface-filtering.md). uRipple is the baked 1024^2
 // ripple normal (lib/textures.js). uDet = (detailK, gain0, gainWind, belowK): the
 // detail-normal master, its calm gain, its per-m/s wind gain, and the fraction of it the
@@ -1937,15 +1922,6 @@ const uRipple = { value: null };
 const uDet = { value: new THREE.Vector4(GLASS.chop.detailK, GLASS.chop.detailGain, GLASS.chop.detailWind, GLASS.chop.detailBelow) };
 const uRough = { value: new THREE.Vector4(GLASS.chop.windMps, GLASS.chop.roughK, GLASS.chop.glitterLegacy, GLASS.chop.glitterK) };
 const uGlit = { value: new THREE.Vector2(0.0445, 0.009) };
-// FOAM ACCUMULATOR (roadmap/ref-foam-accumulator.md). uFoamAcc is the live side of a
-// 256^2 ping-pong target tiled over ACC_TILE world units around the camera (see
-// updateFoamAcc). uAccA = (invTile, accK, fadeR, bubbleK); uAccC = the camera xz the
-// window is centred on; uAccS = (foamStretch, laceScale, 0, 0).
-const uFoamAcc = { value: null };
-const uAccA = { value: new THREE.Vector4(1 / 120, GLASS.chop.foamAccK, 58, GLASS.chop.bubbleK) };
-const uAccC = { value: new THREE.Vector2(0, 0) };
-const uAccS = { value: new THREE.Vector2(GLASS.chop.foamStretch, 0.55) };
-const CHOP_LAGS = [1.35, 2.70, 4.05];
 // Eased CPU state. Module-scoped, zero allocation per frame.
 let _wdX = 1, _wdZ = 0, _wsp = 0;
 // Targets, written by setWeatherHand (or the dev override) and chased in updateWater.
@@ -1956,9 +1932,6 @@ const WIND_TAU = 5.5;
 // Dev override: game.js pushes the real wind every frame, so poking the stored object
 // is not enough to force a sweep. window.__sky.wind(s, dirRad) / .windOff().
 let _wForce = null;
-// Declared inside the wave GLSL so both the vertex and the fragment copy see them; the
-// two are compiled into one program, which is exactly what a shared uniform is for.
-const GLSL_WIND_DECL = `uniform vec2 uWindD, uWindK; uniform float uWindS;`;
 
 // THE CPU ANSWER TO "HOW HIGH IS THE SEA HERE". The spectral ocean (world/ocean.js)
 // owns it: a worker inverse-FFTs the identical long-wave bins the GPU draws, ahead of
@@ -2480,6 +2453,40 @@ function buildSurface() {
         return smoothstep( 0.62 - 0.55 * cov, 0.80 - 0.45 * cov, n + 0.35 * cov );
       }
 
+      // THE BOLT ON THE SEA (polish-leftovers-oct). The fog chunk lights every material from a
+      // live bolt with a Lambert term on a screen-derivative normal and a flat cold albedo,
+      // which is right for timber and rock and wrong for water: on a sea whose normal is
+      // nearly vertical under a light high in the sky it is one constant, and together with
+      // the old flat uFlash sheet it turned the whole sea a pale grey plate. Water is a
+      // specular body. So the sea takes the bolt the way it takes the sun: a GGX glint on
+      // the sea's own normal and roughness (the path of light toward the strike), light
+      // through the crests that stand between the eye and the bolt (the body's turquoise,
+      // derived from K_EXT like the sun's SSS), and a Lambert share for FOAM only (bDiff).
+      // abyssaBoltCol carries lightning.js's flat albedo (0.36); 2.78 unfolds it back to
+      // the light. Inverse-square with the same floor distance as the chunk.
+      vec3 seaBolt( vec3 P, vec3 N, vec3 V, float a, float F, float h01, vec4 B, inout vec3 bDiff ){
+        vec3 d = B.xyz - P;
+        float d2 = dot( d, d ), dist = sqrt( d2 );
+        vec3 L = d / max( dist, 1e-3 );
+        float fl2 = abyssaBoltK.x * abyssaBoltK.x;
+        vec3 E = abyssaBoltCol.rgb * ( 2.78 * B.w * fl2 / max( d2, fl2 ) );
+        float NoL = max( dot( N, L ), 0.0 ), NoV = max( -dot( V, N ), 1e-4 );
+        bDiff += E * NoL * 0.3183;
+        vec3 H = normalize( L - V );
+        float NoH = max( dot( N, H ), 0.0 ), VoH = max( -dot( V, H ), 1e-4 );
+        // a broader lobe than the sun's: the channel is metres long and the cloud base it
+        // lights glows round it, so the glint path is a lane, not a pin
+        float aB = min( a + 0.10, 1.0 );
+        vec3 spec = E * ( ggxD( NoH, aB ) * smithGGXCorrelated( NoV, max( NoL, 1e-4 ), aB ) * oceanF( VoH ) * NoL );
+        // light through the crests standing between the eye and the strike
+        vec2 lxz = L.xz; float ll = length( lxz );
+        float tw = ll > 1e-3 ? max( dot( normalize( V.xz ), lxz / ll ), 0.0 ) : 0.0;
+        float face = ll > 1e-3 ? clamp( dot( -N.xz, lxz / ll ) * 2.5, 0.0, 1.0 ) : 0.0;
+        float thru = smoothstep( 0.35, 1.0, h01 ) * ( 0.35 + 0.65 * face ) * ( 0.25 + 0.75 * tw ) * sqrt( max( 1.0 - F, 0.0 ) );
+        vec3 sss = E * exp( -${v3(K_EXT)} * 0.55 ) * ( 0.10 * thru );
+        return min( spec, vec3( 1.6 ) ) + sss;
+      }
+
       float seaS0(){ return uOcSea.w; }
       void main(){
         // Clipmap overlap band: the finer level owns everything inside its extent.
@@ -2613,6 +2620,7 @@ function buildSurface() {
         bool dFoam = !dOff || abs( uDbg - 4.0 ) < 0.5;
         bool dHaze = !dOff || abs( uDbg - 6.0 ) < 0.5;
         vec3 tRefl = vec3( 0.0 ), tBody = vec3( 0.0 ), tTrans = vec3( 0.0 ), tSss = vec3( 0.0 ), tGlit = vec3( 0.0 );
+        vec3 bDiff = vec3( 0.0 );
         if ( below ) {
           // ---- FROM BELOW: Snell's window, TIR mirror, the far-side render ----------
           float kk = 1.0 - ETA * ETA * ( 1.0 - ct * ct );
@@ -2709,6 +2717,15 @@ function buildSurface() {
               col += tSss;
             }
           }
+          // THE BOLT (see seaBolt), and the flash-lit cloud base in the mirror: the sky the
+          // sea reflects is what the flash brightens, so it arrives through the Fresnel
+          // weight, bright toward the horizon and dark looking down, never as a flat plate.
+          if ( abyssaBolt0.w + abyssaBolt1.w > 0.0 && !dOff ) {
+            float h01b = clamp( waveY / hRef * 0.5 + 0.5, 0.0, 1.0 );
+            col += ( seaBolt( vW, Na, V, alpha, F, h01b, abyssaBolt0, bDiff )
+                   + seaBolt( vW, Na, V, alpha, F, h01b, abyssaBolt1, bDiff ) ) * uNearK;
+          }
+          if ( !dOff ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.55 * F * uNearK;
           if ( dOff ) {
             if ( uDbg < 1.5 ) col = tRefl;
             else if ( uDbg < 2.5 ) col = tBody;
@@ -2742,7 +2759,7 @@ function buildSurface() {
           float lum = dot( uSunCol, vec3( 0.2126, 0.7152, 0.0722 ) );
           vec3 capCol = vec3( 0.90, 0.97, 0.95 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6
                       * ( 0.62 + 0.38 * NoLf * sh * smoothstep( 0.5, 1.2, lum ) );
-          capCol = min( capCol, vec3( 0.34 ) );
+          capCol = min( capCol, vec3( 0.34 ) ) + bDiff * 0.75;
           float capW = smoothstep( uCap.x, min( 0.98, uCap.x + 0.30 ), uWindS );
           col = mix( col, capCol, clamp( fj * fm * ( 0.75 + 0.25 * capW ), 0.0, 0.94 ) );
           // A thin bubble veil under fresh foam: milky turquoise, not white.
@@ -2780,8 +2797,10 @@ function buildSurface() {
           if ( !dOff ) col += vec3( 0.18, 0.66, 0.46 ) * clamp( sc, 0.0, 1.0 ) * min( lum * 0.62, 0.20 );
         }
         if ( dFoam ) col += foamCol * ( below ? rain * 0.25 : splashV * ${f(GLASS.rain.splashK)} );
-        if ( !dOff ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
-        gBoltK = 0.15;
+        // From below the flash arrives through Snell's window (the air side is lit above).
+        if ( !dOff && below ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK * ( 1.0 - F );
+        // The fog chunk's generic Lambert bolt term: the air side has its own (seaBolt).
+        gBoltK = below ? 0.15 : 0.0;
         if ( farK > 0.0 && dHaze ) col = mix( col, farSea( V, fogColor ), farK );
         if ( airK > 0.0 && dHaze ) col = airFog( col, 0.0, airK );
 
@@ -3198,27 +3217,16 @@ export function updateWater(dt, t) {
     if (L > 1e-4) { uWindD.value.set(_wdX / L, _wdZ / L); }
     uWindS.value = _wsp;
     const WW = GLASS.windwater;
-    uWindK.value.set(WW.anisoK, WW.ampK);
     uCap.value.set(WW.capThr, WW.capK);
-    // The chop block, pushed every frame so all nine numbers are live-pokeable. The lag
-    // WEIGHTS are resolved here rather than baked, so foamDecay is a knob too; the lag
-    // TIMES are compile-time (they set the phase rotations inside the shader).
+    // The chop block, pushed every frame so every number is live-pokeable.
     const CH = GLASS.chop;
-    uChop.value.set(CH.k, CH.foamThr, CH.foamSoft, CH.foamK);
     uChop2.value.set(CH.texScale, CH.streakK, CH.scatterK, CH.scatterPow);
-    const td = Math.max(0.2, CH.foamDecay);
-    uLagW.value.set(Math.exp(-CHOP_LAGS[0] / td), Math.exp(-CHOP_LAGS[1] / td),
-      Math.exp(-CHOP_LAGS[2] / td));
-    uChopX.value.set(CH.streakLegacy, CH.foamLagK);
-    uGale.value = CH.galeAmp;
     uSss.value.set(CH.sssK, CH.sssPow, CH.sssTau, CH.sssGain);
     uSss2.value.set(CH.sssCap, CH.sssCalm, CH.sssDayLo, CH.sssDayHi);
     uOpaq.value.set(CH.opaqK, CH.opaqLo, CH.opaqHi, CH.opaqFoam);
     uOpaq2.value.set(CH.opaqBelow, CH.opaqSssK);
-    uSpill.value.set(CH.spillK, CH.spillLen, CH.spillLip, CH.spillTail);
     uDet.value.set(CH.detailK, CH.detailGain, CH.detailWind, CH.detailBelow);
     uRough.value.set(CH.windMps, CH.roughK, CH.glitterLegacy, CH.glitterK);
-    uAccS.value.set(CH.foamStretch, CH.foamLaceScale);
     _windOut.speed = _wsp; _windOut.dx = uWindD.value.x; _windOut.dz = uWindD.value.y;
   }
 
@@ -3456,7 +3464,12 @@ function updateLamps(camY, storm) {
   LAMPK_U[0] = (rc * K_EXT[0] + sh * K_PART[0]) * storm;
   LAMPK_U[1] = (rc * K_EXT[1] + sh * K_PART[1]) * storm;
   LAMPK_U[2] = (rc * K_EXT[2] + sh * K_PART[2]) * storm;
-  LAMPK_U[3] = ATMOS.lampGain;
+  // THE ABYSS READS (GLASS.abyss.lampK): the nepheloid ash over the zone-2 plain is the
+  // murkiest water in the column, so the flame's glow in it is a larger, brighter volume
+  // -- the luminous ground that kelp, reef and animals between it and the lens stand
+  // against in silhouette. Eased in over the zone top; 1 = the shipped gain.
+  const ak = abyssK(camY);
+  LAMPK_U[3] = ATMOS.lampGain * (1 + (GLASS.abyss.lampK - 1) * ak);
   {
     const on = SURFK && SURFK.on ? 1 : 0, pk = SURFK ? SURFK.pathK : 0;
     const d = scene.fog ? scene.fog.density * pk * on : 0;

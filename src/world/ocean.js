@@ -50,6 +50,11 @@ export const uOcLevC = { value: Array.from({ length: GRID_LEVELS }, () => new TH
 export const uOcDisp = [{ value: null }, { value: null }, { value: null }];
 export const uOcSlope = [{ value: null }, { value: null }, { value: null }];
 export const uOcFoam = [{ value: null }, { value: null }, { value: null }];
+// LAST step's displacement (the merge targets already ping-pong for the foam memory, so the
+// other half IS the previous field) and whether the sim stepped this frame (1) or held (0):
+// postfx.taa.js draws the sea's motion vectors from the pair. Read-only for everyone else.
+export const uOcDispPrev = [{ value: null }, { value: null }, { value: null }];
+export const uOcVelK = { value: 0 };
 // (foamThr, foamSoft, chop lambda, residual mss) — the surface's foam/roughness numbers.
 export const uOcK = { value: new THREE.Vector4(0.45, 0.35, 1.0, 0.002) };
 // (Hs units, total mss, peak wavelength units, sea state 0..1) for the shader's
@@ -84,6 +89,19 @@ vec3 ocDisp( vec2 p, vec2 camXZ ){
   if ( l1 < 7.5 ) D += textureLod( uOcDisp1, p / uOcL.y, l1 ).xyz;
   float l2 = ocLod( sp, uOcL.z );
   if ( l2 < 7.5 ) D += textureLod( uOcDisp2, p / uOcL.z, l2 ).xyz;
+  return D;
+}`;
+// The same law on the previous step's field (uOcDispPrev), for motion vectors.
+export const OCEAN_GLSL_DISP_PREV = `
+uniform sampler2D uOcDispP0, uOcDispP1, uOcDispP2;
+vec3 ocDispPrev( vec2 p, vec2 camXZ ){
+  float d = length( p - camXZ );
+  float sp = max( uOcGrid.x, 2.0 * d / uOcGrid.y );
+  vec3 D = textureLod( uOcDispP0, p / uOcL.x, ocLod( sp, uOcL.x ) ).xyz;
+  float l1 = ocLod( sp, uOcL.y );
+  if ( l1 < 7.5 ) D += textureLod( uOcDispP1, p / uOcL.y, l1 ).xyz;
+  float l2 = ocLod( sp, uOcL.z );
+  if ( l2 < 7.5 ) D += textureLod( uOcDispP2, p / uOcL.z, l2 ).xyz;
   return D;
 }`;
 
@@ -389,6 +407,7 @@ function bindMerged() {
     uOcDisp[c].value = rt.textures[0];
     uOcSlope[c].value = rt.textures[1];
     uOcFoam[c].value = rt.textures[2];
+    uOcDispPrev[c].value = rtMerge[c][mergeCur ^ 1].textures[0];
   }
 }
 
@@ -462,9 +481,11 @@ export function setOceanSim(on) { simOn = on; }
 // one; foam integrates the skipped frames' dt; the probe stamps the SIM clock.
 export function setOceanRate(k) { simEvery = Math.max(1, k | 0); }
 export function updateOcean(dt, t) {
+  uOcVelK.value = 0;
   if (!ok || !simOn) return;
   simDt += dt;
   if ((simTick++ % simEvery) !== 0) return;
+  uOcVelK.value = frame > 0 ? 1 : 0;
   dt = simDt; simDt = 0;
   const prevRT = renderer.getRenderTarget();
   const prevShadow = renderer.shadowMap.autoUpdate;

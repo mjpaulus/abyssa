@@ -16,6 +16,14 @@
 //   her exhale (brPh crosses 0.7)            a deep resonant siphon exhale + a boil
 //   an arm lashing (arms[i].lash rises)      a slither with sucker pops, at the tip
 //   the grab (grab appears / goes)           a clamp, then a squeeze; the release
+//   (orune-menace, all on the hoarder's own edge counters:)
+//   moving (L.moveK)                         a low wet churn riding her body, always
+//   an arm resettling asleep (creepN)        a slow wet drag at that arm, out of sight
+//   a probing tip near Sal (popN)            sucker pops at the tip, close
+//   THE FREEZE (stillN)                      the bed and her churn drop away: silence
+//   the cock (cockN)                         a wet inhale of suckers letting go
+//   ink wind-up (inkN)                       the big exhale with a sub you feel
+//   the beak (beak.snapN)                    a hard horn click, close
 // MHOR THE HUNTER (squid) — jets and clicks.
 //   his jet (contract rises)                 a whoomp of water thrown
 //   circling                                 predatory click trains, quickening
@@ -30,7 +38,7 @@ import { mix, cl01 } from './engine.js';
 export const KC = { BROODER: 1, HOARDER: 1, HUNTER: 1, FAUNA: 1, SLAM: 0.42 };
 
 export function buildCre(E) {
-  const c = { kind: null, L: null, feet: new Float32Array(8), hamPh: 0, impT: 9, brPh: 0, lash: new Float32Array(16), grab: false,
+  const c = { kind: null, L: null, creepN: 0, popN: 0, stillN: 0, cockN: 0, inkN: 0, snapN: 0, wetHush: 0, feet: new Float32Array(8), hamPh: 0, impT: 9, brPh: 0, lash: new Float32Array(16), strk: new Float32Array(16), grab: false,
     hState: '', contract: 0, clickNext: 0, lastFoot: 0, footN: 0, sharkT: [0, 0], rayT: 0, fishT: 0, grabRe: 0, lastSlam: -9, silenceT: 0 };
   E.cre = c;
   // A body emitter that rides the sleeper: continuous joint grind (Velkath) and fin
@@ -42,6 +50,10 @@ export function buildCre(E) {
     const gate = E.o('square', 38); const gg = E.g(0.5, am.gain); gate.connect(gg); gate.start();
     const jit = E.n('brown', 0.3), jg = E.g(40, gate.frequency); jit.connect(jg); E.loop(jit);
     E.loop(E.n('white', 1, am)); }
+  // ORUNE'S CHURN: brown noise through a low wet band, slowly swelled — her mass moving
+  c.wetG = E.g(0, c.body.inp);
+  { const am = E.g(0.6), lp = E.f('lowpass', 210, 2.2, c.wetG), bp = E.f('bandpass', 95, 1.4, c.wetG); am.connect(lp); am.connect(bp);
+    E.lfo(0.23, 0.35, am.gain); E.lfo(0.61, 0.15, am.gain); E.loop(E.n('brown', 1, am)); }
   c.finG = E.g(0, c.body.inp);
   { const am = E.g(0.5), lp = E.f('lowpass', 240, 1.5, c.finG); am.connect(lp); c.finO = E.o('sine', 3.5); const fg = E.g(0.5, am.gain); c.finO.connect(fg); c.finO.start(); E.loop(E.n('brown', 1, am)); }
 }
@@ -147,6 +159,9 @@ function oruneExhale(E, L, big) {
   o.frequency.setValueAtTime(41, t); o.frequency.exponentialRampToValueAtTime(34, t + dur);
   E.ahr(tg.gain, t, dur * 0.25, dur * 0.25, dur * 0.5, 0.22 * k);
   E.fire(o, t, t + dur + 0.05, [lp, tg]);
+  // the sub you feel (menace): a sine under hearing, swelling with the breath
+  if (big) { const sg = E.g(0, vg), so = E.o('sine', 31, sg); so.frequency.setValueAtTime(31, t); so.frequency.exponentialRampToValueAtTime(23, t + dur);
+    E.ahr(sg.gain, t, dur * 0.3, dur * 0.2, dur * 0.5, 0.45 * k); E.fire(so, t, t + dur + 0.05, [sg]); }
   // the boil at the siphon mouth: big slow bubbles
   const n = big ? 14 : 6;
   for (let i = 0; i < n; i++) { const f = E.r(80, 240); E.bubble(t + E.r(0.2, dur * 0.8), f, f * E.r(1.4, 2), E.r(0.08, 0.2), E.r(0.05, 0.13) * k, vg); }
@@ -177,6 +192,34 @@ function oruneGrab(E, L, on) {
     noiseHit(E, vg, t + 0.03, 'pink', 'bandpass', 600, 1.4, 0.05, 0.6, 0.12, 250);
   }
   void p;
+}
+// a slow wet drag where an arm resettled (asleep, out of his sight)
+function oruneDrag(E, p) {
+  const t = E.now() + 0.01, vg = E.emit('cre', p.x, p.y, p.z, 2.4, 1); if (!vg) return; E.log('oruneDrag');
+  noiseHit(E, vg, t, 'brown', 'lowpass', 260, 1.6, 0.6, 1.8, 0.16 * KC.HOARDER, 140);
+  noiseHit(E, vg, t + 0.2, 'pink', 'bandpass', 420, 2, 0.4, 1.2, 0.035 * KC.HOARDER, 260);
+}
+// sucker pops at a probing tip
+function orunePops(E, p, n) {
+  const t = E.now() + 0.005, vg = E.emit('cre', p.x, p.y, p.z, 1.2, 1); if (!vg) return; E.log('orunePops');
+  for (let i = 0; i < n; i++) {
+    const tt = t + E.r(0, 0.5), f = E.r(200, 520), g = E.g(0, vg), o = E.o('sine', f, g);
+    o.frequency.setValueAtTime(f, tt); o.frequency.exponentialRampToValueAtTime(f * 0.5, tt + 0.03);
+    E.env(g.gain, tt, 0.001, 0.05, E.r(0.05, 0.12) * KC.HOARDER);
+    E.fire(o, tt, tt + 0.07, [g]);
+  }
+}
+// the cock: an inhale of water through the arm, cups letting go in a ripple
+function oruneCock(E, A) {
+  const p = A.tip, t = E.now() + 0.005, vg = E.emit('cre', p.x, p.y, p.z, 1.2, 2, p); if (!vg) return; E.log('oruneCock');
+  noiseHit(E, vg, t, 'pink', 'bandpass', 380, 1.2, 0.25, 0.45, 0.14 * KC.HOARDER, 900);
+  orunePops(E, p, 5);
+}
+// the beak: a hard horn click, close
+function oruneBeak(E, L) {
+  const p = L.head || L.pos, t = E.now() + 0.004, vg = E.emit('cre', p.x, p.y, p.z, 0.6, 3, p); if (!vg) return; E.log('oruneBeak');
+  noiseHit(E, vg, t, 'white', 'bandpass', 2300, 5, 0.001, 0.05, 0.22 * E.startle);
+  thump(E, vg, t, 160, 70, 0.12, 0.18 * E.startle);
 }
 function oruneWake(E, L) {
   oruneExhale(E, L, true);
@@ -319,7 +362,8 @@ export function frameCre(E, W) {
     if (L && L.feet) for (let i = 0; i < 8; i++) c.feet[i] = L.feet[i] ? L.feet[i].t : -1;
     c.hamPh = L ? L.hamPh || 0 : 0; c.impT = L ? L.impT || 9 : 9; c.brPh = L ? L.brPh || 0 : 0; c.grab = !!(L && L.grab);
     c.hState = L ? L.state || '' : ''; c.contract = L ? L.contract || 0 : 0;
-    if (L && L.arms) for (let i = 0; i < L.arms.length && i < 16; i++) c.lash[i] = L.arms[i].lash || 0;
+    if (L && L.arms) for (let i = 0; i < L.arms.length && i < 16; i++) { c.lash[i] = L.arms[i].lash || 0; c.strk[i] = L.arms[i].strikeN || 0; }
+    if (L && L.creepN !== undefined) { c.creepN = L.creepN; c.popN = L.popN; c.stillN = L.stillN; c.cockN = L.cockN; c.inkN = L.inkN; c.snapN = L.beak ? L.beak.snapN : 0; }
     c.body.follow = L ? L.pos : null; c.body.lvl = 0;
   }
   let bodyLvl = 0, grind = 0, fin = 0;
@@ -349,8 +393,22 @@ export function frameCre(E, W) {
       c.brPh = b;
       if (L.arms) for (let i = 0; i < L.arms.length && i < 16; i++) {
         const A = L.arms[i], v = A.lash || 0;
-        if (v > 0 && c.lash[i] <= 0 && A.tip) oruneLash(E, A);
+        // (menace: the slither lands on the STRIKE, after the cock's inhale; strikeN is the edge)
+        if (A.strikeN !== undefined) { if (A.strikeN !== c.strk[i]) { c.strk[i] = A.strikeN; if (A.tip) oruneLash(E, A); } }
+        else if (v > 0 && c.lash[i] <= 0 && A.tip) oruneLash(E, A);
         c.lash[i] = v;
+      }
+      // menace edges (the hoarder's own counters; never fired on a sleeper change)
+      if (L.creepN !== undefined) {
+        if (L.creepN !== c.creepN) { c.creepN = L.creepN; oruneDrag(E, L.creepAt); }
+        if (L.popN !== c.popN) { c.popN = L.popN; orunePops(E, L.popAt, 3); }
+        if (L.cockN !== c.cockN) { c.cockN = L.cockN; const A = L.arms.find(q => q.lash > 0); if (A) oruneCock(E, A); }
+        if (L.inkN !== c.inkN) { c.inkN = L.inkN; oruneExhale(E, L, true); }
+        if (L.beak && L.beak.snapN !== c.snapN) { c.snapN = L.beak.snapN; oruneBeak(E, L); }
+        // THE FREEZE: silence before the ambush — the bed and her churn fall away
+        if (L.stillN !== c.stillN) { c.stillN = L.stillN; E.duck('amb', 0.12, 0.35, 2.2); if (E.silence) E.silence(2.2); }
+        c.wetHush = (L.still > 0) ? 1 : Math.max(0, c.wetHush - 0.05);
+        bodyLvl = awake ? 0.5 : 0.15;
       }
       const g = !!L.grab;
       if (g !== c.grab) { oruneGrab(E, L, g); c.grabRe = t + 1.6; }
@@ -379,6 +437,9 @@ export function frameCre(E, W) {
   c.body.lvl = bodyLvl;
   E.gate('cgrind', c.grindG, c.body.inp, 0.3 * grind * KC.BROODER, 0.15);
   E.gate('cfin', c.finG, c.body.inp, 0.2 * fin * KC.HUNTER, 0.3);
+  // her churn: a floor while she is up, swelling with the arms' speed; gone in the freeze
+  const wet = c.kind === 'hoarder' && L && I.state === 'play' && !L.calmed ? (L.dormant ? 0.03 : 0.10 + 0.35 * (L.moveK || 0)) * (1 - c.wetHush) : 0;
+  E.gate('cwet', c.wetG, c.body.inp, wet * KC.HOARDER, c.wetHush > 0 ? 0.08 : 0.4);
   if (ev && ev.woke && c.kind === 'hunter') { /* the arrival voice comes via growl() */ }
   frameFauna(E, W);
 }

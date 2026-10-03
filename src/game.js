@@ -43,6 +43,7 @@ import { buildRain, updateRain, setRainWeather } from './world/rain.js';
 import { buildLightning, updateLightning, setBoltRibbons } from './world/lightning.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { buildGardens, updateGardens, reseedGardens } from './world/gardens.js';
+import { updateAbyss } from './world/abyss.js';
 import { buildFauna, updateFauna, reseedFauna } from './world/fauna.js';   // FAUNA PATCH
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
@@ -195,7 +196,7 @@ const _burst = V3();
 let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
 let lev = null, zone = -1;
 const lanternPos = V3();
-let lightDip = 0, lightK = 1, slamWas = false;   // hit feedback on the light (see the lantern block)
+let lightDip = 0, lightK = 1, slamWas = false, inkBlind = 0;   // inkBlind: Orune's ink smothering the lantern   // hit feedback on the light (see the lantern block)
 // THE PAUSE. There is no pause menu: losing the pointer lock IS the pause. While he has
 // no helm the man, his air and the hunters all stand still; the sea, the raft and the
 // camera keep breathing so it never reads as a freeze. Same on window blur.
@@ -1422,6 +1423,7 @@ function update(dt, t) {
     if (ev.plume) stirPulse(ev.plumeX, ev.plumeY, ev.plumeZ, 30, 0, Math.min(1, 0.5 + 0.5 * ev.plume), P_SLAM);   // the Brooder's sand plume startles the reef where it rises
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
+    if (ev.inkDim) inkBlind = 1;   // Orune answers the light with ink (hoarder.js)
     if (ev.slam) {
       shake = Math.min(1, shake + 2 * dt); slam();
       // Contact is per-frame; the tear is per collision. Rising edge only.
@@ -1727,7 +1729,8 @@ function update(dt, t) {
   // ~3 s (an envelope over the stored value, so it is never a second oxygen penalty),
   // and the lantern gutters for 1.2 s on top of its everyday flicker.
   lightDip = Math.max(0, lightDip - dt / 3);
-  lightK = player.light * (1 - 0.45 * lightDip);
+  inkBlind = Math.max(0, inkBlind - dt / 2.5);
+  lightK = player.light * (1 - 0.45 * lightDip) * (1 - 0.6 * inkBlind);
   lanternLight.intensity = (9 + 3.5 * Math.sin(t * 9) + 1.5 * Math.sin(t * 23)) * lightK * lanternGutter(dt, t);
   playerLightSrc.position.copy(player.pos);
   playerLightSrc.intensity = 8 + 40 * lightK;
@@ -1736,6 +1739,9 @@ function update(dt, t) {
   // what the eye is sitting in decides the optics. updateCamera runs below, so this reads
   // last frame's position — half a unit at full swim speed, against a 24-unit scale height.
   updateAtmosphere(depth01, camera.position.y);
+  // THE ABYSS READS (world/abyss.js): zone-2 floor palette + the reef's own light on
+  // Mhor's idle pool lights. After the sleeper staged the pool, before the lamp pick.
+  safe('abyss', () => updateAbyss(dt, t, lev, player));
   updateLighting(depth01); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
   setLampOccluders(diverOccluders(lampOcc));   // Sal's chest and bonnet shadow the glow
 

@@ -47,8 +47,9 @@
 // built once.
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
-import { GLASS } from './config.js';
+import { GLASS, abyssK } from './config.js';
 import { rig } from './lighting.js';
+import { camera } from './core.js';
 
 const VERT = `
 varying vec2 vUv;
@@ -240,6 +241,13 @@ export class ExposurePass extends Pass {
     this.lo = E['lo' + i] + (E['lo' + j] - E['lo' + i]) * t;
     this.hi = E['hi' + i] + (E['hi' + j] - E['hi' + i]) * t;
     this.key = E['key' + i] + (E['key' + j] - E['key' + i]) * t;
+    // THE ABYSS READS (GLASS.abyss): zone 2 carries its own fence and key once the camera
+    // is in it, eased in over the zone top so a descent never steps.
+    const ak = abyssK(camera.position.y);
+    if (ak > 0) {
+      const A = GLASS.abyss;
+      this.lo += (A.expLo - this.lo) * ak; this.hi += (A.expHi - this.hi) * ak; this.key += (A.expKey - this.key) * ak;
+    }
   }
 
   // CPU side, once per frame BEFORE the scene renders (the exposure it sets is the one

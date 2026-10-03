@@ -36,7 +36,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
 import { clamp } from '../lib/math.js';
 import { terrainH } from './terrain.js';
-import { activeVents } from './vents.js';
+import { activeVents, ventColliders } from './vents.js';
+import { rockColliders } from './flora.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { uPush, uPushV, uJolt, PUSH_GLSL, PUSH_N } from './stir.js';
 import { loadSculpted } from '../lib/assets.js';
@@ -52,6 +53,20 @@ const SHRIMP_PER_VENT = 160;
 const CRABS_PER_VENT = 2;
 const MAX_SHRIMP = MAX_VENTS * SHRIMP_PER_VENT;
 const MAX_CRABS = MAX_VENTS * CRABS_PER_VENT;
+
+// (lods) SHRIMP DETAIL LEVELS, per vent (the 160 shrimp of one throat switch together). Sculpted
+// mode only; the procedural fallback draws as before. Distances are camera -> throat:
+//   0 near  < 14 u   body + generated legs/antennae (the shader already collapses those past
+//                    10 u per shrimp, and a swarm reaches ~4 u from its throat, so at the 14 u
+//                    switch every shrimp has already dropped them: the switch draws the same image)
+//   1 mid   < 28 u   the sculpted body alone (170 tris)
+//   2 far   < 60 u   an 8-triangle spindle carrying the carapace's albedo (a shrimp is ~2.5 px
+//                    long at 28 u), shrunk to nothing over 45-60 u in the shader (~1 px there)
+//   past 60 u        not submitted at all
+// Each level is its own InstancedMesh with its own copy of the instance buffers (capacity
+// MAX_SHRIMP, allocated once at install); a vent changing level rewrites the level buffers by
+// copying vent blocks out of the master buffers that layout() fills. 2 u hysteresis.
+const SH_LOD = [14, 28, 60], SH_HYST = 2, SH_FAR = [45, 60];
 
 // Depth band. Zone 1's floor sits near y = -570 and the tallest chimney tops out
 // ~14 above it, so -340 is a generous gate: everything is invisible and the
@@ -283,8 +298,10 @@ function shrimpMaterial(maps) {
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         ${maps ? `vVuv = aVuv;
         // the legs and antennae are sub-pixel past ~10 u: collapse them (no micro-triangles)
-        if (uv.x > 1.5 && distance(cameraPosition, (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz) > 10.0) transformed = vec3(0.0);` : ''}
+        float vlCamD = distance(cameraPosition, (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz);
+        if (uv.x > 1.5 && vlCamD > 10.0) transformed = vec3(0.0);` : ''}
         float vlSz = aBody.x * uVis;
+        ${maps ? `vlSz *= 1.0 - smoothstep(${SH_FAR[0].toFixed(1)}, ${SH_FAR[1].toFixed(1)}, vlCamD);   // (lods) the far edge shrinks away` : ''}
         // pleopod flick — the tail end sweeps, the head barely moves
         // Reversed-edge smoothstep is UB (0.0 on this driver) — the flick never moved
         // a vertex. 1.0 - smoothstep(lo, hi, x) is the defined form (water.js foldK).
@@ -493,13 +510,16 @@ export function buildVentLife() {
 // exactly what they did), same vertex motion (labels: uv = (kind, along)), one extra program each,
 // compiled once. The procedural meshes stay as the fallback; ?ventproc / __ventlife.sculpt(false).
 // ---------------------------------------------------------------------------
-const vs = { on: true, installed: false, ms: 0, shrimpTris: 0, crabTris: 0 };
+const vs = { on: true, installed: false, ms: 0, shrimpTris: 0, crabTris: 0, lodOn: true };
+// (lods) per-level meshes, the per-vent level (255 = unassigned), dirty after a layout / switch
+const shL = [], shLevel = new Uint8Array(MAX_VENTS).fill(255);
+let shDirty = true;
 let shrimpProc = null, crabProc = null, shrimpSc = null, crabSc = null, shrimpScMat = null, crabScMat = null;
-function shrimpSculptGeometry(src) {
+function shrimpSculptGeometry(src, app = true) {
   const sp = src.attributes.position, sn = src.attributes.normal, su = src.attributes.uv, nb = sp.count;
-  const A = shrimpAppendages(), na = A.P.length / 3;
+  const A = app ? shrimpAppendages() : { P: [], I: [], K: [] }, na = A.P.length / 3;
   const ag = new THREE.BufferGeometry();
-  ag.setAttribute('position', new THREE.Float32BufferAttribute(A.P, 3)); ag.setIndex(A.I); ag.computeVertexNormals();
+  ag.setAttribute('position', new THREE.Float32BufferAttribute(A.P, 3)); ag.setIndex(A.I); if (na) ag.computeVertexNormals(); else ag.setAttribute('normal', new THREE.Float32BufferAttribute([], 3));
   const n = nb + na, P = new Float32Array(n * 3), N = new Float32Array(n * 3), UV = new Float32Array(n * 2), VU = new Float32Array(n * 2);
   for (let i = 0; i < nb; i++) {
     P[i * 3] = sp.getX(i); P[i * 3 + 1] = sp.getY(i); P[i * 3 + 2] = sp.getZ(i);
@@ -512,6 +532,23 @@ function shrimpSculptGeometry(src) {
   const I = Array.from(src.index.array); for (const q of A.I) I.push(q + nb);
   ag.dispose();
   return vlFinish(P, N, UV, VU, I);
+}
+// (lods) the far shrimp: a spindle (nose, tail, a ring of four over the carapace's widest point),
+// 6 vertices / 8 triangles, every vertex on ONE carapace texel of the bake (so the normal map's
+// cotangent frame is degenerate and leaves the geometric normal alone; the albedo is the body's)
+function shrimpFarGeometry(src) {
+  const sp = src.attributes.position, su = src.attributes.uv;
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < sp.count; i++) { const d = (sp.getX(i) - 0.22) ** 2 + (sp.getY(i) - 0.19) ** 2 + sp.getZ(i) ** 2; if (d < bd) { bd = d; bi = i; } }
+  const P = [0.50, 0.12, 0, -0.60, -0.02, 0, 0.12, 0.20, 0, 0.12, -0.04, 0, 0.12, 0.08, 0.10, 0.12, 0.08, -0.10];
+  const I = [0, 2, 4, 0, 4, 3, 0, 3, 5, 0, 5, 2, 1, 4, 2, 1, 3, 4, 1, 5, 3, 1, 2, 5];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setIndex(I); g.computeVertexNormals();
+  const UV = new Float32Array(12), VU = new Float32Array(12);
+  for (let i = 0; i < 6; i++) { UV[i * 2 + 1] = clamp((0.5 - P[i * 3]) / 1.2, 0, 1); VU[i * 2] = su.getX(bi); VU[i * 2 + 1] = su.getY(bi); }
+  const out = vlFinish(Float32Array.from(P), Float32Array.from(g.attributes.normal.array), UV, VU, I);
+  g.dispose();
+  return out;
 }
 function crabSculptGeometry(src) {
   const sp = src.attributes.position, n = sp.count, UV = new Float32Array(n * 2);
@@ -536,6 +573,21 @@ function installVentSculpt(a) {
   crabSc = crabSculptGeometry(a.geos.kiwa);
   crabSc.setAttribute('aCrab', aCrab);
   shrimpScMat = shrimpMaterial(a.maps.vent); crabScMat = crabMaterial(a.maps.vent);
+  // (lods) the three detail levels: own geometry + own instance buffers, the sculpt material
+  const geos = [shrimpSc, shrimpSculptGeometry(a.geos.shrimp, false), shrimpFarGeometry(a.geos.shrimp)];
+  for (let l = 0; l < 3; l++) {
+    const g = l ? geos[l] : shrimpSc.clone();   // level 0 gets its own attribute set (the master keeps aShrimpA/B)
+    const A = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SHRIMP * 4), 4), B = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SHRIMP * 4), 4);
+    A.setUsage(THREE.DynamicDrawUsage); B.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('aSwirl', A); g.setAttribute('aBody', B);
+    const m = new THREE.InstancedMesh(g, shrimpScMat, MAX_SHRIMP);
+    m.castShadow = false; m.receiveShadow = false; m.frustumCulled = false; m.visible = false; m.count = 0;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.name = 'ventShrimpL' + l;
+    scene.add(m);
+    shL.push({ m, A, B, tris: g.index.count / 3 });
+  }
+  shLevel.fill(255); shDirty = true;
   vs.installed = true; vs.shrimpTris = shrimpSc.index.count / 3; vs.crabTris = crabSc.index.count / 3;
   ventSculptOn(vs.on);
   vs.ms = performance.now() - t0;
@@ -544,11 +596,16 @@ function ventSculptOn(v) {
   vs.on = !!v;
   if (!vs.installed) return vs.on;
   shrimp.geometry = v ? shrimpSc : shrimpProc; shrimp.material = v ? shrimpScMat : shrimpMat;
+  shLevel.fill(255); shDirty = true;   // (lods) the levels re-pick next frame (or hide, procedural)
+  if (!v) for (const L of shL) L.m.visible = false;
   crabs.geometry = v ? crabSc : crabProc; crabs.material = v ? crabScMat : crabMat;
   return vs.on;
 }
 if (typeof window !== 'undefined') window.__ventlife = {
-  state: () => ({ ...vs, shrimp: shrimp ? shrimp.count : 0, crabs: crabs ? crabs.count : 0, visible: shrimp ? shrimp.visible : false }),
+  state: () => ({ ...vs, crabSeatWorst: crabSeat.worst, crabsHidden: crabSeat.hidden, shrimp: shrimp ? shrimp.count : 0, crabs: crabs ? crabs.count : 0, visible: shrimp ? shrimp.visible : false,
+    lod: shL.map(L => L.m.count), lodTris: shL.reduce((a, L) => a + L.m.count * L.tris, 0), level: Array.from(shLevel.slice(0, Math.min(activeVents.length, MAX_VENTS))) }),
+  // (lods) A/B: false = every vent at the near level (the old single full-detail draw)
+  lod: on => { vs.lodOn = !!on; shLevel.fill(255); shDirty = true; return vs.lodOn; },
   sculpt: ventSculptOn,
   // captures: where shrimp i is now (the shader's swirl, scatter ignored), and a clock hold
   shrimpAt: i => {
@@ -575,6 +632,67 @@ export function reseedVentLife() {
 // ---------------------------------------------------------------------------
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 
+// Crab-frame probe points: claw tips, the long hands, the carpus, the rear, the leg tips.
+const CRAB_PTS = [
+  [0.53, 0.055, 0.09], [0.53, 0.055, -0.09], [0.44, 0.06, 0.10], [0.44, 0.06, -0.10],
+  [0.26, 0.07, 0.15], [0.26, 0.07, -0.15], [-0.21, 0.0, 0.0], [0.02, -0.07, 0.32], [0.02, -0.07, -0.32]
+];
+const _cF = new THREE.Vector3(), _cU = new THREE.Vector3(), _cZ = new THREE.Vector3();
+const CRAB_GOLD = 2.39996, CRAB_TRIES = 20, CRAB_LIFT_MAX = 0.10;
+// Writes _m. Placement-time only (layout/reseed), never per frame.
+function seatCrab(vent, a0, rr0, yawJ, sc) {
+  let best = Infinity, bx = 0, by = 0, bz = 0, bfx = 1, bfy = 0, bfz = 0, bux = 0, buy = 1, buz = 0;
+  for (let j = 0; j < CRAB_TRIES; j++) {
+    const a = a0 + j * CRAB_GOLD, rr = rr0 + 0.35 * j;
+    const cx = vent.x + Math.cos(a) * rr, cz = vent.z + Math.sin(a) * rr;
+    // ground plane under the body (eps ~ the crab's half-span)
+    const e = 0.35;
+    _cU.set(terrainH(cx - e, cz, ZI) - terrainH(cx + e, cz, ZI), 2 * e,
+      terrainH(cx, cz - e, ZI) - terrainH(cx, cz + e, ZI)).normalize();
+    // facing: out from the throat, jittered +-60 deg, projected onto that plane
+    const yaw = a + (yawJ - 0.5) * 2.1;
+    _cF.set(Math.cos(yaw), 0, Math.sin(yaw));
+    _cF.addScaledVector(_cU, -_cF.dot(_cU)).normalize();
+    _cZ.crossVectors(_cF, _cU);
+    let cy = terrainH(cx, cz, ZI) + 0.06, lift = 0;
+    for (const q of CRAB_PTS) {
+      const wx = cx + sc * (q[0] * _cF.x + q[1] * _cU.x + q[2] * _cZ.x);
+      const wy = cy + sc * (q[0] * _cF.y + q[1] * _cU.y + q[2] * _cZ.y);
+      const wz = cz + sc * (q[0] * _cF.z + q[1] * _cU.z + q[2] * _cZ.z);
+      lift = Math.max(lift, terrainH(wx, wz, ZI) + 0.01 - wy);
+    }
+    cy += lift;
+    let pen = Math.max(0, lift - CRAB_LIFT_MAX);   // a crab propped on its claws is a miss too
+    for (const q of CRAB_PTS) {
+      const wx = cx + sc * (q[0] * _cF.x + q[1] * _cU.x + q[2] * _cZ.x);
+      const wy = cy + sc * (q[0] * _cF.y + q[1] * _cU.y + q[2] * _cZ.y);
+      const wz = cz + sc * (q[0] * _cF.z + q[1] * _cU.z + q[2] * _cZ.z);
+      for (let i = 0; i < ventColliders.length; i++) {
+        const v = ventColliders[i];
+        pen = Math.max(pen, v.r + 0.05 - Math.hypot(wx - v.x, wz - v.z));
+      }
+      for (let i = 0; i < rockColliders.length; i++) {
+        const r = rockColliders[i];
+        const dx = wx - r.x, dy = wy - r.y, dz = wz - r.z;
+        if (Math.abs(dx) > r.r + 0.1 || Math.abs(dz) > r.r + 0.1 || Math.abs(dy) > r.r + 0.1) continue;
+        pen = Math.max(pen, r.r + 0.04 - Math.sqrt(dx * dx + dy * dy + dz * dz));
+      }
+    }
+    if (pen < best) {
+      best = pen; bx = cx; by = cy; bz = cz;
+      bfx = _cF.x; bfy = _cF.y; bfz = _cF.z; bux = _cU.x; buy = _cU.y; buz = _cU.z;
+      if (pen <= 0) break;
+    }
+  }
+  _cF.set(bfx, bfy, bfz); _cU.set(bux, buy, buz); _cZ.crossVectors(_cF, _cU);
+  // No clean seat within reach (a vent standing in a landmark boulder's sand fillet): the
+  // crab is not drawn. A missing crab reads as nothing; a buried one reads as a bug.
+  const hide = best > 0.03;
+  _m.makeBasis(_cF, _cU, _cZ).scale(_s.setScalar(hide ? 1e-4 : sc)).setPosition(bx, by, bz);
+  if (hide) crabSeat.hidden++; else crabSeat.worst = Math.max(crabSeat.worst, best);
+}
+const crabSeat = { worst: 0, hidden: 0 };
+
 function layout() {
   rnd = mulberry32(0x5EA11FE);
 
@@ -583,6 +701,7 @@ function layout() {
   const A = aShrimpA.array, B = aShrimpB.array, C = aCrab.array;
 
   let si = 0, ci = 0;
+  crabSeat.worst = 0; crabSeat.hidden = 0;
   for (let v = 0; v < nV; v++) {
     const vent = activeVents[v];
     const baseY = terrainH(vent.x, vent.z, ZI);
@@ -621,14 +740,17 @@ function layout() {
     // chimneys lean as they grow and ventlife only knows the throat, so a
     // flank-clung crab would float off the rock on the leaned ones. terrainH
     // puts these exactly on the ground, every time.
+    // The yeti crab's chelipeds reach 0.53 x scale ahead of the body (to 0.72 u), so a
+    // crab dropped at a random yaw with only its CENTRE on the ground pushed its claws
+    // into the slope, a neighbouring chimney or a flora boulder. seatCrab() faces it out
+    // from the throat (+-60 deg), lays it on the local ground plane, lifts it until the
+    // claw tips, hands, rear and leg tips clear the terrain, and walks the golden angle
+    // round the chimney (stepping outward) until those points are clear of every chimney
+    // and boulder collider. Same stream draws in the same order as before.
     for (let k = 0; k < CRABS_PER_VENT; k++, ci++) {
       const a = rnd() * TAU, rr = bR + rng(0.5, 3.0);
-      const cx = vent.x + Math.cos(a) * rr, cz = vent.z + Math.sin(a) * rr;
-      const cy = terrainH(cx, cz, ZI) + 0.06;
-      _p.set(cx, cy, cz);
-      _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, rnd() * TAU);
-      _s.setScalar(rng(0.85, 1.35));
-      _m.compose(_p, _q, _s);
+      const yawJ = rnd(), sc = rng(0.85, 1.35);
+      seatCrab(vent, a, rr, yawJ, sc);
       crabs.setMatrixAt(ci, _m);
       C[ci * 2] = rnd() * TAU;
       C[ci * 2 + 1] = rng(0.4, 0.9);
@@ -637,6 +759,7 @@ function layout() {
 
   shrimp.count = si;
   crabs.count = ci;
+  shLevel.fill(255); shDirty = true;   // (lods) the level buffers re-copy from the new layout
   shrimp.instanceMatrix.needsUpdate = true;
   crabs.instanceMatrix.needsUpdate = true;
   aShrimpA.needsUpdate = true;
@@ -654,7 +777,8 @@ export function updateVentLife(dt, t) {
 
   if (camY > FADE_IN0 || camY < FADE_OUT1) {
     // Cheap early-out: everything off, no uniform writes, nothing drawn.
-    if (shrimp.visible) { shrimp.visible = false; crabs.visible = false; }
+    if (shrimp.visible || crabs.visible) { shrimp.visible = false; crabs.visible = false; }
+    for (const L of shL) if (L.m.visible) L.m.visible = false;
     return;
   }
 
@@ -669,5 +793,49 @@ export function updateVentLife(dt, t) {
   uni.uVis.value = vis;
 
   const on = vis > 0.001;
-  if (shrimp.visible !== on) { shrimp.visible = on; crabs.visible = on; }
+  const lods = vs.installed && vs.on;
+  if (shrimp.visible !== (on && !lods)) shrimp.visible = on && !lods;
+  if (crabs.visible !== on) crabs.visible = on;
+  if (lods) shrimpLod(on);
+}
+
+// (lods) per-vent level with hysteresis; on any change, re-copy the vent blocks into the level
+// buffers (only then: a still camera uploads nothing). Zero allocation.
+function shrimpLod(on) {
+  const nV = Math.min(activeVents.length, MAX_VENTS), cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+  let changed = shDirty;
+  for (let v = 0; v < nV; v++) {
+    const a = activeVents[v], d = Math.hypot(a.x - cx, a.y - cy, a.z - cz), cur = shLevel[v];
+    let l = vs.lodOn ? (d < SH_LOD[0] ? 0 : d < SH_LOD[1] ? 1 : d < SH_LOD[2] ? 2 : 3) : 0;
+    // hysteresis: stay on the current level until the distance clears its edge by SH_HYST
+    if (cur !== 255 && l !== cur && vs.lodOn) {
+      const lo = cur === 0 ? -Infinity : SH_LOD[cur - 1], hi = cur === 3 ? Infinity : SH_LOD[cur];
+      if (d > lo - SH_HYST && d < hi + SH_HYST) l = cur;
+    }
+    if (l !== cur) { shLevel[v] = l; changed = true; }
+  }
+  if (changed) {
+    shDirty = false;
+    const sm = shrimp.instanceMatrix.array, MA = aShrimpA.array, MB = aShrimpB.array;
+    for (let l = 0; l < 3; l++) {
+      const L = shL[l], dm = L.m.instanceMatrix.array, DA = L.A.array, DB = L.B.array;
+      let c = 0;
+      for (let v = 0; v < nV; v++) {
+        if (shLevel[v] !== l) continue;
+        const s0 = v * SHRIMP_PER_VENT;
+        for (let k = 0; k < SHRIMP_PER_VENT; k++, c++) {
+          const s = s0 + k;
+          for (let q = 0; q < 16; q++) dm[c * 16 + q] = sm[s * 16 + q];
+          for (let q = 0; q < 4; q++) { DA[c * 4 + q] = MA[s * 4 + q]; DB[c * 4 + q] = MB[s * 4 + q]; }
+        }
+      }
+      L.m.count = c;
+      if (c) {
+        L.m.instanceMatrix.clearUpdateRanges(); L.m.instanceMatrix.addUpdateRange(0, c * 16); L.m.instanceMatrix.needsUpdate = true;
+        L.A.clearUpdateRanges(); L.A.addUpdateRange(0, c * 4); L.A.needsUpdate = true;
+        L.B.clearUpdateRanges(); L.B.addUpdateRange(0, c * 4); L.B.needsUpdate = true;
+      }
+    }
+  }
+  for (let l = 0; l < 3; l++) { const m = shL[l].m, want = on && m.count > 0; if (m.visible !== want) m.visible = want; }
 }

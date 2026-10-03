@@ -20,7 +20,8 @@ import { scene, envTexDeep as envTex } from '../core.js';
 import { V3, clamp, fbm } from '../lib/math.js';
 import { terrainH } from '../world/terrain.js';
 import { survival } from './survival.js';
-import { pumpPos } from './raft.js';
+import { pumpPos, raft } from './raft.js';
+import { resolveHoseNode, HOSE_BOUND_R2 } from './raft/colliders.js';
 import { airInletWorldPos } from '../entities/diver.js';
 import { braidSet } from '../lib/textures.js';
 import { registerPaint } from '../lib/paint.js';
@@ -143,7 +144,13 @@ const arcAttr = [];              // one Float32Array per chunk: world arc at eac
 let anchor = V3(0, -1.2, 0);
 const meshes = [];
 let deployed = 0, restFor = -1, clockT = 0, primed = false, lastZi = -1;
-let contacts = 0;
+let contacts = 0, deckContacts = 0;
+// THE DECK (polish-leftovers-oct). The raft's world matrix and its inverse, refreshed once
+// a frame in updateTether; substep() takes nodes near the raft into raft-local space and
+// lets raft/colliders.js resolveHoseNode push them out of the planks, the gear and the
+// gallows struts. Scalars + one scratch vector: no allocation.
+const _rInv = new THREE.Matrix4(), _rl = { x: 0, y: 0, z: 0 };
+let raftOn = false, deckOn = true;   // deckOn: window.tether.deck = false is the A/B
 
 const _d = V3(), _m = new THREE.Matrix4(), _inlet = V3();
 const _q = new THREE.Quaternion(), _s = V3(), _up = V3(0, 1, 0), _p = V3();
@@ -315,6 +322,32 @@ function substep(h, ax, ay, az, hx, hy, hz, zi) {
       ox[i] += (px[i] - ox[i]) * mu;
       oz[i] += (pz[i] - oz[i]) * mu;
       contacts++;
+    }
+  }
+
+  // The raft. Same contact model as the seabed: the push is positional, the inward motion
+  // it removes does not come back as velocity (the old position moves with the node), and
+  // a node resting on the planks drags with MU_RATE friction.
+  deckContacts = 0;
+  if (raftOn) {
+    const W = raft.matrixWorld.elements, I = _rInv.elements;
+    const rx = W[12], ry = W[13], rz = W[14];
+    for (let i = 1; i < N - 1; i++) {
+      const dx0 = px[i] - rx, dy0 = py[i] - ry, dz0 = pz[i] - rz;
+      if (dx0 * dx0 + dy0 * dy0 + dz0 * dz0 > HOSE_BOUND_R2) continue;
+      const X = px[i], Y = py[i], Z = pz[i];
+      _rl.x = I[0] * X + I[4] * Y + I[8] * Z + I[12];
+      _rl.y = I[1] * X + I[5] * Y + I[9] * Z + I[13];
+      _rl.z = I[2] * X + I[6] * Y + I[10] * Z + I[14];
+      const prevY = I[1] * ox[i] + I[5] * oy[i] + I[9] * oz[i] + I[13];
+      if (!resolveHoseNode(_rl, RAD, prevY)) continue;
+      const nX = W[0] * _rl.x + W[4] * _rl.y + W[8] * _rl.z + W[12];
+      const nY = W[1] * _rl.x + W[5] * _rl.y + W[9] * _rl.z + W[13];
+      const nZ = W[2] * _rl.x + W[6] * _rl.y + W[10] * _rl.z + W[14];
+      ox[i] += nX - X; oy[i] += nY - Y; oz[i] += nZ - Z;
+      px[i] = nX; py[i] = nY; pz[i] = nZ;
+      ox[i] += (px[i] - ox[i]) * mu; oz[i] += (pz[i] - oz[i]) * mu;
+      deckContacts++;
     }
   }
 
@@ -589,6 +622,8 @@ export function updateTether(dt, player, zone) {
   }
 
   if (!primed) { _pa.copy(anchor); _ph.copy(helmet); primed = true; }
+  raftOn = deckOn && !!raft.parent;
+  if (raftOn) _rInv.copy(raft.matrixWorld).invert();
   updateCurrent(clockT);
 
   // dt is split into equal steps that always consume the whole frame, so the rope never
@@ -641,6 +676,9 @@ if (typeof window !== 'undefined') {
   window.tether = {
     get deployed() { return deployed; },
     get contacts() { return contacts; },
+    get deckContacts() { return deckContacts; },
+    get deck() { return deckOn; },
+    set deck(v) { deckOn = !!v; },
     // Mirrors the vertex shader exactly, so the screen-width floor can be read rather
     // than inferred. widthPx is what the hose actually covers at that view depth.
     get pix() { return uPix.value; },
