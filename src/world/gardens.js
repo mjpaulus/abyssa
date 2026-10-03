@@ -251,6 +251,21 @@ const F_DITHER = `
 // hidden-surface removal — the kelp forest is mostly overdraw (blade behind blade behind
 // blade), and one discard in the shader made every hidden blade pay its full shading. Its
 // range end is the kit's own instance cull instead (a pop deep in the fog).
+// (lods) ...which popped visibly at 130 u in zone 0's clear band. The fade is back WITHOUT a
+// discard: over the same band (uCull) the fragment's fog path is stretched by 1/fade, so the
+// per-channel extinction carries the plant smoothly into the water's own in-scatter (the colour
+// the far water behind it converges on) and the cull at the band's end lands on a plant that is
+// already fog. Pure arithmetic on vFogDepth before the shared fog chunk: no discard, no blend,
+// early depth test / hidden-surface removal kept.
+const F_FOGFADE = `
+#if defined(GD_NODITHER) && defined(USE_FOG)
+  float gdFogDepth = vFogDepth / max(vGd.z, 0.03);
+  #define vFogDepth gdFogDepth
+#endif
+#include <fog_fragment>
+#if defined(GD_NODITHER) && defined(USE_FOG)
+  #undef vFogDepth
+#endif`;
 
 const F_BODY = `
 #if defined(GD_THIN) && !defined(GD_ALPHA)
@@ -419,6 +434,7 @@ function gardenMat(o) {
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + F_DITHER)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
       .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS + F_SSSL);
+    if (m.defines.GD_NODITHER) sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', F_FOGFADE);
     injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): the plants are organic
   };
   m.customProgramCacheKey = () => 'gardens|' + o.key;
