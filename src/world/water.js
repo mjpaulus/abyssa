@@ -2453,6 +2453,40 @@ function buildSurface() {
         return smoothstep( 0.62 - 0.55 * cov, 0.80 - 0.45 * cov, n + 0.35 * cov );
       }
 
+      // THE BOLT ON THE SEA (polish-leftovers-oct). The fog chunk lights every material from a
+      // live bolt with a Lambert term on a screen-derivative normal and a flat cold albedo,
+      // which is right for timber and rock and wrong for water: on a sea whose normal is
+      // nearly vertical under a light high in the sky it is one constant, and together with
+      // the old flat uFlash sheet it turned the whole sea a pale grey plate. Water is a
+      // specular body. So the sea takes the bolt the way it takes the sun: a GGX glint on
+      // the sea's own normal and roughness (the path of light toward the strike), light
+      // through the crests that stand between the eye and the bolt (the body's turquoise,
+      // derived from K_EXT like the sun's SSS), and a Lambert share for FOAM only (bDiff).
+      // abyssaBoltCol carries lightning.js's flat albedo (0.36); 2.78 unfolds it back to
+      // the light. Inverse-square with the same floor distance as the chunk.
+      vec3 seaBolt( vec3 P, vec3 N, vec3 V, float a, float F, float h01, vec4 B, inout vec3 bDiff ){
+        vec3 d = B.xyz - P;
+        float d2 = dot( d, d ), dist = sqrt( d2 );
+        vec3 L = d / max( dist, 1e-3 );
+        float fl2 = abyssaBoltK.x * abyssaBoltK.x;
+        vec3 E = abyssaBoltCol.rgb * ( 2.78 * B.w * fl2 / max( d2, fl2 ) );
+        float NoL = max( dot( N, L ), 0.0 ), NoV = max( -dot( V, N ), 1e-4 );
+        bDiff += E * NoL * 0.3183;
+        vec3 H = normalize( L - V );
+        float NoH = max( dot( N, H ), 0.0 ), VoH = max( -dot( V, H ), 1e-4 );
+        // a broader lobe than the sun's: the channel is metres long and the cloud base it
+        // lights glows round it, so the glint path is a lane, not a pin
+        float aB = min( a + 0.10, 1.0 );
+        vec3 spec = E * ( ggxD( NoH, aB ) * smithGGXCorrelated( NoV, max( NoL, 1e-4 ), aB ) * oceanF( VoH ) * NoL );
+        // light through the crests standing between the eye and the strike
+        vec2 lxz = L.xz; float ll = length( lxz );
+        float tw = ll > 1e-3 ? max( dot( normalize( V.xz ), lxz / ll ), 0.0 ) : 0.0;
+        float face = ll > 1e-3 ? clamp( dot( -N.xz, lxz / ll ) * 2.5, 0.0, 1.0 ) : 0.0;
+        float thru = smoothstep( 0.35, 1.0, h01 ) * ( 0.35 + 0.65 * face ) * ( 0.25 + 0.75 * tw ) * sqrt( max( 1.0 - F, 0.0 ) );
+        vec3 sss = E * exp( -${v3(K_EXT)} * 0.55 ) * ( 0.10 * thru );
+        return min( spec, vec3( 1.6 ) ) + sss;
+      }
+
       float seaS0(){ return uOcSea.w; }
       void main(){
         // Clipmap overlap band: the finer level owns everything inside its extent.
@@ -2586,6 +2620,7 @@ function buildSurface() {
         bool dFoam = !dOff || abs( uDbg - 4.0 ) < 0.5;
         bool dHaze = !dOff || abs( uDbg - 6.0 ) < 0.5;
         vec3 tRefl = vec3( 0.0 ), tBody = vec3( 0.0 ), tTrans = vec3( 0.0 ), tSss = vec3( 0.0 ), tGlit = vec3( 0.0 );
+        vec3 bDiff = vec3( 0.0 );
         if ( below ) {
           // ---- FROM BELOW: Snell's window, TIR mirror, the far-side render ----------
           float kk = 1.0 - ETA * ETA * ( 1.0 - ct * ct );
@@ -2682,6 +2717,15 @@ function buildSurface() {
               col += tSss;
             }
           }
+          // THE BOLT (see seaBolt), and the flash-lit cloud base in the mirror: the sky the
+          // sea reflects is what the flash brightens, so it arrives through the Fresnel
+          // weight, bright toward the horizon and dark looking down, never as a flat plate.
+          if ( abyssaBolt0.w + abyssaBolt1.w > 0.0 && !dOff ) {
+            float h01b = clamp( waveY / hRef * 0.5 + 0.5, 0.0, 1.0 );
+            col += ( seaBolt( vW, Na, V, alpha, F, h01b, abyssaBolt0, bDiff )
+                   + seaBolt( vW, Na, V, alpha, F, h01b, abyssaBolt1, bDiff ) ) * uNearK;
+          }
+          if ( !dOff ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.55 * F * uNearK;
           if ( dOff ) {
             if ( uDbg < 1.5 ) col = tRefl;
             else if ( uDbg < 2.5 ) col = tBody;
@@ -2715,7 +2759,7 @@ function buildSurface() {
           float lum = dot( uSunCol, vec3( 0.2126, 0.7152, 0.0722 ) );
           vec3 capCol = vec3( 0.90, 0.97, 0.95 ) * dot( fogColor, vec3( 0.36, 0.50, 0.34 ) ) * 4.6
                       * ( 0.62 + 0.38 * NoLf * sh * smoothstep( 0.5, 1.2, lum ) );
-          capCol = min( capCol, vec3( 0.34 ) );
+          capCol = min( capCol, vec3( 0.34 ) ) + bDiff * 0.75;
           float capW = smoothstep( uCap.x, min( 0.98, uCap.x + 0.30 ), uWindS );
           col = mix( col, capCol, clamp( fj * fm * ( 0.75 + 0.25 * capW ), 0.0, 0.94 ) );
           // A thin bubble veil under fresh foam: milky turquoise, not white.
@@ -2753,8 +2797,10 @@ function buildSurface() {
           if ( !dOff ) col += vec3( 0.18, 0.66, 0.46 ) * clamp( sc, 0.0, 1.0 ) * min( lum * 0.62, 0.20 );
         }
         if ( dFoam ) col += foamCol * ( below ? rain * 0.25 : splashV * ${f(GLASS.rain.splashK)} );
-        if ( !dOff ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK;
-        gBoltK = 0.15;
+        // From below the flash arrives through Snell's window (the air side is lit above).
+        if ( !dOff && below ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK * ( 1.0 - F );
+        // The fog chunk's generic Lambert bolt term: the air side has its own (seaBolt).
+        gBoltK = below ? 0.15 : 0.0;
         if ( farK > 0.0 && dHaze ) col = mix( col, farSea( V, fogColor ), farK );
         if ( airK > 0.0 && dHaze ) col = airFog( col, 0.0, airK );
 
