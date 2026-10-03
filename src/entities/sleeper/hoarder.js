@@ -511,8 +511,9 @@ export function makeHoarder(idx, cfg) {
 // The arm tubes carry aArmP = arm + 1 + s (s along the arm); the mantle has no such
 // attribute and reads 0, which is how one program tells the body from an arm.
 const MENACE_GLSL = /* glsl */`
-  float oruH3(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-  vec3 oruJ3(vec3 c) { return vec3(oruH3(c), oruH3(c + 17.3), oruH3(c + 41.9)); }
+  // (an arithmetic hash, one per cell: three sin() hashes per cell measured ~1.5 ms more
+  // with her filling the frame)
+  vec3 oruJ3(vec3 p3) { p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yxx) * p3.zyx); }
   // cellular bumps on a 2x2x2 search (feature points jittered inside the middle half of
   // their cell, so the nearest one is always in the 2x2x2 neighbourhood)
   float oruCell(vec3 p, float keep) {
@@ -550,6 +551,7 @@ function cloudPatch(m, L, key, orm) {
         varying vec3 vOruP;
         varying vec3 vOruN;
         varying vec3 vOruA;
+        varying float vOruHc;
         ${MENACE_GLSL}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         {
@@ -572,6 +574,7 @@ function cloudPatch(m, L, key, orm) {
           float amp = mix(0.045, 0.02 * uRm, isArm);
           transformed += normal * uMen.x * (hc * amp + brow * 0.20 * (1.0 - isArm));
           vOruN = wn;
+          vOruHc = hc;
           vOruA = vec3(isArm, fract(aArmP), uTell[int(aArmP)]);
         }`)
       .replace('#include <project_vertex>', '#include <project_vertex>\nvCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -587,6 +590,7 @@ function cloudPatch(m, L, key, orm) {
         varying vec3 vOruP;
         varying vec3 vOruN;
         varying vec3 vOruA;
+        varying float vOruHc;
         ${MENACE_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float ocA = dot(vCloudW, vec3(0.071, 0.043, 0.052)) * uCloud.w;
@@ -594,8 +598,10 @@ function cloudPatch(m, L, key, orm) {
         float ocBand = smoothstep(0.55, 1.2, ocB);
         diffuseColor.rgb *= 1.0 - uCloud.y * ocBand;
         // MENACE: the papilla field (shared with the normal below), darkness, the flash
-        float oHf = oruCell(vOruP * 10.0, 0.75);
-        float oHc = oruCell(vOruP * 3.2, 0.32) * smoothstep(-0.2, 0.5, vOruN.y);
+        // fine papillae per pixel (skipped outright while she lies flat: a uniform branch);
+        // the coarse horns come interpolated from the vertex stage
+        float oHf = uMen.x > 0.02 ? oruCell(vOruP * 10.0, 0.75) : 0.0;
+        float oHc = vOruHc;
         float oPap = uMen.x * max(oHf * 0.55, oHc);
         float oLum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
         // dark: the dorsum toward black-violet-brown, the underside held paler (counter-shade)
@@ -1393,7 +1399,7 @@ export function updateHoarder(L, dt, t, player) {
   L.pap += (papT - L.pap) * Math.min(1, dt * (papT > L.pap ? 1.6 : 0.5));
   L.dark += (darkT - L.dark) * Math.min(1, dt * (darkT > L.dark ? 2.5 : 0.6));
   L.web += (webT - L.web) * Math.min(1, dt * 1.2);
-  M.set(L.pap, L.dark * (1 - deim), deim, L.web);
+  M.set(L.noPap ? 0 : L.pap, L.dark * (1 - deim), deim, L.web);          // (L.noPap: dev A/B for the papilla cost)
   const pupT = L.calmed || L.dormant ? 0 : Math.max(0.2, stillK, grabK, 0.6 * near);
   L.pupil += (Math.max(pupT, deim) - L.pupil) * Math.min(1, dt * (pupT > L.pupil ? 5 : 1.2));
   L.pupU.value = L.pupil;
