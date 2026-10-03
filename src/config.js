@@ -97,6 +97,14 @@ setSun(SUN_ELEV_DEG, 26.565);
 // At day = 1, storm = 0 the ring lands exactly on it, so today's noon is reproduced
 // bit-for-bit. `night` is likewise exactly the old SKY_*_N / MOON_DISC pair, which is
 // what the old two-point night/day lerp reached at day = 0. Do not "improve" either.
+// THE ABYSS WEIGHT (world/abyss.js, GLASS.abyss): 0 above -640, 1 below -700 (the zone-2
+// top is -660), times GLASS.abyss.on. Pure, so every consumer can read it import-free.
+export function abyssK(camY) {
+  const A = GLASS.abyss;
+  if (!A || !(A.on > 0)) return 0;
+  const t = Math.max(0, Math.min(1, (-640 - camY) / 60));
+  return Math.min(1, A.on) * t * t * (3 - 2 * t);
+}
 export const GLASS = {
   sun: {
     elevNoon: SUN_ELEV_DEG,  // solar elevation at high noon — the shipped 58
@@ -399,6 +407,28 @@ export const GLASS = {
     // its flatness, its shade against the cumulus above and its drift factor.
     lowShare: 0.5, lowYLo: 58, lowYHi: 84, lowFlat: 0.34, lowShade: 0.62, lowDrift: 0.55,
     lowSize: 1.55
+  },
+  // THE ABYSS READS (roadmap/zone2-readability.md; world/abyss.js). Zone 2 at play
+  // distance, made legible by motivated light only. on = 0 is the pre-pass frame
+  // exactly (every consumer lerps by `on`), the canonical A/B: __abyss.on(0/1).
+  //   silt/grav/rock — the zone-2 floor palette: the abyssal plain is pale volcanic ash
+  //     over dark basalt, so a lit floor is a light ground that rocks, plants and animals
+  //     stand against in silhouette (the ROV-footage read), never a lifted black.
+  //   bio* — the reef's own light: while Mhor is absent his five borrowed pool lights
+  //     ride the five nearest bioluminescent colonies (sea pens, whips, crinoids), cold,
+  //     dim, decay 2, breathing with the polyp wave and flaring on a touch.
+  abyss: {
+    on: 1,
+    silt: 0x857565, grav: 0x4a3e37, rock: 0x22171a,
+    bioI: 3.2, bioR: 9.0, bioFlash: 9.0, bioCol: 0x4aa89a, bioScatter: 0.08, bioReach: 42, bioMinW: 2.5,
+    // the eye in the abyss (postfx.exposure.js): the zone-2 exposure fence and key
+    expLo: 0.90, expHi: 1.30, expKey: -4.4,
+    // the film finish for zone 2 (postfx.js): (contrast, pivot, toe weight, shadow sat), toe rgb
+    film: [1.20, 0.14, 0.06, 0.62], toe: [0.10, 0.13, 0.44],
+    // the lantern's glow in the murk (water.js lamp in-scatter) and its key (lighting.js)
+    lampK: 1.6, lantK: 1.0, lantDecay: 1.45, rimK: 0.4,
+    // AO under water in zone 2 (postfx.js updateAO)
+    aoI: 3.2, aoR: 2.4
   },
   // POWER — the frame governor (game.js frame(); roadmap/battery-governor.md). A laptop
   // on battery cannot afford an uncapped loop: this box renders the full HalfFloat

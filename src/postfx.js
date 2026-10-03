@@ -13,7 +13,7 @@ import {
   KernelSize, NormalPass, SSAOEffect, SMAAEffect, SMAAPreset, DepthCopyPass
 } from 'postprocessing';
 import { N8AOPostPass } from 'n8ao';
-import { SURFACE_Y, GLASS, SKY, ZONE_H, ZONE_GAP } from './config.js';
+import { SURFACE_Y, GLASS, SKY, ZONE_H, ZONE_GAP, abyssK } from './config.js';
 import { renderer, scene, camera, onResize, RES_SCALE, RES_FLOOR, getRenderScale, setRenderScale, getRenderFloor, setRenderFloor, getOutputSize } from './core.js';
 // TEMPORAL AA + UPSCALING (postfx.taa.js): replaces the SMAA/vignette/grain tail when on.
 import { TemporalAAPass } from './postfx.taa.js';
@@ -418,7 +418,9 @@ if (typeof window !== 'undefined') window.__aok = AOK;
 function updateAO(airK) {
   if (!n8aoPass || !AOK.on) return;
   const c = n8aoPass.configuration, W = AOK.water, A = AOK.air;
-  const r = W.r + (A.r - W.r) * airK, f = W.fall + (A.fall - W.fall) * airK, i = W.i + (A.i - W.i) * airK;
+  let r = W.r + (A.r - W.r) * airK, f = W.fall + (A.fall - W.fall) * airK, i = W.i + (A.i - W.i) * airK;
+  const ak = abyssK(camera.position.y);   // zone 2's own AO (GLASS.abyss.aoI / aoR)
+  if (ak > 0) { i += (GLASS.abyss.aoI - i) * ak; r += (GLASS.abyss.aoR - r) * ak; }
   if (Math.abs(c.aoRadius - r) > 0.02) c.aoRadius = r;
   if (Math.abs(c.distanceFalloff - f) > 0.02) c.distanceFalloff = f;
   if (Math.abs(c.intensity - i) > 0.02) c.intensity = i;
@@ -450,6 +452,9 @@ function updateGrade(airK) {
     _gradeU.coolW.value = Math.min(TUNE.coolMax, S.wash * TUNE.coolK * (1 + (TUNE.coolAir - 1) * airK)) * ks;
     const bw = S.band, ba = TUNE.bandAir;
     _gradeU.band.value.set(bw[0] + (ba[0] - bw[0]) * airK, bw[1] + (ba[1] - bw[1]) * airK);
+    // THE ABYSS READS (GLASS.abyss): zone 2's own film and toe, eased in over the zone top.
+    const ak = abyssK(camera.position.y), AF = GLASS.abyss.film, AT = GLASS.abyss.toe;
+    if (ak > 0) for (let i = 0; i < 4; i++) { S.film[i] += (AF[i] - S.film[i]) * ak; if (i < 3) S.toe[i] += (AT[i] - S.toe[i]) * ak; }
     const F = S.film, fk = FILM_K.on;
     _gradeU.film.value.set(1 + (F[0] - 1) * fk, F[1], F[2] * fk, 1 + (F[3] - 1) * fk);
     _gradeU.toe.value.set(S.toe[0], S.toe[1], S.toe[2]);

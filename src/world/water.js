@@ -3,7 +3,7 @@
 // OWNED BY: water/atmosphere agent.
 import * as THREE from 'three';
 import { scene, camera, renderer } from '../core.js';
-import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY } from '../config.js';
+import { WORLD_R, SURFACE_Y, SUN, GLASS, SKY, abyssK } from '../config.js';
 // Re-exported so the coming lab (and the brief's contract) can reach the tuning surface
 // from here. It is DEFINED in config.js — weather.js needs GLASS.sun and this file needs
 // GLASS.stops, and config.js is the only module both already import. Plain mutable data:
@@ -3456,7 +3456,12 @@ function updateLamps(camY, storm) {
   LAMPK_U[0] = (rc * K_EXT[0] + sh * K_PART[0]) * storm;
   LAMPK_U[1] = (rc * K_EXT[1] + sh * K_PART[1]) * storm;
   LAMPK_U[2] = (rc * K_EXT[2] + sh * K_PART[2]) * storm;
-  LAMPK_U[3] = ATMOS.lampGain;
+  // THE ABYSS READS (GLASS.abyss.lampK): the nepheloid ash over the zone-2 plain is the
+  // murkiest water in the column, so the flame's glow in it is a larger, brighter volume
+  // -- the luminous ground that kelp, reef and animals between it and the lens stand
+  // against in silhouette. Eased in over the zone top; 1 = the shipped gain.
+  const ak = abyssK(camY);
+  LAMPK_U[3] = ATMOS.lampGain * (1 + (GLASS.abyss.lampK - 1) * ak);
   {
     const on = SURFK && SURFK.on ? 1 : 0, pk = SURFK ? SURFK.pathK : 0;
     const d = scene.fog ? scene.fog.density * pk * on : 0;

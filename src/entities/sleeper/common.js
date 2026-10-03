@@ -167,7 +167,7 @@ export function disposeSleeper(L) {
   // Kinds that STAGE the pool (hoarder, hunter: a light that is not a ward's rides the
   // hoard or the body) retint and re-range it; hand every pool light back as built so the
   // next kind (and the serpent, which never restages) inherits the shipped rig exactly.
-  for (const pl of sigilPool) { pl.intensity = 0; pl.color.setHex(0xffe8a8); pl.distance = 50; pl.decay = 2.0; pl.userData.scatter = undefined; pl.userData.lampBias = undefined; }
+  for (const pl of sigilPool) { pl.intensity = 0; pl.color.setHex(0xffe8a8); pl.distance = 50; pl.decay = 2.0; pl.userData.scatter = undefined; pl.userData.lampBias = undefined; pl.userData.bioFree = false; }
   scene.remove(L.grp);
   if (L.onDispose) L.onDispose();
   L.grp.traverse(o => {
