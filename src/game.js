@@ -1111,9 +1111,14 @@ function updateCamera(dt, t, fwd) {
 // The decorative block: a broken jelly or a bad cloud must never take the helm with it.
 // Each system fails on its own, once, loudly, and the dive goes on without it.
 const safeFailed = new Set();
+// PERF HARNESS section clock (__bench, ?lab/?bench): null in play, so each mark is one
+// compare. pm(name) books the wall time since the previous mark to `name`.
+let prof = null, pmT = 0;
+function pm(name) { if (!prof) return; const n = performance.now(); prof[name] = (prof[name] || 0) + n - pmT; pmT = n; }
 function safe(name, fn) {
   if (safeFailed.has(name)) return;
-  try { fn(); } catch (e) {
+  if (prof) pm('glue');
+  try { fn(); if (prof) pm(name); } catch (e) {
     safeFailed.add(name);
     console.error(`ABYSSA: ${name} threw and is switched off for this session`, e);
   }
@@ -1176,6 +1181,7 @@ function pollGamepad(dt) {
 }
 
 function update(dt, t) {
+  if (prof) pmT = performance.now();
   if (msgT > 0) {
     msgT -= dt;
     if (msgT <= 0) {
@@ -1266,14 +1272,14 @@ function update(dt, t) {
   safe('footfx', () => updateFootFX(dt, t));
   safe('creatures', () => updateCreatures(dt, t));
   safe('fauna', () => updateFauna(dt, t));   // FAUNA PATCH
-  updateWater(dt, t);    // NOT decorative: the surface height, optics and refraction key off it
+  pm('glue'); updateWater(dt, t); pm('water');    // NOT decorative: the surface height, optics and refraction key off it
   // The volumetric sky retires the puffs (they stay built: the A/B, and __vsky.on(0)).
   if (volSkyOn()) setPuffsVisible(false);
   else safe('clouds', () => updateClouds(dt, t));   // after updateWater: reads its eased wind and its resolved cloud palette
   safe('sky', () => updateSky(dt, t));         // after updateWater: reads its palette, hands back the horizon
   safe('rain', () => updateRain(dt, t));       // after updateWater: reads the surface height it just resolved
-  updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm));
-  updateRifts(dt, t, zone, !!(lev && lev.calmed));
+  pm('glue'); updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm)); pm('terrain');
+  updateRifts(dt, t, zone, !!(lev && lev.calmed)); pm('rifts');
 
   // ---- THE VOYAGE ------------------------------------------------------------------
   // A cut dressed as passage: fade to black, reseed the whole sea floor under it,
@@ -1338,8 +1344,10 @@ function update(dt, t) {
   $pause.classList.toggle('on', paused && pauseT > 0.35);
   if (!paused) pollGamepad(dt);
   let fwd;
+  pm('glue');
   if (paused) fwd = forwardVec();
   else ({ fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed)));
+  pm('player');
   $mode.textContent = player.grounded ? 'walking'
     : player.fill > NEUTRAL_FILL + 0.09 ? 'rising'
     : player.fill < NEUTRAL_FILL - 0.09 ? 'sinking' : 'trimmed';
@@ -1411,8 +1419,9 @@ function update(dt, t) {
     chime(880 + Math.random() * 220, 0.9, 0.18, 'pickup');
   }
 
+  pm('glue');
   if (lev) {
-    const ev = updateLeviathan(lev, dt, t, player);
+    const ev = updateLeviathan(lev, dt, t, player); pm('leviathan');
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
     if (ev.woke) { showMsg(lev.name, 5, 2); growl(); shake = 1; }
     if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); diverImpulse('grab'); }
@@ -1468,8 +1477,8 @@ function update(dt, t) {
   wasLightOut = lightOut;
 
   // ---- surface-supplied air ----
-  updateRaft(dt, t);
-  const distFromRaft = updateTether(dt, player, zone);
+  pm('glue'); updateRaft(dt, t); pm('raft');
+  const distFromRaft = updateTether(dt, player, zone); pm('tether');
   const drowned = paused ? false : updateSurvival(dt, depth01, player.pos.y < -3, lightOut);
 
   // The pump, heard. On deck it is the loudest object in Sal's world; once he is under,
@@ -1635,8 +1644,8 @@ function update(dt, t) {
   // wrecks + relic tools
   safe('vents', () => updateVents(dt, t));
   safe('ventlife', () => updateVentLife(dt, t));
-  updateWrecks(dt, t);
-  const tev = updateTools(dt, t, player);
+  pm('glue'); updateWrecks(dt, t); pm('wrecks');
+  const tev = updateTools(dt, t, player); pm('tools');
   if (tev.spearKill) {
     chime(880, 0.5, 0.22, 'pickup');
     showMsg('THE SPEAR FINDS ITS MARK', 2.5);
@@ -1655,7 +1664,7 @@ function update(dt, t) {
   }
 
   // predators: hunting behavior, strikes and light-stealing
-  const pev = paused ? PEV_IDLE : updatePredators(dt, t, player, lanternPos);
+  pm('glue'); const pev = paused ? PEV_IDLE : updatePredators(dt, t, player, lanternPos); pm('predators');
   // Audio-only threats get a picture: a cold tint at the frame's edge, and one line the
   // first time each approach closes in (re-armed once it has fully withdrawn).
   $threat.style.opacity = (pev.threat * 0.55).toFixed(3);
@@ -1690,11 +1699,11 @@ function update(dt, t) {
     dread = clamp(1 - near / (lev.size * 9), 0, 1);
   }
   setProximity(Math.max(dread, pev.threat));
-  audioFrame(dt, pev, wx);   // audio: listener, breath clock, creature/fauna/thunder edges
+  pm('glue'); audioFrame(dt, pev, wx); pm('audio');   // audio: listener, breath clock, creature/fauna/thunder edges
   // Debris reacts to the diver's push and the leviathan's sweep.
-  updatePhysics(dt, player.pos, player.vel, lev ? lev.spine : null);
+  updatePhysics(dt, player.pos, player.vel, lev ? lev.spine : null); pm('physics');
 
-  updateDiver(dt, t, player);
+  updateDiver(dt, t, player); pm('diver');
   // Bootfall audio, sand puff and boot print all key off the rig's real heel strikes
   // (counted inside updateDiver), so they land on the same frame the weight drops.
   const sc = stepCount();
@@ -1738,14 +1747,14 @@ function update(dt, t) {
   // Keyed on the CAMERA's height, not the player's: the water column is stratified, so
   // what the eye is sitting in decides the optics. updateCamera runs below, so this reads
   // last frame's position — half a unit at full swim speed, against a 24-unit scale height.
-  updateAtmosphere(depth01, camera.position.y);
+  pm('glue'); updateAtmosphere(depth01, camera.position.y); pm('atmos');
   // THE ABYSS READS (world/abyss.js): zone-2 floor palette + the reef's own light on
   // Mhor's idle pool lights. After the sleeper staged the pool, before the lamp pick.
   safe('abyss', () => updateAbyss(dt, t, lev, player));
   updateLighting(depth01); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
   setLampOccluders(diverOccluders(lampOcc));   // Sal's chest and bonnet shadow the glow
-
-  updateCamera(dt, t, fwd);
+  pm('lighting');
+  updateCamera(dt, t, fwd); pm('camera');
   // Look-dev camera pin, ?lab ONLY (DEV_CAMPIN is false in a shipped URL, so the read
   // never happens): window.__camPin = { pos: [x,y,z], look: [x,y,z] } holds the lens
   // there for macro captures.
@@ -1792,6 +1801,7 @@ function update(dt, t) {
     ? 'ON DECK'
     : Math.floor(-player.pos.y * 3) + ' m';
   if (state === 'won') winT += dt;
+  pm('hud');
 }
 
 // requestAnimationFrame is scheduled first so a throw can't stop the loop — but that
@@ -1851,9 +1861,11 @@ window.__power = {
 // an unguarded re-queue per call would stack parallel loops the moment it is visible.
 let rafQ = false;
 function rafTick(t) { rafQ = false; frame(t); }
+let benchHold = false;   // __bench owns the frame while it measures
 function frame(now = performance.now()) {
   if (loopFailed) return;
   if (!rafQ) { rafQ = true; requestAnimationFrame(rafTick); }
+  if (benchHold) return;
   const cap = frameCap();
   if (cap < 0) return;                        // hidden: hold everything, spend nothing
   if (cap > 0) {
@@ -1902,6 +1914,27 @@ function frame(now = performance.now()) {
       frame();
     });
 }
+
+// DEV: THE PERF HARNESS (src/lib/bench.js, ?lab or ?bench): a fixed-step offscreen loop
+// that steps the REAL update + render back to back, owning the frame while it runs.
+if (/[?&](lab|bench)/.test(location.search)) import('./lib/bench.js').then(B => B.installBench({
+  hold(on) { benchHold = !!on; if (!on) { clock.getDelta(); frameDue = 0; } },
+  profOn(o) { prof = o; },
+  // One whole frame exactly as frame() runs it, minus the governor and the perf judge.
+  update(dt, t) { flushSize(); update(dt, t); },
+  sky: () => renderSky(), refraction: () => renderRefraction(), post: (dt) => render(dt),
+  // Stand Sal on zone z's seabed at (x, z), facing yaw, camera snapped behind him: the
+  // bench's views are reproducible spots, not wherever the last probe left him.
+  place(x, zz, yaw = 0, zi = zone) {
+    if (zi !== zone) enterZone(zi);
+    player.pos.set(x, terrainH(x, zz, zi) + 0.05, zz); player.vel.set(0, 0, 0); player.yaw = yaw;
+    player.grounded = true; player.onDeck = false;
+    snapCamBehind(9);
+    return { y: player.pos.y, zone };
+  },
+  where: () => ({ zone, pos: player.pos.toArray(), yaw: player.yaw, cam: camera.position.toArray(), rift: [0, 1, 2].map(i => riftPos(i)),
+    lev: lev && lev.head ? lev.head.toArray() : null })
+})).catch(e => console.warn('bench: ' + e));
 
 // DEV: the weather/light lab. One guard, dynamic import — a normal load never fetches it.
 if (location.search.includes('lab')) import('./ui/lab.js').catch(e => console.warn('lab: ' + e));
