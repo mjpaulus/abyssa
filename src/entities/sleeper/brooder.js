@@ -28,6 +28,8 @@ import { riftPos } from '../../config.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
+import { buildNear, groundAt, placeFoot, pushOut, steer, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
+import { spawnPlume, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -110,7 +112,7 @@ const S = () => ({ x: 0, v: 0 });
 const nz = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
 const ease = x => x * x * (3 - 2 * x);
 const win = (x, a, b) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0 };
+const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0 };
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
@@ -159,7 +161,9 @@ export function makeBrooder(idx, cfg) {
     // motion state (anim-sleepers): springs, per-leg unfold, the hammer, the flinch
     legSt: new Float32Array(8), clawSt: 0, heave: S(), bY: S(), bP: S(), bR: S(), offX: S(), offZ: S(),
     yawV: 0, velPrev: V3(), cock: 0, swing: 0, impT: 9, hamPh: 0, hurt: S(), shuffleT: 3, quake: 0,
-    mPh: 0, segL0: { coxa: 1, femur: 1, tibia: 1, dactyl: 1 }, sculpted: false, eyeSt: null
+    mPh: 0, segL0: { coxa: 1, femur: 1, tibia: 1, dactyl: 1 }, sculpted: false, eyeSt: null,
+    // ground + sight (brooder-ground-plume): sole lift, collider push, what she can see
+    soleLift: 0, pushed: 0, seen: true, lastSeen: V3(), blindT: 0, clearT: 0, tau: 0, aim: V3()
   };
 
   // ---- materials ----
@@ -198,6 +202,7 @@ export function makeBrooder(idx, cfg) {
   belly.castShadow = belly.receiveShadow = true;
   body.add(belly);
   L.parts = { shell, belly };
+  L.sole = soleFromGeos([shell.geometry, belly.geometry]);    // ground contact (brooderGround.js)
 
   // ---- crust: barnacles and weed ----
   const bar = G.barnacleMatrices(36, 0xBA2AC1E5 + idx);
@@ -274,6 +279,7 @@ export function makeBrooder(idx, cfg) {
   // Lopsided on purpose (the coconut crab / fiddler read): the major claw is nearly
   // twice the minor. The asymmetry is the first thing the silhouette says.
   L.claws = [buildClaw(body, armMat, -1, 0.72), buildClaw(body, armMat, 1, 1.35)];
+  for (const cl of L.claws) clawSamples(cl);
 
   // ---- the shingles: layered blade-plates down the flanks, the silhouette ----
   // AAA pass: four broken-edge plate variants (bevelled rim, thick root, growth shelves in
@@ -406,7 +412,9 @@ export function makeBrooder(idx, cfg) {
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
     wards: L.sigils.map(g => ({ lit: g.lit, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
     tris: countTris(L.body), sculpted: L.sculpted,
-    eyes: L.eyeSt ? L.eyeSt.map(e => ({ errDeg: +(e.err * 57.3).toFixed(1), saccades: e.n })) : null
+    eyes: L.eyeSt ? L.eyeSt.map(e => ({ errDeg: +(e.err * 57.3).toFixed(1), saccades: e.n })) : null,
+    sight: { seen: L.seen, tau: +L.tau.toFixed(2), blindT: +L.blindT.toFixed(2), aim: L.aim.toArray().map(v => +v.toFixed(1)), lost: L.lostN || 0 },
+    ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)) }
   });
 
   if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
@@ -418,7 +426,7 @@ export function makeBrooder(idx, cfg) {
   if (SC) installSculpt(L, SC);
   else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); } });
   const pd = L.onDispose;
-  L.onDispose = () => { L.gone = true; if (pd) pd(); };
+  L.onDispose = () => { L.gone = true; clearPlumes(); if (pd) pd(); };
   return L;
 }
 
@@ -581,6 +589,11 @@ function buildClaw(body, mat, sd, k) {
   dj.add(dact);
   return { root, cj, pj, dj, sd, major: k >= 1, merus, carpus, palm, dact };
 }
+// the claw's hull samples for the floor clamp (re-run when the sculpt swaps the meshes)
+function clawSamples(c) {
+  c.samp = [c.merus, c.carpus, c.palm, c.dact].map(mesh => ({ mesh, pts: hullSamples(mesh.geometry, 5) }));
+  if (!c.lift) { c.lift = { x: 0, v: 0 }; c.need = 0; c.need0 = 0; c.liftNow = 0; }
+}
 
 // ---- THE SCULPT, installed ---------------------------------------------------------------
 // Swaps the procedural body for the pipeline's baked meshes, in place (at build, or later
@@ -626,6 +639,7 @@ function installSculpt(L, A) {
     { scale: 20, normal: 0.9, cavity: 0.45, rough: 0.3 });
   P.shell.geometry.dispose(); P.shell.material.dispose();
   P.shell.geometry = g.body; P.shell.material = bodyMat;
+  L.sole = soleFromGeos([g.body]);                   // the baked shell's own underside
   drop(L, P.belly); drop(L, P.barn);
   for (const b of L.blades) drop(L, b);
   L.blades = [];
@@ -671,6 +685,7 @@ function installSculpt(L, A) {
       mesh.scale.set(1, 1, 1);
     }
     if (H) c.dj.position.fromArray(H.hinge);
+    clawSamples(c);
   }
   L.chitMats.armMat.dispose();
   // THE MOUTH (brooder2): layered maxillipeds and mandibles (meta.mouth maps the rig's five
@@ -761,11 +776,21 @@ function poseEyes(L, dt, player) {
   const E = L.eyeSt;
   if (!E) return;
   const up = win(L.stand, 0.18, 0.55);                       // they come up early in the wake
-  const track = player && !L.dormant && !L.calmed && L._pd < 70;
-  if (track) { _et.copy(player.pos); _et.y += 1.2; _et.applyMatrix4(_inv); }
+  // blind in the silt she SEARCHES: quick, wide saccades round the spot she lost him
+  const search = player && !L.dormant && !L.calmed && !L.seen;
+  const track = player && !L.dormant && !L.calmed && L.seen && L._pd < 70;
+  if (track || search) { _et.copy(L.aim); _et.y += 1.2; _et.applyMatrix4(_inv); }
   for (const e of E) {
     // what this eye wants
     if (track) e.want.copy(_et).sub(e.piv).normalize();
+    else if (search) {
+      if ((e.scanT = (e.scanT || 0) - dt) <= 0) {
+        e.scanT = 0.28 + Math.random() * 0.45;
+        e.want.copy(_et).sub(e.piv).normalize();
+        e.want.x += (Math.random() - 0.5) * 1.3; e.want.y += (Math.random() - 0.4) * 0.6;
+        e.want.normalize();
+      }
+    }
     else if ((e.scanT = (e.scanT || 0) - dt) <= 0) {
       e.scanT = 1.2 + Math.random() * 2.5;
       e.want.set(e.sd * (0.2 + 0.6 * Math.random()), -0.1 + 0.4 * Math.random(), 0.6 + 0.4 * Math.random()).normalize();
@@ -816,11 +841,31 @@ function placeAt(L, pos, yaw) {
   L.pos.set(pos.x, 0, pos.z);
   L.yaw = yaw;
   L.vel.set(0, 0, 0);
+  buildNear(L, L.R * 2.6);
   for (let li = 0; li < 8; li++) {
     const f = L.feet[li];
     restWorld(L, li, f.planted);
     f.cur.copy(f.planted); f.t = -1;
   }
+}
+
+// A step target the leg can actually stand on: out of any hull, grounded on the floor or
+// a rock top, and pulled in toward the hip until the leg reaches it (an out-of-reach foot
+// used to slide: the IK kept the leg whole and the foot hung in the water above the floor).
+const _hw = V3();
+function reachFoot(L, li, out) {
+  const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, k = lg.k, R = L.R;
+  _hw.set(lg.hip[0] * sd, lg.hip[1], lg.hip[2]).applyMatrix4(L.body.matrixWorld);
+  const maxR = (SEG.coxa + (SEG.femur + SEG.tibia) * k * 0.97 + SEG.dactyl * k * 0.5) * R * 0.95;
+  for (let it = 0; it < 3; it++) {
+    placeFoot(L, out);
+    const dx = out.x - _hw.x, dz = out.z - _hw.z, dy = out.y - _hw.y, hz = Math.hypot(dx, dz);
+    if (Math.hypot(hz, dy) <= maxR || hz < 1e-3) break;
+    const hmax = Math.sqrt(Math.max(0.04 * maxR * maxR, maxR * maxR - dy * dy));
+    const sc = Math.max(0.3, hmax / hz);
+    out.x = _hw.x + dx * sc; out.z = _hw.z + dz * sc;
+  }
+  return out;
 }
 
 // Rest spot of foot li: local (yaw only) -> world, on the terrain.
@@ -831,7 +876,7 @@ function restWorld(L, li, out) {
   const lx = lg.hip[0] * sd + Math.cos(a) * reach * sd, lz = lg.hip[2] + Math.sin(a) * reach;
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   out.set(L.pos.x + (lx * cy + lz * sy) * L.R, 0, L.pos.z + (-lx * sy + lz * cy) * L.R);
-  out.y = terrainH(out.x, out.z, L.idx);
+  out.y = groundAt(L, out.x, out.z, true);           // a rock's top is ground too
   return out;
 }
 
@@ -944,14 +989,74 @@ function tuckJoint(j, T, base, sd, d) {
   r.set(r.x + (T[0] - r.x) * d, r.y + (base - sd * T[1] - r.y) * d, r.z + (T[2] - r.z) * d);
 }
 
+// THE GROUND UNDER HER (brooder-ground-plume). The shell's SOLE (lowest vertex per cell of
+// an 11x11 plan grid, plus the outermost low vertex on 48 bearings) may never go under the
+// ground (floor or rock top) once she is up: standing she keeps 0.35 u of clearance. Asleep
+// she is bedded (the ridge); the floor comes on through the heave, so rising lifts her out.
+// The support estimate below is unchanged in spirit; this is a hard floor applied after it.
+const SOLE_CLR = 0.35, CLAW_MAXLIFT = 1.4, SOLE_BED_DEEP = 0.6, CLAW_M = 0.12;
+// the folded dactyl lies flat on its thick base: lift its tip by its own radius
+const FOOT_LIFT0 = 0.019, FOOT_LIFTF = 0.05;
+function clawPen(L, c) {
+  let w = -1e9;
+  for (const s of c.samp) { const p = penetration(L, s.pts, s.mesh.matrixWorld, CLAW_M); if (p > w) w = p; }
+  return w;
+}
+// The claw's floor: if any hull sample is under the ground, find (bisection) the smallest
+// lift of the arm at its root that clears it. A blow that ARRIVES at the surface kicks back
+// (a spring on the lift, underdamped): it slams onto the sand and rebounds, never through.
+function clampClaw(L, c, dt) {
+  const r = c.root.rotation, z0 = r.z;
+  c.root.updateMatrixWorld(true);
+  let need = 0;
+  if (clawPen(L, c) > 0) {
+    let lo = 0, hi = CLAW_MAXLIFT;
+    r.z = z0 + hi; c.root.updateMatrixWorld(true);
+    if (clawPen(L, c) > 0) need = hi;
+    else {
+      for (let i = 0; i < 7; i++) {
+        const mid = (lo + hi) * 0.5;
+        r.z = z0 + mid; c.root.updateMatrixWorld(true);
+        if (clawPen(L, c) > 0) lo = mid; else hi = mid;
+      }
+      need = hi;
+    }
+  }
+  if (dt > 0) {
+    if (c.major && need > 0.03 && c.need0 <= 0.03 && L.swing > 0.4) c.lift.v += 2.6 * Math.max(0.3, L.threatE);
+    spr(c.lift, need, 15, 0.28, dt);
+  } else { c.lift.x = need; c.lift.v = 0; }
+  c.need0 = need;
+  const lift = Math.max(need, c.lift.x);
+  r.z = z0 + lift;
+  c.root.updateMatrixWorld(true);
+  c.need = need; c.liftNow = lift;
+}
+
 function poseAll(L, dt, player) {
+  buildNear(L, L.R * 2.6);
   const b = L.body, R = L.R, st = L.standE, hv = L.heave.x, hc = clamp(hv, 0, 1), h = L.hurt.x, ck = L.cock * L.threatE;
-  // body on the ground: mean of five samples, pitch/roll from the fore-aft/side slopes...
+  // body on the ground. ASLEEP she is the ridge Michael approved: bedded in the silt on
+  // the old five-sample estimate (her flank and prow deep in the dune, the drift banked
+  // against her), and the sole floor below does not apply. As she HEAVES up the estimate
+  // moves to a least-squares plane through the ground (floor or rock tops) over her whole
+  // footprint, 5 x 5 (brooder-ground-plume: the five samples at +-0.7 R read the rift-rim
+  // crest behind her as a slope and drove her prow into the floor)...
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw), o = 0.7 * R;
   const gF = terrainH(L.pos.x + sy * o, L.pos.z + cy * o, L.idx), gB = terrainH(L.pos.x - sy * o, L.pos.z - cy * o, L.idx);
   const gL = terrainH(L.pos.x + cy * o, L.pos.z - sy * o, L.idx), gR = terrainH(L.pos.x - cy * o, L.pos.z + sy * o, L.idx);
   const gC = terrainH(L.pos.x, L.pos.z, L.idx);
-  let gy = (gF + gB + gL + gR + gC) / 5, pit = -Math.atan2(gF - gB, 2 * o), rol = Math.atan2(gL - gR, 2 * o);
+  let sh = 0, sx = 0, sz = 0, sxh = 0, szh = 0, sxx = 0, szz = 0, nG = 0;
+  for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) {
+    const lx = (-0.8 + 0.4 * i) * R, lz = (-0.84 + 0.425 * j) * R;
+    const hg = groundAt(L, L.pos.x + lx * cy + lz * sy, L.pos.z - lx * sy + lz * cy, true);
+    sh += hg; sx += lx; sz += lz; sxh += lx * hg; szh += lz * hg; sxx += lx * lx; szz += lz * lz; nG++;
+  }
+  // a rectangular grid: x and z are uncorrelated, so the two slopes solve independently
+  const mh = sh / nG, mx = sx / nG, mz = sz / nG;
+  const bx = (sxh / nG - mx * mh) / (sxx / nG - mx * mx), bz = (szh / nG - mz * mh) / (szz / nG - mz * mz);
+  let gy = lerp((gF + gB + gL + gR + gC) / 5, mh - bx * mx - bz * mz, hc);
+  let pit = lerp(-Math.atan2(gF - gB, 2 * o), -Math.atan(bz), hc), rol = lerp(Math.atan2(gL - gR, 2 * o), Math.atan(bx), hc);
   // ...and standing, she rides her PLANTED FEET instead: height off their mean, pitch and
   // roll off the plane they make (a foot in the air carries no weight)
   if (hc > 0) {
@@ -977,12 +1082,25 @@ function poseAll(L, dt, player) {
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
   b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h - (L.lookP || 0) + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
+  // the sole stays on the ground (L.grp sits at the origin, so body.matrix IS its world)
+  b.updateMatrix();
+  // (asleep the floor is off; it comes on through the heave, so the rise lifts her OUT)
+  const bed = lerp(SOLE_BED_DEEP * R, -SOLE_CLR, smooth(hc, 0, 0.7));
+  const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
+  L.soleLift = pen > 0 ? pen : 0;
+  if (pen > 0) { b.position.y += pen; L.bodyY += pen; }
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
 
-  for (let li = 0; li < 8; li++) poseLeg(L, li, _lp.copy(L.feet[li].cur).applyMatrix4(_inv));
+  for (let li = 0; li < 8; li++) {
+    _lp.copy(L.feet[li].cur);
+    _lp.y += R * (FOOT_LIFT0 + FOOT_LIFTF * (1 - L.legSt[li]));
+    poseLeg(L, li, _lp.applyMatrix4(_inv));
+  }
   for (const k in L.legs) L.legs[k].instanceMatrix.needsUpdate = true;
   poseClaws(L);
+  if (L.clawSt > 0.02) for (const c of L.claws) clampClaw(L, c, dt);   // folded asleep they lie bedded with the shell
+  else for (const c of L.claws) { c.liftNow = c.need = 0; c.lift.x = c.lift.v = 0; }
   poseEyes(L, dt, player);
 
   // EYESHINE: the eyes are dark until the diver's lantern finds them, then they throw it
@@ -1029,7 +1147,7 @@ function poseAll(L, dt, player) {
 }
 
 function resetEv() {
-  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0;
+  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.plume = 0;
   return EV;
 }
 // a ground shock at world x,z of strength k (0..1): the game's camera shake, by distance
@@ -1051,6 +1169,40 @@ const LEG_DELAY = new Float32Array(8);
 WAKE_ORDER.forEach((li, o) => { LEG_DELAY[li] = 0.08 + o * 0.055; });
 const _busy = new Int8Array(2);
 
+// ---- SIGHT (brooder-ground-plume) ------------------------------------------------------
+// She sees Sal along the line from her head to his chest. The sand plume (plume.js) has an
+// optical depth on that line; past SIGHT_LOSE she loses him: her face and her blows stay on
+// the spot she last saw him, the stalk stops, her eyes search in quick wide saccades. She
+// finds him again when the line has been clear (below SIGHT_FIND) for SIGHT_REACQ s, when he
+// bumps her shell, or when a ward is lit (a wound tells her where he is). After
+// SIGHT_GIVEUP s blind she stops striking the empty spot and sweeps the cloud with her front.
+export const SIGHT = { lose: 1.0, find: 0.55, reacq: 0.6, giveUp: 7 };
+let SIGHT_LOSE = SIGHT.lose, SIGHT_FIND = SIGHT.find, SIGHT_REACQ = SIGHT.reacq, SIGHT_GIVEUP = SIGHT.giveUp;
+const PLUME_MSG = 'SAND HANGS IN THE WATER. SHE CANNOT SEE YOU.';
+let plumeHinted = false;
+function sight(L, dt, player, ev) {
+  SIGHT_LOSE = SIGHT.lose; SIGHT_FIND = SIGHT.find; SIGHT_REACQ = SIGHT.reacq; SIGHT_GIVEUP = SIGHT.giveUp;
+  const awake = !L.dormant && !L.calmed;
+  const px = player.pos.x, py = player.pos.y + 1.0, pz = player.pos.z;
+  L.tau = awake && L.standE > 0.3 ? plumeTau(L.head.x, L.head.y, L.head.z, px, py, pz) : 0;
+  if (!awake || L.hold) { L.seen = true; L.blindT = 0; L.clearT = 0; }
+  else if (L.seen) {
+    if (L.tau > SIGHT_LOSE && L.standE > 0.5) {
+      L.seen = false; L.blindT = 0; L.clearT = 0; L.searchYaw = L.yaw; L.lostN = (L.lostN || 0) + 1;
+      if (!plumeHinted && L._pd < 90) { plumeHinted = true; L.pendingMsg = L.pendingMsg || PLUME_MSG; }
+    }
+  } else {
+    L.blindT += dt;
+    L.clearT = L.tau < SIGHT_FIND ? L.clearT + dt : 0;
+    if (L.clearT > SIGHT_REACQ || L._pd < L.collR * 1.05) { L.seen = true; L.blindT = 0; }
+  }
+  if (L.seen) L.lastSeen.copy(player.pos);
+  L.aim.copy(L.lastSeen);
+  let d = 1e9;
+  for (const s of L.spine) { const q = s.distanceTo(L.aim); if (q < d) d = q; }
+  L._pdT = d;
+}
+
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
@@ -1060,6 +1212,7 @@ export function updateBrooder(L, dt, t, player) {
     if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = 'THE RIDGE IS WARM UNDER YOUR HAND.'; }
   }
   if (!L.pPrev) L.pPrev = player.pos.clone();
+  sight(L, dt, player, ev);
   L.t += dt;
   L.uni.uTime.value = L.t;
   const R = L.R;
@@ -1110,7 +1263,8 @@ export function updateBrooder(L, dt, t, player) {
     if (!L.dormant && L.standE > 0.97) L.skirt.visible = false;
   }
   // she rears on her own when the diver comes close (the lab's hold/rear override it)
-  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pd < L.R * 2.4 ? 1 : 0;
+  // blind, she keeps striking where she last saw him, until she gives the spot up
+  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * 2.4 && L.blindT < SIGHT_GIVEUP ? 1 : 0;
   // a fresh threat starts the hammer at the top of its guard, so the first blow is
   // always preceded by the full wind-up
   if (L.threatTarget > 0.5 && L.threat < 0.02) L.swingT = 0;
@@ -1125,7 +1279,10 @@ export function updateBrooder(L, dt, t, player) {
     L.hamPh = ph;
     L.cock = ph < PH_COCK0 ? 0 : ph < PH_COCK1 ? ease((ph - PH_COCK0) / (PH_COCK1 - PH_COCK0)) : ph < PH_SLAM0 ? 1
       : ph < PH_SLAM1 ? 1 - Math.pow((ph - PH_SLAM0) / (PH_SLAM1 - PH_SLAM0), 1.6) : 0;
-    if (ph >= PH_SLAM1 && prev < PH_SLAM1) L.impT = 0;
+    // (the landing is flagged: the recoil branch below advances impT in this same frame, so
+    // the old `impT === 0` test never fired and the blow's dust/drop/quake were dead code)
+    const landed = ph >= PH_SLAM1 && prev < PH_SLAM1;
+    if (landed) L.impT = 0;
     if (ph >= PH_SLAM0 && ph < PH_SLAM1) L.swing = Math.pow((ph - PH_SLAM0) / (PH_SLAM1 - PH_SLAM0), 2.2);
     else if (L.impT < 3) {
       L.impT += dt;
@@ -1133,11 +1290,14 @@ export function updateBrooder(L, dt, t, player) {
       L.swing = L.impT < 0.10 ? 1 : Math.exp(-4.5 * k) * Math.cos(7 * k);
     } else L.swing = 0;
     // the blow lands: dust under the fingers, the body drops onto it, the ground jumps
-    if (L.impT === 0 && L.threatE > 0.5) {
+    if (landed && L.threatE > 0.5) {
       const c = L.claws[1].major ? L.claws[1] : L.claws[0];
       c.dj.getWorldPosition(_ft);
-      const gy = terrainH(_ft.x, _ft.z, L.idx);
+      const gy = groundAt(L, _ft.x, _ft.z, false);
       silt(_ft.x, gy + 0.3, _ft.z, 5, 5, 3.6, 2.2);
+      // THE PLUME: the seabed comes up off the blow (plume.js); game.js startles the reef from it
+      spawnPlume(_ft.x, gy, _ft.z, 'big', L.threatE, L.idx);
+      ev.plume = L.threatE; ev.plumeX = _ft.x; ev.plumeY = gy; ev.plumeZ = _ft.z;
       L.bY.v -= R * 0.10 * L.threatE;
       L.bP.v += 0.9 * L.threatE;
       quake(L, ev, _ft.x, _ft.z, 0.7 * L.threatE, player);
@@ -1156,9 +1316,13 @@ export function updateBrooder(L, dt, t, player) {
       if (L.toNest) { L.toNest = false; L.standTarget = 0; }  // home: settle over the brood
     }
     else { want = Math.atan2(dx, dz); speed = L.speed * 0.30; }
-  } else if (!L.calmed && !L.hold && !L.dormant && L.standE > 0.5 && pd < 90) {
-    want = Math.atan2(player.pos.x - L.pos.x, player.pos.z - L.pos.z);
+  } else if (!L.calmed && !L.hold && !L.dormant && L.standE > 0.5 && L._pdT < 90) {
+    // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
+    // given up, she sweeps her front slowly across the cloud, searching
+    want = L.blindT < SIGHT_GIVEUP ? Math.atan2(L.aim.x - L.pos.x, L.aim.z - L.pos.z)
+      : L.searchYaw + 0.7 * Math.sin((L.blindT - SIGHT_GIVEUP) * 0.45);
   }
+  if (want !== null && speed > 0) want = steer(L, want);    // round the rocks and hulls ahead
   // the turn has inertia: angular velocity eases toward what the error asks for (same
   // 0.35 rad/s ceiling), so she swings into a turn and out of it instead of pivoting
   let yawWant = 0;
@@ -1174,7 +1338,7 @@ export function updateBrooder(L, dt, t, player) {
   let vx = Math.sin(L.yaw) * speed, vz = Math.cos(L.yaw) * speed;
   // STALK: awake and not yet striking, she circles the diver crab-fashion — sideways,
   // face locked on him — and changes direction every few seconds.
-  if (!L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.9 && L.threatE < 0.5 && pd > L.R * 1.4 && pd < L.R * 5) {
+  if (!L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.9 && L.threatE < 0.5 && L.seen && pd > L.R * 1.4 && pd < L.R * 5) {
     L.strafeT = (L.strafeT || 0) - dt;
     if (L.strafeT <= 0) { L.strafeT = 4 + Math.random() * 4; L.strafeDir = Math.random() < 0.5 ? -1 : 1; }
     const ss = L.speed * 0.22 * L.strafeDir;
@@ -1185,6 +1349,8 @@ export function updateBrooder(L, dt, t, player) {
   L.vel.z = lerp(L.vel.z, vz, Math.min(1, 1.5 * dt));
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
+  // the world is solid to her: out of every hull and big rock, sliding along it
+  L.pushed = L.standE > 0.3 ? pushOut(L, dt) : 0;
 
   // ---- feet: alternating tetrapod gait on planted feet ----
   // The swing is a real arc: the foot peels up fast, carries forward, and STABS down
@@ -1202,6 +1368,7 @@ export function updateBrooder(L, dt, t, player) {
   for (let li = 0; li < 8; li++) {
     const f = L.feet[li], sd = li < 4 ? 1 : -1, k = li & 3;
     restWorld(L, li, _rw);
+    if (L.standE > 0.35 && f.t < 0) reachFoot(L, li, _rw);   // the rest spot she can really stand on
     if (f.t >= 0) {
       f.t = Math.min(1, f.t + dt / SWING_T);
       const e = win(f.t, 0.12, 0.92), lift = Math.sin(Math.PI * Math.pow(f.t, 0.72));
@@ -1212,6 +1379,7 @@ export function updateBrooder(L, dt, t, player) {
       if (f.t >= 1) {
         f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to);
         silt(f.cur.x, f.cur.y + 0.2, f.cur.z, f.h > 0.2 ? 3 : 1, 3, 1.4 + 1.4 * f.h / 0.30, 0.9);
+        if (f.h > 0.2) spawnPlume(f.cur.x, f.cur.y, f.cur.z, 'small', 1, L.idx);   // a heavy foot throws its own small cloud
         L.bY.v -= R * 0.10 * f.h / 0.30;
         L.bR.v += sd * 0.10 * f.h / 0.30;
         quake(L, ev, f.cur.x, f.cur.z, 0.16 * f.h / 0.30, player);
@@ -1222,7 +1390,7 @@ export function updateBrooder(L, dt, t, player) {
         f.from.copy(f.planted);
         f.to.copy(_rw).addScaledVector(L.vel, SWING_T * 0.6);
         if (li === shuffle) { f.to.x += (Math.random() - 0.5) * 0.06 * R; f.to.z += (Math.random() - 0.5) * 0.06 * R; }
-        f.to.y = terrainH(f.to.x, f.to.z, L.idx);
+        reachFoot(L, li, f.to);                        // on the ground or a rock top, beside a hull, inside the leg's reach
         // a shuffle is a small, low step; a stride lifts high
         f.h = li === shuffle && d < STRIDE * L.R ? 0.09 : 0.30;
         f.t = 0;
@@ -1248,7 +1416,7 @@ export function updateBrooder(L, dt, t, player) {
   {
     let lk = 0;
     if (!L.dormant && !L.calmed && !L.hold && L.standE > 0.8 && pd < 60) {
-      const el = Math.atan2(player.pos.y - L.head.y, Math.max(4, Math.hypot(player.pos.x - L.head.x, player.pos.z - L.head.z)));
+      const el = Math.atan2(L.aim.y - L.head.y, Math.max(4, Math.hypot(L.aim.x - L.head.x, L.aim.z - L.head.z)));
       lk = clamp(el * 0.35, -0.06, 0.16);
     }
     L.lookP = (L.lookP || 0) + (lk - (L.lookP || 0)) * Math.min(1, 1.2 * dt);
@@ -1331,8 +1499,9 @@ export function updateBrooder(L, dt, t, player) {
     }
   }
   // a ward lit is a wound: she flinches - rears back, claws snatched in - and it rings out
-  if (ev.sigilLit) { L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
+  if (ev.sigilLit) { L.seen = true; L.blindT = 0; L.lastSeen.copy(player.pos); L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
   wardFlashes(L, dt, null);
+  updatePlumes(dt);
   L.pPrev.copy(player.pos);
   return ev;
 }
