@@ -1091,6 +1091,8 @@ export function updateHunter(L, dt, t, player) {
   if (L.state === 'absent') {
     if (Fz.lit && L.stT > 14) arrive(L);                             // he hunts heat
     ev.remaining = L.sigils.length;
+    // his pool lights are idle until he comes: the reef borrows them (world/abyss.js)
+    for (let i = 0; i < sigilPool.length; i++) sigilPool[i].userData.bioFree = true;
     return ev;
   }
   L.pulse = L.t;
@@ -1305,7 +1307,8 @@ function stageHunter(L, dt) {
   for (let i = 0; i < L.stage.length; i++) {
     const pl = sigilPool[i], s = L.stage[i], g = i < L.sigils.length ? L.sigils[i] : null;
     if (g && (g.lit || g.flashT < 1.5 || L.state === 'stunned' || L.calmed)) {
-      if (s.src !== -2) { s.src = -2; s.cur = 0; pl.color.setHex(WARD_COL); pl.distance = 50; pl.userData.lampBias = undefined; }
+      if (s.src !== -2) { s.src = -2; s.cur = 0; pl.color.setHex(WARD_COL); pl.distance = 50; pl.decay = 2.0; pl.userData.lampBias = undefined; }
+      pl.userData.bioFree = false;
       // lifted off the hide along the ward's face: a light ON the skin only grazes it (the
       // burning wards used to light nothing round them); 2.5 u out it pools on his back
       pl.position.copy(g.grp.position).addScaledVector(_sp.set(0, 0, 1).applyQuaternion(g.grp.quaternion), 2.5);
@@ -1316,6 +1319,10 @@ function stageHunter(L, dt) {
     if (s.src !== want) { s.cur = Math.max(0, s.cur - dt * 80); if (s.cur <= 0) s.src = want; }
     else s.cur += clamp(I - s.cur, -dt * 80, dt * 60);
     pl.intensity = s.cur;
+    // IDLE (he is absent and this light has faded out): the reef may borrow it
+    // (world/abyss.js rides it on a bioluminescent colony); the frame he needs it the
+    // flag drops and every property below is rewritten, so nothing of the reef's leaks.
+    pl.userData.bioFree = s.src < 0 && s.cur <= 0;
     if (s.src < 0) continue;
     const b = BODY_AT[s.src];
     pl.position.copy(_sp.set(b[0] * near, b[1], b[2]).applyMatrix4(L.body.matrixWorld));
