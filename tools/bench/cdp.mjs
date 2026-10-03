@@ -11,6 +11,7 @@
 //   node tools/bench/cdp.mjs run probe.js                          -> the file is an async function body
 //   node tools/bench/cdp.mjs png out.png "<expr -> data URL>"       -> writes the PNG (e.g. __bench.png(window.cap))
 //   node tools/bench/cdp.mjs reload                                -> fresh load of the page
+//   node tools/bench/cdp.mjs goto <url>                            -> load another URL (keep ?bench in it)
 //   node tools/bench/cdp.mjs console                               -> console lines since load
 //   node tools/bench/cdp.mjs stop
 //
@@ -65,12 +66,15 @@ if (cmd === 'start') {
   if (existsSync(STATE)) { const s = JSON.parse(readFileSync(STATE, 'utf8')); try { process.kill(s.pid); } catch (e) { /* gone */ } }
   try { execSync(`pkill -f "user-data-dir=${join(DIR, 'profile')}"`); } catch (e) { /* none */ }
   console.log('stopped');
-} else if (cmd === 'eval' || cmd === 'run' || cmd === 'png' || cmd === 'reload' || cmd === 'console') {
+} else if (cmd === 'eval' || cmd === 'run' || cmd === 'png' || cmd === 'reload' || cmd === 'goto' || cmd === 'console') {
   const c = rpc(await pageWs());
   await c.ready;
   if (cmd === 'reload') {
     await c.send('Page.reload', { ignoreCache: true });
     console.log('reloaded');
+  } else if (cmd === 'goto') {
+    await c.send('Page.navigate', { url: args[0] });
+    console.log('navigated ' + args[0]);
   } else if (cmd === 'console') {
     await c.send('Runtime.enable'); await sleep(300);
     for (const e of c.events) if (e.method === 'Runtime.consoleAPICalled') console.log(e.params.type, e.params.args.map(a => a.value ?? a.description).join(' '));

@@ -209,5 +209,25 @@ export function surfaceState() {
       ok++;
     } else fail('specular AA');
   }
-  SURF.patched = ok === 4;
+  // --- 8. dark point lights skip the BRDF (perf-budget-oct) ---------------------------
+  // The light COUNT is sacred (14: changing it recompiles every lit program), so most of
+  // the scene's nine point lights sit at intensity 0 or out of range at any moment (ward
+  // pool, colony pool, vent throat, hoard lights). Each still ran the full direct term for
+  // every lit fragment: GGX + the wrap / rim / wet film / thin-sheet terms above, ~100 ALU
+  // a light. getPointLightInfo already sets directLight.visible = (color != 0) after the
+  // range cutoff and patch 1's extinction; RE_Direct is now gated on it. A light whose
+  // colour is exactly zero contributes exactly zero, so the frame is identical (bar a NaN
+  // a zero light could once have turned into); the branch is on a near-uniform value, so
+  // it costs nothing where the light IS on. Point lights only (the first RE_Direct).
+  {
+    const s = C.lights_fragment_begin;
+    const a = 'RE_Direct( directLight, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight );';
+    const i = s.indexOf(a), pl = s.indexOf('NUM_POINT_LIGHTS > 0');
+    if (typeof location !== 'undefined' && location.search.includes('nolightskip')) { ok++; }   // A/B across loads
+    else if (i > pl && pl >= 0 && s.indexOf('NUM_SPOT_LIGHTS > 0') > i) {
+      C.lights_fragment_begin = s.slice(0, i) + 'if ( directLight.visible ) ' + s.slice(i);
+      ok++;
+    } else fail('dark point light skip');
+  }
+  SURF.patched = ok === 5;
 })();
