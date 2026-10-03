@@ -188,7 +188,7 @@ export function pipeline() {
   return {
     name: 'star', out: 'assets/fauna/star',
     sets: { star: { size: 1024, gutter: 6, aoDist: 0.08, aoSamples: 48, fill: true } },
-    pieces: [{ name: 'star', set: 'star', sdf: starSpec(), paint: starPaint(), hi: { h: 0.0032 }, lo: { h: 0.009, tris: 2400, err: 0.02 }, kEps: 0.006, ao: { r: 0.04, n: 4 }, cage: 0.012, ray: 0.04 }],
+    pieces: [{ name: 'star', set: 'star', sdf: starSpec(), paint: starPaint(), hi: { h: 0.0032 }, lo: { h: 0.009, tris: 2400, err: 0.02 }, far: 450, kEps: 0.006, ao: { r: 0.04, n: 4 }, cage: 0.012, ray: 0.04 }],
     compress: { mesh: 'draco', tex: 'ktx2' },
     meta: { arms: ARMS.map(a => ({ L: a.L, curl: a.curl })) }
   };

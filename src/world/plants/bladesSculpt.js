@@ -620,8 +620,17 @@ function kelpSkel(vi) {
   return sk;
 }
 
+// (lods) THE KELP LOD MORPH. Level 1 keeps every 2nd frond blade (grown 1.35x) and level 2 every
+// 3rd (1.6x, no floats), so the switches at 14 u and 40 u used to halve the blades in one frame.
+// Every vertex now also carries aKD = (anchor xyz, code): over the last few units before its
+// level's switch (gardens.js GD_KELPX, plantKit uKX) a blade the next level drops shrinks into
+// its anchor and a kept blade grows toward the next level's size, so the swap lands on (nearly)
+// the same plant. code = (band + 1) * 8 + f; f = 0 drop, f >= 1 grow factor; 0 = untouched.
+const KX_CODE = (band, f) => (band + 1) * 8 + f;
 export function buildKelp(vi, lod) {
   const sk = kelpSkel(vi), K = sk.K, H = K.Href, Lq = LODK[lod], M = new MB();
+  const Ln = lod < 2 ? LODK[lod + 1] : null, kxR = [];   // kxR: [v0, v1, ax, ay, az, code]
+  const kx = (v0, A, code) => { if (Ln && M.nv > v0) kxR.push(v0, M.nv, A[0], A[1], A[2], code); };
   const STI = KC('sti')[0], HOLD = KC('hold')[0], FLO = KC('flo')[0], BULB = KC('bulb')[0];
   const hN = y => clamp(y / H, 0, 1);
   const stSw = ph => (t, p) => { const h = hN(p[1]); return [h * h, h, 0, ph]; };
@@ -645,9 +654,17 @@ export function buildKelp(vi, lod) {
   // blades
   let bi = 0;
   for (const b of sk.blades) {
-    const keep = b.kind === 'apex' || b.kind === 'bull' || b.kind === 'ala' || b.kind === 'lam' || (bi++ % Lq.every === 0);
+    const special = b.kind === 'apex' || b.kind === 'bull' || b.kind === 'ala' || b.kind === 'lam', bix = special ? -1 : bi++;
+    const keep = special || bix % Lq.every === 0;
     if (!keep) continue;
     if (b.kind === 'spor' && lod > 0) continue;
+    // (lods) does the next level keep this blade, and how much bigger is it there
+    const keepN = Ln && (special || bix % Ln.every === 0) && b.kind !== 'spor';
+    // (length ratio x width ratio)^0.5: one uniform scale about the base for a blade the next level
+    // draws longer AND wider (len x grow, wid x min(1.3, sqrt(grow)), grow per kind as below)
+    const gk = q => b.kind === 'mac' ? q.grow : b.kind === 'apex' ? 1 : Math.sqrt(q.grow);
+    const gN = !Ln ? 1 : Math.sqrt((gk(Ln) / gk(Lq)) * (Math.min(1.3, Math.sqrt(gk(Ln))) / Math.min(1.3, Math.sqrt(gk(Lq)))));
+    const v0b = M.nv;
     const st = sk.stipes[b.stipe], A = bez(st.P, b.t), Ts = bezD(st.P, Math.min(0.999, b.t));
     const DS = [1, 0, 0], DN = [0, -1, 0];
     const grow = (b.kind === 'mac' ? Lq.grow : b.kind === 'apex' ? 1 : Math.sqrt(Lq.grow));
@@ -659,8 +676,10 @@ export function buildKelp(vi, lod) {
       const fa = V.norm(V.add(V.add(sv, DS, 0.7), Ts, 0.5));
       P0 = V.add(A, sv, st.r1 + 0.01);
       if (Lq.floats) {
-        const fC = V.add(P0, fa, 0.065);
+        const fC = V.add(P0, fa, 0.065), vf = M.nv;
         ellip(M, fC, fa, 0.065, 0.04, Lq.fsides, Lq.frings, FLO, p => { const h = hN(p[1]); return [hN(A[1]) ** 2, h, 0, b.ph]; }, 0.004);
+        // (lods) the float goes with its blade, and at the last switch (no floats) on its own
+        kx(vf, A, keepN && Ln.floats ? 0 : KX_CODE(lod, 0));
         P0 = V.add(fC, fa, 0.06);
       } else P0 = V.add(P0, fa, 0.12);
       dir = V.norm(V.add(V.add(V.add(sv, DS, 0.9), [0, 1, 0], b.el), Ts, 0.3));
@@ -700,8 +719,13 @@ export function buildKelp(vi, lod) {
       sw: (t, p) => { const h = hN(p[1]); return [Math.min(1.2, hb * hb + (1.05 - hb * hb) * 0.55 * t), h, sst(0.45, 1, h) * 0.5 * t, b.ph]; },
       flut: t => 0.1 * t * t
     });
+    // (lods) the blade itself (its float, if any, was coded above): drop, or grow about its base
+    if (Ln) { const vb = Math.max(v0b, kxR.length ? kxR[kxR.length - 5] : 0); kx(vb, P0, keepN ? (Math.abs(gN - 1) > 1e-3 ? KX_CODE(lod, Math.min(7.9, gN)) : 0) : KX_CODE(lod, 0)); }
   }
-  return M.out();
+  const o = M.out(), kd = new Float32Array(M.nv * 4);
+  for (let r = 0; r < kxR.length; r += 6) if (kxR[r + 5]) for (let v = kxR[r]; v < kxR[r + 1]; v++) { kd[v * 4] = kxR[r + 2]; kd[v * 4 + 1] = kxR[r + 3]; kd[v * 4 + 2] = kxR[r + 4]; kd[v * 4 + 3] = kxR[r + 5]; }
+  o.aKD = kd;
+  return o;
 }
 // host (W, H, W) on a unit mesh -> our scale and sway terms (see plantKit sync)
 const KELP_CUR = [Math.cos(0.9), 0, Math.sin(0.9)];
