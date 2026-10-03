@@ -90,6 +90,9 @@ uniform vec4 uJolt;
 #endif
 // (plants) a BatchedMesh of sculpted species (plants/plantKit.js) runs this same program:
 // its instance matrix comes from three's batching texture and its aInst from uInstTex
+#ifdef GD_KELPX
+  attribute vec4 aKD; uniform vec4 uKX;   // (lods) kelp LOD morph: plants/bladesSculpt.js buildKelp
+#endif
 #ifdef USE_BATCHING
   uniform highp sampler2D uInstTex;
   #define GD_IM batchingMatrix
@@ -99,6 +102,16 @@ uniform vec4 uJolt;
 ${PUSH_GLSL}`;
 
 const V_BODY = `
+#ifdef GD_KELPX
+  // (lods) over the band before this level's switch, the blades the next level drops shrink into
+  // their anchor and the kept ones grow toward its size (rest pose, before any sway)
+  if (aKD.w > 0.5) {
+    float gkb = floor(aKD.w / 8.0) - 1.0, gkf = aKD.w - (gkb + 1.0) * 8.0;
+    vec2 gkB = gkb < 0.5 ? uKX.xy : uKX.zw;
+    float gkt = smoothstep(gkB.x, gkB.y, distance((modelMatrix * GD_IM * vec4(0.0, 0.0, 0.0, 1.0)).xyz, cameraPosition));
+    transformed = aKD.xyz + (transformed - aKD.xyz) * (gkf < 0.5 ? 1.0 - gkt : mix(1.0, gkf, gkt));
+  }
+#endif
 #ifdef USE_BATCHING
   vec4 gdInst;
   {
@@ -251,6 +264,21 @@ const F_DITHER = `
 // hidden-surface removal — the kelp forest is mostly overdraw (blade behind blade behind
 // blade), and one discard in the shader made every hidden blade pay its full shading. Its
 // range end is the kit's own instance cull instead (a pop deep in the fog).
+// (lods) ...which popped visibly at 130 u in zone 0's clear band. The fade is back WITHOUT a
+// discard: over the same band (uCull) the fragment's fog path is stretched by 1/fade, so the
+// per-channel extinction carries the plant smoothly into the water's own in-scatter (the colour
+// the far water behind it converges on) and the cull at the band's end lands on a plant that is
+// already fog. Pure arithmetic on vFogDepth before the shared fog chunk: no discard, no blend,
+// early depth test / hidden-surface removal kept.
+const F_FOGFADE = `
+#if defined(GD_NODITHER) && defined(USE_FOG)
+  float gdFogDepth = vFogDepth / max(vGd.z, 0.03);
+  #define vFogDepth gdFogDepth
+#endif
+#include <fog_fragment>
+#if defined(GD_NODITHER) && defined(USE_FOG)
+  #undef vFogDepth
+#endif`;
 
 const F_BODY = `
 #if defined(GD_THIN) && !defined(GD_ALPHA)
@@ -400,6 +428,7 @@ function gardenMat(o) {
       Object.assign(sh.uniforms, { uBladePack: { value: BS.pack }, uBladeNrm: { value: BS.nrm }, uTrans: { value: o.trans ?? 1 } });
     }
     if (m.userData.uInstTex) sh.uniforms.uInstTex = m.userData.uInstTex;
+    if (m.userData.uKX) sh.uniforms.uKX = m.userData.uKX;
     if (m.defines.GD_THIN && !m.defines.GD_BLADE) sh.uniforms.uTrans = { value: o.trans ?? 1 };
     if (m.defines.GD_RUFFLE) sh.uniforms.uRuffle = { value: o.ruffle ?? 0.012 };
     if (m.defines.GD_BIOLUM || m.defines.GD_BIOTIP) { sh.uniforms.uBioCol = { value: new THREE.Color(o.bioCol ?? 0x2f8f86) }; sh.uniforms.uBioFrac = { value: o.bioFrac ?? 1 }; }
@@ -419,6 +448,7 @@ function gardenMat(o) {
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + F_DITHER)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
       .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS + F_SSSL);
+    if (m.defines.GD_NODITHER) sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', F_FOGFADE);
     injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): the plants are organic
   };
   m.customProgramCacheKey = () => 'gardens|' + o.key;

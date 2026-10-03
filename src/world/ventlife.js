@@ -53,6 +53,20 @@ const CRABS_PER_VENT = 2;
 const MAX_SHRIMP = MAX_VENTS * SHRIMP_PER_VENT;
 const MAX_CRABS = MAX_VENTS * CRABS_PER_VENT;
 
+// (lods) SHRIMP DETAIL LEVELS, per vent (the 160 shrimp of one throat switch together). Sculpted
+// mode only; the procedural fallback draws as before. Distances are camera -> throat:
+//   0 near  < 14 u   body + generated legs/antennae (the shader already collapses those past
+//                    10 u per shrimp, and a swarm reaches ~4 u from its throat, so at the 14 u
+//                    switch every shrimp has already dropped them: the switch draws the same image)
+//   1 mid   < 28 u   the sculpted body alone (170 tris)
+//   2 far   < 60 u   an 8-triangle spindle carrying the carapace's albedo (a shrimp is ~2.5 px
+//                    long at 28 u), shrunk to nothing over 45-60 u in the shader (~1 px there)
+//   past 60 u        not submitted at all
+// Each level is its own InstancedMesh with its own copy of the instance buffers (capacity
+// MAX_SHRIMP, allocated once at install); a vent changing level rewrites the level buffers by
+// copying vent blocks out of the master buffers that layout() fills. 2 u hysteresis.
+const SH_LOD = [14, 28, 60], SH_HYST = 2, SH_FAR = [45, 60];
+
 // Depth band. Zone 1's floor sits near y = -570 and the tallest chimney tops out
 // ~14 above it, so -340 is a generous gate: everything is invisible and the
 // update does no work at all above it. The deep edge hands over to zone 2.
@@ -283,8 +297,10 @@ function shrimpMaterial(maps) {
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         ${maps ? `vVuv = aVuv;
         // the legs and antennae are sub-pixel past ~10 u: collapse them (no micro-triangles)
-        if (uv.x > 1.5 && distance(cameraPosition, (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz) > 10.0) transformed = vec3(0.0);` : ''}
+        float vlCamD = distance(cameraPosition, (modelMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0)).xyz);
+        if (uv.x > 1.5 && vlCamD > 10.0) transformed = vec3(0.0);` : ''}
         float vlSz = aBody.x * uVis;
+        ${maps ? `vlSz *= 1.0 - smoothstep(${SH_FAR[0].toFixed(1)}, ${SH_FAR[1].toFixed(1)}, vlCamD);   // (lods) the far edge shrinks away` : ''}
         // pleopod flick — the tail end sweeps, the head barely moves
         // Reversed-edge smoothstep is UB (0.0 on this driver) — the flick never moved
         // a vertex. 1.0 - smoothstep(lo, hi, x) is the defined form (water.js foldK).
@@ -493,13 +509,16 @@ export function buildVentLife() {
 // exactly what they did), same vertex motion (labels: uv = (kind, along)), one extra program each,
 // compiled once. The procedural meshes stay as the fallback; ?ventproc / __ventlife.sculpt(false).
 // ---------------------------------------------------------------------------
-const vs = { on: true, installed: false, ms: 0, shrimpTris: 0, crabTris: 0 };
+const vs = { on: true, installed: false, ms: 0, shrimpTris: 0, crabTris: 0, lodOn: true };
+// (lods) per-level meshes, the per-vent level (255 = unassigned), dirty after a layout / switch
+const shL = [], shLevel = new Uint8Array(MAX_VENTS).fill(255);
+let shDirty = true;
 let shrimpProc = null, crabProc = null, shrimpSc = null, crabSc = null, shrimpScMat = null, crabScMat = null;
-function shrimpSculptGeometry(src) {
+function shrimpSculptGeometry(src, app = true) {
   const sp = src.attributes.position, sn = src.attributes.normal, su = src.attributes.uv, nb = sp.count;
-  const A = shrimpAppendages(), na = A.P.length / 3;
+  const A = app ? shrimpAppendages() : { P: [], I: [], K: [] }, na = A.P.length / 3;
   const ag = new THREE.BufferGeometry();
-  ag.setAttribute('position', new THREE.Float32BufferAttribute(A.P, 3)); ag.setIndex(A.I); ag.computeVertexNormals();
+  ag.setAttribute('position', new THREE.Float32BufferAttribute(A.P, 3)); ag.setIndex(A.I); if (na) ag.computeVertexNormals(); else ag.setAttribute('normal', new THREE.Float32BufferAttribute([], 3));
   const n = nb + na, P = new Float32Array(n * 3), N = new Float32Array(n * 3), UV = new Float32Array(n * 2), VU = new Float32Array(n * 2);
   for (let i = 0; i < nb; i++) {
     P[i * 3] = sp.getX(i); P[i * 3 + 1] = sp.getY(i); P[i * 3 + 2] = sp.getZ(i);
@@ -512,6 +531,23 @@ function shrimpSculptGeometry(src) {
   const I = Array.from(src.index.array); for (const q of A.I) I.push(q + nb);
   ag.dispose();
   return vlFinish(P, N, UV, VU, I);
+}
+// (lods) the far shrimp: a spindle (nose, tail, a ring of four over the carapace's widest point),
+// 6 vertices / 8 triangles, every vertex on ONE carapace texel of the bake (so the normal map's
+// cotangent frame is degenerate and leaves the geometric normal alone; the albedo is the body's)
+function shrimpFarGeometry(src) {
+  const sp = src.attributes.position, su = src.attributes.uv;
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < sp.count; i++) { const d = (sp.getX(i) - 0.22) ** 2 + (sp.getY(i) - 0.19) ** 2 + sp.getZ(i) ** 2; if (d < bd) { bd = d; bi = i; } }
+  const P = [0.50, 0.12, 0, -0.60, -0.02, 0, 0.12, 0.20, 0, 0.12, -0.04, 0, 0.12, 0.08, 0.10, 0.12, 0.08, -0.10];
+  const I = [0, 2, 4, 0, 4, 3, 0, 3, 5, 0, 5, 2, 1, 4, 2, 1, 3, 4, 1, 5, 3, 1, 2, 5];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3)); g.setIndex(I); g.computeVertexNormals();
+  const UV = new Float32Array(12), VU = new Float32Array(12);
+  for (let i = 0; i < 6; i++) { UV[i * 2 + 1] = clamp((0.5 - P[i * 3]) / 1.2, 0, 1); VU[i * 2] = su.getX(bi); VU[i * 2 + 1] = su.getY(bi); }
+  const out = vlFinish(Float32Array.from(P), Float32Array.from(g.attributes.normal.array), UV, VU, I);
+  g.dispose();
+  return out;
 }
 function crabSculptGeometry(src) {
   const sp = src.attributes.position, n = sp.count, UV = new Float32Array(n * 2);
@@ -536,6 +572,21 @@ function installVentSculpt(a) {
   crabSc = crabSculptGeometry(a.geos.kiwa);
   crabSc.setAttribute('aCrab', aCrab);
   shrimpScMat = shrimpMaterial(a.maps.vent); crabScMat = crabMaterial(a.maps.vent);
+  // (lods) the three detail levels: own geometry + own instance buffers, the sculpt material
+  const geos = [shrimpSc, shrimpSculptGeometry(a.geos.shrimp, false), shrimpFarGeometry(a.geos.shrimp)];
+  for (let l = 0; l < 3; l++) {
+    const g = l ? geos[l] : shrimpSc.clone();   // level 0 gets its own attribute set (the master keeps aShrimpA/B)
+    const A = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SHRIMP * 4), 4), B = new THREE.InstancedBufferAttribute(new Float32Array(MAX_SHRIMP * 4), 4);
+    A.setUsage(THREE.DynamicDrawUsage); B.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('aSwirl', A); g.setAttribute('aBody', B);
+    const m = new THREE.InstancedMesh(g, shrimpScMat, MAX_SHRIMP);
+    m.castShadow = false; m.receiveShadow = false; m.frustumCulled = false; m.visible = false; m.count = 0;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.name = 'ventShrimpL' + l;
+    scene.add(m);
+    shL.push({ m, A, B, tris: g.index.count / 3 });
+  }
+  shLevel.fill(255); shDirty = true;
   vs.installed = true; vs.shrimpTris = shrimpSc.index.count / 3; vs.crabTris = crabSc.index.count / 3;
   ventSculptOn(vs.on);
   vs.ms = performance.now() - t0;
@@ -544,11 +595,16 @@ function ventSculptOn(v) {
   vs.on = !!v;
   if (!vs.installed) return vs.on;
   shrimp.geometry = v ? shrimpSc : shrimpProc; shrimp.material = v ? shrimpScMat : shrimpMat;
+  shLevel.fill(255); shDirty = true;   // (lods) the levels re-pick next frame (or hide, procedural)
+  if (!v) for (const L of shL) L.m.visible = false;
   crabs.geometry = v ? crabSc : crabProc; crabs.material = v ? crabScMat : crabMat;
   return vs.on;
 }
 if (typeof window !== 'undefined') window.__ventlife = {
-  state: () => ({ ...vs, shrimp: shrimp ? shrimp.count : 0, crabs: crabs ? crabs.count : 0, visible: shrimp ? shrimp.visible : false }),
+  state: () => ({ ...vs, shrimp: shrimp ? shrimp.count : 0, crabs: crabs ? crabs.count : 0, visible: shrimp ? shrimp.visible : false,
+    lod: shL.map(L => L.m.count), lodTris: shL.reduce((a, L) => a + L.m.count * L.tris, 0), level: Array.from(shLevel.slice(0, Math.min(activeVents.length, MAX_VENTS))) }),
+  // (lods) A/B: false = every vent at the near level (the old single full-detail draw)
+  lod: on => { vs.lodOn = !!on; shLevel.fill(255); shDirty = true; return vs.lodOn; },
   sculpt: ventSculptOn,
   // captures: where shrimp i is now (the shader's swirl, scatter ignored), and a clock hold
   shrimpAt: i => {
@@ -637,6 +693,7 @@ function layout() {
 
   shrimp.count = si;
   crabs.count = ci;
+  shLevel.fill(255); shDirty = true;   // (lods) the level buffers re-copy from the new layout
   shrimp.instanceMatrix.needsUpdate = true;
   crabs.instanceMatrix.needsUpdate = true;
   aShrimpA.needsUpdate = true;
@@ -654,7 +711,8 @@ export function updateVentLife(dt, t) {
 
   if (camY > FADE_IN0 || camY < FADE_OUT1) {
     // Cheap early-out: everything off, no uniform writes, nothing drawn.
-    if (shrimp.visible) { shrimp.visible = false; crabs.visible = false; }
+    if (shrimp.visible || crabs.visible) { shrimp.visible = false; crabs.visible = false; }
+    for (const L of shL) if (L.m.visible) L.m.visible = false;
     return;
   }
 
@@ -669,5 +727,49 @@ export function updateVentLife(dt, t) {
   uni.uVis.value = vis;
 
   const on = vis > 0.001;
-  if (shrimp.visible !== on) { shrimp.visible = on; crabs.visible = on; }
+  const lods = vs.installed && vs.on;
+  if (shrimp.visible !== (on && !lods)) shrimp.visible = on && !lods;
+  if (crabs.visible !== on) crabs.visible = on;
+  if (lods) shrimpLod(on);
+}
+
+// (lods) per-vent level with hysteresis; on any change, re-copy the vent blocks into the level
+// buffers (only then: a still camera uploads nothing). Zero allocation.
+function shrimpLod(on) {
+  const nV = Math.min(activeVents.length, MAX_VENTS), cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+  let changed = shDirty;
+  for (let v = 0; v < nV; v++) {
+    const a = activeVents[v], d = Math.hypot(a.x - cx, a.y - cy, a.z - cz), cur = shLevel[v];
+    let l = vs.lodOn ? (d < SH_LOD[0] ? 0 : d < SH_LOD[1] ? 1 : d < SH_LOD[2] ? 2 : 3) : 0;
+    // hysteresis: stay on the current level until the distance clears its edge by SH_HYST
+    if (cur !== 255 && l !== cur && vs.lodOn) {
+      const lo = cur === 0 ? -Infinity : SH_LOD[cur - 1], hi = cur === 3 ? Infinity : SH_LOD[cur];
+      if (d > lo - SH_HYST && d < hi + SH_HYST) l = cur;
+    }
+    if (l !== cur) { shLevel[v] = l; changed = true; }
+  }
+  if (changed) {
+    shDirty = false;
+    const sm = shrimp.instanceMatrix.array, MA = aShrimpA.array, MB = aShrimpB.array;
+    for (let l = 0; l < 3; l++) {
+      const L = shL[l], dm = L.m.instanceMatrix.array, DA = L.A.array, DB = L.B.array;
+      let c = 0;
+      for (let v = 0; v < nV; v++) {
+        if (shLevel[v] !== l) continue;
+        const s0 = v * SHRIMP_PER_VENT;
+        for (let k = 0; k < SHRIMP_PER_VENT; k++, c++) {
+          const s = s0 + k;
+          for (let q = 0; q < 16; q++) dm[c * 16 + q] = sm[s * 16 + q];
+          for (let q = 0; q < 4; q++) { DA[c * 4 + q] = MA[s * 4 + q]; DB[c * 4 + q] = MB[s * 4 + q]; }
+        }
+      }
+      L.m.count = c;
+      if (c) {
+        L.m.instanceMatrix.clearUpdateRanges(); L.m.instanceMatrix.addUpdateRange(0, c * 16); L.m.instanceMatrix.needsUpdate = true;
+        L.A.clearUpdateRanges(); L.A.addUpdateRange(0, c * 4); L.A.needsUpdate = true;
+        L.B.clearUpdateRanges(); L.B.addUpdateRange(0, c * 4); L.B.needsUpdate = true;
+      }
+    }
+  }
+  for (let l = 0; l < 3; l++) { const m = shL[l].m, want = on && m.count > 0; if (m.visible !== want) m.visible = want; }
 }
