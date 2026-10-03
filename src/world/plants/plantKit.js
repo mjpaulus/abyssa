@@ -143,6 +143,31 @@ function pieceGeo(species, v, far) {
   return g;
 }
 
+// (lods) THE INDIRECT RE-UPLOAD. three's BatchedMesh.onBeforeRender rebuilds its draw list and
+// flags its indirect texture (draw -> instance id) needsUpdate on EVERY render, so every batch
+// re-uploaded a texture every frame even when nothing moved. On ANGLE/Metal that upload is the
+// batch's cost: measured (isolated, min of 16 alternating reps, zone-0 reef) the whole plant set
+// cost +1.06 ms over terrain alone, +0.24 ms with the upload skipped when the list is unchanged.
+// This wrapper runs three's own list build and then undoes the version bump when the list is
+// identical to the one last uploaded (the renderer compares versions, so no upload happens).
+// The draw list only changes when an instance enters/leaves the frustum or the visible set.
+let quietOn = true;
+function quietIndirect(b) {
+  const proto = Object.getPrototypeOf(b).onBeforeRender;
+  let last = new Int32Array(0), lastN = -1;
+  b.onBeforeRender = function (r, s, c, g, m, gr) {
+    const t = this._indirectTexture, v = t.version;
+    proto.call(this, r, s, c, g, m, gr);
+    const n = this._multiDrawCount, a = t.image.data;
+    let same = quietOn && n === lastN;
+    if (same) for (let i = 0; i < n; i++) if (a[i] !== last[i]) { same = false; break; }
+    if (same) { t.version = v; return; }
+    if (last.length < n) last = new Int32Array(Math.max(n, last.length * 2, 64));
+    for (let i = 0; i < n; i++) last[i] = a[i];
+    lastN = n;
+  };
+}
+
 function hashV(i, k) { const s = Math.sin(i * 91.345 + 17.13) * 24634.6345; return Math.floor((s - Math.floor(s)) * k) % k; }
 
 // ---- ONE batch per SPECIES (one multi-draw), every host that adopted it a segment of it:
@@ -178,6 +203,7 @@ function buildGroup(sp, hosts) {
   b.sortObjects = false;
   b.frustumCulled = false;
   b.name = 'plants:' + sp;
+  quietIndirect(b);
   const ids = levels.map(L => L.map(g => b.addGeometry(g)));
   // sway headroom: per-object culling uses the rest pose's sphere
   for (const L of ids) for (const id of L) { b.getBoundingSphereAt(id, _sph); const gi = b._geometryInfo && b._geometryInfo[id]; if (gi && gi.boundingSphere) gi.boundingSphere.radius *= 1.35; }
@@ -322,6 +348,7 @@ function buildImp() {
   if (maps.normalMap.userData.rg) patchNormalRG(mat);
   impB = new THREE.BatchedMesh(impCap, nvx, nix, mat);
   impB.perObjectFrustumCulled = true; impB.sortObjects = false; impB.frustumCulled = false; impB.name = 'plants:imp';
+  quietIndirect(impB);
   for (const [G, v, g] of geos) G.impIds[v] = impB.addGeometry(g);
   for (const G of gs) for (let i = 0; i < G.cap; i++) { impB.addInstance(G.impIds[G.var[i]]); impB.setVisibleAt(G.impOff + i, false); }
   const w = Math.ceil(Math.sqrt(impCap));
@@ -418,5 +445,6 @@ if (typeof window !== 'undefined') window.__plants = {
   }),
   proc: on => { procForced = !!on; return procForced; },
   lod: on => { lodOn = !!on; for (const G of groups.values()) G.lod.fill(255); return lodOn; },
+  quiet: on => { quietOn = !!on; return quietOn; },   // (lods) A/B: skip the unchanged indirect re-upload
   groups, root
 };
