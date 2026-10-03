@@ -963,6 +963,7 @@ export function render(dt) {
   }
   try { composer.render(dt); }
   finally { if (taaLive) taaPass.end(camera); }
+  if (expPass) expPass.fence();   // covers this frame's metering readback (end of frame: no early commit)
   pumpCaptures();
   if (DEV_LAB && window.__perf && window.__perf.load > 0) { const e = performance.now() + window.__perf.load; while (performance.now() < e) { /* dev load */ } }
 }

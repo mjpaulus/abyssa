@@ -13,14 +13,20 @@
 //     -> 32x32  weighted log2 luminance, 8x8 sparse taps per cell   (RG: sum wl, sum w)
 //     -> 4x4    exact box of the 32x32                               (same program)
 //     -> 1x1    exact box of the 4x4, RGBA32F                        (same program)
-//     -> PBO ring readback, NO fence: readPixels into a pixel-pack buffer is async,
-//        and the buffer is only mapped back (getBufferSubData) once PBO_LAG later
-//        meterings have been issued (>= 6 frames at every 2), by which time the frame
-//        that wrote it has long presented. A fenceSync per readback was tried first:
-//        ANGLE/Metal commits the command buffer to make a sync signalable, and that
-//        mid-frame commit cost ~1 ms of lost GPU parallelism per metering (measured
-//        on the deck, frame median 11.9 -> 13.0 ms). ONE program, no depth attachments
-//        (depthBuffer: false on all three — nothing to share, nothing to feedback).
+//     -> PBO ring readback, FENCE-GATED (perf-budget-oct): readPixels into a pixel-pack
+//        buffer is async; the fence that covers it is made at the END of the frame
+//        (`fence()`, called by postfx.render after the composer, where the frame's
+//        command buffer is committed anyway -- a fence made mid-frame made ANGLE/Metal
+//        commit early, measured ~1 ms), and the buffer is mapped back (getBufferSubData)
+//        only once that fence reports SIGNALED, polled without waiting. Even so EVERY
+//        getBufferSubData is a synchronous round trip to Chrome's GPU process that first
+//        drains everything queued ahead of it: on this machine ~1.8 ms of main thread
+//        after the scene pass (the bench saw submit alternate 5.5 / 3.3 ms frame to frame).
+//        Moving the read to frame start was measured WORSE (+0.4 ms live: the wait then
+//        idles the GPU while the CPU has nothing queued). What helps is reading less
+//        often: GLASS.exposure.every 2 -> 8 (7.5 Hz metering against 0.6 / 3 s time
+//        constants) bought 0.33 ms live at 1.0x and 0.88 ms at 1.5x in zone 0 (paired
+//        live A/B, noise +-0.3). ONE program, no depth attachments (depthBuffer: false).
 //
 // The buffer is TONE-MAPPED (three bakes ACES + exposure into every material at scene
 // render), so the meter INVERTS the ACES fit per tap (the RRT+ODT rational, solved as a
@@ -100,7 +106,7 @@ function fullscreenTri() {
   return g;
 }
 
-const PBO_RING = 4, PBO_LAG = 3;   // read a buffer only after 3 later readbacks were issued
+const PBO_RING = 4;   // readbacks in flight; a metering is skipped while all four wait on fences
 const log2 = Math.log2;
 
 export class ExposurePass extends Pass {
@@ -130,6 +136,7 @@ export class ExposurePass extends Pass {
 
     // Readback ring: PBOs + fences, created lazily on the live context.
     this.gl = null; this.pbo = null; this.issued = 0; this.read = 0;   // monotonic counters; slot = n % PBO_RING
+    this.fences = new Array(PBO_RING).fill(null); this.fenced = 0;     // issues covered by a fence so far
     this.out = new Float32Array(4);
     this.frame = 0; this.failed = false;
 
@@ -183,11 +190,26 @@ export class ExposurePass extends Pass {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     return true;
   }
-  // Map back every readback that is at least PBO_LAG issues old, in issue order.
+  // End of frame (postfx.render, after the composer): one fence covers every readback
+  // issued since the last one. A WebGLSync is the one object this makes (every `every`
+  // frames); WebGL has no way to recycle a sync.
+  fence() {
+    const gl = this.gl;
+    if (!gl || this.fenced === this.issued) return;
+    const f = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+    for (let n = this.fenced; n < this.issued; n++) this.fences[n % PBO_RING] = f;
+    this.fenced = this.issued;
+  }
+  // Map back every readback whose fence has signalled, in issue order. Never waits.
   _poll() {
     const gl = this.gl;
-    while (this.issued - this.read > PBO_LAG) {
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.read % PBO_RING]);
+    while (this.read < this.fenced) {
+      const slot = this.read % PBO_RING, f = this.fences[slot];
+      if (f && gl.getSyncParameter(f, gl.SYNC_STATUS) !== gl.SIGNALED) break;
+      // a sync shared by several slots is deleted with its last one
+      this.fences[slot] = null;
+      if (f && this.fences.indexOf(f) < 0) gl.deleteSync(f);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[slot]);
       gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
       this.read++;

@@ -457,7 +457,10 @@ export const GLASS = {
     tauBright: 0.6,       // s, 63% time constant when the exposure must FALL
     tauDark: 3.0,         // s, when it may RISE
     centre: 0.6,          // metering weight: 1 at the middle, 1 - centre at the corners
-    every: 2,             // meter every N frames
+    every: 8,             // meter every N frames. Each metering costs one synchronous
+                          // readback round trip (~1.8 ms main thread under load); 2 -> 8
+                          // saved 0.3-0.9 ms a frame (perf-budget-oct). 7.5 Hz is still
+                          // ~4.5 samples per tauBright.
     airRaw: 0.65,         // deck correction: the unexposed share of an air frame (dome, sea
                           // surface are raw shaders); measured loop gain -0.65 at noon
     // Measured 2026-09-25 at multiplier 1 (scene-referred mean log2, ACES inverted):

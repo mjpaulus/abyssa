@@ -61,7 +61,7 @@ function syncAll() {
 const stats = (a) => {
   if (!a.length) return null;
   const s = Float64Array.from(a).sort(), q = (p) => s[Math.min(s.length - 1, Math.max(0, Math.round(p * (s.length - 1))))];
-  return { med: +q(0.5).toFixed(3), p10: +q(0.1).toFixed(3), p90: +q(0.9).toFixed(3), n: s.length };
+  return { med: +q(0.5).toFixed(3), p25: +q(0.25).toFixed(3), p10: +q(0.1).toFixed(3), p90: +q(0.9).toFixed(3), n: s.length };
 };
 
 // ---- stage instrumentation ------------------------------------------------------------
@@ -112,18 +112,21 @@ function unwrapPasses() { if (wrapped) for (const [p, orig] of wrapped) p.render
 
 // ---- the stepped frame ------------------------------------------------------------------
 const DT = 1 / 60;
+// opts.freeze: the world clock stands still (dt 1e-4, t fixed) so every frame draws the same
+// picture; frame-to-frame spread is then the machine's, not the animation's.
 function stepFrame(o, gpuQs) {
+  const dt = o.freeze ? 1e-4 : DT;
   const t0 = performance.now();
   if (ext) { const q = gl.createQuery(); gl.beginQuery(ext.TIME_ELAPSED_EXT, q); openQ = { q, list: gpuQs }; }
   renderer.info.reset();
-  clock.elapsedTime += DT;
+  clock.elapsedTime += dt;
   stageBegin('update');
-  H.update(DT, clock.elapsedTime);
+  H.update(dt, clock.elapsedTime);
   stageEnd('update');
   const t1 = performance.now();
   stageBegin('sky'); H.sky(); stageEnd('sky');
   stageBegin('refraction'); H.refraction(); stageEnd('refraction');
-  H.post(DT);
+  H.post(dt);
   if (openQ) { gl.endQuery(ext.TIME_ELAPSED_EXT); openQ.list.push(openQ.q); openQ = null; }
   const t2 = performance.now();
   if (o.mode !== 'pipe') { if (o.endSync === 'rt') syncAll(); else syncCanvas(); }
@@ -232,6 +235,7 @@ async function run(opts = {}) {
     for (const k in prof) cpu[k] = +(prof[k] / o.frames).toFixed(3);
     const cal = Math.max(cal0, calibrate()), gcal = o.gcal === false ? 0 : Math.max(gcal0, gpuCalibrate());
     return {
+      series: o.keep ? { wall: wall.map(x => +x.toFixed(2)), sub: sub.map(x => +x.toFixed(2)) } : undefined,
       cal: +cal.toFixed(2), calBest: +calBest.toFixed(2), slowCpu: cal > calBest * 1.35,
       gcal: +gcal.toFixed(2), gcalBest: +gcalBest.toFixed(2), busyGpu: gcal > gcalBest * 1.35,
       mode: o.mode, split: !!o.split, frames: o.frames,
@@ -253,7 +257,7 @@ async function run(opts = {}) {
 // The answer is the median of per-pair (B - A) block medians, for wall and GPU.
 async function ab(o = {}) {
   const P = Object.assign({ pairs: 10, per: 8, drop: 4, mode: 'sync' }, o);
-  const A = { wall: [], gpu: [] }, B = { wall: [], gpu: [] }, dW = [], dG = [], cals = [];
+  const A = { wall: [], gpu: [] }, B = { wall: [], gpu: [] }, dW = [], dW25 = [], dG = [], cals = [];
   holdOn();
   try {
     for (let i = 0; i < P.pairs; i++) {
@@ -261,20 +265,47 @@ async function ab(o = {}) {
       const got = {};
       for (const k of order) {
         P[k]();
-        const r = await run({ frames: P.per, warm: P.drop, mode: P.mode, prof: false });
+        const r = await run({ frames: P.per, warm: P.drop, mode: P.mode, prof: false, freeze: P.freeze, gcal: P.gcal });
         got[k] = r; cals.push(r.cal);
       }
-      A.wall.push(got.a.wall.med); B.wall.push(got.b.wall.med);
+      A.wall.push(got.a.wall.med); B.wall.push(got.b.wall.med); dW25.push(got.b.wall.p25 - got.a.wall.p25);
       if (got.a.gpu && got.b.gpu) { A.gpu.push(got.a.gpu.med); B.gpu.push(got.b.gpu.med); dG.push(got.b.gpu.med - got.a.gpu.med); }
       dW.push(got.b.wall.med - got.a.wall.med);
     }
   } finally { if (P.restore) P.restore(); else P.a(); holdOff(); }
   return { name: P.name || '', a: { wall: stats(A.wall), gpu: stats(A.gpu) }, b: { wall: stats(B.wall), gpu: stats(B.gpu) },
-    dWall: stats(dW), dGpu: stats(dG), cal: stats(cals), calBest: +calBest.toFixed(2) };
+    dWall: stats(dW), dWall25: stats(dW25), dGpu: stats(dG), cal: stats(cals), calBest: +calBest.toFixed(2) };
 }
 // The A/A floor: the same state on both sides. |median| and the p10..p90 of the pair
 // differences are what any A/B on this machine can and cannot resolve.
 const noise = (o = {}) => ab(Object.assign({ name: 'A/A', a: () => {}, b: () => {} }, o));
+
+// ---- LIVE: the real rAF loop -------------------------------------------------------------
+// The shipping loop (governor, perf judge, CPU/GPU overlap), uncapped, for `ms`: the MEAN
+// frame interval. Only meaningful where rAF is not vsync-bound (the bench Chrome runs with
+// --disable-gpu-vsync --disable-frame-rate-limit) and the page is visible.
+async function live(ms = 3000) {
+  const P = window.__power, cap = P.state().knobs.cap;
+  P.set(0, null);
+  try {
+    await new Promise(r => setTimeout(r, 300));
+    const t0 = performance.now(); let n = 0;
+    await new Promise(res => { function f(t) { n++; if (t - t0 < ms) requestAnimationFrame(f); else res(); } requestAnimationFrame(f); });
+    return (performance.now() - t0) / n;
+  } finally { P.set(cap, null); }
+}
+// Paired live A/B, ABBA blocks of `ms` each: median of per-pair (B - A) mean intervals.
+async function liveAB(o = {}) {
+  const P = Object.assign({ pairs: 4, ms: 2500 }, o), A = [], B = [], d = [];
+  try {
+    for (let i = 0; i < P.pairs; i++) {
+      const got = {};
+      for (const k of (i & 1 ? ['b', 'a'] : ['a', 'b'])) { P[k](); got[k] = await live(P.ms); }
+      A.push(got.a); B.push(got.b); d.push(got.b - got.a);
+    }
+  } finally { if (P.restore) P.restore(); else P.a(); }
+  return { name: P.name || '', a: stats(A), b: stats(B), d: stats(d) };
+}
 
 // ---- ownership: hide / draws --------------------------------------------------------------
 const ownerOf = (o) => { let r = o; while (r.parent && r.parent !== scene) r = r.parent; return r.parent === scene ? r : null; };
@@ -341,14 +372,19 @@ function size(w, h) {
 }
 
 // THE STANDARD VIEWS (perf-budget-oct). Each is a reproducible spot: Sal stood on the
-// seabed facing `yaw`, the follow camera settled behind him for `settle` ms of driven play.
-// z0: under the raft (the dive's arrival, the kelp/reef garden); z0b: the Brooder's ridge;
-// z1: under rift 0 (the zone-1 arrival); z1b: Orune on the trawler; z2: under rift 1 (the
-// zone-2 arrival, reef + colony lights). Positions are the authored site-0 layout.
+// seabed facing `yaw` (he faces (sin yaw, cos yaw)), the follow camera settled behind him.
+// Arrivals: z0 under the raft, z1 under rift 0, z2 under rift 1 (where a descent lands).
+// Dense views: z0r / z2r the densest 40 u plant cells of site 0 (reef, grass, kelp);
+// sleepers: z0b Velkath's ridge from 30 u, z1b Orune on the trawler from 21 u (asleep).
+// Positions are the authored site-0 layout (a voyage moves them).
 const VIEWS = {
   z0: { zone: 0, x: 4, z: 4, yaw: 0.5 },
+  z0r: { zone: 0, x: 30, z: -10, yaw: 0.8 },
+  z0b: { zone: 0, x: 15, z: 18, yaw: 0.83 },
   z1: { zone: 1, x: 81.5, z: 83.9, yaw: 0.5 },
-  z2: { zone: 2, x: -116.8, z: -6.8, yaw: 0.5 }
+  z1b: { zone: 1, x: -162, z: 70, yaw: -1.86 },
+  z2: { zone: 2, x: -116.8, z: -6.8, yaw: 0.5 },
+  z2r: { zone: 2, x: -55, z: 25, yaw: 0.8 }
 };
 async function setup(view = 'z0', o = {}) {
   const v = typeof view === 'string' ? VIEWS[view] : view;
@@ -369,5 +405,5 @@ async function setup(view = 'z0', o = {}) {
 
 export function installBench(hooks) {
   H = hooks;
-  window.__bench = { VIEWS, setup, calibrate, gpuCalibrate, run, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
+  window.__bench = { VIEWS, setup, calibrate, gpuCalibrate, run, live, liveAB, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
 }
