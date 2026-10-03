@@ -1,6 +1,6 @@
 ---
 title: Orune, menacing
-status: wip
+status: done
 tags: leviathan, creatures, encounter, audio, shaders
 updated: 2026-10-03
 ---
@@ -26,3 +26,4 @@ Research notes and the threat → tell table: docs/superpowers/specs/orune-menac
 
 ## Log
 - 2026-10-03 — wip on branch `orune` (23270eb, 17cb6e1, 88fb9ce): research, presence, reveal, silhouette, hunting, sound, fairness fixes. Verified with real E / T / RT / W input; fingerprints and light count held.
+- 2026-10-03 — merged to main; verified in a fresh tab (woke her, zone tour clean, 14 lights, fingerprints unchanged). Open: her GPU cost in a close awake frame rose to about 2–3.5 ms (from 0.2–0.5) on a shared machine — re-measure quietly; levers `L.noPap` (papillae, about 0.6 ms) and idle arm reach. The beak reads only up close; ink is small puffs; audio not yet heard.
