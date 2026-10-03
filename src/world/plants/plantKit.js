@@ -152,6 +152,7 @@ function pieceGeo(species, v, far) {
 // identical to the one last uploaded (the renderer compares versions, so no upload happens).
 // The draw list only changes when an instance enters/leaves the frustum or the visible set.
 let quietOn = true;
+const noDitherOn = !(typeof location !== 'undefined' && /[?&]plantdither\b/.test(location.search));   // (lods) ?plantdither = A/B
 function quietIndirect(b) {
   const proto = Object.getPrototypeOf(b).onBeforeRender;
   let last = new Int32Array(0), lastN = -1;
@@ -270,6 +271,10 @@ function sync(K) {
       // (plants2) species whose decimated far mesh stalled at its seams (still 1-4k triangles)
       // skip it: the near mesh holds a little longer, then the impostor takes over
       if (S.noMid && G.impB) { const d = Math.max(nk * 1.5, 16); G.near2[j] = G.mid2[j] = d * d; }
+      // (lods) with an impostor the batch hands over BEFORE the host's range fade starts (0.72 of
+      // its cull, gardens.js uCull), so the batch never needs the dithered fade and compiles
+      // without a discard (GD_NODITHER): hidden-surface removal back for the opaque reef
+      if (G.impB) { const fb = 0.72 * Math.sqrt(c2) - 1, f2 = fb * fb; if (G.mid2[j] > f2) G.mid2[j] = f2; if (G.near2[j] > f2) G.near2[j] = f2; }
     }
     if (im.instanceColor) im.getColorAt(i, _c); else _c.setRGB(1, 1, 1);
     // soften the host's palette toward its own value: the bake carries the species' colour
@@ -394,7 +399,13 @@ function tick() {
       for (const K of keys.values()) if (hasSpecies(K.species)) { if (!by.has(K.species)) by.set(K.species, []); by.get(K.species).push(K); }
       buildQ = [['micro', () => { if (!microTextureStep(BUILD_MS)) return 'again'; }]];
       for (const [sp, hosts] of by) buildQ.push(...jobsFor(sp, hosts));
-      if (assetI) buildQ.push(['imp batch', () => { buildImp(); for (const G of groups.values()) if (G.impB) { if (G.nl < 3) { G.ids.push(G.ids[G.nl - 1]); G.nl = 3; } for (const K of G.hosts) sync(K); } }]);
+      if (assetI) buildQ.push(['imp batch', () => { buildImp(); for (const G of groups.values()) if (G.impB) {
+        if (G.nl < 3) { G.ids.push(G.ids[G.nl - 1]); G.nl = 3; }
+        // (lods) the opaque species' batch loses its dither discard (see sync: it never reaches the fade)
+        const md = G.batch.material.defines;
+        if (!md.GD_ALPHA && !md.GD_NODITHER && noDitherOn) { md.GD_NODITHER = 1; G.batch.material.needsUpdate = true; }
+        for (const K of G.hosts) sync(K);
+      } }]);
       return;
     }
     if (buildQ.length) {
@@ -445,6 +456,8 @@ if (typeof window !== 'undefined') window.__plants = {
   }),
   proc: on => { procForced = !!on; return procForced; },
   lod: on => { lodOn = !!on; for (const G of groups.values()) G.lod.fill(255); return lodOn; },
-  quiet: on => { quietOn = !!on; return quietOn; },   // (lods) A/B: skip the unchanged indirect re-upload
+  quiet: on => { quietOn = !!on; return quietOn; },
+  // (lods) A/B: true puts the dither discard back on the impostor-backed opaque batches
+  dither: on => { for (const G of groups.values()) if (G.impB) { const m = G.batch.material, md = m.defines; if (md.GD_ALPHA) continue; if (on) delete md.GD_NODITHER; else md.GD_NODITHER = 1; m.needsUpdate = true; } return !!on; },   // (lods) A/B: skip the unchanged indirect re-upload
   groups, root
 };
