@@ -195,7 +195,7 @@ const _burst = V3();
 let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
 let lev = null, zone = -1;
 const lanternPos = V3();
-let lightDip = 0, lightK = 1, slamWas = false;   // hit feedback on the light (see the lantern block)
+let lightDip = 0, lightK = 1, slamWas = false, inkBlind = 0;   // inkBlind: Orune's ink smothering the lantern   // hit feedback on the light (see the lantern block)
 // THE PAUSE. There is no pause menu: losing the pointer lock IS the pause. While he has
 // no helm the man, his air and the hunters all stand still; the sea, the raft and the
 // camera keep breathing so it never reads as a freeze. Same on window blur.
@@ -1421,6 +1421,7 @@ function update(dt, t) {
     if (ev.quake > 0.3 && lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, Math.min(1, ev.quake + 0.3), P_SLAM);
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
+    if (ev.inkDim) inkBlind = 1;   // Orune answers the light with ink (hoarder.js)
     if (ev.slam) {
       shake = Math.min(1, shake + 2 * dt); slam();
       // Contact is per-frame; the tear is per collision. Rising edge only.
@@ -1726,7 +1727,8 @@ function update(dt, t) {
   // ~3 s (an envelope over the stored value, so it is never a second oxygen penalty),
   // and the lantern gutters for 1.2 s on top of its everyday flicker.
   lightDip = Math.max(0, lightDip - dt / 3);
-  lightK = player.light * (1 - 0.45 * lightDip);
+  inkBlind = Math.max(0, inkBlind - dt / 2.5);
+  lightK = player.light * (1 - 0.45 * lightDip) * (1 - 0.6 * inkBlind);
   lanternLight.intensity = (9 + 3.5 * Math.sin(t * 9) + 1.5 * Math.sin(t * 23)) * lightK * lanternGutter(dt, t);
   playerLightSrc.position.copy(player.pos);
   playerLightSrc.intensity = 8 + 40 * lightK;
