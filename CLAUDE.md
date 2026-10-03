@@ -491,13 +491,78 @@ Hidden or driven (`__power.drive`) frames never enter the window. `__perf.state(
 `__perf.log()` show the judge's reading and every transition; `?lab` adds
 `__perf.load` (ms busy-wait per frame) and `__perf.judgeHidden` for testing.
 
+### Perf harness — MEASURE THIS WAY (roadmap/perf-budget-oct.md, 2026-10-03)
+
+Every frame number taken before October 2026 was noise (+-3-6 ms) for three measured reasons:
+1. **The hidden Browser pane runs on the efficiency cores.** macOS gives a hidden renderer
+   background QoS: the same JS ran 3-4x slower (a fixed scalar kernel: 8-13 ms vs 2.1 ms in
+   node). Every CPU cost - update, three's submission - inflated with it, for minutes at a
+   time, with no other sign.
+2. **The GPU timer query is not a cost on this platform.** EXT_disjoint_timer_query on
+   ANGLE/Metal (Apple TBDR) sums command buffers that overlap each other and the previous
+   frame: it read 15-17 ms for frames whose whole serialised CPU+GPU cost was 6-11 ms, 22-31
+   ms with frames queued, ~17 ms under vsync whatever the load. `__gpu.median()` is kept but
+   means nothing as milliseconds; per-pass timer queries are worse.
+3. **Other GPU clients.** The iOS Simulator, a visible pane tab still running the game, a
+   user's Chrome tab: they share the GPU. `gcal` (below) shows it.
+
+THE HOST: a private headless Chrome over CDP, visible to itself (rAF live), normal QoS,
+dpr 2, vsync OFF so rAF is unthrottled and the frame interval IS the frame cost:
+`node tools/bench/cdp.mjs start 9021` (own --user-data-dir under $TMPDIR, debug port 9333;
+`BENCH_VSYNC=1` keeps a 60 Hz vsync for DRS/judge checks), then `eval "<expr>"`,
+`run file.js` (an async function body), `png out.png "<expr -> dataURL>"`, `reload`,
+`goto <url>`, `console`, `stop`. Serve with `python3 serve.py <port>` and load `?bench`
+(or `?lab`): game.js then imports `src/lib/bench.js` -> `window.__bench`. Kill both when done.
+
+THE HARNESS (`__bench`, src/lib/bench.js; the frame hooks are in game.js, owner tags in
+core.js):
+- `await __bench.setup('z0')` - a STANDARD VIEW: Sal stood on a fixed seabed spot, camera
+  settled, canvas CSS fixed at 1512x982 (`size(w,h)`), DRS pinned 1.0. Views: z0 (under the
+  raft), z0r (dense reef/kelp), z0b (Velkath's ridge), z1 (under rift 0), z1b (Orune, 21 u),
+  z2 (under rift 1), z2r (zone-2 reef). Site 0 only.
+- `await __bench.live(ms)` - the REAL rAF loop, governor uncapped: mean frame interval =
+  the pipelined frame cost. **The number to report.** `liveAB({a, b})` = ABBA paired;
+  noise floor +-0.1-0.3 ms on a quiet machine.
+- `await __bench.run({frames, mode, split, freeze, prof})` - the FIXED-STEP offscreen loop:
+  the game loop is held and the real update + sky + refraction + composer step back to back
+  (dt 1/60, a MessageChannel hop between frames). `mode 'sync'` (default) ends each frame
+  with a 1-px readPixels: `wall` = CPU + GPU serialised; `cpuUpdate` / `cpuSubmit` split
+  the CPU; `stages` = per composer pass ms / calls / tris (renderer.info accumulated across
+  the composer); `split: true` syncs after every stage (ranking only); `prof` books
+  update() wall time per system (game.js `pm()` marks); `cal` / `gcal` = CPU / GPU
+  calibration kernels (~2.1 / ~1.2 ms here; `slowCpu` / `busyGpu` flag a contaminated run).
+  `mode 'pipe'` = throughput without per-frame sync.
+- `ab({a, b})` / `noise()` - paired A/B on the stepped loop (wall deltas). Coarser than
+  liveAB under load; prefer liveAB.
+- `hide(/owner/)` - takes a system out of the camera by owning module (layers; a module
+  writing .visible each frame cannot undo it). Owners containing LIGHTS change the light
+  count (programs recompile, fewer lights) - their A/B is not the system's cost.
+- `draws()` - calls/triangles per owner and stage, INCLUDING the lantern's cube-shadow
+  draws (`@0:RenderPass shadow`), plus the top objects.
+- `capture()` / `diff(a,b)` / `png(cap)` - frozen-frame look checks (grain off). Post chain
+  is not deterministic frame to frame (A/A mean ~3-5 codes); for scene-content changes
+  compare under P bypass (`setPostBypass(true)`: A/A ~0.2-0.7). Compile-time changes
+  (shader patches): two loads, compare against an A/A pair of loads.
+- Cross-load ABBA (a branch against main): two worktrees served on two ports, alternate
+  `goto` A B B A, `setup` + `live` in each (see roadmap/perf-budget-oct.md Log).
+- Hazards: ANGLE/Metal DROPS a render pass whose target is cleared again before anything
+  reads it (a synthetic GPU load needs additive draws, no clears); any getBufferSubData /
+  readPixels / getError is a synchronous round trip that first drains Chrome's GPU-process
+  queue (the auto-exposure read cost 1.8 ms of main thread per call); under vsync a GPU
+  over its slot does NOT slow rAF (frames queue/drop) - the wall-time judge cannot see it,
+  `__gpu.lag()` (frames from a query's issue to readable: 1 = headroom, 2 = saturated) can.
+
+Measured 2026-10-03 (after perf-budget-oct, live, 1512x982 CSS): every zone 3.5-5.5 ms at
+1.0x and 5-7 ms at 1.5x on this machine; DRS (pace) holds 1.5x in every standard view.
+
 ### AAA pass 2 (2026-09-28, roadmap/aaa-motion-atmos.md)
 - DYNAMIC RESOLUTION: `core.js` RES_SCALE is the CEILING now; `setRenderScale` moves the
   live scale (floor 0.85) through the same coalesced applySize/flushSize path as a window
   resize. `postfx.js` `updateResScale` (inside samplePerf, so hidden/driven/idle-cap frames
-  never steer it) holds the GPU median at 55-78% of the governor slot. Acts before the
-  quality ladder. `__drs.state()`, `__drs.pin(x)` (pins and turns it off). To judge perf
-  in the pane: `__power.drive(false)` and `__power.set(60,60)`, or the judge sees nothing.
+  never steer it) steers on PACE + GPU BACKLOG since perf-budget-oct (the GPU timer it
+  used to hold at 55-78% of the slot is not a cost on ANGLE/Metal and parked DRS at its
+  floor; see "Perf harness" below). Acts before the quality ladder. `__drs.state()`,
+  `__drs.pin(x)` (pins and turns it off), `__drs.sig = 'timer'` = the old signal.
 - TEMPORAL AA + UPSCALING (`postfx.taa.js`, branch `taa`): the composer's LAST pass. The
   renderer's size (every composer target, `getSize`, `getDrawingBufferSize`, every uPix)
   is the INTERNAL resolution; the canvas drawing buffer is the OUTPUT resolution

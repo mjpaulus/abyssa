@@ -162,20 +162,24 @@ function calibrate() {
   calBest = Math.min(calBest, best);
   return best;
 }
-// GPU CALIBRATION: a fixed fragment workload (1024^2, 480 hash iterations a pixel, x4 draws) timed by
+// GPU CALIBRATION: a fixed fragment workload (1024^2, 96 hash iterations a pixel, x4 additive draws; ~1.5 ms here) timed by
 // a sync. When another process holds the GPU (the iOS Simulator, a visible Chrome tab, the
 // WindowServer compositing a video) this rises and every frame number with it.
 const gcRT = new THREE.WebGLRenderTarget(1024, 1024, { depthBuffer: false, type: THREE.HalfFloatType });
 const gcScene = new THREE.Scene(), gcCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 gcScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
   vertexShader: 'void main(){ gl_Position = vec4(position.xy, 0.0, 1.0); }',
-  fragmentShader: 'uniform float k; void main(){ vec2 p = gl_FragCoord.xy * 0.001; float a = k; for (int i = 0; i < 480; i++) { a = fract(sin(dot(p + a, vec2(12.9898, 78.233))) * 43758.5453); } gl_FragColor = vec4(a); }',
-  uniforms: { k: { value: 0 } }, depthTest: false, depthWrite: false
+  fragmentShader: 'uniform float k; void main(){ vec2 p = gl_FragCoord.xy * 0.001; float a = k; for (int i = 0; i < 96; i++) { a = fract(sin(dot(p + a, vec2(12.9898, 78.233))) * 43758.5453); } gl_FragColor = vec4(a); }',
+  uniforms: { k: { value: 0 } }, depthTest: false, depthWrite: false,
+  // ADDITIVE, no clears between draws: ANGLE/Metal drops a render pass whose target is
+  // cleared again before anything reads it, so cleared repeats measured nothing.
+  blending: THREE.AdditiveBlending, transparent: true
 })));
 gcScene.children[0].frustumCulled = false;
 let gcalBest = Infinity;
 function gpuCalibrate() {
-  const prev = renderer.getRenderTarget();
+  const prev = renderer.getRenderTarget(), ac = renderer.autoClear;
+  renderer.autoClear = false;
   renderer.setRenderTarget(gcRT); renderer.render(gcScene, gcCam); syncAll();   // compile + warm
   let best = Infinity;
   for (let r = 0; r < 5; r++) {
@@ -184,7 +188,7 @@ function gpuCalibrate() {
     syncAll();
     best = Math.min(best, performance.now() - t);
   }
-  renderer.setRenderTarget(prev);
+  renderer.setRenderTarget(prev); renderer.autoClear = ac;
   gcalBest = Math.min(gcalBest, best);
   return best;
 }

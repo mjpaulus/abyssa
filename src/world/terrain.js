@@ -864,9 +864,13 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   }
 }
 
-// ZONE SIGHT (config.js ZONE_SEEN): zone i is visible only once the camera is within 4 u of,
-// or under, zone i-1's floor at its own x, z. Two terrainH calls a frame.
-const SIGHT_MARGIN = 4;
+// ZONE SIGHT (config.js ZONE_SEEN): zone i is visible only once the camera is within
+// SIGHT_MARGIN of, or under, zone i-1's floor at its own x, z. Two terrainH calls a frame.
+// The follow camera rides only ~2-4 u over the seabed, so a 4 u margin left zone 1 drawn in
+// most of zone 0 (z0r, z0b). 0.5 u covers the gate's one-frame lag at any swim or fall
+// speed the camera reaches; and anything of zone i seen from just under zone i-1's floor
+// is >= 90 u away through the gap, where the water's transmittance is already ~e^-10.
+const SIGHT_MARGIN = 0.5;
 export function updateZoneSight(x, y, z) {
   const on = GLASS.zoneSight !== 0;
   ZONE_SEEN[0] = 1;

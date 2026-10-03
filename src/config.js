@@ -12,7 +12,7 @@ export const zoneBottom = i => zoneTop(i) - ZONE_H;
 // floor -- but the zone-0 seabed sits INSIDE zone 1's band (its lows are under -230), so
 // standing on most of zone 0 drew all of zone 1 (terrain, rocks, gardens, sculpted plants,
 // fauna, chimneys) under an opaque floor, and cast it into the lantern's cube shadow six
-// times over. ZONE_SEEN[i] is 0 while the camera is more than 4 u above zone i-1's floor at
+// times over. ZONE_SEEN[i] is 0 while the camera is more than 0.5 u above zone i-1's floor at
 // its own x, z: every ray from there into zone i crosses that single-valued heightfield
 // first (zone i lies wholly below it, rim walls included), so nothing of zone i can reach
 // the screen. Exact occlusion, not a distance cull: the frame is unchanged. Written once a
