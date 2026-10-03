@@ -175,7 +175,7 @@ function makeBeak(L) {
   grp.add(hu, hl);
   grp.scale.setScalar(1.25);
   L.body.add(grp);
-  L.beak = { grp, hu, hl, open: 0, ev: 0, ph: 0, snapN: 0 };
+  L.beak = { grp, hu, hl, open: 0, ev: 0, ph: 0, cyc: 0, snapN: 0 };
 }
 
 export function makeHoarder(idx, cfg) {
@@ -201,7 +201,7 @@ export function makeHoarder(idx, cfg) {
     revealT: -1, still: 0, writheK: 1, circleT: 0, circleCd: 0, circleDir: 1, behindNext: false,
     inkT: -1, inkCd: 0, inkedT: 0, glareT: 0, inkSaid: false, peekCd: 0,
     probeT: 0, probeArm: [-1, -1], probeAng: [0, 0], probeRot: 0, moveK: 0,
-    creepN: 0, creepAt: V3(), popN: 0, popAt: V3(), stillN: 0, cockN: 0, inkN: 0
+    creepN: 0, creepAt: V3(), popN: 0, popAt: V3(), popNext: 0, stillN: 0, cockN: 0, inkN: 0
   };
 
   // ---- skin ----
@@ -1185,21 +1185,21 @@ export function updateHoarder(L, dt, t, player) {
   // slides round it, sideways over the silt, and the next arm comes from where he is not
   // looking (with the longer cock as its tell)
   L.circleT -= dt; L.circleCd -= dt;
-  if (hunting && L.circleT > 0 && L.still <= 0 && !L.grab) {
+  if (hunting && L.circleT > 0 && L.still <= 0 && !L.grab && pd > L.collR + 5) {
     _p.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
     const dl = _p.length() || 1;
     const sp = L.speed * 0.2 * dt * smooth(L.circleT, 0, 0.6);
     L.pos.x += -_p.z / dl * sp * L.circleDir; L.pos.z += _p.x / dl * sp * L.circleDir;
   }
 
-  // ---- INK: the lantern held into her arms (three or more burning at once for a second)
+  // ---- INK: the lantern held into her arms (two or more burning at once, ~1.2 s in all)
   // is answered with ink. Tell: the siphon swells on a deep exhale (0.9 s). After: the
   // light cannot find her arms for 3 s, and no lash comes for 2.5 s.
   L.inkCd -= dt; L.inkedT -= dt;
   let burned = 0;
   for (const A of L.arms) if (A.recoil > 0.5) burned++;
-  L.glareT = hunting && burned >= 3 ? L.glareT + dt : Math.max(0, L.glareT - dt);
-  if (L.inkT < 0 && L.glareT > 1.0 && L.inkCd <= 0 && !L.grab && !reveal) { L.inkT = 0; L.inkN++; L.lashCd = Math.max(L.lashCd, INK_WIND + 2.5); }
+  L.glareT = hunting && burned >= 2 ? L.glareT + dt : Math.max(0, L.glareT - dt * 0.5);
+  if (L.inkT < 0 && L.glareT > 1.2 && L.inkCd <= 0 && !L.grab && !reveal) { L.inkT = 0; L.inkN++; L.lashCd = Math.max(L.lashCd, INK_WIND + 2.5); }
   if (L.inkT >= 0) {
     L.inkT += dt;
     if (L.inkT >= INK_WIND) {
@@ -1243,9 +1243,15 @@ export function updateHoarder(L, dt, t, player) {
     const A = L.arms[a];
     const liftGoal = L.calmed ? 0.15 : L.dormant ? 0 : 1;
     A.lift += clamp(liftGoal - A.lift, -dt * 0.35, dt * (0.18 + 0.04 * a));   // staggered
-    // flinch: the lit lantern near the arm's inner third
-    const nr = A.pts[RINGS >> 2].distanceTo(player.pos);
-    const flinch = hunting && lit && nr < 11 ? 1 : 0;
+    // flinch: the lit lantern near the arm (menace: anywhere along its inner 60% — she
+    // stands taller now, so the inner quarter alone rode over his head and the rite's
+    // "arms flinch from light" stopped answering; measured, then widened). An arm already
+    // THROWN (the strike, after its cock tell) is committed and does not flinch mid-air.
+    let nr = 1e9;
+    for (let i = RINGS >> 2; i <= (RINGS * 0.6 | 0); i += 5) { const d = A.pts[i].distanceToSquared(player.pos); if (d < nr) nr = d; }
+    nr = Math.sqrt(nr);
+    const thrown = A.lash > 0 && A.lash <= STRIKE_T;
+    const flinch = hunting && lit && !thrown && nr < 11 ? 1 : 0;
     if (flinch && A.recoil < 0.1) {
       L.mood = Math.min(1, L.mood + 0.3);
       // the burned arm flashes; and she starts round the light
@@ -1332,7 +1338,7 @@ export function updateHoarder(L, dt, t, player) {
       const sp = A.tipV.length();
       if (A.dustT <= 0 && sp > 0.6 && A.tip.y - _c.y < 2) {
         A.dustT = 0.45; emitDust(A.tip.x, _c.y - 0.5, A.tip.z, 4, 1.0);
-        if (A.tip.distanceTo(player.pos) < 12) { L.popN++; L.popAt.copy(A.tip); }
+        if (A.tip.distanceTo(player.pos) < 12 && L.t > L.popNext) { L.popN++; L.popAt.copy(A.tip); L.popNext = L.t + 1.2 + Math.random() * 1.6; }
       }
     } else {
       // awake idle: low and wide, reaching across the lair, tips just off the silt
@@ -1368,7 +1374,11 @@ export function updateHoarder(L, dt, t, player) {
     L.grab.t += dt;
     _p.copy(L.head).sub(player.pos);
     const d = _p.length() || 1;
-    if (d > L.R * 0.9) player.vel.addScaledVector(_p.divideScalar(d), 14 * dt);
+    // (menace: she rears and looms now, so the head rides over her own mantle; the drag
+    // stops short of her contact shell or a grab became a slam and a torn dress — measured)
+    _p.divideScalar(d);
+    if (d > L.R * 0.9 && pd > L.collR + 4) player.vel.addScaledVector(_p, 14 * dt);
+    else if (pd < L.collR + 3) { const vin = player.vel.dot(_p); if (vin > 0) player.vel.addScaledVector(_p, -vin); }   // held at the beak, not into her
     ev.lightDrain += dt * 0.12;
     if (L.grab.t > 5 || L.calmed) { L.arms[L.grab.arm].recoil = 1; L.grab = null; }
   }
@@ -1394,10 +1404,16 @@ export function updateHoarder(L, dt, t, player) {
   {
     const Bk = L.beak;
     Bk.ev += ((grabK ? 1 : hunting ? 0.2 * L.loomE : 0) - Bk.ev) * Math.min(1, dt * 2);
-    const was = Bk.open;
-    if (grabK) { Bk.ph += dt * 1.9; Bk.open = Math.pow(0.5 + 0.5 * Math.sin(Bk.ph * TAU * 0.5), 1.6); }
-    else Bk.open += ((hunting ? 0.1 + 0.12 * (0.5 + 0.5 * Math.sin(L.t * 1.3)) : 0) - Bk.open) * Math.min(1, dt * 3);
-    if (was > 0.3 && Bk.open < 0.08) Bk.snapN++;
+    // held: the beak opens and SNAPS shut about once a second (each closing is a click)
+    if (grabK) {
+      Bk.ph += dt * 1.9;
+      Bk.open = Math.pow(0.5 + 0.5 * Math.sin(Bk.ph * Math.PI), 1.6);
+      const cyc = Math.floor(Bk.ph / 2 + 0.25);
+      if (cyc !== Bk.cyc) { Bk.cyc = cyc; if (Bk.ph > 0.5) Bk.snapN++; }
+    } else {
+      Bk.ph = 0; Bk.cyc = 0;
+      Bk.open += ((hunting ? 0.1 + 0.12 * (0.5 + 0.5 * Math.sin(L.t * 1.3)) : 0) - Bk.open) * Math.min(1, dt * 3);
+    }
   }
 
   poseHoarder(L, dt, player);

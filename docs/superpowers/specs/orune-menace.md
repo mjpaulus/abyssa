@@ -68,4 +68,4 @@ predatory mass. Tone holds: quiet dread, brass-age, never neon, never cartoon.
 | the freeze -> ambush lash | breathing stops, the bed goes silent, skin darkens, pupils blow round; then the arm blanches and cocks (0.45-0.6 s) before it throws |
 | lash from behind (after circling the light) | longer cock (0.6 s), the pale arm, a positional pop behind him |
 | grab -> beak | "IT HAS YOU. CUT IT.", the mantle rears to bare the beak, the beak snaps in time with a click |
-| ink (the lantern answered) | the siphon swells on a deep exhale ~0.9 s before the cloud; no lash for 2.5 s after |
+| ink (the lantern held into two arms ~1.2 s) | the siphon swells on a deep exhale ~0.9 s before the cloud; no lash for 2.5 s after |
