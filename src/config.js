@@ -416,11 +416,14 @@ export const GLASS = {
   //     stand against in silhouette (the ROV-footage read), never a lifted black.
   //   bio* — the reef's own light: while Mhor is absent his five borrowed pool lights
   //     ride the five nearest bioluminescent colonies (sea pens, whips, crinoids), cold,
-  //     dim, decay 2, breathing with the polyp wave and flaring on a touch.
+  //     decay 2, range bioR, breathing with the polyp wave and flaring on a touch. Only
+  //     colonies bioNear..bioReach from Sal: inside the lantern's pool the flame out-lights
+  //     them 20:1 and the lit BRDF over the foreground was the lever's only GPU cost. At
+  //     bioI 5 the pocket was invisible past 10 u; 18 reads as a soft cold patch on the ash.
   abyss: {
     on: 1,
     silt: 0x857565, grav: 0x4a3e37, rock: 0x22171a,
-    bioI: 3.2, bioR: 9.0, bioFlash: 9.0, bioCol: 0x4aa89a, bioScatter: 0.08, bioReach: 42, bioMinW: 2.5,
+    bioI: 18.0, bioR: 8.0, bioFlash: 30.0, bioCol: 0x5c9f96, bioScatter: 0.08, bioReach: 42, bioNear: 9, bioMinW: 2.5,
     // the eye in the abyss (postfx.exposure.js): the zone-2 exposure fence and key
     expLo: 0.90, expHi: 1.30, expKey: -4.4,
     // the film finish for zone 2 (postfx.js): (contrast, pivot, toe weight, shadow sat), toe rgb

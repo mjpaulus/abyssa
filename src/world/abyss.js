@@ -18,8 +18,8 @@
 //     cold blue-green, dim, decay 2 (physical), breathing with the polyp wave and FLARING
 //     when a colony is touched (stir.js pulseAt: Sal's footfall, the sonar, a slam), so
 //     a startled reef lights its own sediment, its neighbours and whatever swims through
-//     it. The nearest lit colony is a natural lamp-slot-B candidate, so the murk round it
-//     glows faintly too (userData.scatter keeps that a haze, not a fog bank). When Mhor
+//     it. They are kept OUT of lamp slot B (see below), so they light surfaces and not the
+//     murk. When Mhor
 //     arrives hunter.js takes the lights back the same frame: the reef goes dark as the
 //     hunter comes.
 //
@@ -137,7 +137,11 @@ export function updateAbyss(dt, t, lev, sal) {
     pickT = now;
     for (let s = 0; s < nS; s++) sWant[s] = -1;
     if (k > 0 && hunter && nCol) {
-      const R2 = A.bioReach * A.bioReach;
+      // Not inside the lantern's own pool: within ~bioNear of Sal the flame out-lights a
+      // colony 20:1 (measured invisible there), and a point light's BRDF over a pool that
+      // fills the foreground was the whole GPU cost of this lever. The reef's light earns
+      // its keep out where the lantern does not reach.
+      const R2 = A.bioReach * A.bioReach, N2 = A.bioNear * A.bioNear;
       for (let s = 0; s < nS; s++) {
         let best = -1, bd = R2;
         for (let c = 0; c < nCol; c++) {
@@ -145,7 +149,7 @@ export function updateAbyss(dt, t, lev, sal) {
           for (let q = 0; q < s; q++) if (sWant[q] === c) { taken = true; break; }
           if (taken) continue;
           const dx = CX[c] - sal.pos.x, dz = CZ[c] - sal.pos.z, d2 = dx * dx + dz * dz;
-          if (d2 < bd) { bd = d2; best = c; }
+          if (d2 < bd && d2 >= N2) { bd = d2; best = c; }
         }
         sWant[s] = best;
       }
@@ -180,8 +184,12 @@ export function updateAbyss(dt, t, lev, sal) {
     pl.color.copy(_col);
     pl.distance = A.bioR * (0.85 + 0.15 * wk);
     pl.decay = 2.0;
+    // NOT a lamp-B candidate (lampBias 0 scores it out of water.js's pick): a colony's
+    // glow in the water read as a floating orb at any gain that showed, and slot B costs
+    // two atan on every fogged fragment of the frame -- GPU parity keeps the slot empty
+    // until something that earns it (the furnace, Mhor) is in play.
     pl.userData.scatter = A.bioScatter;
-    pl.userData.lampBias = undefined;
+    pl.userData.lampBias = 0;
     if (pl.intensity > 0.01) lit++;
   }
   abyssState.lit = lit;
