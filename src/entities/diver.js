@@ -2147,6 +2147,7 @@ const CZ_HEEL = -0.16, CZ_FLAT = 0.02, CZ_BALL = 0.315;
 // seabed run, 118 -> 110 steps/min, step / leg 0.89 -> 0.95 (the leg is 1.50 now, not 1.39).
 const GAIT_STRIDE0 = 2.9;
 const GAIT = { stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, rise: 30,
+  hoStart: HO_START, thOff: TH_OFF, thPow: TH_POW, thStrike: TH_STRIKE, claimPow: 2,
   // THE WEIGHTED SUIT (Michael, 2026-10-01: "his swimming and walking still dont seem like a person
   // in a weighted suit would move"; docs/superpowers/specs/sal-weighted-suit-motion.md). Every
   // earlier number here was tuned toward a man's dry-land walk. A Mark V diver carries ~90 kg of
@@ -2316,7 +2317,7 @@ const _qH = new THREE.Quaternion(), _qA = new THREE.Quaternion(), _qB = new THRE
 const _eA = new THREE.Euler(), _X1 = new THREE.Vector3(1, 0, 0);
 const _vA = V3(), _vB = V3(), _vC = V3(), _vD = V3();
 // Live probe surface for the slip test — game.js never reads it, but the browser can.
-export const ikDebug = { slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0, gd: 0, gdd: 0 };
+export const ikDebug = { wxR: 0, wyR: 0, wzR: 0, wxL: 0, wyL: 0, wzL: 0, slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0, gd: 0, gdd: 0 };
 
 // ===========================================================================
 // COMPLIANCE — the spring-driven skeleton.
@@ -2454,14 +2455,15 @@ const LEG_CH = [
 // Written into _vA.x/_vA.y purely to avoid a return allocation.
 function rollThrough(u, out) {
   let th, cz;
+  const hoS = GAIT.hoStart, thOff = GAIT.thOff;
   if (u < HS_END) {
     const q = u / HS_END, e = q * q * (3 - 2 * q);
-    th = TH_STRIKE * (1 - e); cz = CZ_HEEL;
-  } else if (u < HO_START) {
+    th = GAIT.thStrike * (1 - e); cz = CZ_HEEL;
+  } else if (u < hoS) {
     th = 0; cz = CZ_FLAT;
   } else {
-    const q = (u - HO_START) / (1 - HO_START);
-    th = TH_OFF * Math.pow(q, TH_POW);                    // the heel breaks slowly, then goes
+    const q = (u - hoS) / (1 - hoS);
+    th = thOff * Math.pow(q, GAIT.thPow);                 // the heel breaks slowly, then goes
     cz = CZ_BALL;
   }
   return out.set(th, cz, 0);
@@ -2671,9 +2673,10 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     } else if (ft.stT >= 0) { ft.stT = -1; ft.lift = 0; shufX = 0; }
 
     // ---- TARGET. One world-space ankle point, however it was arrived at. ----
-    let th, cz, wIK;
+    let th, cz, wIK, rl = 0;
     if (inStance) {
       rollThrough(sp, _vB); th = _vB.x + groundPitch(ft.ax + ox, ft.az + oz); cz = _vB.y;
+      rl = groundRoll(ft.ax + ox, ft.az + oz);
       ankleOverContact(th, cz, _vC);
       // THE ROCKERS. The point in contact is not the anchor: the foot pivots on its HEEL
       // as it slaps down and on its BALL as the heel lifts, and a pivot does not move. The
@@ -2713,7 +2716,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       const latL = sgn * (HIP_X + gWide) + ft.lat;
       let lx = player.pos.x + player.vel.x * tRem + sy * ahead + cy * latL;
       let lz = player.pos.z + player.vel.z * tRem + cy * ahead - sy * latL;
-      th = TH_STRIKE + (TH_OFF - TH_STRIKE) * revF + groundPitch(lx, lz); cz = CZ_HEEL + (CZ_BALL - CZ_HEEL) * revF;
+      th = GAIT.thStrike + (TH_OFF - GAIT.thStrike) * revF + groundPitch(lx, lz); cz = CZ_HEEL + (CZ_BALL - CZ_HEEL) * revF;
       // CLEARANCE. Blending the authored swing toward a target ON the ground pulled the
       // boot down through mid-swing: measured, the swinging sole skimmed the seabed at 2.4
       // u/s at ~70% of every swing. The landing target rides on an arc that only comes
@@ -2766,8 +2769,13 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     // amplitude, so a slow step (or the decay of a stop) swings a nearly straight leg —
     // which, under a pelvis that now stands at its true height, put the swinging boot
     // 8 cm into the seabed and dragged it. A swinging sole is held a few cm clear.
+    // ...and a PLANTED one is held on it: where the hill bends under the boot faster than the
+    // pitch sample can follow (a crest, a grade past the pitch clamp), the heel or ball edge
+    // would otherwise dip into the seabed. In stance the clearance is zero, so on true ground
+    // this never moves the target; it only lifts an edge that would sink. Seabed only: on the
+    // planks the anchor rides the raft's own frame, which soleB (a world height) does not.
     let lifted = false;
-    if ((!inStance || w < 0.999) && ikOn > 1e-3 && !standing) {
+    if ((!inStance || w < 0.999 || gdOn) && ikOn > 1e-3 && !standing) {
       _vB.set(tx, ty, tz).applyMatrix4(_mH);
       const fa = hxF + kF + pc[ch[3]], thE = fa + (th - fa) * w;
       const c = Math.cos(thE), s = Math.sin(thE);
@@ -2812,7 +2820,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     seg.end.rotation.set(thAbs - _ik[0] - _ik[2], 0, 0);
     if (w > 1e-3) {
       _qA.setFromEuler(_eA.set(_ik[0], 0, _ik[1], 'XYZ')).multiply(_qB.setFromAxisAngle(_X1, _ik[2])).premultiply(_qH);
-      _qB.setFromEuler(_eA.set(th, yawF, 0, 'YXZ'));
+      _qB.setFromEuler(_eA.set(th, yawF, rl, 'YXZ'));
       _qC.copy(_qA).invert().multiply(_qB);                 // the world-level foot, in the shank's frame
       seg.end.quaternion.slerp(_qC, w);
     }
@@ -2829,6 +2837,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     if (inStance && ft.pin) ft.slip += Math.hypot(ex - ft.ex, ez - ft.ez);   // accumulated intra-stance travel
     ft.ex = ex; ft.ez = ez; ft.pin = inStance && ft.planted;
     ft.wx = nx; ft.wy = _vB.y - _vC.y; ft.wz = nz; ft.cz = cz;
+    if (i === 0) { ikDebug.wxR = nx; ikDebug.wyR = ft.wy; ikDebug.wzR = nz; } else { ikDebug.wxL = nx; ikDebug.wyL = ft.wy; ikDebug.wzL = nz; }
     if (i === 0) { ikDebug.slipR = ft.slip; ikDebug.plR = (ft.planted ? 1 : 0) + (inStance ? 2 : 0); ikDebug.dR = ft.duty; }
     else { ikDebug.slipL = ft.slip; ikDebug.plL = (ft.planted ? 1 : 0) + (inStance ? 2 : 0); ikDebug.dL = ft.duty; }
   }
@@ -2894,9 +2903,11 @@ const HEAD_CTR = 0.8;           // how much of the spine's yaw the neck takes ba
 // kH 0.6 -> 0.5 (salprop): the longer stride swung the bonnet to 31% of the hips; 0.5 holds it at ~22%
 // kHDeck: on the planks the trunk travels WITH the pelvis over each boot (a waddle is a whole-
 // body shift onto the loaded leg, not a hip swinging under a steady chest).
-const CHAIN = { on: 1, kH: 0.5, kHDeck: 0.55, yawK: 0.5, headK: 0.8, f: 22, d: 0.9, lag: 0.5, lagF: 5 };
+// vF/vMax: the carried load's vertical compliance on the spine (see THE CARRIED LOAD).
+const CHAIN = { on: 1, kH: 0.5, kHDeck: 0.55, yawK: 0.5, headK: 0.8, f: 22, d: 0.9, lag: 0.5, lagF: 5, vF: 10, vMax: 0.02 };
 window.__chain = CHAIN;
 const chR = { x: 0, v: 0 }, chY = { x: 0, v: 0 }, hdC = { x: 0, v: 0 };
+const spV = { x: 0, v: 0 }; let spVInit = false;
 let peerT = -1, peerW = 0;
 const PEER_DUR = 4.2;
 let prevBurstT = 0, burstW = 0;
@@ -2923,10 +2934,24 @@ function groundD(x, z) {
   return clamp(terrainH(x, z, slopeZi) - gdC, -0.42, 0.42);
 }
 // Absolute foot pitch that lays a sole on the slope along his heading (toe-down +).
+// The clamp was 0.45 rad (25.8 deg): the zone-0 rims run to 30 deg locally, and going DOWN
+// them the sole stopped tilting 4-5 deg short of the hill, so the planted HEEL (the uphill
+// end) stood 3.5-4.8 cm in the seabed for whole stances (measured on the fixed-step harness,
+// 7 of ~450 planted frames over 3 cm on a 0.5 grade). 0.62 (35.5 deg) covers every grade he
+// can walk; anything steeper is caught by the stance floor in driveLegs.
 function groundPitch(x, z) {
   if (!gdOn) return 0;
   const a = terrainH(x + gdFx * 0.22, z + gdFz * 0.22, slopeZi), b = terrainH(x - gdFx * 0.22, z - gdFz * 0.22, slopeZi);
-  return clamp(-Math.atan((a - b) / 0.44), -0.45, 0.45);
+  return clamp(-Math.atan((a - b) / 0.44), -0.62, 0.62);
+}
+// ...and ACROSS it. The sole used to stay level side to side, so walking along a 26 deg
+// side-slope the downhill-side edge stood 3.5 cm in the seabed (measured). The planted lead
+// plate rolls onto the hill; the ankle takes it (a weighted boot is laced stiff, but the
+// foot inside it is not). Read along the boot's own +X (the sole's right edge).
+function groundRoll(x, z) {
+  if (!gdOn) return 0;
+  const sx = Math.cos(yawF) * 0.10, sz = -Math.sin(yawF) * 0.10;
+  return clamp(Math.atan((terrainH(x + sx, z + sz, slopeZi) - terrainH(x - sx, z - sz, slopeZi)) / 0.20), -0.45, 0.45);
 }
 
 // THE FIRST STEP: start the clock where the feet ARE. Starting from a stand always
@@ -2980,7 +3005,7 @@ function pelvisDrop(dt, player, gw) {
     // how high this hip may be and still reach this ankle with the knee at kCap
     const top = ft.ty + Math.sqrt(Math.max(dCap * dCap - dh2, 0.01));
     // a swing boot's claim fades in with its IK weight (squared: it only binds late)
-    const lim = top - _hj.y + (1 - ft.tw * ft.tw) * 0.6;
+    const lim = top - _hj.y + (1 - Math.pow(ft.tw, GAIT.claimPow)) * 0.6;
     if (i === 0) ikDebug.limR = lim; else ikDebug.limL = lim;
     need = need > 1e8 ? lim : smin(need, lim, GAIT.soft);
   }
@@ -3609,6 +3634,21 @@ export function updateDiver(dt, t, player) {
   sp.rotation.set(pc[CH.sPitch] - 0.4 * rcP.x, pc[CH.sYaw] + rcY.x + chY.x, pc[CH.sRoll] + 0.3 * rcR.x + chR.x);
   if (ikOn > 1e-3) b.position.y += pelvisDrop(dt, player, gw) * ikOn;
   else { pelS.x = 0; pelS.v = 0; pelInit = false; }
+  // THE CARRIED LOAD (polish-leftovers-oct). Helmet and corselet are ~25 kg resting on the
+  // shoulders through the corselet's pads and the dress, over a spine that gives: the load
+  // rides the pelvis's step-to-step rise and fall through that compliance, not rigidly.
+  // The spine's base follows the hips on a soft critically-damped spring, its lag held to
+  // CHAIN.vMax, so the bonnet keeps the walk's rhythm with the sharp heel-strike dips taken
+  // out. Seabed only: in the water the air in the bonnet takes the load off the shoulders
+  // ("the helmet merely lifts the weight of the apparatus off his shoulders", 1943 manual),
+  // so it rides loose; on the planks the whole weight presses it down and the deck bob
+  // (0.04 already, its target) stays as it was. Off the bottom there are no steps to filter.
+  {
+    const by = b.position.y, gV = gb * ikOn * (1 - ladderF) * (1 - deckF);
+    if (!spVInit || gV < 1e-3) { spV.x = by; spV.v = 0; spVInit = true; }
+    spring(spV, by, dt, CHAIN.vF, 1.0);
+    sp.position.y = 0.20 + clamp(spV.x - by, -CHAIN.vMax, CHAIN.vMax) * gV;
+  }
 
   // brass helmet lags the torso, then over-settles
   // Gaze stabilisation: HEAD_CTR takes the spine's INTENT yaw (look-lead, slash, peer) back
