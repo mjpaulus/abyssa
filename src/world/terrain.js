@@ -603,6 +603,7 @@ function zoneMat(silt, grav, rock, caust, wet) {
     uWet: { value: wet }
   };
   m.onBeforeCompile = sh => { sh.__zone = u; compileTerrain(sh); };
+  m.userData.zoneU = u;
   return m;
 }
 

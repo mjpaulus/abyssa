@@ -43,6 +43,7 @@ import { buildRain, updateRain, setRainWeather } from './world/rain.js';
 import { buildLightning, updateLightning, setBoltRibbons } from './world/lightning.js';
 import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.js';
 import { buildGardens, updateGardens, reseedGardens } from './world/gardens.js';
+import { updateAbyss } from './world/abyss.js';
 import { buildFauna, updateFauna, reseedFauna } from './world/fauna.js';   // FAUNA PATCH
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
@@ -1735,6 +1736,9 @@ function update(dt, t) {
   // what the eye is sitting in decides the optics. updateCamera runs below, so this reads
   // last frame's position — half a unit at full swim speed, against a 24-unit scale height.
   updateAtmosphere(depth01, camera.position.y);
+  // THE ABYSS READS (world/abyss.js): zone-2 floor palette + the reef's own light on
+  // Mhor's idle pool lights. After the sleeper staged the pool, before the lamp pick.
+  safe('abyss', () => updateAbyss(dt, t, lev, player));
   updateLighting(depth01); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
   setLampOccluders(diverOccluders(lampOcc));   // Sal's chest and bonnet shadow the glow
 

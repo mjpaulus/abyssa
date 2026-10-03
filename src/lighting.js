@@ -1,7 +1,7 @@
 // Scene lighting rig. OWNED BY: lighting/post agent.
 import * as THREE from 'three';
 import { scene, camera } from './core.js';
-import { SUN, SURFACE_Y, GLASS, zoneBottom } from './config.js';
+import { SUN, SURFACE_Y, GLASS, zoneBottom, abyssK } from './config.js';
 import { V3, clamp } from './lib/math.js';
 // SKY DRAMA ambience, published by water.js's updateWater: {fog, moon}, both 0..1.
 // Imported rather than wired through game.js because it is a READ of a value water.js
@@ -657,6 +657,18 @@ function relight(air, depth01) {
   // and the exposure clamp tightens with depth, so the key has to carry the zone itself.
   lanternLight.intensity *= _lk.xLant + _lk.xLantDeep * depth01;
   lanternLight.decay = _lk.lantDecay;
+  // THE ABYSS READS (GLASS.abyss lantK / lantDecay): zone 2's key, eased in over the zone top.
+  const ak = abyssK(camera.position.y);
+  if (ak > 0) {
+    const AB = GLASS.abyss;
+    lanternLight.intensity *= 1 + (AB.lantK - 1) * ak;
+    lanternLight.decay += (AB.lantDecay - lanternLight.decay) * ak;
+    // No light reaches the abyss from above: the camera-riding cool directional is a fill
+    // from nowhere there, and once the floor turned pale it lit every slope in the frame
+    // cold-blue. It keeps a trace (Sal's edge) and the lantern, the reef's own light and
+    // lib/surface.js's per-light backscatter rim carry the separation instead.
+    rim.intensity *= 1 + (AB.rimK - 1) * ak;
+  }
   playerLightSrc.intensity *= _lk.xFill;
   playerLightSrc.distance = _lk.fillDist;
   // What is left of the fill is the LANTERN'S OWN BOUNCE: light off the sand and the
