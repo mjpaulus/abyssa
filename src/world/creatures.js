@@ -6,7 +6,7 @@
 // motion and glow all live in vertex shaders so the frame cost stays flat.
 import * as THREE from 'three';
 import { scene, camera, renderer } from '../core.js';
-import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand, ZONE_SEEN } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, V3 } from '../lib/math.js';
 import { glowTex } from '../lib/textures.js';
@@ -1528,7 +1528,7 @@ function updateJellies(dt, t) {
   const cy = camera.position.y;
   for (const J of jellies) {
     // zone band (terrain/fauna's rule) + the fog wall, with hysteresis
-    const band = cy < zoneTop(J.zi) + 120 && cy > zoneBottom(J.zi) - 150;
+    const band = zoneBand(J.zi, cy);
     const jd = J.pos.distanceTo(camera.position) - J.scale * 8;
     J.culled = !band || (J.culled ? jd > cullR - 10 : jd > cullR + 10);
     const step = dt * J.rate;
@@ -1804,7 +1804,7 @@ export function updateCreatures(dt, t) {
   // three zones every frame regardless of where the camera was.
   const cy = camera.position.y;
   for (let zi = 0; zi < 3; zi++)
-    sparksZ[zi].visible = cy < zoneTop(zi) + 120 && cy > zoneBottom(zi) - 150;
+    sparksZ[zi].visible = zoneBand(zi, cy);
   // drifters live in zones 1-2 only (see driftArrays placement)
-  drifters.visible = cy < zoneTop(1) + 120;
+  drifters.visible = cy < zoneTop(1) + 120 && ZONE_SEEN[1] === 1;
 }

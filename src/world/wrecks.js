@@ -44,7 +44,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
-import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
+import { WORLD_R, riftPos, zoneTop, zoneBottom, ZONE_SEEN } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { rng, clamp, fbm, V3 } from '../lib/math.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, ironPlateSet } from '../lib/textures.js';
@@ -1725,7 +1725,7 @@ export function updateWrecks(dt, t) {
     const W = WRECKS[i];
     // Zone gating: nothing is visible from the neighbouring zone anyway, and this keeps
     // three wrecks' worth of geometry out of the culler for most of the game.
-    const vis = cy < zoneTop(W.zi) + 110 && cy > zoneBottom(W.zi) - 130;
+    const vis = ZONE_SEEN[W.zi] === 1 && cy < zoneTop(W.zi) + 110 && cy > zoneBottom(W.zi) - 130;
     W.grp.visible = vis;
     if (!vis) continue;
     if (!W.taken) {

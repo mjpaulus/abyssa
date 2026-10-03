@@ -362,6 +362,50 @@ async function draws(o = {}) {
   return { byOwner: rows, topObjects: top };
 }
 
+// ---- LOOK: frozen-frame captures for before/after ---------------------------------------
+// capture(): `frames` frozen frames (dt 1e-4: the world, the jitter cycle and the grain all
+// but stand still), then the canvas read back whole. diff(a, b): mean |delta| per channel,
+// the 99.9th percentile, and the share of pixels off by more than 2 and 8 codes. With TAA on,
+// two captures `frames` apart sit on different jitter phases: run A/A first for the floor.
+let capBuf = null;
+async function capture(o = {}) {
+  const T = window.__taa, gk = T ? T.grain() : 1;
+  if (T && !o.grain) T.grain(0);   // film grain is a fresh hash every frame: off for comparisons
+  try { await run({ frames: o.frames || 24, warm: 0, prof: false, freeze: true, gcal: false }); }
+  catch (e) { if (T) T.grain(gk); throw e; }
+  const c = renderer.domElement, W = c.width, Hh = c.height;
+  if (!capBuf || capBuf.length !== W * Hh * 4) capBuf = new Uint8Array(W * Hh * 4);
+  holdOn();
+  try {
+    stepFrame({ freeze: true, mode: 'sync' }, []);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    gl.readPixels(0, 0, W, Hh, gl.RGBA, gl.UNSIGNED_BYTE, capBuf);
+  } finally { holdOff(); if (T) T.grain(gk); }
+  return { w: W, h: Hh, px: capBuf.slice() };
+}
+function diff(a, b) {
+  if (a.w !== b.w || a.h !== b.h) return null;
+  const n = a.w * a.h, hist = new Uint32Array(256);
+  let sum = 0, gt2 = 0, gt8 = 0;
+  for (let i = 0; i < n; i++) {
+    const k = i * 4;
+    const d = Math.max(Math.abs(a.px[k] - b.px[k]), Math.abs(a.px[k + 1] - b.px[k + 1]), Math.abs(a.px[k + 2] - b.px[k + 2]));
+    sum += d; hist[d]++; if (d > 2) gt2++; if (d > 8) gt8++;
+  }
+  let acc = 0, p999 = 0; for (let d = 0; d < 256; d++) { acc += hist[d]; if (acc >= n * 0.999) { p999 = d; break; } }
+  return { mean: +(sum / n).toFixed(4), p999, gt2: +(gt2 / n).toFixed(5), gt8: +(gt8 / n).toFixed(5) };
+}
+// PNG of a capture (for eyes): data URL, downscaled by `s`.
+function png(cap, s = 0.5) {
+  const W = Math.round(cap.w * s), Hh = Math.round(cap.h * s), cv = document.createElement('canvas');
+  cv.width = cap.w; cv.height = cap.h;
+  const ctx = cv.getContext('2d'), im = ctx.createImageData(cap.w, cap.h);
+  for (let y = 0; y < cap.h; y++) im.data.set(cap.px.subarray((cap.h - 1 - y) * cap.w * 4, (cap.h - y) * cap.w * 4), y * cap.w * 4);
+  ctx.putImageData(im, 0, 0);
+  const o = document.createElement('canvas'); o.width = W; o.height = Hh; o.getContext('2d').drawImage(cv, 0, 0, W, Hh);
+  return o.toDataURL('image/png');
+}
+
 // Fix the canvas's CSS box so the bench measures the same pixel count whatever the pane
 // is doing (a hidden pane reports 0x0; the emulated viewport is cleared between turns).
 function size(w, h) {
@@ -405,5 +449,5 @@ async function setup(view = 'z0', o = {}) {
 
 export function installBench(hooks) {
   H = hooks;
-  window.__bench = { VIEWS, setup, calibrate, gpuCalibrate, run, live, liveAB, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
+  window.__bench = { VIEWS, setup, calibrate, gpuCalibrate, run, live, liveAB, capture, diff, png, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
 }

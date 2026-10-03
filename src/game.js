@@ -5,7 +5,7 @@ import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CF
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH, fillTerrain } from './world/terrain.js';
+import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
@@ -1265,6 +1265,8 @@ function update(dt, t) {
   setRayDim(getVolumetrics() ? 0.55 : 1);
 
   // Ambient world animation runs even behind the title screen. Decorative: each is fenced.
+  // Zone sight first: every band gate below reads it (config.js ZONE_SEEN).
+  updateZoneSight(camera.position.x, camera.position.y, camera.position.z);
   if (window.__breakAmbient) { window.__breakAmbient = 0; safe('probe', () => { throw new Error('probe: injected ambient throw'); }); }
   safe('flora', () => updateFlora(dt, t));
   safe('gardens', () => updateGardens(dt, t));

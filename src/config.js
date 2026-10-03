@@ -7,6 +7,19 @@ export const RIFT_R = 16;
 
 export const zoneTop = i => -(40 + i * (ZONE_H + ZONE_GAP));
 export const zoneBottom = i => zoneTop(i) - ZONE_H;
+// ZONE SIGHT (roadmap/perf-budget-oct.md). The camera-Y band gates (zoneTop + 120 /
+// zoneBottom - 150) overlap 180 u through every rift so a descent never shows a missing
+// floor -- but the zone-0 seabed sits INSIDE zone 1's band (its lows are under -230), so
+// standing on most of zone 0 drew all of zone 1 (terrain, rocks, gardens, sculpted plants,
+// fauna, chimneys) under an opaque floor, and cast it into the lantern's cube shadow six
+// times over. ZONE_SEEN[i] is 0 while the camera is more than 4 u above zone i-1's floor at
+// its own x, z: every ray from there into zone i crosses that single-valued heightfield
+// first (zone i lies wholly below it, rim walls included), so nothing of zone i can reach
+// the screen. Exact occlusion, not a distance cull: the frame is unchanged. Written once a
+// frame by terrain.js updateZoneSight (game.js, before the ambient updates); GLASS.zoneSight
+// 0 = the old bands (A/B).
+export const ZONE_SEEN = new Uint8Array([1, 1, 1]);
+export const zoneBand = (i, y) => ZONE_SEEN[i] === 1 && y < zoneTop(i) + 120 && y > zoneBottom(i) - 150;
 
 // Deterministic rift (zone exit) location per zone.
 export function riftPos(i) {

@@ -36,7 +36,7 @@
 // shared-program hazard). Materials are site-invariant; only layout re-rolls.
 import * as THREE from 'three';
 import { scene, camera } from '../core.js';
-import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
+import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
@@ -1317,7 +1317,7 @@ export function updateGardens(dt, t) {
   // Depth bands: flora.js:780's law — the zone(s) around the camera only.
   const y = camera.position.y, off = !!window.__noGardens;   // __noGardens = A/B kill switch
   for (let zi = 0; zi < 3; zi++)
-    zones[zi].visible = !off && y < zoneTop(zi) + 120 && y > zoneBottom(zi) - 150;
+    zones[zi].visible = !off && zoneBand(zi, y);
   plantTick();   // (plants) after the gates: the batches mirror their hosts' visibility
 }
 

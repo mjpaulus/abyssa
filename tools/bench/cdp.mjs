@@ -9,6 +9,7 @@
 //   node tools/bench/cdp.mjs start [port=9021] [w=1512] [h=982]  -> launches Chrome, opens ?bench
 //   node tools/bench/cdp.mjs eval "<js expression, await ok>"     -> prints the JSON result
 //   node tools/bench/cdp.mjs run probe.js                          -> the file is an async function body
+//   node tools/bench/cdp.mjs png out.png "<expr -> data URL>"       -> writes the PNG (e.g. __bench.png(window.cap))
 //   node tools/bench/cdp.mjs reload                                -> fresh load of the page
 //   node tools/bench/cdp.mjs console                               -> console lines since load
 //   node tools/bench/cdp.mjs stop
@@ -64,7 +65,7 @@ if (cmd === 'start') {
   if (existsSync(STATE)) { const s = JSON.parse(readFileSync(STATE, 'utf8')); try { process.kill(s.pid); } catch (e) { /* gone */ } }
   try { execSync(`pkill -f "user-data-dir=${join(DIR, 'profile')}"`); } catch (e) { /* none */ }
   console.log('stopped');
-} else if (cmd === 'eval' || cmd === 'run' || cmd === 'reload' || cmd === 'console') {
+} else if (cmd === 'eval' || cmd === 'run' || cmd === 'png' || cmd === 'reload' || cmd === 'console') {
   const c = rpc(await pageWs());
   await c.ready;
   if (cmd === 'reload') {
@@ -76,9 +77,11 @@ if (cmd === 'start') {
     else if (e.method === 'Runtime.exceptionThrown') console.log('EXC', e.params.exceptionDetails.text, e.params.exceptionDetails.exception && e.params.exceptionDetails.exception.description);
   } else {
     // eval: one expression; run <file.js>: the file is an async function BODY (use return)
-    const src = cmd === 'run' ? `(async () => { ${readFileSync(args[0], 'utf8')}\n})()` : `(async () => (${args.join(' ')}))()`;
+    const src = cmd === 'run' ? `(async () => { ${readFileSync(args[0], 'utf8')}\n})()`
+      : cmd === 'png' ? `(async () => (${args.slice(1).join(' ')}))()` : `(async () => (${args.join(' ')}))()`;
     const r = await c.send('Runtime.evaluate', { expression: src, awaitPromise: true, returnByValue: true, timeout: 600000 });
     if (r.result.exceptionDetails) console.log('ERROR', JSON.stringify(r.result.exceptionDetails.exception && r.result.exceptionDetails.exception.description || r.result.exceptionDetails));
+    else if (cmd === 'png') { const v = r.result.result.value; writeFileSync(args[0], Buffer.from(String(v).split(',')[1], 'base64')); console.log('wrote ' + args[0]); }
     else { const v = r.result.result.value; console.log(typeof v === 'string' ? v : JSON.stringify(v)); }
   }
   c.close();

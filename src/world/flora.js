@@ -3,7 +3,7 @@
 // costs only a handful of uniform writes regardless of instance count.
 import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
-import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom } from '../config.js';
+import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow, rockMapSet, bladeMapSet, coralMazeSet } from '../lib/textures.js';
 import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
@@ -1585,5 +1585,5 @@ export function updateFlora(dt, t) {
   // Only the zone(s) around the camera are submitted; the rest cost nothing.
   const y = camera.position.y;
   for (let zi = 0; zi < 3; zi++)
-    if (zones[zi]) zones[zi].visible = y < zoneTop(zi) + 120 && y > zoneBottom(zi) - 150;
+    if (zones[zi]) zones[zi].visible = zoneBand(zi, y);
 }
