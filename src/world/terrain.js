@@ -1,7 +1,7 @@
 // Seafloor terrain: heightfield, mesh, triplanar PBR material, caustics. OWNED BY: terrain agent.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, RIFT_R, zoneTop, zoneBottom, riftPos, SUN, GLASS } from '../config.js';
+import { WORLD_R, RIFT_R, zoneTop, zoneBottom, zoneBand, ZONE_SEEN, riftPos, SUN, GLASS } from '../config.js';
 // WAVE-SLOPE CAUSTICS + SEABED SHADOW (roadmap/ref-caustics-shadow.md). Both are
 // runtime-only reads of values those modules already resolve each frame (the wave field
 // water.js publishes, the shadow mode lighting.js runs); nothing here is touched at
@@ -853,7 +853,7 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   // never shows a frame with a missing floor. Visibility only: fillTerrain, the
   // collision field (terrainH) and the roof shells are untouched.
   for (let i = 0; i < 3; i++) {
-    terrainMeshes[i].visible = camY < zoneTop(i) + 120 && camY > zoneBottom(i) - 150;
+    terrainMeshes[i].visible = zoneBand(i, camY);
   }
   // A shell only exists for the player in the zone BELOW it, looking up: on when the
   // camera is 40 under the parent floor, off again 340 under (past the next floor,
@@ -862,6 +862,19 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   for (let i = 0; i < roofShells.length; i++) {
     roofShells[i].visible = camY < ZB[i] - 40 && camY > ZB[i] - 340;
   }
+}
+
+// ZONE SIGHT (config.js ZONE_SEEN): zone i is visible only once the camera is within
+// SIGHT_MARGIN of, or under, zone i-1's floor at its own x, z. Two terrainH calls a frame.
+// The follow camera rides only ~2-4 u over the seabed, so a 4 u margin left zone 1 drawn in
+// most of zone 0 (z0r, z0b). 0.5 u covers the gate's one-frame lag at any swim or fall
+// speed the camera reaches; and anything of zone i seen from just under zone i-1's floor
+// is >= 90 u away through the gap, where the water's transmittance is already ~e^-10.
+const SIGHT_MARGIN = 0.5;
+export function updateZoneSight(x, y, z) {
+  const on = GLASS.zoneSight !== 0;
+  ZONE_SEEN[0] = 1;
+  for (let i = 1; i < 3; i++) ZONE_SEEN[i] = !on || y < terrainH(x, z, i - 1) + SIGHT_MARGIN ? 1 : 0;
 }
 
 // ---- DEV PROBE: window.__caust (roadmap/ref-caustics-shadow.md) --------------------

@@ -16,7 +16,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
-import { riftPos } from '../config.js';
+import { riftPos, ZONE_SEEN } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { clamp, vnoise } from '../lib/math.js';
 import { makeGlow, sulphideSet } from '../lib/textures.js';
@@ -985,6 +985,10 @@ export function updateVents(dt, t) {
     ventLight.userData.scatter = undefined; ventLight.userData.lampBias = undefined;
   }
 
+  // Zone sight (config.js): from the zone-0 floor the field is under opaque ground; the
+  // chimneys and their (opacity-0) ember sprites were still submitted every frame.
+  const seen = ZONE_SEEN[1] === 1;
+  if (root && root.visible !== seen) root.visible = seen;
   const awake = camY < FADE_IN0 && camY > FADE_OUT1;
   if (plumePts) plumePts.visible = awake;
   if (shimmerPts) shimmerPts.visible = awake;
@@ -1005,6 +1009,7 @@ export function updateVents(dt, t) {
     // far is LINEAR, not squared: squared put a 50-unit ember at alpha 0.03, which is
     // below the film grain's own noise floor — measured invisible. 0.10-0.12 at that
     // range is a presence the eye finds without the frame ever calling attention to it.
+    v.sprite.visible = seen && vis > 0;
     v.sprite.material.opacity = (far * 0.22 + near * near * 0.30) * vis
       * (0.85 + 0.15 * Math.sin(t * 1.7 + i * 2.1));
     // A light in murk grows a scattering halo with range — that is what fog does to a

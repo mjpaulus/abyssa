@@ -7,6 +7,19 @@ export const RIFT_R = 16;
 
 export const zoneTop = i => -(40 + i * (ZONE_H + ZONE_GAP));
 export const zoneBottom = i => zoneTop(i) - ZONE_H;
+// ZONE SIGHT (roadmap/perf-budget-oct.md). The camera-Y band gates (zoneTop + 120 /
+// zoneBottom - 150) overlap 180 u through every rift so a descent never shows a missing
+// floor -- but the zone-0 seabed sits INSIDE zone 1's band (its lows are under -230), so
+// standing on most of zone 0 drew all of zone 1 (terrain, rocks, gardens, sculpted plants,
+// fauna, chimneys) under an opaque floor, and cast it into the lantern's cube shadow six
+// times over. ZONE_SEEN[i] is 0 while the camera is more than 0.5 u above zone i-1's floor at
+// its own x, z: every ray from there into zone i crosses that single-valued heightfield
+// first (zone i lies wholly below it, rim walls included), so nothing of zone i can reach
+// the screen. Exact occlusion, not a distance cull: the frame is unchanged. Written once a
+// frame by terrain.js updateZoneSight (game.js, before the ambient updates); GLASS.zoneSight
+// 0 = the old bands (A/B).
+export const ZONE_SEEN = new Uint8Array([1, 1, 1]);
+export const zoneBand = (i, y) => ZONE_SEEN[i] === 1 && y < zoneTop(i) + 120 && y > zoneBottom(i) - 150;
 
 // Deterministic rift (zone exit) location per zone.
 export function riftPos(i) {
@@ -457,7 +470,10 @@ export const GLASS = {
     tauBright: 0.6,       // s, 63% time constant when the exposure must FALL
     tauDark: 3.0,         // s, when it may RISE
     centre: 0.6,          // metering weight: 1 at the middle, 1 - centre at the corners
-    every: 2,             // meter every N frames
+    every: 8,             // meter every N frames. Each metering costs one synchronous
+                          // readback round trip (~1.8 ms main thread under load); 2 -> 8
+                          // saved 0.3-0.9 ms a frame (perf-budget-oct). 7.5 Hz is still
+                          // ~4.5 samples per tauBright.
     airRaw: 0.65,         // deck correction: the unexposed share of an air frame (dome, sea
                           // surface are raw shaders); measured loop gain -0.65 at noon
     // Measured 2026-09-25 at multiplier 1 (scene-referred mean log2, ACES inverted):

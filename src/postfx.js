@@ -548,6 +548,7 @@ const smaaPass = new EffectPass(camera, smaa, vignette, grain);
 let taaPass = null;
 try { taaPass = new TemporalAAPass(camera); }
 catch (e) { console.warn('TAA unavailable:', e); taaPass = null; }
+if (taaPass) taaPass.beforeOutput = () => latProbe();   // the frame-latency probe's sync point (below)
 const TAA = { on: taaPass ? 1 : 0, floor: 0.5, grainK: 1, camProbe: null };   // grainK: measurement knob (0 = no grain, both paths)   // floor: TAAU internal floor as a fraction of RES_SCALE
 function finalPass() { return TAA.on && taaPass ? taaPass : smaaPass; }
 composer.addPass(finalPass());
@@ -980,6 +981,14 @@ export function render(dt) {
 const GPU_RING = 8, GPU_WIN = 64;
 const gpuQ = new Array(GPU_RING).fill(null);
 const gpuPending = new Uint8Array(GPU_RING);       // 1 = query issued, result not yet read
+// GPU BACKLOG (perf-budget-oct): how many frames after its issue a frame's query result
+// becomes readable. Not a cost (see FRAME LATENCY PROBE), but a saturation tell: with
+// headroom the GPU finishes a frame before the next one or two begin; past saturation the
+// queue grows. Under a vsync'd headless Chrome a GPU 25% over its slot still showed rAF at
+// 60 and no slow frames to the wall-time judge -- the frames queue -- so this is the only
+// non-blocking signal that sees it.
+const gpuIssueF = new Float64Array(GPU_RING), lagWin = new Float64Array(GPU_WIN), lagScratch = new Float64Array(GPU_WIN);
+let gpuFrameNo = 0, lagN = 0, lagAt = 0;
 let gpuExt = null, gpuSupported = false, gpuInit = false, gpuHead = 0, gpuTail = 0, gpuOpen = -1;
 let gpuPaused = false;                              // __rays.profile owns the timer while it runs
 const gpuWin = new Float64Array(GPU_WIN), gpuScratch = new Float64Array(GPU_WIN);
@@ -1001,6 +1010,7 @@ function gpuPoll(gl) {
     if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
     const disjoint = gl.getParameter(gpuExt.GPU_DISJOINT_EXT);
     const ns = gl.getQueryParameter(q, gl.QUERY_RESULT);
+    lagWin[lagAt] = gpuFrameNo - gpuIssueF[gpuHead]; lagAt = (lagAt + 1) % GPU_WIN; if (lagN < GPU_WIN) lagN++;
     gpuPending[gpuHead] = 0; gpuHead = (gpuHead + 1) % GPU_RING;
     if (disjoint) { gpuN = 0; gpuAt = 0; continue; }   // the window is poisoned; start over
     const ms = ns / 1e6;
@@ -1013,6 +1023,7 @@ function gpuPoll(gl) {
 // query may be open on a context, so the frame is skipped while the ring is full or
 // the sky-rays profiler holds the timer.
 export function gpuFrameBegin() {
+  gpuFrameNo++;
   if (!gpuInit) gpuSetup();
   if (!gpuSupported || gpuPaused) return;
   const gl = renderer.getContext();
@@ -1022,9 +1033,11 @@ export function gpuFrameBegin() {
   catch (e) { gpuOpen = -1; }
 }
 export function gpuFrameEnd() {
+  if (latStart) frameCpu = performance.now() - latStart;
+  latProbe();   // no-op when the TAA pass already took this frame's probe (and when off)
   if (gpuOpen < 0) return;
   const gl = renderer.getContext();
-  try { gl.endQuery(gpuExt.TIME_ELAPSED_EXT); gpuPending[gpuOpen] = 1; gpuTail = (gpuOpen + 1) % GPU_RING; }
+  try { gl.endQuery(gpuExt.TIME_ELAPSED_EXT); gpuPending[gpuOpen] = 1; gpuIssueF[gpuOpen] = gpuFrameNo; gpuTail = (gpuOpen + 1) % GPU_RING; }
   catch (e) { /* lost context mid-frame: the query is simply dropped */ }
   gpuOpen = -1;
 }
@@ -1038,12 +1051,68 @@ function medianOf(win, n, scratch) {
   return n & 1 ? sub[n >> 1] : 0.5 * (sub[(n >> 1) - 1] + sub[n >> 1]);
 }
 const gpuMedian = () => gpuSupported ? medianOf(gpuWin, gpuN, gpuScratch) : null;
+
+// ---------------------------------------------------------------------------------
+// FRAME LATENCY PROBE (roadmap/perf-budget-oct.md). The timer query above is NOT a cost
+// on this platform (ANGLE/Metal, Apple TBDR): its span sums command buffers that overlap
+// one another and the previous frame's tail, so it read 15-17 ms for frames whose whole
+// serialised CPU+GPU cost was 6-11 ms, ~22-31 ms with frames queued, and ~17 ms whenever
+// vsync paced the loop. DRS steered on it, so it parked the internal resolution at its
+// floor whatever the frame actually cost.
+// This measures what a frame must fit in instead: L, from the start of frame() to the
+// moment the GPU has finished everything the frame submitted. Every LAT_EVERY-th frame
+// ends with a 1-pixel readPixels of a private 1x1 target (cleared first, so the read
+// waits on the whole queue: Metal command buffers complete in order). That is a real
+// stall -- the main thread waits out the GPU tail of that one frame -- so it runs twice a
+// second; while L is inside the slot (the only state DRS aims for) the frame still lands
+// on its vsync. Query availability and fence status were tried first: Chrome only
+// publishes them when its GPU process next polls (~a frame later), so they read ~13 ms at
+// any resolution. C, the probed frame's CPU time to the end of submission, rides along
+// so DRS can tell the resolution-dependent share (L - C) from the part no resolution
+// change can buy back. Zero allocation per frame: one 1x1 target, typed windows.
+// DIAGNOSTIC ONLY (LAT.on = 0 by default): under a 60 Hz vsync the probe's stall made
+// most probed frames miss their vsync (bench Chrome, z0r @1.5x: 20 intervals > 20 ms in
+// 8 s with it, 2-4 without), so DRS does not ride it; DRS paces on frame intervals (below).
+// __gpu.latK.on = 1 turns it on for a measurement; __gpu.lat() / latCpu() read it.
+const LAT_EVERY = 30, LAT_WIN = 12;
+const LAT = { every: LAT_EVERY, on: 0 };
+const latWin = new Float64Array(LAT_WIN), latCpu = new Float64Array(LAT_WIN), latScratch = new Float64Array(LAT_WIN);
+const latPx = new Uint8Array(4);
+let latN = 0, latAt = 0, latRT = null, latFrame = 0, latStart = 0;
+// game.js, first thing in a frame that will render.
+export function frameStart() { latStart = performance.now(); latDue = !!LAT.on && (++latFrame % Math.max(1, LAT.every | 0)) === 0; }
+let frameCpu = 0;   // this frame's main-thread time to the end of submission (gpuFrameEnd), every frame
+let latDue = false;
+// Called from the TAA pass just before its canvas draw (the sync must not wait on a free
+// drawable); with TAA off, from gpuFrameEnd after the whole frame.
+function latProbe() {
+  if (!latDue || !latStart) return;
+  latDue = false;
+  const c = performance.now() - latStart;
+  try {
+    if (!latRT) latRT = new THREE.WebGLRenderTarget(1, 1, { depthBuffer: false });
+    const prev = renderer.getRenderTarget(), gl = renderer.getContext();
+    renderer.setRenderTarget(latRT); renderer.clear(true, false, false);
+    gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, latPx);
+    renderer.setRenderTarget(prev);
+  } catch (e) { return; }
+  latWin[latAt] = performance.now() - latStart; latCpu[latAt] = c;
+  latAt = (latAt + 1) % LAT_WIN; if (latN < LAT_WIN) latN++;
+}
+const latReset = () => { latN = 0; latAt = 0; };
+const latMedian = () => latN >= 5 ? medianOf(latWin, latN, latScratch) : null;
+const latCpuMedian = () => latN >= 5 ? medianOf(latCpu, latN, latScratch) : null;
 if (typeof window !== 'undefined') {
   window.__gpu = {
     get supported() { if (!gpuInit) gpuSetup(); return gpuSupported; },
     ms: () => gpuSupported && gpuSamples ? gpuEma : null,        // EMA (alpha 0.1)
     last: () => gpuSupported && gpuSamples ? gpuLast : null,
-    median: gpuMedian,                                            // over the last 64 timed frames
+    median: gpuMedian,                                            // over the last 64 timed frames (NOT a cost here: see FRAME LATENCY PROBE)
+    lag: () => lagN ? medianOf(lagWin, lagN, lagScratch) : null,   // frames from issue to readable (backlog)
+    lagMax: () => { let m = 0; for (let i = 0; i < lagN; i++) m = Math.max(m, lagWin[i]); return lagN ? m : null; },
+    lat: latMedian,                                               // frame start -> GPU done, ms (median of 32 probes)
+    latCpu: latCpuMedian,
+    latK: LAT,                                         // the same frames' CPU time to end of submission
     n: () => gpuSamples,
     // Per-pass timing is not wired (one query per frame, by design); the sky-rays
     // pass has its own profiler at __rays.profile / __rays.cost.
@@ -1216,25 +1285,85 @@ function clearWindow() { wallN = 0; wallAt = 0; badT = 0; goodT = 0; sinceJudge 
 
 // dt is unused (kept for the call-site contract); `active` gates the sample; `cap` is
 // the governor's fps cap in force (0 = uncapped -> a 60 fps budget).
-// DYNAMIC RESOLUTION. The softest lever, so it acts long before the quality ladder:
-// hold the GPU median inside a band of the governor's frame slot by moving the render
-// scale (core.js). Cost goes with pixel count, so the step is sized from the square
-// root of the overshoot, quantised to 1/16 so the buffer dims repeat. A change waits
-// HOLD ms (the 64-frame GPU window must refill with the new size's frames first).
-// __drs.state() / __drs.on = 0 (pins the ceiling) for A/B.
-const DRS = { on: 1, lo: 0.55, hi: 0.78, target: 0.66, hold: 2500, t: 0, last: null };
-function updateResScale(now, cap) {
-  if (!DRS.on || !gpuSupported || gpuN < 48 || now - DRS.t < DRS.hold) return;
-  const g = gpuMedian(); if (g == null) return;
-  const budget = cap > 0 ? 1000 / cap : 1000 / 60, load = g / budget, s = getRenderScale();
-  if (load > DRS.hi || (load < DRS.lo && s < RES_SCALE - 0.01)) {
-    const want = Math.round(s * Math.sqrt(DRS.target / load) * 16) / 16;
-    const next = setRenderScale(Math.max(s - 0.25, Math.min(s + 0.125, want)));
-    if (next !== s) { DRS.t = now; DRS.last = { from: s, to: next, gpu: +g.toFixed(2), budget: +budget.toFixed(2) }; gpuN = 0; gpuAt = 0; }
+// DYNAMIC RESOLUTION. The softest lever, so it acts long before the quality ladder.
+// PACE (default, perf-budget-oct): steer on what the player sees -- rendered-frame
+// intervals against the governor's slot. The GPU timer it used to hold at 55-78% of the
+// slot is not a cost on ANGLE/Metal (it read 15-25 ms for frames whose whole serialised
+// CPU+GPU cost was 6-11 ms, and ~17 ms whenever vsync paced the loop), so DRS sat at its
+// floor (0.75x) on this machine in every zone, whatever the frame cost. Measured in the
+// bench Chrome with a 60 Hz vsync: 'timer' -> 0.75 in z0/z0r/z1b/z2r; 'pace' -> 1.5.
+//   GPU BACKLOG: frame intervals alone are blind to a GPU over its slot under vsync
+//         (Chrome queues/drops the frames and rAF stays at 60: measured, judge median 16.7
+//         with the GPU at ~21 ms), so the timer ring's BACKLOG counts too: the share of
+//         the last 64 frames whose query was not readable by the frame after next (lag
+//         >= 2; 1 with headroom, 2 once saturated -- measured at +0/+3/+6/+8/+11 ms of
+//         added GPU work: lag 1,1,1(max 2),2,2).
+//   DOWN: over the last ~1 s, more than 10% of frames missed the slot (> 1.35 x budget)
+//         while the frame's own CPU was under 80% of it (a CPU-bound miss is not the
+//         resolution's fault), or more than 30% of frames were backlogged -> one step down
+//         (two if a third missed).
+//   UP:   no miss and backlog under 3% for upWait at this scale -> one step up. A down within 4 s of an up
+//         doubles that scale's upWait (4 s .. 2 min), so a machine at its edge settles and
+//         re-tries rarely; a machine with headroom climbs to the ceiling and stays.
+// Steps are 1/16-quantised (buffer dims repeat) and wait HOLD after each change.
+// DRS.sig: 'pace' | 'lat' (the blocking probe, if __gpu.latK.on) | 'timer' (the old
+// signal, A/B). __drs.state() / __drs.pin(x).
+const DRS = { on: 1, lo: 0.55, hi: 0.78, target: 0.66, hold: 2500, t: 0, last: null, sig: 'pace',
+  step: 0.125, missK: 1.35, downFrac: 0.10, up0: 4000, upMax: 120000 };
+const PACE_N = 60;
+const paceMiss = new Uint8Array(PACE_N), paceCpuHi = new Uint8Array(PACE_N);
+let paceAt = 0, paceN = 0, paceMisses = 0, paceCpuMisses = 0, paceUpAt = -1e9;
+const upWaitS = new Float64Array(64);   // per scale step (scale * 16), ms
+function paceReset() { paceMiss.fill(0); paceCpuHi.fill(0); paceAt = 0; paceN = 0; paceMisses = 0; paceCpuMisses = 0; }
+function setScaleDRS(now, s, next, why, ms, budget) {
+  const got = setRenderScale(next);
+  if (got === s) return;
+  DRS.t = now; DRS.last = { from: s, to: got, sig: DRS.sig, why, ms: +ms.toFixed(2), budget: +budget.toFixed(2) };
+  gpuN = 0; gpuAt = 0; lagN = 0; lagAt = 0; latReset(); paceReset();
+}
+function updateResScale(now, cap, intervalMs) {
+  if (!DRS.on) return;
+  const budget = cap > 0 ? 1000 / cap : 1000 / 60, s = getRenderScale();
+  if (DRS.sig === 'pace') {
+    // ring of the last PACE_N rendered frames: missed the slot? and was its CPU the reason?
+    const miss = intervalMs > budget * DRS.missK ? 1 : 0, cpuHi = miss && frameCpu > budget * 0.8 ? 1 : 0;
+    paceMisses += miss - paceMiss[paceAt]; paceCpuMisses += cpuHi - paceCpuHi[paceAt];
+    paceMiss[paceAt] = miss; paceCpuHi[paceAt] = cpuHi; paceAt = (paceAt + 1) % PACE_N; if (paceN < PACE_N) paceN++;
+    if (now - DRS.t < DRS.hold || paceN < PACE_N) return;
+    const gpuMisses = paceMisses - paceCpuMisses, k = Math.round(s * 16);
+    let lagHi = 0; for (let i = 0; i < lagN; i++) if (lagWin[i] >= 2) lagHi++;
+    const backlog = lagN >= 16 && lagHi > lagN * 0.3;
+    if (gpuMisses > PACE_N * DRS.downFrac || backlog) {
+      if (now - paceUpAt < 4000) upWaitS[Math.min(63, k)] = Math.min(DRS.upMax, Math.max(DRS.up0, upWaitS[Math.min(63, k)] || DRS.up0) * 2);
+      const n = gpuMisses > PACE_N / 3 ? 2 : 1;
+      setScaleDRS(now, s, s - DRS.step * n, 'missed ' + gpuMisses + '/' + PACE_N + ' backlog ' + lagHi + '/' + lagN, intervalMs, budget);
+    } else if (paceMisses === 0 && lagHi <= lagN * 0.03 && (lagN >= 16 || !gpuSupported) && s < RES_SCALE - 0.01) {
+      const up = Math.min(63, Math.round((s + DRS.step) * 16));
+      if (now - DRS.t >= (upWaitS[up] || DRS.up0)) { paceUpAt = now; setScaleDRS(now, s, s + DRS.step, 'clean', intervalMs, budget); }
+    }
+    return;
   }
+  if (now - DRS.t < DRS.hold) return;
+  const L = DRS.sig === 'lat' ? latMedian() : null;
+  if (DRS.sig === 'lat' && L == null) return;   // probe off or warming
+  let load, want;
+  if (L != null) {
+    const C = Math.min(latCpuMedian(), L), G = Math.max(0.5, L - C);
+    load = Math.max(C, G) / budget;
+    if (!(load > DRS.hi || (load < DRS.lo && s < RES_SCALE - 0.01))) return;
+    want = Math.round(s * Math.sqrt(Math.min(1.5, DRS.target * budget / G)) * 16) / 16;
+  } else {
+    if (!gpuSupported || gpuN < 48) return;
+    const g = gpuMedian(); if (g == null) return;
+    load = g / budget;
+    if (!(load > DRS.hi || (load < DRS.lo && s < RES_SCALE - 0.01))) return;
+    want = Math.round(s * Math.sqrt(DRS.target / load) * 16) / 16;
+  }
+  setScaleDRS(now, s, Math.max(s - 0.25, Math.min(s + 0.125, want)), 'load ' + load.toFixed(2), L != null ? L : load * budget, budget);
 }
 if (typeof window !== 'undefined') window.__drs = Object.assign(DRS, {
-  state: () => ({ on: DRS.on, scale: getRenderScale(), ceil: RES_SCALE, floor: getRenderFloor(), taa: !!TAA.on, gpu: gpuMedian(), last: DRS.last }),
+  state: () => ({ on: DRS.on, sig: DRS.sig, scale: getRenderScale(), ceil: RES_SCALE, floor: getRenderFloor(), taa: !!TAA.on,
+    pace: { n: paceN, misses: paceMisses, cpuMisses: paceCpuMisses, frameCpu: +frameCpu.toFixed(2), lagN, lag2: (() => { let c = 0; for (let i = 0; i < lagN; i++) if (lagWin[i] >= 2) c++; return c; })() }, lat: latMedian(), gpu: gpuMedian(), last: DRS.last }),
   pin: (x) => { DRS.on = 0; return setRenderScale(x == null ? RES_SCALE : x); }
 });
 
@@ -1257,7 +1386,7 @@ export function samplePerf(dt, active, cap = 0) {
   // a timer while hidden). Those frames say nothing about the GPU.
   if ((document.hidden && !(DEV_LAB && window.__perf.judgeHidden)) || real > 0.25) return;
   if (warmT < WARMUP) { warmT += real; return; }
-  updateResScale(now, cap);
+  updateResScale(now, cap, real * 1000);
 
   wallWin[wallAt] = real * 1000; wallAt = (wallAt + 1) % WIN; if (wallN < WIN) wallN++;
   // The cooldown fills the window (those frames are the new chain's) but is not
@@ -1269,7 +1398,9 @@ export function samplePerf(dt, active, cap = 0) {
 
   const budget = cap > 0 ? 1000 / cap : 1000 / 60;
   const median = medianOf(wallWin, wallN, wallScratch);
-  const gmed = gpuMedian();
+  // The judge's GPU-cost evidence: the latency probe's resolution-dependent share where it
+  // has samples (L - C, an upper bound on GPU time), the timer otherwise.
+  const L = latMedian(), gmed = L != null ? Math.max(0, L - Math.min(L, latCpuMedian())) : gpuMedian();
   lastMedian = median; lastGpuMedian = gmed; lastBudget = budget;
 
   // DOWN: over the bar, sustained.

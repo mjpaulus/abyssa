@@ -58,6 +58,17 @@ document.body.appendChild(renderer.domElement);
 export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x04121f);
 scene.fog = new THREE.FogExp2(0x04121f, 0.016);
+// PERF HARNESS (?lab or ?bench only): every top-level scene.add records the module that
+// made the call, so __bench (game.js) can attribute draws/triangles and A/B-hide a whole
+// system by owner without each module registering itself. Build-time only, never per frame.
+if (typeof location !== 'undefined' && /[?&](lab|bench)/.test(location.search)) {
+  const add0 = scene.add;
+  scene.add = function (...objs) {
+    const st = new Error().stack || '', m = st.split('\n').slice(2).map(l => /\/src\/([\w./-]+?)\.js/.exec(l)).find(x => x && x[1] !== 'core');
+    for (const o of objs) if (o && o.userData && !o.userData.benchSrc) o.userData.benchSrc = m ? m[1] : '?';
+    return add0.apply(this, objs);
+  };
+}
 
 export const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 700);
 

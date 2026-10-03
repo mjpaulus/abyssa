@@ -52,7 +52,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
-import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp } from '../lib/math.js';
 import { terrainH } from './terrain.js';
@@ -2027,7 +2027,7 @@ export function updateFauna(dt, t) {
 
   // Zone band gate (terrain's rule), then a range gate on the group's centre.
   for (const G of groups) {
-    const band = cy < zoneTop(G.zi) + 120 && cy > zoneBottom(G.zi) - 150;
+    const band = zoneBand(G.zi, cy);
     let vis = band;
     if (band && !G.stat) {
       const st = G.st;

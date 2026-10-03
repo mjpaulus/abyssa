@@ -15,12 +15,20 @@
 //     -> 1x1    exact box of the 4x4, RGBA32F                        (same program)
 //     -> PBO ring readback, NO fence: readPixels into a pixel-pack buffer is async,
 //        and the buffer is only mapped back (getBufferSubData) once PBO_LAG later
-//        meterings have been issued (>= 6 frames at every 2), by which time the frame
-//        that wrote it has long presented. A fenceSync per readback was tried first:
-//        ANGLE/Metal commits the command buffer to make a sync signalable, and that
-//        mid-frame commit cost ~1 ms of lost GPU parallelism per metering (measured
-//        on the deck, frame median 11.9 -> 13.0 ms). ONE program, no depth attachments
-//        (depthBuffer: false on all three — nothing to share, nothing to feedback).
+//        meterings have been issued, by which time the frame that wrote it has long
+//        presented. A fenceSync per readback was tried first: ANGLE/Metal commits the
+//        command buffer to make a sync signalable, and that mid-frame commit cost ~1 ms
+//        of lost GPU parallelism per metering (measured on the deck, frame median 11.9
+//        -> 13.0 ms); an end-of-frame fence (perf-budget-oct) put Chrome performance
+//        warnings in the console and bought nothing measurable. EVERY getBufferSubData is
+//        a synchronous round trip to Chrome's GPU process that first drains everything
+//        queued ahead of it: ~1.8 ms of main thread after the scene pass on this machine
+//        (the bench saw submit alternate 5.5 / 3.3 ms frame to frame at every 2). Moving
+//        the read to frame start measured WORSE (+0.4 ms live: the wait then idles the
+//        GPU). What helps is reading less often: GLASS.exposure.every 2 -> 8 (7.5 Hz
+//        metering against 0.6 / 3 s time constants) bought 0.33 ms live at 1.0x and
+//        0.88 ms at 1.5x in zone 0 (paired live A/B, noise +-0.3). ONE program, no depth
+//        attachments (depthBuffer: false on all three).
 //
 // The buffer is TONE-MAPPED (three bakes ACES + exposure into every material at scene
 // render), so the meter INVERTS the ACES fit per tap (the RRT+ODT rational, solved as a

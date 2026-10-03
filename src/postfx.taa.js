@@ -702,6 +702,9 @@ export class TemporalAAPass extends Pass {
     const ratio = this.outW / Math.max(1, this.inW);
     o.uSharp.value = Math.min(1, K.sharp * (0.6 + 0.4 * ratio * ratio));
     this.fullscreenMaterial = this.outMat;
+    // postfx.js's frame-latency probe syncs HERE, before the one draw that touches the
+    // canvas: a sync after it also waits on the compositor's next free drawable (vsync).
+    if (this.beforeOutput) this.beforeOutput();
     renderer.setRenderTarget(null);
     renderer.setViewport(0, 0, this.outW, this.outH);
     renderer.render(this.scene, this.camera);

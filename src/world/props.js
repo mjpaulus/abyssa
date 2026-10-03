@@ -28,7 +28,7 @@
 //   updateProps(dt, t);           // next to updateFlora(dt, t) in the frame loop
 import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
-import { WORLD_R, riftPos, zoneTop, zoneBottom } from '../config.js';
+import { WORLD_R, riftPos, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { barkSet, staveSet } from '../lib/textures.js';
@@ -682,7 +682,7 @@ export function updateProps(dt, t) {
   uni.uCur.value.set(Math.cos(a), Math.sin(a));
   const y = camera.position.y;
   for (let zi = 0; zi < 3; zi++)
-    if (zones[zi]) zones[zi].visible = y < zoneTop(zi) + 120 && y > zoneBottom(zi) - 150;
+    if (zones[zi]) zones[zi].visible = zoneBand(zi, y);
 }
 
 // Dev surface: the one-time generation cost (shapes) and the two map-set bakes.
