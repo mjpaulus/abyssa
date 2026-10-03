@@ -552,8 +552,9 @@ core.js):
   over its slot does NOT slow rAF (frames queue/drop) - the wall-time judge cannot see it,
   `__gpu.lag()` (frames from a query's issue to readable: 1 = headroom, 2 = saturated) can.
 
-Measured 2026-10-03 (after perf-budget-oct, live, 1512x982 CSS): every zone 3.5-5.5 ms at
-1.0x and 5-7 ms at 1.5x on this machine; DRS (pace) holds 1.5x in every standard view.
+Measured 2026-10-03 (after perf-budget-oct; live, uncapped, 1512x982 CSS, M5 Max): every
+standard view 3.7-6.3 ms at 1.0x and 6.1-8.3 ms at 1.5x (main: 4.0-7.4 / 7.1-9.1, same
+session, cross-load ABBA); DRS (pace) holds 1.5x in every standard view under a 60 Hz vsync.
 
 ### AAA pass 2 (2026-09-28, roadmap/aaa-motion-atmos.md)
 - DYNAMIC RESOLUTION: `core.js` RES_SCALE is the CEILING now; `setRenderScale` moves the
