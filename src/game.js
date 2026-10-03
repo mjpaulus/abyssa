@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
 import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
-import { render, samplePerf, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover } from './postfx.js';
+import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
@@ -1877,6 +1877,7 @@ function frame(now = performance.now()) {
     // return from hidden) rather than bursting to catch up.
     frameDue = now - frameDue > slot * 2 ? now + slot : frameDue + slot;
   }
+  frameStart();   // the latency probe's clock (postfx.js): this frame will render
   const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
   try {
     flushSize();   // one resize per frame, before anything reads the camera or the targets

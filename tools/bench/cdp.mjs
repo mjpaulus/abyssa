@@ -53,7 +53,10 @@ if (cmd === 'start') {
   const url = `http://localhost:${port}/?bench`;
   const ch = spawn(CHROME, [
     `--user-data-dir=${join(DIR, 'profile')}`, `--remote-debugging-port=${DBG}`,
-    '--headless=new', '--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--force-device-scale-factor=2', '--disable-gpu-vsync', '--disable-frame-rate-limit',
+    '--headless=new', '--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--force-device-scale-factor=2',
+    // vsync off (default): rAF is unthrottled, so __bench.live() reads the real frame cost.
+    // BENCH_VSYNC=1 keeps a 60 Hz vsync, the way a player's window paces (DRS / judge checks).
+    ...(process.env.BENCH_VSYNC ? [] : ['--disable-gpu-vsync', '--disable-frame-rate-limit']),
     '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
     '--autoplay-policy=no-user-gesture-required', '--mute-audio', '--no-first-run', '--no-default-browser-check',
     `--window-size=${w},${+h + 87}`, url
