@@ -1,6 +1,6 @@
 ---
 title: Velkath on the ground, and the sand plume
-status: wip
+status: done
 tags: creatures, gameplay, brooder, particles
 updated: 2026-10-03
 ---
@@ -65,3 +65,4 @@ Open:
 
 ## Log
 2026-10-03: Built on branch brooder3 (8612a2a, 6a6a47e, 114cf54, dbb3c45, merge of main 75e3745), verified live as above. Captures are in scratchpad/brooder3cap/: S_side_strip.jpg (hammer from the side: claw on the surface, cloud billowing), G_game_strip.jpg (game distance), g_game_pinned_n38.jpg, h_pair.jpg (inside / edge of the cloud), main_sleep_side.jpg vs a_sleep_side.jpg.
+- 2026-10-03 — merged to main; verified in a fresh tab (woke her, zone tour clean, 14 lights, fingerprints unchanged). Deviation to confirm with Michael: asleep and mid-rise she is still bedded in the dune on purpose (the approved ridge look); every awake state sits on the floor. Open: a leg can cut the knife-edge rift-rim crest; her steering climbs over boulders rather than pathfinding; plume tuning (blind threshold 1.0, regain 0.55 for 0.6 s, gives up after 7 s) needs a human hand.
