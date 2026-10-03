@@ -79,8 +79,9 @@ if (cmd === 'start') {
     await c.send('Page.navigate', { url: args[0] });
     console.log('navigated ' + args[0]);
   } else if (cmd === 'console') {
-    await c.send('Runtime.enable'); await sleep(300);
+    await c.send('Runtime.enable'); await c.send('Log.enable'); await sleep(300);
     for (const e of c.events) if (e.method === 'Runtime.consoleAPICalled') console.log(e.params.type, e.params.args.map(a => a.value ?? a.description).join(' '));
+    else if (e.method === 'Log.entryAdded') console.log('log:' + e.params.entry.level, e.params.entry.text)
     else if (e.method === 'Runtime.exceptionThrown') console.log('EXC', e.params.exceptionDetails.text, e.params.exceptionDetails.exception && e.params.exceptionDetails.exception.description);
   } else {
     // eval: one expression; run <file.js>: the file is an async function BODY (use return)
