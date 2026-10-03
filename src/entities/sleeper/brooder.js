@@ -868,6 +868,12 @@ function reachFoot(L, li, out) {
   return out;
 }
 
+// floor gradient magnitude (rise per unit run) at x, z
+function slopeAt(L, x, z) {
+  const gx = terrainH(x + 1, z, L.idx) - terrainH(x - 1, z, L.idx), gz = terrainH(x, z + 1, L.idx) - terrainH(x, z - 1, L.idx);
+  return 0.5 * Math.hypot(gx, gz);
+}
+
 // Rest spot of foot li: local (yaw only) -> world, on the terrain.
 function restWorld(L, li, out) {
   const lg = LEGS[li & 3], sd = li < 4 ? 1 : -1, st = L.legSt[li];      // each leg unfolds on its own beat
@@ -1014,33 +1020,45 @@ function clawPen(L, c, all) {
 // by trial: the joint's frame is turned inward). A blow that ARRIVES at the surface kicks
 // back (a spring on the shoulder lift, underdamped): it slams onto the sand and rebounds,
 // never through.
-const ROOT_MAX = 0.45, ELBOW_MAX = 1.3;
-function liftAt(L, c, j, max, signed) {
+const ROOT_MAX = 0.45, ELBOW_MAX = 1.3, LIFT_RES = 0.01;
+// Smallest lift in [0, max] (joint j, sign sg) that clears the floor, to LIFT_RES. Frame
+// coherent: last frame's answer brackets the search, so a held contact costs ~3-5 probes
+// instead of a full bisection (each probe is ~0.02 ms: a joint-chain matrix update and
+// ~50 hull samples against the ground).
+let _uL = null, _uC = null, _uR = null, _uZ0 = 0, _uSg = 1;     // the probe's target (no closure per call)
+function under(a) { _uR.z = _uZ0 + _uSg * a; _uC.root.updateMatrixWorld(true); return clawPen(_uL, _uC, false) > 0; }
+function liftAt(L, c, j, max, sg, prev) {
   const r = j.rotation, z0 = r.z;
-  let sg = 1;
-  if (signed) {
-    r.z = z0 + 0.25; c.root.updateMatrixWorld(true); const pp = clawPen(L, c, false);
-    r.z = z0 - 0.25; c.root.updateMatrixWorld(true); const pm = clawPen(L, c, false);
-    sg = pp <= pm ? 1 : -1;
-  }
-  r.z = z0 + sg * max; c.root.updateMatrixWorld(true);
-  if (clawPen(L, c, false) > 0) return sg * max;
+  _uL = L; _uC = c; _uR = r; _uZ0 = z0; _uSg = sg;
   let lo = 0, hi = max;
-  for (let i = 0; i < 7; i++) {
-    const mid = (lo + hi) * 0.5;
-    r.z = z0 + sg * mid; c.root.updateMatrixWorld(true);
-    if (clawPen(L, c, false) > 0) lo = mid; else hi = mid;
+  if (prev > 0 && prev < max) {
+    if (under(prev)) lo = prev;
+    else { hi = prev; const p2 = prev - 0.05; if (p2 > 0) { if (under(p2)) lo = p2; else hi = p2; } }
   }
+  if (hi === max && under(max)) return max;
+  while (hi - lo > LIFT_RES) { const mid = (lo + hi) * 0.5; if (under(mid)) lo = mid; else hi = mid; }
   r.z = z0 + sg * hi; c.root.updateMatrixWorld(true);
-  return sg * hi;
+  return hi;
 }
 function clampClaw(L, c, dt) {
   const z0 = c.root.rotation.z, e0 = c.cj.rotation.z;
   c.root.updateMatrixWorld(true);
   let need = 0, el = 0;
   if (clawPen(L, c, true) > 0) {
-    need = liftAt(L, c, c.root, ROOT_MAX, false);
-    if (need >= ROOT_MAX && clawPen(L, c, false) > 0) el = liftAt(L, c, c.cj, ELBOW_MAX, true);
+    need = liftAt(L, c, c.root, ROOT_MAX, 1, c.need || 0);
+    if (need >= ROOT_MAX && clawPen(L, c, false) > 0) {
+      // the elbow's lifting sign, found by trial now and then (its frame is turned inward)
+      if (!c.elSg || (c.elSgT = (c.elSgT || 0) - dt) <= 0) {
+        const r = c.cj.rotation;
+        r.z = e0 + 0.25; c.root.updateMatrixWorld(true); const pp = clawPen(L, c, false);
+        r.z = e0 - 0.25; c.root.updateMatrixWorld(true); const pm = clawPen(L, c, false);
+        r.z = e0; c.elSg = pp <= pm ? 1 : -1; c.elSgT = 0.5;
+      }
+      el = c.elSg * liftAt(L, c, c.cj, ELBOW_MAX, c.elSg, Math.abs(c.elbow || 0));
+      // still under with both joints spent (the floor rises in front of her): what is left
+      // goes to her FRONT, which she lifts (L.frontUp, next frame), as a crab facing a bank does
+      if (Math.abs(el) >= ELBOW_MAX) { const res = clawPen(L, c, false); if (res > L.clawRes) L.clawRes = res; }
+    }
   }
   if (dt > 0) {
     if (c.major && need > 0.03 && c.need0 <= 0.03 && L.swing > 0.4) c.lift.v += 2.6 * Math.max(0.3, L.threatE);
@@ -1102,7 +1120,7 @@ function poseAll(L, dt, player) {
   // hunched: standing, the front drops over the diver; threat lifts it to show the face.
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
-  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h - (L.lookP || 0) + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
+  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
   // the sole stays on the ground (L.grp sits at the origin, so body.matrix IS its world)
   b.updateMatrix();
   // (asleep the floor is off; it comes on through the heave, so the rise lifts her OUT)
@@ -1115,12 +1133,18 @@ function poseAll(L, dt, player) {
 
   for (let li = 0; li < 8; li++) {
     _lp.copy(L.feet[li].cur);
-    _lp.y += R * (FOOT_LIFT0 + FOOT_LIFTF * (1 - L.legSt[li]));
+    // (+ on a steep bank the dactyl's shaft meets the uphill side before its tip: measured
+    // pen ~0.5 x slope; lifted by the slope found when the foot was planted)
+    _lp.y += R * (FOOT_LIFT0 + FOOT_LIFTF * (1 - L.legSt[li])) + 0.45 * Math.max(0, (L.feet[li].sl || 0) - 0.3) * L.legSt[li];
     poseLeg(L, li, _lp.applyMatrix4(_inv));
   }
   for (const k in L.legs) L.legs[k].instanceMatrix.needsUpdate = true;
   poseClaws(L);
-  if (L.clawSt > 0.02) for (const c of L.claws) clampClaw(L, c, dt);   // folded asleep they lie bedded with the shell
+  L.clawRes = 0;
+  if (L.clawSt > 0.02) for (const c of L.claws) clampClaw(L, c, dt);
+  // the front lifts by what the arms could not (lever ~ the crusher's length), and sinks
+  // back slowly when they can again
+  if (dt > 0) L.frontUp = clamp((L.frontUp || 0) + (L.clawRes > 0 ? Math.min(L.clawRes / (1.6 * R), 0.8 * dt) : -0.15 * dt), 0, 0.35);   // folded asleep they lie bedded with the shell
   else for (const c of L.claws) { c.liftNow = c.need = 0; c.lift.x = c.lift.v = 0; }
   poseEyes(L, dt, player);
 
@@ -1413,6 +1437,7 @@ export function updateBrooder(L, dt, t, player) {
       rollT -= sd * 0.016 * lift; pitchT += (k < 2 ? 0.011 : -0.008) * lift; yT += 0.006 * lift;
       if (f.t >= 1) {
         f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to);
+        f.sl = slopeAt(L, f.to.x, f.to.z);
         silt(f.cur.x, f.cur.y + 0.2, f.cur.z, f.h > 0.2 ? 3 : 1, 3, 1.4 + 1.4 * f.h / 0.30, 0.9);
         if (f.h > 0.2) spawnPlume(f.cur.x, f.cur.y, f.cur.z, 'small', 1, L.idx);   // a heavy foot throws its own small cloud
         L.bY.v -= R * 0.10 * f.h / 0.30;
