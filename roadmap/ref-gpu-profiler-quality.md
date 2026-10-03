@@ -1,8 +1,8 @@
 ---
 title: GPU timer profiler + median quality loop
-status: wip
+status: done
 tags: perf, reference
-updated: 2026-09-25
+updated: 2026-10-03
 ---
 From the abyssal-living-deep reference analysis (emollick, fully procedural — a peer under the hard rule). Technique, not code. Effort: S.
 
@@ -31,3 +31,4 @@ CHANGE: Replace samplePerf's one-window fps bar: per-zone GPU timings, outlier-p
   is typed-array rings with no allocation by construction (median scratch sorted in
   place, two subarray views per 0.5 s judge). Not verified with real visible-tab rAF
   (pane and Chrome both reported document.hidden); per-pass timing not wired.
+- 2026-10-03 — moved to done in a board cleanup: shipped and merged (__gpu, median judge, restoreQuality); extended by dynamic resolution in aaa-motion-atmos.

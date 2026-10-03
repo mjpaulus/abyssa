@@ -1,8 +1,8 @@
 ---
 title: AAA animation pass
-status: wip
+status: done
 tags: quality, animation
-updated: 2026-08-26
+updated: 2026-10-03
 ---
 Last of the skill-pack sweeps. Audit verdict: the motion craft is far above baseline (dt-robustness fully clean, phase-integrated beats everywhere, springs stable, fish tails genuinely exploit the new geometry) — the findings are seams BETWEEN systems, not bad motion. Sal's approved gait fenced off throughout.
 
@@ -11,3 +11,4 @@ Fix round on branch aaa-anim: (1) the title screen's raft is a dead prop — upd
 
 ## Log
 2026-08-26: All thirteen shipped, merged to main d900be6, pushed. Title raft rides the swell (verified two frames apart: hull attitude, lantern swing, exhaust all move); Sal climbs the ladder with alternating overhead reach + tucked knees (0.25s blend; note: onLadder only exists ascending — descent is a swim past, covered by the blend); calming thrash drains over ~2s (wave rate 3.7→1.15 measured); ending flythrough inhabited (vent life ticks, predators hidden at rite start); leviathan half-rate gated past 70u so the vigil never jitters; lunge coils in over 0.4s; drowning is a quiet pull-away instead of a frozen frame; shark fades in the fog wall's last 8u at constant size; octopus jets with its arms; jelly cull hysteresis; raft/ending eases framerate-independent; knife sheath swap after the hand arrives. Integrated build console clean. Awaiting Michael's eye. THE SKILL-PACK SWEEP IS COMPLETE: shaders, textures, lighting, geometry, postfx, animation.
+- 2026-10-03 — moved to done in a board cleanup: superseded by aaa-motion-atmos and the weighted-suit locomotion (sal-walk-and-sculpt).

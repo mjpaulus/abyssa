@@ -1,8 +1,8 @@
 ---
 title: Lightning as a scene light
-status: wip
+status: done
 tags: weather, lighting, reference
-updated: 2026-09-25
+updated: 2026-10-03
 ---
 From the abyssal-living-deep reference analysis (emollick, fully procedural — a peer under the hard rule). Technique, not code. Effort: S.
 
@@ -52,3 +52,4 @@ frame (±1e-4 across reloads); position and time are exact.
   uncapped, 20 s each: storm no bolts 13.3 ms vs held light + a strike every 500 ms
   15.6 ms (worst case — a real strike is live ~1 s per 8-25 s); (g) sleeper fps
   15ce888c/c938fe6e/652d0412 unchanged; (h) console clean.
+- 2026-10-03 — moved to done in a board cleanup: shipped and merged (world/lightning.js; CLAUDE.md "LIGHTNING IS A LIGHT"); the sea flash under the new ocean is tracked on sea-and-sky.

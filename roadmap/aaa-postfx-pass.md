@@ -1,8 +1,8 @@
 ---
 title: AAA postfx pass (HDR pipeline)
-status: wip
+status: done
 tags: quality, postfx
-updated: 2026-08-26
+updated: 2026-10-03
 ---
 Fresh audit of the post-rework chain against the threejs-postprocessing pack. Engineering came back consistent (no primary/degrade drift, depth discipline upheld, effects merge as intended) — but the headline is structural: the whole chain runs in 8-bit.
 
@@ -13,3 +13,4 @@ Fix round on branch aaa-postfx2: all twelve, HalfFloat + shaft shoulder judged t
 
 ## Log
 2026-08-26: All twelve shipped, merged to main 3118d4a. Chain is HalfFloat end-to-end (no fps cost on this box — 120fps both sizes; marginal-hardware delta unmeasured); shafts get a Reinhard shoulder (intensity 0.85→1.0, lit-not-milky with internal falloff); DoF air-blend lagged — deck-in-gale horizon stable across bob cycles; zero-mean dither kills mid-tone banding (invisible as texture at −200); grain re-roll on golden ratio (no 1Hz tick); new degrade rung keeps cheap god rays alive before full removal; grade ramp extends −650→−900 with a quiet drift; chroma purely radial; comments honest (FiniteEffect scope, no auto-sort); zero-alloc updateGrade. GL regression clean: 6 bypass toggles, resize, all 4 degrade rungs. UNVERIFIED: vent-ember bloom shimmer at zone-1 range (agent could not stage it against hose physics) — check on a real dive; fix would be luminanceSmoothing up, not threshold. Awaiting Michael's eye.
+- 2026-10-03 — moved to done in a board cleanup: superseded by later passes: TAA + upscaling, film finish, dynamic resolution (aaa-pass-3, aaa-motion-atmos).

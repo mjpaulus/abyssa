@@ -1,8 +1,8 @@
 ---
 title: Procedural gardens (plant vocabulary)
-status: wip
+status: done
 tags: flora, geometry, quality
-updated: 2026-09-04
+updated: 2026-10-03
 ---
 Michael: 'we need more procedural plants.' Flora has kelp, reef communities, brain coral, rocks — thin for an NMS-bar reef.
 
@@ -11,3 +11,4 @@ New src/world/gardens.js: sea fans, seagrass beds, staghorn, barrel sponges, ane
 
 ## Log
 2026-09-04: Shipped, merged d9c379a. 12 types, 12 draw calls, ~143k submitted tris at the reef; flora/rock fingerprints proven identical wired vs unwired; layout deterministic across voyages. Reseed sits after reseedVentLife (needs activeVents), still after flora. TASTE: colours pulled toward brass after a first pass read as candy — judge against the reference. TODO: authored gardens seeds in site.js (currently a per-site fallback stream). Awaiting Michael's eye.
+- 2026-10-03 — moved to done in a board cleanup: shipped; species since rebuilt through the sculpt pipeline (sea-life-sculpted).

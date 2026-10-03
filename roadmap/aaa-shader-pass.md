@@ -1,8 +1,8 @@
 ---
 title: AAA shader pass (all shaders)
-status: wip
+status: done
 tags: bug, perf, shaders, quality
-updated: 2026-08-25
+updated: 2026-10-03
 ---
 Full pass over every shader in the game against the threejs-skills packs, AAA bar. Three parallel audits (life / world / postfx), then three implementation branches. Absorbs the reversed-smoothstep sweep.
 
@@ -18,3 +18,4 @@ DECISION (Michael): props.js loads downloaded glTF models — violates the gener
 
 ## Log
 2026-08-25: All three branches merged to main (e36295d postfx, 3166de7 world, f797037 life) and pushed. Combined verify on main: clean console, god rays + snow + jelly structure confirmed live at 52 m (first render ever). Retunes logged in-code old→new (fish glowI 7.5→1.5 etc., volumetrics 1.05→0.85, uRayFade 0.62→0.42, grain COLOR_DODGE→shadow-weighted, deck DoF air-blended). New knob: __grade.amount (depth CDL, default 0.15). Awaiting Michael's eye; props.js glTF decision still open.
+- 2026-10-03 — moved to done in a board cleanup: superseded by lib/surface.js shared response and specular AA (aaa-motion-atmos).

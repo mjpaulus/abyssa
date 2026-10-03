@@ -1,8 +1,8 @@
 ---
 title: The snowfield sea (bright-day milk)
-status: wip
+status: done
 tags: water, bug, quality
-updated: 2026-09-04
+updated: 2026-10-03
 ---
 Michael's screenshot: on a bright overcast day from the deck, the sea read as a snowfield — pale cyan-white, glassy, BRIGHTER than the grey sky it reflected. "Maybe it's the transparency of the water from the surface."
 
@@ -13,3 +13,4 @@ ROOT CAUSE (decomposition with a new uDbg term isolator, __sky.dbg(n)): from dec
 
 ## Log
 2026-09-04: Fixed, merged 4582be0. uSkyHor (what the dome draws AND the sea mirrors) is pulled toward the lid's own underside by lidK = max(ms(cov, lidCov), ms(storm, lidStorm)); the fog chunk got its first uniform (abyssaAir — one shared Float32Array installed on every fogged ShaderLib entry; flag 0 = old bake bit-for-bit) so fog airlight, sea rim, and dome horizon are ONE number = the ring under the lid. Numbers (scene-linear, post bypassed): bright overcast horizon sky/sea-under-horizon 0.36/0.41 → 0.20/0.22 — sea ≤ sky everywhere but the 0-2° slit it mirrors. Calm-noon anchor bit-identical (lidCov starts above day-0 cover). Gale keeps walls/foam, reads darker at the horizon than the shipped bright gale — GLASS.cloud.lidRing (0.10) is Michael's lever (0.15 restores more haze). Awaiting Michael's eye on the SAME bright day.
+- 2026-10-03 — moved to done in a board cleanup: fixed (merged 4582be0); the sea was later replaced by the FFT ocean (sea-and-sky).

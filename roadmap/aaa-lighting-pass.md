@@ -1,8 +1,8 @@
 ---
 title: AAA lighting pass
-status: wip
+status: done
 tags: quality, lighting, perf
-updated: 2026-08-25
+updated: 2026-10-03
 ---
 Full lighting pass against the threejs-lighting skill pack. Audit verdict: the rig's architecture is genuinely strong (three-point on Sal, STOPS depth grading, disciplined per-frame writes) with ONE real contradiction: the leviathan's per-sigil PointLights break the light-count-stability law the vents module treats as sacred — every zone change recompiles every lit material mid-dive.
 
@@ -12,3 +12,4 @@ Backlog seed: LightProbe from the sky PMREM could replace the hand-tuned AIR_SKY
 
 ## Log
 2026-08-25: Shipped, merged to main 3e4f12e. Sigil pool: light count probe-constant at 14 across two zone cycles AND a full voyage; program count flat after first visits (the mid-dive recompile hitch is gone). Flash 900→360 at decay 2.0 (close-up blaze intact, scene splash gone). Lantern shadow 512 won the A/B (no stair-stepping in murk at 34u). N8AO 2.2/2.6→1.0/3.0 — gear seats onto the planks. New envTexDeep (procedural teal-to-black PMREM) for wrecks/props/flora/tools/tether/leviathan; raft+diver keep the sky path. Beacon dims in air; rim clamped on descent; layers idea declined in-code. TASTE CALL for Michael: lit wards read slightly tighter at long range under physical decay — judge on next dive. Integrated build console clean.
+- 2026-10-03 — moved to done in a board cleanup: superseded by the relight + film finish + encounter lighting (aaa-motion-atmos, aaa-pass-3).

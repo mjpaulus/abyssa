@@ -1,8 +1,8 @@
 ---
 title: Surface water bar (inkwell + poseidon)
-status: wip
+status: done
 tags: water, reference
-updated: 2026-08-16
+updated: 2026-10-03
 ---
 Harvest the ideas (not the code) that make the inkwell WebGPU ocean read so well, as bounded passes on our own WebGL surface: physically-derived foam, wind-shaped glitter, capillary detail, backlit crests.
 
@@ -27,3 +27,4 @@ Constraints as always: no new render targets, bloom discipline, calm-noon anchor
 - 2026-08-08 — luminous-sea merged (with the orchestrator's live-experiment correction: the grey wall was FOUR stacked dimmers — reflected slate storm sky, dark cloud lid, un-gated irradiance cut, un-gated lighting cut — not airFog, which measures 0 in a clear gale). Shipped: broad-body SSS (hue derived from the water's own spectrum), a second authored stormDay stop cross-faded by solar height (night gale bit-identical BY CONSTRUCTION), the day gate on lighting's storm cut (15.75% at noon, shipped 45% at night), gale swells 1.56x, bloom held to clear-noon levels (42.9%). HONEST REMAINING GAP vs the reference: ours is a bright overcast gale; the reference is a sunlit storm with a hole in the cloud — covStorm 0.30 closes the sky completely, so the sun never breaks through. That breakup is the next pass if Michael wants the last step
 - 2026-08-08 — Michael: "closer" + three notes: transparency throwing it off (reference sea is OPAQUE — churned storm water; ours stays a glass window), no BREAKING (whitewater must spill down the front faces), and Sal floats on the OLD flat swell while gale waves roll through him. Sal fix landed by the orchestrator (buoyancy equilibrium + ceiling now ride surfaceHeightAt at his position); storm-opacity + spilling breakers to the agent
 - 2026-08-08 — opaque-storm merged (7ba056c): THE FOAM WAS NEVER ALIVE on this driver (reversed smoothstep = undefined = 0) — fixed; gale seas now opaque-thick (calm window bit-identical, refraction render skipped at full gale — a storm is cheaper than a calm now), whitewater spills down leading faces. Below-side thickening authored at 0.35 (gameplay over physics — Michael may re-rule). Remaining vs reference: cloud breakup (covStorm) + close-range whitewater texture
+- 2026-10-03 — moved to done in a board cleanup: superseded by the spectral FFT ocean (sea-and-sky).

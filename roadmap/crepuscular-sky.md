@@ -1,8 +1,8 @@
 ---
 title: Crepuscular rays (the sky pokes through)
-status: wip
+status: done
 tags: sky, clouds, weather, postfx, reference
-updated: 2026-09-05
+updated: 2026-10-03
 ---
 Michael's photo (2026-09-05, a road under a broken overcast): a dark, layered cloud deck with a bright hole behind it, and a FAN of pale rays spreading down and outward from the hidden sun — silver-lined cloud edges where the light leaks around them, the rays reading as light IN the air, converging on a point behind the cloud. Our sky has no atmospheric rays; the volumetric pass is underwater-only.
 
@@ -20,3 +20,4 @@ GATES: never neon (rays are haze-lit, values compressed like the photo — the b
 
 ## Log
 - 2026-09-05 — BUILT on branch `crepuscular` (agent round, not merged): `src/postfx.skyrays.js` (half-res sun-visibility mask = dome coverage chunk + puff occluders + depth gate, 2x radial blur toward the clamped sun point, additive composite read against the mask's mean, haze-weighted by depth, soft-capped at 0.6x the hole); clouds.js two-layer deck off the new hand field `layers` (last draw of the hand, pool split, one draw call), silver-lining rim + CPU self-shadow; GLASS.rays knobs + MICHAEL'S ROAD preset in the lab. Measured: 1.1 ms GPU at 1788x1812, zero programs on first fan, gates (clear/lid/night/underwater/off-screen) verified. Orchestrator to review + merge.
+- 2026-10-03 — moved to done in a board cleanup: shipped; the rays now read the volumetric cloud transmittance (sea-and-sky).

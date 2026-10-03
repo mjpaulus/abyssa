@@ -2,7 +2,7 @@
 title: Audio audit
 status: backlog
 tags: audio, user
-updated: 2026-08-05
+updated: 2026-10-03
 ---
 Full mix pass with your ears; the synth engine has never had one.
 
@@ -13,3 +13,4 @@ Everything is synthesised in audio.js. Wants: level balance across depth, chime 
 
 ## Log
 - 2026-08-05 — long-standing; needs the user present
+- 2026-10-03 — the audio was rebuilt from scratch in aaa-pass-3 (all synthesised; listening guide in docs/audio.md). This card stays open: nobody has listened yet, and that needs Michael's ears.

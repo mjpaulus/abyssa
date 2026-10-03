@@ -1,8 +1,8 @@
 ---
 title: AAA geometry pass (go hard)
-status: wip
+status: done
 tags: quality, geometry
-updated: 2026-08-26
+updated: 2026-10-03
 ---
 The deep one — every asset is generated, so geometry IS the art. Michael's call: "the geometry pass is probably the one to spend most time on for aaa quality. go hard on this one." Three parallel domain audits (hero objects / world / life) with explicit license to spend triangles where the camera lives, then implementation branches.
 
@@ -15,3 +15,4 @@ Audit axes: engineering (indexing, segment counts vs viewing distance, tangent f
 DECISION (Michael): terrain skyline redistribution — bending vertex density toward ridge crests fixes the polyline skyline at the fog wall at zero tri cost, but CHANGES the site-0 terrain fingerprint (the bit-identical regression anchor). Re-anchor deliberately, or keep the anchor and live with the faceted skyline?
 
 2026-08-26 (later): All three branches merged to main (c35c51b hero, 3b5c54f world, 1b15a44 life) and pushed; integrated build clean. Measured: raft 36k→56k tris at −6 draw calls (exhaust instanced); terrain gating −332k tris/frame with 0 visibility violations across the full ending ascent + voyages; site-0 fingerprint bit-identical (35acc2d0 both sides); program count stable. Shipped: chamfered planks + ovolo rail + hex bolts + deck nails, re-lathed drums, smooth flywheel, 44-seg helmet + Mark V hasp, the trawler's lost lit porthole, 12-sided lobed chimneys, resolved hull plating, rock cull to real sightlines, wave-3 aliasing fix, shark spade snout/keel/curling tail/flexing pectorals, fish forked tails + eyes + per-fish proportions, leviathan 22-radial + billowing 4-row membranes + crescent gills + calm-fade perf guards, jelly scalloped lagging skirts (zone-distinct via rib counts), squid/octopus arm resolution, crab claw-lift. Awaiting Michael's eye; skyline fingerprint decision still open.
+- 2026-10-03 — moved to done in a board cleanup: superseded by the sculpt + Blender pipeline (aaa-pass-3, sal-walk-and-sculpt, sea-life-sculpted).

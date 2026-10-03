@@ -1,8 +1,8 @@
 ---
 title: Clouds to the photo bar
-status: wip
+status: done
 tags: sky, taste
-updated: 2026-08-06
+updated: 2026-10-03
 ---
 Michael set the cloud quality bar with a reference photo: dusk marine sky, ragged individual cloud clumps gathered low near the horizon with dark flat undersides, a milky haze band at the waterline, ruthlessly quiet grey-lavender palette.
 
@@ -39,3 +39,4 @@ Levers: `world/water.js` `skyRadiance` cloud block (fbm2 shaping, coverage thres
 - 2026-08-06 — Michael: "clouds seem really flat still, no dimension." Diagnosis: coverage-map shading — no lit/shadow flank per clump. Dimension pass launched: sun-offset density gradient (cheap volumetric illusion), per-clump vertical profile (dark flat base -> domed lit top), sunward cauliflower detail
 - 2026-08-06 — dimension pass shipped: terminator flank shading off the existing sun gradient (zero added noise samples), threshold-relative height profile (dark base skirt -> domed lit crown), cauliflower relief on lit faces only. Within-clump range 1.6->2.0 (control region unmoved), sun-side swing +26% and flips with the sun, dusk bases within -5% (no double-darkening), storm deck byte-equivalent on/off, +0.29ms. GLASS.cloud form* knobs. Still awaiting Michael's eye vs the photo
 - 2026-08-07 — OPTION A shipped on r184: world/clouds.js — one InstancedMesh, 16 clusters x 30 soft puffs, dealt per dayIndex, per-puff sun form in the vertex shader (crown 0.96 vs base 0.39, flanks cross when the sun swings), depth-sorted per frame, drifting on the eased wind. PARALLAX IS REAL: near cluster shifts 20.95px vs far 6.24px for a 6-unit camera move — 3.4x differential, the thing no dome can do. Storm hands off to the flat painted deck (GLASS.cloud.dome), fog mornings dissolve clusters, visible refracted through Snell's window. +1 draw call. Awaiting Michael's eye vs the photo
+- 2026-10-03 — moved to done in a board cleanup: superseded by the volumetric raymarched clouds (sea-and-sky).
