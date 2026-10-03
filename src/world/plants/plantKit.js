@@ -65,7 +65,7 @@ const SPEC = {
   // 'blades' asset, plants built at load from their seeds at three LODs. `lods` are fixed
   // switch distances (u); `remap` re-picks the variant and the proportions per instance.
   // kelp: OPAQUE (no alpha, no dither: see gardens.js GD_NODITHER), drawn turned to the current
-  kelp: { lods: [14, 40], tint: 0.15, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades', opaque: true, def: ['NODITHER'] },
+  kelp: { lods: [14, 40], tint: 0.15, micro: 0, side: D2, build: buildKelp, nv: KELP_VARIANTS.length, remap: kelpRemap, asset: 'blades', opaque: true, def: ['NODITHER', 'KELPX'] },
   grass: { lods: [11, 24], tint: 0.6, micro: 0, side: D2, build: buildGrass, nv: GRASS_VARIANTS.length, asset: 'blades' }
 };
 
@@ -112,6 +112,7 @@ function runtimeGeo(species, v, lod) {
   g.setAttribute('aVA', new THREE.BufferAttribute(o.aVA, 4));
   g.setAttribute('aFlut', new THREE.BufferAttribute(o.aFlut, 1));
   g.setAttribute('aBU', new THREE.BufferAttribute(o.aBU, 2));
+  if (o.aKD) g.setAttribute('aKD', new THREE.BufferAttribute(o.aKD, 4));   // (lods) kelp LOD morph
   g.setIndex(new THREE.BufferAttribute(o.index, 1));
   _geoCache.set(name, g);
   return g;
@@ -199,6 +200,8 @@ function buildGroup(sp, hosts) {
   });
   if (maps.normalMap.userData.rg) patchNormalRG(mat);
   if (S.micro) applyMicroDetail(mat, { scale: S.micro, normal: 0.45, cavity: 0.3, rough: 0.2, cav: ormB === 'cavity' });
+  // (lods) the kelp morph bands: the last 4 u before the near switch, the last 6 before the far one
+  if (def.has('KELPX')) mat.userData.uKX = { value: new THREE.Vector4(S.lods[0] - 4, S.lods[0], S.lods[1] - 6, S.lods[1]) };
   const b = new THREE.BatchedMesh(cap, nvx, nix, mat);
   b.perObjectFrustumCulled = true;
   b.sortObjects = false;
@@ -455,7 +458,7 @@ if (typeof window !== 'undefined') window.__plants = {
     groups: [...groups.values()].map(G => ({ sp: G.sp, cap: G.cap, hosts: G.hosts.map(K => K.key + ':' + K.n), shown: G.vis.reduce((a, b) => a + (b ? 1 : 0), 0), far: G.lod.reduce((a, b, i) => a + (G.vis[i] === 1 && b >= 1 ? 1 : 0), 0), imp: G.vis.reduce((a, b) => a + (b === 2 ? 1 : 0), 0) }))
   }),
   proc: on => { procForced = !!on; return procForced; },
-  lod: on => { lodOn = !!on; for (const G of groups.values()) G.lod.fill(255); return lodOn; },
+  lod: on => { lodOn = !!on; for (const G of groups.values()) { G.lod.fill(255); const u = G.batch.material.userData.uKX; if (u) u.value.set(on ? G.S.lods[0] - 4 : 1e5, on ? G.S.lods[0] : 1e5 + 1, on ? G.S.lods[1] - 6 : 1e5, on ? G.S.lods[1] : 1e5 + 1); } return lodOn; },
   quiet: on => { quietOn = !!on; return quietOn; },
   // (lods) A/B: true puts the dither discard back on the impostor-backed opaque batches
   dither: on => { for (const G of groups.values()) if (G.impB) { const m = G.batch.material, md = m.defines; if (md.GD_ALPHA) continue; if (on) delete md.GD_NODITHER; else md.GD_NODITHER = 1; m.needsUpdate = true; } return !!on; },   // (lods) A/B: skip the unchanged indirect re-upload

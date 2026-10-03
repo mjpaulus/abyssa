@@ -90,6 +90,9 @@ uniform vec4 uJolt;
 #endif
 // (plants) a BatchedMesh of sculpted species (plants/plantKit.js) runs this same program:
 // its instance matrix comes from three's batching texture and its aInst from uInstTex
+#ifdef GD_KELPX
+  attribute vec4 aKD; uniform vec4 uKX;   // (lods) kelp LOD morph: plants/bladesSculpt.js buildKelp
+#endif
 #ifdef USE_BATCHING
   uniform highp sampler2D uInstTex;
   #define GD_IM batchingMatrix
@@ -99,6 +102,16 @@ uniform vec4 uJolt;
 ${PUSH_GLSL}`;
 
 const V_BODY = `
+#ifdef GD_KELPX
+  // (lods) over the band before this level's switch, the blades the next level drops shrink into
+  // their anchor and the kept ones grow toward its size (rest pose, before any sway)
+  if (aKD.w > 0.5) {
+    float gkb = floor(aKD.w / 8.0) - 1.0, gkf = aKD.w - (gkb + 1.0) * 8.0;
+    vec2 gkB = gkb < 0.5 ? uKX.xy : uKX.zw;
+    float gkt = smoothstep(gkB.x, gkB.y, distance((modelMatrix * GD_IM * vec4(0.0, 0.0, 0.0, 1.0)).xyz, cameraPosition));
+    transformed = aKD.xyz + (transformed - aKD.xyz) * (gkf < 0.5 ? 1.0 - gkt : mix(1.0, gkf, gkt));
+  }
+#endif
 #ifdef USE_BATCHING
   vec4 gdInst;
   {
@@ -415,6 +428,7 @@ function gardenMat(o) {
       Object.assign(sh.uniforms, { uBladePack: { value: BS.pack }, uBladeNrm: { value: BS.nrm }, uTrans: { value: o.trans ?? 1 } });
     }
     if (m.userData.uInstTex) sh.uniforms.uInstTex = m.userData.uInstTex;
+    if (m.userData.uKX) sh.uniforms.uKX = m.userData.uKX;
     if (m.defines.GD_THIN && !m.defines.GD_BLADE) sh.uniforms.uTrans = { value: o.trans ?? 1 };
     if (m.defines.GD_RUFFLE) sh.uniforms.uRuffle = { value: o.ruffle ?? 0.012 };
     if (m.defines.GD_BIOLUM || m.defines.GD_BIOTIP) { sh.uniforms.uBioCol = { value: new THREE.Color(o.bioCol ?? 0x2f8f86) }; sh.uniforms.uBioFrac = { value: o.bioFrac ?? 1 }; }
