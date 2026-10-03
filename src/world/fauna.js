@@ -1753,7 +1753,9 @@ const FS_DEFS = {
   'URCHIN': { set: 'reef', pieces: [['urchin', () => REEF_LABELS.urchin]], scale: 0.75, lodR: -1 },
   // SEA STAR (fauna3): its own sculpt and 1024 set (entities/starSculpt.js) — the fauna2 bake in the
   // reef atlas lost to the shader star and stays unused there
-  'SEA STAR': { set: 'star', pieces: [['star', () => STAR_LABEL]], scale: 0.7, lodR: -1 },
+  // (lods) far: the bake's welded collapse-decimated copy (same atlas), per star past farR, and no
+  // star past the fog cull at all (they used to draw all 40 at full detail anywhere in the zone)
+  'SEA STAR': { set: 'star', pieces: [['star', () => STAR_LABEL]], scale: 0.7, lodR: -1, far: 'star_far', farR: 24 },
   // the deep (entities/deepSculpt.js)
   'ANGLER': { set: 'deep', pieces: [['angler', () => DEEP_LABELS.angler], ['anglerJaw', () => DEEP_LABELS.anglerJaw], ['anglerPec', () => DEEP_LABELS.anglerPec], ['anglerLure', () => DEEP_LABELS.anglerLure]], scale: 1.6, lodR: -1 },
   'GULPER': { set: 'deep', pieces: [['gulper', () => DEEP_LABELS.gulper], ['gulperJaw', () => DEEP_LABELS.gulperJaw]], scale: 1.5, lodR: -1 },
@@ -1774,6 +1776,7 @@ function installFaunaSculpt(set, a) {
     G.sculptMat = faunaSculptMaterial(G.procMat, a.maps[set]);
     G.sculptTris = G.sculptGeo.index.count / 3 * G.n;
     G.lodR = def.lodR != null ? def.lodR : FS_LOD_R;
+    if (def.far && a.geos[def.far] && G.stat) installStaticLod(G, faunaSculptGeometry([{ src: a.geos[def.far], label: def.pieces[0][1]() }], def.scale, G.procGeo), def.farR);
     fsState.n++;
   }
   fsState.ms += performance.now() - t0;
@@ -1781,6 +1784,64 @@ function installFaunaSculpt(set, a) {
 function loadFaunaSculpts() {
   if (typeof location !== 'undefined' && location.search.includes('faunaproc')) return;
   for (const set in FS_SETS) loadSculpted(FS_SETS[set], set).then(a => installFaunaSculpt(set, a));
+}
+// (lods) PER-INSTANCE detail for a STATIC group (the sea stars): two child InstancedMeshes (near
+// sculpt / far decimated sculpt, the sculpt material) under the group's mesh, so they inherit its
+// zone gate and hides; the group mesh itself draws count 0 while they are up. Each child owns
+// copies of the instance matrix and aInst, refilled from the group's (posed once per layout) only
+// when an instance changes level or the camera has moved 1 u. Past the fog cull: not drawn.
+const ST_HYST = 1.5;
+function installStaticLod(G, farGeo, farR) {
+  const mk = src => {
+    const g = new THREE.BufferGeometry();
+    for (const k in src.attributes) if (k !== 'aInst') g.setAttribute(k, src.attributes[k]);
+    g.setIndex(src.index);
+    const ai = new THREE.InstancedBufferAttribute(new Float32Array(G.n * 4), 4); ai.setUsage(THREE.DynamicDrawUsage);
+    g.setAttribute('aInst', ai);
+    const m = new THREE.InstancedMesh(g, G.sculptMat, G.n);
+    m.frustumCulled = false; m.castShadow = false; m.receiveShadow = false; m.count = 0;
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.name = G.name + ' lod';
+    G.mesh.add(m);
+    return m;
+  };
+  G.lodM = [mk(G.sculptGeo), mk(farGeo)];
+  G.lodLv = new Uint8Array(G.n).fill(255);
+  G.lodCam = new Float32Array([1e9, 0, 0]);
+  G.farR = farR;
+  G.farTris = farGeo.index.count / 3;
+}
+function staticLod(G, on) {
+  const M = G.lodM;
+  if (!on) {
+    if (G.mesh.count !== G.n) { G.mesh.count = G.n; M[0].visible = M[1].visible = false; G.lodLv.fill(255); G.lodCam[0] = 1e9; }
+    return;
+  }
+  if (G.mesh.count !== 0) { G.mesh.count = 0; M[0].visible = M[1].visible = true; }
+  const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z, C = G.lodCam;
+  if ((cx - C[0]) ** 2 + (cy - C[1]) ** 2 + (cz - C[2]) ** 2 < 1) return;
+  C[0] = cx; C[1] = cy; C[2] = cz;
+  const st = G.st, lv = G.lodLv, R = G.farR, cull = uCull.value;
+  let changed = false;
+  for (let i = 0; i < G.n; i++) {
+    const o = i * STN, d = Math.hypot(st[o] - cx, st[o + 1] - cy, st[o + 2] - cz), cur = lv[i];
+    let l = d < R ? 0 : d < cull ? 1 : 2;
+    if (cur !== 255 && l !== cur && Math.abs(d - (l + cur === 1 ? R : cull)) < ST_HYST) l = cur;
+    if (l !== cur) { lv[i] = l; changed = true; }
+  }
+  if (!changed) return;
+  const sm = G.mesh.instanceMatrix.array, sa = G.aInst.array;
+  for (let k = 0; k < 2; k++) {
+    const m = M[k], dm = m.instanceMatrix.array, da = m.geometry.attributes.aInst.array;
+    let c = 0;
+    for (let i = 0; i < G.n; i++) {
+      if (lv[i] !== k) continue;
+      for (let q = 0; q < 16; q++) dm[c * 16 + q] = sm[i * 16 + q];
+      for (let q = 0; q < 4; q++) da[c * 4 + q] = sa[i * 4 + q];
+      c++;
+    }
+    m.count = c; m.instanceMatrix.needsUpdate = true; m.geometry.attributes.aInst.needsUpdate = true;
+  }
 }
 // near = sculpt, far = procedural (shoals swap on their centre; lone animals on themselves)
 function faunaLod(G) {
@@ -1791,10 +1852,15 @@ function faunaLod(G) {
   const near = fsState.on && (G.lodR < 0 || dx * dx + dy * dy + dz * dz < R * R);
   const g = near ? G.sculptGeo : G.procGeo, m = near ? G.sculptMat : G.procMat;
   if (G.mesh.geometry !== g) { G.mesh.geometry = g; G.mesh.material = m; }
+  if (G.lodM) staticLod(G, near && !G.lodOff);
 }
 if (typeof window !== 'undefined') window.__faunaSculpt = {
   state: () => ({ installed: fsState.n, sets: fsState.sets, ms: +fsState.ms.toFixed(1), on: fsState.on,
-    groups: groups.filter(G => G.sculptGeo).map(G => ({ name: G.name, near: G.mesh.geometry === G.sculptGeo, tris: G.mesh.geometry.index.count / 3 * G.n, vis: G.mesh.visible })) }),
+    groups: groups.filter(G => G.sculptGeo).map(G => ({ name: G.name, near: G.mesh.geometry === G.sculptGeo, vis: G.mesh.visible,
+      tris: G.lodM && G.mesh.count === 0 ? G.lodM[0].count * G.sculptGeo.index.count / 3 + G.lodM[1].count * G.farTris : G.mesh.geometry.index.count / 3 * G.n,
+      lod: G.lodM ? [G.lodM[0].count, G.lodM[1].count, G.n - G.lodM[0].count - G.lodM[1].count] : null })) }),
+  // (lods) A/B: static-group detail levels off = the old all-near single draw
+  lod: v => { for (const G of groups) if (G.lodM) { G.lodOff = !v; staticLod(G, false); } return !!v; },
   on: v => { fsState.on = !!v; for (const G of groups) faunaLod(G); return fsState.on; }
 };
 
@@ -1908,6 +1974,7 @@ function layoutAll() {
     G.layout(G);
     G.stp.set(G.st);
     pose(G, 1);
+    if (G.lodM) { G.lodLv.fill(255); G.lodCam[0] = 1e9; }   // (lods) re-partition from the new pose
   }
   hidden = false;
   acc = 0;
