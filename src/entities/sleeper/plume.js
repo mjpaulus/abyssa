@@ -8,7 +8,7 @@
 // for the optical depth on the line from her eyes to Sal, and above a threshold she loses
 // him (keeps striking where she last saw him, eyes searching).
 //
-// Render: ONE instanced draw of camera-facing quads (a ring of 320), all motion analytic in
+// Render: ONE instanced draw of camera-facing quads (a ring of 448), all motion analytic in
 // the vertex shader off a clock uniform; the CPU writes a particle's attributes once, when it
 // is born. Lit like the silt it is: the scene's own ambient/hemisphere/key (read off the
 // lights, divided by PI exactly as a Lambert surface takes them), the lantern's slot from
@@ -21,26 +21,26 @@
 // the same clocks the particles spread on (checked against frames; see the card).
 //
 // Budget: 1 draw (+1 veil draw while the camera is inside a cloud). CPU per frame: a clock,
-// a light read, the veil density (<= 8 plumes). Zero per-frame allocation.
+// a light read, the veil density (<= 12 plumes). Zero per-frame allocation.
 import * as THREE from 'three';
 import { scene, camera } from '../../core.js';
 import { canvas2d, noiseCanvas, seededRand } from '../../lib/textures.js';
 import { terrainH } from '../../world/terrain.js';
 
-const N = 320;                       // particle ring
-const PL = 8;                        // plume records (density model)
+const N = 448;                       // particle ring
+const PL = 12;                       // plume records (density model): 0..3 the hammer's, 4..11 footfalls'
 // the two kinds: a hammer blow and a footfall
 export const PLUME = {
-  big: { n: 60, life: [5.0, 6.6], vr: [3.0, 14.0], vy: [1.0, 6.5], s0: [3.5, 5.5], s1: [10, 15], a: 0.62, kd: 1.05,
+  big: { n: 38, life: [4.6, 6.0], vr: [3.0, 14.0], vy: [1.0, 6.5], s0: [3.5, 5.5], s1: [9, 13], a: 0.72, kd: 1.05,
     rh0: 2.0, rhA: 10.5, rhK: 1.0, hv0: 1.6, hvA: 4.4, hvK: 0.8, D: 3.6 },
   small: { n: 7, life: [2.4, 3.4], vr: [1.2, 3.8], vy: [0.4, 1.4], s0: [1.2, 1.8], s1: [3.0, 4.4], a: 0.30, kd: 1.3,
     rh0: 0.8, rhA: 2.8, rhK: 1.2, hv0: 0.6, hvA: 1.3, hvK: 1.0, D: 0.9 }
 };
-export const PLUME_TUNE = { ambK: 1.6, lampK: 0.6, veilK: 1.0, sink: 0.30 };
+export const PLUME_TUNE = { ambK: 1.6, lampK: 0.6, veilK: 1.0, sink: 0.30, off: false };   // off: render A/B (the gameplay model still runs)
 
 let mesh = null, veil = null, uni = null, head = 0, clock = 0, alive = 0;
 const rec = new Float32Array(PL * 8);   // x y z t0 life kindIdx(0 big / 1 small) k used
-let recHead = 0;
+let recHead = 0, recHeadS = 0;    // two rings: a footfall never evicts a hammer cloud
 const KINDS = [PLUME.big, PLUME.small];
 let lights = null;
 const _c = new THREE.Color();
@@ -85,13 +85,23 @@ function build() {
     uTime: { value: 0 }, uTex: { value: puffTexture() }, uAlb: { value: new THREE.Color(0.60, 0.55, 0.45) },
     uAmb: { value: new THREE.Vector3(0.05, 0.06, 0.06) }, uLampK: { value: 1 }, uSink: { value: PLUME_TUNE.sink }
   });
+  // THE WATER, PER VERTEX. The patched fog chunk (water.js: stratified Beer-Lambert, both
+  // lamp in-scatter slots, the bolt) is the costliest thing a fragment of this cloud would
+  // run, and the cloud is many layers deep on screen. It is affine in the colour it is
+  // given (out = c * T + S), and a quad's corners span a few units of water, so the
+  // VERTEX runs it twice (on black and on white) and hands T and S down. Measured: the
+  // per-fragment version cost ~1.5-2 ms more on a near cloud. The chunk's text is taken as
+  // shipped; only its output variable is renamed (gl_FragColor is a fragment built-in) and
+  // its bolt normal is the sprite's facing (ABYSSA_LIT: no screen derivatives in a VS).
+  const FOGV = THREE.ShaderChunk.fog_fragment.replace(/gl_FragColor/g, 'fogTmp');
   const mat = new THREE.ShaderMaterial({
     uniforms: uni, transparent: true, depthWrite: false, depthTest: true, fog: true,
     vertexShader: /* glsl */`
       uniform float uTime, uSink;
       attribute vec4 aA, aB, aC, aD;
-      varying vec2 vUv; varying float vA, vH, vCell; varying vec3 vW;
-      #include <fog_pars_vertex>
+      varying vec2 vUv; varying float vA, vH, vCell; varying vec3 vW, vFogT, vFogS;
+      #define ABYSSA_LIT
+      #include <fog_pars_fragment>
       void main(){
         float age = uTime - aA.w, life = aC.z;
         vA = 0.0; vUv = vec2(0.0); vH = 0.0; vCell = 0.0; vW = vec3(0.0);
@@ -124,12 +134,24 @@ function build() {
         vec4 mvPosition = viewMatrix * vec4(w, 1.0);
         vA *= smoothstep(1.2, 3.5, -mvPosition.z);           // the veil carries it inside 3 u
         gl_Position = projectionMatrix * mvPosition;
+        vFogT = vec3(1.0); vFogS = vec3(0.0);
         #include <fog_vertex>
+        #ifdef USE_FOG
+        {
+          vec3 normal = vec3(0.0, 0.0, 1.0);
+          vec4 fogTmp = vec4(0.0, 0.0, 0.0, 1.0);
+          ${FOGV}
+          vFogS = fogTmp.rgb;
+          fogTmp = vec4(1.0);
+          ${FOGV}
+          vFogT = fogTmp.rgb - vFogS;
+        }
+        #endif
       }`,
     fragmentShader: /* glsl */`
       uniform sampler2D uTex; uniform vec3 uAlb, uAmb; uniform float uLampK;
-      varying vec2 vUv; varying float vA, vH, vCell; varying vec3 vW;
-      #include <fog_pars_fragment>
+      uniform vec4 abyssaLampA, abyssaLampAC;
+      varying vec2 vUv; varying float vA, vH, vCell; varying vec3 vW, vFogT, vFogS;
       void main(){
         if (vA < 0.002) discard;
         vec2 cell = vec2(mod(vCell, 2.0), floor(vCell / 2.0));
@@ -139,15 +161,12 @@ function build() {
         // lit from above like a cloud: the crown takes the light, the underside is its own shadow
         float sh = clamp(0.62 + 0.85 * vH, 0.22, 1.1) * (0.7 + 0.3 * tx.r);
         vec3 E = uAmb * sh;
-        #ifdef USE_FOG
         if (abyssaLampA.w > 0.0) {
           vec3 dl = vW - abyssaLampA.xyz;
           float d2 = dot(dl, dl), q = d2 / max(abyssaLampAC.w * abyssaLampAC.w, 1.0), wn = clamp(1.0 - q * q, 0.0, 1.0);
           E += abyssaLampAC.rgb * (abyssaLampA.w * wn * wn / max(d2, 1.0) * 0.3183 * uLampK * (0.55 + 0.45 * sh));
         }
-        #endif
-        gl_FragColor = vec4(uAlb * E, a);
-        #include <fog_fragment>
+        gl_FragColor = vec4(uAlb * E * vFogT + vFogS, a);
       }`
   });
   mesh = new THREE.Mesh(g, mat);
@@ -203,7 +222,9 @@ export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
     else { at.addUpdateRange(start * 4, (N - start) * 4); at.addUpdateRange(0, (start + n - N) * 4); }
     at.needsUpdate = true;
   }
-  const o = recHead * 8; recHead = (recHead + 1) % PL;
+  let o;
+  if (ki === 0) { o = recHead * 8; recHead = (recHead + 1) % 4; }
+  else { o = (4 + recHeadS) * 8; recHeadS = (recHeadS + 1) % (PL - 4); }
   rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = clock; rec[o + 4] = lifeMax; rec[o + 5] = ki; rec[o + 6] = k; rec[o + 7] = 1;
   alive = Math.max(alive, clock + lifeMax + 0.2);
   mesh.visible = true;
@@ -258,7 +279,7 @@ export function updatePlumes(dt) {
   uni.uTime.value = clock;
   uni.uLampK.value = PLUME_TUNE.lampK;
   uni.uSink.value = PLUME_TUNE.sink;
-  const on = clock < alive;
+  const on = clock < alive && !PLUME_TUNE.off;
   mesh.visible = on;
   if (!on) { veil.visible = false; return; }
   // the light the silt takes: what a Lambert surface gets from the same lights
@@ -294,8 +315,8 @@ export function clearPlumes() {
   if (mesh) { mesh.visible = false; veil.visible = false; }
 }
 export function plumeState() {
-  let n = 0;
-  for (let i = 0; i < PL; i++) if (rec[i * 8 + 7] && clock - rec[i * 8 + 3] < rec[i * 8 + 4]) n++;
-  return { live: n, clock, visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
+  let n = 0, big = 0;
+  for (let i = 0; i < PL; i++) if (rec[i * 8 + 7] && clock - rec[i * 8 + 3] < rec[i * 8 + 4]) { n++; if (i < 4) big++; }
+  return { live: n, big, clock, visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
 }
 if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, spawn: spawnPlume, clear: clearPlumes };
