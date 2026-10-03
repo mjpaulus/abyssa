@@ -1420,6 +1420,7 @@ function update(dt, t) {
     if (ev.quake) shake = Math.max(shake, ev.quake);   // her footfalls, hammer, settle thump
     // big blows startle the reef too (footfalls already reach it through stir.js)
     if (ev.quake > 0.3 && lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, Math.min(1, ev.quake + 0.3), P_SLAM);
+    if (ev.plume) stirPulse(ev.plumeX, ev.plumeY, ev.plumeZ, 30, 0, Math.min(1, 0.5 + 0.5 * ev.plume), P_SLAM);   // the Brooder's sand plume startles the reef where it rises
     if (ev.msg) showMsg(ev.msg, 4);
     if (ev.lightDrain) player.light -= ev.lightDrain;
     if (ev.inkDim) inkBlind = 1;   // Orune answers the light with ink (hoarder.js)
