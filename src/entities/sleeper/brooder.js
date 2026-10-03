@@ -28,7 +28,7 @@ import { riftPos } from '../../config.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
-import { buildNear, groundAt, placeFoot, pushOut, steer, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
+import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
@@ -414,7 +414,7 @@ export function makeBrooder(idx, cfg) {
     tris: countTris(L.body), sculpted: L.sculpted,
     eyes: L.eyeSt ? L.eyeSt.map(e => ({ errDeg: +(e.err * 57.3).toFixed(1), saccades: e.n })) : null,
     sight: { seen: L.seen, tau: +L.tau.toFixed(2), blindT: +L.blindT.toFixed(2), aim: L.aim.toArray().map(v => +v.toFixed(1)), lost: L.lostN || 0 },
-    ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)) }
+    ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), climb: +(L.climbT > 0 ? L.climbT : 0).toFixed(1), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)), elbow: L.claws.map(c => +(c.elbow || 0).toFixed(3)) }
   });
 
   if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
@@ -591,7 +591,7 @@ function buildClaw(body, mat, sd, k) {
 }
 // the claw's hull samples for the floor clamp (re-run when the sculpt swaps the meshes)
 function clawSamples(c) {
-  c.samp = [c.merus, c.carpus, c.palm, c.dact].map(mesh => ({ mesh, pts: hullSamples(mesh.geometry, 5) }));
+  c.samp = [c.merus, c.carpus, c.palm, c.dact].map(mesh => ({ mesh, pts: hullSamples(mesh.geometry, 7, mesh === c.merus ? 0.04 : -1e9) }));
   if (!c.lift) { c.lift = { x: 0, v: 0 }; c.need = 0; c.need0 = 0; c.liftNow = 0; }
 }
 
@@ -994,43 +994,64 @@ function tuckJoint(j, T, base, sd, d) {
 // ground (floor or rock top) once she is up: standing she keeps 0.35 u of clearance. Asleep
 // she is bedded (the ridge); the floor comes on through the heave, so rising lifts her out.
 // The support estimate below is unchanged in spirit; this is a hard floor applied after it.
-const SOLE_CLR = 0.35, CLAW_MAXLIFT = 1.4, SOLE_BED_DEEP = 0.6, CLAW_M = 0.12;
+const SOLE_CLR = 0.35, SOLE_BED_DEEP = 0.6, CLAW_M = 0.12;
 // the folded dactyl lies flat on its thick base: lift its tip by its own radius
 const FOOT_LIFT0 = 0.019, FOOT_LIFTF = 0.05;
-function clawPen(L, c) {
+// (pieces whose samples all stand > 4 u clear at the unclamped pose sit out the search)
+function clawPen(L, c, all) {
   let w = -1e9;
-  for (const s of c.samp) { const p = penetration(L, s.pts, s.mesh.matrixWorld, CLAW_M); if (p > w) w = p; }
+  for (const s of c.samp) {
+    if (!all && s.clear) continue;
+    const p = penetration(L, s.pts, s.mesh.matrixWorld, CLAW_M);
+    if (all) s.clear = p < -4;
+    if (p > w) w = p;
+  }
   return w;
 }
 // The claw's floor: if any hull sample is under the ground, find (bisection) the smallest
-// lift of the arm at its root that clears it. A blow that ARRIVES at the surface kicks back
-// (a spring on the lift, underdamped): it slams onto the sand and rebounds, never through.
+// lift that clears it: first at the SHOULDER (up to 0.45 rad: more swings the merus root,
+// buried under her lip, down out of her belly), then the rest at the ELBOW (its sign found
+// by trial: the joint's frame is turned inward). A blow that ARRIVES at the surface kicks
+// back (a spring on the shoulder lift, underdamped): it slams onto the sand and rebounds,
+// never through.
+const ROOT_MAX = 0.45, ELBOW_MAX = 1.3;
+function liftAt(L, c, j, max, signed) {
+  const r = j.rotation, z0 = r.z;
+  let sg = 1;
+  if (signed) {
+    r.z = z0 + 0.25; c.root.updateMatrixWorld(true); const pp = clawPen(L, c, false);
+    r.z = z0 - 0.25; c.root.updateMatrixWorld(true); const pm = clawPen(L, c, false);
+    sg = pp <= pm ? 1 : -1;
+  }
+  r.z = z0 + sg * max; c.root.updateMatrixWorld(true);
+  if (clawPen(L, c, false) > 0) return sg * max;
+  let lo = 0, hi = max;
+  for (let i = 0; i < 7; i++) {
+    const mid = (lo + hi) * 0.5;
+    r.z = z0 + sg * mid; c.root.updateMatrixWorld(true);
+    if (clawPen(L, c, false) > 0) lo = mid; else hi = mid;
+  }
+  r.z = z0 + sg * hi; c.root.updateMatrixWorld(true);
+  return sg * hi;
+}
 function clampClaw(L, c, dt) {
-  const r = c.root.rotation, z0 = r.z;
+  const z0 = c.root.rotation.z, e0 = c.cj.rotation.z;
   c.root.updateMatrixWorld(true);
-  let need = 0;
-  if (clawPen(L, c) > 0) {
-    let lo = 0, hi = CLAW_MAXLIFT;
-    r.z = z0 + hi; c.root.updateMatrixWorld(true);
-    if (clawPen(L, c) > 0) need = hi;
-    else {
-      for (let i = 0; i < 7; i++) {
-        const mid = (lo + hi) * 0.5;
-        r.z = z0 + mid; c.root.updateMatrixWorld(true);
-        if (clawPen(L, c) > 0) lo = mid; else hi = mid;
-      }
-      need = hi;
-    }
+  let need = 0, el = 0;
+  if (clawPen(L, c, true) > 0) {
+    need = liftAt(L, c, c.root, ROOT_MAX, false);
+    if (need >= ROOT_MAX && clawPen(L, c, false) > 0) el = liftAt(L, c, c.cj, ELBOW_MAX, true);
   }
   if (dt > 0) {
     if (c.major && need > 0.03 && c.need0 <= 0.03 && L.swing > 0.4) c.lift.v += 2.6 * Math.max(0.3, L.threatE);
     spr(c.lift, need, 15, 0.28, dt);
   } else { c.lift.x = need; c.lift.v = 0; }
   c.need0 = need;
-  const lift = Math.max(need, c.lift.x);
-  r.z = z0 + lift;
+  const lift = Math.max(need, Math.min(c.lift.x, ROOT_MAX + 0.25));
+  c.root.rotation.z = z0 + lift;
+  c.cj.rotation.z = e0 + el;
   c.root.updateMatrixWorld(true);
-  c.need = need; c.liftNow = lift;
+  c.need = need; c.liftNow = lift; c.elbow = el;
 }
 
 function poseAll(L, dt, player) {
@@ -1322,7 +1343,19 @@ export function updateBrooder(L, dt, t, player) {
     want = L.blindT < SIGHT_GIVEUP ? Math.atan2(L.aim.x - L.pos.x, L.aim.z - L.pos.z)
       : L.searchYaw + 0.7 * Math.sin((L.blindT - SIGHT_GIVEUP) * 0.45);
   }
-  if (want !== null && speed > 0) want = steer(L, want);    // round the rocks and hulls ahead
+  if (want !== null && speed > 0) {
+    // round the rocks and hulls ahead; no headway for 3 s (a pocket between two of them)
+    // and she commits to going round the other way
+    const dGo = Math.hypot(L.walkTo.x - L.pos.x, L.walkTo.z - L.pos.z);
+    if (!(dGo < (L.goBest ?? 1e9) - 1.5)) L.goStall = (L.goStall || 0) + dt; else { L.goBest = dGo; L.goStall = 0; L.goFlips = 0; }
+    if (L.goStall > 3) {
+      L.goSide = L.goSide > 0 ? -1 : 1; L.goStall = 0; L.goBest = dGo;
+      // boxed in twice over: she climbs (rocks stop blocking; her sole and feet ride their tops)
+      if ((L.goFlips = (L.goFlips || 0) + 1) >= 2) { L.climbT = 8; L.goFlips = 0; }
+    }
+    want = steer(L, want, L.goSide || 0);
+  } else { L.goBest = undefined; L.goStall = 0; L.goSide = 0; L.goFlips = 0; }
+  if (L.climbT > 0) { L.climbT -= dt; if (L.climbT < 0.5 && overTall(L)) L.climbT = 0.5; }
   // the turn has inertia: angular velocity eases toward what the error asks for (same
   // 0.35 rad/s ceiling), so she swings into a turn and out of it instead of pivoting
   let yawWant = 0;
@@ -1374,6 +1407,8 @@ export function updateBrooder(L, dt, t, player) {
       const e = win(f.t, 0.12, 0.92), lift = Math.sin(Math.PI * Math.pow(f.t, 0.72));
       f.cur.lerpVectors(f.from, f.to, e);
       f.cur.y += lift * f.h * L.R * L.standE;
+      // a swing over a hump never cuts through it: the arc rides over the ground under it
+      { const gc = groundAt(L, f.cur.x, f.cur.z, true) + 0.25 * lift; if (f.cur.y < gc) f.cur.y = gc; }
       // weight comes off this corner: the body lists toward it and away from the step
       rollT -= sd * 0.016 * lift; pitchT += (k < 2 ? 0.011 : -0.008) * lift; yT += 0.006 * lift;
       if (f.t >= 1) {

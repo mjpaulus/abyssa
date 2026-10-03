@@ -22,11 +22,11 @@ import { propColliders } from '../../world/props.js';
 
 const NEAR_MAX = 160;
 const near = new Array(NEAR_MAX).fill(null);
-const nearBlock = new Uint8Array(NEAR_MAX);
+const nearBlock = new Uint8Array(NEAR_MAX), nearTall = new Uint8Array(NEAR_MAX);
 let nearN = 0;
-// a collider whose top stands this far (x R) over the floor is something she walks
-// AROUND, not over: her belly clears ~0.15 R standing
-export const BLOCK_H = 0.20;
+// a collider whose top stands this far (x R, ~6.5 u) over the floor is something she walks
+// AROUND; anything lower she steps on and rides over (her sole lifts onto it)
+export const BLOCK_H = 0.42;
 export const BODY_RH = 0.86;            // her horizontal body radius in R (the shell is ~1.0 wide, ~1.1 long, the rim is skirted plates)
 
 // Gather the colliders within `rad` of (x, z) and within the zone's height band.
@@ -42,8 +42,10 @@ export function buildNear(L, rad) {
       if (c.y > gy + 60 || c.y < gy - 60) continue;          // another zone's floor
       if (dx * dx + dz * dz > rr * rr) continue;
       near[nearN] = c;
-      // wrecks always block (hulls are walls); rocks and the rest by their height
-      nearBlock[nearN] = list === 1 || (c.y + c.r - terrainH(c.x, c.z, L.idx) > BLOCK_H * R) ? 1 : 0;
+      // wrecks always block (hulls are walls); rocks and the rest by their height, unless she
+      // is CLIMBING (brooder.js: boxed in by boulders she cannot get round, she goes over)
+      nearTall[nearN] = list !== 1 && c.y + c.r - terrainH(c.x, c.z, L.idx) > BLOCK_H * R ? 1 : 0;
+      nearBlock[nearN] = list === 1 || (!(L.climbT > 0) && nearTall[nearN]) ? 1 : 0;
       nearN++;
     }
   }
@@ -107,9 +109,22 @@ export function pushOut(L, dt) {
   return tot;
 }
 
+// Still over a tall rock (a climb is not over until she is off it)?
+export function overTall(L) {
+  const br = BODY_RH * L.R;
+  for (let k = 0; k < nearN; k++) {
+    if (!nearTall[k]) continue;
+    const c = near[k], rr = br + c.r * 0.9;
+    if ((L.pos.x - c.x) ** 2 + (L.pos.z - c.z) ** 2 < rr * rr) return true;
+  }
+  return false;
+}
+
 // Steering: bend a wanted heading round the blocking colliders ahead (a tangent push on
 // the side she was already going, plus a little straight away from it).
-export function steer(L, want) {
+// `side` (+1/-1) is sticky: brooder.js flips it when she stops making headway (two rocks
+// either side of her line make a pocket a potential field can sit in).
+export function steer(L, want, side = 0) {
   const R = L.R, br = BODY_RH * R, look = 1.2 * R;
   let dx = Math.sin(want), dz = Math.cos(want), any = false;
   for (let k = 0; k < nearN; k++) {
@@ -121,9 +136,9 @@ export function steer(L, want) {
     if (ahead < -0.2) continue;                                   // behind her
     const w = Math.min(1.5, 1 - gap / look) * (0.4 + 0.6 * Math.max(0, ahead));
     let tx = rz / d, tz = -rx / d;                                // tangent
-    if (tx * dx + tz * dz < 0) { tx = -tx; tz = -tz; }
-    dx += (tx * 1.6 - rx / d * 0.6) * w;
-    dz += (tz * 1.6 - rz / d * 0.6) * w;
+    if (side ? side < 0 : tx * dx + tz * dz < 0) { tx = -tx; tz = -tz; }
+    dx += (tx * 1.1 - rx / d * 0.4) * w;
+    dz += (tz * 1.1 - rz / d * 0.4) * w;
     any = true;
   }
   return any ? Math.atan2(dx, dz) : want;
@@ -173,21 +188,24 @@ export function soleFromGeos(geos, n = 11) {
 // A limb piece's hull samples: along its bone (local X) in `bins` slices, the extreme
 // vertices in +-Y and +-Z of each slice, in the mesh's own space (the mesh's scale is part
 // of its matrixWorld, so these stay right after a rescale).
-export function hullSamples(g, bins = 5) {
+// minX: skip the piece behind its own joint (the merus root is buried in her shell, and
+// lifting the arm swings it DOWN: it would make every lift look like it needs more).
+export function hullSamples(g, bins = 7, minX = -1e9) {
   const P = g.attributes.position.array;
   let x0 = 1e9, x1 = -1e9;
-  for (let i = 0; i < P.length; i += 3) { if (P[i] < x0) x0 = P[i]; if (P[i] > x1) x1 = P[i]; }
-  const best = new Float32Array(bins * 4 * 4).fill(NaN);    // per bin: 4 extremes x (x,y,z,score)
+  for (let i = 0; i < P.length; i += 3) { if (P[i] < minX) continue; if (P[i] < x0) x0 = P[i]; if (P[i] > x1) x1 = P[i]; }
+  const E = 8, best = new Float32Array(bins * E * 4).fill(NaN);    // per bin: 8 extremes x (x,y,z,score)
   for (let i = 0; i < P.length; i += 3) {
-    const b = Math.min(bins - 1, ((P[i] - x0) / (x1 - x0 || 1) * bins) | 0);
-    const sc = [P[i + 1], -P[i + 1], P[i + 2], -P[i + 2]];
-    for (let e = 0; e < 4; e++) {
-      const o = (b * 4 + e) * 4;
+    if (P[i] < minX) continue;
+    const b = Math.min(bins - 1, ((P[i] - x0) / (x1 - x0 || 1) * bins) | 0), y = P[i + 1], z = P[i + 2];
+    const sc = [y, -y, z, -z, y + z, -y - z, y - z, z - y];
+    for (let e = 0; e < E; e++) {
+      const o = (b * E + e) * 4;
       if (!(sc[e] <= best[o + 3])) { best[o] = P[i]; best[o + 1] = P[i + 1]; best[o + 2] = P[i + 2]; best[o + 3] = sc[e]; }
     }
   }
   const pts = [];
-  for (let i = 0; i < bins * 4; i++) if (best[i * 4 + 3] === best[i * 4 + 3]) pts.push(best[i * 4], best[i * 4 + 1], best[i * 4 + 2]);
+  for (let i = 0; i < bins * E; i++) if (best[i * 4 + 3] === best[i * 4 + 3]) pts.push(best[i * 4], best[i * 4 + 1], best[i * 4 + 2]);
   return new Float32Array(pts);
 }
 
