@@ -40,12 +40,16 @@ import { Pass } from 'postprocessing';
 import { camera, renderer as coreRenderer } from './core.js';
 import { sun, LOOK } from './lighting.js';
 import { GLASS, SUN } from './config.js';
-import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, cloudLook, localSurfaceY, styleState, airAmbience } from './world/water.js';
+import { GLSL_NOISE, GLSL_SKY_DECL, GLSL_SKY_COVERAGE, SKY_UNIFORMS, skyState, cloudLook, localSurfaceY, styleState, airAmbience, K_AIR } from './world/water.js';
 import { cloudOccluder, cloudOccK } from './world/clouds.js';
 import { DOME_U as VOL_U } from './world/sky.js';
 
 const SUN_REF_I = 2.60;     // lighting.js STOPS[0].sunI, the same reference volumetrics uses
-const K_AIR_G = 0.0040;     // water.js K_AIR green: the marine haze the rays are made of
+// The rays are made of the same air every fogged program and the dome integrate: water.js
+// K_AIR's green leg, read live (it was a hand copy of the old 2.9 km marine haze, 0.0040,
+// left behind when the ocean round cleared the air ~3.5x). The gain on it is the same
+// STYLE_U[0] the KAIR macro carries (Flow-lean haze + the storm's spray haze).
+const K_AIR_G = K_AIR[1];
 const MAX_TAPS = 32;
 const d2r = Math.PI / 180;
 
@@ -349,8 +353,8 @@ export class SkyRaysPass extends Pass {
     sx = Math.max(-0.75, Math.min(1.75, sx)); sy = Math.max(-0.75, Math.min(1.75, sy));
     S.sunUV[0] = sx; S.sunUV[1] = sy;
 
-    // THE AIR. K_AIR with the Flow-lean haze gain (styleState()[0], the same number every
-    // fogged program multiplies KAIR by), plus the marine layer's scattering. Normalised
+    // THE AIR. K_AIR with the Flow-lean + storm haze gain (styleState()[0], the same number
+    // every fogged program multiplies KAIR by), plus the marine layer's scattering. Normalised
     // at the shipped lean (0.6 -> 1.39x) so the defaults land at 1; a clear-air day at
     // lean 0 fans at 0.72, a foggy one brighter but fog also kills the disc (discK).
     const st = styleState();

@@ -28,6 +28,8 @@
 // No backticks inside GLSL comments (they terminate the template literal).
 import * as THREE from 'three';
 import { Pass } from 'postprocessing';
+import { SURFACE_Y } from './config.js';
+import { OCEAN_GLSL_DISP, OCEAN_GLSL_DISP_PREV, OCEAN_UNIFORMS, uOcDispPrev, uOcVelK, buildOceanGeometry, GRID_LEVELS, oceanReady } from './world/ocean.js';
 
 // TEXTURE MIP BIAS under upscaling. abyssaTaa (installed by world/water.js patchFog on
 // every fogged program, the abyssaAir way) carries x = LOD bias; the built-in map chunks
@@ -87,6 +89,7 @@ const RESOLVE_FRAG = /* glsl */`
   uniform float uReset;
   uniform vec4 uK;
   uniform vec2 uK2;
+  uniform vec4 uSea;
   varying vec2 vUv;
 
   vec3 toYC(vec3 c) { return vec3(0.25 * c.r + 0.5 * c.g + 0.25 * c.b, 0.5 * c.r - 0.5 * c.b, -0.25 * c.r + 0.5 * c.g - 0.25 * c.b); }
@@ -159,15 +162,21 @@ const RESOLVE_FRAG = /* glsl */`
     vec4 pc = uRe * vec4(vUv * 2.0 - 1.0, dmin * 2.0 - 1.0, 1.0);
     vec2 pUv = pc.xy / pc.w * 0.5 + 0.5;
     float pZ = pc.w * z;
+    float seaFoam = 0.0;
     // A rigid mover under the (dilated) texel: its own motion replaces the camera's.
     if (uVelOn > 0.5 && tmin.x >= int(uVelRect.x) && tmin.y >= int(uVelRect.y) && tmin.x < int(uVelRect.z) && tmin.y < int(uVelRect.w)) {
       vec4 mv = texelFetch(tVel, tmin, 0);
-      if (mv.b > 0.5) { pUv = vUv - mv.xy; pZ = mv.a * z; }
+      if (mv.b > 0.9 || (mv.b > 0.5 && uSea.w > 0.5)) { pUv = vUv - mv.xy; pZ = mv.a * z; }
+      // the sea writes its vectors with its foam in the flag (0.55..0.85, see SEA_VEL_FRAG)
+      seaFoam = mv.b > 0.5 && mv.b < 0.9 ? clamp((mv.b - 0.55) / 0.3, 0.0, 1.0) : 0.0;
     }
     float velPx = length((vUv - pUv) * uOut);
 
     float a = clamp(uK.x * wmax, uK.y, 1.0);
     a = max(a, uK2.x * clamp(velPx * uK2.y, 0.0, 1.0));
+    // whitecap coverage this low already reads as white on screen (the lace texture), so
+    // the mask saturates early
+    a = max(a, uSea.z * smoothstep(0.02, 0.25, seaFoam));
     bool off = pUv.x < 0.0 || pUv.y < 0.0 || pUv.x > 1.0 || pUv.y > 1.0 || uReset > 0.5;
     vec3 outC = sumW / max(wsumW, 1e-6);
     if (!off) {
@@ -283,6 +292,71 @@ const VEL_FRAG = /* glsl */`
     gl_FragColor = vec4(v, uFlag, vPrev.w / max(vCur.w, 1e-4));
   }`;
 
+// THE SEA (polish-leftovers-oct). The FFT surface is transparent and writes no depth, so
+// TAA reprojected a sea pixel by the depth BEHIND it (the seabed, the far plane) and with
+// no motion of its own: the gale's whitewater, which rides the water particles, was blended
+// with history from where the swell had already carried it, and went soft. The sea now
+// draws its own vectors into the velocity target: the same geomorphed clipmap the surface
+// draws (one call), so every sea pixel is reprojected from where the SURFACE was, not the
+// seabed behind it. uOrb (K.seaOrb, default 0) adds the water's own orbital motion from the
+// PREVIOUS step's field (ocean.js keeps both halves of its merge ping-pong; uOcVelK = 0 when
+// the sim held this frame): measured, it did not help -- the whitecaps' lace texture is
+// anchored in WORLD space (water.js foamTex on vW), so the surface's camera motion is the
+// right vector for it, and only the coverage rides the particles.
+// Occlusion is VEL_FRAG's depth-copy test (the raft in front discards it); movers draw
+// after it and win where they are visible. Its flag carries the foam (SEA_VEL_FRAG).
+const SEA_VEL_VERT = /* glsl */`
+  uniform mat4 uCurVP;
+  uniform mat4 uPrevVP;
+  uniform vec2 uOcLevC[ ${GRID_LEVELS} ];
+  uniform vec3 uCam;
+  uniform float uOcVelK;
+  uniform float uOrb;
+  ${OCEAN_GLSL_DISP}
+  ${OCEAN_GLSL_DISP_PREV}
+  varying vec4 vCur;
+  varying vec4 vPrev;
+  varying vec2 vG;
+  varying vec2 vP0;
+  flat varying vec3 vHole;
+  void main() {
+    int l = int(position.y + 0.5);
+    float s = uOcGrid.x * exp2(float(l));
+    vec2 c = uOcLevC[l];
+    vec2 p = c + position.xz * s;
+    vG = p;
+    float R = uOcGrid.y * s;
+    vHole = l > 0 ? vec3(uOcLevC[l - 1], 0.5 * R) : vec3(0.0, 0.0, -1.0);
+    vec2 dc = abs(p - c);
+    float m = clamp((max(dc.x, dc.y) / R - 0.70) / 0.22, 0.0, 1.0);
+    p -= fract(p / (2.0 * s)) * (2.0 * s) * m;
+    vP0 = p;
+    vec3 D = ocDisp(p, uCam.xz);
+    vec3 Dp = mix(D, ocDispPrev(p, uCam.xz), uOcVelK * uOrb);
+    vec4 w = vec4(p.x + D.x, ${SURFACE_Y.toFixed(3)} + D.y, p.y + D.z, 1.0);
+    vCur = uCurVP * w;
+    vPrev = uPrevVP * vec4(p.x + Dp.x, ${SURFACE_Y.toFixed(3)} + Dp.y, p.y + Dp.z, 1.0);
+    gl_Position = projectionMatrix * viewMatrix * w;
+  }`;
+// THE REACTIVE MASK. History is the wrong answer for whitewater whatever the vectors say:
+// it is born, torn and re-textured every frame. The fragment reads the same foam the sea
+// shades with (the live fold of all three cascades' Jacobian + their persistent memory,
+// water.js's foamJ less the gust break-up) and writes it into the flag: b = 0.55 + 0.3 foam.
+// The resolve lifts the blend weight by K.seaA x foam, so the open sea keeps its full
+// accumulation (its ripples and glints alias without it) and only the whitecaps go reactive.
+const SEA_VEL_FRAG = VEL_FRAG.replace('void main() {', `varying vec2 vG;
+  varying vec2 vP0;
+  flat varying vec3 vHole;
+  uniform vec3 uOcL;
+  uniform vec4 uOcK;
+  uniform sampler2D uOcFoam0, uOcFoam1, uOcFoam2;
+  void main() {
+    if (vHole.z > 0.0) { vec2 hd = abs(vG - vHole.xy); if (max(hd.x, hd.y) < vHole.z * 0.99999) discard; }`)
+  .replace('gl_FragColor = vec4(v, uFlag,', `vec4 j0 = texture2D(uOcFoam0, vP0 / uOcL.x), j1 = texture2D(uOcFoam1, vP0 / uOcL.y), j2 = texture2D(uOcFoam2, vP0 / uOcL.z);
+    float Jt = (1.0 + j0.x + j1.x + j2.x) * (1.0 + j0.y + j1.y + j2.y) - (j0.z + j1.z + j2.z) * (j0.z + j1.z + j2.z);
+    float foam = max(1.0 - smoothstep(uOcK.x - uOcK.y, uOcK.x, Jt), max(max(j0.w, j1.w), j2.w * 0.45));
+    gl_FragColor = vec4(v, 0.55 + 0.3 * clamp(foam, 0.0, 1.0),`);
+
 // SKINNED movers (salreal: Sal's dress). The same proxy idea with the source's OWN skeleton:
 // the current position is skinned with this frame's bone palette (three uploads it as
 // boneTexture for the proxy, from the shared Skeleton), the previous one with LAST frame's
@@ -336,7 +410,10 @@ export class TemporalAAPass extends Pass {
     this.jx = 0; this.jy = 0;
     // Knobs (window.__taa.K): alpha gain, alpha floor, clip gamma, disocclusion tolerance,
     // motion alpha cap + per-pixel gain, sharpen, cut distance (units per frame).
-    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.35, cut: 5, jitter: 1, velDepth: 0, mip: 1, skinVel: 1 };
+    // sea: 1 = the sea draws its own motion vectors + foam reactive mask (0 = the A/B);
+    // seaA = the blend-weight floor on full whitewater (scaled by the foam mask); seaVec 0
+    // keeps the mask but drops the vectors (with seaA 0 that is exactly the old resolve).
+    this.K = { alpha: 0.12, alphaMin: 0.035, gamma: 1.1, occl: 0.035, motionA: 0.18, motionK: 1 / 24, sharp: 0.35, cut: 5, jitter: 1, velDepth: 0, mip: 1, skinVel: 1, sea: 1, seaVec: 1, seaA: 0.6, seaOrb: 0 };
     this.savedProj = new THREE.Matrix4(); this.savedProjInv = new THREE.Matrix4(); this.jittered = false;
     this.resolveMat = new THREE.ShaderMaterial({
       name: 'AbyssaTAAResolve', vertexShader: VERT, fragmentShader: RESOLVE_FRAG,
@@ -346,7 +423,8 @@ export class TemporalAAPass extends Pass {
         uIn: { value: new THREE.Vector2(1, 1) }, uOut: { value: new THREE.Vector2(1, 1) },
         uJit: { value: new THREE.Vector2() }, uRe: { value: new THREE.Matrix4() },
         uNF: { value: new THREE.Vector2(0.1, 700) }, uReset: { value: 1 },
-        uK: { value: new THREE.Vector4() }, uK2: { value: new THREE.Vector2() }
+        uK: { value: new THREE.Vector4() }, uK2: { value: new THREE.Vector2() },
+        uSea: { value: new THREE.Vector4(0, 0, 0, 0) }
       }
     });
     this.outMat = new THREE.ShaderMaterial({
@@ -435,7 +513,7 @@ export class TemporalAAPass extends Pass {
     }
   }
   _renderVelocity(renderer) {
-    if (!this.velOn || !this.proxies.length && !this.movers.length) return false;
+    if (!this.velOn || !this.proxies.length && !this.movers.length && !this.K.sea) return false;
     if ((this.moverScan++ % 30) === 0) this._rescan();
     const wantDepth = !!this.K.velDepth;
     if (!this.velRT || this.velRT.width !== this.inW || this.velRT.height !== this.inH || this.velRT.depthBuffer !== wantDepth) {
@@ -450,10 +528,34 @@ export class TemporalAAPass extends Pass {
     const cam = this.mainCam;
     cam.getWorldPosition(_mv);
     let n = 0;
+    // the sea first (renderOrder -1: painted under every mover), full screen when the eye is
+    // above the water
+    if (!this.seaPx && oceanReady()) {
+      const m = new THREE.ShaderMaterial({
+        name: 'AbyssaTAASeaVelocity', vertexShader: SEA_VEL_VERT, fragmentShader: SEA_VEL_FRAG, toneMapped: false,
+        side: THREE.DoubleSide,
+        uniforms: { ...OCEAN_UNIFORMS, uOcDispP0: uOcDispPrev[0], uOcDispP1: uOcDispPrev[1], uOcDispP2: uOcDispPrev[2], uOcVelK, uOrb: { value: 0 },
+          uCurVP: { value: this.curVP }, uPrevVP: { value: this.prevVP }, uCam: { value: new THREE.Vector3() },
+          tDepth: { value: null }, uIn: { value: this.velIn }, uNF: { value: this.resolveMat.uniforms.uNF.value }, uFlag: { value: 0.75 } }
+      });
+      this.seaPx = new THREE.Mesh(buildOceanGeometry(), m);
+      this.seaPx.frustumCulled = false; this.seaPx.renderOrder = -1;
+      this.seaPx.matrixAutoUpdate = false; this.seaPx.matrixWorldAutoUpdate = false;
+      this.velScene.add(this.seaPx);
+    }
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    if (this.seaPx) {
+      const on = !!this.K.sea && _mv.y > SURFACE_Y + 0.3 && this.valid;
+      this.seaPx.visible = on;
+      if (on) {
+        const su = this.seaPx.material.uniforms;
+        su.uCam.value.copy(_mv); su.tDepth.value = this.depthTexture; su.uOrb.value = this.K.seaOrb;
+        x0 = 0; y0 = 0; x1 = 1; y1 = 1; n++;
+      }
+    }
     // Screen rect of every visible mover (bounding spheres, projected): the clear and the
     // draw are SCISSORED to it and the resolve ignores velocity outside it, so the pass
-    // costs Sal's footprint, not a full-screen target clear.
-    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    // costs Sal's footprint, not a full-screen target clear (the sea, when drawn, is all of it).
     const pe = this.savedProj.elements, ve = cam.matrixWorldInverse.elements;
     for (let i = 0; i < this.proxies.length; i++) {
       const px = this.proxies[i], src = px.userData.src;
@@ -550,6 +652,7 @@ export class TemporalAAPass extends Pass {
     else u.uRe.value.identity();
     u.uReset.value = this.valid ? 0 : 1;
     this.prevVP.copy(this.valid ? _prevVP : _vp); this.curVP.copy(_vp);
+    u.uSea.value.set(0, 0, this.K.seaA, this.K.seaVec ? 1 : 0);
     _prevVP.copy(_vp); _prevPos.copy(_camPos); _prevDir.copy(_dir);
     const k = (this.frame++) % HALTON_N;
     this.jx = HALTON[k * 2] * this.K.jitter; this.jy = HALTON[k * 2 + 1] * this.K.jitter;
@@ -609,6 +712,7 @@ export class TemporalAAPass extends Pass {
   dispose() {
     for (const h of this.hist) if (h) h.dispose();
     if (this.velRT) this.velRT.dispose();
+    if (this.seaPx) { this.seaPx.geometry.dispose(); this.seaPx.material.dispose(); }
     for (const px of this.proxies) px.material.dispose();
     for (const p of this.prevPal.values()) p.tex.dispose();
     this.resolveMat.dispose(); this.outMat.dispose();

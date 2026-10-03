@@ -2369,6 +2369,23 @@ function octSculptPatch(sh, arm) {
         P.x *= 1.0 + 0.12 * sac;
       }`);
   else console.warn('ABYSSA: octopus rest-pose patch did not match; the sculpt keeps the old squash');
+  // THE SEAM (polish-leftovers-oct). The procedural arms leave from a ring at object y 0.14,
+  // radius 0.24 — where the procedural egg's underside pole sits at rest. The sculpted head is
+  // a different shape: its underside is at mantle y -0.16 (object ~0.20 at rest) and, roused,
+  // the mantle lifts 0.22 while the arm roots stayed put, so a ledge of up to ~0.3 opened
+  // between the mantle's rim and the arms. Here the arm ROOT is carried up into the head's
+  // underside and rides the mantle's own transform (rest squash, reach lift, jet clench),
+  // blended back to the procedural path by T 0.45, so the arm grows out of the body and the
+  // rest of it (reach, curl, the floor it lies on) is untouched.
+  const aRoot = 'c.xz += ca.xz * 0.24;                          // arms leave from the skirt\n      c.y += 0.14;';
+  if (sh.vertexShader.includes(aRoot)) sh.vertexShader = sh.vertexShader.replace(aRoot, `{
+        float fl = 1.0 - uReach, rw = 1.0 - smoothstep(0.0, 0.45, T);
+        float rY = -0.02 * (1.0 - fl * 0.10) * (1.0 + 0.12 * uJet) + uReach * 0.22 + 0.34;
+        float rR = 0.34 * (1.0 + fl * 0.05) * (1.0 - 0.22 * uJet);
+        c.xz += ca.xz * mix(0.24, rR, rw);
+        c.y += mix(0.14, rY, rw);
+      }`);
+  else console.warn('ABYSSA: octopus arm-root patch did not match; the sculpt keeps the old arm crown');
   const nRest = 'N = normalize(normal);\n    } else if (kind < 1.5) {';
   if (sh.vertexShader.includes(nRest)) sh.vertexShader = sh.vertexShader.replace(nRest, 'N = normalize(normal); N.yz = vec2(N.y * cos(oTh) - N.z * sin(oTh), N.y * sin(oTh) + N.z * cos(oTh));\n    } else if (kind < 1.5) {');
   const f = sh.fragmentShader;

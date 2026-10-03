@@ -36,7 +36,8 @@ import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
 import { clamp } from '../lib/math.js';
 import { terrainH } from './terrain.js';
-import { activeVents } from './vents.js';
+import { activeVents, ventColliders } from './vents.js';
+import { rockColliders } from './flora.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
 import { uPush, uPushV, uJolt, PUSH_GLSL, PUSH_N } from './stir.js';
 import { loadSculpted } from '../lib/assets.js';
@@ -601,7 +602,7 @@ function ventSculptOn(v) {
   return vs.on;
 }
 if (typeof window !== 'undefined') window.__ventlife = {
-  state: () => ({ ...vs, shrimp: shrimp ? shrimp.count : 0, crabs: crabs ? crabs.count : 0, visible: shrimp ? shrimp.visible : false,
+  state: () => ({ ...vs, crabSeatWorst: crabSeat.worst, crabsHidden: crabSeat.hidden, shrimp: shrimp ? shrimp.count : 0, crabs: crabs ? crabs.count : 0, visible: shrimp ? shrimp.visible : false,
     lod: shL.map(L => L.m.count), lodTris: shL.reduce((a, L) => a + L.m.count * L.tris, 0), level: Array.from(shLevel.slice(0, Math.min(activeVents.length, MAX_VENTS))) }),
   // (lods) A/B: false = every vent at the near level (the old single full-detail draw)
   lod: on => { vs.lodOn = !!on; shLevel.fill(255); shDirty = true; return vs.lodOn; },
@@ -631,6 +632,67 @@ export function reseedVentLife() {
 // ---------------------------------------------------------------------------
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 
+// Crab-frame probe points: claw tips, the long hands, the carpus, the rear, the leg tips.
+const CRAB_PTS = [
+  [0.53, 0.055, 0.09], [0.53, 0.055, -0.09], [0.44, 0.06, 0.10], [0.44, 0.06, -0.10],
+  [0.26, 0.07, 0.15], [0.26, 0.07, -0.15], [-0.21, 0.0, 0.0], [0.02, -0.07, 0.32], [0.02, -0.07, -0.32]
+];
+const _cF = new THREE.Vector3(), _cU = new THREE.Vector3(), _cZ = new THREE.Vector3();
+const CRAB_GOLD = 2.39996, CRAB_TRIES = 20, CRAB_LIFT_MAX = 0.10;
+// Writes _m. Placement-time only (layout/reseed), never per frame.
+function seatCrab(vent, a0, rr0, yawJ, sc) {
+  let best = Infinity, bx = 0, by = 0, bz = 0, bfx = 1, bfy = 0, bfz = 0, bux = 0, buy = 1, buz = 0;
+  for (let j = 0; j < CRAB_TRIES; j++) {
+    const a = a0 + j * CRAB_GOLD, rr = rr0 + 0.35 * j;
+    const cx = vent.x + Math.cos(a) * rr, cz = vent.z + Math.sin(a) * rr;
+    // ground plane under the body (eps ~ the crab's half-span)
+    const e = 0.35;
+    _cU.set(terrainH(cx - e, cz, ZI) - terrainH(cx + e, cz, ZI), 2 * e,
+      terrainH(cx, cz - e, ZI) - terrainH(cx, cz + e, ZI)).normalize();
+    // facing: out from the throat, jittered +-60 deg, projected onto that plane
+    const yaw = a + (yawJ - 0.5) * 2.1;
+    _cF.set(Math.cos(yaw), 0, Math.sin(yaw));
+    _cF.addScaledVector(_cU, -_cF.dot(_cU)).normalize();
+    _cZ.crossVectors(_cF, _cU);
+    let cy = terrainH(cx, cz, ZI) + 0.06, lift = 0;
+    for (const q of CRAB_PTS) {
+      const wx = cx + sc * (q[0] * _cF.x + q[1] * _cU.x + q[2] * _cZ.x);
+      const wy = cy + sc * (q[0] * _cF.y + q[1] * _cU.y + q[2] * _cZ.y);
+      const wz = cz + sc * (q[0] * _cF.z + q[1] * _cU.z + q[2] * _cZ.z);
+      lift = Math.max(lift, terrainH(wx, wz, ZI) + 0.01 - wy);
+    }
+    cy += lift;
+    let pen = Math.max(0, lift - CRAB_LIFT_MAX);   // a crab propped on its claws is a miss too
+    for (const q of CRAB_PTS) {
+      const wx = cx + sc * (q[0] * _cF.x + q[1] * _cU.x + q[2] * _cZ.x);
+      const wy = cy + sc * (q[0] * _cF.y + q[1] * _cU.y + q[2] * _cZ.y);
+      const wz = cz + sc * (q[0] * _cF.z + q[1] * _cU.z + q[2] * _cZ.z);
+      for (let i = 0; i < ventColliders.length; i++) {
+        const v = ventColliders[i];
+        pen = Math.max(pen, v.r + 0.05 - Math.hypot(wx - v.x, wz - v.z));
+      }
+      for (let i = 0; i < rockColliders.length; i++) {
+        const r = rockColliders[i];
+        const dx = wx - r.x, dy = wy - r.y, dz = wz - r.z;
+        if (Math.abs(dx) > r.r + 0.1 || Math.abs(dz) > r.r + 0.1 || Math.abs(dy) > r.r + 0.1) continue;
+        pen = Math.max(pen, r.r + 0.04 - Math.sqrt(dx * dx + dy * dy + dz * dz));
+      }
+    }
+    if (pen < best) {
+      best = pen; bx = cx; by = cy; bz = cz;
+      bfx = _cF.x; bfy = _cF.y; bfz = _cF.z; bux = _cU.x; buy = _cU.y; buz = _cU.z;
+      if (pen <= 0) break;
+    }
+  }
+  _cF.set(bfx, bfy, bfz); _cU.set(bux, buy, buz); _cZ.crossVectors(_cF, _cU);
+  // No clean seat within reach (a vent standing in a landmark boulder's sand fillet): the
+  // crab is not drawn. A missing crab reads as nothing; a buried one reads as a bug.
+  const hide = best > 0.03;
+  _m.makeBasis(_cF, _cU, _cZ).scale(_s.setScalar(hide ? 1e-4 : sc)).setPosition(bx, by, bz);
+  if (hide) crabSeat.hidden++; else crabSeat.worst = Math.max(crabSeat.worst, best);
+}
+const crabSeat = { worst: 0, hidden: 0 };
+
 function layout() {
   rnd = mulberry32(0x5EA11FE);
 
@@ -639,6 +701,7 @@ function layout() {
   const A = aShrimpA.array, B = aShrimpB.array, C = aCrab.array;
 
   let si = 0, ci = 0;
+  crabSeat.worst = 0; crabSeat.hidden = 0;
   for (let v = 0; v < nV; v++) {
     const vent = activeVents[v];
     const baseY = terrainH(vent.x, vent.z, ZI);
@@ -677,14 +740,17 @@ function layout() {
     // chimneys lean as they grow and ventlife only knows the throat, so a
     // flank-clung crab would float off the rock on the leaned ones. terrainH
     // puts these exactly on the ground, every time.
+    // The yeti crab's chelipeds reach 0.53 x scale ahead of the body (to 0.72 u), so a
+    // crab dropped at a random yaw with only its CENTRE on the ground pushed its claws
+    // into the slope, a neighbouring chimney or a flora boulder. seatCrab() faces it out
+    // from the throat (+-60 deg), lays it on the local ground plane, lifts it until the
+    // claw tips, hands, rear and leg tips clear the terrain, and walks the golden angle
+    // round the chimney (stepping outward) until those points are clear of every chimney
+    // and boulder collider. Same stream draws in the same order as before.
     for (let k = 0; k < CRABS_PER_VENT; k++, ci++) {
       const a = rnd() * TAU, rr = bR + rng(0.5, 3.0);
-      const cx = vent.x + Math.cos(a) * rr, cz = vent.z + Math.sin(a) * rr;
-      const cy = terrainH(cx, cz, ZI) + 0.06;
-      _p.set(cx, cy, cz);
-      _q.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, rnd() * TAU);
-      _s.setScalar(rng(0.85, 1.35));
-      _m.compose(_p, _q, _s);
+      const yawJ = rnd(), sc = rng(0.85, 1.35);
+      seatCrab(vent, a, rr, yawJ, sc);
       crabs.setMatrixAt(ci, _m);
       C[ci * 2] = rnd() * TAU;
       C[ci * 2 + 1] = rng(0.4, 0.9);
