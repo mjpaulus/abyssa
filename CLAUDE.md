@@ -388,17 +388,17 @@ against explicit contracts and reviewed on return.
 ## THE WORKING CHART (feature board — keep it inked)
 
 `roadmap/` is the feature board: ONE MARKDOWN FILE PER CARD, git is the revision
-history, `ROADMAP.html` is GENERATED (never hand-edit it). The `roadmap` skill in
-~/.claude/skills has the full conventions — invoke it. Cards are CONTEXT: read a
-feature's card before working on it; parallel sessions check `status` before
-claiming work.
+history, `ROADMAP.html` is GENERATED (never hand-edit it). The roadmap mod
+(~/.claude/mods/roadmap) owns it: use its tools, `mcp__roadmap__list/read/add/move/
+log/update/publish`, and its `roadmap` skill for the card conventions. Cards are
+CONTEXT: read a feature's card (`mcp__roadmap__read`) before working on it; parallel
+sessions check `status` before claiming work.
 
 - Artifact URL (stable, never mint another): in `roadmap/config.json` artifactUrl.
-- WHEN feature state changes: edit/add the card .md (status = column; append a dated
-  `## Log` line with the why + commit hash; bump `updated`), then
-  `python3 ~/.claude/skills/roadmap/gen.py roadmap`, republish ROADMAP.html via the
-  Artifact tool with `url` from config.json and favicon "⚓", and commit roadmap/ +
-  ROADMAP.html with the code.
+- WHEN feature state changes: `mcp__roadmap__move` / `log` / `update` the card (the
+  tools append the dated `## Log` line and bump `updated` — put the why + commit hash
+  in the note), then `mcp__roadmap__publish` (regenerates ROADMAP.html and republishes
+  to artifactUrl), and commit roadmap/ + ROADMAP.html with the code.
 - Cards with `status: decision` are decisions ONLY the user can make — never resolve one
   without his explicit call; record his words in the log line when he rules.
 
