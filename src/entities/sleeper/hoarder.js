@@ -20,11 +20,11 @@
 // sonar rings them (the zone-1 rule, sonarWards). Calmed, she coils back round the wreck
 // and her wards stay burning: a lighthouse in the dark zone.
 import * as THREE from 'three';
-import { scene, envTexDeep as envTex } from '../../core.js';
+import { scene, camera, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp } from '../../lib/math.js';
 import { registerPaint } from '../../lib/paint.js';
 import { terrainH } from '../../world/terrain.js';
-import { setWardTargets } from '../../world/predators.js';
+import { setWardTargets, deployInk } from '../../world/predators.js';
 import { wreckSites } from '../../world/wrecks.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
@@ -81,7 +81,7 @@ const _m = new THREE.Matrix4(), _s = V3(), _zp = V3(0, 0, 1), _yp = V3(0, 1, 0),
 // the siphon puffing silt when she lies on the floor, and the skin carries PASSING CLOUDS
 // (dark chromatophore bands sweeping the body, the photophores flaring in their wake)
 // whose speed and depth are her mood.
-const EVO = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, grabbed: false };
+const EVO = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, grabbed: false, quake: 0, inkDim: 0 };
 const LASH_T = 1.4, COCK_T = 0.35;
 const nzO = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
 function sprO(o, target, w, z, dt) {
@@ -90,6 +90,9 @@ function sprO(o, target, w, z, dt) {
   return o.x;
 }
 const _e1 = V3(), _e2 = V3(), _tg = V3(), _dv = V3();
+// the body's geometries carry aArmP = 0 explicitly (never trust a driver's default for a
+// missing attribute)
+function bodyArmP(g) { if (g && !g.attributes.aArmP) g.setAttribute('aArmP', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count), 1)); return g; }
 const SIPHON = V3(-0.80, -0.36, 0.44);
 
 // ---- the arm's cross-section (unit), per side vertex: dorsal U at a = 0, the oral face
@@ -124,6 +127,57 @@ const CR_I = new Int16Array(RR + 1), CR_W = new Float32Array((RR + 1) * 4);
 const WRINK = new Float32Array(RR + 1);
 for (let f = 0; f <= RR; f++) WRINK[f] = Math.pow(0.5 + 0.5 * Math.cos(f * Math.PI * 0.46), 2);
 
+// THE BEAK (menace): the sculpt's beak is small and buried in the web; this one is the
+// working beak a grabbed diver is dragged toward. Two hooked mandibles of dark horn, swept
+// along curves (taper to a point, flattened side to side), hinged at the buccal ring. In
+// the body's unit frame, mouth at (0, -0.44, 0.12); it everts down and out when she feeds.
+function hookGeo(pts, r0, r1, flat, n = 20, rad = 10) {
+  const c = new THREE.CatmullRomCurve3(pts.map(p => new THREE.Vector3(...p)));
+  const P = c.getSpacedPoints(n), pos = [], col = [], idx = [];
+  const t = new THREE.Vector3(), u = new THREE.Vector3(), b = new THREE.Vector3(), X = new THREE.Vector3(1, 0, 0);
+  for (let i = 0; i <= n; i++) {
+    const s = i / n;
+    c.getTangentAt(Math.min(0.999, s), t);
+    b.crossVectors(t, X).normalize(); u.crossVectors(b, t).normalize();
+    // u is ~x (side), b is in the y-z plane; the keel (the cutting edge) is sharp on -b
+    const r = r0 + (r1 - r0) * Math.pow(s, 0.8);
+    for (let j = 0; j <= rad; j++) {
+      const a = j / rad * TAU, ca = Math.cos(a), sa = Math.sin(a);
+      const keel = sa < 0 ? 1 + 0.6 * (-sa) * (-sa) : 1;
+      const p = P[i];
+      pos.push(p.x + u.x * ca * r * flat + b.x * sa * r * keel, p.y + u.y * ca * r * flat + b.y * sa * r * keel, p.z + u.z * ca * r * flat + b.z * sa * r * keel);
+      // horn: near-black at the root, paling to a worn amber at the edges and the point
+      const e = Math.min(1, s * s * 1.2 + (sa < -0.6 ? 0.35 : 0));
+      col.push(0.08 + 0.30 * e, 0.06 + 0.20 * e, 0.05 + 0.10 * e);
+    }
+  }
+  for (let i = 0; i < n; i++) for (let j = 0; j < rad; j++) {
+    const a = i * (rad + 1) + j, d = a + rad + 1;
+    idx.push(a, d, a + 1, a + 1, d, d + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+function makeBeak(L) {
+  const m = registerPaint(new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.28, metalness: 0, envMap: envTex, envMapIntensity: 0.9 }));
+  const grp = new THREE.Group();
+  grp.position.set(0, -0.44, 0.14);
+  // upper mandible: deep, hooked down and forward to a point (the rostrum)
+  const up = new THREE.Mesh(hookGeo([[0, 0.06, -0.10], [0, 0.04, 0.05], [0, -0.06, 0.14], [0, -0.17, 0.12], [0, -0.21, 0.05]], 0.085, 0.004, 0.62), m);
+  // lower mandible: shorter, set behind, its edge rising to meet the hook
+  const lo = new THREE.Mesh(hookGeo([[0, 0.02, -0.12], [0, -0.07, -0.08], [0, -0.13, 0.00], [0, -0.12, 0.06]], 0.07, 0.006, 0.7), m);
+  const hu = new THREE.Group(), hl = new THREE.Group();
+  hu.add(up); hl.add(lo);
+  grp.add(hu, hl);
+  grp.scale.setScalar(1.25);
+  L.body.add(grp);
+  L.beak = { grp, hu, hl, open: 0, ev: 0, ph: 0, cyc: 0, snapN: 0 };
+}
+
 export function makeHoarder(idx, cfg) {
   let c = cfg;
   if (c.nSigils > SIGIL_POOL_N) c = Object.assign({}, c, { nSigils: SIGIL_POOL_N });
@@ -140,7 +194,14 @@ export function makeHoarder(idx, cfg) {
     yawV: 0, crawl: 0, blinkT: 9, blinkN: 3, look: { y: { x: 0, v: 0 }, p: { x: 0, v: 0 }, ty: 0, tp: 0, next: 0 }, brPh: 0, cloudPh: 0, mood: 0, armsInit: false,
     pos: V3(), yaw: 0, bodyY: 0, head: V3(), spine: [V3(), V3(), V3(), V3()], sigils: [], arms: [],
     grab: null, lashCd: 3, _pd: 1e9, suckK: 0.27, suckSink: 0, hideK: 1, lidK: 1.25, lidKb: 1.25, sculpted: false,
-    sigilStyle: true, webK: 0.35, webSeats: null, clutch: [], stage: null
+    sigilStyle: true, webK: 0.35, webSeats: null, clutch: [], stage: null,
+    // menace (orune-menace): display state, the reveal, the freeze, circling, ink, probes,
+    // and edge counters the audio watches (creepN, popN, stillN, cockN, inkN, beak.snapN)
+    aware: 0, pap: 0, dark: 0, web: 0, pupil: 0, puff: 0, loomE: 0, rearE: 0, deimT: 9, deimK: 0, shine: 0,
+    revealT: -1, still: 0, writheK: 1, circleT: 0, circleCd: 0, circleDir: 1, behindNext: false,
+    inkT: -1, inkCd: 0, inkedT: 0, glareT: 0, inkSaid: false, peekCd: 0,
+    probeT: 0, probeArm: [-1, -1], probeAng: [0, 0], probeRot: 0, moveK: 0,
+    creepN: 0, creepAt: V3(), popN: 0, popAt: V3(), popNext: 0, stillN: 0, cockN: 0, inkN: 0
   };
 
   // ---- skin ----
@@ -157,12 +218,13 @@ export function makeHoarder(idx, cfg) {
   }), 'abyssa-orune-skin', 1, true));
   L.skin = skin;
   // passing clouds (chromatophores) and the siphon's pulse, patched over wetSkin
-  L.cloudU = { uCloud: { value: new THREE.Vector4(0, 0.25, 0.4, 0.5) }, uSiph: { value: 0 } };
+  L.cloudU = { uCloud: { value: new THREE.Vector4(0, 0.25, 0.4, 0.5) }, uSiph: { value: 0 },
+    uMen: { value: new THREE.Vector4(0, 0, 0, 0) }, uTell: { value: [0, 0, 0, 0, 0, 0, 0, 0, 0] }, uRm: { value: Rm } };
   cloudPatch(skin, L, 'abyssa-orune-skin-m', false);
   // one program for all of her skin: the mantle's biplanar blend is carried by attributes
   // (uvB, wB) that every other skin geometry sets to its own UV with weight 0
   L.skinM = skin;
-  const mantle = new THREE.Mesh(G.mantleGeo(), skin);
+  const mantle = new THREE.Mesh(bodyArmP(G.mantleGeo()), skin);
   mantle.castShadow = mantle.receiveShadow = true;
   body.add(mantle);
   L.mantle = mantle;
@@ -170,8 +232,28 @@ export function makeHoarder(idx, cfg) {
   // ---- eyes: gold, slit-pupilled, shut to slits asleep; eyeshine when the lantern finds them ----
   const eyeMat = G.wetEye(new THREE.MeshStandardMaterial({ map: em.map, roughness: 0.04, metalness: 0.1, envMap: envTex, envMapIntensity: 1.8,
     emissive: 0xd9b24a, emissiveMap: em.emissiveMap, emissiveIntensity: 0 }));
-  const ballG = G.eyeBallGeo(0.16), lidTG = G.lidGeo(0.178, false), lidBG = G.lidGeo(0.178, true);
+  const ballG = G.eyeBallGeo(0.16), lidTG = bodyArmP(G.lidGeo(0.178, false)), lidBG = bodyArmP(G.lidGeo(0.178, true));
   L.eyeMat = eyeMat;
+  // THE PUPIL (menace): the bar holds level and narrow while she watches; in the deimatic
+  // display and the hunt it BLOWS near round (a dilated pupil reads as a bigger animal).
+  L.pupU = { value: 0 };
+  {
+    const ob = eyeMat.onBeforeCompile;
+    eyeMat.customProgramCacheKey = () => 'abyssa-orune-eye';
+    eyeMat.onBeforeCompile = (sh, r) => {
+      ob(sh, r);
+      sh.uniforms.uPup = L.pupU;
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform float uPup;')
+        .replace('#include <map_fragment>', `#include <map_fragment>
+          vec2 oPq = vMapUv * 2.0 - 1.0;
+          float oHw = mix(0.46, 0.60, uPup), oHh = mix(0.085, 0.50, uPup) * (1.0 - 0.5 * min(1.0, (oPq.x / oHw) * (oPq.x / oHw)));
+          float oPin = 1.0 - smoothstep(-0.03, 0.0, max(abs(oPq.x) - oHw, abs(oPq.y) - oHh));
+          oPin *= step(0.002, uPup);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.006), oPin);`)
+        .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\ntotalEmissiveRadiance *= 1.0 - oPin;');
+    };
+  }
   const lidMat = skin;
   L.eyes = [];
   for (const sd of [-1, 1]) {
@@ -184,18 +266,27 @@ export function makeHoarder(idx, cfg) {
     const lidB = new THREE.Mesh(lidBG, lidMat);
     e.add(lidT, lidB);
     body.add(e);
-    L.eyes.push({ e, lidT, lidB, ball, sd, yaw0: sd * 0.75 });
+    L.eyes.push({ e, lidT, lidB, ball, sd, yaw0: sd * 0.75, peek: 0, eo: 0 });
   }
+
+  makeBeak(L);
 
   // ---- arms ----
   // stalked cups: pale rolled rim, pink cup, dark centre (vertex colour), wet
   const suckMat = registerPaint(new THREE.MeshStandardMaterial({ color: 0xd8b4a8, vertexColors: true, roughness: 0.42, metalness: 0, envMap: envTex, envMapIntensity: 0.35 }));
   L.suckers = new THREE.InstancedMesh(G.suckerGeo(), suckMat, NA * SUCK);
+  L.suckBase = suckMat.color.clone();
   L.suckers.frustumCulled = false;
   L.suckers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   grp.add(L.suckers);
   for (let a = 0; a < NA; a++) {
     const geo = G.armTubeGeo(RR, RAD);
+    {
+      // which arm, and how far along it (the menace patch's per-arm tell and tip mask)
+      const ap = new Float32Array((RR + 1) * (RAD + 1));
+      for (let f = 0; f <= RR; f++) for (let j = 0; j <= RAD; j++) ap[f * (RAD + 1) + j] = a + 1 + 0.98 * f / RR;
+      geo.setAttribute('aArmP', new THREE.BufferAttribute(ap, 1));
+    }
     const mesh = new THREE.Mesh(geo, skin);
     mesh.frustumCulled = false;
     mesh.castShadow = true;
@@ -210,7 +301,9 @@ export function makeHoarder(idx, cfg) {
       // render-tube state (polish-sleepers2)
       Pf: new Float32Array((RR + 1) * 3), Uf: new Float32Array((RR + 1) * 3), Bf: new Float32Array((RR + 1) * 3),
       Ka: new Float32Array(RR + 1), Kd: new Float32Array((RR + 1) * 3), rf: new Float32Array(RR + 1), fold: new Float32Array((RR + 1) * (RAD + 1)),
-      suckS: new Float32Array(SUCK)
+      suckS: new Float32Array(SUCK),
+      // menace: the asleep resettle, the probe's silt, the lash's tell
+      creep: V3(), creepT: 2 + a * 0.7, creepMove: 0, dustT: 0, tell: 0, cockT: COCK_T, fast: false, strikeN: 0
     });
     const A = L.arms[a];
     for (let f = 0; f <= RR; f++) {
@@ -406,6 +499,37 @@ export function makeHoarder(idx, cfg) {
 // sweep the body in world space (their speed, depth and photophore flare are her mood), and
 // the siphon swells on the exhale. `orm`: the emissive mask is the sculpt's ORM blue (the
 // pipeline's layout: R = AO, G = roughness, B = emissive), not an emissive colour map.
+// MENACE (orune-menace, docs/superpowers/specs/orune-menace.md), same program:
+//   uMen.x PAPILLAE — a sparse field of coarse horns (vertex-displaced: they break the
+//     silhouette) over a dense fine papilla field (shaded only, derivative normals), plus
+//     the supraocular horn over each eye; raised as she becomes aware of him, full in threat.
+//   uMen.y DARK — the aggressor darkens (Scheel 2016): near-black dorsum, counter-shaded
+//     paler underside.
+//   uMen.z DEIMATIC — the startle flash: a blanch to bone with the eye rings left black.
+//   uMen.w WEB — the web skirt flares out and up.
+//   uTell[1 + arm] — that arm's TELL: it blanches in bands racing down it while it cocks.
+// The arm tubes carry aArmP = arm + 1 + s (s along the arm); the mantle has no such
+// attribute and reads 0, which is how one program tells the body from an arm.
+const MENACE_GLSL = /* glsl */`
+  // (an arithmetic hash, one per cell: three sin() hashes per cell measured ~1.5 ms more
+  // with her filling the frame)
+  vec3 oruJ3(vec3 p3) { p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973)); p3 += dot(p3, p3.yxz + 33.33); return fract((p3.xxy + p3.yxx) * p3.zyx); }
+  // cellular bumps on a 2x2x2 search (feature points jittered inside the middle half of
+  // their cell, so the nearest one is always in the 2x2x2 neighbourhood)
+  float oruCell(vec3 p, float keep) {
+    vec3 b = floor(p - 0.5);
+    float h = 0.0;
+    for (int i = 0; i < 8; i++) {
+      vec3 c = b + vec3(float(i & 1), float((i >> 1) & 1), float((i >> 2) & 1));
+      vec3 j = oruJ3(c);
+      float on = step(1.0 - keep, j.x * 0.7 + j.y * 0.3);
+      vec3 q = c + 0.25 + 0.5 * j;
+      float d = length(p - q) / (0.30 + 0.12 * j.z);
+      h = max(h, on * pow(max(0.0, 1.0 - d), 1.6));
+    }
+    return h;
+  }
+`;
 function cloudPatch(m, L, key, orm) {
   const ob = m.onBeforeCompile;
   m.customProgramCacheKey = () => key;
@@ -413,24 +537,100 @@ function cloudPatch(m, L, key, orm) {
     ob(sh, r);
     sh.uniforms.uCloud = L.cloudU.uCloud;
     sh.uniforms.uSiph = L.cloudU.uSiph;
+    sh.uniforms.uMen = L.cloudU.uMen;
+    sh.uniforms.uTell = L.cloudU.uTell;
+    sh.uniforms.uRm = L.cloudU.uRm;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform float uSiph;\nvarying vec3 vCloudW;')
+      .replace('#include <common>', `#include <common>
+        uniform float uSiph;
+        uniform vec4 uMen;
+        uniform float uTell[9];
+        uniform float uRm;
+        attribute float aArmP;
+        varying vec3 vCloudW;
+        varying vec3 vOruP;
+        varying vec3 vOruN;
+        varying vec3 vOruA;
+        varying float vOruHc;
+        ${MENACE_GLSL}`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         {
+          float isArm = step(0.5, aArmP);
           vec3 sq = position - vec3(-0.80, -0.36, 0.44);
-          transformed += normal * uSiph * exp(-dot(sq, sq) / 0.035);
+          transformed += normal * uSiph * exp(-dot(sq, sq) / 0.035) * (1.0 - isArm);
+          // the body's own unit frame (the arms are built in world space: / Rm)
+          vec3 op = mix(position, position / uRm, isArm);
+          vOruP = op;
+          // the web flares out and up (the skirt band under the crown only)
+          float wb = (1.0 - isArm) * (1.0 - smoothstep(-0.62, -0.24, position.y)) * smoothstep(0.30, 0.60, length(position.xz - vec2(0.0, 0.10)));
+          vec2 wd = normalize(position.xz - vec2(0.0, 0.10) + 1e-4);
+          transformed.xz += wd * uMen.w * wb * 0.30;
+          transformed.y += uMen.w * wb * 0.10;
+          // horns: sparse coarse papillae on the upper surfaces, and one over each eye
+          vec3 wn = normalize(mat3(modelMatrix) * normal);
+          float hc = oruCell(op * 3.2, 0.32) * smoothstep(-0.2, 0.5, wn.y);
+          vec3 e1 = op - vec3(0.50, 0.55, 0.30), e2 = op - vec3(-0.50, 0.55, 0.30);
+          float brow = (1.0 - isArm) * max(pow(max(0.0, 1.0 - length(e1) / 0.20), 1.4), pow(max(0.0, 1.0 - length(e2) / 0.20), 1.4));
+          float amp = mix(0.045, 0.02 * uRm, isArm);
+          transformed += normal * uMen.x * (hc * amp + brow * 0.20 * (1.0 - isArm));
+          vOruN = wn;
+          vOruHc = hc;
+          vOruA = vec3(isArm, fract(aArmP), uTell[int(aArmP)]);
         }`)
       .replace('#include <project_vertex>', '#include <project_vertex>\nvCloudW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     // (encounter pass: the mask's soft skirts lit too, so every photophore read as a fat
     // speck; only the lens cores glow now)
     if (orm) sh.fragmentShader = sh.fragmentShader.replace('#include <emissivemap_fragment>', THREE.ShaderChunk.emissivemap_fragment.replace('emissiveColor.rgb', 'emissiveColor.bbb * smoothstep(0.3, 0.7, emissiveColor.b)'));
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec4 uCloud;\nvarying vec3 vCloudW;')
+      .replace('#include <common>', `#include <common>
+        uniform vec4 uCloud;
+        uniform vec4 uMen;
+        uniform float uRm;
+        varying vec3 vCloudW;
+        varying vec3 vOruP;
+        varying vec3 vOruN;
+        varying vec3 vOruA;
+        varying float vOruHc;
+        ${MENACE_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         float ocA = dot(vCloudW, vec3(0.071, 0.043, 0.052)) * uCloud.w;
         float ocB = sin(ocA - uCloud.x) + 0.35 * sin(ocA * 2.3 + 1.7 - uCloud.x * 1.3);
         float ocBand = smoothstep(0.55, 1.2, ocB);
-        diffuseColor.rgb *= 1.0 - uCloud.y * ocBand;`)
+        diffuseColor.rgb *= 1.0 - uCloud.y * ocBand;
+        // MENACE: the papilla field (shared with the normal below), darkness, the flash
+        // fine papillae per pixel (skipped outright while she lies flat: a uniform branch);
+        // the coarse horns come interpolated from the vertex stage
+        float oHf = uMen.x > 0.02 ? oruCell(vOruP * 10.0, 0.75) : 0.0;
+        float oHc = vOruHc;
+        float oPap = uMen.x * max(oHf * 0.55, oHc);
+        float oLum = dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114));
+        // dark: the dorsum toward black-violet-brown, the underside held paler (counter-shade)
+        float oUp = smoothstep(-0.35, 0.65, vOruN.y);
+        // (the arms' pale oral faces darken too: a hunting arm is a dark arm)
+        diffuseColor.rgb *= 1.0 - uMen.y * mix(0.30 + 0.45 * oUp, 0.82 + 0.10 * oUp, vOruA.x);
+        // papilla crowns: a worn bone tip on each raised horn
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.26, 0.21, 0.17), clamp(oPap * oPap * 0.9, 0.0, 0.6));
+        // the deimatic flash: bone-pale, the eye rings and arm tips left black
+        float oEye = (1.0 - vOruA.x) * max(1.0 - smoothstep(0.17, 0.30, length(vOruP - vec3(0.52, 0.32, 0.34))), 1.0 - smoothstep(0.17, 0.30, length(vOruP - vec3(-0.52, 0.32, 0.34))));
+        float oTip = vOruA.x * smoothstep(0.62, 0.85, vOruA.y);
+        // (bone that keeps her pattern: the reticulate net and the mottle stay dark in it)
+        vec3 oBone = vec3(0.50, 0.45, 0.40) * (0.35 + 1.6 * oLum);
+        diffuseColor.rgb = mix(diffuseColor.rgb, oBone, uMen.z * (1.0 - max(oEye, oTip)) * 0.7);
+        diffuseColor.rgb *= 1.0 - uMen.z * max(oEye, oTip) * 0.85;
+        // an arm's tell: pale bands racing down it from the root
+        float oTell = vOruA.z * (0.55 + 0.45 * sin(vOruA.y * 46.0 - uCloud.x * 9.0));
+        diffuseColor.rgb = mix(diffuseColor.rgb, oBone * 1.2, clamp(oTell, 0.0, 1.0) * 0.75);`)
+      .replace('#include <clearcoat_normal_fragment_maps>', `{
+          // the papillae in the normal (derivative bump; world units)
+          float oHw = oPap * mix(0.045, 0.02, vOruA.x) * uRm;
+          vec3 oSx = dFdx(-vViewPosition), oSy = dFdy(-vViewPosition);
+          float oDx = dFdx(oHw), oDy = dFdy(oHw);
+          vec3 oR1 = cross(oSy, normal), oR2 = cross(normal, oSx);
+          float oDet = dot(oSx, oR1) * faceDirection;
+          vec3 oG = sign(oDet) * (oDx * oR1 + oDy * oR2);
+          normal = normalize(abs(oDet) * normal - oG);
+        }
+        #include <clearcoat_normal_fragment_maps>`)
       .replace('#include <lights_physical_fragment>', `#include <lights_physical_fragment>
         totalEmissiveRadiance *= 1.0 + uCloud.z * smoothstep(0.3, 1.1, sin(ocA - uCloud.x + 0.9));`);
   };
@@ -460,7 +660,8 @@ function installSculpt(L, A) {
   // the mantle, head, web, beak and siphon: one mesh (breath still scales it; the siphon
   // pulse still keys on SIPHON — the sculpt keeps the funnel there)
   L.mantle.geometry.dispose();
-  L.mantle.geometry = g.mantle;
+  L.mantle.geometry = bodyArmP(g.mantle);
+  bodyArmP(g.lid_top); bodyArmP(g.lid_bot);
   L.mantle.material = bodyMat;
   // the lids: thick, rolled, rotating as before (heavier: they never quite clear the iris)
   const oldLids = new Set();
@@ -498,6 +699,7 @@ function installSculpt(L, A) {
   L.suckers.material.dispose();
   L.suckers.geometry = g.sucker;
   L.suckers.material = sm;
+  L.suckBase = sm.color.clone();
   L.suckK = meta.suckK || 0.34;
   L.suckSink = 0.09;                       // the stalk sits down in its collar
   // the strip bakes a socket under every station, so a hidden sucker leaves an empty socket:
@@ -557,7 +759,7 @@ function buildArm(L, A, dt, player) {
   _t.subVectors(_d, _a); const span = _t.length() || 1;
   _b.copy(_a).addScaledVector(_t, 0.30).addScaledVector(UP, L.R * (0.9 + 1.4 * A.lift) + span * 0.10 * (1 - A.lift));
   _c.copy(_a).addScaledVector(_t, 0.72).addScaledVector(UP, L.R * 1.1 * A.lift + span * 0.05);
-  const writhe = (0.04 + 0.10 * A.lift) * A.len, wt = L.t * (0.7 + 0.9 * A.lift) + A.phase;
+  const writhe = (0.04 + 0.10 * A.lift) * A.len * L.writheK, wt = L.t * (0.7 + 0.9 * A.lift) + A.phase;
   _w.set(-_t.z, 0, _t.x).normalize();                             // side-to-side
   for (let i = 0; i <= n; i++) {
     const s = i / n, m = 1 - s;
@@ -741,11 +943,23 @@ function poseHoarder(L, dt, player) {
   // the siphon flares on the exhale and the whole head rides the breath
   const ph = L.brPh, bv = ph < 0.7 ? THREE.MathUtils.smootherstep(ph, 0, 0.7) : 1 - THREE.MathUtils.smootherstep(ph, 0.7, 1.0);
   L.cloudU.uSiph.value = ph > 0.68 ? 0.035 * Math.sin(Math.PI * Math.min(1, (ph - 0.68) / 0.32)) : 0;
-  L.bodyY = gy + R * (0.35 + 0.75 * L.riseE) + R * 0.04 * Math.sin(L.t * 0.35) + R * 0.025 * bv;
+  // (menace) she LOOMS: awake and close she stands tall over him with the mantle reared,
+  // and a held diver is lifted to a beak she bares by rearing further
+  const loom = L.loomE, rear = L.rearE;
+  L.bodyY = gy + R * (0.35 + 0.75 * L.riseE + 0.32 * loom + 0.12 * rear) + R * 0.04 * Math.sin(L.t * 0.35) + R * 0.025 * bv;
   b.position.set(L.pos.x, L.bodyY, L.pos.z);
-  b.rotation.set(-0.10 * L.riseE + 0.03 * Math.sin(L.t * 0.35) - 0.02 * bv, L.yaw, 0.015 * nzO(L.t * 0.3, 2));
-  const br = 1 + 0.05 * (bv - 0.5);
+  b.rotation.set(-0.10 * L.riseE - 0.16 * loom - 0.40 * rear + 0.03 * Math.sin(L.t * 0.35) - 0.02 * bv, L.yaw, 0.015 * nzO(L.t * 0.3, 2));
+  const br = (1 + 0.05 * (bv - 0.5)) * (1 + 0.07 * L.puff);
   L.mantle.scale.set(br, 1 + (br - 1) * 1.4, br);
+  // the working beak: everted toward a held diver, snapping
+  if (L.beak) {
+    const Bk = L.beak, ev = Bk.ev;
+    Bk.grp.position.set(0, -0.44 - 0.14 * ev, 0.14 + 0.24 * ev);
+    Bk.grp.rotation.x = -0.35 * ev;
+    Bk.grp.scale.setScalar(1.25 * (1 + 0.35 * ev));
+    Bk.hu.rotation.x = -0.60 * Bk.open;
+    Bk.hl.rotation.x = 0.45 * Bk.open;
+  }
   b.updateMatrixWorld(true);
 
   // arms
@@ -753,7 +967,8 @@ function poseHoarder(L, dt, player) {
   _mi.copy(b.matrixWorld).invert();
   for (let a = 0; a < NA; a++) {
     const A = L.arms[a];
-    _p.set(Math.sin(A.ang) * 0.52, -0.42, Math.cos(A.ang) * 0.52 + 0.10).applyMatrix4(b.matrixWorld);
+    const wf = 0.52 * (1 + 0.28 * L.cloudU.uMen.value.w);           // the roots ride the flared web
+    _p.set(Math.sin(A.ang) * wf, -0.42, Math.cos(A.ang) * wf + 0.10).applyMatrix4(b.matrixWorld);
     A.base.copy(_p);
     buildArm(L, A, dt, player);
     // suckers: two staggered rows on the oral face (-U), crowding and shrinking to the tip,
@@ -787,10 +1002,13 @@ function poseHoarder(L, dt, player) {
   const open = L.riseE;
   // (a blink every few seconds awake: the lids close fast and open slower)
   const bl = L.blinkT < 0.28 ? Math.sin(Math.PI * Math.pow(L.blinkT / 0.28, 0.6)) : 0;
-  const lo = open * (1 - 0.9 * bl);
+  // (menace) asleep, ONE lid cracks and that eye follows him (e.peek, set in update)
+  let eoMax = 0;
   for (const e of L.eyes) {
-    e.lidT.rotation.x = -0.1 - L.lidK * lo;
-    e.lidB.rotation.x = 0.1 + L.lidKb * lo;
+    const eo = Math.max(open * (1 - 0.9 * bl), e.peek);
+    e.eo = eo; if (eo > eoMax) eoMax = eo;
+    e.lidT.rotation.x = -0.1 - L.lidK * eo;
+    e.lidB.rotation.x = 0.1 + L.lidKb * eo;
   }
   // THE LOOK: each eyeball turns in its socket toward the diver, in saccades - it holds,
   // then JUMPS (a stiff spring) when the error grows or a moment has passed
@@ -800,7 +1018,7 @@ function poseHoarder(L, dt, player) {
     for (const e of L.eyes) {
       _l.copy(player.pos);
       e.e.worldToLocal(_l);
-      const ty = clamp(Math.atan2(_l.x, _l.z), -0.45, 0.45) * open, tp = clamp(Math.atan2(_l.y, Math.hypot(_l.x, _l.z)), -0.3, 0.3) * open;
+      const ty = clamp(Math.atan2(_l.x, _l.z), -0.45, 0.45) * e.eo, tp = clamp(Math.atan2(_l.y, Math.hypot(_l.x, _l.z)), -0.3, 0.3) * e.eo;
       if (e.ly === undefined) { e.ly = { x: 0, v: 0 }; e.lp = { x: 0, v: 0 }; e.ty = 0; e.tp = 0; }
       if (Lk.next <= 0 || Math.abs(ty - e.ty) > 0.18 || Math.abs(tp - e.tp) > 0.15) { e.ty = ty + 0.03 * nzO(L.t * 3, e.sd); e.tp = tp + 0.02 * nzO(L.t * 2.7, e.sd + 4); }
       sprO(e.ly, e.ty, 26, 0.9, dt); sprO(e.lp, e.tp, 26, 0.9, dt);
@@ -815,7 +1033,8 @@ function poseHoarder(L, dt, player) {
     b.getWorldDirection(_t);
     shine = Math.pow(Math.max(0, _t.dot(_p) / dist), 3) * (1 - smooth(dist, 25, 100)) * Math.max(0, player.light == null ? 1 : player.light);
   }
-  L.eyeMat.emissiveIntensity = (0.05 + 2.0 * shine) * open;
+  L.shine = shine;
+  L.eyeMat.emissiveIntensity = (0.05 + 2.0 * shine) * Math.max(open, eoMax * 1.6);
   // the freckles breathe slowly asleep, run brighter and quicker when she is roused
   // (encounter pass: a breath of cold phosphor, not a starfield; the passing clouds'
   // flare, uCloud.z, still carries her mood across them)
@@ -833,17 +1052,65 @@ function poseHoarder(L, dt, player) {
   L.head.set(0, 0.25, 0.45).applyMatrix4(b.matrixWorld);
 }
 
+// ---- MENACE: behaviour (orune-menace; every threat has its tell, see the spec's table) ----
+// The lash is COCK then STRIKE. The cock is the tell: 0.45 s from the front, 0.6 s when the
+// arm comes from out of his view (after she has circled his light); the arm blanches in
+// bands for its whole length while it cocks. The strike window is the old one (1.05 s).
+const STRIKE_T = LASH_T - COCK_T, REVEAL_DUR = 8.5, INK_WIND = 0.9;
+const _cf = V3(), _cv = V3();
+// is a world point inside the middle of the camera's view (and near enough to read)?
+function inView(p, cosK = 0.6, far = 90) {
+  _cv.subVectors(p, camera.position);
+  const d = _cv.length() || 1;
+  if (d > far) return false;
+  camera.getWorldDirection(_cf);
+  return _cf.dot(_cv) / d > cosK;
+}
+// the deimatic flash: attack 0.08 s, hold 0.3 s, release 0.45 s
+function flash(L, k) { if (L.deimT > 0.5 || k > L.deimK) { L.deimT = 0; L.deimK = k; } }
+function deimEnv(t) { return t < 0.08 ? t / 0.08 : t < 0.38 ? 1 : Math.max(0, 1 - (t - 0.38) / 0.45); }
+function startLash(L, player, ambush) {
+  // from behind after circling the light, else the nearest arm that is not flinching
+  let best = -1, bd = 1e9;
+  for (let a = 0; a < NA; a++) {
+    const A = L.arms[a];
+    if (A.recoil > 0.4 || A.lash > 0) continue;
+    let d = A.tip.distanceTo(player.pos);
+    if (L.behindNext) d += inView(A.tip, 0.35, 200) ? 60 : 0;
+    if (d < bd) { bd = d; best = a; }
+  }
+  if (best < 0) return;
+  const A = L.arms[best];
+  A.cockT = (!inView(A.tip, 0.5, 200) || L.behindNext) ? 0.6 : 0.45;
+  A.lash = A.cockT + STRIKE_T;
+  A.fast = ambush;
+  L.behindNext = false;
+  L.lashCd = 3 + Math.random() * 2.5;
+  L.mood = Math.min(1, L.mood + 0.25);
+  L.cockN++;
+  if (ambush) flash(L, 0.7);
+}
+
 export function updateHoarder(L, dt, t, player) {
   const ev = EVO;
-  ev.sigilLit = 0; ev.calmed = false; ev.lightDrain = 0; ev.slam = false; ev.remaining = 0; ev.msg = null; ev.woke = false; ev.grabbed = false;
+  ev.sigilLit = 0; ev.calmed = false; ev.lightDrain = 0; ev.slam = false; ev.remaining = 0; ev.msg = null; ev.woke = false; ev.grabbed = false; ev.quake = 0; ev.inkDim = 0;
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
-  if (L.woke) { L.woke = false; ev.woke = true; L.mood = 1; }
+  if (L.woke) {
+    L.woke = false; ev.woke = true; L.mood = 1; ev.quake = 0.35;
+    L.revealT = 0; L.lashCd = Math.max(L.lashCd, REVEAL_DUR + 1.5);
+    for (const A of L.arms) A.creep.set(0, 0, 0);
+    for (const e of L.eyes) e.peek = 0;
+  }
   if (!L.pPrev) L.pPrev = player.pos.clone();
   L.t += dt;
+  // THE HUSH: asleep, the hoard's lanterns sink as he nears the lamp and breathe with her —
+  // she is drawing on them before she ever moves (hoard.js eases toward it)
+  const lp = L.hoard.lampPos, dLamp = Math.hypot(player.pos.x - lp.x, player.pos.z - lp.z);
+  L.hoard.hush = L.hoard.lampTaken ? 1 : (1 - 0.55 * (1 - smooth(dLamp, 6, 30))) * (0.86 + 0.14 * Math.cos(L.brPh * TAU));
   L.hoard.update(dt, player, ev);
 
-  // rise / settle
-  const rate = L.riseTarget > L.rise ? 1 / 4 : 1 / 6;
+  // rise / settle (the waking rise is slow now: an overwhelming reveal, not a stand-up)
+  const rate = L.riseTarget > L.rise ? 1 / 6.5 : 1 / 6;
   L.rise += clamp(L.riseTarget - L.rise, -rate * dt, rate * dt);
   L.riseE = smooth(L.rise, 0, 1);
 
@@ -855,10 +1122,23 @@ export function updateHoarder(L, dt, t, player) {
       L.hoard.found.arms = true; ev.msg = 'THE CARGO CHAIN IS WARM. IT IS NOT CHAIN.'; break;
     }
   }
-  // breath, blink, mood (anim-sleepers)
+  const hunting = !L.dormant && !L.calmed;
+  const near = hunting ? 1 - smooth(pd, L.R * 1.5, L.AL * 0.9) : 0;
+  // AWARENESS (asleep): she knows he is there long before she moves
+  const dHead = L.head.distanceTo(player.pos);
+  const awareT = L.dormant ? 1 - smooth(Math.min(dHead, dLamp + 10), 14, 60) : L.calmed ? 0 : 1;
+  L.aware += (awareT - L.aware) * Math.min(1, dt * 0.6);
+  if (L.revealT >= 0) {
+    const was = L.revealT;
+    L.revealT += dt;
+    if (was < 4.2 && L.revealT >= 4.2) flash(L, 1);              // the eyes come fully open
+    if (L.revealT > REVEAL_DUR) L.revealT = -1;
+  }
+  const reveal = L.revealT >= 0;
+  // breath, blink, mood (anim-sleepers). THE FREEZE holds her breath.
   const brRate = L.dormant ? 1 / 11 : L.calmed ? 1 / 8 : 1 / (5.5 - 2.5 * L.mood);
   const brWas = L.brPh;
-  L.brPh = (L.brPh + dt * brRate) % 1;
+  if (L.still <= 0) L.brPh = (L.brPh + dt * brRate) % 1;
   if (brWas < 0.7 && L.brPh >= 0.7) {
     // the exhale: when she lies on the floor it blows the silt out from under the siphon
     _p.copy(SIPHON).applyMatrix4(L.body.matrixWorld);
@@ -868,13 +1148,29 @@ export function updateHoarder(L, dt, t, player) {
   L.blinkT += dt;
   if (L.blinkT > L.blinkN) { L.blinkT = 0; L.blinkN = 2.5 + Math.random() * 5; }
   let moodT = L.dormant ? 0.05 : L.calmed ? 0.12 : 0.45 + 0.35 * (1 - smooth(pd, L.R, L.AL * 0.9));
-  if (L.grab) moodT = 1;
+  if (L.grab || L.still > 0) moodT = 1;
   L.mood += (moodT - L.mood) * Math.min(1, (moodT > L.mood ? 2.5 : 0.35) * dt);
-  L.cloudPh += dt * (0.35 + 2.8 * L.mood);
+  // the freeze stills the passing clouds too: the skin goes dark and holds
+  L.cloudPh += dt * (0.35 + 2.8 * L.mood) * (L.still > 0 ? 0.08 : 1);
+
+  // ---- the eye that watches (asleep): the near lid cracks and the bar pupil follows
+  // him; it snaps shut when he looks straight at it, and opens again when he looks away
+  L.peekCd -= dt;
+  if (L.dormant) {
+    _l.copy(player.pos); L.body.worldToLocal(_l);
+    const side = _l.x >= 0 ? 1 : -1;
+    for (const e of L.eyes) {
+      e.e.getWorldPosition(_c);
+      const watched = inView(_c, 0.97, 45);
+      if (watched && e.peek > 0.1) L.peekCd = 4 + Math.random() * 3;
+      const want = e.sd === side && L.aware > 0.45 && L.peekCd <= 0 && !watched ? 0.34 : 0;
+      e.peek += clamp(want - e.peek, -dt * 3, dt * 0.12);
+    }
+  } else for (const e of L.eyes) e.peek = Math.max(0, e.peek - dt);
 
   // ---- heading: awake, she turns to him (the turn eases in and out) ----
   let yawWant = 0, crawlT = 0;
-  if (!L.dormant && !L.calmed) {
+  if (hunting && L.still <= 0) {
     const want = Math.atan2(player.pos.x - L.pos.x, player.pos.z - L.pos.z);
     let dA = want - L.yaw;
     while (dA > Math.PI) dA -= TAU;
@@ -883,45 +1179,114 @@ export function updateHoarder(L, dt, t, player) {
     // she pours toward him over the silt when he keeps his distance
     if (pd > L.AL * 0.7) crawlT = L.speed * 0.18;
   }
-  L.yawV += (yawWant - L.yawV) * Math.min(1, 1.5 * dt);
+  L.yawV += (yawWant - L.yawV) * Math.min(1, (L.still > 0 ? 6 : 1.5) * dt);
   L.yaw += L.yawV * dt;
   // (the pour surges with the breath: a mantle-driven crawl, not a conveyor)
   L.crawl += (crawlT - L.crawl) * Math.min(1, 0.8 * dt);
-  if (L.crawl > 1e-3) {
+  if (L.crawl > 1e-3 && L.still <= 0) {
     const sp = L.crawl * (0.55 + 0.9 * (L.brPh > 0.7 ? 1 : 0.4)) * dt;
     L.pos.x += Math.sin(L.yaw) * sp; L.pos.z += Math.cos(L.yaw) * sp;
   }
+  // CIRCLING THE LIGHT: an arm burned by the lantern does not make her back off — she
+  // slides round it, sideways over the silt, and the next arm comes from where he is not
+  // looking (with the longer cock as its tell)
+  L.circleT -= dt; L.circleCd -= dt;
+  if (hunting && L.circleT > 0 && L.still <= 0 && !L.grab && pd > L.collR + 5) {
+    _p.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
+    const dl = _p.length() || 1;
+    const sp = L.speed * 0.2 * dt * smooth(L.circleT, 0, 0.6);
+    L.pos.x += -_p.z / dl * sp * L.circleDir; L.pos.z += _p.x / dl * sp * L.circleDir;
+  }
 
-  // ---- arms: drape, writhe, lash, grab, flinch ----
-  const lit = player.light > 0.25;
+  // ---- INK: the lantern held into her arms (two or more burning at once, ~1.2 s in all)
+  // is answered with ink. Tell: the siphon swells on a deep exhale (0.9 s). After: the
+  // light cannot find her arms for 3 s, and no lash comes for 2.5 s.
+  L.inkCd -= dt; L.inkedT -= dt;
+  let burned = 0;
+  for (const A of L.arms) if (A.recoil > 0.5) burned++;
+  L.glareT = hunting && burned >= 2 ? L.glareT + dt : Math.max(0, L.glareT - dt * 0.5);
+  if (L.inkT < 0 && L.glareT > 1.2 && L.inkCd <= 0 && !L.grab && !reveal) { L.inkT = 0; L.inkN++; L.lashCd = Math.max(L.lashCd, INK_WIND + 2.5); }
+  if (L.inkT >= 0) {
+    L.inkT += dt;
+    if (L.inkT >= INK_WIND) {
+      L.inkT = -1; L.inkCd = 22; L.inkedT = 3; L.glareT = 0;
+      _p.copy(SIPHON).applyMatrix4(L.body.matrixWorld);
+      deployInk(_p);
+      _c.lerpVectors(_p, player.pos, 0.65);
+      deployInk(_c);
+      if (_c.distanceTo(player.pos) < 14) ev.inkDim = 1;
+      if (!L.inkSaid) { L.inkSaid = true; L.pendingMsg = L.pendingMsg || 'SHE CLOUDS THE WATER. THE LIGHT CANNOT FIND HER.'; }
+    }
+  }
+
+  // ---- arms: drape, creep, probe, freeze, lash, grab, flinch ----
+  const lit = player.light > 0.25 && L.inkedT <= 0;
   L.lashCd -= dt;
+  // probers: two arms that test the silt toward him, re-chosen every ~7 s; one comes from
+  // behind him (where the camera is not looking)
+  L.probeT -= dt;
+  if (hunting && !reveal && L.probeT <= 0) {
+    L.probeT = 6 + Math.random() * 3;
+    camera.getWorldDirection(_cf);
+    L.probeAng[0] = Math.atan2(-_cf.x, -_cf.z) + (Math.random() - 0.5) * 0.9;     // behind him
+    L.probeAng[1] = Math.atan2(_cf.x, _cf.z) + (Math.random() < 0.5 ? 1 : -1) * (0.9 + Math.random() * 0.6);
+    let k = 0;
+    for (let a = 0; a < NA && k < 2; a++) {
+      const q = (a + L.probeRot) % NA, A = L.arms[q];
+      if (A.lash > 0 || A.recoil > 0.3 || (L.grab && L.grab.arm === q)) continue;
+      L.probeArm[k++] = q;
+    }
+    L.probeRot = (L.probeRot + 3) % NA;
+  }
+  if (!hunting || reveal) L.probeArm[0] = L.probeArm[1] = -1;
+  if (L.still > 0) {
+    L.still -= dt;
+    if (L.still <= 0) { L.lashCd = 1.5; if (hunting && !L.grab) startLash(L, player, true); }
+  }
+  L.writheK += ((L.still > 0 ? 0 : 1) - L.writheK) * Math.min(1, dt * 5);
+  let spd = 0;
   for (let a = 0; a < NA; a++) {
     const A = L.arms[a];
     const liftGoal = L.calmed ? 0.15 : L.dormant ? 0 : 1;
-    A.lift += clamp(liftGoal - A.lift, -dt * 0.35, dt * (0.25 + 0.05 * a));   // staggered
-    // flinch: the lit lantern near the arm's inner third
-    const near = A.pts[RINGS >> 2].distanceTo(player.pos);
-    const flinch = !L.dormant && !L.calmed && lit && near < 11 ? 1 : 0;
-    if (flinch && A.recoil < 0.1) L.mood = Math.min(1, L.mood + 0.3);
+    A.lift += clamp(liftGoal - A.lift, -dt * 0.35, dt * (0.18 + 0.04 * a));   // staggered
+    // flinch: the lit lantern near the arm (menace: anywhere along its inner 60% — she
+    // stands taller now, so the inner quarter alone rode over his head and the rite's
+    // "arms flinch from light" stopped answering; measured, then widened). An arm already
+    // THROWN (the strike, after its cock tell) is committed and does not flinch mid-air.
+    let nr = 1e9;
+    for (let i = RINGS >> 2; i <= (RINGS * 0.6 | 0); i += 5) { const d = A.pts[i].distanceToSquared(player.pos); if (d < nr) nr = d; }
+    nr = Math.sqrt(nr);
+    const thrown = A.lash > 0 && A.lash <= STRIKE_T;
+    const flinch = hunting && lit && !thrown && nr < 11 ? 1 : 0;
+    if (flinch && A.recoil < 0.1) {
+      L.mood = Math.min(1, L.mood + 0.3);
+      // the burned arm flashes; and she starts round the light
+      flash(L, 0.55);
+      if (L.circleCd <= 0) { L.circleT = 3.2; L.circleCd = 7; L.circleDir = Math.random() < 0.5 ? 1 : -1; L.behindNext = true; }
+    }
     A.recoil += clamp(flinch - A.recoil, -dt * 0.6, dt * 2.5);
     // tip goal, and how the tip chases it (w, z of its spring) and how tightly it coils
     const held = L.grab && L.grab.arm === a;
-    let w = 1.6, z = 1, curlT = L.dormant ? 7 : L.calmed ? 9 : 15;
+    const probe = L.probeArm[0] === a || L.probeArm[1] === a;
+    let w = 1.6, z = 1, curlT = L.dormant ? 7 : L.calmed ? 9 : 10;
+    let tellT = 0;
     if (held) {
       A.tipGoal.copy(player.pos);
       w = 7; curlT = 3;
     } else if (A.lash > 0) {
+      const was = A.lash;
       A.lash -= dt;
-      if (A.lash > LASH_T - COCK_T) {
-        // THE COCK: the arm draws back and up over her, coiling - the telegraph
+      if (A.lash > STRIKE_T) {
+        // THE COCK: the arm draws back and up over her, coiling — and blanches: the tell
         _p.copy(A.base).sub(player.pos).setY(0).normalize();
         A.tipGoal.copy(A.base).addScaledVector(_p, L.R * 1.4);
         A.tipGoal.y += L.R * 2.4;
-        w = 5; z = 0.8; curlT = 24;
+        w = 5; z = 0.8; curlT = 24; tellT = 1;
       } else {
-        // THE STRIKE: the coil throws open at him
+        if (was > STRIKE_T) A.strikeN++;
+        // THE STRIKE: the coil throws open at him (faster out of the freeze: the ambush)
         A.tipGoal.copy(player.pos);
-        w = 7; z = 0.8; curlT = 1.5;
+        w = A.fast ? 9 : 7; z = 0.8; curlT = 1.5; tellT = 0.35;
         if (A.tip.distanceTo(player.pos) < 3.2 && !L.grab && A.recoil < 0.4) {
           // a grab is the DRAG, not a slam: no dress tear, the line is the teaching
           L.grab = { arm: a, t: 0 };
@@ -929,50 +1294,137 @@ export function updateHoarder(L, dt, t, player) {
           ev.msg = ev.msg || 'IT HAS YOU. CUT IT.';
         }
       }
+    } else if (L.still > 0) {
+      // THE FREEZE: every arm stops where it is; she is a held breath
+      A.tipGoal.copy(A.tip);
+      w = 6;
     } else if (L.dormant || L.calmed) {
-      // asleep the tips still creep a little over the silt
+      // asleep the tips still creep a little over the silt — and, out of his sight, an arm
+      // RESETTLES nearer him: silt hangs where it moved (the tell; it never touches him)
+      if (L.dormant) {
+        A.creepT -= dt; A.creepMove -= dt;
+        if (L.aware > 0.35 && A.creepT <= 0 && A.tip.distanceTo(player.pos) > 7 && A.tip.distanceTo(player.pos) < 70 && !inView(A.tip, 0.55, 120)) {
+          _p.set(player.pos.x - A.tip.x, 0, player.pos.z - A.tip.z).normalize();
+          A.creep.addScaledVector(_p, 1.8 + Math.random() * 2.2);
+          if (A.creep.length() > 8) A.creep.setLength(8);
+          A.creepT = 3.5 + Math.random() * 5; A.creepMove = 1.8;
+          L.creepN++; L.creepAt.copy(A.tip);
+          emitDust(A.tip.x, terrainH(A.tip.x, A.tip.z, L.idx) + 0.2, A.tip.z, 10, 1.6);
+        }
+        if (A.creepMove > 0) {
+          A.dustT -= dt;
+          if (A.dustT <= 0) { A.dustT = 0.4; emitDust(A.tip.x, terrainH(A.tip.x, A.tip.z, L.idx) + 0.2, A.tip.z, 5, 1.1); }
+        }
+      }
       A.tipGoal.copy(A.drape);
+      if (L.dormant) A.tipGoal.add(A.creep);
       A.tipGoal.x += nzO(L.t * 0.13, a * 3) * 0.8; A.tipGoal.z += nzO(L.t * 0.11, a * 5 + 1) * 0.8;
-      w = 0.8;
+      w = A.creepMove > 0 ? 1.3 : 0.8;
+    } else if (reveal && L.revealT > 2.2) {
+      // THE WEB-OVER: the arms come up over him and down round him — a cage of her, and
+      // no lash for its length (it is the reveal, not an attack)
+      const k = smooth(L.revealT, 2.2, 6.5) * (1 - smooth(L.revealT, 7.2, REVEAL_DUR));
+      _p.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
+      const dl = Math.min(_p.length(), A.len * 0.7) || 1;
+      _p.setLength(dl);
+      const ang = a / NA * TAU + L.yaw, rr = 11 - 3 * k;
+      _c.set(L.pos.x + _p.x + Math.sin(ang) * rr, 0, L.pos.z + _p.z + Math.cos(ang) * rr);
+      _c.y = terrainH(_c.x, _c.z, L.idx) + 1.5 + 4 * (1 - k);
+      A.tipGoal.copy(_c);
+      w = 1.1; curlT = 6;
+    } else if (probe && pd < L.AL * 1.1) {
+      // PROBING: the tip tests the seabed toward him, closing in (silt puffs, sucker pops)
+      const pi = L.probeArm[0] === a ? 0 : 1;
+      const pr = 5 + 7 * smooth(L.probeT, 0, 6);
+      _c.set(player.pos.x + Math.sin(L.probeAng[pi]) * pr, 0, player.pos.z + Math.cos(L.probeAng[pi]) * pr);
+      _c.y = terrainH(_c.x, _c.z, L.idx) + 0.7;
+      A.tipGoal.copy(_c);
+      w = 1.3; curlT = 5;
+      A.dustT -= dt;
+      const sp = A.tipV.length();
+      if (A.dustT <= 0 && sp > 0.6 && A.tip.y - _c.y < 2) {
+        A.dustT = 0.45; emitDust(A.tip.x, _c.y - 0.5, A.tip.z, 4, 1.0);
+        if (A.tip.distanceTo(player.pos) < 12 && L.t > L.popNext) { L.popN++; L.popAt.copy(A.tip); L.popNext = L.t + 1.2 + Math.random() * 1.6; }
+      }
     } else {
-      // awake idle: tips raised and hunting round her, higher when she is roused
+      // awake idle: low and wide, reaching across the lair, tips just off the silt
       const ang = L.yaw + A.ang + Math.sin(L.t * 0.3 + A.phase) * 0.3;
-      const rr = A.len * (0.55 + 0.1 * Math.sin(L.t * 0.5 + A.phase));
-      A.tipGoal.set(L.pos.x + Math.sin(ang) * rr, L.bodyY + L.R * (0.8 + 0.8 * Math.sin(L.t * 0.7 + A.phase)) + A.recoil * L.R * 2, L.pos.z + Math.cos(ang) * rr);
+      const rr = A.len * (0.66 + 0.1 * Math.sin(L.t * 0.5 + A.phase));
+      const gx = L.pos.x + Math.sin(ang) * rr, gz = L.pos.z + Math.cos(ang) * rr;
+      A.tipGoal.set(gx, terrainH(gx, gz, L.idx) + L.R * (0.35 + 0.55 * (0.5 + 0.5 * Math.sin(L.t * 0.7 + A.phase))) + A.recoil * L.R * 2, gz);
     }
     // a flinching arm coils away from the light
     curlT += 10 * A.recoil;
     A.curl += (curlT - A.curl) * Math.min(1, 4 * dt);
     A.wrap += clamp((held ? 1 : 0) - A.wrap, -dt * 1.5, dt * 2.2);
+    A.tell += clamp(tellT - A.tell, -dt * 2, dt * 6);
+    L.cloudU.uTell.value[a + 1] = A.tell;
     // the tip: a damped spring toward its goal (was a constant-rate lerp)
     for (let c = 0; c < 3; c++) {
       const x = A.tip.getComponent(c), v = A.tipV.getComponent(c), g = A.tipGoal.getComponent(c);
       const nv = (v + w * w * dt * (g - x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
       A.tipV.setComponent(c, nv); A.tip.setComponent(c, x + nv * dt);
     }
+    spd += A.tipV.length();
   }
-  // a new lash: the nearest arm that is not flinching, when he is inside her reach
-  if (!L.dormant && !L.calmed && !L.grab && L.lashCd <= 0 && pd < L.AL * 0.85) {
-    let best = -1, bd = 1e9;
-    for (let a = 0; a < NA; a++) {
-      const A = L.arms[a];
-      if (A.recoil > 0.4) continue;
-      const d = A.tip.distanceTo(player.pos);
-      if (d < bd) { bd = d; best = a; }
-    }
-    if (best >= 0) { L.arms[best].lash = LASH_T; L.lashCd = 3 + Math.random() * 2.5; L.mood = Math.min(1, L.mood + 0.25); }
+  L.moveK = Math.min(1, spd / NA / 8);
+  // a new lash: inside her reach, never in the reveal or the ink wind-up. Half the time
+  // she FREEZES first (1.2-2.2 s: breath held, skin dark, pupils blown, the bed silent)
+  // and then comes the ambush — still through the cock.
+  if (hunting && !reveal && !L.grab && L.still <= 0 && L.inkT < 0 && L.lashCd <= 0 && pd < L.AL * 0.85) {
+    if (Math.random() < 0.5) { L.still = 1.2 + Math.random(); L.stillN++; L.lashCd = 99; }
+    else startLash(L, player, false);
   }
   // the grab: dragged toward the beak, light going, until cut or she tires of him
   if (L.grab) {
     L.grab.t += dt;
     _p.copy(L.head).sub(player.pos);
     const d = _p.length() || 1;
-    if (d > L.R * 0.9) player.vel.addScaledVector(_p.divideScalar(d), 14 * dt);
+    // (menace: she rears and looms now, so the head rides over her own mantle; the drag
+    // stops short of her contact shell or a grab became a slam and a torn dress — measured)
+    _p.divideScalar(d);
+    if (d > L.R * 0.9 && pd > L.collR + 4) player.vel.addScaledVector(_p, 14 * dt);
+    else if (pd < L.collR + 3) { const vin = player.vel.dot(_p); if (vin > 0) player.vel.addScaledVector(_p, -vin); }   // held at the beak, not into her
     ev.lightDrain += dt * 0.12;
     if (L.grab.t > 5 || L.calmed) { L.arms[L.grab.arm].recoil = 1; L.grab = null; }
   }
+  // ---- the display: papillae, darkness, the flash, the web, the pupil, the beak ----
+  L.deimT += dt;
+  const deim = L.deimK * deimEnv(L.deimT);
+  const stillK = L.still > 0 ? 1 : 0, grabK = L.grab ? 1 : 0;
+  const papT = L.calmed ? 0.1 : L.dormant ? 0.12 + 0.6 * L.aware : Math.max(0.55 + 0.45 * near, stillK, grabK);
+  const darkT = L.calmed ? 0 : L.dormant ? 0.15 * L.aware : Math.max(0.7 + 0.3 * near, stillK, grabK);
+  const webT = L.calmed ? 0.1 : L.dormant ? 0 : reveal ? smooth(L.revealT, 1.5, 6) : 0.5 + 0.5 * near;
+  const M = L.cloudU.uMen.value;
+  L.pap += (papT - L.pap) * Math.min(1, dt * (papT > L.pap ? 1.6 : 0.5));
+  L.dark += (darkT - L.dark) * Math.min(1, dt * (darkT > L.dark ? 2.5 : 0.6));
+  L.web += (webT - L.web) * Math.min(1, dt * 1.2);
+  M.set(L.noPap ? 0 : L.pap, L.dark * (1 - deim), deim, L.web);          // (L.noPap: dev A/B for the papilla cost)
+  const pupT = L.calmed || L.dormant ? 0 : Math.max(0.2, stillK, grabK, 0.6 * near);
+  L.pupil += (Math.max(pupT, deim) - L.pupil) * Math.min(1, dt * (pupT > L.pupil ? 5 : 1.2));
+  L.pupU.value = L.pupil;
+  L.suckers.material.color.copy(L.suckBase).multiplyScalar(1 - 0.22 * L.dark * (1 - deim));
+  L.puff += ((hunting ? near : 0) - L.puff) * Math.min(1, dt);
+  L.loomE += ((hunting ? 1 - smooth(pd, L.AL * 0.35, L.AL * 0.9) : 0) - L.loomE) * Math.min(1, dt * 0.7);
+  L.rearE += (grabK - L.rearE) * Math.min(1, dt * 1.5);
+  {
+    const Bk = L.beak;
+    Bk.ev += ((grabK ? 1 : hunting ? 0.2 * L.loomE : 0) - Bk.ev) * Math.min(1, dt * 2);
+    // held: the beak opens and SNAPS shut about once a second (each closing is a click)
+    if (grabK) {
+      Bk.ph += dt * 1.9;
+      Bk.open = Math.pow(0.5 + 0.5 * Math.sin(Bk.ph * Math.PI), 1.6);
+      const cyc = Math.floor(Bk.ph / 2 + 0.25);
+      if (cyc !== Bk.cyc) { Bk.cyc = cyc; if (Bk.ph > 0.5) Bk.snapN++; }
+    } else {
+      Bk.ph = 0; Bk.cyc = 0;
+      Bk.open += ((hunting ? 0.1 + 0.12 * (0.5 + 0.5 * Math.sin(L.t * 1.3)) : 0) - Bk.open) * Math.min(1, dt * 3);
+    }
+  }
 
   poseHoarder(L, dt, player);
+  // the ink wind-up: the siphon swells (after poseHoarder's breath write)
+  if (L.inkT >= 0) L.cloudU.uSiph.value = 0.12 * smooth(L.inkT, 0, INK_WIND * 0.8);
   L.armsInit = true;
 
   // contact: the mantle shoves
@@ -1075,7 +1527,7 @@ function stageHoard(L, dt) {
       if (L.heap && L.heap.on > 0.02 && !L.calmed) { want = 30; I = SO.heapI * L.heap.on * (0.93 + 0.07 * Math.sin(L.t * 3.1)); }
       else { want = 11; I = SO.webI * L.webK * flick; }     // the lantern caught in the web at her front
     } else if (i === 3 && L.dormant) { want = 13; I = SO.cradleI * L.webK * flick; }       // the cradled lantern under her face
-    else if (L.dormant || (L.clutch[i] && L.clutch[i].on > 0.02)) { want = i; I = SO.coilI * (L.clutch[i] ? L.clutch[i].on : 0) * (0.9 + 0.1 * Math.sin(L.t * 6.3 + i * 2.1)); }
+    else if (L.dormant || (L.clutch[i] && L.clutch[i].on > 0.02)) { want = i; I = SO.coilI * H.hushE * (L.clutch[i] ? L.clutch[i].on : 0) * (0.9 + 0.1 * Math.sin(L.t * 6.3 + i * 2.1)); }
     else if (i < 2 && L.webSeats && L.webSeats.length > 2) { want = i === 0 ? 10 : 12; I = SO.seatI * L.webK * flick * (L.calmed ? 0.5 : 1); }
     if (s.src !== want) {
       s.cur = Math.max(0, s.cur - dt * 60);
