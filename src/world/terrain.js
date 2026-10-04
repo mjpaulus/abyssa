@@ -162,7 +162,7 @@ const RAM_IN = 340, RAM_PK = 410, RAM_OUT = 540, RAM_H = 66;
 //    reads as a lighter shape behind the dark near rim — aerial perspective by albedo as
 //    well as by distance.
 // The near rim (r < RIDGE.in0) is untouched: weight 0 there, bit-identical.
-export const RIDGE = { in0: 300, pk0: 348, out0: 540, h0: 74, j0: 44, j2: 28, top: -8, c0: -75, drape: 1, drapeK: 5 };
+export const RIDGE = { in0: 300, pk0: 348, out0: 540, h0: 74, j0: 44, j2: 28, top: -8, c0: -75, drape: 1, drapeK: 4.2 };
 
 // THE FAR ISLANDS (same card: "Build a few far islands"). The rampart breaks the surface
 // in two or three places per site: basalt stacks on a drowned shoal, ~390-430 u off the
