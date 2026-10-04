@@ -240,6 +240,7 @@ export function siteParams(key) {
     sleepers: s.sleepers,
     water: s.water || null, light: s.light || null, floor: s.floor || null,
     shape: s.shape || null, vents: s.vents || null, wrecks: s.wrecks || null, grade: s.grade || null,
+    sparks: s.sparks || null,
     rng: key && s.seeds[key] !== undefined ? stream(s.seeds[key]) : stream(0xD1CE0000 + current)
   };
 }
