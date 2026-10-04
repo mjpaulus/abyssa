@@ -1,6 +1,6 @@
 ---
 title: Fly Pallid Bank + Burned Ground
-status: decision
+status: next
 tags: chart, phase 5
 updated: 2026-10-04
 ---
@@ -15,4 +15,4 @@ Terrain fingerprints if a probe is needed: home 5e6cfe45, Pallid ef14da09 (32x32
 ## Log
 - 2026-08-05 — created at THE CHART v1 ship (de2aacc); awaiting flyover
 - 2026-10-04 — Michael chose to judge from a side-by-side page: Claude captures matched views (floor skyline, a vent cluster, the wreck, the sleeper) at home / Pallid / Burned and publishes one comparison page. Stays in decision until he rules from it.
-
+- 2026-10-04 — RULED by Michael from the capture page (https://claude.ai/artifact/8nFRAqR5QM9JygyCVzTNBW): "Give each its own water". Capture found the sites near-identical from mid-water and the sleeper rows partly dead data (idle never passed; Mhor capped at 5 wards; Velkath lair identical). Build: per-site water colour/clarity, terrain character, vent + wreck placement, and sleepers that sit elsewhere and are genuinely harder. Moved decision -> next.

@@ -1,6 +1,6 @@
 ---
 title: Far ridgeline read
-status: decision
+status: next
 tags: terrain
 updated: 2026-10-04
 ---
@@ -15,4 +15,4 @@ Also of note: the rampart breaches the surface in places — distant 'islands' o
 ## Log
 - 2026-08-05 — carried from W2; islands observation added during the raft round
 - 2026-10-04 — RULED by Michael (islands): "Keep the islands". The rampart's mid-water read (RAM_H) goes on the side-by-side capture page with fly-remote-sites; stays in decision until he rules on RAM_H from it.
-
+- 2026-10-04 — RULED by Michael from the capture page: ridge "Raise it" (RAM_H up until it reads as a second, paler wall above the rim from mid-water); islands — the capture proved NONE exist (highest crest -19.7 home); Michael: "Build a few far islands" (two or three low dark breaches far off). The earlier "keep the islands" ruling was made on a false premise from this card. Moved decision -> next.
