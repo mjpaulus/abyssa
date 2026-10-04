@@ -22,7 +22,7 @@ import { V3 } from '../lib/math.js';
 import { makeGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftRopeSet, raftCanvasSet,
   raftLeatherSet, raftSetsBench } from '../lib/textures.js';
 import { survival } from './survival.js';
-import { surfaceHeightAt, stormLevel, onSkyEnv, setRaftContact } from '../world/water.js';
+import { surfaceHeightAt, stormLevel, onSkyEnv, setRaftContact, setRaftFrame } from '../world/water.js';
 import { Part, xf, box, cyl, tor, weather, rivetRing, boltLine, rope, lash, DECK_SENTINEL, chamferBox, weldBead } from './raft/kit.js';
 import { DECK_NAILS } from './raft/hull.js';
 import { buildHull } from './raft/hull.js';
@@ -538,6 +538,7 @@ export function buildRaft() {
   scene.add(raft);
   raft.updateMatrixWorld(true);
   raft.localToWorld(pumpPos.copy(hoseHead));
+  setRaftFrame(raft.matrixWorld);
   return calls;
 }
 
@@ -597,6 +598,8 @@ export function updateRaft(dt, t) {
   // would not rebuild until render, leaving the anchor a frame behind the swell.
   raft.updateMatrixWorld(true);
   raft.localToWorld(pumpPos.copy(hoseHead));
+  // The sea lets the deck through a crest standing in front of it (water.js raftDry).
+  setRaftFrame(raft.matrixWorld);
 
   // rain wets the whole boat (surface patch): storm drives it in, and it dries slowly
   const wetTo = storm > 0.25 ? Math.min(1, (storm - 0.25) / 0.45) : 0;

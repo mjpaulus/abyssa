@@ -1904,7 +1904,9 @@ const uSss2 = { value: new THREE.Vector4(GLASS.chop.sssCap, GLASS.chop.sssCalm, 
 // DEV DECOMPOSITION. uDbg = 0 is the shipped composite (one uniform compare per
 // fragment, nothing else). 1 reflection, 2 analytic body, 3 screen-space transmission,
 // 4 foam (all whitewater mixes), 5 broad-body SSS, 6 haze/airlight, 7 bubble lift
-// (accumulator), 8 sun glitter. Air side only; the from-below path ignores it.
+// (accumulator), 8 sun glitter, 10 the raft-behind-a-crest mask (raftDry: red = the eye ray
+// lands on the dry raft, green = the deck share let through, blue = the refraction weight
+// that pixel carried before the fix). Air side only; the from-below path ignores it.
 // window.__sky.dbg(n).
 const uDbg = { value: 0 };
 const uOpaq = { value: new THREE.Vector4(GLASS.chop.opaqK, GLASS.chop.opaqLo, GLASS.chop.opaqHi, GLASS.chop.opaqFoam) };
@@ -1943,6 +1945,39 @@ export function surfaceHeightAt(x, z, t, storm) {
 // Raft hull collar for the surface shader: centre xz, half-size, |heave rate|.
 const uRaftC = { value: new THREE.Vector4(0, 0, 4.7, 0) };
 export function setRaftContact(x, z, half, vy) { uRaftC.value.set(x, z, half, Math.min(1.5, Math.abs(vy))); }
+// THE RAFT BEHIND A CREST (roadmap/gale-crests-deck.md). The screen-space refraction
+// target holds only the half-world below the clip plane, so wherever the eye ray leaving
+// a sea fragment is going to land on the raft's DRY slab (deck + bulwark), the target
+// holds the wrong thing: the hull cut open at the waterline and the open water under it
+// -- a window into other water where the deck should be. Measured in a full gale: the
+// sea stands above the planks in ~1 frame in 5 (up to 0.45 u, cascades 0+1), and from
+// the water a crest between the eye and the hull shows the same window.
+// The fix needs no extra pass and no depth texture, because the sea is the FIRST
+// transparent draw: every opaque pixel -- the deck, the bulwark, Sal, the gear -- is
+// already in the colour buffer under it. The shader intersects the eye ray beyond the
+// fragment with the raft's dry slab (an exact box in raft-local space, inset a hair so
+// the proxy never claims a pixel the real hull does not cover), drops the refraction
+// target there, and lets the buffer's own raft show through by the water it crosses:
+// alpha = 1 - (1 - F) * exp(-sigma * d), d the water path from the fragment to the slab.
+// A sheet over the planks is a few centimetres (deck seen, wet and green); a crest in
+// front of the hull is metres (opaque water body, foamed). The contact line fades with d
+// -> 0, so the old hard sea/deck intersection becomes a soft wet edge for free.
+// (raftInv: world -> raft local; raftBox: half-extent, slab bottom y, slab top y, on.)
+const uRaftInv = { value: new THREE.Matrix4() };
+const uRaftBox = { value: new THREE.Vector4(4.66, -0.11, 0.53, 0) };
+// sigma (1/u) of the water a dry-raft ray crosses: (glass sea, fully churned sea).
+const uRaftSig = { value: new THREE.Vector2(0.8, 2.4) };
+let _raftFixOff = false;
+export function setRaftFrame(matrixWorld) {
+  uRaftInv.value.copy(matrixWorld).invert();
+  uRaftBox.value.w = _raftFixOff ? 0 : 1;
+}
+if (typeof window !== 'undefined') {
+  // DEV A/B: __raftCrest(false) = the shipped refraction everywhere (the bug back);
+  // __sky.dbg(10) = the mask (red: the eye ray lands on the dry raft; green: deck share).
+  window.__raftCrest = (on = true, sc, sh) => { _raftFixOff = !on; uRaftBox.value.w = on ? 1 : 0;
+    if (sc != null) uRaftSig.value.set(sc, sh ?? uRaftSig.value.y); return { on, box: uRaftBox.value.toArray(), sig: uRaftSig.value.toArray() }; };
+}
 const uSeaEnv = { value: null }, uEnvK = { value: 1 }, uFarR = { value: 700 };
 // 0 = eye fully in water, 1 = fully in air. The band is half a helmet: narrow enough that
 // the transition is a moment, wide enough not to alias on a chopping surface.
@@ -2277,7 +2312,8 @@ function buildSurface() {
     uWindD, uWindS, uCap, uChop2, uSss, uSss2,
     uOpaq, uOpaq2, uBoil, uDet, uRough, uGlit,
     uSunShadow, uSunShadowMat, uShadowK,
-    uRaftC, uSeaEnv, uEnvK, uFarR, uSkyEnvT, uSkyEnvK, uCloudShT, uCloudShW
+    uRaftC, uSeaEnv, uEnvK, uFarR, uSkyEnvT, uSkyEnvK, uCloudShT, uCloudShW,
+    uRaftInv, uRaftBox, uRaftSig
   });
   const mat = new THREE.ShaderMaterial({
     uniforms: u, fog: true, side: THREE.DoubleSide,
@@ -2390,6 +2426,29 @@ function buildSurface() {
         float inb = min( m.x, m.y );
         ok = clamp( inb * 14.0, 0.0, 1.0 ) * step( 0.0, inb );
         return texture2D( uRefr, clamp( uv, 0.002, 0.998 ) ).rgb;
+      }
+
+      // THE RAFT BEHIND A CREST (see uRaftBox in JS). x: the water path, from this fragment
+      // along the eye ray, to the raft's dry slab (-1 when the ray never lands on it).
+      // Slab test in raft-local space; a fragment already inside the slab (a sheet over the
+      // planks, inside the bulwark) measures down to the deck top instead, and reports its
+      // depth over the planks in y with z = 1.
+      uniform mat4 uRaftInv;
+      uniform vec4 uRaftBox;
+      uniform vec2 uRaftSig;
+      vec3 raftDry( vec3 P, vec3 V ){
+        vec3 o = ( uRaftInv * vec4( P, 1.0 ) ).xyz;
+        vec3 d = ( uRaftInv * vec4( V, 0.0 ) ).xyz;
+        d = vec3( abs( d.x ) < 1e-5 ? 1e-5 : d.x, abs( d.y ) < 1e-5 ? 1e-5 : d.y, abs( d.z ) < 1e-5 ? 1e-5 : d.z );
+        vec3 id = 1.0 / d;
+        vec3 lo = vec3( -uRaftBox.x, uRaftBox.y, -uRaftBox.x ), hi = vec3( uRaftBox.x, uRaftBox.z, uRaftBox.x );
+        vec3 ta = ( lo - o ) * id, tb = ( hi - o ) * id;
+        vec3 tn = min( ta, tb ), tf = max( ta, tb );
+        float tN = max( max( tn.x, tn.y ), tn.z ), tF = min( min( tf.x, tf.y ), tf.z );
+        if ( tF < max( tN, 0.0 ) ) return vec3( -1.0, 0.0, 0.0 );
+        if ( tN > 0.0 ) return vec3( tN, 0.0, 0.0 );
+        float hs = o.y - ${f(0.11)};
+        return vec3( clamp( hs / max( -d.y, 0.05 ), 0.0, tF ), hs, 1.0 );
       }
 
       const float ETA = 1.333;
@@ -2591,6 +2650,8 @@ function buildSurface() {
         // THE HULL. Water piles and tears against the raft: a ragged white collar on
         // the waterline, thicker where the hull is working (uRaftC.w = |heave rate|).
         float hull = 0.0;
+        vec3 rDry = vec3( -1.0, 0.0, 0.0 );
+        if ( gl_FrontFacing && ( uRaftBox.w > 0.5 || abs( uDbg - 10.0 ) < 0.5 ) ) rDry = raftDry( vW, V );
         {
           vec2 rq = abs( vW.xz - uRaftC.xy ) - vec2( uRaftC.z );
           float rd = length( max( rq, 0.0 ) ) + min( max( rq.x, rq.y ), 0.0 );
@@ -2603,6 +2664,16 @@ function buildSurface() {
             // Seen from below the collar is a thin bubble line against the bright window,
             // and a full-strength one drew the hull's rectangle in white chalk.
             if ( !gl_FrontFacing ) hull *= 0.3 * smoothstep( 0.35, 0.65, vn( vW.xz * 1.1 + uTime * 0.2 ) );
+          }
+          // GREEN WATER ON DECK. A sheet the gale lifts over the planks runs and laces white,
+          // thickest at its thin, moving edges; under it the deck shows (see raftDry).
+          if ( rDry.z > 0.5 && uRaftBox.w > 0.5 ) {
+            float tn2 = vn( vW.xz * 3.1 + vec2( uTime * 1.1, -uTime * 0.8 ) ) * 0.6
+                      + vn( vW.xz * 8.0 - vec2( uTime * 1.7, uTime * 1.2 ) ) * 0.4;
+            float sheet = smoothstep( 0.42, 0.78, tn2 )
+                        * ( 0.45 + 0.55 * ( 1.0 - smoothstep( 0.0, 0.30, max( rDry.y, 0.0 ) ) ) )
+                        * ( 0.5 + 0.5 * seaS );
+            hull = max( hull, sheet * 0.8 );
           }
         }
 
@@ -2621,6 +2692,9 @@ function buildSurface() {
         bool dHaze = !dOff || abs( uDbg - 6.0 ) < 0.5;
         vec3 tRefl = vec3( 0.0 ), tBody = vec3( 0.0 ), tTrans = vec3( 0.0 ), tSss = vec3( 0.0 ), tGlit = vec3( 0.0 );
         vec3 bDiff = vec3( 0.0 );
+        // kT: the share of THIS pixel that is the raft already in the colour buffer
+        // (see raftDry); it rides out through alpha. rkW/rD keep the mask for dbg 10.
+        float kT = 0.0, rD = -1.0, rkW = 0.0;
         if ( below ) {
           // ---- FROM BELOW: Snell's window, TIR mirror, the far-side render ----------
           float kk = 1.0 - ETA * ETA * ( 1.0 - ct * ct );
@@ -2654,6 +2728,15 @@ function buildSurface() {
           vec3 body = seaBody( mirrorRadiance( vW, T, uTime, mk * 0.55 ) );
           vec3 bodyA = body;
           float rk = uRefrK * uRefrSide * ( 1.0 - opq );
+          rkW = rk;
+          // THE RAFT BEHIND A CREST: the target cannot hold what this ray lands on, so it
+          // is dropped and the buffer's own raft is let through by the water crossed.
+          float tauR = 0.0;
+          rD = rDry.x;
+          if ( rD >= 0.0 && uRaftBox.w > 0.5 ) {
+            rk = 0.0;
+            tauR = exp( -mix( uRaftSig.x, uRaftSig.y, opq ) * rD );
+          }
           if ( rk > 0.001 ) {
             float ok; vec3 rs = refrSample( T, V, dhA, ok );
             body = mix( body, mix( rs, body, 0.15 ), rk * ok );
@@ -2683,7 +2766,8 @@ function buildSurface() {
             }
           #endif
           tRefl = sky * F;
-          col = body * bodyW + tRefl;
+          col = body * bodyW * ( 1.0 - tauR ) + tRefl;
+          kT = tauR * ( 1.0 - F );
           gSunK = 1.0; gHaloK = 1.0;
           if ( uRough.z < 0.999 ) {
             tGlit = seaGlitter( Na, V, alpha, sh ) * ( 1.0 - uRough.z );
@@ -2714,7 +2798,7 @@ function buildSurface() {
               float sMax = max( sssRaw.r, max( sssRaw.g, sssRaw.b ) );
               vec3 sssCol = sssRaw * ( sMax > uSss2.x ? uSss2.x / sMax : 1.0 );
               tSss = sssCol * clamp( amt, 0.0, 1.0 ) * sqrt( max( 1.0 - F, 0.0 ) );
-              col += tSss;
+              col += tSss * ( 1.0 - tauR );
             }
           }
           // THE BOLT (see seaBolt), and the flash-lit cloud base in the mirror: the sky the
@@ -2732,8 +2816,10 @@ function buildSurface() {
             else if ( uDbg < 3.5 ) col = tTrans;
             else if ( uDbg < 5.5 && uDbg > 4.5 ) col = tSss;
             else if ( uDbg > 7.5 && uDbg < 8.5 ) col = tGlit;
+            else if ( uDbg > 9.5 && uDbg < 10.5 ) col = vec3( rD >= 0.0 ? 0.6 : 0.0, tauR * ( 1.0 - F ), rD >= 0.0 ? rkW : 0.0 );
             else if ( uDbg > 8.5 ) col = vec3( alpha, sqrt( varU ), foamJ );
             else col = vec3( 0.0 );
+            kT = 0.0;
           }
           // THE FAR BAND. The mesh ends at the camera's far plane; past it the dome draws
           // farSea(). Over the last stretch the near shading eases into that same BRDF so
@@ -2761,7 +2847,9 @@ function buildSurface() {
                       * ( 0.62 + 0.38 * NoLf * sh * smoothstep( 0.5, 1.2, lum ) );
           capCol = min( capCol, vec3( 0.34 ) ) + bDiff * 0.75;
           float capW = smoothstep( uCap.x, min( 0.98, uCap.x + 0.30 ), uWindS );
-          col = mix( col, capCol, clamp( fj * fm * ( 0.75 + 0.25 * capW ), 0.0, 0.94 ) );
+          float capM = clamp( fj * fm * ( 0.75 + 0.25 * capW ), 0.0, 0.94 );
+          col = mix( col, capCol, capM );
+          kT *= 1.0 - capM;
           // A thin bubble veil under fresh foam: milky turquoise, not white.
           if ( !below ) col += foamCol * 0.05 * fj * ( 1.0 - fm );
         }
@@ -2776,7 +2864,7 @@ function buildSurface() {
             float bn = vn( vW.xz * 6.5 + vec2( uTime * 1.9, -uTime * 2.4 ) ) * 0.6
                      + vn( vW.xz * 13.0 - vec2( uTime * 3.3, uTime * 2.1 ) ) * 0.4;
             float bw = bA * bk * smoothstep( 0.26, 0.72, bn * ( 0.55 + 0.95 * bk * bA ) );
-            if ( dFoam ) col = mix( col, foamCol, clamp( bw, 0.0, 0.85 ) );
+            if ( dFoam ) { col = mix( col, foamCol, clamp( bw, 0.0, 0.85 ) ); kT *= 1.0 - clamp( bw, 0.0, 0.85 ); }
           }
         }
 
@@ -2801,10 +2889,13 @@ function buildSurface() {
         if ( !dOff && below ) col += vec3( 0.72, 0.80, 0.92 ) * uFlash * 0.30 * uNearK * ( 1.0 - F );
         // The fog chunk's generic Lambert bolt term: the air side has its own (seaBolt).
         gBoltK = below ? 0.15 : 0.0;
-        if ( farK > 0.0 && dHaze ) col = mix( col, farSea( V, fogColor ), farK );
+        if ( farK > 0.0 && dHaze ) { col = mix( col, farSea( V, fogColor ), farK ); kT *= 1.0 - farK; }
         if ( airK > 0.0 && dHaze ) col = airFog( col, 0.0, airK );
 
-        gl_FragColor = vec4( col * uBright, uFade );
+        // The raft's share leaves through alpha (NormalBlending: out = a C + (1 - a) dst),
+        // so the colour is divided back up: a C is exactly the sea's own part.
+        float aT = 1.0 - clamp( kT, 0.0, 0.95 );
+        gl_FragColor = vec4( col * uBright / aT, uFade * aT );
         #include <fog_fragment>
       }`
   });
