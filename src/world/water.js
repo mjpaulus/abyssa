@@ -178,7 +178,8 @@ export function styleState() { return STYLE_U; }
 //   abyssaSite   x = clear-column density gain - 1   y = silt (nepheloid) amp gain - 1
 //                z = SILT_MIX delta                  w = SILT_GAIN delta
 //   abyssaSiteT  rgb = silt inscatter tint delta from (1.42, 1.16, 0.72); w = deep zone-glow gain - 1
-//   abyssaSiteK  rgb = downwelling absorption (K_ABS) gain - 1; w spare
+//   abyssaSiteK  rgb = downwelling absorption (K_ABS) gain - 1; w = the column VEIL: how far
+//                the ambient water is pulled to the silt tint (chalk milk / ash), 0 at home
 // SITE_SURF (CPU only) multiplies the surface irradiance the palette resolves, so
 // scene.fog.color — and everything derived from it — carries the site's light.
 const SITE_U = new Float32Array(4), SITE_T = new Float32Array(4), SITE_K = new Float32Array(4);
@@ -196,6 +197,7 @@ export function setSiteWater(w) {
     const t = w.siltTint || SILT_TINT, a = w.absorb || [1, 1, 1], sf = w.surf || [1, 1, 1];
     for (let i = 0; i < 3; i++) { SITE_T[i] = t[i] - SILT_TINT[i]; SITE_K[i] = a[i] - 1; SITE_SURF[i] = sf[i]; }
     SITE_T[3] = (w.glow ?? 1) - 1;
+    SITE_K[3] = w.veil || 0;
   }
   palette(_lastRing, _lastEnv);   // the next frame re-resolves anyway; this keeps a probe honest
 }
@@ -304,7 +306,12 @@ vec3 abyssaAmbient(vec3 surf,float y){
   // Up to ${f(SHALLOW_DESAT)} of the chroma folds into a cool blue-grey (~0.9 of the luminance) at the
   // surface, fading out by y = -300 so the deep zones keep their authored darkness.
   float l=dot(a,vec3(0.2126,0.7152,0.0722));
-  return mix(a,l*vec3(0.70,0.92,1.14),${f(SHALLOW_DESAT)}*(1.0-smoothstep(0.0,300.0,-y)));
+  a=mix(a,l*vec3(0.70,0.92,1.14),${f(SHALLOW_DESAT)}*(1.0-smoothstep(0.0,300.0,-y)));
+  // OWN WATER: the site's suspended load (chalk milk at Pallid Bank, ash at the Burned
+  // Ground) veils the whole column in its own colour, luminance kept. abyssaSiteK.w = 0 at
+  // home: mix by exactly 0.0 returns a unchanged.
+  l=dot(a,vec3(0.2126,0.7152,0.0722));
+  return mix(a,l*(vec3(1.42,1.16,0.72)+abyssaSiteT.rgb),abyssaSiteK.w);
 }`;
 
 // The stratified water profile, shared VERBATIM by the fog chunk and the background
@@ -1052,6 +1059,12 @@ function ambientAt(y, out) {
   const l = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
   const k = SHALLOW_DESAT * (1 - ms(-y, 0, 300));
   r += (l * 0.70 - r) * k; g += (l * 0.92 - g) * k; bl += (l * 1.14 - bl) * k;
+  // Mirror of the site veil (OWN WATER); skipped at home
+  const mk = SITE_K[3];
+  if (mk > 0) {
+    const l2 = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+    r += (l2 * (SILT_TINT[0] + SITE_T[0]) - r) * mk; g += (l2 * (SILT_TINT[1] + SITE_T[1]) - g) * mk; bl += (l2 * (SILT_TINT[2] + SITE_T[2]) - bl) * mk;
+  }
   return out.setRGB(r, g, bl, THREE.LinearSRGBColorSpace);
 }
 

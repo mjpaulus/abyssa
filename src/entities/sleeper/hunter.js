@@ -733,7 +733,7 @@ export function makeHunter(idx, cfg) {
     return L.probe();
   };
   L.probe = () => ({
-    kind: 'hunter', state: L.state, furnace: L.furnace.lit, heat: +L.furnace.heat.toFixed(2), stun: +L.stun.toFixed(1),
+    kind: 'hunter', state: L.state, furnace: L.furnace.lit, fpos: L.furnace.pos.toArray().map(v => +v.toFixed(1)), heat: +L.furnace.heat.toFixed(2), stun: +L.stun.toFixed(1),
     pos: L.pos.toArray().map(v => +v.toFixed(1)), calmed: L.calmed, remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
     wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, kept: wardGuardCount(L.sigils.indexOf(g)) }))
   });

@@ -54,7 +54,7 @@ const SITES = [
     sleepers: null,                      // no overlay: LEVIATHAN_CFG untouched
     // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries none of it:
     // every consumer reads null as "the shipped constant", so site 0 stays bit-identical.
-    water: null, light: null, floor: null, shape: null, vents: null, wrecks: null
+    water: null, light: null, floor: null, shape: null, vents: null, wrecks: null, grade: null
   },
   {
     key: 'pallid',
@@ -92,8 +92,15 @@ const SITES = [
     // PALE WATER: a chalk bank. Milky, high-scatter: the column is thicker (clear x1.4,
     // silt x1.65) but what it scatters back is pale grey-green and brighter, so the far
     // field is a bright veil instead of a dark wall. Surface light colder and paler.
-    water: { surf: [1.42, 1.13, 1.10], clear: 1.40, silt: 1.65, siltMix: 0.86, siltGain: 1.40,
-      siltTint: [1.04, 1.12, 1.02], absorb: [0.80, 1.00, 1.12], glow: 1.30 },
+    water: { surf: [1.55, 1.22, 1.18], clear: 1.40, silt: 1.65, siltMix: 0.86, siltGain: 1.40,
+      siltTint: [0.96, 1.14, 1.04], absorb: [0.80, 1.00, 1.12], glow: 1.30, veil: 0.80 },
+    // the zone looks (postfx.js ZONE_LOOKS overrides): chalk -- lifted milky blacks, the
+    // colour held down, a pale grey-green mood; the boiler a paler sulphur; the abyss slate
+    grade: [
+      { slope: [0.98, 1.00, 0.99], offset: [0.010, 0.012, 0.012], power: [1.02, 1.00, 1.01], mood: [0.62, 0.80, 0.66], satUp: 0.04, satDn: -0.30, wash: 0.20, cool: [0.30, 0.38, 0.42], toe: [0.30, 0.34, 0.33] },
+      { slope: [1.04, 1.00, 0.90], offset: [0.012, 0.010, 0.006], mood: [0.95, 0.82, 0.50], satUp: 0.14, satDn: -0.32, wash: 0.32, cool: [0.26, 0.30, 0.40] },
+      { offset: [0.006, 0.006, 0.008], mood: [0.50, 0.50, 0.70], satUp: 0.04, satDn: -0.40, wash: 0.16, cool: [0.22, 0.24, 0.36], toe: [0.22, 0.22, 0.30] }
+    ],
     light: { amb: [1.22, 1.18, 1.12], sky: [1.18, 1.14, 1.06], gnd: [1.85, 1.85, 1.70], sun: [1.06, 1.05, 1.00] },
     // bleached limestone, chalk silt, pale gravel
     floor: { silt: [1.62, 1.60, 1.48], grav: [1.50, 1.48, 1.40], rock: [1.85, 1.80, 1.70] },
@@ -145,8 +152,15 @@ const SITES = [
     // ASH WATER: warm and dark. The column carries suspended ash (silt x1.5) that scatters
     // umber, blue is eaten first (humic/ash absorption), so depth goes olive-brown instead
     // of blue, and the surface light arrives already warm and dimmer.
-    water: { surf: [1.06, 0.80, 0.60], clear: 1.15, silt: 1.50, siltMix: 0.84, siltGain: 0.86,
-      siltTint: [1.72, 1.08, 0.52], absorb: [0.78, 1.10, 1.55], glow: 0.85 },
+    water: { surf: [0.92, 0.70, 0.52], clear: 1.15, silt: 1.50, siltMix: 0.84, siltGain: 0.86,
+      siltTint: [1.74, 1.08, 0.56], absorb: [0.78, 1.10, 1.55], glow: 0.85, veil: 0.72 },
+    // the zone looks: umber ash with warm-neutral shadows (no teal wash), a red-amber
+    // boiler, an ember-black abyss -- the darker crown
+    grade: [
+      { slope: [1.06, 0.98, 0.86], offset: [0.008, 0.004, -0.002], power: [0.97, 1.00, 1.08], mood: [1.00, 0.66, 0.40], satUp: 0.06, satDn: -0.34, wash: 0.24, cool: [0.24, 0.22, 0.22], toe: [0.30, 0.22, 0.14] },
+      { slope: [1.10, 0.96, 0.80], offset: [0.014, 0.004, -0.006], mood: [1.00, 0.52, 0.18], satUp: 0.26, satDn: -0.30, wash: 0.44, cool: [0.22, 0.20, 0.24], toe: [0.44, 0.22, 0.10] },
+      { slope: [1.02, 0.92, 0.92], offset: [0.004, 0.000, 0.000], mood: [0.80, 0.36, 0.30], satUp: 0.06, satDn: -0.40, wash: 0.20, cool: [0.20, 0.14, 0.16], toe: [0.30, 0.14, 0.12] }
+    ],
     light: { amb: [1.16, 0.86, 0.66], sky: [1.10, 0.86, 0.62], gnd: [0.90, 0.62, 0.46], sun: [1.00, 0.86, 0.70] },
     // basalt and ash: dark, a little warm in the gravel
     floor: { silt: [0.60, 0.54, 0.50], grav: [0.62, 0.54, 0.48], rock: [0.48, 0.44, 0.44] },
@@ -215,7 +229,7 @@ export function siteParams(key) {
     scarcity: s.scarcity,
     sleepers: s.sleepers,
     water: s.water || null, light: s.light || null, floor: s.floor || null,
-    shape: s.shape || null, vents: s.vents || null, wrecks: s.wrecks || null,
+    shape: s.shape || null, vents: s.vents || null, wrecks: s.wrecks || null, grade: s.grade || null,
     rng: key && s.seeds[key] !== undefined ? stream(s.seeds[key]) : stream(0xD1CE0000 + current)
   };
 }

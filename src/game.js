@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
 import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
-import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover } from './postfx.js';
+import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
@@ -132,6 +132,7 @@ buildWater();
 // The saved site is already set (loadChart runs before the world builds).
 setSiteWater(currentSite().water || null);
 setSiteLight(currentSite().light || null);
+setSiteGrade(currentSite().grade || null);
 buildClouds();   // instanced puff clusters in the air; must follow buildWater (palette + wind)
 buildSky();      // VOLUMETRIC SKY: noise volumes on the GPU, atmosphere LUT, cloud march targets
 buildRain();     // one instanced draw call of wind-slanted rain streaks, air side only
@@ -665,6 +666,7 @@ function reseedWorld(i) {
   setSite(i);
   setSiteWater(currentSite().water || null);   // uniforms only: no program, no material
   setSiteLight(currentSite().light || null);
+  setSiteGrade(currentSite().grade || null);
   fillTerrain();
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
   setKeepsakeState(keepsakes[currentSiteIndex()]);
