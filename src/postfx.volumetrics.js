@@ -21,6 +21,8 @@ import { Pass } from 'postprocessing';
 import { camera, scene } from './core.js';
 import { sun, LOOK } from './lighting.js';
 import { GLASS } from './config.js';
+// OWN WATER: the anchorage's surface-light tint (all ones at home), read at render time only.
+import { SITE_SURF } from './world/water.js';
 
 // THE FLOW LEAN (roadmap/flow-lean-style.md, item 12): the medium stays lit. Same dial
 // lighting.js reads (GLASS.style.flowLean, `light` sub-knob), a local copy because the
@@ -490,6 +492,8 @@ export class VolumetricLightPass extends Pass {
     // lean is a ceiling of 1.2 -- soft and wide, never neon.
     const sk = styleK('light');
     mu.uStyle.value = sk;
+    // the shafts are made of the anchorage's water too (x1 at home: the shipped literal)
+    mu.uSurf.value.set(SURF_LIGHT[0] * SITE_SURF[0], SURF_LIGHT[1] * SITE_SURF[1], SURF_LIGHT[2] * SITE_SURF[2]);
     mu.uSunDir.value.copy(sun.position).normalize();
     // Turbidity: water.js drives scene.fog.density from depth + storm murk, so the
     // shafts dim in murky water on their own.

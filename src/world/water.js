@@ -166,6 +166,41 @@ const styleK = n => { const st = GLASS.style; return st && st[n] >= 0 ? st[n] : 
 const STYLE_U = new Float32Array(4);
 export function styleState() { return STYLE_U; }
 
+// OWN WATER (roadmap/fly-remote-sites.md, Michael 2026-10-04: "Give each its own water").
+// Each anchorage of THE CHART carries its own water: colour, clarity, silt and the
+// spectrum the column eats. Three more shared vec4s, installed on every fogged program
+// exactly the way abyssaStyle is (patchFog), so a voyage moves the whole medium through
+// UNIFORMS — no program is recompiled, no material rebuilt — and the fog chunk, the dome,
+// the far sea and the shafts all read the same numbers, so the far field cannot disagree
+// with the near. Every slot is a DELTA from the shipped constant (a program never handed
+// the uniform reads zeros = the shipped water), and site 0 writes zeros, so home is the
+// shipped water bit for bit (1.0 + 0.0 and 0.62 + 0.0 are exact in IEEE):
+//   abyssaSite   x = clear-column density gain - 1   y = silt (nepheloid) amp gain - 1
+//                z = SILT_MIX delta                  w = SILT_GAIN delta
+//   abyssaSiteT  rgb = silt inscatter tint delta from (1.42, 1.16, 0.72); w = deep zone-glow gain - 1
+//   abyssaSiteK  rgb = downwelling absorption (K_ABS) gain - 1; w spare
+// SITE_SURF (CPU only) multiplies the surface irradiance the palette resolves, so
+// scene.fog.color — and everything derived from it — carries the site's light.
+const SITE_U = new Float32Array(4), SITE_T = new Float32Array(4), SITE_K = new Float32Array(4);
+export const SITE_SURF = new Float32Array([1, 1, 1]);
+const SILT_TINT = [1.42, 1.16, 0.72];
+let siteWaterOn = false;
+// Called by game.js at boot (after the saved site is set) and in reseedWorld. `w` is
+// site.js's `water` row (null = the shipped water).
+export function setSiteWater(w) {
+  SITE_U.fill(0); SITE_T.fill(0); SITE_K.fill(0); SITE_SURF.fill(1);
+  siteWaterOn = !!w;
+  if (w) {
+    SITE_U[0] = (w.clear ?? 1) - 1; SITE_U[1] = (w.silt ?? 1) - 1;
+    SITE_U[2] = (w.siltMix ?? SILT_MIX) - SILT_MIX; SITE_U[3] = (w.siltGain ?? SILT_GAIN) - SILT_GAIN;
+    const t = w.siltTint || SILT_TINT, a = w.absorb || [1, 1, 1], sf = w.surf || [1, 1, 1];
+    for (let i = 0; i < 3; i++) { SITE_T[i] = t[i] - SILT_TINT[i]; SITE_K[i] = a[i] - 1; SITE_SURF[i] = sf[i]; }
+    SITE_T[3] = (w.glow ?? 1) - 1;
+  }
+  palette(_lastRing, _lastEnv);   // the next frame re-resolves anyway; this keeps a probe honest
+}
+export function siteWaterState() { return { on: siteWaterOn, u: Array.from(SITE_U), t: Array.from(SITE_T), k: Array.from(SITE_K), surf: Array.from(SITE_SURF) }; }
+
 // LIGHTNING AS A LIGHT (roadmap/ref-lightning-light.md). Two slots of bolt light, installed
 // on the fog chunk exactly the way abyssaAir is: xyz = the channel's light anchor in world
 // space, w = intensity (0 = slot empty). BOLT_COL = the cold-white colour with the diffuse
@@ -249,6 +284,7 @@ float fbm2(vec2 p){float v=0.0,a=0.5;for(int i=0;i<4;i++){v+=a*vn(p);p*=2.07;a*=
 // so one frame can show teal overhead and ink below at the same time.
 const SHALLOW_DESAT = 0.28;
 const GLSL_AMBIENT = `
+uniform vec4 abyssaSite, abyssaSiteT, abyssaSiteK;
 vec3 zoneGlow(float y){
   float t=clamp(-y/900.0,0.0,1.0);
   vec3 g=mix(vec3(0.0060,0.0210,0.0185),vec3(0.0102,0.0043,0.0203),smoothstep(0.20,0.52,t));
@@ -256,10 +292,10 @@ vec3 zoneGlow(float y){
   // Floor the scatter so open mid-water is always legibly coloured. Without it the
   // sunlight term dies by ~60 units and empty water tone-maps to pure black, which
   // reads as a rendering fault rather than as darkness.
-  return g*(0.15+0.85*smoothstep(0.03,0.30,t));
+  return g*(0.15+0.85*smoothstep(0.03,0.30,t))*(1.0+abyssaSiteT.w);
 }
 vec3 abyssaAmbient(vec3 surf,float y){
-  vec3 a=surf*exp(${v3(K_ABS)}*min(y,0.0))+zoneGlow(y);
+  vec3 a=surf*exp(${v3(K_ABS)}*(1.0+abyssaSiteK.xyz)*min(y,0.0))+zoneGlow(y);
   // SHALLOW CHROMA ROLL-OFF (atmos track). Single-scatter Beer-Lambert leaves the lit
   // shallows with red at ~0 against green and blue, which the display renders as the
   // most saturated cyan it has: measured (43,207,213) sRGB for open water at y = -60,
@@ -284,7 +320,7 @@ uniform vec4 abyssaStyle;
 #define KMOL ${v3(K_EXT)}
 #define KPART ${v3(K_PART)}
 
-float rhoClearAt( float y ){ return RC0 * max( RC_MIN, 1.0 + RC_K * y ); }
+float rhoClearAt( float y ){ return RC0 * ( 1.0 + abyssaSite.x ) * max( RC_MIN, 1.0 + RC_K * y ); }
 
 // Both edges ASCEND. GLSL smoothstep is UNDEFINED for edge0 >= edge1: the inverted
 // form works on some drivers and produces garbage on others, presenting as
@@ -298,6 +334,7 @@ void nephParams( float yc, out float yf, out float hs, out float amp ){
   // Flow lean: the silt line one notch thicker (structure untouched -- yf and hs are
   // the layer's shape, amp is only its weight). Mirrored on the CPU in nephAt().
   amp *= 1.0 + abyssaStyle.y;
+  amp *= 1.0 + abyssaSite.y;   // the site's silt (OWN WATER); 1 + 0 at home
 }
 
 // Antiderivative of the SATURATING shape min(1, exp(-s)). The exp argument is
@@ -325,7 +362,7 @@ float murkFracAt( float y, float yf, float hs, float amp ){
 // identity function and the whole system is pure density stratification.
 vec3 siltTint( vec3 A, float fm ){
   float lum = dot( A, vec3( 0.2126, 0.7152, 0.0722 ) );
-  return mix( A, mix( A, lum * vec3( 1.42, 1.16, 0.72 ), ${f(SILT_MIX)} ) * ${f(SILT_GAIN)}, fm );
+  return mix( A, mix( A, lum * ( vec3( 1.42, 1.16, 0.72 ) + abyssaSiteT.rgb ), ${f(SILT_MIX)} + abyssaSite.z ) * ( ${f(SILT_GAIN)} + abyssaSite.w ), fm );
 }`;
 
 // The AIR half of the medium. Shared VERBATIM by the fog chunk, the dome and the ocean
@@ -998,14 +1035,19 @@ function palette(ring, envSky) {
   _pSurf[0] *= SURF_LIGHT[0] * g;
   _pSurf[1] *= SURF_LIGHT[1] * g;
   _pSurf[2] *= SURF_LIGHT[2] * g;
+  // OWN WATER: the anchorage's surface light (skipped at home: not even a x1.0)
+  if (siteWaterOn) { _pSurf[0] *= SITE_SURF[0]; _pSurf[1] *= SITE_SURF[1]; _pSurf[2] *= SITE_SURF[2]; }
+  _lastRing = ring; _lastEnv = envSky;
 }
+let _lastRing = 2, _lastEnv = 0;
 palette(2, 0);
 function ambientAt(y, out) {
   const t = clamp(-y / 900, 0, 1);
   const a = ms(t, 0.20, 0.52), b = ms(t, 0.62, 0.92), c = ms(t, 0.03, 0.30), d = Math.min(0, y);
-  let r = _pSurf[0] * Math.exp(K_ABS[0] * d) + ml(ml(0.0020, 0.0064, a), 0.0123, b) * c;
-  let g = _pSurf[1] * Math.exp(K_ABS[1] * d) + ml(ml(0.0073, 0.0027, a), 0.0042, b) * c;
-  let bl = _pSurf[2] * Math.exp(K_ABS[2] * d) + ml(ml(0.0115, 0.0127, a), 0.0025, b) * c;
+  const gk = 1 + SITE_T[3];   // OWN WATER deltas: exactly 1 / K_ABS * 1 at home
+  let r = _pSurf[0] * Math.exp(K_ABS[0] * (1 + SITE_K[0]) * d) + ml(ml(0.0020, 0.0064, a), 0.0123, b) * c * gk;
+  let g = _pSurf[1] * Math.exp(K_ABS[1] * (1 + SITE_K[1]) * d) + ml(ml(0.0073, 0.0027, a), 0.0042, b) * c * gk;
+  let bl = _pSurf[2] * Math.exp(K_ABS[2] * (1 + SITE_K[2]) * d) + ml(ml(0.0115, 0.0127, a), 0.0025, b) * c * gk;
   // Mirror of the shallow chroma roll-off in GLSL_AMBIENT (same constants, same curve).
   const l = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
   const k = SHALLOW_DESAT * (1 - ms(-y, 0, 300));
@@ -1018,7 +1060,7 @@ function ambientAt(y, out) {
 // true local total at the eye, which is why creatures/predators/tools/volumetrics need
 // no edits) and uExtG.
 // Note THREE.MathUtils.smoothstep takes (x, min, max), not GLSL's (edge0, edge1, x).
-export function rhoClearAt(y) { return RC0 * Math.max(RC_MIN, 1 + RC_K * y); }
+export function rhoClearAt(y) { return RC0 * (1 + SITE_U[0]) * Math.max(RC_MIN, 1 + RC_K * y); }
 // Returns a module-scoped object: called every frame, and this file allocates nothing
 // in a hot path. Do not hold the reference across a second nephAt() call.
 const _neph = { yf: 0, hs: 0, amp: 0 };
@@ -1027,7 +1069,7 @@ export function nephAt(y) {
   _neph.yf = ml(ml(NEPH_YF[0], NEPH_YF[1], t1), NEPH_YF[2], t2);
   _neph.hs = ml(ml(NEPH_HS[0], NEPH_HS[1], t1), NEPH_HS[2], t2);
   // Same Flow-lean gain the shader applies (STYLE_U[1]); 1 + 0 is exact at lean 0.
-  _neph.amp = ml(ml(NEPH_AMP[0], NEPH_AMP[1], t1), NEPH_AMP[2], t2) * (1 + STYLE_U[1]);
+  _neph.amp = ml(ml(NEPH_AMP[0], NEPH_AMP[1], t1), NEPH_AMP[2], t2) * (1 + STYLE_U[1]) * (1 + SITE_U[1]);
   return _neph;
 }
 const nephShape = (y, n) => n.amp * Math.exp(-Math.max((y - n.yf) / n.hs, 0));
@@ -1066,6 +1108,9 @@ const AIRZ_U = new Float32Array(4);
   THREE.UniformsLib.fog.abyssaAir = { value: AIR_U };
   THREE.UniformsLib.fog.abyssaAirZ = { value: AIRZ_U };
   THREE.UniformsLib.fog.abyssaStyle = { value: STYLE_U };
+  THREE.UniformsLib.fog.abyssaSite = { value: SITE_U };
+  THREE.UniformsLib.fog.abyssaSiteT = { value: SITE_T };
+  THREE.UniformsLib.fog.abyssaSiteK = { value: SITE_K };
   THREE.UniformsLib.fog.abyssaBolt0 = { value: BOLT0_U };
   THREE.UniformsLib.fog.abyssaBolt1 = { value: BOLT1_U };
   THREE.UniformsLib.fog.abyssaBoltCol = { value: BOLT_COL_U };
@@ -1083,6 +1128,7 @@ const AIRZ_U = new Float32Array(4);
     const u = THREE.ShaderLib[k] && THREE.ShaderLib[k].uniforms;
     if (u && u.fogColor) {
       u.abyssaAir = { value: AIR_U }; u.abyssaAirZ = { value: AIRZ_U }; u.abyssaStyle = { value: STYLE_U };
+      u.abyssaSite = { value: SITE_U }; u.abyssaSiteT = { value: SITE_T }; u.abyssaSiteK = { value: SITE_K };
       u.abyssaBolt0 = { value: BOLT0_U }; u.abyssaBolt1 = { value: BOLT1_U };
       u.abyssaBoltCol = { value: BOLT_COL_U }; u.abyssaBoltK = { value: BOLT_K_U };
       u.abyssaLampA = { value: LAMPA_U }; u.abyssaLampAC = { value: LAMPAC_U };
@@ -1408,6 +1454,7 @@ export const SKY_UNIFORMS = {
   uMoonDir, uMoonRight, uMoonCol, uMoonR, uMoonPh, uFog, uFogCol,
   abyssaAir: { value: AIR_U },
   abyssaStyle: { value: STYLE_U },
+  abyssaSite: { value: SITE_U }, abyssaSiteT: { value: SITE_T }, abyssaSiteK: { value: SITE_K },
   abyssaBolt0: { value: BOLT0_U }, abyssaBolt1: { value: BOLT1_U },
   abyssaBoltCol: { value: BOLT_COL_U }, abyssaBoltK: { value: BOLT_K_U }
 };

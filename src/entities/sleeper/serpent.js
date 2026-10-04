@@ -1025,7 +1025,9 @@ export function updateSerpent(L, dt, t, player) {
     const yTop = zoneTop(L.idx) - 15, yBot = zoneBottom(L.idx) + 55;
     // Zone 0's sleeper idles shallow (62/38 split toward the top of its band) so it
     // regularly crosses the volumetric sun shafts — the silhouette-through-light beat.
-    const yMid = L.idx === 0 ? yTop * 0.62 + yBot * 0.38 : (yTop + yBot) / 2;
+    // A chart row's IDLE split [a, b] (site.js) replaces the shipped rule when present.
+    const yMid = L.idle ? (yTop * L.idle[0] + yBot * L.idle[1]) / (L.idle[0] + L.idle[1])
+      : L.idx === 0 ? yTop * 0.62 + yBot * 0.38 : (yTop + yBot) / 2;
     // module-scoped temps: this ran 4-5 clone()/V3() per frame while un-calmed
     const target = L.agitation > 0.05
       ? _lt.copy(player.pos)

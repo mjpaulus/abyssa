@@ -22,6 +22,7 @@ import { clamp, vnoise } from '../lib/math.js';
 import { makeGlow, sulphideSet } from '../lib/textures.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { siteParams } from './site.js';
+import { wreckSites } from './wrecks.js';
 
 const TAU = Math.PI * 2;
 const ZI = 1;   // zone 1 only, per brief
@@ -51,6 +52,25 @@ const RC1 = riftPos(1), RC0 = riftPos(0);
 const N_CLUSTERS = 4;
 const PER_CLUSTER = [4, 4, 4, 5];   // 17 chimneys total
 const CLUSTER_R = 16;               // chimney scatter radius around each cluster centre
+// OWN GROUND (roadmap/fly-remote-sites.md): a site's `vents` row may retune the field —
+// cluster count / chimneys per cluster / scatter radius / cluster separation, the dead
+// share, the living chimneys' height range and how many throats burn. The ember's own
+// curve is untouched. Absent (home), every knob is the shipped constant above, read in
+// the same draw order, so site 0 grows the shipped field from the shipped stream.
+const VK = { clusters: N_CLUSTERS, per: PER_CLUSTER, clusterR: CLUSTER_R, sep: 55, deadP: 0.28, h: [4, 14], hot: 3, avoid: null };
+function ventKnobs(row) {
+  VK.clusters = row && row.clusters || N_CLUSTERS;
+  VK.per = row && row.per || PER_CLUSTER;
+  VK.clusterR = row && row.clusterR || CLUSTER_R;
+  VK.sep = row && row.sep || 55;
+  VK.deadP = row && row.deadP != null ? row.deadP : 0.28;
+  VK.h = row && row.h || [4, 14];
+  VK.hot = row && row.hot || 3;
+  // a remote field keeps off the zone's trawler and the hoarder curled round it (wrecks
+  // reseed first — ORDER IS CONTRACT); home never checked and still does not
+  VK.avoid = row ? wreckSites()[ZI] : null;
+}
+const AVOID_R = 64;
 
 // ------------------------------------------------------------------- Part/bake --
 // Local copy of the merged-geometry idiom (diver.js / wrecks.js / raft/kit.js): bucket
@@ -659,7 +679,8 @@ function publishColumns() {
 export function buildVents() {
   if (built) return;
   built = true;
-  rnd = siteParams('vents').rng;
+  const sp = siteParams('vents');
+  rnd = sp.rng; ventKnobs(sp.vents);
   growField();
 }
 
@@ -698,7 +719,8 @@ export function reseedVents() {
   activeVents.length = 0;
   ventColliders.length = 0;   // in place — player.js/game.js hold this exact array reference
 
-  rnd = siteParams('vents').rng;   // fresh stream per brief: never reuse one across rebuilds
+  const sp = siteParams('vents');
+  rnd = sp.rng; ventKnobs(sp.vents);   // fresh stream per brief: never reuse one across rebuilds
   growField();
 }
 
@@ -708,16 +730,18 @@ export function reseedVents() {
 function growField() {
   // --- pass 1: cluster centres, deterministic rejection sampling -------------
   const clusters = [];
-  for (let ci = 0; ci < N_CLUSTERS; ci++) {
+  const CR = VK.clusterR;
+  for (let ci = 0; ci < VK.clusters; ci++) {
     let found = null;
     for (let tries = 0; tries < 400 && !found; tries++) {
       const a = rnd() * TAU, r = rng(40, 200);
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
-      const margin = CLUSTER_R + 6;
+      const margin = CR + 6;
       if (Math.hypot(x - RC1.x, z - RC1.z) < RIFT1_CLEAR + margin) continue;
       if (Math.hypot(x - RC0.x, z - RC0.z) < RIFT0_CLEAR + margin) continue;
       if (Math.hypot(x, z) > FIELD_R - margin) continue;
-      if (clusters.some(o => Math.hypot(o.x - x, o.z - z) < 55)) continue;
+      if (clusters.some(o => Math.hypot(o.x - x, o.z - z) < VK.sep)) continue;
+      if (VK.avoid && Math.hypot(x - VK.avoid.x, z - VK.avoid.z) < AVOID_R + margin) continue;
       found = { x, z };
     }
     // Guaranteed to succeed at the shipped seed (verified offline); a null center
@@ -729,14 +753,15 @@ function growField() {
   const chimneys = [];
   for (let ci = 0; ci < clusters.length; ci++) {
     const c = clusters[ci];
-    const want = PER_CLUSTER[ci] ?? 4;
+    const want = VK.per[ci] ?? 4;
     let placed = 0, guard = 0;
     while (placed < want && guard++ < want * 60) {
-      const a = rnd() * TAU, r = Math.sqrt(rnd()) * CLUSTER_R;
+      const a = rnd() * TAU, r = Math.sqrt(rnd()) * CR;
       const x = c.x + Math.cos(a) * r, z = c.z + Math.sin(a) * r;
       if (Math.hypot(x - RC1.x, z - RC1.z) < RIFT1_CLEAR) continue;
       if (Math.hypot(x - RC0.x, z - RC0.z) < RIFT0_CLEAR) continue;
       if (Math.hypot(x, z) > FIELD_R) continue;
+      if (VK.avoid && Math.hypot(x - VK.avoid.x, z - VK.avoid.z) < AVOID_R) continue;
       const n = terrainNormal(x, z, ZI);
       if (n.y < SLOPE_MIN_NY) continue;
       chimneys.push({ ci, x, y: terrainH(x, z, ZI), z });
@@ -746,14 +771,14 @@ function growField() {
 
   // --- pass 3: per-chimney attributes (height/dead/forked), then rank "hot" --
   const attrs = chimneys.map(() => {
-    const dead = rnd() < 0.28;
-    const height = dead ? rng(3, 6) : rng(4, 14);
+    const dead = rnd() < VK.deadP;
+    const height = dead ? rng(3, 6) : rng(VK.h[0], VK.h[1]);
     const forked = !dead && rnd() < 0.30;
     return { dead, height, forked };
   });
   const activeIdx = attrs.map((a, i) => i).filter(i => !attrs[i].dead)
     .sort((i, j) => attrs[j].height - attrs[i].height);
-  const hotSet = new Set(activeIdx.slice(0, 3));
+  const hotSet = new Set(activeIdx.slice(0, VK.hot));
 
   // --- pass 4: build geometry + FX ------------------------------------------
   // chimneyMat is created once, ever, and reused on every reseed — a fresh material

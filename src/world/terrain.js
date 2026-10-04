@@ -131,14 +131,45 @@ const RIM_KH = [
 // verbatim copies of the literals, so the shipped world survives bit-identical.
 // Amplitudes, frequencies and the mesh itself never vary by site — only where in the
 // infinite noise field each zone looks, and which skyline harmonics it wears.
+//
+// OWN WATER, OWN GROUND (roadmap/fly-remote-sites.md, Michael 2026-10-04): a remote site
+// may now also carry a `shape` row — per-zone overrides of the landform knobs above
+// (ramp, s2amp, terrace...) plus the rim's height / span / crest-jag — so Pallid Bank
+// reads as broad terraced chalk and the Burned Ground as jagged lava steps. Every
+// override is restored from ZP0 (the shipped literals, snapshotted before the first
+// sync) on every sync, so a voyage home lands on the exact shipped numbers. The new
+// knobs' shipped values are identities: tflat 0 (terrace gated by the uplands only, as
+// shipped), rimK 1, rimSpan RIM_SPAN, rimJag 30 — each enters terrainH in a form that is
+// bit-exact at those values. RAM_H and the rampart's generation are NOT site knobs.
+for (const P of ZP) { P.tflat = 0; P.rimK = 1; P.rimSpan = RIM_SPAN; P.rimJag = 30; }
+const ZP0 = ZP.map(P => Object.assign({}, P));
+// The floor palette per site (uniform multipliers on every zone's silt/gravel/rock, all
+// ones at home). Shared by the three zone programs through COMMON below.
+const SITE_PAL = {
+  uSiteSilt: { value: new THREE.Vector3(1, 1, 1) },
+  uSiteGrav: { value: new THREE.Vector3(1, 1, 1) },
+  uSiteRock: { value: new THREE.Vector3(1, 1, 1) }
+};
 function syncSite() {
-  const t = siteParams().terra;
+  const sp = siteParams(), t = sp.terra, sh = sp.shape;
   for (let zi = 0; zi < 3; zi++) {
+    Object.assign(ZP[zi], ZP0[zi]);
+    if (sh && sh.zp && sh.zp[zi]) Object.assign(ZP[zi], sh.zp[zi]);
+    if (sh && sh.rim) {
+      ZP[zi].rimK = sh.rim.h ?? 1;
+      ZP[zi].rimSpan = RIM_SPAN * (sh.rim.span ?? 1);
+      ZP[zi].rimJag = 30 * (sh.rim.jag ?? 1);
+    }
     ZP[zi].ox = t.off[zi][0];
     ZP[zi].oz = t.off[zi][1];
     const kr = t.rimKR[zi], kh = t.rimKH[zi];
     for (let k = 0; k < 6; k++) { RIM_KR[zi][k] = kr[k]; RIM_KH[zi][k] = kh[k]; }
   }
+  const fl = sp.floor;
+  const set = (u, m) => { if (m) u.value.set(m[0], m[1], m[2]); else u.value.set(1, 1, 1); };
+  set(SITE_PAL.uSiteSilt, fl && fl.silt);
+  set(SITE_PAL.uSiteGrav, fl && fl.grav);
+  set(SITE_PAL.uSiteRock, fl && fl.rock);
 }
 syncSite();
 
@@ -190,7 +221,8 @@ export function terrainH(x, z, zi) {
   h += fbm2(px * P.mf, pz * P.mf, 3) * P.mamp;
   h += fbm2(x * P.ff + 3.3, z * P.ff - 8.8, 2) * P.famp;
 
-  if (P.tamt > 0) h = terrace(h, P.tq, P.tamt * rk);
+  // tflat (a site knob, 0 at home) carries the strata out over the open ground too
+  if (P.tamt > 0) h = terrace(h, P.tq, P.tamt * (P.tflat > 0 ? rk + P.tflat * (1 - rk) : rk));
 
   h += P.lift;
   // Soft floor: canyons must not dig below the zone-change trigger plane.
@@ -221,12 +253,12 @@ export function terrainH(x, z, zi) {
   const aR = KR[0] * c2 + KR[1] * s2 + KR[2] * c3 + KR[3] * s3 + KR[4] * c5 + KR[5] * s5;
   const aH = KH[0] * c2 + KH[1] * s2 + KH[2] * c3 + KH[3] * s3 + KH[4] * c5 + KH[5] * s5;
   const rin = RIM_IN + 46 * c01(aR * 0.62 + 0.5);            // 176.8 .. 222.8
-  const rh = RIM_H * (0.55 + 0.90 * c01(aH * 0.62 + 0.5));   // 64.9 .. 171.1
-  const rt = c01((rr - rin) / RIM_SPAN);
+  const rh = RIM_H * P.rimK * (0.55 + 0.90 * c01(aH * 0.62 + 0.5));   // 64.9 .. 171.1 (x rimK)
+  const rt = c01((rr - rin) / P.rimSpan);
   if (rt > 0) {
     const s = rt * rt * rt * (rt * (rt * 6 - 15) + 10);
     h += s * rh * (1.0 + fbm2(x * 0.0060 + 71, z * 0.0060 - 19, 3) * 0.55)
-       + s * s * rmf(x * 0.0105 + 5, z * 0.0105 - 3, 3) * 30;
+       + s * s * rmf(x * 0.0105 + 5, z * 0.0105 - 3, 3) * P.rimJag;
   }
 
   // Rampart: a second ridgeline 100+ units behind the rim crest, at roughly half its
@@ -384,6 +416,7 @@ export const causticsUniforms = {
 };
 
 const COMMON = {
+  ...SITE_PAL,
   uDetail: { value: MAPS.detail },
   uRockN: { value: MAPS.rockN },
   uRipple: { value: MAPS.rippleN }
@@ -392,6 +425,7 @@ const COMMON = {
 const FRAG_HEAD = PBR_GLSL + /* glsl */`
 uniform sampler2D uDetail, uRockN, uRipple;
 uniform vec3 uSilt, uGrav, uRock;
+uniform vec3 uSiteSilt, uSiteGrav, uSiteRock;
 uniform float uTime, uCamY, uCaust, uWet, uSunK;
 uniform vec3 uSunW;
 uniform vec4 uWaveA, uWaveB, uWaveW, uCTune;
@@ -462,9 +496,10 @@ function compileTerrain(sh) {
       float gravW = smoothstep(0.02, 0.24, slope + (mac.b - 0.5) * 0.26) * (1.0 - rockW);
       float siltW = max(0.0, 1.0 - rockW - gravW);
 
-      vec3 alb = uSilt * (0.68 + 0.64 * det.r) * siltW
-               + uGrav * (0.55 + 0.85 * det.g) * gravW
-               + uRock * (0.46 + 0.95 * det.g) * rockW;
+      // (uSite*: the anchorage's floor palette, exactly 1.0 at home)
+      vec3 alb = uSilt * uSiteSilt * (0.68 + 0.64 * det.r) * siltW
+               + uGrav * uSiteGrav * (0.55 + 0.85 * det.g) * gravW
+               + uRock * uSiteRock * (0.46 + 0.95 * det.g) * rockW;
       alb *= 0.62 + 0.80 * mac.r;
       alb *= 0.16 + 0.84 * ao;
       // Slight up-facing bias so distant landforms keep some form under the flat
