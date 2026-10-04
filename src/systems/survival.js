@@ -30,7 +30,11 @@ export const survival = {
   polymer: 0,         // crafts hose
   bitumen: 0,         // crafts fuel
   supplied: true,     // is air actually reaching the helmet right now
-  tautness: 0,        // 0..1, how close to the end of the hose
+  tautness: 0,        // 0..1, how close to the end of the hose (HUD, audio, the lean)
+  // 0..1, how hard he is STRAINING against the line at full stretch (tether.js leashStep,
+  // eased both ways). The air pinches off on this, not on tautness: the line coming taut
+  // costs nothing, pressing into it does (Michael's leash ruling, 2026-10-04).
+  strain: 0,
   ink: 0,             // squid-ink sacs: deployable smoke that breaks a shark's charge
   // relic tools, discovered at the wrecks
   hasSonar: false,
@@ -88,12 +92,14 @@ export function updateSurvival(dt, depth01, submerged, lightOut) {
 
   const pumpRunning = survival.fuel > 0;
   if (survival.sputter > 0) survival.sputter = Math.max(0, survival.sputter - dt);
-  survival.supplied = pumpRunning && survival.tautness < 1 && survival.sputter <= 0;
+  // Straining at full stretch kinks the line: the supply is cut past half strain, and the
+  // refill eases back in as he stops pushing (the (1 - strain) below).
+  survival.supplied = pumpRunning && survival.strain < 0.5 && survival.sputter <= 0;
 
   if (survival.torn > 0) survival.torn = Math.max(0, survival.torn - dt);
 
   if (survival.supplied) {
-    survival.oxygen = Math.min(1, survival.oxygen + o2RefillRate() * dt);
+    survival.oxygen = Math.min(1, survival.oxygen + o2RefillRate() * (1 - survival.strain) * dt);
   } else {
     const panic = lightOut ? 1.5 : 1;
     survival.oxygen -= O2_BASE_DRAIN * (1 + depth01 * O2_DEPTH_FACTOR) * panic * dt;

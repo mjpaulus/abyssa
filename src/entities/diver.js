@@ -2891,6 +2891,29 @@ export function diverImpulse(kind, dx = 0, dz = 0, mag = 1) {
   rcD.v -= 2.2 * k;                   // the knees buckle under it
 }
 export function diverGrab(on) { grabOn = !!on; }
+// THE YANK (tether.js leash). The hose comes up hard on the bonnet and jerks him back
+// toward it: (dx, dz) is the world direction FROM Sal TOWARD the pull (the raft), str 0..1
+// is the snap's strength (his speed into the line). A heavy man jerked by a line, not a
+// ragdoll: the body takes it on its own channel (ykP/ykR, below) with a slow, heavily
+// damped righting — on the bottom a 3..20 degree rock back onto his heels, in the open
+// water a tumble of up to ~55 degrees that the helmet's buoyancy rights over a second and
+// a half. Never horizontal, never a bounce. sqrt(str): a lean is still a visible tug.
+const ykP = { x: 0, v: 0 }, ykR = { x: 0, v: 0 };
+window.__salYank = () => ({ pitch: ykP.x, roll: ykR.x });
+export function diverYank(dx, dz, str, grounded) {
+  if (!(str > 0)) return;
+  const n = Math.hypot(dx, dz) || 1, k = Math.sqrt(Math.min(1, str)) * SAL.react;
+  const sy = Math.sin(yawF), cy = Math.cos(yawF);
+  // back > 0: the line pulls from behind him; lat > 0: from his left
+  const back = -(dx * sy + dz * cy) / n, lat = (dx * cy - dz * sy) / n;
+  const w = grounded ? 3.2 : 5.2;
+  ykP.v -= w * k * back;               // pitched toward the line (negative = back)
+  ykR.v -= w * 0.75 * k * lat;         // and over toward its side (positive = top goes right)
+  rcH.v -= (grounded ? 2.6 : 3.4) * k * back;   // the bonnet is what the hose is on: it goes first
+  rcY.v += 1.6 * k * lat;              // the shoulders wrench round after it
+  rcA.v += 3.4 * str * SAL.react;      // arms thrown out for balance (not on a lean)
+  rcD.v -= (grounded ? 2.4 : 0.8) * str * SAL.react;   // the knees go under it
+}
 // blend one composed channel toward a target (module function: no per-frame closure)
 function poMix(ch, v, w) { po[ch] += (v - po[ch]) * w; }
 let idleT = 0, valveT = -1, valveNext = 11, valveIdx = 0, valveW = 0;
@@ -3420,9 +3443,7 @@ export function updateDiver(dt, t, player) {
       hoseLean = 0.14 * strain * Math.max(0, back);
       hoseRoll = -0.07 * strain * lat;
       po[CH.sPitch] += 0.07 * strain; po[CH.nPitch] += 0.10 * strain;
-      if (taut > 0.995 && hoseTautWas <= 0.995) {
-        rcP.v -= 1.5 * back * SAL.react; rcR.v += 1.0 * lat * SAL.react; rcH.v -= 1.2 * SAL.react;
-      }
+      // (the jolt at the end of the line is the leash's yank now: diverYank, speed-scaled)
     }
     hoseTautWas = taut;
   }
@@ -3520,6 +3541,9 @@ export function updateDiver(dt, t, player) {
   spring(rcP, 0, dt, 5.0 * wf, 0.32); spring(rcR, 0, dt, 5.0 * wf, 0.32); spring(rcY, 0, dt, 5.5 * wf, 0.35);
   spring(rcH, 0, dt, 7.5 * wf, 0.28); spring(rcA, 0, dt, 4.5 * wf, 0.40); spring(rcD, 0, dt, 6.0, 0.45);
   spring(brP, 0, dt, 4.5, 0.40);
+  // the yank's righting: heavy and nearly dead-beat — firmer on his boots than hanging
+  // from the bonnet in open water, where the dress's air does the righting
+  spring(ykP, 0, dt, 2.5 + 1.8 * gb, 0.66 + 0.12 * gb); spring(ykR, 0, dt, 2.5 + 1.8 * gb, 0.66 + 0.12 * gb);
   // ACCELERATION LEAN. Lead boots and a column of water: to get going he leans into it,
   // to stop he has to sit back against his own momentum. Plus a constant lean into the
   // water's drag at walking pace. Read along his own heading, smoothed, sprung.
@@ -3593,8 +3617,8 @@ export function updateDiver(dt, t, player) {
     spring(pendP, clamp(0.011 * pdAf, -0.20, 0.20) * off * (1 - ladderF), dt, 2.3, 0.32);
     spring(pendR, clamp(-0.014 * pdAl, -0.20, 0.20) * off * (1 - ladderF), dt, 2.3, 0.32);
   }
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x, 0,
-    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x);
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x, 0,
+    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x);
 
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);

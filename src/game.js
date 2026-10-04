@@ -12,7 +12,7 @@ import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders,
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
@@ -22,14 +22,14 @@ import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
   setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady, setPump,
   syncBreath, voyage, nib, setAbove, setWind, setMaster,
-  audioFrame, audioSleeper, setPaused, sonar, knife, knifeHit, land
+  audioFrame, audioSleeper, setPaused, sonar, knife, knifeHit, land, hoseYank
 } from './audio.js';
 import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
   resupplyAtRaft, canDescendTo, HOSE_REQ, HOSE_START, HOSE_MAX, tearDress, o2RefillRate, SPUTTER_SEC
 } from './systems/survival.js';
 import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed, chartAnchor, setKeepsakes } from './systems/raft.js';
-import { buildTether, updateTether, reseatTether } from './systems/tether.js';
+import { buildTether, updateTether, reseatTether, leash } from './systems/tether.js';
 import { camBlockedLocal, camBlockWhy } from './systems/raft/colliders.js';
 import { buildResources, updateResources, reseedResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
@@ -738,6 +738,11 @@ let camSnap = false;
 // Burst reaction. Scoped entirely to these two envelopes so ordinary swimming — which
 // nobody complained about — is byte-identical to before.
 let camKick = 0, camKickPunch = 0;
+// THE YANK in the lens (tether.js leash): the hose jerks Sal and the frame goes with him
+// for a beat — a short, near-dead-beat offset along the pull plus a nod, proportional to
+// the snap. Centimetres, not shake: GROUNDED (Michael hates a floaty lens).
+const camYank = { x: 0, v: 0 }, camYankDir = V3();
+window.__camYank = camYank;   // probe: x = the lens offset along the pull, u
 const CAM_BACK = 9, CAM_UP = 2.4;
 // ---- THE DECK BOOM (roadmap/deck-camera-pullin.md; Michael 2026-10-04: "Closer on deck
 // (~6)"). Nine back the lens was always OFF the raft, 9.4 across, so every deck detail was
@@ -1180,6 +1185,18 @@ function updateCamera(dt, t, fwd) {
   // the whole burst is 0.26 s. Close the rest of the gap directly, scoped to the kick.
   if (camKick > 0) camera.position.lerp(camDesired, Math.min(1, 7 * camKick * dt));
 
+  // the yank: the frame is jerked along the line with him and settles inside ~0.3 s
+  if (camYank.x !== 0 || camYank.v !== 0) {
+    const w = 15, z = 0.72;
+    let h = Math.min(dt, 0.05);
+    while (h > 1e-6) {
+      const hs = Math.min(h, 1 / 120);
+      camYank.v += (-w * w * camYank.x - 2 * z * w * camYank.v) * hs;
+      camYank.x += camYank.v * hs; h -= hs;
+    }
+    if (Math.abs(camYank.x) < 1e-4 && Math.abs(camYank.v) < 1e-3) camYank.x = camYank.v = 0;
+    camera.position.addScaledVector(camYankDir, camYank.x * (rmK ? 1 : 0.3));
+  }
   if (shake > 0) {
     const sk = shake * 0.5 * (rmK ? 1 : 0.3) * (hk > 0 ? 1 - 0.5 * hk * hhGate : 1);
     camera.position.x += rng(-1, 1) * sk;
@@ -1279,6 +1296,7 @@ function updateCamera(dt, t, fwd) {
   // rolled the horizon whenever he crabbed or the current set him sideways.
   camRoll += (clamp(-lateral * 0.004, -0.035, 0.035) * rmK - camRoll) * Math.min(1, 3 * dt);
   camera.rotateZ(camRoll + hhRoll);
+  if (camYank.x !== 0) camera.rotateX(camYank.x * 0.09 * (rmK ? 1 : 0.3));   // the nod: ~1 deg at a full snap
 
   // The 2.5/s lerp has a 0.4 s time constant, so it can only reach 48% of any target
   // inside a 0.26 s burst — which is why the existing +9 speed FOV was imperceptible.
@@ -1677,6 +1695,21 @@ function update(dt, t) {
   // ---- surface-supplied air ----
   pm('glue'); updateRaft(dt, t); pm('raft');
   const distFromRaft = updateTether(dt, player, zone); pm('tether');
+  // THE YANK: the hose snapped him back this frame (tether.js leash). The body staggers
+  // toward the line, his hands come off the controls for a recovery that scales with the
+  // snap, the lens is jerked with him, and the rubber and the bonnet sound it.
+  if (leash.yank > 0 && !paused) {
+    const k = leash.yank;
+    diverYank(leash.dx, leash.dz, k, player.grounded);
+    if (k > 0.12) {
+      const dur = 0.3 + 1.2 * k;
+      player.staggerDur = dur; player.stagger = dur;
+      player.staggerK = Math.min(0.95, 0.35 + 0.6 * k);
+    }
+    camYankDir.set(leash.dx, leash.dy, leash.dz);
+    camYank.v += 7.5 * k;
+    hoseYank(k);
+  }
   const drowned = paused ? false : updateSurvival(dt, depth01, player.pos.y < -3, lightOut);
 
   // The pump, heard. On deck it is the loudest object in Sal's world; once he is under,
