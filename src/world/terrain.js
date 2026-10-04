@@ -152,16 +152,19 @@ const RAM_IN = 340, RAM_PK = 410, RAM_OUT = 540, RAM_H = 66;
 // drowned-shelf ceiling squashed every crest into one flat band at -21..-34 — measured
 // from the pinned mid-water cameras the silhouette step across its skyline was 0.007-0.012
 // linear luma: no edge, only the water's own vertical gradient. Three levers, all here:
-//  - nearer: the envelope starts behind the rim crest and peaks ~30 u closer, so the wall
-//    stands at ~1.5x the rim's distance, not 1.7x (transmittance is all distance: the
-//    green extinction is 0.0105-0.0113 per unit from -5 to -150);
-//  - higher and jagged: a taller envelope with a harder ridged term, and the ceiling over
-//    it is SOFT (asymptotic to RIDGE.top, slope 1 where it engages) instead of the 0.15
-//    kink, so the crest keeps its peaks and saddles up to ~-8 instead of flattening;
+//  - nearer: the envelope rises straight off the rim plateau and peaks at r 348, not 410,
+//    so from 120 u off the raft at y -110 the crest is ~245 u away, not ~295 (green
+//    transmittance ~7% vs ~4%: the extinction is 0.0105-0.0113 per unit from -5 to -150,
+//    so distance is the only lever that buys contrast);
+//  - higher and jagged: a harder ridged term plus a ~48 u crag term, and the ceiling over
+//    it is SOFT (asymptotic to RIDGE.top, slope 1 where it engages at RIDGE.c0) instead of
+//    the 0.15 kink, so the crest keeps peaks and notches (-9..-60 over 128 bearings, median
+//    -23) instead of one flat band;
 //  - paler: a carbonate drape on its upper faces (terrain shader, uDrape), so the wall
 //    reads as a lighter shape behind the dark near rim — aerial perspective by albedo as
-//    well as by distance.
-// The near rim (r < RIDGE.in0) is untouched: weight 0 there, bit-identical.
+//    well as by distance. Faded in past ~100 u from the eye.
+// Tuned from pinned mid-water frames (compare2/B_mid_*): far-ridge skyline Weber contrast
+// 2.4-3.9% -> 3.9-12.2%. The near rim (r < RIDGE.in0 = 300) is untouched: weight 0 there.
 export const RIDGE = { in0: 300, pk0: 348, out0: 540, h0: 74, j0: 44, j2: 28, top: -8, c0: -75, drape: 1, drapeK: 5.5 };
 
 // THE FAR ISLANDS (same card: "Build a few far islands"). The rampart breaks the surface
