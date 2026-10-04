@@ -231,9 +231,26 @@ function legField(P, s) {
   const mod = legFolds(P, s);
   return Lathe(prof, M.CANVAS, { c: [s * P.hipX, 0, 0], sz: 0.96, amp: 0.03, lip: 0.55, mod: (th, y) => mod(s > 0 ? th : Math.PI - th, y) });
 }
+// THE SHOULDER (salfix, 2026-10-04 — Michael: "his arm is floating, not connected at shoulder").
+// The sleeve used to close in a cap pinched to 55% of the arm's girth 0.07 BELOW the shoulder
+// pivot, trusting the breastplate to hide it. Since salprop shrank the corselet (x0.85) its edge
+// sits right ON the pivot (x 0.456 at pivot height against the pivot's 0.46), so nothing covered
+// the joint: measured, 50% of the directions out of each shoulder pivot met no dress or brass
+// within 0.30 u (76% of the deltoid hemisphere), the arm hung from a tube end beside the brass
+// pot, and every lift of the arm (valve check, the haul, the lantern) swung that pinched end out
+// into view. The sleeve now ends in a JOINT DOME: a sphere centred on the pivot, a hair wider
+// than the arm there, so the upper arm rises into a rounded deltoid that tucks under the brass
+// rim, and the dome maps onto itself under any rotation of the arm (the rigid build's joint
+// ball, done in canvas) — the shoulder is closed by construction at every angle the rig reaches,
+// with no blend zone to pinch or candy-wrap. Below the pivot the tube takes over at its own girth.
+const SH_DOME = 0.172;
 function sleeveField(P, s) {
-  const prof = [], yT = -0.07, yB = -(P.aL - 0.075), n = 70;
-  for (let i = 0; i <= n; i++) { const y = yT + (yB - yT) * i / n; prof.push([armRb(P, -y) * (1 - 0.45 * sst(-0.22, yT, y)), y]); }
+  const prof = [], yT = SH_DOME, yB = -(P.aL - 0.075), n = 90;
+  for (let i = 0; i <= n; i++) {
+    const y = yT + (yB - yT) * i / n;
+    const dome = Math.sqrt(Math.max(0, SH_DOME * SH_DOME - y * y));
+    prof.push([y >= 0 ? dome : Math.max(armRb(P, -y), dome), y]);
+  }
   const mod = armFolds(P, s);
   return Lathe(prof, M.CANVAS, { c: [s * P.shX, P.shY, 0], amp: 0.025, lip: 0.55, mod: (th, y) => mod(s > 0 ? th : Math.PI - th, y) });
 }
@@ -268,7 +285,7 @@ function crotchStrap(P) {
 // bake-only displacement: a second layer of canvas 1.5 mm proud, stitched round its edge)
 // limb coordinates of a dress point: which part, u along it, th round it (0 outboard)
 function dressCoords(P, x, y, z, o) {
-  if (Math.abs(Math.abs(x) - P.shX) < 0.24 && y > P.shY - P.aL - 0.1 && y < P.shY + 0.1 && o.sleeve) {
+  if (Math.abs(Math.abs(x) - P.shX) < 0.24 && y > P.shY - P.aL - 0.1 && y < P.shY + 0.2 && o.sleeve) {
     const s = x > 0 ? 1 : -1, lx = s * x - P.shX;
     o.part = s > 0 ? 'armL' : 'armR'; o.u = P.shY - y; o.th = Math.atan2(z, lx); o.s = s; return o;
   }
