@@ -162,7 +162,7 @@ const RAM_IN = 340, RAM_PK = 410, RAM_OUT = 540, RAM_H = 66;
 //    reads as a lighter shape behind the dark near rim — aerial perspective by albedo as
 //    well as by distance.
 // The near rim (r < RIDGE.in0) is untouched: weight 0 there, bit-identical.
-export const RIDGE = { in0: 300, pk0: 348, out0: 540, h0: 74, j0: 44, j2: 28, top: -8, c0: -75, drape: 1, drapeK: 4.2 };
+export const RIDGE = { in0: 300, pk0: 348, out0: 540, h0: 74, j0: 44, j2: 28, top: -8, c0: -75, drape: 1, drapeK: 5.5 };
 
 // THE FAR ISLANDS (same card: "Build a few far islands"). The rampart breaks the surface
 // in two or three places per site: basalt stacks on a drowned shoal, ~390-430 u off the
@@ -550,9 +550,14 @@ function compileTerrain(sh) {
       // THE FAR RIDGE's carbonate drape (zone 0 only: uDrape is 0 on the other two, and
       // the radial gate starts past the near rim). Pale sediment settles on the upper
       // faces of the rampart, so behind the dark near rim it reads as a lighter wall.
+      // Faded in with distance from the eye: near the surface the caustics already light
+      // the crest, and drape plus caustics at arm's length read as snow (measured at 5.0
+      // from r = 300, y = -30).
       if (uDrape.x > 0.0) {
         float dr = uDrape.x * smoothstep(uDrape.y, uDrape.z, length(vWPos.xz))
-                 * smoothstep(-90.0, -35.0, vWPos.y) * (0.45 + 0.55 * smoothstep(0.15, 0.75, wn.y));
+                 * smoothstep(-90.0, -35.0, vWPos.y) * (0.45 + 0.55 * smoothstep(0.15, 0.75, wn.y))
+                 // a far read: within ~100 u the ridge is just rock and silt like the rest
+                 * smoothstep(70.0, 170.0, length(vWPos - cameraPosition));
         alb = mix(alb, uSilt * uDrape.w * (0.75 + 0.5 * det.r), dr);
       }
 
