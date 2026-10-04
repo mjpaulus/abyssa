@@ -1,6 +1,6 @@
 ---
 title: Chart parchment on your monitor
-status: next
+status: done
 tags: chart, ui
 updated: 2026-10-04
 ---
@@ -19,3 +19,4 @@ The in-game paper chart: warmth, size, drop shadow, and the one authored margin 
 - 2026-10-04 — RULED by Michael: shadow "Soft, close shadow" (replace the 18px/42px floating drop-shadow with a tight low one, paper lying on the table); margin line "Replace it" — WHAT SLEEPS WILL WAKE FOR NOISE is false since the three sleepers (they wake to a taking / the furnace); proposed WHAT SLEEPS GUARDS WHAT IT KEEPS, same hand. Warmth and size not raised; unchanged. Moved decision -> next.
 
 - 2026-10-04 — SHIPPED on branch voyage (fe87024): soft close shadow (drop-shadow 0 1px 1.5px .55 + 0 3px 7px .32, was 0 18px 42px .65); margin line now WHAT SLEEPS GUARDS WHAT IT KEEPS, same hand. Also fixed: the sheet had been pinned top-left at full window height (index.html's page-wide canvas rule beat #chartPaper), now a centred 3:2 as authored; at narrow windows (800 / 640 px) the label lines fit inside the border and the conditions lines clear each other; soundings kept off the conditions lines. Warmth and size unchanged. How to see it: [E] at the chart table.
+- 2026-10-04 — Merged to main (c7aa70b): soft close shadow, new margin line; also fixed a global canvas CSS rule that had the sheet top-left at full height (now centred 3:2 as authored — Michael may see it smaller than before). Moved next -> done.
