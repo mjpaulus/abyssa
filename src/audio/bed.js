@@ -402,7 +402,62 @@ export function gull(E, t = E.now(), pan = 0.5, lvl = KB.GULL) {
   E.log('gull');
 }
 
-// The passage as one score on the audio clock (game.js rings the bell at 2.3 s).
+// THE NIB (the inked passage, ui/passage.js): a steel dip pen on laid paper, heard close,
+// at the chart table, not out on the water. The scratch is band-limited noise chopped by
+// the paper's tooth (a fast irregular AM, the tines catching), its level riding the hand:
+//   stroke  a ruled leg — swells with the nib's speed (off the mark briskly, easing into
+//           the fix), pans with it across the sheet; `dry` (0..1) thins it, raises it and
+//           roughens the chop, the way a pen running out of ink starts to bite the paper
+//   ring    the little circle round a fix: one quick curling scrape
+//   letter  lettering: short separate strokes, the pen lifting between glyphs
+//   tick    the nib set down / touching the mark: a soft click of steel on paper
+export const KN = { STROKE: 0.15, RING: 0.1, LETTER: 0.09, TICK: 0.12 };
+export function nib(E, kind = 'stroke', dur = 0.8, pan0 = 0, pan1 = 0, dry = 0.3, t = E.now() + 0.005) {
+  if (E.full()) return;
+  const bus = E.B.sail, p = E.pan(pan0, bus);
+  if (pan1 !== pan0) { p.pan.setValueAtTime(pan0, t); p.pan.linearRampToValueAtTime(pan1, t + dur); }
+  if (kind === 'tick') {
+    const g = E.g(0, p), bp = E.f('bandpass', E.r(2600, 3400), 1.6, g);
+    E.env(g.gain, t, 0.0015, 0.035, KN.TICK);
+    E.fire(E.n('white', 1, bp), t, t + 0.06, [bp, g, p]);
+    const tg = E.g(0, p), to = E.o('sine', E.r(1700, 2100), tg);   // the steel's tiny ring
+    E.env(tg.gain, t, 0.001, 0.05, KN.TICK * 0.18);
+    E.fire(to, t, t + 0.07, [tg]);
+    E.log('nib', kind);
+    return;
+  }
+  const tEnd = t + dur + 0.08;
+  const g = E.g(0, p), am = E.g(0.5, g);
+  const bp = E.f('bandpass', E.r(3000, 3800) * (1 + 0.25 * dry), 0.85, am);
+  const hp = E.f('highpass', 1300, 0.7, bp);
+  // the paper's tooth: two unrelated choppers, the faster one harsher as the pen dries
+  E.mod(E.r(21, 29), 0.32, am.gain, t, tEnd, 'sawtooth');
+  E.mod(E.r(53, 67), 0.12 + 0.22 * dry, am.gain, t, tEnd, 'square');
+  E.mod(E.r(2.5, 4.5), 420, bp.frequency, t, tEnd);
+  const G = g.gain;
+  G.setValueAtTime(0.0001, t);
+  if (kind === 'letter') {
+    // glyph strokes: ~12 per second, each a little scratch with the pen lifted between
+    const lvl = KN.LETTER, n = Math.max(2, Math.round(dur * 12));
+    for (let i = 0; i < n; i++) {
+      const a = t + (i / n) * dur + E.r(0, 0.012), d = dur / n;
+      G.setValueAtTime(0.0001, a);
+      G.linearRampToValueAtTime(lvl * E.r(0.6, 1), a + d * 0.25);
+      G.linearRampToValueAtTime(0.0001, a + d * 0.8);
+    }
+  } else {
+    const lvl = (kind === 'ring' ? KN.RING : KN.STROKE) * (0.85 + 0.3 * dry);
+    G.linearRampToValueAtTime(lvl * 0.65, t + 0.03);
+    G.linearRampToValueAtTime(lvl, t + dur * 0.42);      // the hand's fastest point (passage nibEase)
+    G.linearRampToValueAtTime(lvl * 0.45, t + dur * 0.92);
+    G.linearRampToValueAtTime(0.0001, t + dur + 0.04);
+  }
+  E.fire(E.n('white', 1, hp), t, tEnd, [hp, bp, am, g, p]);
+  E.log('nib', kind, dur);
+}
+
+// The passage as one score on the audio clock (game.js rings the bell as the nib
+// touches the mark, PT.BELL in ui/passage.js).
 export function voyage(E, len = 6.2) {
   const t = E.now() + 0.01;
   strakeWash(E, t + 0.2, len - 0.4, 0.055);

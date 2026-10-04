@@ -9,6 +9,10 @@
 //   openChart(state, onChoose, onClose)  state = { currentSite, calmed }
 //   closeChart()
 //   isChartOpen()
+// For THE PASSAGE (ui/passage.js — the voyage inked on this same sheet):
+//   paintSheet(canvas, cssW, cssH, dpr, state, opts)  the whole sheet into any canvas
+//   sheetObstacles(W, H, state)  where the lettering sits, for routing a course clear of it
+//   letter(..., capture) / setCtx(c)  the same hand, captured as glyphs or drawn elsewhere
 //
 // No per-frame work while closed. Open redraws only on open / hover change / resize.
 
@@ -16,15 +20,19 @@ import { siteAt, siteCount, stream } from '../world/site.js';
 
 // ---------------------------------------------------------------------------
 // palette
-const INK = '#2a2018';            // near-black brown
-const INK_FADE = 'rgba(42,32,24,0.55)';
-const PENCIL = 'rgba(90,88,84,0.85)';
-const PENCIL_SOFT = 'rgba(96,94,90,0.6)';
+export const INK = '#2a2018';            // near-black brown
+export const INK_FADE = 'rgba(42,32,24,0.55)';
+export const PENCIL = 'rgba(90,88,84,0.85)';
+export const PENCIL_SOFT = 'rgba(96,94,90,0.6)';
 const RED_FADE = 'rgba(140,52,40,0.55)';
-const PAPER = '#d8c9a3';
+export const PAPER = '#d8c9a3';
+// The sheet LIES on the chart table (Michael, 2026-10-04: "Soft, close shadow"): a
+// contact shadow hugging the deckle and a short soft skirt, no float. Was
+// drop-shadow(0 18px 42px rgba(0,0,0,.65)) — that read as a UI card hovering.
+export const PAPER_SHADOW = 'drop-shadow(0 1px 1.5px rgba(0,0,0,.55)) drop-shadow(0 3px 7px rgba(0,0,0,.32))';
 
 // anchorage placement on the sheet (fractions of canvas w/h)
-const SPOTS = [
+export const SPOTS = [
   { x: 0.235, y: 0.640 },   // THE HOME MOORING — lower-left-ish
   { x: 0.685, y: 0.270 },   // PALLID BANK — upper-right
   { x: 0.720, y: 0.700 },   // THE BURNED GROUND — lower-right
@@ -39,6 +47,7 @@ let curState = null, chooseCb = null, closeCb = null;
 let hoverIdx = -1;
 let hitRects = [];                // {x,y,w,h,i} in CSS pixels
 let styleDone = false;
+let passOpts = null;              // set only while paintSheet runs (null = the chart table)
 
 function injectStyle() {
   if (styleDone) return;
@@ -49,17 +58,25 @@ function injectStyle() {
     background:rgba(1,4,9,.78);pointer-events:auto;opacity:0;transition:opacity .35s}
   #chartWrap.on{opacity:1}
   #chartPaper{width:min(78vw,1100px);aspect-ratio:3/2;display:block;
-    filter:drop-shadow(0 18px 42px rgba(0,0,0,.65));cursor:default}
+    position:relative;top:auto;left:auto;height:auto;z-index:auto;
+    filter:${PAPER_SHADOW};cursor:default}
   `;
+  // (position..z-index: index.html's page-wide canvas rule — fixed, top-left, 100vh,
+  // there for the WebGL canvas — used to win here, pinning the sheet to the window's
+  // top-left corner at full height instead of a centred 3:2 sheet.)
   document.head.appendChild(css);
 }
 
 // ---------------------------------------------------------------------------
-// lettering: period hand — serif small caps, letter-spaced, slight per-glyph jitter
-function letter(text, x, y, px, tracking, color, rng, align = 'center') {
+// lettering: period hand — serif small caps, letter-spaced, slight per-glyph jitter.
+// `capture` (an array) records each glyph { ch, x, y, rot, font, color } instead of
+// drawing it — the passage letters a name in glyph by glyph at exactly these places.
+// Either way the rng is consumed identically, so the rest of the sheet never shifts.
+export function letter(text, x, y, px, tracking, color, rng, align = 'center', capture = null) {
   ctx.save();
   ctx.fillStyle = color;
-  ctx.font = `${px}px Georgia, 'Times New Roman', serif`;
+  const font = `${px}px Georgia, 'Times New Roman', serif`;
+  ctx.font = font;
   ctx.textBaseline = 'alphabetic';
   const widths = [];
   let total = 0;
@@ -69,18 +86,45 @@ function letter(text, x, y, px, tracking, color, rng, align = 'center') {
   for (const ch of text) {
     const rot = (rng() - 0.5) * 0.045;
     const jy = (rng() - 0.5) * px * 0.06;
-    ctx.save();
-    ctx.translate(cx, y + jy);
-    ctx.rotate(rot);
-    ctx.fillText(ch, 0, 0);
-    ctx.restore();
+    if (capture) {
+      if (ch !== ' ') capture.push({ ch, x: cx, y: y + jy, rot, font, color });
+    } else {
+      ctx.save();
+      ctx.translate(cx, y + jy);
+      ctx.rotate(rot);
+      ctx.fillText(ch, 0, 0);
+      ctx.restore();
+    }
     cx += widths[i++];
   }
   ctx.restore();
   return total;
 }
 
-function measure(text, px, tracking) {
+// Point the hand at another canvas (the passage's layers); returns the previous one.
+export function setCtx(c) { const p = ctx; ctx = c; return p; }
+
+// A label line that must stay on the sheet. On a narrow sheet the lettering's minimum
+// sizes (names 10 px, conditions 8 px) outgrow the W-relative layout and the long
+// conditions lines ran off the paper past the border rule (THE SLEEPERS SIT SHALLOW at
+// a 640 px window). Fit the line inside the inner border, centred where it was: close the
+// letter-spacing first (down to a quarter), then the size (never under 6.5 px). A no-op
+// at every ordinary size. Shared by the draw, the hit rects and sheetObstacles.
+const FIT = { px: 0, tr: 0, w: 0 };
+function fitLine(text, x, px, tracking, W) {
+  const m = Math.round(W * 0.025), avail = 2 * Math.min(x - (m + 9), W - (m + 9) - x);
+  let w = measure(text, px, tracking);
+  if (w > avail) {
+    const n = [...text].length;
+    tracking = Math.max(tracking * 0.25, tracking - (w - avail) / n);
+    w = measure(text, px, tracking);
+    if (w > avail) { px = Math.max(6.5, px * avail / w); w = measure(text, px, tracking); }
+  }
+  FIT.px = px; FIT.tr = tracking; FIT.w = w;
+  return FIT;
+}
+
+export function measure(text, px, tracking) {
   ctx.font = `${px}px Georgia, 'Times New Roman', serif`;
   let total = 0;
   for (const ch of text) total += ctx.measureText(ch).width + tracking;
@@ -119,8 +163,25 @@ function draw(state) {
   paperC.width = Math.round(cssW * dpr);
   paperC.height = Math.round(cssH * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const W = cssW, H = cssH;
   hitRects.length = 0;
+  sheet(cssW, cssH, state, null);
+}
+
+// The whole sheet into any canvas at any size — the passage paints the same chart.
+// opts: { hideName: i }  that anchorage's name is held back (the passage letters it in
+//       on arrival; `captured` receives its glyphs) — rng consumed as if drawn.
+export function paintSheet(canvas, cssW, cssH, dpr, state, opts) {
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  const prev = ctx;
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  sheet(cssW, cssH, state, opts || {});
+  ctx = prev;
+}
+
+function sheet(W, H, state, opts) {
+  passOpts = opts;
 
   const rng = stream(0xC4A87001);           // deterministic: same sheet every open
 
@@ -200,6 +261,7 @@ function draw(state) {
   // -- 7 soundings ---------------------------------------------------------
   ctx.fillStyle = 'rgba(42,32,24,0.42)';
   const sRng = stream(0x50D1265);
+  const lab = sheetObstacles(W, H, state).rects;
   for (let i = 0; i < 46; i++) {
     const x = m + 30 + sRng() * (W - 2 * m - 60);
     const y = m + 30 + sRng() * (H - 2 * m - 60);
@@ -210,9 +272,17 @@ function draw(state) {
     if (!clear) continue;
     const f = 8 + Math.floor(sRng() * 90);
     const px = 9 + sRng() * 2.5;
+    const rot = (sRng() - 0.5) * 0.22;
+    // ...and off the long conditions lines, which run far wider than that radius (a
+    // sounding printed into SIT SHALLOW). Tested after all its draws, so every other
+    // sounding keeps its place and figure.
+    const fw = px * (f > 9 ? 1.15 : 0.6);
+    let onLabel = false;
+    for (const r of lab) if (x + fw > r.x0 - 3 && x < r.x1 + 3 && y > r.y0 - 2 && y - px < r.y1 + 2) onLabel = true;
+    if (onLabel) continue;
     ctx.save();
     ctx.translate(x, y);
-    ctx.rotate((sRng() - 0.5) * 0.22);
+    ctx.rotate(rot);
     ctx.font = `${px}px Georgia, 'Times New Roman', serif`;
     ctx.fillText(String(f), 0, 0);
     ctx.restore();
@@ -231,9 +301,48 @@ function draw(state) {
   inkLineCentered(W / 2, m + H * 0.072, W * 0.11, tRng);
   letter('SOUNDINGS IN FATHOMS', W / 2, m + H * 0.095, Math.max(8, W * 0.0082), W * 0.004, INK_FADE, tRng);
   // margin note in the dead owner's hand, then Sal's pencil beneath
-  letter('WHAT SLEEPS WILL WAKE FOR NOISE', W * 0.5, H - m - H * 0.030, Math.max(8, W * 0.0085), W * 0.004, INK_FADE, tRng);
+  // (Michael, 2026-10-04: "Replace it" — the old line, WHAT SLEEPS WILL WAKE FOR NOISE,
+  // stopped being true when the three sleepers came: they wake to a taking, a furnace.)
+  letter('WHAT SLEEPS GUARDS WHAT IT KEEPS', W * 0.5, H - m - H * 0.030, Math.max(8, W * 0.0085), W * 0.004, INK_FADE, tRng);
 
   ctx.restore();
+  passOpts = null;
+}
+
+// Where the sheet's lettering and marks sit (CSS px of a W x H sheet), so the passage
+// can rule a course that never crosses a name. Same arithmetic as the draw. Needs a
+// context for measuring: call after setCtx() or paintSheet().
+//   { m, aS, namePx, condPx, rects: [{x0,y0,x1,y1,site}], circles: [{x,y,r,site}] }
+export function sheetObstacles(W, H, state) {
+  const m = Math.round(W * 0.025);
+  const aS = W * 0.016;
+  const namePx = Math.max(10, W * 0.0122);
+  const condPx = Math.max(8, W * 0.0084);
+  const rects = [], circles = [];
+  const n = Math.min(siteCount(), SPOTS.length);
+  for (let i = 0; i < n; i++) {
+    const site = siteAt(i);
+    if (!site) continue;
+    const x = SPOTS[i].x * W, y = SPOTS[i].y * H;
+    const found = !site.hidden || (state.found && state.found[i]);
+    circles.push({ x, y, r: aS * 1.5, site: i });
+    if (!found) continue;
+    const nameY = y + aS * 2.6, condY = nameY + condPx * 1.7;
+    const nw = fitLine(site.name, x, namePx, W * 0.0042, W).w / 2;
+    const cw = fitLine(site.conditions, x, condPx, W * 0.0022, W).w / 2;
+    rects.push({ x0: x - nw, y0: nameY - namePx * 0.85, x1: x + nw, y1: nameY + namePx * 0.25, site: i });
+    const calmed = (state.calmed && state.calmed[i]) || [];
+    const struck = (calmed[0] ? 1 : 0) + (calmed[1] ? 1 : 0) + (calmed[2] ? 1 : 0);
+    rects.push({ x0: x - cw, y0: condY - condPx * 0.85, x1: x + cw, y1: condY + (struck ? condPx * 1.9 : condPx * 0.25), site: i });
+  }
+  // the rose with its letters, the title block, the margin note
+  circles.push({ x: W * 0.155, y: H * 0.30 + W * 0.004, r: W * 0.052 * 1.5, site: -1 });
+  const tw = measure('THE THREE ANCHORAGES', Math.max(13, W * 0.0165), W * 0.008) / 2;
+  rects.push({ x0: W / 2 - tw, y0: m + H * 0.035, x1: W / 2 + tw, y1: m + H * 0.102, site: -1 });
+  const mpx = Math.max(8, W * 0.0085);
+  const mw = measure('WHAT SLEEPS GUARDS WHAT IT KEEPS', mpx, W * 0.004) / 2;
+  rects.push({ x0: W / 2 - mw, y0: H - m - H * 0.030 - mpx, x1: W / 2 + mw, y1: H - m - H * 0.030 + mpx * 0.3, site: -1 });
+  return { m, aS, namePx, condPx, rects, circles };
 }
 
 function inkLineCentered(cx, y, halfW, rng) {
@@ -352,9 +461,12 @@ function drawAnchorage(i, W, H, state, rng) {
 
   // name + conditions
   const nameY = y + aS * 2.6;
-  letter(site.name, x, nameY, namePx, W * 0.0042, hand, rng);
+  const held = passOpts && passOpts.hideName === i;
+  const nf = fitLine(site.name, x, namePx, W * 0.0042, W), nPx = nf.px, nTr = nf.tr, nW = nf.w;
+  letter(site.name, x, nameY, nPx, nTr, hand, rng, 'center', held ? (passOpts.captured = []) : null);
   const condY = nameY + condPx * 1.7;
-  letter(site.conditions, x, condY, condPx, W * 0.0022, handFade, rng);
+  const cf = fitLine(site.conditions, x, condPx, W * 0.0022, W), cW = cf.w;
+  letter(site.conditions, x, condY, cf.px, cf.tr, handFade, rng);
 
   // calmed sleepers: pencil strike marks, one per becalmed sleeper
   const calmed = (state.calmed && state.calmed[i]) || [];
@@ -377,17 +489,18 @@ function drawAnchorage(i, W, H, state, rng) {
   }
 
   // hover: faint pencil underline beneath the name
-  if (hoverIdx === i && !isCur) {
+  if (hoverIdx === i && !isCur && !passOpts) {
     ctx.save();
     ctx.strokeStyle = PENCIL_SOFT;
-    const hw = measure(site.name, namePx, W * 0.0042) / 2;
+    const hw = measure(site.name, nPx, nTr) / 2;
     ctx.lineWidth = 1.1;
     inkLine(x - hw, nameY + namePx * 0.35, x + hw, nameY + namePx * 0.35, rng);
     ctx.restore();
   }
 
   // hit region: from above the anchor to below the conditions line
-  const hw = Math.max(measure(site.name, namePx, W * 0.0042), measure(site.conditions, condPx, W * 0.0022)) / 2 + 8;
+  if (passOpts) return;
+  const hw = Math.max(nW, cW) / 2 + 8;
   hitRects.push({ x: x - hw, y: y - aS * 3.4, w: hw * 2, h: (condY + condPx * 2.4) - (y - aS * 3.4), i });
 }
 
