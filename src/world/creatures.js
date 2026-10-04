@@ -1739,7 +1739,18 @@ function buildSparks() {
 
 let SPARK_N = null;
 
+// OWN WATER: a site's `sparks` row recolours the twinkling plankton (hue band per zone,
+// saturation, gain) so a teal-cyan glow does not burn out of ash water. The stream draws
+// are untouched (the shipped draw is remapped into the site's band); home has no row.
+let SG = null;
+const SPARK_BAND = [[0.5, 0.6], [0.68, 0.86], [0.38, 0.52]];
+function sparkHue(zi, h) {
+  if (!SG || !SG.hue || !SG.hue[zi]) return h;
+  const a = SPARK_BAND[zi], b = SG.hue[zi], t = (h - a[0]) / (a[1] - a[0]);
+  return ((b[0] + (b[1] - b[0]) * t) % 1 + 1) % 1;
+}
 function layoutSparks() {
+  SG = siteParams().sparks;
   const col = new THREE.Color();
   // zone-major loop = identical _cr consumption order to the old single-mesh layout
   for (let zi = 0; zi < 3; zi++) {
@@ -1751,8 +1762,8 @@ function layoutSparks() {
       p[i * 3 + 1] = rr(zoneBottom(zi) + 10, zoneTop(zi) - 6);
       p[i * 3 + 2] = Math.sin(a) * r;
       s[i] = rr(0.5, 1.8) * (1 + zi * 0.35);
-      col.setHSL(zi === 2 ? rr(0.38, 0.52) : (zi === 1 ? rr(0.68, 0.86) : rr(0.5, 0.6)), 0.8, 0.6);
-      const k = 0.5 + zi * 0.5;
+      col.setHSL(sparkHue(zi, zi === 2 ? rr(0.38, 0.52) : (zi === 1 ? rr(0.68, 0.86) : rr(0.5, 0.6))), SG ? SG.sat : 0.8, 0.6);
+      const k = (0.5 + zi * 0.5) * (SG ? SG.k : 1);
       c[i * 3] = col.r * k; c[i * 3 + 1] = col.g * k; c[i * 3 + 2] = col.b * k;
       e[i * 3] = _cr() * 6.283;
       e[i * 3 + 1] = rr(0.08, 0.22);

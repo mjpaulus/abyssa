@@ -22,7 +22,7 @@ import { camera, scene } from './core.js';
 import { sun, LOOK } from './lighting.js';
 import { GLASS } from './config.js';
 // OWN WATER: the anchorage's surface-light tint (all ones at home), read at render time only.
-import { SITE_SURF, SITE_ABS } from './world/water.js';
+import { SITE_SURF, SITE_ABS, SITE_SHAFT } from './world/water.js';
 
 // THE FLOW LEAN (roadmap/flow-lean-style.md, item 12): the medium stays lit. Same dial
 // lighting.js reads (GLASS.style.flowLean, `light` sub-knob), a local copy because the
@@ -126,6 +126,7 @@ precision highp float;
 #define OCC_EVERY ${OCC_EVERY}
 uniform sampler2D tDepth, tCaust;
 uniform vec3 uCamPos, uSunDir, uSurf, uAbsK;
+uniform vec4 uVeil;
 uniform mat4 uCamW, uViewProj;
 uniform vec2 uTanHalf;
 uniform float uNear, uFar, uDens, uSunK, uJitter, uOcclude, uDensK, uStyle;
@@ -261,6 +262,10 @@ void main(){
   // rather than a saturated cyan laid over it.
   float accL = dot( acc, vec3( 0.2126, 0.7152, 0.0722 ) );
   acc = mix( acc, accL * vec3( 0.70, 0.92, 1.14 ), 0.28 * ( 1.0 - smoothstep( 0.0, 300.0, -uCamPos.y ) ) );
+  // OWN WATER: the shafts take the anchorage's suspended load too (ash-grey-gold at the
+  // Burned Ground). uVeil.w = 0 at home: mix by exactly 0.0.
+  accL = dot( acc, vec3( 0.2126, 0.7152, 0.0722 ) );
+  acc = mix( acc, accL * uVeil.rgb, uVeil.w );
   gl_FragColor = vec4( acc * ( dt * rlen * uSunK * uDensK ), tS );
 }`;
 
@@ -373,6 +378,7 @@ export class VolumetricLightPass extends Pass {
         uSunDir: { value: new THREE.Vector3(0.2, 1, 0.1).normalize() },
         uSurf: { value: new THREE.Vector3(...SURF_LIGHT) },
         uAbsK: { value: new THREE.Vector3(1, 1, 1) },
+        uVeil: { value: new THREE.Vector4(1, 1, 1, 0) },
         uCamW: { value: new THREE.Matrix4() },
         uViewProj: { value: new THREE.Matrix4() },
         uTanHalf: { value: new THREE.Vector2(1, 1) },
@@ -497,6 +503,7 @@ export class VolumetricLightPass extends Pass {
     // the shafts are made of the anchorage's water too (x1 at home: the shipped literal)
     mu.uSurf.value.set(SURF_LIGHT[0] * SITE_SURF[0], SURF_LIGHT[1] * SITE_SURF[1], SURF_LIGHT[2] * SITE_SURF[2]);
     mu.uAbsK.value.set(SITE_ABS[0], SITE_ABS[1], SITE_ABS[2]);
+    mu.uVeil.value.set(SITE_SHAFT[0], SITE_SHAFT[1], SITE_SHAFT[2], SITE_SHAFT[3]);
     mu.uSunDir.value.copy(sun.position).normalize();
     // Turbidity: water.js drives scene.fog.density from depth + storm murk, so the
     // shafts dim in murky water on their own.

@@ -184,13 +184,15 @@ export function styleState() { return STYLE_U; }
 // scene.fog.color — and everything derived from it — carries the site's light.
 const SITE_U = new Float32Array(4), SITE_T = new Float32Array(4), SITE_K = new Float32Array(4);
 export const SITE_SURF = new Float32Array([1, 1, 1]);
-export const SITE_ABS = new Float32Array([1, 1, 1]);   // 1 + SITE_K.rgb, for the shafts (postfx.volumetrics.js)
+export const SITE_ABS = new Float32Array([1, 1, 1]);
+export const SITE_SHAFT = new Float32Array([1, 1, 1, 0]);   // shaft veil: tint rgb, amount (0 at home)   // 1 + SITE_K.rgb, for the shafts (postfx.volumetrics.js)
 const SILT_TINT = [1.42, 1.16, 0.72];
 let siteWaterOn = false;
 // Called by game.js at boot (after the saved site is set) and in reseedWorld. `w` is
 // site.js's `water` row (null = the shipped water).
 export function setSiteWater(w) {
   SITE_U.fill(0); SITE_T.fill(0); SITE_K.fill(0); SITE_SURF.fill(1); SITE_ABS.fill(1);
+  SITE_SHAFT[0] = SITE_SHAFT[1] = SITE_SHAFT[2] = 1; SITE_SHAFT[3] = 0;
   siteWaterOn = !!w;
   if (w) {
     SITE_U[0] = (w.clear ?? 1) - 1; SITE_U[1] = (w.silt ?? 1) - 1;
@@ -199,6 +201,7 @@ export function setSiteWater(w) {
     for (let i = 0; i < 3; i++) { SITE_T[i] = t[i] - SILT_TINT[i]; SITE_K[i] = a[i] - 1; SITE_SURF[i] = sf[i]; SITE_ABS[i] = a[i]; }
     SITE_T[3] = (w.glow ?? 1) - 1;
     SITE_K[3] = w.veil || 0;
+    if (w.shaft) { SITE_SHAFT[0] = w.shaft[0]; SITE_SHAFT[1] = w.shaft[1]; SITE_SHAFT[2] = w.shaft[2]; SITE_SHAFT[3] = w.shaft[3]; }
   }
   palette(_lastRing, _lastEnv);   // the next frame re-resolves anyway; this keeps a probe honest
 }

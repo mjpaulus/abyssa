@@ -142,7 +142,7 @@ const RIM_KH = [
 // knobs' shipped values are identities: tflat 0 (terrace gated by the uplands only, as
 // shipped), rimK 1, rimSpan RIM_SPAN, rimJag 30 — each enters terrainH in a form that is
 // bit-exact at those values. RAM_H and the rampart's generation are NOT site knobs.
-for (const P of ZP) { P.tflat = 0; P.rimK = 1; P.rimSpan = RIM_SPAN; P.rimJag = 30; }
+for (const P of ZP) { P.tflat = 0; P.rimK = 1; P.rimSpan = RIM_SPAN; P.rimJag = 30; P.rimIn = RIM_IN; }
 const ZP0 = ZP.map(P => Object.assign({}, P));
 // The floor palette per site (uniform multipliers on every zone's silt/gravel/rock, all
 // ones at home). Shared by the three zone programs through COMMON below.
@@ -160,6 +160,7 @@ function syncSite() {
       ZP[zi].rimK = sh.rim.h ?? 1;
       ZP[zi].rimSpan = RIM_SPAN * (sh.rim.span ?? 1);
       ZP[zi].rimJag = 30 * (sh.rim.jag ?? 1);
+      ZP[zi].rimIn = RIM_IN + (sh.rim.out ?? 0);   // push the wall's foot outward (u)
     }
     ZP[zi].ox = t.off[zi][0];
     ZP[zi].oz = t.off[zi][1];
@@ -302,7 +303,7 @@ export function terrainH(x, z, zi) {
   const KR = RIM_KR[zi], KH = RIM_KH[zi];
   const aR = KR[0] * c2 + KR[1] * s2 + KR[2] * c3 + KR[3] * s3 + KR[4] * c5 + KR[5] * s5;
   const aH = KH[0] * c2 + KH[1] * s2 + KH[2] * c3 + KH[3] * s3 + KH[4] * c5 + KH[5] * s5;
-  const rin = RIM_IN + 46 * c01(aR * 0.62 + 0.5);            // 176.8 .. 222.8
+  const rin = P.rimIn + 46 * c01(aR * 0.62 + 0.5);           // 176.8 .. 222.8 (+ a site's rim.out)
   const rh = RIM_H * P.rimK * (0.55 + 0.90 * c01(aH * 0.62 + 0.5));   // 64.9 .. 171.1 (x rimK)
   const rt = c01((rr - rin) / P.rimSpan);
   if (rt > 0) {

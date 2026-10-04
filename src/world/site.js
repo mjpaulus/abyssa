@@ -162,18 +162,27 @@ const SITES = [
     // ASH WATER: warm and dark. The column carries suspended ash (silt x1.5) that scatters
     // umber, blue is eaten first (humic/ash absorption), so depth goes olive-brown instead
     // of blue, and the surface light arrives already warm and dimmer.
-    water: { surf: [0.92, 0.70, 0.52], clear: 1.15, silt: 1.50, siltMix: 0.84, siltGain: 0.86,
-      siltTint: [1.74, 1.08, 0.56], absorb: [0.78, 1.10, 1.55], glow: 0.85, veil: 0.72 },
+    // SECOND PASS (2026-10-04): the first read as a flat brown smear with the skyline lost
+    // in it. Ash water is warm SLATE -- a desaturated grey veil with a faint umber
+    // undertone -- and its clear band is CLEARER than home (ash settles; the silt line is
+    // thinner), so black basalt stands against it at home's distances or better.
+    // Shafts go ashen grey-gold (`shaft`: tint, amount).
+    water: { surf: [1.16, 1.05, 0.92], clear: 0.60, silt: 0.55, siltMix: 0.80, siltGain: 1.10,
+      siltTint: [1.24, 1.08, 0.88], absorb: [0.75, 1.00, 1.18], glow: 0.80, veil: 0.62,
+      shaft: [1.22, 1.06, 0.82, 0.75] },
     // the zone looks: umber ash with warm-neutral shadows (no teal wash), a red-amber
     // boiler, an ember-black abyss -- the darker crown
     grade: [
-      { slope: [1.06, 0.98, 0.86], offset: [0.008, 0.004, -0.002], power: [0.97, 1.00, 1.08], mood: [1.00, 0.66, 0.40], satUp: 0.06, satDn: -0.34, wash: 0.24, cool: [0.24, 0.22, 0.22], toe: [0.30, 0.22, 0.14] },
-      { slope: [1.10, 0.96, 0.80], offset: [0.014, 0.004, -0.006], mood: [1.00, 0.52, 0.18], satUp: 0.26, satDn: -0.30, wash: 0.44, cool: [0.22, 0.20, 0.24], toe: [0.44, 0.22, 0.10] },
+      { slope: [1.02, 1.00, 0.96], offset: [0.004, 0.003, 0.002], power: [1.00, 1.00, 1.03], mood: [0.86, 0.74, 0.62], satUp: 0.04, satDn: -0.42, wash: 0.14, cool: [0.30, 0.30, 0.30], toe: [0.16, 0.12, 0.10], film: [1.20, 0.30, 0.05, 0.70] },
+      { slope: [1.04, 0.99, 0.92], offset: [0.006, 0.004, 0.002], mood: [0.95, 0.64, 0.42], satUp: 0.10, satDn: -0.40, wash: 0.22, cool: [0.26, 0.26, 0.28], toe: [0.24, 0.16, 0.10], film: [1.18, 0.30, 0.05, 0.75] },
       { slope: [1.02, 0.92, 0.92], offset: [0.004, 0.000, 0.000], mood: [0.80, 0.36, 0.30], satUp: 0.06, satDn: -0.40, wash: 0.20, cool: [0.20, 0.14, 0.16], toe: [0.30, 0.14, 0.12] }
     ],
-    light: { amb: [1.16, 0.86, 0.66], sky: [1.10, 0.86, 0.62], gnd: [0.90, 0.62, 0.46], sun: [1.00, 0.86, 0.70] },
+    // the fill dimmed hard so stone stays black; the key a touch warm
+    light: { amb: [0.64, 0.60, 0.56], sky: [0.78, 0.74, 0.70], gnd: [0.50, 0.45, 0.40], sun: [0.95, 0.88, 0.78] },
+    // the plankton glow as embers and ash, not teal (creatures.js layoutSparks)
+    sparks: { hue: [[0.06, 0.10], [0.05, 0.09], [0.02, 0.06]], sat: 0.45, k: 0.7 },
     // basalt and ash: dark, a little warm in the gravel
-    floor: { silt: [0.60, 0.54, 0.50], grav: [0.62, 0.54, 0.48], rock: [0.48, 0.44, 0.44] },
+    floor: { silt: [0.36, 0.345, 0.34], grav: [0.30, 0.29, 0.28], rock: [0.22, 0.21, 0.21] },
     // jagged: taller sharper massifs (an extra ridged octave), lava-step ledges, a steep
     // close rim with a broken crest
     shape: {
@@ -182,7 +191,7 @@ const SITES = [
         { ramp: 54, roc: 5, rbias: 0.02, s2amp: 14, r3amp: 4.6, tq: 4.5, tamt: 0.80 },
         { ramp: 60, roc: 5, s2amp: 16, r3amp: 5.2, tq: 4.0, tamt: 0.72 }
       ],
-      rim: { h: 1.15, span: 0.82, jag: 1.6 }
+      rim: { h: 1.15, span: 0.82, jag: 1.6, out: 28 }   // its foot pushed back 28 u: the wall stands off
     },
     // more and hotter: five dense fields, taller living chimneys, four burning throats
     vents: { clusters: 5, per: [5, 5, 4, 5, 4], deadP: 0.16, hot: 4, h: [5, 16], clusterR: 18, sep: 48 },
@@ -240,6 +249,7 @@ export function siteParams(key) {
     sleepers: s.sleepers,
     water: s.water || null, light: s.light || null, floor: s.floor || null,
     shape: s.shape || null, vents: s.vents || null, wrecks: s.wrecks || null, grade: s.grade || null,
+    sparks: s.sparks || null,
     rng: key && s.seeds[key] !== undefined ? stream(s.seeds[key]) : stream(0xD1CE0000 + current)
   };
 }
