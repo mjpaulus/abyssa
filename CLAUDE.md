@@ -338,8 +338,8 @@ against explicit contracts and reviewed on return.
   round her rift's lip (lair.bear, or lair.arc + idle picks the lip height), Orune turns
   about her trawler (lair.bear / idle), Mhor's furnace moves (lair.bear/r); `hard` =
   hammerT/threatR, pull/hold/lashCd/grabR, circleT/stunT/hitR/speed. Never more lights.
-  Probe (committed as scratch recipe, FNV-1a of f32 terrainH on a 32x32 grid over
-  +-260 (N-1 spacing) x 3 zones): home 8ff7cdbd (UNCHANGED), Pallid c265183a, Burned
+  Probe `__chart.fp()` (terrain.js terrainFingerprint: FNV-1a of f32 terrainH, 32x32 grid
+  over +-260 x 3 zones): home 8ff7cdbd (UNCHANGED), Pallid c265183a, Burned
   e7dbcb88. (The old 5e6cfe45/ef14da09 recipe is not in the repo and could not be
   reproduced.) sleeperFingerprint(i) home: 49a7a176 ac04921e ce3eaf9d.
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands

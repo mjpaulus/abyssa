@@ -332,6 +332,17 @@ function buildClampTable() {
   }
 }
 
+// THE CHART's regression probe (dev): FNV-1a over the f32 bits of terrainH on a 32 x 32
+// grid spanning +-260 (31 steps) for each of the three zones. Home 8ff7cdbd since 2026-10-04.
+export function terrainFingerprint() {
+  const f = new Float32Array(1), u = new Uint32Array(f.buffer);
+  let h = 0x811c9dc5;
+  for (let zi = 0; zi < 3; zi++) for (let j = 0; j < 32; j++) for (let i = 0; i < 32; i++) {
+    f[0] = terrainH(-260 + i * 520 / 31, -260 + j * 520 / 31, zi); h ^= u[0]; h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, '0');
+}
+
 // Surface normal via finite differences of terrainH — used for slope-aware placement and physics.
 export function terrainNormal(x, z, zi, eps = 0.5) {
   const hL = terrainH(x - eps, z, zi), hR = terrainH(x + eps, z, zi);
