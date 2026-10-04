@@ -138,12 +138,36 @@ against explicit contracts and reviewed on return.
 - `world/terrain.js` + `lib/triplanar.js` — 3 heightfield meshes, ZONE-GATED by
   camera Y with flora's bands (−332k tris/frame; verified 0 visibility violations
   across the ending ascent and voyages). Rifts are flattened bowls, NOT holes;
-  fall-through is a player.js special case. Site-0 fingerprint probe (FNV-1a over
-  float32 terrainH, 32x32x3, x,z −248..248 step 16) must stay 35acc2d0.
+  fall-through is a player.js special case. Fingerprint probe = `terrainFingerprint()` /
+  `__ridge.fp(zones?)` (FNV-1a over the float32 BYTES of terrainH, 32x32 grid x,z
+  −248..248 step 16, zone-major then z then x). The old quoted values (35acc2d0, 5e6cfe45)
+  came from an unrecorded probe and reproduce under no variant of it; this one is canonical
+  since 2026-10-04. Home: 4ff3a4f6 on main 7a41c43 -> 119f0cae after THE FAR RIDGE (zone 0
+  only: 776f4b37 -> 6b719d1f; zones 1+2 d47f42e0 unchanged at every site).
+  THE FAR RIDGE (roadmap/far-ridgeline-read.md, Michael "Raise it"): zone 0's rampart runs
+  its own rows (`RIDGE` in terrain.js: envelope 300/348/540 — nearer than the W2 340/410
+  — h 74, ridged 44 + a 48-u crag term 28, and a SOFT ceiling asymptotic to -8 over the
+  envelope instead of the 0.15 shelf kink, so peaks and notches survive at -9..-60), plus
+  a pale carbonate DRAPE on its upper faces in the terrain shader (`uDrape`, zone 0 only,
+  faded in past ~100 u from the eye so the crest is rock up close). Zones 1/2 keep W2.
+  `__ridge.set({...})` retunes live (refills the terrain); `__ridge.RIDGE` / `.ISLES`.
   Triplanar CC0 PBR (channel-packed, 3.3 MB) multiplies ON TOP of zone palettes:
   texture = structure, palette = hue. ROCKS (flora.js) use a GENERATED rock map set
   (lib/textures.js rockMapSet, two variants) triplanar via onBeforeCompile + screen-
   derivative relief; cleavage faces are pure functions of existing stream draws.
+- `world/islands.js` — THE FAR ISLANDS (same card, "Build a few far islands"): 2-3 per
+  site, laid by terrain.js `layIsles` from a seeded stream (bearings >= 95 deg apart,
+  392-428 u off the raft; kinds crown / needle / teeth). terrainH lifts a drowned SHOAL
+  under each (soft-capped below a gale trough, ~-8..-14); the stacks in the air are ONE
+  merged mesh of jointed polygonal basalt columns (flat shaded, <= 48 columns, 3.5-6.7k
+  tris, capacity buffers refilled in place on a voyage, feet sunk 8 u into the shoal).
+  Air-side material: dry basalt, salt/lime streaks, crusted tops, a wet splash band that
+  rises with the storm, black weed, surf at the foot riding a sea-height PLANE per island
+  (one surfaceHeightAt tap a frame, round-robin), cloud shadow on the direct light. Fog is
+  the global chunk with its airlight scaled down in storms for this material only (the
+  painted-ring airlight made a black stack glow against the lid). Visibility == the
+  zone-0 terrain mesh's (no popping; checked through the ending). The sea meets them by
+  depth (opaque rock, transparent sea after it). `__isles.state()`.
 - `lighting.js` — STOPS depth blend; `setWeatherLight(day, storm, flash)`; weather
   bite fades out by ~40% depth so the abyss never changes.
   **ABOVE THE WATERLINE IS A SEPARATE REGIME.** Every STOPS entry describes being IN
@@ -297,7 +321,9 @@ against explicit contracts and reviewed on return.
     reads as a broken teleport.
 - THE CHART (multi-site ocean) — `world/site.js` is the registry (3 authored
   anchorages; site 0 = shipped world BIT-IDENTICAL, the regression anchor; terrain
-  fingerprints: home 5e6cfe45, Pallid Bank ef14da09 on the 32x32x3 probe). The world
+  fingerprints on the canonical probe (`__ridge.fp()`, see terrain.js above) since THE FAR
+  RIDGE: home 119f0cae, Pallid Bank cb37d61d, Burned Ground 3a8dfad7, Unsounded Shelf
+  5b793afa — were 4ff3a4f6 / bd02b8e3 / 4014c41e / 46c21abb on 7a41c43). The world
   reseeds IN PLACE around the raft: `reseedWorld(i)` in game.js runs
   fillTerrain -> reseedWrecks(tools) -> reseedFlora -> reseedResources ->
   reseedProps -> reseedVents -> reseedVentLife -> reseedGardens -> reseatRifts ->
@@ -479,9 +505,18 @@ orchestrator redoes it, not the agent.
   `SILT_MIX/SILT_GAIN = 0.00/1.00` in water.js (three adjacent lines, ~line 44).
   Worth re-judging NOW: until the samplePerf fix the game silently ran with
   volumetrics/AO/shadows off every session, so the user has never seen full quality.
-- **Does the far ridgeline read?** W2's rampart sits at 4.5% transmittance against
-  the rim's 13.1% — a measured 2.9x separation, but subtle. `RAM_H` is the lever if
-  it is too faint on a real monitor. Only the user can settle this.
+- **The far ridgeline (RULED 2026-10-04 "Raise it"; built on branch horizon).** W2's
+  rampart sat at ~4% green transmittance behind the rim, its crest squashed flat at
+  -21..-34 by the drowned-shelf ceiling: from the pinned mid-water cameras the luma step
+  across its skyline was 0.007-0.012 linear — no edge, only the water's own gradient.
+  Distance is the whole game here (green extinction is 0.0105-0.0113 per unit from -5 to
+  -150, so brightness cannot buy it): zone 0's ridge now peaks at r 348 (was 410), its
+  crest is craggy up to -9 under a soft ceiling, and its upper faces carry a pale drape.
+  Far-ridge skyline Weber contrast (3 px) 2.4-3.9% -> 3.9-12.2% over seven pinned views
+  (y -80/-110/-130, S/E/W, 120 u off the raft; A/A within 0.003); into the sun the shafts
+  still dominate. Frames: compare2/B_mid_*.jpg. Michael judges the read.
+- **The far islands exist now** (they never did: the capture pass measured the highest
+  zone-0 crest at -19.7). See world/islands.js above; frames compare2/B_island_*.jpg.
 - Streaming/chunked LOD is DECLINED with arithmetic, not taste: utilisation is 4.6%
   at r=2236 and 1.8% at r=3600, because scale is (resolvable feature)/(mean free
   path) and both terms are set by the water, not the triangle budget. The procedural
