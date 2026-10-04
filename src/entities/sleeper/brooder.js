@@ -20,7 +20,8 @@ import { registerPaint } from '../../lib/paint.js';
 import { terrainH, terrainMeshes } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard
+  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard,
+  rememberWard, wardMemPose, wardsRecall
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
@@ -376,6 +377,18 @@ export function makeBrooder(idx, cfg) {
     w.q = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), V3(s.n[0], s.n[1], s.n[2]).normalize());
     L.sigils.push(w);
   }
+  // RITUAL, REMEMBERED: the ward the old calm keeps is the FRONT socket, under her prow
+  // between the claws. Two reasons. (1) THE BROOD RULE must survive the memory: it is not
+  // a fixed ward but "the last DARK ward will not light while an egg is out". Pre-counting
+  // a ward that is lit from the boot means it can never BE the last dark one, so the rule
+  // still lands on a ward the diver has to reach (the second flank ward): one touch, then
+  // the clutch decides. Had the memory been "the last ward lights itself", the brood rule
+  // would have been the free ward and the egg would no longer matter. (2) The front ward
+  // is the one inside the lunge and the hammer cycle; the flank wards are the ones her
+  // sideways stalk offers. The memory spares the cruellest approach and keeps the walk
+  // round her, the stand and the clutch: the rite is shorter, not different.
+  rememberWard(L, 0);
+  L.memLine = 'SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.';
   makeEmbers(L, c.size);
 
   // THE RIDGE: she sleeps at this zone's rift, facing the open seabed the diver comes
@@ -410,7 +423,8 @@ export function makeBrooder(idx, cfg) {
   L.probe = () => ({
     kind: 'brooder', dormant: !!L.dormant, eggsOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
-    wards: L.sigils.map(g => ({ lit: g.lit, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
+    remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
+    wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
     tris: countTris(L.body), sculpted: L.sculpted,
     eyes: L.eyeSt ? L.eyeSt.map(e => ({ errDeg: +(e.err * 57.3).toFixed(1), saccades: e.n })) : null,
     sight: { seen: L.seen, tau: +L.tau.toFixed(2), blindT: +L.blindT.toFixed(2), aim: L.aim.toArray().map(v => +v.toFixed(1)), lost: L.lostN || 0 },
@@ -1515,7 +1529,8 @@ export function updateBrooder(L, dt, t, player) {
     let allLit = true;
     for (let i = 0; i < L.sigils.length; i++) {
       const g = L.sigils[i];
-      if (g.lit) wardLitPose(g, dt, haloK);
+      // (a remembered ward is buried with the rest while she sleeps: it rises with her)
+      if (g.lit) { if (g.mem) wardMemPose(g, dt, haloK, L.standE); else wardLitPose(g, dt, haloK); }
       else {
         allLit = false;
         // a sleeping Brooder's wards are in the sand: no glow, no light until she rises
@@ -1545,6 +1560,7 @@ export function updateBrooder(L, dt, t, player) {
     ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
+      if (L.memWard >= 0) wardsRecall(L, haloK);
       // she goes home: back to the nest to settle over her brood, off the rift
       if (L.brood) { L.walkTo = L.brood.nest.clone(); L.toNest = true; L.standTarget = 1; }
       else { L.standTarget = 0; L.walkTo = null; }

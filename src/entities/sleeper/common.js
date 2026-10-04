@@ -265,6 +265,67 @@ export function wardLitPose(g, dt, haloK) {
   g.light.position.copy(g.grp.position);
   g.halo.position.copy(g.grp.position);
 }
+// ---- RITUAL, REMEMBERED (roadmap/sleepers-persist-decision.md, Michael 2026-10-04) ----
+// A sleeper calmed on an earlier visit (the chart's pencil record, game.js chartRec,
+// handed in as cfg.remembered) still wakes to her rite, but ONE ward carries the old calm:
+// it is counted lit from the boot (g.lit, so every count, the audio rite level, the sonar
+// echoes and the keepers already treat it as done) and is drawn DIM-LIT (g.mem) until the
+// calm, when it answers with the rest. Each kind picks WHICH ward (its reasoning sits at
+// the call). A sleeper with one ward never pre-counts: that would calm her on the spot.
+// Nothing here runs unless cfg.remembered is set: the fresh path is untouched.
+export function rememberWard(L, i) {
+  if (!L.remembered || L.sigils.length < 2) return;
+  const g = L.sigils[Math.max(0, Math.min(L.sigils.length - 1, i))];
+  g.lit = true; g.mem = true; g.memK = 0;
+  L.memWard = L.sigils.indexOf(g);
+}
+// The dim-lit look, through the ward's own rune / halo / borrowed light: a banked ember,
+// not a lamp. Three reads keep it apart from the other two states at a glance:
+//   TEMPO  a slow breath (~8.4 s) against the idle ward's 3.1 s flicker and the lit 2.1 s throb
+//   LEVEL  glyph ~0.65-0.85, light ~27-34: over the idle iron (glyph 0.22-0.38, light 3-13),
+//          far under the lit ward (glyph 1 / over-unity, light 100-180, the scale throb)
+//   HUE    the glyph and halo go to a low amber; the lit and idle wards are white-gold (at
+//          depth the water eats most of the red, so the hue is the weakest of the three)
+// `kT` (0..1) is how much of her is up to show it (buried, asleep, absent = 0); it eases.
+// The light is written every frame like the other poses; kinds that STAGE the pool
+// (hoarder, hunter) keep the slot for their own rig while a ward is only remembered.
+const MEM_R = 1, MEM_G = 0.62, MEM_B = 0.30;
+export function wardMemPose(g, dt, haloK, kT) {
+  g.pulse += dt;
+  g.memK += (kT - g.memK) * Math.min(1, dt * 1.2);
+  const k = g.memK, w = 0.5 + 0.5 * Math.sin(g.pulse * 0.75), b = (0.78 + 0.22 * w) * k;
+  g.rune.material.opacity = 0.85 * b;
+  // (the sigil style's idle glyph is already a strong white-gold, so its remembered glyph
+  // runs a little over unity: warmer AND brighter than the iron, still far under the lit)
+  const ck = g.sig ? 1.25 : 1;
+  g.rune.material.color.setRGB(MEM_R * ck, MEM_G * ck, MEM_B * ck);
+  g.halo.material.color.setRGB(MEM_R, MEM_G * 0.92, MEM_B * 0.8);
+  g.light.intensity = 34 * b;
+  if (g.sig) {
+    g.halo.scale.setScalar(Math.max(0.001, haloK * 0.44 * b));
+    g.halo.material.opacity = 0.34 * b;
+    g.light.userData.scatter = 0.04;
+  } else {
+    g.halo.scale.setScalar(Math.max(0.001, haloK * 2.0 * b));
+    g.halo.material.opacity = 0.55;
+  }
+  g.light.position.copy(g.grp.position);
+  g.halo.position.copy(g.grp.position);
+}
+// At the calm the remembered ward answers: full lit pose, its own flash and embers (no
+// chime: the calm rings its own chord). Called by each kind on its calming frame.
+export function wardsRecall(L, haloK) {
+  for (const g of L.sigils) {
+    if (!g.mem) continue;
+    g.mem = false;
+    g.rune.material.color.setHex(0xffe8a8);
+    g.halo.material.color.setHex(0xffe8a8);
+    if (!g.sig) g.halo.material.opacity = 0.8;
+    wardLitPose(g, 0, haloK);
+    g.flashT = 0;
+    burstEmbers(L, g.grp.position);
+  }
+}
 // The touch: a swept test from last frame's diver position, so a hitch or a fast pass
 // can't tunnel through a ward. The zone-1 dark rule and zone-2 keeper rule apply to any
 // kind that sets sonarWards / guardWards. Returns true on the frame the ward lights.

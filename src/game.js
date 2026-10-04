@@ -427,21 +427,40 @@ window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPr
 // Remote anchorages carry hand-authored sleeper rows: more wards, a hue nudge, an
 // epithet in the previous chart-owner's ink. Home passes undefined and is untouched.
 // `extra` merges last (the lab uses it to ask for a different kind).
+//
+// RITUAL, REMEMBERED (roadmap/sleepers-persist-decision.md, Michael 2026-10-04): a sleeper
+// the chart's pencil already records as stilled (chartRec[site][zone], set on the calming
+// frame and saved with the chart) still wakes to her rite, but boots `remembered`: one
+// ward dim-lit and counted, one fewer touch (sleeper/common.js rememberWard). Read at
+// every build, so it holds across a voyage there and back, a reload, and a zone re-entry;
+// the visit that does the calming is not affected (she is already built). The flag is
+// only added when true, so a never-calmed sleeper builds from exactly the config it did.
+// memForce (dev, __lev.remember) overrides the chart; null = the chart decides.
+let memForce = null;
+const calmedBefore = i => memForce !== null ? memForce : !!chartRec[currentSiteIndex()][i];
 function makeZoneSleeper(i, extra) {
   const row = currentSite().sleepers && currentSite().sleepers[i];
-  const over = row ? {
+  let over = row ? {
     nSigils: row.sigils,
     hue: (LEVIATHAN_CFG[i].hue + row.hueShift + 1) % 1,
     name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name
   } : undefined;
+  if (calmedBefore(i)) over = Object.assign({}, over, { remembered: true });
   return makeLeviathan(i, extra ? Object.assign({}, over, extra) : over);
 }
+// The remembered wake's one line ('SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.', per
+// kind: lev.memLine), said once per sleeper per session, in the first silence after her
+// name (it waits like the other onboarding beats, so it never clobbers the queue).
+// (marked said when it SHOWS: a wake that leaves the zone before a silence keeps it owed)
+const memSaid = new Uint8Array(12);
+let memPending = null, memKey = 0;
 
 function enterZone(i) {
   disposeLeviathan(lev);
   zone = i;
   setZone(i);            // must precede growl() so the voice is tuned to the zone
   lev = makeZoneSleeper(i);
+  memPending = null;
   seedMotes(i);
   physicsSwitchZone(i);  // no-op until the WASM world is up
   switchPredatorZone(i);
@@ -481,6 +500,17 @@ window.__lev = {
       lev.cmd('place', { pos, yaw: Math.atan2(-fx, -fz) });
     }
     return lev.kind;
+  },
+  // remember(on): rebuild the live zone's sleeper as if the chart did (true) or did not
+  // (false) record her stilled; the force holds for every later build until remember(null)
+  // hands the call back to the chart. The save is never touched.
+  remember(on = true) {
+    memForce = on === null ? null : !!on;
+    if (zone < 0) return null;
+    disposeLeviathan(lev);
+    lev = makeZoneSleeper(zone);
+    memPending = null;
+    return lev.probe ? lev.probe() : { kind: lev.kind, remembered: !!lev.remembered };
   },
   cmd(name, arg) { return lev && lev.cmd ? lev.cmd(name, arg) : null; },
   state() { return lev ? (lev.probe ? lev.probe() : { kind: lev.kind, calmed: lev.calmed }) : null; },
@@ -1425,7 +1455,11 @@ function update(dt, t) {
   if (lev) {
     const ev = updateLeviathan(lev, dt, t, player); pm('leviathan');
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
-    if (ev.woke) { showMsg(lev.name, 5, 2); growl(); shake = 1; }
+    if (ev.woke) {
+      showMsg(lev.name, 5, 2); growl(); shake = 1;
+      const mk = currentSiteIndex() * 3 + zone;
+      if (lev.memWard >= 0 && lev.memLine && !memSaid[mk]) { memPending = lev.memLine; memKey = mk; }
+    }
     if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); diverImpulse('grab'); }
     diverGrab(!!lev.grab);
     if (ev.quake) shake = Math.max(shake, ev.quake);   // her footfalls, hammer, settle thump
@@ -1553,7 +1587,11 @@ function update(dt, t) {
   // onboarding beats fire only in silence, each exactly once
   zoneTime += dt;
   if (msgT <= 0 && state === 'play') {
-    if (pendingWards) {
+    if (memPending) {
+      // (stilled before a silence came, the line is stale: dropped, still owed)
+      if (lev && !lev.calmed) { showMsg(memPending, 5); memSaid[memKey] = 1; }
+      memPending = null;
+    } else if (pendingWards) {
       pendingWards = false; showMsg(wardsLine(), 5);
     } else if (!tips.submerged && player.pos.y < -6) {
       tips.submerged = 1; showMsg('YOUR AIR COMES DOWN THE LINE. THE PUMP ABOVE MUST STAY FED.', 5);
