@@ -34,10 +34,12 @@
 // against their own shoal. From the deck they stand on the horizon; from below they are
 // dark columns rising to the surface out of the rampart.
 //
-// BUDGET. <= 48 columns, ~16k triangles at capacity, one draw (+ the refraction pass's
-// one). Per frame: 9 sea-height queries (~4 us each) only while the camera is near the
-// surface, and a handful of uniform writes. Zero allocation: buffers are allocated once
-// at capacity and refilled in place on a voyage (drawRange carries the live count).
+// BUDGET. <= 48 columns, ~9.7k triangles at capacity (3.5-6.7k live across the four
+// sites), one draw (+ the refraction pass's one; __bench.draws: 6119 tris each at home).
+// Per frame: ONE sea-height query while the camera is near the surface (round-robin),
+// a handful of uniform writes, nothing at all below y = -45. Zero allocation: buffers
+// are allocated once at capacity and refilled in place on a voyage (drawRange carries
+// the live count).
 import * as THREE from 'three';
 import { scene } from '../core.js';
 import { terrainH, ISLES, terrainMeshes } from './terrain.js';
@@ -344,6 +346,7 @@ export function fillIslands() {
     c.set(ISLES[i].x, ISLES[i].z, 0, 0);
     uIsle.uSeaG.value[i].set(0, 0, 0, 0);
   }
+  _taps.fill(0); _tap = 0;
   geo.index.needsUpdate = true;
   geo.attributes.position.needsUpdate = true;
   geo.attributes.aIsle.needsUpdate = true;
@@ -355,6 +358,8 @@ export function fillIslands() {
 
 // Per frame from terrain.js updateTerrain, after the zone gate.
 const SEA_TAP = 9;
+const _taps = new Float32Array(MAX_ISLES * 3);
+let _tap = 0;
 export function updateIslands(camY, t) {
   if (!mesh) return;
   const vis = terrainMeshes[0].visible && liveCols > 0;
@@ -365,16 +370,20 @@ export function updateIslands(camY, t) {
   uIsle.uIsAir.value = 1 - 0.42 * storm;
   uIsle.uSplash.value.set(1.6 + 2.6 * storm, 1.1 + 1.6 * storm, 1.3 + 2.8 * storm);
   uIsle.uSunW.value.set(SUN.dir.x, SUN.dir.y, SUN.dir.z);
-  // The waterline: only worth the taps while the surf can be seen (eye near the surface).
-  if (camY > -45) {
-    for (let i = 0; i < ISLES.length && i < MAX_ISLES; i++) {
-      const s = ISLES[i];
-      const h0 = surfaceHeightAt(s.x, s.z, t, storm);
-      const hx = surfaceHeightAt(s.x + SEA_TAP, s.z, t, storm);
-      const hz = surfaceHeightAt(s.x, s.z + SEA_TAP, t, storm);
-      uIsle.uSeaC.value[i].z = h0;
-      uIsle.uSeaG.value[i].set((hx - h0) / SEA_TAP, (hz - h0) / SEA_TAP, 0, 0);
-    }
+  // The waterline: only worth a tap while the surf can be seen (eye near the surface).
+  // ONE sea-height query a frame, round-robin over the 3 taps of every island (a query
+  // measured 4 us nominal, 17-21 us on a contended bench host; nine a frame were 176 us),
+  // so each island's plane is refreshed every 3n frames — ~150 ms on a 9-s swell, a lag
+  // of about a tenth of the wave height, invisible at 400 u.
+  const n = Math.min(ISLES.length, MAX_ISLES);
+  if (camY > -45 && n > 0) {
+    if (_tap >= n * 3) _tap = 0;
+    const i = (_tap / 3) | 0, j = _tap - i * 3, s = ISLES[i];
+    _taps[_tap] = surfaceHeightAt(s.x + (j === 1 ? SEA_TAP : 0), s.z + (j === 2 ? SEA_TAP : 0), t, storm);
+    const h0 = _taps[i * 3];
+    uIsle.uSeaC.value[i].z = h0;
+    uIsle.uSeaG.value[i].set((_taps[i * 3 + 1] - h0) / SEA_TAP, (_taps[i * 3 + 2] - h0) / SEA_TAP, 0, 0);
+    _tap++;
   }
   const cs = getCloudShadow();
   if (cs && cs.texture) { uIsle.uCloudT.value = cs.texture; uIsle.uCloudW.value.set(cs.window[0], cs.window[1], cs.window[2], 1); }
