@@ -3,12 +3,12 @@ import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
 import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
-import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover } from './postfx.js';
-import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight } from './world/terrain.js';
+import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
+import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight } from './lighting.js';
+import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM } from './world/stir.js';
-import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState } from './world/water.js';
+import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
@@ -128,6 +128,11 @@ performance.mark('abyssa:world-build-start');
 buildTerrain();
 buildFlora();
 buildWater();
+// OWN WATER: the anchorage's water and light (uniform + CPU rows; null at home = shipped).
+// The saved site is already set (loadChart runs before the world builds).
+setSiteWater(currentSite().water || null);
+setSiteLight(currentSite().light || null);
+setSiteGrade(currentSite().grade || null);
 buildClouds();   // instanced puff clusters in the air; must follow buildWater (palette + wind)
 buildSky();      // VOLUMETRIC SKY: noise volumes on the GPU, atmosphere LUT, cloud march targets
 buildRain();     // one instanced draw call of wind-slanted rain streaks, air side only
@@ -442,10 +447,14 @@ let memForce = null;
 const calmedBefore = i => memForce !== null ? memForce : !!chartRec[currentSiteIndex()][i];
 function makeZoneSleeper(i, extra) {
   const row = currentSite().sleepers && currentSite().sleepers[i];
+  // idle / lair / hard (OWN WATER, roadmap/fly-remote-sites.md) were dead data until
+  // 2026-10-04: the row's idle depth, its lair bearing and its behaviour numbers now reach
+  // the kind (brooder/hoarder/hunter read c.idle / c.lair / c.hard; absent = shipped).
   let over = row ? {
     nSigils: row.sigils,
     hue: (LEVIATHAN_CFG[i].hue + row.hueShift + 1) % 1,
-    name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name
+    name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name,
+    idle: row.idle || null, lair: row.lair || null, hard: row.hard || null
   } : undefined;
   if (calmedBefore(i)) over = Object.assign({}, over, { remembered: true });
   return makeLeviathan(i, extra ? Object.assign({}, over, extra) : over);
@@ -655,6 +664,9 @@ function startVoyage(i) {
 function reseedWorld(i) {
   resetTemporal('reseed');   // the world changes under a still camera: no history survives it
   setSite(i);
+  setSiteWater(currentSite().water || null);   // uniforms only: no program, no material
+  setSiteLight(currentSite().light || null);
+  setSiteGrade(currentSite().grade || null);
   fillTerrain();
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
   setKeepsakeState(keepsakes[currentSiteIndex()]);
@@ -704,7 +716,7 @@ window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zon
 // Debug: sail without the fade (the fade is cosmetic; this is the state change), and
 // force the reseed directly. Kept for probes and for future harness runs.
 window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec,
-  found: () => chartFound, keeps: () => keepsakes };
+  found: () => chartFound, keeps: () => keepsakes, fp: () => terrainFingerprint() };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
   if (state !== 'play') return 'start the game first';

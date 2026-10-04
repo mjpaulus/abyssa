@@ -26,6 +26,7 @@ import { registerPaint } from '../../lib/paint.js';
 import { terrainH } from '../../world/terrain.js';
 import { setWardTargets, deployInk } from '../../world/predators.js';
 import { wreckSites } from '../../world/wrecks.js';
+import { riftPos, WORLD_R, RIFT_R } from '../../config.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
   rememberWard, wardMemPose, wardsRecall
@@ -177,6 +178,33 @@ function makeBeak(L) {
   grp.scale.setScalar(1.25);
   L.body.add(grp);
   L.beak = { grp, hu, hl, open: 0, ev: 0, ph: 0, cyc: 0, snapN: 0 };
+}
+
+// Bearing of her lair about the wreck for a remote row (see makeHoarder). Pure function of
+// the terrain + row; candidates whose lair would leave the basin or sit in the rift bowl
+// are passed over. Returns the unit `out` (wreck -> lair) the shipped code builds from.
+function hoarderOut(idx, W, Rm, c) {
+  const o0 = Math.atan2(W.z, W.x), rad = Rm * 1.4 + 9, rp = riftPos(idx);
+  const at = th => {
+    const ox = Math.cos(th), oz = Math.sin(th), x = W.x + ox * rad, z = W.z + oz * rad;
+    const ok = Math.hypot(x, z) < WORLD_R * 0.68 && Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + Rm + 8;
+    return { out: V3(ox, 0, oz), ok, g: terrainH(x, z, idx) };
+  };
+  if (c.idle) {
+    const C = [];
+    for (let k = 0; k < 12; k++) { const q = at(o0 + k / 12 * Math.PI * 2); if (q.ok) C.push(q); }
+    if (C.length) {
+      let lo = 1e9, hi = -1e9;
+      for (const q of C) { lo = Math.min(lo, q.g); hi = Math.max(hi, q.g); }
+      const want = lo + (hi - lo) * c.idle[0] / (c.idle[0] + c.idle[1]);
+      let best = C[0];
+      for (const q of C) if (Math.abs(q.g - want) < Math.abs(best.g - want)) best = q;
+      return best.out;
+    }
+  }
+  const b = ((c.lair && c.lair.bear) || 0) * Math.PI / 180;
+  for (let k = 0; k < 12; k++) { const q = at(o0 + b + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 6); if (q.ok) return q.out; }
+  return at(o0 + b).out;
 }
 
 export function makeHoarder(idx, cfg) {
@@ -350,11 +378,22 @@ export function makeHoarder(idx, cfg) {
   // all still belong to the rite.
   rememberWard(L, 0);
   L.memLine = 'SHE KNOWS YOUR LAMP. ONE WARD STILL REMEMBERS.';
+  // HARDER WATER (site row `hard`; absent = shipped): she lashes sooner, reaches a little
+  // further for the grab, drags harder and holds longer before she tires. The cock, the
+  // freeze and the knife that frees him are all unchanged.
+  const hk = c.hard || {};
+  L.hPull = hk.pull || 14; L.hHold = hk.hold || 5; L.hGrabR = hk.grabR || 3.2;
+  L.hCd0 = hk.lashCd ? hk.lashCd[0] : 3; L.hCdR = hk.lashCd ? hk.lashCd[1] : 2.5;
   makeEmbers(L, c.size);
 
   // ---- the lair: wrapped round the broken trawler, the hoard at its heart ----
   const W = wreckSites()[Math.min(idx, 2)];
-  const out = V3(W.x, 0, W.z).normalize(), perp = V3(-out.z, 0, out.x);
+  // OWN WATER: the trawler lies where each anchorage's sea put it (wrecks.js), and she lies
+  // round it wherever that is; a site row may also turn her about it (lair.bear, degrees)
+  // or, with an IDLE split, choose the bearing whose ground sits at a/(a+b) of the ring's
+  // height range (the Burned Ground's [70, 44]: the high side). Home: the shipped bearing.
+  const out = c.lair || c.idle ? hoarderOut(idx, W, Rm, c) : V3(W.x, 0, W.z).normalize();
+  const perp = V3(-out.z, 0, out.x);
   L.wreck = V3(W.x, W.y, W.z);
   const lair = V3(W.x, 0, W.z).addScaledVector(out, Rm * 1.4 + 9);
   L.pos.copy(lair);
@@ -1098,7 +1137,7 @@ function startLash(L, player, ambush) {
   A.lash = A.cockT + STRIKE_T;
   A.fast = ambush;
   L.behindNext = false;
-  L.lashCd = 3 + Math.random() * 2.5;
+  L.lashCd = L.hCd0 + Math.random() * L.hCdR;
   L.mood = Math.min(1, L.mood + 0.25);
   L.cockN++;
   if (ambush) flash(L, 0.7);
@@ -1300,7 +1339,7 @@ export function updateHoarder(L, dt, t, player) {
         // THE STRIKE: the coil throws open at him (faster out of the freeze: the ambush)
         A.tipGoal.copy(player.pos);
         w = A.fast ? 9 : 7; z = 0.8; curlT = 1.5; tellT = 0.35;
-        if (A.tip.distanceTo(player.pos) < 3.2 && !L.grab && A.recoil < 0.4) {
+        if (A.tip.distanceTo(player.pos) < L.hGrabR && !L.grab && A.recoil < 0.4) {
           // a grab is the DRAG, not a slam: no dress tear, the line is the teaching
           L.grab = { arm: a, t: 0 };
           ev.grabbed = true;
@@ -1396,10 +1435,10 @@ export function updateHoarder(L, dt, t, player) {
     // (menace: she rears and looms now, so the head rides over her own mantle; the drag
     // stops short of her contact shell or a grab became a slam and a torn dress — measured)
     _p.divideScalar(d);
-    if (d > L.R * 0.9 && pd > L.collR + 4) player.vel.addScaledVector(_p, 14 * dt);
+    if (d > L.R * 0.9 && pd > L.collR + 4) player.vel.addScaledVector(_p, L.hPull * dt);
     else if (pd < L.collR + 3) { const vin = player.vel.dot(_p); if (vin > 0) player.vel.addScaledVector(_p, -vin); }   // held at the beak, not into her
     ev.lightDrain += dt * 0.12;
-    if (L.grab.t > 5 || L.calmed) { L.arms[L.grab.arm].recoil = 1; L.grab = null; }
+    if (L.grab.t > L.hHold || L.calmed) { L.arms[L.grab.arm].recoil = 1; L.grab = null; }
   }
   // ---- the display: papillae, darkness, the flash, the web, the pupil, the beak ----
   L.deimT += dt;

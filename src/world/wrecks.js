@@ -1574,8 +1574,12 @@ const SITE_SPEC = [
 // the sites before buildWrecks() has run without forcing a build order.
 let SITES = null;
 export function wreckSites() {
+  // OWN GROUND: a site's `wrecks.band` row moves each wreck's search ring about its
+  // rift (Pallid: out on the bank; Burned: close in, in the ash). Home has none.
+  const wr = !SITES && siteParams().wrecks;
   if (!SITES) SITES = SITE_SPEC.map((s, zi) => {
-    const site = findSite(zi, s.minR, s.maxR, s.foot);
+    const b = wr && wr.band && wr.band[zi];
+    const site = findSite(zi, b ? b[0] : s.minR, b ? b[1] : s.maxR, s.foot);
     return { zi, x: site.x, y: site.y, z: site.z, clear: s.clear, site };
   });
   return SITES;

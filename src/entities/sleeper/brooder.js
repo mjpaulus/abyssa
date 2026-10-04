@@ -25,7 +25,8 @@ import {
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
-import { riftPos } from '../../config.js';
+import { riftPos, WORLD_R } from '../../config.js';
+import { wreckSites } from '../../world/wrecks.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
@@ -139,6 +140,50 @@ function chitinSheen(m) {
       #include <opaque_fragment>`);
   };
   return m;
+}
+
+// OWN WATER: where she sleeps at a remote anchorage (site.js row `lair`, read only when
+// present — home never enters here). The rift itself never moves (THE CHART's frozen
+// frame), so her ridge swings ROUND ITS LIP instead: `bear` (degrees) turns the shipped
+// raft-side lip point about the rift centre; `arc` with the row's IDLE split [a, b]
+// searches that arc and takes the lip point whose ground sits at a/(a+b) of the arc's
+// height range (Pallid's [62, 38]: the HIGH lip — THE SLEEPERS SIT SHALLOW). Either way a
+// point whose ridge or nest would sit on the zone's wreck is passed over, so the skiff
+// never lies under her. Returns the lip and the rift-ward `out` the shipped code faces by.
+// Pure function of the terrain and the row: a reseed lands her in the same place.
+function lairOf(idx, R, c) {
+  const rp = riftPos(idx), rad = 16 * 2.7 + R * 0.55, lr = c.lair;
+  const in0 = Math.atan2(-rp.z, -rp.x);                 // the shipped bearing: rift -> raft side
+  const W = idx < 3 ? wreckSites()[idx] : null;
+  const at = th => {
+    const dx = Math.cos(th), dz = Math.sin(th);
+    const lip = V3(rp.x + dx * rad, 0, rp.z + dz * rad), out = V3(-dx, 0, -dz);
+    const nest = lip.clone().addScaledVector(V3(-out.z, 0, out.x), R * 2.8);
+    const clear = !W || (Math.hypot(lip.x - W.x, lip.z - W.z) > R * 2 + 16 && Math.hypot(nest.x - W.x, nest.z - W.z) > 22);
+    const inBasin = Math.hypot(lip.x, lip.z) < WORLD_R * 0.66 && Math.hypot(nest.x, nest.z) < WORLD_R * 0.66;
+    let g = 0;
+    for (let k = 0; k < 5; k++) g += terrainH(lip.x + Math.cos(k * 1.2566) * R * 0.6, lip.z + Math.sin(k * 1.2566) * R * 0.6, idx);
+    return { lip, out, ok: clear && inBasin, g: g / 5 };
+  };
+  const d2r = Math.PI / 180;
+  if (lr.arc && c.idle) {
+    const C = [];
+    for (let a = lr.arc[0]; a <= lr.arc[1] + 1e-6; a += 10) { const q = at(in0 + a * d2r); if (q.ok) C.push(q); }
+    if (C.length) {
+      let lo = 1e9, hi = -1e9;
+      for (const q of C) { lo = Math.min(lo, q.g); hi = Math.max(hi, q.g); }
+      const want = lo + (hi - lo) * c.idle[0] / (c.idle[0] + c.idle[1]);
+      let best = C[0];
+      for (const q of C) if (Math.abs(q.g - want) < Math.abs(best.g - want)) best = q;
+      return best;
+    }
+  }
+  const b = (lr.bear || 0) * d2r;
+  for (let k = 0; k < 24; k++) {
+    const q = at(in0 + b + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * 15 * d2r);
+    if (q.ok) return q;
+  }
+  return at(in0 + b);
 }
 
 export function makeBrooder(idx, cfg) {
@@ -367,6 +412,11 @@ export function makeBrooder(idx, cfg) {
     L.mouth.push({ hinge, sd, k, hook });
   }
   L.chitMats = { limbMat, armMat, mouthMat };
+  // HARDER WATER (site.js sleeper row `hard`; absent = shipped): a quicker hammer and a
+  // longer reach before she rears. The cycle's shape (guard, cock, trembling hold, fall)
+  // is unchanged, so every blow still telegraphs; there is just less time between them.
+  L.hammerT = c.hard && c.hard.hammerT || HAMMER_T;
+  L.threatR = c.hard && c.hard.threatR || 2.4;
 
   // ---- wards ----
   const wardScale = 4.2;
@@ -397,10 +447,13 @@ export function makeBrooder(idx, cfg) {
   // egg wakes her (brood.onTake); calmed, she walks back and settles over her brood,
   // which clears the way.
   {
-    const rp = riftPos(idx), out = V3(rp.x, 0, rp.z).normalize(), perp = V3(-out.z, 0, out.x);
+    const rp = riftPos(idx);
+    let out = V3(rp.x, 0, rp.z).normalize(), lip;
     // on the rift's LIP (its bowl is a deep funnel — sat in it she was a hole, not a
     // ridge), between the rift and the open ground, facing the way a diver comes
-    const lip = V3(rp.x, 0, rp.z).addScaledVector(out, -(16 * 2.7 + R * 0.55));
+    if (!c.lair) lip = V3(rp.x, 0, rp.z).addScaledVector(out, -(16 * 2.7 + R * 0.55));   // shipped, exactly
+    else ({ lip, out } = lairOf(idx, R, c));
+    const perp = V3(-out.z, 0, out.x);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     const nest = lip.clone().addScaledVector(perp, R * 2.8);
     L.brood = makeBrood(L, idx, nest, nest.clone().addScaledVector(out, -95));
@@ -1323,7 +1376,7 @@ export function updateBrooder(L, dt, t, player) {
   }
   // she rears on her own when the diver comes close (the lab's hold/rear override it)
   // blind, she keeps striking where she last saw him, until she gives the spot up
-  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * 2.4 && L.blindT < SIGHT_GIVEUP ? 1 : 0;
+  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP ? 1 : 0;
   // a fresh threat starts the hammer at the top of its guard, so the first blow is
   // always preceded by the full wind-up
   if (L.threatTarget > 0.5 && L.threat < 0.02) L.swingT = 0;
@@ -1334,7 +1387,7 @@ export function updateBrooder(L, dt, t, player) {
   // -> impact -> a recoil that bounces and settles
   L.swingT = (L.swingT || 0) + dt;
   {
-    const ph = (L.swingT % HAMMER_T) / HAMMER_T, prev = L.hamPh;
+    const ph = (L.swingT % L.hammerT) / L.hammerT, prev = L.hamPh;
     L.hamPh = ph;
     L.cock = ph < PH_COCK0 ? 0 : ph < PH_COCK1 ? ease((ph - PH_COCK0) / (PH_COCK1 - PH_COCK0)) : ph < PH_SLAM0 ? 1
       : ph < PH_SLAM1 ? 1 - Math.pow((ph - PH_SLAM0) / (PH_SLAM1 - PH_SLAM0), 1.6) : 0;

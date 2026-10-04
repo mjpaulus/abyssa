@@ -21,7 +21,8 @@ import * as K from './hoarderGeo.js';
 import { registerPaint } from '../../lib/paint.js';
 import { terrainH } from '../../world/terrain.js';
 import { setWardTargets, wardGuardCount } from '../../world/predators.js';
-import { riftPos, WORLD_R } from '../../config.js';
+import { riftPos, WORLD_R, RIFT_R } from '../../config.js';
+import { wreckSites } from '../../world/wrecks.js';
 import { survival } from '../../systems/survival.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
@@ -436,6 +437,19 @@ function shimmerTex() {
 }
 
 // ---- build ----------------------------------------------------------------------------
+// Where a remote site's furnace stands: the row's bearing and radius, nudged in 15-degree
+// steps until it is clear of the rift bowl and the zone's wreck. Pure function of the row.
+function furnaceAt(idx, lair) {
+  const rp = riftPos(idx), a0 = Math.atan2(-rp.z, -rp.x), r = WORLD_R * (lair.r || 0.30);
+  const W = wreckSites()[Math.min(idx, 2)], b = (lair.bear || 0) * Math.PI / 180;
+  for (let k = 0; k < 24; k++) {
+    const a = a0 + b + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 12;
+    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    if (Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + 45 && Math.hypot(x - W.x, z - W.z) > 45) return V3(x, 0, z);
+  }
+  return V3(Math.cos(a0 + b) * r, 0, Math.sin(a0 + b) * r);
+}
+
 export function makeHunter(idx, cfg) {
   let c = cfg;
   if (c.nSigils > SIGIL_POOL_N) c = Object.assign({}, c, { nSigils: SIGIL_POOL_N });
@@ -454,9 +468,21 @@ export function makeHunter(idx, cfg) {
     suckK: 0.19, sculpted: false, spd: 0, jetPh: 0, contract: 0, inflate: 0, spread: 1, finPh: 0, accS: V3(), fwdPrev: V3(0, 0, 1), stunT: 0, loll: { x: 0, v: 0 }, tip: [{ x: 0, v: 0 }, { x: 0, v: 0 }], armsInit: false
   };
 
+  // HARDER WATER (site row `hard`; absent = shipped): he circles a shorter while before he
+  // strikes, swims faster, his strike connects from further off and the furnace's fire
+  // holds him a shorter while. The wind-up (0.9 s), the ink break and the flare stun stay.
+  const hk = c.hard || {};
+  L.hCircle = hk.circleT || 7; L.hStun = hk.stunT || 10; L.hHit = hk.hitR || 7;
+  if (hk.speed) L.speed = hk.speed;
+  // IDLE (site row): how high over the diver he circles; [a, b] lifts him toward the top
+  // of his band (shipped: 8 u). Absent at home.
+  L.circleY = c.idle ? 8 + (c.idle[0] / (c.idle[0] + c.idle[1]) - 0.5) * 24 : 8;
+
   // ---- the field: the last furnace, cold stumps, scorch ----
   const rp = riftPos(idx), awayRift = V3(-rp.x, 0, -rp.z).normalize();
-  const F = V3(awayRift.x * WORLD_R * 0.30, 0, awayRift.z * WORLD_R * 0.30);
+  // OWN WATER: a remote row's `lair` swings the furnace round the basin (bear, degrees
+  // off the shipped away-from-the-rift bearing) and out (r, of WORLD_R); home: shipped.
+  const F = c.lair ? furnaceAt(idx, c.lair) : V3(awayRift.x * WORLD_R * 0.30, 0, awayRift.z * WORLD_R * 0.30);
   F.y = terrainH(F.x, F.z, idx);
   L.furnace = { pos: F, lit: false, heat: 0, top: V3(F.x, F.y + 28, F.z), found: false, stumps: [], stumpFound: false };
   const crust = crustMaps();
@@ -707,7 +733,7 @@ export function makeHunter(idx, cfg) {
     return L.probe();
   };
   L.probe = () => ({
-    kind: 'hunter', state: L.state, furnace: L.furnace.lit, heat: +L.furnace.heat.toFixed(2), stun: +L.stun.toFixed(1),
+    kind: 'hunter', state: L.state, furnace: L.furnace.lit, fpos: L.furnace.pos.toArray().map(v => +v.toFixed(1)), heat: +L.furnace.heat.toFixed(2), stun: +L.stun.toFixed(1),
     pos: L.pos.toArray().map(v => +v.toFixed(1)), calmed: L.calmed, remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
     wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, kept: wardGuardCount(L.sigils.indexOf(g)) }))
   });
@@ -857,7 +883,7 @@ function startStrike(L, target) {
   L.strikeTo.copy(target || L.aim);
 }
 function stunHim(L) {
-  L.state = 'stunned'; L.stT = 0; L.stun = 10; L.stunT = 0;
+  L.state = 'stunned'; L.stT = 0; L.stun = L.hStun; L.stunT = 0;
   L.loll.v += 1.5;
   L.pendingMsg = L.pendingMsg || 'THE FIRE BLINDS HIM. HIS SHOAL SCATTERS. HE HANGS IN THE GLOW.';
 }
@@ -1123,13 +1149,13 @@ export function updateHunter(L, dt, t, player) {
     // circle the diver out in the dark, closing, then strike
     L.orbitA += dt * 0.22;
     const R = 55 - Math.min(20, L.stT * 2);
-    _t.set(player.pos.x + Math.cos(L.orbitA) * R, player.pos.y + 8 + 6 * Math.sin(L.t * 0.4), player.pos.z + Math.sin(L.orbitA) * R).sub(L.pos);
+    _t.set(player.pos.x + Math.cos(L.orbitA) * R, player.pos.y + L.circleY + 6 * Math.sin(L.t * 0.4), player.pos.z + Math.sin(L.orbitA) * R).sub(L.pos);
     L.fwd.lerp(_t.normalize(), Math.min(1, dt * 1.2)).normalize();
     jet(L, dt, speedK, 1.6);
     L.pos.addScaledVector(L.fwd, L.spd * dt);
     spreadT = 1 + 0.25 * L.inflate - 0.6 * L.contract;
     finAmp = 0.012 + 0.010 * (1 - L.contract); finRate = 3.5 + 3 * L.contract;
-    if (L.stT > 7 && !L.calmed) { L.aim = player.pos.clone(); startStrike(L); }
+    if (L.stT > L.hCircle && !L.calmed) { L.aim = player.pos.clone(); startStrike(L); }
   } else if (L.state === 'strike') {
     // drive through where the diver was, arms-first, tentacles out
     _t.copy(L.strikeTo).sub(L.pos);
@@ -1164,7 +1190,7 @@ export function updateHunter(L, dt, t, player) {
       // ink in his line breaks the strike
       if (L.state === 'strike' && player.inkAt && performance.now() - player.inkAt < 4000 && pd < 30) { L.state = 'circle'; L.stT = 0; L.orbitA += Math.PI; ev.msg = ev.msg || 'THE INK BREAKS HIS LINE.'; }
       // the hit
-      if (L.state === 'strike' && pd < 7 && !L.hitThisStrike) {
+      if (L.state === 'strike' && pd < L.hHit && !L.hitThisStrike) {
         L.hitThisStrike = true;
         _r.copy(player.pos).sub(L.pos).normalize();
         player.vel.addScaledVector(_r, 40).addScaledVector(L.fwd, 20);

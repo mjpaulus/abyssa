@@ -352,6 +352,15 @@ let wDay = 1, wStorm = 0, wFlash = 0, wDeep = 0;
 // near-surface bite reads env.sky and the deeper bite reads env.below, so the light and
 // the water are provably on the same eased curve. Omitted (or absent), both fall back to
 // raw storm — which is exactly what shipped, so the anchor is untouched.
+// OWN WATER: site.js's `light` row (null = the shipped stops). Colour multipliers per
+// channel for the ambient, the hemisphere's two ends and the key, eased in by depth below
+// the interface. Set by game.js at boot and on every reseed; read each frame, no copy.
+let siteLight = null;
+export function setSiteLight(row) { siteLight = row || null; }
+function tintBy(c, m, w) {
+  if (!m) return;
+  c.r *= 1 + (m[0] - 1) * w; c.g *= 1 + (m[1] - 1) * w; c.b *= 1 + (m[2] - 1) * w;
+}
 export function setWeatherLight(day, storm, flash, env) {
   wDay = day; wFlash = flash;
   wStorm = env ? env.sky : storm;
@@ -503,6 +512,15 @@ export function updateLighting(depth01) {
     hemi.color.lerp(MOON_SKY, moonK * 0.45 * air);
     hemi.intensity *= lift;
     ambient.intensity *= lift;
+  }
+  // OWN WATER (roadmap/fly-remote-sites.md): the anchorage's light. Pallid's chalk floor
+  // bounces pale light back up into the column; the Burned Ground's ash water arrives warm
+  // and dim. Below the interface only (1 - air), so every deck frame is the same sky; at
+  // home siteLight is null and this line never runs.
+  if (siteLight) {
+    const w = 1 - air;
+    tintBy(ambient.color, siteLight.amb, w); tintBy(hemi.color, siteLight.sky, w);
+    tintBy(hemi.groundColor, siteLight.gnd, w); tintBy(sun.color, siteLight.sun, w);
   }
   // The shadow map only ever contains the raft, so stop rendering it the moment the
   // camera is deep enough that the raft is a dot, or dark enough that it casts nothing.

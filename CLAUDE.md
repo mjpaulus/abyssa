@@ -329,6 +329,19 @@ against explicit contracts and reviewed on return.
   a pure function of siteParams('creatures').rng (build AND reseed install a
   fresh stream; trailer geometry draws from its own fixed GEO_RNG so boot ==
   arrive-back). Soak: 12 voyages flat at 353 programs / 148 geometries.
+  OWN WATER (2026-10-04, roadmap/fly-remote-sites.md, Michael: "Give each its own water"):
+  site rows now carry water / light / grade / floor / shape / vents / wrecks and the
+  sleeper rows' idle / lair / hard are LIVE (they were dead data). All null at home.
+  Water rides three shared fog-chunk vec4s (abyssaSite/SiteT/SiteK, DELTAS from the shipped
+  constants, installed like abyssaStyle) + SITE_SURF on the CPU palette, so a voyage moves
+  fog, dome, far sea and shafts together with zero recompiles. Sleepers: Velkath swings
+  round her rift's lip (lair.bear, or lair.arc + idle picks the lip height), Orune turns
+  about her trawler (lair.bear / idle), Mhor's furnace moves (lair.bear/r); `hard` =
+  hammerT/threatR, pull/hold/lashCd/grabR, circleT/stunT/hitR/speed. Never more lights.
+  Probe `__chart.fp()` (terrain.js terrainFingerprint: FNV-1a of f32 terrainH, 32x32 grid
+  over +-260 x 3 zones): home 8ff7cdbd (UNCHANGED), Pallid c265183a, Burned
+  e7dbcb88. (The old 5e6cfe45/ef14da09 recipe is not in the repo and could not be
+  reproduced.) sleeperFingerprint(i) home: 49a7a176 ac04921e ce3eaf9d.
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own

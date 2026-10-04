@@ -360,6 +360,27 @@ for (const L of [...ZONE_LOOKS, ...Object.values(WX_LOOKS)]) {
   const a = L.air || m, la = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
   L.airT = [a[0] / la, a[1] / la, a[2] / la];
 }
+// OWN WATER (roadmap/fly-remote-sites.md): an anchorage may carry its own zone looks
+// (site.js `grade`: per-zone overrides of the keys above). The shipped reef look is a
+// mossy-teal push that made every site's water the same teal; Pallid's chalk and the
+// Burned Ground's ash need their own. setSiteGrade builds the three looks ONCE per voyage
+// (a load event) and resolveStack reads whichever set is active; null = the shipped
+// table objects themselves, so home is the shipped grade bit for bit.
+function deriveLook(L) {
+  const m = L.mood, l = 0.2126 * m[0] + 0.7152 * m[1] + 0.0722 * m[2];
+  const v = [m[0] - l, m[1] - l, m[2] - l], n = Math.hypot(v[0], v[1], v[2]) || 1;
+  L.moodDir = [v[0] / n, v[1] / n, v[2] / n];
+  L.tint = [m[0] / l, m[1] / l, m[2] / l];
+  const c = L.cool, lc = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  L.coolT = [c[0] / lc, c[1] / lc, c[2] / lc];
+  const a = L.air || m, la = 0.2126 * a[0] + 0.7152 * a[1] + 0.0722 * a[2];
+  L.airT = [a[0] / la, a[1] / la, a[2] / la];
+  return L;
+}
+let zoneLooks = ZONE_LOOKS;
+export function setSiteGrade(rows) {
+  zoneLooks = rows ? ZONE_LOOKS.map((L, i) => rows[i] ? deriveLook(Object.assign({}, L, rows[i])) : L) : ZONE_LOOKS;
+}
 // Working accumulators (zero-alloc): slope, offset, power, mood, satUp, satDn.
 const _stk = { film: [1, 0.3, 0, 1], toe: [0, 0, 0], slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
 const _stkTmp = { film: [1, 0.3, 0, 1], toe: [0, 0, 0], slope: [1, 1, 1], offset: [0, 0, 0], power: [1, 1, 1], mood: [0, 0, 0], tint: [1, 1, 1], coolT: [1, 1, 1], airT: [1, 1, 1], band: [0, 0], satUp: 0, satDn: 0, wash: 0 };
@@ -396,7 +417,7 @@ function resolveStack(airK) {
   // Zone band: continuous zone index from the camera's height, blended across each gap.
   const zf = Math.max(0, Math.min(2, (-y - 40) / (ZONE_H + ZONE_GAP)));
   const zi = Math.min(1, Math.floor(zf)), zt = sstep(0.62, 1.0, zf - zi);
-  const zone = lookLerp(_stk, ZONE_LOOKS[zi], ZONE_LOOKS[Math.min(2, zi + 1)], zt);
+  const zone = lookLerp(_stk, zoneLooks[zi], zoneLooks[Math.min(2, zi + 1)], zt);
   // Weather stop around the ring, then toward the storm look by sea state.
   const r = Math.max(0, Math.min(3.999, SKY.ring || 0)), ri = Math.floor(r);
   const wx = lookLerp(_stkTmp, WX_RING[ri], WX_RING[ri + 1], r - ri);
