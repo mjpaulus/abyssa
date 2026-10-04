@@ -239,3 +239,70 @@ export function resolveHoseNode(p, R, prevY) {
 }
 // Dev: the struts, for probes.
 export const HOSE_GALLOWS = GALLOWS_SEGS;
+
+// ---- THE DECK BOOM (deck-camera-pullin, 2026-10-04) -------------------------------------
+// Michael: "Closer on deck (~6)". A camera six back stands OVER the planks, among the gear,
+// where nine back it was always off the boat. game.js walks the boom from the top of Sal's
+// helmet to the lens and asks this, per sample, whether a raft-local point is inside something solid
+// (grown by `m`, the lens's own clearance). The solid set is the deck lines above as
+// columns, the planks over the footprint, and the tall iron the deck lines leave out
+// because a boot never meets it: the gallows legs (GALLOWS_SEGS, not the wires), the jib out
+// to the sheave, the lantern bracket, and the pump's tall parts. The pump's deck line is a
+// walking outline padded out to its neighbours (the no-slot rule) and runs to z -0.38, a
+// hand from the spawn line; as a 1.95 column it clipped the spawn boom on every roll of
+// the swell. So for the lens the pump is its block to 1.15 plus its real tall parts as
+// capsules: flywheel, engine barrel and hot-bulb head, receiver, stack. Column heights
+// here are the VISIBLE tops (the hose TOP table above is a drape height). Zero allocation.
+const CAM_TOP = { 'hose reel': 1.40, 'keepsake shelf': 1.30, 'chart table': 1.15 };
+for (const o of C) o.camTop = CAM_TOP[o.name] || o.top;
+// The guy wires (r 0.026 / 0.022) are left out: a boom that jumped in to 2.2 for a wire two
+// centimetres thick was measured doing exactly that in the walk lane under the gallows.
+// A wire that crosses the lens is a thin line through the frame for a moment; a boom that
+// lurches is the whole frame.
+const CAM_SEGS = [];
+for (let i = 0; i < GALLOWS_SEGS.length; i += 7) if (GALLOWS_SEGS[i + 6] > 0.05) for (let k = 0; k < 7; k++) CAM_SEGS.push(GALLOWS_SEGS[i + k]);
+{
+  const seg = (a, b, r) => CAM_SEGS.push(RX(a[0], a[2]), a[1], RZ(a[0], a[2]), RX(b[0], b[2]), b[1], RZ(b[0], b[2]), r);
+  seg([0, 3.35, 4.85], [0, 3.30, 5.60], 0.11);              // the jib, knuckle to sheave (+ the knuckle ball)
+  seg([-0.40, 3.28, 4.60], [-0.55, 2.85, 4.50], 0.12);      // lantern bracket and lantern
+}
+// pump.js, group at PUMP_POS (0.15, 0.11, -1.20), no yaw
+CAM_SEGS.push(
+  0.15 - 1.00, 1.30, -1.20, 0.15 - 1.00, 2.50, -1.20, 0.17,     // exhaust stack to the rain cap
+  0.15 - 0.55, 0.93, -0.74, 0.15 - 0.55, 0.93, -0.74, 0.60,     // flywheel (FW 0.82, r 0.58, belt plane z 0.46)
+  0.15 - 0.55, 1.00, -1.20, 0.15 - 0.55, 1.93, -1.20, 0.30,     // engine barrel, fins and hot-bulb head
+  0.15 + 0.19, 1.77, -1.34, 0.15 + 1.17, 1.77, -1.34, 0.27);    // air receiver
+// Dev: what the last blocked query hit (a CAM_SEGS index, 'planks', or a deck line's name).
+export let camBlockWhy = '';
+export function camBlockedLocal(x, y, z, m) {
+  const G = CAM_SEGS;
+  for (let i = 0; i < G.length; i += 7) {
+    const ax = G[i], ay = G[i + 1], az = G[i + 2], sx = G[i + 3] - ax, sy = G[i + 4] - ay, sz = G[i + 5] - az;
+    const rr = G[i + 6] + m;
+    const l2 = sx * sx + sy * sy + sz * sz;   // 0 for a sphere (the flywheel): 0/0 would never hit
+    let t = l2 > 1e-12 ? ((x - ax) * sx + (y - ay) * sy + (z - az) * sz) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x - (ax + sx * t), ey = y - (ay + sy * t), ez = z - (az + sz * t);
+    if (ex * ex + ey * ey + ez * ez < rr * rr) { camBlockWhy = i / 7; return true; }
+  }
+  if (x > DECK_E || x < -DECK_E || z > DECK_E || z < -DECK_E) return false;
+  if (y < DECK_Y - HULL_UNDER) return false;
+  if (y < DECK_Y + m) { camBlockWhy = 'planks'; return true; }
+  for (let i = 0; i < C.length; i++) {
+    const o = C[i];
+    if (!o.camTop || y >= o.camTop + m) continue;
+    if (o.k === 0) {
+      const dx = x - o.cx, dz = z - o.cz;
+      const lx = dx * o.c + dz * o.s, lz = -dx * o.s + dz * o.c;
+      const ex = Math.max(Math.abs(lx) - o.hx, 0), ez = Math.max(Math.abs(lz) - o.hz, 0);
+      if (ex * ex + ez * ez < m * m) { camBlockWhy = o.name; return true; }
+    } else {
+      const sx = o.bx - o.ax, sz = o.bz - o.az, l2 = sx * sx + sz * sz;
+      let t = l2 > 1e-12 ? ((x - o.ax) * sx + (z - o.az) * sz) / l2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const ex = x - (o.ax + sx * t), ez = z - (o.az + sz * t), rr = o.r + m;
+      if (ex * ex + ez * ez < rr * rr) { camBlockWhy = o.name; return true; }
+    }
+  }
+  return false;
+}
