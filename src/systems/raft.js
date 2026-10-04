@@ -19,7 +19,7 @@ import { scene, camera, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { V3 } from '../lib/math.js';
-import { makeGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftRopeSet, raftCanvasSet,
+import { makeWarmGlow, raftWoodSet, raftIronSet, raftBrassSet, raftPaintSet, raftRopeSet, raftCanvasSet,
   raftLeatherSet, raftSetsBench } from '../lib/textures.js';
 import { survival } from './survival.js';
 import { surfaceHeightAt, stormLevel, onSkyEnv, setRaftContact, setRaftFrame } from '../world/water.js';
@@ -503,7 +503,11 @@ export function buildRaft() {
   // halo the moment the camera came above water in daylight. It is now driven by how
   // deep the CAMERA is and by the time of day: a tight warm point on deck at noon, the
   // full long-range beacon once you are down in the fog, and warm again at night.
-  beaconGlow = makeGlow(0xffb673, 1.2);
+  // Fog OFF with its own fade (lib/textures.js warmGlow). Fogged, an additive sprite adds
+  // the water's own colour times its alpha, so from 100+ units down the beacon arrived as a
+  // teal-green dot — the home light, the one warm thing up there, drawn in water colour.
+  // Now it is amber at every depth and fades by its own long curve (gone by 260 u).
+  beaconGlow = makeWarmGlow(0xffb673, 1.2, { near: 40, far: 260, nearW: 0.35 });
   beaconGlow.position.copy(dav.lampPos);
   raft.add(beaconGlow);
 

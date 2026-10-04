@@ -36,6 +36,47 @@ export function makeGlow(color, scale) {
   return s;
 }
 
+// ---- WARM GLOW: an additive sprite that stays warm at every distance ----------------
+// makeGlow's sprite is FOGGED by default, and water.js's per-channel fog chunk computes
+// frag * tr + J * (1 - tr): for an ADDITIVE sprite the second term is the water's own
+// colour times the sprite's alpha, so with range a warm halo stops being a warm light and
+// becomes a disc of teal-green water painted onto the frame (the relic markers and
+// porthole halos read lime at ~30 u, bitumen seeps green at 50). The house rule for
+// additive light (vents.js, hoard.js) is fog OFF and an honest fade of its own; this is
+// that rule as one shared program, so a static glow needs no per-frame CPU loop:
+//   alpha *= mix( lin, quad^2, nearW ),  lin = 1 - d/far,  quad = 1 - d/near
+// (d = view distance to the sprite's centre) -- 1 at the sprite, a near swell that dies
+// by `near`, a faint far presence that dies by `far` -- and, optionally, the halo grows
+// with range as murk grows a lamp's halo: scale *= 1 + min(swellMax, d * swell).
+// The authored opacity/scale (and any CPU animation of them) still apply on top.
+// One program for every warm glow (customProgramCacheKey); uniforms are per material.
+export function warmGlow(sprite, o = {}) {
+  const m = sprite.material;
+  m.fog = false;
+  const u = {
+    uGlowFade: { value: new THREE.Vector3(o.near ?? 25, o.far ?? 90, o.nearW ?? 0.6) },
+    uGlowSwell: { value: new THREE.Vector2(o.swell ?? 0, o.swellMax ?? 0) }
+  };
+  m.userData.warmGlow = u;
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.uGlowFade = u.uGlowFade;
+    sh.uniforms.uGlowSwell = u.uGlowSwell;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform vec2 uGlowSwell;\nvarying float vGlowD;')
+      .replace('vec2 alignedPosition', 'vGlowD = length( mvPosition.xyz );\n\tscale *= 1.0 + min( uGlowSwell.y, vGlowD * uGlowSwell.x );\n\tvec2 alignedPosition');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uGlowFade;\nvarying float vGlowD;')
+      .replace('#include <alphahash_fragment>', '#include <alphahash_fragment>\n' +
+        '\tfloat gfLin = clamp( 1.0 - vGlowD / uGlowFade.y, 0.0, 1.0 );\n' +
+        '\tfloat gfNear = clamp( 1.0 - vGlowD / uGlowFade.x, 0.0, 1.0 );\n' +
+        '\tdiffuseColor.a *= mix( gfLin, gfNear * gfNear, uGlowFade.z );');
+  };
+  m.customProgramCacheKey = () => 'warmGlow';
+  m.needsUpdate = true;
+  return sprite;
+}
+export const makeWarmGlow = (color, scale, o) => warmGlow(makeGlow(color, scale), o);
+
 export function canvas2d(size) {
   const c = document.createElement('canvas');
   c.width = c.height = size;

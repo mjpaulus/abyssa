@@ -1506,7 +1506,15 @@ export function updateHoarder(L, dt, t, player) {
 // A slot changing source fades out where it is, jumps, and fades in: never a pop.
 const _sw = V3();
 // the rig's numbers in one place (window.__stageO for look-dev)
-const SO = { heapI: 90, heapR: 32, heapS: 1.0, webI: 110, webS: 0.25, cradleI: 40, coilI: 42, coilR: 26, coilS: 0.1, seatI: 40 };
+// THE HEAP's haze (octfix 2026-10-04): at scatter 1.0 in FLAME it was the brightest thing
+// in every frame of the hoard — the lamp-B in-scatter (water.js lampSeg) loses its red first along the
+// eye leg, so from the trawler side, 40-45 u off, it arrived as a lime/greenish-yellow sun
+// (R/G 1.16 at its core) over the hoard lanterns and the ship's lamp, and from the raft
+// side it washed the whole frame yellow-green. Her oldest lanterns burn low and RED (the
+// colour that survives that leg reads amber, R/G ~1.5, the hoard's own hue) and scatter
+// at 0.4: still the backlight she silhouettes against, no longer the key of the scene.
+// Her surfaces see the same light at heapI; only its colour and its share of the haze moved.
+const SO = { heapI: 90, heapR: 32, heapS: 0.4, heapCol: 0xff6e22, webI: 110, webS: 0.25, cradleI: 40, coilI: 42, coilR: 26, coilS: 0.1, seatI: 40 };
 if (typeof window !== 'undefined') window.__stageO = SO;
 function stageHoard(L, dt) {
   const H = L.hoard, st = L.stage;
@@ -1555,6 +1563,7 @@ function stageHoard(L, dt) {
     pl.decay = 2.0;
     if (s.src === 30) {
       pl.position.copy(L.heap.pos);
+      pl.color.setHex(SO.heapCol);
       pl.distance = SO.heapR;
       pl.userData.scatter = SO.heapS; pl.userData.lampBias = 4;
     } else if (s.src < 10) {

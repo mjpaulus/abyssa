@@ -53,10 +53,17 @@ function rigMatrix(z) {
 }
 // Bake a frame-authored node's meshes into raft space: geometry takes the matrix, the
 // mesh lands as a direct, identity-transformed child of the raft so consolidate() can
-// still merge it across builders.
+// still merge it across builders. Only a mesh sitting at IDENTITY in the frame may take
+// the matrix into its geometry: a mesh carrying its own transform (the lantern flame is
+// placed by .position, and raft.js scales it about that origin) would have its geometry
+// turned and its position left in the OLD frame — which is how the flame came to burn
+// 7 units outboard of its cage at (0.55, 2.9, 9.4) after the +PI/2 move. Those move as
+// nodes instead, so they keep their own origin and land exactly where the frame put them.
+const _flatM = new THREE.Matrix4();
 function flatten(tmp, group, m) {
   for (const c of tmp.children.slice()) {
-    if (c.isMesh) c.geometry.applyMatrix4(m);
+    c.updateMatrix();
+    if (c.isMesh && c.matrix.equals(_flatM.identity())) c.geometry.applyMatrix4(m);
     else c.applyMatrix4(m);
     group.add(c);
   }
@@ -296,14 +303,17 @@ export function buildDavit(group, mats) {
   lampGlass.position.set(TOP[0], cageY, TOP[2]);
   lampGlass.castShadow = false;
   rig.add(lampGlass);
-  const lampPos = new THREE.Vector3(TOP[0], cageY, TOP[2]);
 
   P.bake();
   PL.bake();
   const headFrame = HEAD.clone();
   const m = rigMatrix(RIG_Z);
-  HEAD.applyMatrix4(m); lampPos.applyMatrix4(m);
+  HEAD.applyMatrix4(m);
   flatten(rig, group, m);
   flatten(lad, group, rigMatrix(LADDER_Z));
+  // ONE anchor for everything that belongs to the flame: raft.js hangs the halo sprite
+  // and the deck light on lampPos, so it is read back off the flame node AFTER it moved
+  // with the cage, never computed a second time beside it.
+  const lampPos = lampGlass.position.clone();
   return { hoseHead: HEAD, headFrame, lampGlass, lampPos };
 }

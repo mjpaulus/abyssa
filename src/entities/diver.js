@@ -1722,16 +1722,39 @@ registerPaint(bubMat, { hero: true });   // a bubble is a mirror at grazing inci
 // trace in the deep zones) — the same normalisation the marine snow uses — so the
 // shallows keep the rim they were tuned with and the abyss does not.
 const uBubAmb = { value: 1 };
+// THE MIRROR ONLY SHOWS WHAT IS THERE (octfix, 2026-10-04). The envMap is core.js's
+// RoomEnvironment studio — softboxes — at intensity 2, and three adds it to every bubble
+// unconditionally (radiance -> indirectSpecular, iblIrradiance -> the diffuse and the
+// multiscatter term). Down in zones 1 and 2, where the water's own light is a trace, that
+// made the exhaust the brightest white thing on screen: self-lit studio reflections in
+// black water. A bubble reflects the light that actually reaches it, so the IBL is
+// scaled, between lights_fragment_maps and lights_fragment_end, by what the bubble
+// receives: the water's radiance (uBubAmb: 1 on the zone-0 floor, more in the shallows,
+// a trace in the deep) plus the direct light on it (the lantern, the sun through the
+// surface — bubD, the same irradiance proxy the rim uses), the direct share taking that
+// light's COLOUR (a bubble by the lantern glints warm; the studio is white). Shallow water
+// (uBubAmb ~1) is unchanged; the deep keeps a faint silver glint and the rim, not a lamp.
 bubMat.onBeforeCompile = (sh) => {
   sh.uniforms.uBubAmb = uBubAmb;
   sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nuniform float uBubAmb;')
+    .replace('#include <lights_fragment_maps>',
+    '#include <lights_fragment_maps>\n' +
+    'vec3 bubIrrD = reflectedLight.directDiffuse / max( diffuseColor.rgb, vec3( 0.05 ) ) * 3.1416;\n' +
+    'float bubDL = dot( bubIrrD, vec3( 0.2126, 0.7152, 0.0722 ) ), bubD = min( bubDL, 1.2 );\n' +
+    'vec3 bubEnvK = min( vec3( uBubAmb * 0.85 ) + bubIrrD / max( bubDL, 1e-3 ) * min( bubDL, 1.0 ) * 0.35, vec3( 1.0 ) );\n' +
+    'radiance *= bubEnvK; iblIrradiance *= bubEnvK;')
     .replace('#include <lights_fragment_end>',
     '#include <lights_fragment_end>\n' +
     'float bubFr = pow( 1.0 - abs( dot( normalize( vNormal ), normalize( vViewPosition ) ) ), 3.0 );\n' +
     'vec3 bubIrr = ( reflectedLight.directDiffuse + reflectedLight.indirectDiffuse ) / max( diffuseColor.rgb, vec3( 0.05 ) );\n' +
-    'float bubD = min( dot( reflectedLight.directDiffuse / max( diffuseColor.rgb, vec3( 0.05 ) ), vec3( 0.2126, 0.7152, 0.0722 ) ) * 3.1416, 1.2 );\n' +
     'reflectedLight.indirectSpecular += vec3( 0.60, 0.71, 0.80 ) * bubFr * 0.60 * uBubAmb\n' +
-    '  + bubIrr / max( dot( bubIrr, vec3( 0.333 ) ), 1e-4 ) * bubFr * 0.45 * bubD;');
+    '  + bubIrr / max( dot( bubIrr, vec3( 0.333 ) ), 1e-4 ) * bubFr * 0.45 * bubD;\n' +
+    // a bubble is clear: it does not scatter light back like a solid. The pale albedo is
+    // the shallows' read (sunlit and skylit from every side) and stays there; in the deep,
+    // where the lantern is the only light, its matte body is what read as a lit white
+    // ball, so it fades to 15% and the glint is left to the mirror and the rim
+    'float bubBody = mix( 0.15, 1.0, smoothstep( 0.3, 1.0, uBubAmb ) );\n' +
+    'reflectedLight.directDiffuse *= bubBody; reflectedLight.indirectDiffuse *= bubBody;');
 };
 bubMat.customProgramCacheKey = () => 'salBubbleRim';
 const bubbles = new THREE.InstancedMesh(new THREE.SphereGeometry(1, 12, 8), bubMat, BUBN);
