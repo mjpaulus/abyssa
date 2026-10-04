@@ -54,6 +54,7 @@ const FOOT_SINK = 8;
 
 const uIsle = {
   uIsT: { value: 0 },
+  uIsAir: { value: 1 },
   // per island: (cx, cz, sea height at centre, 0) and (dh/dx, dh/dz, 0, 0)
   uSeaC: { value: Array.from({ length: MAX_ISLES }, () => new THREE.Vector4()) },
   uSeaG: { value: Array.from({ length: MAX_ISLES }, () => new THREE.Vector4()) },
@@ -62,9 +63,9 @@ const uIsle = {
   uCloudT: { value: null },
   uCloudW: { value: new THREE.Vector4(0, 0, 4096, 0) },
   uSunW: { value: new THREE.Vector3(SUN.dir.x, SUN.dir.y, SUN.dir.z) },
-  uRockC: { value: new THREE.Color(0x26272a) },
-  uSaltC: { value: new THREE.Color(0x6a6c68) },
-  uWeedC: { value: new THREE.Color(0x0d120e) }
+  uRockC: { value: new THREE.Color(0x4b4c4e) },
+  uSaltC: { value: new THREE.Color(0x9a9b94) },
+  uWeedC: { value: new THREE.Color(0x1b211c) }
 };
 
 const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, metalness: 0, flatShading: true });
@@ -86,7 +87,7 @@ varying float vWL;`)
   }`);
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', `#include <common>
-uniform float uIsT;
+uniform float uIsT, uIsAir;
 uniform vec3 uSplash, uSunW, uRockC, uSaltC, uWeedC;
 uniform sampler2D uCloudT;
 uniform vec4 uCloudW;
@@ -121,10 +122,10 @@ float isN( vec2 p ){
   alb = mix( alb, uWeedC, weed * 0.75 );
   // The sea breaking at the foot: a white wash that surges up the rock with the swell.
   float surge = 0.5 + 0.5 * sin( uIsT * 1.25 + dot( iwp.xz, vec2( 0.21, 0.17 ) ) + n1 * 2.2 );
-  float fTop = uSplash.z * ( 0.35 + 0.85 * surge );
-  float band = ( 1.0 - smoothstep( fTop * 0.4, fTop, hW ) ) * smoothstep( -0.8, -0.15, hW );
+  float fTop = uSplash.z * ( 0.45 + 0.80 * surge );
+  float band = ( 1.0 - smoothstep( fTop * 0.55, fTop, hW ) ) * smoothstep( -0.9, -0.2, hW );
   float lace = isN( iwp.xz * 0.9 + iwp.y * 0.6 + vec2( uIsT * 0.45, -uIsT * 0.32 ) ) * 0.5 + 0.5;
-  float foam = clamp( band * smoothstep( 0.15, 0.55, lace * 0.6 + surge * 0.5 ), 0.0, 0.85 );
+  float foam = clamp( band * smoothstep( 0.05, 0.45, lace * 0.6 + surge * 0.5 ), 0.0, 0.88 );
   alb = mix( alb, vec3( 0.60, 0.64, 0.64 ), foam );
   diffuseColor.rgb = alb;
   float iRough = mix( 0.93, 0.36, wet * ( 1.0 - foam ) );
@@ -139,6 +140,19 @@ float isN( vec2 p ){
     .replace('#include <lights_fragment_end>', `#include <lights_fragment_end>
   reflectedLight.directDiffuse *= iCloud;
   reflectedLight.directSpecular *= iCloud;`);
+  // STORM HAZE. The fog chunk's airlight is the painted ring's horizon, which water.js
+  // documents as reading brighter than the sky it meets in a gale — and under the
+  // volumetric lid the sky behind a crown is darker still. A black stack at 400 u then
+  // converged on that brighter value and stood out as a pale glowing spire (measured: a
+  // black-albedo needle at ~100 codes against a 60-66 cloud base and a 65-70 sea at its
+  // foot). Only this material scales its airlight down with the storm; the global chunk,
+  // and everything else it fogs, is untouched. Falls back to the plain chunk if the line
+  // it keys on ever changes.
+  const FOG = THREE.ShaderChunk.fog_fragment, KEY = 'vec3 A   = airLight( fogColor );';
+  if (FOG.includes(KEY)) {
+    sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>',
+      FOG.replace(KEY, 'vec3 A   = airLight( fogColor ) * uIsAir;'));
+  }
 };
 
 let mesh = null, geo = null;
@@ -192,9 +206,10 @@ function column(isle, c, rnd) {
   for (let j = 0; j < ROWS; j++) {
     const y = _rowY[j];
     const h01 = top > 0 ? Math.max(0, Math.min(1, y / top)) : 0;
-    let r = c.r * (1 - c.taper * h01);
-    if (y < 0) r *= 1 + 0.30 * Math.min(1, -y / 9);                 // the talus foot flares
-    if (j >= 5 && j < ROWS - 1) r *= 0.90 + rnd() * 0.16;          // jointed blocks
+    let r = c.r * (1 - c.taper * Math.pow(h01, 1.6));
+    if (y < 0) r *= 1 + c.foot * Math.min(1, -y / 9);              // the talus foot flares
+    if (j >= 5 && j < ROWS - 1) r *= 0.86 + rnd() * 0.20;          // jointed blocks
+    if (j >= ROWS - 2 && top > 3) r *= 0.84;                       // the crumbled crown of it
     _rowR[j] = r;
   }
   for (let j = 0; j < ROWS; j++) {
@@ -202,7 +217,8 @@ function column(isle, c, rnd) {
     const ly = Math.max(0, y);
     const ox = c.x + c.lx * ly, oz = c.z + c.lz * ly;
     for (let k = 0; k < n; k++) {
-      const px = ox + Math.cos(_ang[k]) * r * _rad[k], pz = oz + Math.sin(_ang[k]) * r * _rad[k];
+      const jr = j >= 4 && j < ROWS - 1 ? 1 + (rnd() - 0.5) * c.rough : 1;   // weathered, not machined
+      const px = ox + Math.cos(_ang[k]) * r * _rad[k] * jr, pz = oz + Math.sin(_ang[k]) * r * _rad[k] * jr;
       let py = y;
       if (j === 0) py = Math.min(-12, terrainH(px, pz, 0) - FOOT_SINK);
       else {
@@ -220,7 +236,8 @@ function column(isle, c, rnd) {
   // cap centre
   const tx = c.x + c.lx * Math.max(0, top), tz = c.z + c.lz * Math.max(0, top);
   let capY = 0; for (let k = 0; k < n; k++) capY += _prevY[k];
-  P[_v * 3] = tx; P[_v * 3 + 1] = capY / n + (rnd() - 0.35) * Math.min(1.2, 0.2 + c.r * 0.2); P[_v * 3 + 2] = tz;
+  P[_v * 3] = tx; P[_v * 3 + 2] = tz;
+  P[_v * 3 + 1] = capY / n + (c.spire ? c.r * (0.5 + rnd() * 0.6) : (rnd() - 0.35) * Math.min(1.2, 0.2 + c.r * 0.2));
   A[_v] = isle;
   const cap = _v; _v++;
   for (let j = 0; j < ROWS - 1; j++) {
@@ -237,14 +254,23 @@ function column(isle, c, rnd) {
   liveCols++;
 }
 
-const _c = { x: 0, z: 0, r: 0, n: 6, top: 0, taper: 0, lx: 0, lz: 0, tx: 0, tz: 0 };
-function stack(isle, rnd, x, z, r, top, o = 0) {
+// One stack. o (optional): { n, taper, lean, ldx, ldz (unit lean bearing, else random),
+// tilt (break-plane slope, else rolled), rough, foot, spire }. Fill-time only.
+const _c = { x: 0, z: 0, r: 0, n: 6, top: 0, taper: 0, lx: 0, lz: 0, tx: 0, tz: 0, rough: 0.12, foot: 0.3, spire: false };
+const NO = {};
+function stack(isle, rnd, x, z, r, top, o = NO) {
   _c.x = x; _c.z = z; _c.r = r; _c.top = top;
-  _c.n = 5 + Math.floor(rnd() * 3);
-  _c.taper = 0.10 + rnd() * 0.25;
-  const la = rnd() * Math.PI * 2, lean = 0.015 + rnd() * 0.06 + o;
+  _c.n = o.n || 5 + Math.floor(rnd() * 3);
+  _c.taper = o.taper != null ? o.taper : 0.15 + rnd() * 0.30;
+  _c.rough = o.rough != null ? o.rough : 0.10 + rnd() * 0.10;
+  _c.foot = o.foot != null ? o.foot : 0.30;
+  _c.spire = !!o.spire;
+  let la = rnd() * Math.PI * 2;
+  if (o.ldx != null) la = Math.atan2(o.ldz, o.ldx) + (rnd() - 0.5) * 0.7;
+  const lean = o.lean != null ? o.lean : 0.015 + rnd() * 0.05;
   _c.lx = Math.cos(la) * lean; _c.lz = Math.sin(la) * lean;
-  const ta = rnd() * Math.PI * 2, tilt = (rnd() < 0.3 ? 0.35 + rnd() * 0.45 : 0.06 + rnd() * 0.18);
+  const ta = rnd() * Math.PI * 2;
+  const tilt = o.tilt != null ? o.tilt : (rnd() < 0.4 ? 0.35 + rnd() * 0.5 : 0.08 + rnd() * 0.2);
   _c.tx = Math.cos(ta) * tilt; _c.tz = Math.sin(ta) * tilt;
   column(isle, _c, rnd);
 }
@@ -252,26 +278,39 @@ function stack(isle, rnd, x, z, r, top, o = 0) {
 function rubble(isle, rnd, s, count, rMin, rMax) {
   for (let q = 0; q < count; q++) {
     const a = rnd() * Math.PI * 2, d = rMin + rnd() * (rMax - rMin);
-    stack(isle, rnd, s.x + Math.cos(a) * d, s.z + Math.sin(a) * d, 1.6 + rnd() * 2.2, 0.1 + rnd() * 2.0);
+    stack(isle, rnd, s.x + Math.cos(a) * d, s.z + Math.sin(a) * d, 1.6 + rnd() * 2.4, 0.1 + rnd() * 2.0, { tilt: 0.2 + rnd() * 0.3 });
   }
+}
+
+// A low awash platform the stacks rise out of, so a crown reads as one broken mass of
+// rock and not a scatter of posts.
+function plinth(isle, rnd, x, z, r) {
+  stack(isle, rnd, x, z, r, 0.05 + rnd() * 0.55, { n: 7, taper: 0.05, rough: 0.22, foot: 0.45, tilt: 0.03 + rnd() * 0.05, lean: 0 });
 }
 
 function buildIsle(ii, s) {
   const rnd = stream(s.seed);
+  const ux = s.x / s.r, uz = s.z / s.r;            // outward from the raft
   if (s.kind === 'crown') {
-    // A broken crown: a ring of stacks with one wide gap, one standing tall.
-    const m = 8 + Math.floor(rnd() * 3), a0 = rnd() * Math.PI * 2, span = (290 + rnd() * 30) * Math.PI / 180;
-    const tall = Math.floor(rnd() * m), T = 17 + rnd() * 7;
+    // A broken crown: a splayed ring of stacks with one wide gap, one standing tall, on
+    // a drowned platform.
+    plinth(ii, rnd, s.x, s.z, s.rc * 0.78);
+    const m = 8 + Math.floor(rnd() * 3), a0 = rnd() * Math.PI * 2, span = (285 + rnd() * 30) * Math.PI / 180;
+    const tall = Math.floor(rnd() * m), T = 17 + rnd() * 6;
     for (let q = 0; q < m; q++) {
-      const a = a0 + span * q / (m - 1) + (rnd() - 0.5) * 0.12, d = s.rc * (0.82 + rnd() * 0.3);
-      let top = q === tall ? T : T * (0.22 + rnd() * 0.55);
-      if (q !== tall && rnd() < 0.22) top = 0.6 + rnd() * 2.4;     // snapped to a stump
-      stack(ii, rnd, s.x + Math.cos(a) * d, s.z + Math.sin(a) * d, 3.0 + rnd() * 2.4, top);
+      const a = a0 + span * q / (m - 1) + (rnd() - 0.5) * 0.14, d = s.rc * (0.80 + rnd() * 0.32);
+      const ca = Math.cos(a), sa = Math.sin(a);
+      let top = q === tall ? T : T * (0.20 + rnd() * 0.62);
+      if (q !== tall && rnd() < 0.25) top = 0.8 + rnd() * 2.6;     // snapped to a stump
+      stack(ii, rnd, s.x + ca * d, s.z + sa * d, 2.9 + rnd() * 2.3, top,
+        { ldx: ca, ldz: sa, lean: 0.03 + rnd() * 0.08, spire: q === tall || rnd() < 0.3 });
     }
-    rubble(ii, rnd, s, 4, s.rc * 0.2, s.rc * 1.5);
+    rubble(ii, rnd, s, 4, s.rc * 0.3, s.rc * 1.5);
   } else if (s.kind === 'needle') {
-    // One tall stack leaning off the shoal, a few stumps round its foot.
-    stack(ii, rnd, s.x, s.z, 5.4 + rnd() * 1.4, 25 + rnd() * 6, 0.02);
+    // One tall stack leaning off a ledge, a few stumps round its foot.
+    plinth(ii, rnd, s.x + (rnd() - 0.5) * 4, s.z + (rnd() - 0.5) * 4, 9 + rnd() * 3);
+    stack(ii, rnd, s.x, s.z, 5.6 + rnd() * 1.2, 25 + rnd() * 6,
+      { taper: 0.40 + rnd() * 0.15, lean: 0.03 + rnd() * 0.03, spire: true, tilt: 0.25 + rnd() * 0.2 });
     const m = 2 + Math.floor(rnd() * 2);
     for (let q = 0; q < m; q++) {
       const a = rnd() * Math.PI * 2, d = 7 + rnd() * 7;
@@ -279,13 +318,17 @@ function buildIsle(ii, s) {
     }
     rubble(ii, rnd, s, 5, 4, s.rc * 1.7);
   } else {
-    // Teeth: a low ragged line, the stumps of a wall the sea took.
-    const m = 5 + Math.floor(rnd() * 3), a = rnd() * Math.PI, ca = Math.cos(a), sa = Math.sin(a);
-    const hi = Math.floor(rnd() * m);
+    // Teeth: a low ragged line athwart the raft's line of sight — the stumps of a wall
+    // the sea took.
+    const a = Math.atan2(uz, ux) + Math.PI / 2 + (rnd() - 0.5) * 0.8, ca = Math.cos(a), sa = Math.sin(a);
+    const m = 5 + Math.floor(rnd() * 3), hi = 1 + Math.floor(rnd() * (m - 2));
+    plinth(ii, rnd, s.x + ca * s.rc * 0.45, s.z + sa * s.rc * 0.45, s.rc * 0.55);
+    plinth(ii, rnd, s.x - ca * s.rc * 0.45, s.z - sa * s.rc * 0.45, s.rc * 0.5);
     for (let q = 0; q < m; q++) {
-      const u = (q / (m - 1) - 0.5) * s.rc * 2.1, w = (rnd() - 0.5) * 5 + Math.sin(q * 1.3) * 3;
-      const top = q === hi ? 12 + rnd() * 5 : 3 + rnd() * 9;
-      stack(ii, rnd, s.x + ca * u - sa * w, s.z + sa * u + ca * w, 2.8 + rnd() * 1.9, top);
+      const u = (q / (m - 1) - 0.5) * s.rc * 2.2, w = (rnd() - 0.5) * 5 + Math.sin(q * 1.3) * 2.5;
+      const top = q === hi ? 12 + rnd() * 4 : 2.5 + rnd() * 8.5;
+      stack(ii, rnd, s.x + ca * u - sa * w, s.z + sa * u + ca * w, 2.6 + rnd() * 2.0, top,
+        { tilt: 0.3 + rnd() * 0.5, spire: rnd() < 0.35 });
     }
     rubble(ii, rnd, s, 4, 3, s.rc * 1.4);
   }
@@ -319,7 +362,8 @@ export function updateIslands(camY, t) {
   if (!vis) return;
   uIsle.uIsT.value = t;
   const storm = stormLevel();
-  uIsle.uSplash.value.set(1.3 + 2.6 * storm, 1.0 + 1.6 * storm, 0.8 + 2.4 * storm);
+  uIsle.uIsAir.value = 1 - 0.42 * storm;
+  uIsle.uSplash.value.set(1.6 + 2.6 * storm, 1.1 + 1.6 * storm, 1.3 + 2.8 * storm);
   uIsle.uSunW.value.set(SUN.dir.x, SUN.dir.y, SUN.dir.z);
   // The waterline: only worth the taps while the surf can be seen (eye near the surface).
   if (camY > -45) {
