@@ -25,11 +25,17 @@ const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return 
 const mix3 = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 
 // Semi-implicit spring used for every bit of secondary motion (helmet lag, hose sway,
-// lantern pendulum). dt is clamped so a stalled frame can't blow the integrator up.
+// lantern pendulum). (salfix) A long frame is SUB-STEPPED at <= 22 ms, not clamped: the clamp
+// kept the integrator stable but ran every spring slow in game time below 45 fps — at a
+// throttled 20 fps (game.js hands over dt 0.05) the pelvis, the trunk and the swing leg all
+// moved at 44% speed, the pelvis lagged its legs and planted knees folded to 60-70 deg. Up to
+// three steps (dt is clamped to 50 ms upstream); at 60 fps it is one step, bit-identical.
 function spring(s, target, dt, freq, damp) {
-  const h = Math.min(dt, 0.022), k = freq * freq, c = 2 * damp * freq;
-  s.v += (k * (target - s.x) - c * s.v) * h;
-  s.x += s.v * h;
+  const n = dt > 0.022 ? Math.min(3, Math.ceil(dt / 0.022)) : 1, h = Math.min(dt / n, 0.022), k = freq * freq, c = 2 * damp * freq;
+  for (let j = 0; j < n; j++) {
+    s.v += (k * (target - s.x) - c * s.v) * h;
+    s.x += s.v * h;
+  }
   return s.x;
 }
 
@@ -2398,7 +2404,8 @@ let spInit = false;
 // Integrate the whole table in one pass. `stiff` is the per-channel multiplier the slash
 // window raises; `wet` scales every frequency for the water.
 function compliance(dst, src, dt, wet, slashW) {
-  const h = Math.min(dt, 0.022);
+  // (salfix) sub-stepped like spring(): the clamp ran the whole skeleton slow below 45 fps
+  const nS = dt > 0.022 ? Math.min(3, Math.ceil(dt / 0.022)) : 1, h = Math.min(dt / nS, 0.022);
   if (!spInit) { spInit = true; for (let i = 0; i < CH.N; i++) { spx[i] = src[i]; spv[i] = 0; } }
   // Stability ceiling on the integrator. Semi-implicit Euler goes unstable as w*h
   // approaches 2 and rings visibly well before that; 0.55/h keeps every channel inside
@@ -2413,8 +2420,10 @@ function compliance(dst, src, dt, wet, slashW) {
     // A respawn or a zone teleport can move a channel by radians in one frame; snapping
     // there costs one frame of compliance and saves a visible whip through the pose.
     if (d > 1.6 || d < -1.6) { spx[i] = src[i]; spv[i] = 0; dst[i] = src[i]; continue; }
-    spv[i] += (f * f * d - 2 * SPD[i] * f * spv[i]) * h;
-    spx[i] += spv[i] * h;
+    for (let j = 0; j < nS; j++) {
+      spv[i] += (f * f * (src[i] - spx[i]) - 2 * SPD[i] * f * spv[i]) * h;
+      spx[i] += spv[i] * h;
+    }
     dst[i] = spx[i];
   }
 }
@@ -3670,7 +3679,11 @@ export function updateDiver(dt, t, player) {
   // ---- THE LIFE LAYER: reaction springs (post-compliance, additive, impulse-driven) ----
   const wf = 0.75 + 0.25 * gb;            // water slows every recovery
   spring(rcP, 0, dt, 5.0 * wf, 0.32); spring(rcR, 0, dt, 5.0 * wf, 0.32); spring(rcY, 0, dt, 5.5 * wf, 0.35);
-  spring(rcH, 0, dt, 7.5 * wf, 0.28); spring(rcA, 0, dt, 4.5 * wf, 0.40); spring(rcD, 0, dt, 6.0, 0.45);
+  // (salfix) THE BONNET IS BOLTED TO THE BREASTPLATE: it cannot whip on a neck. At 0.28 damping a
+  // hard yank swung it 31 -> 12 -> 5 deg against the corselet, three swings, the rag-doll read
+  // Michael named; the arms (0.40) threw out and came back a third of the way. Both now take one
+  // soft rebound and settle — the jolt still lands, the head and sleeves still trail it.
+  spring(rcH, 0, dt, 7.5 * wf, 0.70); spring(rcA, 0, dt, 4.5 * wf, 0.58); spring(rcD, 0, dt, 6.0, 0.45);
   spring(brP, 0, dt, 4.5, 0.40);
   // the yank's righting: heavy and nearly dead-beat — firmer on his boots than hanging
   // from the bonnet in open water, where the dress's air does the righting
