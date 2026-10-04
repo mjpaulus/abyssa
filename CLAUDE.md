@@ -39,6 +39,9 @@ procedural fallback (lib/assets.js loadSculpted never throws).**
   current. Trust only a brand-new tab, or verify the served file via `fetch`.
 - Agents share the pane: they steal the fronted tab and each other's screenshots.
   Create your own tab; assert `gameState === 'play'` before reading gameplay state.
+- PAUSE: play pauses whenever pointer lock is off (Esc/blur). Probes/agents without
+  pointer lock must set `window.__helm = true` (strictly true; helmetSwap.js hangs a debug
+  OBJECT on the same name, which until 2026-10-04 silently disabled pause for everyone).
 - Screenshot-based FPS/motion readings in the pane are unreliable under load; the
   user's own focused window is the ground truth for feel.
 
@@ -431,9 +434,12 @@ orchestrator redoes it, not the agent.
   RENDERBUFFER (never share attachments — GL_INVALID_OPERATION history).
   shadowMap.autoUpdate is parked during the pass or every caster draws twice.
   The uv offset is HARD-CLAMPED at 0.035 NDC: in a gale the wave gradient smeared the
-  transmitted scene into ghosts (a phantom davit leg, measured). Known limit of
-  screen-space: storm crests overlapping the raft show refracted water, not the deck
-  behind them — physically defensible, watch it with the user's eye.
+  transmitted scene into ghosts (a phantom davit leg, measured). RAFT CREST (2026-10-04,
+  roadmap/gale-crests-deck.md): air-side sea fragments test the eye ray against the raft's
+  dry slab (`setRaftFrame(raft.matrixWorld)`, raft-local box) and, where it lands, drop the
+  refraction sample and let the already-drawn raft through by exp(-sigma*d) — water over
+  the deck reads as a wash over the planks, never a window into other water. Covers the
+  deck slab only (not the ladder/sheave/helmet). `__raftCrest(false)` = A/B.
 - The third-person camera is 9 units back and the raft is 9.4 across, so the camera is
   always OFF the boat while Sal is on deck. Every deck detail is only ever read from
   ~9 units. Pulling the camera in on deck would change movement feel, which is the

@@ -1378,8 +1378,10 @@ function update(dt, t) {
   // The chart in hand stills the man: movement keys are parked while the paper is up.
   if (isChartOpen()) clearKeys();
   // THE PAUSE: no pointer lock and no chart means no helm. See the note at `paused`.
-  // window.__helm: the review harness has no pointer lock; it takes the helm by flag.
-  paused = !window.__helm && (!locked || blurred) && !isChartOpen();
+  // window.__helm === true: the review harness has no pointer lock; it takes the helm by
+  // flag. Strictly true — helmetSwap.js hangs its debug OBJECT on the same name, and a
+  // truthy test there meant Esc/blur never paused play (found 2026-10-04).
+  paused = window.__helm !== true && (!locked || blurred) && !isChartOpen();
   voyageRing = Math.max(0, voyageRing - dt);
   setPaused(paused && (voyageRing <= 0 || blurred));   // audio: Esc/blur suspends the context (an arrival's bell rings out first)
   pauseT = paused ? pauseT + dt : 0;
@@ -1891,7 +1893,7 @@ let frameDue = 0, driveT = 0;
 function frameCap() {
   if (document.hidden && !driveT) return -1;
   const P = GLASS.power;
-  const idle = state === 'title' || blurred || !document.hasFocus() || (paused && !window.__helm);
+  const idle = state === 'title' || blurred || !document.hasFocus() || (paused && window.__helm !== true);
   return idle ? P.idle : P.cap;
 }
 window.__power = {
