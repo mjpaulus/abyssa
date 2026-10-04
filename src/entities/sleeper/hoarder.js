@@ -27,7 +27,8 @@ import { terrainH } from '../../world/terrain.js';
 import { setWardTargets, deployInk } from '../../world/predators.js';
 import { wreckSites } from '../../world/wrecks.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
+  setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
+  rememberWard, wardMemPose, wardsRecall
 } from './common.js';
 import * as G from './hoarderGeo.js';
 import { makeHoard } from './hoard.js';
@@ -338,6 +339,17 @@ export function makeHoarder(idx, cfg) {
     w.rev = 0;                                                    // dark until the sonar rings them
     L.sigils.push(w);
   }
+  // RITUAL, REMEMBERED: the ward the old calm keeps rides ARM 0, her front-right arm (arms
+  // fan from (a + 0.5) / 8 of a turn off her face, so 0 and 6 are the front pair, 2 and 4
+  // the back). Legible: she turns to face the diver as she rises, so the one ward already
+  // burning without a ping is on the arm reaching for him, the first thing he sees, and
+  // it reads at once against the three that stay iron until the sonar rings them (her
+  // rule still stands: every ward that needs a touch needs a ping). Fair: the front arms
+  // are the lashers and the grabbers, so the memory halves the time spent under the beak
+  // but leaves one front ward and both back ones, so the ping, the circling and the knife
+  // all still belong to the rite.
+  rememberWard(L, 0);
+  L.memLine = 'SHE KNOWS YOUR LAMP. ONE WARD STILL REMEMBERS.';
   makeEmbers(L, c.size);
 
   // ---- the lair: wrapped round the broken trawler, the hoard at its heart ----
@@ -478,7 +490,8 @@ export function makeHoarder(idx, cfg) {
   L.probe = () => ({
     kind: 'hoarder', dormant: L.dormant, rise: +L.rise.toFixed(2), calmed: L.calmed, grab: L.grab ? L.grab.arm : -1,
     lamp: L.hoard.lampTaken, pos: L.pos.toArray(), bodyY: L.bodyY, reveal: L.reveal,
-    wards: L.sigils.map(g => ({ lit: g.lit, rev: +g.rev.toFixed(2) }))
+    remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
+    wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, rev: +g.rev.toFixed(2) }))
   });
 
   if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
@@ -1444,7 +1457,8 @@ export function updateHoarder(L, dt, t, player) {
     let allLit = true;
     for (let i = 0; i < L.sigils.length; i++) {
       const g = L.sigils[i];
-      if (g.lit) { wardLitPose(g, dt, haloK); continue; }
+      // (a remembered ward answers no ping: it needs none; it shows as she rises)
+      if (g.lit) { if (g.mem) wardMemPose(g, dt, haloK, L.riseE); else wardLitPose(g, dt, haloK); continue; }
       allLit = false;
       g.rev += clamp(revTarget - g.rev, -dt * 1.2, dt * 5);
       wardIdle(g, dt, haloK);
@@ -1455,6 +1469,7 @@ export function updateHoarder(L, dt, t, player) {
     ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.grab = null;
+      if (L.memWard >= 0) wardsRecall(L, haloK);
       L.riseTarget = 0.25;                                           // she coils back round the wreck
     }
   } else {
@@ -1511,7 +1526,8 @@ function stageHoard(L, dt) {
   }
   for (let i = 0; i < st.length; i++) {
     const pl = sigilPool[i], s = st[i], g = i < L.sigils.length ? L.sigils[i] : null;
-    if (g && (g.lit || g.rev > 0.01 || g.flashT < 1.5 || L.calmed)) {
+    // (a remembered ward does not take its slot: the hoard keeps the light it had)
+    if (g && ((g.lit && !g.mem) || g.rev > 0.01 || g.flashT < 1.5 || L.calmed)) {
       // the ward has it (its own code set intensity and position this frame)
       if (s.src !== -2) { s.src = -2; s.cur = 0; pl.color.setHex(WARD_COL); pl.distance = 50; pl.userData.lampBias = undefined; }
       // lifted off the sucker face (a light on the skin only grazes it)

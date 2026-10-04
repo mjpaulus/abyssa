@@ -24,7 +24,8 @@ import { setWardTargets, wardGuardCount } from '../../world/predators.js';
 import { riftPos, WORLD_R } from '../../config.js';
 import { survival } from '../../systems/survival.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers
+  setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
+  rememberWard, wardMemPose, wardsRecall
 } from './common.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { lendVentLight } from '../../world/vents.js';
@@ -669,6 +670,14 @@ export function makeHunter(idx, cfg) {
     w.q = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), V3(side * 0.6, 1, 0).normalize());
     L.sigils.push(w);
   }
+  // RITUAL, REMEMBERED: the ward the old calm keeps is the AFT-MOST on his back (WS row 3,
+  // s = 0.68, toward the fins; a short-handed row takes its aft-most). His wards can only
+  // be lit inside the 10 s stun, and the stun only happens with his HEAD in the furnace
+  // flare, so the diver who baited him is at the fire, by the arm crown, and the aft ward
+  // is the longest swim of the window. The memory spares exactly the touch the clock is
+  // least fair about; the keepers, the bait and the stun are all still the rite.
+  rememberWard(L, Math.min(3, L.sigils.length - 1));
+  L.memLine = 'HE KNOWS THIS FIRE. ONE WARD STILL REMEMBERS.';
   makeEmbers(L, c.size);
   grp.visible = true;
   body.visible = false;
@@ -699,7 +708,8 @@ export function makeHunter(idx, cfg) {
   };
   L.probe = () => ({
     kind: 'hunter', state: L.state, furnace: L.furnace.lit, heat: +L.furnace.heat.toFixed(2), stun: +L.stun.toFixed(1),
-    pos: L.pos.toArray().map(v => +v.toFixed(1)), calmed: L.calmed, wards: L.sigils.map(g => ({ lit: g.lit, kept: wardGuardCount(L.sigils.indexOf(g)) }))
+    pos: L.pos.toArray().map(v => +v.toFixed(1)), calmed: L.calmed, remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
+    wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, kept: wardGuardCount(L.sigils.indexOf(g)) }))
   });
   if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
   scene.add(grp);
@@ -1237,7 +1247,8 @@ export function updateHunter(L, dt, t, player) {
     let allLit = true;
     for (let i = 0; i < L.sigils.length; i++) {
       const g = L.sigils[i];
-      if (g.lit) { wardLitPose(g, dt, haloK); continue; }
+      // (a remembered ward smoulders on his back from the moment he comes up)
+      if (g.lit) { if (g.mem) wardMemPose(g, dt, haloK, 1); else wardLitPose(g, dt, haloK); continue; }
       allLit = false;
       g.rev = 1;
       wardIdle(g, dt, haloK);
@@ -1259,6 +1270,7 @@ export function updateHunter(L, dt, t, player) {
     ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true;
+      if (L.memWard >= 0) wardsRecall(L, haloK);
       L.state = 'leave'; L.stT = 0; L.stun = 0;
       setWardTargets(-1, null);
     }
@@ -1306,7 +1318,8 @@ function stageHunter(L, dt) {
   const near = ((camera.position.x - m[12]) * m[0] + (camera.position.y - m[13]) * m[1] + (camera.position.z - m[14]) * m[2]) >= 0 ? 1 : -1;
   for (let i = 0; i < L.stage.length; i++) {
     const pl = sigilPool[i], s = L.stage[i], g = i < L.sigils.length ? L.sigils[i] : null;
-    if (g && (g.lit || g.flashT < 1.5 || L.state === 'stunned' || L.calmed)) {
+    // (a remembered ward leaves its slot on his body until the stun or the calm)
+    if (g && ((g.lit && !g.mem) || g.flashT < 1.5 || L.state === 'stunned' || L.calmed)) {
       if (s.src !== -2) { s.src = -2; s.cur = 0; pl.color.setHex(WARD_COL); pl.distance = 50; pl.decay = 2.0; pl.userData.lampBias = undefined; }
       pl.userData.bioFree = false;
       // lifted off the hide along the ward's face: a light ON the skin only grazes it (the
