@@ -22,7 +22,7 @@ import { camera, scene } from './core.js';
 import { sun, LOOK } from './lighting.js';
 import { GLASS } from './config.js';
 // OWN WATER: the anchorage's surface-light tint (all ones at home), read at render time only.
-import { SITE_SURF } from './world/water.js';
+import { SITE_SURF, SITE_ABS } from './world/water.js';
 
 // THE FLOW LEAN (roadmap/flow-lean-style.md, item 12): the medium stays lit. Same dial
 // lighting.js reads (GLASS.style.flowLean, `light` sub-knob), a local copy because the
@@ -125,7 +125,7 @@ precision highp float;
 #define OCC ${OCC_STEPS}
 #define OCC_EVERY ${OCC_EVERY}
 uniform sampler2D tDepth, tCaust;
-uniform vec3 uCamPos, uSunDir, uSurf;
+uniform vec3 uCamPos, uSunDir, uSurf, uAbsK;
 uniform mat4 uCamW, uViewProj;
 uniform vec2 uTanHalf;
 uniform float uNear, uFar, uDens, uSunK, uJitter, uOcclude, uDensK, uStyle;
@@ -181,8 +181,9 @@ void main(){
   vec2 qStep = ( pStep.xz - sunProj * pStep.y ) * ${f(1 / CAUST_TILE)};
 
   // Beer-Lambert down the water column, and extinction back along the view ray.
-  vec3 down = uSurf * exp( ${v3(K_ABS)} * p.y );
-  vec3 downStep = exp( ${v3(K_ABS)} * pStep.y );
+  // (uAbsK: the anchorage's absorption gain, OWN WATER -- exactly 1.0 at home)
+  vec3 down = uSurf * exp( ${v3(K_ABS)} * uAbsK * p.y );
+  vec3 downStep = exp( ${v3(K_ABS)} * uAbsK * pStep.y );
   vec3 tr = exp( -( t * rlen * uDens ) * ${v3(K_EXT)} );
   vec3 trStep = exp( -( dt * rlen * uDens ) * ${v3(K_EXT)} );
 
@@ -371,6 +372,7 @@ export class VolumetricLightPass extends Pass {
         uCamPos: { value: new THREE.Vector3() },
         uSunDir: { value: new THREE.Vector3(0.2, 1, 0.1).normalize() },
         uSurf: { value: new THREE.Vector3(...SURF_LIGHT) },
+        uAbsK: { value: new THREE.Vector3(1, 1, 1) },
         uCamW: { value: new THREE.Matrix4() },
         uViewProj: { value: new THREE.Matrix4() },
         uTanHalf: { value: new THREE.Vector2(1, 1) },
@@ -494,6 +496,7 @@ export class VolumetricLightPass extends Pass {
     mu.uStyle.value = sk;
     // the shafts are made of the anchorage's water too (x1 at home: the shipped literal)
     mu.uSurf.value.set(SURF_LIGHT[0] * SITE_SURF[0], SURF_LIGHT[1] * SITE_SURF[1], SURF_LIGHT[2] * SITE_SURF[2]);
+    mu.uAbsK.value.set(SITE_ABS[0], SITE_ABS[1], SITE_ABS[2]);
     mu.uSunDir.value.copy(sun.position).normalize();
     // Turbidity: water.js drives scene.fog.density from depth + storm murk, so the
     // shafts dim in murky water on their own.

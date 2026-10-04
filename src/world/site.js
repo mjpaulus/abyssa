@@ -2,11 +2,21 @@
 //
 // A site is the same basin with a different sea floor. Nothing here may move the raft,
 // the rifts, the zone layout or the hose economy — those are the game's frozen frame
-// (see CLAUDE.md invariants). A site is exactly: a name in the previous chart-owner's
-// hand, per-zone DOMAIN OFFSETS into terrain's infinite noise field (new skylines, no
-// amplitude touched), fresh rim-warp harmonic rows inside the shipped amplitude
-// envelope, seed streams for every scatter system, a scarcity dial, and a hand-authored
-// sleeper overlay. All authored, never generated: the register is the product.
+// (see CLAUDE.md invariants). A site is: a name in the previous chart-owner's hand,
+// per-zone DOMAIN OFFSETS into terrain's infinite noise field, fresh rim-warp harmonic
+// rows, seed streams for every scatter system, a scarcity dial, a hand-authored sleeper
+// overlay, and — since Michael's ruling "Give each its own water" (2026-10-04,
+// roadmap/fly-remote-sites.md) — its OWN WATER and GROUND:
+//   water   colour/clarity/silt/absorption/veil -> water.js setSiteWater (uniforms + CPU)
+//   light   underwater ambient/hemi/key tints   -> lighting.js setSiteLight
+//   grade   per-zone look overrides             -> postfx.js setSiteGrade
+//   floor   silt/gravel/rock albedo multipliers -> terrain.js uSite* uniforms
+//   shape   per-zone landform overrides + rim   -> terrain.js syncSite (not RAM_H)
+//   vents   field size/density/heat             -> vents.js ventKnobs
+//   wrecks  search ring about each rift         -> wrecks.js wreckSites
+//   sleepers[i].idle / lair / hard              -> the kinds (brooder/hoarder/hunter)
+// Every one is null at home and every consumer treats null as the shipped constant.
+// All authored, never generated: the register is the product.
 //
 // SITE 0 IS THE SHIPPED WORLD, BIT-IDENTICAL. Its rows below are copied verbatim from
 // terrain.js's ZP/RIM tables and every stream seed matches the constant the module it
