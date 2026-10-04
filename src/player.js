@@ -42,7 +42,13 @@ export const player = {
   // -1..1 sideways / -1..0 backwards scull input, published the other way (physics knows
   // the keys, the rig does not) so diver.js can bias the arms without reading input.
   scullX: 0,
-  scullZ: 0
+  scullZ: 0,
+  // THE YANK (tether.js leash): seconds of recovery left after the hose snapped him back,
+  // over a recovery of staggerDur, at staggerK (0..1) of his hands off the controls.
+  // game.js sets all three on a yank; updatePlayer eases the drive back in.
+  stagger: 0,
+  staggerDur: 0,
+  staggerK: 0
 };
 
 export const keys = {};
@@ -210,6 +216,8 @@ const AM_BURST_V = 1.26, AM_BURST_H = 1.55;
 // held: ~0.3 u/s of slow sinking at neutral trim after several seconds. Small beside the
 // dress (the valve spans -1.83..+2.61), so fill and vent still decide where he goes.
 const A_SETTLE = -0.11;
+// 1/s of extra drag while a hose yank has him tumbling (see TUMBLING in updatePlayer)
+const YANK_TUMBLE_DRAG = 2.6;
 const G_W = 9.81;         // dry weight over mass — only used once he breaks the surface
 const Y_SUB = -2.15, EMERGE_H = 2.6, SURF_DAMP = 1.5;
 const GROUND_BUOY = 0.9;  // above this he cannot get purchase on the bottom
@@ -392,6 +400,15 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // floor is banked while he is grounded and replays the next time he leaves the bottom.
   const burstA = player.burstT > 0 ? BURST_ACC * burstEnv(BURST_DUR - player.burstT) : 0;
   if (player.burstT > 0) player.burstT = Math.max(0, player.burstT - dt);
+  // JERKED OFF BALANCE. After a hard snap of the hose he is not driving, he is getting his
+  // feet (or his trim) back: the drive comes back in on a smoothstep over the recovery,
+  // so the first half is mostly the line's and the last half is mostly his.
+  let ctrl = 1;
+  if (player.stagger > 0) {
+    const u = 1 - player.stagger / Math.max(player.staggerDur, 1e-3);
+    ctrl = 1 - player.staggerK * (1 - u * u * (3 - 2 * u));
+    player.stagger = Math.max(0, player.stagger - dt);
+  }
 
   if (player.grounded) {
     // A man in a Mark V with lead soles PLODS: 1.5 u/s on planks, 2.15 on the seabed (the
@@ -412,7 +429,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // instead of writing the continuous a = TOP/tau is what makes the sentence true.
     const q = (player.walkP * 2) % 1;
     const lurch = 1 + (onDeck ? LURCH_DECK : LURCH_BED) * Math.cos(TAU2 * (q - 0.5));
-    const acc = top * (1 - fr) / (fr * Math.max(dt, 1e-4)) * (sprinting ? WALK_HURRY : 1) * (walkable ? 1 : 0.25) * lurch;
+    const acc = top * (1 - fr) / (fr * Math.max(dt, 1e-4)) * (sprinting ? WALK_HURRY : 1) * (walkable ? 1 : 0.25) * lurch * ctrl;
     if (keys['KeyW'] || keys['ArrowUp']) player.vel.addScaledVector(flat, acc * dt);
     if (keys['KeyS'] || keys['ArrowDown']) player.vel.addScaledVector(flat, -acc * dt * 0.7);
     if (keys['KeyA'] || keys['ArrowLeft']) player.vel.addScaledVector(right, -acc * dt * 0.8);
@@ -448,7 +465,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // 33, was 42 (the weighted-suit pass): cruise ~15.5 u/s, was 17.6. A man hauling himself
     // through the water in 90 kg of dress is drawn along, not driven; the bottle burst
     // (untouched) is still the way to cover ground fast.
-    const acc = 33 * boost / AM_H;
+    const acc = 33 * boost / AM_H * ctrl;
     const sy = Math.sin(player.pitch);
     let ay = emerge > 0 ? (player.buoy + G_W) * (1 - emerge) - G_W : player.buoy;
     // The kick, not the throttle. Unit mean, so the minute-by-minute distance is the old
@@ -487,6 +504,13 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     if (hsp > 0.001) {
       const hd = Math.min(1 / dt, LIN_H + DRAG_H * hsp) * dt / AM_H;
       player.vel.x -= hx * hd; player.vel.z -= hz * hd;
+      // TUMBLING: jerked over by the hose he is broadside to the water, not drawn through it
+      // end-on, and the extra drag is what stops the snap's rebound carrying him tens of
+      // units back toward the raft (the heavy-swim added mass would). Fades with the stagger.
+      if (player.stagger > 0) {
+        const tk = Math.exp(-YANK_TUMBLE_DRAG * (1 - ctrl) * dt);
+        player.vel.x *= tk; player.vel.z *= tk; player.vel.y *= tk;
+      }
     }
   }
 

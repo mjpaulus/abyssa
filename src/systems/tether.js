@@ -1,5 +1,6 @@
 // The umbilical: a heavy rubber-and-canvas air hose from the raft's pump to Sal's helmet.
-// Also enforces the hard leash — the diver physically cannot outrun his air supply.
+// Also owns THE LEASH (see the block above leashStep): elastic give, a firm hold at full
+// stretch, and a speed-scaled yank when he arrives at the end of it.
 // OWNED BY: orchestrator.
 //
 // The rope is a verlet/PBD chain with anisotropic water drag. Three things here are
@@ -571,11 +572,232 @@ export function reseatTether(player) {
   // rope gets dragged across the whole world on the frame after a teleport.
   _pa.copy(anchor); _ph.set(player.pos.x, player.pos.y, player.pos.z);
   primed = true;
+  // hauled back by the line: whatever he was straining against or reeling from is over
+  leash.armed = true; leash.press = 0; leash.yank = 0; leash.state = 'slack';
+  survival.strain = 0; twT = 9; anPrimed = false;
+  player.stagger = 0;
 }
 
 export function tetherAnchor() { return anchor; }
 
 export function setTetherVisible(v) { for (const m of meshes) m.visible = v; }
+
+// ---------------------------------------------------------------------------
+// THE LEASH. Michael, 2026-10-04 (roadmap/hose-leash-decision.md): "stop with stretch but
+// like pulls him a bit so he might go off balance. This should be speed based so the
+// faster he is moving the more exagerated the pull". It replaces a dead invisible wall
+// (player.pos clamped to the sphere, and the air cut the same instant). Three parts,
+// all of them on Sal's VELOCITY, so nothing pops:
+//   GIVE  over the last GIVE units the rubber stretches and pulls back, stiffening as s^2.
+//         Off the bottom it is a spring (3.0 u/s^2 at full stretch, well under his haul):
+//         it slows him and, left alone, draws him gently back. On the ground it only
+//         RESISTS, as a drag proportional to his outward speed — lead boots hold a man
+//         against a stretched hose, and a force cap here deadlocked the walk (measured:
+//         the stride's lurch trough is ~1.5 u/s^2, the spring ate it every frame, walkP
+//         is distance-keyed, so he froze at the trough 0.3 u short of the end, W held).
+//         A drag can never zero a positive drive: he slows to ~55% and still arrives.
+//   HOLD  at full stretch the line is a one-sided distance constraint. The crossing is
+//         resolved at its TIME OF IMPACT: the outward speed goes, and the part of this
+//         frame's travel that carried him past the end is reflected (by the snap's
+//         restitution) instead of snapped — so there is no tunnelling at any frame rate,
+//         and a man pressing into the hold sits at exactly L, frame after frame, no jitter.
+//   SNAP  ARRIVING at the hold (armed again once he is REARM back inside it) is a yank:
+//         the rubber hands back YANK_E of his speed into the line, capped, and the yank's
+//         strength 0..1 is that speed against YANK_HARD. A lean barely tugs, a walk is a
+//         check, a swim burst / a fall / a sleeper's blow is a hard jerk. game.js reads
+//         `leash.yank` the frame it fires and staggers the body (diver.js diverYank),
+//         takes his hands off the controls (player.stagger), kicks the lens and sounds it.
+// AIR: the supply is cut only while he STRAINS — presses outward against the hold —
+// eased both ways on survival.strain (survival.js). A taut line on its own costs nothing.
+// Every interaction that can throw him into the line (Orune's drag, a sleeper's shove,
+// the Brooder's hammer, the bottle) works through player.vel, so all of them yank.
+// ---------------------------------------------------------------------------
+const GIVE = 5;                  // u of elastic give at the end of the line
+const GIVE_K = 3.0;              // u/s^2 pull-back at full stretch (s^2 ramp), off the bottom
+const GIVE_D = 1.6;              // 1/s outward-speed drag at full stretch (s^2 ramp), on the ground
+const GIVE_DRAW = 0.5;           // u/s: the most the stretched line draws a free swimmer back
+const YANK_E = 0.4;              // the rubber's restitution at the snap, on his boots
+const YANK_BACK = 6;             // u/s cap on what the snap hands back, on his boots
+// Off the bottom the same snap hands back far less: with nothing under him the jerk goes
+// into turning him over (the tumble), and the heavy-swim carry would otherwise take a
+// 3 u/s rebound ~25 u back toward the raft (measured) — a line that throws, not one that holds.
+const YANK_E_SWIM = 0.22, YANK_BACK_SWIM = 2.4;
+const TUMBLE_TAKE = 0.5;         // share of his along-the-arc way a full snap turns into the tumble
+const YANK_HARD = 7;             // u/s into the line that makes a full-strength yank
+const YANK_MIN = 0.01;           // u/s below which an arrival is only held (a lean still tugs)
+const REARM = 0.75;              // u back inside the end before another snap can fire
+// u/s^2 of push into the hold that counts as straining. Off the bottom it must clear the
+// current and the settle (~0.6) that lean a passive man on the line; on the ground a man
+// who is not pushing has nothing outward left after the boots' friction, and the push
+// of a walk held at the end can freeze at the stride's lurch trough (~0.75-1.5), so the
+// bar sits under that.
+const PRESS_ON = 1.5, PRESS_ON_GROUND = 0.5;
+const STRAIN_UP = 0.35, STRAIN_DOWN = 0.8;   // s: the air pinches off, then eases back
+const END_TOL = 0.1;             // u: how close to full stretch counts as 'at the end' for strain
+let heldPrev = false;            // the hold took all his outward way last frame
+export const leash = {
+  state: 'slack',                // 'slack' | 'give' | 'hold'
+  r: 0, give: 0,                 // range from the pump, fraction into the give band
+  vr: 0,                         // his radial speed this frame (+ = away from the raft)
+  press: 0,                      // smoothed u/s^2 of push into the hold
+  armed: true,
+  yank: 0,                       // strength of a yank fired THIS frame, else 0 (game.js reads it)
+  dx: 0, dy: 0, dz: 0,           // unit pull direction (toward the raft) at that yank
+  n: 0,                          // yanks since load
+  last: { str: 0, v: 0, back: 0, grounded: false, t: 0 },
+  maxIn: 0,                      // largest integration step past L (resolved the same frame)
+  maxEnd: 0                      // largest END-OF-FRAME distance past L: the hold's invariant
+};
+// twang: a render-only pulse that runs up the line from Sal's end after a snap
+let twA = 0, twT = 9, twPhi = 0;
+const TW_LEN = 0.9, TW_C = 26, TW_LAMBDA = 5.5, TW_DECAY = 22;
+const rpx = new Float64Array(N), rpy = new Float64Array(N), rpz = new Float64Array(N);
+// THE LEASH'S ANCHOR is the pump eased over ~1.5 s, not the live pump. The hose head
+// rides the raft's heave, pitch and roll on a lever and moves 1.5-2.5 u/s radially even
+// in a calm (measured), reversing several times a second; held to the live point, a man
+// at full stretch was tugged back and forth by every wave — jitter at the limit, and a
+// snap whose strength was half swell noise. A real line soaks that up in its own stretch
+// and the tender's hands. The drawn hose still pins to the live pump.
+const lan = V3(); let anPrimed = false;
+const AN_TAU = 1.5;
+
+function leashStep(dt, player) {
+  leash.yank = 0;
+  const L = survival.hose;
+  if (!anPrimed) { lan.copy(anchor); anPrimed = true; }
+  else lan.lerp(anchor, Math.min(1, dt / AN_TAU));
+  const dx = player.pos.x - lan.x, dy = player.pos.y - lan.y, dz = player.pos.z - lan.z;
+  const r = Math.sqrt(dx * dx + dy * dy + dz * dz);
+  leash.r = r;
+  const off = window.__noLeash || player.onLadder || player.onDeck || r < 1e-6 || dt <= 0;
+  if (off) {
+    leash.state = 'slack'; leash.give = 0; leash.vr = 0;
+    leash.press = 0; leash.armed = true; anPrimed = false; heldPrev = false;
+    survival.strain = Math.max(0, survival.strain - dt / STRAIN_DOWN);
+    return r;
+  }
+  const ux = dx / r, uy = dy / r, uz = dz / r;
+  // On the ground the floor carries his weight, so the line's work is horizontal: its pull
+  // and his push are read along the horizontal bearing, and the snap throws him along it.
+  // hl: how much of the line's pull is horizontal. Near the raft the hose comes down
+  // steeply and taking up its slack mostly LIFTS him, so his speed into the line — the
+  // rate the range actually closes, which is what the snap scales on — is the
+  // horizontal speed times hl.
+  const grounded = !!player.grounded;
+  let nx = ux, ny = uy, nz = uz, hl = 1;
+  if (grounded) {
+    hl = Math.hypot(ux, uz);
+    if (hl > 1e-4) { nx = ux / hl; ny = 0; nz = uz / hl; } else { nx = 0; ny = 0; nz = 0; }
+  }
+  if (r < L - REARM) leash.armed = true;
+  const g0 = L - GIVE;
+  const s = r > g0 ? Math.min(1, (r - g0) / GIVE) : 0;
+  leash.give = s;
+  let vr = player.vel.x * nx + player.vel.y * ny + player.vel.z * nz;
+  const vr0 = vr;                // his outward way as he arrives this frame, before the line
+  // GIVE
+  if (s > 0) {
+    // (off the bottom the spring never draws him in faster than GIVE_DRAW: undamped, it
+    // slingshot him back toward the raft at 3+ u/s after a snap — measured)
+    const a = grounded ? Math.max(0, vr) * Math.min(1, GIVE_D * s * s * hl * dt)
+      : Math.min(GIVE_K * s * s * dt, Math.max(0, vr + GIVE_DRAW));
+    player.vel.x -= nx * a; player.vel.y -= ny * a; player.vel.z -= nz * a;
+    vr -= a;
+  }
+  leash.vr = vr * hl;
+  // HOLD + SNAP
+  let state = s > 0 ? 'give' : 'slack';
+  if (r >= L) {
+    state = 'hold';
+    const over = r - L;
+    if (over > leash.maxIn) leash.maxIn = over;
+    let back = 0;
+    if (leash.armed) {
+      leash.armed = false;
+      const vin = Math.max(0, vr) * hl;
+      if (vin > YANK_MIN) {
+        const str = Math.pow(Math.min(1, vin / YANK_HARD), 0.8);
+        back = grounded ? Math.min(YANK_E * vin, YANK_BACK) : Math.min(YANK_E_SWIM * vin, YANK_BACK_SWIM);
+        leash.yank = str; leash.n++;
+        leash.dx = -nx; leash.dy = -ny; leash.dz = -nz;
+        const Ls = leash.last;
+        Ls.str = str; Ls.v = vin; Ls.back = back; Ls.grounded = grounded; Ls.t = clockT;
+        // the line comes up bar-straight and rings: a pulse runs up it from his end
+        twA = 0.05 + 0.32 * str; twT = 0; twPhi = (leash.n * 2.3999) % (Math.PI * 2);
+      }
+    }
+    // the travel past the end, resolved at the time of impact: reflected by what the
+    // snap hands back (a hold reflects none of it), never more than half a unit
+    const rr = L - Math.min(over * (back > 0 ? (grounded ? YANK_E : YANK_E_SWIM) : 0), 0.5);
+    player.pos.x = lan.x + ux * rr; player.pos.y = lan.y + uy * rr; player.pos.z = lan.z + uz * rr;
+    if (vr > 0) { player.vel.x -= nx * vr; player.vel.y -= ny * vr; player.vel.z -= nz * vr; }
+    if (back > 0) {
+      // Off the bottom, the jerk on the bonnet throws him broadside: a share of the way he
+      // had ALONG the line's arc goes into the tumble, or a hard snap would hand the whole
+      // of it on as a pendulum swing up toward the surface (measured 25-40 u).
+      if (!grounded) {
+        const k = 1 - TUMBLE_TAKE * leash.yank;
+        const vt = player.vel.x * ux + player.vel.y * uy + player.vel.z * uz;
+        player.vel.x = ux * vt + (player.vel.x - ux * vt) * k;
+        player.vel.y = uy * vt + (player.vel.y - uy * vt) * k;
+        player.vel.z = uz * vt + (player.vel.z - uz * vt) * k;
+      }
+      player.vel.x -= nx * back; player.vel.y -= ny * back; player.vel.z -= nz * back;
+    }
+    const end = Math.hypot(player.pos.x - lan.x, player.pos.y - lan.y, player.pos.z - lan.z) - L;
+    if (end > leash.maxEnd) leash.maxEnd = end;
+    leash.r = L + end;
+  }
+  leash.state = state;
+  // STRAIN: how hard he is pushing into the line at the end of it, u/s^2, smoothed ~0.12 s.
+  // Read as the outward way he brings into a frame AFTER a frame in which the hold took it
+  // all — exactly one frame of his own drive — and 'at the end' with a hair of tolerance:
+  // the eased anchor creeps, so a man pressing on the hold sits millimetres either side of
+  // it. Arriving (not yet held) counts nothing: the line coming taut costs no air.
+  const atEnd = r >= L - END_TOL;
+  const pressNow = atEnd && heldPrev && leash.yank === 0 ? Math.max(0, vr0) / dt : 0;
+  heldPrev = state === 'hold' || (heldPrev && atEnd);
+  leash.press += (pressNow - leash.press) * Math.min(1, dt / 0.12);
+  if (atEnd && leash.press > (grounded ? PRESS_ON_GROUND : PRESS_ON)) survival.strain = Math.min(1, survival.strain + dt / STRAIN_UP);
+  else survival.strain = Math.max(0, survival.strain - dt / STRAIN_DOWN);
+  return Math.min(r, L);
+}
+
+// Render positions: the physics nodes plus the snap's twang, a transverse pulse that
+// leaves Sal's end (pinned: the inlet does not move) and runs up the line at TW_C u/s,
+// dying over TW_LEN. Render-only — the inextensible solver has no room to ring a taut
+// line, and the camera only ever sees the first twenty-odd units of it anyway.
+function fillRender(dt) {
+  twT += dt;
+  const live = twT < TW_LEN && twA > 0;
+  if (!live) {
+    for (let i = 0; i < N; i++) { rpx[i] = px[i]; rpy[i] = py[i]; rpz[i] = pz[i]; }
+    return;
+  }
+  // a frame perpendicular to the line at Sal's end; the pulse swings in a plane picked
+  // per snap so two yanks do not ring identically
+  let lx = px[0] - px[N - 1], ly = py[0] - py[N - 1], lz = pz[0] - pz[N - 1];
+  const ll = Math.hypot(lx, ly, lz) || 1; lx /= ll; ly /= ll; lz /= ll;
+  let ax = lz, ay = 0, az = -lx;                      // line x up
+  const al = Math.hypot(ax, az);
+  if (al < 1e-3) { ax = 1; az = 0; } else { ax /= al; az /= al; }
+  const bx = ly * az - lz * ay, by = lz * ax - lx * az, bz = lx * ay - ly * ax;   // line x a
+  const c = Math.cos(twPhi), sn = Math.sin(twPhi);
+  const ex = ax * c + bx * sn, ey = ay * c + by * sn, ez = az * c + bz * sn;
+  const env = twA * Math.exp(-twT * 4.2) * (1 - twT / TW_LEN);
+  const k = 2 * Math.PI / TW_LAMBDA, front = TW_C * twT;
+  const top = cum[N - 1];
+  for (let i = 0; i < N; i++) {
+    const d = top - cum[i];                           // arc from Sal's end
+    // a wave packet centred on the front (no hard leading edge to read as a kink),
+    // pinned at the inlet, fading as it runs up the line
+    const q = (d - front) / TW_LAMBDA;
+    const a = q > -2.5 && q < 2.5
+      ? env * Math.sin(k * (d - front)) * Math.exp(-q * q * 1.4) * (1 - Math.exp(-d / 0.9)) * Math.exp(-d / TW_DECAY)
+      : 0;
+    rpx[i] = px[i] + ex * a; rpy[i] = py[i] + ey * a; rpz[i] = pz[i] + ez * a;
+  }
+}
 
 // Returns the distance from the raft, after applying the leash to player.pos/vel.
 export function updateTether(dt, player, zone) {
@@ -588,16 +810,9 @@ export function updateTether(dt, player, zone) {
   // The floor cache is keyed on position only, so a zone change has to drop all of it.
   if (zi !== lastZi) { flOK.fill(0); lastZi = zi; }
 
-  // Hard leash: the hose runs out and the diver is held back.
-  // window.__noLeash disables it so test harnesses can teleport freely.
-  const toDiver = _d.copy(player.pos).sub(anchor);
-  const dist = toDiver.length();
-  if (dist > survival.hose && !window.__noLeash) {
-    toDiver.multiplyScalar(survival.hose / dist);
-    player.pos.copy(anchor).add(toDiver);
-    const outward = player.vel.dot(toDiver.normalize());
-    if (outward > 0) player.vel.addScaledVector(toDiver, -outward);
-  }
+  // THE LEASH: give, hold, snap (leashStep). window.__noLeash disables it so test
+  // harnesses can teleport freely.
+  const dist = leashStep(dt, player);
   survival.tautness = clamp(dist / survival.hose, 0, 1);
 
   // Tender. Pay-out is instant and unconditional; only the haul-back is rate limited,
@@ -629,9 +844,13 @@ export function updateTether(dt, player, zone) {
   // dt is split into equal steps that always consume the whole frame, so the rope never
   // runs slow at low frame rates (a fixed 60 Hz step with a substep cap starves it while
   // the pinned ends keep teleporting at the real rate — which straightens the rope).
+  // A zero-length frame (two frames inside one clock tick: the driven probe loop does
+  // it) used to integrate with h = 0 and divide by it in substep's velocity recovery —
+  // 0 * Infinity — poisoning every node with NaN for the rest of the session (the hose
+  // vanished; caught while verifying the leash). No time, no step.
   const step = Math.min(dt, 0.1);
-  const nsub = Math.min(MAXSUB, Math.max(1, Math.ceil(step / FIXED)));
-  const h = step / nsub;
+  const nsub = step > 0 ? Math.min(MAXSUB, Math.max(1, Math.ceil(step / FIXED))) : 0;
+  const h = nsub > 0 ? step / nsub : 0;
   for (let s = 1; s <= nsub; s++) {
     const u = s / nsub;          // lerp the pinned ends across substeps or a fast diver jolts them
     substep(h,
@@ -642,14 +861,16 @@ export function updateTether(dt, player, zone) {
   _pa.copy(anchor); _ph.copy(helmet);
 
   // One cylinder per segment, stretched EXT past each end so the wedge gap that real
-  // bending now opens at every joint stays buried inside the joint.
+  // bending now opens at every joint stays buried inside the joint. Drawn from the
+  // render positions (physics + the snap's twang).
+  fillRender(dt);
   let arc = 0;
   for (let c = 0; c < CHUNKS; c++) {
     const inst = meshes[c], att = arcAttr[c];
     for (let j = 0; j < SEG; j++) {
       const i = c * SEG + j;
-      _p.set(px[i], py[i], pz[i]);
-      _d.set(px[i + 1] - px[i], py[i + 1] - py[i], pz[i + 1] - pz[i]);
+      _p.set(rpx[i], rpy[i], rpz[i]);
+      _d.set(rpx[i + 1] - rpx[i], rpy[i + 1] - rpy[i], rpz[i + 1] - rpz[i]);
       const len = _d.length() || 1e-6;
       _d.divideScalar(len);
       _q.setFromUnitVectors(_up, _d);
@@ -673,6 +894,12 @@ export function updateTether(dt, player, zone) {
 
 // Dev surface: shape metrics without having to unpack instanceMatrix from the console.
 if (typeof window !== 'undefined') {
+  // THE LEASH probe: live state, the last yank, and the hold's invariants. reset() clears
+  // the maxima before a run.
+  window.__leash = leash;
+  leash.reset = () => { leash.maxIn = 0; leash.maxEnd = 0; leash.n = 0; leash.last.str = 0; leash.last.v = 0; };
+  Object.defineProperty(leash, 'clock', { get: () => clockT });   // sim seconds (sum of dt)
+  leash.k = { GIVE, GIVE_K, GIVE_D, GIVE_DRAW, YANK_E, YANK_BACK, YANK_HARD, YANK_MIN, REARM, PRESS_ON, PRESS_ON_GROUND };
   window.tether = {
     get deployed() { return deployed; },
     get contacts() { return contacts; },

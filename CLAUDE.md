@@ -245,10 +245,24 @@ against explicit contracts and reviewed on return.
 - `systems/survival.js` — air economy (campaign set: FUEL_BURN 1/420, O2_REFILL
   0.10, HOSE 120/craft, HOSE_REQ [0,640,920], rescue refuel 0.5). TORN DRESS: bites
   and sleeper slams halve refill for 20 s (stacks extend). Storm sputter cuts supply.
-  HOSE_REQ gates descent. NOTE: tether.js carries a hard leash clamp that contradicts
-  the recorded user ruling — `hose-leash-decision` card is open; do not touch it.
+  HOSE_REQ gates descent. THE LEASH (ruled by Michael 2026-10-04, roadmap/hose-leash-
+  decision.md: "stop with stretch but like pulls him a bit so he might go off balance.
+  This should be speed based so the faster he is moving the more exagerated the pull"):
+  tether.js `leashStep` — over the last 5 u the line gives (a spring off the bottom, an
+  outward-speed drag on the ground so a walk never deadlocks), then a firm HOLD at full
+  stretch resolved on velocity at the time of impact (no position snap, no tunnelling,
+  no jitter), and ARRIVING at the hold is a YANK scaled on his closing speed (strength
+  = (v/7)^0.8): restitution back toward the raft, a stagger (diver.js `diverYank` own
+  channels ykP/ykR — a rock back on the boots, a tumble up to ~55 deg in open water,
+  never horizontal), player.stagger (hands off the drive 0.3-1.5 s), a camera jolt
+  (game.js camYank, centimetres), a twang running up the drawn hose, and a creak-thump
+  + bonnet knock (audio/sal.js hoseYank). AIR is cut only while he STRAINS against the
+  hold (`survival.strain`, eased both ways), never because the line is merely taut. The
+  leash anchors to the pump eased over 1.5 s (the live hose head heaves 1.5-2.5 u/s).
+  `window.__leash` (state, last yank, maxIn/maxEnd, reset()), `__noLeash` bypasses it.
 - `systems/tether.js` — verlet hose, anchors to live `pumpPos` (raft bobs), docks at
-  `airInletWorldPos`. `setTetherVisible` used by the ending.
+  `airInletWorldPos`. `setTetherVisible` used by the ending. A zero-dt frame no longer
+  integrates (it NaN-poisoned every node: the hose vanished for the session).
 - `ending.js` — 75s cinematic: stillness → rift-threaded ascent (spline through all
   three rift openings; terrain is always present, a straight ascent pops through
   floors) → three sleeper silhouette passes keyed to DEPTH → surface → title card.
@@ -600,4 +614,4 @@ seeded at home (sextant + three marks in his hand), the sea receives the raft's 
 (sampler2DShadow — never a plain sampler2D on a compare depth texture), context-loss
 and frame-throw are handled visibly, reduced-motion/mute/gamepad exist. Open on
 Michael: eye pass, ear pass (audio-audit), three decisions (props glTF, skyline
-fingerprint, hose leash).
+fingerprint, hose leash — the leash was ruled 2026-10-04, see systems/survival.js above).

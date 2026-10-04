@@ -118,9 +118,9 @@ export function mixSal(E) {
   E.gate('mv', s.moveG, H, 0.05 * cl01(S.speed / 22) * u, 0.3);
   R('mvf', s.moveBP.frequency, 320 + 30 * S.speed, 0.3);
   E.gate('whine', s.whineG, H, 0.016 * Math.pow(cl01(1 - S.light / 0.4), 2.2), 0.5);
-  // the hose at its end: the rubber complains
+  // the hose at its end: the rubber complains — moving against it, or straining on the hold
   const t = E.now();
-  if (S.taut > 0.93 && S.speed > 1.2 && u > 0.5 && t - s.lastStrain > E.r(1.4, 2.6)) { s.lastStrain = t; hoseStrain(E, S.taut); }
+  if (((S.taut > 0.93 && S.speed > 1.2) || S.strain > 0.4) && u > 0.5 && t - s.lastStrain > E.r(1.4, 2.6)) { s.lastStrain = t; hoseStrain(E, Math.max(S.taut, S.strain)); }
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +228,43 @@ function hoseStrain(E, taut) {
   E.mod(E.r(14, 22), 0.5, g.gain, t, t + 0.8);
   E.env(g.gain, t, 0.15, 0.8, 0.05 * taut);
   E.fire(o, t, t + 0.9, [bp, g]);
+}
+
+// THE YANK (tether.js leash): the line comes up bar-taut on him. Three layers, all scaled
+// by the snap's strength k: OUTSIDE, the rubber-and-canvas hose taking the load — a low
+// thump down the line and a short stick-slip creak that rises as it stretches; INSIDE, on
+// a hard jerk, the bonnet knocks on the corselet — a dull copper knock (a few inharmonic
+// partials, fast decay) heard through his own head. A lean is a faint creak and no knock.
+export function hoseYank(E, k = 0.5) {
+  if (E.full() || !(k > 0.02)) return;
+  const t = E.now() + 0.005, out = E.B.events, H = E.B.helmet, u = E.S.above < 0.5 ? 1 : 0.6;
+  // the thump: the whole line taking up at once, low and short
+  const tg = E.g(0, out), to = E.o('sine', 58, tg);
+  to.frequency.setValueAtTime(58 + 20 * k, t); to.frequency.exponentialRampToValueAtTime(30, t + 0.22);
+  E.env(tg.gain, t, 0.004, 0.32, 0.30 * Math.pow(k, 0.7) * u);
+  E.fire(to, t, t + 0.36, [tg]);
+  // the creak: a gated sawtooth through a narrow band, pitch rising as the rubber loads
+  const cg = E.g(0, out), cb = E.f('bandpass', 300, 9, cg), am = E.g(0.5); am.connect(cb);
+  const co = E.o('sawtooth', E.r(80, 105), am);
+  co.frequency.setValueAtTime(co.frequency.value, t); co.frequency.exponentialRampToValueAtTime(co.frequency.value * (1.3 + 0.5 * k), t + 0.18 + 0.2 * k);
+  cb.frequency.setValueAtTime(260, t); cb.frequency.exponentialRampToValueAtTime(420 + 260 * k, t + 0.25);
+  E.mod(E.r(26, 38), 0.5, am.gain, t, t + 0.5, 'square');
+  E.env(cg.gain, t + 0.01, 0.03, 0.22 + 0.3 * k, 0.10 * (0.35 + 0.65 * k) * u);
+  E.fire(co, t, t + 0.6, [am, cb, cg]);
+  // the knock: the bonnet on the breastplate, from inside — only when it is a real jerk
+  if (k > 0.22) {
+    const kv = Math.min(1, (k - 0.22) / 0.6) * E.startle;
+    const parts = [[310, 0.12], [742, 0.08], [1187, 0.04], [1663, 0.025]];
+    for (let i = 0; i < parts.length; i++) {
+      const f = parts[i][0] * E.r(0.97, 1.03), g = E.g(0, H), o = E.o('sine', f, g);
+      E.env(g.gain, t + 0.03, 0.002, 0.10 + 0.25 / (i + 1), parts[i][1] * kv);
+      E.fire(o, t + 0.03, t + 0.45, [g]);
+    }
+    const ng = E.g(0, H), nb = E.f('bandpass', 900, 3, ng);
+    E.env(ng.gain, t + 0.03, 0.001, 0.05, 0.07 * kv);
+    E.fire(E.n('white', 0.6, nb), t + 0.03, t + 0.1, [nb, ng]);
+  }
+  E.log('hoseYank', null, k * 100);
 }
 
 // The knife through water: not a whoosh — a displacement. Pressure on the blade's flat,

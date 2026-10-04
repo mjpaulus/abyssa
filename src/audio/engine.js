@@ -61,9 +61,9 @@ export function createEngine(ctx, opt = {}) {
     LOG: [], trace: false,
     // Targets (written by the facade) and smoothed values.
     T: { depth: 0, above: 1, zone: 0, prox: 0, calm: 0, speed: 0, wind: 0, rain: 0, day: 1, light: 1, air: 1,
-      pumpSpd: 1, supplied: 1, taut: 0, torn: 0, rite: 0 },
+      pumpSpd: 1, supplied: 1, taut: 0, strain: 0, torn: 0, rite: 0 },
     S: { depth: 0, above: 1, zone: 0, prox: 0, calm: 0, speed: 0, wind: 0, rain: 0, day: 1, light: 1, air: 1,
-      pumpSpd: 1, supplied: 1, taut: 0, torn: 0, rite: 0, zw: [1, 0, 0] },
+      pumpSpd: 1, supplied: 1, taut: 0, strain: 0, torn: 0, rite: 0, zw: [1, 0, 0] },
     // per-frame input (the facade fills this in place: no allocation)
     in: {
       px: 0, py: 1.5, pz: 0, qx: 0, qy: 0, qz: 0, qw: 1, vx: 0, vy: 0, vz: 0,

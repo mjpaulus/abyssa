@@ -127,7 +127,7 @@ export function audioFrame(dt, pev, wx) {
   if (M.breathPhase) { I.breathPh = M.breathPhase(); I.breathStress = M.breathStress(); }
   if (M.raft) { const r = M.raft.position; I.raftX = r.x; I.raftY = r.y; I.raftZ = r.z; }
   const S = M.survival;
-  if (S) { T.supplied = S.supplied ? 1 : 0; T.taut = S.tautness || 0; T.torn = S.torn || 0; }
+  if (S) { T.supplied = S.supplied ? 1 : 0; T.taut = S.tautness || 0; T.strain = S.strain || 0; T.torn = S.torn || 0; }
   if (M.pumpSpeed) T.pumpSpd = M.pumpSpeed();
   I.lev = sleeperL; I.ev = sleeperEv;
   if (sleeperL && sleeperL.sigils && sleeperL.sigils.length) {
@@ -178,6 +178,8 @@ export function syncBreath() { /* breath follows breathPhase() every frame now; 
 export function knife() { if (live()) SAL.knife(E); }
 export function knifeHit(kind) { if (live()) SAL.knifeHit(E, kind); }
 export function land(p) { if (live()) SAL.land(E, p, surface()); }
+// the hose snapping taut on him (tether.js leash): k 0..1 is the yank's strength
+export function hoseYank(k) { if (live()) SAL.hoseYank(E, k); }
 // Sonar: the targets are what the ping actually finds — the sleeper's unlit wards
 // (bright iron), the sleeper's body (low), the rift once open. Flat array x,y,z,kind.
 const SON = new Float32Array(40);
@@ -242,6 +244,7 @@ function installDev() {
     slam, growl, airVent, bottleReady, voyage, sonar, knife, knifeHit, land: (p = 1.5) => land(p),
     step: (mat = 'silt') => SAL.step(E, mat, 1, 1), exhaust: () => SAL.exhaust(E, 1), tear: () => SAL.tear(E),
     splash: () => SAL.splash(E, 0.8), emerge: () => SAL.emerge(E), bite: () => CRE.bite(E),
+    hoseYank: (k = 0.8) => SAL.hoseYank(E, k),
     suitCreak: () => BED.suitCreak(E), rockGroan: () => BED.rockGroan(E), distantCall: () => BED.distantCall(E),
     deepKnock: () => BED.deepKnock(E), abyssTick: () => BED.abyssTick(E), hullCreak: () => BED.hullCreak(E),
     slap: () => BED.hullSlap(E), gull: () => BED.gull(E), thunder: (d = 200) => BED.thunder(E, E.in.px + d, E.in.pz, 1),

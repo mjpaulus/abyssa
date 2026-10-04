@@ -12,6 +12,7 @@ import { buildCre, frameCre } from './creatures.js';
 import { buildScore, tickScore } from './score.js';
 
 const SMOOTH = ['depth', 'prox', 'calm', 'speed', 'wind', 'rain', 'day', 'light', 'air', 'pumpSpd', 'supplied', 'taut', 'rite'];
+// (strain is not smoothed here: it is already eased in survival.js, and the creak keys on it)
 
 export function assemble(ctx, opt = {}) {
   const E = createEngine(ctx, opt);
@@ -26,6 +27,7 @@ export function tick(E, dt = 0.05) {
   for (let i = 0; i < SMOOTH.length; i++) { const n = SMOOTH[i]; S[n] += (T[n] - S[n]) * k; }
   S.above += (T.above - S.above) * ka;
   S.torn = T.torn;
+  S.strain = T.strain;
   S.zone = T.zone;
   for (let i = 0; i < 3; i++) S.zw[i] += ((i === S.zone ? 1 : 0) - S.zw[i]) * kz;
   mixBed(E); mixPump(E); mixSal(E);
