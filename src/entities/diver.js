@@ -2604,12 +2604,14 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       sp = inStance ? lp / ft.duty : 0;
     }
     ft.sp = inStance ? sp : -1;
-    ft.age = ft.planted ? ft.age + dt : 0;
+    ft.age = ft.planted || (inStance && ft.span) ? ft.age + dt : 0;
 
     // ---- CLAIM. A foot entering stance takes the ground where it already is. ----
     if (inStance && !ft.planted) {
       stepSeq++;
-      ft.step = stepSeq;
+      // (salfix) a boot re-taken inside its own span (an over-reach re-grip) keeps its place in
+      // the order of plants: pelvisDrop lets go of the OLDER plant, and the re-grip is not new
+      if (!ft.span) ft.step = stepSeq;
       // NOTHING IS CLOCKWORK. Small, deterministic, keyed on the step index alone.
       // Stance duration +/-3% (was 8: a long draw kept the boot down for 0.11 u more
       // ground than any other step, and the pelvis had to sink to let the leg reach it).
@@ -2845,8 +2847,6 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       if (!inStance) l = Math.min(l, Math.max(la, reachLand));
       tx = hx0 + dx / dl * l; ty = dy / dl * l; tz = dz / dl * l;
     } else { tx = fkx + (_vD.x - fkx) * w; ty = fky + (_vD.y - fky) * w; tz = fkz + (_vD.z - fkz) * w; }
-    if (ikDebug.blend) { const R0 = UP_L + LO_L, o = i ? ikDebug.blend.L : ikDebug.blend.R, hx0 = sgn * HIP_X;
-      o[0] = w; o[1] = Math.hypot(fkx - hx0, fky, fkz) / R0; o[2] = Math.hypot(_vD.x - hx0, _vD.y, _vD.z) / R0; o[3] = Math.hypot(tx - hx0, ty, tz) / R0; o[4] = inStance ? 1 : 0; }
     // THE GROUND IS A FLOOR FOR THE SWING TOO. The authored swing is scaled by gait
     // amplitude, so a slow step (or the decay of a stop) swings a nearly straight leg —
     // which, under a pelvis that now stands at its true height, put the swinging boot
@@ -3177,7 +3177,11 @@ function pelvisDrop(dt, player, gw) {
   ikDebug.low = low;
   // Never more than a quarter unit down: an anchor further than that is not a step to
   // crouch for, it is one to release and re-take (driveLegs does, on overreach).
-  tgt = clamp(tgt, -0.25, 0.02);
+  // (salfix) ...and never more than a hair ABOVE full stretch over the floor at his centre —
+  // except where a planted boot stands uphill of that floor and its knee needs the hips higher
+  // (the band floor, above): on a 38% grade the uphill knee was planted at 87-97 deg because
+  // this cap held the hips to the centre's height.
+  tgt = clamp(tgt, -0.25, Math.max(0.02, Math.min(low, 0.30)));
   if (!pelInit) { pelInit = true; pelS.x = tgt; pelS.v = 0; }
   // A ceiling: it falls fast (a late fall is an overreach, which the IK's reach clamp
   // absorbs for a frame or two) and rises on a softer spring. Falling at once was a 5 cm
