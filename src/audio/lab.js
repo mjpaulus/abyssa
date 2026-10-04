@@ -44,7 +44,26 @@ function base(E, o) {
   E.S.zw = [0, 0, 0]; E.S.zw[T.zone] = 1;
   E.setSpace(I.above ? 'deck' : ['reef', 'boiler', 'abyss'][T.zone], 0.01);
 }
+// THE INKED PASSAGE (ui/passage.js PT): the voyage score, the pen's strokes / rings /
+// lettering on its timeline, the bell as the nib touches the mark. passageQuiet = the
+// same without the pen, to read what the nib adds.
+const PASS_NIB = [[1.3, 'tick', 0.05, 0], [1.3, 'stroke', 0.82, 0.25], [2.18, 'ring', 0.22, 0.1], [2.34, 'letter', 0.3, 0.1],
+  [2.68, 'tick', 0.05, 0], [2.68, 'stroke', 0.64, 0.45], [3.32, 'ring', 0.16, 0.5], [3.42, 'letter', 0.22, 0.5],
+  [3.68, 'stroke', 0.64, 0.85], [4.32, 'tick', 0.05, 0], [4.4, 'letter', 0.5, 0.2]];
+function passageScene(pen) {
+  return {
+    secs: 8, what: 'the inked passage: chain/strakes, the nib ' + (pen ? 'ON' : 'OFF') + ', the bell at 4.32 s',
+    setup(E) { base(E, { y: 1.5, deck: true, wind: 0.35 }); BED.voyage(E, 5.95); this.i = 0; this.b = 0; },
+    at(E, t) {
+      breathe(E, t);
+      while (pen && this.i < PASS_NIB.length && PASS_NIB[this.i][0] <= t + 1e-6) { const q = PASS_NIB[this.i++]; BED.nib(E, q[1], q[2], -0.2, 0.2, q[3]); }
+      if (!this.b && t >= 4.3) { this.b = 1; SCO.chime(E, 392, 2.6, 0.2, 'voyage'); }
+    }
+  };
+}
 export const SCENES = {
+  passage: passageScene(true),
+  passageQuiet: passageScene(false),
   deck: {
     secs: 16, what: 'on deck, fair day: wind, lap, slaps, hull, the pump beside him, boots on planks',
     setup(E) { base(E, { y: 1.5, deck: true, wind: 0.35 }); this.w = {}; },

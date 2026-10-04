@@ -174,6 +174,8 @@ export function slam() { if (live()) CRE.slam(E); }
 export function airVent(power = 1) { if (live()) SAL.airVent(E, power); }
 export function bottleReady() { if (live()) SAL.bottleReady(E); }
 export function voyage(len) { if (live()) BED.voyage(E, len); }
+// The passage's pen on the chart (ui/passage.js via game.js): kind 'stroke' | 'ring' | 'letter' | 'tick'.
+export function nib(kind, dur, pan0, pan1, dry) { if (live()) BED.nib(E, kind, dur, pan0, pan1, dry); }
 export function syncBreath() { /* breath follows breathPhase() every frame now; kept for callers */ }
 export function knife() { if (live()) SAL.knife(E); }
 export function knifeHit(kind) { if (live()) SAL.knifeHit(E, kind); }

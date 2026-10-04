@@ -21,7 +21,7 @@ import {
 import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
   setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady, setPump,
-  syncBreath, voyage, setAbove, setWind, setMaster,
+  syncBreath, voyage, nib, setAbove, setWind, setMaster,
   audioFrame, audioSleeper, setPaused, sonar, knife, knifeHit, land
 } from './audio.js';
 import {
@@ -50,6 +50,7 @@ import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
 import { setSite, currentSite, currentSiteIndex, siteAt } from './world/site.js';
 import { openChart, closeChart, isChartOpen } from './ui/chartOverlay.js';
+import { startPassage, updatePassage, setPassageSound, PT as PASSAGE_T, PEV_RESEED, PEV_BELL, PEV_DONE } from './ui/passage.js';
 // dev look-dev hooks are live only under ?lab (the lab's own flag)
 const DEV_CAMPIN = typeof location !== 'undefined' && location.search.includes('lab');
 
@@ -588,26 +589,32 @@ function failCard(title, line) {
 window.__loseContext = () => { const x = renderer.getContext().getExtension('WEBGL_lose_context'); if (x) x.loseContext(); return !!x; };
 window.__breakAmbient = 0;
 
-// ---- THE VOYAGE: weigh anchor, black water, a new sea floor -------------------------
-const $voyage = (() => {
-  const d = document.createElement('div');
-  d.id = 'voyage';
-  d.style.cssText = 'position:fixed;inset:0;background:#010409;opacity:0;pointer-events:none;z-index:15';
-  document.body.appendChild(d);
-  return d;
-})();
-let voyageT = 0, voyageTo = 0, voyageDone = false, inkBeat = false;
+// ---- THE VOYAGE: weigh anchor, the chart under the lamp, a new sea floor ------------
+// THE INKED PASSAGE (Michael, 2026-10-04, roadmap/voyage-fade-timing.md): the sea fades
+// as the paper chart comes up and fills the screen; Sal's course inks itself across it
+// from this anchorage to the chosen one; the bell rings as the nib touches the mark; the
+// chart dissolves into the new water. ui/passage.js owns the sheet and its clock; this
+// file owns what happens to the world: the reseed (scheduled by the passage into the
+// still beat after the chart is up and before the pen goes down, where its main-thread
+// hitch can't be seen), the bell, play.
+let voyageTo = 0, voyageDone = false, inkBeat = false;
+// Arrival lands on the pause (the chart click released the helm: CLICK TO TAKE THE HELM),
+// and a pause suspends the audio. Hold that off a few seconds so the bell the nib rang,
+// and the water under the new mooring, ring out before the sea goes quiet.
+let voyageRing = 0;
+setPassageSound((kind, dur, p0, p1, dry) => nib(kind, dur, p0, p1, dry));
 
 function startVoyage(i) {
-  if (state !== 'play') return;
+  if (state !== 'play' || i === currentSiteIndex() || !siteAt(i)) return;
   clearKeys();
   state = 'voyage';
-  voyageT = 0; voyageTo = i; voyageDone = false;
-  voyage();                                 // the passage, scored: chain, strakes, luff, bell, gull
+  voyageTo = i; voyageDone = false;
+  startPassage(currentSiteIndex(), i, { currentSite: currentSiteIndex(), calmed: chartRec, found: chartFound });
+  voyage(PASSAGE_T.END);                    // the passage, scored: chain, strakes, luff, gull
   showMsg('SHE MAKES FOR ' + siteAt(i).name, 4);
 }
 
-// The reseed itself, run once under full black: a load event, exempt from the
+// The reseed itself, run once under the opaque chart: a load event, exempt from the
 // per-frame allocation rule. ORDER IS CONTRACT — flora excludes around wreckSites(),
 // dens are re-picked from flora's fresh colliders.
 function reseedWorld(i) {
@@ -1284,20 +1291,23 @@ function update(dt, t) {
   updateRifts(dt, t, zone, !!(lev && lev.calmed)); pm('rifts');
 
   // ---- THE VOYAGE ------------------------------------------------------------------
-  // A cut dressed as passage: fade to black, reseed the whole sea floor under it,
-  // arrive on deck at the new anchorage. The world keeps breathing (ambient updates
-  // above already ran); the reseed itself happens exactly once, at full black.
+  // The inked passage (ui/passage.js) runs on its own wall clock; it tells us when to
+  // reseed (once, under the opaque sheet, before the pen goes down), when the nib
+  // touches the mark (the bell) and when the chart has dissolved (play). Blur holds it:
+  // the sheet stops where it is and the audio suspends with it, as in play.
   if (state === 'voyage') {
-    voyageT += dt;
-    $voyage.style.opacity = voyageT < 2 ? voyageT / 2
-      : voyageT < 4.6 ? 1
-      : Math.max(0, 1 - (voyageT - 4.6) / 1.5);
-    if (!voyageDone && voyageT >= 2.3) {
+    setPaused(blurred);
+    const pev = updatePassage(blurred);
+    if ((pev & PEV_RESEED) && !voyageDone) {
       voyageDone = true;
       reseedWorld(voyageTo);
-      chime(392, 2.6, 0.2, 'voyage');       // the bell as she takes her new mooring
     }
-    if (voyageT >= 6.2) { state = 'play'; $voyage.style.opacity = 0; }
+    if (pev & PEV_BELL) chime(392, 2.6, 0.2, 'voyage');   // the ship's bell as the nib touches her mooring
+    if (pev & PEV_DONE) {
+      if (!voyageDone) { voyageDone = true; reseedWorld(voyageTo); }   // never arrive unreseeded
+      state = 'play';
+      voyageRing = 3;
+    }
     updateRaft(dt, t);
     updateAtmosphere(0, camera.position.y);
     updateLighting(0); syncLamps();   // atmos: lamp in-scatter reads the RELIT lantern
@@ -1340,7 +1350,8 @@ function update(dt, t) {
   // THE PAUSE: no pointer lock and no chart means no helm. See the note at `paused`.
   // window.__helm: the review harness has no pointer lock; it takes the helm by flag.
   paused = !window.__helm && (!locked || blurred) && !isChartOpen();
-  setPaused(paused);   // audio: Esc/blur suspends the context
+  voyageRing = Math.max(0, voyageRing - dt);
+  setPaused(paused && (voyageRing <= 0 || blurred));   // audio: Esc/blur suspends the context (an arrival's bell rings out first)
   pauseT = paused ? pauseT + dt : 0;
   // the line waits a beat so the lock's own latency never flashes it
   $pause.classList.toggle('on', paused && pauseT > 0.35);
