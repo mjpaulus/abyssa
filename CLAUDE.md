@@ -322,8 +322,9 @@ against explicit contracts and reviewed on return.
 - THE CHART (multi-site ocean) — `world/site.js` is the registry (3 authored
   anchorages; site 0 = shipped world BIT-IDENTICAL, the regression anchor; terrain
   fingerprints on the canonical probe (`__ridge.fp()`, see terrain.js above) since THE FAR
-  RIDGE: home 119f0cae, Pallid Bank cb37d61d, Burned Ground 3a8dfad7, Unsounded Shelf
-  5b793afa — were 4ff3a4f6 / bd02b8e3 / 4014c41e / 46c21abb on 7a41c43). The world
+  RIDGE + per-site shaping (main 21148ef, both merged): home 119f0cae, Pallid Bank 2c0df461,
+  Burned Ground ff316095 — were 4ff3a4f6 / bd02b8e3 / 4014c41e on 7a41c43; zones 1+2 at home
+  `__ridge.fp([1,2])` d47f42e0). The world
   reseeds IN PLACE around the raft: `reseedWorld(i)` in game.js runs
   fillTerrain -> reseedWrecks(tools) -> reseedFlora -> reseedResources ->
   reseedProps -> reseedVents -> reseedVentLife -> reseedGardens -> reseatRifts ->
@@ -364,10 +365,9 @@ against explicit contracts and reviewed on return.
   round her rift's lip (lair.bear, or lair.arc + idle picks the lip height), Orune turns
   about her trawler (lair.bear / idle), Mhor's furnace moves (lair.bear/r); `hard` =
   hammerT/threatR, pull/hold/lashCd/grabR, circleT/stunT/hitR/speed. Never more lights.
-  Probe `__chart.fp()` (terrain.js terrainFingerprint: FNV-1a of f32 terrainH, 32x32 grid
-  over +-260 x 3 zones): home 8ff7cdbd (UNCHANGED), Pallid c265183a, Burned
-  738bafec (second pass: rim.out 28; was e7dbcb88). (The old 5e6cfe45/ef14da09 recipe is not in the repo and could not be
-  reproduced.) sleeperFingerprint(i) home: 49a7a176 ac04921e ce3eaf9d.
+  `__chart.fp()` is the same canonical probe as `__ridge.fp()` (values above; the sites
+  branch's own probe was folded into it at merge). sleeperFingerprint(i) home: 49a7a176
+  ac04921e ce3eaf9d.
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own
