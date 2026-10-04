@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos } from '../config.js';
 import { V3 } from '../lib/math.js';
-import { makeGlow } from '../lib/textures.js';
+import { makeGlow, makeWarmGlow } from '../lib/textures.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { terrainH } from './terrain.js';
 import { collect } from '../systems/survival.js';
@@ -363,7 +363,10 @@ function bitumenMesh(at, zi) {
   const B = [];
   for (let i = 0; i < 3; i++) { const r = rr(0.14, 0.26), x = rr(-0.5, 0.5), y = rr(0.2, 0.7), z = rr(-0.5, 0.5); B.push({ r, x, y: (y - 0.2) / 0.5, z }); }
   g.add(new THREE.Mesh(drape(bitumenGeo(B), at, zi, 0), bitumenMat));
-  g.add(makeGlow(0xffa64d, 1.8));
+  // fog OFF with its own fade (lib/textures.js warmGlow): fogged, this amber seep marker
+  // turned into a green-teal disc of water colour with range. Still a faint warm point
+  // out to 90 u (it is how a diver finds the pump's food), swelling as murk does.
+  g.add(makeWarmGlow(0xffa64d, 1.8, { near: 20, far: 90, nearW: 0.5, swell: 0.02, swellMax: 1.0 }));
   return g;
 }
 

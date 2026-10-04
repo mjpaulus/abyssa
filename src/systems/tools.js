@@ -29,7 +29,7 @@ import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../core.js';
 import { ZONE_GAP, RIFT_R, riftPos, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
-import { glowTex, canvas2d, noiseCanvas } from '../lib/textures.js';
+import { glowTex, canvas2d, noiseCanvas, warmGlow } from '../lib/textures.js';
 import { terrainH } from '../world/terrain.js';
 import { motes } from '../world/rifts.js';
 import { nodes } from '../world/resources.js';
@@ -336,6 +336,7 @@ function buildSpear() {
       depthWrite: false, blending: THREE.AdditiveBlending
     }));
     glint.scale.setScalar(1.4);
+    warmGlow(glint, { near: 20, far: 70, nearW: 0.5 });   // fog off: a fogged warm glint goes teal with range
     grp.add(glint);
     grp.visible = false;
     scene.add(grp);

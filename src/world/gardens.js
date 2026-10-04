@@ -1226,7 +1226,14 @@ function layout() {
         const x = vt.x + Math.cos(a) * r, z = vt.z + Math.sin(a) * r;
         if (nearWreck(zi, x, z)) continue;
         const y = terrainH(x, z, zi), S = rr(1.2, 4.2);
-        put(imM, mi++, stand(terrainNormal(x, z, zi), 1.0, _gr() * TAU), S, S * 0.6, x, y + 0.02, z,
+        // A mat is a FLAT felt disc up to 4.2 u across: on a steep flank (Pallid Bank's
+        // vent mounds run to 58 degrees) it cannot drape, so it stood off the curved slope
+        // as a lit pale card against unlit rock — "a sheet of paper". Mats keep to ground
+        // they can lie on: full size to ~31 degrees, shrinking to nothing by ~49. The size
+        // is scaled AFTER every stream draw, so the layout stream (and everything placed
+        // after the mats) is unchanged.
+        const mn = terrainNormal(x, z, zi), mk = Math.max(1e-4, sstep(0.66, 0.86, mn.y));
+        put(imM, mi++, stand(mn, 1.0, _gr() * TAU), S * mk, S * 0.6 * mk, x, y + 0.02, z,
           pick(PAL.mat, k, 0.8, 1.05), _gr() * TAU, 0, 0, _gr());
       }
     }

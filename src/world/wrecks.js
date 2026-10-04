@@ -47,7 +47,7 @@ import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom, ZONE_SEEN } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { rng, clamp, fbm, V3 } from '../lib/math.js';
-import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, ironPlateSet } from '../lib/textures.js';
+import { makeWarmGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, ironPlateSet } from '../lib/textures.js';
 import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
 import { player } from '../player.js';
 import { siteParams, currentSiteIndex } from './site.js';
@@ -558,7 +558,9 @@ function porthole(p, M, R, x, y, z, ry, lit) {
     const spill = new THREE.Mesh(put(cone), spillMat());
     spill.renderOrder = 3;
     p.node.add(spill);
-    const halo = makeGlow(0xffb468, R * 5.5);
+    // fog OFF with its own fade (lib/textures.js warmGlow): fogged, an additive halo turns
+    // into a disc of water colour with range — this pane's halo read lime past ~25 u.
+    const halo = makeWarmGlow(0xffb468, R * 5.5, { near: 20, far: 80, nearW: 0.5 });
     halo.material.opacity = 0.28;
     _v.set(0, 0, R * 0.5).applyAxisAngle(UP, ry);
     halo.position.set(x + _v.x, y + _v.y, z + _v.z);
@@ -682,12 +684,18 @@ function burstFX(color) {
 
 // Warm mechanical counterpart to the rifts' cold motes: a slow-turning brass shard with
 // two haloes, readable well past the 25u the brief asks for.
+// The haloes are fog OFF with their own distance curve (lib/textures.js warmGlow, the
+// vent-ember rule): fogged, the per-channel chunk turned the trawler's 0xffb060 amber
+// into a greenish-yellow disc of water colour by ~30 u. Full strength up close, a faint
+// warm presence out to 110 u, the outer halo swelling with range the way murk swells a
+// lamp — and never brighter than the hoard lanterns it shares zone 1 with.
+const RELIC_FADE = { near: 30, far: 110, nearW: 0.6, swell: 0.02, swellMax: 1.0 };
 function relicMarker(color) {
   const grp = new THREE.Group();
   const core = new THREE.Mesh(relicGeo, new THREE.MeshBasicMaterial({ color: 0xffe6b8, fog: false }));
   grp.add(core);
-  const g1 = makeGlow(color, 2.4);
-  const g2 = makeGlow(color, 5.0);
+  const g1 = makeWarmGlow(color, 2.4, RELIC_FADE);
+  const g2 = makeWarmGlow(color, 5.0, RELIC_FADE);
   g2.material.opacity = 0.30;
   grp.add(g1, g2);
   grp.userData = { core, g1, g2 };

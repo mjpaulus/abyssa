@@ -262,7 +262,7 @@ against explicit contracts and reviewed on return.
   - the ember sprites are `fog:false` (per-channel fog turned warm amber TEAL in
     metres — same lesson as the raft lantern), sit ABOVE the bore rim (recessed, the
     chimney's own lip depth-tests them away up close), and carry a two-range curve:
-    linear halo to 90 units (zone 1's only wayfinding, like the raft lamp) swelling
+    linear halo to 130 units (Michael 2026-10-04: "Visible from 90, dimmer than the hoard") swelling
     with distance (murk grows halos), plus a near bore-fire term.
   - ONE shared PointLight rides the nearest hot throat — never per-vent lights,
     because changing the scene's LIGHT COUNT recompiles every lit material mid-game.

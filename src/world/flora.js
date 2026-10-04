@@ -5,7 +5,7 @@ import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
-import { makeGlow, rockMapSet, bladeMapSet, coralMazeSet } from '../lib/textures.js';
+import { makeGlow, warmGlow, rockMapSet, bladeMapSet, coralMazeSet } from '../lib/textures.js';
 import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
 import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
 import { wreckSites, driftSkirt, leeOf } from './wrecks.js';
@@ -1470,6 +1470,9 @@ function buildOnce() {
     for (const [p, S] of lit) {
       const g = makeGlow(P.glow, S * 4.5);
       g.material.opacity = 0.16;
+      // a WARM halo (zone 2's orange polyps) is fog OFF with its own fade (lib/textures.js
+      // warmGlow): fogged, an additive amber halo becomes a disc of teal water with range.
+      if (g.material.color.r > g.material.color.b) warmGlow(g, { near: 25, far: 100, nearW: 0.4 });
       g.position.set(p.x, p.y + S * 0.5, p.z);
       zones[zi].add(g);
     }

@@ -776,7 +776,9 @@ function growField() {
     if (!A.dead) {
       activeVents.push(throat);
       if (hotSet.has(i)) {
-        const sprite = makeGlow(0xff8248, 0.9);
+        // an EMBER: amber-red, not the orange of a UI glyph (it is fog-off, so this is the
+        // colour that reaches the screen at every range)
+        const sprite = makeGlow(0xff6a2c, 0.9);
         sprite.material.opacity = 0;
         // fog OFF, same reasoning as the raft's lantern: the per-channel Beer-Lambert
         // chunk kills red in metres at vent-floor murk, so a warm ember arrived on
@@ -1004,18 +1006,26 @@ export function updateVents(dt, t) {
     // 25 it swells into the fire in the bore. Measured before this: at 12 units from
     // a chimney the frame was EMPTY; unlit rock in vent-floor murk is invisible, so
     // a 25-unit gate meant the field could only be discovered by collision.
-    const far = clamp(1 - dist / 90, 0, 1);
+    // Michael 2026-10-04 (roadmap/vent-ember-strength.md): "Visible from 90, dimmer than
+    // the hoard". The far term used to reach exactly zero AT 90 (1 - d/90), so nothing
+    // marked a vent until ~70; it now runs out to 130, which puts a faint ember of ~0.06 at
+    // 90, ~0.09 at 70, ~0.13 at 45 — always under a third of Orune's hoard lanterns at the
+    // same range (0.55 x their own fade, fog-off, hoard.js) — and grows smoothly into the
+    // unchanged near bore-fire term inside 25.
+    const far = clamp(1 - dist / 130, 0, 1);
     const near = clamp(1 - dist / 25, 0, 1);
     // far is LINEAR, not squared: squared put a 50-unit ember at alpha 0.03, which is
-    // below the film grain's own noise floor — measured invisible. 0.10-0.12 at that
-    // range is a presence the eye finds without the frame ever calling attention to it.
+    // below the film grain's own noise floor — measured invisible.
     v.sprite.visible = seen && vis > 0;
-    v.sprite.material.opacity = (far * 0.22 + near * near * 0.30) * vis
+    v.sprite.material.opacity = (far * 0.20 + near * near * 0.30) * vis
       * (0.85 + 0.15 * Math.sin(t * 1.7 + i * 2.1));
     // A light in murk grows a scattering halo with range — that is what fog does to a
-    // lamp — so the sprite swells as the fire itself shrinks below resolvability. At
-    // 0.9 fixed it was two invisible pixels from 45 units out.
-    v.sprite.scale.setScalar(0.9 + dist * 0.075);
+    // lamp — so the sprite swells as the fire itself shrinks below resolvability (at 0.9
+    // fixed it was two invisible pixels from 45 units out). But only so far: at 0.075/u it
+    // was a 7.6-unit smear at 90, a stain in the murk rather than a POINT you can steer by.
+    // The peak brightness of the sprite is its alpha whatever its size, so a tighter halo
+    // at range keeps the same faint ember and loses only the smear.
+    v.sprite.scale.setScalar(0.9 + Math.min(dist, 25) * 0.075 + Math.max(0, dist - 25) * 0.025);
   }
   // The shared light follows the nearest hot throat. Slow uneven flicker — a vent
   // breathes, it does not strobe — and the same 25-unit approach curve as the sprite,
