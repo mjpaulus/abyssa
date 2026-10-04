@@ -1,8 +1,8 @@
 ---
 title: Gale crests over the deck
-status: decision
+status: next
 tags: water, storm
-updated: 2026-08-05
+updated: 2026-10-04
 ---
 In a full gale, wave crests overlapping the raft show refracted water, not the deck behind them.
 
@@ -16,3 +16,5 @@ If unacceptable: fade `uRefrK` by fragment-to-raft proximity on the air side, at
 
 ## Log
 - 2026-08-05 — created at refraction ship (53376e8)
+- 2026-10-04 — RULED by Michael: "Fix it". Build: first re-check the artefact still occurs with the FFT ocean (world/ocean.js); if it does, fade the screen-space refraction weight by fragment-to-raft proximity on the air side. Moved decision -> next.
+

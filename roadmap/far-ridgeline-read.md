@@ -2,7 +2,7 @@
 title: Far ridgeline read
 status: decision
 tags: terrain
-updated: 2026-08-05
+updated: 2026-10-04
 ---
 Does the W2 rampart read against the rim? 4.5% vs 13.1% transmittance — measured 2.9x separation, but subtle.
 
@@ -14,3 +14,5 @@ Also of note: the rampart breaches the surface in places — distant 'islands' o
 
 ## Log
 - 2026-08-05 — carried from W2; islands observation added during the raft round
+- 2026-10-04 — RULED by Michael (islands): "Keep the islands". The rampart's mid-water read (RAM_H) goes on the side-by-side capture page with fly-remote-sites; stays in decision until he rules on RAM_H from it.
+

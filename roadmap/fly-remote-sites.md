@@ -2,7 +2,7 @@
 title: Fly Pallid Bank + Burned Ground
 status: decision
 tags: chart, phase 5
-updated: 2026-08-05
+updated: 2026-10-04
 ---
 Phase 5 of THE CHART: judge both remote skylines, vent clusters, wreck placement with your own eye.
 
@@ -14,3 +14,5 @@ Terrain fingerprints if a probe is needed: home 5e6cfe45, Pallid ef14da09 (32x32
 
 ## Log
 - 2026-08-05 — created at THE CHART v1 ship (de2aacc); awaiting flyover
+- 2026-10-04 — Michael chose to judge from a side-by-side page: Claude captures matched views (floor skyline, a vent cluster, the wreck, the sleeper) at home / Pallid / Burned and publishes one comparison page. Stays in decision until he rules from it.
+

@@ -2,7 +2,7 @@
 title: Vent ember strength
 status: decision
 tags: zone 1
-updated: 2026-08-05
+updated: 2026-10-04
 ---
 The ember halo reads to 90 units — zone 1's wayfinding. Too shy or too loud on a real monitor?
 
@@ -14,3 +14,5 @@ The vent light gate is linear over 34 units (camera trails the diver by ~10).
 
 ## Log
 - 2026-08-05 — created at boiler-room ship (cf0b51e)
+- 2026-10-04 — Michael chose to judge from the side-by-side capture page: a zone-1 vent approach at 90 / 45 / 15 u alongside Orune's hoard glow (now zone 1's far beacon). Stays in decision until he rules from it.
+

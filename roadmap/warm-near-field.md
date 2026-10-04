@@ -1,8 +1,8 @@
 ---
 title: Warm near field, zone 0
-status: decision
+status: done
 tags: water, taste
-updated: 2026-08-05
+updated: 2026-10-04
 ---
 Red 2% reach 84 -> 105 units in zone 0. Is the warmth right?
 
@@ -14,3 +14,5 @@ Worth judging NOW: until the samplePerf fix the game silently ran with volumetri
 
 ## Log
 - 2026-08-05 — carried from the silt-line round; still awaiting the call
+- 2026-10-04 — RULED by Michael: "Keep it". The warm near field (K_PART / SILT_MIX 0.62 / SILT_GAIN 1.08) stays as shipped. Moved decision -> done.
+

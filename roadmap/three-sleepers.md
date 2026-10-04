@@ -1,8 +1,8 @@
 ---
 title: The Three Sleepers (crab / octopus / squid)
-status: decision
+status: done
 tags: leviathan, design, world, geometry
-updated: 2026-09-24
+updated: 2026-10-04
 ---
 Michael: the leviathan is boring, one serpent scaled three ways. Each zone gets its own colossus — crab, octopus and squid characteristics, not those animals — monolithic next to Sal, different strengths and weaknesses. Something discoverable in each level triggers the creature (the trigger is also the reward), so the world gets bigger and more discoverable. Wards stay the verb; the payoff differs per zone.
 
@@ -21,3 +21,5 @@ Full design: docs/superpowers/specs/2026-09-13-three-sleepers-design.md. Zone 0 
 2026-09-24 (MHOR THE HUNTER, zone 2 flipped to him — all three sleepers now ship): hunter.js. A squid-like colossus ~36 u: lathed torpedo mantle with a head bulb and tail fins, generated red chromatophore hide with rows of photophores (emissive map) that pulse when he hunts, great black eyes that throw back the lantern, 8 arms + 2 tentacles with clubs as per-frame tubes. He is NOT in the zone: the zone is cold, THE LAST FURNACE (a 28 u black smoker) is dead with scorched stumps round it ("A DEAD CHIMNEY. SCORCHED..." / "THE LAST FURNACE. COLD. IT WANTS FEEDING."). [E] FEED THE FURNACE costs 2 bitumen: the throat goes red-hot (emissive + fog-off glow sprites), and a WARM POCKET within 28 u refills air (the depth reward; measured 0.40 -> 1.00). ~14 s after the fire takes he comes up out of the black (his name, a growl). He circles the diver out in the dark, closing, then STRIKES head-first with tentacles shooting out; a hit throws Sal and tears the dress; ink (Q) in his line breaks the strike ("THE INK BREAKS HIS LINE."). The weakness: a strike that runs through the furnace flare blinds him — the fire also scatters his squid keepers (the zone-2 rule rides him otherwise); he hangs stunned 10 s, sinking, his wards burning hot across his hide (borrowed pool lights), and only then can they be lit. Calmed, he sinks back into the deep; the furnace burns on. Verified live: prompt/feed, pocket, arrival, circle, strike, stun by bait over the fire, wards, calm, leave. Fingerprints unchanged, lights 14, memory flat across rebuilds.
 2026-09-24 (the ending matches): ending.js's three silhouette passes are the new animals, not three eels — Mhor streams through tail-first with arms trailing and orange photophores; Orune jets past, sac leading, arms pulsing behind, her wards burning; Velkath walks home along the zone-0 floor, her pass timed to the moment the diver rises past it so she crosses at eye level. Verified by playing the ending through and capturing each pass.
 2026-09-24: Moved to Needs Decision — all three sleepers and their rites ship; Michael's play-through is the judge (feel, difficulty, legibility of each trigger). The hose leash (its own open decision) currently stops a diver at 380 u of line in testing; the zone-2 furnace and Orune's lair are reachable with normal hose progression.
+2026-10-04: RULED by Michael: "Approve the design". The three sleepers and their rites are approved as designed; feel notes from play go on new cards. Moved decision -> done.
+

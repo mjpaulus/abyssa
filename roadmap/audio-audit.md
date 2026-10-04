@@ -14,3 +14,5 @@ Everything is synthesised in audio.js. Wants: level balance across depth, chime 
 ## Log
 - 2026-08-05 — long-standing; needs the user present
 - 2026-10-03 — the audio was rebuilt from scratch in aaa-pass-3 (all synthesised; listening guide in docs/audio.md). This card stays open: nobody has listened yet, and that needs Michael's ears.
+- 2026-10-04 — pump-audio-level folded in: Michael's one listen through docs/audio.md (stops 1, 4, 12) settles the pump level along with the rest of the mix.
+
