@@ -30,6 +30,7 @@ import {
 } from './systems/survival.js';
 import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed, chartAnchor, setKeepsakes } from './systems/raft.js';
 import { buildTether, updateTether, reseatTether } from './systems/tether.js';
+import { camBlockedLocal, camBlockWhy } from './systems/raft/colliders.js';
 import { buildResources, updateResources, reseedResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
 import { buildProps, updateProps, propColliders, reseedProps } from './world/props.js';
@@ -531,9 +532,13 @@ export function deckSpawn(out) {
 }
 // The play camera's rest spot behind a man standing at the spawn heading (game.js cuts
 // to it on start, voyage arrival and rescue rather than letting the spring travel).
-function snapCamBehind(back) {
-  const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
-  camera.position.set(player.pos.x - sy * back, player.pos.y + CAM_UP, player.pos.z - cy * back);
+// `onDeck` picks the boom: every deck spawn passes true (player.onDeck is last frame's
+// and may still say "in the water" after a rescue), the bench's seabed spots false.
+function snapCamBehind(onDeck) {
+  deckK = onDeck && DECKCAM.on ? 1 : 0; deckKV = 0;
+  const back = boomBack(), sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
+  camera.position.set(player.pos.x - sy * back, player.pos.y + boomUp(), player.pos.z - cy * back);
+  camDist = back; camDistV = 0; camBasePrev = back;
 }
 
 export function start() {
@@ -550,9 +555,9 @@ export function start() {
   // Snap the camera from the title portrait (in front of Sal) straight to the
   // play position behind him — letting the spring travel there would drag the
   // lens through his body.
-  snapCamBehind(CAM_BACK);
+  snapCamBehind(true);
   camVel.set(0, 0, 0);
-  camLook.set(player.pos.x + Math.sin(player.yaw) * 6, player.pos.y, player.pos.z + Math.cos(player.yaw) * 6);
+  camLook.set(player.pos.x + Math.sin(player.yaw) * 6, player.pos.y + DECKCAM.look * deckK, player.pos.z + Math.cos(player.yaw) * 6);
   document.getElementById('title').classList.add('hidden');
   $hud.classList.remove('hidden');
   initAudio();
@@ -671,7 +676,7 @@ function reseedWorld(i) {
   reseatTether(player);
   survival.oxygen = 1;
   survival.fuel = Math.max(survival.fuel, 0.3);   // the tender refits while she sails
-  snapCamBehind(CAM_BACK);
+  snapCamBehind(true);
   camSnap = true;
   saveChart();
 }
@@ -734,6 +739,76 @@ let camSnap = false;
 // nobody complained about — is byte-identical to before.
 let camKick = 0, camKickPunch = 0;
 const CAM_BACK = 9, CAM_UP = 2.4;
+// ---- THE DECK BOOM (roadmap/deck-camera-pullin.md; Michael 2026-10-04: "Closer on deck
+// (~6)"). Nine back the lens was always OFF the raft, 9.4 across, so every deck detail was
+// read from the water. On the planks the boom shortens and drops a touch; over the side it
+// eases back out to the 9 everything below the surface was tuned at.
+//   deckK  0 = the water boom (CAM_BACK/CAM_UP, untouched), 1 = the deck boom. It rides a
+//          critically-damped spring (w 4.7: ~95% in 1.0 s, no overshoot) toward a target
+//          the deck state sets: 1 on the planks, 0 in the water, and on the LADDER a
+//          ramp over the last of the climb, so the boom is already coming in as his
+//          helmet clears the rail and the step aboard never pops. Under the surface the
+//          target is 0 and deckK sits at exactly 0: the water camera is byte-for-byte the
+//          grounded camera it was (no lag added there).
+//   look   the aim point drops this much on deck (chosen by eye, 2026-10-04, against
+//          back 6 / up 2.0 / look -0.35 and back 6.5): with the eye-height aim six back,
+//          his helmet sat ON the horizon line in the middle of the frame. Aiming 0.8
+//          lower tips the lens down ~6 deg: the sea line rises to the upper third, his
+//          helmet stands clear below it against open water, and the deck he is walking
+//          on (pump, reel, the lashed cargo) fills the lower half where it can be read.
+// Occlusion: the deck boom is walked from the top of his helmet (DECK_PIVOT) to the lens
+// against the raft's solid gear (colliders.js camBlockedLocal: deck lines as columns, the gallows, jib, lantern and
+// the pump's head and stack) in RAFT-LOCAL space, so the test rolls with the hull in a
+// storm; the first contact is refined by bisection, so the pull-in is continuous (an
+// 8-step quantised answer stair-stepped the boom against the gallows legs).
+const DECKCAM = { on: true, back: 6.0, up: 2.1, look: -0.8, w: 4.7, margin: 0.25 };
+let deckK = 0, deckKV = 0, camBasePrev = CAM_BACK, deckWant = CAM_BACK, deckStops = 0;
+// THE CRANE. Most of what stands on the deck is waist-to-shoulder high (pump block, reel,
+// cargo, the receiver at 1.8): with one of those right behind him, pulling the boom in
+// along its line found nowhere to stand — the lens ended up at the 2.2 floor INSIDE the
+// receiver (measured), and when the hull rolled the line flickered clear/blocked and the
+// boom pumped between 2.2 and 6 with the swell. A camera operator would crane UP and
+// shoot over it. So when the line is blocked, the boom tries a few lifts and rides a
+// critically-damped spring to the lowest one that is clear; it comes back down only when
+// the lower line is clear by an extra hand (hysteresis), so the swell can't flick it.
+const DECK_LIFTS = [0, 0.9, 1.8, 2.7];
+let deckLift = 0, deckLiftV = 0, deckLiftT = 0;
+const boomBack = () => CAM_BACK + (DECKCAM.back - CAM_BACK) * deckK;
+const boomUp = () => CAM_UP + (DECKCAM.up - CAM_UP) * deckK;
+const _raftInv = new THREE.Matrix4(), _one = V3(1, 1, 1), _bp = V3(), _piv = V3();
+// the boom's pivot: the top of his helmet, not his eye — a line from the eye clipped
+// every waist-high thing a hand behind him; from the bonnet it clears them, which is also
+// what the lens needs to see (the helmet and shoulders), and the lens stays on that line.
+const DECK_PIVOT = 0.4;
+function deckTarget() {
+  if (!DECKCAM.on) return 0;
+  if (player.onDeck) return 1;
+  if (player.onLadder) {
+    // the ladder's catch is deck eye height - 0.68 (player.js); ramp over the 1.6 below it
+    const top = raft.position.y + 0.11 + 1.35;
+    return clamp((player.pos.y - (top - 2.3)) / 1.6, 0, 1);
+  }
+  return 0;
+}
+// Fraction (0..1] of the boom from `from` along `boom` that is clear of the raft's gear.
+function deckHit(from, boom, f, m) {
+  _bp.copy(from).addScaledVector(boom, f).applyMatrix4(_raftInv);
+  return camBlockedLocal(_bp.x, _bp.y, _bp.z, m);
+}
+function deckBoomClear(from, boom, m = DECKCAM.margin) {
+  _raftInv.compose(raft.position, raft.quaternion, _one).invert();
+  const N = 14;
+  // start a little out from his eye: the first 0.6 is inside his own helmet and dress
+  const f0 = 0.6 / boom.length();
+  for (let i = 1; i <= N; i++) {
+    const f = f0 + (1 - f0) * (i / N);
+    if (!deckHit(from, boom, f, m)) continue;
+    let lo = f0 + (1 - f0) * ((i - 1) / N), hi = f;
+    for (let k = 0; k < 5; k++) { const mid = (lo + hi) * 0.5; if (deckHit(from, boom, mid, m)) hi = mid; else lo = mid; }
+    return lo;
+  }
+  return 1;
+}
 const MASTER_VOL = 0.62;   // audio.js K.MASTER's shipped value; M toggles between it and silence
 // ---- THE FEEL CHANNEL -------------------------------------------------------------
 // Every embodiment change so far lived in Sal's BODY, and Michael couldn't feel any of
@@ -871,6 +946,13 @@ function buildDynCols() {
   if (player.pos.y < localSurfaceY()) dynCol(raft.position.x, raft.position.y, raft.position.z, 5);
 }
 window.__camCols = () => dynN;
+// Dev: the deck boom. knobs live-tune; state() is the boom as of the last frame.
+window.__deckcam = {
+  knobs: DECKCAM,
+  state: () => ({ deckK: +deckK.toFixed(4), target: deckTarget(), base: +boomBack().toFixed(3), up: +boomUp().toFixed(3),
+    camDist: +camDist.toFixed(3), deckWant: +deckWant.toFixed(3), onDeck: player.onDeck, onLadder: player.onLadder,
+    lens: +camera.position.distanceTo(player.pos).toFixed(3), why: deckWant < boomBack() - 1e-3 ? camBlockWhy : '', stops: deckStops, lift: +deckLift.toFixed(3), liftT: deckLiftT })
+};
 
 // Sal's body reacts to what struck him FROM THE SIDE it came from: the nearest of a list
 // of points (sharks carry .pos, the sleeper's spine is bare vectors). No allocation.
@@ -915,16 +997,65 @@ function updateCamera(dt, t, fwd) {
   camKick = Math.max(0, camKick - dt / 0.62);
   camKickPunch = Math.max(0, camKickPunch - dt / 0.34);
 
+  // the deck boom's ease (see DECKCAM): sub-stepped so a long frame cannot ring it
+  {
+    const tgt = deckTarget(), w = DECKCAM.w;
+    for (let r = dt; r > 1e-6; r -= 0.02) {
+      const h = Math.min(r, 0.02);
+      deckKV += (w * w * (tgt - deckK) - 2 * w * deckKV) * h;
+      deckK += deckKV * h;
+    }
+    if (deckK < 1e-4 && tgt === 0 && deckKV <= 0) { deckK = 0; deckKV = 0; }
+    else if (deckK > 1 - 1e-4 && tgt === 1 && deckKV >= 0) { deckK = 1; deckKV = 0; }
+  }
+  const base = boomBack(), up = boomUp();
   buildDynCols();
-  const want = clearCamDistance(player.pos, camBack, CAM_BACK, zi);
+  let want = clearCamDistance(player.pos, camBack, base, zi);
+  // On (or coming onto) the deck the boom is also walked against the raft's gear, along
+  // the real line from the pivot to the lens (back AND up), and the lens slides in along
+  // that same line: the rise shrinks with the pull-in so a pulled-in lens is still on a
+  // clear line (the water boom keeps its fixed rise; deckK is 0 there).
+  deckWant = base;
+  if (deckK > 0) {
+    // The crane's target: the lowest lift with a clear line (one lower than the current
+    // target must be clear by margin + 0.2). None clear: the longest line, but the current
+    // target holds unless another beats it by 0.1 (equal answers flip-flopped it, measured).
+    _piv.copy(player.pos); _piv.y += DECK_PIVOT;
+    let bestF = -1, bestL = deckLiftT, curF = -1;
+    for (let i = 0; i < DECK_LIFTS.length; i++) {
+      const L = DECK_LIFTS[i];
+      camTo.copy(camBack).multiplyScalar(base); camTo.y += up + L - DECK_PIVOT;
+      const f = deckBoomClear(_piv, camTo, DECKCAM.margin + (L < deckLiftT ? 0.2 : 0));
+      if (f >= 1) { bestL = L; bestF = 2; break; }
+      if (L === deckLiftT) curF = f;
+      if (f > bestF) { bestF = f; bestL = L; }
+    }
+    if (bestF < 2 && curF >= 0 && bestF < curF + 0.1) bestL = deckLiftT;
+    deckLiftT = bestL;
+    { const w = 5.5, h = Math.min(dt, 0.05); deckLiftV += (w * w * (deckLiftT - deckLift) - 2 * w * deckLiftV) * h; deckLift += deckLiftV * h;
+      if (deckLiftT === 0 && Math.abs(deckLift) < 1e-3 && Math.abs(deckLiftV) < 1e-2) deckLift = deckLiftV = 0; }
+    if (bestL === 0 && bestF === 2 && deckLift === 0) deckWant = base;   // the usual frame: one clear line, already tested
+    else {
+      camTo.copy(camBack).multiplyScalar(base); camTo.y += up + deckLift * deckK - DECK_PIVOT;
+      deckWant = Math.max(2.2, base * deckBoomClear(_piv, camTo));
+    }
+    if (deckWant < want) want = deckWant;
+  } else { deckLift = deckLiftV = deckLiftT = 0; }
   // In fast (an obstacle must never be clipped through), out on a critically-damped
   // spring: the old first-order ease left the wall at full speed, a visible kink every
   // time a rock slid out of the line of sight. The spring leaves it at rest.
-  if (want < camDist) { camDist += (want - camDist) * Math.min(1, 14 * dt); camDistV = 0; }
+  // A FREE boom (nothing in the way, and it was at full length last frame) rides the
+  // deck/water ease exactly — the spring is for coming off an obstacle, and chasing the
+  // ease with it would stack a second lag on the 1 s transition.
+  if (want >= base - 1e-4 && camDist >= camBasePrev - 1e-3) { camDist = want; camDistV = 0; }
+  else if (want < camDist) { camDist += (want - camDist) * Math.min(1, 14 * dt); camDistV = 0; }
   else { const w = 4.5; camDistV += (w * w * (want - camDist) - 2 * w * camDistV) * Math.min(dt, 0.05); camDist += camDistV * Math.min(dt, 0.05); if (camDist > want) { camDist = want; camDistV = 0; } }
+  camBasePrev = base;
 
   camDesired.copy(player.pos).addScaledVector(camBack, camDist);
-  camDesired.y += CAM_UP;
+  // on deck the lens rides the line from the pivot: pulled in, it comes down that line
+  if (deckK > 0) { const upD = up + deckLift * deckK; camDesired.y += upD - deckK * (upD - DECK_PIVOT) * (1 - camDist / base); }
+  else camDesired.y += CAM_UP;
   camDesired.y = Math.max(camDesired.y, terrainH(camDesired.x, camDesired.z, zi) + 1.2);
   // (The idle "breathing" drift — 0.09 u vertical, 0.07 u lateral, forever — is gone: a
   // locked frame on a still man is the point. Weight comes from Sal, not from the lens.)
@@ -1028,7 +1159,8 @@ function updateCamera(dt, t, fwd) {
     camera.position.copy(camDesired);
     camVel.set(0, 0, 0);
     camLook.copy(player.pos).addScaledVector(fwd, 6);
-    camDist = want; camDistV = 0;
+    camLook.y += DECKCAM.look * deckK;
+    camDist = want; camDistV = 0; camBasePrev = base;
   }
 
   // Critically-damped spring WITH VELOCITY FEED-FORWARD. The old spring damped the
@@ -1077,12 +1209,29 @@ function updateCamera(dt, t, fwd) {
     }
   }
 
+  // THE DECK BOOM'S HARD STOP. The spring trails camDesired by a frame or two, and in a
+  // brisk turn that lag carried the lens through the jib (measured: 4 frames in one deck
+  // loop). If the lens itself has ended up inside the raft's gear, put it back on the
+  // clear part of its own line to Sal and drop its relative velocity.
+  if (deckK > 0) {
+    _raftInv.compose(raft.position, raft.quaternion, _one).invert();
+    _bp.copy(camera.position).applyMatrix4(_raftInv);
+    if (camBlockedLocal(_bp.x, _bp.y, _bp.z, DECKCAM.margin * 0.5)) {
+      _piv.copy(player.pos); _piv.y += DECK_PIVOT;
+      camTo.copy(camera.position).sub(_piv);
+      camera.position.copy(_piv).addScaledVector(camTo, deckBoomClear(_piv, camTo));
+      camVel.copy(player.vel);
+      deckStops++;
+    }
+  }
+
   // aim slightly ahead of travel so fast movement leads the frame
   // Aim tracks the look direction almost immediately. Heavy smoothing here reads as
   // mouse lag, which is far more objectionable than a little jitter.
   // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
   // went (it swung the aim with every kick's surge).
   camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
+  camAim.y += DECKCAM.look * deckK;
   // Sal looks at what the lens would notice: the nearest life in front, re-picked four
   // times a second (the search walks every fauna buffer; the look itself is sprung).
   diverLookCool -= dt;
@@ -1658,7 +1807,7 @@ function update(dt, t) {
       // Cut the camera with him. The y is set here as well as via camSnap because
       // updateAtmosphere runs BEFORE updateCamera in the frame, so leaving the eye 210
       // units down would key one more frame of fog off the death depth.
-      snapCamBehind(CAM_BACK);
+      snapCamBehind(true);
       camSnap = true;
       // The rescue tops the pump up from the reserve can. Without this, drowning with
       // an empty tank and no bitumen strands you at the raft with 45s of air and all
@@ -1983,7 +2132,7 @@ if (/[?&](lab|bench)/.test(location.search)) import('./lib/bench.js').then(B => 
     if (zi !== zone) enterZone(zi);
     player.pos.set(x, terrainH(x, zz, zi) + 0.05, zz); player.vel.set(0, 0, 0); player.yaw = yaw;
     player.grounded = true; player.onDeck = false;
-    snapCamBehind(9);
+    snapCamBehind(false);
     return { y: player.pos.y, zone };
   },
   where: () => ({ zone, pos: player.pos.toArray(), yaw: player.yaw, cam: camera.position.toArray(), rift: [0, 1, 2].map(i => riftPos(i)),
