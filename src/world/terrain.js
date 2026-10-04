@@ -10,7 +10,8 @@ import { waveLow } from './water.js';
 import { floorShadow, playerLightSrc } from '../lighting.js';
 import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textures.js';
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
-import { siteParams } from './site.js';
+import { siteParams, currentSiteIndex, stream } from './site.js';
+import { buildIslands, fillIslands, updateIslands } from './islands.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -139,11 +140,57 @@ function syncSite() {
     const kr = t.rimKR[zi], kh = t.rimKH[zi];
     for (let k = 0; k < 6; k++) { RIM_KR[zi][k] = kr[k]; RIM_KH[zi][k] = kh[k]; }
   }
+  layIsles();
 }
-syncSite();
 
 // Second ridgeline. Zero new triangles: the graded axisMap already samples out here.
+// Zones 1/2 keep the W2 rampart exactly (their clear-band sightlines are what it is for).
 const RAM_IN = 340, RAM_PK = 410, RAM_OUT = 540, RAM_H = 66;
+
+// THE FAR RIDGE, zone 0 (roadmap/far-ridgeline-read.md, Michael 2026-10-04: "Raise it").
+// The W2 rampart sat at 4.5% transmittance behind the rim's 13.1% and, worse, the
+// drowned-shelf ceiling squashed every crest into one flat band at -21..-34 — measured
+// from the pinned mid-water cameras the silhouette step across its skyline was 0.007-0.012
+// linear luma: no edge, only the water's own vertical gradient. Three levers, all here:
+//  - nearer: the envelope starts behind the rim crest and peaks ~30 u closer, so the wall
+//    stands at ~1.5x the rim's distance, not 1.7x (transmittance is all distance: the
+//    green extinction is 0.0105-0.0113 per unit from -5 to -150);
+//  - higher and jagged: a taller envelope with a harder ridged term, and the ceiling over
+//    it is SOFT (asymptotic to RIDGE.top, slope 1 where it engages) instead of the 0.15
+//    kink, so the crest keeps its peaks and saddles up to ~-8 instead of flattening;
+//  - paler: a carbonate drape on its upper faces (terrain shader, uDrape), so the wall
+//    reads as a lighter shape behind the dark near rim — aerial perspective by albedo as
+//    well as by distance.
+// The near rim (r < RIDGE.in0) is untouched: weight 0 there, bit-identical.
+export const RIDGE = { in0: 318, pk0: 372, out0: 540, h0: 104, j0: 34, top: -9, c0: -44 };
+
+// THE FAR ISLANDS (same card: "Build a few far islands"). The rampart breaks the surface
+// in two or three places per site: basalt stacks on a drowned shoal, ~390-430 u off the
+// raft. terrainH carries only the SHOAL (a pedestal under each crown, soft-capped below
+// the deepest storm trough so the seabed never pokes through the sea); the stacks that
+// stand in the air are world/islands.js geometry, embedded down into this shoal.
+// Layout is a pure function of the site index: a seeded stream, bearings >= 95 degrees
+// apart. Filled in place by syncSite (no reallocation; islands.js reads it at fill time).
+export const ISLES = [];
+const ISLE_KINDS = ['crown', 'needle', 'teeth'];
+const ISLE_TOP = -6.5;          // shoal asymptote: below a gale trough at ~400 u
+function layIsles() {
+  const si = currentSiteIndex();
+  const rnd = stream(0x15AE7000 + si * 7919);
+  const n = si === 0 ? 3 : 2 + (rnd() < 0.5 ? 1 : 0);
+  let a = rnd() * Math.PI * 2;
+  ISLES.length = 0;
+  const kinds = ISLE_KINDS.slice();
+  for (let i = 0; i < n; i++) {
+    const r = 392 + rnd() * 36;
+    const k = kinds.splice(Math.floor(rnd() * kinds.length), 1)[0];
+    const rc = k === 'crown' ? 17 : k === 'needle' ? 11 : 15;
+    ISLES.push({ x: Math.cos(a) * r, z: Math.sin(a) * r, a, r, kind: k, rc,
+      rIn: rc + 6, rOut: rc + 44, lift: 150, seed: (0x5EA57AC0 + si * 131 + i * 17) >>> 0 });
+    a += (95 + rnd() * (360 / n - 95 + 20)) * Math.PI / 180;
+  }
+}
+syncSite();
 
 // Analytic height function. Mesh generation, prop scatter, and player collision all
 // call this, so any change here changes what the player physically stands on.
@@ -234,20 +281,46 @@ export function terrainH(x, z, zi) {
   // clear-band sightlines (456/477 units in zones 1/2) from finding the mesh edge.
   // The upper bound is exact, not a fade cutoff: at rr >= RAM_OUT the envelope is
   // identically zero, and without the bound 11% of mesh samples (the corners) paid
-  // six noise octaves for nothing.
-  if (rr > RAM_IN && rr < RAM_OUT) {
-    const up = c01((rr - RAM_IN) / (RAM_PK - RAM_IN));
-    const dn = c01((rr - RAM_PK) / (RAM_OUT - RAM_PK));
-    const sR = up * up * (3 - 2 * up) * (1 - dn * dn * (3 - 2 * dn));
-    h += sR * RAM_H * (1.0 + fbm2(x * 0.0042 + 133, z * 0.0042 - 61, 3) * 0.62)
-       + sR * rmf(x * 0.0080 + 17, z * 0.0080 + 29, 3) * 22;
+  // six noise octaves for nothing. Zone 0 runs THE FAR RIDGE rows (RIDGE, above).
+  const z0 = zi === 0;
+  const rIn = z0 ? RIDGE.in0 : RAM_IN, rOut = z0 ? RIDGE.out0 : RAM_OUT;
+  let sR = 0;
+  if (rr > rIn && rr < rOut) {
+    const rPk = z0 ? RIDGE.pk0 : RAM_PK;
+    const up = c01((rr - rIn) / (rPk - rIn));
+    const dn = c01((rr - rPk) / (rOut - rPk));
+    sR = up * up * (3 - 2 * up) * (1 - dn * dn * (3 - 2 * dn));
+    h += sR * (z0 ? RIDGE.h0 : RAM_H) * (1.0 + fbm2(x * 0.0042 + 133, z * 0.0042 - 61, 3) * 0.62)
+       + sR * rmf(x * 0.0080 + 17, z * 0.0080 + 29, 3) * (z0 ? RIDGE.j0 : 22);
   }
   // Drowned shelf edge: everything above y=-34 is compressed toward it, never folded.
   // The increasing form matters — the published `-34 - (h+34)*0.15` is monotone
   // DECREASING in h, which inverts every crest above the line into a crease and flips
   // terrainNormal's central differences along the whole far ridgeline. Only zone 0
   // can reach -34 (zones 1/2 top out near -320 and -630), so this fires nowhere else.
-  if (h > -34) h = -34 + (h + 34) * 0.15;
+  if (z0 && rr > rIn) {
+    // THE FAR RIDGE + ISLAND SHOALS. Over the rampart envelope (weight sR) and under each
+    // island crown (weight wI) the ceiling is soft: identity below c0, asymptotic to its
+    // top above, slope 1 where it engages, so peaks and saddles survive up to the top.
+    // For a fixed (x, z) both forms are increasing in h and the weight is fixed, so the
+    // blend is too: still never folded. Weight 0 is the shipped shelf exactly.
+    let wI = 0;
+    for (let i = 0; i < ISLES.length; i++) {
+      const s = ISLES[i], dx = x - s.x, dz = z - s.z, d2 = dx * dx + dz * dz;
+      if (d2 < s.rOut * s.rOut) {
+        const t = c01((s.rOut - Math.sqrt(d2)) / (s.rOut - s.rIn)), k = t * t * (3 - 2 * t);
+        h += k * s.lift;
+        if (k > wI) wI = k;
+      }
+    }
+    const w = sR > wI ? sR : wI;
+    const old = h > -34 ? -34 + (h + 34) * 0.15 : h;
+    if (w > 0) {
+      const top = RIDGE.top + (ISLE_TOP - RIDGE.top) * wI, sc = top - RIDGE.c0;
+      const soft = h > RIDGE.c0 ? top - sc * Math.exp(-(h - RIDGE.c0) / sc) : h;
+      h = old + (soft - old) * w;
+    } else h = old;
+  } else if (h > -34) h = -34 + (h + 34) * 0.15;
   return h;
 }
 
@@ -392,7 +465,7 @@ const COMMON = {
 const FRAG_HEAD = PBR_GLSL + /* glsl */`
 uniform sampler2D uDetail, uRockN, uRipple;
 uniform vec3 uSilt, uGrav, uRock;
-uniform float uTime, uCamY, uCaust, uWet, uSunK;
+uniform float uTime, uCamY, uCaust, uWet, uSunK, uDrape;
 uniform vec3 uSunW;
 uniform vec4 uWaveA, uWaveB, uWaveW, uCTune;
 varying vec3 vWPos, vWNrm;
@@ -470,6 +543,14 @@ function compileTerrain(sh) {
       // Slight up-facing bias so distant landforms keep some form under the flat
       // ambient-dominated rig instead of reading as flat cutouts.
       alb *= 0.86 + 0.20 * max(0.0, wn.y) + 0.10 * hb;
+      // THE FAR RIDGE's carbonate drape (zone 0 only: uDrape is 0 on the other two, and
+      // the radial gate starts past the near rim). Pale sediment settles on the upper
+      // faces of the rampart, so behind the dark near rim it reads as a lighter wall.
+      if (uDrape > 0.0) {
+        float dr = uDrape * smoothstep(326.0, 372.0, length(vWPos.xz))
+                 * smoothstep(-80.0, -30.0, vWPos.y) * (0.45 + 0.55 * smoothstep(0.15, 0.75, wn.y));
+        alb = mix(alb, uSilt * (2.2 + 1.1 * det.r), dr);
+      }
 
       // --- Photographed sediment structure (AmbientCG), layered onto the palette ---
       // The packed maps are level-normalised to a 0.5 mean at bake time, so the
@@ -588,7 +669,7 @@ function compileTerrain(sh) {
       }`);
 }
 
-function zoneMat(silt, grav, rock, caust, wet) {
+function zoneMat(silt, grav, rock, caust, wet, drape = 0) {
   const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 1, metalness: 0, dithering: true });
   // SEABED SHADOW: three draws the BACK faces of a caster into a PCF shadow map (its
   // acne defence), and a heightfield seen from the sun has none, so the floor wrote
@@ -600,7 +681,8 @@ function zoneMat(silt, grav, rock, caust, wet) {
     uGrav: { value: new THREE.Color(grav) },
     uRock: { value: new THREE.Color(rock) },
     uCaust: { value: caust },
-    uWet: { value: wet }
+    uWet: { value: wet },
+    uDrape: { value: drape }
   };
   m.onBeforeCompile = sh => { sh.__zone = u; compileTerrain(sh); };
   m.userData.zoneU = u;
@@ -610,7 +692,7 @@ function zoneMat(silt, grav, rock, caust, wet) {
 const zoneMats = [
   // Deeper zones carry higher albedo on purpose: they receive almost no light, and at
   // the zone-0 values they render as flat black rather than as dark stone.
-  zoneMat(0x3f4744, 0x242c2f, 0x131c23, 1.0, 0.58),   // 0 — pale carbonate silt, cool wet stone
+  zoneMat(0x3f4744, 0x242c2f, 0x131c23, 1.0, 0.58, 1),   // 0 — pale carbonate silt, cool wet stone
   zoneMat(0x4c4c3a, 0x30352a, 0x1d251f, 0.45, 0.52),  // 1 — olive sediment over broken green-grey rock
   zoneMat(0x513f33, 0x322a26, 0x22171a, 0.12, 0.44)   // 2 — ash and scorched basalt
 ];
@@ -713,6 +795,7 @@ const AX = (() => {
 // under the black screen re-floors the basin in place.
 export function buildTerrain() {
   if (terrainMeshes.length) { fillTerrain(); return; }
+  buildIslands();
 
   for (let zi = 0; zi < 3; zi++) {
     // PlaneGeometry is used for its index/attribute topology only; every position is rewritten.
@@ -824,6 +907,7 @@ export function fillTerrain() {
       sg.computeBoundingSphere();
     }
   }
+  fillIslands();   // the far islands' stacks, sunk into this site's shoals
 }
 
 export function updateTerrain(dt, t, camY, sunK = 1) {
@@ -855,6 +939,7 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   for (let i = 0; i < 3; i++) {
     terrainMeshes[i].visible = zoneBand(i, camY);
   }
+  updateIslands(camY, t);   // gated on the zone-0 mesh just set: they never pop off their shoal
   // A shell only exists for the player in the zone BELOW it, looking up: on when the
   // camera is 40 under the parent floor, off again 340 under (past the next floor,
   // where the zone below's own shell takes over). From above, backfaces + early-z
