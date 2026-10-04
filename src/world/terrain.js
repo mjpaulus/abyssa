@@ -162,7 +162,7 @@ const RAM_IN = 340, RAM_PK = 410, RAM_OUT = 540, RAM_H = 66;
 //    reads as a lighter shape behind the dark near rim — aerial perspective by albedo as
 //    well as by distance.
 // The near rim (r < RIDGE.in0) is untouched: weight 0 there, bit-identical.
-export const RIDGE = { in0: 318, pk0: 372, out0: 540, h0: 104, j0: 34, top: -9, c0: -44 };
+export const RIDGE = { in0: 300, pk0: 348, out0: 540, h0: 74, j0: 44, j2: 28, top: -8, c0: -75, drape: 1, drapeK: 5 };
 
 // THE FAR ISLANDS (same card: "Build a few far islands"). The rampart breaks the surface
 // in two or three places per site: basalt stacks on a drowned shoal, ~390-430 u off the
@@ -292,6 +292,9 @@ export function terrainH(x, z, zi) {
     sR = up * up * (3 - 2 * up) * (1 - dn * dn * (3 - 2 * dn));
     h += sR * (z0 ? RIDGE.h0 : RAM_H) * (1.0 + fbm2(x * 0.0042 + 133, z * 0.0042 - 61, 3) * 0.62)
        + sR * rmf(x * 0.0080 + 17, z * 0.0080 + 29, 3) * (z0 ? RIDGE.j0 : 22);
+    // Zone 0 only: a ~48 u crag term, so the far skyline breaks into peaks and notches a
+    // few degrees wide instead of the long smooth swells the 125 u ridging gives alone.
+    if (z0) h += sR * rmf(x * 0.021 - 41, z * 0.021 + 7, 2) * RIDGE.j2;
   }
   // Drowned shelf edge: everything above y=-34 is compressed toward it, never folded.
   // The increasing form matters — the published `-34 - (h+34)*0.15` is monotone
@@ -465,7 +468,8 @@ const COMMON = {
 const FRAG_HEAD = PBR_GLSL + /* glsl */`
 uniform sampler2D uDetail, uRockN, uRipple;
 uniform vec3 uSilt, uGrav, uRock;
-uniform float uTime, uCamY, uCaust, uWet, uSunK, uDrape;
+uniform float uTime, uCamY, uCaust, uWet, uSunK;
+uniform vec4 uDrape;
 uniform vec3 uSunW;
 uniform vec4 uWaveA, uWaveB, uWaveW, uCTune;
 varying vec3 vWPos, vWNrm;
@@ -546,10 +550,10 @@ function compileTerrain(sh) {
       // THE FAR RIDGE's carbonate drape (zone 0 only: uDrape is 0 on the other two, and
       // the radial gate starts past the near rim). Pale sediment settles on the upper
       // faces of the rampart, so behind the dark near rim it reads as a lighter wall.
-      if (uDrape > 0.0) {
-        float dr = uDrape * smoothstep(326.0, 372.0, length(vWPos.xz))
-                 * smoothstep(-80.0, -30.0, vWPos.y) * (0.45 + 0.55 * smoothstep(0.15, 0.75, wn.y));
-        alb = mix(alb, uSilt * (2.2 + 1.1 * det.r), dr);
+      if (uDrape.x > 0.0) {
+        float dr = uDrape.x * smoothstep(uDrape.y, uDrape.z, length(vWPos.xz))
+                 * smoothstep(-90.0, -35.0, vWPos.y) * (0.45 + 0.55 * smoothstep(0.15, 0.75, wn.y));
+        alb = mix(alb, uSilt * uDrape.w * (0.75 + 0.5 * det.r), dr);
       }
 
       // --- Photographed sediment structure (AmbientCG), layered onto the palette ---
@@ -682,7 +686,7 @@ function zoneMat(silt, grav, rock, caust, wet, drape = 0) {
     uRock: { value: new THREE.Color(rock) },
     uCaust: { value: caust },
     uWet: { value: wet },
-    uDrape: { value: drape }
+    uDrape: { value: new THREE.Vector4(drape, 0, 1, 1) }
   };
   m.onBeforeCompile = sh => { sh.__zone = u; compileTerrain(sh); };
   m.userData.zoneU = u;
@@ -828,6 +832,8 @@ export function buildTerrain() {
 // reallocated, and the temporaries below are load-time cost, not per-frame cost.
 export function fillTerrain() {
   syncSite();
+  // The far ridge's drape follows its envelope (zone 0's material only).
+  zoneMats[0].userData.zoneU.uDrape.value.set(RIDGE.drape, RIDGE.in0 + 8, RIDGE.pk0, RIDGE.drapeK);
   buildClampTable();   // ~4.7k terrainH calls, vs the 250k the meshes below do
 
   const n = SEG + 1, ax = AX;
@@ -960,6 +966,29 @@ export function updateZoneSight(x, y, z) {
   const on = GLASS.zoneSight !== 0;
   ZONE_SEEN[0] = 1;
   for (let i = 1; i < 3; i++) ZONE_SEEN[i] = !on || y < terrainH(x, z, i - 1) + SIGHT_MARGIN ? 1 : 0;
+}
+
+// ---- DEV PROBE: window.__ridge (roadmap/far-ridgeline-read.md) ---------------------
+// fp(zones?): the terrain fingerprint — FNV-1a over the float32 BYTES of terrainH on the
+// 32x32 grid x,z = -248..248 step 16, zone-major then z then x. The quoted pre-2026-10
+// values (35acc2d0, 5e6cfe45) were taken with an unrecorded probe and do not reproduce
+// under any byte/word/order variant of this one, so this is now the canonical probe.
+// set({...}) retunes THE FAR RIDGE rows live and refills the terrain (dev only).
+export function terrainFingerprint(zones = [0, 1, 2]) {
+  let h = 0x811c9dc5;
+  const f = new Float32Array(1), b = new Uint8Array(f.buffer);
+  for (const zi of zones) for (let j = 0; j < 32; j++) for (let i = 0; i < 32; i++) {
+    f[0] = terrainH(-248 + i * 16, -248 + j * 16, zi);
+    for (let k = 0; k < 4; k++) { h ^= b[k]; h = Math.imul(h, 16777619) >>> 0; }
+  }
+  return h.toString(16).padStart(8, '0');
+}
+if (typeof window !== 'undefined') {
+  window.__ridge = {
+    RIDGE, ISLES,
+    fp: terrainFingerprint,
+    set(o) { Object.assign(RIDGE, o); fillTerrain(); return { ...RIDGE, fp: terrainFingerprint() }; }
+  };
 }
 
 // ---- DEV PROBE: window.__caust (roadmap/ref-caustics-shadow.md) --------------------
