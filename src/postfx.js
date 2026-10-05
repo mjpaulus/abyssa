@@ -1520,7 +1520,7 @@ export async function precompile(onProgress, yieldFn, only = null) {
       for (const [l] of own) scene.add(l);
       renderer.setRenderTarget(composer.inputBuffer);
       let p;
-      try { p = renderer.compileAsync(c, camera, scene); } finally {
+      try { p = compileAsyncSafe(c, camera, scene); } finally {
         renderer.setRenderTarget(prevRT);
         for (const [l, par, pos, q, sc] of own) { par.add(l); l.position.copy(pos); l.quaternion.copy(q); l.scale.copy(sc); }
       }
@@ -1545,6 +1545,27 @@ export function settleAfterWarm() {
   if (expPass) expPass.reset(renderer);
   if (taaPass) taaPass.reset('warm');
 }
+// SAFE compileAsync. three r184's compileAsync polls properties.get(material).currentProgram
+// .isReady() from a setTimeout; a material disposed or rebuilt between compile() and the poll
+// (a sculpted set installing, a zone rehearsal tearing a sleeper down) has no currentProgram,
+// the poll THROWS inside the timer, and the promise never settles -- the loader sat at ~94%
+// in a hidden tab (seen 2026-10-05). Same work, but a missing program counts as done and the
+// wait is capped, so the boot can never hang on it.
+function compileAsyncSafe(obj, cam, target = null, capMs = 20000) {
+  const mats = renderer.compile(obj, cam, target);
+  const props = renderer.properties, t0 = performance.now();
+  const par = renderer.extensions.get('KHR_parallel_shader_compile') !== null;
+  return new Promise(resolve => {
+    const check = () => {
+      try {
+        mats.forEach(m => { const prog = props.get(m).currentProgram; if (!prog || prog.isReady()) mats.delete(m); });
+      } catch (e) { mats.clear(); }
+      if (mats.size === 0 || performance.now() - t0 > capMs) { resolve(obj); return; }
+      setTimeout(check, 10);
+    };
+    if (par) check(); else setTimeout(check, 10);
+  });
+}
 // The same warm-up, asynchronous: r184's compileAsync uses KHR_parallel_shader_compile
 // where the driver has it, so the boot loader covers the compile without the main
 // thread stalling on each program. Rejects where unsupported; game.js falls back.
@@ -1552,7 +1573,7 @@ export async function warmUpAsync() {
   if (!renderer.compileAsync) throw new Error('no compileAsync');
   const hidden = [];
   scene.traverse(o => { if (!o.visible) { hidden.push(o); o.visible = true; } });
-  try { await renderer.compileAsync(scene, camera); }
+  try { await compileAsyncSafe(scene, camera); }
   finally { for (const o of hidden) o.visible = false; }
   if (raysPass) raysPass.warmUp(renderer);
   warmUpSky();
