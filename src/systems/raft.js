@@ -589,10 +589,10 @@ const DRUM_X = 3.6, DRUM_Z = 3.2;
 // so the calm gain is under 1 (the platform averages it out); a gale's is over 1.
 //   brC/brW: the calm-sea breathing (rad, rad/s) the old decorative bob gave, now FED IN
 //            as forcing so the body filters it (it never adds on top)
-const RR = { on: 1, tC: 4.5, tG: 6.5, pT: 1.0, zC: 0.22, zG: 0.16, g: [0.47, 0.7, 0.95, 1.2, 1.45], pG: 1.0,
+const RR = { on: 1, tC: 4.5, tG: 6.5, pT: 1.0, zC: 0.22, zG: 0.16, g: [0.47, 0.7, 0.95, 1.15, 1.36], pG: 1.0,
   hT: 1.5, hZ: 0.55, max: 0.38, brC: 0.012, brW: 0.48, rec: null,
   // live readout (radians / u), refreshed every step
-  out: { roll: 0, pitch: 0, heave: 0, wRoll: 0, wPitch: 0, G: 0, T: 0 } };
+  out: { roll: 0, pitch: 0, heave: 0, wRoll: 0, wPitch: 0, G: 0, T: 0, rollV: 0, pitchV: 0 } };
 if (typeof window !== 'undefined') window.__raftRoll = RR;
 const rdR = { x: 0, v: 0 }, rdP = { x: 0, v: 0 }, rdH = { x: 0, v: 0 };
 let rdPrevOk = false, rdWR = 0, rdWP = 0, rdWH = 0;
@@ -632,6 +632,7 @@ function stepRaft(dt, t, st, hC, h1, h2, h3, h4) {
   rdWR = wR; rdWP = wP; rdWH = hM;
   const o = RR.out;
   o.roll = rdR.x; o.pitch = rdP.x; o.heave = rdH.x; o.wRoll = wR; o.wPitch = wP; o.G = G; o.T = T;
+  o.rollV = rdR.v; o.pitchV = rdP.v;
 }
 
 export function updateRaft(dt, t) {
