@@ -28,7 +28,7 @@
     background:radial-gradient(ellipse at 50% 58%, rgba(6,18,32,.42), rgba(1,4,9,.90));transition:opacity 1.5s;pointer-events:auto;cursor:pointer}
   #title h1{font-size:clamp(3rem,9vw,7rem);letter-spacing:.45em;margin:0 0 .2em .45em;font-weight:400;color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.5)}
   #title p{letter-spacing:.25em;opacity:.7;font-size:.9rem;text-transform:uppercase;margin:.4em}
-  #title .hint{margin-top:3em;opacity:.45;font-size:.8rem;animation:pulse 3s infinite}
+  #title .hint{margin-top:3em;opacity:.45;font-size:.8rem;animation:pulse 3s infinite;text-align:center;max-width:min(64rem,calc(100vw - 32px));line-height:1.9;text-wrap:balance}
   /* Boot loader (roadmap/loading-and-hitches.md). ES modules are deferred, so this paints
      BEFORE game.js runs and covers the module fetch, the world build, the sculpted assets,
      the shader precompile and the warm-up frames. z-index above #title so the title screen
