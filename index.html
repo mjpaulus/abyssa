@@ -29,14 +29,34 @@
   #title h1{font-size:clamp(3rem,9vw,7rem);letter-spacing:.45em;margin:0 0 .2em .45em;font-weight:400;color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.5)}
   #title p{letter-spacing:.25em;opacity:.7;font-size:.9rem;text-transform:uppercase;margin:.4em}
   #title .hint{margin-top:3em;opacity:.45;font-size:.8rem;animation:pulse 3s infinite}
-  /* Boot loader. ES modules are deferred, so this paints BEFORE game.js runs and covers
-     the whole build + shader precompile. z-index above #title so the title screen can
-     sit ready underneath and simply be uncovered. */
+  /* Boot loader (roadmap/loading-and-hitches.md). ES modules are deferred, so this paints
+     BEFORE game.js runs and covers the module fetch, the world build, the sculpted assets,
+     the shader precompile and the warm-up frames. z-index above #title so the title screen
+     sits ready underneath and is simply uncovered. The bar is a brass scale on ink: an
+     engraved rule with ticks, a brass band that only ever advances, an index needle riding
+     its head, and one line of what the tender is doing, in the game's own voice. */
   #load{position:fixed;inset:0;z-index:2;display:flex;flex-direction:column;align-items:center;justify-content:center;
-    background:#010409;color:#bfe3e8;transition:opacity 1s;font-family:Georgia,'Times New Roman',serif}
-  #load h1{font-size:clamp(2rem,6vw,4rem);letter-spacing:.45em;margin:0 0 1.6em .45em;font-weight:400;
-    color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.35);opacity:.85}
-  #load p{letter-spacing:.28em;font-size:.7rem;text-transform:uppercase;opacity:.42;margin:0;animation:pulse 2.4s infinite}
+    background:radial-gradient(ellipse at 50% 46%, #06121c 0%, #020810 55%, #010409 100%);color:#d8cdb2;transition:opacity 1s;font-family:Georgia,'Times New Roman',serif}
+  #load h1{font-size:clamp(2rem,6vw,4rem);letter-spacing:.45em;margin:0 0 1.5em .45em;font-weight:400;
+    color:#d8f4f7;text-shadow:0 0 30px rgba(120,220,255,.28);opacity:.82}
+  #load .gauge{position:relative;width:min(520px,72vw);height:30px}
+  /* the engraved rule: a hairline, minor ticks every 5%, majors every 25% */
+  #load .rule{position:absolute;left:0;right:0;top:14px;height:1px;background:rgba(201,164,106,.42)}
+  #load .ticks{position:absolute;left:0;right:0;top:15px;height:5px;opacity:.5;
+    background:linear-gradient(90deg,rgba(201,164,106,.75) 0 1px,transparent 1px) 0 0/5% 100% repeat-x}
+  #load .ticks.major{height:9px;opacity:.7;background:linear-gradient(90deg,rgba(214,182,124,.9) 0 1px,transparent 1px) 0 0/25% 100% repeat-x}
+  #load .ticks.end{left:auto;right:0;width:1px;height:9px;opacity:.7;background:rgba(214,182,124,.9)}
+  /* the band: brass, darkest at the start of the run, bright at its head. Only transform moves. */
+  #load .fill{position:absolute;left:0;right:0;top:11px;height:3px;transform-origin:left;transform:scaleX(0);
+    background:linear-gradient(90deg,#5a4426 0%,#9c7a45 55%,#d9b97c 100%);border-radius:1px;transition:transform .45s cubic-bezier(.2,.7,.25,1)}
+  /* the index needle over the head of the band */
+  #load .needle{position:absolute;top:2px;left:0;width:0;height:0;margin-left:-4px;
+    border-left:4px solid transparent;border-right:4px solid transparent;border-top:7px solid #d6b67c;
+    transition:left .45s cubic-bezier(.2,.7,.25,1)}
+  #load .row{display:flex;justify-content:space-between;align-items:baseline;width:min(520px,72vw);margin-top:.9em}
+  #load p{letter-spacing:.32em;font-size:.72rem;text-transform:uppercase;margin:0;color:#d8cdb2;opacity:.8;transition:opacity .25s}
+  #load p.swap{opacity:0;transition:none}
+  #load .pct{font-size:.78rem;letter-spacing:.12em;color:#c9a46a;opacity:.75;font-variant-numeric:oldstyle-nums tabular-nums}
   #load.done{opacity:0;pointer-events:none}
   @keyframes pulse{0%,100%{opacity:.25}50%{opacity:.6}}
   /* fade in fast, out slow: class-driven so the queue in game.js can time the gap */
@@ -121,14 +141,76 @@
   #threat{position:absolute;inset:0;opacity:0;transition:opacity .4s;background:radial-gradient(ellipse at center,
     rgba(0,0,0,0) 58%, rgba(40,90,130,.5) 100%)}
   @media (prefers-reduced-motion: reduce){
-    #o2fill.critical,#o2bar.torn #o2fill,#o2bar.torn #o2leak,#warn,#pause,#load p,#title .hint{animation:none}
+    #o2fill.critical,#o2bar.torn #o2fill,#o2bar.torn #o2leak,#warn,#pause,#title .hint{animation:none}
+    #load .fill,#load .needle,#load p{transition:none}
   }
   @keyframes warnpulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.6)}}
   .hidden{opacity:0!important;pointer-events:none!important}
 </style>
 </head>
 <body>
-<div id="load"><h1>ABYSSA</h1><p>raising the pump</p></div>
+<div id="load" role="progressbar" aria-label="Loading" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+  <h1>ABYSSA</h1>
+  <div class="gauge" aria-hidden="true"><div class="needle"></div><div class="fill"></div><div class="rule"></div><div class="ticks"></div><div class="ticks major"></div><div class="ticks end"></div></div>
+  <div class="row"><p>TAKING ON STORES</p><span class="pct">0</span></div>
+</div>
+<script>
+// THE LOADER'S HAND (roadmap/loading-and-hitches.md). A classic script, so it runs at parse
+// time, before the deferred module graph is even fetched. game.js drives it through
+// window.__load: stage(lo, hi, label) opens a span of the bar, part(f) advances within it,
+// say(label) changes the line. The bar NEVER goes backwards (every write is a max) and only
+// game.js's last call, after the warm-up frames, reaches 100.
+// Stage 0 is the module fetch itself: every script resource that lands moves the needle,
+// against the count the previous load recorded (game.js stores it on its first line).
+(() => {
+  const el = document.getElementById('load');
+  const fill = el.querySelector('.fill'), needle = el.querySelector('.needle'), lab = el.querySelector('p'), pct = el.querySelector('.pct');
+  let shown = 0, lo = 0, hi = 0.1, label = lab.textContent, mods = 0, modsOpen = true, expect = 120;
+  try { expect = +localStorage.getItem('abyssa.boot.mods') || expect; } catch (e) { /* private mode */ }
+  const RM = matchMedia('(prefers-reduced-motion: reduce)');
+  function paint(v) {
+    v = Math.max(0, Math.min(1, v));
+    if (!(v > shown)) return;
+    shown = v;
+    fill.style.transform = 'scaleX(' + v.toFixed(4) + ')';
+    needle.style.left = (v * 100).toFixed(2) + '%';
+    const n = Math.floor(v * 100);
+    pct.textContent = n;
+    el.setAttribute('aria-valuenow', n);
+  }
+  function say(text) {
+    if (!text || text === label) return;
+    label = text;
+    if (RM.matches) { lab.textContent = text; return; }
+    lab.classList.add('swap'); lab.textContent = text;
+    void lab.offsetWidth;   // commit the hidden state, so the new line fades in
+    lab.classList.remove('swap');
+  }
+  window.__load = {
+    stage(a, b, text) { lo = Math.max(lo, a); hi = Math.max(lo, b); say(text); paint(lo); },
+    part(f) { paint(lo + (hi - lo) * Math.max(0, Math.min(1, f))); },
+    say,
+    get value() { return shown; },
+    // game.js's first line: the static module graph is in, record its size for next time
+    mods() {
+      modsOpen = false;
+      try { localStorage.setItem('abyssa.boot.mods', String(Math.max(20, mods))); } catch (e) { /* private mode */ }
+      paint(hi);
+      return mods;
+    },
+    done() { paint(1); },
+    fail(text) { lab.classList.remove('swap'); lab.textContent = text; lab.style.opacity = '.9'; }
+  };
+  window.__load.stage(0, 0.1, 'TAKING ON STORES');
+  try {
+    new PerformanceObserver(list => {
+      if (!modsOpen) return;
+      for (const e of list.getEntries()) if (/\.m?js(\?|$)/.test(e.name)) mods++;
+      window.__load.part(Math.min(0.97, mods / expect));
+    }).observe({ type: 'resource', buffered: true });
+  } catch (e) { /* no observer: the stage simply completes when game.js starts */ }
+})();
+</script>
 <div id="ui">
   <div id="hud" class="hidden">
     <div id="msg"></div>

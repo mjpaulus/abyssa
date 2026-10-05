@@ -412,6 +412,7 @@ function tick() {
       return;
     }
     if (buildQ.length) {
+      if (buildQ.length > buildQmax) buildQmax = buildQ.length;   // (loadbar) the loader's progress
       const tb = performance.now();
       while (buildQ.length && performance.now() - tb < BUILD_MS) {
         const [name, fn] = buildQ[0], tj = performance.now();
@@ -447,13 +448,13 @@ function tick() {
   }
   if (impB) impB.visible = impAny;
 }
-let buildMax = 0, buildFrames = 0;
+let buildMax = 0, buildFrames = 0, buildQmax = 0;
 const jobMax = ['', 0];
 const buildBy = {};
 
 if (typeof window !== 'undefined') window.__plants = {
   state: () => ({
-    state, loadMs: +loadMs.toFixed(0), buildMs: +buildMs.toFixed(1), buildMaxFrame: +buildMax.toFixed(1), buildFrames, jobMax, buildBy, ktx2: asset ? asset.ktx2 : null, blades: !!assetB,
+    state, queue: buildQ ? buildQ.length : null, queueMax: buildQmax, loadMs: +loadMs.toFixed(0), buildMs: +buildMs.toFixed(1), buildMaxFrame: +buildMax.toFixed(1), buildFrames, jobMax, buildBy, ktx2: asset ? asset.ktx2 : null, blades: !!assetB,
     imp: impB ? impCap : 0,
     groups: [...groups.values()].map(G => ({ sp: G.sp, cap: G.cap, hosts: G.hosts.map(K => K.key + ':' + K.n), shown: G.vis.reduce((a, b) => a + (b ? 1 : 0), 0), far: G.lod.reduce((a, b, i) => a + (G.vis[i] === 1 && b >= 1 ? 1 : 0), 0), imp: G.vis.reduce((a, b) => a + (b === 2 ? 1 : 0), 0) }))
   }),
