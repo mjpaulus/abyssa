@@ -783,7 +783,12 @@ const CAM_BACK = 9, CAM_UP = 2.4;
 // the pump's head and stack) in RAFT-LOCAL space, so the test rolls with the hull in a
 // storm; the first contact is refined by bisection, so the pull-in is continuous (an
 // 8-step quantised answer stair-stepped the boom against the gallows legs).
-const DECKCAM = { on: true, back: 6.0, up: 2.1, look: -0.8, w: 4.7, margin: 0.25 };
+const DECKCAM = { on: true, back: 6.0, up: 2.1, look: -0.8, w: 4.7, margin: 0.25,
+  // (sealegs) roll: the share of the deck's roll (about the lens axis) let into the lens, so
+  // the horizon leans a touch as it does to a man aboard. Tiny and critically damped — the
+  // camera stays grounded (Michael hates floaty); 0 = a dead-level lens. rollF: its spring.
+  roll: 0.12, rollF: 2.2 };
+const camDeckRoll = { x: 0, v: 0 };
 let deckK = 0, deckKV = 0, camBasePrev = CAM_BACK, deckWant = CAM_BACK, deckStops = 0;
 // THE CRANE. Most of what stands on the deck is waist-to-shoulder high (pump block, reel,
 // cargo, the receiver at 1.8): with one of those right behind him, pulling the boom in
@@ -1312,7 +1317,14 @@ function updateCamera(dt, t, fwd) {
   // Bank into lateral movement — a hint, not a lean: was 0.012/u capped at 6.3 degrees, which
   // rolled the horizon whenever he crabbed or the current set him sideways.
   camRoll += (clamp(-lateral * 0.004, -0.035, 0.035) * rmK - camRoll) * Math.min(1, 3 * dt);
-  camera.rotateZ(camRoll + hhRoll);
+  // (sealegs) the deck's roll, a little of it, while the boom is on the deck
+  {
+    const n = player.sea, r = deckK * DECKCAM.roll * Math.asin(clamp(n.nx * camRight.x + n.nz * camRight.z, -0.5, 0.5));
+    const f = DECKCAM.rollF, h = Math.min(dt, 0.05);
+    camDeckRoll.v += (f * f * (r - camDeckRoll.x) - 2 * f * camDeckRoll.v) * h;
+    camDeckRoll.x += camDeckRoll.v * h;
+  }
+  camera.rotateZ(camRoll + hhRoll - camDeckRoll.x);
   if (camYank.x !== 0) camera.rotateX(camYank.x * 0.09 * (rmK ? 1 : 0.3));   // the nod: ~1 deg at a full snap
 
   // The 2.5/s lerp has a 0.4 s time constant, so it can only reach 48% of any target

@@ -3060,7 +3060,7 @@ export function diverYank(dx, dz, str, grounded) {
 //   of sway (rad/u); f/d: the trunk's spring; heave: knee sink per u/s^2 of deck acceleration
 //   (less on the unweighting side, which the reach ceiling also limits); hMax/hMin: its range
 //   shuf: the standing-step margin in a full gale (u; 0.27 on still ground)
-const SEALEGS = { on: 1, wide: 0.09, kIdle: 9, kMid: 5, arm: 0.24, elb: 0.16, armS: 1.4, tilt: 0.14, ctr: 0.38,
+const SEALEGS = { on: 1, wide: 0.09, kIdle: 9, kMid: 5, arm: 0.11, elb: 0.10, armS: 0.7, tilt: 0.14, ctr: 0.38,
   f: 3.0, d: 0.95, heave: 0.11, hMax: 0.055, hMin: -0.02, shuf: 0.17 };
 window.__sealegs = SEALEGS;
 const seaP = { x: 0, v: 0 }, seaR = { x: 0, v: 0 }, seaH = { x: 0, v: 0 };

@@ -303,7 +303,7 @@ export function carryDeck(dt) {
       // direction he is thrown, world x/z
       sea.lx = e[0] * seaS.vx + e[8] * seaS.vz; sea.lz = e[2] * seaS.vx + e[10] * seaS.vz;
     }
-  } else { seaS.x = seaS.z = seaS.vx = seaS.vz = 0; }
+  } else if (!SEA.on) { seaS.x = seaS.z = seaS.vx = seaS.vz = 0; }
   // re-stand him: chosen spot plus excursion, on the deck's plane, in its new pose
   fromDeck(L.x + seaS.x, L.z + seaS.z, _dkW);
   player.pos.set(_dkW.x, _dkW.y + EYE_H, _dkW.z);
