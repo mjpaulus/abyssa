@@ -165,7 +165,7 @@
 (() => {
   const el = document.getElementById('load');
   const fill = el.querySelector('.fill'), needle = el.querySelector('.needle'), lab = el.querySelector('p'), pct = el.querySelector('.pct');
-  let shown = 0, lo = 0, hi = 0.1, label = lab.textContent, mods = 0, modsOpen = true, expect = 120;
+  let shown = 0, lo = 0, hi = 0.07, label = lab.textContent, mods = 0, modsOpen = true, expect = 120;
   try { expect = +localStorage.getItem('abyssa.boot.mods') || expect; } catch (e) { /* private mode */ }
   const RM = matchMedia('(prefers-reduced-motion: reduce)');
   function paint(v) {
@@ -201,7 +201,7 @@
     done() { paint(1); },
     fail(text) { lab.classList.remove('swap'); lab.textContent = text; lab.style.opacity = '.9'; }
   };
-  window.__load.stage(0, 0.1, 'TAKING ON STORES');
+  window.__load.stage(0, 0.07, 'TAKING ON STORES');
   try {
     new PerformanceObserver(list => {
       if (!modsOpen) return;

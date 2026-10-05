@@ -172,7 +172,7 @@ let rmWas = null;
 performance.mark('abyssa:world-build-start');
 
 // ---- build the world ----
-LOAD.stage(0.10, 0.34, 'RAISING THE SEABED');
+LOAD.stage(0.07, 0.19, 'RAISING THE SEABED');
 await buildStep('terrain', 'RAISING THE SEABED');
 buildTerrain();
 await buildStep('flora', 'SETTING THE STONES');
@@ -2343,28 +2343,55 @@ function warmPoses() {
     { name: 'up', shadow: true, set() { const x = rp.x + 4, z = rp.z + 4; camera.position.set(x, bed(x, z) + 6, z); camera.lookAt(rp.x, -1, rp.z); } }
   ];
 }
+// Per camera, its share of the warm-up's time on the reference box (the deck builds most of
+// the pipelines, the column builds the shadowless set), so the bar moves at the work's pace.
+const POSE_W = { deck: 0.62, waterline: 0.03, column: 0.27, deep: 0.02, seabed: 0.03, up: 0.03 };
+// The first camera is seconds of GPU-process pipeline building in one draw-call stream, so
+// there the scene is warmed a SLICE at a time first (one top-level branch group per frame,
+// the rest hidden) and the bar keeps moving through it. (Only the first: slicing the
+// shadowless column camera measured 50 extra programs and 7 s, against 1.1 s whole.)
+// A branch that holds a light is never hidden: the light set must stay the one play uses.
+const WARM_SLICES = 8;
 async function warmFrames(onProgress) {
   const poses = warmPoses(), shadow0 = sun.castShadow;
   const F = forceAllDrawn();
   const gl = renderer.getContext(), px = new Uint8Array(4);
+  const hasLight = o => { let l = false; o.traverse(c => { if (c.isLight) l = true; }); return l; };
+  const sliceable = scene.children.filter(o => !hasLight(o));
+  const frame1 = () => { renderSky(); renderRefraction(); render(1e-6); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); };
+  let acc = 0;
   try {
     gl.getError();
     for (let i = 0; i < poses.length; i++) {
-      const P = poses[i], tp = performance.now();
+      const P = poses[i], tp = performance.now(), w = POSE_W[P.name] || 0.02;
       P.set(); camera.updateMatrixWorld();
       sun.castShadow = P.shadow;
       F.near(camera.position);
       // the composer first on the opening camera: it renders the shadow maps, which the
       // refraction pass samples (sampler2DShadow) before the composer's own pass runs
       if (i === 0) render(1e-6);
-      // dt ~0: the lagged lens/exposure/TAA state barely moves, so the title is not left
-      // focused or exposed for the seabed
-      renderSky(); renderRefraction(); render(1e-6);
-      // make the GPU process finish this camera before the next: its pipeline builds are
-      // the point, and a queue of six warm frames would only show up later as one stall
-      gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      if (i === 0) {
+        for (let k = 0; k < WARM_SLICES; k++) {
+          const off = sliceable.filter((o, j) => j % WARM_SLICES !== k);
+          for (const o of off) o.visible = false;
+          try { frame1(); } finally { for (const o of off) o.visible = true; }
+          onProgress(acc + w * 0.9 * (k + 1) / WARM_SLICES);
+          await paintGap();
+        }
+      }
+      // the whole camera through the real frame path. dt ~0: the lagged lens/exposure/TAA
+      // state barely moves, so the title is not left focused or exposed for the seabed. The
+      // readback makes the GPU process finish this camera before the next: its pipeline
+      // builds are the point, and a queue of warm frames would only surface later as a stall.
+      frame1();
       bootLog.push(['pose:' + P.name, +(performance.now() - tp).toFixed(1), renderer.info.programs.length, gl.getError()]);
-      onProgress((i + 1) / poses.length);
+      if (window.__warmDiag !== undefined || /warmdiag/.test(location.search)) {
+        const seen = window.__wd || (window.__wd = new Set()), nn = {};
+        for (const pr of renderer.info.programs) if (!seen.has(pr)) { seen.add(pr); const k = pr.name + ':' + (pr.cacheKey.split(',').slice(0, 3).join(',')); nn[k] = (nn[k] || 0) + 1; }
+        bootLog.push(['new@' + P.name, JSON.stringify(nn)]);
+      }
+      acc += w;
+      onProgress(acc);
       await paintGap();
     }
   } finally {
@@ -2376,11 +2403,11 @@ async function warmFrames(onProgress) {
 }
 async function bootTail() {
   // 1. the zone-0 sleeper and the five ward lights
-  LOAD.stage(0.34, 0.38, 'SOMETHING SLEEPS BELOW');
+  LOAD.stage(0.19, 0.23, 'SOMETHING SLEEPS BELOW');
   await bootStep('sleeper', 'SOMETHING SLEEPS BELOW');
   enterZone(0, true);
   // 2 + 3. physics and the sculpted sets, together
-  LOAD.stage(0.38, 0.56, 'SEWING THE DRESS');
+  LOAD.stage(0.23, 0.30, 'SEWING THE DRESS');
   await bootStep('assets');
   physicsStarted = true;
   const extra = [
@@ -2395,7 +2422,7 @@ async function bootTail() {
   { const t0 = performance.now(); const S = window.__salSculpt;
     while (S && S.state && S.state().reason === 'loading' && performance.now() - t0 < 8000) { await waitRows(rows, 8000); await sleep(30); } }
   // 4. the plant batches: drain plantKit's queue at full speed, then its own compile
-  LOAD.stage(0.56, 0.62, 'TYING THE KELP');
+  LOAD.stage(0.30, 0.32, 'TYING THE KELP');
   await bootStep('plants');
   { const t0 = performance.now(), P = window.__plants;
     while (P && performance.now() - t0 < 30000) {
@@ -2408,11 +2435,11 @@ async function bootTail() {
       await paintGap();
     } }
   // 5. the audio engine's buffers, at the rates a context is likely to open at
-  LOAD.stage(0.62, 0.66, 'PRIMING THE PUMP');
+  LOAD.stage(0.32, 0.35, 'PRIMING THE PUMP');
   await bootStep('audio');
   for (const sr of [48000, 44100]) { prebakeAudio(sr); LOAD.part(sr === 48000 ? 0.5 : 1); await paintGap(); }
   // 6. the compile: the deck's shadow state, then the column's
-  LOAD.stage(0.66, 0.80, 'GRINDING THE GLASS');
+  LOAD.stage(0.35, 0.45, 'GRINDING THE GLASS');
   await bootStep('compile');
   const t0 = performance.now();
   const programs0 = renderer.info.programs.length;
@@ -2424,16 +2451,16 @@ async function bootTail() {
     } finally { sun.castShadow = was; }
   };
   await compileAt(true);
-  LOAD.stage(0.80, 0.86, 'TEMPERING THE LIGHT');
+  LOAD.stage(0.45, 0.50, 'TEMPERING THE LIGHT');
   await bootStep('compile-dark');
   await compileAt(false);
   // 7. warm-up frames from the first minutes' cameras
-  LOAD.stage(0.86, 0.97, 'SOUNDING THE DEPTHS');
+  LOAD.stage(0.50, 0.94, 'SOUNDING THE DEPTHS');
   await bootStep('warm');
   await warmFrames(f => LOAD.part(f));
   console.info(`ABYSSA: ${renderer.info.programs.length} shader programs (${renderer.info.programs.length - programs0} at boot) compiled and warmed in ${(performance.now() - t0).toFixed(0)} ms`);
   // 8. the title's settle frames, then 100 (boot())
-  LOAD.stage(0.97, 1.0, 'TRIMMING THE LAMPS');
+  LOAD.stage(0.94, 1.0, 'TRIMMING THE LAMPS');
   await bootStep('title');
   setMaster(muteSaved ? 0 : MASTER_VOL);
   clock.getDelta();   // the boot is not a frame

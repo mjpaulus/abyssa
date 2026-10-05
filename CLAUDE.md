@@ -545,6 +545,21 @@ orchestrator redoes it, not the agent.
   9u on ~10% of bearings (a second-order effect of the crest-height warp, not the
   onset). Scatter-band steepness got BETTER, so the concern it guarded is closed.
 
+### Boot / loading (roadmap/loading-and-hitches.md)
+The loader (index.html `window.__load`, fed by game.js's boot tail) does ALL first-time work
+before 100: zone 0 + the 5 ward lights (`enterZone(0, true)`), Rapier, props, every sculpted
+set (`sculptedLedger()` in lib/assets.js), plant batches, audio prebake, `precompile()` at both
+sun-shadow states, then WARM FRAMES through sky -> refraction -> composer from six cameras.
+Hazards learned: (1) the render target bound at compile is part of the program key (none =
+canvas sRGB+ACES variants nobody draws) -- precompile issues against `composer.inputBuffer`;
+(2) compileAsync never builds shadow-depth or the refraction's clip-plane programs, nor ANGLE's
+pipelines -- only a real draw does; (3) warm frames with every caster unculled took 62 s (the
+lantern's 6 cube faces) -- distant casters drop castShadow (not in any program key) per camera;
+(4) the composer must render once before the refraction pass samples the sun shadow map
+(sampler2DShadow on an empty texture = GL_INVALID_OPERATION). Anything new that appears first
+in play (a light, a material, a lazily built mesh) must be built or drawn in the boot tail, or
+it hitches. `__boot.log()`, `?warmdiag`, `tools/bench/hitch.mjs` (real click + W over CDP).
+
 ### Perf sampling — read this before touching samplePerf
 
 `game.js` passes `Math.min(0.05, clock.getDelta())`. That clamp is CORRECT for

@@ -1503,8 +1503,18 @@ export async function precompile(onProgress, yieldFn) {
   try {
     const all = [];
     let t = performance.now();
+    // THE TARGET IS PART OF THE KEY. three picks a program's output colour space and tone
+    // mapping from the render target bound when it is built: with none bound (the canvas) it
+    // builds the sRGB + ACES variant, which no scene draw ever uses -- every draw lands in
+    // the composer's linear HalfFloat buffer or the refraction target. Measured: the old boot
+    // compile built the canvas variants, and the real ones (~270) were all built by the first
+    // frames that drew them. So the issue runs with the composer's input buffer bound.
+    const prevRT = renderer.getRenderTarget();
     for (const c of kids) {
-      all.push(renderer.compileAsync(c, camera, scene).then(() => { done++; tick(); }, () => { done++; tick(); }));
+      renderer.setRenderTarget(composer.inputBuffer);
+      let p;
+      try { p = renderer.compileAsync(c, camera, scene); } finally { renderer.setRenderTarget(prevRT); }
+      all.push(p.then(() => { done++; tick(); }, () => { done++; tick(); }));
       issued++; tick();
       if (yieldFn && performance.now() - t > 24) {
         // a yield hands the frame to the browser, which may run a game frame's worth of
