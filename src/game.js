@@ -595,7 +595,9 @@ let memPending = null, memKey = 0;
 // before the title so the sleeper, her textures and the five ward lights exist before the
 // shader compile; start() then only says what enterZone would have said (announceZone).
 function enterZone(i, quiet = false) {
-  disposeLeviathan(lev);
+  // the sleeper left behind keeps her programs (keepingPrograms): coming back -- the next
+  // dive after a rescue, the voyage's reseed -- finds them built
+  keepingPrograms(() => disposeLeviathan(lev));
   zone = i;
   setZone(i);            // must precede growl() so the voice is tuned to the zone
   lev = makeZoneSleeper(i);
@@ -799,7 +801,12 @@ function startVoyage(i) {
 // The reseed itself, run once under the opaque chart: a load event, exempt from the
 // per-frame allocation rule. ORDER IS CONTRACT — flora excludes around wreckSites(),
 // dens are re-picked from flora's fresh colliders.
-function reseedWorld(i) {
+// The reseed rebuilds a few things in place (the wrecks' motes and markers, the vents'
+// plumes: new materials, same shaders). Disposing the old ones released their programs,
+// which then compiled again on the first sight of each at the new anchorage; the old
+// materials keep them instead (bounded: one per program, see keepingPrograms).
+function reseedWorld(i) { return keepingPrograms(() => reseedWorldNow(i)); }
+function reseedWorldNow(i) {
   resetTemporal('reseed');   // the world changes under a still camera: no history survives it
   setSite(i);
   setSiteWater(currentSite().water || null);   // uniforms only: no program, no material
@@ -2493,10 +2500,17 @@ async function warmFrames(onProgress, poses = warmPoses(), weights = POSE_W, sli
 // kind finds its programs by key and its pipelines already built. The light count never
 // moves (the five ward lights are a pool; every kind borrows it), and the live sleeper at
 // the title is a fresh zone-0 build exactly as before.
-const PROGRAM_ANCHOR = [];
+// One material per PROGRAM is kept (the first to hold it); a material whose program is
+// already held, or that never compiled, is disposed as before -- so the anchor is bounded
+// by the number of distinct programs, however many voyages and zone changes it sees.
+const PROGRAM_ANCHOR = [], ANCHORED = new Set();
 function keepingPrograms(fn) {
   const M = THREE.Material.prototype, d0 = M.dispose;
-  M.dispose = function () { PROGRAM_ANCHOR.push(this); };
+  M.dispose = function () {
+    const pr = renderer.properties.get(this).currentProgram;
+    if (pr && !ANCHORED.has(pr)) { ANCHORED.add(pr); PROGRAM_ANCHOR.push(this); return; }
+    return d0.call(this);
+  };
   try { return fn(); } finally { M.dispose = d0; }
 }
 // a camera in zone zi looking at its sleeper (the bench's standard views for zones 1 and 2)

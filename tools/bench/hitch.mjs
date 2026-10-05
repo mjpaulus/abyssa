@@ -123,7 +123,7 @@ if (SCEN.length) {
     }
     if (sc === 'voyage') {
       await ev(`(__hx.backT = 0, window.__vg = 0, (function w() { const s = __power.state().state; if (s === 'voyage') __vg = 1; if (__vg && s === 'play') __hx.backT = performance.now(); else requestAnimationFrame(w); })(), 1)`);
-      await ev(`(__chart.sail(1), 1)`);
+      out.voyageTo = await ev(`(() => { let s = 0; try { s = JSON.parse(localStorage.getItem('abyssa.chart.v1')).site || 0; } catch (e) {} const to = s === 1 ? 2 : 1; __chart.sail(to); return to; })()`);
       await until(`__hx.backT > 0`, 30000, 50);
       out.scen.voyage = await windowAround('after the chart dissolves', async () => {}, 5000, '__hx.backT');
       out.scen.voyage.newPrograms = (await progN()) - p0;
