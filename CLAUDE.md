@@ -414,7 +414,8 @@ against explicit contracts and reviewed on return.
     (gear near a bulwark runs its shape to the timber, clusters are bridged), which is
     why some shapes are larger than their object. MOVE AN OBJECT, MOVE ITS COLLIDER LINE,
     then re-check for slots. Low things a boot steps over are
-    deliberately absent.
+    deliberately absent. The camera does NOT collide with deck gear (it sits ~9 back,
+    off the boat).
   - SEA LEGS (2026-10-04, roadmap/sal-sea-legs.md, spec docs/superpowers/specs/sal-sea-legs.md):
     the deck floor is the raft's TILTED plane (player.js `deckHeightAt`), not a flat
     raft.position.y + 0.11; game.js runs `updateRaft` BEFORE `updatePlayer` and `carryDeck(dt)`
@@ -424,8 +425,7 @@ against explicit contracts and reviewed on return.
     publishes k (storm-eased), sway sx/sz, deck tilt nx/nz, heave accel ay, lurch. Knobs:
     `__sea` (player balance excursion / lurch / walk down-slope), `__sealegs` (posture),
     `__deckcam.knobs.roll` (lens takes 12% of the deck roll; 0 = level). Every deck spawn goes
-    through `deckSpawn` -> `placeOnDeck`. Gale, 3 min: planted boot-to-plank gap max 0.3 cm. The camera does NOT collide with deck gear (it sits ~9 back,
-    off the boat).
+    through `deckSpawn` -> `placeOnDeck`. Gale, 3 min: planted boot-to-plank gap max 0.3 cm.
   - Board width is the whole deck read: at 8 boards across the span they were metre-
     wide slabs and the deck rendered as facets. 44 rows, each `weather()`ed as a whole
     board (boards weather as boards, not as one sheet of noise).
