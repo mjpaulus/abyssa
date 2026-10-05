@@ -2296,10 +2296,24 @@ function foot() {
     ox: 0, oy: 0, oz: 0, oth: 0, ocz: CZ_FLAT, swp: 0,   // the stance's last ankle target and pitch (toe-off)
     ln: false, lnU: 0, lnX: 0, lnY: 0, lnZ: 0,  // first step off a stand: launch point + swing progress at launch
     ex: 0, ez: 0, pin: false,      // the slip probe's last anchor-equivalent point, and whether it was planted
-    sp: -1, early: false, swS: 1, age: 0, kPrev: -1   // stance progress (-1 in the air), early toe-off, and where that swing began
+    sp: -1, early: false, swS: 1, age: 0, kPrev: -1,  // stance progress (-1 in the air), early toe-off, and where that swing began
+    lx: 0, ly: 0, lz: 0            // (sealegs) a deck anchor in RAFT-LOCAL space
   };
 }
 const ftR = foot(), ftL = foot();
+// (sealegs) a deck anchor <-> the world, through the raft's full transform (no scale)
+function deckToWorld(ft) {
+  const e = raft.matrixWorld.elements;
+  ft.ax = e[12] + e[0] * ft.lx + e[4] * ft.ly + e[8] * ft.lz;
+  ft.ay = e[13] + e[1] * ft.lx + e[5] * ft.ly + e[9] * ft.lz;
+  ft.az = e[14] + e[2] * ft.lx + e[6] * ft.ly + e[10] * ft.lz;
+}
+function worldToDeck(ft) {
+  const e = raft.matrixWorld.elements, dx = ft.ax - e[12], dy = ft.ay - e[13], dz = ft.az - e[14];
+  ft.lx = e[0] * dx + e[1] * dy + e[2] * dz;
+  ft.ly = e[4] * dx + e[5] * dy + e[6] * dz;
+  ft.lz = e[8] * dx + e[9] * dy + e[10] * dz;
+}
 let stepSeq = 0;                   // monotonic plant index; seeds every per-step draw
 let strideK = 1;                   // the live step's stride multiplier, read by the clock
 // THE STRIDE FOLLOWS THE SPEED. GAIT.stride is the cycle at full walking pace; slower he
@@ -2347,7 +2361,7 @@ const _qH = new THREE.Quaternion(), _qA = new THREE.Quaternion(), _qB = new THRE
 const _eA = new THREE.Euler(), _X1 = new THREE.Vector3(1, 0, 0);
 const _vA = V3(), _vB = V3(), _vC = V3(), _vD = V3();
 // Live probe surface for the slip test — game.js never reads it, but the browser can.
-export const ikDebug = { wxR: 0, wyR: 0, wzR: 0, wxL: 0, wyL: 0, wzL: 0, slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0, gd: 0, gdd: 0, rel: 0, low: 0 };
+export const ikDebug = { wxR: 0, wyR: 0, wzR: 0, wxL: 0, wyL: 0, wzL: 0, slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0, gd: 0, gdd: 0, rel: 0, low: 0, shuf: 0 };
 window.__ik = ikDebug;   // probe surface (sealegs: foot-to-plank gap probes read plR/plL)
 
 // ===========================================================================
@@ -2508,6 +2522,10 @@ function rollThrough(u, out) {
 }
 
 const SHUF_DUR = 0.42, SHUF_LIFT = 0.075;
+// (sealegs) how far a standing boot may be from where the hips want it before he steps it:
+// 0.27 u on still ground; on a working deck the margin shrinks with the sea, so a gale roll
+// that carries his body past his support costs him a step (the MII "tip" is a step, not a fall)
+let shufD2 = 0.075;
 let shufX = 0;                     // weight roll onto the planted boot during a shuffle step
 // hoisted: two array literals per frame were the rig's last allocations
 const LEGS = [diver.legR, diver.legL], FTS = [ftR, ftL];
@@ -2535,7 +2553,10 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
   // claimed its anchors in mid-water and the stance boot was pulled up to the hip (knee
   // 140 deg for a second after every drifting landing). player.floorY is that floor.
   const soleY = (player.grounded ? (player.floorY != null ? Math.min(player.pos.y, player.floorY) : player.pos.y) : player.groundY) - EYE_H;
-  const ox = onDeck ? raft.position.x : 0, oy = onDeck ? raft.position.y : 0, oz = onDeck ? raft.position.z : 0;
+  // (sealegs) The deck frame is the raft's FULL pose now (heave, surge, pitch, roll): a
+  // planted boot's anchor is kept in raft-local space (ft.lx/ly/lz) and re-stood in the world
+  // each frame below, so ax/ay/az are world coordinates on the deck too and the offset is 0.
+  const ox = 0, oy = 0, oz = 0;
   const cy = Math.cos(yawF), sy = Math.sin(yawF);
 
   // SLOPE. The collision floor is one height at his centre; on a 25% grade the downhill
@@ -2543,8 +2564,10 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
   // the seabed under each boot and plants it there. Only on the bare seabed: a rock top
   // or a wreck deck is not terrain, and there the centre height stops matching the
   // floor, which is exactly the test that switches this off.
-  gdOn = false;
-  if (SAL.slope && !onDeck && player.grounded) {
+  gdOn = false; gdDeck = false;
+  if (onDeck && player.grounded && SEALEGS.on) {
+    gdOn = true; gdDeck = true; gdC = deckH(player.pos.x, player.pos.z); gdFx = sy; gdFz = cy;
+  } else if (SAL.slope && !onDeck && player.grounded) {
     const px = player.pos.x, pz = player.pos.z;
     let hC = terrainH(px, pz, slopeZi);
     if (Math.abs(hC - soleY) > 0.6) {
@@ -2594,6 +2617,8 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     fkAnkle(hxF, hzF, kF, _vA);
     const fkx = sgn * HIP_X + _vA.x, fky = _vA.y, fkz = _vA.z;
 
+    // a boot planted on the deck stands where the deck has carried it
+    if (ft.planted && ft.deck && onDeck) deckToWorld(ft);
     const lp = (walkP - (i ? 0.5 : 0) + 1) % 1;
     let inStance, sp;
     if (standing) { inStance = true; sp = 0.30; ft.early = false; }          // parked in the flat window
@@ -2689,17 +2714,21 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // The other boot may be in its last third (all but down) — a fast turn is a quick
       // run of steps, never both boots off the ground.
       const otherDown = other.stT < 0 || other.stT > other.dur * 0.66;
-      if (ft.stT < 0 && otherDown && d2 > 0.075 && (d2 >= other.d2 * 0.8 || other.stT >= 0)) {
+      if (ft.stT < 0 && otherDown && d2 > shufD2 && (d2 >= other.d2 * 0.8 || other.stT >= 0)) {
         // further to go, quicker step: 0.42 s for a nudge, down to 0.30 s for a big turn
         ft.dur = SHUF_DUR - 0.12 * clamp((Math.sqrt(d2) - 0.27) / 0.4, 0, 1);
         // The boot travels ROUND him, not across: the path is interpolated in polar form
         // about his centre (angle and radius separately), so a big turn cannot drag one
         // boot through the other leg. One step turns at most ~50 degrees; a bigger turn
         // is a run of them.
-        ft.stT = 0;
+        ft.stT = 0; ikDebug.shuf++; ikDebug.shufD = Math.sqrt(d2); ikDebug.shufDx = dx; ikDebug.shufDz = dz;
         const ax0 = ft.ax + ox - player.pos.x, az0 = ft.az + oz - player.pos.z;
         const os = 0.12 + clamp(Math.abs(yawRate) * 0.06, 0, 0.18);   // lead into a turn that is still going
-        const ax1 = nx + dx * os - player.pos.x, az1 = nz + dz * os - player.pos.z;
+        // (sealegs) on a working deck the body sways over the boots; a boot stepped to catch
+        // the sway is put down halfway back toward his spot, not under the sway's extreme, or
+        // every swing back would cost another step
+        const sx = player.sea ? player.sea.sx * 0.5 * deckF : 0, sz = player.sea ? player.sea.sz * 0.5 * deckF : 0;
+        const ax1 = nx - sx + dx * os - player.pos.x, az1 = nz - sz + dz * os - player.pos.z;
         ft.sfx = Math.atan2(ax0, az0); ft.sfz = Math.hypot(ax0, az0);
         let dA = Math.atan2(ax1, az1) - ft.sfx;
         dA = Math.atan2(Math.sin(dA), Math.cos(dA));
@@ -2722,6 +2751,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       ft.ay = soleB + groundD(ft.ax + ox, ft.az + oz) - oy;   // keeps its footing as the deck heaves
     } else if (ft.stT >= 0) { ft.stT = -1; ft.lift = 0; shufX = 0; }
 
+    if (ft.planted && ft.deck && onDeck) worldToDeck(ft);
     // ---- TARGET. One world-space ankle point, however it was arrived at. ----
     let th, cz, wIK, rl = 0;
     if (inStance) {
@@ -2940,8 +2970,8 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     ft.ex = ex; ft.ez = ez; ft.pin = inStance && ft.planted;
     ft.wx = nx; ft.wy = _vB.y - _vC.y; ft.wz = nz; ft.cz = cz;
     if (i === 0) { ikDebug.wxR = nx; ikDebug.wyR = ft.wy; ikDebug.wzR = nz; } else { ikDebug.wxL = nx; ikDebug.wyL = ft.wy; ikDebug.wzL = nz; }
-    if (i === 0) { ikDebug.slipR = ft.slip; ikDebug.plR = (ft.planted ? 1 : 0) + (inStance ? 2 : 0); ikDebug.dR = ft.duty; }
-    else { ikDebug.slipL = ft.slip; ikDebug.plL = (ft.planted ? 1 : 0) + (inStance ? 2 : 0); ikDebug.dL = ft.duty; }
+    if (i === 0) { ikDebug.slipR = ft.slip; ikDebug.plR = (ft.planted ? 1 : 0) + (inStance ? 2 : 0) + (ft.stT >= 0 ? 4 : 0); ikDebug.dR = ft.duty; }
+    else { ikDebug.slipL = ft.slip; ikDebug.plL = (ft.planted ? 1 : 0) + (inStance ? 2 : 0) + (ft.stT >= 0 ? 4 : 0); ikDebug.dL = ft.duty; }
   }
   ikDebug.state = gaitState; ikDebug.stepSeq = stepSeq;
 }
@@ -3016,6 +3046,43 @@ export function diverYank(dx, dz, str, grounded) {
   rcA.v += 3.4 * str * SAL.react;      // arms thrown out for balance (not on a lean)
   rcD.v -= (grounded ? 2.4 : 0.8) * str * SAL.react;   // the knees go under it
 }
+// ---- SEA LEGS (docs/superpowers/specs/sal-sea-legs.md) -----------------------------------
+// player.js carries him in the raft's frame and publishes what the deck is doing to him
+// (player.sea). The rig answers with the posture the reference describes: upright to GRAVITY
+// (the legs take the deck's angle through the deck-plane ground above, uphill knee bent,
+// downhill leg long), the stance widening and the knees softening as the sea gets up, the
+// arms coming out in a gale, the heavy torso-and-bonnet unit leaning late against the sway
+// (bolted together, top-heavy: slow, dead-beat, no wobble), and the knees taking the heave —
+// loaded as the deck rises, unweighted as it drops away. Knobs: window.__sealegs.
+//   wide/kIdle/kMid: extra half step-width / standing knee / walking knee in a full gale
+//   arm/elb: arms out / elbows bent in a gale; armS: arms out per unit of sway
+//   tilt: share of the deck's tilt the trunk is carried through; ctr: counter-lean per unit
+//   of sway (rad/u); f/d: the trunk's spring; heave: knee sink per u/s^2 of deck acceleration
+//   (less on the unweighting side, which the reach ceiling also limits); hMax/hMin: its range
+//   shuf: the standing-step margin in a full gale (u; 0.27 on still ground)
+const SEALEGS = { on: 1, wide: 0.09, kIdle: 9, kMid: 5, arm: 0.24, elb: 0.16, armS: 1.4, tilt: 0.14, ctr: 0.38,
+  f: 3.0, d: 0.95, heave: 0.11, hMax: 0.055, hMin: -0.02, shuf: 0.17 };
+window.__sealegs = SEALEGS;
+const seaP = { x: 0, v: 0 }, seaR = { x: 0, v: 0 }, seaH = { x: 0, v: 0 };
+let seaHeave = 0;                  // pelvis offset (u, + = up) handed to pelvisDrop this frame
+const _rPrev = new THREE.Matrix4(), _rD = new THREE.Matrix4(), _vS = V3();
+let rPrevOk = false;
+// Everything the legs remember in the world (last targets, contacts, toe-off memory) rides the
+// raft's motion since last frame, so the pelvis never judges a boot against where the deck WAS.
+function carryLegMemory(onDeck) {
+  if (onDeck && rPrevOk) {
+    _rD.copy(_rPrev).invert().premultiply(raft.matrixWorld);
+    for (let i = 0; i < 2; i++) {
+      const f = FTS[i];
+      _vS.set(f.tx, f.ty, f.tz).applyMatrix4(_rD); f.tx = _vS.x; f.ty = _vS.y; f.tz = _vS.z;
+      _vS.set(f.wx, f.wy, f.wz).applyMatrix4(_rD); f.wx = _vS.x; f.wy = _vS.y; f.wz = _vS.z;
+      _vS.set(f.ox, f.oy, f.oz).applyMatrix4(_rD); f.ox = _vS.x; f.oy = _vS.y; f.oz = _vS.z;
+      _vS.set(f.lnX, f.lnY, f.lnZ).applyMatrix4(_rD); f.lnX = _vS.x; f.lnY = _vS.y; f.lnZ = _vS.z;
+    }
+  }
+  _rPrev.copy(raft.matrixWorld); rPrevOk = true;
+}
+
 // blend one composed channel toward a target (module function: no per-frame closure)
 function poMix(ch, v, w) { po[ch] += (v - po[ch]) * w; }
 let idleT = 0, valveT = -1, valveNext = 11, valveIdx = 0, valveW = 0;
@@ -3048,6 +3115,17 @@ const lkY = { x: 0, v: 0 }, lkX = { x: 0, v: 0 };
 // slope adaptation state
 let slopeZi = 0;
 let gdOn = false, gdC = 0, gdFx = 0, gdFz = 0;
+// (sealegs) ON THE DECK the ground is the raft's own tilted plane (raft.matrixWorld, deck top
+// at raft-local y 0.11), read through the same slope machinery the seabed uses: the floor at
+// his centre, each boot's height off it, the sole pitched and rolled onto it. player.js's
+// deckHeightAt is the same plane (duplicated here: this module must stay free of player.js).
+let gdDeck = false;
+function deckH(x, z) {
+  const e = raft.matrixWorld.elements, ny = e[5] > 0.2 ? e[5] : 0.2;
+  const px = e[12] + 0.11 * e[4], py = e[13] + 0.11 * e[5], pz = e[14] + 0.11 * e[6];
+  return py - (e[4] * (x - px) + e[6] * (z - pz)) / ny;
+}
+function gH(x, z) { return gdDeck ? deckH(x, z) : terrainH(x, z, slopeZi); }
 let slopeK = 1;                    // stride shortening on a grade (1 = level)
 let soleBase = 0;                  // the ground the boots stand on at his centre (last driveLegs)
 
@@ -3056,7 +3134,7 @@ let soleBase = 0;                  // the ground the boots stand on at his centr
 // rig only adds what the slope does between one boot and the other.
 function groundD(x, z) {
   if (!gdOn) return 0;
-  return clamp(terrainH(x, z, slopeZi) - gdC, -0.42, 0.42);
+  return clamp(gH(x, z) - gdC, -0.42, 0.42);
 }
 // Absolute foot pitch that lays a sole on the slope along his heading (toe-down +).
 // The clamp was 0.45 rad (25.8 deg): the zone-0 rims run to 30 deg locally, and going DOWN
@@ -3066,7 +3144,7 @@ function groundD(x, z) {
 // can walk; anything steeper is caught by the stance floor in driveLegs.
 function groundPitch(x, z) {
   if (!gdOn) return 0;
-  const a = terrainH(x + gdFx * 0.22, z + gdFz * 0.22, slopeZi), b = terrainH(x - gdFx * 0.22, z - gdFz * 0.22, slopeZi);
+  const a = gH(x + gdFx * 0.22, z + gdFz * 0.22), b = gH(x - gdFx * 0.22, z - gdFz * 0.22);
   return clamp(-Math.atan((a - b) / 0.44), -0.62, 0.62);
 }
 // ...and ACROSS it. The sole used to stay level side to side, so walking along a 26 deg
@@ -3076,7 +3154,7 @@ function groundPitch(x, z) {
 function groundRoll(x, z) {
   if (!gdOn) return 0;
   const sx = Math.cos(yawF) * 0.10, sz = -Math.sin(yawF) * 0.10;
-  return clamp(Math.atan((terrainH(x + sx, z + sz, slopeZi) - terrainH(x - sx, z - sz, slopeZi)) / 0.20), -0.45, 0.45);
+  return clamp(Math.atan((gH(x + sx, z + sz) - gH(x - sx, z - sz)) / 0.20), -0.45, 0.45);
 }
 
 // THE FIRST STEP: start the clock where the feet ARE. Starting from a stand always
@@ -3175,6 +3253,9 @@ function pelvisDrop(dt, player, gw) {
   // stranded plant dragged them 19 cm down and folded the swinging knee to 75 deg. The boot
   // over-reaches instead, and walking, that over-reach is its toe-off (driveLegs).
   if (gaitState >= 2) tgt = Math.max(tgt, hipTop - hc - GAIT.crouch);
+  // (sealegs) the heave in the knees: a sink is free, a rise only where the legs still reach
+  if (seaHeave < 0) tgt += seaHeave;
+  else if (seaHeave > 0) tgt = Math.min(tgt + seaHeave, pelNeed < 1e8 ? Math.max(tgt, pelNeed) : tgt + seaHeave);
   ikDebug.low = low;
   // Never more than a quarter unit down: an anchor further than that is not a step to
   // crouch for, it is one to release and re-take (driveLegs does, on overreach).
@@ -3195,6 +3276,7 @@ function pelvisDrop(dt, player, gw) {
 // Pose the diver from player state. grounded => weighted lead-boot walk; else => frog kick.
 export function updateDiver(dt, t, player) {
   diver.position.copy(player.pos);
+  carryLegMemory(!!player.onDeck && !!player.grounded);
   const speed = player.vel.length();
   const flat = Math.hypot(player.vel.x, player.vel.z);
 
@@ -3254,6 +3336,11 @@ export function updateDiver(dt, t, player) {
   const wgt = player.onDeck ? 1 : clamp((0.9 - (player.buoy || 0)) / 2.73, 0, 1);
   wgtNow = wgt;
   gaitGround(deckF, wgt);
+  // (sealegs) a working deck: wider, lower, quicker to step (see SEALEGS)
+  const sea = player.sea;
+  const seaK = SEALEGS.on && sea ? clamp(sea.k, 0, 1) * deckF * gb : 0;
+  gWide += SEALEGS.wide * seaK; gKIdle += SEALEGS.kIdle * seaK; gKMid += SEALEGS.kMid * seaK;
+  { const m = 0.274 + (SEALEGS.shuf - 0.274) * seaK; shufD2 = m * m; }
   // The walk now LURCHES (player.js): the speed swings ~30% over every step. The gait's
   // amplitude and stride must follow the walk, not the lurch, so they read a smoothed speed.
   flatS += (flat - flatS) * Math.min(1, 2.2 * dt);
@@ -3592,6 +3679,16 @@ export function updateDiver(dt, t, player) {
     }
     hoseTautWas = taut;
   }
+  if (seaK > 1e-3 || (sea && (sea.sx !== 0 || sea.sz !== 0))) {
+    // SEA LEGS, the arms: out from the dress for balance as the sea gets up, further as the
+    // deck carries him off his spot, elbows soft and the hands a little forward — ready to
+    // catch a rail, never flailing (they ride the compliance springs like any pose).
+    const sw = sea ? Math.hypot(sea.sx, sea.sz) : 0;
+    const a = (SEALEGS.arm * seaK + SEALEGS.armS * sw * deckF * gb) * (1 - ladderF);
+    po[CH.Rsz] += a; po[CH.Lsz] += a;
+    po[CH.Re] -= SEALEGS.elb * seaK; po[CH.Le] -= SEALEGS.elb * seaK * (slashT < 0 ? 1 : 0);
+    po[CH.Rsx] -= 0.10 * seaK; if (slashT < 0) po[CH.Lsx] -= 0.10 * seaK;
+  }
   {
     // LOW AIR: the posture goes before the man does. Shoulders round, the head drops and
     // then jerks up — looking for the surface he cannot see — on the panic breath clock.
@@ -3766,8 +3863,29 @@ export function updateDiver(dt, t, player) {
     spring(pendP, clamp(0.011 * pdAf, -0.20, 0.20) * off * (1 - ladderF), dt, 2.3, 0.32);
     spring(pendR, clamp(-0.014 * pdAl, -0.20, 0.20) * off * (1 - ladderF), dt, 2.3, 0.32);
   }
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x, 0,
-    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x);
+  // SEA LEGS, the trunk. Upright to gravity, not to the deck: it is carried through a small
+  // share of the deck's tilt and leans against his sway off his spot (the hip strategy: the
+  // heavy top goes back over the boots), on a slow, dead-beat spring — helmet and corselet
+  // are one bolted unit, a beat late, no wobble. And the knees take the heave.
+  {
+    let tP = 0, tR = 0, hT = 0;
+    const w = SEALEGS.on && sea ? deckF * gb * (1 - ladderF) : 0;
+    if (w > 1e-3) {
+      const sy = Math.sin(yawF), cy = Math.cos(yawF);
+      const nf = sea.nx * sy + sea.nz * cy, nl = sea.nx * cy - sea.nz * sy;
+      const sf = sea.sx * sy + sea.sz * cy, sl = sea.sx * cy - sea.sz * sy;
+      tP = (SEALEGS.tilt * Math.asin(clamp(nf, -0.5, 0.5)) - SEALEGS.ctr * sf) * w;
+      tR = (-SEALEGS.tilt * Math.asin(clamp(nl, -0.5, 0.5)) + SEALEGS.ctr * sl) * w;
+      // the deck accelerating up loads him (a sink, to hMax); falling away unweights him (a
+      // rise, to -hMin, which pelvisDrop holds inside the legs' reach)
+      hT = clamp(-SEALEGS.heave * (0.5 + 0.5 * seaK) * (sea.ay || 0), -SEALEGS.hMax, -SEALEGS.hMin) * w;
+    }
+    spring(seaP, tP, dt, SEALEGS.f, SEALEGS.d); spring(seaR, tR, dt, SEALEGS.f, SEALEGS.d);
+    spring(seaH, hT, dt, 9, 0.75);
+    seaHeave = seaH.x;
+  }
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x, 0,
+    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x + seaR.x);
 
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);

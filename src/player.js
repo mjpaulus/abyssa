@@ -48,7 +48,19 @@ export const player = {
   // game.js sets all three on a yank; updatePlayer eases the drive back in.
   stagger: 0,
   staggerDur: 0,
-  staggerK: 0
+  staggerK: 0,
+  // ---- SEA LEGS (docs/superpowers/specs/sal-sea-legs.md). On the planks he stands in the
+  // RAFT'S frame: deckL is where he stands in raft-local x/z (written at the end of every
+  // deck frame, read by carryDeck after the raft moves), and `sea` is what the moving deck
+  // is doing to him this frame, published for diver.js (posture) and game.js (lens, stagger):
+  //   k        0..1 how hard the sea has him working (stance, knees, arms, steps)
+  //   sx, sz   his balance excursion off his chosen spot, WORLD x/z units (the body sways
+  //            over planted boots; past his support a boot steps)
+  //   nx, nz   the deck's up axis, world x/z (its tilt: the deck descends toward +n)
+  //   ay       the deck's vertical acceleration under him, u/s^2, smoothed (+ loads him)
+  //   lurch    > 0 on the frame the deck throws him (a stagger), with its direction lx/lz
+  deckL: { x: 0, z: 0, ok: false },
+  sea: { k: 0, sx: 0, sz: 0, nx: 0, nz: 0, ay: 0, lurch: 0, lx: 0, lz: 0 }
 };
 
 export const keys = {};
@@ -168,6 +180,135 @@ const _deckL = { x: 0, z: 0 }, _deckV = { x: 0, z: 0 };
 // Rungs: the ladder hangs 0.08 outboard of the +X edge; the last metre of the climb
 // steps him inboard over the sill, onto the planks.
 const LADDER_X = 4.78, LADDER_SILL_X = 4.42;
+
+// ---- THE DECK IS A TILTED, MOVING FLOOR (sealegs, 2026-10-04) ------------------------
+// Michael: "when sal is standing on the raft, he doesnt move with it. He is completely stable
+// and his feet go through the raft." The floor here used to be a FLAT plane at
+// raft.position.y + DECK_TOP: the raft pitches and rolls (updateRaft), so at the spawn spot,
+// 2.6 off the centre, the real planks rose and fell up to 26 cm through his boots in a gale,
+// and the raft surged 0.5 u back and forth under a man standing still in world space.
+// Now the floor is the deck's own plane (raft.matrixWorld, deck top at raft-local y 0.11),
+// and a man standing on it is carried in the RAFT'S frame (carryDeck, after updateRaft).
+// The raft carries no scale: its matrix is a rotation + translation.
+export function deckHeightAt(x, z) {
+  const e = raft.matrixWorld.elements;
+  const ny = e[5] > 0.2 ? e[5] : 0.2;
+  const px = e[12] + DECK_TOP * e[4], py = e[13] + DECK_TOP * e[5], pz = e[14] + DECK_TOP * e[6];
+  return py - (e[4] * (x - px) + e[6] * (z - pz)) / ny;
+}
+// world -> raft-local (rotation transpose), into a {x, y, z}
+function toDeck(x, y, z, out) {
+  const e = raft.matrixWorld.elements;
+  const dx = x - e[12], dy = y - e[13], dz = z - e[14];
+  out.x = e[0] * dx + e[1] * dy + e[2] * dz;
+  out.y = e[4] * dx + e[5] * dy + e[6] * dz;
+  out.z = e[8] * dx + e[9] * dy + e[10] * dz;
+  return out;
+}
+// raft-local deck point (lx, DECK_TOP, lz) -> world, into a vector
+function fromDeck(lx, lz, out) {
+  const e = raft.matrixWorld.elements;
+  return out.set(e[12] + e[0] * lx + e[4] * DECK_TOP + e[8] * lz,
+    e[13] + e[1] * lx + e[5] * DECK_TOP + e[9] * lz,
+    e[14] + e[2] * lx + e[6] * DECK_TOP + e[10] * lz);
+}
+const _dkW = new THREE.Vector3(), _dkL = { x: 0, y: 0, z: 0 };
+// Stand him on the deck at raft-local (lx, lz): the spawns (start, rescue, voyage, title)
+// put him here, and the carry picks it up from the first frame.
+export function placeOnDeck(lx, lz) {
+  fromDeck(lx, lz, _dkW);
+  player.pos.set(_dkW.x, _dkW.y + EYE_H, _dkW.z);
+  player.deckL.x = lx; player.deckL.z = lz; player.deckL.ok = true;
+  seaReset();
+  return player.pos;
+}
+
+// ---- SEA LEGS: the balance excursion (spec: sal-sea-legs.md, Targets) --------------------
+// He rides a 0.1 Hz roll (Buchanan & Horak: slow support motion is ridden, not resisted), so
+// most of it is just the carry above. What is left is the part his stance has to work at,
+// the MII model's tipping load: gravity along the tilted deck plus the deck's own horizontal
+// acceleration, felt at his centre of mass. It drives a slow, heavily damped excursion of his
+// body off the spot he chose (the man swaying over his planted boots), with the righting
+// spring of a top-heavy rig: ~3 s and dead-beat, no wobble. The sea state scales how much of
+// the tilt he gives to (a calm-day roll he simply stands through). Past his support, a boot
+// steps (diver.js's shuffle, at a margin that shrinks with the sea) and a hard throw is a
+// stagger (`sea.lurch`, game.js -> diverYank). SEA.on = 0 is the A/B: rigid on the deck plane.
+export const SEA = { on: 1, w: 2.1, z: 0.92, kg: 0.62, kgCalm: 0.22, ki: 1.0, max: 0.24, lurch: 0.13, lurchCd: 7,
+  walkK: 1.25, walkMax: 0.42, slow: 0.22, ayT: 0.12, kT: 4.0 };
+if (typeof window !== 'undefined') window.__sea = SEA;
+const seaS = { x: 0, z: 0, vx: 0, vz: 0 };     // excursion, raft-local x/z, and its rate
+let seaPrevOk = false, seaVx = 0, seaVy = 0, seaVz = 0, seaPx = 0, seaPy = 0, seaPz = 0;
+let seaAx = 0, seaAy = 0, seaAz = 0, seaK = 0, seaCd = 0;
+function seaReset() { seaS.x = seaS.z = seaS.vx = seaS.vz = 0; seaPrevOk = false; }
+
+// CARRIED BY THE BOAT. Called by game.js right after updateRaft, every play frame (paused
+// too: the boat does not stop for a menu, and a man left behind in world space would have
+// his planted boots dragged away from under him). Re-stands him on the plank he was on, in
+// the raft's NEW pose: heave, surge, pitch and roll about the raft centre all carry him.
+export function carryDeck(dt) {
+  const sea = player.sea;
+  sea.lurch = 0;
+  const st = stormLevel();
+  seaK += (st - seaK) * Math.min(1, dt / SEA.kT);
+  sea.k = seaK;
+  const e = raft.matrixWorld.elements;
+  sea.nx = e[4]; sea.nz = e[6];
+  if (!player.onDeck || !player.grounded || !player.deckL.ok || player.onLadder) {
+    seaReset(); player.deckL.ok = false; sea.sx = sea.sz = 0; sea.ay += (0 - sea.ay) * Math.min(1, dt * 4);
+    return;
+  }
+  const L = player.deckL;
+  // the deck under him, this frame: its velocity and acceleration (finite differences on
+  // the point he stands on, smoothed: the hull's ease is smooth, but a weather jump is not)
+  fromDeck(L.x, L.z, _dkW);
+  if (dt > 1e-4) {
+    if (seaPrevOk) {
+      const vx = (_dkW.x - seaPx) / dt, vy = (_dkW.y - seaPy) / dt, vz = (_dkW.z - seaPz) / dt;
+      const a = Math.min(1, dt / SEA.ayT);
+      seaAx += (clamp((vx - seaVx) / dt, -4, 4) - seaAx) * a;
+      seaAy += (clamp((vy - seaVy) / dt, -4, 4) - seaAy) * a;
+      seaAz += (clamp((vz - seaVz) / dt, -4, 4) - seaAz) * a;
+      seaVx = vx; seaVy = vy; seaVz = vz;
+    } else { seaVx = seaVy = seaVz = 0; seaAx = seaAy = seaAz = 0; }
+    seaPx = _dkW.x; seaPy = _dkW.y; seaPz = _dkW.z; seaPrevOk = true;
+  }
+  sea.ay = seaAy;
+  // ---- the excursion, in raft-local x/z ----
+  if (SEA.on && dt > 1e-4) {
+    // gravity along the deck (raft-local): the local axes' world Y components
+    const g = 9.81 * (SEA.kgCalm + (SEA.kg - SEA.kgCalm) * seaK);
+    const gx = -g * e[1], gz = -g * e[9];
+    // the deck's horizontal acceleration, into the raft's axes; the body lags it
+    const ix = -(e[0] * seaAx + e[1] * seaAy + e[2] * seaAz) * SEA.ki;
+    const iz = -(e[8] * seaAx + e[9] * seaAy + e[10] * seaAz) * SEA.ki;
+    // walking, the gait owns the balance: the excursion bleeds out into the steps
+    const walking = Math.hypot(player.vel.x, player.vel.z) > 0.3;
+    const w = SEA.w * (walking ? 1.8 : 1), zt = SEA.z;
+    const fx = walking ? 0 : gx + ix, fz = walking ? 0 : gz + iz;
+    const n = dt > 0.022 ? Math.ceil(dt / 0.022) : 1, h = dt / n;
+    for (let i = 0; i < n; i++) {
+      seaS.vx += (fx - w * w * seaS.x - 2 * zt * w * seaS.vx) * h;
+      seaS.vz += (fz - w * w * seaS.z - 2 * zt * w * seaS.vz) * h;
+      seaS.x += seaS.vx * h; seaS.z += seaS.vz * h;
+    }
+    const r = Math.hypot(seaS.x, seaS.z);
+    if (r > SEA.max) { const k = SEA.max / r; seaS.x *= k; seaS.z *= k; }
+    // THE THROW. A heavy man pushed fast past his support does not ease back: he staggers.
+    // Rare by construction (a gale's worst roll), once per SEA.lurchCd at most.
+    seaCd = Math.max(0, seaCd - dt);
+    const sp = Math.hypot(seaS.vx, seaS.vz);
+    if (!walking && seaCd <= 0 && r > SEA.lurch * (1.6 - 0.6 * seaK) && sp > 0.05) {
+      seaCd = SEA.lurchCd;
+      sea.lurch = clamp((r - SEA.lurch) / 0.08, 0.25, 1) * (0.4 + 0.6 * seaK);
+      // direction he is thrown, world x/z
+      sea.lx = e[0] * seaS.vx + e[8] * seaS.vz; sea.lz = e[2] * seaS.vx + e[10] * seaS.vz;
+    }
+  } else { seaS.x = seaS.z = seaS.vx = seaS.vz = 0; }
+  // re-stand him: chosen spot plus excursion, on the deck's plane, in its new pose
+  fromDeck(L.x + seaS.x, L.z + seaS.z, _dkW);
+  player.pos.set(_dkW.x, _dkW.y + EYE_H, _dkW.z);
+  sea.sx = e[0] * seaS.x + e[8] * seaS.z; sea.sz = e[2] * seaS.x + e[10] * seaS.z;
+}
 
 // ---------------------------------------------------------------- the suit as physics
 // A dressed Mark V is ~170 kg. Its displacement splits in two, and that split is the
@@ -320,11 +461,14 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // up through it from below — surfacing under the raft should put him alongside it, not
   // punt him onto the deck from 200 m down. The 0.7 tolerance is what lets him land
   // rather than clip when he steps off and the swell lifts the deck to meet him.
+  // (sealegs) The footprint is tested in the RAFT'S frame and the top is the tilted plane
+  // under him, not a flat one at the raft's centre height.
   let deckY = -1e5;
-  const dxr = player.pos.x - raft.position.x, dzr = player.pos.z - raft.position.z;
+  toDeck(player.pos.x, player.pos.y, player.pos.z, _dkL);
+  const dxr = _dkL.x, dzr = _dkL.z;
+  const deckTop = deckHeightAt(player.pos.x, player.pos.z) + EYE_H;
   if (dxr > -DECK_HX && dxr < DECK_HX && dzr > -DECK_HZ && dzr < DECK_HZ) {
-    const top = raft.position.y + DECK_TOP + EYE_H;
-    if (player.pos.y > top - 0.7) deckY = top;
+    if (player.pos.y > deckTop - 0.7) deckY = deckTop;
   }
   const onDeck = deckY > -1e4;
   // Published because the footfall FX are seabed effects: a silt cloud and a boot print
@@ -341,7 +485,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // swim at the ladder and keep swimming.
   player.onLadder = false;
   if (!onDeck && dxr > 4.2 && dxr < 5.9 && dzr > LADDER_Z - GAP_HZ && dzr < LADDER_Z + GAP_HZ) {
-    const top = raft.position.y + DECK_TOP + EYE_H;
+    const top = deckTop;
     if (player.pos.y > top - 4.2 && player.pos.y <= top - 0.68 &&
         (keys['KeyW'] || keys['ArrowUp']) && -Math.sin(player.yaw) > 0.1) {
       player.onLadder = true;
@@ -422,7 +566,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     player.scullX = 0; player.scullZ = 0;
     const wgt = onDeck ? 1 : clamp((GROUND_BUOY - player.buoy) / (GROUND_BUOY - A_BUOY_MIN), 0, 1);
     const tau = onDeck ? TAU_DECK : TAU_SILT_LIGHT + (TAU_SILT_HEAVY - TAU_SILT_LIGHT) * wgt;
-    const top = onDeck ? WALK_TOP_DECK : WALK_TOP_BED;
+    // (sealegs) on a working deck he walks slower: wider, shorter, picking his moment
+    const top = onDeck ? WALK_TOP_DECK * (1 - SEA.slow * player.sea.k * SEA.on) : WALK_TOP_BED;
     const fr = Math.exp(-dt / tau);
     // Terminal speed is the ground's top on every ground, at every frame rate. The step here is
     // v <- (v + a*dt) * fr, whose fixed point is a*dt*fr/(1-fr); solving that for a
@@ -434,6 +579,19 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     if (keys['KeyS'] || keys['ArrowDown']) player.vel.addScaledVector(flat, -acc * dt * 0.7);
     if (keys['KeyA'] || keys['ArrowLeft']) player.vel.addScaledVector(right, -acc * dt * 0.8);
     if (keys['KeyD'] || keys['ArrowRight']) player.vel.addScaledVector(right, acc * dt * 0.8);
+    // THE LURCH DOWN-SLOPE (sealegs). Walking a rolled deck, gravity along the planks takes a
+    // share of every step: he is carried down the slope and labours up it, so his path bends
+    // and his pace swells and stalls with the roll. Only while he is walking: standing, the
+    // balance excursion (carryDeck) owns the slope, and a drift here would walk him off.
+    if (onDeck && SEA.on && (keys['KeyW'] || keys['ArrowUp'] || keys['KeyS'] || keys['ArrowDown'] ||
+        keys['KeyA'] || keys['ArrowLeft'] || keys['KeyD'] || keys['ArrowRight'])) {
+      const e = raft.matrixWorld.elements;
+      // the deck's downhill direction in the world, x/z: the horizontal part of -gravity
+      // projected onto the plane is (nx, nz) of its up axis
+      const gk = 9.81 * SEA.walkK * (0.35 + 0.65 * player.sea.k);
+      const ax = clamp(e[4] * gk, -SEA.walkMax / tau, SEA.walkMax / tau), az = clamp(e[6] * gk, -SEA.walkMax / tau, SEA.walkMax / tau);
+      player.vel.x += ax * dt; player.vel.z += az * dt;
+    }
     // A step up into the water column, not a leap. The same keypress is filling the
     // dress, so the push-off buys the seconds the air needs to take over.
     // NOT ON THE DECK: there is no water column to step into, and a hop is the one thing
@@ -529,7 +687,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // carried back out through the raft's own axes.
   if (onDeck && player.grounded) {
     _deckInv.copy(raft.matrixWorld).invert();
-    _deckP.set(player.pos.x, raft.position.y + DECK_TOP + 0.9, player.pos.z).applyMatrix4(_deckInv);
+    _deckP.set(player.pos.x, player.pos.y - EYE_H + 0.9, player.pos.z).applyMatrix4(_deckInv);
     const e = raft.matrixWorld.elements;
     _deckL.x = _deckP.x; _deckL.z = _deckP.z;
     // velocity into the raft's axes (the inverse of a rotation is its transpose; the
@@ -624,6 +782,13 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   } else if (player.pos.y > floorY + 1.4 || (!onDeck && player.buoy > GROUND_BUOY)) {
     player.grounded = false;
   }
+
+  // (sealegs) Where he stands on the planks, in the raft's frame, for the next carry: the
+  // deck point under him, less the balance excursion (that is the sway, not the spot).
+  if (onDeck && player.grounded && !player.onLadder) {
+    toDeck(player.pos.x, player.pos.y - EYE_H, player.pos.z, _dkL);
+    player.deckL.x = _dkL.x - seaS.x; player.deckL.z = _dkL.z - seaS.z; player.deckL.ok = true;
+  } else player.deckL.ok = false;
 
   // Smoothed ground reference used by the camera so cliffs don't snap the view.
   player.groundY += (floorY - player.groundY) * Math.min(1, 8 * dt);
