@@ -568,7 +568,14 @@ lantern's 6 cube faces) -- distant casters drop castShadow (not in any program k
 (4) the composer must render once before the refraction pass samples the sun shadow map
 (sampler2DShadow on an empty texture = GL_INVALID_OPERATION). Anything new that appears first
 in play (a light, a material, a lazily built mesh) must be built or drawn in the boot tail, or
-it hitches. `__boot.log()`, `?warmdiag`, `tools/bench/hitch.mjs` (real click + W over CDP).
+it hitches. `__boot.log()`, `?warmdiag`, `tools/bench/hitch.mjs` (real click + W over CDP;
+`SCEN=jet,z1,z2,voyage` for the later first-time transitions). Zones 1/2: the boot builds every
+sleeper, warms it in its own water, and KEEPS one material per program (`keepingPrograms` in
+game.js) -- disposing a material releases its program, so every zone change and the voyage
+reseed run inside it. (5) `compile(branch, cam, scene)` counts a branch's own lights twice:
+precompile lifts them to the scene root for the call. (6) A mesh that swaps material at run
+time (creatures' school LODs) must have every face warmed -- the compile only sees the one
+assigned.
 
 ### Perf sampling — read this before touching samplePerf
 
