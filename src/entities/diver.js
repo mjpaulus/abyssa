@@ -3112,6 +3112,11 @@ const accLean = { x: 0, v: 0 };
 let pdVx = 0, pdVz = 0, pdAf = 0, pdAl = 0;
 const pendP = { x: 0, v: 0 }, pendR = { x: 0, v: 0 };
 const lkY = { x: 0, v: 0 }, lkX = { x: 0, v: 0 };
+// walking turns (see TURN ANTICIPATION): walk = share of the look-lead taken OFF the body while
+// walking; hipLead = how far the pelvis leads into the turn (rad per rad of lead); strafe = share
+// of the strafe blend's hip offset kept OUT of the trunk's look-lead (1 = none of it twists)
+const TURN = { walk: 0.78, hipLead: 0.07, strafe: 1, dbg: { lead: 0, walkT: 0, strafe: 0, dYaw: 0, lookW: 0, amp: 0 } };
+window.__turn = TURN;
 // slope adaptation state
 let slopeZi = 0;
 let gdOn = false, gdC = 0, gdFx = 0, gdFz = 0;
@@ -3551,12 +3556,28 @@ export function updateDiver(dt, t, player) {
     // yawF is the body's own lagging heading, so its gap to the look direction IS the
     // turn he is about to make. The head leads into it, the spine takes a share, the
     // pelvis holds back — a turn becomes a ripple down the body instead of a turret.
-    const lead = clamp(dYaw, -1.25, 1.25);
-    let hy = lead * 0.85, hp = 0;
+    // The STRAFE BLEND's offset is not a turn he is about to make: it is where he chose to
+    // point his hips (toward the travel). Wringing the trunk back from it onto the camera was
+    // the A/D corkscrew, so on the ground it is taken out of the lead — the column faces the
+    // way he walks, as one (the bolted bonnet with it).
+    const lead = clamp(Math.atan2(Math.sin(dYaw + strafeS.x * (1 - sqW) * gb * TURN.strafe), Math.cos(dYaw + strafeS.x * (1 - sqW) * gb * TURN.strafe)), -1.25, 1.25);
+    // (sealegs/turn, Michael 2026-10-04: "His walk is still odd when turning left or right, he
+    // looks twisted.") WALKING, THE COLUMN TURNS AS ONE. Measured on the seabed: a walking mouse
+    // turn twisted the thorax 22 deg (median) / 49 (p95) / 51 (max) off the pelvis, an A/D
+    // crab 26 / 62 / 66 — the strafe blend and the velocity's lag through a turn swing the
+    // hips toward the travel, and the look-lead then wrung the corselet back toward the camera:
+    // a corkscrew. A man in a corselet cannot do that (the trunk-pelvis counter-rotation of a
+    // walk is ~5-10 deg), and a Mark V diver turns in steps with the hips leading slightly
+    // and the shoulders following. So while he walks the look-lead is mostly NOT carried by the
+    // body (the eyes behind the glass and the lens do the looking) and the pelvis leads into
+    // the turn instead of holding back. Standing, the shipped turn anticipation is untouched.
+    const walkT = clamp(amp * 3, 0, 1) * gb;
+    let hy = lead * 0.85 * (1 - TURN.walk * walkT), hp = 0;
+    TURN.dbg.lead = lead; TURN.dbg.walkT = walkT; TURN.dbg.strafe = strafeS.x; TURN.dbg.dYaw = dYaw; TURN.dbg.lookW = lookW; TURN.dbg.amp = amp;
     // LOOK-AT. Whatever game.js says is worth noticing (a creature, the sleeper, a light
     // in the dark). Heaviest at a standstill, lighter on the move, gone while he fights.
-    const wantL = SAL.look && lookHave ? (0.95 - 0.55 * amp) * (1 - grabW) * (1 - ladderF) : 0;
-    lookW += (wantL - lookW) * Math.min(1, 1.6 * dt);
+    const wantL = SAL.look && lookHave ? (0.95 - 0.55 * amp) * (1 - TURN.walk * 0.85 * walkT) * (1 - grabW) * (1 - ladderF) : 0;
+    lookW += (wantL - lookW) * Math.min(1, (1.6 + 3.5 * walkT) * dt);   // (turn) he lets it go as he sets off
     if (lookW > 1e-3) {
       const vx = lookT.x - diver.position.x, vy = lookT.y - (diver.position.y + 0.45), vz = lookT.z - diver.position.z;
       let ly = Math.atan2(vx, vz) - yawF;
@@ -3582,7 +3603,7 @@ export function updateDiver(dt, t, player) {
     const sY = clamp(lkY.x * 0.80, -0.80, 0.80);
     po[CH.sYaw] += sY;
     po[CH.nYaw] += lkY.x - sY * (1 - HEAD_CTR);
-    po[CH.pYaw] -= lead * 0.12 * gb;
+    po[CH.pYaw] += lead * gb * (TURN.hipLead * walkT - 0.12 * (1 - walkT));
     po[CH.nPitch] -= lkX.x * 0.30;    // nPitch + is chin down
     po[CH.sPitch] -= lkX.x * 0.70;
   }
