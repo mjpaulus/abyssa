@@ -576,17 +576,21 @@ const DRUM_X = 3.6, DRUM_Z = 3.2;
 // drums sample: phi'' = w^2 (G phi_wave - phi) - 2 z w phi'. Roll is about raft Z (the +X
 // dive side up/down), pitch about raft X.
 //   tC/tG: natural roll period (s), calm and gale (heavier, slower wallow as the sea gets up)
-//   pT: pitch period / roll period (the drums run along X: a hair stiffer in pitch)
+//   pT: pitch period / roll period (the square deck is the same both ways: 1)
 //   zC/zG: damping ratio, calm and gale
 //   g: drive gain at storm 0 / 0.25 / 0.5 / 0.75 / 1 (tuned to the ruled amplitudes)
 //   pG: pitch drive gain relative to roll
 //   hT/hZ: heave natural period (s) / damping ratio (a light platform follows the sea's
 //          rise closely, a little late)
-//   max: the soft limit (rad): the response is max * tanh(phi / max)
+//   max: the soft limit (rad) on the whole tilt: |tilt| -> max * tanh(|tilt| / max)
+// Tuned (2026-10-05) by replaying 200 s of the real sea's forcing per state through this
+// oscillator offline, then checked live: tilt p95 3.4 / 9.0 / 16.4 deg calm / moderate / gale
+// (ruled: ~3 / 8-10 / 15-18). A calm day's chop is steeper at the drums than the ruling wants,
+// so the calm gain is under 1 (the platform averages it out); a gale's is over 1.
 //   brC/brW: the calm-sea breathing (rad, rad/s) the old decorative bob gave, now FED IN
 //            as forcing so the body filters it (it never adds on top)
-const RR = { on: 1, tC: 4.2, tG: 6.0, pT: 0.92, zC: 0.22, zG: 0.16, g: [1.25, 2.6, 4.2, 3.9, 3.4], pG: 0.9,
-  hT: 1.5, hZ: 0.55, max: 0.36, brC: 0.012, brW: 0.48, rec: null,
+const RR = { on: 1, tC: 4.5, tG: 6.5, pT: 1.0, zC: 0.22, zG: 0.16, g: [0.47, 0.7, 0.95, 1.2, 1.45], pG: 1.0,
+  hT: 1.5, hZ: 0.55, max: 0.38, brC: 0.012, brW: 0.48, rec: null,
   // live readout (radians / u), refreshed every step
   out: { roll: 0, pitch: 0, heave: 0, wRoll: 0, wPitch: 0, G: 0, T: 0 } };
 if (typeof window !== 'undefined') window.__raftRoll = RR;
@@ -668,9 +672,11 @@ export function updateRaft(dt, t) {
   setRaftContact(RAFT_POS.x, RAFT_POS.z, 4.75, rdH.v);
   raft.position.y = rideY;
   raft.position.x = RAFT_POS.x + Math.sin(t * 0.37) * 0.16 * (1 + storm * 2.1);
-  // the response, softly limited (a fully pressed drum stiffens hard: never past RR.max)
-  rideRX = RR.max * Math.tanh(rdP.x / RR.max);
-  rideRZ = RR.max * Math.tanh(rdR.x / RR.max);
+  // the response, softly limited on the whole tilt (a drum pressed under or lifted clear
+  // stiffens hard: never past RR.max, whichever way she goes over)
+  const tm = Math.sqrt(rdP.x * rdP.x + rdR.x * rdR.x), tsc = tm > 1e-9 ? RR.max * Math.tanh(tm / RR.max) / tm : 1;
+  rideRX = rdP.x * tsc;
+  rideRZ = rdR.x * tsc;
   raft.rotation.x = rideRX;
   raft.rotation.z = rideRZ;
   // The anchor rides the sheave, so the hose stays on the block as the raft rolls.
