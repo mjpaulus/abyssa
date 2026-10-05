@@ -567,6 +567,67 @@ export const raftSurface = { wet: RAFT_WET, deckTex };
 // eye does — an engine whose sound and whose wheel disagree reads as two objects.
 export function pumpSpeed() { return govK; }
 
+// ---- THE RAFT AS A RIGID BODY ON FOUR DRUMS (raftroll, 2026-10-05) ------------------------
+// Drum centres, raft-local (hull.js buildDrums: (+-3.6, -0.75, +-3.2), axis along X).
+const DRUM_X = 3.6, DRUM_Z = 3.2;
+// Knobs (window.__raftRoll). Per axis, a damped oscillator driven by the wave plane the four
+// drums sample: phi'' = w^2 (G phi_wave - phi) - 2 z w phi'. Roll is about raft Z (the +X
+// dive side up/down), pitch about raft X.
+//   tC/tG: natural roll period (s), calm and gale (heavier, slower wallow as the sea gets up)
+//   pT: pitch period / roll period (the drums run along X: a hair stiffer in pitch)
+//   zC/zG: damping ratio, calm and gale
+//   g: drive gain at storm 0 / 0.25 / 0.5 / 0.75 / 1 (tuned to the ruled amplitudes)
+//   pG: pitch drive gain relative to roll
+//   hT/hZ: heave natural period (s) / damping ratio (a light platform follows the sea's
+//          rise closely, a little late)
+//   max: the soft limit (rad): the response is max * tanh(phi / max)
+//   brC/brW: the calm-sea breathing (rad, rad/s) the old decorative bob gave, now FED IN
+//            as forcing so the body filters it (it never adds on top)
+const RR = { on: 1, tC: 4.2, tG: 6.0, pT: 0.92, zC: 0.22, zG: 0.16, g: [1.25, 2.6, 4.2, 3.9, 3.4], pG: 0.9,
+  hT: 1.5, hZ: 0.55, max: 0.36, brC: 0.012, brW: 0.48, rec: null,
+  // live readout (radians / u), refreshed every step
+  out: { roll: 0, pitch: 0, heave: 0, wRoll: 0, wPitch: 0, G: 0, T: 0 } };
+if (typeof window !== 'undefined') window.__raftRoll = RR;
+const rdR = { x: 0, v: 0 }, rdP = { x: 0, v: 0 }, rdH = { x: 0, v: 0 };
+let rdPrevOk = false, rdWR = 0, rdWP = 0, rdWH = 0;
+const RD_H = 1 / 120;          // fixed sub-step (s): frame-rate independent at any fps
+function gainAt(st) {
+  const g = RR.g, u = Math.min(4, Math.max(0, st * 4)), i = Math.min(3, Math.floor(u)), f = u - i;
+  return g[i] + (g[i + 1] - g[i]) * f;
+}
+function stepRaft(dt, t, st, hC, h1, h2, h3, h4) {
+  // the wave plane under the drums: mean height (the centre too, it carries the deck's
+  // middle), and its slope along raft X and Z (least squares over the four drum centres)
+  const hM = (hC * 2 + h1 + h2 + h3 + h4) / 6;
+  const sX = (h1 - h2 + h3 - h4) / (4 * DRUM_X), sZ = (h1 + h2 - h3 - h4) / (4 * DRUM_Z);
+  const k = Math.min(1, Math.max(0, st));
+  // calm breathing: a slow swell the sea field leaves out on a glassy day
+  const br = RR.brC * (1 - 0.6 * k);
+  const wR = Math.atan(sX) + br * Math.sin(t * RR.brW * 1.08);
+  const wP = -Math.atan(sZ) + br * Math.cos(t * RR.brW * 0.92);
+  const G = RR.on ? gainAt(k) : 0.9;
+  const T = RR.tC + (RR.tG - RR.tC) * k, z = RR.zC + (RR.zG - RR.zC) * k;
+  const w = 2 * Math.PI / T, wp = w / RR.pT;
+  const wh = 2 * Math.PI / RR.hT, zh = RR.hZ;
+  if (!rdPrevOk || !(dt >= 0) || !Number.isFinite(rdR.x + rdP.x + rdH.x + rdR.v + rdP.v + rdH.v)) {
+    // first frame (or a broken state): stand on the sea as it is, at rest
+    rdR.x = G * wR; rdP.x = G * RR.pG * wP; rdH.x = hM; rdR.v = rdP.v = rdH.v = 0;
+    rdWR = wR; rdWP = wP; rdWH = hM; rdPrevOk = true;
+  }
+  const n = Math.min(24, Math.ceil(Math.min(dt, 0.2) / RD_H)), h = n > 0 ? Math.min(dt, 0.2) / n : 0;
+  for (let i = 1; i <= n; i++) {
+    // the forcing is sampled once a frame: interpolate it across the sub-steps
+    const f = i / n;
+    const fr = rdWR + (wR - rdWR) * f, fp = rdWP + (wP - rdWP) * f, fh = rdWH + (hM - rdWH) * f;
+    rdR.v += (w * w * (G * fr - rdR.x) - 2 * z * w * rdR.v) * h; rdR.x += rdR.v * h;
+    rdP.v += (wp * wp * (G * RR.pG * fp - rdP.x) - 2 * z * wp * rdP.v) * h; rdP.x += rdP.v * h;
+    rdH.v += (wh * wh * (fh - rdH.x) - 2 * zh * wh * rdH.v) * h; rdH.x += rdH.v * h;
+  }
+  rdWR = wR; rdWP = wP; rdWH = hM;
+  const o = RR.out;
+  o.roll = rdR.x; o.pitch = rdP.x; o.heave = rdH.x; o.wRoll = wR; o.wPitch = wP; o.G = G; o.T = T;
+}
+
 export function updateRaft(dt, t) {
   // THE RAFT RIDES THE REAL SEA. It used to run its own decorative bob (+-0.32 sine)
   // while the wave MESH, since the choppy-sea round, heaves 2.5+ units in a gale —
@@ -577,26 +638,39 @@ export function updateRaft(dt, t) {
   // and eases with a short time constant (mass; a barge does not follow ripples).
   // Pitch/roll come from the bow/beam differentials. Everything downstream (pumpPos,
   // tether, deckY in player.js, the camera) is position-relative and follows free.
+  //
+  // ROCKIER, SCALED BY SEA (Michael, 2026-10-05: about +-3 deg on a calm day, +-8-10 in
+  // moderate seas, +-15-18 in a gale, a slower, heavier wallow). The attitude used to be the
+  // sea's own slope eased toward with a 0.35 s lag, so the raft could never roll more than
+  // the water under it (a gale: ~5 deg). Now it is a rigid body on four buoyant drums:
+  // each drum feels the sea under its own centre, the four of them are a hydrostatic
+  // righting spring (stiffness from the drums' waterplane) pulling the deck toward the
+  // wave plane they sample, and the platform's inertia (with the water it drags: added
+  // mass) and its damping (drum skin friction and the wave-making of a rolling hull) make
+  // it a resonator. The roll's amplitude and phase therefore come out of the sea itself: a
+  // short chop is filtered out above the natural period, a long swell is ridden, and the
+  // part of the sea near the raft's own period is amplified into the slow wallow. The
+  // drive gain per sea state then tunes the result to the ruled amplitudes (the FFT sea's
+  // slope at a 9-unit hull is gentler than a real sea's, the gain stands in for that).
   const st = stormLevel();
-  const hC = surfaceHeightAt(RAFT_POS.x, RAFT_POS.z, t, st);
-  const hF = surfaceHeightAt(RAFT_POS.x, RAFT_POS.z + 3.5, t, st);
-  const hB = surfaceHeightAt(RAFT_POS.x + 3.5, RAFT_POS.z, t, st);
-  const hTarget = RAFT_POS.y + (hC * 2 + hF + hB) * 0.25;
-  // Framerate-independent ease (tether.js's MU_RATE idiom): dt/0.35 clamps at 1 and
-  // over-tightens at low fps; the exp form is the same 0.35 s time constant everywhere.
-  const ek = 1 - Math.exp(-dt / 0.35);
-  const rideY0 = rideY;
-  rideY += (hTarget - rideY) * ek;
+  const ox = raft.position.x;
+  const hC = surfaceHeightAt(ox, RAFT_POS.z, t, st);
+  const h1 = surfaceHeightAt(ox + DRUM_X, RAFT_POS.z + DRUM_Z, t, st);
+  const h2 = surfaceHeightAt(ox - DRUM_X, RAFT_POS.z + DRUM_Z, t, st);
+  const h3 = surfaceHeightAt(ox + DRUM_X, RAFT_POS.z - DRUM_Z, t, st);
+  const h4 = surfaceHeightAt(ox - DRUM_X, RAFT_POS.z - DRUM_Z, t, st);
+  if (RR.rec && RR.rec.length < 200000) RR.rec.push(t, dt, st, hC, h1, h2, h3, h4);
+  stepRaft(dt, t, st, hC, h1, h2, h3, h4);
+  rideY = RAFT_POS.y + rdH.x;
   // The sea draws its hull collar from this: where the raft is and how hard it works.
-  setRaftContact(RAFT_POS.x, RAFT_POS.z, 4.75, dt > 0 ? (rideY - rideY0) / dt : 0);
+  setRaftContact(RAFT_POS.x, RAFT_POS.z, 4.75, rdH.v);
   raft.position.y = rideY;
   raft.position.x = RAFT_POS.x + Math.sin(t * 0.37) * 0.16 * (1 + storm * 2.1);
-  // pitch into the swell off the bow/beam height differentials, softly clamped
-  const pit = clamp01((hF - hC) / 3.5 + 0.5) - 0.5, rol = clamp01((hB - hC) / 3.5 + 0.5) - 0.5;
-  rideRX += (-pit * 0.9 - rideRX) * ek;
-  rideRZ += (rol * 0.9 - rideRZ) * ek;
-  raft.rotation.x = rideRX + Math.cos(t * 0.44) * 0.012;
-  raft.rotation.z = rideRZ + Math.sin(t * 0.52) * 0.014;
+  // the response, softly limited (a fully pressed drum stiffens hard: never past RR.max)
+  rideRX = RR.max * Math.tanh(rdP.x / RR.max);
+  rideRZ = RR.max * Math.tanh(rdR.x / RR.max);
+  raft.rotation.x = rideRX;
+  raft.rotation.z = rideRZ;
   // The anchor rides the sheave, so the hose stays on the block as the raft rolls.
   // The matrix has to be refreshed first — localToWorld reads matrixWorld, which three
   // would not rebuild until render, leaving the anchor a frame behind the swell.
