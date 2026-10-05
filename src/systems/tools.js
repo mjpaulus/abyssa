@@ -15,6 +15,9 @@
 //   fireThruster(dx, dy, dz, power)   — ONE-SHOT: the diver cracked the bottle. (dx,dy,dz)
 //     is the unit THRUST direction; the exhaust vents opposite it. power < 0.25 is a dud
 //     wheeze (cloud only). Physics + air cost stay in player.js/game.js.
+//   setThrusterJet(level, dx, dy, dz) — THE AIR PACK's held burst (game.js updateAirPack,
+//     every play frame): a sustained jet + thick bubble stream off the same twin nozzles
+//     at `level` 0..1 along thrust (dx,dy,dz). 0 = off; the pools drain on their own.
 //   setToolsLanternPos(v)             — the plume catches the lantern, same as the dust.
 //
 // Discipline: every pool is allocated once at init, every hot-path vector is a module
@@ -570,6 +573,13 @@ const bVel = new Float32Array(BUB_MAX * 3), bLife = new Float32Array(BUB_MAX), b
 const bPh = new Float32Array(BUB_MAX), bBuoy = new Float32Array(BUB_MAX), bS0 = new Float32Array(BUB_MAX);
 let jHead = 0, jAlive = 0, bHead = 0, bAlive = 0;
 let burstT = 0, burstPow = 0, jFrac = 0, bFrac = 0, ringT = 0, burstCount = 0;
+// the held burst: a level and a direction, written each frame
+let jetLvl = 0, sjFrac = 0, sbFrac = 0;
+const _jetThrust = new THREE.Vector3(0, 1, 0);
+// Sustained rates are a share of the blowdown's peak: the pools are rings (160 / 260) and
+// at these rates the steady population sits just under them, so a long burst never
+// recycles a particle the eye is still following.
+const SJET_RATE = 420, SBUB_RATE = 175;
 
 const _origin = new THREE.Vector3(), _ex = new THREE.Vector3(), _rt = new THREE.Vector3();
 const _up2 = new THREE.Vector3(), _noz = new THREE.Vector3(), _axis = new THREE.Vector3();
@@ -721,8 +731,13 @@ export function fireThruster(dx, dy, dz, power = 1) {
   }
 }
 
+export function setThrusterJet(level, dx, dy, dz) {
+  jetLvl = level > 0 ? level : 0;
+  if (jetLvl > 0) _jetThrust.set(dx, dy, dz);
+}
+
 function updateThruster(dt, t) {
-  if (burstT <= 0 && jAlive === 0 && bAlive === 0 && ringT <= 0) {
+  if (burstT <= 0 && jetLvl <= 0 && jAlive === 0 && bAlive === 0 && ringT <= 0) {
     if (jet.mesh.visible) {
       jet.mesh.visible = bub.mesh.visible = false;
       ringA.visible = ringB.visible = pShell.visible = false;
@@ -747,6 +762,23 @@ function updateThruster(dt, t) {
       }
     }
   } else { jFrac = bFrac = 0; }
+
+  // ---- THE HELD BURST: a steady roar off both nozzles while the pack runs --------------
+  if (jetLvl > 0) {
+    if (_jetThrust.lengthSq() < 1e-6) _jetThrust.set(0, 1, 0);
+    _ex.copy(_jetThrust).normalize().negate();
+    sjFrac += SJET_RATE * jetLvl * dt;
+    sbFrac += SBUB_RATE * jetLvl * dt;
+    const nj = sjFrac | 0, nb = sbFrac | 0;
+    sjFrac -= nj; sbFrac -= nb;
+    if (nj > 0 || nb > 0) {
+      for (let n = 0; n < 2; n++) {
+        nozzleFrame(n);
+        if (nj > 0) emitJet(Math.min(nj, 14) >> 1 || 1);
+        if (nb > 0) emitBub(Math.min(nb, 10) >> 1 || 1);
+      }
+    }
+  } else { sjFrac = sbFrac = 0; }
 
   // ---- jet core: hard drag, short life ---------------------------------------------
   jet.mesh.visible = true;
@@ -851,7 +883,7 @@ export function updateTools(dt, t, p) {
 window.tools = {
   spears,
   sonar: () => ({ cool: +sonarCool.toFixed(2), age: +sonarAge.toFixed(2), echoes: echoN, live: echoLive }),
-  thruster: () => ({ jet: jAlive, bub: bAlive, ring: +ringT.toFixed(2), burstT: +burstT.toFixed(3), bursts: burstCount }),
+  thruster: () => ({ jet: jAlive, bub: bAlive, ring: +ringT.toFixed(2), burstT: +burstT.toFixed(3), bursts: burstCount, held: +jetLvl.toFixed(2) }),
   jetPos: () => jet.pos, jetCol: () => jet.col, bubPos: () => bub.pos, bubCol: () => bub.col,
   drop: () => spears.map(s => s.state)
 };

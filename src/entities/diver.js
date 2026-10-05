@@ -3034,7 +3034,7 @@ const chR = { x: 0, v: 0 }, chY = { x: 0, v: 0 }, hdC = { x: 0, v: 0 };
 const spV = { x: 0, v: 0 }; let spVInit = false;
 let peerT = -1, peerW = 0;
 const PEER_DUR = 4.2;
-let prevBurstT = 0, burstW = 0;
+let prevBurstT = 0, burstW = 0, prevJet = 0;
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
 const strafeS = { x: 0, v: 0 };
@@ -3358,12 +3358,15 @@ export function updateDiver(dt, t, player) {
   // spins up ~2.6x until the body reaches the speed the effort implies — pressing
   // forward means a kick NOW, not a throttle fading in. At cruise the term is zero
   // and the cadence is the shipped one.
-  const spinUp = 1 + 1.6 * clamp(1 - speed / 14, 0, 1) * clamp(flat * 0.4 + Math.abs(player.vel.y) * 0.2, 0, 1);
+  // (THE AIR PACK pass: the haul cruises at ~6.6 u/s now, was ~16 — the spin-up is keyed
+  // to the new cruise and the cadence capped at it, so a pack burst's speed doesn't whirl
+  // the arms: the burst pose takes them while it runs.)
+  const spinUp = 1 + 1.6 * clamp(1 - speed / 6.5, 0, 1) * clamp(flat * 0.4 + Math.abs(player.vel.y) * 0.2, 0, 1);
   const swPrev = swimP;
   // Slow, wide sweeps: ~0.38 Hz at cruise (the frog kick was 0.52, and 0.73 before that).
   // The thrust pulse in player.js is unit-mean per cycle, so a slower stroke is a bigger
   // haul with a longer drift after it, not a slower diver. Hanging still he barely sculls.
-  swimP = (swimP + (0.20 + speed * 0.012) * spinUp * dt) % 1;
+  swimP = (swimP + (0.17 + Math.min(speed, 7) * 0.012) * spinUp * dt) % 1;
   if (swimP < swPrev) drawKick(++kickIdx);   // one fresh pair of legs per kick
   // ---- breath clock: context-driven cadence, still drifting so it never metronomes.
   // Effort winds the rate up through an EMA — a sprint costs breaths for a while after
@@ -3605,14 +3608,21 @@ export function updateDiver(dt, t, player) {
     // BURST: the bottle dumps through the thruster on his back, so the rig is shoved from
     // BEHIND. The torso takes it, the helmet and limbs are left behind by it and trail
     // into a streamline for as long as the blowdown lasts, then swing back.
-    const bt = player.burstT || 0;
-    if (bt > prevBurstT + 0.05) {
-      brP.v += 3.2 * SAL.react;           // pitch into the shove
-      rcH.v -= 3.6 * SAL.react;            // the helmet snaps back
-      rcA.v -= 2.2 * SAL.react;            // arms flung back along the body
+    // THE AIR PACK (roadmap/air-jet-pack.md): a TAP is a fraction of the old bottle
+    // (player.burstPow), so its jolt is a small one; the HELD burst lighting up is the
+    // full jolt, and the streamline holds for as long as the pack runs (player.jet).
+    const bt = player.burstT || 0, jt = player.jet || 0;
+    let jolt = 0;
+    if (bt > prevBurstT + 0.05) jolt = clamp((player.burstPow || 1) * 4, 0.3, 1);
+    if (jt > 0.3 && prevJet <= 0.3) jolt = 1;
+    if (jolt > 0) {
+      brP.v += 3.2 * SAL.react * jolt;           // pitch into the shove
+      rcH.v -= 3.6 * SAL.react * jolt;            // the helmet snaps back
+      rcA.v -= 2.2 * SAL.react * jolt;            // arms flung back along the body
     }
-    prevBurstT = bt;
-    burstW += ((bt > 0 ? 1 : 0) - burstW) * Math.min(1, (bt > 0 ? 9 : 2.2) * dt);
+    prevBurstT = bt; prevJet = jt;
+    const bwT = Math.max(bt > 0 ? 1 : 0, jt);
+    burstW += (bwT - burstW) * Math.min(1, (bwT > burstW ? 9 : 2.2) * dt);
     if (burstW > 1e-3) {
       const w = burstW * (1 - ladderF);
       poMix(CH.Rsx, 0.55, w); poMix(CH.Rsz, 0.22, w); poMix(CH.Re, -0.30, w);

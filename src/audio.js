@@ -173,6 +173,8 @@ export function growl() { if (live()) { E.in.lev = window.lev || null; CRE.growl
 export function slam() { if (live()) CRE.slam(E); }
 export function airVent(power = 1) { if (live()) SAL.airVent(E, power); }
 export function bottleReady() { if (live()) SAL.bottleReady(E); }
+// THE AIR PACK's held burst, 0..1 every play frame (game.js updateAirPack): the roar layer.
+export function setJet(k) { if (E) E.in.jet = k > 0 ? Math.min(1, k) : 0; }
 export function voyage(len) { if (live()) BED.voyage(E, len); }
 // The passage's pen on the chart (ui/passage.js via game.js): kind 'stroke' | 'ring' | 'letter' | 'tick'.
 export function nib(kind, dur, pan0, pan1, dry) { if (live()) BED.nib(E, kind, dur, pan0, pan1, dry); }
