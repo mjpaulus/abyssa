@@ -16,17 +16,18 @@ import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFoo
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
-  setStormCurrent, setWindCurrentVec, resetSuit, BURST_DUR, NEUTRAL_FILL, carryDeck, placeOnDeck
+  setStormCurrent, setWindCurrentVec, resetSuit, NEUTRAL_FILL, airPackTap, carryDeck, placeOnDeck
 } from './player.js';
 import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
   setSpeed, setWalking, footstep, setZone, slam, setCalm, airVent, bottleReady, setPump,
   syncBreath, voyage, nib, setAbove, setWind, setMaster,
-  audioFrame, audioSleeper, setPaused, sonar, knife, knifeHit, land, hoseYank
+  audioFrame, audioSleeper, setPaused, sonar, knife, knifeHit, land, hoseYank, setJet
 } from './audio.js';
 import {
   survival, updateSurvival, canCraftHose, craftHose, canCraftFuel, craftFuel,
-  resupplyAtRaft, canDescendTo, HOSE_REQ, HOSE_START, HOSE_MAX, tearDress, o2RefillRate, SPUTTER_SEC
+  resupplyAtRaft, canDescendTo, HOSE_REQ, HOSE_START, HOSE_MAX, tearDress, o2RefillRate, SPUTTER_SEC,
+  reserveCapacity
 } from './systems/survival.js';
 import { buildRaft, updateRaft, nearRaft, pumpPos, raft, setSwell, pumpSpeed, chartAnchor, setKeepsakes } from './systems/raft.js';
 import { buildTether, updateTether, reseatTether, leash } from './systems/tether.js';
@@ -46,7 +47,7 @@ import { buildVentLife, updateVentLife, reseedVentLife } from './world/ventlife.
 import { buildGardens, updateGardens, reseedGardens } from './world/gardens.js';
 import { updateAbyss } from './world/abyss.js';
 import { buildFauna, updateFauna, reseedFauna } from './world/fauna.js';   // FAUNA PATCH
-import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setToolsLanternPos } from './systems/tools.js';
+import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setThrusterJet, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
 import { setSite, currentSite, currentSiteIndex, siteAt } from './world/site.js';
@@ -92,6 +93,7 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
     survival.hasSpear = !!sv.tools.spear;
     if (sv.tools.spear) survival.spears = Math.max(survival.spears || 0, 2);
     survival.hasThruster = !!sv.tools.thruster;
+    survival.reserve = survival.reserveCap = reserveCapacity();   // the upgraded tank arrives charged
   }
 } catch (e) { /* a torn save is a blank chart, never a crash */ } })();
 function saveChart() { try {
@@ -244,23 +246,34 @@ let state = 'title', msgT = 0, shake = 0, winT = 0, wasLightOut = false, lastSte
 // One-shot onboarding tips: the game speaks once, at the moment each mechanic first
 // matters, and never talks over another message.
 const tips = { submerged: 0, taut: 0, fuel: 0, wander: 0, polymer: 0, bitumen: 0,
-  dress: 0, swollen: 0, stand: 0, flat: 0 };
+  dress: 0, swollen: 0, stand: 0, flat: 0, pack: 0, dry: 0 };
 let zoneTime = 0;
 let wasGrounded = false, landVel = 0;   // tracks fall speed so landings kick up silt
 // Entry detector: he is only ABOVE the water at the start of a dive and after a rescue,
 // so this fires on the one beat the surface round exists for — the step over the side.
 let wasAboveWater = true, deckTip = 0;
-// Air thruster: one shove per press of the bottle. BURST_RECHARGE is the whole anti-flight
-// argument — at 5 s, mashing Shift while swimming buys +12.7% distance over 30 s against
-// the +85% the held-Shift version bought. It is punctuation, never a travel mode.
-const BURST_RECHARGE = 5.0, AIR_PER_BURST = 0.10;
+// THE AIR PACK (roadmap/air-jet-pack.md; Michael 2026-10-04). Space is the pack: a TAP is
+// a short sharp burst (a hop off the seabed, a shove in open water), HOLDING it opens the
+// big burst after TAP_T, ramped in over JET_RAMP, steered by WASD + look, until the key
+// comes up or the reserve is dry. The tap fires on the PRESS, so neither reads late: a
+// hold is a tap that keeps going. Costs come out of survival.reserve, which the pump
+// refills (survival.js). The pack is his from the first dive; the submersible's AIR
+// THRUSTER upgrades the tank. Polled off keys['Space'] (not keydown), so the pad's A
+// button — mapped onto keys.Space — taps and holds the same way.
+const TAP_T = 0.18, JET_RAMP = 0.20, JET_FALL = 0.09;
+const TAP_COST = 0.12;          // of the base tank (1.0)
+const JET_DRAIN = 0.62;         // per second at full burst: a full base tank is ~1.4 s of it
 let wasCharged = true;
+const pack = { was: false, heldT: 0, armed: false, ramp: 0, lit: false, taps: 0, holds: 0, dry: 0, heldMax: 0, saidT: -99 };
+// a dead stop for the pack: respawn, the ending (the key may still be down under a cut)
+function packReset() { pack.ramp = 0; pack.armed = false; pack.lit = false; player.jet = 0; setThrusterJet(0, 0, 1, 0); setJet(0); }
 let threatSaid = false;
 // The rescue tops the pump up from the reserve can — enough to reach zone 0's bitumen
 // and back; half a tank is ~3.5 min at FUEL_BURN. (Was 0.3: two minutes, and the
 // bitumen 200 m down — an unwinnable state by arithmetic.)
 const FUEL_RESCUE = 0.5;
 const _burst = V3();
+window.__pack = pack;   // probe: taps / holds / dry counts, live ramp (player.jet is the thrust)
 let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
 let lev = null, zone = -1;
 const lanternPos = V3();
@@ -321,40 +334,89 @@ function setBearing(el, tx, ty, tz, show) {
   el.querySelector('.dst').textContent = dist + ' m' + vert;
 }
 
-// One press, one shove. Edge-triggered on keydown with !e.repeat, so HOLDING Shift can
-// never repeat the burst — that is the only reading of the input that fully kills flight.
-// Shift still means "swim hard" while held; cracking the bottle and finning hard are the
-// same panic gesture, and keeping the swim boost (x2.2 since the weighted-suit pass) preserves
-// the marginal escape from a striking shark (predators.js strikeSpeed 22 against a ~24-26 u/s haul).
-function tryBurst() {
-  if (player.grounded) return;                 // lead boots on the floor: nothing to push off
-  if (survival.thrustCharge < 1) return;       // still repressurising
-  const cost = survival.supplied ? AIR_PER_BURST : AIR_PER_BURST * 2;
-  if (survival.oxygen <= cost + 0.06) {
-    // a wheeze, not a burst — the FX still fires so the player learns why
-    _burst.copy(forwardVec());
-    fireThruster(_burst.x, _burst.y, _burst.z, 0.12);
-    airVent(0.18);
-    if (msgT <= 0) showMsg('THE BOTTLE ONLY SIGHS — NOT ENOUGH AIR', 2.5);
-    return;
+// The direction he asks for: camera-relative WASD with the look pitch on W/S; nothing
+// asked = straight up. Written into `out` (module temp), unit length.
+function packDir(out) {
+  const f = forwardVec();
+  out.set(0, 0, 0);
+  if (keys['KeyW'] || keys['ArrowUp']) out.add(f);
+  if (keys['KeyS'] || keys['ArrowDown']) out.sub(f);
+  if (keys['KeyA'] || keys['ArrowLeft']) out.addScaledVector(rightVec(), -1);
+  if (keys['KeyD'] || keys['ArrowRight']) out.addScaledVector(rightVec(), 1);
+  if (out.lengthSq() < 1e-4) out.set(0, 1, 0);
+  return out.normalize();
+}
+// No water to push on: the planks, the ladder, his helmet out of the sea.
+function packUsable() {
+  return !player.onDeck && !player.onLadder && player.pos.y < localSurfaceY() - 0.6;
+}
+// Said in silence, at most every 8 s; the first time it is said whatever else is up.
+function packDrySay() {
+  const now = clock.elapsedTime;
+  if (now - pack.saidT < 8 || (tips.dry && msgT > 0)) return;
+  pack.saidT = now; tips.dry = 1;
+  showMsg(survival.supplied ? 'THE RESERVE IS DRY. THE PUMP IS FILLING IT.' : 'THE RESERVE IS DRY, AND NOTHING COMES DOWN THE LINE.', 3);
+}
+function updateAirPack(dt) {
+  const down = !!keys['Space'] && state === 'play';
+  if (down && !pack.was) {
+    // THE PRESS: the tap fires now, whether or not the key stays down
+    pack.heldT = 0; pack.armed = false;
+    if (packUsable()) {
+      if (survival.reserve >= TAP_COST) {
+        survival.reserve -= TAP_COST;
+        packDir(_burst);
+        const grounded = player.grounded;
+        airPackTap(_burst.x, grounded ? 0 : _burst.y, _burst.z, grounded);
+        // FX: the jet vents opposite the push (a seabed hop pushes straight up)
+        fireThruster(grounded ? 0 : _burst.x, grounded ? 1 : _burst.y, grounded ? 0 : _burst.z, 0.55);
+        airVent(0.5);
+        camKick = Math.max(camKick, 0.35);
+        shake = Math.max(shake, 0.12);
+        pack.armed = true; pack.taps++;
+      } else {
+        // dry: a wheeze, not a burst — the FX still fires so the player learns why
+        packDir(_burst);
+        fireThruster(_burst.x, _burst.y, _burst.z, 0.12);
+        airVent(0.15);
+        pack.dry++;
+        packDrySay();
+      }
+    }
   }
-  survival.thrustCharge = 0;
-  survival.oxygen = Math.max(0.05, survival.oxygen - cost);
-  // Direction: the way he is looking, nudged toward whatever he is asking for. S is
-  // applied LAST so reversing does not also invert the lateral nudge.
-  _burst.copy(forwardVec());
-  if (keys['KeyA'] || keys['ArrowLeft']) _burst.addScaledVector(rightVec(), -0.55);
-  if (keys['KeyD'] || keys['ArrowRight']) _burst.addScaledVector(rightVec(), 0.55);
-  if (keys['Space']) _burst.y += 0.55;
-  if (keys['ControlLeft'] || keys['KeyC']) _burst.y -= 0.55;
-  if (keys['KeyS'] || keys['ArrowDown']) _burst.multiplyScalar(-1);
-  _burst.normalize();
-  player.burstDir.copy(_burst);
-  player.burstT = BURST_DUR;
-  fireThruster(_burst.x, _burst.y, _burst.z, 1);
-  airVent(1);
-  camKick = 1; camKickPunch = 1;
-  shake = Math.max(shake, 0.34);
+  if (down) pack.heldT += dt;
+  pack.was = down;
+  // THE HOLD: a tap that keeps going opens the big burst
+  const want = down && pack.armed && pack.heldT >= TAP_T && survival.reserve > 0 && packUsable();
+  if (want) pack.ramp = Math.min(1, pack.ramp + dt / JET_RAMP);
+  else pack.ramp = Math.max(0, pack.ramp - dt / JET_FALL);
+  const lvl = pack.ramp * pack.ramp * (3 - 2 * pack.ramp);
+  if (lvl > 0) {
+    packDir(player.jetDir);
+    if (want) {
+      survival.reserve = Math.max(0, survival.reserve - JET_DRAIN * lvl * dt);
+      if (survival.reserve <= 0) {
+        // the pack coughs dry under him: the burst ends here, not when the key comes up
+        pack.armed = false;
+        airVent(0.2);
+        packDrySay();
+      }
+    }
+    if (!pack.lit && lvl > 0.02) {
+      // ignition of the big burst: the event the lens answers (GROUNDED: events only)
+      pack.lit = true; pack.holds++;
+      camKick = 1; camKickPunch = 1;
+      shake = Math.max(shake, 0.28);
+      airVent(1);
+    }
+    // the lens rides the burst while it runs, then lets go on its own decay
+    camKick = Math.max(camKick, 0.7 * lvl);
+    camKickPunch = Math.max(camKickPunch, 0.55 * lvl);
+  } else pack.lit = false;
+  if (pack.heldT > pack.heldMax && down) pack.heldMax = pack.heldT;
+  player.jet = lvl;
+  setThrusterJet(lvl, player.jetDir.x, player.jetDir.y, player.jetDir.z);
+  setJet(lvl);
 }
 
 // Crafting is only possible at the raft, where the pump and reel are.
@@ -380,8 +442,6 @@ addEventListener('keydown', e => {
   // Held keys must not repeat a verb: a held E would take, craft and consult in one press.
   if (e.repeat) return;
   if (paused && state === 'play') return;   // no helm, no verbs
-  if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && state === 'play'
-      && survival.hasThruster) { tryBurst(); return; }
   // Q vents a carried ink sac: a dark cloud that breaks a hunting shark's charge.
   if (e.code === 'KeyQ' && state === 'play' && survival.ink > 0) {
     if (deployInk(player.pos)) {
@@ -443,7 +503,11 @@ addEventListener('keydown', e => {
       const tool = takeRelic(rel.zi);
       if (tool === 'sonar') { survival.hasSonar = true; showMsg('A SOUNDING SET — [T] LISTENS TO THE DARK', 5); }
       else if (tool === 'spear') { survival.hasSpear = true; survival.spears = 3; showMsg('A SPEAR GUN — RIGHT CLICK. SPEARS CAN BE RECOVERED.', 5); }
-      else if (tool === 'thruster') { survival.hasThruster = true; showMsg('AN AIR THRUSTER — TAP SHIFT TO CRACK THE BOTTLE. ONE SHOVE, AND IT COSTS AIR.', 6); }
+      else if (tool === 'thruster') {
+        survival.hasThruster = true;
+        survival.reserve = survival.reserveCap = reserveCapacity();   // it comes off the wreck charged
+        showMsg('THE SUBMERSIBLE\'S THRUSTER BOTTLE. YOUR RESERVE HOLDS MORE AND THE PUMP FILLS IT FASTER.', 6);
+      }
       if (tool) { chime(659, 2.5, 0.28, 'craft'); chime(880, 2.5, 0.2, 'craft'); saveChart(); return; }
     }
   }
@@ -1653,6 +1717,7 @@ function update(dt, t) {
   // the line waits a beat so the lock's own latency never flashes it
   $pause.classList.toggle('on', paused && pauseT > 0.35);
   if (!paused) pollGamepad(dt);
+  if (!paused) updateAirPack(dt);
   let fwd;
   pm('glue');
   // THE RAFT MOVES FIRST (sealegs): a man standing on it is carried in its frame, so the
@@ -1664,7 +1729,7 @@ function update(dt, t) {
   if (paused) fwd = forwardVec();
   else ({ fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed)));
   pm('player');
-  $mode.textContent = player.grounded ? 'walking'
+  $mode.textContent = player.jet > 0.1 ? 'bursting' : player.grounded ? 'walking'
     : player.fill > NEUTRAL_FILL + 0.09 ? 'rising'
     : player.fill < NEUTRAL_FILL - 0.09 ? 'sinking' : 'trimmed';
   const depth01 = clamp(-player.pos.y / 900, 0, 1);
@@ -1725,6 +1790,7 @@ function update(dt, t) {
     // The cinematic drives player.pos/vel itself; clear the suit state so a banked burst
     // cannot fire under it and so the rig's pose reads off a sane fill.
     resetSuit(player.pos.y);
+    packReset();
     startEnding();
     return;
   }
@@ -1915,7 +1981,10 @@ function update(dt, t) {
   // FIRST occurrence or the player bobs helplessly without knowing C is the answer.
   if (state === 'play') {
     if (!tips.dress && player.pos.y < -8) {
-      tips.dress = 1; showMsg('AIR IN THE DRESS LIFTS YOU. [SPACE] FILLS IT, [C] VENTS IT.', 5);
+      tips.dress = 1; showMsg('AIR IN THE DRESS LIFTS YOU. THE PACK\'S BURST FILLS IT, [C] VENTS IT.', 5);
+    } else if (!tips.pack && player.pos.y < -14 && tips.dress && msgT <= 0 && !msgPend) {
+      // (in silence: the queue holds one line, and this one must not bump the dress's)
+      tips.pack = 1; showMsg('THE AIR PACK: TAP [SPACE] TO HOP. HOLD IT TO BURST. THE PUMP REFILLS THE RESERVE.', 6);
     } else if (!tips.swollen && player.fill > 0.97 && player.vel.y > 2) {
       tips.swollen = 1; showMsg('THE DRESS IS SWELLING. VENT OR IT WILL CARRY YOU UP.', 4);
     } else if (!tips.stand && !player.grounded && player.buoy > 0.9
@@ -1941,7 +2010,8 @@ function update(dt, t) {
       player.light = 1;
       survival.oxygen = 1;
       survival.torn = 0;
-      survival.thrustCharge = 1;
+      survival.reserve = reserveCapacity();
+      packReset();
       // The tenders re-dress him and blow the suit up. Without this he arrives at the
       // raft with whatever the drowning left — usually a flat dress — and sinks straight
       // back off the surface he was just hauled to.
@@ -2002,13 +2072,11 @@ function update(dt, t) {
     survival.spears += tev.spearRecovered;
     chime(494, 0.5, 0.16, 'pickup');
   }
-  // The bottle repressurises off the hose, so outrunning the line costs you the relic
-  // too: a quarter-rate refill when the pump is dry or the line is taut.
-  if (survival.hasThruster) {
-    survival.thrustCharge = Math.min(1,
-      survival.thrustCharge + dt / (BURST_RECHARGE * (survival.supplied ? 1 : 4)));
-    if (survival.thrustCharge >= 1 && !wasCharged) bottleReady();
-    wasCharged = survival.thrustCharge >= 1;
+  // The reserve fills off the pump (survival.js); the valve ticks once when it is full.
+  {
+    const full = survival.reserve >= survival.reserveCap - 1e-4;
+    if (full && !wasCharged) bottleReady();
+    wasCharged = full;
   }
 
   // predators: hunting behavior, strikes and light-stealing
@@ -2124,8 +2192,10 @@ function update(dt, t) {
   $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
 
   $trimfill.style.transform = `scaleX(${player.fill})`;
-  $bottlebar.classList.toggle('hidden', !survival.hasThruster);
-  $bottlefill.style.transform = `scaleX(${survival.thrustCharge})`;
+  $bottlefill.style.transform = `scaleX(${(survival.reserve / survival.reserveCap).toFixed(3)})`;
+  $bottlebar.classList.toggle('charging', survival.charging);
+  $bottlebar.classList.toggle('dry', survival.reserve < TAP_COST);
+  $bottlebar.classList.toggle('big', survival.hasThruster);
   $lightfill.style.transform = `scaleX(${lightK})`;
   $o2fill.style.transform = `scaleX(${survival.oxygen})`;
   $fuelfill.style.transform = `scaleX(${survival.fuel})`;

@@ -23,7 +23,7 @@ import { hullCreak } from './bed.js';
 
 export const KS = {
   BREATH: 0.12, BREATH_VOICE: 0.035, INFLOW: 0.03, EXHAUST: 0.11,
-  STEP: 1, HOSE: 0.05, LEAK: 0.03, KNIFE: 0.22, SONAR: 0.2
+  STEP: 1, HOSE: 0.05, LEAK: 0.03, KNIFE: 0.22, SONAR: 0.2, JET: 0.16
 };
 const TAU = Math.PI * 2;
 
@@ -53,6 +53,13 @@ export function buildSal(E) {
   // failing filament: near-dead lantern only
   s.whineG = E.g(0, H); const wf = E.f('bandpass', 3100, 6, s.whineG); const wo = E.o('sawtooth', 3100, wf); wo.start();
   E.lfo(0.31, 90, wf.frequency);
+  // THE AIR PACK's held burst: three layers off one level. A hard hiss at the valve (in
+  // the helmet: it is on his back), a roar as the jet entrains water (outside, filtered by
+  // the medium), and a low rumble through the backplate into the bonnet. Gated by frameSal.
+  s.jetHissG = E.g(0, H); s.jetHissBP = E.f('bandpass', 3400, 1.3, s.jetHissG); E.loop(E.n('white', 1.0, s.jetHissBP));
+  s.jetRoarG = E.g(0, E.B.events); s.jetRoarBP = E.f('bandpass', 700, 0.8, s.jetRoarG); E.loop(E.n('pink', 1.2, s.jetRoarBP));
+  s.jetRumG = E.g(0, H); const jrl = E.f('lowpass', 140, 0.9, s.jetRumG); E.loop(E.n('brown', 1.4, jrl));
+  s.jetWas = 0;
   s.stepOut = [E.pan(-0.18, E.B.events), E.pan(0.18, E.B.events)];
   s.exhOut = E.pan(0.35, E.B.events);
   s.inflowStroke = (t, spd) => {
@@ -97,6 +104,16 @@ export function frameSal(E, dt) {
     if (S.above < 0.5) exhaust(E, 0.6 + 0.6 * st);
   }
   s.prevPh = ph;
+  // the air pack's held burst: hiss leads, the roar and the rumble swell under it; the
+  // roar's filter opens as the jet comes up to pressure (a falling-then-steady hiss->roar)
+  {
+    const j = playing ? (I.jet || 0) : 0, under = 1 - S.above;
+    E.gate('jetHiss', s.jetHissG, E.B.helmet, KS.JET * 0.55 * j * under, j > s.jetWas ? 0.03 : 0.08);
+    E.gate('jetRoar', s.jetRoarG, E.B.events, KS.JET * j * under, j > s.jetWas ? 0.05 : 0.12);
+    E.gate('jetRum', s.jetRumG, E.B.helmet, KS.JET * 1.3 * j * under, j > s.jetWas ? 0.06 : 0.15);
+    E.ramp('jetRoarF', s.jetRoarBP.frequency, 420 + 520 * j, 0.12);
+    s.jetWas = j;
+  }
   // the dress tears (fresh tear only)
   if (S.torn > 0 && s.tornWas <= 0) tear(E);
   s.tornWas = S.torn;

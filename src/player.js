@@ -29,8 +29,17 @@ export const player = {
   trim: 0.225,   // surface-equivalent air standing in the dress: his valve setting
   fill: 0.412,   // 0..1 envelope fill AT THE CURRENT DEPTH — drives force, HUD and pose
   buoy: 0,       // u/s^2, signed net buoyancy. Read by game.js and diver.js.
-  burstT: 0,     // seconds of bottle blowdown still to deliver
+  burstT: 0,     // seconds of the air pack's TAP blowdown still to deliver
   burstDir: V3(0, 0, 1),
+  burstPow: 1,   // the tap's share of a full bottle blowdown (game.js airPackTap)
+  // THE AIR PACK's HELD BURST (game.js updateAirPack writes both, player.js flies them):
+  // jet 0..1 is the thrust level (ramped in over ~0.2 s), jetDir the unit thrust direction.
+  jet: 0,
+  jetDir: V3(0, 1, 0),
+  thrustOn: false,   // diver.js breath effort
+  // A tap ON THE SEABED is a hop: the pop speed asked for, consumed by the grounded branch.
+  hop: 0,
+  hopT: 0,       // seconds left on the hop's braking (see HOP_* below)
   // ---- animation phases, WRITTEN BY diver.js, READ HERE ----------------------------
   // The direction is deliberate: diver.js already owns both clocks (walkP advances on
   // distance travelled, swimP on the kick), it already receives `player` every frame,
@@ -324,9 +333,8 @@ export function carryDeck(dt) {
 const P_REF = 260;        // depth units per extra atmosphere: 1.00 surface / 1.92 zone-0
 const PFILL = 1.90;       // trim = 1 exactly fills the dress at y = -234
 const TRIM_MAX = 2.6;     // headroom to fill the dress at the zone-2 floor (needs 2.35)
-const TRIM_UP = 0.50;     // /s  inlet
 const TRIM_DOWN = 1.15;   // /s  exhaust dumps at the ambient differential — 2.3x faster
-const TRIM_RELIEF = 0.90; // /s  spring relief valve; must beat TRIM_UP or he over-pressures
+const TRIM_RELIEF = 0.90; // /s  spring relief valve; must beat the pack's JET_TRIM (0.50) or he over-pressures
 const SURF_TRIM = 2.5;    // /s  a tended diver at the surface is kept blown up, not vented
 const A_BUOY_MIN = -1.83, A_BUOY_MAX = 2.61;
 export const NEUTRAL_FILL = -A_BUOY_MIN / (A_BUOY_MAX - A_BUOY_MIN);   // 0.4122
@@ -336,7 +344,12 @@ const A_LOOK = 1.30;      // the vertical share of a swim stroke when he is pitc
 // ~0.75 m^2 at Cd 1.2 broadside, so vertical drag is 0.327x horizontal. This is why a
 // Mark V walks and is hauled but does not swim.
 const LIN_H = 0.5978, DRAG_H = 0.10;      // UNCHANGED from the shipped swim law
-const LIN_V = 0.1955, DRAG_V = 0.0327;    // = horizontal * 0.327
+// THE AIR PACK pass (Michael 2026-10-04: "Rising takes to long"): x0.60 on the vertical
+// drag. A blown-up dress used to top out at 6.4 u/s and seabed-to-surface took 25 s of
+// held Space; at 0.60 a full dress floats up at ~9 u/s and a vented one sinks at ~7 (C
+// held: ~13). Still 0.196x the horizontal drag — end-on he is the streamlined axis.
+const V_STREAM = 0.60;
+const LIN_V = 0.1955 * V_STREAM, DRAG_V = 0.0327 * V_STREAM;    // = horizontal * 0.327 * V_STREAM
 // Added mass: a body accelerating in water must accelerate the water around it. Dividing
 // BOTH the applied acceleration and the drag by AM cancels in the terminal-velocity
 // solution and multiplies the response time — a pure laginess knob that costs no speed.
@@ -353,6 +366,8 @@ const AM_H = 2.90;        // was 1.55, then 2.40 (1.88 is the full broadside phy
 // full punch — and on a heavier body it now carries ~45 u instead of ~29, which is what
 // makes it read as the one thing that can throw this much brass through the water.
 const AM_BURST_V = 1.26, AM_BURST_H = 1.55;
+// The haul's thrust (u/s^2 before added mass). See the swim branch.
+const HAUL = 8.0;
 // Unworked, he settles. A small downward bias while no stroke, scull or valve key is
 // held: ~0.3 u/s of slow sinking at neutral trim after several seconds. Small beside the
 // dress (the valve spans -1.83..+2.61), so fill and vent still decide where he goes.
@@ -430,12 +445,52 @@ const SCULL = 0.347;
 
 // Bottle blowdown: thrust from a fixed-volume bottle through a fixed orifice tracks
 // bottle pressure, which decays exponentially once the valve is cracked. A 30 ms crack
-// and an 85 ms half-life, spent by 0.26 s. A bottle gives you one shove.
+// and an 85 ms half-life, spent by 0.26 s. THE AIR PACK's TAP is this envelope at
+// player.burstPow of the old full bottle (a full one was a 37 u/s shove).
 export const BURST_DUR = 0.26;
 const BURST_ACC = 850;
 export function burstEnv(tau) {
   const o = clamp(tau / 0.030, 0, 1);
   return o * o * (3 - 2 * o) * Math.exp(-tau / 0.085);
+}
+
+// ---- THE AIR PACK (roadmap/air-jet-pack.md) -------------------------------------
+// Michael, 2026-10-04: "use the air like a jet pack. Where a tap of the space bar does a
+// short burst and allows him to jump off the surface a bit. If the space bar is held it
+// uses a big burst of air to travel quicker but that air burst is short lived ... Since
+// his suit is filled he can continue to float to the surface."
+// game.js owns the key (tap vs hold, the reserve); this is the physics.
+//   TAP   — airPackTap(): a TAP_POW share of the bottle blowdown along the asked
+//           direction; on the seabed a HOP instead (a sharp pop, braked to a 2-4 u rise,
+//           then he drifts down or hangs on whatever his trim is).
+//   HOLD  — player.jet x JET_ACC along player.jetDir, pushed through the SHIPPED added
+//           mass like the old bottle so it has punch (the haul keeps the heavy one), and
+//           it BLOWS UP THE DRESS as it runs (JET_TRIM, scaled by how much of the burst
+//           points up): let go and the full dress carries him on toward the surface
+//           until he vents with C.
+export const TAP_POW = 0.14;     // ~5 u/s shove level, ~6 u/s straight up
+const TAP_TRIM = 0.03;           // a tap UP spills a little into the dress (his fine trim now)
+const JET_ACC = 23;              // u/s^2 at full burst
+const JET_TRIM = 0.50;           // /s of trim at full burst straight up
+const JET_TRIM_FLAT = 0;         // ...and a level burst spills none: a dash along the bottom
+                                 // must not leave him on a Boyle runaway to the surface
+const AM_JET_V = 1.26, AM_JET_H = 1.55;
+// The hop. HOP_V is the pop; while HOP_BRAKE runs the lead and the broadside dress fight
+// the climb (linear drag HOP_K on the way up only), so the pop is sharp but the rise is a
+// hop — not a launch. Forward input adds HOP_FWD.
+const HOP_V = 5.6, HOP_K = 2.1, HOP_BRAKE = 1.2, HOP_FWD = 2.2;
+export function airPackTap(dx, dy, dz, grounded) {
+  player.trim = Math.min(TRIM_MAX, player.trim + TAP_TRIM * (grounded ? 1 : Math.max(0, dy)));
+  if (grounded) {
+    player.hop = HOP_V;
+    player.hopT = HOP_BRAKE;
+    // the hop carries a little of whatever level push was asked for
+    player.vel.x += dx * HOP_FWD; player.vel.z += dz * HOP_FWD;
+    return;
+  }
+  player.burstDir.set(dx, dy, dz);
+  player.burstPow = TAP_POW;
+  player.burstT = BURST_DUR;
 }
 
 // Unit-mean impulse envelope on the kick phase. A wrapped gaussian, so it is smooth
@@ -508,10 +563,9 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // his centre up to 1.2 above it for a few frames while he settles).
   player.floorY = overRift ? null : floorY;
 
+  // Shift is the hurried plod on the bottom and nothing off it (THE AIR PACK pass: off the
+  // bottom it was a 2.2x haul; real speed in open water is the pack's now, not the arms').
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
-  // Off the bottom, holding Shift is hauling hard (2.2x, was 2x on a 42 thrust): the sprint
-  // stays above predators.js's 22 u/s shark strike now that the cruise haul is lighter.
-  const boost = sprinting ? 2.2 : 1;
   const fwd = forwardVec(), flat = flatVec(), right = rightVec();
   const normal = overRift ? _up : terrainNormal(player.pos.x, player.pos.z, zi);
   // On the deck the seafloor's slope is irrelevant — planks are planks.
@@ -523,7 +577,13 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // weight on the seabed is whatever the dress is holding up right now.
   const P = 1 + Math.max(0, -player.pos.y) / P_REF;
   const fullTrim = P / PFILL;
-  if (keys['Space']) player.trim = Math.min(TRIM_MAX, player.trim + TRIM_UP * dt);
+  // Space is the AIR PACK now, not the inlet valve: the dress fills from the pack's burst
+  // (the jet spills into it as it runs; a tap spills a little — airPackTap).
+  if (player.jet > 0) {
+    const up = player.jetDir.y > 0 ? player.jetDir.y : 0;
+    player.trim = Math.min(TRIM_MAX, player.trim + JET_TRIM * player.jet * (JET_TRIM_FLAT + (1 - JET_TRIM_FLAT) * up) * dt);
+  }
+  player.thrustOn = player.jet > 0.05;
   if (keys['ControlLeft'] || keys['KeyC']) player.trim = Math.max(0, player.trim - TRIM_DOWN * dt);
   if (player.trim > fullTrim) player.trim = Math.max(fullTrim, player.trim - TRIM_RELIEF * dt);
   // THE REAL WAVE UNDER HIM. This was the raft's old decorative sine — but the raft
@@ -542,7 +602,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   player.buoy = A_BUOY_MIN + (A_BUOY_MAX - A_BUOY_MIN) * player.fill;
   // The blowdown runs on its own clock, not the swim branch's, or a burst fired into the
   // floor is banked while he is grounded and replays the next time he leaves the bottom.
-  const burstA = player.burstT > 0 ? BURST_ACC * burstEnv(BURST_DUR - player.burstT) : 0;
+  const burstA = player.burstT > 0 ? BURST_ACC * player.burstPow * burstEnv(BURST_DUR - player.burstT) : 0;
   if (player.burstT > 0) player.burstT = Math.max(0, player.burstT - dt);
   // JERKED OFF BALANCE. After a hard snap of the hose he is not driving, he is getting his
   // feet (or his trim) back: the drive comes back in on a smoothstep over the recovery,
@@ -597,7 +657,11 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // NOT ON THE DECK: there is no water column to step into, and a hop is the one thing
     // that could still carry 90 lb of dress over a bulwark the rail check now holds him
     // at. On planks Space is the inlet valve and nothing else.
-    if (keys['Space'] && !onDeck) { player.vel.y = 2.6; player.grounded = false; }
+    // THE AIR PACK's hop (a tap on the seabed, airPackTap) and its held burst both take
+    // him off the bottom; the swim branch flies him from the next frame.
+    if (player.hop > 0 && !onDeck) { player.vel.y = player.hop; player.grounded = false; }
+    if (player.jet > 0 && !onDeck) player.grounded = false;
+    player.hop = 0;
     // On terrain too steep to stand on, gravity drags him downslope.
     if (!walkable) player.vel.addScaledVector(_slide.set(normal.x, 0, normal.z).normalize(), 30 * dt);
     // lead boots, less whatever the dress is holding up
@@ -623,7 +687,10 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // 33, was 42 (the weighted-suit pass): cruise ~15.5 u/s, was 17.6. A man hauling himself
     // through the water in 90 kg of dress is drawn along, not driven; the bottle burst
     // (untouched) is still the way to cover ground fast.
-    const acc = 33 * boost / AM_H * ctrl;
+    // THE AIR PACK pass (Michael 2026-10-04: "Swimming forward or back is still too fast and
+    // should need the air pack to push him forward faster"): 8.0, was 33 — cruise ~6.6 u/s,
+    // was ~16. He drags himself through the water; speed is the pack's.
+    const acc = HAUL / AM_H * ctrl;
     const sy = Math.sin(player.pitch);
     let ay = emerge > 0 ? (player.buoy + G_W) * (1 - emerge) - G_W : player.buoy;
     // The kick, not the throttle. Unit mean, so the minute-by-minute distance is the old
@@ -634,7 +701,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     if (keys['KeyS'] || keys['ArrowDown']) { player.vel.addScaledVector(flat, -acc * SCULL * dt); ay -= A_LOOK * sy * SCULL; player.scullZ = -1; }
     if (keys['KeyA'] || keys['ArrowLeft']) { player.vel.addScaledVector(right, -acc * SCULL * dt); player.scullX = -1; }
     if (keys['KeyD'] || keys['ArrowRight']) { player.vel.addScaledVector(right, acc * SCULL * dt); player.scullX = 1; }
-    if (keys['Space']) ay += A_KICK;
+    // (Space no longer kicks up: it is the pack. C still drives him down as it vents.)
     if (keys['ControlLeft'] || keys['KeyC']) ay -= A_KICK;
     if (!(keys['KeyW'] || keys['ArrowUp'] || keys['KeyS'] || keys['ArrowDown'] || keys['KeyA'] || keys['ArrowLeft'] ||
       keys['KeyD'] || keys['ArrowRight'] || keys['Space'] || keys['ControlLeft'] || keys['KeyC'])) ay += A_SETTLE * (1 - emerge);
@@ -648,6 +715,18 @@ export function updatePlayer(dt, t, zone, riftOpen) {
       player.vel.x += player.burstDir.x * k / AM_BURST_H;
       player.vel.y += player.burstDir.y * k / AM_BURST_V;
       player.vel.z += player.burstDir.z * k / AM_BURST_H;
+    }
+    // THE HELD BURST. Faded out as he breaks the surface: there is no water to push on.
+    if (player.jet > 0) {
+      const k = JET_ACC * player.jet * (1 - emerge) * dt;
+      player.vel.x += player.jetDir.x * k / AM_JET_H;
+      player.vel.y += player.jetDir.y * k / AM_JET_V;
+      player.vel.z += player.jetDir.z * k / AM_JET_H;
+    }
+    // THE HOP's brake: the climb out of a seabed hop is fought, the fall back is not.
+    if (player.hopT > 0) {
+      if (player.vel.y > 0) player.vel.y *= Math.exp(-HOP_K * dt);
+      player.hopT = Math.max(0, player.hopT - dt);
     }
     // Wave-making drag at the waterline, or he corks for half a minute.
     if (emerge > 0) ay -= player.vel.y * SURF_DAMP * emerge;
@@ -819,4 +898,5 @@ export function resetSuit(y) {
   player.fill = NEUTRAL_FILL;
   player.buoy = 0;
   player.burstT = 0;
+  player.jet = 0; player.hop = 0; player.hopT = 0; player.thrustOn = false;
 }

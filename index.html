@@ -75,7 +75,7 @@
   /* ---- gauges ----------------------------------------------------------------------
      Three groups, one hierarchy. The pair that can kill you sits bottom-centre, AIR the
      widest thing on the screen and PUMP under it; the pair you steer with (DRESS, and
-     the BOTTLE once he has one) sits bottom-left; the LANTERN rides beside the bearing
+     the pack's RESERVE) sits bottom-left; the LANTERN rides beside the bearing
      strip, because it and the strip are both about seeing. Labels sit above-left of
      their bar so a bar at the screen edge never loses its name off-screen. */
   .bar{position:absolute;height:6px;border:1px solid rgba(160,230,255,.35);border-radius:4px;overflow:visible}
@@ -102,8 +102,19 @@
   #trimfill{background:linear-gradient(90deg,#8a6a33,#e8c98a);box-shadow:0 0 10px rgba(232,201,138,.5)}
   /* neutral-fill tick: game.js sets its left from the suit model's NEUTRAL_FILL */
   #trimbar .neutral{position:absolute;left:50%;top:-2px;width:1px;height:10px;background:rgba(200,235,255,.85);z-index:2}
-  #bottlebar{left:1.4em;bottom:4.1em;width:min(150px,17vw)}
-  #bottlefill{background:linear-gradient(90deg,#5c4a2a,#b99a63);box-shadow:0 0 8px rgba(185,154,99,.35)}
+  /* THE AIR PACK's reserve (roadmap/air-jet-pack.md): brass, above the dress. Charging = a
+     slow sheen travels the fill (the pump feeding it); dry = the brass goes dull and the
+     rim reddens. The submersible's thruster upgrade makes the gauge itself longer. */
+  #bottlebar{left:1.4em;bottom:4.1em;width:min(130px,15vw);border-color:rgba(214,186,128,.45);transition:width .6s}
+  #bottlebar.big{width:min(208px,24vw)}
+  #bottlefill{background:linear-gradient(90deg,#6b5530,#d9b877);box-shadow:0 0 9px rgba(217,184,119,.45);
+    transition:transform .12s,filter .4s,box-shadow .4s}
+  #bottlebar.charging #bottlefill{background:linear-gradient(90deg,#6b5530 0%,#d9b877 40%,#fff0c8 50%,#d9b877 60%,#d9b877 100%);
+    background-size:300% 100%;animation:sheen 1.6s linear infinite}
+  @keyframes sheen{0%{background-position:100% 0}100%{background-position:0 0}}
+  #bottlebar.dry{border-color:rgba(220,120,90,.55)}
+  #bottlebar.dry #bottlefill{filter:saturate(.25) brightness(.6);box-shadow:none}
+  #bottlebar.dry .label{color:#e8a58c}
   /* the lantern: beside the bearing strip, on its left so the right-hand readouts keep their column */
   #lightbar{top:4.1em;width:min(150px,11vw);left:max(1.4em, calc(50% - min(448px,39vw) - 1.6em - min(150px,11vw)))}
   /* a narrow window has no room beside the strip: the lantern tucks under the mode line instead */
@@ -141,7 +152,7 @@
   #threat{position:absolute;inset:0;opacity:0;transition:opacity .4s;background:radial-gradient(ellipse at center,
     rgba(0,0,0,0) 58%, rgba(40,90,130,.5) 100%)}
   @media (prefers-reduced-motion: reduce){
-    #o2fill.critical,#o2bar.torn #o2fill,#o2bar.torn #o2leak,#warn,#pause,#title .hint{animation:none}
+    #o2fill.critical,#o2bar.torn #o2fill,#o2bar.torn #o2leak,#warn,#pause,#title .hint,#bottlebar.charging #bottlefill{animation:none}
     #load .fill,#load .needle,#load p{transition:none}
   }
   @keyframes warnpulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.6)}}
@@ -230,7 +241,7 @@
     <div id="mats"></div>
     <div id="craft"></div>
     <div id="trimbar" class="bar"><span class="label">dress</span><div id="trimfill" class="fill"></div><i class="neutral"></i></div>
-    <div id="bottlebar" class="bar hidden"><span class="label">bottle</span><div id="bottlefill" class="fill"></div></div>
+    <div id="bottlebar" class="bar"><span class="label">reserve</span><div id="bottlefill" class="fill"></div></div>
     <div id="fuelbar" class="bar"><span class="label">pump</span><div id="fuelfill" class="fill"></div></div>
     <div id="o2bar" class="bar"><span class="label">air</span><div id="o2fill" class="fill"></div><i id="o2leak"></i></div>
   </div>
@@ -238,7 +249,7 @@
     <h1>ABYSSA</h1>
     <p>three sleepers bar the deep</p>
     <p>your air comes down a hose. do not outrun it.</p>
-    <p class="hint">click to descend · mouse: look · WASD: move · space/C: fill/vent the dress · shift: boost · E/F: craft at the raft · M: sound</p>
+    <p class="hint">click to descend · mouse: look · WASD: move · space: air pack (tap, hold) · C: vent · shift: hurry · E/F: craft at the raft · M: sound</p>
   </div>
 </div>
 <script type="importmap">

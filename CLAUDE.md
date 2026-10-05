@@ -59,16 +59,24 @@ against explicit contracts and reviewed on return.
 - `player.js` — locomotion. Walking is deliberately PONDEROUS and now WEIGHTED-SUIT
   (Michael 2026-10-02, reference-built: docs/superpowers/specs/sal-weighted-suit-motion.md):
   deck ~1.5 u/s, seabed top 2.15, Shift walk x1.3, per-ground gait (lean 9/15 deg, stance
-  0.61-0.70), off-bottom is a head-up two-handed haul (~16 u/s, Shift x2.2), never a kick.
+  0.61-0.70), off-bottom is a head-up two-handed haul (~6.6 u/s since THE AIR PACK, was ~16;
+  Shift does nothing off the bottom), never a kick.
   The user rejected faster/snappier; motion targets come from Mark V reference, not human gait. Swim is HEAVY (Michael,
-  2026-10-01, "make the swimming feel heavier"): added mass AM_H 2.40 / AM_V 1.90 (was
-  1.55 / 1.26) — same cruise speed, longer ramps and carry; the bottle burst is computed
-  against the shipped added mass so it keeps its punch and carries further; an unworked
-  diver settles (A_SETTLE -0.11, small beside the dress's -1.83..+2.61). diver.js: a
-  0.52 Hz kick (was 0.73), slower body yaw in water, a body pendulum under the helmet.
-  Air thruster is a BURST model, not a drain: one shove per Shift press (`player.burstDir`
-  / `player.burstT`, set by game.js's `tryBurst`), costing AIR_PER_BURST of the tank and
-  a 5 s bottle recharge (`survival.thrustCharge`). Holding Shift never repeats it.
+  2026-10-01, "make the swimming feel heavier"): added mass AM_H 2.90 / AM_V 1.90 — long ramps
+  and carry; an unworked diver settles (A_SETTLE -0.11, small beside the dress's -1.83..+2.61).
+  diver.js: a slow haul cadence keyed to the ~6.6 u/s cruise, a body pendulum under the helmet.
+  THE AIR PACK (roadmap/air-jet-pack.md, Michael 2026-10-04): SPACE is a jet pack fed by a
+  RESERVE tank (`survival.reserve` / `reserveCap`, separate from breathing air) that the PUMP
+  refills down the hose (~11 s empty->full, only while supplied and not strained; +50% pump
+  burn while charging). game.js `updateAirPack` polls keys.Space (pad A maps onto it): the
+  PRESS fires a TAP (`airPackTap`: 0.12 of the tank; a ~2.5 u seabed HOP, or a ~5 u/s shove in
+  open water along camera WASD+pitch, none = up); held past 0.18 s it opens the BURST
+  (`player.jet` 0..1 ramped over 0.2 s along `player.jetDir`, JET_ACC 23 through the shipped
+  added mass 1.26/1.55, drain 0.62/s ≈ 1.4 s from full) which BLOWS UP THE DRESS in proportion
+  to how much of it points up, so he floats on after it (vertical drag x0.60: a full dress
+  rises ~9 u/s, C sinks ~13). Seabed->surface zone 0: ~17 s with 2 bursts (was 25 s of held
+  Space). The submersible's AIR THRUSTER is an UPGRADE (1.6x tank, 1.5x refill). No pack on
+  the deck, ladder or above water. `window.__pack` (taps/holds/dry counts, ramp).
 - Camera (`game.js` updateCamera) is GROUNDED (Michael, 2026-10-01, "floaty underwater"):
   the follow spring damps velocity relative to Sal (zero steady-state lag), no idle drift,
   the Flow handheld noise layers / stroke roll / interest drift are zeroed (knobs kept on
@@ -256,9 +264,11 @@ against explicit contracts and reviewed on return.
   threat/bite/lightSteal/inkPickup. `window.pred` dev surface.
 - `world/wrecks.js` — skiff (sonar), split trawler (spear gun), crushed submersible
   (thruster). `wreckColliders` feed camera probe + player push-out (3-list loops in
-  game.js and player.js). `window.wrecks.goto(zi)`.
+  game.js and player.js). `window.wrecks.goto(zi)`. The submersible's thruster is the AIR
+  PACK's reserve UPGRADE now (see player.js above).
 - `systems/tools.js` — sonar staggered-echo ping, spear projectile (reuses
-  predators.slash at the tip), thruster bubble FX.
+  predators.slash at the tip), thruster bubble FX (one-shot `fireThruster` for taps, sustained
+  `setThrusterJet(level, dir)` for the air pack's held burst).
 - `systems/weather.js` — deterministic 12-min day cycle + storm/lightning schedule
   (pure function of t, mulberry32 const seed). `window.weather.set/advance`.
 - `world/lightning.js` — LIGHTNING IS A LIGHT (roadmap/ref-lightning-light.md): each main

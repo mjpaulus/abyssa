@@ -41,11 +41,16 @@ export const survival = {
   hasSpear: false,
   hasThruster: false,
   spears: 0,          // loaded spears; spent ones stick in the world and can be recovered
-  // Accumulator bottle for the air thruster: one burst spends all of it. It refills off
-  // the hose, so an unsupplied diver gets his bottle back at a crawl. game.js owns the
-  // recharge (it has dt and the play-state gate); it lives here so the HUD, the debug
-  // surface and the respawn path all read one authoritative value.
-  thrustCharge: 1,
+  // THE AIR PACK (roadmap/air-jet-pack.md, Michael 2026-10-04: "use the air like a jet
+  // pack"). A RESERVE TANK on his back, separate from the air he breathes: Space taps
+  // and bursts spend it (game.js updateAirPack), and the PUMP refills it down the same
+  // hose — only while the pump runs and he is not straining the line. In absolute units:
+  // 1.0 is the base tank; the crushed submersible's AIR THRUSTER upgrades it to
+  // RESERVE_UP and refills it half again as fast. Lives here so the HUD, the respawn
+  // and the debug surface read one value.
+  reserve: 1,
+  reserveCap: 1,
+  charging: false,    // the pump is feeding the reserve this frame (HUD)
   // THE TORN DRESS. Seconds left on a tear: a bite or a sleeper's slam opens the suit
   // and the tenders cannot out-pump the hole — supplied air refills at half rate until
   // it runs out. Stacking hits EXTEND the tear (capped), they never halve twice.
@@ -56,6 +61,19 @@ export const survival = {
   sputter: 0
 };
 export const SPUTTER_SEC = 2.2;
+
+// ---- the reserve's economy ------------------------------------------------------------
+// Empty -> full in ~11 s on a running pump (base), so a big burst is a decision: a full
+// tank is one held burst and a couple of taps, then a wait. The upgrade holds 1.6x and
+// fills 1.5x as fast (~11.9 s empty -> full of the bigger tank).
+export const RESERVE_BASE = 1, RESERVE_UP = 1.6;
+const RESERVE_FILL = 0.09;          // units / s through the hose
+const RESERVE_FILL_UP = 1.5;        // the thruster bottle's bigger feed
+// Charging the reserve costs the pump a little extra: half again its normal burn while it
+// fills (a full base refill costs ~1.3% of the tank, ~5 s of pumping). Only while he is down the line, the same
+// rule as the pump's own burn.
+const RESERVE_FUEL = 0.5;
+export function reserveCapacity() { return survival.hasThruster ? RESERVE_UP : RESERVE_BASE; }
 
 export const TORN_SEC = 20;
 const TORN_CAP = 45;
@@ -97,6 +115,18 @@ export function updateSurvival(dt, depth01, submerged, lightOut) {
   survival.supplied = pumpRunning && survival.strain < 0.5 && survival.sputter <= 0;
 
   if (survival.torn > 0) survival.torn = Math.max(0, survival.torn - dt);
+
+  // the pump charges the reserve down the same line, eased off by the strain like the air
+  const cap = reserveCapacity();
+  survival.reserveCap = cap;
+  survival.charging = false;
+  if (survival.reserve > cap) survival.reserve = cap;
+  if (survival.reserve < cap && survival.supplied) {
+    const rate = RESERVE_FILL * (survival.hasThruster ? RESERVE_FILL_UP : 1) * (1 - survival.strain);
+    survival.reserve = Math.min(cap, survival.reserve + rate * dt);
+    survival.charging = true;
+    if (submerged && survival.fuel > 0) survival.fuel = Math.max(0, survival.fuel - FUEL_BURN * RESERVE_FUEL * dt);
+  }
 
   if (survival.supplied) {
     survival.oxygen = Math.min(1, survival.oxygen + o2RefillRate() * (1 - survival.strain) * dt);
