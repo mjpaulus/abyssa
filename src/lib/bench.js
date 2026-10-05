@@ -451,7 +451,23 @@ async function setup(view = 'z0', o = {}) {
   return Object.assign(r, H.where());
 }
 
+// THE STEPPED PROBE (sealegs): n whole update frames at a fixed dt with the live loop held,
+// calling fn(i) after each — for motion probes that must not depend on the pane's rAF.
+// o.render draws each frame too (slow; only for frame sequences).
+function step(n, fn, o = {}) {
+  const dt = o.dt || DT;
+  holdOn();
+  try {
+    for (let i = 0; i < n; i++) {
+      clock.elapsedTime += dt;
+      H.update(dt, clock.elapsedTime);
+      if (o.render) { H.sky(); H.refraction(); H.post(dt); }
+      if (fn && fn(i) === false) break;
+    }
+  } finally { holdOff(); }
+}
+
 export function installBench(hooks) {
   H = hooks;
-  window.__bench = { VIEWS, setup, calibrate, gpuCalibrate, run, live, liveAB, capture, diff, png, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
+  window.__bench = { VIEWS, step, setup, calibrate, gpuCalibrate, run, live, liveAB, capture, diff, png, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
 }

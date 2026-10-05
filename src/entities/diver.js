@@ -2348,6 +2348,7 @@ const _eA = new THREE.Euler(), _X1 = new THREE.Vector3(1, 0, 0);
 const _vA = V3(), _vB = V3(), _vC = V3(), _vD = V3();
 // Live probe surface for the slip test — game.js never reads it, but the browser can.
 export const ikDebug = { wxR: 0, wyR: 0, wzR: 0, wxL: 0, wyL: 0, wzL: 0, slipR: 0, slipL: 0, clampR: 0, clampL: 0, overR: 0, overL: 0, state: 0, stepSeq: 0, limR: 0, limL: 0, top: 0, pel: 0, plR: 0, plL: 0, dR: 0, dL: 0, gd: 0, gdd: 0, rel: 0, low: 0 };
+window.__ik = ikDebug;   // probe surface (sealegs: foot-to-plank gap probes read plR/plL)
 
 // ===========================================================================
 // COMPLIANCE — the spring-driven skeleton.
