@@ -243,8 +243,10 @@ export function placeOnDeck(lx, lz) {
 // the tilt he gives to (a calm-day roll he simply stands through). Past his support, a boot
 // steps (diver.js's shuffle, at a margin that shrinks with the sea) and a hard throw is a
 // stagger (`sea.lurch`, game.js -> diverYank). SEA.on = 0 is the A/B: rigid on the deck plane.
-export const SEA = { on: 1, w: 2.1, z: 0.92, kg: 0.62, kgCalm: 0.22, ki: 1.0, max: 0.24, lurch: 0.13, lurchCd: 7,
-  walkK: 1.25, walkMax: 0.42, slow: 0.22, ayT: 0.12, kT: 4.0, tSat: 0.17 };
+// (raftroll, 2026-10-05: the raft rolls 15-18 deg in a gale now) tSat saturates the tilt load;
+// lurch 0.13 -> 0.143 and lurchCd 7 -> 10 keep a gale's staggers to about one a minute.
+export const SEA = { on: 1, w: 2.1, z: 0.92, kg: 0.62, kgCalm: 0.22, ki: 1.0, max: 0.24, lurch: 0.143, lurchCd: 10,
+  walkK: 1.25, walkMax: 0.42, slow: 0.22, ayT: 0.12, kT: 4.0, tSat: 0.10 };
 if (typeof window !== 'undefined') window.__sea = SEA;
 const seaS = { x: 0, z: 0, vx: 0, vz: 0 };     // excursion, raft-local x/z, and its rate
 let seaPrevOk = false, seaVx = 0, seaVy = 0, seaVz = 0, seaPx = 0, seaPy = 0, seaPz = 0;
@@ -288,7 +290,7 @@ export function carryDeck(dt) {
     // gravity along the deck (raft-local): the local axes' world Y components
     // (raftroll) The raft now rolls 15-18 deg in a gale, not 5. He stands upright to gravity
     // through the knees, so what his stance has to work at is not the whole tilt: the load
-    // saturates (tSat * tanh(tilt / tSat), on the sine), which keeps a calm day's 3 deg exactly
+    // saturates (tSat * tanh(tilt / tSat), on the sine), which keeps a calm day's 3 deg nearly
     // as it was and lets a gale's big rolls throw him further and more often without pinning
     // him at the limit for the whole wallow.
     const g = 9.81 * (SEA.kgCalm + (SEA.kg - SEA.kgCalm) * seaK);
