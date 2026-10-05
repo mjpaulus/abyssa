@@ -1,8 +1,8 @@
 ---
 title: The air pack — tap to hop, hold to burst, the pump refills the reserve
-status: wip
+status: done
 tags: player, feel, suit, survival
-updated: 2026-10-04
+updated: 2026-10-05
 ---
 Michael: "I also want to change his suit mechanics a bit. Rising takes to long, so lets use the air like a jet pack. Where a tap of the space bar does a short burst and allows him to jump off the surface a bit. If the space bar is held it uses a big burst of air to travel quicker but that air burst is short lived, so we need the pump to catch up his reserve tank so it can be used again. Since his suit is filled he can continue to float to the surface. Swimming forward or back is still too fast and should need the air pack to push him forward faster."
 
@@ -21,3 +21,4 @@ Design decisions (orchestrator; Michael can overrule any of these):
 ## Log
 - 2026-10-04 — Started on branch `jetpack`.
 - 2026-10-04 — SHIPPED on branch `jetpack` (player.js swim/buoyancy, game.js updateAirPack + HUD, survival.js reserve, tools.js setThrusterJet, audio/sal.js jet roar, diver.js additive burst pose + haul cadence). Measured in a headless Chrome with real CDP key events: seabed tap = a 2.5 u hop (lands ~4.5 s later on a vented trim); held burst straight up peaks ~30 u/s and covers ~37 u while it runs (~1.4 s from a full tank), level bursts ~17-19 u/s and ~25 u; unassisted haul 6.9 u/s mean (was 16.1); zone-0 seabed (-239) to surface 16.9 s with 2 bursts + float, 22.8 s with 1 burst (was 25.4 s holding Space); reserve empty->full 11.1 s on a running pump, no refill with the pump dry; a burst into the end of the hose yanks (str 0.94 at 6.4 u/s closing). See it: dive, tap Space on the seabed to hop, hold Space to burst (WASD steers, none = up), watch the brass RESERVE gauge bottom-left (sheen = the pump charging it, dull red rim = dry), C to vent and drop.
+- 2026-10-05 — Merged to main (5b70342), fresh-tab verified. Feel at 60 fps unjudged by Michael; shark escape now harder (swim ~7 u/s, level burst ~19 vs strike 22). Moved wip -> done.
