@@ -1494,10 +1494,10 @@ export function warmUp() {
 // first minutes visit (game.js toggles the sun's castShadow between calls). Hidden objects
 // are compiled too (made visible for the pass; lights are never touched, so the light set
 // compiled against is the one that renders). onProgress(0..1); yieldFn() -> Promise.
-export async function precompile(onProgress, yieldFn) {
+export async function precompile(onProgress, yieldFn, only = null) {
   const hidden = [];
   scene.traverse(o => { if (!o.visible && !o.isLight) { hidden.push(o); o.visible = true; } });
-  const kids = scene.children.filter(o => !o.isLight);
+  const kids = only || scene.children.filter(o => !o.isLight);
   let issued = 0, done = 0;
   const tick = () => onProgress && onProgress(0.5 * issued / kids.length + 0.5 * done / kids.length);
   try {
@@ -1511,9 +1511,19 @@ export async function precompile(onProgress, yieldFn) {
     // frames that drew them. So the issue runs with the composer's input buffer bound.
     const prevRT = renderer.getRenderTarget();
     for (const c of kids) {
+      // compile(branch, camera, scene) gathers lights from the scene AND again from the
+      // branch, so a branch that holds lights (the raft's two lamps) compiled against 12
+      // point lights instead of 10: a set of programs no frame ever uses (measured). Its
+      // lights sit at the scene root for the call -- counted once -- and go straight back.
+      const own = [];
+      c.traverse(o => { if (o.isLight) own.push([o, o.parent, o.position.clone(), o.quaternion.clone(), o.scale.clone()]); });
+      for (const [l] of own) scene.add(l);
       renderer.setRenderTarget(composer.inputBuffer);
       let p;
-      try { p = renderer.compileAsync(c, camera, scene); } finally { renderer.setRenderTarget(prevRT); }
+      try { p = renderer.compileAsync(c, camera, scene); } finally {
+        renderer.setRenderTarget(prevRT);
+        for (const [l, par, pos, q, sc] of own) { par.add(l); l.position.copy(pos); l.quaternion.copy(q); l.scale.copy(sc); }
+      }
       all.push(p.then(() => { done++; tick(); }, () => { done++; tick(); }));
       issued++; tick();
       if (yieldFn && performance.now() - t > 24) {

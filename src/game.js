@@ -595,7 +595,9 @@ let memPending = null, memKey = 0;
 // before the title so the sleeper, her textures and the five ward lights exist before the
 // shader compile; start() then only says what enterZone would have said (announceZone).
 function enterZone(i, quiet = false) {
-  disposeLeviathan(lev);
+  // the sleeper left behind keeps her programs (keepingPrograms): coming back -- the next
+  // dive after a rescue, the voyage's reseed -- finds them built
+  keepingPrograms(() => disposeLeviathan(lev));
   zone = i;
   setZone(i);            // must precede growl() so the voice is tuned to the zone
   lev = makeZoneSleeper(i);
@@ -799,7 +801,12 @@ function startVoyage(i) {
 // The reseed itself, run once under the opaque chart: a load event, exempt from the
 // per-frame allocation rule. ORDER IS CONTRACT — flora excludes around wreckSites(),
 // dens are re-picked from flora's fresh colliders.
-function reseedWorld(i) {
+// The reseed rebuilds a few things in place (the wrecks' motes and markers, the vents'
+// plumes: new materials, same shaders). Disposing the old ones released their programs,
+// which then compiled again on the first sight of each at the new anchorage; the old
+// materials keep them instead (bounded: one per program, see keepingPrograms).
+function reseedWorld(i) { return keepingPrograms(() => reseedWorldNow(i)); }
+function reseedWorldNow(i) {
   resetTemporal('reseed');   // the world changes under a still camera: no history survives it
   setSite(i);
   setSiteWater(currentSite().water || null);   // uniforms only: no program, no material
@@ -2388,17 +2395,23 @@ async function waitRows(rows, capMs) {
 // object, near or far, still draws once in every main pass.
 const CAST_R = 70;
 function forceAllDrawn() {
-  const hid = [], cull = [], casters = [];
+  const hid = [], cull = [], casters = [], empty = [];
   scene.traverse(o => {
     if (o.isLight) return;
     if (!o.visible) { hid.push(o); o.visible = true; }
     if (o.frustumCulled) { cull.push(o); o.frustumCulled = false; }
-    if (o.castShadow) casters.push(o);
+    if (o.isMesh || o.isPoints || o.isLine) casters.push([o, o.castShadow]);
+    // an empty pool (footprints, bursts, bubbles: count 0 until play spawns one) is
+    // skipped by the renderer, so it would build its pipelines on its first spawn
+    if (o.isInstancedMesh && o.count === 0) { empty.push(o); o.count = 1; }
   });
   const _p = new THREE.Vector3();
   return {
-    near(cam) { for (const o of casters) { o.getWorldPosition(_p); o.castShadow = _p.distanceToSquared(cam) < CAST_R * CAST_R; } },
-    restore() { for (const o of hid) o.visible = false; for (const o of cull) o.frustumCulled = true; for (const o of casters) o.castShadow = true; }
+    // every drawable within reach casts for this camera, not only today's casters: some
+    // modules switch castShadow on at run time (flora's near-field rocks), and their
+    // shadow-depth programs were the last ones still compiling on the zone-0 seabed
+    near(cam) { for (const [o] of casters) { o.getWorldPosition(_p); o.castShadow = _p.distanceToSquared(cam) < CAST_R * CAST_R; } },
+    restore() { for (const o of hid) o.visible = false; for (const o of cull) o.frustumCulled = true; for (const [o, c] of casters) o.castShadow = c; for (const o of empty) o.count = 0; }
   };
 }
 // The cameras of the first minutes. Each sets the camera (and the sun's shadow state that
@@ -2427,8 +2440,8 @@ const POSE_W = { deck: 0.62, waterline: 0.03, column: 0.27, deep: 0.02, seabed: 
 // shadowless column camera measured 50 extra programs and 7 s, against 1.1 s whole.)
 // A branch that holds a light is never hidden: the light set must stay the one play uses.
 const WARM_SLICES = 8;
-async function warmFrames(onProgress) {
-  const poses = warmPoses(), shadow0 = sun.castShadow;
+async function warmFrames(onProgress, poses = warmPoses(), weights = POSE_W, slice = true) {
+  const shadow0 = sun.castShadow;
   const F = forceAllDrawn();
   const gl = renderer.getContext(), px = new Uint8Array(4);
   const hasLight = o => { let l = false; o.traverse(c => { if (c.isLight) l = true; }); return l; };
@@ -2438,14 +2451,14 @@ async function warmFrames(onProgress) {
   try {
     gl.getError();
     for (let i = 0; i < poses.length; i++) {
-      const P = poses[i], tp = performance.now(), w = POSE_W[P.name] || 0.02;
+      const P = poses[i], tp = performance.now(), w = weights ? (weights[P.name] || 0.02) : 1 / poses.length;
       P.set(); camera.updateMatrixWorld();
       sun.castShadow = P.shadow;
       F.near(camera.position);
       // the composer first on the opening camera: it renders the shadow maps, which the
       // refraction pass samples (sampler2DShadow) before the composer's own pass runs
       if (i === 0) render(1e-6);
-      if (i === 0) {
+      if (i === 0 && slice) {
         for (let k = 0; k < WARM_SLICES; k++) {
           const off = sliceable.filter((o, j) => j % WARM_SLICES !== k);
           for (const o of off) o.visible = false;
@@ -2476,11 +2489,98 @@ async function warmFrames(onProgress) {
     settleAfterWarm();
   }
 }
+// ---- THE SLEEPERS' REHEARSAL (zone prewarm) ------------------------------------------
+// Orune and Mhor were built at their own enterZone, the first time Sal came down the rift:
+// ~360 / ~270 ms of first-build work (their modules' lazy caches, generated maps), their
+// sculpted sets fetched only then and installed a beat later, and every program and
+// pipeline compiled on first sight (two 1.1 s stalls arriving at Orune, 0.27 s at the
+// cold furnace, 0.45 s when Mhor first comes in, measured). And disposing a sleeper
+// RELEASES its programs (three deletes a program when no material uses it): the voyage's
+// reseed and every zone change threw the last sleeper's away, to be compiled again on the
+// next sight of her kind.
+// So the loader builds each zone's sleeper once, through the same enterZone the descent
+// calls (quiet: no word, no sound, nothing the player can see), draws it from a camera in
+// its own zone, and when it is torn down its materials are KEPT (never disposed) in
+// PROGRAM_ANCHOR: one set per kind, alive for the session, so every later build of that
+// kind finds its programs by key and its pipelines already built. The light count never
+// moves (the five ward lights are a pool; every kind borrows it), and the live sleeper at
+// the title is a fresh zone-0 build exactly as before.
+// One material per PROGRAM is kept (the first to hold it); a material whose program is
+// already held, or that never compiled, is disposed as before -- so the anchor is bounded
+// by the number of distinct programs, however many voyages and zone changes it sees.
+const PROGRAM_ANCHOR = [], ANCHORED = new Set();
+function keepingPrograms(fn) {
+  const M = THREE.Material.prototype, d0 = M.dispose;
+  M.dispose = function () {
+    const pr = renderer.properties.get(this).currentProgram;
+    if (pr && !ANCHORED.has(pr)) { ANCHORED.add(pr); PROGRAM_ANCHOR.push(this); return; }
+    return d0.call(this);
+  };
+  try { return fn(); } finally { M.dispose = d0; }
+}
+// a camera in zone zi looking at its sleeper (the bench's standard views for zones 1 and 2)
+function sleeperPoses(zi) {
+  const v = zi === 1 ? [-162, 70, -1.86] : [-116.8, -6.8, 0.5];
+  const look = () => {
+    const L = lev, h = L && (L.head || L.pos || (L.grp && L.grp.position));
+    return h || riftPos(zi);
+  };
+  const set = () => {
+    player.pos.set(v[0], terrainH(v[0], v[1], zi) + 0.05, v[1]); player.yaw = v[2];
+    snapCamBehind(false); camera.lookAt(look());
+  };
+  // the seabed's floor-band shadow and the column's shadowless state, both
+  return [{ name: 'z' + zi + 'lit', shadow: true, set }, { name: 'z' + zi + 'dark', shadow: false, set }];
+}
+async function rehearseSleepers(onProgress) {
+  const zs = [1, 2];
+  for (let k = 0; k < zs.length; k++) {
+    const zi = zs[k];
+    keepingPrograms(() => enterZone(zi, true));   // keeps the previous kind's programs
+    // the zone switch builds its own things (the sleeper, its keepers, the zone's shoals):
+    // compile them at both sun-shadow states, then draw them in their water
+    for (const sh of [true, false]) {
+      const was = sun.castShadow; sun.castShadow = sh;
+      try { await precompile(null, paintGap); } finally { sun.castShadow = was; }
+    }
+    await warmFrames(f => onProgress((k + f) / (zs.length + 1)), sleeperPoses(zi), null, false);
+  }
+  keepingPrograms(() => enterZone(0, true));      // keeps Mhor's; the title's sleeper is a fresh zone-0 build
+  onProgress(1);
+}
+// THE SHOALS' OTHER FACES. Each school swaps its mesh between three LODs at run time
+// (creatures.js: the sculpted near fish, the far fish, the procedural fallback), each its
+// own geometry + material. The compile and the warm frames only ever see the one assigned
+// at boot, so the others built their programs the first time a school changed LOD in play
+// (measured: 6 programs arriving at the zone-2 seabed). Each set is swapped in, compiled at
+// both sun-shadow states, drawn from the waterline and the column, and swapped back.
+async function warmSchoolLods(onProgress) {
+  const sets = [['sculptGeo', 'sculptMat'], ['farGeo', 'farMat'], ['procGeo', 'procMat']];
+  const live = schools.filter(S => S.inst).map(S => [S, S.inst.geometry, S.inst.material]);
+  const poses = warmPoses().filter(P => P.name === 'waterline' || P.name === 'column');
+  for (let k = 0; k < sets.length; k++) {
+    const [gk, mk] = sets[k];
+    const objs = [];
+    for (const [S] of live) if (S[gk] && S[mk]) { S.inst.geometry = S[gk]; S.inst.material = S[mk]; objs.push(S.inst); }
+    try {
+      if (objs.length) {
+        for (const sh of [true, false]) {
+          const was = sun.castShadow; sun.castShadow = sh;
+          try { await precompile(null, paintGap, objs); } finally { sun.castShadow = was; }
+        }
+        await warmFrames(() => {}, poses, null, false);
+      }
+    } finally { for (const [S, g, m] of live) { S.inst.geometry = g; S.inst.material = m; } }
+    onProgress((k + 1) / sets.length);
+  }
+}
 async function bootTail() {
   // 1. the zone-0 sleeper and the five ward lights
   LOAD.stage(0.19, 0.23, 'SOMETHING SLEEPS BELOW');
   await bootStep('sleeper', 'SOMETHING SLEEPS BELOW');
-  enterZone(0, true);
+  // every zone's sleeper once (first-build caches, and it asks for her sculpted set, so the
+  // asset wait below covers Orune's and Mhor's too); zone 0's is the one left standing
+  enterZone(1, true); enterZone(2, true); enterZone(0, true);
   // 2 + 3. physics and the sculpted sets, together
   LOAD.stage(0.23, 0.30, 'SEWING THE DRESS');
   await bootStep('assets');
@@ -2513,7 +2613,11 @@ async function bootTail() {
   LOAD.stage(0.32, 0.35, 'PRIMING THE PUMP');
   await bootStep('audio');
   for (const sr of [48000, 44100]) { prebakeAudio(sr); LOAD.part(sr === 48000 ? 0.5 : 1); await paintGap(); }
-  // 6. the compile: the deck's shadow state, then the column's
+  // 6. the compile: the deck's shadow state, then the column's. One title-frame's water
+  // update first: its first sky-environment capture hands the raft's metals their probe
+  // (a 256 cube-UV map where boot's room map is 1024 -- a different program), and that
+  // capture used to land on the first frame AFTER the compile.
+  updateWater(1 / 60, clock.elapsedTime);
   LOAD.stage(0.35, 0.45, 'GRINDING THE GLASS');
   await bootStep('compile');
   const t0 = performance.now();
@@ -2530,9 +2634,17 @@ async function bootTail() {
   await bootStep('compile-dark');
   await compileAt(false);
   // 7. warm-up frames from the first minutes' cameras
-  LOAD.stage(0.50, 0.94, 'SOUNDING THE DEPTHS');
+  LOAD.stage(0.50, 0.82, 'SOUNDING THE DEPTHS');
   await bootStep('warm');
   await warmFrames(f => LOAD.part(f));
+  // 7a. the shoals' other LODs
+  LOAD.stage(0.82, 0.86, 'SCHOOLING THE FISH');
+  await bootStep('shoals');
+  await warmSchoolLods(f => LOAD.part(f));
+  // 7b. the deeper zones' sleepers, warmed in their own water and kept
+  LOAD.stage(0.86, 0.94, 'SOMETHING ELSE, DEEPER');
+  await bootStep('sleepers');
+  await rehearseSleepers(f => LOAD.part(f));
   console.info(`ABYSSA: ${renderer.info.programs.length} shader programs (${renderer.info.programs.length - programs0} at boot) compiled and warmed in ${(performance.now() - t0).toFixed(0)} ms`);
   // 8. the title's settle frames, then 100 (boot())
   LOAD.stage(0.94, 1.0, 'TRIMMING THE LAMPS');
