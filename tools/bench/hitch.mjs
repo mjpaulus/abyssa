@@ -72,6 +72,7 @@ async function windowAround(label, act, ms = 6000, anchor = null) {
 
 const out = { bootMs, boot };
 await ev(`(window.__helm = true, 1)`);
+if (process.env.PRECLICK) { await ev(process.env.PRECLICK); await sleep(+(process.env.PRECLICK_MS || 3000)); }
 // 2. the click: a real mouse press/release on the centre of the title
 const W = await ev(`[innerWidth, innerHeight]`);
 out.click = await windowAround('title->play click', async () => {

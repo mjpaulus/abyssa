@@ -2272,16 +2272,27 @@ async function waitRows(rows, capMs) {
   }
 }
 // Everything drawn, nothing culled, for the warm-up frames only. Lights are never touched:
-// the light set the programs are built against is the one play renders with.
-const WARM_Q = new URLSearchParams(location.search).get('warm') || '';
+// the light set the programs are built against is the one play renders with. Shadow
+// CASTERS are the exception to 'nothing culled': unculled, every caster in the world went
+// into the lantern's six cube faces and the sun's map from every camera (62 s of warm-up,
+// measured). So per camera a caster keeps castShadow only within CAST_R of it (castShadow
+// is not part of any program key; receiveShadow, which is, is untouched): the shadow-depth
+// programs are warmed by the casters the first minutes put near the lens, and every
+// object, near or far, still draws once in every main pass.
+const CAST_R = 70;
 function forceAllDrawn() {
-  const hid = [], cull = [];
+  const hid = [], cull = [], casters = [];
   scene.traverse(o => {
     if (o.isLight) return;
-    if (!o.visible && !WARM_Q.includes('nohid')) { hid.push(o); o.visible = true; }
-    if (o.frustumCulled && !WARM_Q.includes('cull') && !(WARM_Q.includes('nc') && o.castShadow)) { cull.push(o); o.frustumCulled = false; }
+    if (!o.visible) { hid.push(o); o.visible = true; }
+    if (o.frustumCulled) { cull.push(o); o.frustumCulled = false; }
+    if (o.castShadow) casters.push(o);
   });
-  return () => { for (const o of hid) o.visible = false; for (const o of cull) o.frustumCulled = true; };
+  const _p = new THREE.Vector3();
+  return {
+    near(cam) { for (const o of casters) { o.getWorldPosition(_p); o.castShadow = _p.distanceToSquared(cam) < CAST_R * CAST_R; } },
+    restore() { for (const o of hid) o.visible = false; for (const o of cull) o.frustumCulled = true; for (const o of casters) o.castShadow = true; }
+  };
 }
 // The cameras of the first minutes. Each sets the camera (and the sun's shadow state that
 // depth would have) and the real frame path renders it.
@@ -2302,25 +2313,30 @@ function warmPoses() {
 }
 async function warmFrames(onProgress) {
   const poses = warmPoses(), shadow0 = sun.castShadow;
-  const restore = forceAllDrawn();
+  const F = forceAllDrawn();
   const gl = renderer.getContext(), px = new Uint8Array(4);
   try {
+    gl.getError();
     for (let i = 0; i < poses.length; i++) {
       const P = poses[i], tp = performance.now();
       P.set(); camera.updateMatrixWorld();
       sun.castShadow = P.shadow;
+      F.near(camera.position);
+      // the composer first on the opening camera: it renders the shadow maps, which the
+      // refraction pass samples (sampler2DShadow) before the composer's own pass runs
+      if (i === 0) render(1e-6);
       // dt ~0: the lagged lens/exposure/TAA state barely moves, so the title is not left
       // focused or exposed for the seabed
       renderSky(); renderRefraction(); render(1e-6);
       // make the GPU process finish this camera before the next: its pipeline builds are
       // the point, and a queue of six warm frames would only show up later as one stall
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      bootLog.push(['pose:' + P.name, +(performance.now() - tp).toFixed(1), renderer.info.programs.length]);
+      bootLog.push(['pose:' + P.name, +(performance.now() - tp).toFixed(1), renderer.info.programs.length, gl.getError()]);
       onProgress((i + 1) / poses.length);
       await paintGap();
     }
   } finally {
-    restore();
+    F.restore();
     sun.castShadow = shadow0;
     deckSpawn(player.pos); player.yaw = DECK_SPAWN_YAW;
     settleAfterWarm();
