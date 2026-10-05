@@ -16,7 +16,7 @@ import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFoo
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
-  setStormCurrent, setWindCurrentVec, resetSuit, BURST_DUR, NEUTRAL_FILL
+  setStormCurrent, setWindCurrentVec, resetSuit, BURST_DUR, NEUTRAL_FILL, carryDeck, placeOnDeck
 } from './player.js';
 import {
   initAudio, chime, growl, setDepth, setProximity, setLight, setAir,
@@ -536,8 +536,13 @@ let riftShutSaid = false, riftRimY = 0;
 // the +X rail since 2026-10-02 (Michael: "move the ladder to the left side. The air
 // hose rig is in the way"), so he faces +X; the gallows stands forward of the gap, on
 // his right, instead of over it. Clear of the pump block (x <= 1.6) by a stride.
+// (sealegs) On the deck's own plane in the raft's CURRENT pose (it pitches and rolls: a flat
+// raft.position.y + 0.11 stood him in or over the planks), and seated in its frame so the
+// carry has him from the first frame.
 export function deckSpawn(out) {
-  return out.set(raft.position.x + DECK_SPAWN_X, raft.position.y + 0.11 + 1.35, raft.position.z + DECK_SPAWN_Z);
+  if (out === player.pos) return placeOnDeck(DECK_SPAWN_X, DECK_SPAWN_Z);
+  raft.updateMatrixWorld(true);
+  return raft.localToWorld(out.set(DECK_SPAWN_X, 0.11, DECK_SPAWN_Z)).setY(out.y + 1.35);
 }
 // The play camera's rest spot behind a man standing at the spawn heading (game.js cuts
 // to it on start, voyage arrival and rescue rather than letting the spring travel).
@@ -778,7 +783,12 @@ const CAM_BACK = 9, CAM_UP = 2.4;
 // the pump's head and stack) in RAFT-LOCAL space, so the test rolls with the hull in a
 // storm; the first contact is refined by bisection, so the pull-in is continuous (an
 // 8-step quantised answer stair-stepped the boom against the gallows legs).
-const DECKCAM = { on: true, back: 6.0, up: 2.1, look: -0.8, w: 4.7, margin: 0.25 };
+const DECKCAM = { on: true, back: 6.0, up: 2.1, look: -0.8, w: 4.7, margin: 0.25,
+  // (sealegs) roll: the share of the deck's roll (about the lens axis) let into the lens, so
+  // the horizon leans a touch as it does to a man aboard. Tiny and critically damped — the
+  // camera stays grounded (Michael hates floaty); 0 = a dead-level lens. rollF: its spring.
+  roll: 0.12, rollF: 2.2 };
+const camDeckRoll = { x: 0, v: 0 };
 let deckK = 0, deckKV = 0, camBasePrev = CAM_BACK, deckWant = CAM_BACK, deckStops = 0;
 // THE CRANE. Most of what stands on the deck is waist-to-shoulder high (pump block, reel,
 // cargo, the receiver at 1.8): with one of those right behind him, pulling the boom in
@@ -1307,7 +1317,14 @@ function updateCamera(dt, t, fwd) {
   // Bank into lateral movement — a hint, not a lean: was 0.012/u capped at 6.3 degrees, which
   // rolled the horizon whenever he crabbed or the current set him sideways.
   camRoll += (clamp(-lateral * 0.004, -0.035, 0.035) * rmK - camRoll) * Math.min(1, 3 * dt);
-  camera.rotateZ(camRoll + hhRoll);
+  // (sealegs) the deck's roll, a little of it, while the boom is on the deck
+  {
+    const n = player.sea, r = deckK * DECKCAM.roll * Math.asin(clamp(n.nx * camRight.x + n.nz * camRight.z, -0.5, 0.5));
+    const f = DECKCAM.rollF, h = Math.min(dt, 0.05);
+    camDeckRoll.v += (f * f * (r - camDeckRoll.x) - 2 * f * camDeckRoll.v) * h;
+    camDeckRoll.x += camDeckRoll.v * h;
+  }
+  camera.rotateZ(camRoll + hhRoll - camDeckRoll.x);
   if (camYank.x !== 0) camera.rotateX(camYank.x * 0.09 * (rmK ? 1 : 0.3));   // the nod: ~1 deg at a full snap
 
   // The 2.5/s lerp has a 0.4 s time constant, so it can only reach 48% of any target
@@ -1569,6 +1586,12 @@ function update(dt, t) {
   if (!paused) pollGamepad(dt);
   let fwd;
   pm('glue');
+  // THE RAFT MOVES FIRST (sealegs): a man standing on it is carried in its frame, so the
+  // deck has to be in this frame's pose before he is stood on it (it used to move after
+  // him — the body a frame behind the boat its boots were planted on). Paused too: the
+  // boat does not stop for a menu.
+  updateRaft(dt, t); pm('raft');
+  carryDeck(dt);
   if (paused) fwd = forwardVec();
   else ({ fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed)));
   pm('player');
@@ -1705,7 +1728,7 @@ function update(dt, t) {
   wasLightOut = lightOut;
 
   // ---- surface-supplied air ----
-  pm('glue'); updateRaft(dt, t); pm('raft');
+  pm('glue');
   const distFromRaft = updateTether(dt, player, zone); pm('tether');
   // THE YANK: the hose snapped him back this frame (tether.js leash). The body staggers
   // toward the line, his hands come off the controls for a recovery that scales with the
@@ -1721,6 +1744,15 @@ function update(dt, t) {
     camYankDir.set(leash.dx, leash.dy, leash.dz);
     camYank.v += 7.5 * k;
     hoseYank(k);
+  }
+  // THE DECK THROWS HIM (sealegs): a gale roll past his support is a stagger, through the
+  // leash's own plumbing — a rock of the body on its yank channel and his hands briefly off
+  // the controls. Small: the boots hold, the deck tips, he catches himself.
+  if (player.sea.lurch > 0 && !paused) {
+    const k = player.sea.lurch;
+    diverYank(player.sea.lx, player.sea.lz, 0.22 * k, true);
+    const dur = 0.4 + 0.5 * k;
+    if (player.stagger <= 0) { player.staggerDur = dur; player.stagger = dur; player.staggerK = 0.5 * k; }
   }
   const drowned = paused ? false : updateSurvival(dt, depth01, player.pos.y < -3, lightOut);
 
