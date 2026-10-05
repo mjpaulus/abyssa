@@ -1881,7 +1881,8 @@ function update(dt, t) {
   if (state === 'play') {
     if (!tips.dress && player.pos.y < -8) {
       tips.dress = 1; showMsg('AIR IN THE DRESS LIFTS YOU. THE PACK\'S BURST FILLS IT, [C] VENTS IT.', 5);
-    } else if (!tips.pack && player.pos.y < -14) {
+    } else if (!tips.pack && player.pos.y < -14 && tips.dress && msgT <= 0 && !msgPend) {
+      // (in silence: the queue holds one line, and this one must not bump the dress's)
       tips.pack = 1; showMsg('THE AIR PACK: TAP [SPACE] TO HOP. HOLD IT TO BURST. THE PUMP REFILLS THE RESERVE.', 6);
     } else if (!tips.swollen && player.fill > 0.97 && player.vel.y > 2) {
       tips.swollen = 1; showMsg('THE DRESS IS SWELLING. VENT OR IT WILL CARRY YOU UP.', 4);
