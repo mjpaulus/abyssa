@@ -546,7 +546,9 @@ const VS = `
     mv.xy += position.xy * aSize;
     // The plume passes through the lens at 40+ u/s of closing speed. Without this the
     // frame washes white and overdraw spikes; it is a requirement, not a polish pass.
-    vC.a *= smoothstep(0.6, 2.4, -mv.z);
+    // (1.2..4.5, was 0.6..2.4: the air pack's HELD burst streams back at the lens for a
+    // second and more, and the near bubbles filled the frame like soap.)
+    vC.a *= smoothstep(1.2, 4.5, -mv.z);
     vUv = uv * 0.5 + vec2(mod(aCell, 2.0), floor(aCell * 0.5)) * 0.5;
     gl_Position = projectionMatrix * mv;
   }`;
