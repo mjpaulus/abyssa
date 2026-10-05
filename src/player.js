@@ -177,6 +177,7 @@ const DECK_HX = 4.7, DECK_HZ = 4.7, DECK_TOP = 0.11;
 // Up the boarding ladder. A man in 90 lb of dress does not vault a bulwark: 1.1 u/s is
 // a deliberate hand-over-hand, about three seconds from the waterline to the catch.
 const CLIMB_RATE = 1.1;
+let ladTopPrev = -1e5;          // the deck-top at the rungs last frame (the ladder's carry)
 // ---- THE BULWARK AND EVERYTHING ON DECK ARE REAL ---------------------------------
 // hull.js walls the deck on all four sides and leaves ONE gap: the boarding bay on the
 // +X rail at |z - LADDER_Z| < 1.2, where the ladder hangs (moved off the +Z rail
@@ -243,7 +244,7 @@ export function placeOnDeck(lx, lz) {
 // steps (diver.js's shuffle, at a margin that shrinks with the sea) and a hard throw is a
 // stagger (`sea.lurch`, game.js -> diverYank). SEA.on = 0 is the A/B: rigid on the deck plane.
 export const SEA = { on: 1, w: 2.1, z: 0.92, kg: 0.62, kgCalm: 0.22, ki: 1.0, max: 0.24, lurch: 0.13, lurchCd: 7,
-  walkK: 1.25, walkMax: 0.42, slow: 0.22, ayT: 0.12, kT: 4.0 };
+  walkK: 1.25, walkMax: 0.42, slow: 0.22, ayT: 0.12, kT: 4.0, tSat: 0.17 };
 if (typeof window !== 'undefined') window.__sea = SEA;
 const seaS = { x: 0, z: 0, vx: 0, vz: 0 };     // excursion, raft-local x/z, and its rate
 let seaPrevOk = false, seaVx = 0, seaVy = 0, seaVz = 0, seaPx = 0, seaPy = 0, seaPz = 0;
@@ -285,8 +286,14 @@ export function carryDeck(dt) {
   // ---- the excursion, in raft-local x/z ----
   if (SEA.on && dt > 1e-4) {
     // gravity along the deck (raft-local): the local axes' world Y components
+    // (raftroll) The raft now rolls 15-18 deg in a gale, not 5. He stands upright to gravity
+    // through the knees, so what his stance has to work at is not the whole tilt: the load
+    // saturates (tSat * tanh(tilt / tSat), on the sine), which keeps a calm day's 3 deg exactly
+    // as it was and lets a gale's big rolls throw him further and more often without pinning
+    // him at the limit for the whole wallow.
     const g = 9.81 * (SEA.kgCalm + (SEA.kg - SEA.kgCalm) * seaK);
-    const gx = -g * e[1], gz = -g * e[9];
+    const ts = Math.sqrt(e[1] * e[1] + e[9] * e[9]), tq = ts > 1e-6 ? SEA.tSat * Math.tanh(ts / SEA.tSat) / ts : 1;
+    const gx = -g * e[1] * tq, gz = -g * e[9] * tq;
     // the deck's horizontal acceleration, into the raft's axes; the body lags it
     const ix = -(e[0] * seaAx + e[1] * seaAy + e[2] * seaAz) * SEA.ki;
     const iz = -(e[8] * seaAx + e[9] * seaAy + e[10] * seaAz) * SEA.ki;
@@ -538,12 +545,19 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // catch), and holding W toward the raft (facing -X) is the grab: he rises up the rungs
   // at a climb, not a launch, until the deck check takes him. No new input to learn —
   // swim at the ladder and keep swimming.
+  const wasLadder = player.onLadder;
   player.onLadder = false;
   if (!onDeck && dxr > 4.2 && dxr < 5.9 && dzr > LADDER_Z - GAP_HZ && dzr < LADDER_Z + GAP_HZ) {
     const top = deckTop;
     if (player.pos.y > top - 4.2 && player.pos.y <= top - 0.68 &&
         (keys['KeyW'] || keys['ArrowUp']) && -Math.sin(player.yaw) > 0.1) {
       player.onLadder = true;
+      // (raftroll) THE LADDER CARRIES HIM. It hangs off the dive rail, 4.8 from the raft's
+      // centre, so a gale's 15-18 deg roll swings it up and down ~1.5 u at up to ~1.6 u/s,
+      // faster than he climbs (1.1): a man in world space slid off the bottom rung on every
+      // rise and was punted up past it on every fall. On the rungs he moves with them.
+      if (wasLadder && ladTopPrev > -1e4) player.pos.y += clamp(top - ladTopPrev, -0.12, 0.12);
+      ladTopPrev = top;
       player.pos.y += CLIMB_RATE * dt;
       // hold him against the rungs: kill the swim that was carrying him under the hull,
       // and pin him to the ladder line from BOTH sides — the swim thrust re-accumulates

@@ -496,7 +496,9 @@ export function buildRaft() {
     puffMesh.setMatrixAt(i, _puffM);
     puffs.push({ p: V3(), life: 0, max: 1, vy: 0, dz: 0 });
   }
-  raft.add(puffMesh);
+  // (raftroll) the smoke lives in the WORLD, not the raft: born at the stack tip, it leaves
+  // the boat behind. Parented to a hull that rolls 15-18 deg it wagged like a flag.
+  scene.add(puffMesh);
 
   // THE BEACON. It exists so a diver 200 m down can find his way home, and that job is
   // why it was a 7-unit additive sprite — which is also why it blew out to an enormous
@@ -695,7 +697,7 @@ export function updateRaft(dt, t) {
       p.life = p.max = 1.7 + Math.random() * 0.9;
       p.vy = 0.9 + Math.random() * 0.5;
       p.dz = (Math.random() - 0.5) * 0.3;
-      p.p.copy(puffOrigin);
+      p.p.copy(puffOrigin).applyMatrix4(raft.matrixWorld);
     }
   }
   for (let i = 0; i < PUFFN; i++) {

@@ -108,6 +108,7 @@ let sleeperL = null, sleeperEv = null;
 export function audioSleeper(lev, ev) { sleeperL = lev; sleeperEv = ev; }
 
 const PERF = { frame: 0, frames: 0, tick: 0, ticks: 0 };
+let rollPrev = 0, rollV = 0, rollUp = false;
 let lastFrameAt = 0;
 export function audioFrame(dt, pev, wx) {
   if (!E || ctx.state !== 'running') { sleeperL = sleeperEv = null; return; }
@@ -125,7 +126,21 @@ export function audioFrame(dt, pev, wx) {
   if (cam) { const q = cam.quaternion; I.qx = q.x; I.qy = q.y; I.qz = q.z; I.qw = q.w; }
   I.state = window.gameState || 'play';
   if (M.breathPhase) { I.breathPh = M.breathPhase(); I.breathStress = M.breathStress(); }
-  if (M.raft) { const r = M.raft.position; I.raftX = r.x; I.raftY = r.y; I.raftZ = r.z; }
+  if (M.raft) {
+    const r = M.raft.position; I.raftX = r.x; I.raftY = r.y; I.raftZ = r.z;
+    // (raftroll) THE LASHINGS TALK AT THE END OF EACH ROLL: the deck's tilt off level and the
+    // moment it peaks (the hull stops and starts back, the load comes off one drum and onto
+    // the other) is when timber and rope groan. tickBed fires a creak sized by the peak.
+    const ro = M.raft.rotation, tl = Math.sqrt(ro.x * ro.x + ro.z * ro.z);
+    if (dt > 1e-4) {
+      const v = (tl - rollPrev) / dt;
+      rollV += (v - rollV) * Math.min(1, dt / 0.15);
+      if (rollUp && rollV < -0.004 && tl > 0.06) { I.rollPeak = Math.max(I.rollPeak, tl); rollUp = false; }
+      else if (rollV > 0.004) rollUp = true;
+      rollPrev = tl;
+    }
+    I.roll = tl;
+  }
   const S = M.survival;
   if (S) { T.supplied = S.supplied ? 1 : 0; T.taut = S.tautness || 0; T.strain = S.strain || 0; T.torn = S.torn || 0; }
   if (M.pumpSpeed) T.pumpSpd = M.pumpSpeed();

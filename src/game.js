@@ -920,7 +920,11 @@ const DECKCAM = { on: true, back: 6.0, up: 2.1, look: -0.8, w: 4.7, margin: 0.25
   // (sealegs) roll: the share of the deck's roll (about the lens axis) let into the lens, so
   // the horizon leans a touch as it does to a man aboard. Tiny and critically damped — the
   // camera stays grounded (Michael hates floaty); 0 = a dead-level lens. rollF: its spring.
-  roll: 0.12, rollF: 2.2 };
+  // rollMax (raftroll, 2026-10-05): the lens's share is soft-capped (rollMax * tanh(share * roll
+  // / rollMax)) now the raft really rolls: a gale's 15-18 deg at 12% would tilt the horizon 2+
+  // deg on every wallow, which reads as seasickness, not weather. A calm day's 3 deg is
+  // untouched (0.36 deg); a gale tops out near 1.1 deg.
+  roll: 0.12, rollF: 2.2, rollMax: 0.021 };
 const camDeckRoll = { x: 0, v: 0 };
 let deckK = 0, deckKV = 0, camBasePrev = CAM_BACK, deckWant = CAM_BACK, deckStops = 0;
 // THE CRANE. Most of what stands on the deck is waist-to-shoulder high (pump block, reel,
@@ -1452,7 +1456,8 @@ function updateCamera(dt, t, fwd) {
   camRoll += (clamp(-lateral * 0.004, -0.035, 0.035) * rmK - camRoll) * Math.min(1, 3 * dt);
   // (sealegs) the deck's roll, a little of it, while the boom is on the deck
   {
-    const n = player.sea, r = deckK * DECKCAM.roll * Math.asin(clamp(n.nx * camRight.x + n.nz * camRight.z, -0.5, 0.5));
+    const n = player.sea, rm = Math.max(1e-4, DECKCAM.rollMax);
+    const r = deckK * rm * Math.tanh(DECKCAM.roll * Math.asin(clamp(n.nx * camRight.x + n.nz * camRight.z, -0.5, 0.5)) / rm);
     const f = DECKCAM.rollF, h = Math.min(dt, 0.05);
     camDeckRoll.v += (f * f * (r - camDeckRoll.x) - 2 * f * camDeckRoll.v) * h;
     camDeckRoll.x += camDeckRoll.v * h;
