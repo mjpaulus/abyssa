@@ -86,6 +86,56 @@ await sleep(4000);
 out.deckSteady = await ev(`(async () => { const t0 = performance.now(), n0 = __hx.fr.length; await new Promise(r => setTimeout(r, 2000)); const fr = __hx.fr.slice(n0), iv = []; for (let i = 1; i < fr.length; i++) iv.push(fr[i] - fr[i - 1]); iv.sort((a, b) => a - b); return { median: +iv[iv.length >> 1].toFixed(2), max: +iv[iv.length - 1].toFixed(2), n: iv.length, programs: ${progs} }; })()`);
 const key = (type, code, k) => send('Input.dispatchKeyEvent', { type, code, key: k, windowsVirtualKeyCode: k.toUpperCase().charCodeAt(0) });
 let entered = null;
+// SCEN=jet,z1,z2,voyage: the later first-time transitions, each a measured window
+// (z1/z2 arrive by __bench.place -- the same enterZone the rift descent calls -- with the
+// camera on the sleeper; z2wake brings Mhor in; jet holds the REAL Space key in water;
+// voyage sails to anchorage 1 and is anchored at the chart dissolving back to play)
+const SCEN = (process.env.SCEN || '').split(',').filter(Boolean);
+if (SCEN.length) {
+  out.scen = {};
+  const progN = async () => ev(progs);
+  for (const sc of SCEN) {
+    const p0 = await progN();
+    if (sc === 'jet') {
+      await ev(`(__bench.place(4, 4, 0.5, 0), 1)`); await sleep(4000);
+      const q0 = await progN();
+      out.scen.jet = await windowAround('first jet burst', async () => {
+        await key('keyDown', 'Space', ' '); await sleep(1500); await key('keyUp', 'Space', ' ');
+      }, 4000);
+      out.scen.jet.newPrograms = (await progN()) - q0;
+      out.scen.jet.pack = await ev(`({ taps: __pack.taps, holds: __pack.holds })`);
+      continue;
+    }
+    if (sc === 'z1' || sc === 'z2') {
+      const v = sc === 'z1' ? [-162, 70, -1.86, 1] : [-116.8, -6.8, 0.5, 2];
+      out.scen[sc] = await windowAround(sc + ' arrival', async () => { await ev(`(__bench.place(${v.join(',')}), 1)`); }, 6000);
+      out.scen[sc].newPrograms = (await progN()) - p0;
+      if (sc === 'z2') {
+        const q0 = await progN();
+        out.scen.z2wake = await windowAround('Mhor arrives', async () => {
+          await ev(`(window.__lev.cmd('wake'), window.__lev.cmd('wake'), 1)`);
+          await ev(`(function f() { const s = __lev.state(); if (s && s.state !== 'absent') { const h = __sl && (__sl.head || __sl.pos); if (h) { camera.lookAt(h); } } })(), 1`);
+        }, 8000);
+        out.scen.z2wake.newPrograms = (await progN()) - q0;
+        out.scen.z2wake.lev = await ev(`__lev.state() && __lev.state().state`);
+      }
+      continue;
+    }
+    if (sc === 'voyage') {
+      await ev(`(__hx.backT = 0, window.__vg = 0, (function w() { const s = __power.state().state; if (s === 'voyage') __vg = 1; if (__vg && s === 'play') __hx.backT = performance.now(); else requestAnimationFrame(w); })(), 1)`);
+      await ev(`(__chart.sail(1), 1)`);
+      await until(`__hx.backT > 0`, 30000, 50);
+      out.scen.voyage = await windowAround('after the chart dissolves', async () => {}, 5000, '__hx.backT');
+      out.scen.voyage.newPrograms = (await progN()) - p0;
+      continue;
+    }
+  }
+  out.end = await ev(`({ programs: ${progs}, lights: ${lightsN}, safe: window.__safeFailed ? __safeFailed() : null })`);
+  await send('Page.removeScriptToEvaluateOnNewDocument', { identifier: sid.result.identifier });
+  console.log(JSON.stringify(out, null, 1));
+  ws.close();
+  process.exit(0);
+}
 out.dive = await windowAround('first water entry', async () => {
   await ev(`(__hx.entryT = 0, (function w() { if (player.pos.y < -0.8) __hx.entryT = performance.now(); else requestAnimationFrame(w); })(), 1)`);
   await key('keyDown', 'KeyW', 'w');
