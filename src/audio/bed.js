@@ -215,7 +215,20 @@ export function tickBed(E) {
   if (t >= n.call) { n.call = t + (zi === 2 ? E.r(90, 200) : E.r(45, 120)); if (u && KB.CALL && S.prox < 0.3) distantCall(E); }
   if (t >= n.knock) { n.knock = t + E.r(28, 72); if (u && zi > 0 && KB.KNOCK) deepKnock(E); }
   if (t >= n.tick) { n.tick = t + E.r(9, 34); if (u && zi === 2 && KB.TICK) abyssTick(E); }
-  if (t >= n.deckCreak) { n.deckCreak = t + E.r(2, 6); if (!u) hullCreak(E, t, E.r(0.4, 1) * (0.4 + 0.6 * S.wind), KB.DECK_CREAK * (0.5 + 0.5 * S.wind)); }
+  // (raftroll) the idle creak gives way to the roll's own once she is really working (7 deg+)
+  const I = E.in;
+  if (t >= n.deckCreak) { n.deckCreak = t + E.r(2, 6); if (!u && I.roll < 0.12) hullCreak(E, t, E.r(0.4, 1) * (0.4 + 0.6 * S.wind), KB.DECK_CREAK * (0.5 + 0.5 * S.wind)); }
+  // (raftroll) a roll that peaks loads the lashings: a creak sized by how far she went over
+  // (4 deg: a murmur; a gale's 15-18: a long groan), and the idle creak waits its turn
+  if (I.rollPeak > 0) {
+    const pk = I.rollPeak; I.rollPeak = 0;
+    if (!u && t >= (n.rollCreak || 0)) {
+      const f = Math.min(1, (pk - 0.06) / 0.24);
+      n.rollCreak = t + 1.2;
+      n.deckCreak = Math.max(n.deckCreak, t + E.r(1.5, 3));
+      hullCreak(E, t + E.r(0, 0.25), 0.35 + 0.65 * f, KB.DECK_CREAK * (0.45 + 0.9 * f));
+    }
+  }
   if (t >= n.slap) { n.slap = t + E.r(0.35, 2.2) / (0.6 + S.wind); if (!u) hullSlap(E, t, 0.5 + 0.5 * S.wind); }
   if (t >= n.gull) { n.gull = t + E.r(40, 130); if (!u && KB.GULL_ON && S.wind < 0.5 && S.rain < 0.1 && S.day > 0.5) { const s = E.r(0, 1) < 0.5 ? -1 : 1; gull(E, t, 0.55 * s); if (E.r(0, 1) < 0.4) gull(E, t + E.r(0.5, 0.9), -0.4 * s, KB.GULL * 0.7); } }
   pumpTick(E);

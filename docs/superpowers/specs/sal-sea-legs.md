@@ -128,3 +128,45 @@ boots on the planks (gap 0 on arrival).
 - [Your Dive Experience, Dive a Mark V](https://diveamarkv.com/dive/)
 - [Heavy Metal: The Hardhat Diving Experience, X-Ray Mag](https://xray-mag.com/content/heavy-metal-hardhat-diving-experience)
 - [Diving Manual, 1943, US Navy (Internet Archive)](https://archive.org/details/DivingManual1943)
+
+## The rockier raft (branch `raftroll`, 2026-10-05)
+
+Michael: "Rockier, scaled by sea" — about +-3 deg on a calm day, +-8-10 in moderate seas, +-15-18 in a
+gale, with a slower, heavier wallow.
+
+The raft can no longer just ease toward the sea's slope (that capped a gale at ~5 deg). It is a rigid
+body on its four drums: the drum centres (+-3.6, +-3.2) sample the sea, their least-squares plane is
+where the hydrostatic spring pulls the deck, and inertia plus damping make it a resonator
+(phi'' = w^2 (G phi_wave - phi) - 2 z w phi', per axis; heave the same on the mean height). A short
+chop is filtered out above the natural period, a long swell is ridden, and the sea near the raft's
+own period is amplified into the wallow. Natural period 4.5 s calm -> 6.5 s gale, damping 0.22 ->
+0.16, drive gain 0.47 / 0.95 / 1.36 (calm / moderate / gale): the sea's own slope over the drum
+span is 4.3 / 5.5 / 6.4 deg p95, so a calm day is attenuated and a gale amplified. Tuned by
+recording 200 s of the real forcing per state and replaying it offline, then checked live.
+
+| live, standing at the spawn | calm | moderate | gale |
+|---|---|---|---|
+| roll p95 / max (deg) | 3.4 / 4.8 | 8.3-9.0 / 12.2-12.6 | 13.7-14.7 / 16.1-17.9 |
+| pitch p95 / max (deg) | 1.6 / 2.8 | 6.6-7.2 / 9.6-10.0 | 12.2-13.3 / 15.0-17.1 |
+| whole tilt p95 / max (deg) | 3.4 / 4.8 | 9.4-9.8 / 12.3-12.6 | 15.6-15.7 / 17.4-17.8 |
+| roll half-period, median (s) | 2.9 | 3.4-3.5 | 3.6-4.1 |
+| roll rate p95 (deg/s) | 3.6 | 8.9 | 13.8-14.1 |
+| heave range (u) | 0.9 | 1.3-1.7 | 2.7 |
+| planted boot-to-plank gap max (cm) | 0.01 | 0.09-0.12 | 0.49-1.05 |
+| drift of his spot on the deck (u) | 0 | 0 | 0 |
+| balance sway p95 / max (u) | 0.03 / 0.04 | 0.09 / 0.10 | 0.14 / 0.15-0.17 |
+| corrective steps / staggers per minute | 0 / 0 | 0 / 0 | ~5.6 / ~1.6 |
+| camera roll p95 / max (deg) | | 0.61 / 0.75 | 0.87 / 0.95-1.04 |
+
+Sea-legs retune (knobs only): the tilt load saturates (`__sea.tSat` 0.10: he stands upright to
+gravity through his knees, so a 15 deg deck does not load his stance three times a 5 deg one),
+stagger threshold 0.143 u with a 10 s cooldown, gale step margin 0.23 u (at 0.19 he stepped 20
+times a minute). The lens's share of the roll is soft-capped at ~1.2 deg (`rollMax`).
+
+Walking the deck loop in a gale (real W over CDP): never outside the deck, never below the planks
+(min -0.3 cm at his centre), no jitter (deck-local second difference p99 0.003 u). Planted-boot
+gap while walking -0.3..+4.5 cm, except two transients: the first frames of a walk start on a
+steeply rolled deck (up to ~9 cm for ~0.25 s, the downhill boot before the gait takes it; the same
+moment reads ~5 cm at the old roll) and the first 3 frames off the ladder (12 cm -> 0). Off the side
+at the gap and back up the ladder in a gale: the ladder now carries him with the rail (it moves
+~1.5 u at up to ~1.6 u/s, faster than his 1.1 u/s climb); 3 s from rung to deck, no falls.

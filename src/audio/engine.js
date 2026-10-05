@@ -108,7 +108,8 @@ export function createEngine(ctx, opt = {}) {
       px: 0, py: 1.5, pz: 0, qx: 0, qy: 0, qz: 0, qw: 1, vx: 0, vy: 0, vz: 0,
       grounded: true, onDeck: true, above: true, state: 'title',
       breathPh: 0, breathStress: 0, raftX: 0, raftY: 0, raftZ: 0,
-      lev: null, ev: null, threat: 0, bolt: null, jet: 0
+      lev: null, ev: null, threat: 0, bolt: null, jet: 0,
+      roll: 0, rollPeak: 0
     },
     next: {}, lastV: new Map(), B: {}, G: {}
   };
