@@ -5,9 +5,10 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { scene, envTex } from '../core.js';
 import { SURFACE_Y } from '../config.js';
 import { registerPaint, styleUniforms } from '../lib/paint.js';
-// The deck is a MOVING GROUND. A stance anchor claimed on planks is stored relative to
-// raft.position so it heaves and surges with the boat; a world-space anchor would leave
-// the boot hanging in the air on the first swell. (No cycle: raft.js does not import us.)
+// The deck is a MOVING GROUND. A stance anchor claimed on planks is stored in RAFT-LOCAL
+// space (the raft's full transform: heave, surge, pitch, roll — sealegs) so the boot stays on
+// its plank; a world-space anchor would leave it in the air on the first swell, and a
+// translation-only one put it through the planks on every roll. (No cycle: raft.js does not import us.)
 import { raft, pumpPos } from '../systems/raft.js';
 import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 // Exhaust bubbles die INTO the swell, not at a flat plane; survival's air fraction
@@ -2277,9 +2278,8 @@ function ankleOverContact(th, cz, out) {
 
 // ---- per-foot anchor state ----
 // A foot in stance owns an anchor: a CONTACT POINT expressed in its ground's frame. On
-// planks that frame is raft.position (translation only — player.js's deck collision is a
-// flat plane at raft.position.y + DECK_TOP and ignores the boat's roll, so honouring the
-// roll here would slide the feet against the body he actually stands with). On the seabed
+// planks that frame is the raft's full transform (lx/ly/lz, re-stood in the world every frame
+// — sealegs: the floor is the deck's tilted plane now, and he is carried with it). On the seabed
 // the frame is the world and the height is frozen at the moment of the plant, which is
 // what makes a step onto a slope keep its own level instead of dragging.
 function foot() {
@@ -2542,11 +2542,9 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
   _mHi.copy(_mH).invert();
   _qH.setFromRotationMatrix(_mH);
 
-  // The ground under the soles, and the FRAME the anchors live in. On planks that frame
-  // is raft.position: player.js pins pos.y rigidly to raft.position.y + DECK_TOP and
-  // ignores the boat's roll, so anchors that tracked the roll would slide against the
-  // very body he is standing with. Translation is the honest frame here — he heaves and
-  // surges with the boat, which is the part the eye reads.
+  // The ground under the soles, and the FRAME the anchors live in. On planks that frame is
+  // the raft's own (player.js stands him on the deck's tilted plane and carries him in the
+  // raft's frame since sealegs), so planted anchors live in raft-local space; see below.
   const onDeck = !!player.onDeck;
   // The REAL floor, not his centre: player.js grounds him up to 1.2 u above the bottom and
   // eases him down at 10/s ("boots find the bottom a little before the body"), so a landing

@@ -96,6 +96,25 @@ Sal's numbers: half stance 0.285 (HIP_X 0.225 + deck wide 0.06), boot half-width
 | walk on a rolling deck | shipped | top speed -25%, wider, a down-slope lurch, slower when climbing the tilt | timing to the roll |
 | camera | level | a few tenths of a degree of the roll, damped (knob) | aboard, the horizon tilts; Michael hates floaty, so tiny |
 
+## Achieved (branch `sealegs`, fixed 60 Hz through the real update; standing at the spawn, facing +X)
+
+| | target | before | after |
+|---|---|---|---|
+| planted boot to plank gap, gale 3 min (cm) | 0 +-1, max 2 | -26 .. +25 | -0.1 .. +0.3 (median 0) |
+| same, calm / moderate 60 s (cm) | | -16..+16 / -10..+15 | 0 / 0 |
+| walking the deck, calm and gale (cm) | | | -0.2 .. +4.7 (p95 0.7; the heel rocker) |
+| drift of his spot vs the deck, standing (u) | about 0 | 0.32 calm, 0.53 gale | 0.000 |
+| balance sway off the spot, gale (u) | at most about 0.3 | | median 0.06, p95 0.13, max 0.15 (calm max 0.04) |
+| standing knee, gale median (deg) | 18-22 | 12 | 22-23 |
+| uphill vs downhill knee | uphill bends | none | knee difference follows the deck's lateral tilt, r = 0.76-0.78, ~4.7 deg of knee per deg of tilt |
+| trunk tilt to gravity, gale (deg) | 1-2, slow, no wobble | 0 | median 1.0, p95 2.1, max 2.6 (calm p95 0.4) |
+| corrective steps, gale | rare | 0 | 3 per minute (calm 0) |
+| staggers, gale | rare | 0 | 1 in 3 minutes |
+| lens roll | tiny | 0 | 12% of the deck roll about the lens axis (about 0.5 deg in a gale), knob |
+
+Ladder off and on, the chart table [E], the voyage, the drowning rescue and the title all keep his
+boots on the planks (gap 0 on arrival).
+
 ## Sources
 - [Getting Your Sea Legs, Stoffregen et al. 2013, PLOS ONE](https://journals.plos.org/plosone/article?id=10.1371%2Fjournal.pone.0066949)
 - [Standing Posture on Land and at Sea, Stoffregen, Chen, Yu & Villard](https://www.researchgate.net/publication/233183211_Standing_Posture_on_Land_and_at_Sea)
