@@ -2383,17 +2383,23 @@ async function waitRows(rows, capMs) {
 // object, near or far, still draws once in every main pass.
 const CAST_R = 70;
 function forceAllDrawn() {
-  const hid = [], cull = [], casters = [];
+  const hid = [], cull = [], casters = [], empty = [];
   scene.traverse(o => {
     if (o.isLight) return;
     if (!o.visible) { hid.push(o); o.visible = true; }
     if (o.frustumCulled) { cull.push(o); o.frustumCulled = false; }
-    if (o.castShadow) casters.push(o);
+    if (o.isMesh || o.isPoints || o.isLine) casters.push([o, o.castShadow]);
+    // an empty pool (footprints, bursts, bubbles: count 0 until play spawns one) is
+    // skipped by the renderer, so it would build its pipelines on its first spawn
+    if (o.isInstancedMesh && o.count === 0) { empty.push(o); o.count = 1; }
   });
   const _p = new THREE.Vector3();
   return {
-    near(cam) { for (const o of casters) { o.getWorldPosition(_p); o.castShadow = _p.distanceToSquared(cam) < CAST_R * CAST_R; } },
-    restore() { for (const o of hid) o.visible = false; for (const o of cull) o.frustumCulled = true; for (const o of casters) o.castShadow = true; }
+    // every drawable within reach casts for this camera, not only today's casters: some
+    // modules switch castShadow on at run time (flora's near-field rocks), and their
+    // shadow-depth programs were the last ones still compiling on the zone-0 seabed
+    near(cam) { for (const [o] of casters) { o.getWorldPosition(_p); o.castShadow = _p.distanceToSquared(cam) < CAST_R * CAST_R; } },
+    restore() { for (const o of hid) o.visible = false; for (const o of cull) o.frustumCulled = true; for (const [o, c] of casters) o.castShadow = c; for (const o of empty) o.count = 0; }
   };
 }
 // The cameras of the first minutes. Each sets the camera (and the sun's shadow state that
