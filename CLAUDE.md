@@ -436,6 +436,13 @@ against explicit contracts and reviewed on return.
     `__sea` (player balance excursion / lurch / walk down-slope), `__sealegs` (posture),
     `__deckcam.knobs.roll` (lens takes 12% of the deck roll; 0 = level). Every deck spawn goes
     through `deckSpawn` -> `placeOnDeck`. Gale, 3 min: planted boot-to-plank gap max 0.3 cm.
+  - ROCKIER, SCALED BY SEA (2026-10-05, branch raftroll, Michael ~+-3/+-8-10/+-15-18 deg): the raft is a
+    damped rigid body on its four drums (raft.js `stepRaft`, 120 Hz sub-steps; knobs `__raftRoll`:
+    natural period tC/tG 4.5/6.5 s, gain g[] per storm quarter, soft limit `max` on the whole tilt;
+    `out` = live state). Live tilt p95 3.4/9.6/15.7 deg calm/moderate/gale. Rides it: the ladder
+    carries him with the rail (player.js), the lens roll is soft-capped (`DECKCAM.rollMax`), exhaust
+    smoke is in world space, hull creaks fire at roll peaks (audio.js -> E.in.roll/rollPeak).
+    Spec: docs/superpowers/specs/sal-sea-legs.md, "The rockier raft".
   - Board width is the whole deck read: at 8 boards across the span they were metre-
     wide slabs and the deck rendered as facets. 44 rows, each `weather()`ed as a whole
     board (boards weather as boards, not as one sheet of noise).
