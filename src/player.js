@@ -226,7 +226,7 @@ const AM_H = 2.90;        // was 1.55, then 2.40 (1.88 is the full broadside phy
 // makes it read as the one thing that can throw this much brass through the water.
 const AM_BURST_V = 1.26, AM_BURST_H = 1.55;
 // The haul's thrust (u/s^2 before added mass). See the swim branch.
-const HAUL = 9.0;
+const HAUL = 8.0;
 // Unworked, he settles. A small downward bias while no stroke, scull or valve key is
 // held: ~0.3 u/s of slow sinking at neutral trim after several seconds. Small beside the
 // dress (the valve spans -1.83..+2.61), so fill and vent still decide where he goes.
@@ -328,17 +328,18 @@ export function burstEnv(tau) {
 //           points up): let go and the full dress carries him on toward the surface
 //           until he vents with C.
 export const TAP_POW = 0.14;     // ~5 u/s shove level, ~6 u/s straight up
-const TAP_TRIM = 0.03;           // a tap spills a little into the dress
+const TAP_TRIM = 0.03;           // a tap UP spills a little into the dress (his fine trim now)
 const JET_ACC = 23;              // u/s^2 at full burst
 const JET_TRIM = 0.50;           // /s of trim at full burst straight up
-const JET_TRIM_FLAT = 0.15;      // ...and the share a level burst still spills in
+const JET_TRIM_FLAT = 0;         // ...and a level burst spills none: a dash along the bottom
+                                 // must not leave him on a Boyle runaway to the surface
 const AM_JET_V = 1.26, AM_JET_H = 1.55;
 // The hop. HOP_V is the pop; while HOP_BRAKE runs the lead and the broadside dress fight
 // the climb (linear drag HOP_K on the way up only), so the pop is sharp but the rise is a
-// hop — measured ~3 u at a vented trim — not a launch. Forward input adds HOP_FWD.
-const HOP_V = 4.6, HOP_K = 1.25, HOP_BRAKE = 1.6, HOP_FWD = 2.2;
+// hop — not a launch. Forward input adds HOP_FWD.
+const HOP_V = 5.6, HOP_K = 2.1, HOP_BRAKE = 1.2, HOP_FWD = 2.2;
 export function airPackTap(dx, dy, dz, grounded) {
-  player.trim = Math.min(TRIM_MAX, player.trim + TAP_TRIM);
+  player.trim = Math.min(TRIM_MAX, player.trim + TAP_TRIM * (grounded ? 1 : Math.max(0, dy)));
   if (grounded) {
     player.hop = HOP_V;
     player.hopT = HOP_BRAKE;
@@ -529,7 +530,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // through the water in 90 kg of dress is drawn along, not driven; the bottle burst
     // (untouched) is still the way to cover ground fast.
     // THE AIR PACK pass (Michael 2026-10-04: "Swimming forward or back is still too fast and
-    // should need the air pack to push him forward faster"): 9.0, was 33 — cruise ~6.6 u/s,
+    // should need the air pack to push him forward faster"): 8.0, was 33 — cruise ~6.6 u/s,
     // was ~16. He drags himself through the water; speed is the pack's.
     const acc = HAUL / AM_H * ctrl;
     const sy = Math.sin(player.pitch);
