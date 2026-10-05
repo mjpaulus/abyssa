@@ -25,7 +25,7 @@
 //     and underwater the image NARROWS (sound travels 4.3x faster in water, so the ear's
 //     time cues collapse — divers really cannot place sounds well).
 // ---------------------------------------------------------------------------
-import { makeIR, SPACES, mulberry } from './ir.js';
+import { makeIR, irData, SPACES, mulberry } from './ir.js';
 import { loadTexture } from './worklet.js';
 
 export const K = {
@@ -48,6 +48,45 @@ export const K = {
   // voice cap
   LIVE_MAX: 150
 };
+
+
+// ---- PREBAKE (roadmap/loading-and-hitches.md) ---------------------------------------
+// The engine's heavy DSP is its noise colours and its five room responses, all pure on the
+// context's sample rate. The click used to compute them inside initAudio (~170 ms on the
+// first play frame). The loader calls prebakeAudio() at the rates a context is likely to
+// open at; a context at another rate simply computes on demand, as before.
+const NOISE = new Map();
+function noiseData(kind, secs, sr) {
+  const key = kind + '|' + secs + '|' + sr;
+  let got = NOISE.get(key);
+  if (got) return got;
+  const n = Math.floor(sr * secs), ch = [new Float32Array(n), new Float32Array(n)];
+  for (let c = 0; c < 2; c++) {
+    const d = ch[c], r = mulberry(0xA11CE + c * 977 + secs * 31);
+    let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, br = 0;
+    for (let i = 0; i < n; i++) {
+      const w = r() * 2 - 1;
+      if (kind === 'white') d[i] = w * 0.7;
+      else if (kind === 'pink') {       // Kellet's economy filter
+        b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
+        b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
+        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926;
+      } else { br = (br + 0.02 * w) / 1.02; d[i] = br * 3.2; }
+    }
+    // crossfade the loop seam so a loop point is never a click
+    const f = Math.floor(sr * 0.05);
+    for (let i = 0; i < f; i++) { const k = i / f; d[n - f + i] = d[n - f + i] * (1 - k) + d[i] * k; }
+    for (let i = 0; i < f; i++) d[i] = d[n - f + i];
+  }
+  NOISE.set(key, ch);
+  return ch;
+}
+// Every buffer a live context at `sr` will ask for (createEngine's seeds: opt.seed unset).
+export function prebakeAudio(sr) {
+  noiseData('white', 6.1, sr); noiseData('pink', 7.3, sr); noiseData('brown', 8.9, sr);
+  const irSeed = 7;
+  for (const k of ['deck', 'reef', 'boiler', 'abyss', 'helmet']) irData(sr, SPACES[k], irSeed + k.length * 131);
+}
 
 const cl01 = v => (v < 0 ? 0 : v > 1 ? 1 : v);
 export const mix = (a, b, t) => a + (b - a) * t;
@@ -156,25 +195,10 @@ export function createEngine(ctx, opt = {}) {
   };
 
   // ---- noise colours ----------------------------------------------------------
+  // (prebaked: noiseData below is pure on (kind, secs, rate); the click only copies it)
   function noiseBuf(kind, secs) {
-    const n = Math.floor(ctx.sampleRate * secs), b = ctx.createBuffer(2, n, ctx.sampleRate);
-    for (let c = 0; c < 2; c++) {
-      const d = b.getChannelData(c), r = mulberry(0xA11CE + c * 977 + secs * 31);
-      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0, br = 0;
-      for (let i = 0; i < n; i++) {
-        const w = r() * 2 - 1;
-        if (kind === 'white') d[i] = w * 0.7;
-        else if (kind === 'pink') {       // Kellet's economy filter
-          b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759; b2 = 0.969 * b2 + w * 0.153852;
-          b3 = 0.8665 * b3 + w * 0.3104856; b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
-          d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926;
-        } else { br = (br + 0.02 * w) / 1.02; d[i] = br * 3.2; }
-      }
-      // crossfade the loop seam so a loop point is never a click
-      const f = Math.floor(ctx.sampleRate * 0.05);
-      for (let i = 0; i < f; i++) { const k = i / f; d[n - f + i] = d[n - f + i] * (1 - k) + d[i] * k; }
-      for (let i = 0; i < f; i++) d[i] = d[n - f + i];
-    }
+    const ch = noiseData(kind, secs, ctx.sampleRate), n = ch[0].length, b = ctx.createBuffer(2, n, ctx.sampleRate);
+    b.copyToChannel(ch[0], 0); b.copyToChannel(ch[1], 1);
     return b;
   }
   E.noise = { white: noiseBuf('white', 6.1), pink: noiseBuf('pink', 7.3), brown: noiseBuf('brown', 8.9) };

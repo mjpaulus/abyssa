@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
 import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
-import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, warmUpAsync, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
-import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight } from './lighting.js';
+import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
+import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM } from './world/stir.js';
@@ -51,6 +51,9 @@ import { initWeather, updateWeather } from './systems/weather.js';
 import { startEnding, updateEnding } from './ending.js';
 import { setSite, currentSite, currentSiteIndex, siteAt } from './world/site.js';
 import { openChart, closeChart, isChartOpen } from './ui/chartOverlay.js';
+import { sculptedLedger } from './lib/assets.js';
+import { plantTick } from './world/plants/plantKit.js';
+import { prebakeAudio } from './audio/engine.js';
 import { startPassage, updatePassage, setPassageSound, PT as PASSAGE_T, PEV_RESEED, PEV_BELL, PEV_DONE } from './ui/passage.js';
 // dev look-dev hooks are live only under ?lab (the lab's own flag)
 const DEV_CAMPIN = typeof location !== 'undefined' && location.search.includes('lab');
@@ -109,12 +112,56 @@ function bootFail(e) {
   if (booted) return;
   const el = document.getElementById('load');
   if (!el) return;
-  const p = el.querySelector('p');
-  if (p) { p.textContent = 'THE PUMP WILL NOT START — RELOAD'; p.style.animation = 'none'; p.style.opacity = '.85'; }
+  if (LOAD.fail) LOAD.fail('THE PUMP WILL NOT START — RELOAD');
+  else { const p = el.querySelector('p'); if (p) p.textContent = 'THE PUMP WILL NOT START — RELOAD'; }
   console.error('ABYSSA: boot failed', e);
 }
 addEventListener('error', ev => bootFail(ev.error || ev.message));
 addEventListener('unhandledrejection', ev => bootFail(ev.reason));
+
+// ---- THE LOADER (roadmap/loading-and-hitches.md) -----------------------------------
+// index.html's classic script owns the bar (window.__load); this module feeds it real work.
+// The boot is a sequence of STAGES, each a span of the bar sized by what it measured on
+// the reference machine (M5 Max, bench host), each advancing as its own units of work
+// finish: the module fetch (counted by index.html), the world build step by step, every
+// sculpted asset set as it lands, the sleeper, physics, the plant batches, the audio
+// buffers, the shader compile (per scene branch), the warm-up frames (per camera), then
+// title frames settling. Between steps the module yields one paint (paintGap) so the bar
+// and its line are on screen while the step runs. 100 is written only after the warm-up,
+// when the first minutes of play have nothing left to compile, upload or allocate.
+const LOAD = window.__load || { stage() {}, part() {}, say() {}, mods() { return 0; }, done() {}, fail: null };
+const bootLog = [];   // [label, ms] per step: window.__boot.log()
+let bootMark = performance.now(), bootLabel = 'modules';
+LOAD.mods();
+// One paint: rAF fires before the frame is drawn, so the timeout after it lands once the
+// bar has been composited. A hidden tab has no rAF; the 60 ms fallback keeps the boot moving.
+function paintGap() {
+  return new Promise(res => {
+    let done = false;
+    const go = () => { if (!done) { done = true; res(); } };
+    requestAnimationFrame(() => setTimeout(go, 0));
+    setTimeout(go, 60);
+  });
+}
+// Close the previous step's timing, show the next step's line, let it paint.
+async function bootStep(label, line) {
+  const now = performance.now();
+  bootLog.push([bootLabel, +(now - bootMark).toFixed(1)]);
+  bootLabel = label; bootMark = performance.now();
+  if (line) LOAD.say(line);
+  await paintGap();
+  bootMark = performance.now();   // the paint is the loader's, not the step's
+}
+// The world build: [weight, ...] in measured ms (bench host), so the bar moves at the pace
+// the work actually goes. Steps the reference machine finished in <5 ms carry 5.
+const BUILD_W = { terrain: 120, flora: 150, water: 140, sky: 60, creatures: 70, raft: 120, deck: 30, world: 60, vents: 40, gardens: 80, fauna: 60, tools: 5 };
+const BUILD_SUM = Object.values(BUILD_W).reduce((a, b) => a + b, 0);
+let buildDone = 0;
+async function buildStep(key, line) {
+  await bootStep(key, line);
+  LOAD.part(buildDone / BUILD_SUM);
+  buildDone += BUILD_W[key];
+}
 
 // ---- REDUCED MOTION ---------------------------------------------------------------
 // The OS setting, plus window.__rm for probes. Read every frame so a live toggle takes.
@@ -125,30 +172,39 @@ let rmWas = null;
 performance.mark('abyssa:world-build-start');
 
 // ---- build the world ----
+LOAD.stage(0.07, 0.19, 'RAISING THE SEABED');
+await buildStep('terrain', 'RAISING THE SEABED');
 buildTerrain();
+await buildStep('flora', 'SETTING THE STONES');
 buildFlora();
+await buildStep('water', 'MIXING THE WATER');
 buildWater();
 // OWN WATER: the anchorage's water and light (uniform + CPU rows; null at home = shipped).
 // The saved site is already set (loadChart runs before the world builds).
 setSiteWater(currentSite().water || null);
 setSiteLight(currentSite().light || null);
 setSiteGrade(currentSite().grade || null);
+await buildStep('sky', 'HANGING THE SKY');
 buildClouds();   // instanced puff clusters in the air; must follow buildWater (palette + wind)
 buildSky();      // VOLUMETRIC SKY: noise volumes on the GPU, atmosphere LUT, cloud march targets
 buildRain();     // one instanced draw call of wind-slanted rain streaks, air side only
 buildLightning();   // bolt channels (one instanced draw) + the two-slot bolt light in the fog chunk
+await buildStep('creatures', 'SEEDING THE SHOALS');
 buildCreatures();
 buildRifts();
+await buildStep('raft', 'FITTING OUT THE TENDER');
 buildRaft();
 // TAA: Sal and the raft are rigid hierarchies -- exact motion vectors for both.
 addTemporalMover(diver); addTemporalMover(raft);
 // Deck spawn (deckSpawn below): raft-local, and his heading — toward the boarding gap.
 const DECK_SPAWN_X = 2.6, DECK_SPAWN_Z = 0;
 export const DECK_SPAWN_YAW = Math.PI / 2;
+await buildStep('deck', 'PAYING OUT THE HOSE');
 buildTether(pumpPos);
 buildResources();
-buildProps();   // async; props pop in shortly after load, world never blocks on them
+const propsP = buildProps();   // async; the boot waits for it now (bootTail), so props never pop in during play
 buildFootFX();
+await buildStep('world', 'SINKING THE WRECKS');
 buildPredators();
 buildWrecks();
 // A restored diver already owns his relics: rebuild the wrecks with those cradles
@@ -158,12 +214,17 @@ if (survival.hasSonar || survival.hasSpear || survival.hasThruster) {
 }
 setKeepsakeState(keepsakes[currentSiteIndex()]);
 setKeepsakes(keepsakes);
+await buildStep('vents', 'STOKING THE BOILER ROOM');
 buildVents();
 buildVentLife();
+await buildStep('gardens', 'PLANTING THE GARDENS');
 buildGardens();   // after flora (reef anchors = its rock colliders) and vents (activeVents)
+await buildStep('fauna', 'WAKING THE SMALL THINGS');
 buildFauna();   // FAUNA PATCH: after creatures AND after vents (isopods/vent fish anchor on activeVents, moray/crabs on flora's rockColliders)
+await buildStep('tools', 'READING THE GLASS');
 initTools();
 initWeather();
+LOAD.part(1);
 performance.mark('abyssa:world-build-end');
 {
   const m = performance.measure('abyssa:world-build', 'abyssa:world-build-start', 'abyssa:world-build-end');
@@ -466,7 +527,10 @@ function makeZoneSleeper(i, extra) {
 const memSaid = new Uint8Array(12);
 let memPending = null, memKey = 0;
 
-function enterZone(i) {
+// `quiet` (the boot): build the zone without a word or a sound. The loader builds zone 0
+// before the title so the sleeper, her textures and the five ward lights exist before the
+// shader compile; start() then only says what enterZone would have said (announceZone).
+function enterZone(i, quiet = false) {
   disposeLeviathan(lev);
   zone = i;
   setZone(i);            // must precede growl() so the voice is tuned to the zone
@@ -476,9 +540,7 @@ function enterZone(i) {
   physicsSwitchZone(i);  // no-op until the WASM world is up
   switchPredatorZone(i);
   setCalm(0);
-  // colour, not instruction: it waits behind anything that matters. A dormant sleeper
-  // (the Brooder asleep as a ridge) is not announced — her name is the reveal.
-  if (!lev.dormant) { showMsg(lev.name, 4, 0); growl(); }
+  if (!quiet) announceZone();
   pendingWards = i > 0;
   riftShutSaid = false;
   // The bowl's rim, for the rift-shut beat: the collar crest sits at 0.84 of the funnel
@@ -486,6 +548,11 @@ function enterZone(i) {
   const rp = riftPos(i), rr = RIFT_R * 2.7 * 0.84;
   riftRimY = (terrainH(rp.x + rr, rp.z, i) + terrainH(rp.x - rr, rp.z, i)
     + terrainH(rp.x, rp.z + rr, i) + terrainH(rp.x, rp.z - rr, i)) * 0.25;
+}
+// colour, not instruction: it waits behind anything that matters. A dormant sleeper
+// (the Brooder asleep as a ridge) is not announced — her name is the reveal.
+function announceZone() {
+  if (lev && !lev.dormant) { showMsg(lev.name, 4, 0); growl(); }
 }
 
 // Sleeper probe (roadmap/three-sleepers.md). fp(i): the split's regression hash for zone
@@ -575,9 +642,11 @@ export function start() {
   document.getElementById('title').classList.add('hidden');
   $hud.classList.remove('hidden');
   initAudio();
-  enterZone(0);
-  // Async WASM load; the module degrades to no-ops if the CDN fails, so no await.
-  initPhysics(0);
+  // The loader built zone 0 (quiet) and the physics world before the title: the click no
+  // longer builds a sleeper, adds five lights (which recompiled every lit material in the
+  // game, ~1.4 s here) or compiles Rapier. A save that left zone 0 still rebuilds it.
+  if (zone !== 0 || !lev) enterZone(0); else announceZone();
+  if (!physicsStarted) { physicsStarted = true; initPhysics(0); }
   // Lock is requested by the window click handler below, on this same click. Asking
   // here as well made Chrome reject the duplicate request, so the mouse stayed dead
   // until the player clicked a second time.
@@ -2093,14 +2162,24 @@ let loopFailed = false;
 // player twice — visible hitches, and a perf sampler that graded the warmup and silently
 // dropped volumetrics, AO and shadows for the whole session on hardware that then ran at
 // a steady 60. Two settled frames after the compile, uncover the title.
-let bootFrames = 0;
+// SETTLE (loadbar): the title's first frames run under the loader too — the sky's march
+// history, the auto-exposure and TAA re-converge after the warm-up cameras — and the bar's
+// last span is these frames. Then 100, then the title is uncovered.
+const SETTLE_FRAMES = 12;
+let bootFrames = 0, bootShown = false;
 function boot() {
-  if (++bootFrames < 3) return false;
+  if (bootFrames > SETTLE_FRAMES) return true;
+  LOAD.part(++bootFrames / SETTLE_FRAMES);
+  if (bootFrames < SETTLE_FRAMES) return false;
   const el = document.getElementById('load');
-  if (el && !el.classList.contains('done')) {
-    el.classList.add('done');
-    booted = true;
-    setTimeout(() => el.remove(), 1100);   // it is z-index 2 over the title; do not leave it
+  if (el && !bootShown) {
+    bootShown = true;
+    LOAD.done();
+    bootStep('settle');
+    window.__boot.total = +performance.now().toFixed(0);
+    console.info('ABYSSA: ready in ' + window.__boot.total + ' ms (' + bootLog.map(r => r[0] + ' ' + r[1].toFixed(0)).join(', ') + ')');
+    // a beat at 100 before the fade, so the full bar is actually seen
+    setTimeout(() => { el.classList.add('done'); booted = true; setTimeout(() => el.remove(), 1100); }, reducedMotion() ? 0 : 220);
   }
   return true;
 }
@@ -2180,20 +2259,215 @@ function frame(now = performance.now()) {
     }
   }
 }
-// The shader precompile is ASYNC now (parallel compile where the driver has it), and
-// the loader is held until it resolves; the loop does not start before the programs
-// exist. A driver without compileAsync falls back to the synchronous compile.
-{
+// ---- THE BOOT TAIL (roadmap/loading-and-hitches.md) ----------------------------------
+// Everything the first minutes of play would otherwise do for the first time, done here
+// under the loader, in the order the dependencies demand:
+//   1. zone 0 (quiet): the sleeper, her generated textures, and the ward-light pool. The pool
+//      is FIVE PointLights; built at the click (as it was) it took the scene from 9 to 14
+//      lights and three recompiled every lit material in the game on the first play frame.
+//   2. Rapier (WASM fetch + compile + the zone-0 world), in parallel with
+//   3. every sculpted asset set already requested (Sal, sleeper, plants, impostors, fauna)
+//      and the props; their installs run as each lands, so the compile below sees them.
+//   4. the plant batches (plantKit's job queue, drained here instead of at 4 ms a frame
+//      behind the title) and their own compile.
+//   5. the audio engine's buffers (noise colours + room responses) at the likely rates.
+//   6. the shader compile, per scene branch, at BOTH sun-shadow states the first dive
+//      visits (deck: on; below y -26: off; the seabed's floor band: on again).
+//   7. WARM-UP FRAMES through the real frame path (sky -> refraction -> composer) from the
+//      cameras of the first minutes, with every object drawn: compileAsync builds programs,
+//      but ANGLE/Metal builds its pipeline states, the shadow-depth programs and the texture
+//      uploads only at the first real draw, into the real targets. The first dive's stall
+//      (~700 ms, all of it inside a GPU readback) was exactly this.
+//   8. the title's settle frames (boot() above), then 100.
+let physicsStarted = false;
+const ASSET_LINE = {
+  salSkin: 'SEWING THE DRESS', sal: 'SEWING THE DRESS', brooder: 'CARVING THE SLEEPER',
+  hoarder: 'GILDING THE HOARD', hunter: 'SOMETHING ELSE, DEEPER', plants: 'GROWING THE CORAL',
+  blades: 'COMBING THE KELP', imp: 'DRAWING THE FAR REEFS', school: 'SCHOOLING THE FISH',
+  octo: 'COILING THE ARMS', shark: 'COUNTING THE TEETH', vent: 'WARMING THE VENT LIFE',
+  reef: 'NAMING THE CREATURES', star: 'NAMING THE CREATURES', deep: 'NAMING THE CREATURES'
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Wait on a moving set of rows ({ line, p, done }), moving the bar by rows landed and saying
+// the line of the first one still out. Capped: a hung network never holds the boot hostage
+// (a set that lands later installs exactly as it always did).
+async function waitRows(rows, capMs) {
   const t0 = performance.now();
-  warmUpAsync()
-    .catch(e => { console.warn('ABYSSA: compileAsync failed, compiling synchronously', e); return warmUp(); })
-    .then(n => {
-      console.info(`ABYSSA: ${n} shader programs precompiled in ${(performance.now() - t0).toFixed(0)} ms`);
-      setMaster(muteSaved ? 0 : MASTER_VOL);
-      clock.getDelta();   // the compile is not a frame
-      frame();
-    });
+  for (;;) {
+    const open = rows().filter(r => !r.done);
+    const all = rows().length;
+    LOAD.part((all - open.length) / Math.max(1, all));
+    if (!open.length) return true;
+    if (performance.now() - t0 > capMs) { console.warn('ABYSSA: boot stopped waiting for ' + open.map(r => r.name).join(', ')); return false; }
+    LOAD.say(open[0].line);
+    await Promise.race([Promise.race(open.map(r => r.p)), sleep(250)]);
+  }
 }
+// Everything drawn, nothing culled, for the warm-up frames only. Lights are never touched:
+// the light set the programs are built against is the one play renders with. Shadow
+// CASTERS are the exception to 'nothing culled': unculled, every caster in the world went
+// into the lantern's six cube faces and the sun's map from every camera (62 s of warm-up,
+// measured). So per camera a caster keeps castShadow only within CAST_R of it (castShadow
+// is not part of any program key; receiveShadow, which is, is untouched): the shadow-depth
+// programs are warmed by the casters the first minutes put near the lens, and every
+// object, near or far, still draws once in every main pass.
+const CAST_R = 70;
+function forceAllDrawn() {
+  const hid = [], cull = [], casters = [];
+  scene.traverse(o => {
+    if (o.isLight) return;
+    if (!o.visible) { hid.push(o); o.visible = true; }
+    if (o.frustumCulled) { cull.push(o); o.frustumCulled = false; }
+    if (o.castShadow) casters.push(o);
+  });
+  const _p = new THREE.Vector3();
+  return {
+    near(cam) { for (const o of casters) { o.getWorldPosition(_p); o.castShadow = _p.distanceToSquared(cam) < CAST_R * CAST_R; } },
+    restore() { for (const o of hid) o.visible = false; for (const o of cull) o.frustumCulled = true; for (const o of casters) o.castShadow = true; }
+  };
+}
+// The cameras of the first minutes. Each sets the camera (and the sun's shadow state that
+// depth would have) and the real frame path renders it.
+function warmPoses() {
+  const rp = raft.position, r0 = riftPos(0);
+  const bed = (x, z) => terrainH(x, z, 0);
+  return [
+    { name: 'deck', shadow: true, set() {
+      deckSpawn(player.pos); player.yaw = DECK_SPAWN_YAW; snapCamBehind(true);
+      camera.lookAt(player.pos.x + Math.sin(player.yaw) * 6, player.pos.y, player.pos.z + Math.cos(player.yaw) * 6);
+    } },
+    { name: 'waterline', shadow: true, set() { camera.position.set(rp.x + 7, -2.2, rp.z + 3); camera.lookAt(rp.x + 1, -0.6, rp.z); } },
+    { name: 'column', shadow: false, set() { camera.position.set(rp.x + 10, -30, rp.z + 8); camera.lookAt(rp.x + 30, -50, rp.z - 6); } },
+    { name: 'deep', shadow: false, set() { const x = rp.x + 10, z = rp.z + 12; camera.position.set(x, bed(x, z) + 30, z); camera.lookAt(r0.x, bed(x, z), r0.z); } },
+    { name: 'seabed', shadow: true, set() { const x = rp.x + 8, z = rp.z + 14; camera.position.set(x, bed(x, z) + 3.75, z); camera.lookAt(r0.x, bed(x, z) + 2.5, r0.z); } },
+    { name: 'up', shadow: true, set() { const x = rp.x + 4, z = rp.z + 4; camera.position.set(x, bed(x, z) + 6, z); camera.lookAt(rp.x, -1, rp.z); } }
+  ];
+}
+// Per camera, its share of the warm-up's time on the reference box (the deck builds most of
+// the pipelines, the column builds the shadowless set), so the bar moves at the work's pace.
+const POSE_W = { deck: 0.62, waterline: 0.03, column: 0.27, deep: 0.02, seabed: 0.03, up: 0.03 };
+// The first camera is seconds of GPU-process pipeline building in one draw-call stream, so
+// there the scene is warmed a SLICE at a time first (one top-level branch group per frame,
+// the rest hidden) and the bar keeps moving through it. (Only the first: slicing the
+// shadowless column camera measured 50 extra programs and 7 s, against 1.1 s whole.)
+// A branch that holds a light is never hidden: the light set must stay the one play uses.
+const WARM_SLICES = 8;
+async function warmFrames(onProgress) {
+  const poses = warmPoses(), shadow0 = sun.castShadow;
+  const F = forceAllDrawn();
+  const gl = renderer.getContext(), px = new Uint8Array(4);
+  const hasLight = o => { let l = false; o.traverse(c => { if (c.isLight) l = true; }); return l; };
+  const sliceable = scene.children.filter(o => !hasLight(o));
+  const frame1 = () => { renderSky(); renderRefraction(); render(1e-6); gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px); };
+  let acc = 0;
+  try {
+    gl.getError();
+    for (let i = 0; i < poses.length; i++) {
+      const P = poses[i], tp = performance.now(), w = POSE_W[P.name] || 0.02;
+      P.set(); camera.updateMatrixWorld();
+      sun.castShadow = P.shadow;
+      F.near(camera.position);
+      // the composer first on the opening camera: it renders the shadow maps, which the
+      // refraction pass samples (sampler2DShadow) before the composer's own pass runs
+      if (i === 0) render(1e-6);
+      if (i === 0) {
+        for (let k = 0; k < WARM_SLICES; k++) {
+          const off = sliceable.filter((o, j) => j % WARM_SLICES !== k);
+          for (const o of off) o.visible = false;
+          try { frame1(); } finally { for (const o of off) o.visible = true; }
+          onProgress(acc + w * 0.9 * (k + 1) / WARM_SLICES);
+          await paintGap();
+        }
+      }
+      // the whole camera through the real frame path. dt ~0: the lagged lens/exposure/TAA
+      // state barely moves, so the title is not left focused or exposed for the seabed. The
+      // readback makes the GPU process finish this camera before the next: its pipeline
+      // builds are the point, and a queue of warm frames would only surface later as a stall.
+      frame1();
+      bootLog.push(['pose:' + P.name, +(performance.now() - tp).toFixed(1), renderer.info.programs.length, gl.getError()]);
+      if (window.__warmDiag !== undefined || /warmdiag/.test(location.search)) {
+        const seen = window.__wd || (window.__wd = new Set()), nn = {};
+        for (const pr of renderer.info.programs) if (!seen.has(pr)) { seen.add(pr); const k = pr.name + ':' + (pr.cacheKey.split(',').slice(0, 3).join(',')); nn[k] = (nn[k] || 0) + 1; }
+        bootLog.push(['new@' + P.name, JSON.stringify(nn)]);
+      }
+      acc += w;
+      onProgress(acc);
+      await paintGap();
+    }
+  } finally {
+    F.restore();
+    sun.castShadow = shadow0;
+    deckSpawn(player.pos); player.yaw = DECK_SPAWN_YAW;
+    settleAfterWarm();
+  }
+}
+async function bootTail() {
+  // 1. the zone-0 sleeper and the five ward lights
+  LOAD.stage(0.19, 0.23, 'SOMETHING SLEEPS BELOW');
+  await bootStep('sleeper', 'SOMETHING SLEEPS BELOW');
+  enterZone(0, true);
+  // 2 + 3. physics and the sculpted sets, together
+  LOAD.stage(0.23, 0.30, 'SEWING THE DRESS');
+  await bootStep('assets');
+  physicsStarted = true;
+  const extra = [
+    { name: 'physics', line: 'WEIGHTING THE BOOTS', done: false, p: null },
+    { name: 'props', line: 'STOWING THE GEAR', done: false, p: null }
+  ];
+  extra[0].p = initPhysics(0).catch(() => {}).then(() => { extra[0].done = true; });
+  extra[1].p = Promise.resolve(propsP).catch(() => {}).then(() => { extra[1].done = true; });
+  const rows = () => sculptedLedger().map(r => ({ name: r.name, line: ASSET_LINE[r.name] || 'TAKING ON STORES', done: r.done, p: r.p })).concat(extra);
+  await waitRows(rows, 60000);
+  // Sal's install can fetch a second set (the rigid fallback) after the first resolves
+  { const t0 = performance.now(); const S = window.__salSculpt;
+    while (S && S.state && S.state().reason === 'loading' && performance.now() - t0 < 8000) { await waitRows(rows, 8000); await sleep(30); } }
+  // 4. the plant batches: drain plantKit's queue at full speed, then its own compile
+  LOAD.stage(0.30, 0.32, 'TYING THE KELP');
+  await bootStep('plants');
+  { const t0 = performance.now(), P = window.__plants;
+    while (P && performance.now() - t0 < 30000) {
+      const st = P.state();
+      if (st.state === 'ready' || st.state === 'failed' || st.state === 'dead' || st.state === 'off') break;
+      const tb = performance.now();
+      while (performance.now() - tb < 24) { plantTick(); if (P.state().state !== 'loaded') break; }
+      const q = P.state();
+      if (q.queueMax) LOAD.part(1 - q.queue / q.queueMax);
+      await paintGap();
+    } }
+  // 5. the audio engine's buffers, at the rates a context is likely to open at
+  LOAD.stage(0.32, 0.35, 'PRIMING THE PUMP');
+  await bootStep('audio');
+  for (const sr of [48000, 44100]) { prebakeAudio(sr); LOAD.part(sr === 48000 ? 0.5 : 1); await paintGap(); }
+  // 6. the compile: the deck's shadow state, then the column's
+  LOAD.stage(0.35, 0.45, 'GRINDING THE GLASS');
+  await bootStep('compile');
+  const t0 = performance.now();
+  const programs0 = renderer.info.programs.length;
+  const compileAt = async (castShadow) => {
+    const was = sun.castShadow; sun.castShadow = castShadow;
+    try {
+      await precompile(f => LOAD.part(f), paintGap)
+        .catch(e => { console.warn('ABYSSA: compileAsync failed, compiling synchronously', e); return warmUp(); });
+    } finally { sun.castShadow = was; }
+  };
+  await compileAt(true);
+  LOAD.stage(0.45, 0.50, 'TEMPERING THE LIGHT');
+  await bootStep('compile-dark');
+  await compileAt(false);
+  // 7. warm-up frames from the first minutes' cameras
+  LOAD.stage(0.50, 0.94, 'SOUNDING THE DEPTHS');
+  await bootStep('warm');
+  await warmFrames(f => LOAD.part(f));
+  console.info(`ABYSSA: ${renderer.info.programs.length} shader programs (${renderer.info.programs.length - programs0} at boot) compiled and warmed in ${(performance.now() - t0).toFixed(0)} ms`);
+  // 8. the title's settle frames, then 100 (boot())
+  LOAD.stage(0.94, 1.0, 'TRIMMING THE LAMPS');
+  await bootStep('title');
+  setMaster(muteSaved ? 0 : MASTER_VOL);
+  clock.getDelta();   // the boot is not a frame
+  frame();
+}
+window.__boot = { log: () => bootLog.slice(), total: 0 };
+bootTail().catch(e => bootFail(e));
 
 // DEV: THE PERF HARNESS (src/lib/bench.js, ?lab or ?bench): a fixed-step offscreen loop
 // that steps the REAL update + render back to back, owning the frame while it runs.

@@ -66,12 +66,21 @@ export function bcSupported() {
 }
 
 const CACHE = new Map();
+// THE LOADER'S LEDGER (roadmap/loading-and-hitches.md): every set ever asked for, in request
+// order, with its promise and whether it has landed. game.js's boot waits on the ones asked
+// for by then (the creature modules ask at import, so that is all of the first minutes'),
+// moving the loading bar as each lands, so nothing installs, uploads or compiles after it.
+const LEDGER = [];
+export function sculptedLedger() { return LEDGER; }
 export function loadSculpted(base, name) {
   // keyed by base AND name (plants2: a partial rebake lives beside its full asset)
   const key = base + '|' + name;
   if (CACHE.has(key)) return CACHE.get(key);
   const p = load(base, name).catch(e => { console.warn('ABYSSA: sculpted asset ' + base + ' unavailable, keeping the procedural build', e && e.message); return null; });
   CACHE.set(key, p);
+  const row = { name, base, p, done: false };
+  p.then(() => { row.done = true; });
+  LEDGER.push(row);
   return p;
 }
 

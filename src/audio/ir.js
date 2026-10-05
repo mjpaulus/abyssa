@@ -70,9 +70,27 @@ export const SPACES = {
 
 const LN1000 = 6.907755;
 
+// PREBAKE (roadmap/loading-and-hitches.md): the response is pure DSP on (sample rate, spec,
+// seed), so the loader computes it before the click (engine.js prebakeAudio, at the likely
+// rates) and the context the click creates only copies it into its buffers. Same floats,
+// same order of operations: a baked IR is bit-identical to one made at the click.
+const BAKED = new Map();
 export function makeIR(ctx, spec, seed = 1) {
-  const sr = ctx.sampleRate, n = Math.max(64, Math.floor(sr * spec.dur));
-  const buf = ctx.createBuffer(2, n, sr);
+  const ch = irData(ctx.sampleRate, spec, seed), n = ch[0].length;
+  const buf = ctx.createBuffer(2, n, ctx.sampleRate);
+  buf.copyToChannel(ch[0], 0); buf.copyToChannel(ch[1], 1);
+  return buf;
+}
+export function irData(sr, spec, seed = 1) {
+  const key = sr + '|' + seed + '|' + spec.dur + '|' + spec.rt.join(',') + '|' + spec.x.join(',');
+  let got = BAKED.get(key);
+  if (!got) { got = irBake(sr, spec, seed); BAKED.set(key, got); }
+  return got;
+}
+function irBake(sr, spec, seed) {
+  const n = Math.max(64, Math.floor(sr * spec.dur));
+  const ch = [new Float32Array(n), new Float32Array(n)];
+  const buf = { getChannelData: c => ch[c] };
   const aLo = 1 - Math.exp(-2 * Math.PI * spec.x[0] / sr);
   const aHi = 1 - Math.exp(-2 * Math.PI * spec.x[1] / sr);
   const kLo = LN1000 / (spec.rt[0] * sr), kMid = LN1000 / (spec.rt[1] * sr), kHi = LN1000 / (spec.rt[2] * sr);
@@ -130,5 +148,5 @@ export function makeIR(ctx, spec, seed = 1) {
     const f = Math.min(n, Math.floor(sr * 0.02));
     for (let i = 0; i < f; i++) d[n - 1 - i] *= i / f;
   }
-  return buf;
+  return ch;
 }

@@ -1486,6 +1486,55 @@ export function warmUp() {
   warmUpSky();
   return renderer.info.programs.length;
 }
+// THE LOADER'S COMPILE (roadmap/loading-and-hitches.md). The boot warm-up, split per
+// top-level branch of the scene so the loading bar moves with it: each branch's programs are
+// ISSUED (three's JS side + gl.compileShader; yields a paint every ~24 ms of it) and then
+// awaited together (KHR_parallel_shader_compile finishes them off the main thread).
+// Compiled against the scene's own lights, so it is called once per shadow-count state the
+// first minutes visit (game.js toggles the sun's castShadow between calls). Hidden objects
+// are compiled too (made visible for the pass; lights are never touched, so the light set
+// compiled against is the one that renders). onProgress(0..1); yieldFn() -> Promise.
+export async function precompile(onProgress, yieldFn) {
+  const hidden = [];
+  scene.traverse(o => { if (!o.visible && !o.isLight) { hidden.push(o); o.visible = true; } });
+  const kids = scene.children.filter(o => !o.isLight);
+  let issued = 0, done = 0;
+  const tick = () => onProgress && onProgress(0.5 * issued / kids.length + 0.5 * done / kids.length);
+  try {
+    const all = [];
+    let t = performance.now();
+    // THE TARGET IS PART OF THE KEY. three picks a program's output colour space and tone
+    // mapping from the render target bound when it is built: with none bound (the canvas) it
+    // builds the sRGB + ACES variant, which no scene draw ever uses -- every draw lands in
+    // the composer's linear HalfFloat buffer or the refraction target. Measured: the old boot
+    // compile built the canvas variants, and the real ones (~270) were all built by the first
+    // frames that drew them. So the issue runs with the composer's input buffer bound.
+    const prevRT = renderer.getRenderTarget();
+    for (const c of kids) {
+      renderer.setRenderTarget(composer.inputBuffer);
+      let p;
+      try { p = renderer.compileAsync(c, camera, scene); } finally { renderer.setRenderTarget(prevRT); }
+      all.push(p.then(() => { done++; tick(); }, () => { done++; tick(); }));
+      issued++; tick();
+      if (yieldFn && performance.now() - t > 24) {
+        // a yield hands the frame to the browser, which may run a game frame's worth of
+        // nothing (the loop is not started yet) -- but the hidden objects must stay drawn
+        // for the compile only, so they stay visible across the gap (nothing renders)
+        await yieldFn(); t = performance.now();
+      }
+    }
+    await Promise.all(all);
+  } finally { for (const o of hidden) o.visible = false; }
+  if (raysPass) raysPass.warmUp(renderer);
+  warmUpSky();
+  return renderer.info.programs.length;
+}
+// After the loader's warm-up frames (rendered from cameras the title never uses): drop the
+// temporal history and re-seat the auto-exposure, so the title's first frames start clean.
+export function settleAfterWarm() {
+  if (expPass) expPass.reset(renderer);
+  if (taaPass) taaPass.reset('warm');
+}
 // The same warm-up, asynchronous: r184's compileAsync uses KHR_parallel_shader_compile
 // where the driver has it, so the boot loader covers the compile without the main
 // thread stalling on each program. Rejects where unsupported; game.js falls back.
