@@ -216,6 +216,8 @@ export function chime(E, freq, dur = 1.2, vol = 0.25, kind = null) {
   let f, tail, v = vol * 0.55, parts = BELL, strike = 0.05;
   switch (kind) {
     case 'pickup': f = snap(E, freq); brassTap(E, t, f, v * KM.CH.pickup); E.log('chime', kind, f); return;
+    // a ward a rule holds cold answers a touch with a dead iron knock, never its bell (fifth-ward)
+    case 'cold': f = snap(E, freq); brassTap(E, t, f, v * KM.CH.pickup * 0.9); E.log('chime', kind, f); return;
     case 'craft': f = snap(E, freq); metalClack(E, t, f, v * KM.CH.craft); E.log('chime', kind, f); return;
     case 'ward': f = degFreq(E, SIGIL_BASE + MOTIF[D.sigil % MOTIF.length]); D.sigil++; tail = 1.5; v *= KM.CH.ward; break;
     case 'calm': case 'chord': case 'ending':

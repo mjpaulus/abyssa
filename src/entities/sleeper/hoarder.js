@@ -61,7 +61,7 @@ if (typeof window !== 'undefined') setTimeout(sculpt, 2500);
 const TAU = Math.PI * 2;
 const smooth = THREE.MathUtils.smoothstep;
 const RM_OF_SIZE = 0.95, ARM_OF_SIZE = 5.0, NA = 8, RINGS = 40, RR = 128, RAD = 28, SUCK = 36;
-const WARD_ARMS = [0, 2, 4, 6], WARD_S = 0.22;
+const WARD_ARMS = [0, 2, 4, 6], WARD_S = 0.22, FIFTH_ARM = 7;
 // Her own light: a cold, pale, sea-green phosphor (period-correct foxfire, never violet),
 // and the hoard's warm lamp-flame she lies among.
 const ORUNE_PHOTO = 0x8fb49a, FLAME = 0xff8e3c, WARD_COL = 0xffe8a8;
@@ -362,8 +362,14 @@ export function makeHoarder(idx, cfg) {
   // ---- wards on the sucker faces of four arms ----
   for (let i = 1; i <= c.nSigils; i++) {
     const w = makeWard(L, i, 3.4);
-    w.arm = WARD_ARMS[(i - 1) % WARD_ARMS.length];
-    w.s = WARD_S + 0.06 * Math.floor((i - 1) / WARD_ARMS.length);
+    // (fifth-ward) a fifth ward (Pallid Bank, the Burned Ground, the Shelf) used to ride arm 0
+    // again at s + 0.06: 1.3 u from ward 1 (the remembered one), so it read as the same ward
+    // and lit with it. It takes arm 7 now, the free arm fanned on the silt beside arm 0,
+    // further out (s 0.40: the arms converge at the mantle, and at 0.22 it sat 4.4 u from
+    // ward 1, ring to ring; at 0.40 it stands 6-7 u off its neighbours, near the others' ~8).
+    const fifth = i > WARD_ARMS.length;
+    w.arm = fifth ? FIFTH_ARM : WARD_ARMS[i - 1];
+    w.s = fifth ? 0.40 : WARD_S;
     w.rev = 0;                                                    // dark until the sonar rings them
     L.sigils.push(w);
   }

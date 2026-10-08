@@ -335,6 +335,58 @@ function setBearing(el, tx, ty, tz, show) {
   el.querySelector('.dst').textContent = dist + ' m' + vert;
 }
 
+// THE WARD TALLY (roadmap/fifth-ward.md). How many wards remain used to live only in a
+// 2.5 s line ("TWO WARDS DARK") at the bottom of a one-slot message queue, which any slam,
+// tear or lantern line replaced, so a diver could light a ward, be hit, and never learn
+// the count; and the brood rule held Velkath's last ward cold with nothing on screen to
+// say so. Now the sleeper's own bearing mark carries a row of pips, one per ward: hollow
+// = dark, gold = lit (a fresh one swells as it takes), amber = the ward a past calm
+// remembers, a dashed cold ring = the last ward while an egg is out of the nest, with the
+// count and the reason beside them. Rebuilt only when the state changes (an integer key),
+// so the frame cost is a loop over at most five wards.
+const $tally = document.createElement('div');
+$tally.className = 'tally';
+$bm.lev.appendChild($tally);
+let tallyKey = -1, tallyLit = 0, tallyNoT = 0;
+function eggsOut(L) {
+  const B = L && L.brood;
+  if (!B) return 0;
+  let n = 0;
+  for (let k = 0; k < B.eggs.length; k++) if (!B.eggs[k].inNest) n++;
+  return n;
+}
+function updateTally(dt) {
+  if (tallyNoT > 0 && (tallyNoT -= dt) <= 0) $tally.classList.remove('refuse');
+  const S = lev && lev.sigils;
+  if (!S || !S.length) { if (tallyKey !== 0) { tallyKey = 0; $tally.textContent = ''; } return; }
+  let key = S.length, litMask = 0, dark = 0;
+  for (let i = 0; i < S.length; i++) {
+    const g = S[i];
+    key = key * 3 + (g.mem ? 2 : g.lit ? 1 : 0);
+    if (g.lit && !g.mem) litMask |= 1 << i;
+    if (!g.lit) dark++;
+  }
+  const held = dark === 1 && eggsOut(lev) > 0;
+  key = key * 2 + (held ? 1 : 0);
+  if (key === tallyKey) return;
+  tallyKey = key;
+  // mem first, then lit in the order they took, then the dark ones (the cold one last)
+  let h = '';
+  for (let i = 0; i < S.length; i++) if (S[i].mem) h += '<i class="mem"></i>';
+  for (let i = 0; i < S.length; i++) if (S[i].lit && !S[i].mem) h += (litMask & ~tallyLit) & (1 << i) ? '<i class="on new"></i>' : '<i class="on"></i>';
+  for (let i = 0; i < S.length; i++) if (!S[i].lit) h += held ? '<i class="cold"></i>' : '<i></i>';
+  h += dark ? `<b>${dark} DARK${held ? ' · EGG OUT' : ''}</b>` : '';
+  tallyLit = litMask;
+  $tally.innerHTML = h;
+}
+// a held ward refused a touch: the dark pips shake once (game.js on ev.refused)
+function tallyRefuse() { $tally.classList.remove('refuse'); void $tally.offsetWidth; $tally.classList.add('refuse'); tallyNoT = 0.6; }
+// THE REMEMBERED WARD answers a touch (it is already counted, so it never lights again):
+// a warm swell through its own pose (common.js wardMemPose reads g.memPing), a soft spark
+// note, and, at most every 6 s, the line that says it is done and the rest are not.
+let memInR = false, memLineT = -1e9;
+const MSG_MEM_TOUCH = 'THIS WARD REMEMBERS YOUR HAND. LIGHT THE OTHERS.';
+
 // The direction he asks for: camera-relative WASD with the look pitch on W/S; nothing
 // asked = straight up. Written into `out` (module temp), unit length.
 function packDir(out) {
@@ -475,7 +527,7 @@ addEventListener('keydown', e => {
     const r = lev.rite.interact(player.pos);
     if (r) {
       if (r.took) chime(740, 2.2, 0.2, 'pickup');
-      else if (r.returned) chime(494, 2.4, 0.2, 'ward');
+      else if (r.returned) { chime(494, 2.4, 0.2, 'ward'); if (!r.out) { dropMsg(refuseLive); refuseLive = null; } }
       if (r.lamp) player.hasLamp = true;
       if (r.msg) showMsg(r.msg, 3);
       return;
@@ -544,18 +596,53 @@ addEventListener('mousedown', e => {
 // one WAITS for it (so 'SHE MAKES FOR...' is never clobbered by the arrival's sleeper
 // name); a higher one cuts in. The waiting slot keeps the more important of any two.
 // prio 0: names and colour. prio 1 (default): everything the player must read.
-let msgPrio = 0, msgPend = null;
+// (fifth-ward) The waiting room is a short QUEUE now, not one slot: with one slot every line
+// that arrived while another waited REPLACED it, so in a busy beat (a ward lit, a slam, the
+// dress tearing, the lantern guttering) the count, the brood rule's refusal and the sleepers'
+// own beats ('THE FIRE BLINDS HIM', 'THE WARDS OF ORUNE ANSWER THE PING') were silently lost.
+// Up to MSGQ_N lines wait, highest priority first and in arrival order within one; a line
+// already live or waiting is not queued twice; a line that has waited MSGQ_STALE seconds is
+// dropped unshown (old news). Allocation only when a line is said, never per frame.
+let msgPrio = 0;
+const msgQ = [], MSGQ_N = 3, MSGQ_STALE = 12;
+let msgClock = 0;   // game seconds (update's dt): staleness must not run on wall time
+function queueMsg(text, dur, prio, front) {
+  for (let i = 0; i < msgQ.length; i++) if (msgQ[i].text === text) return;
+  let i = msgQ.length;
+  if (front) { i = 0; while (i < msgQ.length && msgQ[i].prio > prio) i++; }
+  else while (i > 0 && msgQ[i - 1].prio < prio) i--;
+  msgQ.splice(i, 0, { text, dur, prio, at: msgClock });
+  if (msgQ.length > MSGQ_N) msgQ.length = MSGQ_N;
+}
 function showMsg(text, dur = 4, prio = 1) {
   if (msgT > 0 && msgPrio >= prio) {
-    if (!msgPend || prio >= msgPend.prio) msgPend = { text, dur, prio };
+    if ($msg.textContent === text && msgT > 0.6) return;
+    queueMsg(text, dur, prio, false);
     return;
   }
+  // a higher line cutting in: the one it interrupts waits at the front of its rank (it was
+  // being read), unless it was nearly done
+  if (msgT > 1 && $msg.classList.contains('on') && $msg.textContent !== text) queueMsg($msg.textContent, Math.max(1.5, msgT), msgPrio, true);
   $msg.textContent = text;
   $msg.classList.add('on');
   msgT = dur; msgPrio = prio;
 }
+// the next line that is still news, or null
+function nextMsg() {
+  while (msgQ.length && msgClock - msgQ[0].at > MSGQ_STALE) msgQ.shift();
+  return msgQ.length ? msgQ.shift() : null;
+}
+// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the egg is
+// back, the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
+// whatever waits behind it shows; a waiting copy is struck too.
+function dropMsg(text) {
+  if (!text) return;
+  if (msgT > 0.01 && $msg.textContent === text) msgT = 0.01;
+  for (let i = msgQ.length - 1; i >= 0; i--) if (msgQ[i].text === text) msgQ.splice(i, 1);
+}
+let refuseLive = null, countLive = null, knockT = -1e9, stunWas = false, ringWas = false;
 // Probe surface: what is live, what waits.
-window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPrio, pend: msgPend && msgPend.text });
+window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPrio, pend: msgQ.length ? msgQ[0].text : null, queue: msgQ.map(q => q.text) });
 
 // Remote anchorages carry hand-authored sleeper rows: more wards, a hue nudge, an
 // epithet in the previous chart-owner's ink. Home passes undefined and is untouched.
@@ -1576,15 +1663,17 @@ function pollGamepad(dt) {
 
 function update(dt, t) {
   if (prof) pmT = performance.now();
+  msgClock += dt;
   if (msgT > 0) {
     msgT -= dt;
     if (msgT <= 0) {
       if ($msg.classList.contains('on')) {
         // the live line fades; if one waits, hold the slot (at ITS priority) for the fade
         $msg.classList.remove('on');
-        if (msgPend) { msgT = 0.5; msgPrio = msgPend.prio; }
-      } else if (msgPend) {
-        const p = msgPend; msgPend = null; showMsg(p.text, p.dur, p.prio);
+        if (msgQ.length) { msgT = 0.5; msgPrio = msgQ[0].prio; }
+      } else {
+        const p = nextMsg();
+        if (p) showMsg(p.text, p.dur, p.prio);
       }
     }
   }
@@ -1844,7 +1933,29 @@ function update(dt, t) {
     // big blows startle the reef too (footfalls already reach it through stir.js)
     if (ev.quake > 0.3 && lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, Math.min(1, ev.quake + 0.3), P_SLAM);
     if (ev.plume) stirPulse(ev.plumeX, ev.plumeY, ev.plumeZ, 30, 0, Math.min(1, 0.5 + 0.5 * ev.plume), P_SLAM);   // the Brooder's sand plume startles the reef where it rises
-    if (ev.msg) showMsg(ev.msg, 4);
+    // (fifth-ward) the sleeper telling him its rule ('THE FIRE BLINDS HIM...', 'THE WARDS OF
+    // ORUNE ANSWER THE PING.') ranks with the ward lines: at prio 1 the counts starved it
+    if (ev.msg) showMsg(ev.msg, 4, 2);
+    // (fifth-ward) a held ward refused a touch: a dead iron knock, the pips shake, and the
+    // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
+    // (one knock per 0.6 s per sleeper: a strike pass sweeps several held wards at once)
+    if (ev.refused) { if (t - knockT > 0.6) { knockT = t; chime(98, 1, 0.32, 'cold'); tallyRefuse(); } ev.refused = 0; }
+    // (prio 3: it answers the hand that just touched; the count it supersedes is on the tally)
+    if (ev.refuseMsg) { dropMsg(countLive); countLive = null; showMsg(ev.refuseMsg, 4.5, 3); refuseLive = ev.refuseMsg; ev.refuseMsg = null; }
+    // the refusal's reason went away: Mhor hangs stunned, or Orune's wards ring
+    const stunNow = lev.state === 'stunned', ringNow = !!(lev.sonarWards && lev.reveal > 0);
+    if ((stunNow && !stunWas) || (ringNow && !ringWas)) { dropMsg(refuseLive); refuseLive = null; }
+    stunWas = stunNow; ringWas = ringNow;
+    if (lev.memWard >= 0 && !lev.calmed && !lev.dormant) {
+      const g = lev.sigils[lev.memWard];
+      const inR = !!(g && g.mem && g.grp.position.distanceTo(player.pos) < (lev.reach || 5));
+      if (inR && !memInR) {
+        g.memPing = 0;
+        chime(523, 1.2, 0.12, 'spark');
+        if (t - memLineT > 6) { memLineT = t; showMsg(MSG_MEM_TOUCH, 4, 2); }
+      }
+      memInR = inR;
+    } else memInR = false;
     if (ev.lightDrain) player.light -= ev.lightDrain;
     if (ev.inkDim) inkBlind = 1;   // Orune answers the light with ink (hoarder.js)
     if (ev.slam) {
@@ -1860,9 +1971,18 @@ function update(dt, t) {
     }
     slamWas = ev.slam;
     if (ev.sigilLit) {
+      dropMsg(refuseLive); refuseLive = null;
       chime(ev.sigilLit, 2, 0.3, 'ward');
       shake = 0.6;
-      if (ev.remaining > 0) showMsg((COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), 2.5);
+      // (fifth-ward) the count at priority 2: a slam or a tear in the same breath used to
+      // replace it in the queue's one pending slot. And when the one ward left is the one
+      // the brood rule will hold, say so NOW, before he swims to it.
+      if (ev.remaining > 0) {
+        const held = ev.remaining === 1 && eggsOut(lev) > 0;
+        dropMsg(countLive);   // only the newest count is news
+        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE AN EGG IS OUT OF THE NEST.'
+          : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);
+      }
     }
     if (ev.calmed) {
       chartRec[currentSiteIndex()][zone] = 1;
@@ -1873,7 +1993,7 @@ function update(dt, t) {
       // say so NOW with the real numbers, not 55% of the way down the rift.
       showMsg(zone === 2 ? 'ALL WARDS LIT. THE LAST SLEEPER STILLS. THE RIFT WAITS.'
         : canDescendTo(zone + 1) ? 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.'
-        : `IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6);
+        : `IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6, 2);
       chime(262, 3, 0.3, 'calm'); chime(330, 3, 0.25, 'calm'); chime(392, 3, 0.25, 'calm');
     }
   }
@@ -2010,7 +2130,7 @@ function update(dt, t) {
   if (state === 'play') {
     if (!tips.dress && player.pos.y < -8) {
       tips.dress = 1; showMsg('AIR IN THE DRESS LIFTS YOU. THE PACK\'S BURST FILLS IT, [C] VENTS IT.', 5);
-    } else if (!tips.pack && player.pos.y < -14 && tips.dress && msgT <= 0 && !msgPend) {
+    } else if (!tips.pack && player.pos.y < -14 && tips.dress && msgT <= 0 && !msgQ.length) {
       // (in silence: the queue holds one line, and this one must not bump the dress's)
       tips.pack = 1; showMsg('THE AIR PACK: TAP [SPACE] TO HOP. HOLD IT TO BURST. THE PUMP REFILLS THE RESERVE.', 6);
     } else if (!tips.swollen && player.fill > 0.97 && player.vel.y > 2) {
@@ -2216,6 +2336,7 @@ function update(dt, t) {
   setBearing($bm.rift, rp ? rp.x : 0, rp ? terrainH(rp.x, rp.z, zone) : 0, rp ? rp.z : 0, !!(rp && lev && lev.calmed));
   // the active target carries the bright tick: the sleeper until it stills, then the rift
   $bm.lev.classList.toggle('active', levShown);
+  if (levShown) updateTally(dt);
   $bm.rift.classList.toggle('active', !!(rp && lev && lev.calmed));
   // low-air vignette breathes in once the tank drops below a third
   $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
@@ -2748,7 +2869,7 @@ if (/[?&]playtest(?:[=&#]|$)/.test(location.search)) import('./ui/playtest.js').
   // No lingering lines: the message slot and its queue cleared, the one-shot onboarding
   // beats marked said (a tester has read them; they would fire over every arrival).
   hush() {
-    msgT = 0; msgPend = null; msgPrio = 0; $msg.classList.remove('on');
+    msgT = 0; msgQ.length = 0; msgPrio = 0; $msg.classList.remove('on');
     for (const k in tips) tips[k] = 1;
     deckTip = 1; pendingWards = false; memPending = null; zoneTime = 0;
   }

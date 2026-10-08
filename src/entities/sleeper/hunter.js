@@ -26,7 +26,7 @@ import { wreckSites } from '../../world/wrecks.js';
 import { survival } from '../../systems/survival.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
-  rememberWard, wardMemPose, wardsRecall
+  rememberWard, wardMemPose, wardsRecall, wardRefuse, MSG_NOT_STILL
 } from './common.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { lendVentLight } from '../../world/vents.js';
@@ -687,7 +687,11 @@ export function makeHunter(idx, cfg) {
   }
 
   // ---- wards: five on the mantle, kept by the squid (the zone-2 rule) ----
-  const WS = [[0.10, 0.25], [-0.10, 0.40], [0.10, 0.55], [-0.10, 0.68], [0, 0.32]];
+  // (fifth-ward) the fifth used to sit on the dorsal MIDLINE at s 0.32 (side 0): inside the
+  // barrel (its glyph 0.25-0.48 u under the hide, measured) and 4.2 u from the first ward,
+  // so it lit unseen as a side effect of that one. It continues the zig-zag forward now, on
+  // the head end's flank, proud of the hide like the others and >= 8.8 u from every one.
+  const WS = [[0.10, 0.25], [-0.10, 0.40], [0.10, 0.55], [-0.10, 0.68], [-0.10, 0.10]];
   for (let i = 1; i <= c.nSigils; i++) {
     const w = makeWard(L, i, 3.6);
     const [side, s] = WS[(i - 1) % WS.length];
@@ -1287,7 +1291,7 @@ export function updateHunter(L, dt, t, player) {
         g.light.userData.scatter = 0.14;
         L.guardWards = false; wardTouch(L, i, g, player, ev); L.guardWards = true;
       }
-      else if (!L.hinted && g.grp.position.distanceTo(player.pos) < L.reach) { L.hinted = true; ev.msg = ev.msg || 'HE WILL NOT HOLD STILL. NOT OUT HERE IN THE DARK.'; }
+      else wardRefuse(L, g, player, ev, MSG_NOT_STILL);   // (fifth-ward) every touch answers
     }
     // the keepers ride his wards — except in the fire, which scatters the shoal
     if (L.state === 'stunned') setWardTargets(-1, null); else setWardTargets(L.idx, L.sigils);
