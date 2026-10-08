@@ -5,6 +5,7 @@
 import { connect, sleep } from './drv.mjs';
 const c = await connect();
 const OUT = '/Users/michaelpaulus/sc/.abyssa-wt/shots/brooderfix-rite-';
+await c.ev(`(localStorage.removeItem('abyssa.chart.v1'), 1)`).catch(() => 0);   // a first rite: no remembered ward
 await c.send('Page.reload', { ignoreCache: true });
 await sleep(1500);
 await c.until(`!document.getElementById('load') && typeof window.start === 'function'`, 240000, 500);
@@ -38,7 +39,7 @@ async function steerTo(expr, near, ms, keys = ['KeyW']) {
 }
 const darkWard = `(() => { const L = __sl, p = player.pos; let b = null, bd = 1e9; for (const g of L.sigils) { if (g.lit) continue; const d = Math.hypot(g.grp.position.x - p.x, g.grp.position.z - p.z); if (d < bd) { bd = d; b = g; } } return b ? [b.grp.position.x, b.grp.position.z] : null; })()`;
 // wards: up to 4 tries
-for (let k = 0; k < 4; k++) {
+for (let k = 0; k < 6; k++) {
   const s = await st(); console.log('ward try', k, JSON.stringify(s));
   if (!s.lit.includes('0') || s.calmed) break;
   const before = s.lit;
@@ -50,7 +51,7 @@ for (let k = 0; k < 4; k++) {
   await snap('ward-' + k);
   await c.key('KeyC', true); await sleep(1500); await c.key('KeyC', false);
   const s2 = await st(); console.log(' after', JSON.stringify(s2));
-  if (s2.lit === before && k >= 1) break;                   // the brood rule refuses: go and set the egg back
+  if (s2.lit === before && (await c.ev(`__msgs.some(m => /WILL NOT TAKE|COLD/.test(m))`))) break;   // the brood rule refuses: set the egg back
 }
 // back to the nest, set the egg back
 console.log('to nest', JSON.stringify(await st()));
@@ -65,6 +66,7 @@ for (let i = 0; i < 14; i++) { await sleep(2000); if (i % 3 === 0) await snap('h
 await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(L.pos.x - p.x, L.pos.z - p.z); return 1; })()`);
 await sleep(1500); await snap('home-look');
 console.log('end', JSON.stringify(await st()));
+await c.ev(`(localStorage.removeItem('abyssa.chart.v1'), 1)`);
 console.log('msgs', JSON.stringify(await c.ev(`__msgs`)));
 const rl = await c.ev(`__rl`);
 const calmIdx = rl.findIndex(r => r[3]);
