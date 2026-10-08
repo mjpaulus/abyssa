@@ -47,7 +47,10 @@ await ev(`(async () => {
   const R = window.__rec = { seg: 'idle', log: [], on: true, shots: [], shotOn: false, shotLast: 0, shotEvery: +(${SHOT_MS}), crop: ${process.env.CROP || '[0, 0, 1, 1]'}, sc: ${process.env.SC || 0.25}, side: ${+(process.env.SIDE || 0)} };
   const cv2 = document.createElement('canvas'), cx2 = cv2.getContext('2d');
   let lt = performance.now();
-  const sv = new V();
+  const sv = new V(), tv = new V();
+  // trunk pitch off vertical along his heading, deg (+ = over into the travel): hips -> neck, world
+  const trunk = () => { D.diver.hips.getWorldPosition(tv); D.diver.neck.getWorldPosition(sv); sv.sub(tv);
+    const p = P.player, f = sv.x * Math.sin(p.yaw) + sv.z * Math.cos(p.yaw); return +(Math.atan2(f, sv.y) * 57.3).toFixed(1); };
   // both hands through the game camera, in canvas CSS pixels (what the player sees move)
   const scr = () => { const cam = window.camera, cv = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0], w = cv.clientWidth, h = cv.clientHeight, o = [];
     for (const arm of [D.diver.armL, D.diver.armR]) { arm.end.getWorldPosition(sv); sv.project(cam); o.push(+((sv.x * 0.5 + 0.5) * w).toFixed(1), +((-sv.y * 0.5 + 0.5) * h).toFixed(1)); }
@@ -64,7 +67,7 @@ await ev(`(async () => {
         +(p.jet || 0).toFixed(2), +(p.burstT || 0).toFixed(2), +p.swimP.toFixed(4), +Math.hypot(p.vel.x, p.vel.z).toFixed(2),
         +(p.vel.x * sy + p.vel.z * cy).toFixed(2), +p.vel.y.toFixed(2), p.scullZ || 0,
         +a.x.toFixed(3), +a.y.toFixed(3), +a.z.toFixed(3), +b.x.toFixed(3), +b.y.toFixed(3), +b.z.toFixed(3),
-        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr(), ...(window.__swimState && window.__swimState().layDeg !== undefined ? (() => { const q = window.__swimState(); return [q.layDeg, q.bankDeg, q.legLay]; })() : [0, 0, 0])]);
+        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr(), ...(window.__swimState && window.__swimState().layDeg !== undefined ? (() => { const q = window.__swimState(); return [q.layDeg, q.bankDeg, q.legLay]; })() : [0, 0, 0]), trunk()]);
     }
     if (R.side) {   // a side lens that rides with him (SIDE=1): checks the stroke's shape, not the game view
       const sy = Math.sin(p.yaw), cy = Math.cos(p.yaw), q = p.pos;
