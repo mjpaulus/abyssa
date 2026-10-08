@@ -21,7 +21,7 @@ import { terrainH, terrainMeshes } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard,
-  rememberWard, wardMemPose, wardsRecall
+  rememberWard, wardMemPose, wardsRecall, wardRefuse, MSG_BROOD_COLD
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
@@ -1598,10 +1598,8 @@ export function updateBrooder(L, dt, t, player) {
           for (const q of L.sigils) if (!q.lit) dark++;
           const last = dark === 1;
           if (last && L.brood && L.brood.out() > 0) {
-            if (g.grp.position.distanceTo(player.pos) < L.reach * 1.2 && !L.broodHint) {
-              L.broodHint = true;
-              ev.msg = ev.msg || 'THE LAST WARD IS COLD. SHE WILL NOT STILL WHILE HER BROOD IS OUT.';
-            }
+            // (fifth-ward) every touch answers: a cold spark, a dead knock, the line (common.js)
+            wardRefuse(L, g, player, ev, MSG_BROOD_COLD);
           } else if (last && L.brood && L.sigils.length > 1 && !ev.sigilLit) {
             lightWard(L, g, ev);
           } else wardTouch(L, i, g, player, ev);
