@@ -49,13 +49,13 @@ import { updateAbyss } from './world/abyss.js';
 import { buildFauna, updateFauna, reseedFauna } from './world/fauna.js';   // FAUNA PATCH
 import { initTools, updateTools, sonarPing, fireSpear, fireThruster, setThrusterJet, setToolsLanternPos } from './systems/tools.js';
 import { initWeather, updateWeather } from './systems/weather.js';
-import { startEnding, updateEnding } from './ending.js';
+import { startEnding, updateEnding, abortEnding } from './ending.js';
 import { setSite, currentSite, currentSiteIndex, siteAt } from './world/site.js';
 import { openChart, closeChart, isChartOpen } from './ui/chartOverlay.js';
 import { sculptedLedger } from './lib/assets.js';
 import { plantTick } from './world/plants/plantKit.js';
 import { prebakeAudio } from './audio/engine.js';
-import { startPassage, updatePassage, setPassageSound, PT as PASSAGE_T, PEV_RESEED, PEV_BELL, PEV_DONE } from './ui/passage.js';
+import { startPassage, updatePassage, setPassageSound, endPassage, PT as PASSAGE_T, PEV_RESEED, PEV_BELL, PEV_DONE } from './ui/passage.js';
 // dev look-dev hooks are live only under ?lab (the lab's own flag)
 const DEV_CAMPIN = typeof location !== 'undefined' && location.search.includes('lab');
 
@@ -275,6 +275,7 @@ const FUEL_RESCUE = 0.5;
 const _burst = V3();
 window.__pack = pack;   // probe: taps / holds / dry counts, live ramp (player.jet is the thrust)
 let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
+let rescueT = 0;                        // the haul back to the deck after a drowning (a timer; the playtest jumps cancel it)
 let lev = null, zone = -1;
 const lanternPos = V3();
 let lightDip = 0, lightK = 1, slamWas = false, inkBlind = 0;   // inkBlind: Orune's ink smothering the lantern   // hit feedback on the light (see the lantern block)
@@ -2011,7 +2012,8 @@ function update(dt, t) {
     state = 'dead';
     clearKeys();
     showMsg('YOUR AIR RAN OUT', 4);
-    setTimeout(() => {
+    rescueT = setTimeout(() => {
+      rescueT = 0;
       // BACK ON THE DECK, not floating under the raft. The tenders hauled him up and
       // stood him on his feet; the dive starts again the way it started the first time,
       // by stepping over the side. Same pose as start().
@@ -2676,6 +2678,66 @@ if (/[?&](lab|bench)/.test(location.search)) import('./lib/bench.js').then(B => 
   where: () => ({ zone, pos: player.pos.toArray(), yaw: player.yaw, cam: camera.position.toArray(), rift: [0, 1, 2].map(i => riftPos(i)),
     lev: lev && lev.head ? lev.head.toArray() : null })
 })).catch(e => console.warn('bench: ' + e));
+
+// DEV: THE PLAYTEST JUMPS (src/ui/playtest.js, roadmap/playtest-jumps.md): Alt+digit to each
+// scenario on Michael's checklist, through the game's own paths. Only under ?playtest: a
+// normal load never fetches the module, adds no listener and builds no DOM. The hooks are
+// the few game.js-private moves a jump needs; everything else it reads from the modules.
+if (/[?&]playtest(?:[=&#]|$)/.test(location.search)) import('./ui/playtest.js').then(P => P.installPlaytest({
+  get state() { return state; },
+  get zone() { return zone; },
+  get lev() { return lev; },
+  deckSpawn: () => deckSpawn(player.pos),   // the dive's own spawn spot, on the deck's live plane
+  DECK_SPAWN_YAW,
+  // From ANY state into ordinary play, by the game's own exits: the title's start(); the
+  // chart put down; a passage cut (an unreseeded one arrives first, so the world is never
+  // half a voyage); the haul after a drowning cancelled (the jump stands him up instead);
+  // the ending taken down (abortEnding + the zone and the fauna re-run). Returns a note.
+  toPlay() {
+    let note = '';
+    if (isChartOpen()) closeChart();
+    if (state === 'title') start();
+    else if (state === 'voyage') {
+      endPassage();
+      if (!voyageDone) { voyageDone = true; reseedWorld(voyageTo); }
+      state = 'play'; voyageRing = 0; note = 'PASSAGE CUT SHORT';
+    } else if (state === 'dead') {
+      if (rescueT) { clearTimeout(rescueT); rescueT = 0; }
+      state = 'play'; note = 'THE HAUL SKIPPED';
+    } else if (state === 'won') {
+      abortEnding(); reseedFauna(); state = 'play'; inkBeat = false; note = 'THE RITE TAKEN DOWN';
+    }
+    clearKeys(); packReset();
+    return note;
+  },
+  enterZone: i => enterZone(i, true),   // quiet: the jump's own toast says where he is
+  reseedWorld: i => reseedWorld(i),
+  consultChart: () => consultChart(),
+  // After a jump has set player.pos / yaw: the rest of a respawn, as start() and the rescue
+  // do it — still, re-dressed at this depth, the pack shut, the line re-laid to him, the
+  // lens CUT behind him (never flown), the surface crossing not counted as a dive.
+  settle(onDeck, grounded) {
+    player.vel.set(0, 0, 0);
+    player.pitch = onDeck ? -0.05 : -0.12;
+    player.onDeck = onDeck; player.grounded = grounded; player.onLadder = false;
+    if (!onDeck) player.deckL.ok = false;
+    player.groundY = grounded ? player.pos.y : player.groundY;
+    player.stagger = 0;
+    resetSuit(player.pos.y);
+    packReset();
+    reseatTether(player);
+    snapCamBehind(onDeck);
+    camSnap = true; shake = 0; camKick = 0; camKickPunch = 0; lightDip = 0; inkBlind = 0;
+    wasAboveWater = player.pos.y > localSurfaceY();
+  },
+  // No lingering lines: the message slot and its queue cleared, the one-shot onboarding
+  // beats marked said (a tester has read them; they would fire over every arrival).
+  hush() {
+    msgT = 0; msgPend = null; msgPrio = 0; $msg.classList.remove('on');
+    for (const k in tips) tips[k] = 1;
+    deckTip = 1; pendingWards = false; memPending = null; zoneTime = 0;
+  }
+})).catch(e => console.warn('playtest: ' + e));
 
 // DEV: the weather/light lab. One guard, dynamic import — a normal load never fetches it.
 if (location.search.includes('lab')) import('./ui/lab.js').catch(e => console.warn('lab: ' + e));

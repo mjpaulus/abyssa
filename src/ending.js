@@ -398,6 +398,7 @@ let yawF = 0, pitchF = 0;
 
 export function startEnding() {
   buildOnce();
+  card.style.display = '';   // (abortEnding puts the card away entirely: it takes clicks)
   T = 0;
   startY = player.pos.y;
   startX = player.pos.x;
@@ -442,6 +443,28 @@ export function startEnding() {
   // fired at night gave 50 s of black water and a lantern. The STILL beat exists to hide
   // a cut, so the weather is scrubbed toward late morning under it (see updateEnding).
   dayScrub = -1;
+}
+
+// Take the rite down mid-flight and hand the frame back (the ?playtest jumps; a normal
+// game never calls this). Undoes what startEnding did to things outside this module that
+// game.js does not rebuild on its own: the HUD fade, the hidden umbilical, the card (which
+// takes clicks even while transparent). game.js re-runs the zone (predators, calm) and the
+// fauna layout. The silhouettes and bubbles go dark here; updateEnding no longer runs.
+export function abortEnding() {
+  if (T < 0) return false;
+  T = -1;
+  if (card) {
+    card.style.display = 'none'; card.style.opacity = '0';
+    for (const el of [cLine1, cRule, cLine2, cLine3, cHint]) el.style.opacity = '0';
+    cHint.classList.remove('on');
+  }
+  cardOn = l2 = l3 = hintOn = false;
+  if (bubbles) bubbles.visible = false;
+  for (const s of SLEEPERS) if (s.obj) { s.obj.grp.visible = false; s.obj.live = false; }
+  setTetherVisible(true);
+  const ui = document.getElementById('ui');
+  if (ui) { ui.style.transition = ''; ui.style.opacity = ''; }
+  return true;
 }
 
 // ---------------------------------------------------------------- force the rite to day
