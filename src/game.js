@@ -1713,6 +1713,9 @@ function updateCamera(dt, t, fwd) {
   const fovRate = camKickPunch > 0 && wantFov > camFov ? 20 : 2.5;
   camFov += (wantFov - camFov) * Math.min(1, fovRate * dt);
   if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
+  // DEV (look-dev stills): window.__camPin = { p: [x,y,z], t: [x,y,z] } pins the lens; nothing sets it in play
+  const pin = window.__camPin;
+  if (pin) { camera.position.fromArray(pin.p); camera.lookAt(pin.t[0], pin.t[1], pin.t[2]); }
 }
 
 // The decorative block: a broken jelly or a bad cloud must never take the helm with it.

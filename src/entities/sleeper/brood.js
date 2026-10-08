@@ -58,8 +58,20 @@ const MAIN = [
   [0.13, -0.21, -0.38, 0.13], [-0.13, -0.21, -0.38, 0.13], [0, -0.20, -0.05, 0.12],
   [0, -0.21, -0.48, 0.11], [0.06, -0.30, -0.30, 0.10], [-0.06, -0.30, -0.24, 0.10]
 ];
-const SPILL_MAX = 6;
+const SPILL_MAX = 8;
 const MASS_C = [0, -0.23, -0.27];
+
+// A lobe is not a ball: its radius wanders with direction (the same function in the core's
+// vertex shader, so the beads sit on the surface the core draws). d: unit direction, s: seed.
+function lump(dx, dy, dz, s) {
+  return 1 + 0.13 * Math.sin(dx * 3.1 + s) * Math.sin(dy * 2.7 + s * 1.7) * Math.sin(dz * 3.3 + s * 2.3)
+    + 0.06 * Math.sin(dx * 7.3 + s * 3.1) * Math.sin(dy * 6.1 + s * 0.7) * Math.sin(dz * 6.9 + s * 1.3);
+}
+const LUMP_GLSL = `
+float clLump(vec3 d, float s) {
+  return 1.0 + 0.13 * sin(d.x * 3.1 + s) * sin(d.y * 2.7 + s * 1.7) * sin(d.z * 3.3 + s * 2.3)
+    + 0.06 * sin(d.x * 7.3 + s * 3.1) * sin(d.y * 6.1 + s * 0.7) * sin(d.z * 6.9 + s * 1.3);
+}`;
 
 // ---- the program ----------------------------------------------------------------------------
 // aP0 / aP1: centre (xyz) + radius (w), asleep / standing (mesh-local units). aSd: x random,
@@ -70,7 +82,7 @@ const CL_VS_HEAD = `
 attribute vec4 aP0, aP1, aSd;
 uniform float uStand, uTime, uBreath;
 uniform vec3 uMassC;
-varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW; varying float vBR, vBK;`;
+varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW; varying float vBR, vBK;` + LUMP_GLSL;
 const CL_VS_BEGIN = `
 vec4 bcl = mix(aP0, aP1, uStand);
 vec3 bc = bcl.xyz; float brr = bcl.w;
@@ -86,6 +98,7 @@ if (bmode > 1.5 && bmode < 2.5) {
   bsc = vec3(1.0, 0.42, 1.0);      // a spent casing: collapsed, a flat wrinkled skin
   bc.y += 0.03 * brr * sin(uTime * 0.7 + aSd.x * 40.0);
 }
+if (bmode > 0.5 && bmode < 1.5 || bmode > 3.5) bsc *= clLump(position, aSd.x * 10.0);
 vec3 transformed = bc + position * bsc * brr;
 {
   vec3 bwc = (modelMatrix * vec4(bc, 1.0)).xyz;
@@ -101,7 +114,7 @@ vec3 transformed = bc + position * bsc * brr;
 vBSd = aSd; vBDir = position; vBLoc = transformed; vBR = brr; vBK = length(modelMatrix[0].xyz);
 vBW = (modelMatrix * vec4(transformed, 1.0)).xyz;`;
 const CL_FS_HEAD = `
-uniform float uSssK;
+uniform float uSssK; uniform vec4 uDbg;
 varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW; varying float vBR, vBK;
 float clH(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
 // nearest 3D cell (a bead deeper in the mass): returns its distance, writes its id
@@ -117,10 +130,10 @@ float clCell(vec3 p, out vec3 cid) {
 }
 vec3 clAlb(float st, float rnd) {
   // fresh orange -> amber -> brown -> brown-grey (linear albedo)
-  vec3 a = mix(vec3(0.62, 0.20, 0.025), vec3(0.40, 0.15, 0.03), smoothstep(0.0, 0.45, st));
-  a = mix(a, vec3(0.17, 0.085, 0.035), smoothstep(0.40, 0.80, st));
-  a = mix(a, vec3(0.13, 0.11, 0.09), smoothstep(0.80, 1.0, st));
-  return a * (0.85 + 0.3 * rnd);
+  vec3 a = mix(vec3(0.46, 0.14, 0.018), vec3(0.27, 0.10, 0.022), smoothstep(0.0, 0.45, st));
+  a = mix(a, vec3(0.115, 0.055, 0.026), smoothstep(0.40, 0.80, st));
+  a = mix(a, vec3(0.085, 0.07, 0.058), smoothstep(0.80, 1.0, st));
+  return a * (0.8 + 0.4 * rnd);
 }`;
 // diffuse: the bead's colour, its eyespot, and (cores) the cell it shows
 const CL_FS_COLOR = `
@@ -143,13 +156,14 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
   vec3 nd = normalize(vBDir);
   float de = dot(nd, ed);
   float kid = de + 0.08 * dot(nd, normalize(cross(ed, vec3(0.0, 1.0, 0.0)) + 1e-4));
-  bSpot = smoothstep(0.80, 0.90, kid) * smoothstep(0.28, 0.55, vBSd.y);
+  bSpot = smoothstep(0.70, 0.82, kid) * smoothstep(0.28, 0.55, vBSd.y);
   // the yolk: a darker mass filling the old egg's far half
   bAlb *= 1.0 - 0.35 * smoothstep(0.0, -0.7, de) * smoothstep(0.5, 0.9, vBSd.y);
 }
+bSpot = max(bSpot, uDbg.x);
 diffuseColor.rgb = bAlb * (1.0 - 0.88 * bSpot);`;
 const CL_FS_ROUGH = `
-roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : mix(0.16, 0.42, bCore);`;
+roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : mix(mix(0.32, 0.55, bSpot), 0.5, bCore);`;
 // cores: each cell bulges like a bead (screen-derivative bump off the cell distance)
 const CL_FS_NORMAL = `
 if (bCore > 0.5) {
@@ -166,19 +180,19 @@ const CL_FS_SSS = `
 if (abyssaLampA.w > 0.0 && !(bMode > 1.5 && bMode < 2.5)) {
   vec3 bdl = abyssaLampA.xyz - vBW; float bd2 = dot(bdl, bdl);
   float bq = bd2 / max(abyssaLampAC.w * abyssaLampAC.w, 1.0), bwn = clamp(1.0 - bq * bq, 0.0, 1.0);
-  vec3 bE = abyssaLampAC.rgb * (abyssaLampA.w * bwn * bwn / max(bd2, 1.0) * 0.3183);
+  vec3 bE = abyssaLampAC.rgb * (abyssaLampA.w * bwn * bwn / max(bd2, 6.0) * 0.3183);
   vec3 bL = bdl * inversesqrt(max(bd2, 1e-6));
   vec3 bN = (vec4(normal, 0.0) * viewMatrix).xyz;
   float bWrap = clamp((dot(bN, bL) + 0.75) / 1.75, 0.0, 1.0);
   float bNV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
-  vec3 bIn = bAlb * vec3(1.9, 1.35, 0.9);
+  vec3 bIn = bAlb * vec3(1.6, 1.2, 0.85);
   totalEmissiveRadiance += bIn * bE * bWrap * (0.30 + 0.70 * pow(bNV, 1.6)) * (1.0 - 0.9 * bSpot) * uSssK * (1.0 - 0.55 * bCore);
 }
 #endif`;
 function clutchMat(far) {
   const k = far ? 'far' : 'near';
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0, envMap: envTex, envMapIntensity: 0.55 });
-  const u = { uStand: { value: 0 }, uTime: { value: 0 }, uBreath: { value: 1 }, uMassC: { value: new THREE.Vector3().fromArray(MASS_C) }, uSssK: { value: 1.1 } };
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0, envMap: envTex, envMapIntensity: 0.22 });
+  const u = { uStand: { value: 0 }, uTime: { value: 0 }, uBreath: { value: 1 }, uMassC: { value: new THREE.Vector3().fromArray(MASS_C) }, uSssK: { value: 0.55 }, uDbg: { value: new THREE.Vector4() } };
   m.userData.u = u;
   if (far) m.defines = { CLUTCH_FAR: 1 };
   m.onBeforeCompile = sh => {
@@ -293,10 +307,10 @@ export function makeBrood(L, idx, trailFrom) {
   B.mats = [matN, matF, sMat];
 
   // ---- the lobes (filled for real by seat(); standing positions are fixed) ----
-  for (const [x, y, z, r] of MAIN) B.lobes.push({ h: [x, y, z, r], s: [x, y, z, r], spill: false });
+  for (const [x, y, z, r] of MAIN) B.lobes.push({ h: [x, y, z, r], s: [x, y, z, r], spill: false, seed: rnd() });
   for (let k = 0; k < SPILL_MAX; k++) {
     // a spill lobe standing is folded back inside the big centre lobe (it hides there)
-    B.lobes.push({ h: [MAIN[0][0], MAIN[0][1] - 0.01, MAIN[0][2], 0.09], s: [0, -0.2, -0.26, 0.09], spill: true });
+    B.lobes.push({ h: [MAIN[0][0], MAIN[0][1] - 0.01, MAIN[0][2], 0.09], s: [0, -0.2, -0.26, 0.09], spill: true, seed: rnd() });
   }
   B.nL = B.lobes.length;
   // the live lobe set (lerped by B.st), for reach tests: x y z r per lobe
@@ -486,18 +500,20 @@ export function makeBrood(L, idx, trailFrom) {
     }
     // the spill: a tongue of lobes from under the apron out past the rim, on the floor
     const r0s = Math.hypot(MAIN[0][0], MAIN[0][2] + 0.0);
-    const start = 0.30, end = rim * 1.10, nS = SPILL_MAX;
+    const start = 0.30, end = rim * 1.12, nS = SPILL_MAX;
     for (let k = 0; k < nS; k++) {
       const lb = B.lobes[MAIN.length + k], f = k / (nS - 1);
       const rho = start + (end - start) * f;
-      const x = bc * rho, z = bs * rho - 0.0, fl = floorL(x, z);
-      let r = 0.115 - 0.04 * f;
-      let y = fl + 0.55 * r;
+      // two staggered rows, so the tongue is a broad heap and not a string of balls
+      const sw = (k & 1 ? -1 : 1) * 0.055 * (0.5 + f);
+      const x = bc * rho - bs * sw, z = bs * rho + bc * sw, fl = floorL(x, z);
+      let r = 0.12 - 0.035 * f;
+      let y = fl + 0.32 * r;
       const under = rho < rim * 0.98;
       if (under && y > -0.12 - 0.5 * r) { y = -0.12 - 0.5 * r; }
-      lb.s = [x + (k & 1 ? -1 : 1) * bs * 0.02, y, z - (k & 1 ? -1 : 1) * bc * 0.02, r];
+      lb.s = [x, y, z, r];
       // open: its top stands above the floor out where he can reach it
-      lb.open = rho > rim * 0.78 && (y + r - fl) * R > 0.6;
+      lb.open = rho > rim * 0.78 && (y + r - fl) * R > 0.4;
       // standing it folds back into the hanging mass
       lb.h = [MAIN[0][0] + bc * 0.035 * f, MAIN[0][1] - 0.01, MAIN[0][2] + bs * 0.035 * f, 0.10];
     }
@@ -517,7 +533,7 @@ export function makeBrood(L, idx, trailFrom) {
         const lb = B.lobes[k], o = k * 4;
         for (let c = 0; c < 3; c++) { P0[o + c] = lb.s[c]; P1[o + c] = lb.h[c]; }
         P0[o + 3] = lb.s[3] - RB * 0.35; P1[o + 3] = lb.h[3] - RB * 0.35;
-        Sd[o] = rnd(); Sd[o + 1] = 0.5 + 0.2 * rnd(); Sd[o + 2] = RB * 2.1; Sd[o + 3] = 1;
+        Sd[o] = lb.seed; Sd[o + 1] = 0.55 + 0.2 * rnd(); Sd[o + 2] = RB * 2.1; Sd[o + 3] = 1;
       }
       g.attributes.aP0.needsUpdate = g.attributes.aP1.needsUpdate = g.attributes.aSd.needsUpdate = true;
     }
@@ -547,23 +563,23 @@ export function makeBrood(L, idx, trailFrom) {
     const buried = (x, y, z) => { _a.set(x, y, z).applyMatrix4(bw); return _a.y < terrainH(_a.x, _a.z, idx) - RB * R * 0.5; };
     const P0 = [], P1 = [], SD = [];
     for (let k = 0; k < nL; k++) {
-      const s = lobes[k].s, h = lobes[k].h;
-      const rMax = Math.max(s[3], h[3]);
+      const s = lobes[k].s, h = lobes[k].h, sd = lobes[k].seed * 10;
+      const rMax = Math.max(s[3], h[3]) * 1.1;
       const N = Math.round(3.4 * (rMax / RB) * (rMax / RB));
       const ga = br() * TAU;
       for (let i = 0; i < N; i++) {
         const y = 1 - 2 * (i + 0.5) / N, rr = Math.sqrt(Math.max(0, 1 - y * y)), ph = i * 2.399963 + ga;
-        const dx = Math.cos(ph) * rr, dy = y, dz = Math.sin(ph) * rr;
+        const dx = Math.cos(ph) * rr, dy = y, dz = Math.sin(ph) * rr, lf = lump(dx, dy, dz, sd);
         const jr = 0.85 + 0.35 * br();
-        const sx = s[0] + dx * s[3], sy = s[1] + dy * s[3], sz = s[2] + dz * s[3];
-        const hx = h[0] + dx * h[3], hy = h[1] + dy * h[3], hz = h[2] + dz * h[3];
+        const sx = s[0] + dx * s[3] * lf, sy = s[1] + dy * s[3] * lf, sz = s[2] + dz * s[3] * lf;
+        const hx = h[0] + dx * h[3] * lf, hy = h[1] + dy * h[3] * lf, hz = h[2] + dz * h[3] * lf;
         const showS = !inside(sx, sy, sz, 0, k) && !buried(sx, sy, sz);
         const showH = !inside(hx, hy, hz, 1, k);
         if (!showS && !showH) { br(); br(); continue; }
         const rb = RB * jr;
         P0.push(sx, sy, sz, showS ? rb : 0); P1.push(hx, hy, hz, showH ? rb : 0);
         // development: mostly eyed amber-brown, a fresher patch on the front lobes
-        const stg = clamp(0.55 + 0.25 * Math.sin(hx * 9 + hz * 7) - (hz > -0.15 ? 0.25 : 0) + (br() - 0.5) * 0.3, 0.05, 0.98);
+        const stg = clamp(0.66 + 0.2 * Math.sin(hx * 9 + hz * 7) - (hz > -0.1 && hx > 0 ? 0.3 : 0) + (br() - 0.5) * 0.3, 0.05, 0.98);
         SD.push(br(), stg, br() * TAU, 0);
       }
     }
