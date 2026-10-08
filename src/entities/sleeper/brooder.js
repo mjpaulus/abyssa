@@ -32,7 +32,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, setShell, endBodyCols, clearBodyCols, fitCapsule, shellProxy } from './bodyCols.js';
+import { beginBodyCols, addCapsule, setShell, endBodyCols, clearBodyCols, fitCapsule, fitCapsules, shellProxy } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -673,7 +673,9 @@ function buildClaw(body, mat, sd, k) {
 function clawSamples(c) {
   c.samp = [c.merus, c.carpus, c.palm, c.dact].map(mesh => ({ mesh, pts: hullSamples(mesh.geometry, 7, mesh === c.merus ? 0.04 : -1e9) }));
   // ...and its collision capsules (bodyCols.js), one per piece in the piece's own frame
-  c.fit = [c.merus, c.carpus, c.palm, c.dact].map(mesh => ({ mesh, f: fitCapsule(mesh.geometry) }));
+  // (the hooked palm and finger follow their curve in short pieces)
+  c.fit = [];
+  for (const [mesh, n] of [[c.merus, 1], [c.carpus, 1], [c.palm, 3], [c.dact, 3]]) for (const f of fitCapsules(mesh.geometry, n)) c.fit.push({ mesh, f });
   if (!c.lift) { c.lift = { x: 0, v: 0 }; c.need = 0; c.need0 = 0; c.liftNow = 0; }
 }
 

@@ -1931,7 +1931,7 @@ function update(dt, t) {
     // A part of her that comes INTO him (a sweeping leg, the lunge, her flank) is the slam;
     // walking into a planted leg is only a wall.
     if (!paused && bodyColsOn() && resolveBodyCols(player, dt, player.grounded)) {
-      lev.touchT = 0.3;
+      if (BODY.shell) lev.touchT = 0.3;   // bumping her SHELL tells her where he is (sight); a limb brushing him does not
       if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant) { ev.slam = true; ev.lightDrain += dt * 0.5; }
     }
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame

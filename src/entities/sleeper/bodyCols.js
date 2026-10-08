@@ -17,14 +17,14 @@
 // Zero per-frame allocation: fixed typed pools, module scratch.
 // OWNED BY: the sleepers (brooder.js publishes; game.js resolves and probes).
 
-const MAXC = 48;
+const MAXC = 64;
 const CAP = new Float32Array(MAXC * 8), PREV = new Float32Array(MAXC * 8);   // ax ay az bx by bz ra rb
 let nC = 0, nPrev = 0, prevOk = false;
 const SHM = new Float32Array(16), SHP = new Float32Array(16), SHI = new Float32Array(16);
 let shell = null, shellOk = false, shellPrevOk = false, shR = 1;
 let bx = 0, by = 0, bz = 0, bRad = 0;           // a bounding sphere over everything published
 let on = false;
-export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, last: '' };   // probe: this frame's resolve
+export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, last: '' };   // probe: this frame's resolve
 
 export function bodyColsOn() { return on; }
 export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; }
@@ -66,37 +66,56 @@ function invertAffine(m, o, s) {
 }
 
 // ---- geometry fits (build time only: allocation is fine here) -----------------------------
-// A tapered capsule along a limb piece's own X: the end centroids and radii of its first and
-// last slices (a high percentile of the distance from the axis, so the knobs and spines
-// count but a lone thorn does not).
-export function fitCapsule(geo, pct = 0.85) {
+// Tapered capsules along a limb piece's own X: the piece is cut into `n` slabs along X and
+// each slab gets one capsule between the centroids of its end slices, its radii a high
+// percentile of the slab's distance from that axis (so the knobs and spines count but a lone
+// thorn does not). A hooked palm or finger is several short capsules that follow the curve:
+// one chord capsule round a hook was 4.6 u fat and walled off her whole front.
+export function fitCapsules(geo, n = 1, pct = 0.85) {
   const P = geo.attributes.position.array;
   let x0 = 1e9, x1 = -1e9;
   for (let i = 0; i < P.length; i += 3) { if (P[i] < x0) x0 = P[i]; if (P[i] > x1) x1 = P[i]; }
-  const span = Math.max(1e-4, x1 - x0), NB = 6;
+  const span = Math.max(1e-4, x1 - x0), NB = 4 * n + 2;
   const cy = new Float64Array(NB), cz = new Float64Array(NB), cn = new Float64Array(NB);
   for (let i = 0; i < P.length; i += 3) {
     const b = Math.min(NB - 1, ((P[i] - x0) / span * NB) | 0);
     cy[b] += P[i + 1]; cz[b] += P[i + 2]; cn[b]++;
   }
-  const ctr = b => [cn[b] ? cy[b] / cn[b] : 0, cn[b] ? cz[b] / cn[b] : 0];
-  const [ay, az] = ctr(0), [by_, bz_] = ctr(NB - 1);
-  const ax = x0, bxx = x1;
-  // radius per half, from the axis line a->b
-  const dx = bxx - ax, dy = by_ - ay, dz = bz_ - az, L2 = dx * dx + dy * dy + dz * dz;
-  const r0 = [], r1 = [];
-  for (let i = 0; i < P.length; i += 3) {
-    const px = P[i] - ax, py = P[i + 1] - ay, pz = P[i + 2] - az;
-    const t = Math.max(0, Math.min(1, (px * dx + py * dy + pz * dz) / L2));
-    const ex = px - dx * t, ey = py - dy * t, ez = pz - dz * t;
-    (t < 0.5 ? r0 : r1).push(Math.sqrt(ex * ex + ey * ey + ez * ez));
+  // the axis: centroid of each thin bin (empty bins borrow a neighbour)
+  const ax = [], ay = [], az = [];
+  for (let b = 0; b < NB; b++) {
+    let k = b; while (!cn[k] && k > 0) k--; if (!cn[k]) { k = b; while (!cn[k] && k < NB - 1) k++; }
+    ax.push(x0 + (b + 0.5) / NB * span); ay.push(cn[k] ? cy[k] / cn[k] : 0); az.push(cn[k] ? cz[k] / cn[k] : 0);
   }
-  const q = a => { if (!a.length) return 0; a.sort((u, v) => u - v); return a[Math.min(a.length - 1, Math.floor(a.length * pct))]; };
-  const ra = q(r0), rb = q(r1);
-  // the caps are part of the capsule: pull the ends in by their radius (never past the middle)
-  const len = Math.sqrt(L2), ka = Math.min(0.45, ra / len), kb = Math.min(0.45, rb / len);
-  return { a: [ax + dx * ka, ay + dy * ka, az + dz * ka], b: [bxx - dx * kb, by_ - dy * kb, bz_ - dz * kb], ra, rb };
+  // knots: the axis at slab boundaries (the ends at the piece's own extremes)
+  const knot = j => {
+    const f = j / n * (NB - 1), b = Math.min(NB - 2, Math.floor(f)), w = f - b;
+    return [j === 0 ? x0 : j === n ? x1 : ax[b] + (ax[b + 1] - ax[b]) * w, ay[b] + (ay[b + 1] - ay[b]) * w, az[b] + (az[b + 1] - az[b]) * w];
+  };
+  const out = [];
+  for (let j = 0; j < n; j++) {
+    const A = knot(j), B = knot(j + 1);
+    const dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2], L2 = Math.max(1e-9, dx * dx + dy * dy + dz * dz);
+    const r0 = [], r1 = [];
+    const xa = x0 + j / n * span, xb = x0 + (j + 1) / n * span;
+    for (let i = 0; i < P.length; i += 3) {
+      if (P[i] < xa - 1e-6 || P[i] > xb + 1e-6) continue;
+      const px = P[i] - A[0], py = P[i + 1] - A[1], pz = P[i + 2] - A[2];
+      const t = Math.max(0, Math.min(1, (px * dx + py * dy + pz * dz) / L2));
+      const ex = px - dx * t, ey = py - dy * t, ez = pz - dz * t;
+      (t < 0.5 ? r0 : r1).push(Math.sqrt(ex * ex + ey * ey + ez * ez));
+    }
+    const q = a => { if (!a.length) return 0; a.sort((u, v) => u - v); return a[Math.min(a.length - 1, Math.floor(a.length * pct))]; };
+    let ra = q(r0), rb = q(r1);
+    if (!ra) ra = rb; if (!rb) rb = ra;
+    // the caps are part of the capsule: pull the piece's two outer ends in by their radius
+    const len = Math.sqrt(L2);
+    const ka = j === 0 ? Math.min(0.45, ra / len) : 0, kb = j === n - 1 ? Math.min(0.45, rb / len) : 0;
+    out.push({ a: [A[0] + dx * ka, A[1] + dy * ka, A[2] + dz * ka], b: [B[0] - dx * kb, B[1] - dy * kb, B[2] - dz * kb], ra, rb });
+  }
+  return out;
 }
+export function fitCapsule(geo, pct = 0.85) { return fitCapsules(geo, 1, pct)[0]; }
 
 // The shell's polar height bands (body-local shell units): B bearings x K rings about the
 // plan centre. rOut[b] = outermost radius on that bearing; lo/hi[b*K+k] = the lowest and
@@ -228,7 +247,7 @@ function segSeg(p0x, p0y, p0z, p1x, p1y, p1z, q0x, q0y, q0z, q1x, q1y, q1z) {
 // ---- Sal ----------------------------------------------------------------------------------
 // His body: a vertical capsule from 0.45 over his boots to his eye (pos is the eye, EYE_H
 // 1.35 over the boots), radius 0.45: the helmet's crown is at eye + 0.45.
-const EYE_H = 1.35, SAL_R = 0.45;
+const EYE_H = 1.35, SAL_R = 0.45, PUSH_MAX = 0.8;
 const _n = { x: 0, y: 0, z: 0 };
 // One contact against capsule i of pool A (CAP or an interpolation of PREV->CAP at f):
 // returns penetration, the normal in _n, and the part's point (s param in _t).
@@ -255,7 +274,7 @@ function capPen(A, i, f, px, y0, y1, pz) {
 // Push Sal out of her (positions, then velocities) and report the hardest closing speed
 // of any part that met him this frame (u/s; the game's slam) in BODY.hitV.
 export function resolveBodyCols(player, dt, grounded) {
-  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.last = '';
+  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.last = '';
   if (!on) return 0;
   const p = player.pos, v = player.vel;
   { const dx = p.x - bx, dy = p.y - by, dz = p.z - bz; if (dx * dx + dy * dy + dz * dz > (bRad + 3) * (bRad + 3)) return 0; }
@@ -296,10 +315,14 @@ export function resolveBodyCols(player, dt, grounded) {
         }
       }
       if (pen <= 0) continue;
+      // a fast part (the falling claw) can pass most of its thickness through him in a frame:
+      // he is moved at most PUSH_MAX a frame and the part's motion carries the rest (a jump of
+      // 3 u in one frame read as a teleport)
+      if (pen > PUSH_MAX) pen = PUSH_MAX;
       // on the ground only sideways: the floor holds him up, a push into it would fight it
       if (grounded && ny < 0.75) { const h = Math.hypot(nx, nz); if (h < 1e-4) continue; nx /= h; ny = 0; nz /= h; }
       p.x += nx * pen; p.y += ny * pen; p.z += nz * pen;
-      BODY.contacts++; BODY.push += pen; BODY.last = i < 32 ? 'leg' : 'claw';
+      BODY.contacts++; BODY.push += pen; BODY.last = i < 32 ? 'leg' + (i & 7) + ':' + (i >> 3) : 'claw' + (i - 32);
       // velocity: never INTO the part faster than the part itself moves (it carries him)
       let pvx = 0, pvy = 0, pvz = 0;
       if (prevOk) {
@@ -327,7 +350,7 @@ export function resolveBodyCols(player, dt, grounded) {
         nx /= pen; ny /= pen; nz /= pen;
         if (grounded && ny < 0.75) { const h = Math.hypot(nx, nz); if (h < 1e-4) continue; pen *= 1 / h; nx /= h; ny = 0; nz /= h; pen = Math.min(pen, 3); }
         p.x += nx * pen; p.y += ny * pen; p.z += nz * pen;
-        BODY.contacts++; BODY.push += pen; BODY.last = 'shell';
+        BODY.contacts++; BODY.push += pen; BODY.last = 'shell'; BODY.shell = true;
         let pvx = 0, pvy = 0, pvz = 0;
         if (shellPrevOk) {
           // the shell's own velocity at this local point

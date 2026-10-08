@@ -136,22 +136,41 @@ for (const sc of SCEN) {
     report.ridge = { centreDist: tr, dormant: await c.ev(`__sl.dormant`) };
   } else if (sc === 'under') {
     await wakeAndHold();
-    // from her +X flank, between legs 1 and 2, walk in under her to the flank ward
+    await c.ev(`(async () => { window.__B = await import('/src/entities/sleeper/bodyCols.js'); return 1; })()`);
+    // from her flat flank, between legs 5 and 6, walk in under her (real W), then up to the
+    // nearest dark ward (real W to stand under it, real Space to rise to it)
     const g = await c.ev(`(() => { const L = __sl, a = L.feet[5].planted, b = L.feet[6].planted, mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2, dx = mx - L.pos.x, dz = mz - L.pos.z, d = Math.hypot(dx, dz); return [mx + dx / d * 8, mz + dz / d * 8, Math.atan2(-dx, -dz)]; })()`);
     await standAt(g[0], g[1], g[2], 0.0);
     await sleep(2000); await shot('under-0');
     await c.key('KeyW', true);
     const tr = [];
-    for (let i = 0; i < 50; i++) {
+    let t0 = Date.now(), k = 1;
+    while (Date.now() - t0 < 16000) {
       await sleep(200);
-      const r = await c.ev(`(() => { const L = __sl, p = player.pos; return [+Math.hypot(p.x - L.pos.x, p.z - L.pos.z).toFixed(1), L.sigils.map(g => g.lit ? 1 : 0).join(''), +L.sigils.reduce((m, g) => Math.min(m, g.grp.position.distanceTo(p)), 1e9).toFixed(1)]; })()`);
-      tr.push(r); if (i === 15 || i === 30 || i === 49) await shot('under-' + i);
-      if (r[0] < 3) break;
+      const r = await c.ev(`(() => { const L = __sl, p = player.pos; return [+Math.hypot(p.x - L.pos.x, p.z - L.pos.z).toFixed(1), __B.BODY.under ? 1 : 0, __B.BODY.last, L.sigils.map(g => g.lit ? 1 : 0).join('')]; })()`);
+      tr.push(r);
+      if (Date.now() - t0 > k * 2500) { await shot('under-' + k); k++; }
+      if (r[1]) break;
+    }
+    await shot('under-in');
+    // the nearest dark ward: stand under it, then rise (Space burst, pitched up)
+    const w = await c.ev(`(() => { const L = __sl, p = player.pos; let best = null, bd = 1e9; for (const g of L.sigils) { if (g.lit) continue; const d = Math.hypot(g.grp.position.x - p.x, g.grp.position.z - p.z); if (d < bd) { bd = d; best = g; } } return best ? [best.grp.position.x, best.grp.position.z, +(best.grp.position.y - p.y).toFixed(1)] : null; })()`);
+    if (w) {
+      t0 = Date.now();
+      while (Date.now() - t0 < 8000) {
+        const d = await c.ev(`(() => { const p = player.pos; player.yaw = Math.atan2(${w[0]} - p.x, ${w[1]} - p.z); return Math.hypot(${w[0]} - p.x, ${w[1]} - p.z); })()`);
+        if (d < 1.5) break;
+        await sleep(100);
+      }
+      await c.key('KeyW', false);
+      await c.ev(`(player.pitch = 0.6, 1)`);
+      await sleep(600);
+      await shot('under-ward-0');
+      await c.key('Space', true); await sleep(700); await c.key('Space', false);
+      for (let i = 1; i <= 3; i++) { await sleep(700); await shot('under-ward-' + i); }
     }
     await c.key('KeyW', false);
-    // look up at the belly from under her
-    await c.ev(`(player.pitch = 0.5, 1)`); await sleep(1500); await shot('under-lookup');
-    report.under = { tr, pen: await c.ev(PEN) };
+    report.under = { tr, ward: w, lit: await c.ev(`__sl.sigils.map(g => g.lit ? 1 : 0).join('')`), eyeAboveFloor: await c.ev(`+(player.pos.y - __T.terrainH(player.pos.x, player.pos.z, 0)).toFixed(1)`) };
   } else if (sc === 'cam') {
     await wakeAndHold();
     // under her, the lens in four directions; then just outside a leg with her body behind him
