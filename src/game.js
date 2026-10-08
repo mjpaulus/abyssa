@@ -931,7 +931,17 @@ const DECKCAM = { on: true, back: 6.0, up: 2.1, look: -0.8, w: 4.7, margin: 0.25
   // / rollMax)) now the raft really rolls: a gale's 15-18 deg at 12% would tilt the horizon 2+
   // deg on every wallow, which reads as seasickness, not weather. A calm day's 3 deg is
   // untouched (0.36 deg); a gale tops out near 1.1 deg.
-  roll: 0.12, rollF: 2.2, rollMax: 0.021 };
+  roll: 0.12, rollF: 2.2, rollMax: 0.021,
+  // (sweep) heave: the share of the raft's heave taken OUT of the lens (and its aim, so the
+  // pitch and the horizon do not move), low-passed over heaveTau s. JUDGED AND LEFT AT 0:
+  // measured standing 60 s in a gale, the lens rides 2.2 u of heave as a smooth ~6.5 s swell
+  // (vertical speed p95 0.54 u/s, accel p95 0.33 u/s^2, only 2.8 cm rms above 1 Hz), Sal holds
+  // still in frame (2% of the screen) and the horizon sits on the pitch, not the height
+  // (pitch range 2 deg incl. the roll share). Removing heave can only trail the swell -- the
+  // floaty lens Michael rejects -- and makes the raft and Sal bob in frame instead. The knob
+  // stays for his eye: e.g. heave 0.4, heaveTau 1.2.
+  heave: 0, heaveTau: 1.2 };
+let camHeaveLP = null;
 const camDeckRoll = { x: 0, v: 0 };
 let deckK = 0, deckKV = 0, camBasePrev = CAM_BACK, deckWant = CAM_BACK, deckStops = 0;
 // THE CRANE. Most of what stands on the deck is waist-to-shoulder high (pump block, reel,
@@ -1227,6 +1237,11 @@ function updateCamera(dt, t, fwd) {
   // on deck the lens rides the line from the pivot: pulled in, it comes down that line
   if (deckK > 0) { const upD = up + deckLift * deckK; camDesired.y += upD - deckK * (upD - DECK_PIVOT) * (1 - camDist / base); }
   else camDesired.y += CAM_UP;
+  // (sweep) the deck heave knob (DECKCAM.heave, 0 = the lens rides the boat exactly)
+  if (camHeaveLP === null || deckK <= 0) camHeaveLP = raft.position.y;
+  else camHeaveLP += (raft.position.y - camHeaveLP) * Math.min(1, dt / Math.max(0.05, DECKCAM.heaveTau));
+  const camHeaveOff = DECKCAM.heave > 0 ? -DECKCAM.heave * deckK * (raft.position.y - camHeaveLP) : 0;
+  camDesired.y += camHeaveOff;
   camDesired.y = Math.max(camDesired.y, terrainH(camDesired.x, camDesired.z, zi) + 1.2);
   // (The idle "breathing" drift — 0.09 u vertical, 0.07 u lateral, forever — is gone: a
   // locked frame on a still man is the point. Weight comes from Sal, not from the lens.)
@@ -1414,7 +1429,7 @@ function updateCamera(dt, t, fwd) {
   // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
   // went (it swung the aim with every kick's surge).
   camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
-  camAim.y += DECKCAM.look * deckK;
+  camAim.y += DECKCAM.look * deckK + camHeaveOff;
   // Sal looks at what the lens would notice: the nearest life in front, re-picked four
   // times a second (the search walks every fauna buffer; the look itself is sprung).
   diverLookCool -= dt;
