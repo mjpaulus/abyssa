@@ -1,6 +1,6 @@
 ---
 title: Playtest jumps — one key to each scenario
-status: wip
+status: done
 tags: tools, playtest
 updated: 2026-10-08
 ---
@@ -27,3 +27,4 @@ Caveats: the jumps write the normal save like play does (site after Alt+-, line 
 
 ## Log
 - 2026-10-04 — built on branch playtest: open the game with ?playtest, the brass panel bottom-right lists the keys. Verified every key with real (CDP) Alt+key events from the title, the deck, zones 0/1/2, mid-voyage, the drowned wait and the ending; rites re-arm (egg taken -> Alt+6 dormant again; furnace fed -> Alt+8 cold again); walk / step off / ladder / seabed walk / pack / voyage fine after. Invariants with and without ?playtest: 14 lights, __lev.fp 15ce888c c938fe6e 652d0412, __chart.fp home 119f0cae (Pallid 2c0df461, Burned ff316095 via Alt+-), __safeFailed [], console clean bar the favicon. Without ?playtest: module never fetched, no DOM, Alt+keys do nothing. 32 jumps + 8 reseeds: +1 geometry, +1 program.
+- 2026-10-08 — Merged to main (e52f0ba), verified with Alt+key events from title, deck and zones (14 lights, fingerprints, console clean). Alt+4 kept as spec (hose = distance + 8, straight-line from the pump, so ~20 u of walking before the hold); checklist says so. Moved wip -> done.
