@@ -80,7 +80,8 @@ async function lift(dy) {
 }
 async function ws6() { await hold('KeyW', 6000, 'W'); await mark('coastW'); await sleep(1500); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
 
-if (SCEN === 'midS') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(3000); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
+if (SCEN === 'long') { await mark('setup'); await lift(60); await neutral(2500); await mark('hang'); await neutral(2000); await hold('KeyW', 12000, 'W'); await mark('coastW'); await neutral(6000); await hold('KeyS', 12000, 'S'); await mark('coastS'); await sleep(1500); }
+else if (SCEN === 'midS') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(3000); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
 else if (SCEN === 'mid') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(5000); await ws6(); }
 else if (SCEN === 'low') { await mark('setup'); await lift(2.5); await neutral(1200); await ws6(); }
 else if (SCEN === 'seabed') { await mark('setup'); await sleep(1000); await ws6(); }
