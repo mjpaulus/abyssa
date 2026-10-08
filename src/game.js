@@ -1268,7 +1268,7 @@ function clearCamDistance(from, dir, want, zi) {
 // Knobs: window.__swimCam  on (0 = off), drop (u lower), side (tan of the off-axis angle,
 // toward his LEFT, away from the lantern hand), aimDrop (u), hold (s of sustained work first),
 // wIn / wOut (critically damped ease rates, /s: ~1.2 s in, ~1.5 s out).
-const SWIMCAM = { on: 1, drop: 1.7, side: 0.087, aimDrop: 0.3, hold: 0.4, wIn: 3.2, wOut: 2.6 };
+const SWIMCAM = { on: 1, drop: 2.4, side: 0.122, aimDrop: 0.45, hold: 0.4, wIn: 3.2, wOut: 2.6 };
 let swimCamK = 0, swimCamV = 0, swimCamHeld = 0;
 window.__swimCam = SWIMCAM;
 window.__swimCamState = () => ({ k: +swimCamK.toFixed(3), held: +swimCamHeld.toFixed(2) });

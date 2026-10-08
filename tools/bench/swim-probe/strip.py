@@ -6,6 +6,7 @@ from PIL import Image, ImageDraw
 d, seg, out = sys.argv[1], sys.argv[2], sys.argv[3]
 n = int(sys.argv[4]) if len(sys.argv) > 4 else 10
 label = sys.argv[5] if len(sys.argv) > 5 else ''
+crop = [float(x) for x in sys.argv[6].split(',')] if len(sys.argv) > 6 else None   # x0,y0,x1,y1 fractions
 fs = sorted(glob.glob(os.path.join(d, seg + '-*.jpg')))
 rows = []
 for f in fs:
@@ -24,6 +25,7 @@ for k in range(n):
 ims = []
 for (i, p, v, f) in pick:
     im = Image.open(f).convert('RGB')
+    if crop: W0, H0 = im.size; im = im.crop((int(crop[0] * W0), int(crop[1] * H0), int(crop[2] * W0), int(crop[3] * H0))).resize((int((crop[2] - crop[0]) * W0 * 2), int((crop[3] - crop[1]) * H0 * 2)))
     ImageDraw.Draw(im).text((6, 6), f'{seg} p={p:.2f} {v:.1f}u/s', fill=(255, 255, 0))
     ims.append(im)
 w, h = ims[0].size
