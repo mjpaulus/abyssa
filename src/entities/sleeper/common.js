@@ -26,6 +26,9 @@ export { REVEAL_T };
 export const MSG_WARDS_ANSWER = 'THE WARDS OF ORUNE ANSWER THE PING.';
 export const MSG_WARDS_DARK = 'THE WARDS OF ORUNE ARE DARK. SOUND FOR THEM.';
 export const MSG_WARDS_KEPT = "MHOR'S WARDS ARE KEPT. CUT THE KEEPERS LOOSE.";
+// (fifth-ward) the other held wards' lines: each says why AND what to do
+export const MSG_BROOD_COLD = 'THE LAST WARD STAYS COLD WHILE AN EGG IS OUT. SET IT BACK IN THE NEST.';
+export const MSG_NOT_STILL = 'HE WILL NOT HOLD STILL. DRAW HIS STRIKE THROUGH THE FURNACE FIRE.';
 // The live sleeper (game.js owns `lev`; this is the same object, for the tools hook).
 let live = null;
 export function setLive(L) { live = L; }
@@ -241,13 +244,37 @@ export function wardIdle(g, dt, haloK) {
     g.halo.material.opacity = 0.32 * rv;
     g.light.position.copy(g.grp.position);
     g.halo.position.copy(g.grp.position);
-    return;
+  } else {
+    g.rune.material.opacity = (0.22 + 0.16 * Math.sin(g.pulse * 2)) * rv;
+    g.light.intensity = (8 + 5 * Math.sin(g.pulse * 2)) * rv;
+    g.halo.scale.setScalar(Math.max(0.001, (haloK * 1.2 + Math.sin(g.pulse * 2) * 0.6) * rv));
+    g.light.position.copy(g.grp.position);
+    g.halo.position.copy(g.grp.position);
   }
-  g.rune.material.opacity = (0.22 + 0.16 * Math.sin(g.pulse * 2)) * rv;
-  g.light.intensity = (8 + 5 * Math.sin(g.pulse * 2)) * rv;
-  g.halo.scale.setScalar(Math.max(0.001, (haloK * 1.2 + Math.sin(g.pulse * 2) * 0.6) * rv));
-  g.light.position.copy(g.grp.position);
-  g.halo.position.copy(g.grp.position);
+  wardCold(g, dt, haloK);
+}
+// THE COLD SPARK (see wardRefuse): over the idle pose just written. A hard pale flash in
+// the glyph (it took the touch: the hand was right) that dies to ash below the idle level
+// (it will not hold: something else is wrong), the iron shuddering as it goes. Shown even on
+// a ward the sonar has not rung (rv 0): the touch is what it answers. Leaves the idle exactly
+// as it was once it has run out.
+function wardCold(g, dt, haloK) {
+  const k = coldK(g);
+  if (k < 0) { if (g.coldT != null && g.coldT < 1e3) { g.coldT = 1e3; g.grp.scale.setScalar(g.scale); } return; }
+  g.coldT += dt;
+  // 0..0.12: up to the spark; then an eased gutter to 0.15 of it; the last fifth eases back
+  const up = Math.min(1, k / 0.09), down = 1 - Math.pow(Math.min(1, Math.max(0, (k - 0.09) / 0.7)), 0.6);
+  const spark = up * (0.15 + 0.85 * down), back = Math.max(0, (k - 0.8) / 0.2);
+  const m = g.rune.material;
+  m.opacity = m.opacity * back + (1 - back) * (0.08 + 1.1 * spark);
+  // pale steel blue at the spark, ash grey as it dies (never the warm gold of a lit ward)
+  const c = 0.55 + 0.75 * spark;
+  m.color.setRGB(m.color.r * back + (1 - back) * c * 0.78, m.color.g * back + (1 - back) * c * 0.9, m.color.b * back + (1 - back) * c * 1.15);
+  g.halo.material.opacity *= back + (1 - back) * (0.25 + 0.6 * spark);
+  g.light.intensity = g.light.intensity * back + (1 - back) * 46 * spark * spark;
+  // the iron shudders: a damped knock, ~9 Hz, gone by mid-gutter
+  const sh = 0.07 * Math.sin(k * COLD_T * 57) * Math.max(0, 1 - k / 0.55);
+  g.grp.scale.setScalar(g.scale * (1 + sh));
 }
 export function wardLitPose(g, dt, haloK) {
   g.pulse += dt;
@@ -293,7 +320,10 @@ const MEM_R = 1, MEM_G = 0.62, MEM_B = 0.30;
 export function wardMemPose(g, dt, haloK, kT) {
   g.pulse += dt;
   g.memK += (kT - g.memK) * Math.min(1, dt * 1.2);
-  const k = g.memK, w = 0.5 + 0.5 * Math.sin(g.pulse * 0.75), b = (0.78 + 0.22 * w) * k;
+  // (fifth-ward) touched, it answers with a warm swell over ~1.4 s (game.js sets g.memPing)
+  let ping = 0;
+  if (g.memPing != null && g.memPing < 1.4) { g.memPing += dt; ping = Math.sin(Math.PI * Math.min(1, g.memPing / 1.4)) * 0.9; }
+  const k = g.memK, w = 0.5 + 0.5 * Math.sin(g.pulse * 0.75), b = (0.78 + 0.22 * w + ping) * k;
   g.rune.material.opacity = 0.85 * b;
   // (the sigil style's idle glyph is already a strong white-gold, so its remembered glyph
   // runs a little over unity: warmer AND brighter than the iron, still far under the lit)
@@ -330,16 +360,45 @@ export function wardsRecall(L, haloK) {
 // can't tunnel through a ward. The zone-1 dark rule and zone-2 keeper rule apply to any
 // kind that sets sonarWards / guardWards. Returns true on the frame the ward lights.
 export function wardTouch(L, i, g, player, ev) {
-  if (segDist(g.grp.position, L.pPrev, player.pos) >= L.reach) return false;
+  if (segDist(g.grp.position, L.pPrev, player.pos) >= L.reach) { g.inR = false; return false; }
   const dark = L.sonarWards && g.rev < 0.5;
   const kept = L.guardWards && wardGuardCount(i) > 0;
-  if (dark || kept) {
-    if (!L.hinted) { L.hinted = true; ev.msg = ev.msg || (dark ? MSG_WARDS_DARK : MSG_WARDS_KEPT); }
-    return false;
-  }
+  if (dark || kept) { wardRefuse(L, g, player, ev, dark ? MSG_WARDS_DARK : MSG_WARDS_KEPT); return false; }
   lightWard(L, g, ev);
   return true;
 }
+
+// ---- THE REFUSAL (roadmap/fifth-ward.md) ------------------------------------------------
+// A ward a rule holds dark (Velkath's brood, Orune's unrung iron, Mhor's keepers or his
+// moving bulk) used to say why ONCE per sleeper, at the bottom of a one-slot message queue
+// that any slam, tear or lantern line replaced, and then answer every later touch with
+// nothing at all: the ward simply "didn't change" (Michael, 2026-10-08). Now EVERY entry
+// into a held ward's reach answers, in three channels at once:
+//   the WARD itself: a cold spark - its glyph jumps to a pale blue-white and gutters out
+//     below its idle over ~1.3 s, the iron shudders (wardIdle reads g.coldT); no light
+//     is added: its own pool light dips with it
+//   a SOUND: a dead iron knock, not the ward bell (game.js on ev.refused)
+//   the LINE: why, and what to do, at a priority nothing routine can bump (game.js on
+//     ev.refuseMsg), at most every REFUSE_T seconds so a diver loitering at the ward
+//     is not spammed; the knock and the spark answer every entry.
+// Call it every frame the held ward is evaluated (it tracks the entry edge itself, on the
+// same swept test as the touch). Returns true on the entry frame.
+const REFUSE_T = 3;
+export function wardRefuse(L, g, player, ev, msg) {
+  const inR = segDist(g.grp.position, L.pPrev, player.pos) < L.reach;
+  const was = g.inR;
+  g.inR = inR;
+  if (!inR || was) return false;
+  g.coldT = 0;
+  ev.refused = g.note;
+  const now = L.t || 0;
+  if (msg && !(now - (L.refuseAt ?? -1e9) < REFUSE_T)) { L.refuseAt = now; ev.refuseMsg = msg; }
+  return true;
+}
+// The cold spark's shape, 0..1 (1 = the spark's peak, then a gutter below idle): read by
+// wardIdle. Exported for the HUD probe.
+const COLD_T = 1.3;
+function coldK(g) { return g.coldT == null || g.coldT >= COLD_T ? -1 : g.coldT / COLD_T; }
 // Light a ward: the flash, the embers, the event the game rings a chime on.
 export function lightWard(L, g, ev) {
   g.lit = true; g.rev = 1; g.flashT = 0;

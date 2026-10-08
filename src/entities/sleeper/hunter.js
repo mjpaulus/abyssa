@@ -26,7 +26,7 @@ import { wreckSites } from '../../world/wrecks.js';
 import { survival } from '../../systems/survival.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
-  rememberWard, wardMemPose, wardsRecall
+  rememberWard, wardMemPose, wardsRecall, wardRefuse, MSG_NOT_STILL
 } from './common.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { lendVentLight } from '../../world/vents.js';
@@ -1287,7 +1287,7 @@ export function updateHunter(L, dt, t, player) {
         g.light.userData.scatter = 0.14;
         L.guardWards = false; wardTouch(L, i, g, player, ev); L.guardWards = true;
       }
-      else if (!L.hinted && g.grp.position.distanceTo(player.pos) < L.reach) { L.hinted = true; ev.msg = ev.msg || 'HE WILL NOT HOLD STILL. NOT OUT HERE IN THE DARK.'; }
+      else wardRefuse(L, g, player, ev, MSG_NOT_STILL);   // (fifth-ward) every touch answers
     }
     // the keepers ride his wards — except in the fire, which scatters the shoal
     if (L.state === 'stunned') setWardTargets(-1, null); else setWardTargets(L.idx, L.sigils);

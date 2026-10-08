@@ -145,6 +145,19 @@
   .bm.active .lbl{opacity:1;text-shadow:0 0 10px currentColor}
   #bmLev.active .tick{background:#ffd2c0;color:#ffb9a0}
   #bmRift.active .tick{background:#dbf7ff;color:#aee9ff}
+  /* THE WARD TALLY (fifth-ward): one pip per ward under the sleeper's mark. Hollow = dark,
+     gold = lit, amber = remembered, dashed cold ring = held by the brood rule. */
+  .bm .tally{margin-top:.25em;font-size:.82em;line-height:1;white-space:nowrap}
+  .tally i{display:inline-block;width:.62em;height:.62em;margin:0 .17em;border-radius:50%;box-sizing:border-box;
+    border:1.5px solid rgba(255,190,165,.8);vertical-align:middle}
+  .tally i.on{background:#ffdca6;border-color:#fff0cf;box-shadow:0 0 7px rgba(255,205,140,.85)}
+  .tally i.mem{background:rgba(255,150,70,.6);border-color:rgba(255,178,110,.85)}
+  .tally i.cold{border:1.5px dashed rgba(175,205,235,.95)}
+  .tally i.new{animation:pipnew 1.2s ease-out}
+  .tally b{font-weight:400;font-size:.86em;letter-spacing:.22em;margin-left:.5em;color:#ffb9a0;opacity:.9;vertical-align:middle}
+  .tally.refuse i:not(.on):not(.mem){animation:pipno .45s ease-in-out}
+  @keyframes pipnew{0%{transform:scale(2.4);box-shadow:0 0 18px #fff8e0}100%{transform:scale(1)}}
+  @keyframes pipno{0%,100%{transform:translateX(0)}20%{transform:translateX(-3px)}60%{transform:translateX(3px)}}
   /* low-air vignette: breathes at the frame edges, driven from game.js */
   #warn{position:absolute;inset:0;opacity:0;background:radial-gradient(ellipse at center,
     rgba(0,0,0,0) 52%, rgba(120,20,10,.55) 100%);animation:warnpulse 1.6s ease-in-out infinite}
