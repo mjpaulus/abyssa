@@ -10,12 +10,11 @@
 // and the embers live on L.grp at the world origin (the ward light pool is placed in
 // world coordinates, exactly as the serpent does).
 //
-// This file is the body and its motion. The ridge/nest/egg reveal, the fight and the
-// payoff come in the next plan; until then the lab drives her through L.cmd().
+// This file is the body and its motion; the clutch and its rite are brood.js.
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
-import { makeGlow, seededRand } from '../../lib/textures.js';
+import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
 import { terrainH, terrainMeshes } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
@@ -31,7 +30,7 @@ import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
-import { spawnPlume, updatePlumes, plumeTau, clearPlumes } from './plume.js';
+import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
@@ -114,6 +113,19 @@ const HAMMER_T = 2.6;
 // still throws him clear of her front (~20 u) and keeps her in his view as she comes on.
 // guardUp: how far (rad) the minor claw's guard rises off her mouth when a diver is close
 // under her face.
+// THE BROODING CROUCH (brooder-clutch): drop (shell units off the standing height), lean
+// (rad toward the diver under her), clear (u: the belly over his helmet never comes lower)
+// THE CHASE MUST READ (brooder-clutch; the hunt worked but past ~35 u in the zone-0 murk she
+// was a dark shape on dark water): her eyes throw the lantern back as two pinpoints out to
+// ~110 u (GLINT), her feet leave a pale wake that hangs (plume.js spawnWake), each heavy
+// footfall is FELT out to ~110 u (ev.thump: game.js dips the lens and lifts sand round his
+// boots), a low hunting voice rides her body (audio/creatures.js, L.huntK), and her shell
+// carries a faint backscatter rim past ~20 u (RIM; the water's own colour, so it tracks day
+// and night). k: strength; near/far: fades (u).
+export const GLINT = { k: 0.9, scale: 1.0, near: 14, far: 130 };
+export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
+export const THUMP = { k: 1, near: 12, far: 110 };
+export const CROUCH = { drop: 0.16, lean: 0.16, clear: 4.6 };
 export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -126,7 +138,7 @@ const S = () => ({ x: 0, v: 0 });
 const nz = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
 const ease = x => x * x * (3 - 2 * x);
 const win = (x, a, b) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0 };
+const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0 };
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
@@ -212,7 +224,10 @@ export function makeBrooder(idx, cfg) {
   const L = {
     ...c, idx, R, size: c.size, grp, body, t: 0, agitation: 0, calmed: false, calmT: 0,
     sonarWards: false, guardWards: false, reveal: 0, rang: false, hinted: false, pendingMsg: null,
-    reach: 5, collR: 0.33 * R, flare: 0,
+    // (brooder-clutch) her wards are on her underside, 8-13 u over the floor when she stands
+    // on the rift lip (the crest lifts her): 6 u of reach makes the near ones a hop and the
+    // high hip ward a short burst (it was 5: every ward but the nearest needed a full burst)
+    reach: 6, collR: 0.33 * R, flare: 0,
     pos: V3(), yaw: 0, vel: V3(), stand: 0, standE: 0, standTarget: 0, threat: 0, threatE: 0, threatTarget: 0,
     walkTo: null, bodyY: 0, head: V3(), spine: COLL.map(() => V3()), sigils: [], feet: [], _pd: 1e9,
     uni: { uTime: { value: 0 } },
@@ -443,11 +458,11 @@ export function makeBrooder(idx, cfg) {
   }
   // RITUAL, REMEMBERED: the ward the old calm keeps is the FRONT socket, under her prow
   // between the claws. Two reasons. (1) THE BROOD RULE must survive the memory: it is not
-  // a fixed ward but "the last DARK ward will not light while an egg is out". Pre-counting
+  // a fixed ward but "the last DARK ward will not light while the clutch is robbed". Pre-counting
   // a ward that is lit from the boot means it can never BE the last dark one, so the rule
   // still lands on a ward the diver has to reach (the second flank ward): one touch, then
   // the clutch decides. Had the memory been "the last ward lights itself", the brood rule
-  // would have been the free ward and the egg would no longer matter. (2) The front ward
+  // would have been the free ward and the clutch would no longer matter. (2) The front ward
   // is the one inside the lunge and the hammer cycle; the flank wards are the ones her
   // sideways stalk offers. The memory spares the cruellest approach and keeps the walk
   // round her, the stand and the clutch: the rite is shorter, not different.
@@ -456,9 +471,9 @@ export function makeBrooder(idx, cfg) {
   makeEmbers(L, c.size);
 
   // THE RIDGE: she sleeps at this zone's rift, facing the open seabed the diver comes
-  // from, a reef-crusted mound in the silt. Her nest lies in her lee, and a trail of
-  // tracks runs to it from the open ground past the shells of an old clutch. Taking an
-  // egg wakes her (brood.onTake); calmed, she walks back and settles over her brood,
+  // from, a reef-crusted mound in the silt. Her clutch bulges from under her rim, and a trail of
+  // tracks runs in from the open ground past a shed shell and spent egg skins. Prying a
+  // clump wakes her (brood.onTake); calmed, she walks back and settles over her clutch,
   // which clears the way.
   {
     const rp = riftPos(idx);
@@ -470,8 +485,11 @@ export function makeBrooder(idx, cfg) {
     const perp = V3(-out.z, 0, out.x);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
+    L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
+    // (the old nest's spot, kept only as the start of her trail: the tracks run in from 95 u
+    // out past it, exactly where they always began)
     const nest = lip.clone().addScaledVector(perp, R * 2.8);
-    L.brood = makeBrood(L, idx, nest, nest.clone().addScaledVector(out, -95));
+    L.brood = makeBrood(L, idx, nest.clone().addScaledVector(out, -95));
     L.rite = L.brood;                                 // the game's generic [E] / prompt hook
     L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
@@ -485,11 +503,11 @@ export function makeBrooder(idx, cfg) {
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
-    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); fitSkirt(L); } }
+    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); if (L.brood) L.brood.seat(); fitSkirt(L); } }
     return L.probe();
   };
   L.probe = () => ({
-    kind: 'brooder', dormant: !!L.dormant, eggsOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
+    kind: 'brooder', dormant: !!L.dormant, clutchOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
     remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
     wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
@@ -499,14 +517,24 @@ export function makeBrooder(idx, cfg) {
     ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), climb: +(L.climbT > 0 ? L.climbT : 0).toFixed(1), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)), elbow: L.claws.map(c => +(c.elbow || 0).toFixed(3)) }
   });
 
+  // the eyeshine pinpoints (poseAll writes them; always in the scene at opacity 0 so the
+  // shared warm-glow program is built at boot)
+  L.glints = [0, 1].map(() => {
+    const g = makeWarmGlow(0xd6ecd2, GLINT.scale, { near: 40, far: GLINT.far, nearW: 0, swell: 0.02, swellMax: 1.5 });
+    g.material.opacity = 0;
+    g.renderOrder = 3;
+    grp.add(g);
+    return g;
+  });
   if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
   poseAll(L, 0, null);
+  if (L.brood) L.brood.seat();                       // the clutch rests on her bed (brood.js): before the drift, which leaves its side open
   buildSkirt(L);
   if (SC) installSculpt(L, SC);
-  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); } });
+  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.brood && L.dormant) { L.brood.seat(); fitSkirt(L); } } });
   const pd = L.onDispose;
   L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
   return L;
@@ -584,9 +612,18 @@ function fitSkirt(L) {
     for (let q = -3; q <= 3; q++) a += gap[(j + q + SK_COLS) % SK_COLS];
     gs[j] = Math.min(gap[j], a / 7);
   }
+  // THE CLUTCH'S SIDE (brooder-clutch): her fanning keeps the silt off the eggs that bulge out
+  // from under her rim there, so the drift opens over that arc (brood.js seat picks it)
+  const nB = L.brood && L.brood.seated ? L.brood.bear : null, nW = L.brood ? L.brood.notch : 0;
+  const notchK = j => {
+    if (nB === null) return 0;
+    let d = j / SK_COLS * Math.PI * 2 - nB;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    return 1 - smooth(Math.abs(d), nW * 0.55, nW);
+  };
   for (let j = 0; j < SK_COLS; j++) {
     const th = j / SK_COLS * Math.PI * 2, rr = G.rimR(th), c = Math.cos(th), sn = Math.sin(th);
-    const gp = gs[j], w = clamp(gp * 1.7, 1.6, 9.5) / R;        // repose: ~30 degrees, wider for a deeper hollow
+    const nk = notchK(j), gp = gs[j] * (1 - nk), w = clamp(gp * 1.7, 1.6, 9.5) / R;        // repose: ~30 degrees, wider for a deeper hollow
     for (let i = 0; i < SK_RINGS; i++) {
       let rho, ly = -0.02, s = 0;
       if (i === 0) { rho = 0.80; ly = -0.10; }
@@ -601,6 +638,7 @@ function fitSkirt(L) {
         y = th0 + Math.max(0, gp) * prof + rip - 0.08 * s * s;
         if (i === SK_RINGS - 1) y = th0 - 0.10;
       }
+      if (i < 2 && nk > 0) y += (th0 - 0.12 - y) * nk;          // the open side: no curtain of silt under the rim
       if (y < th0 - 0.12 && i >= 1) y = th0 - 0.12;             // where the floor stands over her rim, the drift is under it
       P.setXYZ(i * SK_COLS + j, _v.x, y, _v.z);
       seabedColor(tm, _v.x, _v.z, rgb);
@@ -700,6 +738,30 @@ function finishSculpt(m, maps, set, micro) {
   if (maps.normalMap && maps.normalMap.userData.rg) patchNormalRG(m);
   return m;
 }
+// THE SILHOUETTE IN THE MURK (brooder-clutch): past ~20 u her shell carries a faint rim of
+// the water's own light (backscatter round a dark mass), so her outline separates from the
+// water behind her where the lantern cannot reach. Chained after the micro layer; its own
+// program key. uVkRim (rgb) is the water's colour x RIM.k, written per frame by poseAll.
+function silhouetteRim(L, m) {
+  const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
+  const u = { uVkRim: { value: new THREE.Color(0, 0, 0) }, uVkRimD: { value: new THREE.Vector3(RIM.near, RIM.far, RIM.pow) } };
+  L.rimU = u;
+  m.onBeforeCompile = function (sh, r) {
+    if (prev) prev.call(this, sh, r);
+    Object.assign(sh.uniforms, u);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uVkRim, uVkRimD;')
+      .replace('#include <tonemapping_fragment>', `{
+        float vkD = length(vViewPosition);
+        float vkR = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+        float vkW = smoothstep(uVkRimD.x, uVkRimD.x * 2.5, vkD) * (1.0 - smoothstep(uVkRimD.y * 0.7, uVkRimD.y, vkD));
+        gl_FragColor.rgb += uVkRim * pow(vkR, uVkRimD.z) * vkW;
+      }
+      #include <tonemapping_fragment>`);
+  };
+  m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|vkRim';
+  m.needsUpdate = true;
+}
 // retire a procedural part: its geometry, its material, and any texture it owned that
 // nothing else keeps (the belly's cloned mottle), so a swap leaks nothing
 function drop(L, o) {
@@ -723,6 +785,7 @@ function installSculpt(L, A) {
   // her AO no longer doubles up on the paint's (the bores read deep, not punched to black)
   const bodyMat = finishSculpt(registerPaint(sculptMat(A.maps.body, { envMapIntensity: 0.35, aoMapIntensity: 0.8 })), A.maps.body, sets.body,
     { scale: 20, normal: 0.9, cavity: 0.45, rough: 0.3 });
+  silhouetteRim(L, bodyMat);
   P.shell.geometry.dispose(); P.shell.material.dispose();
   P.shell.geometry = g.body; P.shell.material = bodyMat;
   L.sole = soleFromGeos([g.body]);                   // the baked shell's own underside
@@ -1206,12 +1269,36 @@ function poseAll(L, dt, player) {
   if (!(dt > 0) || !L.gG) { L.gG = { x: gy, v: 0 }; L.gP = { x: pit, v: 0 }; L.gRl = { x: rol, v: 0 }; }
   else { gy = spr(L.gG, gy, 4.5, 1, dt); pit = spr(L.gP, pit, 4.5, 1, dt); rol = spr(L.gRl, rol, 4.5, 1, dt); }
   const breath = (0.012 * Math.sin(L.t * 0.45) + 0.004 * Math.sin(L.t * 1.07 + 1)) * (1 - hc);
-  L.bodyY = gy + R * (lerp(0.06, 0.44, hv) + 0.10 * L.threatE + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  // THE BROODING CROUCH (brooder-clutch): a diver UNDER her shell (at her wards, at the clutch
+  // hanging there) and she bears down on him: the legs bend, the body comes down 2.5 u and
+  // leans over him, her threat lift dropped. Standing on the rift lip she rides the crest
+  // 13-15 u up (sole floor), which put her wards 8-13 u and the clutch ~9 u over the floor;
+  // the lean pivots on that crest, so the side over him comes down. The belly over his
+  // helmet is kept >= CROUCH.clear u off the floor (measured last frame, L.bellyOver).
+  if (!L.crouch) L.crouch = S();
+  {
+    let cw = 0;
+    if (player && !L.dormant && !L.calmed && !L.hold && L.standE > 0.9) {
+      const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z;
+      if (Math.hypot(px, pz) < 0.85 * R && player.pos.y < L.bodyY - 0.08 * R) cw = 1;
+    }
+    if (L.bellyOver < CROUCH.clear) cw = Math.min(cw, L.crouch.x - 0.15);
+    spr(L.crouch, clamp(cw, 0, 1), 1.4, 0.95, dt > 0 ? dt : 1);
+  }
+  const cK = L.crouch.x;
+  L.bodyY = gy + R * (lerp(0.06, 0.44 - CROUCH.drop * cK, hv) + 0.10 * L.threatE * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
+  // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
+  let leanP = 0, leanR = 0;
+  if (cK > 0.01 && player) {
+    const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z, cy2 = Math.cos(L.yaw), sy2 = Math.sin(L.yaw);
+    const lx = (px * cy2 - pz * sy2) / R, lz = (px * sy2 + pz * cy2) / R, ll = Math.max(0.35, Math.hypot(lx, lz));
+    leanP = CROUCH.lean * cK * lz / ll; leanR = -CROUCH.lean * cK * lx / ll;
+  }
   // hunched: standing, the front drops over the diver; threat lifts it to show the face.
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
-  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
+  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE * (1 - cK) - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x + leanP, L.yaw, rol - 0.025 * hc + L.bR.x + leanR);
   // the sole stays on the ground (L.grp sits at the origin, so body.matrix IS its world)
   b.updateMatrix();
   // (asleep the floor is off; it comes on through the heave, so the rise lifts her OUT)
@@ -1221,6 +1308,13 @@ function poseAll(L, dt, player) {
   if (pen > 0) { b.position.y += pen; L.bodyY += pen; }
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
+  // the belly over his helmet, off the floor under him (the crouch's limit, next frame)
+  if (player) {
+    _v.copy(player.pos).applyMatrix4(_inv);
+    _v.y = L.brood && L.brood.seated ? L.brood.underY(_v.x, _v.z, -0.125) : -0.125;
+    _v.applyMatrix4(b.matrixWorld);
+    L.bellyOver = _v.y - terrainH(player.pos.x, player.pos.z, L.idx);
+  } else L.bellyOver = 99;
 
   for (let li = 0; li < 8; li++) {
     _lp.copy(L.feet[li].cur);
@@ -1261,6 +1355,33 @@ function poseAll(L, dt, player) {
       s2 = Math.pow(Math.max(0, _x.dot(_v) / dist), 4) * (1 - smooth(dist, 25, 90)) * Math.max(0, player.light == null ? 1 : player.light);
     }
     L.stalkMat.emissiveIntensity = (0.05 * st + 2.6 * s2 * (0.35 + 0.65 * st)) * (L.stalkK ?? 1);
+  }
+  // EYESHINE AT RANGE (brooder-clutch): the pseudopupil above is a few pixels at 20 u and
+  // nothing at 45, so in the murk her eyes on him never read. Two small warm-glow pinpoints
+  // ride the stalked eyes: lit only by where each eye points at his lantern and its charge,
+  // never close (the real eye carries it there), fading out by GLINT.far. Fog off with their
+  // own fade (lib/textures.js warmGlow): a fogged additive sprite turns green with range.
+  if (L.rimU && scene.fog) L.rimU.uVkRim.value.copy(scene.fog.color).multiplyScalar(RIM.k * (L.dormant ? 0 : st));
+  if (L.glints) {
+    const lit = player ? Math.max(0, player.light == null ? 1 : player.light) : 0;
+    for (let i = 0; i < 2; i++) {
+      const gl = L.glints[i], e = L.eyeSt ? L.eyeSt[i] : null;
+      if (e) _r.copy(e.cur).multiplyScalar(L.stalkL || 0.12).add(e.piv).applyMatrix4(b.matrixWorld);
+      else _r.copy(L.head);
+      // (stood off the cornea toward him, out in front of the claws she holds before her face,
+      // so her own guard never depth-clips the pinpoint; on his line of sight it lands on the
+      // eye, and a dune or rock between them still hides it)
+      if (player) { _v.copy(player.pos).sub(_r); const dl = _v.length() || 1; gl.position.copy(_r).addScaledVector(_v, Math.min(7, dl * 0.3) / dl); }
+      else gl.position.copy(_r);
+      let f = 0;
+      if (player && st > 0.2) {
+        _v.copy(player.pos).sub(_r);
+        const dist = _v.length() || 1;
+        if (e) _x.copy(e.cur).transformDirection(b.matrixWorld); else b.getWorldDirection(_x);
+        f = Math.pow(Math.max(0, _x.dot(_v) / dist), 6) * lit * smooth(dist, GLINT.near, GLINT.near * 2) * st;
+      }
+      gl.material.opacity = GLINT.k * f;
+    }
   }
   // the mouthparts: five pairs working out of phase, faster when roused
   // (a sawtooth-ish stroke: a quick pull in, a slower open; the rhythm stutters and
@@ -1322,7 +1443,7 @@ function publishCols(L) {
 }
 
 function resetEv() {
-  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.plume = 0;
+  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0;
   return EV;
 }
 // a ground shock at world x,z of strength k (0..1): the game's camera shake, by distance
@@ -1330,6 +1451,14 @@ function quake(L, ev, x, z, k, player) {
   const d = Math.hypot(player.pos.x - x, player.pos.z - z);
   const q = k * (1 - smooth(d, 8, 70));
   if (q > ev.quake) ev.quake = q;
+}
+// a footfall you FEEL (brooder-clutch): event-shaped, distance-weighted out to THUMP.far;
+// game.js turns it into a vertical dip of the lens and sand lifting round his boots
+function thump(L, ev, x, z, k, player) {
+  if (!player) return;
+  const d = Math.hypot(player.pos.x - x, player.pos.z - z);
+  const q = THUMP.k * k * (1 - smooth(d, THUMP.near, THUMP.far));
+  if (q > ev.thump) ev.thump = q;
 }
 // Silt on HER scale: the shared puff pool (footfx, 420 particles, also the diver's boots)
 // spawns every burst within ~0.3 u, so a colossus's impact is a ring of k small bursts
@@ -1396,6 +1525,7 @@ export function updateBrooder(L, dt, t, player) {
 
   // ---- stand / threat easing: she takes ~6 s to rise and ~4 s to settle ----
   const rising = L.standTarget > L.stand;
+  L.rising = rising && !L.calmed;                     // (game.js: limbs unfolding past him are a shove, not a slam)
   const rate = rising ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
@@ -1508,9 +1638,16 @@ export function updateBrooder(L, dt, t, player) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
     if (dist < (L.toNest ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
       L.walkTo = null;
-      if (L.toNest) { L.toNest = false; L.standTarget = 0; }  // home: settle over the brood
+      if (L.toNest) { L.toNest = false; L.homeTurn = true; }   // home: turn to her bed, then settle over the clutch
     }
     else { want = Math.atan2(dx, dz); speed = L.speed * 0.30; }
+  } else if (L.homeTurn) {
+    // (brooder-clutch) she turns back to the heading she slept on, and she will not lie down
+    // on a diver: while he is under her shell she stands over him, calm, until he walks out
+    want = L.lairYaw;
+    let dA = L.lairYaw - L.yaw; dA = Math.atan2(Math.sin(dA), Math.cos(dA));
+    const under = Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY;
+    if (Math.abs(dA) < 0.12 && !under) { L.homeTurn = false; L.standTarget = 0; }
   } else if (hunt && L._pdT < (thief ? 400 : 90)) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
     // given up, she sweeps her front slowly across the cloud, searching. A thief she never
@@ -1529,6 +1666,8 @@ export function updateBrooder(L, dt, t, player) {
     const planted = L.threatE > 0.3 && (L.hamPh >= PH_SLAM0 || L.impT < 0.45);
     vC = planted ? 0 : L.speed * (thief ? HUNT.chase : HUNT.stalk) * closeK * (1 - 0.45 * L.threatE);
   }
+  // the hunting voice (audio/creatures.js): up while she comes for him, down when she stops
+  L.huntK = (L.huntK || 0) + ((hunt && (vC > 0.3 || thief) ? (thief ? 1 : 0.6) : 0) - (L.huntK || 0)) * Math.min(1, 1.2 * dt);
   const goal = want !== null && speed > 0 ? L.walkTo : vC > 0.3 ? L.aim : null;
   if (goal) {
     // round the rocks and hulls ahead; no headway for 3 s (a pocket between two of them)
@@ -1611,9 +1750,13 @@ export function updateBrooder(L, dt, t, player) {
         f.sl = slopeAt(L, f.to.x, f.to.z);
         silt(f.cur.x, f.cur.y + 0.2, f.cur.z, f.h > 0.2 ? 3 : 1, 3, 1.4 + 1.4 * f.h / 0.30, 0.9);
         if (f.h > 0.2) spawnPlume(f.cur.x, f.cur.y, f.cur.z, 'small', 1, L.idx);   // a heavy foot throws its own small cloud
+        // ...and going hard, a slow one that hangs where she went (render only: her wake)
+        const vH = Math.hypot(L.vel.x, L.vel.z);
+        if (f.h > 0.2 && vH > 1.0 && !L.dormant) spawnWake(f.cur.x, f.cur.y, f.cur.z, clamp(vH / 3.8, 0.3, 1), L.idx);
         L.bY.v -= R * 0.10 * f.h / 0.30;
         L.bR.v += sd * 0.10 * f.h / 0.30;
         quake(L, ev, f.cur.x, f.cur.z, 0.16 * f.h / 0.30, player);
+        thump(L, ev, f.cur.x, f.cur.z, (0.18 + 0.12 * clamp(vH / 3.8, 0, 1)) * f.h / 0.30, player);
       }
     } else if (L.standE > 0.35) {
       const d = f.planted.distanceTo(_rw);
@@ -1699,8 +1842,8 @@ export function updateBrooder(L, dt, t, player) {
         // buried wards can sit within reach of her face through the sand: only a
         // standing Brooder offers them
         if (L.standE > 0.6) {
-          // THE BROOD RULE: her last ward will not light while any egg is out of the
-          // nest; with the clutch whole again it lights on its own.
+          // THE BROOD RULE: her last ward will not light while a clump of her clutch is
+          // out; pressed back into her, it lights on its own.
           let dark = 0;
           for (const q of L.sigils) if (!q.lit) dark++;
           const last = dark === 1;
@@ -1719,8 +1862,8 @@ export function updateBrooder(L, dt, t, player) {
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
       if (L.memWard >= 0) wardsRecall(L, haloK);
-      // she goes home: back to the nest to settle over her brood, off the rift
-      if (L.brood) { L.walkTo = L.brood.nest.clone(); L.toNest = true; L.standTarget = 1; }
+      // she goes home: back to her bed on the lip, to settle over her clutch
+      if (L.brood) { L.walkTo = L.lairPos.clone(); L.toNest = true; L.standTarget = 1; }
       else { L.standTarget = 0; L.walkTo = null; }
     }
   } else {

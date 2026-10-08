@@ -54,6 +54,17 @@ export function buildCre(E) {
   c.wetG = E.g(0, c.body.inp);
   { const am = E.g(0.6), lp = E.f('lowpass', 210, 2.2, c.wetG), bp = E.f('bandpass', 95, 1.4, c.wetG); am.connect(lp); am.connect(bp);
     E.lfo(0.23, 0.35, am.gain); E.lfo(0.61, 0.15, am.gain); E.loop(E.n('brown', 1, am)); }
+  // VELKATH HUNTING (brooder-clutch: "the chase must read"): while she comes for him a low voice
+  // rides her body emitter (panned and distance-filtered like every emitter): a slow chitinous
+  // breath (brown noise in a low band, swelling on two slow lfos) over a beating sub growl (a
+  // detuned saw pair at 31/33 Hz under a 150 Hz lowpass). Level = L.huntK (brooder.js).
+  c.huntG = E.g(0, c.body.inp);
+  { const am = E.g(0.55), lp = E.f('lowpass', 150, 1.6, c.huntG), bp = E.f('bandpass', 70, 1.2, c.huntG);
+    am.connect(lp); am.connect(bp);
+    E.lfo(0.31, 0.4, am.gain); E.lfo(0.83, 0.15, am.gain);
+    E.loop(E.n('brown', 1, am));
+    const og = E.g(0.22, lp), o1 = E.o('sawtooth', 31), o2 = E.o('sawtooth', 33.4);
+    o1.connect(og); o2.connect(og); o1.start(); o2.start(); }
   c.finG = E.g(0, c.body.inp);
   { const am = E.g(0.5), lp = E.f('lowpass', 240, 1.5, c.finG); am.connect(lp); c.finO = E.o('sine', 3.5); const fg = E.g(0.5, am.gain); c.finO.connect(fg); c.finO.start(); E.loop(E.n('brown', 1, am)); }
 }
@@ -366,7 +377,7 @@ export function frameCre(E, W) {
     if (L && L.creepN !== undefined) { c.creepN = L.creepN; c.popN = L.popN; c.stillN = L.stillN; c.cockN = L.cockN; c.inkN = L.inkN; c.snapN = L.beak ? L.beak.snapN : 0; }
     c.body.follow = L ? L.pos : null; c.body.lvl = 0;
   }
-  let bodyLvl = 0, grind = 0, fin = 0;
+  let bodyLvl = 0, grind = 0, fin = 0, hunt = 0;
   if (L && I.state === 'play') {
     const awake = !L.dormant && !L.calmed;
     if (c.kind === 'brooder') {
@@ -374,7 +385,8 @@ export function frameCre(E, W) {
         let moving = 0;
         for (let i = 0; i < 8; i++) {
           const f = L.feet[i]; if (!f) continue;
-          if (c.feet[i] >= 0 && f.t < 0 && f.cur && t - c.lastFoot > 0.07) { c.lastFoot = t; velkathFoot(E, f.cur.x, f.cur.y, f.cur.z, (f.h || 0.3) / 0.3); }
+          // (at a run eight feet land ~7 a second: thinned, so the six emitters keep room for her voice)
+          if (c.feet[i] >= 0 && f.t < 0 && f.cur && t - c.lastFoot > ((L.huntK || 0) > 0.5 ? 0.2 : 0.07)) { c.lastFoot = t; velkathFoot(E, f.cur.x, f.cur.y, f.cur.z, (f.h || 0.3) / 0.3); }
           if (f.t >= 0) moving++;
           c.feet[i] = f.t;
         }
@@ -387,6 +399,7 @@ export function frameCre(E, W) {
       if (it < c.impT - 0.5 && it < 0.1 && (L.threatE || 0) > 0.5) velkathHammer(E, L, L.threatE);
       c.impT = it;
       bodyLvl = awake ? 0.5 : 0.15;
+      hunt = awake ? (L.huntK || 0) : 0;
     } else if (c.kind === 'hoarder') {
       const b = L.brPh || 0;
       if (c.brPh < 0.7 && b >= 0.7) oruneExhale(E, L, !L.dormant && !L.calmed);
@@ -437,6 +450,7 @@ export function frameCre(E, W) {
   c.body.lvl = bodyLvl;
   E.gate('cgrind', c.grindG, c.body.inp, 0.3 * grind * KC.BROODER, 0.15);
   E.gate('cfin', c.finG, c.body.inp, 0.2 * fin * KC.HUNTER, 0.3);
+  E.gate('chunt', c.huntG, c.body.inp, 0.42 * hunt * KC.BROODER, 0.6);
   // her churn: a floor while she is up, swelling with the arms' speed; gone in the freeze
   const wet = c.kind === 'hoarder' && L && I.state === 'play' && !L.calmed ? (L.dormant ? 0.03 : 0.10 + 0.35 * (L.moveK || 0)) * (1 - c.wetHush) : 0;
   E.gate('cwet', c.wetG, c.body.inp, wet * KC.HOARDER, c.wetHush > 0 ? 0.08 : 0.4);

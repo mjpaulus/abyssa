@@ -25,6 +25,7 @@ import { raft, pumpPos, chartAnchor } from '../systems/raft.js';
 import { placeOnDeck } from '../player.js';
 import { riftPos, RIFT_R, zoneTop } from '../config.js';
 import { currentSiteIndex, siteAt } from '../world/site.js';
+import { bodyBlocked } from '../entities/sleeper/bodyCols.js';
 
 const EYE_H = 1.35;                 // player.js: his eye over his boots
 const TAU = Math.PI * 2;
@@ -312,23 +313,35 @@ function shark(yaw) {
   return 'ONE CIRCLES IN FROM ' + SHARK_D + ' U. ITS RUN COMES IN ~5 S. SWIM, BURST, OR INK';
 }
 
-// The Brooder's nest: stand him on the far side of the nest from her body, the nearest egg
-// in arm's reach (the rite's own test, brood.nearEgg, says so), facing the clutch and her.
+// The Brooder's clutch (brooder-clutch): stand him where it bulges out from under her rim,
+// in reach of it (the rite's own test, brood.canTake, says so), clear of her body (the
+// collider the push-out uses), facing it.
 function velkath() {
   const L = H.lev, B = L && L.brood;
-  if (!B) return 'NO BROOD HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
-  const n = B.nest, bx = L.pos ? L.pos.x : n.x + 1, bz = L.pos ? L.pos.z : n.z;
-  const bear = yawTo(n.x - bx, n.z - bz);
+  if (!B || !B.seated) return 'NO CLUTCH HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
+  const t = B.takeAt, bx = L.pos.x, bz = L.pos.z;
+  const out = yawTo(t.x - bx, t.z - bz);
   const probe = player.pos.clone();
-  const reach = (x, z) => { probe.set(x, terrainH(x, z, 0) + EYE_H, z); return B.nearEgg(probe) >= 0; };
+  const ok = (x, z) => {
+    const y = terrainH(x, z, 0);
+    if (terrainNormal(x, z, 0).y < 0.6) return false;
+    probe.set(x, y + EYE_H, z);
+    if (!B.canTake(probe)) return false;
+    for (const h of [0.45, 1.0, 1.6]) if (bodyBlocked(x, y + h, z, 0.45)) return false;
+    return true;
+  };
   let s = null;
-  for (const r of [3.0, 2.4, 3.6, 1.8, 4.2]) {
-    const c = findGround(n.x, n.z, r, bear, 0, 0.6, reach);
-    if (reach(c.x, c.z)) { s = c; break; }
+  for (const r of [2.0, 2.6, 1.4, 3.2, 3.8, 1.0, 4.4]) {
+    for (let k = 0; k < 24 && !s; k++) {
+      const a = out + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * (TAU / 24);
+      const x = t.x + Math.sin(a) * r, z = t.z + Math.cos(a) * r;
+      if (ok(x, z)) s = { x, z };
+    }
+    if (s) break;
   }
-  if (!s) s = { x: n.x + Math.sin(bear) * 2, z: n.z + Math.cos(bear) * 2 };
-  standAt(s.x, s.z, 0, yawTo(n.x - s.x, n.z - s.z), s.pitch);
-  return 'AT THE NEST, AN EGG IN REACH. [E] TAKES IT AND SHE WAKES';
+  if (!s) s = { x: t.x + Math.sin(out) * 2.5, z: t.z + Math.cos(out) * 2.5 };
+  standAt(s.x, s.z, 0, yawTo(t.x - s.x, t.z - s.z), -0.3);
+  return 'AT HER CLUTCH, IN REACH. [E] PRIES A CLUMP AND SHE WAKES';
 }
 
 // Orune's hoard: stand him ~14 u off the ship's lamp, on the open side away from her body,

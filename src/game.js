@@ -7,7 +7,7 @@ import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, pre
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
-import { stirPulse, P_SLAM } from './world/stir.js';
+import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
@@ -36,7 +36,7 @@ import { camBlockedLocal, camBlockWhy } from './systems/raft/colliders.js';
 import { buildResources, updateResources, reseedResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
 import { buildProps, updateProps, propColliders, reseedProps } from './world/props.js';
-import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world/footfx.js';
+import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos, emitDust } from './world/footfx.js';
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, reseedDens } from './world/predators.js';
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks, setKeepsakeState, nearKeepsake, takeKeepsake } from './world/wrecks.js';
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
@@ -351,10 +351,7 @@ $bm.lev.appendChild($tally);
 let tallyKey = -1, tallyLit = 0, tallyNoT = 0;
 function eggsOut(L) {
   const B = L && L.brood;
-  if (!B) return 0;
-  let n = 0;
-  for (let k = 0; k < B.eggs.length; k++) if (!B.eggs[k].inNest) n++;
-  return n;
+  return B ? B.out() : 0;          // the clump of her clutch Sal carries (brood.js)
 }
 function updateTally(dt) {
   if (tallyNoT > 0 && (tallyNoT -= dt) <= 0) $tally.classList.remove('refuse');
@@ -376,7 +373,7 @@ function updateTally(dt) {
   for (let i = 0; i < S.length; i++) if (S[i].mem) h += '<i class="mem"></i>';
   for (let i = 0; i < S.length; i++) if (S[i].lit && !S[i].mem) h += (litMask & ~tallyLit) & (1 << i) ? '<i class="on new"></i>' : '<i class="on"></i>';
   for (let i = 0; i < S.length; i++) if (!S[i].lit) h += held ? '<i class="cold"></i>' : '<i></i>';
-  h += dark ? `<b>${dark} DARK${held ? ' · EGG OUT' : ''}</b>` : '';
+  h += dark ? `<b>${dark} DARK${held ? ' · CLUTCH ROBBED' : ''}</b>` : '';
   tallyLit = litMask;
   $tally.innerHTML = h;
 }
@@ -1716,6 +1713,9 @@ function updateCamera(dt, t, fwd) {
   const fovRate = camKickPunch > 0 && wantFov > camFov ? 20 : 2.5;
   camFov += (wantFov - camFov) * Math.min(1, fovRate * dt);
   if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
+  // DEV (look-dev stills): window.__camPin = { p: [x,y,z], t: [x,y,z] } pins the lens; nothing sets it in play
+  const pin = window.__camPin;
+  if (pin) { camera.position.fromArray(pin.p); camera.lookAt(pin.t[0], pin.t[1], pin.t[2]); }
 }
 
 // The decorative block: a broken jelly or a bad cloud must never take the helm with it.
@@ -2056,7 +2056,9 @@ function update(dt, t) {
     // walking into a planted leg is only a wall.
     if (!paused && bodyColsOn() && resolveBodyCols(player, dt, player.grounded)) {
       if (BODY.shell) lev.touchT = 0.3;   // bumping her SHELL tells her where he is (sight); a limb brushing him does not
-      if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant) { ev.slam = true; ev.lightDrain += dt * 0.5; }
+      // (brooder-clutch: the take is AT her body now, so her legs unfold past him as she rises;
+      // that is a shove, not a blow)
+      if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant && !lev.rising) { ev.slam = true; ev.lightDrain += dt * 0.5; }
     }
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
     if (ev.woke) {
@@ -2067,6 +2069,18 @@ function update(dt, t) {
     if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); diverImpulse('grab'); }
     diverGrab(!!lev.grab);
     if (ev.quake) shake = Math.max(shake, ev.quake);   // her footfalls, hammer, settle thump
+    // (brooder-clutch) HER FOOTFALLS, FELT out to ~110 u: an event-shaped dip of the lens (the
+    // landing spring, not jitter), and the sand round his boots lifts and the reef nearby
+    // starts (stir.js) on the same frame, so she is there before she is seen
+    if (ev.thump > 0.02 && !paused) {
+      camLand.v -= ev.thump * 1.6 * (reducedMotion() ? 0.3 : 1);
+      shake = Math.max(shake, ev.thump * 0.22);
+      if (player.grounded) {
+        const n = Math.round(1 + 5 * ev.thump), fy = player.pos.y - 1.3;
+        for (let i = 0; i < 3; i++) { const a = Math.random() * 6.283, r = 0.5 + 0.8 * Math.random(); emitDust(player.pos.x + Math.cos(a) * r, fy, player.pos.z + Math.sin(a) * r, n, 0.35 + 0.8 * ev.thump); }
+        stirPulse(player.pos.x, fy, player.pos.z, 7, 0, Math.min(0.45, 0.2 + ev.thump), P_STEP);
+      }
+    }
     // big blows startle the reef too (footfalls already reach it through stir.js)
     if (ev.quake > 0.3 && lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, Math.min(1, ev.quake + 0.3), P_SLAM);
     if (ev.plume) stirPulse(ev.plumeX, ev.plumeY, ev.plumeZ, 30, 0, Math.min(1, 0.5 + 0.5 * ev.plume), P_SLAM);   // the Brooder's sand plume startles the reef where it rises
@@ -2117,7 +2131,7 @@ function update(dt, t) {
       if (ev.remaining > 0) {
         const held = ev.remaining === 1 && eggsOut(lev) > 0;
         dropMsg(countLive);   // only the newest count is news
-        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE AN EGG IS OUT OF THE NEST.'
+        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE YOU CARRY HER EGGS.'
           : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);
       }
     }

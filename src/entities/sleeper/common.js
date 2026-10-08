@@ -27,7 +27,7 @@ export const MSG_WARDS_ANSWER = 'THE WARDS OF ORUNE ANSWER THE PING.';
 export const MSG_WARDS_DARK = 'THE WARDS OF ORUNE ARE DARK. SOUND FOR THEM.';
 export const MSG_WARDS_KEPT = "MHOR'S WARDS ARE KEPT. CUT THE KEEPERS LOOSE.";
 // (fifth-ward) the other held wards' lines: each says why AND what to do
-export const MSG_BROOD_COLD = 'THE LAST WARD STAYS COLD WHILE AN EGG IS OUT. SET IT BACK IN THE NEST.';
+export const MSG_BROOD_COLD = 'THE LAST WARD STAYS COLD WHILE YOU CARRY HER EGGS. PRESS THEM BACK UNDER HER.';
 export const MSG_NOT_STILL = 'HE WILL NOT HOLD STILL. DRAW HIS STRIKE THROUGH THE FURNACE FIRE.';
 // The live sleeper (game.js owns `lev`; this is the same object, for the tools hook).
 let live = null;
