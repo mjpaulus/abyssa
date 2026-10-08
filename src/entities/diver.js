@@ -3162,6 +3162,11 @@ const spV = { x: 0, v: 0 }; let spVInit = false;
 let peerT = -1, peerW = 0;
 const PEER_DUR = 4.2;
 let prevBurstT = 0, burstW = 0, prevJet = 0;
+// (sweep) the burst streamline: body pitch/roll toward the thrust, its own slow springs (rad)
+const blP = { x: 0, v: 0 }, blR = { x: 0, v: 0 };
+const BURSTLEAN = { on: 1, max: 1.05, bank: 0.55, back: 0.5, fIn: 3.2, fOut: 2.0, spine: 0.30, neck: 0.42 };
+window.__burstLean = BURSTLEAN;
+window.__burstLeanState = () => ({ pitchDeg: +(blP.x * 57.3).toFixed(1), rollDeg: +(blR.x * 57.3).toFixed(1) });
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
 const strafeS = { x: 0, v: 0 };
@@ -3833,6 +3838,40 @@ export function updateDiver(dt, t, player) {
       poMix(CH.Lhx, 0.18, w); poMix(CH.Lk, 0.16, w); poMix(CH.La, -0.40, w);
       poMix(CH.nPitch, -0.18, w);
     }
+    // (sweep) THE STREAMLINE INTO THE THRUST. The pack shoves him from the back, and a held
+    // burst used to leave him standing bolt upright in the water while it drove him level
+    // across the column. The whole man lays over toward where the jet is taking him: a level
+    // burst carries him to ~60 deg (BURSTLEAN.max), an upward one stays vertical, a sideways
+    // one banks him (a share of the angle), backwards half of it. He is ~170 kg of lead and
+    // brass and a bonnet full of air, so the lay-over is a slow, critically damped swing in and
+    // a slower one back after, never a snap. The bonnet is bolted to the corselet, so the
+    // look ahead comes from the spine and neck extending (head up, view port forward); the arms
+    // brace back along the body and the boots trail.
+    {
+      const BL = BURSTLEAN, wJ = jt * (1 - gb) * (1 - ladderF) * BL.on;
+      let tP = 0, tR = 0;
+      if (wJ > 1e-3 && player.jetDir) {
+        const d = player.jetDir, sy = Math.sin(yawF), cy = Math.cos(yawF);
+        const f = d.x * sy + d.z * cy, r = -d.x * cy + d.z * sy, hz = Math.hypot(f, r);
+        if (hz > 1e-3) {
+          const th = Math.min(Math.atan2(hz, Math.max(d.y, 0)), BL.max) * wJ;
+          tP = th * f / hz * (f < 0 ? BL.back : 1); tR = th * r / hz * BL.bank;
+        }
+      }
+      const into = Math.abs(tP) + Math.abs(tR) > Math.abs(blP.x) + Math.abs(blR.x);
+      spring(blP, tP, dt, into ? BL.fIn : BL.fOut, 1.0);
+      spring(blR, tR, dt, into ? BL.fIn : BL.fOut, 1.0);
+      const lay = clamp(Math.hypot(blP.x, blR.x) / BL.max, 0, 1.2);
+      if (lay > 1e-3) {
+        const fw = Math.max(blP.x, 0);
+        po[CH.sPitch] -= BL.spine * fw; po[CH.nPitch] -= BL.neck * fw;      // head up, looking where he goes
+        po[CH.Rsx] += 0.32 * lay; po[CH.Lsx] += 0.32 * lay;                 // arms braced back along the body
+        po[CH.Re] -= 0.12 * lay; po[CH.Le] -= 0.12 * lay;
+        po[CH.Rsz] += 0.06 * lay; po[CH.Lsz] += 0.06 * lay;
+        po[CH.Rhx] += 0.12 * lay; po[CH.Lhx] += 0.20 * lay;                 // the boots trail, a little apart
+        po[CH.Rk] += 0.12 * lay; po[CH.Lk] += 0.22 * lay;
+      }
+    }
   }
 
   // Slash overlay: blends over the left-arm channels (plus a touch of spine twist) rather
@@ -3998,8 +4037,8 @@ export function updateDiver(dt, t, player) {
     spring(seaH, hT, dt, 9, 0.75);
     seaHeave = seaH.x;
   }
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x, 0,
-    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x + seaR.x);
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x + blP.x, 0,
+    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x + seaR.x + blR.x);
 
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);
