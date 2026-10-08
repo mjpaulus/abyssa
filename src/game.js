@@ -604,7 +604,7 @@ addEventListener('mousedown', e => {
 // already live or waiting is not queued twice; a line that has waited MSGQ_STALE seconds is
 // dropped unshown (old news). Allocation only when a line is said, never per frame.
 let msgPrio = 0;
-const msgQ = [], MSGQ_N = 3, MSGQ_STALE = 8;
+const msgQ = [], MSGQ_N = 3, MSGQ_STALE = 12;
 function showMsg(text, dur = 4, prio = 1) {
   if (msgT > 0 && msgPrio >= prio) {
     if ($msg.textContent === text && msgT > 0.6) return;
@@ -633,7 +633,7 @@ function dropMsg(text) {
   if (msgT > 0.01 && $msg.textContent === text) msgT = 0.01;
   for (let i = msgQ.length - 1; i >= 0; i--) if (msgQ[i].text === text) msgQ.splice(i, 1);
 }
-let refuseLive = null, knockT = -1e9, stunWas = false, ringWas = false;
+let refuseLive = null, countLive = null, knockT = -1e9, stunWas = false, ringWas = false;
 // Probe surface: what is live, what waits.
 window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPrio, pend: msgQ.length ? msgQ[0].text : null, queue: msgQ.map(q => q.text) });
 
@@ -1968,7 +1968,8 @@ function update(dt, t) {
       // the brood rule will hold, say so NOW, before he swims to it.
       if (ev.remaining > 0) {
         const held = ev.remaining === 1 && eggsOut(lev) > 0;
-        showMsg(held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE AN EGG IS OUT OF THE NEST.'
+        dropMsg(countLive);   // only the newest count is news
+        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE AN EGG IS OUT OF THE NEST.'
           : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);
       }
     }

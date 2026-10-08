@@ -35,6 +35,7 @@ for (let i = 0; i < L.sigils.length; i++) {
     }
     res.notes.push('re-stun for ward ' + i + ': ' + L.state);
   }
+  if (A.pace) W.run(A.pace, W.holdFn);   // a diver's swim between wards (HUD checks)
   const stunLeft = +L.stun.toFixed(2);
   const r = W.approach(L, g, { far: 9, near: 1.0 });
   W.run(30);   // flash settles

@@ -28,6 +28,7 @@ for (let i = 0; i < L.sigils.length; i++) {
   const g = L.sigils[i];
   if (g.lit) { res.wards.push({ i, pre: 'lit' + (g.mem ? '(mem)' : '') }); continue; }
   if (L.reveal < 4) { W.hold(back); W.run(2, W.holdFn); res.notes.push('ping before ' + i + ': ' + ping()); W.run(30, W.holdFn); }
+  if (A.pace) W.run(A.pace, W.holdFn);   // a diver's swim between wards (HUD checks)
   const rev = +L.reveal.toFixed(2), grev = +g.rev.toFixed(2);
   const r = W.approach(L, g, { far: 9, near: 1.0 });
   W.run(30, W.holdFn);
