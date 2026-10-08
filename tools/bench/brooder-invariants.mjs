@@ -16,7 +16,7 @@ const safe = await c.ev(`window.__safeFailed ? __safeFailed() : 'n/a'`);
 const shader = await c.ev(`window.__shaderFailed ? __shaderFailed() : 'n/a'`);
 const ridge = await c.ev(`__ridge.fp()`);
 const fps = await c.ev(`[__lev.fp(0), __lev.fp(1), __lev.fp(2)]`);
-const sfp = await c.ev(`(async () => { const M = await import('/src/entities/leviathan.js'); const out = []; for (let i = 0; i < 3; i++) out.push(M.sleeperFingerprint(i)); __lev.swap(); return out; })()`);
+const sfp = await c.ev(`(async () => { const M = await import('/src/entities/leviathan.js'); const out = []; for (let i = 0; i < 3; i++) out.push(M.sleeperFingerprint(i)); out.push(M.sleeperFingerprint(0)); __lev.swap(); return out; })()`);   // (zone 0 twice: deterministic)
 const shader2 = await c.ev(`window.__shaderFailed ? __shaderFailed() : 'n/a'`);
 const cons = (await c.console()).filter(l => /error|EXC/i.test(l));
 console.log(JSON.stringify({ lights, safe, shader, shader2, ridge, levFp: fps, sleeperFp: sfp, consoleErrors: cons }, null, 1));
