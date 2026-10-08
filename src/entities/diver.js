@@ -1901,12 +1901,13 @@ const S = {
 // a man in a weighted dress pushes the water away in front of him. Same phase clock, the push
 // centred on the haul's (player.js KICK_P .36, so the thrust lands on the visible push):
 // GATHER (0-.12) both hands in front of the chest, elbows folded, palms out -> PUSH (.12-.47)
-// the arms drive forward and a little down until the elbows lock -> SCULL OUT (.47-.66) the
+// the arms drive forward and out (wide enough to be seen past him from behind) until the
+// elbows lock -> SCULL OUT (.47-.66) the
 // straight arms open wide, feathering -> RECOVER (.66-1) round the sides and the elbows fold
 // back in to the ribs, the hands rising to the chest again.
 const SB = {
   sx: curve([[0, -0.72], [0.12, -0.84], [0.24, -1.02], [0.36, -1.14], [0.47, -1.08], [0.56, -0.84], [0.66, -0.48], [0.78, -0.40], [0.90, -0.58]]),
-  sz: curve([[0, 0.22], [0.12, 0.24], [0.24, 0.30], [0.36, 0.42], [0.47, 0.64], [0.56, 0.88], [0.66, 0.84], [0.78, 0.46], [0.90, 0.26]]),
+  sz: curve([[0, 0.30], [0.12, 0.40], [0.24, 0.50], [0.36, 0.60], [0.47, 0.74], [0.56, 0.90], [0.66, 0.84], [0.78, 0.50], [0.90, 0.32]]),
   el: curve([[0, -1.36], [0.12, -1.16], [0.24, -0.70], [0.36, -0.30], [0.47, -0.18], [0.56, -0.24], [0.66, -0.50], [0.78, -1.10], [0.90, -1.40]])
 };
 // The haul's effort envelope (swimfix): what he is DOING sizes and paces the stroke, so a

@@ -35,7 +35,7 @@ if (process.env.CROP) { }
 await ev(`(async () => {
   const D = await import('/src/entities/diver.js'), P = await import('/src/player.js');
   const V = D.diver.armL.end.position.constructor, a = new V(), b = new V();
-  const R = window.__rec = { seg: 'idle', log: [], on: true, shots: [], shotOn: false, shotLast: 0, shotEvery: +(${SHOT_MS}), crop: ${process.env.CROP || '[0, 0, 1, 1]'}, sc: ${process.env.SC || 0.25} };
+  const R = window.__rec = { seg: 'idle', log: [], on: true, shots: [], shotOn: false, shotLast: 0, shotEvery: +(${SHOT_MS}), crop: ${process.env.CROP || '[0, 0, 1, 1]'}, sc: ${process.env.SC || 0.25}, side: ${+(process.env.SIDE || 0)} };
   const cv2 = document.createElement('canvas'), cx2 = cv2.getContext('2d');
   let lt = performance.now();
   const sv = new V();
@@ -56,6 +56,10 @@ await ev(`(async () => {
         +(p.vel.x * sy + p.vel.z * cy).toFixed(2), +p.vel.y.toFixed(2), p.scullZ || 0,
         +a.x.toFixed(3), +a.y.toFixed(3), +a.z.toFixed(3), +b.x.toFixed(3), +b.y.toFixed(3), +b.z.toFixed(3),
         (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr()]);
+    }
+    if (R.side) {   // a side lens that rides with him (SIDE=1): checks the stroke's shape, not the game view
+      const sy = Math.sin(p.yaw), cy = Math.cos(p.yaw), q = p.pos;
+      window.__camPin = { pos: [q.x + cy * R.side, q.y + 0.2, q.z - sy * R.side], look: [q.x, q.y - 0.9, q.z] };
     }
     if (R.shotOn && now - R.shotLast >= R.shotEvery) {
       R.shotLast = now;
@@ -80,6 +84,13 @@ async function lift(dy) {
 }
 async function ws6() { await hold('KeyW', 6000, 'W'); await mark('coastW'); await sleep(1500); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
 
+// ALT3=1: enter the way Michael did, the playtest jump Alt+3 (SEABED, ZONE 0), by a real key
+if (process.env.ALT3) {
+  await mark('alt3');
+  await key('keyDown', 'Digit3', 1); await key('keyUp', 'Digit3', 1);
+  await sleep(2500);
+  console.log('alt3', JSON.stringify(await ev(`(window.__helm = true, [gameState, window.__playtest && window.__playtest.last(), player.grounded, +player.pos.y.toFixed(1)])`)));
+}
 if (SCEN === 'long') { await mark('setup'); await lift(60); await neutral(2500); await mark('hang'); await neutral(2000); await hold('KeyW', 12000, 'W'); await mark('coastW'); await neutral(6000); await hold('KeyS', 12000, 'S'); await mark('coastS'); await sleep(1500); }
 else if (SCEN === 'midS') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(3000); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
 else if (SCEN === 'mid') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(5000); await ws6(); }
