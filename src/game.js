@@ -596,22 +596,46 @@ addEventListener('mousedown', e => {
 // one WAITS for it (so 'SHE MAKES FOR...' is never clobbered by the arrival's sleeper
 // name); a higher one cuts in. The waiting slot keeps the more important of any two.
 // prio 0: names and colour. prio 1 (default): everything the player must read.
-let msgPrio = 0, msgPend = null;
+// (fifth-ward) The waiting room is a short QUEUE now, not one slot: with one slot every line
+// that arrived while another waited REPLACED it, so in a busy beat (a ward lit, a slam, the
+// dress tearing, the lantern guttering) the count, the brood rule's refusal and the sleepers'
+// own beats ('THE FIRE BLINDS HIM', 'THE WARDS OF ORUNE ANSWER THE PING') were silently lost.
+// Up to MSGQ_N lines wait, highest priority first and in arrival order within one; a line
+// already live or waiting is not queued twice; a line that has waited MSGQ_STALE seconds is
+// dropped unshown (old news). Allocation only when a line is said, never per frame.
+let msgPrio = 0;
+const msgQ = [], MSGQ_N = 3, MSGQ_STALE = 8;
 function showMsg(text, dur = 4, prio = 1) {
   if (msgT > 0 && msgPrio >= prio) {
-    if (!msgPend || prio >= msgPend.prio) msgPend = { text, dur, prio };
+    if ($msg.textContent === text && msgT > 0.6) return;
+    for (let i = 0; i < msgQ.length; i++) if (msgQ[i].text === text) return;
+    let i = msgQ.length;
+    while (i > 0 && msgQ[i - 1].prio < prio) i--;
+    msgQ.splice(i, 0, { text, dur, prio, at: performance.now() });
+    if (msgQ.length > MSGQ_N) msgQ.length = MSGQ_N;
     return;
   }
   $msg.textContent = text;
   $msg.classList.add('on');
   msgT = dur; msgPrio = prio;
 }
-// Probe surface: what is live, what waits.
+// the next line that is still news, or null
+function nextMsg() {
+  const now = performance.now();
+  while (msgQ.length && now - msgQ[0].at > MSGQ_STALE * 1000) msgQ.shift();
+  return msgQ.length ? msgQ.shift() : null;
+}
 // (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the egg is
-// back or the ward has taken): it fades now and whatever waits behind it shows.
-function dropMsg(text) { if (text && msgT > 0.01 && $msg.textContent === text) msgT = 0.01; }
-let refuseLive = null;
-window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPrio, pend: msgPend && msgPend.text });
+// back, the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
+// whatever waits behind it shows; a waiting copy is struck too.
+function dropMsg(text) {
+  if (!text) return;
+  if (msgT > 0.01 && $msg.textContent === text) msgT = 0.01;
+  for (let i = msgQ.length - 1; i >= 0; i--) if (msgQ[i].text === text) msgQ.splice(i, 1);
+}
+let refuseLive = null, knockT = -1e9, stunWas = false, ringWas = false;
+// Probe surface: what is live, what waits.
+window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPrio, pend: msgQ.length ? msgQ[0].text : null, queue: msgQ.map(q => q.text) });
 
 // Remote anchorages carry hand-authored sleeper rows: more wards, a hue nudge, an
 // epithet in the previous chart-owner's ink. Home passes undefined and is untouched.
@@ -1638,9 +1662,10 @@ function update(dt, t) {
       if ($msg.classList.contains('on')) {
         // the live line fades; if one waits, hold the slot (at ITS priority) for the fade
         $msg.classList.remove('on');
-        if (msgPend) { msgT = 0.5; msgPrio = msgPend.prio; }
-      } else if (msgPend) {
-        const p = msgPend; msgPend = null; showMsg(p.text, p.dur, p.prio);
+        if (msgQ.length) { msgT = 0.5; msgPrio = msgQ[0].prio; }
+      } else {
+        const p = nextMsg();
+        if (p) showMsg(p.text, p.dur, p.prio);
       }
     }
   }
@@ -1903,8 +1928,13 @@ function update(dt, t) {
     if (ev.msg) showMsg(ev.msg, 4);
     // (fifth-ward) a held ward refused a touch: a dead iron knock, the pips shake, and the
     // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
-    if (ev.refused) { chime(98, 1, 0.32, 'cold'); tallyRefuse(); ev.refused = 0; }
+    // (one knock per 0.6 s per sleeper: a strike pass sweeps several held wards at once)
+    if (ev.refused) { if (t - knockT > 0.6) { knockT = t; chime(98, 1, 0.32, 'cold'); tallyRefuse(); } ev.refused = 0; }
     if (ev.refuseMsg) { showMsg(ev.refuseMsg, 4.5, 2); refuseLive = ev.refuseMsg; ev.refuseMsg = null; }
+    // the refusal's reason went away: Mhor hangs stunned, or Orune's wards ring
+    const stunNow = lev.state === 'stunned', ringNow = !!(lev.sonarWards && lev.reveal > 0);
+    if ((stunNow && !stunWas) || (ringNow && !ringWas)) { dropMsg(refuseLive); refuseLive = null; }
+    stunWas = stunNow; ringWas = ringNow;
     if (lev.memWard >= 0 && !lev.calmed && !lev.dormant) {
       const g = lev.sigils[lev.memWard];
       const inR = !!(g && g.mem && g.grp.position.distanceTo(player.pos) < (lev.reach || 5));
@@ -2088,7 +2118,7 @@ function update(dt, t) {
   if (state === 'play') {
     if (!tips.dress && player.pos.y < -8) {
       tips.dress = 1; showMsg('AIR IN THE DRESS LIFTS YOU. THE PACK\'S BURST FILLS IT, [C] VENTS IT.', 5);
-    } else if (!tips.pack && player.pos.y < -14 && tips.dress && msgT <= 0 && !msgPend) {
+    } else if (!tips.pack && player.pos.y < -14 && tips.dress && msgT <= 0 && !msgQ.length) {
       // (in silence: the queue holds one line, and this one must not bump the dress's)
       tips.pack = 1; showMsg('THE AIR PACK: TAP [SPACE] TO HOP. HOLD IT TO BURST. THE PUMP REFILLS THE RESERVE.', 6);
     } else if (!tips.swollen && player.fill > 0.97 && player.vel.y > 2) {
@@ -2827,7 +2857,7 @@ if (/[?&]playtest(?:[=&#]|$)/.test(location.search)) import('./ui/playtest.js').
   // No lingering lines: the message slot and its queue cleared, the one-shot onboarding
   // beats marked said (a tester has read them; they would fire over every arrival).
   hush() {
-    msgT = 0; msgPend = null; msgPrio = 0; $msg.classList.remove('on');
+    msgT = 0; msgQ.length = 0; msgPrio = 0; $msg.classList.remove('on');
     for (const k in tips) tips[k] = 1;
     deckTip = 1; pendingWards = false; memPending = null; zoneTime = 0;
   }
