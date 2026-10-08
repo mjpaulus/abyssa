@@ -281,7 +281,7 @@ function jump(k) {
       const next = cur === 0 ? 1 : cur === 1 ? 2 : 0;   // home -> Pallid Bank -> Burned Ground -> home
       H.reseedWorld(next);   // the voyage's own reseed, without the passage: lands on deck
       deck(); refill();
-      label = '− · ' + siteAt(next).name;
+      label = '− · NEXT ANCHORAGE';
       line = 'SAILED TO ' + siteAt(next).name;
       break;
     }
