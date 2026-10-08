@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { setMaxAniso } from './lib/textures.js';
+import { installShaderWatch } from './lib/shaderWatch.js';
 
 export const renderer = new THREE.WebGLRenderer({ antialias: false, stencil: false, depth: false, powerPreference: 'high-performance' });
 // Render scale is applied by hand to INTEGER buffer dimensions, with pixelRatio pinned
@@ -58,6 +59,8 @@ document.body.appendChild(renderer.domElement);
 export const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x04121f);
 scene.fog = new THREE.FogExp2(0x04121f, 0.016);
+// Every program that fails to compile/link is recorded: window.__shaderFailed() must be [].
+installShaderWatch(renderer, scene);
 // PERF HARNESS (?lab or ?bench only): every top-level scene.add records the module that
 // made the call, so __bench (game.js) can attribute draws/triangles and A/B-hide a whole
 // system by owner without each module registering itself. Build-time only, never per frame.

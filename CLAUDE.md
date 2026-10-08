@@ -44,6 +44,16 @@ procedural fallback (lib/assets.js loadSculpted never throws).**
   OBJECT on the same name, which until 2026-10-04 silently disabled pause for everyone).
 - Screenshot-based FPS/motion readings in the pane are unreliable under load; the
   user's own focused window is the ground truth for feel.
+- SHADER LINK FAILURES ON METAL ARE A TRANSLATOR HICCUP, NOT OUR GLSL (roadmap/shader-link-
+  failure.md). ANGLE's GLSL->MSL step now and then gives one random function parameter a
+  spurious `constant T &` / `thread T &` and the program fails to link ("no matching function
+  for call to ..."); the identical source links fine on the next try. `lib/shaderWatch.js`
+  (installed by core.js on renderer.debug.onShaderError) re-translates and relinks the same
+  program in place (a `#define ABYSSA_RELINK n` line), so the object still draws.
+  `__shaderFailed()` = still broken (must be []), `.all()` = every failure incl. relinked
+  (console.warn), `.detail(i)` = logs + GLSL + translated MSL, `.selfTest()` = the relink
+  path. Never "fix" one of these by rewriting the function it named: it picks a different one
+  each time. Soak: `tools/bench/shader-soak.js` (page module, `?bench&playtest`).
 
 ## Architecture (src/)
 
@@ -460,7 +470,11 @@ against explicit contracts and reviewed on return.
   short lines, period voice ("BITUMEN — FOOD FOR THE PUMP").
 - Debug surfaces are namespaced on window and kept: player, survival, lev, zone,
   gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
-  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart.
+  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __shaderFailed.
+- INVARIANTS checked before every commit (fresh tab): 14 lights in the scene; `__lev.fp(0/1/2)`
+  15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 119f0cae; `__safeFailed()` returns [];
+  **`__shaderFailed()` returns []** (no shader program left broken; see lib/shaderWatch.js);
+  console clean (no errors except a favicon 404).
 - Message discipline: `showMsg(text, dur, prio)` is a two-slot priority queue —
   never clobber; sleeper-name lines are prio 0. Esc/blur is a real pause.
 - Reversed-edge `smoothstep(a,b,x)` with a>=b is GLSL UB and returns 0 on this
