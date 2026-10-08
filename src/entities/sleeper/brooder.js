@@ -31,7 +31,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -1439,6 +1439,8 @@ function publishCols(L) {
     }
   }
   setShell(L.shellProx, bw.elements, R);
+  // her clutch: soft, the drawn surface (brood.js B.live, refreshed by its update this frame)
+  if (L.brood && L.brood.seated && !L.brood.off) setClutch(L.brood.live, L.brood.seeds, L.brood.nL, bw.elements, R);
   endBodyCols(L.pos.x, L.bodyY, L.pos.z, 2.9 * R);
 }
 

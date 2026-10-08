@@ -1059,7 +1059,10 @@ const DECK_PIVOT = 0.4;
 // shell the lifts run into her belly and are refused; the lens stays low between her legs,
 // sprung, and tips up a little at the underside (the wards are there).
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2 };
-const CRE_LIFTS = [0, 1.4, 2.8, 4.2];
+// (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
+// helmet is against the eggs and every rise runs into them, so the lens goes level or low
+// behind him instead (never under the floor's clearance)
+const CRE_LIFTS = [0, 1.4, 2.8, 4.2, -1.3, -2.4];
 let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0;
 function creHit(from, boom, f, m) {
   _bp.copy(from).addScaledVector(boom, f);
@@ -1369,6 +1372,7 @@ function updateCamera(dt, t, fwd) {
       for (let i = 0; i < CRE_LIFTS.length; i++) {
         const L = CRE_LIFTS[i];
         camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP - CRECAM.under * creUnder + L - DECK_PIVOT;
+        if (L < 0 && _piv.y + camTo.y < terrainH(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
         const f = creBoomClear(_piv, camTo, CRECAM.margin + (L < creLiftT ? 0.25 : 0));
         if (f >= 1) { bestL = L; bestF = 2; break; }
         if (L === creLiftT) curF = f;

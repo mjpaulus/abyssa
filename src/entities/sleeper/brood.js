@@ -66,7 +66,7 @@ const MASS_C = [0, -0.23, -0.27];
 
 // A lobe is not a ball: its radius wanders with direction (the same function in the core's
 // vertex shader, so the beads sit on the surface the core draws). d: unit direction, s: seed.
-function lump(dx, dy, dz, s) {
+export function lump(dx, dy, dz, s) {
   return 1 + 0.13 * Math.sin(dx * 3.1 + s) * Math.sin(dy * 2.7 + s * 1.7) * Math.sin(dz * 3.3 + s * 2.3)
     + 0.06 * Math.sin(dx * 7.3 + s * 3.1) * Math.sin(dy * 6.1 + s * 0.7) * Math.sin(dz * 6.9 + s * 1.3);
 }
@@ -318,6 +318,7 @@ export function makeBrood(L, idx, trailFrom) {
   B.nL = B.lobes.length;
   // the live lobe set (lerped by B.st), for reach tests: x y z r per lobe
   B.live = new Float32Array(B.nL * 4);
+  B.seeds = Float32Array.from(B.lobes, l => l.seed * 10);    // lump seeds (the shader's aSd.x * 10)
 
   // ---- meshes (geometry sized at seat) ----
   B.core = new THREE.Mesh(beadSet(_geoC, B.nL, false), matN);
@@ -382,7 +383,9 @@ export function makeBrood(L, idx, trailFrom) {
         if (openOnly && !B.lobes[k].open) continue;
         const o = k * 4, r = B.live[o + 3];
         if (r <= 0.002) continue;
-        const d = (Math.hypot(_v.x - B.live[o], _v.y - B.live[o + 1], _v.z - B.live[o + 2]) - r) * R;
+        // to the drawn (lumped) surface, the one the collider stops him at
+        const dx = _v.x - B.live[o], dy = _v.y - B.live[o + 1], dz = _v.z - B.live[o + 2], dl = Math.hypot(dx, dy, dz);
+        const d = (dl - (dl > 1e-6 ? r * lump(dx / dl, dy / dl, dz / dl, B.seeds[k]) : r)) * R;
         if (d < best) { best = d; B.nearK = k; }
       }
     }
