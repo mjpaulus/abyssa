@@ -3211,7 +3211,7 @@ let swDrive = 0, swRate = 0, haulF = 0, haulB = 0, backW = 0, haulDir = 0, haulC
 // pitch; fIn/fOut = spring rates (/s, critically damped); legF/legD = the legs' spring;
 // trail/knee = how far the boots trail and the knees give at full lay.
 const hlP = { x: 0, v: 0 }, hlR = { x: 0, v: 0 }, hlL = { x: 0, v: 0 };
-const HAULLAY = { on: 1, fwd: 0.50, back: 0.30, bank: 0.13, surge: 0.06, fIn: 1.7, fOut: 1.3, legF: 1.1, legD: 0.55, trail: 0.16, knee: 0.22, wade: 0.5 };
+const HAULLAY = { on: 1, fwd: 0.36, back: 0.26, bank: 0.13, surge: 0.06, fIn: 1.7, fOut: 1.3, legF: 1.1, legD: 0.55, trail: 0.08, knee: 0.14, wade: 0.5 };
 window.__haulLay = HAULLAY;
 window.__swimState = () => ({ gb: +gb.toFixed(3), burstW: +burstW.toFixed(3), ladderF: +ladderF.toFixed(3), drive: +swDrive.toFixed(3), rate: +swRate.toFixed(3), swimP: +swimP.toFixed(3), haulF: +haulF.toFixed(3), haulB: +haulB.toFixed(3), backW: +backW.toFixed(3), layDeg: +(hlP.x * 57.3).toFixed(1), bankDeg: +(hlR.x * 57.3).toFixed(1), legLay: +hlL.x.toFixed(3) });
 const brP = { x: 0, v: 0 };

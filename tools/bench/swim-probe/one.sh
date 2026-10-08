@@ -3,7 +3,7 @@
 P=$1; H=$2; TAG=$3; s=$4
 CDP=$(dirname $0)/../cdp.mjs
 export BENCH_DBG_PORT=$P
-timeout 20 node $CDP goto "http://localhost:$H/?bench&playtest" >/dev/null
+timeout 20 node $CDP goto "http://localhost:$H/?bench&playtest${Q:-}" >/dev/null
 sleep 3
 for i in {1..90}; do
   timeout 8 node $CDP eval "!!(window.__bench && window.setState && window.__boot && window.__boot.total)" 2>/dev/null | grep -q true && break; sleep 1

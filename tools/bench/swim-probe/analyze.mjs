@@ -1,6 +1,6 @@
 // usage: node analyze.mjs file.json [...]
 import { readFileSync } from 'node:fs';
-const F = { seg: 0, dt: 1, gr: 2, deck: 3, buoy: 4, fill: 5, jet: 6, bT: 7, sp: 8, hs: 9, va: 10, vy: 11, scZ: 12, lx: 13, ly: 14, lz: 15, rx: 16, ry: 17, rz: 18, mode: 19, agl: 20, bl: 21, lsx: 22, le: 23, rsx: 24, lsz: 25, gb: 26, bW: 27, lad: 28, drv: 29, rate: 30, lpx: 31, lpy: 32, rpx: 33, rpy: 34, bpx: 35, bpy: 36 };
+const F = { seg: 0, dt: 1, gr: 2, deck: 3, buoy: 4, fill: 5, jet: 6, bT: 7, sp: 8, hs: 9, va: 10, vy: 11, scZ: 12, lx: 13, ly: 14, lz: 15, rx: 16, ry: 17, rz: 18, mode: 19, agl: 20, bl: 21, lsx: 22, le: 23, rsx: 24, lsz: 25, gb: 26, bW: 27, lad: 28, drv: 29, rate: 30, lpx: 31, lpy: 32, rpx: 33, rpy: 34, bpx: 35, bpy: 36, lay: 37, bank: 38, leg: 39 };
 for (const f of process.argv.slice(2)) {
   const L = JSON.parse(readFileSync(f, 'utf8'));
   console.log('==', f, L.length, 'frames');
@@ -19,6 +19,6 @@ for (const f of process.argv.slice(2)) {
     const modes = [...new Set(R.map(r => r[F.mode]))].join('/');
     console.log(s.name.padEnd(9), `T ${T.toFixed(1)}s fps ${(R.length / T).toFixed(0)} grounded ${(mean(F.gr) * 100).toFixed(0)}% agl ${mean(F.agl)} fill ${mean(F.fill)} jet ${mean(F.jet)}`,
       `| hs ${mean(F.hs)} vAlong ${mean(F.va)} vy ${mean(F.vy)} scZ ${mean(F.scZ)} | stroke ${(un / T).toFixed(3)} Hz (${un.toFixed(2)} cyc)`,
-      `| L p2p x ${p2p(F.lx)} y ${p2p(F.ly)} z ${p2p(F.lz)} | R p2p x ${p2p(F.rx)} y ${p2p(F.ry)} z ${p2p(F.rz)} | Lsx p2p ${p2p(F.lsx)} Le ${p2p(F.le)} Rsx ${p2p(F.rsx)} Lsz ${p2p(F.lsz)} | gb ${mean(F.gb)} bW ${mean(F.bW)} drive ${mean(F.drv)} rate ${mean(F.rate)} | scr L-body p2p x ${p2pRel(F.lpx, F.bpx)} y ${p2pRel(F.lpy, F.bpy)} R ${p2pRel(F.rpx, F.bpx)} ${p2pRel(F.rpy, F.bpy)} | bl ${mean(F.bl)} | ${modes}`);
+      `| L p2p x ${p2p(F.lx)} y ${p2p(F.ly)} z ${p2p(F.lz)} | R p2p x ${p2p(F.rx)} y ${p2p(F.ry)} z ${p2p(F.rz)} | Lsx p2p ${p2p(F.lsx)} Le ${p2p(F.le)} Rsx ${p2p(F.rsx)} Lsz ${p2p(F.lsz)} | gb ${mean(F.gb)} bW ${mean(F.bW)} drive ${mean(F.drv)} rate ${mean(F.rate)} | scr L-body p2p x ${p2pRel(F.lpx, F.bpx)} y ${p2pRel(F.lpy, F.bpy)} R ${p2pRel(F.rpx, F.bpx)} ${p2pRel(F.rpy, F.bpy)} | lay ${mean(F.lay)} (max ${Math.max(...R.map(r => r[F.lay] || 0)).toFixed(1)} min ${Math.min(...R.map(r => r[F.lay] || 0)).toFixed(1)}) bank ${mean(F.bank)} | bl ${mean(F.bl)} | ${modes}`);
   }
 }
