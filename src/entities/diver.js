@@ -2101,7 +2101,8 @@ let walkP = 0, swimP = 0, gb = 1, yawF = 0, yawInit = false;
 let deckF = 1, ampS = 0, flatS = 0;
 // ladderF: blend weight for the boarding-ladder climb (player.onLadder). Blends in and
 // out over ~0.25 s so the grab and the step over the rail never snap.
-let ladderF = 0;
+let ladderF = 0, ladArrive = false;
+const LAD_STEP_DUR = 0.34, LAD_STEP_GAP = 0.22, LAD_STEP_LIFT = 0.06;   // (sweep) the two steps up off the top rung
 // Ground covered by one full walk cycle (two steps) is GAIT.stride (below), read live.
 // History: 2.35 -> 2.27 -> 1.95, each time cut to fit a pelvis that had been lowered
 // into a permanent crouch. See THE PELVIS for why that budget was the wrong way round.
@@ -2298,7 +2299,7 @@ function foot() {
     ex: 0, ez: 0, pin: false,      // the slip probe's last anchor-equivalent point, and whether it was planted
     sp: -1, early: false, swS: 1, age: 0, kPrev: -1,  // stance progress (-1 in the air), early toe-off, and where that swing began
     lx: 0, ly: 0, lz: 0,           // (sealegs) a deck anchor in RAFT-LOCAL space
-    spE: 0, spI: 0, spOk: false, swung: false, land: 0, landV: 0, gap: 0, over: 0   // (sweep) the eased roll-through + a landing still to finish
+    spE: 0, spI: 0, spOk: false, swung: false, land: 0, landV: 0, wlo: 0, over: 0, rise0: 0, riseT: 0   // (sweep) the eased roll-through + a landing still to finish
   };
 }
 const ftR = foot(), ftL = foot();
@@ -2674,9 +2675,29 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // that same frame. It starts its stance from the landing pose it actually has and rolls
       // flat (below), and the last of its fall is finished as a fall, not a snap.
       ft.spI = sp;
-      if (standing && ft.swung && gb > 0.5) {
+      ft.rise0 = 0;
+      if ((standing && ft.swung && gb > 0.5) || ladArrive) {
         ft.spI = revF > 0.5 ? 1 : 0;
-        ft.land = clamp(ft.gap, 0, 0.2); ft.landV = 0.3;
+        const g0 = ft.wlo - (ft.ay + oy);
+        ft.land = clamp(g0, 0, 0.4); ft.landV = 0.3;
+        // off the ladder a boot is still down on its rung, under the deck's edge: it steps UP onto
+        // the planks (the higher boot first, the other a beat later), not a teleport onto them
+        if (ladArrive) {
+          // stood flat where the boot really is: the climbing pose's contact memory is a pitched
+          // rung contact and re-reading it as a heel strike put the anchor 0.2-0.4 u outboard
+          const me = seg.end.matrixWorld.elements;
+          ft.ax = me[12] + sy * 0.02 - ox; ft.az = me[14] + cy * 0.02 - oz; ft.cz = CZ_FLAT;
+          ft.ay = soleB + groundD(ft.ax + ox, ft.az + oz) - oy; ft.spI = 0.30;
+          ft.stT = -1; ft.lift = 0;   // a shuffle the climb left running would drag it off its new spot
+        }
+        // (the rung boot is pitched toe-down, so its lowest point is no measure of where a FLAT
+        // boot's ankle has to start: that is the ankle's own height less the sole's depth)
+        const gA = ladArrive ? seg.end.matrixWorld.elements[13] + SOLE_Y - (ft.ay + oy) : 0;
+        if (ladArrive && gA < -0.01) {
+          ft.rise0 = Math.max(gA, -0.8);
+          const o = i ? ftR : ftL;
+          ft.riseT = (o.wlo > ft.wlo) ? -LAD_STEP_GAP : 0;
+        }
       } else ft.land = 0;
       ft.spOk = false;
       if (!ft.span) markFootfall(ft, sgn, ox, oz);
@@ -2779,6 +2800,13 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       if (SAL.spSlew > 0) spP = ft.spE;
       rollThrough(spP, _vB); th = _vB.x + groundPitch(ft.ax + ox, ft.az + oz); cz = _vB.y;
       if (ft.land > 0) { ft.landV += 9.8 * dt; ft.land = Math.max(0, ft.land - ft.landV * dt); }
+      let rise = 0;
+      if (ft.rise0 < 0) {
+        ft.riseT += dt;
+        const u = clamp(ft.riseT / LAD_STEP_DUR, 0, 1), e = u * u * (3 - 2 * u);
+        rise = ft.rise0 * (1 - e) + (u > 0 ? LAD_STEP_LIFT * Math.sin(Math.PI * u) : 0);
+        if (u >= 1) { ft.rise0 = 0; settle.v -= 0.9; if (gb > 0.5) steps++; }   // the boot comes down on the planks: a footfall
+      }
       rl = groundRoll(ft.ax + ox, ft.az + oz);
       ankleOverContact(th, cz, _vC);
       // THE ROCKERS. The point in contact is not the anchor: the foot pivots on its HEEL
@@ -2790,7 +2818,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // ...and the ground under the rolling contact, not the anchor's: on a grade the heel
       // and ball rest on seabed a few cm above or below the flat-foot point.
       const gRoll = rs !== 0 ? groundD(ft.ax + ox + sy * rs, ft.az + oz + cy * rs) - groundD(ft.ax + ox, ft.az + oz) : 0;
-      _vD.set(ft.ax + ox + sy * (_vC.z + rs), ft.ay + oy + gRoll + _vC.y + ft.lift + ft.land, ft.az + oz + cy * (_vC.z + rs));
+      _vD.set(ft.ax + ox + sy * (_vC.z + rs), ft.ay + oy + gRoll + _vC.y + ft.lift + ft.land + rise, ft.az + oz + cy * (_vC.z + rs));
       // The ground keeps the boot to the very end of stance, in either direction, and the
       // hand-back to the curves happens in the AIR (early swing, below). Handing back on
       // the ground let the authored pose push the ball 6-8 cm into the seabed at every
@@ -2996,9 +3024,9 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     // (sweep) the boot's real clearance: its LOWEST sole point (heel or ball, whichever the pitch
     // puts down) over the ground under it — what a stop's forced claim has left to fall
     { const c = Math.cos(thAbs), s = Math.sin(thAbs), yH = -(SOLE_Y * c - CZ_HEEL * s), yB = -(SOLE_Y * c - CZ_BALL * s);
-      ft.gap = _vB.y - Math.max(yH, yB) - (soleB + groundD(nx, nz)); }
+      ft.wlo = _vB.y - Math.max(yH, yB); }
     if (i === 0) { ikDebug.wxR = nx; ikDebug.wyR = ft.wy; ikDebug.wzR = nz; } else { ikDebug.wxL = nx; ikDebug.wyL = ft.wy; ikDebug.wzL = nz; }
-    ft.swung = !inStance; if (!inStance) { ft.spOk = false; ft.land = 0; }
+    ft.swung = !inStance; if (!inStance) { ft.spOk = false; ft.land = 0; ft.rise0 = 0; }
     if (i === 0) { ikDebug.slipR = ft.slip; ikDebug.plR = (ft.planted ? 1 : 0) + (inStance ? 2 : 0) + (ft.stT >= 0 ? 4 : 0); ikDebug.dR = ft.duty; }
     else { ikDebug.slipL = ft.slip; ikDebug.plL = (ft.planted ? 1 : 0) + (inStance ? 2 : 0) + (ft.stT >= 0 ? 4 : 0); ikDebug.dL = ft.duty; }
   }
@@ -3024,7 +3052,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
 // ===========================================================================
 // Live knobs (-1 = auto). vp is the valve pose (Lsx, Lsz, Lsy, Le): the hand to the
 // bonnet's side port, tuned on the rig from a contact sheet of six candidates.
-const SAL = { spSlew: 1.5, look: true, react: 1, lean: 1, valve: -1, peer: -1, slope: true, grab: -1, vp: [-1.35, 1.2, -0.85, -2.05],
+const SAL = { spSlew: 1.5, ladSnap: 1, look: true, react: 1, lean: 1, valve: -1, peer: -1, slope: true, grab: -1, vp: [-1.35, 1.2, -0.85, -2.05],
   pp: [-1.3, -0.1, 0.3, -0.7] };   // pp: the peer pose (Rsx, Rsz, Rsy, Re) — lantern up and forward
 window.__sal = SAL;
 // look-at: game.js hands over the nearest thing worth looking at (or null)
@@ -3380,6 +3408,13 @@ export function updateDiver(dt, t, player) {
   // the deck is a hard, dry contract with the world, and swim bob leaking past the ladder
   // was the single most visible thing wrong with him. Off the deck the old soft 4.5/s
   // stands — settling onto the seabed IS gradual, you sink into it.
+  // (sweep) OFF THE LADDER HE IS ON THE PLANKS AT ONCE. gb and deckF eased in over ~0.2 s from
+  // the climb (where both are 0), so for a dozen frames the stance IK only partly owned the legs
+  // and the rest was the climbing pose: measured in a gale, one boot hanging 5-6 cm over the
+  // planks and the other 3-5 cm through them. The boots are taken where they are (driveLegs:
+  // a boot still up on the sill is set down as a fall, ladArrive) and the IK owns them now.
+  ladArrive = !!(SAL.ladSnap && player.onDeck && player.grounded && !prevGrounded && ladderF > 0.2);
+  if (ladArrive) { gb = 1; deckF = 1; }
   gb = lerp(gb, player.grounded ? 1 : 0, Math.min(1, (player.onDeck ? 10 : 4.5) * dt));
   deckF = lerp(deckF, player.onDeck ? 1 : 0, Math.min(1, 10 * dt));
   ladderF = lerp(ladderF, player.onLadder ? 1 : 0, Math.min(1, 4 * dt));
