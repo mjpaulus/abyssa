@@ -67,7 +67,7 @@ await ev(`(async () => {
         +(p.jet || 0).toFixed(2), +(p.burstT || 0).toFixed(2), +p.swimP.toFixed(4), +Math.hypot(p.vel.x, p.vel.z).toFixed(2),
         +(p.vel.x * sy + p.vel.z * cy).toFixed(2), +p.vel.y.toFixed(2), p.scullZ || 0,
         +a.x.toFixed(3), +a.y.toFixed(3), +a.z.toFixed(3), +b.x.toFixed(3), +b.y.toFixed(3), +b.z.toFixed(3),
-        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr(), ...(window.__swimState && window.__swimState().layDeg !== undefined ? (() => { const q = window.__swimState(); return [q.layDeg, q.bankDeg, q.legLay]; })() : [0, 0, 0]), trunk()]);
+        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr(), ...(window.__swimState && window.__swimState().layDeg !== undefined ? (() => { const q = window.__swimState(); return [q.layDeg, q.bankDeg, q.legLay]; })() : [0, 0, 0]), trunk(), window.__swimCamState ? window.__swimCamState().k : -1, +window.camera.position.distanceTo(p.pos).toFixed(2), +((window.camera.position.y - p.pos.y)).toFixed(2)]);
     }
     if (R.side) {   // a side lens that rides with him (SIDE=1): checks the stroke's shape, not the game view
       const sy = Math.sin(p.yaw), cy = Math.cos(p.yaw), q = p.pos;
@@ -96,6 +96,8 @@ async function lift(dy) {
 }
 async function ws6() { await hold('KeyW', 6000, 'W'); await mark('coastW'); await sleep(1500); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
 
+// PRE='<js>': evaluated in the page before the scenario (e.g. an A/B knob)
+if (process.env.PRE) console.log('pre', JSON.stringify(await ev(process.env.PRE)));
 // ALT3=1: enter the way Michael did, the playtest jump Alt+3 (SEABED, ZONE 0), by a real key
 if (process.env.ALT3) {
   await mark('alt3');
@@ -103,7 +105,13 @@ if (process.env.ALT3) {
   await sleep(2500);
   console.log('alt3', JSON.stringify(await ev(`(window.__helm = true, [gameState, window.__playtest && window.__playtest.last(), player.grounded, +player.pos.y.toFixed(1)])`)));
 }
-if (SCEN === 'stop' || SCEN === 'stopS') {   // haul, let go, and watch him settle (frames through the coast)
+if (SCEN === 'taps') {   // single taps must never move the swim framing
+  await mark('setup'); await lift(40); await neutral(2500);
+  for (let i = 0; i < 3; i++) { await hold('KeyW', 220, 'tapW'); await mark('gap'); await sleep(1200); }
+  for (let i = 0; i < 2; i++) { await hold('KeyS', 220, 'tapS'); await mark('gap'); await sleep(1200); }
+  await hold('Space', 120, 'tapSpace'); await mark('gap'); await sleep(2000);
+}
+else if (SCEN === 'stop' || SCEN === 'stopS') {   // haul, let go, and watch him settle (frames through the coast)
   const k = SCEN === 'stop' ? 'KeyW' : 'KeyS';
   await mark('setup'); await lift(40); await neutral(2500);
   await hold(k, 6000, k === 'KeyW' ? 'W' : 'S');
