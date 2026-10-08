@@ -12,6 +12,7 @@ import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders,
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
+import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn } from './entities/sleeper/bodyCols.js';
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
@@ -1049,6 +1050,37 @@ const _raftInv = new THREE.Matrix4(), _one = V3(1, 1, 1), _bp = V3(), _piv = V3(
 // every waist-high thing a hand behind him; from the bonnet it clears them, which is also
 // what the lens needs to see (the helmet and shoulders), and the lens stays on that line.
 const DECK_PIVOT = 0.4;
+// ---- THE SLEEPER'S BODY IN THE BOOM (brooderfix; Michael 2026-10-08: "the camera is bad").
+// Around Velkath the lens used to stop on nine fixed spheres over her shell (8 quantised
+// steps, the legs and claws not there at all): it sat inside her legs, or behind one with Sal
+// hidden. Now her live body (bodyCols.js: every leg segment and claw piece as a capsule, the
+// shell's real volume) is walked the deck boom's way: the real line from the top of his helmet
+// to the lens, the first contact REFINED by bisection (a continuous pull-in), a CRANE over a
+// leg or claw right behind him (the lowest lift with a clear line, hysteresis so a stepping
+// leg can't flick it), and a HOLD: after a part has crossed the line the boom waits for it
+// to stay clear before easing back out, so legs walking through it don't pump it. Under her
+// shell the lifts run into her belly and are refused; the lens stays low between her legs,
+// sprung, and tips up a little at the underside (the wards are there).
+const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2 };
+const CRE_LIFTS = [0, 1.4, 2.8, 4.2];
+let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0;
+function creHit(from, boom, f, m) {
+  _bp.copy(from).addScaledVector(boom, f);
+  return bodyBlocked(_bp.x, _bp.y, _bp.z, m);
+}
+// fraction (0..1] of the boom from `from` that is clear of her body
+function creBoomClear(from, boom, m = CRECAM.margin) {
+  const N = 16, f0 = 0.6 / boom.length();
+  for (let i = 1; i <= N; i++) {
+    const f = f0 + (1 - f0) * (i / N);
+    if (!creHit(from, boom, f, m)) continue;
+    let lo = f0 + (1 - f0) * ((i - 1) / N), hi = f;
+    for (let k = 0; k < 6; k++) { const mid = (lo + hi) * 0.5; if (creHit(from, boom, mid, m)) hi = mid; else lo = mid; }
+    return lo;
+  }
+  return 1;
+}
+window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -1207,7 +1239,8 @@ function dynCol(x, y, z, r) {
 }
 function buildDynCols() {
   dynN = 0;
-  if (lev && lev.spine) {
+  // (a sleeper that publishes its real body — bodyCols.js — is walked separately, refined)
+  if (lev && lev.spine && !bodyColsOn()) {
     const r = lev.collR || lev.size * BODY_R_MAX;   // per kind: the brooder's shell spheres are smaller
     for (let i = 0; i < lev.spine.length; i++) { const s = lev.spine[i]; dynCol(s.x, s.y, s.z, r); }
   }
@@ -1324,6 +1357,45 @@ function updateCamera(dt, t, fwd) {
     }
     if (deckWant < want) want = deckWant;
   } else { deckLift = deckLiftV = deckLiftT = 0; }
+  // the sleeper's body (see CRECAM): only when she is near the boom, never on the deck
+  {
+    const near = deckK === 0 && bodyNear(player.pos.x, player.pos.y, player.pos.z, base + 3);
+    const h = Math.min(dt, 0.05);
+    const ck = near ? 1 : 0;
+    creKV += (16 * (ck - creK) - 8 * creKV) * h; creK += creKV * h;      // w 4, critically damped
+    if (creK < 1e-4 && ck === 0) { creK = 0; creKV = 0; }
+    let underT = 0;
+    if (near) {
+      _piv.copy(player.pos); _piv.y += DECK_PIVOT;
+      underT = BODY.under ? 1 : 0;
+      let bestF = -1, bestL = creLiftT, curF = -1;
+      for (let i = 0; i < CRE_LIFTS.length; i++) {
+        const L = CRE_LIFTS[i];
+        camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP - CRECAM.under * creUnder + L - DECK_PIVOT;
+        const f = creBoomClear(_piv, camTo, CRECAM.margin + (L < creLiftT ? 0.25 : 0));
+        if (f >= 1) { bestL = L; bestF = 2; break; }
+        if (L === creLiftT) curF = f;
+        if (f > bestF + 0.02) { bestF = f; bestL = L; }
+      }
+      if (bestF < 2 && curF >= 0 && bestF < curF + 0.12) bestL = creLiftT;
+      creLiftT = bestL;
+      camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP - CRECAM.under * creUnder + creLift - DECK_PIVOT;
+      const cw = Math.max(CRECAM.minD, base * creBoomClear(_piv, camTo));
+      // in at once; out only once the line has stayed clear for a beat
+      if (cw < creHold - 0.05) { creHold = cw; creHoldT = 0; }
+      // (while she is hammering the claw crosses the line every blow: the boom stays in for a
+      // whole cycle instead of breathing in and out with each one — measured 13 reversals
+      // over 1 u in a 40 s fight with the short hold)
+      else if (cw > creHold + 0.05) { creHoldT += dt; if (creHoldT > (lev && lev.threatE > 0.3 ? CRECAM.holdFight : CRECAM.hold)) creHold = cw; }
+      else creHoldT = 0;
+      if (creHold < want) want = creHold;
+    } else { creLiftT = 0; creHold = 1e9; creHoldT = 0; }
+    const w = CRECAM.w;
+    creLiftV += (w * w * (creLiftT - creLift) - 2 * w * creLiftV) * h; creLift += creLiftV * h;
+    if (creLiftT === 0 && Math.abs(creLift) < 1e-3 && Math.abs(creLiftV) < 1e-2) creLift = creLiftV = 0;
+    creUnder += (underT - creUnder) * Math.min(1, 1.6 * dt);
+    if (creUnder < 1e-4 && underT === 0) creUnder = 0;
+  }
   // In fast (an obstacle must never be clipped through), out on a critically-damped
   // spring: the old first-order ease left the wall at full speed, a visible kink every
   // time a rock slid out of the line of sight. The spring leaves it at rest.
@@ -1338,7 +1410,13 @@ function updateCamera(dt, t, fwd) {
   camDesired.copy(player.pos).addScaledVector(camBack, camDist);
   // on deck the lens rides the line from the pivot: pulled in, it comes down that line
   if (deckK > 0) { const upD = up + deckLift * deckK; camDesired.y += upD - deckK * (upD - DECK_PIVOT) * (1 - camDist / base); }
-  else camDesired.y += CAM_UP;
+  else {
+    // (brooderfix) around her the pulled-in lens comes down the line from the top of his
+    // helmet, as on deck; craned over a leg, it rises; under her shell it rides low. Away from
+    // her creK, creLift and creUnder are exactly 0 and this is the water boom's fixed rise.
+    const upC = CAM_UP + creLift - CRECAM.under * creUnder;
+    camDesired.y += upC - creK * (upC - DECK_PIVOT) * (1 - camDist / base);
+  }
   {
     // (swimfix 3) the swim framing (SWIMCAM above)
     const S = SWIMCAM;
@@ -1546,13 +1624,29 @@ function updateCamera(dt, t, fwd) {
     }
   }
 
+  // THE LENS NEVER RESTS INSIDE HER (brooderfix). The spring trails its target by a frame
+  // or two and her legs move on their own: if the lens has ended up in her body anyway it is
+  // drawn back along its own line toward his helmet, quickly but sprung (a cut against a
+  // moving leg read as a snap), and its velocity relative to him is bled.
+  if (creK > 0 && bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0.15)) {
+    _piv.copy(player.pos); _piv.y += DECK_PIVOT;
+    camTo.copy(camera.position).sub(_piv);
+    const cl = camTo.length();
+    // (never into his own helmet: a claw falling right beside him has no clear spot, and a
+    // moment inside it beats the inside of the bonnet)
+    const f = Math.max(Math.min(1, CRECAM.minD / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
+    _bp.copy(_piv).addScaledVector(camTo, f);
+    camera.position.lerp(_bp, Math.min(1, 30 * dt));
+    camVel.lerp(player.vel, Math.min(1, 10 * dt));
+    creStops++;
+  }
   // aim slightly ahead of travel so fast movement leads the frame
   // Aim tracks the look direction almost immediately. Heavy smoothing here reads as
   // mouse lag, which is far more objectionable than a little jitter.
   // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
   // went (it swung the aim with every kick's surge).
   camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
-  camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK;
+  camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder;
   // Sal looks at what the lens would notice: the nearest life in front, re-picked four
   // times a second (the search walks every fauna buffer; the look itself is sprung).
   diverLookCool -= dt;
@@ -1956,6 +2050,14 @@ function update(dt, t) {
   pm('glue');
   if (lev) {
     const ev = updateLeviathan(lev, dt, t, player); pm('leviathan');
+    // HER BODY IS SOLID (brooderfix, bodyCols.js): Sal is pushed out of her live pose here,
+    // after she has moved this frame and before the hose, the diver and the lens read him.
+    // A part of her that comes INTO him (a sweeping leg, the lunge, her flank) is the slam;
+    // walking into a planted leg is only a wall.
+    if (!paused && bodyColsOn() && resolveBodyCols(player, dt, player.grounded)) {
+      if (BODY.shell) lev.touchT = 0.3;   // bumping her SHELL tells her where he is (sight); a limb brushing him does not
+      if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant) { ev.slam = true; ev.lightDrain += dt * 0.5; }
+    }
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
     if (ev.woke) {
       showMsg(lev.name, 5, 2); growl(); shake = 1;

@@ -32,6 +32,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, updatePlumes, plumeTau, clearPlumes } from './plume.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -103,6 +104,17 @@ export const DORM = {
 const WAKE_ORDER = [0, 5, 2, 7, 1, 4, 3, 6];         // leg unfold order (li), alternating sides
 const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;   // hammer cycle phases
 const HAMMER_T = 2.6;
+// THE HUNT (brooderfix): speeds are fractions of cfg.speed (9: Sal walks 2.15 u/s, 2.8 with
+// Shift, hauls ~6.6 off the bottom). chase 0.42 = 3.8 u/s after a thief (she runs a walker
+// down; a swimmer gets away), stalk 0.26 = 2.3 u/s otherwise. She closes to `hold` R from
+// her centre (the hammer's hinge lands ~2.3 R out, measured; the hit takes 0.42 R round it), keeps an unburdened
+// diver off `guard` R round her lair, and turns at up to `turn` rad/s while hunting.
+// knock: the hammer's throw (u/s). It was 38 when she never moved: measured, it carried him
+// ~35 u and out of her sight in the murk, so the chase that follows a blow never read; 26
+// still throws him clear of her front (~20 u) and keeps her in his view as she comes on.
+// guardUp: how far (rad) the minor claw's guard rises off her mouth when a diver is close
+// under her face.
+export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -249,6 +261,7 @@ export function makeBrooder(idx, cfg) {
   body.add(belly);
   L.parts = { shell, belly };
   L.sole = soleFromGeos([shell.geometry, belly.geometry]);    // ground contact (brooderGround.js)
+  L.shellProx = shellProxy([shell.geometry, belly.geometry]);  // her outer volume, solid to Sal (bodyCols.js)
 
   // ---- crust: barnacles and weed ----
   const bar = G.barnacleMatrices(36, 0xBA2AC1E5 + idx);
@@ -307,6 +320,7 @@ export function makeBrooder(idx, cfg) {
     body.add(legs[k]);
   }
   L.legs = legs;
+  L.legFit = fitLegs(legs);
   for (let li = 0; li < 8; li++) {
     const sd = li < 4 ? 1 : -1, k = li & 3;
     L.feet.push({ planted: V3(), from: V3(), to: V3(), cur: V3(), t: -1, h: 0.30, group: (k + (sd > 0 ? 0 : 1)) & 1 });
@@ -455,6 +469,7 @@ export function makeBrooder(idx, cfg) {
     else ({ lip, out } = lairOf(idx, R, c));
     const perp = V3(-out.z, 0, out.x);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
+    L.lairPos = lip.clone();
     const nest = lip.clone().addScaledVector(perp, R * 2.8);
     L.brood = makeBrood(L, idx, nest, nest.clone().addScaledVector(out, -95));
     L.rite = L.brood;                                 // the game's generic [E] / prompt hook
@@ -493,7 +508,7 @@ export function makeBrooder(idx, cfg) {
   if (SC) installSculpt(L, SC);
   else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); } });
   const pd = L.onDispose;
-  L.onDispose = () => { L.gone = true; clearPlumes(); if (pd) pd(); };
+  L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
   return L;
 }
 
@@ -659,6 +674,10 @@ function buildClaw(body, mat, sd, k) {
 // the claw's hull samples for the floor clamp (re-run when the sculpt swaps the meshes)
 function clawSamples(c) {
   c.samp = [c.merus, c.carpus, c.palm, c.dact].map(mesh => ({ mesh, pts: hullSamples(mesh.geometry, 7, mesh === c.merus ? 0.04 : -1e9) }));
+  // ...and its collision capsules (bodyCols.js), one per piece in the piece's own frame
+  // (the hooked palm and finger follow their curve in short pieces)
+  c.fit = [];
+  for (const [mesh, n] of [[c.merus, 1], [c.carpus, 1], [c.palm, 3], [c.dact, 3]]) for (const f of fitCapsules(mesh.geometry, n)) c.fit.push({ mesh, f });
   if (!c.lift) { c.lift = { x: 0, v: 0 }; c.need = 0; c.need0 = 0; c.liftNow = 0; }
 }
 
@@ -707,6 +726,7 @@ function installSculpt(L, A) {
   P.shell.geometry.dispose(); P.shell.material.dispose();
   P.shell.geometry = g.body; P.shell.material = bodyMat;
   L.sole = soleFromGeos([g.body]);                   // the baked shell's own underside
+  L.shellProx = shellProxy([g.body]);
   drop(L, P.belly); drop(L, P.barn);
   for (const b of L.blades) drop(L, b);
   L.blades = [];
@@ -742,6 +762,7 @@ function installSculpt(L, A) {
     im.geometry = g['leg_' + k]; im.material = legMat;
     L.segL0[k] = SEG_L[k];
   }
+  L.legFit = fitLegs(L.legs);
   L.chitMats.limbMat.dispose();
   for (const c of L.claws) {
     const side = c.major ? 'major' : 'minor', H = (meta.hand || {})[side];
@@ -1040,8 +1061,11 @@ function poseClaws(L) {
     } else {
       // the minor stays low and close, a guard across the mouth, working; it spreads
       // wide as the crusher cocks (the body opens up behind the blow)
+      // (brooderfix) a diver close under her face: the guard comes UP off her mouth, raised to
+      // strike (L.guardUp). Solid now, held low across the mouth it walled off the one way in
+      // under her front, the plume rush (measured: 0 of 3 rushes got under her, 3 of 3 on main)
       c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th) + sd * 0.28 * ck + dy - sd * 0.2 * h,
-        lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h);
+        lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h + HUNT.guardUp * (L.guardUp ? L.guardUp.x : 0));
       c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th) + sd * 0.3 * ck, 0.30);
       c.pj.rotation.set(0, -sd * 0.45, -0.55 + 0.6 * dz);
       c.dj.rotation.z = (0.08 + 0.28 * gape + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th + 0.3 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
@@ -1256,6 +1280,45 @@ function poseAll(L, dt, player) {
   }
   for (let k = 0; k < COLL.length; k++) L.spine[k].set(COLL[k][0], COLL[k][1], COLL[k][2]).applyMatrix4(b.matrixWorld);
   L.head.set(0, 0.10, 0.80).applyMatrix4(b.matrixWorld);
+  publishCols(L);
+}
+
+// HER BODY IS SOLID (brooderfix): the live pose as collision volumes (bodyCols.js) — every
+// leg segment and claw piece a tapered capsule carried by its own matrix, and the shell's
+// height-band proxy carried by the body's. game.js pushes Sal out of them right after this
+// frame's update and walks the camera's boom against them.
+const LEG_KEYS = ['coxa', 'femur', 'tibia', 'dactyl'];
+// (the dactyl curls to its point: two capsules follow it; one chord left 0.7 u of claw outside)
+const LEG_N = { coxa: 1, femur: 1, tibia: 1, dactyl: 2 };
+function fitLegs(legs) { const o = {}; for (const k of LEG_KEYS) o[k] = fitCapsules(legs[k].geometry, LEG_N[k]); return o; }
+const _cm = new THREE.Matrix4(), _ca = V3(), _cb = V3();
+function publishCols(L) {
+  if (!L.legFit || L.gone) return;
+  beginBodyCols();
+  const bw = L.body.matrixWorld, R = L.R;
+  for (let q = 0; q < 4; q++) {
+    const k = LEG_KEYS[q], im = L.legs[k], FF = L.legFit[k];
+    for (let i = 0; i < 8; i++) {
+      im.getMatrixAt(i, _cm); _cm.premultiply(bw);
+      for (let j = 0; j < FF.length; j++) {
+        const F = FF[j];
+        _ca.fromArray(F.a).applyMatrix4(_cm); _cb.fromArray(F.b).applyMatrix4(_cm);
+        addCapsule(_ca.x, _ca.y, _ca.z, _cb.x, _cb.y, _cb.z, F.ra * R, F.rb * R);
+      }
+    }
+  }
+  markLimbs();                                       // (the probe's leg/claw boundary)
+  for (let ci = 0; ci < L.claws.length; ci++) {
+    const fit = L.claws[ci].fit;
+    for (let j = 0; j < fit.length; j++) {
+      const mw = fit[j].mesh.matrixWorld, e = mw.elements, F = fit[j].f;
+      const sc = Math.sqrt(e[4] * e[4] + e[5] * e[5] + e[6] * e[6]);     // its radial scale (R x the arm's k)
+      _ca.fromArray(F.a).applyMatrix4(mw); _cb.fromArray(F.b).applyMatrix4(mw);
+      addCapsule(_ca.x, _ca.y, _ca.z, _cb.x, _cb.y, _cb.z, F.ra * sc, F.rb * sc);
+    }
+  }
+  setShell(L.shellProx, bw.elements, R);
+  endBodyCols(L.pos.x, L.bodyY, L.pos.z, 2.9 * R);
 }
 
 function resetEv() {
@@ -1306,7 +1369,7 @@ function sight(L, dt, player, ev) {
   } else {
     L.blindT += dt;
     L.clearT = L.tau < SIGHT_FIND ? L.clearT + dt : 0;
-    if (L.clearT > SIGHT_REACQ || L._pd < L.collR * 1.05) { L.seen = true; L.blindT = 0; }
+    if (L.clearT > SIGHT_REACQ || L._pd < L.collR * 1.05 || L.touchT > 0) { L.seen = true; L.blindT = 0; }
   }
   if (L.seen) L.lastSeen.copy(player.pos);
   L.aim.copy(L.lastSeen);
@@ -1394,6 +1457,12 @@ export function updateBrooder(L, dt, t, player) {
     // (the landing is flagged: the recoil branch below advances impT in this same frame, so
     // the old `impT === 0` test never fired and the blow's dust/drop/quake were dead code)
     const landed = ph >= PH_SLAM1 && prev < PH_SLAM1;
+    // THE LUNGE (brooderfix): the fall throws her whole front at him, a surge of the shell
+    // along the line to her target that the offset springs carry back
+    if (ph >= PH_SLAM0 && prev < PH_SLAM0 && L.threatE > 0.5 && !L.hold) {
+      const lx = L.aim.x - L.pos.x, lz = L.aim.z - L.pos.z, ld = Math.hypot(lx, lz) || 1;
+      L.offX.v += lx / ld * R * HUNT.lunge * L.threatE; L.offZ.v += lz / ld * R * HUNT.lunge * L.threatE;
+    }
     if (landed) L.impT = 0;
     if (ph >= PH_SLAM0 && ph < PH_SLAM1) L.swing = Math.pow((ph - PH_SLAM0) / (PH_SLAM1 - PH_SLAM0), 2.2);
     else if (L.impT < 3) {
@@ -1421,6 +1490,20 @@ export function updateBrooder(L, dt, t, player) {
   for (const s of L.spine) { const d = s.distanceTo(player.pos); if (d < pd) pd = d; }
   L._pd = pd;
   let want = null, speed = 0;
+  // THE HUNT (brooderfix, Michael 2026-10-08: "Crab does not follow sal at all when he gets
+  // the egg"). Measured on main: awake she only ever TURNED and sidled (the stalk below is
+  // purely tangential, so it drifted her outward), from her first commit on; no step toward
+  // him was ever written, and the nest sits just outside her 2.4 R threat ring, so a thief
+  // at the clutch was never even struck. Now, once she is up, she COMES FOR HIM: her body
+  // moves in WORLD space toward what she is after (Sal, or blind, the spot she lost him),
+  // crab-fashion, independent of where her face has got to; she stalks sideways as she
+  // closes, plants for every blow and lunges into it. While he carries an egg she is
+  // relentless; unburdened she keeps him off her ground (HUNT.guard round her lair) and lets
+  // him go past it.
+  const thief = !!(L.brood && L.brood.held >= 0);
+  const hunt = !L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.5;
+  const tx = L.aim.x - L.pos.x, tz = L.aim.z - L.pos.z, dh = Math.hypot(tx, tz) || 1e-3;
+  L.huntD = dh;
   if (L.walkTo && L.standE > 0.9) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
     if (dist < (L.toNest ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
@@ -1428,23 +1511,37 @@ export function updateBrooder(L, dt, t, player) {
       if (L.toNest) { L.toNest = false; L.standTarget = 0; }  // home: settle over the brood
     }
     else { want = Math.atan2(dx, dz); speed = L.speed * 0.30; }
-  } else if (!L.calmed && !L.hold && !L.dormant && L.standE > 0.5 && L._pdT < 90) {
+  } else if (hunt && L._pdT < (thief ? 400 : 90)) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
-    // given up, she sweeps her front slowly across the cloud, searching
-    want = L.blindT < SIGHT_GIVEUP ? Math.atan2(L.aim.x - L.pos.x, L.aim.z - L.pos.z)
+    // given up, she sweeps her front slowly across the cloud, searching. A thief she never
+    // stops facing, however far he gets.
+    // (under her, the bearing to him swings wildly with every step he takes: she holds)
+    want = L.blindT < SIGHT_GIVEUP ? (dh > 0.5 * R ? Math.atan2(tx, tz) : L.yaw)
       : L.searchYaw + 0.7 * Math.sin((L.blindT - SIGHT_GIVEUP) * 0.45);
   }
-  if (want !== null && speed > 0) {
+  // the hunt's closing speed and heading (world space)
+  let vC = 0, cAng = Math.atan2(tx, tz);
+  if (hunt && L.standE > 0.9 && want !== null) {
+    const N = L.lairPos || L.pos;                       // her ground: the lair she sleeps on (not the clutch, which may move)
+    const terr = thief ? 1 : 1 - smooth(Math.hypot(L.aim.x - N.x, L.aim.z - N.z), HUNT.guard * 0.75 * R, HUNT.guard * R);
+    const closeK = smooth(dh, HUNT.hold * R, (HUNT.hold + 0.6) * R) * terr * (L.blindT >= SIGHT_GIVEUP ? 0 : 1);
+    // planted for the blow: from the fall to the end of the recoil
+    const planted = L.threatE > 0.3 && (L.hamPh >= PH_SLAM0 || L.impT < 0.45);
+    vC = planted ? 0 : L.speed * (thief ? HUNT.chase : HUNT.stalk) * closeK * (1 - 0.45 * L.threatE);
+  }
+  const goal = want !== null && speed > 0 ? L.walkTo : vC > 0.3 ? L.aim : null;
+  if (goal) {
     // round the rocks and hulls ahead; no headway for 3 s (a pocket between two of them)
     // and she commits to going round the other way
-    const dGo = Math.hypot(L.walkTo.x - L.pos.x, L.walkTo.z - L.pos.z);
+    const dGo = Math.hypot(goal.x - L.pos.x, goal.z - L.pos.z);
     if (!(dGo < (L.goBest ?? 1e9) - 1.5)) L.goStall = (L.goStall || 0) + dt; else { L.goBest = dGo; L.goStall = 0; L.goFlips = 0; }
     if (L.goStall > 3) {
       L.goSide = L.goSide > 0 ? -1 : 1; L.goStall = 0; L.goBest = dGo;
       // boxed in twice over: she climbs (rocks stop blocking; her sole and feet ride their tops)
       if ((L.goFlips = (L.goFlips || 0) + 1) >= 2) { L.climbT = 8; L.goFlips = 0; }
     }
-    want = steer(L, want, L.goSide || 0);
+    if (goal === L.walkTo) want = steer(L, want, L.goSide || 0);
+    else cAng = steer(L, cAng, L.goSide || 0);
   } else { L.goBest = undefined; L.goStall = 0; L.goSide = 0; L.goFlips = 0; }
   if (L.climbT > 0) { L.climbT -= dt; if (L.climbT < 0.5 && overTall(L)) L.climbT = 0.5; }
   // the turn has inertia: angular velocity eases toward what the error asks for (same
@@ -1454,19 +1551,23 @@ export function updateBrooder(L, dt, t, player) {
     let dA = want - L.yaw;
     while (dA > Math.PI) dA -= Math.PI * 2;
     while (dA < -Math.PI) dA += Math.PI * 2;
-    yawWant = clamp(dA * 1.4, -0.35, 0.35);
+    const wr = hunt ? HUNT.turn : 0.35;
+    yawWant = clamp(dA * 1.4, -wr, wr);
     if (Math.abs(dA) > 0.6) speed *= 0.2;                // turn on the spot before striding off
   }
   L.yawV += (yawWant - L.yawV) * Math.min(1, 1.6 * dt);
   L.yaw += L.yawV * dt;
   let vx = Math.sin(L.yaw) * speed, vz = Math.cos(L.yaw) * speed;
+  // the hunt: straight for him, whatever her face is doing
+  vx += Math.sin(cAng) * vC; vz += Math.cos(cAng) * vC;
   // STALK: awake and not yet striking, she circles the diver crab-fashion — sideways,
-  // face locked on him — and changes direction every few seconds.
-  if (!L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.9 && L.threatE < 0.5 && L.seen && pd > L.R * 1.4 && pd < L.R * 5) {
+  // face locked on him — and changes direction every few seconds. (Sideways across the line
+  // to him, not across her own heading, so a thief behind her is not circled away from.)
+  if (hunt && L.standE > 0.9 && L.threatE < 0.5 && L.seen && dh > L.R * 1.4 && dh < L.R * 6) {
     L.strafeT = (L.strafeT || 0) - dt;
     if (L.strafeT <= 0) { L.strafeT = 4 + Math.random() * 4; L.strafeDir = Math.random() < 0.5 ? -1 : 1; }
-    const ss = L.speed * 0.22 * L.strafeDir;
-    vx += Math.cos(L.yaw) * ss; vz -= Math.sin(L.yaw) * ss;
+    const ss = L.speed * 0.22 * L.strafeDir * (thief ? 0.55 : 1);
+    vx += tz / dh * ss; vz -= tx / dh * ss;
   }
   L.velPrev.copy(L.vel);
   L.vel.x = lerp(L.vel.x, vx, Math.min(1, 1.5 * dt));
@@ -1482,6 +1583,9 @@ export function updateBrooder(L, dt, t, player) {
   // body onto it and shakes the ground. Standing still she shifts her weight now and then.
   _busy[0] = _busy[1] = 0;
   for (const f of L.feet) if (f.t >= 0) _busy[f.group]++;
+  // a quicker step when she runs (the stride is fixed: at 3.8 u/s a 0.8 s swing left her
+  // feet trailing out of reach); unchanged at a walk
+  const swT = SWING_T * clamp(1.25 - 0.13 * Math.hypot(L.vel.x, L.vel.z), 0.6, 1);
   let rollT = 0, pitchT = 0, yT = 0;
   L.shuffleT -= dt;
   let shuffle = -1;
@@ -1494,7 +1598,7 @@ export function updateBrooder(L, dt, t, player) {
     restWorld(L, li, _rw);
     if (L.standE > 0.35 && f.t < 0) reachFoot(L, li, _rw);   // the rest spot she can really stand on
     if (f.t >= 0) {
-      f.t = Math.min(1, f.t + dt / SWING_T);
+      f.t = Math.min(1, f.t + dt / swT);
       const e = win(f.t, 0.12, 0.92), lift = Math.sin(Math.PI * Math.pow(f.t, 0.72));
       f.cur.lerpVectors(f.from, f.to, e);
       f.cur.y += lift * f.h * L.R * L.standE;
@@ -1515,7 +1619,7 @@ export function updateBrooder(L, dt, t, player) {
       const d = f.planted.distanceTo(_rw);
       if (!_busy[f.group ^ 1] && (d > STRIDE * L.R || li === shuffle)) {
         f.from.copy(f.planted);
-        f.to.copy(_rw).addScaledVector(L.vel, SWING_T * 0.6);
+        f.to.copy(_rw).addScaledVector(L.vel, swT * 0.6);
         if (li === shuffle) { f.to.x += (Math.random() - 0.5) * 0.06 * R; f.to.z += (Math.random() - 0.5) * 0.06 * R; }
         reachFoot(L, li, f.to);                        // on the ground or a rock top, beside a hull, inside the leg's reach
         // a shuffle is a small, low step; a stride lifts high
@@ -1547,19 +1651,22 @@ export function updateBrooder(L, dt, t, player) {
       lk = clamp(el * 0.35, -0.06, 0.16);
     }
     L.lookP = (L.lookP || 0) + (lk - (L.lookP || 0)) * Math.min(1, 1.2 * dt);
+    // the guard rises when he is close under her face (in front, inside 1.6 R): see poseClaws
+    let gu = 0;
+    if (!L.dormant && !L.calmed && L.standE > 0.8) {
+      const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z, fw = px * Math.sin(L.yaw) + pz * Math.cos(L.yaw);
+      if (fw > 0 && Math.hypot(px, pz) < 1.6 * R) gu = 1;
+    }
+    if (!L.guardUp) L.guardUp = S();
+    spr(L.guardUp, gu, 3.2, 0.9, dt);
   }
 
   poseAll(L, dt, player);
 
-  // ---- contact: the shell shoves ----
-  if (pd < L.collR) {
-    let ni = 0, nd = 1e9;
-    for (let k = 0; k < L.spine.length; k++) { const d = L.spine[k].distanceTo(player.pos); if (d < nd) { nd = d; ni = k; } }
-    _v.copy(player.pos).sub(L.spine[ni]).normalize();
-    player.vel.addScaledVector(_v, 90 * dt * 8);
-    ev.lightDrain += dt * 0.5;
-    ev.slam = true;
-  }
+  // (contact: her body is solid now — bodyCols.js, resolved by game.js after this update,
+  // which also raises the slam when a part of her comes INTO him. The old shove here was a
+  // velocity kick off nine shell spheres: 12 u/s a frame, it bounced him off the ridge.)
+  L.touchT = Math.max(0, (L.touchT || 0) - dt);
   // the hammer: at the bottom of the swing, anything under the great claw's fingers
   L.strikeCd = Math.max(0, (L.strikeCd || 0) - dt);
   if (!L.calmed && L.threatE > 0.8 && L.swing > 0.85 && L.strikeCd <= 0) {
@@ -1567,7 +1674,7 @@ export function updateBrooder(L, dt, t, player) {
     c.dj.getWorldPosition(_ft);
     if (_ft.distanceTo(player.pos) < L.R * 0.42) {
       _v.copy(player.pos).sub(_ft).setY(0.4).normalize();
-      player.vel.addScaledVector(_v, 38);
+      player.vel.addScaledVector(_v, HUNT.knock);
       ev.lightDrain += 0.12;
       ev.slam = true;
       L.strikeCd = 2.0;
