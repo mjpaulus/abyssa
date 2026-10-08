@@ -82,25 +82,59 @@ function clearGround(x, z, zi, pad) {
   }
   return true;
 }
+// The lens hangs from his eye straight back along his look (game.js clearCamDistance stops
+// the boom where that ray comes within 1.1 of the ground or a solid). So for a spot, find
+// the shallowest downward look (pitch) whose boom clears: level ground takes the usual
+// -0.05, a bowl (Mhor's furnace sits in one) needs him looking a little down. null: none.
+const PITCHES = [-0.05, -0.15, -0.25, -0.35];
+function lensPitch(x, z, zi, dx, dz) {
+  const y0 = terrainH(x, z, zi);
+  for (const pt of PITCHES) {
+    const up = Math.sin(-pt);
+    let ok = true;
+    for (const d of [2, 4, 6, 8, 10]) {
+      const bx = x + dx * d, bz = z + dz * d, by = y0 + EYE_H + up * d;
+      if (terrainH(bx, bz, zi) + 1.3 > by) { ok = false; break; }
+      for (const L of COLS) { for (let i = 0; i < L.length; i++) {
+        const c = L[i], ex = bx - c.x, ey = by - c.y, ez = bz - c.z, rr = c.r + 1.2;
+        if (ex * ex + ey * ey + ez * ez < rr * rr) { ok = false; break; }
+      } if (!ok) break; }
+      if (!ok) break;
+    }
+    if (ok) return pt;
+  }
+  return null;
+}
 // Round about (cx, cz) at radius r from `bear`, alternating either side, then a little
-// nearer and further: the first clear spot wins. Deterministic for a given world.
-function findGround(cx, cz, r, bear, zi, pad = 2.5, ok = null) {
-  for (const rr of [r, r * 0.85, r * 1.2, r * 0.7, r * 1.45]) {
-    for (let k = 0; k < 48; k++) {
-      const a = bear + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * (TAU / 48);
-      const x = cx + Math.sin(a) * rr, z = cz + Math.cos(a) * rr;
-      if (clearGround(x, z, zi, pad) && (!ok || ok(x, z))) return { x, z };
+// nearer and further: the first clear spot whose boom clears wins (then, failing every one,
+// the first merely clear one). Deterministic for a given world. `back`: which way the lens
+// hangs along the radius (+1: he faces the centre, so it is further out; -1: he faces out).
+function findGround(cx, cz, r, bear, zi, pad = 2.5, ok = null, back = 1) {
+  for (const strict of [true, false]) {
+    for (const rr of [r, r * 0.85, r * 1.2, r * 0.7, r * 1.45]) {
+      for (let k = 0; k < 48; k++) {
+        const a = bear + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * (TAU / 48);
+        const sx = Math.sin(a), sz = Math.cos(a), x = cx + sx * rr, z = cz + sz * rr;
+        if (!clearGround(x, z, zi, pad) || (ok && !ok(x, z))) continue;
+        const pitch = lensPitch(x, z, zi, sx * back, sz * back);
+        if (strict && pitch === null) continue;
+        return { x, z, pitch: pitch === null ? -0.05 : pitch };
+      }
     }
   }
-  return { x: cx + Math.sin(bear) * r, z: cz + Math.cos(bear) * r };   // nothing clear: the plain spot
+  return { x: cx + Math.sin(bear) * r, z: cz + Math.cos(bear) * r, pitch: -0.05 };   // nothing clear: the plain spot
 }
-function standAt(x, z, zi, yaw) {
+let pitchNext = -0.05;   // the look a spot's boom needs (lensPitch), for the settle
+function standAt(x, z, zi, yaw, pitch = -0.05) {
   player.pos.set(x, terrainH(x, z, zi) + EYE_H, z);
   player.yaw = yaw;
+  pitchNext = pitch;
 }
 // Raise the line to reach where he stands, with room to move (never lowers it).
+// (the HUD calls the line TAUT past 0.92 of it: arrive well inside that)
 function lineFor(margin = 30) {
-  const need = Math.ceil(player.pos.distanceTo(pumpPos) + margin);
+  const d = player.pos.distanceTo(pumpPos);
+  const need = Math.ceil(Math.max(d + margin, d / 0.85));
   if (survival.hose < need) { survival.hose = need; return ' · LINE ' + Math.round(need * 3) + ' M'; }
   return '';
 }
@@ -118,7 +152,7 @@ function home() {
   return 'SAILED HOME · ';
 }
 function seabedSpot() {
-  return findGround(pumpPos.x, pumpPos.z, SEABED_R, SEABED_BEAR, 0);
+  return findGround(pumpPos.x, pumpPos.z, SEABED_R, SEABED_BEAR, 0, 2.5, null, -1);
 }
 function sleeperNote() {
   const L = H.lev;
@@ -133,6 +167,7 @@ function deck() {
 // ---- the jumps ----------------------------------------------------------------------------
 function jump(k) {
   if (!H) return;
+  pitchNext = -0.05;
   let pre = H.toPlay();
   if (pre) pre += ' · ';
   let line = '', label = '';
@@ -160,22 +195,21 @@ function jump(k) {
       H.enterZone(0);
       const s = seabedSpot();
       // facing out, away from the raft: open ground ahead
-      standAt(s.x, s.z, 0, yawTo(s.x - pumpPos.x, s.z - pumpPos.z));
+      standAt(s.x, s.z, 0, yawTo(s.x - pumpPos.x, s.z - pumpPos.z), s.pitch);
       refill();
       if (k === '3') {
         label = '3 · SEABED, ZONE 0';
         line = 'SEABED, ZONE 0 — ' + SEABED_R + ' U OFF THE LINE, RESERVE FULL' + lineFor();
       } else {
-        // THE LINE ENDS ~8 U AHEAD: the leash measures straight from the pump, so the
-        // length that puts its end 8 u along his heading is the range of THAT point (the
-        // line hangs steeply here, so range + 8 would end it ~20 u off instead).
+        // THE LINE ENDS 8 U ON: the leash measures range straight from the pump, so this
+        // is 8 u of range left. Here the line hangs steeply (the seabed is ~240 down, he is
+        // 25 out), so walking straight out spends that range slowly (~20 u of walking);
+        // a burst up-and-out spends it fastest. Not in the give band on arrival (last 5 u).
         label = '4 · HOSE END';
-        const ax = player.pos.x + Math.sin(player.yaw) * 8, az = player.pos.z + Math.cos(player.yaw) * 8;
-        const ay = terrainH(ax, az, 0) + EYE_H;
-        survival.hose = Math.hypot(ax - pumpPos.x, ay - pumpPos.y, az - pumpPos.z);
-        line = 'HOSE END — THE LINE RUNS OUT 8 U AHEAD (' + Math.round(survival.hose * 3) + ' M). WALK OR BURST INTO IT';
+        survival.hose = player.pos.distanceTo(pumpPos) + 8;
+        line = 'HOSE END — 8 U OF LINE LEFT (' + Math.round(survival.hose * 3) + ' M). WALK OUT OR BURST UP-AND-OUT INTO IT';
       }
-      H.settle(false, true);
+      H.settle(false, true, pitchNext);
       break;
     }
     case '5': {
@@ -198,7 +232,7 @@ function jump(k) {
       line = 'VELKATH — ' + velkath();
       refill();
       line += lineFor() + sleeperNote();
-      H.settle(false, true);
+      H.settle(false, true, pitchNext);
       break;
     }
     case '7': {
@@ -208,7 +242,7 @@ function jump(k) {
       line = 'ORUNE — ' + orune();
       refill();
       line += lineFor() + sleeperNote();
-      H.settle(false, true);
+      H.settle(false, true, pitchNext);
       break;
     }
     case '8': {
@@ -218,7 +252,7 @@ function jump(k) {
       line = 'MHOR — ' + mhor();
       refill();
       line += lineFor() + sleeperNote();
-      H.settle(false, true);
+      H.settle(false, true, pitchNext);
       break;
     }
     case '9': {
@@ -261,8 +295,8 @@ function jump(k) {
 
 // The zone-0 shark (window.pred is predators.js's dev surface; its objects are live): set it
 // 40 u off him, ahead and a little to the side, already INTERESTED and circling in from that
-// range. Interest -> windup needs 10 s of circling (SH.minInterest); it starts at 7, so the
-// approach runs ~3 s, then the wind-up and the run come when he is inside 42 u.
+// range. Interest -> windup needs 10 s of circling (SH.minInterest); it starts at 5, so the
+// approach runs ~5 s, then the wind-up and the run come when he is inside 42 u.
 function shark(yaw) {
   const P = window.pred;
   const S = P && P.sharks.find(s => s.cfg.zi === 0);
@@ -273,9 +307,9 @@ function shark(yaw) {
   S.orbitPh = Math.atan2(dz, dx);   // predators.js orbits at (cos ph, sin ph) * R about him
   S.orbitR = SHARK_D;
   S.fwd.set(-Math.sin(S.orbitPh), 0, Math.cos(S.orbitPh)).normalize();   // on its circle
-  S.state = 'interest'; S.tState = 7;
+  S.state = 'interest'; S.tState = 5;
   S.arousal = 1.2; S.cool = 0; S.bit = false; S.blinded = 0;
-  return 'ONE CIRCLES IN FROM ' + SHARK_D + ' U. ITS RUN COMES IN ~3 S. SWIM, BURST, OR INK';
+  return 'ONE CIRCLES IN FROM ' + SHARK_D + ' U. ITS RUN COMES IN ~5 S. SWIM, BURST, OR INK';
 }
 
 // The Brooder's nest: stand him on the far side of the nest from her body, the nearest egg
@@ -293,7 +327,7 @@ function velkath() {
     if (reach(c.x, c.z)) { s = c; break; }
   }
   if (!s) s = { x: n.x + Math.sin(bear) * 2, z: n.z + Math.cos(bear) * 2 };
-  standAt(s.x, s.z, 0, yawTo(n.x - s.x, n.z - s.z));
+  standAt(s.x, s.z, 0, yawTo(n.x - s.x, n.z - s.z), s.pitch);
   return 'AT THE NEST, AN EGG IN REACH. [E] TAKES IT AND SHE WAKES';
 }
 
@@ -307,7 +341,7 @@ function orune() {
   let bear = yawTo(lp.x - bx, lp.z - bz);
   if (Math.hypot(lp.x - bx, lp.z - bz) < 1) bear = 0;
   const s = findGround(lp.x, lp.z, 14, bear, 1, 2.5);
-  standAt(s.x, s.z, 1, yawTo(lp.x - s.x, lp.z - s.z));
+  standAt(s.x, s.z, 1, yawTo(lp.x - s.x, lp.z - s.z), s.pitch);
   return "THE SHIP'S LAMP AHEAD. WALK IN; [E] TAKES IT AND SHE WAKES";
 }
 
@@ -317,9 +351,9 @@ function mhor() {
   const L = H.lev, F = L && L.furnace;
   if (!F) return 'NO FURNACE HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
   const f = F.pos, rp = riftPos(1);
-  const s = findGround(f.x, f.z, 7.5, yawTo(rp.x - f.x, rp.z - f.z), 2, 0.8,
-    (x, z) => Math.hypot(x - f.x, z - f.z) < 9.5);
-  standAt(s.x, s.z, 2, yawTo(f.x - s.x, f.z - s.z));
+  const s = findGround(f.x, f.z, 8.5, yawTo(rp.x - f.x, rp.z - f.z), 2, 0.8,
+    (x, z) => Math.hypot(x - f.x, z - f.z) < 9.8);
+  standAt(s.x, s.z, 2, yawTo(f.x - s.x, f.z - s.z), s.pitch);
   return 'THE COLD FURNACE, 2 BITUMEN IN THE BAG. [E] FEEDS IT';
 }
 

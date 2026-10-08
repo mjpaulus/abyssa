@@ -2716,9 +2716,9 @@ if (/[?&]playtest(?:[=&#]|$)/.test(location.search)) import('./ui/playtest.js').
   // After a jump has set player.pos / yaw: the rest of a respawn, as start() and the rescue
   // do it — still, re-dressed at this depth, the pack shut, the line re-laid to him, the
   // lens CUT behind him (never flown), the surface crossing not counted as a dive.
-  settle(onDeck, grounded) {
+  settle(onDeck, grounded, pitch = -0.05) {
     player.vel.set(0, 0, 0);
-    player.pitch = onDeck ? -0.05 : -0.12;
+    player.pitch = pitch;
     player.onDeck = onDeck; player.grounded = grounded; player.onLadder = false;
     if (!onDeck) player.deckL.ok = false;
     player.groundY = grounded ? player.pos.y : player.groundY;
