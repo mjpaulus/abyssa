@@ -1915,9 +1915,12 @@ const SB = {
 //   hz / bHz  cadence of the haul / the back-pull at full effort (spec 0.35-0.42 Hz)
 //   amp       stroke size at full effort (1 = the full authored sweep)
 //   att / rel effort envelope rates, /s (commit quickly, let go slowly)
-//   spin      first-stroke commitment: from a standstill the cadence runs up to (1 + spin)x
-//             until the smoothed way reaches the cruise (fwd / back)
-const HAUL_POSE = { hz: 0.38, bHz: 0.42, amp: 1.0, att: 2.4, rel: 1.1, spin: 0.9, fwd: 6.5, back: 2.4 };
+//   spin/commit  the first stroke of a haul (a fresh press, or a reversal) runs up to
+//             (1 + spin)x the cadence, decaying over ~commit s: pressing W means a pull NOW,
+//             then the slow working rhythm. Keyed on time, not way: way lags the stroke, and
+//             backing against his own momentum it never comes, so a way-keyed spin-up ran the
+//             back-pull at 0.6 Hz for seconds (measured) — a flurry, not a heavy man.
+const HAUL_POSE = { hz: 0.38, bHz: 0.42, amp: 1.0, att: 2.4, rel: 1.1, spin: 0.8, commit: 0.9 };
 window.__haul = HAUL_POSE;
 
 const CH = {
@@ -3198,7 +3201,7 @@ const BURSTLEAN = { on: 1, max: 1.05, bank: 0.55, back: 0.5, fIn: 3.2, fOut: 2.0
 window.__burstLean = BURSTLEAN;
 window.__burstLeanState = () => ({ pitchDeg: +(blP.x * 57.3).toFixed(1), rollDeg: +(blR.x * 57.3).toFixed(1) });
 // (swimfix) probe: the haul's live weights — which branch owns the body and how hard the stroke runs
-let swDrive = 0, swRate = 0, haulF = 0, haulB = 0, backW = 0;
+let swDrive = 0, swRate = 0, haulF = 0, haulB = 0, backW = 0, haulDir = 0, haulCommit = 0;
 window.__swimState = () => ({ gb: +gb.toFixed(3), burstW: +burstW.toFixed(3), ladderF: +ladderF.toFixed(3), drive: +swDrive.toFixed(3), rate: +swRate.toFixed(3), swimP: +swimP.toFixed(3), haulF: +haulF.toFixed(3), haulB: +haulB.toFixed(3), backW: +backW.toFixed(3) });
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
@@ -3583,9 +3586,9 @@ export function updateDiver(dt, t, player) {
   // (swimfix) THE HAUL IS PACED BY THE WORK, NOT THE WAY. The cadence above was keyed to speed,
   // and the air pack cut the haul from ~16 u/s to ~7: hauling flat out he stroked at 0.25 Hz
   // with a half-size sweep, and backing (~2.4 u/s) was the idle scull — no stroke at all
-  // (roadmap/swim-stroke-missing.md). While he hauls, the stroke runs at its own cadence, with
-  // a commitment spin-up keyed on the SMOOTHED way (instantaneous speed surges every stroke,
-  // and would wobble the cadence inside one). Hanging or coasting, the old speed-keyed scull.
+  // (roadmap/swim-stroke-missing.md). While he hauls, the stroke runs at its own cadence, the
+  // first pull of a haul committed quicker (HAUL_POSE.spin). Hanging or coasting, the old
+  // speed-keyed scull.
   {
     const H = HAUL_POSE, hz = player.haulZ || 0;
     const fT = hz > 0 ? hz : 0, bT = hz < 0 ? -hz : 0;
@@ -3593,11 +3596,15 @@ export function updateDiver(dt, t, player) {
     haulB += (bT - haulB) * Math.min(1, (bT > haulB ? H.att : H.rel) * dt);
     const bwT = haulB > 0.05 && haulB > haulF ? 1 : 0;
     backW += (bwT - backW) * Math.min(1, 2.5 * dt);
+    const dir = hz > 0.05 ? 1 : hz < -0.05 ? -1 : 0;
+    if (dir !== 0 && dir !== haulDir) haulCommit = 1;   // a fresh press, or a reversal
+    haulDir = dir;
+    haulCommit *= Math.exp(-dt / H.commit);
   }
   const effort = Math.max(haulF, haulB);
   {
-    const H = HAUL_POSE, ref = H.fwd + (H.back - H.fwd) * backW;
-    const work = (H.hz + (H.bHz - H.hz) * backW) * (1 + H.spin * clamp(1 - flatS / ref, 0, 1));
+    const H = HAUL_POSE;
+    const work = (H.hz + (H.bHz - H.hz) * backW) * (1 + H.spin * haulCommit);
     swRate = (0.17 + Math.min(speed, 7) * 0.012) * spinUp * (1 - effort) + work * effort;
   }
   swimP = (swimP + swRate * dt) % 1;

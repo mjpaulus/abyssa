@@ -91,7 +91,8 @@ if (process.env.ALT3) {
   await sleep(2500);
   console.log('alt3', JSON.stringify(await ev(`(window.__helm = true, [gameState, window.__playtest && window.__playtest.last(), player.grounded, +player.pos.y.toFixed(1)])`)));
 }
-if (SCEN === 'long') { await mark('setup'); await lift(60); await neutral(2500); await mark('hang'); await neutral(2000); await hold('KeyW', 12000, 'W'); await mark('coastW'); await neutral(6000); await hold('KeyS', 12000, 'S'); await mark('coastS'); await sleep(1500); }
+if (SCEN === 'cruise') { await mark('setup'); await lift(90); await neutral(2500); await hold('KeyW', 22000, 'W'); await mark('coastW'); await neutral(8000); await hold('KeyS', 16000, 'S'); }
+else if (SCEN === 'long') { await mark('setup'); await lift(60); await neutral(2500); await mark('hang'); await neutral(2000); await hold('KeyW', 12000, 'W'); await mark('coastW'); await neutral(6000); await hold('KeyS', 12000, 'S'); await mark('coastS'); await sleep(1500); }
 else if (SCEN === 'midS') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(3000); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
 else if (SCEN === 'mid') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(5000); await ws6(); }
 else if (SCEN === 'low') { await mark('setup'); await lift(2.5); await neutral(1200); await ws6(); }

@@ -455,10 +455,9 @@ const KICK_DEPTH = 0.62;   // 0 = the old constant glide, 1 = pure impulse
 // the measured make-good (mean 16.39 -> 17.6 against the old constant 17.72), applied to
 // the whole pulse so the shape is untouched and only the average moves.
 // Retuned for depth 0.88 (the deeper the pulse, the harder quadratic drag taxes it).
-// (swimfix) 1.25, was 1.16: the haul's stroke now runs at its own 0.38 Hz (was ~0.26 Hz,
-// speed-keyed), and the shorter period changes what quadratic drag takes; measured with real
-// keys, 12 s W from a hang (last 6 s): 7.31 u/s mean, against 7.33 before (and 7.00 at 1.16).
-const KICK_GAIN = 1.25;
+// (swimfix) The haul's stroke runs at its own 0.38 Hz now (was ~0.25 Hz, speed-keyed); its
+// cruise is unchanged at this gain — measured with real keys, 22 s of W, whole strokes only.
+const KICK_GAIN = 1.16;
 // Backwards and sideways are sculls, not strokes: a man in a Mark V can paddle himself
 // crabwise, slowly. Was 1.0 and 1.0 — indistinguishable from swimming forwards.
 // This is a FORCE fraction and the target is a SPEED fraction, and drag is quadratic, so
