@@ -605,24 +605,31 @@ addEventListener('mousedown', e => {
 // dropped unshown (old news). Allocation only when a line is said, never per frame.
 let msgPrio = 0;
 const msgQ = [], MSGQ_N = 3, MSGQ_STALE = 12;
+let msgClock = 0;   // game seconds (update's dt): staleness must not run on wall time
+function queueMsg(text, dur, prio, front) {
+  for (let i = 0; i < msgQ.length; i++) if (msgQ[i].text === text) return;
+  let i = msgQ.length;
+  if (front) { i = 0; while (i < msgQ.length && msgQ[i].prio > prio) i++; }
+  else while (i > 0 && msgQ[i - 1].prio < prio) i--;
+  msgQ.splice(i, 0, { text, dur, prio, at: msgClock });
+  if (msgQ.length > MSGQ_N) msgQ.length = MSGQ_N;
+}
 function showMsg(text, dur = 4, prio = 1) {
   if (msgT > 0 && msgPrio >= prio) {
     if ($msg.textContent === text && msgT > 0.6) return;
-    for (let i = 0; i < msgQ.length; i++) if (msgQ[i].text === text) return;
-    let i = msgQ.length;
-    while (i > 0 && msgQ[i - 1].prio < prio) i--;
-    msgQ.splice(i, 0, { text, dur, prio, at: performance.now() });
-    if (msgQ.length > MSGQ_N) msgQ.length = MSGQ_N;
+    queueMsg(text, dur, prio, false);
     return;
   }
+  // a higher line cutting in: the one it interrupts waits at the front of its rank (it was
+  // being read), unless it was nearly done
+  if (msgT > 1 && $msg.classList.contains('on') && $msg.textContent !== text) queueMsg($msg.textContent, Math.max(1.5, msgT), msgPrio, true);
   $msg.textContent = text;
   $msg.classList.add('on');
   msgT = dur; msgPrio = prio;
 }
 // the next line that is still news, or null
 function nextMsg() {
-  const now = performance.now();
-  while (msgQ.length && now - msgQ[0].at > MSGQ_STALE * 1000) msgQ.shift();
+  while (msgQ.length && msgClock - msgQ[0].at > MSGQ_STALE) msgQ.shift();
   return msgQ.length ? msgQ.shift() : null;
 }
 // (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the egg is
@@ -1656,6 +1663,7 @@ function pollGamepad(dt) {
 
 function update(dt, t) {
   if (prof) pmT = performance.now();
+  msgClock += dt;
   if (msgT > 0) {
     msgT -= dt;
     if (msgT <= 0) {
@@ -1925,7 +1933,9 @@ function update(dt, t) {
     // big blows startle the reef too (footfalls already reach it through stir.js)
     if (ev.quake > 0.3 && lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, Math.min(1, ev.quake + 0.3), P_SLAM);
     if (ev.plume) stirPulse(ev.plumeX, ev.plumeY, ev.plumeZ, 30, 0, Math.min(1, 0.5 + 0.5 * ev.plume), P_SLAM);   // the Brooder's sand plume startles the reef where it rises
-    if (ev.msg) showMsg(ev.msg, 4);
+    // (fifth-ward) the sleeper telling him its rule ('THE FIRE BLINDS HIM...', 'THE WARDS OF
+    // ORUNE ANSWER THE PING.') ranks with the ward lines: at prio 1 the counts starved it
+    if (ev.msg) showMsg(ev.msg, 4, 2);
     // (fifth-ward) a held ward refused a touch: a dead iron knock, the pips shake, and the
     // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
     // (one knock per 0.6 s per sleeper: a strike pass sweeps several held wards at once)
