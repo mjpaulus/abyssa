@@ -52,6 +52,12 @@ export const player = {
   // the keys, the rig does not) so diver.js can bias the arms without reading input.
   scullX: 0,
   scullZ: 0,
+  // (swimfix) the haul he is MAKING, not the way he is making: +1 hauling forward (W), -1
+  // pulling himself back (S), 0 neither or both; times ctrl, so a man jerked off balance by
+  // the line strokes at what he has left. Zero on the ground. diver.js keys the stroke's
+  // size and cadence on this, because at the air pack's ~7 u/s haul the way made through
+  // the water no longer tells a hard-working man from one hanging still.
+  haulZ: 0,
   // THE YANK (tether.js leash): seconds of recovery left after the hose snapped him back,
   // over a recovery of staggerDur, at staggerK (0..1) of his hands off the controls.
   // game.js sets all three on a yank; updatePlayer eases the drive back in.
@@ -449,6 +455,8 @@ const KICK_DEPTH = 0.62;   // 0 = the old constant glide, 1 = pure impulse
 // the measured make-good (mean 16.39 -> 17.6 against the old constant 17.72), applied to
 // the whole pulse so the shape is untouched and only the average moves.
 // Retuned for depth 0.88 (the deeper the pulse, the harder quadratic drag taxes it).
+// (swimfix) The haul's stroke runs at its own 0.38 Hz now (was ~0.25 Hz, speed-keyed); its
+// cruise is unchanged at this gain — measured with real keys, 22 s of W, whole strokes only.
 const KICK_GAIN = 1.16;
 // Backwards and sideways are sculls, not strokes: a man in a Mark V can paddle himself
 // crabwise, slowly. Was 1.0 and 1.0 — indistinguishable from swimming forwards.
@@ -456,6 +464,11 @@ const KICK_GAIN = 1.16;
 // the two are not the same number: 0.347 of the thrust buys 0.55 of the speed (measured
 // 9.4 u/s against a forward mean of 17.2). Writing 0.55 here would have bought 0.72.
 const SCULL = 0.347;
+// (swimfix) BACKING IS A STROKE TOO. The back-pull (diver.js SB) pushes on the same phase as
+// the haul (push centred on KICK_P), so the backward thrust is shaped on it like the forward:
+// the visible push IS the push. kickThrust carries KICK_GAIN (the forward make-good); the
+// back-pull takes its own, measured to keep the old constant scull's speed (~2.4 u/s).
+const BACK_GAIN = 1.0;
 
 // Bottle blowdown: thrust from a fixed-volume bottle through a fixed orifice tracks
 // bottle pressure, which decays exponentially once the valve is cracked. A 30 ms crack
@@ -645,7 +658,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // How much of him the bottom is actually carrying. Vented, the dress holds nothing
     // up and 170 kg of lead and brass is on his soles; blown up, he is nearly floating
     // and the boots skim. On planks there is no water to hold anything up: weight is 1.
-    player.scullX = 0; player.scullZ = 0;
+    player.scullX = 0; player.scullZ = 0; player.haulZ = 0;
     const wgt = onDeck ? 1 : clamp((GROUND_BUOY - player.buoy) / (GROUND_BUOY - A_BUOY_MIN), 0, 1);
     const tau = onDeck ? TAU_DECK : TAU_SILT_LIGHT + (TAU_SILT_HEAVY - TAU_SILT_LIGHT) * wgt;
     // (sealegs) on a working deck he walks slower: wider, shorter, picking his moment
@@ -721,9 +734,12 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // The kick, not the throttle. Unit mean, so the minute-by-minute distance is the old
     // one; what is new is that the speed now rises and falls under him.
     const kick = kickThrust(player.swimP);
+    const kickB = kick * (BACK_GAIN / KICK_GAIN);
     player.scullX = 0; player.scullZ = 0;
-    if (keys['KeyW'] || keys['ArrowUp']) { player.vel.addScaledVector(flat, acc * kick * dt); ay += A_LOOK * sy * kick; }
-    if (keys['KeyS'] || keys['ArrowDown']) { player.vel.addScaledVector(flat, -acc * SCULL * dt); ay -= A_LOOK * sy * SCULL; player.scullZ = -1; }
+    const kF = keys['KeyW'] || keys['ArrowUp'], kB = keys['KeyS'] || keys['ArrowDown'];
+    player.haulZ = ((kF ? 1 : 0) - (kB ? 1 : 0)) * ctrl;
+    if (kF) { player.vel.addScaledVector(flat, acc * kick * dt); ay += A_LOOK * sy * kick; }
+    if (kB) { player.vel.addScaledVector(flat, -acc * SCULL * kickB * dt); ay -= A_LOOK * sy * SCULL * kickB; player.scullZ = -1; }
     if (keys['KeyA'] || keys['ArrowLeft']) { player.vel.addScaledVector(right, -acc * SCULL * dt); player.scullX = -1; }
     if (keys['KeyD'] || keys['ArrowRight']) { player.vel.addScaledVector(right, acc * SCULL * dt); player.scullX = 1; }
     // (Space no longer kicks up: it is the pack. C still drives him down as it vents.)

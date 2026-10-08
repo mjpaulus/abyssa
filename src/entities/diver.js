@@ -1897,6 +1897,32 @@ const S = {
   knee: curve([[0, 0.22], [0.25, 0.58], [0.50, 0.40], [0.75, 0.12]])
 };
 
+// THE BACK-PULL (swimfix). Backing off is not the haul run backwards and not the haul mirrored:
+// a man in a weighted dress pushes the water away in front of him. Same phase clock, the push
+// centred on the haul's (player.js KICK_P .36, so the thrust lands on the visible push):
+// GATHER (0-.12) both hands in front of the chest, elbows folded, palms out -> PUSH (.12-.47)
+// the arms drive forward and out (wide enough to be seen past him from behind) until the
+// elbows lock -> SCULL OUT (.47-.66) the
+// straight arms open wide, feathering -> RECOVER (.66-1) round the sides and the elbows fold
+// back in to the ribs, the hands rising to the chest again.
+const SB = {
+  sx: curve([[0, -0.72], [0.12, -0.84], [0.24, -1.02], [0.36, -1.14], [0.47, -1.08], [0.56, -0.84], [0.66, -0.48], [0.78, -0.40], [0.90, -0.58]]),
+  sz: curve([[0, 0.32], [0.12, 0.44], [0.24, 0.56], [0.36, 0.68], [0.47, 0.86], [0.56, 1.06], [0.66, 1.00], [0.78, 0.60], [0.90, 0.36]]),
+  el: curve([[0, -1.36], [0.12, -1.16], [0.24, -0.70], [0.36, -0.30], [0.47, -0.18], [0.56, -0.24], [0.66, -0.50], [0.78, -1.10], [0.90, -1.40]])
+};
+// The haul's effort envelope (swimfix): what he is DOING sizes and paces the stroke, so a
+// heavy man working hard for little way reads as working hard. Knobs: window.__haul.
+//   hz / bHz  cadence of the haul / the back-pull at full effort (spec 0.35-0.42 Hz)
+//   amp       stroke size at full effort (1 = the full authored sweep)
+//   att / rel effort envelope rates, /s (commit quickly, let go slowly)
+//   spin/commit  the first stroke of a haul (a fresh press, or a reversal) runs up to
+//             (1 + spin)x the cadence, decaying over ~commit s: pressing W means a pull NOW,
+//             then the slow working rhythm. Keyed on time, not way: way lags the stroke, and
+//             backing against his own momentum it never comes, so a way-keyed spin-up ran the
+//             back-pull at 0.6 Hz for seconds (measured) — a flurry, not a heavy man.
+const HAUL_POSE = { hz: 0.38, bHz: 0.42, amp: 1.0, att: 2.4, rel: 1.1, spin: 0.8, commit: 0.9 };
+window.__haul = HAUL_POSE;
+
 const CH = {
   bobY: 0, shiftX: 1, shiftZ: 2, pYaw: 3, pRoll: 4, pPitch: 5, sYaw: 6, sPitch: 7, sRoll: 8, nYaw: 9, nPitch: 10,
   Rhx: 11, Rhz: 12, Rk: 13, Ra: 14, Lhx: 15, Lhz: 16, Lk: 17, La: 18,
@@ -2013,7 +2039,7 @@ function poseWalk(o, p, a, t, deck) {
 const dragS = x => { const s = Math.sin(x); return s * (1.15 - 0.15 * s * s); };
 const SWIM_DRAG = 0.28;    // seconds the arms trail the body's roll/yaw
 
-function poseSwim(o, p, t0, drive) {
+function poseSwim(o, p, t0, drive, back) {
   // Every free oscillation of the hanging body is slow and small: a hundredweight of lead
   // under an air-filled bonnet does not bob and wander.
   const t = t0 * 0.72;
@@ -2026,27 +2052,35 @@ function poseSwim(o, p, t0, drive) {
   o[CH.shiftZ] = 0;
   o[CH.pYaw] = Math.sin(t * 0.5) * 0.025;
   o[CH.pRoll] = Math.sin(t * 0.71) * 0.025;
-  o[CH.pPitch] = 0.03 + 0.06 * k * sweep;
+  // backing, the push sets him back on his heels: the chest comes up off the hands
+  const fw = 1 - back;
+  o[CH.pPitch] = 0.03 + 0.06 * k * sweep * fw - 0.05 * k * sweep * back;
   o[CH.sYaw] = Math.sin(t * 0.44 + 1) * 0.03;
-  o[CH.sPitch] = 0.06 + 0.07 * k * Math.max(0, -Math.sin(TAU * p));    // chest over the reach
+  o[CH.sPitch] = 0.06 + 0.07 * k * Math.max(0, -Math.sin(TAU * p)) * fw - (0.04 + 0.06 * sweep) * k * back;    // chest over the reach
   o[CH.sRoll] = Math.sin(t * 0.58) * 0.03;
   o[CH.nYaw] = Math.sin(t * 0.33) * 0.03; o[CH.nPitch] = -0.04;
   // ARMS. The free (left) hand makes the full sweep; the lantern hand the same stroke a beat
   // late and smaller, the lamp swinging on its bail. Per-stroke variation (drawKick): one
   // sweep never quite repeats the last.
-  const kl = k * kAmpL, kr = k * 0.55 * kAmpR, pr = p - 0.035;
-  o[CH.Lsx] = -0.15 + (S.sx(p) + 0.15) * kl; o[CH.Lsz] = 0.22 + (S.sz(p) - 0.22) * kl * kAbdL; o[CH.Lsy] = 0.10;
-  o[CH.Le] = -0.40 + (S.el(p) + 0.40) * kl;
-  o[CH.Rsx] = -0.30 + (S.sx(pr) + 0.30) * kr; o[CH.Rsz] = 0.30 + (S.sz(pr) - 0.30) * kr * kAbdR; o[CH.Rsy] = -0.16;
-  o[CH.Re] = -0.60 + (S.el(pr) + 0.60) * kr * 0.8;
+  const kl = k * kAmpL, kr = k * (0.55 + 0.30 * back) * kAmpR, pr = p - 0.035;
+  // (the back-pull swaps the curves, same rest pose and the same per-stroke variation; the
+  // lantern hand pushes with it nearly as hard — backing needs both hands, and the lamp
+  // swinging out wide on its bail is most of what the follow camera sees of the push)
+  const sxL = S.sx(p) * fw + SB.sx(p) * back, szL = S.sz(p) * fw + SB.sz(p) * back, elL = S.el(p) * fw + SB.el(p) * back;
+  const sxR = S.sx(pr) * fw + SB.sx(pr) * back, szR = S.sz(pr) * fw + SB.sz(pr) * back, elR = S.el(pr) * fw + SB.el(pr) * back;
+  o[CH.Lsx] = -0.15 + (sxL + 0.15) * kl; o[CH.Lsz] = 0.22 + (szL - 0.22) * kl * kAbdL; o[CH.Lsy] = 0.10;
+  o[CH.Le] = -0.40 + (elL + 0.40) * kl;
+  o[CH.Rsx] = -0.30 + (sxR + 0.30) * kr; o[CH.Rsz] = 0.30 + (szR - 0.30) * kr * kAbdR; o[CH.Rsy] = -0.16;
+  o[CH.Re] = -0.60 + (elR + 0.60) * kr * 0.8;
   // drag wobble on the trailing clock, small
   o[CH.Lsx] += dragS(td * 0.66 + 2) * 0.04; o[CH.Rsx] += dragS(td * 0.8) * 0.04;
   // LEGS. The boots hang: hips nearly straight, knees soft, feet pointing down under the lead.
   // A slow alternating wade rides on the stroke (one leg per stroke), scaled by the effort.
   const w = 0.25 + 0.75 * drive, pl = p + 0.5 + kPhL;
-  o[CH.Rhx] = -(0.04 + S.thigh(p) * w); o[CH.Rhz] = 0.07;
+  // backing, the water takes the boots a little ahead of him
+  o[CH.Rhx] = -(0.04 + S.thigh(p) * w + 0.10 * back * w); o[CH.Rhz] = 0.07;
   o[CH.Rk] = 0.16 + (S.knee(p) - 0.16) * w; o[CH.Ra] = -0.18;
-  o[CH.Lhx] = -(0.03 + S.thigh(pl) * w); o[CH.Lhz] = 0.07;
+  o[CH.Lhx] = -(0.03 + S.thigh(pl) * w + 0.08 * back * w); o[CH.Lhz] = 0.07;
   o[CH.Lk] = 0.18 + (S.knee(pl) - 0.18) * w; o[CH.La] = -0.16;
 }
 
@@ -2453,7 +2487,7 @@ GAIT.dbg = { po, pc, spx, spv, CH };
 // is the rate channel: smoothed d(yaw)/dt, eased in and out by the same spring.
 let prevYaw = 0, yawRate = 0, prevYawInit = false;
 // Scull arm bias, eased so the posture arrives and leaves rather than snapping.
-const scX = { x: 0, v: 0 }, scZ = { x: 0, v: 0 };
+const scX = { x: 0, v: 0 };
 const sPitch = { x: 0, v: 0 }, sRollT = { x: 0, v: 0 };
 // heel-strike knee soften, and the trailing wrists/ankles (secondary motion, sprung rather
 // than keyed — same idiom as the helmet lag). Wrist targets are REST-RELATIVE so the rest
@@ -3167,6 +3201,20 @@ const blP = { x: 0, v: 0 }, blR = { x: 0, v: 0 };
 const BURSTLEAN = { on: 1, max: 1.05, bank: 0.55, back: 0.5, fIn: 3.2, fOut: 2.0, spine: 0.30, neck: 0.42 };
 window.__burstLean = BURSTLEAN;
 window.__burstLeanState = () => ({ pitchDeg: +(blP.x * 57.3).toFixed(1), rollDeg: +(blR.x * 57.3).toFixed(1) });
+// (swimfix) probe: the haul's live weights — which branch owns the body and how hard the stroke runs
+let swDrive = 0, swRate = 0, haulF = 0, haulB = 0, backW = 0, haulDir = 0, haulCommit = 0;
+// (swimfix 2) THE HAUL LAY: hauling he hangs INTO the travel, the whole body pitched over the
+// pull with the bonnet held up looking ahead and the boots trailing; backing he sits back on
+// them; crabbing he banks. Its own slow springs (body pitch/roll, rad) and a slower, under-
+// damped one for the legs, so they come round late and swing once when he stops. Knobs:
+// window.__haulLay  fwd/back/bank = the lay at full effort (rad); surge = the pull's extra
+// pitch; fIn/fOut = spring rates (/s, critically damped); legF/legD = the legs' spring;
+// trail/knee = how far the boots trail and the knees give at full lay.
+const hlP = { x: 0, v: 0 }, hlR = { x: 0, v: 0 }, hlL = { x: 0, v: 0 };
+let hlApply = 0;   // the haul lay actually applied this frame (hlP capped against the burst lean)
+const HAULLAY = { on: 1, fwd: 0.36, back: 0.26, bank: 0.13, surge: 0.06, fIn: 1.7, fOut: 1.3, legF: 1.1, legD: 0.55, trail: 0.08, knee: 0.14, wade: 0.5, backCap: 0.55 };
+window.__haulLay = HAULLAY;
+window.__swimState = () => ({ gb: +gb.toFixed(3), burstW: +burstW.toFixed(3), ladderF: +ladderF.toFixed(3), drive: +swDrive.toFixed(3), rate: +swRate.toFixed(3), swimP: +swimP.toFixed(3), haulF: +haulF.toFixed(3), haulB: +haulB.toFixed(3), backW: +backW.toFixed(3), layDeg: +(hlApply * 57.3).toFixed(1), bankDeg: +(hlR.x * 57.3).toFixed(1), legLay: +hlL.x.toFixed(3) });
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
 const strafeS = { x: 0, v: 0 };
@@ -3547,7 +3595,31 @@ export function updateDiver(dt, t, player) {
   // Slow, wide sweeps: ~0.38 Hz at cruise (the frog kick was 0.52, and 0.73 before that).
   // The thrust pulse in player.js is unit-mean per cycle, so a slower stroke is a bigger
   // haul with a longer drift after it, not a slower diver. Hanging still he barely sculls.
-  swimP = (swimP + (0.17 + Math.min(speed, 7) * 0.012) * spinUp * dt) % 1;
+  // (swimfix) THE HAUL IS PACED BY THE WORK, NOT THE WAY. The cadence above was keyed to speed,
+  // and the air pack cut the haul from ~16 u/s to ~7: hauling flat out he stroked at 0.25 Hz
+  // with a half-size sweep, and backing (~2.4 u/s) was the idle scull — no stroke at all
+  // (roadmap/swim-stroke-missing.md). While he hauls, the stroke runs at its own cadence, the
+  // first pull of a haul committed quicker (HAUL_POSE.spin). Hanging or coasting, the old
+  // speed-keyed scull.
+  {
+    const H = HAUL_POSE, hz = player.haulZ || 0;
+    const fT = hz > 0 ? hz : 0, bT = hz < 0 ? -hz : 0;
+    haulF += (fT - haulF) * Math.min(1, (fT > haulF ? H.att : H.rel) * dt);
+    haulB += (bT - haulB) * Math.min(1, (bT > haulB ? H.att : H.rel) * dt);
+    const bwT = haulB > 0.05 && haulB > haulF ? 1 : 0;
+    backW += (bwT - backW) * Math.min(1, 2.5 * dt);
+    const dir = hz > 0.05 ? 1 : hz < -0.05 ? -1 : 0;
+    if (dir !== 0 && dir !== haulDir) haulCommit = 1;   // a fresh press, or a reversal
+    haulDir = dir;
+    haulCommit *= Math.exp(-dt / H.commit);
+  }
+  const effort = Math.max(haulF, haulB);
+  {
+    const H = HAUL_POSE;
+    const work = (H.hz + (H.bHz - H.hz) * backW) * (1 + H.spin * haulCommit);
+    swRate = (0.17 + Math.min(speed, 7) * 0.012) * spinUp * (1 - effort) + work * effort;
+  }
+  swimP = (swimP + swRate * dt) % 1;
   if (swimP < swPrev) drawKick(++kickIdx);   // one fresh pair of legs per kick
   // ---- breath clock: context-driven cadence, still drifting so it never metronomes.
   // Effort winds the rate up through an EMA — a sprint costs breaths for a while after
@@ -3573,23 +3645,22 @@ export function updateDiver(dt, t, player) {
   poseWalk(pw, walkP, amp, t, deckF);
   // The haul is driven by way made THROUGH the water, not by the dress lifting him: rising on
   // a full dress he hangs and barely sculls; a slow climb or settle still works the arms a little.
-  poseSwim(psw, swimP, t, clamp(flat * 0.09 + Math.abs(player.vel.y) * 0.04, 0, 1));
+  // (swimfix) ...and hauling or backing he works the full stroke whatever way it buys him.
+  swDrive = Math.max(clamp(flat * 0.09 + Math.abs(player.vel.y) * 0.04, 0, 1), effort * HAUL_POSE.amp);
+  poseSwim(psw, swimP, t, swDrive, backW);
   for (let i = 0; i < CH.N; i++) po[i] = psw[i] + (pw[i] - psw[i]) * gb;
 
-  // ---- SCULLS. Backing up and crabbing sideways are not swimming, and they should not
-  // look like it: the arms come out of the streamlined trail into a shallow paddle. This
-  // is a BIAS on the existing swim pose, not a new animation — four channels, sprung so
-  // it eases in and out, and it fades out entirely the moment his boots find the ground.
+  // ---- SCULLS. Crabbing sideways is not swimming, and it should not look like it: the arms
+  // come out of the streamlined trail into a shallow paddle. This is a BIAS on the existing
+  // swim pose, not a new animation, sprung so it eases in and out, and it fades out entirely
+  // the moment his boots find the ground. (Backing was a static bias here too; it is the
+  // back-pull now, a stroke of its own — SB, poseSwim.)
   const sw = 1 - gb;
   spring(scX, (player.scullX || 0) * sw, dt, 5, 0.85);
-  spring(scZ, (player.scullZ || 0) * sw, dt, 5, 0.85);
-  if (scX.x !== 0 || scZ.x !== 0) {
+  if (scX.x !== 0) {
     // sideways: the leading arm sweeps across the chest, the trailing arm abducts out
     po[CH.Rsz] += 0.22 * scX.x; po[CH.Lsz] -= 0.22 * scX.x;
     po[CH.Rsy] += 0.14 * scX.x; po[CH.Lsy] += 0.14 * scX.x;
-    // backing: both hands come forward and the elbows open, palms pushing ahead of him
-    po[CH.Rsx] += 0.34 * scZ.x; po[CH.Lsx] += 0.34 * scZ.x;
-    po[CH.Re] += 0.26 * scZ.x; po[CH.Le] += 0.26 * scZ.x;
   }
 
   // ---- THE LADDER. player.onLadder walks him up the rungs; without this the rig kept
@@ -3872,6 +3943,48 @@ export function updateDiver(dt, t, player) {
         po[CH.Rk] += 0.12 * lay; po[CH.Lk] += 0.22 * lay;
       }
     }
+    // (swimfix 2) THE HAUL LAY (HAULLAY above). Michael: "Sal has no swimming animation when
+    // moving forward or backward" — with the arms fixed he still hung bolt upright, a man
+    // standing in water waving. A Mark V diver hauling along hangs into the travel the way a
+    // towed weight does (spec: the boots swing back, he never goes horizontal): ~29 deg over
+    // the pull at full effort, a little more on each pull, the bonnet kept up on the spine and
+    // neck. Backing he sits back ~17 deg with the boots swinging forward under him; A/D bank him.
+    // The burst lean is the same body laid further: the two add, capped at the burst lean's own
+    // limit, so a burst while hauling lays him on to ~60 deg and, released, he comes back down
+    // to the haul lay (never through it), then upright when he stops.
+    {
+      const H = HAULLAY, off = (1 - gb) * (1 - ladderF) * H.on;
+      const pull = Math.max(0, Math.sin(TAU * (swimP - 0.18) / 0.76));
+      let tP = (H.fwd * haulF * (1 + H.surge / H.fwd * pull) - H.back * haulB) * off;
+      let tR = -H.bank * clamp(scX.x, -1, 1) * off;
+      // the burst lean already banking him that way: take only the rest (pitch is capped below)
+      if (tR * blR.x > 0) tR = tR > 0 ? Math.max(0, tR - blR.x) : Math.min(0, tR - blR.x);
+      const into = Math.abs(tP) > Math.abs(hlP.x);
+      spring(hlP, tP, dt, into ? H.fIn : H.fOut, 1.0);
+      spring(hlR, tR, dt, into ? H.fIn : H.fOut, 1.0);
+      // the legs answer the lay late and swing through once (heavy boots on a long body)
+      spring(hlL, hlP.x, dt, H.legF, H.legD);
+      // ...and the two together never lay him past the burst lean's own limit: the haul lay's
+      // spring lets go slowly, the burst lean comes in fast, so the sum is capped, not left to
+      // the springs (measured 65 deg uncapped)
+      hlApply = hlP.x > 0 ? Math.min(hlP.x, Math.max(0, BURSTLEAN.max - Math.max(blP.x, 0)))
+        : Math.max(hlP.x, -Math.max(0, H.backCap - Math.max(-blP.x, 0)));   // sat back: ~32 deg at most
+      const fw = Math.max(hlApply, 0), bk = Math.max(-hlApply, 0);
+      if (fw + bk > 1e-4) {
+        // the bonnet up and looking ahead (or level, sat back), as in the burst lean
+        po[CH.sPitch] -= BURSTLEAN.spine * fw - 0.25 * bk; po[CH.nPitch] -= BURSTLEAN.neck * fw - 0.30 * bk;
+      }
+      const lf = hlL.x / H.fwd, lfw = Math.max(lf, 0), lbk = Math.max(-hlL.x / H.back, 0);
+      if (Math.abs(lf) > 1e-4) {
+        // forward: the boots trail out behind, knees soft, and the wade (a step under him)
+        // gives way to the trail; backing: the boots swing forward under him, knees bent
+        const wd = 1 - H.wade * Math.min(lfw, 1);
+        po[CH.Rhx] = po[CH.Rhx] * wd + (H.trail * lfw - 0.30 * lbk);
+        po[CH.Lhx] = po[CH.Lhx] * wd + (H.trail * 1.25 * lfw - 0.24 * lbk);
+        po[CH.Rk] += H.knee * lfw + 0.20 * lbk; po[CH.Lk] += H.knee * 1.3 * lfw + 0.26 * lbk;
+        po[CH.Ra] -= 0.20 * lfw; po[CH.La] -= 0.22 * lfw;     // the boots point back along the trail
+      }
+    }
   }
 
   // Slash overlay: blends over the left-arm channels (plus a touch of spine twist) rather
@@ -4037,8 +4150,8 @@ export function updateDiver(dt, t, player) {
     spring(seaH, hT, dt, 9, 0.75);
     seaHeave = seaH.x;
   }
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x + blP.x, 0,
-    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x + seaR.x + blR.x);
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x + blP.x + hlApply, 0,
+    sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x + seaR.x + blR.x + hlR.x);
 
   const h = diver.hips;
   h.rotation.set(0, pc[CH.pYaw], pc[CH.pRoll]);

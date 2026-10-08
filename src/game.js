@@ -1292,6 +1292,20 @@ function clearCamDistance(from, dir, want, zi) {
   return want;
 }
 
+// (swimfix 3) THE SWIM FRAMING. While Sal hauls (W/S held) or bursts in open water the water
+// boom eases DOWN and a few degrees off-axis, so the haul lay reads from behind: the body
+// points away along the travel, the boots trail toward the lens. A framing change only — the
+// targets move, on the existing spring; no added lag, no drift. Grounded, on the deck, the
+// ladder or near the seabed it is off; a tap (W or Space) never moves it (`hold`). It gives
+// way with the boom: pulled in by an obstacle, the offsets shrink with it.
+// Knobs: window.__swimCam  on (0 = off), drop (u lower), side (tan of the off-axis angle,
+// toward his LEFT, away from the lantern hand), aimDrop (u), hold (s of sustained work first),
+// wIn / wOut (critically damped ease rates, /s: ~1.2 s in, ~1.5 s out).
+const SWIMCAM = { on: 1, drop: 2.4, side: 0.122, aimDrop: 0.45, hold: 0.4, wIn: 3.2, wOut: 2.6 };
+let swimCamK = 0, swimCamV = 0, swimCamHeld = 0;
+window.__swimCam = SWIMCAM;
+window.__swimCamState = () => ({ k: +swimCamK.toFixed(3), held: +swimCamHeld.toFixed(2) });
+
 function updateCamera(dt, t, fwd) {
   const zi = zone < 0 ? 0 : zone;
   const speed = player.vel.length();
@@ -1402,6 +1416,27 @@ function updateCamera(dt, t, fwd) {
     // her creK, creLift and creUnder are exactly 0 and this is the water boom's fixed rise.
     const upC = CAM_UP + creLift - CRECAM.under * creUnder;
     camDesired.y += upC - creK * (upC - DECK_PIVOT) * (1 - camDist / base);
+  }
+  {
+    // (swimfix 3) the swim framing (SWIMCAM above)
+    const S = SWIMCAM;
+    const open = !player.grounded && !player.onDeck && !player.onLadder && deckK <= 0 && player.pos.y < SURFACE_Y - 1;
+    swimCamHeld = open && (Math.abs(player.haulZ || 0) > 0.5 || player.jet > 0.3) ? swimCamHeld + dt : 0;
+    const agl = player.pos.y - 1.35 - terrainH(player.pos.x, player.pos.z, zi);
+    const tgt = S.on && swimCamHeld > S.hold ? clamp((agl - 1) / 2, 0, 1) : 0;
+    const w = tgt > swimCamK ? S.wIn : S.wOut;
+    for (let r = dt; r > 1e-6; r -= 0.02) {
+      const h = Math.min(r, 0.02);
+      swimCamV += (w * w * (tgt - swimCamK) - 2 * w * swimCamV) * h;
+      swimCamK += swimCamV * h;
+    }
+    if (tgt === 0 && swimCamK < 1e-4 && swimCamV <= 0) { swimCamK = 0; swimCamV = 0; }
+    if (swimCamK > 1e-4) {
+      const k = swimCamK * clamp(camDist / Math.max(base, 1e-3), 0, 1);
+      camDesired.y -= S.drop * k;
+      camRight.set(Math.sin(player.yaw - Math.PI / 2), 0, Math.cos(player.yaw - Math.PI / 2));
+      camDesired.addScaledVector(camRight, -S.side * camDist * k);
+    }
   }
   // (sweep) the deck heave knob (DECKCAM.heave, 0 = the lens rides the boat exactly)
   if (camHeaveLP === null || deckK <= 0) camHeaveLP = raft.position.y;
@@ -1611,7 +1646,7 @@ function updateCamera(dt, t, fwd) {
   // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
   // went (it swung the aim with every kick's surge).
   camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
-  camAim.y += DECKCAM.look * deckK + camHeaveOff + CRECAM.look * creUnder;
+  camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder;
   // Sal looks at what the lens would notice: the nearest life in front, re-picked four
   // times a second (the search walks every fauna buffer; the look itself is sprung).
   diverLookCool -= dt;
