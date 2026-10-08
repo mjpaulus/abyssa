@@ -13,8 +13,10 @@ for f in fs:
     rows.append((int(m.group(1)), float(m.group(2)), float(m.group(3)), f))
 rows.sort()
 wraps = [i for i in range(1, len(rows)) if rows[i][1] < rows[i - 1][1] - 0.3]
-if len(wraps) < 2: sys.exit('no full cycle in ' + seg)
-cyc = rows[wraps[-2]:wraps[-1]]
+if len(wraps) >= 2: cyc = rows[wraps[-2]:wraps[-1]]
+else:   # a slow stroke may not finish a whole cycle inside the hold: nearest phase over its back 2/3
+    print('note: no whole cycle in', seg, '- phases taken from the last 2/3 of the hold')
+    cyc = rows[len(rows) // 3:]
 pick = []
 for k in range(n):
     ph = k / n

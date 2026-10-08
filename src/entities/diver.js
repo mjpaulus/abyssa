@@ -1907,7 +1907,7 @@ const S = {
 // back in to the ribs, the hands rising to the chest again.
 const SB = {
   sx: curve([[0, -0.72], [0.12, -0.84], [0.24, -1.02], [0.36, -1.14], [0.47, -1.08], [0.56, -0.84], [0.66, -0.48], [0.78, -0.40], [0.90, -0.58]]),
-  sz: curve([[0, 0.30], [0.12, 0.40], [0.24, 0.50], [0.36, 0.60], [0.47, 0.74], [0.56, 0.90], [0.66, 0.84], [0.78, 0.50], [0.90, 0.32]]),
+  sz: curve([[0, 0.32], [0.12, 0.44], [0.24, 0.56], [0.36, 0.68], [0.47, 0.86], [0.56, 1.06], [0.66, 1.00], [0.78, 0.60], [0.90, 0.36]]),
   el: curve([[0, -1.36], [0.12, -1.16], [0.24, -0.70], [0.36, -0.30], [0.47, -0.18], [0.56, -0.24], [0.66, -0.50], [0.78, -1.10], [0.90, -1.40]])
 };
 // The haul's effort envelope (swimfix): what he is DOING sizes and paces the stroke, so a
@@ -2062,9 +2062,10 @@ function poseSwim(o, p, t0, drive, back) {
   // ARMS. The free (left) hand makes the full sweep; the lantern hand the same stroke a beat
   // late and smaller, the lamp swinging on its bail. Per-stroke variation (drawKick): one
   // sweep never quite repeats the last.
-  const kl = k * kAmpL, kr = k * 0.55 * kAmpR, pr = p - 0.035;
+  const kl = k * kAmpL, kr = k * (0.55 + 0.30 * back) * kAmpR, pr = p - 0.035;
   // (the back-pull swaps the curves, same rest pose and the same per-stroke variation; the
-  // lantern hand pushes with it, smaller — the lamp goes out ahead of him on its bail)
+  // lantern hand pushes with it nearly as hard — backing needs both hands, and the lamp
+  // swinging out wide on its bail is most of what the follow camera sees of the push)
   const sxL = S.sx(p) * fw + SB.sx(p) * back, szL = S.sz(p) * fw + SB.sz(p) * back, elL = S.el(p) * fw + SB.el(p) * back;
   const sxR = S.sx(pr) * fw + SB.sx(pr) * back, szR = S.sz(pr) * fw + SB.sz(pr) * back, elR = S.el(pr) * fw + SB.el(pr) * back;
   o[CH.Lsx] = -0.15 + (sxL + 0.15) * kl; o[CH.Lsz] = 0.22 + (szL - 0.22) * kl * kAbdL; o[CH.Lsy] = 0.10;
