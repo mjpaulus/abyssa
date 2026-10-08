@@ -351,10 +351,7 @@ $bm.lev.appendChild($tally);
 let tallyKey = -1, tallyLit = 0, tallyNoT = 0;
 function eggsOut(L) {
   const B = L && L.brood;
-  if (!B) return 0;
-  let n = 0;
-  for (let k = 0; k < B.eggs.length; k++) if (!B.eggs[k].inNest) n++;
-  return n;
+  return B ? B.out() : 0;          // the clump of her clutch Sal carries (brood.js)
 }
 function updateTally(dt) {
   if (tallyNoT > 0 && (tallyNoT -= dt) <= 0) $tally.classList.remove('refuse');
@@ -376,7 +373,7 @@ function updateTally(dt) {
   for (let i = 0; i < S.length; i++) if (S[i].mem) h += '<i class="mem"></i>';
   for (let i = 0; i < S.length; i++) if (S[i].lit && !S[i].mem) h += (litMask & ~tallyLit) & (1 << i) ? '<i class="on new"></i>' : '<i class="on"></i>';
   for (let i = 0; i < S.length; i++) if (!S[i].lit) h += held ? '<i class="cold"></i>' : '<i></i>';
-  h += dark ? `<b>${dark} DARK${held ? ' · EGG OUT' : ''}</b>` : '';
+  h += dark ? `<b>${dark} DARK${held ? ' · CLUTCH ROBBED' : ''}</b>` : '';
   tallyLit = litMask;
   $tally.innerHTML = h;
 }
@@ -2056,7 +2053,9 @@ function update(dt, t) {
     // walking into a planted leg is only a wall.
     if (!paused && bodyColsOn() && resolveBodyCols(player, dt, player.grounded)) {
       if (BODY.shell) lev.touchT = 0.3;   // bumping her SHELL tells her where he is (sight); a limb brushing him does not
-      if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant) { ev.slam = true; ev.lightDrain += dt * 0.5; }
+      // (brooder-clutch: the take is AT her body now, so her legs unfold past him as she rises;
+      // that is a shove, not a blow)
+      if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant && !lev.rising) { ev.slam = true; ev.lightDrain += dt * 0.5; }
     }
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
     if (ev.woke) {
@@ -2117,7 +2116,7 @@ function update(dt, t) {
       if (ev.remaining > 0) {
         const held = ev.remaining === 1 && eggsOut(lev) > 0;
         dropMsg(countLive);   // only the newest count is news
-        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE AN EGG IS OUT OF THE NEST.'
+        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE YOU CARRY HER EGGS.'
           : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);
       }
     }

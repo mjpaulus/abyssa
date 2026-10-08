@@ -10,8 +10,7 @@
 // and the embers live on L.grp at the world origin (the ward light pool is placed in
 // world coordinates, exactly as the serpent does).
 //
-// This file is the body and its motion. The ridge/nest/egg reveal, the fight and the
-// payoff come in the next plan; until then the lab drives her through L.cmd().
+// This file is the body and its motion; the clutch and its rite are brood.js.
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
@@ -443,11 +442,11 @@ export function makeBrooder(idx, cfg) {
   }
   // RITUAL, REMEMBERED: the ward the old calm keeps is the FRONT socket, under her prow
   // between the claws. Two reasons. (1) THE BROOD RULE must survive the memory: it is not
-  // a fixed ward but "the last DARK ward will not light while an egg is out". Pre-counting
+  // a fixed ward but "the last DARK ward will not light while the clutch is robbed". Pre-counting
   // a ward that is lit from the boot means it can never BE the last dark one, so the rule
   // still lands on a ward the diver has to reach (the second flank ward): one touch, then
   // the clutch decides. Had the memory been "the last ward lights itself", the brood rule
-  // would have been the free ward and the egg would no longer matter. (2) The front ward
+  // would have been the free ward and the clutch would no longer matter. (2) The front ward
   // is the one inside the lunge and the hammer cycle; the flank wards are the ones her
   // sideways stalk offers. The memory spares the cruellest approach and keeps the walk
   // round her, the stand and the clutch: the rite is shorter, not different.
@@ -456,9 +455,9 @@ export function makeBrooder(idx, cfg) {
   makeEmbers(L, c.size);
 
   // THE RIDGE: she sleeps at this zone's rift, facing the open seabed the diver comes
-  // from, a reef-crusted mound in the silt. Her nest lies in her lee, and a trail of
-  // tracks runs to it from the open ground past the shells of an old clutch. Taking an
-  // egg wakes her (brood.onTake); calmed, she walks back and settles over her brood,
+  // from, a reef-crusted mound in the silt. Her clutch bulges from under her rim, and a trail of
+  // tracks runs in from the open ground past a shed shell and spent egg skins. Prying a
+  // clump wakes her (brood.onTake); calmed, she walks back and settles over her clutch,
   // which clears the way.
   {
     const rp = riftPos(idx);
@@ -470,8 +469,10 @@ export function makeBrooder(idx, cfg) {
     const perp = V3(-out.z, 0, out.x);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
+    // (the old nest's spot, kept only as the start of her trail: the tracks run in from 95 u
+    // out past it, exactly where they always began)
     const nest = lip.clone().addScaledVector(perp, R * 2.8);
-    L.brood = makeBrood(L, idx, nest, nest.clone().addScaledVector(out, -95));
+    L.brood = makeBrood(L, idx, nest.clone().addScaledVector(out, -95));
     L.rite = L.brood;                                 // the game's generic [E] / prompt hook
     L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
@@ -485,11 +486,11 @@ export function makeBrooder(idx, cfg) {
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
-    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); fitSkirt(L); } }
+    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); if (L.brood) L.brood.seat(); fitSkirt(L); } }
     return L.probe();
   };
   L.probe = () => ({
-    kind: 'brooder', dormant: !!L.dormant, eggsOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
+    kind: 'brooder', dormant: !!L.dormant, clutchOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
     remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
     wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
@@ -504,9 +505,10 @@ export function makeBrooder(idx, cfg) {
   setLive(L);
   setWardTargets(-1, null);
   poseAll(L, 0, null);
+  if (L.brood) L.brood.seat();                       // the clutch rests on her bed (brood.js): before the drift, which leaves its side open
   buildSkirt(L);
   if (SC) installSculpt(L, SC);
-  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); } });
+  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.brood && L.dormant) { L.brood.seat(); fitSkirt(L); } } });
   const pd = L.onDispose;
   L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
   return L;
@@ -584,9 +586,18 @@ function fitSkirt(L) {
     for (let q = -3; q <= 3; q++) a += gap[(j + q + SK_COLS) % SK_COLS];
     gs[j] = Math.min(gap[j], a / 7);
   }
+  // THE CLUTCH'S SIDE (brooder-clutch): her fanning keeps the silt off the eggs that bulge out
+  // from under her rim there, so the drift opens over that arc (brood.js seat picks it)
+  const nB = L.brood && L.brood.seated ? L.brood.bear : null, nW = L.brood ? L.brood.notch : 0;
+  const notchK = j => {
+    if (nB === null) return 0;
+    let d = j / SK_COLS * Math.PI * 2 - nB;
+    d = Math.atan2(Math.sin(d), Math.cos(d));
+    return 1 - smooth(Math.abs(d), nW * 0.55, nW);
+  };
   for (let j = 0; j < SK_COLS; j++) {
     const th = j / SK_COLS * Math.PI * 2, rr = G.rimR(th), c = Math.cos(th), sn = Math.sin(th);
-    const gp = gs[j], w = clamp(gp * 1.7, 1.6, 9.5) / R;        // repose: ~30 degrees, wider for a deeper hollow
+    const nk = notchK(j), gp = gs[j] * (1 - nk), w = clamp(gp * 1.7, 1.6, 9.5) / R;        // repose: ~30 degrees, wider for a deeper hollow
     for (let i = 0; i < SK_RINGS; i++) {
       let rho, ly = -0.02, s = 0;
       if (i === 0) { rho = 0.80; ly = -0.10; }
@@ -601,6 +612,7 @@ function fitSkirt(L) {
         y = th0 + Math.max(0, gp) * prof + rip - 0.08 * s * s;
         if (i === SK_RINGS - 1) y = th0 - 0.10;
       }
+      if (i < 2 && nk > 0) y += (th0 - 0.12 - y) * nk;          // the open side: no curtain of silt under the rim
       if (y < th0 - 0.12 && i >= 1) y = th0 - 0.12;             // where the floor stands over her rim, the drift is under it
       P.setXYZ(i * SK_COLS + j, _v.x, y, _v.z);
       seabedColor(tm, _v.x, _v.z, rgb);
@@ -1396,6 +1408,7 @@ export function updateBrooder(L, dt, t, player) {
 
   // ---- stand / threat easing: she takes ~6 s to rise and ~4 s to settle ----
   const rising = L.standTarget > L.stand;
+  L.rising = rising && !L.calmed;                     // (game.js: limbs unfolding past him are a shove, not a slam)
   const rate = rising ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
@@ -1699,8 +1712,8 @@ export function updateBrooder(L, dt, t, player) {
         // buried wards can sit within reach of her face through the sand: only a
         // standing Brooder offers them
         if (L.standE > 0.6) {
-          // THE BROOD RULE: her last ward will not light while any egg is out of the
-          // nest; with the clutch whole again it lights on its own.
+          // THE BROOD RULE: her last ward will not light while a clump of her clutch is
+          // out; pressed back into her, it lights on its own.
           let dark = 0;
           for (const q of L.sigils) if (!q.lit) dark++;
           const last = dark === 1;
@@ -1719,8 +1732,8 @@ export function updateBrooder(L, dt, t, player) {
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
       if (L.memWard >= 0) wardsRecall(L, haloK);
-      // she goes home: back to the nest to settle over her brood, off the rift
-      if (L.brood) { L.walkTo = L.brood.nest.clone(); L.toNest = true; L.standTarget = 1; }
+      // she goes home: back to her bed on the lip, to settle over her clutch
+      if (L.brood) { L.walkTo = L.lairPos.clone(); L.toNest = true; L.standTarget = 1; }
       else { L.standTarget = 0; L.walkTo = null; }
     }
   } else {
