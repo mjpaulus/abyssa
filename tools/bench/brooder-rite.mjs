@@ -5,8 +5,10 @@
 import { connect, sleep } from './drv.mjs';
 const c = await connect();
 const OUT = '/Users/michaelpaulus/sc/.abyssa-wt/shots/brooderfix-rite-';
-await c.ev(`(localStorage.removeItem('abyssa.chart.v1'), 1)`).catch(() => 0);   // a first rite: no remembered ward
-await c.send('Page.reload', { ignoreCache: true });
+// a first rite: no remembered ward (the save is cleared with the page away, so nothing re-writes it)
+await c.send('Page.navigate', { url: 'about:blank' }); await sleep(800);
+await c.send('Storage.clearDataForOrigin', { origin: 'http://localhost:8829', storageTypes: 'local_storage' });
+await c.send('Page.navigate', { url: 'http://localhost:8829/?bench&playtest' });
 await sleep(1500);
 await c.until(`!document.getElementById('load') && typeof window.start === 'function'`, 240000, 500);
 await sleep(1500);
@@ -17,9 +19,10 @@ await sleep(2500);
 await c.key('Digit6', true, 1); await sleep(80); await c.key('Digit6', false, 1); await sleep(1500);
 await c.ev(`(async () => { window.__B = await import('/src/entities/sleeper/bodyCols.js'); window.__msgs = []; window.__rl = []; window.__rT = performance.now();
   (function f() { const t = document.getElementById('msg').textContent; if (t && __msgs[__msgs.length - 1] !== t) __msgs.push(t); const L = __sl, p = player.pos;
-    __rl.push([+((performance.now() - __rT) / 1000).toFixed(1), +__B.BODY.push.toFixed(2), __B.BODY.hitV > 2.5 ? 1 : 0, L.calmed ? 1 : 0, +Math.hypot(L.vel.x, L.vel.z).toFixed(2), +(Math.hypot(p.x - L.pos.x, p.z - L.pos.z) / L.R).toFixed(2), L.sigils.map(g => g.lit ? 1 : 0).join(''), L.brood.held]);
+    __rl.push([__B.BODY.hitV > 2.5 ? __B.BODY.last : '', +((performance.now() - __rT) / 1000).toFixed(1), +__B.BODY.push.toFixed(2), __B.BODY.hitV > 2.5 ? 1 : 0, L.calmed ? 1 : 0, +Math.hypot(L.vel.x, L.vel.z).toFixed(2), +(Math.hypot(p.x - L.pos.x, p.z - L.pos.z) / L.R).toFixed(2), L.sigils.map(g => g.lit ? 1 : 0).join(''), L.brood.held]);
     if (performance.now() - __rT < 400000) requestAnimationFrame(f); })(); return 1; })()`);
 const st = () => c.ev(`(() => { const L = __sl; return { lit: L.sigils.map(g => g.lit ? 1 : 0).join(''), held: L.brood.held, out: L.brood.out(), calmed: L.calmed, d: +(Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) / L.R).toFixed(2), stand: +L.stand.toFixed(2), seen: L.seen, g: player.grounded }; })()`);
+await (async () => { for (const f of (await import('node:fs')).readdirSync('/Users/michaelpaulus/sc/.abyssa-wt/shots')) if (f.startsWith('brooderfix-rite-')) (await import('node:fs')).unlinkSync('/Users/michaelpaulus/sc/.abyssa-wt/shots/' + f); })();
 let shot = 0; const snap = async n => { await c.png(OUT + String(shot++).padStart(2, '0') + '-' + n + '.png'); };
 await snap('nest');
 await c.tap('KeyE', 100);                                   // take
@@ -27,14 +30,16 @@ await c.until(`__sl.stand >= 1`, 20000);
 await snap('risen');
 async function steerTo(expr, near, ms, keys = ['KeyW']) {
   for (const k of keys) await c.key(k, true);
-  const t0 = Date.now(); let d = 1e9;
+  const t0 = Date.now(); let d = 1e9, cd = false;
   while (Date.now() - t0 < ms) {
     d = await c.ev(`(() => { const q = ${expr}; if (!q) return -1; const p = player.pos; player.yaw = Math.atan2(q[0] - p.x, q[1] - p.z); player.pitch = -0.05; return Math.hypot(q[0] - p.x, q[1] - p.z); })()`);
     if (d >= 0 && d < near) break;
-    if (!(await c.ev(`player.grounded`))) { await c.key('KeyC', true); await sleep(120); await c.key('KeyC', false); }
+    const gr = await c.ev(`player.grounded`);
+    if (!gr && !cd) { await c.key('KeyC', true); cd = true; } else if (gr && cd) { await c.key('KeyC', false); cd = false; }
     await sleep(100);
   }
   for (const k of keys) await c.key(k, false);
+  if (cd) await c.key('KeyC', false);
   return d;
 }
 const darkWard = `(() => { const L = __sl, p = player.pos; let b = null, bd = 1e9; for (const g of L.sigils) { if (g.lit) continue; const d = Math.hypot(g.grp.position.x - p.x, g.grp.position.z - p.z); if (d < bd) { bd = d; b = g; } } return b ? [b.grp.position.x, b.grp.position.z] : null; })()`;
@@ -66,9 +71,11 @@ for (let i = 0; i < 14; i++) { await sleep(2000); if (i % 3 === 0) await snap('h
 await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(L.pos.x - p.x, L.pos.z - p.z); return 1; })()`);
 await sleep(1500); await snap('home-look');
 console.log('end', JSON.stringify(await st()));
-await c.ev(`(localStorage.removeItem('abyssa.chart.v1'), 1)`);
 console.log('msgs', JSON.stringify(await c.ev(`__msgs`)));
 const rl = await c.ev(`__rl`);
+rl.forEach(r => r.shift && 0);
+const slamParts = {}; for (const r of rl) if (r[0]) slamParts[r[0]] = (slamParts[r[0]] || 0) + 1; console.log('slam parts', JSON.stringify(slamParts));
+for (const r of rl) r.shift();
 const calmIdx = rl.findIndex(r => r[3]);
 const after = calmIdx >= 0 ? rl.slice(calmIdx) : [];
 console.log(JSON.stringify({ frames: rl.length, slamFrames: rl.filter(r => r[2]).length, maxPush: Math.max(...rl.map(r => r[1])), calmAt: calmIdx >= 0 ? rl[calmIdx][0] : null,
