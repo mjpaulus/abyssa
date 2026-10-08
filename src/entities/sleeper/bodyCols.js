@@ -24,6 +24,8 @@ const SHM = new Float32Array(16), SHP = new Float32Array(16), SHI = new Float32A
 let shell = null, shellOk = false, shellPrevOk = false, shR = 1;
 let bx = 0, by = 0, bz = 0, bRad = 0;           // a bounding sphere over everything published
 let on = false;
+// dev A/B: claws = false takes the claws out of Sal's resolve (the camera still sees them)
+export const BODYCOLS = { claws: true };
 export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, last: '' };   // probe: this frame's resolve
 
 export function bodyColsOn() { return on; }
@@ -31,7 +33,7 @@ export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk =
 
 // ---- publishing (the sleeper's pose step) -----------------------------------------------
 export function beginBodyCols() {
-  PREV.set(CAP.subarray(0, nC * 8));
+  for (let i = 0, n = nC * 8; i < n; i++) PREV[i] = CAP[i];   // (no subarray: a view is an allocation)
   nPrev = nC; prevOk = on && nC > 0;
   if (shellOk) { SHP.set(SHM); shellPrevOk = true; }
   nC = 0; nLeg = 0;
@@ -283,7 +285,8 @@ export function resolveBodyCols(player, dt, grounded) {
   const idt = dt > 1e-5 ? 1 / dt : 0;
   for (let it = 0; it < 2; it++) {
     // the limbs
-    for (let i = 0; i < nC; i++) {
+    const nRes = BODYCOLS.claws ? nC : nLeg || nC;
+    for (let i = 0; i < nRes; i++) {
       const o = i * 8;
       const y0 = p.y - EYE_H + SAL_R, y1 = p.y;
       // cheap reject on the segment's box
@@ -324,7 +327,7 @@ export function resolveBodyCols(player, dt, grounded) {
       // on the ground only sideways: the floor holds him up, a push into it would fight it
       if (grounded && ny < 0.75) { const h = Math.hypot(nx, nz); if (h < 1e-4) continue; nx /= h; ny = 0; nz /= h; }
       p.x += nx * pen; p.y += ny * pen; p.z += nz * pen;
-      BODY.contacts++; BODY.push += pen; BODY.last = i < nLeg ? 'leg' : 'claw';
+      BODY.contacts++; BODY.push += pen; BODY.last = i < nLeg ? 'leg' + i : 'claw' + (i - nLeg);
       // velocity: never INTO the part faster than the part itself moves (it carries him)
       let pvx = 0, pvy = 0, pvz = 0;
       if (prevOk) {
@@ -333,6 +336,10 @@ export function resolveBodyCols(player, dt, grounded) {
         pvy = ((CAP[o + 1] - PREV[o + 1]) * (1 - t) + (CAP[o + 4] - PREV[o + 4]) * t) * idt;
         pvz = ((CAP[o + 2] - PREV[o + 2]) * (1 - t) + (CAP[o + 5] - PREV[o + 5]) * t) * idt;
       }
+      // (a CLAW only walls him off and moves him out of its way: it never throws him — the
+      // hammer has its own designed knock, and a guard claw working across her mouth that
+      // flung him 5 u/s back every cycle sealed her front against the plume rush)
+      if (i >= nLeg && nLeg) { pvx = pvy = pvz = 0; }
       contactVel(v, nx, ny, nz, pvx, pvy, pvz);
     }
     // the shell
@@ -350,7 +357,10 @@ export function resolveBodyCols(player, dt, grounded) {
         let pen = Math.sqrt(nx * nx + ny * ny + nz * nz);
         if (pen < 1e-5) continue;
         nx /= pen; ny /= pen; nz /= pen;
-        if (grounded && ny < 0.75) { const h = Math.hypot(nx, nz); if (h < 1e-4) continue; pen *= 1 / h; nx /= h; ny = 0; nz /= h; pen = Math.min(pen, 3); }
+        if (grounded && ny < 0.75) { const h = Math.hypot(nx, nz); if (h < 1e-4) continue; pen *= 1 / h; nx /= h; ny = 0; nz /= h; }
+        // (her shell coming DOWN onto him turns into a sideways shove: never more than
+        // PUSH_MAX a frame, or a footfall's dip threw him metres in one frame — measured 12 u)
+        if (pen > PUSH_MAX) pen = PUSH_MAX;
         p.x += nx * pen; p.y += ny * pen; p.z += nz * pen;
         BODY.contacts++; BODY.push += pen; BODY.last = 'shell'; BODY.shell = true;
         let pvx = 0, pvy = 0, pvz = 0;

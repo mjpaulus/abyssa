@@ -13,7 +13,8 @@ await c.click(640, 400);
 await c.until(`window.__power && __power.state().state === 'play'`, 30000);
 await sleep(2500);
 await c.key('Digit6', true, 1); await sleep(80); await c.key('Digit6', false, 1); await sleep(1500);
-await c.ev(`(async () => { window.__B = await import('/src/entities/sleeper/bodyCols.js'); return 1; })()`);
+await c.ev(`(async () => { window.__B = await import('/src/entities/sleeper/bodyCols.js'); const Bm = await import('/src/entities/sleeper/brooder.js');
+  if (${process.env.CLAWS === '0'}) __B.BODYCOLS.claws = false; if (${+(process.env.HOLD || 0)}) Bm.HUNT.hold = ${+(process.env.HOLD || 0)}; return 1; })()`);
 await c.tap('KeyE', 100);
 // face her and wait for the blind
 await c.until(`__sl.stand >= 1`, 20000);
@@ -30,7 +31,7 @@ while (Date.now() - t0 < 40000) {
   await sleep(100);
 }
 if (!blind) { console.log('never blinded'); process.exit(0); }
-await c.ev(`(window.__rr = [], window.__rT0 = performance.now(), (function f() { const L = __sl, p = player.pos; __rr.push([+((performance.now() - __rT0) / 1000).toFixed(2), +(Math.hypot(p.x - L.pos.x, p.z - L.pos.z) / L.R).toFixed(2), L.seen ? 1 : 0, +L.blindT.toFixed(1), __B.BODY.under ? 1 : 0, __B.BODY.contacts, __B.BODY.last, +__B.BODY.push.toFixed(2), L.sigils.map(g => g.lit ? 1 : 0).join(''), +p.y.toFixed(2), +L.threatE.toFixed(2), +Math.hypot(player.vel.x, player.vel.z).toFixed(1), (() => { const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw), dx = p.x - L.pos.x, dz = p.z - L.pos.z; return [+((dx * cy - dz * sy) / L.R).toFixed(2), +((dx * sy + dz * cy) / L.R).toFixed(2)]; })(), window.__wp]); if (performance.now() - __rT0 < 12000) requestAnimationFrame(f); })(), 1)`);
+await c.ev(`(window.__rr = [], window.__rT0 = performance.now(), (function f() { const L = __sl, p = player.pos; __rr.push([+((performance.now() - __rT0) / 1000).toFixed(2), +(Math.hypot(p.x - L.pos.x, p.z - L.pos.z) / L.R).toFixed(2), L.seen ? 1 : 0, +L.blindT.toFixed(1), __B.BODY.under ? 1 : 0, __B.BODY.contacts, __B.BODY.last, +__B.BODY.push.toFixed(2), L.sigils.map(g => g.lit ? 1 : 0).join(''), +p.y.toFixed(2), +L.threatE.toFixed(2), +Math.hypot(player.vel.x, player.vel.z).toFixed(1), (() => { const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw), dx = p.x - L.pos.x, dz = p.z - L.pos.z; return [+((dx * cy - dz * sy) / L.R).toFixed(2), +((dx * sy + dz * cy) / L.R).toFixed(2)]; })(), window.__wp, +Math.hypot(L.vel.x, L.vel.z).toFixed(2), +(L.strikeCd || 0).toFixed(2), +(player.stagger || 0).toFixed(2), __B.BODY.shell ? 1 : 0, +p.x.toFixed(2), +p.z.toFixed(2)]); if (performance.now() - __rT0 < 12000) requestAnimationFrame(f); })(), 1)`);
 await c.key('ShiftLeft', true); await c.key('KeyW', true);
 // the air pack: a held burst along his look (real Space), then C to keep low
 const burstAt = Date.now();
@@ -40,7 +41,7 @@ t0 = Date.now();
 while (Date.now() - t0 < 9000) {
   // RUSH=center: straight at her middle; side (default): blind, she does not turn, so he goes
   // in by her front-right (round both claws, which guard her mouth and front-left), then under
-  if (!window_wp) window_wp = await c.ev(`(() => { const L = __sl, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw); const W = ${process.env.RUSH === 'center' ? '[[0, 0]]' : '[[0.95, 1.45], [0.4, 0.1]]'};
+  if (!window_wp) window_wp = await c.ev(`(() => { const L = __sl, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw); const W = ${process.env.RUSH === 'center' ? '[[0, 0]]' : '[[0.5, 1.5], [0.35, 0.1]]'};
     return W.map(w => [L.pos.x + w[0] * L.R * cy + w[1] * L.R * sy, L.pos.z - w[0] * L.R * sy + w[1] * L.R * cy]); })()`);
   { const p = await c.ev(`[player.pos.x, player.pos.z]`); let w = window_wp[wpI]; if (Math.hypot(p[0] - w[0], p[1] - w[1]) < 3 && wpI < window_wp.length - 1) { wpI++; w = window_wp[wpI]; }
     if (Math.hypot(p[0] - w[0], p[1] - w[1]) > 1.5) await c.ev(`(player.yaw = Math.atan2(${w[0]} - player.pos.x, ${w[1]} - player.pos.z), 1)`);
