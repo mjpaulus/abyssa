@@ -3211,9 +3211,10 @@ let swDrive = 0, swRate = 0, haulF = 0, haulB = 0, backW = 0, haulDir = 0, haulC
 // pitch; fIn/fOut = spring rates (/s, critically damped); legF/legD = the legs' spring;
 // trail/knee = how far the boots trail and the knees give at full lay.
 const hlP = { x: 0, v: 0 }, hlR = { x: 0, v: 0 }, hlL = { x: 0, v: 0 };
-const HAULLAY = { on: 1, fwd: 0.36, back: 0.26, bank: 0.13, surge: 0.06, fIn: 1.7, fOut: 1.3, legF: 1.1, legD: 0.55, trail: 0.08, knee: 0.14, wade: 0.5 };
+let hlApply = 0;   // the haul lay actually applied this frame (hlP capped against the burst lean)
+const HAULLAY = { on: 1, fwd: 0.36, back: 0.26, bank: 0.13, surge: 0.06, fIn: 1.7, fOut: 1.3, legF: 1.1, legD: 0.55, trail: 0.08, knee: 0.14, wade: 0.5, backCap: 0.55 };
 window.__haulLay = HAULLAY;
-window.__swimState = () => ({ gb: +gb.toFixed(3), burstW: +burstW.toFixed(3), ladderF: +ladderF.toFixed(3), drive: +swDrive.toFixed(3), rate: +swRate.toFixed(3), swimP: +swimP.toFixed(3), haulF: +haulF.toFixed(3), haulB: +haulB.toFixed(3), backW: +backW.toFixed(3), layDeg: +(hlP.x * 57.3).toFixed(1), bankDeg: +(hlR.x * 57.3).toFixed(1), legLay: +hlL.x.toFixed(3) });
+window.__swimState = () => ({ gb: +gb.toFixed(3), burstW: +burstW.toFixed(3), ladderF: +ladderF.toFixed(3), drive: +swDrive.toFixed(3), rate: +swRate.toFixed(3), swimP: +swimP.toFixed(3), haulF: +haulF.toFixed(3), haulB: +haulB.toFixed(3), backW: +backW.toFixed(3), layDeg: +(hlApply * 57.3).toFixed(1), bankDeg: +(hlR.x * 57.3).toFixed(1), legLay: +hlL.x.toFixed(3) });
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
 const strafeS = { x: 0, v: 0 };
@@ -3948,23 +3949,27 @@ export function updateDiver(dt, t, player) {
     // towed weight does (spec: the boots swing back, he never goes horizontal): ~29 deg over
     // the pull at full effort, a little more on each pull, the bonnet kept up on the spine and
     // neck. Backing he sits back ~17 deg with the boots swinging forward under him; A/D bank him.
-    // The burst lean is the same body laid further: whichever asks more wins (the haul lay takes
-    // only what the burst lean is not already giving), so a burst while hauling lays him on to
-    // ~60 deg and, released, he swings back to the haul lay, then upright when he stops.
+    // The burst lean is the same body laid further: the two add, capped at the burst lean's own
+    // limit, so a burst while hauling lays him on to ~60 deg and, released, he comes back down
+    // to the haul lay (never through it), then upright when he stops.
     {
       const H = HAULLAY, off = (1 - gb) * (1 - ladderF) * H.on;
       const pull = Math.max(0, Math.sin(TAU * (swimP - 0.18) / 0.76));
       let tP = (H.fwd * haulF * (1 + H.surge / H.fwd * pull) - H.back * haulB) * off;
       let tR = -H.bank * clamp(scX.x, -1, 1) * off;
-      // the burst lean already carrying him that way: take only the rest
-      if (tP > 0) tP = Math.max(0, tP - Math.max(blP.x, 0)); else if (tP < 0) tP = Math.min(0, tP - Math.min(blP.x, 0));
+      // the burst lean already banking him that way: take only the rest (pitch is capped below)
       if (tR * blR.x > 0) tR = tR > 0 ? Math.max(0, tR - blR.x) : Math.min(0, tR - blR.x);
       const into = Math.abs(tP) > Math.abs(hlP.x);
       spring(hlP, tP, dt, into ? H.fIn : H.fOut, 1.0);
       spring(hlR, tR, dt, into ? H.fIn : H.fOut, 1.0);
       // the legs answer the lay late and swing through once (heavy boots on a long body)
       spring(hlL, hlP.x, dt, H.legF, H.legD);
-      const fw = Math.max(hlP.x, 0), bk = Math.max(-hlP.x, 0);
+      // ...and the two together never lay him past the burst lean's own limit: the haul lay's
+      // spring lets go slowly, the burst lean comes in fast, so the sum is capped, not left to
+      // the springs (measured 65 deg uncapped)
+      hlApply = hlP.x > 0 ? Math.min(hlP.x, Math.max(0, BURSTLEAN.max - Math.max(blP.x, 0)))
+        : Math.max(hlP.x, -Math.max(0, H.backCap - Math.max(-blP.x, 0)));   // sat back: ~32 deg at most
+      const fw = Math.max(hlApply, 0), bk = Math.max(-hlApply, 0);
       if (fw + bk > 1e-4) {
         // the bonnet up and looking ahead (or level, sat back), as in the burst lean
         po[CH.sPitch] -= BURSTLEAN.spine * fw - 0.25 * bk; po[CH.nPitch] -= BURSTLEAN.neck * fw - 0.30 * bk;
@@ -4145,7 +4150,7 @@ export function updateDiver(dt, t, player) {
     spring(seaH, hT, dt, 9, 0.75);
     seaHeave = seaH.x;
   }
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x + blP.x + hlP.x, 0,
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x + blP.x + hlApply, 0,
     sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x + seaR.x + blR.x + hlR.x);
 
   const h = diver.hips;
