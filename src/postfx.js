@@ -1330,7 +1330,9 @@ function clearWindow() { wallN = 0; wallAt = 0; badT = 0; goodT = 0; sinceJudge 
 // DRS.sig: 'pace' | 'lat' (the blocking probe, if __gpu.latK.on) | 'timer' (the old
 // signal, A/B). __drs.state() / __drs.pin(x).
 const DRS = { on: 1, lo: 0.55, hi: 0.78, target: 0.66, hold: 2500, t: 0, last: null, sig: 'pace',
-  step: 0.125, missK: 1.35, downFrac: 0.10, up0: 4000, upMax: 120000 };
+  step: 0.125, missK: 1.35, downFrac: 0.10, up0: 4000, upMax: 120000,
+  fastT: 9000, fastLag: 0.5 };
+let drsFastUntil = 0, drsFastFrom = 0;   // (sweep) play just (re)started: see updateResScale
 const PACE_N = 60;
 const paceMiss = new Uint8Array(PACE_N), paceCpuHi = new Uint8Array(PACE_N);
 let paceAt = 0, paceN = 0, paceMisses = 0, paceCpuMisses = 0, paceUpAt = -1e9;
@@ -1350,13 +1352,22 @@ function updateResScale(now, cap, intervalMs) {
     const miss = intervalMs > budget * DRS.missK ? 1 : 0, cpuHi = miss && frameCpu > budget * 0.8 ? 1 : 0;
     paceMisses += miss - paceMiss[paceAt]; paceCpuMisses += cpuHi - paceCpuHi[paceAt];
     paceMiss[paceAt] = miss; paceCpuHi[paceAt] = cpuHi; paceAt = (paceAt + 1) % PACE_N; if (paceN < PACE_N) paceN++;
+    // (sweep) THE FIRST SECONDS OF PLAY. Measured on the bench host (vsync 60, real click):
+    // the deck at 1.5x holds the slot but runs the GPU into backlog, so DRS stepped
+    // 1.5 -> 1.375 at 3.1 s and -> 1.25 at 7.7 s after the click, one 2.5 s hold apart; on a
+    // contended machine those five seconds are the scattered 33-50 ms frames. The FIRST
+    // decision after play starts (inside DRS.fastT, no step taken yet) may take two rungs in
+    // ONE resize when the backlog is heavy (each step reallocates every target, itself a long
+    // frame); later decisions keep the normal hold, because the GPU queries that arrive
+    // just after a resize still describe the old scale (a fast hold overshot 1.5 -> 0.75).
+    const fast = now < drsFastUntil && DRS.t < drsFastFrom;
     if (now - DRS.t < DRS.hold || paceN < PACE_N) return;
     const gpuMisses = paceMisses - paceCpuMisses, k = Math.round(s * 16);
     let lagHi = 0; for (let i = 0; i < lagN; i++) if (lagWin[i] >= 2) lagHi++;
     const backlog = lagN >= 16 && lagHi > lagN * 0.3;
     if (gpuMisses > PACE_N * DRS.downFrac || backlog) {
       if (now - paceUpAt < 4000) upWaitS[Math.min(63, k)] = Math.min(DRS.upMax, Math.max(DRS.up0, upWaitS[Math.min(63, k)] || DRS.up0) * 2);
-      const n = gpuMisses > PACE_N / 3 ? 2 : 1;
+      const n = gpuMisses > PACE_N / 3 || (fast && lagHi > lagN * DRS.fastLag) ? 2 : 1;
       setScaleDRS(now, s, s - DRS.step * n, 'missed ' + gpuMisses + '/' + PACE_N + ' backlog ' + lagHi + '/' + lagN, intervalMs, budget);
     } else if (paceMisses === 0 && lagHi <= lagN * 0.03 && (lagN >= 16 || !gpuSupported) && s < RES_SCALE - 0.01) {
       const up = Math.min(63, Math.round((s + DRS.step) * 16));
@@ -1400,7 +1411,7 @@ export function samplePerf(dt, active, cap = 0) {
   // for physics (it stops a stall from teleporting the diver) and fatal for a perf
   // judge — it is why this degraded on a machine measured at 54 fps steady.
   const now = performance.now();
-  if (!lastT) { lastT = now; return; }
+  if (!lastT) { lastT = now; drsFastFrom = now; drsFastUntil = now + DRS.fastT; return; }
   const real = (now - lastT) / 1000;
   lastT = now;
   // A backgrounded tab throttles rAF toward zero (and __power.drive runs the loop from
