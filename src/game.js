@@ -527,7 +527,7 @@ addEventListener('keydown', e => {
     const r = lev.rite.interact(player.pos);
     if (r) {
       if (r.took) chime(740, 2.2, 0.2, 'pickup');
-      else if (r.returned) chime(494, 2.4, 0.2, 'ward');
+      else if (r.returned) { chime(494, 2.4, 0.2, 'ward'); if (!r.out) { dropMsg(refuseLive); refuseLive = null; } }
       if (r.lamp) player.hasLamp = true;
       if (r.msg) showMsg(r.msg, 3);
       return;
@@ -607,6 +607,10 @@ function showMsg(text, dur = 4, prio = 1) {
   msgT = dur; msgPrio = prio;
 }
 // Probe surface: what is live, what waits.
+// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the egg is
+// back or the ward has taken): it fades now and whatever waits behind it shows.
+function dropMsg(text) { if (text && msgT > 0.01 && $msg.textContent === text) msgT = 0.01; }
+let refuseLive = null;
 window.__msg = () => ({ live: $msg.textContent, t: +msgT.toFixed(2), prio: msgPrio, pend: msgPend && msgPend.text });
 
 // Remote anchorages carry hand-authored sleeper rows: more wards, a hue nudge, an
@@ -1900,7 +1904,7 @@ function update(dt, t) {
     // (fifth-ward) a held ward refused a touch: a dead iron knock, the pips shake, and the
     // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
     if (ev.refused) { chime(98, 1, 0.32, 'cold'); tallyRefuse(); ev.refused = 0; }
-    if (ev.refuseMsg) { showMsg(ev.refuseMsg, 4.5, 2); ev.refuseMsg = null; }
+    if (ev.refuseMsg) { showMsg(ev.refuseMsg, 4.5, 2); refuseLive = ev.refuseMsg; ev.refuseMsg = null; }
     if (lev.memWard >= 0 && !lev.calmed && !lev.dormant) {
       const g = lev.sigils[lev.memWard];
       const inR = !!(g && g.mem && g.grp.position.distanceTo(player.pos) < (lev.reach || 5));
@@ -1926,6 +1930,7 @@ function update(dt, t) {
     }
     slamWas = ev.slam;
     if (ev.sigilLit) {
+      dropMsg(refuseLive); refuseLive = null;
       chime(ev.sigilLit, 2, 0.3, 'ward');
       shake = 0.6;
       // (fifth-ward) the count at priority 2: a slam or a tear in the same breath used to
@@ -1946,7 +1951,7 @@ function update(dt, t) {
       // say so NOW with the real numbers, not 55% of the way down the rift.
       showMsg(zone === 2 ? 'ALL WARDS LIT. THE LAST SLEEPER STILLS. THE RIFT WAITS.'
         : canDescendTo(zone + 1) ? 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.'
-        : `IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6);
+        : `IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6, 2);
       chime(262, 3, 0.3, 'calm'); chime(330, 3, 0.25, 'calm'); chime(392, 3, 0.25, 'calm');
     }
   }
