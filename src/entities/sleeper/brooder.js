@@ -122,7 +122,7 @@ const HAMMER_T = 2.6;
 // boots), a low hunting voice rides her body (audio/creatures.js, L.huntK), and her shell
 // carries a faint backscatter rim past ~20 u (RIM; the water's own colour, so it tracks day
 // and night). k: strength; near/far: fades (u).
-export const GLINT = { k: 0.75, scale: 0.9, near: 7, far: 115 };
+export const GLINT = { k: 0.9, scale: 1.0, near: 14, far: 130 };
 export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
 export const THUMP = { k: 1, near: 12, far: 110 };
 export const CROUCH = { drop: 0.16, lean: 0.16, clear: 4.6 };
@@ -519,7 +519,7 @@ export function makeBrooder(idx, cfg) {
   // the eyeshine pinpoints (poseAll writes them; always in the scene at opacity 0 so the
   // shared warm-glow program is built at boot)
   L.glints = [0, 1].map(() => {
-    const g = makeWarmGlow(0xd6ecd2, GLINT.scale, { near: 40, far: GLINT.far, nearW: 0.25, swell: 0.012, swellMax: 1.2 });
+    const g = makeWarmGlow(0xd6ecd2, GLINT.scale, { near: 40, far: GLINT.far, nearW: 0, swell: 0.02, swellMax: 1.5 });
     g.material.opacity = 0;
     g.renderOrder = 3;
     grp.add(g);
@@ -1367,13 +1367,17 @@ function poseAll(L, dt, player) {
       const gl = L.glints[i], e = L.eyeSt ? L.eyeSt[i] : null;
       if (e) _r.copy(e.cur).multiplyScalar(L.stalkL || 0.12).add(e.piv).applyMatrix4(b.matrixWorld);
       else _r.copy(L.head);
-      gl.position.copy(_r);
+      // (stood off the cornea toward him, out in front of the claws she holds before her face,
+      // so her own guard never depth-clips the pinpoint; on his line of sight it lands on the
+      // eye, and a dune or rock between them still hides it)
+      if (player) { _v.copy(player.pos).sub(_r); const dl = _v.length() || 1; gl.position.copy(_r).addScaledVector(_v, Math.min(7, dl * 0.3) / dl); }
+      else gl.position.copy(_r);
       let f = 0;
       if (player && st > 0.2) {
         _v.copy(player.pos).sub(_r);
         const dist = _v.length() || 1;
         if (e) _x.copy(e.cur).transformDirection(b.matrixWorld); else b.getWorldDirection(_x);
-        f = Math.pow(Math.max(0, _x.dot(_v) / dist), 6) * lit * smooth(dist, GLINT.near, GLINT.near * 2.2) * st;
+        f = Math.pow(Math.max(0, _x.dot(_v) / dist), 6) * lit * smooth(dist, GLINT.near, GLINT.near * 2) * st;
       }
       gl.material.opacity = GLINT.k * f;
     }
