@@ -24,7 +24,7 @@ async function ev(expr) {
   if (r.result.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails.exception?.description || r.result.exceptionDetails));
   return r.result.result.value;
 }
-const KC = { KeyW: [87, 'w'], KeyS: [83, 's'], KeyC: [67, 'c'], Space: [32, ' '], Digit3: [51, '3'] };
+const KC = { KeyW: [87, 'w'], KeyS: [83, 's'], KeyA: [65, 'a'], KeyD: [68, 'd'], KeyC: [67, 'c'], Space: [32, ' '], Digit3: [51, '3'] };
 async function key(type, code, mods = 0) {
   const [vk, k] = KC[code];
   await send('Input.dispatchKeyEvent', { type, code, key: k, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers: mods, ...(type === 'keyDown' && !mods ? { text: k } : {}) });
@@ -34,7 +34,7 @@ async function mark(s) { await ev(`(window.__rec.seg = ${JSON.stringify(s)}, 0)`
 async function hold(code, ms, seg) {
   await mark(seg); await down(code);
   const t0 = Date.now();
-  if (SHOTS && (seg === 'W' || seg === 'S')) { await ev(`(window.__rec.shotOn = true, 0)`); await sleep(ms); await ev(`(window.__rec.shotOn = false, 0)`); }
+  if (SHOTS && (process.env.SHOTSEGS || 'W,S').split(',').includes(seg)) { await ev(`(window.__rec.shotOn = true, 0)`); await sleep(ms); await ev(`(window.__rec.shotOn = false, 0)`); }
   else await sleep(ms);
   await up(code);
 }
@@ -47,7 +47,10 @@ await ev(`(async () => {
   const R = window.__rec = { seg: 'idle', log: [], on: true, shots: [], shotOn: false, shotLast: 0, shotEvery: +(${SHOT_MS}), crop: ${process.env.CROP || '[0, 0, 1, 1]'}, sc: ${process.env.SC || 0.25}, side: ${+(process.env.SIDE || 0)} };
   const cv2 = document.createElement('canvas'), cx2 = cv2.getContext('2d');
   let lt = performance.now();
-  const sv = new V();
+  const sv = new V(), tv = new V();
+  // trunk pitch off vertical along his heading, deg (+ = over into the travel): hips -> neck, world
+  const trunk = () => { D.diver.hips.getWorldPosition(tv); D.diver.neck.getWorldPosition(sv); sv.sub(tv);
+    const p = P.player, f = sv.x * Math.sin(p.yaw) + sv.z * Math.cos(p.yaw); return +(Math.atan2(f, sv.y) * 57.3).toFixed(1); };
   // both hands through the game camera, in canvas CSS pixels (what the player sees move)
   const scr = () => { const cam = window.camera, cv = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0], w = cv.clientWidth, h = cv.clientHeight, o = [];
     for (const arm of [D.diver.armL, D.diver.armR]) { arm.end.getWorldPosition(sv); sv.project(cam); o.push(+((sv.x * 0.5 + 0.5) * w).toFixed(1), +((-sv.y * 0.5 + 0.5) * h).toFixed(1)); }
@@ -64,11 +67,11 @@ await ev(`(async () => {
         +(p.jet || 0).toFixed(2), +(p.burstT || 0).toFixed(2), +p.swimP.toFixed(4), +Math.hypot(p.vel.x, p.vel.z).toFixed(2),
         +(p.vel.x * sy + p.vel.z * cy).toFixed(2), +p.vel.y.toFixed(2), p.scullZ || 0,
         +a.x.toFixed(3), +a.y.toFixed(3), +a.z.toFixed(3), +b.x.toFixed(3), +b.y.toFixed(3), +b.z.toFixed(3),
-        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr()]);
+        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr(), ...(window.__swimState && window.__swimState().layDeg !== undefined ? (() => { const q = window.__swimState(); return [q.layDeg, q.bankDeg, q.legLay]; })() : [0, 0, 0]), trunk()]);
     }
     if (R.side) {   // a side lens that rides with him (SIDE=1): checks the stroke's shape, not the game view
       const sy = Math.sin(p.yaw), cy = Math.cos(p.yaw), q = p.pos;
-      window.__camPin = { pos: [q.x + cy * R.side, q.y + 0.2, q.z - sy * R.side], look: [q.x, q.y - 0.9, q.z] };
+      window.__camPin = { pos: [q.x + cy * R.side, q.y + 0.2, q.z - sy * R.side], look: [q.x, q.y - 0.5, q.z] };
     }
     if (R.shotOn && now - R.shotLast >= R.shotEvery) {
       R.shotLast = now;
@@ -100,7 +103,16 @@ if (process.env.ALT3) {
   await sleep(2500);
   console.log('alt3', JSON.stringify(await ev(`(window.__helm = true, [gameState, window.__playtest && window.__playtest.last(), player.grounded, +player.pos.y.toFixed(1)])`)));
 }
-if (SCEN === 'wburst' || SCEN === 'sburst') {   // burst while hauling: the burst lean, then the haul under its decay
+if (SCEN === 'stop' || SCEN === 'stopS') {   // haul, let go, and watch him settle (frames through the coast)
+  const k = SCEN === 'stop' ? 'KeyW' : 'KeyS';
+  await mark('setup'); await lift(40); await neutral(2500);
+  await hold(k, 6000, k === 'KeyW' ? 'W' : 'S');
+  if (SHOTS) await ev(`(window.__rec.shotOn = true, 0)`);
+  await mark('settle'); await sleep(5000);
+  await ev(`(window.__rec.shotOn = false, 0)`);
+}
+else if (SCEN === 'bank') { await mark('setup'); await lift(40); await neutral(2500); await hold('KeyD', 5000, 'D'); await mark('coastD'); await sleep(2500); await hold('KeyA', 5000, 'A'); await mark('coastA'); await sleep(2000); }
+else if (SCEN === 'wburst' || SCEN === 'sburst') {   // burst while hauling: the burst lean, then the haul under its decay
   const k = SCEN === 'wburst' ? 'KeyW' : 'KeyS';
   await mark('setup'); await lift(40); await neutral(2500);
   if (SHOTS) await ev(`(window.__rec.shotOn = true, 0)`);
