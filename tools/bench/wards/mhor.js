@@ -26,6 +26,7 @@ res.before = L.sigils.map(g => W.look(L, g));
 for (let i = 0; i < L.sigils.length; i++) {
   const g = L.sigils[i];
   if (g.lit) { res.wards.push({ i, pre: 'lit' + (g.mem ? '(mem)' : '') }); continue; }
+  for (let tryN = 0; tryN < 3 && !g.lit && !L.calmed; tryN++) {
   if (L.state !== 'stunned') {
     // a new stun, the real way
     for (let tries = 0; tries < 4 && L.state !== 'stunned'; tries++) {
@@ -39,7 +40,8 @@ for (let i = 0; i < L.sigils.length; i++) {
   const stunLeft = +L.stun.toFixed(2);
   const r = W.approach(L, g, { far: 9, near: 1.0 });
   W.run(30);   // flash settles
-  res.wards.push({ i, stunLeft, ...r, after: W.look(L, g), others: L.sigils.filter(q => q.lit).length });
+  res.wards.push({ i, tryN, stunLeft, ...r, after: W.look(L, g), others: L.sigils.filter(q => q.lit).length });
+  }
   if (L.calmed) break;
 }
 res.calmed = L.calmed;

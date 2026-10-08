@@ -1940,7 +1940,8 @@ function update(dt, t) {
     // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
     // (one knock per 0.6 s per sleeper: a strike pass sweeps several held wards at once)
     if (ev.refused) { if (t - knockT > 0.6) { knockT = t; chime(98, 1, 0.32, 'cold'); tallyRefuse(); } ev.refused = 0; }
-    if (ev.refuseMsg) { showMsg(ev.refuseMsg, 4.5, 2); refuseLive = ev.refuseMsg; ev.refuseMsg = null; }
+    // (prio 3: it answers the hand that just touched; the count it supersedes is on the tally)
+    if (ev.refuseMsg) { dropMsg(countLive); countLive = null; showMsg(ev.refuseMsg, 4.5, 3); refuseLive = ev.refuseMsg; ev.refuseMsg = null; }
     // the refusal's reason went away: Mhor hangs stunned, or Orune's wards ring
     const stunNow = lev.state === 'stunned', ringNow = !!(lev.sonarWards && lev.reveal > 0);
     if ((stunNow && !stunWas) || (ringNow && !ringWas)) { dropMsg(refuseLive); refuseLive = null; }
