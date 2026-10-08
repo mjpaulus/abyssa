@@ -114,6 +114,9 @@ const SITES = [
     light: { amb: [1.22, 1.18, 1.12], sky: [1.18, 1.14, 1.06], gnd: [1.85, 1.85, 1.70], sun: [1.06, 1.05, 1.00] },
     // bleached limestone, chalk silt, pale gravel
     floor: { silt: [1.62, 1.60, 1.48], grav: [1.50, 1.48, 1.40], rock: [1.85, 1.80, 1.70] },
+    // (sweep) BLEACHED GROWTH: the reef has lost its colour on the chalk -- fans, grass and
+    // kelp go to a pale bone-grey with only a ghost of their own hue left (flora.js FLORA_SITE)
+    flora: { desat: 0.72, tint: [0.90, 0.88, 0.80], a: 0.42, b: 1.05, k: 0.55 },
     // broad terraced banks: lower massifs, strata stepped across the open ground too
     // (tflat), fewer canyons, a lower and gentler rim
     shape: {
@@ -183,6 +186,9 @@ const SITES = [
     sparks: { hue: [[0.06, 0.10], [0.05, 0.09], [0.02, 0.06]], sat: 0.45, k: 0.7 },
     // basalt and ash: dark, a little warm in the gravel
     floor: { silt: [0.36, 0.345, 0.34], grav: [0.30, 0.29, 0.28], rock: [0.22, 0.21, 0.21] },
+    // (sweep) SCORCHED GROWTH: what grows here grew back through ash -- dark, dry, umber-grey
+    // stems with the colour burned out of them
+    flora: { desat: 0.70, tint: [0.24, 0.21, 0.18], a: 0.22, b: 0.75, k: 0.82 },
     // jagged: taller sharper massifs (an extra ridged octave), lava-step ledges, a steep
     // close rim with a broken crest
     shape: {

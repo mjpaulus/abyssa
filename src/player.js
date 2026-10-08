@@ -69,6 +69,7 @@ export const player = {
   //   ay       the deck's vertical acceleration under him, u/s^2, smoothed (+ loads him)
   //   lurch    > 0 on the frame the deck throws him (a stagger), with its direction lx/lz
   deckL: { x: 0, z: 0, ok: false },
+  stepUp: 0, stepUpV: 0,   // (sweep) the last of the ladder still to rise, u (0 = standing)
   sea: { k: 0, sx: 0, sz: 0, nx: 0, nz: 0, ay: 0, lurch: 0, lx: 0, lz: 0 }
 };
 
@@ -177,6 +178,10 @@ const DECK_HX = 4.7, DECK_HZ = 4.7, DECK_TOP = 0.11;
 // Up the boarding ladder. A man in 90 lb of dress does not vault a bulwark: 1.1 u/s is
 // a deliberate hand-over-hand, about three seconds from the waterline to the catch.
 const CLIMB_RATE = 1.1;
+// (sweep) the step up off the top rung: knob w (rad/s of a critically damped ease), on
+export const LADDER_STEP = { on: 1, w: 9 };
+if (typeof window !== 'undefined') window.__ladStep = LADDER_STEP;
+let ladYPrev = -1e5;
 let ladTopPrev = -1e5;          // the deck-top at the rungs last frame (the ladder's carry)
 // ---- THE BULWARK AND EVERYTHING ON DECK ARE REAL ---------------------------------
 // hull.js walls the deck on all four sides and leaves ONE gap: the boarding bay on the
@@ -532,7 +537,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   const dxr = _dkL.x, dzr = _dkL.z;
   const deckTop = deckHeightAt(player.pos.x, player.pos.z) + EYE_H;
   if (dxr > -DECK_HX && dxr < DECK_HX && dzr > -DECK_HZ && dzr < DECK_HZ) {
-    if (player.pos.y > deckTop - 0.7) deckY = deckTop;
+    // (sweep) ...and a man still stepping up off the ladder (stepUp) is on it already
+    if (player.pos.y > deckTop - 0.7 - player.stepUp) deckY = deckTop;
   }
   const onDeck = deckY > -1e4;
   // Published because the footfall FX are seabed effects: a silt cloud and a boot print
@@ -650,7 +656,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // instead of writing the continuous a = TOP/tau is what makes the sentence true.
     const q = (player.walkP * 2) % 1;
     const lurch = 1 + (onDeck ? LURCH_DECK : LURCH_BED) * Math.cos(TAU2 * (q - 0.5));
-    const acc = top * (1 - fr) / (fr * Math.max(dt, 1e-4)) * (sprinting ? WALK_HURRY : 1) * (walkable ? 1 : 0.25) * lurch * ctrl;
+    const acc = top * (1 - fr) / (fr * Math.max(dt, 1e-4)) * (sprinting ? WALK_HURRY : 1) * (walkable ? 1 : 0.25) * lurch * ctrl
+      * (player.stepUp > 0 ? 0 : 1);   // (sweep) hauling himself up off the ladder: no walk yet
     if (keys['KeyW'] || keys['ArrowUp']) player.vel.addScaledVector(flat, acc * dt);
     if (keys['KeyS'] || keys['ArrowDown']) player.vel.addScaledVector(flat, -acc * dt * 0.7);
     if (keys['KeyA'] || keys['ArrowLeft']) player.vel.addScaledVector(right, -acc * dt * 0.8);
@@ -675,6 +682,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     // at. On planks Space is the inlet valve and nothing else.
     // THE AIR PACK's hop (a tap on the seabed, airPackTap) and its held burst both take
     // him off the bottom; the swim branch flies him from the next frame.
+    // (sweep) hauling himself up off the ladder he stands where the deck carries him
+    if (player.stepUp > 0) { player.vel.x = 0; player.vel.z = 0; }
     if (player.hop > 0 && !onDeck) { player.vel.y = player.hop; player.grounded = false; }
     if (player.jet > 0 && !onDeck) player.grounded = false;
     player.hop = 0;
@@ -878,10 +887,30 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     player.grounded = false;
   }
 
+  // (sweep) OVER THE SILL, NOT A TELEPORT. The climb hands over to the deck when his eye is
+  // 0.7 under the deck's standing height (the one-way catch), and the catch put him there in
+  // ONE frame: measured, the whole diver (helmet, hips, camera) jumped 0.69 u up and both boots
+  // went from half a metre under the planks to 20 cm over them between two frames. Now the
+  // deck takes his boots at once and his body comes up over them, a heavy man straightening
+  // out of the last step (~0.45 s, eased out), still on the deck and carried with it.
+  if (onDeck && player.grounded && !player.onLadder) {
+    if (wasLadder && ladYPrev < floorY - 0.05 && LADDER_STEP.on) { player.stepUp = floorY - ladYPrev; player.stepUpV = 0; }
+    if (player.stepUp > 0) {
+      // critically damped toward 0 at w (no overshoot: he never rises past standing)
+      const w = LADDER_STEP.w, a = -w * w * player.stepUp - 2 * w * player.stepUpV;
+      player.stepUpV += a * dt; player.stepUp += player.stepUpV * dt;
+      if (player.stepUp < 0.002) player.stepUp = player.stepUpV = 0;
+      player.pos.y = floorY - player.stepUp;
+    }
+  } else player.stepUp = player.stepUpV = 0;
+  ladYPrev = player.pos.y;
+
   // (sealegs) Where he stands on the planks, in the raft's frame, for the next carry: the
   // deck point under him, less the balance excursion (that is the sway, not the spot).
   if (onDeck && player.grounded && !player.onLadder) {
-    toDeck(player.pos.x, player.pos.y - EYE_H, player.pos.z, _dkL);
+    // (stepUp: the spot is where he will STAND; read off his lowered centre, a tilted deck's
+    // inverse rotation slid it sideways a little every frame and walked him off the edge)
+    toDeck(player.pos.x, player.pos.y + player.stepUp - EYE_H, player.pos.z, _dkL);
     player.deckL.x = _dkL.x - seaS.x; player.deckL.z = _dkL.z - seaS.z; player.deckL.ok = true;
   } else player.deckL.ok = false;
 

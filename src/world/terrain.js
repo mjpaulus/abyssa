@@ -498,8 +498,13 @@ export const causticsUniforms = {
   uCTune: { value: new THREE.Vector4(1, 1, 1, 0.45) }
 };
 
+// (sweep) the far ridge drape's top taper / grazing fade / range thinning (zone 0 only,
+// gated by uDrape.x like the rest of it). window.__ridge.drape2 / drape3 for look-dev.
+export const DRAPE2 = { value: new THREE.Vector4(-58, -14, 0.70, 1.0) };
+export const DRAPE3 = { value: new THREE.Vector4(280, 460, 0.35, 0) };
 const COMMON = {
   ...SITE_PAL,
+  uDrape2: DRAPE2, uDrape3: DRAPE3,
   uDetail: { value: MAPS.detail },
   uRockN: { value: MAPS.rockN },
   uRipple: { value: MAPS.rippleN }
@@ -510,7 +515,7 @@ uniform sampler2D uDetail, uRockN, uRipple;
 uniform vec3 uSilt, uGrav, uRock;
 uniform vec3 uSiteSilt, uSiteGrav, uSiteRock;
 uniform float uTime, uCamY, uCaust, uWet, uSunK;
-uniform vec4 uDrape;
+uniform vec4 uDrape, uDrape2, uDrape3;
 uniform vec3 uSunW;
 uniform vec4 uWaveA, uWaveB, uWaveW, uCTune;
 varying vec3 vWPos, vWNrm;
@@ -596,10 +601,22 @@ function compileTerrain(sh) {
       // the crest, and drape plus caustics at arm's length read as snow (measured at 5.0
       // from r = 300, y = -30).
       if (uDrape.x > 0.0) {
+        // (sweep) NOT A STRIPE. The drape rose to full strength at the top of every face, so
+        // from mid-water the last few metres under the skyline were the palest thing on the
+        // ridge, brighter than the water above it (measured: a +3.3-code band along the crest
+        // where the face below was darker) -- a bright line drawn round the basin. The pale
+        // now builds up the face and eases back over the top metres (uDrape2.x..y keeps
+        // 1 - uDrape2.z there), fades where a face is seen edge-on (uDrape2.w: the grazing
+        // band that compresses into a line), and thins with range (uDrape3.x..y keeps
+        // 1 - uDrape3.z), so the ridge reads as a paler MASS.
+        float dEye = length(vWPos - cameraPosition);
+        float dUp = smoothstep(0.15, 0.75, wn.y);
+        float dGraze = mix(1.0, smoothstep(0.04, 0.30, abs(dot(normalize(cameraPosition - vWPos), wn))), uDrape2.w);
         float dr = uDrape.x * smoothstep(uDrape.y, uDrape.z, length(vWPos.xz))
-                 * smoothstep(-90.0, -35.0, vWPos.y) * (0.45 + 0.55 * smoothstep(0.15, 0.75, wn.y))
+                 * smoothstep(-90.0, -35.0, vWPos.y) * (1.0 - uDrape2.z * smoothstep(uDrape2.x, uDrape2.y, vWPos.y))
+                 * (0.45 + 0.55 * dUp) * dGraze
                  // a far read: within ~100 u the ridge is just rock and silt like the rest
-                 * smoothstep(70.0, 170.0, length(vWPos - cameraPosition));
+                 * smoothstep(70.0, 170.0, dEye) * (1.0 - uDrape3.z * smoothstep(uDrape3.x, uDrape3.y, dEye));
         alb = mix(alb, uSilt * uDrape.w * (0.75 + 0.5 * det.r), dr);
       }
 
@@ -1032,7 +1049,7 @@ export function terrainFingerprint(zones = [0, 1, 2]) {
 }
 if (typeof window !== 'undefined') {
   window.__ridge = {
-    RIDGE, ISLES,
+    RIDGE, ISLES, drape2: DRAPE2.value, drape3: DRAPE3.value,
     fp: terrainFingerprint,
     set(o) { Object.assign(RIDGE, o); fillTerrain(); return { ...RIDGE, fp: terrainFingerprint() }; }
   };

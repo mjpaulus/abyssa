@@ -9,7 +9,7 @@ import { makeGlow, warmGlow, rockMapSet, bladeMapSet, coralMazeSet } from '../li
 import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
 import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
 import { wreckSites, driftSkirt, leeOf } from './wrecks.js';
-import { siteParams } from './site.js';
+import { siteParams, currentSite } from './site.js';
 import { tickStir, uPush, uPushV, PUSH_GLSL, PUSH_N } from './stir.js';
 import { plantAdopt } from './plants/plantKit.js';
 
@@ -66,6 +66,28 @@ function n3(x, y, z) {
 // ---------------------------------------------------------------- shaders ----
 // Shared across every flora material so one write per frame animates the world.
 const uni = { uTime: { value: 0 }, uCur: { value: new THREE.Vector2(1, 0) } };
+// (sweep) THE SITE'S GROWTH. The site pass gave every anchorage its own water and floor but
+// left the plants the home reef's colours, so Pallid Bank's "bleached growth" was green and
+// lively over chalk. One pair of shared uniforms tints every flora / gardens / plant-kit
+// material after its own colour is built (rocks excluded: the floor palette owns stone):
+// A = target colour rgb + how far toward it, B = desaturation, target scale a + b * luma,
+// and an ON flag. Home is OFF (the branch is skipped: bit-identical), a voyage rewrites the
+// values in place (no recompile, no material rebuilt). Rows: site.js `flora`.
+export const FLORA_SITE = { uFloraSiteA: { value: new THREE.Vector4(1, 1, 1, 0) }, uFloraSiteB: { value: new THREE.Vector4(0, 1, 0, 0) } };
+export const F_SITE_HEAD = '\nuniform vec4 uFloraSiteA, uFloraSiteB;\n';
+export const F_SITE = `
+if (uFloraSiteB.w > 0.5) {
+  vec3 fsc = diffuseColor.rgb;
+  float fsl = dot(fsc, vec3(0.2126, 0.7152, 0.0722));
+  fsc = mix(fsc, vec3(fsl), uFloraSiteB.x);
+  diffuseColor.rgb = mix(fsc, uFloraSiteA.rgb * (uFloraSiteB.y + uFloraSiteB.z * fsl), uFloraSiteA.w);
+}`;
+export function syncFloraSite() {
+  const f = currentSite().flora, A = FLORA_SITE.uFloraSiteA.value, B = FLORA_SITE.uFloraSiteB.value;
+  if (f) { A.set(f.tint[0], f.tint[1], f.tint[2], f.k); B.set(f.desat, f.a, f.b, 1); }
+  else { A.set(1, 1, 1, 0); B.set(0, 1, 0, 0); }
+}
+if (typeof window !== 'undefined') window.__floraSite = { A: FLORA_SITE.uFloraSiteA.value, B: FLORA_SITE.uFloraSiteB.value, sync: () => syncFloraSite() };
 
 const V_HEAD = `
 attribute vec4 aVA;     // flex, normalised height, glow mask, part phase
@@ -556,9 +578,10 @@ function floraMat(o) {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>' + V_HEAD)
       .replace('#include <begin_vertex>', '#include <begin_vertex>' + V_BODY);
+    if (!o.rockSet) Object.assign(sh.uniforms, FLORA_SITE);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>' + F_HEAD.replace('BRAIN_TILE', BRAIN_TILE))
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
+      .replace('#include <common>', '#include <common>' + F_HEAD.replace('BRAIN_TILE', BRAIN_TILE) + (o.rockSet ? '' : F_SITE_HEAD))
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}' + (o.rockSet ? '' : F_SITE))
       .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS);
     if (o.rockSet) Object.assign(sh.uniforms, { uEdgeK: styleUniforms.uEdgeK, uEdgeSun: styleUniforms.uEdgeSun, uPaintK: styleUniforms.uPaintK });
     else injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): organic flora only — never the rocks.
@@ -1325,6 +1348,7 @@ function disposeFlora() {
 }
 
 function buildOnce() {
+  syncFloraSite();   // (sweep) the site's growth tint, before anything is drawn
   // Fresh deterministic stream per build (THE CHART's contract): layout, orientation,
   // scale AND the procedural shapes below (kelp blades, rock erosion, ...) all read
   // through this one source, so the same site reseeds to the same forest, rock for
