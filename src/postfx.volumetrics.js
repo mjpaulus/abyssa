@@ -55,6 +55,10 @@ const MARCH_STEPS = 26;
 const OCC_STEPS = 7;
 const OCC_EVERY = 2;
 const MAX_DIST = 320;
+// (sweep) the composite's wide depth-aware filter over the march noise: k = how much of it
+// (0 = the shipped 4-tap upsample exactly), r = tap offset in half-res texels. window.__volSmooth
+export const VOL_SMOOTH = { k: { value: 1 }, r: { value: 1.25 } };
+if (typeof window !== 'undefined') window.__volSmooth = VOL_SMOOTH;
 
 // The shaft pattern is a 2D function of the point where the shaft pierces the
 // surface, so it is baked once per frame into a small seamlessly tiling texture
@@ -273,7 +277,7 @@ const COMPOSITE_FRAG = `
 precision highp float;
 uniform sampler2D tDiffuse, tVol, tDepth;
 uniform vec2 uHalfSize, uHalfTexel;
-uniform float uNear, uFar, uIntensity;
+uniform float uNear, uFar, uIntensity, uSmooth, uSmoothR;
 varying vec2 vUv;
 
 float sceneT( float d ){
@@ -313,6 +317,25 @@ void main(){
   w = bw / ( 0.05 + abs( s.a - zc ) ); sum += s.rgb * w; wsum += w;
 
   vec3 vol = max( vec3( 0.0 ), wsum > 1e-6 ? sum / wsum : texture2D( tVol, vUv ).rgb );
+  // (sweep) THE MARCH NOISE, FILTERED. The march is jittered per half-res pixel by
+  // interleaved gradient noise, which is a regular lattice; the 4-tap upsample above keeps
+  // its texels apart, and TAA (variance clip, a 3x3 that already contains the lattice) let a
+  // residual of it through: a fine dot/stipple screen over every bright mid-water view, at
+  // every site (measured: the pattern goes with the volumetric pass alone; snow, sky rays and
+  // grain do not carry it). Shafts are a low-frequency signal, so where the depth under four
+  // wider bilinear taps agrees with this pixel (open water, broad surfaces) the result is
+  // their tent average over ~4x4 half-res texels; at a silhouette the edge-aware 4 taps win.
+  if ( uSmooth > 0.0 ) {
+    vec2 o = uHalfTexel * uSmoothR;
+    vec4 a0 = texture2D( tVol, vUv + vec2( -o.x, -o.y ) );
+    vec4 a1 = texture2D( tVol, vUv + vec2(  o.x, -o.y ) );
+    vec4 a2 = texture2D( tVol, vUv + vec2( -o.x,  o.y ) );
+    vec4 a3 = texture2D( tVol, vUv + vec2(  o.x,  o.y ) );
+    float dz = max( max( abs( a0.a - zc ), abs( a1.a - zc ) ), max( abs( a2.a - zc ), abs( a3.a - zc ) ) );
+    float wk = 1.0 - smoothstep( 0.3 + 0.02 * zc, 1.0 + 0.06 * zc, dz );
+    vec3 wide = max( vec3( 0.0 ), ( a0.rgb + a1.rgb + a2.rgb + a3.rgb ) * 0.25 );
+    vol = mix( vol, wide, wk * uSmooth );
+  }
   // Reinhard shoulder on the inscatter before the add: the base is already ACES
   // tone-mapped (display-referred), so adding RAW linear inscatter clipped dense
   // shafts to a flat cyan-white sheet. vol/(1+vol) rolls the top off smoothly, so a
@@ -402,7 +425,8 @@ export class VolumetricLightPass extends Pass {
         uHalfSize: { value: new THREE.Vector2(1, 1) },
         uHalfTexel: { value: new THREE.Vector2(1, 1) },
         uNear: { value: 0.1 }, uFar: { value: 700 },
-        uIntensity: { value: 1 }
+        uIntensity: { value: 1 },
+        uSmooth: VOL_SMOOTH.k, uSmoothR: VOL_SMOOTH.r
       },
       vertexShader: VERT, fragmentShader: COMPOSITE_FRAG,
       depthTest: false, depthWrite: false
