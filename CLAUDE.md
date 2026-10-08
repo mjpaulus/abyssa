@@ -231,8 +231,13 @@ against explicit contracts and reviewed on return.
   `__lev.fp(i)` is the serpent's regression hash (z0 15ce888c, z1 c938fe6e, z2
   652d0412); `__lev.swap/cmd/state` and the lab "sleeper" group drive the kinds.
   Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge on the
-  rift lip, nest + 3 eggs + tracks; taking an egg wakes her; the last ward won't light
-  while an egg is out; `lev.dormant` hides name/bearing/dread until she wakes).
+  rift lip with a BERRIED CLUTCH under her apron (2026-10-08, roadmap/brooder-clutch.md: the
+  nest and helmet eggs are gone; ~10k instanced beads on setae, lantern-lit); [E] pries a clump
+  off her and wakes her; the last ward won't light while the clump is out (wardRefuse +
+  tally "CLUTCH ROBBED"); [E] under her presses it back. Awake she HUNTS the thief (HUNT in
+  brooder.js; 3.8 u/s with the clump out), crouches over Sal when he's under her, and her
+  body collides per part (sleeper/bodyCols.js; belly deliberately open) for Sal and the
+  camera (`__crecam`). `lev.dormant` hides name/bearing/dread until she wakes).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (knife frees: `lev.onSlash`), flinch from light; wards on
