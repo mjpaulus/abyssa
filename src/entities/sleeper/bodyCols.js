@@ -81,10 +81,10 @@ export function setClutch(live, seeds, n, m, R) {
   }
   nLob = k; clR = R;
   CLM.set(m); invertAffine(CLM, CLI, R);
-  // a world bound over the lobes (the lump reaches 1.19 r)
+  // a world bound over the lobes (the lump reaches 1.23 r)
   let x0 = 1e9, y0 = 1e9, z0 = 1e9, x1 = -1e9, y1 = -1e9, z1 = -1e9;
   for (let i = 0; i < nLob; i++) {
-    const o = i * 4, lx = LOB[o], ly = LOB[o + 1], lz = LOB[o + 2], rr = LOB[o + 3] * 1.2 * R;
+    const o = i * 4, lx = LOB[o], ly = LOB[o + 1], lz = LOB[o + 2], rr = LOB[o + 3] * 1.25 * R;
     const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12], wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13], wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
     if (wx - rr < x0) x0 = wx - rr; if (wx + rr > x1) x1 = wx + rr;
     if (wy - rr < y0) y0 = wy - rr; if (wy + rr > y1) y1 = wy + rr;
@@ -102,7 +102,7 @@ function clutchPen(lx, ly, lz, mL) {
   for (let i = 0; i < nLob; i++) {
     const o = i * 4, r = LOB[o + 3];
     const dx = lx - LOB[o], dy = ly - LOB[o + 1], dz = lz - LOB[o + 2];
-    const d2 = dx * dx + dy * dy + dz * dz, rb = r * 1.2 + mL;
+    const d2 = dx * dx + dy * dy + dz * dz, rb = r * 1.25 + mL;
     if (d2 > rb * rb) continue;
     const d = Math.sqrt(d2);
     const rs = d > 1e-6 ? r * lump(dx / d, dy / d, dz / d, LSD[i]) : r;
@@ -452,7 +452,7 @@ function resolveClutch(p, v, dt, grounded) {
     const y0 = p.y - EYE_H + SAL_R, y1 = p.y;
     const sy = cy < y0 ? y0 : cy > y1 ? y1 : cy;
     let ex = p.x - cx, ey = sy - cy, ez = p.z - cz;
-    const d2 = ex * ex + ey * ey + ez * ez, rb = r * 1.2 + SAL_R;
+    const d2 = ex * ex + ey * ey + ez * ez, rb = r * 1.25 + SAL_R;
     if (d2 > rb * rb) continue;
     const d = Math.sqrt(d2);
     if (d < 1e-5) { ex = 0; ey = 1; ez = 0; } else { ex /= d; ey /= d; ez /= d; }
