@@ -19,7 +19,7 @@
 
 const MAXC = 64;
 const CAP = new Float32Array(MAXC * 8), PREV = new Float32Array(MAXC * 8);   // ax ay az bx by bz ra rb
-let nC = 0, nPrev = 0, prevOk = false;
+let nC = 0, nPrev = 0, prevOk = false, nLeg = 0;
 const SHM = new Float32Array(16), SHP = new Float32Array(16), SHI = new Float32Array(16);
 let shell = null, shellOk = false, shellPrevOk = false, shR = 1;
 let bx = 0, by = 0, bz = 0, bRad = 0;           // a bounding sphere over everything published
@@ -34,8 +34,10 @@ export function beginBodyCols() {
   PREV.set(CAP.subarray(0, nC * 8));
   nPrev = nC; prevOk = on && nC > 0;
   if (shellOk) { SHP.set(SHM); shellPrevOk = true; }
-  nC = 0;
+  nC = 0; nLeg = 0;
 }
+// everything published before this call is a leg (probe labels only)
+export function markLimbs() { if (!nLeg) nLeg = nC; }
 export function addCapsule(ax, ay, az, bx_, by_, bz_, ra, rb) {
   if (nC >= MAXC) return;
   const o = nC * 8;
@@ -322,7 +324,7 @@ export function resolveBodyCols(player, dt, grounded) {
       // on the ground only sideways: the floor holds him up, a push into it would fight it
       if (grounded && ny < 0.75) { const h = Math.hypot(nx, nz); if (h < 1e-4) continue; nx /= h; ny = 0; nz /= h; }
       p.x += nx * pen; p.y += ny * pen; p.z += nz * pen;
-      BODY.contacts++; BODY.push += pen; BODY.last = i < 32 ? 'leg' + (i & 7) + ':' + (i >> 3) : 'claw' + (i - 32);
+      BODY.contacts++; BODY.push += pen; BODY.last = i < nLeg ? 'leg' : 'claw';
       // velocity: never INTO the part faster than the part itself moves (it carries him)
       let pvx = 0, pvy = 0, pvz = 0;
       if (prevOk) {

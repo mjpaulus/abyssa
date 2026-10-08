@@ -32,7 +32,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, setShell, endBodyCols, clearBodyCols, fitCapsule, fitCapsules, shellProxy } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -108,7 +108,7 @@ const HAMMER_T = 2.6;
 // Shift, hauls ~6.6 off the bottom). chase 0.42 = 3.8 u/s after a thief (she runs a walker
 // down; a swimmer gets away), stalk 0.26 = 2.3 u/s otherwise. She closes to `hold` R from
 // her centre (the hammer's hinge lands ~2.3 R out, measured; the hit takes 0.42 R round it), keeps an unburdened
-// diver off `guard` R round the nest, and turns at up to `turn` rad/s while hunting.
+// diver off `guard` R round her lair, and turns at up to `turn` rad/s while hunting.
 // knock: the hammer's throw (u/s). It was 38 when she never moved: measured, it carried him
 // ~35 u and out of her sight in the murk, so the chase that follows a blow never read; 26
 // still throws him clear of her front (~20 u) and keeps her in his view as she comes on.
@@ -1283,20 +1283,26 @@ function poseAll(L, dt, player) {
 // height-band proxy carried by the body's. game.js pushes Sal out of them right after this
 // frame's update and walks the camera's boom against them.
 const LEG_KEYS = ['coxa', 'femur', 'tibia', 'dactyl'];
-function fitLegs(legs) { const o = {}; for (const k of LEG_KEYS) o[k] = fitCapsule(legs[k].geometry); return o; }
+// (the dactyl curls to its point: two capsules follow it; one chord left 0.7 u of claw outside)
+const LEG_N = { coxa: 1, femur: 1, tibia: 1, dactyl: 2 };
+function fitLegs(legs) { const o = {}; for (const k of LEG_KEYS) o[k] = fitCapsules(legs[k].geometry, LEG_N[k]); return o; }
 const _cm = new THREE.Matrix4(), _ca = V3(), _cb = V3();
 function publishCols(L) {
   if (!L.legFit || L.gone) return;
   beginBodyCols();
   const bw = L.body.matrixWorld, R = L.R;
   for (let q = 0; q < 4; q++) {
-    const k = LEG_KEYS[q], im = L.legs[k], F = L.legFit[k];
+    const k = LEG_KEYS[q], im = L.legs[k], FF = L.legFit[k];
     for (let i = 0; i < 8; i++) {
       im.getMatrixAt(i, _cm); _cm.premultiply(bw);
-      _ca.fromArray(F.a).applyMatrix4(_cm); _cb.fromArray(F.b).applyMatrix4(_cm);
-      addCapsule(_ca.x, _ca.y, _ca.z, _cb.x, _cb.y, _cb.z, F.ra * R, F.rb * R);
+      for (let j = 0; j < FF.length; j++) {
+        const F = FF[j];
+        _ca.fromArray(F.a).applyMatrix4(_cm); _cb.fromArray(F.b).applyMatrix4(_cm);
+        addCapsule(_ca.x, _ca.y, _ca.z, _cb.x, _cb.y, _cb.z, F.ra * R, F.rb * R);
+      }
     }
   }
+  markLimbs();                                       // (the probe's leg/claw boundary)
   for (let ci = 0; ci < L.claws.length; ci++) {
     const fit = L.claws[ci].fit;
     for (let j = 0; j < fit.length; j++) {
@@ -1487,7 +1493,7 @@ export function updateBrooder(L, dt, t, player) {
   // moves in WORLD space toward what she is after (Sal, or blind, the spot she lost him),
   // crab-fashion, independent of where her face has got to; she stalks sideways as she
   // closes, plants for every blow and lunges into it. While he carries an egg she is
-  // relentless; unburdened she keeps him off her ground (GUARD_R round the nest) and lets
+  // relentless; unburdened she keeps him off her ground (HUNT.guard round her lair) and lets
   // him go past it.
   const thief = !!(L.brood && L.brood.held >= 0);
   const hunt = !L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.5;
@@ -1511,7 +1517,7 @@ export function updateBrooder(L, dt, t, player) {
   // the hunt's closing speed and heading (world space)
   let vC = 0, cAng = Math.atan2(tx, tz);
   if (hunt && L.standE > 0.9 && want !== null) {
-    const N = L.brood ? L.brood.nest : L.lairPos || L.pos;
+    const N = L.lairPos || L.pos;                       // her ground: the lair she sleeps on (not the clutch, which may move)
     const terr = thief ? 1 : 1 - smooth(Math.hypot(L.aim.x - N.x, L.aim.z - N.z), HUNT.guard * 0.75 * R, HUNT.guard * R);
     const closeK = smooth(dh, HUNT.hold * R, (HUNT.hold + 0.6) * R) * terr * (L.blindT >= SIGHT_GIVEUP ? 0 : 1);
     // planted for the blow: from the fall to the end of the recoil

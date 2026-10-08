@@ -62,6 +62,8 @@ const ST = `(() => { const L = __sl, p = player.pos; return { stand: +L.stand.to
   pos: [+L.pos.x.toFixed(1), +L.pos.z.toFixed(1)], sal: [+p.x.toFixed(1), +p.y.toFixed(2), +p.z.toFixed(1)], lens: +camera.position.distanceTo(p).toFixed(2), camY: +(camera.position.y - p.y).toFixed(2), eggs: L.brood.out() }; })()`;
 const TH = `(async () => { const T = await import('three'); window.THREE_V = [0,0,0,0,0,0,0].map(() => new T.Vector3()); window.THREE_M = new T.Matrix4(); return 1; })()`;
 const report = {};
+// the fix's own colliders: Sal's clearance to the nearest published capsule (negative = inside)
+const OWN = `(async () => { const B = await import('/src/entities/sleeper/bodyCols.js'); const C = B.bodyColsCaps(), p = player.pos; let m = [1e9, -1]; for (let i = 0; i < C.length / 8; i++) { const o = i * 8, ax = C[o], ay = C[o+1], az = C[o+2], dx = C[o+3]-ax, dy = C[o+4]-ay, dz = C[o+5]-az, L2 = dx*dx+dy*dy+dz*dz; for (let yy = p.y - 0.9; yy <= p.y + 0.01; yy += 0.15) { let t = ((p.x-ax)*dx+(yy-ay)*dy+(p.z-az)*dz)/L2; t = Math.max(0, Math.min(1, t)); const d = Math.hypot(p.x-ax-dx*t, yy-ay-dy*t, p.z-az-dz*t) - (C[o+6] + (C[o+7]-C[o+6])*t) - 0.45; if (d < m[0]) m = [+d.toFixed(2), i]; } } return m; })()`;
 async function standAt(x, z, yaw, pitch = -0.05) {
   await c.ev(`(() => { const y = __T.terrainH(${x}, ${z}, 0) + 1.35; player.pos.set(${x}, y, ${z}); player.vel.set(0, 0, 0); player.yaw = ${yaw}; player.pitch = ${pitch}; return 1; })()`);
 }
@@ -112,7 +114,7 @@ for (const sc of SCEN) {
     await shot('leg-0');
     await c.key('KeyW', true);
     let worst = -9; const tr = [];
-    for (let i = 0; i < 40; i++) { await sleep(150); const pn = await c.ev(PEN); tr.push(pn[0]); if (pn[0] > worst) worst = pn[0]; if (i === 14 || i === 26 || i === 39) await shot('leg-' + i); }
+    for (let i = 0; i < 40; i++) { await sleep(150); const pn = await c.ev(PEN); tr.push(pn[0]); if (pn[0] > worst) { worst = pn[0]; report.legWhat = pn[1]; report.legOwn = await c.ev(OWN); } if (i === 14 || i === 26 || i === 39) await shot('leg-' + i); }
     await c.key('KeyW', false);
     report.leg = { worst, tr, st: await c.ev(ST) };
     // the claw: in front of her face, walk into the great claw
