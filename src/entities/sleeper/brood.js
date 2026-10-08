@@ -32,7 +32,7 @@ import * as THREE from 'three';
 import { V3, clamp } from '../../lib/math.js';
 import { seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
-import { envTexDeep as envTex } from '../../core.js';
+import { envTexDeep as envTex, camera } from '../../core.js';
 import { terrainH, terrainNormal } from '../../world/terrain.js';
 import { riftPos, RIFT_R } from '../../config.js';
 import { emitDust } from '../../world/footfx.js';
@@ -41,9 +41,9 @@ import * as G from './brooderGeo.js';
 
 const TAU = Math.PI * 2;
 const TAKE_R = 2.6, RET_R = 3.4;        // reach from his hands/helmet to the mass's surface (world u): pry / press back (up, arm raised)
-const RB = 0.0052;                      // bead radius, shell units (x R 15.4 = 0.08 u)
-const MAXB = 14000;                     // bead budget (the clutch); the build thins to it
-const LOD_N = 12, LOD_F = 55;           // near (80-tri) / far (20-tri) / core-only ranges, world u
+const RB = 0.0056;                      // bead radius, shell units (x R 15.4 = 0.086 u)
+const MAXB = 10000;                     // bead budget (the clutch); the build thins to it
+const LOD_N = 9, LOD_F = 50;            // near (80-tri) / far (20-tri) / core-only ranges, world u
 const SHED_N = 32, CLUMP_B = 110, CASE_N = 420, SETAE_N = 360;
 const _v = V3(), _w = V3(), _n = V3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _up = V3(0, 1, 0);
 const _a = V3(), _b = V3(), _lant = V3();
@@ -749,6 +749,16 @@ export function makeBrood(L, idx, trailFrom) {
     const uN = matN.userData.u, uF = matF.userData.u, uS = sMat.userData.u;
     uN.uStand.value = uF.uStand.value = uS.uStand.value = B.st;
     uN.uTime.value = uF.uTime.value = uS.uTime.value = B.t;
+    // the bead sets are only submitted where a bead of theirs can be drawn (the shader
+    // collapses the rest, but a collapsed vertex still runs): the clutch spans ~12 u
+    if (B.beadsN) {
+      _a.fromArray(MASS_C).applyMatrix4(L.body.matrixWorld);
+      const dc = _a.distanceTo(camera.position), on = !B.off;     // (B.off: the dev A/B, the whole clutch out)
+      B.beadsN.visible = on && dc < LOD_N + 14;
+      B.beadsF.visible = on && dc > LOD_N - 14 && dc < LOD_F + 14;
+      B.setae.visible = on && dc < 40;
+      B.core.visible = on;
+    }
     // asleep she fans it slowly; awake she clamps the apron down (it barely moves)
     uN.uBreath.value = uF.uBreath.value = L.dormant ? 1 : 0.35;
     // the fanning lifts a breath of silt off the open lobes now and then
