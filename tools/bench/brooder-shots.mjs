@@ -76,21 +76,32 @@ for (const sc of SCEN) {
   await boot();
   await c.ev(TH);
   if (sc === 'chase') {
-    // the take -> wake -> chase, from the game camera: E, then he walks away from her
-    await shot('chase-0-atnest');
+    // the take -> wake -> chase, from the game camera: E at the nest, he holds still while
+    // she rises, then walks away from her (real W; real C whenever a blow has him off the
+    // bottom), looking back at her now and then
+    await shot('chase-00-atnest');
     await c.tap('KeyE', 100);
     const rows = [];
-    for (let i = 1; i <= 16; i++) {
-      if (i === 5) { await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(p.x - L.pos.x, p.z - L.pos.z) + 0.5; player.pitch = -0.05; return 1; })()`); await c.key('KeyW', true); }
-      if (i === 9) await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(L.pos.x - p.x, L.pos.z - p.z) + Math.PI * 0.85; return 1; })()`);
-      await sleep(1500);
-      rows.push(await c.ev(ST));
-      if (i % 2 === 0) await shot('chase-' + i);
+    let cDown = false, wDown = false;
+    const t0 = Date.now();
+    let n = 0;
+    while (Date.now() - t0 < 34000) {
+      const el = (Date.now() - t0) / 1000;
+      if (el > 9 && !wDown) { await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(p.x - L.pos.x, p.z - L.pos.z); player.pitch = -0.05; return 1; })()`); await c.key('KeyW', true); wDown = true; }
+      const g = await c.ev(`player.grounded`);
+      if (!g && !cDown) { await c.key('KeyC', true); cDown = true; } else if (g && cDown) { await c.key('KeyC', false); cDown = false; }
+      if (el > n * 2) {
+        // every 4th frame he glances back over his shoulder (the lens follows his look)
+        const back = wDown && n % 3 === 2;
+        if (back) { await c.key('KeyW', false); await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(L.pos.x - p.x, L.pos.z - p.z); return 1; })()`); await sleep(700); }
+        await shot('chase-' + String(n).padStart(2, '0'));
+        rows.push(Object.assign({ el: +el.toFixed(1) }, await c.ev(ST)));
+        if (back) { await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(p.x - L.pos.x, p.z - L.pos.z); return 1; })()`); await c.key('KeyW', true); }
+        n++;
+      }
+      await sleep(120);
     }
-    await c.key('KeyW', false);
-    // turn round and look at her
-    await c.ev(`(() => { const L = __sl, p = player.pos; player.yaw = Math.atan2(L.pos.x - p.x, L.pos.z - p.z); player.pitch = 0.05; return 1; })()`);
-    await sleep(1200); await shot('chase-look');
+    await c.key('KeyW', false); if (cDown) await c.key('KeyC', false);
     report.chase = rows;
   } else if (sc === 'leg') {
     await wakeAndHold();

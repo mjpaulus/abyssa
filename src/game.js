@@ -974,7 +974,7 @@ const DECK_PIVOT = 0.4;
 // to stay clear before easing back out, so legs walking through it don't pump it. Under her
 // shell the lifts run into her belly and are refused; the lens stays low between her legs,
 // sprung, and tips up a little at the underside (the wards are there).
-const CRECAM = { margin: 0.4, hold: 0.55, w: 4.2, under: 0.5, look: 2.0, minD: 1.7 };
+const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2 };
 const CRE_LIFTS = [0, 1.4, 2.8, 4.2];
 let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0;
 function creHit(from, boom, f, m) {
@@ -1282,7 +1282,10 @@ function updateCamera(dt, t, fwd) {
       const cw = Math.max(CRECAM.minD, base * creBoomClear(_piv, camTo));
       // in at once; out only once the line has stayed clear for a beat
       if (cw < creHold - 0.05) { creHold = cw; creHoldT = 0; }
-      else if (cw > creHold + 0.05) { creHoldT += dt; if (creHoldT > CRECAM.hold) creHold = cw; }
+      // (while she is hammering the claw crosses the line every blow: the boom stays in for a
+      // whole cycle instead of breathing in and out with each one — measured 13 reversals
+      // over 1 u in a 40 s fight with the short hold)
+      else if (cw > creHold + 0.05) { creHoldT += dt; if (creHoldT > (lev && lev.threatE > 0.3 ? CRECAM.holdFight : CRECAM.hold)) creHold = cw; }
       else creHoldT = 0;
       if (creHold < want) want = creHold;
     } else { creLiftT = 0; creHold = 1e9; creHoldT = 0; }
@@ -1506,7 +1509,10 @@ function updateCamera(dt, t, fwd) {
   if (creK > 0 && bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0.15)) {
     _piv.copy(player.pos); _piv.y += DECK_PIVOT;
     camTo.copy(camera.position).sub(_piv);
-    const f = creBoomClear(_piv, camTo, 0.3);
+    const cl = camTo.length();
+    // (never into his own helmet: a claw falling right beside him has no clear spot, and a
+    // moment inside it beats the inside of the bonnet)
+    const f = Math.max(Math.min(1, CRECAM.minD / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
     _bp.copy(_piv).addScaledVector(camTo, f);
     camera.position.lerp(_bp, Math.min(1, 18 * dt));
     camVel.lerp(player.vel, Math.min(1, 10 * dt));

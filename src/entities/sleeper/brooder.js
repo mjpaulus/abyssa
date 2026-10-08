@@ -107,9 +107,12 @@ const HAMMER_T = 2.6;
 // THE HUNT (brooderfix): speeds are fractions of cfg.speed (9: Sal walks 2.15 u/s, 2.8 with
 // Shift, hauls ~6.6 off the bottom). chase 0.42 = 3.8 u/s after a thief (she runs a walker
 // down; a swimmer gets away), stalk 0.26 = 2.3 u/s otherwise. She closes to `hold` R from
-// her centre (inside the hammer's landing ring, measured ~2.1 R ahead), keeps an unburdened
+// her centre (the hammer's hinge lands ~2.3 R out, measured; the hit takes 0.42 R round it), keeps an unburdened
 // diver off `guard` R round the nest, and turns at up to `turn` rad/s while hunting.
-export const HUNT = { chase: 0.42, stalk: 0.26, hold: 1.9, guard: 7, turn: 0.5, lunge: 0.35 };
+// knock: the hammer's throw (u/s). It was 38 when she never moved: measured, it carried him
+// ~35 u and out of her sight in the murk, so the chase that follows a blow never read; 26
+// still throws him clear of her front (~20 u) and keeps her in his view as she comes on.
+export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -1650,7 +1653,7 @@ export function updateBrooder(L, dt, t, player) {
     c.dj.getWorldPosition(_ft);
     if (_ft.distanceTo(player.pos) < L.R * 0.42) {
       _v.copy(player.pos).sub(_ft).setY(0.4).normalize();
-      player.vel.addScaledVector(_v, 38);
+      player.vel.addScaledVector(_v, HUNT.knock);
       ev.lightDrain += 0.12;
       ev.slam = true;
       L.strikeCd = 2.0;

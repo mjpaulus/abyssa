@@ -344,10 +344,14 @@ export function resolveBodyCols(player, dt, grounded) {
   if (shellOk && underShell(p.x, p.y, p.z)) BODY.under = true;
   return BODY.contacts;
 }
+// (the carry is capped: the falling claw's tip moves at tens of u/s, and handing him all of
+// it threw him 60 u — the hammer has its own designed knock. A shove, not a launch.)
+const CARRY_MAX = 5;
 function contactVel(v, nx, ny, nz, pvx, pvy, pvz) {
-  const pn = pvx * nx + pvy * ny + pvz * nz;          // the part's speed out along the normal
-  const vn = v.x * nx + v.y * ny + v.z * nz;
+  let pn = pvx * nx + pvy * ny + pvz * nz;            // the part's speed out along the normal
   if (pn > BODY.hitV) BODY.hitV = pn;
+  if (pn > CARRY_MAX) pn = CARRY_MAX;
+  const vn = v.x * nx + v.y * ny + v.z * nz;
   if (vn < pn) { const k = pn - vn; v.x += nx * k; v.y += ny * k; v.z += nz * k; }
 }
 
