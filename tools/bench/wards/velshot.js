@@ -10,6 +10,9 @@ W.until(() => L.standE > 0.95, 60 * 25, W.holdFn);
 for (const g of L.sigils) { if (L.sigils.filter(q => !q.lit).length <= 1) break; if (!g.lit) { W.approach(L, g); W.run(20, W.holdFn); } }
 const last = L.sigils.find(q => !q.lit);
 window.__last = last;
+// A.pre: one earlier touch of the held ward (the stepping harness), then 5 s away from it,
+// so the shot is the diver's SECOND try (Michael: "I tried multiple times")
+if (A.pre) { W.approach(L, last); const away = last.grp.position.clone().addScaledVector(W.wardNormal(last), 16); away.y = Math.max(away.y, window.terrainH(away.x, away.z, 0) + 1.35); W.hold(away); W.run(300, W.holdFn); }
 // stand off along the horizontal from her centre through the ward
 const c = L.pos, wp = last.grp.position;
 let dx = wp.x - c.x, dz = wp.z - c.z; const dl = Math.hypot(dx, dz) || 1; dx /= dl; dz /= dl;
