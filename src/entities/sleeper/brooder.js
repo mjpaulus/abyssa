@@ -112,7 +112,9 @@ const HAMMER_T = 2.6;
 // knock: the hammer's throw (u/s). It was 38 when she never moved: measured, it carried him
 // ~35 u and out of her sight in the murk, so the chase that follows a blow never read; 26
 // still throws him clear of her front (~20 u) and keeps her in his view as she comes on.
-export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26 };
+// guardUp: how far (rad) the minor claw's guard rises off her mouth when a diver is close
+// under her face.
+export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -1059,8 +1061,11 @@ function poseClaws(L) {
     } else {
       // the minor stays low and close, a guard across the mouth, working; it spreads
       // wide as the crusher cocks (the body opens up behind the blow)
+      // (brooderfix) a diver close under her face: the guard comes UP off her mouth, raised to
+      // strike (L.guardUp). Solid now, held low across the mouth it walled off the one way in
+      // under her front, the plume rush (measured: 0 of 3 rushes got under her, 3 of 3 on main)
       c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th) + sd * 0.28 * ck + dy - sd * 0.2 * h,
-        lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h);
+        lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h + HUNT.guardUp * (L.guardUp ? L.guardUp.x : 0));
       c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th) + sd * 0.3 * ck, 0.30);
       c.pj.rotation.set(0, -sd * 0.45, -0.55 + 0.6 * dz);
       c.dj.rotation.z = (0.08 + 0.28 * gape + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th + 0.3 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
@@ -1646,6 +1651,14 @@ export function updateBrooder(L, dt, t, player) {
       lk = clamp(el * 0.35, -0.06, 0.16);
     }
     L.lookP = (L.lookP || 0) + (lk - (L.lookP || 0)) * Math.min(1, 1.2 * dt);
+    // the guard rises when he is close under her face (in front, inside 1.6 R): see poseClaws
+    let gu = 0;
+    if (!L.dormant && !L.calmed && L.standE > 0.8) {
+      const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z, fw = px * Math.sin(L.yaw) + pz * Math.cos(L.yaw);
+      if (fw > 0 && Math.hypot(px, pz) < 1.6 * R) gu = 1;
+    }
+    if (!L.guardUp) L.guardUp = S();
+    spr(L.guardUp, gu, 3.2, 0.9, dt);
   }
 
   poseAll(L, dt, player);
