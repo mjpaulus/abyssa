@@ -1636,7 +1636,7 @@ function updateCamera(dt, t, fwd) {
     // moment inside it beats the inside of the bonnet)
     const f = Math.max(Math.min(1, CRECAM.minD / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
     _bp.copy(_piv).addScaledVector(camTo, f);
-    camera.position.lerp(_bp, Math.min(1, 18 * dt));
+    camera.position.lerp(_bp, Math.min(1, 30 * dt));
     camVel.lerp(player.vel, Math.min(1, 10 * dt));
     creStops++;
   }
