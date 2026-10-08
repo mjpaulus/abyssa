@@ -38,6 +38,12 @@ await ev(`(async () => {
   const R = window.__rec = { seg: 'idle', log: [], on: true, shots: [], shotOn: false, shotLast: 0, shotEvery: +(${SHOT_MS}), crop: ${process.env.CROP || '[0, 0, 1, 1]'}, sc: ${process.env.SC || 0.25} };
   const cv2 = document.createElement('canvas'), cx2 = cv2.getContext('2d');
   let lt = performance.now();
+  const sv = new V();
+  // both hands through the game camera, in canvas CSS pixels (what the player sees move)
+  const scr = () => { const cam = window.camera, cv = [...document.querySelectorAll('canvas')].sort((a, b) => b.width * b.height - a.width * a.height)[0], w = cv.clientWidth, h = cv.clientHeight, o = [];
+    for (const arm of [D.diver.armL, D.diver.armR]) { arm.end.getWorldPosition(sv); sv.project(cam); o.push(+((sv.x * 0.5 + 0.5) * w).toFixed(1), +((-sv.y * 0.5 + 0.5) * h).toFixed(1)); }
+    D.diver.getWorldPosition(sv); sv.project(cam); o.push(+((sv.x * 0.5 + 0.5) * w).toFixed(1), +((-sv.y * 0.5 + 0.5) * h).toFixed(1));
+    return o; };
   const f = () => {
     const now = performance.now(), p = P.player;
     if (R.on && window.gameState === 'play') {
@@ -49,7 +55,7 @@ await ev(`(async () => {
         +(p.jet || 0).toFixed(2), +(p.burstT || 0).toFixed(2), +p.swimP.toFixed(4), +Math.hypot(p.vel.x, p.vel.z).toFixed(2),
         +(p.vel.x * sy + p.vel.z * cy).toFixed(2), +p.vel.y.toFixed(2), p.scullZ || 0,
         +a.x.toFixed(3), +a.y.toFixed(3), +a.z.toFixed(3), +b.x.toFixed(3), +b.y.toFixed(3), +b.z.toFixed(3),
-        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3)]);
+        (document.getElementById('mode') || {}).textContent || '', +(p.pos.y - p.groundY).toFixed(2), window.__burstLeanState ? window.__burstLeanState().pitchDeg : 0, +D.diver.armL.root.rotation.x.toFixed(3), +D.diver.armL.mid.rotation.x.toFixed(3), +D.diver.armR.root.rotation.x.toFixed(3), +D.diver.armL.root.rotation.z.toFixed(3), ...(window.__swimState ? (() => { const q = window.__swimState(); return [q.gb, q.burstW, q.ladderF, q.drive, q.rate]; })() : [-1, -1, -1, -1, -1]), ...scr()]);
     }
     if (R.shotOn && now - R.shotLast >= R.shotEvery) {
       R.shotLast = now;
@@ -74,7 +80,8 @@ async function lift(dy) {
 }
 async function ws6() { await hold('KeyW', 6000, 'W'); await mark('coastW'); await sleep(1500); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
 
-if (SCEN === 'mid') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(5000); await ws6(); }
+if (SCEN === 'midS') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(3000); await hold('KeyS', 6000, 'S'); await mark('coastS'); await sleep(1500); }
+else if (SCEN === 'mid') { await mark('setup'); await lift(40); await neutral(2500); await mark('hang'); await neutral(5000); await ws6(); }
 else if (SCEN === 'low') { await mark('setup'); await lift(2.5); await neutral(1200); await ws6(); }
 else if (SCEN === 'seabed') { await mark('setup'); await sleep(1000); await ws6(); }
 else if (SCEN === 'burst') { await mark('setup'); await sleep(500); await hold('Space', 1100, 'burst'); await mark('float'); await sleep(1500); await ws6(); }

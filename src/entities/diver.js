@@ -3167,6 +3167,9 @@ const blP = { x: 0, v: 0 }, blR = { x: 0, v: 0 };
 const BURSTLEAN = { on: 1, max: 1.05, bank: 0.55, back: 0.5, fIn: 3.2, fOut: 2.0, spine: 0.30, neck: 0.42 };
 window.__burstLean = BURSTLEAN;
 window.__burstLeanState = () => ({ pitchDeg: +(blP.x * 57.3).toFixed(1), rollDeg: +(blR.x * 57.3).toFixed(1) });
+// (swimfix) probe: the haul's live weights — which branch owns the body and how hard the stroke runs
+let swDrive = 0, swRate = 0;
+window.__swimState = () => ({ gb: +gb.toFixed(3), burstW: +burstW.toFixed(3), ladderF: +ladderF.toFixed(3), drive: +swDrive.toFixed(3), rate: +swRate.toFixed(3), swimP: +swimP.toFixed(3) });
 const brP = { x: 0, v: 0 };
 let fwdSpdPrev = 0, accF = 0;
 const strafeS = { x: 0, v: 0 };
@@ -3547,7 +3550,8 @@ export function updateDiver(dt, t, player) {
   // Slow, wide sweeps: ~0.38 Hz at cruise (the frog kick was 0.52, and 0.73 before that).
   // The thrust pulse in player.js is unit-mean per cycle, so a slower stroke is a bigger
   // haul with a longer drift after it, not a slower diver. Hanging still he barely sculls.
-  swimP = (swimP + (0.17 + Math.min(speed, 7) * 0.012) * spinUp * dt) % 1;
+  swRate = (0.17 + Math.min(speed, 7) * 0.012) * spinUp;
+  swimP = (swimP + swRate * dt) % 1;
   if (swimP < swPrev) drawKick(++kickIdx);   // one fresh pair of legs per kick
   // ---- breath clock: context-driven cadence, still drifting so it never metronomes.
   // Effort winds the rate up through an EMA — a sprint costs breaths for a while after
@@ -3573,7 +3577,8 @@ export function updateDiver(dt, t, player) {
   poseWalk(pw, walkP, amp, t, deckF);
   // The haul is driven by way made THROUGH the water, not by the dress lifting him: rising on
   // a full dress he hangs and barely sculls; a slow climb or settle still works the arms a little.
-  poseSwim(psw, swimP, t, clamp(flat * 0.09 + Math.abs(player.vel.y) * 0.04, 0, 1));
+  swDrive = clamp(flat * 0.09 + Math.abs(player.vel.y) * 0.04, 0, 1);
+  poseSwim(psw, swimP, t, swDrive);
   for (let i = 0; i < CH.N; i++) po[i] = psw[i] + (pw[i] - psw[i]) * gb;
 
   // ---- SCULLS. Backing up and crabbing sideways are not swimming, and they should not
