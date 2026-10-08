@@ -14,7 +14,7 @@
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
-import { makeGlow, seededRand } from '../../lib/textures.js';
+import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
 import { terrainH, terrainMeshes } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
@@ -30,7 +30,7 @@ import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
-import { spawnPlume, updatePlumes, plumeTau, clearPlumes } from './plume.js';
+import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
@@ -115,6 +115,16 @@ const HAMMER_T = 2.6;
 // under her face.
 // THE BROODING CROUCH (brooder-clutch): drop (shell units off the standing height), lean
 // (rad toward the diver under her), clear (u: the belly over his helmet never comes lower)
+// THE CHASE MUST READ (brooder-clutch; the hunt worked but past ~35 u in the zone-0 murk she
+// was a dark shape on dark water): her eyes throw the lantern back as two pinpoints out to
+// ~110 u (GLINT), her feet leave a pale wake that hangs (plume.js spawnWake), each heavy
+// footfall is FELT out to ~110 u (ev.thump: game.js dips the lens and lifts sand round his
+// boots), a low hunting voice rides her body (audio/creatures.js, L.huntK), and her shell
+// carries a faint backscatter rim past ~20 u (RIM; the water's own colour, so it tracks day
+// and night). k: strength; near/far: fades (u).
+export const GLINT = { k: 0.75, scale: 0.9, near: 7, far: 115 };
+export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
+export const THUMP = { k: 1, near: 12, far: 110 };
 export const CROUCH = { drop: 0.16, lean: 0.16, clear: 4.6 };
 export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
@@ -128,7 +138,7 @@ const S = () => ({ x: 0, v: 0 });
 const nz = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
 const ease = x => x * x * (3 - 2 * x);
 const win = (x, a, b) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0 };
+const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0 };
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
@@ -506,6 +516,15 @@ export function makeBrooder(idx, cfg) {
     ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), climb: +(L.climbT > 0 ? L.climbT : 0).toFixed(1), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)), elbow: L.claws.map(c => +(c.elbow || 0).toFixed(3)) }
   });
 
+  // the eyeshine pinpoints (poseAll writes them; always in the scene at opacity 0 so the
+  // shared warm-glow program is built at boot)
+  L.glints = [0, 1].map(() => {
+    const g = makeWarmGlow(0xd6ecd2, GLINT.scale, { near: 40, far: GLINT.far, nearW: 0.25, swell: 0.012, swellMax: 1.2 });
+    g.material.opacity = 0;
+    g.renderOrder = 3;
+    grp.add(g);
+    return g;
+  });
   if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
   scene.add(grp);
   setLive(L);
@@ -718,6 +737,30 @@ function finishSculpt(m, maps, set, micro) {
   if (maps.normalMap && maps.normalMap.userData.rg) patchNormalRG(m);
   return m;
 }
+// THE SILHOUETTE IN THE MURK (brooder-clutch): past ~20 u her shell carries a faint rim of
+// the water's own light (backscatter round a dark mass), so her outline separates from the
+// water behind her where the lantern cannot reach. Chained after the micro layer; its own
+// program key. uVkRim (rgb) is the water's colour x RIM.k, written per frame by poseAll.
+function silhouetteRim(L, m) {
+  const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
+  const u = { uVkRim: { value: new THREE.Color(0, 0, 0) }, uVkRimD: { value: new THREE.Vector3(RIM.near, RIM.far, RIM.pow) } };
+  L.rimU = u;
+  m.onBeforeCompile = function (sh, r) {
+    if (prev) prev.call(this, sh, r);
+    Object.assign(sh.uniforms, u);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec3 uVkRim, uVkRimD;')
+      .replace('#include <tonemapping_fragment>', `{
+        float vkD = length(vViewPosition);
+        float vkR = 1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
+        float vkW = smoothstep(uVkRimD.x, uVkRimD.x * 2.5, vkD) * (1.0 - smoothstep(uVkRimD.y * 0.7, uVkRimD.y, vkD));
+        gl_FragColor.rgb += uVkRim * pow(vkR, uVkRimD.z) * vkW;
+      }
+      #include <tonemapping_fragment>`);
+  };
+  m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|vkRim';
+  m.needsUpdate = true;
+}
 // retire a procedural part: its geometry, its material, and any texture it owned that
 // nothing else keeps (the belly's cloned mottle), so a swap leaks nothing
 function drop(L, o) {
@@ -741,6 +784,7 @@ function installSculpt(L, A) {
   // her AO no longer doubles up on the paint's (the bores read deep, not punched to black)
   const bodyMat = finishSculpt(registerPaint(sculptMat(A.maps.body, { envMapIntensity: 0.35, aoMapIntensity: 0.8 })), A.maps.body, sets.body,
     { scale: 20, normal: 0.9, cavity: 0.45, rough: 0.3 });
+  silhouetteRim(L, bodyMat);
   P.shell.geometry.dispose(); P.shell.material.dispose();
   P.shell.geometry = g.body; P.shell.material = bodyMat;
   L.sole = soleFromGeos([g.body]);                   // the baked shell's own underside
@@ -1311,6 +1355,29 @@ function poseAll(L, dt, player) {
     }
     L.stalkMat.emissiveIntensity = (0.05 * st + 2.6 * s2 * (0.35 + 0.65 * st)) * (L.stalkK ?? 1);
   }
+  // EYESHINE AT RANGE (brooder-clutch): the pseudopupil above is a few pixels at 20 u and
+  // nothing at 45, so in the murk her eyes on him never read. Two small warm-glow pinpoints
+  // ride the stalked eyes: lit only by where each eye points at his lantern and its charge,
+  // never close (the real eye carries it there), fading out by GLINT.far. Fog off with their
+  // own fade (lib/textures.js warmGlow): a fogged additive sprite turns green with range.
+  if (L.rimU && scene.fog) L.rimU.uVkRim.value.copy(scene.fog.color).multiplyScalar(RIM.k * (L.dormant ? 0 : st));
+  if (L.glints) {
+    const lit = player ? Math.max(0, player.light == null ? 1 : player.light) : 0;
+    for (let i = 0; i < 2; i++) {
+      const gl = L.glints[i], e = L.eyeSt ? L.eyeSt[i] : null;
+      if (e) _r.copy(e.cur).multiplyScalar(L.stalkL || 0.12).add(e.piv).applyMatrix4(b.matrixWorld);
+      else _r.copy(L.head);
+      gl.position.copy(_r);
+      let f = 0;
+      if (player && st > 0.2) {
+        _v.copy(player.pos).sub(_r);
+        const dist = _v.length() || 1;
+        if (e) _x.copy(e.cur).transformDirection(b.matrixWorld); else b.getWorldDirection(_x);
+        f = Math.pow(Math.max(0, _x.dot(_v) / dist), 6) * lit * smooth(dist, GLINT.near, GLINT.near * 2.2) * st;
+      }
+      gl.material.opacity = GLINT.k * f;
+    }
+  }
   // the mouthparts: five pairs working out of phase, faster when roused
   // (a sawtooth-ish stroke: a quick pull in, a slower open; the rhythm stutters and
   // pauses on a slow noise, and the outer pairs sweep wider)
@@ -1371,7 +1438,7 @@ function publishCols(L) {
 }
 
 function resetEv() {
-  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.plume = 0;
+  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0;
   return EV;
 }
 // a ground shock at world x,z of strength k (0..1): the game's camera shake, by distance
@@ -1379,6 +1446,14 @@ function quake(L, ev, x, z, k, player) {
   const d = Math.hypot(player.pos.x - x, player.pos.z - z);
   const q = k * (1 - smooth(d, 8, 70));
   if (q > ev.quake) ev.quake = q;
+}
+// a footfall you FEEL (brooder-clutch): event-shaped, distance-weighted out to THUMP.far;
+// game.js turns it into a vertical dip of the lens and sand lifting round his boots
+function thump(L, ev, x, z, k, player) {
+  if (!player) return;
+  const d = Math.hypot(player.pos.x - x, player.pos.z - z);
+  const q = THUMP.k * k * (1 - smooth(d, THUMP.near, THUMP.far));
+  if (q > ev.thump) ev.thump = q;
 }
 // Silt on HER scale: the shared puff pool (footfx, 420 particles, also the diver's boots)
 // spawns every burst within ~0.3 u, so a colossus's impact is a ring of k small bursts
@@ -1579,6 +1654,8 @@ export function updateBrooder(L, dt, t, player) {
     const planted = L.threatE > 0.3 && (L.hamPh >= PH_SLAM0 || L.impT < 0.45);
     vC = planted ? 0 : L.speed * (thief ? HUNT.chase : HUNT.stalk) * closeK * (1 - 0.45 * L.threatE);
   }
+  // the hunting voice (audio/creatures.js): up while she comes for him, down when she stops
+  L.huntK = (L.huntK || 0) + ((hunt && (vC > 0.3 || thief) ? (thief ? 1 : 0.6) : 0) - (L.huntK || 0)) * Math.min(1, 1.2 * dt);
   const goal = want !== null && speed > 0 ? L.walkTo : vC > 0.3 ? L.aim : null;
   if (goal) {
     // round the rocks and hulls ahead; no headway for 3 s (a pocket between two of them)
@@ -1661,9 +1738,13 @@ export function updateBrooder(L, dt, t, player) {
         f.sl = slopeAt(L, f.to.x, f.to.z);
         silt(f.cur.x, f.cur.y + 0.2, f.cur.z, f.h > 0.2 ? 3 : 1, 3, 1.4 + 1.4 * f.h / 0.30, 0.9);
         if (f.h > 0.2) spawnPlume(f.cur.x, f.cur.y, f.cur.z, 'small', 1, L.idx);   // a heavy foot throws its own small cloud
+        // ...and going hard, a slow one that hangs where she went (render only: her wake)
+        const vH = Math.hypot(L.vel.x, L.vel.z);
+        if (f.h > 0.2 && vH > 1.0 && !L.dormant) spawnWake(f.cur.x, f.cur.y, f.cur.z, clamp(vH / 3.8, 0.3, 1), L.idx);
         L.bY.v -= R * 0.10 * f.h / 0.30;
         L.bR.v += sd * 0.10 * f.h / 0.30;
         quake(L, ev, f.cur.x, f.cur.z, 0.16 * f.h / 0.30, player);
+        thump(L, ev, f.cur.x, f.cur.z, (0.18 + 0.12 * clamp(vH / 3.8, 0, 1)) * f.h / 0.30, player);
       }
     } else if (L.standE > 0.35) {
       const d = f.planted.distanceTo(_rw);

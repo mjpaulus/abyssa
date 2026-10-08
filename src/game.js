@@ -7,7 +7,7 @@ import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, pre
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
-import { stirPulse, P_SLAM } from './world/stir.js';
+import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
@@ -36,7 +36,7 @@ import { camBlockedLocal, camBlockWhy } from './systems/raft/colliders.js';
 import { buildResources, updateResources, reseedResources } from './world/resources.js';
 import { initPhysics, updatePhysics, switchZone as physicsSwitchZone } from './systems/physics.js';
 import { buildProps, updateProps, propColliders, reseedProps } from './world/props.js';
-import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos } from './world/footfx.js';
+import { buildFootFX, spawnFootfall, updateFootFX, setLanternPos, emitDust } from './world/footfx.js';
 import { buildPredators, switchPredatorZone, updatePredators, slash, deployInk, reseedDens } from './world/predators.js';
 import { buildWrecks, updateWrecks, wreckColliders, nearRelic, takeRelic, reseedWrecks, setKeepsakeState, nearKeepsake, takeKeepsake } from './world/wrecks.js';
 import { buildVents, updateVents, ventColliders, reseedVents } from './world/vents.js';
@@ -2069,6 +2069,18 @@ function update(dt, t) {
     if (ev.grabbed) { shake = Math.min(1, shake + 0.6); kickLantern(0.8); diverImpulse('grab'); }
     diverGrab(!!lev.grab);
     if (ev.quake) shake = Math.max(shake, ev.quake);   // her footfalls, hammer, settle thump
+    // (brooder-clutch) HER FOOTFALLS, FELT out to ~110 u: an event-shaped dip of the lens (the
+    // landing spring, not jitter), and the sand round his boots lifts and the reef nearby
+    // starts (stir.js) on the same frame, so she is there before she is seen
+    if (ev.thump > 0.02 && !paused) {
+      camLand.v -= ev.thump * 1.6 * (reducedMotion() ? 0.3 : 1);
+      shake = Math.max(shake, ev.thump * 0.22);
+      if (player.grounded) {
+        const n = Math.round(1 + 5 * ev.thump), fy = player.pos.y - 1.3;
+        for (let i = 0; i < 3; i++) { const a = Math.random() * 6.283, r = 0.5 + 0.8 * Math.random(); emitDust(player.pos.x + Math.cos(a) * r, fy, player.pos.z + Math.sin(a) * r, n, 0.35 + 0.8 * ev.thump); }
+        stirPulse(player.pos.x, fy, player.pos.z, 7, 0, Math.min(0.45, 0.2 + ev.thump), P_STEP);
+      }
+    }
     // big blows startle the reef too (footfalls already reach it through stir.js)
     if (ev.quake > 0.3 && lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, Math.min(1, ev.quake + 0.3), P_SLAM);
     if (ev.plume) stirPulse(ev.plumeX, ev.plumeY, ev.plumeZ, 30, 0, Math.min(1, 0.5 + 0.5 * ev.plume), P_SLAM);   // the Brooder's sand plume startles the reef where it rises

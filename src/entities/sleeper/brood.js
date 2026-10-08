@@ -166,7 +166,7 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
 bSpot = max(bSpot, uDbg.x);
 diffuseColor.rgb = bAlb * (1.0 - 0.88 * bSpot);`;
 const CL_FS_ROUGH = `
-roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : mix(mix(0.32, 0.55, bSpot), 0.5, bCore);`;
+roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : mix(mix(0.14, 0.6, bSpot), 0.5, bCore);`;
 // cores: each cell bulges like a bead (screen-derivative bump off the cell distance)
 const CL_FS_NORMAL = `
 if (bCore > 0.5) {
@@ -194,7 +194,7 @@ if (abyssaLampA.w > 0.0 && !(bMode > 1.5 && bMode < 2.5)) {
 #endif`;
 function clutchMat(far) {
   const k = far ? 'far' : 'near';
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0, envMap: envTex, envMapIntensity: 0.22 });
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0, envMap: envTex, envMapIntensity: 0.15 });
   const u = { uStand: { value: 0 }, uTime: { value: 0 }, uBreath: { value: 1 }, uMassC: { value: new THREE.Vector3().fromArray(MASS_C) }, uSssK: { value: 0.55 }, uDbg: { value: new THREE.Vector4() } };
   m.userData.u = u;
   if (far) m.defines = { CLUTCH_FAR: 1 };

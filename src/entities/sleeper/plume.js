@@ -27,7 +27,7 @@ import { scene, camera } from '../../core.js';
 import { canvas2d, noiseCanvas, seededRand } from '../../lib/textures.js';
 import { terrainH } from '../../world/terrain.js';
 
-const N = 448;                       // particle ring
+const N0 = 448, NW = 192, N = N0 + NW;   // particle ring: [0, N0) the plumes, [N0, N) her wake (render only)
 const PL = 12;                       // plume records (density model): 0..3 the hammer's, 4..11 footfalls'
 // the two kinds: a hammer blow and a footfall
 export const PLUME = {
@@ -36,9 +36,14 @@ export const PLUME = {
   small: { n: 7, life: [2.4, 3.4], vr: [1.2, 3.8], vy: [0.4, 1.4], s0: [1.2, 1.8], s1: [3.0, 4.4], a: 0.30, kd: 1.3,
     rh0: 0.8, rhA: 2.8, rhK: 1.2, hv0: 0.6, hvA: 1.3, hvK: 1.0, D: 0.9 }
 };
+// HER WAKE (brooder-clutch: "the chase must read"): a footfall at a run throws a low, slow
+// cloud that HANGS where she went, so in the zone-0 murk her path is a pale haze on the dark
+// ground. Render only: it is not in the density model (her sight never reads it, the plume
+// rush is unchanged) and it has its own ring, so it never evicts a hammer cloud.
+export const WAKE = { n: 2, life: [7.0, 10.0], vr: [0.5, 2.0], vy: [0.8, 2.4], s0: [2.2, 3.2], s1: [5.5, 8.5], a: 0.30, kd: 0.8 };
 export const PLUME_TUNE = { ambK: 1.6, lampK: 0.6, veilK: 1.0, sink: 0.30, off: false };   // off: render A/B (the gameplay model still runs)
 
-let mesh = null, veil = null, uni = null, head = 0, clock = 0, alive = 0;
+let mesh = null, veil = null, uni = null, head = 0, headW = 0, clock = 0, alive = 0;
 const rec = new Float32Array(PL * 8);   // x y z t0 life kindIdx(0 big / 1 small) k used
 let recHead = 0, recHeadS = 0;    // two rings: a footfall never evicts a hammer cloud
 const KINDS = [PLUME.big, PLUME.small];
@@ -192,6 +197,7 @@ function build() {
 }
 
 const rr = (a) => a[0] + (a[1] - a[0]) * Math.random();
+const AKEYS = ['aA', 'aB', 'aC', 'aD'];
 
 // A plume at x,y(floor),z: kind 'big' (the hammer) or 'small' (a footfall); k scales it.
 export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
@@ -202,7 +208,7 @@ export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
   const start = head;
   let lifeMax = 0;
   for (let i = 0; i < n; i++) {
-    const p = head * 4; head = (head + 1) % N;
+    const p = head * 4; head = (head + 1) % N0;
     const ang = Math.random() * 6.283, vr = rr(K.vr) * (0.7 + 0.3 * k), kd = K.kd;
     const dx = Math.cos(ang), dz = Math.sin(ang), life = rr(K.life);
     if (life > lifeMax) lifeMax = life;
@@ -215,17 +221,39 @@ export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
     const reach = vrr / kd;
     d[p] = Math.random(); d[p + 1] = (Math.random() - 0.5) * 0.5; d[p + 2] = terrainH(x + dx * reach, z + dz * reach, zi); d[p + 3] = kd;
   }
-  for (const key of ['aA', 'aB', 'aC', 'aD']) {
+  // (no clearUpdateRanges here: three clears them after each upload, and a wake spawned in
+  // the same frame has its own ranges queued)
+  for (const key of AKEYS) {
     const at = A[key];
-    at.clearUpdateRanges();
-    if (start + n <= N) at.addUpdateRange(start * 4, n * 4);
-    else { at.addUpdateRange(start * 4, (N - start) * 4); at.addUpdateRange(0, (start + n - N) * 4); }
+    if (start + n <= N0) at.addUpdateRange(start * 4, n * 4);
+    else { at.addUpdateRange(start * 4, (N0 - start) * 4); at.addUpdateRange(0, (start + n - N0) * 4); }
     at.needsUpdate = true;
   }
   let o;
   if (ki === 0) { o = recHead * 8; recHead = (recHead + 1) % 4; }
   else { o = (4 + recHeadS) * 8; recHeadS = (recHeadS + 1) % (PL - 4); }
   rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = clock; rec[o + 4] = lifeMax; rec[o + 5] = ki; rec[o + 6] = k; rec[o + 7] = 1;
+  alive = Math.max(alive, clock + lifeMax + 0.2);
+  mesh.visible = true;
+}
+
+// Her wake at a footfall (x, floor y, z), k 0..1 (how hard she is going). Render only.
+export function spawnWake(x, y, z, k = 1, zi = 0) {
+  if (!mesh) build();
+  const K = WAKE, A = mesh.geometry.attributes, a = A.aA.array, b = A.aB.array, c = A.aC.array, d = A.aD.array;
+  let lifeMax = 0;
+  for (let i = 0; i < K.n; i++) {
+    const q = N0 + headW, p = q * 4; headW = (headW + 1) % NW;
+    const ang = Math.random() * 6.283, vr = rr(K.vr) * (0.6 + 0.4 * k), dx = Math.cos(ang), dz = Math.sin(ang), life = rr(K.life);
+    if (life > lifeMax) lifeMax = life;
+    a[p] = x + dx * 0.8; a[p + 1] = y; a[p + 2] = z + dz * 0.8; a[p + 3] = clock + Math.random() * 0.2;
+    b[p] = dx; b[p + 1] = dz; b[p + 2] = vr; b[p + 3] = rr(K.vy) * (0.7 + 0.3 * k);
+    c[p] = rr(K.s0); c[p + 1] = rr(K.s1) * (0.75 + 0.25 * k); c[p + 2] = life; c[p + 3] = K.a * (0.6 + 0.4 * k);
+    const reach = vr / K.kd;
+    d[p] = Math.random(); d[p + 1] = (Math.random() - 0.5) * 0.3; d[p + 2] = terrainH(x + dx * reach, z + dz * reach, zi); d[p + 3] = K.kd;
+    for (const key of AKEYS) A[key].addUpdateRange(p, 4);
+  }
+  for (const key of AKEYS) A[key].needsUpdate = true;
   alive = Math.max(alive, clock + lifeMax + 0.2);
   mesh.visible = true;
 }
