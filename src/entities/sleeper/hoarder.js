@@ -364,9 +364,12 @@ export function makeHoarder(idx, cfg) {
     const w = makeWard(L, i, 3.4);
     // (fifth-ward) a fifth ward (Pallid Bank, the Burned Ground, the Shelf) used to ride arm 0
     // again at s + 0.06: 1.3 u from ward 1 (the remembered one), so it read as the same ward
-    // and lit with it. It takes arm 7 now, the free arm fanned on the silt beside arm 0.
-    w.arm = i <= WARD_ARMS.length ? WARD_ARMS[i - 1] : FIFTH_ARM;
-    w.s = WARD_S;
+    // and lit with it. It takes arm 7 now, the free arm fanned on the silt beside arm 0,
+    // further out (s 0.40: the arms converge at the mantle, and at 0.22 it sat 4.4 u from
+    // ward 1, ring to ring; at 0.40 it stands 6-7 u off its neighbours, near the others' ~8).
+    const fifth = i > WARD_ARMS.length;
+    w.arm = fifth ? FIFTH_ARM : WARD_ARMS[i - 1];
+    w.s = fifth ? 0.40 : WARD_S;
     w.rev = 0;                                                    // dark until the sonar rings them
     L.sigils.push(w);
   }

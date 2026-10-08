@@ -58,7 +58,7 @@ W.wardNormal = g => V(0, 0, 1).applyQuaternion(g.grp.getWorldQuaternion(new THRE
 // over n frames, then dwell d frames. Returns the frame index (relative) the ward lit, or -1.
 W.approach = (L, g, o = {}) => {
   const n = o.frames || 30, dwell = o.dwell || 12, far = o.far || 9, near = o.near == null ? 1.2 : o.near;
-  const wasLit = g.lit;
+  const wasLit = g.lit, pre = L.sigils.map(q => q.lit);
   let litAt = -1, k = 0;
   const target = () => {
     const nn = W.wardNormal(g);
@@ -70,6 +70,7 @@ W.approach = (L, g, o = {}) => {
     return p;
   };
   P.pos.copy(target()); P.vel.set(0, 0, 0);
+  if (L.pPrev) L.pPrev.copy(P.pos);   // he arrives at the start point; no teleport sweep across the body
   W.run(1, () => { P.pos.copy(target()); P.vel.set(0, 0, 0); });   // pPrev settles at the start
   W.run(n + dwell, i => {
     k = i + 1;
@@ -78,7 +79,8 @@ W.approach = (L, g, o = {}) => {
     P.pos.copy(target()); P.vel.set(0, 0, 0);
   });
   if (!wasLit && g.lit && litAt < 0) litAt = n + dwell;
-  return { litAt, dist: +P.pos.distanceTo(g.grp.position).toFixed(2), segDist: +g.grp.position.distanceTo(P.pos).toFixed(2) };
+  const alsoLit = L.sigils.map((q, j) => (!pre[j] && q.lit && q !== g) ? j : -1).filter(j => j >= 0);
+  return { litAt, alsoLit, dist: +P.pos.distanceTo(g.grp.position).toFixed(2), segDist: +g.grp.position.distanceTo(P.pos).toFixed(2) };
 };
 // what a ward looks like right now
 W.look = (L, g) => {
