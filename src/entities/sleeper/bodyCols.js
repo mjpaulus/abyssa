@@ -283,6 +283,7 @@ export function resolveBodyCols(player, dt, grounded) {
   const p = player.pos, v = player.vel;
   { const dx = p.x - bx, dy = p.y - by, dz = p.z - bz; if (dx * dx + dy * dy + dz * dz > (bRad + 3) * (bRad + 3)) return 0; }
   const idt = dt > 1e-5 ? 1 / dt : 0;
+  let shellLeft = PUSH_MAX;                        // the shell's whole shove this frame, all samples
   for (let it = 0; it < 2; it++) {
     // the limbs
     const nRes = BODYCOLS.claws ? nC : nLeg || nC;
@@ -360,7 +361,9 @@ export function resolveBodyCols(player, dt, grounded) {
         if (grounded && ny < 0.75) { const h = Math.hypot(nx, nz); if (h < 1e-4) continue; pen *= 1 / h; nx /= h; ny = 0; nz /= h; }
         // (her shell coming DOWN onto him turns into a sideways shove: never more than
         // PUSH_MAX a frame, or a footfall's dip threw him metres in one frame — measured 12 u)
-        if (pen > PUSH_MAX) pen = PUSH_MAX;
+        if (pen > shellLeft) pen = shellLeft;
+        if (pen <= 1e-5) continue;
+        shellLeft -= pen;
         p.x += nx * pen; p.y += ny * pen; p.z += nz * pen;
         BODY.contacts++; BODY.push += pen; BODY.last = 'shell'; BODY.shell = true;
         let pvx = 0, pvy = 0, pvz = 0;
