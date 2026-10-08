@@ -2176,7 +2176,7 @@ const CZ_HEEL = -0.16, CZ_FLAT = 0.02, CZ_BALL = 0.315;
 // 2.70 -> 2.90 (salprop, the longer thigh): measured on the fixed-step harness, the same
 // seabed run, 118 -> 110 steps/min, step / leg 0.89 -> 0.95 (the leg is 1.50 now, not 1.39).
 const GAIT_STRIDE0 = 2.9;
-const GAIT = { polar: 1, kLand: 7, kBand: 42, relAge: 0.2, revPitch: 0.5, crouch: 0.10, kVel: 12, center: 0, stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, rise: 30,
+const GAIT = { shufFree: 1, catchBind: 1, overFb: 2.5, catchLong: 0.18, polar: 1, kLand: 7, kBand: 42, relAge: 0.2, revPitch: 0.5, crouch: 0.10, kVel: 12, center: 0, stride: GAIT_STRIDE0, kMid: 13, kIdle: 8, kCap: 4, soft: 0.03, rise: 30,
   hoStart: HO_START, thOff: TH_OFF, thPow: TH_POW, thStrike: TH_STRIKE, claimPow: 2,
   // THE WEIGHTED SUIT (Michael, 2026-10-01: "his swimming and walking still dont seem like a person
   // in a weighted suit would move"; docs/superpowers/specs/sal-weighted-suit-motion.md). Every
@@ -2297,7 +2297,8 @@ function foot() {
     ln: false, lnU: 0, lnX: 0, lnY: 0, lnZ: 0,  // first step off a stand: launch point + swing progress at launch
     ex: 0, ez: 0, pin: false,      // the slip probe's last anchor-equivalent point, and whether it was planted
     sp: -1, early: false, swS: 1, age: 0, kPrev: -1,  // stance progress (-1 in the air), early toe-off, and where that swing began
-    lx: 0, ly: 0, lz: 0            // (sealegs) a deck anchor in RAFT-LOCAL space
+    lx: 0, ly: 0, lz: 0,           // (sealegs) a deck anchor in RAFT-LOCAL space
+    spE: 0, spI: 0, spOk: false, swung: false, land: 0, landV: 0, gap: 0, over: 0   // (sweep) the eased roll-through + a landing still to finish
   };
 }
 const ftR = foot(), ftL = foot();
@@ -2529,6 +2530,7 @@ let shufD2 = 0.075;
 let shufX = 0;                     // weight roll onto the planted boot during a shuffle step
 // hoisted: two array literals per frame were the rig's last allocations
 const LEGS = [diver.legR, diver.legL], FTS = [ftR, ftL];
+window.__fts = FTS;   // probe surface: the two boots' stance state (sweep gap probes)
 // ---- the ground is boss ----
 function driveLegs(dt, player, ikOn, amp, stepRate) {
   const legs = LEGS, fts = FTS;
@@ -2666,6 +2668,17 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       ft.ax = ft.wx - sy * rs - ox; ft.az = ft.wz - cy * rs - oz;
       ft.ay = soleB + groundD(ft.ax + ox, ft.az + oz) - oy;   // the ground at the ANCHOR (the rockers add the rest)
       ft.deck = onDeck; ft.planted = true; ft.ln = false;
+      // (sweep) A STOP CLAIMS A BOOT THAT IS STILL COMING DOWN. The catch step ends on the clock
+      // (walkP reaches catchTo) and standing takes both boots at once, so the catch boot was
+      // claimed on its heel (or, backing, its ball) a centimetre or more up, and stood flat in
+      // that same frame. It starts its stance from the landing pose it actually has and rolls
+      // flat (below), and the last of its fall is finished as a fall, not a snap.
+      ft.spI = sp;
+      if (standing && ft.swung && gb > 0.5) {
+        ft.spI = revF > 0.5 ? 1 : 0;
+        ft.land = clamp(ft.gap, 0, 0.2); ft.landV = 0.3;
+      } else ft.land = 0;
+      ft.spOk = false;
       if (!ft.span) markFootfall(ft, sgn, ox, oz);
       // A reverse plant IS the footfall (toe down behind him), and it lands at lp = duty,
       // which the per-step duty draw moves — so backing up fires its footfall here, on
@@ -2753,7 +2766,19 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     // ---- TARGET. One world-space ankle point, however it was arrived at. ----
     let th, cz, wIK, rl = 0;
     if (inStance) {
-      rollThrough(sp, _vB); th = _vB.x + groundPitch(ft.ax + ox, ft.az + oz); cz = _vB.y;
+      // (sweep) THE ROLL-THROUGH NEVER JUMPS. Standing parks both boots at sp 0.30 (flat) and the
+      // walk takes them back onto the clock, so every start and stop used to snap a planted
+      // boot's pitch in one frame: a boot landing on its heel was stood flat with the leg at full
+      // stretch, which lifts the sole ~4-5 cm (the heel is the lowest point of a toe-up boot),
+      // and a start stood a flat boot on its toes. The pose follows the clock at a slew rate that
+      // never binds while walking (above the clock's own rate) and spends ~0.1 s on a handoff,
+      // which is time the pelvis spring needs to bring the hips down to it.
+      let spP = sp;
+      if (!ft.spOk) { ft.spE = ft.spI; ft.spOk = true; }
+      else { const r = (SAL.spSlew + 1.6 * stepRate / ft.duty) * dt; ft.spE += clamp(sp - ft.spE, -r, r); }
+      if (SAL.spSlew > 0) spP = ft.spE;
+      rollThrough(spP, _vB); th = _vB.x + groundPitch(ft.ax + ox, ft.az + oz); cz = _vB.y;
+      if (ft.land > 0) { ft.landV += 9.8 * dt; ft.land = Math.max(0, ft.land - ft.landV * dt); }
       rl = groundRoll(ft.ax + ox, ft.az + oz);
       ankleOverContact(th, cz, _vC);
       // THE ROCKERS. The point in contact is not the anchor: the foot pivots on its HEEL
@@ -2765,7 +2790,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // ...and the ground under the rolling contact, not the anchor's: on a grade the heel
       // and ball rest on seabed a few cm above or below the flat-foot point.
       const gRoll = rs !== 0 ? groundD(ft.ax + ox + sy * rs, ft.az + oz + cy * rs) - groundD(ft.ax + ox, ft.az + oz) : 0;
-      _vD.set(ft.ax + ox + sy * (_vC.z + rs), ft.ay + oy + gRoll + _vC.y + ft.lift, ft.az + oz + cy * (_vC.z + rs));
+      _vD.set(ft.ax + ox + sy * (_vC.z + rs), ft.ay + oy + gRoll + _vC.y + ft.lift + ft.land, ft.az + oz + cy * (_vC.z + rs));
       // The ground keeps the boot to the very end of stance, in either direction, and the
       // hand-back to the curves happens in the AIR (early swing, below). Handing back on
       // the ground let the authored pose push the ball 6-8 cm into the seabed at every
@@ -2799,7 +2824,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
       // what lands — a heel's length short of that. Backing up lands on the ball, behind.
       const halfS = DUTY * strideNow * ft.stride * slopeK * 0.5;
       const aF = halfS - 0.05 - GAIT.center + (CZ_HEEL - CZ_FLAT), aR = -halfS - 0.05 - GAIT.center + (CZ_BALL - CZ_FLAT);
-      const ahead = aF + (aR - aF) * revF + (gaitState === 3 ? 0.18 : 0) * (1 - 2 * revF);
+      const ahead = aF + (aR - aF) * revF + (gaitState === 3 ? GAIT.catchLong : 0) * (1 - 2 * revF);
       const latL = sgn * (HIP_X + gWide) + ft.lat;
       let lx = player.pos.x + player.vel.x * tRem + sy * ahead + cy * latL;
       let lz = player.pos.z + player.vel.z * tRem + cy * ahead - sy * latL;
@@ -2919,6 +2944,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     }
     ft.kPrev = ikOn > 0.5 ? _ik[2] : -1;
     if (i === 0) { ikDebug.clampR = ikClamped; ikDebug.overR = ikOver; } else { ikDebug.clampL = ikClamped; ikDebug.overL = ikOver; }
+    ft.over = inStance && ft.planted ? ikOver : 0;
     // A stance anchor the leg genuinely CANNOT reach — he was shoved, the ground moved,
     // the raft dropped away — releases early and takes a new step. The threshold is 60 mm
     // of overrun, not merely touching the clamp: at the ends of a long stance the leg is
@@ -2967,7 +2993,12 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     if (inStance && ft.pin) ft.slip += Math.hypot(ex - ft.ex, ez - ft.ez);   // accumulated intra-stance travel
     ft.ex = ex; ft.ez = ez; ft.pin = inStance && ft.planted;
     ft.wx = nx; ft.wy = _vB.y - _vC.y; ft.wz = nz; ft.cz = cz;
+    // (sweep) the boot's real clearance: its LOWEST sole point (heel or ball, whichever the pitch
+    // puts down) over the ground under it — what a stop's forced claim has left to fall
+    { const c = Math.cos(thAbs), s = Math.sin(thAbs), yH = -(SOLE_Y * c - CZ_HEEL * s), yB = -(SOLE_Y * c - CZ_BALL * s);
+      ft.gap = _vB.y - Math.max(yH, yB) - (soleB + groundD(nx, nz)); }
     if (i === 0) { ikDebug.wxR = nx; ikDebug.wyR = ft.wy; ikDebug.wzR = nz; } else { ikDebug.wxL = nx; ikDebug.wyL = ft.wy; ikDebug.wzL = nz; }
+    ft.swung = !inStance; if (!inStance) { ft.spOk = false; ft.land = 0; }
     if (i === 0) { ikDebug.slipR = ft.slip; ikDebug.plR = (ft.planted ? 1 : 0) + (inStance ? 2 : 0) + (ft.stT >= 0 ? 4 : 0); ikDebug.dR = ft.duty; }
     else { ikDebug.slipL = ft.slip; ikDebug.plL = (ft.planted ? 1 : 0) + (inStance ? 2 : 0) + (ft.stT >= 0 ? 4 : 0); ikDebug.dL = ft.duty; }
   }
@@ -2993,7 +3024,7 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
 // ===========================================================================
 // Live knobs (-1 = auto). vp is the valve pose (Lsx, Lsz, Lsy, Le): the hand to the
 // bonnet's side port, tuned on the rig from a contact sheet of six candidates.
-const SAL = { look: true, react: 1, lean: 1, valve: -1, peer: -1, slope: true, grab: -1, vp: [-1.35, 1.2, -0.85, -2.05],
+const SAL = { spSlew: 1.5, look: true, react: 1, lean: 1, valve: -1, peer: -1, slope: true, grab: -1, vp: [-1.35, 1.2, -0.85, -2.05],
   pp: [-1.3, -0.1, 0.3, -0.7] };   // pp: the peer pose (Rsx, Rsz, Rsy, Re) — lantern up and forward
 window.__sal = SAL;
 // look-at: game.js hands over the nearest thing worth looking at (or null)
@@ -3222,16 +3253,24 @@ function pelvisDrop(dt, player, gw) {
       const ft = FTS[i], sgn = LEG_CH[i][4];
       _hj.set(sgn * HIP_X, 0, 0).applyMatrix4(_mH);
       hc += _hj.y * 0.5;
-      if (ft.tw < 0.02 || i === rel) continue;
+      // (sweep) THE CATCH STEP IS SHORT AND LANDS LONG (0.3 s, +0.18 u): bound only by its IK
+      // weight the landing boot's claim arrived in its last two or three frames, the hips were
+      // still up and the boot hung 4-8 cm off the planks (more on the downhill side of a rolled
+      // deck) when standing took it. In the catch the swinging boot's claim binds from mid-swing.
+      const twE = gaitState === 3 && ft.sp < 0 && GAIT.catchBind ? Math.max(ft.tw, ss(0.25, 0.6, ft.swp)) : ft.tw;
+      if (twE < 0.02 || i === rel) continue;
       const dx = ft.tx - ft.px - _hj.x, dz = ft.tz - ft.pz - _hj.z, dh2 = dx * dx + dz * dz;
       // how high this hip may be and still reach this ankle with the knee at kCap
       const top = ft.ty + Math.sqrt(Math.max(dCap * dCap - dh2, 0.01));
       // a swing boot's claim fades in with its IK weight (squared: it only binds late)
-      const lim = top - _hj.y + (1 - Math.pow(ft.tw, GAIT.claimPow)) * 0.6;
+      const lim = top - _hj.y + (1 - Math.pow(twE, GAIT.claimPow)) * 0.6;
       if (i === 0) ikDebug.limR = lim; else ikDebug.limL = lim;
       need = need > 1e8 ? lim : smin(need, lim, GAIT.soft);
       // a boot all but down (the last stretch of its swing) has a knee to keep in the band too
-      const down = ft.sp >= 0 && ft.planted;
+      // (sweep) ...but not a boot he is stepping in (the shuffle): it is in the air, its knee is
+      // free, and its floor rising with the lift held the hips up while the other boot was still
+      // landing (measured: the catch boot of a stop left 3-6 cm off the planks for ~0.15 s)
+      const down = ft.sp >= 0 && ft.planted && (ft.stT < 0 || !GAIT.shufFree);
       if ((down || ft.tw > 0.9) && dBand * dBand > dh2) {
         const fl = ft.ty + Math.sqrt(dBand * dBand - dh2) - _hj.y;
         if (fl > lowP) lowP = fl;
@@ -3259,6 +3298,15 @@ function pelvisDrop(dt, player, gw) {
   // over-reaches instead, and walking, that over-reach is its toe-off (driveLegs).
   if (gaitState >= 2) tgt = Math.max(tgt, hipTop - hc - GAIT.crouch);
   // (sealegs) the heave in the knees: a sink is free, a rise only where the legs still reach
+  // (sweep) THE PLANTED BOOT IS A CONTRACT, SO THE HIPS YIELD. The ceiling above is a forecast
+  // (last frame's targets, a soft min, a knee-cap reach); where it was wrong a planted boot was
+  // left hanging at the end of a straight leg until the next estimate caught up: measured on a
+  // gale-rolled deck, the first step's downhill landing and a stop's lead boot 3-4 cm off the
+  // planks for ~0.1 s. What the solver could not reach last frame lowers the hips this frame.
+  if (GAIT.overFb > 0) for (let i = 0; i < 2; i++) {
+    const ft = FTS[i];
+    if (ft.planted && ft.sp >= 0 && ft.over > 0.002) tgt = Math.min(tgt, pelS.x - ft.over * GAIT.overFb);
+  }
   if (seaHeave < 0) tgt += seaHeave;
   else if (seaHeave > 0) tgt = Math.min(tgt + seaHeave, pelNeed < 1e8 ? Math.max(tgt, pelNeed) : tgt + seaHeave);
   ikDebug.low = low;
