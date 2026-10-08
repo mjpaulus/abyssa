@@ -485,6 +485,7 @@ export function makeBrooder(idx, cfg) {
     const perp = V3(-out.z, 0, out.x);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
+    L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
     // (the old nest's spot, kept only as the start of her trail: the tracks run in from 95 u
     // out past it, exactly where they always began)
     const nest = lip.clone().addScaledVector(perp, R * 2.8);
@@ -1637,9 +1638,16 @@ export function updateBrooder(L, dt, t, player) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
     if (dist < (L.toNest ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
       L.walkTo = null;
-      if (L.toNest) { L.toNest = false; L.standTarget = 0; }  // home: settle over the brood
+      if (L.toNest) { L.toNest = false; L.homeTurn = true; }   // home: turn to her bed, then settle over the clutch
     }
     else { want = Math.atan2(dx, dz); speed = L.speed * 0.30; }
+  } else if (L.homeTurn) {
+    // (brooder-clutch) she turns back to the heading she slept on, and she will not lie down
+    // on a diver: while he is under her shell she stands over him, calm, until he walks out
+    want = L.lairYaw;
+    let dA = L.lairYaw - L.yaw; dA = Math.atan2(Math.sin(dA), Math.cos(dA));
+    const under = Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY;
+    if (Math.abs(dA) < 0.12 && !under) { L.homeTurn = false; L.standTarget = 0; }
   } else if (hunt && L._pdT < (thief ? 400 : 90)) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
     // given up, she sweeps her front slowly across the cloud, searching. A thief she never

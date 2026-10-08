@@ -743,8 +743,10 @@ export function makeBrood(L, idx, trailFrom) {
   // sheds; loose beads sink and settle; the trail announces itself once each as it is found.
   B.update = (dt, player, ev) => {
     B.t += dt;
+    B.locked = !!L.calmed;                     // stilled, her clutch is hers: no more takes
     // calmed she keeps it clamped under her (it does not spill again where she settles)
-    B.st = L.calmed ? 1 : L.standE;
+    // (home on her bed, at the heading she was seated on, it spills again as she settles)
+    B.st = L.calmed && (L.homeTurn || L.walkTo || Math.abs(Math.atan2(Math.sin(L.yaw - (L.lairYaw ?? L.yaw)), Math.cos(L.yaw - (L.lairYaw ?? L.yaw)))) > 0.2) ? 1 : L.standE;
     liveLobes();
     const uN = matN.userData.u, uF = matF.userData.u, uS = sMat.userData.u;
     uN.uStand.value = uF.uStand.value = uS.uStand.value = B.st;
@@ -753,9 +755,11 @@ export function makeBrood(L, idx, trailFrom) {
     // collapses the rest, but a collapsed vertex still runs): the clutch spans ~12 u
     if (B.beadsN) {
       _a.fromArray(MASS_C).applyMatrix4(L.body.matrixWorld);
-      const dc = _a.distanceTo(camera.position), on = !B.off;     // (B.off: the dev A/B, the whole clutch out)
+      // (the gate holds off for the first 12 s of her clock: the boot's precompile and warm
+      // frames must see every set, or its program builds on first sight, mid-dive)
+      const dc = B.t < 12 ? 0 : _a.distanceTo(camera.position), on = !B.off;     // (B.off: the dev A/B, the whole clutch out)
       B.beadsN.visible = on && dc < LOD_N + 14;
-      B.beadsF.visible = on && dc > LOD_N - 14 && dc < LOD_F + 14;
+      B.beadsF.visible = on && (B.t < 12 || (dc > LOD_N - 14 && dc < LOD_F + 14));
       B.setae.visible = on && dc < 40;
       B.core.visible = on;
     }

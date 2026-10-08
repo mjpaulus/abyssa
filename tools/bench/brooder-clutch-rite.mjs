@@ -103,7 +103,14 @@ await sleep(500);
 console.log('after the return', JSON.stringify(await st()));
 await snap('pressed-back');
 await c.key('KeyC', true); await sleep(1500); await c.key('KeyC', false);
-for (let i = 0; i < 14; i++) { await sleep(2000); if (i % 3 === 0) await snap('home-' + i); }
+// calmed: she will not lie down on him. He walks out from under her (W, away from her centre)
+await sleep(2500); await snap('calm-over-him');
+console.log('calm, before walking out', JSON.stringify(await st()), 'homeTurn', await c.ev(`!!__sl.homeTurn`));
+await c.key('KeyW', true);
+{ const t0 = Date.now(); while (Date.now() - t0 < 7000) { await c.ev(`(player.yaw = Math.atan2(player.pos.x - __sl.pos.x, player.pos.z - __sl.pos.z), player.pitch = -0.05, 1)`); await sleep(120); } }
+await c.key('KeyW', false);
+console.log('walked out', JSON.stringify(await st()));
+for (let i = 0; i < 5; i++) { await sleep(2000); await c.ev(`(player.yaw = Math.atan2(__sl.pos.x - player.pos.x, __sl.pos.z - player.pos.z), player.pitch = -0.12, 1)`); await snap('home-' + i); }
 console.log('end', JSON.stringify(await st()));
 console.log('msgs', JSON.stringify(await c.ev(`__msgs`)));
 const rl = await c.ev(`__rl`);
