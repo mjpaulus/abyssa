@@ -43,7 +43,7 @@ import { terrainH, terrainNormal } from './terrain.js';
 import { wreckSites } from './wrecks.js';
 import { siteParams, stream } from './site.js';
 import { activeVents } from './vents.js';
-import { rockColliders, F_TRANS } from './flora.js';
+import { rockColliders, F_TRANS, FLORA_SITE, F_SITE_HEAD, F_SITE } from './flora.js';
 import { bladeMapSet } from '../lib/textures.js';
 import { windState } from './water.js';
 import { uPush, uPushV, uJolt, PUSH_GLSL, PUSH_N, tickStir } from './stir.js';
@@ -443,10 +443,11 @@ function gardenMat(o) {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>' + V_HEAD)
       .replace('#include <begin_vertex>', '#include <begin_vertex>' + V_BODY);
+    Object.assign(sh.uniforms, FLORA_SITE);   // (sweep) the site's growth tint (flora.js)
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>' + F_HEAD)
+      .replace('#include <common>', '#include <common>' + F_HEAD + F_SITE_HEAD)
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + F_DITHER)
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}')
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\nfloat floraThin = 0.0;\n{' + F_BODY + '\n}' + F_SITE)
       .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n' + F_TRANS + F_SSSL);
     if (m.defines.GD_NODITHER) sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', F_FOGFADE);
     injectStrokes(sh);   // SILHOUETTE STROKES (lib/paint.js): the plants are organic
