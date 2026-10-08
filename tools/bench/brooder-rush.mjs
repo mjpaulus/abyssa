@@ -49,7 +49,8 @@ while (Date.now() - t0 < 9000) {
   if (!process.env.NOBURST && !burst && Date.now() - burstAt > 150) { await c.ev(`(player.pitch = -0.1, 1)`); await c.key('Space', true); burst = true; }
   if (burst && !burstDone && Date.now() - burstAt > 1300) { await c.key('Space', false); await c.key('KeyC', true); burstDone = true; }
   if (process.env.SHOTS && Date.now() - t0 > shot * 700) { await c.png(OUT + shot + '.png'); shot++; }
-  const u = await c.ev(`__B.BODY.under`);
+  // under her: within 0.8 R of her centre on the plan (geometric, so main measures the same)
+  const u = await c.ev(`Math.hypot(player.pos.x - __sl.pos.x, player.pos.z - __sl.pos.z) < 0.8 * __sl.R`);
   if (u) { under++; if (under > 4) break; }
   await sleep(100);
 }
