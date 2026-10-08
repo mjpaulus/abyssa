@@ -1,4 +1,13 @@
-// Real-input swim probe over CDP. usage: node drive.mjs <dbgPort> <scenario> <out.json>
+// SWIM PROBE (roadmap/swim-stroke-missing.md): real keydown/keyup over CDP against a bench host
+// (tools/bench/cdp.mjs start), a per-frame log of Sal's swim state (grounded, buoy, jet, swimP,
+// speed, hand positions in the body frame and on screen, arm joint angles, window.__swimState),
+// and optional in-page frame captures from the game camera.
+//   node drive.mjs <dbgPort> <scenario> <out.json>     scenarios: mid midS long cruise low seabed burst vent
+//   env: SHOTS=<dir> (frames during W/S holds), SHOT_MS, CROP='[x0,y0,x1,y1]' (fractions), SC (scale),
+//        SIDE=<u> (a side lens riding with him), ALT3=1 (enter by the real Alt+3 playtest jump)
+//   one.sh <dbgPort> <httpPort> <tag> <scenario>   fresh load + __bench.setup('z0') + drive
+//   analyze.mjs log.json...   (TAIL=<s>: last s of each segment) | cyc.mjs <seg> <skip> log.json... (whole strokes)
+//   strip.py <shotdir> <W|S> <out.png> [n] [label]   one stroke cycle binned by phase
 import { writeFileSync, mkdirSync } from 'node:fs';
 const SHOTS = process.env.SHOTS, SHOT_MS = +(process.env.SHOT_MS || 400);
 const [, , DBG, SCEN, OUT] = process.argv;

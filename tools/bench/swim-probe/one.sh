@@ -1,7 +1,7 @@
 #!/bin/zsh
 # usage: one.sh <dbgPort> <httpPort> <tag> <scen>   (fresh load, sets up z0, runs the scenario)
 P=$1; H=$2; TAG=$3; s=$4
-CDP=/Users/michaelpaulus/sc/.abyssa-wt/swimfix/tools/bench/cdp.mjs
+CDP=$(dirname $0)/../cdp.mjs
 export BENCH_DBG_PORT=$P
 timeout 20 node $CDP goto "http://localhost:$H/?bench&playtest" >/dev/null
 sleep 3
