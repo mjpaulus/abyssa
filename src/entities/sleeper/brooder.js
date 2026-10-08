@@ -113,6 +113,9 @@ const HAMMER_T = 2.6;
 // still throws him clear of her front (~20 u) and keeps her in his view as she comes on.
 // guardUp: how far (rad) the minor claw's guard rises off her mouth when a diver is close
 // under her face.
+// THE BROODING CROUCH (brooder-clutch): drop (shell units off the standing height), lean
+// (rad toward the diver under her), clear (u: the belly over his helmet never comes lower)
+export const CROUCH = { drop: 0.16, lean: 0.16, clear: 4.6 };
 export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -211,7 +214,10 @@ export function makeBrooder(idx, cfg) {
   const L = {
     ...c, idx, R, size: c.size, grp, body, t: 0, agitation: 0, calmed: false, calmT: 0,
     sonarWards: false, guardWards: false, reveal: 0, rang: false, hinted: false, pendingMsg: null,
-    reach: 5, collR: 0.33 * R, flare: 0,
+    // (brooder-clutch) her wards are on her underside, 8-13 u over the floor when she stands
+    // on the rift lip (the crest lifts her): 6 u of reach makes the near ones a hop and the
+    // high hip ward a short burst (it was 5: every ward but the nearest needed a full burst)
+    reach: 6, collR: 0.33 * R, flare: 0,
     pos: V3(), yaw: 0, vel: V3(), stand: 0, standE: 0, standTarget: 0, threat: 0, threatE: 0, threatTarget: 0,
     walkTo: null, bodyY: 0, head: V3(), spine: COLL.map(() => V3()), sigils: [], feet: [], _pd: 1e9,
     uni: { uTime: { value: 0 } },
@@ -1218,12 +1224,36 @@ function poseAll(L, dt, player) {
   if (!(dt > 0) || !L.gG) { L.gG = { x: gy, v: 0 }; L.gP = { x: pit, v: 0 }; L.gRl = { x: rol, v: 0 }; }
   else { gy = spr(L.gG, gy, 4.5, 1, dt); pit = spr(L.gP, pit, 4.5, 1, dt); rol = spr(L.gRl, rol, 4.5, 1, dt); }
   const breath = (0.012 * Math.sin(L.t * 0.45) + 0.004 * Math.sin(L.t * 1.07 + 1)) * (1 - hc);
-  L.bodyY = gy + R * (lerp(0.06, 0.44, hv) + 0.10 * L.threatE + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  // THE BROODING CROUCH (brooder-clutch): a diver UNDER her shell (at her wards, at the clutch
+  // hanging there) and she bears down on him: the legs bend, the body comes down 2.5 u and
+  // leans over him, her threat lift dropped. Standing on the rift lip she rides the crest
+  // 13-15 u up (sole floor), which put her wards 8-13 u and the clutch ~9 u over the floor;
+  // the lean pivots on that crest, so the side over him comes down. The belly over his
+  // helmet is kept >= CROUCH.clear u off the floor (measured last frame, L.bellyOver).
+  if (!L.crouch) L.crouch = S();
+  {
+    let cw = 0;
+    if (player && !L.dormant && !L.calmed && !L.hold && L.standE > 0.9) {
+      const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z;
+      if (Math.hypot(px, pz) < 0.85 * R && player.pos.y < L.bodyY - 0.08 * R) cw = 1;
+    }
+    if (L.bellyOver < CROUCH.clear) cw = Math.min(cw, L.crouch.x - 0.15);
+    spr(L.crouch, clamp(cw, 0, 1), 1.4, 0.95, dt > 0 ? dt : 1);
+  }
+  const cK = L.crouch.x;
+  L.bodyY = gy + R * (lerp(0.06, 0.44 - CROUCH.drop * cK, hv) + 0.10 * L.threatE * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
+  // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
+  let leanP = 0, leanR = 0;
+  if (cK > 0.01 && player) {
+    const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z, cy2 = Math.cos(L.yaw), sy2 = Math.sin(L.yaw);
+    const lx = (px * cy2 - pz * sy2) / R, lz = (px * sy2 + pz * cy2) / R, ll = Math.max(0.35, Math.hypot(lx, lz));
+    leanP = CROUCH.lean * cK * lz / ll; leanR = -CROUCH.lean * cK * lx / ll;
+  }
   // hunched: standing, the front drops over the diver; threat lifts it to show the face.
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
-  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x, L.yaw, rol - 0.025 * hc + L.bR.x);
+  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE * (1 - cK) - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x + leanP, L.yaw, rol - 0.025 * hc + L.bR.x + leanR);
   // the sole stays on the ground (L.grp sits at the origin, so body.matrix IS its world)
   b.updateMatrix();
   // (asleep the floor is off; it comes on through the heave, so the rise lifts her OUT)
@@ -1233,6 +1263,13 @@ function poseAll(L, dt, player) {
   if (pen > 0) { b.position.y += pen; L.bodyY += pen; }
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
+  // the belly over his helmet, off the floor under him (the crouch's limit, next frame)
+  if (player) {
+    _v.copy(player.pos).applyMatrix4(_inv);
+    _v.y = L.brood && L.brood.seated ? L.brood.underY(_v.x, _v.z, -0.125) : -0.125;
+    _v.applyMatrix4(b.matrixWorld);
+    L.bellyOver = _v.y - terrainH(player.pos.x, player.pos.z, L.idx);
+  } else L.bellyOver = 99;
 
   for (let li = 0; li < 8; li++) {
     _lp.copy(L.feet[li].cur);

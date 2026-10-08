@@ -40,7 +40,7 @@ import { lanternWorldPos } from '../diver.js';
 import * as G from './brooderGeo.js';
 
 const TAU = Math.PI * 2;
-const TAKE_R = 2.6;                     // reach from his hands/helmet to the mass's surface (world u)
+const TAKE_R = 2.6, RET_R = 3.4;        // reach from his hands/helmet to the mass's surface (world u): pry / press back (up, arm raised)
 const RB = 0.0052;                      // bead radius, shell units (x R 15.4 = 0.08 u)
 const MAXB = 14000;                     // bead budget (the clutch); the build thins to it
 const LOD_N = 12, LOD_F = 55;           // near (80-tri) / far (20-tri) / core-only ranges, world u
@@ -56,7 +56,10 @@ const _a = V3(), _b = V3(), _lant = V3();
 const MAIN = [
   [0, -0.215, -0.26, 0.16], [0.15, -0.20, -0.18, 0.13], [-0.15, -0.20, -0.18, 0.13],
   [0.13, -0.21, -0.38, 0.13], [-0.13, -0.21, -0.38, 0.13], [0, -0.20, -0.05, 0.12],
-  [0, -0.21, -0.48, 0.11], [0.06, -0.30, -0.30, 0.10], [-0.06, -0.30, -0.24, 0.10]
+  [0, -0.21, -0.48, 0.11], [0.06, -0.30, -0.30, 0.10], [-0.06, -0.30, -0.24, 0.10],
+  // the sag: the heaviest of it hangs lowest (the reach test counts these, so the return is
+  // ~1.3 u nearer the floor than the apron's own bead line)
+  [0.03, -0.39, -0.29, 0.085], [-0.04, -0.40, -0.21, 0.075]
 ];
 const SPILL_MAX = 8;
 const MASS_C = [0, -0.23, -0.27];
@@ -385,8 +388,18 @@ export function makeBrood(L, idx, trailFrom) {
     }
     return best;
   };
+  // the lowest point of the mass over body-local (x, z), shell units (or `none`): the
+  // crouch keeps it off the diver's helmet (brooder.js)
+  B.underY = (x, z, none) => {
+    let y = none;
+    for (let k = 0; k < B.nL; k++) {
+      const o = k * 4, r = B.live[o + 3], dx = x - B.live[o], dz = z - B.live[o + 2], q = r * r - dx * dx - dz * dz;
+      if (q > 0) { const b = B.live[o + 1] - Math.sqrt(q); if (b < y) y = b; }
+    }
+    return y;
+  };
   B.canTake = pos => !B.locked && B.held < 0 && B.reach(pos) < TAKE_R;
-  B.canReturn = pos => B.held >= 0 && B.reach(pos) < TAKE_R;
+  B.canReturn = pos => B.held >= 0 && B.reach(pos) < RET_R;
   // (playtest / probes: the old names)
   B.nearEgg = pos => (B.canTake(pos) ? 0 : -1);
   B.nearNest = pos => B.canReturn(pos);
@@ -730,7 +743,9 @@ export function makeBrood(L, idx, trailFrom) {
   // sheds; loose beads sink and settle; the trail announces itself once each as it is found.
   B.update = (dt, player, ev) => {
     B.t += dt;
-    B.st = L.standE;
+    // calmed she keeps it clamped under her (it does not spill again where she settles)
+    B.st = L.calmed ? 1 : L.standE;
+    liveLobes();
     const uN = matN.userData.u, uF = matF.userData.u, uS = sMat.userData.u;
     uN.uStand.value = uF.uStand.value = uS.uStand.value = B.st;
     uN.uTime.value = uF.uTime.value = uS.uTime.value = B.t;
