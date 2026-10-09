@@ -240,6 +240,7 @@ function jump(k) {
       label = '7 · ORUNE';
       H.enterZone(1);
       player.hasLamp = false;   // the ship's lamp is back on the hoard
+      survival.hasSonar = true;   // her wards answer only a sounding; the skiff's sonar is earlier progression
       line = 'ORUNE — ' + orune();
       refill();
       line += lineFor() + sleeperNote();

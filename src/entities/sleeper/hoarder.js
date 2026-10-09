@@ -1349,7 +1349,7 @@ export function updateHoarder(L, dt, t, player) {
           // a grab is the DRAG, not a slam: no dress tear, the line is the teaching
           L.grab = { arm: a, t: 0 };
           ev.grabbed = true;
-          ev.msg = ev.msg || 'IT HAS YOU. CUT IT.';
+          ev.msg = ev.msg || 'IT HAS YOU. CUT IT — CLICK TO SLASH.';
         }
       }
     } else if (L.still > 0) {
