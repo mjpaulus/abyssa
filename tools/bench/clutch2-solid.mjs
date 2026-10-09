@@ -34,8 +34,11 @@ let shot = 0; const snap = async n => { await c.png(DIR + PRE + '-' + n + '.png'
 const faceTake = (dy = 0, pt = -0.3) => c.ev(`(() => { const t = __sl.brood.takeAt, p = player.pos; player.yaw = Math.atan2(t.x - p.x, t.z - p.z) + ${dy}; player.pitch = ${pt}; return 1; })()`);
 // 1. walk in (the strip): the camera turned a little off his back so the tongue is in frame
 console.log('start', JSON.stringify(await st()));
-// (from OUTSIDE her rim, along the clutch's own bearing, so the lens is clear of her shell)
-await c.ev(`(() => { const t = __sl.brood.takeAt, L = __sl, a = Math.atan2(t.x - L.pos.x, t.z - L.pos.z); player.pos.x = t.x + Math.sin(a) * 6.5; player.pos.z = t.z + Math.cos(a) * 6.5; player.pos.y = __T0.terrainH(player.pos.x, player.pos.z, 0) + 1.35; player.vel.set(0, 0, 0); return 1; })()`);
+// (out past her rim first, with real keys: S held facing the clutch, so the lens is clear of her
+// shell and the walk in is long enough to read)
+await c.key('KeyS', true);
+{ const t0 = Date.now(); while (Date.now() - t0 < +(process.env.BACK || 4000)) { await faceTake(0.3, -0.3); await sleep(70); } }
+await c.key('KeyS', false); await sleep(800);
 await faceTake(0.35, -0.3); await sleep(1500);
 await snap('walkin-0'); console.log('walkin 0', JSON.stringify(await st()));
 await c.key('KeyW', true);
