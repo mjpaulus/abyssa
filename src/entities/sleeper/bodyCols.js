@@ -14,8 +14,16 @@
 // the floor never fights it), and his velocity along the normal is made to match the
 // part's own (a leg sweeping into him carries him, never tunnels; last frame's pose gives
 // each part's velocity, and a fast part is tested along its sweep).
+//   * THE CLUTCH (clutch2): the egg mass's lobes (brood.js), each a lumpy sphere in the body's
+//     own frame (centre, radius, the same lump() the drawn surface uses, so the collider IS the
+//     surface he sees). It is SOFT: he stops at the surface and slides round it (the last few
+//     centimetres ease out, only his inward speed is taken), never a blow, never a shove into
+//     the floor (on the ground it pushes sideways only, and a lobe coming down over him as
+//     she settles shoves him out from under it, never down). The camera's boom
+//     treats the lobes like the rest of her (bodyBlocked).
 // Zero per-frame allocation: fixed typed pools, module scratch.
 // OWNED BY: the sleepers (brooder.js publishes; game.js resolves and probes).
+import { lump } from './brood.js';
 
 const MAXC = 64;
 const CAP = new Float32Array(MAXC * 8), PREV = new Float32Array(MAXC * 8);   // ax ay az bx by bz ra rb
@@ -26,17 +34,24 @@ let bx = 0, by = 0, bz = 0, bRad = 0;           // a bounding sphere over everyt
 let on = false;
 // dev A/B: claws = false takes the claws out of Sal's resolve (the camera still sees them)
 export const BODYCOLS = { claws: true };
-export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, last: '' };   // probe: this frame's resolve
+export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, last: '', clutch: 0, clPush: 0 };   // probe: this frame's resolve
+// the clutch's lobes: x y z r (body-local shell units) + lump seed; the body matrix and inverse
+const MAXL = 32;
+const LOB = new Float32Array(MAXL * 4), LSD = new Float32Array(MAXL), CLM = new Float32Array(16), CLI = new Float32Array(16);
+let nLob = 0, clOk = false, clR = 1, cbx = 0, cby = 0, cbz = 0, cbr = 0;
+// soft surface: the last `skin` u of a contact eases out at rate k (/s); a frame moves him at
+// most `step` u (a lobe folding past him while she rises is a slow shove, never a throw)
+export const CLUTCHCOL = { on: true, skin: 0.15, k: 10, step: 0.3, roof: 0.3 };
 
 export function bodyColsOn() { return on; }
-export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; }
+export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; }
 
 // ---- publishing (the sleeper's pose step) -----------------------------------------------
 export function beginBodyCols() {
   for (let i = 0, n = nC * 8; i < n; i++) PREV[i] = CAP[i];   // (no subarray: a view is an allocation)
   nPrev = nC; prevOk = on && nC > 0;
   if (shellOk) { SHP.set(SHM); shellPrevOk = true; }
-  nC = 0; nLeg = 0;
+  nC = 0; nLeg = 0; clOk = false;
 }
 // everything published before this call is a leg (probe labels only)
 export function markLimbs() { if (!nLeg) nLeg = nC; }
@@ -52,6 +67,49 @@ export function setShell(proxy, m, R) {
   if (!proxy) { shellOk = false; return; }
   SHM.set(m); shellOk = true;
   invertAffine(SHM, SHI, R);
+}
+// the clutch (brood.js B.live: x y z r per lobe, shell units, body-local; seeds: lump seeds),
+// carried by the body matrix m (scale R). Lobes of radius ~0 (folded away) are skipped.
+export function setClutch(live, seeds, n, m, R) {
+  n = Math.min(n, MAXL);
+  let k = 0;
+  for (let i = 0; i < n; i++) {
+    const r = live[i * 4 + 3];
+    if (!(r > 0.002)) continue;
+    LOB[k * 4] = live[i * 4]; LOB[k * 4 + 1] = live[i * 4 + 1]; LOB[k * 4 + 2] = live[i * 4 + 2]; LOB[k * 4 + 3] = r; LSD[k] = seeds[i];
+    k++;
+  }
+  nLob = k; clR = R;
+  CLM.set(m); invertAffine(CLM, CLI, R);
+  // a world bound over the lobes (the lump reaches 1.23 r)
+  let x0 = 1e9, y0 = 1e9, z0 = 1e9, x1 = -1e9, y1 = -1e9, z1 = -1e9;
+  for (let i = 0; i < nLob; i++) {
+    const o = i * 4, lx = LOB[o], ly = LOB[o + 1], lz = LOB[o + 2], rr = LOB[o + 3] * 1.25 * R;
+    const wx = m[0] * lx + m[4] * ly + m[8] * lz + m[12], wy = m[1] * lx + m[5] * ly + m[9] * lz + m[13], wz = m[2] * lx + m[6] * ly + m[10] * lz + m[14];
+    if (wx - rr < x0) x0 = wx - rr; if (wx + rr > x1) x1 = wx + rr;
+    if (wy - rr < y0) y0 = wy - rr; if (wy + rr > y1) y1 = wy + rr;
+    if (wz - rr < z0) z0 = wz - rr; if (wz + rr > z1) z1 = wz + rr;
+  }
+  cbx = (x0 + x1) * 0.5; cby = (y0 + y1) * 0.5; cbz = (z0 + z1) * 0.5;
+  cbr = 0.5 * Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0) + (z1 - z0) * (z1 - z0));
+  clOk = nLob > 0 && CLUTCHCOL.on;
+}
+// How far inside the clutch is the LOCAL point (lx, ly, lz) grown by mL (local units)? The
+// deepest lobe's penetration (0 = clear); its index in _lk.
+let _lk = -1;
+function clutchPen(lx, ly, lz, mL) {
+  let best = 0; _lk = -1;
+  for (let i = 0; i < nLob; i++) {
+    const o = i * 4, r = LOB[o + 3];
+    const dx = lx - LOB[o], dy = ly - LOB[o + 1], dz = lz - LOB[o + 2];
+    const d2 = dx * dx + dy * dy + dz * dz, rb = r * 1.25 + mL;
+    if (d2 > rb * rb) continue;
+    const d = Math.sqrt(d2);
+    const rs = d > 1e-6 ? r * lump(dx / d, dy / d, dz / d, LSD[i]) : r;
+    const pen = rs + mL - d;
+    if (pen > best) { best = pen; _lk = i; }
+  }
+  return best;
 }
 export function endBodyCols(cx, cy, cz, rad) {
   bx = cx; by = cy; bz = cz; bRad = rad; on = true;
@@ -278,7 +336,7 @@ function capPen(A, i, f, px, y0, y1, pz) {
 // Push Sal out of her (positions, then velocities) and report the hardest closing speed
 // of any part that met him this frame (u/s; the game's slam) in BODY.hitV.
 export function resolveBodyCols(player, dt, grounded) {
-  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.last = '';
+  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.last = ''; BODY.clutch = 0; BODY.clPush = 0;
   if (!on) return 0;
   const p = player.pos, v = player.vel;
   { const dx = p.x - bx, dy = p.y - by, dz = p.z - bz; if (dx * dx + dy * dy + dz * dz > (bRad + 3) * (bRad + 3)) return 0; }
@@ -379,8 +437,49 @@ export function resolveBodyCols(player, dt, grounded) {
       _upMax = 1e9;
     }
   }
+  if (clOk) resolveClutch(p, v, dt, grounded);
   if (shellOk && underShell(p.x, p.y, p.z)) BODY.under = true;
   return BODY.contacts;
+}
+// THE CLUTCH, SOFT (see the header). His capsule against each lobe's lumped surface.
+function resolveClutch(p, v, dt, grounded) {
+  { const dx = p.x - cbx, dy = p.y - cby, dz = p.z - cbz, rr = cbr + EYE_H + SAL_R; if (dx * dx + dy * dy + dz * dz > rr * rr) return; }
+  const C = CLUTCHCOL, W = CLM, M = CLI, ease = 1 - Math.exp(-C.k * Math.max(dt, 0));
+  let left = C.step;
+  for (let it = 0; it < 2; it++) for (let i = 0; i < nLob; i++) {
+    const o = i * 4, lx = LOB[o], ly = LOB[o + 1], lz = LOB[o + 2], r = LOB[o + 3] * clR;
+    const cx = W[0] * lx + W[4] * ly + W[8] * lz + W[12], cy = W[1] * lx + W[5] * ly + W[9] * lz + W[13], cz = W[2] * lx + W[6] * ly + W[10] * lz + W[14];
+    const y0 = p.y - EYE_H + SAL_R, y1 = p.y;
+    const sy = cy < y0 ? y0 : cy > y1 ? y1 : cy;
+    let ex = p.x - cx, ey = sy - cy, ez = p.z - cz;
+    const d2 = ex * ex + ey * ey + ez * ez, rb = r * 1.25 + SAL_R;
+    if (d2 > rb * rb) continue;
+    const d = Math.sqrt(d2);
+    if (d < 1e-5) { ex = 0; ey = 1; ez = 0; } else { ex /= d; ey /= d; ez /= d; }
+    // the lump along that bearing, in her frame (the 3x3 of the inverse carries 1/R)
+    const qx = M[0] * ex + M[4] * ey + M[8] * ez, qy = M[1] * ex + M[5] * ey + M[9] * ez, qz = M[2] * ex + M[6] * ey + M[10] * ez, ql = Math.sqrt(qx * qx + qy * qy + qz * qz) || 1;
+    let pen = r * lump(qx / ql, qy / ql, qz / ql, LSD[i]) + SAL_R - d;
+    if (pen <= 0) continue;
+    let nx = ex, ny = ey, nz = ez;
+    if (grounded) {
+      // on his feet: sideways only (the floor holds him up). A lobe coming down right over him
+      // (she settles) shoves him out from under it: away from its centre, or from the mass's
+      if (ny < -0.75 || Math.hypot(nx, nz) < C.roof) {
+        let hx = p.x - cx, hz = p.z - cz, hl = Math.hypot(hx, hz);
+        if (hl < 1e-3) { hx = p.x - cbx; hz = p.z - cbz; hl = Math.hypot(hx, hz) || 1; }
+        nx = hx / hl; nz = hz / hl; ny = 0;
+      } else { const h = Math.hypot(nx, nz); nx /= h; ny = 0; nz /= h; }
+    }
+    let mv = pen > C.skin ? pen - C.skin + C.skin * ease : pen * ease;
+    if (mv > left) mv = left;
+    if (mv > 1e-6) { p.x += nx * mv; p.y += ny * mv; p.z += nz * mv; left -= mv; }
+    // only his speed INTO the eggs goes (no bounce, no carry: eggs are not a blow)
+    const vn = v.x * nx + v.y * ny + v.z * nz;
+    if (vn < 0) { v.x -= nx * vn; v.y -= ny * vn; v.z -= nz * vn; }
+    if (it === 0) { BODY.contacts++; BODY.clutch++; }
+    BODY.push += mv; BODY.clPush += mv;
+    if (!BODY.last) BODY.last = 'clutch';
+  }
 }
 // (the carry is capped: the falling claw's tip moves at tens of u/s, and handing him all of
 // it threw him 60 u — the hammer has its own designed knock. A shove, not a launch.)
@@ -413,7 +512,22 @@ export function bodyBlocked(x, y, z, m) {
     const lx = M[0] * x + M[4] * y + M[8] * z + M[12], ly = M[1] * x + M[5] * y + M[9] * z + M[13], lz = M[2] * x + M[6] * y + M[10] * z + M[14];
     if (shellPen(shell, lx, ly, lz, m / shR) > 0) { blockWhy = -1; return true; }
   }
+  if (clOk) {
+    const dx = x - cbx, dy = y - cby, dz = z - cbz;
+    if (dx * dx + dy * dy + dz * dz < (cbr + m) * (cbr + m)) {
+      const M = CLI;
+      const lx = M[0] * x + M[4] * y + M[8] * z + M[12], ly = M[1] * x + M[5] * y + M[9] * z + M[13], lz = M[2] * x + M[6] * y + M[10] * z + M[14];
+      if (clutchPen(lx, ly, lz, m / clR) > 0) { blockWhy = -3; return true; }
+    }
+  }
   return false;
+}
+// probe: is the world point inside the clutch (grown by m)? (-1 = no clutch published)
+export function inClutch(x, y, z, m = 0) {
+  if (!clOk) return -1;
+  const M = CLI;
+  const lx = M[0] * x + M[4] * y + M[8] * z + M[12], ly = M[1] * x + M[5] * y + M[9] * z + M[13], lz = M[2] * x + M[6] * y + M[10] * z + M[14];
+  return clutchPen(lx, ly, lz, m / clR) * clR;
 }
 // Is she anywhere near the boom (centre within rad + her bound)?
 export function bodyNear(x, y, z, rad) {
@@ -422,5 +536,5 @@ export function bodyNear(x, y, z, rad) {
   return dx * dx + dy * dy + dz * dz < r * r;
 }
 // probe: the published pool (dev)
-export function bodyColsState() { return { on, n: nC, shell: shellOk, prevOk, bound: [bx, by, bz, bRad] }; }
+export function bodyColsState() { return { on, n: nC, shell: shellOk, prevOk, bound: [bx, by, bz, bRad], lobes: nLob, clutch: clOk, clBound: [cbx, cby, cbz, cbr] }; }
 export function bodyColsCaps() { return Array.from(CAP.subarray(0, nC * 8)); }

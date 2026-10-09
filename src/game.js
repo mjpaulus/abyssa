@@ -12,7 +12,7 @@ import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders,
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn } from './entities/sleeper/bodyCols.js';
+import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
@@ -342,14 +342,14 @@ function setBearing(el, tx, ty, tz, show) {
 // the count; and the brood rule held Velkath's last ward cold with nothing on screen to
 // say so. Now the sleeper's own bearing mark carries a row of pips, one per ward: hollow
 // = dark, gold = lit (a fresh one swells as it takes), amber = the ward a past calm
-// remembers, a dashed cold ring = the last ward while an egg is out of the nest, with the
+// remembers, a dashed cold ring = the last ward while a clump of her clutch is out, with the
 // count and the reason beside them. Rebuilt only when the state changes (an integer key),
 // so the frame cost is a loop over at most five wards.
 const $tally = document.createElement('div');
 $tally.className = 'tally';
 $bm.lev.appendChild($tally);
 let tallyKey = -1, tallyLit = 0, tallyNoT = 0;
-function eggsOut(L) {
+function clutchOut(L) {
   const B = L && L.brood;
   return B ? B.out() : 0;          // the clump of her clutch Sal carries (brood.js)
 }
@@ -364,7 +364,7 @@ function updateTally(dt) {
     if (g.lit && !g.mem) litMask |= 1 << i;
     if (!g.lit) dark++;
   }
-  const held = dark === 1 && eggsOut(lev) > 0;
+  const held = dark === 1 && clutchOut(lev) > 0;
   key = key * 2 + (held ? 1 : 0);
   if (key === tallyKey) return;
   tallyKey = key;
@@ -520,7 +520,7 @@ addEventListener('keydown', e => {
   }
   // E near a wreck's relic: take the tool
   if (e.code === 'KeyE' && state === 'play' && lev && lev.rite) {
-    // THE RITE'S TRIGGER (the Brooder's eggs, the Hoarder's lamp): the sleeper's own
+    // THE RITE'S TRIGGER (a clump of the Brooder's clutch, the Hoarder's lamp): the sleeper's own
     // object decides what [E] does here, and hands back the line to show
     const r = lev.rite.interact(player.pos);
     if (r) {
@@ -630,7 +630,7 @@ function nextMsg() {
   while (msgQ.length && msgClock - msgQ[0].at > MSGQ_STALE) msgQ.shift();
   return msgQ.length ? msgQ.shift() : null;
 }
-// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the egg is
+// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the clump is
 // back, the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
 // whatever waits behind it shows; a waiting copy is struck too.
 function dropMsg(text) {
@@ -1042,7 +1042,7 @@ const DECK_LIFTS = [0, 0.9, 1.8, 2.7];
 let deckLift = 0, deckLiftV = 0, deckLiftT = 0;
 const boomBack = () => CAM_BACK + (DECKCAM.back - CAM_BACK) * deckK;
 const boomUp = () => CAM_UP + (DECKCAM.up - CAM_UP) * deckK;
-const _raftInv = new THREE.Matrix4(), _one = V3(1, 1, 1), _bp = V3(), _piv = V3();
+const _raftInv = new THREE.Matrix4(), _one = V3(1, 1, 1), _bp = V3(), _bp2 = V3(), _piv = V3();
 // the boom's pivot: the top of his helmet, not his eye — a line from the eye clipped
 // every waist-high thing a hand behind him; from the bonnet it clears them, which is also
 // what the lens needs to see (the helmet and shoulders), and the lens stays on that line.
@@ -1059,8 +1059,11 @@ const DECK_PIVOT = 0.4;
 // shell the lifts run into her belly and are refused; the lens stays low between her legs,
 // sprung, and tips up a little at the underside (the wards are there).
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2 };
-const CRE_LIFTS = [0, 1.4, 2.8, 4.2];
-let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0;
+// (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
+// helmet is against the eggs and every rise runs into them, so the lens goes level or low
+// behind him instead (never under the floor's clearance)
+const CRE_LIFTS = [0, 1.4, 2.8, 4.2, -1.3, -2.4];
+let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0, creEggs = 0, creEggFail = 0;
 function creHit(from, boom, f, m) {
   _bp.copy(from).addScaledVector(boom, f);
   return bodyBlocked(_bp.x, _bp.y, _bp.z, m);
@@ -1077,7 +1080,7 @@ function creBoomClear(from, boom, m = CRECAM.margin) {
   }
   return 1;
 }
-window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, body: Object.assign({}, BODY) }) };
+window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -1369,6 +1372,7 @@ function updateCamera(dt, t, fwd) {
       for (let i = 0; i < CRE_LIFTS.length; i++) {
         const L = CRE_LIFTS[i];
         camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP - CRECAM.under * creUnder + L - DECK_PIVOT;
+        if (L < 0 && _piv.y + camTo.y < terrainH(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
         const f = creBoomClear(_piv, camTo, CRECAM.margin + (L < creLiftT ? 0.25 : 0));
         if (f >= 1) { bestL = L; bestF = 2; break; }
         if (L === creLiftT) curF = f;
@@ -1631,9 +1635,28 @@ function updateCamera(dt, t, fwd) {
     const cl = camTo.length();
     // (never into his own helmet: a claw falling right beside him has no clear spot, and a
     // moment inside it beats the inside of the bonnet)
-    const f = Math.max(Math.min(1, CRECAM.minD / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
+    // (clutch2) inside her EGGS the lens goes straight out (the mass barely moves: a snap of a
+    // few centimetres is invisible, a frame inside the eggs is not), and may come nearer his
+    // helmet than minD to do it (under the hanging mass his bonnet is against it)
+    let eggs = inClutch(camera.position.x, camera.position.y, camera.position.z, 0.05) > 0;
+    const f = Math.max(Math.min(1, (eggs ? 1.0 : CRECAM.minD) / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
     _bp.copy(_piv).addScaledVector(camTo, f);
-    camera.position.lerp(_bp, Math.min(1, 30 * dt));
+    // (a lens drawn out of her shell or a leg must not be drawn INTO the eggs on the way: the
+    // sprung step toward its clear point is tested, and if it lands in them it snaps instead)
+    if (!eggs) { _bp2.lerpVectors(camera.position, _bp, Math.min(1, 30 * dt)); eggs = inClutch(_bp2.x, _bp2.y, _bp2.z, 0.05) > 0; }
+    if (eggs && inClutch(_bp.x, _bp.y, _bp.z, 0.05) > 0) {
+      // his bonnet is against the eggs and the boom runs up into them: the lens drops down
+      // the same bearing until it is out of them (never under the floor's clearance)
+      for (let d = 0.8; d <= 4.01; d += 0.8) {
+        camTo.copy(camera.position).sub(_piv); camTo.y -= d;
+        const l2 = camTo.length(), f2 = Math.max(Math.min(1, 1.0 / Math.max(l2, 1e-3)), creBoomClear(_piv, camTo, 0.3));
+        _bp2.copy(_piv).addScaledVector(camTo, f2);
+        if (_bp2.y < terrainH(_bp2.x, _bp2.z, zone < 0 ? 0 : zone) + 0.6) break;
+        if (inClutch(_bp2.x, _bp2.y, _bp2.z, 0.05) <= 0) { _bp.copy(_bp2); break; }
+      }
+    }
+    camera.position.lerp(_bp, eggs ? 1 : Math.min(1, 30 * dt));
+    if (eggs) { creEggs++; if (inClutch(camera.position.x, camera.position.y, camera.position.z, 0) > 0) creEggFail++; }
     camVel.lerp(player.vel, Math.min(1, 10 * dt));
     creStops++;
   }
@@ -2129,7 +2152,7 @@ function update(dt, t) {
       // replace it in the queue's one pending slot. And when the one ward left is the one
       // the brood rule will hold, say so NOW, before he swims to it.
       if (ev.remaining > 0) {
-        const held = ev.remaining === 1 && eggsOut(lev) > 0;
+        const held = ev.remaining === 1 && clutchOut(lev) > 0;
         dropMsg(countLive);   // only the newest count is news
         showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE YOU CARRY HER EGGS.'
           : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);

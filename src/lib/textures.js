@@ -1434,7 +1434,8 @@ export function sulphideSet() {
 // DataTextures (mipmapped, anisotropic, RepeatWrapping, LINEAR: structure, not colour —
 // the callers' shaders own every hue), built on this file's polish-world helpers
 // (_pwTex, _pwNormals, _pwLattice, _pwFbm) and the polish-vents torus blur (_pvBox):
-//   eggSkinSet()  leathery egg skin with a vein network (brood.js eggs + shards)
+//   eggSkinSet()  leathery egg skin with a vein network (was the old nest's helmet eggs; unused
+//                 since Velkath's clutch replaced them, kept as a generator)
 //   barkSet()     waterlogged bark over bare, grain-lined wood (props.js log)
 //   staveSet()    coopered staves: grain, seams, per-stave tone (props.js barrel)
 // Each set records its own bake time in `.ms`.
@@ -1456,7 +1457,7 @@ function _ppCells(rand, WC, WR = WC) {
   };
 }
 
-// ---- THE EGG SKIN (brood.js) ---------------------------------------------------------
+// ---- THE EGG SKIN (the old nest's helmet eggs; unused since the clutch) --------------
 // Leathery, not calcareous: a pebbled grain of tiny domed scutes (Worley F1 domes with
 // sunken borders), a slow crease field, and GROWN vessels — tapering random walks
 // that fork, with a blurred halo (the blood seen through the skin, not drawn on it).

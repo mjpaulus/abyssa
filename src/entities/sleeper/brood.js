@@ -5,10 +5,15 @@
 // REFERENCE (a berried female crab): tens of thousands of ~0.5 mm eggs held as a spongy mass
 // under the folded abdomen, glued to the setae (hairs) of the pleopods; bright orange when
 // fresh, darkening to brown/grey with dark EYESPOTS as the embryos develop; she aerates the
-// mass by fanning the abdomen. Velkath is a colossus, so the mass is ~9 u across and its
-// beads are scaled up past true scale (true scale would be ~0.04 u; these are ~0.08 u, about
-// a fist to a helmet's quarter): thousands of translucent amber-to-brown beads, each with an
-// eyespot, clinging to hairs, the whole mass breathing as she fans it.
+// mass by fanning the abdomen. Velkath is a colossus, so the mass is ~9 u across and its eggs
+// are ~0.08 u across (true to her scale): far too many to draw one by one, so the mass is a
+// GRANULAR SURFACE. Each lobe's skin carries a generated BEAD FIELD (beadField(): two tiling
+// textures of packed egg domes over a deeper layer, with each egg's own normal, height, id,
+// eyespot and yolk), projected triplanar in the lobe's rest frame, so the beads ride the lobe
+// and never swim as it moves. Over it, a SPARSE layer of instanced beads (~3k, near range
+// only) stands proud in small clusters and grape-bunches on the setae tips, breaking the
+// silhouette the way loose eggs do. Fresh orange through amber and brown to grey across the
+// mass, eyespots on the eyed ones, lit from inside by the lantern.
 //
 // The rite, in the world's own grammar:
 //   * she sleeps on the rift lip, a reef-crusted ridge bedded in the silt;
@@ -16,21 +21,21 @@
 //     leaves open: her fanning keeps the silt off it), resting on the seabed;
 //   * a trail of many-legged tracks runs in to her past a shed shell and spent casings;
 //   * [E] near the clutch PRIES A CLUMP off her (carried at Sal's free hand, shedding a few
-//     beads); that take wakes her (brooder.js hears it through brood.onTake);
+//     eggs; a torn patch is left in the lobe); that take wakes her (brood.onTake);
 //   * standing, the mass hangs under her apron: her last ward will not light while the
 //     clump is out; [E] within reach of the clutch under her belly presses it back.
+// The mass is SOFT-SOLID (bodyCols.js setClutch): Sal stops at the drawn surface and slides
+// round it, and the camera's boom treats it like the rest of her.
 //
-// RENDER: one program (CLUTCH material, two LOD variants by define) draws every bead, the
-// mass's core, the carried clump, the shed beads and the spent casings: instanced unit
-// spheres whose centre/radius come from instance attributes (asleep + standing positions,
-// lerped by uStand in the vertex shader). Near the lens the beads are an 80-tri sphere, out
-// to 55 u a 20-tri one, past that only the core (whose surface draws deeper beads as 3D
-// cells). The hairs are one more instanced draw (SETAE). Nothing casts shadows. Translucency
-// without a light: the lantern's in-scatter slot (abyssaLampA, the fog chunk's uniform) lights
-// the bead from inside, wrapped round the terminator; the eyespot darkens what shows through.
+// RENDER: one program (CLUTCH material) draws the lobes' skins, the sparse beads, the carried
+// clump, the shed eggs and the spent casings: instanced unit spheres whose centre/radius come
+// from instance attributes (asleep + standing positions, lerped by uStand in the vertex
+// shader). The hairs are one more instanced draw (SETAE). Nothing casts shadows. Translucency
+// without a light: the lantern's in-scatter slot (abyssaLampA, the fog chunk's uniform)
+// lights the egg from inside, wrapped round the terminator; the eyespot darkens what shows.
 import * as THREE from 'three';
 import { V3, clamp } from '../../lib/math.js';
-import { seededRand } from '../../lib/textures.js';
+import { seededRand, maxAniso } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
 import { envTexDeep as envTex, camera } from '../../core.js';
 import { terrainH, terrainNormal } from '../../world/terrain.js';
@@ -41,10 +46,11 @@ import * as G from './brooderGeo.js';
 
 const TAU = Math.PI * 2;
 const TAKE_R = 2.6, RET_R = 3.4;        // reach from his hands/helmet to the mass's surface (world u): pry / press back (up, arm raised)
-const RB = 0.0056;                      // bead radius, shell units (x R 15.4 = 0.086 u)
-const MAXB = 10000;                     // bead budget (the clutch); the build thins to it
-const LOD_N = 9, LOD_F = 50;            // near (80-tri) / far (20-tri) / core-only ranges, world u
-const SHED_N = 32, CLUMP_B = 110, CASE_N = 420, SETAE_N = 360;
+const RB = 0.0025;                      // a sparse (proud) bead's radius, shell units (x R 15.4 = 0.039 u: her eggs, true to her scale)
+const MAXB = 3200;                      // sparse bead budget; the build thins to it
+const LOD_N = 12;                       // sparse beads draw inside this range (world u); the skin carries the read past it
+const BF_N = 44, BF_TILE = 3.5;         // bead field: eggs across one tile, the tile's world size (0.08 u eggs)
+const SHED_N = 32, CLUMP_B = 70, CASE_N = 420, SETAE_N = 420;
 const _v = V3(), _w = V3(), _n = V3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _up = V3(0, 1, 0);
 const _a = V3(), _b = V3(), _lant = V3();
 
@@ -65,90 +71,224 @@ const SPILL_MAX = 8;
 const MASS_C = [0, -0.23, -0.27];
 
 // A lobe is not a ball: its radius wanders with direction (the same function in the core's
-// vertex shader, so the beads sit on the surface the core draws). d: unit direction, s: seed.
-function lump(dx, dy, dz, s) {
+// vertex shader, so the beads sit on the surface the core draws, and in bodyCols.js, so the
+// collider is that surface). The third octave is the spongy bunching of the mass (~1 u).
+// d: unit direction, s: seed.
+export function lump(dx, dy, dz, s) {
   return 1 + 0.13 * Math.sin(dx * 3.1 + s) * Math.sin(dy * 2.7 + s * 1.7) * Math.sin(dz * 3.3 + s * 2.3)
-    + 0.06 * Math.sin(dx * 7.3 + s * 3.1) * Math.sin(dy * 6.1 + s * 0.7) * Math.sin(dz * 6.9 + s * 1.3);
+    + 0.06 * Math.sin(dx * 7.3 + s * 3.1) * Math.sin(dy * 6.1 + s * 0.7) * Math.sin(dz * 6.9 + s * 1.3)
+    + 0.04 * Math.sin(dx * 15.1 + s * 2.1) * Math.sin(dy * 13.7 + s * 1.1) * Math.sin(dz * 14.3 + s * 0.3);
 }
 const LUMP_GLSL = `
 float clLump(vec3 d, float s) {
   return 1.0 + 0.13 * sin(d.x * 3.1 + s) * sin(d.y * 2.7 + s * 1.7) * sin(d.z * 3.3 + s * 2.3)
-    + 0.06 * sin(d.x * 7.3 + s * 3.1) * sin(d.y * 6.1 + s * 0.7) * sin(d.z * 6.9 + s * 1.3);
+    + 0.06 * sin(d.x * 7.3 + s * 3.1) * sin(d.y * 6.1 + s * 0.7) * sin(d.z * 6.9 + s * 1.3)
+    + 0.04 * sin(d.x * 15.1 + s * 2.1) * sin(d.y * 13.7 + s * 1.1) * sin(d.z * 14.3 + s * 0.3);
 }`;
 
+// ---- THE BEAD FIELD (generated once; ~30 ms) ------------------------------------------------
+// One tile of packed eggs, BF_N across on a jittered hex lattice, over a second, deeper layer
+// offset by half a cell (it shows in the gaps and where an outer egg is missing). Each pixel
+// belongs to the egg whose dome is highest there.
+//   A: rg = the dome's normal (tangent xy), b = height (0 crevice .. 1 crown), a = egg id
+//   B: r = eyespot (a dark kidney inside the shell, on its own bearing), g = yolk (the far
+//      half, darker), b = a second random (development jitter), a = outer layer
+// Linear data, mip-mapped: far off the domes average flat and the eyespots to a speckle.
+let _bf = null;
+function beadField() {
+  if (_bf) return _bf;
+  const t0 = performance.now();
+  const S = 1024, COLS = BF_N, ROWS = 50, cw = S / COLS, rh = S / ROWS;
+  const Hh = new Float32Array(S * S).fill(-1e9);
+  const A = new Uint8Array(S * S * 4), Bd = new Uint8Array(S * S * 4);
+  const rnd = seededRand(0xE6650);
+  const top = cw * 0.5 * 1.1, bot = -cw * 0.42;
+  const egg = (x, y, rad, base, outer) => {
+    const id = rnd(), r2 = rnd(), ea = rnd() * TAU, ex = Math.cos(ea) * 0.26, ey = Math.sin(ea) * 0.26;
+    const ka = ea + 1.2 + rnd() * 0.6, kc = Math.cos(ka), ks = Math.sin(ka);
+    const x0 = Math.floor(x - rad), x1 = Math.ceil(x + rad), y0 = Math.floor(y - rad), y1 = Math.ceil(y + rad);
+    for (let py = y0; py <= y1; py++) {
+      const dy = (py + 0.5 - y) / rad, wy = ((py % S) + S) % S;
+      for (let px = x0; px <= x1; px++) {
+        const dx = (px + 0.5 - x) / rad, q = 1 - dx * dx - dy * dy;
+        if (q <= 0) continue;
+        const sq = Math.sqrt(q), z = base + sq * rad, i = wy * S + (((px % S) + S) % S);
+        if (z <= Hh[i]) continue;
+        Hh[i] = z;
+        const o = i * 4;
+        A[o] = (dx * 0.5 + 0.5) * 255; A[o + 1] = (dy * 0.5 + 0.5) * 255;
+        A[o + 2] = clamp((z - bot) / (top - bot), 0, 1) * 255; A[o + 3] = id * 255;
+        // the eyespot: an ellipse 0.3 x 0.19 of the egg, turned on its own axis, with a notch
+        const ux = dx - ex, uy = dy - ey, a1 = (ux * kc + uy * ks) / 0.42, a2 = (-ux * ks + uy * kc) / 0.29;
+        const e = Math.sqrt(a1 * a1 + a2 * a2);
+        const notch = Math.max(0, 1 - Math.hypot(a1 - 0.0, a2 - 1.05) / 0.55);
+        Bd[o] = clamp((1.05 - e) / 0.2, 0, 1) * (1 - 0.8 * notch) * 255;
+        Bd[o + 1] = clamp(0.5 - 0.7 * (dx * ex + dy * ey) / 0.26, 0, 1) * clamp(sq * 1.6, 0, 1) * 255;
+        Bd[o + 2] = r2 * 255; Bd[o + 3] = outer ? 255 : 0;
+      }
+    }
+  };
+  // the deeper layer first, then the outer (6% of outer cells empty: the deeper egg shows)
+  for (let layer = 1; layer >= 0; layer--) {
+    for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+      const jx = (rnd() - 0.5) * 0.4 * cw, jy = (rnd() - 0.5) * 0.4 * rh;
+      const x = (c + (r & 1) * 0.5 + layer * 0.5) * cw + jx, y = (r + layer * 0.5) * rh + jy;
+      if (layer === 0 && rnd() < 0.09) { rnd(); continue; }
+      const rad = cw * 0.5 * (layer ? 0.72 + 0.22 * rnd() : 0.8 + 0.3 * rnd());
+      egg(x, y, rad, layer ? bot : 0, !layer);
+    }
+  }
+  for (let i = 0; i < S * S; i++) if (Hh[i] < -1e8) { const o = i * 4; A[o] = A[o + 1] = 128; A[o + 2] = 0; A[o + 3] = 0; Bd[o] = Bd[o + 1] = Bd[o + 2] = Bd[o + 3] = 0; }
+  const tex = d => {
+    const t = new THREE.DataTexture(d, S, S, THREE.RGBAFormat, THREE.UnsignedByteType);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.magFilter = THREE.LinearFilter; t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.generateMipmaps = true; t.anisotropy = Math.min(8, maxAniso());
+    t.needsUpdate = true;
+    return t;
+  };
+  _bf = { a: tex(A), b: tex(Bd), ms: performance.now() - t0 };
+  return _bf;
+}
+
 // ---- the program ----------------------------------------------------------------------------
-// aP0 / aP1: centre (xyz) + radius (w), asleep / standing (mesh-local units). aSd: x random,
-// y development stage (0 fresh orange .. 1 brown-grey, eyed), z eyespot azimuth (beads) or
-// the cell size (cores), w MODE: 0 clutch bead, 1 clutch core, 2 spent casing, 3 loose bead,
-// 4 loose core (the clump's).
+// aP0 / aP1: centre (xyz) + radius (w), asleep / standing (mesh-local units). aSd: x random
+// (the lobe's lump seed / 10 for skins), y development stage (0 fresh orange .. 1 brown-grey,
+// eyed), z eyespot azimuth (beads) or the skin's rest radius (mesh units), w MODE: 0 bead,
+// 1 lobe skin, 2 spent casing, 3 loose bead, 4 loose skin (the clump's).
+const NLOB = MAIN.length + SPILL_MAX, FIL = 0.08;   // lobes in the uniform; the fillet's width (shell units, ~1.2 u)
 const CL_VS_HEAD = `
 attribute vec4 aP0, aP1, aSd;
-uniform float uStand, uTime, uBreath;
+uniform float uStand, uTime, uBreath, uScarL;
 uniform vec3 uMassC;
-varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW; varying float vBR, vBK;` + LUMP_GLSL;
-const CL_VS_BEGIN = `
+uniform vec4 uScar;
+uniform vec4 uLobes[${NLOB}];
+uniform float uLobeS[${NLOB}];
+varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW, vBTex, vBN; varying float vBR, vBK, vBScar, vBAO;` + LUMP_GLSL + `
+// THE MASS IS ONE SPONGE, NOT A BAG OF BALLS: where two lobes meet, the skin swells into a
+// smooth fillet (a polynomial smooth-union of the lobes' lumped surfaces), and the nearest
+// other lobe is remembered for the crevice's shade
+float clNear;
+float clFillet(vec3 bp, int self) {
+  float fil = 0.0;
+  for (int j = 0; j < ${NLOB}; j++) {
+    if (j == self) continue;
+    vec4 lj = uLobes[j];
+    vec3 dv = bp - lj.xyz; float dl = length(dv);
+    if (lj.w <= 0.002 || dl > lj.w * 1.25 + ${FIL.toFixed(3)}) continue;
+    float dj = dl - lj.w * clLump(dv / max(dl, 1e-5), uLobeS[j]);
+    clNear = min(clNear, dj);
+    float h = max(${FIL.toFixed(3)} - abs(dj), 0.0) / ${FIL.toFixed(3)};
+    fil = max(fil, h * h * ${(FIL * 0.25).toFixed(4)});
+  }
+  return fil;
+}`;
+// the centre, the breath, and the skin's lumped (and filleted) surface and its normal
+const CL_VS_NORMAL = `
+vec3 objectNormal = vec3(normal);
+float bmode = floor(aSd.w + 0.5);
+bool bskin = (bmode > 0.5 && bmode < 1.5) || bmode > 3.5;
 vec4 bcl = mix(aP0, aP1, uStand);
 vec3 bc = bcl.xyz; float brr = bcl.w;
-float bmode = floor(aSd.w + 0.5);
 if (bmode < 1.5) {
   // she fans the apron: a slow wave runs front to back through the mass, swelling it
   vec3 brad = bc - uMassC; float brl = length(brad) + 1e-4;
   float bw = 0.5 + 0.5 * sin(uTime * 1.25 + bc.z * 11.0 + bc.x * 4.0);
   bc += brad / brl * (0.0065 * bw * bw * uBreath);
 }
+vec3 bSkinP = vec3(0.0);
+vBAO = 1.0;
+if (bskin) {
+  float bls = aSd.x * 10.0;
+  vec3 bd0 = normalize(position);
+  vec3 bt1 = normalize(cross(bd0, abs(bd0.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+  vec3 bt2 = cross(bd0, bt1);
+  vec3 bd1 = normalize(bd0 + bt1 * 0.012), bd2 = normalize(bd0 + bt2 * 0.012);
+  vec3 bq0 = bd0 * clLump(bd0, bls) * brr, bq1 = bd1 * clLump(bd1, bls) * brr, bq2 = bd2 * clLump(bd2, bls) * brr;
+  if (bmode < 1.5 && brr > 0.002) {
+    clNear = 1e3;
+    bq0 += bd0 * clFillet(bc + bq0, gl_InstanceID);
+    vBAO = clNear;
+    bq1 += bd1 * clFillet(bc + bq1, gl_InstanceID);
+    bq2 += bd2 * clFillet(bc + bq2, gl_InstanceID);
+  }
+  vec3 bnn = normalize(cross(bq1 - bq0, bq2 - bq0));
+  objectNormal = dot(bnn, bd0) < 0.0 ? -bnn : bnn;
+  bSkinP = bq0;
+}
+vBN = objectNormal;`;
+const CL_VS_BEGIN = `
 vec3 bsc = vec3(1.0);
 if (bmode > 1.5 && bmode < 2.5) {
   bsc = vec3(1.0, 0.42, 1.0);      // a spent casing: collapsed, a flat wrinkled skin
   bc.y += 0.03 * brr * sin(uTime * 0.7 + aSd.x * 40.0);
 }
-if (bmode > 0.5 && bmode < 1.5 || bmode > 3.5) bsc *= clLump(position, aSd.x * 10.0);
-vec3 transformed = bc + position * bsc * brr;
+// the tear a pried clump leaves: a dent in that lobe's skin, on its own bearing
+vBScar = 0.0;
+if (bmode > 0.5 && bmode < 1.5 && abs(float(gl_InstanceID) - uScarL) < 0.5) {
+  vBScar = smoothstep(uScar.w, mix(uScar.w, 1.0, 0.55), dot(normalize(position), uScar.xyz));
+  bSkinP *= 1.0 - 0.05 * vBScar;
+}
+vec3 transformed = bskin ? bc + bSkinP : bc + position * bsc * brr;
 {
   vec3 bwc = (modelMatrix * vec4(bc, 1.0)).xyz;
   float bdc = distance(bwc, cameraPosition);
-#ifdef CLUTCH_FAR
-  // the far set draws only clutch beads between the near and far ranges
-  if (bmode > 0.5 || bdc <= ${LOD_N.toFixed(1)} || bdc > ${LOD_F.toFixed(1)}) transformed = bc;
-#else
   if ((bmode < 0.5 && bdc > ${LOD_N.toFixed(1)}) || (bmode > 1.5 && bmode < 2.5 && bdc > 45.0) || (bmode > 2.5 && bmode < 3.5 && bdc > 30.0)) transformed = bc;
-#endif
   if (brr <= 0.0) transformed = bc;
 }
 vBSd = aSd; vBDir = position; vBLoc = transformed; vBR = brr; vBK = length(modelMatrix[0].xyz);
+// the skin's bead field lives in the lobe's REST frame (its own unit sphere at a fixed radius,
+// world-scaled, in tiles), so the eggs ride the lobe as it breathes, rises and folds
+vBTex = position * (bskin ? clLump(position, aSd.x * 10.0) : 1.0) * aSd.z * vBK * ${(1 / BF_TILE).toFixed(5)} + vec3(aSd.x * 7.31, aSd.x * 3.17, aSd.x * 5.53);
 vBW = (modelMatrix * vec4(transformed, 1.0)).xyz;`;
 const CL_FS_HEAD = `
 uniform float uSssK; uniform vec4 uDbg;
-varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW; varying float vBR, vBK;
-float clH(vec3 p) { return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-// nearest 3D cell (a bead deeper in the mass): returns its distance, writes its id
-float clCell(vec3 p, out vec3 cid) {
-  vec3 ip = floor(p), fp = fract(p); float d1 = 9.0; cid = ip;
-  for (int k = -1; k <= 1; k++) for (int j = -1; j <= 1; j++) for (int i = -1; i <= 1; i++) {
-    vec3 g = vec3(float(i), float(j), float(k));
-    vec3 o = vec3(clH(ip + g), clH(ip + g + 17.3), clH(ip + g + 41.9)) * 0.7 + 0.15;
-    vec3 r = g + o - fp; float d = dot(r, r);
-    if (d < d1) { d1 = d; cid = ip + g; }
-  }
-  return sqrt(d1);
-}
+uniform sampler2D uBeadA, uBeadB;
+uniform mat3 normalMatrix;
+varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW, vBTex, vBN; varying float vBR, vBK, vBScar, vBAO;
 vec3 clAlb(float st, float rnd) {
   // fresh orange -> amber -> brown -> brown-grey (linear albedo)
   vec3 a = mix(vec3(0.46, 0.14, 0.018), vec3(0.27, 0.10, 0.022), smoothstep(0.0, 0.45, st));
-  a = mix(a, vec3(0.115, 0.055, 0.026), smoothstep(0.40, 0.80, st));
-  a = mix(a, vec3(0.085, 0.07, 0.058), smoothstep(0.80, 1.0, st));
-  return a * (0.8 + 0.4 * rnd);
+  a = mix(a, vec3(0.105, 0.05, 0.024), smoothstep(0.40, 0.78, st));
+  a = mix(a, vec3(0.095, 0.088, 0.078), smoothstep(0.78, 0.98, st));
+  return a * (0.72 + 0.56 * rnd);
 }`;
-// diffuse: the bead's colour, its eyespot, and (cores) the cell it shows
+// diffuse: the egg's colour, its eyespot; on a skin, the bead field (triplanar, rest frame)
 const CL_FS_COLOR = `
 float bMode = floor(vBSd.w + 0.5);
-float bSpot = 0.0, bCore = 0.0, bCellD = 0.0;
-vec3 bAlb;
+float bSpot = 0.0, bSkin = 0.0, bH = 1.0;
+vec3 bAlb, bLN = vec3(0.0, 0.0, 1.0);
 if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
-  vec3 cid; bCellD = clCell(vBLoc / max(vBSd.z, 1e-5), cid);
-  float cr = clH(cid + 3.1), cs = clamp(vBSd.y + (clH(cid + 7.7) - 0.5) * 0.35, 0.0, 1.0);
-  bAlb = clAlb(cs, cr) * (0.55 + 0.45 * smoothstep(0.75, 0.2, bCellD));
-  bSpot = (1.0 - smoothstep(0.16, 0.26, length(vec2(bCellD - 0.18, clH(cid + 5.5) - 0.5)))) * smoothstep(0.3, 0.6, cs) * 0.7;
-  bCore = 1.0;
+  bSkin = 1.0;
+  vec3 n0 = normalize(vBN);
+  vec3 bw3 = pow(abs(n0), vec3(4.0)); bw3 /= bw3.x + bw3.y + bw3.z;
+  vec3 axs = vec3(n0.x < 0.0 ? -1.0 : 1.0, n0.y < 0.0 ? -1.0 : 1.0, n0.z < 0.0 ? -1.0 : 1.0);
+  // (each lobe turns the field its own way, or the rows line up across the whole mass)
+  float bra = vBSd.x * 6.2832; mat2 bRot = mat2(cos(bra), sin(bra), -sin(bra), cos(bra));
+  vec2 uvX = bRot * vec2(vBTex.z * axs.x, vBTex.y), uvY = bRot * vec2(vBTex.x * axs.y, vBTex.z), uvZ = bRot * vec2(-vBTex.x * axs.z, vBTex.y);
+  vec4 aX = texture2D(uBeadA, uvX), aY = texture2D(uBeadA, uvY), aZ = texture2D(uBeadA, uvZ);
+  vec4 cX = texture2D(uBeadB, uvX), cY = texture2D(uBeadB, uvY), cZ = texture2D(uBeadB, uvZ);
+  vec4 bA = aX * bw3.x + aY * bw3.y + aZ * bw3.z, bB = cX * bw3.x + cY * bw3.y + cZ * bw3.z;
+  // the domes (UDN-blended, signs re-applied per axis); they fade as an egg falls under a pixel
+  float bFoot = length(fwidth(vBTex)) * ${BF_N.toFixed(1)};
+  float bump = 0.9 * (1.0 - smoothstep(0.6, 1.6, bFoot));
+  mat2 bRotT = mat2(cos(bra), -sin(bra), sin(bra), cos(bra));
+  vec2 tX = bRotT * (aX.xy * 2.0 - 1.0) * bump, tY = bRotT * (aY.xy * 2.0 - 1.0) * bump, tZ = bRotT * (aZ.xy * 2.0 - 1.0) * bump;
+  tX.x *= axs.x; tY.x *= axs.y; tZ.x *= -axs.z;
+  vec3 nX = vec3(tX + n0.zy, abs(n0.x) * axs.x), nY = vec3(tY + n0.xz, abs(n0.y) * axs.y), nZ = vec3(tZ + n0.xy, abs(n0.z) * axs.z);
+  bLN = normalize(nX.zyx * bw3.x + nY.xzy * bw3.y + nZ.xyz * bw3.z);
+  bH = bA.z;
+  // development: the lobe's own stage, broad patches across the mass, each egg's jitter
+  float st = clamp(vBSd.y + 0.28 * sin(vBTex.x * 2.1 + vBTex.z * 1.7 + vBSd.x * 9.0) * sin(vBTex.y * 1.9 - vBTex.x * 1.3)
+    + 0.1 * sin(vBTex.y * 6.3 + vBTex.z * 5.1) + (bB.z - 0.5) * 0.3, 0.0, 1.0);
+  bAlb = clAlb(st, bA.w);
+  // the crevices and the deeper layer are in each other's shade; so is a fold between lobes
+  bAlb *= mix(0.26, 1.0, smoothstep(0.08, 0.62, bH)) * mix(0.42, 1.0, smoothstep(-0.01, ${(FIL * 1.6).toFixed(3)}, vBAO));
+  float bSee = 1.0 - smoothstep(0.9, 2.2, bFoot) * 0.6;          // far off, the eyes are a speckle
+  bSpot = bB.x * smoothstep(0.26, 0.5, st) * bSee;
+  bAlb *= 1.0 - 0.35 * bB.y * smoothstep(0.5, 0.9, st);           // the yolk
+  // the tear: the deeper, darker mass and the stubs of the hairs show
+  bAlb = mix(bAlb, bAlb * vec3(0.5, 0.36, 0.3), vBScar);
 } else if (bMode > 1.5 && bMode < 2.5) {
   bAlb = vec3(0.30, 0.27, 0.22) * (0.8 + 0.4 * vBSd.x);
 } else {
@@ -161,23 +301,17 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
   float kid = de + 0.08 * dot(nd, normalize(cross(ed, vec3(0.0, 1.0, 0.0)) + 1e-4));
   bSpot = smoothstep(0.70, 0.82, kid) * smoothstep(0.28, 0.55, vBSd.y);
   // the yolk: a darker mass filling the old egg's far half
-  bAlb *= 1.0 - 0.35 * smoothstep(0.0, -0.7, de) * smoothstep(0.5, 0.9, vBSd.y);
+  bAlb *= 1.0 - 0.35 * (1.0 - smoothstep(-0.7, 0.0, de)) * smoothstep(0.5, 0.9, vBSd.y);
 }
 bSpot = max(bSpot, uDbg.x);
-diffuseColor.rgb = bAlb * (1.0 - 0.88 * bSpot);`;
+diffuseColor.rgb = bAlb * (1.0 - 0.93 * bSpot);`;
 const CL_FS_ROUGH = `
-roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : mix(mix(0.14, 0.6, bSpot), 0.5, bCore);`;
-// cores: each cell bulges like a bead (screen-derivative bump off the cell distance)
+roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : bSkin > 0.5 ? mix(0.66, 0.36, smoothstep(0.25, 0.75, bH)) + 0.2 * vBScar + 0.25 * bSpot : mix(0.14, 0.6, bSpot);`;
 const CL_FS_NORMAL = `
-if (bCore > 0.5) {
-  float hgt = -bCellD * bCellD * vBSd.z * vBK * 0.5 * (1.0 - smoothstep(0.25, 0.8, length(fwidth(vBLoc)) / max(vBSd.z, 1e-5)));
-  vec3 pv = -vViewPosition, dx = dFdx(pv), dy = dFdy(pv), r1 = cross(dy, normal), r2 = cross(normal, dx);
-  float det = dot(dx, r1);
-  vec3 grd = sign(det) * (dFdx(hgt) * r1 + dFdy(hgt) * r2);
-  normal = normalize(abs(det) * normal - grd);
-}`;
-// translucency: the lantern lights the bead from INSIDE (its own in-scatter slot), wrapped
-// round the terminator, brightest through its thickness, shadowed by the eyespot
+if (bSkin > 0.5) normal = normalize(normalMatrix * bLN);`;
+// translucency: the lantern lights the egg from INSIDE (its own in-scatter slot), wrapped
+// round the terminator, brightest through its thickness, shadowed by the eyespot; on a skin
+// the crowns carry it and the crevices do not
 const CL_FS_SSS = `
 #ifdef USE_FOG
 if (abyssaLampA.w > 0.0 && !(bMode > 1.5 && bMode < 2.5)) {
@@ -189,19 +323,24 @@ if (abyssaLampA.w > 0.0 && !(bMode > 1.5 && bMode < 2.5)) {
   float bWrap = clamp((dot(bN, bL) + 0.75) / 1.75, 0.0, 1.0);
   float bNV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
   vec3 bIn = bAlb * vec3(1.6, 1.2, 0.85);
-  totalEmissiveRadiance += bIn * bE * bWrap * (0.30 + 0.70 * pow(bNV, 1.6)) * (1.0 - 0.9 * bSpot) * uSssK * (1.0 - 0.55 * bCore);
+  float bThk = bSkin > 0.5 ? mix(0.2, 1.0, smoothstep(0.15, 0.7, bH)) * (1.0 - 0.7 * vBScar) * mix(0.35, 1.0, smoothstep(0.0, ${(FIL * 1.6).toFixed(3)}, vBAO)) : 1.0;
+  totalEmissiveRadiance += bIn * bE * bWrap * (0.30 + 0.70 * pow(bNV, 1.6)) * (1.0 - 0.9 * bSpot) * uSssK * bThk;
 }
 #endif`;
-function clutchMat(far) {
-  const k = far ? 'far' : 'near';
-  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0, envMap: envTex, envMapIntensity: 0.15 });
-  const u = { uStand: { value: 0 }, uTime: { value: 0 }, uBreath: { value: 1 }, uMassC: { value: new THREE.Vector3().fromArray(MASS_C) }, uSssK: { value: 0.55 }, uDbg: { value: new THREE.Vector4() } };
+function clutchMat() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0, envMap: envTex, envMapIntensity: 0.08 });
+  const bf = beadField();
+  const u = {
+    uStand: { value: 0 }, uTime: { value: 0 }, uBreath: { value: 1 }, uMassC: { value: new THREE.Vector3().fromArray(MASS_C) }, uSssK: { value: 0.32 }, uDbg: { value: new THREE.Vector4() },
+    uScar: { value: new THREE.Vector4(0, 1, 0, 2) }, uScarL: { value: -1 }, uBeadA: { value: bf.a }, uBeadB: { value: bf.b },
+    uLobes: { value: Array.from({ length: NLOB }, () => new THREE.Vector4()) }, uLobeS: { value: new Float32Array(NLOB) }
+  };
   m.userData.u = u;
-  if (far) m.defines = { CLUTCH_FAR: 1 };
   m.onBeforeCompile = sh => {
     Object.assign(sh.uniforms, u);
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n' + CL_VS_HEAD)
+      .replace('#include <beginnormal_vertex>', CL_VS_NORMAL)
       .replace('#include <begin_vertex>', CL_VS_BEGIN);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + CL_FS_HEAD)
@@ -210,7 +349,7 @@ function clutchMat(far) {
       .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + CL_FS_NORMAL)
       .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n' + CL_FS_SSS);
   };
-  m.customProgramCacheKey = () => 'brood|clutch|' + k;
+  m.customProgramCacheKey = () => 'brood|clutch|field';
   return registerPaint(m);
 }
 
@@ -249,9 +388,8 @@ function setaeMat() {
   return registerPaint(m);
 }
 
-// unit spheres: an 80-tri (near), a 20-tri (far, smooth normals = round enough at range),
-// the core's lathe-smooth 1280-tri sphere
-let _geoN = null, _geoF = null, _geoC = null, _geoS = null;
+// unit spheres: an 80-tri bead, the skin's 5120-tri sphere (its silhouette carries the lumps)
+let _geoN = null, _geoC = null, _geoS = null;
 function sphere(detail) {
   const g = new THREE.IcosahedronGeometry(1, detail);
   g.deleteAttribute('uv');
@@ -285,29 +423,20 @@ function beadSet(base, n, dynamic) {
   g.instanceCount = n;
   return g;
 }
-function shareSet(src, base) {
-  const g = new THREE.InstancedBufferGeometry();
-  g.index = base.index;
-  g.setAttribute('position', base.attributes.position);
-  g.setAttribute('normal', base.attributes.normal);
-  for (const k of ['aP0', 'aP1', 'aSd']) g.setAttribute(k, src.attributes[k]);
-  g.instanceCount = src.instanceCount;
-  return g;
-}
 
 export function makeBrood(L, idx, trailFrom) {
   const grp = L.grp, R = L.R;
   const rnd = seededRand(0xB700D + idx * 131 + Math.round(trailFrom.x * 7 + trailFrom.z * 13));
-  if (!_geoN) { _geoN = sphere(1); _geoF = sphere(0); _geoC = sphere(3); _geoS = strandGeo(); }
+  if (!_geoN) { _geoN = sphere(1); _geoC = sphere(4); _geoS = strandGeo(); }
   const B = {
     held: -1, taken: 0, t: 0, seated: false, st: 0, carryT: 0, shedT: 2, fanT: 4, locked: false,
-    found: { tracks: false, shells: false, nest: false, ridge: false },
+    found: { tracks: false, shells: false, clutch: false, ridge: false },
     trailA: trailFrom.clone(), shellsAt: V3(), takeAt: V3(), clumpAt: V3(), bear: 0, notch: 0.5,
     lobes: [], nL: 0
   };
   B.trailA.y = terrainH(B.trailA.x, B.trailA.z, idx);
-  const matN = clutchMat(false), matF = clutchMat(true), sMat = setaeMat();
-  B.mats = [matN, matF, sMat];
+  const matN = clutchMat(), sMat = setaeMat();
+  B.mats = [matN, sMat];
 
   // ---- the lobes (filled for real by seat(); standing positions are fixed) ----
   for (const [x, y, z, r] of MAIN) B.lobes.push({ h: [x, y, z, r], s: [x, y, z, r], spill: false, seed: rnd() });
@@ -318,10 +447,12 @@ export function makeBrood(L, idx, trailFrom) {
   B.nL = B.lobes.length;
   // the live lobe set (lerped by B.st), for reach tests: x y z r per lobe
   B.live = new Float32Array(B.nL * 4);
+  B.seeds = Float32Array.from(B.lobes, l => l.seed * 10);    // lump seeds (the shader's aSd.x * 10)
+  matN.userData.u.uLobeS.value = B.seeds;
 
   // ---- meshes (geometry sized at seat) ----
   B.core = new THREE.Mesh(beadSet(_geoC, B.nL, false), matN);
-  B.beadsN = null; B.beadsF = null; B.setae = null;
+  B.beadsN = null; B.setae = null;
   B.core.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, -0.2, -0.2), 1.45);
   for (const o of [B.core]) { o.castShadow = false; o.receiveShadow = true; L.body.add(o); }
 
@@ -330,12 +461,13 @@ export function makeBrood(L, idx, trailFrom) {
     const g = beadSet(_geoN, CLUMP_B + 1, false), P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, Sd = g.attributes.aSd.array;
     const cr = seededRand(0xC1A9);
     const rw = RB * R;
-    // a core and a lumpy crust of beads round it (radius ~0.3 u)
-    P0[0] = P1[0] = 0; P0[1] = P1[1] = 0; P0[2] = P1[2] = 0; P0[3] = P1[3] = 0.24;
-    Sd[0] = 0.5; Sd[1] = 0.55; Sd[2] = 2 * rw; Sd[3] = 4;
+    // a skin of the bead field (radius ~0.3 u, the lump making it a torn clod) and a few
+    // eggs standing proud of it
+    P0[0] = P1[0] = 0; P0[1] = P1[1] = 0; P0[2] = P1[2] = 0; P0[3] = P1[3] = 0.26;
+    Sd[0] = 0.5; Sd[1] = 0.55; Sd[2] = 0.26; Sd[3] = 4;
     for (let i = 1; i <= CLUMP_B; i++) {
       const y = 1 - 2 * (i - 0.5) / CLUMP_B, rr = Math.sqrt(1 - y * y), ph = i * 2.39996 + cr() * 0.3;
-      const lump = 0.24 + rw * (0.6 + 0.6 * cr()) + 0.05 * Math.sin(ph * 2.0 + y * 3.0);
+      const lump = 0.26 * (1 + 0.13 * Math.sin(Math.cos(ph) * rr * 3.1 + 5) * Math.sin(y * 2.7 + 8.5) * Math.sin(Math.sin(ph) * rr * 3.3 + 11.5)) + rw * 0.5;
       const o = i * 4;
       P0[o] = P1[o] = Math.cos(ph) * rr * lump; P0[o + 1] = P1[o + 1] = y * lump * 0.85; P0[o + 2] = P1[o + 2] = Math.sin(ph) * rr * lump;
       P0[o + 3] = P1[o + 3] = rw * (0.8 + 0.4 * cr());
@@ -382,7 +514,9 @@ export function makeBrood(L, idx, trailFrom) {
         if (openOnly && !B.lobes[k].open) continue;
         const o = k * 4, r = B.live[o + 3];
         if (r <= 0.002) continue;
-        const d = (Math.hypot(_v.x - B.live[o], _v.y - B.live[o + 1], _v.z - B.live[o + 2]) - r) * R;
+        // to the drawn (lumped) surface, the one the collider stops him at
+        const dx = _v.x - B.live[o], dy = _v.y - B.live[o + 1], dz = _v.z - B.live[o + 2], dl = Math.hypot(dx, dy, dz);
+        const d = (dl - (dl > 1e-6 ? r * lump(dx / dl, dy / dl, dz / dl, B.seeds[k]) : r)) * R;
         if (d < best) { best = d; B.nearK = k; }
       }
     }
@@ -398,9 +532,21 @@ export function makeBrood(L, idx, trailFrom) {
     }
     return y;
   };
+  // Is he standing where her tongue of eggs lies when she sleeps? (calmed, she will not settle
+  // it onto him: brooder.js homeTurn). Plan distance to the spill lobes as they lay when seated.
+  B.onBed = pos => {
+    if (!B.seated) return false;
+    const bw = B.bedM;                                   // her body as it lay when the clutch was seated
+    for (let k = MAIN.length; k < B.nL; k++) {
+      const sl = B.lobes[k].s;
+      _a.set(sl[0], sl[1], sl[2]).applyMatrix4(bw);
+      if (Math.hypot(pos.x - _a.x, pos.z - _a.z) < sl[3] * R * 1.25 + 1.2) return true;   // (his body + a step)
+    }
+    return false;
+  };
   B.canTake = pos => !B.locked && B.held < 0 && B.reach(pos) < TAKE_R;
   B.canReturn = pos => B.held >= 0 && B.reach(pos) < RET_R;
-  // (playtest / probes: the old names)
+  // (bench probes: the old names, from the nest's days)
   B.nearEgg = pos => (B.canTake(pos) ? 0 : -1);
   B.nearNest = pos => B.canReturn(pos);
   B.prompt = pos => {
@@ -421,7 +567,7 @@ export function makeBrood(L, idx, trailFrom) {
     const k = B.nearK, o = k * 4;
     _v.set(B.live[o], B.live[o + 1], B.live[o + 2]);
     _w.set(pos.x, pos.y - 0.45, pos.z).applyMatrix4(_inv).sub(_v).normalize().multiplyScalar(B.live[o + 3]).add(_v);
-    B.scarAt = _w.clone();
+    B.scarAt = _w.clone(); B.scarK = k;
     B.clumpAt.copy(_w).applyMatrix4(L.body.matrixWorld);
     scar(true);
     B.held = 0; B.taken++; B.carryT = 0;
@@ -434,6 +580,14 @@ export function makeBrood(L, idx, trailFrom) {
   };
   // the tear: beads within ~0.55 u of the take point go (radius 0), and come back pressed in
   const scar = on => {
+    // the skin: a dent on that lobe, on the bearing he tore from (the lobe's rest frame)
+    const su = matN.userData.u;
+    if (on && B.scarK >= 0) {
+      const o = B.scarK * 4, r = Math.max(1e-4, B.live[o + 3]);
+      su.uScar.value.set(B.scarAt.x - B.live[o], B.scarAt.y - B.live[o + 1], B.scarAt.z - B.live[o + 2], 0).normalize();
+      su.uScar.value.w = Math.cos(Math.min(1.2, 0.62 / (r * R)));
+      su.uScarL.value = B.scarK;
+    } else if (!on) su.uScarL.value = -1;
     if (!B.beadsN || !B.scarAt) return;
     const g = B.beadsN.geometry, P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, S = B.scarSave, n = g.instanceCount;
     const r2 = (0.6 / R) * (0.6 / R), sx = B.scarAt.x, sy = B.scarAt.y, sz = B.scarAt.z, s = B.st;
@@ -468,6 +622,7 @@ export function makeBrood(L, idx, trailFrom) {
   B.seat = () => {
     const bw = L.body.matrixWorld;
     L.body.updateMatrixWorld();
+    (B.bedM || (B.bedM = new THREE.Matrix4())).copy(bw);
     _inv.copy(bw).invert();
     // floor height in shell units under local (x, z) (two passes: she is tilted a little)
     const floorL = (x, z) => {
@@ -545,8 +700,13 @@ export function makeBrood(L, idx, trailFrom) {
       for (let k = 0; k < B.nL; k++) {
         const lb = B.lobes[k], o = k * 4;
         for (let c = 0; c < 3; c++) { P0[o + c] = lb.s[c]; P1[o + c] = lb.h[c]; }
-        P0[o + 3] = lb.s[3] - RB * 0.35; P1[o + 3] = lb.h[3] - RB * 0.35;
-        Sd[o] = lb.seed; Sd[o + 1] = 0.55 + 0.2 * rnd(); Sd[o + 2] = RB * 2.1; Sd[o + 3] = 1;
+        P0[o + 3] = lb.s[3]; P1[o + 3] = lb.h[3];
+        // development by lobe: mostly eyed amber-brown, a fresher (orange) patch on the front
+        // lobes, the oldest (grey) at the back; the shader breaks it up per patch and per egg
+        const [hx, , hz] = lb.h;
+        const stg = lb.spill ? clamp(0.56 + 0.34 * Math.sin(k * 2.3 + lb.seed * 6), 0.12, 0.95)
+          : clamp(0.6 + 0.2 * Math.sin(hx * 9 + hz * 7) + 0.2 * Math.sin(k * 2.3 + lb.seed * 6) - (hz > -0.12 && hx > -0.02 ? 0.36 : 0) + (hz < -0.42 ? 0.2 : 0), 0.06, 0.95);
+        Sd[o] = lb.seed; Sd[o + 1] = lb.stage = stg; Sd[o + 2] = (lb.s[3] + lb.h[3]) * 0.5; Sd[o + 3] = 1;
       }
       g.attributes.aP0.needsUpdate = g.attributes.aP1.needsUpdate = g.attributes.aSd.needsUpdate = true;
     }
@@ -575,25 +735,33 @@ export function makeBrood(L, idx, trailFrom) {
     };
     const buried = (x, y, z) => { _a.set(x, y, z).applyMatrix4(bw); return _a.y < terrainH(_a.x, _a.z, idx) - RB * R * 0.5; };
     const P0 = [], P1 = [], SD = [];
+    // the proud eggs: small clusters standing half out of the skin (3-8 each, ~14 clusters on
+    // a big lobe), the ones that catch the lantern singly and break the lobe's outline
     for (let k = 0; k < nL; k++) {
-      const s = lobes[k].s, h = lobes[k].h, sd = lobes[k].seed * 10;
-      const rMax = Math.max(s[3], h[3]) * 1.1;
-      const N = Math.round(3.4 * (rMax / RB) * (rMax / RB));
-      const ga = br() * TAU;
-      for (let i = 0; i < N; i++) {
-        const y = 1 - 2 * (i + 0.5) / N, rr = Math.sqrt(Math.max(0, 1 - y * y)), ph = i * 2.399963 + ga;
-        const dx = Math.cos(ph) * rr, dy = y, dz = Math.sin(ph) * rr, lf = lump(dx, dy, dz, sd);
-        const jr = 0.85 + 0.35 * br();
-        const sx = s[0] + dx * s[3] * lf, sy = s[1] + dy * s[3] * lf, sz = s[2] + dz * s[3] * lf;
-        const hx = h[0] + dx * h[3] * lf, hy = h[1] + dy * h[3] * lf, hz = h[2] + dz * h[3] * lf;
-        const showS = !inside(sx, sy, sz, 0, k) && !buried(sx, sy, sz);
-        const showH = !inside(hx, hy, hz, 1, k);
-        if (!showS && !showH) { br(); br(); continue; }
-        const rb = RB * jr;
-        P0.push(sx, sy, sz, showS ? rb : 0); P1.push(hx, hy, hz, showH ? rb : 0);
-        // development: mostly eyed amber-brown, a fresher patch on the front lobes
-        const stg = clamp(0.66 + 0.2 * Math.sin(hx * 9 + hz * 7) - (hz > -0.1 && hx > 0 ? 0.3 : 0) + (br() - 0.5) * 0.3, 0.05, 0.98);
-        SD.push(br(), stg, br() * TAU, 0);
+      const s = lobes[k].s, h = lobes[k].h, sd = lobes[k].seed * 10, stg0 = lobes[k].stage ?? 0.6;
+      const rMax = Math.max(s[3], h[3]);
+      const nCl = Math.max(3, Math.round(15 * (rMax / 0.13) * (rMax / 0.13)));
+      for (let c = 0; c < nCl; c++) {
+        const cy = 1 - 2 * br(), cr = Math.sqrt(Math.max(0, 1 - cy * cy)), ca = br() * TAU;
+        const cx = Math.cos(ca) * cr, cz = Math.sin(ca) * cr;
+        // a tangent frame at the cluster's centre
+        _a.set(cx, cy, cz); _b.set(0, 1, 0); if (Math.abs(cy) > 0.9) _b.set(1, 0, 0);
+        _b.crossVectors(_a, _b).normalize(); _n.crossVectors(_a, _b);
+        const nb = 3 + Math.floor(br() * 6), spread = RB * 2.6 / rMax;
+        for (let b = 0; b < nb; b++) {
+          const u = (br() - 0.5) * 2 * spread * Math.sqrt(nb), v = (br() - 0.5) * 2 * spread * Math.sqrt(nb);
+          const dx0 = cx + _b.x * u + _n.x * v, dy0 = cy + _b.y * u + _n.y * v, dz0 = cz + _b.z * u + _n.z * v, dl = Math.hypot(dx0, dy0, dz0);
+          const dx = dx0 / dl, dy = dy0 / dl, dz = dz0 / dl, lf = lump(dx, dy, dz, sd);
+          const rb = RB * (0.8 + 0.35 * br()), proud = rb * (0.15 + 0.5 * br());
+          const sx = s[0] + dx * (s[3] * lf + proud), sy = s[1] + dy * (s[3] * lf + proud), sz = s[2] + dz * (s[3] * lf + proud);
+          const hx = h[0] + dx * (h[3] * lf + proud), hy = h[1] + dy * (h[3] * lf + proud), hz = h[2] + dz * (h[3] * lf + proud);
+          const showS = !inside(sx, sy, sz, 0, k) && !buried(sx, sy, sz);
+          const showH = !inside(hx, hy, hz, 1, k);
+          const j0 = br(), j1 = br(), j2 = br();
+          if (!showS && !showH) continue;
+          P0.push(sx, sy, sz, showS ? rb : 0); P1.push(hx, hy, hz, showH ? rb : 0);
+          SD.push(j0, clamp(stg0 + (j1 - 0.5) * 0.4, 0.05, 0.98), j2 * TAU, 0);
+        }
       }
     }
     // the hairs, and the beads that hang on the ones poking out of the mass
@@ -615,18 +783,18 @@ export function makeBrood(L, idx, trailFrom) {
       }
       ST.r1[ST.r1.length - 1] = 0.0011 * (0.7 + 0.6 * br());
       if (fromApron) { ST.r0[ST.r0.length - 4] = r0x; ST.r0[ST.r0.length - 3] = -0.112; ST.r0[ST.r0.length - 2] = r0z; }
-      // a bunch of beads near the free tip (eggs on their stalks, like grapes)
-      if (f > 1.12) {
-        const nb = 2 + Math.floor(br() * 4);
+      // a bunch of eggs near the free tip (eggs on their stalks, like grapes)
+      if (f > 1.08) {
+        const nb = 4 + Math.floor(br() * 7);
         for (let b = 0; b < nb; b++) {
-          const tt = 0.75 + 0.25 * br(), off = RB * 1.6;
+          const tt = 0.72 + 0.28 * br(), off = RB * 3.2;
           const ox = (br() - 0.5) * off, oy = (br() - 0.5) * off, oz = (br() - 0.5) * off;
           const sx = s[0] + dx * s[3] * f * tt + ox, sy = s[1] + dy * s[3] * f * tt + oy, sz = s[2] + dz * s[3] * f * tt + oz;
           const hx = h[0] + dx * h[3] * f * tt + ox, hy = h[1] + dy * h[3] * f * tt + oy, hz = h[2] + dz * h[3] * f * tt + oz;
           const showS = !buried(sx, sy, sz) && !inside(sx, sy, sz, 0, -1), showH = !inside(hx, hy, hz, 1, -1);
           const rb = RB * (0.8 + 0.3 * br());
           P0.push(sx, sy, sz, showS ? rb : 0); P1.push(hx, hy, hz, showH ? rb : 0);
-          SD.push(br(), 0.5 + 0.3 * br(), br() * TAU, 0);
+          SD.push(br(), clamp((lobes[k].stage ?? 0.6) + (br() - 0.5) * 0.35, 0.05, 0.98), br() * TAU, 0);
         }
       }
     }
@@ -643,12 +811,11 @@ export function makeBrood(L, idx, trailFrom) {
     }
     g.instanceCount = m;
     B.nBeads = m;
-    if (B.beadsN) { B.beadsN.geometry.dispose(); B.beadsF.geometry.dispose(); L.body.remove(B.beadsN, B.beadsF); }
+    if (B.beadsN) { B.beadsN.geometry.dispose(); L.body.remove(B.beadsN); }
     B.beadsN = new THREE.Mesh(g, matN);
-    B.beadsF = new THREE.Mesh(shareSet(g, _geoF), matF);
     B.scarSave = new Float32Array(m * 2);
-    g.boundingSphere = B.beadsF.geometry.boundingSphere = B.core.geometry.boundingSphere;
-    for (const o of [B.beadsN, B.beadsF]) { o.castShadow = false; o.receiveShadow = true; L.body.add(o); }
+    g.boundingSphere = B.core.geometry.boundingSphere;
+    B.beadsN.castShadow = false; B.beadsN.receiveShadow = true; L.body.add(B.beadsN);
     // setae
     const sg = new THREE.InstancedBufferGeometry();
     sg.index = _geoS.index; sg.setAttribute('position', _geoS.attributes.position); sg.setAttribute('normal', _geoS.attributes.normal);
@@ -692,7 +859,7 @@ export function makeBrood(L, idx, trailFrom) {
     // and thinning out along the trail in toward her
     {
       const g = beadSet(_geoN, CASE_N, false), P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, Sd = g.attributes.aSd.array;
-      const rw = RB * R * 1.1;
+      const rw = RB * R * 1.7;            // (collapsed skins lie wider than the eggs were)
       for (let i = 0; i < CASE_N; i++) {
         let x, z;
         if (i < CASE_N * 0.6) { const a = rnd() * TAU, r = Math.pow(rnd(), 0.6) * 9; x = B.shellsAt.x + Math.cos(a) * r; z = B.shellsAt.z + Math.sin(a) * r; }
@@ -748,9 +915,20 @@ export function makeBrood(L, idx, trailFrom) {
     // (home on her bed, at the heading she was seated on, it spills again as she settles)
     B.st = L.calmed && (L.homeTurn || L.walkTo || Math.abs(Math.atan2(Math.sin(L.yaw - (L.lairYaw ?? L.yaw)), Math.cos(L.yaw - (L.lairYaw ?? L.yaw)))) > 0.2) ? 1 : L.standE;
     liveLobes();
-    const uN = matN.userData.u, uF = matF.userData.u, uS = sMat.userData.u;
-    uN.uStand.value = uF.uStand.value = uS.uStand.value = B.st;
-    uN.uTime.value = uF.uTime.value = uS.uTime.value = B.t;
+    const uN = matN.userData.u, uS = sMat.userData.u;
+    uN.uStand.value = uS.uStand.value = B.st;
+    uN.uTime.value = uS.uTime.value = B.t;
+    uN.uBreath.value = L.dormant ? 1 : 0.35;
+    // the live lobes (breathing as the shader breathes them) for the skin's fillets
+    {
+      const UL = uN.uLobes.value, br = uN.uBreath.value, Lv = B.live;
+      for (let k = 0; k < B.nL; k++) {
+        const o = k * 4, x = Lv[o], y = Lv[o + 1], z = Lv[o + 2];
+        const dx = x - MASS_C[0], dy = y - MASS_C[1], dz = z - MASS_C[2], dl = Math.hypot(dx, dy, dz) + 1e-4;
+        const bw = 0.5 + 0.5 * Math.sin(B.t * 1.25 + z * 11 + x * 4), f = 0.0065 * bw * bw * br / dl;
+        UL[k].set(x + dx * f, y + dy * f, z + dz * f, Lv[o + 3]);
+      }
+    }
     // the bead sets are only submitted where a bead of theirs can be drawn (the shader
     // collapses the rest, but a collapsed vertex still runs): the clutch spans ~12 u
     if (B.beadsN) {
@@ -759,12 +937,10 @@ export function makeBrood(L, idx, trailFrom) {
       // frames must see every set, or its program builds on first sight, mid-dive)
       const dc = B.t < 12 ? 0 : _a.distanceTo(camera.position), on = !B.off;     // (B.off: the dev A/B, the whole clutch out)
       B.beadsN.visible = on && dc < LOD_N + 14;
-      B.beadsF.visible = on && (B.t < 12 || (dc > LOD_N - 14 && dc < LOD_F + 14));
       B.setae.visible = on && dc < 40;
       B.core.visible = on;
     }
-    // asleep she fans it slowly; awake she clamps the apron down (it barely moves)
-    uN.uBreath.value = uF.uBreath.value = L.dormant ? 1 : 0.35;
+    // (asleep she fans it slowly; awake she clamps the apron down: uBreath above)
     // the fanning lifts a breath of silt off the open lobes now and then
     if (L.dormant && B.seated && (B.fanT -= dt) <= 0) {
       B.fanT = 5 + 4 * Math.random();
@@ -786,7 +962,7 @@ export function makeBrood(L, idx, trailFrom) {
       if ((B.shedT -= dt * (1 + sp * 0.6)) <= 0) { B.shedT = 1.4 + 1.6 * Math.random(); shedOne(B.clump.position, 0.4); }
     }
     if (B.shed.visible) {
-      const St = B.shedSt, g = B.shed.geometry, P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, rw = RB * R;
+      const St = B.shedSt, g = B.shed.geometry, P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, rw = RB * R * 1.1;
       let live = 0;
       for (let i = 0; i < SHED_N; i++) {
         const o = i * 8;
@@ -814,7 +990,7 @@ export function makeBrood(L, idx, trailFrom) {
     const near = (q, r) => Math.hypot(p.x - q.x, p.z - q.z) < r && Math.abs(p.y - q.y) < 10;
     if (!F.tracks && near(B.trailA, 30)) { F.tracks = true; ev.msg = 'TRACKS IN THE SILT. MANY LEGS, AND HEAVY.'; }
     else if (!F.shells && near(B.shellsAt, 12)) { F.shells = true; ev.msg = 'A SHED SHELL, SPLIT DOWN THE BACK. EMPTY EGG SKINS ROUND IT.'; }
-    else if (!F.nest && L.dormant && B.seated && near(B.takeAt, 11)) { F.nest = true; ev.msg = 'A CLUTCH UNDER HER. EGGS BY THE THOUSAND, AND EVERY ONE HAS AN EYE.'; }
+    else if (!F.clutch && L.dormant && B.seated && near(B.takeAt, 11)) { F.clutch = true; ev.msg = 'A CLUTCH UNDER HER. EGGS BY THE THOUSAND, AND EVERY ONE HAS AN EYE.'; }
   };
   return B;
 }
