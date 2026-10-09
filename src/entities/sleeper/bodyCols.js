@@ -34,7 +34,7 @@ let bx = 0, by = 0, bz = 0, bRad = 0;           // a bounding sphere over everyt
 let on = false;
 // dev A/B: claws = false takes the claws out of Sal's resolve (the camera still sees them)
 export const BODYCOLS = { claws: true };
-const SHELL_SLIDE = 7, SHELL_VMAX = 14;   // (ritefair) u/s^2: a diver on her back slides off her shoulders
+const SHELL_SLIDE = 7, SHELL_VMAX = 14, LIMB_VMAX = 20;   // (ritefair) u/s^2: a diver on her back slides off her shoulders
 export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, top: false, last: '', clutch: 0, clPush: 0 };   // probe: this frame's resolve
 // the clutch's lobes: x y z r (body-local shell units) + lump seed; the body matrix and inverse
 const MAXL = 32;
@@ -400,6 +400,9 @@ export function resolveBodyCols(player, dt, grounded) {
       // hammer has its own designed knock, and a guard claw working across her mouth that
       // flung him 5 u/s back every cycle sealed her front against the plume rush)
       if (i >= nLeg && nLeg) { pvx = pvy = pvz = 0; }
+      // (ritefair) a leg "moving" faster than a stepping leg can is a jump in its pose (an IK
+      // re-solve, a re-plant), not a kick: measured 28 and 78 u/s leg contacts tearing the dress
+      if (pvx * pvx + pvy * pvy + pvz * pvz > LIMB_VMAX * LIMB_VMAX) { pvx = pvy = pvz = 0; }
       contactVel(v, nx, ny, nz, pvx, pvy, pvz);
     }
     // the shell
