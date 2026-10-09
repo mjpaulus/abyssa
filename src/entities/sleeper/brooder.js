@@ -65,7 +65,9 @@ const SOCKETS = [
   { p: [0, -0.125, 0.56], n: [0, -0.94, 0.34] },
   { p: [0.52, -0.105, -0.06], n: [0.18, -0.98, 0] },
   { p: [-0.52, -0.105, -0.06], n: [-0.18, -0.98, 0] },
-  { p: [0, -0.135, -0.36], n: [0, -1, 0] },
+  // (ritefair) the 4th (Pallid, Burned) was at [0, -0.135, -0.36], INSIDE the hanging clutch's
+  // big lobe: touchable through the eggs but never seen. Now under the cutter's shoulder.
+  { p: [-0.34, -0.117, 0.40], n: [-0.12, -0.97, 0.20] },
   { p: [0, -0.118, 0.18], n: [0, -1, 0] }
 ];
 // Collision centres: the crown and a ring of eight over the shell, sized so the spheres
@@ -125,7 +127,23 @@ const HAMMER_T = 2.6;
 export const GLINT = { k: 0.9, scale: 1.0, near: 14, far: 130 };
 export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
 export const THUMP = { k: 1, near: 12, far: 110 };
-export const CROUCH = { drop: 0.16, lean: 0.16, clear: 4.6 };
+// (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
+// crouched too low and I kept colliding") drop 0.16 -> 0.05, lean 0.16 -> 0 (the lean dropped
+// the rim ~2.4 u on HIS side while he was still walking in under it), and it only bears down
+// once he is well under her (`r`, R). The wards no longer need it: see STAND.
+export const CROUCH = { drop: 0.05, lean: 0, clear: 4.6, r: 0.6 };
+// (ritefair) THE RITE, FAIR. stand: her standing height (shell units over her feet; was 0.44):
+// with the clutch carried tucked under her apron (brood.js MAIN) and her wards on the belly
+// plane, 0.52 puts the wards ~6 u over flat ground (in reach standing, a hop at most) and the
+// egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). Standing on
+// the rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
+// 12-17 u over him: `keep` holds her centre this far (R) outside the crest while she hunts a
+// diver on the plateau (she comes off her ledge to fight). underK: under her body (R) the
+// hammer cannot reach him (a crab cannot strike under itself) and she lowers it; she shifts
+// her stance every `shiftT` s to dislodge him instead, at `shiftV` u/s for `shiftD` s.
+// knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
+// u/s straight up: it launched him over her back); a throw never carries him toward the rift.
+export const STAND = { h: 0.52, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
 export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -485,6 +503,14 @@ export function makeBrooder(idx, cfg) {
     const perp = V3(-out.z, 0, out.x);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
+    // (ritefair) the rift's rim crest along her lair's bearing: she sleeps astride it, and
+    // awake she keeps off it (STAND.keep) while she hunts a diver out on the plateau
+    {
+      const bx = lip.x - rp.x, bz = lip.z - rp.z, bl = Math.hypot(bx, bz) || 1;
+      let hi = -1e9, cr = 16;
+      for (let r = 16; r <= bl; r += 1) { const h = terrainH(rp.x + bx / bl * r, rp.z + bz / bl * r, idx); if (h > hi) { hi = h; cr = r; } }
+      L.riftC = V3(rp.x, 0, rp.z); L.crestR = cr;
+    }
     L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
     // (her trail's head, where the old nest stood: the tracks run in from 95 u out past it,
     // exactly where they always began)
@@ -1280,13 +1306,13 @@ function poseAll(L, dt, player) {
     let cw = 0;
     if (player && !L.dormant && !L.calmed && !L.hold && L.standE > 0.9) {
       const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z;
-      if (Math.hypot(px, pz) < 0.85 * R && player.pos.y < L.bodyY - 0.08 * R) cw = 1;
+      if (Math.hypot(px, pz) < CROUCH.r * R && player.pos.y < L.bodyY - 0.08 * R) cw = 1;
     }
     if (L.bellyOver < CROUCH.clear) cw = Math.min(cw, L.crouch.x - 0.15);
     spr(L.crouch, clamp(cw, 0, 1), 1.4, 0.95, dt > 0 ? dt : 1);
   }
   const cK = L.crouch.x;
-  L.bodyY = gy + R * (lerp(0.06, 0.44 - CROUCH.drop * cK, hv) + 0.10 * L.threatE * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * L.threatE * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
   let leanP = 0, leanR = 0;
@@ -1571,7 +1597,13 @@ export function updateBrooder(L, dt, t, player) {
   }
   // she rears on her own when the diver comes close (the lab's hold/rear override it)
   // blind, she keeps striking where she last saw him, until she gives the spot up
-  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP ? 1 : 0;
+  // (ritefair) under her body the hammer cannot reach him: she lowers it, and shifts her stance
+  // now and then to put him out from under her instead (below)
+  {
+    const ux = player.pos.x - L.pos.x, uz = player.pos.z - L.pos.z;
+    L.under = !L.dormant && L.standE > 0.5 && Math.hypot(ux, uz) < STAND.under * L.R && player.pos.y < L.bodyY;
+  }
+  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP && !L.under ? 1 : 0;
   // a fresh threat starts the hammer at the top of its guard, so the first blow is
   // always preceded by the full wind-up
   if (L.threatTarget > 0.5 && L.threat < 0.02) L.swingT = 0;
@@ -1715,8 +1747,34 @@ export function updateBrooder(L, dt, t, player) {
   L.velPrev.copy(L.vel);
   L.vel.x = lerp(L.vel.x, vx, Math.min(1, 1.5 * dt));
   L.vel.z = lerp(L.vel.z, vz, Math.min(1, 1.5 * dt));
+  // (ritefair) THE SHIFT: a diver under her a while, and she moves her stance out from over
+  // him, sideways at a walk; her legs stepping round him nudge him, they never strike
+  L.underT = L.under && hunt ? (L.underT || 0) + dt : 0;
+  if (L.underT > STAND.shiftT && !(L.shiftT > 0)) {
+    L.underT = 0; L.shiftT = STAND.shiftD;
+    const a = L.yaw + (Math.random() < 0.5 ? 1 : -1) * Math.PI / 2;
+    L.shiftX = Math.sin(a); L.shiftZ = Math.cos(a);
+  }
+  if (L.shiftT > 0) {
+    L.shiftT -= dt;
+    const k = STAND.shiftV * Math.sin(Math.PI * clamp(1 - L.shiftT / STAND.shiftD, 0, 1));
+    L.vel.x += (L.shiftX * k - L.vel.x) * Math.min(1, 4 * dt); L.vel.z += (L.shiftZ * k - L.vel.z) * Math.min(1, 4 * dt);
+  }
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
+  // (ritefair) OFF THE LIP: hunting a diver out on the plateau she keeps her centre STAND.keep R
+  // outside the rift's rim crest (on it the crest lifted her and her wards 6-8 u); she walks off
+  // her ledge as she rises, and comes no nearer the rift while he stays out of its bowl
+  if (hunt && L.riftC && L.standE > 0.5) {
+    const rx = L.pos.x - L.riftC.x, rz = L.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
+    const keep = L.crestR + STAND.keep * R;
+    if (rr < keep && Math.hypot(L.aim.x - L.riftC.x, L.aim.z - L.riftC.z) > L.crestR) {
+      const k = Math.min(keep - rr, 3.0 * dt * L.standE);
+      L.pos.x += rx / rr * k; L.pos.z += rz / rr * k;
+      const vin = (L.vel.x * rx + L.vel.z * rz) / rr;
+      if (vin < 0) { L.vel.x -= vin * rx / rr; L.vel.z -= vin * rz / rr; }
+    }
+  }
   // the world is solid to her: out of every hull and big rock, sliding along it
   L.pushed = L.standE > 0.3 ? pushOut(L, dt) : 0;
 
@@ -1819,9 +1877,20 @@ export function updateBrooder(L, dt, t, player) {
   if (!L.calmed && L.threatE > 0.8 && L.swing > 0.85 && L.strikeCd <= 0) {
     const c = L.claws[1].major ? L.claws[1] : L.claws[0];
     c.dj.getWorldPosition(_ft);
-    if (_ft.distanceTo(player.pos) < L.R * 0.42) {
-      _v.copy(player.pos).sub(_ft).setY(0.4).normalize();
+    if (_ft.distanceTo(player.pos) < L.R * 0.42 && !L.under) {
+      // (ritefair) a throw along the ground away from the blow, a little up (was setY(0.4):
+      // ~10 u/s straight up, over her back), and never toward her rift's bowl
+      _v.copy(player.pos).sub(_ft).setY(0);
+      if (_v.lengthSq() < 1e-6) _v.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
+      _v.normalize();
+      if (L.riftC) {
+        const rx = player.pos.x - L.riftC.x, rz = player.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
+        const vin = (_v.x * rx + _v.z * rz) / rr;
+        if (vin < 0 && rr > L.crestR) { _v.x -= vin * rx / rr; _v.z -= vin * rz / rr; if (_v.lengthSq() < 0.04) _v.set(rx / rr, 0, rz / rr); _v.normalize(); }
+      }
+      _v.y = STAND.knockUp; _v.normalize();
       player.vel.addScaledVector(_v, HUNT.knock);
+      L.hits = (L.hits || 0) + 1;
       ev.lightDrain += 0.12;
       ev.slam = true;
       L.strikeCd = 2.0;

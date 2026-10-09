@@ -279,7 +279,8 @@ let sputterT = 0, sputterCd = 12;       // storm-peak pump sputter scheduler
 let rescueT = 0;                        // the haul back to the deck after a drowning (a timer; the playtest jumps cancel it)
 let lev = null, zone = -1;
 const lanternPos = V3();
-let lightDip = 0, lightK = 1, slamWas = false, inkBlind = 0;   // inkBlind: Orune's ink smothering the lantern   // hit feedback on the light (see the lantern block)
+let lightDip = 0, lightK = 1, slamWas = false, slamLastT = -99, inkBlind = 0;
+const SLAM_GAP = 0.8;   // inkBlind: Orune's ink smothering the lantern   // hit feedback on the light (see the lantern block)
 // THE PAUSE. There is no pause menu: losing the pointer lock IS the pause. While he has
 // no helm the man, his air and the hunters all stand still; the sea, the raft and the
 // camera keep breathing so it never reads as a freeze. Same on window blur.
@@ -1080,6 +1081,41 @@ function creBoomClear(from, boom, m = CRECAM.margin) {
   }
   return 1;
 }
+// ---- BOSS FRAMING (ritefair, 2026-10-09; the orchestrator's play: "near her it presses onto
+// Sal (legs/back fill the frame) and never frames HER; at 13-18 u she was off-screen in 4 of 6
+// checks"). While Velkath is up and hunting within BOSSCAM.r of him the encounter is framed:
+// the boom cranes UP (lift u) and holds a longer minimum (minD u on top of CRECAM's), it does
+// not swing down under him when he looks up (boomPitch), and the look leans toward her belly
+// or her nearest dark ward (aimK share of the angle, at most maxDeg, only while she is in
+// front of the lens). bossK eases in and out on a critically damped spring (w /s): an event
+// (she is up and near), never a wander. Under her shell the lift gives way to CRECAM's low lens.
+const BOSSCAM = { on: 1, r: 30, lift: 1.5, minD: 1.6, boomPitch: 0.10, aimK: 0.5, maxDeg: 20, w: 2.4 };
+let bossK = 0, bossKV = 0, bossLift = 0;
+const bossF = V3();
+function bossFrame(dt) {
+  const L = lev;
+  let tgt = 0;
+  if (BOSSCAM.on && L && L.kind === 'brooder' && L.pos && !L.dormant && !L.calmed && (L.standE || 0) > 0.5 && deckK === 0) {
+    const d = Math.hypot(L.pos.x - player.pos.x, L.pos.z - player.pos.z);
+    tgt = 1 - clamp((d - BOSSCAM.r * 0.8) / (BOSSCAM.r * 0.4), 0, 1);
+    if (tgt > 0) {
+      // her belly, pulled toward the nearest dark ward (the thing he has to reach)
+      bossF.set(L.pos.x, L.bodyY - 0.15 * L.R, L.pos.z);
+      let best = 1e9, bi = -1;
+      if (L.sigils) for (let i = 0; i < L.sigils.length; i++) {
+        const g = L.sigils[i]; if (g.lit) continue;
+        const q = g.grp.position.distanceToSquared(player.pos); if (q < best) { best = q; bi = i; }
+      }
+      if (bi >= 0) bossF.lerp(L.sigils[bi].grp.position, 0.6);
+    }
+  }
+  const h = Math.min(dt, 0.05), w = BOSSCAM.w;
+  bossKV += (w * w * (tgt - bossK) - 2 * w * bossKV) * h; bossK += bossKV * h;
+  if (tgt === 0 && bossK < 1e-3 && bossKV <= 0) { bossK = 0; bossKV = 0; }
+  bossK = clamp(bossK, 0, 1);
+  bossLift = BOSSCAM.lift * bossK * (1 - creUnder);
+}
+window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)) }) };
 window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
@@ -1309,7 +1345,15 @@ window.__swimCamState = () => ({ k: +swimCamK.toFixed(3), held: +swimCamHeld.toF
 function updateCamera(dt, t, fwd) {
   const zi = zone < 0 ? 0 : zone;
   const speed = player.vel.length();
+  bossFrame(dt);
   camBack.copy(fwd).multiplyScalar(-1);
+  // (ritefair) framing her, the boom does not swing down under him when he looks up at her
+  // belly (it hit the floor and pulled in onto his back): it holds behind and above, and the
+  // look tips up past him instead (the aim keeps the real pitch)
+  if (bossK > 1e-3 && player.pitch > BOSSCAM.boomPitch) {
+    const pb = player.pitch + (BOSSCAM.boomPitch - player.pitch) * bossK, cp = Math.cos(pb);
+    camBack.set(-cp * Math.sin(player.yaw), -Math.sin(pb), -cp * Math.cos(player.yaw));
+  }
   camKick = Math.max(0, camKick - dt / 0.62);
   camKickPunch = Math.max(0, camKickPunch - dt / 0.34);
 
@@ -1371,7 +1415,7 @@ function updateCamera(dt, t, fwd) {
       let bestF = -1, bestL = creLiftT, curF = -1;
       for (let i = 0; i < CRE_LIFTS.length; i++) {
         const L = CRE_LIFTS[i];
-        camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP - CRECAM.under * creUnder + L - DECK_PIVOT;
+        camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + L - DECK_PIVOT;
         if (L < 0 && _piv.y + camTo.y < terrainH(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
         const f = creBoomClear(_piv, camTo, CRECAM.margin + (L < creLiftT ? 0.25 : 0));
         if (f >= 1) { bestL = L; bestF = 2; break; }
@@ -1380,8 +1424,8 @@ function updateCamera(dt, t, fwd) {
       }
       if (bestF < 2 && curF >= 0 && bestF < curF + 0.12) bestL = creLiftT;
       creLiftT = bestL;
-      camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP - CRECAM.under * creUnder + creLift - DECK_PIVOT;
-      const cw = Math.max(CRECAM.minD, base * creBoomClear(_piv, camTo));
+      camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + creLift - DECK_PIVOT;
+      const cw = Math.max(CRECAM.minD + BOSSCAM.minD * bossK * (1 - creUnder), base * creBoomClear(_piv, camTo));
       // in at once; out only once the line has stayed clear for a beat
       if (cw < creHold - 0.05) { creHold = cw; creHoldT = 0; }
       // (while she is hammering the claw crosses the line every blow: the boom stays in for a
@@ -1415,7 +1459,7 @@ function updateCamera(dt, t, fwd) {
     // (brooderfix) around her the pulled-in lens comes down the line from the top of his
     // helmet, as on deck; craned over a leg, it rises; under her shell it rides low. Away from
     // her creK, creLift and creUnder are exactly 0 and this is the water boom's fixed rise.
-    const upC = CAM_UP + creLift - CRECAM.under * creUnder;
+    const upC = CAM_UP + bossLift + creLift - CRECAM.under * creUnder;
     camDesired.y += upC - creK * (upC - DECK_PIVOT) * (1 - camDist / base);
   }
   {
@@ -1667,6 +1711,27 @@ function updateCamera(dt, t, fwd) {
   // went (it swung the aim with every kick's surge).
   camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
   camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder;
+  // (ritefair) the look leans toward her (bossFrame): toward her belly / nearest dark ward, by a
+  // share of the angle, capped, and only while she is in front of the lens (she is never
+  // dragged round from behind him); the mouse still owns the view
+  if (bossK > 1e-3) {
+    _bp.copy(camAim).sub(camera.position);
+    const la = _bp.length();
+    _bp2.copy(bossF).sub(camera.position);
+    const lf = _bp2.length();
+    if (la > 1e-3 && lf > 1e-3) {
+      _bp.multiplyScalar(1 / la); _bp2.multiplyScalar(1 / lf);
+      const c = clamp(_bp.dot(_bp2), -1, 1), ang = Math.acos(c);
+      const front = clamp((c + 0.15) / 0.55, 0, 1);
+      const turn = Math.min(ang * BOSSCAM.aimK, BOSSCAM.maxDeg * Math.PI / 180) * bossK * front * front * (3 - 2 * front);
+      if (ang > 1e-4 && turn > 1e-5) {
+        // slerp the unit look toward her by `turn`, keep the aim's distance
+        const f = Math.sin(turn) / Math.sin(ang), g = Math.sin(ang - turn) / Math.sin(ang);
+        _bp.multiplyScalar(g).addScaledVector(_bp2, f).normalize();
+        camAim.copy(camera.position).addScaledVector(_bp, la);
+      }
+    }
+  }
   // Sal looks at what the lens would notice: the nearest life in front, re-picked four
   // times a second (the search walks every fauna buffer; the look itself is sprung).
   diverLookCool -= dt;
@@ -2134,8 +2199,11 @@ function update(dt, t) {
     if (ev.inkDim) inkBlind = 1;   // Orune answers the light with ink (hoarder.js)
     if (ev.slam) {
       shake = Math.min(1, shake + 2 * dt); slam();
-      // Contact is per-frame; the tear is per collision. Rising edge only.
-      if (!slamWas) {
+      // Contact is per-frame; the tear is per collision. Rising edge only, and (ritefair) one
+      // blow is one blow: a contact that flickers off and on for a few frames (measured: three
+      // tears in 0.1 s from one shove) is the same collision, so a second needs SLAM_GAP s
+      if (!slamWas && t - slamLastT > SLAM_GAP) {
+        slamLastT = t;
         if (lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, 1, P_SLAM);
         kickLantern(1.2);
         hitFrom(lev.spine, 1.5);   // Sal's body takes the slam too (diver.js life layer)

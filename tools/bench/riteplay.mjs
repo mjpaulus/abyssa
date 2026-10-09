@@ -28,13 +28,13 @@ const PROBE = `(() => {
   const P = window.player, SV = window.survival, L = window.lev, cam = window.camera, V = P.pos.constructor;
   const v = new V(), w = new V();
   const seen = L.sigils.map(() => false);
-  const st = { seen, f: 0, hits: 0, hitAt: [], dryN: 0, dryWas: false, low: 0, bowlN: 0, bowlAt: [], inBowl: false, camN: 0, camBad: 0, pressed: 0,
+  const st = { seen, f: 0, tears: 0, lastHit: -9, hits: 0, hitAt: [], dryN: 0, dryWas: false, low: 0, bowlN: 0, bowlAt: [], inBowl: false, camN: 0, camBad: 0, pressed: 0,
     wardT: L.sigils.map(g => g.lit ? 0 : null), calmT: null, retT: null, takeT: null, maxUp: 0, floatS: 0, tornPrev: SV.torn, heldPrev: L.brood ? L.brood.held : -1,
     lairFloor: terrainH(L.lairPos.x, L.lairPos.z, 0), minReserve: 1 };
   const frame = () => {
     st.f++;
     const t = st.f / 60;
-    if (SV.torn > st.tornPrev + 0.5) { st.hits++; st.hitAt.push(+t.toFixed(1)); }
+    if (SV.torn > st.tornPrev + 0.5) { st.tears++; if (t - st.lastHit > 0.5) { st.hits++; st.hitAt.push(+t.toFixed(1)); } st.lastHit = t; }
     st.tornPrev = SV.torn;
     const res = SV.reserve / (SV.reserveCap || 1);
     if (res < st.minReserve) st.minReserve = res;
@@ -56,7 +56,7 @@ const PROBE = `(() => {
     if (h < 0 && st.heldPrev >= 0) st.retT = +t.toFixed(1);
     st.heldPrev = h;
     // the framing: she is awake and inside 30 u; readable if her belly or a dark ward is on screen
-    if (st.f % 4 === 0 && !L.dormant && !L.calmed && L.standE > 0.5 && Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z) < 30) {
+    if (st.f % 4 === 0 && t >= (window.__rpFlee || 0) && !L.dormant && !L.calmed && L.standE > 0.5 && Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z) < 30) {
       st.camN++;
       cam.updateMatrixWorld();
       const on = p => { w.copy(p).project(cam); return Math.abs(w.x) < 0.95 && Math.abs(w.y) < 0.95 && w.z < 1 && w.z > -1; };
@@ -99,6 +99,7 @@ for (let i = 0; i < nSail; i++) { await alt('Minus'); await sleep(4000); await c
 await alt('Digit6');
 await sleep(1500);
 await c.ev(`(window.__bench.step(60), 1)`);
+await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(PROBE);
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
@@ -157,7 +158,8 @@ function decide(s) {
   const P = s.pos, reach = s.reach || 6;
   const sec = AVG ? 0.5 + 0.5 * rnd() : 0.25;
   const noise = AVG ? (rnd() * 2 - 1) * 20 * DEG : 0;
-  const burstK = AVG ? 0.7 + 0.8 * rnd() : 1;
+  // the average player holds a burst ~1 s whatever the climb needs (the ledger's habit)
+  const avgBurst = 0.6 + 0.6 * rnd();
   if (s.dormant) return { sec: 0.2, yaw: 0, e: s.canTake, keys: [], why: 'take' };
   if (t < FLEE) { const ax = P[0] - s.lev[0], az = P[2] - s.lev[2]; return { sec, yaw: Math.atan2(ax, az) + noise, keys: ['W', 'Shift'], why: 'flee' }; }
   // targets: the dark wards; the last one waits on the clutch while the clump is out
@@ -190,7 +192,7 @@ function decide(s) {
     if (needUp <= 0.2) return { sec, yaw, pitch: lookP, keys: ['W', 'Shift'], why: 'walk-in' };
     if (needUp <= 2.2) return { sec, yaw, pitch: clamp(pitch, -0.3, 0.7), keys: dh > 1.5 ? ['W'] : [], space: 0.05, why: 'hop' };
     // a burst toward it: held for what the climb needs
-    const sp = clamp((0.22 + 0.05 * needUp) * burstK, 0.22, 1.2);
+    const sp = AVG ? avgBurst : clamp(0.22 + 0.05 * needUp, 0.22, 1.2);
     return { sec: Math.max(sec, sp + 0.05), yaw, pitch, keys: dh > 1.5 ? ['W'] : [], space: sp, why: 'burst ' + needUp.toFixed(1) };
   }
   // in the water
@@ -198,7 +200,7 @@ function decide(s) {
   const keys = [];
   if (dh > 1.2) keys.push('W');
   if (needUp < -1.0 || vy > 2.5 || (needUp < 0 && vy > 0.8)) keys.push('C');
-  if (needUp > 1.5 && vy < 1.0 && s.reserve > 0.25) return { sec: Math.max(sec, 0.3), yaw, pitch, keys, space: clamp(0.25 * burstK, 0.2, 0.6), why: 'swim-burst' };
+  if (needUp > 1.5 && vy < 1.0 && s.reserve > 0.25) return { sec: Math.max(sec, 0.3), yaw, pitch, keys, space: AVG ? avgBurst : 0.25, why: 'swim-burst' };
   return { sec, yaw, pitch, keys, why: 'swim' };
 }
 function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
@@ -221,8 +223,8 @@ s = await c.ev(STATE);
 await shot('end');
 const st = s.rp;
 const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT, retT: st.retT,
-  hits: st.hits, hitAt: st.hitAt, dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
-  camN: st.camN, camBad: st.camBad, pressed: st.pressed, gameSec: +t.toFixed(1) };
+  hits: st.hits, tears: st.tears, hitAt: st.hitAt, dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
+  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1) };
 console.log(log.join('\n'));
 console.log('LEDGER', JSON.stringify(ledger));
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));

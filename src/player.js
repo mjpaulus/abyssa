@@ -501,6 +501,14 @@ const JET_ACC = 23;              // u/s^2 at full burst
 const JET_TRIM = 0.50;           // /s of trim at full burst straight up
 const JET_TRIM_FLAT = 0;         // ...and a level burst spills none: a dash along the bottom
                                  // must not leave him on a Boyle runaway to the surface
+// (ritefair, 2026-10-09) ...and a SHORT burst spills little: the spill comes in over the burst's
+// first JET_TRIM_T0..T1 s, so a 0.3 s kick up to a ward is a kick, not a blown-up dress (it left
+// him floating up past her back, C taking > 3 s to turn it); a held burst (the open-water climb,
+// 1-1.4 s) still blows the dress up nearly as before.
+const JET_TRIM_T0 = 0.15, JET_TRIM_T1 = 0.45;
+// C turns an ascent: while he vents and is still rising, the collapsing dress and the haul down
+// on the line bleed the climb (1/s) on top of the vent; it never touches a descent
+const VENT_BRAKE = 2.2;
 const AM_JET_V = 1.26, AM_JET_H = 1.55;
 // The hop. HOP_V is the pop; while HOP_BRAKE runs the lead and the broadside dress fight
 // the climb (linear drag HOP_K on the way up only), so the pop is sharp but the rise is a
@@ -615,9 +623,11 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // Space is the AIR PACK now, not the inlet valve: the dress fills from the pack's burst
   // (the jet spills into it as it runs; a tap spills a little — airPackTap).
   if (player.jet > 0) {
+    player.jetT = (player.jetT || 0) + dt;
     const up = player.jetDir.y > 0 ? player.jetDir.y : 0;
-    player.trim = Math.min(TRIM_MAX, player.trim + JET_TRIM * player.jet * (JET_TRIM_FLAT + (1 - JET_TRIM_FLAT) * up) * dt);
-  }
+    const ramp = clamp((player.jetT - JET_TRIM_T0) / (JET_TRIM_T1 - JET_TRIM_T0), 0, 1);
+    player.trim = Math.min(TRIM_MAX, player.trim + JET_TRIM * player.jet * ramp * ramp * (3 - 2 * ramp) * (JET_TRIM_FLAT + (1 - JET_TRIM_FLAT) * up) * dt);
+  } else player.jetT = 0;
   player.thrustOn = player.jet > 0.05;
   if (keys['ControlLeft'] || keys['KeyC']) player.trim = Math.max(0, player.trim - TRIM_DOWN * dt);
   if (player.trim > fullTrim) player.trim = Math.max(fullTrim, player.trim - TRIM_RELIEF * dt);
@@ -743,7 +753,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     if (keys['KeyA'] || keys['ArrowLeft']) { player.vel.addScaledVector(right, -acc * SCULL * dt); player.scullX = -1; }
     if (keys['KeyD'] || keys['ArrowRight']) { player.vel.addScaledVector(right, acc * SCULL * dt); player.scullX = 1; }
     // (Space no longer kicks up: it is the pack. C still drives him down as it vents.)
-    if (keys['ControlLeft'] || keys['KeyC']) ay -= A_KICK;
+    if (keys['ControlLeft'] || keys['KeyC']) { ay -= A_KICK; if (player.vel.y > 0) player.vel.y *= Math.exp(-VENT_BRAKE * dt); }
     if (!(keys['KeyW'] || keys['ArrowUp'] || keys['KeyS'] || keys['ArrowDown'] || keys['KeyA'] || keys['ArrowLeft'] ||
       keys['KeyD'] || keys['ArrowRight'] || keys['Space'] || keys['ControlLeft'] || keys['KeyC'])) ay += A_SETTLE * (1 - emerge);
 
