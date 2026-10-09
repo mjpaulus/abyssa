@@ -1638,9 +1638,12 @@ function updateCamera(dt, t, fwd) {
     // (clutch2) inside her EGGS the lens goes straight out (the mass barely moves: a snap of a
     // few centimetres is invisible, a frame inside the eggs is not), and may come nearer his
     // helmet than minD to do it (under the hanging mass his bonnet is against it)
-    const eggs = inClutch(camera.position.x, camera.position.y, camera.position.z, 0.05) > 0;
+    let eggs = inClutch(camera.position.x, camera.position.y, camera.position.z, 0.05) > 0;
     const f = Math.max(Math.min(1, (eggs ? 1.0 : CRECAM.minD) / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
     _bp.copy(_piv).addScaledVector(camTo, f);
+    // (a lens drawn out of her shell or a leg must not be drawn INTO the eggs on the way: the
+    // sprung step toward its clear point is tested, and if it lands in them it snaps instead)
+    if (!eggs) { _bp2.lerpVectors(camera.position, _bp, Math.min(1, 30 * dt)); eggs = inClutch(_bp2.x, _bp2.y, _bp2.z, 0.05) > 0; }
     if (eggs && inClutch(_bp.x, _bp.y, _bp.z, 0.05) > 0) {
       // his bonnet is against the eggs and the boom runs up into them: the lens drops down
       // the same bearing until it is out of them (never under the floor's clearance)
