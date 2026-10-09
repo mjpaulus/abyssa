@@ -137,7 +137,8 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // with the clutch carried tucked under her apron (brood.js MAIN) and her wards on the belly
 // plane, 0.52 puts the wards ~6 u over flat ground (in reach standing, a hop at most) and the
 // egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). ride: she rides
-// at most this far (R) over the ground under her belly, whatever her feet stand on. Standing on
+// at most this far (R) over the ground under her belly, whatever her feet stand on; clear: her
+// shell's lowest point keeps this many u over the ground under it while she is awake. Standing on
 // the rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
 // 12-17 u over him: `keep` holds her centre this far (R) outside the crest while she hunts a
 // diver on the plateau (she comes off her ledge to fight). underK: under her body (R) the
@@ -145,7 +146,7 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // her stance every `shiftT` s to dislodge him instead, at `shiftV` u/s for `shiftD` s.
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
 // u/s straight up: it launched him over her back); a throw never carries him toward the rift.
-export const STAND = { h: 0.52, ride: 0.06, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
+export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
 export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -247,7 +248,9 @@ export function makeBrooder(idx, cfg) {
     // (brooder-clutch) her wards are on her underside, 8-13 u over the floor when she stands
     // on the rift lip (the crest lifts her): 6 u of reach makes the near ones a hop and the
     // high hip ward a short burst (it was 5: every ward but the nearest needed a full burst)
-    reach: 6, collR: 0.33 * R, flare: 0,
+    // (ritefair) 6 -> 7: her shell now keeps 3.6 u over the ground under it (Michael could not
+    // get under her), which lifts the belly plane on uneven ground; the touch reaches up to meet it
+    reach: 7, collR: 0.33 * R, flare: 0,
     pos: V3(), yaw: 0, vel: V3(), stand: 0, standE: 0, standTarget: 0, threat: 0, threatE: 0, threatTarget: 0,
     walkTo: null, bodyY: 0, head: V3(), spine: COLL.map(() => V3()), sigils: [], feet: [], _pd: 1e9,
     uni: { uTime: { value: 0 } },
@@ -1331,7 +1334,11 @@ function poseAll(L, dt, player) {
     spr(L.crouch, clamp(cw, 0, 1), 1.4, 0.95, dt > 0 ? dt : 1);
   }
   const cK = L.crouch.x;
-  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * L.threatE * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  // (ritefair) with him under her the hammer is lowered (threat 0), but she does NOT settle onto
+  // him: she holds the height (and front) she stood at, so the lanes in stay open (measured: the
+  // threat's lift and front pitch going with it brought her 4.3 u down over him)
+  const liftK = Math.max(L.threatE, L.underE ? L.underE.x : 0);
+  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
   let leanP = 0, leanR = 0;
@@ -1343,11 +1350,15 @@ function poseAll(L, dt, player) {
   // hunched: standing, the front drops over the diver; threat lifts it to show the face.
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
-  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE * (1 - cK) - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x + leanP, L.yaw, rol - 0.025 * hc + L.bR.x + leanR);
+  b.rotation.set(pit + 0.06 * hc + 0.12 * liftK * (1 - cK) - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x + leanP, L.yaw, rol - 0.025 * hc + L.bR.x + leanR);
   // the sole stays on the ground (L.grp sits at the origin, so body.matrix IS its world)
   b.updateMatrix();
   // (asleep the floor is off; it comes on through the heave, so the rise lifts her OUT)
-  const bed = lerp(SOLE_BED_DEEP * R, -SOLE_CLR, smooth(hc, 0, 0.7));
+  // (ritefair) awake and not stilled, her SHELL keeps STAND.clear u over whatever ground is under
+  // it (a bank under her prow had the rim 0.3-0.7 u off the floor: the lane in was shut); her legs
+  // still plant on the floor, the doors between them stay open. Stilled, she settles as before.
+  const clr = !L.dormant && !L.calmed ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
+  const bed = lerp(SOLE_BED_DEEP * R, -clr, smooth(hc, 0, 0.7));
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
   if (pen > 0) { b.position.y += pen; L.bodyY += pen; }
@@ -1622,6 +1633,8 @@ export function updateBrooder(L, dt, t, player) {
     const ux = player.pos.x - L.pos.x, uz = player.pos.z - L.pos.z;
     L.under = !L.dormant && L.standE > 0.5 && Math.hypot(ux, uz) < STAND.under * L.R && player.pos.y < L.bodyY;
   }
+  if (!L.underE) L.underE = S();
+  spr(L.underE, L.under ? L.standE : 0, 2.0, 1.0, dt > 0 ? dt : 1);
   if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP && !L.under ? 1 : 0;
   // a fresh threat starts the hammer at the top of its guard, so the first blow is
   // always preceded by the full wind-up
@@ -1872,7 +1885,7 @@ export function updateBrooder(L, dt, t, player) {
     let lk = 0;
     if (!L.dormant && !L.calmed && !L.hold && L.standE > 0.8 && pd < 60) {
       const el = Math.atan2(L.aim.y - L.head.y, Math.max(4, Math.hypot(L.aim.x - L.head.x, L.aim.z - L.head.z)));
-      lk = clamp(el * 0.35, -0.06, 0.16);
+      lk = clamp(el * 0.35, L.under ? 0 : -0.06, 0.16);   // (ritefair: never tips her front down onto him under her)
     }
     L.lookP = (L.lookP || 0) + (lk - (L.lookP || 0)) * Math.min(1, 1.2 * dt);
     // the guard rises when he is close under her face (in front, inside 1.6 R): see poseClaws

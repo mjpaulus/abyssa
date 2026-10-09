@@ -89,7 +89,7 @@ const STATE = `(() => {
   return o;
 })()`;
 
-const c0 = await (async () => { await start(`http://localhost:${PORT}/?playtest&bench`); return connect(); })();
+const c0 = await (async () => { await start(`http://localhost:${PORT}/${process.env.RP_PATH || ""}?playtest&bench`); return connect(); })();
 const c = c0;
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && window.__bench`, 240000, 1000);
 await c.ev(`(window.__helm = true, window.setState('play'), 1)`);

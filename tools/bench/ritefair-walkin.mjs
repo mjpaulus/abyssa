@@ -17,7 +17,7 @@ if (!process.env.DRV_DIR) process.env.DRV_DIR = tmpdir() + '/abyssa-wi-' + proce
 const { start, stop, connect, sleep } = await import('./drv.mjs');
 const [, , PORT, TAG = 'walkin', SITE = 'home'] = process.argv;
 const OUT = '/Users/michaelpaulus/sc/.abyssa-wt/shots/ritefair-play';
-await start(`http://localhost:${PORT}/?playtest&bench`);
+await start(`http://localhost:${PORT}/${process.env.RP_PATH || ""}?playtest&bench`);
 const c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && window.__bench`, 240000, 1000);
 await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
@@ -88,6 +88,8 @@ await c.ev(`(async () => {
     far: () => { const [sx, sz] = dirOf(0); window.__bench.place(L.pos.x + sx * 70, L.pos.z + sz * 70, 0, 0); },
     // rim/lane roofs on all four bearings (the approach lanes, 1.2 R .. 0.5 R) and under him
     lanesRoof: () => [0, 90, 180, 270].map(b => roof(b, 1.2, 0.5).clear),
+    lanesRoofWhy: () => [0, 90, 180, 270].map(b => { const q = roof(b, 1.2, 0.5); return q.clear + '@' + q.atR + ':' + (q.why === -1 ? 'shell' : q.why === -3 ? 'clutch' : q.why == null ? '-' : 'cap' + q.why); }),
+    nLeg: () => BC.bodyColsState ? null : null,
     slice: () => { const r = x => +x.toFixed(2); return { d: r(Math.hypot(L.pos.x - P.pos.x, L.pos.z - P.pos.z) / R), g: !!P.grounded, v: r(Math.hypot(P.vel.x, P.vel.z)), vy: r(P.vel.y), her: r(Math.hypot(L.vel.x, L.vel.z)), thr: r(L.threatE), cr: r(L.crouch ? L.crouch.x : 0), cont: BC.BODY.contacts, agl: r(P.pos.y - 1.35 - fl(P.pos.x, P.pos.z)) }; },
     aim: () => { P.yaw = Math.atan2(L.pos.x - P.pos.x, L.pos.z - P.pos.z); P.pitch = 0; return +(Math.hypot(L.pos.x - P.pos.x, L.pos.z - P.pos.z) / R).toFixed(3); },
     run: n => { const st = window.__wi.st; window.__bench.step(n, () => {
@@ -150,7 +152,7 @@ for (const mode of ['held', 'hunt']) {
     const prev = ramp.length ? ramp[ramp.length - 1].t : 0;
     if (dt > prev) await c.ev(`(window.__bench.step(${Math.round((dt - prev) * 60)}), 1)`);
     const a = await c.ev(`window.__wi.anat()`);
-    ramp.push({ t: dt, crouch: a.crouch, bellyOver: a.bellyOver, lanesRoof: await c.ev(`window.__wi.lanesRoof()`), wards: a.wards, massBottom: a.massBottom, bodyOverFloor: a.bodyOverFloor });
+    ramp.push({ t: dt, crouch: a.crouch, bellyOver: a.bellyOver, lanesRoof: await c.ev(`window.__wi.lanesRoofWhy()`), wards: a.wards, massBottom: a.massBottom, bodyOverFloor: a.bodyOverFloor });
   }
   res.crouch = ramp;
   await c.ev(`(window.__bench.step(1, null, { render: true }), 1)`); await c.png(`${OUT}/${TAG}-crouched.png`);
