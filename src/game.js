@@ -342,14 +342,14 @@ function setBearing(el, tx, ty, tz, show) {
 // the count; and the brood rule held Velkath's last ward cold with nothing on screen to
 // say so. Now the sleeper's own bearing mark carries a row of pips, one per ward: hollow
 // = dark, gold = lit (a fresh one swells as it takes), amber = the ward a past calm
-// remembers, a dashed cold ring = the last ward while an egg is out of the nest, with the
+// remembers, a dashed cold ring = the last ward while a clump of her clutch is out, with the
 // count and the reason beside them. Rebuilt only when the state changes (an integer key),
 // so the frame cost is a loop over at most five wards.
 const $tally = document.createElement('div');
 $tally.className = 'tally';
 $bm.lev.appendChild($tally);
 let tallyKey = -1, tallyLit = 0, tallyNoT = 0;
-function eggsOut(L) {
+function clutchOut(L) {
   const B = L && L.brood;
   return B ? B.out() : 0;          // the clump of her clutch Sal carries (brood.js)
 }
@@ -364,7 +364,7 @@ function updateTally(dt) {
     if (g.lit && !g.mem) litMask |= 1 << i;
     if (!g.lit) dark++;
   }
-  const held = dark === 1 && eggsOut(lev) > 0;
+  const held = dark === 1 && clutchOut(lev) > 0;
   key = key * 2 + (held ? 1 : 0);
   if (key === tallyKey) return;
   tallyKey = key;
@@ -520,7 +520,7 @@ addEventListener('keydown', e => {
   }
   // E near a wreck's relic: take the tool
   if (e.code === 'KeyE' && state === 'play' && lev && lev.rite) {
-    // THE RITE'S TRIGGER (the Brooder's eggs, the Hoarder's lamp): the sleeper's own
+    // THE RITE'S TRIGGER (a clump of the Brooder's clutch, the Hoarder's lamp): the sleeper's own
     // object decides what [E] does here, and hands back the line to show
     const r = lev.rite.interact(player.pos);
     if (r) {
@@ -630,7 +630,7 @@ function nextMsg() {
   while (msgQ.length && msgClock - msgQ[0].at > MSGQ_STALE) msgQ.shift();
   return msgQ.length ? msgQ.shift() : null;
 }
-// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the egg is
+// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the clump is
 // back, the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
 // whatever waits behind it shows; a waiting copy is struck too.
 function dropMsg(text) {
@@ -2149,7 +2149,7 @@ function update(dt, t) {
       // replace it in the queue's one pending slot. And when the one ward left is the one
       // the brood rule will hold, say so NOW, before he swims to it.
       if (ev.remaining > 0) {
-        const held = ev.remaining === 1 && eggsOut(lev) > 0;
+        const held = ev.remaining === 1 && clutchOut(lev) > 0;
         dropMsg(countLive);   // only the newest count is news
         showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE YOU CARRY HER EGGS.'
           : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);

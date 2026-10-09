@@ -430,7 +430,7 @@ export function makeBrood(L, idx, trailFrom) {
   if (!_geoN) { _geoN = sphere(1); _geoC = sphere(4); _geoS = strandGeo(); }
   const B = {
     held: -1, taken: 0, t: 0, seated: false, st: 0, carryT: 0, shedT: 2, fanT: 4, locked: false,
-    found: { tracks: false, shells: false, nest: false, ridge: false },
+    found: { tracks: false, shells: false, clutch: false, ridge: false },
     trailA: trailFrom.clone(), shellsAt: V3(), takeAt: V3(), clumpAt: V3(), bear: 0, notch: 0.5,
     lobes: [], nL: 0
   };
@@ -546,7 +546,7 @@ export function makeBrood(L, idx, trailFrom) {
   };
   B.canTake = pos => !B.locked && B.held < 0 && B.reach(pos) < TAKE_R;
   B.canReturn = pos => B.held >= 0 && B.reach(pos) < RET_R;
-  // (playtest / probes: the old names)
+  // (bench probes: the old names, from the nest's days)
   B.nearEgg = pos => (B.canTake(pos) ? 0 : -1);
   B.nearNest = pos => B.canReturn(pos);
   B.prompt = pos => {
@@ -990,7 +990,7 @@ export function makeBrood(L, idx, trailFrom) {
     const near = (q, r) => Math.hypot(p.x - q.x, p.z - q.z) < r && Math.abs(p.y - q.y) < 10;
     if (!F.tracks && near(B.trailA, 30)) { F.tracks = true; ev.msg = 'TRACKS IN THE SILT. MANY LEGS, AND HEAVY.'; }
     else if (!F.shells && near(B.shellsAt, 12)) { F.shells = true; ev.msg = 'A SHED SHELL, SPLIT DOWN THE BACK. EMPTY EGG SKINS ROUND IT.'; }
-    else if (!F.nest && L.dormant && B.seated && near(B.takeAt, 11)) { F.nest = true; ev.msg = 'A CLUTCH UNDER HER. EGGS BY THE THOUSAND, AND EVERY ONE HAS AN EYE.'; }
+    else if (!F.clutch && L.dormant && B.seated && near(B.takeAt, 11)) { F.clutch = true; ev.msg = 'A CLUTCH UNDER HER. EGGS BY THE THOUSAND, AND EVERY ONE HAS AN EYE.'; }
   };
   return B;
 }

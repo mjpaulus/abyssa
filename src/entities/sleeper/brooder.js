@@ -172,7 +172,7 @@ function chitinSheen(m) {
 // raft-side lip point about the rift centre; `arc` with the row's IDLE split [a, b]
 // searches that arc and takes the lip point whose ground sits at a/(a+b) of the arc's
 // height range (Pallid's [62, 38]: the HIGH lip — THE SLEEPERS SIT SHALLOW). Either way a
-// point whose ridge or nest would sit on the zone's wreck is passed over, so the skiff
+// point whose ridge or trail head would sit on the zone's wreck is passed over, so the skiff
 // never lies under her. Returns the lip and the rift-ward `out` the shipped code faces by.
 // Pure function of the terrain and the row: a reseed lands her in the same place.
 function lairOf(idx, R, c) {
@@ -182,9 +182,9 @@ function lairOf(idx, R, c) {
   const at = th => {
     const dx = Math.cos(th), dz = Math.sin(th);
     const lip = V3(rp.x + dx * rad, 0, rp.z + dz * rad), out = V3(-dx, 0, -dz);
-    const nest = lip.clone().addScaledVector(V3(-out.z, 0, out.x), R * 2.8);
-    const clear = !W || (Math.hypot(lip.x - W.x, lip.z - W.z) > R * 2 + 16 && Math.hypot(nest.x - W.x, nest.z - W.z) > 22);
-    const inBasin = Math.hypot(lip.x, lip.z) < WORLD_R * 0.66 && Math.hypot(nest.x, nest.z) < WORLD_R * 0.66;
+    const head = lip.clone().addScaledVector(V3(-out.z, 0, out.x), R * 2.8);      // (where the old nest stood: her trail's head)
+    const clear = !W || (Math.hypot(lip.x - W.x, lip.z - W.z) > R * 2 + 16 && Math.hypot(head.x - W.x, head.z - W.z) > 22);
+    const inBasin = Math.hypot(lip.x, lip.z) < WORLD_R * 0.66 && Math.hypot(head.x, head.z) < WORLD_R * 0.66;
     let g = 0;
     for (let k = 0; k < 5; k++) g += terrainH(lip.x + Math.cos(k * 1.2566) * R * 0.6, lip.z + Math.sin(k * 1.2566) * R * 0.6, idx);
     return { lip, out, ok: clear && inBasin, g: g / 5 };
@@ -486,10 +486,10 @@ export function makeBrooder(idx, cfg) {
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
     L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
-    // (the old nest's spot, kept only as the start of her trail: the tracks run in from 95 u
-    // out past it, exactly where they always began)
-    const nest = lip.clone().addScaledVector(perp, R * 2.8);
-    L.brood = makeBrood(L, idx, nest.clone().addScaledVector(out, -95));
+    // (her trail's head, where the old nest stood: the tracks run in from 95 u out past it,
+    // exactly where they always began)
+    const head = lip.clone().addScaledVector(perp, R * 2.8);
+    L.brood = makeBrood(L, idx, head.clone().addScaledVector(out, -95));
     L.rite = L.brood;                                 // the game's generic [E] / prompt hook
     L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
@@ -1625,11 +1625,11 @@ export function updateBrooder(L, dt, t, player) {
   // THE HUNT (brooderfix, Michael 2026-10-08: "Crab does not follow sal at all when he gets
   // the egg"). Measured on main: awake she only ever TURNED and sidled (the stalk below is
   // purely tangential, so it drifted her outward), from her first commit on; no step toward
-  // him was ever written, and the nest sits just outside her 2.4 R threat ring, so a thief
-  // at the clutch was never even struck. Now, once she is up, she COMES FOR HIM: her body
+  // him was ever written, and the old nest sat just outside her 2.4 R threat ring, so a thief
+  // at it was never even struck. Now, once she is up, she COMES FOR HIM: her body
   // moves in WORLD space toward what she is after (Sal, or blind, the spot she lost him),
   // crab-fashion, independent of where her face has got to; she stalks sideways as she
-  // closes, plants for every blow and lunges into it. While he carries an egg she is
+  // closes, plants for every blow and lunges into it. While he carries a clump of her clutch she is
   // relentless; unburdened she keeps him off her ground (HUNT.guard round her lair) and lets
   // him go past it.
   const thief = !!(L.brood && L.brood.held >= 0);
@@ -1638,9 +1638,9 @@ export function updateBrooder(L, dt, t, player) {
   L.huntD = dh;
   if (L.walkTo && L.standE > 0.9) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
-    if (dist < (L.toNest ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
+    if (dist < (L.toBed ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
       L.walkTo = null;
-      if (L.toNest) { L.toNest = false; L.homeTurn = true; }   // home: turn to her bed, then settle over the clutch
+      if (L.toBed) { L.toBed = false; L.homeTurn = true; }   // home: turn to her bed, then settle over the clutch
     }
     else { want = Math.atan2(dx, dz); speed = L.speed * 0.30; }
   } else if (L.homeTurn) {
@@ -1867,7 +1867,7 @@ export function updateBrooder(L, dt, t, player) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
       if (L.memWard >= 0) wardsRecall(L, haloK);
       // she goes home: back to her bed on the lip, to settle over her clutch
-      if (L.brood) { L.walkTo = L.lairPos.clone(); L.toNest = true; L.standTarget = 1; }
+      if (L.brood) { L.walkTo = L.lairPos.clone(); L.toBed = true; L.standTarget = 1; }
       else { L.standTarget = 0; L.walkTo = null; }
     }
   } else {
