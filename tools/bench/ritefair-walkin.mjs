@@ -73,10 +73,15 @@ await c.ev(`(async () => {
   };
   window.__wi = {
     anat: () => {
-      const r = x => +x.toFixed(2), m = L.brood ? new (P.pos.constructor)(0, -0.47, -0.27).applyMatrix4(L.body.matrixWorld) : null;
+      const r = x => +x.toFixed(2);
+      // the mass's lowest point over the floor: every live lobe (shell units) to the world
+      let m = null;
+      if (L.brood && L.brood.live) { const B = L.brood, q = new (P.pos.constructor)(); let lo = 1e9;
+        for (let k = 0; k < B.nL; k++) { const o = k * 4; if (B.live[o + 3] <= 0.002) continue; q.set(B.live[o], B.live[o + 1] - B.live[o + 3], B.live[o + 2]).applyMatrix4(L.body.matrixWorld);
+          const h = q.y - fl(q.x, q.z); if (h < lo) { lo = h; m = { y: q.y, x: q.x, z: q.z }; } } }
       return { standE: r(L.standE), threatE: r(L.threatE), crouch: r(L.crouch ? L.crouch.x : 0), bellyOver: r(L.bellyOver || 0), soleLift: r(L.soleLift || 0),
         bodyOverFloor: r(L.bodyY - fl(L.pos.x, L.pos.z)), wards: L.sigils.map(g => r(g.grp.position.y - fl(g.grp.position.x, g.grp.position.z))),
-        massBottom: m ? r(m.y - fl(m.x, m.z)) : null };
+        massBottom: m ? r(m.y - fl(m.x, m.z)) : null, levR: L.riftC ? r(Math.hypot(L.pos.x - L.riftC.x, L.pos.z - L.riftC.z)) : null, keepR: L.crestR ? r(L.crestR + 1.45 * R) : null };
     },
     lanes: () => [0, 90, 180, 270].map(b => ({ b, arcs: [1.15, 1.0, 0.85, 0.7].map(q => arc(b, q * R)), roof: roof(b) })),
     put: b => { const s = startAt(b); if (!s) return null; window.__bench.place(s.x, s.z, Math.atan2(L.pos.x - s.x, L.pos.z - s.z), 0); return { q: s.q, d: s.d }; },

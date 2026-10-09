@@ -128,10 +128,11 @@ export const GLINT = { k: 0.9, scale: 1.0, near: 14, far: 130 };
 export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
 export const THUMP = { k: 1, near: 12, far: 110 };
 // (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
-// crouched too low and I kept colliding") drop 0.16 -> 0.05, lean 0.16 -> 0 (the lean dropped
-// the rim ~2.4 u on HIS side while he was still walking in under it), and it only bears down
-// once he is well under her (`r`, R). The wards no longer need it: see STAND.
-export const CROUCH = { drop: 0.05, lean: 0, clear: 4.6, r: 0.6 };
+// crouched too low and I kept colliding") RETIRED: drop 0.16 -> 0, lean 0.16 -> 0 (measured
+// before: the rim came down to 0.4-1.3 u over the floor on the lanes in as the spring ramped,
+// and the lean dropped it ~2.4 u on HIS side while he was still walking in under it). The wards
+// no longer need it (see STAND); the knobs stay for the lab.
+export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // (ritefair) THE RITE, FAIR. stand: her standing height (shell units over her feet; was 0.44):
 // with the clutch carried tucked under her apron (brood.js MAIN) and her wards on the belly
 // plane, 0.52 puts the wards ~6 u over flat ground (in reach standing, a hop at most) and the
@@ -144,7 +145,7 @@ export const CROUCH = { drop: 0.05, lean: 0, clear: 4.6, r: 0.6 };
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
 // u/s straight up: it launched him over her back); a throw never carries him toward the rift.
 export const STAND = { h: 0.52, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
-export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
+export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -1125,6 +1126,12 @@ function poseClaws(L) {
   // the hammer's anticipation: cocked high and back, holding with a tremble, then the fall
   const ck = L.cock * th, hold = ck > 0.98 ? 1 : 0;
   const trem = hold * 0.022 * Math.sin(t * 71) * Math.sin(t * 13.3);
+  // (ritefair) THE MERAL SPREAD: a diver coming in at her face and she throws both claws up and
+  // OUT (a crab's threat display), the way under her front open between them; the crusher
+  // folds back into the hammer as it cocks. Held forward as a guard they walled off the walk-in
+  // from the front, and she always turns to face him (Pallid: a perfect walker stuck at the
+  // claws for 200 s in 3 of 3 runs)
+  const gu = L.guardUp ? L.guardUp.x : 0;
   for (const c of L.claws) {
     const sd = c.sd;
     // never quite still: slow drift in two axes (noise, not a metronome), a heavier and
@@ -1142,8 +1149,9 @@ function poseClaws(L) {
       // the strike: the great claw comes up to head height and gapes; then it COCKS -
       // up and back, the pincer wide - holds trembling, and comes DOWN across her front
       const sw = L.swing * th;
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw + sd * 0.30 * ck + dy - sd * 0.2 * h,
-        lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h);
+      const spr = HUNT.spread * gu * (1 - ck) * (1 - sw);
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw + sd * 0.30 * ck + dy - sd * 0.2 * h + sd * spr,
+        lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h + 0.8 * spr);
       c.cj.rotation.set(0, -sd * lerp(0.95, 0.40, th), 0.30 - 0.25 * sw + 0.25 * ck);
       c.pj.rotation.set(0, -sd * lerp(0.45, 0.15, th), lerp(-0.55, -0.30, th) + 0.2 * sw - 0.25 * ck + 0.6 * dz);
       c.dj.rotation.z = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
@@ -1153,7 +1161,7 @@ function poseClaws(L) {
       // (brooderfix) a diver close under her face: the guard comes UP off her mouth, raised to
       // strike (L.guardUp). Solid now, held low across the mouth it walled off the one way in
       // under her front, the plume rush (measured: 0 of 3 rushes got under her, 3 of 3 on main)
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th) + sd * 0.28 * ck + dy - sd * 0.2 * h,
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th) + sd * 0.28 * ck + dy - sd * 0.2 * h + sd * HUNT.spread * gu,
         lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h + HUNT.guardUp * (L.guardUp ? L.guardUp.x : 0));
       c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th) + sd * 0.3 * ck, 0.30);
       c.pj.rotation.set(0, -sd * 0.45, -0.55 + 0.6 * dz);
@@ -1860,7 +1868,7 @@ export function updateBrooder(L, dt, t, player) {
     let gu = 0;
     if (!L.dormant && !L.calmed && L.standE > 0.8) {
       const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z, fw = px * Math.sin(L.yaw) + pz * Math.cos(L.yaw);
-      if (fw > 0 && Math.hypot(px, pz) < 1.6 * R) gu = 1;
+      if (fw > 0 && Math.hypot(px, pz) < HUNT.upR * R) gu = 1;   // (ritefair: 1.6 R -> 2.4 R: the claws walled him off at ~1.8 R)
     }
     if (!L.guardUp) L.guardUp = S();
     spr(L.guardUp, gu, 3.2, 0.9, dt);

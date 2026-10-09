@@ -25,6 +25,10 @@ if (cmd === 'start') {
   console.log('ready'); process.exit(0);
 }
 const c = await connect();
+if (cmd === 'png') {
+  await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__helm = true, window.__bench.step(1, null, { render: true }), 1)`);
+  await c.png(a1); console.log('saved ' + a1); process.exit(0);
+}
 const expr = cmd === 'file' ? `(async () => { ${readFileSync(a1, 'utf8')} })()` : a1;
 console.log(JSON.stringify(await c.ev(expr)));
 process.exit(0);

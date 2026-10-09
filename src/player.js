@@ -505,7 +505,7 @@ const JET_TRIM_FLAT = 0;         // ...and a level burst spills none: a dash alo
 // first JET_TRIM_T0..T1 s, so a 0.3 s kick up to a ward is a kick, not a blown-up dress (it left
 // him floating up past her back, C taking > 3 s to turn it); a held burst (the open-water climb,
 // 1-1.4 s) still blows the dress up nearly as before.
-const JET_TRIM_T0 = 0.15, JET_TRIM_T1 = 0.45;
+const JET_TRIM_T0 = 0.12, JET_TRIM_T1 = 0.32;
 // C turns an ascent: while he vents and is still rising, the collapsing dress and the haul down
 // on the line bleed the climb (1/s) on top of the vent; it never touches a descent
 const VENT_BRAKE = 2.2;

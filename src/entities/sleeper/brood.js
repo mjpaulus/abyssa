@@ -67,7 +67,9 @@ const _a = V3(), _b = V3(), _lant = V3();
 // his reach standing (RET_R). Slung, it lay ON the floor whenever she stood off the rim crest
 // (measured 0.1 u, -2.2 u) and walled off the walk in under her; on the crest it hung 6-10 u
 // up, out of reach. The lobes' tops stay inside her shell. Asleep (seat) is unchanged.
-const TUCK = 0.18;
+// TUCK_FLOOR: and no lobe hangs below this (shell units): the sag lobes were 1.5 u under the
+// rest of the mass; pressed up level with it the underside is ~3 u under her body origin.
+const TUCK = 0.18, TUCK_FLOOR = -0.20;
 const MAIN = [
   [0, -0.215, -0.26, 0.16], [0.15, -0.20, -0.18, 0.13], [-0.15, -0.20, -0.18, 0.13],
   [0.13, -0.21, -0.38, 0.13], [-0.13, -0.21, -0.38, 0.13], [0, -0.20, -0.05, 0.12],
@@ -75,7 +77,7 @@ const MAIN = [
   // the sag: the heaviest of it hangs lowest (the reach test counts these, so the return is
   // ~1.3 u nearer the floor than the apron's own bead line)
   [0.03, -0.39, -0.29, 0.085], [-0.04, -0.40, -0.21, 0.075]
-].map(l => [l[0], l[1] + TUCK, l[2], l[3]]);
+].map(l => [l[0], Math.max(l[1] + TUCK, TUCK_FLOOR + l[3]), l[2], l[3]]);
 const SPILL_MAX = 8;
 const MASS_C = [0, -0.23 + TUCK, -0.27];
 

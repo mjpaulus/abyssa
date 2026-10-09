@@ -80,7 +80,11 @@ const STATE = `(() => {
     held: B ? B.held : -1, canTake: B ? !!B.canTake(P.pos) : false, canReturn: B ? !!B.canReturn(P.pos) : false, clutchReach: B ? r(B.reach(P.pos)) : 99,
     reach: L.reach, msg: window.__msg().live };
   o.wards = L.sigils.map(g => ({ p: [r(g.grp.position.x), r(g.grp.position.y), r(g.grp.position.z)], lit: !!g.lit, floor: r(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, 0)) }));
-  if (B) { const m = new V(0, -0.36, -0.27).applyMatrix4(L.body.matrixWorld); o.mass = [r(m.x), r(m.y), r(m.z)]; o.massFloor = r(m.y - terrainH(m.x, m.z, 0)); }
+  // the clutch's lowest point (live lobes), the spot he presses the clump back into
+  if (B && B.live) { const q = new V(); let lo = 1e9, m = null;
+    for (let k = 0; k < B.nL; k++) { const j = k * 4; if (B.live[j + 3] <= 0.002) continue; q.set(B.live[j], B.live[j + 1] - B.live[j + 3], B.live[j + 2]).applyMatrix4(L.body.matrixWorld);
+      if (q.y < lo) { lo = q.y; m = q.clone(); } }
+    if (m) { o.mass = [r(m.x), r(m.y), r(m.z)]; o.massFloor = r(m.y - terrainH(m.x, m.z, 0)); } }
   o.rp = window.__rp ? window.__rp.st : null;
   return o;
 })()`;
