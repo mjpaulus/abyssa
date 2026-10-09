@@ -574,6 +574,7 @@ addEventListener('contextmenu', e => { if (locked) e.preventDefault(); });
 let pendingSlash = 0;
 const lampOcc = new Float32Array(8);   // diverOccluders -> setLampOccluders, every frame
 function doSlash() { if (triggerSlash()) { pendingSlash = 0.22; knife(); } }   // contact ~0.22s into the swing
+window.__slash = () => { if (state === 'play') doSlash(); };   // probes: the knife without pointer lock (tools/bench/play.mjs)
 function doSpear() {
   if (!survival.hasSpear) return;
   if (survival.spears > 0 && fireSpear(player.pos, forwardVec())) {

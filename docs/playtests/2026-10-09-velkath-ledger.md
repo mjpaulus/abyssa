@@ -29,3 +29,25 @@ Frames: /Users/michaelpaulus/sc/.abyssa-wt/shots/play/p01..p21.
 6. **The return point** (clutch, hanging 6–7.5 u under her moving belly) needs being stationary in mid-water under a hammering, moving creature.
 
 Not the cause: reaction time (perfect here), ward lighting itself (worked when reached), the brood rule message (shown correctly).
+
+## Run 2 (recorded: .abyssa-wt/video/velkath-home-run2.webm)
+Same route, different line: WALK straight in under her instead of bursting. Completed in ~15 s of
+game time, 1 hit (dress torn), reserve never below 0.92.
+- 0 s pry the clump; her rising legs shove Sal ~13 u with no input.
+- 3–6 s walk in (W): slow — 3 s covered only ~5 u (her legs/claws pushing back).
+- 6 s ward 0 directly overhead at 6.8 u (reach 6): one TAP-hop lit it.
+- 8 s hauled 2 s to ward 1 (5.6 out, 4.8 up): lit. Ward 2 = last, refuses (brood rule; message shown).
+- 9–12 s chasing the moving clutch: HAMMERED once while mid-water; the return prompt came up for a
+  moment and was overshot; she keeps sidestepping, so the clutch moves.
+- 12–13 s grounded under her, clutch 4.2 u above → tap-hop → prompt → [E] → last ward lit → calm.
+CAVEAT: I steered by a numeric readout of ward positions (debug state), which a player doesn't have.
+One video stretch (~8 s) is the camera pressed into her shell (blown-out white): unreadable.
+
+## Orune, home (partial; not recorded)
+- On the ?playtest Alt+7 route Sal had NO SONAR → her wards can never answer. In normal play the
+  sonar comes from the zone-0 skiff, but nothing stops a player reaching Orune without it → the rite
+  is impossible and nothing explains why. (BUG)
+- The knife is LEFT-CLICK and needs pointer lock; "IT HAS YOU. CUT IT." never says how, nor does the
+  title hint. (Readability)
+- Grabbed every ~1–2 s; each needs a cut; the lantern goes out; message line lags the action
+  (queued lines show seconds late). Lit 3/4 wards in ~30 s game time with perfect reactions.
