@@ -280,7 +280,10 @@ let rescueT = 0;                        // the haul back to the deck after a dro
 let lev = null, zone = -1;
 const lanternPos = V3();
 let lightDip = 0, lightK = 1, slamWas = false, slamLastT = -99, inkBlind = 0;
-const SLAM_GAP = 0.8;   // inkBlind: Orune's ink smothering the lantern   // hit feedback on the light (see the lantern block)
+const SLAM_GAP = 0.8;
+let slamWhy = '';
+const slamLog = [];
+window.__slamLog = slamLog;   // inkBlind: Orune's ink smothering the lantern   // hit feedback on the light (see the lantern block)
 // THE PAUSE. There is no pause menu: losing the pointer lock IS the pause. While he has
 // no helm the man, his air and the hunters all stand still; the sea, the raft and the
 // camera keep breathing so it never reads as a freeze. Same on window blur.
@@ -2142,6 +2145,7 @@ function update(dt, t) {
     // hunting and hammering through the pause, her blows banked in his velocity and his dress
     // torn while the player was away from the keys
     const ev = paused ? LEV_IDLE : updateLeviathan(lev, dt, t, player); pm('leviathan');
+    const slamSrc = ev.slam ? 'blow' : '';
     // HER BODY IS SOLID (brooderfix, bodyCols.js): Sal is pushed out of her live pose here,
     // after she has moved this frame and before the hose, the diver and the lens read him.
     // A part of her that comes INTO him (a sweeping leg, the lunge, her flank) is the slam;
@@ -2150,7 +2154,7 @@ function update(dt, t) {
       if (BODY.shell) lev.touchT = 0.3;   // bumping her SHELL tells her where he is (sight); a limb brushing him does not
       // (brooder-clutch: the take is AT her body now, so her legs unfold past him as she rises;
       // that is a shove, not a blow)
-      if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant && !lev.rising) { ev.slam = true; ev.lightDrain += dt * 0.5; }
+      if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant && !lev.rising) { ev.slam = true; ev.lightDrain += dt * 0.5; slamWhy = BODY.last + ' ' + BODY.hitV.toFixed(1); }
     }
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
     if (ev.woke) {
@@ -2208,6 +2212,8 @@ function update(dt, t) {
       // tears in 0.1 s from one shove) is the same collision, so a second needs SLAM_GAP s
       if (!slamWas && t - slamLastT > SLAM_GAP) {
         slamLastT = t;
+        // (ritefair) probe: what tore it (the hammer's blow, or which part of her body came into him)
+        if (slamLog.length < 64) slamLog.push({ t: +t.toFixed(1), why: slamSrc || slamWhy, up: lev.bodyY != null ? +(player.pos.y - lev.bodyY).toFixed(1) : null });
         if (lev.pos) stirPulse(lev.pos.x, lev.pos.y, lev.pos.z, 40, 0, 1, P_SLAM);
         kickLantern(1.2);
         hitFrom(lev.spine, 1.5);   // Sal's body takes the slam too (diver.js life layer)

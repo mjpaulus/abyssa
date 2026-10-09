@@ -238,6 +238,7 @@ const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != nul
   hits: st.hits, tears: st.tears, hitAt: st.hitAt, dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
   camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1) };
 console.log(log.join('\n'));
+ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const cons = await c.console();
