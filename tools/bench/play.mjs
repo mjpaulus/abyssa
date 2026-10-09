@@ -9,7 +9,7 @@
 // Env DRV_PORT (default 9461). Frames -> /Users/michaelpaulus/sc/.abyssa-wt/shots/play/
 import { start, stop, connect, sleep } from './drv.mjs';
 import { mkdirSync } from 'node:fs';
-const OUT = '/Users/michaelpaulus/sc/.abyssa-wt/shots/play';
+const OUT = process.env.PLAY_OUT || '/Users/michaelpaulus/sc/.abyssa-wt/shots/play';
 mkdirSync(OUT, { recursive: true });
 const [, , cmd, a1, a2, a3, a4] = process.argv;
 if (!process.env.DRV_PORT) process.env.DRV_PORT = '9461';
@@ -45,7 +45,7 @@ async function render(c) {
 if (cmd === 'start') {
   await start(`http://localhost:${a1}/?playtest&bench`);
   const c = await connect();
-  await c.until(`!document.getElementById('load')`, 240000, 1000);
+  await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && window.__bench`, 240000, 1000);
   await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
   await sleep(4000);
   console.log(JSON.stringify(await c.ev(STATE)));
@@ -54,7 +54,8 @@ if (cmd === 'start') {
 if (cmd === 'stop') { stop(); process.exit(0); }
 const c = await connect();
 if (cmd === 'alt') {
-  await c.ev(`(window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Digit${a1}', key: '${a1}', altKey: true, bubbles: true })), window.dispatchEvent(new KeyboardEvent('keyup', { code: 'Digit${a1}', key: '${a1}', altKey: true, bubbles: true })), 1)`);
+  const code = a1 === '-' ? 'Minus' : 'Digit' + a1;
+  await c.ev(`(window.dispatchEvent(new KeyboardEvent('keydown', { code: '${code}', key: 'x', altKey: true, bubbles: true })), window.dispatchEvent(new KeyboardEvent('keyup', { code: '${code}', key: 'x', altKey: true, bubbles: true })), 1)`);
   await c.ev(`(window.__helm = true, window.__bench.step(90), 1)`);
   await render(c);
   await c.png(`${OUT}/alt${a1}.png`);

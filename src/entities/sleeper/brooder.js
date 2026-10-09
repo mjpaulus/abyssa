@@ -136,7 +136,8 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // (ritefair) THE RITE, FAIR. stand: her standing height (shell units over her feet; was 0.44):
 // with the clutch carried tucked under her apron (brood.js MAIN) and her wards on the belly
 // plane, 0.52 puts the wards ~6 u over flat ground (in reach standing, a hop at most) and the
-// egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). Standing on
+// egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). ride: she rides
+// at most this far (R) over the ground under her belly, whatever her feet stand on. Standing on
 // the rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
 // 12-17 u over him: `keep` holds her centre this far (R) outside the crest while she hunts a
 // diver on the plateau (she comes off her ledge to fight). underK: under her body (R) the
@@ -144,7 +145,7 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // her stance every `shiftT` s to dislodge him instead, at `shiftV` u/s for `shiftD` s.
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
 // u/s straight up: it launched him over her back); a throw never carries him toward the rift.
-export const STAND = { h: 0.52, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
+export const STAND = { h: 0.52, ride: 0.06, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
 export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -1295,6 +1296,16 @@ function poseAll(L, dt, player) {
     }
     const span = 1.3 * R;
     gy = lerp(gy, fy / 8, hc);
+    // (ritefair) ...but never more than STAND.ride over the ground under her belly: a foot up on
+    // a boulder or the high side of a bank lifted the whole shell (measured: feet at +7 and
+    // +11 u put her wards 10-13 u over him off the crest); now the legs take it, knees up, and
+    // the sole (below) still lifts her over anything that would come up through the belly
+    {
+      let fb = -1e9;
+      for (let k = 0; k < 5; k++) { const a = k * 1.2566, rr = k ? 0.3 * R : 0; fb = Math.max(fb, groundAt(L, L.pos.x + Math.cos(a) * rr, L.pos.z + Math.sin(a) * rr, true)); }
+      const cap = fb + STAND.ride * R;
+      if (gy > cap) gy = lerp(gy, cap, hc);
+    }
     pit = lerp(pit, -Math.atan2((ff - fb) / 4, span * 0.55), hc);
     rol = lerp(rol, Math.atan2((fl - fr) / 4, span * 1.6), hc);
   }
