@@ -16,13 +16,13 @@ await boot(c);
 await c.ev(`(weather.set(${process.env.WX ?? 0}, 0), 1)`);
 await c.key('Digit6', true, 1); await sleep(80); await c.key('Digit6', false, 1); await sleep(2500);
 await c.ev(`(async () => { window.__B = await import('/src/entities/sleeper/bodyCols.js'); window.__T0 = await import('/src/world/terrain.js');
-  window.__ck = { frames: 0, camIn: 0, camMax: 0, camAt: [], camBody: 0, salMax: 0, salDeep: 0, pushMax: 0, contactFrames: 0, minCamFloor: 1e9 };
+  window.__ck = { frames: 0, camIn: 0, camMax: 0, camAt: [], camBody: 0, camBodyAt: [], salMax: 0, salDeep: 0, pushMax: 0, contactFrames: 0, minCamFloor: 1e9 };
   window.__rT = performance.now(); window.__msgs = [];
   (function f() { const L = __sl, p = player.pos, cp = camera.position;
     const t = document.getElementById('msg').textContent; if (t && __msgs[__msgs.length - 1] !== t) __msgs.push(t);
     const ci = __B.inClutch(cp.x, cp.y, cp.z, 0);
     if (ci > 0) { __ck.camIn++; if (ci > __ck.camMax) __ck.camMax = ci; if (__ck.camAt.length < 20) __ck.camAt.push([+((performance.now() - __rT) / 1000).toFixed(1), +ci.toFixed(2), +L.stand.toFixed(2)]); }
-    if (__B.bodyBlocked(cp.x, cp.y, cp.z, 0)) __ck.camBody++;
+    if (__B.bodyBlocked(cp.x, cp.y, cp.z, 0)) { __ck.camBody++; if (__ck.camBodyAt.length < 30) __ck.camBodyAt.push([+((performance.now() - __rT) / 1000).toFixed(1), __B.blockWhy, +L.stand.toFixed(2)]); }
     __ck.frames++;
     let sp = 0; for (const h of [-0.9, -0.45, 0]) { const v = __B.inClutch(p.x, p.y + h, p.z, 0.45); if (v > sp) sp = v; }
     if (sp > __ck.salMax) __ck.salMax = sp; if (sp > 0.1) __ck.salDeep++;
@@ -33,7 +33,8 @@ let shot = 0; const snap = async n => { await c.png(DIR + PRE + '-' + n + '.png'
 const faceTake = (dy = 0, pt = -0.3) => c.ev(`(() => { const t = __sl.brood.takeAt, p = player.pos; player.yaw = Math.atan2(t.x - p.x, t.z - p.z) + ${dy}; player.pitch = ${pt}; return 1; })()`);
 // 1. walk in (the strip): the camera turned a little off his back so the tongue is in frame
 console.log('start', JSON.stringify(await st()));
-await c.ev(`(() => { const t = __sl.brood.takeAt, p = player.pos, a = Math.atan2(t.x - p.x, t.z - p.z); player.pos.x -= Math.sin(a) * 2.5; player.pos.z -= Math.cos(a) * 2.5; player.pos.y = __T0.terrainH(player.pos.x, player.pos.z, 0) + 1.35; return 1; })()`);
+// (from OUTSIDE her rim, along the clutch's own bearing, so the lens is clear of her shell)
+await c.ev(`(() => { const t = __sl.brood.takeAt, L = __sl, a = Math.atan2(t.x - L.pos.x, t.z - L.pos.z); player.pos.x = t.x + Math.sin(a) * 6.5; player.pos.z = t.z + Math.cos(a) * 6.5; player.pos.y = __T0.terrainH(player.pos.x, player.pos.z, 0) + 1.35; player.vel.set(0, 0, 0); return 1; })()`);
 await faceTake(0.35, -0.3); await sleep(1500);
 await snap('walkin-0'); console.log('walkin 0', JSON.stringify(await st()));
 await c.key('KeyW', true);
@@ -109,9 +110,18 @@ for (let i = 0; i < 8; i++) {
   if (i % 2 === 1) await snap('settle-' + (i >> 1));
   console.log('settle', i, JSON.stringify(await st()), 'homeTurn', await c.ev(`!!__sl.homeTurn`));
 }
-// back to the spilled tongue: walk in and stand against it with the lens close
-await steerTo(`(() => { const t = __sl.brood.takeAt; return [t.x, t.z]; })()`, 0.5, 15000);
-await faceTake(-0.5, -0.4); await sleep(1500); await snap('after-settle');
+// THE SETTLE BESIDE HIM: Alt+6 (re-arms her asleep, Sal at the tongue, the lens behind him),
+// wake her and hold her, let her stand (the tongue folds up), then settle her again: the
+// tongue spills back out toward him and the lens
+await c.key('Digit6', true, 1); await sleep(80); await c.key('Digit6', false, 1); await sleep(2500);
+await faceTake(0.5, -0.3); await sleep(800);
+await c.ev(`(__sl.cmd('wake'), __sl.hold = true, 1)`);
+await c.until(`__sl.stand >= 0.98`, 25000).catch(() => console.log('no stand'));
+await faceTake(0.5, -0.3); await sleep(1000); await snap('resettle-0-up');
+console.log('resettle up', JSON.stringify(await st()));
+await c.ev(`(__sl.cmd('settle'), 1)`);
+for (let i = 1; i <= 4; i++) { await sleep(1600); await faceTake(0.5, -0.3); await snap('resettle-' + i); console.log('resettle', i, JSON.stringify(await st())); }
+await sleep(3000); await faceTake(-0.5, -0.4); await sleep(1200); await snap('after-settle');
 console.log('end', JSON.stringify(await st()));
 console.log('msgs', JSON.stringify(await c.ev(`__msgs`)));
 console.log('CLUTCH', JSON.stringify(await c.ev(`__ck`)));

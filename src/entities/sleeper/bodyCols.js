@@ -18,8 +18,8 @@
 //     own frame (centre, radius, the same lump() the drawn surface uses, so the collider IS the
 //     surface he sees). It is SOFT: he stops at the surface and slides round it (the last few
 //     centimetres ease out, only his inward speed is taken), never a blow, never a shove into
-//     the floor (on the ground it pushes sideways only, and a lobe right over his helmet while
-//     he stands lets him be: a hard roof there would pin him under her). The camera's boom
+//     the floor (on the ground it pushes sideways only, and a lobe coming down over him as
+//     she settles shoves him out from under it, never down). The camera's boom
 //     treats the lobes like the rest of her (bodyBlocked).
 // Zero per-frame allocation: fixed typed pools, module scratch.
 // OWNED BY: the sleepers (brooder.js publishes; game.js resolves and probes).
@@ -462,10 +462,13 @@ function resolveClutch(p, v, dt, grounded) {
     if (pen <= 0) continue;
     let nx = ex, ny = ey, nz = ez;
     if (grounded) {
-      // on his feet: sideways only; a lobe right over (or under) him leaves him be
-      const h = Math.hypot(nx, nz);
-      if (h < C.roof) continue;
-      nx /= h; ny = 0; nz /= h;
+      // on his feet: sideways only (the floor holds him up). A lobe coming down right over him
+      // (she settles) shoves him out from under it: away from its centre, or from the mass's
+      if (ny < -0.75 || Math.hypot(nx, nz) < C.roof) {
+        let hx = p.x - cx, hz = p.z - cz, hl = Math.hypot(hx, hz);
+        if (hl < 1e-3) { hx = p.x - cbx; hz = p.z - cbz; hl = Math.hypot(hx, hz) || 1; }
+        nx = hx / hl; nz = hz / hl; ny = 0;
+      } else { const h = Math.hypot(nx, nz); nx /= h; ny = 0; nz /= h; }
     }
     let mv = pen > C.skin ? pen - C.skin + C.skin * ease : pen * ease;
     if (mv > left) mv = left;

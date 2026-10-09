@@ -12,7 +12,7 @@ import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders,
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn } from './entities/sleeper/bodyCols.js';
+import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
@@ -1042,7 +1042,7 @@ const DECK_LIFTS = [0, 0.9, 1.8, 2.7];
 let deckLift = 0, deckLiftV = 0, deckLiftT = 0;
 const boomBack = () => CAM_BACK + (DECKCAM.back - CAM_BACK) * deckK;
 const boomUp = () => CAM_UP + (DECKCAM.up - CAM_UP) * deckK;
-const _raftInv = new THREE.Matrix4(), _one = V3(1, 1, 1), _bp = V3(), _piv = V3();
+const _raftInv = new THREE.Matrix4(), _one = V3(1, 1, 1), _bp = V3(), _bp2 = V3(), _piv = V3();
 // the boom's pivot: the top of his helmet, not his eye — a line from the eye clipped
 // every waist-high thing a hand behind him; from the bonnet it clears them, which is also
 // what the lens needs to see (the helmet and shoulders), and the lens stays on that line.
@@ -1635,9 +1635,24 @@ function updateCamera(dt, t, fwd) {
     const cl = camTo.length();
     // (never into his own helmet: a claw falling right beside him has no clear spot, and a
     // moment inside it beats the inside of the bonnet)
-    const f = Math.max(Math.min(1, CRECAM.minD / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
+    // (clutch2) inside her EGGS the lens goes straight out (the mass barely moves: a snap of a
+    // few centimetres is invisible, a frame inside the eggs is not), and may come nearer his
+    // helmet than minD to do it (under the hanging mass his bonnet is against it)
+    const eggs = inClutch(camera.position.x, camera.position.y, camera.position.z, 0.05) > 0;
+    const f = Math.max(Math.min(1, (eggs ? 1.0 : CRECAM.minD) / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
     _bp.copy(_piv).addScaledVector(camTo, f);
-    camera.position.lerp(_bp, Math.min(1, 30 * dt));
+    if (eggs && inClutch(_bp.x, _bp.y, _bp.z, 0.05) > 0) {
+      // his bonnet is against the eggs and the boom runs up into them: the lens drops down
+      // the same bearing until it is out of them (never under the floor's clearance)
+      for (let d = 0.8; d <= 4.01; d += 0.8) {
+        camTo.copy(camera.position).sub(_piv); camTo.y -= d;
+        const l2 = camTo.length(), f2 = Math.max(Math.min(1, 1.0 / Math.max(l2, 1e-3)), creBoomClear(_piv, camTo, 0.3));
+        _bp2.copy(_piv).addScaledVector(camTo, f2);
+        if (_bp2.y < terrainH(_bp2.x, _bp2.z, zone < 0 ? 0 : zone) + 0.6) break;
+        if (inClutch(_bp2.x, _bp2.y, _bp2.z, 0.05) <= 0) { _bp.copy(_bp2); break; }
+      }
+    }
+    camera.position.lerp(_bp, eggs ? 1 : Math.min(1, 30 * dt));
     camVel.lerp(player.vel, Math.min(1, 10 * dt));
     creStops++;
   }
