@@ -45,7 +45,8 @@ import { lanternWorldPos } from '../diver.js';
 import * as G from './brooderGeo.js';
 
 const TAU = Math.PI * 2;
-const TAKE_R = 2.6, RET_R = 3.4;        // reach from his hands/helmet to the mass's surface (world u): pry / press back (up, arm raised)
+// (ritefair: RET_R 3.4 -> 5.0, the return is a press, not a precision hover under a moving colossus)
+const TAKE_R = 2.6, RET_R = 5.0;        // reach from his hands/helmet to the mass's surface (world u): pry / press back (up, arm raised)
 const RB = 0.0025;                      // a sparse (proud) bead's radius, shell units (x R 15.4 = 0.039 u: her eggs, true to her scale)
 const MAXB = 3200;                      // sparse bead budget; the build thins to it
 const LOD_N = 12;                       // sparse beads draw inside this range (world u); the skin carries the read past it
@@ -59,6 +60,16 @@ const _a = V3(), _b = V3(), _lant = V3();
 // (0, -0.103, -0.24), radii (0.36, 0.022, 0.34)), heavy and sagging: bottom ~ -0.40 (6 u
 // under her body origin), 8.6 u across. ASLEEP ("S"): seat() rests every lobe on the seabed
 // under her and pushes a tongue of lobes out past the rim on the open side.
+// (ritefair, 2026-10-09) TUCKED: a berried crab carries her mass pressed up under the
+// abdomen flap, not slung beneath her. Standing, every lobe rides TUCK higher (shell units,
+// 0.18 = 2.8 u): with her standing height (brooder.js STAND.h) the mass's underside sits ~3.5 u
+// over flat ground (over his helmet: he walks in under her rear without meeting it) and in
+// his reach standing (RET_R). Slung, it lay ON the floor whenever she stood off the rim crest
+// (measured 0.1 u, -2.2 u) and walled off the walk in under her; on the crest it hung 6-10 u
+// up, out of reach. The lobes' tops stay inside her shell. Asleep (seat) is unchanged.
+// TUCK_FLOOR: and no lobe hangs below this (shell units): the sag lobes were 1.5 u under the
+// rest of the mass; pressed up level with it the underside is ~3 u under her body origin.
+const TUCK = 0.18, TUCK_FLOOR = -0.20;
 const MAIN = [
   [0, -0.215, -0.26, 0.16], [0.15, -0.20, -0.18, 0.13], [-0.15, -0.20, -0.18, 0.13],
   [0.13, -0.21, -0.38, 0.13], [-0.13, -0.21, -0.38, 0.13], [0, -0.20, -0.05, 0.12],
@@ -66,9 +77,9 @@ const MAIN = [
   // the sag: the heaviest of it hangs lowest (the reach test counts these, so the return is
   // ~1.3 u nearer the floor than the apron's own bead line)
   [0.03, -0.39, -0.29, 0.085], [-0.04, -0.40, -0.21, 0.075]
-];
+].map(l => [l[0], Math.max(l[1] + TUCK, TUCK_FLOOR + l[3]), l[2], l[3]]);
 const SPILL_MAX = 8;
-const MASS_C = [0, -0.23, -0.27];
+const MASS_C = [0, -0.23 + TUCK, -0.27];
 
 // A lobe is not a ball: its radius wanders with direction (the same function in the core's
 // vertex shader, so the beads sit on the surface the core draws, and in bodyCols.js, so the

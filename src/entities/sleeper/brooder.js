@@ -65,7 +65,9 @@ const SOCKETS = [
   { p: [0, -0.125, 0.56], n: [0, -0.94, 0.34] },
   { p: [0.52, -0.105, -0.06], n: [0.18, -0.98, 0] },
   { p: [-0.52, -0.105, -0.06], n: [-0.18, -0.98, 0] },
-  { p: [0, -0.135, -0.36], n: [0, -1, 0] },
+  // (ritefair) the 4th (Pallid, Burned) was at [0, -0.135, -0.36], INSIDE the hanging clutch's
+  // big lobe: touchable through the eggs but never seen. Now under the cutter's shoulder.
+  { p: [-0.34, -0.117, 0.40], n: [-0.12, -0.97, 0.20] },
   { p: [0, -0.118, 0.18], n: [0, -1, 0] }
 ];
 // Collision centres: the crown and a ring of eight over the shell, sized so the spheres
@@ -125,8 +127,27 @@ const HAMMER_T = 2.6;
 export const GLINT = { k: 0.9, scale: 1.0, near: 14, far: 130 };
 export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
 export const THUMP = { k: 1, near: 12, far: 110 };
-export const CROUCH = { drop: 0.16, lean: 0.16, clear: 4.6 };
-export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6 };
+// (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
+// crouched too low and I kept colliding") RETIRED: drop 0.16 -> 0, lean 0.16 -> 0 (measured
+// before: the rim came down to 0.4-1.3 u over the floor on the lanes in as the spring ramped,
+// and the lean dropped it ~2.4 u on HIS side while he was still walking in under it). The wards
+// no longer need it (see STAND); the knobs stay for the lab.
+export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
+// (ritefair) THE RITE, FAIR. stand: her standing height (shell units over her feet; was 0.44):
+// with the clutch carried tucked under her apron (brood.js MAIN) and her wards on the belly
+// plane, 0.52 puts the wards ~6 u over flat ground (in reach standing, a hop at most) and the
+// egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). ride: she rides
+// at most this far (R) over the ground under her belly, whatever her feet stand on; clear: her
+// shell's lowest point keeps this many u over the ground under it while she is awake. Standing on
+// the rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
+// 12-17 u over him: `keep` holds her centre this far (R) outside the crest while she hunts a
+// diver on the plateau (she comes off her ledge to fight). underK: under her body (R) the
+// hammer cannot reach him (a crab cannot strike under itself) and she lowers it; she shifts
+// her stance every `shiftT` s to dislodge him instead, at `shiftV` u/s for `shiftD` s.
+// knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
+// u/s straight up: it launched him over her back); a throw never carries him toward the rift.
+export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
+export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -227,7 +248,9 @@ export function makeBrooder(idx, cfg) {
     // (brooder-clutch) her wards are on her underside, 8-13 u over the floor when she stands
     // on the rift lip (the crest lifts her): 6 u of reach makes the near ones a hop and the
     // high hip ward a short burst (it was 5: every ward but the nearest needed a full burst)
-    reach: 6, collR: 0.33 * R, flare: 0,
+    // (ritefair) 6 -> 7: her shell now keeps 3.6 u over the ground under it (Michael could not
+    // get under her), which lifts the belly plane on uneven ground; the touch reaches up to meet it
+    reach: 7, collR: 0.33 * R, flare: 0,
     pos: V3(), yaw: 0, vel: V3(), stand: 0, standE: 0, standTarget: 0, threat: 0, threatE: 0, threatTarget: 0,
     walkTo: null, bodyY: 0, head: V3(), spine: COLL.map(() => V3()), sigils: [], feet: [], _pd: 1e9,
     uni: { uTime: { value: 0 } },
@@ -485,6 +508,14 @@ export function makeBrooder(idx, cfg) {
     const perp = V3(-out.z, 0, out.x);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
+    // (ritefair) the rift's rim crest along her lair's bearing: she sleeps astride it, and
+    // awake she keeps off it (STAND.keep) while she hunts a diver out on the plateau
+    {
+      const bx = lip.x - rp.x, bz = lip.z - rp.z, bl = Math.hypot(bx, bz) || 1;
+      let hi = -1e9, cr = 16;
+      for (let r = 16; r <= bl; r += 1) { const h = terrainH(rp.x + bx / bl * r, rp.z + bz / bl * r, idx); if (h > hi) { hi = h; cr = r; } }
+      L.riftC = V3(rp.x, 0, rp.z); L.crestR = cr;
+    }
     L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
     // (her trail's head, where the old nest stood: the tracks run in from 95 u out past it,
     // exactly where they always began)
@@ -1099,6 +1130,12 @@ function poseClaws(L) {
   // the hammer's anticipation: cocked high and back, holding with a tremble, then the fall
   const ck = L.cock * th, hold = ck > 0.98 ? 1 : 0;
   const trem = hold * 0.022 * Math.sin(t * 71) * Math.sin(t * 13.3);
+  // (ritefair) THE MERAL SPREAD: a diver coming in at her face and she throws both claws up and
+  // OUT (a crab's threat display), the way under her front open between them; the crusher
+  // folds back into the hammer as it cocks. Held forward as a guard they walled off the walk-in
+  // from the front, and she always turns to face him (Pallid: a perfect walker stuck at the
+  // claws for 200 s in 3 of 3 runs)
+  const gu = L.guardUp ? L.guardUp.x : 0;
   for (const c of L.claws) {
     const sd = c.sd;
     // never quite still: slow drift in two axes (noise, not a metronome), a heavier and
@@ -1116,8 +1153,9 @@ function poseClaws(L) {
       // the strike: the great claw comes up to head height and gapes; then it COCKS -
       // up and back, the pincer wide - holds trembling, and comes DOWN across her front
       const sw = L.swing * th;
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw + sd * 0.30 * ck + dy - sd * 0.2 * h,
-        lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h);
+      const spr = HUNT.spread * gu * (1 - ck) * (1 - sw);
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw + sd * 0.30 * ck + dy - sd * 0.2 * h + sd * spr,
+        lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h + 0.8 * spr);
       c.cj.rotation.set(0, -sd * lerp(0.95, 0.40, th), 0.30 - 0.25 * sw + 0.25 * ck);
       c.pj.rotation.set(0, -sd * lerp(0.45, 0.15, th), lerp(-0.55, -0.30, th) + 0.2 * sw - 0.25 * ck + 0.6 * dz);
       c.dj.rotation.z = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
@@ -1127,7 +1165,7 @@ function poseClaws(L) {
       // (brooderfix) a diver close under her face: the guard comes UP off her mouth, raised to
       // strike (L.guardUp). Solid now, held low across the mouth it walled off the one way in
       // under her front, the plume rush (measured: 0 of 3 rushes got under her, 3 of 3 on main)
-      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th) + sd * 0.28 * ck + dy - sd * 0.2 * h,
+      c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.12, th) + sd * 0.28 * ck + dy - sd * 0.2 * h + sd * HUNT.spread * gu,
         lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h + HUNT.guardUp * (L.guardUp ? L.guardUp.x : 0));
       c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th) + sd * 0.3 * ck, 0.30);
       c.pj.rotation.set(0, -sd * 0.45, -0.55 + 0.6 * dz);
@@ -1261,6 +1299,16 @@ function poseAll(L, dt, player) {
     }
     const span = 1.3 * R;
     gy = lerp(gy, fy / 8, hc);
+    // (ritefair) ...but never more than STAND.ride over the ground under her belly: a foot up on
+    // a boulder or the high side of a bank lifted the whole shell (measured: feet at +7 and
+    // +11 u put her wards 10-13 u over him off the crest); now the legs take it, knees up, and
+    // the sole (below) still lifts her over anything that would come up through the belly
+    {
+      let fb = -1e9;
+      for (let k = 0; k < 5; k++) { const a = k * 1.2566, rr = k ? 0.3 * R : 0; fb = Math.max(fb, groundAt(L, L.pos.x + Math.cos(a) * rr, L.pos.z + Math.sin(a) * rr, true)); }
+      const cap = fb + STAND.ride * R;
+      if (gy > cap) gy = lerp(gy, cap, hc);
+    }
     pit = lerp(pit, -Math.atan2((ff - fb) / 4, span * 0.55), hc);
     rol = lerp(rol, Math.atan2((fl - fr) / 4, span * 1.6), hc);
   }
@@ -1280,13 +1328,17 @@ function poseAll(L, dt, player) {
     let cw = 0;
     if (player && !L.dormant && !L.calmed && !L.hold && L.standE > 0.9) {
       const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z;
-      if (Math.hypot(px, pz) < 0.85 * R && player.pos.y < L.bodyY - 0.08 * R) cw = 1;
+      if (Math.hypot(px, pz) < CROUCH.r * R && player.pos.y < L.bodyY - 0.08 * R) cw = 1;
     }
     if (L.bellyOver < CROUCH.clear) cw = Math.min(cw, L.crouch.x - 0.15);
     spr(L.crouch, clamp(cw, 0, 1), 1.4, 0.95, dt > 0 ? dt : 1);
   }
   const cK = L.crouch.x;
-  L.bodyY = gy + R * (lerp(0.06, 0.44 - CROUCH.drop * cK, hv) + 0.10 * L.threatE * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  // (ritefair) with him under her the hammer is lowered (threat 0), but she does NOT settle onto
+  // him: she holds the height (and front) she stood at, so the lanes in stay open (measured: the
+  // threat's lift and front pitch going with it brought her 4.3 u down over him)
+  const liftK = Math.max(L.threatE, L.underE ? L.underE.x : 0);
+  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
   let leanP = 0, leanR = 0;
@@ -1298,11 +1350,15 @@ function poseAll(L, dt, player) {
   // hunched: standing, the front drops over the diver; threat lifts it to show the face.
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
-  b.rotation.set(pit + 0.06 * hc + 0.12 * L.threatE * (1 - cK) - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x + leanP, L.yaw, rol - 0.025 * hc + L.bR.x + leanR);
+  b.rotation.set(pit + 0.06 * hc + 0.12 * liftK * (1 - cK) - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x + leanP, L.yaw, rol - 0.025 * hc + L.bR.x + leanR);
   // the sole stays on the ground (L.grp sits at the origin, so body.matrix IS its world)
   b.updateMatrix();
   // (asleep the floor is off; it comes on through the heave, so the rise lifts her OUT)
-  const bed = lerp(SOLE_BED_DEEP * R, -SOLE_CLR, smooth(hc, 0, 0.7));
+  // (ritefair) awake and not stilled, her SHELL keeps STAND.clear u over whatever ground is under
+  // it (a bank under her prow had the rim 0.3-0.7 u off the floor: the lane in was shut); her legs
+  // still plant on the floor, the doors between them stay open. Stilled, she settles as before.
+  const clr = !L.dormant && !L.calmed ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
+  const bed = lerp(SOLE_BED_DEEP * R, -clr, smooth(hc, 0, 0.7));
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
   if (pen > 0) { b.position.y += pen; L.bodyY += pen; }
@@ -1571,7 +1627,15 @@ export function updateBrooder(L, dt, t, player) {
   }
   // she rears on her own when the diver comes close (the lab's hold/rear override it)
   // blind, she keeps striking where she last saw him, until she gives the spot up
-  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP ? 1 : 0;
+  // (ritefair) under her body the hammer cannot reach him: she lowers it, and shifts her stance
+  // now and then to put him out from under her instead (below)
+  {
+    const ux = player.pos.x - L.pos.x, uz = player.pos.z - L.pos.z;
+    L.under = !L.dormant && L.standE > 0.5 && Math.hypot(ux, uz) < STAND.under * L.R && player.pos.y < L.bodyY;
+  }
+  if (!L.underE) L.underE = S();
+  spr(L.underE, L.under ? L.standE : 0, 2.0, 1.0, dt > 0 ? dt : 1);
+  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP && !L.under ? 1 : 0;
   // a fresh threat starts the hammer at the top of its guard, so the first blow is
   // always preceded by the full wind-up
   if (L.threatTarget > 0.5 && L.threat < 0.02) L.swingT = 0;
@@ -1715,8 +1779,34 @@ export function updateBrooder(L, dt, t, player) {
   L.velPrev.copy(L.vel);
   L.vel.x = lerp(L.vel.x, vx, Math.min(1, 1.5 * dt));
   L.vel.z = lerp(L.vel.z, vz, Math.min(1, 1.5 * dt));
+  // (ritefair) THE SHIFT: a diver under her a while, and she moves her stance out from over
+  // him, sideways at a walk; her legs stepping round him nudge him, they never strike
+  L.underT = L.under && hunt ? (L.underT || 0) + dt : 0;
+  if (L.underT > STAND.shiftT && !(L.shiftT > 0)) {
+    L.underT = 0; L.shiftT = STAND.shiftD;
+    const a = L.yaw + (Math.random() < 0.5 ? 1 : -1) * Math.PI / 2;
+    L.shiftX = Math.sin(a); L.shiftZ = Math.cos(a);
+  }
+  if (L.shiftT > 0) {
+    L.shiftT -= dt;
+    const k = STAND.shiftV * Math.sin(Math.PI * clamp(1 - L.shiftT / STAND.shiftD, 0, 1));
+    L.vel.x += (L.shiftX * k - L.vel.x) * Math.min(1, 4 * dt); L.vel.z += (L.shiftZ * k - L.vel.z) * Math.min(1, 4 * dt);
+  }
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
+  // (ritefair) OFF THE LIP: hunting a diver out on the plateau she keeps her centre STAND.keep R
+  // outside the rift's rim crest (on it the crest lifted her and her wards 6-8 u); she walks off
+  // her ledge as she rises, and comes no nearer the rift while he stays out of its bowl
+  if (hunt && L.riftC && L.standE > 0.5) {
+    const rx = L.pos.x - L.riftC.x, rz = L.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
+    const keep = L.crestR + STAND.keep * R;
+    if (rr < keep && Math.hypot(L.aim.x - L.riftC.x, L.aim.z - L.riftC.z) > L.crestR) {
+      const k = Math.min(keep - rr, 3.0 * dt * L.standE);
+      L.pos.x += rx / rr * k; L.pos.z += rz / rr * k;
+      const vin = (L.vel.x * rx + L.vel.z * rz) / rr;
+      if (vin < 0) { L.vel.x -= vin * rx / rr; L.vel.z -= vin * rz / rr; }
+    }
+  }
   // the world is solid to her: out of every hull and big rock, sliding along it
   L.pushed = L.standE > 0.3 ? pushOut(L, dt) : 0;
 
@@ -1795,14 +1885,14 @@ export function updateBrooder(L, dt, t, player) {
     let lk = 0;
     if (!L.dormant && !L.calmed && !L.hold && L.standE > 0.8 && pd < 60) {
       const el = Math.atan2(L.aim.y - L.head.y, Math.max(4, Math.hypot(L.aim.x - L.head.x, L.aim.z - L.head.z)));
-      lk = clamp(el * 0.35, -0.06, 0.16);
+      lk = clamp(el * 0.35, L.under ? 0 : -0.06, 0.16);   // (ritefair: never tips her front down onto him under her)
     }
     L.lookP = (L.lookP || 0) + (lk - (L.lookP || 0)) * Math.min(1, 1.2 * dt);
     // the guard rises when he is close under her face (in front, inside 1.6 R): see poseClaws
     let gu = 0;
     if (!L.dormant && !L.calmed && L.standE > 0.8) {
       const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z, fw = px * Math.sin(L.yaw) + pz * Math.cos(L.yaw);
-      if (fw > 0 && Math.hypot(px, pz) < 1.6 * R) gu = 1;
+      if (fw > 0 && Math.hypot(px, pz) < HUNT.upR * R) gu = 1;   // (ritefair: 1.6 R -> 2.4 R: the claws walled him off at ~1.8 R)
     }
     if (!L.guardUp) L.guardUp = S();
     spr(L.guardUp, gu, 3.2, 0.9, dt);
@@ -1819,9 +1909,20 @@ export function updateBrooder(L, dt, t, player) {
   if (!L.calmed && L.threatE > 0.8 && L.swing > 0.85 && L.strikeCd <= 0) {
     const c = L.claws[1].major ? L.claws[1] : L.claws[0];
     c.dj.getWorldPosition(_ft);
-    if (_ft.distanceTo(player.pos) < L.R * 0.42) {
-      _v.copy(player.pos).sub(_ft).setY(0.4).normalize();
+    if (_ft.distanceTo(player.pos) < L.R * 0.42 && !L.under) {
+      // (ritefair) a throw along the ground away from the blow, a little up (was setY(0.4):
+      // ~10 u/s straight up, over her back), and never toward her rift's bowl
+      _v.copy(player.pos).sub(_ft).setY(0);
+      if (_v.lengthSq() < 1e-6) _v.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
+      _v.normalize();
+      if (L.riftC) {
+        const rx = player.pos.x - L.riftC.x, rz = player.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
+        const vin = (_v.x * rx + _v.z * rz) / rr;
+        if (vin < 0 && rr > L.crestR) { _v.x -= vin * rx / rr; _v.z -= vin * rz / rr; if (_v.lengthSq() < 0.04) _v.set(rx / rr, 0, rz / rr); _v.normalize(); }
+      }
+      _v.y = STAND.knockUp; _v.normalize();
       player.vel.addScaledVector(_v, HUNT.knock);
+      L.hits = (L.hits || 0) + 1;
       ev.lightDrain += 0.12;
       ev.slam = true;
       L.strikeCd = 2.0;

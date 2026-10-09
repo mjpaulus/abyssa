@@ -84,7 +84,9 @@ against explicit contracts and reviewed on return.
   (`player.jet` 0..1 ramped over 0.2 s along `player.jetDir`, JET_ACC 23 through the shipped
   added mass 1.26/1.55, drain 0.62/s ≈ 1.4 s from full) which BLOWS UP THE DRESS in proportion
   to how much of it points up, so he floats on after it (vertical drag x0.60: a full dress
-  rises ~9 u/s, C sinks ~13). Seabed->surface zone 0: ~17 s with 2 bursts (was 25 s of held
+  rises ~9 u/s, C sinks ~13; ritefair: the spill ramps in over the burst's first 0.12-0.32 s, so
+  a 0.3 s kick barely fills it, and C held while rising bleeds the climb (VENT_BRAKE 2.2/s): a 1 s
+  burst up turns in 0.8 s, was 1.9). Seabed->surface zone 0: ~17 s with 2 bursts (was 25 s of held
   Space). The submersible's AIR THRUSTER is an UPGRADE (1.6x tank, 1.5x refill). No pack on
   the deck, ladder or above water. `window.__pack` (taps/holds/dry counts, ramp).
 - Camera (`game.js` updateCamera) is GROUNDED (Michael, 2026-10-01, "floaty underwater"):
@@ -239,9 +241,20 @@ against explicit contracts and reviewed on return.
   it, calmed she won't settle her tongue of eggs onto him); [E] pries a clump
   off her and wakes her; the last ward won't light while the clump is out (wardRefuse +
   tally "CLUTCH ROBBED"); [E] under her presses it back. Awake she HUNTS the thief (HUNT in
-  brooder.js; 3.8 u/s with the clump out), crouches over Sal when he's under her, and her
-  body collides per part (sleeper/bodyCols.js; belly deliberately open) for Sal and the
-  camera (`__crecam`). `lev.dormant` hides name/bearing/dread until she wakes).
+  brooder.js; 3.8 u/s with the clump out), and her body collides per part (sleeper/bodyCols.js;
+  belly deliberately open) for Sal and the camera (`__crecam`). `lev.dormant` hides name/
+  bearing/dread until she wakes). THE RITE, FAIR (ritefair 2026-10-09, brooder.js `STAND`,
+  docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre 1.45 R off
+  the rift's rim crest (on it her wards hung 12-17 u up) and rides at most 0.06 R over the ground
+  under her belly; standing height 0.52 R, held over him (no settling onto him), shell 3.6 u over
+  the ground under it (STAND.clear), ward reach 7; the clutch is carried TUCKED under her apron (brood.js
+  TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up) and pressed back from RET_R 5; the crouch is retired
+  (Michael: "crouched too low and I kept colliding"); under her body is a refuge (no hammer; she
+  shifts her stance every ~3 s instead); her claws spread open her front when he comes in
+  (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never toward the rift; a slam
+  tears once per 0.8 s; her back is a slick dome (no tear, he slides off); game.js `BOSSCAM` cranes
+  the lens up 1.5 u and leans the look toward her belly/nearest dark ward while she is up within
+  30 u (drops on any mouse look). `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (knife frees: `lev.onSlash`), flinch from light; wards on

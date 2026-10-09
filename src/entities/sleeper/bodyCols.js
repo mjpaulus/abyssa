@@ -34,7 +34,8 @@ let bx = 0, by = 0, bz = 0, bRad = 0;           // a bounding sphere over everyt
 let on = false;
 // dev A/B: claws = false takes the claws out of Sal's resolve (the camera still sees them)
 export const BODYCOLS = { claws: true };
-export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, last: '', clutch: 0, clPush: 0 };   // probe: this frame's resolve
+const SHELL_SLIDE = 7, SHELL_VMAX = 14, LIMB_VMAX = 20;   // (ritefair) u/s^2: a diver on her back slides off her shoulders
+export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, top: false, last: '', clutch: 0, clPush: 0 };   // probe: this frame's resolve
 // the clutch's lobes: x y z r (body-local shell units) + lump seed; the body matrix and inverse
 const MAXL = 32;
 const LOB = new Float32Array(MAXL * 4), LSD = new Float32Array(MAXL), CLM = new Float32Array(16), CLI = new Float32Array(16);
@@ -336,7 +337,7 @@ function capPen(A, i, f, px, y0, y1, pz) {
 // Push Sal out of her (positions, then velocities) and report the hardest closing speed
 // of any part that met him this frame (u/s; the game's slam) in BODY.hitV.
 export function resolveBodyCols(player, dt, grounded) {
-  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.last = ''; BODY.clutch = 0; BODY.clPush = 0;
+  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.top = false; BODY.last = ''; BODY.clutch = 0; BODY.clPush = 0;
   if (!on) return 0;
   const p = player.pos, v = player.vel;
   { const dx = p.x - bx, dy = p.y - by, dz = p.z - bz; if (dx * dx + dy * dy + dz * dz > (bRad + 3) * (bRad + 3)) return 0; }
@@ -399,6 +400,9 @@ export function resolveBodyCols(player, dt, grounded) {
       // hammer has its own designed knock, and a guard claw working across her mouth that
       // flung him 5 u/s back every cycle sealed her front against the plume rush)
       if (i >= nLeg && nLeg) { pvx = pvy = pvz = 0; }
+      // (ritefair) a leg "moving" faster than a stepping leg can is a jump in its pose (an IK
+      // re-solve, a re-plant), not a kick: measured 28 and 78 u/s leg contacts tearing the dress
+      if (pvx * pvx + pvy * pvy + pvz * pvz > LIMB_VMAX * LIMB_VMAX) { pvx = pvy = pvz = 0; }
       contactVel(v, nx, ny, nz, pvx, pvy, pvz);
     }
     // the shell
@@ -431,8 +435,24 @@ export function resolveBodyCols(player, dt, grounded) {
           const ox = P[0] * lx + P[4] * ly + P[8] * lz + P[12], oy = P[1] * lx + P[5] * ly + P[9] * lz + P[13], oz = P[2] * lx + P[6] * ly + P[10] * lz + P[14];
           const cx = W[0] * lx + W[4] * ly + W[8] * lz + W[12], cy = W[1] * lx + W[5] * ly + W[9] * lz + W[13], cz = W[2] * lx + W[6] * ly + W[10] * lz + W[14];
           pvx = (cx - ox) * idt; pvy = (cy - oy) * idt; pvz = (cz - oz) * idt;
+          // (ritefair) a shell point "moving" faster than she can is a jump in her pose (the
+          // sole snapping her up out of the ground, a re-pose), not a blow: measured a 63 u/s
+          // shell contact tearing the dress. Her real shell speed tops out ~8 u/s (the lunge).
+          if (pvx * pvx + pvy * pvy + pvz * pvz > SHELL_VMAX * SHELL_VMAX) { pvx = pvy = pvz = 0; }
         }
-        contactVel(v, nx, ny, nz, pvx, pvy, pvz);
+        // (ritefair) ON HER BACK: her shell under his boots is a slick dome, not a blow. Her
+        // bob and footfalls carry him, they never tear the dress (measured: a sloppy run stood
+        // on her back 49 s and took 24 tears from her breathing), and he slides off her
+        // shoulders (SHELL_SLIDE u/s^2 outward along the dome) to where the wards are
+        if (ny > 0.55) {
+          BODY.top = true;
+          let hx = nx, hz = nz, hl = Math.hypot(hx, hz);
+          if (hl < 0.05) { hx = p.x - bx; hz = p.z - bz; hl = Math.hypot(hx, hz) || 1; }
+          v.x += hx / hl * SHELL_SLIDE * dt; v.z += hz / hl * SHELL_SLIDE * dt;
+          const hv = BODY.hitV;
+          contactVel(v, nx, ny, nz, pvx, pvy, pvz);
+          BODY.hitV = hv;
+        } else contactVel(v, nx, ny, nz, pvx, pvy, pvz);
       }
       _upMax = 1e9;
     }
