@@ -1,42 +1,64 @@
 # Velkath rite: before and after the fairness pass (ritefair, 2026-10-09)
 
-This answers Michael's "you should try playing and getting all the wards its so hard" and the
-orchestrator's ledger (docs/playtests/2026-10-09-velkath-ledger.md). Branch `ritefair`.
-BEFORE means main 7ad6d7d. AFTER means this branch. Both were served from one dev server on
-8832: AFTER from the worktree, BEFORE from an archive of main mounted at /_base.
+This answers Michael's two reports:
+- "you should try playing and getting all the wards its so hard"
+- "I was struggling to get under her as she was crouched too low and I kept colliding"
 
-## First finding: the harness itself was part of "so hard"
+It also answers the orchestrator's ledger (docs/playtests/2026-10-09-velkath-ledger.md).
 
-Two flaws made the fight harder than the game is.
+Branch `ritefair`. BEFORE means main 7ad6d7d. AFTER means the branch head. Both were served by
+the one dev server on 8832: AFTER from the worktree, BEFORE from an archive of main mounted at
+/_base. Bot and walk-in runs ran on DRV 9471 and 9472.
 
-**1. The game never froze her on pause.** In game.js, `updateLeviathan` ran even while
-paused, unlike the predators (`PEV_IDLE`). So with the pointer lock off, Velkath kept
-hunting and hammering:
-- her knock was banked in Sal's velocity;
-- the dress tore while nobody was at the keys.
+## Up front: where this lands against the target
 
-This is a real bug for Michael too: Esc in the middle of the fight. It is fixed here: paused,
-she gets `LEV_IDLE`.
+The target was: a competent first attempt lights every ward in 1.5-2.5 min, taking 1-3 hits.
 
-**2. The freeze-step harness let the game keep running between moves.**
-- `tools/bench/play.mjs` sets `__helm = false` between acts. Sal froze (paused), but she did
-  not (bug 1). Every pause to think was free time for her. The orchestrator's three hits in
-  80 s were partly this.
-- `__bench.step` holds the loop only while it steps. Between CDP calls the page's own rAF
-  kept playing real-time frames with whatever keys were down, and every screenshot forced one
-  more.
+**The miss is on the SOFT side.**
+- With perfect reaction the rite takes 16-22 s of game time from the take. That held before as
+  well as after.
+- After, 13 of the 14 bot runs took 0 hits. The 14th, sloppy home s2, took 1.
+- Under her body is now a refuge, and a player who knows to go there is safe.
 
-My probes now stop the live rAF loop (`requestAnimationFrame` stubbed) and render every frame
-through `__bench.step`. Every number below was taken that way. On main, with the old harness
-semantics, 3 of 4 runs took a hit 2.8 s into the take that never happens in a held run.
+**Knobs, if Michael finds it soft** (brooder.js):
+
+| knob | now | effect |
+|---|---|---|
+| `STAND.under` | 0.85 R | radius of the refuge |
+| `STAND.shiftT` / `shiftV` / `shiftD` | 3.2 s / 1.7 u/s / 1.3 s | the stance shift that dislodges him; make it a real stomp |
+| `HUNT.upR` | 2.4 R | how early the claws part for him |
+| `reach` | 7 | ward touch reach |
+
+**The 1.5-2.5 min figure** is human reading time (finding the wards, the camera, the controls).
+A perfect-reaction harness cannot measure it.
+
+## Two flaws that were making it harder than the game is
+
+**1. GAME: paused, the sleeper did not stand still.**
+- In game.js, `updateLeviathan` ran while paused. The predators do not (`PEV_IDLE`).
+- So with the pointer lock off (Esc, blur), Velkath kept hunting and hammering. Her knock was
+  banked in Sal's velocity and the dress tore with nobody at the keys.
+- FIXED: paused, she gets `LEV_IDLE`. This applies to Orune and Mhor too. Checked live: their
+  clocks stop on pause and resume on unpause, with no errors and `__shaderFailed` [].
+- Not tested: a pause in the middle of an Orune grab or during Mhor's circle (Mhor was absent
+  in the check).
+
+**2. HARNESS: real-time frames leaked between steps.**
+- `play.mjs` paused Sal between acts but, through flaw 1, not her.
+- `__bench.step` holds the loop only while it steps. Between CDP calls the page's own rAF ran
+  real-time frames with the keys as they were, and every screenshot forced one more.
+- With the leak, on main, 3 of 4 runs took a hit 2.8 s after the take. Without it, 0 of 12.
+- The orchestrator's ledger was played under both flaws. The mechanism is shown; how much of
+  its 3 hits, the float and the bowl it explains is not measured.
+- All numbers below stop the live rAF loop (`requestAnimationFrame` stubbed) and render every
+  stepped frame.
 
 ## How it was played
 
-**Bot, `tools/bench/riteplay.mjs`.** Real CDP keys, freeze-step, one frame rendered per step.
-The ledger is booked per frame in the page. Both players play the same way at the start:
+**Bot, `tools/bench/riteplay.mjs`.** Real CDP keys on the freeze-step loop, the ledger booked
+per frame in the page. Both policies play the same opening:
 - [E] pries the clump;
-- he runs off with it for 6 s, so the rite starts against a risen, hunting Velkath (the
-  ledger's case);
+- he runs off with it for 6 s, so the rite starts against a risen, hunting Velkath;
 - then the rite.
 
 The two policies:
@@ -45,260 +67,232 @@ The two policies:
 |---|---|---|
 | Slice length | 0.25 s | 0.5-1.0 s, decided on the state at slice start |
 | Aim | exact | +-20 deg |
-| Ward knowledge | every ward's position | only wards it has seen on screen; otherwise "go under her belly" |
+| Ward knowledge | every ward | only wards it has seen on screen; otherwise "under her belly" |
 | Bursts | held for what the climb needs | held 0.6-1.2 s whatever the need |
-| Dodging | rushes under her when she cocks the hammer | none |
+| Dodging | rushes under her when she cocks | none |
 
-Fixed seeds, but the game itself rolls Math.random (her strafe, her shift), so a seed does not
-repeat exactly.
-
-**Manual (me), `tools/bench/play.mjs`.** Perfect reaction, reading the per-move state and
-frames. The live loop was stopped on main too, so the comparison is fair.
+Policy, harness and seeds are identical on both trees. The game's own Math.random (her strafe,
+her shift) means a seed does not repeat exactly: compare rows in aggregate.
 
 **Column meanings.**
 - hits: tears more than 0.5 s apart.
-- tears: every tear.
 - dry dips: reserve under 12%.
-- bowl falls: entering the rift bowl, defined as floor 15 u under her lair floor.
+- bowl falls: entering the rift bowl.
 - max up / float: height over the floor; seconds spent more than 9 u up.
-- cam off-frame: share of 4-frame samples (she is awake and within 30 u) where neither her
-  belly nor a dark ward is on screen.
-- cam pressed: share of the same samples with the lens within 2.6 u of his helmet.
+- cam off-frame: share of samples (she is awake within 30 u) where neither her belly nor a dark
+  ward is on screen.
+- cam pressed: lens within 2.6 u of his helmet.
 
-### BEFORE (main), bot
+### BEFORE (main), bot: 11 of 14 complete
 | run | done | calm s | ward lit at (s) | return s | hits | tears | dry dips | min reserve | bowl falls | max up (u) | float >9u (s) | cam: off-frame % | cam: pressed % |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| home perfect s1 | yes | 19.5 | [15.4, 19.5, 16.7] | 19.5 | 1 | 1 | 0 | 0.7 | 0 | 12.2 | 0.9 | 11 | 67 |
-| home perfect s2 | yes | 20.5 | [15.6, 20.5, 16.8] | 20.5 | 0 | 0 | 0 | 0.68 | 0 | 12.6 | 1.3 | 12 | 77 |
-| home perfect s3 | yes | 20.3 | [15.6, 20.3, 16.8] | 20.3 | 0 | 0 | 0 | 0.68 | 0 | 12.7 | 1.3 | 13 | 76 |
-| home average s1 | yes | 16.9 | [15.4, 16.7, 16.8] | 16.8 | 0 | 0 | 0 | 0.54 | 0 | 14.3 | 1.8 | 5 | 91 |
-| home average s2 | yes | 17.1 | [15.2, 17.1, 16.3] | 17.1 | 0 | 0 | 0 | 0.47 | 0 | 12.6 | 3.4 | 13 | 90 |
-| home average s3 | yes | 20.4 | [14.9, 17.3, 20.4] | 20.4 | 0 | 0 | 0 | 0.45 | 0 | 6.2 | 0 | 7 | 92 |
+| home perfect s1 | yes | 19.8 | [15.2, 19.8, 16.7] | 19.8 | 0 | 0 | 0 | 0.7 | 0 | 12.3 | 1 | 13 | 71 |
+| home perfect s2 | yes | 20.1 | [15.3, 20.1, 16.7] | 20.1 | 0 | 0 | 0 | 0.68 | 0 | 12.4 | 1 | 12 | 71 |
+| home perfect s3 | yes | 16.6 | [15.4, 16.6, 16.5] | 16.6 | 0 | 0 | 0 | 0.7 | 0 | 13.2 | 1.8 | 11 | 76 |
+| home average s1 | yes | 25.7 | [15.6, 16.9, 25.7] | 25.7 | 1 | 1 | 0 | 0.44 | 0 | 7.9 | 0 | 8 | 89 |
+| home average s2 | yes | 16.2 | [15.1, 16.2, 16.1] | 16.2 | 0 | 0 | 0 | 0.47 | 0 | 12.5 | 3.1 | 5 | 95 |
+| home average s3 | yes | 24.9 | [14.9, 17.4, 24.9] | 24.9 | 0 | 0 | 1 | 0.08 | 0 | 14.7 | 1.3 | 12 | 91 |
 | pallid perfect s1 | NO | None | [None, None, None, None] | None | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 1 | 99 |
 | pallid perfect s2 | NO | None | [None, None, None, None] | None | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 1 | 99 |
 | pallid perfect s3 | NO | None | [None, None, None, None] | None | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 1 | 99 |
-| pallid average s1 | NO | None | [14.9, 18.1, None, 16.7] | None | 46 | 46 | 0 | 0.29 | 0 | 29.9 | 183.1 | 7 | 7 |
-| pallid average s2 | NO | None | [15.2, 53.3, 16.1, None] | None | 55 | 55 | 0 | 0.47 | 0 | 28.9 | 185.6 | 2 | 10 |
-| pallid average s3 | yes | 23.3 | [15, 18.4, 23.3, 17.2] | 23.3 | 1 | 3 | 1 | 0.08 | 0 | 8.1 | 0 | 5 | 83 |
+| pallid average s1 | yes | 17.1 | [14.9, 17.1, 17, 16.3] | 17.1 | 0 | 0 | 0 | 0.61 | 0 | 13.9 | 1.6 | 5 | 84 |
+| pallid average s2 | yes | 67.1 | [15.2, 67, 16.1, 66.7] | 67 | 18 | 19 | 1 | 0 | 0 | 27.6 | 48.2 | 2 | 22 |
+| pallid average s3 | yes | 17.1 | [15.1, 16.9, 17.1, 16.9] | 17.1 | 0 | 0 | 0 | 0.64 | 0 | 8.1 | 0 | 4 | 86 |
+| burned perfect s1 | yes | 35.5 | [25, 19.9, 35.5, 19.1] | 35.5 | 2 | 4 | 0 | 0.38 | 0 | 11.6 | 7.2 | 7 | 84 |
+| burned average s1 | yes | 26.4 | [24.9, 17.9, 26.4, 17.9] | 26.4 | 1 | 1 | 1 | 0.09 | 0 | 19.5 | 8 | 0 | 82 |
 
-### AFTER (ritefair), bot
+### AFTER (ritefair), bot: 14 of 14 complete
 | run | done | calm s | ward lit at (s) | return s | hits | tears | dry dips | min reserve | bowl falls | max up (u) | float >9u (s) | cam: off-frame % | cam: pressed % |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| home perfect s1 | yes | 16.2 | [14.6, 16.1, 16.2] | 16.2 | 0 | 0 | 0 | 0.77 | 0 | 2.8 | 0 | 3 | 50 |
-| home perfect s2 | yes | 16.2 | [14.6, 16.1, 16.2] | 16.2 | 0 | 0 | 0 | 0.78 | 0 | 2.5 | 0 | 3 | 53 |
-| home perfect s3 | yes | 16 | [14.5, 15.9, 16] | 16 | 0 | 0 | 0 | 0.74 | 0 | 3.4 | 0 | 3 | 29 |
-| home average s1 | yes | 24.1 | [15.8, 17.2, 24.1] | 24.1 | 0 | 0 | 0 | 0.71 | 0 | 5 | 0 | 7 | 57 |
-| home average s2 | yes | 17.1 | [15, 17.1, 16.2] | 17.1 | 0 | 0 | 0 | 0.47 | 0 | 8.2 | 0 | 13 | 43 |
-| home average s3 | yes | 26.3 | [15.8, 19.1, 26.2] | 26.2 | 1 | 1 | 0 | 0.5 | 0 | 15.7 | 2.3 | 3 | 50 |
-| pallid perfect s1 | yes | 17.2 | [15.5, 17.2, 17, 16.3] | 17.2 | 0 | 0 | 0 | 0.77 | 0 | 6.6 | 0 | 2 | 62 |
-| pallid perfect s2 | yes | 17.2 | [15.6, 17.2, 17, 16.3] | 17.2 | 0 | 0 | 0 | 0.77 | 0 | 6.6 | 0 | 0 | 59 |
-| pallid perfect s3 | yes | 17.5 | [15.8, 17.5, 17.3, 16.6] | 17.5 | 0 | 0 | 0 | 0.76 | 0 | 6.7 | 0 | 1 | 57 |
-| pallid average s1 | yes | 45.3 | [16.7, 43.4, 45.2, 17.5] | 45.2 | 1 | 1 | 1 | 0 | 0 | 15.6 | 12.9 | 1 | 73 |
-| pallid average s2 | yes | 49.7 | [17.1, 49.6, 47.1, 18.2] | 49.6 | 2 | 2 | 2 | 0 | 0 | 19.4 | 10.3 | 1 | 59 |
-| pallid average s3 | yes | 18.3 | [16.4, 18.3, 17.6, 16.8] | 18.3 | 0 | 0 | 0 | 0.59 | 0 | 7.7 | 0 | 7 | 55 |
+| home perfect s1 | yes | 16.9 | [15.8, 16.9, 16.9] | 16.9 | 0 | 0 | 0 | 0.69 | 0 | 7.3 | 0 | 4 | 15 |
+| home perfect s2 | yes | 17.6 | [16.3, 17.6, 17.5] | 17.6 | 0 | 0 | 0 | 0.7 | 0 | 10.1 | 2.3 | 4 | 14 |
+| home perfect s3 | yes | 17.6 | [16.3, 17.6, 17.5] | 17.6 | 0 | 0 | 0 | 0.7 | 0 | 10 | 1.8 | 4 | 14 |
+| home average s1 | yes | 17.3 | [16.5, 17.3, 17.1] | 17.3 | 0 | 0 | 0 | 0.42 | 0 | 8.7 | 0 | 5 | 48 |
+| home average s2 | yes | 58.1 | [45.5, 58.1, 16.4] | 58.1 | 1 | 1 | 1 | 0.12 | 0 | 21.2 | 44.4 | 9 | 11 |
+| home average s3 | yes | 17.4 | [16.1, 17.1, 17.4] | 17.4 | 0 | 0 | 0 | 0.28 | 0 | 11.7 | 2.6 | 5 | 28 |
+| pallid perfect s1 | yes | 17.6 | [16.4, 17.6, 17.4, 16.9] | 17.6 | 0 | 0 | 0 | 0.71 | 0 | 14.4 | 2 | 0 | 64 |
+| pallid perfect s2 | yes | 17.6 | [16.4, 17.6, 17.4, 17] | 17.6 | 0 | 0 | 0 | 0.71 | 0 | 9.7 | 0.5 | 0 | 63 |
+| pallid perfect s3 | yes | 20.7 | [16.7, 20.7, 17.9, 17.1] | 20.7 | 0 | 0 | 0 | 0.73 | 0 | 9.3 | 0.9 | 0 | 46 |
+| pallid average s1 | yes | 29.2 | [17.1, 17.8, 20.1, 29.2] | 29.2 | 0 | 0 | 2 | 0 | 0 | 10 | 0.7 | 14 | 60 |
+| pallid average s2 | yes | 28.3 | [17.4, 28.2, 19.1, 20.3] | 28.2 | 0 | 0 | 0 | 0.24 | 0 | 10.2 | 1.5 | 10 | 73 |
+| pallid average s3 | yes | 18.3 | [16.6, 18.3, 17.6, 16.9] | 18.3 | 0 | 0 | 0 | 0.59 | 0 | 7.9 | 0 | 0 | 58 |
+| burned perfect s1 | yes | 21.9 | [20.4, 21.9, 21.7, 21.1] | 21.9 | 0 | 0 | 0 | 0.66 | 0 | 13.4 | 3.6 | 0 | 48 |
+| burned average s1 | yes | 26.8 | [23.2, 26.8, 21.3, 22.4] | 26.8 | 0 | 0 | 1 | 0.1 | 0 | 17.7 | 6.3 | 3 | 76 |
 
-The home and Pallid perfect rows, and Pallid average s3, are from the full rerun at the slick-back commit. Pallid average s1-s2 were re-measured
-after the last commit (leg glitch speeds are not kicks). No home row took a hit from it.
+**Reading the tables.**
+- Pallid perfect on main is stuck at her claws for 200 s in 3 of 3 runs, walking straight at
+  her front.
+- Sloppy Pallid on main had 18 hits, 48 s floating and 27 u up.
+- AFTER, no bot run takes more than 1 hit or falls into the bowl.
+- Camera pressed: home 71-95% -> 11-48%; Pallid 84-99% -> 46-73%.
+- Sloppy home s2 still floats about 44 s after its own long bursts (policy, 1 hit).
 
-### Manual, perfect reaction (play.mjs)
+### Manual, perfect reaction (me, `play.mjs`; the live loop stopped on main too)
+
+Played on the branch before the final shell-clearance and reach commits: the geometry differs a
+little from the head.
 
 | | BEFORE home | AFTER home | BEFORE Pallid | AFTER Pallid |
 |---|---|---|---|---|
-| ward 1st | 13 s, but only because a knock threw him past ward 2 | 12.4 s (tap-hop under her face) | 12.3 s (0.4 s burst) | 12.7 s (0.35 s burst) |
-| ward 2nd | 36 s | 15.6 s (hop) | 17.5 s | 14.2 s |
-| ward 3rd | - | - | 18.5 s; the 4th socket sat inside the egg mass | 17.3 s |
-| return / calm | 43 s (needed a hop into the hanging mass) | 21.5 s (hop, [E] at reach 5.0) | 21.7 s | 21 s (she shifted twice; [E] at reach 4.8) |
-| hits / tears | 4 hits, ~5 tears (torn reached 44 s) | 0 | 0 | 0 |
-| float | rose to 23 u over the floor, then stood on her back; C held 3 s and still rising (vy +0.7) | max ~3 u (hop) | ~4 u | ~6 u |
-| bowl | 0 | 0 | 0 | 0 |
-| reserve min | 0.81 | 0.91 | 0.77 | 0.87 |
-| camera | jammed on his legs / the hanging eggs as he tumbled (see strip) | her face, claws and wards in every frame read; 1 frame had Sal behind her mouthparts | readable | readable (one frame half a rock wall) |
+| 1st ward | 13 s, but only because a knock threw him past ward 2 | 12.4 s (tap-hop under her face) | 12.3 s (0.4 s burst) | 12.7 s (0.35 s burst) |
+| 2nd ward | 36 s | 15.6 s (hop) | 17.5 s | 14.2 s |
+| 3rd ward | - | - | 18.5 s; the old 4th socket was inside the egg mass | 17.3 s |
+| return, calm | 43 s | 21.5 s | 21.7 s | 21 s |
+| hits | 4 (about 5 tears) | 0 | 0 | 0 |
+| float | rose 23 u, then stood on her back; C held 3 s and still rising | about 3 u | about 4 u | about 6 u |
 
 Frames:
 - shots/ritefair-manual-home-strip.png
 - shots/ritefair-manual-pallid-strip.png
 - shots/ritefair-manual/ (AFTER)
 - shots/ritefair-manual-before/ (BEFORE)
-- shots/ritefair-cam-before-after.png
 
-## Walk-in under her (Michael at 60 fps: "crouched too low and I kept colliding")
+## Walk-in under her (`tools/bench/ritefair-walkin.mjs`, real W+Shift, re-aimed at her centre each 0.25 s)
 
-Probe: `tools/bench/ritefair-walkin.mjs`. Lane roofs are the lowest part of her over the floor
-along a bearing from 1.2 R to 0.5 R. Legs plant at the rim, so a lane can read low where a
-foot is; the free arc is the real door.
+**Free arc at the rim (1.0 R)** a 0.45 u diver fits through at 0.45/1.0/1.8 u, on four bearings
+about her heading:
 
-**Crouched**, unheld, Sal under her centre, at t = 3 s:
-
-| | lane roofs front / right / back / left (u) | wards over the floor (u) | clutch underside (u) |
+| | standing (lab hold) | hunting | narrowest |
 |---|---|---|---|
-| BEFORE home | 7.2 / **0.6** / 6.3 / **1.3** | 9.8 / 6.3 / 12.8 | 4.6 (the old slung mass) |
-| AFTER home | 2.2 (a planted leg) / 3.2 / 5.7 / 4.5 | 4.1 / 5.3 / 5.3 | 3.7 |
-| BEFORE Pallid | 7.0 / 5.8 / 12.7 / 2.6 | 10.7 / 11.9 / 5.9 / 15.2 | 9.8 |
-| AFTER Pallid | 5.1 / 2.9 / 6.8 / 6.4 | 6.0 / 6.5 / 7.3 / 6.5 | 5.9 |
+| BEFORE home | 24-49 u | 2.8-40 u | 2.8 u, hunting, left |
+| BEFORE Pallid | 26-49 u | 10-49 u | |
+| AFTER home | 30-49 u | 49 u on all four | 29.7 u |
+| AFTER Pallid | 49 u | 49 u | |
 
-In BEFORE, the 0.6 and 1.3 u readings are the rim on his side dropping 2.4 u from the crouch's
-lean while he is still walking in. That is the collision.
+**Real-key walk-ins reaching under her (< 0.35 R) in 12 s**, starts on her plateau only:
 
-**Standing (lab hold)**, free arcs at the rim (1.0 R) on four bearings:
-
-| | home | Pallid |
+| | standing | hunting |
 |---|---|---|
-| BEFORE | 25-48 u | 25-48 u |
-| AFTER | 30-49 u | 33-49 u |
+| BEFORE home | 3/3 | 3/3 |
+| BEFORE Pallid | 4/4 | 3/3 |
+| AFTER home | 3/4 | 3/4 |
+| AFTER Pallid | 4/4 | 4/4 |
 
-All four bearings are open, and real-key walk-ins reached under her (< 0.35 R) in 9.5-10.75 s:
+The two AFTER home misses:
+- standing b90: he pressed straight into a planted leg 1.78 R out (the probe never steers
+  round);
+- hunting b90: still moving at 1.38 R when the 12 s ran out.
 
-| | home | Pallid |
-|---|---|---|
-| BEFORE | 3/3 (the 4th start was in the rift bowl, no walkable approach) | 4/4 |
-| AFTER | 4/4 | 4/4 |
+**Him under her (unheld, 3 s): her lowest part over the floor** along the four lanes in
+(1.2-0.5 R):
 
-**Hunting** (she turns to face him and hammers), walk-ins under her:
+| | lane minimum over the ramp | wards over the floor | clutch underside |
+|---|---|---|---|
+| BEFORE home | 2.9 u | 9.3 / 9.4 / 15.1 | 8.1 |
+| BEFORE Pallid | 0.1 u | 11.4 / 13.3 / 6.9 / 16.8 | 11.4 |
+| AFTER home | 2.3 u | 6.7 / 7.7 / 7.8 | 6.3 |
+| AFTER Pallid | 4.8 u | 8.3 / 9.2 / 9.5 / 9.6 | 7.9 |
 
-| | home | Pallid |
-|---|---|---|
-| BEFORE | 2/3 | 3/3 |
-| AFTER | 2/4 | 4/4 |
+The AFTER home 2.3 u minimum is the cutter claw held forward at 1.2 R. Shell-only it is 5.0 u or
+more on every lane.
 
-Two home AFTER failures:
-- b90 never moved from its start spot (terrain);
-- b270 was walled by a leg and took 1 slam (hitV 3.2).
-
-Pallid perfect bot, walking straight at her front: BEFORE stuck at her claws for 200 s in
-3 of 3 runs. AFTER the meral spread opens the front, and 3 of 3 completed in about 17 s.
+**Shell clearance and ward reach.** The shell now holds `STAND.clear` 3.6 u over the ground under
+it, which lifts her on uneven ground. The ward touch reach went 6 -> 7 to meet that: a ward
+8.35 u up is in reach standing directly under, and more with one tap-hop.
 
 ## Decisions (each lever, what was done, why)
 
 **1. Wards reachable.**
-- She keeps her centre `STAND.keep` 1.45 R outside the rift's rim crest while she hunts a
-  diver on the plateau. The crest is found once per lair along her lair's bearing (home: r 37,
-  keep r 59.3; she walks off her ledge about 7 u as she rises). On the crest the crest came up
-  under her and her feet, so the wards hung 12-17 u over him.
-- She rides at most 0.06 R over the ground under her belly (`STAND.ride`). A foot on a boulder
-  had lifted her 3-4 u.
-- Standing height is 0.44 R -> 0.52 R. With the threat lift off while he is under her, the
-  wards hang 4-6 u over the floor under her at home, 6-7 at Pallid: reachable standing or with
-  one tap-hop.
-- The crouch is RETIRED (drop and lean 0, knobs kept). Michael's report, plus the measured
-  0.6-1.3 u rim, ruled out making it deeper.
-- The Pallid/Burned 4th socket was INSIDE the hanging clutch's big lobe (touchable through the
-  eggs but never seen). It now sits under the cutter's shoulder (-0.34, -0.117, 0.40).
-- Wards stay on HER, on her belly.
+- She hunts OFF THE LIP: her centre is held `STAND.keep` 1.45 R outside the rift's rim crest
+  while the diver is on the plateau. The crest is found once along her lair's bearing (home:
+  crest r 37, keep r 59.3, about a 7 u walk off her ledge as she rises).
+- She rides at most `STAND.ride` 0.06 R over the ground under her belly (a foot on a boulder
+  had lifted her 3-4 u).
+- Standing height is 0.52 R.
+- She holds her height when he is under her: `L.underE` keeps the threat lift and the front's
+  pitch. Before, dropping them brought her 4.3 u down onto him.
+- Her shell keeps `STAND.clear` 3.6 u over the ground under it while she is awake.
+- Reach is 7. The wards stay on her belly.
+- The 4th (remote) socket moved out of the egg mass, where it was touchable but invisible, to
+  under the cutter's shoulder.
 
 **2. Burst vs dress.**
-- A burst's dress spill now ramps in over its first 0.12-0.32 s (`JET_TRIM_T0/T1`).
-- C held while rising bleeds the climb (`VENT_BRAKE` 2.2/s).
-- The open-water feel was measured on the same protocol on both trees:
+- The spill ramps in over the burst's first 0.12-0.32 s.
+- C bleeds a climb (`VENT_BRAKE` 2.2/s).
+- Measured on the same protocol on both trees:
 
 | | main | branch |
 |---|---|---|
-| seabed -> surface, two held bursts | 25.1 s | 25.1 s (unchanged) |
+| seabed -> surface, two held bursts | 25.1 s | 25.1 s |
 | 1 s burst up then C: time until he turns | 1.9 s | 0.8 s |
 | ... rise before he turns | 10.5 u | 7.0 u |
-| 0.3 s burst: fill / peak | 0.47 / 4.6 u | 0.44 / 4.1 u |
+| 0.3 s kick: fill / peak | 0.47 / 4.6 u | 0.44 / 4.1 u |
 
-**3. Rift bowl.** Two behaviour changes, no terrain change:
-- the hammer's throw never has a component toward the rift while Sal is outside the crest;
-- she fights off the lip.
-
-Bowl falls in the fair-harness runs: 0 BEFORE and 0 AFTER. The bowl showed up only in runs
-with the old live-loop flaw: 5 falls in one home run and 2 in one Pallid run, the same flaw the
-ledger's game was played under. So the bowl falls in the ledger were mostly flaw-driven. The
-rift-ward knock guard stays, because a real knock near the lip can still do it.
+**3. Rift bowl.** The knock never has a rift-ward component outside the crest, and she fights
+off the lip. Bowl falls were 0 in every fair-harness run on both trees: the ledger's bowl
+belongs to the flaws above. The guard stays for a real knock near the lip.
 
 **4. Hammer near her.**
-- Under her body (0.85 R, below her belly) the hammer cannot hit, and she lowers it (threat 0).
-  Instead, every 3.2 s she SHIFTS her stance sideways at 1.7 u/s for 1.3 s, and her stepping
-  legs nudge him.
-- The throw is flat: knockUp 0.12 (was setY(0.4) before normalising, about 10 u/s straight up),
-  still 26 u/s.
-- One collision tears once (`SLAM_GAP` 0.8 s): three tears in 0.1 s had been measured from one
-  shove.
-- Pose jumps are not blows: a shell point over 14 u/s or a leg over 20 u/s. Measured 63 and
-  78 u/s "hits" that were IK re-solves.
-- Her back is a slick dome: no tear from the shell under his boots, and he slides off at
-  7 u/s^2 (`SHELL_SLIDE`). One sloppy run had stood on her back 49 s and taken 24 tears from
-  her breathing.
-- Outside her, the hammer, the lunge, the plume, the chase and the refusal lines are unchanged.
+- Under her body (0.85 R) the hammer is lowered and cannot hit. Instead she shifts her stance
+  every 3.2 s.
+- The throw is flat: `knockUp` 0.12 (it was about 10 u/s straight up), 26 u/s along the ground.
+- One collision tears once (0.8 s gap).
+- Pose-jump speeds are not blows: shell over 14 u/s, leg over 20 u/s. Measured 63 and 78 u/s
+  "hits" that were IK re-solves.
+- Her back is a slick dome: no tear, and he slides off at 7 u/s^2. On main a sloppy run stood
+  on her back 49 s and took 24 tears from her breathing.
+- Outside her: the hammer, lunge, plume, chase and refusal lines are unchanged.
+- THE MERAL SPREAD: when he comes in at her face (2.4 R) both claws throw up and out. The
+  crusher folds back into the hammer as it cocks.
 
-**5. Camera** (`BOSSCAM`, game.js). While she is up within 30 u (eased in over 0.8-1.0 x r):
+**5. Camera** (`BOSSCAM` in game.js; she is up and within 30 u):
 - the boom cranes up 1.5 u;
-- it does not swing down under him when he looks up (boom pitch held at 0.10 rad, the aim
-  keeps the real pitch);
-- the look slerps toward her belly / nearest dark ward by half the angle, at most 20 deg, and
-  only while she is in front of the lens.
+- the boom does not swing down under him when he looks up (boom pitch held at 0.10 rad, the aim
+  keeps his pitch);
+- the look slerps toward her belly / nearest dark ward, half the angle, at most 20 deg, only
+  while she is in front of the lens. ANY mouse look drops the lean at once, and it returns once
+  the look has been still 0.6 s.
 
-It is an event (she is up and near) on a critically damped spring, never wander. A longer
-minimum boom was tried and dropped: a minimum inside her body only fights the guard that pulls
-the lens out of her.
+It eases on a critically damped spring and is an event, not wander. **Flag for Michael (grounded
+camera rule):** the lean is new camera behaviour. The bot sets the yaw every slice, so it saw
+the lean mostly off; his hands judge it.
 
-| | BEFORE | AFTER |
-|---|---|---|
-| pressed, home | 67-92% | 29-57% |
-| pressed, Pallid | 7-99% (99% stuck at the claws; 7-10% floating away from her) | 49-73% |
-| off-frame, home | 5-13% | 3-13% |
-
-Remaining: the ward-lit flare washes the frame out for about 0.5 s when the look is on the
-ward (frame 0300 in after-home-perfect-s1). That is the ward's own flash, but the lean makes
-the lens face it.
+Known: the ward-lit flash fills the frame for about 0.5 s when the look is on the ward.
 
 **6. The return.**
-- The clutch is carried TUCKED under her apron (brood.js `TUCK` 0.18 R, `TUCK_FLOOR` -0.20 R),
-  as a berried crab carries it.
-- Slung, it lay on the floor whenever she stood on flat ground (measured 0.1 and -2.2 u) and
-  walled off the walk-in under her rear. On the crest it hung 6-10 u up.
-- Its underside is now 3.7-5.9 u over the floor under her, over his helmet.
-- `RET_R` 3.4 -> 5.0. The press-back is now a walk-under plus a hop at most.
-- Asleep (the seated tongue) is unchanged. The lobes' tops stay inside her shell (checked from
-  above, shots/ritefair-top-after.png).
+- The clutch is carried TUCKED under her apron (`TUCK` 0.18 R, `TUCK_FLOOR` -0.20 R), as a
+  berried crab carries it.
+- Slung, it lay on the floor on flat ground (0.1 and -2.2 u measured) and walled off the walk
+  in under her rear.
+- `RET_R` 3.4 -> 5.0.
+- **This is a LOOK DEVIATION on the brooder-clutch decision card:** the mass reads flatter. See
+  shots/ritefair-clutch-under-before-after.png. The lobes' tops stay inside her shell (checked
+  from above, shots/ritefair-top-after.png).
 
-**Also:**
-- When he is in front within 2.4 R (was 1.6), both claws throw up and out in a meral spread
-  (`HUNT.spread` 0.4). Held forward as a guard they walled off every walk-in from the front,
-  and she always turns to face him.
-- The crusher folds back into the hammer as it cocks.
+## Regression probes on the branch
 
-## Target check (honest)
+- `clutch2-alt6`, all three anchorages: prompt up, reach 0.46-0.61, push 0, Sal in eggs 0.
+- `clutch2-camstress`: lens in a lobe 0 of 8454 frames; egg snaps 4, fails 0.
+- `clutch2-solid`: lens in a lobe 0 of 6503. Sal's maximum overlap with the eggs is 0.11 u
+  (clutch2 reported 0.05-0.07). The lens was inside another part of her for 102 frames: claw
+  capsules about 19.5 s in while she rises, and the shell for about 10 frames at 42.4 s. The
+  main comparison is not valid, because the probe imports the branch's bodyCols.
+- `brooder-rush`: 3/3 rushes got under her and lit 2 wards.
+- Burned Ground bot runs: perfect 22 s, sloppy 27 s, 0 hits each.
 
-**The target was "competent first attempt 1.5-2.5 min, 1-3 hits".**
-- With perfect reaction, the rite takes about 16-22 s of game time from the take, before AND
-  after. A player who knows where to go was never slow.
-- The difference is what goes wrong:
+## Videos for Michael
 
-| | BEFORE | AFTER |
+Every 3rd game frame (about 20 fps of game time), 960x600 PNG, under
+/Users/michaelpaulus/sc/.abyssa-wt/shots/ritefair-video/. About 3.5 GB. The bottom 66 px of each
+frame is a black bar (the capture clip is taller than the headless viewport): crop it.
+
+| BEFORE (main) | frames | outcome |
 |---|---|---|
-| bot runs completed | 7 of 12 | 12 of 12 |
-| perfect | 3/3 home, 0/3 Pallid (stuck at the claw wall) | 3/3 home, 3/3 Pallid |
-| sloppy | 3/3 home, 1/3 Pallid (46 and 55 hits, floating 180 s) | 3/3 home, 3/3 Pallid |
-| sloppy max hits | | 2 |
-| hits per sloppy run, home | | 0-1 |
-| hits per sloppy run, Pallid | | 0-2 |
-| sloppy Pallid, completion time | | 18-50 s |
-| sloppy Pallid, float time | | 0-13 s (from its own 1 s bursts) |
-
-- A real human at 60 fps reads the scene, finds the wards and handles the camera, so real-time
-  play should land longer than these numbers.
-- Is it now soft? The perfect runs take 0 hits because the policy goes straight under her,
-  which is now a refuge. Out on the plateau the hammer, the lunge and the plume are as before.
-  Michael's hands decide.
-
-## Videos (orchestrator: assemble for Michael)
-
-Frame sequences: every 3rd game frame, about 20 fps of game time, 960x600 PNG, under
-/Users/michaelpaulus/sc/.abyssa-wt/shots/ritefair-video/.
-
-| sequence | frames | outcome |
-|---|---|---|
-| before-home-perfect-s1 | 377 | completed |
-| before-pallid-perfect-s1 | 1244 | stuck at her claws for 60 s, no ward |
+| before-home-perfect-s1 | 377 | |
+| before-pallid-perfect-s1 | 1244 | stuck at her claws 60 s |
 | before-home-average-s2 | 398 | |
-| before-pallid-average-s1 | 415 | this video run completed in 18 s; the suite runs of the same seed failed |
-| after-home-perfect-s1 | 365 | |
-| after-pallid-perfect-s1 | 394 | |
-| after-home-average-s2 | 398 | |
-| after-pallid-average-s1 | 642 | |
+| before-pallid-average-s1 | 415 | |
 
-About 2.7 GB in total.
+| AFTER (branch head) | frames |
+|---|---|
+| after-home-perfect-s1 | 382 |
+| after-pallid-perfect-s1 | 555 |
+| after-home-average-s2 | 1106 |
+| after-pallid-average-s1 | 402 |
+| after-burned-perfect-s1 | 488 |
+
+The manual BEFORE home run (4 hits, 23 u up, on her back) was NOT recorded as video. Its still
+frames are in shots/ritefair-manual-before/h01-h28.
 
 ## Invariants (fresh load, branch)
 
@@ -307,6 +301,6 @@ About 2.7 GB in total.
 - `__ridge.fp` 119f0cae.
 - sleeperFingerprint 67303936 / ac04921e / ce3eaf9d (zone 0 twice), unchanged.
 - `__safeFailed` [] and `__shaderFailed` [].
-- Console: only favicon 404s.
-- Perf: unmeasured. The added work is O(1) scalar per frame: a 5-sample ground max, a crest
-  radius test, a 3-5 ward scan for the camera. It adds no allocation.
+- Console: favicon 404s only.
+- Perf: unmeasured. The added work is O(1) scalar per frame and allocation-free; `__slamLog`
+  allocates only on a tear and is capped at 64.
