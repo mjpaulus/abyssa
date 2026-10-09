@@ -1091,10 +1091,11 @@ function creBoomClear(from, boom, m = CRECAM.margin) {
 // the boom cranes UP (lift u: a line over her legs instead of a pull-in onto his back), it does
 // not swing down under him when he looks up (boomPitch), and the look leans toward her belly
 // or her nearest dark ward (aimK share of the angle, at most maxDeg, only while she is in
-// front of the lens). bossK eases in and out on a critically damped spring (w /s): an event
+// front of the lens; any mouse look drops the lean, it returns once the look has been still `cool`
+// s). bossK eases in and out on a critically damped spring (w /s): an event
 // (she is up and near), never a wander. Under her shell the lift gives way to CRECAM's low lens.
-const BOSSCAM = { on: 1, r: 30, lift: 1.5, boomPitch: 0.10, aimK: 0.5, maxDeg: 20, w: 2.4 };
-let bossK = 0, bossKV = 0, bossLift = 0;
+const BOSSCAM = { on: 1, r: 30, lift: 1.5, boomPitch: 0.10, aimK: 0.5, maxDeg: 20, w: 2.4, cool: 0.6 };
+let bossK = 0, bossKV = 0, bossLift = 0, bossLean = 0, bossCool = 0, bossYawWas = 0, bossPitchWas = 0;
 const bossF = V3();
 function bossFrame(dt) {
   const L = lev;
@@ -1718,7 +1719,16 @@ function updateCamera(dt, t, fwd) {
   // (ritefair) the look leans toward her (bossFrame): toward her belly / nearest dark ward, by a
   // share of the angle, capped, and only while she is in front of the lens (she is never
   // dragged round from behind him); the mouse still owns the view
-  if (bossK > 1e-3) {
+  // (the lean gives way to the mouse: any look input drops it at once and it comes back over ~1 s
+  // once the look has been still BOSSCAM.cool s, like the interest drift: it never fights him)
+  {
+    const looked = Math.abs(player.yaw - bossYawWas) > 1e-6 || Math.abs(player.pitch - bossPitchWas) > 1e-6;
+    bossYawWas = player.yaw; bossPitchWas = player.pitch;
+    if (looked) bossCool = BOSSCAM.cool;
+    else if (!paused) bossCool = Math.max(0, bossCool - dt);
+    bossLean = bossCool > 0 ? 0 : Math.min(1, bossLean + dt);
+  }
+  if (bossK > 1e-3 && bossLean > 1e-3) {
     _bp.copy(camAim).sub(camera.position);
     const la = _bp.length();
     _bp2.copy(bossF).sub(camera.position);
@@ -1727,7 +1737,8 @@ function updateCamera(dt, t, fwd) {
       _bp.multiplyScalar(1 / la); _bp2.multiplyScalar(1 / lf);
       const c = clamp(_bp.dot(_bp2), -1, 1), ang = Math.acos(c);
       const front = clamp((c + 0.15) / 0.55, 0, 1);
-      const turn = Math.min(ang * BOSSCAM.aimK, BOSSCAM.maxDeg * Math.PI / 180) * bossK * front * front * (3 - 2 * front);
+      const ls = bossLean * bossLean * (3 - 2 * bossLean);
+      const turn = Math.min(ang * BOSSCAM.aimK, BOSSCAM.maxDeg * Math.PI / 180) * bossK * ls * front * front * (3 - 2 * front);
       if (ang > 1e-4 && turn > 1e-5) {
         // slerp the unit look toward her by `turn`, keep the aim's distance
         const f = Math.sin(turn) / Math.sin(ang), g = Math.sin(ang - turn) / Math.sin(ang);
