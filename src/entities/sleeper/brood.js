@@ -532,6 +532,18 @@ export function makeBrood(L, idx, trailFrom) {
     }
     return y;
   };
+  // Is he standing where her tongue of eggs lies when she sleeps? (calmed, she will not settle
+  // it onto him: brooder.js homeTurn). Plan distance to the spill lobes as they lay when seated.
+  B.onBed = pos => {
+    if (!B.seated) return false;
+    const bw = B.bedM;                                   // her body as it lay when the clutch was seated
+    for (let k = MAIN.length; k < B.nL; k++) {
+      const sl = B.lobes[k].s;
+      _a.set(sl[0], sl[1], sl[2]).applyMatrix4(bw);
+      if (Math.hypot(pos.x - _a.x, pos.z - _a.z) < sl[3] * R * 1.25 + 1.2) return true;   // (his body + a step)
+    }
+    return false;
+  };
   B.canTake = pos => !B.locked && B.held < 0 && B.reach(pos) < TAKE_R;
   B.canReturn = pos => B.held >= 0 && B.reach(pos) < RET_R;
   // (playtest / probes: the old names)
@@ -610,6 +622,7 @@ export function makeBrood(L, idx, trailFrom) {
   B.seat = () => {
     const bw = L.body.matrixWorld;
     L.body.updateMatrixWorld();
+    (B.bedM || (B.bedM = new THREE.Matrix4())).copy(bw);
     _inv.copy(bw).invert();
     // floor height in shell units under local (x, z) (two passes: she is tilted a little)
     const floorL = (x, z) => {

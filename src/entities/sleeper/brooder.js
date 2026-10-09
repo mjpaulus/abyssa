@@ -1646,9 +1646,11 @@ export function updateBrooder(L, dt, t, player) {
   } else if (L.homeTurn) {
     // (brooder-clutch) she turns back to the heading she slept on, and she will not lie down
     // on a diver: while he is under her shell she stands over him, calm, until he walks out
+    // (clutch2: nor spill her eggs onto him: standing where the tongue lies counts)
     want = L.lairYaw;
     let dA = L.lairYaw - L.yaw; dA = Math.atan2(Math.sin(dA), Math.cos(dA));
-    const under = Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY;
+    const under = (Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY)
+      || (L.brood && player.pos.y < L.bodyY && L.brood.onBed(player.pos));
     if (Math.abs(dA) < 0.12 && !under) { L.homeTurn = false; L.standTarget = 0; }
   } else if (hunt && L._pdT < (thief ? 400 : 90)) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;

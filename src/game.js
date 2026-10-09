@@ -1063,7 +1063,7 @@ const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, loo
 // helmet is against the eggs and every rise runs into them, so the lens goes level or low
 // behind him instead (never under the floor's clearance)
 const CRE_LIFTS = [0, 1.4, 2.8, 4.2, -1.3, -2.4];
-let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0;
+let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0, creEggs = 0, creEggFail = 0;
 function creHit(from, boom, f, m) {
   _bp.copy(from).addScaledVector(boom, f);
   return bodyBlocked(_bp.x, _bp.y, _bp.z, m);
@@ -1080,7 +1080,7 @@ function creBoomClear(from, boom, m = CRECAM.margin) {
   }
   return 1;
 }
-window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, body: Object.assign({}, BODY) }) };
+window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -1653,6 +1653,7 @@ function updateCamera(dt, t, fwd) {
       }
     }
     camera.position.lerp(_bp, eggs ? 1 : Math.min(1, 30 * dt));
+    if (eggs) { creEggs++; if (inClutch(camera.position.x, camera.position.y, camera.position.z, 0) > 0) creEggFail++; }
     camVel.lerp(player.vel, Math.min(1, 10 * dt));
     creStops++;
   }

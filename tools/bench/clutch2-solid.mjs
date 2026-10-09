@@ -17,11 +17,12 @@ await c.ev(`(weather.set(${process.env.WX ?? 0}, 0), 1)`);
 await c.key('Digit6', true, 1); await sleep(80); await c.key('Digit6', false, 1); await sleep(2500);
 await c.ev(`(async () => { window.__B = await import('/src/entities/sleeper/bodyCols.js'); window.__T0 = await import('/src/world/terrain.js');
   window.__ck = { frames: 0, camIn: 0, camMax: 0, camAt: [], camBody: 0, camBodyAt: [], salMax: 0, salDeep: 0, pushMax: 0, contactFrames: 0, minCamFloor: 1e9 };
-  window.__rT = performance.now(); window.__msgs = [];
+  window.__rT = performance.now(); window.__msgs = []; window.__ring = [];
   (function f() { const L = __sl, p = player.pos, cp = camera.position;
     const t = document.getElementById('msg').textContent; if (t && __msgs[__msgs.length - 1] !== t) __msgs.push(t);
     const ci = __B.inClutch(cp.x, cp.y, cp.z, 0);
-    if (ci > 0) { __ck.camIn++; if (ci > __ck.camMax) __ck.camMax = ci; if (__ck.camAt.length < 20) __ck.camAt.push([+((performance.now() - __rT) / 1000).toFixed(1), +ci.toFixed(2), +L.stand.toFixed(2)]); }
+    { const cs = __crecam.state(); __ring.push([+((performance.now() - __rT) / 1000).toFixed(2), +cp.distanceTo(p).toFixed(2), +ci.toFixed(2), __B.bodyBlocked(cp.x, cp.y, cp.z, 0.15) ? 1 : 0, cs.k, cs.camDist, cs.liftT, cs.eggs, +player.vel.y.toFixed(1), __power.state().state, document.hidden ? 'H' : '']); if (__ring.length > 24) __ring.shift(); if (ci > 0 && !__ck.ring) __ck.ring = __ring.slice(); }
+    if (ci > 0) { __ck.camIn++; if (ci > __ck.camMax) __ck.camMax = ci; if (__ck.camAt.length < 20) __ck.camAt.push([+((performance.now() - __rT) / 1000).toFixed(1), +ci.toFixed(2), +L.stand.toFixed(2), JSON.stringify(__crecam.state()).slice(0, 160), +cp.distanceTo(p).toFixed(2), +player.vel.y.toFixed(2)]); }
     if (__B.bodyBlocked(cp.x, cp.y, cp.z, 0)) { __ck.camBody++; if (__ck.camBodyAt.length < 30) __ck.camBodyAt.push([+((performance.now() - __rT) / 1000).toFixed(1), __B.blockWhy, +L.stand.toFixed(2)]); }
     __ck.frames++;
     let sp = 0; for (const h of [-0.9, -0.45, 0]) { const v = __B.inClutch(p.x, p.y + h, p.z, 0.45); if (v > sp) sp = v; }
@@ -110,18 +111,22 @@ for (let i = 0; i < 8; i++) {
   if (i % 2 === 1) await snap('settle-' + (i >> 1));
   console.log('settle', i, JSON.stringify(await st()), 'homeTurn', await c.ev(`!!__sl.homeTurn`));
 }
-// THE SETTLE BESIDE HIM: Alt+6 (re-arms her asleep, Sal at the tongue, the lens behind him),
-// wake her and hold her, let her stand (the tongue folds up), then settle her again: the
-// tongue spills back out toward him and the lens
+// THE SETTLE BESIDE HIM (the game's own path): Alt+6 (re-arms her asleep, Sal on the tongue),
+// wake her and hold her, light all but her last ward (the brood rule lights the last: no clump
+// is out), so she is calmed at home: she must NOT settle while he stands on her clutch's bed;
+// he backs off a few steps (S) facing it and she settles, the tongue spilling toward the lens
 await c.key('Digit6', true, 1); await sleep(80); await c.key('Digit6', false, 1); await sleep(2500);
 await faceTake(0.5, -0.3); await sleep(800);
 await c.ev(`(__sl.cmd('wake'), __sl.hold = true, 1)`);
 await c.until(`__sl.stand >= 0.98`, 25000).catch(() => console.log('no stand'));
+await c.ev(`(() => { const S = __sl.sigils; for (let i = 0; i < S.length - 1; i++) S[i].lit = true; __sl.hold = false; return 1; })()`);
+await c.until(`__sl.calmed`, 20000).catch(() => console.log('NOT CALMED'));
 await faceTake(0.5, -0.3); await sleep(1000); await snap('resettle-0-up');
-console.log('resettle up', JSON.stringify(await st()));
-await c.ev(`(__sl.cmd('settle'), 1)`);
-for (let i = 1; i <= 4; i++) { await sleep(1600); await faceTake(0.5, -0.3); await snap('resettle-' + i); console.log('resettle', i, JSON.stringify(await st())); }
-await sleep(3000); await faceTake(-0.5, -0.4); await sleep(1200); await snap('after-settle');
+for (let i = 0; i < 3; i++) { await sleep(1500); await faceTake(0.5, -0.3); console.log('on her bed', i, JSON.stringify(await st()), 'homeTurn', await c.ev(`!!__sl.homeTurn`), 'onBed', await c.ev(`__sl.brood.onBed(player.pos)`)); }
+await c.key('KeyS', true); { const t0 = Date.now(); while (Date.now() - t0 < 2200) { await faceTake(0.3, -0.3); await sleep(70); } } await c.key('KeyS', false);
+for (let i = 1; i <= 4; i++) { await sleep(1500); await faceTake(0.4, -0.3); await snap('resettle-' + i); console.log('resettle', i, JSON.stringify(await st()), 'onBed', await c.ev(`__sl.brood.onBed(player.pos)`)); }
+await sleep(3000); await c.key('KeyW', true); { const t0 = Date.now(); while (Date.now() - t0 < 2500) { await faceTake(-0.4, -0.35); await sleep(70); } } await c.key('KeyW', false);
+await sleep(1200); await snap('after-settle');
 console.log('end', JSON.stringify(await st()));
 console.log('msgs', JSON.stringify(await c.ev(`__msgs`)));
 console.log('CLUTCH', JSON.stringify(await c.ev(`__ck`)));
