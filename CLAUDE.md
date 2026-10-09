@@ -246,13 +246,15 @@ against explicit contracts and reviewed on return.
   bearing/dread until she wakes). THE RITE, FAIR (ritefair 2026-10-09, brooder.js `STAND`,
   docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre 1.45 R off
   the rift's rim crest (on it her wards hung 12-17 u up) and rides at most 0.06 R over the ground
-  under her belly; standing height 0.52 R; the clutch is carried TUCKED under her apron (brood.js
+  under her belly; standing height 0.52 R, held over him (no settling onto him), shell 3.6 u over
+  the ground under it (STAND.clear), ward reach 7; the clutch is carried TUCKED under her apron (brood.js
   TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up) and pressed back from RET_R 5; the crouch is retired
   (Michael: "crouched too low and I kept colliding"); under her body is a refuge (no hammer; she
   shifts her stance every ~3 s instead); her claws spread open her front when he comes in
   (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never toward the rift; a slam
-  tears once per 0.8 s; game.js `BOSSCAM` cranes the lens up 1.5 u and leans the look toward her
-  belly/nearest dark ward while she is up within 30 u. PAUSED, the sleeper stands still (LEV_IDLE).
+  tears once per 0.8 s; her back is a slick dome (no tear, he slides off); game.js `BOSSCAM` cranes
+  the lens up 1.5 u and leans the look toward her belly/nearest dark ward while she is up within
+  30 u (drops on any mouse look). `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (knife frees: `lev.onSlash`), flinch from light; wards on
