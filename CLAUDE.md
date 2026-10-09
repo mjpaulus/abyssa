@@ -232,7 +232,11 @@ against explicit contracts and reviewed on return.
   652d0412); `__lev.swap/cmd/state` and the lab "sleeper" group drive the kinds.
   Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge on the
   rift lip with a BERRIED CLUTCH under her apron (2026-10-08, roadmap/brooder-clutch.md: the
-  nest and helmet eggs are gone; ~10k instanced beads on setae, lantern-lit); [E] pries a clump
+  nest and helmet eggs are gone; clutch2 2026-10-08: each lobe's skin carries a generated BEAD
+  FIELD (brood.js beadField: packed egg domes, eyespots, yolk; triplanar in the lobe's rest
+  frame; lobes filleted into one mass) + ~2.8k sparse proud eggs on setae tips, lantern-lit; the
+  mass is SOFT-SOLID: bodyCols setClutch, Sal stops at the drawn surface, the lens never rests in
+  it, calmed she won't settle her tongue of eggs onto him); [E] pries a clump
   off her and wakes her; the last ward won't light while the clump is out (wardRefuse +
   tally "CLUTCH ROBBED"); [E] under her presses it back. Awake she HUNTS the thief (HUNT in
   brooder.js; 3.8 u/s with the clump out), crouches over Sal when he's under her, and her
