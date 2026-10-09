@@ -287,6 +287,7 @@ const SLAM_GAP = 0.8;   // inkBlind: Orune's ink smothering the lantern   // hit
 let paused = false, pauseT = 0, blurred = false;
 let lanternHeld = false;   // predators.js STATE: the octopus has the lantern (see the snatch)
 const PEV_IDLE = { threat: 0, bite: 0, lightSteal: 0, inkPickup: 0, lanternStolen: false, msg: null };
+const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0 };
 
 const $hud = document.getElementById('hud');
 const $msg = document.getElementById('msg');
@@ -1084,12 +1085,12 @@ function creBoomClear(from, boom, m = CRECAM.margin) {
 // ---- BOSS FRAMING (ritefair, 2026-10-09; the orchestrator's play: "near her it presses onto
 // Sal (legs/back fill the frame) and never frames HER; at 13-18 u she was off-screen in 4 of 6
 // checks"). While Velkath is up and hunting within BOSSCAM.r of him the encounter is framed:
-// the boom cranes UP (lift u) and holds a longer minimum (minD u on top of CRECAM's), it does
+// the boom cranes UP (lift u: a line over her legs instead of a pull-in onto his back), it does
 // not swing down under him when he looks up (boomPitch), and the look leans toward her belly
 // or her nearest dark ward (aimK share of the angle, at most maxDeg, only while she is in
 // front of the lens). bossK eases in and out on a critically damped spring (w /s): an event
 // (she is up and near), never a wander. Under her shell the lift gives way to CRECAM's low lens.
-const BOSSCAM = { on: 1, r: 30, lift: 1.5, minD: 1.6, boomPitch: 0.10, aimK: 0.5, maxDeg: 20, w: 2.4 };
+const BOSSCAM = { on: 1, r: 30, lift: 1.5, boomPitch: 0.10, aimK: 0.5, maxDeg: 20, w: 2.4 };
 let bossK = 0, bossKV = 0, bossLift = 0;
 const bossF = V3();
 function bossFrame(dt) {
@@ -1425,7 +1426,7 @@ function updateCamera(dt, t, fwd) {
       if (bestF < 2 && curF >= 0 && bestF < curF + 0.12) bestL = creLiftT;
       creLiftT = bestL;
       camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + creLift - DECK_PIVOT;
-      const cw = Math.max(CRECAM.minD + BOSSCAM.minD * bossK * (1 - creUnder), base * creBoomClear(_piv, camTo));
+      const cw = Math.max(CRECAM.minD, base * creBoomClear(_piv, camTo));
       // in at once; out only once the line has stayed clear for a beat
       if (cw < creHold - 0.05) { creHold = cw; creHoldT = 0; }
       // (while she is hammering the claw crosses the line every blow: the boom stays in for a
@@ -2137,7 +2138,10 @@ function update(dt, t) {
 
   pm('glue');
   if (lev) {
-    const ev = updateLeviathan(lev, dt, t, player); pm('leviathan');
+    // (ritefair) paused, the sleeper stands still like the hunters (PEV_IDLE): she used to keep
+    // hunting and hammering through the pause, her blows banked in his velocity and his dress
+    // torn while the player was away from the keys
+    const ev = paused ? LEV_IDLE : updateLeviathan(lev, dt, t, player); pm('leviathan');
     // HER BODY IS SOLID (brooderfix, bodyCols.js): Sal is pushed out of her live pose here,
     // after she has moved this frame and before the hose, the diver and the lens read him.
     // A part of her that comes INTO him (a sweeping leg, the lunge, her flank) is the slam;

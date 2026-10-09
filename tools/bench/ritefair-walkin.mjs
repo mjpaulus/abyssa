@@ -95,6 +95,12 @@ await c.ev(`(async () => {
   };
   return 1;
 })()`);
+// THE LIVE LOOP STOPS HERE: __bench.step only holds the game loop while it steps, so between
+// CDP calls the page's own rAF kept playing real-time frames with the keys as they were (and a
+// screenshot forces one), an unbooked, unrepeatable share of the fight. From now on time moves
+// only through __bench.step.
+await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
+await sleep(300);
 // take (real E) and let her rise
 await c.key('KeyE', true); await c.ev(`(window.__bench.step(2), 1)`); await c.key('KeyE', false);
 await c.ev(`(window.__bench.step(8 * 60), 1)`);

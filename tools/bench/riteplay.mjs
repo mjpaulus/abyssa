@@ -99,6 +99,12 @@ for (let i = 0; i < nSail; i++) { await alt('Minus'); await sleep(4000); await c
 await alt('Digit6');
 await sleep(1500);
 await c.ev(`(window.__bench.step(60), 1)`);
+// THE LIVE LOOP STOPS HERE: __bench.step only holds the game loop while it steps, so between
+// CDP calls the page's own rAF kept playing real-time frames with the keys as they were (and a
+// screenshot forces one), an unbooked, unrepeatable share of the fight. From now on time moves
+// only through __bench.step.
+await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
+await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(PROBE);
 const render = async () => {
@@ -114,25 +120,27 @@ async function vgrab() {
   const r = await c.send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 1280, height: 800, scale: 0.75 } });
   writeFileSync(`${VID}/${String(vidN++).padStart(4, '0')}.png`, Buffer.from(r.result.data, 'base64'));
 }
-// n game frames with the ledger booked each frame (and the video's every-3rd-frame render)
+// n game frames with the ledger booked each frame. Every frame is RENDERED through the real
+// pipeline (RP_RENDER=0 skips it): the renderer's matrixWorld pass is part of the frame the
+// game reads back (her colliders), and a stepped loop without it played a different, gentler
+// fight (0 early hits in 12 runs vs 3 of 4 with renders). With RP_VIDEO every 3rd is captured.
+const RENDER = process.env.RP_RENDER !== '0';
 async function stepN(n) {
-  if (!VID) { await c.ev(`(window.__bench.step(${n}, () => window.__rp.frame()), 1)`); return; }
+  const R = RENDER ? ', { render: true }' : '';
+  if (!VID) { await c.ev(`(window.__bench.step(${n}, () => window.__rp.frame()${R}), 1)`); return; }
   while (n > 0) {
     const k = Math.min(n, 3 - vidPh);
     if (vidPh + k === 3) {
-      if (k > 1) await c.ev(`(window.__bench.step(${k - 1}, () => window.__rp.frame()), 1)`);
+      if (k > 1) await c.ev(`(window.__bench.step(${k - 1}, () => window.__rp.frame()${R}), 1)`);
       await c.ev(`(window.__bench.step(1, () => window.__rp.frame(), { render: true }), 1)`);
       await vgrab();
       vidPh = 0;
-    } else { await c.ev(`(window.__bench.step(${k}, () => window.__rp.frame()), 1)`); vidPh += k; }
+    } else { await c.ev(`(window.__bench.step(${k}, () => window.__rp.frame()${R}), 1)`); vidPh += k; }
     n -= k;
   }
 }
-await shot('000-start');
-
 const DEG = Math.PI / 180;
-let t = 0, lastShot = 0, plan = null, log = [];
-let pendingE = false;
+let t = 0, lastShot = 0, log = [];
 // one slice: keys held for `sec`, Space held only its first `spaceSec`, E tapped at the start
 async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false }) {
   const frames = Math.max(1, Math.round(sec * 60));
