@@ -575,8 +575,14 @@ function crackFloorAt(x, z, zi) {   // the eye height the shut floor would stand
   }
   return h + EYE_H;
 }
-function wallRefuses(x, z, zi, x0, z0, floorY) {
-  const f = crackFloorAt(x, z, zi), rise = f - floorY;
+// Off the bottom (a pack hop or burst, W held at the wall) the same face is refused while it is
+// more than AIR_STEP over his eye at the new spot (airY): he rises past it first, then crosses over
+// its top and lands, instead of being stood up it (measured 0.6-1.3 u in a frame).
+const AIR_STEP = 0.3;
+function wallRefuses(x, z, zi, x0, z0, floorY, airY) {
+  const f = crackFloorAt(x, z, zi);
+  if (airY != null) return f > airY + AIR_STEP;
+  const rise = f - floorY;
   if (rise <= 1e-4) return false;   // no noise floor: a face climbed in sub-0.05 u frames is still a face
   return rise > WALL_RISE * Math.hypot(x - x0, z - z0) && f > jamYAt(_fl.u, zi, terrainH) + EYE_H + JAM_STEP;
 }
@@ -897,15 +903,16 @@ export function updatePlayer(dt, t, zone, riftOpen) {
 
   const px0 = player.pos.x, pz0 = player.pos.z;
   player.pos.addScaledVector(player.vel, dt);
-  if (shutCrack && player.grounded && !onDeck && wallRefuses(player.pos.x, player.pos.z, zi, px0, pz0, floorY)) {
+  const airY = player.grounded ? null : player.pos.y;
+  if (shutCrack && !onDeck && wallRefuses(player.pos.x, player.pos.z, zi, px0, pz0, floorY, airY)) {
     const x1 = player.pos.x, z1 = player.pos.z;
     fissureLocal(px0, pz0, zi, _wl0); fissureLocal(x1, z1, zi, _fl);
     const u1 = _fl.u, v1 = _fl.v;
     fissureWorld(u1, _wl0.v, zi, _fw);   // the along-crack part of the step only (sliding along a wall)
-    if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
+    if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY, airY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
     else {
       fissureWorld(_wl0.u, v1, zi, _fw);   // ...or the across part only (out of a corner, down off a ledge)
-      if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
+      if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY, airY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
       else { player.pos.x = px0; player.pos.z = pz0; }
     }
     // take the refused part out of his velocity (into the wall), keep the rest
@@ -1037,8 +1044,12 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   const crackStep = shutCrack && !onDeck && player.grounded && !player.onLadder;
   if ((onDeck || crackStep) && player.grounded && !player.onLadder) {
     if (onDeck && wasLadder && ladYPrev < floorY - 0.05 && LADDER_STEP.on) { player.stepUp = floorY - ladYPrev; player.stepUpV = 0; }
-    if (crackStep && player.stepUp === 0 && ladYPrev < floorY - CRACK_STEP && ladYPrev > floorY - JAM_STEP - 0.5) {
-      player.stepUp = floorY - ladYPrev; player.stepUpV = 0;
+    // (a second riser met while still rising off the first re-seeds the spring from where the body
+    // is, or floorY - stepUp would jump with the new floor)
+    const need = floorY - ladYPrev;
+    if (crackStep && need > player.stepUp + CRACK_STEP && need < JAM_STEP + 0.5) {
+      if (player.stepUp === 0) player.stepUpV = 0;
+      player.stepUp = need;
     }
     if (player.stepUp > 0) {
       // critically damped toward 0 at w (no overshoot: he never rises past standing)
