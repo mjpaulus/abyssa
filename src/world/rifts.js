@@ -29,7 +29,7 @@ import * as THREE from 'three';
 import { scene, camera } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
-import { makeGlow } from '../lib/textures.js';
+import { makeGlow, makeWarmGlow } from '../lib/textures.js';
 import { terrainH, terrainUnderH, terrainMeshes, fissurePatchGeo } from './terrain.js';
 import { FISSURE, SLABS, fissureWorld, fissureDist, lipMeanY, _widths } from './fissureShape.js';
 import { surfaceHeightAt, localSurfaceY, stormLevel } from './water.js';
@@ -39,12 +39,14 @@ export const rifts = [];
 // Rift light reads as a beacon, so it survives murk better than the general fog.
 const BEACON_EXT = 0.010;
 const TAU = Math.PI * 2;
-const COL = [0.62, 0.78, 1.0];           // pale blue-white (the brief's), every zone
+// pale blue-white (the brief's 0.62, 0.78, 1.0) as it lands on screen: zone 1's water grade warms
+// and zone 2's leans violet, so each zone's source is leaned against its grade (as the seep's is)
+const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
 const BREATH = 7.5;                      // s
 const K0 = 0.545;                        // k at which the seep's last breath is gone (fissure.js: T = COLLAPSE)
 // per zone gain (dev: __rifts.K), and the parts' shares (dev: __rifts.tune)
-const LIGHT_K = [1, 1, 1];
-const TUNE = { shaft: 0.32, wall: 0.40, drift: 0.85, surf: 0.07 };
+const LIGHT_K = [1.7, 1, 0.8];
+const TUNE = { shaft: 0.09, wall: 0.85, drift: 0.85, halo: 0.16, surf: 0.08 };
 const SURF_MAX = 0.08;                   // the surface glow's alpha never passes this
 const N_DRIFT = 320;
 const c01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
@@ -76,21 +78,25 @@ const SHAFT_FS = `
   void main(){
     vec3 N = normalize( vN );
     vec3 Vv = normalize( -( viewMatrix * vec4( vW, 1.0 ) ).xyz );
-    float chord = pow( abs( dot( N, Vv ) ), 1.1 );
-    // a slow upward scroll of noise sampled on a circle (the wrap has no seam)
+    // soft at the shell's silhouette, fullest through its middle: a lit column of water
+    float chord = pow( abs( dot( N, Vv ) ), 2.2 );
+    // streaks rising slowly up the column: noise sampled on a circle (the wrap has no seam),
+    // stretched along the height
     float a = vUv.x * 6.28318;
-    vec2 cir = vec2( cos( a ), sin( a ) ) * 2.2;
-    float n = fbm3( cir + vec2( vUv.y * 4.0 - uTime * 0.16 + uPh, vUv.y * 1.6 + uTime * 0.04 ) );
+    vec2 cir = vec2( cos( a ), sin( a ) ) * 3.4;
+    float n = fbm3( cir + vec2( vUv.y * 1.2 - uTime * 0.05 + uPh, vUv.y * 0.6 + uTime * 0.02 ) );
+    n = n * n * 1.8;
     // soft at its root on the throat floor, full in the crack, dissolving over the lip
-    float vert = smoothstep( 0.0, 0.10, vUv.y ) * ( 1.0 - smoothstep( uLipV - 0.08, 1.0, vUv.y ) );
+    float up = 1.0 - smoothstep( uLipV - 0.06, 1.0, vUv.y );
+    float vert = smoothstep( 0.0, 0.10, vUv.y ) * up * up;
     float dist = distance( vW, cameraPosition );
-    float al = chord * vert * ( 0.30 + 1.2 * n ) * uK * exp( -dist * ${EXT} );
+    float al = chord * vert * ( 0.25 + n ) * uK * exp( -dist * ${EXT} );
     if ( al <= 0.002 ) discard;
     gl_FragColor = vec4( uColor, al );
   }`;
-function shaftMat() {
+function shaftMat(zi) {
   const m = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(...COL) }, uTime: { value: 0 }, uK: { value: 0 }, uPh: { value: 0 }, uLipV: { value: 0.7 } },
+    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uPh: { value: 0 }, uLipV: { value: 0.7 } },
     vertexShader: SHAFT_VS, fragmentShader: SHAFT_FS,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     // DoubleSide is load-bearing (the chord shading reads both walls of the shell);
@@ -126,27 +132,38 @@ const WALL_VS = `
     vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
     gl_Position = projectionMatrix * mvPosition; }`;
 const WALL_FS = `
-  uniform vec3 uColor; uniform float uTime, uK, uLip, uHalf; uniform vec4 uAx;
+  uniform vec3 uColor; uniform float uTime, uK, uLip, uHalf; uniform vec4 uAx; uniform vec2 uM;
   varying vec3 vW, vN;
   ${NOISE}
+  float tri( float t ){ return 4.0 * abs( t - floor( t + 0.5 ) ) - 1.0; }
   void main(){
     float depth = uLip - vW.y;
-    float u = dot( vW.xz - uAx.xy, uAx.zw );
+    vec2 r = vW.xz - uAx.xy, nrm = vec2( -uAx.w, uAx.z );
+    float u = dot( r, uAx.zw );
+    // across the crack from its KINKED centreline (fissureShape.js midAt, the same triangle waves)
+    float mid = 2.2 * ( tri( u / 24.0 + uM.x ) - tri( uM.x ) ) + 0.8 * ( tri( u / 9.0 + uM.y ) - tri( uM.y ) );
+    float v = dot( r, nrm ) - mid;
     vec3 N = normalize( vN );
-    // the light comes up out of the throat: faces and undersides catch it, a ledge's top much less
-    float face = 0.3 + 0.7 * ( 1.0 - max( N.y, 0.0 ) );
+    // the light comes up out of the throat, from its axis below: Lambert toward it, so the faces
+    // turned to the crack and the undersides of the strata catch it and a ledge's top does not
+    vec2 toAx = -sign( v ) * nrm;
+    float lam = max( dot( N, normalize( vec3( toAx.x * 0.8, -0.6, toAx.y * 0.8 ) ) ), 0.0 );
     // the crater floor's caustic carried onto the faces: rings rising up the wall, streaks along the crack
     float ripple = sin( depth * 0.55 + uTime * 1.6 );
     float spokes = 0.5 + 0.5 * sin( u * 0.85 + uTime * 0.75 + ripple * 2.2 );
     float n = fbm3( vec2( u * 0.16, vW.y * 0.16 ) + vec2( uTime * 0.09, -uTime * 0.06 ) );
     float caus = ( pow( spokes, 3.0 ) * 0.9 + 0.25 ) * ( 0.35 + 1.1 * n );
-    // nothing on the lip, the caustic down the faces, a pale wash deepening into the throat
+    // nothing on the lip, the caustic down the faces, a wash deepening into the throat, and the
+    // throat's floor is the light itself
     float band = smoothstep( 0.5, 8.0, depth );
     float wash = smoothstep( 14.0, 60.0, depth );
+    float deep = smoothstep( 45.0, 78.0, depth );
     // the throat's light: it thins toward the pinched tips
     float tip = 1.0 - smoothstep( uHalf * 0.55, uHalf * 0.95, abs( u ) );
     float d = distance( vW, cameraPosition );
-    float a = uK * face * tip * ( band * caus * 0.5 + wash * 0.8 ) * exp( -d * ${EXT} );
+    // up close it is light ON the rock, not paint over it: it thins as you come to it
+    float near = 0.3 + 0.7 * smoothstep( 2.0, 18.0, d );
+    float a = uK * tip * near * ( lam * ( band * ( 0.08 + 0.3 * caus ) + wash * 0.45 ) + deep * 0.55 ) * exp( -d * ${EXT} );
     if ( a <= 0.002 ) discard;
     gl_FragColor = vec4( uColor, a );
   }`;
@@ -165,8 +182,8 @@ function wallMesh(zi) {
   g.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(F.cx, 0, F.cz), Math.hypot(F.halfLen + 4, 48));
   const m = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(...COL) }, uTime: { value: 0 }, uK: { value: 0 }, uLip: { value: 0 },
-      uHalf: { value: F.halfLen }, uAx: { value: new THREE.Vector4(F.cx, F.cz, F.dx, F.dz) } },
+    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uLip: { value: 0 },
+      uHalf: { value: F.halfLen }, uAx: { value: new THREE.Vector4(F.cx, F.cz, F.dx, F.dz) }, uM: { value: new THREE.Vector2(F.ph.m[0], F.ph.m[1]) } },
     vertexShader: WALL_VS, fragmentShader: WALL_FS, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4
@@ -213,7 +230,7 @@ function drift(zi, rand) {
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('aP', new THREE.BufferAttribute(par, 4));
   const m = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(...COL) }, uTime: { value: 0 }, uK: { value: 0 }, uPix: { value: 900 }, uBot: { value: -60 }, uTop: { value: 30 } },
+    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uPix: { value: 900 }, uBot: { value: -60 }, uTop: { value: 30 } },
     vertexShader: DRIFT_VS, fragmentShader: DRIFT_FS,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false
   });
@@ -223,37 +240,39 @@ function drift(zi, rand) {
   return p;
 }
 
-// ---- THE SURFACE GLOW (zone 0) ---------------------------------------------------------------
+// ---- THE HALO ------------------------------------------------------------------------------
 const SURF_VS = `
   varying vec2 vQ; varying vec3 vW;
   void main(){ vQ = uv * 2.0 - 1.0; vW = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 ); }`;
 const SURF_FS = `
-  uniform vec3 uColor; uniform float uK, uTime, uFar; varying vec2 vQ; varying vec3 vW;
+  uniform vec3 uColor; uniform float uK, uTime, uFar, uMax; varying vec2 vQ; varying vec3 vW;
   ${NOISE}
   void main(){
     float r2 = dot( vQ, vQ );
     float n = vn( vQ * 3.0 + vec2( uTime * 0.05, -uTime * 0.04 ) );
     float a = uK * exp( -r2 * 3.2 ) * ( 0.75 + 0.5 * n ) * ( 1.0 - smoothstep( 0.7, 1.0, r2 ) );
     // its own fade with range (fog off), and never past the cap
-    a = min( a * clamp( 1.0 - distance( vW, cameraPosition ) / uFar, 0.0, 1.0 ), ${SURF_MAX.toFixed(3)} );
+    a = min( a * clamp( 1.0 - distance( vW, cameraPosition ) / uFar, 0.0, 1.0 ), uMax );
     if ( a <= 0.001 ) discard;
     gl_FragColor = vec4( uColor, a );
   }`;
-function surfGlow(zi) {
+// THE HALO: a flat glow drawn out along the crack, lying just over its lips, where the light spills
+// out of it into the water (seen from above it softens the gash's edge; edge-on it is nothing).
+function glowPlane(zi, along, across, far, max, name) {
   const F = FISSURE[zi], g = new THREE.PlaneGeometry(2, 2, 1, 1);
   g.rotateX(-Math.PI / 2);
   const m = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(...COL) }, uK: { value: 0 }, uTime: { value: 0 }, uFar: { value: 320 } },
+    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uK: { value: 0 }, uTime: { value: 0 }, uFar: { value: far }, uMax: { value: max } },
     vertexShader: SURF_VS, fragmentShader: SURF_FS, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false
   });
-  m.customProgramCacheKey = () => 'riftSurf';
+  m.customProgramCacheKey = () => 'riftHalo';
   const s = new THREE.Mesh(g, m);
-  s.name = 'riftSurf' + zi;
+  s.name = name + zi;
   // drawn out along the crack's bearing: local x -> (dx, dz)
   s.rotation.y = Math.atan2(-F.dz, F.dx);
-  s.scale.set(F.halfLen * 1.5, 1, 26);
+  s.scale.set(along, 1, across);
   s.position.set(F.cx, 0.25, F.cz);
   s.visible = false;
   return s;
@@ -276,7 +295,7 @@ export function buildRifts() {
       let wmin = Math.min(wd.w0, wd.w1);
       for (let du = -3; du <= 3; du += 1) { const q = _widths(F, st.u + du); wmin = Math.min(wmin, q.w0, q.w1); }
       const rBot = 0.6, rLip = 0.38 * wmin, up = [30, 38, 26, 34, 28][i];
-      const sh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 24, 8, true), shaftMat());
+      const sh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 24, 8, true), shaftMat(zi));
       sh.name = 'riftShaft' + zi + '_' + i;
       // local x along the crack's local tangent (the kinked centreline), drawn out along it
       fissureWorld(st.u - 0.5, 0, zi, _a); fissureWorld(st.u + 0.5, 0, zi, _b);
@@ -291,9 +310,23 @@ export function buildRifts() {
     scene.add(grp);
     const wall = wallMesh(zi);
     scene.add(wall);
-    const surf = zi === 0 ? surfGlow(zi) : null;
-    if (surf) scene.add(surf);
-    rifts.push({ grp, shells, wall, drift: dr, surf, light: 0, ph: shells.map((_, i) => i * 0.55) });
+    // the surface glow: a low, wide breath of pale light where the sea lies over the crack. A sprite
+    // stood on the water: the sea (which writes depth above the waterline) hides its lower half, so
+    // from the deck it is a faint mound of light on the swell, crests passing in front of it.
+    // warmGlow's house program (fog off, its own linear fade to 320 u).
+    let surf = null;
+    if (zi === 0) {
+      surf = makeWarmGlow(new THREE.Color(...COLS[0]), 1, { near: 40, far: 320, nearW: 0 });
+      surf.name = 'riftSurf0';
+      surf.scale.set(F.halfLen * 1.9, 22, 1);
+      surf.position.set(F.cx, 0, F.cz);
+      surf.material.opacity = 0; surf.visible = false;
+      scene.add(surf);
+    }
+    const halo = glowPlane(zi, F.halfLen * 1.12, F.halfW * 1.9, 140, 0.3, 'riftHalo');
+    halo.position.set(0, 1.5, 0);
+    grp.add(halo);
+    rifts.push({ grp, shells, wall, drift: dr, surf, halo, light: 0, ph: shells.map((_, i) => i * 0.55) });
     dr.onBeforeRender = (r, s, cam) => {
       r.getSize(_s);
       dr.material.uniforms.uPix.value = _s.y * r.getPixelRatio() / (2 * Math.tan(cam.fov * Math.PI / 360));
@@ -362,6 +395,7 @@ export function updateRifts(dt, t, activeZone, openK) {
       }
       const W = R.wall.material.uniforms; W.uK.value = TUNE.wall * k * breath; W.uTime.value = t;
       const D = R.drift.material.uniforms; D.uK.value = TUNE.drift * k * (0.85 + 0.15 * breath); D.uTime.value = t;
+      const Hh = R.halo.material.uniforms; Hh.uK.value = TUNE.halo * k * breath; Hh.uTime.value = t;
     }
     if (R.surf) {
       // seen from the air only (under the water it would be a fog-free light through 240 u of sea)
@@ -369,8 +403,8 @@ export function updateRifts(dt, t, activeZone, openK) {
       R.surf.visible = s > 0.003;
       if (R.surf.visible) {
         const F = FISSURE[zi];
-        R.surf.position.y = surfaceHeightAt(F.cx, F.cz, t, stormLevel()) + 0.25;
-        const U = R.surf.material.uniforms; U.uK.value = TUNE.surf * s * breath; U.uTime.value = t;
+        R.surf.position.y = surfaceHeightAt(F.cx, F.cz, t, stormLevel());
+        R.surf.material.opacity = Math.min(SURF_MAX, TUNE.surf * s * breath);
       }
     }
   }
@@ -381,7 +415,7 @@ const __rifts = {
   K: LIGHT_K, tune: TUNE,
   state(zi) { const R = rifts[zi]; return R ? { light: R.light, visible: R.grp.visible, shells: R.shells.length, wallTris: R.wall.geometry.index.count / 3,
     surf: R.surf ? R.surf.visible : null, stations: R.shells.map(s => ({ u: s.userData.u, clear: s.userData.c, rLip: +s.userData.rLip.toFixed(2), rTop: +s.userData.rTop.toFixed(2), along: +s.userData.along.toFixed(2), reachAlong: +(s.userData.rTop * s.userData.along).toFixed(2) })) } : null; },
-  materials(zi) { const R = rifts[zi]; return R ? [...R.shells.map(s => s.material), R.wall.material, R.drift.material].concat(R.surf ? [R.surf.material] : []) : []; }
+  materials(zi) { const R = rifts[zi]; return R ? [...R.shells.map(s => s.material), R.wall.material, R.drift.material, R.halo.material].concat(R.surf ? [R.surf.material] : []) : []; }
 };
 if (typeof window !== 'undefined') window.__rifts = __rifts;
 
