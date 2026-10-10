@@ -12,7 +12,7 @@ import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
-import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures } from './world/fissure.js';
+import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
 import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
@@ -707,6 +707,7 @@ function enterZone(i, quiet = false) {
   if (!quiet) announceZone();
   pendingWards = i > 0;
   riftShutSaid = false;
+  calmLineT = -1;        // a calm's held line belongs to the zone it was said in
   syncFissureRecord();   // every zone's fissure, open or shut, from the chart's pencil
   // The fissure's lip, for the rift-shut beat: its mean lip height (fissureShape.js lipMeanY
   // samples it along both broken lips).
@@ -761,6 +762,14 @@ window.__lev = {
 // stills falls into an unmarked hole in the dark. Said once per zone, once he stands on the
 // shut fissure's jam (riftRimY is the fissure's mean lip height).
 let riftShutSaid = false, riftRimY = 0;
+// THE CALM'S LINE waits for the light (spec: "A RIFT OPENS BELOW." lands as the light arrives):
+// the calm starts the opening (openFissure, its duration back) and the line is held until
+// dur - 2.5 s on the opening's own clock (the fissure's dt: held while paused), then queued
+// through showMsg like any line. calmLineZ is the zone it belongs to; a zone change, a reseed or
+// leaving play cancels it (calmLineT < 0: none pending).
+let calmLineT = -1, calmLineZ = -1, calmLine = '';
+// every zone's open level for the light (rifts.js updateRifts), refilled each frame (no allocation)
+const openK = [0, 0, 0];
 // THE FISSURE'S OPEN STATE lives in world/fissure.js (fissureOpenK, 0 shut .. 1 open, open past
 // 0.5) for EVERY zone, not just the one he is in: a zone the chart's pencil records as calmed at
 // this anchorage stays open behind him (he can come back up through it; a re-shut jam would close
@@ -2018,12 +2027,21 @@ function update(dt, t) {
   safe('sky', () => updateSky(dt, t));         // after updateWater: reads its palette, hands back the horizon
   safe('rain', () => updateRain(dt, t));       // after updateWater: reads the surface height it just resolved
   pm('glue'); updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm)); pm('terrain');
-  updateRifts(dt, t, zone, !!(lev && lev.calmed)); pm('rifts');
   // THE FISSURE (world/fissure.js): the seep's breath, and an opening's collapse (held while
   // paused). Its quake is the seabed's: the lens shakes as it does for her blows.
-  { const fz = updateFissure(state === 'play' && paused ? 0 : dt, t, zone);
-    if (fz.quake > 0 && state === 'play') shake = Math.max(shake, fz.quake); }
+  { const fdt = state === 'play' && paused ? 0 : dt;
+    const fz = updateFissure(fdt, t, zone);
+    if (fz.quake > 0 && state === 'play') shake = Math.max(shake, fz.quake);
+    // the calm's line, on the opening's clock: it lands as the light arrives
+    if (calmLineT >= 0) {
+      if (state !== 'play' || zone !== calmLineZ) calmLineT = -1;
+      else if ((calmLineT -= fdt) <= 0) { calmLineT = -1; showMsg(calmLine, 6, 2); }
+    } }
   pm('fissure');
+  // THE DEEP'S OWN LIGHT (rifts.js) reads each zone's open level, never the calm instant: it wells
+  // up as the jam pours (after updateFissure, so the light and k are the same frame's)
+  openK[0] = fissureOpenK(0); openK[1] = fissureOpenK(1); openK[2] = fissureOpenK(2);
+  updateRifts(dt, t, zone, openK); pm('rifts');
 
   // ---- THE VOYAGE ------------------------------------------------------------------
   // The inked passage (ui/passage.js) runs on its own wall clock; it tells us when to
@@ -2142,11 +2160,13 @@ function update(dt, t) {
     }
   }
   // zone progression through the rift, gated on having the line to work the next zone
-  if (lev && lev.calmed && zone < 2 && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
+  // (the way down is the fissure's: open past half, the jam gone -- not the calm instant; a
+  // recorded zone loads open, so a remembered sleeper does not hold the throat shut either)
+  if (zone >= 0 && zone < 2 && fissureOpen() && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
     if (canDescendTo(zone + 1)) enterZone(zone + 1);
     else if (msgT <= 0) showMsg(`THE LINE IS TOO SHORT — ${HOSE_REQ[zone + 1] * 3} M NEEDED`, 3);
   }
-  if (lev && lev.calmed && zone === 2 && player.pos.y < zoneBottom(2) - 70 && state === 'play') {
+  if (zone === 2 && fissureOpen() && player.pos.y < zoneBottom(2) - 70 && state === 'play') {
     // The full rite plays ONCE, the first triple-calm anywhere. Every later completion
     // is a quiet beat: the chart takes the ink and the dive simply ends where it is.
     if (endingSeen) {
@@ -2279,11 +2299,18 @@ function update(dt, t) {
       saveChart();
       player.light = 1;
       setCalm(1);
-      // The one moment the player is reading: if the line will not reach the next zone,
-      // say so NOW with the real numbers, not 55% of the way down the rift.
-      showMsg(zone === 2 ? 'ALL WARDS LIT. THE LAST SLEEPER STILLS. THE RIFT WAITS.'
-        : canDescendTo(zone + 1) ? 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.'
-        : `IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6, 2);
+      // THE FISSURE OPENS (world/fissure.js): the seabed shudders, the jam pours, then the deep's
+      // light wells up. Its line is held to land as the light arrives (calmLineT, run on the
+      // opening's clock above); an already-open fissure (a remembered visit) says it at once.
+      const dur = openFissure(zone);
+      if (zone < 2 && !canDescendTo(zone + 1)) {
+        // The one moment the player is reading: if the line will not reach the next zone,
+        // say so NOW with the real numbers, not 55% of the way down the rift.
+        showMsg(`IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6, 2);
+      } else {
+        calmLine = zone === 2 ? 'ALL WARDS LIT. THE LAST SLEEPER STILLS. THE RIFT WAITS.' : 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.';
+        calmLineZ = zone; calmLineT = Math.max(0, dur - 2.5);
+      }
       chime(262, 3, 0.3, 'calm'); chime(330, 3, 0.25, 'calm'); chime(392, 3, 0.25, 'calm');
     }
   }
@@ -2623,11 +2650,12 @@ function update(dt, t) {
   const levShown = !!(lev && !lev.calmed && !lev.dormant);   // a sleeping ridge has no bearing
   setBearing($bm.lev, lev ? lev.head.x : 0, lev ? lev.head.y : 0, lev ? lev.head.z : 0, levShown);
   const rp = zone >= 0 ? riftPos(zone) : null;
-  setBearing($bm.rift, rp ? rp.x : 0, rp ? terrainH(rp.x, rp.z, zone) : 0, rp ? rp.z : 0, !!(rp && lev && lev.calmed));
+  const riftShown = !!(rp && fissureOpen());   // the way down once the jam has gone, not the calm instant
+  setBearing($bm.rift, rp ? rp.x : 0, rp ? riftRimY : 0, rp ? rp.z : 0, riftShown);
   // the active target carries the bright tick: the sleeper until it stills, then the rift
   $bm.lev.classList.toggle('active', levShown);
   if (levShown) updateTally(dt);
-  $bm.rift.classList.toggle('active', !!(rp && lev && lev.calmed));
+  $bm.rift.classList.toggle('active', riftShown);
   // low-air vignette breathes in once the tank drops below a third
   $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
 

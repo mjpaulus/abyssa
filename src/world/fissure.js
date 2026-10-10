@@ -33,11 +33,12 @@
 //   0.4-3.3 THE SLUMP: the middle sags 2 u into the throat. The sag is part of the FLOOR
 //        (fissureShape.js setJamSag -> terrain.js jamAt), so a man stood on it rides it down.
 //   3.3  k > 0.5: the floor goes (setFissureShut false); the silt drains into the throat, the middle
-//        fastest, and is gone 14 u down; the crack exhales its cloud (six more plumes, from down in the throat, small enough to see the pour through).
+//        fastest, and drains on until all of it is under the throat floor (3.3 s: it leaves behind rock,
+//        never switched off in sight of the light welling up under it); the crack exhales its cloud (six more plumes, from down in the throat, small enough to see the pour through).
 //   3.3-5.0 THE POUR: the blocks go, the middle first and the wall blocks last, tumbling, sinking as
 //        stone does in water (9 u/s^2 to 10 u/s), drawn in toward the throat as they drop. They do
 //        not stop: each sinks on through the throat floor (>= 20 u down) and out of sight, one by one.
-//   3.6-6.6 THE SWELL: Task 4's open light reads k. The pour keeps its own clock past 6.6 until the
+//   3.6-6.6 THE SWELL: the deep's own light (rifts.js) reads k, from 0.545 (the seep just gone) to 1. The pour keeps its own clock past 6.6 until the
 //        last block has sunk out (<= 14 s), then the rubble is hidden.
 // Built at boot (game.js after buildRifts, inside the loader: the warm frames draw every mesh, so
 // first sight builds nothing), refilled in place on a reseed (reseatFissures after resetJam).
@@ -56,7 +57,7 @@ import { currentSiteIndex } from './site.js';
 
 const N_BOULDER = 160, COLLAPSE = 3.6, SWELL = 3.0;
 const T_BREAK = 0.4, T_OPEN = 0.5 * (COLLAPSE + SWELL);        // the break; k passes 0.5 (the floor goes)
-const SAG_MAX = 2.0, A_SILT = 10, SILT_GONE = 14;               // u, u/s^2, u
+const SAG_MAX = 2.0, A_SILT = 10, SILT_GONE = 55;               // u, u/s^2, u of drain by which all of it is under the throat floor (3.3 s)
 const A_ROCK = 9, V_ROCK = 10, ROCK_T = 14, DROP_MIN = 20;      // u/s^2, terminal u/s, the pour's longest clock (s), u of throat under every block
 const GD = 0.25, FD = GD / 2;          // the silt mesh's spacing; the floor grid's (twice as fine: block edges), u
 const JAM_STEP_OK = 0.45, DRIFT = 0.9; // a block stands at most this proud of the silt banked round it; the bank's slope (rise / run)
@@ -223,7 +224,7 @@ function buildZone(zi) {
   const g = { u0: -F.halfLen, v0, d: FD, nu: nuF, nv: nvF, h: new Float32Array(NF) };
   return { zi, kinds, grid: g, inside, silt, leak, wisp, nverts: NVX, mu: nu, mv: nv, quadIdx: idx,
     S0: new Float32Array(NF), D: new Float32Array(NF), FL: new Float32Array(NF), dist: new Float32Array(NF), SL: new Float32Array(NF),
-    sY: new Float32Array(NVX), sP: new Float32Array(NVX), wispY: new Float32Array(N_WISP), wispP: new Float32Array(N_WISP),
+    sY: new Float32Array(NVX), sP: new Float32Array(NVX), sM: new Float32Array(NVX), wispY: new Float32Array(N_WISP), wispP: new Float32Array(N_WISP),
     n: 0, B: new Float32Array(N_BOULDER * BS),
     k: 0, t: -1, rt: -1, q: 0, sag: 0, drop: 0, topMax: -1e9, siltOn: true, rockOn: true };
 }
@@ -430,7 +431,17 @@ function layout(zi) {
   const sg = Fz.silt.geometry;
   sg.attributes.position.needsUpdate = true; sg.attributes.color.needsUpdate = true;
   sg.computeVertexNormals();
-  sg.computeBoundingSphere(); sg.boundingSphere.radius += SILT_GONE + 2;
+  // THE DRAIN'S END (Task 4: the deep's light wells up under the silt as it goes): the silt drains
+  // until ALL of it is under the throat floor below it (each vertex at its own rate: the middle
+  // fastest, and wherever the throat is deeper, faster still), so it leaves the frame behind rock
+  // and the light it uncovers never pops through a sheet switched off in plain sight
+  const sM = Fz.sM;
+  for (let m = 0; m < Fz.nverts; m++) {
+    const h = terrainUnderH(P[m * 3], P[m * 3 + 2], zi);
+    sM[m] = Math.max(0.35 + 0.65 * sP[m], (sY[m] - h + 0.5) / SILT_GONE);
+  }
+  Fz.siltGone = SILT_GONE;
+  sg.computeBoundingSphere(); sg.boundingSphere.radius += SILT_GONE * 2 + 2;
   // the seep layer's quads: those that leak at all
   const qi = Fz.quadIdx, li = Fz.leak.geometry.index.array;
   let nl = 0;
@@ -530,7 +541,7 @@ export function updateFissure(dt, t, activeZone) {
       if (T >= COLLAPSE + SWELL) { F.t = -1; F.k = 1; F.q = 0; setJamSag(zi, 0); setFissureShut(zi, false); }
     }
     // the pour runs on its own clock: the last blocks are still going down when k reaches 1
-    if (F.rt >= 0) { F.rt += dt; pose(zi, F.rt); if (!F.rockOn) F.rt = -1; }
+    if (F.rt >= 0) { F.rt += dt; pose(zi, F.rt); if (!F.rockOn && !F.siltOn) F.rt = -1; }
     // in sight only while there is something to see
     for (let k = 0; k < F.kinds.length; k++) F.kinds[k].im.visible = inSight && F.rockOn;
     F.silt.visible = inSight && F.siltOn;
@@ -598,11 +609,11 @@ function pose(zi, T) {
   for (let k = 0; k < Fz.kinds.length; k++) Fz.kinds[k].im.instanceMatrix.needsUpdate = true;
   Fz.rockOn = rest || (left > 0 && T < ROCK_T); Fz.left = left;
   // the silt: sags with the floor, then drains into the throat (the middle fastest); the wisps ride it
-  const drop = rest ? 0 : Fz.drop;
-  Fz.siltOn = drop < SILT_GONE;
+  const drop = rest || T <= T_OPEN ? 0 : 0.5 * A_SILT * (T - T_OPEN) * (T - T_OPEN);   // on the pour's clock: it may outlast the swell
+  Fz.siltOn = drop < Fz.siltGone;
   if (Fz.siltOn) {
-    const P = Fz.silt.geometry.attributes.position.array, sY = Fz.sY, sP = Fz.sP;
-    for (let i = 0; i < Fz.nverts; i++) { const p = sP[i]; P[i * 3 + 1] = sY[i] - sagV * p - drop * (0.35 + 0.65 * p); }
+    const P = Fz.silt.geometry.attributes.position.array, sY = Fz.sY, sP = Fz.sP, sM = Fz.sM;
+    for (let i = 0; i < Fz.nverts; i++) P[i * 3 + 1] = sY[i] - sagV * sP[i] - drop * sM[i];
     Fz.silt.geometry.attributes.position.needsUpdate = true;
     const WP = Fz.wisp.geometry.attributes.position.array, WB = Fz.wispBase;
     for (let k = 0; k < N_WISP; k++) {
@@ -626,7 +637,7 @@ function drawnAt(zi, x, y0, z) {
 }
 function state(zi) {
   const F = Z[zi];
-  return { k: F.k, t: F.t, quake: F.q, opening: F.t >= 0, bouldersVisible: F.rockOn, left: F.rockOn ? F.left : 0, siltVisible: F.siltOn, boulderTopMax: F.topMax, n: F.n,
+  return { k: F.k, t: F.t, quake: F.q, opening: F.t >= 0, siltGone: F.siltGone, bouldersVisible: F.rockOn, left: F.rockOn ? F.left : 0, siltVisible: F.siltOn, boulderTopMax: F.topMax, n: F.n,
     drawnAt: (x, y, z) => drawnAt(zi, x, y, z) };
 }
 function audit(zi, samples = 1500) {

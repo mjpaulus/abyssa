@@ -1191,6 +1191,13 @@ function fillSlabs(zi, Q, P, NN, CC, base) {
   }
 }
 
+// THE OPEN LIGHT'S WALLS (rifts.js): the patch's own vertex buffers (refilled in place per site) and
+// its index arrays, so the light on the walls lies on exactly the triangles drawn there (the seep's
+// depth-stable rule: same vertices, same transform). Read once at build; slab vertices are >= nv.
+export function fissurePatchGeo(zi) {
+  const Q = fissurePatches[zi];
+  return Q ? { pos: Q.pos, nor: Q.nor, nv: Q.nv, index: Q.meshes.map(m => m.geometry.index.array) } : null;
+}
 // DEBUG / PROBES: the DRAWN height of the fissure patch at (x, z) (its own two-triangle split of
 // each fine cell), or NaN where the coarse terrain draws. Slab tops are not included.
 export function fissurePatchH(zi, x, z) {
