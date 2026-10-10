@@ -86,10 +86,17 @@ function vnoise(x, y) {
 // ---- the seep's two forms (one program each, every zone) ---------------------------------
 // House law for additive light under water: fog OFF, its own fade to black with range (never toward
 // the fog colour), so it reads the same cold pale at 5 u and at 40.
+// DEPTH-STABLE ON THE SILT (fix round 2): the layer lies on the silt's own vertices, so its clip
+// position is computed EXACTLY as the silt's standard material computes it (projection * (modelView *
+// p), the same rounding), and the material pulls it toward the lens (polygonOffset) with depth writes
+// off: it can never lose the depth test to the surface it lies on. (Computed as projection * view *
+// model it differed by float rounding and passed LEQUAL in patches: flat camouflage blotches that
+// crawled with the TAA jitter.)
 const SEEP_VS = `
   attribute float aLeak; varying float vLeak; varying vec3 vW;
-  void main(){ vLeak = aLeak; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz;
-    gl_Position = projectionMatrix * viewMatrix * w; }`;
+  void main(){ vLeak = aLeak; vW = (modelMatrix * vec4(position, 1.0)).xyz;
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mvPosition; }`;
 const NOISE = `
   float sh21(vec2 p){ vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
   float svn(vec2 p){ vec2 i = floor(p), g = fract(p); g = g * g * (3.0 - 2.0 * g);
@@ -135,6 +142,7 @@ function seepMat(zi, vs, fs, key) {
     vertexShader: vs, fragmentShader: fs, transparent: true, depthWrite: false, depthTest: true,
     blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false
   });
+  if (key === 'fissureSeep') { m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -4; }
   m.customProgramCacheKey = () => key;
   return m;
 }
@@ -412,10 +420,10 @@ function layout(zi) {
       CC[m * 3 + 1] = 0.55 + 0.35 * (1 - sstep(0, 1.4, dm));   // packed and gritty, gravel at the blocks' feet
       CC[m * 3 + 2] = c01((y - ZB - 2) / 220);
       // the seep's mask: the cold light comes up through the crevices at the blocks' feet (brightest
-      // a hand's width out from a block), not through packed open silt, never under a block, fading
-      // into the walls
+      // a hand's width out from a block), NOT through packed open silt (no base: open silt stays dark
+      // sediment), never under a block, fading into the walls
       const under = D[c] > SL[c] + 0.02 ? 1 : 0;
-      LK[m] = (1 - under) * sstep(0.0, 0.6, dm) * (0.25 + 0.75 * Math.exp(-dm / 1.1)) * (1 - sstep(0.7, 0.98, f)) * (f <= 1 ? 1 : 0);
+      LK[m] = (1 - under) * sstep(0.0, 0.45, dm) * Math.exp(-dm / 0.8) * (1 - sstep(0.7, 0.98, f)) * (f <= 1 ? 1 : 0);
     }
   }
   setJamGrid(zi, g);
@@ -677,7 +685,7 @@ function audit(zi, samples = 1500) {
     lowerLipOver: +lipOver.toFixed(2), stepIn: +stepIn.toFixed(2), seepFogOff: F.leak.material.fog === false && F.wisp.material.fog === false,
     lip: +lipMeanY(zi, terrainH).toFixed(2), shut: fissureShut(zi), gridCells: g.nu * g.nv };
 }
-export const __fissure = { seep: SEEP_TUNE, setOpen: setFissureOpen, open: openFissure, k: fissureOpenK, state, audit, programs: () => renderer.info.programs.length,
+export const __fissure = { seep: SEEP_TUNE, seepK: SEEP_K, setOpen: setFissureOpen, open: openFissure, k: fissureOpenK, state, audit, programs: () => renderer.info.programs.length,
   progList: () => renderer.info.programs.map(p => p.id + '|' + p.name + '|' + p.cacheKey.length),
   // which drawables use program id (dev: first-sight audits)
   progUsers: id => { const out = []; scene.traverse(o => { const m = o.material; if (!m || Array.isArray(m)) return; const pr = renderer.properties.get(m).currentProgram;

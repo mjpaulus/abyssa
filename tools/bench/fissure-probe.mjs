@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -516,6 +516,51 @@ if (mode === 'shape') {
   }
   if (!(r.boots.p95 <= 0.2)) fail.push('his soles off the drawn jam ' + JSON.stringify(r.boots));
   console.log(JSON.stringify(r));
+} else if (mode === 'seep-depth') {
+  // THE SEEP LAYER IS DEPTH-STABLE (fix round 2): it lies on the silt's own vertices, so a z-fight with
+  // the silt shows as the layer passing in some patches and failing in others: flat camouflage
+  // blotches that crawl with the TAA jitter. By day, through the full post chain, the layer's gain
+  // raised to the same strong light in every zone, stood in each zone's crack looking down at it:
+  // frame A layer on, frame B layer off. D = A - B is the layer's own light and must be SMOOTH:
+  // blotch energy E = sum|D - blur9(D)| / sum blur9(D) over the pixels it lights.
+  // Measured on the z-fighting layer (its transform and no polygon offset, restored for the run):
+  // z0 0.21, z1 0.59, z2 0.22; depth-stable: z0 0.07, z1 0.14, z2 0.12.
+  const out = [];
+  await c.ev(`(async () => { window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.weather.set(1, 0); window.__bench.size(960, 540); return 1; })()`);
+  for (let zi = 0; zi < 3; zi++) {
+    await c.ev(`(async () => { window.gotoZone(${zi}); window.lev.calmed = false; window.__fissure.setOpen(${zi}, 0); return 1; })()`);
+    await sleep(400);
+    out.push(await c.ev(`(async () => {
+      const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+      const zi = ${zi}, SE = window.__fissure.seep, keep = Object.assign({}, SE);
+      const lum = cap => { const n = cap.w * cap.h, L = new Float32Array(n); for (let i = 0; i < n; i++) L[i] = 0.2126 * cap.px[i * 4] + 0.7152 * cap.px[i * 4 + 1] + 0.0722 * cap.px[i * 4 + 2]; return L; };
+      try {
+        const F = S.FISSURE[zi], o = { x: 0, z: 0 }; S.fissureWorld(-6, 0, zi, o);
+        window.__bench.place(o.x, o.z, Math.atan2(F.dx, F.dz), zi); window.player.pos.y = T.shutFloorY(o.x, o.z, zi) + 1.35; window.player.pitch = -0.55;
+        SE.wisp = 0; SE.k = 7 / window.__fissure.seepK[zi];
+        window.__bench.step(90, null, { render: true });
+        const A = lum(await window.__bench.capture({ frames: 4 }));
+        SE.layer = 0;
+        const capB = await window.__bench.capture({ frames: 4 }), B = lum(capB), W = capB.w, H = capB.h;
+        const D = new Float32Array(W * H); for (let i = 0; i < D.length; i++) D[i] = Math.max(0, A[i] - B[i]);
+        const SA = new Float64Array((W + 1) * (H + 1));
+        for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += D[y * W + x]; SA[(y + 1) * (W + 1) + x + 1] = SA[y * (W + 1) + x + 1] + row; } }
+        const R = 4; let num = 0, den = 0, px = 0;
+        for (let y = R; y < H - R; y++) for (let x = R; x < W - R; x++) {
+          const s = SA[(y + R + 1) * (W + 1) + x + R + 1] - SA[(y - R) * (W + 1) + x + R + 1] - SA[(y + R + 1) * (W + 1) + x - R] + SA[(y - R) * (W + 1) + x - R];
+          const m = s / ((2 * R + 1) * (2 * R + 1));
+          if (m < 1.5) continue;
+          num += Math.abs(D[y * W + x] - m); den += m; px++;
+        }
+        return { zi, camAbove: +(window.camera.position.y - window.player.pos.y).toFixed(1), litPx: px, meanAdd: +(den / Math.max(1, px)).toFixed(2), blotch: +(num / Math.max(1e-6, den)).toFixed(3) };
+      } finally { Object.assign(SE, keep); } })()`));
+  }
+  await c.ev(`(window.__bench.size(), 1)`);
+  for (const z of out) {
+    if (z.litPx < 2000) fail.push(`zone ${z.zi}: the seep layer barely draws (${z.litPx} px)`);
+    if (z.blotch > 0.17) fail.push(`zone ${z.zi}: the seep layer is blotched (z-fight) E ${z.blotch}`);
+  }
+  console.log(JSON.stringify(out));
 } else if (mode === 'reascend') {
   // THE OPEN STATE IS THE CHART'S, FOR EVERY ZONE: calmed (recorded) zone 0 stays open after he
   // descends through it, so coming back up through the crack (re-entering zone 0 the way start and
