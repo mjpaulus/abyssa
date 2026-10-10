@@ -18,8 +18,11 @@
 //     crater-floor caustic carried onto the faces (rings rising up the wall, streaks along the
 //     crack) over a pale wash that deepens into the throat: the deep is where the light is.
 //   - THE DRIFT: a column of motes rising out of the crack along its middle.
-//   - THE SURFACE GLOW (zone 0, the one fissure under open sea): a faint pale patch lying on the
-//     water over the crack, seen from the air only (from the deck it marks the place); alpha <= 0.08.
+//   - THE HALO: a flat glow lying just over the lips, the light spilling out into the water (from
+//     above it softens the gash's edge; edge-on it is nothing).
+//   - THE SURFACE GLOW (zone 0, the one fissure under open sea): a faint, low, wide warmGlow sprite
+//     stood on the sea over the crack, seen from the air only (the sea hides its lower half: from the
+//     deck a pale mound of light on the swell marks the place); alpha <= 0.08, faded out by 320 u.
 // All additive, fog OFF, each with its own fade to black with range (never fogged additive: fog
 // turns an additive glow into a disc of water colour). Breath 0.75 + 0.25 sin(2 pi t / 7.5).
 // Built at boot (buildRifts, before the loader's warm frames: forceAllDrawn draws them OPEN-shaped,

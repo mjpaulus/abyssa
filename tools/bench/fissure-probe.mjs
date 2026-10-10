@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -647,6 +647,70 @@ if (mode === 'shape') {
   if (r.lightAt < 0 || r.lightAt < r.kHalfAt) fail.push(`the light did not follow the pour (${r.lightAt} vs k>0.5 at ${r.kHalfAt})`);
   if (r.bearAt < 0) fail.push('no rift bearing once open');
   if (r.zone1At < 0) fail.push('he did not descend through the opened throat');
+  if (r.lights !== 14) fail.push('light count ' + r.lights);
+  console.log(JSON.stringify(r));
+} else if (mode === 'open-light') {
+  // THE DEEP'S OWN LIGHT (rifts.js), at every site and zone: 3-5 shells, each kept clear of every
+  // overhang slab (its reach along the crack under its clearance from the nearest slab's end, its
+  // reach across under the slab's inner edge), dark while shut and full when open (it reads k only);
+  // every part additive with fog off and its own program key; the surface glow only over zone 0,
+  // only from the air, alpha <= 0.08; then, drawn open from above in each zone, every program it
+  // draws with was built at boot (ids <= the boot's highest); 14 lights.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), core = await import('/src/core.js');
+    const R = core.renderer, bootMax = Math.max(...R.info.programs.map(p => p.id));
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const out = { bootMax, rows: [], draw: [] };
+    for (const site of [0, 1, 2]) {
+      if (site) window.__chart.arrive(site);
+      for (let zi = 0; zi < 3; zi++) {
+        const F = S.FISSURE[zi], st = window.__rifts.state(zi), row = { site, zi, shells: st.shells, bad: [] };
+        for (const s of st.stations) {
+          if (s.reachAlong > s.clear - 0.5) row.bad.push('along ' + JSON.stringify(s));
+          // across: the shell's top radius under the inner edge of any slab on either lip over its span
+          let wmin = 1e9; for (let du = -3; du <= 3; du++) { const w = S._widths(F, s.u + du); wmin = Math.min(wmin, w.w0, w.w1); }
+          if (s.rTop > 0.58 * wmin) row.bad.push('across ' + JSON.stringify(s) + ' wmin ' + wmin.toFixed(2));
+        }
+        window.__fissure.setOpen(zi, 0); window.__bench.step(2); row.shutLight = window.__rifts.state(zi).light;
+        window.__fissure.setOpen(zi, 1); window.__bench.step(2); row.openLight = window.__rifts.state(zi).light;
+        const mats = window.__rifts.materials(zi);
+        row.fogOff = mats.every(m => m.fog === false); row.additive = mats.every(m => m.blending === 2);
+        row.keys = [...new Set(mats.map(m => m.customProgramCacheKey()))];
+        out.rows.push(row);
+      }
+    }
+    window.__chart.arrive(0);
+    for (const zi of [0, 1, 2]) {
+      window.gotoZone(zi); window.__fissure.setOpen(zi, 1);
+      const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), o = { x: 0, z: 0 };
+      S.fissureWorld(-8, S._halfWAt(F, -8, 1) + 7, zi, o); window.__bench.place(o.x, o.z, 0, zi);
+      const P = [F.cx - F.dz * 26, lip + 30, F.cz + F.dx * 26], L = [F.cx, lip - 6, F.cz];
+      window.__camPin = { p: P, t: L, pos: P, look: L };
+      window.__bench.step(20, null, { render: true });
+      const ids = window.__rifts.materials(zi).map(m => { const p = R.properties.get(m).currentProgram; return p ? p.id : -1; });
+      out.draw.push({ zi, ids: [...new Set(ids)], surf: window.__rifts.state(zi).surf });
+    }
+    window.__camPin = null;
+    // the surface glow from the deck (air) and from under the raft (water)
+    window.__playtest.jump('1'); window.setState('play'); window.__helm = true; window.__fissure.setOpen(0, 1);
+    window.__bench.step(10); out.surfAir = window.__rifts.state(0).surf;
+    const surfMat = window.__rifts.materials(0).find(m => m.isSpriteMaterial); out.surfOpacity = surfMat ? surfMat.opacity : null; out.surfFog = surfMat ? surfMat.fog : null;
+    window.gotoZone(0); window.__fissure.setOpen(0, 1); window.__bench.place(4, 4, 0, 0); window.__bench.step(10); out.surfWater = window.__rifts.state(0).surf;
+    let lights = 0; window.scene.traverse(q => { if (q.isLight) lights++; }); out.lights = lights;
+    return out; })()`);
+  for (const w of r.rows) {
+    const tag = `site ${w.site} zone ${w.zi}`;
+    if (w.shells < 3 || w.shells > 5) fail.push(`${tag}: ${w.shells} shells`);
+    if (w.bad.length) fail.push(`${tag}: a shell reaches a slab ` + w.bad.join('; '));
+    if (w.shutLight !== 0) fail.push(`${tag}: light over the shut jam ${w.shutLight}`);
+    if (w.openLight !== 1) fail.push(`${tag}: open light ${w.openLight}`);
+    if (!w.fogOff || !w.additive) fail.push(`${tag}: a part is fogged or not additive`);
+    if (w.keys.some(k => !/^(rift|warmGlow)/.test(k))) fail.push(`${tag}: program keys ${w.keys}`);
+  }
+  for (const d of r.draw) if (d.ids.some(i => i < 0 || i > r.bootMax)) fail.push(`zone ${d.zi}: a program built after boot ${d.ids} > ${r.bootMax}`);
+  if (r.surfAir !== true) fail.push('no surface glow from the deck');
+  if (r.surfWater !== false) fail.push('the surface glow shows under the water');
+  if (!(r.surfOpacity <= 0.08) || r.surfFog !== false) fail.push(`surface glow opacity ${r.surfOpacity} fog ${r.surfFog}`);
   if (r.lights !== 14) fail.push('light count ' + r.lights);
   console.log(JSON.stringify(r));
 } else fail.push(`unknown mode ${mode}`);
