@@ -107,7 +107,9 @@ export function fissureDist(x, z, zi) {
 // The slab at (x, z): writes _sp.r = the local reach of the slab whose u-range and lip side hold the
 // point (0 if none; the wall under and beyond a slab is set back by it, so the slab overhangs), and
 // _sp.q = s / reach when the point is on the slab's footprint (s = how far inside its lip), else -1.
-const _sp = { r: 0, q: -1 };
+// _sp.th / _sp.side: that slab's thickness and lip side (player.js keeps him out of a slab's body
+// when he is under it, not on it).
+const _sp = { r: 0, q: -1, th: 0, side: 0 };
 export function slabProbe(x, z, zi) {
   const F = FISSURE[zi], L = SLABS[zi]; fissureLocal(x, z, zi, _l);
   const u = _l.u, v = _l.v;
@@ -117,7 +119,7 @@ export function slabProbe(x, z, zi) {
     if (Math.abs(u - sl.u0) >= sl.hu || (sl.side ? v < 0 : v >= 0)) continue;
     widths(F, u);
     const w = sl.side ? _w.w1 : _w.w0, s = w - (sl.side ? v : -v), r = slabReach(sl, u, w);
-    _sp.r = r;
+    _sp.r = r; _sp.th = sl.th; _sp.side = sl.side;
     if (s >= 0 && s < r) _sp.q = s / r;
     break;
   }

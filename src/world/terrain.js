@@ -240,6 +240,9 @@ syncSite();
 // Analytic height function. Mesh generation, prop scatter, and player collision all
 // call this, so any change here changes what the player physically stands on.
 export function terrainH(x, z, zi) { return heightAt(x, z, zi, true); }
+// The ground UNDER the fissure's overhang slabs (the carved wall the patch draws beneath them):
+// player.js stands him on it when he is below a slab, not on it. Equal to terrainH off the slabs.
+export function terrainUnderH(x, z, zi) { return heightAt(x, z, zi, false); }
 // The ground with or without the fissure's overhang slabs: terrainH (collision, scatter, the
 // patch's slab tops) stands on them; the fissure patch draws the carved wall UNDER them.
 function heightAt(x, z, zi, slabs) {
