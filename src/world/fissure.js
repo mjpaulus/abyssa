@@ -441,5 +441,12 @@ function audit(zi) {
   return { floorErr: +floorErr.toFixed(3), slabGap: +slabGap.toFixed(3), boulders: F.n, inSlab: inSlabN, dropMin: +dropMin.toFixed(1), topMid: +topMid.toFixed(2), topWall: +topWall.toFixed(2),
     seeps: F.seep.length, seepFogOff: F.seep.every(s => s.material.fog === false), lip: +lipMeanY(zi, terrainH).toFixed(2), shut: fissureShut(zi) };
 }
-export const __fissure = { setOpen: setFissureOpen, open: openFissure, k: fissureOpenK, state, audit, programs: () => renderer.info.programs.length };
+export const __fissure = { setOpen: setFissureOpen, open: openFissure, k: fissureOpenK, state, audit, programs: () => renderer.info.programs.length,
+  progList: () => renderer.info.programs.map(p => p.id + '|' + p.name + '|' + p.cacheKey.length),
+  // which drawables use program id (dev: first-sight audits)
+  progUsers: id => { const out = []; scene.traverse(o => { const m = o.material; if (!m || Array.isArray(m)) return; const pr = renderer.properties.get(m).currentProgram;
+    if (pr && pr.id === id) { let q = o, path = ''; for (let d = 0; d < 4 && q; d++, q = q.parent) path += (q.name || q.type) + '<'; out.push(path + ' ' + m.type); } }); return out; },
+  // the program ids the jam, silt and seep draw with (each must exist before first sight)
+  ownProgs: () => { const out = []; for (const F of Z) for (const o of [F.jam, F.silt, F.seep[0]]) { const pr = renderer.properties.get(o.material).currentProgram; out.push(o.name + ':' + (pr ? pr.id : 'none')); } return out; },
+  progKey: id => { const p = renderer.info.programs.find(q => q.id === id); return p ? p.cacheKey : null; } };
 if (typeof window !== 'undefined') window.__fissure = __fissure;
