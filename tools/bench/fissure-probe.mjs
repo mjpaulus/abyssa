@@ -4,9 +4,13 @@
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
 process.env.DRV_PORT = process.env.DRV_PORT || '9481';
+// A FRESH PROFILE per run: the game saves its chart (endingSeen, calms) to localStorage, and a run
+// that played the ending would turn the next run's zone-2 fall into the quiet ink beat.
+const { mkdtempSync, rmSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
+process.env.DRV_DIR = mkdtempSync(tmpdir() + '/abyssa-fissure-probe-');
 const { start, stop, connect } = await import('./drv.mjs');
 await start(`http://localhost:${port}/?bench&playtest`);
-process.on('exit', () => stop());   // a throwing probe must not leave its Chrome on the port
+process.on('exit', () => { stop(); try { rmSync(process.env.DRV_DIR, { recursive: true, force: true }); } catch (e) { } });   // a throwing probe must not leave its Chrome on the port
 const c = await connect();
 await c.until(`!document.getElementById('load')`, 240000, 1000);
 const fail = [];
@@ -54,10 +58,17 @@ if (mode === 'shape') {
     for (const site of [0, 1, 2]) {
       if (site) window.__chart.arrive(site);
       for (let zi = 0; zi < 3; zi++) {
-        const F = S.FISSURE[zi], jam = S.jamTopY(zi, T.terrainH); let lipMin = 1e9;
-        for (let u = -F.halfLen; u <= F.halfLen; u += 0.25) for (const sd of [0, 1]) {
-          S.fissureWorld(u, (sd ? 1 : -1) * S._halfWAt(F, u, sd), zi, o); lipMin = Math.min(lipMin, T.terrainH(o.x, o.z, zi)); }
-        out.planes.push({ site, zi, jam: +jam.toFixed(2), trigger: trig(zi), aboveTrigger: +(jam - trig(zi)).toFixed(2), lipMin: +lipMin.toFixed(2) });
+        // the jam's whole profile (jamYAt ramps up toward the tips): under both lip points at every
+        // station, never steeper than 1 (walkable well inside the 52 deg limit)
+        const F = S.FISSURE[zi], jam = S.jamTopY(zi, T.terrainH); let lipMin = 1e9, under = 1e9, slope = 0, prev = null;
+        for (let u = -F.halfLen; u <= F.halfLen + 1e-9; u += 0.1) {
+          const jy = S.jamYAt(u, zi, T.terrainH);
+          if (prev != null) slope = Math.max(slope, Math.abs(jy - prev) / 0.1); prev = jy;
+          for (const sd of [0, 1]) {
+            S.fissureWorld(u, (sd ? 1 : -1) * S._halfWAt(F, u, sd), zi, o); const h = T.terrainH(o.x, o.z, zi);
+            lipMin = Math.min(lipMin, h); under = Math.min(under, h - jy); } }
+        out.planes.push({ site, zi, jam: +jam.toFixed(2), ends: [+S.jamYAt(-F.halfLen, zi, T.terrainH).toFixed(2), +S.jamYAt(F.halfLen, zi, T.terrainH).toFixed(2)],
+          trigger: trig(zi), aboveTrigger: +(jam - trig(zi)).toFixed(2), lipMin: +lipMin.toFixed(2), underLip: +under.toFixed(3), maxSlope: +slope.toFixed(3) });
       }
     }
     window.__chart.arrive(0);
@@ -70,7 +81,8 @@ if (mode === 'shape') {
   }
   for (const p of r.planes) {
     if (!(p.aboveTrigger > 1.35 + 5)) fail.push(`site ${p.site} zone ${p.zi}: jam not clear of the trigger plane ` + JSON.stringify(p));
-    if (!(p.lipMin > p.jam)) fail.push(`site ${p.site} zone ${p.zi}: lip dips below the jam ` + JSON.stringify(p));
+    if (!(p.underLip > 0)) fail.push(`site ${p.site} zone ${p.zi}: a lip point dips below the jam ` + JSON.stringify(p));
+    if (!(p.maxSlope <= 1.0)) fail.push(`site ${p.site} zone ${p.zi}: jam ramp too steep ` + JSON.stringify(p));
   }
   console.log(JSON.stringify(r));
 } else if (mode === 'throat-edges') {
@@ -96,7 +108,7 @@ if (mode === 'shape') {
         window.__bench.place(F.cx, F.cz, 0, zi);
         window.player.pos.y = S.jamTopY(zi, T.terrainH) + 1.35;   // from where the jam was
         const nx = -F.dz * (sd ? 1 : -1), nz = F.dx * (sd ? 1 : -1);  // across the crack toward side sd
-        window.player.yaw = Math.atan2(-nx, -nz);
+        window.player.yaw = Math.atan2(nx, nz);   // forward is (sin yaw, cos yaw)
         window.keys.KeyW = true; window.keys.KeyC = true; let up = 0, last = null, n = 0, outT = 0;
         try {
           window.__bench.step(2400, i => {

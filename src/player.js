@@ -4,7 +4,7 @@ import { renderer } from './core.js';
 import { WORLD_R, SURFACE_Y, GLASS } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
 import { terrainH, terrainNormal, clampR } from './world/terrain.js';
-import { FISSURE, fissureDist, inThroat, jamTopY, fissureLocal, fissureWorld, _widths } from './world/fissureShape.js';
+import { FISSURE, fissureDist, inThroat, jamYAt, fissureLocal, fissureWorld, _widths } from './world/fissureShape.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
@@ -549,6 +549,7 @@ let strideSide = 0;
 // (crack coordinates, clamped 0.3 u in from its outline) with the outward velocity removed, so he
 // slides down the shaft wall instead of leaving the throat and being stood back on the wall face.
 const _fl = { u: 0, v: 0 }, _fw = { x: 0, z: 0 };
+const JAM_STEP = 0.8;   // shut: terrain this little above the jam reads level underfoot (a step up)
 function holdInThroat(zi) {
   const F = FISSURE[zi]; fissureLocal(player.pos.x, player.pos.z, zi, _fl);
   const uM = F.halfLen * 0.92 - 0.3, u = clamp(_fl.u, -uM, uM);
@@ -567,12 +568,13 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   const zi = zone < 0 ? 0 : zone;
   let th = terrainH(player.pos.x, player.pos.z, zi);
   // THE FISSURE (spec 2026-10-10). Shut, the rubble jam is a floor wherever the crack is (inside
-  // the lip outline), at one height per zone below the lip; the wall above it is still terrain, so
+  // the lip outline), level below the lip and ramping up toward each tip (jamYAt); the wall above
+  // it is still terrain, so
   // the floor is max(wall, jam) and stepping in is a step down, never a ledge. Open, the THROAT is
   // the hole (inThroat: the narrower interval, slabs excluded) — and once he is below the wall beside
   // him he can only have dropped in through it, so he stays in the shaft (holdInThroat) and keeps
   // falling; the calm-gated zone-change plane sits above every throat floor.
-  let overRift = false, jamFloor = -1e9;
+  let overRift = false, jamFloor = -1e9, jamStep = false;
   if (fissureDist(player.pos.x, player.pos.z, zi) < 0) {
     if (riftOpen) {
       overRift = inThroat(player.pos.x, player.pos.z, zi);
@@ -580,8 +582,12 @@ export function updatePlayer(dt, t, zone, riftOpen) {
         holdInThroat(zi); th = terrainH(player.pos.x, player.pos.z, zi); overRift = true;
       }
     } else {
-      const jt = jamTopY(zi, terrainH) + EYE_H;
+      fissureLocal(player.pos.x, player.pos.z, zi, _fl);
+      const jt = jamYAt(_fl.u, zi, terrainH) + EYE_H;
       if (jt > th + EYE_H) jamFloor = jt;
+      // rock poking less than a boot's step above the rubble is a step, not a wall to slide off
+      // (the hairline tips end in a short steep riser above the jam: without this he stalls at it)
+      jamStep = jt + JAM_STEP > th + EYE_H;
     }
   }
   const onJam = jamFloor > -1e8;
@@ -651,7 +657,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
   const fwd = forwardVec(), flat = flatVec(), right = rightVec();
   // the jam is packed level (the wall or throat floor under it is not what he stands on)
-  const normal = overRift || onJam ? _up : terrainNormal(player.pos.x, player.pos.z, zi);
+  const normal = overRift || jamStep ? _up : terrainNormal(player.pos.x, player.pos.z, zi);
   // On the deck the seafloor's slope is irrelevant — planks are planks.
   const walkable = onDeck || normal.y > MAX_WALK_SLOPE;
 

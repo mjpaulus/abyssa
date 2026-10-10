@@ -134,16 +134,26 @@ export function inThroat(x, z, zi) {
   if (Math.max(_l.v - _w.w1 * k, -_l.v - _w.w0 * k) >= 0) return false;
   return slabAt(x, z, zi) < 0;
 }
-// THE JAM (shut): the walkable top of the rubble that chokes the crack, one world height per zone =
-// the mean lip height minus jamDepth. Sampled 1.5 u outside each lip (the broken lip's own crest,
-// not the break) at nine stations along the middle 80% of the crack, both sides, each placed through
-// fissureWorld with its own side's width (the centreline kinks ~3.5 u: a straight-axis sample lands
-// in the crack, ~70 u deep, on one side). terrainH is passed in so this module stays pure (terrain.js
-// imports us; we must not import it). Cached: call resetJam() after a reseed (the terrain changed).
+// THE JAM (shut): the walkable top of the rubble that chokes the crack. jamTopY(zi) is its flat
+// middle, one world height per zone = the mean lip height minus jamDepth. Sampled 1.5 u outside each
+// lip (the broken lip's own crest, not the break) at nine stations along the middle 80% of the
+// crack, both sides, each placed through fissureWorld with its own side's width (the centreline
+// kinks ~3.5 u: a straight-axis sample lands in the crack, ~70 u deep, on one side). terrainH is
+// passed in so this module stays pure (terrain.js imports us; we must not import it).
+// jamYAt(u): toward each tip the rubble wedges higher where the crack pinches — the tips are slots
+// ~2 u wide and 8-12 u deep, a trap to walk into and a bounce to walk along — so past
+// |u| = JAM_T0 * halfLen the surface rises on a smoothstep toward that tip's own lip, and it is held
+// JAM_UNDER_LIP under the LOWER lip point (fd = 0, both sides) everywhere: under a windowed minimum
+// (+-1.5 u) of the lip line, so the lip's jag and joint blocks come back as gentle plateaus, not
+// bumps. The floor max(terrain, jam) is then continuous at the outline and stepping in is never a
+// step up. One table per zone at 0.25 u, built with the jam (boot / reseed), read by lerp: no
+// allocation, no terrainH per frame. Slope-limited to |dy/du| <= 0.9 (42 deg: inside the 52 deg walk
+// limit; the probe jam-stand checks it at every site). Cached: call resetJam() after a reseed.
 const JAM = [null, null, null], _j = { x: 0, z: 0 };
-export function jamTopY(zi, terrainH) {
-  if (JAM[zi] != null) return JAM[zi];
-  if (!terrainH) return -1e9;
+const JAM_T0 = 0.5, JAM_UNDER_LIP = 0.4, JAM_DU = 0.25, JAM_WIN = 6, JAM_SLOPE = 0.9;   // window +-6 stations = +-1.5 u
+const JAM_N = FISSURE.map(F => Math.round(2 * F.halfLen / JAM_DU) + 1);
+const JAM_P = JAM_N.map(n => new Float32Array(n)), _lipLo = new Float32Array(Math.max(...JAM_N));
+function buildJam(zi, terrainH) {
   const F = FISSURE[zi]; let s = 0, n = 0;
   for (let i = -4; i <= 4; i++) {
     const u = i / 4 * F.halfLen * 0.8;
@@ -152,7 +162,42 @@ export function jamTopY(zi, terrainH) {
       s += terrainH(_j.x, _j.z, zi); n++;
     }
   }
-  return (JAM[zi] = s / n - F.jamDepth);
+  const top = s / n - F.jamDepth, N = JAM_N[zi], P = JAM_P[zi];
+  for (let i = 0; i < N; i++) {
+    const u = -F.halfLen + i * JAM_DU; let lo = 1e9;
+    for (let sd = 0; sd < 2; sd++) {
+      fissureWorld(u, (sd ? 1 : -1) * halfWAt(F, u, sd), zi, _j);
+      lo = Math.min(lo, terrainH(_j.x, _j.z, zi));
+    }
+    _lipLo[i] = lo;
+  }
+  const env = i => {   // windowed lip minimum, less the margin
+    let m = 1e9;
+    for (let k = Math.max(0, i - JAM_WIN); k <= Math.min(N - 1, i + JAM_WIN); k++) m = Math.min(m, _lipLo[k]);
+    return m - JAM_UNDER_LIP;
+  };
+  const tipW = env(0), tipE = env(N - 1);
+  for (let i = 0; i < N; i++) {
+    const u = -F.halfLen + i * JAM_DU, t = Math.min(1, Math.abs(u) / F.halfLen);
+    let y = top;
+    if (t > JAM_T0) { const q = (t - JAM_T0) / (1 - JAM_T0); y = top + ((u > 0 ? tipE : tipW) - top) * q * q * (3 - 2 * q); }
+    P[i] = Math.max(top, Math.min(y, env(i)));
+  }
+  // a slope limiter that only ever LOWERS (so the profile stays under the lip): |dy/du| <= JAM_SLOPE
+  const dm = JAM_SLOPE * JAM_DU;
+  for (let i = 1; i < N; i++) P[i] = Math.min(P[i], P[i - 1] + dm);
+  for (let i = N - 2; i >= 0; i--) P[i] = Math.min(P[i], P[i + 1] + dm);
+  JAM[zi] = top;
+}
+export function jamTopY(zi, terrainH) {
+  if (JAM[zi] == null) { if (!terrainH) return -1e9; buildJam(zi, terrainH); }
+  return JAM[zi];
+}
+export function jamYAt(u, zi, terrainH) {
+  const top = jamTopY(zi, terrainH), F = FISSURE[zi];
+  if (Math.abs(u) <= JAM_T0 * F.halfLen || top < -1e8) return top;
+  const N = JAM_N[zi], f = Math.min(N - 1, Math.max(0, (u + F.halfLen) / JAM_DU)), i = Math.min(N - 2, f | 0), P = JAM_P[zi];
+  return P[i] + (P[i + 1] - P[i]) * (f - i);
 }
 export function resetJam() { JAM[0] = JAM[1] = JAM[2] = null; }
 export { halfWAt as _halfWAt, midAt as _midAt, widths as _widths, slabReach as _slabReach };
