@@ -3,8 +3,8 @@ import * as THREE from 'three';
 import { renderer } from './core.js';
 import { WORLD_R, SURFACE_Y, GLASS } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
-import { terrainH, terrainUnderH, terrainNormal, clampR } from './world/terrain.js';
-import { FISSURE, fissureDist, inThroat, jamYAt, fissureLocal, fissureWorld, slabProbe, slabAt, _widths } from './world/fissureShape.js';
+import { terrainH, terrainUnderH, terrainNormal, clampR, jamAt } from './world/terrain.js';
+import { FISSURE, fissureDist, inThroat, fissureLocal, fissureWorld, slabProbe, slabAt, _widths } from './world/fissureShape.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
@@ -191,7 +191,7 @@ const CLIMB_RATE = 1.1;
 // (sweep) the step up off the top rung: knob w (rad/s of a critically damped ease), on
 export const LADDER_STEP = { on: 1, w: 9 };
 if (typeof window !== 'undefined') window.__ladStep = LADDER_STEP;
-let ladYPrev = -1e5;
+let ladYPrev = -1e5, lastX = 0, lastZ = 0;   // last frame's end position (lastX/Z: a teleport is no step)
 let ladTopPrev = -1e5;          // the deck-top at the rungs last frame (the ladder's carry)
 // ---- THE BULWARK AND EVERYTHING ON DECK ARE REAL ---------------------------------
 // hull.js walls the deck on all four sides and leaves ONE gap: the boarding bay on the
@@ -558,33 +558,33 @@ const JAM_STEP = 1.0;   // shut: a riser ending this little above the jam is a s
 // under it on the ground beneath (terrainUnderH), and where it does not (a slab low on the rubble)
 // its front is a wall: held out of its footprint like the throat's walls hold him in.
 const SLAB_CATCH = 0.7, SLAB_TH_MAX = 2.4, HELMET_TOP = 0.6, SLAB_CLEAR = 0.35;
-// THE CRACK'S WALLS (shut). The jam leaves him in a trench 5-12 u deep with walls far past the
-// 52 deg walk limit; a heightfield has no side walls, so W into one stood him up the face a metre
-// or two in a frame and the downslope slide dropped him back (measured: 1-2.3 u per frame, over and
-// over). On the shut crack's floor the wall is a wall: a step whose floor rises steeper than
-// WALL_RISE per unit run AND ends more than JAM_STEP above the jam there is refused; he keeps the
+// THE CRACK'S WALLS (shut or open). The crack's walls run far past the 52 deg walk limit; a
+// heightfield has no side walls, so W into one stood him up the face a metre or two in a frame and
+// the downslope slide dropped him back (measured: 1-2.3 u per frame, over and over) — and, open,
+// the face read as ground he was below, which sent him into the throat off a ledge. Inside the
+// crack the wall is a wall: a step whose floor rises steeper than WALL_RISE per unit run is refused,
+// unless (shut) it ends within JAM_STEP of the jam he stands on (a riser at a tip); he keeps the
 // along-crack part of the step (sliding along the wall), else its across part (out of a corner),
 // if that part alone is not a wall too.
 const WALL_RISE = 1.3;   // tan 52 deg
-function crackFloorAt(x, z, zi) {   // the eye height the shut floor would stand him at, and _fl.u there
+function crackFloorAt(x, z, zi) {   // the eye height the crack's floor would stand him at
   let h = terrainH(x, z, zi);
-  fissureLocal(x, z, zi, _fl);
-  if (fissureDist(x, z, zi) < 0) {
-    if (slabAt(x, z, zi) >= 0 && player.pos.y < h + EYE_H - SLAB_CATCH) h = terrainUnderH(x, z, zi);
-    h = Math.max(h, jamYAt(_fl.u, zi, terrainH));
-  }
-  return h + EYE_H;
+  if (slabAt(x, z, zi) >= 0 && player.pos.y < h + EYE_H - SLAB_CATCH) h = terrainUnderH(x, z, zi);
+  const j = jamAt(x, z, zi);   // the shared shut-floor helper (terrain.js): -1e9 open or outside
+  return (j > h ? j : h) + EYE_H;
 }
 // Off the bottom (a pack hop or burst, W held at the wall) the same face is refused while it is
 // more than AIR_STEP over his eye at the new spot (airY): he rises past it first, then crosses over
-// its top and lands, instead of being stood up it (measured 0.6-1.3 u in a frame).
+// its top and lands, instead of being stood up it (measured 0.6-1.3 u in a frame). While he is still
+// RISING the face may not catch him at all (no allowance): a hop at a wall otherwise landed him on
+// the face a metre up, mid-rise, with the rest of the hop spent standing there.
 const AIR_STEP = 0.3;
-function wallRefuses(x, z, zi, x0, z0, floorY, airY) {
+function wallRefuses(x, z, zi, x0, z0, floorY, airY, jam0) {
   const f = crackFloorAt(x, z, zi);
-  if (airY != null) return f > airY + AIR_STEP;
+  if (airY != null) return f > airY + (player.vel.y > 0 ? 0 : AIR_STEP);
   const rise = f - floorY;
   if (rise <= 1e-4) return false;   // no noise floor: a face climbed in sub-0.05 u frames is still a face
-  return rise > WALL_RISE * Math.hypot(x - x0, z - z0) && f > jamYAt(_fl.u, zi, terrainH) + EYE_H + JAM_STEP;
+  return rise > WALL_RISE * Math.hypot(x - x0, z - z0) && f > jam0 + EYE_H + JAM_STEP;
 }
 const _wl0 = { u: 0, v: 0 };
 function holdOffSlab(zi, sp) {
@@ -613,6 +613,8 @@ function holdInThroat(zi) {
 
 export function updatePlayer(dt, t, zone, riftOpen) {
   const zi = zone < 0 ? 0 : zone;
+  const groundedAtStart = player.grounded;
+  const teleported = Math.abs(player.pos.x - lastX) + Math.abs(player.pos.z - lastZ) > 1;
   let th = terrainH(player.pos.x, player.pos.z, zi);
   // THE FISSURE (spec 2026-10-10). Shut, the rubble jam is a floor wherever the crack is (inside
   // the lip outline), level below the lip and ramping up toward each tip (jamYAt); the wall above
@@ -621,8 +623,9 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // the hole (inThroat: the narrower interval, slabs excluded) — and once he is below the wall beside
   // him he can only have dropped in through it, so he stays in the shaft (holdInThroat) and keeps
   // falling; the calm-gated zone-change plane sits above every throat floor.
-  let overRift = false, jamFloor = -1e9, shutCrack = false;
+  let overRift = false, jamFloor = -1e9, shutCrack = false, inCrack = false;
   if (fissureDist(player.pos.x, player.pos.z, zi) < 0) {
+    inCrack = true;
     const sp = slabProbe(player.pos.x, player.pos.z, zi);
     if (sp.q >= 0 && player.pos.y < th + EYE_H - SLAB_CATCH) {
       if (player.pos.y + HELMET_TOP > th - SLAB_TH_MAX * sp.th) holdOffSlab(zi, sp);
@@ -630,13 +633,14 @@ export function updatePlayer(dt, t, zone, riftOpen) {
     }
     if (riftOpen) {
       overRift = inThroat(player.pos.x, player.pos.z, zi);
-      if (!overRift && player.pos.y < th + EYE_H - 0.3) {
+      // the backstop: OFF THE BOTTOM and below the wall beside him, he came down the shaft (the
+      // walls refuse every step into a face, so a man standing on a ledge is never "below" it)
+      if (!overRift && !player.grounded && player.pos.y < th + EYE_H - 0.3) {
         holdInThroat(zi); th = terrainH(player.pos.x, player.pos.z, zi); overRift = true;
       }
     } else {
       shutCrack = true;
-      fissureLocal(player.pos.x, player.pos.z, zi, _fl);
-      const jt = jamYAt(_fl.u, zi, terrainH) + EYE_H;
+      const jt = jamAt(player.pos.x, player.pos.z, zi) + EYE_H;
       if (jt > th + EYE_H) jamFloor = jt;
     }
   }
@@ -902,17 +906,18 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   }
 
   const px0 = player.pos.x, pz0 = player.pos.z;
+  const jam0 = inCrack ? jamAt(px0, pz0, zi) : -1e9;   // the jam he stands over (open: none, every steep rise refused)
   player.pos.addScaledVector(player.vel, dt);
   const airY = player.grounded ? null : player.pos.y;
-  if (shutCrack && !onDeck && wallRefuses(player.pos.x, player.pos.z, zi, px0, pz0, floorY, airY)) {
+  if (inCrack && !overRift && !onDeck && wallRefuses(player.pos.x, player.pos.z, zi, px0, pz0, floorY, airY, jam0)) {
     const x1 = player.pos.x, z1 = player.pos.z;
     fissureLocal(px0, pz0, zi, _wl0); fissureLocal(x1, z1, zi, _fl);
     const u1 = _fl.u, v1 = _fl.v;
     fissureWorld(u1, _wl0.v, zi, _fw);   // the along-crack part of the step only (sliding along a wall)
-    if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY, airY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
+    if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY, airY, jam0)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
     else {
       fissureWorld(_wl0.u, v1, zi, _fw);   // ...or the across part only (out of a corner, down off a ledge)
-      if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY, airY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
+      if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY, airY, jam0)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
       else { player.pos.x = px0; player.pos.z = pz0; }
     }
     // take the refused part out of his velocity (into the wall), keep the rest
@@ -1041,7 +1046,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // The shut crack's risers (up to JAM_STEP) are the same kind of step: the floor rose under him
   // by more than CRACK_STEP in one frame (measured 0.81 u at a strata riser by the wall foot), so
   // the boots take the riser and the body comes up over them on the same spring, walk held.
-  const crackStep = shutCrack && !onDeck && player.grounded && !player.onLadder;
+  const crackStep = shutCrack && !onDeck && player.grounded && groundedAtStart && !teleported && !player.onLadder;   // walking onto a riser, not landing or being put there
   if ((onDeck || crackStep) && player.grounded && !player.onLadder) {
     if (onDeck && wasLadder && ladYPrev < floorY - 0.05 && LADDER_STEP.on) { player.stepUp = floorY - ladYPrev; player.stepUpV = 0; }
     // (a second riser met while still rising off the first re-seeds the spring from where the body
@@ -1059,7 +1064,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
       player.pos.y = floorY - player.stepUp;
     }
   } else player.stepUp = player.stepUpV = 0;
-  ladYPrev = player.pos.y;
+  ladYPrev = player.pos.y; lastX = player.pos.x; lastZ = player.pos.z;
 
   // (sealegs) Where he stands on the planks, in the raft's frame, for the next carry: the
   // deck point under him, less the balance excursion (that is the sway, not the spot).

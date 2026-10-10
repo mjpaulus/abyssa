@@ -5,8 +5,8 @@ import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
-import { FISSURE, jamTopY, resetJam } from './world/fissureShape.js';
+import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
+import { lipMeanY, resetJam, setFissureShut } from './world/fissureShape.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
@@ -702,9 +702,9 @@ function enterZone(i, quiet = false) {
   if (!quiet) announceZone();
   pendingWards = i > 0;
   riftShutSaid = false;
-  // The fissure's lip, for the rift-shut beat: the mean lip height the jam hangs under
-  // (fissureShape.js jamTopY samples it along both broken lips).
-  riftRimY = jamTopY(i, terrainH) + FISSURE[i].jamDepth;
+  // The fissure's lip, for the rift-shut beat: its mean lip height (fissureShape.js lipMeanY
+  // samples it along both broken lips).
+  riftRimY = lipMeanY(i, terrainH);
 }
 // colour, not instruction: it waits behind anything that matters. A dormant sleeper
 // (the Brooder asleep as a ridge) is not announced — her name is the reveal.
@@ -761,7 +761,11 @@ let riftShutSaid = false, riftRimY = 0;
 // is a forced state, 0 shut .. 1 open, open past 0.5.
 const fissureK = [null, null, null];
 window.__fissure = { setOpen(zi, k) { fissureK[zi] = k; }, k: zi => fissureK[zi] != null ? fissureK[zi] : (zi === zone && lev && lev.calmed ? 1 : 0) };
-const fissureOpen = () => zone >= 0 && (fissureK[zone] != null ? fissureK[zone] > 0.5 : !!(lev && lev.calmed));
+const fissureOpenZ = zi => fissureK[zi] != null ? fissureK[zi] > 0.5 : zi === zone && !!(lev && lev.calmed);
+const fissureOpen = () => zone >= 0 && fissureOpenZ(zone);
+// the shut flags every "ground under X" reader shares (terrain.js shutFloorY / jamAt), set before
+// anything steps this frame
+function syncFissureShut() { for (let zi = 0; zi < 3; zi++) setFissureShut(zi, !fissureOpenZ(zi)); }
 
 // Where a dressed diver waits before a dive: on the deck at the inboard end of the walk
 // to the boarding gap, facing out over the water he is about to step into. The gap is on
@@ -1324,7 +1328,7 @@ function clearCamDistance(from, dir, want, zi) {
   for (let i = 1; i <= STEPS; i++) {
     const d = want * (i / STEPS);
     const x = from.x + dir.x * d, y = from.y + dir.y * d, z = from.z + dir.z * d;
-    if (y < terrainH(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
+    if (y < shutFloorY(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
     for (let list = 0; list < 5; list++) {
     const cols = list === 0 ? rockColliders : list === 1 ? propColliders : list === 2 ? wreckColliders : list === 3 ? ventColliders : dynCols;
     const nCols = list === 4 ? dynN : cols.length;
@@ -1430,7 +1434,7 @@ function updateCamera(dt, t, fwd) {
       for (let i = 0; i < CRE_LIFTS.length; i++) {
         const L = CRE_LIFTS[i];
         camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + L - DECK_PIVOT;
-        if (L < 0 && _piv.y + camTo.y < terrainH(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
+        if (L < 0 && _piv.y + camTo.y < shutFloorY(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
         const f = creBoomClear(_piv, camTo, CRECAM.margin + (L < creLiftT ? 0.25 : 0));
         if (f >= 1) { bestL = L; bestF = 2; break; }
         if (L === creLiftT) curF = f;
@@ -1481,7 +1485,7 @@ function updateCamera(dt, t, fwd) {
     const S = SWIMCAM;
     const open = !player.grounded && !player.onDeck && !player.onLadder && deckK <= 0 && player.pos.y < SURFACE_Y - 1;
     swimCamHeld = open && (Math.abs(player.haulZ || 0) > 0.5 || player.jet > 0.3) ? swimCamHeld + dt : 0;
-    const agl = player.pos.y - 1.35 - terrainH(player.pos.x, player.pos.z, zi);
+    const agl = player.pos.y - 1.35 - shutFloorY(player.pos.x, player.pos.z, zi);
     const tgt = S.on && swimCamHeld > S.hold ? clamp((agl - 1) / 2, 0, 1) : 0;
     const w = tgt > swimCamK ? S.wIn : S.wOut;
     for (let r = dt; r > 1e-6; r -= 0.02) {
@@ -1502,7 +1506,7 @@ function updateCamera(dt, t, fwd) {
   else camHeaveLP += (raft.position.y - camHeaveLP) * Math.min(1, dt / Math.max(0.05, DECKCAM.heaveTau));
   const camHeaveOff = DECKCAM.heave > 0 ? -DECKCAM.heave * deckK * (raft.position.y - camHeaveLP) : 0;
   camDesired.y += camHeaveOff;
-  camDesired.y = Math.max(camDesired.y, terrainH(camDesired.x, camDesired.z, zi) + 1.2);
+  camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, zi) + 1.2);
   // (The idle "breathing" drift — 0.09 u vertical, 0.07 u lateral, forever — is gone: a
   // locked frame on a still man is the point. Weight comes from Sal, not from the lens.)
   const rmK = reducedMotion() ? 0 : 1;
@@ -1709,7 +1713,7 @@ function updateCamera(dt, t, fwd) {
         camTo.copy(camera.position).sub(_piv); camTo.y -= d;
         const l2 = camTo.length(), f2 = Math.max(Math.min(1, 1.0 / Math.max(l2, 1e-3)), creBoomClear(_piv, camTo, 0.3));
         _bp2.copy(_piv).addScaledVector(camTo, f2);
-        if (_bp2.y < terrainH(_bp2.x, _bp2.z, zone < 0 ? 0 : zone) + 0.6) break;
+        if (_bp2.y < shutFloorY(_bp2.x, _bp2.z, zone < 0 ? 0 : zone) + 0.6) break;
         if (inClutch(_bp2.x, _bp2.y, _bp2.z, 0.05) <= 0) { _bp.copy(_bp2); break; }
       }
     }
@@ -2084,6 +2088,7 @@ function update(dt, t) {
   // boat does not stop for a menu.
   updateRaft(dt, t); pm('raft');
   carryDeck(dt);
+  syncFissureShut();
   if (paused) fwd = forwardVec();
   else ({ fwd } = updatePlayer(dt, t, zone, fissureOpen()));
   pm('player');
@@ -2117,7 +2122,7 @@ function update(dt, t) {
   // THE RIFT IS SHUT WHILE IT WAKES: said once he is down in the crack, standing on the jam
   // (player.js publishes jamY while the jam is his floor) with the sleeper not yet calmed.
   if (!riftShutSaid && lev && !lev.calmed && zone >= 0 && msgT <= 0) {
-    if (player.jamY != null && player.grounded && player.jamY < riftRimY - 3) {
+    if (player.jamY != null && player.grounded && player.jamY < riftRimY - 1.5) {
       riftShutSaid = true;
       showMsg('THE RIFT IS SHUT WHILE IT WAKES.', 5);
     }
@@ -3079,6 +3084,7 @@ if (/[?&](lab|bench)/.test(location.search)) import('./lib/bench.js').then(B => 
     if (zi !== zone) enterZone(zi);
     player.pos.set(x, terrainH(x, zz, zi) + 0.05, zz); player.vel.set(0, 0, 0); player.yaw = yaw;
     player.grounded = true; player.onDeck = false;
+    player.stepUp = player.stepUpV = 0;   // a teleport ends any step he was half-way up (it held him under the new floor)
     snapCamBehind(false);
     return { y: player.pos.y, zone };
   },

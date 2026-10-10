@@ -33,7 +33,7 @@ import { scene, envTexDeep as envTex } from '../core.js';
 import { ZONE_GAP, RIFT_R, riftPos, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { glowTex, canvas2d, noiseCanvas, warmGlow } from '../lib/textures.js';
-import { terrainH } from '../world/terrain.js';
+import { terrainH, shutFloorY } from '../world/terrain.js';
 import { motes } from '../world/rifts.js';
 import { nodes } from '../world/resources.js';
 import { slash } from '../world/predators.js';
@@ -259,7 +259,7 @@ function updateSonar(dt) {
       shell.scale.setScalar(Math.max(0.01, r));
       shell.material.uniforms.uA.value = 0.85 * fade;
       sweep.position.set(sonarOrigin.x, 0, sonarOrigin.z);
-      sweep.position.y = terrainH(sonarOrigin.x, sonarOrigin.z, curZone()) + 0.35;
+      sweep.position.y = shutFloorY(sonarOrigin.x, sonarOrigin.z, curZone()) + 0.35;
       sweep.scale.set(Math.max(0.01, r), 1, Math.max(0.01, r));
       sweep.material.uniforms.uA.value = 0.55 * fade;
     } else {
@@ -377,7 +377,7 @@ function layDown(S, zi) {
   if (_b.lengthSq() < 1e-6) _b.set(0, 0, 1);
   _b.normalize();
   S.grp.quaternion.setFromUnitVectors(FWD_Z, _b);
-  S.pos.y = terrainH(S.pos.x, S.pos.z, zi) + 0.09;
+  S.pos.y = shutFloorY(S.pos.x, S.pos.z, zi) + 0.09;   // on the shut fissure's jam, not 70 u under it
   S.grp.position.copy(S.pos);
   S.vel.set(0, 0, 0);
   S.trail.material.opacity = 0;
@@ -413,7 +413,7 @@ function updateSpears(dt, t, p) {
         continue;
       }
 
-      const th = terrainH(S.pos.x, S.pos.z, zi);
+      const th = shutFloorY(S.pos.x, S.pos.z, zi);
       if (S.pos.y <= th + 0.12) { layDown(S, zi); continue; }
       if (S.flown >= SPEAR_RANGE) {
         // spent: it stops driving forward and sinks the rest of the way
@@ -431,7 +431,7 @@ function updateSpears(dt, t, p) {
       S.grp.quaternion.slerp(_q.setFromUnitVectors(FWD_Z, _b.set(S.dir.x, -0.35, S.dir.z).normalize()),
         Math.min(1, dt * 2.5));
       S.trail.material.opacity = 0;
-      if (S.pos.y <= terrainH(S.pos.x, S.pos.z, zi) + 0.12) layDown(S, zi);
+      if (S.pos.y <= shutFloorY(S.pos.x, S.pos.z, zi) + 0.12) layDown(S, zi);
     } else if (S.state === 2) {
       S.stuckT -= dt;
       if (S.stuckT <= 0) { S.vel.set(0, -1.2, 0); S.state = 4; }

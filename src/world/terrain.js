@@ -12,7 +12,7 @@ import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textu
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams, currentSiteIndex, stream } from './site.js';
 import { buildIslands, fillIslands, updateIslands } from './islands.js';
-import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, _widths, _slabReach } from './fissureShape.js';
+import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamYAt, fissureShut, _widths, _slabReach } from './fissureShape.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -243,6 +243,24 @@ export function terrainH(x, z, zi) { return heightAt(x, z, zi, true); }
 // The ground UNDER the fissure's overhang slabs (the carved wall the patch draws beneath them):
 // player.js stands him on it when he is below a slab, not on it. Equal to terrainH off the slabs.
 export function terrainUnderH(x, z, zi) { return heightAt(x, z, zi, false); }
+// THE SHUT FISSURE'S JAM is a floor that is not terrain (fissureShape.js jamYAt): jamAt is its
+// surface over (x, z) while the zone's fissure is shut and (x, z) is inside the lip outline, else
+// -1e9. shutFloorY = the ground anything rests on there: max(terrainH, jam). Open, it is terrainH.
+// Every reader of "the ground under X" that Sal can be over (hose nodes, spears, the sonar ring,
+// the camera's clearance, player.js) uses these, not terrainH.
+const _jl = { u: 0, v: 0 };
+export function jamAt(x, z, zi) {
+  const F = FISSURE[zi];
+  if (!F || !fissureShut(zi)) return -1e9;
+  const dx = x - F.cx, dz = z - F.cz;
+  if (dx * dx + dz * dz > F.apronR2 || fissureDist(x, z, zi) >= 0) return -1e9;
+  fissureLocal(x, z, zi, _jl);
+  return jamYAt(_jl.u, zi, terrainH);
+}
+export function shutFloorY(x, z, zi) {
+  const h = terrainH(x, z, zi), j = jamAt(x, z, zi);
+  return j > h ? j : h;
+}
 // The ground with or without the fissure's overhang slabs: terrainH (collision, scatter, the
 // patch's slab tops) stands on them; the fissure patch draws the carved wall UNDER them.
 function heightAt(x, z, zi, slabs) {
