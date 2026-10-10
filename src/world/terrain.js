@@ -282,12 +282,20 @@ export function terrainH(x, z, zi) {
     // apron: flatten the landform near the crack so lips read as broken shelf, not noise
     const a = fm * fm * (3 - 2 * fm);
     h = h * (1 - 0.6 * a) + 18 * 0.6 * a;
+    const lumps = fbm2(x * 0.11 + 7.7, z * 0.11 - 3.1, 2);                 // 9 u slumped blocks, ~-0.9..0.9
+    // broken lip: the shelf heaves up a little at the edge before it fails, in blocks, so the
+    // crack shows a lip line from standing height instead of vanishing into flat ground
+    if (fd > -2 && fd < 7) { const q = (fd - 1.2) / 1.9; h += Math.exp(-q * q) * (1.7 + 1.3 * lumps); }
     if (fd < 0) {
-      // walls: steep, layered (terrace steps every 4.5 u), slumped blocks via a 9 u hash lump
-      const depth = Math.min(1, -fd / 2.2);                                   // lip break within ~2 u
-      const strata = Math.floor((-fd) * 1.7) / 1.7;                           // stepped faces
-      const lumps = (fbm2(x * 0.11 + 7.7, z * 0.11 - 3.1, 2) - 0.5) * 6;      // slumped blocks
-      h -= F.lipDrop + depth * (60 + strata * 2.5) + lumps * depth;           // ~60 u throat into black
+      // walls: the lip breaks over ~1.6 u, the wall falls over ~4.6 u (two mesh cells at the rifts:
+      // a one-cell drop renders as a single stretched quad and aliases the edge into a sawtooth),
+      // stepped faces every 2.4 u (one cell), slumped blocks on the faces. Where the crack pinches
+      // toward its tips the wall never reaches full depth, so it shallows out instead of ending blunt.
+      const s = -fd;
+      const lip = s < 1.6 ? (s / 1.6) * (s / 1.6) * (3 - 2 * s / 1.6) : 1;
+      const w = Math.min(1, Math.max(0, (s - 0.6) / 4.6)), wall = w * w * (3 - 2 * w);
+      const strata = Math.floor(s / 2.4) * 2.4;
+      h -= F.lipDrop * lip + wall * (60 + strata * 2.5) + lumps * 4 * wall;  // ~60-80 u throat into black
     }
   }
 
