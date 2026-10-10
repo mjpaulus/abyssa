@@ -1,7 +1,7 @@
 // Seafloor terrain: heightfield, mesh, triplanar PBR material, caustics. OWNED BY: terrain agent.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, RIFT_R, zoneTop, zoneBottom, zoneBand, ZONE_SEEN, riftPos, SUN, GLASS } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand, ZONE_SEEN, SUN, GLASS } from '../config.js';
 // WAVE-SLOPE CAUSTICS + SEABED SHADOW (roadmap/ref-caustics-shadow.md). Both are
 // runtime-only reads of values those modules already resolve each frame (the wave field
 // water.js publishes, the shadow mode lighting.js runs); nothing here is touched at
@@ -12,6 +12,7 @@ import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textu
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams, currentSiteIndex, stream } from './site.js';
 import { buildIslands, fillIslands, updateIslands } from './islands.js';
+import { FISSURE, fissureDist } from './fissureShape.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -103,9 +104,7 @@ const ZP = [
     mf: 0.033, mamp: 3.2, ff: 0.098, famp: 0.80, tq: 6.0, tamt: 0.52, lift: 23 }
 ];
 
-const RP = [riftPos(0), riftPos(1), riftPos(2)];
 const ZB = [zoneBottom(0), zoneBottom(1), zoneBottom(2)];
-const RIFT_RR = RIFT_R * 2.7;
 const RIM_IN = WORLD_R * 0.68, RIM_SPAN = WORLD_R * 0.44, RIM_H = 118;
 
 // Azimuthal rim harmonics (a2,b2,a3,b3,a5,b5 per zone). Distinct seeds per zone so
@@ -232,11 +231,9 @@ syncSite();
 export function terrainH(x, z, zi) {
   const P = ZP[zi];
 
-  // Rift funnel mask up front: noise is flattened toward a plateau inside it so the
-  // zone exit stays a clean, traversable bowl no matter what the landform does there.
-  const rp = RP[zi], ddx = x - rp.x, ddz = z - rp.z, dr = Math.sqrt(ddx * ddx + ddz * ddz);
-  let rm = 0;
-  if (dr < RIFT_RR) { const t = 1 - dr / RIFT_RR; rm = t * t * (3 - 2 * t); }
+  // THE FISSURE (spec 2026-10-10): a jagged crack carved along FISSURE[zi]; replaces the round funnel.
+  const fd = fissureDist(x, z, zi);          // < 0 inside the lip outline
+  const fm = fd < 14 ? 1 - Math.min(1, Math.max(0, fd) / 14) : 0;   // 14 u apron: ground eased toward the lip
 
   // Domain warp — pulls every later octave off the noise lattice, so ridges meander.
   const xs = x + P.ox, zs = z + P.oz;
@@ -276,16 +273,22 @@ export function terrainH(x, z, zi) {
   if (P.tamt > 0) h = terrace(h, P.tq, P.tamt * (P.tflat > 0 ? rk + P.tflat * (1 - rk) : rk));
 
   h += P.lift;
-  // Soft floor: canyons must not dig below the zone-change trigger plane.
+  // Soft floor: canyons must not dig below the zone-change trigger plane. It sits ABOVE the
+  // fissure carving on purpose: the throat is the one place meant to go deeper.
   if (h < 4) h = 4 + (h - 4) * 0.25;
 
-  if (rm > 0) {
-    const k = rm * 0.9;
-    h = h * (1 - k) + 18 * k;      // flatten toward a plateau, then sink the funnel
-    h -= rm * rm * 78;
-    // raised collar so the exit reads as a sinkhole rather than a dent
-    const q = (dr - RIFT_RR * 0.84) / (RIFT_RR * 0.2);
-    h += Math.exp(-q * q) * 13;
+  if (fm > 0) {
+    const F = FISSURE[zi];
+    // apron: flatten the landform near the crack so lips read as broken shelf, not noise
+    const a = fm * fm * (3 - 2 * fm);
+    h = h * (1 - 0.6 * a) + 18 * 0.6 * a;
+    if (fd < 0) {
+      // walls: steep, layered (terrace steps every 4.5 u), slumped blocks via a 9 u hash lump
+      const depth = Math.min(1, -fd / 2.2);                                   // lip break within ~2 u
+      const strata = Math.floor((-fd) * 1.7) / 1.7;                           // stepped faces
+      const lumps = (fbm2(x * 0.11 + 7.7, z * 0.11 - 3.1, 2) - 0.5) * 6;      // slumped blocks
+      h -= F.lipDrop + depth * (60 + strata * 2.5) + lumps * depth;           // ~60 u throat into black
+    }
   }
 
   h += ZB[zi];
