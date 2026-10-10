@@ -35,15 +35,15 @@ export const FISSURE = ROWS.map((r, zi) => {
 // (1: v >= 0, 0: v < 0); hu: half length along u; reach: how far past the lip it juts; th: thickness.
 // Kept off the middle (|u| >= 7) so the opening the ending and the jam use stays clear.
 export const SLABS = [
-  [{ u0: -19, side: 1, hu: 2.6, reach: 2.0, th: 1.3 }, { u0: -8, side: 0, hu: 2.0, reach: 1.6, th: 1.0 },
-   { u0: 11, side: 1, hu: 2.2, reach: 1.8, th: 1.5 }, { u0: 22, side: 0, hu: 2.8, reach: 1.7, th: 1.1 }],
-  [{ u0: -17, side: 0, hu: 2.4, reach: 1.9, th: 1.2 }, { u0: -7, side: 1, hu: 1.9, reach: 1.5, th: 1.0 },
-   { u0: 9, side: 0, hu: 2.6, reach: 2.0, th: 1.4 }, { u0: 20, side: 1, hu: 2.2, reach: 1.6, th: 1.1 }],
-  [{ u0: -24, side: 1, hu: 2.8, reach: 2.1, th: 1.6 }, { u0: -10, side: 0, hu: 2.2, reach: 1.8, th: 1.2 },
-   { u0: 8, side: 1, hu: 2.0, reach: 1.6, th: 1.0 }, { u0: 18, side: 0, hu: 3.0, reach: 2.2, th: 1.5 },
-   { u0: 29, side: 1, hu: 2.0, reach: 1.4, th: 0.9 }],
+  [{ u0: -19, side: 1, hu: 2.6, reach: 2.6, th: 1.3 }, { u0: -8, side: 0, hu: 2.0, reach: 2.2, th: 1.0 },
+   { u0: 11, side: 1, hu: 2.2, reach: 2.4, th: 1.5 }, { u0: 22, side: 0, hu: 2.8, reach: 2.3, th: 1.1 }],
+  [{ u0: -17, side: 0, hu: 2.4, reach: 2.5, th: 1.2 }, { u0: -7, side: 1, hu: 1.9, reach: 2.1, th: 1.0 },
+   { u0: 9, side: 0, hu: 2.6, reach: 2.6, th: 1.4 }, { u0: 20, side: 1, hu: 2.2, reach: 2.2, th: 1.1 }],
+  [{ u0: -24, side: 1, hu: 2.8, reach: 2.7, th: 1.6 }, { u0: -10, side: 0, hu: 2.2, reach: 2.4, th: 1.2 },
+   { u0: 8, side: 1, hu: 2.0, reach: 2.2, th: 1.0 }, { u0: 18, side: 0, hu: 3.0, reach: 2.8, th: 1.5 },
+   { u0: 29, side: 1, hu: 2.0, reach: 2.0, th: 0.9 }],
 ];
-export const SLAB_REACH_MAX = 2.2;
+export const SLAB_REACH_MAX = 2.8;
 // Triangle wave, -1..1, period 1: straight runs and hard kinks, the en-echelon zigzag of a real
 // tension crack (a sine reads as a meander, a river, not rock).
 const tri = t => 4 * Math.abs(t - Math.floor(t + 0.5)) - 1;

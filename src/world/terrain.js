@@ -307,8 +307,8 @@ function heightAt(x, z, zi, slabs) {
       // an overhang slab's top is ground that has not fallen yet: no carve, a slight lean outward.
       // The wall under and beyond it is set back by 1.3 x its reach (in BOTH modes, so drawn and
       // collision agree past its front), which is what leaves it overhanging the void.
-      const sp = slabProbe(x, z, zi), q = sp.q, ru = Math.min(1, Math.max(0, (s - 0.7) / 0.6));
-      const rs = 1.3 * sp.r * ru * ru * (3 - 2 * ru);   // ramps in from 0.7 u inside: a patch cell over the lip must not dip
+      const sp = slabProbe(x, z, zi), q = sp.q, ru = Math.min(1, Math.max(0, (s - 1.1) / 0.6));
+      const rs = 1.3 * sp.r * ru * ru * (3 - 2 * ru);   // ramps in from 1.1 u inside: a patch cell (<= 0.5 u, ~0.7 u diagonal, |grad fd| up to ~1.4 at the kinks) over the lip must not dip
       if (slabs && q >= 0) h -= 0.3 * s + 0.35 * q * q;
       else {
         // Drawn by the fissure patch at ~0.46 u (see buildFissurePatch), so the walls carry detail
@@ -926,6 +926,27 @@ function axSearch(A, v) {           // last index i with A[i] <= v, clamped to [
   return lo;
 }
 const SLAB_NU = 10, SLAB_NS = 4, SLAB_TRIS = SLAB_NU * SLAB_NS * 4 + SLAB_NU * 4;
+// Each coarse column/row is split into its OWN ceil(width / 0.5) steps (the grid's spacing varies
+// 1.7-2.9 u here), so no part of the patch is denser than the ruling's 0.5 u needs.
+// ONE mesh per zone (slabs included): cut into 8x8 / 16x16-cell chunks so the frustum and the
+// lantern's cube faces could cull pieces, it cost MORE (paired live A/B at the zone-0 lip, patch vs
+// the uncut coarse terrain: one mesh +0.11..0.20 ms, 16-cell chunks +0.25, 8-cell +0.38..0.44): the
+// draw calls (61 shadow + 16 colour at 8 cells) outweigh the triangles they cull. PATCH_CHUNK
+// keeps the split available should that ever change.
+const PATCH_CHUNK = 1 << 20;
+let PATCH_ON = true;
+function splitAxis(ax, c0, c1) {        // fine axis over coarse lines c0..c1: values, coarse line, sub index
+  let n = 1; const m = [];
+  for (let c = c0; c < c1; c++) { const k = Math.ceil((ax[c + 1] - ax[c]) / PATCH_STEP); m.push(k); n += k; }
+  const V = new Float64Array(n), K = new Int32Array(n), I = new Int32Array(n), S = new Int32Array(c1 - c0 + 1);
+  let a = 0;
+  for (let c = c0; c < c1; c++) {
+    const k = m[c - c0]; S[c - c0] = a;
+    for (let i = 0; i < k; i++, a++) { V[a] = i === 0 ? ax[c] : ax[c] + (ax[c + 1] - ax[c]) * i / k; K[a] = c; I[a] = i; }
+  }
+  S[c1 - c0] = a; V[a] = ax[c1]; K[a] = c1; I[a] = 0;
+  return { V, K, I, S, m, n };
+}
 function buildFissurePatch(zi, g) {
   const ax = AX, n = SEG + 1, F = FISSURE[zi], R = Math.sqrt(F.apronR2) + 6;
   const ka = axSearch(ax, F.cx - R), kb = axSearch(ax, F.cx + R), ja = axSearch(ax, F.cz - R), jb = axSearch(ax, F.cz + R);
@@ -939,23 +960,18 @@ function buildFissurePatch(zi, g) {
       if (k < k0) k0 = k; if (k + 1 > k1) k1 = k + 1; if (j < j0) j0 = j; if (j + 1 > j1) j1 = j + 1;
     }
   }
-  let sx = 0, sz = 0;
-  for (let k = k0; k < k1; k++) sx = Math.max(sx, ax[k + 1] - ax[k]);
-  for (let j = j0; j < j1; j++) sz = Math.max(sz, ax[j + 1] - ax[j]);
-  const mx = Math.ceil(sx / PATCH_STEP), mz = Math.ceil(sz / PATCH_STEP);
-  const nfx = (k1 - k0) * mx + 1, nfz = (j1 - j0) * mz + 1;
-  const FX = new Float64Array(nfx), FZ = new Float64Array(nfz);
-  for (let k = k0, a = 0; k < k1; k++) for (let i = 0; i < mx; i++, a++) FX[a] = i === 0 ? ax[k] : ax[k] + (ax[k + 1] - ax[k]) * i / mx;
-  FX[nfx - 1] = ax[k1];
-  for (let j = j0, b = 0; j < j1; j++) for (let i = 0; i < mz; i++, b++) FZ[b] = i === 0 ? ax[j] : ax[j] + (ax[j + 1] - ax[j]) * i / mz;
-  FZ[nfz - 1] = ax[j1];
+  const XA = splitAxis(ax, k0, k1), ZA = splitAxis(ax, j0, j1);
+  const nfx = XA.n, nfz = ZA.n, FX = XA.V, FZ = ZA.V;
   const isRef = (k, j) => k >= k0 && k < k1 && j >= j0 && j < j1 && ref[j * SEG + k] === 1;
   // compact vertex map: only vertices of refined cells
   const vmap = new Int32Array(nfx * nfz).fill(-1);
-  let nv = 0;
+  let nv = 0, nq = 0, nsub = 0;
   for (let j = j0; j < j1; j++) for (let k = k0; k < k1; k++) if (ref[j * SEG + k]) {
-    for (let jj = 0; jj <= mz; jj++) for (let ii = 0; ii <= mx; ii++) {
-      const id = ((j - j0) * mz + jj) * nfx + (k - k0) * mx + ii;
+    nq++;
+    const as = XA.S[k - k0], bs = ZA.S[j - j0], mxk = XA.m[k - k0], mzj = ZA.m[j - j0];
+    nsub += mxk * mzj;
+    for (let jj = 0; jj <= mzj; jj++) for (let ii = 0; ii <= mxk; ii++) {
+      const id = (bs + jj) * nfx + as + ii;
       if (vmap[id] < 0) vmap[id] = nv++;
     }
   }
@@ -964,7 +980,7 @@ function buildFissurePatch(zi, g) {
   for (let b = 0; b < nfz; b++) for (let a = 0; a < nfx; a++) {
     const v = vmap[b * nfx + a]; if (v < 0) continue;
     va[v] = a; vb[v] = b;
-    const ia = a % mx, ib = b % mz, kc = k0 + Math.floor(a / mx), jc = j0 + Math.floor(b / mz);
+    const ia = XA.I[a], ib = ZA.I[b], kc = XA.K[a], jc = ZA.K[b];
     let all = true;
     if (ia === 0 && ib === 0) all = isRef(kc - 1, jc - 1) && isRef(kc, jc - 1) && isRef(kc - 1, jc) && isRef(kc, jc);
     else if (ia === 0) all = isRef(kc - 1, jc) && isRef(kc, jc);
@@ -972,27 +988,47 @@ function buildFissurePatch(zi, g) {
     bnd[v] = all ? 0 : 1;
   }
   const L = SLABS[zi], nsv = L.length * SLAB_TRIS * 3;
-  let nq = 0;
-  for (let i = 0; i < ref.length; i++) nq += ref[i];
-  const idx = new Uint32Array(nq * mx * mz * 6 + nsv);
-  let t = 0;
+  const pos = new THREE.BufferAttribute(new Float32Array((nv + nsv) * 3), 3);
+  const nor = new THREE.BufferAttribute(new Float32Array((nv + nsv) * 3), 3);
+  const col = new THREE.BufferAttribute(new Float32Array((nv + nsv) * 3), 3);
+  // chunks: count, then fill each chunk's index
+  const ncx = Math.ceil((k1 - k0) / PATCH_CHUNK), ncz = Math.ceil((j1 - j0) / PATCH_CHUNK);
+  const cnt = new Int32Array(ncx * ncz);
+  for (let j = j0; j < j1; j++) for (let k = k0; k < k1; k++) if (ref[j * SEG + k])
+    cnt[Math.floor((j - j0) / PATCH_CHUNK) * ncx + Math.floor((k - k0) / PATCH_CHUNK)] += XA.m[k - k0] * ZA.m[j - j0] * 6;
+  const IX = [], fill = new Int32Array(ncx * ncz);
+  for (let c = 0; c < cnt.length; c++) IX.push(cnt[c] ? new Uint32Array(cnt[c]) : null);
   for (let j = j0; j < j1; j++) for (let k = k0; k < k1; k++) if (ref[j * SEG + k]) {
-    for (let jj = 0; jj < mz; jj++) for (let ii = 0; ii < mx; ii++) {
-      const a = (k - k0) * mx + ii, b = (j - j0) * mz + jj;
+    const ci = Math.floor((j - j0) / PATCH_CHUNK) * ncx + Math.floor((k - k0) / PATCH_CHUNK), I = IX[ci];
+    let t = fill[ci];
+    const as = XA.S[k - k0], bs = ZA.S[j - j0];
+    for (let jj = 0; jj < ZA.m[j - j0]; jj++) for (let ii = 0; ii < XA.m[k - k0]; ii++) {
+      const a = as + ii, b = bs + jj;
       const A = vmap[b * nfx + a], B = vmap[(b + 1) * nfx + a], C = vmap[(b + 1) * nfx + a + 1], D = vmap[b * nfx + a + 1];
-      idx[t++] = A; idx[t++] = B; idx[t++] = D; idx[t++] = B; idx[t++] = C; idx[t++] = D;   // the coarse winding (up)
+      I[t++] = A; I[t++] = B; I[t++] = D; I[t++] = B; I[t++] = C; I[t++] = D;   // the coarse winding (up)
     }
+    fill[ci] = t;
   }
-  for (let i = 0; i < nsv; i++) idx[t++] = nv + i;   // slab triangles: their own vertices, flat shaded
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array((nv + nsv) * 3), 3));
-  geo.setAttribute('normal', new THREE.BufferAttribute(new Float32Array((nv + nsv) * 3), 3));
-  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array((nv + nsv) * 3), 3));
-  geo.setIndex(new THREE.BufferAttribute(idx, 1));
-  const mesh = new THREE.Mesh(geo, zoneMats[zi]);
-  mesh.receiveShadow = true;
-  mesh.name = 'fissurePatch' + zi;
-  scene.add(mesh);
+  // slab triangles (their own vertices, flat shaded) ride in the first chunk: no draw of their own
+  const c0 = IX.findIndex(I => I), merged = new Uint32Array(IX[c0].length + nsv);
+  merged.set(IX[c0]);
+  for (let i = 0; i < nsv; i++) merged[IX[c0].length + i] = nv + i;
+  IX[c0] = merged;
+  const group = new THREE.Group();
+  group.name = 'fissurePatch' + zi;
+  const meshes = [];
+  for (const I of IX) {
+    if (!I) continue;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', pos); geo.setAttribute('normal', nor); geo.setAttribute('color', col);
+    geo.setIndex(new THREE.BufferAttribute(I, 1));
+    geo.boundingSphere = new THREE.Sphere();          // set per fill from the chunk's own vertices
+    const m = new THREE.Mesh(geo, zoneMats[zi]);
+    m.receiveShadow = true;
+    m.name = 'fissurePatch' + zi;
+    group.add(m); meshes.push(m);
+  }
+  scene.add(group);
   // cut the refined cells out of the coarse mesh (PlaneGeometry order: a = k + n j, faces abd, bcd)
   const keep = new Uint32Array((SEG * SEG - nq) * 6);
   let c = 0;
@@ -1001,9 +1037,10 @@ function buildFissurePatch(zi, g) {
     const a = k + n * j, b = k + n * (j + 1), cc = k + 1 + n * (j + 1), d = k + 1 + n * j;
     keep[c++] = a; keep[c++] = b; keep[c++] = d; keep[c++] = b; keep[c++] = cc; keep[c++] = d;
   }
+  const fullIdx = g.index;
   g.setIndex(new THREE.BufferAttribute(keep, 1));
-  fissurePatches[zi] = { mesh, ref, k0, k1, j0, j1, mx, mz, nfx, nfz, FX, FZ, vmap, va, vb, bnd, nv, nsv,
-    HF: new Float32Array(nfx * nfz), cells: nq };
+  fissurePatches[zi] = { coarse: g, fullIdx, cutIdx: g.index, group, meshes, pos, nor, col, ref, k0, k1, j0, j1, XA, ZA, nfx, nfz, FX, FZ, vmap, va, vb, bnd, nv, nsv,
+    HF: new Float32Array(nfx * nfz), cells: nq, tris: nsub * 2 + nsv / 3 };
 }
 
 // Coarse triangle interpolation (the terrain mesh's own split of a cell) of a per-vertex array.
@@ -1017,9 +1054,9 @@ function coarseLerp(Arr, stride, off, k, j, x, z) {
 const AO_RINGS = [1.4, 0.22, 4.6, 0.28, 16, 0.38, 46, 0.34];
 function fillFissurePatch(zi, H, NR, COL) {
   const Q = fissurePatches[zi]; if (!Q) return;
-  const { FX, FZ, nfx, nfz, mx, mz, k0, j0, vmap, va, vb, bnd, nv, HF } = Q, B = ZB[zi], ax = AX;
-  const g = Q.mesh.geometry, P = g.attributes.position.array, NN = g.attributes.normal.array, CC = g.attributes.color.array;
-  const cellK = a => Math.min(SEG - 1, k0 + Math.floor(a / mx)), cellJ = b => Math.min(SEG - 1, j0 + Math.floor(b / mz));
+  const { FX, FZ, nfx, nfz, XA, ZA, vmap, va, vb, bnd, nv, HF } = Q, B = ZB[zi], ax = AX;
+  const P = Q.pos.array, NN = Q.nor.array, CC = Q.col.array;
+  const cellK = a => Math.min(SEG - 1, XA.K[a]), cellJ = b => Math.min(SEG - 1, ZA.K[b]);
   // heights: refined interior from the height function; seam + the rest of the block from the coarse mesh
   for (let b = 0; b < nfz; b++) for (let a = 0; a < nfx; a++) {
     const v = vmap[b * nfx + a], x = FX[a], z = FZ[b];
@@ -1065,10 +1102,15 @@ function fillFissurePatch(zi, H, NR, COL) {
     CC[v * 3 + 2] = c01((h - B - 2) / 220);
   }
   fillSlabs(zi, Q, P, NN, CC, nv);
-  g.attributes.position.needsUpdate = true;
-  g.attributes.normal.needsUpdate = true;
-  g.attributes.color.needsUpdate = true;
-  g.computeBoundingSphere();
+  Q.pos.needsUpdate = true; Q.nor.needsUpdate = true; Q.col.needsUpdate = true;
+  for (const m of Q.meshes) {             // each chunk's bounds from its own vertices
+    const I = m.geometry.index.array, bb = m.geometry.boundingSphere;
+    let x0 = 1e9, y0 = 1e9, z0 = 1e9, x1 = -1e9, y1 = -1e9, z1 = -1e9;
+    for (let i = 0; i < I.length; i++) { const o = I[i] * 3, x = P[o], y = P[o + 1], z = P[o + 2];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; if (z < z0) z0 = z; if (z > z1) z1 = z; }
+    bb.center.set((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+    bb.radius = 0.5 * Math.hypot(x1 - x0, y1 - y0, z1 - z0);
+  }
 }
 
 // The overhang slabs: top = terrainH (what he stands on), a ragged underside a slab-thickness
@@ -1131,7 +1173,7 @@ function fillSlabs(zi, Q, P, NN, CC, base) {
 // each fine cell), or NaN where the coarse terrain draws. Slab tops are not included.
 export function fissurePatchH(zi, x, z) {
   const Q = fissurePatches[zi]; if (!Q) return NaN;
-  const { FX, FZ, nfx, nfz, vmap } = Q, P = Q.mesh.geometry.attributes.position.array;
+  const { FX, FZ, nfx, nfz, vmap } = Q, P = Q.pos.array;
   if (x < FX[0] || x > FX[nfx - 1] || z < FZ[0] || z > FZ[nfz - 1]) return NaN;
   const a = axSearch(FX, x), b = axSearch(FZ, z);
   const A = vmap[b * nfx + a], Bv = vmap[(b + 1) * nfx + a], C = vmap[(b + 1) * nfx + a + 1], D = vmap[b * nfx + a + 1];
@@ -1140,9 +1182,16 @@ export function fissurePatchH(zi, x, z) {
   const ha = P[A * 3 + 1], hb = P[Bv * 3 + 1], hc = P[C * 3 + 1], hd = P[D * 3 + 1];
   return fx + fz <= 1 ? ha * (1 - fx - fz) + hb * fz + hd * fx : hb * (1 - fx) + hc * (fx + fz - 1) + hd * (1 - fz);
 }
+// A/B (bench): false draws the uncut coarse terrain and hides the patch; true restores the patch.
+export function fissurePatchAB(on) {
+  PATCH_ON = !!on;
+  for (const Q of fissurePatches) if (Q) { Q.coarse.setIndex(PATCH_ON ? Q.cutIdx : Q.fullIdx); Q.group.visible = PATCH_ON; }
+  return PATCH_ON;
+}
 export function fissurePatchState() {
-  return fissurePatches.map((Q, zi) => Q && ({ zi, cells: Q.cells, mx: Q.mx, mz: Q.mz, step: [+((Q.FX[1] - Q.FX[0])).toFixed(3), +((Q.FZ[1] - Q.FZ[0])).toFixed(3)],
-    verts: Q.nv + Q.nsv, tris: Q.mesh.geometry.index.count / 3, visible: Q.mesh.visible }));
+  return fissurePatches.map((Q, zi) => Q && ({ zi, cells: Q.cells, chunks: Q.meshes.length, subs: [Math.min(...Q.XA.m), Math.max(...Q.XA.m), Math.min(...Q.ZA.m), Math.max(...Q.ZA.m)],
+    maxStep: +Math.max(...Q.XA.m.map((m, i) => (AX[Q.k0 + i + 1] - AX[Q.k0 + i]) / m), ...Q.ZA.m.map((m, i) => (AX[Q.j0 + i + 1] - AX[Q.j0 + i]) / m)).toFixed(3),
+    verts: Q.nv + Q.nsv, tris: Q.tris, visible: Q.group.visible }));
 }
 
 // Topology once, heights per site. buildTerrain allocates the geometries and puts the
@@ -1291,7 +1340,7 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   // shadow box over the seabed. Off, the terrain never enters the raft box's shadow
   // pass (its bounding sphere would otherwise put 166k tris into it every frame).
   const cast = floorShadow.on;
-  for (let i = 0; i < 3; i++) if (terrainMeshes[i].castShadow !== cast) { terrainMeshes[i].castShadow = cast; if (fissurePatches[i]) fissurePatches[i].mesh.castShadow = cast; }
+  for (let i = 0; i < 3; i++) if (terrainMeshes[i].castShadow !== cast) { terrainMeshes[i].castShadow = cast; if (fissurePatches[i]) for (const m of fissurePatches[i].meshes) m.castShadow = cast; }
   // Zone gating: each 166k-tri heightfield is submitted only while the camera is
   // inside its band — the same bands flora already runs (top+120 / bottom-150), which
   // overlap 180 units through every rift so a descent or the ending's fast ascent
@@ -1299,7 +1348,7 @@ export function updateTerrain(dt, t, camY, sunK = 1) {
   // collision field (terrainH) and the roof shells are untouched.
   for (let i = 0; i < 3; i++) {
     terrainMeshes[i].visible = zoneBand(i, camY);
-    if (fissurePatches[i]) fissurePatches[i].mesh.visible = terrainMeshes[i].visible;
+    if (fissurePatches[i]) fissurePatches[i].group.visible = PATCH_ON && terrainMeshes[i].visible;
   }
   updateIslands(camY, t);   // gated on the zone-0 mesh just set: they never pop off their shoal
   // A shell only exists for the player in the zone BELOW it, looking up: on when the

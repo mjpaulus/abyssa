@@ -431,14 +431,14 @@ export function startEnding() {
   // floor. The debug hook drops him at the origin instead, 70u under the seafloor and
   // 118u off the rift — from there the first leg would drag him through the zone-2 floor
   // from below. Either way the shot starts in the funnel, so put him in it.
+  // THE FISSURE: he now falls through anywhere along a ~70 u crack, and the trigger
+  // (zoneBottom(2) - 70) lies only a few units under its throat floor, so an off-centre start held
+  // the lens in the floor's skin through the whole STILL beat (199 of 4500 frames, measured from a
+  // real fall 12 u along the crack). The STILL beat is the cut: always start on riftPos, under the
+  // throat, in open water, the way the shot started under the old bowl.
   const r2 = riftPos(2);
-  if (Math.hypot(startX - r2.x, startZ - r2.z) > RIFT_R * 1.6) {
-    startX = r2.x; startZ = r2.z;
-    player.pos.x = startX; player.pos.z = startZ;
-  }
-  // THE FISSURE: the ending's trigger (zoneBottom(2) - 70) lies only a few units under zone 2's
-  // throat floor, so the STILL beat would hold him (and the lens) inside the floor's skin. It
-  // starts under the throat instead, in open water, the way it started under the old bowl.
+  startX = r2.x; startZ = r2.z;
+  player.pos.x = startX; player.pos.z = startZ;
   const under = terrainH(startX, startZ, 2) - 28;
   if (startY > under) { startY = under; player.pos.y = startY; }
   // Far enough out that the raft reads as a small silhouette on the ceiling of light.
