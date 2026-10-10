@@ -445,7 +445,8 @@ if (mode === 'shape') {
   // stands on (drawn y within 0.1 of jamAt wherever the jam is above the wall), never within 0.05 u
   // of an overhang slab's top (no z-fight: it covers the slab or sits clear under it); <= 160
   // boulders, none in a slab footprint, their tops within 0.75 u of the jam in the walkable band
-  // (|v| < 0.6 w) and within 1.6 u near the walls; the seep sprites sit over the jam, fog off.
+  // (|v| < 0.6 w) and within 1.6 u near the walls; every one falls >= 14 u when it opens (none left
+  // resting in view); the seep sprites sit over the jam, fog off.
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     window.setState('play'); window.__helm = true;
@@ -462,6 +463,7 @@ if (mode === 'shape') {
     if (z.slabGap < 0.05) fail.push(`${tag}: silt within ${z.slabGap} of a slab top`);
     if (z.boulders > 160 || z.boulders < 60) fail.push(`${tag}: ${z.boulders} boulders`);
     if (z.inSlab) fail.push(`${tag}: ${z.inSlab} boulders in slab footprints`);
+    if (!(z.dropMin >= 14)) fail.push(`${tag}: a boulder would come to rest only ${z.dropMin} u under the jam (in view)`);
     if (z.topMid > 0.75) fail.push(`${tag}: a boulder stands ${z.topMid} over the walkable jam`);
     if (z.topWall > 1.6) fail.push(`${tag}: a wall boulder stands ${z.topWall} over the jam`);
     if (z.seeps < 6 || z.seeps > 10 || !z.seepFogOff) fail.push(`${tag}: seep ${z.seeps} fogOff ${z.seepFogOff}`);

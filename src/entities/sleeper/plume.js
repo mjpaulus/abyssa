@@ -301,7 +301,15 @@ function findLights() {
   });
 }
 
+// THE FISSURE's opening (world/fissure.js) throws these clouds too, in any zone. It builds the
+// mesh at boot (buildPlumes: the loader's warm frames then draw it, so no first cloud compiles
+// anything) and keeps the clock running where no Brooder does: plumeTicks() counts the calls here,
+// and fissure.js ticks the clouds itself only on a frame that follows one nobody ticked.
+let ticks = 0;
+export const plumeTicks = () => ticks;
+export function buildPlumes() { if (!mesh) build(); }
 export function updatePlumes(dt) {
+  ticks++;
   if (!mesh) return;
   clock += dt;
   uni.uTime.value = clock;
