@@ -12,7 +12,7 @@ import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textu
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams, currentSiteIndex, stream } from './site.js';
 import { buildIslands, fillIslands, updateIslands } from './islands.js';
-import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamYAt, fissureShut, _widths, _slabReach } from './fissureShape.js';
+import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamYAt, jamSagAt, fissureShut, _widths, _slabReach } from './fissureShape.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -255,7 +255,7 @@ export function jamAt(x, z, zi) {
   const dx = x - F.cx, dz = z - F.cz;
   if (dx * dx + dz * dz > F.apronR2 || fissureDist(x, z, zi) >= 0) return -1e9;
   fissureLocal(x, z, zi, _jl);
-  return jamYAt(_jl.u, zi, terrainH);
+  return jamYAt(_jl.u, zi, terrainH) - jamSagAt(_jl.u, _jl.v, zi);   // (the slump: 0 but mid-opening)
 }
 export function shutFloorY(x, z, zi) {
   const h = terrainH(x, z, zi), j = jamAt(x, z, zi);

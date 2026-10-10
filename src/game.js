@@ -12,6 +12,7 @@ import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
+import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
 import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
@@ -196,6 +197,10 @@ buildLightning();   // bolt channels (one instanced draw) + the two-slot bolt li
 await buildStep('creatures', 'SEEDING THE SHOALS');
 buildCreatures();
 buildRifts();
+// THE FISSURE's jam, silt and seep (world/fissure.js): built here, inside the loader, so the warm
+// frames draw them (forceAllDrawn) and first sight builds nothing; shut or open per the chart
+buildFissures();
+syncFissureRecord();
 await buildStep('raft', 'FITTING OUT THE TENDER');
 buildRaft();
 // TAA: Sal and the raft are rigid hierarchies -- exact motion vectors for both.
@@ -702,6 +707,7 @@ function enterZone(i, quiet = false) {
   if (!quiet) announceZone();
   pendingWards = i > 0;
   riftShutSaid = false;
+  syncFissureRecord();   // every zone's fissure, open or shut, from the chart's pencil
   // The fissure's lip, for the rift-shut beat: its mean lip height (fissureShape.js lipMeanY
   // samples it along both broken lips).
   riftRimY = lipMeanY(i, terrainH);
@@ -755,17 +761,19 @@ window.__lev = {
 // stills falls into an unmarked hole in the dark. Said once per zone, once he stands on the
 // shut fissure's jam (riftRimY is the fissure's mean lip height).
 let riftShutSaid = false, riftRimY = 0;
-// THE FISSURE'S OPEN STATE — a STUB, the one place it lives until world/fissure.js (Task 3) takes
-// it over with the jam, the opening and window.__fissure. openK[z] null = follow the calm (as the
-// rift always has, so a calm still opens the way down until the calm drives the opening); a number
-// is a forced state, 0 shut .. 1 open, open past 0.5.
-const fissureK = [null, null, null];
-window.__fissure = { setOpen(zi, k) { fissureK[zi] = k; }, k: zi => fissureK[zi] != null ? fissureK[zi] : (zi === zone && lev && lev.calmed ? 1 : 0) };
-const fissureOpenZ = zi => fissureK[zi] != null ? fissureK[zi] > 0.5 : zi === zone && !!(lev && lev.calmed);
-const fissureOpen = () => zone >= 0 && fissureOpenZ(zone);
+// THE FISSURE'S OPEN STATE lives in world/fissure.js (fissureOpenK, 0 shut .. 1 open, open past
+// 0.5) for EVERY zone, not just the one he is in: a zone the chart's pencil records as calmed at
+// this anchorage stays open behind him (he can come back up through it; a re-shut jam would close
+// over his head). syncFissureRecord pushes the record in on every zone entry and reseed (zones
+// mid-opening are left to finish); the calm itself starts the opening (openFissure).
+function syncFissureRecord() {
+  const rec = chartRec[currentSiteIndex()];
+  for (let zi = 0; zi < 3; zi++) if (!fissureOpening(zi)) setFissureOpen(zi, rec[zi] ? 1 : 0);
+}
+const fissureOpen = () => zone >= 0 && fissureOpenK(zone) > 0.5;
 // the shut flags every "ground under X" reader shares (terrain.js shutFloorY / jamAt), set before
 // anything steps this frame
-function syncFissureShut() { for (let zi = 0; zi < 3; zi++) setFissureShut(zi, !fissureOpenZ(zi)); }
+function syncFissureShut() { for (let zi = 0; zi < 3; zi++) setFissureShut(zi, fissureOpenK(zi) <= 0.5); }
 
 // Where a dressed diver waits before a dive: on the deck at the inboard end of the walk
 // to the boarding gap, facing out over the water he is about to step into. The gap is on
@@ -917,6 +925,7 @@ function reseedWorldNow(i) {
   setSiteGrade(currentSite().grade || null);
   fillTerrain();
   resetJam();   // the jam hangs under the new site's lips (enterZone below reads it)
+  reseatFissures();   // ...and the drawn jam with it (boulders, silt, seep refilled in place)
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
   setKeepsakeState(keepsakes[currentSiteIndex()]);
   reseedFlora();
@@ -2010,6 +2019,11 @@ function update(dt, t) {
   safe('rain', () => updateRain(dt, t));       // after updateWater: reads the surface height it just resolved
   pm('glue'); updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm)); pm('terrain');
   updateRifts(dt, t, zone, !!(lev && lev.calmed)); pm('rifts');
+  // THE FISSURE (world/fissure.js): the seep's breath, and an opening's collapse (held while
+  // paused). Its quake is the seabed's: the lens shakes as it does for her blows.
+  { const fz = updateFissure(state === 'play' && paused ? 0 : dt, t, zone);
+    if (fz.quake > 0 && state === 'play') shake = Math.max(shake, fz.quake); }
+  pm('fissure');
 
   // ---- THE VOYAGE ------------------------------------------------------------------
   // The inked passage (ui/passage.js) runs on its own wall clock; it tells us when to

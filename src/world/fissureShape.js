@@ -223,4 +223,19 @@ export function resetJam() { JAM[0] = JAM[1] = JAM[2] = null; }
 const SHUT = [true, true, true];
 export function setFissureShut(zi, shut) { SHUT[zi] = !!shut; }
 export function fissureShut(zi) { return SHUT[zi]; }
+// THE SLUMP (world/fissure.js, the opening): while the jam fails, before the throat opens, its
+// middle sags into the throat. The sag is part of the FLOOR (terrain.js jamAt subtracts jamSagAt),
+// so a man stood on it rides it down with the drawn silt instead of hovering over a sinking
+// surface. jamSagProfile(u, v): 1 over the throat's middle, 0 at the lips and toward the tips.
+// SAG is 0 except during an opening: every other reader sees jamYAt exactly.
+const SAG = [0, 0, 0];
+export function setJamSag(zi, s) { SAG[zi] = s; }
+export function jamSagProfile(u, v, zi) {
+  const F = FISSURE[zi]; widths(F, u);
+  const w = v >= 0 ? _w.w1 : _w.w0, f = Math.min(1, Math.abs(v) / Math.max(0.3, w)), a = Math.min(1, Math.abs(u) / F.halfLen);
+  const sf = f <= 0.25 ? 0 : (f >= 1 ? 1 : ((f - 0.25) / 0.75) ** 2 * (3 - 2 * (f - 0.25) / 0.75));
+  const sa = a <= 0.5 ? 0 : (a >= 0.9 ? 1 : ((a - 0.5) / 0.4) ** 2 * (3 - 2 * (a - 0.5) / 0.4));
+  return (1 - sf) * (1 - sa);
+}
+export function jamSagAt(u, v, zi) { return SAG[zi] === 0 ? 0 : SAG[zi] * jamSagProfile(u, v, zi); }
 export { halfWAt as _halfWAt, midAt as _midAt, widths as _widths, slabReach as _slabReach };

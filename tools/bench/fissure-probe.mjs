@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -397,6 +397,108 @@ if (mode === 'shape') {
   if (!(r.camAboveJam > 1.0)) fail.push('camera under the jam clearance ' + r.camAboveJam);
   if (r.hoseLow != null && r.hoseLow < r.shut.jam) fail.push('hose sagged under the jam ' + r.hoseLow);
   if (!r.spear || !r.spear.inCrack || r.spear.aboveJam < 0) fail.push('spear did not lie on the jam ' + JSON.stringify(r.spear));
+  console.log(JSON.stringify(r));
+} else if (mode === 'opening') {
+  // THE OPENING MOMENT (world/fissure.js): a calm opens it once. open(0) returns 5-9 s; k climbs
+  // 0 -> 1 over it (past 0.5 the shut floor goes); the seabed quakes (shake > 0) and the jam's
+  // boulders end below the lip (or hidden); no light is added and no shader program is built.
+  // Stood on the jam at the centre, he rides the slump down (never more than 0.5 u under the
+  // drawn silt / over it while it holds) and then drops into the throat.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    window.gotoZone(0); window.__fissure.setOpen(0, 0);
+    const F = S.FISSURE[0], jam = S.jamYAt(0, 0, T.terrainH), lip = S.lipMeanY(0, T.terrainH);
+    window.__bench.place(F.cx, F.cz, 0, 0); window.player.pos.y = jam + 1.35; window.__bench.step(30);
+    const programs0 = window.__fissure.programs ? window.__fissure.programs() : null;
+    const dur = window.__fissure.open(0); let k5 = 0, kHalfAt = -1, quake = 0, shutAt = -1, gapMax = 0, minY = 1e9;
+    window.__bench.step(Math.round(dur * 60) + 60, i => {
+      const st = window.__fissure.state(0);
+      if (i === 300) k5 = st.k;
+      if (kHalfAt < 0 && st.k > 0.5) kHalfAt = i;
+      if (shutAt < 0 && !S.fissureShut(0)) shutAt = i;
+      quake = Math.max(quake, st.quake);
+      minY = Math.min(minY, window.player.pos.y);
+      if (S.fissureShut(0) && window.player.grounded && window.player.jamY != null) gapMax = Math.max(gapMax, Math.abs(window.player.jamY - st.siltAt(window.player.pos.x, window.player.pos.z)));
+    });
+    const st = window.__fissure.state(0);
+    let lights = 0; window.scene.traverse(o => { if (o.isLight) lights++; });
+    return { dur, k5, kEnd: st.k, kHalfAt, shutAt, quake: +quake.toFixed(3), shutEnd: S.fissureShut(0), opening: st.opening,
+      bouldersVisible: st.bouldersVisible, boulderTopMax: +st.boulderTopMax.toFixed(2), lip: +lip.toFixed(2),
+      siltVisible: st.siltVisible, rideGapMax: +gapMax.toFixed(3), fellBelowJam: +(jam + 1.35 - minY).toFixed(2), zone: window.zone,
+      lights, programs0, programs1: window.__fissure.programs ? window.__fissure.programs() : null }; })()`);
+  if (r.dur < 5 || r.dur > 9) fail.push('opening duration ' + r.dur);
+  if (r.kEnd < 0.99) fail.push('did not finish opening');
+  if (r.opening) fail.push('still opening after its duration');
+  if (!(r.quake > 0)) fail.push('no quake');
+  if (r.shutEnd) fail.push('still shut at the end');
+  if (r.shutAt < 0 || Math.abs(r.shutAt - r.kHalfAt) > 1) fail.push(`shut flag did not follow k > 0.5 (${r.shutAt} vs ${r.kHalfAt})`);
+  if (r.bouldersVisible && r.boulderTopMax > r.lip) fail.push('boulders end above the lip ' + r.boulderTopMax);
+  if (r.siltVisible) fail.push('the silt is still drawn when open');
+  if (r.rideGapMax > 0.5) fail.push('he hovered over / sank into the slumping silt by ' + r.rideGapMax);
+  if (!(r.fellBelowJam > 5)) fail.push('he did not drop into the throat once it opened ' + r.fellBelowJam);
+  if (r.lights !== 14) fail.push('light count ' + r.lights);
+  if (r.programs0 != null && r.programs1 !== r.programs0) fail.push(`programs ${r.programs0} -> ${r.programs1} across the opening`);
+  console.log(JSON.stringify(r));
+} else if (mode === 'jam-mesh') {
+  // THE DRAWN JAM (world/fissure.js), every site x zone, shut: the silt surface IS the floor he
+  // stands on (drawn y within 0.1 of jamAt wherever the jam is above the wall), never within 0.05 u
+  // of an overhang slab's top (no z-fight: it covers the slab or sits clear under it); <= 160
+  // boulders, none in a slab footprint, their tops within 0.75 u of the jam in the walkable band
+  // (|v| < 0.6 w) and within 1.6 u near the walls; the seep sprites sit over the jam, fog off.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true;
+    const out = [];
+    for (const site of [0, 1, 2]) {
+      if (site) window.__chart.arrive(site);
+      for (let zi = 0; zi < 3; zi++) { window.__fissure.setOpen(zi, 0); }
+      for (let zi = 0; zi < 3; zi++) out.push(Object.assign({ site, zi }, window.__fissure.audit(zi)));
+    }
+    return out; })()`);
+  for (const z of r) {
+    const tag = `site ${z.site} zone ${z.zi}`;
+    if (z.floorErr > 0.1) fail.push(`${tag}: silt off the floor by ${z.floorErr}`);
+    if (z.slabGap < 0.05) fail.push(`${tag}: silt within ${z.slabGap} of a slab top`);
+    if (z.boulders > 160 || z.boulders < 60) fail.push(`${tag}: ${z.boulders} boulders`);
+    if (z.inSlab) fail.push(`${tag}: ${z.inSlab} boulders in slab footprints`);
+    if (z.topMid > 0.75) fail.push(`${tag}: a boulder stands ${z.topMid} over the walkable jam`);
+    if (z.topWall > 1.6) fail.push(`${tag}: a wall boulder stands ${z.topWall} over the jam`);
+    if (z.seeps < 6 || z.seeps > 10 || !z.seepFogOff) fail.push(`${tag}: seep ${z.seeps} fogOff ${z.seepFogOff}`);
+  }
+  console.log(JSON.stringify(r));
+} else if (mode === 'reascend') {
+  // THE OPEN STATE IS THE CHART'S, FOR EVERY ZONE: calmed (recorded) zone 0 stays open after he
+  // descends through it, so coming back up through the crack (re-entering zone 0 the way start and
+  // the rescue do) he passes the jam's level with nothing under or over him there.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const site = 0, F = S.FISSURE[0], jam = S.jamYAt(0, 0, T.terrainH), out = {};
+    window.__chart.rec()[site][0] = 1;          // the pencil has her: zone 0 calmed
+    window.gotoZone(0); window.lev.calmed = true;
+    out.kAtEnter = window.__fissure.k(0);
+    window.__bench.place(F.cx, F.cz, 0, 0); window.player.pos.y = jam + 1.35;
+    let n = 0; window.__bench.step(4800, i => { n = i; if (window.zone !== 0) return false; });
+    out.descended = { zone: window.zone, seconds: +(n / 60).toFixed(1) };
+    out.after = { k0: window.__fissure.k(0), shut0: S.fissureShut(0), jamAt0: T.jamAt(F.cx, F.cz, 0), k1: window.__fissure.k(1), shut1: S.fissureShut(1) };
+    // back up: re-entering zone 0 (as start / the rescue do), from 12 u under the jam in the throat, rising
+    window.gotoZone(0);
+    out.kReenter = window.__fissure.k(0);
+    window.__bench.place(F.cx, F.cz, 0, 0); window.player.pos.y = jam - 12 + 1.35; window.player.grounded = false;
+    window.player.vel.set(0, 3, 0); window.player.fill = 1;
+    let caught = -1, maxStep = 0, last = null, top = -1e9;
+    window.__bench.step(600, i => { const y = window.player.pos.y; if (last != null) maxStep = Math.max(maxStep, y - last); last = y; top = Math.max(top, y);
+      window.player.vel.y = Math.max(window.player.vel.y, 3);
+      if (caught < 0 && window.player.grounded && Math.abs(y - (jam + 1.35)) < 0.3) caught = i; if (y > jam + 8) return false; });
+    out.rise = { caughtOnJam: caught, maxStep: +maxStep.toFixed(3), top: +(top - jam).toFixed(2), jamY: window.player.jamY };
+    return out; })()`);
+  if (r.kAtEnter !== 1) fail.push('recorded calm: zone 0 not open on entering ' + r.kAtEnter);
+  if (r.descended.zone !== 1) fail.push('did not descend through the open throat ' + JSON.stringify(r.descended));
+  if (r.after.k0 !== 1 || r.after.shut0 || r.after.jamAt0 > -1e8) fail.push('zone 0 re-shut behind him ' + JSON.stringify(r.after));
+  if (r.after.k1 !== 0 || !r.after.shut1) fail.push('zone 1 (not calmed) is not shut ' + JSON.stringify(r.after));
+  if (r.kReenter !== 1) fail.push('zone 0 shut on re-entry ' + r.kReenter);
+  if (r.rise.caughtOnJam >= 0 || r.rise.maxStep > 0.5 || r.rise.top < 7) fail.push('a phantom jam stopped him ' + JSON.stringify(r.rise));
   console.log(JSON.stringify(r));
 } else fail.push(`unknown mode ${mode}`);
 c.close();

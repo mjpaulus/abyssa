@@ -1587,6 +1587,19 @@ function mountFillets(zi, F) {
   zones[zi].add(m);
 }
 
+// THE FISSURE's jam (world/fissure.js) is built from this rock kit, so its boulders ARE the
+// seabed's rocks: zone z's boulder material (the 'rock' program, already compiled and warmed),
+// one rock geometry shaped from the CALLER's stream (flora's own stream is swapped out for the
+// call and restored, so no layout or fingerprint here moves) and the zone's rock albedo.
+// The geometry carries flora's per-vertex attributes; the caller adds aInst (zeros: no sway) and
+// an instanceColor, as mount() / put() do, so the program key is the boulders' own.
+export function jamRockKit(zi, rand, detail = 4, squash = 0.8, amp = 0.75, facet = 1.6) {
+  if (!zoneMats) zoneMats = buildZoneMats();
+  const was = _fr; _fr = rand;
+  try { return { mat: zoneMats[zi].rockB, geo: rockGeo(detail, squash, amp, facet), rock: PAL[zi].rock }; }
+  finally { _fr = was; }
+}
+
 // First boot: identical path to every prior version of this file (buildZoneMats()
 // runs once here since zoneMats starts null; there is nothing yet to dispose).
 export function buildFlora() {
