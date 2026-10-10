@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -594,6 +594,60 @@ if (mode === 'shape') {
   if (r.after.k1 !== 0 || !r.after.shut1) fail.push('zone 1 (not calmed) is not shut ' + JSON.stringify(r.after));
   if (r.kReenter !== 1) fail.push('zone 0 shut on re-entry ' + r.kReenter);
   if (r.rise.caughtOnJam >= 0 || r.rise.maxStep > 0.5 || r.rise.top < 7) fail.push('a phantom jam stopped him ' + JSON.stringify(r.rise));
+  console.log(JSON.stringify(r));
+} else if (mode === 'open-persist') {   // calmed zones load OPEN without the cutscene; uncalmed load SHUT
+  const r = await c.ev(`(async () => {
+    window.__helm = true; const rec = window.__chart.rec(); const site = 0;
+    rec[site][0] = 1; rec[site][1] = 0;                                   // zone 0 calmed, zone 1 not
+    window.__chart.arrive(0);                                             // reseed path applies the record
+    return { k0: window.__fissure.k(0), k1: window.__fissure.k(1) }; })()`);
+  if (r.k0 !== 1) fail.push('calmed zone did not load open ' + r.k0);
+  if (r.k1 !== 0) fail.push('uncalmed zone loaded open ' + r.k1);
+  console.log(JSON.stringify(r));
+} else if (mode === 'calm-open') {
+  // THE REAL CALM PATH (game.js's ev.calmed block), at home zone 0, Sal stood on the jam's middle:
+  // every ward lit through the sleeper's own update -> the chart records her, the fissure opening
+  // starts on the calm frame; the open light (rifts.js), the rift's bearing and the descent all wait
+  // for the jam's pour (k > 0.5), never the calm instant; "A RIFT OPENS BELOW." lands as the light
+  // arrives (dur - 2.5 s after the calm, +-0.2 s); he drops through the opened throat into zone 1.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    window.gotoZone(0);
+    const o = { x: 0, z: 0 }; S.fissureWorld(0, 0, 0, o); window.__bench.place(o.x, o.z, 0, 0);
+    window.player.pos.y = T.jamAt(o.x, o.z, 0) + 1.35; window.__bench.step(30);
+    const $msg = document.getElementById('msg'), $rift = document.getElementById('bmRift');
+    const out = { calmAt: -1, openAt: -1, recAt: -1, msgAt: -1, kHalfAt: -1, lightAt: -1, bearAt: -1, zone1At: -1,
+      lightBeforeHalf: 0, bearBeforeHalf: false, lights: 0, programs0: window.__fissure.programs() };
+    for (const g of window.lev.sigils) g.lit = true;                      // the last ward takes: the sleeper's own update calms her
+    window.__bench.step(60 * 40, i => {
+      if (out.calmAt < 0 && window.lev.calmed) out.calmAt = i;
+      if (out.openAt < 0 && window.__fissure.state(0).opening) out.openAt = i;
+      if (out.recAt < 0 && window.__chart.rec()[0][0]) out.recAt = i;
+      if (out.msgAt < 0 && /A RIFT OPENS BELOW/.test($msg.textContent) && $msg.classList.contains('on')) out.msgAt = i;
+      const k = window.__fissure.k(0), L = window.__rifts ? window.__rifts.state(0) : { light: 0 };
+      if (out.kHalfAt < 0 && k > 0.5) out.kHalfAt = i;
+      if (out.lightAt < 0 && L.light > 0.01) out.lightAt = i;
+      const bear = $rift.classList.contains('active');
+      if (out.bearAt < 0 && bear) out.bearAt = i;
+      if (k <= 0.5) { out.lightBeforeHalf = Math.max(out.lightBeforeHalf, L.light); out.bearBeforeHalf = out.bearBeforeHalf || bear; }
+      if (out.zone1At < 0 && window.zone === 1) { out.zone1At = i; return false; }
+    });
+    out.dur = 3.6 + 3.0; out.k = window.__fissure.k(0);
+    window.scene.traverse(q => { if (q.isLight) out.lights++; });
+    out.programs1 = window.__fissure.programs();
+    return out; })()`);
+  const f = 60, d = r.dur;
+  if (r.calmAt < 0) fail.push('the wards never calmed her');
+  if (r.recAt < 0 || r.recAt !== r.calmAt) fail.push(`the chart did not record the calm on its frame (${r.recAt} vs ${r.calmAt})`);
+  if (r.openAt < 0 || r.openAt - r.calmAt > 1) fail.push(`the fissure did not start opening on the calm (${r.openAt} vs ${r.calmAt})`);
+  if (r.msgAt < 0 || Math.abs((r.msgAt - r.calmAt) / f - (d - 2.5)) > 0.2) fail.push(`"A RIFT OPENS BELOW." at ${((r.msgAt - r.calmAt) / f).toFixed(2)} s, want ${d - 2.5}`);
+  if (r.lightBeforeHalf > 0.01) fail.push('the open light showed over the shut jam ' + r.lightBeforeHalf);
+  if (r.bearBeforeHalf) fail.push('the rift bearing showed over the shut jam');
+  if (r.lightAt < 0 || r.lightAt < r.kHalfAt) fail.push(`the light did not follow the pour (${r.lightAt} vs k>0.5 at ${r.kHalfAt})`);
+  if (r.bearAt < 0) fail.push('no rift bearing once open');
+  if (r.zone1At < 0) fail.push('he did not descend through the opened throat');
+  if (r.lights !== 14) fail.push('light count ' + r.lights);
   console.log(JSON.stringify(r));
 } else fail.push(`unknown mode ${mode}`);
 c.close();
