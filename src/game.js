@@ -1,11 +1,12 @@
 // Game state machine, camera, HUD, and the frame loop. Owned by the orchestrator.
 import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
-import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
+import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
+import { FISSURE, jamTopY, resetJam } from './world/fissureShape.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
@@ -701,11 +702,9 @@ function enterZone(i, quiet = false) {
   if (!quiet) announceZone();
   pendingWards = i > 0;
   riftShutSaid = false;
-  // The bowl's rim, for the rift-shut beat: the collar crest sits at 0.84 of the funnel
-  // radius, so sample the height there on four bearings and keep the mean.
-  const rp = riftPos(i), rr = RIFT_R * 2.7 * 0.84;
-  riftRimY = (terrainH(rp.x + rr, rp.z, i) + terrainH(rp.x - rr, rp.z, i)
-    + terrainH(rp.x, rp.z + rr, i) + terrainH(rp.x, rp.z - rr, i)) * 0.25;
+  // The fissure's lip, for the rift-shut beat: the mean lip height the jam hangs under
+  // (fissureShape.js jamTopY samples it along both broken lips).
+  riftRimY = jamTopY(i, terrainH) + FISSURE[i].jamDepth;
 }
 // colour, not instruction: it waits behind anything that matters. A dormant sleeper
 // (the Brooder asleep as a ridge) is not announced — her name is the reveal.
@@ -755,6 +754,13 @@ window.__lev = {
 // THE RIFT IS SHUT WHILE IT WAKES: a diver who drops into the bowl before the sleeper
 // stills falls into an unmarked hole in the dark. Said once per zone, 20u below the rim.
 let riftShutSaid = false, riftRimY = 0;
+// THE FISSURE'S OPEN STATE — a STUB, the one place it lives until world/fissure.js (Task 3) takes
+// it over with the jam, the opening and window.__fissure. openK[z] null = follow the calm (as the
+// rift always has, so a calm still opens the way down until the calm drives the opening); a number
+// is a forced state, 0 shut .. 1 open, open past 0.5.
+const fissureK = [null, null, null];
+window.__fissure = { setOpen(zi, k) { fissureK[zi] = k; }, k: zi => fissureK[zi] != null ? fissureK[zi] : (zi === zone && lev && lev.calmed ? 1 : 0) };
+const fissureOpen = () => zone >= 0 && (fissureK[zone] != null ? fissureK[zone] > 0.5 : !!(lev && lev.calmed));
 
 // Where a dressed diver waits before a dive: on the deck at the inboard end of the walk
 // to the boarding gap, facing out over the water he is about to step into. The gap is on
@@ -905,6 +911,7 @@ function reseedWorldNow(i) {
   setSiteLight(currentSite().light || null);
   setSiteGrade(currentSite().grade || null);
   fillTerrain();
+  resetJam();   // the jam hangs under the new site's lips (enterZone below reads it)
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
   setKeepsakeState(keepsakes[currentSiteIndex()]);
   reseedFlora();
@@ -2077,7 +2084,7 @@ function update(dt, t) {
   updateRaft(dt, t); pm('raft');
   carryDeck(dt);
   if (paused) fwd = forwardVec();
-  else ({ fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed)));
+  else ({ fwd } = updatePlayer(dt, t, zone, fissureOpen()));
   pm('player');
   $mode.textContent = player.jet > 0.1 ? 'bursting' : player.grounded ? 'walking'
     : player.fill > NEUTRAL_FILL + 0.09 ? 'rising'
@@ -2106,11 +2113,10 @@ function update(dt, t) {
     showMsg('STEP OVER THE SIDE', 4);
   }
 
-  // THE RIFT IS SHUT WHILE IT WAKES: 20u below the bowl's rim with the sleeper awake.
+  // THE RIFT IS SHUT WHILE IT WAKES: said once he is down in the crack, standing on the jam
+  // (player.js publishes jamY while the jam is his floor) with the sleeper not yet calmed.
   if (!riftShutSaid && lev && !lev.calmed && zone >= 0 && msgT <= 0) {
-    const rq = riftPos(zone);
-    if (Math.hypot(player.pos.x - rq.x, player.pos.z - rq.z) < RIFT_R * 2.7 * 0.84
-        && player.pos.y < riftRimY - 20) {
+    if (player.jamY != null && player.grounded && player.jamY < riftRimY - 3) {
       riftShutSaid = true;
       showMsg('THE RIFT IS SHUT WHILE IT WAKES.', 5);
     }
@@ -2545,7 +2551,7 @@ function update(dt, t) {
     // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
     // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
     // the sound and nothing else.
-    if (!player.onDeck) { const ff = lastFootfall(); spawnFootfall(player.pos, ff.yaw, ff.side, zone < 0 ? 0 : zone, 1, ff); }   // at the boot that went down, on its heading
+    if (!player.onDeck) { const ff = lastFootfall(); spawnFootfall(player.pos, ff.yaw, ff.side, zone < 0 ? 0 : zone, 1, ff, player.jamY); }   // at the boot that went down, on its heading
   }
   // Landing after a drop kicks up a bigger cloud under both boots.
   // Terminal sink is 5.1 u/s vented (10.2 with the exhaust held open), not the 18 u/s
@@ -2554,8 +2560,8 @@ function update(dt, t) {
     const zi = zone < 0 ? 0 : zone;
     const p = Math.min(2.2, landVel * 0.42);
     land(p);
-    spawnFootfall(player.pos, player.yaw, 1, zi, p);
-    spawnFootfall(player.pos, player.yaw, -1, zi, p);
+    spawnFootfall(player.pos, player.yaw, 1, zi, p, null, player.jamY);
+    spawnFootfall(player.pos, player.yaw, -1, zi, p, null, player.jamY);
   }
   wasGrounded = player.grounded;
   landVel = player.grounded ? 0 : Math.max(landVel * 0.98, -player.vel.y);

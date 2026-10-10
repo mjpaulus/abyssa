@@ -1,9 +1,10 @@
 // Player state, input, and underwater/ground locomotion. OWNED BY: orchestrator.
 import * as THREE from 'three';
 import { renderer } from './core.js';
-import { WORLD_R, SURFACE_Y, RIFT_R, riftPos, GLASS } from './config.js';
+import { WORLD_R, SURFACE_Y, GLASS } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
 import { terrainH, terrainNormal, clampR } from './world/terrain.js';
+import { FISSURE, fissureDist, inThroat, jamTopY, fissureLocal, fissureWorld, _widths } from './world/fissureShape.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
@@ -20,6 +21,9 @@ export const player = {
   pitch: 0,
   grounded: false,
   onDeck: false,
+  // THE FISSURE, shut: the world y of the jam he is standing on (null off it). footfx and the
+  // rift-shut beat read it; terrainH under him is the throat floor, ~70 u down.
+  jamY: null,
   // smoothed ground height, so cliffy terrain doesn't make the camera judder
   groundY: -10,
   bobPhase: 0,
@@ -541,11 +545,47 @@ function kickThrust(p) {
 // Which half of the stride he was in last frame, for the per-step water resistance.
 let strideSide = 0;
 
+// THE THROAT IS A SHAFT, NOT A HOLE IN A SHEET (fissureShape.js). Held inside the throat's walls
+// (crack coordinates, clamped 0.3 u in from its outline) with the outward velocity removed, so he
+// slides down the shaft wall instead of leaving the throat and being stood back on the wall face.
+const _fl = { u: 0, v: 0 }, _fw = { x: 0, z: 0 };
+function holdInThroat(zi) {
+  const F = FISSURE[zi]; fissureLocal(player.pos.x, player.pos.z, zi, _fl);
+  const uM = F.halfLen * 0.92 - 0.3, u = clamp(_fl.u, -uM, uM);
+  const w = _widths(F, u), k = F.throatHalfW / F.halfW;
+  const lo = -w.w0 * k + 0.3, hi = w.w1 * k - 0.3;
+  const v = hi > lo ? clamp(_fl.v, lo, hi) : (lo + hi) * 0.5;
+  fissureWorld(u, v, zi, _fw);
+  const dx = _fw.x - player.pos.x, dz = _fw.z - player.pos.z, d = Math.hypot(dx, dz);
+  if (d < 1e-6) return;
+  const inward = (player.vel.x * dx + player.vel.z * dz) / d;
+  if (inward < 0) { player.vel.x -= dx / d * inward; player.vel.z -= dz / d * inward; }
+  player.pos.x = _fw.x; player.pos.z = _fw.z;
+}
+
 export function updatePlayer(dt, t, zone, riftOpen) {
   const zi = zone < 0 ? 0 : zone;
-  const th = terrainH(player.pos.x, player.pos.z, zi);
-  const rp = riftPos(zi);
-  const overRift = riftOpen && Math.hypot(player.pos.x - rp.x, player.pos.z - rp.z) < RIFT_R;
+  let th = terrainH(player.pos.x, player.pos.z, zi);
+  // THE FISSURE (spec 2026-10-10). Shut, the rubble jam is a floor wherever the crack is (inside
+  // the lip outline), at one height per zone below the lip; the wall above it is still terrain, so
+  // the floor is max(wall, jam) and stepping in is a step down, never a ledge. Open, the THROAT is
+  // the hole (inThroat: the narrower interval, slabs excluded) — and once he is below the wall beside
+  // him he can only have dropped in through it, so he stays in the shaft (holdInThroat) and keeps
+  // falling; the calm-gated zone-change plane sits above every throat floor.
+  let overRift = false, jamFloor = -1e9;
+  if (fissureDist(player.pos.x, player.pos.z, zi) < 0) {
+    if (riftOpen) {
+      overRift = inThroat(player.pos.x, player.pos.z, zi);
+      if (!overRift && player.pos.y < th + EYE_H - 0.3) {
+        holdInThroat(zi); th = terrainH(player.pos.x, player.pos.z, zi); overRift = true;
+      }
+    } else {
+      const jt = jamTopY(zi, terrainH) + EYE_H;
+      if (jt > th + EYE_H) jamFloor = jt;
+    }
+  }
+  const onJam = jamFloor > -1e8;
+  player.jamY = onJam ? jamFloor - EYE_H : null;
 
   // THE RAFT DECK IS A ONE-WAY PLATFORM. He lands on it from above and passes straight
   // up through it from below — surfacing under the raft should put him alongside it, not
@@ -601,7 +641,7 @@ export function updatePlayer(dt, t, zone, riftOpen) {
       player.pos.z -= clamp(dzr - LADDER_Z, -0.5 * dt, 0.5 * dt);
     }
   }
-  const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY);
+  const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY, jamFloor);
   // Published for diver.js: where the boots actually stand (the grounded snap below holds
   // his centre up to 1.2 above it for a few frames while he settles).
   player.floorY = overRift ? null : floorY;
@@ -610,7 +650,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // bottom it was a 2.2x haul; real speed in open water is the pack's now, not the arms').
   const sprinting = keys['ShiftLeft'] || keys['ShiftRight'];
   const fwd = forwardVec(), flat = flatVec(), right = rightVec();
-  const normal = overRift ? _up : terrainNormal(player.pos.x, player.pos.z, zi);
+  // the jam is packed level (the wall or throat floor under it is not what he stands on)
+  const normal = overRift || onJam ? _up : terrainNormal(player.pos.x, player.pos.z, zi);
   // On the deck the seafloor's slope is irrelevant — planks are planks.
   const walkable = onDeck || normal.y > MAX_WALK_SLOPE;
 

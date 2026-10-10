@@ -208,15 +208,18 @@ function emitPuff(x, y, z, count, strength) {
 // side: -1 left boot, +1 right. strength ~1 step, ~2 landing.
 // at (optional): the boot's own sole centre {x, z} from the rig (diver.js lastFootfall);
 // without it the print goes at the old fixed offset from playerPos.
-export function spawnFootfall(playerPos, yaw, side, zi, strength = 1, at = null) {
+// jamY (optional): he is standing on the fissure's shut jam (player.jamY), a floor that is not
+// terrain: the puff and the print go on the jam, level, not on the throat floor far below it.
+export function spawnFootfall(playerPos, yaw, side, zi, strength = 1, at = null, jamY = null) {
   const rx = Math.sin(yaw - Math.PI / 2), rz = Math.cos(yaw - Math.PI / 2);
   const fx = at ? at.x : playerPos.x + rx * side * 0.26 + Math.sin(yaw) * 0.1;
   const fz = at ? at.z : playerPos.z + rz * side * 0.26 + Math.cos(yaw) * 0.1;
-  const fy = terrainH(fx, fz, zi);
+  const tH = terrainH(fx, fz, zi), onJam = jamY != null && jamY > tH;
+  const fy = onJam ? jamY : tH;
   emitPuff(fx, fy, fz, Math.min(20, 9 + (strength * 6) | 0), strength);
 
   const k = tHead; tHead = (tHead + 1) % T_MAX;
-  _n.copy(terrainNormal(fx, fz, zi));
+  if (onJam) _n.set(0, 1, 0); else _n.copy(terrainNormal(fx, fz, zi));
   _t1.set(Math.sin(yaw), 0, Math.cos(yaw));
   _t1.addScaledVector(_n, -_n.dot(_t1)).normalize();
   _t2.crossVectors(_t1, _n);                 // right-handed: x = y cross z

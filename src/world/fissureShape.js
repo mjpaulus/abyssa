@@ -134,4 +134,25 @@ export function inThroat(x, z, zi) {
   if (Math.max(_l.v - _w.w1 * k, -_l.v - _w.w0 * k) >= 0) return false;
   return slabAt(x, z, zi) < 0;
 }
+// THE JAM (shut): the walkable top of the rubble that chokes the crack, one world height per zone =
+// the mean lip height minus jamDepth. Sampled 1.5 u outside each lip (the broken lip's own crest,
+// not the break) at nine stations along the middle 80% of the crack, both sides, each placed through
+// fissureWorld with its own side's width (the centreline kinks ~3.5 u: a straight-axis sample lands
+// in the crack, ~70 u deep, on one side). terrainH is passed in so this module stays pure (terrain.js
+// imports us; we must not import it). Cached: call resetJam() after a reseed (the terrain changed).
+const JAM = [null, null, null], _j = { x: 0, z: 0 };
+export function jamTopY(zi, terrainH) {
+  if (JAM[zi] != null) return JAM[zi];
+  if (!terrainH) return -1e9;
+  const F = FISSURE[zi]; let s = 0, n = 0;
+  for (let i = -4; i <= 4; i++) {
+    const u = i / 4 * F.halfLen * 0.8;
+    for (let sd = 0; sd < 2; sd++) {
+      fissureWorld(u, (sd ? 1 : -1) * (halfWAt(F, u, sd) + 1.5), zi, _j);
+      s += terrainH(_j.x, _j.z, zi); n++;
+    }
+  }
+  return (JAM[zi] = s / n - F.jamDepth);
+}
+export function resetJam() { JAM[0] = JAM[1] = JAM[2] = null; }
 export { halfWAt as _halfWAt, midAt as _midAt, widths as _widths, slabReach as _slabReach };
