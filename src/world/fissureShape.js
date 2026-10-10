@@ -26,19 +26,29 @@ export const FISSURE = ROWS.map((r, zi) => {
 // Triangle wave, -1..1, period 1: straight runs and hard kinks, the en-echelon zigzag of a real
 // tension crack (a sine reads as a meander, a river, not rock).
 const tri = t => 4 * Math.abs(t - Math.floor(t + 0.5)) - 1;
-// The crack's centreline wanders off the bearing axis by up to ~3 u in kinked runs (kinks every
+// The crack's centreline wanders off the bearing axis by up to ~4 u in kinked runs (kinks every
 // ~12 u and ~4.5 u: both at or above two mesh cells, ~2.3 u at the rifts). Pinned to 0 at u = 0 so
 // the opening stays centred on riftPos (the ending's spline and the fall-through rely on it).
 function midAt(F, u) {
   const m = F.ph.m;
   return 2.2 * (tri(u / 24 + m[0]) - tri(m[0])) + 0.8 * (tri(u / 9 + m[1]) - tri(m[1]));
 }
-// u along the bearing; v across, measured from the kinked centreline (so fissureDist and inThroat
-// follow the drawn crack, not the straight axis).
+// u along the bearing; v across, measured from the KINKED CENTRELINE, not the straight bearing
+// axis (so fissureDist and inThroat follow the drawn crack). CONTRACT for every consumer:
+//   world(u, v) = (cx, cz) + (dx, dz) * u + (-dz, dx) * (v + _midAt(F, u))   -> fissureWorld below
+//   the lip on side s is at |v| = _halfWAt(F, u, s), s = 1 for v >= 0, s = 0 for v < 0 (the two
+//   lips differ: never size both from one side), the throat at _halfWAt(F, u, s) * throatHalfW / halfW.
+// Building positions as centre + dir * u + normal * v (ignoring _midAt) misses the crack by up to
+// ~4 u, a whole throat half width.
 export function fissureLocal(x, z, zi, out) {
   const F = FISSURE[zi], rx = x - F.cx, rz = z - F.cz;
   const u = rx * F.dx + rz * F.dz;
   out.u = u; out.v = -rx * F.dz + rz * F.dx - midAt(F, u); return out;
+}
+// The inverse of fissureLocal: writes out.x, out.z for crack coordinates (u, v). No allocation.
+export function fissureWorld(u, v, zi, out) {
+  const F = FISSURE[zi], w = v + midAt(F, u);
+  out.x = F.cx + F.dx * u - F.dz * w; out.z = F.cz + F.dz * u + F.dx * w; return out;
 }
 // Half width on one side (side 1: v >= 0, side 0: v < 0). It pinches toward the ends (a crack
 // thins to a hairline: (1 - t^2)^0.7, pointed, not the round ends of an ellipse) and each lip
