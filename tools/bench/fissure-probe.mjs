@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -178,6 +178,40 @@ if (mode === 'shape') {
   for (const z of r) {
     if (z.maxRise > 0.85) fail.push(`zone ${z.zi} slab u0 ${z.u0}: snapped up ${z.maxRise}`);
     if (z.onTop && z.room > 1.1) fail.push(`zone ${z.zi} slab u0 ${z.u0}: stood on the slab from below ` + JSON.stringify(z));
+  }
+  console.log(JSON.stringify(r));
+} else if (mode === 'tips') {
+  // SHUT, END TO END: at every site, every zone, both ends: stood on the jam at 0.8 halfLen, W held
+  // along the crack (the yaw steered at the centreline 5 u ahead: the mouse's job) for 25 s. He must
+  // walk out past the tip (the jam ramps up into each tip; a riser of up to a step is stepped),
+  // never rising more than a step in one frame.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const o = { x: 0, z: 0 }, L = { u: 0, v: 0 }, out = [];
+    for (const site of [0, 1, 2]) {
+      if (site) window.__chart.arrive(site);
+      window.setState('play'); window.__helm = true;
+      for (let zi = 0; zi < 3; zi++) for (const e of [-1, 1]) {
+        window.gotoZone(zi); if (window.lev) window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
+        const F = S.FISSURE[zi], u0 = e * 0.8 * F.halfLen;
+        S.fissureWorld(u0, 0, zi, o); window.__bench.place(o.x, o.z, 0, zi);
+        window.player.pos.y = Math.max(T.terrainH(o.x, o.z, zi), S.jamYAt(u0, zi, T.terrainH)) + 1.35;
+        window.__bench.step(20);
+        window.keys.KeyW = true; let up = 0, last = null, uEnd = 0, n = 0;
+        try { window.__bench.step(1500, i => { const p = window.player.pos; S.fissureLocal(p.x, p.z, zi, L);
+          S.fissureWorld(L.u + 5 * e, 0, zi, o); window.player.yaw = Math.atan2(o.x - p.x, o.z - p.z);
+          if (last != null) up = Math.max(up, p.y - last); last = p.y; uEnd = L.u; n = i;
+          if (e * L.u > F.halfLen + 2) return false; }); }
+        finally { window.keys.KeyW = false; }
+        out.push({ site, zi, end: e, out: e * uEnd > F.halfLen + 2, uEnd: +uEnd.toFixed(1), secs: +(n / 60).toFixed(1), maxRise: +up.toFixed(3) });
+      }
+    }
+    window.__chart.arrive(0);
+    return out; })()`);
+  for (const z of r) {
+    if (!z.out) fail.push(`site ${z.site} zone ${z.zi} end ${z.end}: did not walk out of the tip ` + JSON.stringify(z));
+    if (z.maxRise > 0.85) fail.push(`site ${z.site} zone ${z.zi} end ${z.end}: rose ${z.maxRise} in a frame`);
   }
   console.log(JSON.stringify(r));
 } else fail.push(`unknown mode ${mode}`);

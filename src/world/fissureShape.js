@@ -146,13 +146,14 @@ export function inThroat(x, z, zi) {
 // ~2 u wide and 8-12 u deep, a trap to walk into and a bounce to walk along — so past
 // |u| = JAM_T0 * halfLen the surface rises on a smoothstep toward that tip's own lip, and it is held
 // JAM_UNDER_LIP under the LOWER lip point (fd = 0, both sides) everywhere: under a windowed minimum
-// (+-1.5 u) of the lip line, so the lip's jag and joint blocks come back as gentle plateaus, not
-// bumps. The floor max(terrain, jam) is then continuous at the outline and stepping in is never a
-// step up. One table per zone at 0.25 u, built with the jam (boot / reseed), read by lerp: no
+// (+-0.5 u; +-1.5 lagged the lip rising into a tip and left a riser) of the lip line, so its jag
+// and joint blocks come back as short plateaus (then slope-limited). The floor max(terrain, jam) is
+// then continuous at the outline and stepping in is never a step up. One table per zone at 0.25 u,
+// built with the jam (boot / reseed), read by lerp: no
 // allocation, no terrainH per frame. Slope-limited to |dy/du| <= 0.9 (42 deg: inside the 52 deg walk
 // limit; the probe jam-stand checks it at every site). Cached: call resetJam() after a reseed.
 const JAM = [null, null, null], _j = { x: 0, z: 0 };
-const JAM_T0 = 0.5, JAM_UNDER_LIP = 0.4, JAM_DU = 0.25, JAM_WIN = 6, JAM_SLOPE = 0.9;   // window +-6 stations = +-1.5 u
+const JAM_T0 = 0.5, JAM_UNDER_LIP = 0.4, JAM_DU = 0.25, JAM_WIN = 2, JAM_SLOPE = 0.9;   // window +-2 stations = +-0.5 u
 const JAM_N = FISSURE.map(F => Math.round(2 * F.halfLen / JAM_DU) + 1);
 const JAM_P = JAM_N.map(n => new Float32Array(n)), _lipLo = new Float32Array(Math.max(...JAM_N));
 function buildJam(zi, terrainH) {

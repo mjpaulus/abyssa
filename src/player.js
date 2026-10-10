@@ -549,7 +549,7 @@ let strideSide = 0;
 // (crack coordinates, clamped 0.3 u in from its outline) with the outward velocity removed, so he
 // slides down the shaft wall instead of leaving the throat and being stood back on the wall face.
 const _fl = { u: 0, v: 0 }, _fw = { x: 0, z: 0 };
-const JAM_STEP = 0.8;   // shut: a riser ending this little above the jam is a step (the tips end in one)
+const JAM_STEP = 1.0;   // shut: a riser ending this little above the jam is a step (the hairline tips end in one; 0.8 stalled at Pallid zone 1 east)
 // THE OVERHANG SLABS FROM BELOW. terrainH holds a slab's TOP (ground he can stand on from the lip),
 // so down on the jam a step under one stood him on it: measured a 6.8 u snap in one frame. A slab
 // is a one-way platform (it catches him within SLAB_CATCH of its top, like the raft deck); below
@@ -562,7 +562,8 @@ const SLAB_CATCH = 0.7, SLAB_TH_MAX = 2.4, HELMET_TOP = 0.6, SLAB_CLEAR = 0.35;
 // or two in a frame and the downslope slide dropped him back (measured: 1-2.3 u per frame, over and
 // over). On the shut crack's floor the wall is a wall: a step whose floor rises steeper than
 // WALL_RISE per unit run AND ends more than JAM_STEP above the jam there is refused; he keeps the
-// along-crack part of the step (sliding along the wall) if that part alone is not a wall too.
+// along-crack part of the step (sliding along the wall), else its across part (out of a corner),
+// if that part alone is not a wall too.
 const WALL_RISE = 1.3;   // tan 52 deg
 function crackFloorAt(x, z, zi) {   // the eye height the shut floor would stand him at, and _fl.u there
   let h = terrainH(x, z, zi);
@@ -898,9 +899,14 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   if (shutCrack && player.grounded && !onDeck && wallRefuses(player.pos.x, player.pos.z, zi, px0, pz0, floorY)) {
     const x1 = player.pos.x, z1 = player.pos.z;
     fissureLocal(px0, pz0, zi, _wl0); fissureLocal(x1, z1, zi, _fl);
-    fissureWorld(_fl.u, _wl0.v, zi, _fw);   // the along-crack part of the step only
+    const u1 = _fl.u, v1 = _fl.v;
+    fissureWorld(u1, _wl0.v, zi, _fw);   // the along-crack part of the step only (sliding along a wall)
     if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
-    else { player.pos.x = px0; player.pos.z = pz0; }
+    else {
+      fissureWorld(_wl0.u, v1, zi, _fw);   // ...or the across part only (out of a corner, down off a ledge)
+      if (!wallRefuses(_fw.x, _fw.z, zi, px0, pz0, floorY)) { player.pos.x = _fw.x; player.pos.z = _fw.z; }
+      else { player.pos.x = px0; player.pos.z = pz0; }
+    }
     // take the refused part out of his velocity (into the wall), keep the rest
     const rx = x1 - player.pos.x, rz = z1 - player.pos.z, rl = Math.hypot(rx, rz);
     if (rl > 1e-6) {
