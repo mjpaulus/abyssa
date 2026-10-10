@@ -549,6 +549,7 @@ let strideSide = 0;
 // (crack coordinates, clamped 0.3 u in from its outline) with the outward velocity removed, so he
 // slides down the shaft wall instead of leaving the throat and being stood back on the wall face.
 const _fl = { u: 0, v: 0 }, _fw = { x: 0, z: 0 };
+const CRACK_STEP = 0.25;   // a rise this big in one frame is a step taken, not ground followed
 const JAM_STEP = 1.0;   // shut: a riser ending this little above the jam is a step (the hairline tips end in one; 0.8 stalled at Pallid zone 1 east)
 // THE OVERHANG SLABS FROM BELOW. terrainH holds a slab's TOP (ground he can stand on from the lip),
 // so down on the jam a step under one stood him on it: measured a 6.8 u snap in one frame. A slab
@@ -1030,8 +1031,15 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   // went from half a metre under the planks to 20 cm over them between two frames. Now the
   // deck takes his boots at once and his body comes up over them, a heavy man straightening
   // out of the last step (~0.45 s, eased out), still on the deck and carried with it.
-  if (onDeck && player.grounded && !player.onLadder) {
-    if (wasLadder && ladYPrev < floorY - 0.05 && LADDER_STEP.on) { player.stepUp = floorY - ladYPrev; player.stepUpV = 0; }
+  // The shut crack's risers (up to JAM_STEP) are the same kind of step: the floor rose under him
+  // by more than CRACK_STEP in one frame (measured 0.81 u at a strata riser by the wall foot), so
+  // the boots take the riser and the body comes up over them on the same spring, walk held.
+  const crackStep = shutCrack && !onDeck && player.grounded && !player.onLadder;
+  if ((onDeck || crackStep) && player.grounded && !player.onLadder) {
+    if (onDeck && wasLadder && ladYPrev < floorY - 0.05 && LADDER_STEP.on) { player.stepUp = floorY - ladYPrev; player.stepUpV = 0; }
+    if (crackStep && player.stepUp === 0 && ladYPrev < floorY - CRACK_STEP && ladYPrev > floorY - JAM_STEP - 0.5) {
+      player.stepUp = floorY - ladYPrev; player.stepUpV = 0;
+    }
     if (player.stepUp > 0) {
       // critically damped toward 0 at w (no overshoot: he never rises past standing)
       const w = LADDER_STEP.w, a = -w * w * player.stepUp - 2 * w * player.stepUpV;
