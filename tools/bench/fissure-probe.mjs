@@ -86,10 +86,11 @@ if (mode === 'shape') {
   }
   console.log(JSON.stringify(r));
 } else if (mode === 'throat-edges') {
-  // OPEN: from the opening's centre he falls through to the next zone (zone 2: the ending); 1 u
-  // outside the lip he does not. Hauling across the throat mid-fall (W held, facing a wall, C held to
-  // vent: a trimmed diver sinks ~3-4 u/s, the jam was 60-80 u above the trigger) he is kept in the
-  // throat column, never snapped up onto the wall. Zone 0 also sinks free from the centre, no input.
+  // OPEN: 1 u outside the lip he stays put. Stood where the jam was over the opening's centre he
+  // sinks through to the next zone with no input (zones 0, 1). Hauling across the shaft mid-fall
+  // (W held at a wall, C held to vent), started 5 u below the wall face at the throat's edges (so he
+  // is in the shaft, not over a strata ledge he could land on), he is held in the throat column and
+  // falls through (zone 2: the ending), never snapped up onto the wall.
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
@@ -102,11 +103,14 @@ if (mode === 'shape') {
       window.__bench.place(o.x, o.z, 0, zi); res.lipN = +T.terrainNormal(o.x, o.z, zi).y.toFixed(3);
       window.__bench.step(300); res.lipZone = window.zone;
       res.lipMoved = +Math.hypot(window.player.pos.x - o.x, window.player.pos.z - o.z).toFixed(2);
-      // haul across the crack mid-fall: facing the side-1 wall, W held from the first frame
-      for (const sd of [1, 0]) {
+      // the shaft: below the lower wall face at the throat's two edges (u = 0)
+      const k = F.throatHalfW / F.halfW; let wallLo = 1e9;
+      for (const sd of [0, 1]) { S.fissureWorld(0, (sd ? 1 : -1) * S._halfWAt(F, 0, sd) * k, zi, o); wallLo = Math.min(wallLo, T.terrainH(o.x, o.z, zi)); }
+      res.shaftY = +(wallLo - 5).toFixed(1);
+      for (const sd of (zi < 2 ? [1, 0] : [1])) {   // zone 2: the first haul ends the game
         open(zi);
         window.__bench.place(F.cx, F.cz, 0, zi);
-        window.player.pos.y = S.jamTopY(zi, T.terrainH) + 1.35;   // from where the jam was
+        window.player.pos.y = wallLo - 5 + 1.35; window.player.grounded = false;
         const nx = -F.dz * (sd ? 1 : -1), nz = F.dx * (sd ? 1 : -1);  // across the crack toward side sd
         window.player.yaw = Math.atan2(nx, nz);   // forward is (sin yaw, cos yaw)
         window.keys.KeyW = true; window.keys.KeyC = true; let up = 0, last = null, n = 0, outT = 0;
@@ -118,11 +122,10 @@ if (mode === 'shape') {
           });
         } finally { window.keys.KeyW = false; window.keys.KeyC = false; }
         res['haul' + sd] = { zone: window.zone, state: window.gameState, maxRise: +up.toFixed(3), frames: n, outOfThroat: outT };
-        if (zi === 2) break;   // the first haul ends the game
       }
-      if (zi === 0) {   // no input at all: stood where the jam was, he sinks through on his own
-        open(0); window.__bench.place(F.cx, F.cz, 0, 0); window.player.pos.y = S.jamTopY(0, T.terrainH) + 1.35;
-        let n = 0; window.__bench.step(4800, i => { n = i; if (window.zone !== 0) return false; });
+      if (zi < 2) {   // no input at all: stood where the jam was, he sinks through on his own
+        open(zi); window.__bench.place(F.cx, F.cz, 0, zi); window.player.pos.y = S.jamTopY(zi, T.terrainH) + 1.35;
+        let n = 0; window.__bench.step(4800, i => { n = i; if (window.zone !== zi) return false; });
         res.freeSink = { zone: window.zone, seconds: +(n / 60).toFixed(1) };
       }
       out.push(res);
@@ -130,7 +133,7 @@ if (mode === 'shape') {
     return out; })()`);
   for (const z of r) {
     if (z.lipZone !== z.zi) fail.push(`zone ${z.zi}: fell through from the lip`);
-    if (z.freeSink && z.freeSink.zone !== 1) fail.push('zone 0: did not sink through the open throat unaided ' + JSON.stringify(z.freeSink));
+    if (z.freeSink && z.freeSink.zone !== z.zi + 1) fail.push(`zone ${z.zi}: did not sink through the open throat unaided ` + JSON.stringify(z.freeSink));
     for (const k of ['haul1', 'haul0']) {
       const h = z[k]; if (!h) continue;
       if (z.zi < 2 ? h.zone !== z.zi + 1 : h.state !== 'won') fail.push(`zone ${z.zi} ${k}: did not fall through the open throat ` + JSON.stringify(h));
