@@ -14,7 +14,7 @@
 //     (r cavity AO, g rock bias, b height over the basin floor): it is seabed, same program. It
 //     covers the buried slab tops (or sinks under a wall face) 0.06-0.08 u clear: no z-fight.
 //   - THE SEEP: 8 pale blue-white additive sprites in the gaps (lib/textures.js warmGlow: fog off,
-//     its own distance fade), breathing on an 8 s period, alpha <= 0.10 (1.6x for a beat at the break). No THREE light (14).
+//     its own distance fade), breathing on an 8 s period, alpha <= 0.10 (the break's flare rises to that cap). No THREE light (14).
 // THE OPENING (openFissure, COLLAPSE + SWELL = 6.6 s; k climbs linearly over it):
 //   0.0  the seabed shudders (quake: the lens shakes as for her blows); the blocks jostle.
 //   0.4  THE BREAK: the crack coughs silt (three of the Brooder's sand-plume clouds, plume.js:
@@ -337,7 +337,7 @@ export function updateFissure(dt, t, activeZone) {
       s.visible = seepOn;
       if (!seepOn) continue;
       const br = 0.55 + 0.45 * Math.sin(t * (6.2832 / SEEP_PERIOD) + F.seepPh[i]);
-      s.material.opacity = a * br;
+      s.material.opacity = Math.min(SEEP_MAX, a * br);   // the brief's ceiling holds through the flare
       s.position.y = F.seepY[i] - F.sag * F.seepP[i];   // rides the slump
     }
   }
