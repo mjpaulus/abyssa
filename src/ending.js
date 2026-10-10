@@ -16,6 +16,7 @@ import { camera, scene } from './core.js';
 import { player } from './player.js';
 import { zoneTop, zoneBottom, riftPos, RIFT_R } from './config.js';
 import { terrainH } from './world/terrain.js';
+import { FISSURE, fissureWorld, _widths } from './world/fissureShape.js';
 import { clamp, V3 } from './lib/math.js';
 import { glowTex as sharedGlowTex } from './lib/textures.js';
 import { updateDiver, lanternWorldPos } from './entities/diver.js';
@@ -98,28 +99,51 @@ function corridorMin(a, b, zi) {
 }
 
 let pathY = null, pathX = null, pathZ = null;
+// The higher of a crack's two lips at riftPos (u = 0), 2 u outside each.
+const _lw = { x: 0, z: 0 };
+function lipTop(zi) {
+  const W = _widths(FISSURE[zi], 0), w0 = W.w0, w1 = W.w1;
+  fissureWorld(0, w1 + 2, zi, _lw); const a = terrainH(_lw.x, _lw.z, zi);
+  fissureWorld(0, -(w0 + 2), zi, _lw); const b = terrainH(_lw.x, _lw.z, zi);
+  return Math.max(a, b);
+}
 // Per-rift transit bands, for the camera: [where he enters the funnel, where he clears it].
 const trY0 = new Float32Array(3), trY1 = new Float32Array(3);
 const trX = new Float32Array(3), trZ = new Float32Array(3);
 const _pts = [];        // the seven control points, reused across wins
 const _path = V3(), _ahead = V3();
+const _fw = { x: 0, z: 0 };   // fissureWorld scratch for the camera
 
 function buildPath(sx, sy, sz, endX, endZ) {
   const r2 = riftPos(2), r1 = riftPos(1), r0 = riftPos(0);
   const end = { x: endX, z: endZ };
   // Clearance level above each floor he leaves, and arrival level under each floor above.
   const yA = corridorMax(r2, r1, 2) + CLEAR;   // clear of the zone-2 floor
-  const yB = corridorMin(r2, r1, 1) - DIP;     // still under the zone-1 floor, at rift 1
+  // THE FISSURE (2026-10-10): the opening is a narrow crack whose throat floor lies ~70 u under
+  // its lip, so arriving just under the general floor would track sideways through the crack's
+  // walls. Arrive under the throat floor at the rift (terrainH at riftPos) and rise up the crack.
+  const yB = Math.min(corridorMin(r2, r1, 1), terrainH(r1.x, r1.z, 1)) - DIP;   // under zone 1's floor and its throat
   const yC = corridorMax(r1, r0, 1) + CLEAR;   // clear of the zone-1 floor
-  const yD = corridorMin(r1, r0, 0) - DIP;     // still under the zone-0 floor, at rift 0
+  const yD = Math.min(corridorMin(r1, r0, 0), terrainH(r0.x, r0.z, 0)) - DIP;   // under zone 0's floor and its throat
   const yE = corridorMax(r0, end, 0) + CLEAR;  // clear of the zone-0 floor
 
+  // THE FISSURE: each opening is a crack ~5 u either side of riftPos, and a spline corner bleeds
+  // sideways ~8 u (the old 43 u bowl absorbed it). Pin the transit vertical: a point just under
+  // each throat floor and one just over each lip, both on riftPos, so the segment between them has
+  // vertical tangents at both ends and runs straight up the crack.
+  const tf = [terrainH(r0.x, r0.z, 0), terrainH(r1.x, r1.z, 1), terrainH(r2.x, r2.z, 2)];
+  const lp = [lipTop(0), lipTop(1), lipTop(2)];
   _pts.length = 0;
   _pts.push(new THREE.Vector3(sx, sy, sz));
+  if (lp[2] + 8 < yA - 4) _pts.push(new THREE.Vector3(r2.x, lp[2] + 8, r2.z));
   _pts.push(new THREE.Vector3(r2.x, yA, r2.z));
   _pts.push(new THREE.Vector3(r1.x, yB, r1.z));
+  if (tf[1] - 4 > yB + 2) _pts.push(new THREE.Vector3(r1.x, tf[1] - 4, r1.z));
+  if (lp[1] + 8 < yC - 4) _pts.push(new THREE.Vector3(r1.x, lp[1] + 8, r1.z));
   _pts.push(new THREE.Vector3(r1.x, yC, r1.z));
   _pts.push(new THREE.Vector3(r0.x, yD, r0.z));
+  if (tf[0] - 4 > yD + 2) _pts.push(new THREE.Vector3(r0.x, tf[0] - 4, r0.z));
+  if (lp[0] + 8 < yE - 4) _pts.push(new THREE.Vector3(r0.x, lp[0] + 8, r0.z));
   _pts.push(new THREE.Vector3(r0.x, yE, r0.z));
   _pts.push(new THREE.Vector3(end.x, SURFACE_END_Y, end.z));
 
@@ -412,6 +436,11 @@ export function startEnding() {
     startX = r2.x; startZ = r2.z;
     player.pos.x = startX; player.pos.z = startZ;
   }
+  // THE FISSURE: the ending's trigger (zoneBottom(2) - 70) lies only a few units under zone 2's
+  // throat floor, so the STILL beat would hold him (and the lens) inside the floor's skin. It
+  // starts under the throat instead, in open water, the way it started under the old bowl.
+  const under = terrainH(startX, startZ, 2) - 28;
+  if (startY > under) { startY = under; player.pos.y = startY; }
   // Far enough out that the raft reads as a small silhouette on the ceiling of light.
   // At 9u it filled the upper third of the frame with hull logs and float barrels.
   endX = raft.position.x + 34; endZ = raft.position.z + 27;
@@ -681,13 +710,31 @@ export function updateEnding(dt, t) {
   // Inside a funnel the orbit has to come in and sit higher: the bowl is 43u across and
   // 100u deep, and a 19u arm swinging round the far side of it spent a second and a half
   // buried in the wall. Pulled in, the arm stays in the throat where the water is.
-  let transit = 0;
+  let transit = 0, ti = 0;
   for (let i = 0; i < 3; i++) {
     const near = 1 - smooth(RIFT_R * 1.1, RIFT_R * 3.0,
       Math.hypot(player.pos.x - trX[i], player.pos.z - trZ[i]));
     const band = smooth(trY0[i] - 30, trY0[i] + 12, y) * (1 - smooth(trY1[i] - 26, trY1[i] + 16, y));
     const f = near * band;
-    if (f > transit) transit = f;
+    if (f > transit) { transit = f; ti = i; }
+  }
+  // THE FISSURE (2026-10-10): the opening is a crack ~13 u wide and ~70 long, not a 43 u bowl, so
+  // an orbit swinging across it buries the arm in a wall. While he threads one, the orbit is held
+  // to the crack's own (kinked) line, toward whichever end the camera is already nearer.
+  if (transit > 0.01) {
+    const F = FISSURE[ti], ax = Math.atan2(F.dz, F.dx);
+    let d = ax - camAz;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    // aim down the middle of the GAP: the two lips differ, so it sits at v = (w1 - w0) / 2, not v = 0
+    // at the arm's own length, so the camera itself (not just its bearing) lands in the gap
+    const arm = Math.max(3, camDist * (1 - 0.62 * camPull));
+    const ua = Math.abs(d) < Math.PI / 2 ? arm : -arm, W = _widths(F, ua);
+    fissureWorld(ua, (W.w1 - W.w0) * 0.5, ti, _fw);
+    let e = Math.atan2(_fw.z - player.pos.z, _fw.x - player.pos.x) - camAz;
+    while (e > Math.PI) e -= Math.PI * 2;
+    while (e < -Math.PI) e += Math.PI * 2;
+    camAz += e * Math.min(1, 3 * transit * dt);
   }
 
   const wantDist = (8.5 + 10.5 * inRise + 3.6 * Math.sin(T * 0.083) + 15 * inSurf) * (1 - 0.46 * transit);

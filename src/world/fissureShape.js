@@ -104,23 +104,28 @@ export function fissureDist(x, z, zi) {
   widths(F, _l.u);
   return Math.max(_l.v - _w.w1, -_l.v - _w.w0);
 }
-// The slab at (x, z), as how far inside its lip the point is (s, >= 0) over the slab's local reach:
-// returns -1 off every slab, else s / reach in [0, 1]. Used by terrainH (slab tops are ground),
-// inThroat (a slab is not open water) and the slab mesh.
-export function slabAt(x, z, zi) {
+// The slab at (x, z): writes _sp.r = the local reach of the slab whose u-range and lip side hold the
+// point (0 if none; the wall under and beyond a slab is set back by it, so the slab overhangs), and
+// _sp.q = s / reach when the point is on the slab's footprint (s = how far inside its lip), else -1.
+const _sp = { r: 0, q: -1 };
+export function slabProbe(x, z, zi) {
   const F = FISSURE[zi], L = SLABS[zi]; fissureLocal(x, z, zi, _l);
   const u = _l.u, v = _l.v;
+  _sp.r = 0; _sp.q = -1;
   for (let i = 0; i < L.length; i++) {
     const sl = L[i];
-    if (Math.abs(u - sl.u0) >= sl.hu) continue;
+    if (Math.abs(u - sl.u0) >= sl.hu || (sl.side ? v < 0 : v >= 0)) continue;
     widths(F, u);
-    const w = sl.side ? _w.w1 : _w.w0, s = w - (sl.side ? v : -v);
-    if (s < 0) continue;
-    const r = slabReach(sl, u, w);
-    if (s < r) return s / r;
+    const w = sl.side ? _w.w1 : _w.w0, s = w - (sl.side ? v : -v), r = slabReach(sl, u, w);
+    _sp.r = r;
+    if (s >= 0 && s < r) _sp.q = s / r;
+    break;
   }
-  return -1;
+  return _sp;
 }
+// -1 off every slab footprint, else s / reach in [0, 1] (terrainH: a slab top is ground; inThroat:
+// a slab is not open water).
+export function slabAt(x, z, zi) { return slabProbe(x, z, zi).q; }
 export function inThroat(x, z, zi) {
   const F = FISSURE[zi]; fissureLocal(x, z, zi, _l);
   if (Math.abs(_l.u) > F.halfLen * 0.92) return false;

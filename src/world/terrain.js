@@ -12,7 +12,7 @@ import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textu
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams, currentSiteIndex, stream } from './site.js';
 import { buildIslands, fillIslands, updateIslands } from './islands.js';
-import { FISSURE, fissureDist, slabAt, SLABS, SLAB_REACH_MAX, fissureWorld, _widths, _slabReach } from './fissureShape.js';
+import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, _widths, _slabReach } from './fissureShape.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -304,9 +304,12 @@ function heightAt(x, z, zi, slabs) {
     if (fd > -2 && fd < 7) { const q = (fd - 1.2) / 1.9; h += Math.exp(-q * q) * (1.7 + 1.3 * lumps); }
     if (fd < 0) {
       const s = -fd;
-      // an overhang slab's top is ground that has not fallen yet: no carve, a slight lean outward
-      const q = slabs && s < SLAB_REACH_MAX ? slabAt(x, z, zi) : -1;
-      if (q >= 0) h -= 0.3 * s + 0.35 * q * q;
+      // an overhang slab's top is ground that has not fallen yet: no carve, a slight lean outward.
+      // The wall under and beyond it is set back by 1.3 x its reach (in BOTH modes, so drawn and
+      // collision agree past its front), which is what leaves it overhanging the void.
+      const sp = slabProbe(x, z, zi), q = sp.q, ru = Math.min(1, Math.max(0, (s - 0.7) / 0.6));
+      const rs = 1.3 * sp.r * ru * ru * (3 - 2 * ru);   // ramps in from 0.7 u inside: a patch cell over the lip must not dip
+      if (slabs && q >= 0) h -= 0.3 * s + 0.35 * q * q;
       else {
         // Drawn by the fissure patch at ~0.46 u (see buildFissurePatch), so the walls carry detail
         // the 2.3 u terrain grid could not: the lip breaks off in 2.4 u joint blocks at different
@@ -314,7 +317,7 @@ function heightAt(x, z, zi, slabs) {
         // riser, wandering with depth), and slumped blocks sit on the faces. Where the crack pinches
         // toward its tips the wall never reaches full depth, so it shallows out instead of ending blunt.
         const bk = jointBlock(x, z);                                          // 0..1 per joint block
-        const sl = Math.max(0, s - 0.9 * bk);                                 // broken lip setback
+        const sl = Math.max(0, s + rs - 0.9 * bk);                            // broken lip setback (+ slab undercut)
         // the break eases in (smootherstep over 2 u): a linear cell straddling the lip must not
         // cut the corner Sal stands on (drawn-vs-collision on the lip band < 0.3 u)
         const lt = sl < 2 ? sl / 2 : 1, lip = lt * lt * lt * (lt * (lt * 6 - 15) + 10);
@@ -1022,16 +1025,9 @@ function fillFissurePatch(zi, H, NR, COL) {
     const v = vmap[b * nfx + a], x = FX[a], z = FZ[b];
     HF[b * nfx + a] = v >= 0 && !bnd[v] ? heightAt(x, z, zi, false) : coarseLerp(H, 1, 0, cellK(a), cellJ(b), x, z);
   }
-  // height anywhere (AO rings): the fine block inside it, the coarse mesh outside
-  const hAt = (x, z) => {
-    if (x >= FX[0] && x <= FX[nfx - 1] && z >= FZ[0] && z <= FZ[nfz - 1]) {
-      const a = axSearch(FX, x), b = axSearch(FZ, z);
-      const fx = (x - FX[a]) / (FX[a + 1] - FX[a]), fz = (z - FZ[b]) / (FZ[b + 1] - FZ[b]);
-      const h00 = HF[b * nfx + a], h10 = HF[b * nfx + a + 1], h01 = HF[(b + 1) * nfx + a], h11 = HF[(b + 1) * nfx + a + 1];
-      return fx + fz <= 1 ? h00 * (1 - fx - fz) + h01 * fz + h10 * fx : h01 * (1 - fx) + h11 * (fx + fz - 1) + h10 * (1 - fz);
-    }
-    return coarseLerp(H, 1, 0, axSearch(ax, x), axSearch(ax, z), x, z);
-  };
+  // height at a fine-grid index (AO rings): the block's own value inside it, the coarse mesh outside
+  const hIdx = (a2, b2, x2, z2) => (a2 >= 0 && a2 < nfx && b2 >= 0 && b2 < nfz) ? HF[b2 * nfx + a2]
+    : coarseLerp(H, 1, 0, axSearch(ax, x2), axSearch(ax, z2), x2, z2);
   for (let v = 0; v < nv; v++) {
     const a = va[v], b = vb[v], x = FX[a], z = FZ[b], h = HF[b * nfx + a];
     P[v * 3] = x; P[v * 3 + 1] = h; P[v * 3 + 2] = z;
@@ -1050,11 +1046,16 @@ function fillFissurePatch(zi, H, NR, COL) {
     NN[v * 3] = nx * il; NN[v * 3 + 1] = il; NN[v * 3 + 2] = nz * il;
     // cavity AO on world-unit rings (the coarse bake's 4.6 / 16 / 46 u plus a 1.4 u crevice ring),
     // eased to the coarse colours toward the seam so the tone never steps there
+    // (ring offsets in fine-grid steps at this vertex's own spacing: the grid is uniform within a
+    // coarse cell and nearly so across neighbours, and this keeps the fill free of searches)
+    const sxl = FX[a1] - FX[a], szl = FZ[b1] - FZ[b];
     let ao = 1;
     for (let r = 0; r < AO_RINGS.length; r += 2) {
       const d = AO_RINGS[r], wt = AO_RINGS[r + 1], e = d * 0.7071;
-      const avg = (hAt(x - d, z) + hAt(x + d, z) + hAt(x, z - d) + hAt(x, z + d) +
-        hAt(x - e, z - e) + hAt(x + e, z - e) + hAt(x - e, z + e) + hAt(x + e, z + e)) * 0.125;
+      const da = Math.round(d / sxl), db = Math.round(d / szl), ea = Math.round(e / sxl), eb = Math.round(e / szl);
+      const avg = (hIdx(a - da, b, x - d, z) + hIdx(a + da, b, x + d, z) + hIdx(a, b - db, x, z - d) + hIdx(a, b + db, x, z + d) +
+        hIdx(a - ea, b - eb, x - e, z - e) + hIdx(a + ea, b - eb, x + e, z - e) + hIdx(a - ea, b + eb, x - e, z + e) +
+        hIdx(a + ea, b + eb, x + e, z + e)) * 0.125;
       ao -= c01((avg - h) / (2 * d * 0.42 + 0.01)) * wt;
     }
     const aa = c01(ao), wB = c01((fissureDist(x, z, zi) - (PATCH_FD - 4)) / 3);
