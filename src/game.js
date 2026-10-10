@@ -752,7 +752,8 @@ window.__lev = {
   me() { return player.pos.clone(); }
 };
 // THE RIFT IS SHUT WHILE IT WAKES: a diver who drops into the bowl before the sleeper
-// stills falls into an unmarked hole in the dark. Said once per zone, 20u below the rim.
+// stills falls into an unmarked hole in the dark. Said once per zone, once he stands on the
+// shut fissure's jam (riftRimY is the fissure's mean lip height).
 let riftShutSaid = false, riftRimY = 0;
 // THE FISSURE'S OPEN STATE — a STUB, the one place it lives until world/fissure.js (Task 3) takes
 // it over with the jam, the opening and window.__fissure. openK[z] null = follow the calm (as the
