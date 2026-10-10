@@ -65,7 +65,7 @@ const SHAPES = [[4, 0.95, 0.5, 2.4], [4, 0.85, 0.75, 1.0], [4, 0.55, 0.55, 2.0],
 // pale blue-white as it lands on screen: zone 1's water grade warms, zone 2's cools toward violet, so
 // each zone's own source colour is leaned against its grade
 const SEEP_COL = [[0.66, 0.84, 1.0], [0.50, 0.80, 1.0], [0.40, 0.95, 1.0]], SEEP_PERIOD = 8;
-const SEEP_K = [2.3, 0.6, 0.32];
+const SEEP_K = [1.6, 1.0, 0.4];
 const SEEP_TUNE = { k: 1, layer: 0.16, wisp: 0.13 };   // dev: __fissure.seep       // per zone: the same faint breath read from ~20 u in each water
 const N_WISP = 6;
 const BS = 22;   // block record: u v restY sx sy sz qx qy qz qw start floorY targetV ax ay az rate p top ph kind slot
