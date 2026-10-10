@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -12,7 +12,7 @@ const { start, stop, connect } = await import('./drv.mjs');
 await start(`http://localhost:${port}/?bench&playtest`);
 process.on('exit', () => { stop(); try { rmSync(process.env.DRV_DIR, { recursive: true, force: true }); } catch (e) { } });   // a throwing probe must not leave its Chrome on the port
 const c = await connect();
-await c.until(`!document.getElementById('load')`, 240000, 1000);
+await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__fissure`, 240000, 1000);
 const fail = [];
 if (mode === 'shape') {
   const r = await c.ev(`(async () => {
@@ -136,6 +136,45 @@ if (mode === 'shape') {
       if (z.zi < 2 ? h.zone !== z.zi + 1 : h.state !== 'won') fail.push(`zone ${z.zi} ${k}: did not fall through the open throat ` + JSON.stringify(h));
       if (h.maxRise > 0.5) fail.push(`zone ${z.zi} ${k}: snapped up out of the throat by ${h.maxRise}`);
     }
+  }
+  console.log(JSON.stringify(r));
+} else if (mode === 'slabs') {
+  // SHUT, FROM BELOW: stood on the jam 1 u in front of each overhang slab, facing it, W held 4 s
+  // (the yaw re-aimed at a point on the slab each frame: the mouse's job).
+  // A slab top is ground only from above: from the jam he walks under it or stops at its front,
+  // never snapped up onto it (a heightfield slab top once stood him 6.8 u up in one frame).
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const o = { x: 0, z: 0 }, a = { x: 0, z: 0 }, out = [];
+    for (let zi = 0; zi < 3; zi++) {
+      window.gotoZone(zi); if (window.lev) window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
+      const F = S.FISSURE[zi];
+      for (const sl of S.SLABS[zi]) {
+        const wd = S._widths(F, sl.u0), w = sl.side ? wd.w1 : wd.w0, reach = S._slabReach(sl, sl.u0, w), sg = sl.side ? 1 : -1;
+        S.fissureWorld(sl.u0, sg * (w - reach - 1.0), zi, o);          // 1 u in front of the slab's front
+        S.fissureWorld(sl.u0, sg * (w - reach * 0.5), zi, a);          // a point on the slab
+        const top = T.terrainH(a.x, a.z, zi);
+        window.__bench.place(o.x, o.z, 0, zi);
+        window.player.pos.y = Math.max(T.terrainH(o.x, o.z, zi), S.jamYAt(sl.u0, zi, T.terrainH)) + 1.35;
+        window.__bench.step(30);
+        window.player.yaw = Math.atan2(a.x - o.x, a.z - o.z);          // forward is (sin yaw, cos yaw)
+        window.keys.KeyW = true; let up = 0, last = null, maxY = -1e9;
+        try { window.__bench.step(240, () => { const y = window.player.pos.y; if (last != null) up = Math.max(up, y - last); last = y; maxY = Math.max(maxY, y);
+          window.player.yaw = Math.atan2(a.x - window.player.pos.x, a.z - window.player.pos.z); }); }
+        finally { window.keys.KeyW = false; }
+        const p = window.player.pos, q = S.slabAt(p.x, p.z, zi);
+        out.push({ zi, u0: sl.u0, side: sl.side, room: +(top - S.jamYAt(sl.u0, zi, T.terrainH)).toFixed(2), maxRise: +up.toFixed(3),
+          onTop: maxY > top + 1.35 - 0.7, under: q >= 0, moved: +Math.hypot(p.x - o.x, p.z - o.z).toFixed(2) });
+      }
+    }
+    return out; })()`);
+  // A riser up to JAM_STEP (0.8 u, player.js) over the jam is a step he takes in a few frames; more
+  // than that in one frame is a snap. A slab whose top sits within a step of the jam (room <= 1.1)
+  // is a ledge he may step onto; any higher one must never be stood on from below.
+  for (const z of r) {
+    if (z.maxRise > 0.85) fail.push(`zone ${z.zi} slab u0 ${z.u0}: snapped up ${z.maxRise}`);
+    if (z.onTop && z.room > 1.1) fail.push(`zone ${z.zi} slab u0 ${z.u0}: stood on the slab from below ` + JSON.stringify(z));
   }
   console.log(JSON.stringify(r));
 } else fail.push(`unknown mode ${mode}`);

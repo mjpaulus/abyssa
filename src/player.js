@@ -575,7 +575,7 @@ function crackFloorAt(x, z, zi) {   // the eye height the shut floor would stand
 }
 function wallRefuses(x, z, zi, x0, z0, floorY) {
   const f = crackFloorAt(x, z, zi), rise = f - floorY;
-  if (rise <= 0.05) return false;
+  if (rise <= 1e-4) return false;   // no noise floor: a face climbed in sub-0.05 u frames is still a face
   return rise > WALL_RISE * Math.hypot(x - x0, z - z0) && f > jamYAt(_fl.u, zi, terrainH) + EYE_H + JAM_STEP;
 }
 const _wl0 = { u: 0, v: 0 };
