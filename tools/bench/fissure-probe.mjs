@@ -255,21 +255,26 @@ if (mode === 'shape') {
         window.__bench.step(10);
         const sg = sd ? 1 : -1, nx = -F.dz * sg, nz = F.dx * sg;
         window.player.yaw = Math.atan2(nx, nz);
-        let under = 1e9, up = 0, last = null, n = 0;
+        let under = 1e9, underStep = 1e9, underN = 0, up = 0, last = null, n = 0;
         window.keys.KeyW = true;
         try { window.__bench.step(burst ? 420 : 240, i => {
           window.keys.Space = burst && i >= 60 && i < 90;
           const p = window.player.pos, j = T.jamAt(p.x, p.z, zi);
-          if (j > -1e8) under = Math.min(under, p.y - (j + 1.35));
+          // (a step up a block's side in progress eases him up on the sill spring, briefly under the new
+          // floor by design: those frames are held to half a step instead)
+          if (j > -1e8) { if (window.player.stepUp > 1e-3) underStep = Math.min(underStep, p.y - (j + 1.35)); else { under = Math.min(under, p.y - (j + 1.35)); if (p.y - (j + 1.35) < -0.03) underN++; } }
           if (last != null) up = Math.max(up, p.y - last); last = p.y; n = i; }); }
         finally { window.keys.KeyW = false; window.keys.Space = false; }
         const p = window.player.pos;
-        out.push({ zi, a, sd, burst, minAboveJam: +under.toFixed(3), maxRise: +up.toFixed(3), endFd: +S.fissureDist(p.x, p.z, zi).toFixed(2), zone: window.zone });
+        out.push({ zi, a, sd, burst, minAboveJam: +under.toFixed(3), minInStep: +underStep.toFixed(3), underFrames: underN, maxRise: +up.toFixed(3), endFd: +S.fissureDist(p.x, p.z, zi).toFixed(2), zone: window.zone });
       }
     }
     return out; })()`);
   for (const z of r) {
-    if (z.minAboveJam < -0.05) fail.push('under the jam ' + JSON.stringify(z));
+    // (fix round 1: the jam's floor has banks now, up to 0.9 slope; player.js samples the floor before
+    // the frame's step, so climbing a bank he trails it by one frame's rise, <= 0.1 u)
+    if (z.minAboveJam < -0.1) fail.push('under the jam ' + JSON.stringify(z));
+    if (z.minInStep < -0.5) fail.push('under the jam mid-step ' + JSON.stringify(z));
     if (z.maxRise > 0.85) fail.push('snapped up ' + JSON.stringify(z));
     if (z.zone !== z.zi) fail.push('left the zone ' + JSON.stringify(z));
   }
