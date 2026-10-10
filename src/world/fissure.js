@@ -33,7 +33,7 @@
 //   0.4-3.3 THE SLUMP: the middle sags 2 u into the throat. The sag is part of the FLOOR
 //        (fissureShape.js setJamSag -> terrain.js jamAt), so a man stood on it rides it down.
 //   3.3  k > 0.5: the floor goes (setFissureShut false); the silt drains into the throat, the middle
-//        fastest, and is gone 14 u down; the crack exhales its cloud (seven more plumes).
+//        fastest, and is gone 14 u down; the crack exhales its cloud (six more plumes, from down in the throat, small enough to see the pour through).
 //   3.3-5.0 THE POUR: the blocks go, the middle first and the wall blocks last, tumbling, sinking as
 //        stone does in water (9 u/s^2 to 10 u/s), drawn in toward the throat as they drop. They do
 //        not stop: each sinks on through the throat floor (>= 20 u down) and out of sight, one by one.
@@ -65,7 +65,7 @@ const SHAPES = [[4, 0.95, 0.5, 2.4], [4, 0.85, 0.75, 1.0], [4, 0.55, 0.55, 2.0],
 // pale blue-white as it lands on screen: zone 1's water grade warms, zone 2's cools toward violet, so
 // each zone's own source colour is leaned against its grade
 const SEEP_COL = [[0.66, 0.84, 1.0], [0.50, 0.80, 1.0], [0.40, 0.95, 1.0]], SEEP_PERIOD = 8;
-const SEEP_K = [1.8, 0.55, 0.25];
+const SEEP_K = [2.3, 0.6, 0.32];
 const SEEP_TUNE = { k: 1, layer: 0.16, wisp: 0.13 };   // dev: __fissure.seep       // per zone: the same faint breath read from ~20 u in each water
 const N_WISP = 6;
 const BS = 22;   // block record: u v restY sx sy sz qx qy qz qw start floorY targetV ax ay az rate p top ph kind slot
@@ -101,7 +101,8 @@ const SEEP_FS = `
     // slow-drifting patches: the cold light finds some cracks and not others, and moves between them
     float n = svn(vW.xz * 0.55 + vec2(uTime * 0.05, -uTime * 0.035)) * 0.65 + svn(vW.xz * 1.7 - uTime * 0.09) * 0.35;
     float d = distance(vW, cameraPosition);
-    float a = vLeak * uK * (0.3 + 0.95 * n) * clamp(1.0 - d / uFar, 0.0, 1.0);
+    // up close it is a breath, not paint on the silt: it reads from range, and thins as you come to it
+    float a = vLeak * uK * (0.3 + 0.95 * n) * clamp(1.0 - d / uFar, 0.0, 1.0) * (0.3 + 0.7 * smoothstep(3.0, 16.0, d));
     if (a <= 0.002) discard;
     gl_FragColor = vec4(uCol * a, 1.0);
   }`;
@@ -414,7 +415,7 @@ function layout(zi) {
       // a hand's width out from a block), not through packed open silt, never under a block, fading
       // into the walls
       const under = D[c] > SL[c] + 0.02 ? 1 : 0;
-      LK[m] = (1 - under) * sstep(0.0, 0.25, dm) * (0.3 + 0.7 * Math.exp(-dm / 1.3)) * (1 - sstep(0.7, 0.98, f)) * (f <= 1 ? 1 : 0);
+      LK[m] = (1 - under) * sstep(0.0, 0.6, dm) * (0.25 + 0.75 * Math.exp(-dm / 1.1)) * (1 - sstep(0.7, 0.98, f)) * (f <= 1 ? 1 : 0);
     }
   }
   setJamGrid(zi, g);
@@ -515,8 +516,8 @@ export function updateFissure(dt, t, activeZone) {
         quake = Math.max(quake, F.q);
         // the silt plume: a cough at the break, then the pour's cloud heaving up out of the crack
         if (t0 < T_BREAK && T >= T_BREAK) burst(zi, 1.0, 0.55, 3, 0);
-        if (t0 < T_OPEN && T >= T_OPEN) burst(zi, 0.8, 1.0, 4, 1);
-        if (t0 < T_OPEN + 0.7 && T >= T_OPEN + 0.7) burst(zi, 0, 0.65, 3, 2);
+        if (t0 < T_OPEN && T >= T_OPEN) burst(zi, 0.8, 0.7, 3, 1);
+        if (t0 < T_OPEN + 0.7 && T >= T_OPEN + 0.7) burst(zi, 0, 0.45, 3, 2);
       }
       if (T >= COLLAPSE + SWELL) { F.t = -1; F.k = 1; F.q = 0; setJamSag(zi, 0); setFissureShut(zi, false); }
     }
@@ -553,7 +554,7 @@ function burst(zi, k, size, n, salt) {
     const u = (-0.6 + 1.2 * (j + 0.3 + 0.4 * h) / n) * F.halfLen, wd = _widths(F, u);
     const v = (h * 2 - 1) * 0.35 * (j & 1 ? wd.w1 : wd.w0);
     fissureWorld(u, v, zi, _w);
-    spawnPlume(_w.x, jamFloorAt(u, v, zi, terrainH) - Fz.sag * jamSagProfile(u, v, zi), _w.z, 'big', size, zi);
+    spawnPlume(_w.x, jamFloorAt(u, v, zi, terrainH) - Fz.sag * jamSagProfile(u, v, zi) - (salt ? 1.5 : 0), _w.z, 'big', size, zi);   // the pour's rise from down in the crack
   }
   plumeOwn = 8;
 }
