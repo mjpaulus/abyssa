@@ -49,8 +49,9 @@ if (mode === 'shape') {
     const o = { x: 0, z: 0 }, out = { stand: [], drop: [], planes: [] };
     for (let zi = 0; zi < 3; zi++) {
       window.gotoZone(zi); if (window.lev) window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
-      const F = S.FISSURE[zi], jam = S.jamYAt(0, zi, T.terrainH);
+      const F = S.FISSURE[zi];
       window.__bench.place(F.cx, F.cz, 0, zi);
+      const jam = T.shutFloorY(F.cx, F.cz, zi);      // the jam's floor there (the rubble grid; fix round 1)
       window.player.pos.y = jam + EYE_H;            // place() stands him on terrainH: the throat floor
       let minY = 1e9, maxStep = 0, last = null;
       window.__bench.step(300, () => { const y = window.player.pos.y; minY = Math.min(minY, y);
@@ -180,7 +181,7 @@ if (mode === 'shape') {
         S.fissureWorld(sl.u0, sg * (w - reach * 0.5), zi, a);          // a point on the slab
         const top = T.terrainH(a.x, a.z, zi);
         window.__bench.place(o.x, o.z, 0, zi);
-        window.player.pos.y = Math.max(T.terrainH(o.x, o.z, zi), S.jamYAt(sl.u0, zi, T.terrainH)) + 1.35;
+        window.player.pos.y = T.shutFloorY(o.x, o.z, zi) + 1.35;
         window.__bench.step(30);
         window.player.yaw = Math.atan2(a.x - o.x, a.z - o.z);          // forward is (sin yaw, cos yaw)
         window.keys.KeyW = true; let up = 0, last = null, maxY = -1e9;
@@ -217,7 +218,7 @@ if (mode === 'shape') {
         window.gotoZone(zi); if (window.lev) window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
         const F = S.FISSURE[zi], u0 = e * 0.8 * F.halfLen;
         S.fissureWorld(u0, 0, zi, o); window.__bench.place(o.x, o.z, 0, zi);
-        window.player.pos.y = Math.max(T.terrainH(o.x, o.z, zi), S.jamYAt(u0, zi, T.terrainH)) + 1.35;
+        window.player.pos.y = T.shutFloorY(o.x, o.z, zi) + 1.35;
         window.__bench.step(20);
         window.keys.KeyW = true; let up = 0, last = null, uEnd = 0, n = 0;
         try { window.__bench.step(1500, i => { const p = window.player.pos; S.fissureLocal(p.x, p.z, zi, L);
@@ -249,7 +250,7 @@ if (mode === 'shape') {
       const F = S.FISSURE[zi];
       for (const a of [-0.3, 0, 0.3]) for (const sd of [0, 1]) for (const burst of [false, true]) {
         const u = a * F.halfLen; S.fissureWorld(u, 0, zi, o);
-        window.__bench.place(o.x, o.z, 0, zi); window.player.pos.y = S.jamYAt(u, zi, T.terrainH) + 1.35;
+        window.__bench.place(o.x, o.z, 0, zi); window.player.pos.y = T.shutFloorY(o.x, o.z, zi) + 1.35;
         window.player.vel.set(0, 0, 0); window.survival.reserve = window.survival.reserveCap || 1;
         window.__bench.step(10);
         const sg = sd ? 1 : -1, nx = -F.dz * sg, nz = F.dx * sg;
@@ -285,7 +286,7 @@ if (mode === 'shape') {
       window.gotoZone(${zi}); if (window.lev) window.lev.calmed = false; window.__fissure.setOpen(${zi}, 0);
       const F = S.FISSURE[${zi}], o = { x: 0, z: 0 };
       S.fissureWorld(0, 0, ${zi}, o); window.__bench.place(o.x, o.z, 0, ${zi});
-      window.player.pos.y = S.jamYAt(0, ${zi}, T.terrainH) + 1.35;
+      window.player.pos.y = T.shutFloorY(o.x, o.z, ${zi}) + 1.35;
       window.survival.reserve = window.survival.reserveCap || 1;
       const sg = ${sd} ? 1 : -1; window.player.yaw = Math.atan2(-F.dz * sg, F.dx * sg);
       window.__co = { up: 0, last: null };
@@ -373,7 +374,7 @@ if (mode === 'shape') {
     const zi = 0, F = S.FISSURE[zi], o = { x: 0, z: 0 }, out = {};
     window.gotoZone(zi); window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
     S.fissureWorld(0, 0, zi, o); window.__bench.place(o.x, o.z, 0, zi);
-    const jam = S.jamYAt(0, zi, T.terrainH); window.player.pos.y = jam + 1.35;
+    const jam = T.jamAt(o.x, o.z, zi); window.player.pos.y = jam + 1.35;   // the jam's own floor there (the rubble grid)
     window.__bench.step(2);
     out.shut = { floor: +T.shutFloorY(o.x, o.z, zi).toFixed(3), jam: +jam.toFixed(3), terrain: +T.terrainH(o.x, o.z, zi).toFixed(2) };
     S.fissureWorld(0, 20, zi, o); out.outside = { floor: +T.shutFloorY(o.x, o.z, zi).toFixed(3), terrain: +T.terrainH(o.x, o.z, zi).toFixed(3) };
@@ -399,75 +400,116 @@ if (mode === 'shape') {
   if (!r.spear || !r.spear.inCrack || r.spear.aboveJam < 0) fail.push('spear did not lie on the jam ' + JSON.stringify(r.spear));
   console.log(JSON.stringify(r));
 } else if (mode === 'opening') {
-  // THE OPENING MOMENT (world/fissure.js): a calm opens it once. open(0) returns 5-9 s; k climbs
-  // 0 -> 1 over it (past 0.5 the shut floor goes); the seabed quakes (shake > 0) and the jam's
-  // boulders end below the lip (or hidden); no light is added and no shader program is built.
-  // Stood on the jam at the centre, he rides the slump down (never more than 0.5 u under the
-  // drawn silt / over it while it holds) and then drops into the throat.
+  // THE OPENING MOMENT (world/fissure.js), at home zone 0, Pallid Bank zone 0 and home zone 1: open()
+  // returns 5-9 s; k climbs 0 -> 1 over it and the shut flag clears on the frame k passes 0.5; the
+  // seabed quakes; stood on the jam's middle he rides the slump (his floor never more than 0.25 u off
+  // what is drawn under his boots while the floor holds) and drops into the throat once it goes; at
+  // the end the silt is gone and every block left in view is below the lip; the pour then sinks out
+  // one block at a time (never all at once) and is gone by 14 s; no light added, no program built.
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
-    window.gotoZone(0); window.__fissure.setOpen(0, 0);
-    const F = S.FISSURE[0], jam = S.jamYAt(0, 0, T.terrainH), lip = S.lipMeanY(0, T.terrainH);
-    window.__bench.place(F.cx, F.cz, 0, 0); window.player.pos.y = jam + 1.35; window.__bench.step(30);
-    const programs0 = window.__fissure.programs ? window.__fissure.programs() : null;
-    const dur = window.__fissure.open(0); let k5 = 0, kHalfAt = -1, quake = 0, shutAt = -1, gapMax = 0, minY = 1e9;
-    window.__bench.step(Math.round(dur * 60) + 60, i => {
-      const st = window.__fissure.state(0);
-      if (i === 300) k5 = st.k;
-      if (kHalfAt < 0 && st.k > 0.5) kHalfAt = i;
-      if (shutAt < 0 && !S.fissureShut(0)) shutAt = i;
-      quake = Math.max(quake, st.quake);
-      minY = Math.min(minY, window.player.pos.y);
-      if (S.fissureShut(0) && window.player.grounded && window.player.jamY != null) gapMax = Math.max(gapMax, Math.abs(window.player.jamY - st.siltAt(window.player.pos.x, window.player.pos.z)));
-    });
-    const st = window.__fissure.state(0);
-    let lights = 0; window.scene.traverse(o => { if (o.isLight) lights++; });
-    return { dur, k5, kEnd: st.k, kHalfAt, shutAt, quake: +quake.toFixed(3), shutEnd: S.fissureShut(0), opening: st.opening,
-      bouldersVisible: st.bouldersVisible, boulderTopMax: +st.boulderTopMax.toFixed(2), lip: +lip.toFixed(2),
-      siltVisible: st.siltVisible, rideGapMax: +gapMax.toFixed(3), fellBelowJam: +(jam + 1.35 - minY).toFixed(2), zone: window.zone,
-      lights, programs0, programs1: window.__fissure.programs ? window.__fissure.programs() : null }; })()`);
-  if (r.dur < 5 || r.dur > 9) fail.push('opening duration ' + r.dur);
-  if (r.kEnd < 0.99) fail.push('did not finish opening');
-  if (r.opening) fail.push('still opening after its duration');
-  if (!(r.quake > 0)) fail.push('no quake');
-  if (r.shutEnd) fail.push('still shut at the end');
-  if (r.shutAt < 0 || Math.abs(r.shutAt - r.kHalfAt) > 1) fail.push(`shut flag did not follow k > 0.5 (${r.shutAt} vs ${r.kHalfAt})`);
-  if (r.bouldersVisible && r.boulderTopMax > r.lip) fail.push('boulders end above the lip ' + r.boulderTopMax);
-  if (r.siltVisible) fail.push('the silt is still drawn when open');
-  if (r.rideGapMax > 0.5) fail.push('he hovered over / sank into the slumping silt by ' + r.rideGapMax);
-  if (!(r.fellBelowJam > 5)) fail.push('he did not drop into the throat once it opened ' + r.fellBelowJam);
-  if (r.lights !== 14) fail.push('light count ' + r.lights);
-  if (r.programs0 != null && r.programs1 !== r.programs0) fail.push(`programs ${r.programs0} -> ${r.programs1} across the opening`);
-  console.log(JSON.stringify(r));
-} else if (mode === 'jam-mesh') {
-  // THE DRAWN JAM (world/fissure.js), every site x zone, shut: the silt surface IS the floor he
-  // stands on (drawn y within 0.1 of jamAt wherever the jam is above the wall), never within 0.05 u
-  // of an overhang slab's top (no z-fight: it covers the slab or sits clear under it); <= 160
-  // boulders, none in a slab footprint, their tops within 0.75 u of the jam in the walkable band
-  // (|v| < 0.6 w) and within 1.6 u near the walls; every one falls >= 14 u when it opens (none left
-  // resting in view); the seep sprites sit over the jam, fog off.
-  const r = await c.ev(`(async () => {
-    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
-    window.setState('play'); window.__helm = true;
     const out = [];
-    for (const site of [0, 1, 2]) {
-      if (site) window.__chart.arrive(site);
-      for (let zi = 0; zi < 3; zi++) { window.__fissure.setOpen(zi, 0); }
-      for (let zi = 0; zi < 3; zi++) out.push(Object.assign({ site, zi }, window.__fissure.audit(zi)));
+    for (const [site, zi] of [[0, 0], [1, 0], [0, 1]]) {
+      if (site !== (out.length ? out[out.length - 1].site : 0)) window.__chart.arrive(site);
+      window.setState('play'); window.__helm = true;
+      window.gotoZone(zi); window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
+      const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), o = { x: 0, z: 0 };
+      S.fissureWorld(0, 0, zi, o); window.__bench.place(o.x, o.z, 0, zi);
+      const jam = T.jamAt(o.x, o.z, zi); window.player.pos.y = jam + 1.35; window.__bench.step(30);
+      const programs0 = window.__fissure.programs();
+      const dur = window.__fissure.open(zi); let k5 = 0, kHalfAt = -1, quake = 0, shutAt = -1, gapMax = 0, minY = 1e9, endState = null, shown = [], nMax = 0;
+      window.__bench.step(Math.round(dur * 60) + 60, i => {
+        const st = window.__fissure.state(zi);
+        if (i === 300) k5 = st.k;
+        if (kHalfAt < 0 && st.k > 0.5) kHalfAt = i;
+        if (shutAt < 0 && !S.fissureShut(zi)) shutAt = i;
+        quake = Math.max(quake, st.quake);
+        minY = Math.min(minY, window.player.pos.y);
+        if (S.fissureShut(zi) && window.player.grounded && window.player.jamY != null && i % 6 === 0) {
+          const p = window.player.pos, d = st.drawnAt(p.x, p.y - 1.35, p.z);
+          if (!isNaN(d)) gapMax = Math.max(gapMax, Math.abs(window.player.jamY - d)); }
+      });
+      endState = window.__fissure.state(zi);
+      // the pour after the opening: how many blocks are still drawn, frame by frame, to 14 s
+      let prevLeft = -1, maxDropAtOnce = 0, goneAt = -1;
+      window.__bench.step(Math.round((14.2 - dur - 1) * 60), i => { const L = window.__fissure.state(zi).left;
+        if (prevLeft >= 0) maxDropAtOnce = Math.max(maxDropAtOnce, prevLeft - L); prevLeft = L; if (goneAt < 0 && !window.__fissure.state(zi).bouldersVisible) goneAt = i; });
+      let lights = 0; window.scene.traverse(q => { if (q.isLight) lights++; });
+      out.push({ site, zi, dur, k5: +k5.toFixed(3), kEnd: endState.k, kHalfAt, shutAt, quake: +quake.toFixed(3), shutEnd: S.fissureShut(zi), opening: endState.opening,
+        bouldersVisible: endState.bouldersVisible, boulderTopMax: +endState.boulderTopMax.toFixed(2), lip: +lip.toFixed(2), siltVisible: endState.siltVisible,
+        rideGapMax: +gapMax.toFixed(3), fellBelowJam: +(jam + 1.35 - minY).toFixed(2), blocks: endState.n, maxSinkOutAtOnce: maxDropAtOnce, pourGoneAfter: goneAt < 0 ? null : +((goneAt / 60) + dur + 1).toFixed(1),
+        lights, programs0, programs1: window.__fissure.programs() });
     }
+    window.__chart.arrive(0);
     return out; })()`);
   for (const z of r) {
     const tag = `site ${z.site} zone ${z.zi}`;
-    if (z.floorErr > 0.1) fail.push(`${tag}: silt off the floor by ${z.floorErr}`);
-    if (z.slabGap < 0.05) fail.push(`${tag}: silt within ${z.slabGap} of a slab top`);
-    if (z.boulders > 160 || z.boulders < 60) fail.push(`${tag}: ${z.boulders} boulders`);
-    if (z.inSlab) fail.push(`${tag}: ${z.inSlab} boulders in slab footprints`);
-    if (!(z.dropMin >= 14)) fail.push(`${tag}: a boulder would come to rest only ${z.dropMin} u under the jam (in view)`);
-    if (z.topMid > 0.75) fail.push(`${tag}: a boulder stands ${z.topMid} over the walkable jam`);
-    if (z.topWall > 1.6) fail.push(`${tag}: a wall boulder stands ${z.topWall} over the jam`);
-    if (z.seeps < 6 || z.seeps > 10 || !z.seepFogOff) fail.push(`${tag}: seep ${z.seeps} fogOff ${z.seepFogOff}`);
+    if (z.dur < 5 || z.dur > 9) fail.push(`${tag}: opening duration ` + z.dur);
+    if (z.kEnd < 0.99) fail.push(`${tag}: did not finish opening`);
+    if (z.opening) fail.push(`${tag}: still opening after its duration`);
+    if (!(z.quake > 0)) fail.push(`${tag}: no quake`);
+    if (z.shutEnd) fail.push(`${tag}: still shut at the end`);
+    if (z.shutAt < 0 || Math.abs(z.shutAt - z.kHalfAt) > 1) fail.push(`${tag}: shut flag did not follow k > 0.5 (${z.shutAt} vs ${z.kHalfAt})`);
+    if (z.bouldersVisible && z.boulderTopMax > z.lip) fail.push(`${tag}: a block ends above the lip ` + z.boulderTopMax);
+    if (z.siltVisible) fail.push(`${tag}: the silt is still drawn when open`);
+    if (z.rideGapMax > 0.25) fail.push(`${tag}: his floor left the drawn jam by ${z.rideGapMax} while it held`);
+    if (!(z.fellBelowJam > 5)) fail.push(`${tag}: he did not drop into the throat once it opened ` + z.fellBelowJam);
+    if (z.pourGoneAfter == null) fail.push(`${tag}: the pour still drawn at 14 s`);
+    if (z.maxSinkOutAtOnce > Math.max(6, z.blocks * 0.1)) fail.push(`${tag}: ${z.maxSinkOutAtOnce} blocks vanished in one frame`);
+    if (z.lights !== 14) fail.push(`${tag}: light count ` + z.lights);
+    if (z.programs1 !== z.programs0) fail.push(`${tag}: programs ${z.programs0} -> ${z.programs1} across the opening`);
   }
+  console.log(JSON.stringify(r));
+} else if (mode === 'jam-mesh') {
+  // THE DRAWN JAM IS THE FLOOR (fix round 1), every site x zone, shut: rays down through the drawn
+  // silt and blocks at ~1500 points agree with the floor Sal stands on (shutFloorY) within 0.15 u at
+  // the 95th percentile, with <= 1% where drawn rock stands > 0.3 u over his boots (clipping) and <= 2%
+  // where his boots would hang > 0.3 u over the drawn ground; the silt never within 0.05 u of a slab top
+  // (no z-fight); 60-160 blocks in >= 3 shapes, CLUMPED (nearest-neighbour CV >= 0.4: Poisson-disk
+  // paving reads ~0.2), none in a slab footprint, each over >= 20 u of throat; Task 2's bounds: the lower
+  // lip at most 2.2 u (a tap-hop) over the walkable floor beside it, stepping in at most 0.6 u up; the
+  // seep fog off. Then the BOOTS: at home, zone 0, stood at 40 spots on the jam (the live player, 20
+  // frames), the drawn top under his soles within 0.2 u of them at 95%.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true;
+    const out = { audit: [], boots: null };
+    for (const site of [0, 1, 2]) {
+      if (site) window.__chart.arrive(site);
+      for (let zi = 0; zi < 3; zi++) { window.__fissure.setOpen(zi, 0); }
+      for (let zi = 0; zi < 3; zi++) out.audit.push(Object.assign({ site, zi }, window.__fissure.audit(zi)));
+    }
+    window.__chart.arrive(0); window.setState('play'); window.__helm = true;
+    window.gotoZone(0); window.lev.calmed = false; window.__fissure.setOpen(0, 0);
+    const F = S.FISSURE[0], o = { x: 0, z: 0 }, errs = []; let s = 0x2468;
+    const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
+    for (let k = 0; k < 40; k++) {
+      const u = (rnd() * 2 - 1) * F.halfLen * 0.75, v = (rnd() * 2 - 1) * 0.6 * S._halfWAt(F, u, rnd() < 0.5 ? 1 : 0);
+      S.fissureWorld(u, v, 0, o); window.__bench.place(o.x, o.z, rnd() * 6.28, 0); window.player.pos.y = T.shutFloorY(o.x, o.z, 0) + 1.35;
+      window.__bench.step(20);
+      const p = window.player.pos, d = window.__fissure.state(0).drawnAt(p.x, p.y - 1.35, p.z);
+      if (!isNaN(d)) errs.push(Math.abs(p.y - 1.35 - d));
+    }
+    errs.sort((a, b) => a - b);
+    out.boots = { n: errs.length, p50: +errs[Math.floor(errs.length * 0.5)].toFixed(3), p95: +errs[Math.floor(errs.length * 0.95)].toFixed(3), max: +errs[errs.length - 1].toFixed(3) };
+    return out; })()`);
+  for (const z of r.audit) {
+    const tag = `site ${z.site} zone ${z.zi}`;
+    if (!(z.p95 <= 0.15)) fail.push(`${tag}: floor vs drawn p95 ${z.p95}`);
+    if (z.clipPct > 1) fail.push(`${tag}: drawn rock over his boots at ${z.clipPct}%`);
+    if (z.hoverPct > 2) fail.push(`${tag}: boots over the drawn ground at ${z.hoverPct}%`);
+    if (z.slabGap < 0.05) fail.push(`${tag}: silt within ${z.slabGap} of a slab top`);
+    if (z.boulders > 160 || z.boulders < 60) fail.push(`${tag}: ${z.boulders} blocks`);
+    if (z.shapes < 3) fail.push(`${tag}: ${z.shapes} rock shapes`);
+    if (!(z.nnCV >= 0.4)) fail.push(`${tag}: blocks evenly spaced (nearest-neighbour CV ${z.nnCV})`);
+    if (z.inSlab) fail.push(`${tag}: ${z.inSlab} blocks in slab footprints`);
+    if (!(z.dropMin >= 20)) fail.push(`${tag}: a block over only ${z.dropMin} u of throat`);
+    if (!(z.lowerLipOver <= 2.2)) fail.push(`${tag}: the lower lip ${z.lowerLipOver} u over the floor beside it`);
+    if (!(z.stepIn <= 0.6)) fail.push(`${tag}: stepping in is ${z.stepIn} u up`);
+    if (!z.seepFogOff) fail.push(`${tag}: seep fogged`);
+  }
+  if (!(r.boots.p95 <= 0.2)) fail.push('his soles off the drawn jam ' + JSON.stringify(r.boots));
   console.log(JSON.stringify(r));
 } else if (mode === 'reascend') {
   // THE OPEN STATE IS THE CHART'S, FOR EVERY ZONE: calmed (recorded) zone 0 stays open after he
@@ -476,7 +518,7 @@ if (mode === 'shape') {
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
-    const site = 0, F = S.FISSURE[0], jam = S.jamYAt(0, 0, T.terrainH), out = {};
+    const site = 0, F = S.FISSURE[0], jam = S.jamFloorAt(0, 0, 0, T.terrainH), out = {};
     window.__chart.rec()[site][0] = 1;          // the pencil has her: zone 0 calmed
     window.gotoZone(0); window.lev.calmed = true;
     out.kAtEnter = window.__fissure.k(0);

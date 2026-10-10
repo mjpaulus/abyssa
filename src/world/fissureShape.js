@@ -216,7 +216,26 @@ export function jamYAt(u, zi, terrainH) {
   const f = Math.min(N - 1, Math.max(0, (u + F.halfLen) / JAM_DU)), i = Math.min(N - 2, f | 0);
   return P[i] + (P[i + 1] - P[i]) * (f - i);
 }
-export function resetJam() { JAM[0] = JAM[1] = JAM[2] = null; }
+export function resetJam() { JAM[0] = JAM[1] = JAM[2] = null; JG[0] = JG[1] = JG[2] = null; }
+// THE JAM'S FLOOR GRID (Task 3 fix round 1, controller ruling: "the jam floor becomes a baked (u,v)
+// height grid made from the block tops plus drifted silt, step-limited so Sal walks ON the rocks").
+// world/fissure.js bakes it per zone at layout (boot, every reseed) from the boulders it draws and the
+// silt it drifts between them; jamFloorAt(u, v) reads it bilinearly (no allocation), and terrain.js
+// jamAt stands everything on it. jamYAt(u) stays the jam's BASE profile (the silt's datum: trigger
+// clearance, the lip bounds, the stir pulse); the grid only ever lies at or above it, slope- and
+// step-limited (a block stands at most a step proud of the silt banked round it). Until a grid is
+// baked (and after resetJam, which makes it stale) jamFloorAt is jamYAt.
+//   grid: { u0, v0, d, nu, nv, h: Float32Array(nu * nv) }, cell (i, j) at u0 + i d, v0 + j d, h[i * nv + j]
+const JG = [null, null, null];
+export function setJamGrid(zi, g) { JG[zi] = g; }
+export function jamGrid(zi) { return JG[zi]; }
+export function jamFloorAt(u, v, zi, terrainH) {
+  const g = JG[zi];
+  if (!g) return jamYAt(u, zi, terrainH);
+  const fu = Math.min(g.nu - 1.0001, Math.max(0, (u - g.u0) / g.d)), fv = Math.min(g.nv - 1.0001, Math.max(0, (v - g.v0) / g.d));
+  const i = fu | 0, j = fv | 0, a = fu - i, b = fv - j, h = g.h, o = i * g.nv + j;
+  return (h[o] * (1 - b) + h[o + 1] * b) * (1 - a) + (h[o + g.nv] * (1 - b) + h[o + g.nv + 1] * b) * a;
+}
 // SHUT OR OPEN, per zone: the one runtime flag here. The fissure's state owner (game.js's stub now,
 // world/fissure.js from Task 3) sets it every frame; terrain.js's jamAt / shutFloorY read it, so
 // every consumer of "the ground under X" (player, hose, spear, sonar ring, camera) agrees on the jam.
