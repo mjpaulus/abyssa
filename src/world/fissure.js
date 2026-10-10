@@ -685,7 +685,20 @@ function audit(zi, samples = 1500) {
     lowerLipOver: +lipOver.toFixed(2), stepIn: +stepIn.toFixed(2), seepFogOff: F.leak.material.fog === false && F.wisp.material.fog === false,
     lip: +lipMeanY(zi, terrainH).toFixed(2), shut: fissureShut(zi), gridCells: g.nu * g.nv };
 }
-export const __fissure = { seep: SEEP_TUNE, seepK: SEEP_K, setOpen: setFissureOpen, open: openFissure, k: fissureOpenK, state, audit, programs: () => renderer.info.programs.length,
+// seepTest(zi, on): the depth probe's flat layer: every silt quad, leak 1 everywhere (so the only
+// structure left in the layer's light is the depth test against the silt it lies on); off restores.
+const _seepSaved = [null, null, null];
+function seepTest(zi, on) {
+  const F = Z[zi], lg = F.leak.geometry, LK = lg.attributes.aLeak.array, I = lg.index.array;
+  if (on && !_seepSaved[zi]) {
+    _seepSaved[zi] = { lk: LK.slice(), idx: I.slice(), n: lg.drawRange.count };
+    LK.fill(1); I.set(F.quadIdx); lg.setDrawRange(0, F.quadIdx.length);
+  } else if (!on && _seepSaved[zi]) {
+    const S = _seepSaved[zi]; LK.set(S.lk); I.set(S.idx); lg.setDrawRange(0, S.n); _seepSaved[zi] = null;
+  } else return;
+  lg.attributes.aLeak.needsUpdate = true; lg.index.needsUpdate = true;
+}
+export const __fissure = { seep: SEEP_TUNE, seepK: SEEP_K, seepTest, setOpen: setFissureOpen, open: openFissure, k: fissureOpenK, state, audit, programs: () => renderer.info.programs.length,
   progList: () => renderer.info.programs.map(p => p.id + '|' + p.name + '|' + p.cacheKey.length),
   // which drawables use program id (dev: first-sight audits)
   progUsers: id => { const out = []; scene.traverse(o => { const m = o.material; if (!m || Array.isArray(m)) return; const pr = renderer.properties.get(m).currentProgram;

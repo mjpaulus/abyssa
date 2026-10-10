@@ -520,11 +520,12 @@ if (mode === 'shape') {
   // THE SEEP LAYER IS DEPTH-STABLE (fix round 2): it lies on the silt's own vertices, so a z-fight with
   // the silt shows as the layer passing in some patches and failing in others: flat camouflage
   // blotches that crawl with the TAA jitter. By day, through the full post chain, the layer's gain
-  // raised to the same strong light in every zone, stood in each zone's crack looking down at it:
+  // raised to the same strong light in every zone and made FLAT (leak 1 on every silt quad, so its
+  // own mask adds no structure), stood in each zone's crack looking down at it:
   // frame A layer on, frame B layer off. D = A - B is the layer's own light and must be SMOOTH:
   // blotch energy E = sum|D - blur9(D)| / sum blur9(D) over the pixels it lights.
   // Measured on the z-fighting layer (its transform and no polygon offset, restored for the run):
-  // z0 0.21, z1 0.59, z2 0.22; depth-stable: z0 0.07, z1 0.14, z2 0.12.
+  // z0 0.22, z1 0.56, z2 0.26; depth-stable: z0 0.075, z1 0.11, z2 0.13.
   const out = [];
   await c.ev(`(async () => { window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.weather.set(1, 0); window.__bench.size(960, 540); return 1; })()`);
   for (let zi = 0; zi < 3; zi++) {
@@ -537,7 +538,7 @@ if (mode === 'shape') {
       try {
         const F = S.FISSURE[zi], o = { x: 0, z: 0 }; S.fissureWorld(-6, 0, zi, o);
         window.__bench.place(o.x, o.z, Math.atan2(F.dx, F.dz), zi); window.player.pos.y = T.shutFloorY(o.x, o.z, zi) + 1.35; window.player.pitch = -0.55;
-        SE.wisp = 0; SE.k = 7 / window.__fissure.seepK[zi];
+        SE.wisp = 0; SE.k = 2.5 / window.__fissure.seepK[zi]; window.__fissure.seepTest(zi, true);   // flat: leak 1 on every silt quad
         window.__bench.step(90, null, { render: true });
         const A = lum(await window.__bench.capture({ frames: 4 }));
         SE.layer = 0;
@@ -553,7 +554,7 @@ if (mode === 'shape') {
           num += Math.abs(D[y * W + x] - m); den += m; px++;
         }
         return { zi, camAbove: +(window.camera.position.y - window.player.pos.y).toFixed(1), litPx: px, meanAdd: +(den / Math.max(1, px)).toFixed(2), blotch: +(num / Math.max(1e-6, den)).toFixed(3) };
-      } finally { Object.assign(SE, keep); } })()`));
+      } finally { Object.assign(SE, keep); window.__fissure.seepTest(zi, false); } })()`));
   }
   await c.ev(`(window.__bench.size(), 1)`);
   for (const z of out) {
