@@ -438,7 +438,9 @@ function beadSet(base, n, dynamic) {
 // ---- THE OTHER DIVER'S LEAVINGS (generated): vertex-coloured, one program (brood|relic) ----
 function colGeo(g, c, rnd, vary = 0.12) {
   const n = g.attributes.position.count, a = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) { const k = 1 + (rnd() - 0.5) * vary; a[i * 3] = c[0] * k; a[i * 3 + 1] = c[1] * k; a[i * 3 + 2] = c[2] * k; }
+  // (the swatches are sRGB; vertex colours are linear)
+  const L0 = Math.pow(c[0], 2.2), L1 = Math.pow(c[1], 2.2), L2 = Math.pow(c[2], 2.2);
+  for (let i = 0; i < n; i++) { const k = 1 + (rnd() - 0.5) * vary; a[i * 3] = L0 * k; a[i * 3 + 1] = L1 * k; a[i * 3 + 2] = L2 * k; }
   g.setAttribute('color', new THREE.BufferAttribute(a, 3));
   const out = g.index ? g.toNonIndexed() : g;
   for (const k of Object.keys(out.attributes)) if (!['position', 'normal', 'color'].includes(k)) out.deleteAttribute(k);
@@ -853,8 +855,10 @@ export function makeBrood(L, idx, trailFrom) {
         return m;
       };
       B.relics = [
-        place(bootGeo(rnd), B.bootAt, rnd() * TAU, 1.15, 0.05),          // over on its side, the sole toward the light
-        place(couplingGeo(rnd), B.couplingAt, rnd() * TAU, 0.25, 0.022)
+        // (the drawn seabed sits ~0.1-0.2 over terrainH between its vertices and its sand relief rises over
+        // that: measured, at -0.05 the boot showed only its collar. So: lifted, and only tipped part over)
+        place(bootGeo(rnd), B.bootAt, rnd() * TAU, 0.55, -0.10),         // tipped over, the toe cap and the sole's edge toward the light
+        place(couplingGeo(rnd), B.couplingAt, rnd() * TAU, 0.25, -0.07)
       ];
     }
     // the trail: rows of paired pits, many legs, from the open seabed in to her

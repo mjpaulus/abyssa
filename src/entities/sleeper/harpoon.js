@@ -84,7 +84,7 @@ function proceduralGeo() {
   const D = DIM, parts = [];
   const col = (g, c) => {
     const n = g.attributes.position.count, a = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { a[i * 3] = c[0]; a[i * 3 + 1] = c[1]; a[i * 3 + 2] = c[2]; }
+    for (let i = 0; i < n; i++) { a[i * 3] = c[0] ** 2.2; a[i * 3 + 1] = c[1] ** 2.2; a[i * 3 + 2] = c[2] ** 2.2; }   // (sRGB swatches, linear vertex colours)
     g.setAttribute('color', new THREE.BufferAttribute(a, 3));
     return g.index ? g.toNonIndexed() : g;
   };

@@ -95,6 +95,9 @@ const alt = async code => {
 };
 const nSail = SITE === 'pallid' ? 1 : SITE === 'burned' ? 2 : 0;
 for (let i = 0; i < nSail; i++) { await alt('Minus'); await sleep(4000); await c.ev(`(window.__bench.step(120), 1)`); }
+// RP_PRE=<js>: evaluated before the jump (e.g. a revisit: the chart says pulled + calmed here, then a
+// sail away and back: "__chart.pulled()[0]=1; __chart.rec()[0][0]=1; __chart.arrive(1); __chart.arrive(0)")
+if (process.env.RP_PRE) await c.ev(`(() => { ${process.env.RP_PRE}; return 1; })()`);
 await alt('Digit6');
 await sleep(1500);
 await c.ev(`(window.__bench.step(60), 1)`);
@@ -213,7 +216,7 @@ function decide(s) {
 function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
 
 let s = await c.ev(STATE);
-console.log('START', JSON.stringify({ site: SITE, mode: MODE, pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), canTake: s.canTake }));
+console.log('START', JSON.stringify({ site: SITE, mode: MODE, pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`) }));
 let lastWhy = '';
 while (t < +MAXS) {
   s = await c.ev(STATE);
