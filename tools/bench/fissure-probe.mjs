@@ -1028,6 +1028,63 @@ if (mode === 'shape') {
   console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, lensGuardFrames: guards, lensCuts: snaps }));
   for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
     minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip, salIn: q.salIn, salInMax: q.salInMax, salAt: q.salAt, salFloor: q.salFloor, salFloorAt: q.salFloorAt, offAll: q.offAll, holds: q.shaftHolds, closeAt: q.closeAt, hfAt: q.hfAt, offAt: q.offAt }));
+} else if (mode === 'ending') {
+  // THE ENDING THREADS THE OPEN THROATS (final fix wave M5). playEnding() with all three fissures open
+  // this visit, 4500 stepped frames (dt 1/60). Per frame, for the diver (his eye, player.pos) and the
+  // lens:
+  //   band     - ending.js's own insideFloor criterion, y in (h - 26, h + 1.8) of a zone's floor, with its
+  //              y-window (zoneBottom - 62 .. + 190): Task 1's numbers (camera 2/19/0, diver 18/7/0)
+  //   bandAll  - the same band WITHOUT the y-window (the throat floors lie ~70 u under the lips, below
+  //              zoneBottom - 62: the window hides the diver's last ~14 u under each throat floor; the
+  //              final review's 68/52 counted these)
+  //   hidden   - his chest under the floor of his own column while the lens is over the floor of its
+  //              own (the same zone's floor): he is inside the rock and the lens on the other side
+  //   occluded - during the rise, the line from the lens to his chest enters the rock from the water
+  //              side (a front-face crossing of any zone's heightfield: the throat walls and floors as
+  //              drawn within ~1 u), his body in the water
+  // GATES: hidden 0, occluded <= 60 of the ~2730 rise frames (the lens's release up through each floor
+  // after him and the zone-0 crossing's first frames), the ending holds 'won'. RED on 1d68aa0 (ending.js
+  // unchanged since Task 1): band cam 2/19/0 diver 18/7/0 (Task 1's numbers reproduce), bandAll diver
+  // 66/49/241 (the review's 68/52: the window was dropped), hidden 74 (19/3/52: he rose the last ~14 u
+  // under each throat floor with the lens 5-12 u over it), occluded 292 (zone 2's pinched throat: 230).
+  // GREEN (ending.js FLOOR_UNDER / UNDER_HIM / LOS_F): hidden 0, occluded 33; the lens's own band frames
+  // rise (2/19/0 -> 32/5/118: it now waits under each floor with him, where the floor is a culled back face).
+  const r = await c.ev(`(async () => {
+    const T = await import('/src/world/terrain.js'), C = await import('/src/config.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    for (let zi = 0; zi < 3; zi++) window.__fissure.setOpen(zi, 1);
+    window.__bench.step(5);
+    window.playEnding();
+    const bandOf = (x, y, z, win) => { for (let zi = 0; zi < 3; zi++) { if (win && (y < C.zoneBottom(zi) - 62 || y > C.zoneBottom(zi) + 190)) continue;
+      const h = T.terrainH(x, z, zi); if (y < h + 1.8 && y > h - 26) return zi; } return -1; };
+    const nearZone = y => { let best = -1, bd = 1e9; for (let zi = 0; zi < 3; zi++) { const d = Math.abs(y - (C.zoneBottom(zi) - 40)); if (d < bd) { bd = d; best = zi; } } return best; };
+    const out = { cam: [0, 0, 0], div: [0, 0, 0], camAll: [0, 0, 0], divAll: [0, 0, 0], hidden: [0, 0, 0], occluded: 0, occAt: [], hidAt: [], rise: 0 };
+    // +1 over a floor, -1 under it (the zone whose floor lies within 40 u), 0 in the open water between
+    const above = (x, y, z) => { for (let zi = 0; zi < 3; zi++) { const h = T.terrainH(x, z, zi); if (Math.abs(y - h) < 40) return y > h ? 1 : -1; } return 0; };
+    window.__bench.step(4500, i => {
+      const p = window.player.pos, c = window.camera.position, t = i / 60;
+      let b = bandOf(c.x, c.y, c.z, true); if (b >= 0) out.cam[b]++;
+      b = bandOf(p.x, p.y, p.z, true); if (b >= 0) out.div[b]++;
+      b = bandOf(c.x, c.y, c.z, false); if (b >= 0) out.camAll[b]++;
+      b = bandOf(p.x, p.y, p.z, false); if (b >= 0) out.divAll[b]++;
+      // hidden: the floor nearest him (the zone whose floor lies within 30 u)
+      let hid = false;
+      for (let zi = 0; zi < 3; zi++) { const hd = T.terrainH(p.x, p.z, zi); if (Math.abs(p.y - hd) > 30) continue;
+        if (p.y - 0.5 < hd && c.y > T.terrainH(c.x, c.z, zi)) { hid = true; out.hidden[zi]++; if (out.hidAt.length < 12) out.hidAt.push([i, zi, +(p.y - hd).toFixed(1)]); } break; }
+      if (t > 6.5 && t < 52) { out.rise++;
+        if (!hid) { const y0 = p.y - 0.5; let prev = above(c.x, c.y, c.z), occ = false;
+          const d = Math.hypot(p.x - c.x, y0 - c.y, p.z - c.z), n = Math.max(8, Math.ceil(d / 0.5));
+          for (let k = 1; k < n; k++) { const f = k / n, x = c.x + (p.x - c.x) * f, y = c.y + (y0 - c.y) * f, z = c.z + (p.z - c.z) * f;
+            const a = above(x, y, z); if (prev > 0 && a < 0) { occ = true; break; } if (a !== 0) prev = a; }
+          if (occ) { out.occluded++; if (out.occAt.length < 16) out.occAt.push([i, +p.y.toFixed(1)]); } } }
+    });
+    out.state = window.gameState;
+    return out; })()`);
+  console.log(JSON.stringify(r));
+  const sum = a => a.reduce((x, y) => x + y, 0);
+  if (r.state !== 'won') fail.push('the ending did not hold the won state: ' + r.state);
+  if (sum(r.hidden)) fail.push(`the diver was inside the rock with the lens on the other side on ${sum(r.hidden)} frames (${r.hidden.join('/')}) ` + JSON.stringify(r.hidAt));
+  if (r.occluded > 60) fail.push(`the lens's line to him ran through rock on ${r.occluded}/${r.rise} rise frames ` + JSON.stringify(r.occAt));
 } else if (mode === 'wave-minors') {
   // THE FINAL WAVE'S SMALL FIXES, each through the game's own path (RED: each fix reverted alone).
   //  M1 the sonar's "way down" echo keys on the FISSURE (open past half), not the calm: calmed but still

@@ -201,6 +201,29 @@ function insideFloor(x, y, z) {
   return false;
 }
 
+// Does the lens at (cx, cy, cz) see the point (px, py, pz)? Marched in 0.5 u steps against every zone's
+// heightfield within 40 u: blocked where the line goes from over a floor to under it (it enters the rock
+// from the water side: a front face as drawn, the throat walls included); from under a floor up through
+// it is a culled back face, not a block. No allocation.
+function losClear(cx, cy, cz, px, py, pz) {
+  const d = Math.hypot(px - cx, py - cy, pz - cz), n = Math.max(8, Math.ceil(d / 0.5));
+  let prev = sideOf(cx, cy, cz);
+  for (let k = 1; k < n; k++) {
+    const f = k / n, a = sideOf(cx + (px - cx) * f, cy + (py - cy) * f, cz + (pz - cz) * f);
+    if (prev > 0 && a < 0) return false;
+    if (a !== 0) prev = a;
+  }
+  return true;
+}
+// +1 over the floor of the zone whose floor lies within 40 u of y, -1 under it, 0 in the open water between
+function sideOf(x, y, z) {
+  for (let zi = 0; zi < 3; zi++) {
+    const h = terrainH(x, z, zi);
+    if (y - h < 40 && h - y < 40) return y > h ? 1 : -1;
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------- sleeper silhouettes
 // Deliberately NOT the real leviathan module: these are tapered spines of scaled spheres
 // with an additive cyan wash, read at 43-72u through the fog. Ordered deepest-pass-first
@@ -416,6 +439,19 @@ function hideTether() {
 // ---------------------------------------------------------------- state
 let T = -1, startY = -900, startX = 0, startZ = 0, lastY = -900;
 let camAz = 0, camDist = 8.5, camHeight = 1.9, camFov = 62, camRoll = 0, lookLift = 0, camPull = 0;
+// THE THROAT, SEEN (final fix wave M5). Two things hid him in the open throats (fissure-probe `ending`):
+//   - the floor's skin: he rises the last ~14 u to each throat floor UNDER it, on riftPos, while the lens
+//     rode 5-12 u above him, over the floor: he was inside the rock with the lens on the other side (74
+//     frames of 4500, 19/3/52 by zone). So while he is under the floor of the crack he is threading, the
+//     lens is held under it too (at its own column's floor less FLOOR_UNDER), released on a decay once he
+//     is through: from below the floor is a back face (culled) and he is seen rising through it.
+//   - the kinks: the orbit is held along the crack's line at the arm's length, and the deep shaft kinks
+//     and pinches: the line from the lens to him ran into a wall (292 rise frames). While he threads a
+//     crack, the arm is shortened to the longest of LOS_F that sees him (a heightfield march from the lens
+//     to his chest: no entry into the rock from the water side), the lost reach put back as height (the
+//     shaft widens upward); fast in, slow out.
+const FLOOR_UNDER = 1.5, UNDER_HIM = 1.5, LOS_F = [1, 0.8, 0.64, 0.5, 0.38, 0.28, 0.2], LOS_RAISE = 1.0;
+let losF = 1, floorDrop = 0;
 let endX = 34, endZ = 27;
 let cardOn = false, l2 = false, l3 = false, hintOn = false;
 let yawF = 0, pitchF = 0;
@@ -452,7 +488,7 @@ export function startEnding() {
   yawF = player.yaw;
   pitchF = player.pitch;
   camAz = player.yaw + Math.PI;
-  camDist = 8.5; camHeight = 1.9; camFov = 62; camRoll = 0; lookLift = 0; camPull = 0;
+  camDist = 8.5; camHeight = 1.9; camFov = 62; camRoll = 0; lookLift = 0; camPull = 0; losF = 1; floorDrop = 0;
   cardOn = l2 = l3 = hintOn = false;
   for (const s of SLEEPERS) { s.obj.seen = false; s.obj.live = false; s.obj.grp.visible = false; }
   for (let i = 0; i < NBUB; i++) respawnBubble(i, true);
@@ -753,16 +789,42 @@ export function updateEnding(dt, t) {
   // still ends up in rock, shorten it until it does not. Measured against the position it
   // is actually about to use, so it converges instead of hunting.
   const dEff = camDist * (1 - 0.62 * camPull);
-  const camY = player.pos.y + camHeight;
-  const hit = insideFloor(player.pos.x + Math.cos(camAz) * dEff, camY,
-                          player.pos.z + Math.sin(camAz) * dEff);
+  const cax = Math.cos(camAz), caz = Math.sin(camAz);
+  // THE THROAT, SEEN (see FLOOR_UNDER / LOS_F): the arm that sees him, while he threads a crack
+  let fWant = 1, hd = 0, cross = 0;
+  if (transit > 0.01) {
+    fWant = LOS_F[LOS_F.length - 1];
+    for (let k = 0; k < LOS_F.length; k++) {
+      const f = LOS_F[k], d = dEff * f;
+      const cy = player.pos.y + camHeight + (1 - f) * dEff * LOS_RAISE - floorDrop;
+      if (losClear(player.pos.x + cax * d, cy, player.pos.z + caz * d, player.pos.x, player.pos.y - 0.5, player.pos.z)) { fWant = f; break; }
+    }
+    // crossing the floor (his last ~16 u under it, his first few over it) the arm comes all the way in:
+    // the throat floor is at full depth only in a slot a few units wide round his own column, and a lens
+    // out along the crack sat in the rock of a pocket's wall (zone 2: black frames)
+    hd = terrainH(player.pos.x, player.pos.z, ti);
+    const rel = player.pos.y - hd; cross = smooth(-20, -15, rel) * (1 - smooth(2, 7, rel)) * transit;
+    fWant = Math.min(fWant, 1 - (1 - LOS_F[LOS_F.length - 1]) * cross);
+  }
+  losF += (fWant - losF) * Math.min(1, (fWant < losF ? 6 : 1.5) * dt);
+  const dArm = dEff * losF;
+  const camX = player.pos.x + cax * dArm, camZ = player.pos.z + caz * dArm;
+  let camY = player.pos.y + camHeight + (1 - losF) * dEff * LOS_RAISE;
+  // under the floor of the crack he threads while he is: the lens stays under it too, and through the
+  // crossing itself UNDER HIM (he rises through the pit at the throat floor's bottom: every floor round
+  // him is higher, so a line from below him stays under it all), held there continuously as both rise
+  // and let go on a ~0.7 s decay once he is through: from below, the floor is a culled back face
+  let need = 0;
+  if (transit > 0.01 && player.pos.y - 0.5 < hd + 0.3) {
+    const cap = Math.min(terrainH(camX, camZ, ti) - FLOOR_UNDER, player.pos.y - UNDER_HIM + (1 - cross) * 40);
+    need = Math.max(0, camY - cap);
+  }
+  floorDrop = Math.max(need, floorDrop * Math.exp(-1.4 * dt));
+  camY -= floorDrop;
+  const hit = insideFloor(camX, camY, camZ);
   camPull += ((hit ? 1 : 0) - camPull) * Math.min(1, 3 * dt);
 
-  camera.position.set(
-    player.pos.x + Math.cos(camAz) * camDist * (1 - 0.62 * camPull),
-    camY,
-    player.pos.z + Math.sin(camAz) * camDist * (1 - 0.62 * camPull)
-  );
+  camera.position.set(camX, camY, camZ);
   _v.set(player.pos.x, player.pos.y + 0.6 + lookLift, player.pos.z);
   camera.up.set(0, 1, 0);
   camera.lookAt(_v);
