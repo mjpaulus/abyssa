@@ -60,12 +60,16 @@ const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
 // per site (index = site.js row), per zone: a multiplier on COLS so the light lands the same cold
 // pale blue-white in that anchorage's own water and grade (calibrated: open-minus-shut mean colour
 // over the light's pixels against home's; fissure.js leans the seep with it)
-// target on screen R:G:B = 0.72 : 0.87 : 1.0 (cold pale blue-white), luma kept
+// target: the ABSOLUTE colour of the BRIGHT lit pixels (open against gain 0: the upper quarter by
+// luma of the pixels the light changes, where the eye reads its hue), R:G:B = 0.80 : 0.90 : 1.0,
+// over four views per site and zone (40 u side, 60 u above, across the crack from its lip, inside the
+// throat), iterated (review N2: the added light alone read blue while the lit highlights stayed cream
+// in zone 1's warm grade and lavender in zone 2's); luma kept
 export const SITE_LEAN = [
-  [[0.814, 1.053, 1.254], [1.018, 0.965, 1.148], [1.242, 0.914, 0.775]],   // home
-  [[0.859, 1.039, 1.196], [0.932, 1.011, 1.128], [1.176, 0.935, 0.857]],   // Pallid Bank
-  [[0.956, 1.022, 1.014], [0.949, 1.003, 1.123], [1.005, 0.982, 1.056]],   // the Burned Ground
-  [[0.953, 1.003, 1.126], [0.977, 0.970, 1.233], [1.170, 0.961, 0.728]],   // the Unsounded Shelf
+  [[1.060, 0.972, 1.024], [1.027, 0.999, 0.937], [1.108, 1.015, 0.601]],   // home
+  [[0.993, 0.996, 1.057], [0.993, 0.986, 1.094], [1.258, 0.931, 0.657]],   // Pallid Bank
+  [[0.915, 1.031, 1.078], [0.826, 1.037, 1.279], [0.944, 1.028, 0.974]],   // the Burned Ground
+  [[1.586, 0.735, 0.833], [0.741, 1.034, 1.537], [0.976, 1.096, 0.540]],   // the Unsounded Shelf
 ];
 export function siteLean(zi, out) {
   const L = (SITE_LEAN[currentSiteIndex()] || SITE_LEAN[0])[zi];
