@@ -25,12 +25,13 @@ const { renderer, scene, camera } = await import('/src/core.js');
 // every drawn crack triangle: { pos (Float32Array), tris: Int32Array of vertex triples, mesh list }
 function drawn(zi) {
   const P = T.fissurePatchGeo(zi), A = P.pos.array, tris = [];
-  const wall = T.fissureWallGeo ? T.fissureWallGeo(zi) : null;
+  const on = T.fissureWallOn ? T.fissureWallOn() : false;
+  const wall = on ? T.fissureWallGeo(zi) : null;
   const fdv = i => S.fissureDist(A[i * 3], A[i * 3 + 2], zi);
   const surf = [];
   // the patch: its own triangles (slab bodies excluded: they are rock over the void by design,
   // probed by `slabs`); with a throat wall only the kept ones (the index the patch draws)
-  for (const I of P.index) for (let t = 0; t < I.length; t += 3) {
+  for (const I of (on || !P.indexFull ? P.index : P.indexFull)) for (let t = 0; t < I.length; t += 3) {
     const a = I[t], b = I[t + 1], c = I[t + 2];
     if (a >= P.nv || b >= P.nv || c >= P.nv) continue;
     if (Math.min(fdv(a), fdv(b), fdv(c)) >= 0) continue;           // only what lies inside the lip
@@ -45,21 +46,32 @@ function drawn(zi) {
   return surf;
 }
 const _l = { u: 0, v: 0 };
-// signed distance of a drawn point to the heightfield: + in the water, - in the rock
-function sdist(x, y, z, zi, F) {
-  const h = T.terrainUnderH(x, z, zi), dv = y - h, nx = -F.dz, nz = F.dx;
-  let dh = 1e9;
-  for (let t = 0.02; t <= 2.5 && dh > 1e8; t += 0.02) for (const sg of [-1, 1]) {
-    const h2 = T.terrainUnderH(x + nx * t * sg, z + nz * t * sg, zi);
-    if ((h2 - y) * (h - y) <= 0) { dh = t; break; }
+// signed distance of a drawn point to the heightfield surface: + in the water, - in the rock. Its
+// size: the nearest surface point found on twelve horizontal bearings out to 2.5 u: a ground point
+// (x', h(x')) at sqrt(d^2 + (y - h)^2), or a riser crossing the point's own height at d (a riser is
+// the heightfield's vertical face between two samples). Its sign: the vertical gap's at the point.
+const DIRS = [];
+export function sdist(x, y, z, zi, F) {
+  if (!DIRS.length || DIRS.zi !== zi) { DIRS.length = 0; DIRS.zi = zi;
+    for (let k = 0; k < 12; k++) { const a = k * Math.PI / 6, cu = Math.cos(a), cv = Math.sin(a); DIRS.push([F.dx * cu - F.dz * cv, F.dz * cu + F.dx * cv]); } }
+  const h = T.terrainUnderH(x, z, zi), dv = y - h;
+  let best = Math.abs(dv);
+  for (const [ex, ez] of DIRS) {
+    let prev = dv;
+    for (let t = 0.04; t <= 2.5 && t < best; t += 0.04) {
+      const g = y - T.terrainUnderH(x + ex * t, z + ez * t, zi);
+      if (g * prev <= 0) { best = Math.min(best, t); break; }
+      const d = Math.hypot(t, g); if (d < best) best = d;
+      prev = g;
+    }
   }
-  return Math.sign(dv) * Math.min(Math.abs(dv), dh);
+  return Math.sign(dv) * best;
 }
 export function bound(zi) {
   const F = S.FISSURE[zi], out = {};
   for (const s of drawn(zi)) {
     const A = s.A, I = s.tris, n = I.length / 3;
-    const step = Math.max(1, Math.floor(n / 12000));
+    const step = Math.max(1, Math.floor(n / 8000));
     let pMax = -1e9, rMax = -1e9, cnt = 0, gt = 0, wp = null, wr = null; const hist = [];
     const take = (x, y, z) => {
       const d = sdist(x, y, z, zi, F); cnt++;
@@ -182,6 +194,24 @@ export async function look(zi, o = {}) {
     for (let ch = 0; ch < 3; ch++) s += Math.abs(N[i * 4 + ch] - N[r * 4 + ch]) + Math.abs(N[i * 4 + ch] - N[d * 4 + ch]);
     fe += s * 0.5; fn++;
   }
+  // the streaks: the normal pass's change ACROSS the wall's vertical axis (tangential) against ALONG
+  // it (radial, toward the zenith's vanishing point), 2 px each way. A heightfield grid on a 30 u
+  // riser draws long vertical slivers: the normal changes across them, hardly along them (stretched,
+  // ratio > 1); layered rock changes most along the vertical (beds, ledges, ratio < 1).
+  const vpN = new THREE.Vector3(camera.position.x, camera.position.y + 1e4, camera.position.z).project(camera);
+  const nvx = (vpN.x * 0.5 + 0.5) * W, nvy = (vpN.y * 0.5 + 0.5) * H;
+  const nb = (x, y, ch) => { const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, i = (y0 * W + x0) * 4 + ch;
+    return (N[i] * (1 - fx) + N[i + 4] * fx) * (1 - fy) + (N[i + W * 4] * (1 - fx) + N[i + W * 4 + 4] * fx) * fy; };
+  let eR = 0, eT = 0;
+  for (let y = 4; y < H - 4; y += 2) for (let x = 4; x < W - 4; x += 2) {
+    let ax = nvx - x, ay = nvy - y; const al = Math.hypot(ax, ay) || 1; ax /= al; ay /= al;
+    const ok = (dx, dy) => cov(Math.round(y + dy) * W + Math.round(x + dx)) && cov(Math.round(y - dy) * W + Math.round(x - dx));
+    if (!cov(y * W + x) || !ok(2 * ax, 2 * ay) || !ok(-2 * ay, 2 * ax)) continue;
+    for (let ch = 0; ch < 3; ch++) {
+      eR += Math.abs(nb(x + 2 * ax, y + 2 * ay, ch) - nb(x - 2 * ax, y - 2 * ay, ch));
+      eT += Math.abs(nb(x - 2 * ay, y + 2 * ax, ch) - nb(x + 2 * ay, y - 2 * ax, ch));
+    }
+  }
   // luminance band-pass along the wall's vertical axis: the screen direction world-up projects to
   // at each pixel (toward the zenith's vanishing point), second difference at 2 px, over the local
   // mean (a 9 px box); only on rock pixels whose whole stencil is rock
@@ -208,7 +238,7 @@ export async function look(zi, o = {}) {
     lc += Math.abs(c - m + 2) / m; mean += c; en++;
   }
   window.__camPin = null;
-  return { zi, open: pin.open, rockPx: fn, facet: +(fe / Math.max(1, fn)).toFixed(3), bandV: +(ev / Math.max(1, en)).toFixed(4), bandA: +(ea / Math.max(1, en)).toFixed(4),
+  return { zi, open: pin.open, rockPx: fn, facet: +(fe / Math.max(1, fn)).toFixed(3), streak: +(eT / Math.max(1, eR)).toFixed(3), bandV: +(ev / Math.max(1, en)).toFixed(4), bandA: +(ea / Math.max(1, en)).toFixed(4),
     localContrast: +(lc / Math.max(1, en)).toFixed(4), meanL: +(mean / Math.max(1, en)).toFixed(2), cap, normals: N, W, H };
 }
 // PNG of a normal pass (for eyes)

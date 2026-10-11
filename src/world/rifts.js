@@ -44,7 +44,7 @@ import { scene, camera } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { makeGlow, makeWarmGlow } from '../lib/textures.js';
-import { terrainH, terrainUnderH, terrainMeshes, fissurePatchGeo } from './terrain.js';
+import { terrainH, terrainUnderH, terrainMeshes, fissurePatchGeo, fissureWallGeo, fissureWallOn } from './terrain.js';
 import { FISSURE, fissureWorld, fissureLocal, fissureDist, slabProbe, lipMeanY, _widths } from './fissureShape.js';
 import { surfaceHeightAt, localSurfaceY, stormLevel } from './water.js';
 import { currentSiteIndex } from './site.js';
@@ -319,15 +319,20 @@ function wallMesh(zi) {
   }
   g.setAttribute('aF', new THREE.BufferAttribute(aF, 2));
   // the patch's triangles in and just round the crack (the lips and the apron's first 3 u), and
-  // every overhang slab triangle (top, front, underside)
-  const keep = [];
-  for (const I of P.index) for (let t = 0; t < I.length; t += 3) {
-    const a = I[t], b = I[t + 1], c = I[t + 2];
-    if (a >= P.nv && b >= P.nv && c >= P.nv) { keep.push(a, b, c); continue; }
-    if (a >= P.nv || b >= P.nv || c >= P.nv) continue;
-    if ((aF[a * 2] + aF[b * 2] + aF[c * 2]) / 3 < 3) keep.push(a, b, c);
-  }
-  g.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
+  // every overhang slab triangle (top, front, underside). Two lists: the patch as it draws with the
+  // throat walls (Task 5b: the walls inside the outline are the ribbon's, lit by riftWallR below),
+  // and the old full patch (terrain.js fissureWallAB(false), the A/B)
+  const lists = [P.index, P.indexFull].map(IX => {
+    const keep = [];
+    for (const I of IX) for (let t = 0; t < I.length; t += 3) {
+      const a = I[t], b = I[t + 1], c = I[t + 2];
+      if (a >= P.nv && b >= P.nv && c >= P.nv) { keep.push(a, b, c); continue; }
+      if (a >= P.nv || b >= P.nv || c >= P.nv) continue;
+      if ((aF[a * 2] + aF[b * 2] + aF[c * 2]) / 3 < 3) keep.push(a, b, c);
+    }
+    return new THREE.BufferAttribute(new Uint32Array(keep), 1);
+  });
+  g.setIndex(lists[0]);
   g.boundingSphere = new THREE.Sphere(new THREE.Vector3(F.cx, 0, F.cz), Math.hypot(F.halfLen + 8, 50));
   const m = new THREE.ShaderMaterial({
     uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uLip: { value: 0 },
@@ -339,6 +344,23 @@ function wallMesh(zi) {
   m.customProgramCacheKey = () => 'riftWall';
   const mesh = new THREE.Mesh(g, m);
   mesh.name = 'riftWall' + zi;
+  mesh.visible = false;
+  mesh.userData.idx = lists; mesh.userData.on = true;
+  return mesh;
+}
+// THE THROAT WALLS (terrain.js fissureWallGeo, Task 5b): the same light on the ribbon's own
+// triangles, its buffers shared (refilled per site in place, aF with them), the same material (one
+// set of uniforms, the same program): the depth-stable rule as on the patch. Where the ribbon lies
+// under the kept patch at the lip, its light loses the depth test to the patch's.
+function ribbonLight(zi, wall) {
+  const W = fissureWallGeo(zi);
+  if (!W) return null;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', W.pos); g.setAttribute('normal', W.nor); g.setAttribute('aF', W.aF);
+  g.setIndex(new THREE.BufferAttribute(W.index, 1));
+  g.boundingSphere = wall.geometry.boundingSphere;      // the same crack, re-seated with it
+  const mesh = new THREE.Mesh(g, wall.material);
+  mesh.name = 'riftWallR' + zi;
   mesh.visible = false;
   return mesh;
 }
@@ -445,6 +467,8 @@ export function buildRifts() {
     scene.add(grp);
     const wall = wallMesh(zi);
     scene.add(wall);
+    const wallR = ribbonLight(zi, wall);
+    if (wallR) scene.add(wallR);
     // the surface glow (zone 0): a low, wide breath of pale light where the sea lies over the crack,
     // a sprite stood on the water (warmGlow's house program: fog off, its own linear fade to 320 u)
     let surf = null;
@@ -456,7 +480,7 @@ export function buildRifts() {
       surf.material.opacity = 0; surf.visible = false;
       scene.add(surf);
     }
-    rifts.push({ grp, curtain: cur, wall, drift: dr, halo: ha, surf, light: 0, gate: 1, floorMin: -1e9, lip: 0 });
+    rifts.push({ grp, curtain: cur, wall, wallR, drift: dr, halo: ha, surf, light: 0, gate: 1, floorMin: -1e9, lip: 0 });
     dr.onBeforeRender = (r, s, cam) => {
       r.getSize(_s);
       dr.material.uniforms.uPix.value = _s.y * r.getPixelRatio() / (2 * Math.tan(cam.fov * Math.PI / 360));
@@ -497,6 +521,10 @@ export function updateRifts(dt, t, openK) {
     R.light = L; R.gate = gate;
     const see = L * gate > 0.003 && terrainMeshes[zi].visible;
     R.grp.visible = see; R.wall.visible = see;
+    // the throat walls' A/B (terrain.js fissureWallAB): the patch light's index follows the patch's
+    const won = fissureWallOn();
+    if (R.wall.userData.on !== won) { R.wall.userData.on = won; R.wall.geometry.setIndex(R.wall.userData.idx[won ? 0 : 1]); }
+    if (R.wallR) R.wallR.visible = see && won;
     if (see) {
       const k = L * gate * LIGHT_K[zi];
       // with the lens INSIDE the crack the veil all round it would fill the screen: it thins to a quarter
@@ -524,7 +552,7 @@ export function updateRifts(dt, t, openK) {
 const __rifts = {
   K: LIGHT_K, tune: TUNE, lean: SITE_LEAN, reseat: reseatRifts, surfMax: SURF_MAX,
   state(zi) { const R = rifts[zi]; return R ? { light: R.light, gate: R.gate, visible: R.grp.visible, floorMin: R.floorMin, stations: R.curtain.st.length, blobs: R.curtain.nb,
-    wallTris: R.wall.geometry.index.count / 3, surf: R.surf ? R.surf.visible : null } : null; },
+    wallTris: R.wall.geometry.index.count / 3 + (R.wallR && R.wallR.visible ? R.wallR.geometry.index.count / 3 : 0), surf: R.surf ? R.surf.visible : null } : null; },
   // the curtain's stations as seated: u, x, z, floor, lip, the measured open half-width per level
   stations(zi) { const R = rifts[zi]; return R ? R.curtain.st.map(s => ({ u: s.u, x: s.x, z: s.z, tx: s.tx, tz: s.tz, floor: s.floor, lip: s.lip, hw: Array.from(s.hw) })) : []; },
   // the blob radius the shader gives at height y (absolute) over station s (the same formula)
