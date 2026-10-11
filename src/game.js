@@ -15,7 +15,7 @@ import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './
 import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
 import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
-import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed, diverBladeTip } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
@@ -592,19 +592,26 @@ addEventListener('contextmenu', e => { if (locked) e.preventDefault(); });
 // (survival.hasHarpoon, saved tools.harpoon); then the harpoon is the blade: a heavier two-handed thrust,
 // later to land and further to reach, through the same systems (predators.slash scaled by power, lev.onSlash).
 // contact: s after the click (diver.js keys the swing to it — keep in sync); reach: u; cd: the swing's own
-// length gates repeats (triggerSlash returns false while one is in flight); power: the shark's stagger.
+// length (diver.js SLASH_DUR 0.55 / THRUST_DUR 0.9): no new swing until it is over (the anim gates it too —
+// triggerSlash returns false while one is in flight; the cd is checked half a frame short so it can never
+// refuse a click the anim would take); power: the shark's stagger and the abort.
 const BLADE = {
-  knife: { kind: 'knife', contact: 0.22, reach: 3.4, cd: 0.45, power: 1 },
+  knife: { kind: 'knife', contact: 0.22, reach: 3.4, cd: 0.55, power: 1 },
   harpoon: { kind: 'harpoon', contact: 0.30, reach: 5.5, cd: 0.9, power: 1.8 }
 };
+let bladeAt = -1e9;
+const _tipV = new THREE.Vector3();
 let pendingSlash = 0, pendingBlade = BLADE.knife;
 // the last blow's contact, for probes: ONE reused object (set on the contact frame, never allocated in play)
 const bladeLast = { t: 0, reach: 0, kind: '' };
 window.__bladeLast = null;
 const lampOcc = new Float32Array(8);   // diverOccluders -> setLampOccluders, every frame
 function doSlash() {
+  // (fix round 1) not while both hands are on Velkath's iron (as packUsable)
+  if (lev && lev.rite && lev.rite.wrenching) return;
   const b = survival.hasHarpoon ? BLADE.harpoon : BLADE.knife;
-  if (triggerSlash(b.kind)) { pendingSlash = b.contact; pendingBlade = b; knife(); }
+  if (clock.elapsedTime - bladeAt < b.cd - 0.5 / 60) return;
+  if (triggerSlash(b.kind)) { pendingSlash = b.contact; pendingBlade = b; bladeAt = clock.elapsedTime; knife(); }
 }
 window.__slash = () => { if (state === 'play') doSlash(); };   // probes: the blade without pointer lock (tools/bench/play.mjs)
 window.__programs = () => renderer.info.programs.length;     // probes: no first-sight compile (harpoon-probe thrust-contact)
@@ -2562,8 +2569,17 @@ function update(dt, t) {
       const kill = slash(player.pos, forwardVec(), B.reach, B.power);
       // the Hoarder lets go of a cut arm (knife 3.0 u, as it always was; the harpoon 5.1). Nothing against a
       // sleeper: no other kind has an onSlash.
-      if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), B.reach - 0.4);
-      bladeLast.t = 0; bladeLast.reach = B.reach; bladeLast.kind = B.kind; window.__bladeLast = bladeLast;
+      // (fix round 1, ruled) the full reach is also the parry: an arm REACHING for him with its tip inside it
+      if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), B.reach - 0.4, B.reach);
+      bladeLast.t = clock.elapsedTime; bladeLast.reach = B.reach; bladeLast.kind = B.kind; window.__bladeLast = bladeLast;
+      if (B.power > 1) {
+        // (fix round 1, ruled) the thrust READS from the follow lens: a centimetre punch of the lens along the
+        // look (an event, the grounded-camera rule), and silt off the iron's point when it is near the bed
+        // (diver.js spits bubbles off it at the same beat)
+        camYankDir.copy(forwardVec()); camYank.v += 0.9;
+        diverBladeTip(_tipV);
+        if (zone >= 0) { const g = terrainH(_tipV.x, _tipV.z, zone); if (_tipV.y - g < 1.4) emitDust(_tipV.x, g + 0.15, _tipV.z, 10, 1.2); }
+      }
       if (kill) {
         knifeHit('flesh');
         shake = Math.min(1, shake + 0.25);

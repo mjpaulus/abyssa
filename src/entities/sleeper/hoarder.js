@@ -520,8 +520,24 @@ export function makeHoarder(idx, cfg) {
   }
 
   // reach: how far past the arm's own girth the blade carries (game.js: the knife 3, the harpoon 5.1)
-  L.onSlash = (pos, fwd, reach = 3) => {
-    if (!L.grab) return;
+  // (fix round 1, ruled) tipReach: the blade's full reach (knife 3.4, harpoon 5.5). Not held, a blade at an
+  // arm REACHING for him (the cock or the throw of a lash) whose tip is inside that reach and in front of
+  // him PARRIES it: the arm recoils (no grab while it does) and the lash is spent. The knife's reach is a
+  // last-instant cut (her grab closes at hGrabR 3.2); the harpoon catches the throw early. Held, the cut
+  // frees him in one hit with either blade (unchanged).
+  L.onSlash = (pos, fwd, reach = 3, tipReach = reach + 0.4) => {
+    if (!L.grab) {
+      let parried = 0;
+      for (let a = 0; a < L.arms.length; a++) {
+        const A = L.arms[a];
+        if (!(A.lash > 0) || A.recoil > 0.4) continue;
+        _p.copy(A.tip).sub(pos);
+        const d = _p.length();
+        if (d < tipReach && _p.dot(fwd) > 0.342 * d) { A.lash = 0; A.recoil = 1; parried++; }
+      }
+      if (parried) { L.parried = (L.parried || 0) + parried; L.pendingMsg = L.pendingMsg || 'THE ARM RECOILS FROM THE BLADE.'; }
+      return;
+    }
     const A = L.arms[L.grab.arm];
     // the cut lands if the blade is anywhere near the arm that holds him
     for (let i = 8; i <= RINGS; i += 4) if (A.pts[i].distanceTo(pos) < A.r0 * 1.2 + reach) {
