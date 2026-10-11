@@ -26,8 +26,8 @@ export { REVEAL_T };
 export const MSG_WARDS_ANSWER = 'THE WARDS OF ORUNE ANSWER THE PING.';
 export const MSG_WARDS_DARK = 'THE WARDS OF ORUNE ARE DARK. SOUND FOR THEM.';
 export const MSG_WARDS_KEPT = "MHOR'S WARDS ARE KEPT. CUT THE KEEPERS LOOSE.";
-// (fifth-ward) the other held wards' lines: each says why AND what to do
-export const MSG_BROOD_COLD = 'THE LAST WARD STAYS COLD WHILE YOU CARRY HER EGGS. PRESS THEM BACK UNDER HER.';
+// (fifth-ward) the other held wards' lines: each says why AND what to do (Velkath's brood rule and its
+// line went with the pry, fissure-and-harpoon Task 6: her wards are simply lit)
 export const MSG_NOT_STILL = 'HE WILL NOT HOLD STILL. DRAW HIS STRIKE THROUGH THE FURNACE FIRE.';
 // The live sleeper (game.js owns `lev`; this is the same object, for the tools hook).
 let live = null;
@@ -369,7 +369,7 @@ export function wardTouch(L, i, g, player, ev) {
 }
 
 // ---- THE REFUSAL (roadmap/fifth-ward.md) ------------------------------------------------
-// A ward a rule holds dark (Velkath's brood, Orune's unrung iron, Mhor's keepers or his
+// A ward a rule holds dark (Orune's unrung iron, Mhor's keepers or his
 // moving bulk) used to say why ONCE per sleeper, at the bottom of a one-slot message queue
 // that any slam, tear or lantern line replaced, and then answer every later touch with
 // nothing at all: the ward simply "didn't change" (Michael, 2026-10-08). Now EVERY entry

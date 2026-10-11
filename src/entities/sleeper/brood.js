@@ -19,16 +19,18 @@
 //   * she sleeps on the rift lip, a reef-crusted ridge bedded in the silt;
 //   * asleep, the clutch BULGES out from under her rim on one side (the side the silt drift
 //     leaves open: her fanning keeps the silt off it), resting on the seabed;
-//   * a trail of many-legged tracks runs in to her past a shed shell and spent casings;
-//   * [E] near the clutch PRIES A CLUMP off her (carried at Sal's free hand, shedding a few
-//     eggs; a torn patch is left in the lobe); that take wakes her (brood.onTake);
-//   * standing, the mass hangs under her apron: her last ward will not light while the
-//     clump is out; [E] within reach of the clutch under her belly presses it back.
+//   * a trail of many-legged tracks runs in to her past a shed shell and spent casings, and
+//     (fissure-and-harpoon Task 6) the last of another diver: an old lead boot half in the silt,
+//     then a sheared air-hose coupling, on the approach to her near flank;
+//   * the clutch is HERS: Michael ruled taking her eggs the wrong trigger (2026-10-10). What wakes
+//     her is the old harpoon in her side (sleeper/harpoon.js); the pry, the carried clump, the
+//     press-back and the brood rule (her last ward cold while a clump was out) are gone;
+//   * standing, the mass hangs tucked under her apron (look + soft solid).
 // The mass is SOFT-SOLID (bodyCols.js setClutch): Sal stops at the drawn surface and slides
 // round it, and the camera's boom treats it like the rest of her.
 //
-// RENDER: one program (CLUTCH material) draws the lobes' skins, the sparse beads, the carried
-// clump, the shed eggs and the spent casings: instanced unit spheres whose centre/radius come
+// RENDER: one program (CLUTCH material) draws the lobes' skins, the sparse beads and the spent
+// casings: instanced unit spheres whose centre/radius come
 // from instance attributes (asleep + standing positions, lerped by uStand in the vertex
 // shader). The hairs are one more instanced draw (SETAE). Nothing casts shadows. Translucency
 // without a light: the lantern's in-scatter slot (abyssaLampA, the fog chunk's uniform)
@@ -41,19 +43,17 @@ import { envTexDeep as envTex, camera } from '../../core.js';
 import { terrainH, terrainNormal } from '../../world/terrain.js';
 import { fissureDist } from '../../world/fissureShape.js';
 import { emitDust } from '../../world/footfx.js';
-import { lanternWorldPos } from '../diver.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as G from './brooderGeo.js';
 
 const TAU = Math.PI * 2;
-// (ritefair: RET_R 3.4 -> 5.0, the return is a press, not a precision hover under a moving colossus)
-const TAKE_R = 2.6, RET_R = 5.0;        // reach from his hands/helmet to the mass's surface (world u): pry / press back (up, arm raised)
 const RB = 0.0025;                      // a sparse (proud) bead's radius, shell units (x R 15.4 = 0.039 u: her eggs, true to her scale)
 const MAXB = 3200;                      // sparse bead budget; the build thins to it
 const LOD_N = 12;                       // sparse beads draw inside this range (world u); the skin carries the read past it
 const BF_N = 44, BF_TILE = 3.5;         // bead field: eggs across one tile, the tile's world size (0.08 u eggs)
-const SHED_N = 32, CLUMP_B = 70, CASE_N = 420, SETAE_N = 420;
+const CASE_N = 420, SETAE_N = 420;
 const _v = V3(), _w = V3(), _n = V3(), _q = new THREE.Quaternion(), _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _up = V3(0, 1, 0);
-const _a = V3(), _b = V3(), _lant = V3();
+const _a = V3(), _b = V3();
 
 // ---- the mass: lobes (shell units, body-local) ------------------------------------------
 // STANDING ("H"): hanging under the brood apron (the sculpt's apron is an ellipsoid at
@@ -435,14 +435,83 @@ function beadSet(base, n, dynamic) {
   return g;
 }
 
+// ---- THE OTHER DIVER'S LEAVINGS (generated): vertex-coloured, one program (brood|relic) ----
+function colGeo(g, c, rnd, vary = 0.12) {
+  const n = g.attributes.position.count, a = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) { const k = 1 + (rnd() - 0.5) * vary; a[i * 3] = c[0] * k; a[i * 3 + 1] = c[1] * k; a[i * 3 + 2] = c[2] * k; }
+  g.setAttribute('color', new THREE.BufferAttribute(a, 3));
+  const out = g.index ? g.toNonIndexed() : g;
+  for (const k of Object.keys(out.attributes)) if (!['position', 'normal', 'color'].includes(k)) out.deleteAttribute(k);
+  return out;
+}
+const LEAD = [0.30, 0.31, 0.32], BRASSV = [0.36, 0.38, 0.27], LEATHER = [0.13, 0.10, 0.075], RUBBER = [0.075, 0.07, 0.065], BRASS = [0.50, 0.40, 0.22];
+// a Mark V's weighted boot, years down: the lead sole and the brass toe cap outlast the rest; the
+// leather upper rotted to a collapsed collar, a strap and its buckle (+Z the toe, the sole on y = 0)
+function bootGeo(rnd) {
+  const parts = [];
+  {
+    const sh = new THREE.Shape();
+    sh.moveTo(-0.07, -0.17); sh.quadraticCurveTo(0, -0.205, 0.07, -0.17); sh.lineTo(0.082, 0.08);
+    sh.quadraticCurveTo(0.08, 0.20, 0, 0.215); sh.quadraticCurveTo(-0.08, 0.20, -0.082, 0.08); sh.closePath();
+    const g = new THREE.ExtrudeGeometry(sh, { depth: 0.05, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 2, curveSegments: 10 });
+    g.rotateX(Math.PI / 2); g.scale(1, -1, 1); g.translate(0, 0.012, 0);
+    // pitted, white oxide bloom
+    const C = colGeo(g, LEAD, rnd, 0.35);
+    parts.push(C);
+  }
+  { const g = new THREE.SphereGeometry(0.088, 14, 7, 0, Math.PI * 2, 0, Math.PI / 2); g.scale(1, 0.8, 1.2); g.translate(0, 0.062, 0.105); parts.push(colGeo(g, BRASSV, rnd, 0.3)); }
+  {
+    const g = new THREE.CylinderGeometry(0.072, 0.086, 0.19, 14, 5, true);
+    const P = g.attributes.position;
+    for (let i = 0; i < P.count; i++) {   // rotted: the top ragged and slumped in
+      const y = P.getY(i), a = Math.atan2(P.getZ(i), P.getX(i)), t = (y + 0.095) / 0.19;
+      const tear = t > 0.6 ? (t - 0.6) * (0.10 + 0.08 * Math.sin(a * 5 + 1) + 0.05 * Math.sin(a * 11)) : 0;
+      P.setY(i, y - tear);
+      const sl = 1 - 0.28 * t * t * (0.6 + 0.4 * Math.sin(a * 2 + 0.5));
+      P.setX(i, P.getX(i) * sl); P.setZ(i, P.getZ(i) * sl);
+    }
+    g.computeVertexNormals();
+    g.rotateX(-0.18); g.translate(0, 0.155, -0.06);
+    parts.push(colGeo(g, LEATHER, rnd, 0.25));
+  }
+  { const g = new THREE.TorusGeometry(0.086, 0.011, 5, 16); g.rotateX(Math.PI / 2 - 0.18); g.translate(0, 0.11, -0.055); parts.push(colGeo(g, LEATHER, rnd, 0.2)); }
+  { const g = new THREE.BoxGeometry(0.03, 0.028, 0.012); g.translate(0.086, 0.11, -0.045); parts.push(colGeo(g, BRASSV, rnd, 0.2)); }
+  const g = mergeGeometries(parts);
+  g.computeBoundingSphere();
+  return g;
+}
+// a hose union off an old diver's line: the brass nut with its lugs, the threaded spigot, and the
+// rubbered canvas hose torn off a foot behind it (+Z along the hose, toward the spigot)
+function couplingGeo(rnd) {
+  const parts = [];
+  const along = g => { g.rotateX(Math.PI / 2); return g; };
+  { const g = along(new THREE.CylinderGeometry(0.056, 0.056, 0.065, 6)); parts.push(colGeo(g, BRASS, rnd, 0.3)); }
+  for (const sd of [-1, 1]) { const g = new THREE.BoxGeometry(0.03, 0.022, 0.05); g.translate(sd * 0.068, 0, 0); parts.push(colGeo(g, BRASSV, rnd, 0.2)); }
+  { const g = along(new THREE.CylinderGeometry(0.031, 0.034, 0.09, 12)); g.translate(0, 0, 0.075); parts.push(colGeo(g, BRASS, rnd, 0.25)); }
+  { const g = new THREE.TorusGeometry(0.034, 0.006, 5, 12); g.translate(0, 0, 0.115); parts.push(colGeo(g, BRASSV, rnd, 0.2)); }
+  { const g = along(new THREE.CylinderGeometry(0.046, 0.05, 0.05, 12)); g.translate(0, 0, -0.055); parts.push(colGeo(g, BRASSV, rnd, 0.25)); }
+  {
+    const c = new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, -0.06), new THREE.Vector3(0.02, -0.01, -0.25), new THREE.Vector3(0.09, -0.025, -0.45), new THREE.Vector3(0.20, -0.03, -0.58)]);
+    const g = new THREE.TubeGeometry(c, 20, 0.043, 10, false);
+    // the torn end: ragged
+    const P = g.attributes.position, n = P.count;
+    for (let i = n - 11 * 2; i < n; i++) { P.setX(i, P.getX(i) + (rnd() - 0.5) * 0.03); P.setZ(i, P.getZ(i) + (rnd() - 0.5) * 0.04); }
+    g.computeVertexNormals();
+    parts.push(colGeo(g, RUBBER, rnd, 0.3));
+  }
+  const g = mergeGeometries(parts);
+  g.computeBoundingSphere();
+  return g;
+}
+
 export function makeBrood(L, idx, trailFrom) {
   const grp = L.grp, R = L.R;
   const rnd = seededRand(0xB700D + idx * 131 + Math.round(trailFrom.x * 7 + trailFrom.z * 13));
   if (!_geoN) { _geoN = sphere(1); _geoC = sphere(4); _geoS = strandGeo(); }
   const B = {
-    held: -1, taken: 0, t: 0, seated: false, st: 0, carryT: 0, shedT: 2, fanT: 4, locked: false,
-    found: { tracks: false, shells: false, clutch: false, ridge: false },
-    trailA: trailFrom.clone(), shellsAt: V3(), takeAt: V3(), clumpAt: V3(), bear: 0, notch: 0.5,
+    t: 0, seated: false, st: 0, fanT: 4,
+    found: { tracks: false, shells: false, boot: false, coupling: false, clutch: false, ridge: false },
+    trailA: trailFrom.clone(), shellsAt: V3(), bootAt: V3(), couplingAt: V3(), takeAt: V3(), bear: 0, notch: 0.5,
     lobes: [], nL: 0
   };
   B.trailA.y = terrainH(B.trailA.x, B.trailA.z, idx);
@@ -467,39 +536,7 @@ export function makeBrood(L, idx, trailFrom) {
   B.core.geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, -0.2, -0.2), 1.45);
   for (const o of [B.core]) { o.castShadow = false; o.receiveShadow = true; L.body.add(o); }
 
-  // ---- the clump (carried) and the shed beads: world space, same program ----
-  {
-    const g = beadSet(_geoN, CLUMP_B + 1, false), P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, Sd = g.attributes.aSd.array;
-    const cr = seededRand(0xC1A9);
-    const rw = RB * R;
-    // a skin of the bead field (radius ~0.3 u, the lump making it a torn clod) and a few
-    // eggs standing proud of it
-    P0[0] = P1[0] = 0; P0[1] = P1[1] = 0; P0[2] = P1[2] = 0; P0[3] = P1[3] = 0.26;
-    Sd[0] = 0.5; Sd[1] = 0.55; Sd[2] = 0.26; Sd[3] = 4;
-    for (let i = 1; i <= CLUMP_B; i++) {
-      const y = 1 - 2 * (i - 0.5) / CLUMP_B, rr = Math.sqrt(1 - y * y), ph = i * 2.39996 + cr() * 0.3;
-      const lump = 0.26 * (1 + 0.13 * Math.sin(Math.cos(ph) * rr * 3.1 + 5) * Math.sin(y * 2.7 + 8.5) * Math.sin(Math.sin(ph) * rr * 3.3 + 11.5)) + rw * 0.5;
-      const o = i * 4;
-      P0[o] = P1[o] = Math.cos(ph) * rr * lump; P0[o + 1] = P1[o + 1] = y * lump * 0.85; P0[o + 2] = P1[o + 2] = Math.sin(ph) * rr * lump;
-      P0[o + 3] = P1[o + 3] = rw * (0.8 + 0.4 * cr());
-      Sd[o] = cr(); Sd[o + 1] = 0.45 + 0.4 * cr(); Sd[o + 2] = cr() * TAU; Sd[o + 3] = 3;
-    }
-    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1);
-    B.clump = new THREE.Mesh(g, matN);
-    B.clump.castShadow = false;
-    B.clump.visible = false;
-    grp.add(B.clump);
-    const sg = beadSet(_geoN, SHED_N, true);
-    B.shed = new THREE.Mesh(sg, matN);
-    B.shed.frustumCulled = false; B.shed.castShadow = false;
-    B.shed.visible = false;
-    grp.add(B.shed);
-    B.shedSt = new Float32Array(SHED_N * 8);   // x y z vx vy vz age life
-    B.shedHead = 0; B.shedLive = 0;
-  }
-
   // ---- behaviour ----
-  B.out = () => (B.held >= 0 ? 1 : 0);
   // live lobes (shell units) for the current stand, and the inverse body matrix
   const liveLobes = () => {
     const s = B.st;
@@ -507,31 +544,6 @@ export function makeBrood(L, idx, trailFrom) {
       const lb = B.lobes[k], o = k * 4;
       for (let c = 0; c < 4; c++) B.live[o + c] = lb.s[c] + (lb.h[c] - lb.s[c]) * s;
     }
-  };
-  // Reach from Sal to the mass's surface (world u; < 0 inside). Asleep only the lobes that
-  // lie OUT in the open count (the rest are bedded under her); standing, every lobe.
-  // Tested from his helmet, his chest and his hands' height (he reaches; he does not have to
-  // put his head in it). Returns the lobe index through B.nearK.
-  B.reach = pos => {
-    if (!B.seated) return 1e9;
-    L.body.updateMatrixWorld();
-    _inv.copy(L.body.matrixWorld).invert();
-    liveLobes();
-    const openOnly = B.st < 0.5;
-    let best = 1e9; B.nearK = -1;
-    for (let h = 0; h < 3; h++) {
-      _v.set(pos.x, pos.y + (h === 0 ? 0.25 : h === 1 ? -0.45 : -0.95), pos.z).applyMatrix4(_inv);
-      for (let k = 0; k < B.nL; k++) {
-        if (openOnly && !B.lobes[k].open) continue;
-        const o = k * 4, r = B.live[o + 3];
-        if (r <= 0.002) continue;
-        // to the drawn (lumped) surface, the one the collider stops him at
-        const dx = _v.x - B.live[o], dy = _v.y - B.live[o + 1], dz = _v.z - B.live[o + 2], dl = Math.hypot(dx, dy, dz);
-        const d = (dl - (dl > 1e-6 ? r * lump(dx / dl, dy / dl, dz / dl, B.seeds[k]) : r)) * R;
-        if (d < best) { best = d; B.nearK = k; }
-      }
-    }
-    return best;
   };
   // the lowest point of the mass over body-local (x, z), shell units (or `none`): the
   // crouch keeps it off the diver's helmet (brooder.js)
@@ -555,78 +567,6 @@ export function makeBrood(L, idx, trailFrom) {
     }
     return false;
   };
-  B.canTake = pos => !B.locked && B.held < 0 && B.reach(pos) < TAKE_R;
-  B.canReturn = pos => B.held >= 0 && B.reach(pos) < RET_R;
-  // (bench probes: the old names, from the nest's days)
-  B.nearEgg = pos => (B.canTake(pos) ? 0 : -1);
-  B.nearNest = pos => B.canReturn(pos);
-  B.prompt = pos => {
-    if (B.held >= 0) return B.canReturn(pos) ? '[E] PRESS THE CLUMP BACK INTO HER CLUTCH' : null;
-    return B.canTake(pos) ? '[E] PRY A CLUMP FROM HER CLUTCH' : null;
-  };
-  // [E]: returns { took, returned } or null. brooder.js wakes on the first take.
-  B.interact = pos => {
-    if (B.held >= 0) {
-      if (!B.canReturn(pos)) return null;
-      B.held = -1;
-      B.clump.visible = false;
-      scar(false);
-      return { returned: true, out: 0, msg: 'PRESSED BACK INTO HER. THE CLUTCH IS WHOLE.' };
-    }
-    if (!B.canTake(pos)) return null;
-    // the clump comes away from the lobe he reached, at the point nearest him
-    const k = B.nearK, o = k * 4;
-    _v.set(B.live[o], B.live[o + 1], B.live[o + 2]);
-    _w.set(pos.x, pos.y - 0.45, pos.z).applyMatrix4(_inv).sub(_v).normalize().multiplyScalar(B.live[o + 3]).add(_v);
-    B.scarAt = _w.clone(); B.scarK = k;
-    B.clumpAt.copy(_w).applyMatrix4(L.body.matrixWorld);
-    scar(true);
-    B.held = 0; B.taken++; B.carryT = 0;
-    B.clump.visible = true;
-    B.clump.position.copy(B.clumpAt);
-    if (B.onTake) B.onTake(B.taken);
-    // (a few beads fall as it tears free)
-    for (let i = 0; i < 5; i++) shedOne(B.clumpAt, 0.6);
-    return { took: true, first: B.taken === 1, msg: B.taken === 1 ? null : 'ANOTHER CLUMP. SHE KNOWS.' };
-  };
-  // the tear: beads within ~0.55 u of the take point go (radius 0), and come back pressed in
-  const scar = on => {
-    // the skin: a dent on that lobe, on the bearing he tore from (the lobe's rest frame)
-    const su = matN.userData.u;
-    if (on && B.scarK >= 0) {
-      const o = B.scarK * 4, r = Math.max(1e-4, B.live[o + 3]);
-      su.uScar.value.set(B.scarAt.x - B.live[o], B.scarAt.y - B.live[o + 1], B.scarAt.z - B.live[o + 2], 0).normalize();
-      su.uScar.value.w = Math.cos(Math.min(1.2, 0.62 / (r * R)));
-      su.uScarL.value = B.scarK;
-    } else if (!on) su.uScarL.value = -1;
-    if (!B.beadsN || !B.scarAt) return;
-    const g = B.beadsN.geometry, P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, S = B.scarSave, n = g.instanceCount;
-    const r2 = (0.6 / R) * (0.6 / R), sx = B.scarAt.x, sy = B.scarAt.y, sz = B.scarAt.z, s = B.st;
-    for (let i = 0; i < n; i++) {
-      const o = i * 4;
-      if (on) {
-        const x = P0[o] + (P1[o] - P0[o]) * s - sx, y = P0[o + 1] + (P1[o + 1] - P0[o + 1]) * s - sy, z = P0[o + 2] + (P1[o + 2] - P0[o + 2]) * s - sz;
-        if (x * x + y * y + z * z < r2) { S[i * 2] = P0[o + 3]; S[i * 2 + 1] = P1[o + 3]; P0[o + 3] = P1[o + 3] = 0; B.scarN = (B.scarN || 0) + 1; }
-        else S[i * 2] = S[i * 2 + 1] = -1;
-      } else if (S[i * 2] >= 0) { P0[o + 3] = S[i * 2]; P1[o + 3] = S[i * 2 + 1]; }
-    }
-    if (!on) B.scarN = 0;
-    g.attributes.aP0.needsUpdate = g.attributes.aP1.needsUpdate = true;
-  };
-  // a bead falls loose at world p (sinks, drifts, settles on the silt)
-  const shedOne = (p, kick) => {
-    const i = B.shedHead, o = i * 8;
-    B.shedHead = (B.shedHead + 1) % SHED_N;
-    const St = B.shedSt;
-    St[o] = p.x + (Math.random() - 0.5) * 0.3; St[o + 1] = p.y + (Math.random() - 0.5) * 0.3; St[o + 2] = p.z + (Math.random() - 0.5) * 0.3;
-    St[o + 3] = (Math.random() - 0.5) * kick; St[o + 4] = Math.random() * 0.3 * kick; St[o + 5] = (Math.random() - 0.5) * kick;
-    St[o + 6] = 0; St[o + 7] = 18 + 10 * Math.random();
-    const Sd = B.shed.geometry.attributes.aSd.array;
-    Sd[i * 4] = Math.random(); Sd[i * 4 + 1] = 0.4 + 0.4 * Math.random(); Sd[i * 4 + 2] = Math.random() * TAU; Sd[i * 4 + 3] = 3;
-    B.shed.geometry.attributes.aSd.needsUpdate = true;
-    B.shed.visible = true;
-  };
-
   // SEAT: shape the asleep clutch to her bed (called after her dormant pose is written, and
   // again whenever she is placed or her sculpt lands). Picks the side the clutch spills out
   // on, rests every lobe on the seabed, builds the beads/hairs once, and lays the trail.
@@ -824,7 +764,6 @@ export function makeBrood(L, idx, trailFrom) {
     B.nBeads = m;
     if (B.beadsN) { B.beadsN.geometry.dispose(); L.body.remove(B.beadsN); }
     B.beadsN = new THREE.Mesh(g, matN);
-    B.scarSave = new Float32Array(m * 2);
     g.boundingSphere = B.core.geometry.boundingSphere;
     B.beadsN.castShadow = false; B.beadsN.receiveShadow = true; L.body.add(B.beadsN);
     // setae
@@ -886,6 +825,38 @@ export function makeBrood(L, idx, trailFrom) {
       grp.add(cs);
       B.casings = cs;
     }
+    // THE OTHER DIVER (fissure-and-harpoon Task 6): on the approach from the shed shell to her near
+    // flank, where the harpoon is, an old lead boot half in the silt, then a sheared air-hose
+    // coupling nearer her. Generated (lathes, boxes, a tube), one program for both.
+    if (L.nearFlank && L.sand) {
+      const T = _w.copy(L.nearFlank).addScaledVector(L.sand, 5);
+      const at = (f, side, out) => {
+        out.lerpVectors(B.shellsAt, T, f);
+        const dx = T.x - B.shellsAt.x, dz = T.z - B.shellsAt.z, dl = Math.hypot(dx, dz) || 1;
+        out.x += -dz / dl * side; out.z += dx / dl * side;
+        // never by the crack: slide out along the sand normal until it is well clear
+        for (let k = 0; k < 20 && fissureDist(out.x, out.z, idx) < 9; k++) { out.x += L.sand.x; out.z += L.sand.z; }
+        out.y = terrainH(out.x, out.z, idx);
+        return out;
+      };
+      at(0.48, 1.6, B.bootAt); at(0.80, -1.1, B.couplingAt);
+      const mat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.8, metalness: 0.25, envMap: envTex, envMapIntensity: 0.35, side: THREE.DoubleSide });
+      mat.customProgramCacheKey = () => 'brood|molt';   // (the shed shell's program: same shader, nothing patched)
+      const place = (geo, p, yaw, roll, sink) => {
+        const m = new THREE.Mesh(geo, mat);
+        _n.copy(terrainNormal(p.x, p.z, idx));
+        _q.setFromUnitVectors(_up, _n).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, roll, 'YXZ')));
+        m.quaternion.copy(_q);
+        m.position.set(p.x, p.y - sink, p.z);
+        m.castShadow = m.receiveShadow = true;
+        grp.add(m);
+        return m;
+      };
+      B.relics = [
+        place(bootGeo(rnd), B.bootAt, rnd() * TAU, 1.15, 0.05),          // over on its side, the sole toward the light
+        place(couplingGeo(rnd), B.couplingAt, rnd() * TAU, 0.25, 0.022)
+      ];
+    }
     // the trail: rows of paired pits, many legs, from the open seabed in to her
     const pitGeo = new THREE.CircleGeometry(0.55, 10);
     pitGeo.rotateX(-Math.PI / 2);
@@ -917,11 +888,10 @@ export function makeBrood(L, idx, trailFrom) {
     grp.add(pits);
   };
 
-  // Per frame: the clutch breathes and rises with her; the clump rides at his free hand and
-  // sheds; loose beads sink and settle; the trail announces itself once each as it is found.
+  // Per frame: the clutch breathes and rises with her; the trail announces itself once each as
+  // it is found.
   B.update = (dt, player, ev) => {
     B.t += dt;
-    B.locked = !!L.calmed;                     // stilled, her clutch is hers: no more takes
     // calmed she keeps it clamped under her (it does not spill again where she settles)
     // (home on her bed, at the heading she was seated on, it spills again as she settles)
     B.st = L.calmed && (L.homeTurn || L.walkTo || Math.abs(Math.atan2(Math.sin(L.yaw - (L.lairYaw ?? L.yaw)), Math.cos(L.yaw - (L.lairYaw ?? L.yaw)))) > 0.2) ? 1 : L.standE;
@@ -957,50 +927,13 @@ export function makeBrood(L, idx, trailFrom) {
       B.fanT = 5 + 4 * Math.random();
       emitDust(B.takeAt.x + (Math.random() - 0.5) * 2, B.takeAt.y - 0.3, B.takeAt.z + (Math.random() - 0.5) * 2, 4, 0.8);
     }
-    if (B.held >= 0) {
-      // the other hand: the lantern's, mirrored across his heading
-      lanternWorldPos(_lant);
-      const yaw = player.yaw || 0, rx = Math.cos(yaw), rz = -Math.sin(yaw);
-      const vx = _lant.x - player.pos.x, vz = _lant.z - player.pos.z, side = vx * rx + vz * rz;
-      _a.set(_lant.x - 2 * side * rx, _lant.y - 0.28, _lant.z - 2 * side * rz);
-      if (Math.abs(side) < 0.2) _a.set(player.pos.x - rx * 0.55, player.pos.y - 0.85, player.pos.z - rz * 0.55);
-      B.carryT += dt;
-      const k = Math.min(1, B.carryT / 0.35);
-      B.clump.position.lerpVectors(B.clumpAt, _a, k * k * (3 - 2 * k));
-      B.clump.rotation.set(0.25 * Math.sin(B.t * 1.1), yaw + 0.3 * Math.sin(B.t * 0.7), 0.2 * Math.sin(B.t * 0.9));
-      // it sheds: a bead every second or two, more when he hurries
-      const sp = Math.hypot(player.vel.x, player.vel.z, player.vel.y);
-      if ((B.shedT -= dt * (1 + sp * 0.6)) <= 0) { B.shedT = 1.4 + 1.6 * Math.random(); shedOne(B.clump.position, 0.4); }
-    }
-    if (B.shed.visible) {
-      const St = B.shedSt, g = B.shed.geometry, P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, rw = RB * R * 1.1;
-      let live = 0;
-      for (let i = 0; i < SHED_N; i++) {
-        const o = i * 8;
-        if (St[o + 7] <= 0) { P0[i * 4 + 3] = P1[i * 4 + 3] = 0; continue; }
-        St[o + 6] += dt;
-        if (St[o + 6] > St[o + 7]) { St[o + 7] = 0; P0[i * 4 + 3] = P1[i * 4 + 3] = 0; continue; }
-        live++;
-        const fl = terrainH(St[o], St[o + 2], idx) + rw * 0.8;
-        if (St[o + 1] > fl) {
-          St[o + 4] += (-0.32 - St[o + 4]) * Math.min(1, 1.5 * dt);   // sinks to a slow terminal fall
-          St[o + 3] *= 1 - Math.min(1, 0.8 * dt); St[o + 5] *= 1 - Math.min(1, 0.8 * dt);
-          St[o] += St[o + 3] * dt; St[o + 1] += St[o + 4] * dt; St[o + 2] += St[o + 5] * dt;
-          if (St[o + 1] < fl) St[o + 1] = fl;
-        }
-        const fade = Math.min(1, (St[o + 7] - St[o + 6]) / 3);
-        P0[i * 4] = P1[i * 4] = St[o]; P0[i * 4 + 1] = P1[i * 4 + 1] = St[o + 1]; P0[i * 4 + 2] = P1[i * 4 + 2] = St[o + 2];
-        P0[i * 4 + 3] = P1[i * 4 + 3] = rw * 0.95 * fade;
-      }
-      g.attributes.aP0.needsUpdate = g.attributes.aP1.needsUpdate = true;
-      B.shedLive = live;
-      if (!live && B.held < 0) B.shed.visible = false;
-    }
     if (ev.msg) return;
     const F = B.found, p = player.pos;
     const near = (q, r) => Math.hypot(p.x - q.x, p.z - q.z) < r && Math.abs(p.y - q.y) < 10;
     if (!F.tracks && near(B.trailA, 30)) { F.tracks = true; ev.msg = 'TRACKS IN THE SILT. MANY LEGS, AND HEAVY.'; }
     else if (!F.shells && near(B.shellsAt, 12)) { F.shells = true; ev.msg = 'A SHED SHELL, SPLIT DOWN THE BACK. EMPTY EGG SKINS ROUND IT.'; }
+    else if (!F.boot && B.relics && near(B.bootAt, 6)) { F.boot = true; ev.msg = 'AN OLD LEAD BOOT, HALF IN THE SILT. NOT YOURS.'; }
+    else if (!F.coupling && B.relics && near(B.couplingAt, 6)) { F.coupling = true; ev.msg = 'A HOSE COUPLING, SHEARED THROUGH. HIS AIR CAME THIS FAR.'; }
     else if (!F.clutch && L.dormant && B.seated && near(B.takeAt, 11)) { F.clutch = true; ev.msg = 'A CLUTCH UNDER HER. EGGS BY THE THOUSAND, AND EVERY ONE HAS AN EYE.'; }
   };
   return B;

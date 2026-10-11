@@ -15,7 +15,7 @@ Keys (exact):
 - Alt+3 SEABED, ZONE 0: home, standing on the zone-0 seabed 25 u (horizontal) off the pump's line, facing out, reserve full. Line raised only if it would not reach (never lowered).
 - Alt+4 HOSE END: the Alt+3 spot with survival.hose = his range from the pump + 8. The line hangs steeply there (seabed ~240 down), so walking straight out reaches the end after ~21 u of walking (measured: one yank at the hold); range, not walking distance, is what is 8 u.
 - Alt+5 SHARK: home, zone 0 mid-water above the Alt+3 spot (halfway between the floor and the zone top), the zone-0 shark set 40 u off, already INTERESTED and circling in; its wind-up and run come ~5 s later (measured: interest -> windup -> strike within ~7 s).
-- Alt+6 VELKATH: the CURRENT anchorage's zone 0 rebuilt (Brooder dormant, clutch whole), standing at the nest with an egg in reach ([E] TAKE THE EGG is live).
+- Alt+6 VELKATH: the CURRENT anchorage's zone 0 rebuilt (Brooder dormant, clutch whole), standing at the old harpoon in her near flank, facing it ([E] PULL THE HARPOON is live; on a revisit to an anchorage whose harpoon was pulled, the old wound in the same seam: [E] PRESS THE OLD WOUND). Never on the crack, at all four anchorages (fissure-and-harpoon Task 6).
 - Alt+7 ORUNE: current anchorage, zone 1 rebuilt (Orune dormant, ship's lamp back on the hoard), ~14 u off the lamp facing it; he walks in for [E].
 - Alt+8 MHOR: current anchorage, zone 2 rebuilt (furnace cold, Mhor absent), inside the furnace's feeding reach facing it, bitumen raised to 2 ([E] FEED THE FURNACE is live).
 - Alt+9 CHART: current anchorage, zone 0 rebuilt, on deck at the chart table facing it, the chart opened through the [E] consult path (pick an anchorage for the inked passage; Esc puts it down).

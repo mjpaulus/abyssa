@@ -73,6 +73,9 @@ let chartRec = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], endingSeen = false;
 // (per site, per wreck berth).
 let chartFound = [1, 1, 1, 0];
 let keepsakes = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+// (fissure-and-harpoon Task 6) per anchorage, Velkath's old harpoon has been pulled there: a revisit
+// finds the OLD WOUND in the seam instead (sleeper/harpoon.js; cfg.pulled, makeZoneSleeper)
+let pulledRec = [0, 0, 0, 0];
 let muteSaved = false;
 // A save is UNTRUSTED input: hand-edited, torn, or written by an older build. Every
 // field is coerced to its shape and clamped to its range; nothing in it can put the
@@ -85,6 +88,7 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
   if (Array.isArray(sv.rec)) chartRec = grid43(sv.rec);
   if (Array.isArray(sv.found)) chartFound = [1, 1, 1, sv.found[3] ? 1 : 0];   // authored sites always start found
   if (Array.isArray(sv.keeps)) keepsakes = grid43(sv.keeps).map(r => Array.isArray(r) ? r : [0, 0, 0]);
+  if (Array.isArray(sv.pulled)) pulledRec = [0, 1, 2, 3].map(i => sv.pulled[i] ? 1 : 0);
   endingSeen = !!sv.endingSeen;
   muteSaved = !!sv.mute;
   if (sv.site) setSite(sv.site);
@@ -96,14 +100,15 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
     survival.hasSpear = !!sv.tools.spear;
     if (sv.tools.spear) survival.spears = Math.max(survival.spears || 0, 2);
     survival.hasThruster = !!sv.tools.thruster;
+    survival.hasHarpoon = !!sv.tools.harpoon;     // the old iron from Velkath's side (Task 7: his blade)
     survival.reserve = survival.reserveCap = reserveCapacity();   // the upgraded tank arrives charged
   }
 } catch (e) { /* a torn save is a blank chart, never a crash */ } })();
 function saveChart() { try {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
-    site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes,
+    site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes, pulled: pulledRec,
     endingSeen, hose: survival.hose, mute: muteSaved,
-    tools: { sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster }
+    tools: { sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster, harpoon: !!survival.hasHarpoon }
   }));
 } catch (e) { /* private mode etc: play on, remember nothing */ } }
 // A tab closed mid-dive keeps its crafts: pagehide is the last reliable beat on every browser.
@@ -298,7 +303,7 @@ window.__slamLog = slamLog;   // inkBlind: Orune's ink smothering the lantern   
 let paused = false, pauseT = 0, blurred = false;
 let lanternHeld = false;   // predators.js STATE: the octopus has the lantern (see the snatch)
 const PEV_IDLE = { threat: 0, bite: 0, lightSteal: 0, inkPickup: 0, lanternStolen: false, msg: null };
-const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0 };
+const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, pulled: false };
 
 const $hud = document.getElementById('hud');
 const $msg = document.getElementById('msg');
@@ -352,20 +357,15 @@ function setBearing(el, tx, ty, tz, show) {
 // THE WARD TALLY (roadmap/fifth-ward.md). How many wards remain used to live only in a
 // 2.5 s line ("TWO WARDS DARK") at the bottom of a one-slot message queue, which any slam,
 // tear or lantern line replaced, so a diver could light a ward, be hit, and never learn
-// the count; and the brood rule held Velkath's last ward cold with nothing on screen to
-// say so. Now the sleeper's own bearing mark carries a row of pips, one per ward: hollow
+// the count. Now the sleeper's own bearing mark carries a row of pips, one per ward: hollow
 // = dark, gold = lit (a fresh one swells as it takes), amber = the ward a past calm
-// remembers, a dashed cold ring = the last ward while a clump of her clutch is out, with the
-// count and the reason beside them. Rebuilt only when the state changes (an integer key),
+// remembers, with the count beside them. (Velkath's cold-ring variant, the brood rule's
+// "CLUTCH ROBBED", went with the pry: fissure-and-harpoon Task 6.) Rebuilt only when the state changes (an integer key),
 // so the frame cost is a loop over at most five wards.
 const $tally = document.createElement('div');
 $tally.className = 'tally';
 $bm.lev.appendChild($tally);
 let tallyKey = -1, tallyLit = 0, tallyNoT = 0;
-function clutchOut(L) {
-  const B = L && L.brood;
-  return B ? B.out() : 0;          // the clump of her clutch Sal carries (brood.js)
-}
 function updateTally(dt) {
   if (tallyNoT > 0 && (tallyNoT -= dt) <= 0) $tally.classList.remove('refuse');
   const S = lev && lev.sigils;
@@ -377,16 +377,14 @@ function updateTally(dt) {
     if (g.lit && !g.mem) litMask |= 1 << i;
     if (!g.lit) dark++;
   }
-  const held = dark === 1 && clutchOut(lev) > 0;
-  key = key * 2 + (held ? 1 : 0);
   if (key === tallyKey) return;
   tallyKey = key;
-  // mem first, then lit in the order they took, then the dark ones (the cold one last)
+  // mem first, then lit in the order they took, then the dark ones
   let h = '';
   for (let i = 0; i < S.length; i++) if (S[i].mem) h += '<i class="mem"></i>';
   for (let i = 0; i < S.length; i++) if (S[i].lit && !S[i].mem) h += (litMask & ~tallyLit) & (1 << i) ? '<i class="on new"></i>' : '<i class="on"></i>';
-  for (let i = 0; i < S.length; i++) if (!S[i].lit) h += held ? '<i class="cold"></i>' : '<i></i>';
-  h += dark ? `<b>${dark} DARK${held ? ' · CLUTCH ROBBED' : ''}</b>` : '';
+  for (let i = 0; i < S.length; i++) if (!S[i].lit) h += '<i></i>';
+  h += dark ? `<b>${dark} DARK</b>` : '';
   tallyLit = litMask;
   $tally.innerHTML = h;
 }
@@ -412,6 +410,8 @@ function packDir(out) {
 }
 // No water to push on: the planks, the ladder, his helmet out of the sea.
 function packUsable() {
+  // (Task 6) not while both hands are on the harpoon in her side
+  if (lev && lev.rite && lev.rite.wrenching) return false;
   return !player.onDeck && !player.onLadder && player.pos.y < localSurfaceY() - 0.6;
 }
 // Said in silence, at most every 8 s; the first time it is said whatever else is up.
@@ -533,12 +533,13 @@ addEventListener('keydown', e => {
   }
   // E near a wreck's relic: take the tool
   if (e.code === 'KeyE' && state === 'play' && lev && lev.rite) {
-    // THE RITE'S TRIGGER (a clump of the Brooder's clutch, the Hoarder's lamp): the sleeper's own
-    // object decides what [E] does here, and hands back the line to show
+    // THE RITE'S TRIGGER (Velkath's harpoon or her old wound, the Hoarder's lamp, the furnace): the
+    // sleeper's own object decides what [E] does here, and hands back the line to show. The harpoon's
+    // press starts a 1.5 s commitment (sleeper/harpoon.js): its line is said when it comes free.
     const r = lev.rite.interact(player.pos);
     if (r) {
       if (r.took) chime(740, 2.2, 0.2, 'pickup');
-      else if (r.returned) { chime(494, 2.4, 0.2, 'ward'); if (!r.out) { dropMsg(refuseLive); refuseLive = null; } }
+      else if (r.pulled) chime(r.wound ? 330 : 220, 1.6, 0.18, 'cold');
       if (r.lamp) player.hasLamp = true;
       if (r.msg) showMsg(r.msg, 3);
       return;
@@ -682,6 +683,8 @@ function makeZoneSleeper(i, extra) {
     idle: row.idle || null, lair: row.lair || null, hard: row.hard || null
   } : undefined;
   if (calmedBefore(i)) over = Object.assign({}, over, { remembered: true });
+  // (Task 6) Velkath's harpoon already pulled at this anchorage: her rite starts at the old wound
+  if (i === 0 && pulledRec[currentSiteIndex()]) over = Object.assign({}, over, { pulled: true });
   return makeLeviathan(i, extra ? Object.assign({}, over, extra) : over);
 }
 // The remembered wake's one line ('SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.', per
@@ -851,6 +854,10 @@ const COUNT = ['NO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE'];
 function wardsLine() {
   const n = lev ? lev.sigils.length : 3;
   // a dormant sleeper (the Brooder asleep as a ridge) is not described: finding her is the point
+  // (Task 6) the Brooder's trigger is the iron in her side: the line points at what pins the ridge
+  if (lev && lev.dormant && lev.harpoon) return lev.harpoon.wound
+    ? `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND THE OLD WOUND IN THE RIDGE.`
+    : `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND WHAT PINS THE RIDGE.`;
   if (lev && lev.dormant) return `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND IT. LIGHT THEM.`;
   return `${COUNT[n] || n} IRON WARDS RIDE ITS HIDE. LIGHT THEM AND IT STILLS.`;
 }
@@ -988,7 +995,7 @@ window.__hit = () => ({ torn: +survival.torn.toFixed(2), refill: +o2RefillRate()
 window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zone ' + zone; };
 // Debug: sail without the fade (the fade is cosmetic; this is the state change), and
 // force the reseed directly. Kept for probes and for future harness runs.
-window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm,
+window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm, pulled: () => pulledRec, site: () => currentSiteIndex(),
   found: () => chartFound, keeps: () => keepsakes, fp: () => terrainFingerprint() };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
@@ -1791,6 +1798,8 @@ function updateCamera(dt, t, fwd) {
     diverLookCool = 0.25;
     diverLookAt(hhNearestLife(fwd) < Infinity ? hhTmp : null);
   }
+  // (Task 6) wrenching the harpoon free, his eyes are on the iron, every frame
+  if (lev && lev.rite && lev.rite.lookAt && lev.rite.wrenching) diverLookAt(lev.rite.lookAt);
   camLook.lerp(camAim, Math.min(1, 40 * dt));
   camera.lookAt(camLook);
   if (hk > 0) {
@@ -2247,6 +2256,9 @@ function update(dt, t) {
     // (fifth-ward) the sleeper telling him its rule ('THE FIRE BLINDS HIM...', 'THE WARDS OF
     // ORUNE ANSWER THE PING.') ranks with the ward lines: at prio 1 the counts starved it
     if (ev.msg) showMsg(ev.msg, 4, 2);
+    // (Task 6) the harpoon came free: this anchorage's iron is pulled (a revisit finds the wound), and
+    // the blade, if this was the first ever (harpoon.js set survival.hasHarpoon), is saved with the tools
+    if (ev.pulled) { pulledRec[currentSiteIndex()] = 1; saveChart(); chime(147, 2.2, 0.3, 'cold'); }
     // (fifth-ward) a held ward refused a touch: a dead iron knock, the pips shake, and the
     // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
     // (one knock per 0.6 s per sleeper: a strike pass sweeps several held wards at once)
@@ -2291,13 +2303,10 @@ function update(dt, t) {
       chime(ev.sigilLit, 2, 0.3, 'ward');
       shake = 0.6;
       // (fifth-ward) the count at priority 2: a slam or a tear in the same breath used to
-      // replace it in the queue's one pending slot. And when the one ward left is the one
-      // the brood rule will hold, say so NOW, before he swims to it.
+      // replace it in the queue's one pending slot.
       if (ev.remaining > 0) {
-        const held = ev.remaining === 1 && clutchOut(lev) > 0;
         dropMsg(countLive);   // only the newest count is news
-        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE YOU CARRY HER EGGS.'
-          : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);
+        showMsg(countLive = (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), 2.5, 2);
       }
     }
     if (ev.calmed) {

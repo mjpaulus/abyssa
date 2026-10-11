@@ -19,11 +19,12 @@ import { registerPaint } from '../../lib/paint.js';
 import { terrainH, terrainMeshes, fissurePatchSample } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard,
-  rememberWard, wardMemPose, wardsRecall, wardRefuse, MSG_BROOD_COLD
+  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
+  rememberWard, wardMemPose, wardsRecall
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
+import { makeHarpoon } from './harpoon.js';
 import { FISSURE, fissureDist, fissureLocal, APRON } from '../../world/fissureShape.js';
 import { velkathLair, R_OF_SIZE, HEAD_R } from './lair.js';
 import { emitDust } from '../../world/footfx.js';
@@ -162,7 +163,7 @@ const S = () => ({ x: 0, v: 0 });
 const nz = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
 const ease = x => x * x * (3 - 2 * x);
 const win = (x, a, b) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0 };
+const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0, pulled: false };
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
@@ -479,15 +480,10 @@ export function makeBrooder(idx, cfg) {
     L.sigils.push(w);
   }
   // RITUAL, REMEMBERED: the ward the old calm keeps is the FRONT socket, under her prow
-  // between the claws. Two reasons. (1) THE BROOD RULE must survive the memory: it is not
-  // a fixed ward but "the last DARK ward will not light while the clutch is robbed". Pre-counting
-  // a ward that is lit from the boot means it can never BE the last dark one, so the rule
-  // still lands on a ward the diver has to reach (the second flank ward): one touch, then
-  // the clutch decides. Had the memory been "the last ward lights itself", the brood rule
-  // would have been the free ward and the clutch would no longer matter. (2) The front ward
-  // is the one inside the lunge and the hammer cycle; the flank wards are the ones her
-  // sideways stalk offers. The memory spares the cruellest approach and keeps the walk
-  // round her, the stand and the clutch: the rite is shorter, not different.
+  // between the claws: it is the one inside the lunge and the hammer cycle; the flank wards
+  // are the ones her sideways stalk offers. The memory spares the cruellest approach and
+  // keeps the walk round her and the stand: the rite is shorter, not different. (The memory's
+  // rite starts at the OLD WOUND where the harpoon was: sleeper/harpoon.js, wound mode.)
   rememberWard(L, 0);
   L.memLine = 'SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.';
   makeEmbers(L, c.size);
@@ -495,8 +491,9 @@ export function makeBrooder(idx, cfg) {
   // THE RIDGE: she sleeps ALONGSIDE this zone's fissure (sleeper/lair.js: one flank to the crack, her near
   // flank to the open sand the diver comes over), a reef-crusted mound in the silt. Her clutch
   // bulges from under her rim, and a trail of tracks runs in from the open ground past a shed shell
-  // and spent egg skins. Prying a clump wakes her (brood.onTake); calmed, she walks back and
-  // settles over her clutch, which clears the way.
+  // and spent egg skins, past the last of another diver. The HARPOON in her near flank wakes her
+  // (sleeper/harpoon.js; on a revisit, the old wound); calmed, she walks back and settles over her
+  // clutch, which clears the way.
   {
     const { lip, out, sand } = velkathLair(idx, R, c);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
@@ -518,10 +515,13 @@ export function makeBrooder(idx, cfg) {
     const head = lip.clone().addScaledVector(sand, R * HEAD_R);
     const tIn = V3(-head.x, 0, -head.z).normalize().multiplyScalar(0.6).add(sand).normalize();
     L.brood = makeBrood(L, idx, head.clone().addScaledVector(tIn, 95));
-    L.rite = L.brood;                                 // the game's generic [E] / prompt hook
+    // the rite's trigger: the old harpoon (a revisit to an anchorage whose iron was pulled: the old
+    // wound, cfg.pulled from the chart record, game.js makeZoneSleeper)
+    L.harpoon = makeHarpoon(L, { wound: !!c.pulled });
+    L.rite = L.harpoon;                               // the game's generic [E] / prompt hook
     L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
-    L.brood.onTake = () => { if (L.dormant) wakeBrooder(L); };
+    L.harpoon.onWake = () => { if (L.dormant) wakeBrooder(L); };
   }
 
   // (playtest) her body's colliders now, for a spot search right after a (re)build, before her first update
@@ -533,11 +533,11 @@ export function makeBrooder(idx, cfg) {
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
-    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); if (L.brood) L.brood.seat(); fitSkirt(L); } }
+    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); seatRite(L); fitSkirt(L); } }
     return L.probe();
   };
   L.probe = () => ({
-    kind: 'brooder', dormant: !!L.dormant, clutchOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
+    kind: 'brooder', dormant: !!L.dormant, harpoon: L.harpoon ? { pulled: !!L.harpoon.pulled, wound: !!L.harpoon.wound, wrenching: !!L.harpoon.wrenching, pressed: !!L.harpoon.pressed } : null, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
     remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
     wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
@@ -561,13 +561,22 @@ export function makeBrooder(idx, cfg) {
   setLive(L);
   setWardTargets(-1, null);
   poseAll(L, 0, null);
-  if (L.brood) L.brood.seat();                       // the clutch rests on her bed (brood.js): before the drift, which leaves its side open
+  seatRite(L);                                       // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
   buildSkirt(L);
-  if (SC) installSculpt(L, SC);
-  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.brood && L.dormant) { L.brood.seat(); fitSkirt(L); } } });
+  // (the harpoon seats in her DRAWN shell: with the sculpt already here it is swapped in after the first
+  // seat, so the iron is re-seated on it and the drift re-opened at its bearing)
+  if (SC) { installSculpt(L, SC); if (L.harpoon && L.dormant) { L.harpoon.seat(); fitSkirt(L); } }
+  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.dormant) { seatRite(L); fitSkirt(L); } } });
   const pd = L.onDispose;
   L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
   return L;
+}
+
+// The clutch on her bed and the harpoon in her drawn flank, in her dormant pose (the harpoon also
+// re-keeps its shared model after a sculpt install replaced L.keepGeo).
+function seatRite(L) {
+  if (L.brood) L.brood.seat();
+  if (L.harpoon) { L.harpoon.keep(); if (!L.harpoon.pulled || L.harpoon.wound) L.harpoon.seat(); }
 }
 
 // ---- THE SILT DRIFT (polish-followups) ----
@@ -648,11 +657,22 @@ function fitSkirt(L) {
   // THE CLUTCH'S SIDE (brooder-clutch): her fanning keeps the silt off the eggs that bulge out
   // from under her rim there, so the drift opens over that arc (brood.js seat picks it)
   const nB = L.brood && L.brood.seated ? L.brood.bear : null, nW = L.brood ? L.brood.notch : 0;
+  // (fissure-and-harpoon Task 6) and at the harpoon's seam: the old diver dug in to stand there, and
+  // the silt never banked over the iron (nor over the wound it left); a narrow gap
+  const hB = L.harpoon && L.harpoon.seated ? L.harpoon.bear : null, hW = 0.16;
   const notchK = j => {
-    if (nB === null) return 0;
-    let d = j / SK_COLS * Math.PI * 2 - nB;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    return 1 - smooth(Math.abs(d), nW * 0.55, nW);
+    let k = 0;
+    if (nB !== null) {
+      let d = j / SK_COLS * Math.PI * 2 - nB;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      k = 1 - smooth(Math.abs(d), nW * 0.55, nW);
+    }
+    if (hB !== null) {
+      let d = j / SK_COLS * Math.PI * 2 - hB;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      k = Math.max(k, 1 - smooth(Math.abs(d), hW * 0.45, hW));
+    }
+    return k;
   };
   for (let j = 0; j < SK_COLS; j++) {
     const th = j / SK_COLS * Math.PI * 2, rr = G.rimR(th), c = Math.cos(th), sn = Math.sin(th);
@@ -816,7 +836,7 @@ function installSculpt(L, A) {
   if (!g.body || !A.maps.body || !A.maps.limbs || L.sculpted) return;
   L.sculpted = true;
   L.keepTex = new Set([...L.keepTex, ...assetTextures(A), microTexture()]);   // the micro layer is shared by every creature
-  L.keepGeo = assetGeos(A);
+  L.keepGeo = new Set([...(L.keepGeo || []), ...assetGeos(A)]);   // (union: the harpoon keeps its shared model here too)
   const P = L.parts, body = L.body;
   // the fused shell replaces the scute shell, the belly, the barnacles and the shingles
   const sets = (A.meta && A.meta.sets) || {};
@@ -1509,7 +1529,7 @@ function publishCols(L) {
 }
 
 function resetEv() {
-  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0;
+  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0; EV.pulled = false;
   return EV;
 }
 // a ground shock at world x,z of strength k (0..1): the game's camera shake, by distance
@@ -1577,6 +1597,7 @@ export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
   if (L.woke) { L.woke = false; ev.woke = true; L.bY.v -= L.R * 0.25; }    // the first jolt: she tenses into the silt
+  if (L.harpoon) L.harpoon.update(dt, t, player, ev);
   if (L.brood) {
     L.brood.update(dt, player, ev);
     if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = 'THE RIDGE IS WARM UNDER YOUR HAND.'; }
@@ -1701,10 +1722,10 @@ export function updateBrooder(L, dt, t, player) {
   // at it was never even struck. Now, once she is up, she COMES FOR HIM: her body
   // moves in WORLD space toward what she is after (Sal, or blind, the spot she lost him),
   // crab-fashion, independent of where her face has got to; she stalks sideways as she
-  // closes, plants for every blow and lunges into it. While he carries a clump of her clutch she is
-  // relentless; unburdened she keeps him off her ground (HUNT.guard round her lair) and lets
-  // him go past it.
-  const thief = !!(L.brood && L.brood.held >= 0);
+  // closes, plants for every blow and lunges into it. She keeps him off her ground (HUNT.guard round
+  // her lair) and lets him go past it. (fissure-and-harpoon Task 6: the clutch is never carried off now,
+  // so the relentless thief chase, HUNT.chase out to 400 u, is retired; she hunts whoever pulled the
+  // harpoon at the unburdened speeds.)
   const hunt = !L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.5;
   const tx = L.aim.x - L.pos.x, tz = L.aim.z - L.pos.z, dh = Math.hypot(tx, tz) || 1e-3;
   L.huntD = dh;
@@ -1724,10 +1745,9 @@ export function updateBrooder(L, dt, t, player) {
     const under = (Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY)
       || (L.brood && player.pos.y < L.bodyY && L.brood.onBed(player.pos));
     if (Math.abs(dA) < 0.12 && !under) { L.homeTurn = false; L.standTarget = 0; }
-  } else if (hunt && L._pdT < (thief ? 400 : 90)) {
+  } else if (hunt && L._pdT < 90) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
-    // given up, she sweeps her front slowly across the cloud, searching. A thief she never
-    // stops facing, however far he gets.
+    // given up, she sweeps her front slowly across the cloud, searching.
     // (under her, the bearing to him swings wildly with every step he takes: she holds)
     want = L.blindT < SIGHT_GIVEUP ? (dh > 0.5 * R ? Math.atan2(tx, tz) : L.yaw)
       : L.searchYaw + 0.7 * Math.sin((L.blindT - SIGHT_GIVEUP) * 0.45);
@@ -1736,14 +1756,14 @@ export function updateBrooder(L, dt, t, player) {
   let vC = 0, cAng = Math.atan2(tx, tz);
   if (hunt && L.standE > 0.9 && want !== null) {
     const N = L.lairPos || L.pos;                       // her ground: the lair she sleeps on (not the clutch, which may move)
-    const terr = thief ? 1 : 1 - smooth(Math.hypot(L.aim.x - N.x, L.aim.z - N.z), HUNT.guard * 0.75 * R, HUNT.guard * R);
+    const terr = 1 - smooth(Math.hypot(L.aim.x - N.x, L.aim.z - N.z), HUNT.guard * 0.75 * R, HUNT.guard * R);
     const closeK = smooth(dh, HUNT.hold * R, (HUNT.hold + 0.6) * R) * terr * (L.blindT >= SIGHT_GIVEUP ? 0 : 1);
     // planted for the blow: from the fall to the end of the recoil
     const planted = L.threatE > 0.3 && (L.hamPh >= PH_SLAM0 || L.impT < 0.45);
-    vC = planted ? 0 : L.speed * (thief ? HUNT.chase : HUNT.stalk) * closeK * (1 - 0.45 * L.threatE);
+    vC = planted ? 0 : L.speed * HUNT.stalk * closeK * (1 - 0.45 * L.threatE);
   }
   // the hunting voice (audio/creatures.js): up while she comes for him, down when she stops
-  L.huntK = (L.huntK || 0) + ((hunt && (vC > 0.3 || thief) ? (thief ? 1 : 0.6) : 0) - (L.huntK || 0)) * Math.min(1, 1.2 * dt);
+  L.huntK = (L.huntK || 0) + ((hunt && vC > 0.3 ? 0.6 : 0) - (L.huntK || 0)) * Math.min(1, 1.2 * dt);
   const goal = want !== null && speed > 0 ? L.walkTo : vC > 0.3 ? L.aim : null;
   if (goal) {
     // round the rocks and hulls ahead; no headway for 3 s (a pocket between two of them)
@@ -1777,11 +1797,11 @@ export function updateBrooder(L, dt, t, player) {
   vx += Math.sin(cAng) * vC; vz += Math.cos(cAng) * vC;
   // STALK: awake and not yet striking, she circles the diver crab-fashion — sideways,
   // face locked on him — and changes direction every few seconds. (Sideways across the line
-  // to him, not across her own heading, so a thief behind her is not circled away from.)
+  // to him, not across her own heading, so a diver behind her is not circled away from.)
   if (hunt && L.standE > 0.9 && L.threatE < 0.5 && L.seen && dh > L.R * 1.4 && dh < L.R * 6) {
     L.strafeT = (L.strafeT || 0) - dt;
     if (L.strafeT <= 0) { L.strafeT = 4 + Math.random() * 4; L.strafeDir = Math.random() < 0.5 ? -1 : 1; }
-    const ss = L.speed * 0.22 * L.strafeDir * (thief ? 0.55 : 1);
+    const ss = L.speed * 0.22 * L.strafeDir;
     vx += tz / dh * ss; vz -= tx / dh * ss;
   }
   L.velPrev.copy(L.vel);
@@ -1965,19 +1985,9 @@ export function updateBrooder(L, dt, t, player) {
         wardIdle(g, dt, haloK);
         // buried wards can sit within reach of her face through the sand: only a
         // standing Brooder offers them
-        if (L.standE > 0.6) {
-          // THE BROOD RULE: her last ward will not light while a clump of her clutch is
-          // out; pressed back into her, it lights on its own.
-          let dark = 0;
-          for (const q of L.sigils) if (!q.lit) dark++;
-          const last = dark === 1;
-          if (last && L.brood && L.brood.out() > 0) {
-            // (fifth-ward) every touch answers: a cold spark, a dead knock, the line (common.js)
-            wardRefuse(L, g, player, ev, MSG_BROOD_COLD);
-          } else if (last && L.brood && L.sigils.length > 1 && !ev.sigilLit) {
-            lightWard(L, g, ev);
-          } else wardTouch(L, i, g, player, ev);
-        }
+        // (fissure-and-harpoon Task 6: the brood rule, her last ward cold while a clump of her clutch
+        // was out, is gone with the pry; every ward is simply lit by his touch)
+        if (L.standE > 0.6) wardTouch(L, i, g, player, ev);
       }
     }
     let rem = 0;

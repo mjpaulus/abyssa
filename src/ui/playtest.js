@@ -26,7 +26,6 @@ import { placeOnDeck } from '../player.js';
 import { riftPos, zoneTop } from '../config.js';
 import { clearOfCrack } from '../world/fissureShape.js';
 import { currentSiteIndex, siteAt } from '../world/site.js';
-import { bodyBlocked, inClutch } from '../entities/sleeper/bodyCols.js';
 
 const EYE_H = 1.35;                 // player.js: his eye over his boots
 const TAU = Math.PI * 2;
@@ -312,39 +311,16 @@ function shark(yaw) {
   return 'ONE CIRCLES IN FROM ' + SHARK_D + ' U. ITS RUN COMES IN ~5 S. SWIM, BURST, OR INK';
 }
 
-// The Brooder's clutch (brooder-clutch): stand him where it bulges out from under her rim,
-// in reach of it (the rite's own test, brood.canTake, says so), clear of her body (the
-// collider the push-out uses), facing it.
+// Velkath's harpoon (fissure-and-harpoon Task 6): stand him at the rite's own spot, L.harpoon.anchor (on
+// clear ground off her near flank, never on the crack, out of her body and her clutch: harpoon.js seat
+// chose it), facing the iron (or, on a revisit, the old wound in the same seam).
 function velkath() {
-  const L = H.lev, B = L && L.brood;
-  if (!B || !B.seated) return 'NO CLUTCH HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
-  const t = B.takeAt, bx = L.pos.x, bz = L.pos.z;
-  // (Task 5) the zone was just (re)entered: her colliders are cleared until her first update, so the
-  // blocked test below passed everywhere and a spot inside a leg was pushed out of reach on the first frame
-  if (L.publishCols) L.publishCols();
-  const out = yawTo(t.x - bx, t.z - bz);
-  const probe = player.pos.clone();
-  const ok = (x, z) => {
-    if (!clearOfCrack(x, z, 0)) return false;          // never on the crack's lip or its jam
-    const y = terrainH(x, z, 0);
-    if (terrainNormal(x, z, 0).y < 0.6) return false;
-    probe.set(x, y + EYE_H, z);
-    if (!B.canTake(probe)) return false;
-    for (const h of [0.45, 1.0, 1.6]) if (bodyBlocked(x, y + h, z, 0.45) || inClutch(x, y + h, z, 0.45) > 0) return false;   // (the soft-solid mass pushes him out of reach)
-    return true;
-  };
-  let s = null;
-  for (const r of [2.0, 2.6, 1.4, 3.2, 3.8, 1.0, 4.4]) {
-    for (let k = 0; k < 24 && !s; k++) {
-      const a = out + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * (TAU / 24);
-      const x = t.x + Math.sin(a) * r, z = t.z + Math.cos(a) * r;
-      if (ok(x, z)) s = { x, z };
-    }
-    if (s) break;
-  }
-  if (!s) s = { x: t.x + Math.sin(out) * 2.5, z: t.z + Math.cos(out) * 2.5 };
-  standAt(s.x, s.z, 0, yawTo(t.x - s.x, t.z - s.z), -0.3);
-  return 'AT HER CLUTCH, IN REACH. [E] PRIES A CLUMP AND SHE WAKES';
+  const L = H.lev, Hp = L && L.harpoon;
+  if (!Hp || !Hp.seated) return 'NO HARPOON HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
+  const a = Hp.anchor, t = Hp.seamWorld();
+  standAt(a.x, a.z, 0, yawTo(t.x - a.x, t.z - a.z), -0.15);
+  return Hp.wound ? 'AT THE OLD WOUND IN HER SIDE. [E] PRESSES IT AND SHE WAKES (THE REMEMBERED RITE)'
+    : 'AT THE HARPOON IN HER SIDE. [E] PULLS IT FREE AND SHE WAKES';
 }
 
 // Orune's hoard: stand him ~14 u off the ship's lamp, on the open side away from her body,

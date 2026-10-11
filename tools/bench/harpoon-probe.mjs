@@ -25,7 +25,7 @@ const AT = `(async () => {
   const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), BC = await import('/src/entities/sleeper/bodyCols.js');
   const L = window.lev, P = window.player, H = L && L.harpoon;
   if (!H) return { err: 'no harpoon (' + (L ? L.kind : 'no sleeper') + ')' };
-  const hp = H.tipWorld ? H.tipWorld() : null, a = H.anchor;
+  const hp = H.seamWorld ? H.seamWorld() : null, a = H.anchor;
   const fl = T.terrainH(a.x, a.z, 0);
   let blocked = false; L.publishCols && L.publishCols();
   for (const h of [0.45, 1.0, 1.6]) if (BC.bodyBlocked(a.x, fl + h, a.z, 0.45)) blocked = true;
@@ -33,6 +33,7 @@ const AT = `(async () => {
   return { prompt: L.rite ? L.rite.prompt(P.pos) : null, dSal: +Math.hypot(P.pos.x - a.x, P.pos.z - a.z).toFixed(2),
     anchorFd: +S.fissureDist(a.x, a.z, 0).toFixed(1), seamFd: hp ? +S.fissureDist(hp.x, hp.z, 0).toFixed(1) : null,
     seamUp: hp ? +(hp.y - T.terrainH(hp.x, hp.z, 0)).toFixed(2) : null, seamUpSal: hp ? +(hp.y - fl).toFixed(2) : null, sandSide: side == null ? null : +side.toFixed(1),
+    gripUp: H.gripWorld ? +(H.gripWorld(new (a.constructor)()).y - fl).toFixed(2) : null, seatOk: !!H.seatOk,
     blocked, wound: !!H.wound, pulled: !!H.pulled, dormant: !!L.dormant, site: window.__chart.site ? window.__chart.site() : null };
 })()`;
 if (mode === 'routes') {
@@ -46,7 +47,9 @@ if (mode === 'routes') {
     if (r.anchorFd < 6) fail.push(`site ${site}: Sal stands ${r.anchorFd} u off the crack`);
     if (r.seamFd < 6) fail.push(`site ${site}: the harpoon sits ${r.seamFd} u off the crack`);
     if (!(r.sandSide > 0)) fail.push(`site ${site}: the harpoon is not on her near (sand) flank (${r.sandSide})`);
-    if (!(r.seamUpSal > 0.5 && r.seamUpSal < 2.4)) fail.push(`site ${site}: the harpoon's grip is ${r.seamUpSal} u over his boots (standing height 0.5-2.4)`);
+    if (!(r.seamUpSal > 0.5 && r.seamUpSal < 2.8)) fail.push(`site ${site}: the seam is ${r.seamUpSal} u over his boots (0.5-2.8)`);
+    if (!(r.gripUp > 0.85 && r.gripUp < 1.95)) fail.push(`site ${site}: the harpoon's grip is ${r.gripUp} u over his boots (his hands: 0.85-1.95)`);
+    if (!r.seatOk) fail.push(`site ${site}: no seam on her flank qualified (fallback seat)`);
     if (r.blocked) fail.push(`site ${site}: the anchor is inside her body`);
     if (r.dSal > 0.6) fail.push(`site ${site}: Alt+6 left him ${r.dSal} u off the anchor`);
   }
