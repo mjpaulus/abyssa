@@ -2218,10 +2218,14 @@ const _ikM = new THREE.Matrix4();
 // point forward past his helmet. In the burst the iron swings out and trails past the fist instead, the
 // head back along his wake. (fix round 1) Splayed both ways the turn is ~105 deg, not ~150, and it is
 // SPRUNG (bwS: the water swings it round a beat late and lets it settle), not a hand-frame flip.
-const BURST_DIR = V3(0.90, -1, -0.12).normalize();
-// THE DRAW's WAYPOINT: carry -> jab (and back) swings the head out over his left hip, never across the
-// breastplate (the straight slerp passed the head through the corselet for ~6 frames each way)
-const MID_DIR = V3(1, 0.30, 0.45).normalize();
+const BURST_DIR = V3(0.60, -1, -0.12).normalize();
+// ...and the fist slides to the butt end for it (the wash takes the iron; held at HG_L the butt, opposite
+// the trailing head, pointed into his hip)
+const BURST_HG = -0.92;
+// THE DRAW's WAYPOINT (world, per frame): carry -> jab (and back) goes through the iron held FORWARD AND UP
+// from the fist, so the head turns over in the fist's own fore-and-aft plane (never across the breastplate:
+// the straight slerp passed it through the corselet for ~6 frames each way) and the butt, opposite it, goes
+// back and down outside his hip (an outboard waypoint swung the butt into the thigh).
 const carryQ = new THREE.Quaternion(), carryP = V3(), burstQ = new THREE.Quaternion(), burstP = V3();
 const midQ = new THREE.Quaternion(), midP = V3();
 const _cQ = new THREE.Quaternion(), _cP = V3();
@@ -2230,14 +2234,17 @@ const bwS = { x: 0, v: 0 };
 // down the outside of his upper arm) and the ladder (both hands on the rungs; the iron hangs from his left
 // wrist by its butt, as on a lanyard). LADDER_HG: the model z that hangs at the wrist.
 const LADDER_HG = -0.94;
+// the valve check: the fist slides to the butt end and the iron hangs outboard of his raised arm (held at
+// HG_L the butt stood up into the bonnet)
+const VALVE_HG = -1.00;
 const _plQ = new THREE.Quaternion(), _plP = V3(), _plD = V3(), _plL = V3(), _plG = V3();
 const _puff = V3();
 {
   // model +Z (toward the head) along the carry; model +Y (the leaf's flat, the line stub hangs -Y) outboard
-  for (const [D, Q, P] of [[CARRY_DIR, carryQ, carryP], [BURST_DIR, burstQ, burstP], [MID_DIR, midQ, midP]]) {
+  for (const [D, Q, P, hg] of [[CARRY_DIR, carryQ, carryP, HG_L], [BURST_DIR, burstQ, burstP, BURST_HG]]) {
     _ikZ.copy(D); _ikY.set(1, 0, 0); _ikX.crossVectors(_ikY, _ikZ).normalize(); _ikY.crossVectors(_ikZ, _ikX);
     _ikM.makeBasis(_ikX, _ikY, _ikZ); Q.setFromRotationMatrix(_ikM);
-    P.copy(PALM_L).addScaledVector(D, -HG_L);
+    P.copy(PALM_L).addScaledVector(D, -hg);
   }
 }
 // Two-bone solve in the spine's frame: places arm A's palm point (`palm`, hand frame, wrist straight) at
@@ -4463,13 +4470,13 @@ export function updateDiver(dt, t, player) {
       }
       if (vW > 1e-3) {
         _plG.copy(PALM_L).applyMatrix4(AL.end.matrixWorld);
-        _plD.set(0, -1, 0).addScaledVector(_plL, 0.30).normalize();
-        plumbLocal(AL.end, _ikQf, _plG, _plD, HG_L, _plL, _plQ, _plP);
+        _plD.set(0, -1, 0).addScaledVector(_plL, 0.55).normalize();
+        plumbLocal(AL.end, _ikQf, _plG, _plD, VALVE_HG, _plL, _plQ, _plP);
         _cP.lerp(_plP, vW); _cQ.slerp(_plQ, vW);
       }
       if (lW > 1e-3) {
-        _plG.setFromMatrixPosition(AL.end.matrixWorld).addScaledVector(_plL, 0.10);
-        _plD.set(0, -1, 0).addScaledVector(_plL, 0.06).normalize();
+        _plG.setFromMatrixPosition(AL.end.matrixWorld).addScaledVector(_plL, 0.30);
+        _plD.set(0, -1, 0).addScaledVector(_plL, 0.25).normalize();
         plumbLocal(AL.end, _ikQf, _plG, _plD, LADDER_HG, _plL, _plQ, _plP);
         _cP.lerp(_plP, lW); _cQ.slerp(_plQ, lW);
       }
@@ -4481,6 +4488,10 @@ export function updateDiver(dt, t, player) {
         _ikY.set(0, 1, 0); _ikX.crossVectors(_ikY, _ikZ).normalize(); _ikY.crossVectors(_ikZ, _ikX);
         _ikM.makeBasis(_ikX, _ikY, _ikZ); _ikQ.setFromRotationMatrix(_ikM).premultiply(_ikQf);
         AL.end.worldToLocal(_ikP);
+        // the waypoint: forward and up from the fist (plumbLocal reuses _ikX/_ikY/_ikZ/_ikM: after the jab's)
+        _plG.copy(PALM_L).applyMatrix4(AL.end.matrixWorld);
+        _plD.set(Math.sin(yawF) * 0.75, 0.66, Math.cos(yawF) * 0.75).normalize();
+        plumbLocal(AL.end, _ikQf, _plG, _plD, HG_L, _plL, midQ, midP);
         // carry -> out over the hip -> the jab (and back the same way)
         if (wP < 0.5) {
           const u = wP * 2;
