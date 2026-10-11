@@ -26,7 +26,7 @@ import { placeOnDeck } from '../player.js';
 import { riftPos, zoneTop } from '../config.js';
 import { clearOfCrack } from '../world/fissureShape.js';
 import { currentSiteIndex, siteAt } from '../world/site.js';
-import { bodyBlocked } from '../entities/sleeper/bodyCols.js';
+import { bodyBlocked, inClutch } from '../entities/sleeper/bodyCols.js';
 
 const EYE_H = 1.35;                 // player.js: his eye over his boots
 const TAU = Math.PI * 2;
@@ -319,6 +319,9 @@ function velkath() {
   const L = H.lev, B = L && L.brood;
   if (!B || !B.seated) return 'NO CLUTCH HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
   const t = B.takeAt, bx = L.pos.x, bz = L.pos.z;
+  // (Task 5) the zone was just (re)entered: her colliders are cleared until her first update, so the
+  // blocked test below passed everywhere and a spot inside a leg was pushed out of reach on the first frame
+  if (L.publishCols) L.publishCols();
   const out = yawTo(t.x - bx, t.z - bz);
   const probe = player.pos.clone();
   const ok = (x, z) => {
@@ -327,7 +330,7 @@ function velkath() {
     if (terrainNormal(x, z, 0).y < 0.6) return false;
     probe.set(x, y + EYE_H, z);
     if (!B.canTake(probe)) return false;
-    for (const h of [0.45, 1.0, 1.6]) if (bodyBlocked(x, y + h, z, 0.45)) return false;
+    for (const h of [0.45, 1.0, 1.6]) if (bodyBlocked(x, y + h, z, 0.45) || inClutch(x, y + h, z, 0.45) > 0) return false;   // (the soft-solid mass pushes him out of reach)
     return true;
   };
   let s = null;

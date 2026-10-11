@@ -43,7 +43,7 @@ const PROBE = `(() => {
     st.dryWas = dry;
     const fl = terrainH(P.pos.x, P.pos.z, 0);
     const lairD = Math.hypot(P.pos.x - L.lairPos.x, P.pos.z - L.lairPos.z);
-    const inB = fl < st.lairFloor - 15 && lairD < 90;
+    const inB = window.__fd ? window.__fd(P.pos.x, P.pos.z, 0) < 0 : fl < st.lairFloor - 15 && lairD < 90;   // (fissure Task 5: the 'bowl' is the crack now)
     if (inB && !st.inBowl) { st.bowlN++; st.bowlAt.push(+t.toFixed(1)); }
     st.inBowl = inB;
     const agl = P.pos.y - 1.35 - fl;
@@ -110,6 +110,7 @@ await c.ev(`(window.__bench.step(60), 1)`);
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
+await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); window.__fd = S.fissureDist; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);

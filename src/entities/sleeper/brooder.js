@@ -523,6 +523,8 @@ export function makeBrooder(idx, cfg) {
     L.brood.onTake = () => { if (L.dormant) wakeBrooder(L); };
   }
 
+  // (playtest) her body's colliders now, for a spot search right after a (re)build, before her first update
+  L.publishCols = () => { L.grp.updateMatrixWorld(true); publishCols(L); };
   L.cmd = (name, arg) => {
     if (name === 'wake') { if (L.dormant) wakeBrooder(L); }
     else if (name === 'stand') L.standTarget = 1;
