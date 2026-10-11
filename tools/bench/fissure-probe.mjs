@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -876,6 +876,66 @@ if (mode === 'shape') {
     if (z.ab.mean > z.aa.mean * 1.5 + 0.02 || z.ab.bigPct > z.aa.bigPct * 1.5 + 0.01) fail.push(`crack ${z.zi}: the light shows from below ` + JSON.stringify(z));
   }
   console.log(JSON.stringify(r));
+} else if (mode === 'walls-inside') {
+  // THE THROAT WALLS FROM INSIDE (Task 5b; page half: tools/bench/walls-inside.page.js).
+  // (1) THE BOUND, every site x zone: every drawn crack surface (the patch inside the lip; the throat
+  //     wall where there is one) against the heightfield Sal stands on: it may lie back inside the
+  //     collision rock (by at most WALL_RECESS) but never stand out into the water (lens, body) by more
+  //     than WALL_PROTRUDE; rays from the throat's axis to both walls find no gap (a drawn miss, or a
+  //     drawn hit far behind the rock) and nothing drawn in front of the rock.
+  // (2) THE LOOK, each zone open at home, settled, from inside the throat looking up along it: the
+  //     FACET energy of the drawn rock's view-space normals (the sawtooth teeth flip the normal every
+  //     half unit) under WALL_FACET, and the settled frame keeps its detail (local contrast over
+  //     WALL_DETAIL: a smooth dark wall does not pass). With the A/B (terrain.js fissureWallAB) the old
+  //     patch walls are measured too and the new must beat them by half.
+  const fs = await import('node:fs');
+  const WALL_PROTRUDE = 0.3, WALL_RECESS = 1.3, WALL_GAP = 2.2, WALL_FACET = 1.0, WALL_DETAIL = 0.035;
+  const bound = await c.ev(`(async () => {
+    const W = await import('/tools/bench/walls-inside.page.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const out = [];
+    for (const site of [0, 1, 2]) {
+      if (site) window.__chart.arrive(site);
+      for (let zi = 0; zi < 3; zi++) out.push(Object.assign({ site, zi }, W.bound(zi), { rays: W.rays(zi) }));
+    }
+    window.__chart.arrive(0);
+    return out; })()`);
+  for (const b of bound) {
+    for (const k of ['patch', 'wall']) {
+      const s = b[k]; if (!s) continue;
+      if (s.protrudeMax > WALL_PROTRUDE) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock stands ${s.protrudeMax} u out into the water (bound ${WALL_PROTRUDE}) at ${s.worstOut}`);
+      if (s.recessMax > WALL_RECESS) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock lies ${s.recessMax} u back in the rock (bound ${WALL_RECESS}) at ${s.worstIn}`);
+    }
+    const r = b.rays;
+    if (r.gaps) fail.push(`site ${b.site} zone ${b.zi}: ${r.gaps}/${r.rays} rays see a gap (drawn hit > ${WALL_GAP} u behind the rock, or none) ` + JSON.stringify(r.bad));
+    if (r.hitInFrontMax > WALL_PROTRUDE + 0.05) fail.push(`site ${b.site} zone ${b.zi}: a ray hits drawn rock ${r.hitInFrontMax} u in front of the rock`);
+  }
+  console.log(JSON.stringify(bound));
+  const look = await c.ev(`(async () => {
+    const W = await import('/tools/bench/walls-inside.page.js'), T = await import('/src/world/terrain.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.weather.set(1, 0);
+    window.__bench.size(1280, 720);
+    const out = [];
+    for (let zi = 0; zi < 3; zi++) {
+      window.gotoZone(zi); window.lev.calmed = true; window.__fissure.setOpen(zi, 1);
+      const row = { zi };
+      const one = async tag => { const r = await W.look(zi); if (r.err) return r;
+        row['png_' + tag] = window.__bench.png(r.cap, 0.5); delete r.cap; delete r.normals; return r; };
+      row.now = await one('now');
+      if (T.fissureWallAB) { T.fissureWallAB(false); try { row.old = await one('old'); } finally { T.fissureWallAB(true); } }
+      out.push(row);
+    }
+    window.__bench.size();
+    return out; })()`);
+  for (const z of look) {
+    for (const k of ['now', 'old']) if (z['png_' + k]) { fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t5b-probe-z${z.zi}-${k}.png`, Buffer.from(z['png_' + k].split(',')[1], 'base64')); delete z['png_' + k]; }
+    const n = z.now;
+    if (n.err) { fail.push(`zone ${z.zi}: ${n.err}`); continue; }
+    if (n.facet > WALL_FACET) fail.push(`zone ${z.zi}: the walls are faceted (teeth) from inside: facet energy ${n.facet} > ${WALL_FACET}`);
+    if (n.localContrast < WALL_DETAIL) fail.push(`zone ${z.zi}: the walls lost their detail: local contrast ${n.localContrast} < ${WALL_DETAIL}`);
+    if (z.old && !(n.facet < 0.5 * z.old.facet)) fail.push(`zone ${z.zi}: no better than the old patch walls (facet ${n.facet} vs ${z.old.facet})`);
+  }
+  console.log(JSON.stringify(look));
 } else if (mode === 'clearance') {
   // EVERYTHING CLEARS THE CRACK (spec §1 Lairs, Task 5). At every anchorage (the hidden shelf too),
   // in every zone: every collider (rocks, props, wrecks, vents), every placed instance (flora,
