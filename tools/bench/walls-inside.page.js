@@ -582,7 +582,7 @@ export async function standLens(zi, o) {
 // zone BELOW (zi + 1: there is no upward zone change, he stays in it to the lip) 10 u under zone zi's throat
 // floor at station u, dv off the slot's middle (beside it, under the wall), facing yaw off +u; 0.5 s settled,
 // Space held 1.2 s (the burst), then the dress held full, until he is 4 u over the lip (or 14 s). Every frame
-// with his chest over (floor - 6): the lens's speed RELATIVE TO HIM (u/s; overall, and with the shaft lens on: it engages here),
+// with his chest over (floor - 6): the lens's speed RELATIVE TO HIM (u/s; and on every frame with the shaft lens on: it engages here),
 // the lens in the old crack's rock (inside its outline, under its heightfield, with him over it), and him HIDDEN
 // (under the old floor at his column, the lens over it at its own, inside the outline); inside the
 // outline: his lateral step a frame and the shaft hold's own largest step.
@@ -613,12 +613,14 @@ export async function riseShaft(zi, o = {}) {
       const p = window.player.pos, c = cam.position;
       if (S.fissureDist(p.x, p.z, zi) < 0) { const st = Math.hypot(p.x - pPrev.x, p.z - pPrev.z); if (st > stepMax) stepMax = st; n++; }
       const on = !!(window.__throatCam && window.__throatCam.state().on);
+      // the shaft lens on (or letting go this frame): EVERY such frame, inside the window or not (it can come on
+      // under floor - 6 beside the slot)
+      if (on || wasOn) { const rv = Math.hypot((c.x - cPrev.x) - (p.x - pPrev.x), (c.y - cPrev.y) - (p.y - pPrev.y), (c.z - cPrev.z) - (p.z - pPrev.z)) / fdt; if (rv > relOn) relOn = rv; }
       if (p.y - 0.5 > floorY - 6) {
         m++;
         const rv = Math.hypot((c.x - cPrev.x) - (p.x - pPrev.x), (c.y - cPrev.y) - (p.y - pPrev.y), (c.z - cPrev.z) - (p.z - pPrev.z)) / fdt;
         if (rv > relMax) { relMax = rv; relAt = [f, +(p.y - floorY).toFixed(1)]; }
         if (rv > 60) over60++;
-        if ((on || wasOn) && rv > relOn) relOn = rv;   // the shaft lens on (or letting go this frame)
         if (S.fissureDist(c.x, c.z, zi) < 0 && c.y < T.terrainUnderH(c.x, c.z, zi) - 0.1 && p.y - 0.5 > T.terrainUnderH(p.x, p.z, zi)) {
           hfIn++; if (hfAt.length < 4) hfAt.push([f, +(T.terrainUnderH(c.x, c.z, zi) - c.y).toFixed(2), +(p.y - floorY).toFixed(1)]); }
         // hidden: he is under the old floor at his column, the lens over it at its own (the floor between them)

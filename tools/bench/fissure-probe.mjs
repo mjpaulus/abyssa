@@ -18,7 +18,7 @@ const fail = [];
 // play has it (walls-inside.page.js riseShaft). 1/60: zones 0/1, u -4 / 9, under the slot and beside it (dv
 // -1.5 / 0 / +1.5), facing along and across; 1/30: the same under the slot both ways and beside it along (40).
 // GATES (every rise, his chest within 6 u of the old floor and up): the lens's speed relative to him <= RISE_REL
-// u/s at both rates, and <= RISE_ON with the shaft lens on (game.js THROAT_CAM.relVmax 45 + 1: the old shaft's
+// u/s at both rates, and <= RISE_ON on EVERY frame with the shaft lens on (window or not; game.js THROAT_CAM.relVmax 45 + 1: the old shaft's
 // lens engages as he nears its floor: on 917d689 its target jumped up to 15 u in a frame and the lens flew in at
 // up to 133.8 u/s, 2.2 u a frame); the lens in the old crack's rock (inside its outline, under its heightfield,
 // him over it) <= RISE_HF in all (7cbcc49: 1033 over the reviewer's 32 rises; 917d689: 24 there, 32 here; now
