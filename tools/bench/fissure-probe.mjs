@@ -1006,7 +1006,7 @@ if (mode === 'shape') {
   }
   console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off }));
   for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
-    minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip }));
+    minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip, salIn: q.salIn, salInMax: q.salInMax, salAt: q.salAt, closeAt: q.closeAt, hfAt: q.hfAt, offAt: q.offAt }));
 } else if (mode === 'clearance') {
   // EVERYTHING CLEARS THE CRACK (spec §1 Lairs, Task 5). At every anchorage (the hidden shelf too),
   // in every zone: every collider (rocks, props, wrecks, vents), every placed instance (flora,

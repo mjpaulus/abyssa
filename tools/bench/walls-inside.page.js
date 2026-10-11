@@ -435,6 +435,7 @@ export async function descentLens(zi, o = {}) {
   const Wg = T.fissureWallOn && T.fissureWallOn() ? T.fissureWallGeo(zi) : null; if (Wg) take(Wg.pos.array, Wg.index);
   const n = tris.length / 9, cam = window.camera;
   let minD = 1e9, at = null, samples = 0, close = 0, inside = 0, hfIn = 0, worstIn = null, lensBelowPivotMax = -1e9, boomMin = 1e9, boomMax = 0, fallV = 0, ndcLow = 9, ndcHigh = -9, ndcSide = 0, offFrame = 0;
+  const closeAt = [], hfAt = [], offAt = [], salAt = []; let salIn = 0, salInMax = 0;
   const startZone = window.zone, shots = o.shots || [], got = [];
   // the measure ends just above the zone-change plane (zones 0/1) or the ending's (zone 2: the
   // cinematic takes the lens there)
@@ -453,11 +454,13 @@ export async function descentLens(zi, o = {}) {
       samples++;
       boomMin = Math.min(boomMin, p.distanceTo(pv)); boomMax = Math.max(boomMax, p.distanceTo(pv)); fallV = Math.max(fallV, -window.player.vel.y);
       lensBelowPivotMax = Math.max(lensBelowPivotMax, pv.y - p.y);
-      if (p.y < T.terrainUnderH(p.x, p.z, zi) - 0.1) hfIn++;
+      // Sal himself: his chest (0.5 u under the eye) under the heightfield at his own (x, z) = his body in the rock
+      { const sd = T.terrainUnderH(pv.x, pv.z, zi) - (pv.y - 0.5); if (sd > 0) { salIn++; salInMax = Math.max(salInMax, sd); if (salAt.length < 4) salAt.push([f, +(lip - pv.y).toFixed(1), +sd.toFixed(2)]); } }
+      if (p.y < T.terrainUnderH(p.x, p.z, zi) - 0.1) { hfIn++; if (hfAt.length < 6) hfAt.push([f, +(lip - pv.y).toFixed(1), +(T.terrainUnderH(p.x, p.z, zi) - p.y).toFixed(2)]); }
       // where Sal sits in the frame (his chest: 0.5 u under the eye): NDC, -1 = the bottom edge
       cam.updateMatrixWorld(); _q.set(pv.x, pv.y - 0.5, pv.z).project(cam);
-      if (_q.z < 1) { ndcLow = Math.min(ndcLow, _q.y); ndcHigh = Math.max(ndcHigh, _q.y); ndcSide = Math.max(ndcSide, Math.abs(_q.x)); if (Math.abs(_q.y) > 0.85 || Math.abs(_q.x) > 0.85) offFrame++; }
-      else offFrame++;
+      if (_q.z < 1) { ndcLow = Math.min(ndcLow, _q.y); ndcHigh = Math.max(ndcHigh, _q.y); ndcSide = Math.max(ndcSide, Math.abs(_q.x)); if (Math.abs(_q.y) > 0.85 || Math.abs(_q.x) > 0.85) { offFrame++; if (offAt.length < 4) offAt.push([f, +(lip - pv.y).toFixed(1), +_q.y.toFixed(2)]); } }
+      else { offFrame++; if (offAt.length < 4) offAt.push([f, +(lip - pv.y).toFixed(1), 'behind']); }
       let fMin = 1e9, fSide = 1;
       for (let k = 0; k < n; k++) {
         const o9 = k * 9;
@@ -476,12 +479,12 @@ export async function descentLens(zi, o = {}) {
           fSide = _b.dot(_q.set(p.x - _q.x, p.y - _q.y, p.z - _q.z)) >= 0 ? 1 : -1;
         }
       }
-      if (fMin < cam.near) close++;
+      if (fMin < cam.near) { close++; if (closeAt.length < 6) closeAt.push([f, +(lip - pv.y).toFixed(1), +fMin.toFixed(3)]); }
       if (fSide < 0 && fMin < 3) { inside++; if (!worstIn || fMin > worstIn.d) worstIn = { f, d: +fMin.toFixed(2), below: +(lip - pv.y).toFixed(1) }; }
       if (fMin < minD) { minD = fMin; at = { f, side: fSide, cam: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], below: +(lip - pv.y).toFixed(1), boom: +p.distanceTo(pv).toFixed(2) }; }
     }
   } finally { window.keys.KeyC = false; }
   return { zi, u: u0, yaw: +(o.yaw || 0).toFixed(3), pitch: o.pitch || 0, yawRate: o.yawRate || 0, tris: n, samples, endBelowLip: +(lip - window.player.pos.y).toFixed(1), trigBelowLip: +(lip - trig).toFixed(1), close, inside, hfIn, worstIn, zoneEnd: window.zone, near: cam.near, minD: +minD.toFixed(3), at,
-    ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
+    salIn, salInMax: +salInMax.toFixed(2), salAt, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
     boomMin: +boomMin.toFixed(2), boomMax: +boomMax.toFixed(2), fallV: +fallV.toFixed(1), lensBelowPivotMax: +lensBelowPivotMax.toFixed(2), shots: got };
 }

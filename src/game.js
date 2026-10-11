@@ -6,7 +6,7 @@ import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
 import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
-import { lipMeanY, resetJam, setFissureShut } from './world/fissureShape.js';
+import { lipMeanY, resetJam, setFissureShut, FISSURE, fissureDist, fissureLocal, fissureWorld, fissureShut, _widths } from './world/fissureShape.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
@@ -1384,12 +1384,15 @@ function hitFrom(list, mag, hasPos) {
   diverImpulse('hit', bx, bz, mag);
 }
 
-function clearCamDistance(from, dir, want, zi) {
+// `inCrack`: the pivot is inside the OPEN crack's outline: the floor test is off (a wall face is not a
+// floor: it stopped the boom anywhere from 0 to 1/8 of its length off the face and the 2.2 u minimum then
+// put the lens in the rock); throatLens below puts the lens in the shaft instead.
+function clearCamDistance(from, dir, want, zi, inCrack) {
   const STEPS = 8, MARGIN = 0.8;
   for (let i = 1; i <= STEPS; i++) {
     const d = want * (i / STEPS);
     const x = from.x + dir.x * d, y = from.y + dir.y * d, z = from.z + dir.z * d;
-    if (y < shutFloorY(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
+    if (!inCrack && y < shutFloorY(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
     for (let list = 0; list < 5; list++) {
     const cols = list === 0 ? rockColliders : list === 1 ? propColliders : list === 2 ? wreckColliders : list === 3 ? ventColliders : dynCols;
     const nCols = list === 4 ? dynN : cols.length;
@@ -1405,6 +1408,82 @@ function clearCamDistance(from, dir, want, zi) {
     }
   }
   return want;
+}
+
+// THE LENS IN THE OPEN THROAT (final fix wave I1). In the crack the boom's floor test is no clearance:
+// a riser is a near-vertical face, a lens 1.1 u over the ledge beside it sat centimetres off the face,
+// the 2.2 u minimum boom put it in the rock, and once the lens's column was a wall the floor clamp
+// lifted it up that column to the lip while he fell 60 u (fall-lens RED: boom 45-64 u, 1134 / 16882
+// frames within the near plane of drawn rock, 3950 inside it). So with the pivot inside the OPEN crack's
+// outline the boom runs free of the floor (clearCamDistance inCrack) and the LENS IS PUT IN THE SHAFT,
+// after every offset, before the spring (the spring still carries it there):
+//   - at the lens's own station u, the open interval across the crack (v) at its height less `clear`
+//     (and less `ahead` s of his fall: the spring trails its target ~0.25 s, the shaft steps in at each
+//     ledge) is marched out from the lens's v in `step` u of the heightfield (the drawn walls stand at
+//     most 0.8 u proud of it: `margin` 0.9), the stations du either side too (the lips jag);
+//   - its v is clamped inside that interval less `margin` each side; where its own station has no open
+//     water at that height (a tip), the stations walk toward his;
+//   - the horizontal distance the clamp took is put back as HEIGHT (`raise`): the lens rides up the
+//     shaft, which only widens upward, and the aim drops by the same amount, eased on the lens spring's
+//     rate (`aim`), so he stays in the frame: the boom pitches down the shaft over him.
+// Above the lip, or anywhere the march finds no wall, nothing changes; outside the crack, and over the
+// shut jam, the camera is the camera it was. __throatCam: knobs, state().
+const THROAT_CAM = { margin: 0.9, clear: 1.2, ahead: 0.25, step: 0.2, du: 0.5, raise: 1.0, aim: 1.0 };
+const _tcL = { u: 0, v: 0 }, _tcP = { u: 0, v: 0 }, _tcW = { x: 0, z: 0 };
+const _tcRun = { lo: 0, hi: 0, loOpen: false, hiOpen: false };
+let throatRaise = 0, throatAim = 0, throatAimV = 0, throatOn = false, throatFixes = 0;
+const throatLast = { st: -1, u: 0, v: 0, lo: 0, hi: 0, yT: 0, fail: 0 };   // the last frame's answer (dev)
+window.__throatCam = { knobs: THROAT_CAM, last: throatLast, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, fail: throatLast.fail }) };
+function tcOpen(u, v, zi, yT) { fissureWorld(u, v, zi, _tcW); return shutFloorY(_tcW.x, _tcW.z, zi) < yT; }
+// The open run across the crack at station u and height yT nearest vRef, marched in THROAT_CAM.step:
+// _tcRun.lo / hi, lo/hiOpen when it runs out past the lip on that side (no wall). False: no open water.
+function tcRun(F, u, vRef, zi, yT) {
+  const wd = _widths(F, u), vMin = -wd.w0 - 1.5, vMax = wd.w1 + 1.5, S = THROAT_CAM.step;   // (read now: terrainH re-uses _widths' object)
+  const vr = clamp(vRef, vMin, vMax), nk = Math.ceil((vMax - vMin) / S);
+  let v0 = NaN;
+  for (let k = 0; k <= nk; k++) {
+    const a = vr + k * S, b = vr - k * S;
+    if (a <= vMax && tcOpen(u, a, zi, yT)) { v0 = a; break; }
+    if (k > 0 && b >= vMin && tcOpen(u, b, zi, yT)) { v0 = b; break; }
+    if (a > vMax && b < vMin) break;
+  }
+  if (v0 !== v0) return false;
+  let lo = v0, hi = v0;
+  while (lo - S >= vMin && tcOpen(u, lo - S, zi, yT)) lo -= S;
+  while (hi + S <= vMax && tcOpen(u, hi + S, zi, yT)) hi += S;
+  _tcRun.lo = lo; _tcRun.hi = hi; _tcRun.loOpen = lo - S < vMin; _tcRun.hiOpen = hi + S > vMax;
+  return true;
+}
+// Puts the lens target L in the shaft; returns the height it raised it (0: nothing to do).
+function throatLens(zi, L) {
+  const F = FISSURE[zi], P = player.pos, T = THROAT_CAM;
+  fissureLocal(L.x, L.z, zi, _tcL); fissureLocal(P.x, P.z, zi, _tcP);
+  const yT = L.y - T.clear - (player.grounded ? 0 : Math.max(0, -player.vel.y) * T.ahead);
+  for (let st = 0; st < 3; st++) {
+    const u = st === 0 ? _tcL.u : st === 1 ? (_tcL.u + _tcP.u) * 0.5 : _tcP.u;
+    if (!tcRun(F, u, _tcL.v, zi, yT)) continue;
+    let lo = _tcRun.lo, hi = _tcRun.hi, loOpen = _tcRun.loOpen, hiOpen = _tcRun.hiOpen, ok = true;
+    const mid = (lo + hi) * 0.5;
+    for (let n = -1; n <= 1; n += 2) {
+      if (!tcRun(F, u + n * T.du, mid, zi, yT)) { ok = false; break; }
+      if (_tcRun.lo > lo) lo = _tcRun.lo;
+      if (_tcRun.hi < hi) hi = _tcRun.hi;
+      loOpen = loOpen && _tcRun.loOpen; hiOpen = hiOpen && _tcRun.hiOpen;
+    }
+    if (!ok || lo > hi) continue;
+    let a = loOpen ? -Infinity : lo + T.margin, b = hiOpen ? Infinity : hi - T.margin;
+    if (a > b) a = b = (lo + hi) * 0.5;
+    const v = clamp(_tcL.v, a, b);
+    throatLast.st = st; throatLast.u = u; throatLast.v = v; throatLast.lo = lo; throatLast.hi = hi; throatLast.yT = yT;
+    if (st === 0 && v === _tcL.v) return 0;
+    fissureWorld(u, v, zi, _tcW);
+    const e = Math.hypot(_tcW.x - L.x, _tcW.z - L.z);
+    L.x = _tcW.x; L.z = _tcW.z; L.y += e * T.raise;
+    throatFixes++;
+    return e * T.raise;
+  }
+  throatLast.st = -1; throatLast.yT = yT; throatLast.fail++;
+  return 0;
 }
 
 // (swimfix 3) THE SWIM FRAMING. While Sal hauls (W/S held) or bursts in open water the water
@@ -1449,7 +1528,9 @@ function updateCamera(dt, t, fwd) {
   }
   const base = boomBack(), up = boomUp();
   buildDynCols();
-  let want = clearCamDistance(player.pos, camBack, base, zi);
+  // the pivot inside the OPEN crack's outline: the throat lens owns the walls (THROAT_CAM)
+  const inCrack = deckK === 0 && !fissureShut(zi) && fissureDist(player.pos.x, player.pos.z, zi) < 0;
+  let want = clearCamDistance(player.pos, camBack, base, zi, inCrack);
   // On (or coming onto) the deck the boom is also walked against the raft's gear, along
   // the real line from the pivot to the lens (back AND up), and the lens slides in along
   // that same line: the rise shrinks with the pull-in so a pulled-in lens is still on a
@@ -1567,7 +1648,9 @@ function updateCamera(dt, t, fwd) {
   else camHeaveLP += (raft.position.y - camHeaveLP) * Math.min(1, dt / Math.max(0.05, DECKCAM.heaveTau));
   const camHeaveOff = DECKCAM.heave > 0 ? -DECKCAM.heave * deckK * (raft.position.y - camHeaveLP) : 0;
   camDesired.y += camHeaveOff;
-  camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, zi) + 1.2);
+  // (in the open crack the throat lens below clears the floor under its own column: lifted here first,
+  // up a wall column, the lens hung at the lip while he fell)
+  if (!inCrack) camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, zi) + 1.2);
   // (The idle "breathing" drift — 0.09 u vertical, 0.07 u lateral, forever — is gone: a
   // locked frame on a still man is the point. Weight comes from Sal, not from the lens.)
   const rmK = reducedMotion() ? 0 : 1;
@@ -1663,6 +1746,16 @@ function updateCamera(dt, t, fwd) {
   // (The old velocity lead that made up the tracker's lag is not needed: the spring below
   // carries Sal's own velocity, so it has no lag to make up. The punch-in stays.)
   if (camKick > 0) camDesired.addScaledVector(camBack, -2.6 * camKick);
+
+  // THE LENS IN THE OPEN THROAT (THROAT_CAM): after every offset, before the cut and the spring. With
+  // the pivot outside the crack the lens is tested only when its own target is inside the outline.
+  throatOn = deckK === 0 && !fissureShut(zi) && (inCrack || fissureDist(camDesired.x, camDesired.z, zi) < 0);
+  throatRaise = throatOn ? throatLens(zi, camDesired) : 0;
+  {
+    const w = 7.75, h = Math.min(dt, 0.05);   // the lens spring's own rate (stiff 60)
+    throatAimV += (w * w * (throatRaise - throatAim) - 2 * w * throatAimV) * h; throatAim += throatAimV * h;
+    if (throatRaise === 0 && Math.abs(throatAim) < 1e-4 && Math.abs(throatAimV) < 1e-3) throatAim = throatAimV = 0;
+  }
 
   // Cut, don't fly. Done before the spring so camVel never integrates the teleport.
   if (camSnap) {
@@ -1789,7 +1882,7 @@ function updateCamera(dt, t, fwd) {
   // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
   // went (it swung the aim with every kick's surge).
   camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
-  camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder;
+  camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder - THROAT_CAM.aim * throatAim;
   // (ritefair) the look leans toward her (bossFrame): toward her belly / nearest dark ward, by a
   // share of the angle, capped, and only while she is in front of the lens (she is never
   // dragged round from behind him); the mouse still owns the view
