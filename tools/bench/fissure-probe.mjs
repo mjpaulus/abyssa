@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <clearance|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -876,6 +876,73 @@ if (mode === 'shape') {
     if (z.ab.mean > z.aa.mean * 1.5 + 0.02 || z.ab.bigPct > z.aa.bigPct * 1.5 + 0.01) fail.push(`crack ${z.zi}: the light shows from below ` + JSON.stringify(z));
   }
   console.log(JSON.stringify(r));
+} else if (mode === 'clearance') {
+  // EVERYTHING CLEARS THE CRACK (spec §1 Lairs, Task 5). At every anchorage (the hidden shelf too),
+  // in every zone: every collider (rocks, props, wrecks, vents), every placed instance (flora,
+  // gardens, props, physics debris), every resource node, the wrecks' sites and the three lairs
+  // keep >= 6 u + their own radius off the lip (fissureDist is negative inside the crack).
+  // Velkath: her lair centre (radius R), her whole REST OUTLINE (every shell vertex) >= 6 u, her silt
+  // skirt never over the lip (>= 1 u), her near flank (L.nearFlank, Task 6's harpoon side) out on
+  // open walkable sand.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js');
+    const Fl = await import('/src/world/flora.js'), Pr = await import('/src/world/props.js'), Wr = await import('/src/world/wrecks.js');
+    const Ve = await import('/src/world/vents.js'), Re = await import('/src/world/resources.js'), THREE = await import('three'), { scene } = await import('/src/core.js');
+    window.setState('play'); window.__helm = true;
+    const out = [], info = [], m4 = new THREE.Matrix4(), v = new THREE.Vector3();
+    const zoneOf = (x, y, z) => { for (let zi = 0; zi < 3; zi++) if (Math.abs(y - T.terrainH(x, z, zi)) < 25) return zi; return -1; };
+    const owner = o => { while (o && o.parent && o.parent !== scene && !(o.userData && o.userData.benchSrc)) o = o.parent; return o && o.userData ? o.userData.benchSrc || '' : ''; };
+    const SCAN = /^(world\\/flora|world\\/gardens|world\\/props|systems\\/physics)$/;
+    for (const site of [0, 1, 2, 3]) {
+      window.__chart.arrive(site);
+      const worst = {};
+      const bad = (n, zi, x, z, rad, need = 6) => {
+        const d = S.fissureDist(x, z, zi) - rad;
+        if (!(n in worst) || d < worst[n]) worst[n] = +d.toFixed(1);
+        if (d < need) out.push({ site, zi, n, d: +d.toFixed(1), at: [+x.toFixed(1), +z.toFixed(1)] });
+        return d; };
+      for (const [n, list] of [['rock', Fl.rockColliders], ['prop', Pr.propColliders], ['wreckCol', Wr.wreckColliders], ['vent', Ve.ventColliders]])
+        for (const q of list) { const zi = zoneOf(q.x, q.y, q.z); if (zi >= 0) bad(n, zi, q.x, q.z, q.r); }
+      for (const nd of Re.nodes) { const p = nd.grp.position, zi = zoneOf(p.x, p.y, p.z); if (zi >= 0) bad('resource', zi, p.x, p.z, 1); }
+      for (let zi = 0; zi < 3; zi++) for (const w of (window.wrecks && window.wrecks.sites ? window.wrecks.sites(zi) : [{ x: 0, z: 0, r: 1e9, missing: 1 }])) {
+        if (w.missing) { out.push({ site, zi, n: 'wrecks.sites missing' }); continue; }
+        bad('wreck', zi, w.x, w.z, w.r || 10); }
+      for (let zi = 0; zi < 3; zi++) {
+        window.gotoZone(zi);
+        scene.traverse(o => {
+          if (!o.isInstancedMesh || !SCAN.test(owner(o))) return;
+          o.updateWorldMatrix(true, false);
+          for (let i = 0; i < o.count; i++) {
+            o.getMatrixAt(i, m4); v.setFromMatrixPosition(m4).applyMatrix4(o.matrixWorld);
+            if (zoneOf(v.x, v.y, v.z) !== zi) continue;
+            bad('inst:' + owner(o).split('/')[1], zi, v.x, v.z, 0);
+          } });
+        const L = window.lev;
+        if (!L) continue;
+        if (L.kind === 'brooder') {
+          bad('lair', zi, L.lairPos.x, L.lairPos.z, L.R || 10);
+          L.body.updateMatrixWorld(true);
+          const P = L.parts.shell.geometry.attributes.position, mw = L.parts.shell.matrixWorld;
+          let om = 1e9;
+          for (let i = 0; i < P.count; i += 3) { v.fromBufferAttribute(P, i).applyMatrix4(mw); om = Math.min(om, S.fissureDist(v.x, v.z, zi)); }
+          if (om < 6) out.push({ site, zi, n: 'velkath outline', d: +om.toFixed(1) });
+          let sm = 1e9;
+          if (L.skirt) { const Q = L.skirt.geometry.attributes.position; for (let i = 0; i < Q.count; i++) sm = Math.min(sm, S.fissureDist(Q.getX(i), Q.getZ(i), zi)); }
+          if (sm < 1) out.push({ site, zi, n: 'velkath skirt', d: +sm.toFixed(1) });
+          const nf = L.nearFlank, fd = nf ? S.fissureDist(nf.x, nf.z, zi) : -1e9;
+          const ny = nf ? T.terrainNormal(nf.x, nf.z, zi).y : 0;
+          if (!nf || fd < 6 + 0.5 * L.R || ny < 0.8) out.push({ site, zi, n: 'velkath near flank', fd: +fd.toFixed(1), ny: +ny.toFixed(2) });
+          info.push({ site, zi, lairFd: +S.fissureDist(L.lairPos.x, L.lairPos.z, zi).toFixed(1), outline: +om.toFixed(1), skirt: +sm.toFixed(1), flankFd: +fd.toFixed(1), flankNy: +ny.toFixed(2) });
+        }
+        if (L.kind === 'hoarder') { bad('orune', zi, L.pos.x, L.pos.z, L.R || 10); if (L.hoard && L.hoard.center) bad('trawler hoard', zi, L.hoard.center.x, L.hoard.center.z, 14); }
+        if (L.furnace && L.furnace.pos) bad('furnace', zi, L.furnace.pos.x, L.furnace.pos.z, 6);
+      }
+      info.push({ site, worst });
+    }
+    window.__chart.arrive(0);
+    return { out, info }; })()`);
+  console.log(JSON.stringify(r.info));
+  if (r.out.length) fail.push(`too close to the crack (${r.out.length}): ` + JSON.stringify(r.out.slice(0, 60)));
 } else fail.push(`unknown mode ${mode}`);
 c.close();
 stop();
