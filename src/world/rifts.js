@@ -79,7 +79,7 @@ export function siteLean(zi, out) {
 const BREATH = 7.5;                      // s
 const K0 = 0.545;                        // k at which the seep's last breath is gone (fissure.js: T = COLLAPSE)
 // per zone gain (dev: __rifts.K), and the parts' shares (dev: __rifts.tune)
-const LIGHT_K = [1.7, 1, 0.8];
+const LIGHT_K = [1.7, 0.7, 0.8];   // (zone 1 lower: its warm grade turns bright additive highlights cream as the exposure rises)
 const TUNE = { curtain: 0.16, endOn: 0.05, wall: 1.3, drift: 0.85, halo: 0.16, surf: 0.14, surfH: 22, inside: 0.75, noGate: false };
 const SURF_MAX = 0.16;                   // the surface glow's alpha never passes this
 const N_DRIFT = 320;
