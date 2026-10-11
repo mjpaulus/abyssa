@@ -2582,7 +2582,9 @@ function update(dt, t) {
         // (diver.js spits bubbles off it at the same beat)
         camYankDir.copy(forwardVec()); camYank.v += 0.9;
         diverBladeTip(_tipV);
-        if (zone >= 0) { const g = terrainH(_tipV.x, _tipV.z, zone); if (_tipV.y - g < 1.4) emitDust(_tipV.x, g + 0.15, _tipV.z, 10, 1.2); }
+        // the silt it churns AT the point (the near-bed water is silt-laden: within 3 u of the bed), big enough
+        // to show past his shoulder from the follow lens
+        if (zone >= 0 && !aboveWater) { const g = terrainH(_tipV.x, _tipV.z, zone); if (_tipV.y - g < 3) emitDust(_tipV.x, _tipV.y - 0.15, _tipV.z, 16, 1.5); }
       }
       if (kill) {
         knifeHit('flesh');

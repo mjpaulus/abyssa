@@ -4202,7 +4202,7 @@ export function updateDiver(dt, t, player) {
         diver.harpoonMesh.localToWorld(_puff.set(0, 0, 0.60));
         if (_puff.y < SURFACE_Y + surfaceHeightAt(_puff.x, _puff.z, t, stormLevel())) {
           thrustN++;
-          for (let i = 0; i < 7; i++) emitBubble(_puff, player.vel, 0.02, i < 2 ? 0.07 : 0.045, thrustN * 31.7 + i * 5.3);
+          for (let i = 0; i < 12; i++) emitBubble(_puff, player.vel, 0.035, i < 3 ? 0.12 : 0.07, thrustN * 31.7 + i * 5.3);
         }
       }
     }

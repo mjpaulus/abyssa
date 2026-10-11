@@ -217,9 +217,22 @@ against explicit contracts and reviewed on return.
   are the two PALMS in the spine frame, solved by `armIK`; the iron runs through both fists; the lantern
   hangs plumb from the right fist), reach 5.5, power 1.8 (`predators.slash` stagger, `lev.onSlash` reach
   5.1). The prop (`diver.harpoon`, a Group under the left hand bone: lib/harpoonModel.js, sculpted swap on
-  HARPOON_ASSET) is carried along the left forearm; the knife stays sheathed. Not owned: the knife path is
-  bit-identical (`tools/bench/knife-trace.mjs`). Alt+= (playtest) grants/revokes it. Probes:
-  harpoon-probe `thrust-contact`, `orune-cut`, `shark-thrust`; look-dev: `tools/bench/blade-shots.mjs`.
+  HARPOON_ASSET) is carried along the left forearm SPLAYED ~16 deg off the sleeve (CARRY_DIR; laid on it the
+  follow lens never saw it); the knife stays sheathed. The draw/recover turns the iron over through a
+  forward-and-up waypoint (no corselet sweep); the burst trail is sprung; the valve check / low-air reach hang
+  it plumb from the raised fist and the ladder hangs it from the wrist (both hands on the rungs) — all
+  measured clear of the body by `tools/bench/blade-clear.js`. Contact: bubbles off the point (diver.js),
+  silt at it near the bed and a ~3 cm lens punch (game.js camYank). REACH SCALES EVERY BLADE TEST: squid
+  kill range+size*0.35 in the 70 deg cone, shark range+size*0.5 (a SPHERE: a long blade spooks a shark
+  beside/behind him too), octopus range+2.2; power scales only the shark's abort + stagger (blind, roll),
+  never its 60-90 s avoidance. ORUNE PARRY (ruled): `lev.onSlash(pos, fwd, reach, tipReach, guard)` — an arm
+  REACHING for him (a lash, not yet holding) with its tip inside the blade's full reach (knife 3.4: a last-
+  instant cut; harpoon 5.5) and in front is parried (recoils, lash spent); the harpoon's point held out after
+  contact is a 0.26 s guard (game.js bladeGuard). Held, one cut frees him with either blade. `BLADE.cd` gates
+  repeats (knife 0.55 = SLASH_DUR, harpoon 0.9); no swing while wrenching Velkath's iron. Not owned: the
+  knife path is bit-identical (`tools/bench/knife-trace.mjs`). Alt+= (playtest) grants/revokes it. Probes:
+  harpoon-probe `thrust-contact` (programs read before the first grant + a control), `orune-cut`,
+  `orune-parry`, `shark-thrust`; look-dev: `tools/bench/blade-shots.mjs`.
   The helmet is generated (44-seg spun bonnet, Mark V hasp); `helmetSwap.js` loader
   is RETIRED under the hard rule. Sal breathes on ONE clock (`breathPhase()`):
   shoulders, exhaust bursts from the real valve, and the audio regulator share it;
