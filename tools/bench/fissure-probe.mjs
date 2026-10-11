@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|fall-lens|ending|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -972,6 +972,41 @@ if (mode === 'shape') {
   console.log(JSON.stringify({ fallSum, fall: fall.map(r => ({ ab: r.ab, zi: r.zi, u: r.u, close: r.closeFrames, samples: r.samples, minD: r.minD, at: r.at })) }));
   if (fallSum.old.samples && fallSum.now.close > 1.5 * fallSum.old.close + 15) fail.push(`the lens grazes the drawn rock on the fall more than with the old walls: ${fallSum.now.close}/${fallSum.now.samples} frames vs ${fallSum.old.close}/${fallSum.old.samples}`);
 
+} else if (mode === 'fall-lens') {
+  // THE LENS ON THE DESCENT (final fix wave I1; page half: walls-inside.page.js descentLens). The REAL
+  // follow camera while Sal sinks through each open throat from the shut jam it opened under: three
+  // stations along each crack x six headings relative to it (along, across both ways, the diagonals),
+  // plus the look pitched down / up and a man turning while he falls. GATES, per case: 0 frames with
+  // the lens within the near plane (0.1 u) of DRAWN crack rock (the patch, the throat walls, the
+  // slabs); 0 frames with the lens under the heightfield he collides with at its own (x, z) (inside
+  // the rock: the frame shows the void behind it); Sal (his chest) inside 85% of the frame every
+  // sample; >= 150 samples below the lip (a case that measures nothing fails). `inside` (behind the
+  // nearest drawn triangle by its winding) is reported, not gated: the patch's risers do not all wind
+  // toward the water. RED on 1d68aa0 (no clearance across the crack: clearCamDistance tested only the
+  // floor under the boom, the 2.2 u minimum, and the floor clamp lifted the lens up a wall column).
+  const D90 = Math.PI / 2, cases = [];
+  for (let zi = 0; zi < 3; zi++) {
+    for (const u of [-15, -4, 9]) for (const yaw of [0, D90, -D90, D90 / 2, 3 * D90 / 2, 2 * D90]) cases.push({ zi, u, yaw });
+    cases.push({ zi, u: -4, yaw: D90, pitch: -0.6 }, { zi, u: -4, yaw: 0, pitch: -0.6 }, { zi, u: -4, yaw: D90, pitch: 0.4 });
+    cases.push({ zi, u: -4, yaw: 0, yawRate: 1.0 }, { zi, u: 9, yaw: D90, yawRate: -1.0 });
+  }
+  const r = await c.ev(`(async () => {
+    const W = await import('/tools/bench/walls-inside.page.js'); const out = [];
+    for (const k of ${JSON.stringify(cases)}) out.push(await W.descentLens(k.zi, k));
+    window.gotoZone(0);
+    return out; })()`);
+  let close = 0, hfIn = 0, inside = 0, off = 0, samples = 0;
+  for (const q of r) {
+    close += q.close; hfIn += q.hfIn; inside += q.inside; off += q.offFrame; samples += q.samples;
+    const at = `zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}${q.pitch ? ' pitch ' + q.pitch : ''}${q.yawRate ? ' turning ' + q.yawRate : ''}`;
+    if (q.samples < 150) fail.push(`${at}: only ${q.samples} samples below the lip (the fall was not measured)`);
+    if (q.close) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames (min ${q.minD} at ${JSON.stringify(q.at)})`);
+    if (q.hfIn) fail.push(`${at}: the lens inside the rock on ${q.hfIn}/${q.samples} frames`);
+    if (q.offFrame) fail.push(`${at}: Sal out of frame on ${q.offFrame}/${q.samples} frames (ndc y ${q.ndcLow}..${q.ndcHigh}, |x| ${q.ndcSide})`);
+  }
+  console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off }));
+  for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
+    minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip }));
 } else if (mode === 'clearance') {
   // EVERYTHING CLEARS THE CRACK (spec §1 Lairs, Task 5). At every anchorage (the hidden shelf too),
   // in every zone: every collider (rocks, props, wrecks, vents), every placed instance (flora,
