@@ -1444,13 +1444,40 @@ function clearCamDistance(from, dir, want, zi, inCrack) {
 // shut jam, the camera is the camera it was. __throatCam: knobs, last (dev), state().
 const THROAT_CAM = { margin: 1.0, clear: 1.2, ahead: 0.25, step: 0.2, du: 0.5, raise: 1.0, aim: 1.0, guard: 0.8, guardClear: 1.5, minW: 1.2, guardW: 40, guardW2: 80, guardAhead: 0.1, guardVmax: 45 };
 const GUARD_DEAD = 1e-3, guardV = V3(), _gStart = V3();
+// The guard's spring, one frame: p (the lens) and v (its velocity) toward `corr` (what is left of the correction,
+// worked down as p moves while `active`; with nothing to correct, damping only), in fixed sub-steps <= 1/240 s
+// (1/60 = 4 of them, 1/30 = 8 of the same size: the same motion at any frame rate), speed-limited per second.
+function guardSpring(p, v, corr, w, dt, active) {
+  const T = Math.min(dt, 0.1), n = Math.max(1, Math.ceil(T * 240)), h = T / n, vmax = THROAT_CAM.guardVmax;
+  for (let k = 0; k < n; k++) {
+    // a = w^2 (what is left of the correction) - 2 w v
+    v.x += (w * w * corr.x - 2 * w * v.x) * h; v.y += (w * w * corr.y - 2 * w * v.y) * h; v.z += (w * w * corr.z - 2 * w * v.z) * h;
+    const sp = v.length(); if (sp > vmax) v.multiplyScalar(vmax / sp);
+    p.addScaledVector(v, h);
+    if (active) corr.addScaledVector(v, -h);
+  }
+}
 const _tcL = { u: 0, v: 0 }, _tcP = { u: 0, v: 0 }, _tcW = { x: 0, z: 0 };
 const _tcRun = { lo: 0, hi: 0, loOpen: false, hiOpen: false };
 let throatRaise = 0, throatAim = 0, throatAimV = 0, throatOn = false, throatFixes = 0, throatGuards = 0, throatSnaps = 0;
 // the last station the march found open water at (the fallback under the throat floor, below)
 let throatGood = false, throatGoodU = 0, throatGoodV = 0, throatZone = -1;
 const throatLast = { st: -1, u: 0, v: 0, lo: 0, hi: 0, yT: 0, fail: 0, gx: 0, gy: 0, gz: 0, gr: 0, bx: 0, by: 0, bz: 0, stiffMax: 0 };   // the last frame's answer (dev)
-window.__throatCam = { knobs: THROAT_CAM, last: throatLast, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, guards: throatGuards, stiff: throatSnaps, stiffMax: +throatLast.stiffMax.toFixed(3), fail: throatLast.fail }) };
+// stepResponse(x0, w, dt, T): the guard's own spring (guardSpring) answering a lens x0 u off where the march puts
+// it, the correction re-read each frame with the dead band as play does; positions at every 1/30 s and the
+// largest one-frame move as a speed (fissure-probe fall-lens: the same motion at 1/30 as at 1/60). Dev only.
+function guardStepResponse(x0, w, dt, T = 0.5) {
+  const p = V3(), v = V3(), c = V3(), at = []; let vmax = 0;
+  for (let f = 0; (f + 1) * dt <= T + 1e-9; f++) {
+    c.set(x0 - p.x, 0, 0); const on = Math.abs(c.x) > GUARD_DEAD; if (!on) c.set(0, 0, 0);
+    const x1 = p.x;
+    if (on || v.lengthSq() > 1e-8) { guardSpring(p, v, c, w, dt, on); if (!on && v.lengthSq() < 1e-6) v.set(0, 0, 0); }
+    vmax = Math.max(vmax, Math.abs(p.x - x1) / dt);
+    const k = (f + 1) * dt * 30; if (Math.abs(k - Math.round(k)) < 1e-6) at.push(p.x);
+  }
+  return { at, vmax };
+}
+window.__throatCam = { knobs: THROAT_CAM, last: throatLast, stepResponse: guardStepResponse, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, guards: throatGuards, stiff: throatSnaps, stiffMax: +throatLast.stiffMax.toFixed(3), fail: throatLast.fail }) };
 // the open run across the crack at station u, height yT (fissureShape.js openRunAt: the march Sal's fall shares)
 function tcRun(F, u, vRef, zi, yT) { return openRunAt(u, vRef, zi, yT, shutFloorY, _tcRun, THROAT_CAM.step); }
 // Puts L (the lens target; or, for the guard, the lens itself) in the shaft with `margin` off the faces
@@ -1889,15 +1916,9 @@ function updateCamera(dt, t, fwd) {
     if (_bp2.lengthSq() < GUARD_DEAD * GUARD_DEAD) { _bp2.set(0, 0, 0); gk = 0; }
   }
   if (gk > 0 || guardV.lengthSq() > 1e-8) {
-    const w = gk === 2 ? THROAT_CAM.guardW2 : THROAT_CAM.guardW, n = Math.max(1, Math.ceil(Math.min(dt, 0.1) * 240)), h = Math.min(dt, 0.1) / n;
+    const w = gk === 2 ? THROAT_CAM.guardW2 : THROAT_CAM.guardW;
     _gStart.copy(camera.position);
-    for (let k = 0; k < n; k++) {
-      // a = w^2 (what is left of the correction) - 2 w v; nothing left to correct: damping only
-      guardV.x += (w * w * _bp2.x - 2 * w * guardV.x) * h; guardV.y += (w * w * _bp2.y - 2 * w * guardV.y) * h; guardV.z += (w * w * _bp2.z - 2 * w * guardV.z) * h;
-      { const sp = guardV.length(); if (sp > THROAT_CAM.guardVmax) guardV.multiplyScalar(THROAT_CAM.guardVmax / sp); }   // (a speed limit, per second: the same at any frame rate)
-      camera.position.addScaledVector(guardV, h);
-      if (gk > 0) _bp2.addScaledVector(guardV, -h);
-    }
+    guardSpring(camera.position, guardV, _bp2, w, dt, gk > 0);
     if (gk === 0 && guardV.lengthSq() < 1e-6) guardV.set(0, 0, 0);
     const mv = camera.position.distanceTo(_gStart);
     if (mv > throatLast.stiffMax) throatLast.stiffMax = mv;
