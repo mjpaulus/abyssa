@@ -60,12 +60,12 @@ const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
 // per site (index = site.js row), per zone: a multiplier on COLS so the light lands the same cold
 // pale blue-white in that anchorage's own water and grade (calibrated: open-minus-shut mean colour
 // over the light's pixels against home's; fissure.js leans the seep with it)
-// target on screen R:G:B = 0.80 : 0.91 : 1.0 (cold pale blue-white), luma kept
+// target on screen R:G:B = 0.72 : 0.87 : 1.0 (cold pale blue-white), luma kept
 export const SITE_LEAN = [
-  [[0.867, 1.042, 1.136], [0.996, 0.983, 1.103], [1.117, 0.956, 0.918]],   // home
-  [[0.916, 1.026, 1.092], [0.980, 0.998, 1.064], [1.080, 0.959, 1.002]],   // Pallid Bank
-  [[0.961, 1.013, 1.036], [1.028, 0.986, 1.001], [1.110, 0.960, 0.916]],   // the Burned Ground
-  [[0.907, 1.034, 1.071], [1.001, 0.983, 1.089], [1.111, 0.964, 0.894]],   // the Unsounded Shelf
+  [[0.826, 1.056, 1.203], [0.949, 0.996, 1.168], [1.065, 0.968, 0.972]],   // home
+  [[0.873, 1.039, 1.156], [0.934, 1.011, 1.127], [1.029, 0.971, 1.061]],   // Pallid Bank
+  [[0.916, 1.026, 1.097], [0.980, 0.999, 1.060], [1.058, 0.972, 0.970]],   // the Burned Ground
+  [[0.864, 1.047, 1.134], [0.954, 0.996, 1.153], [1.059, 0.977, 0.947]],   // the Unsounded Shelf
 ];
 export function siteLean(zi, out) {
   const L = (SITE_LEAN[currentSiteIndex()] || SITE_LEAN[0])[zi];

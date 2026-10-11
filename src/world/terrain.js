@@ -850,7 +850,7 @@ export const terrainMeshes = [];
 // volume. Measured worst gap 18.0u (zone 1); 22 leaves 4u everywhere. The offset is
 // invisible: at 231 units through 25% transmittance nothing about it reads.
 const SHELL_STEP = 3, SHELL_DROP = 22;   // 288/3 = 96 quads/side, 97x97 verts
-const SHELL_CUT = 0.5, SHELL_HOLD = 3;   // the crack: cells with their centre this far inside the lip outline are cut; vertices within HOLD of it held at the lip
+const SHELL_CUT = 0, SHELL_HOLD = 3;   // the crack: cells wholly inside the lip outline are cut; vertices within HOLD of it held at the lip
 const _shl = { u: 0, v: 0 }, _shw = { x: 0, z: 0 };
 const roofShells = [];
 
@@ -1259,8 +1259,10 @@ export function buildTerrain() {
       {
         const m1 = q + 1, keep = [];
         for (let iy = 0; iy < q; iy++) for (let ix = 0; ix < q; ix++) {
-          const xc = (AX[ix * SHELL_STEP] + AX[(ix + 1) * SHELL_STEP]) * 0.5, zc = (AX[iy * SHELL_STEP] + AX[(iy + 1) * SHELL_STEP]) * 0.5;
-          if (fissureDist(xc, zc, zi) < SHELL_CUT) continue;
+          // cut only a cell wholly inside the lip outline (all four corners and its centre): the opening
+          // never shows through rock that is there (zone 0's ground is FrontSide: from below it is not drawn)
+          const x0 = AX[ix * SHELL_STEP], x1 = AX[(ix + 1) * SHELL_STEP], z0 = AX[iy * SHELL_STEP], z1 = AX[(iy + 1) * SHELL_STEP];
+          if (Math.max(fissureDist(x0, z0, zi), fissureDist(x1, z0, zi), fissureDist(x0, z1, zi), fissureDist(x1, z1, zi), fissureDist((x0 + x1) * 0.5, (z0 + z1) * 0.5, zi)) < SHELL_CUT) continue;
           const a = ix + m1 * iy, b = ix + m1 * (iy + 1), c = ix + 1 + m1 * (iy + 1), d = ix + 1 + m1 * iy;
           keep.push(a, b, d, b, c, d);
         }
