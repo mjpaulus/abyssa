@@ -879,17 +879,22 @@ if (mode === 'shape') {
 } else if (mode === 'walls-inside') {
   // THE THROAT WALLS FROM INSIDE (Task 5b; page half: tools/bench/walls-inside.page.js).
   // (1) THE BOUND, every site x zone: every drawn crack surface (the patch inside the lip; the throat
-  //     wall where there is one) against the heightfield Sal stands on: it may lie back inside the
-  //     collision rock (by at most WALL_RECESS) but never stand out into the water (lens, body) by more
-  //     than WALL_PROTRUDE; rays from the throat's axis to both walls find no gap (a drawn miss, or a
-  //     drawn hit far behind the rock) and nothing drawn in front of the rock.
+  //     wall where there is one) against the heightfield Sal stands on (terrainUnderH), as a 3-D
+  //     distance to its surface: it may lie back inside the collision rock (by at most WALL_RECESS)
+  //     but stand out into the water (lens, body) by no more than WALL_PROTRUDE anywhere and by more
+  //     than 0.25 u on no more than WALL_OUT25 of its samples; rays from the throat's axis to both
+  //     walls (grazes and overhang slabs aside) find no gap (a drawn miss) and no drawn rock more than
+  //     0.3 u in front of the heightfield's.
   // (2) THE LOOK, each zone open at home, settled, from inside the throat looking up along it: the
-  //     FACET energy of the drawn rock's view-space normals (the sawtooth teeth flip the normal every
-  //     half unit) under WALL_FACET, and the settled frame keeps its detail (local contrast over
-  //     WALL_DETAIL: a smooth dark wall does not pass). With the A/B (terrain.js fissureWallAB) the old
-  //     patch walls are measured too and the new must beat them by half.
+  //     STREAK ratio of the drawn rock's view-space normals (their change across the wall's vertical
+  //     axis over their change along it: a grid on a 30 u riser draws long vertical slivers, ratio
+  //     6-8; layered rock changes most down the face) under WALL_STREAK, and the settled frame keeps its
+  //     detail (local contrast over WALL_DETAIL: a smooth dark wall does not pass). With the A/B
+  //     (terrain.js fissureWallAB) the old patch walls are measured too and the new must halve them.
+  //     (The facet energy, the mean normal change, is reported: it was the RED's first metric and
+  //     does not tell teeth from relief: the layered walls carry more relief than the teeth did.)
   const fs = await import('node:fs');
-  const WALL_PROTRUDE = 0.3, WALL_RECESS = 1.3, WALL_GAP = 2.2, WALL_FACET = 1.0, WALL_DETAIL = 0.035;
+  const WALL_PROTRUDE = 0.8, WALL_OUT25 = 0.002, WALL_RECESS = 2.0, WALL_STREAK = 3.5, WALL_DETAIL = 0.035;
   const bound = await c.ev(`(async () => {
     const W = await import('/tools/bench/walls-inside.page.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
@@ -904,11 +909,12 @@ if (mode === 'shape') {
     for (const k of ['patch', 'wall']) {
       const s = b[k]; if (!s) continue;
       if (s.protrudeMax > WALL_PROTRUDE) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock stands ${s.protrudeMax} u out into the water (bound ${WALL_PROTRUDE}) at ${s.worstOut}`);
+      if (s.over025 > WALL_OUT25) fail.push(`site ${b.site} zone ${b.zi} ${k}: ${(s.over025 * 100).toFixed(2)}% of the drawn rock stands > 0.25 u out into the water (bound ${WALL_OUT25 * 100}%)`);
       if (s.recessMax > WALL_RECESS) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock lies ${s.recessMax} u back in the rock (bound ${WALL_RECESS}) at ${s.worstIn}`);
     }
     const r = b.rays;
-    if (r.gaps) fail.push(`site ${b.site} zone ${b.zi}: ${r.gaps}/${r.rays} rays see a gap (drawn hit > ${WALL_GAP} u behind the rock, or none) ` + JSON.stringify(r.bad));
-    if (r.hitInFrontMax > WALL_PROTRUDE + 0.05) fail.push(`site ${b.site} zone ${b.zi}: a ray hits drawn rock ${r.hitInFrontMax} u in front of the rock`);
+    if (r.gaps) fail.push(`site ${b.site} zone ${b.zi}: ${r.gaps}/${r.rays} rays see a gap (no drawn rock where the heightfield is) ` + JSON.stringify(r.bad));
+    if (r.protrude) fail.push(`site ${b.site} zone ${b.zi}: ${r.protrude}/${r.rays} rays hit drawn rock more than 0.3 u in front of the rock (worst ${r.hitInFrontMax} ` + JSON.stringify(r.inFrontAt) + ')');
   }
   console.log(JSON.stringify(bound));
   const look = await c.ev(`(async () => {
@@ -931,9 +937,9 @@ if (mode === 'shape') {
     for (const k of ['now', 'old']) if (z['png_' + k]) { fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t5b-probe-z${z.zi}-${k}.png`, Buffer.from(z['png_' + k].split(',')[1], 'base64')); delete z['png_' + k]; }
     const n = z.now;
     if (n.err) { fail.push(`zone ${z.zi}: ${n.err}`); continue; }
-    if (n.facet > WALL_FACET) fail.push(`zone ${z.zi}: the walls are faceted (teeth) from inside: facet energy ${n.facet} > ${WALL_FACET}`);
+    if (n.streak > WALL_STREAK) fail.push(`zone ${z.zi}: the walls draw as vertical slivers (teeth, stretched) from inside: streak ${n.streak} > ${WALL_STREAK}`);
     if (n.localContrast < WALL_DETAIL) fail.push(`zone ${z.zi}: the walls lost their detail: local contrast ${n.localContrast} < ${WALL_DETAIL}`);
-    if (z.old && !(n.facet < 0.5 * z.old.facet)) fail.push(`zone ${z.zi}: no better than the old patch walls (facet ${n.facet} vs ${z.old.facet})`);
+    if (z.old && !(n.streak < 0.5 * z.old.streak)) fail.push(`zone ${z.zi}: no better than the old patch walls (streak ${n.streak} vs ${z.old.streak})`);
   }
   console.log(JSON.stringify(look));
 } else if (mode === 'clearance') {

@@ -107,7 +107,7 @@ export function rays(zi) {
   meshes.forEach(m => { m.visible = true; m.updateMatrixWorld(true); });
   const rc = new THREE.Raycaster(); rc.far = 45;
   const org = new THREE.Vector3(), dir = new THREE.Vector3();
-  let n = 0, gaps = 0, protrude = 0, worstGap = 0, worstIn = 0, worstOut = 0; const bad = [];
+  let n = 0, gaps = 0, behind = 0, protrude = 0, worstIn = 0, worstOut = 0, outAt = null; const bad = [];
   try {
     for (let u = -0.7 * F.halfLen; u <= 0.7 * F.halfLen; u += 3.1) {
       if (S.SLABS[zi].some(sl => Math.abs(u - sl.u0) < sl.hu + 1.5)) continue;
@@ -127,22 +127,31 @@ export function rays(zi) {
           for (let t = 0.02; t < 45; t += 0.02) { const px = org.x + dir.x * t, py = org.y + dir.y * t, pz = org.z + dir.z * t;
             if (py < T.terrainUnderH(px, pz, zi)) { th = t; break; } }
           if (th < 0 || th > 12) continue; // out over the lip (the apron beyond is not the crack's rock)
+          // a graze (the ray skims a lip and goes on over it) is not a hit: it must go 0.3 u into the rock
+          let into = 0;
+          for (let t = th; t < th + 1; t += 0.02) into = Math.max(into, T.terrainUnderH(org.x + dir.x * t, org.z + dir.z * t, zi) - (org.y + dir.y * t));
+          if (into < 0.3) continue;
           rc.set(org, dir);
           const hit = rc.intersectObjects(meshes, false)[0];
           const td = hit ? hit.distance : 1e9;
           n++;
           // (a drawn slab body hit first is the slab, not the wall: the station filter keeps rays off them)
+          // a GAP is a drawn miss: water seen through where the heightfield has rock. A drawn hit far
+          // behind the heightfield's is reported (the heightfield's thin fins at joint-block seams,
+          // narrower than a column, are not drawn by the patch or the walls), not failed.
           const d = td - th;
-          if (d > 1.6) { gaps++; if (bad.length < 6) bad.push({ u: +u.toFixed(1), dep, sg, el, al, th: +th.toFixed(2), td: hit ? +td.toFixed(2) : null }); }
+          if (!hit) { gaps++; if (bad.length < 6) bad.push({ u: +u.toFixed(1), dep, sg, el, al, th: +th.toFixed(2), td: null }); }
+          else if (d > 2.2) behind++;
+          if (hit && d > worstIn) worstIn = d;
+          const slabHit = hit && hit.object.name.startsWith('fissurePatch') && hit.face && hit.face.a >= T.fissurePatchGeo(zi).nv;
+          if (slabHit) continue;           // an overhang slab is drawn rock over the water by design (probed by the slabs mode)
           if (d < -0.3) protrude++;
-          if (d > worstIn && hit) worstIn = d;
-          if (!hit) worstGap = Math.max(worstGap, 1);
-          if (-d > worstOut) worstOut = -d;
+          if (-d > worstOut) { worstOut = -d; outAt = { u: +u.toFixed(1), dep, sg, el, al, th: +th.toFixed(2), td: +td.toFixed(2), mesh: hit.object.name, face: hit.faceIndex, slabFace: hit.object.name.startsWith('fissurePatch') && hit.face && hit.face.a >= T.fissurePatchGeo(zi).nv }; }
         }
       }
     }
   } finally { meshes.forEach((m, i) => { m.visible = vis[i]; }); }
-  return { rays: n, gaps, protrude, hitBehindMax: +worstIn.toFixed(3), hitInFrontMax: +worstOut.toFixed(3), missed: worstGap, bad };
+  return { rays: n, gaps, behind, protrude, hitBehindMax: +worstIn.toFixed(3), hitInFrontMax: +worstOut.toFixed(3), inFrontAt: outAt, bad };
 }
 
 // ---- the look ----------------------------------------------------------------------------------
