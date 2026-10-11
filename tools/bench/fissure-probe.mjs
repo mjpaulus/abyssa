@@ -1331,6 +1331,26 @@ if (mode === 'rise') {
   if (!r.m9.dormant) fail.push('M9: she was not asleep for the asleep half');
   if (r.m9.asleepSaid) fail.push('M9: "THE RIFT IS SHUT WHILE IT WAKES." said while she slept');
   if (r.m9.awakeDormant || !r.m9.awakeSaid) fail.push('M9: not said on the jam with her awake ' + JSON.stringify(r.m9.awake));
+  // R2 (rise fix): A CAMERA CUT ZEROES THE GUARD'S VELOCITY. Falling in zone 0's open shaft until the guard is
+  // moving the lens (its velocity over 1 u/s), then cut away (__bench.place: snapCamBehind) to open seabed 40 u
+  // off the crack: one frame later the guard's velocity is 0 (it used to carry the lens on after the cut, <= ~0.56 u).
+  const cut = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), { clock } = await import('/src/core.js');
+    const zi = 0, F = S.FISSURE[zi], w = { x: 0, z: 0 }, u = 9;
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.survival.fuel = 1; window.survival.oxygen = 1;
+    window.weather.set(1, 0); clock.elapsedTime = 1000;
+    { const vis = window.__chart.visit(); vis[0] = vis[1] = vis[2] = 0; vis[zi] = 1; }
+    window.gotoZone(zi); window.__fissure.setOpen(zi, 1);
+    S.fissureWorld(u, (S._halfWAt(F, u, 1) - S._halfWAt(F, u, 0)) / 2, zi, w);
+    window.__bench.place(w.x, w.z, Math.atan2(F.dx, F.dz), zi); window.player.pos.y = S.lipMeanY(zi, T.terrainH) - 2;
+    window.keys.KeyC = true; let gv = 0, f = 0;
+    try { for (; f < 900 && gv <= 1; f++) { window.__bench.step(1); gv = window.__throatCam.state().gv; window.survival.oxygen = 1; } } finally { window.keys.KeyC = false; }
+    S.fissureWorld(0, F.halfW + 40, zi, w); window.__bench.place(w.x, w.z, 0, zi);
+    window.__bench.step(1);
+    return { before: gv, frame: f, after: window.__throatCam.state().gv, on: window.__throatCam.state().on }; })()`);
+  console.log(JSON.stringify({ r2: cut }));
+  if (!(cut.before > 1)) fail.push('R2: the guard never moved the lens (the cut check is vacuous) ' + JSON.stringify(cut));
+  else if (cut.after !== 0) fail.push('R2: the guard still moving the lens one frame after a cut ' + JSON.stringify(cut));
   if (r.m10.calmAt < 0) fail.push('M10: the wards never calmed her');
   if (r.m10.wardsSaid) fail.push('M10: the ward count was said after the calm ' + JSON.stringify(r.m10.after));
 } else if (mode === 'clearance') {

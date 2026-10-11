@@ -1450,8 +1450,8 @@ const _relPrev = V3(), _relD = V3();
 let throatRelOk = false, throatRelT = 0, throatOffT = 9, throatRelHits = 0;
 const _salPrev = V3();
 // Every camera CUT (camSnap, snapCamBehind) starts the throat lens's motion afresh: no last frame to limit
-// against, no let-go window carried across it.
-function camCut() { throatRelOk = false; throatOffT = 9; }
+// against, no let-go window carried across it, and no guard velocity to carry the lens on after it (rise fix 2).
+function camCut() { throatRelOk = false; throatOffT = 9; guardV.set(0, 0, 0); }
 // The guard's spring, one frame: p (the lens) and v (its velocity) toward `corr` (what is left of the correction,
 // worked down as p moves while `active`; with nothing to correct, damping only), in fixed sub-steps <= 1/240 s
 // (1/60 = 4 of them, 1/30 = 8 of the same size: the same motion at any frame rate), speed-limited per second.
@@ -1485,7 +1485,7 @@ function guardStepResponse(x0, w, dt, T = 0.5) {
   }
   return { at, vmax };
 }
-window.__throatCam = { knobs: THROAT_CAM, last: throatLast, stepResponse: guardStepResponse, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, guards: throatGuards, stiff: throatSnaps, stiffMax: +throatLast.stiffMax.toFixed(3), fail: throatLast.fail, relHits: throatRelHits }) };
+window.__throatCam = { knobs: THROAT_CAM, last: throatLast, stepResponse: guardStepResponse, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, guards: throatGuards, stiff: throatSnaps, stiffMax: +throatLast.stiffMax.toFixed(3), fail: throatLast.fail, relHits: throatRelHits, gv: +guardV.length().toFixed(3) }) };
 // the open run across the crack at station u, height yT (fissureShape.js openRunAt: the march Sal's fall shares)
 function tcRun(F, u, vRef, zi, yT) { return openRunAt(u, vRef, zi, yT, shutFloorY, _tcRun, THROAT_CAM.step); }
 // Puts L (the lens target; or, for the guard, the lens itself) in the shaft with `margin` off the faces
