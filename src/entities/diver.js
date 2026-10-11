@@ -21,7 +21,6 @@ import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet,
 // SALSCULPT HOOK (1/2): the pipeline-built Mark V swaps onto this rig when assets/sal loads
 import { installSalSculpt } from './salInstall.js';
 import { harpoonModel, HARPOON_ASSET } from '../lib/harpoonModel.js';
-import { DIM as HDIM } from '../lib/harpoonSculpt.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
