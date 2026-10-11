@@ -871,7 +871,8 @@ if (mode === 'shape') {
     fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t4f-below-z${z.zi}.png`, Buffer.from(z.url.split(',')[1], 'base64')); delete z.url;
     if (z.light !== 1) fail.push(`crack ${z.zi}: not open for the check`);
     if (z.gate !== 0) fail.push(`crack ${z.zi}: the light's gate is open from below ${z.gate}`);
-    if (!(z.noGate.mean > z.aa.mean * 3 + 0.05)) fail.push(`crack ${z.zi}: the check does not discriminate (gate forced open shows nothing) ` + JSON.stringify(z));
+    if (!(z.noGate.bigPct > z.aa.bigPct * 3 + 0.1)) fail.push(   // (on bigPct: settled frames move between captures, the mean's A/A floor is higher)
+      `crack ${z.zi}: the check does not discriminate (gate forced open shows nothing) ` + JSON.stringify(z));
     if (z.ab.mean > z.aa.mean * 1.5 + 0.02 || z.ab.bigPct > z.aa.bigPct * 1.5 + 0.01) fail.push(`crack ${z.zi}: the light shows from below ` + JSON.stringify(z));
   }
   console.log(JSON.stringify(r));
