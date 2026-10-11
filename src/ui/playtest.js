@@ -9,8 +9,10 @@
 //   Alt+1 DECK, CALM      Alt+2 DECK, GALE      Alt+3 SEABED, ZONE 0   Alt+4 HOSE END
 //   Alt+5 SHARK           Alt+6 VELKATH         Alt+7 ORUNE            Alt+8 MHOR
 //   Alt+9 CHART           Alt+0 RESTORE         Alt+- NEXT ANCHORAGE   Alt+/ the panel
+//   Alt+= THE BLADE: grants Velkath's old harpoon (Sal's blade, fissure-and-harpoon Task 7) without the
+//         rite, or takes it back (the knife again). Written to the save (tools.harpoon) both ways.
 //
-// Keys go by e.code (Digit1.., Minus, Slash) so Option's typed symbols never matter, and
+// Keys go by e.code (Digit1.., Minus, Slash, Equal) so Option's typed symbols never matter, and
 // every one is preventDefault'ed and stopped here (capture phase) so nothing else sees it.
 // None of this runs per frame: the panel and the toast change only on a key.
 // OWNED BY: orchestrator (dev tool).
@@ -41,7 +43,7 @@ let last = '—';
 const ORDER = [
   ['1', 'DECK, CALM'], ['2', 'DECK, GALE'], ['3', 'SEABED, ZONE 0'], ['4', 'HOSE END'],
   ['5', 'SHARK'], ['6', 'VELKATH'], ['7', 'ORUNE'], ['8', 'MHOR'],
-  ['9', 'CHART'], ['0', 'RESTORE'], ['−', 'NEXT ANCHORAGE'], ['/', 'HIDE / SHOW']
+  ['9', 'CHART'], ['0', 'RESTORE'], ['−', 'NEXT ANCHORAGE'], ['=', 'HARPOON / KNIFE'], ['/', 'HIDE / SHOW']
 ];
 
 export function installPlaytest(hooks) {
@@ -58,11 +60,13 @@ function onKey(e) {
   if (c.length === 6 && c.startsWith('Digit')) k = c[5];
   else if (c === 'Minus') k = '-';
   else if (c === 'Slash') k = '/';
+  else if (c === 'Equal') k = '=';
   if (k === null) return;
   e.preventDefault();               // Option+digit would type a symbol
   e.stopImmediatePropagation();     // nothing else in the game hears an Alt+key
   if (e.repeat) return;
   if (k === '/') { togglePanel(); return; }
+  if (k === '=') { toggleBlade(); return; }
   jump(k);
 }
 
@@ -400,6 +404,15 @@ function buildDom() {
   let off = false;
   try { off = localStorage.getItem('abyssa.playtest.panel') === 'off'; } catch (e) { /* private mode */ }
   $panel.classList.toggle('off', off);
+}
+// Alt+= : the harpoon as his blade without the rite (or back to the knife). Not a jump: he stays where
+// he is, in whatever he was doing; the save is written so a reload keeps the choice.
+function toggleBlade() {
+  survival.hasHarpoon = !survival.hasHarpoon;
+  if (H && H.saveChart) H.saveChart();
+  toast(survival.hasHarpoon
+    ? 'BLADE — THE OLD HARPOON (CLICK: THE THRUST). SAVED WITH THE TOOLS · ALT+= AGAIN FOR THE KNIFE'
+    : 'BLADE — THE DIVE KNIFE (THE HARPOON TAKEN BACK, SAVED) · ALT+= FOR THE HARPOON');
 }
 function togglePanel() {
   const off = !$panel.classList.contains('off');

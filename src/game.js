@@ -3216,6 +3216,7 @@ if (/[?&]playtest(?:[=&#]|$)/.test(location.search)) import('./ui/playtest.js').
   enterZone: i => enterZone(i, true),   // quiet: the jump's own toast says where he is
   reseedWorld: i => reseedWorld(i),
   consultChart: () => consultChart(),
+  saveChart: () => saveChart(),   // (Task 7) Alt+= grants / revokes the harpoon in the save
   // After a jump has set player.pos / yaw: the rest of a respawn, as start() and the rescue
   // do it — still, re-dressed at this depth, the pack shut, the line re-laid to him, the
   // lens CUT behind him (never flown), the surface crossing not counted as a dive.

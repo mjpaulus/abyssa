@@ -209,8 +209,17 @@ against explicit contracts and reviewed on return.
   than 41.4 degrees. 58 rakes the deck and slants the shafts.
 - `entities/diver.js` — procedural Mark V Sal (~40k tris): Part/bake merged
   geometry, spring secondary motion, curve-keyed gait, heel-strike `stepCount()`
-  drives footsteps+dust+prints on the same frame. Knife slash contact at t=0.22s
-  (game.js `pendingSlash` matches — keep in sync). `airInletWorldPos` = tether dock.
+  drives footsteps+dust+prints on the same frame. Knife slash contact at t=0.22s; the
+  harpoon's thrust contact at t=0.30s (game.js `BLADE` / `pendingSlash` match — keep in sync).
+  `airInletWorldPos` = tether dock.
+  THE HARPOON AS HIS BLADE (fissure-and-harpoon Task 7): once `survival.hasHarpoon`, left click / RT is
+  `triggerSlash('harpoon')` — a two-handed bladed thrust (wind-up 0.18, contact 0.30, back by 0.9; THK keys
+  are the two PALMS in the spine frame, solved by `armIK`; the iron runs through both fists; the lantern
+  hangs plumb from the right fist), reach 5.5, power 1.8 (`predators.slash` stagger, `lev.onSlash` reach
+  5.1). The prop (`diver.harpoon`, a Group under the left hand bone: lib/harpoonModel.js, sculpted swap on
+  HARPOON_ASSET) is carried along the left forearm; the knife stays sheathed. Not owned: the knife path is
+  bit-identical (`tools/bench/knife-trace.mjs`). Alt+= (playtest) grants/revokes it. Probes:
+  harpoon-probe `thrust-contact`, `orune-cut`, `shark-thrust`; look-dev: `tools/bench/blade-shots.mjs`.
   The helmet is generated (44-seg spun bonnet, Mark V hasp); `helmetSwap.js` loader
   is RETIRED under the hard rule. Sal breathes on ONE clock (`breathPhase()`):
   shoulders, exhaust bursts from the real valve, and the audio regulator share it;
@@ -271,7 +280,7 @@ against explicit contracts and reviewed on return.
   30 u (drops on any mouse look). `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
-  wakes her; arms lash/grab (knife frees: `lev.onSlash`), flinch from light; wards on
+  wakes her; arms lash/grab (the blade frees: `lev.onSlash(pos, fwd, reach)`, knife 3 / harpoon 5.1), flinch from light; wards on
   the sucker faces answer the sonar; calmed, a lighthouse. `lev.rite` is the generic
   [E]/prompt hook all three use. Zone 2 SHIPS MHOR THE HUNTER (`sleeper/hunter.js`):
   absent until THE LAST FURNACE is fed 2 bitumen (warm pocket refills air); arrives
