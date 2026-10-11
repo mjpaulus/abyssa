@@ -2211,12 +2211,19 @@ const CARRY_DIR = V3(0.26, 1, -0.10).normalize();
 const _ikV = V3(), _ikH = V3(), _ikE = V3(), _ikP = V3(), _ikX = V3(), _ikY = V3(), _ikZ = V3();
 const _ikQ = new THREE.Quaternion(), _ikQ2 = new THREE.Quaternion(), _ikQf = new THREE.Quaternion();
 const _ikM = new THREE.Matrix4();
-const carryQ = new THREE.Quaternion(), carryP = V3();
+// THE BURST: the arms are flung back, the elbow ahead of the fist — along the forearm the head would
+// point forward past his helmet. In the burst the iron swings out (the slerp's midway is outboard) and
+// trails past the fist instead, the head back along his wake.
+const BURST_DIR = V3(0.26, -1, -0.10).normalize();
+const carryQ = new THREE.Quaternion(), carryP = V3(), burstQ = new THREE.Quaternion(), burstP = V3();
+const _cQ = new THREE.Quaternion(), _cP = V3();
 {
-  // model +Z (toward the head) along CARRY_DIR; model +Y (the leaf's flat, the line stub hangs -Y) outboard
-  _ikZ.copy(CARRY_DIR); _ikY.set(1, 0, 0); _ikX.crossVectors(_ikY, _ikZ).normalize(); _ikY.crossVectors(_ikZ, _ikX);
-  _ikM.makeBasis(_ikX, _ikY, _ikZ); carryQ.setFromRotationMatrix(_ikM);
-  carryP.copy(PALM_L).addScaledVector(CARRY_DIR, -HG_L);
+  // model +Z (toward the head) along the carry; model +Y (the leaf's flat, the line stub hangs -Y) outboard
+  for (const [D, Q, P] of [[CARRY_DIR, carryQ, carryP], [BURST_DIR, burstQ, burstP]]) {
+    _ikZ.copy(D); _ikY.set(1, 0, 0); _ikX.crossVectors(_ikY, _ikZ).normalize(); _ikY.crossVectors(_ikZ, _ikX);
+    _ikM.makeBasis(_ikX, _ikY, _ikZ); Q.setFromRotationMatrix(_ikM);
+    P.copy(PALM_L).addScaledVector(D, -HG_L);
+  }
 }
 // Two-bone solve in the spine's frame: places arm A's palm point (`palm`, hand frame, wrist straight) at
 // (tx, ty, tz), elbow toward `pole`, and blends the result over the pose already on the bones by w.
@@ -4402,6 +4409,9 @@ export function updateDiver(dt, t, player) {
     if (own) {
       thIK = thrustT >= 0 ? ss(0, 0.14, thrustT) * (1 - ss(0.58, 0.88, thrustT)) : 0;
       const wP = thrustT >= 0 ? ss(0.02, 0.16, thrustT) * (1 - ss(0.62, 0.88, thrustT)) : 0;
+      // the carry of the moment: along the forearm, or trailing past the fist through the burst
+      const bw = ss(0.15, 0.85, burstW * (1 - ladderF));
+      _cP.copy(carryP).lerp(burstP, bw); _cQ.copy(carryQ).slerp(burstQ, bw);
       if (thIK > 1e-4) {
         armIK(AL, PALM_L, thA[0], thA[1], thA[2], POLE_L, thIK);
         armIK(AR, PALM_R, thA[3], thA[4], thA[5], POLE_R, thIK);
@@ -4417,9 +4427,9 @@ export function updateDiver(dt, t, player) {
         AL.end.getWorldQuaternion(_ikQf);
         _ikQ.premultiply(_ikQf.invert());
         AL.end.worldToLocal(_ikP);
-        hp.position.copy(carryP).lerp(_ikP, wP);
-        hp.quaternion.copy(carryQ).slerp(_ikQ, wP);
-      } else { hp.position.copy(carryP); hp.quaternion.copy(carryQ); }
+        hp.position.copy(_cP).lerp(_ikP, wP);
+        hp.quaternion.copy(_cQ).slerp(_ikQ, wP);
+      } else { hp.position.copy(_cP); hp.quaternion.copy(_cQ); }
     }
   }
 
