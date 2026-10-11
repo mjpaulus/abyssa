@@ -32,11 +32,10 @@
 // from the build (hidden things are drawn by the boot's warm frames), so nothing compiles on sight.
 // Zero per-frame allocation (module temps).
 import * as THREE from 'three';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { camera, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp } from '../../lib/math.js';
 import { makeWarmGlow, seededRand } from '../../lib/textures.js';
-import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+import { HARPOON_ASSET, harpoonModel, harpoonSculpted } from '../../lib/harpoonModel.js';
 import { DIM } from '../../lib/harpoonSculpt.js';
 import { terrainH } from '../../world/terrain.js';
 import { fissureDist } from '../../world/fissureShape.js';
@@ -49,16 +48,19 @@ import { bodyBlocked, inClutch, blockWhy } from './bodyCols.js';
 import { rimR as G_rimR } from './brooderGeo.js';
 const G = { rimR: G_rimR };
 
-export const HARPOON_ASSET = loadSculpted('assets/harpoon/', 'harpoon');
-let ASSET = null;
-HARPOON_ASSET.then(a => { if (a && a.geos.harpoon && a.maps.harpoon) ASSET = a; });
 
 export const WRENCH_T = 1.5;          // the commitment (s): brace, wrench, wrench, free
-const BEATS = [0.28, 0.72, 1.12];
-const SEAT_TRY = 90;                  // seam candidates given the full reach test (best pre-score first)     // the three heaves (s into the wrench)
+const BEATS = [0.28, 0.72, 1.12];     // the three heaves (s into the wrench)
+const SEAT_TRY = 10;                  // buried + reachable seams scored before the search stops (best pre-score first)
+const AX_UPS = [0.18, 0.06, 0.3];     // the entry's rise per unit in (tried in turn per seam)
 export const REACH = 2.6;             // prompt / interact range from the anchor (horizontal, u)
 const WAKE_DELAY = 0.7;               // it comes free, she shudders a beat later (the wake's own sequence takes ~6 s)
-const LODGE_IN = 0.30;                // how much of the iron is in her (model units, from the point)
+// how much of the iron is in her (model units, from the point): the head, the pin and the shank up to the
+// socket (fix round 1: at 0.30 the point and the head stood out of her, leaned on the margin's lip)
+const LODGE_IN = 0.605;
+// the burial test (seat): these model points must be inside her drawn shell by at least `d` (u)
+const BURY = [[0, 0, 0.62, 0.15], [0, 0, 0.52, 0.15], [0.06, 0, 0.45, 0.12], [-0.06, 0, 0.45, 0.12], [0, 0, 0.40, 0.15], [0, 0, 0.25, 0.06], [0, 0, 0.12, 0.02]];
+
 // the lodged iron is drawn 1.3x the hand-scale model (a whaling iron for a colossus: 2.1 u, the pole
 // reaching out past her folded legs to where a man on the sand takes it); Task 7's blade is 1x
 export const LODGED_S = 1.3;
@@ -74,69 +76,6 @@ const sightSaid = new Uint8Array(8);
 const _v = V3(), _w = V3(), _n = V3(), _a = V3(), _b = V3(), _up = V3(0, 1, 0), _fw = V3();
 const _m = new THREE.Matrix4(), _m2 = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = V3(1, 1, 1), _nm = new THREE.Matrix3();
 const _e = new THREE.Euler();
-
-// ---- THE MODEL (shared with Task 7) ----------------------------------------------------------
-let _procGeo = null;
-// The procedural build: the same proportions in lathes, cones and boxes, vertex-coloured (iron,
-// brass, weathered wood, tarred line). The loader never throws; this is what draws until (or unless)
-// the sculpted set lands.
-function proceduralGeo() {
-  if (_procGeo) return _procGeo;
-  const D = DIM, parts = [];
-  const col = (g, c) => {
-    const n = g.attributes.position.count, a = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { a[i * 3] = c[0] ** 2.2; a[i * 3 + 1] = c[1] ** 2.2; a[i * 3 + 2] = c[2] ** 2.2; }   // (sRGB swatches, linear vertex colours)
-    g.setAttribute('color', new THREE.BufferAttribute(a, 3));
-    return g.index ? g.toNonIndexed() : g;
-  };
-  const along = (g, z0, z1) => { g.rotateX(Math.PI / 2); g.translate(0, 0, (z0 + z1) / 2); return g; };
-  const IRON = [0.17, 0.12, 0.09], BRASS = [0.52, 0.40, 0.21], WOOD = [0.40, 0.38, 0.33], ROPE = [0.13, 0.11, 0.08];
-  parts.push(col(along(new THREE.CylinderGeometry(D.poleR0, D.poleR1, D.fer0 - D.butt, 12, 1), D.butt, D.fer0), WOOD));
-  parts.push(col(along(new THREE.CylinderGeometry(D.ferR - 0.003, D.ferR, D.fer1 - D.fer0, 14, 1), D.fer0, D.fer1), BRASS));
-  for (const z of [D.fer0 + 0.008, D.fer1 - 0.01]) { const g = new THREE.TorusGeometry(D.ferR, 0.0062, 6, 16); g.translate(0, 0, z); parts.push(col(g, BRASS)); }
-  parts.push(col(along(new THREE.CylinderGeometry(D.shankR + 0.002, D.socketR, D.shank0 + 0.012 - D.socket0 + 0.02, 10, 1), D.socket0 - 0.02, D.shank0 + 0.012), IRON));
-  { const g = new THREE.BoxGeometry(D.shankR * 2, D.shankR * 2, D.pin - D.shank0); g.translate(0, 0, (D.shank0 + D.pin) / 2); parts.push(col(g, IRON)); }
-  { // the head: a flat two-flued leaf (an extruded outline), canted on its pin
-    const sh = new THREE.Shape();
-    const P = [[0, D.tip], [0.070, 0.508], [D.headHalfW, D.barbBack], [0.046, 0.469], [0.019, 0.462], [-0.019, 0.462], [-0.046, 0.469], [-D.headHalfW, D.barbBack], [-0.070, 0.508]];
-    sh.moveTo(P[0][0], P[0][1]);
-    for (let i = 1; i < P.length; i++) sh.lineTo(P[i][0], P[i][1]);
-    sh.closePath();
-    const g = new THREE.ExtrudeGeometry(sh, { depth: 0.012, bevelEnabled: false });
-    g.translate(0, 0, -0.006);
-    g.rotateX(Math.PI / 2);                  // the outline's y -> +Z (the point), its depth -> Y (the leaf's thickness)
-    g.translate(0, 0, -D.pin); g.rotateY(-D.toggle); g.translate(0, 0, D.pin);   // the toggle's cant on its pin
-    parts.push(col(g, IRON));
-  }
-  for (let k = 0; k < 3; k++) { const g = new THREE.TorusGeometry(D.poleR0 + D.lashR * 0.75, D.lashR, 6, 14); g.translate(0, 0, D.lash0 + (D.lash1 - D.lash0) * (k + 0.5) / 3); parts.push(col(g, ROPE)); }
-  {
-    const c = new THREE.CubicBezierCurve3(V3(0.040, -0.022, -0.172), V3(0.072, -0.085, -0.215), V3(0.070, -0.165, -0.268), V3(0.052, -0.215, -0.318));
-    parts.push(col(new THREE.TubeGeometry(c, 8, 0.0105, 6, false), ROPE));
-  }
-  for (const p of parts) { if (p.attributes.uv === undefined) p.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(p.attributes.position.count * 2), 2)); }
-  _procGeo = mergeGeometries(parts.map(p => { const g = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv', 'color']) g.setAttribute(k, p.attributes[k]); return g; }));
-  _procGeo.computeBoundingSphere();
-  return _procGeo;
-}
-// harpoonModel() -> { geometry, material, sculpted, dim, keepGeo: Set, keepTex: Set }
-// The geometry and textures are SHARED (cached for the page's life): an owner that disposes its
-// subtree must keep them (the sets returned; a sleeper's L.keepGeo / L.keepTex). The material is the
-// caller's own (fresh per call; one program for every owner: customProgramCacheKey).
-export function harpoonModel() {
-  if (ASSET) {
-    const mp = ASSET.maps.harpoon;
-    const m = new THREE.MeshStandardMaterial({
-      map: mp.map, normalMap: mp.normalMap, roughnessMap: mp.ormMap, aoMap: mp.ormMap, metalnessMap: mp.ormMap,
-      roughness: 1, metalness: 1, aoMapIntensity: 0.85, envMap: envTex, envMapIntensity: 0.55
-    });
-    m.customProgramCacheKey = () => 'harpoon|sculpt';
-    return { geometry: ASSET.geos.harpoon, material: m, sculpted: true, dim: DIM, meta: ASSET.meta.meta, keepGeo: assetGeos(ASSET), keepTex: assetTextures(ASSET) };
-  }
-  const m = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.35, envMap: envTex, envMapIntensity: 0.45 });
-  m.customProgramCacheKey = () => 'harpoon|proc';
-  const g = proceduralGeo();
-  return { geometry: g, material: m, sculpted: false, dim: DIM, meta: null, keepGeo: new Set([g]), keepTex: new Set() };
-}
 
 // ---- the wound (a healed scar in the seam; fresh and wet once pulled) -------------------------
 let _woundGeo = null;
@@ -234,7 +173,7 @@ export function makeHarpoon(L, opts = {}) {
   keep(model);
   H.keep = () => keep(model);          // brooder.js: her sculpt install REPLACES L.keepGeo; re-add ours after it
   if (!model.sculpted) HARPOON_ASSET.then(() => {
-    if (!ASSET || L.gone) return;
+    if (!harpoonSculpted() || L.gone) return;
     const old = iron.material;
     model = harpoonModel();
     iron.geometry = model.geometry; iron.material = model.material;
@@ -284,15 +223,124 @@ export function makeHarpoon(L, opts = {}) {
   L.grp.add(gl);
   H.glintSpr = gl;
 
-  // The iron went in from BELOW: a diver on the sand thrust it up into the seam over her rim (a man on
-  // foot cannot throw down at her), so it slopes in and up, a little aft, and its pole hangs out and
-  // down to where a standing man takes it. axisFor: the model's +Z (the point, into her) from the
-  // seam's normal.
+  // The iron went in from below and outside: a diver on the sand drove it into the seam at her margin,
+  // nearly level and a little up (fix round 1: at 0.64 up it ran through the margin's thin lip and its
+  // point stood out of the top), a little aft; its pole hangs out and down to where a standing man takes
+  // it. axisFor: the model's +Z (the point, into her) from the seam's normal.
+  const _ax = V3(), _o = V3(), _p = V3(), _g = V3();
+  let axUp = 0.18;                    // the rise of the entry (tried per seam: AX_UPS)
   const axisFor = (n, out) => {
     const nh = Math.hypot(n.x, n.z) || 1;
-    return out.set(-n.x / nh * 0.74 - _fw.x * 0.14, 0.64, -n.z / nh * 0.74 - _fw.z * 0.14).normalize();
+    return out.set(-n.x / nh * 0.96 - _fw.x * 0.10, axUp, -n.z / nh * 0.96 - _fw.z * 0.10).normalize();
   };
-  const _ax = V3(), _o = V3(), _p = V3(), _g = V3();
+  // ---- THE BURIAL TEST: rays against her drawn shell (seat time only) ----
+  // TRI: world-space triangles of the shell near the flank (9 floats each), gathered once per seat and
+  // bucketed on an x/z grid (GC u cells, CSR: CELL0 offsets into CELLT). A point is INSIDE her when the
+  // vertical ray up from it and the one down both meet her surface first from the inside (her shell is
+  // closed and wound outward: an exit face); its depth is the nearer of the two. (Vertical rays only need
+  // the triangles over the point's own cell: the whole test is a few dozen triangles.)
+  const GC = 0.5;
+  let TRI = new Float32Array(0), nTri = 0, CELL0 = new Int32Array(0), CELLT = new Int32Array(0), gx0 = 0, gz0 = 0, gnx = 0, gnz = 0;
+  const gatherTris = (sh, mw, sa) => {
+    const P = sh.geometry.attributes.position, I = sh.geometry.index, n = I ? I.count / 3 : P.count / 3;
+    if (TRI.length < n * 9) TRI = new Float32Array(n * 9);
+    nTri = 0;
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+    for (let t = 0; t < n; t++) {
+      const i0 = I ? I.getX(t * 3) : t * 3, i1 = I ? I.getX(t * 3 + 1) : t * 3 + 1, i2 = I ? I.getX(t * 3 + 2) : t * 3 + 2;
+      const cx = (P.getX(i0) + P.getX(i1) + P.getX(i2)) / 3, cy = (P.getY(i0) + P.getY(i1) + P.getY(i2)) / 3, cz = (P.getZ(i0) + P.getZ(i1) + P.getZ(i2)) / 3;
+      if (cy < -0.4 || cy > 0.4) continue;
+      const th = Math.atan2(cz, cx); let dth = th - sa; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
+      if (Math.abs(dth) > 1.45 || Math.hypot(cx, cz) < G.rimR(th) * 0.5) continue;
+      const o = nTri * 9;
+      _v.fromBufferAttribute(P, i0).applyMatrix4(mw); TRI[o] = _v.x; TRI[o + 1] = _v.y; TRI[o + 2] = _v.z;
+      _v.fromBufferAttribute(P, i1).applyMatrix4(mw); TRI[o + 3] = _v.x; TRI[o + 4] = _v.y; TRI[o + 5] = _v.z;
+      _v.fromBufferAttribute(P, i2).applyMatrix4(mw); TRI[o + 6] = _v.x; TRI[o + 7] = _v.y; TRI[o + 8] = _v.z;
+      for (const k of [0, 3, 6]) { x0 = Math.min(x0, TRI[o + k]); x1 = Math.max(x1, TRI[o + k]); z0 = Math.min(z0, TRI[o + k + 2]); z1 = Math.max(z1, TRI[o + k + 2]); }
+      nTri++;
+    }
+    gx0 = x0; gz0 = z0; gnx = Math.max(1, Math.ceil((x1 - x0) / GC) + 1); gnz = Math.max(1, Math.ceil((z1 - z0) / GC) + 1);
+    const cnt = new Int32Array(gnx * gnz + 1);
+    const each = (t, fn) => {
+      const o = t * 9;
+      const a0 = Math.floor((Math.min(TRI[o], TRI[o + 3], TRI[o + 6]) - gx0) / GC), a1 = Math.floor((Math.max(TRI[o], TRI[o + 3], TRI[o + 6]) - gx0) / GC);
+      const b0 = Math.floor((Math.min(TRI[o + 2], TRI[o + 5], TRI[o + 8]) - gz0) / GC), b1 = Math.floor((Math.max(TRI[o + 2], TRI[o + 5], TRI[o + 8]) - gz0) / GC);
+      for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) fn(b * gnx + a);
+    };
+    for (let t = 0; t < nTri; t++) each(t, c => { cnt[c + 1]++; });
+    for (let c = 0; c < gnx * gnz; c++) cnt[c + 1] += cnt[c];
+    CELL0 = cnt; CELLT = new Int32Array(cnt[gnx * gnz]);
+    const fill = new Int32Array(gnx * gnz);
+    for (let t = 0; t < nTri; t++) each(t, c => { CELLT[CELL0[c] + fill[c]++] = t; });
+  };
+  // the first hit of the vertical ray from (px, py, pz) going dir (+1 up, -1 down): sets RAY.t, RAY.exit
+  const RAY = { t: 1e9, exit: false };
+  const vray = (px, py, pz, dir) => {
+    RAY.t = 1e9; RAY.exit = false;
+    const a = Math.floor((px - gx0) / GC), b = Math.floor((pz - gz0) / GC);
+    if (a < 0 || b < 0 || a >= gnx || b >= gnz) return;
+    const c = b * gnx + a;
+    for (let q = CELL0[c]; q < CELL0[c + 1]; q++) {
+      const o = CELLT[q] * 9;
+      const ax = TRI[o], az = TRI[o + 2], bx = TRI[o + 3], bz = TRI[o + 5], cx = TRI[o + 6], cz = TRI[o + 8];
+      // barycentric in x/z
+      const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+      if (d > -1e-12 && d < 1e-12) continue;
+      const l1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d, l2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d, l3 = 1 - l1 - l2;
+      if (l1 < 0 || l2 < 0 || l3 < 0) continue;
+      const y = l1 * TRI[o + 1] + l2 * TRI[o + 4] + l3 * TRI[o + 7], t = (y - py) * dir;
+      if (t <= 1e-5 || t >= RAY.t) continue;
+      RAY.t = t;
+      // the face's normal y (e1 x e2): an exit face going up faces up
+      const ny = (TRI[o + 5] - TRI[o + 2]) * (TRI[o + 6] - TRI[o]) - (TRI[o + 3] - TRI[o]) * (TRI[o + 8] - TRI[o + 2]);
+      RAY.exit = ny * dir > 0;
+    }
+  };
+  // depth of world point (px, py, pz) inside her (-1: outside)
+  const depthIn = (px, py, pz) => {
+    vray(px, py, pz, 1); if (!RAY.exit || RAY.t > 1e8) return -1;
+    const up = RAY.t;
+    vray(px, py, pz, -1); if (!RAY.exit || RAY.t > 1e8) return -1;
+    return Math.min(up, RAY.t);
+  };
+  const _bx = V3(), _by = V3();
+  // the head and the shank buried (every BURY point at its depth), for a seam p with normal n
+  const buried = (p, n) => {
+    axisFor(n, _ax);
+    _by.copy(_up).addScaledVector(_ax, -_up.dot(_ax)).normalize();
+    _bx.crossVectors(_by, _ax);
+    _o.copy(p).addScaledVector(_ax, -(DIM.tip - LODGE_IN) * LODGED_S);
+    let worst = 1e9;
+    for (const [x, y, z, d] of BURY) {
+      _g.copy(_o).addScaledVector(_bx, x * LODGED_S).addScaledVector(_by, y * LODGED_S).addScaledVector(_ax, z * LODGED_S);
+      const dep = depthIn(_g.x, _g.y, _g.z);
+      if (dep < d) return -1;
+      worst = Math.min(worst, dep - d);
+    }
+    return worst;
+  };
+  H._buriedScan = () => {   // (dev probe) burial over every margin-edge seam: [ok count, best margin, per-point fail histogram]
+    const sh = L.parts.shell, mw = sh.matrixWorld, P = sh.geometry.attributes.position, N = sh.geometry.attributes.normal;
+    L.grp.updateMatrixWorld(true); _nm.getNormalMatrix(mw); _fw.set(Math.sin(L.yaw), 0, Math.cos(L.yaw));
+    const sa = L.sandSide > 0 ? 0 : Math.PI; gatherTris(sh, mw, sa);
+    const fail = new Array(BURY.length).fill(0); let ok = 0, n = 0, bestW = -9;
+    for (let i = 0; i < P.count; i += 3) {
+      _v.fromBufferAttribute(P, i); if (_v.y < -0.13 || _v.y > 0.08) continue;
+      const th = Math.atan2(_v.z, _v.x); let dth = th - sa; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
+      if (Math.abs(dth) > 1.15 || Math.hypot(_v.x, _v.z) < G.rimR(th) * 0.95) continue;
+      _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize(); const ns = _n.x * L.sand.x + _n.z * L.sand.z;
+      if (ns < 0.55 || _n.y > 0.55 || _n.y < -0.45) continue;
+      _v.applyMatrix4(mw); n++;
+      axisFor(_n, _ax); _by.copy(_up).addScaledVector(_ax, -_up.dot(_ax)).normalize(); _bx.crossVectors(_by, _ax);
+      _o.copy(_v).addScaledVector(_ax, -(DIM.tip - LODGE_IN) * LODGED_S);
+      let w = 1e9, k = 0;
+      for (const [x, y, z, d] of BURY) { _g.copy(_o).addScaledVector(_bx, x * LODGED_S).addScaledVector(_by, y * LODGED_S).addScaledVector(_ax, z * LODGED_S);
+        const dep = depthIn(_g.x, _g.y, _g.z); if (dep < d) { fail[k]++; w = -1; break; } w = Math.min(w, dep - d); k++; }
+      if (w >= 0) ok++; bestW = Math.max(bestW, w);
+    }
+    return { n, ok, bestW, fail };
+  };
+  H._depthIn = (x, y, z) => depthIn(x, y, z);   // (dev probe; after a seat)
   const clearAt = (x, y, z, m) => !bodyBlocked(x, y, z, m) && !(inClutch(x, y, z, m) > 0);
   // Try a seam (world point p, normal n). The iron's outside length must stand clear of her limbs; a
   // standing spot must exist on clear ground (his whole body out of hers and out of her clutch, off
@@ -304,11 +352,13 @@ export function makeHarpoon(L, opts = {}) {
     _o.copy(p).addScaledVector(_ax, -(DIM.tip - LODGE_IN) * LODGED_S);
     // (her limbs only: the shell's own collider is the column under her plan, which the iron's first
     // hand's breadth out of the seam is always inside)
-    if (strict) for (const z of [-0.2, -0.55, -0.95]) {
+    if (strict) for (const z of [0.03, -0.1, -0.3, -0.55, -0.8, -0.95]) {   // socket, ferrule, the pole to its break
       _g.copy(_o).addScaledVector(_ax, z * LODGED_S);
       if (bodyBlocked(_g.x, _g.y, _g.z, 0.05) && blockWhy !== -1) { H.dbg.shaft++; return Infinity; }
     }
     _g.copy(_o).addScaledVector(_ax, GRIP_Z * LODGED_S);
+    // (cheap first: a grip far off a man's hands over the ground under it is never in reach)
+    if (strict) { const g0 = _g.y - terrainH(_g.x, _g.z, idx); if (g0 < 0.6 || g0 > 2.2) { H.dbg.high++; return Infinity; } }
     const nh = Math.hypot(n.x, n.z) || 1, nx = n.x / nh, nz = n.z / nh;
     let best = Infinity;
     H.dbg.tried++;
@@ -358,7 +408,7 @@ export function makeHarpoon(L, opts = {}) {
       if (Math.hypot(_v.x, _v.z) < G.rimR(th) * 0.95) continue;
       _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
       const ns = _n.x * sand.x + _n.z * sand.z;
-      if (ns < 0.4 || _n.y > 0.8) continue;
+      if (ns < 0.55 || _n.y > 0.55 || _n.y < -0.45) continue;           // the margin's outer EDGE (its top face is a thin lip)
       _v.applyMatrix4(mw);
       if (fissureDist(_v.x, _v.z, idx) < 8) continue;
       // the cheap part of the score now (bearing, facing, the seam ~2 u over the ground out there); the
@@ -369,13 +419,27 @@ export function makeHarpoon(L, opts = {}) {
     const ord = [];
     for (let k = 0; k < cand.length; k += 2) ord.push(k);
     ord.sort((a, b) => cand[a] - cand[b]);
-    for (let q = 0; q < ord.length && q < SEAT_TRY; q++) {
+    // every seam (best pre-score first, at most SEAT_TRY of those that pass): its head and shank BURIED in
+    // her drawn body at one of the entry rises AX_UPS (the sculpted shell is closed; the procedural one,
+    // before the sculpt lands, is not, and is only reached), then the reach test; the best score wins
+    const tg0 = performance.now();
+    gatherTris(sh, mw, sa);
+    H.dbg.tGather = +(performance.now() - tg0).toFixed(1); H.dbg.tris = nTri; H.dbg.bury = 0; H.dbg.pass = 0;
+    let bestUp = AX_UPS[0];
+    for (let q = 0; q < ord.length && H.dbg.pass < SEAT_TRY; q++) {
       const i = cand[ord[q] + 1];
       _v.fromBufferAttribute(P, i).applyMatrix4(mw);
       _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
-      const sc = trySeam(_v, _n, true) + cand[ord[q]];
-      if (sc < best) { best = sc; bi = i; H.anchor.copy(_p); }
+      for (const up of AX_UPS) {
+        axUp = up;
+        if (L.sculpted && buried(_v, _n) < 0) continue;
+        H.dbg.bury++;
+        const sc = trySeam(_v, _n, true) + cand[ord[q]];
+        if (sc < Infinity) { H.dbg.pass++; if (sc < best) { best = sc; bi = i; bestUp = up; H.anchor.copy(_p); } }
+      }
     }
+    H.dbg.tSearch = +(performance.now() - tg0).toFixed(1);
+    axUp = bestUp; H.axUp = bestUp;
     const found = bi >= 0;
     if (found) {
       H.seam.fromBufferAttribute(P, bi).applyMatrix4(mw);

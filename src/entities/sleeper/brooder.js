@@ -106,8 +106,8 @@ const WAKE_ORDER = [0, 5, 2, 7, 1, 4, 3, 6];         // leg unfold order (li), a
 const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;   // hammer cycle phases
 const HAMMER_T = 2.6;
 // THE HUNT (brooderfix): speeds are fractions of cfg.speed (9: Sal walks 2.15 u/s, 2.8 with
-// Shift, hauls ~6.6 off the bottom). chase 0.42 = 3.8 u/s after a thief (she runs a walker
-// down; a swimmer gets away), stalk 0.26 = 2.3 u/s otherwise. She closes to `hold` R from
+// Shift, hauls ~6.6 off the bottom). stalk 0.26 = 2.3 u/s (fissure-and-harpoon Task 6 retired the
+// 0.42 `chase` after a clutch thief with the pry). She closes to `hold` R from
 // her centre (the hammer's hinge lands ~2.3 R out, measured; the hit takes 0.42 R round it), keeps an unburdened
 // diver off `guard` R round her lair, and turns at up to `turn` rad/s while hunting.
 // knock: the hammer's throw (u/s). It was 38 when she never moved: measured, it carried him
@@ -136,7 +136,7 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // (ritefair) THE RITE, FAIR. stand: her standing height (shell units over her feet; was 0.44):
 // with the clutch carried tucked under her apron (brood.js MAIN) and her wards on the belly
 // plane, 0.52 puts the wards ~6 u over flat ground (in reach standing, a hop at most) and the
-// egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). ride: she rides
+// egg mass's underside ~3.5 u up (over his helmet). ride: she rides
 // at most this far (R) over the ground under her belly, whatever her feet stand on; clear: her
 // shell's lowest point keeps this many u over the ground under it while she is awake. Standing on
 // the old rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
@@ -151,7 +151,7 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
 // u/s straight up: it launched him over her back); a throw never carries him into the crack (safeThrow).
 export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
-export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
+export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -561,7 +561,7 @@ export function makeBrooder(idx, cfg) {
   setLive(L);
   setWardTargets(-1, null);
   poseAll(L, 0, null);
-  seatRite(L);                                       // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
+  seatRite(L, !!SC);                                 // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
   buildSkirt(L);
   // (the harpoon seats in her DRAWN shell: with the sculpt already here it is swapped in after the first
   // seat, so the iron is re-seated on it and the drift re-opened at its bearing)
@@ -574,9 +574,9 @@ export function makeBrooder(idx, cfg) {
 
 // The clutch on her bed and the harpoon in her drawn flank, in her dormant pose (the harpoon also
 // re-keeps its shared model after a sculpt install replaced L.keepGeo).
-function seatRite(L) {
+function seatRite(L, noHarpoon = false) {
   if (L.brood) L.brood.seat();
-  if (L.harpoon) { L.harpoon.keep(); if (!L.harpoon.pulled || L.harpoon.wound) L.harpoon.seat(); }
+  if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
 }
 
 // ---- THE SILT DRIFT (polish-followups) ----
@@ -1715,17 +1715,13 @@ export function updateBrooder(L, dt, t, player) {
   for (const s of L.spine) { const d = s.distanceTo(player.pos); if (d < pd) pd = d; }
   L._pd = pd;
   let want = null, speed = 0;
-  // THE HUNT (brooderfix, Michael 2026-10-08: "Crab does not follow sal at all when he gets
-  // the egg"). Measured on main: awake she only ever TURNED and sidled (the stalk below is
-  // purely tangential, so it drifted her outward), from her first commit on; no step toward
-  // him was ever written, and the old nest sat just outside her 2.4 R threat ring, so a thief
-  // at it was never even struck. Now, once she is up, she COMES FOR HIM: her body
+  // THE HUNT (brooderfix, 2026-10-08: she never followed him). Awake she only ever TURNED and
+  // sidled (the stalk below is purely tangential, so it drifted her outward); no step toward him
+  // was ever written. Now, once she is up, she COMES FOR HIM: her body
   // moves in WORLD space toward what she is after (Sal, or blind, the spot she lost him),
   // crab-fashion, independent of where her face has got to; she stalks sideways as she
   // closes, plants for every blow and lunges into it. She keeps him off her ground (HUNT.guard round
-  // her lair) and lets him go past it. (fissure-and-harpoon Task 6: the clutch is never carried off now,
-  // so the relentless thief chase, HUNT.chase out to 400 u, is retired; she hunts whoever pulled the
-  // harpoon at the unburdened speeds.)
+  // her lair) and lets him go past it. She hunts whoever pulled the harpoon.
   const hunt = !L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.5;
   const tx = L.aim.x - L.pos.x, tz = L.aim.z - L.pos.z, dh = Math.hypot(tx, tz) || 1e-3;
   L.huntD = dh;

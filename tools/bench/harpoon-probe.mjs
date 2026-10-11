@@ -1,5 +1,5 @@
 // THE HARPOON probe (fissure-and-harpoon Task 6; spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md §2).
-//   node tools/bench/harpoon-probe.mjs <routes|rite|remote> <port>      (serve.py must already serve <port>)
+//   node tools/bench/harpoon-probe.mjs <routes|rite|remote|lodged|abort> <port>      (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9485). A FRESH PROFILE per run (the chart save remembers
 // pulled[site] and tools.harpoon), shared across the rite's own reload.
 //   routes: at all four anchorages (Home, Pallid, Burned, the Unsounded Shelf), Alt+6 stands Sal at
@@ -94,6 +94,40 @@ if (mode === 'rite') {
   console.log('wound', JSON.stringify(b));
   if (b.dormant) fail.push('pressing the wound did not wake her');
   if (b.msgs.includes('IT COMES FREE. SHE FEELS IT.') || b.msgs.includes("ANOTHER DIVER'S HARPOON.")) fail.push('the wound said a pull line');
+} else if (mode === 'lodged') {
+  // THE IRON IS IN HER (fix round 1): at all four anchorages, points along the DRAWN iron (H.iron.matrixWorld,
+  // the live pose) are cast against her drawn body (the shell, the instanced legs, the claws; DoubleSide for
+  // the test) along +-Y and +-the seam normal. INSIDE = every first hit is an exit face. The head (tip, mid,
+  // both barbs, pin) and the shank must be inside her shell, the head by >= 0.1 u; the socket, ferrule and the
+  // pole (outside her) must be inside no leg or claw.
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  const LODGE = `(async () => {
+    const THREE = await import('three'); const L = window.lev, H = L.harpoon; L.grp.updateMatrixWorld(true);
+    const shell = [L.parts.shell], limbs = [];
+    for (const k in L.legs) limbs.push(L.legs[k]);
+    for (const cl of L.claws || []) for (const k in cl) { const o = cl[k]; if (o && o.isObject3D) o.traverse(m => { if (m.isMesh && !limbs.includes(m)) limbs.push(m); }); }
+    const all = shell.concat(limbs), sides = all.map(m => m.material.side); all.forEach(m => m.material.side = THREE.DoubleSide);
+    const rc = new THREE.Raycaster(), v = new THREE.Vector3(), n = H.normal.clone(), nm = new THREE.Matrix3(), im = new THREE.Matrix4(), wn = new THREE.Vector3();
+    const dirs = [new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0), n.clone(), n.clone().negate()];
+    const inside = (p, objs) => { let dmin = 1e9;
+      for (const d of dirs) { rc.set(p, d); rc.far = 40; const h = rc.intersectObjects(objs, false)[0]; if (!h) return -1;
+        const o = h.object; let M = o.matrixWorld; if (o.isInstancedMesh && h.instanceId != null) { o.getMatrixAt(h.instanceId, im); M = im.premultiply(o.matrixWorld); }
+        nm.getNormalMatrix(M); wn.copy(h.face.normal).applyMatrix3(nm).normalize(); if (wn.dot(d) <= 0) return -1; dmin = Math.min(dmin, h.distance); }
+      return dmin; };
+    const pt = (x, y, z) => v.set(x, y, z).applyMatrix4(H.iron.matrixWorld).clone();
+    const head = { tip: [0, 0, 0.62], mid: [0, 0, 0.52], barbL: [0.06, 0, 0.45], barbR: [-0.06, 0, 0.45], pin: [0, 0, 0.448], shank: [0, 0, 0.25] };
+    const out = { site: window.__chart.site(), head: {}, limbs: {} };
+    for (const k in head) out.head[k] = +inside(pt(...head[k]), shell).toFixed(3);
+    for (const z of [0.0, -0.1, -0.3, -0.55, -0.8, -0.95]) out.limbs[z] = +inside(pt(0, 0, z), limbs).toFixed(3);
+    all.forEach((m, i) => m.material.side = sides[i]);
+    return out; })()`;
+  for (const site of [0, 1, 2, 3]) {
+    await c.ev(`(window.__helm=true, window.__chart.arrive(${site}), 1)`); await alt(c, 6);
+    const r = await c.ev(LODGE);
+    console.log('site', site, JSON.stringify(r));
+    for (const k in r.head) { const need = k === 'shank' ? 0.0 : 0.1; if (!(r.head[k] >= need)) fail.push(`site ${site}: the ${k} is ${r.head[k] < 0 ? 'outside her' : r.head[k] + ' u inside (< ' + need + ')'}`); }
+    for (const z in r.limbs) if (r.limbs[z] >= 0) fail.push(`site ${site}: the pole at z ${z} runs through a leg/claw (${r.limbs[z]} u)`);
+  }
 } else if (mode === 'remote') {
   // the first pull EVER at a remote anchorage: another diver's iron, and the blade with it; then home's
   // own pull says its own line and grants nothing new; pulled[] is per anchorage

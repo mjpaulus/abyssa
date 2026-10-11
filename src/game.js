@@ -611,7 +611,7 @@ addEventListener('mousedown', e => {
 // prio 0: names and colour. prio 1 (default): everything the player must read.
 // (fifth-ward) The waiting room is a short QUEUE now, not one slot: with one slot every line
 // that arrived while another waited REPLACED it, so in a busy beat (a ward lit, a slam, the
-// dress tearing, the lantern guttering) the count, the brood rule's refusal and the sleepers'
+// dress tearing, the lantern guttering) the count, a held ward's refusal and the sleepers'
 // own beats ('THE FIRE BLINDS HIM', 'THE WARDS OF ORUNE ANSWER THE PING') were silently lost.
 // Up to MSGQ_N lines wait, highest priority first and in arrival order within one; a line
 // already live or waiting is not queued twice; a line that has waited MSGQ_STALE seconds is
@@ -645,8 +645,8 @@ function nextMsg() {
   while (msgQ.length && msgClock - msgQ[0].at > MSGQ_STALE) msgQ.shift();
   return msgQ.length ? msgQ.shift() : null;
 }
-// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the clump is
-// back, the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
+// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once its rule lets go,
+// the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
 // whatever waits behind it shows; a waiting copy is struck too.
 function dropMsg(text) {
   if (!text) return;
@@ -2418,7 +2418,7 @@ function update(dt, t) {
       $craft.style.opacity = 1;
     }
   } else {
-    // Same order as the E handler: the brood, the keepsake (or his mark), the relic.
+    // Same order as the E handler: the rite (Velkath's harpoon, the lamp, the furnace), the keepsake (or his mark), the relic.
     const bp = lev && lev.rite ? lev.rite.prompt(player.pos) : null;
     const kp = bp ? null : nearKeepsake(player.pos);
     const rel = kp || bp ? null : nearRelic(player.pos);

@@ -166,16 +166,15 @@ function beadField() {
 // aP0 / aP1: centre (xyz) + radius (w), asleep / standing (mesh-local units). aSd: x random
 // (the lobe's lump seed / 10 for skins), y development stage (0 fresh orange .. 1 brown-grey,
 // eyed), z eyespot azimuth (beads) or the skin's rest radius (mesh units), w MODE: 0 bead,
-// 1 lobe skin, 2 spent casing, 3 loose bead, 4 loose skin (the clump's).
+// 1 lobe skin, 2 spent casing, 3 loose bead (4, the carried clump's loose skin, went with the pry: Task 6).
 const NLOB = MAIN.length + SPILL_MAX, FIL = 0.08;   // lobes in the uniform; the fillet's width (shell units, ~1.2 u)
 const CL_VS_HEAD = `
 attribute vec4 aP0, aP1, aSd;
-uniform float uStand, uTime, uBreath, uScarL;
+uniform float uStand, uTime, uBreath;
 uniform vec3 uMassC;
-uniform vec4 uScar;
 uniform vec4 uLobes[${NLOB}];
 uniform float uLobeS[${NLOB}];
-varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW, vBTex, vBN; varying float vBR, vBK, vBScar, vBAO;` + LUMP_GLSL + `
+varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW, vBTex, vBN; varying float vBR, vBK, vBAO;` + LUMP_GLSL + `
 // THE MASS IS ONE SPONGE, NOT A BAG OF BALLS: where two lobes meet, the skin swells into a
 // smooth fillet (a polynomial smooth-union of the lobes' lumped surfaces), and the nearest
 // other lobe is remembered for the crevice's shade
@@ -234,12 +233,6 @@ if (bmode > 1.5 && bmode < 2.5) {
   bsc = vec3(1.0, 0.42, 1.0);      // a spent casing: collapsed, a flat wrinkled skin
   bc.y += 0.03 * brr * sin(uTime * 0.7 + aSd.x * 40.0);
 }
-// the tear a pried clump leaves: a dent in that lobe's skin, on its own bearing
-vBScar = 0.0;
-if (bmode > 0.5 && bmode < 1.5 && abs(float(gl_InstanceID) - uScarL) < 0.5) {
-  vBScar = smoothstep(uScar.w, mix(uScar.w, 1.0, 0.55), dot(normalize(position), uScar.xyz));
-  bSkinP *= 1.0 - 0.05 * vBScar;
-}
 vec3 transformed = bskin ? bc + bSkinP : bc + position * bsc * brr;
 {
   vec3 bwc = (modelMatrix * vec4(bc, 1.0)).xyz;
@@ -256,7 +249,7 @@ const CL_FS_HEAD = `
 uniform float uSssK; uniform vec4 uDbg;
 uniform sampler2D uBeadA, uBeadB;
 uniform mat3 normalMatrix;
-varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW, vBTex, vBN; varying float vBR, vBK, vBScar, vBAO;
+varying vec4 vBSd; varying vec3 vBDir, vBLoc, vBW, vBTex, vBN; varying float vBR, vBK, vBAO;
 vec3 clAlb(float st, float rnd) {
   // fresh orange -> amber -> brown -> brown-grey (linear albedo)
   vec3 a = mix(vec3(0.46, 0.14, 0.018), vec3(0.27, 0.10, 0.022), smoothstep(0.0, 0.45, st));
@@ -298,8 +291,6 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
   float bSee = 1.0 - smoothstep(0.9, 2.2, bFoot) * 0.6;          // far off, the eyes are a speckle
   bSpot = bB.x * smoothstep(0.26, 0.5, st) * bSee;
   bAlb *= 1.0 - 0.35 * bB.y * smoothstep(0.5, 0.9, st);           // the yolk
-  // the tear: the deeper, darker mass and the stubs of the hairs show
-  bAlb = mix(bAlb, bAlb * vec3(0.5, 0.36, 0.3), vBScar);
 } else if (bMode > 1.5 && bMode < 2.5) {
   bAlb = vec3(0.30, 0.27, 0.22) * (0.8 + 0.4 * vBSd.x);
 } else {
@@ -317,7 +308,7 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
 bSpot = max(bSpot, uDbg.x);
 diffuseColor.rgb = bAlb * (1.0 - 0.93 * bSpot);`;
 const CL_FS_ROUGH = `
-roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : bSkin > 0.5 ? mix(0.66, 0.36, smoothstep(0.25, 0.75, bH)) + 0.2 * vBScar + 0.25 * bSpot : mix(0.14, 0.6, bSpot);`;
+roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : bSkin > 0.5 ? mix(0.66, 0.36, smoothstep(0.25, 0.75, bH)) + 0.25 * bSpot : mix(0.14, 0.6, bSpot);`;
 const CL_FS_NORMAL = `
 if (bSkin > 0.5) normal = normalize(normalMatrix * bLN);`;
 // translucency: the lantern lights the egg from INSIDE (its own in-scatter slot), wrapped
@@ -334,7 +325,7 @@ if (abyssaLampA.w > 0.0 && !(bMode > 1.5 && bMode < 2.5)) {
   float bWrap = clamp((dot(bN, bL) + 0.75) / 1.75, 0.0, 1.0);
   float bNV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
   vec3 bIn = bAlb * vec3(1.6, 1.2, 0.85);
-  float bThk = bSkin > 0.5 ? mix(0.2, 1.0, smoothstep(0.15, 0.7, bH)) * (1.0 - 0.7 * vBScar) * mix(0.35, 1.0, smoothstep(0.0, ${(FIL * 1.6).toFixed(3)}, vBAO)) : 1.0;
+  float bThk = bSkin > 0.5 ? mix(0.2, 1.0, smoothstep(0.15, 0.7, bH)) * mix(0.35, 1.0, smoothstep(0.0, ${(FIL * 1.6).toFixed(3)}, vBAO)) : 1.0;
   totalEmissiveRadiance += bIn * bE * bWrap * (0.30 + 0.70 * pow(bNV, 1.6)) * (1.0 - 0.9 * bSpot) * uSssK * bThk;
 }
 #endif`;
@@ -343,7 +334,7 @@ function clutchMat() {
   const bf = beadField();
   const u = {
     uStand: { value: 0 }, uTime: { value: 0 }, uBreath: { value: 1 }, uMassC: { value: new THREE.Vector3().fromArray(MASS_C) }, uSssK: { value: 0.32 }, uDbg: { value: new THREE.Vector4() },
-    uScar: { value: new THREE.Vector4(0, 1, 0, 2) }, uScarL: { value: -1 }, uBeadA: { value: bf.a }, uBeadB: { value: bf.b },
+    uBeadA: { value: bf.a }, uBeadB: { value: bf.b },
     uLobes: { value: Array.from({ length: NLOB }, () => new THREE.Vector4()) }, uLobeS: { value: new Float32Array(NLOB) }
   };
   m.userData.u = u;
