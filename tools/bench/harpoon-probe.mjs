@@ -1,5 +1,5 @@
 // THE HARPOON probe (fissure-and-harpoon Task 6; spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md §2).
-//   node tools/bench/harpoon-probe.mjs <routes|rite> <port>      (serve.py must already serve <port>)
+//   node tools/bench/harpoon-probe.mjs <routes|rite|remote> <port>      (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9485). A FRESH PROFILE per run (the chart save remembers
 // pulled[site] and tools.harpoon), shared across the rite's own reload.
 //   routes: at all four anchorages (Home, Pallid, Burned, the Unsounded Shelf), Alt+6 stands Sal at
@@ -94,6 +94,27 @@ if (mode === 'rite') {
   console.log('wound', JSON.stringify(b));
   if (b.dormant) fail.push('pressing the wound did not wake her');
   if (b.msgs.includes('IT COMES FREE. SHE FEELS IT.') || b.msgs.includes("ANOTHER DIVER'S HARPOON.")) fail.push('the wound said a pull line');
+} else if (mode === 'remote') {
+  // the first pull EVER at a remote anchorage: another diver's iron, and the blade with it; then home's
+  // own pull says its own line and grants nothing new; pulled[] is per anchorage
+  const pull = async site => {
+    await c.ev(`(window.__helm=true, window.__chart.arrive(${site}), 1)`); await alt(c, 6);
+    await c.key('KeyE', true); await c.ev(`(window.__bench.step(2), 1)`); await c.key('KeyE', false);
+    return c.ev(`(() => { const seen = []; window.__bench.step(300, () => { const m = window.__msg().live; if (m && seen[seen.length - 1] !== m) seen.push(m); }); const sv = JSON.parse(localStorage.getItem('abyssa.chart.v1') || '{}'); return { msgs: seen, owns: !!window.survival.hasHarpoon, dormant: !!window.lev.dormant, pulled: sv.pulled, tool: !!(sv.tools && sv.tools.harpoon) }; })()`);
+  };
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  const r1 = await pull(1);
+  console.log('pallid', JSON.stringify(r1));
+  if (!r1.msgs.includes("ANOTHER DIVER'S HARPOON.")) fail.push('remote line missing: ' + JSON.stringify(r1.msgs));
+  if (r1.msgs.includes('IT COMES FREE. SHE FEELS IT.')) fail.push('home line at a remote anchorage');
+  if (!r1.owns || !r1.tool) fail.push('the first pull ever (remote) did not grant the blade');
+  if (JSON.stringify(r1.pulled) !== '[0,1,0,0]') fail.push('pulled after Pallid: ' + JSON.stringify(r1.pulled));
+  if (r1.dormant) fail.push('she did not wake at Pallid');
+  const r0 = await pull(0);
+  console.log('home', JSON.stringify(r0));
+  if (!r0.msgs.includes('IT COMES FREE. SHE FEELS IT.')) fail.push('home line missing: ' + JSON.stringify(r0.msgs));
+  if (!r0.owns) fail.push('ownership lost');
+  if (JSON.stringify(r0.pulled) !== '[1,1,0,0]') fail.push('pulled after home: ' + JSON.stringify(r0.pulled));
 } else if (mode !== 'routes') fail.push('unknown mode ' + mode);
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));

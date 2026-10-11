@@ -54,7 +54,8 @@ let ASSET = null;
 HARPOON_ASSET.then(a => { if (a && a.geos.harpoon && a.maps.harpoon) ASSET = a; });
 
 export const WRENCH_T = 1.5;          // the commitment (s): brace, wrench, wrench, free
-const BEATS = [0.28, 0.72, 1.12];     // the three heaves (s into the wrench)
+const BEATS = [0.28, 0.72, 1.12];
+const SEAT_TRY = 90;                  // seam candidates given the full reach test (best pre-score first)     // the three heaves (s into the wrench)
 export const REACH = 2.6;             // prompt / interact range from the anchor (horizontal, u)
 const WAKE_DELAY = 0.7;               // it comes free, she shudders a beat later (the wake's own sequence takes ~6 s)
 const LODGE_IN = 0.30;                // how much of the iron is in her (model units, from the point)
@@ -277,7 +278,7 @@ export function makeHarpoon(L, opts = {}) {
     L.keepTex.add(puffTex());
   }
   // the glint on the brass (the eyeshine's warm-glow program; in the scene from the build at 0)
-  const gl = makeWarmGlow(0xffe0a6, 0.55, { near: 3, far: GLINT_FAR, nearW: 0, swell: 0.015, swellMax: 0.8 });
+  const gl = makeWarmGlow(0xffe0a6, 0.8, { near: 3, far: GLINT_FAR, nearW: 0, swell: 0.015, swellMax: 0.8 });
   gl.material.opacity = 0;
   gl.renderOrder = 3;
   L.grp.add(gl);
@@ -346,6 +347,7 @@ export function makeHarpoon(L, opts = {}) {
     if (L.publishCols) L.publishCols();
     H.dbg = { tried: 0, shaft: 0, high: 0, body: 0 };
     let best = Infinity, bi = -1;
+    const cand = [];
     const sa = L.sandSide > 0 ? 0 : Math.PI;
     for (let i = 0; i < P.count; i++) {
       _v.fromBufferAttribute(P, i);
@@ -359,7 +361,19 @@ export function makeHarpoon(L, opts = {}) {
       if (ns < 0.4 || _n.y > 0.8) continue;
       _v.applyMatrix4(mw);
       if (fissureDist(_v.x, _v.z, idx) < 8) continue;
-      const sc = trySeam(_v, _n, true) + 0.25 * Math.abs(dth) + 0.6 * (1 - ns);
+      // the cheap part of the score now (bearing, facing, the seam ~2 u over the ground out there); the
+      // costly reach test only for the best SEAT_TRY of them (the full scan was 24-30 ms a build)
+      const gh = terrainH(_v.x + _n.x * 1.5, _v.z + _n.z * 1.5, idx);
+      cand.push(0.25 * Math.abs(dth) + 0.6 * (1 - ns) + 0.3 * Math.abs(_v.y - gh - 2.0), i);
+    }
+    const ord = [];
+    for (let k = 0; k < cand.length; k += 2) ord.push(k);
+    ord.sort((a, b) => cand[a] - cand[b]);
+    for (let q = 0; q < ord.length && q < SEAT_TRY; q++) {
+      const i = cand[ord[q] + 1];
+      _v.fromBufferAttribute(P, i).applyMatrix4(mw);
+      _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
+      const sc = trySeam(_v, _n, true) + cand[ord[q]];
       if (sc < best) { best = sc; bi = i; H.anchor.copy(_p); }
     }
     const found = bi >= 0;
