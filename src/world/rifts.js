@@ -64,12 +64,13 @@ const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
 // luma of the pixels the light changes, where the eye reads its hue), R:G:B = 0.80 : 0.90 : 1.0,
 // over four views per site and zone (40 u side, 60 u above, across the crack from its lip, inside the
 // throat), iterated (review N2: the added light alone read blue while the lit highlights stayed cream
-// in zone 1's warm grade and lavender in zone 2's); luma kept
+// in zone 1's warm grade and lavender in zone 2's); luma kept. Zone 1's column leaned a further step
+// cold (0.90 : 0.97 : 1.12): its highlights by the lip sit in the lamp's haze and the warm vent water
 export const SITE_LEAN = [
-  [[1.060, 0.972, 1.024], [1.027, 0.999, 0.937], [1.108, 1.015, 0.601]],   // home
-  [[0.993, 0.996, 1.057], [0.993, 0.986, 1.094], [1.258, 0.931, 0.657]],   // Pallid Bank
-  [[0.915, 1.031, 1.078], [0.826, 1.037, 1.279], [0.944, 1.028, 0.974]],   // the Burned Ground
-  [[1.586, 0.735, 0.833], [0.741, 1.034, 1.537], [0.976, 1.096, 0.540]],   // the Unsounded Shelf
+  [[1.060, 0.972, 1.024], [0.959, 1.005, 1.089], [1.108, 1.015, 0.601]],   // home
+  [[0.993, 0.996, 1.057], [0.924, 0.989, 1.267], [1.258, 0.931, 0.657]],   // Pallid Bank
+  [[0.915, 1.031, 1.078], [0.763, 1.033, 1.471], [0.944, 1.028, 0.974]],   // the Burned Ground
+  [[1.586, 0.735, 0.833], [0.681, 1.024, 1.757], [0.976, 1.096, 0.540]],   // the Unsounded Shelf
 ];
 export function siteLean(zi, out) {
   const L = (SITE_LEAN[currentSiteIndex()] || SITE_LEAN[0])[zi];
