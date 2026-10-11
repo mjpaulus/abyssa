@@ -1,5 +1,5 @@
 // THE HARPOON probe (fissure-and-harpoon Task 6; spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md §2).
-//   node tools/bench/harpoon-probe.mjs <routes|rite|remote|lodged|abort> <port>      (serve.py must already serve <port>)
+//   node tools/bench/harpoon-probe.mjs <routes|rite|remote|lodged|abort|thrust-contact|orune-cut|shark-thrust> <port>      (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9485). A FRESH PROFILE per run (the chart save remembers
 // pulled[site] and tools.harpoon), shared across the rite's own reload.
 //   routes: at all four anchorages (Home, Pallid, Burned, the Unsounded Shelf), Alt+6 stands Sal at
@@ -171,6 +171,71 @@ if (mode === 'rite') {
   if (!r0.msgs.includes('IT COMES FREE. SHE FEELS IT.')) fail.push('home line missing: ' + JSON.stringify(r0.msgs));
   if (!r0.owns) fail.push('ownership lost');
   if (JSON.stringify(r0.pulled) !== '[1,1,0,0]') fail.push('pulled after home: ' + JSON.stringify(r0.pulled));
+} else if (mode === 'thrust-contact') {
+  // (Task 7) the blade's timing and reach at the contact frame: not owned, the knife (0.22 s = 13 frames, 3.4 u);
+  // owned, the harpoon (0.30 s = 18 frames, 5.5 u). And no first-sight compile: the shader program count is the
+  // same before the grant and after the first thrust has drawn (the prop is built and warmed in the boot).
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  await alt(c, 3);
+  const r = await c.ev(`(async () => { window.__helm = true; window.__bench.step(30, null, { render: true });
+    const t = [];
+    for (const own of [false, true]) { window.survival.hasHarpoon = own; window.__bench.step(40, null, { render: true }); window.__slash();
+      let hitAt = -1; window.__bench.step(60, i => { if (hitAt < 0 && window.__bladeLast && window.__bladeLast.t >= 0) hitAt = i; }, { render: true });
+      t.push({ own, contactFrames: hitAt, reach: window.__bladeLast && window.__bladeLast.reach, kind: window.__bladeLast && window.__bladeLast.kind });
+      window.__bladeLast = null; window.__bench.step(70, null, { render: true }); }
+    return t; })()`);
+  console.log('thrust', JSON.stringify(r));
+  const [k, h] = r;
+  if (Math.abs(k.contactFrames - 13) > 1 || k.reach !== 3.4) fail.push('knife changed ' + JSON.stringify(k));
+  if (Math.abs(h.contactFrames - 18) > 1 || h.reach !== 5.5) fail.push('harpoon timing/reach ' + JSON.stringify(h));
+  // the compile check: a FRESH grant + thrust + settle, programs counted around it
+  const pc = await c.ev(`(() => { window.survival.hasHarpoon = false; window.__bench.step(10, null, { render: true }); const p0 = window.__programs();
+    window.survival.hasHarpoon = true; window.__bench.step(10, null, { render: true }); window.__slash(); window.__bench.step(70, null, { render: true });
+    return { p0, p1: window.__programs() }; })()`);
+  console.log('programs', JSON.stringify(pc));
+  if (pc.p1 !== pc.p0) fail.push('the blade compiled on first sight: programs ' + pc.p0 + ' -> ' + pc.p1);
+} else if (mode === 'orune-cut') {
+  // (Task 7) grabbed by Orune: one owned thrust frees him, and the grab line says THRUST. Logs how far the holding
+  // arm's tested rings are from him at the cut (if they are inside the knife's 3 u the case cannot tell the blades apart).
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  const r = await c.ev(`(async () => { window.__helm = true; window.survival.hasHarpoon = true; window.survival.hasSonar = true;
+    window.dispatchEvent(new KeyboardEvent('keydown',{code:'Digit7',key:'7',altKey:true,bubbles:true})); window.__helm = true; window.__bench.step(60);
+    window.lev.cmd('wake'); let grabbed = false, line = null;
+    window.__bench.step(900, () => { const m = window.__msg().live; if (m && /IT HAS YOU/.test(m)) line = m; if (window.lev.grab) { grabbed = true; return false; } });
+    if (!grabbed) return { grabbed };
+    window.__bench.step(3, () => { const m = window.__msg().live; if (m && /IT HAS YOU/.test(m)) line = m; });
+    const L = window.lev, A = L.arms[L.grab.arm], P = window.player.pos; let dmin = 1e9;
+    // the gap is read on the frame BEFORE the contact (the cut may let go on the contact frame itself)
+    const gap = () => { let d = 1e9; for (let i = 8; i < A.pts.length; i += 4) d = Math.min(d, A.pts[i].distanceTo(P) - A.r0 * 1.2); return d; };
+    window.__bladeLast = null; window.__slash();
+    window.__bench.step(40, () => { if (!window.__bladeLast) dmin = gap(); });
+    return { grabbed, free: !window.lev.grab, line, ringGapAtCut: +dmin.toFixed(2) }; })()`);
+  console.log('orune', JSON.stringify(r));
+  if (!r.grabbed) fail.push('no grab happened in 15 s'); else {
+    if (!r.free) fail.push('one thrust did not free him');
+    if (r.line !== 'IT HAS YOU. CUT IT — CLICK TO THRUST.') fail.push('grab line: ' + r.line);
+  }
+} else if (mode === 'shark-thrust') {
+  // (Task 7) one owned thrust aborts a zone-0 shark's strike from >= 4.5 u off its flank (centre 8 u ahead: the knife's
+  // 3.4 + half its 6.6 length = 6.7 does not reach; the harpoon's 5.5 + 3.3 = 8.8 does). The knife at the same spot
+  // is the control: the strike goes on. The shark is held on its spot through the swing.
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  await alt(c, 3);
+  const SH = own => `(() => { window.__helm = true; window.survival.hasHarpoon = ${own}; window.__bench.step(40);
+    const S = window.pred.sharks.find(s => s.cfg.zi === 0), P = window.player, y = P.yaw, D = 8.0;
+    const hold = () => { S.pos.set(P.pos.x + Math.sin(y) * D, P.pos.y + 0.5, P.pos.z + Math.cos(y) * D); };
+    S.state = 'strike'; S.tState = 0; S.bit = false; S.cool = 0; S.blinded = 0; S.arousal = 1.2; hold();
+    window.__slash(); let at = -1, st = null;
+    window.__bench.step(26, i => { if (S.state === 'strike') hold(); if (at < 0 && S.state !== 'strike') { at = i; st = S.state; } });
+    const gap = +(Math.hypot(S.pos.x - P.pos.x, S.pos.z - P.pos.z) - S.cfg.size * 0.5).toFixed(2);
+    const out = { own: ${own}, state: S.state, at, st, bit: S.bit, blinded: +S.blinded.toFixed(2), gap };
+    S.state = 'patrol'; S.tState = 0; S.cool = 60; S.arousal = 0; S.pos.set(P.pos.x + 60, P.pos.y + 10, P.pos.z);
+    window.__bench.step(60); return out; })()`;
+  const k = await c.ev(SH(false)), h = await c.ev(SH(true));
+  console.log('shark', JSON.stringify(k), JSON.stringify(h));
+  if (k.state !== 'strike') fail.push('the knife (control) aborted the strike from 8 u: ' + JSON.stringify(k));
+  if (h.st !== 'flee' || !h.bit) fail.push('the harpoon did not abort the strike: ' + JSON.stringify(h));
+  if (!(h.gap >= 4.5)) fail.push('the strike was not aborted from >= 4.5 u off its flank: ' + h.gap);
 } else if (mode !== 'routes') fail.push('unknown mode ' + mode);
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
