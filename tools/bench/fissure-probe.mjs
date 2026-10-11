@@ -1182,7 +1182,7 @@ if (mode === 'shape') {
   //   occluded - during the rise, the line from the lens to his chest enters the rock from the water
   //              side (a front-face crossing of any zone's heightfield: the throat walls and floors as
   //              drawn within ~1 u), his body in the water
-  // GATES: the lens's own step <= 1 u a frame at 60 fps until the card (final residual fix 4: 1d68aa0 max 0.81;
+  // GATES: the lens's own step <= 1 u a frame at 60 fps, every frame of the 75 s (final residual fix 4: 1d68aa0 max 0.81;
   // the floor-side cap's ramp dropped it 6.6 u at the zone-1 crossing); hidden 0, occluded <= 60 of the ~2730 rise frames (the lens's release up through each floor
   // after him and the zone-0 crossing's first frames), the ending holds 'won'. RED on 1d68aa0 (ending.js
   // unchanged since Task 1): band cam 2/19/0 diver 18/7/0 (Task 1's numbers reproduce), bandAll diver
@@ -1206,7 +1206,7 @@ if (mode === 'shape') {
     window.__bench.step(4500, i => {
       const p = window.player.pos, c = window.camera.position, t = i / 60;
       // the lens's own step a frame (final residual fix 4: the zone-1 crossing dropped it 6.6 u in one)
-      if (cOk && t < 60) { const st = c.distanceTo(cPrev); if (st > out.stepMax) { out.stepMax = +st.toFixed(3); out.stepAt = i; } if (st > 1) out.over1++; }
+      if (cOk) { const st = c.distanceTo(cPrev); if (st > out.stepMax) { out.stepMax = +st.toFixed(3); out.stepAt = i; } if (st > 1) out.over1++; }
       cPrev.copy(c); cOk = true;
       let b = bandOf(c.x, c.y, c.z, true); if (b >= 0) out.cam[b]++;
       b = bandOf(p.x, p.y, p.z, true); if (b >= 0) out.div[b]++;
