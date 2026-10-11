@@ -58,7 +58,7 @@ import { currentSiteIndex } from './site.js';
 const N_BOULDER = 160, COLLAPSE = 3.6, SWELL = 3.0;
 const T_BREAK = 0.4, T_OPEN = 0.5 * (COLLAPSE + SWELL);        // the break; k passes 0.5 (the floor goes)
 const SAG_MAX = 2.0, A_SILT = 10, SILT_GONE = 55;               // u, u/s^2, u of drain by which all of it is under the throat floor (3.3 s)
-const A_ROCK = 9, V_ROCK = 10, ROCK_T = 14, DROP_MIN = 20;      // u/s^2, terminal u/s, the pour's longest clock (s), u of throat under every block
+const A_ROCK = 9, V_ROCK = 10, ROCK_T = 22, DROP_MIN = 20;      // u/s^2, terminal u/s, the pour's longest clock (s), u of throat under every block
 const GD = 0.25, FD = GD / 2;          // the silt mesh's spacing; the floor grid's (twice as fine: block edges), u
 const JAM_STEP_OK = 0.45, DRIFT = 0.9; // a block stands at most this proud of the silt banked round it; the bank's slope (rise / run)
 // the four rock shapes: [detail, squash, amp, facet] for flora's rockGeo
@@ -173,7 +173,9 @@ function buildZone(zi) {
     let lo = 1e9, hi = -1e9;
     for (let i = 0; i < rp.count; i++) { rv[i * 3] = rp.getX(i); rv[i * 3 + 1] = rp.getY(i); rv[i * 3 + 2] = rp.getZ(i); }
     for (let i = 0; i < rp.count; i++) { lo = Math.min(lo, rv[i * 3 + 1]); hi = Math.max(hi, rv[i * 3 + 1]); }
-    return { im, rv, tri: g.index.array, rock: kit.rock, n: 0 };
+    let rmax = 0;   // the shape's bound radius (unit scale): what 'wholly under' is measured with
+    for (let i = 0; i < rp.count; i++) rmax = Math.max(rmax, Math.hypot(rv[i * 3], rv[i * 3 + 1], rv[i * 3 + 2]));
+    return { im, rv, tri: g.index.array, rock: kit.rock, n: 0, rmax };
   });
   // the floor grid / the silt: one vertex per grid cell; topology is site-invariant (the outline never moves)
   const VMAX = F.halfW * 1.36 + 0.75;
@@ -346,7 +348,14 @@ function layout(zi) {
     B[o + 6] = _q.x; B[o + 7] = _q.y; B[o + 8] = _q.z; B[o + 9] = _q.w;
     // the pour: as the floor goes, the middle first; the wall blocks last
     B[o + 10] = T_OPEN + 1.3 * Math.pow(1 - p, 0.7) + 0.35 * rand();
-    B[o + 11] = floorY; B[o + 12] = tv;
+    // where it goes out of sight: under the LOWEST ground over its whole footprint at its target (u, tv)
+    // (the throat is a steep V: under the floor at its centre, a block still hangs half out over the void,
+    // and with the deep's light welling up under it a block switched off there pops)
+    fissureWorld(u, tv, zi, _w);
+    const Rb = Math.max(sx, sy, sz) * K.rmax;
+    let hideY = floorY;
+    for (let a = -4; a <= 4; a++) for (let b = -4; b <= 4; b++) hideY = Math.min(hideY, terrainUnderH(_w.x + a / 4 * Rb, _w.z + b / 4 * Rb, zi));   // a 9 x 9 grid over it
+    B[o + 11] = hideY - 1.5; B[o + 12] = tv;   // (1.5: the ground can dip between grid points on a steep face)
     _ax.set(rr(-1, 1), rr(-0.4, 0.4), rr(-1, 1)).normalize();
     B[o + 13] = _ax.x; B[o + 14] = _ax.y; B[o + 15] = _ax.z; B[o + 16] = rr(0.6, 2.2) * (rand() < 0.5 ? 1 : -1) / Math.max(0.6, R);
     B[o + 17] = p; B[o + 18] = hi; B[o + 19] = rr(0, 6.2832); B[o + 20] = k; B[o + 21] = K.n;
@@ -438,7 +447,7 @@ function layout(zi) {
   const sM = Fz.sM;
   for (let m = 0; m < Fz.nverts; m++) {
     const h = terrainUnderH(P[m * 3], P[m * 3 + 2], zi);
-    sM[m] = Math.max(0.35 + 0.65 * sP[m], (sY[m] - h + 0.5) / SILT_GONE);
+    sM[m] = Math.max(0.35 + 0.65 * sP[m], (sY[m] - h + 1.5) / SILT_GONE);   // 1.5 u under it by then (a frame of drain is <= 0.9 u)
   }
   Fz.siltGone = SILT_GONE;
   sg.computeBoundingSphere(); sg.boundingSphere.radius += SILT_GONE * 2 + 2;
@@ -596,7 +605,7 @@ function pose(zi, T) {
       _ax.set(B[o + 13], B[o + 14], B[o + 15]);
       _q.multiply(_qa.setFromAxisAngle(_ax, ang));
       // sunk on through the throat floor, wholly: gone (one by one, never all at once)
-      if (y + Math.max(B[o + 3], B[o + 4], B[o + 5]) * 1.4 < B[o + 11]) { im.setMatrixAt(slot, _zero); continue; }
+      if (y + Math.max(B[o + 3], B[o + 4], B[o + 5]) * Fz.kinds[B[o + 20]].rmax < B[o + 11]) { im.setMatrixAt(slot, _zero); continue; }
     } else if (jostle > 0) y += jostle * Math.sin(T * 41 + B[o + 19]);
     left++;
     fissureWorld(B[o], v, zi, _w);

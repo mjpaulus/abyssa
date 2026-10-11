@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -712,6 +712,53 @@ if (mode === 'shape') {
   if (r.surfWater !== false) fail.push('the surface glow shows under the water');
   if (!(r.surfOpacity <= 0.08) || r.surfFog !== false) fail.push(`surface glow opacity ${r.surfOpacity} fog ${r.surfFog}`);
   if (r.lights !== 14) fail.push('light count ' + r.lights);
+  console.log(JSON.stringify(r));
+} else if (mode === 'pour-hide') {
+  // NOTHING POPS IN THE LIGHT: with the deep's light welling up under the pour, every block must be
+  // switched off only once it is wholly under the throat floor where it is NOW (every drawn vertex of
+  // it, every third, under the ground at that vertex's x, z), and the silt
+  // only once every vertex of it is under the throat floor below it. One opening per zone, at home.
+  const r = await c.ev(`(async () => {
+    const T = await import('/src/world/terrain.js'), THREE = await import('three');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const out = [], m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
+    for (const zi of [0, 1, 2]) {
+      window.gotoZone(zi); window.__fissure.setOpen(zi, 0); window.__bench.place(0, 0, 0, zi);
+      window.__fissure.open(zi);
+      const ims = [0, 1, 2, 3].map(k => window.scene.getObjectByName('fissureJam' + zi + '_' + k)).filter(Boolean);
+      const prev = ims.map(im => new Float32Array(im.instanceMatrix.array));
+      let hidden = 0, worst = -1e9, worstAt = null, siltWorst = -1e9;
+      const silt = window.scene.getObjectByName('fissureSilt' + zi);
+      window.__bench.step(60 * 15, i => {
+        ims.forEach((im, a) => {
+          const A = im.instanceMatrix.array, P = prev[a];
+          for (let k = 0; k < im.count; k++) {
+            const o = k * 16, wasOn = P[o] !== 0 || P[o + 5] !== 0 || P[o + 10] !== 0, on = A[o] !== 0 || A[o + 5] !== 0 || A[o + 10] !== 0;
+            if (wasOn && !on) {
+              hidden++;
+              // its own drawn vertices (every 3rd) against the ground under each
+              m.fromArray(P, o); const G = im.geometry.attributes.position; let w = -1e9, wy = 0, wf = 0;
+              for (let v = 0; v < G.count; v += 3) { p.fromBufferAttribute(G, v).applyMatrix4(m); const f = T.terrainUnderH(p.x, p.z, zi); if (p.y - f > w) { w = p.y - f; wy = p.y; wf = f; } }
+              if (w > worst) { worst = w; worstAt = { frame: i, y: +wy.toFixed(2), floor: +wf.toFixed(2) }; }
+            }
+          }
+          P.set(A);
+        });
+        if (silt && silt.visible) {
+          // the frame before it goes: how far its highest vertex stands over the floor under it
+          const S = silt.geometry.attributes.position.array; let w = -1e9;
+          for (let v = 0; v < S.length; v += 3 * 7) w = Math.max(w, S[v + 1] - T.terrainUnderH(S[v], S[v + 2], zi));
+          siltWorst = w;
+        }
+      });
+      out.push({ zi, hidden, worstTopOverFloor: +worst.toFixed(3), worstAt, siltLastAboveFloor: +siltWorst.toFixed(3), left: window.__fissure.state(zi).left });
+    }
+    return out; })()`);
+  for (const z of r) {
+    if (z.hidden < 100) fail.push(`zone ${z.zi}: only ${z.hidden} blocks hid`);
+    if (z.worstTopOverFloor > 0) fail.push(`zone ${z.zi}: a block hid ${z.worstTopOverFloor} u above the floor over it ` + JSON.stringify(z.worstAt));
+    if (z.siltLastAboveFloor > 0.05) fail.push(`zone ${z.zi}: the silt hid with a part ${z.siltLastAboveFloor} u above the floor`);
+  }
   console.log(JSON.stringify(r));
 } else fail.push(`unknown mode ${mode}`);
 c.close();
