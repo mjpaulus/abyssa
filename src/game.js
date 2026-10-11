@@ -586,12 +586,28 @@ addEventListener('keydown', e => {
 });
 addEventListener('contextmenu', e => { if (locked) e.preventDefault(); });
 
-// Left-click while locked: knife slash. The anim gates repeats; the hit lands on the
+// Left-click while locked: the blade. The anim gates repeats; the hit lands on the
 // contact frame via pendingSlash so the blade connects when it visually connects.
-let pendingSlash = 0;
+// (fissure-and-harpoon Task 7) TWO BLADES, one input. The dive knife until he owns Velkath's old harpoon
+// (survival.hasHarpoon, saved tools.harpoon); then the harpoon is the blade: a heavier two-handed thrust,
+// later to land and further to reach, through the same systems (predators.slash scaled by power, lev.onSlash).
+// contact: s after the click (diver.js keys the swing to it — keep in sync); reach: u; cd: the swing's own
+// length gates repeats (triggerSlash returns false while one is in flight); power: the shark's stagger.
+const BLADE = {
+  knife: { kind: 'knife', contact: 0.22, reach: 3.4, cd: 0.45, power: 1 },
+  harpoon: { kind: 'harpoon', contact: 0.30, reach: 5.5, cd: 0.9, power: 1.8 }
+};
+let pendingSlash = 0, pendingBlade = BLADE.knife;
+// the last blow's contact, for probes: ONE reused object (set on the contact frame, never allocated in play)
+const bladeLast = { t: 0, reach: 0, kind: '' };
+window.__bladeLast = null;
 const lampOcc = new Float32Array(8);   // diverOccluders -> setLampOccluders, every frame
-function doSlash() { if (triggerSlash()) { pendingSlash = 0.22; knife(); } }   // contact ~0.22s into the swing
-window.__slash = () => { if (state === 'play') doSlash(); };   // probes: the knife without pointer lock (tools/bench/play.mjs)
+function doSlash() {
+  const b = survival.hasHarpoon ? BLADE.harpoon : BLADE.knife;
+  if (triggerSlash(b.kind)) { pendingSlash = b.contact; pendingBlade = b; knife(); }
+}
+window.__slash = () => { if (state === 'play') doSlash(); };   // probes: the blade without pointer lock (tools/bench/play.mjs)
+window.__programs = () => renderer.info.programs.length;     // probes: no first-sight compile (harpoon-probe thrust-contact)
 function doSpear() {
   if (!survival.hasSpear) return;
   if (survival.spears > 0 && fireSpear(player.pos, forwardVec())) {
@@ -2538,12 +2554,16 @@ function update(dt, t) {
   setWalking(player.grounded);
   setAbove(aboveWater);            // the air side of the mix: gulls, wind, the pump in the open
   setWind(windState().speed);      // the eased wind, same curve as the chop
-  // knife: the hit lands on the swing's contact frame, not the click
+  // the blade: the hit lands on the swing's contact frame, not the click
   if (pendingSlash > 0) {
     pendingSlash -= dt;
     if (pendingSlash <= 0) {
-      const kill = slash(player.pos, forwardVec(), 3.4);
-      if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec());   // the Hoarder lets go of a cut arm
+      const B = pendingBlade;
+      const kill = slash(player.pos, forwardVec(), B.reach, B.power);
+      // the Hoarder lets go of a cut arm (knife 3.0 u, as it always was; the harpoon 5.1). Nothing against a
+      // sleeper: no other kind has an onSlash.
+      if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), B.reach - 0.4);
+      bladeLast.t = 0; bladeLast.reach = B.reach; bladeLast.kind = B.kind; window.__bladeLast = bladeLast;
       if (kill) {
         knifeHit('flesh');
         shake = Math.min(1, shake + 0.25);

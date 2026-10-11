@@ -9,7 +9,7 @@ await c.ev(`(location.reload(), 1)`).catch(() => {}); await sleep(3000);
 c.close(); c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench`, 240000, 1000);
 const r = await c.ev(`(async () => {
-  window.__helm = true; window.setState('play'); window.__bench.step(30);
+  window.__helm = true; window.survival.hasHarpoon = false; window.setState('play'); window.__bench.step(30);   // the knife (a saved harpoon would make it the thrust)
   window.dispatchEvent(new KeyboardEvent('keydown',{code:'Digit3',key:'3',altKey:true,bubbles:true}));
   window.__helm = true; window.__bench.step(120);
   const D = await import('/src/entities/diver.js'); const G = window.__gait.dbg, CH = G.CH, v = new (window.player.pos.constructor)();

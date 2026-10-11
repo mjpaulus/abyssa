@@ -36,6 +36,7 @@ import * as G from './hoarderGeo.js';
 import { makeHoard } from './hoard.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+import { survival } from '../../systems/survival.js';
 
 // THE SCULPT (tools/blender pipeline; hoarderSculpt.js has the design). THE SPLIT, and why:
 //   RIGID or SHADER-MOVED -> sculpted, baked high-to-low: the mantle + head + web + beak +
@@ -518,11 +519,12 @@ export function makeHoarder(idx, cfg) {
     L.stage = sigilPool.map(() => ({ src: -1, cur: 0 }));
   }
 
-  L.onSlash = (pos, fwd) => {
+  // reach: how far past the arm's own girth the blade carries (game.js: the knife 3, the harpoon 5.1)
+  L.onSlash = (pos, fwd, reach = 3) => {
     if (!L.grab) return;
     const A = L.arms[L.grab.arm];
     // the cut lands if the blade is anywhere near the arm that holds him
-    for (let i = 8; i <= RINGS; i += 4) if (A.pts[i].distanceTo(pos) < A.r0 * 1.2 + 3) {
+    for (let i = 8; i <= RINGS; i += 4) if (A.pts[i].distanceTo(pos) < A.r0 * 1.2 + reach) {
       L.grab = null; A.recoil = 1; A.lash = 0; L.pendingMsg = L.pendingMsg || 'THE ARM LETS GO.';
       return;
     }
@@ -1351,7 +1353,8 @@ export function updateHoarder(L, dt, t, player) {
           // a grab is the DRAG, not a slam: no dress tear, the line is the teaching
           L.grab = { arm: a, t: 0 };
           ev.grabbed = true;
-          ev.msg = ev.msg || 'IT HAS YOU. CUT IT — CLICK TO SLASH.';
+          // (Task 7) the old harpoon, once he owns it, is the blade: a thrust, not a slash
+          ev.msg = ev.msg || (survival.hasHarpoon ? 'IT HAS YOU. CUT IT — CLICK TO THRUST.' : 'IT HAS YOU. CUT IT — CLICK TO SLASH.');
         }
       }
     } else if (L.still > 0) {

@@ -15,12 +15,12 @@ if (cmd === 'start') {
   await start(`http://localhost:${a1}/?bench&playtest${a2 ? '&' + a2 : ''}`);
   const c = await connect();
   await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench`, 240000, 1000);
-  await c.ev(`(window.__helm = true, window.setState('play'), ['title','pause'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), 1)`);
+  await c.ev(`(window.__helm = true, window.setState('play'), ['title','pause'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(30), window.__helm = false, 1)`);
   console.log('ready');
   process.exit(0);
 }
 const c = await connect();
-if (cmd === 'ev') { console.log(JSON.stringify(await c.ev(a1))); process.exit(0); }
+if (cmd === 'ev') { console.log(JSON.stringify(await c.ev(`(async () => { window.__helm = true; try { return await (${a1}); } finally { window.__helm = false; } })()`))); process.exit(0); }
 if (cmd === 'png') {
   const view = a2 || 'game', dist = +(a3 || 4.2);
   await c.ev(`(async () => {
@@ -36,9 +36,11 @@ if (cmd === 'png') {
       window.__camPin = { p: [cx, cy, cz], t: [P.pos.x, P.pos.y - 0.35, P.pos.z] };
     }
     window.__bench.step(1, null, { render: true });
+    window.__bench.hold(true);   // the live loop must not run the game on (or redraw) before the screenshot
     return 1; })()`);
   mkdirSync(dirname(a1), { recursive: true });
   await c.png(a1);
+  await c.ev(`(window.__bench.hold(false), window.__helm = false, 1)`);
   console.log('wrote', a1);
   process.exit(0);
 }
@@ -50,6 +52,7 @@ if (cmd === 'strip') {
   await c.ev(`(async () => {
     window.__helm = true;
     const D = await import('/src/entities/diver.js');
+    window.player.yaw = D.diver.rotation.y; window.__bench.step(70);   // no squaring-up turn in the strip (and the last swing over)
     ['title','pause','ptDock','ptPanel','ptToast'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; });
     const v = '${view}', P = window.player, y = P.yaw;
     window.__camPin = null;
@@ -59,12 +62,38 @@ if (cmd === 'strip') {
       window.__camPin = { p: [P.pos.x + Math.sin(a) * d, P.pos.y - 0.25, P.pos.z + Math.cos(a) * d], t: [P.pos.x + Math.sin(y) * 0.8, P.pos.y - 0.35, P.pos.z + Math.cos(y) * 0.8] };
     }
     window.__slash();
+    window.__bench.hold(true);   // the live loop stands still between the frames (it animates Sal even paused)
     return 1; })()`);
   for (let k = 0; k <= 18; k++) {
-    await c.ev(`(window.__bench.step(${k === 0 ? 1 : 3}, null, { render: true }), 1)`);
+    await c.ev(`(window.__helm = true, window.__bench.step(${k === 0 ? 1 : 3}, null, { render: true }), window.__helm = false, 1)`);
     await c.png(`${a1}-${String(k).padStart(2, '0')}.png`);
   }
+  await c.ev(`(window.__bench.hold(false), window.__helm = false, 1)`);
   console.log('wrote 19 frames', a1);
+  process.exit(0);
+}
+// at <file> <view> <dist> <sec>: settle his yaw onto the look first, then window.__slash(), step to <sec>, png
+if (cmd === 'at') {
+  const view = a2 || 'game', dist = +(a3 || 4.2), sec = +(process.argv[6] || 0.3);
+  await c.ev(`(async () => {
+    window.__helm = true; window.__camPin = null;
+    { const D = await import('/src/entities/diver.js'); window.player.yaw = D.diver.rotation.y; }   // no squaring-up turn in the frame
+    window.__bench.step(90);
+    ['title','pause','ptDock','ptPanel','ptToast'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; });
+    const v = '${view}', P = window.player, y = P.yaw;
+    if (v !== 'game') {
+      const ang = { left: Math.PI / 2, right: -Math.PI / 2, front: 0, back: Math.PI, fl: Math.PI / 4, fr: -Math.PI / 4, bl: Math.PI * 0.75, br: -Math.PI * 0.75 }[v] || 0;
+      const a = y + ang, d = ${dist};
+      window.__camPin = { p: [P.pos.x + Math.sin(a) * d, P.pos.y + 0.1, P.pos.z + Math.cos(a) * d], t: [P.pos.x + Math.sin(y) * 0.6, P.pos.y - 0.1, P.pos.z + Math.cos(y) * 0.6] };
+    }
+    if (${sec} >= 0) window.__slash();
+    window.__bench.step(Math.max(1, Math.round(${sec} * 60)), null, { render: true });
+    window.__bench.hold(true);   // the live loop must not run the game on (or redraw) before the screenshot
+    return 1; })()`);
+  mkdirSync(dirname(a1), { recursive: true });
+  await c.png(a1);
+  await c.ev(`(window.__bench.hold(false), window.__helm = false, 1)`);
+  console.log('wrote', a1);
   process.exit(0);
 }
 console.error('unknown command ' + cmd); process.exit(1);

@@ -2947,7 +2947,11 @@ const slashResult = { killed: '', at: V3() };
 
 // Sharks and octopuses are not killable with a diving knife, and pretending otherwise
 // would cheapen both. They react instead — the swing registers as a threat, not damage.
-export function slash(pos, fwd, range = 3.4) {
+// (fissure-and-harpoon Task 7) `power` is the blade's weight: 1 the knife (exactly as it always was), 1.8 the
+// old harpoon. A heavier blow sends a shark off harder: it stays off longer (cool x power), peels away blinder
+// (blinded 0.7 x power, to 1: the hard flee turn) and is knocked into a roll away from the iron (rollKick x
+// power) — the stagger. The reach (range) is the blade's own; nothing here kills a shark or an octopus.
+export function slash(pos, fwd, range = 3.4, power = 1) {
   const r2 = range * range;
   // a knife stroke in the water is a small hard jolt: fish in reach bolt, plumes snap in
   stirPulse(pos.x + fwd.x * 1.5, pos.y + fwd.y * 1.5, pos.z + fwd.z * 1.5, 12, 0, 0.8, P_STRIKE);
@@ -2987,8 +2991,10 @@ export function slash(pos, fwd, range = 3.4) {
     if (_k1.lengthSq() > reach * reach) continue;
     if (S.state !== 'flee') {
       sharkSetState(S, 'flee');
-      S.arousal = 0; S.cool = rng(SH.coolMax, SH.coolMax * 1.5);
-      S.bit = true; S.blinded = 0.7;    // borrow the hard peel-away read
+      S.arousal = 0; S.cool = rng(SH.coolMax, SH.coolMax * 1.5) * power;
+      S.bit = true; S.blinded = Math.min(1, 0.7 * power);    // borrow the hard peel-away read
+      // the stagger: rolled off the blow, away from the side the iron came in on (the flee's own kick, larger)
+      if (power > 1) S.rollKick = (fwd.x * _k1.z - fwd.z * _k1.x >= 0 ? -1 : 1) * 1.35 * Math.min(power, 1.6);
       spooked = true;
     }
   }

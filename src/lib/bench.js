@@ -477,5 +477,5 @@ function step(n, fn, o = {}) {
 
 export function installBench(hooks) {
   H = hooks;
-  window.__bench = { VIEWS, step, setup, calibrate, gpuCalibrate, run, live, liveAB, capture, diff, png, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
+  window.__bench = { VIEWS, step, hold: on => (on ? holdOn() : holdOff(), holdN), setup, calibrate, gpuCalibrate, run, live, liveAB, capture, diff, png, ab, noise, hide, owners, draws, size, place: H.place, where: H.where, get timer() { return !!ext; } };
 }
