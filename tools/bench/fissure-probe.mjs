@@ -1160,7 +1160,8 @@ if (mode === 'shape') {
   //   occluded - during the rise, the line from the lens to his chest enters the rock from the water
   //              side (a front-face crossing of any zone's heightfield: the throat walls and floors as
   //              drawn within ~1 u), his body in the water
-  // GATES: hidden 0, occluded <= 60 of the ~2730 rise frames (the lens's release up through each floor
+  // GATES: the lens's own step <= 1 u a frame at 60 fps until the card (final residual fix 4: 1d68aa0 max 0.81;
+  // the floor-side cap's ramp dropped it 6.6 u at the zone-1 crossing); hidden 0, occluded <= 60 of the ~2730 rise frames (the lens's release up through each floor
   // after him and the zone-0 crossing's first frames), the ending holds 'won'. RED on 1d68aa0 (ending.js
   // unchanged since Task 1): band cam 2/19/0 diver 18/7/0 (Task 1's numbers reproduce), bandAll diver
   // 66/49/241 (the review's 68/52: the window was dropped), hidden 74 (19/3/52: he rose the last ~14 u
@@ -1176,11 +1177,15 @@ if (mode === 'shape') {
     const bandOf = (x, y, z, win) => { for (let zi = 0; zi < 3; zi++) { if (win && (y < C.zoneBottom(zi) - 62 || y > C.zoneBottom(zi) + 190)) continue;
       const h = T.terrainH(x, z, zi); if (y < h + 1.8 && y > h - 26) return zi; } return -1; };
     const nearZone = y => { let best = -1, bd = 1e9; for (let zi = 0; zi < 3; zi++) { const d = Math.abs(y - (C.zoneBottom(zi) - 40)); if (d < bd) { bd = d; best = zi; } } return best; };
-    const out = { cam: [0, 0, 0], div: [0, 0, 0], camAll: [0, 0, 0], divAll: [0, 0, 0], hidden: [0, 0, 0], occluded: 0, occAt: [], hidAt: [], rise: 0 };
+    const out = { cam: [0, 0, 0], div: [0, 0, 0], camAll: [0, 0, 0], divAll: [0, 0, 0], hidden: [0, 0, 0], occluded: 0, occAt: [], hidAt: [], rise: 0, stepMax: 0, stepAt: -1, over1: 0 };
+    const cPrev = window.camera.position.clone(); let cOk = false;
     // +1 over a floor, -1 under it (the zone whose floor lies within 40 u), 0 in the open water between
     const above = (x, y, z) => { for (let zi = 0; zi < 3; zi++) { const h = T.terrainH(x, z, zi); if (Math.abs(y - h) < 40) return y > h ? 1 : -1; } return 0; };
     window.__bench.step(4500, i => {
       const p = window.player.pos, c = window.camera.position, t = i / 60;
+      // the lens's own step a frame (final residual fix 4: the zone-1 crossing dropped it 6.6 u in one)
+      if (cOk && t < 60) { const st = c.distanceTo(cPrev); if (st > out.stepMax) { out.stepMax = +st.toFixed(3); out.stepAt = i; } if (st > 1) out.over1++; }
+      cPrev.copy(c); cOk = true;
       let b = bandOf(c.x, c.y, c.z, true); if (b >= 0) out.cam[b]++;
       b = bandOf(p.x, p.y, p.z, true); if (b >= 0) out.div[b]++;
       b = bandOf(c.x, c.y, c.z, false); if (b >= 0) out.camAll[b]++;
@@ -1203,6 +1208,7 @@ if (mode === 'shape') {
   if (r.state !== 'won') fail.push('the ending did not hold the won state: ' + r.state);
   if (sum(r.hidden)) fail.push(`the diver was inside the rock with the lens on the other side on ${sum(r.hidden)} frames (${r.hidden.join('/')}) ` + JSON.stringify(r.hidAt));
   if (r.occluded > 60) fail.push(`the lens's line to him ran through rock on ${r.occluded}/${r.rise} rise frames ` + JSON.stringify(r.occAt));
+  if (r.stepMax > 1.0) fail.push(`the ending lens moved ${r.stepMax} u in one frame (frame ${r.stepAt}; ${r.over1} frames over 1 u; bound 1 u at 60 fps)`);
 } else if (mode === 'wave-minors') {
   // THE FINAL WAVE'S SMALL FIXES, each through the game's own path (RED: each fix reverted alone).
   //  M1 the sonar's "way down" echo keys on the FISSURE (open past half), not the calm: calmed but still

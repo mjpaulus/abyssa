@@ -452,8 +452,9 @@ let camAz = 0, camDist = 8.5, camHeight = 1.9, camFov = 62, camRoll = 0, lookLif
 //     crack, the arm is shortened to the longest of LOS_F that sees him (a heightfield march from the lens
 //     to his chest: no entry into the rock from the water side), the lost reach put back as height (the
 //     shaft widens upward); fast in, slow out.
-const FLOOR_UNDER = 1.5, UNDER_HIM = 1.5, LOS_F = [1, 0.8, 0.64, 0.5, 0.38, 0.28, 0.2], LOS_RAISE = 1.0;
-let losF = 1, floorDrop = 0;
+const FLOOR_UNDER = 1.5, UNDER_HIM = 1.5, LOS_F = [1, 0.8, 0.64, 0.5, 0.38, 0.28, 0.2], LOS_RAISE = 1.0, DROP_RATE = 45, LENS_REL = 40, LENS_ABS = 58;
+let losF = 1, floorDrop = 0, lensPrevOk = false;
+const lensPrev = V3(), diverPrev = V3();
 let endX = 34, endZ = 27;
 let cardOn = false, l2 = false, l3 = false, hintOn = false;
 let yawF = 0, pitchF = 0;
@@ -490,7 +491,7 @@ export function startEnding() {
   yawF = player.yaw;
   pitchF = player.pitch;
   camAz = player.yaw + Math.PI;
-  camDist = 8.5; camHeight = 1.9; camFov = 62; camRoll = 0; lookLift = 0; camPull = 0; losF = 1; floorDrop = 0;
+  camDist = 8.5; camHeight = 1.9; camFov = 62; camRoll = 0; lookLift = 0; camPull = 0; losF = 1; floorDrop = 0; lensPrevOk = false;
   cardOn = l2 = l3 = hintOn = false;
   for (const s of SLEEPERS) { s.obj.seen = false; s.obj.live = false; s.obj.grp.visible = false; }
   for (let i = 0; i < NBUB; i++) respawnBubble(i, true);
@@ -805,10 +806,10 @@ export function updateEnding(dt, t) {
     // the throat floor is at full depth only in a slot a few units wide round his own column, and a lens
     // out along the crack sat in the rock of a pocket's wall (zone 2: black frames)
     hd = terrainH(player.pos.x, player.pos.z, ti);
-    const rel = player.pos.y - hd; cross = smooth(-20, -15, rel) * (1 - smooth(2, 7, rel)) * transit;
+    const rel = player.pos.y - hd; cross = smooth(-32, -15, rel) * (1 - smooth(2, 7, rel)) * transit;
     fWant = Math.min(fWant, 1 - (1 - LOS_F[LOS_F.length - 1]) * cross);
   }
-  losF += (fWant - losF) * Math.min(1, (fWant < losF ? 6 : 1.5) * dt);
+  losF += (fWant - losF) * (1 - Math.exp(-(fWant < losF ? 3 : 1.5) * dt));
   const dArm = dEff * losF;
   const camX = player.pos.x + cax * dArm, camZ = player.pos.z + caz * dArm;
   let camY = player.pos.y + camHeight + (1 - losF) * dEff * LOS_RAISE;
@@ -816,17 +817,32 @@ export function updateEnding(dt, t) {
   // crossing itself UNDER HIM (he rises through the pit at the throat floor's bottom: every floor round
   // him is higher, so a line from below him stays under it all), held there continuously as both rise
   // and let go on a ~0.7 s decay once he is through: from below, the floor is a culled back face
+  // (final residual fix 4) the under-him part rides `cross` as a share of the way down (it was a cap 40 u
+  // over him squeezed into cross's 5 u ramp: 6.6 u in one frame at the zone-1 crossing), and the drop is
+  // taken at <= DROP_RATE u/s: no step of the lens past ~1 u a frame at 60 fps
   let need = 0;
   if (transit > 0.01 && player.pos.y - 0.5 < hd + 0.3) {
-    const cap = Math.min(terrainH(camX, camZ, ti) - FLOOR_UNDER, player.pos.y - UNDER_HIM + (1 - cross) * 40);
-    need = Math.max(0, camY - cap);
+    need = Math.max(0, camY - (terrainH(camX, camZ, ti) - FLOOR_UNDER), cross * (camY - (player.pos.y - UNDER_HIM)));
   }
-  floorDrop = Math.max(need, floorDrop * Math.exp(-1.4 * dt));
+  const fd0 = floorDrop * Math.exp(-1.4 * dt);
+  floorDrop = need > fd0 ? Math.min(need, Math.max(fd0, floorDrop + DROP_RATE * dt)) : fd0;
   camY -= floorDrop;
   const hit = insideFloor(camX, camY, camZ);
   camPull += ((hit ? 1 : 0) - camPull) * Math.min(1, 3 * dt);
 
-  camera.position.set(camX, camY, camZ);
+  // and the lens never moves faster than LENS_REL u/s relative to him (frame-rate independent): every term
+  // above is eased, this is the backstop that keeps a ramp from ever reading as a cut
+  if (lensPrevOk && dt > 0) {
+    const ex = camX - (lensPrev.x + player.pos.x - diverPrev.x), ey = camY - (lensPrev.y + player.pos.y - diverPrev.y), ez = camZ - (lensPrev.z + player.pos.z - diverPrev.z);
+    const el = Math.hypot(ex, ey, ez), lim = LENS_REL * dt;
+    if (el > lim) { const k = lim / el; camera.position.set(camX - ex * (1 - k), camY - ey * (1 - k), camZ - ez * (1 - k)); }
+    else camera.position.set(camX, camY, camZ);
+    // ...and absolutely no faster than LENS_ABS u/s (~1 u a frame at 60 fps; he himself rides up to ~44 u/s)
+    const ax = camera.position.x - lensPrev.x, ay = camera.position.y - lensPrev.y, az = camera.position.z - lensPrev.z;
+    const al = Math.hypot(ax, ay, az), alim = LENS_ABS * dt;
+    if (al > alim) { const k = alim / al; camera.position.set(lensPrev.x + ax * k, lensPrev.y + ay * k, lensPrev.z + az * k); }
+  } else camera.position.set(camX, camY, camZ);
+  lensPrev.copy(camera.position); diverPrev.copy(player.pos); lensPrevOk = true;
   _v.set(player.pos.x, player.pos.y + 0.6 + lookLift, player.pos.z);
   camera.up.set(0, 1, 0);
   camera.lookAt(_v);
