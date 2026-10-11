@@ -232,8 +232,10 @@ against explicit contracts and reviewed on return.
   legs, underside wards buried and dark while she sleeps, touchable only standing).
   `__lev.fp(i)` is the serpent's regression hash (z0 15ce888c, z1 c938fe6e, z2
   652d0412); `__lev.swap/cmd/state` and the lab "sleeper" group drive the kinds.
-  Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge on the
-  rift lip with a BERRIED CLUTCH under her apron (2026-10-08, roadmap/brooder-clutch.md: the
+  Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge ALONGSIDE her
+  fissure (fissure Task 5: `sleeper/lair.js` velkathLair, pure; one flank to the crack, her NEAR flank
+  `L.nearFlank`/`L.sand` to open sand, her whole outline off the 14 u APRON; the scatter keeps her bed
+  clear, `clearOfBed`) with a BERRIED CLUTCH under her apron (2026-10-08, roadmap/brooder-clutch.md: the
   nest and helmet eggs are gone; clutch2 2026-10-08: each lobe's skin carries a generated BEAD
   FIELD (brood.js beadField: packed egg domes, eyespots, yolk; triplanar in the lobe's rest
   frame; lobes filleted into one mass) + ~2.8k sparse proud eggs on setae tips, lantern-lit; the
@@ -244,14 +246,14 @@ against explicit contracts and reviewed on return.
   brooder.js; 3.8 u/s with the clump out), and her body collides per part (sleeper/bodyCols.js;
   belly deliberately open) for Sal and the camera (`__crecam`). `lev.dormant` hides name/
   bearing/dread until she wakes). THE RITE, FAIR (ritefair 2026-10-09, brooder.js `STAND`,
-  docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre 1.45 R off
-  the rift's rim crest (on it her wards hung 12-17 u up) and rides at most 0.06 R over the ground
+  docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre APRON + 1.3 R off
+  the crack's lip (`STAND.keep`; the old rim crest, and the apron rising to the lip, hung her wards 12-17 u up) and rides at most 0.06 R over the ground
   under her belly; standing height 0.52 R, held over him (no settling onto him), shell 3.6 u over
   the ground under it (STAND.clear), ward reach 7; the clutch is carried TUCKED under her apron (brood.js
   TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up) and pressed back from RET_R 5; the crouch is retired
   (Michael: "crouched too low and I kept colliding"); under her body is a refuge (no hammer; she
   shifts her stance every ~3 s instead); her claws spread open her front when he comes in
-  (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never toward the rift; a slam
+  (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never into the crack (`safeThrow`: its whole ~16-29 u slide clears the lip); a slam
   tears once per 0.8 s; her back is a slick dome (no tear, he slides off); game.js `BOSSCAM` cranes
   the lens up 1.5 u and leans the look toward her belly/nearest dark ward while she is up within
   30 u (drops on any mouse look). `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
@@ -371,7 +373,9 @@ against explicit contracts and reviewed on return.
   fillTerrain -> reseedWrecks(tools) -> reseedFlora -> reseedResources ->
   reseedProps -> reseedVents -> reseedVentLife -> reseedGardens -> reseatRifts ->
   reseedDens -> reseedCreatures -> reseedFauna -> enterZone(0) — ORDER IS
-  CONTRACT (flora excludes around wreckSites(), dens re-pick from flora's colliders).
+  CONTRACT (flora excludes around wreckSites(), dens re-pick from flora's colliders). Every placement
+  keeps off the crack with fissureShape.js `clearOfCrack(x, z, zi, r)` (lip + 6 u + its radius; it
+  replaced the riftPos circles, fissure Task 5) and off Velkath's bed (`sleeper/lair.js` clearOfBed).
   Discipline held everywhere: materials/programs never recreated, collider arrays
   keep object identity, layouts are pure functions of site seed streams (20x soak:
   programs constant, zero geometry/texture growth, zero scene drift).
@@ -404,7 +408,7 @@ against explicit contracts and reviewed on return.
   Water rides three shared fog-chunk vec4s (abyssaSite/SiteT/SiteK, DELTAS from the shipped
   constants, installed like abyssaStyle) + SITE_SURF on the CPU palette, so a voyage moves
   fog, dome, far sea and shafts together with zero recompiles. Sleepers: Velkath swings
-  round her rift's lip (lair.bear, or lair.arc + idle picks the lip height), Orune turns
+  round her crack (lair.bear / lair.arc pick the side and the station along it; idle the height), Orune turns
   about her trawler (lair.bear / idle), Mhor's furnace moves (lair.bear/r); `hard` =
   hammerT/threatR, pull/hold/lashCd/grabR, circleT/stunT/hitR/speed. Never more lights.
   `__chart.fp()` is the same canonical probe as `__ridge.fp()` (values above; the sites
