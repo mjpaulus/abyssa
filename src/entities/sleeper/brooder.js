@@ -24,7 +24,7 @@ import {
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
-import { fissureDist, APRON } from '../../world/fissureShape.js';
+import { FISSURE, fissureDist, fissureLocal, APRON } from '../../world/fissureShape.js';
 import { velkathLair, R_OF_SIZE, HEAD_R } from './lair.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
@@ -194,7 +194,7 @@ function chitinSheen(m) {
 
 // (Task 5) the fissure's outward direction at (x, z): central differences of fissureDist (unit; into a
 // module scratch, no allocation). Points away from the lip, toward open ground.
-const _fg = { x: 0, z: 0 };
+const _fg = { x: 0, z: 0 }, _fl = { u: 0, v: 0 };
 function crackAway(x, z, zi) {
   const h = 0.75;
   const gx = fissureDist(x + h, z, zi) - fissureDist(x - h, z, zi), gz = fissureDist(x, z + h, zi) - fissureDist(x, z - h, zi);
@@ -505,6 +505,7 @@ export function makeBrooder(idx, cfg) {
     // on this flank); sandSide = which of her local flanks (+1: +x) faces it
     L.sand = sand.clone();
     L.sandSide = Math.cos(L.yaw) * sand.x - Math.sin(L.yaw) * sand.z >= 0 ? 1 : -1;
+    { const q = fissureLocal(lip.x, lip.z, idx, { u: 0, v: 0 }); L.lairSide = q.v >= 0 ? 1 : -1; }   // which side of the crack is hers
     {
       const rr = G.rimR(L.sandSide > 0 ? 0 : Math.PI) * R;
       L.nearFlank = lip.clone().addScaledVector(sand, rr);
@@ -1806,7 +1807,10 @@ export function updateBrooder(L, dt, t, player) {
   // extent is 1.29 R, so at any heading no part of her is over the crack, its jam or the apron that
   // rises to the lip (the old rim crest she walked off; on it her wards hung 6-8 u up). She slides
   // along the line, never into it.
-  if (hunt && L.standE > 0.5) {
+  // The same holds on the walk home to her bed (calm, walkTo), and past either tip she stays on her
+  // own side of the crack's line, so a diver across it cannot lead her round a tip and back over
+  // the jam on the walk home.
+  if ((hunt || L.walkTo) && !L.dormant && L.standE > 0.5) {
     const keep = APRON + STAND.keep * R, fd = fissureDist(L.pos.x, L.pos.z, L.idx);
     if (fd < keep) {
       const g = crackAway(L.pos.x, L.pos.z, L.idx);
@@ -1814,6 +1818,14 @@ export function updateBrooder(L, dt, t, player) {
       L.pos.x += g.x * k; L.pos.z += g.z * k;
       const vin = L.vel.x * g.x + L.vel.z * g.z;
       if (vin < 0) { L.vel.x -= vin * g.x; L.vel.z -= vin * g.z; }
+    }
+    const F = FISSURE[L.idx];
+    fissureLocal(L.pos.x, L.pos.z, L.idx, _fl);
+    if (L.lairSide && Math.abs(_fl.u) > F.halfLen && _fl.v * L.lairSide < 0) {
+      const nx = -F.dz * L.lairSide, nz = F.dx * L.lairSide, k = Math.min(-_fl.v * L.lairSide, 3.0 * dt);
+      L.pos.x += nx * k; L.pos.z += nz * k;
+      const vin = L.vel.x * nx + L.vel.z * nz;
+      if (vin < 0) { L.vel.x -= vin * nx; L.vel.z -= vin * nz; }
     }
   }
   // the world is solid to her: out of every hull and big rock, sliding along it
