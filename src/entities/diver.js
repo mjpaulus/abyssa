@@ -3238,6 +3238,9 @@ export function diverImpulse(kind, dx = 0, dz = 0, mag = 1) {
   rcD.v -= 2.2 * k;                   // the knees buckle under it
 }
 export function diverGrab(on) { grabOn = !!on; }
+// (Task 7) game.js: true while Sal wrenches a lodged harpoon free (lev.rite.wrenching) — the carried one is not drawn
+let bladeStowed = false;
+export function diverBladeStowed(on) { bladeStowed = !!on; }
 // THE YANK (tether.js leash). The hose comes up hard on the bonnet and jerks him back
 // toward it: (dx, dz) is the world direction FROM Sal TOWARD the pull (the raft), str 0..1
 // is the snap's strength (his speed into the line). A heavy man jerked by a line, not a
@@ -4392,7 +4395,10 @@ export function updateDiver(dt, t, player) {
   thIK = 0;
   {
     const own = !!survival.hasHarpoon, hp = diver.harpoon;
-    if (hp.visible !== own) hp.visible = own;
+    // (wrenching another iron out of Velkath his hands are on THAT one: his own is not drawn till it comes
+    // free — then the one he carries is the one he pulled)
+    const shown = own && !bladeStowed;
+    if (hp.visible !== shown) hp.visible = shown;
     if (own) {
       thIK = thrustT >= 0 ? ss(0, 0.14, thrustT) * (1 - ss(0.58, 0.88, thrustT)) : 0;
       const wP = thrustT >= 0 ? ss(0.02, 0.16, thrustT) * (1 - ss(0.62, 0.88, thrustT)) : 0;

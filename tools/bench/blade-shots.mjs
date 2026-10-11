@@ -28,7 +28,7 @@ if (cmd === 'png') {
     const D = await import('/src/entities/diver.js');
     ['title','pause','ptDock','ptPanel','ptToast'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; });
     const v = '${view}', P = window.player, y = D.diver.rotation.y;
-    if (v === 'game') window.__camPin = null;
+    if (v === 'game') { window.__camPin = null; window.__bench.step(45); }   // the lens eases back from a pin
     else {
       const ang = { left: Math.PI / 2, right: -Math.PI / 2, front: 0, back: Math.PI, fl: Math.PI / 4, fr: -Math.PI / 4 }[v] || 0;
       const a = y + ang, d = ${dist};

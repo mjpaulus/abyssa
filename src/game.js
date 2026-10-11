@@ -15,7 +15,7 @@ import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './
 import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
 import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
-import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
@@ -2632,6 +2632,8 @@ function update(dt, t) {
   // Debris reacts to the diver's push and the leviathan's sweep.
   updatePhysics(dt, player.pos, player.vel, lev ? lev.spine : null); pm('physics');
 
+  // (Task 7) both hands on the lodged iron: his own harpoon (if he carries one) is not drawn till it comes free
+  diverBladeStowed(!!(lev && lev.rite && lev.rite.wrenching));
   updateDiver(dt, t, player); pm('diver');
   // Bootfall audio, sand puff and boot print all key off the rig's real heel strikes
   // (counted inside updateDiver), so they land on the same frame the weight drops.
