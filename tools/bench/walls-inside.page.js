@@ -439,7 +439,7 @@ export async function descentLens(zi, o = {}) {
   const Wg = T.fissureWallOn && T.fissureWallOn() ? T.fissureWallGeo(zi) : null; if (Wg) take(Wg.pos.array, Wg.index, -1);
   const n = tris.length / 9, cam = window.camera;
   let minD = 1e9, at = null, samples = 0, close = 0, inside = 0, hfIn = 0, worstIn = null, lensBelowPivotMax = -1e9, boomMin = 1e9, boomMax = 0, fallV = 0, ndcLow = 9, ndcHigh = -9, ndcSide = 0, offFrame = 0;
-  const closeAt = [], hfAt = [], offAt = [], salAt = []; let salIn = 0, salInMax = 0, salFloor = 0, salFloorAt = -1, offAll = 0;
+  const closeAt = [], hfAt = [], offAt = [], salAt = []; let salIn = 0, salInMax = 0, salFloor = 0, salFloorAt = -1, offAll = 0, postN = 0, postClose = 0, postHf = 0, postSal = 0, through = false;
   const fell0 = window.player.pos.y;
   const startZone = window.zone, shots = o.shots || [], got = [], holds0 = window.__shaftHolds ? window.__shaftHolds() : 0;
   const tc0 = window.__throatCam ? window.__throatCam.state() : null;
@@ -449,7 +449,11 @@ export async function descentLens(zi, o = {}) {
   window.__fissure.setOpen(zi, 1);
   window.keys.KeyC = true;
   try {
-    for (let f = 0; f < (o.frames || 1500) && window.zone === startZone && window.gameState === 'play' && window.player.pos.y > trig + 1.5; f += every) {
+    // (final residual fix) the WHOLE shaft: past the zone-change plane too (zones 0/1 switch 10-16 u above
+    // the throat floor; the rest of the old shaft is still around him), until he is through the old throat
+    // floor (his chest under it and no open water at his feet) or, in zone 2, the ending's plane
+    through = false;
+    for (let f = 0; f < (o.frames || 2400) && !through && window.gameState === 'play' && !(zi === 2 && window.player.pos.y <= trig + 1.5); f += every) {
       if (o.yawRate) window.__bench.step(every, () => { window.player.yaw += o.yawRate / 60; }, { render: !!o.render });
       else window.__bench.step(every, null, { render: !!o.render });
       const p = cam.position, pv = window.player.pos;
@@ -457,7 +461,10 @@ export async function descentLens(zi, o = {}) {
         got.push({ below: shots[got.length], png: window.__bench.png(await window.__bench.capture({ frames: 6 }), 0.5) });
       }
       if (pv.y > lip - 1) continue;                                         // the pivot is not in the throat yet
-      samples++;
+      { S.fissureLocal(pv.x, pv.z, zi, _sl);
+        if (pv.y - 0.5 < T.terrainUnderH(pv.x, pv.z, zi) - 1 && !S.openRunAt(_sl.u, _sl.v, zi, pv.y - 1.35, T.terrainUnderH, _sr)) { through = true; continue; } }
+      const post = window.zone !== startZone;   // past the zone-change plane, still in the old shaft
+      samples++; if (post) postN++;
       boomMin = Math.min(boomMin, p.distanceTo(pv)); boomMax = Math.max(boomMax, p.distanceTo(pv)); fallV = Math.max(fallV, -window.player.vel.y);
       lensBelowPivotMax = Math.max(lensBelowPivotMax, pv.y - p.y);
       // Sal himself: his chest (0.5 u under the eye) under the heightfield at his own (x, z) = his body in
@@ -465,9 +472,9 @@ export async function descentLens(zi, o = {}) {
       // a face) or under the THROAT FLOOR (no open water left there: he sinks through toward the plane)
       { const sd = T.terrainUnderH(pv.x, pv.z, zi) - (pv.y - 0.5);
         if (sd > 0) { S.fissureLocal(pv.x, pv.z, zi, _sl);
-          if (S.openRunAt(_sl.u, _sl.v, zi, pv.y - 1.35, T.terrainUnderH, _sr)) { salIn++; salInMax = Math.max(salInMax, sd); if (salAt.length < 4) salAt.push([f, +(lip - pv.y).toFixed(1), +sd.toFixed(2)]); }
+          if (S.openRunAt(_sl.u, _sl.v, zi, pv.y - 1.35, T.terrainUnderH, _sr)) { salIn++; if (post) postSal++; salInMax = Math.max(salInMax, sd); if (salAt.length < 4) salAt.push([f, +(lip - pv.y).toFixed(1), +sd.toFixed(2)]); }
           else { salFloor++; if (salFloorAt < 0) salFloorAt = +(lip - pv.y).toFixed(1); } } }
-      if (p.y < T.terrainUnderH(p.x, p.z, zi) - 0.1) { hfIn++; if (hfAt.length < 6) hfAt.push([f, +(lip - pv.y).toFixed(1), +(T.terrainUnderH(p.x, p.z, zi) - p.y).toFixed(2)]); }
+      if (p.y < T.terrainUnderH(p.x, p.z, zi) - 0.1) { hfIn++; if (post) postHf++; if (hfAt.length < 6) hfAt.push([f, +(lip - pv.y).toFixed(1), +(T.terrainUnderH(p.x, p.z, zi) - p.y).toFixed(2)]); }
       // where Sal sits in the frame (his chest: 0.5 u under the eye): NDC, -1 = the bottom edge
       cam.updateMatrixWorld(); _q.set(pv.x, pv.y - 0.5, pv.z).project(cam);
       // (counted once he has fallen 3 u off the jam: before that the frame is the shut jam's, whose boom
@@ -493,13 +500,13 @@ export async function descentLens(zi, o = {}) {
           fSide = _b.dot(_q.set(p.x - _q.x, p.y - _q.y, p.z - _q.z)) >= 0 ? 1 : -1;
         }
       }
-      if (fMin < cam.near) { close++; if (closeAt.length < 6) { S.fissureLocal(p.x, p.z, zi, _sl); closeAt.push([f, +(lip - pv.y).toFixed(1), +fMin.toFixed(3), ['patch', 'slab', 'wall'][fKind], +_sl.u.toFixed(1), +_sl.v.toFixed(2), +(lip - p.y).toFixed(1)]); } }
+      if (fMin < cam.near) { close++; if (post) postClose++; if (closeAt.length < 6) { S.fissureLocal(p.x, p.z, zi, _sl); closeAt.push([f, +(lip - pv.y).toFixed(1), +fMin.toFixed(3), ['patch', 'slab', 'wall'][fKind], +_sl.u.toFixed(1), +_sl.v.toFixed(2), +(lip - p.y).toFixed(1)]); } }
       if (fSide < 0 && fMin < 3) { inside++; if (!worstIn || fMin > worstIn.d) worstIn = { f, d: +fMin.toFixed(2), below: +(lip - pv.y).toFixed(1) }; }
       if (fMin < minD) { minD = fMin; at = { f, side: fSide, cam: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], below: +(lip - pv.y).toFixed(1), boom: +p.distanceTo(pv).toFixed(2) }; }
     }
   } finally { window.keys.KeyC = false; }
   return { zi, u: u0, yaw: +(o.yaw || 0).toFixed(3), pitch: o.pitch || 0, yawRate: o.yawRate || 0, tris: n, samples, endBelowLip: +(lip - window.player.pos.y).toFixed(1), trigBelowLip: +(lip - trig).toFixed(1), close, inside, hfIn, worstIn, zoneEnd: window.zone, near: cam.near, minD: +minD.toFixed(3), at,
-    salIn, salInMax: +salInMax.toFixed(2), salAt, salFloor, salFloorAt, offAll, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
+    salIn, salInMax: +salInMax.toFixed(2), salAt, salFloor, salFloorAt, offAll, post: { n: postN, close: postClose, hfIn: postHf, salIn: postSal }, through, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
     guards: tc0 ? window.__throatCam.state().guards - tc0.guards : null, snaps: tc0 ? window.__throatCam.state().stiff - tc0.stiff : null, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
     boomMin: +boomMin.toFixed(2), boomMax: +boomMax.toFixed(2), fallV: +fallV.toFixed(1), lensBelowPivotMax: +lensBelowPivotMax.toFixed(2), shots: got };
 }

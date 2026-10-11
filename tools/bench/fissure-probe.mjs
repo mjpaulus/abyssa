@@ -978,7 +978,9 @@ if (mode === 'shape') {
 
 } else if (mode === 'fall-lens') {
   // THE LENS ON THE DESCENT (final fix wave I1; page half: walls-inside.page.js descentLens). The REAL
-  // follow camera while Sal sinks through each open throat from the shut jam it opened under: three
+  // follow camera while Sal sinks through each open throat from the shut jam it opened under, ALL THE WAY
+  // through the throat floor (final residual fix: in zones 0/1 the zone-change plane lies 10-16 u above
+  // the throat floor, and the shaft below it was never measured; `postSwitch` counts that segment): three
   // stations along each crack x six headings relative to it (along, across both ways, the diagonals),
   // plus the look pitched down / up and a man turning while he falls. GATES, per case: 0 frames with
   // the lens within the near plane (0.1 u) of DRAWN crack rock (the patch, the throat walls, the
@@ -1017,8 +1019,11 @@ if (mode === 'shape') {
     window.gotoZone(0);
     return out; })()`);
   let close = 0, hfIn = 0, inside = 0, off = 0, samples = 0, salIn = 0, salFloor = 0, guards = 0, snaps = 0;
+  const post = { n: 0, close: 0, hfIn: 0, salIn: 0 };
   for (const q of r) {
     close += q.close; hfIn += q.hfIn; inside += q.inside; off += q.offFrame; samples += q.samples; salIn += q.salIn; salFloor += q.salFloor; guards += q.guards || 0; snaps += q.snaps || 0;
+    for (const k in post) post[k] += q.post[k];
+    if (q.zi < 2 && !q.through) fail.push(`zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}: the descent was not followed through the throat floor`);
     const at = `zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}${q.pitch ? ' pitch ' + q.pitch : ''}${q.yawRate ? ' turning ' + q.yawRate : ''}`;
     if (q.samples < 150) fail.push(`${at}: only ${q.samples} samples below the lip (the fall was not measured)`);
     if (q.zi < 2 && q.close) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames (min ${q.minD} at ${JSON.stringify(q.at)})`);
@@ -1029,7 +1034,7 @@ if (mode === 'shape') {
   }
   const z2 = r.filter(q => q.zi === 2), z2close = z2.reduce((a, q) => a + q.close, 0), z2hf = z2.reduce((a, q) => a + q.hfIn, 0);
   if (z2close > 12 || z2hf > 4) fail.push(`zone 2: the lens near drawn rock on ${z2close} frames / inside it on ${z2hf} (bound 12 / 4)`);
-  console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, lensGuardFrames: guards, lensStiffFrames: snaps }));
+  console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, postSwitch: post, lensGuardFrames: guards, lensStiffFrames: snaps }));
   // STANDING in or at the open crack (the boom's floor test and the floor clamp stand aside only inside the
   // outline): per zone, stood on the broken lip (fd -0.4 / -1.2 on each side) at three stations and at both
   // tips, plus the probe's strata ledge, facing out of the crack, along it and into it, 3 s settled then 2 s
