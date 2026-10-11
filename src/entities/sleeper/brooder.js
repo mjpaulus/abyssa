@@ -16,7 +16,7 @@ import { scene, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
 import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
-import { terrainH, terrainMeshes } from '../../world/terrain.js';
+import { terrainH, terrainMeshes, fissurePatchSample } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard,
@@ -25,6 +25,7 @@ import {
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
 import { riftPos, WORLD_R } from '../../config.js';
+import { FISSURE, fissureDist, fissureWorld, _halfWAt, LIP_CLEAR } from '../../world/fissureShape.js';
 import { wreckSites } from '../../world/wrecks.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
@@ -139,14 +140,16 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). ride: she rides
 // at most this far (R) over the ground under her belly, whatever her feet stand on; clear: her
 // shell's lowest point keeps this many u over the ground under it while she is awake. Standing on
-// the rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
-// 12-17 u over him: `keep` holds her centre this far (R) outside the crest while she hunts a
-// diver on the plateau (she comes off her ledge to fight). underK: under her body (R) the
+// the old rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
+// 12-17 u over him. Since THE FISSURE (Task 5) `keep` holds her centre LIP_CLEAR + keep R off the
+// crack's lip while she hunts (1.3 R: her widest half extent is 1.29 R, so no part of her is ever over
+// the crack or its jam at any heading; it is also where she lies asleep, so rising she does not lurch).
+// underK: under her body (R) the
 // hammer cannot reach him (a crab cannot strike under itself) and she lowers it; she shifts
 // her stance every `shiftT` s to dislodge him instead, at `shiftV` u/s for `shiftD` s.
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
-// u/s straight up: it launched him over her back); a throw never carries him toward the rift.
-export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
+// u/s straight up: it launched him over her back); a throw never carries him into the crack (safeThrow).
+export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
 export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -187,28 +190,56 @@ function chitinSheen(m) {
   return m;
 }
 
-// OWN WATER: where she sleeps at a remote anchorage (site.js row `lair`, read only when
-// present — home never enters here). The rift itself never moves (THE CHART's frozen
-// frame), so her ridge swings ROUND ITS LIP instead: `bear` (degrees) turns the shipped
-// raft-side lip point about the rift centre; `arc` with the row's IDLE split [a, b]
-// searches that arc and takes the lip point whose ground sits at a/(a+b) of the arc's
-// height range (Pallid's [62, 38]: the HIGH lip — THE SLEEPERS SIT SHALLOW). Either way a
-// point whose ridge or trail head would sit on the zone's wreck is passed over, so the skiff
-// never lies under her. Returns the lip and the rift-ward `out` the shipped code faces by.
-// Pure function of the terrain and the row: a reseed lands her in the same place.
+// THE LAIR (Task 5, spec 2026-10-10 §1 "Lairs" / §2 "Asleep"): she lies ALONGSIDE her fissure, not on
+// a rim crest: one flank to the crack, the other (her NEAR flank: Task 6 lodges the harpoon there, at
+// standing height) to open sand, her face turned along the crack toward the opening. Her centre is
+//   lair = fissureWorld(u0, +-(halfW(u0, side) + off))      (the KINKED centreline: fissureShape.js contract)
+// with off the smallest value from LIP_CLEAR + 1.3 R (her crack-facing half extent, the shell's
+// +-1.19..1.29 R across, is the shield's widest) up, 1 u at a time, that keeps her whole REST OUTLINE
+// (G.rimR round her, as the skirt and the bed are built) LIP_CLEAR off the lip: the lip kinks and jags
+// under her ~31 u length, so a fixed offset from one half width is not enough.
+// The row picks WHERE: a bearing th about the crack's centre (the shipped raft-side bearing, swung by
+// the row's `bear`, or searched over its `arc` with the IDLE height split as before: Pallid's [62, 38]
+// still takes the HIGH ground) turns into a side (which way th points across the crack) and a station
+// u0 (how far th points along it, scaled into the stretch where her length fits the crack). A point
+// whose body or trail head would lie on the zone's wreck is passed over (the skiff never lies under
+// her); home has no row and takes the shipped bearing. Pure function of the terrain and the row.
+// Returns { lip (her centre), out (minus her face: the shipped code faces by it), sand (unit normal to
+// open ground), ok, g }.
+const _lw = { x: 0, z: 0 };
+function restOutlineMin(x, z, yaw, R, zi) {
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  let m = 1e9;
+  for (let k = 0; k < 48; k++) {
+    const th = k / 48 * Math.PI * 2, rr = G.rimR(th) * R, lx = Math.cos(th) * rr, lz = Math.sin(th) * rr;
+    m = Math.min(m, fissureDist(x + lx * cy + lz * sy, z - lx * sy + lz * cy, zi));
+  }
+  return m;
+}
 function lairOf(idx, R, c) {
-  const rp = riftPos(idx), rad = 16 * 2.7 + R * 0.55, lr = c.lair;
+  const F = FISSURE[idx], rp = riftPos(idx), lr = c.lair || {};
   const in0 = Math.atan2(-rp.z, -rp.x);                 // the shipped bearing: rift -> raft side
   const W = idx < 3 ? wreckSites()[idx] : null;
+  const uMax = Math.max(0, 0.9 * F.halfLen - R);         // her length along the crack stays where it is wide
   const at = th => {
-    const dx = Math.cos(th), dz = Math.sin(th);
-    const lip = V3(rp.x + dx * rad, 0, rp.z + dz * rad), out = V3(-dx, 0, -dz);
-    const head = lip.clone().addScaledVector(V3(-out.z, 0, out.x), R * 2.8);      // (where the old nest stood: her trail's head)
+    const ax = Math.cos(th), az = Math.sin(th);
+    const along = ax * F.dx + az * F.dz, across = -ax * F.dz + az * F.dx;
+    const side = across >= 0 ? 1 : 0, sg = side ? 1 : -1, u0 = along * uMax;
+    const sand = V3(-F.dz * sg, 0, F.dx * sg);           // across the bearing, away from the crack
+    const fs = u0 > 0 ? -1 : 1, front = V3(F.dx * fs, 0, F.dz * fs);   // her face: along the crack, toward the opening
+    const yaw = Math.atan2(front.x, front.z), w = _halfWAt(F, u0, side);
+    let off = LIP_CLEAR + 1.3 * R;
+    for (let it = 0; it < 40; it++, off += 1) {
+      fissureWorld(u0, sg * (w + off), idx, _lw);
+      if (restOutlineMin(_lw.x, _lw.z, yaw, R, idx) >= LIP_CLEAR) break;
+    }
+    const lip = V3(_lw.x, 0, _lw.z), out = front.clone().negate();
+    const head = lip.clone().addScaledVector(sand, R * 2.8);      // (where the old nest stood: her trail's head)
     const clear = !W || (Math.hypot(lip.x - W.x, lip.z - W.z) > R * 2 + 16 && Math.hypot(head.x - W.x, head.z - W.z) > 22);
     const inBasin = Math.hypot(lip.x, lip.z) < WORLD_R * 0.66 && Math.hypot(head.x, head.z) < WORLD_R * 0.66;
     let g = 0;
     for (let k = 0; k < 5; k++) g += terrainH(lip.x + Math.cos(k * 1.2566) * R * 0.6, lip.z + Math.sin(k * 1.2566) * R * 0.6, idx);
-    return { lip, out, ok: clear && inBasin, g: g / 5 };
+    return { lip, out, sand, ok: clear && inBasin, g: g / 5 };
   };
   const d2r = Math.PI / 180;
   if (lr.arc && c.idle) {
@@ -229,6 +260,34 @@ function lairOf(idx, R, c) {
     if (q.ok) return q;
   }
   return at(in0 + b);
+}
+
+// (Task 5) the fissure's outward direction at (x, z): central differences of fissureDist (unit; into a
+// module scratch, no allocation). Points away from the lip, toward open ground.
+const _fg = { x: 0, z: 0 };
+function crackAway(x, z, zi) {
+  const h = 0.75;
+  const gx = fissureDist(x + h, z, zi) - fissureDist(x - h, z, zi), gz = fissureDist(x, z + h, zi) - fissureDist(x, z - h, zi);
+  const l = Math.hypot(gx, gz) || 1;
+  _fg.x = gx / l; _fg.z = gz / l;
+  return _fg;
+}
+// (Task 5) the hammer's throw, flat direction v (unit, y 0), from (x, z): never toward the lip while he is
+// on the sand, and never a line that reaches the crack inside THROW_REACH (26 u/s under the suit's drag
+// slides him ~5-7 u: 10 is the margin). In place.
+const THROW_REACH = 10;
+function safeThrow(v, x, z, zi) {
+  if (fissureDist(x, z, zi) < 0) return v;                       // already in it: leave the blow alone
+  let g = crackAway(x, z, zi);
+  const vin = v.x * g.x + v.z * g.z;
+  if (vin < 0) { v.x -= vin * g.x; v.z -= vin * g.z; if (v.x * v.x + v.z * v.z < 0.04) { v.x = g.x; v.z = g.z; } v.normalize(); }
+  for (let d = 1; d <= THROW_REACH; d += 1) {
+    if (fissureDist(x + v.x * d, z + v.z * d, zi) < LIP_CLEAR * 0.5) {
+      g = crackAway(x, z, zi); v.x = g.x; v.z = g.z; v.y = 0; v.normalize();
+      break;
+    }
+  }
+  return v;
 }
 
 export function makeBrooder(idx, cfg) {
@@ -493,34 +552,30 @@ export function makeBrooder(idx, cfg) {
   L.memLine = 'SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.';
   makeEmbers(L, c.size);
 
-  // THE RIDGE: she sleeps at this zone's rift, facing the open seabed the diver comes
-  // from, a reef-crusted mound in the silt. Her clutch bulges from under her rim, and a trail of
-  // tracks runs in from the open ground past a shed shell and spent egg skins. Prying a
-  // clump wakes her (brood.onTake); calmed, she walks back and settles over her clutch,
-  // which clears the way.
+  // THE RIDGE: she sleeps ALONGSIDE this zone's fissure (lairOf: one flank to the crack, her near
+  // flank to the open sand the diver comes over), a reef-crusted mound in the silt. Her clutch
+  // bulges from under her rim, and a trail of tracks runs in from the open ground past a shed shell
+  // and spent egg skins. Prying a clump wakes her (brood.onTake); calmed, she walks back and
+  // settles over her clutch, which clears the way.
   {
-    const rp = riftPos(idx);
-    let out = V3(rp.x, 0, rp.z).normalize(), lip;
-    // on the rift's LIP (its bowl is a deep funnel — sat in it she was a hole, not a
-    // ridge), between the rift and the open ground, facing the way a diver comes
-    if (!c.lair) lip = V3(rp.x, 0, rp.z).addScaledVector(out, -(16 * 2.7 + R * 0.55));   // shipped, exactly
-    else ({ lip, out } = lairOf(idx, R, c));
-    const perp = V3(-out.z, 0, out.x);
+    const { lip, out, sand } = lairOf(idx, R, c);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
-    // (ritefair) the rift's rim crest along her lair's bearing: she sleeps astride it, and
-    // awake she keeps off it (STAND.keep) while she hunts a diver out on the plateau
+    // (Task 5) her near flank: the rim point on the sand side, at the ground (Task 6's harpoon seam is
+    // on this flank); sandSide = which of her local flanks (+1: +x) faces it
+    L.sand = sand.clone();
+    L.sandSide = Math.cos(L.yaw) * sand.x - Math.sin(L.yaw) * sand.z >= 0 ? 1 : -1;
     {
-      const bx = lip.x - rp.x, bz = lip.z - rp.z, bl = Math.hypot(bx, bz) || 1;
-      let hi = -1e9, cr = 16;
-      for (let r = 16; r <= bl; r += 1) { const h = terrainH(rp.x + bx / bl * r, rp.z + bz / bl * r, idx); if (h > hi) { hi = h; cr = r; } }
-      L.riftC = V3(rp.x, 0, rp.z); L.crestR = cr;
+      const rr = G.rimR(L.sandSide > 0 ? 0 : Math.PI) * R;
+      L.nearFlank = lip.clone().addScaledVector(sand, rr);
+      L.nearFlank.y = terrainH(L.nearFlank.x, L.nearFlank.z, idx);
     }
     L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
-    // (her trail's head, where the old nest stood: the tracks run in from 95 u out past it,
-    // exactly where they always began)
-    const head = lip.clone().addScaledVector(perp, R * 2.8);
-    L.brood = makeBrood(L, idx, head.clone().addScaledVector(out, -95));
+    // (her trail's head, where the old nest stood, out on her sand side: the tracks run in to it from
+    // 95 u further out, leaning toward the basin's middle so they start on open floor)
+    const head = lip.clone().addScaledVector(sand, R * 2.8);
+    const tIn = V3(-head.x, 0, -head.z).normalize().multiplyScalar(0.6).add(sand).normalize();
+    L.brood = makeBrood(L, idx, head.clone().addScaledVector(tIn, 95));
     L.rite = L.brood;                                 // the game's generic [E] / prompt hook
     L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
@@ -607,8 +662,11 @@ function buildSkirt(L) {
   L.onDispose = () => { if (m.parent) m.parent.remove(m); g.dispose(); if (prev) prev(); };
 }
 
-// bilinear sample of the seabed mesh's vertex colour at world x,z (its grid is separable)
-function seabedColor(tm, x, z, out) {
+// bilinear sample of the seabed mesh's vertex colour at world x,z (its grid is separable); near the
+// crack the coarse cells are cut out and the fissure patch draws the floor, so its colour first (Task 5)
+function seabedColor(tm, x, z, out, zi) {
+  const hp = fissurePatchSample(zi, x, z, out);
+  if (hp === hp) return out;
   const P = tm.geometry.attributes.position.array, C = tm.geometry.attributes.color.array;
   const n = Math.round(Math.sqrt(P.length / 3));
   const find = (v, stride, off) => {                  // largest k with axis[k] <= v
@@ -654,7 +712,13 @@ function fitSkirt(L) {
   };
   for (let j = 0; j < SK_COLS; j++) {
     const th = j / SK_COLS * Math.PI * 2, rr = G.rimR(th), c = Math.cos(th), sn = Math.sin(th);
-    const nk = notchK(j), gp = gs[j] * (1 - nk), w = clamp(gp * 1.7, 1.6, 9.5) / R;        // repose: ~30 degrees, wider for a deeper hollow
+    const nk = notchK(j), gp = gs[j] * (1 - nk);
+    let w = clamp(gp * 1.7, 1.6, 9.5) / R;                     // repose: ~30 degrees, wider for a deeper hollow
+    // (Task 5) the drift never runs over the crack's lip: on a bearing toward it the bank ends 1.5 u short
+    for (let q = 0.97; q <= 0.97 + w; q += 0.25 / R) {
+      _v.set(c * rr * q, -0.02, sn * rr * q).applyMatrix4(mw);
+      if (fissureDist(_v.x, _v.z, L.idx) < 1.5) { w = Math.max(0.2 / R, q - 0.97 - 0.25 / R); break; }
+    }
     for (let i = 0; i < SK_RINGS; i++) {
       let rho, ly = -0.02, s = 0;
       if (i === 0) { rho = 0.80; ly = -0.10; }
@@ -672,7 +736,7 @@ function fitSkirt(L) {
       if (i < 2 && nk > 0) y += (th0 - 0.12 - y) * nk;          // the open side: no curtain of silt under the rim
       if (y < th0 - 0.12 && i >= 1) y = th0 - 0.12;             // where the floor stands over her rim, the drift is under it
       P.setXYZ(i * SK_COLS + j, _v.x, y, _v.z);
-      seabedColor(tm, _v.x, _v.z, rgb);
+      seabedColor(tm, _v.x, _v.z, rgb, L.idx);
       const dk = i < 2 ? 0.42 : 0.42 + 0.58 * Math.pow(s, 0.6);  // darker where silt meets shell
       C.setXYZ(i * SK_COLS + j, rgb[0] * dk, rgb[1], rgb[2]);
     }
@@ -1794,17 +1858,18 @@ export function updateBrooder(L, dt, t, player) {
   }
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
-  // (ritefair) OFF THE LIP: hunting a diver out on the plateau she keeps her centre STAND.keep R
-  // outside the rift's rim crest (on it the crest lifted her and her wards 6-8 u); she walks off
-  // her ledge as she rises, and comes no nearer the rift while he stays out of its bowl
-  if (hunt && L.riftC && L.standE > 0.5) {
-    const rx = L.pos.x - L.riftC.x, rz = L.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
-    const keep = L.crestR + STAND.keep * R;
-    if (rr < keep && Math.hypot(L.aim.x - L.riftC.x, L.aim.z - L.riftC.z) > L.crestR) {
-      const k = Math.min(keep - rr, 3.0 * dt * L.standE);
-      L.pos.x += rx / rr * k; L.pos.z += rz / rr * k;
-      const vin = (L.vel.x * rx + L.vel.z * rz) / rr;
-      if (vin < 0) { L.vel.x -= vin * rx / rr; L.vel.z -= vin * rz / rr; }
+  // (ritefair; Task 5) OFF THE CRACK: awake and hunting she keeps her centre LIP_CLEAR + STAND.keep R
+  // off the fissure's lip (fissureDist, its outward gradient), whatever he does: her widest half
+  // extent is 1.29 R, so at any heading no part of her is over the crack or its jam (the old rim crest
+  // she walked off; on it her wards hung 6-8 u up). She slides along the line, never into it.
+  if (hunt && L.standE > 0.5) {
+    const keep = LIP_CLEAR + STAND.keep * R, fd = fissureDist(L.pos.x, L.pos.z, L.idx);
+    if (fd < keep) {
+      const g = crackAway(L.pos.x, L.pos.z, L.idx);
+      const k = Math.min(keep - fd, 3.0 * dt * L.standE);
+      L.pos.x += g.x * k; L.pos.z += g.z * k;
+      const vin = L.vel.x * g.x + L.vel.z * g.z;
+      if (vin < 0) { L.vel.x -= vin * g.x; L.vel.z -= vin * g.z; }
     }
   }
   // the world is solid to her: out of every hull and big rock, sliding along it
@@ -1911,15 +1976,13 @@ export function updateBrooder(L, dt, t, player) {
     c.dj.getWorldPosition(_ft);
     if (_ft.distanceTo(player.pos) < L.R * 0.42 && !L.under) {
       // (ritefair) a throw along the ground away from the blow, a little up (was setY(0.4):
-      // ~10 u/s straight up, over her back), and never toward her rift's bowl
+      // ~10 u/s straight up, over her back), and (Task 5) never into the crack: out on the sand,
+      // the part of it toward the lip is taken off; what is left still carrying him to the lip
+      // inside THROW_REACH (a tangent throw at a kink or a tip) turns straight out instead
       _v.copy(player.pos).sub(_ft).setY(0);
       if (_v.lengthSq() < 1e-6) _v.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
       _v.normalize();
-      if (L.riftC) {
-        const rx = player.pos.x - L.riftC.x, rz = player.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
-        const vin = (_v.x * rx + _v.z * rz) / rr;
-        if (vin < 0 && rr > L.crestR) { _v.x -= vin * rx / rr; _v.z -= vin * rz / rr; if (_v.lengthSq() < 0.04) _v.set(rx / rr, 0, rz / rr); _v.normalize(); }
-      }
+      safeThrow(_v, player.pos.x, player.pos.z, L.idx);
       _v.y = STAND.knockUp; _v.normalize();
       player.vel.addScaledVector(_v, HUNT.knock);
       L.hits = (L.hits || 0) + 1;

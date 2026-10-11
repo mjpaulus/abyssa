@@ -39,7 +39,7 @@ import { seededRand, maxAniso } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
 import { envTexDeep as envTex, camera } from '../../core.js';
 import { terrainH, terrainNormal } from '../../world/terrain.js';
-import { riftPos, RIFT_R } from '../../config.js';
+import { fissureDist } from '../../world/fissureShape.js';
 import { emitDust } from '../../world/footfx.js';
 import { lanternWorldPos } from '../diver.js';
 import * as G from './brooderGeo.js';
@@ -648,8 +648,8 @@ export function makeBrood(L, idx, trailFrom) {
       return y;
     };
     // the spill side: round her rear half, the bearing whose rim stands clear of the floor
-    // (room to see under it), whose ground beyond is walkable and out of the rift's bowl
-    const rp = riftPos(idx);
+    // (room to see under it), whose ground beyond is walkable and well off the crack (Task 5: she
+    // lies alongside it, one flank to the lip; a spill there would be out of reach over the jam)
     let bestS = -1e9, bestTh = -Math.PI / 2;
     for (let j = -13; j <= 13; j++) {
       const th = -Math.PI / 2 + j * 0.1;
@@ -657,13 +657,13 @@ export function makeBrood(L, idx, trailFrom) {
       const gap = -0.02 - floorL(c * rr * 0.97, s * rr * 0.97);         // rim underside over the floor (shell units)
       _a.set(c * rr * 1.25, 0, s * rr * 1.25).applyMatrix4(bw);
       const ny = terrainNormal(_a.x, _a.z, idx).y;
-      const dRift = Math.hypot(_a.x - rp.x, _a.z - rp.z) / (RIFT_R * 3.2);
+      const fdS = fissureDist(_a.x, _a.z, idx);                         // the spill's end off the lip
       const ground = floorL(c * rr * 1.25, s * rr * 1.25) - floorL(c * rr * 0.97, s * rr * 0.97);   // does the ground rise beyond?
       let sc = -Math.abs(j) * 0.04;                                    // the rear is the natural place
       sc += clamp(gap * R, -3, 4) * 0.6;                               // headroom under the rim
       sc -= Math.max(0, ground * R - 1.5) * 0.5;                       // a bank beyond buries it
       sc += ny > 0.85 ? 1.5 : ny > 0.7 ? 0.5 : -2;                     // he can stand there
-      sc += dRift > 1.05 ? 1.2 : dRift > 0.9 ? 0 : -1.5;               // not down in the bowl
+      sc += fdS > 12 ? 1.2 : fdS > 8 ? 0 : -1.5;                       // not by the lip (he stands there to take it)
       if (sc > bestS) { bestS = sc; bestTh = th; }
     }
     B.bear = bestTh;

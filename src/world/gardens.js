@@ -36,7 +36,8 @@
 // shared-program hazard). Materials are site-invariant; only layout re-rolls.
 import * as THREE from 'three';
 import { scene, camera } from '../core.js';
-import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom, zoneBand } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
+import { clearOfCrack } from './fissureShape.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
@@ -975,12 +976,12 @@ function inZoneBand(y, zi) { return y < zoneTop(zi) + 10 && y > zoneBottom(zi) -
 function reefSeeds(zi, own, radLo, radHi, thresh, seed) {
   const out = [];
   for (const c of rockColliders) if (inZoneBand(c.y, zi)) out.push([c.x, c.z, c.r * rr(1.6, 2.6)]);
-  const rp = riftPos(zi), want = out.length + own;
+  const want = out.length + own;
   let guard = 0;
   while (out.length < want && guard++ < own * 60) {
     const a = _gr() * TAU, r = rr(16, WORLD_R * 0.92);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 3) continue;
+    if (!clearOfCrack(x, z, zi)) continue;            // (a seed centre: members keep their own radius)
     if (fbm(x * 0.011 + seed, z * 0.011 - seed) < thresh) continue;
     out.push([x, z, rr(radLo, radHi)]);
   }
@@ -988,12 +989,12 @@ function reefSeeds(zi, own, radLo, radHi, thresh, seed) {
 }
 
 function fieldSeeds(zi, n, radLo, radHi, thresh, seed) {
-  const out = [], rp = riftPos(zi);
+  const out = [];
   let guard = 0;
   while (out.length < n && guard++ < n * 70) {
     const a = _gr() * TAU, r = rr(14, WORLD_R * 0.97);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 3) continue;
+    if (!clearOfCrack(x, z, zi)) continue;
     if (guard < n * 35 && fbm(x * 0.011 + seed, z * 0.011 - seed) < thresh) continue;
     out.push([x, z, rr(radLo, radHi)]);
   }
@@ -1001,12 +1002,12 @@ function fieldSeeds(zi, n, radLo, radHi, thresh, seed) {
 }
 
 // Clumped sampling with slope gating (flora.js's place()), against this module's own
-// stream. Same exclusions: rift funnel, wreck site, the raft's water, the rim.
+// stream. Same exclusions: the crack (rad: the call's largest object radius, a constant: the
+// scale is drawn after placement), wreck site, the raft's water, the rim.
 const _pts = [];
-function place(zi, count, seeds, minSlope, maxSlope = 1.01) {
+function place(zi, count, seeds, minSlope, maxSlope = 1.01, rad = 1) {
   _pts.length = 0;
   if (!seeds.length) return _pts;
-  const rp = riftPos(zi);
   let lo = minSlope, guard = 0, relaxed = false;
   while (_pts.length < count && guard++ < count * 40) {
     if (!relaxed && guard > count * 18) { relaxed = true; lo = 1 - (1 - lo) * 2.4; }
@@ -1016,7 +1017,7 @@ function place(zi, count, seeds, minSlope, maxSlope = 1.01) {
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 2.4) continue;
+    if (!clearOfCrack(x, z, zi, rad)) continue;
     if (nearWreck(zi, x, z)) continue;
     const n = terrainNormal(x, z, zi);
     if (n.y < lo || n.y > maxSlope) continue;
@@ -1158,7 +1159,7 @@ function layout() {
     const reef = reefSeeds(zi, 14, 5, 12, 0.42, 17.3);
     const field = fieldSeeds(zi, 22, 12, 30, 0.30, 44.1);
     const yaw = Math.atan2(Math.cos(CUR0), Math.sin(CUR0));
-    let L = place(zi, CAP.fan, reef, 0.5, 0.97);
+    let L = place(zi, CAP.fan, reef, 0.5, 0.97, 3.9);
     let im = IM.fan;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(1.2, 3.2);
@@ -1167,7 +1168,7 @@ function layout() {
     }
     seal(im, L.length);
 
-    L = place(zi, CAP.grass, field.concat(reef), 0.8);
+    L = place(zi, CAP.grass, field.concat(reef), 0.8, 1.01, 3.2);
     im = IM.grass;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(1.6, 3.2), H = rr(1.2, 2.4);
@@ -1176,7 +1177,7 @@ function layout() {
     }
     seal(im, L.length);
 
-    L = place(zi, CAP.stag, reef, 0.7);
+    L = place(zi, CAP.stag, reef, 0.7, 1.01, 3.6);
     im = IM.stag;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(1.4, 3.6);
@@ -1185,7 +1186,7 @@ function layout() {
     }
     seal(im, L.length);
 
-    L = place(zi, CAP.barrel, reef, 0.72);
+    L = place(zi, CAP.barrel, reef, 0.72, 1.01, 1.9);
     im = IM.barrel;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(0.7, 1.9);
@@ -1194,7 +1195,7 @@ function layout() {
     }
     seal(im, L.length);
 
-    L = place(zi, CAP.anem, reef, 0.72);
+    L = place(zi, CAP.anem, reef, 0.72, 1.01, 2.4);
     im = IM.anem;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(0.9, 2.4);
@@ -1245,7 +1246,7 @@ function layout() {
     const seeds = [];
     for (let v = 0; v < nV; v++) seeds.push([activeVents[v].x, activeVents[v].z, rr(6, 14)]);
     const fld = fieldSeeds(zi, 10, 10, 22, 0.32, 71.7);
-    const L = place(zi, CAP.crin, seeds.concat(fld), 0.6);
+    const L = place(zi, CAP.crin, seeds.concat(fld), 0.6, 1.01, 2.2);
     const im = IM.crin;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(1.0, 2.2);
@@ -1260,7 +1261,7 @@ function layout() {
     const zi = 2;
     const reef = reefSeeds(zi, 6, 6, 14, 0.45, 91.3);
     const field = fieldSeeds(zi, 18, 14, 34, 0.30, 23.9);
-    let L = place(zi, CAP.pen, field, 0.85);
+    let L = place(zi, CAP.pen, field, 0.85, 1.01, 2.2);
     let im = IM.pen;
     const yaw = Math.atan2(Math.cos(CUR0), Math.sin(CUR0));
     for (let i = 0; i < L.length; i++) {
@@ -1273,7 +1274,7 @@ function layout() {
     seal(im, L.length);
     seal(penTips, L.length);
 
-    L = place(zi, CAP.glass, reef.concat(field), 0.6);
+    L = place(zi, CAP.glass, reef.concat(field), 0.6, 1.01, 2.6);
     im = IM.glass;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(1.2, 2.6);
@@ -1282,7 +1283,7 @@ function layout() {
     }
     seal(im, L.length);
 
-    L = place(zi, CAP.whip, reef.concat(field), 0.55);
+    L = place(zi, CAP.whip, reef.concat(field), 0.55, 1.01, 1.6);
     im = IM.whip;
     for (let i = 0; i < L.length; i++) {
       const p = L[i], S = rr(0.8, 1.6), H = rr(3.5, 8);

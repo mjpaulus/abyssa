@@ -27,6 +27,7 @@ import { terrainH } from '../../world/terrain.js';
 import { setWardTargets, deployInk } from '../../world/predators.js';
 import { wreckSites } from '../../world/wrecks.js';
 import { riftPos, WORLD_R, RIFT_R } from '../../config.js';
+import { clearOfCrack } from '../../world/fissureShape.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
   rememberWard, wardMemPose, wardsRecall
@@ -187,7 +188,8 @@ function hoarderOut(idx, W, Rm, c) {
   const o0 = Math.atan2(W.z, W.x), rad = Rm * 1.4 + 9, rp = riftPos(idx);
   const at = th => {
     const ox = Math.cos(th), oz = Math.sin(th), x = W.x + ox * rad, z = W.z + oz * rad;
-    const ok = Math.hypot(x, z) < WORLD_R * 0.68 && Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + Rm + 8;
+    const ok = Math.hypot(x, z) < WORLD_R * 0.68 && Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + Rm + 8
+      && clearOfCrack(x, z, idx, Rm);                    // (Task 5) and off the crack itself: every row passes already
     return { out: V3(ox, 0, oz), ok, g: terrainH(x, z, idx) };
   };
   if (c.idle) {

@@ -48,7 +48,8 @@ import { WORLD_R, riftPos, zoneTop, zoneBottom, ZONE_SEEN } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
 import { rng, clamp, fbm, V3 } from '../lib/math.js';
 import { makeWarmGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, seededRand, ironPlateSet } from '../lib/textures.js';
-import { terrainH, terrainNormal, terrainMeshes } from './terrain.js';
+import { terrainH, terrainNormal, terrainMeshes, fissurePatchSample } from './terrain.js';
+import { clearOfCrack } from './fissureShape.js';
 import { player } from '../player.js';
 import { siteParams, currentSiteIndex } from './site.js';
 import { keepsakeKind, keepsakeGeo } from '../lib/keepsakes.js';
@@ -1288,6 +1289,9 @@ function axFind(ax, x) {
   return lo;
 }
 export function terrainSample(zi, x, z, col) {
+  // near a crack the coarse cells are cut out and the 0.5 u fissure patch draws the ground (Task 5)
+  const hp = fissurePatchSample(zi, x, z, col);
+  if (hp === hp) return hp;
   const ax = axis(), n = _AN, g = terrainMeshes[zi].geometry;
   const P = g.attributes.position.array, C = g.attributes.color.array;
   const k = axFind(ax, x), j = axFind(ax, z);
@@ -1534,7 +1538,9 @@ function buildGrowth(zi, M, hulls, g, rnd) {
 // ------------------------------------------------------------- placement -----
 // Deterministic sweep for the flattest spot in the ring the brief allows, so wreck
 // coordinates are stable between runs and can be quoted in a bug report.
-function findSite(zi, minR, maxR, footprint) {
+// The ring is still centred on the opening (riftPos); what it keeps off is the CRACK: the whole
+// claimed ground (clear) 6 u outside its lip (Task 5). A spot that already passed is unchanged.
+function findSite(zi, minR, maxR, footprint, clear) {
   const rp = riftPos(zi);
   let best = null;
   for (let ai = 0; ai < 48; ai++) {
@@ -1544,6 +1550,7 @@ function findSite(zi, minR, maxR, footprint) {
       const x = rp.x + Math.cos(a) * rad, z = rp.z + Math.sin(a) * rad;
       if (Math.hypot(x, z) > WORLD_R * 0.72) continue;         // stay off the basin rim
       if (zi === 0 && Math.hypot(x, z) < 55) continue;         // clear of the raft column
+      if (!clearOfCrack(x, z, zi, clear)) continue;            // off the crack, the whole claim
       const h0 = terrainH(x, z, zi);
       // Flatness decides where; the highest ground under the footprint decides how deep.
       // Bedding on the mean instead would let a mound swallow the hull whole.
@@ -1579,7 +1586,7 @@ export function wreckSites() {
   const wr = !SITES && siteParams().wrecks;
   if (!SITES) SITES = SITE_SPEC.map((s, zi) => {
     const b = wr && wr.band && wr.band[zi];
-    const site = findSite(zi, b ? b[0] : s.minR, b ? b[1] : s.maxR, s.foot);
+    const site = findSite(zi, b ? b[0] : s.minR, b ? b[1] : s.maxR, s.foot, s.clear);
     return { zi, x: site.x, y: site.y, z: site.z, clear: s.clear, site };
   });
   return SITES;
@@ -1999,6 +2006,8 @@ window.wrecks = {
     player.vel.set(0, 0, 0);
     return 'viewing ' + zi;
   },
+  // the zone's wreck site(s) and the ground each claims (r = its keep-out radius): the clearance probe
+  sites: zi => wreckSites().filter(w => w.zi === zi).map(w => ({ x: w.x, z: w.z, r: w.clear })),
   list: () => WRECKS.map(W => ({
     zi: W.zi, tool: W.tool, taken: W.taken,
     x: +W.pos.x.toFixed(1), y: +W.pos.y.toFixed(1), z: +W.pos.z.toFixed(1)

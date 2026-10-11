@@ -28,15 +28,15 @@
 //   updateProps(dt, t);           // next to updateFlora(dt, t) in the frame loop
 import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
-import { WORLD_R, riftPos, zoneTop, zoneBottom, zoneBand } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
+import { clearOfCrack } from './fissureShape.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { barkSet, staveSet } from '../lib/textures.js';
 import { siteParams } from './site.js';
 
 const TAU = Math.PI * 2;
-// Rift clearance required by the brief, in world units.
-const RIFT_CLEAR = 45;
+// Crack clearance: fissureShape.js clearOfCrack (the lip + 6 u + each prop's radius).
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
 const _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
@@ -534,12 +534,12 @@ const rr = (a, b) => a + rnd() * (b - a);
 
 // ----------------------------------------------------------------- placement --
 function seedClusters(zi, n, minR, maxR, seed) {
-  const out = [], rp = riftPos(zi);
+  const out = [];
   let guard = 0;
   while (out.length < n && guard++ < n * 70) {
     const a = rnd() * TAU, r = rr(minR, maxR);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_CLEAR) continue;
+    if (!clearOfCrack(x, z, zi)) continue;            // (a seed centre: each prop keeps its own radius)
     if (guard < n * 35 && fbm(x * 0.011 + seed, z * 0.011 - seed) < 0.34) continue;
     out.push([x, z, rr(24, 58)]);
   }
@@ -548,8 +548,9 @@ function seedClusters(zi, n, minR, maxR, seed) {
 
 // Clumped sampling with slope gating; relaxes the limit rather than starving a prop.
 // minGap keeps same-type props from piling into one unreadable blob.
-function place(zi, count, seeds, minSlope, minGap) {
-  const out = [], rp = riftPos(zi);
+// rad: the type's largest radius, a constant (the size is drawn after placement).
+function place(zi, count, seeds, minSlope, minGap, rad) {
+  const out = [];
   if (!seeds.length) return out;
   let lo = minSlope, gap = minGap, guard = 0, relaxed = false;
   while (out.length < count && guard++ < count * 40) {
@@ -559,7 +560,7 @@ function place(zi, count, seeds, minSlope, minGap) {
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_CLEAR) continue;
+    if (!clearOfCrack(x, z, zi, rad)) continue;
     const n = terrainNormal(x, z, zi);
     if (n.y < lo) continue;
     if (gap > 0 && out.some(o => Math.hypot(o.x - x, o.z - z) < gap)) continue;
@@ -634,7 +635,7 @@ async function run() {
     const seeds = seedClusters(zi, 26, 20, WORLD_R * 0.94, zi * 13.7 + 5);
 
     for (const { cfg, prop } of use) {
-      const L = place(zi, cfg.n, seeds, cfg.slope, cfg.gap || 0);
+      const L = place(zi, cfg.n, seeds, cfg.slope, cfg.gap || 0, cfg.size[1] * 1.35 * 1.3);   // the widest W: H max x 1.3
       if (!L.length) continue;
       const g = prop.geometry.clone();
       g.setAttribute('aInst', new THREE.InstancedBufferAttribute(new Float32Array(L.length * 2), 2));

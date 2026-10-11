@@ -104,6 +104,11 @@ export function fissureDist(x, z, zi) {
   widths(F, _l.u);
   return Math.max(_l.v - _w.w1, -_l.v - _w.w0);
 }
+// THE CLEARANCE RULE (Task 5, spec §1 "Lairs"): everything placed in the world keeps LIP_CLEAR u
+// plus its own radius r off the lip (it replaced each module's riftPos circle: the crack is long
+// and narrow, a circle either swallowed the basin or missed the tips). Pure, no allocation.
+export const LIP_CLEAR = 6;
+export function clearOfCrack(x, z, zi, r = 0) { return fissureDist(x, z, zi) > LIP_CLEAR + r; }
 // The slab at (x, z): writes _sp.r = the local reach of the slab whose u-range and lip side hold the
 // point (0 if none; the wall under and beyond a slab is set back by it, so the slab overhangs), and
 // _sp.q = s / reach when the point is on the slab's footprint (s = how far inside its lip), else -1.

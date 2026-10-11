@@ -23,7 +23,8 @@ import { wreckColliders } from '../world/wrecks.js';
 import { ventColliders } from '../world/vents.js';
 import { raft, pumpPos, chartAnchor } from '../systems/raft.js';
 import { placeOnDeck } from '../player.js';
-import { riftPos, RIFT_R, zoneTop } from '../config.js';
+import { riftPos, zoneTop } from '../config.js';
+import { clearOfCrack } from '../world/fissureShape.js';
 import { currentSiteIndex, siteAt } from '../world/site.js';
 import { bodyBlocked } from '../entities/sleeper/bodyCols.js';
 
@@ -69,7 +70,7 @@ function onKey(e) {
 // ---- placement helpers (key-press time only: allocation is fine here) --------------------
 const yawTo = (dx, dz) => Math.atan2(dx, dz);   // he faces (sin yaw, cos yaw)
 const COLS = [rockColliders, propColliders, wreckColliders, ventColliders];
-// Gentle ground, clear of every solid the push-out knows, out of the rift bowls.
+// Gentle ground, clear of every solid the push-out knows, off the crack.
 function clearGround(x, z, zi, pad) {
   if (terrainNormal(x, z, zi).y < 0.9) return false;
   const y = terrainH(x, z, zi) + 1;
@@ -77,10 +78,7 @@ function clearGround(x, z, zi, pad) {
     const c = L[i], dx = x - c.x, dy = y - c.y, dz = z - c.z, rr = c.r + pad;
     if (dx * dx + dy * dy + dz * dz < rr * rr) return false;
   }
-  for (let r = zi; r <= zi; r++) {
-    const rp = riftPos(r);
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 3.2) return false;
-  }
+  if (!clearOfCrack(x, z, zi, pad)) return false;     // off the crack and its jam (Task 5): the lip + 6 u + pad
   return true;
 }
 // The lens hangs from his eye straight back along his look (game.js clearCamDistance stops
@@ -324,6 +322,7 @@ function velkath() {
   const out = yawTo(t.x - bx, t.z - bz);
   const probe = player.pos.clone();
   const ok = (x, z) => {
+    if (!clearOfCrack(x, z, 0)) return false;          // never on the crack's lip or its jam
     const y = terrainH(x, z, 0);
     if (terrainNormal(x, z, 0).y < 0.6) return false;
     probe.set(x, y + EYE_H, z);

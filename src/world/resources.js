@@ -3,7 +3,8 @@
 // than importing flora's scatter, so concurrent flora work can't destabilise progression.
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../core.js';
-import { WORLD_R, RIFT_R, riftPos } from '../config.js';
+import { WORLD_R } from '../config.js';
+import { clearOfCrack } from './fissureShape.js';
 import { V3 } from '../lib/math.js';
 import { makeGlow, makeWarmGlow } from '../lib/textures.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -39,8 +40,7 @@ function place(zi, count, minR, maxR) {
   while (out.length < count && guard++ < count * 40) {
     const a = rnd() * Math.PI * 2, r = rr(minR, maxR);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const rp = riftPos(zi);
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 2.6) continue;
+    if (!clearOfCrack(x, z, zi, 1.5)) continue;     // (a node and its glow: ~1.5 u)
     out.push(V3(x, terrainH(x, z, zi), z));
   }
   return out;

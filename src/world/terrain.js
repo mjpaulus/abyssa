@@ -1206,9 +1206,12 @@ export function fissurePatchGeo(zi) {
   const Q = fissurePatches[zi];
   return Q ? { pos: Q.pos, nor: Q.nor, nv: Q.nv, index: Q.meshes.map(m => m.geometry.index.array) } : null;
 }
-// DEBUG / PROBES: the DRAWN height of the fissure patch at (x, z) (its own two-triangle split of
-// each fine cell), or NaN where the coarse terrain draws. Slab tops are not included.
-export function fissurePatchH(zi, x, z) {
+// The DRAWN height of the fissure patch at (x, z) (its own two-triangle split of each fine cell),
+// or NaN where the coarse terrain draws. Slab tops are not included. With col (3 floats), also the
+// patch's vertex colour there (the terrain's encoding). Readers that sample the coarse mesh's own
+// vertices (wrecks.js terrainSample: drift skirts and fillets; brooder.js: Velkath's silt skirt)
+// take this first near a crack (Task 5), where the coarse cells are cut out and drawn here instead.
+export function fissurePatchSample(zi, x, z, col) {
   const Q = fissurePatches[zi]; if (!Q) return NaN;
   const { FX, FZ, nfx, nfz, vmap } = Q, P = Q.pos.array;
   if (x < FX[0] || x > FX[nfx - 1] || z < FZ[0] || z > FZ[nfz - 1]) return NaN;
@@ -1216,9 +1219,13 @@ export function fissurePatchH(zi, x, z) {
   const A = vmap[b * nfx + a], Bv = vmap[(b + 1) * nfx + a], C = vmap[(b + 1) * nfx + a + 1], D = vmap[b * nfx + a + 1];
   if (A < 0 || Bv < 0 || C < 0 || D < 0) return NaN;
   const fx = (x - FX[a]) / (FX[a + 1] - FX[a]), fz = (z - FZ[b]) / (FZ[b + 1] - FZ[b]);
-  const ha = P[A * 3 + 1], hb = P[Bv * 3 + 1], hc = P[C * 3 + 1], hd = P[D * 3 + 1];
-  return fx + fz <= 1 ? ha * (1 - fx - fz) + hb * fz + hd * fx : hb * (1 - fx) + hc * (fx + fz - 1) + hd * (1 - fz);
+  const lo = fx + fz <= 1;
+  const wa = lo ? 1 - fx - fz : 0, wb = lo ? fz : 1 - fx, wc = lo ? 0 : fx + fz - 1, wd = lo ? fx : 1 - fz;
+  if (col) { const K = Q.col.array; for (let c = 0; c < 3; c++) col[c] = K[A * 3 + c] * wa + K[Bv * 3 + c] * wb + K[C * 3 + c] * wc + K[D * 3 + c] * wd; }
+  return P[A * 3 + 1] * wa + P[Bv * 3 + 1] * wb + P[C * 3 + 1] * wc + P[D * 3 + 1] * wd;
 }
+// DEBUG / PROBES: the drawn patch height alone.
+export function fissurePatchH(zi, x, z) { return fissurePatchSample(zi, x, z, null); }
 // A/B (bench): false draws the uncut coarse terrain and hides the patch; true restores the patch.
 export function fissurePatchAB(on) {
   PATCH_ON = !!on;
