@@ -617,71 +617,113 @@ if (mode === 'shape') {
   if (r.c.k0 !== 0 || r.c.rec00 !== 1) fail.push('recorded-only anchorage did not load shut after a reload ' + JSON.stringify(r.c));
   console.log(JSON.stringify(r));
 } else if (mode === 'calm-open') {
-  // THE REAL CALM PATH (game.js's ev.calmed block), at home zone 0, Sal stood on the jam's middle:
-  // every ward lit through the sleeper's own update -> the chart records her, the fissure opening
-  // starts on the calm frame; the open light (rifts.js), the rift's bearing and the descent all wait
-  // for the jam's pour (k > 0.5), never the calm instant; "A RIFT OPENS BELOW." lands as the light
-  // arrives (dur - 2.5 s after the calm, +-0.2 s); he drops through the opened throat into zone 1.
-  const r = await c.ev(`(async () => {
-    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
-    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
-    window.gotoZone(0);
-    const o = { x: 0, z: 0 }; S.fissureWorld(0, 0, 0, o); window.__bench.place(o.x, o.z, 0, 0);
-    window.player.pos.y = T.jamAt(o.x, o.z, 0) + 1.35; window.__bench.step(30);
-    const $msg = document.getElementById('msg'), $rift = document.getElementById('bmRift');
-    const out = { calmAt: -1, openAt: -1, recAt: -1, msgAt: -1, kHalfAt: -1, lightAt: -1, bearAt: -1, zone1At: -1,
-      lightBeforeHalf: 0, bearBeforeHalf: false, lights: 0, programs0: window.__fissure.programs() };
-    for (const g of window.lev.sigils) g.lit = true;                      // the last ward takes: the sleeper's own update calms her
-    window.__bench.step(60 * 40, i => {
-      if (out.calmAt < 0 && window.lev.calmed) out.calmAt = i;
-      if (out.openAt < 0 && window.__fissure.state(0).opening) out.openAt = i;
-      if (out.recAt < 0 && window.__chart.rec()[0][0]) out.recAt = i;
-      if (out.msgAt < 0 && /A RIFT OPENS BELOW/.test($msg.textContent) && $msg.classList.contains('on')) out.msgAt = i;
-      const k = window.__fissure.k(0), L = window.__rifts ? window.__rifts.state(0) : { light: 0 };
-      if (out.kHalfAt < 0 && k > 0.5) out.kHalfAt = i;
-      if (out.lightAt < 0 && L.light > 0.01) out.lightAt = i;
-      const bear = $rift.classList.contains('active');
-      if (out.bearAt < 0 && bear) out.bearAt = i;
-      if (k <= 0.5) { out.lightBeforeHalf = Math.max(out.lightBeforeHalf, L.light); out.bearBeforeHalf = out.bearBeforeHalf || bear; }
-      if (out.zone1At < 0 && window.zone === 1) { out.zone1At = i; return false; }
-    });
-    out.dur = 3.6 + 3.0; out.k = window.__fissure.k(0);
-    window.scene.traverse(q => { if (q.isLight) out.lights++; });
-    out.programs1 = window.__fissure.programs();
-    return out; })()`);
-  const f = 60, d = r.dur;
-  if (r.calmAt < 0) fail.push('the wards never calmed her');
-  if (r.recAt < 0 || r.recAt !== r.calmAt) fail.push(`the chart did not record the calm on its frame (${r.recAt} vs ${r.calmAt})`);
-  if (r.openAt < 0 || r.openAt - r.calmAt > 1) fail.push(`the fissure did not start opening on the calm (${r.openAt} vs ${r.calmAt})`);
-  if (r.msgAt < 0 || Math.abs((r.msgAt - r.calmAt) / f - (d - 2.5)) > 0.2) fail.push(`"A RIFT OPENS BELOW." at ${((r.msgAt - r.calmAt) / f).toFixed(2)} s, want ${d - 2.5}`);
-  if (r.lightBeforeHalf > 0.01) fail.push('the open light showed over the shut jam ' + r.lightBeforeHalf);
-  if (r.bearBeforeHalf) fail.push('the rift bearing showed over the shut jam');
-  if (r.lightAt < 0 || r.lightAt < r.kHalfAt) fail.push(`the light did not follow the pour (${r.lightAt} vs k>0.5 at ${r.kHalfAt})`);
-  if (r.bearAt < 0) fail.push('no rift bearing once open');
-  if (r.zone1At < 0) fail.push('he did not descend through the opened throat');
-  if (r.lights !== 14) fail.push('light count ' + r.lights);
-  console.log(JSON.stringify(r));
+  // THE REAL CALM PATH (game.js's ev.calmed block), Sal stood on the jam's middle, every ward lit
+  // through the sleeper's own update. Three branches:
+  //  z0     home zone 0, line enough: the chart records her and the visit holds her on the calm frame,
+  //         the opening starts there; the open light, the rift's bearing and the descent all wait for
+  //         the jam's pour (k > 0.5), never the calm instant; "A RIFT OPENS BELOW." lands as the light
+  //         arrives (dur - 2.5 s, +-0.2 s); he drops through the opened throat into zone 1.
+  //  nohose zone 0 with too little line: the line ("IT STILLS. YOU HAVE ...") is said AT ONCE, the
+  //         fissure still opens, he falls into the throat but the zone change is refused (and said).
+  //  z2     zone 2 (Mhor woken, furnace lit): "...THE RIFT WAITS." is held to dur - 2.5 s; falling
+  //         through the opened throat plays the ending.
+  const cases = { z0: { zi: 0, hose: 5000 }, nohose: { zi: 0, hose: 450 }, z2: { zi: 2, hose: 5000 } };
+  const out = {};
+  for (const [name, cs] of Object.entries(cases)) {
+    if (name !== 'z0') { await c.send('Page.reload', { ignoreCache: true }); await new Promise(res => setTimeout(res, 1500));
+      await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__fissure`, 240000, 1000); }
+    out[name] = await c.ev(`(async () => {
+      const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+      const zi = ${cs.zi};
+      window.setState('play'); window.__helm = true; window.survival.hose = ${cs.hose};
+      window.gotoZone(zi);
+      if (zi === 2) { window.lev.cmd('wake'); window.__bench.step(10); window.lev.cmd('wake'); window.__bench.step(120); }
+      const o = { x: 0, z: 0 }; S.fissureWorld(0, 0, zi, o); window.__bench.place(o.x, o.z, 0, zi);
+      const jam0 = T.jamAt(o.x, o.z, zi); window.player.pos.y = jam0 + 1.35; window.__bench.step(30);
+      const $msg = document.getElementById('msg'), $rift = document.getElementById('bmRift');
+      const out = { calmAt: -1, openAt: -1, recAt: -1, visitAt: -1, msgAt: -1, shortAt: -1, kHalfAt: -1, lightAt: -1, bearAt: -1, zoneAt: -1, wonAt: -1,
+        lightBeforeHalf: 0, bearBeforeHalf: false, lights: 0, programs0: window.__fissure.programs(), kEnd: 0, zoneEnd: -1 };
+      for (const g of window.lev.sigils) g.lit = true;                      // the last ward takes: the sleeper's own update calms her
+      const line = ${JSON.stringify(cs.zi === 2 ? 'THE RIFT WAITS' : cs.hose < 1000 ? 'IT STILLS. YOU HAVE' : 'A RIFT OPENS BELOW')};
+      window.__bench.step(60 * 40, i => {
+        if (out.calmAt < 0 && window.lev.calmed) out.calmAt = i;
+        if (out.openAt < 0 && window.__fissure.state(zi).opening) out.openAt = i;
+        if (out.recAt < 0 && window.__chart.rec()[0][zi]) out.recAt = i;
+        if (out.visitAt < 0 && window.__chart.visit()[zi]) out.visitAt = i;
+        if (out.msgAt < 0 && $msg.textContent.includes(line) && $msg.classList.contains('on')) out.msgAt = i;
+        if (out.shortAt < 0 && $msg.textContent.includes('THE LINE IS TOO SHORT')) out.shortAt = i;
+        const k = window.__fissure.k(zi), L = window.__rifts.state(zi);
+        if (out.kHalfAt < 0 && k > 0.5) out.kHalfAt = i;
+        if (out.lightAt < 0 && L.light > 0.01) out.lightAt = i;
+        const bear = $rift.classList.contains('active');
+        if (out.bearAt < 0 && bear) out.bearAt = i;
+        if (k <= 0.5) { out.lightBeforeHalf = Math.max(out.lightBeforeHalf, L.light); out.bearBeforeHalf = out.bearBeforeHalf || bear; }
+        if (out.zoneAt < 0 && window.zone !== zi) out.zoneAt = i;
+        if (out.wonAt < 0 && window.gameState === 'won') { out.wonAt = i; return false; }
+        if (zi === 0 && ${cs.hose >= 1000} && out.zoneAt >= 0) return false;
+      });
+      out.kEnd = window.__fissure.k(zi); out.zoneEnd = window.zone; out.fellY = +(window.player.pos.y - jam0).toFixed(1); out.minY = +window.player.pos.y.toFixed(1);
+      window.scene.traverse(q => { if (q.isLight) out.lights++; });
+      out.programs1 = window.__fissure.programs();
+      return out; })()`);
+  }
+  const f = 60, d = 6.6;
+  for (const [name, r] of Object.entries(out)) {
+    const tag = name + ':';
+    if (r.calmAt < 0) { fail.push(tag + ' the wards never calmed her'); continue; }
+    if (r.recAt !== r.calmAt || r.visitAt !== r.calmAt) fail.push(`${tag} the chart/visit did not record the calm on its frame (${r.recAt}/${r.visitAt} vs ${r.calmAt})`);
+    if (r.openAt < 0 || r.openAt - r.calmAt > 1) fail.push(`${tag} the fissure did not start opening on the calm (${r.openAt} vs ${r.calmAt})`);
+    if (r.lightBeforeHalf > 0.01) fail.push(tag + ' the open light showed over the shut jam ' + r.lightBeforeHalf);
+    if (r.bearBeforeHalf) fail.push(tag + ' the rift bearing showed over the shut jam');
+    if (r.lightAt < 0 || r.lightAt < r.kHalfAt) fail.push(`${tag} the light did not follow the pour (${r.lightAt} vs k>0.5 at ${r.kHalfAt})`);
+    if (r.lights !== 14) fail.push(tag + ' light count ' + r.lights);
+    if (name === 'nohose') {
+      if (r.msgAt < 0 || r.msgAt - r.calmAt > 1) fail.push(`${tag} the no-line line was not said at once (${r.msgAt} vs ${r.calmAt})`);
+      if (r.kEnd !== 1) fail.push(tag + ' the fissure did not open ' + r.kEnd);
+      if (r.zoneAt >= 0) fail.push(tag + ' he descended with too little line');
+      if (r.shortAt < 0) fail.push(tag + ' the refusal was not said');
+      if (!(r.fellY < -5)) fail.push(tag + ' he did not fall into the opened throat ' + r.fellY);
+    } else {
+      if (r.msgAt < 0 || Math.abs((r.msgAt - r.calmAt) / f - (d - 2.5)) > 0.2) fail.push(`${tag} the line at ${((r.msgAt - r.calmAt) / f).toFixed(2)} s, want ${d - 2.5}`);
+      if (r.bearAt < 0) fail.push(tag + ' no rift bearing once open');
+      if (name === 'z0' && r.zoneAt < 0) fail.push(tag + ' he did not descend through the opened throat');
+      if (name === 'z2' && r.wonAt < 0) fail.push(tag + ' the ending did not play through the opened throat');
+    }
+  }
+  console.log(JSON.stringify(out));
 } else if (mode === 'open-light') {
-  // THE DEEP'S OWN LIGHT (rifts.js), at every site and zone: 3-5 shells, each kept clear of every
-  // overhang slab (its reach along the crack under its clearance from the nearest slab's end, its
-  // reach across under the slab's inner edge), dark while shut and full when open (it reads k only);
-  // every part additive with fog off and its own program key; the surface glow only over zone 0,
-  // only from the air, alpha <= 0.08; then, drawn open from above in each zone, every program it
-  // draws with was built at boot (ids <= the boot's highest); 14 lights.
+  // THE DEEP'S OWN LIGHT (rifts.js), at every site and zone. The CURTAIN is continuous along the crack
+  // (stations <= 1.6 u apart over the middle 80% of its length) and no blob's light reaches rock: at
+  // 24 heights through every station's rise, its radius (the shader's own formula, __rifts.radiusAt)
+  // stays inside the open half-width the probe measures itself (16 directions, 0.1 u steps, the carved
+  // rock and the overhang slabs' bodies), and its lifted foot stays off the throat floor. The light is
+  // dark shut / full open (it reads k only); every part additive, fog off, its own program key; drawn
+  // open in each zone every program it uses was built at boot; the surface glow only over zone 0, only
+  // from the air, opacity <= 0.16; 14 lights.
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), core = await import('/src/core.js');
     const R = core.renderer, bootMax = Math.max(...R.info.programs.map(p => p.id));
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const solid = (x, z, y, zi) => { if (T.terrainUnderH(x, z, zi) > y) return true; const sp = S.slabProbe(x, z, zi);
+      if (sp.q >= 0) { const top = T.terrainH(x, z, zi); if (y < top + 0.3 && y > top - sp.th - 0.6) return true; } return false; };
+    const openAt = (x, z, y, zi, cap) => { let best = cap; for (let k = 0; k < 16; k++) { const a = k / 16 * 6.2832, dx = Math.cos(a), dz = Math.sin(a);
+      for (let q = 0; q <= best; q += 0.1) if (solid(x + dx * q, z + dz * q, y, zi)) { best = q; break; } } return best; };
     const out = { bootMax, rows: [], draw: [] };
     for (const site of [0, 1, 2]) {
       if (site) window.__chart.arrive(site);
       for (let zi = 0; zi < 3; zi++) {
-        const F = S.FISSURE[zi], st = window.__rifts.state(zi), row = { site, zi, shells: st.shells, bad: [] };
-        for (const s of st.stations) {
-          if (s.reachAlong > s.clear - 0.5) row.bad.push('along ' + JSON.stringify(s));
-          // across: the shell's top radius under the inner edge of any slab on either lip over its span
-          let wmin = 1e9; for (let du = -3; du <= 3; du++) { const w = S._widths(F, s.u + du); wmin = Math.min(wmin, w.w0, w.w1); }
-          if (s.rTop > 0.58 * wmin) row.bad.push('across ' + JSON.stringify(s) + ' wmin ' + wmin.toFixed(2));
+        const F = S.FISSURE[zi], st = window.__rifts.stations(zi), row = { site, zi, stations: st.length, gapMax: 0, cover: 0, worst: -1e9, worstAt: null, footWorst: -1e9, n: 0 };
+        for (let i = 1; i < st.length; i++) row.gapMax = Math.max(row.gapMax, st[i].u - st[i - 1].u);
+        row.cover = +((st[st.length - 1].u - st[0].u) / (2 * F.halfLen)).toFixed(2);
+        for (let i = 0; i < st.length; i += 2) {
+          const s = st[i];
+          for (let j = 0; j < 24; j++) {
+            const y0 = s.floor + (s.lip + 26 - s.floor) * j / 23, b = window.__rifts.radiusAt(zi, i, y0);
+            if (b.y > s.lip + 8) continue;                       // high over the lip there is no rock to reach (the lip heave is <= 3 u)
+            const open = openAt(s.x, s.z, b.y, zi, b.R + 1); row.n++;   // (a blob under 0.1 u is nothing; the march's step is 0.1 u)
+            if (b.R > 0.1 && b.R - open > row.worst) { row.worst = +(b.R - open).toFixed(3); row.worstAt = { u: +s.u.toFixed(1), y: +(b.y - s.lip).toFixed(1), R: +b.R.toFixed(2), open: +open.toFixed(2) }; }
+            row.footWorst = Math.max(row.footWorst, +(s.floor - (b.y - 0.95 * b.R * b.sy)).toFixed(3));
+          }
         }
         window.__fissure.setOpen(zi, 0); window.__bench.step(2); row.shutLight = window.__rifts.state(zi).light;
         window.__fissure.setOpen(zi, 1); window.__bench.step(2); row.openLight = window.__rifts.state(zi).light;
@@ -700,7 +742,7 @@ if (mode === 'shape') {
       window.__camPin = { p: P, t: L, pos: P, look: L };
       window.__bench.step(20, null, { render: true });
       const ids = window.__rifts.materials(zi).map(m => { const p = R.properties.get(m).currentProgram; return p ? p.id : -1; });
-      out.draw.push({ zi, ids: [...new Set(ids)], surf: window.__rifts.state(zi).surf });
+      out.draw.push({ zi, ids: [...new Set(ids)] });
     }
     window.__camPin = null;
     // the surface glow from the deck (air) and from under the raft (water)
@@ -712,8 +754,9 @@ if (mode === 'shape') {
     return out; })()`);
   for (const w of r.rows) {
     const tag = `site ${w.site} zone ${w.zi}`;
-    if (w.shells < 3 || w.shells > 5) fail.push(`${tag}: ${w.shells} shells`);
-    if (w.bad.length) fail.push(`${tag}: a shell reaches a slab ` + w.bad.join('; '));
+    if (w.gapMax > 1.6 || w.cover < 0.78) fail.push(`${tag}: the curtain is not continuous (gap ${w.gapMax}, cover ${w.cover})`);
+    if (w.worst > 0.1) fail.push(`${tag}: a blob's light reaches rock ` + JSON.stringify(w.worstAt) + ' by ' + w.worst);
+    if (w.footWorst > 0.05) fail.push(`${tag}: a blob's foot reaches the throat floor by ${w.footWorst}`);
     if (w.shutLight !== 0) fail.push(`${tag}: light over the shut jam ${w.shutLight}`);
     if (w.openLight !== 1) fail.push(`${tag}: open light ${w.openLight}`);
     if (!w.fogOff || !w.additive) fail.push(`${tag}: a part is fogged or not additive`);
@@ -722,7 +765,7 @@ if (mode === 'shape') {
   for (const d of r.draw) if (d.ids.some(i => i < 0 || i > r.bootMax)) fail.push(`zone ${d.zi}: a program built after boot ${d.ids} > ${r.bootMax}`);
   if (r.surfAir !== true) fail.push('no surface glow from the deck');
   if (r.surfWater !== false) fail.push('the surface glow shows under the water');
-  if (!(r.surfOpacity <= 0.08) || r.surfFog !== false) fail.push(`surface glow opacity ${r.surfOpacity} fog ${r.surfFog}`);
+  if (!(r.surfOpacity <= 0.16) || r.surfFog !== false) fail.push(`surface glow opacity ${r.surfOpacity} fog ${r.surfFog}`);
   if (r.lights !== 14) fail.push('light count ' + r.lights);
   console.log(JSON.stringify(r));
 } else if (mode === 'pour-hide') {
@@ -739,9 +782,18 @@ if (mode === 'shape') {
       window.__fissure.open(zi);
       const ims = [0, 1, 2, 3].map(k => window.scene.getObjectByName('fissureJam' + zi + '_' + k)).filter(Boolean);
       const prev = ims.map(im => new Float32Array(im.instanceMatrix.array));
-      let hidden = 0, worst = -1e9, worstAt = null, siltWorst = -1e9;
+      let hidden = 0, worst = -1e9, worstAt = null, siltWorst = -1e9, meshOffAt = -1, meshWorst = -1e9, meshLeft = 0, wasOn = true;
+      // the worst drawn vertex of an instance (matrix array P at o) over the ground under it
+      const overGround = (im, P, o) => { m.fromArray(P, o); const G = im.geometry.attributes.position; let w = -1e9;
+        for (let v = 0; v < G.count; v += 3) { p.fromBufferAttribute(G, v).applyMatrix4(m); w = Math.max(w, p.y - T.terrainUnderH(p.x, p.z, zi)); } return w; };
       const silt = window.scene.getObjectByName('fissureSilt' + zi);
-      window.__bench.step(60 * 15, i => {
+      window.__bench.step(60 * 23, i => {   // (the pour's whole clock: ROCK_T is 22 s)
+        // the mesh-level switch-off (rockOn: every block gone, or the ROCK_T cap): anything still drawn
+        // the frame before must already be under the ground
+        const on = window.__fissure.state(zi).bouldersVisible;
+        if (wasOn && !on && meshOffAt < 0) { meshOffAt = i; ims.forEach((im, a) => { const P = prev[a]; for (let k = 0; k < im.count; k++) { const o = k * 16;
+          if (P[o] !== 0 || P[o + 5] !== 0 || P[o + 10] !== 0) { meshLeft++; meshWorst = Math.max(meshWorst, overGround(im, P, o)); } } }); }
+        wasOn = on;
         ims.forEach((im, a) => {
           const A = im.instanceMatrix.array, P = prev[a];
           for (let k = 0; k < im.count; k++) {
@@ -763,12 +815,15 @@ if (mode === 'shape') {
           siltWorst = w;
         }
       });
-      out.push({ zi, hidden, worstTopOverFloor: +worst.toFixed(3), worstAt, siltLastAboveFloor: +siltWorst.toFixed(3), left: window.__fissure.state(zi).left });
+      out.push({ zi, hidden, worstTopOverFloor: +worst.toFixed(3), worstAt, siltLastAboveFloor: +siltWorst.toFixed(3), left: window.__fissure.state(zi).left,
+        meshOffAt: +(meshOffAt / 60).toFixed(2), meshLeft, meshWorst: meshLeft ? +meshWorst.toFixed(3) : null });
     }
     return out; })()`);
   for (const z of r) {
     if (z.hidden < 100) fail.push(`zone ${z.zi}: only ${z.hidden} blocks hid`);
     if (z.worstTopOverFloor > 0) fail.push(`zone ${z.zi}: a block hid ${z.worstTopOverFloor} u above the floor over it ` + JSON.stringify(z.worstAt));
+    if (z.meshLeft && z.meshWorst > 0) fail.push(`zone ${z.zi}: the rubble switched off with ${z.meshLeft} blocks still drawn, ${z.meshWorst} u above the ground`);
+    if (z.meshOffAt < 0) fail.push(`zone ${z.zi}: the rubble never switched off`);
     if (z.siltLastAboveFloor > 0.05) fail.push(`zone ${z.zi}: the silt hid with a part ${z.siltLastAboveFloor} u above the floor`);
   }
   console.log(JSON.stringify(r));

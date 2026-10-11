@@ -80,7 +80,7 @@ const SURF_MAX = 0.16;                   // the surface glow's alpha never passe
 const N_DRIFT = 320;
 const ST_DU = 1.2, NB = 9, LEV = 12, LEV_UP = 6;  // curtain: station spacing (u), blobs per station, measured levels (floor .. lip + LEV_UP, closer near the top: f = 1 - (1 - l/11)^2)
 const R_MAX = 5.0, HW_FILL = 0.85, STRETCH = 1.8;      // a blob's natural radius cap; the share of the measured open half-width it may fill
-const UP_TOP = 26;                       // the curtain climbs this far over the lip
+const UP_TOP = 26, FOOT = 3;                       // the curtain climbs this far over the lip
 const GATE = 16;                         // the fade (u) as the camera goes below the deepest throat floor
 const c01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
 
@@ -116,7 +116,7 @@ const CURTAIN_VS = `
     vQ = aB.xy; vSeed = aB.w;
     // it rises out of the floor and dissolves over the lip, swelling as it climbs
     float k = fract(aB.z + uTime * aU.w);
-    float y = mix(aS.z, aS.w + ${UP_TOP.toFixed(1)}, k);
+    float y = mix(aS.z + ${FOOT.toFixed(1)}, aS.w + ${UP_TOP.toFixed(1)}, k);   // born a little up off the throat's lumpy floor
     float R = min(min(${R_MAX.toFixed(1)}, 0.9 + 0.06 * (y - aS.z)), ${HW_FILL.toFixed(2)} * hwAt(y));
     R = max(R, 0.05);
     vec4 wc = modelMatrix * vec4(aS.x, y, aS.y, 1.0);
@@ -154,7 +154,7 @@ const CURTAIN_FS = `
   }`;
 function curtain(zi, rand) {
   const F = FISSURE[zi], lim = 0.82 * F.halfLen, us = [];
-  for (let u = -lim; u <= lim + 1e-6; u += ST_DU) us.push(u + (rand() - 0.5) * 0.5);
+  for (let u = -lim; u <= lim + 1e-6; u += ST_DU) us.push(u + (rand() - 0.5) * 0.3);
   const ns = us.length, nb = ns * NB, nv = nb * 4;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
@@ -200,13 +200,13 @@ function solid(x, z, y, zi) {
   if (sp.q >= 0) { const top = terrainH(x, z, zi); if (y < top + 0.3 && y > top - sp.th - 0.6) return true; }
   return false;
 }
-// the open half-width at (station, height): the nearest rock along 8 horizontal directions from the
+// the open half-width at (station, height): the nearest rock along 16 horizontal directions from the
 // station's centre, marched at 0.4 u then refined, capped at 12 u
 function openHW(s, y, zi) {
   let best = 12;
-  for (let k = 0; k < 8; k++) {
-    const a = k / 8 * TAU, dx = Math.cos(a), dz = Math.sin(a);
-    if (solid(s.x, s.z, y, zi)) return 0;
+  if (solid(s.x, s.z, y, zi)) return 0;
+  for (let k = 0; k < 16; k++) {
+    const a = k / 16 * TAU, dx = Math.cos(a), dz = Math.sin(a);
     let lo = 0;
     for (let r = 0.4; r <= best; r += 0.4) {
       if (solid(s.x + dx * r, s.z + dz * r, y, zi)) {
@@ -221,6 +221,7 @@ function openHW(s, y, zi) {
 }
 // the measured levels: from the floor to lip + LEV_UP, closer together near the top (where the open
 // width changes fastest: the lip, its heave, the slabs)
+const _ow = new Float32Array(LEV);
 const levY = (fl, lip, l) => { const q = 1 - l / (LEV - 1); return fl + (lip + LEV_UP - fl) * (1 - q * q); };
 function seatCurtain(R, zi, lip) {
   const C = R.curtain, F = FISSURE[zi], g = C.mesh.geometry;
@@ -232,7 +233,11 @@ function seatCurtain(R, zi, lip) {
     let fl = terrainUnderH(t.x, t.z, zi);
     for (let q = -3; q <= 3; q++) fl = Math.min(fl, terrainUnderH(t.x - t.tz * q * 0.6, t.z + t.tx * q * 0.6, zi));
     t.floor = fl; t.lip = lip; floorMin = Math.min(floorMin, fl);
-    for (let l = 0; l < LEV; l++) t.hw[l] = openHW(t, levY(fl, lip, l), zi);
+    // stored CONSERVATIVELY: each level holds the least of its own and its neighbours' open widths, so
+    // the shader's interpolation between two levels never exceeds the open width anywhere between
+    // them (the crack widens upward; a slab's body is a band, caught by the window)
+    for (let l = 0; l < LEV; l++) _ow[l] = openHW(t, levY(fl, lip, l), zi);
+    for (let l = 0; l < LEV; l++) t.hw[l] = Math.min(_ow[Math.max(0, l - 1)], _ow[l], _ow[Math.min(LEV - 1, l + 1)]);
     for (let j = 0; j < NB; j++) for (let c = 0; c < 4; c++) {
       const o = ((s * NB + j) * 4 + c) * 4;
       S[o] = t.x - F.cx; S[o + 1] = t.z - F.cz; S[o + 2] = fl - lip; S[o + 3] = 0;
@@ -507,6 +512,7 @@ const __rifts = {
   radiusAt(zi, si, y) {
     const s = rifts[zi].curtain.st[si], top = s.lip + LEV_UP, ytop = s.lip + UP_TOP;
     const hwAt = yy => { if (yy >= top) return s.hw[LEV - 1] + (yy - top) * 0.5; const t = c01((yy - s.floor) / Math.max(1, top - s.floor)), f = (1 - Math.sqrt(1 - t)) * (LEV - 1), i = Math.min(Math.floor(f), LEV - 2); return s.hw[i] + (s.hw[i + 1] - s.hw[i]) * (f - i); };
+    y = Math.max(y, s.floor + FOOT);
     const R = Math.max(0.05, Math.min(Math.min(R_MAX, 0.9 + 0.06 * (y - s.floor)), HW_FILL * hwAt(y)));
     // (the shader lifts it by up to 0.95 R STRETCH off the floor; the side view's tall veil)
     return { y: Math.max(y, s.floor + 0.95 * R * STRETCH), R, sy: STRETCH, ytop };
