@@ -854,7 +854,7 @@ if (mode === 'shape') {
       S.fissureWorld(0, 0, zi, o);
       const Pp = [o.x + F.dz * 6, fl - 40, o.z - F.dx * 6], L = [o.x, fl + 20, o.z];
       window.__camPin = { p: Pp, t: L, pos: Pp, look: L };
-      const k0 = K[zi], shot = async () => { const cap = await window.__bench.capture({ frames: 12 }); return cap; };
+      const k0 = K[zi], shot = async () => { const cap = await window.__bench.capture({ frames: 12, settle: 90 }); return cap; };   // (settled: the grade on what is in front of the lens)
       window.__bench.step(30);
       // A/B (on, off) against an A/A pair (on, on): the frame is not bit-stable (drifting particles)
       const on = await shot(), on2 = await shot(); K[zi] = 0; const off = await shot(); K[zi] = k0;

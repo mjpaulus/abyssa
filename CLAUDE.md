@@ -698,6 +698,10 @@ core.js):
   (shader patches): two loads, compare against an A/A pair of loads.
 - Cross-load ABBA (a branch against main): two worktrees served on two ports, alternate
   `goto` A B B A, `setup` + `live` in each (see roadmap/perf-budget-oct.md Log).
+- COLOUR/LOOK CAPTURES MUST SETTLE THE POST CHAIN: `__bench.step(n)` runs update() only, so after a
+  `gotoZone`/teleport the grade's air/zone blend, auto-exposure, AO and DoF stay on the last real frame's
+  state (a fresh page: the DECK look). Use `capture({ settle: 90 })` (90 rendered frames first) or
+  `step(n, null, { render: true })`; a light colour-calibrated without it was gold in zone 1 in play.
 - Hazards: ANGLE/Metal DROPS a render pass whose target is cleared again before anything
   reads it (a synthetic GPU load needs additive draws, no clears); any getBufferSubData /
   readPixels / getError is a synchronous round trip that first drains Chrome's GPU-process

@@ -371,8 +371,16 @@ async function draws(o = {}) {
 // but stand still), then the canvas read back whole. diff(a, b): mean |delta| per channel,
 // the 99.9th percentile, and the share of pixels off by more than 2 and 8 codes. With TAA on,
 // two captures `frames` apart sit on different jitter phases: run A/A first for the floor.
+// o.settle (frames, e.g. 90 = 1.5 s): real rendered frames first (step with render), so the post
+// chain's lagged state -- the grade's air/zone blend, the auto-exposure, AO, DoF -- has converged on
+// what is in front of the lens. Without it a capture after gotoZone / a bare step() is graded with
+// whatever the last real frame left (on a fresh page: the DECK look), and any colour read off it is
+// false (Task 4 fix round 3: a light calibrated that way was gold in zone 1 in play). Opt-in (the
+// frozen A/A uses keep their old meaning): every colour or look capture must pass it.
 let capBuf = null;
 async function capture(o = {}) {
+  const st = o.settle || 0;
+  if (st > 0) step(st, null, { render: true });
   const T = window.__taa, gk = T ? T.grain() : 1;
   if (T && !o.grain) T.grain(0);   // film grain is a fresh hash every frame: off for comparisons
   try { await run({ frames: o.frames || 24, warm: 0, prof: false, freeze: true, gcal: false }); }

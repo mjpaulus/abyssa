@@ -60,17 +60,17 @@ const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
 // per site (index = site.js row), per zone: a multiplier on COLS so the light lands the same cold
 // pale blue-white in that anchorage's own water and grade (calibrated: open-minus-shut mean colour
 // over the light's pixels against home's; fissure.js leans the seep with it)
-// target: the ABSOLUTE colour of the BRIGHT lit pixels (open against gain 0: the upper quarter by
-// luma of the pixels the light changes, where the eye reads its hue), R:G:B = 0.80 : 0.90 : 1.0,
-// over four views per site and zone (40 u side, 60 u above, across the crack from its lip, inside the
-// throat), iterated (review N2: the added light alone read blue while the lit highlights stayed cream
-// in zone 1's warm grade and lavender in zone 2's); luma kept. Zone 1's column leaned a further step
-// cold (0.90 : 0.97 : 1.12): its highlights by the lip sit in the lamp's haze and the warm vent water
+// target: the ABSOLUTE colour of the BRIGHT lit pixels ON SETTLED FRAMES (the post chain converged on
+// the view: bench capture({ settle }), never a bare step()), the upper quarter by luma of the pixels the
+// light changes (light on against gain 0), R:G:B = 0.80 : 0.90 : 1.0 with B >= R, over four views per
+// site and zone (40 u side, 60 u above, across the crack from its lip, inside the throat), iterated
+// (fix round 3). Zone 0's grade is teal, zone 1's warm (it turned the light gold), zone 2's violet:
+// each source leans hard against its own grade so what lands on screen is the same cold pale white.
 export const SITE_LEAN = [
-  [[1.060, 0.972, 1.024], [0.959, 1.005, 1.089], [1.108, 1.015, 0.601]],   // home
-  [[0.993, 0.996, 1.057], [0.924, 0.989, 1.267], [1.258, 0.931, 0.657]],   // Pallid Bank
-  [[0.915, 1.031, 1.078], [0.763, 1.033, 1.471], [0.944, 1.028, 0.974]],   // the Burned Ground
-  [[1.586, 0.735, 0.833], [0.681, 1.024, 1.757], [0.976, 1.096, 0.540]],   // the Unsounded Shelf
+  [[1.600, 0.715, 0.936], [0.610, 1.031, 1.898], [0.992, 1.086, 0.539]],   // home
+  [[0.962, 0.981, 1.223], [0.827, 1.000, 1.475], [1.160, 0.983, 0.641]],   // Pallid Bank
+  [[0.860, 1.041, 1.179], [0.726, 1.045, 1.505], [0.689, 1.104, 1.266]],   // the Burned Ground
+  [[1.569, 0.719, 0.968], [0.604, 1.047, 1.845], [0.878, 1.146, 0.541]],   // the Unsounded Shelf
 ];
 export function siteLean(zi, out) {
   const L = (SITE_LEAN[currentSiteIndex()] || SITE_LEAN[0])[zi];
@@ -79,7 +79,7 @@ export function siteLean(zi, out) {
 const BREATH = 7.5;                      // s
 const K0 = 0.545;                        // k at which the seep's last breath is gone (fissure.js: T = COLLAPSE)
 // per zone gain (dev: __rifts.K), and the parts' shares (dev: __rifts.tune)
-const LIGHT_K = [1.7, 0.7, 0.8];   // (zone 1 lower: its warm grade turns bright additive highlights cream as the exposure rises)
+const LIGHT_K = [1.7, 1, 0.8];
 const TUNE = { curtain: 0.16, endOn: 0.05, wall: 1.3, drift: 0.85, halo: 0.16, surf: 0.14, surfH: 22, inside: 0.75, noGate: false };
 const SURF_MAX = 0.16;                   // the surface glow's alpha never passes this
 const N_DRIFT = 320;
