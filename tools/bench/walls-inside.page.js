@@ -500,6 +500,47 @@ export async function descentLens(zi, o = {}) {
   } finally { window.keys.KeyC = false; }
   return { zi, u: u0, yaw: +(o.yaw || 0).toFixed(3), pitch: o.pitch || 0, yawRate: o.yawRate || 0, tris: n, samples, endBelowLip: +(lip - window.player.pos.y).toFixed(1), trigBelowLip: +(lip - trig).toFixed(1), close, inside, hfIn, worstIn, zoneEnd: window.zone, near: cam.near, minD: +minD.toFixed(3), at,
     salIn, salInMax: +salInMax.toFixed(2), salAt, salFloor, salFloorAt, offAll, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
-    guards: tc0 ? window.__throatCam.state().guards - tc0.guards : null, snaps: tc0 ? window.__throatCam.state().snaps - tc0.snaps : null, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
+    guards: tc0 ? window.__throatCam.state().guards - tc0.guards : null, snaps: tc0 ? window.__throatCam.state().stiff - tc0.stiff : null, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
     boomMin: +boomMin.toFixed(2), boomMax: +boomMax.toFixed(2), fallV: +fallV.toFixed(1), lensBelowPivotMax: +lensBelowPivotMax.toFixed(2), shots: got };
+}
+
+// ---- the lens with him STANDING in or at the open crack (final fix wave I1, review) -----------------------
+// standLens(zi, { x, z, yaw }): Sal stood at (x, z) (the bench stands him on terrainH: the broken lip, a
+// strata ledge, a tip) with the zone's fissure open, facing yaw (world), the lens settled 3 s, then 2 s
+// measured every 2nd frame: close (within the near plane of any drawn crack triangle within 16 u) and hfIn
+// (under the zone's heightfield at its own x, z by more than 0.1 u). Shared helper for fissure-probe fall-lens.
+export async function standLens(zi, o) {
+  const cam = window.camera;
+  window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.survival.fuel = 1; window.survival.oxygen = 1;
+  window.weather.set(1, 0); clock.elapsedTime = o.t0 == null ? 2000 : o.t0;
+  if (window.zone !== zi) window.gotoZone(zi);
+  window.__fissure.setOpen(zi, 1); if (window.lev) window.lev.calmed = true;
+  window.__bench.place(o.x, o.z, o.yaw, zi); window.player.pitch = o.pitch || 0;
+  window.__bench.step(180);
+  const tris = [];
+  const take = (A, I) => { for (let t = 0; t < I.length; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+    const cx = (A[a] + A[b] + A[c]) / 3, cz = (A[a + 2] + A[b + 2] + A[c + 2]) / 3;
+    if (Math.hypot(cx - o.x, cz - o.z) < 16) tris.push(A[a], A[a + 1], A[a + 2], A[b], A[b + 1], A[b + 2], A[c], A[c + 1], A[c + 2]); } };
+  const P = T.fissurePatchGeo(zi); for (const I of P.index) take(P.pos.array, I);
+  const Wg = T.fissureWallOn && T.fissureWallOn() ? T.fissureWallGeo(zi) : null; if (Wg) take(Wg.pos.array, Wg.index);
+  const n = tris.length / 9;
+  let close = 0, hfIn = 0, samples = 0, minD = 1e9, hfMax = -1e9;
+  for (let f = 0; f < 120; f += 2) {
+    window.__bench.step(2); samples++;
+    const p = cam.position, hf = T.terrainUnderH(p.x, p.z, zi) - p.y;
+    if (hf > 0.1) hfIn++; if (hf > hfMax) hfMax = hf;
+    let fMin = 1e9;
+    for (let k = 0; k < n; k++) {
+      const o9 = k * 9;
+      if (p.x < Math.min(tris[o9], tris[o9 + 3], tris[o9 + 6]) - 1 || p.x > Math.max(tris[o9], tris[o9 + 3], tris[o9 + 6]) + 1) continue;
+      if (p.z < Math.min(tris[o9 + 2], tris[o9 + 5], tris[o9 + 8]) - 1 || p.z > Math.max(tris[o9 + 2], tris[o9 + 5], tris[o9 + 8]) + 1) continue;
+      if (p.y < Math.min(tris[o9 + 1], tris[o9 + 4], tris[o9 + 7]) - 1 || p.y > Math.max(tris[o9 + 1], tris[o9 + 4], tris[o9 + 7]) + 1) continue;
+      _a.set(tris[o9], tris[o9 + 1], tris[o9 + 2]); _b.set(tris[o9 + 3], tris[o9 + 4], tris[o9 + 5]); _c.set(tris[o9 + 6], tris[o9 + 7], tris[o9 + 8]);
+      _tri.set(_a, _b, _c); _tri.closestPointToPoint(p, _q); const d = _q.distanceTo(p); if (d < fMin) fMin = d;
+    }
+    if (fMin < cam.near) close++; if (fMin < minD) minD = fMin;
+  }
+  const pv = window.player.pos;
+  return { zi, samples, close, hfIn, minD: +minD.toFixed(3), hfMax: +hfMax.toFixed(2), fd: +S.fissureDist(pv.x, pv.z, zi).toFixed(2), grounded: window.player.grounded, boom: +cam.position.distanceTo(pv).toFixed(2) };
 }

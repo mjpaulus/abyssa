@@ -1003,7 +1003,7 @@ if (mode === 'shape') {
   // clearance across the crack: clearCamDistance tested only the floor under the boom, the 2.2 u
   // minimum, the floor clamp lifted the lens up a wall column; Sal drifted into the walls with no wall
   // test while overRift). GREEN (game.js THROAT_CAM, player.js holdInShaft): zones 0-1 all 0; zone 2
-  // near 4-6, inside 1-2; out of frame 0; in the walls 0.
+  // near 4-6, inside 1-2; out of frame 0; in the walls 0. Then the STANDING cases (below).
   const D90 = Math.PI / 2, cases = [];
   for (let zi = 0; zi < 3; zi++) {
     for (const u of [-15, -4, 9]) for (const yaw of [0, D90, -D90, D90 / 2, 3 * D90 / 2, 2 * D90]) cases.push({ zi, u, yaw });
@@ -1029,7 +1029,52 @@ if (mode === 'shape') {
   }
   const z2 = r.filter(q => q.zi === 2), z2close = z2.reduce((a, q) => a + q.close, 0), z2hf = z2.reduce((a, q) => a + q.hfIn, 0);
   if (z2close > 12 || z2hf > 4) fail.push(`zone 2: the lens near drawn rock on ${z2close} frames / inside it on ${z2hf} (bound 12 / 4)`);
-  console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, lensGuardFrames: guards, lensCuts: snaps }));
+  console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, lensGuardFrames: guards, lensStiffFrames: snaps }));
+  // STANDING in or at the open crack (the boom's floor test and the floor clamp stand aside only inside the
+  // outline): per zone, stood on the broken lip (fd -0.4 / -1.2 on each side) at three stations and at both
+  // tips, plus the probe's strata ledge, facing out of the crack, along it and into it, 3 s settled then 2 s
+  // measured. RED on 1a79a7b: stood on zone 1's lip facing in, the lens sat 2.9 u inside the ground past the
+  // lip on 60/60 samples (no floor clamp in the open crack, and the shaft's march only scans 1.5 u past the
+  // lip). GATES, a bound: per stand <= 1 near-plane sample and <= 2 under the heightfield, over all 180
+  // stands <= 3 and <= 4 (of ~10800). Measured over three runs: near 1/2/2, under 0/1/2, every one at a
+  // crack TIP (0.88 halfLen, where the outline closes to a slot a lens can be either side of from frame to
+  // frame), under by <= 0.16 u, a one-sample transient of the spring.
+  const stand = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), W = await import('/tools/bench/walls-inside.page.js');
+    const o = { x: 0, z: 0 }, q = { x: 0, z: 0 }, out = [];
+    for (let zi = 0; zi < 3; zi++) {
+      const F = S.FISSURE[zi], spots = [];
+      for (const u of [-12, 0, 12, -0.88 * F.halfLen, 0.88 * F.halfLen]) for (const sd of [0, 1]) for (const d of [0.4, 1.2]) {
+        const w = S._halfWAt(F, u, sd); if (w < d + 0.3) continue;
+        S.fissureWorld(u, (sd ? 1 : -1) * (w - d), zi, o); if (S.slabAt(o.x, o.z, zi) >= 0) continue;
+        spots.push({ u, sd, d, x: o.x, z: o.z });
+      }
+      // a strata ledge (open-ledge's rule)
+      const k = F.throatHalfW / F.halfW;
+      for (let m = 0; m <= 40 && spots.length < 40; m++) { const u = (m % 2 ? -1 : 1) * Math.ceil(m / 2); let got = false;
+        for (const sd of [0, 1]) { const sg = sd ? 1 : -1, w = S._halfWAt(F, u, sd);
+          for (let v = w * k + 0.3; v < w - 0.6 && !got; v += 0.1) { S.fissureWorld(u, sg * v, zi, o); if (S.slabAt(o.x, o.z, zi) >= 0) continue;
+            const h = T.terrainH(o.x, o.z, zi), nn = T.terrainNormal(o.x, o.z, zi); if (nn.y < 0.8 || S.lipMeanY(zi, T.terrainH) - h < 1.5) continue;
+            S.fissureWorld(u, sg * (v + 0.7), zi, q); if (T.terrainH(q.x, q.z, zi) - h > 0.8) { spots.push({ u, sd, ledge: true, x: o.x, z: o.z }); got = true; } } }
+        if (got) break; }
+      for (const sp of spots) {
+        const l = { u: 0, v: 0 }; S.fissureLocal(sp.x, sp.z, zi, l);
+        const sg = l.v >= 0 ? 1 : -1, outX = -F.dz * sg, outZ = F.dx * sg;
+        for (const [name, fx, fz] of [['out', outX, outZ], ['along', F.dx, F.dz], ['in', -outX, -outZ]]) {
+          const r = await W.standLens(zi, { x: sp.x, z: sp.z, yaw: Math.atan2(fx, fz), t0: 2000 + out.length * 17 });
+          out.push(Object.assign({ u: +sp.u.toFixed(1), sd: sp.sd, d: sp.d || null, ledge: !!sp.ledge, face: name }, r));
+        }
+      }
+    }
+    window.gotoZone(0);
+    return out; })()`);
+  let sClose = 0, sHf = 0;
+  for (const q of stand) {
+    sClose += q.close; sHf += q.hfIn;
+    if (q.close > 1 || q.hfIn > 2) fail.push(`standing zone ${q.zi} u ${q.u} side ${q.sd} ${q.ledge ? 'ledge' : 'lip ' + q.d} facing ${q.face}: the lens near drawn rock ${q.close} / in the rock ${q.hfIn} of ${q.samples} (min ${q.minD}, hf ${q.hfMax})`);
+  }
+  if (sClose > 3 || sHf > 4) fail.push(`standing: the lens near drawn rock on ${sClose} / under the ground on ${sHf} samples over ${stand.length} stands (bound 3 / 4)`);
+  console.log(JSON.stringify({ standing: stand.length, close: sClose, hfIn: sHf }));
   for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
     minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip, salIn: q.salIn, salInMax: q.salInMax, salAt: q.salAt, salFloor: q.salFloor, salFloorAt: q.salFloorAt, offAll: q.offAll, holds: q.shaftHolds, closeAt: q.closeAt, hfAt: q.hfAt, offAt: q.offAt }));
 } else if (mode === 'ending') {
