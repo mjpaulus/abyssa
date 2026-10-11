@@ -1,5 +1,5 @@
 // THE HARPOON probe (fissure-and-harpoon Task 6; spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md §2).
-//   node tools/bench/harpoon-probe.mjs <routes|rite|remote|lodged|abort|thrust-contact|orune-cut|orune-parry|shark-thrust> <port>      (serve.py must already serve <port>)
+//   node tools/bench/harpoon-probe.mjs <routes|rite|remote|lodged|abort|thrust-contact|orune-cut|orune-parry|shark-thrust|wrench-spear> <port>      (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9485). A FRESH PROFILE per run (the chart save remembers
 // pulled[site] and tools.harpoon), shared across the rite's own reload.
 //   routes: at all four anchorages (Home, Pallid, Burned, the Unsounded Shelf), Alt+6 stands Sal at
@@ -94,6 +94,22 @@ if (mode === 'rite') {
   console.log('wound', JSON.stringify(b));
   if (b.dormant) fail.push('pressing the wound did not wake her');
   if (b.msgs.includes('IT COMES FREE. SHE FEELS IT.') || b.msgs.includes("ANOTHER DIVER'S HARPOON.")) fail.push('the wound said a pull line');
+} else if (mode === 'wrench-spear') {
+  // (final fix wave M3) BOTH HANDS ON THE IRON: a right-click (the spear gun) during the wrench fires
+  // nothing, as a left-click swings nothing (doSlash's gate); the same click once the wrench is over
+  // fires (the control: the gun is loaded and the hook works). window.__spear = the click's own path.
+  await c.ev(`(window.__helm = true, window.setState('play'), window.__chart.arrive(0), 1)`); await alt(c, 6);
+  await c.ev(`(window.survival.hasSpear = true, window.survival.spears = 3, 1)`);
+  await c.key('KeyE', true); await c.ev(`(window.__bench.step(2), 1)`); await c.key('KeyE', false);
+  const r = await c.ev(`(() => { window.__bench.step(20); const H = window.lev.harpoon, out = { wrenching: !!H.wrenching, before: window.survival.spears };
+    window.__spear(); window.__bench.step(2); out.during = window.survival.spears; out.flying = window.tools.drop().filter(s => s !== 0).length;
+    window.__bench.step(600); out.wrenchingAfter = !!H.wrenching; out.owns = !!window.survival.hasHarpoon;
+    const n0 = window.survival.spears; window.__spear(); window.__bench.step(2); out.control = n0 - window.survival.spears; return out; })()`);
+  console.log(JSON.stringify(r));
+  if (!r.wrenching) fail.push('no wrench under way when the spear was tried');
+  if (r.during !== r.before || r.flying) fail.push(`the spear gun fired mid-wrench (spears ${r.before} -> ${r.during}, ${r.flying} out)`);
+  if (r.wrenchingAfter) fail.push('the wrench never ended');
+  if (r.control !== 1) fail.push('control: the spear did not fire after the wrench (' + r.control + ')');
 } else if (mode === 'lodged') {
   // THE IRON IS IN HER (fix round 1): at all four anchorages, points along the DRAWN iron (H.iron.matrixWorld,
   // the live pose) are cast against her drawn body (the shell, the instanced legs, the claws; DoubleSide for

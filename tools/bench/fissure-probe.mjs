@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|fall-lens|ending|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|fall-lens|ending|wave-minors|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -1028,6 +1028,76 @@ if (mode === 'shape') {
   console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, lensGuardFrames: guards, lensCuts: snaps }));
   for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
     minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip, salIn: q.salIn, salInMax: q.salInMax, salAt: q.salAt, salFloor: q.salFloor, salFloorAt: q.salFloorAt, offAll: q.offAll, holds: q.shaftHolds, closeAt: q.closeAt, hfAt: q.hfAt, offAt: q.offAt }));
+} else if (mode === 'wave-minors') {
+  // THE FINAL WAVE'S SMALL FIXES, each through the game's own path (RED: each fix reverted alone).
+  //  M1 the sonar's "way down" echo keys on the FISSURE (open past half), not the calm: calmed but still
+  //     shut, no echo; open (whatever the calm flag says), the echo rings at the LIP (lipMeanY + 1), not
+  //     down at the throat floor.
+  //  M2 the harpoon's contact over the SHUT jam churns silt at the point (the floor under it is the jam,
+  //     shutFloorY; terrainH there is the throat floor ~70 u down, so it never fired over the jam).
+  //  M9 "THE RIFT IS SHUT WHILE IT WAKES." never while she sleeps (he stands on the jam 25 s, she dormant);
+  //     once she is awake and he stands on it, it is said.
+  //  M10 a zone's ward count still waiting for a silence is dropped when she stills (zone 1: the calm lands
+  //     before the count is said; 25 s after it the count has not been said).
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), Tools = await import('/src/systems/tools.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.survival.fuel = 1; window.survival.oxygen = 1;
+    const out = {}, o = { x: 0, z: 0 }, $msg = document.getElementById('msg');
+    const said = (n, hold) => { const seen = []; window.__bench.step(n, () => { if (hold) hold(); window.survival.oxygen = 1; window.survival.fuel = 1;
+      const m = $msg.classList.contains('on') ? $msg.textContent : null; if (m && seen[seen.length - 1] !== m) seen.push(m); }); return seen; };
+    // ---- M1
+    window.gotoZone(0); const F = S.FISSURE[0], lip = S.lipMeanY(0, T.terrainH);
+    S.fissureWorld(0, S._halfWAt(F, 0, 1) + 3, 0, o); window.__bench.place(o.x, o.z, 0, 0);
+    const ping = () => { window.__bench.step(400); Tools.sonarPing(window.player.pos, 0); return window.tools.echoes().filter(e => Math.abs(e[3] - 0.58) < 1e-3 && Math.abs(e[4] - 0.95) < 1e-3); };
+    window.lev.calmed = true; window.__fissure.setOpen(0, 0); window.__bench.step(2);
+    const a = ping(); window.lev.calmed = true; window.__fissure.setOpen(0, 0);
+    out.m1 = { calmedShut: a.length };
+    window.lev.calmed = false; window.__fissure.setOpen(0, 1); window.__bench.step(2);
+    const b = ping();
+    out.m1.openUncalmed = b.length; out.m1.y = b.length ? +(b[0][1] - lip).toFixed(2) : null;
+    window.__fissure.setOpen(0, 0); window.lev.calmed = false;
+    // ---- M2
+    window.gotoZone(0); window.__fissure.setOpen(0, 0); window.lev.calmed = false;
+    window.survival.hasHarpoon = true;
+    S.fissureWorld(0, 0, 0, o); window.__bench.place(o.x, o.z, 0, 0);
+    window.player.pos.y = T.shutFloorY(o.x, o.z, 0) + 1.35; window.player.vel.set(0, 0, 0); window.player.pitch = -0.3;
+    window.__bench.step(60);
+    window.__slash(); const t0 = window.__bladeLast ? window.__bladeLast.t : -1;
+    window.__bench.step(40);
+    const BL = window.__bladeLast;
+    out.m2 = { contact: !!BL && BL.t !== t0, kind: BL && BL.kind, puff: BL ? BL.puff : null, onJam: window.player.jamY != null };
+    window.survival.hasHarpoon = false; window.player.pitch = 0;
+    // ---- M9
+    window.gotoZone(0); window.__fissure.setOpen(0, 0); window.lev.calmed = false;
+    S.fissureWorld(0, 0, 0, o); const hx = o.x, hz = o.z;
+    const hold = () => { window.player.pos.x = hx; window.player.pos.z = hz; };
+    window.__bench.place(hx, hz, 0, 0); window.player.pos.y = T.shutFloorY(hx, hz, 0) + 1.35;
+    const asleep = said(1500, hold);
+    out.m9 = { dormant: !!window.lev.dormant, asleepSaid: asleep.includes('THE RIFT IS SHUT WHILE IT WAKES.'), asleep };
+    window.lev.cmd('wake'); window.__bench.step(10); window.lev.cmd('wake');
+    window.__bench.place(hx, hz, 0, 0); window.player.pos.y = T.shutFloorY(hx, hz, 0) + 1.35;
+    const awake = said(1500, hold);
+    out.m9.awakeDormant = !!window.lev.dormant; out.m9.awakeSaid = awake.includes('THE RIFT IS SHUT WHILE IT WAKES.'); out.m9.awake = awake;
+    // ---- M10
+    window.gotoZone(1); window.__fissure.setOpen(1, 0);
+    S.fissureWorld(0, 30, 1, o); window.__bench.place(o.x, o.z, 0, 1);
+    for (const g of window.lev.sigils) g.lit = true;
+    let calmAt = -1; window.__bench.step(120, i => { if (calmAt < 0 && window.lev.calmed) calmAt = i; });
+    const after = said(1500);
+    out.m10 = { calmAt, wardsSaid: after.some(m => /IRON WARDS/.test(m)), after };
+    window.gotoZone(0);
+    return out; })()`);
+  console.log(JSON.stringify(r));
+  if (r.m1.calmedShut) fail.push('M1: the way-down echo rang over a still-shut jam (calmed, fissure shut)');
+  if (r.m1.openUncalmed !== 1) fail.push('M1: no way-down echo over the open fissure ' + JSON.stringify(r.m1));
+  else if (Math.abs(r.m1.y - 1) > 0.5) fail.push('M1: the way-down echo is not at the lip (' + r.m1.y + ' u off lipMeanY)');
+  if (!r.m2.contact) fail.push('M2: the thrust never landed ' + JSON.stringify(r.m2));
+  else if (r.m2.puff !== 1) fail.push('M2: no silt at the point over the shut jam ' + JSON.stringify(r.m2));
+  if (!r.m9.dormant) fail.push('M9: she was not asleep for the asleep half');
+  if (r.m9.asleepSaid) fail.push('M9: "THE RIFT IS SHUT WHILE IT WAKES." said while she slept');
+  if (r.m9.awakeDormant || !r.m9.awakeSaid) fail.push('M9: not said on the jam with her awake ' + JSON.stringify(r.m9.awake));
+  if (r.m10.calmAt < 0) fail.push('M10: the wards never calmed her');
+  if (r.m10.wardsSaid) fail.push('M10: the ward count was said after the calm ' + JSON.stringify(r.m10.after));
 } else if (mode === 'clearance') {
   // EVERYTHING CLEARS THE CRACK (spec §1 Lairs, Task 5). At every anchorage (the hidden shelf too),
   // in every zone: every collider (rocks, props, wrecks, vents), every placed instance (flora,
@@ -1108,7 +1178,9 @@ if (mode === 'shape') {
   // the floor stay where ritefair left them (6.7-9.6 u; fail > 10.5: reach 7 + one tap-hop) and the shell keeps its STAND.clear. THROWS: from 160 spots by the lip (fd 0.5-10, either side,
   // along the whole crack) in 8 directions each, the guarded hammer throw (safeThrow, knockUp,
   // 26 u/s through the real player step) never carries him into the crack (fd < 0 at any frame);
-  // the unguarded share is reported as the discriminator.
+  // the unguarded share is reported as the discriminator. (final wave M4) Her feet (planted and
+  // swinging) never stand inside the lip (fd >= 0). OPEN, from inside the lip on the broken lip (off
+  // the throat): the guarded throw always leans out of the crack; shut there, it is left alone.
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js');
     const B = await import('/src/entities/sleeper/brooder.js'), THREE = await import('three');
@@ -1128,7 +1200,8 @@ if (mode === 'shape') {
         window.__chart.arrive(site); window.gotoZone(0); window.__fissure.setOpen(0, 0);
         const L = window.lev; L.cmd('wake');
         window.__bench.place(sx, sz, 0, 0); window.player.pos.y = T.shutFloorY(sx, sz, 0) + EYE; window.player.vel.set(0, 0, 0);
-        let minC = 1e9, minO = 1e9, minClr = 1e9, frames = 0;
+        let minC = 1e9, minO = 1e9, minClr = 1e9, frames = 0, minFoot = 1e9;
+        const footScan = () => { for (const f of L.feet) { minFoot = Math.min(minFoot, S.fissureDist(f.cur.x, f.cur.z, 0), S.fissureDist(f.planted.x, f.planted.z, 0)); } };
         const P = L.parts.shell.geometry.attributes.position;
         const shellScan = () => { const mw = L.parts.shell.matrixWorld; let low = 1e9;
           for (let k = 0; k < P.count; k += 7) { v.fromBufferAttribute(P, k).applyMatrix4(mw); minO = Math.min(minO, S.fissureDist(v.x, v.z, 0)); low = Math.min(low, v.y - T.terrainH(v.x, v.z, 0)); }
@@ -1136,14 +1209,14 @@ if (mode === 'shape') {
         window.__bench.step(900, i => {
           window.player.pos.x = sx; window.player.pos.z = sz;   // he holds his ground at the lip
           if (L.standE < 0.9) return; frames++;
-          minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0));
+          minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan();
           if (i % 12 === 0) shellScan(); });
         // then him under her (the refuge), 3 s: her dark wards over the floor under each (ritefair's table)
         const ux = L.pos.x, uz = L.pos.z;
         window.__bench.place(ux, uz, 0, 0); window.player.vel.set(0, 0, 0);
-        window.__bench.step(180, i => { minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); if (i % 12 === 0) shellScan(); });
+        window.__bench.step(180, i => { minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan(); if (i % 12 === 0) shellScan(); });
         const wards = L.sigils.filter(g => !g.lit).map(g => +(g.grp.position.y - T.terrainH(g.grp.position.x, g.grp.position.z, 0)).toFixed(1));
-        out.hunt.push({ site, kind, frames, minCentre: +minC.toFixed(2), keep: +keep.toFixed(2), minOutline: +minO.toFixed(2), wardsUnder: wards, minShellClear: +minClr.toFixed(2),
+        out.hunt.push({ site, kind, frames, minCentre: +minC.toFixed(2), keep: +keep.toFixed(2), minOutline: +minO.toFixed(2), minFoot: +minFoot.toFixed(2), wardsUnder: wards, minShellClear: +minClr.toFixed(2),
           salFd: +S.fissureDist(sx, sz, 0).toFixed(1) });
       }
     }
@@ -1170,6 +1243,34 @@ if (mode === 'shape') {
       }
     }
     out.throws = { n, intoCrackGuarded: inG, intoCrackUnguarded: inU, worst };
+    // (final wave M4) OPEN, from INSIDE the lip (fd -0.3..-1.6, off the throat, where a man stands on the
+    // broken lip): the guarded throw always leans OUT, away from the throat (its flat direction's share
+    // along the outward normal >= 0.3, in 16 headings); shut, it is left alone (the jam is under him). The
+    // throw's own lift (knockUp, buoyancy) mostly carries him over the crack whichever way it points, so
+    // this is the contract, checked directly: on 1d68aa0 safeThrow returned early inside the lip and
+    // half of these headings pointed in.
+    const g2 = { x: 0, z: 0 }, fdAt = (x, z) => S.fissureDist(x, z, 0);
+    let n2 = 0, inG2 = 0, inU2 = 0, shutMoved = 0; const worst2 = [];
+    for (let k = 0; k < 60; k++) {
+      const u = (rnd() * 2 - 1) * F.halfLen * 0.8, sd = rnd() < 0.5 ? 1 : 0, d = 0.3 + rnd() * 1.3;
+      S.fissureWorld(u, (sd ? 1 : -1) * (S._halfWAt(F, u, sd) - d), 0, o);
+      if (S.inThroat(o.x, o.z, 0) || fdAt(o.x, o.z) >= 0) continue;
+      const h = 0.75, gx = fdAt(o.x + h, o.z) - fdAt(o.x - h, o.z), gz = fdAt(o.x, o.z + h) - fdAt(o.x, o.z - h), gl = Math.hypot(gx, gz) || 1;
+      g2.x = gx / gl; g2.z = gz / gl;
+      for (let a = 0; a < 16; a++) {
+        const th = a / 16 * Math.PI * 2;
+        window.__fissure.setOpen(0, 1); window.__bench.step(1);   // (the shut flag follows k on the next update)
+        v.set(Math.cos(th), 0, Math.sin(th)); const outU = v.x * g2.x + v.z * g2.z;
+        B.safeThrow(v, o.x, o.z, 0); const outG = (v.x * g2.x + v.z * g2.z) / Math.max(1e-6, Math.hypot(v.x, v.z));
+        n2++; if (outG < 0.3) { inG2++; if (worst2.length < 6) worst2.push({ at: [+o.x.toFixed(1), +o.z.toFixed(1)], th: +th.toFixed(2), out: +outG.toFixed(2) }); }
+        if (outU < 0) inU2++;
+        window.__fissure.setOpen(0, 0); window.__bench.step(1);
+        v.set(Math.cos(th), 0, Math.sin(th)); B.safeThrow(v, o.x, o.z, 0);
+        if (Math.abs(v.x - Math.cos(th)) > 1e-9 || Math.abs(v.z - Math.sin(th)) > 1e-9) shutMoved++;
+      }
+    }
+    out.throwsOpen = { n: n2, inwardGuarded: inG2, inwardUnguarded: inU2, shutMoved, worst: worst2 };
+    window.__fissure.setOpen(0, 0); if (window.lev) window.lev.calmed = false;
     window.__chart.arrive(0);
     return out; })()`);
   console.log(JSON.stringify(r));
@@ -1181,8 +1282,14 @@ if (mode === 'shape') {
     if (Math.max(...h.wardsUnder) > 10.5) fail.push(`site ${h.site} ${h.kind}: a dark ward hung ${Math.max(...h.wardsUnder)} u over him under her (ritefair: 6.7-9.6, reach 7 + a tap-hop)`);
     if (h.minShellClear < 3.0) fail.push(`site ${h.site} ${h.kind}: her shell came ${h.minShellClear} u over the ground (STAND.clear 3.6)`);
   }
+  for (const h of r.hunt) if (!h.err && h.minFoot < 0) fail.push(`site ${h.site} ${h.kind}: one of her feet stood ${h.minFoot} u inside the lip`);
   if (r.throws.intoCrackGuarded) fail.push(`a guarded throw carried him into the crack: ${r.throws.intoCrackGuarded}/${r.throws.n} ` + JSON.stringify(r.throws.worst));
   if (!r.throws.intoCrackUnguarded) fail.push('the throw check does not discriminate (no unguarded throw reached the crack)');
+  const to = r.throwsOpen;
+  if (!(to.n >= 300)) fail.push(`open-crack throws: only ${to.n} measured`);
+  if (to.inwardGuarded) fail.push(`OPEN, from inside the lip: ${to.inwardGuarded}/${to.n} guarded throws do not lean out of the crack ` + JSON.stringify(to.worst));
+  if (!to.inwardUnguarded) fail.push('the open-crack throw check does not discriminate (no unguarded heading pointed in)');
+  if (to.shutMoved) fail.push(`SHUT, inside the lip: ${to.shutMoved} throws were turned (the jam is under him: left alone)`);
 } else fail.push(`unknown mode ${mode}`);
 c.close();
 stop();

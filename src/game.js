@@ -606,7 +606,7 @@ let bladeGuard = 0;
 const _tipV = new THREE.Vector3();
 let pendingSlash = 0, pendingBlade = BLADE.knife;
 // the last blow's contact, for probes: ONE reused object (set on the contact frame, never allocated in play)
-const bladeLast = { t: 0, reach: 0, kind: '' };
+const bladeLast = { t: 0, reach: 0, kind: '', puff: 0 };   // puff: the contact churned silt at the point (1) or not (0)
 window.__bladeLast = null;
 const lampOcc = new Float32Array(8);   // diverOccluders -> setLampOccluders, every frame
 function doSlash() {
@@ -617,9 +617,12 @@ function doSlash() {
   if (triggerSlash(b.kind)) { pendingSlash = b.contact; pendingBlade = b; bladeAt = clock.elapsedTime; knife(); }
 }
 window.__slash = () => { if (state === 'play') doSlash(); };   // probes: the blade without pointer lock (tools/bench/play.mjs)
+window.__spear = () => { if (state === 'play') doSpear(); };   // probes: the spear gun without pointer lock (harpoon-probe wrench-spear)
 window.__programs = () => renderer.info.programs.length;     // probes: no first-sight compile (harpoon-probe thrust-contact)
 function doSpear() {
   if (!survival.hasSpear) return;
+  // (final wave) not while both hands are on Velkath's iron either (as doSlash, packUsable)
+  if (lev && lev.rite && lev.rite.wrenching) return;
   if (survival.spears > 0 && fireSpear(player.pos, forwardVec())) {
     survival.spears--;
     chime(330, 0.3, 0.24, 'pickup');
@@ -793,9 +796,9 @@ window.__lev = {
   state() { return lev ? (lev.probe ? lev.probe() : { kind: lev.kind, calmed: lev.calmed }) : null; },
   me() { return player.pos.clone(); }
 };
-// THE RIFT IS SHUT WHILE IT WAKES: a diver who drops into the bowl before the sleeper
-// stills falls into an unmarked hole in the dark. Said once per zone, once he stands on the
-// shut fissure's jam (riftRimY is the fissure's mean lip height).
+// THE RIFT IS SHUT WHILE IT WAKES: a diver on the shut fissure's jam while the sleeper is awake is
+// told why it will not let him down. Said once per zone, once he stands on the jam with her awake
+// and not yet calmed (riftRimY is the fissure's mean lip height).
 let riftShutSaid = false, riftRimY = 0;
 // THE CALM'S LINE waits for the light (spec: "A RIFT OPENS BELOW." lands as the light arrives):
 // the calm starts the opening (openFissure, its duration back) and the line is held until
@@ -2331,8 +2334,10 @@ function update(dt, t) {
   }
 
   // THE RIFT IS SHUT WHILE IT WAKES: said once he is down in the crack, standing on the jam
-  // (player.js publishes jamY while the jam is his floor) with the sleeper not yet calmed.
-  if (!riftShutSaid && lev && !lev.calmed && zone >= 0 && msgT <= 0) {
+  // (player.js publishes jamY while the jam is his floor) with the sleeper AWAKE and not yet calmed
+  // (final wave: the jam is a few units down and walkable, so most divers stand on it long before she
+  // stirs: while she still sleeps the line was false; asleep, the zone's own line already says FIND IT)
+  if (!riftShutSaid && lev && !lev.calmed && !lev.dormant && zone >= 0 && msgT <= 0) {
     if (player.jamY != null && player.grounded && player.jamY < riftRimY - 1.5) {
       riftShutSaid = true;
       showMsg('THE RIFT IS SHUT WHILE IT WAKES.', 5);
@@ -2480,6 +2485,8 @@ function update(dt, t) {
       }
     }
     if (ev.calmed) {
+      // (final wave) a ward count still waiting for a silence is stale once she stills: never said after it
+      pendingWards = false;
       chartRec[currentSiteIndex()][zone] = 1;
       visitCalm[zone] = 1;   // the water keeps it open for THIS visit only
       saveChart();
@@ -2618,7 +2625,7 @@ function update(dt, t) {
       if (lev && !lev.calmed) { showMsg(memPending, 5); memSaid[memKey] = 1; }
       memPending = null;
     } else if (pendingWards) {
-      pendingWards = false; showMsg(wardsLine(), 5);
+      pendingWards = false; if (lev && !lev.calmed) showMsg(wardsLine(), 5);
     } else if (!tips.submerged && player.pos.y < -6) {
       tips.submerged = 1; showMsg('YOUR AIR COMES DOWN THE LINE. THE PUMP ABOVE MUST STAY FED.', 5);
     } else if (!tips.taut && survival.tautness > 0.92) {
@@ -2708,7 +2715,7 @@ function update(dt, t) {
       // sleeper: no other kind has an onSlash.
       // (fix round 1, ruled) the full reach is also the parry: an arm REACHING for him with its tip inside it
       if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), B.reach - 0.4, B.reach);
-      bladeLast.t = clock.elapsedTime; bladeLast.reach = B.reach; bladeLast.kind = B.kind; window.__bladeLast = bladeLast;
+      bladeLast.t = clock.elapsedTime; bladeLast.reach = B.reach; bladeLast.kind = B.kind; bladeLast.puff = 0; window.__bladeLast = bladeLast;
       if (B.power > 1) {
         bladeGuard = 0.26;
         // (fix round 1, ruled) the thrust READS from the follow lens: a centimetre punch of the lens along the
@@ -2718,7 +2725,8 @@ function update(dt, t) {
         diverBladeTip(_tipV);
         // the silt it churns AT the point (the near-bed water is silt-laden: within 3 u of the bed), big enough
         // to show past his shoulder from the follow lens
-        if (zone >= 0 && !aboveWater) { const g = terrainH(_tipV.x, _tipV.z, zone); if (_tipV.y - g < 3) emitDust(_tipV.x, _tipV.y - 0.15, _tipV.z, 16, 1.5); }
+        // (the ground under it is the shared floor: over the shut jam, the rubble — terrainH there is the throat floor ~70 u down)
+        if (zone >= 0 && !aboveWater) { const g = shutFloorY(_tipV.x, _tipV.z, zone); if (_tipV.y - g < 3) { emitDust(_tipV.x, _tipV.y - 0.15, _tipV.z, 16, 1.5); bladeLast.puff = 1; } }
       }
       if (kill) {
         knifeHit('flesh');

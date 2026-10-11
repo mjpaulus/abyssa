@@ -30,11 +30,13 @@
 // without it the plume keeps core.js's boot density and stops sitting in the water.
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../core.js';
-import { ZONE_GAP, RIFT_R, riftPos, zoneBottom } from '../config.js';
+import { ZONE_GAP, riftPos, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { glowTex, canvas2d, noiseCanvas, warmGlow } from '../lib/textures.js';
 import { terrainH, shutFloorY } from '../world/terrain.js';
 import { motes } from '../world/rifts.js';
+import { fissureOpenK } from '../world/fissure.js';
+import { lipMeanY } from '../world/fissureShape.js';
 import { nodes } from '../world/resources.js';
 import { slash } from '../world/predators.js';
 import { RAFT_POS } from './raft.js';
@@ -224,10 +226,12 @@ export function sonarPing(pos, zi) {
       addEcho(_a.x, _a.y, _a.z, C_SIGIL, 7.0);
     }
   }
-  // the way down, once it has opened
-  if (L && L.calmed) {
+  // the way down, once it has opened: keyed on the FISSURE (open past half, the jam gone — the calm
+  // instant leaves it shut for ~3 s of pour, and a zone calmed this visit stays open behind him), rung at
+  // its lip (riftPos's floor is the throat floor ~70 u down)
+  if (fissureOpenK(zi) > 0.5) {
     const rp = riftPos(zi);
-    _a.set(rp.x, terrainH(rp.x, rp.z, zi) + RIFT_R * 0.5, rp.z);
+    _a.set(rp.x, lipMeanY(zi, terrainH) + 1, rp.z);
     if (_a.distanceToSquared(sonarOrigin) <= R2) addEcho(_a.x, _a.y, _a.z, C_RIFT, 9.0);
   }
   // the way home, from the shallows
@@ -887,5 +891,7 @@ window.tools = {
   sonar: () => ({ cool: +sonarCool.toFixed(2), age: +sonarAge.toFixed(2), echoes: echoN, live: echoLive }),
   thruster: () => ({ jet: jAlive, bub: bAlive, ring: +ringT.toFixed(2), burstT: +burstT.toFixed(3), bursts: burstCount, held: +jetLvl.toFixed(2) }),
   jetPos: () => jet.pos, jetCol: () => jet.col, bubPos: () => bub.pos, bubCol: () => bub.col,
-  drop: () => spears.map(s => s.state)
+  drop: () => spears.map(s => s.state),
+  // the last ping's echoes, [x, y, z, r, g, b] each (dev: allocates on call only)
+  echoes: () => { const out = []; for (let k = 0; k < echoN; k++) out.push([ePos[k * 3], ePos[k * 3 + 1], ePos[k * 3 + 2], eCol[k * 3], eCol[k * 3 + 1], eCol[k * 3 + 2]]); return out; }
 };
