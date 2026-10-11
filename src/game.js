@@ -1551,8 +1551,14 @@ function updateCamera(dt, t, fwd) {
   }
   const base = boomBack(), up = boomUp();
   buildDynCols();
-  // the pivot inside the OPEN crack's outline: the throat lens owns the walls (THROAT_CAM)
-  const inCrack = deckK === 0 && !fissureShut(zi) && fissureDist(player.pos.x, player.pos.z, zi) < 0;
+  // the pivot inside the OPEN crack's outline: the throat lens owns the walls (THROAT_CAM). The crack he is IN
+  // (`czi`): his zone's, or (final residual fix) past the zone-change plane the shaft of the zone he fell
+  // from, until his chest is through its floor: zones 0/1 switch 10-16 u above the throat floor, and the
+  // new zone's crack is elsewhere and shut (the old shaft went unguarded: the lens in its rock on 1106
+  // post-switch fall-lens samples, Sal in its walls on 287)
+  let czi = zi, inCrack = deckK === 0 && !fissureShut(zi) && fissureDist(player.pos.x, player.pos.z, zi) < 0;
+  if (!inCrack && deckK === 0 && zi > 0 && !fissureShut(zi - 1) && fissureDist(player.pos.x, player.pos.z, zi - 1) < 0
+      && player.pos.y - 0.5 > terrainH(player.pos.x, player.pos.z, zi - 1) - 1) { inCrack = true; czi = zi - 1; }
   let want = clearCamDistance(player.pos, camBack, base, zi, inCrack);
   // On (or coming onto) the deck the boom is also walked against the raft's gear, along
   // the real line from the pivot to the lens (back AND up), and the lens slides in along
@@ -1772,15 +1778,15 @@ function updateCamera(dt, t, fwd) {
 
   // THE LENS IN THE OPEN THROAT (THROAT_CAM): after every offset, before the cut and the spring. With
   // the pivot outside the crack the lens is tested only when its own target is inside the outline.
-  throatOn = deckK === 0 && !fissureShut(zi) && (inCrack || fissureDist(camDesired.x, camDesired.z, zi) < 0);
-  if (!throatOn || throatZone !== zi) throatGood = false;
-  throatZone = zi;
-  if (throatOn) { const y0 = camDesired.y; throatLens(zi, camDesired, THROAT_CAM.margin, THROAT_CAM.clear, THROAT_CAM.ahead, true, THROAT_CAM.raise); throatRaise = camDesired.y - y0; }
+  throatOn = deckK === 0 && (inCrack || (!fissureShut(zi) && fissureDist(camDesired.x, camDesired.z, zi) < 0));
+  if (!throatOn || throatZone !== czi) throatGood = false;
+  throatZone = czi;
+  if (throatOn) { const y0 = camDesired.y; throatLens(czi, camDesired, THROAT_CAM.margin, THROAT_CAM.clear, THROAT_CAM.ahead, true, THROAT_CAM.raise); throatRaise = camDesired.y - y0; }
   else throatRaise = 0;
   // the floor clamp the open crack stood aside (above), for a target the shaft left OUTSIDE the outline: out
   // there (over the apron, the lip heave, the ground past a tip) the floor is the ground again. (The shaft
   // only ever leaves a target outside when the run is open past the lip at its height: up at lip level.)
-  if (inCrack && fissureDist(camDesired.x, camDesired.z, zi) >= 0) camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, zi) + 1.2);
+  if (inCrack && fissureDist(camDesired.x, camDesired.z, czi) >= 0) camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, czi) + 1.2);
   {
     const w = 7.75, h = Math.min(dt, 0.05);   // the lens spring's own rate (stiff 60)
     throatAimV += (w * w * (throatRaise - throatAim) - 2 * w * throatAimV) * h; throatAim += throatAimV * h;
@@ -1842,20 +1848,20 @@ function updateCamera(dt, t, fwd) {
   if (throatOn) {
     _bp.copy(camera.position);
     throatLast.gx = camera.position.x; throatLast.gy = camera.position.y; throatLast.gz = camera.position.z;
-    throatLast.gr = throatLens(zi, _bp, THROAT_CAM.guard, THROAT_CAM.guardClear, 0, false, 0);
+    throatLast.gr = throatLens(czi, _bp, THROAT_CAM.guard, THROAT_CAM.guardClear, 0, false, 0);
     throatLast.bx = _bp.x; throatLast.by = _bp.y; throatLast.bz = _bp.z;
     if (throatLast.gr > 0) {
       // (IN the rock, or within a unit over the floor at its own column — the drawn ledge corners stand up
       // to ~0.9-1.4 u proud of the heightfield — it comes out on a stiffer spring, 45/s: still a spring)
-      const inRock = camera.position.y < shutFloorY(camera.position.x, camera.position.z, zi) + 1.0;
+      const inRock = camera.position.y < shutFloorY(camera.position.x, camera.position.z, czi) + 1.0;
       const step = Math.min(1, (inRock ? 45 : 30) * dt), mv = camera.position.distanceTo(_bp) * step;
       camera.position.lerp(_bp, step);
       camVel.lerp(player.vel, Math.min(1, 10 * dt));
       throatGuards++; if (inRock) { throatSnaps++; if (mv > throatLast.stiffMax) throatLast.stiffMax = mv; }
-    } else if (fissureDist(camera.position.x, camera.position.z, zi) >= 0) {
+    } else if (fissureDist(camera.position.x, camera.position.z, czi) >= 0) {
       // out past the lip (the march's scan ends 1.5 u past it), the ground is the floor again: a lens the
       // spring has carried within half a unit of it is lifted back to the floor clamp's 1.2, on the same 45/s
-      const fy = shutFloorY(camera.position.x, camera.position.z, zi);
+      const fy = shutFloorY(camera.position.x, camera.position.z, czi);
       if (camera.position.y < fy + 0.5) { camera.position.y += (fy + 1.2 - camera.position.y) * Math.min(1, 45 * dt); if (camVel.y < player.vel.y) camVel.y = player.vel.y; throatGuards++; throatSnaps++; }
     }
   }

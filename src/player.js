@@ -4,7 +4,7 @@ import { renderer } from './core.js';
 import { WORLD_R, SURFACE_Y, GLASS } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
 import { terrainH, terrainUnderH, terrainNormal, clampR, jamAt } from './world/terrain.js';
-import { FISSURE, fissureDist, inThroat, fissureLocal, fissureWorld, slabProbe, slabAt, _widths, openRunAt } from './world/fissureShape.js';
+import { FISSURE, fissureDist, inThroat, fissureLocal, fissureWorld, slabProbe, slabAt, _widths, openRunAt, fissureShut } from './world/fissureShape.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
@@ -979,6 +979,11 @@ export function updatePlayer(dt, t, zone, riftOpen) {
   }
 
   if (overRift) holdInShaft(zi, dt);
+  // (final residual fix) past the zone-change plane he is in the NEW zone (its crack elsewhere and shut), but
+  // zones 0/1 switch 10-16 u above the throat floor: the rest of the shaft he fell from is still round him
+  // until his chest is through its floor, and it holds him the same way (game.js's lens keys on it too)
+  else if (zi > 0 && !inCrack && !player.grounded && !fissureShut(zi - 1) && fissureDist(player.pos.x, player.pos.z, zi - 1) < 0
+    && player.pos.y - 0.5 > terrainH(player.pos.x, player.pos.z, zi - 1) - 1) holdInShaft(zi - 1, dt);
 
   // ---- THE BULWARK AND THE DECK GEAR ---------------------------------------------------
   // Held at the rail on all four sides while he is on the deck, with ONE gap: the

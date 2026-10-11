@@ -421,6 +421,9 @@ export async function descentLens(zi, o = {}) {
   // REPEATABLE: the ambient current that sets him sideways is fbm in (x, z, t) plus the wind; the
   // weather is pinned (day, no storm) and the clock set to the case's own t0 (o.t0, default 1000)
   window.weather.set(1, 0); clock.elapsedTime = o.t0 == null ? 1000 : o.t0;
+  // (as play: the crack is open because she was calmed THIS VISIT, so it stays open behind him past the zone
+  // switch; a bare setOpen is undone by enterZone's syncFissureRecord)
+  { const vis = window.__chart.visit(); vis[0] = vis[1] = vis[2] = 0; }
   window.gotoZone(zi); if (window.lev) window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
   const u0 = o.u == null ? -4 : o.u, every = o.every || 2;
   S.fissureWorld(u0, (S._halfWAt(F, u0, 1) - S._halfWAt(F, u0, 0)) / 2, zi, w);
@@ -446,7 +449,7 @@ export async function descentLens(zi, o = {}) {
   // the measure ends just above the zone-change plane (zones 0/1) or the ending's (zone 2: the
   // cinematic takes the lens there)
   const C = await import('/src/config.js'), trig = zi < 2 ? C.zoneBottom(zi) - C.ZONE_GAP * 0.55 : C.zoneBottom(2) - 70;
-  window.__fissure.setOpen(zi, 1);
+  window.__chart.visit()[zi] = 1; window.__fissure.setOpen(zi, 1);
   window.keys.KeyC = true;
   try {
     // (final residual fix) the WHOLE shaft: past the zone-change plane too (zones 0/1 switch 10-16 u above
@@ -520,6 +523,7 @@ export async function standLens(zi, o) {
   const cam = window.camera;
   window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.survival.fuel = 1; window.survival.oxygen = 1;
   window.weather.set(1, 0); clock.elapsedTime = o.t0 == null ? 2000 : o.t0;
+  { const vis = window.__chart.visit(); vis[0] = vis[1] = vis[2] = 0; vis[zi] = 1; }
   if (window.zone !== zi) window.gotoZone(zi);
   window.__fissure.setOpen(zi, 1); if (window.lev) window.lev.calmed = true;
   window.__bench.place(o.x, o.z, o.yaw, zi); window.player.pitch = o.pitch || 0;
