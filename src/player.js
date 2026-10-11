@@ -615,25 +615,25 @@ function holdInThroat(zi) {
 // test) the ambient current sets him sideways up to ~1 u/s, and the shaft narrows as it deepens (its
 // walls step in up to ~3 u a side inside the lip-level interval inThroat / holdInThroat use): on most
 // descents he sank 20-70 u inside the walls (fissure-probe fall-lens salIn, 1d68aa0). So every frame
-// he is over the open throat his v is held inside the shaft's open interval at his FEET, measured
-// SHAFT_AHEAD s of his fall lower (a ledge pushes him in before he reaches it; fissureShape.js
-// openRunAt, the march the follow lens shares), less his body (SHAFT_R): eased toward it over
-// SHAFT_EASE s, never nearer than SHAFT_HARD to the rock, only the into-wall velocity taken out,
-// moved only across the crack, never up (never onto a wall: throat-edges). Where the shaft has no open
-// water at that height (the throat floor: zone 2's ending plane lies ~5-10 u under it) nothing holds
-// him and he sinks on through, as before.
-const SHAFT_R = 0.6, SHAFT_HARD = 0.25, SHAFT_EASE = 0.15, SHAFT_AHEAD = 0.15, SHAFT_DU = 0.4;
-const _sr = { lo: 0, hi: 0, loOpen: false, hiOpen: false };
-function holdInShaft(zi, dt) {
-  fissureLocal(player.pos.x, player.pos.z, zi, _fl);
-  const u = _fl.u, v = _fl.v;
-  let y = player.pos.y - EYE_H - Math.max(0, -player.vel.y) * SHAFT_AHEAD;
-  // (just over the throat floor the look-ahead finds no water: his feet still decide)
-  if (!openRunAt(u, v, zi, y, terrainH, _sr)) { y = player.pos.y - EYE_H; if (!openRunAt(u, v, zi, y, terrainH, _sr)) return; }
-  const lo0 = _sr.lo, hi0 = _sr.hi, loOpen0 = _sr.loOpen, hiOpen0 = _sr.hiOpen;
+// he is over the open throat (or, past the zone-change plane, in the shaft he fell from) his v is
+// steered into the shaft's open interval SHAFT_AHEAD s of his fall below his feet (a ledge pushes him in
+// before he reaches it; fissureShape.js openRunAt, the march the follow lens shares), less his body
+// (SHAFT_R), and kept SHAFT_HARD off the rock at his feet: eased over SHAFT_EASE s and never faster
+// than SHAFT_V u/s, only the into-wall velocity taken out, moved only across the crack, never up
+// (never onto a wall: throat-edges). Where the shaft has no open water at his feet or below them (the
+// throat floor: zone 2's ending plane lies ~5-10 u under it) nothing holds him and he sinks through.
+const SHAFT_R = 0.6, SHAFT_HARD = 0.25, SHAFT_EASE = 0.15, SHAFT_AHEAD = 0.5, SHAFT_DU = 0.4, SHAFT_V = 12;
+// (final residual fix) EASED, never a teleport: the soft target is the run AHEAD of his fall (a ledge pushes
+// him in before he reaches it), the hard bound the run at his FEET (never out of the open water there), and
+// every move rides one speed limit, SHAFT_V u/s (0.2 u a frame at 60 fps). The hard clamp to the look-ahead
+// run used to snap him up to 2.75 u in a frame at a ledge, 3.8 u rising back into the shaft from under its floor.
+const _sr = { lo: 0, hi: 0, loOpen: false, hiOpen: false }, _rF = { lo: 0, hi: 0, loOpen: false, hiOpen: false }, _rA = { lo: 0, hi: 0, loOpen: false, hiOpen: false };
+// the open run at height y round station u (and SHAFT_DU either side: the lips jag), nearest v, into out
+function shaftRun(u, v, zi, y, out) {
+  if (!openRunAt(u, v, zi, y, terrainH, _sr)) return false;
+  const lo0 = _sr.lo, hi0 = _sr.hi, loOpen0 = _sr.loOpen, hiOpen0 = _sr.hiOpen, mid = (lo0 + hi0) * 0.5;
   let lo = lo0, hi = hi0, loOpen = loOpen0, hiOpen = hiOpen0;
-  const mid = (lo + hi) * 0.5;
-  for (let n = -1; n <= 1; n += 2) {   // the lips jag: the faces either side of his station too (a closed one is a tip: his own decides)
+  for (let n = -1; n <= 1; n += 2) {   // (a closed neighbour is a tip: his own station decides)
     if (!openRunAt(u + n * SHAFT_DU, mid, zi, y, terrainH, _sr)) continue;
     if (_sr.lo > lo) lo = _sr.lo;
     if (_sr.hi < hi) hi = _sr.hi;
@@ -641,25 +641,39 @@ function holdInShaft(zi, dt) {
   }
   // (just over the floor the slot can be narrower than the jag shifts it: no overlap, his station decides)
   if (lo > hi) { lo = lo0; hi = hi0; loOpen = loOpen0; hiOpen = hiOpen0; }
-  if (loOpen && hiOpen) return;
-  let a = loOpen ? -1e9 : lo + SHAFT_R, b = hiOpen ? 1e9 : hi - SHAFT_R;
-  if (a > b) a = b = (lo + hi) * 0.5;
-  const vt = clamp(v, a, b);
-  if (vt === v) return;
-  let vn = v + (vt - v) * Math.min(1, dt / SHAFT_EASE);
-  const ha = loOpen ? -1e9 : lo + SHAFT_HARD, hb = hiOpen ? 1e9 : hi - SHAFT_HARD;
-  vn = ha <= hb ? clamp(vn, ha, hb) : (lo + hi) * 0.5;
+  out.lo = lo; out.hi = hi; out.loOpen = loOpen; out.hiOpen = hiOpen;
+  return true;
+}
+function holdInShaft(zi, dt) {
+  fissureLocal(player.pos.x, player.pos.z, zi, _fl);
+  const u = _fl.u, v = _fl.v, yF = player.pos.y - EYE_H, yA = yF - Math.max(0, -player.vel.y) * SHAFT_AHEAD;
+  const hasF = shaftRun(u, v, zi, yF, _rF), hasA = yA < yF - 1e-3 && shaftRun(u, v, zi, yA, _rA);
+  if (!hasF && !hasA) return;   // under the throat floor: nothing holds him
+  const R = hasA ? _rA : _rF;
+  let a = R.loOpen ? -1e9 : R.lo + SHAFT_R, b = R.hiOpen ? 1e9 : R.hi - SHAFT_R;
+  if (a > b) a = b = (R.lo + R.hi) * 0.5;
+  let vt = clamp(v, a, b);
+  if (hasF) {
+    const ha = _rF.loOpen ? -1e9 : _rF.lo + SHAFT_HARD, hb = _rF.hiOpen ? 1e9 : _rF.hi - SHAFT_HARD;
+    vt = ha <= hb ? clamp(vt, ha, hb) : (_rF.lo + _rF.hi) * 0.5;
+  }
+  if (Math.abs(vt - v) < 1e-6) return;
+  const lim = SHAFT_V * dt, vn = v + clamp((vt - v) * Math.min(1, dt / SHAFT_EASE), -lim, lim);
   fissureWorld(u, vn, zi, _fw);
   const dx = _fw.x - player.pos.x, dz = _fw.z - player.pos.z, d = Math.hypot(dx, dz);
   if (d < 1e-6) return;
   const inward = (player.vel.x * dx + player.vel.z * dz) / d;
   if (inward < 0) { player.vel.x -= dx / d * inward; player.vel.z -= dz / d * inward; }
   player.pos.x = _fw.x; player.pos.z = _fw.z;
-  shaftHolds++;
+  shaftHolds++; if (d > shaftStepMax) shaftStepMax = d;
 }
+let shaftStepMax = 0;
 let shaftHolds = 0;
 export function shaftHoldCount() { return shaftHolds; }
-if (typeof window !== 'undefined') window.__shaftHolds = shaftHoldCount;   // dev: frames the shaft has held him
+if (typeof window !== 'undefined') {
+  window.__shaftHolds = shaftHoldCount;   // dev: frames the shaft has held him
+  window.__shaftStep = reset => { const m = shaftStepMax; if (reset) shaftStepMax = 0; return m; };   // dev: its largest one-frame move
+}
 
 export function updatePlayer(dt, t, zone, riftOpen) {
   const zi = zone < 0 ? 0 : zone;

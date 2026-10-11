@@ -450,6 +450,7 @@ export async function descentLens(zi, o = {}) {
   const fdt = o.dt || 1 / 60, cPrev = cam.position.clone(), pPrev = window.player.pos.clone();
   let relMax = 0, relAt = null, stepMax = 0;
   if (window.__throatCam) window.__throatCam.last.stiffMax = 0;
+  if (window.__shaftStep) window.__shaftStep(true);
   const perFrame = () => {
     if (o.yawRate) window.player.yaw += o.yawRate * fdt;
     const c = cam.position, p = window.player.pos;
@@ -527,7 +528,7 @@ export async function descentLens(zi, o = {}) {
   } finally { window.keys.KeyC = false; }
   return { zi, u: u0, yaw: +(o.yaw || 0).toFixed(3), pitch: o.pitch || 0, yawRate: o.yawRate || 0, tris: n, samples, endBelowLip: +(lip - window.player.pos.y).toFixed(1), trigBelowLip: +(lip - trig).toFixed(1), close, inside, hfIn, worstIn, zoneEnd: window.zone, near: cam.near, minD: +minD.toFixed(3), at,
     salIn, salInMax: +salInMax.toFixed(2), salAt, salFloor, salFloorAt, offAll, post: { n: postN, close: postClose, hfIn: postHf, salIn: postSal }, through,
-    dt: +fdt.toFixed(4), relMax: +relMax.toFixed(1), relAt, salStepMax: +stepMax.toFixed(3), guardStepMax: window.__throatCam ? +window.__throatCam.last.stiffMax.toFixed(3) : null, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
+    dt: +fdt.toFixed(4), relMax: +relMax.toFixed(1), relAt, salStepMax: +stepMax.toFixed(3), holdStepMax: window.__shaftStep ? +window.__shaftStep(false).toFixed(3) : null, guardStepMax: window.__throatCam ? +window.__throatCam.last.stiffMax.toFixed(3) : null, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
     guards: tc0 ? window.__throatCam.state().guards - tc0.guards : null, snaps: tc0 ? window.__throatCam.state().stiff - tc0.stiff : null, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
     boomMin: +boomMin.toFixed(2), boomMax: +boomMax.toFixed(2), fallV: +fallV.toFixed(1), lensBelowPivotMax: +lensBelowPivotMax.toFixed(2), shots: got };
 }
@@ -574,4 +575,37 @@ export async function standLens(zi, o) {
   }
   const pv = window.player.pos;
   return { zi, samples, close, hfIn, hfAt, minD: +minD.toFixed(3), hfMax: +hfMax.toFixed(2), fd: +S.fissureDist(pv.x, pv.z, zi).toFixed(2), grounded: window.player.grounded, boom: +cam.position.distanceTo(pv).toFixed(2) };
+}
+
+// ---- Sal rising back INTO the shaft from under its floor (final residual fix 3) -----------------------
+// riseShaft(zi, { u, dv, dt }): the crack open (as calmed this visit), Sal 6 u under the throat floor at
+// station u, dv off the slot's middle (beside it, under the wall), still; Space held 1.2 s (the burst),
+// then the dress carries him; 5 s measured every frame while he is inside the outline: his lateral step a
+// frame (|dx, dz|) and the shaft hold's own largest step. The hold's hard clamp used to snap him 2.4-3.8 u.
+export async function riseShaft(zi, o = {}) {
+  const F = S.FISSURE[zi], w = { x: 0, z: 0 }, u0 = o.u == null ? -4 : o.u, fdt = o.dt || 1 / 60;
+  window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.survival.fuel = 1; window.survival.oxygen = 1;
+  window.weather.set(1, 0); clock.elapsedTime = o.t0 == null ? 4000 : o.t0;
+  { const vis = window.__chart.visit(); vis[0] = vis[1] = vis[2] = 0; vis[zi] = 1; }
+  window.gotoZone(zi); window.__fissure.setOpen(zi, 1); if (window.lev) window.lev.calmed = true;
+  const mid = (S._halfWAt(F, u0, 1) - S._halfWAt(F, u0, 0)) / 2;
+  S.fissureWorld(u0, mid + (o.dv || 0), zi, w);
+  window.__bench.place(w.x, w.z, Math.atan2(F.dx, F.dz), zi);
+  window.player.pos.y = T.terrainH(w.x, w.z, zi) - 6; window.player.vel.set(0, 0, 0); window.player.grounded = false;
+  if (window.survival.reserveCap != null) window.survival.reserve = window.survival.reserveCap;
+  if (window.__shaftStep) window.__shaftStep(true);
+  const pPrev = window.player.pos.clone(); let stepMax = 0, n = 0, rose = 0;
+  const y0 = window.player.pos.y;
+  window.keys.Space = true;
+  try {
+    const frames = Math.round(5 / fdt);
+    for (let f = 0; f < frames; f++) {
+      if (f === Math.round(1.2 / fdt)) window.keys.Space = false;
+      window.__bench.step(1, null, { dt: fdt });
+      const p = window.player.pos;
+      if (S.fissureDist(p.x, p.z, zi) < 0) { const st = Math.hypot(p.x - pPrev.x, p.z - pPrev.z); if (st > stepMax) stepMax = st; n++; }
+      pPrev.copy(p); rose = Math.max(rose, p.y - y0);
+    }
+  } finally { window.keys.Space = false; }
+  return { zi, u: u0, dv: o.dv || 0, dt: +fdt.toFixed(4), frames: n, rose: +rose.toFixed(1), salStepMax: +stepMax.toFixed(3), holdStepMax: window.__shaftStep ? +window.__shaftStep(false).toFixed(3) : null };
 }
