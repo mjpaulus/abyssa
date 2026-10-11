@@ -209,31 +209,49 @@ if (mode === 'rite') {
     const gap = () => { let d = 1e9; for (let i = 8; i < A.pts.length; i += 4) d = Math.min(d, A.pts[i].distanceTo(P) - A.r0 * 1.2); return d; };
     window.__bladeLast = null; window.__slash();
     window.__bench.step(40, () => { if (!window.__bladeLast) dmin = gap(); });
-    return { grabbed, free: !window.lev.grab, line, ringGapAtCut: +dmin.toFixed(2) }; })()`);
+    const free = !window.lev.grab;
+    // THE REACH RULE (the arm's tip holds him, so the real cut is inside both blades' reach): re-grabbed, the
+    // cut is tried from a point the tested rings are 4 u (past their girth) from — the knife's 3 must not
+    // free him, the harpoon's 5.1 must
+    let rule = null;
+    if (free) {
+      L.grab = { arm: L.arms.indexOf(A), t: 0 }; A.recoil = 0;
+      const q = P.clone(); let k = 0;
+      const gapAt = p => { let d = 1e9; for (let i = 8; i < A.pts.length; i += 4) d = Math.min(d, A.pts[i].distanceTo(p) - A.r0 * 1.2); return d; };
+      while (k < 30 && gapAt(q) < 4.0) { k += 0.05; q.copy(P); q.y += k; }
+      const f = new (P.constructor)(0, 0, 1);
+      L.onSlash(q, f, 3.4 - 0.4); const knifeFreed = !L.grab;
+      if (!knifeFreed) L.onSlash(q, f, 5.5 - 0.4);
+      rule = { gap: +gapAt(q).toFixed(2), knifeFreed, harpoonFreed: !knifeFreed && !L.grab };
+      L.grab = null;
+    }
+    return { grabbed, free, line, ringGapAtCut: +dmin.toFixed(2), rule }; })()`);
   console.log('orune', JSON.stringify(r));
   if (!r.grabbed) fail.push('no grab happened in 15 s'); else {
     if (!r.free) fail.push('one thrust did not free him');
+    if (!r.rule || r.rule.knifeFreed || !r.rule.harpoonFreed) fail.push('the reach rule (4 u off the arm: knife no, harpoon yes): ' + JSON.stringify(r.rule));
     if (r.line !== 'IT HAS YOU. CUT IT — CLICK TO THRUST.') fail.push('grab line: ' + r.line);
   }
 } else if (mode === 'shark-thrust') {
-  // (Task 7) one owned thrust aborts a zone-0 shark's strike from >= 4.5 u off its flank (centre 8 u ahead: the knife's
+  // (Task 7) one owned thrust aborts a zone-0 shark's strike from >= 4.5 u off its flank (centre 8.3 u ahead: the knife's
   // 3.4 + half its 6.6 length = 6.7 does not reach; the harpoon's 5.5 + 3.3 = 8.8 does). The knife at the same spot
   // is the control: the strike goes on. The shark is held on its spot through the swing.
   await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
   await alt(c, 3);
   const SH = own => `(() => { window.__helm = true; window.survival.hasHarpoon = ${own}; window.__bench.step(40);
-    const S = window.pred.sharks.find(s => s.cfg.zi === 0), P = window.player, y = P.yaw, D = 8.0;
+    const S = window.pred.sharks.find(s => s.cfg.zi === 0), P = window.player, y = P.yaw, D = 8.3;
     const hold = () => { S.pos.set(P.pos.x + Math.sin(y) * D, P.pos.y + 0.5, P.pos.z + Math.cos(y) * D); };
     S.state = 'strike'; S.tState = 0; S.bit = false; S.cool = 0; S.blinded = 0; S.arousal = 1.2; hold();
-    window.__slash(); let at = -1, st = null;
-    window.__bench.step(26, i => { if (S.state === 'strike') hold(); if (at < 0 && S.state !== 'strike') { at = i; st = S.state; } });
-    const gap = +(Math.hypot(S.pos.x - P.pos.x, S.pos.z - P.pos.z) - S.cfg.size * 0.5).toFixed(2);
+    window.__slash(); let at = -1, st = null, gap = null;
+    // the gap off its flank is read on the frame the strike breaks off (after that it carries on past him)
+    window.__bench.step(26, i => { if (S.state === 'strike') hold(); if (at < 0 && S.state !== 'strike') { at = i; st = S.state; gap = +(S.pos.distanceTo(P.pos) - S.cfg.size * 0.5).toFixed(2); } });
+    if (gap === null) gap = +(S.pos.distanceTo(P.pos) - S.cfg.size * 0.5).toFixed(2);
     const out = { own: ${own}, state: S.state, at, st, bit: S.bit, blinded: +S.blinded.toFixed(2), gap };
     S.state = 'patrol'; S.tState = 0; S.cool = 60; S.arousal = 0; S.pos.set(P.pos.x + 60, P.pos.y + 10, P.pos.z);
     window.__bench.step(60); return out; })()`;
   const k = await c.ev(SH(false)), h = await c.ev(SH(true));
   console.log('shark', JSON.stringify(k), JSON.stringify(h));
-  if (k.state !== 'strike') fail.push('the knife (control) aborted the strike from 8 u: ' + JSON.stringify(k));
+  if (k.state !== 'strike') fail.push('the knife (control) aborted the strike from 8.3 u: ' + JSON.stringify(k));
   if (h.st !== 'flee' || !h.bit) fail.push('the harpoon did not abort the strike: ' + JSON.stringify(h));
   if (!(h.gap >= 4.5)) fail.push('the strike was not aborted from >= 4.5 u off its flank: ' + h.gap);
 } else if (mode !== 'routes') fail.push('unknown mode ' + mode);
