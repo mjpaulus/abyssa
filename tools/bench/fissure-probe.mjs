@@ -9,7 +9,7 @@ process.env.DRV_PORT = process.env.DRV_PORT || '9481';
 const { mkdtempSync, rmSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
 process.env.DRV_DIR = mkdtempSync(tmpdir() + '/abyssa-fissure-probe-');
 const { start, stop, connect, sleep } = await import('./drv.mjs');
-await start(`http://localhost:${port}/?bench&playtest`);
+await start(`http://localhost:${port}/?bench&playtest${['below-dark', 'ending'].includes(mode) ? '&lab' : ''}`);   // (&lab: the pinned lens, __camPin)
 process.on('exit', () => { stop(); try { rmSync(process.env.DRV_DIR, { recursive: true, force: true }); } catch (e) { } });   // a throwing probe must not leave its Chrome on the port
 const c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__fissure`, 240000, 1000);
@@ -770,6 +770,45 @@ if (mode === 'shape') {
     if (z.hidden < 100) fail.push(`zone ${z.zi}: only ${z.hidden} blocks hid`);
     if (z.worstTopOverFloor > 0) fail.push(`zone ${z.zi}: a block hid ${z.worstTopOverFloor} u above the floor over it ` + JSON.stringify(z.worstAt));
     if (z.siltLastAboveFloor > 0.05) fail.push(`zone ${z.zi}: the silt hid with a part ${z.siltLastAboveFloor} u above the floor`);
+  }
+  console.log(JSON.stringify(r));
+} else if (mode === 'below-dark') {
+  // FROM BELOW NOTHING (review I1 + I2): from the zone under each crack (where the descent lands and
+  // the ending rises), 40 u under its deepest throat floor, looking up at it: the open light adds
+  // nothing to the frame (A/B: the light on against its gain zeroed, post bypassed so the frame is
+  // the scene's own), and the roof shell hangs no blades into the view (frames kept).
+  const fs = await import('node:fs');
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), P = await import('/src/postfx.js');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    P.setPostBypass(true);
+    const out = [], K = window.__rifts.K;
+    for (const zi of [0, 1, 2]) {
+      const vis = window.__chart.visit(); vis[0] = vis[1] = vis[2] = 1;
+      window.gotoZone(Math.min(2, zi + 1)); window.__fissure.setOpen(zi, 1);
+      const F = S.FISSURE[zi], fl = window.__rifts.state(zi).floorMin, o = { x: 0, z: 0 };
+      S.fissureWorld(0, 0, zi, o);
+      const Pp = [o.x + F.dz * 6, fl - 40, o.z - F.dx * 6], L = [o.x, fl + 20, o.z];
+      window.__camPin = { p: Pp, t: L, pos: Pp, look: L };
+      const k0 = K[zi], shot = async () => { const cap = await window.__bench.capture({ frames: 12 }); return cap; };
+      window.__bench.step(30);
+      // A/B (on, off) against an A/A pair (on, on): the frame is not bit-stable (drifting particles)
+      const on = await shot(), on2 = await shot(); K[zi] = 0; const off = await shot(); K[zi] = k0;
+      const cmp = (A, B) => { let sum = 0, big = 0; const n = A.px.length / 4;
+        for (let i = 0; i < A.px.length; i += 4) { const d = Math.abs(A.px[i] - B.px[i]) + Math.abs(A.px[i + 1] - B.px[i + 1]) + Math.abs(A.px[i + 2] - B.px[i + 2]); sum += d; if (d > 12) big++; }
+        return { mean: +(sum / n).toFixed(3), bigPct: +(100 * big / n).toFixed(3) }; };
+      // and the discriminator: the same A/B with the gate forced open must show the light
+      window.__rifts.tune.noGate = true; window.__bench.step(2); const ng = await shot(); window.__rifts.tune.noGate = false; window.__bench.step(2);
+      out.push({ zi, camY: +Pp[1].toFixed(1), floorMin: +fl.toFixed(1), gate: window.__rifts.state(zi).gate, light: window.__rifts.state(zi).light, ab: cmp(on2, off), aa: cmp(on, on2), noGate: cmp(ng, off), url: window.__bench.png(on, 0.6) });
+    }
+    window.__camPin = null; P.setPostBypass(false);
+    return out; })()`);
+  for (const z of r) {
+    fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t4f-below-z${z.zi}.png`, Buffer.from(z.url.split(',')[1], 'base64')); delete z.url;
+    if (z.light !== 1) fail.push(`crack ${z.zi}: not open for the check`);
+    if (z.gate !== 0) fail.push(`crack ${z.zi}: the light's gate is open from below ${z.gate}`);
+    if (!(z.noGate.mean > z.aa.mean * 3 + 0.05)) fail.push(`crack ${z.zi}: the check does not discriminate (gate forced open shows nothing) ` + JSON.stringify(z));
+    if (z.ab.mean > z.aa.mean * 1.5 + 0.02 || z.ab.bigPct > z.aa.bigPct * 1.5 + 0.01) fail.push(`crack ${z.zi}: the light shows from below ` + JSON.stringify(z));
   }
   console.log(JSON.stringify(r));
 } else fail.push(`unknown mode ${mode}`);

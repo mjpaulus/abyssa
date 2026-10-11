@@ -60,11 +60,12 @@ const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
 // per site (index = site.js row), per zone: a multiplier on COLS so the light lands the same cold
 // pale blue-white in that anchorage's own water and grade (calibrated: open-minus-shut mean colour
 // over the light's pixels against home's; fissure.js leans the seep with it)
+// target on screen R:G:B = 0.80 : 0.91 : 1.0 (cold pale blue-white), luma kept
 export const SITE_LEAN = [
-  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
-  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
-  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
-  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+  [[0.867, 1.042, 1.136], [0.996, 0.983, 1.103], [1.117, 0.956, 0.918]],   // home
+  [[0.916, 1.026, 1.092], [0.980, 0.998, 1.064], [1.080, 0.959, 1.002]],   // Pallid Bank
+  [[0.961, 1.013, 1.036], [1.028, 0.986, 1.001], [1.110, 0.960, 0.916]],   // the Burned Ground
+  [[0.907, 1.034, 1.071], [1.001, 0.983, 1.089], [1.111, 0.964, 0.894]],   // the Unsounded Shelf
 ];
 export function siteLean(zi, out) {
   const L = (SITE_LEAN[currentSiteIndex()] || SITE_LEAN[0])[zi];
@@ -74,7 +75,7 @@ const BREATH = 7.5;                      // s
 const K0 = 0.545;                        // k at which the seep's last breath is gone (fissure.js: T = COLLAPSE)
 // per zone gain (dev: __rifts.K), and the parts' shares (dev: __rifts.tune)
 const LIGHT_K = [1.7, 1, 0.8];
-const TUNE = { curtain: 0.16, endOn: 0.05, wall: 0.85, drift: 0.85, halo: 0.16, surf: 0.14, surfH: 22 };
+const TUNE = { curtain: 0.16, endOn: 0.05, wall: 0.85, drift: 0.85, halo: 0.16, surf: 0.14, surfH: 22, noGate: false };
 const SURF_MAX = 0.16;                   // the surface glow's alpha never passes this
 const N_DRIFT = 320;
 const ST_DU = 1.2, NB = 9, LEV = 12, LEV_UP = 6;  // curtain: station spacing (u), blobs per station, measured levels (floor .. lip + LEV_UP, closer near the top: f = 1 - (1 - l/11)^2)
@@ -470,7 +471,7 @@ export function updateRifts(dt, t, openK) {
   for (let zi = 0; zi < rifts.length; zi++) {
     const R = rifts[zi], o = c01((openK[zi] - K0) / (1 - K0)), L = o * o * (3 - 2 * o);
     // from below nothing: it fades as the camera goes under this zone's deepest throat floor
-    const gate = c01((camY - (R.floorMin - GATE)) / GATE);
+    const gate = TUNE.noGate ? 1 : c01((camY - (R.floorMin - GATE)) / GATE);   // (noGate: dev A/B only)
     R.light = L; R.gate = gate;
     const see = L * gate > 0.003 && terrainMeshes[zi].visible;
     R.grp.visible = see; R.wall.visible = see;
