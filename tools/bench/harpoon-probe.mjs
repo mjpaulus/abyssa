@@ -1,5 +1,5 @@
 // THE HARPOON probe (fissure-and-harpoon Task 6; spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md §2).
-//   node tools/bench/harpoon-probe.mjs <routes|rite|remote|lodged|abort|thrust-contact|orune-cut|shark-thrust> <port>      (serve.py must already serve <port>)
+//   node tools/bench/harpoon-probe.mjs <routes|rite|remote|lodged|abort|thrust-contact|orune-cut|orune-parry|shark-thrust> <port>      (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9485). A FRESH PROFILE per run (the chart save remembers
 // pulled[site] and tools.harpoon), shared across the rite's own reload.
 //   routes: at all four anchorages (Home, Pallid, Burned, the Unsounded Shelf), Alt+6 stands Sal at
@@ -173,10 +173,14 @@ if (mode === 'rite') {
   if (JSON.stringify(r0.pulled) !== '[1,1,0,0]') fail.push('pulled after home: ' + JSON.stringify(r0.pulled));
 } else if (mode === 'thrust-contact') {
   // (Task 7) the blade's timing and reach at the contact frame: not owned, the knife (0.22 s = 13 frames, 3.4 u);
-  // owned, the harpoon (0.30 s = 18 frames, 5.5 u). And no first-sight compile: the shader program count is the
-  // same before the grant and after the first thrust has drawn (the prop is built and warmed in the boot).
+  // owned, the harpoon (0.30 s = 18 frames, 5.5 u). And no first-sight compile (fix round 1: the count is read
+  // BEFORE the first grant ever on this fresh profile — the iron has never been shown — and again after the
+  // grant, the first thrust and a settle; a control then shows an unwarmed material DOES move the count, so
+  // the check can fail).
   await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
   await alt(c, 3);
+  const pre = await c.ev(`(() => { window.__helm = true; window.__bench.step(60, null, { render: true }); return { owned: !!window.survival.hasHarpoon, p0: window.__programs() }; })()`);
+  if (pre.owned) fail.push('the fresh profile already owns the harpoon: the first-sight check would be vacuous');
   const r = await c.ev(`(async () => { window.__helm = true; window.__bench.step(30, null, { render: true });
     const t = [];
     for (const own of [false, true]) { window.survival.hasHarpoon = own; window.__bench.step(40, null, { render: true }); window.__slash();
@@ -188,12 +192,16 @@ if (mode === 'rite') {
   const [k, h] = r;
   if (Math.abs(k.contactFrames - 13) > 1 || k.reach !== 3.4) fail.push('knife changed ' + JSON.stringify(k));
   if (Math.abs(h.contactFrames - 18) > 1 || h.reach !== 5.5) fail.push('harpoon timing/reach ' + JSON.stringify(h));
-  // the compile check: a FRESH grant + thrust + settle, programs counted around it
-  const pc = await c.ev(`(() => { window.survival.hasHarpoon = false; window.__bench.step(10, null, { render: true }); const p0 = window.__programs();
-    window.survival.hasHarpoon = true; window.__bench.step(10, null, { render: true }); window.__slash(); window.__bench.step(70, null, { render: true });
-    return { p0, p1: window.__programs() }; })()`);
-  console.log('programs', JSON.stringify(pc));
-  if (pc.p1 !== pc.p0) fail.push('the blade compiled on first sight: programs ' + pc.p0 + ' -> ' + pc.p1);
+  const p1 = await c.ev(`(window.__bench.step(30, null, { render: true }), window.__programs())`);
+  // the control: a material no one warmed, hung where the iron is, must add a program
+  const ctl = await c.ev(`(async () => { const T = await import('three'), D = await import('/src/entities/diver.js');
+    const m = new T.Mesh(new T.BoxGeometry(0.2, 0.2, 0.2), new T.MeshStandardMaterial({ color: 0x884422, roughness: 0.31 }));
+    m.material.customProgramCacheKey = () => 'probe-unwarmed-' + Math.random(); D.diver.harpoon.add(m);
+    const a = window.__programs(); window.__bench.step(3, null, { render: true }); const b = window.__programs();
+    D.diver.harpoon.remove(m); m.geometry.dispose(); m.material.dispose(); return { a, b }; })()`);
+  console.log('programs', JSON.stringify({ beforeGrant: pre.p0, afterFirstThrust: p1, control: ctl }));
+  if (p1 !== pre.p0) fail.push('the blade compiled on first sight: programs ' + pre.p0 + ' -> ' + p1);
+  if (!(ctl.b > ctl.a)) fail.push('the compile check is blind: an unwarmed material did not move the count ' + JSON.stringify(ctl));
 } else if (mode === 'orune-cut') {
   // (Task 7) grabbed by Orune: one owned thrust frees him, and the grab line says THRUST. Logs how far the holding
   // arm's tested rings are from him at the cut (if they are inside the knife's 3 u the case cannot tell the blades apart).
@@ -254,6 +262,50 @@ if (mode === 'rite') {
   if (k.state !== 'strike') fail.push('the knife (control) aborted the strike from 8.3 u: ' + JSON.stringify(k));
   if (h.st !== 'flee' || !h.bit) fail.push('the harpoon did not abort the strike: ' + JSON.stringify(h));
   if (!(h.gap >= 4.5)) fail.push('the strike was not aborted from >= 4.5 u off its flank: ' + h.gap);
+} else if (mode === 'orune-parry') {
+  // (fix round 1, ruled) ORUNE, FROM FURTHER OUT: an arm REACHING for him (a lash thrown at him, not yet holding)
+  // whose tip is inside the blade's full reach, in front of him, is PARRIED. Caught where it crosses ~5 u off him:
+  // the contact frame's own call (lev.onSlash with game.js's knife / harpoon arguments) leaves it coming with the
+  // knife (3.4) and parries it with the harpoon (5.5) — no grab follows. Then the real input path end to end: owned,
+  // a click as a throw begins (the tell over), facing the arm: the iron is out as it arrives (contact + the held-out
+  // guard) and the throw is parried before it can close on him.
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  const r = await c.ev(`(async () => { const PL = await import('/src/player.js');
+    window.__helm = true; window.survival.hasHarpoon = true; window.survival.hasSonar = true;
+    window.dispatchEvent(new KeyboardEvent('keydown',{code:'Digit7',key:'7',altKey:true,bubbles:true})); window.__helm = true; window.__bench.step(60);
+    window.lev.cmd('wake'); const L = window.lev, P = window.player;
+    const face = A => { const dx = A.tip.x - P.pos.x, dy = A.tip.y - P.pos.y, dz = A.tip.z - P.pos.z; P.yaw = Math.atan2(dx, dz); P.pitch = Math.atan2(dy, Math.hypot(dx, dz)); };
+    const prev = L.arms.map(() => 1e9); let caught = null;
+    window.__bench.step(1800, () => { if (L.grab) { L.grab = null; for (const A of L.arms) { A.lash = 0; A.recoil = 1; } return; }
+      for (let a = 0; a < L.arms.length; a++) { const A = L.arms[a], d = A.tip.distanceTo(P.pos);
+        if (A.lash > 0 && A.recoil < 0.4 && d < 5.0 && d > 3.8 && d < prev[a] - 0.01) { caught = { a, d }; return false; }
+        prev[a] = d; } });
+    if (!caught) return { caught };
+    const A = L.arms[caught.a]; face(A);
+    const before = { lash: A.lash, recoil: A.recoil };
+    L.onSlash(P.pos, PL.forwardVec(), 3.4 - 0.4, 3.4); const knifeParried = A.lash === 0 && A.recoil === 1;
+    L.onSlash(P.pos, PL.forwardVec(), 5.5 - 0.4, 5.5); const harpoonParried = A.lash === 0 && A.recoil === 1;
+    let grabbedAfter = false; window.__bench.step(90, () => { if (L.grab && L.grab.arm === caught.a) grabbedAfter = true; });
+    // end to end: the next throw at him, a real click as it starts (contact 0.30 s later), facing that arm
+    let live = null; const prev2 = L.arms.map(() => 1e9); L.parried = 0; let grabbed2 = false;
+    window.__bench.step(2400, () => { if (L.grab) { grabbed2 = true; return false; }
+      for (let a = 0; a < L.arms.length; a++) { const B = L.arms[a], d = B.tip.distanceTo(P.pos);
+        // the throw begins (the tell is over: the tip turns back toward him from its coil, far out)
+        if (!live && B.lash > 0 && B.recoil < 0.4 && d > 12 && d < prev2[a] - 0.02) { live = { a, d: +d.toFixed(2) }; face(B); window.__slash(); }
+        if (live && live.a === a) face(B);
+        prev2[a] = d; }
+      if (live && L.parried > 0) return false; });
+    return { caught: { a: caught.a, d: +caught.d.toFixed(2) }, before, knifeParried, harpoonParried, grabbedAfter, live, liveParried: L.parried || 0, grabbed2 };
+  })()`);
+  console.log('parry', JSON.stringify(r));
+  if (!r.caught) fail.push('no arm was caught reaching for him inside 5 u');
+  else {
+    if (r.knifeParried) fail.push('the knife parried an arm 5 u out: ' + JSON.stringify(r));
+    if (!r.harpoonParried) fail.push('the harpoon did not parry an arm 5 u out: ' + JSON.stringify(r));
+    if (r.grabbedAfter) fail.push('the parried arm grabbed him anyway');
+    if (!r.live) fail.push('no throw came for the real-input check');
+    else if (!r.liveParried) fail.push('the real click did not parry the throw: ' + JSON.stringify(r));
+  }
 } else if (mode !== 'routes') fail.push('unknown mode ' + mode);
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));

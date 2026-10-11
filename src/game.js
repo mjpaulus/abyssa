@@ -600,6 +600,9 @@ const BLADE = {
   harpoon: { kind: 'harpoon', contact: 0.30, reach: 5.5, cd: 0.9, power: 1.8 }
 };
 let bladeAt = -1e9;
+// (fix round 1, ruled) THE IRON HELD OUT is a guard: after the harpoon's contact the point stays out (diver.js
+// THK holds it to ~0.56 s), and an Orune arm thrown onto it in that time is parried as at the contact frame
+let bladeGuard = 0;
 const _tipV = new THREE.Vector3();
 let pendingSlash = 0, pendingBlade = BLADE.knife;
 // the last blow's contact, for probes: ONE reused object (set on the contact frame, never allocated in play)
@@ -2573,6 +2576,7 @@ function update(dt, t) {
       if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), B.reach - 0.4, B.reach);
       bladeLast.t = clock.elapsedTime; bladeLast.reach = B.reach; bladeLast.kind = B.kind; window.__bladeLast = bladeLast;
       if (B.power > 1) {
+        bladeGuard = 0.26;
         // (fix round 1, ruled) the thrust READS from the follow lens: a centimetre punch of the lens along the
         // look (an event, the grounded-camera rule), and silt off the iron's point when it is near the bed
         // (diver.js spits bubbles off it at the same beat)
@@ -2586,6 +2590,9 @@ function update(dt, t) {
         if (kill.killed === 'squid') showMsg('THE SHOAL SCATTERS — IT DROPPED SOMETHING', 3);
       }
     }
+  } else if (bladeGuard > 0) {
+    bladeGuard -= dt;
+    if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), pendingBlade.reach - 0.4, pendingBlade.reach, true);
   }
 
   // wrecks + relic tools

@@ -14,8 +14,11 @@ const c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench`, 240000, 1000);
 await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
 await sleep(30000);
+// (fix round 1) programs read here, BEFORE the first grant ever on this fresh profile (asserted not owned)
 const base = await c.ev(`(async () => { const C = await import('/src/core.js'); let lights = 0; C.scene.traverse(o => { if (o.isLight) lights++; });
-  return { lights, fp: [0, 1, 2].map(i => window.__lev.fp(i)), home: window.__ridge.fp([0]), all: window.__ridge.fp(), z12: window.__ridge.fp([1, 2]) }; })()`);
+  const owned = !!window.survival.hasHarpoon, programs = C.renderer.info.programs.length;
+  return { lights, fp: [0, 1, 2].map(i => window.__lev.fp(i)), home: window.__ridge.fp([0]), all: window.__ridge.fp(), z12: window.__ridge.fp([1, 2]), owned, programs }; })()`);
+if (base.owned) console.log('WARN the fresh profile owns the harpoon: the first-sight check is vacuous');
 console.log('base', JSON.stringify(base));
 const stops = [];
 for (let k = 0; k < 6; k++) {
@@ -27,6 +30,7 @@ for (let k = 0; k < 6; k++) {
     return { site: window.__chart.site(), fp0: window.__ridge.fp([0]), fpAll: window.__ridge.fp(), programs: C.renderer.info.programs.length, geos: m.geometries, tex: m.textures, lights, blade: window.__bladeLast && window.__bladeLast.kind }; })()`);
   stops.push(r); console.log('stop', JSON.stringify(r));
 }
+console.log('first-sight', stops.length ? (stops[0].programs === base.programs ? 'OK' : 'COMPILED') : '?', base.programs, '->', stops.map(x => x.programs).join(' '));
 const tail = await c.ev(`({ fp: [0, 1, 2].map(i => window.__lev.fp(i)), safe: window.__safeFailed(), shader: window.__shaderFailed ? window.__shaderFailed() : 'n/a' })`);
 console.log('tail', JSON.stringify(tail));
 const cons = await c.console();

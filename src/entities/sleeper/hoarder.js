@@ -525,7 +525,9 @@ export function makeHoarder(idx, cfg) {
   // him PARRIES it: the arm recoils (no grab while it does) and the lash is spent. The knife's reach is a
   // last-instant cut (her grab closes at hGrabR 3.2); the harpoon catches the throw early. Held, the cut
   // frees him in one hit with either blade (unchanged).
-  L.onSlash = (pos, fwd, reach = 3, tipReach = reach + 0.4) => {
+  // guard: the harpoon's point held out after its contact (game.js bladeGuard) — it parries, it does not cut
+  L.onSlash = (pos, fwd, reach = 3, tipReach = reach + 0.4, guard = false) => {
+    if (guard && L.grab) return;
     if (!L.grab) {
       let parried = 0;
       for (let a = 0; a < L.arms.length; a++) {
