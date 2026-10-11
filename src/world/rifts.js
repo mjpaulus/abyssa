@@ -404,7 +404,7 @@ const HALO_FS = `
     // its own fade with range (fog off), and never past the cap; gone edge-on (a grazing view of a
     // flat glow is a hard band across the crack)
     vec3 tc = cameraPosition - vW; float dd = length(tc);
-    a = min( a * clamp( 1.0 - dd / uFar, 0.0, 1.0 ) * smoothstep( 0.18, 0.55, abs( tc.y ) / max( dd, 1e-3 ) ) * smoothstep( 4.0, 18.0, dd ), uMax );   // (and thinning as you come into it)
+    a = min( a * clamp( 1.0 - dd / uFar, 0.0, 1.0 ) * smoothstep( 0.18, 0.55, abs( tc.y ) / max( dd, 1e-3 ) ) * smoothstep( 10.0, 36.0, dd ), uMax );   // (gone as you come into it: over the lip it was a milky fill across the screen)
     if ( a <= 0.001 ) discard;
     gl_FragColor = vec4( uColor, a );
   }`;
