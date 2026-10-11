@@ -5,18 +5,27 @@
 // the fissure patch's own triangles inside the lip (b511877 and before), so the same probe gives the
 // RED there and the GREEN after.
 //   bound(zi)  - the DRAWN crack surfaces against the heightfield Sal stands on (terrainUnderH): a
-//                signed distance per sample, + = the drawn rock stands out in the water (lens and
-//                body could sit inside it), - = the drawn rock lies back inside the collision rock.
-//                Measured as the nearer of the vertical gap and the horizontal gap across the crack
-//                (on a 15:1 face a vertical error means nothing); every vertex and every centroid.
+//                signed 3-D distance per sample (every ~9th triangle: its centroid and a corner),
+//                + = the drawn rock stands out in the water (lens, body), - = it lies back inside the
+//                collision rock. Size: the nearest surface point on twelve horizontal bearings out to
+//                2.5 u (a ground point at sqrt(d^2 + gap^2), or a riser crossing the point's height);
+//                sign: the vertical gap's.
 //   rays(zi)   - rays from the throat's axis to both walls (several depths, along the crack, three
-//                elevations): the drawn hit (THREE.Raycaster on every drawn crack mesh) against the
-//                heightfield hit (a CPU march). A drawn miss where the heightfield is hit = a gap you
-//                see water through; the hit distances bound what the lens sees.
-//   look(zi)   - settled frames from inside the throat looking up along it (open): the FACET energy
-//                of a view-space normal pass of the drawn crack meshes (the teeth: sawtooth facets
-//                flip the normal every half unit), and the settled full chain's luminance band-pass
-//                energy along the wall's vertical axis (the detail kept; and the chevrons' signature).
+//                elevations x three bearings): the drawn hit (THREE.Raycaster on every drawn crack mesh)
+//                against the heightfield hit (a CPU march). A drawn miss = a gap; drawn rock > 0.3 u in
+//                front of the heightfield's = protrusion. Grazes of a lip and overhang-slab faces aside.
+//   look(zi)   - a settled frame from inside the throat looking up along it (open):
+//                STREAK (geometry: a view-space normal pass): the normals' change across the wall's
+//                  vertical axis over their change along it. The old grid's vertical slivers: 6-8;
+//                  the throat walls: 2.0-2.5.
+//                LINES and LINE SHARE (the settled full chain: what the shader draws): the fine band of
+//                  the luminance (less its 9 px mean) that runs in coherent lines, against the mean
+//                  luminance, and its share of the fine band. Rock grit points every way; stretched
+//                  2-D noise drew fine wavy lines that close into eyes (wood grain, agate: fix round 1).
+//                Also reported: local contrast (detail kept), facet energy, contour turn / tilt / spread.
+//   fallLens(zi) - the REAL follow camera while Sal sinks through the open throat (C held), every 3rd
+//                frame: the lens's nearest distance to any drawn crack triangle (the patch, the walls,
+//                the slabs) against the camera's near plane.
 const S = await import('/src/world/fissureShape.js');
 const T = await import('/src/world/terrain.js');
 const THREE = await import('three');
@@ -205,8 +214,8 @@ export async function look(zi, o = {}) {
   }
   // the streaks: the normal pass's change ACROSS the wall's vertical axis (tangential) against ALONG
   // it (radial, toward the zenith's vanishing point), 2 px each way. A heightfield grid on a 30 u
-  // riser draws long vertical slivers: the normal changes across them, hardly along them (stretched,
-  // ratio > 1); layered rock changes most along the vertical (beds, ledges, ratio < 1).
+  // riser draws long vertical slivers: the normal changes across them, hardly along them (6-8);
+  // layered rock changes much more along the vertical (beds, ledges: 2.0-2.5 measured).
   const vpN = new THREE.Vector3(camera.position.x, camera.position.y + 1e4, camera.position.z).project(camera);
   const nvx = (vpN.x * 0.5 + 0.5) * W, nvy = (vpN.y * 0.5 + 0.5) * H;
   const nb = (x, y, ch) => { const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0, i = (y0 * W + x0) * 4 + ch;
@@ -246,11 +255,144 @@ export async function look(zi, o = {}) {
     ea += Math.abs(bil(x - sy, y + sx) - 2 * c + bil(x + sy, y - sx)) / m;        // across it
     lc += Math.abs(c - m + 2) / m; mean += c; en++;
   }
+  // THE CONTOURS (fix round 1): the settled frame's own grain. Bedding seen from inside runs level,
+  // so the luminance gradient on the rock points up and down the wall (along the radial axis to the
+  // zenith's vanishing point); 2-D noise stretched into bands draws wandering, closing contours
+  // (wood grain, agate eyes) whose gradient turns every way. Luminance smoothed (two 3 px boxes),
+  // Sobel; per 24 px block of rock, the gradient's doubled angle to the radial axis, weighted by its
+  // energy: ALIGN = sum(gr^2 - gt^2) / sum(gr^2 + gt^2) (1: level bands, 0: no preferred way, -1:
+  // vertical), and COHERENCE = |sum of the doubled-angle vectors| / energy. Reported: alignment and
+  // coherence medians over the blocks, and WANDER = the share of energetic blocks whose alignment
+  // is under 0.2 (their grain runs any way but level).
+  const sm = new Float32Array(W * H), sm2 = new Float32Array(W * H);
+  const box3 = (src, dst) => { for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { let t = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) t += src[(y + dy) * W + x + dx]; dst[y * W + x] = t / 9; } };
+  box3(L, sm); box3(sm, sm2);
+  const BS = 24, blocks = [];
+  for (let by = 4; by + BS < H - 4; by += BS) for (let bx = 4; bx + BS < W - 4; bx += BS) {
+    let e = 0, c2 = 0, s2 = 0, n = 0;
+    for (let y = by; y < by + BS; y++) for (let x = bx; x < bx + BS; x++) {
+      const i = y * W + x; if (!cov(i)) continue; n++;
+      const gx = (sm2[i - W + 1] + 2 * sm2[i + 1] + sm2[i + W + 1]) - (sm2[i - W - 1] + 2 * sm2[i - 1] + sm2[i + W - 1]);
+      const gy = (sm2[i + W - 1] + 2 * sm2[i + W] + sm2[i + W + 1]) - (sm2[i - W - 1] + 2 * sm2[i - W] + sm2[i - W + 1]);
+      let ax = vx - x, ay = vy - y; const al = Math.hypot(ax, ay) || 1; ax /= al; ay /= al;
+      const gr = gx * ax + gy * ay, gt = -gx * ay + gy * ax;
+      e += gr * gr + gt * gt; c2 += gr * gr - gt * gt; s2 += 2 * gr * gt;
+    }
+    if (n < BS * BS * 0.9 || e <= 0) continue;
+    blocks.push({ e: e / n, al: c2 / e, co: Math.hypot(c2, s2) / e, c2: c2 / e, s2: s2 / e });
+  }
+  const eMed = blocks.map(b => b.e).sort((p, q) => p - q)[Math.floor(blocks.length / 2)] || 0;
+  const strong = blocks.filter(b => b.e >= eMed);
+  const med = a => { const v = a.slice().sort((p, q) => p - q); return v.length ? v[Math.floor(v.length / 2)] : 0; };
+  const align = med(strong.map(b => b.al)), coher = med(strong.map(b => b.co)), wander = strong.filter(b => b.al < 0.2).length / Math.max(1, strong.length);
+  // the grain's way, block to block: each block's doubled angle (0 = level bands); TILT = the median
+  // of its size in degrees, SPREAD = 1 - the resultant length of the unit doubled angles
+  let rx = 0, ry = 0; const tilts = [];
+  for (const b of strong) { const l = Math.hypot(b.c2, b.s2) || 1; rx += b.c2 / l; ry += b.s2 / l; tilts.push(Math.abs(Math.atan2(b.s2, b.c2)) * 90 / Math.PI); }
+  const spread = 1 - Math.hypot(rx, ry) / Math.max(1, strong.length), tilt = med(tilts);
+  // THE GRAIN'S PATH: how much the contours turn as they run. A smoothed structure tensor (Sobel on the
+  // smoothed luminance, 5 px box) gives each pixel its grain's way; stepping 3 px along the grain,
+  // the change of that way, weighted by the tensor's strength, over the coherent rock pixels. Level
+  // beds and laminae run straight (small); wood grain, agate eyes and wandering contours turn (large).
+  const Jxx = new Float32Array(W * H), Jyy = new Float32Array(W * H), Jxy = new Float32Array(W * H);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x;
+    const gx = (sm2[i - W + 1] + 2 * sm2[i + 1] + sm2[i + W + 1]) - (sm2[i - W - 1] + 2 * sm2[i - 1] + sm2[i + W - 1]);
+    const gy = (sm2[i + W - 1] + 2 * sm2[i + W] + sm2[i + W + 1]) - (sm2[i - W - 1] + 2 * sm2[i - W] + sm2[i - W + 1]);
+    Jxx[i] = gx * gx; Jyy[i] = gy * gy; Jxy[i] = gx * gy;
+  }
+  const bx5 = A => { const o = new Float32Array(W * H); for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) { let t = 0; for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) t += A[(y + dy) * W + x + dx]; o[y * W + x] = t / 25; } return o; };
+  const Sxx = bx5(Jxx), Syy = bx5(Jyy), Sxy = bx5(Jxy);
+  const phiAt = i => 0.5 * Math.atan2(2 * Sxy[i], Sxx[i] - Syy[i]);
+  const ens = []; for (let y = 8; y < H - 8; y += 3) for (let x = 8; x < W - 8; x += 3) { const i = y * W + x; if (cov(i)) ens.push(Sxx[i] + Syy[i]); }
+  ens.sort((p, q) => p - q); const eCut = ens[Math.floor(ens.length / 2)] || 0;
+  let kw = 0, ks = 0;
+  for (let y = 8; y < H - 8; y += 3) for (let x = 8; x < W - 8; x += 3) {
+    const i = y * W + x; if (!cov(i)) continue;
+    const e = Sxx[i] + Syy[i]; if (e < eCut || e <= 0) continue;
+    const c = Math.hypot(Sxx[i] - Syy[i], 2 * Sxy[i]) / e; if (c < 0.4) continue;
+    const ph = phiAt(i), tx = -Math.sin(ph), ty = Math.cos(ph);
+    const x2 = Math.round(x + 3 * tx), y2 = Math.round(y + 3 * ty), j = y2 * W + x2;
+    if (!cov(j)) continue;
+    let d = Math.abs(phiAt(j) - ph); if (d > Math.PI / 2) d = Math.PI - d;
+    kw += c * e; ks += c * e * d;
+  }
+  const turn = ks / Math.max(1e-9, kw) * 180 / Math.PI;
+  // FINE COHERENT LINES: the band of fine structure (the luminance less its 9 px box mean), its own
+  // structure tensor's coherence over a 5 px box; the share of the fine band's energy that lies in
+  // coherent lines, and that energy against the mean luminance. Rock grit is fine but points every
+  // way; wood grain and agate are fine lines running together.
+  const b9 = new Float32Array(W * H), SA2 = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += sm[y * W + x]; SA2[(y + 1) * (W + 1) + x + 1] = SA2[y * (W + 1) + x + 1] + row; } }
+  for (let y = 4; y < H - 4; y++) for (let x = 4; x < W - 4; x++) b9[y * W + x] = (SA2[(y + 5) * (W + 1) + x + 5] - SA2[(y - 4) * (W + 1) + x + 5] - SA2[(y + 5) * (W + 1) + x - 4] + SA2[(y - 4) * (W + 1) + x - 4]) / 81;
+  const Dd = new Float32Array(W * H); for (let i = 0; i < W * H; i++) Dd[i] = sm[i] - b9[i];
+  const Fxx = new Float32Array(W * H), Fyy = new Float32Array(W * H), Fxy = new Float32Array(W * H);
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) { const i = y * W + x, gx = Dd[i + 1] - Dd[i - 1], gy = Dd[i + W] - Dd[i - W]; Fxx[i] = gx * gx; Fyy[i] = gy * gy; Fxy[i] = gx * gy; }
+  const Gxx = bx5(Fxx), Gyy = bx5(Fyy), Gxy = bx5(Fxy);
+  let lineE = 0, allE = 0, lum = 0, ln = 0;
+  for (let y = 8; y < H - 8; y += 2) for (let x = 8; x < W - 8; x += 2) {
+    const i = y * W + x; if (!cov(i)) continue;
+    const e = Gxx[i] + Gyy[i], c = e > 0 ? Math.hypot(Gxx[i] - Gyy[i], 2 * Gxy[i]) / e : 0;
+    allE += Dd[i] * Dd[i]; lineE += c * c * Dd[i] * Dd[i]; lum += b9[i] + 2; ln++;
+  }
+  const lineShare = lineE / Math.max(1e-9, allE), lines = Math.sqrt(lineE / Math.max(1, ln)) / Math.max(1e-6, lum / Math.max(1, ln));
   window.__camPin = null;
-  return { zi, open: pin.open, rockPx: fn, facet: +(fe / Math.max(1, fn)).toFixed(3), streak: +(eT / Math.max(1, eR)).toFixed(3), bandV: +(ev / Math.max(1, en)).toFixed(4), bandA: +(ea / Math.max(1, en)).toFixed(4),
+  return { zi, open: pin.open, rockPx: fn, lines: +lines.toFixed(4), lineShare: +lineShare.toFixed(3), turn: +turn.toFixed(2), tilt: +tilt.toFixed(1), spread: +spread.toFixed(3), align: +align.toFixed(3), coherence: +coher.toFixed(3), wander: +wander.toFixed(3), blocks: strong.length, facet: +(fe / Math.max(1, fn)).toFixed(3), streak: +(eT / Math.max(1, eR)).toFixed(3), bandV: +(ev / Math.max(1, en)).toFixed(4), bandA: +(ea / Math.max(1, en)).toFixed(4),
     localContrast: +(lc / Math.max(1, en)).toFixed(4), meanL: +(mean / Math.max(1, en)).toFixed(2), cap, normals: N, W, H };
 }
 // PNG of a normal pass (for eyes)
 export function normalsPng(N, W, H, s = 0.5) {
   return window.__bench.png({ w: W, h: H, px: N }, s);
+}
+
+// ---- the lens on the fall path ----------------------------------------------------------------
+// point-triangle distance (Ericson, closest point on triangle), no allocation beyond the scratch
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _q = new THREE.Vector3(), _tri = new THREE.Triangle();
+export async function fallLens(zi, o = {}) {
+  const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), w = { x: 0, z: 0 };
+  window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.__camPin = null;
+  window.gotoZone(zi); window.lev.calmed = true; window.__fissure.setOpen(zi, 1);
+  const u0 = o.u == null ? -4 : o.u;
+  S.fissureWorld(u0, (S._halfWAt(F, u0, 1) - S._halfWAt(F, u0, 0)) / 2, zi, w);
+  window.__bench.place(w.x + F.dz * 9, w.z - F.dx * 9, 0, zi);
+  window.__bench.step(30, null, { render: true });
+  window.player.pos.set(w.x, lip - 1, w.z); window.player.vel.set(0, -2, 0); window.player.grounded = false;
+  // the drawn crack triangles in a column round the fall (the lens trails within ~10 u)
+  const tris = [];
+  const take = (A, I) => { for (let t = 0; t < I.length; t += 3) {
+    const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
+    const cx = (A[a] + A[b] + A[c]) / 3, cz = (A[a + 2] + A[b + 2] + A[c + 2]) / 3;
+    if (Math.hypot(cx - w.x, cz - w.z) < 16) tris.push(A[a], A[a + 1], A[a + 2], A[b], A[b + 1], A[b + 2], A[c], A[c + 1], A[c + 2]); } };
+  const P = T.fissurePatchGeo(zi); for (const I of P.index) take(P.pos.array, I);
+  const Wg = T.fissureWallGeo ? T.fissureWallGeo(zi) : null; if (Wg) take(Wg.pos.array, Wg.index);
+  const n = tris.length / 9, cam = window.camera;
+  let minD = 1e9, at = null, frames = 0, startZone = window.zone, closeFrames = 0, samples = 0;
+  window.keys.KeyC = true;
+  try {
+    for (let f = 0; f < (o.frames || 600) && window.zone === startZone && window.gameState === 'play'; f += 3) {
+      window.__bench.step(3); frames = f; samples++;
+      const p = cam.position; let fMin = 1e9;
+      for (let k = 0; k < n; k++) {
+        const o9 = k * 9;
+        const mx = Math.min(tris[o9], tris[o9 + 3], tris[o9 + 6]) - 1, Mx = Math.max(tris[o9], tris[o9 + 3], tris[o9 + 6]) + 1;
+        if (p.x < mx || p.x > Mx) continue;
+        const mz = Math.min(tris[o9 + 2], tris[o9 + 5], tris[o9 + 8]) - 1, Mz = Math.max(tris[o9 + 2], tris[o9 + 5], tris[o9 + 8]) + 1;
+        if (p.z < mz || p.z > Mz) continue;
+        const my = Math.min(tris[o9 + 1], tris[o9 + 4], tris[o9 + 7]) - 1, My = Math.max(tris[o9 + 1], tris[o9 + 4], tris[o9 + 7]) + 1;
+        if (p.y < my || p.y > My) continue;
+        _a.set(tris[o9], tris[o9 + 1], tris[o9 + 2]); _b.set(tris[o9 + 3], tris[o9 + 4], tris[o9 + 5]); _c.set(tris[o9 + 6], tris[o9 + 7], tris[o9 + 8]);
+        _tri.set(_a, _b, _c); _tri.closestPointToPoint(p, _q);
+        const d = _q.distanceTo(p);
+        if (d < fMin) fMin = d;
+        if (d < minD) {
+          // which side: the triangle's front (its winding faces the water) or behind it, in the rock
+          _b.sub(_a); _c.sub(_a); _b.cross(_c);
+          const side = _b.dot(_q.set(p.x - _q.x, p.y - _q.y, p.z - _q.z)) >= 0 ? 1 : -1;
+          minD = d; at = { f, side, cam: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], below: +(lip - p.y).toFixed(1) };
+        }
+      }
+      if (fMin < cam.near) closeFrames++;
+    }
+  } finally { window.keys.KeyC = false; }
+  return { zi, tris: n, frames, samples, closeFrames, endY: +window.player.pos.y.toFixed(1), zoneEnd: window.zone, near: cam.near, minD: +minD.toFixed(3), at };
 }

@@ -621,20 +621,31 @@ float causticF(vec2 p, float t) {
 }
 `;
 
-// THE THROAT WALLS' LAYER (fissure Task 5b). vWall = (u along the crack, depth below the side's
-// top, wall weight: 0 in the seam band where the ribbon IS the patch's surface, recess 0..1: how far
-// the drawn strata undercut this face). The texture is projected on the crack's own frame (u, world
-// y): a wall face is one plane of it, so nothing stretches and nothing blends 50/50 at the kinks.
-// Per zone (uWallHard / uWallSoft: the hard and the soft beds; uWallSilt: what runs down the faces;
-// uWallP: bed scale, laminae per unit, silt run amount, crust; uWallG: rough hard / soft, sheen,
-// bed contrast), multiplied by the anchorage's rock tint (uSiteRock).
+// THE THROAT WALLS' LAYER (fissure Task 5b). vWall = (u along the crack; the BED COORDINATE (wallBed:
+// the bed's index + how far up it, the same beds the drawn strata are cut from); the wall weight, 0 in
+// the seam band where the ribbon IS the patch's surface; the recess 0..1 + 2 on side 1). The beds are
+// a function of height only, so their boundaries run level along the wall (fix round 1: 2-D noise
+// stretched into bands drew wandering, closing contours: wood grain). The texture is projected on the
+// crack's own frame (u, world y). Per zone: uWallHard / uWallSoft (the beds), uWallSilt (what runs
+// down from each bed's top), uWallCrust (on the hard beds' tops and every up-turned face), uWallSoot
+// (streaks down from the lip); uWallP = (the share of hard beds: STRATA's, soot, runs, crust);
+// uWallG = (roughness hard / soft, the bed hash's seed, laminae contrast); uWallL = (laminae
+// frequency in the bed coordinate, groove strength, photo normal strength); uWallTop: the lip band (soot); times the
+// anchorage's rock tint (uSiteRock).
 const WALL_HEAD = /* glsl */`
 varying vec4 vWall;
-uniform vec3 uWallHard, uWallSoft, uWallSilt, uWallCrust;
+uniform vec3 uWallHard, uWallSoft, uWallSilt, uWallCrust, uWallSoot;
 uniform vec4 uWallP, uWallG;
 uniform vec2 uWallAx;
-uniform float uWallY;
+uniform float uWallY, uWallTop;
+uniform vec3 uWallL;
 uniform sampler2D uWallN;
+// terrain.js hash1 in uint math (bit for bit: the drawn strata and the shader agree on every bed)
+float wHashI(int k, int s) {
+  uint h = ((uint(k) ^ 0x9e3779b9u) * 0x85ebca6bu) ^ (uint(s) * 0xc2b2ae35u);
+  h ^= h >> 13u; h *= 0x27d4eb2fu; h ^= h >> 16u;
+  return float(h) * (1.0 / 4294967296.0);
+}
 `;
 // where the wall layer rules (wk0 > 0.9) the terrain's own triplanar steps take their flat-ground
 // path (one plane): its share there is a tenth at most, and on a wall face it paid for every plane
@@ -642,28 +653,37 @@ const WALL_0 = /* glsl */`
       float wk0 = vWall.z * (1.0 - smoothstep(0.68, 0.9, wn.y));
       bw = wk0 > 0.9 ? vec3(0.0, 1.0, 0.0) : bw;
 `;
-// albedo: the beds (a tone per bed at the geometry's own scale, darker where undercut), the fine
-// laminae, the silt run down the faces in long streaks, the zone's crust; treads keep the terrain's
-// silt (sand drifts on every ledge). The noise is one baked tile (WALL_NOISE, 16 u, two taps).
+// albedo: the bed (hard or soft as drawn, a tone per bed), darker up under a hard bed's lip; laminae
+// (1-D in the bed coordinate, a hair of wander along the crack); runs from each bed's top fading down
+// it; soot streaks toward the lip; crust on the hard beds' tops and every up-turned face (and over
+// the treads' silt). The noise is one baked tile (WALL_NOISE, 16 u).
 const WALL_A = /* glsl */`
       float wk = wk0;
-      float wu = vWall.x, wy = vWPos.y - uWallY, wrec = vWall.w;
+      float wu = vWall.x, wb = vWall.y, wside = step(1.5, vWall.w), wrec = vWall.w - 2.0 * wside;
+      float wy = vWPos.y - uWallY;
       vec2 wq = vec2(wu, wy);
-      float wdip = wy + (mac.g - 0.5) * 1.8;
-      vec4 wn1 = texture2D(uWallN, vec2(wu, wdip) * 0.0625);
-      vec4 wn2 = texture2D(uWallN, vec2(wu * 0.37 + 5.3, wdip * 3.2 / uWallP.x - 2.9) * 0.0625);
-      float wbed = wn2.r, wlam = wn1.g;
-      float whard = smoothstep(0.25, 0.75, wbed + 0.25 - wrec * 0.9);
-      vec3 wA = mix(uWallSoft, uWallHard, whard);
+      float wkb = floor(wb), wf = wb - wkb;
+      int wki = int(wkb), wsd = int(uWallG.z + 0.5);
+      float whard = wHashI(wki, wsd) > uWallP.x ? 0.0 : 1.0, wtone = wHashI(wki, wsd + 28);
+      float wlam = texture2D(uWallN, vec2(0.31 + wu * 0.004, wb * uWallL.x)).g;
+      vec4 wn1 = texture2D(uWallN, wq * 0.0625);
+      vec3 wA = mix(uWallSoft, uWallHard, whard) * (0.8 + 0.4 * wtone);
+      // a soft bed is darkest up under the hard bed's lip: the undercut's roof in shadow
+      wA *= (1.0 - 0.3 * wrec) * (1.0 - 0.35 * (1.0 - whard) * smoothstep(0.8, 0.98, wf));
       wA *= 1.0 - uWallG.w * 0.5 + uWallG.w * wlam;
-      // the silt run: long streaks hanging down the faces, fading out down each run
-      float wst = smoothstep(0.55, 0.85, wn1.b) * smoothstep(0.35, 0.75, wn2.b);
-      wA = mix(wA, uWallSilt, clamp(wst * uWallP.z, 0.0, 1.0));
-      // the zone's crust: blotches that cling to the faces (vent crust, mineral bloom)
-      float wcr = smoothstep(0.6, 0.8, wn2.a * 0.7 + wn1.a * 0.3);
-      wA = mix(wA, uWallCrust, wcr * uWallP.w);
+      // the parting under each bed: a thin dark seam at its foot (antialiased on its own footprint)
+      float wfw = fwidth(wb);
+      wA *= 1.0 - (0.25 + uWallG.w) * (1.0 - smoothstep(0.0, 0.05 + 1.5 * wfw, wf)) * (1.0 - smoothstep(0.15, 0.6, wfw));
+      float wrun = smoothstep(0.55, 0.85, wn1.b) * exp(-(1.0 - wf) * 2.2);
+      wA = mix(wA, uWallSilt, clamp(wrun * uWallP.z, 0.0, 1.0));
+      float wsoot = smoothstep(0.3, 0.62, texture2D(uWallN, vec2(wu * 0.033 + 0.23, wy * 0.012)).b) * smoothstep(-45.0, -6.0, vWPos.y - uWallTop);
+      wA = mix(wA, uWallSoot, clamp(wsoot * uWallP.y, 0.0, 1.0));
+      float wcr = max(whard * smoothstep(0.7, 0.95, wf), smoothstep(0.12, 0.55, wn.y)) * smoothstep(0.35, 0.62, wn1.a);
+      wA = mix(wA, uWallCrust, clamp(wcr * uWallP.w, 0.0, 1.0));
       wA *= uSiteRock * (0.62 + 0.80 * mac.r) * (0.16 + 0.84 * ao);
       alb = mix(alb, wA, wk);
+      alb = mix(alb, uWallCrust * uSiteRock * (0.16 + 0.84 * ao) * (0.75 + 0.5 * wn1.a),
+                vWall.z * (1.0 - wk) * smoothstep(0.4, 0.75, wn1.a) * uWallP.w * 0.8);
 `;
 // structure: the rock channel of the photographed maps on the crack's frame
 const WALL_B = /* glsl */`
@@ -671,21 +691,24 @@ const WALL_B = /* glsl */`
       float rStrW = 2.0 * mix(ABYSSA_TEX(uPRgh, wq * PBR_NEAR).b, ABYSSA_TEX(uPRgh, wq * PBR_FAR).b, oct);
       aStr = mix(aStr, aStrW, wk); rStr = mix(rStr, rStrW, wk);
 `;
-// relief on the crack's frame (the rock normal maps, the laminae as fine bedding grooves), and the
-// zone's sheen (zone 2's glassy basalt)
+// relief on the crack's frame: the procedural rock normal, the photographed one damped and at its
+// large scale only (near, under grazing light, it drew curvy streaks), the laminae as fine grooves.
+// The tangent is horizontal in the face and turns with the side (cross(up, n), pointing +u on both
+// walls), so a face turned along the crack (a tip, a block's end) keeps a steady one.
 const WALL_C = /* glsl */`
       {
-        vec3 wA3 = vec3(uWallAx.x, 0.0, uWallAx.y);
-        vec3 wT = normalize(wA3 - wn * dot(wn, wA3) + vec3(1e-4, 0.0, 0.0));
+        vec3 wT0 = cross(vec3(0.0, 1.0, 0.0), wn);
+        vec3 wT = wT0 * ((wside > 0.5 ? -1.0 : 1.0) / max(length(wT0), 1e-3));
         vec3 wB = normalize(vec3(0.0, 1.0, 0.0) - wn * wn.y + vec3(0.0, 1e-4, 0.0));
         vec3 n1 = texture2D(uRockN, wq * 0.062).xyz * 2.0 - 1.0;
-        vec3 n2 = mix(ABYSSA_TEX(uPNR, wq * PBR_NEAR).xyz, ABYSSA_TEX(uPNR, wq * PBR_FAR).xyz, oct) * 2.0 - 1.0;
-        // the laminae as grooves: the slope of the laminae tone down the face
-        float lg = (texture2D(uWallN, vec2(wu, wdip + 0.12) * 0.0625).g - wlam) * 0.9;
-        vec2 dn = n1.xy * 0.55 + n2.xy * uTexAmt * 0.9 + vec2(0.0, -lg);
+        vec3 n2 = mix(ABYSSA_TEX(uPNR, wq * PBR_NEAR).xyz, ABYSSA_TEX(uPNR, wq * PBR_FAR).xyz, max(oct, uWallL.z < 0.4 ? 1.0 : 0.0)) * 2.0 - 1.0;
+        float lg = (texture2D(uWallN, vec2(0.31 + wu * 0.004, (wb + 0.05) * uWallL.x)).g - wlam) * uWallL.y;
+        vec2 dn = n1.xy * 0.5 + n2.xy * uTexAmt * uWallL.z + vec2(0.0, -lg);
         vec3 wN = normalize(wn + wT * dn.x + wB * dn.y);
         tN = normalize(mix(tN, wN, wk));
-        tRough = mix(tRough, mix(uWallG.y, uWallG.x, whard) * (0.85 + 0.3 * rStrW * 0.5), wk);
+        // (the treads in the throat take the wall's roughness too: the terrain's wet rock glinted there)
+        tRough = mix(tRough, mix(uWallG.y, uWallG.x, whard) * (0.85 + 0.15 * rStrW), wk);
+        tRough = mix(tRough, uWallG.y, max(0.0, vWall.z - wk));
       }
 `;
 // One shared function object so all three zone materials hit the same program cache key.
@@ -915,16 +938,28 @@ const zoneMats = [
 
 export const terrainMat = zoneMats[0];
 
+// (the throat walls' beds: wallBed / wallRecess below, and the shader's hard-bed share)
+const STRATA = [
+  { t: 3.2, j: 0.4, hard: 0.62, cut: 1.0, blk: 3.6, bk: 0.3 },    // 0: pale limestone, even beds, deep notches
+  { t: 2.6, j: 0.5, hard: 0.6, cut: 0.75, blk: 2.4, bk: 0.5 },    // 1: scorched, broken and blocky
+  { t: 4.8, j: 0.25, hard: 0.7, cut: 0.6, blk: 1.4, bk: 0.5 },    // 2: black basalt: thick flows, columns
+];
 // THE THROAT WALLS' materials (fissure Task 5b): the zone's own terrain material (its uniforms, its
 // palette, the anchorage's tint) plus the wall layer, one program for all three ('fissureWall').
 // Pushed back a hair (polygon offset) under the kept patch at the seam band, where the ribbon lies
 // WALL_SINK under it.
-// per zone: hard bed, soft bed, the silt run, the crust; P: bed scale, laminae / u, silt run, crust;
-// G: roughness hard / soft, (unused), laminae contrast
+// per zone: the hard and soft beds, the runs, the crust, the soot; P: (soot, runs, crust) with the
+// hard beds' share taken from STRATA; G: roughness hard / soft, laminae contrast; L: laminae per bed
+// unit (x 26 in the tile), their grooves' strength, the photographed rock normal's strength (under
+// 0.4 it reads at its large scale only: zone 1's grazing light turned the near one into curvy streaks).
 const WALL_LOOK = [
-  { hard: 0x676a62, soft: 0x40443f, silt: 0x7e7f72, crust: 0x585a52, P: [3.2, 1.3, 0.45, 0.15], G: [0.80, 0.95, 0, 0.18] },   // pale limestone, sand run
-  { hard: 0x2a2521, soft: 0x171514, silt: 0x3e3a30, crust: 0x5e4a2c, P: [2.6, 1.7, 0.25, 0.6], G: [0.9, 0.97, 0, 0.22] },     // scorched, vent crust (dry, matte)
-  { hard: 0x1a191e, soft: 0x100f13, silt: 0x2c2a30, crust: 0x2a2436, P: [4.8, 1.1, 0.2, 0.12], G: [0.42, 0.75, 0, 0.16] },    // black glassy basalt
+  // 0: pale limestone, sand run down the faces and drifted on the ledges, no soot
+  { hard: 0x676a62, soft: 0x40443f, silt: 0x7e7f72, crust: 0x8a8a7c, soot: 0x2a2c2a, P: [0.0, 0.45, 0.3], G: [0.80, 0.95, 0.13], L: [0.19, 0.5, 0.7] },
+  // 1: scorched black-grey: soot down from the lip, sulphur running from the beds, rust crust on the
+  //    ledges and the hard beds' tops (dry, matte)
+  { hard: 0x1f232b, soft: 0x111317, silt: 0x5e5428, crust: 0x5a2c17, soot: 0x040405, P: [0.85, 0.45, 0.8], G: [0.9, 0.97, 0.06], L: [0.1, 0.15, 0.25] },
+  // 2: black glassy basalt: glass on the hard flows, a little grey silt, faint soot
+  { hard: 0x1a191e, soft: 0x100f13, silt: 0x2c2a30, crust: 0x2a2436, soot: 0x050507, P: [0.2, 0.2, 0.12], G: [0.55, 0.78, 0.12], L: [0.25, 0.4, 0.7] },
 ];
 // THE WALLS' NOISE: one 16 u tile (256 texels), tileable (pn), every channel stretched for its job:
 // r the beds' tone (slow along the crack, ~3 u down the face), g the laminae (~0.6 u down the face),
@@ -952,9 +987,10 @@ function wallMat(zi) {
   m.polygonOffset = true; m.polygonOffsetFactor = 1; m.polygonOffsetUnits = 1;
   const w = {
     uWallHard: { value: new THREE.Color(L.hard) }, uWallSoft: { value: new THREE.Color(L.soft) },
-    uWallSilt: { value: new THREE.Color(L.silt) }, uWallCrust: { value: new THREE.Color(L.crust) },
-    uWallP: { value: new THREE.Vector4(...L.P) }, uWallG: { value: new THREE.Vector4(...L.G) },
-    uWallAx: { value: new THREE.Vector2(F.dx, F.dz) }, uWallY: { value: ZB[zi] }, uWallN: { value: WALL_NOISE }
+    uWallSilt: { value: new THREE.Color(L.silt) }, uWallCrust: { value: new THREE.Color(L.crust) }, uWallSoot: { value: new THREE.Color(L.soot) },
+    uWallP: { value: new THREE.Vector4(STRATA[zi].hard, L.P[0], L.P[1], L.P[2]) },
+    uWallG: { value: new THREE.Vector4(L.G[0], L.G[1], 23 + zi, L.G[2]) },   // z: the bed hash's seed (wallRecess: hash1(kb, 23 + zi))
+    uWallAx: { value: new THREE.Vector2(F.dx, F.dz) }, uWallY: { value: ZB[zi] }, uWallTop: { value: 0 }, uWallN: { value: WALL_NOISE }, uWallL: { value: new THREE.Vector3(...L.L) }
   };
   m.onBeforeCompile = sh => { sh.__zone = zm.userData.zoneU; sh.__wall = w; compileTerrain(sh, true); };
   m.customProgramCacheKey = () => 'fissureWall';
@@ -1376,23 +1412,33 @@ const wallSigma = d => 0.45 + 1.15 * sst(6, 48, d);
 // break into blocks along the crack, each set back a little. All features are kept >= ~2 rows /
 // columns wide (a narrower one would alias between rows: teeth again); the fine bedding and the
 // joints are the shader's (WALL_A / WALL_C).
+// STRATA (declared with the wall materials, which read it):
 //   t: mean bed thickness, j: bed boundary jitter (x t), hard: share of hard beds, cut: undercut
 //   (x WALL_RECESS), blk: block length along the crack, bk: block setback (x WALL_RECESS)
-const STRATA = [
-  { t: 3.2, j: 0.4, hard: 0.62, cut: 1.0, blk: 3.6, bk: 0.3 },    // 0: pale limestone, even beds, deep notches
-  { t: 2.6, j: 0.5, hard: 0.6, cut: 0.75, blk: 2.4, bk: 0.5 },    // 1: scorched, broken and blocky
-  { t: 4.8, j: 0.25, hard: 0.7, cut: 0.6, blk: 1.4, bk: 0.5 },    // 2: black basalt: thick flows, columns
-];
 const hash1 = (k, s) => { let h = Math.imul((k | 0) ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(s | 0, 0xc2b2ae35); h ^= h >>> 13; h = Math.imul(h, 0x27d4eb2f); h ^= h >>> 16; return (h >>> 0) / 4294967296; };
-function wallRecess(zi, u, y, side, sig) {
+// THE BEDS, one function for the drawn strata and the wall shader (fix round 1: the shader's beds were
+// stretched 2-D noise, whose contours wander and close into eyes: wood grain). Bed kb spans world
+// heights [b0, b1) (jittered boundaries, each its own hash, shared by the two beds it divides) after
+// a gentle dip along the crack. Writes _bd and returns the BED COORDINATE kb + (yw - b0) / (b1 - b0):
+// the bed's index and how far up it the point is, continuous and rising with height. The ribbon
+// carries it per vertex (aW.y); the shader takes floor() for the bed and hashes it exactly as here
+// (wHashI is hash1 in GLSL uint math), so the texture's beds sit on the drawn ledges.
+const _bd = { kb: 0, b0: 0, b1: 0, yw: 0 };
+function wallBed(zi, u, y, side) {
   const P = STRATA[zi];
   const yw = y + 0.9 * gn(u * 0.045 + zi * 11.1, side * 7.3 + 0.5);          // the beds dip and wander along the crack
   const k = Math.floor(yw / P.t);
-  // bed k spans [y0, y1) with jittered boundaries (each boundary its own hash, shared by the two beds)
   const y0 = (k + (hash1(k, 11) - 0.5) * P.j) * P.t, y1 = (k + 1 + (hash1(k + 1, 11) - 0.5) * P.j) * P.t;
   let kb = k, b0 = y0, b1 = y1;
   if (yw < y0) { kb = k - 1; b1 = y0; b0 = (k - 1 + (hash1(k - 1, 11) - 0.5) * P.j) * P.t; }
   else if (yw >= y1) { kb = k + 1; b0 = y1; b1 = (k + 2 + (hash1(k + 2, 11) - 0.5) * P.j) * P.t; }
+  _bd.kb = kb; _bd.b0 = b0; _bd.b1 = b1; _bd.yw = yw;
+  return kb + (yw - b0) / (b1 - b0);
+}
+function wallRecess(zi, u, y, side, sig) {
+  const P = STRATA[zi];
+  wallBed(zi, u, y, side);
+  const kb = _bd.kb, b0 = _bd.b0, b1 = _bd.b1, yw = _bd.yw;
   const hk = hash1(kb, 23 + zi);
   const fromTop = b1 - yw, th = b1 - b0;
   if (hk > P.hard) {
@@ -1558,6 +1604,7 @@ function fillFissureWall(zi) {
   const base = W.base, bn = W.bn;
   // 1. the rows down the cross-section, ON the heightfield (the scan's own samples), on the ladder
   const yRef = wallRef(zi, W), K = W.K;
+  wallMats[zi].userData.wallU.uWallTop.value = yRef;   // (the lip band: the soot's reach)
   for (let c = 0; c < nc; c++) {
     wallScan(zi, W, c);
     wallMeasure(W, yRef);
@@ -1606,7 +1653,10 @@ function fillFissureWall(zi) {
         if (yp === yp) py = py + (yp - WALL_SINK - py) * wP;
       }
       P[o] = px; P[o + 1] = py; P[o + 2] = pz;
-      AW[i * 4 + 1] = dTop; AW[i * 4 + 2] = 1 - wP; AW[i * 4 + 3] = rec / WALL_RECESS;
+      // aW: u, the bed coordinate at the drawn point, the wall weight, recess + 2 on side 1 (the shader's
+      // relief tangent turns with the side: horizontal in the face, along +u)
+      const sd = _wl.v >= 0 ? 1 : 0;
+      AW[i * 4 + 1] = wallBed(zi, W.cu[c], py, sd); AW[i * 4 + 2] = 1 - wP; AW[i * 4 + 3] = rec / WALL_RECESS + 2 * sd;
       fissureLocal(px, pz, zi, _wl);
       AF[i * 2] = fissureDist(px, pz, zi); AF[i * 2 + 1] = _wl.v;
     }
@@ -1623,7 +1673,7 @@ function fillFissureWall(zi) {
       // the cavity: how far down the slot this face sits against how wide the slot is there (the
       // crack narrows with depth), and the undercuts darker still
       const dd = W.dTop[i], ow = wsum * Math.max(0.12, 1 - dd / 70);
-      const shut = sst(0, 1, dd / (dd + 2.2 * ow)), aa = c01(1 - 0.78 * shut - 0.22 * AW[i * 4 + 3]);
+      const shut = sst(0, 1, dd / (dd + 2.2 * ow)), aa = c01(1 - 0.78 * shut - 0.22 * (AW[i * 4 + 3] % 2));
       let cr = 0.18 + 0.82 * aa * aa, cg = c01(gn(x * 0.0135 + zi * 40, z * 0.0135 - zi * 17) * 1.5 + 0.5), cb = c01((y - B - 2) / 220);
       if (wP > 0) {
         if (patchLerp3(Q, Q.col.array, x, z, _pc)) { cr += (_pc[0] - cr) * wP; cg += (_pc[1] - cg) * wP; cb += (_pc[2] - cb) * wP; }

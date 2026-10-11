@@ -885,7 +885,10 @@ if (mode === 'shape') {
   //     than 0.25 u on no more than WALL_OUT25 of its samples; rays from the throat's axis to both
   //     walls (grazes and overhang slabs aside) find no gap (a drawn miss) and no drawn rock more than
   //     0.3 u in front of the heightfield's.
-  // (2) THE LOOK, each zone open at home, settled, from inside the throat looking up along it: the
+  // (2) THE LOOK, each zone open at every anchorage (home, Pallid, Burned, the Shelf), settled, from
+  //     inside the throat looking up along it. THE GRAIN (fix round 1): the settled frame's fine band
+  //     that runs in coherent lines (LINES, LINE SHARE: walls-inside.page.js look) under WALL_LINES /
+  //     WALL_LINESHARE: stretched 2-D noise beds drew zone 1 as wood grain and agate eyes. And the
   //     STREAK ratio of the drawn rock's view-space normals (their change across the wall's vertical
   //     axis over their change along it: a grid on a 30 u riser draws long vertical slivers, ratio
   //     6-8; layered rock changes most down the face) under WALL_STREAK, and the settled frame keeps its
@@ -894,7 +897,10 @@ if (mode === 'shape') {
   //     (The facet energy, the mean normal change, is reported: it was the RED's first metric and
   //     does not tell teeth from relief: the layered walls carry more relief than the teeth did.)
   const fs = await import('node:fs');
-  const WALL_PROTRUDE = 0.8, WALL_OUT25 = 0.002, WALL_RECESS = 2.0, WALL_STREAK = 3.5, WALL_DETAIL = 0.035;
+  // (WALL_OUT25: the worst measured share is 0.20%; the geometry is deterministic, the bound keeps 50%
+  // headroom for later changes to the walls. WALL_LINES / WALL_LINESHARE (fix round 1): the zone-1
+  // wood grain measured lines 0.083-0.085 / share 0.65-0.66; the 1-D beds 0.041-0.068 / <= 0.604.)
+  const WALL_PROTRUDE = 0.8, WALL_OUT25 = 0.003, WALL_RECESS = 2.0, WALL_STREAK = 3.5, WALL_DETAIL = 0.035, WALL_LINES = 0.075, WALL_LINESHARE = 0.63;
   const bound = await c.ev(`(async () => {
     const W = await import('/tools/bench/walls-inside.page.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
@@ -922,26 +928,48 @@ if (mode === 'shape') {
     window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.weather.set(1, 0);
     window.__bench.size(1280, 720);
     const out = [];
-    for (let zi = 0; zi < 3; zi++) {
-      window.gotoZone(zi); window.lev.calmed = true; window.__fissure.setOpen(zi, 1);
-      const row = { zi };
-      const one = async tag => { const r = await W.look(zi); if (r.err) return r;
-        row['png_' + tag] = window.__bench.png(r.cap, 0.5); delete r.cap; delete r.normals; return r; };
-      row.now = await one('now');
-      if (T.fissureWallAB) { T.fissureWallAB(false); try { row.old = await one('old'); } finally { T.fissureWallAB(true); } }
-      out.push(row);
+    for (const site of [0, 1, 2, 3]) {
+      window.__chart.arrive(site);
+      for (let zi = 0; zi < 3; zi++) {
+        window.gotoZone(zi); window.lev.calmed = true; window.__fissure.setOpen(zi, 1);
+        const row = { site, zi };
+        const one = async tag => { const r = await W.look(zi); if (r.err) return r;
+          row['png_' + tag] = window.__bench.png(r.cap, 0.5); delete r.cap; delete r.normals; return r; };
+        row.now = await one('now');
+        if (site === 0 && T.fissureWallAB) { T.fissureWallAB(false); try { row.old = await one('old'); } finally { T.fissureWallAB(true); } }
+        out.push(row);
+      }
     }
-    window.__bench.size();
+    window.__chart.arrive(0); window.__bench.size();
     return out; })()`);
   for (const z of look) {
-    for (const k of ['now', 'old']) if (z['png_' + k]) { fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t5b-probe-z${z.zi}-${k}.png`, Buffer.from(z['png_' + k].split(',')[1], 'base64')); delete z['png_' + k]; }
-    const n = z.now;
-    if (n.err) { fail.push(`zone ${z.zi}: ${n.err}`); continue; }
-    if (n.streak > WALL_STREAK) fail.push(`zone ${z.zi}: the walls draw as vertical slivers (teeth, stretched) from inside: streak ${n.streak} > ${WALL_STREAK}`);
-    if (n.localContrast < WALL_DETAIL) fail.push(`zone ${z.zi}: the walls lost their detail: local contrast ${n.localContrast} < ${WALL_DETAIL}`);
-    if (z.old && !(n.streak < 0.5 * z.old.streak)) fail.push(`zone ${z.zi}: no better than the old patch walls (streak ${n.streak} vs ${z.old.streak})`);
+    for (const k of ['now', 'old']) if (z['png_' + k]) { fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t5b-probe-s${z.site}-z${z.zi}-${k}.png`, Buffer.from(z['png_' + k].split(',')[1], 'base64')); delete z['png_' + k]; }
+    const n = z.now, at = `site ${z.site} zone ${z.zi}`;
+    if (n.err) { fail.push(`${at}: ${n.err}`); continue; }
+    if (n.streak > WALL_STREAK) fail.push(`${at}: the walls draw as vertical slivers (teeth, stretched) from inside: streak ${n.streak} > ${WALL_STREAK}`);
+    if (n.localContrast < WALL_DETAIL) fail.push(`${at}: the walls lost their detail: local contrast ${n.localContrast} < ${WALL_DETAIL}`);
+    if (n.lines > WALL_LINES || n.lineShare > WALL_LINESHARE) fail.push(`${at}: the walls' grain runs in fine coherent lines (wood grain, agate): lines ${n.lines} (bound ${WALL_LINES}), share ${n.lineShare} (bound ${WALL_LINESHARE})`);
+    if (z.old && !(n.streak < 0.5 * z.old.streak)) fail.push(`${at}: no better than the old patch walls (streak ${n.streak} vs ${z.old.streak})`);
   }
-  console.log(JSON.stringify(look));
+  console.log(JSON.stringify(look.map(z => ({ site: z.site, zi: z.zi, now: z.now && { streak: z.now.streak, lines: z.now.lines, lineShare: z.now.lineShare, localContrast: z.now.localContrast, facet: z.now.facet },
+    old: z.old && { streak: z.old.streak, lines: z.old.lines, lineShare: z.old.lineShare, localContrast: z.old.localContrast } }))));
+  // (3) THE LENS ON THE FALL PATH: the real follow camera while Sal sinks through each open throat (three
+  //     places along it), the frames its lens sits within the near plane (0.1 u) of drawn crack rock,
+  //     the throat walls against the old patch walls on the same paths. The camera keeps no
+  //     horizontal clearance in the crack (game.js clearCamDistance tests the floor under it), so the
+  //     lens grazes the faces either way: the walls must not make it worse.
+  const fall = await c.ev(`(async () => {
+    const W = await import('/tools/bench/walls-inside.page.js'), T = await import('/src/world/terrain.js');
+    const out = [];
+    for (const ab of [true, false]) { if (T.fissureWallAB) T.fissureWallAB(ab); else if (ab === false) break;
+      for (let zi = 0; zi < 3; zi++) for (const u of [-15, -4, 9]) out.push(Object.assign({ ab, u }, await W.fallLens(zi, { u }))); }
+    if (T.fissureWallAB) T.fissureWallAB(true);
+    return out; })()`);
+  const close = ab => fall.filter(r => r.ab === ab).reduce((a, r) => a + r.closeFrames, 0), samp = ab => fall.filter(r => r.ab === ab).reduce((a, r) => a + r.samples, 0);
+  const fallSum = { now: { close: close(true), samples: samp(true) }, old: { close: close(false), samples: samp(false) } };
+  console.log(JSON.stringify({ fallSum, fall: fall.map(r => ({ ab: r.ab, zi: r.zi, u: r.u, close: r.closeFrames, samples: r.samples, minD: r.minD, at: r.at })) }));
+  if (fallSum.old.samples && fallSum.now.close > 1.5 * fallSum.old.close + 15) fail.push(`the lens grazes the drawn rock on the fall more than with the old walls: ${fallSum.now.close}/${fallSum.now.samples} frames vs ${fallSum.old.close}/${fallSum.old.samples}`);
+
 } else if (mode === 'clearance') {
   // EVERYTHING CLEARS THE CRACK (spec §1 Lairs, Task 5). At every anchorage (the hidden shelf too),
   // in every zone: every collider (rocks, props, wrecks, vents), every placed instance (flora,
