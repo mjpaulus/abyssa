@@ -887,8 +887,8 @@ if (mode === 'shape') {
   //     0.3 u in front of the heightfield's.
   // (2) THE LOOK, each zone open at every anchorage (home, Pallid, Burned, the Shelf), settled, from
   //     inside the throat looking up along it. THE GRAIN (fix round 1): the settled frame's fine band
-  //     that runs in coherent lines (LINES, LINE SHARE: walls-inside.page.js look) under WALL_LINES /
-  //     WALL_LINESHARE: stretched 2-D noise beds drew zone 1 as wood grain and agate eyes. And the
+  //     that runs in coherent lines (LINES x LINE SHARE: walls-inside.page.js look) under WALL_GRAIN:
+  //     stretched 2-D noise beds drew zone 1 as wood grain and agate eyes. And the
   //     STREAK ratio of the drawn rock's view-space normals (their change across the wall's vertical
   //     axis over their change along it: a grid on a 30 u riser draws long vertical slivers, ratio
   //     6-8; layered rock changes most down the face) under WALL_STREAK, and the settled frame keeps its
@@ -898,9 +898,10 @@ if (mode === 'shape') {
   //     does not tell teeth from relief: the layered walls carry more relief than the teeth did.)
   const fs = await import('node:fs');
   // (WALL_OUT25: the worst measured share is 0.20%; the geometry is deterministic, the bound keeps 50%
-  // headroom for later changes to the walls. WALL_LINES / WALL_LINESHARE (fix round 1): the zone-1
-  // wood grain measured lines 0.083-0.085 / share 0.65-0.66; the 1-D beds 0.041-0.068 / <= 0.604.)
-  const WALL_PROTRUDE = 0.8, WALL_OUT25 = 0.003, WALL_RECESS = 2.0, WALL_STREAK = 3.5, WALL_DETAIL = 0.035, WALL_LINES = 0.075, WALL_LINESHARE = 0.63;
+  // headroom for later changes to the walls. WALL_GRAIN (fix round 1) = LINES x LINE SHARE: the zone-1
+  // wood grain at 85e22f8 measured 0.049-0.066 at the four anchorages (zone 2's at Burned and the
+  // Shelf 0.045-0.046), the 1-D beds <= 0.039 everywhere: the bound sits ~12% from each side.)
+  const WALL_PROTRUDE = 0.8, WALL_OUT25 = 0.003, WALL_RECESS = 2.0, WALL_STREAK = 3.5, WALL_DETAIL = 0.035, WALL_GRAIN = 0.044;
   const bound = await c.ev(`(async () => {
     const W = await import('/tools/bench/walls-inside.page.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
@@ -948,10 +949,11 @@ if (mode === 'shape') {
     if (n.err) { fail.push(`${at}: ${n.err}`); continue; }
     if (n.streak > WALL_STREAK) fail.push(`${at}: the walls draw as vertical slivers (teeth, stretched) from inside: streak ${n.streak} > ${WALL_STREAK}`);
     if (n.localContrast < WALL_DETAIL) fail.push(`${at}: the walls lost their detail: local contrast ${n.localContrast} < ${WALL_DETAIL}`);
-    if (n.lines > WALL_LINES || n.lineShare > WALL_LINESHARE) fail.push(`${at}: the walls' grain runs in fine coherent lines (wood grain, agate): lines ${n.lines} (bound ${WALL_LINES}), share ${n.lineShare} (bound ${WALL_LINESHARE})`);
+    const grain = +(n.lines * n.lineShare).toFixed(4); n.grain = grain;
+    if (grain > WALL_GRAIN) fail.push(`${at}: the walls' grain runs in fine coherent lines (wood grain, agate): grain ${grain} = lines ${n.lines} x share ${n.lineShare} (bound ${WALL_GRAIN})`);
     if (z.old && !(n.streak < 0.5 * z.old.streak)) fail.push(`${at}: no better than the old patch walls (streak ${n.streak} vs ${z.old.streak})`);
   }
-  console.log(JSON.stringify(look.map(z => ({ site: z.site, zi: z.zi, now: z.now && { streak: z.now.streak, lines: z.now.lines, lineShare: z.now.lineShare, localContrast: z.now.localContrast, facet: z.now.facet },
+  console.log(JSON.stringify(look.map(z => ({ site: z.site, zi: z.zi, now: z.now && { streak: z.now.streak, grain: z.now.grain, lines: z.now.lines, lineShare: z.now.lineShare, localContrast: z.now.localContrast, facet: z.now.facet },
     old: z.old && { streak: z.old.streak, lines: z.old.lines, lineShare: z.old.lineShare, localContrast: z.old.localContrast } }))));
   // (3) THE LENS ON THE FALL PATH: the real follow camera while Sal sinks through each open throat (three
   //     places along it), the frames its lens sits within the near plane (0.1 u) of drawn crack rock,
