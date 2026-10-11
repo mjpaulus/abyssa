@@ -136,7 +136,7 @@ const CURTAIN_VS = `
     float ct = abs(dot(vd.xz, aU.xy)), cy = abs(vd.y);
     float w = mix(1.0, uEndOn, smoothstep(0.4, 1.0, ct)) * mix(1.0, 0.3, smoothstep(0.45, 1.0, cy));
     float a = uK * g * life * w * patchK(aU.z, uTime, uSeed) * (0.6 + 0.6 * fract(aB.w * 7.13))
-            * exp(-d * ${EXT}) * smoothstep(1.5, 9.0, d);
+            * exp(-d * ${EXT}) * smoothstep(4.0, 20.0, d);   // inside the veil there is no veil: it thins away as you come into it
     vA = a;
     if (a < 0.0008) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // nothing to draw: off the screen
     gl_Position = projectionMatrix * viewMatrix * vec4(wc.xyz + rt * (aB.x * R) + upv * (aB.y * R * sy), 1.0);
@@ -284,7 +284,7 @@ const WALL_FS = `
     float spill = exp( -max( vF.x, 0.0 ) / 1.6 ) * top * ( 1.0 - smoothstep( 2.0, 14.0, depth ) ) * 0.28;
     float tip = 1.0 - smoothstep( uHalf * 0.6, uHalf * 0.97, abs( u ) );
     float d = distance( vW, cameraPosition );
-    float near = 0.3 + 0.7 * smoothstep( 2.0, 18.0, d );                  // up close: light ON the rock, not paint
+    float near = 0.2 + 0.8 * smoothstep( 3.0, 24.0, d );                  // up close: light ON the rock, not paint
     float a = uK * tip * near * patchK( u, uTime, uSeed ) * ( walls + spill ) * exp( -d * ${EXT} );
     if ( a <= 0.002 ) discard;
     gl_FragColor = vec4( uColor, a );
@@ -388,7 +388,7 @@ const HALO_FS = `
     // its own fade with range (fog off), and never past the cap; gone edge-on (a grazing view of a
     // flat glow is a hard band across the crack)
     vec3 tc = cameraPosition - vW; float dd = length(tc);
-    a = min( a * clamp( 1.0 - dd / uFar, 0.0, 1.0 ) * smoothstep( 0.18, 0.55, abs( tc.y ) / max( dd, 1e-3 ) ), uMax );
+    a = min( a * clamp( 1.0 - dd / uFar, 0.0, 1.0 ) * smoothstep( 0.18, 0.55, abs( tc.y ) / max( dd, 1e-3 ) ) * smoothstep( 4.0, 18.0, dd ), uMax );   // (and thinning as you come into it)
     if ( a <= 0.001 ) discard;
     gl_FragColor = vec4( uColor, a );
   }`;
