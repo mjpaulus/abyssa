@@ -445,6 +445,21 @@ export async function descentLens(zi, o = {}) {
   const closeAt = [], hfAt = [], offAt = [], salAt = []; let salIn = 0, salInMax = 0, salFloor = 0, salFloorAt = -1, offAll = 0, postN = 0, postClose = 0, postHf = 0, postSal = 0, through = false;
   const fell0 = window.player.pos.y;
   const startZone = window.zone, shots = o.shots || [], got = [], holds0 = window.__shaftHolds ? window.__shaftHolds() : 0;
+  // per FRAME (dt o.dt, default 1/60): the lens's speed RELATIVE TO SAL (how fast it moves in his frame:
+  // a cut or a pop shows here), his own lateral step, and the guard's largest one-frame move
+  const fdt = o.dt || 1 / 60, cPrev = cam.position.clone(), pPrev = window.player.pos.clone();
+  let relMax = 0, relAt = null, stepMax = 0;
+  if (window.__throatCam) window.__throatCam.last.stiffMax = 0;
+  const perFrame = () => {
+    if (o.yawRate) window.player.yaw += o.yawRate * fdt;
+    const c = cam.position, p = window.player.pos;
+    if (p.y < lip - 1 && window.gameState === 'play') {
+      const rx = (c.x - cPrev.x) - (p.x - pPrev.x), ry = (c.y - cPrev.y) - (p.y - pPrev.y), rz = (c.z - cPrev.z) - (p.z - pPrev.z);
+      const rv = Math.hypot(rx, ry, rz) / fdt; if (rv > relMax) { relMax = rv; relAt = +(lip - p.y).toFixed(1); }
+      const st = Math.hypot(p.x - pPrev.x, p.z - pPrev.z); if (st > stepMax) stepMax = st;
+    }
+    cPrev.copy(c); pPrev.copy(p);
+  };
   const tc0 = window.__throatCam ? window.__throatCam.state() : null;
   // the measure ends just above the zone-change plane (zones 0/1) or the ending's (zone 2: the
   // cinematic takes the lens there)
@@ -457,15 +472,17 @@ export async function descentLens(zi, o = {}) {
     // floor (his chest under it and no open water at his feet) or, in zone 2, the ending's plane
     through = false;
     for (let f = 0; f < (o.frames || 2400) && !through && window.gameState === 'play' && !(zi === 2 && window.player.pos.y <= trig + 1.5); f += every) {
-      if (o.yawRate) window.__bench.step(every, () => { window.player.yaw += o.yawRate / 60; }, { render: !!o.render });
-      else window.__bench.step(every, null, { render: !!o.render });
+      window.__bench.step(every, perFrame, { render: !!o.render, dt: fdt });
       const p = cam.position, pv = window.player.pos;
       if (shots.length && got.length < shots.length && lip - pv.y >= shots[got.length]) {
         got.push({ below: shots[got.length], png: window.__bench.png(await window.__bench.capture({ frames: 6 }), 0.5) });
       }
       if (pv.y > lip - 1) continue;                                         // the pivot is not in the throat yet
-      { S.fissureLocal(pv.x, pv.z, zi, _sl);
-        if (pv.y - 0.5 < T.terrainUnderH(pv.x, pv.z, zi) - 1 && !S.openRunAt(_sl.u, _sl.v, zi, pv.y - 1.35, T.terrainUnderH, _sr)) { through = true; continue; } }
+      // through the floor: his chest a unit under the old throat floor at his column, where the game lets the
+      // lens follow him down through it (game.js czi / player.js: the same test) into the zone below's water
+      if (window.zone !== startZone && pv.y - 0.5 < T.terrainH(pv.x, pv.z, zi) - 1) { through = true; continue; }
+      if (window.zone === startZone && pv.y - 0.5 < T.terrainUnderH(pv.x, pv.z, zi) - 1) { S.fissureLocal(pv.x, pv.z, zi, _sl);
+        if (!S.openRunAt(_sl.u, _sl.v, zi, pv.y - 1.35, T.terrainUnderH, _sr)) { through = true; continue; } }
       const post = window.zone !== startZone;   // past the zone-change plane, still in the old shaft
       samples++; if (post) postN++;
       boomMin = Math.min(boomMin, p.distanceTo(pv)); boomMax = Math.max(boomMax, p.distanceTo(pv)); fallV = Math.max(fallV, -window.player.vel.y);
@@ -509,7 +526,8 @@ export async function descentLens(zi, o = {}) {
     }
   } finally { window.keys.KeyC = false; }
   return { zi, u: u0, yaw: +(o.yaw || 0).toFixed(3), pitch: o.pitch || 0, yawRate: o.yawRate || 0, tris: n, samples, endBelowLip: +(lip - window.player.pos.y).toFixed(1), trigBelowLip: +(lip - trig).toFixed(1), close, inside, hfIn, worstIn, zoneEnd: window.zone, near: cam.near, minD: +minD.toFixed(3), at,
-    salIn, salInMax: +salInMax.toFixed(2), salAt, salFloor, salFloorAt, offAll, post: { n: postN, close: postClose, hfIn: postHf, salIn: postSal }, through, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
+    salIn, salInMax: +salInMax.toFixed(2), salAt, salFloor, salFloorAt, offAll, post: { n: postN, close: postClose, hfIn: postHf, salIn: postSal }, through,
+    dt: +fdt.toFixed(4), relMax: +relMax.toFixed(1), relAt, salStepMax: +stepMax.toFixed(3), guardStepMax: window.__throatCam ? +window.__throatCam.last.stiffMax.toFixed(3) : null, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
     guards: tc0 ? window.__throatCam.state().guards - tc0.guards : null, snaps: tc0 ? window.__throatCam.state().stiff - tc0.stiff : null, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
     boomMin: +boomMin.toFixed(2), boomMax: +boomMax.toFixed(2), fallV: +fallV.toFixed(1), lensBelowPivotMax: +lensBelowPivotMax.toFixed(2), shots: got };
 }
@@ -536,11 +554,13 @@ export async function standLens(zi, o) {
   const P = T.fissurePatchGeo(zi); for (const I of P.index) take(P.pos.array, I);
   const Wg = T.fissureWallOn && T.fissureWallOn() ? T.fissureWallGeo(zi) : null; if (Wg) take(Wg.pos.array, Wg.index);
   const n = tris.length / 9;
-  let close = 0, hfIn = 0, samples = 0, minD = 1e9, hfMax = -1e9;
+  let close = 0, hfIn = 0, samples = 0, minD = 1e9, hfMax = -1e9; const hfAt = [];
   for (let f = 0; f < 120; f += 2) {
     window.__bench.step(2); samples++;
     const p = cam.position, hf = T.terrainUnderH(p.x, p.z, zi) - p.y;
-    if (hf > 0.1) hfIn++; if (hf > hfMax) hfMax = hf;
+    if (hf > 0.1) { hfIn++; if (hfAt.length < 6) { const L = window.__throatCam ? window.__throatCam.last : {}; const pv = window.player.pos;
+      hfAt.push([f, +hf.toFixed(2), 'camFd', +S.fissureDist(p.x, p.z, zi).toFixed(2), 'salFd', +S.fissureDist(pv.x, pv.z, zi).toFixed(2), 'rel', +(p.y - pv.y).toFixed(2), 'st', L.st, 'fail', L.fail, 'on', window.__throatCam && window.__throatCam.state().on]); } }
+    if (hf > hfMax) hfMax = hf;
     let fMin = 1e9;
     for (let k = 0; k < n; k++) {
       const o9 = k * 9;
@@ -553,5 +573,5 @@ export async function standLens(zi, o) {
     if (fMin < cam.near) close++; if (fMin < minD) minD = fMin;
   }
   const pv = window.player.pos;
-  return { zi, samples, close, hfIn, minD: +minD.toFixed(3), hfMax: +hfMax.toFixed(2), fd: +S.fissureDist(pv.x, pv.z, zi).toFixed(2), grounded: window.player.grounded, boom: +cam.position.distanceTo(pv).toFixed(2) };
+  return { zi, samples, close, hfIn, hfAt, minD: +minD.toFixed(3), hfMax: +hfMax.toFixed(2), fd: +S.fissureDist(pv.x, pv.z, zi).toFixed(2), grounded: window.player.grounded, boom: +cam.position.distanceTo(pv).toFixed(2) };
 }

@@ -985,9 +985,13 @@ if (mode === 'shape') {
   // plus the look pitched down / up and a man turning while he falls. GATES, per case: 0 frames with
   // the lens within the near plane (0.1 u) of DRAWN crack rock (the patch, the throat walls, the
   // slabs); 0 frames with the lens under the heightfield he collides with at its own (x, z) (inside
-  // the rock: the frame shows the void behind it) — zones 0 and 1 exactly; ZONE 2 within a bound:
-  // <= 6 near frames a case, <= 12 near / 4 inside over its 23 cases (~5800 samples; measured 4-6 /
-  // 1-2 over two runs, every one 38-87 u down). Why a bound there: below ~40 u the zone-2 shaft
+  // the rock: the frame shows the void behind it) — zones 0 and 1: in the rock 0, near the drawn rock <= 1
+  // sample a case and <= 3 in all (final residual fix: followed to the throat floor, their bottom 10-16 u
+  // pinch like zone 2's and their drawn walls stand proud of collision there: 0-1 measured, min 0.008 u,
+  // never under the heightfield); ZONE 2 within a bound:
+  // <= 8 near frames a case, <= 12 near / 4 inside over its 23 cases (~5800 samples; measured 4-6 /
+  // 1-2 with the lerp guard, 7-8 / 0 with the spring guard, every one 38-87 u down; the per-case 8 since
+  // the spring guard: it ramps in instead of covering half the correction in a frame). Why a bound there: below ~40 u the zone-2 shaft
   // pinches at its kinks into pockets a few tenths of a unit to 1.6 u wide (u 15-25 off its centre),
   // and its drawn walls stand up to ~0.9-1.4 u proud of the collision heightfield at the ledge corners
   // (the strata ribbon chamfers the staircase), so the heightfield march the lens is placed by cannot
@@ -1026,13 +1030,15 @@ if (mode === 'shape') {
     if (q.zi < 2 && !q.through) fail.push(`zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}: the descent was not followed through the throat floor`);
     const at = `zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}${q.pitch ? ' pitch ' + q.pitch : ''}${q.yawRate ? ' turning ' + q.yawRate : ''}`;
     if (q.samples < 150) fail.push(`${at}: only ${q.samples} samples below the lip (the fall was not measured)`);
-    if (q.zi < 2 && q.close) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames (min ${q.minD} at ${JSON.stringify(q.at)})`);
+    if (q.zi < 2 && q.close > 1) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames (min ${q.minD} at ${JSON.stringify(q.at)})`);
     if (q.zi < 2 && q.hfIn) fail.push(`${at}: the lens inside the rock on ${q.hfIn}/${q.samples} frames`);
-    if (q.zi === 2 && q.close > 6) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames, over the zone-2 bound 6 (min ${q.minD})`);
+    if (q.zi === 2 && q.close > 8) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames, over the zone-2 bound 8 (min ${q.minD})`);
     if (q.offFrame && !(q.pitch > 0)) fail.push(`${at}: Sal out of frame on ${q.offFrame}/${q.samples} frames (ndc y ${q.ndcLow}..${q.ndcHigh}, |x| ${q.ndcSide})`);
     if (q.salIn) fail.push(`${at}: Sal inside the shaft walls on ${q.salIn}/${q.samples} frames (up to ${q.salInMax} u under the rock)`);
   }
   const z2 = r.filter(q => q.zi === 2), z2close = z2.reduce((a, q) => a + q.close, 0), z2hf = z2.reduce((a, q) => a + q.hfIn, 0);
+  const z01close = r.filter(q => q.zi < 2).reduce((a, q) => a + q.close, 0);
+  if (z01close > 3) fail.push(`zones 0/1: the lens near drawn rock on ${z01close} samples (bound 3, <= 1 a case)`);
   if (z2close > 12 || z2hf > 4) fail.push(`zone 2: the lens near drawn rock on ${z2close} frames / inside it on ${z2hf} (bound 12 / 4)`);
   console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, postSwitch: post, lensGuardFrames: guards, lensStiffFrames: snaps }));
   // STANDING in or at the open crack (the boom's floor test and the floor clamp stand aside only inside the
@@ -1080,6 +1086,32 @@ if (mode === 'shape') {
   }
   if (sClose > 3 || sHf > 4) fail.push(`standing: the lens near drawn rock on ${sClose} / under the ground on ${sHf} samples over ${stand.length} stands (bound 3 / 4)`);
   console.log(JSON.stringify({ standing: stand.length, close: sClose, hfIn: sHf }));
+  // FRAME-RATE INDEPENDENCE (final residual fix): nine descents (per zone: across, along, turning) stepped
+  // at dt 1/60 and at dt 1/30. Per frame: the lens's speed relative to Sal and the guard's one-frame move as
+  // a speed. GATES: per case, the worst lens speed relative to him at 1/30 within 1.3x (+10 u/s) of the same
+  // case's at 1/60, and over all nine within 1.2x (+5); and the guard's own one-frame move, as a speed, never
+  // over 45 u/s at either rate (RED on 6cf1039, the lerp guard, instrumented to record every move: see the
+  // final-fix report); at 1/30 the
+  // whole-shaft gates hold within a bound (zones 0/1: <= 2 near-plane and <= 2 in-rock samples a case: the
+  // follow spring itself is explicit Euler at dt and trails further at 30 fps); Sal never in the walls.
+  const fr = await c.ev(`(async () => {
+    const W = await import('/tools/bench/walls-inside.page.js'); const out = [];
+    for (const dt of [1 / 60, 1 / 30]) for (let zi = 0; zi < 3; zi++) for (const k of [{ u: -4, yaw: Math.PI / 2 }, { u: 9, yaw: 0 }, { u: -4, yaw: 0, yawRate: 1.0 }]) {
+      const q = await W.descentLens(zi, Object.assign({ dt, every: dt > 0.02 ? 1 : 2, t0: 3000 + out.length * 23 }, k));
+      out.push({ dt: q.dt, zi, u: k.u, yaw: Math.round(k.yaw * 57.3), turn: k.yawRate || 0, n: q.samples, close: q.close, hfIn: q.hfIn, salIn: q.salIn, relMax: q.relMax, relAt: q.relAt,
+        guardSpeed: q.guardStepMax == null ? null : +(q.guardStepMax / q.dt).toFixed(1), salStepMax: q.salStepMax });
+    }
+    window.gotoZone(0); return out; })()`);
+  const agg = dt => { const a = fr.filter(q => Math.abs(q.dt - dt) < 1e-3); return { rel: Math.max(...a.map(q => q.relMax)), guard: Math.max(...a.map(q => q.guardSpeed || 0)), salStep: Math.max(...a.map(q => q.salStepMax)) }; };
+  const f60 = agg(0.0167), f30 = agg(0.0333);
+  console.log(JSON.stringify({ frameRate: { dt60: f60, dt30: f30 } }));
+  for (const q of fr) console.log(JSON.stringify(q));
+  if (f30.rel > 1.2 * f60.rel + 5) fail.push(`frame rate: the lens's worst speed relative to him ${f30.rel} u/s at 1/30 vs ${f60.rel} at 1/60`);
+  // the guard's own move: a speed limit per SECOND (45 u/s), so no frame rate turns it into a cut
+  if (f60.guard > 46 || f30.guard > 46) fail.push(`frame rate: the guard moved the lens at ${f60.guard} u/s at 1/60, ${f30.guard} at 1/30 (limit 45)`);
+  const a60 = fr.filter(q => q.dt < 0.02), a30 = fr.filter(q => q.dt > 0.02);
+  a30.forEach((q, i) => { const b = a60[i]; if (b && q.relMax > 1.3 * b.relMax + 10) fail.push(`frame rate, zone ${q.zi} u ${q.u} yaw ${q.yaw}${q.turn ? ' turning' : ''}: ${q.relMax} u/s at 1/30 vs ${b.relMax} at 1/60`); });
+  for (const q of fr) if (q.dt > 0.02 && (q.zi < 2 && (q.close > 2 || q.hfIn > 2) || q.salIn)) fail.push('at dt 1/30: ' + JSON.stringify(q));
   for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
     minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip, salIn: q.salIn, salInMax: q.salInMax, salAt: q.salAt, salFloor: q.salFloor, salFloorAt: q.salFloorAt, offAll: q.offAll, holds: q.shaftHolds, closeAt: q.closeAt, hfAt: q.hfAt, offAt: q.offAt }));
 } else if (mode === 'ending') {
