@@ -850,6 +850,8 @@ export const terrainMeshes = [];
 // volume. Measured worst gap 18.0u (zone 1); 22 leaves 4u everywhere. The offset is
 // invisible: at 231 units through 25% transmittance nothing about it reads.
 const SHELL_STEP = 3, SHELL_DROP = 22;   // 288/3 = 96 quads/side, 97x97 verts
+const SHELL_CUT = 0.5, SHELL_HOLD = 3;   // the crack: cells with their centre this far inside the lip outline are cut; vertices within HOLD of it held at the lip
+const _shl = { u: 0, v: 0 }, _shw = { x: 0, z: 0 };
 const roofShells = [];
 
 function shellMat(alb) {
@@ -1249,6 +1251,21 @@ export function buildTerrain() {
       const q = SEG / SHELL_STEP;
       const sg = new THREE.PlaneGeometry(1, 1, q, q);
       sg.rotateX(-Math.PI / 2);
+      // THE FISSURE (Task 4, I2): the roof shell is a coarse subsample of the floor above, so over
+      // the crack it hung the carve's 70 u keel down into the zone below as blades. Its cells whose
+      // centre lies in the crack's footprint are cut (the crack is an opening: from below you look
+      // up through it), and fillTerrain holds every vertex near the crack at its local lip level, so
+      // no cell on the rim dips into the carve either. Topology from the frozen outline: built once.
+      {
+        const m1 = q + 1, keep = [];
+        for (let iy = 0; iy < q; iy++) for (let ix = 0; ix < q; ix++) {
+          const xc = (AX[ix * SHELL_STEP] + AX[(ix + 1) * SHELL_STEP]) * 0.5, zc = (AX[iy * SHELL_STEP] + AX[(iy + 1) * SHELL_STEP]) * 0.5;
+          if (fissureDist(xc, zc, zi) < SHELL_CUT) continue;
+          const a = ix + m1 * iy, b = ix + m1 * (iy + 1), c = ix + 1 + m1 * (iy + 1), d = ix + 1 + m1 * iy;
+          keep.push(a, b, d, b, c, d);
+        }
+        sg.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
+      }
       const sm = new THREE.Mesh(sg, shellMats[zi]);
       sm.visible = false;               // updateTerrain gates it; warmUp un-hides for compile
       scene.add(sm);
@@ -1341,6 +1358,15 @@ export function fillTerrain() {
         SP[i * 3] = ax[k * SHELL_STEP];
         SP[i * 3 + 1] = H[(j * SHELL_STEP) * n + k * SHELL_STEP] - SHELL_DROP;
         SP[i * 3 + 2] = ax[j * SHELL_STEP];
+        // near the crack: never down into the carve (held at the lower lip beside it, less the drop)
+        const fd = fissureDist(SP[i * 3], SP[i * 3 + 2], zi);
+        if (fd < SHELL_HOLD) {
+          fissureLocal(SP[i * 3], SP[i * 3 + 2], zi, _shl);
+          const FZz = FISSURE[zi], uu = Math.max(-FZz.halfLen, Math.min(FZz.halfLen, _shl.u)), wd = _widths(FZz, uu);
+          fissureWorld(uu, wd.w1 + 1.5, zi, _shw); let lipY = heightAt(_shw.x, _shw.z, zi, true);
+          fissureWorld(uu, -wd.w0 - 1.5, zi, _shw); lipY = Math.min(lipY, heightAt(_shw.x, _shw.z, zi, true));
+          SP[i * 3 + 1] = Math.max(SP[i * 3 + 1], lipY - SHELL_DROP);
+        }
       }
       sg.attributes.position.needsUpdate = true;
       sg.computeBoundingSphere();

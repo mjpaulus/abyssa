@@ -570,7 +570,7 @@ if (mode === 'shape') {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
     const site = 0, F = S.FISSURE[0], jam = S.jamFloorAt(0, 0, 0, T.terrainH), out = {};
-    window.__chart.rec()[site][0] = 1;          // the pencil has her: zone 0 calmed
+    window.__chart.rec()[site][0] = 1; window.__chart.visit()[0] = 1;   // calmed THIS visit (the pencil has her too)
     window.gotoZone(0); window.lev.calmed = true;
     out.kAtEnter = window.__fissure.k(0);
     window.__bench.place(F.cx, F.cz, 0, 0); window.player.pos.y = jam + 1.35;
@@ -595,14 +595,26 @@ if (mode === 'shape') {
   if (r.kReenter !== 1) fail.push('zone 0 shut on re-entry ' + r.kReenter);
   if (r.rise.caughtOnJam >= 0 || r.rise.maxStep > 0.5 || r.rise.top < 7) fail.push('a phantom jam stopped him ' + JSON.stringify(r.rise));
   console.log(JSON.stringify(r));
-} else if (mode === 'open-persist') {   // calmed zones load OPEN without the cutscene; uncalmed load SHUT
+} else if (mode === 'open-persist') {
+  // OPEN = CALMED THIS VISIT (Michael, "Ritual, remembered": the sleepers re-wake every visit, the
+  // water does not remember). (a) a zone calmed this visit stays open across zone changes (down and
+  // back); (b) an anchorage the chart only RECORDS loads shut on arrival; (c) and after a reload.
   const r = await c.ev(`(async () => {
-    window.__helm = true; const rec = window.__chart.rec(); const site = 0;
-    rec[site][0] = 1; rec[site][1] = 0;                                   // zone 0 calmed, zone 1 not
-    window.__chart.arrive(0);                                             // reseed path applies the record
-    return { k0: window.__fissure.k(0), k1: window.__fissure.k(1) }; })()`);
-  if (r.k0 !== 1) fail.push('calmed zone did not load open ' + r.k0);
-  if (r.k1 !== 0) fail.push('uncalmed zone loaded open ' + r.k1);
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const rec = window.__chart.rec(), visit = window.__chart.visit(), out = {};
+    window.gotoZone(0); rec[0][0] = 1; visit[0] = 1; window.gotoZone(0);   // the calm's two writes
+    window.gotoZone(1); out.a1 = { k0: window.__fissure.k(0), k1: window.__fissure.k(1) };
+    window.gotoZone(0); out.a0 = { k0: window.__fissure.k(0), k1: window.__fissure.k(1) };
+    window.__chart.arrive(0); out.b = { k0: window.__fissure.k(0), rec00: rec[0][0], visit0: visit[0] };
+    return out; })()`);
+  await c.send('Page.reload', { ignoreCache: true });
+  await new Promise(res => setTimeout(res, 1500));
+  await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__fissure`, 240000, 1000);
+  r.c = await c.ev(`({ k0: window.__fissure.k(0), rec00: window.__chart.rec()[0][0], visit0: window.__chart.visit()[0] })`);
+  if (r.a1.k0 !== 1 || r.a0.k0 !== 1) fail.push('calmed this visit: zone 0 did not stay open across zone changes ' + JSON.stringify(r));
+  if (r.a1.k1 !== 0 || r.a0.k1 !== 0) fail.push('uncalmed zone 1 loaded open ' + JSON.stringify(r));
+  if (r.b.k0 !== 0 || r.b.rec00 !== 1 || r.b.visit0 !== 0) fail.push('recorded-only anchorage did not load shut on arrival ' + JSON.stringify(r.b));
+  if (r.c.k0 !== 0 || r.c.rec00 !== 1) fail.push('recorded-only anchorage did not load shut after a reload ' + JSON.stringify(r.c));
   console.log(JSON.stringify(r));
 } else if (mode === 'calm-open') {
   // THE REAL CALM PATH (game.js's ev.calmed block), at home zone 0, Sal stood on the jam's middle:

@@ -1,7 +1,7 @@
 // src/world/fissure.js — THE FISSURE's jam, its seep and the opening (spec 2026-10-10 §1).
 // OWNS each zone's OPEN LEVEL k (0 shut .. 1 open): riftOpen (k > 0.5), the shut floor's flag
 // (fissureShape.js setFissureShut, read by terrain.js jamAt / shutFloorY) and, from Task 4, the
-// open light all read fissureOpenK. game.js pushes the chart's calm record in (setFissureOpen on
+// open light all read fissureOpenK. game.js pushes the calmed-THIS-VISIT set in (setFissureOpen on
 // every zone entry / reseed) and starts the opening (openFissure); nothing else writes k.
 //
 // SHUT, what is drawn over the crack IS what Sal stands on (fix round 1, controller ruling I1):
@@ -54,6 +54,7 @@ import { jamRockKit } from './flora.js';
 import { seededRand } from '../lib/textures.js';
 import { spawnPlume, updatePlumes, plumeTicks, buildPlumes } from '../entities/sleeper/plume.js';
 import { currentSiteIndex } from './site.js';
+import { siteLean } from './rifts.js';
 
 const N_BOULDER = 160, COLLAPSE = 3.6, SWELL = 3.0;
 const T_BREAK = 0.4, T_OPEN = 0.5 * (COLLAPSE + SWELL);        // the break; k passes 0.5 (the floor goes)
@@ -69,7 +70,7 @@ const SEEP_COL = [[0.66, 0.84, 1.0], [0.50, 0.80, 1.0], [0.40, 0.95, 1.0]], SEEP
 const SEEP_K = [1.6, 1.0, 0.4];
 const SEEP_TUNE = { k: 1, layer: 0.16, wisp: 0.13 };   // dev: __fissure.seep       // per zone: the same faint breath read from ~20 u in each water
 const N_WISP = 6;
-const BS = 22;   // block record: u v restY sx sy sz qx qy qz qw start floorY targetV ax ay az rate p top ph kind slot
+const BS = 22;   // block record: u v restY sx sy sz qx qy qz qw start hideY targetV ax ay az rate p top ph kind slot
 const Z = [];
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _qa = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
 const _ax = new THREE.Vector3(), _e = new THREE.Euler(), _c = new THREE.Color(), _w = { x: 0, z: 0 }, _l = { u: 0, v: 0 };
@@ -152,7 +153,7 @@ function seepMat(zi, vs, fs, key) {
 export function buildFissures() {
   buildPlumes();   // the opening's silt clouds (the Brooder's sand-plume system): built now, warmed with the rest
   for (let zi = 0; zi < 3; zi++) Z.push(buildZone(zi));
-  for (let zi = 0; zi < 3; zi++) { layout(zi); setFissureOpen(zi, 0); }
+  for (let zi = 0; zi < 3; zi++) { layout(zi); setFissureOpen(zi, 0); leanSeep(zi); }
 }
 function buildZone(zi) {
   const F = FISSURE[zi];
@@ -449,7 +450,6 @@ function layout(zi) {
     const h = terrainUnderH(P[m * 3], P[m * 3 + 2], zi);
     sM[m] = Math.max(0.35 + 0.65 * sP[m], (sY[m] - h + 1.5) / SILT_GONE);   // 1.5 u under it by then (a frame of drain is <= 0.9 u)
   }
-  Fz.siltGone = SILT_GONE;
   sg.computeBoundingSphere(); sg.boundingSphere.radius += SILT_GONE * 2 + 2;
   // the seep layer's quads: those that leak at all
   const qi = Fz.quadIdx, li = Fz.leak.geometry.index.array;
@@ -486,16 +486,22 @@ function layout(zi) {
 
 // On a reseed (game.js reseedWorldNow, after resetJam): the jam hangs under the new site's lips.
 export function reseatFissures() {
-  for (let zi = 0; zi < Z.length; zi++) { const k = Z[zi].k; layout(zi); setFissureOpen(zi, k); }
+  for (let zi = 0; zi < Z.length; zi++) { const k = Z[zi].k; layout(zi); setFissureOpen(zi, k); leanSeep(zi); }
+}
+// the seep's colour leaned for this anchorage's water (rifts.js SITE_LEAN, the open light's table)
+const _ln = [1, 1, 1];
+function leanSeep(zi) {
+  const F = Z[zi], c = SEEP_COL[zi]; siteLean(zi, _ln);
+  for (const m of [F.leak.material, F.wisp.material]) m.uniforms.uCol.value.set(c[0] * _ln[0], c[1] * _ln[1], c[2] * _ln[2]);
 }
 
 // ---- state --------------------------------------------------------------------------------
-// Instant state (load, reseed, zone entry from the chart's record, probes): stops an opening.
+// Instant state (load, reseed, zone entry from the calmed-this-visit set, probes): stops an opening.
 export function setFissureOpen(zi, k) {
   const F = Z[zi]; if (!F) return;
   F.k = Math.max(0, Math.min(1, k)); F.t = -1; F.rt = -1; F.q = 0;
   setJamSag(zi, 0); setFissureShut(zi, F.k <= 0.5);
-  F.sag = 0; F.drop = 0;
+  F.sag = 0;
   F.siltOn = F.rockOn = F.k <= 0.5;
   if (F.k <= 0.5) pose(zi, -1);
 }
@@ -535,7 +541,6 @@ export function updateFissure(dt, t, activeZone) {
       // the slump is the floor until the floor goes
       F.sag = sagAt(Math.min(T, T_OPEN));
       setJamSag(zi, F.k <= 0.5 ? F.sag : 0);
-      F.drop = T > T_OPEN ? 0.5 * A_SILT * (T - T_OPEN) * (T - T_OPEN) : 0;
       // the seabed shudders: a held tremor easing out over the collapse, a jolt at the break and
       // another as the floor goes
       F.q = T < COLLAPSE + 0.6 ? Math.min(1, T / 0.15) * 0.6 * (1 - c)
@@ -619,7 +624,7 @@ function pose(zi, T) {
   Fz.rockOn = rest || (left > 0 && T < ROCK_T); Fz.left = left;
   // the silt: sags with the floor, then drains into the throat (the middle fastest); the wisps ride it
   const drop = rest || T <= T_OPEN ? 0 : 0.5 * A_SILT * (T - T_OPEN) * (T - T_OPEN);   // on the pour's clock: it may outlast the swell
-  Fz.siltOn = drop < Fz.siltGone;
+  Fz.siltOn = drop < SILT_GONE;
   if (Fz.siltOn) {
     const P = Fz.silt.geometry.attributes.position.array, sY = Fz.sY, sP = Fz.sP, sM = Fz.sM;
     for (let i = 0; i < Fz.nverts; i++) P[i * 3 + 1] = sY[i] - sagV * sP[i] - drop * sM[i];
@@ -646,7 +651,7 @@ function drawnAt(zi, x, y0, z) {
 }
 function state(zi) {
   const F = Z[zi];
-  return { k: F.k, t: F.t, quake: F.q, opening: F.t >= 0, siltGone: F.siltGone, bouldersVisible: F.rockOn, left: F.rockOn ? F.left : 0, siltVisible: F.siltOn, boulderTopMax: F.topMax, n: F.n,
+  return { k: F.k, t: F.t, quake: F.q, opening: F.t >= 0, bouldersVisible: F.rockOn, left: F.rockOn ? F.left : 0, siltVisible: F.siltOn, boulderTopMax: F.topMax, n: F.n,
     drawnAt: (x, y, z) => drawnAt(zi, x, y, z) };
 }
 function audit(zi, samples = 1500) {

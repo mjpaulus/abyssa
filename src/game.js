@@ -198,7 +198,9 @@ await buildStep('creatures', 'SEEDING THE SHOALS');
 buildCreatures();
 buildRifts();
 // THE FISSURE's jam, silt and seep (world/fissure.js): built here, inside the loader, so the warm
-// frames draw them (forceAllDrawn) and first sight builds nothing; shut or open per the chart
+// frames draw them (forceAllDrawn) and first sight builds nothing; shut at boot (calmed THIS
+// VISIT is empty: see syncFissureRecord)
+const visitCalm = [0, 0, 0];
 buildFissures();
 syncFissureRecord();
 await buildStep('raft', 'FITTING OUT THE TENDER');
@@ -771,13 +773,16 @@ let calmLineT = -1, calmLineZ = -1, calmLine = '';
 // every zone's open level for the light (rifts.js updateRifts), refilled each frame (no allocation)
 const openK = [0, 0, 0];
 // THE FISSURE'S OPEN STATE lives in world/fissure.js (fissureOpenK, 0 shut .. 1 open, open past
-// 0.5) for EVERY zone, not just the one he is in: a zone the chart's pencil records as calmed at
-// this anchorage stays open behind him (he can come back up through it; a re-shut jam would close
-// over his head). syncFissureRecord pushes the record in on every zone entry and reseed (zones
-// mid-opening are left to finish); the calm itself starts the opening (openFissure).
+// 0.5) for EVERY zone, not just the one he is in. It is "calmed THIS VISIT" (visitCalm, Michael's
+// "Ritual, remembered", roadmap/sleepers-persist-decision.md: the sleepers re-wake every visit and
+// "the water does not" remember): written at the calm, cleared at boot and on every arrival
+// (reseedWorldNow), never on a zone entry, so a zone calmed this visit stays open behind him (he
+// can come back up through it; a re-shut jam would close over his head) while an anchorage the
+// chart's pencil only REMEMBERS loads shut until she is calmed again. syncFissureRecord pushes the
+// set in on every zone entry and reseed (zones mid-opening are left to finish); the calm itself
+// starts the opening (openFissure). (visitCalm is declared before the boot build, which reads it.)
 function syncFissureRecord() {
-  const rec = chartRec[currentSiteIndex()];
-  for (let zi = 0; zi < 3; zi++) if (!fissureOpening(zi)) setFissureOpen(zi, rec[zi] ? 1 : 0);
+  for (let zi = 0; zi < 3; zi++) if (!fissureOpening(zi)) setFissureOpen(zi, visitCalm[zi] ? 1 : 0);
 }
 const fissureOpen = () => zone >= 0 && fissureOpenK(zone) > 0.5;
 // the shut flags every "ground under X" reader shares (terrain.js shutFloorY / jamAt), set before
@@ -933,6 +938,7 @@ function reseedWorldNow(i) {
   setSiteLight(currentSite().light || null);
   setSiteGrade(currentSite().grade || null);
   fillTerrain();
+  visitCalm[0] = visitCalm[1] = visitCalm[2] = 0;   // a new arrival: the water has forgotten (enterZone(0) below syncs it)
   resetJam();   // the jam hangs under the new site's lips (enterZone below reads it)
   reseatFissures();   // ...and the drawn jam with it (boulders, silt, seep refilled in place)
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
@@ -982,7 +988,7 @@ window.__hit = () => ({ torn: +survival.torn.toFixed(2), refill: +o2RefillRate()
 window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zone ' + zone; };
 // Debug: sail without the fade (the fade is cosmetic; this is the state change), and
 // force the reseed directly. Kept for probes and for future harness runs.
-window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec,
+window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm,
   found: () => chartFound, keeps: () => keepsakes, fp: () => terrainFingerprint() };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
@@ -2041,7 +2047,7 @@ function update(dt, t) {
   // THE DEEP'S OWN LIGHT (rifts.js) reads each zone's open level, never the calm instant: it wells
   // up as the jam pours (after updateFissure, so the light and k are the same frame's)
   openK[0] = fissureOpenK(0); openK[1] = fissureOpenK(1); openK[2] = fissureOpenK(2);
-  updateRifts(dt, t, zone, openK); pm('rifts');
+  updateRifts(dt, t, openK); pm('rifts');
 
   // ---- THE VOYAGE ------------------------------------------------------------------
   // The inked passage (ui/passage.js) runs on its own wall clock; it tells us when to
@@ -2160,8 +2166,8 @@ function update(dt, t) {
     }
   }
   // zone progression through the rift, gated on having the line to work the next zone
-  // (the way down is the fissure's: open past half, the jam gone -- not the calm instant; a
-  // recorded zone loads open, so a remembered sleeper does not hold the throat shut either)
+  // (the way down is the fissure's: open past half, the jam gone -- not the calm instant; a zone
+  // calmed this visit stays open behind him)
   if (zone >= 0 && zone < 2 && fissureOpen() && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
     if (canDescendTo(zone + 1)) enterZone(zone + 1);
     else if (msgT <= 0) showMsg(`THE LINE IS TOO SHORT — ${HOSE_REQ[zone + 1] * 3} M NEEDED`, 3);
@@ -2296,6 +2302,7 @@ function update(dt, t) {
     }
     if (ev.calmed) {
       chartRec[currentSiteIndex()][zone] = 1;
+      visitCalm[zone] = 1;   // the water keeps it open for THIS visit only
       saveChart();
       player.light = 1;
       setCalm(1);

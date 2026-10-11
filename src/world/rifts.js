@@ -3,30 +3,41 @@
 // OWNED BY: water/atmosphere agent (rift VFX) — motes logic is shared, coordinate before changing.
 //
 // THE DEEP'S OWN LIGHT (spec 2026-10-10 §1 "Open"): cold pale blue-white breathing up out of the
-// fissure, like a portal, never neon. It reads ONLY the fissure's open level k (world/fissure.js
-// fissureOpenK; game.js passes the three zones' k in): nothing while the jam holds (the jam's seep
-// is the shut light), welling up over the swell as the jam pours (k from 0.545, the moment the
-// seep's last breath has gone, to 1: one light hands to the other, never both), full when open.
-// No source is drawn and no THREE light is added (the count is 14).
-//   - THE SHAFTS: 3-5 thin shells stood ALONG the crack's kinked centreline (fissureWorld), drawn
-//     out along it, rooted on the throat floor, bright down in the crack, dissolving some tens of
-//     units over the lip. Their stations keep clear of the overhang slabs, wide shells never reach
-//     one (no blade of light under or through a roof).
-//   - THE WALLS: light on the two wall faces, laid on the fissure patch's OWN triangles (terrain.js
-//     fissurePatchGeo: the same vertices and transform, pulled toward the lens: the seep's
-//     depth-stable rule), so it follows every stratum and broken block of both lips. The old
-//     crater-floor caustic carried onto the faces (rings rising up the wall, streaks along the
-//     crack) over a pale wash that deepens into the throat: the deep is where the light is.
-//   - THE DRIFT: a column of motes rising out of the crack along its middle.
-//   - THE HALO: a flat glow lying just over the lips, the light spilling out into the water (from
-//     above it softens the gash's edge; edge-on it is nothing).
-//   - THE SURFACE GLOW (zone 0, the one fissure under open sea): a faint, low, wide warmGlow sprite
-//     stood on the sea over the crack, seen from the air only (the sea hides its lower half: from the
-//     deck a pale mound of light on the swell marks the place); alpha <= 0.08, faded out by 320 u.
+// fissure, like a portal, never neon, with no visible source. It reads ONLY the fissure's open
+// level k (world/fissure.js fissureOpenK; game.js passes the three zones' k in): nothing while the
+// jam holds (the jam's seep is the shut light), welling up over the swell as the jam pours (k from
+// 0.545, the moment the seep's last breath has gone, to 1: one light hands to the other, never
+// both), full when open. Open = calmed THIS VISIT (game.js visitCalm). No THREE light (count 14).
+//   - THE CURTAIN: a continuous, uneven veil of light along the whole middle of the crack: a lattice
+//     of soft camera-facing blobs (a station every 1.2 u along the kinked centreline, seven rising
+//     blobs each) that rise slowly out of the throat floor, swelling as they climb and dissolving
+//     over the lip. Soft every way: a gaussian disc that is zero before the quad's edge, its radius
+//     held inside the MEASURED open half-width of the crack at its height (marched against the rock
+//     and the overhang slabs' bodies at every reseat), so no quad plane ever reaches rock with any
+//     light on it. Brighter in places: one slow noise along the crack (shared with the walls, so a
+//     bright reach of the veil lights the rock beside it). Stacking is weighed off by view: end-on
+//     along the crack and straight down, where the lattice piles up on itself.
+//   - THE WALLS: light on the rock of the crack and its lips, laid on the fissure patch's OWN
+//     triangles (terrain.js fissurePatchGeo: the same vertices and transform, pulled toward the lens:
+//     the seep's depth-stable rule), FrontSide: the faces turned to the throat's axis catch the light
+//     rising out of it (the old crater caustic carried onto them: rings rising, streaks along the
+//     crack), and the lips, the slabs and the apron tops catch the glow spilling out over the crack.
+//     No even floor wash: the throat's floor is not a lit tray, the light is in the water.
+//   - THE DRIFT: a column of motes rising out of the crack along its middle, each from the floor
+//     under it.
+//   - THE HALO: a flat glow lying just over the lips, the light spilling out into the water.
+//   - THE SURFACE GLOW (zone 0, the one fissure under open sea): a low, wide warmGlow sprite stood on
+//     the sea over the crack, seen from the air only (the sea hides its lower half: from the deck a
+//     pale mound of light on the swell marks the place); alpha <= 0.16, faded out by 320 u.
+// FROM BELOW NOTHING: every part fades out as the camera goes below that zone's deepest throat floor
+// (16 u), so the zone underneath (where the descent lands and the ending rises) never sees it.
 // All additive, fog OFF, each with its own fade to black with range (never fogged additive: fog
 // turns an additive glow into a disc of water colour). Breath 0.75 + 0.25 sin(2 pi t / 7.5).
-// Built at boot (buildRifts, before the loader's warm frames: forceAllDrawn draws them OPEN-shaped,
-// so the first opening builds nothing); reseatRifts re-seats them on a voyage (no geometry growth).
+// PER SITE: each anchorage's water and grade cast the light (Pallid's turned it cream); reseatRifts
+// leans every part's colour per site and zone (SITE_LEAN, calibrated on frames) so it lands cold
+// pale blue-white at every anchorage; fissure.js leans the seep with the same table.
+// Built at boot (buildRifts, before the loader's warm frames: forceAllDrawn draws them, so the first
+// opening builds nothing); reseatRifts re-seats them in place on a voyage (no geometry growth).
 // Per frame: uniforms, one sea-height tap while the surface glow is up; zero allocation.
 import * as THREE from 'three';
 import { scene, camera } from '../core.js';
@@ -34,24 +45,42 @@ import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { makeGlow, makeWarmGlow } from '../lib/textures.js';
 import { terrainH, terrainUnderH, terrainMeshes, fissurePatchGeo } from './terrain.js';
-import { FISSURE, SLABS, fissureWorld, fissureDist, lipMeanY, _widths } from './fissureShape.js';
+import { FISSURE, fissureWorld, fissureLocal, fissureDist, slabProbe, lipMeanY, _widths } from './fissureShape.js';
 import { surfaceHeightAt, localSurfaceY, stormLevel } from './water.js';
+import { currentSiteIndex } from './site.js';
 
 export const rifts = [];
 
 // Rift light reads as a beacon, so it survives murk better than the general fog.
 const BEACON_EXT = 0.010;
 const TAU = Math.PI * 2;
-// pale blue-white (the brief's 0.62, 0.78, 1.0) as it lands on screen: zone 1's water grade warms
-// and zone 2's leans violet, so each zone's source is leaned against its grade (as the seep's is)
+// pale blue-white (the brief's 0.62, 0.78, 1.0) as it lands on screen at home: zone 1's water grade
+// warms and zone 2's leans violet, so each zone's source is leaned against its grade
 const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
+// per site (index = site.js row), per zone: a multiplier on COLS so the light lands the same cold
+// pale blue-white in that anchorage's own water and grade (calibrated: open-minus-shut mean colour
+// over the light's pixels against home's; fissure.js leans the seep with it)
+export const SITE_LEAN = [
+  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+  [[1, 1, 1], [1, 1, 1], [1, 1, 1]],
+];
+export function siteLean(zi, out) {
+  const L = (SITE_LEAN[currentSiteIndex()] || SITE_LEAN[0])[zi];
+  out[0] = L[0]; out[1] = L[1]; out[2] = L[2]; return out;
+}
 const BREATH = 7.5;                      // s
 const K0 = 0.545;                        // k at which the seep's last breath is gone (fissure.js: T = COLLAPSE)
 // per zone gain (dev: __rifts.K), and the parts' shares (dev: __rifts.tune)
 const LIGHT_K = [1.7, 1, 0.8];
-const TUNE = { shaft: 0.09, wall: 0.85, drift: 0.85, halo: 0.16, surf: 0.08 };
-const SURF_MAX = 0.08;                   // the surface glow's alpha never passes this
+const TUNE = { curtain: 0.16, endOn: 0.05, wall: 0.85, drift: 0.85, halo: 0.16, surf: 0.14, surfH: 22 };
+const SURF_MAX = 0.16;                   // the surface glow's alpha never passes this
 const N_DRIFT = 320;
+const ST_DU = 1.2, NB = 9, LEV = 12, LEV_UP = 6;  // curtain: station spacing (u), blobs per station, measured levels (floor .. lip + LEV_UP, closer near the top: f = 1 - (1 - l/11)^2)
+const R_MAX = 5.0, HW_FILL = 0.85, STRETCH = 1.8;      // a blob's natural radius cap; the share of the measured open half-width it may fill
+const UP_TOP = 26;                       // the curtain climbs this far over the lip
+const GATE = 16;                         // the fade (u) as the camera goes below the deepest throat floor
 const c01 = x => x < 0 ? 0 : x > 1 ? 1 : x;
 
 const NOISE = `
@@ -60,135 +89,228 @@ float vn(vec2 p){vec2 i=floor(p),g=fract(p);g=g*g*(3.0-2.0*g);
 return mix(mix(h21(i),h21(i+vec2(1,0)),g.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),g.x),g.y);}
 float fbm3(vec2 p){float v=0.0,a=0.5;for(int i=0;i<3;i++){v+=a*vn(p);p*=2.11;a*=0.5;}return v;}`;
 const EXT = BEACON_EXT.toFixed(4);
+// the one slow noise along the crack: where the veil is bright the walls beside it are too
+const PATCH = `float patchK(float u, float t, float seed){ float n = vn(vec2(u * 0.09 + t * 0.012 + seed, seed * 1.7)); return 0.3 + 1.3 * n * n; }`;
 
-// ---- THE SHAFTS ----------------------------------------------------------------------------
-// Shells shaded so alpha tracks |N.V|, the chord length through the enclosed volume: a lit
-// column of water, not a cardboard tube. uLipV: the fraction of the shell's height at the lip;
-// below it the shell is the throat's light, above it the light dissolves into the water.
-const SHAFT_VS = `
-  varying vec3 vN, vW; varying vec2 vUv;
+// ---- THE CURTAIN ---------------------------------------------------------------------------
+// Per blob vertex: aS (station x, z in the group's frame, floor and lip heights relative to the
+// group), aH0/aH1 (the measured open half-width at the LEV levels from the floor to lip + LEV_UP),
+// aB (corner x, corner y, rise phase, seed), aU (the crack's tangent x, z there, u, rise rate).
+const CURTAIN_VS = `
+  uniform float uTime, uK, uEndOn, uSeed;
+  attribute vec4 aS, aH0, aH1, aH2, aB, aU;
+  varying vec2 vQ; varying float vA, vSeed;
+  ${NOISE}
+  ${PATCH}
+  float lev(int i){ vec4 v = i < 4 ? aH0 : i < 8 ? aH1 : aH2; int j = i - (i / 4) * 4; return j == 0 ? v.x : j == 1 ? v.y : j == 2 ? v.z : v.w; }
+  float hwAt(float y){
+    float top = aS.w + ${LEV_UP.toFixed(1)};
+    if (y >= top) return aH2.w + (y - top) * 0.5;
+    float t = clamp((y - aS.z) / max(1.0, top - aS.z), 0.0, 1.0);
+    float f = (1.0 - sqrt(1.0 - t)) * ${(LEV - 1).toFixed(1)};
+    int i = int(min(floor(f), ${(LEV - 2).toFixed(1)}));
+    return mix(lev(i), lev(i + 1), f - float(i));
+  }
   void main(){
-    vN = normalMatrix * normal;
-    vec4 mv = modelViewMatrix * vec4( position, 1.0 );
-    vW = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
-    vUv = uv;
-    gl_Position = projectionMatrix * mv;
+    vQ = aB.xy; vSeed = aB.w;
+    // it rises out of the floor and dissolves over the lip, swelling as it climbs
+    float k = fract(aB.z + uTime * aU.w);
+    float y = mix(aS.z, aS.w + ${UP_TOP.toFixed(1)}, k);
+    float R = min(min(${R_MAX.toFixed(1)}, 0.9 + 0.06 * (y - aS.z)), ${HW_FILL.toFixed(2)} * hwAt(y));
+    R = max(R, 0.05);
+    vec4 wc = modelMatrix * vec4(aS.x, y, aS.y, 1.0);
+    vec3 vd = cameraPosition - wc.xyz; float d = length(vd); vd /= max(d, 1e-3);
+    // a tall veil, not a puff: drawn out up the world's vertical (seen from the side), turning to a
+    // plain camera-facing disc as the view comes overhead (where a vertical card would be edge-on)
+    float over = smoothstep(0.5, 0.95, abs(vd.y));
+    vec3 rt = normalize(vec3(-vd.z, 0.0, vd.x) + vec3(1e-4, 0.0, 0.0));
+    vec3 upv = normalize(mix(vec3(0.0, 1.0, 0.0), cross(rt, vd), over));
+    float sy = mix(${STRETCH.toFixed(1)}, 1.0, over);
+    float lift = max(0.0, aS.z + 0.95 * R * sy - y);   // never down into the throat floor
+    wc.y += lift; y += lift;
+    // in the crack it is the light; over the lip it thins away into the water
+    float g = y < aS.w ? 1.0 : exp(-(y - aS.w) / 7.0);
+    float life = smoothstep(0.0, 0.10, k) * (1.0 - smoothstep(0.72, 1.0, k));
+    // where the lattice stacks on itself on screen: end-on along the crack, and from straight above
+    float ct = abs(dot(vd.xz, aU.xy)), cy = abs(vd.y);
+    float w = mix(1.0, uEndOn, smoothstep(0.4, 1.0, ct)) * mix(1.0, 0.3, smoothstep(0.45, 1.0, cy));
+    float a = uK * g * life * w * patchK(aU.z, uTime, uSeed) * (0.6 + 0.6 * fract(aB.w * 7.13))
+            * exp(-d * ${EXT}) * smoothstep(1.5, 9.0, d);
+    vA = a;
+    if (a < 0.0008) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); return; }   // nothing to draw: off the screen
+    gl_Position = projectionMatrix * viewMatrix * vec4(wc.xyz + rt * (aB.x * R) + upv * (aB.y * R * sy), 1.0);
   }`;
-const SHAFT_FS = `
-  uniform vec3 uColor; uniform float uTime, uK, uPh, uLipV;
-  varying vec3 vN, vW; varying vec2 vUv;
+const CURTAIN_FS = `
+  uniform vec3 uColor; uniform float uTime;
+  varying vec2 vQ; varying float vA, vSeed;
   ${NOISE}
   void main(){
-    vec3 N = normalize( vN );
-    vec3 Vv = normalize( -( viewMatrix * vec4( vW, 1.0 ) ).xyz );
-    // soft at the shell's silhouette, fullest through its middle: a lit column of water
-    float chord = pow( abs( dot( N, Vv ) ), 2.2 );
-    // streaks rising slowly up the column: noise sampled on a circle (the wrap has no seam),
-    // stretched along the height
-    float a = vUv.x * 6.28318;
-    vec2 cir = vec2( cos( a ), sin( a ) ) * 3.4;
-    float n = fbm3( cir + vec2( vUv.y * 1.2 - uTime * 0.05 + uPh, vUv.y * 0.6 + uTime * 0.02 ) );
-    n = n * n * 1.8;
-    // soft at its root on the throat floor, full in the crack, dissolving over the lip
-    float up = 1.0 - smoothstep( uLipV - 0.06, 1.0, vUv.y );
-    float vert = smoothstep( 0.0, 0.10, vUv.y ) * up * up;
-    float dist = distance( vW, cameraPosition );
-    float al = chord * vert * ( 0.25 + n ) * uK * exp( -dist * ${EXT} );
-    if ( al <= 0.002 ) discard;
-    gl_FragColor = vec4( uColor, al );
+    float r2 = dot(vQ, vQ);
+    // a soft disc, zero well before the quad's edge, a little uneven inside
+    float a = vA * exp(-r2 * 2.6) * (1.0 - smoothstep(0.55, 1.0, r2)) * (0.7 + 0.6 * vn(vQ * 1.6 + vSeed * 31.0 + vec2(0.0, -uTime * 0.05)));
+    if (a <= 0.002) discard;
+    gl_FragColor = vec4(uColor, a);
   }`;
-function shaftMat(zi) {
-  const m = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uPh: { value: 0 }, uLipV: { value: 0.7 } },
-    vertexShader: SHAFT_VS, fragmentShader: SHAFT_FS,
-    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-    // DoubleSide is load-bearing (the chord shading reads both walls of the shell);
-    // forceSinglePass keeps it one draw
-    side: THREE.DoubleSide, forceSinglePass: true, fog: false
-  });
-  m.customProgramCacheKey = () => 'riftShaft';
-  return m;
-}
-// The stations: along the middle 62% of the crack, clear of every overhang slab by >= 2.2 u
-// (clearance = how far along the crack to the nearest slab's end), the widest clearances first,
-// >= 5 u apart, at most five. A shell's reach along the crack is held under its clearance.
-function stations(zi) {
-  const F = FISSURE[zi], L = SLABS[zi], lim = 0.62 * F.halfLen, cand = [];
-  for (let u = -lim; u <= lim + 1e-6; u += 0.5) {
-    let c = 1e9;
-    for (const sl of L) c = Math.min(c, Math.abs(u - sl.u0) - sl.hu);
-    if (c >= 2.2) cand.push({ u, c });
+function curtain(zi, rand) {
+  const F = FISSURE[zi], lim = 0.82 * F.halfLen, us = [];
+  for (let u = -lim; u <= lim + 1e-6; u += ST_DU) us.push(u + (rand() - 0.5) * 0.5);
+  const ns = us.length, nb = ns * NB, nv = nb * 4;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(nv * 3), 3));
+  const aS = new THREE.BufferAttribute(new Float32Array(nv * 4), 4), aH0 = new THREE.BufferAttribute(new Float32Array(nv * 4), 4), aH1 = new THREE.BufferAttribute(new Float32Array(nv * 4), 4), aH2 = new THREE.BufferAttribute(new Float32Array(nv * 4), 4);
+  const aB = new Float32Array(nv * 4), aU = new Float32Array(nv * 4), idx = new Uint32Array(nb * 6);
+  const st = [], _a = { x: 0, z: 0 }, _b = { x: 0, z: 0 };
+  for (let s = 0; s < ns; s++) {
+    const u = us[s];
+    fissureWorld(u - 0.5, 0, zi, _a); fissureWorld(u + 0.5, 0, zi, _b);
+    const tl = Math.hypot(_b.x - _a.x, _b.z - _a.z), tx = (_b.x - _a.x) / tl, tz = (_b.z - _a.z) / tl;
+    const wd = _widths(F, u); fissureWorld(u, (wd.w1 - wd.w0) * 0.5, zi, _a);
+    st.push({ u, x: _a.x, z: _a.z, tx, tz, floor: 0, lip: 0, hw: new Float32Array(LEV) });
+    for (let j = 0; j < NB; j++) {
+      const b = s * NB + j, ph = (j + rand() * 0.8) / NB, seed = rand(), rate = 1 / (55 + 45 * rand());
+      for (let c = 0; c < 4; c++) {
+        const v = b * 4 + c, o = v * 4;
+        aB[o] = c & 1 ? 1 : -1; aB[o + 1] = c & 2 ? 1 : -1; aB[o + 2] = ph; aB[o + 3] = seed;
+        aU[o] = tx; aU[o + 1] = tz; aU[o + 2] = u; aU[o + 3] = rate;
+      }
+      idx.set([b * 4, b * 4 + 1, b * 4 + 3, b * 4, b * 4 + 3, b * 4 + 2], b * 6);
+    }
   }
-  cand.sort((a, b) => b.c - a.c || Math.abs(a.u) - Math.abs(b.u));
-  const out = [];
-  for (const q of cand) { if (out.length >= 5) break; if (out.every(o => Math.abs(o.u - q.u) >= 5)) out.push(q); }
-  return out.sort((a, b) => a.u - b.u);
+  g.setAttribute('aS', aS); g.setAttribute('aH0', aH0); g.setAttribute('aH1', aH1); g.setAttribute('aH2', aH2);
+  g.setAttribute('aB', new THREE.BufferAttribute(aB, 4)); g.setAttribute('aU', new THREE.BufferAttribute(aU, 4));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  const m = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uEndOn: { value: TUNE.endOn }, uSeed: { value: zi * 3.7 } },
+    vertexShader: CURTAIN_VS, fragmentShader: CURTAIN_FS,
+    transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false
+  });
+  m.customProgramCacheKey = () => 'riftCurtain';
+  const mesh = new THREE.Mesh(g, m);
+  mesh.name = 'riftCurtain' + zi;
+  mesh.frustumCulled = false;
+  return { mesh, st, nb };
+}
+// SOLID at (x, z, y): under the carved rock, or inside an overhang slab's body (its top is terrainH,
+// its underside ~th below), or under the ground over the lip
+const _sp = { q: -1, th: 0 };
+function solid(x, z, y, zi) {
+  if (terrainUnderH(x, z, zi) > y) return true;
+  const sp = slabProbe(x, z, zi);
+  if (sp.q >= 0) { const top = terrainH(x, z, zi); if (y < top + 0.3 && y > top - sp.th - 0.6) return true; }
+  return false;
+}
+// the open half-width at (station, height): the nearest rock along 8 horizontal directions from the
+// station's centre, marched at 0.4 u then refined, capped at 12 u
+function openHW(s, y, zi) {
+  let best = 12;
+  for (let k = 0; k < 8; k++) {
+    const a = k / 8 * TAU, dx = Math.cos(a), dz = Math.sin(a);
+    if (solid(s.x, s.z, y, zi)) return 0;
+    let lo = 0;
+    for (let r = 0.4; r <= best; r += 0.4) {
+      if (solid(s.x + dx * r, s.z + dz * r, y, zi)) {
+        let a0 = lo, a1 = r;
+        for (let i = 0; i < 4; i++) { const m = (a0 + a1) * 0.5; if (solid(s.x + dx * m, s.z + dz * m, y, zi)) a1 = m; else a0 = m; }
+        best = Math.min(best, a0); break;
+      }
+      lo = r;
+    }
+  }
+  return best;
+}
+// the measured levels: from the floor to lip + LEV_UP, closer together near the top (where the open
+// width changes fastest: the lip, its heave, the slabs)
+const levY = (fl, lip, l) => { const q = 1 - l / (LEV - 1); return fl + (lip + LEV_UP - fl) * (1 - q * q); };
+function seatCurtain(R, zi, lip) {
+  const C = R.curtain, F = FISSURE[zi], g = C.mesh.geometry;
+  const S = g.attributes.aS.array, HA = [g.attributes.aH0.array, g.attributes.aH1.array, g.attributes.aH2.array];
+  let floorMin = 1e9;
+  for (let s = 0; s < C.st.length; s++) {
+    const t = C.st[s];
+    // the throat's floor under this station: the lowest ground across the crack here
+    let fl = terrainUnderH(t.x, t.z, zi);
+    for (let q = -3; q <= 3; q++) fl = Math.min(fl, terrainUnderH(t.x - t.tz * q * 0.6, t.z + t.tx * q * 0.6, zi));
+    t.floor = fl; t.lip = lip; floorMin = Math.min(floorMin, fl);
+    for (let l = 0; l < LEV; l++) t.hw[l] = openHW(t, levY(fl, lip, l), zi);
+    for (let j = 0; j < NB; j++) for (let c = 0; c < 4; c++) {
+      const o = ((s * NB + j) * 4 + c) * 4;
+      S[o] = t.x - F.cx; S[o + 1] = t.z - F.cz; S[o + 2] = fl - lip; S[o + 3] = 0;
+      for (let l = 0; l < LEV; l++) HA[l >> 2][o + (l & 3)] = t.hw[l];
+    }
+  }
+  g.attributes.aS.needsUpdate = g.attributes.aH0.needsUpdate = g.attributes.aH1.needsUpdate = g.attributes.aH2.needsUpdate = true;
+  return floorMin;
 }
 
 // ---- THE WALLS -----------------------------------------------------------------------------
 // Clip position computed exactly as the terrain's standard material does (projection * (modelView
-// * p)), polygon offset toward the lens, no depth writes: it never loses the depth test to the wall
-// it lies on (the seep's camouflage lesson, fix round 2).
+// * p)), polygon offset toward the lens, no depth writes: it never loses the depth test to the rock
+// it lies on (the seep's camouflage lesson). FrontSide: the rock's own faces only (from below, from
+// inside the rock, nothing). aF: (fissureDist, v from the kinked centreline) per patch vertex.
 const WALL_VS = `
-  varying vec3 vW, vN;
-  void main(){ vW = ( modelMatrix * vec4( position, 1.0 ) ).xyz; vN = normal;
+  attribute vec2 aF; varying vec3 vW, vN; varying vec2 vF;
+  void main(){ vW = ( modelMatrix * vec4( position, 1.0 ) ).xyz; vN = normal; vF = aF;
     vec4 mvPosition = modelViewMatrix * vec4( position, 1.0 );
     gl_Position = projectionMatrix * mvPosition; }`;
 const WALL_FS = `
-  uniform vec3 uColor; uniform float uTime, uK, uLip, uHalf; uniform vec4 uAx; uniform vec2 uM;
-  varying vec3 vW, vN;
+  uniform vec3 uColor; uniform float uTime, uK, uLip, uHalf, uSeed; uniform vec4 uAx;
+  varying vec3 vW, vN; varying vec2 vF;
   ${NOISE}
-  float tri( float t ){ return 4.0 * abs( t - floor( t + 0.5 ) ) - 1.0; }
+  ${PATCH}
   void main(){
     float depth = uLip - vW.y;
-    vec2 r = vW.xz - uAx.xy, nrm = vec2( -uAx.w, uAx.z );
-    float u = dot( r, uAx.zw );
-    // across the crack from its KINKED centreline (fissureShape.js midAt, the same triangle waves)
-    float mid = 2.2 * ( tri( u / 24.0 + uM.x ) - tri( uM.x ) ) + 0.8 * ( tri( u / 9.0 + uM.y ) - tri( uM.y ) );
-    float v = dot( r, nrm ) - mid;
+    float u = dot( vW.xz - uAx.xy, uAx.zw );
+    vec2 nrm = vec2( -uAx.w, uAx.z ), toAx = -sign( vF.y + 1e-4 ) * nrm;
     vec3 N = normalize( vN );
-    // the light comes up out of the throat, from its axis below: Lambert toward it, so the faces
-    // turned to the crack and the undersides of the strata catch it and a ledge's top does not
-    vec2 toAx = -sign( v ) * nrm;
+    // the faces turned to the throat's axis catch the light rising out of it; the lips, the slabs'
+    // tops and the apron catch the glow spilling out over the crack
     float lam = max( dot( N, normalize( vec3( toAx.x * 0.8, -0.6, toAx.y * 0.8 ) ) ), 0.0 );
+    float top = max( dot( N, normalize( vec3( toAx.x * 0.55, 0.85, toAx.y * 0.55 ) ) ), 0.0 );
     // the crater floor's caustic carried onto the faces: rings rising up the wall, streaks along the crack
     float ripple = sin( depth * 0.55 + uTime * 1.6 );
     float spokes = 0.5 + 0.5 * sin( u * 0.85 + uTime * 0.75 + ripple * 2.2 );
     float n = fbm3( vec2( u * 0.16, vW.y * 0.16 ) + vec2( uTime * 0.09, -uTime * 0.06 ) );
     float caus = ( pow( spokes, 3.0 ) * 0.9 + 0.25 ) * ( 0.35 + 1.1 * n );
-    // nothing on the lip, the caustic down the faces, a wash deepening into the throat, and the
-    // throat's floor is the light itself
-    float band = smoothstep( 0.5, 8.0, depth );
-    float wash = smoothstep( 14.0, 60.0, depth );
-    float deep = smoothstep( 45.0, 78.0, depth );
-    // the throat's light: it thins toward the pinched tips
-    float tip = 1.0 - smoothstep( uHalf * 0.55, uHalf * 0.95, abs( u ) );
+    float inside = 1.0 - smoothstep( -0.3, 0.6, vF.x );
+    float band = 0.3 + 0.7 * smoothstep( 0.5, 9.0, depth );                 // never zero at the lip
+    float deepDim = 1.0 - 0.55 * smoothstep( 28.0, 75.0, depth );          // the light is in the water, not a lit floor
+    float walls = inside * lam * band * deepDim * ( 0.22 + 0.38 * caus );
+    float spill = exp( -max( vF.x, 0.0 ) / 1.6 ) * top * ( 1.0 - smoothstep( 2.0, 14.0, depth ) ) * 0.28;
+    float tip = 1.0 - smoothstep( uHalf * 0.6, uHalf * 0.97, abs( u ) );
     float d = distance( vW, cameraPosition );
-    // up close it is light ON the rock, not paint over it: it thins as you come to it
-    float near = 0.3 + 0.7 * smoothstep( 2.0, 18.0, d );
-    float a = uK * tip * near * ( lam * ( band * ( 0.08 + 0.3 * caus ) + wash * 0.45 ) + deep * 0.55 ) * exp( -d * ${EXT} );
+    float near = 0.3 + 0.7 * smoothstep( 2.0, 18.0, d );                  // up close: light ON the rock, not paint
+    float a = uK * tip * near * patchK( u, uTime, uSeed ) * ( walls + spill ) * exp( -d * ${EXT} );
     if ( a <= 0.002 ) discard;
     gl_FragColor = vec4( uColor, a );
   }`;
 function wallMesh(zi) {
-  const P = fissurePatchGeo(zi), F = FISSURE[zi];
+  const P = fissurePatchGeo(zi), F = FISSURE[zi], A = P.pos.array, cnt = P.pos.count;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', P.pos); g.setAttribute('normal', P.nor);
-  // the patch's triangles inside the lip outline (its slab triangles, >= nv, are not wall)
-  const keep = [], A = P.pos.array;
+  // per patch vertex (slab vertices too: the buffer's whole count): its distance to the lip outline
+  // and its side of the crack (site-invariant: the patch's x, z never move)
+  const aF = new Float32Array(cnt * 2), _l = { u: 0, v: 0 };
+  for (let i = 0; i < cnt; i++) {
+    const x = A[i * 3], z = A[i * 3 + 2];
+    aF[i * 2] = fissureDist(x, z, zi); fissureLocal(x, z, zi, _l); aF[i * 2 + 1] = _l.v;
+  }
+  g.setAttribute('aF', new THREE.BufferAttribute(aF, 2));
+  // the patch's triangles in and just round the crack (the lips and the apron's first 3 u), and
+  // every overhang slab triangle (top, front, underside)
+  const keep = [];
   for (const I of P.index) for (let t = 0; t < I.length; t += 3) {
     const a = I[t], b = I[t + 1], c = I[t + 2];
+    if (a >= P.nv && b >= P.nv && c >= P.nv) { keep.push(a, b, c); continue; }
     if (a >= P.nv || b >= P.nv || c >= P.nv) continue;
-    const x = (A[a * 3] + A[b * 3] + A[c * 3]) / 3, z = (A[a * 3 + 2] + A[b * 3 + 2] + A[c * 3 + 2]) / 3;
-    if (fissureDist(x, z, zi) < 0.25) keep.push(a, b, c);
+    if ((aF[a * 2] + aF[b * 2] + aF[c * 2]) / 3 < 3) keep.push(a, b, c);
   }
   g.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
-  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(F.cx, 0, F.cz), Math.hypot(F.halfLen + 4, 48));
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(F.cx, 0, F.cz), Math.hypot(F.halfLen + 8, 50));
   const m = new THREE.ShaderMaterial({
     uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uLip: { value: 0 },
-      uHalf: { value: F.halfLen }, uAx: { value: new THREE.Vector4(F.cx, F.cz, F.dx, F.dz) }, uM: { value: new THREE.Vector2(F.ph.m[0], F.ph.m[1]) } },
+      uHalf: { value: F.halfLen }, uAx: { value: new THREE.Vector4(F.cx, F.cz, F.dx, F.dz) }, uSeed: { value: zi * 3.7 } },
     vertexShader: WALL_VS, fragmentShader: WALL_FS, transparent: true, depthWrite: false,
-    blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false,
+    blending: THREE.AdditiveBlending, side: THREE.FrontSide, fog: false,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4
   });
   m.customProgramCacheKey = () => 'riftWall';
@@ -199,13 +321,14 @@ function wallMesh(zi) {
 }
 
 // ---- THE DRIFT -----------------------------------------------------------------------------
-// aP: (x, z) in the group's frame on the crack, phase, climb rate (fraction of the column / s)
+// aP: (x, z) in the group's frame on the crack, phase, climb rate (fraction of the column / s);
+// aF: the floor under it, relative to the group (reseat)
 const DRIFT_VS = `
-  uniform float uTime, uK, uPix, uBot, uTop; attribute vec4 aP;
+  uniform float uTime, uK, uPix, uTop; attribute vec4 aP; attribute float aF;
   varying float vA;
   void main(){
     float k = fract( aP.z + uTime * aP.w );
-    vec3 p = vec3( aP.x + sin( uTime * 0.31 + aP.z * 17.0 ) * 0.5, mix( uBot, uTop, k ),
+    vec3 p = vec3( aP.x + sin( uTime * 0.31 + aP.z * 17.0 ) * 0.5, mix( aF + 2.0, uTop, k ),
                    aP.y + cos( uTime * 0.27 + aP.z * 23.0 ) * 0.5 );
     vec4 mv = modelViewMatrix * vec4( p, 1.0 );
     float dist = -mv.z;
@@ -227,13 +350,14 @@ function drift(zi, rand) {
   const pos = new Float32Array(N_DRIFT * 3), par = new Float32Array(N_DRIFT * 4);
   for (let i = 0; i < N_DRIFT; i++) {
     const u = (rand() + rand() - 1) * 0.72 * F.halfLen, wd = _widths(F, u), w = Math.min(wd.w0, wd.w1);
-    fissureWorld(u, (wd.w1 - wd.w0) * 0.5 + (rand() * 2 - 1) * 0.35 * w, zi, _w);
+    fissureWorld(u, (wd.w1 - wd.w0) * 0.5 + (rand() * 2 - 1) * 0.3 * w, zi, _w);
     par[i * 4] = _w.x - F.cx; par[i * 4 + 1] = _w.z - F.cz; par[i * 4 + 2] = rand(); par[i * 4 + 3] = 1 / (70 + 70 * rand());
   }
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('aP', new THREE.BufferAttribute(par, 4));
+  g.setAttribute('aF', new THREE.BufferAttribute(new Float32Array(N_DRIFT), 1));
   const m = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uPix: { value: 900 }, uBot: { value: -60 }, uTop: { value: 30 } },
+    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uTime: { value: 0 }, uK: { value: 0 }, uPix: { value: 900 }, uTop: { value: 30 } },
     vertexShader: DRIFT_VS, fragmentShader: DRIFT_FS,
     transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, fog: false
   });
@@ -244,46 +368,46 @@ function drift(zi, rand) {
 }
 
 // ---- THE HALO ------------------------------------------------------------------------------
-const SURF_VS = `
+const HALO_VS = `
   varying vec2 vQ; varying vec3 vW;
   void main(){ vQ = uv * 2.0 - 1.0; vW = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 ); }`;
-const SURF_FS = `
+const HALO_FS = `
   uniform vec3 uColor; uniform float uK, uTime, uFar, uMax; varying vec2 vQ; varying vec3 vW;
   ${NOISE}
   void main(){
     float r2 = dot( vQ, vQ );
     float n = vn( vQ * 3.0 + vec2( uTime * 0.05, -uTime * 0.04 ) );
     float a = uK * exp( -r2 * 3.2 ) * ( 0.75 + 0.5 * n ) * ( 1.0 - smoothstep( 0.7, 1.0, r2 ) );
-    // its own fade with range (fog off), and never past the cap
-    a = min( a * clamp( 1.0 - distance( vW, cameraPosition ) / uFar, 0.0, 1.0 ), uMax );
+    // its own fade with range (fog off), and never past the cap; gone edge-on (a grazing view of a
+    // flat glow is a hard band across the crack)
+    vec3 tc = cameraPosition - vW; float dd = length(tc);
+    a = min( a * clamp( 1.0 - dd / uFar, 0.0, 1.0 ) * smoothstep( 0.18, 0.55, abs( tc.y ) / max( dd, 1e-3 ) ), uMax );
     if ( a <= 0.001 ) discard;
     gl_FragColor = vec4( uColor, a );
   }`;
-// THE HALO: a flat glow drawn out along the crack, lying just over its lips, where the light spills
-// out of it into the water (seen from above it softens the gash's edge; edge-on it is nothing).
-function glowPlane(zi, along, across, far, max, name) {
+// a flat glow drawn out along the crack, lying just over its lips (seen from above it softens the
+// gash's edge; edge-on it is nothing)
+function halo(zi) {
   const F = FISSURE[zi], g = new THREE.PlaneGeometry(2, 2, 1, 1);
   g.rotateX(-Math.PI / 2);
   const m = new THREE.ShaderMaterial({
-    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uK: { value: 0 }, uTime: { value: 0 }, uFar: { value: far }, uMax: { value: max } },
-    vertexShader: SURF_VS, fragmentShader: SURF_FS, transparent: true, depthWrite: false,
+    uniforms: { uColor: { value: new THREE.Vector3(...COLS[zi]) }, uK: { value: 0 }, uTime: { value: 0 }, uFar: { value: 140 }, uMax: { value: 0.3 } },
+    vertexShader: HALO_VS, fragmentShader: HALO_FS, transparent: true, depthWrite: false,
     blending: THREE.AdditiveBlending, side: THREE.DoubleSide, forceSinglePass: true, fog: false
   });
   m.customProgramCacheKey = () => 'riftHalo';
   const s = new THREE.Mesh(g, m);
-  s.name = name + zi;
-  // drawn out along the crack's bearing: local x -> (dx, dz)
-  s.rotation.y = Math.atan2(-F.dz, F.dx);
-  s.scale.set(along, 1, across);
-  s.position.set(F.cx, 0.25, F.cz);
-  s.visible = false;
+  s.name = 'riftHalo' + zi;
+  s.rotation.y = Math.atan2(-F.dz, F.dx);           // local x -> the crack's bearing
+  s.scale.set(F.halfLen * 1.12, 1, F.halfW * 1.9);
+  s.position.set(0, 1.5, 0);
   return s;
 }
 
 // ---- build / seat --------------------------------------------------------------------------
 export function buildRifts() {
-  const _s = new THREE.Vector2(), _a = { x: 0, z: 0 }, _b = { x: 0, z: 0 };
+  const _s = new THREE.Vector2();
   let seed = 0x5a17;
   const rand = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
   for (let zi = 0; zi < 3; zi++) {
@@ -291,45 +415,25 @@ export function buildRifts() {
     const grp = new THREE.Group();
     grp.name = 'riftLight' + zi;
     grp.visible = false;
-    const shells = [];
-    for (const [i, st] of stations(zi).entries()) {
-      const wd = _widths(F, st.u);
-      // the thinnest the crack gets over the shell's reach along it: the shell keeps well inside
-      let wmin = Math.min(wd.w0, wd.w1);
-      for (let du = -3; du <= 3; du += 1) { const q = _widths(F, st.u + du); wmin = Math.min(wmin, q.w0, q.w1); }
-      const rBot = 0.6, rLip = 0.38 * wmin, up = [30, 38, 26, 34, 28][i];
-      const sh = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 24, 8, true), shaftMat(zi));
-      sh.name = 'riftShaft' + zi + '_' + i;
-      // local x along the crack's local tangent (the kinked centreline), drawn out along it
-      fissureWorld(st.u - 0.5, 0, zi, _a); fissureWorld(st.u + 0.5, 0, zi, _b);
-      sh.rotation.y = Math.atan2(-(_b.z - _a.z), _b.x - _a.x);
-      fissureWorld(st.u, (wd.w1 - wd.w0) * 0.5, zi, _a);
-      sh.userData = { u: st.u, c: st.c, x: _a.x, z: _a.z, rBot, rLip, up, rTop: 0, along: 1 };
-      sh.material.uniforms.uPh.value = rand() * 10;
-      shells.push(sh); grp.add(sh);
-    }
+    const cur = curtain(zi, rand);
     const dr = drift(zi, rand);
-    grp.add(dr);
+    const ha = halo(zi);
+    grp.add(cur.mesh, dr, ha);
     scene.add(grp);
     const wall = wallMesh(zi);
     scene.add(wall);
-    // the surface glow: a low, wide breath of pale light where the sea lies over the crack. A sprite
-    // stood on the water: the sea (which writes depth above the waterline) hides its lower half, so
-    // from the deck it is a faint mound of light on the swell, crests passing in front of it.
-    // warmGlow's house program (fog off, its own linear fade to 320 u).
+    // the surface glow (zone 0): a low, wide breath of pale light where the sea lies over the crack,
+    // a sprite stood on the water (warmGlow's house program: fog off, its own linear fade to 320 u)
     let surf = null;
     if (zi === 0) {
       surf = makeWarmGlow(new THREE.Color(...COLS[0]), 1, { near: 40, far: 320, nearW: 0 });
       surf.name = 'riftSurf0';
-      surf.scale.set(F.halfLen * 1.9, 22, 1);
+      surf.scale.set(F.halfLen * 1.9, TUNE.surfH, 1);
       surf.position.set(F.cx, 0, F.cz);
       surf.material.opacity = 0; surf.visible = false;
       scene.add(surf);
     }
-    const halo = glowPlane(zi, F.halfLen * 1.12, F.halfW * 1.9, 140, 0.3, 'riftHalo');
-    halo.position.set(0, 1.5, 0);
-    grp.add(halo);
-    rifts.push({ grp, shells, wall, drift: dr, surf, halo, light: 0, ph: shells.map((_, i) => i * 0.55) });
+    rifts.push({ grp, curtain: cur, wall, drift: dr, halo: ha, surf, light: 0, gate: 1, floorMin: -1e9 });
     dr.onBeforeRender = (r, s, cam) => {
       r.getSize(_s);
       dr.material.uniforms.uPix.value = _s.y * r.getPixelRatio() / (2 * Math.tan(cam.fov * Math.PI / 360));
@@ -339,86 +443,74 @@ export function buildRifts() {
 }
 
 // The fissure never moves (riftPos and FISSURE are frozen), but a site swap regrows terrain under
-// it: re-seat the light on the current lip and throat floor, in place (no geometry, no material).
-// The group sits at the crack's centre on its mean lip height.
+// it: re-seat the light on the current lip and throat floor, in place (attributes rewritten, no new
+// geometry, no material), and lean its colour for this anchorage's water. The group sits at the
+// crack's centre on its mean lip height.
+const _lean = [1, 1, 1];
 export function reseatRifts() {
   for (let zi = 0; zi < rifts.length; zi++) {
     const R = rifts[zi], F = FISSURE[zi], lip = lipMeanY(zi, terrainH);
     R.grp.position.set(F.cx, lip, F.cz);
-    for (const sh of R.shells) {
-      const d = sh.userData, floor = terrainUnderH(d.x, d.z, zi) - 1, top = lip + d.up, H = top - floor;
-      // radius r(y) linear from rBot at the floor to rLip at the lip, on up to the top
-      // (its top held inside its clearance along the crack: no shell reaches a slab at any height)
-      const fl = (lip - floor) / H, reach = d.c - 0.6;
-      d.rTop = Math.min(reach, d.rBot + (d.rLip - d.rBot) / Math.max(0.2, fl));
-      d.along = Math.max(1, Math.min(2.2, reach / d.rTop));     // drawn out along the crack
-      shellRadii(sh, d.rBot, d.rTop);                           // unit height; the scale stands it
-      sh.position.set(d.x - F.cx, (floor + top) * 0.5 - lip, d.z - F.cz);
-      sh.scale.set(d.along, H, 1);
-      sh.material.uniforms.uLipV.value = fl;
-    }
-    const D = R.drift.material.uniforms, fc = terrainUnderH(F.cx, F.cz, zi);
-    D.uBot.value = fc - lip + 2; D.uTop.value = 30;
+    R.floorMin = seatCurtain(R, zi, lip);
+    const DP = R.drift.geometry.attributes.aP.array, DF = R.drift.geometry.attributes.aF;
+    for (let i = 0; i < N_DRIFT; i++) DF.array[i] = terrainUnderH(F.cx + DP[i * 4], F.cz + DP[i * 4 + 1], zi) - lip;
+    DF.needsUpdate = true;
     R.wall.material.uniforms.uLip.value = lip;
     R.wall.geometry.boundingSphere.center.y = lip - 30;
+    siteLean(zi, _lean);
+    const c = COLS[zi];
+    for (const m of [R.curtain.mesh.material, R.wall.material, R.drift.material, R.halo.material])
+      m.uniforms.uColor.value.set(c[0] * _lean[0], c[1] * _lean[1], c[2] * _lean[2]);
+    if (R.surf) R.surf.material.color.setRGB(c[0] * _lean[0], c[1] * _lean[1], c[2] * _lean[2]);
   }
-}
-// The unit cylinder's two radii, written in place in three's own CylinderGeometry layout (open,
-// 24 x 8; uv untouched): a reseat rewrites positions and normals, never a new geometry.
-function shellRadii(sh, rBot, rTop) {
-  const g = sh.geometry, P = g.attributes.position, N = g.attributes.normal;
-  const radial = 24, hs = 8, slope = rBot - rTop;
-  let i = 0;
-  for (let y = 0; y <= hs; y++) {
-    const v = y / hs, r = v * (rBot - rTop) + rTop;
-    for (let x = 0; x <= radial; x++) {
-      const th = x / radial * TAU, s = Math.sin(th), c = Math.cos(th);
-      P.setXYZ(i, r * s, -v + 0.5, r * c);
-      const nl = Math.hypot(1, slope); N.setXYZ(i, s / nl, slope / nl, c / nl);
-      i++;
-    }
-  }
-  P.needsUpdate = true; N.needsUpdate = true;
-  g.computeBoundingSphere();
 }
 
-export function updateRifts(dt, t, activeZone, openK) {
-  const breath = 0.75 + 0.25 * Math.sin(t * TAU / BREATH);
+export function updateRifts(dt, t, openK) {
+  const breath = 0.75 + 0.25 * Math.sin(t * TAU / BREATH), camY = camera.position.y;
   for (let zi = 0; zi < rifts.length; zi++) {
     const R = rifts[zi], o = c01((openK[zi] - K0) / (1 - K0)), L = o * o * (3 - 2 * o);
-    R.light = L;
-    const see = L > 0.003 && terrainMeshes[zi].visible;
+    // from below nothing: it fades as the camera goes under this zone's deepest throat floor
+    const gate = c01((camY - (R.floorMin - GATE)) / GATE);
+    R.light = L; R.gate = gate;
+    const see = L * gate > 0.003 && terrainMeshes[zi].visible;
     R.grp.visible = see; R.wall.visible = see;
     if (see) {
-      const k = L * LIGHT_K[zi];
-      for (let i = 0; i < R.shells.length; i++) {
-        const U = R.shells[i].material.uniforms;
-        // one breath, walking a little along the crack shell to shell
-        U.uK.value = TUNE.shaft * k * (0.75 + 0.25 * Math.sin(t * TAU / BREATH - R.ph[i])); U.uTime.value = t;
-      }
+      const k = L * gate * LIGHT_K[zi];
+      const C = R.curtain.mesh.material.uniforms; C.uK.value = TUNE.curtain * k * breath; C.uTime.value = t; C.uEndOn.value = TUNE.endOn;
       const W = R.wall.material.uniforms; W.uK.value = TUNE.wall * k * breath; W.uTime.value = t;
       const D = R.drift.material.uniforms; D.uK.value = TUNE.drift * k * (0.85 + 0.15 * breath); D.uTime.value = t;
-      const Hh = R.halo.material.uniforms; Hh.uK.value = TUNE.halo * k * breath; Hh.uTime.value = t;
+      const H = R.halo.material.uniforms; H.uK.value = TUNE.halo * k * breath; H.uTime.value = t;
     }
     if (R.surf) {
       // seen from the air only (under the water it would be a fog-free light through 240 u of sea)
-      const air = c01((camera.position.y - localSurfaceY() + 0.3) / 0.9), s = L * air * LIGHT_K[zi];
+      const air = c01((camY - localSurfaceY() + 0.3) / 0.9), s = L * air * LIGHT_K[zi];
       R.surf.visible = s > 0.003;
       if (R.surf.visible) {
         const F = FISSURE[zi];
         R.surf.position.y = surfaceHeightAt(F.cx, F.cz, t, stormLevel());
+        R.surf.scale.y = TUNE.surfH;
         R.surf.material.opacity = Math.min(SURF_MAX, TUNE.surf * s * breath);
       }
     }
   }
 }
 
-// dev surface (probes): the light each zone shows now, the parts' gains
+// dev surface (probes): the light each zone shows now, the curtain's stations, the parts' gains
 const __rifts = {
-  K: LIGHT_K, tune: TUNE,
-  state(zi) { const R = rifts[zi]; return R ? { light: R.light, visible: R.grp.visible, shells: R.shells.length, wallTris: R.wall.geometry.index.count / 3,
-    surf: R.surf ? R.surf.visible : null, stations: R.shells.map(s => ({ u: s.userData.u, clear: s.userData.c, rLip: +s.userData.rLip.toFixed(2), rTop: +s.userData.rTop.toFixed(2), along: +s.userData.along.toFixed(2), reachAlong: +(s.userData.rTop * s.userData.along).toFixed(2) })) } : null; },
-  materials(zi) { const R = rifts[zi]; return R ? [...R.shells.map(s => s.material), R.wall.material, R.drift.material, R.halo.material].concat(R.surf ? [R.surf.material] : []) : []; }
+  K: LIGHT_K, tune: TUNE, lean: SITE_LEAN, reseat: reseatRifts, surfMax: SURF_MAX,
+  state(zi) { const R = rifts[zi]; return R ? { light: R.light, gate: R.gate, visible: R.grp.visible, floorMin: R.floorMin, stations: R.curtain.st.length, blobs: R.curtain.nb,
+    wallTris: R.wall.geometry.index.count / 3, surf: R.surf ? R.surf.visible : null } : null; },
+  // the curtain's stations as seated: u, x, z, floor, lip, the measured open half-width per level
+  stations(zi) { const R = rifts[zi]; return R ? R.curtain.st.map(s => ({ u: s.u, x: s.x, z: s.z, tx: s.tx, tz: s.tz, floor: s.floor, lip: s.lip, hw: Array.from(s.hw) })) : []; },
+  // the blob radius the shader gives at height y (absolute) over station s (the same formula)
+  radiusAt(zi, si, y) {
+    const s = rifts[zi].curtain.st[si], top = s.lip + LEV_UP, ytop = s.lip + UP_TOP;
+    const hwAt = yy => { if (yy >= top) return s.hw[LEV - 1] + (yy - top) * 0.5; const t = c01((yy - s.floor) / Math.max(1, top - s.floor)), f = (1 - Math.sqrt(1 - t)) * (LEV - 1), i = Math.min(Math.floor(f), LEV - 2); return s.hw[i] + (s.hw[i + 1] - s.hw[i]) * (f - i); };
+    const R = Math.max(0.05, Math.min(Math.min(R_MAX, 0.9 + 0.06 * (y - s.floor)), HW_FILL * hwAt(y)));
+    // (the shader lifts it by up to 0.95 R STRETCH off the floor; the side view's tall veil)
+    return { y: Math.max(y, s.floor + 0.95 * R * STRETCH), R, sy: STRETCH, ytop };
+  },
+  materials(zi) { const R = rifts[zi]; return R ? [R.curtain.mesh.material, R.wall.material, R.drift.material, R.halo.material].concat(R.surf ? [R.surf.material] : []) : []; }
 };
 if (typeof window !== 'undefined') window.__rifts = __rifts;
 
