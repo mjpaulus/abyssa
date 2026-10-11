@@ -206,17 +206,30 @@ function chitinSheen(m) {
 // her); home has no row and takes the shipped bearing. Pure function of the terrain and the row.
 // Returns { lip (her centre), out (minus her face: the shipped code faces by it), sand (unit normal to
 // open ground), ok, g }.
-const _lw = { x: 0, z: 0 };
-function restOutlineMin(x, z, yaw, R, zi) {
+// OUT_PAD: her bedded pose tilts and settles the shell up to ~0.6 u off the flat plan (measured: 5.4 u at a
+// plan 6.0): the plan keeps that much more.
+const _lw = { x: 0, z: 0 }, OUT_N = 64, HEAD_R = 1.8, OUT_PAD = 1.5;
+// Her drawn plan outline: per bearing (OUT_N bins, shell units) the farthest shell vertex, widened by
+// its neighbours (the brow, the serration and the rear points stand up to 0.39 past G.rimR).
+function shellPolar(geo) {
+  const P = geo.attributes.position, raw = new Float32Array(OUT_N), out = new Float32Array(OUT_N);
+  for (let i = 0; i < P.count; i++) {
+    const x = P.getX(i), z = P.getZ(i), b = ((Math.round(Math.atan2(z, x) / (Math.PI * 2) * OUT_N) % OUT_N) + OUT_N) % OUT_N;
+    raw[b] = Math.max(raw[b], Math.hypot(x, z));
+  }
+  for (let b = 0; b < OUT_N; b++) out[b] = Math.max(raw[b], raw[(b + 1) % OUT_N], raw[(b + OUT_N - 1) % OUT_N]);
+  return out;
+}
+function restOutlineMin(x, z, yaw, R, zi, polar) {
   const cy = Math.cos(yaw), sy = Math.sin(yaw);
   let m = 1e9;
-  for (let k = 0; k < 48; k++) {
-    const th = k / 48 * Math.PI * 2, rr = G.rimR(th) * R, lx = Math.cos(th) * rr, lz = Math.sin(th) * rr;
+  for (let k = 0; k < OUT_N; k++) {
+    const th = k / OUT_N * Math.PI * 2, rr = polar[k] * R, lx = Math.cos(th) * rr, lz = Math.sin(th) * rr;
     m = Math.min(m, fissureDist(x + lx * cy + lz * sy, z - lx * sy + lz * cy, zi));
   }
   return m;
 }
-function lairOf(idx, R, c) {
+function lairOf(idx, R, c, polar) {
   const F = FISSURE[idx], rp = riftPos(idx), lr = c.lair || {};
   const in0 = Math.atan2(-rp.z, -rp.x);                 // the shipped bearing: rift -> raft side
   const W = idx < 3 ? wreckSites()[idx] : null;
@@ -231,10 +244,10 @@ function lairOf(idx, R, c) {
     let off = LIP_CLEAR + 1.3 * R;
     for (let it = 0; it < 40; it++, off += 1) {
       fissureWorld(u0, sg * (w + off), idx, _lw);
-      if (restOutlineMin(_lw.x, _lw.z, yaw, R, idx) >= LIP_CLEAR) break;
+      if (restOutlineMin(_lw.x, _lw.z, yaw, R, idx, polar) >= LIP_CLEAR + OUT_PAD) break;
     }
     const lip = V3(_lw.x, 0, _lw.z), out = front.clone().negate();
-    const head = lip.clone().addScaledVector(sand, R * 2.8);      // (where the old nest stood: her trail's head)
+    const head = lip.clone().addScaledVector(sand, R * HEAD_R);   // (her trail's head, out on the sand side)
     const clear = !W || (Math.hypot(lip.x - W.x, lip.z - W.z) > R * 2 + 16 && Math.hypot(head.x - W.x, head.z - W.z) > 22);
     const inBasin = Math.hypot(lip.x, lip.z) < WORLD_R * 0.66 && Math.hypot(head.x, head.z) < WORLD_R * 0.66;
     let g = 0;
@@ -558,7 +571,7 @@ export function makeBrooder(idx, cfg) {
   // and spent egg skins. Prying a clump wakes her (brood.onTake); calmed, she walks back and
   // settles over her clutch, which clears the way.
   {
-    const { lip, out, sand } = lairOf(idx, R, c);
+    const { lip, out, sand } = lairOf(idx, R, c, shellPolar(L.parts.shell.geometry));
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
     // (Task 5) her near flank: the rim point on the sand side, at the ground (Task 6's harpoon seam is
@@ -571,9 +584,10 @@ export function makeBrooder(idx, cfg) {
       L.nearFlank.y = terrainH(L.nearFlank.x, L.nearFlank.z, idx);
     }
     L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
-    // (her trail's head, where the old nest stood, out on her sand side: the tracks run in to it from
-    // 95 u further out, leaning toward the basin's middle so they start on open floor)
-    const head = lip.clone().addScaledVector(sand, R * 2.8);
+    // (her trail's head, out on her sand side (1.8 R: at 2.8 R, where the old nest stood, home's head
+    // fell on the skiff): the tracks run in to it from 95 u further out, leaning toward the basin's
+    // middle so they start on open floor)
+    const head = lip.clone().addScaledVector(sand, R * HEAD_R);
     const tIn = V3(-head.x, 0, -head.z).normalize().multiplyScalar(0.6).add(sand).normalize();
     L.brood = makeBrood(L, idx, head.clone().addScaledVector(tIn, 95));
     L.rite = L.brood;                                 // the game's generic [E] / prompt hook
