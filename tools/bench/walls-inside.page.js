@@ -577,35 +577,54 @@ export async function standLens(zi, o) {
   return { zi, samples, close, hfIn, hfAt, minD: +minD.toFixed(3), hfMax: +hfMax.toFixed(2), fd: +S.fissureDist(pv.x, pv.z, zi).toFixed(2), grounded: window.player.grounded, boom: +cam.position.distanceTo(pv).toFixed(2) };
 }
 
-// ---- Sal rising back INTO the shaft from under its floor (final residual fix 3) -----------------------
-// riseShaft(zi, { u, dv, dt }): the crack open (as calmed this visit), Sal 6 u under the throat floor at
-// station u, dv off the slot's middle (beside it, under the wall), still; Space held 1.2 s (the burst),
-// then the dress carries him; 5 s measured every frame while he is inside the outline: his lateral step a
-// frame (|dx, dz|) and the shaft hold's own largest step. The hold's hard clamp used to snap him 2.4-3.8 u.
+// ---- Sal rising back INTO the shaft from under its floor (final residual fix 3; rise fix) -------------
+// riseShaft(zi, { u, dv, yaw, dt, t0 }): THE REAL RE-ASCENT. The crack open (as calmed this visit), Sal in the
+// zone BELOW (zi + 1: there is no upward zone change, he stays in it to the lip) 10 u under zone zi's throat
+// floor at station u, dv off the slot's middle (beside it, under the wall), facing yaw off +u; 0.5 s settled,
+// Space held 1.2 s (the burst), then the dress held full, until he is 4 u over the lip (or 14 s). Every frame
+// with his chest over (floor - 3): the lens's speed RELATIVE TO HIM (u/s; the old shaft's guard engages here),
+// the lens in the old crack's rock (inside its outline, under its heightfield, with him over it); inside the
+// outline: his lateral step a frame and the shaft hold's own largest step.
 export async function riseShaft(zi, o = {}) {
-  const F = S.FISSURE[zi], w = { x: 0, z: 0 }, u0 = o.u == null ? -4 : o.u, fdt = o.dt || 1 / 60;
+  const F = S.FISSURE[zi], w = { x: 0, z: 0 }, u0 = o.u == null ? -4 : o.u, fdt = o.dt || 1 / 60, a = o.yaw || 0, cam = window.camera;
   window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.survival.fuel = 1; window.survival.oxygen = 1;
   window.weather.set(1, 0); clock.elapsedTime = o.t0 == null ? 4000 : o.t0;
   { const vis = window.__chart.visit(); vis[0] = vis[1] = vis[2] = 0; vis[zi] = 1; }
-  window.gotoZone(zi); window.__fissure.setOpen(zi, 1); if (window.lev) window.lev.calmed = true;
+  window.gotoZone(zi + 1); window.__fissure.setOpen(zi, 1);
   const mid = (S._halfWAt(F, u0, 1) - S._halfWAt(F, u0, 0)) / 2;
   S.fissureWorld(u0, mid + (o.dv || 0), zi, w);
-  window.__bench.place(w.x, w.z, Math.atan2(F.dx, F.dz), zi);
-  window.player.pos.y = T.terrainH(w.x, w.z, zi) - 6; window.player.vel.set(0, 0, 0); window.player.grounded = false;
+  const fx = Math.cos(a) * F.dx - Math.sin(a) * F.dz, fz = Math.cos(a) * F.dz + Math.sin(a) * F.dx;
+  window.__bench.place(w.x, w.z, Math.atan2(fx, fz), zi + 1);
+  const floorY = T.terrainH(w.x, w.z, zi), lip = S.lipMeanY(zi, T.terrainH);
+  window.player.pos.y = floorY - 10; window.player.vel.set(0, 0, 0); window.player.grounded = false;
+  window.__bench.step(Math.round(0.5 / fdt), null, { dt: fdt });
   if (window.survival.reserveCap != null) window.survival.reserve = window.survival.reserveCap;
   if (window.__shaftStep) window.__shaftStep(true);
-  const pPrev = window.player.pos.clone(); let stepMax = 0, n = 0, rose = 0;
-  const y0 = window.player.pos.y;
+  const pPrev = window.player.pos.clone(), cPrev = cam.position.clone(), startZone = window.zone;
+  let stepMax = 0, n = 0, m = 0, relMax = 0, relAt = null, over60 = 0, hfIn = 0, onAt = null, top = -1e9;
+  const hfAt = [];
   window.keys.Space = true;
   try {
-    const frames = Math.round(5 / fdt);
-    for (let f = 0; f < frames; f++) {
+    for (let f = 0; f < Math.round(14 / fdt); f++) {
       if (f === Math.round(1.2 / fdt)) window.keys.Space = false;
+      if (f > Math.round(1.2 / fdt)) window.player.fill = Math.max(window.player.fill, 1);
       window.__bench.step(1, null, { dt: fdt });
-      const p = window.player.pos;
+      const p = window.player.pos, c = cam.position;
       if (S.fissureDist(p.x, p.z, zi) < 0) { const st = Math.hypot(p.x - pPrev.x, p.z - pPrev.z); if (st > stepMax) stepMax = st; n++; }
-      pPrev.copy(p); rose = Math.max(rose, p.y - y0);
+      if (p.y - 0.5 > floorY - 3) {
+        m++;
+        const rv = Math.hypot((c.x - cPrev.x) - (p.x - pPrev.x), (c.y - cPrev.y) - (p.y - pPrev.y), (c.z - cPrev.z) - (p.z - pPrev.z)) / fdt;
+        if (rv > relMax) { relMax = rv; relAt = [f, +(p.y - floorY).toFixed(1)]; }
+        if (rv > 60) over60++;
+        if (S.fissureDist(c.x, c.z, zi) < 0 && c.y < T.terrainUnderH(c.x, c.z, zi) - 0.1 && p.y - 0.5 > T.terrainUnderH(p.x, p.z, zi)) {
+          hfIn++; if (hfAt.length < 4) hfAt.push([f, +(T.terrainUnderH(c.x, c.z, zi) - c.y).toFixed(2), +(p.y - floorY).toFixed(1)]); }
+      }
+      if (!onAt && window.__throatCam && window.__throatCam.state().on) onAt = [f, +(p.y - floorY).toFixed(1)];
+      pPrev.copy(p); cPrev.copy(c); top = Math.max(top, p.y);
+      if (p.y > lip + 4) break;
     }
   } finally { window.keys.Space = false; }
-  return { zi, u: u0, dv: o.dv || 0, dt: +fdt.toFixed(4), frames: n, rose: +rose.toFixed(1), salStepMax: +stepMax.toFixed(3), holdStepMax: window.__shaftStep ? +window.__shaftStep(false).toFixed(3) : null };
+  return { zi, u: u0, dv: o.dv || 0, yaw: Math.round(a * 57.3), dt: +fdt.toFixed(4), startZone, zEnd: window.zone, frames: n, measured: m, onAt,
+    topOverLip: +(top - lip).toFixed(1), relMax: +relMax.toFixed(1), relAt, over60, hfIn, hfAt,
+    salStepMax: +stepMax.toFixed(3), holdStepMax: window.__shaftStep ? +window.__shaftStep(false).toFixed(3) : null };
 }

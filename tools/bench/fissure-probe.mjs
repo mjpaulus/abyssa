@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|fall-lens|ending|wave-minors|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide|below-dark> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|fall-lens|rise|ending|wave-minors|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide|below-dark> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -14,7 +14,42 @@ process.on('exit', () => { stop(); try { rmSync(process.env.DRV_DIR, { recursive
 const c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__fissure`, 240000, 1000);
 const fail = [];
-if (mode === 'shape') {
+// THE RE-ASCENT (rise fix): Sal rising from the zone below up through an open throat and out over the lip, as
+// play has it (walls-inside.page.js riseShaft). 1/60: zones 0/1, u -4 / 9, under the slot and beside it (dv
+// -1.5 / 0 / +1.5), facing along and across; 1/30: the same under the slot both ways and beside it along (40).
+// GATES (every rise): the lens's speed relative to him <= RISE_REL u/s at both rates (the old shaft's guard
+// engages as his chest reaches its floor: on 917d689 its target jumped up to 15 u in a frame and the lens
+// flew in at up to 132.8 u/s, 2.2 u a frame); the lens in the old crack's rock (inside its outline, under its
+// heightfield, him over it) <= RISE_HF in all (7cbcc49: 1033 over 32 rises; 917d689: 24); his lateral step
+// <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own <= its 12 u/s; he came up into the crack.
+const RISE_REL = 50, RISE_HF = 40;
+async function riseSet() {
+  const rise = await c.ev(`(async () => {
+    const W = await import('/tools/bench/walls-inside.page.js'); const out = [];
+    for (const dt of [1 / 60, 1 / 30]) for (const zi of [0, 1]) for (const u of [-4, 9]) for (const dv of [-1.5, 0, 1.5]) for (const yaw of [0, Math.PI / 2]) {
+      if (dt > 0.02 && dv !== 0 && yaw !== 0) continue;
+      out.push(await W.riseShaft(zi, { u, dv, yaw, dt, t0: 4000 + out.length * 13 }));
+    }
+    window.gotoZone(0); return out; })()`);
+  const stepCap = dt => dt > 0.02 ? 0.5 : 0.25, holdCap = dt => 12 * dt + 1e-3;
+  let hf = 0, over = 0;
+  for (const q of rise) {
+    hf += q.hfIn; if (q.relMax > RISE_REL) over++;
+    if (q.frames < 30 || q.measured < 30) fail.push('rise did not come up into the crack ' + JSON.stringify(q));
+    if (q.salStepMax > stepCap(q.dt)) fail.push('rising: Sal stepped ' + q.salStepMax + ' u in one frame ' + JSON.stringify(q));
+    if (q.holdStepMax > holdCap(q.dt)) fail.push('rising: the shaft hold moved him ' + q.holdStepMax + ' u in a frame ' + JSON.stringify(q));
+    if (q.relMax > RISE_REL) fail.push(`rising zone ${q.zi} u ${q.u} dv ${q.dv} yaw ${q.yaw} dt ${q.dt}: the lens moved ${q.relMax} u/s relative to him (bound ${RISE_REL}; ${q.over60} frames over 60) at ${JSON.stringify(q.relAt)}`);
+  }
+  if (hf > RISE_HF) fail.push(`rising: the lens in the old crack's rock on ${hf} frames over ${rise.length} rises (bound ${RISE_HF})`);
+  const by = dt => rise.filter(q => Math.abs(q.dt - dt) < 1e-3);
+  const sum = a => ({ n: a.length, relMax: Math.max(...a.map(q => q.relMax)), over60Rises: a.filter(q => q.relMax > 60).length, over60Frames: a.reduce((x, q) => x + q.over60, 0), hfIn: a.reduce((x, q) => x + q.hfIn, 0), step: Math.max(...a.map(q => q.salStepMax)), hold: Math.max(...a.map(q => q.holdStepMax || 0)) });
+  console.log(JSON.stringify({ rise: { dt60: sum(by(0.0167)), dt30: sum(by(0.0333)), overBound: over } }));
+  for (const q of rise) console.log(JSON.stringify(q));
+  return rise;
+}
+if (mode === 'rise') {
+  await riseSet();
+} else if (mode === 'shape') {
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     const out = [];
@@ -1149,23 +1184,15 @@ if (mode === 'shape') {
   // the frame-rate ones) plus RISES: per zone 0/1, under the throat floor at u -4 and 9, beside the slot
   // (dv -1.5 / +1.5) and under it, Space held (the burst) then the dress, at dt 1/60 and 1/30. GATES: his
   // lateral step <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own step <= its 12 u/s limit.
-  const rise = await c.ev(`(async () => {
-    const W = await import('/tools/bench/walls-inside.page.js'); const out = [];
-    for (const dt of [1 / 60, 1 / 30]) for (const zi of [0, 1]) for (const u of [-4, 9]) for (const dv of [-1.5, 0, 1.5])
-      out.push(await W.riseShaft(zi, { u, dv, dt, t0: 4000 + out.length * 13 }));
-    window.gotoZone(0); return out; })()`);
+  const rise = await riseSet();
   const stepCap = dt => dt > 0.02 ? 0.5 : 0.25, holdCap = dt => 12 * dt + 1e-3;
   const desc = r.concat(fr.map(q => ({ zi: q.zi, u: q.u, yaw: q.yaw * Math.PI / 180, dt: q.dt, salStepMax: q.salStepMax, holdStepMax: null })));
   let stepW = 0, holdW = 0;
   for (const q of desc) { stepW = Math.max(stepW, q.salStepMax || 0); holdW = Math.max(holdW, q.holdStepMax || 0);
     if ((q.salStepMax || 0) > stepCap(q.dt || 1 / 60)) fail.push(`zone ${q.zi} u ${q.u} yaw ${Math.round((q.yaw || 0) * 57.3)}: Sal stepped ${q.salStepMax} u in one frame (dt ${q.dt || '1/60'})`);
     if ((q.holdStepMax || 0) > holdCap(q.dt || 1 / 60)) fail.push(`zone ${q.zi} u ${q.u}: the shaft hold moved him ${q.holdStepMax} u in a frame`); }
-  for (const q of rise) { stepW = Math.max(stepW, q.salStepMax);
-    if (q.frames < 30) fail.push('rise did not come up into the crack ' + JSON.stringify(q));
-    if (q.salStepMax > stepCap(q.dt)) fail.push('rising: Sal stepped ' + q.salStepMax + ' u in one frame ' + JSON.stringify(q));
-    if (q.holdStepMax > holdCap(q.dt)) fail.push('rising: the shaft hold moved him ' + q.holdStepMax + ' u in a frame ' + JSON.stringify(q)); }
+  for (const q of rise) stepW = Math.max(stepW, q.salStepMax);   // (the rises' own gates: riseSet)
   console.log(JSON.stringify({ salStep: { worst: +stepW.toFixed(3), holdWorst: +holdW.toFixed(3), rises: rise.length, riseWorst: Math.max(...rise.map(q => q.salStepMax)), riseHoldWorst: Math.max(...rise.map(q => q.holdStepMax || 0)) } }));
-  for (const q of rise) console.log(JSON.stringify(q));
   for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
     minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip, salIn: q.salIn, salInMax: q.salInMax, salAt: q.salAt, salFloor: q.salFloor, salFloorAt: q.salFloorAt, offAll: q.offAll, holds: q.shaftHolds, closeAt: q.closeAt, hfAt: q.hfAt, offAt: q.offAt }));
 } else if (mode === 'ending') {
