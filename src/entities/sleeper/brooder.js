@@ -24,9 +24,8 @@ import {
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
-import { riftPos, WORLD_R } from '../../config.js';
-import { FISSURE, fissureDist, fissureWorld, _halfWAt, LIP_CLEAR } from '../../world/fissureShape.js';
-import { wreckSites } from '../../world/wrecks.js';
+import { fissureDist, APRON } from '../../world/fissureShape.js';
+import { velkathLair, R_OF_SIZE, HEAD_R } from './lair.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
@@ -45,7 +44,6 @@ SCULPT.then(a => { SC = a; });
 
 const UP = V3(0, 1, 0);
 const smooth = THREE.MathUtils.smoothstep;
-const R_OF_SIZE = 2.8;                     // carapace half-width in cfg.size units (5.5 -> 15.4 u)
 // Walking legs, per side front to back: hip on the lip, rest-foot bearing off the side
 // (+ toward the front), length scale (the middle pairs are the longest, as in crabs).
 const LEGS = [
@@ -141,9 +139,11 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // at most this far (R) over the ground under her belly, whatever her feet stand on; clear: her
 // shell's lowest point keeps this many u over the ground under it while she is awake. Standing on
 // the old rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
-// 12-17 u over him. Since THE FISSURE (Task 5) `keep` holds her centre LIP_CLEAR + keep R off the
-// crack's lip while she hunts (1.3 R: her widest half extent is 1.29 R, so no part of her is ever over
-// the crack or its jam at any heading; it is also where she lies asleep, so rising she does not lurch).
+// 12-17 u over him. Since THE FISSURE (Task 5) `keep` holds her centre APRON + keep R off the crack's
+// lip while she hunts (1.3 R: her widest half extent is 1.29 R, so at any heading no part of her is
+// over the crack, its jam, or the 14 u apron where the ground rises to the lip: on it her crack-side
+// shell edge stood 5-6 u higher and STAND.clear lifted her wards to 13-17 u). Asleep she lies outside
+// the same line, so rising she does not lurch.
 // underK: under her body (R) the
 // hammer cannot reach him (a crab cannot strike under itself) and she lowers it; she shifts
 // her stance every `shiftT` s to dislodge him instead, at `shiftV` u/s for `shiftD` s.
@@ -190,90 +190,7 @@ function chitinSheen(m) {
   return m;
 }
 
-// THE LAIR (Task 5, spec 2026-10-10 §1 "Lairs" / §2 "Asleep"): she lies ALONGSIDE her fissure, not on
-// a rim crest: one flank to the crack, the other (her NEAR flank: Task 6 lodges the harpoon there, at
-// standing height) to open sand, her face turned along the crack toward the opening. Her centre is
-//   lair = fissureWorld(u0, +-(halfW(u0, side) + off))      (the KINKED centreline: fissureShape.js contract)
-// with off the smallest value from LIP_CLEAR + 1.3 R (her crack-facing half extent, the shell's
-// +-1.19..1.29 R across, is the shield's widest) up, 1 u at a time, that keeps her whole REST OUTLINE
-// (G.rimR round her, as the skirt and the bed are built) LIP_CLEAR off the lip: the lip kinks and jags
-// under her ~31 u length, so a fixed offset from one half width is not enough.
-// The row picks WHERE: a bearing th about the crack's centre (the shipped raft-side bearing, swung by
-// the row's `bear`, or searched over its `arc` with the IDLE height split as before: Pallid's [62, 38]
-// still takes the HIGH ground) turns into a side (which way th points across the crack) and a station
-// u0 (how far th points along it, scaled into the stretch where her length fits the crack). A point
-// whose body or trail head would lie on the zone's wreck is passed over (the skiff never lies under
-// her); home has no row and takes the shipped bearing. Pure function of the terrain and the row.
-// Returns { lip (her centre), out (minus her face: the shipped code faces by it), sand (unit normal to
-// open ground), ok, g }.
-// OUT_PAD: her bedded pose tilts and settles the shell up to ~0.6 u off the flat plan (measured: 5.4 u at a
-// plan 6.0): the plan keeps that much more.
-const _lw = { x: 0, z: 0 }, OUT_N = 64, HEAD_R = 1.8, OUT_PAD = 1.5;
-// Her drawn plan outline: per bearing (OUT_N bins, shell units) the farthest shell vertex, widened by
-// its neighbours (the brow, the serration and the rear points stand up to 0.39 past G.rimR).
-function shellPolar(geo) {
-  const P = geo.attributes.position, raw = new Float32Array(OUT_N), out = new Float32Array(OUT_N);
-  for (let i = 0; i < P.count; i++) {
-    const x = P.getX(i), z = P.getZ(i), b = ((Math.round(Math.atan2(z, x) / (Math.PI * 2) * OUT_N) % OUT_N) + OUT_N) % OUT_N;
-    raw[b] = Math.max(raw[b], Math.hypot(x, z));
-  }
-  for (let b = 0; b < OUT_N; b++) out[b] = Math.max(raw[b], raw[(b + 1) % OUT_N], raw[(b + OUT_N - 1) % OUT_N]);
-  return out;
-}
-function restOutlineMin(x, z, yaw, R, zi, polar) {
-  const cy = Math.cos(yaw), sy = Math.sin(yaw);
-  let m = 1e9;
-  for (let k = 0; k < OUT_N; k++) {
-    const th = k / OUT_N * Math.PI * 2, rr = polar[k] * R, lx = Math.cos(th) * rr, lz = Math.sin(th) * rr;
-    m = Math.min(m, fissureDist(x + lx * cy + lz * sy, z - lx * sy + lz * cy, zi));
-  }
-  return m;
-}
-function lairOf(idx, R, c, polar) {
-  const F = FISSURE[idx], rp = riftPos(idx), lr = c.lair || {};
-  const in0 = Math.atan2(-rp.z, -rp.x);                 // the shipped bearing: rift -> raft side
-  const W = idx < 3 ? wreckSites()[idx] : null;
-  const uMax = Math.max(0, 0.9 * F.halfLen - R);         // her length along the crack stays where it is wide
-  const at = th => {
-    const ax = Math.cos(th), az = Math.sin(th);
-    const along = ax * F.dx + az * F.dz, across = -ax * F.dz + az * F.dx;
-    const side = across >= 0 ? 1 : 0, sg = side ? 1 : -1, u0 = along * uMax;
-    const sand = V3(-F.dz * sg, 0, F.dx * sg);           // across the bearing, away from the crack
-    const fs = u0 > 0 ? -1 : 1, front = V3(F.dx * fs, 0, F.dz * fs);   // her face: along the crack, toward the opening
-    const yaw = Math.atan2(front.x, front.z), w = _halfWAt(F, u0, side);
-    let off = LIP_CLEAR + 1.3 * R;
-    for (let it = 0; it < 40; it++, off += 1) {
-      fissureWorld(u0, sg * (w + off), idx, _lw);
-      if (restOutlineMin(_lw.x, _lw.z, yaw, R, idx, polar) >= LIP_CLEAR + OUT_PAD) break;
-    }
-    const lip = V3(_lw.x, 0, _lw.z), out = front.clone().negate();
-    const head = lip.clone().addScaledVector(sand, R * HEAD_R);   // (her trail's head, out on the sand side)
-    const clear = !W || (Math.hypot(lip.x - W.x, lip.z - W.z) > R * 2 + 16 && Math.hypot(head.x - W.x, head.z - W.z) > 22);
-    const inBasin = Math.hypot(lip.x, lip.z) < WORLD_R * 0.66 && Math.hypot(head.x, head.z) < WORLD_R * 0.66;
-    let g = 0;
-    for (let k = 0; k < 5; k++) g += terrainH(lip.x + Math.cos(k * 1.2566) * R * 0.6, lip.z + Math.sin(k * 1.2566) * R * 0.6, idx);
-    return { lip, out, sand, ok: clear && inBasin, g: g / 5 };
-  };
-  const d2r = Math.PI / 180;
-  if (lr.arc && c.idle) {
-    const C = [];
-    for (let a = lr.arc[0]; a <= lr.arc[1] + 1e-6; a += 10) { const q = at(in0 + a * d2r); if (q.ok) C.push(q); }
-    if (C.length) {
-      let lo = 1e9, hi = -1e9;
-      for (const q of C) { lo = Math.min(lo, q.g); hi = Math.max(hi, q.g); }
-      const want = lo + (hi - lo) * c.idle[0] / (c.idle[0] + c.idle[1]);
-      let best = C[0];
-      for (const q of C) if (Math.abs(q.g - want) < Math.abs(best.g - want)) best = q;
-      return best;
-    }
-  }
-  const b = (lr.bear || 0) * d2r;
-  for (let k = 0; k < 24; k++) {
-    const q = at(in0 + b + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * 15 * d2r);
-    if (q.ok) return q;
-  }
-  return at(in0 + b);
-}
+// THE LAIR (Task 5): where she lies is sleeper/lair.js velkathLair (pure: the scatter keeps her bed clear).
 
 // (Task 5) the fissure's outward direction at (x, z): central differences of fissureDist (unit; into a
 // module scratch, no allocation). Points away from the lip, toward open ground.
@@ -286,20 +203,30 @@ function crackAway(x, z, zi) {
   return _fg;
 }
 // (Task 5) the hammer's throw, flat direction v (unit, y 0), from (x, z): never toward the lip while he is
-// on the sand, and never a line that reaches the crack inside THROW_REACH (26 u/s under the suit's drag
-// slides him ~5-7 u: 10 is the margin). In place.
-const THROW_REACH = 10;
-function safeThrow(v, x, z, zi) {
+// on the sand, and never a line that comes within 3 u of the lip inside THROW_REACH (26 u/s with the
+// flat knock slides him ~16-29 u through the suit's drag, measured through the real player step):
+// the throw turns away from the crack 15 degrees at a time until its line clears (at worst straight
+// out). Runs once per landed blow, no allocation. In place.
+const THROW_REACH = 32;
+function lineClear(x, z, vx, vz, zi) {
+  for (let d = 1; d <= THROW_REACH; d += 1) if (fissureDist(x + vx * d, z + vz * d, zi) < 3) return false;
+  return true;
+}
+export function safeThrow(v, x, z, zi) {   // (exported for the fissure probe's throw check)
   if (fissureDist(x, z, zi) < 0) return v;                       // already in it: leave the blow alone
-  let g = crackAway(x, z, zi);
-  const vin = v.x * g.x + v.z * g.z;
-  if (vin < 0) { v.x -= vin * g.x; v.z -= vin * g.z; if (v.x * v.x + v.z * v.z < 0.04) { v.x = g.x; v.z = g.z; } v.normalize(); }
-  for (let d = 1; d <= THROW_REACH; d += 1) {
-    if (fissureDist(x + v.x * d, z + v.z * d, zi) < LIP_CLEAR * 0.5) {
-      g = crackAway(x, z, zi); v.x = g.x; v.z = g.z; v.y = 0; v.normalize();
-      break;
-    }
+  const g = crackAway(x, z, zi), gx = g.x, gz = g.z;
+  const vin = v.x * gx + v.z * gz;
+  if (vin < 0) { v.x -= vin * gx; v.z -= vin * gz; if (v.x * v.x + v.z * v.z < 0.04) { v.x = gx; v.z = gz; } v.y = 0; v.normalize(); }
+  if (lineClear(x, z, v.x, v.z, zi)) return v;
+  // turn toward straight out (the side of the outward normal the throw already leans to)
+  const crs = v.x * gz - v.z * gx, sgn = crs > 0 ? 1 : -1, x0 = v.x, z0 = v.z;
+  for (let k = 1; k <= 12; k++) {
+    const a = sgn * k * Math.PI / 12, ca = Math.cos(a), sa = Math.sin(a);
+    const rx = x0 * ca - z0 * sa, rz = x0 * sa + z0 * ca;
+    if ((rx * gz - rz * gx) * crs < 0) break;                      // turned past straight out
+    if (lineClear(x, z, rx, rz, zi)) { v.x = rx; v.z = rz; v.y = 0; return v; }
   }
+  v.x = gx; v.z = gz; v.y = 0;
   return v;
 }
 
@@ -565,13 +492,13 @@ export function makeBrooder(idx, cfg) {
   L.memLine = 'SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.';
   makeEmbers(L, c.size);
 
-  // THE RIDGE: she sleeps ALONGSIDE this zone's fissure (lairOf: one flank to the crack, her near
+  // THE RIDGE: she sleeps ALONGSIDE this zone's fissure (sleeper/lair.js: one flank to the crack, her near
   // flank to the open sand the diver comes over), a reef-crusted mound in the silt. Her clutch
   // bulges from under her rim, and a trail of tracks runs in from the open ground past a shed shell
   // and spent egg skins. Prying a clump wakes her (brood.onTake); calmed, she walks back and
   // settles over her clutch, which clears the way.
   {
-    const { lip, out, sand } = lairOf(idx, R, c, shellPolar(L.parts.shell.geometry));
+    const { lip, out, sand } = velkathLair(idx, R, c);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
     // (Task 5) her near flank: the rim point on the sand side, at the ground (Task 6's harpoon seam is
@@ -1872,12 +1799,13 @@ export function updateBrooder(L, dt, t, player) {
   }
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
-  // (ritefair; Task 5) OFF THE CRACK: awake and hunting she keeps her centre LIP_CLEAR + STAND.keep R
+  // (ritefair; Task 5) OFF THE CRACK: awake and hunting she keeps her centre APRON + STAND.keep R
   // off the fissure's lip (fissureDist, its outward gradient), whatever he does: her widest half
-  // extent is 1.29 R, so at any heading no part of her is over the crack or its jam (the old rim crest
-  // she walked off; on it her wards hung 6-8 u up). She slides along the line, never into it.
+  // extent is 1.29 R, so at any heading no part of her is over the crack, its jam or the apron that
+  // rises to the lip (the old rim crest she walked off; on it her wards hung 6-8 u up). She slides
+  // along the line, never into it.
   if (hunt && L.standE > 0.5) {
-    const keep = LIP_CLEAR + STAND.keep * R, fd = fissureDist(L.pos.x, L.pos.z, L.idx);
+    const keep = APRON + STAND.keep * R, fd = fissureDist(L.pos.x, L.pos.z, L.idx);
     if (fd < keep) {
       const g = crackAway(L.pos.x, L.pos.z, L.idx);
       const k = Math.min(keep - fd, 3.0 * dt * L.standE);
@@ -1991,8 +1919,8 @@ export function updateBrooder(L, dt, t, player) {
     if (_ft.distanceTo(player.pos) < L.R * 0.42 && !L.under) {
       // (ritefair) a throw along the ground away from the blow, a little up (was setY(0.4):
       // ~10 u/s straight up, over her back), and (Task 5) never into the crack: out on the sand,
-      // the part of it toward the lip is taken off; what is left still carrying him to the lip
-      // inside THROW_REACH (a tangent throw at a kink or a tip) turns straight out instead
+      // the part of it toward the lip is taken off, and a line that would still slide him to the
+      // lip (a tangent throw at a kink or a tip) turns out until it clears
       _v.copy(player.pos).sub(_ft).setY(0);
       if (_v.lengthSq() < 1e-6) _v.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
       _v.normalize();

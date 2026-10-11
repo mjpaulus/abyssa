@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../core.js';
 import { WORLD_R } from '../config.js';
 import { clearOfCrack } from './fissureShape.js';
+import { clearOfBed } from '../entities/sleeper/lair.js';
 import { V3 } from '../lib/math.js';
 import { makeGlow, makeWarmGlow } from '../lib/textures.js';
 import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -40,7 +41,7 @@ function place(zi, count, minR, maxR) {
   while (out.length < count && guard++ < count * 40) {
     const a = rnd() * Math.PI * 2, r = rr(minR, maxR);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (!clearOfCrack(x, z, zi, 1.5)) continue;     // (a node and its glow: ~1.5 u)
+    if (!clearOfCrack(x, z, zi, 1.5) || !clearOfBed(zi, x, z, 1.5)) continue;     // (a node and its glow: ~1.5 u)
     out.push(V3(x, terrainH(x, z, zi), z));
   }
   return out;

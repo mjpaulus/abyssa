@@ -12,7 +12,7 @@ import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textu
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams, currentSiteIndex, stream } from './site.js';
 import { buildIslands, fillIslands, updateIslands } from './islands.js';
-import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamFloorAt, jamSagAt, fissureShut, _widths, _slabReach } from './fissureShape.js';
+import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamFloorAt, jamSagAt, fissureShut, _widths, _slabReach, APRON } from './fissureShape.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -271,7 +271,7 @@ function heightAt(x, z, zi, slabs) {
   // Cheap reject first: outside apronR2 the crack is >= 14 u away and changes nothing.
   const FZ = FISSURE[zi], fdx = x - FZ.cx, fdz = z - FZ.cz;
   const fd = fdx * fdx + fdz * fdz < FZ.apronR2 ? fissureDist(x, z, zi) : 1e3;   // < 0 inside the lip
-  const fm = fd < 14 ? 1 - Math.min(1, Math.max(0, fd) / 14) : 0;   // 14 u apron: ground eased toward the lip
+  const fm = fd < APRON ? 1 - Math.min(1, Math.max(0, fd) / APRON) : 0;   // 14 u apron: ground eased toward the lip
 
   // Domain warp — pulls every later octave off the noise lattice, so ridges meander.
   const xs = x + P.ox, zs = z + P.oz;

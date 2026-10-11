@@ -30,6 +30,7 @@ import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { clearOfCrack } from './fissureShape.js';
+import { clearOfBed } from '../entities/sleeper/lair.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { barkSet, staveSet } from '../lib/textures.js';
@@ -560,7 +561,7 @@ function place(zi, count, seeds, minSlope, minGap, rad) {
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
-    if (!clearOfCrack(x, z, zi, rad)) continue;
+    if (!clearOfCrack(x, z, zi, rad) || !clearOfBed(zi, x, z, rad)) continue;   // off the crack and Velkath's bed
     const n = terrainNormal(x, z, zi);
     if (n.y < lo) continue;
     if (gap > 0 && out.some(o => Math.hypot(o.x - x, o.z - z) < gap)) continue;

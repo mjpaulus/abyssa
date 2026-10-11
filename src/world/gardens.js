@@ -38,6 +38,7 @@ import * as THREE from 'three';
 import { scene, camera } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { clearOfCrack } from './fissureShape.js';
+import { clearOfBed } from '../entities/sleeper/lair.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
@@ -1017,7 +1018,7 @@ function place(zi, count, seeds, minSlope, maxSlope = 1.01, rad = 1) {
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
-    if (!clearOfCrack(x, z, zi, rad)) continue;
+    if (!clearOfCrack(x, z, zi, rad) || !clearOfBed(zi, x, z, rad)) continue;   // off the crack and Velkath's bed
     if (nearWreck(zi, x, z)) continue;
     const n = terrainNormal(x, z, zi);
     if (n.y < lo || n.y > maxSlope) continue;

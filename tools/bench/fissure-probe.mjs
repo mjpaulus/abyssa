@@ -1,5 +1,5 @@
 // THE FISSURE probe (spec docs/superpowers/specs/2026-10-10-fissure-and-harpoon-design.md).
-//   node tools/bench/fissure-probe.mjs <clearance|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
+//   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 const [, , mode, port] = process.argv;
@@ -932,6 +932,10 @@ if (mode === 'shape') {
           const nf = L.nearFlank, fd = nf ? S.fissureDist(nf.x, nf.z, zi) : -1e9;
           const ny = nf ? T.terrainNormal(nf.x, nf.z, zi).y : 0;
           if (!nf || fd < 6 + 0.5 * L.R || ny < 0.8) out.push({ site, zi, n: 'velkath near flank', fd: +fd.toFixed(1), ny: +ny.toFixed(2) });
+          // her bed (sleeper/lair.js clearOfBed): no rock under her (a rock top lifts her standing sole)
+          for (const q of Fl.rockColliders) if (zoneOf(q.x, q.y, q.z) === 0) {
+            const d = Math.hypot(q.x - L.lairPos.x, q.z - L.lairPos.z) - q.r;
+            if (d < 1.3 * L.R) out.push({ site, zi, n: 'rock under velkath', d: +d.toFixed(1), r: +q.r.toFixed(1) }); }
           info.push({ site, zi, lairFd: +S.fissureDist(L.lairPos.x, L.lairPos.z, zi).toFixed(1), outline: +om.toFixed(1), skirt: +sm.toFixed(1), flankFd: +fd.toFixed(1), flankNy: +ny.toFixed(2) });
         }
         if (L.kind === 'hoarder') { bad('orune', zi, L.pos.x, L.pos.z, L.R || 10); if (L.hoard && L.hoard.center) bad('trawler hoard', zi, L.hoard.center.x, L.hoard.center.z, 14); }
@@ -943,6 +947,90 @@ if (mode === 'shape') {
     return { out, info }; })()`);
   console.log(JSON.stringify(r.info));
   if (r.out.length) fail.push(`too close to the crack (${r.out.length}): ` + JSON.stringify(r.out.slice(0, 60)));
+} else if (mode === 'velkath-crack') {
+  // AWAKE BY HER CRACK (Task 5; ritefair numbers re-checked). At home, Pallid and Burned: she is woken
+  // and hunts a diver who stands right at her crack's lip (fd 1.5-3, several stations along it
+  // either side of her, and out on the shut jam itself); over 15 s each: her centre never comes
+  // inside APRON + STAND.keep R of the lip (0.3 u slack for the per-frame push), her drawn
+  // shell never inside 12 u of it (the 14 u apron, 2 u slack); then him under her for 3 s: her dark wards over
+  // the floor stay where ritefair left them (6.7-9.6 u; fail > 10.5: reach 7 + one tap-hop) and the shell keeps its STAND.clear. THROWS: from 160 spots by the lip (fd 0.5-10, either side,
+  // along the whole crack) in 8 directions each, the guarded hammer throw (safeThrow, knockUp,
+  // 26 u/s through the real player step) never carries him into the crack (fd < 0 at any frame);
+  // the unguarded share is reported as the discriminator.
+  const r = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js');
+    const B = await import('/src/entities/sleeper/brooder.js'), THREE = await import('three');
+    window.setState('play'); window.__helm = true; window.survival.hose = 5000;
+    const out = { hunt: [], throws: [] }, v = new THREE.Vector3(), o = { x: 0, z: 0 };
+    const EYE = 1.35, keep = S.APRON + B.STAND.keep * 15.4;
+    for (const site of [0, 1, 2]) {
+      window.__chart.arrive(site); window.gotoZone(0); window.__fissure.setOpen(0, 0);
+      const L = window.lev; if (!L || L.kind !== 'brooder') { out.hunt.push({ site, err: 'no brooder' }); continue; }
+      const lair = L.lairPos.clone(), l = { u: 0, v: 0 }; S.fissureLocal(lair.x, lair.z, 0, l);
+      const sg = l.v >= 0 ? 1 : -1, F = S.FISSURE[0];
+      const spots = [];
+      for (const du of [-14, 0, 14]) { const u = Math.max(-F.halfLen * 0.85, Math.min(F.halfLen * 0.85, l.u + du));
+        S.fissureWorld(u, sg * (S._halfWAt(F, u, sg > 0 ? 1 : 0) + 2), 0, o); spots.push([o.x, o.z, 'lip']); }
+      S.fissureWorld(l.u, 0, 0, o); spots.push([o.x, o.z, 'jam']);
+      for (const [sx, sz, kind] of spots) {
+        window.__chart.arrive(site); window.gotoZone(0); window.__fissure.setOpen(0, 0);
+        const L = window.lev; L.cmd('wake');
+        window.__bench.place(sx, sz, 0, 0); window.player.pos.y = T.shutFloorY(sx, sz, 0) + EYE; window.player.vel.set(0, 0, 0);
+        let minC = 1e9, minO = 1e9, minClr = 1e9, frames = 0;
+        const P = L.parts.shell.geometry.attributes.position;
+        const shellScan = () => { const mw = L.parts.shell.matrixWorld; let low = 1e9;
+          for (let k = 0; k < P.count; k += 7) { v.fromBufferAttribute(P, k).applyMatrix4(mw); minO = Math.min(minO, S.fissureDist(v.x, v.z, 0)); low = Math.min(low, v.y - T.terrainH(v.x, v.z, 0)); }
+          minClr = Math.min(minClr, low); };
+        window.__bench.step(900, i => {
+          window.player.pos.x = sx; window.player.pos.z = sz;   // he holds his ground at the lip
+          if (L.standE < 0.9) return; frames++;
+          minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0));
+          if (i % 12 === 0) shellScan(); });
+        // then him under her (the refuge), 3 s: her dark wards over the floor under each (ritefair's table)
+        const ux = L.pos.x, uz = L.pos.z;
+        window.__bench.place(ux, uz, 0, 0); window.player.vel.set(0, 0, 0);
+        window.__bench.step(180, i => { minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); if (i % 12 === 0) shellScan(); });
+        const wards = L.sigils.filter(g => !g.lit).map(g => +(g.grp.position.y - T.terrainH(g.grp.position.x, g.grp.position.z, 0)).toFixed(1));
+        out.hunt.push({ site, kind, frames, minCentre: +minC.toFixed(2), keep: +keep.toFixed(2), minOutline: +minO.toFixed(2), wardsUnder: wards, minShellClear: +minClr.toFixed(2),
+          salFd: +S.fissureDist(sx, sz, 0).toFixed(1) });
+      }
+    }
+    // throws (home terrain)
+    window.__chart.arrive(0); window.gotoZone(0); window.__fissure.setOpen(0, 0);
+    const F = S.FISSURE[0]; let seed = 7; const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+    let n = 0, inG = 0, inU = 0; const worst = [];
+    for (let k = 0; k < 160; k++) {
+      const u = (rnd() * 2 - 1) * F.halfLen * 1.05, sd = rnd() < 0.5 ? 1 : 0, d = 0.5 + rnd() * 9.5;
+      S.fissureWorld(u, (sd ? 1 : -1) * (S._halfWAt(F, Math.max(-F.halfLen, Math.min(F.halfLen, u)), sd) + d), 0, o);
+      if (S.fissureDist(o.x, o.z, 0) < 0.4) continue;
+      for (let a = 0; a < 8; a++) {
+        const th = a / 8 * Math.PI * 2 + rnd() * 0.3;
+        for (const guard of [true, false]) {
+          v.set(Math.cos(th), 0, Math.sin(th));
+          if (guard) B.safeThrow(v, o.x, o.z, 0);
+          v.y = B.STAND.knockUp; v.normalize();
+          window.__bench.place(o.x, o.z, 0, 0); window.player.pos.y = T.shutFloorY(o.x, o.z, 0) + EYE;
+          window.player.vel.set(0, 0, 0).addScaledVector(v, 26); window.player.grounded = false;
+          let m = 1e9; window.__bench.step(90, () => { m = Math.min(m, S.fissureDist(window.player.pos.x, window.player.pos.z, 0)); });
+          if (guard) { n++; if (m < 0) { inG++; if (worst.length < 8) worst.push({ at: [+o.x.toFixed(1), +o.z.toFixed(1)], th: +th.toFixed(2), m: +m.toFixed(2) }); } }
+          else if (m < 0) inU++;
+        }
+      }
+    }
+    out.throws = { n, intoCrackGuarded: inG, intoCrackUnguarded: inU, worst };
+    window.__chart.arrive(0);
+    return out; })()`);
+  console.log(JSON.stringify(r));
+  for (const h of r.hunt) {
+    if (h.err) { fail.push(h.err); continue; }
+    if (h.frames < 200) fail.push(`site ${h.site} ${h.kind}: she never stood (${h.frames} frames)`);
+    if (h.minCentre < h.keep - 0.3) fail.push(`site ${h.site} ${h.kind}: her centre came ${h.minCentre} off the lip (keep ${h.keep})`);
+    if (h.minOutline < 12) fail.push(`site ${h.site} ${h.kind}: her shell came ${h.minOutline} off the lip (onto the 14 u apron)`);
+    if (Math.max(...h.wardsUnder) > 10.5) fail.push(`site ${h.site} ${h.kind}: a dark ward hung ${Math.max(...h.wardsUnder)} u over him under her (ritefair: 6.7-9.6, reach 7 + a tap-hop)`);
+    if (h.minShellClear < 3.0) fail.push(`site ${h.site} ${h.kind}: her shell came ${h.minShellClear} u over the ground (STAND.clear 3.6)`);
+  }
+  if (r.throws.intoCrackGuarded) fail.push(`a guarded throw carried him into the crack: ${r.throws.intoCrackGuarded}/${r.throws.n} ` + JSON.stringify(r.throws.worst));
+  if (!r.throws.intoCrackUnguarded) fail.push('the throw check does not discriminate (no unguarded throw reached the crack)');
 } else fail.push(`unknown mode ${mode}`);
 c.close();
 stop();

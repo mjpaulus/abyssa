@@ -108,6 +108,9 @@ export function fissureDist(x, z, zi) {
 // plus its own radius r off the lip (it replaced each module's riftPos circle: the crack is long
 // and narrow, a circle either swallowed the basin or missed the tips). Pure, no allocation.
 export const LIP_CLEAR = 6;
+// The APRON: within this of the lip terrain.js eases the ground up toward a shelf and heaves the lip
+// (heightAt's fm). A body standing on it is lifted on its crack side: Velkath keeps her whole outline off it.
+export const APRON = 14;
 export function clearOfCrack(x, z, zi, r = 0) { return fissureDist(x, z, zi) > LIP_CLEAR + r; }
 // The slab at (x, z): writes _sp.r = the local reach of the slab whose u-range and lip side hold the
 // point (0 if none; the wall under and beyond a slab is set back by it, so the slab overhangs), and

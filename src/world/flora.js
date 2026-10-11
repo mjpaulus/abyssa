@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
 import { clearOfCrack } from './fissureShape.js';
+import { clearOfBed } from '../entities/sleeper/lair.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow, warmGlow, rockMapSet, bladeMapSet, coralMazeSet } from '../lib/textures.js';
 import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
@@ -1208,7 +1209,7 @@ function place(zi, count, seeds, minSlope, maxSlope = 1.01, rad = 1) {
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
-    if (!clearOfCrack(x, z, zi, rad)) continue;
+    if (!clearOfCrack(x, z, zi, rad) || !clearOfBed(zi, x, z, rad)) continue;   // off the crack and Velkath's bed
     if (nearWreck(zi, x, z)) continue;
     const n = terrainNormal(x, z, zi);
     if (n.y < lo || n.y > maxSlope) continue;
@@ -1532,7 +1533,7 @@ function buildOnce() {
         // bed the landmark in with debris so it never reads as a floating prop
         for (let k = 0; k < 6 && i < L.length + 60; k++) {
           const a = rr(0, TAU), r = S * rr(0.7, 1.35), x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
-          if (nearWreck(zi, x, z) || !clearOfCrack(x, z, zi, S * 0.27)) continue;   // (a bedding stone, s2 x 1.2 <= 0.27 S)
+          if (nearWreck(zi, x, z) || !clearOfCrack(x, z, zi, S * 0.27) || !clearOfBed(zi, x, z, S * 0.27)) continue;   // (a bedding stone, s2 x 1.2 <= 0.27 S)
           const s2 = S * rr(0.08, 0.22);
           _c.set(P.rock).multiplyScalar(rr(0.6, 1.1));
           put(im, i++, stand(terrainNormal(x, z, zi), 0.85, rr(0, TAU)), s2 * 1.2, s2,
