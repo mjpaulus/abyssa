@@ -25,7 +25,7 @@ import {
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
 import { makeHarpoon } from './harpoon.js';
-import { FISSURE, fissureDist, fissureLocal, APRON } from '../../world/fissureShape.js';
+import { FISSURE, fissureDist, fissureLocal, fissureShut, APRON } from '../../world/fissureShape.js';
 import { velkathLair, R_OF_SIZE, HEAD_R } from './lair.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
@@ -214,7 +214,18 @@ function lineClear(x, z, vx, vz, zi) {
   return true;
 }
 export function safeThrow(v, x, z, zi) {   // (exported for the fissure probe's throw check)
-  if (fissureDist(x, z, zi) < 0) return v;                       // already in it: leave the blow alone
+  if (fissureDist(x, z, zi) < 0) {
+    // already inside the lip. Shut, the jam is under him (the blow lands him on rubble): left alone. OPEN
+    // (final wave M4: a zone-0 rebuild after the calm, or a debug jump, can put her awake beside an open
+    // throat), never toward the throat: the part of the throw toward the crack's middle is taken off and
+    // it leans out over the nearer lip (fissureDist rises toward it from inside too)
+    if (fissureShut(zi)) return v;
+    const g = crackAway(x, z, zi), gx = g.x, gz = g.z;
+    const vin = v.x * gx + v.z * gz;
+    if (vin < 0.5) { v.x += (0.5 - vin) * gx; v.z += (0.5 - vin) * gz; }
+    v.y = 0; v.normalize();
+    return v;
+  }
   const g = crackAway(x, z, zi), gx = g.x, gz = g.z;
   const vin = v.x * gx + v.z * gz;
   if (vin < 0) { v.x -= vin * gx; v.z -= vin * gz; if (v.x * v.x + v.z * v.z < 0.04) { v.x = gx; v.z = gz; } v.y = 0; v.normalize(); }
