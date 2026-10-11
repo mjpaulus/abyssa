@@ -582,8 +582,9 @@ export async function standLens(zi, o) {
 // zone BELOW (zi + 1: there is no upward zone change, he stays in it to the lip) 10 u under zone zi's throat
 // floor at station u, dv off the slot's middle (beside it, under the wall), facing yaw off +u; 0.5 s settled,
 // Space held 1.2 s (the burst), then the dress held full, until he is 4 u over the lip (or 14 s). Every frame
-// with his chest over (floor - 3): the lens's speed RELATIVE TO HIM (u/s; the old shaft's guard engages here),
-// the lens in the old crack's rock (inside its outline, under its heightfield, with him over it); inside the
+// with his chest over (floor - 6): the lens's speed RELATIVE TO HIM (u/s; overall, and with the shaft lens on: it engages here),
+// the lens in the old crack's rock (inside its outline, under its heightfield, with him over it), and him HIDDEN
+// (under the old floor at his column, the lens over it at its own, inside the outline); inside the
 // outline: his lateral step a frame and the shaft hold's own largest step.
 export async function riseShaft(zi, o = {}) {
   const F = S.FISSURE[zi], w = { x: 0, z: 0 }, u0 = o.u == null ? -4 : o.u, fdt = o.dt || 1 / 60, a = o.yaw || 0, cam = window.camera;
@@ -601,7 +602,7 @@ export async function riseShaft(zi, o = {}) {
   if (window.survival.reserveCap != null) window.survival.reserve = window.survival.reserveCap;
   if (window.__shaftStep) window.__shaftStep(true);
   const pPrev = window.player.pos.clone(), cPrev = cam.position.clone(), startZone = window.zone;
-  let stepMax = 0, n = 0, m = 0, relMax = 0, relAt = null, over60 = 0, hfIn = 0, onAt = null, top = -1e9;
+  let stepMax = 0, n = 0, m = 0, relMax = 0, relAt = null, relOn = 0, over60 = 0, hfIn = 0, hidden = 0, onAt = null, top = -1e9, wasOn = false;
   const hfAt = [];
   window.keys.Space = true;
   try {
@@ -611,20 +612,25 @@ export async function riseShaft(zi, o = {}) {
       window.__bench.step(1, null, { dt: fdt });
       const p = window.player.pos, c = cam.position;
       if (S.fissureDist(p.x, p.z, zi) < 0) { const st = Math.hypot(p.x - pPrev.x, p.z - pPrev.z); if (st > stepMax) stepMax = st; n++; }
-      if (p.y - 0.5 > floorY - 3) {
+      const on = !!(window.__throatCam && window.__throatCam.state().on);
+      if (p.y - 0.5 > floorY - 6) {
         m++;
         const rv = Math.hypot((c.x - cPrev.x) - (p.x - pPrev.x), (c.y - cPrev.y) - (p.y - pPrev.y), (c.z - cPrev.z) - (p.z - pPrev.z)) / fdt;
         if (rv > relMax) { relMax = rv; relAt = [f, +(p.y - floorY).toFixed(1)]; }
         if (rv > 60) over60++;
+        if ((on || wasOn) && rv > relOn) relOn = rv;   // the shaft lens on (or letting go this frame)
         if (S.fissureDist(c.x, c.z, zi) < 0 && c.y < T.terrainUnderH(c.x, c.z, zi) - 0.1 && p.y - 0.5 > T.terrainUnderH(p.x, p.z, zi)) {
           hfIn++; if (hfAt.length < 4) hfAt.push([f, +(T.terrainUnderH(c.x, c.z, zi) - c.y).toFixed(2), +(p.y - floorY).toFixed(1)]); }
+        // hidden: he is under the old floor at his column, the lens over it at its own (the floor between them)
+        if (p.y - 0.5 < T.terrainH(p.x, p.z, zi) && c.y > T.terrainH(c.x, c.z, zi) && S.fissureDist(c.x, c.z, zi) < 0) hidden++;
       }
-      if (!onAt && window.__throatCam && window.__throatCam.state().on) onAt = [f, +(p.y - floorY).toFixed(1)];
+      if (!onAt && on) onAt = [f, +(p.y - floorY).toFixed(1)];
+      wasOn = on;
       pPrev.copy(p); cPrev.copy(c); top = Math.max(top, p.y);
       if (p.y > lip + 4) break;
     }
   } finally { window.keys.Space = false; }
   return { zi, u: u0, dv: o.dv || 0, yaw: Math.round(a * 57.3), dt: +fdt.toFixed(4), startZone, zEnd: window.zone, frames: n, measured: m, onAt,
-    topOverLip: +(top - lip).toFixed(1), relMax: +relMax.toFixed(1), relAt, over60, hfIn, hfAt,
+    topOverLip: +(top - lip).toFixed(1), relMax: +relMax.toFixed(1), relAt, relOn: +relOn.toFixed(1), over60, hfIn, hfAt, hidden,
     salStepMax: +stepMax.toFixed(3), holdStepMax: window.__shaftStep ? +window.__shaftStep(false).toFixed(3) : null };
 }

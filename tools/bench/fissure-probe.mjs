@@ -17,12 +17,15 @@ const fail = [];
 // THE RE-ASCENT (rise fix): Sal rising from the zone below up through an open throat and out over the lip, as
 // play has it (walls-inside.page.js riseShaft). 1/60: zones 0/1, u -4 / 9, under the slot and beside it (dv
 // -1.5 / 0 / +1.5), facing along and across; 1/30: the same under the slot both ways and beside it along (40).
-// GATES (every rise): the lens's speed relative to him <= RISE_REL u/s at both rates (the old shaft's guard
-// engages as his chest reaches its floor: on 917d689 its target jumped up to 15 u in a frame and the lens
-// flew in at up to 132.8 u/s, 2.2 u a frame); the lens in the old crack's rock (inside its outline, under its
-// heightfield, him over it) <= RISE_HF in all (7cbcc49: 1033 over 32 rises; 917d689: 24); his lateral step
-// <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own <= its 12 u/s; he came up into the crack.
-const RISE_REL = 50, RISE_HF = 40;
+// GATES (every rise, his chest within 6 u of the old floor and up): the lens's speed relative to him <= RISE_REL
+// u/s at both rates, and <= RISE_ON with the shaft lens on (game.js THROAT_CAM.relVmax 45 + 1: the old shaft's
+// lens engages as he nears its floor: on 917d689 its target jumped up to 15 u in a frame and the lens flew in at
+// up to 133.8 u/s, 2.2 u a frame); the lens in the old crack's rock (inside its outline, under its heightfield,
+// him over it) <= RISE_HF in all (7cbcc49: 1033 over the reviewer's 32 rises; 917d689: 24 there, 32 here; now
+// 24); him HIDDEN (under the old floor, the lens over it) <= RISE_HID in all (a guard against the early
+// engagement trading rock for floor: 917d689 121, now 123, much of it beside the slot under the wall, pre-
+// existing); his lateral step <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own <= its 12 u/s; he came up.
+const RISE_REL = 50, RISE_ON = 46, RISE_HF = 40, RISE_HID = 160;
 async function riseSet() {
   const rise = await c.ev(`(async () => {
     const W = await import('/tools/bench/walls-inside.page.js'); const out = [];
@@ -32,17 +35,19 @@ async function riseSet() {
     }
     window.gotoZone(0); return out; })()`);
   const stepCap = dt => dt > 0.02 ? 0.5 : 0.25, holdCap = dt => 12 * dt + 1e-3;
-  let hf = 0, over = 0;
+  let hf = 0, hid = 0, over = 0;
   for (const q of rise) {
-    hf += q.hfIn; if (q.relMax > RISE_REL) over++;
+    hf += q.hfIn; hid += q.hidden; if (q.relMax > RISE_REL || q.relOn > RISE_ON) over++;
+    if (q.relOn > RISE_ON) fail.push(`rising zone ${q.zi} u ${q.u} dv ${q.dv} yaw ${q.yaw} dt ${q.dt}: with the shaft lens on, the lens moved ${q.relOn} u/s relative to him (bound ${RISE_ON})`);
     if (q.frames < 30 || q.measured < 30) fail.push('rise did not come up into the crack ' + JSON.stringify(q));
     if (q.salStepMax > stepCap(q.dt)) fail.push('rising: Sal stepped ' + q.salStepMax + ' u in one frame ' + JSON.stringify(q));
     if (q.holdStepMax > holdCap(q.dt)) fail.push('rising: the shaft hold moved him ' + q.holdStepMax + ' u in a frame ' + JSON.stringify(q));
     if (q.relMax > RISE_REL) fail.push(`rising zone ${q.zi} u ${q.u} dv ${q.dv} yaw ${q.yaw} dt ${q.dt}: the lens moved ${q.relMax} u/s relative to him (bound ${RISE_REL}; ${q.over60} frames over 60) at ${JSON.stringify(q.relAt)}`);
   }
   if (hf > RISE_HF) fail.push(`rising: the lens in the old crack's rock on ${hf} frames over ${rise.length} rises (bound ${RISE_HF})`);
+  if (hid > RISE_HID) fail.push(`rising: him under the old floor with the lens over it on ${hid} frames over ${rise.length} rises (bound ${RISE_HID})`);
   const by = dt => rise.filter(q => Math.abs(q.dt - dt) < 1e-3);
-  const sum = a => ({ n: a.length, relMax: Math.max(...a.map(q => q.relMax)), over60Rises: a.filter(q => q.relMax > 60).length, over60Frames: a.reduce((x, q) => x + q.over60, 0), hfIn: a.reduce((x, q) => x + q.hfIn, 0), step: Math.max(...a.map(q => q.salStepMax)), hold: Math.max(...a.map(q => q.holdStepMax || 0)) });
+  const sum = a => ({ n: a.length, relMax: Math.max(...a.map(q => q.relMax)), relOn: Math.max(...a.map(q => q.relOn)), over60Rises: a.filter(q => q.relMax > 60).length, over60Frames: a.reduce((x, q) => x + q.over60, 0), hfIn: a.reduce((x, q) => x + q.hfIn, 0), hidden: a.reduce((x, q) => x + q.hidden, 0), step: Math.max(...a.map(q => q.salStepMax)), hold: Math.max(...a.map(q => q.holdStepMax || 0)) });
   console.log(JSON.stringify({ rise: { dt60: sum(by(0.0167)), dt30: sum(by(0.0333)), overBound: over } }));
   for (const q of rise) console.log(JSON.stringify(q));
   return rise;

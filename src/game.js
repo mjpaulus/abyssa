@@ -847,6 +847,7 @@ function snapCamBehind(onDeck) {
   const back = boomBack(), sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
   camera.position.set(player.pos.x - sy * back, player.pos.y + boomUp(), player.pos.z - cy * back);
   camDist = back; camDistV = 0; camBasePrev = back;
+  camCut();
 }
 
 export function start() {
@@ -1442,8 +1443,15 @@ function clearCamDistance(from, dir, want, zi, inCrack) {
 //     frame-rate independent. No cut anywhere.
 // Above the lip, or anywhere the march finds no wall, nothing changes; outside the crack, and over the
 // shut jam, the camera is the camera it was. __throatCam: knobs, last (dev), state().
-const THROAT_CAM = { margin: 1.0, clear: 1.2, ahead: 0.25, step: 0.2, du: 0.5, raise: 1.0, aim: 1.0, guard: 0.8, guardClear: 1.5, minW: 1.2, guardW: 40, guardW2: 80, guardAhead: 0.1, guardVmax: 45 };
+const THROAT_CAM = { margin: 1.0, clear: 1.2, ahead: 0.25, step: 0.2, du: 0.5, raise: 1.0, aim: 1.0, guard: 0.8, guardClear: 1.5, minW: 1.2, guardW: 40, guardW2: 80, guardAhead: 0.1, guardVmax: 45, relVmax: 45, riseAhead: 0.1 };
 const GUARD_DEAD = 1e-3, guardV = V3(), _gStart = V3();
+// the lens's speed limit relative to him while the throat lens is on (rise fix): his last offset, its time
+const _relPrev = V3(), _relD = V3();
+let throatRelOk = false, throatRelT = 0, throatOffT = 9, throatRelHits = 0;
+const _salPrev = V3();
+// Every camera CUT (camSnap, snapCamBehind) starts the throat lens's motion afresh: no last frame to limit
+// against, no let-go window carried across it.
+function camCut() { throatRelOk = false; throatOffT = 9; }
 // The guard's spring, one frame: p (the lens) and v (its velocity) toward `corr` (what is left of the correction,
 // worked down as p moves while `active`; with nothing to correct, damping only), in fixed sub-steps <= 1/240 s
 // (1/60 = 4 of them, 1/30 = 8 of the same size: the same motion at any frame rate), speed-limited per second.
@@ -1477,7 +1485,7 @@ function guardStepResponse(x0, w, dt, T = 0.5) {
   }
   return { at, vmax };
 }
-window.__throatCam = { knobs: THROAT_CAM, last: throatLast, stepResponse: guardStepResponse, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, guards: throatGuards, stiff: throatSnaps, stiffMax: +throatLast.stiffMax.toFixed(3), fail: throatLast.fail }) };
+window.__throatCam = { knobs: THROAT_CAM, last: throatLast, stepResponse: guardStepResponse, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, guards: throatGuards, stiff: throatSnaps, stiffMax: +throatLast.stiffMax.toFixed(3), fail: throatLast.fail, relHits: throatRelHits }) };
 // the open run across the crack at station u, height yT (fissureShape.js openRunAt: the march Sal's fall shares)
 function tcRun(F, u, vRef, zi, yT) { return openRunAt(u, vRef, zi, yT, shutFloorY, _tcRun, THROAT_CAM.step); }
 // Puts L (the lens target; or, for the guard, the lens itself) in the shaft with `margin` off the faces
@@ -1595,7 +1603,10 @@ function updateCamera(dt, t, fwd) {
   // post-switch fall-lens samples, Sal in its walls on 287)
   let czi = zi, inCrack = deckK === 0 && !fissureShut(zi) && fissureDist(player.pos.x, player.pos.z, zi) < 0;
   if (!inCrack && deckK === 0 && zi > 0 && !fissureShut(zi - 1) && fissureDist(player.pos.x, player.pos.z, zi - 1) < 0
-      && player.pos.y - 0.5 > terrainH(player.pos.x, player.pos.z, zi - 1) - 1) { inCrack = true; czi = zi - 1; }
+      && player.pos.y - 0.5 + Math.max(0, player.vel.y) * THROAT_CAM.riseAhead > terrainH(player.pos.x, player.pos.z, zi - 1) - 1) { inCrack = true; czi = zi - 1; }
+  // (rise fix) rising from the zone below, the old shaft's lens comes on `riseAhead` s of his climb early, so
+  // the lens (behind and over him: already in the throat's wall as his chest reaches the floor) starts for the
+  // slot while it is still in open water under the floor; falling, the look-ahead is 0 and the release stands
   let want = clearCamDistance(player.pos, camBack, base, zi, inCrack);
   // On (or coming onto) the deck the boom is also walked against the raft's gear, along
   // the real line from the pivot to the lens (back AND up), and the lens slides in along
@@ -1835,6 +1846,7 @@ function updateCamera(dt, t, fwd) {
     camSnap = false;
     camera.position.copy(camDesired);
     camVel.set(0, 0, 0);
+    camCut();
     camLook.copy(player.pos).addScaledVector(fwd, 6);
     camLook.y += DECKCAM.look * deckK;
     camDist = want; camDistV = 0; camBasePrev = base;
@@ -1924,6 +1936,27 @@ function updateCamera(dt, t, fwd) {
     if (mv > throatLast.stiffMax) throatLast.stiffMax = mv;
     if (gk > 0) { camVel.lerp(player.vel, 1 - Math.exp(-10 * dt)); throatGuards++; if (gk === 2) throatSnaps++; }
   }
+
+  // THE THROAT LENS NEVER FLIES (rise fix). Rising from the zone below, the old shaft's lens switches on as his
+  // chest reaches its floor, with the lens out under the throat's wall: the follow target jumped up to 15 u into
+  // the shaft in one frame and the spring flew the lens in at up to 133 u/s (2.2 u a frame). While the throat
+  // lens is on, while its guard acts, and for 0.5 s after it lets go, the lens moves at most `relVmax` (45) u/s
+  // RELATIVE TO HIM, in any direction (per second: the same at any frame rate). A frame that meets the limit
+  // hands the follow spring the limited velocity, so it does not wind up behind it. A cut (camCut), a
+  // teleport of his, or a gap in this camera's frames (the ending, the deck) starts it afresh.
+  throatOffT = throatOn ? 0 : throatOffT + dt;
+  if (throatRelOk && dt > 0 && t - throatRelT > 0 && t - throatRelT < 0.25 && player.pos.distanceToSquared(_salPrev) < 25
+      && (throatOn || gk > 0 || throatOffT < 0.5)) {   // (he teleported: a respawn, a jump - not a frame to limit)
+    _relD.copy(camera.position).sub(player.pos).sub(_relPrev);   // this frame's move relative to him
+    const L = _relD.length(), lim = THROAT_CAM.relVmax * dt;
+    if (L > lim) {
+      _relD.multiplyScalar(lim / L);
+      camera.position.copy(player.pos).add(_relPrev).add(_relD);
+      camVel.copy(player.vel).addScaledVector(_relD, 1 / dt);
+      throatRelHits++;
+    }
+  }
+  _relPrev.copy(camera.position).sub(player.pos); _salPrev.copy(player.pos); throatRelOk = true; throatRelT = t;
 
   // There is no above-water world yet — no sky, and the raft deck sits at y = -2.08 — so
   // a camera that breaks the surface renders air through the WATER's optics and washes
