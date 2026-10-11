@@ -260,7 +260,7 @@ not need the BC5 normal path). The old whaling iron lodged in Velkath's near fla
 `sleeper/harpoon.js`) is the same model Sal carries as his blade (Task 7): it is sculpted ONCE at true size in its
 own frame (+Z the point, origin on the axis at the ferrule's mouth), `meta.dim` records the points either owner
 needs (tip, ferrule, grip, the lodged depth) and `meta.lineEnd` where the frayed line leaves it. Metal is in
-ORM.B (Sal's convention: set `ormB: 'metal'` + a piece `emit` mask). `harpoon.js harpoonModel()` hands any owner
+ORM.B (Sal's convention: set `ormB: 'metal'` + a piece `emit` mask). `src/lib/harpoonModel.js harpoonModel()` hands any owner
 the geometry and a fresh material (sculpted when the asset has landed, else the procedural lathe-and-box build
 from the same `DIM`); the geometry and maps are shared and must be kept from a sleeper's disposal
 (`keepGeo`/`keepTex`). Bake: ~7 s.

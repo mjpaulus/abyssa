@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // Michael's route: ?playtest Alt+6 (the jump's own placement at the nest), a real [E] for the
 // egg, every ward but the last lit, then the last ward touched with the egg in hand.
 const W = window.__wt, A = window.__arg || {};

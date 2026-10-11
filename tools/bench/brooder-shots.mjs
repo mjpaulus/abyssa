@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // BROODERFIX visible proof: frame strips through REAL input (W/E over CDP), plus numbers.
 //   TAG=before|after SCEN=chase,leg,ridge,under,cam node tools/bench/brooder-shots.mjs
 // Frames land in /Users/michaelpaulus/sc/.abyssa-wt/shots/brooderfix-<TAG>-<scen>-<n>.png

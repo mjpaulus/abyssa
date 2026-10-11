@@ -244,7 +244,12 @@ against explicit contracts and reviewed on return.
   Task 6, `sleeper/harpoon.js`; the pry, the carried clump and the brood rule are gone): an old whaling iron
   (src/lib/harpoonSculpt.js -> assets/harpoon, the same model Task 7 makes Sal's blade; `harpoonModel()`) is
   lodged in her shell margin on the NEAR flank, in a gap between her folded legs (seat() searches her drawn
-  shell; the silt drift is notched there); `L.harpoon.anchor` is where he stands (Alt+6). [E] PULL THE HARPOON
+  shell: the head + shank BURIED by a vertical-ray test against the drawn body, the pole clear of her limbs;
+  the silt drift is notched there); `L.harpoon.anchor` is where he stands (Alt+6). The model is
+  `src/lib/harpoonModel.js` (neutral: Sal's blade imports it). A pull ABORTS (nothing granted) if he leaves
+  it: on the deck (drowned), > REACH+1 from the anchor, or she woke. The brass GLINT is the eyeshine's
+  range cue (3-40 u, toward the lens) and CATCHES once ever per site when his light first finds it
+  (sighted[] persisted with pulled[]). [E] PULL THE HARPOON
   = a 1.5 s wrench (his drive held off: player.stagger re-armed; pack off), it comes free ("IT COMES FREE.
   SHE FEELS IT." / remote "ANOTHER DIVER'S HARPOON.", prio 3, her name follows at 3), the wound weeps (render
   only), she wakes 0.7 s later; survival.hasHarpoon on the first pull EVER (save tools.harpoon); pulled[site]
@@ -509,7 +514,9 @@ against explicit contracts and reviewed on return.
   **`__shaderFailed()` returns []** (no shader program left broken; see lib/shaderWatch.js);
   console clean (no errors except a favicon 404).
 - Message discipline: `showMsg(text, dur, prio)` is a two-slot priority queue —
-  never clobber; sleeper-name lines are prio 0. Esc/blur is a real pause.
+  never clobber. A sleeper's name is prio 0 when a zone is announced (colour: it waits behind
+  everything) and prio 2 on her WAKE (ev.woke), 3 for Velkath's (it follows the harpoon's pull line,
+  also 3, ahead of the queued finds, which the wake strikes). Esc/blur is a real pause.
 - Reversed-edge `smoothstep(a,b,x)` with a>=b is GLSL UB and returns 0 on this
   driver — it silently killed eleven art systems for months. Always `1.0 -
   smoothstep(lo, hi, x)`. Transparent DoubleSide materials need `forceSinglePass`.

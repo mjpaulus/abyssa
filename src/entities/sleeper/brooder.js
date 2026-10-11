@@ -163,7 +163,7 @@ const S = () => ({ x: 0, v: 0 });
 const nz = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
 const ease = x => x * x * (3 - 2 * x);
 const win = (x, a, b) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0, pulled: false, pullLine: null };
+const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0, pulled: false, pullLine: null, sighted: false };
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
@@ -517,11 +517,13 @@ export function makeBrooder(idx, cfg) {
     L.brood = makeBrood(L, idx, head.clone().addScaledVector(tIn, 95));
     // the rite's trigger: the old harpoon (a revisit to an anchorage whose iron was pulled: the old
     // wound, cfg.pulled from the chart record, game.js makeZoneSleeper)
-    L.harpoon = makeHarpoon(L, { wound: !!c.pulled });
+    L.harpoon = makeHarpoon(L, { wound: !!c.pulled, sighted: !!c.sighted });
     L.rite = L.harpoon;                               // the game's generic [E] / prompt hook
     L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
     L.harpoon.onWake = () => { if (L.dormant) wakeBrooder(L); };
+    // the lines only a SLEEPING ridge says (game.js drops any still queued the moment she wakes)
+    L.findLines = L.brood.findLines.concat([RIDGE_LINE, L.harpoon.sightLine]);
   }
 
   // (playtest) her body's colliders now, for a spot search right after a (re)build, before her first update
@@ -1529,7 +1531,7 @@ function publishCols(L) {
 }
 
 function resetEv() {
-  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0; EV.pulled = false; EV.pullLine = null;
+  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0; EV.pulled = false; EV.pullLine = null; EV.sighted = false;
   return EV;
 }
 // a ground shock at world x,z of strength k (0..1): the game's camera shake, by distance
@@ -1593,6 +1595,7 @@ function sight(L, dt, player, ev) {
   L._pdT = d;
 }
 
+const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
@@ -1600,7 +1603,7 @@ export function updateBrooder(L, dt, t, player) {
   if (L.harpoon) L.harpoon.update(dt, t, player, ev);
   if (L.brood) {
     L.brood.update(dt, player, ev);
-    if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = 'THE RIDGE IS WARM UNDER YOUR HAND.'; }
+    if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = RIDGE_LINE; }
   }
   if (!L.pPrev) L.pPrev = player.pos.clone();
   sight(L, dt, player, ev);

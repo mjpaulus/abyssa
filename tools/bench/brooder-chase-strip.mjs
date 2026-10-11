@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // BROODER-CLUTCH proof strips through REAL input (keys over CDP; yaw/pitch are the mouse's job):
 //   (2) the take -> wake: E at the Alt+6 spot, frames through her ~6 s rise;
 //   (3) a 30 s chase from the default camera: he flees with the clump (W+Shift), turning his

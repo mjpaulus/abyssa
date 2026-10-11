@@ -128,6 +128,28 @@ if (mode === 'rite') {
     for (const k in r.head) { const need = k === 'shank' ? 0.0 : 0.1; if (!(r.head[k] >= need)) fail.push(`site ${site}: the ${k} is ${r.head[k] < 0 ? 'outside her' : r.head[k] + ' u inside (< ' + need + ')'}`); }
     for (const z in r.limbs) if (r.limbs[z] >= 0) fail.push(`site ${site}: the pole at z ${z} runs through a leg/claw (${r.limbs[z]} u)`);
   }
+} else if (mode === 'abort') {
+  // DROWNED MID-PULL (fix round 1): E at the harpoon, a beat of the wrench, his air runs out; the tenders
+  // haul him up and stand him on the deck. The pull must be UNDONE there: no harpoon, she still asleep, no
+  // "IT COMES FREE", nothing saved; and the iron still in her for the next dive.
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  await c.ev(`(window.__helm=true, window.__chart.arrive(0), 1)`); await alt(c, 6);
+  await c.key('KeyE', true); await c.ev(`(window.__bench.step(2), 1)`); await c.key('KeyE', false);
+  const w0 = await c.ev(`(window.__bench.step(12), { wrenching: !!window.lev.harpoon.wrenching })`);
+  await c.ev(`(window.survival.oxygen = -1, window.__bench.step(6), 1)`);
+  const st = await c.ev(`window.gameState`);
+  await sleep(3500);   // the rescue is a wall-clock timer (2.5 s)
+  const r = await c.ev(`(() => { const seen = []; window.__bench.step(300, () => { const m = window.__msg().live; if (m && seen[seen.length - 1] !== m) seen.push(m); }); const sv = JSON.parse(localStorage.getItem('abyssa.chart.v1') || '{}'); const H = window.lev.harpoon;
+    return { state: window.gameState, onDeck: !!window.player.onDeck, msgs: seen, owns: !!window.survival.hasHarpoon, dormant: !!window.lev.dormant, wrenching: !!H.wrenching, pulled: !!H.pulled, ironVisible: H.iron.visible, aborted: H.aborted || 0, saved: sv.pulled || null, tool: !!(sv.tools && sv.tools.harpoon), stagger: +window.player.stagger.toFixed(2) }; })()`);
+  console.log('abort', JSON.stringify({ w0, deadState: st, r }));
+  if (!w0.wrenching) fail.push('no wrench under way before the drowning');
+  if (st !== 'dead') fail.push('the drowning did not take (state ' + st + ')');
+  if (!r.onDeck || r.state !== 'play') fail.push('not back on the deck in play: ' + r.state);
+  if (r.owns || r.tool) fail.push('the harpoon was granted on the deck');
+  if (!r.dormant) fail.push('she woke while he was on the deck');
+  if (r.msgs.includes('IT COMES FREE. SHE FEELS IT.')) fail.push('the pull line was said on the deck');
+  if (r.wrenching || r.pulled || !r.ironVisible) fail.push('the pull was not undone (wrenching ' + r.wrenching + ', pulled ' + r.pulled + ', iron ' + r.ironVisible + ')');
+  if (r.saved && r.saved[0]) fail.push('pulled[0] saved: ' + JSON.stringify(r.saved));
 } else if (mode === 'remote') {
   // the first pull EVER at a remote anchorage: another diver's iron, and the blade with it; then home's
   // own pull says its own line and grants nothing new; pulled[] is per anchorage

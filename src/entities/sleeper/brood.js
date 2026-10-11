@@ -497,6 +497,15 @@ function couplingGeo(rnd) {
   return g;
 }
 
+// the trail's found lines, once each (game.js drops any still queued when she wakes: L.findLines)
+const FIND = {
+  tracks: 'TRACKS IN THE SILT. MANY LEGS, AND HEAVY.',
+  shells: 'A SHED SHELL, SPLIT DOWN THE BACK. EMPTY EGG SKINS ROUND IT.',
+  boot: 'AN OLD LEAD BOOT, HALF IN THE SILT. NOT YOURS.',
+  coupling: 'A HOSE COUPLING, SHEARED THROUGH. HIS AIR CAME THIS FAR.',
+  clutch: 'A CLUTCH UNDER HER. EGGS BY THE THOUSAND, AND EVERY ONE HAS AN EYE.'
+};
+const FIND_LINES = Object.values(FIND);
 export function makeBrood(L, idx, trailFrom) {
   const grp = L.grp, R = L.R;
   const rnd = seededRand(0xB700D + idx * 131 + Math.round(trailFrom.x * 7 + trailFrom.z * 13));
@@ -505,7 +514,7 @@ export function makeBrood(L, idx, trailFrom) {
     t: 0, seated: false, st: 0, fanT: 4,
     found: { tracks: false, shells: false, boot: false, coupling: false, clutch: false, ridge: false },
     trailA: trailFrom.clone(), shellsAt: V3(), bootAt: V3(), couplingAt: V3(), takeAt: V3(), bear: 0, notch: 0.5,
-    lobes: [], nL: 0
+    lobes: [], nL: 0, findLines: FIND_LINES
   };
   B.trailA.y = terrainH(B.trailA.x, B.trailA.z, idx);
   const matN = clutchMat(), sMat = setaeMat();
@@ -925,11 +934,11 @@ export function makeBrood(L, idx, trailFrom) {
     if (ev.msg) return;
     const F = B.found, p = player.pos;
     const near = (q, r) => Math.hypot(p.x - q.x, p.z - q.z) < r && Math.abs(p.y - q.y) < 10;
-    if (!F.tracks && near(B.trailA, 30)) { F.tracks = true; ev.msg = 'TRACKS IN THE SILT. MANY LEGS, AND HEAVY.'; }
-    else if (!F.shells && near(B.shellsAt, 12)) { F.shells = true; ev.msg = 'A SHED SHELL, SPLIT DOWN THE BACK. EMPTY EGG SKINS ROUND IT.'; }
-    else if (!F.boot && B.relics && near(B.bootAt, 6)) { F.boot = true; ev.msg = 'AN OLD LEAD BOOT, HALF IN THE SILT. NOT YOURS.'; }
-    else if (!F.coupling && B.relics && near(B.couplingAt, 6)) { F.coupling = true; ev.msg = 'A HOSE COUPLING, SHEARED THROUGH. HIS AIR CAME THIS FAR.'; }
-    else if (!F.clutch && L.dormant && B.seated && near(B.takeAt, 11)) { F.clutch = true; ev.msg = 'A CLUTCH UNDER HER. EGGS BY THE THOUSAND, AND EVERY ONE HAS AN EYE.'; }
+    if (!F.tracks && near(B.trailA, 30)) { F.tracks = true; ev.msg = FIND.tracks; }
+    else if (!F.shells && near(B.shellsAt, 12)) { F.shells = true; ev.msg = FIND.shells; }
+    else if (!F.boot && B.relics && near(B.bootAt, 6)) { F.boot = true; ev.msg = FIND.boot; }
+    else if (!F.coupling && B.relics && near(B.couplingAt, 6)) { F.coupling = true; ev.msg = FIND.coupling; }
+    else if (!F.clutch && L.dormant && B.seated && near(B.takeAt, 11)) { F.clutch = true; ev.msg = FIND.clutch; }
   };
   return B;
 }

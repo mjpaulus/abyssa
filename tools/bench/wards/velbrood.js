@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // FAILING TEST for the brood rule's feedback: with an egg out and one dark ward left, every
 // entry into the last ward's reach must put the refusal on the live HUD line within 1.5 s.
 const W = window.__wt, A = window.__arg || { site: 0, rem: false };

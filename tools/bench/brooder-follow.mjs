@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // BROODERFIX probe: the egg take through REAL input, then 30 s of Velkath's state.
 //   ROUTE=playtest|natural node tools/bench/brooder-follow.mjs [walkAway=1]
 import { connect, sleep } from './drv.mjs';

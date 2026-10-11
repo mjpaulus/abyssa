@@ -76,6 +76,8 @@ let keepsakes = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
 // (fissure-and-harpoon Task 6) per anchorage, Velkath's old harpoon has been pulled there: a revisit
 // finds the OLD WOUND in the seam instead (sleeper/harpoon.js; cfg.pulled, makeZoneSleeper)
 let pulledRec = [0, 0, 0, 0];
+// (fix round 1) and whether his light has found the harpoon there: its first-sight line is once EVER per site
+let sightRec = [0, 0, 0, 0];
 let muteSaved = false;
 // A save is UNTRUSTED input: hand-edited, torn, or written by an older build. Every
 // field is coerced to its shape and clamped to its range; nothing in it can put the
@@ -89,6 +91,7 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
   if (Array.isArray(sv.found)) chartFound = [1, 1, 1, sv.found[3] ? 1 : 0];   // authored sites always start found
   if (Array.isArray(sv.keeps)) keepsakes = grid43(sv.keeps).map(r => Array.isArray(r) ? r : [0, 0, 0]);
   if (Array.isArray(sv.pulled)) pulledRec = [0, 1, 2, 3].map(i => sv.pulled[i] ? 1 : 0);
+  if (Array.isArray(sv.sighted)) sightRec = [0, 1, 2, 3].map(i => sv.sighted[i] ? 1 : 0);
   endingSeen = !!sv.endingSeen;
   muteSaved = !!sv.mute;
   if (sv.site) setSite(sv.site);
@@ -106,7 +109,7 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
 } catch (e) { /* a torn save is a blank chart, never a crash */ } })();
 function saveChart() { try {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
-    site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes, pulled: pulledRec,
+    site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes, pulled: pulledRec, sighted: sightRec,
     endingSeen, hose: survival.hose, mute: muteSaved,
     tools: { sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster, harpoon: !!survival.hasHarpoon }
   }));
@@ -303,7 +306,7 @@ window.__slamLog = slamLog;   // inkBlind: Orune's ink smothering the lantern   
 let paused = false, pauseT = 0, blurred = false;
 let lanternHeld = false;   // predators.js STATE: the octopus has the lantern (see the snatch)
 const PEV_IDLE = { threat: 0, bite: 0, lightSteal: 0, inkPickup: 0, lanternStolen: false, msg: null };
-const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, pulled: false, pullLine: null };
+const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, pulled: false, pullLine: null, sighted: false };
 
 const $hud = document.getElementById('hud');
 const $msg = document.getElementById('msg');
@@ -685,6 +688,7 @@ function makeZoneSleeper(i, extra) {
   if (calmedBefore(i)) over = Object.assign({}, over, { remembered: true });
   // (Task 6) Velkath's harpoon already pulled at this anchorage: her rite starts at the old wound
   if (i === 0 && pulledRec[currentSiteIndex()]) over = Object.assign({}, over, { pulled: true });
+  if (i === 0 && sightRec[currentSiteIndex()]) over = Object.assign({}, over, { sighted: true });
   return makeLeviathan(i, extra ? Object.assign({}, over, extra) : over);
 }
 // The remembered wake's one line ('SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.', per
@@ -995,7 +999,7 @@ window.__hit = () => ({ torn: +survival.torn.toFixed(2), refill: +o2RefillRate()
 window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zone ' + zone; };
 // Debug: sail without the fade (the fade is cosmetic; this is the state change), and
 // force the reseed directly. Kept for probes and for future harness runs.
-window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm, pulled: () => pulledRec, site: () => currentSiteIndex(),
+window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm, pulled: () => pulledRec, sighted: () => sightRec, site: () => currentSiteIndex(),
   found: () => chartFound, keeps: () => keepsakes, fp: () => terrainFingerprint() };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
@@ -2234,6 +2238,8 @@ function update(dt, t) {
     // ambient finds still queued; her name, a breath later, at the same rank, so it follows it
     if (ev.pullLine) { showMsg(ev.pullLine, 3, 3); dropMsg(lev.harpoon && lev.harpoon.sightLine); }   // (its first-sight line is old news now)
     if (ev.woke) {
+      // (fix round 1) what only the sleeping ridge says is old news once she is up: struck from the queue
+      if (lev.findLines) for (const l of lev.findLines) dropMsg(l);
       showMsg(lev.name, 5, lev.harpoon ? 3 : 2); growl(); shake = 1;
       const mk = currentSiteIndex() * 3 + zone;
       if (lev.memWard >= 0 && lev.memLine && !memSaid[mk]) { memPending = lev.memLine; memKey = mk; }
@@ -2262,6 +2268,7 @@ function update(dt, t) {
     // (Task 6) the harpoon came free: this anchorage's iron is pulled (a revisit finds the wound), and
     // the blade, if this was the first ever (harpoon.js set survival.hasHarpoon), is saved with the tools
     if (ev.pulled) { pulledRec[currentSiteIndex()] = 1; saveChart(); chime(147, 2.2, 0.3, 'cold'); }
+    if (ev.sighted) { sightRec[currentSiteIndex()] = 1; saveChart(); }
     // (fifth-ward) a held ward refused a touch: a dead iron knock, the pips shake, and the
     // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
     // (one knock per 0.6 s per sleeper: a strike pass sweeps several held wards at once)

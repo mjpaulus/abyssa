@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // BROODERFIX: the chase, measured per frame (rAF logger in the page) after a REAL E take.
 //   ROUTE=playtest|natural node tools/bench/brooder-chase.mjs
 // Phase 1 (12 s): Sal stands at the nest with the egg. Phase 2 (16 s): he walks away (real W).

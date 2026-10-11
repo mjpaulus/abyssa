@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // BROODERFIX: the whole rite with her UNHELD and real keys (W/Shift/Space/C/E): take an egg,
 // get under her and light wards (Space up to each), meet the brood rule, walk back and set the
 // egg in the nest (E), the last ward lights itself, she calms and walks home over him.

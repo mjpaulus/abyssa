@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // CLUTCH2: the press-back under her crouch, comparable across versions (plain-sphere gap from
 // B.live, so it runs on the old clutch too). Alt+6, E, she hunts; W under the mass; the gap,
 // reach and canReturn standing, then the best reach during one Space tap (a hop) and a 300 ms

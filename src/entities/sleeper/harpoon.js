@@ -23,7 +23,7 @@
 // commitment and the remembered rite's start, and grants nothing.
 //
 // THE MODEL is ONE generated asset (src/lib/harpoonSculpt.js -> assets/harpoon via tools/blender),
-// shared with Task 7 (Sal's blade): harpoonModel() hands any owner its geometry and a fresh material
+// shared with Task 7 (Sal's blade): src/lib/harpoonModel.js harpoonModel() hands any owner its geometry and a fresh material
 // (sculpted when the asset has landed, else the procedural lathe-and-box build with the same DIM).
 //
 // RENDER: the iron (1 draw), the line down to the silt (1), the wound scar (1, hidden until there is
@@ -65,7 +65,10 @@ const BURY = [[0, 0, 0.62, 0.15], [0, 0, 0.52, 0.15], [0.06, 0, 0.45, 0.12], [-0
 // reaching out past her folded legs to where a man on the sand takes it); Task 7's blade is 1x
 export const LODGED_S = 1.3;
 const GRIP_Z = -0.72;                 // where his hands close on the lodged pole (model z: aft of the lashing)
-const GLINT_K = 0.95, GLINT_FAR = 40, SIGHT_R = 24;
+const GLINT_K = 1.0, GLINT_FAR = 120, SIGHT_R = 24;   // (the sprite's own fade runs on the LENS's distance, long and shallow)
+// the range cue: nothing inside GL_NEAR u of him (the lit brass carries it there), full from GL_FULL, gone
+// between GL_OUT0 and GL_OUT1 (the murk has it by then)
+const GL_NEAR = 3, GL_FULL = 6.5, GL_OUT0 = 26, GL_OUT1 = 40, GL_CATCH = 0.4;
 export const LINE_FIRST_SIGHT = 'A HARPOON IN HER SIDE. SOMEONE CAME BEFORE YOU.';
 export const LINE_FREE_HOME = 'IT COMES FREE. SHE FEELS IT.';
 export const LINE_FREE_REMOTE = "ANOTHER DIVER'S HARPOON.";
@@ -153,7 +156,7 @@ export function makeHarpoon(L, opts = {}) {
     wound, pulled: wound, wrenching: false, pressed: false, seated: false,
     anchor: V3(), seam: V3(), normal: V3(), axis: V3(), lookAt: null,
     t: 0, wT: 0, freeT: -1, wakeT: -1, weepT: 0, weepRate: 0, weepHead: 0, kick: 0, pendingLine: null, line: null, first: false,
-    glint: 0, onWake: null, site, sightLine: LINE_FIRST_SIGHT
+    glint: 0, onWake: null, site, sightLine: LINE_FIRST_SIGHT, sighted: !!opts.sighted, catchT: 0
   };
   // the iron, on a pivot under her body (it rides her; her body is scaled by R, so the pivot's
   // matrix carries 1/R): the mesh is swapped to the sculpted set if it lands later
@@ -217,7 +220,7 @@ export function makeHarpoon(L, opts = {}) {
     L.keepTex.add(puffTex());
   }
   // the glint on the brass (the eyeshine's warm-glow program; in the scene from the build at 0)
-  const gl = makeWarmGlow(0xffe0a6, 0.8, { near: 3, far: GLINT_FAR, nearW: 0, swell: 0.015, swellMax: 0.8 });
+  const gl = makeWarmGlow(0xffe0a6, 0.9, { near: 40, far: GLINT_FAR, nearW: 0, swell: 0.02, swellMax: 1.5 });
   gl.material.opacity = 0;
   gl.renderOrder = 3;
   L.grp.add(gl);
@@ -509,6 +512,11 @@ export function makeHarpoon(L, opts = {}) {
     return { pulled: true, first: H.first, wound: H.wound, msg: null, line: H.line };
   };
 
+  const abort = player => {
+    H.wrenching = false; H.lookAt = null; H.wT = 0; H.kick = 0; H.aborted = (H.aborted || 0) + 1;
+    piv.matrix.copy(H.pivBase); piv.matrixWorldNeedsUpdate = true;
+    if (player.stagger > 0 && player.staggerK >= 1) player.stagger = 0;
+  };
   // the moment it comes free (or the wound gives under his palms)
   const free = (player) => {
     H.wrenching = false; H.lookAt = null;
@@ -549,6 +557,9 @@ export function makeHarpoon(L, opts = {}) {
     H.t += dt;
     if (!H.seated) return;
     // ---- the wrench ----
+    // the commitment holds only while he is AT it: drowned and brought up on the deck, hauled off by the
+    // line, thrown by her, or she woke some other way, and the pull is undone (no reward, no wake, no line)
+    if (H.wrenching && (player.onDeck || !L.dormant || Math.hypot(player.pos.x - H.anchor.x, player.pos.z - H.anchor.z) > REACH + 1)) abort(player);
     if (H.wrenching) {
       H.wT += dt;
       // his hands are off the controls for the whole of it (stagger re-armed: drive 0), his air
@@ -557,7 +568,8 @@ export function makeHarpoon(L, opts = {}) {
       player.vel.x *= Math.exp(-8 * dt); player.vel.z *= Math.exp(-8 * dt);
       // he steps in to it and squares up to the iron over the first beat
       const k = Math.min(1, dt * 7);
-      if (H.wT < 0.45) { player.pos.x += (H.anchor.x - player.pos.x) * k; player.pos.z += (H.anchor.z - player.pos.z) * k; }
+      // (not against the line: at the leash's hold the step in would drag him past what the hose allows)
+      if (H.wT < 0.45 && !(survival.tautness > 0.75)) { player.pos.x += (H.anchor.x - player.pos.x) * k; player.pos.z += (H.anchor.z - player.pos.z) * k; }
       H.gripWorld(H.lookAt);
       const want = Math.atan2(H.lookAt.x - player.pos.x, H.lookAt.z - player.pos.z);
       let dy = want - player.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
@@ -621,28 +633,42 @@ export function makeHarpoon(L, opts = {}) {
       H.weep.geometry.attributes.aFade.needsUpdate = true;
       if (!live && H.weepT <= 0) H.weep.count = 0;
     }
-    // ---- the glint: the brass ferrule catching his lantern (lodged only) ----
+    // ---- THE GLINT (fix round 1: the eyeshine's pattern, brooder.js EYESHINE AT RANGE) ----
+    // A range cue, not a lamp: the lit brass carries itself up close, so the pinpoint is zero inside
+    // GL_NEAR u of him and rises by GL_FULL; ONE fade past that (the sprite's own, to GL_FAR from the lens).
+    // Stood off the ferrule toward the CAMERA by min(1.2, 0.1 d) so her rim, her legs and the pole itself
+    // never clip it, and high enough over his line of sight that his helmet does not (10-20 u: the game
+    // camera sees it over him). Lit only by his lantern turned on it (face), his charge (lit); the
+    // cylinder's squareness to the view makes it twinkle, it never vanishes. The FIRST time his light finds
+    // it (once ever per anchorage, persisted with the chart: opts.sighted / ev.sighted), it CATCHES: a
+    // GL_CATCH s swell to full.
     let f = 0;
     if (iron.visible && L.dormant && player) {
-      // the ferrule's centre, stood a little off it toward him (the pole never clips it)
       _a.set(0, 0, (DIM.fer0 + DIM.fer1) * 0.5).applyMatrix4(H.worldM);
-      _v.subVectors(player.pos, _a);
-      const dist = _v.length() || 1;
-      _v.multiplyScalar(1 / dist);
-      gl.position.copy(_a).addScaledVector(_v, 0.12);
-      // a cylinder flashes where its axis stands square to the line of sight; his lantern must be
-      // turned toward it (he faces it); bright close, gone by GLINT_FAR; his lantern's charge
-      const sq = 1 - Math.abs(H.axis.dot(_v));
+      _b.subVectors(camera.position, _a);
+      const dc = _b.length() || 1;
+      gl.position.copy(_a).addScaledVector(_b, Math.min(1.2, 0.1 * dc) / dc);
+      _v.subVectors(_a, player.pos); _v.y = 0;
+      const dp = _v.length() || 1;
+      _v.multiplyScalar(1 / dp);
       _fw.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
-      const face = Math.max(0, -(_fw.x * _v.x + _fw.z * _v.z));
+      const face = Math.max(0, _fw.x * _v.x + _fw.z * _v.z);
       const lit = Math.max(0, player.light == null ? 1 : player.light);
-      const near = clamp(1 - (dist - 2) / (GLINT_FAR - 2), 0, 1);
-      f = (0.25 + 0.75 * sq * sq) * Math.pow(face, 3) * lit * near * (0.85 + 0.15 * Math.sin(H.t * 2.3));
-      // first sight: once per anchorage, when his light finds it (turned on it, close enough to see it)
-      if (!sightSaid[site] && face > 0.85 && lit > 0.2 && dist < SIGHT_R && !ev.msg) { sightSaid[site] = 1; ev.msg = LINE_FIRST_SIGHT; }
+      const sq = 1 - Math.abs(H.axis.dot(_b) / dc);
+      const rng = clamp((dp - GL_NEAR) / (GL_FULL - GL_NEAR), 0, 1), far = 1 - clamp((dp - GL_OUT0) / (GL_OUT1 - GL_OUT0), 0, 1);
+      f = face * face * lit * rng * rng * (3 - 2 * rng) * far * (0.7 + 0.3 * sq * sq) * (0.9 + 0.1 * Math.sin(H.t * 2.3));
+      // first sight: once EVER per anchorage, when his light finds it
+      if (!H.sighted && !sightSaid[site] && face > 0.85 && lit > 0.2 && dp > GL_NEAR && dp < SIGHT_R && !ev.msg) {
+        H.sighted = true; sightSaid[site] = 1; ev.msg = LINE_FIRST_SIGHT; ev.sighted = true; H.catchT = GL_CATCH;
+      }
+    }
+    if (H.catchT > 0) {
+      H.catchT -= dt;
+      const u = 1 - Math.max(0, H.catchT) / GL_CATCH;           // 0 -> 1 over the catch
+      f = Math.max(f, Math.sin(Math.PI * u) / GLINT_K);         // up to full and back down to the twinkle
     }
     H.glint = f;
-    gl.material.opacity = GLINT_K * f;
+    gl.material.opacity = Math.min(1, GLINT_K * f);
   };
   H.dispose = () => { /* everything is in her group: disposeSleeper frees it (the model's shared set is kept) */ };
   return H;
