@@ -52,18 +52,19 @@ function ascentCurve(u) {
 }
 
 // ---------------------------------------------------------------- the ascent path
-// He leaves the way he came: up through the three rift bowls, in order. All three zone
+// He leaves the way he came: up through the three opened fissures, in order. All three zone
 // terrains stay in the scene for the whole cinematic, so a straight lerp from the zone-2
 // rift to the raft drove him through two solid seafloors in open water. The only places
-// the floors may be crossed are the rift funnels — the game already reads a rift transit
-// as passing through the flattened bowl mesh, because that is what normal play does.
+// the floors may be crossed are the fissures' throats at riftPos — the game already reads a
+// rift transit as sinking through a throat floor, because that is what normal play does.
 //
 // The path is a spline through seven points, built once. Its shape is dictated by two
 // rules, and every waypoint is one of them:
 //   * before moving sideways off a rift, rise CLEAR above the highest ground the corridor
 //     to the next rift crosses in the zone he has just left;
-//   * arrive at the next rift still DIP below the lowest ground of the zone above, so the
-//     floor he is about to break through can only ever be crossed inside the funnel.
+//   * arrive at the next rift still DIP below the lowest ground of the zone above (and its
+//     throat floor), so the floor he is about to break through is only ever crossed at the
+//     throat, rising straight up the crack.
 // Both levels are measured off terrainH at startEnding rather than hardcoded: the
 // heightfield is seeded and identical every load, but a terrain retune would silently
 // invalidate numbers baked in here.
@@ -82,9 +83,10 @@ function corridorMax(a, b, zi) {
   }
   return m;
 }
-// Lowest ground of zone zi along the corridor, ignoring its own funnel — the funnel is
-// the hole he is aiming for, and counting its floor would drag the arrival level down
-// under the seafloor he is meant to stay beneath until he is inside it.
+// Lowest ground of zone zi along the corridor, ignoring a RIFT_R * 2.8 circle round its rift —
+// the crack there is the way he is aiming for (buildPath takes its throat floor separately),
+// and counting it here would drag the arrival level down under the seafloor he is meant to stay
+// beneath until he is in the crack.
 function corridorMin(a, b, zi) {
   const rp = riftPos(zi), rr = RIFT_R * 2.8;
   let m = Infinity;
@@ -107,7 +109,7 @@ function lipTop(zi) {
   fissureWorld(0, -(w0 + 2), zi, _lw); const b = terrainH(_lw.x, _lw.z, zi);
   return Math.max(a, b);
 }
-// Per-rift transit bands, for the camera: [where he enters the funnel, where he clears it].
+// Per-rift transit bands, for the camera: [just under the throat floor, where he clears the crack].
 const trY0 = new Float32Array(3), trY1 = new Float32Array(3);
 const trX = new Float32Array(3), trZ = new Float32Array(3);
 const _pts = [];        // the seven control points, reused across wins
@@ -149,7 +151,7 @@ function buildPath(sx, sy, sz, endX, endZ) {
 
   // Centripetal parameterisation, not uniform: the four right-angle corners where a
   // vertical hold turns into a lateral leg made the uniform curve loop out past the rift
-  // and swing back, which put him through the funnel wall on the way in.
+  // and swing back, which put him through the rift's wall on the way in.
   const curve = new THREE.CatmullRomCurve3(_pts, false, 'centripetal', 0.5);
   let prev = -Infinity;
   for (let i = 0; i < PATH_N; i++) {
@@ -166,7 +168,7 @@ function buildPath(sx, sy, sz, endX, endZ) {
   const top = [yE, yC, yA];
   for (let i = 0; i < 3; i++) {
     trX[i] = rr[i].x; trZ[i] = rr[i].z;
-    trY0[i] = terrainH(rr[i].x, rr[i].z, i) - 22;   // just under the bowl floor
+    trY0[i] = terrainH(rr[i].x, rr[i].z, i) - 22;   // just under the throat floor at riftPos
     trY1[i] = top[i];
   }
 }
@@ -463,15 +465,15 @@ export function startEnding() {
   startY = player.pos.y;
   startX = player.pos.x;
   startZ = player.pos.z;
-  // In play he is standing in the zone-2 bowl when this fires, a few units under its
-  // floor. The debug hook drops him at the origin instead, 70u under the seafloor and
+  // In play he has just sunk through zone 2's throat floor when this fires (the trigger is
+  // zoneBottom(2) - 70). The debug hook drops him at the origin instead, 70u under the seafloor and
   // 118u off the rift — from there the first leg would drag him through the zone-2 floor
-  // from below. Either way the shot starts in the funnel, so put him in it.
+  // from below. Either way the shot starts under the rift, so put him there.
   // THE FISSURE: he now falls through anywhere along a ~70 u crack, and the trigger
   // (zoneBottom(2) - 70) lies only a few units under its throat floor, so an off-centre start held
   // the lens in the floor's skin through the whole STILL beat (199 of 4500 frames, measured from a
   // real fall 12 u along the crack). The STILL beat is the cut: always start on riftPos, under the
-  // throat, in open water, the way the shot started under the old bowl.
+  // throat, in open water.
   const r2 = riftPos(2);
   startX = r2.x; startZ = r2.z;
   player.pos.x = startX; player.pos.z = startZ;
@@ -743,9 +745,9 @@ export function updateEnding(dt, t) {
     camAz += d * Math.min(1, 1.1 * inSurf * dt);
   }
 
-  // Inside a funnel the orbit has to come in and sit higher: the bowl is 43u across and
-  // 100u deep, and a 19u arm swinging round the far side of it spent a second and a half
-  // buried in the wall. Pulled in, the arm stays in the throat where the water is.
+  // Threading a crack the orbit has to come in and sit higher (wantDist / wantH below take
+  // `transit`): a 19u arm swinging round across it is buried in a wall. Pulled in, the arm
+  // stays in the throat where the water is (and THE THROAT, SEEN below shortens it further).
   let transit = 0, ti = 0;
   for (let i = 0; i < 3; i++) {
     const near = 1 - smooth(RIFT_R * 1.1, RIFT_R * 3.0,

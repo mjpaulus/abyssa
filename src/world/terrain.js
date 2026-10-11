@@ -333,7 +333,8 @@ function heightAt(x, z, zi, slabs) {
       const rs = 1.3 * sp.r * ru * ru * (3 - 2 * ru);   // ramps in from 1.1 u inside: a patch cell (<= 0.5 u, ~0.7 u diagonal, |grad fd| up to ~1.4 at the kinks) over the lip must not dip
       if (slabs && q >= 0) h -= 0.3 * s + 0.35 * q * q;
       else {
-        // Drawn by the fissure patch at ~0.46 u (see buildFissurePatch), so the walls carry detail
+        // Drawn by the fissure patch at <= 0.5 u (PATCH_STEP: each coarse cell split into its own
+        // ceil(width / 0.5) steps; see buildFissurePatch), so the walls carry detail
         // the 2.3 u terrain grid could not: the lip breaks off in 2.4 u joint blocks at different
         // setbacks, the wall steps down in layered strata (1.5 u steps: a 0.9 u ledge, a 0.6 u
         // riser, wandering with depth), and slumped blocks sit on the faces. Where the crack pinches
@@ -1127,9 +1128,11 @@ const SLAB_NU = 10, SLAB_NS = 4, SLAB_TRIS = SLAB_NU * SLAB_NS * 4 + SLAB_NU * 4
 // ONE mesh per zone (slabs included): cut into 8x8 / 16x16-cell chunks so the frustum and the
 // lantern's cube faces could cull pieces, it cost MORE (paired live A/B at the zone-0 lip, patch vs
 // the uncut coarse terrain: one mesh +0.11..0.20 ms, 16-cell chunks +0.25, 8-cell +0.38..0.44): the
-// draw calls (61 shadow + 16 colour at 8 cells) outweigh the triangles they cull. PATCH_CHUNK
-// keeps the split available should that ever change.
-const PATCH_CHUNK = 1 << 20;
+// draw calls (61 shadow + 16 colour at 8 cells) outweigh the triangles they cull. So PATCH_CHUNK is
+// larger than any patch (2^20 cells): the chunk loops below always make exactly ONE chunk, and the
+// per-chunk lists they fill (the meshes and their index arrays, wallIdx / fullIdx2, read as
+// fissurePatchGeo(zi).index[k] by the probes) are one-element lists. The split is kept, not dead: set PATCH_CHUNK to 8 or 16 to cut it again.
+const PATCH_CHUNK = 1 << 20;   // cells per chunk side: one chunk (see above)
 let PATCH_ON = true;
 function splitAxis(ax, c0, c1) {        // fine axis over coarse lines c0..c1: values, coarse line, sub index
   let n = 1; const m = [];

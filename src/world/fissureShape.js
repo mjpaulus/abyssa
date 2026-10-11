@@ -7,9 +7,9 @@ import { riftPos } from '../config.js';
 // Authored per zone: bearing of the crack (radians) and its proportions. Bearings chosen so the
 // crack runs across the basin, not toward the wall; lengths/widths inside the spec's ranges.
 const ROWS = [
-  { bear: 0.55, halfLen: 36, halfW: 6.5, throatHalfW: 4.2, lipDrop: 6, jamDepth: 7 },   // zone 0: limestone
-  { bear: 2.20, halfLen: 33, halfW: 7.0, throatHalfW: 4.6, lipDrop: 5, jamDepth: 8 },   // zone 1: scorched
-  { bear: 1.05, halfLen: 38, halfW: 7.5, throatHalfW: 5.0, lipDrop: 7, jamDepth: 9 },   // zone 2: basalt
+  { bear: 0.55, halfLen: 36, halfW: 6.5, throatHalfW: 4.2, lipDrop: 6 },   // zone 0: limestone
+  { bear: 2.20, halfLen: 33, halfW: 7.0, throatHalfW: 4.6, lipDrop: 5 },   // zone 1: scorched
+  { bear: 1.05, halfLen: 38, halfW: 7.5, throatHalfW: 5.0, lipDrop: 7 },   // zone 2: basalt
 ];
 // Per zone, per side: phases for the edge's jag and the centreline's kinks, so the two lips of
 // one crack never mirror each other and the three cracks never rhyme.
@@ -25,7 +25,7 @@ export const FISSURE = ROWS.map((r, zi) => {
   const p = riftPos(zi);
   const reach = Math.hypot(r.halfLen, MID_MAX + JAG_MAX * r.halfW) + 14 + 0.5;
   return Object.freeze({ cx: p.x, cz: p.z, dx: Math.cos(r.bear), dz: Math.sin(r.bear), halfLen: r.halfLen,
-    halfW: r.halfW, throatHalfW: r.throatHalfW, lipDrop: r.lipDrop, jamDepth: r.jamDepth, ph: PH[zi],
+    halfW: r.halfW, throatHalfW: r.throatHalfW, lipDrop: r.lipDrop, ph: PH[zi],
     apronR2: reach * reach });   // fissureDist >= 14 everywhere outside this squared radius
 });
 // OVERHANG SLABS (fix round 1): a few slabs of the lip that have not fallen yet, jutting over the void.
@@ -33,7 +33,8 @@ export const FISSURE = ROWS.map((r, zi) => {
 // but not their undersides: terrain.js draws the carved wall under them in the fissure patch and the
 // slab itself (top + front + underside) as rock. u0: centre along the crack; side: which lip
 // (1: v >= 0, 0: v < 0); hu: half length along u; reach: how far past the lip it juts; th: thickness.
-// Kept off the middle (|u| >= 7) so the opening the ending and the jam use stays clear.
+// Their centres are kept off the middle (|u0| >= 7; with their half lengths none reaches nearer than |u| ~5.1)
+// so the opening the ending and the jam use stays clear.
 export const SLABS = [
   [{ u0: -19, side: 1, hu: 2.6, reach: 2.6, th: 1.3 }, { u0: -8, side: 0, hu: 2.0, reach: 2.2, th: 1.0 },
    { u0: 11, side: 1, hu: 2.2, reach: 2.4, th: 1.5 }, { u0: 22, side: 0, hu: 2.8, reach: 2.3, th: 1.1 }],
@@ -47,7 +48,8 @@ export const SLAB_REACH_MAX = 2.8;
 // Triangle wave, -1..1, period 1: straight runs and hard kinks, the en-echelon zigzag of a real
 // tension crack (a sine reads as a meander, a river, not rock).
 const tri = t => 4 * Math.abs(t - Math.floor(t + 0.5)) - 1;
-// The crack's centreline wanders off the bearing axis by up to ~4 u in kinked runs (kinks every
+// The crack's centreline wanders off the bearing axis in kinked runs by up to 3.3-3.8 u (measured per zone;
+// MID_MAX 6.0 below is the analytic bound the cheap reject uses) (kinks every
 // ~12 u and ~4.5 u: both at or above two mesh cells, ~2.3 u at the rifts). Pinned to 0 at u = 0 so
 // the opening stays centred on riftPos (the ending's spline and the fall-through rely on it).
 function midAt(F, u) {
@@ -161,8 +163,8 @@ export function inThroat(x, z, zi) {
 // planes are checked against. lipMeanY(zi): the mean lip height (sampled 1.5 u outside each lip at
 // nine stations through fissureWorld with each side's own width; the rift-shut beat's rim).
 // terrainH is passed in so this module stays pure (terrain.js imports us; we must not import it).
-// Cached: call resetJam() after a reseed (the terrain changed). The frozen ROWS' jamDepth is the
-// planned depth (7-9 u: a trench Sal could not leave mid-crack) and is no longer read.
+// Cached: call resetJam() after a reseed (the terrain changed). (The plan's per-zone jamDepth, 7-9 u, made
+// a trench Sal could not leave mid-crack; it is gone from the rows: the jam hangs JAM_BELOW_LIP under the lip.)
 const JAM = [null, null, null], LIPMEAN = [0, 0, 0], _j = { x: 0, z: 0 };
 const JAM_T0 = 0.5, JAM_BELOW_LIP = 2.0, JAM_UNDER_LIP = 0.4, JAM_DU = 0.25, JAM_SLOPE = 0.9;
 const JAM_WIN_LO = 2, JAM_WIN_HI = 4;   // stations: +-0.5 u (cap), +-1 u (target)
