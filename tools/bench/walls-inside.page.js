@@ -29,7 +29,7 @@
 const S = await import('/src/world/fissureShape.js');
 const T = await import('/src/world/terrain.js');
 const THREE = await import('three');
-const { renderer, scene, camera } = await import('/src/core.js');
+const { renderer, scene, camera, clock } = await import('/src/core.js');
 
 // every drawn crack triangle: { pos (Float32Array), tris: Int32Array of vertex triples, mesh list }
 function drawn(zi) {
@@ -347,6 +347,7 @@ export function normalsPng(N, W, H, s = 0.5) {
 
 // ---- the lens on the fall path ----------------------------------------------------------------
 // point-triangle distance (Ericson, closest point on triangle), no allocation beyond the scratch
+const _sl = { u: 0, v: 0 }, _sr = { lo: 0, hi: 0, loOpen: false, hiOpen: false };
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _c = new THREE.Vector3(), _q = new THREE.Vector3(), _tri = new THREE.Triangle();
 export async function fallLens(zi, o = {}) {
   const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), w = { x: 0, z: 0 };
@@ -417,6 +418,9 @@ export async function descentLens(zi, o = {}) {
   const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), w = { x: 0, z: 0 };
   window.setState('play'); window.__helm = true; window.survival.hose = 5000; window.__camPin = null;
   window.survival.fuel = 1; window.survival.oxygen = 1;   // (seventy cases run the pump dry: he drowns on the jam)
+  // REPEATABLE: the ambient current that sets him sideways is fbm in (x, z, t) plus the wind; the
+  // weather is pinned (day, no storm) and the clock set to the case's own t0 (o.t0, default 1000)
+  window.weather.set(1, 0); clock.elapsedTime = o.t0 == null ? 1000 : o.t0;
   window.gotoZone(zi); if (window.lev) window.lev.calmed = false; window.__fissure.setOpen(zi, 0);
   const u0 = o.u == null ? -4 : o.u, every = o.every || 2;
   S.fissureWorld(u0, (S._halfWAt(F, u0, 1) - S._halfWAt(F, u0, 0)) / 2, zi, w);
@@ -426,17 +430,19 @@ export async function descentLens(zi, o = {}) {
   const jam = T.shutFloorY(w.x, w.z, zi);
   window.player.pos.y = jam + 1.35; window.player.vel.set(0, 0, 0); window.player.pitch = o.pitch || 0;
   window.__bench.step(180, null, { render: !!o.render });                     // the lens settles behind him on the jam
-  const tris = [];
-  const take = (A, I) => { for (let t = 0; t < I.length; t += 3) {
+  const tris = [], kind = [];   // kind per triangle: 0 patch, 1 slab (patch vertices past nv), 2 throat wall
+  const take = (A, I, nv) => { for (let t = 0; t < I.length; t += 3) {
     const a = I[t] * 3, b = I[t + 1] * 3, c = I[t + 2] * 3;
     const cx = (A[a] + A[b] + A[c]) / 3, cz = (A[a + 2] + A[b + 2] + A[c + 2]) / 3;
-    if (Math.hypot(cx - w.x, cz - w.z) < 16) tris.push(A[a], A[a + 1], A[a + 2], A[b], A[b + 1], A[b + 2], A[c], A[c + 1], A[c + 2]); } };
-  const P = T.fissurePatchGeo(zi); for (const I of P.index) take(P.pos.array, I);
-  const Wg = T.fissureWallOn && T.fissureWallOn() ? T.fissureWallGeo(zi) : null; if (Wg) take(Wg.pos.array, Wg.index);
+    if (Math.hypot(cx - w.x, cz - w.z) < 16) { tris.push(A[a], A[a + 1], A[a + 2], A[b], A[b + 1], A[b + 2], A[c], A[c + 1], A[c + 2]); kind.push(nv < 0 ? 2 : I[t] >= nv ? 1 : 0); } } };
+  const P = T.fissurePatchGeo(zi); for (const I of P.index) take(P.pos.array, I, P.nv);
+  const Wg = T.fissureWallOn && T.fissureWallOn() ? T.fissureWallGeo(zi) : null; if (Wg) take(Wg.pos.array, Wg.index, -1);
   const n = tris.length / 9, cam = window.camera;
   let minD = 1e9, at = null, samples = 0, close = 0, inside = 0, hfIn = 0, worstIn = null, lensBelowPivotMax = -1e9, boomMin = 1e9, boomMax = 0, fallV = 0, ndcLow = 9, ndcHigh = -9, ndcSide = 0, offFrame = 0;
-  const closeAt = [], hfAt = [], offAt = [], salAt = []; let salIn = 0, salInMax = 0;
-  const startZone = window.zone, shots = o.shots || [], got = [];
+  const closeAt = [], hfAt = [], offAt = [], salAt = []; let salIn = 0, salInMax = 0, salFloor = 0, salFloorAt = -1, offAll = 0;
+  const fell0 = window.player.pos.y;
+  const startZone = window.zone, shots = o.shots || [], got = [], holds0 = window.__shaftHolds ? window.__shaftHolds() : 0;
+  const tc0 = window.__throatCam ? window.__throatCam.state() : null;
   // the measure ends just above the zone-change plane (zones 0/1) or the ending's (zone 2: the
   // cinematic takes the lens there)
   const C = await import('/src/config.js'), trig = zi < 2 ? C.zoneBottom(zi) - C.ZONE_GAP * 0.55 : C.zoneBottom(2) - 70;
@@ -454,14 +460,22 @@ export async function descentLens(zi, o = {}) {
       samples++;
       boomMin = Math.min(boomMin, p.distanceTo(pv)); boomMax = Math.max(boomMax, p.distanceTo(pv)); fallV = Math.max(fallV, -window.player.vel.y);
       lensBelowPivotMax = Math.max(lensBelowPivotMax, pv.y - p.y);
-      // Sal himself: his chest (0.5 u under the eye) under the heightfield at his own (x, z) = his body in the rock
-      { const sd = T.terrainUnderH(pv.x, pv.z, zi) - (pv.y - 0.5); if (sd > 0) { salIn++; salInMax = Math.max(salInMax, sd); if (salAt.length < 4) salAt.push([f, +(lip - pv.y).toFixed(1), +sd.toFixed(2)]); } }
+      // Sal himself: his chest (0.5 u under the eye) under the heightfield at his own (x, z) = his body in
+      // the rock. In the WALLS (the shaft still has open water at his station at his feet: he drifted into
+      // a face) or under the THROAT FLOOR (no open water left there: he sinks through toward the plane)
+      { const sd = T.terrainUnderH(pv.x, pv.z, zi) - (pv.y - 0.5);
+        if (sd > 0) { S.fissureLocal(pv.x, pv.z, zi, _sl);
+          if (S.openRunAt(_sl.u, _sl.v, zi, pv.y - 1.35, T.terrainUnderH, _sr)) { salIn++; salInMax = Math.max(salInMax, sd); if (salAt.length < 4) salAt.push([f, +(lip - pv.y).toFixed(1), +sd.toFixed(2)]); }
+          else { salFloor++; if (salFloorAt < 0) salFloorAt = +(lip - pv.y).toFixed(1); } } }
       if (p.y < T.terrainUnderH(p.x, p.z, zi) - 0.1) { hfIn++; if (hfAt.length < 6) hfAt.push([f, +(lip - pv.y).toFixed(1), +(T.terrainUnderH(p.x, p.z, zi) - p.y).toFixed(2)]); }
       // where Sal sits in the frame (his chest: 0.5 u under the eye): NDC, -1 = the bottom edge
       cam.updateMatrixWorld(); _q.set(pv.x, pv.y - 0.5, pv.z).project(cam);
-      if (_q.z < 1) { ndcLow = Math.min(ndcLow, _q.y); ndcHigh = Math.max(ndcHigh, _q.y); ndcSide = Math.max(ndcSide, Math.abs(_q.x)); if (Math.abs(_q.y) > 0.85 || Math.abs(_q.x) > 0.85) { offFrame++; if (offAt.length < 4) offAt.push([f, +(lip - pv.y).toFixed(1), +_q.y.toFixed(2)]); } }
-      else { offFrame++; if (offAt.length < 4) offAt.push([f, +(lip - pv.y).toFixed(1), 'behind']); }
-      let fMin = 1e9, fSide = 1;
+      // (counted once he has fallen 3 u off the jam: before that the frame is the shut jam's, whose boom
+      // the rubble pulls in to ~3.3 u on HEAD as now; offAll counts every sample)
+      { const off = _q.z >= 1 || Math.abs(_q.y) > 0.85 || Math.abs(_q.x) > 0.85;
+        if (_q.z < 1) { ndcLow = Math.min(ndcLow, _q.y); ndcHigh = Math.max(ndcHigh, _q.y); ndcSide = Math.max(ndcSide, Math.abs(_q.x)); }
+        if (off) { offAll++; if (pv.y < fell0 - 3) { offFrame++; if (offAt.length < 4) offAt.push([f, +(lip - pv.y).toFixed(1), _q.z >= 1 ? 'behind' : +_q.y.toFixed(2)]); } } }
+      let fMin = 1e9, fSide = 1, fKind = -1;
       for (let k = 0; k < n; k++) {
         const o9 = k * 9;
         const mx = Math.min(tris[o9], tris[o9 + 3], tris[o9 + 6]) - 3, Mx = Math.max(tris[o9], tris[o9 + 3], tris[o9 + 6]) + 3;
@@ -474,17 +488,18 @@ export async function descentLens(zi, o = {}) {
         _tri.set(_a, _b, _c); _tri.closestPointToPoint(p, _q);
         const d = _q.distanceTo(p);
         if (d < fMin) {
-          fMin = d;
+          fMin = d; fKind = kind[k];
           _b.sub(_a); _c.sub(_a); _b.cross(_c);
           fSide = _b.dot(_q.set(p.x - _q.x, p.y - _q.y, p.z - _q.z)) >= 0 ? 1 : -1;
         }
       }
-      if (fMin < cam.near) { close++; if (closeAt.length < 6) closeAt.push([f, +(lip - pv.y).toFixed(1), +fMin.toFixed(3)]); }
+      if (fMin < cam.near) { close++; if (closeAt.length < 6) { S.fissureLocal(p.x, p.z, zi, _sl); closeAt.push([f, +(lip - pv.y).toFixed(1), +fMin.toFixed(3), ['patch', 'slab', 'wall'][fKind], +_sl.u.toFixed(1), +_sl.v.toFixed(2), +(lip - p.y).toFixed(1)]); } }
       if (fSide < 0 && fMin < 3) { inside++; if (!worstIn || fMin > worstIn.d) worstIn = { f, d: +fMin.toFixed(2), below: +(lip - pv.y).toFixed(1) }; }
       if (fMin < minD) { minD = fMin; at = { f, side: fSide, cam: [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2)], below: +(lip - pv.y).toFixed(1), boom: +p.distanceTo(pv).toFixed(2) }; }
     }
   } finally { window.keys.KeyC = false; }
   return { zi, u: u0, yaw: +(o.yaw || 0).toFixed(3), pitch: o.pitch || 0, yawRate: o.yawRate || 0, tris: n, samples, endBelowLip: +(lip - window.player.pos.y).toFixed(1), trigBelowLip: +(lip - trig).toFixed(1), close, inside, hfIn, worstIn, zoneEnd: window.zone, near: cam.near, minD: +minD.toFixed(3), at,
-    salIn, salInMax: +salInMax.toFixed(2), salAt, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
+    salIn, salInMax: +salInMax.toFixed(2), salAt, salFloor, salFloorAt, offAll, shaftHolds: window.__shaftHolds ? window.__shaftHolds() - holds0 : null,
+    guards: tc0 ? window.__throatCam.state().guards - tc0.guards : null, snaps: tc0 ? window.__throatCam.state().snaps - tc0.snaps : null, closeAt, hfAt, offAt, ndcLow: +ndcLow.toFixed(2), ndcHigh: +ndcHigh.toFixed(2), ndcSide: +ndcSide.toFixed(2), offFrame,
     boomMin: +boomMin.toFixed(2), boomMax: +boomMax.toFixed(2), fallV: +fallV.toFixed(1), lensBelowPivotMax: +lensBelowPivotMax.toFixed(2), shots: got };
 }

@@ -265,4 +265,34 @@ export function jamSagProfile(u, v, zi) {
   return (1 - sf) * (1 - sa);
 }
 export function jamSagAt(u, v, zi) { return SAG[zi] === 0 ? 0 : SAG[zi] * jamSagProfile(u, v, zi); }
+// THE OPEN SHAFT AT A HEIGHT (final fix wave I1): the open interval across the crack (v) at station u
+// where the ground stays under height y — floorAt(x, z, zi) is passed in (terrain.js shutFloorY), so this
+// module stays pure. Marched out in `step` u from the open sample nearest vRef (vRef itself first), over
+// the lip interval and 1.5 u past each lip. Writes out.lo / out.hi (the outermost open samples: the face
+// lies within `step` beyond each) and out.loOpen / out.hiOpen (the run reaches past that lip: no wall on
+// that side at this height). False: no open water at this station at this height (the throat floor, a
+// tip). Allocation-free; ~(run width / step) floor samples. The shaft only widens upward (the walls step
+// down in s, never overhang but under the slabs, which the floor counts as rock), so a run found at y is
+// open from y up. Shared by the follow lens (game.js throatLens) and Sal's fall (player.js holdInShaft),
+// so they agree on where the shaft is.
+const _ow = { x: 0, z: 0 };
+function openAt(u, v, zi, y, floorAt) { fissureWorld(u, v, zi, _ow); return floorAt(_ow.x, _ow.z, zi) < y; }
+export function openRunAt(u, vRef, zi, y, floorAt, out, step = 0.2) {
+  const F = FISSURE[zi]; widths(F, u);
+  const vMin = -_w.w0 - 1.5, vMax = _w.w1 + 1.5;   // (read now: floorAt -> terrainH -> fissureDist re-uses _w)
+  const vr = Math.min(vMax, Math.max(vMin, vRef)), nk = Math.ceil((vMax - vMin) / step);
+  let v0 = NaN;
+  for (let k = 0; k <= nk; k++) {
+    const a = vr + k * step, b = vr - k * step;
+    if (a <= vMax && openAt(u, a, zi, y, floorAt)) { v0 = a; break; }
+    if (k > 0 && b >= vMin && openAt(u, b, zi, y, floorAt)) { v0 = b; break; }
+    if (a > vMax && b < vMin) break;
+  }
+  if (v0 !== v0) return false;
+  let lo = v0, hi = v0;
+  while (lo - step >= vMin && openAt(u, lo - step, zi, y, floorAt)) lo -= step;
+  while (hi + step <= vMax && openAt(u, hi + step, zi, y, floorAt)) hi += step;
+  out.lo = lo; out.hi = hi; out.loOpen = lo - step < vMin; out.hiOpen = hi + step > vMax;
+  return true;
+}
 export { halfWAt as _halfWAt, midAt as _midAt, widths as _widths, slabReach as _slabReach };

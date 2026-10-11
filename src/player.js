@@ -4,7 +4,7 @@ import { renderer } from './core.js';
 import { WORLD_R, SURFACE_Y, GLASS } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
 import { terrainH, terrainUnderH, terrainNormal, clampR, jamAt } from './world/terrain.js';
-import { FISSURE, fissureDist, inThroat, fissureLocal, fissureWorld, slabProbe, slabAt, _widths } from './world/fissureShape.js';
+import { FISSURE, fissureDist, inThroat, fissureLocal, fissureWorld, slabProbe, slabAt, _widths, openRunAt } from './world/fissureShape.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
 import { wreckColliders } from './world/wrecks.js';
@@ -611,6 +611,56 @@ function holdInThroat(zi) {
   player.pos.x = _fw.x; player.pos.z = _fw.z;
 }
 
+// THE SHAFT HOLDS HIM (final fix wave). Falling down the open throat (overRift: no floor, no wall
+// test) the ambient current sets him sideways up to ~1 u/s, and the shaft narrows as it deepens (its
+// walls step in up to ~3 u a side inside the lip-level interval inThroat / holdInThroat use): on most
+// descents he sank 20-70 u inside the walls (fissure-probe fall-lens salIn, 1d68aa0). So every frame
+// he is over the open throat his v is held inside the shaft's open interval at his FEET, measured
+// SHAFT_AHEAD s of his fall lower (a ledge pushes him in before he reaches it; fissureShape.js
+// openRunAt, the march the follow lens shares), less his body (SHAFT_R): eased toward it over
+// SHAFT_EASE s, never nearer than SHAFT_HARD to the rock, only the into-wall velocity taken out,
+// moved only across the crack, never up (never onto a wall: throat-edges). Where the shaft has no open
+// water at that height (the throat floor: zone 2's ending plane lies ~5-10 u under it) nothing holds
+// him and he sinks on through, as before.
+const SHAFT_R = 0.6, SHAFT_HARD = 0.25, SHAFT_EASE = 0.15, SHAFT_AHEAD = 0.15, SHAFT_DU = 0.4;
+const _sr = { lo: 0, hi: 0, loOpen: false, hiOpen: false };
+function holdInShaft(zi, dt) {
+  fissureLocal(player.pos.x, player.pos.z, zi, _fl);
+  const u = _fl.u, v = _fl.v;
+  let y = player.pos.y - EYE_H - Math.max(0, -player.vel.y) * SHAFT_AHEAD;
+  // (just over the throat floor the look-ahead finds no water: his feet still decide)
+  if (!openRunAt(u, v, zi, y, terrainH, _sr)) { y = player.pos.y - EYE_H; if (!openRunAt(u, v, zi, y, terrainH, _sr)) return; }
+  const lo0 = _sr.lo, hi0 = _sr.hi, loOpen0 = _sr.loOpen, hiOpen0 = _sr.hiOpen;
+  let lo = lo0, hi = hi0, loOpen = loOpen0, hiOpen = hiOpen0;
+  const mid = (lo + hi) * 0.5;
+  for (let n = -1; n <= 1; n += 2) {   // the lips jag: the faces either side of his station too (a closed one is a tip: his own decides)
+    if (!openRunAt(u + n * SHAFT_DU, mid, zi, y, terrainH, _sr)) continue;
+    if (_sr.lo > lo) lo = _sr.lo;
+    if (_sr.hi < hi) hi = _sr.hi;
+    loOpen = loOpen && _sr.loOpen; hiOpen = hiOpen && _sr.hiOpen;
+  }
+  // (just over the floor the slot can be narrower than the jag shifts it: no overlap, his station decides)
+  if (lo > hi) { lo = lo0; hi = hi0; loOpen = loOpen0; hiOpen = hiOpen0; }
+  if (loOpen && hiOpen) return;
+  let a = loOpen ? -1e9 : lo + SHAFT_R, b = hiOpen ? 1e9 : hi - SHAFT_R;
+  if (a > b) a = b = (lo + hi) * 0.5;
+  const vt = clamp(v, a, b);
+  if (vt === v) return;
+  let vn = v + (vt - v) * Math.min(1, dt / SHAFT_EASE);
+  const ha = loOpen ? -1e9 : lo + SHAFT_HARD, hb = hiOpen ? 1e9 : hi - SHAFT_HARD;
+  vn = ha <= hb ? clamp(vn, ha, hb) : (lo + hi) * 0.5;
+  fissureWorld(u, vn, zi, _fw);
+  const dx = _fw.x - player.pos.x, dz = _fw.z - player.pos.z, d = Math.hypot(dx, dz);
+  if (d < 1e-6) return;
+  const inward = (player.vel.x * dx + player.vel.z * dz) / d;
+  if (inward < 0) { player.vel.x -= dx / d * inward; player.vel.z -= dz / d * inward; }
+  player.pos.x = _fw.x; player.pos.z = _fw.z;
+  shaftHolds++;
+}
+let shaftHolds = 0;
+export function shaftHoldCount() { return shaftHolds; }
+if (typeof window !== 'undefined') window.__shaftHolds = shaftHoldCount;   // dev: frames the shaft has held him
+
 export function updatePlayer(dt, t, zone, riftOpen) {
   const zi = zone < 0 ? 0 : zone;
   const groundedAtStart = player.grounded;
@@ -927,6 +977,8 @@ export function updatePlayer(dt, t, zone, riftOpen) {
       if (into > 0) { player.vel.x -= rx / rl * into; player.vel.z -= rz / rl * into; }
     }
   }
+
+  if (overRift) holdInShaft(zi, dt);
 
   // ---- THE BULWARK AND THE DECK GEAR ---------------------------------------------------
   // Held at the rail on all four sides while he is on the deck, with ONE gap: the
