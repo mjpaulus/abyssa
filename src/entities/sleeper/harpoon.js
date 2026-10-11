@@ -54,6 +54,7 @@ let ASSET = null;
 HARPOON_ASSET.then(a => { if (a && a.geos.harpoon && a.maps.harpoon) ASSET = a; });
 
 export const WRENCH_T = 1.5;          // the commitment (s): brace, wrench, wrench, free
+const BEATS = [0.28, 0.72, 1.12];     // the three heaves (s into the wrench)
 export const REACH = 2.6;             // prompt / interact range from the anchor (horizontal, u)
 const WAKE_DELAY = 0.7;               // it comes free, she shudders a beat later (the wake's own sequence takes ~6 s)
 const LODGE_IN = 0.30;                // how much of the iron is in her (model units, from the point)
@@ -212,7 +213,7 @@ export function makeHarpoon(L, opts = {}) {
     wound, pulled: wound, wrenching: false, pressed: false, seated: false,
     anchor: V3(), seam: V3(), normal: V3(), axis: V3(), lookAt: null,
     t: 0, wT: 0, freeT: -1, wakeT: -1, weepT: 0, weepRate: 0, weepHead: 0, kick: 0, pendingLine: null, line: null, first: false,
-    glint: 0, onWake: null, site
+    glint: 0, onWake: null, site, sightLine: LINE_FIRST_SIGHT
   };
   // the iron, on a pivot under her body (it rides her; her body is scaled by R, so the pivot's
   // matrix carries 1/R): the mesh is swapped to the sculpted set if it lands later
@@ -484,7 +485,7 @@ export function makeHarpoon(L, opts = {}) {
       let dy = want - player.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
       player.yaw += dy * Math.min(1, dt * 6);
       // three heaves: each one rocks him back off his braced boot
-      const beats = [0.28, 0.72, 1.12];
+      const beats = BEATS;
       if (H.kick < beats.length && H.wT >= beats[H.kick]) {
         _v.subVectors(H.seam, player.pos).setY(0); const l = _v.length() || 1;
         diverImpulse('hit', _v.x / l, _v.z / l, H.wound ? 0.35 : 0.55 + 0.15 * H.kick);
@@ -512,7 +513,8 @@ export function makeHarpoon(L, opts = {}) {
     }
     // ---- after: the line, the save, the wake ----
     if (H.justPulled) { ev.pulled = true; H.justPulled = false; }
-    if (H.pendingLine && !ev.msg) { ev.msg = H.pendingLine; H.pendingLine = null; }
+    // (its own field: game.js says it at prio 3, over the ambient finds, and her name follows it)
+    if (H.pendingLine) { ev.pullLine = H.pendingLine; H.pendingLine = null; sightSaid[site] = 1; }
     if (H.wakeT > 0 && (H.wakeT -= dt) <= 0) { H.wakeT = -1; if (H.onWake) H.onWake(); }
     // ---- the weep ----
     if (H.weepT > 0) {
@@ -556,9 +558,10 @@ export function makeHarpoon(L, opts = {}) {
       _fw.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
       const face = Math.max(0, -(_fw.x * _v.x + _fw.z * _v.z));
       const lit = Math.max(0, player.light == null ? 1 : player.light);
-      f = sq * sq * Math.pow(face, 3) * lit * clamp(1 - (dist - 2) / (GLINT_FAR - 2), 0, 1) * (0.85 + 0.15 * Math.sin(H.t * 2.3));
-      // first sight: once per anchorage, when his light finds it
-      if (!sightSaid[site] && f > 0.25 && dist < SIGHT_R && !ev.msg) { sightSaid[site] = 1; ev.msg = LINE_FIRST_SIGHT; }
+      const near = clamp(1 - (dist - 2) / (GLINT_FAR - 2), 0, 1);
+      f = (0.25 + 0.75 * sq * sq) * Math.pow(face, 3) * lit * near * (0.85 + 0.15 * Math.sin(H.t * 2.3));
+      // first sight: once per anchorage, when his light finds it (turned on it, close enough to see it)
+      if (!sightSaid[site] && face > 0.85 && lit > 0.2 && dist < SIGHT_R && !ev.msg) { sightSaid[site] = 1; ev.msg = LINE_FIRST_SIGHT; }
     }
     H.glint = f;
     gl.material.opacity = GLINT_K * f;

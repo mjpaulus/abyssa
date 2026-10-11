@@ -240,17 +240,24 @@ against explicit contracts and reviewed on return.
   FIELD (brood.js beadField: packed egg domes, eyespots, yolk; triplanar in the lobe's rest
   frame; lobes filleted into one mass) + ~2.8k sparse proud eggs on setae tips, lantern-lit; the
   mass is SOFT-SOLID: bodyCols setClutch, Sal stops at the drawn surface, the lens never rests in
-  it, calmed she won't settle her tongue of eggs onto him); [E] pries a clump
-  off her and wakes her; the last ward won't light while the clump is out (wardRefuse +
-  tally "CLUTCH ROBBED"); [E] under her presses it back. Awake she HUNTS the thief (HUNT in
-  brooder.js; 3.8 u/s with the clump out), and her body collides per part (sleeper/bodyCols.js;
+  it, calmed she won't settle her tongue of eggs onto him). THE TRIGGER IS THE HARPOON (fissure-and-harpoon
+  Task 6, `sleeper/harpoon.js`; the pry, the carried clump and the brood rule are gone): an old whaling iron
+  (src/lib/harpoonSculpt.js -> assets/harpoon, the same model Task 7 makes Sal's blade; `harpoonModel()`) is
+  lodged in her shell margin on the NEAR flank, in a gap between her folded legs (seat() searches her drawn
+  shell; the silt drift is notched there); `L.harpoon.anchor` is where he stands (Alt+6). [E] PULL THE HARPOON
+  = a 1.5 s wrench (his drive held off: player.stagger re-armed; pack off), it comes free ("IT COMES FREE.
+  SHE FEELS IT." / remote "ANOTHER DIVER'S HARPOON.", prio 3, her name follows at 3), the wound weeps (render
+  only), she wakes 0.7 s later; survival.hasHarpoon on the first pull EVER (save tools.harpoon); pulled[site]
+  saved with the chart: a revisit's rite starts at the OLD WOUND ([E] PRESS THE OLD WOUND, same commitment,
+  nothing granted). The trail adds the other diver's lead boot and a sheared hose coupling (brood.js). Awake
+  she HUNTS him at the unburdened speeds (HUNT in brooder.js), and her body collides per part (sleeper/bodyCols.js;
   belly deliberately open) for Sal and the camera (`__crecam`). `lev.dormant` hides name/
   bearing/dread until she wakes). THE RITE, FAIR (ritefair 2026-10-09, brooder.js `STAND`,
   docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre APRON + 1.3 R off
   the crack's lip (`STAND.keep`; the old rim crest, and the apron rising to the lip, hung her wards 12-17 u up) and rides at most 0.06 R over the ground
   under her belly; standing height 0.52 R, held over him (no settling onto him), shell 3.6 u over
   the ground under it (STAND.clear), ward reach 7; the clutch is carried TUCKED under her apron (brood.js
-  TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up) and pressed back from RET_R 5; the crouch is retired
+  TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up); the crouch is retired
   (Michael: "crouched too low and I kept colliding"); under her body is a refuge (no hammer; she
   shifts her stance every ~3 s instead); her claws spread open her front when he comes in
   (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never into the crack (`safeThrow`: its whole ~16-29 u slide clears the lip); a slam

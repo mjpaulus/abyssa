@@ -251,3 +251,16 @@ or `__school.on / __faunaSculpt.on / pred.sculptOn` (same frame).
   `?ventproc` / `__ventlife.sculpt(false)` = A/B.
 - Blender 5.2's Metal kernel compile occasionally aborts (`NSURL initFileURLWithPath: nil`) when another
   Blender is baking on the machine; rerun with `--skip-export` (the highs are already written).
+
+## Shared props (harpoon): one model, several owners
+
+`node tools/blender/build.mjs harpoon` — `src/lib/harpoonSculpt.js` (export_hi also looks in `src/lib/` for a
+prop that belongs to no one creature) -> `assets/harpoon/` (one 1024 set, Draco, WebP only: a small prop does
+not need the BC5 normal path). The old whaling iron lodged in Velkath's near flank (fissure-and-harpoon Task 6,
+`sleeper/harpoon.js`) is the same model Sal carries as his blade (Task 7): it is sculpted ONCE at true size in its
+own frame (+Z the point, origin on the axis at the ferrule's mouth), `meta.dim` records the points either owner
+needs (tip, ferrule, grip, the lodged depth) and `meta.lineEnd` where the frayed line leaves it. Metal is in
+ORM.B (Sal's convention: set `ormB: 'metal'` + a piece `emit` mask). `harpoon.js harpoonModel()` hands any owner
+the geometry and a fresh material (sculpted when the asset has landed, else the procedural lathe-and-box build
+from the same `DIM`); the geometry and maps are shared and must be kept from a sleeper's disposal
+(`keepGeo`/`keepTex`). Bake: ~7 s.

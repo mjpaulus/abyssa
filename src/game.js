@@ -303,7 +303,7 @@ window.__slamLog = slamLog;   // inkBlind: Orune's ink smothering the lantern   
 let paused = false, pauseT = 0, blurred = false;
 let lanternHeld = false;   // predators.js STATE: the octopus has the lantern (see the snatch)
 const PEV_IDLE = { threat: 0, bite: 0, lightSteal: 0, inkPickup: 0, lanternStolen: false, msg: null };
-const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, pulled: false };
+const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, pulled: false, pullLine: null };
 
 const $hud = document.getElementById('hud');
 const $msg = document.getElementById('msg');
@@ -2230,8 +2230,11 @@ function update(dt, t) {
       if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant && !lev.rising) { ev.slam = true; ev.lightDrain += dt * 0.5; slamWhy = BODY.last + ' ' + BODY.hitV.toFixed(1); }
     }
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
+    // (Task 6) the harpoon's line ('IT COMES FREE. SHE FEELS IT.'): the beat of the rite, over the
+    // ambient finds still queued; her name, a breath later, at the same rank, so it follows it
+    if (ev.pullLine) { showMsg(ev.pullLine, 3, 3); dropMsg(lev.harpoon && lev.harpoon.sightLine); }   // (its first-sight line is old news now)
     if (ev.woke) {
-      showMsg(lev.name, 5, 2); growl(); shake = 1;
+      showMsg(lev.name, 5, lev.harpoon ? 3 : 2); growl(); shake = 1;
       const mk = currentSiteIndex() * 3 + zone;
       if (lev.memWard >= 0 && lev.memLine && !memSaid[mk]) { memPending = lev.memLine; memKey = mk; }
     }
@@ -2840,7 +2843,8 @@ const ASSET_LINE = {
   hoarder: 'GILDING THE HOARD', hunter: 'SOMETHING ELSE, DEEPER', plants: 'GROWING THE CORAL',
   blades: 'COMBING THE KELP', imp: 'DRAWING THE FAR REEFS', school: 'SCHOOLING THE FISH',
   octo: 'COILING THE ARMS', shark: 'COUNTING THE TEETH', vent: 'WARMING THE VENT LIFE',
-  reef: 'NAMING THE CREATURES', star: 'NAMING THE CREATURES', deep: 'NAMING THE CREATURES'
+  reef: 'NAMING THE CREATURES', star: 'NAMING THE CREATURES', deep: 'NAMING THE CREATURES',
+  harpoon: 'FORGING THE IRON'
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Wait on a moving set of rows ({ line, p, done }), moving the bar by rows landed and saying
