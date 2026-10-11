@@ -20,17 +20,23 @@ const base = await c.ev(`(async () => { const C = await import('/src/core.js'); 
   return { lights, fp: [0, 1, 2].map(i => window.__lev.fp(i)), home: window.__ridge.fp([0]), all: window.__ridge.fp(), z12: window.__ridge.fp([1, 2]), owned, programs }; })()`);
 if (base.owned) console.log('WARN the fresh profile owns the harpoon: the first-sight check is vacuous');
 console.log('base', JSON.stringify(base));
+// the first-sight check proper: at home, where the base was read, grant + settle + the first thrust + settle
+const NOGRANT = process.env.NOGRANT === '1';   // the control: the same soak never granting (the voyage's own programs)
+const home = await c.ev(`(async () => { const C = await import('/src/core.js'); window.__helm = true;
+  if (!${NOGRANT}) window.survival.hasHarpoon = true; window.__bench.step(30, null, { render: true }); window.__slash(); window.__bench.step(70, null, { render: true });
+  return { programs: C.renderer.info.programs.length, owned: !!window.survival.hasHarpoon }; })()`);
+console.log('first-sight at home', base.programs, '->', home.programs, home.programs === base.programs ? 'OK' : 'COMPILED', 'owned', home.owned);
 const stops = [];
 for (let k = 0; k < 6; k++) {
   const r = await c.ev(`(async () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { code: 'Minus', key: '-', altKey: true, bubbles: true }));
     window.__helm = true; window.__bench.step(120, null, { render: true });
-    window.__helm = true; window.survival.hasHarpoon = true; window.__bench.step(30, null, { render: true }); window.__slash(); window.__bench.step(70, null, { render: true });
+    window.__helm = true; if (!${NOGRANT}) window.survival.hasHarpoon = true; window.__bench.step(30, null, { render: true }); window.__slash(); window.__bench.step(70, null, { render: true });
     const C = await import('/src/core.js'); const m = C.renderer.info.memory; let lights = 0; C.scene.traverse(o => { if (o.isLight) lights++; });
     return { site: window.__chart.site(), fp0: window.__ridge.fp([0]), fpAll: window.__ridge.fp(), programs: C.renderer.info.programs.length, geos: m.geometries, tex: m.textures, lights, blade: window.__bladeLast && window.__bladeLast.kind }; })()`);
   stops.push(r); console.log('stop', JSON.stringify(r));
 }
-console.log('first-sight', stops.length ? (stops[0].programs === base.programs ? 'OK' : 'COMPILED') : '?', base.programs, '->', stops.map(x => x.programs).join(' '));
+console.log('soak programs', base.programs, home.programs, '->', stops.map(x => x.programs).join(' '));
 const tail = await c.ev(`({ fp: [0, 1, 2].map(i => window.__lev.fp(i)), safe: window.__safeFailed(), shader: window.__shaderFailed ? window.__shaderFailed() : 'n/a' })`);
 console.log('tail', JSON.stringify(tail));
 const cons = await c.console();
