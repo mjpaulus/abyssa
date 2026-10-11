@@ -6,7 +6,10 @@
 // the lab 'hold' verb so the probe is about the clutch, not the hunt), rise to it (Space) until his
 // helmet meets the soft mass, she calms (the probe lights her wards directly), walks home, he walks
 // out, she settles and the tongue spills toward the lens. Per frame: the camera inside a lobe (margin 0) / inside any part of her,
-// Sal's capsule inside a lobe, the clutch's push.
+// Sal's capsule inside a lobe, the clutch's push. Exits 1 when the walk-in does not walk in or finds nothing
+// in his way, he goes into a lobe, he never meets the clutch under her, the lens rests in the clutch, or a
+// shader is left broken.
+//   DRV_PORT=9431 node tools/bench/drv.mjs start about:blank    (the script drives an open page)
 //   PORT=8831 DRV_PORT=9431 node tools/bench/clutch2-solid.mjs
 import { connect, sleep } from './drv.mjs';
 import { boot } from './clutch2-look.mjs';
@@ -45,12 +48,25 @@ await c.key('KeyS', true);
 await c.key('KeyS', false); await sleep(800);
 await faceTake(0.35, -0.3); await sleep(1500);
 await snap('walkin-0'); console.log('walkin 0', JSON.stringify(await st()));
+// (final fix wave: re-aimed) straight AT the tongue's outermost open lobe (the old 0.35 rad offset walked
+// him past its side). MEASURED: asleep (and calmed, settled) the tongue lies under her shell's collision
+// band at his waist: on all 24 bearings round it the shell blocks 1.5-1.8 u out from the clutch's surface,
+// so on foot he stops at her shell ~4 u from the take point and never touches the eggs; he meets the clutch
+// under her when she stands (step 4/5 below). The walk-in records where he stops and what stopped him.
+const toTake = `(() => { const t = __sl.brood.takeAt, p = player.pos; return +Math.hypot(t.x - p.x, t.z - p.z).toFixed(2); })()`;
+const d0 = await c.ev(toTake);
 await c.key('KeyW', true);
-for (let i = 1; i <= 5; i++) {
-  const t0 = Date.now(); while (Date.now() - t0 < 900) { await faceTake(0.35, -0.3); await sleep(70); }
-  await snap('walkin-' + i); console.log('walkin', i, JSON.stringify(await st()));
+for (let i = 1; i <= 6; i++) {
+  const t0 = Date.now(); while (Date.now() - t0 < 900) { await faceTake(0, -0.3); await sleep(70); }
+  await snap('walkin-' + i); console.log('walkin', i, JSON.stringify(await st()), 'toTake', await c.ev(toTake));
 }
+const stopBy = await c.ev(`(() => { const t = __sl.brood.takeAt, p = player.pos, d = Math.hypot(t.x - p.x, t.z - p.z);
+  for (let s = 0; s <= d; s += 0.1) { const f = s / d, x = p.x + (t.x - p.x) * f, z = p.z + (t.z - p.z) * f, y = __T0.terrainH(x, z, 0) + 0.9;
+    if (__B.bodyBlocked(x, y, z, 0.32)) return { ahead: +s.toFixed(1), why: __B.blockWhy === -1 ? 'shell' : __B.blockWhy === -3 ? 'clutch' : 'limb ' + __B.blockWhy }; }
+  return null; })()`);
 await c.key('KeyW', false);
+const walkIn = { from: d0, to: await c.ev(toTake), stopBy, contactFrames: await c.ev(`__ck.contactFrames`), salMax: await c.ev(`+__ck.salMax.toFixed(3)`) };
+console.log('walk-in', JSON.stringify(walkIn));
 // 2. slide: strafe along it, still pushing in
 await c.key('KeyW', true); await c.key('KeyD', true);
 { const t0 = Date.now(); while (Date.now() - t0 < 2500) { await faceTake(0, -0.3); await sleep(70); } }
@@ -138,5 +154,18 @@ await sleep(1200); await snap('after-settle');
 console.log('end', JSON.stringify(await st()));
 console.log('msgs', JSON.stringify(await c.ev(`__msgs`)));
 console.log('CLUTCH', JSON.stringify(await c.ev(`__ck`)));
-console.log('sf', JSON.stringify(await c.ev(`__shaderFailed()`)));
+const sf = await c.ev(`__shaderFailed()`);
+console.log('sf', JSON.stringify(sf));
 c.close();
+// (final fix wave) it can fail: the walk-in meets the tongue (contact, a push, he stops at its surface:
+// his capsule <= 0.25 u inside a lobe), the lens never rests inside the clutch, no shader left broken
+const ckEnd = await (async () => { const c2 = await connect(); try { return await c2.ev(`__ck`); } finally { c2.close(); } })().catch(() => null);
+const fails = [];
+if (!(walkIn.from - walkIn.to > 1)) fails.push('the walk-in did not walk in ' + JSON.stringify(walkIn));
+if (!walkIn.stopBy) fails.push('the walk-in found nothing between him and the tongue (he should stop at her shell or the clutch) ' + JSON.stringify(walkIn));
+if (walkIn.salMax > 0.25) fails.push('he walked into a lobe on the walk-in ' + walkIn.salMax);
+if (!ckEnd || !(ckEnd.contactFrames > 0) || !(ckEnd.pushMax > 0)) fails.push('he never met the clutch (under her) ' + JSON.stringify(ckEnd && { contactFrames: ckEnd.contactFrames, pushMax: ckEnd.pushMax }));
+if (ckEnd && ckEnd.salMax > 0.75) fails.push('he went deep into the soft mass ' + ckEnd.salMax);
+if (ckEnd && ckEnd.camIn) fails.push('the lens rested inside the clutch on ' + ckEnd.camIn + ' frames');
+if (sf && sf.length) fails.push('shaders failed ' + JSON.stringify(sf));
+if (fails.length) { console.error('FAIL', fails); process.exit(1); } else console.log('PASS');

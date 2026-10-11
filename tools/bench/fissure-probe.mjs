@@ -557,9 +557,13 @@ if (mode === 'shape') {
       } finally { Object.assign(SE, keep); window.__fissure.seepTest(zi, false); } })()`));
   }
   await c.ev(`(window.__bench.size(), 1)`);
+  // PER-ZONE BOUNDS (final fix wave M7): one 0.17 bound flaked in zone 2 under load (depth-stable z2 measured
+  // 0.124-0.182 across loaded and quiet machines, z0 ~0.075, z1 ~0.11) while it must still catch the z-fight
+  // (RED 0.20-0.22 / 0.56-0.58 / 0.20-0.26): z0 0.15, z1 0.30, z2 0.19.
+  const SEEP_BOUND = [0.15, 0.30, 0.19];
   for (const z of out) {
     if (z.litPx < 2000) fail.push(`zone ${z.zi}: the seep layer barely draws (${z.litPx} px)`);
-    if (z.blotch > 0.17) fail.push(`zone ${z.zi}: the seep layer is blotched (z-fight) E ${z.blotch}`);
+    if (z.blotch > SEEP_BOUND[z.zi]) fail.push(`zone ${z.zi}: the seep layer is blotched (z-fight) E ${z.blotch} (bound ${SEEP_BOUND[z.zi]})`);
   }
   console.log(JSON.stringify(out));
 } else if (mode === 'reascend') {

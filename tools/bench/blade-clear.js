@@ -3,6 +3,10 @@
 // against capsules/spheres of the rig — bonnet + corselet (diverOccluders), hips, both thighs and shins, the knife
 // sheath, the left upper arm and forearm (points within 0.35 u of the grip skipped there: the fist holds it).
 // Clearance = distance to the part's axis minus its radius; < 0 is inside. Per state: the minimum per part.
+// (final fix wave) It FAILS: the page module THROWS (so `blade-shots.mjs ev` exits 1) when any part's minimum in
+// any state is below 0 (inside the body), except the valve check's bonnet (his hand is on the helmet there and the
+// sphere is a rough fit of the bonnet's bbox: the palm itself measures -0.074; bound -0.2), or when the iron was
+// never shown (no state measured anything). The table is the return value when it passes.
 (async () => {
   const D = await import('/src/entities/diver.js'), R = await import('/src/systems/raft.js'), Cc = await import('/src/systems/raft/colliders.js'), PL = await import('/src/player.js');
   const g = D.diver, P = window.player, V = P.pos.constructor, oc = new Float32Array(8), p = new V(), a = new V(), b = new V(), w = new V();
@@ -58,5 +62,12 @@
   let on = 0;
   out.push(run('ladder', 150, () => kd('KeyW'), () => ku('KeyW')));
   window.__helm = false;
+  const bad = [];
+  for (const [name, acc] of out) {
+    const parts = Object.keys(acc).filter(k => k !== 'speedMax');
+    if (!parts.length) bad.push(name + ': nothing measured (the iron hidden?)');
+    for (const k of parts) { const lim = name === 'valve' && k === 'bonnet' ? -0.2 : 0; if (acc[k][0] < lim) bad.push(`${name} ${k} ${acc[k][0]} at z ${acc[k][1]} (bound ${lim})`); }
+  }
+  if (bad.length) throw new Error('BLADE CLEAR FAIL: ' + bad.join('; '));
   return out;
 })()
