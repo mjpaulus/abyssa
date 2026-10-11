@@ -712,7 +712,7 @@ if (mode === 'shape') {
     for (const site of [0, 1, 2]) {
       if (site) window.__chart.arrive(site);
       for (let zi = 0; zi < 3; zi++) {
-        const F = S.FISSURE[zi], st = window.__rifts.stations(zi), row = { site, zi, stations: st.length, gapMax: 0, cover: 0, worst: -1e9, worstAt: null, footWorst: -1e9, n: 0 };
+        const F = S.FISSURE[zi], st = window.__rifts.stations(zi), row = { site, zi, stations: st.length, gapMax: 0, cover: 0, worst: -1e9, worstAt: null, footWorst: -1e9, n: 0, slabHits: 0, slabAt: null };
         for (let i = 1; i < st.length; i++) row.gapMax = Math.max(row.gapMax, st[i].u - st[i - 1].u);
         row.cover = +((st[st.length - 1].u - st[0].u) / (2 * F.halfLen)).toFixed(2);
         for (let i = 0; i < st.length; i += 2) {
@@ -723,6 +723,14 @@ if (mode === 'shape') {
             const open = openAt(s.x, s.z, b.y, zi, b.R + 1); row.n++;   // (a blob under 0.1 u is nothing; the march's step is 0.1 u)
             if (b.R > 0.1 && b.R - open > row.worst) { row.worst = +(b.R - open).toFixed(3); row.worstAt = { u: +s.u.toFixed(1), y: +(b.y - s.lip).toFixed(1), R: +b.R.toFixed(2), open: +open.toFixed(2) }; }
             row.footWorst = Math.max(row.footWorst, +(s.floor - (b.y - 0.95 * b.R * b.sy)).toFixed(3));
+            // up and down too (review N6): the veil is drawn out R x sy up the vertical; no point of its
+            // lit ellipsoid (0.95 of it) may lie inside an overhang slab's body
+            if (b.R > 0.1) for (let e = -2; e <= 2; e++) for (let k = 0; k < 16; k++) {
+              const th = e * 0.7, a = k / 16 * 6.2832, rr = 0.95 * b.R * Math.cos(th);
+              const px = s.x + Math.cos(a) * rr, pz = s.z + Math.sin(a) * rr, py = b.y + 0.95 * b.R * b.sy * Math.sin(th);
+              const sp = S.slabProbe(px, pz, zi);
+              if (sp.q >= 0) { const top = T.terrainH(px, pz, zi); if (py < top + 0.3 && py > top - sp.th - 0.6) { row.slabHits++; row.slabAt = { u: +s.u.toFixed(1), y: +(py - s.lip).toFixed(2), R: +b.R.toFixed(2) }; } }
+            }
           }
         }
         window.__fissure.setOpen(zi, 0); window.__bench.step(2); row.shutLight = window.__rifts.state(zi).light;
@@ -756,6 +764,7 @@ if (mode === 'shape') {
     const tag = `site ${w.site} zone ${w.zi}`;
     if (w.gapMax > 1.6 || w.cover < 0.78) fail.push(`${tag}: the curtain is not continuous (gap ${w.gapMax}, cover ${w.cover})`);
     if (w.worst > 0.1) fail.push(`${tag}: a blob's light reaches rock ` + JSON.stringify(w.worstAt) + ' by ' + w.worst);
+    if (w.slabHits) fail.push(`${tag}: ${w.slabHits} points of the veil inside a slab's body ` + JSON.stringify(w.slabAt));
     if (w.footWorst > 0.05) fail.push(`${tag}: a blob's foot reaches the throat floor by ${w.footWorst}`);
     if (w.shutLight !== 0) fail.push(`${tag}: light over the shut jam ${w.shutLight}`);
     if (w.openLight !== 1) fail.push(`${tag}: open light ${w.openLight}`);

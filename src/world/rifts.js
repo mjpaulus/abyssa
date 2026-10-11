@@ -9,7 +9,7 @@
 // 0.545, the moment the seep's last breath has gone, to 1: one light hands to the other, never
 // both), full when open. Open = calmed THIS VISIT (game.js visitCalm). No THREE light (count 14).
 //   - THE CURTAIN: a continuous, uneven veil of light along the whole middle of the crack: a lattice
-//     of soft camera-facing blobs (a station every 1.2 u along the kinked centreline, seven rising
+//     of soft camera-facing blobs (a station every 1.2 u along the kinked centreline, nine rising
 //     blobs each) that rise slowly out of the throat floor, swelling as they climb and dissolving
 //     over the lip. Soft every way: a gaussian disc that is zero before the quad's edge, its radius
 //     held inside the MEASURED open half-width of the crack at its height (marched against the rock
@@ -62,10 +62,10 @@ const COLS = [[0.62, 0.78, 1.0], [0.56, 0.80, 1.0], [0.50, 0.86, 1.0]];
 // over the light's pixels against home's; fissure.js leans the seep with it)
 // target on screen R:G:B = 0.72 : 0.87 : 1.0 (cold pale blue-white), luma kept
 export const SITE_LEAN = [
-  [[0.826, 1.056, 1.203], [0.949, 0.996, 1.168], [1.065, 0.968, 0.972]],   // home
-  [[0.873, 1.039, 1.156], [0.934, 1.011, 1.127], [1.029, 0.971, 1.061]],   // Pallid Bank
-  [[0.916, 1.026, 1.097], [0.980, 0.999, 1.060], [1.058, 0.972, 0.970]],   // the Burned Ground
-  [[0.864, 1.047, 1.134], [0.954, 0.996, 1.153], [1.059, 0.977, 0.947]],   // the Unsounded Shelf
+  [[0.814, 1.053, 1.254], [1.018, 0.965, 1.148], [1.242, 0.914, 0.775]],   // home
+  [[0.859, 1.039, 1.196], [0.932, 1.011, 1.128], [1.176, 0.935, 0.857]],   // Pallid Bank
+  [[0.956, 1.022, 1.014], [0.949, 1.003, 1.123], [1.005, 0.982, 1.056]],   // the Burned Ground
+  [[0.953, 1.003, 1.126], [0.977, 0.970, 1.233], [1.170, 0.961, 0.728]],   // the Unsounded Shelf
 ];
 export function siteLean(zi, out) {
   const L = (SITE_LEAN[currentSiteIndex()] || SITE_LEAN[0])[zi];
@@ -75,7 +75,7 @@ const BREATH = 7.5;                      // s
 const K0 = 0.545;                        // k at which the seep's last breath is gone (fissure.js: T = COLLAPSE)
 // per zone gain (dev: __rifts.K), and the parts' shares (dev: __rifts.tune)
 const LIGHT_K = [1.7, 1, 0.8];
-const TUNE = { curtain: 0.16, endOn: 0.05, wall: 0.85, drift: 0.85, halo: 0.16, surf: 0.14, surfH: 22, noGate: false };
+const TUNE = { curtain: 0.16, endOn: 0.05, wall: 1.3, drift: 0.85, halo: 0.16, surf: 0.14, surfH: 22, inside: 0.75, noGate: false };
 const SURF_MAX = 0.16;                   // the surface glow's alpha never passes this
 const N_DRIFT = 320;
 const ST_DU = 1.2, NB = 9, LEV = 12, LEV_UP = 6;  // curtain: station spacing (u), blobs per station, measured levels (floor .. lip + LEV_UP, closer near the top: f = 1 - (1 - l/11)^2)
@@ -118,6 +118,11 @@ const CURTAIN_VS = `
     float k = fract(aB.z + uTime * aU.w);
     float y = mix(aS.z + ${FOOT.toFixed(1)}, aS.w + ${UP_TOP.toFixed(1)}, k);   // born a little up off the throat's lumpy floor
     float R = min(min(${R_MAX.toFixed(1)}, 0.9 + 0.06 * (y - aS.z)), ${HW_FILL.toFixed(2)} * hwAt(y));
+    // drawn out up the vertical, its upper and lower flanks reach heights where the crack is narrower
+    // (a slab's body, the V): held inside the open width there too (review N6)
+    float Sy = ${STRETCH.toFixed(1)} * R;
+    R = min(R, ${HW_FILL.toFixed(2)} * min(hwAt(y + 0.62 * Sy), hwAt(y - 0.62 * Sy)) / 0.76);
+    R = min(R, ${HW_FILL.toFixed(2)} * min(hwAt(y + 0.94 * Sy), hwAt(y - 0.94 * Sy)) / 0.17);
     R = max(R, 0.05);
     vec4 wc = modelMatrix * vec4(aS.x, y, aS.y, 1.0);
     vec3 vd = cameraPosition - wc.xyz; float d = length(vd); vd /= max(d, 1e-3);
@@ -277,11 +282,18 @@ const WALL_FS = `
     float spokes = 0.5 + 0.5 * sin( u * 0.85 + uTime * 0.75 + ripple * 2.2 );
     float n = fbm3( vec2( u * 0.16, vW.y * 0.16 ) + vec2( uTime * 0.09, -uTime * 0.06 ) );
     float caus = ( pow( spokes, 3.0 ) * 0.9 + 0.25 ) * ( 0.35 + 1.1 * n );
+    // broken up at a shorter scale too, along the crack and down the face (no even enamel)
+    float n2 = fbm3( vec2( u * 0.45 + uSeed, vW.y * 0.32 ) + vec2( uTime * 0.03, -uTime * 0.05 ) );
+    float brk = 0.2 + 1.6 * n2 * n2;
     float inside = 1.0 - smoothstep( -0.3, 0.6, vF.x );
-    float band = 0.3 + 0.7 * smoothstep( 0.5, 9.0, depth );                 // never zero at the lip
+    // the light is the throat's: strongest near its axis and down in it, thinning up the wall toward
+    // the lip over its last ~14 u and outward from the axis, so the lip is not a painted line
+    float axisK = exp( -max( abs( vF.y ) - 1.5, 0.0 ) / 3.0 );
+    float rise = 0.1 + 0.9 * smoothstep( 0.0, 14.0, depth );
     float deepDim = 1.0 - 0.55 * smoothstep( 28.0, 75.0, depth );          // the light is in the water, not a lit floor
-    float walls = inside * lam * band * deepDim * ( 0.22 + 0.38 * caus );
-    float spill = exp( -max( vF.x, 0.0 ) / 1.6 ) * top * ( 1.0 - smoothstep( 2.0, 14.0, depth ) ) * 0.28;
+    float walls = inside * lam * rise * axisK * deepDim * ( 0.3 + 0.5 * caus ) * brk;
+    // and what reaches the lip carries on over it, fading out onto the apron (no edge where it stops)
+    float spill = exp( -max( vF.x, 0.0 ) / 2.2 ) * top * ( 1.0 - smoothstep( 0.0, 9.0, depth ) ) * 0.07 * brk;
     float tip = 1.0 - smoothstep( uHalf * 0.6, uHalf * 0.97, abs( u ) );
     float d = distance( vW, cameraPosition );
     float near = 0.2 + 0.8 * smoothstep( 3.0, 24.0, d );                  // up close: light ON the rock, not paint
@@ -439,7 +451,7 @@ export function buildRifts() {
       surf.material.opacity = 0; surf.visible = false;
       scene.add(surf);
     }
-    rifts.push({ grp, curtain: cur, wall, drift: dr, halo: ha, surf, light: 0, gate: 1, floorMin: -1e9 });
+    rifts.push({ grp, curtain: cur, wall, drift: dr, halo: ha, surf, light: 0, gate: 1, floorMin: -1e9, lip: 0 });
     dr.onBeforeRender = (r, s, cam) => {
       r.getSize(_s);
       dr.material.uniforms.uPix.value = _s.y * r.getPixelRatio() / (2 * Math.tan(cam.fov * Math.PI / 360));
@@ -456,7 +468,7 @@ const _lean = [1, 1, 1];
 export function reseatRifts() {
   for (let zi = 0; zi < rifts.length; zi++) {
     const R = rifts[zi], F = FISSURE[zi], lip = lipMeanY(zi, terrainH);
-    R.grp.position.set(F.cx, lip, F.cz);
+    R.grp.position.set(F.cx, lip, F.cz); R.lip = lip;
     R.floorMin = seatCurtain(R, zi, lip);
     const DP = R.drift.geometry.attributes.aP.array, DF = R.drift.geometry.attributes.aF;
     for (let i = 0; i < N_DRIFT; i++) DF.array[i] = terrainUnderH(F.cx + DP[i * 4], F.cz + DP[i * 4 + 1], zi) - lip;
@@ -482,7 +494,9 @@ export function updateRifts(dt, t, openK) {
     R.grp.visible = see; R.wall.visible = see;
     if (see) {
       const k = L * gate * LIGHT_K[zi];
-      const C = R.curtain.mesh.material.uniforms; C.uK.value = TUNE.curtain * k * breath; C.uTime.value = t; C.uEndOn.value = TUNE.endOn;
+      // with the lens INSIDE the crack the veil all round it would fill the screen: it thins to a quarter
+      const ins = c01(-fissureDist(camera.position.x, camera.position.z, zi) / 2) * c01((R.lip + 3 - camY) / 4);
+      const C = R.curtain.mesh.material.uniforms; C.uK.value = TUNE.curtain * k * breath * (1 - TUNE.inside * ins); C.uTime.value = t; C.uEndOn.value = TUNE.endOn;
       const W = R.wall.material.uniforms; W.uK.value = TUNE.wall * k * breath; W.uTime.value = t;
       const D = R.drift.material.uniforms; D.uK.value = TUNE.drift * k * (0.85 + 0.15 * breath); D.uTime.value = t;
       const H = R.halo.material.uniforms; H.uK.value = TUNE.halo * k * breath; H.uTime.value = t;
@@ -513,7 +527,11 @@ const __rifts = {
     const s = rifts[zi].curtain.st[si], top = s.lip + LEV_UP, ytop = s.lip + UP_TOP;
     const hwAt = yy => { if (yy >= top) return s.hw[LEV - 1] + (yy - top) * 0.5; const t = c01((yy - s.floor) / Math.max(1, top - s.floor)), f = (1 - Math.sqrt(1 - t)) * (LEV - 1), i = Math.min(Math.floor(f), LEV - 2); return s.hw[i] + (s.hw[i + 1] - s.hw[i]) * (f - i); };
     y = Math.max(y, s.floor + FOOT);
-    const R = Math.max(0.05, Math.min(Math.min(R_MAX, 0.9 + 0.06 * (y - s.floor)), HW_FILL * hwAt(y)));
+    let R = Math.min(Math.min(R_MAX, 0.9 + 0.06 * (y - s.floor)), HW_FILL * hwAt(y));
+    const Sy = STRETCH * R;
+    R = Math.min(R, HW_FILL * Math.min(hwAt(y + 0.62 * Sy), hwAt(y - 0.62 * Sy)) / 0.76);
+    R = Math.min(R, HW_FILL * Math.min(hwAt(y + 0.94 * Sy), hwAt(y - 0.94 * Sy)) / 0.17);
+    R = Math.max(0.05, R);
     // (the shader lifts it by up to 0.95 R STRETCH off the floor; the side view's tall veil)
     return { y: Math.max(y, s.floor + 0.95 * R * STRETCH), R, sy: STRETCH, ytop };
   },

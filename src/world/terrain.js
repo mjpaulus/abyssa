@@ -850,8 +850,14 @@ export const terrainMeshes = [];
 // volume. Measured worst gap 18.0u (zone 1); 22 leaves 4u everywhere. The offset is
 // invisible: at 231 units through 25% transmittance nothing about it reads.
 const SHELL_STEP = 3, SHELL_DROP = 22;   // 288/3 = 96 quads/side, 97x97 verts
-const SHELL_CUT = 0, SHELL_HOLD = 3;   // the crack: cells wholly inside the lip outline are cut; vertices within HOLD of it held at the lip
-const _shl = { u: 0, v: 0 }, _shw = { x: 0, z: 0 };
+// THE FISSURE (Task 4, I2 / N0 / N3): the roof shell is cut ALONG THE CRACK'S OUTLINE. Every coarse
+// cell that comes within SHELL_TOUCH of the crack is taken out of the coarse index and redrawn as a
+// fine COLLAR (SHELL_FINE grid) of which only the triangles outside the outline (fissureDist >
+// SHELL_EDGE) are kept, at the true ground less SHELL_DROP; so the opening is the crack's own shape,
+// the shell never hangs the carve's keel down as blades, and nothing lids the throat. The collar's
+// border vertices on an edge shared with an uncut cell follow that edge exactly (watertight).
+const SHELL_TOUCH = 2, SHELL_EDGE = 0.3, SHELL_FINE = 0.8;
+const shellCollars = [];
 const roofShells = [];
 
 function shellMat(alb) {
@@ -1230,6 +1236,67 @@ export function fissurePatchState() {
 // render list hold the mesh and attribute references. fillTerrain owns everything the
 // height functions derive and is the reseed entry point: setSite(i) then fillTerrain()
 // under the black screen re-floors the basin in place.
+// The collar: per cut cell a fine grid; vertex record (x, z, mode, a, b, t): mode 0 = the true ground,
+// mode 1 = on an edge shared with an uncut cell: lerp the coarse shell vertices a -> b by t.
+function buildShellCollar(zi, q, sg) {
+  const m1 = q + 1, keep = [], cut = new Uint8Array(q * q), V = [], I = [];
+  const fdAt = (x, z) => fissureDist(x, z, zi);
+  for (let iy = 0; iy < q; iy++) for (let ix = 0; ix < q; ix++) {
+    const x0 = AX[ix * SHELL_STEP], x1 = AX[(ix + 1) * SHELL_STEP], z0 = AX[iy * SHELL_STEP], z1 = AX[(iy + 1) * SHELL_STEP];
+    let near = false;
+    for (let a = 0; a <= 4 && !near; a++) for (let b = 0; b <= 4; b++) if (fdAt(x0 + (x1 - x0) * a / 4, z0 + (z1 - z0) * b / 4) < SHELL_TOUCH) { near = true; break; }
+    if (near) { cut[iy * q + ix] = 1; continue; }
+    const a = ix + m1 * iy, b = ix + m1 * (iy + 1), c = ix + 1 + m1 * (iy + 1), d = ix + 1 + m1 * iy;
+    keep.push(a, b, d, b, c, d);
+  }
+  sg.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
+  const isCut = (ix, iy) => ix >= 0 && iy >= 0 && ix < q && iy < q && cut[iy * q + ix] === 1;
+  for (let iy = 0; iy < q; iy++) for (let ix = 0; ix < q; ix++) {
+    if (!cut[iy * q + ix]) continue;
+    const x0 = AX[ix * SHELL_STEP], x1 = AX[(ix + 1) * SHELL_STEP], z0 = AX[iy * SHELL_STEP], z1 = AX[(iy + 1) * SHELL_STEP];
+    const nx = Math.max(1, Math.ceil((x1 - x0) / SHELL_FINE)), nz = Math.max(1, Math.ceil((z1 - z0) / SHELL_FINE));
+    const A = ix + m1 * iy, B = ix + 1 + m1 * iy, C = ix + m1 * (iy + 1), D = ix + 1 + m1 * (iy + 1);   // (x0,z0) (x1,z0) (x0,z1) (x1,z1)
+    const base = V.length / 6, fd = [];
+    for (let j = 0; j <= nz; j++) for (let i = 0; i <= nx; i++) {
+      const x = x0 + (x1 - x0) * i / nx, z = z0 + (z1 - z0) * j / nz;
+      let mode = 0, a = 0, b = 0, t = 0;
+      // on a cell edge whose neighbour across it is an uncut (coarse) cell: follow that edge
+      if (j === 0 && !isCut(ix, iy - 1)) { mode = 1; a = A; b = B; t = i / nx; }
+      else if (j === nz && !isCut(ix, iy + 1)) { mode = 1; a = C; b = D; t = i / nx; }
+      else if (i === 0 && !isCut(ix - 1, iy)) { mode = 1; a = A; b = C; t = j / nz; }
+      else if (i === nx && !isCut(ix + 1, iy)) { mode = 1; a = B; b = D; t = j / nz; }
+      V.push(x, z, mode, a, b, t); fd.push(fdAt(x, z));
+    }
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) {
+      const a = base + j * (nx + 1) + i, b = a + (nx + 1), c = b + 1, d = a + 1;   // a (i,j) b (i,j+1) c (i+1,j+1) d (i+1,j)
+      const f = k => fd[k - base];
+      // the coarse winding (a, b, d), (b, c, d); a triangle is kept only outside the outline
+      if ((f(a) + f(b) + f(d)) / 3 > SHELL_EDGE && Math.min(f(a), f(b), f(d)) > -0.2) I.push(a, b, d);
+      if ((f(b) + f(c) + f(d)) / 3 > SHELL_EDGE && Math.min(f(b), f(c), f(d)) > -0.2) I.push(b, c, d);
+    }
+  }
+  const n = V.length / 6, g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
+  g.setIndex(new THREE.BufferAttribute(new Uint32Array(I), 1));
+  const C = { g, V: new Float32Array(V), n };
+  shellCollars[zi] = C;
+  return C;
+}
+// per site: the collar on this floor (fillTerrain, after the coarse shell is resampled)
+function fillShellCollar(zi, SP, m) {
+  const C = shellCollars[zi]; if (!C) return;
+  const P = C.g.attributes.position.array, V = C.V;
+  for (let k = 0; k < C.n; k++) {
+    const o = k * 6, x = V[o], z = V[o + 1];
+    let y;
+    if (V[o + 2] === 1) { const a = V[o + 3], b = V[o + 4], t = V[o + 5]; y = SP[a * 3 + 1] + (SP[b * 3 + 1] - SP[a * 3 + 1]) * t; }
+    else y = heightAt(x, z, zi, true) - SHELL_DROP;
+    P[k * 3] = x; P[k * 3 + 1] = y; P[k * 3 + 2] = z;
+  }
+  C.g.attributes.position.needsUpdate = true;
+  C.g.computeBoundingSphere();
+}
+
 export function buildTerrain() {
   if (terrainMeshes.length) { fillTerrain(); return; }
   buildIslands();
@@ -1251,24 +1318,11 @@ export function buildTerrain() {
       const q = SEG / SHELL_STEP;
       const sg = new THREE.PlaneGeometry(1, 1, q, q);
       sg.rotateX(-Math.PI / 2);
-      // THE FISSURE (Task 4, I2): the roof shell is a coarse subsample of the floor above, so over
-      // the crack it hung the carve's 70 u keel down into the zone below as blades. Its cells whose
-      // centre lies in the crack's footprint are cut (the crack is an opening: from below you look
-      // up through it), and fillTerrain holds every vertex near the crack at its local lip level, so
-      // no cell on the rim dips into the carve either. Topology from the frozen outline: built once.
-      {
-        const m1 = q + 1, keep = [];
-        for (let iy = 0; iy < q; iy++) for (let ix = 0; ix < q; ix++) {
-          // cut only a cell wholly inside the lip outline (all four corners and its centre): the opening
-          // never shows through rock that is there (zone 0's ground is FrontSide: from below it is not drawn)
-          const x0 = AX[ix * SHELL_STEP], x1 = AX[(ix + 1) * SHELL_STEP], z0 = AX[iy * SHELL_STEP], z1 = AX[(iy + 1) * SHELL_STEP];
-          if (Math.max(fissureDist(x0, z0, zi), fissureDist(x1, z0, zi), fissureDist(x0, z1, zi), fissureDist(x1, z1, zi), fissureDist((x0 + x1) * 0.5, (z0 + z1) * 0.5, zi)) < SHELL_CUT) continue;
-          const a = ix + m1 * iy, b = ix + m1 * (iy + 1), c = ix + 1 + m1 * (iy + 1), d = ix + 1 + m1 * iy;
-          keep.push(a, b, d, b, c, d);
-        }
-        sg.setIndex(new THREE.BufferAttribute(new Uint32Array(keep), 1));
-      }
+      // the crack (see SHELL_TOUCH): its cells leave the coarse index for the collar. Topology from the
+      // frozen outline: built once.
+      const collar = buildShellCollar(zi, q, sg);
       const sm = new THREE.Mesh(sg, shellMats[zi]);
+      sm.add(new THREE.Mesh(collar.g, shellMats[zi]));   // a child: the shell's gate is its gate
       sm.visible = false;               // updateTerrain gates it; warmUp un-hides for compile
       scene.add(sm);
       roofShells.push(sm);
@@ -1360,18 +1414,11 @@ export function fillTerrain() {
         SP[i * 3] = ax[k * SHELL_STEP];
         SP[i * 3 + 1] = H[(j * SHELL_STEP) * n + k * SHELL_STEP] - SHELL_DROP;
         SP[i * 3 + 2] = ax[j * SHELL_STEP];
-        // near the crack: never down into the carve (held at the lower lip beside it, less the drop)
-        const fd = fissureDist(SP[i * 3], SP[i * 3 + 2], zi);
-        if (fd < SHELL_HOLD) {
-          fissureLocal(SP[i * 3], SP[i * 3 + 2], zi, _shl);
-          const FZz = FISSURE[zi], uu = Math.max(-FZz.halfLen, Math.min(FZz.halfLen, _shl.u)), wd = _widths(FZz, uu);
-          fissureWorld(uu, wd.w1 + 1.5, zi, _shw); let lipY = heightAt(_shw.x, _shw.z, zi, true);
-          fissureWorld(uu, -wd.w0 - 1.5, zi, _shw); lipY = Math.min(lipY, heightAt(_shw.x, _shw.z, zi, true));
-          SP[i * 3 + 1] = Math.max(SP[i * 3 + 1], lipY - SHELL_DROP);
-        }
+
       }
       sg.attributes.position.needsUpdate = true;
       sg.computeBoundingSphere();
+      fillShellCollar(zi, SP, m);
     }
   }
   fillIslands();   // the far islands' stacks, sunk into this site's shoals

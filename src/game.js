@@ -710,7 +710,7 @@ function enterZone(i, quiet = false) {
   pendingWards = i > 0;
   riftShutSaid = false;
   calmLineT = -1;        // a calm's held line belongs to the zone it was said in
-  syncFissureRecord();   // every zone's fissure, open or shut, from the chart's pencil
+  syncFissureRecord();   // every zone's fissure, open or shut, as calmed THIS visit (visitCalm)
   // The fissure's lip, for the rift-shut beat: its mean lip height (fissureShape.js lipMeanY
   // samples it along both broken lips).
   riftRimY = lipMeanY(i, terrainH);
@@ -2308,7 +2308,8 @@ function update(dt, t) {
       setCalm(1);
       // THE FISSURE OPENS (world/fissure.js): the seabed shudders, the jam pours, then the deep's
       // light wells up. Its line is held to land as the light arrives (calmLineT, run on the
-      // opening's clock above); an already-open fissure (a remembered visit) says it at once.
+      // opening's clock above); an already-open fissure (re-calmed within this visit after a zone
+      // re-entry rebuilt her) says it at once.
       const dur = openFissure(zone);
       if (zone < 2 && !canDescendTo(zone + 1)) {
         // The one moment the player is reading: if the line will not reach the next zone,
