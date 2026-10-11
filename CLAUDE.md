@@ -157,13 +157,27 @@ against explicit contracts and reviewed on return.
   rides STYLE_U[0] (AIR_STORM_K).
 - `world/terrain.js` + `lib/triplanar.js` — 3 heightfield meshes, ZONE-GATED by
   camera Y with flora's bands (−332k tris/frame; verified 0 visibility violations
-  across the ending ascent and voyages). Rifts are flattened bowls, NOT holes;
-  fall-through is a player.js special case. Fingerprint probe = `terrainFingerprint()` /
+  across the ending ascent and voyages). THE FISSURE (2026-10-10, spec docs/superpowers/specs/
+  2026-10-10-fissure-and-harpoon-design.md; Michael: "more realistic... glowing when it opens, like a
+  portal"): each zone's rift is a kinked crack ~60-80 u long carved into terrainH through the frozen
+  `riftPos` (`world/fissureShape.js`: FISSURE frames, fissureDist interval SDF, inThroat, the jam
+  floor grid, clearOfCrack), drawn by a dense local PATCH (<= 0.5 u; drawn == stood on) plus real
+  strata WALL geometry inside the throat (drawn-only; fingerprints untouched). Still not a hole:
+  fall-through is a player.js special case (`inThroat`), only while the zone's fissure is open.
+  SHUT = `world/fissure.js` rubble jam Sal stands ON (block-top floor grid, `terrain.js jamAt` /
+  `shutFloorY`) + a gap-masked cold seep; the calm OPENS it (quake, pour, silt, then the light) and
+  the line "A RIFT OPENS BELOW." lands as the light arrives. Open state = calmed THIS VISIT
+  (game.js `visitCalm`, cleared on boot/voyage — "Ritual, remembered": a revisit is shut until she is
+  calmed again). OPEN = `world/rifts.js` the deep's own pale light: a soft curtain along the crack,
+  wall light (gated off below the throat floor), motes, a surface glow (fog:false, <= 0.16), colour
+  leaned per site/zone and calibrated on SETTLED frames. `__fissure` dev surface; probes
+  `tools/bench/fissure-probe.mjs` (21 modes). Fingerprint probe = `terrainFingerprint()` /
   `__ridge.fp(zones?)` (FNV-1a over the float32 BYTES of terrainH, 32x32 grid x,z
   −248..248 step 16, zone-major then z then x). The old quoted values (35acc2d0, 5e6cfe45)
   came from an unrecorded probe and reproduce under no variant of it; this one is canonical
   since 2026-10-04. Home: 4ff3a4f6 on main 7a41c43 -> 119f0cae after THE FAR RIDGE (zone 0
-  only: 776f4b37 -> 6b719d1f; zones 1+2 d47f42e0 unchanged at every site).
+  only: 776f4b37 -> 6b719d1f; zones 1+2 d47f42e0 unchanged at every site). THE FISSURE carving
+  (2026-10-10): home 3b526986, zones 1+2 d49d451d, Pallid Bank b1c58f8d, Burned Ground d2b6fb68.
   THE FAR RIDGE (roadmap/far-ridgeline-read.md, Michael "Raise it"): zone 0's rampart runs
   its own rows (`RIDGE` in terrain.js: envelope 300/348/540 — nearer than the W2 340/410
   — h 74, ridged 44 + a 48-u crag term 28, and a SOFT ceiling asymptotic to -8 over the
@@ -400,7 +414,8 @@ against explicit contracts and reviewed on return.
 - THE CHART (multi-site ocean) — `world/site.js` is the registry (3 authored
   anchorages; site 0 = shipped world BIT-IDENTICAL, the regression anchor; terrain
   fingerprints on the canonical probe (`__ridge.fp()`, see terrain.js above) since THE FAR
-  RIDGE + per-site shaping (main 21148ef, both merged): home 119f0cae, Pallid Bank 2c0df461,
+  RIDGE + per-site shaping (main 21148ef, both merged; THE FISSURE 2026-10-10 moved them to home
+  3b526986 / Pallid b1c58f8d / Burned d2b6fb68 / zones 1+2 d49d451d): home 119f0cae, Pallid Bank 2c0df461,
   Burned Ground ff316095 — were 4ff3a4f6 / bd02b8e3 / 4014c41e on 7a41c43; zones 1+2 at home
   `__ridge.fp([1,2])` d47f42e0). The world
   reseeds IN PLACE around the raft: `reseedWorld(i)` in game.js runs
@@ -532,7 +547,8 @@ against explicit contracts and reviewed on return.
   gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
   __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __shaderFailed.
 - INVARIANTS checked before every commit (fresh tab): 14 lights in the scene; `__lev.fp(0/1/2)`
-  15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 119f0cae; `__safeFailed()` returns [];
+  15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 3b526986 (zones 1+2 d49d451d; since THE
+  FISSURE 2026-10-10, was 119f0cae); `__safeFailed()` returns [];
   **`__shaderFailed()` returns []** (no shader program left broken; see lib/shaderWatch.js);
   console clean (no errors except a favicon 404).
 - Message discipline: `showMsg(text, dur, prio)` is a two-slot priority queue —
