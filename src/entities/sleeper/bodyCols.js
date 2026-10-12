@@ -549,6 +549,20 @@ export function inClutch(x, y, z, m = 0) {
   const lx = M[0] * x + M[4] * y + M[8] * z + M[12], ly = M[1] * x + M[5] * y + M[9] * z + M[13], lz = M[2] * x + M[6] * y + M[10] * z + M[14];
   return clutchPen(lx, ly, lz, m / clR) * clR;
 }
+// (velfix) Is the ground point (x, z) within m of any of her limbs' plan (a leg segment or claw piece seen from
+// above, its radius included)? brooder.js's SETTLE rule: she will not fold them down onto him.
+export function limbNearXZ(x, z, m) {
+  if (!on) return false;
+  for (let i = 0; i < nC; i++) {
+    const o = i * 8, ax = CAP[o], az = CAP[o + 2], dx = CAP[o + 3] - ax, dz = CAP[o + 5] - az;
+    const L2 = dx * dx + dz * dz;
+    let t = L2 > 1e-9 ? ((x - ax) * dx + (z - az) * dz) / L2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x - ax - dx * t, ez = z - az - dz * t, r = CAP[o + 6] + (CAP[o + 7] - CAP[o + 6]) * t + m;
+    if (ex * ex + ez * ez < r * r) return true;
+  }
+  return false;
+}
 // Is she anywhere near the boom (centre within rad + her bound)?
 export function bodyNear(x, y, z, rad) {
   if (!on) return false;

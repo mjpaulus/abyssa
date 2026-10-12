@@ -32,7 +32,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -182,10 +182,10 @@ export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, 
 // from her centre: her shell reaches 1.29 R (19.8 u) and her standing feet 22-28 u, so with him at her rim
 // at 16.9 u she lay down on him; his bonnet ended up inside her leg capsules, every lens line from it in
 // her, and her settling body lifted him onto her back). Calmed, she now keeps her shell's clearance while she
-// stands (it eases down with the settle), and she will not settle while he is on her ground: within her
-// shell's reach + `release` u (and not up on her back), held `hold` s clear before she lies down; a settle
-// already under way stands back up if he comes within her reach + `rise` u. Post-calm only: the fight and
-// its difficulty are untouched.
+// stands (it eases down with the settle), and she will not settle while he is on her ground: within `release` u
+// of her shell's reach or of her limbs seen from above (bodyCols.js limbNearXZ: her claws fold in from 35 u) and
+// not up on her back, held `hold` s clear before she lies down; a settle already under way stands back up if he
+// comes within `rise` u of it. Post-calm only: the fight and its difficulty are untouched.
 export const SETTLE = { release: 2.5, rise: 1.0, hold: 1.0 };
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
@@ -1545,12 +1545,13 @@ function poseAll(L, dt, player) {
 }
 
 // (velfix, SETTLE) is he on the ground her body comes down on: within her shell's reach (shell plan, R x
-// rMax 1.29) + m u of her centre, and not up on her back (there he slides off; she never lifts him)
+// rMax 1.29) + m u of her centre, or within m of a leg or claw seen from above (standing, her feet reach 28 u and
+// her claws 35 u; they fold in over the settle), and not up on her back (there he slides off; she never lifts him)
 function onHerGround(L, player, m) {
   if (!player) return false;
   if (player.pos.y > L.bodyY + 0.15 * L.R) return false;
   const reach = (L.shellProx ? L.shellProx.rMax : 1.3) * L.R;
-  return Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < reach + m;
+  return Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < reach + m || limbNearXZ(player.pos.x, player.pos.z, m);
 }
 
 // THE BURN (see BURN): over the pose the ward block just wrote, every frame. Lit / remembered / calmed wards only.

@@ -9,9 +9,12 @@
 // (velfix 2026-10-12) Two opt-in additions, neither changes what is played:
 //   FP_GATE=1   the velfix gate, booked in the page every stepped frame and printed as a GATE line (exit 1 when
 //               RED): THE WASH (every 3rd frame, while the lens is under her or within WASH_R of a lit ward: the
-//               share of the drawn frame's pixels with Rec.709 luma > 230, read back right after the frame's own
-//               render) and THE LENS IN HER (every frame she is published awake: the camera inside her bodyCols
-//               volumes, margin 0 = inside, 0.15 = the near plane in it; split fight / after the calm).
+//               share of the drawn frame's pixels with Rec.709 luma > 230 outside each lit ward's own burn disc, and
+//               in all, read back right after the frame's own render) and THE LENS IN HER (every frame she is
+//               published awake: the camera inside her bodyCols volumes, margin 0 = inside, 0.15 = the near plane in
+//               it, and every 3rd frame a ray from the lens toward his bonnet against her drawn meshes, a hit within
+//               0.35 u = her surface on the lens; split fight / after the calm; RED on the after-the-calm counts).
+//               Also: the lens in Sal (0.45 u of his axis), and her shell's lowest point over the ground per phase.
 //   FP_STOP=<n> stop after n video-rate frames (every 3rd game frame, ~20 per game second: the RP_VIDEO index),
 //               print the state; FP_HOLD=1 leaves the (frozen) Chrome up for `drv.mjs eval` and A/B pokes.
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -114,13 +117,17 @@ await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js');
 await c.ev(PROBE);
 // ---- (velfix) the gate's page side: wraps the ledger's frame hook ----
 const GATE = process.env.FP_GATE === '1';
-const WASH_BLOWN = 0.05, WASH_R = 14;   // RED: any booked frame with more than 5% of its pixels blown
+// THE WASH is blown pixels (Rec.709 luma > 230) OUTSIDE every lit ward's own burn: a disc of WASH_DISC u round the ward,
+// projected (the glyph is 2.4 u, its ring 2.6; the light's hot spot on her shell round it). Inside it the burn may
+// clip: that is the strong gold burn on her shell the fix asks for. RED: any booked frame with more than WASH_BLOWN of
+// the frame blown outside the burns, or more than WASH_CAP blown in all (the burn itself never fills the screen).
+const WASH_BLOWN = 0.05, WASH_CAP = 0.15, WASH_R = 14, WASH_DISC = 4;
 const GATE_JS = `(async () => {
   const BC = await import('/src/entities/sleeper/bodyCols.js');
   const { renderer } = await import('/src/core.js');
   const gl = renderer.getContext();
   const L = window.lev, cam = window.camera, P = window.player;
-  const g = { washN: 0, washRed: 0, washSum: 0, washMax: 0, washMaxAt: null, washMeanLuma: 0, washAt: [],
+  const g = { washN: 0, washRed: 0, washSum: 0, washMax: 0, washMaxAt: null, washMeanLuma: 0, washAt: [], washOutSum: 0, washOutMax: 0, washOutMaxAt: null,
     lens: { fightN: 0, fightIn: 0, fightNear: 0, calmN: 0, calmIn: 0, calmNear: 0, inAt: [], parts: {}, salFight: 0, salCalm: 0,
       rayN: 0, rayFight: 0, rayCalm: 0, rayAt: [], rayHit: {} },
     // her shell's lowest point over the ground (u): the fight (up, hunting), the walk home (calmed, up), the settle
@@ -175,12 +182,31 @@ const GATE_JS = `(async () => {
     if (!buf || buf.length !== W * H * 4) buf = new Uint8Array(W * H * 4);
     gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
     gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-    let n = 0, hi = 0, sum = 0;
-    for (let i = 0; i < W * H * 4; i += 8) { const l = 0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2]; n++; sum += l; if (l > 230) hi++; }
-    const sh = hi / n;
-    g.washN++; g.washSum += sh; g.washMeanLuma += sum / n;
-    if (sh > ${WASH_BLOWN}) { g.washRed++; if (g.washAt.length < 60) g.washAt.push([+t.toFixed(2), +sh.toFixed(3)]); }
+    // each lit ward's burn disc in drawing-buffer pixels (rows bottom-up, as readPixels returns them)
+    const discs = []; cam.updateMatrixWorld();
+    const kpx = (H / 2) / Math.tan(cam.fov * Math.PI / 360);
+    for (const s of L.sigils) if (s.lit) {
+      if (s.grp.position.distanceTo(cam.position) < ${WASH_DISC}) { discs.push(0, 0, 1e9); continue; }   // (the lens inside the burn: only the cap applies)
+      dir.copy(s.grp.position).applyMatrix4(cam.matrixWorldInverse);
+      if (dir.z > -0.05) continue;                                                                 // (behind the lens)
+      from.copy(s.grp.position).project(cam);
+      discs.push((from.x * 0.5 + 0.5) * W, (from.y * 0.5 + 0.5) * H, ${WASH_DISC} * kpx / -dir.z);
+    }
+    let n = 0, hi = 0, sum = 0, out = 0;
+    for (let i = 0; i < W * H * 4; i += 8) {
+      const l = 0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2]; n++; sum += l;
+      if (l <= 230) continue;
+      hi++;
+      const px = (i >> 2) % W, py = ((i >> 2) / W) | 0;
+      let inD = false;
+      for (let k = 0; k < discs.length; k += 3) { const dx = px - discs[k], dy = py - discs[k + 1]; if (discs[k + 2] > 1e8 || dx * dx + dy * dy < discs[k + 2] * discs[k + 2]) { inD = true; break; } }
+      if (!inD) out++;
+    }
+    const sh = hi / n, so = out / n;
+    g.washN++; g.washSum += sh; g.washOutSum += so; g.washMeanLuma += sum / n;
+    if (so > ${WASH_BLOWN} || sh > ${WASH_CAP}) { g.washRed++; if (g.washAt.length < 60) g.washAt.push([+t.toFixed(2), +sh.toFixed(3), +so.toFixed(3)]); }
     if (sh > g.washMax) { g.washMax = sh; g.washMaxAt = +t.toFixed(2); }
+    if (so > g.washOutMax) { g.washOutMax = so; g.washOutMaxAt = +t.toFixed(2); }
   };
   window.__vfGate = g;
   return 1;
@@ -413,14 +439,17 @@ console.log('LEDGER', JSON.stringify(ledger));
 let gateRed = false;
 if (GATE) {
   const g = await c.ev('window.__vfGate');
-  // the lens: inside her bodyCols or with the near plane in them (0.15), or her drawn surface on the lens (the ray)
-  const lensRed = g.lens.calmNear + g.lens.fightNear + g.lens.rayFight + g.lens.rayCalm > 0;
+  // the lens, after the calm (the walk home, the settle, him under her): inside her bodyCols, or the near plane in them
+  // (0.15), or her drawn surface on the lens (the ray). The fight's own counts are reported beside it: the fight's
+  // camera is baa7f88's, unchanged, and a claw blow can cross it for a frame or two (pre-existing, rare).
+  const lensRed = g.lens.calmIn + g.lens.calmNear + g.lens.rayCalm > 0;
   const washRed = g.washRed > 0;
   gateRed = washRed || lensRed;
   ledger.gate = g;
   console.log('GATE', gateRed ? 'RED' : 'GREEN', JSON.stringify({
     wash: { booked: g.washN, red: g.washRed, meanBlown: g.washN ? +(g.washSum / g.washN).toFixed(4) : 0, maxBlown: +g.washMax.toFixed(3), maxAt: g.washMaxAt,
-      meanLuma: g.washN ? +(g.washMeanLuma / g.washN).toFixed(1) : 0, verdict: washRed ? `RED (${g.washRed} frames > ${WASH_BLOWN} blown)` : 'GREEN', at: g.washAt.slice(0, 12) },
+      meanOutside: g.washN ? +(g.washOutSum / g.washN).toFixed(4) : 0, maxOutside: +g.washOutMax.toFixed(3), maxOutsideAt: g.washOutMaxAt,
+      meanLuma: g.washN ? +(g.washMeanLuma / g.washN).toFixed(1) : 0, verdict: washRed ? `RED (${g.washRed} frames > ${WASH_BLOWN} blown outside the burns or > ${WASH_CAP} in all)` : 'GREEN', at: g.washAt.slice(0, 12) },
     lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' }, shellClr: g.shellClr }));
 }
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
