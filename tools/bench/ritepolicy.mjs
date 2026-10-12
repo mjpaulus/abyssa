@@ -10,7 +10,8 @@
 //     the moment the ward lights, at the first sign of the telegraph, or when its count says so.
 //   AVERAGE: the ritefair "sloppy" player unchanged (0.5-1.0 s slices decided on the state at slice start,
 //     aim +-20 deg, bursts held 0.6-1.2 s whatever the climb needs, only wards it has seen on screen,
-//     no hammer dodge, straight at the ward), plus it lingers under her a little too long: it leaves when
+//     no hammer dodge, straight at the ward; with no dark ward seen it walks round her looking, where
+//     ritefair stood under her belly, a refuge then), plus it lingers under her a little too long: it leaves when
 //     its own count passes 2.2-2.8 s (drawn each time it goes in), half the time when a ward it lit makes
 //     her flinch, half the time when it sees the telegraph, and it goes back in without waiting for the
 //     count to cool.
@@ -91,7 +92,7 @@ export const TALLY = `(() => { const L = window.lev, st = window.__rp.st; return
 // rnd: the run's seeded stream; now(): the game seconds the driver has played
 export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
   const UNDER = 0.72, RIM = 0.95;      // how far in under her shell the count runs (and slower under her rim), as he has learned it (R)
-  const EXIT_P = 1.25;                 // the perfect player's own count: out by then
+  const EXIT_P = 1.5;                  // the perfect player's own count: out by then (her rule: ~2.4 s)
   let myU = 0, tPrev = null, prevLit = 0, wasUnder = false, wasRim = false, exitA = 2.5, outT = 0, commit = false, onTop = 0;
   let stX = 0, stZ = 0, stT = -9, backT = -9;   // walled off going round her (a leg, a claw): back out and go again
   const decide = s => { const d = decide1(s); decide.dbg = dbg; return d; };
@@ -147,7 +148,15 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
       dark.sort((a, b) => hyp(a.p[0] - P[0], a.p[1] - P[1], a.p[2] - P[2]) - hyp(b.p[0] - P[0], b.p[1] - P[1], b.p[2] - P[2]));
       T = dark[0].p;
     }
-    if (!T && nDark) T = [s.lev[0], s.lev[1] - 0.3 * RR, s.lev[2]];
+    // no dark ward seen yet: under her belly to look was the ritefair habit (a refuge then); under the new
+    // rule that is 150 s of drops, so he walks round her outside her legs, looking up at her belly
+    if (!T && nDark) {
+      if (!AVG) T = [s.lev[0], s.lev[1] - 0.3 * RR, s.lev[2]];
+      else {
+        const aP = Math.atan2(ox, oz), tyaw = aP + Math.PI / 2, outK = clamp((1.35 * RR - rho) / 4, -0.6, 0.9);
+        return { sec, yaw: tyaw - outK + noise, pitch: 0.4, keys: s.grounded ? ['W', 'Shift'] : ['W', 'C'], why: 'look' };
+      }
+    }
     if (!T) return { sec, yaw: 0, keys: [], why: 'idle' };
     // ---- THE PERFECT PLAYER OUTSIDE HER: round her rim to the point nearest the ward, in when cooled ----
     if (!AVG && justLit) commit = false;
