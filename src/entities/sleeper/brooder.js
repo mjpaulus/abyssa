@@ -171,8 +171,8 @@ export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35,
 // telegraph to the end of the rise, so each ward is its own dash in and out.
 export const NOSAFE = {
   after: 2.0, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, tele: 0.7, brace: 0.45, fall: 0.16, depth: 3.6, rise: 0.45,
-  hitR: 0.82, slamR: 0.45, knock: 18, up: 0.10, stag: 0.9, stagK: 0.85,
-  turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 0.4
+  hitR: 0.82, slamR: 0.45, knock: 24, up: 0.10, stag: 0.9, stagK: 0.85,
+  turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 1.0
 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {

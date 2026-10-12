@@ -92,7 +92,7 @@ export const TALLY = `(() => { const L = window.lev, st = window.__rp.st; return
 export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
   const UNDER = 0.72, RIM = 0.95;      // how far in under her shell the count runs (and slower under her rim), as he has learned it (R)
   const EXIT_P = 1.25;                 // the perfect player's own count: out by then
-  let myU = 0, tPrev = null, prevLit = 0, wasUnder = false, wasRim = false, exitA = 2.5, outT = 0, commit = false;
+  let myU = 0, tPrev = null, prevLit = 0, wasUnder = false, wasRim = false, exitA = 2.5, outT = 0, commit = false, onTop = 0;
   let stX = 0, stZ = 0, stT = -9, backT = -9;   // walled off going round her (a leg, a claw): back out and go again
   const decide = s => { const d = decide1(s); decide.dbg = dbg; return d; };
   let dbg = '';
@@ -119,11 +119,17 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     wasUnder = under; wasRim = rimB;
     outT = under ? 0 : outT + dt;
     const nLit = s.wards.filter(w => w.lit).length, justLit = nLit > prevLit; prevLit = nLit;
+    // (the perfect one has learned that a ward lit from under her brings the drop on: its count jumps too)
+    if (!AVG && justLit && (under || rimB)) myU = Math.max(myU, 1.4);
     dbg = `rho ${(rho / RR).toFixed(2)} fwd ${fwd.toFixed(2)} lat ${lat.toFixed(2)} myU ${myU.toFixed(1)} drop ${s.drop} imp ${s.impT}`;
     const away = Math.atan2(ox, oz);      // out from under her, radially
     // targets: the dark wards
     const dark = s.wards.map((w, i) => ({ ...w, i })).filter(w => !w.lit && (!AVG || (s.rp && s.rp.seen[w.i])));
     const nDark = s.wards.filter(w => !w.lit).length;
+    // ---- OFF HER BACK: a diver who has floated up onto her shell swims off it (the wards are under her);
+    // the average one takes a couple of seconds to see it ----
+    onTop = P[1] > s.lev[1] + 1 && rho < 1.25 * RR ? onTop + dt : 0;
+    if (onTop > (AVG ? 2 : 0.3)) return { sec, yaw: away + noise, pitch: 0, keys: ['W', 'C'], why: 'off-back' };
     // ---- OUT FROM UNDER HER ----
     if (under) {
       const tele = s.drop === 1;
