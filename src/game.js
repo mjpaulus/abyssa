@@ -1213,8 +1213,22 @@ function bossFrame(dt) {
   if (tgt === 0 && bossK < 1e-3 && bossKV <= 0) { bossK = 0; bossKV = 0; }
   bossK = clamp(bossK, 0, 1);
   bossLift = BOSSCAM.lift * bossK * (1 - creUnder);
+  // (velfix 2026-10-12) AFTER THE CALM THE BOOM STILL HOLDS ITS PITCH. bossK drops at the calm (it frames a hunt), and
+  // with it went the rule that the boom does not swing down under him when he looks up at her: calmed, standing over
+  // or beside him, a look up at her lit wards put the boom under him, the floor clamp lifted it to his head and the
+  // lens sat inside his helmet (measured 0.3-0.6 u off his eye, blown 13-15% of the frame). calmPitchK keeps that one
+  // rule (not the lift, not the lean) while she is calmed, up and near, on the same spring. Zero before the calm.
+  let ct = 0;
+  if (L && L.kind === 'brooder' && L.calmed && !L.dormant && (L.standE || 0) > 0.3 && deckK === 0 && L.pos) {
+    const d = Math.hypot(L.pos.x - player.pos.x, L.pos.z - player.pos.z);
+    ct = 1 - clamp((d - BOSSCAM.r * 0.8) / (BOSSCAM.r * 0.4), 0, 1);
+  }
+  calmPitchV += (w * w * (ct - calmPitchK) - 2 * w * calmPitchV) * h; calmPitchK += calmPitchV * h;
+  if (ct === 0 && calmPitchK < 1e-3 && calmPitchV <= 0) { calmPitchK = 0; calmPitchV = 0; }
+  calmPitchK = clamp(calmPitchK, 0, 1);
 }
-window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)) }) };
+let calmPitchK = 0, calmPitchV = 0;
+window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)), calmPitch: +calmPitchK.toFixed(3) }) };
 window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
@@ -1592,8 +1606,9 @@ function updateCamera(dt, t, fwd) {
   // (ritefair) framing her, the boom does not swing down under him when he looks up at her
   // belly (it hit the floor and pulled in onto his back): it holds behind and above, and the
   // look tips up past him instead (the aim keeps the real pitch)
-  if (bossK > 1e-3 && player.pitch > BOSSCAM.boomPitch) {
-    const pb = player.pitch + (BOSSCAM.boomPitch - player.pitch) * bossK, cp = Math.cos(pb);
+  const pitchK = Math.max(bossK, calmPitchK);   // (velfix: the boom's pitch hold also after the calm)
+  if (pitchK > 1e-3 && player.pitch > BOSSCAM.boomPitch) {
+    const pb = player.pitch + (BOSSCAM.boomPitch - player.pitch) * pitchK, cp = Math.cos(pb);
     camBack.set(-cp * Math.sin(player.yaw), -Math.sin(pb), -cp * Math.cos(player.yaw));
   }
   camKick = Math.max(0, camKick - dt / 0.62);

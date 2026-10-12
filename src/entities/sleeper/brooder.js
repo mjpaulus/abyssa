@@ -32,7 +32,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -1444,7 +1444,8 @@ function poseAll(L, dt, player) {
   // it (a bank under her prow had the rim 0.3-0.7 u off the floor: the lane in was shut); her legs
   // still plant on the floor, the doors between them stay open. Stilled, she settles as before.
   // (velfix, SETTLE) calmed too: on the walk home it held 0.35 u (SOLE_CLR) and her rim came down on him; it eases
-  // down with the settle (standE)
+  // down with the settle (standE). (Her underside is closed to him after the calm, bodyCols.js CALMCOL, so the room
+  // under her belly is the lens's, not a floating diver's.)
   const clr = !L.dormant ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
   const bed = lerp(SOLE_BED_DEEP * R, -clr, smooth(hc, 0, 0.7));
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
@@ -1721,7 +1722,7 @@ export function updateBrooder(L, dt, t, player) {
     const was = L.legSt[li];
     L.legSt[li] = win(u, LEG_DELAY[li], LEG_DELAY[li] + 0.30);
     // a leg dragging itself out of the silt throws a puff at the foot
-    if (rising && was < 0.12 && L.legSt[li] >= 0.12) { const f = L.feet[li].cur; silt(f.x, f.y + 0.3, f.z, 3, 3, 2.6, 1.2); }
+    if (rising && was < 0.12 && L.legSt[li] >= 0.12) { const f = L.feet[li].cur; silt(f.x, f.y + 0.3, f.z, 3, 3, 2.6, 1.2); L.wakeFx = (L.wakeFx | 0) + 1; }
   }
   L.clawSt = win(u, 0.55, 0.95);
   const heaveT = win(u, 0.45, 0.88) - (rising ? 0.12 * Math.sin(Math.PI * win(u, 0.22, 0.50)) : 0);
@@ -1735,12 +1736,13 @@ export function updateBrooder(L, dt, t, player) {
     L.bR.v += nz(L.t * 9, 1) * 0.9 * shud * dt * 60 * 0.02;
     L.bP.v += nz(L.t * 8, 2) * 0.6 * shud * dt * 60 * 0.02;
     if (!ev.quake) quake(L, ev, L.pos.x, L.pos.z, 0.12 * shud, player);
+    L.wakeFx = (L.wakeFx | 0) + 1;                    // (velfix probe: the wake's effects, counted)
   }
   // silt pours off her back as she rises: from the rim, faster while the shell is moving
   if (!L.dormant && u < 1 && rising) {
     L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud);
     if (L.dustT <= 0) {
-      L.dustT = 0.09;
+      L.dustT = 0.09; L.wakeFx = (L.wakeFx | 0) + 1;
       const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
       const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
       emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 6, 3.4);
@@ -2100,6 +2102,7 @@ export function updateBrooder(L, dt, t, player) {
     }
   } else {
     L.calmT += dt;
+    setBodyCalm(!L.dormant);                          // (velfix, review C1: bodyCols.js CALMCOL) her underside is closed to him
     for (const g of L.sigils) {
       g.pulse += dt;
       g.light.intensity = Math.max(0, 120 - L.calmT * 8);

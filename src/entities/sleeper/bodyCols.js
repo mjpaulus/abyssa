@@ -35,7 +35,7 @@ let on = false;
 // dev A/B: claws = false takes the claws out of Sal's resolve (the camera still sees them)
 export const BODYCOLS = { claws: true };
 const SHELL_SLIDE = 7, SHELL_VMAX = 14, LIMB_VMAX = 20;   // (ritefair) u/s^2: a diver on her back slides off her shoulders
-export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, top: false, last: '', clutch: 0, clPush: 0 };   // probe: this frame's resolve
+export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, top: false, last: '', clutch: 0, clPush: 0, calmOut: 0 };   // probe: this frame's resolve
 // the clutch's lobes: x y z r (body-local shell units) + lump seed; the body matrix and inverse
 const MAXL = 32;
 const LOB = new Float32Array(MAXL * 4), LSD = new Float32Array(MAXL), CLM = new Float32Array(16), CLI = new Float32Array(16);
@@ -44,11 +44,22 @@ let nLob = 0, clOk = false, clR = 1, cbx = 0, cby = 0, cbz = 0, cbr = 0;
 // most `step` u (a lobe folding past him while she rises is a slow shove, never a throw)
 export const CLUTCHCOL = { on: true, skin: 0.15, k: 10, step: 0.3, roof: 0.3 };
 
+// (velfix, review C1) AFTER THE CALM HER UNDERSIDE IS CLOSED TO HIM. In the fight the space under her belly is the
+// refuge, open by design. Calmed, she walks home and stands over him (brooder.js SETTLE), and a diver still afloat from
+// the hops to her wards swam up into her belly, legs and egg mass with the lens jammed between them (the review: up to
+// 1767 lens-in-her frames in 40 s). Calmed (setBodyCalm, re-set by her calmed branch every frame), the volume under her
+// shell's plan, from her belly down `depth` u, is soft-solid to him: he is eased out from under her along her plan's
+// radius at most `rate` u/s to `skin` u past her rim, his inward speed is taken, and he cannot rise into her belly
+// within `roof` u of it. Never a blow: no hitV, no dress tear. The fight never sees it (calm 0 until the calm).
+export const CALMCOL = { on: true, rate: 3.0, skin: 0.6, depth: 16, roof: 3.0 };
+let calmK = 0;
+export function setBodyCalm(onK) { calmK = onK ? 1 : 0; }
 export function bodyColsOn() { return on; }
-export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; }
+export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; calmK = 0; }
 
 // ---- publishing (the sleeper's pose step) -----------------------------------------------
 export function beginBodyCols() {
+  calmK = 0;                                                    // (her calmed branch sets it again this frame)
   for (let i = 0, n = nC * 8; i < n; i++) PREV[i] = CAP[i];   // (no subarray: a view is an allocation)
   nPrev = nC; prevOk = on && nC > 0;
   if (shellOk) { SHP.set(SHM); shellPrevOk = true; }
@@ -337,7 +348,7 @@ function capPen(A, i, f, px, y0, y1, pz) {
 // Push Sal out of her (positions, then velocities) and report the hardest closing speed
 // of any part that met him this frame (u/s; the game's slam) in BODY.hitV.
 export function resolveBodyCols(player, dt, grounded) {
-  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.top = false; BODY.last = ''; BODY.clutch = 0; BODY.clPush = 0;
+  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.top = false; BODY.last = ''; BODY.clutch = 0; BODY.clPush = 0; BODY.calmOut = 0;
   if (!on) return 0;
   const p = player.pos, v = player.vel;
   { const dx = p.x - bx, dy = p.y - by, dz = p.z - bz; if (dx * dx + dy * dy + dz * dz > (bRad + 3) * (bRad + 3)) return 0; }
@@ -458,8 +469,31 @@ export function resolveBodyCols(player, dt, grounded) {
     }
   }
   if (clOk) resolveClutch(p, v, dt, grounded);
+  if (calmK && shellOk && CALMCOL.on) resolveUnderCalm(p, v, dt);
   if (shellOk && underShell(p.x, p.y, p.z)) BODY.under = true;
   return BODY.contacts;
+}
+// (velfix, CALMCOL) out from under her after the calm: his chest against the volume under her shell's plan
+function resolveUnderCalm(p, v, dt) {
+  const S = shell, M = SHI, W = SHM, C = CALMCOL, wy = p.y - 0.45;
+  const lx = M[0] * p.x + M[4] * wy + M[8] * p.z + M[12], ly = M[1] * p.x + M[5] * wy + M[9] * p.z + M[13], lz = M[2] * p.x + M[6] * wy + M[10] * p.z + M[14];
+  const dx = lx - S.cx, dz = lz - S.cz, rho = Math.hypot(dx, dz);
+  if (rho > S.rMax + C.skin / shR) return;
+  let a = Math.atan2(dz, dx) / (Math.PI * 2); if (a < 0) a += 1;
+  band(S, a * S.B, rho);
+  const ro = _ro, lo = _lo;
+  if (!(lo < 1e8) || rho >= ro + C.skin / shR || ly >= lo || (lo - ly) * shR > C.depth) return;
+  // the way out: along her plan's radius, horizontal in the world
+  const ux = rho > 1e-5 ? dx / rho : 1, uz = rho > 1e-5 ? dz / rho : 0;
+  let nx = W[0] * ux + W[8] * uz, nz = W[2] * ux + W[10] * uz;
+  const hl = Math.hypot(nx, nz); if (hl < 1e-6) return;
+  nx /= hl; nz /= hl;
+  const step = Math.min((ro + C.skin / shR - rho) * shR, C.rate * Math.max(dt, 0));
+  p.x += nx * step; p.z += nz * step;
+  const vin = -(v.x * nx + v.z * nz);
+  if (vin > 0) { v.x += nx * vin; v.z += nz * vin; }
+  if ((lo - ly) * shR < C.roof && v.y > 0) v.y = 0;            // nothing carries him up into her belly
+  BODY.calmOut = step;
 }
 // THE CLUTCH, SOFT (see the header). His capsule against each lobe's lumped surface.
 function resolveClutch(p, v, dt, grounded) {
