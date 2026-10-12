@@ -172,7 +172,7 @@ export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35,
 export const NOSAFE = {
   after: 2.0, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, tele: 0.7, brace: 0.45, fall: 0.16, depth: 3.6, rise: 0.45,
   hitR: 0.82, slamR: 0.45, knock: 18, up: 0.10, stag: 0.9, stagK: 0.85,
-  turn: 0.12, slowT: 1.2, slowK: 0.15, reach: 5, wound: 0.4
+  turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 0.4
 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -1850,7 +1850,11 @@ export function updateBrooder(L, dt, t, player) {
       L.bY.v -= R * 0.10 * L.threatE;
       L.bP.v += 0.9 * L.threatE;
       quake(L, ev, _ft.x, _ft.z, 0.7 * L.threatE, player);
-      L.nsSlow = NOSAFE.slowT;   // (velhard) the blow spent, she is slow to turn: the dash-in window
+      // (velhard) the blow spent at him, she is slow to turn: the dash-in window (only a blow struck down
+      // her front lane at him; one into empty water beside her opens nothing)
+      { const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z, sy = Math.sin(L.yaw), cy = Math.cos(L.yaw);
+        const fw = (px * sy + pz * cy) / R, la = (px * cy - pz * sy) / R;
+        if (fw > 0.9 && Math.abs(la) < 0.9) L.nsSlow = NOSAFE.slowT; }
     }
   }
 

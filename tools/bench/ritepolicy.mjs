@@ -3,10 +3,10 @@
 // same fight the sweep measured. Ruling: VELHARD-BRIEF.md ("No safe spot": under her more than ~2 s and
 // she drops; she keeps her front to him; a slow-turn window after each blow and each drop; reach 5).
 //   PERFECT: 0.25 s slices, exact aim. It has learned the rule: it counts its own time under her (deep under
-//     her at 1/s, under her rim slower) and never reads hers. Outside her it steps out of the hammer's lane
-//     while she cocks and goes back in only once its count has cooled (backing off past her rim to let it);
-//     then it goes straight for the nearest ward, walks in under it and bursts straight up at it (a slant
-//     burst carried it in under her past where it could get out), and is out before the drop: radially,
+//     her at 1/s, under her rim slower) and never reads hers. It goes in at the point of her rim nearest
+//     the ward it wants (hopping and hauling round her outside the rim: she out-turns a walker; out of the
+//     hammer's lane while she cocks), goes in
+//     once its count has cooled, bursts at the ward on the slant, and is out before the drop: radially,
 //     the moment the ward lights, at the first sign of the telegraph, or when its count says so.
 //   AVERAGE: the ritefair "sloppy" player unchanged (0.5-1.0 s slices decided on the state at slice start,
 //     aim +-20 deg, bursts held 0.6-1.2 s whatever the climb needs, only wards it has seen on screen,
@@ -92,7 +92,8 @@ export const TALLY = `(() => { const L = window.lev, st = window.__rp.st; return
 export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
   const UNDER = 0.72, RIM = 0.95;      // how far in under her shell the count runs (and slower under her rim), as he has learned it (R)
   const EXIT_P = 1.25;                 // the perfect player's own count: out by then
-  let myU = 0, tPrev = null, prevLit = 0, wasUnder = false, wasRim = false, exitA = 2.5, outT = 0;
+  let myU = 0, tPrev = null, prevLit = 0, wasUnder = false, wasRim = false, exitA = 2.5, outT = 0, commit = false;
+  let stX = 0, stZ = 0, stT = -9, backT = -9;   // walled off going round her (a leg, a claw): back out and go again
   const decide = s => { const d = decide1(s); decide.dbg = dbg; return d; };
   let dbg = '';
   return decide;
@@ -129,6 +130,7 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
       if (AVG && justLit && rnd() < 0.5) exitA = 0;     // half the time he reads her flinch and leaves
       const go = AVG ? (myU > exitA || (tele && rnd() < 0.5)) : (tele || myU > EXIT_P || justLit);
       if (go) {
+        commit = false;
         const keys = s.grounded ? ['W', 'Shift'] : ['W'];
         if (!s.grounded && s.vel[1] > 0.5) keys.push('C');
         return { sec, yaw: away + noise, pitch: s.grounded ? 0 : -0.25, keys, why: tele ? 'out-tele' : 'out' };
@@ -141,20 +143,44 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     }
     if (!T && nDark) T = [s.lev[0], s.lev[1] - 0.3 * RR, s.lev[2]];
     if (!T) return { sec, yaw: 0, keys: [], why: 'idle' };
-    // ---- THE PERFECT PLAYER OUTSIDE HER: out of the hammer's lane while she cocks; in only once its
-    // count has cooled (it backs off past her rim to let it); then straight for the ward, like anyone ----
-    if (!AVG && !under) {
+    // ---- THE PERFECT PLAYER OUTSIDE HER: round her rim to the point nearest the ward, in when cooled ----
+    if (!AVG && justLit) commit = false;
+    if (!AVG && commit && rho > (RIM * RR + 4)) commit = false;
+    if (!AVG && !under && !commit) {
+      const tx = T[0] - s.lev[0], tz = T[2] - s.lev[2], tl = hyp(tx, tz) || 1;
+      const eR = RIM * RR + 1.0;
+      const ex = s.lev[0] + tx / tl * eR, ez = s.lev[2] + tz / tl * eR;
+      const de = hyp(ex - P[0], ez - P[2]);
+      // the hammer's lane: in front of her, 1.6-2.8 R, while she cocks or falls: step out of it sideways
       const inLane = fwd > 1.6 && fwd < 2.8 && Math.abs(lat) < 0.7 && s.threatE > 0.5 && s.cock > 0.25;
       if (inLane) {
         const sgn = lat >= 0 ? 1 : -1;
         return { sec, yaw: Math.atan2(fz * sgn, -fx * sgn), keys: s.grounded ? ['W', 'Shift'] : ['W'], why: 'lane' };
       }
-      // (under her rim, walking in, its count runs slow: it keeps going unless the count is already high)
-      const out = rho >= RIM * RR;
-      if (s.drop || (out && myU > 0.35) || (!out && myU > EXIT_P)) {
-        if (!out) return { sec, yaw: away, keys: s.grounded ? ['W', 'Shift'] : ['W'], why: 'back' };
-        return { sec, yaw: Math.atan2(-ox, -oz), keys: s.grounded ? [] : ['C'], why: 'wait' };
+      if (de > 4) {
+        // walled off (no headway for 1.5 s against a planted leg or her claw): a human backs out and goes again
+        if (hyp(fwd * RR - stX, lat * RR - stZ) > 0.6) { stX = fwd * RR; stZ = lat * RR; stT = t; }   // (in her frame: she carries him)
+        else if (t - stT > 1.5) { backT = t + 1.2; stT = t; }
+        if (backT > t) return { sec, yaw: away, keys: s.grounded ? ['W', 'Shift'] : ['W'], why: 'unstick' };
+        // circle outside the rim: if the straight line cuts under her, go round at the rim's radius
+        const aP = Math.atan2(ox, oz), aE = Math.atan2(ex - s.lev[0], ez - s.lev[2]);
+        let da = aE - aP; da = Math.atan2(Math.sin(da), Math.cos(da));
+        let yaw;
+        if (Math.abs(da) > 0.35 && rho < eR + 6) {
+          const sgn = da > 0 ? 1 : -1;                         // tangent toward E
+          const tyaw = aP + sgn * Math.PI / 2;
+          const outK = clamp((eR + 2.5 - rho) / 3, -0.6, 1.1);  // hold the circle's radius (a haul carries him in)
+          yaw = tyaw - sgn * outK;
+          // she turns to keep her front on him faster than he walks round her: he hops off the bottom
+          // and HAULS round her (~6.6 u/s), over her planted feet
+          if (s.grounded && s.reserve > 0.3) return { sec, yaw, pitch: 0.2, keys: ['W'], space: 0.05, why: 'round-hop' };
+          if (!s.grounded) return { sec, yaw, pitch: -0.05, keys: ['W', ...(s.vel[1] > 0.3 ? ['C'] : [])], why: 'round-haul' };
+        } else yaw = Math.atan2(ex - P[0], ez - P[2]);
+        return { sec, yaw, pitch: 0, keys: s.grounded ? ['W', 'Shift'] : ['W', ...(s.vel[1] > 0.5 ? ['C'] : [])], why: 'round' };
       }
+      // at her rim, by the ward: wait out the count, then in
+      if (myU > 0.35 || s.drop) return { sec, yaw: Math.atan2(-ox, -oz), keys: s.grounded ? [] : ['C'], why: 'wait' };
+      commit = true;                     // cooled, at her rim by the ward: in, and no second thoughts
     }
     // ---- AT THE WARD (both players; the average one comes straight here) ----
     const dx = T[0] - P[0], dz = T[2] - P[2], dh = hyp(dx, dz), up = T[1] - P[1];
@@ -167,16 +193,12 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     if (d3 < R - 0.3) return { sec, yaw, keys: s.grounded ? [] : (s.vel[1] > 0.5 ? ['C'] : []), why: 'in-reach' };
     if (s.grounded) {
       const lookP = clamp(pitch, -0.3, 0.7);
-      // (velhard) a ward high on her belly: burst at it on the slant from up to ~6.5 u out (on foot to 3.5 u
-      // the time under her ran out before the climb began)
-      if (AVG && needUp > 2.2 && dh <= 8) return { sec: Math.max(sec, avgBurst + 0.05), yaw, pitch, keys: ['W'], space: avgBurst, why: 'burst ' + needUp.toFixed(1) };
-      // the perfect one walks in under its edge and goes straight up at it (a slant burst carried it in
-      // under her, past where it could get out before the drop)
-      if (!AVG && needUp > 2.2 && dh <= 4.2) {
-        const sp = clamp(0.2 + 0.055 * needUp, 0.22, 1.0);
-        return { sec: Math.max(sec, sp + 0.05), yaw, pitch: 1.2, keys: dh > 3 ? ['W'] : [], space: sp, why: 'burst ' + needUp.toFixed(1) };
+      // (velhard) the perfect player bursts at a high ward on the slant from up to 8 u out (on foot to 3.5 u
+      // its time under her ran out before the climb began); the average one walks in to 3.5 u, as ritefair
+      if (!AVG && needUp > 2.2 && dh <= 8) {
+        const sp = clamp(0.22 + 0.05 * needUp + 0.03 * dh, 0.22, 1.2);
+        return { sec: Math.max(sec, sp + 0.05), yaw, pitch, keys: ['W'], space: sp, why: 'burst ' + needUp.toFixed(1) };
       }
-      if (!AVG && dh > 3.0) return { sec, yaw, pitch: lookP, keys: ['W', 'Shift'], why: 'walk' };
       if (dh > 3.5 && needUp > -1) return { sec, yaw, pitch: lookP, keys: ['W', 'Shift'], why: 'walk' };
       if (needUp <= 0.2) return { sec, yaw, pitch: lookP, keys: ['W', 'Shift'], why: 'walk-in' };
       if (needUp <= 2.2) return { sec, yaw, pitch: clamp(pitch, -0.3, 0.7), keys: dh > 1.5 ? ['W'] : [], space: 0.05, why: 'hop' };
