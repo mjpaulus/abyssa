@@ -408,15 +408,17 @@ export function lightWard(L, g, ev) {
   L.agitation = 1;
 }
 // The ward-lighting flash: ~1.5 s of extra light on the borrowed PointLight (and the
-// hide ring, for kinds with a uniform array to drive).
+// hide ring, for kinds with a uniform array to drive). L.flashK scales the extra light (a kind
+// that sets it: brooder.js BURN.flash; unset = 1, as shipped).
 export function wardFlashes(L, dt, fx) {
+  const fk = L.flashK != null ? L.flashK : 1;
   for (let i = 0; i < L.sigils.length; i++) {
     const g = L.sigils[i], f = fx ? fx[i] : null;
     if (g.flashT >= 1.5) { if (f) f.y = 0; continue; }
     g.flashT += dt;
     const k = Math.min(1, g.flashT / 1.5);
     if (f) { f.x = 0.62 * Math.pow(k, 0.65); f.y = 3.4 * (1 - k) * (1 - k) * THREE.MathUtils.smoothstep(k, 0, 0.06); }
-    g.light.intensity += 360 * (1 - k) * (1 - k) * (1 - k);
+    g.light.intensity += 360 * fk * (1 - k) * (1 - k) * (1 - k);
   }
   updateEmbers(L, dt);
 }

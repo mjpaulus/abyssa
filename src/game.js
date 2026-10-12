@@ -14,7 +14,7 @@ import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } fr
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
+import { resolveBodyCols, BODY, bodyBlocked, bodyBlockedAhead, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed, diverBladeTip } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
@@ -1141,7 +1141,16 @@ const DECK_PIVOT = 0.4;
 // to stay clear before easing back out, so legs walking through it don't pump it. Under her
 // shell the lifts run into her belly and are refused; the lens stays low between her legs,
 // sprung, and tips up a little at the underside (the wards are there).
-const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2 };
+// AFTER THE CALM, THE GUARD LOOKS AHEAD (velfix 2026-10-12). The guard below met her body only once the lens was in
+// it (margin 0.15). Calmed, she walks home, stands over him while he is on her ground and folds her legs and claws
+// in as she settles, and he walks out past her limbs: a leg tip met by the lens on its way out still put it inside
+// her for a frame (1 frame in 1 of 4 fullplay runs once she no longer lay down on him; baa7f88: 26-59 a run). So
+// after the calm the guard also tests where the lens and her limbs will be `ahead` frames on (the lens on its own
+// velocity; each limb capsule on its last frame's motion, bodyCols.js bodyBlockedAhead), and its same sprung pull
+// starts before contact, toward the part of the line clear of both. Before the calm nothing changes: the fight's
+// lens is baa7f88's, and the fight (and her difficulty) is left exactly as it was.
+const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2 };
+let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
 // helmet is against the eggs and every rise runs into them, so the lens goes level or low
 // behind him instead (never under the floor's clearance)
@@ -1149,7 +1158,14 @@ const CRE_LIFTS = [0, 1.4, 2.8, 4.2, -1.3, -2.4];
 let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0, creEggs = 0, creEggFail = 0;
 function creHit(from, boom, f, m) {
   _bp.copy(from).addScaledVector(boom, f);
-  return bodyBlocked(_bp.x, _bp.y, _bp.z, m);
+  return bodyBlocked(_bp.x, _bp.y, _bp.z, m) || (creAheadK > 0 && bodyBlockedAhead(_bp.x, _bp.y, _bp.z, m, creAheadK));
+}
+// (velfix) after the calm: will the lens be in her `ahead` frames on (it on its velocity, her limbs on theirs)?
+function creLensAhead(dt) {
+  const k = CRECAM.ahead;
+  if (!(k > 0) || !lev || !lev.calmed) return false;
+  _bp2.copy(camera.position).addScaledVector(camVel, dt * k);
+  return bodyBlockedAhead(_bp2.x, _bp2.y, _bp2.z, 0.15, k) || bodyBlocked(_bp2.x, _bp2.y, _bp2.z, 0.15);
 }
 // fraction (0..1] of the boom from `from` that is clear of her body
 function creBoomClear(from, boom, m = CRECAM.margin) {
@@ -1197,8 +1213,23 @@ function bossFrame(dt) {
   if (tgt === 0 && bossK < 1e-3 && bossKV <= 0) { bossK = 0; bossKV = 0; }
   bossK = clamp(bossK, 0, 1);
   bossLift = BOSSCAM.lift * bossK * (1 - creUnder);
+  // (velfix 2026-10-12) AFTER THE CALM THE BOOM STILL HOLDS ITS PITCH. bossK drops at the calm (it frames a hunt), and
+  // with it went the rule that the boom does not swing down under him when he looks up at her: calmed, standing over
+  // or beside him, a look up at her lit wards put the boom under him, the floor clamp lifted it to his head and the
+  // lens sat inside his helmet (measured 0.3-0.6 u off his eye, blown 13-15% of the frame). calmPitchK keeps that one
+  // rule (not the lift, not the lean) while she is calmed, up and near, on the same spring. Zero before the calm.
+  let ct = 0;
+  // (not in the open crack: the throat lens owns the boom there; last frame's throatOn, the spring keeps it smooth)
+  if (L && L.kind === 'brooder' && L.calmed && !L.dormant && (L.standE || 0) > 0.3 && deckK === 0 && !throatOn && L.pos) {
+    const d = Math.hypot(L.pos.x - player.pos.x, L.pos.z - player.pos.z);
+    ct = 1 - clamp((d - BOSSCAM.r * 0.8) / (BOSSCAM.r * 0.4), 0, 1);
+  }
+  calmPitchV += (w * w * (ct - calmPitchK) - 2 * w * calmPitchV) * h; calmPitchK += calmPitchV * h;
+  if (ct === 0 && calmPitchK < 1e-3 && calmPitchV <= 0) { calmPitchK = 0; calmPitchV = 0; }
+  calmPitchK = clamp(calmPitchK, 0, 1);
 }
-window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)) }) };
+let calmPitchK = 0, calmPitchV = 0;
+window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)), calmPitch: +calmPitchK.toFixed(3) }) };
 window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
@@ -1576,8 +1607,9 @@ function updateCamera(dt, t, fwd) {
   // (ritefair) framing her, the boom does not swing down under him when he looks up at her
   // belly (it hit the floor and pulled in onto his back): it holds behind and above, and the
   // look tips up past him instead (the aim keeps the real pitch)
-  if (bossK > 1e-3 && player.pitch > BOSSCAM.boomPitch) {
-    const pb = player.pitch + (BOSSCAM.boomPitch - player.pitch) * bossK, cp = Math.cos(pb);
+  const pitchK = Math.max(bossK, calmPitchK);   // (velfix: the boom's pitch hold also after the calm)
+  if (pitchK > 1e-3 && player.pitch > BOSSCAM.boomPitch) {
+    const pb = player.pitch + (BOSSCAM.boomPitch - player.pitch) * pitchK, cp = Math.cos(pb);
     camBack.set(-cp * Math.sin(player.yaw), -Math.sin(pb), -cp * Math.cos(player.yaw));
   }
   camKick = Math.max(0, camKick - dt / 0.62);
@@ -1999,7 +2031,8 @@ function updateCamera(dt, t, fwd) {
   // or two and her legs move on their own: if the lens has ended up in her body anyway it is
   // drawn back along its own line toward his helmet, quickly but sprung (a cut against a
   // moving leg read as a snap), and its velocity relative to him is bled.
-  if (creK > 0 && bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0.15)) {
+  if (creK > 0 && (bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0.15) || creLensAhead(dt))) {
+    creAheadK = lev && lev.calmed ? CRECAM.ahead : 0;
     _piv.copy(player.pos); _piv.y += DECK_PIVOT;
     camTo.copy(camera.position).sub(_piv);
     const cl = camTo.length();
@@ -2029,6 +2062,7 @@ function updateCamera(dt, t, fwd) {
     if (eggs) { creEggs++; if (inClutch(camera.position.x, camera.position.y, camera.position.z, 0) > 0) creEggFail++; }
     camVel.lerp(player.vel, Math.min(1, 10 * dt));
     creStops++;
+    creAheadK = 0;
   }
   // aim slightly ahead of travel so fast movement leads the frame
   // Aim tracks the look direction almost immediately. Heavy smoothing here reads as

@@ -35,7 +35,7 @@ let on = false;
 // dev A/B: claws = false takes the claws out of Sal's resolve (the camera still sees them)
 export const BODYCOLS = { claws: true };
 const SHELL_SLIDE = 7, SHELL_VMAX = 14, LIMB_VMAX = 20;   // (ritefair) u/s^2: a diver on her back slides off her shoulders
-export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, top: false, last: '', clutch: 0, clPush: 0 };   // probe: this frame's resolve
+export const BODY = { contacts: 0, push: 0, hitV: 0, under: false, shell: false, top: false, last: '', clutch: 0, clPush: 0, calmOut: 0 };   // probe: this frame's resolve
 // the clutch's lobes: x y z r (body-local shell units) + lump seed; the body matrix and inverse
 const MAXL = 32;
 const LOB = new Float32Array(MAXL * 4), LSD = new Float32Array(MAXL), CLM = new Float32Array(16), CLI = new Float32Array(16);
@@ -44,11 +44,23 @@ let nLob = 0, clOk = false, clR = 1, cbx = 0, cby = 0, cbz = 0, cbr = 0;
 // most `step` u (a lobe folding past him while she rises is a slow shove, never a throw)
 export const CLUTCHCOL = { on: true, skin: 0.15, k: 10, step: 0.3, roof: 0.3 };
 
+// (velfix, review C1) AFTER THE CALM HER BELLY AND EGG MASS ARE CLOSED TO HIM FROM BELOW. In the fight the space
+// under her belly is the refuge, open by design, and the lens works there. Calmed, she walks home and stands over him
+// (brooder.js SETTLE), and a diver still afloat from the hops to her wards rose up into her belly, egg mass and legs,
+// with the lens jammed between them (the review: up to 1767 lens-in-her frames in 40 s). Calmed (setBodyCalm, re-set
+// by her calmed branch every frame), under her shell's plan his bonnet is kept `roof` u under her underside - her
+// belly, or the egg mass where it hangs over him - eased down at most `rate` u/s, and nothing carries him up into it
+// (down to `depth` u under it: deeper, the open crack, is not under her). He may still stand under her: the refuge
+// stays a place, he just cannot float up into her. Never a blow: no hitV, no dress tear. The fight never sees it.
+export const CALMCOL = { on: true, rate: 3.0, roof: 3.5, depth: 16 };
+let calmK = 0;
+export function setBodyCalm(onK) { calmK = onK ? 1 : 0; }
 export function bodyColsOn() { return on; }
-export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; }
+export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; calmK = 0; }
 
 // ---- publishing (the sleeper's pose step) -----------------------------------------------
 export function beginBodyCols() {
+  calmK = 0;                                                    // (her calmed branch sets it again this frame)
   for (let i = 0, n = nC * 8; i < n; i++) PREV[i] = CAP[i];   // (no subarray: a view is an allocation)
   nPrev = nC; prevOk = on && nC > 0;
   if (shellOk) { SHP.set(SHM); shellPrevOk = true; }
@@ -337,7 +349,7 @@ function capPen(A, i, f, px, y0, y1, pz) {
 // Push Sal out of her (positions, then velocities) and report the hardest closing speed
 // of any part that met him this frame (u/s; the game's slam) in BODY.hitV.
 export function resolveBodyCols(player, dt, grounded) {
-  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.top = false; BODY.last = ''; BODY.clutch = 0; BODY.clPush = 0;
+  BODY.contacts = 0; BODY.push = 0; BODY.hitV = 0; BODY.under = false; BODY.shell = false; BODY.top = false; BODY.last = ''; BODY.clutch = 0; BODY.clPush = 0; BODY.calmOut = 0;
   if (!on) return 0;
   const p = player.pos, v = player.vel;
   { const dx = p.x - bx, dy = p.y - by, dz = p.z - bz; if (dx * dx + dy * dy + dz * dz > (bRad + 3) * (bRad + 3)) return 0; }
@@ -458,8 +470,38 @@ export function resolveBodyCols(player, dt, grounded) {
     }
   }
   if (clOk) resolveClutch(p, v, dt, grounded);
+  if (calmK && shellOk && CALMCOL.on) resolveUnderCalm(p, v, dt);
   if (shellOk && underShell(p.x, p.y, p.z)) BODY.under = true;
   return BODY.contacts;
+}
+// (velfix, CALMCOL) her underside closed from below after the calm: the roof over him is her belly (the shell band's
+// lowest point at his ring) or, where the egg mass hangs over him, its lobes' undersides; his bonnet is kept `roof` u
+// under it, eased down at most `rate` u/s, and nothing carries him up into it
+function resolveUnderCalm(p, v, dt) {
+  const S = shell, M = SHI, C = CALMCOL, wy = p.y + 0.4;
+  const lx = M[0] * p.x + M[4] * wy + M[8] * p.z + M[12], ly = M[1] * p.x + M[5] * wy + M[9] * p.z + M[13], lz = M[2] * p.x + M[6] * wy + M[10] * p.z + M[14];
+  const dx = lx - S.cx, dz = lz - S.cz, rho = Math.hypot(dx, dz);
+  if (rho > S.rMax) return;
+  let a = Math.atan2(dz, dx) / (Math.PI * 2); if (a < 0) a += 1;
+  band(S, a * S.B, rho);
+  if (!(_lo < 1e8) || rho >= _ro) return;                       // not under her shell's plan
+  let roof = _lo;
+  // the egg mass over him (its lobes share her body frame and scale): the lowest underside above his chest
+  if (clOk) {
+    const L2 = CLI, cx = L2[0] * p.x + L2[4] * wy + L2[8] * p.z + L2[12], cz = L2[2] * p.x + L2[6] * wy + L2[10] * p.z + L2[14];
+    const cy = L2[1] * p.x + L2[5] * wy + L2[9] * p.z + L2[13], chest = cy - 0.85 / clR;
+    for (let i = 0; i < nLob; i++) {
+      const o = i * 4, r = LOB[o + 3], ex = cx - LOB[o], ez = cz - LOB[o + 2], q = r * r - ex * ex - ez * ez;
+      if (q <= 0) continue;
+      const b = LOB[o + 1] - Math.sqrt(q);
+      if (b > chest && b < roof) roof = b;
+    }
+  }
+  const gap = (roof - ly) * shR;                                // u from his bonnet top up to her underside
+  if (gap > C.roof || gap < -C.depth) return;
+  if (v.y > 0) v.y = 0;                                         // nothing carries him up into her
+  const step = Math.min(C.roof - gap, C.rate * Math.max(dt, 0));
+  if (step > 0) { p.y -= step; BODY.calmOut = step; }
 }
 // THE CLUTCH, SOFT (see the header). His capsule against each lobe's lumped surface.
 function resolveClutch(p, v, dt, grounded) {
@@ -542,12 +584,55 @@ export function bodyBlocked(x, y, z, m) {
   }
   return false;
 }
+// (velfix) the same test against her limbs where they will be `k` frames on (each capsule's ends carried on by their
+// last frame's motion; the shell and the clutch move slowly and are tested as they are): game.js's lens guard reads
+// it after the calm, so a leg or claw coming to the lens (or the lens to it) is met before it arrives
+export function bodyBlockedAhead(x, y, z, m, k) {
+  if (!on || !prevOk) return false;
+  for (let i = 0; i < nC; i++) {
+    const o = i * 8;
+    const ax = CAP[o] + (CAP[o] - PREV[o]) * k, ay = CAP[o + 1] + (CAP[o + 1] - PREV[o + 1]) * k, az = CAP[o + 2] + (CAP[o + 2] - PREV[o + 2]) * k;
+    const dx = CAP[o + 3] + (CAP[o + 3] - PREV[o + 3]) * k - ax, dy = CAP[o + 4] + (CAP[o + 4] - PREV[o + 4]) * k - ay, dz = CAP[o + 5] + (CAP[o + 5] - PREV[o + 5]) * k - az;
+    const L2 = dx * dx + dy * dy + dz * dz;
+    let t = L2 > 1e-9 ? ((x - ax) * dx + (y - ay) * dy + (z - az) * dz) / L2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x - ax - dx * t, ey = y - ay - dy * t, ez = z - az - dz * t, r = CAP[o + 6] + (CAP[o + 7] - CAP[o + 6]) * t + m;
+    if (ex * ex + ey * ey + ez * ez < r * r) { blockWhy = i; return true; }
+  }
+  return false;
+}
 // probe: is the world point inside the clutch (grown by m)? (-1 = no clutch published)
 export function inClutch(x, y, z, m = 0) {
   if (!clOk) return -1;
   const M = CLI;
   const lx = M[0] * x + M[4] * y + M[8] * z + M[12], ly = M[1] * x + M[5] * y + M[9] * z + M[13], lz = M[2] * x + M[6] * y + M[10] * z + M[14];
   return clutchPen(lx, ly, lz, m / clR) * clR;
+}
+// (velfix) Is the point within m (u) of her shell's plan, at its own bearing (inside her outline, or near her rim)?
+// brooder.js SETTLE: where her shell comes down when she lies down.
+export function shellPlanNear(x, y, z, m) {
+  if (!on || !shellOk) return false;
+  const M = SHI, S = shell;
+  const px = M[0] * x + M[4] * y + M[8] * z + M[12], pz = M[2] * x + M[6] * y + M[10] * z + M[14];
+  const dx = px - S.cx, dz = pz - S.cz, rho = Math.hypot(dx, dz);
+  if (rho > S.rMax + m / shR) return false;
+  let a = Math.atan2(dz, dx) / (Math.PI * 2); if (a < 0) a += 1;
+  band(S, a * S.B, rho);
+  return rho < _ro + m / shR;
+}
+// (velfix) Is the ground point (x, z) within m of any of her limbs' plan (a leg segment or claw piece seen from
+// above, its radius included)? brooder.js's SETTLE rule: she will not fold them down onto him.
+export function limbNearXZ(x, z, m) {
+  if (!on) return false;
+  for (let i = 0; i < nC; i++) {
+    const o = i * 8, ax = CAP[o], az = CAP[o + 2], dx = CAP[o + 3] - ax, dz = CAP[o + 5] - az;
+    const L2 = dx * dx + dz * dz;
+    let t = L2 > 1e-9 ? ((x - ax) * dx + (z - az) * dz) / L2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x - ax - dx * t, ez = z - az - dz * t, r = CAP[o + 6] + (CAP[o + 7] - CAP[o + 6]) * t + m;
+    if (ex * ex + ez * ez < r * r) return true;
+  }
+  return false;
 }
 // Is she anywhere near the boom (centre within rad + her bound)?
 export function bodyNear(x, y, z, rad) {

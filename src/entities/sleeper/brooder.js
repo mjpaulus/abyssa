@@ -12,7 +12,7 @@
 //
 // This file is the body and its motion; the clutch and its rite are brood.js.
 import * as THREE from 'three';
-import { scene, envTexDeep as envTex } from '../../core.js';
+import { scene, camera, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
 import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
@@ -32,7 +32,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -127,6 +127,34 @@ const HAMMER_T = 2.6;
 export const GLINT = { k: 0.9, scale: 1.0, near: 14, far: 130 };
 export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
 export const THUMP = { k: 1, near: 12, far: 110 };
+// THE BURN (velfix 2026-10-12; Michael's recorded play-through: under her with lit wards the frame washed
+// white-green, 41-46 s, and again at 55-58 s as she walked home with all three lit and the lens under her belly).
+// Measured by A/B on the held frame (44.0 s, the lit ward 7 u from the lens; mean Rec.709 luma / share of pixels
+// over 230): as shipped 198 / 0.33; its light's in-scatter off (water.js lamp B) 125 / 0.06; the fogged halo off
+// 185 / 0.21; bloom off 174 / 0.21; the lit flash, embers and glyph ~0; the auto-exposure on its seabed floor
+// (x0.847: it could come down no further). Her pool lights never took the sigil kinds' scatter weight, so a lit ward
+// was a 140-180 cd lamp IN THE WATER at full weight (lamp-B gain ~1700, forty lanterns' worth), and its halo was the
+// idle ward's fogged sprite blown up to 3x her size (16.5 u at 0.8, additive): from under her the lens sat inside
+// both, and after the calm nothing faded either. Now a lit, flashing or calmed ward (a remembered ward, on a revisit,
+// keeps wardMemPose's look and takes only the scatter cap; an UNLIT ward is
+// untouched: how its idle glow reads is part of the rite's difficulty):
+//   scatter  its light's share of the in-scatter (the other kinds' wards run 0.04-0.05): the light is a burn on her
+//            shell and the sand under it, not a lamp in the water; scatterFar past scatterD (lens distance, u): from
+//            20-30 u off a warm haze round her is part of the read, and it shows past her legs where the glow sprite
+//            is hidden (a point lamp's in-scatter grows without bound as the lens nears it; a ward is a glyph on her
+//            shell, not a point). At 31 u, ward-disc contrast 1.34 (0.35 gave 1.15; shipped 1.54, all of it green)
+//   col      its light's colour while lit (warmer than the pool's 0xffe8a8: the water takes the red over a few u)
+//   halo/op  a warm glow (lib/textures.js warmGlow: fog off, its own distance fade, the glints' program) in place
+//            of the fogged halo: halo x size, opacity op, on the lit pose's throb; swell grows it with range as the
+//            murk grows a lamp's halo
+//   near     ...and faded out as the lens comes within near[1] of it, gone by near[0]: up close the light on her
+//            shell, the in-scatter and the glyph carry the ward; from 20-30 u the glow is the read
+//   glyph    the lit glyph burns warm gold over unity (bloom halates it): tint x glyph
+//   calmT    calmed: the light (120 - 8 calmT, as shipped), the glow and the glyph ease down together over calmT
+//            s to a banked ember (the glyph keeps `ember` of its burn)
+//   flash    the light-up flash's extra light (common.js wardFlashes, 360 cd at its peak as shipped) x flash: with him
+//            at the ward it flooded her belly past the burn (6% of the frame blown outside it at the calm's flash)
+export const BURN = { scatter: 0.08, scatterFar: 0.6, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35, flash: 0.5 };
 // (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
 // crouched too low and I kept colliding") RETIRED: drop 0.16 -> 0, lean 0.16 -> 0 (measured
 // before: the rim came down to 0.4-1.3 u over the floor on the lanes in as the spring ramped,
@@ -151,6 +179,20 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
 // u/s straight up: it launched him over her back); a throw never carries him into the crack (safeThrow).
 export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
+// SHE DOES NOT LIE DOWN ON HIM (velfix 2026-10-12; Michael's recorded play-through: after the calm, as she
+// walked home and settled, the lens went into her leg). Two of the fight's protections ended at the calm:
+// her shell's STAND.clear over the ground (measured on baa7f88: 3.36 u at the lowest through the fight, 0.35
+// on the walk home) and her not settling onto him (the 'under' test ran once, as she turned home, at 0.95 R
+// from her centre: her shell reaches 1.29 R (19.8 u), so with him at her rim at 16.9 u she lay down on him; his
+// bonnet ended up inside her leg capsules, every lens line from it in her, and her settling body lifted him onto
+// her back). Calmed, she now keeps her shell's clearance while she stands (it eases down with the settle), and she
+// will not settle while he is within `release` u of her shell's own outline at his bearing (bodyCols.js
+// shellPlanNear; `plan` 0 = the old rMax circle) and not up on her back, held `hold` s clear before she lies down;
+// a settle already under way stands back up, quietly (no wake, the clutch eased), if he comes within `rise` u of
+// it. (`limbs` 1 also counts her limbs' plan: review M3, it kept her standing over a diver watching from 30 u,
+// her legs sprawled round the lens; off.) Her belly and egg mass are closed to him from below after the calm
+// (bodyCols.js CALMCOL, review C1). Post-calm only: the fight and its difficulty are untouched.
+export const SETTLE = { release: 1.5, rise: 0.5, hold: 1.0, limbs: 0, plan: 1 };
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -488,6 +530,11 @@ export function makeBrooder(idx, cfg) {
     const s = SOCKETS[i - 1];
     w.local = V3(s.p[0], s.p[1], s.p[2]);
     w.q = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), V3(s.n[0], s.n[1], s.n[2]).normalize());
+    // THE BURN's glow (velfix): always in the scene at opacity 0, like the glints, so the shared warm-glow
+    // program is the one the boot built
+    w.burn = makeWarmGlow(0xffd49a, 0.001, { near: 30, far: BURN.far, nearW: 0, swell: BURN.swell, swellMax: BURN.swellMax });
+    w.burn.material.opacity = 0;
+    grp.add(w.burn);
     L.sigils.push(w);
   }
   // RITUAL, REMEMBERED: the ward the old calm keeps is the FRONT socket, under her prow
@@ -569,7 +616,7 @@ export function makeBrooder(idx, cfg) {
     grp.add(g);
     return g;
   });
-  if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
+  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; window.__settle = SETTLE; }   // dev: the live sleeper object (motion probes); the burn's knobs
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
@@ -1398,7 +1445,10 @@ function poseAll(L, dt, player) {
   // (ritefair) awake and not stilled, her SHELL keeps STAND.clear u over whatever ground is under
   // it (a bank under her prow had the rim 0.3-0.7 u off the floor: the lane in was shut); her legs
   // still plant on the floor, the doors between them stay open. Stilled, she settles as before.
-  const clr = !L.dormant && !L.calmed ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
+  // (velfix, SETTLE) calmed too: on the walk home it held 0.35 u (SOLE_CLR) and her rim came down on him; it eases
+  // down with the settle (standE). (Her underside is closed to him after the calm, bodyCols.js CALMCOL, so the room
+  // under her belly is the lens's, not a floating diver's.)
+  const clr = !L.dormant ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
   const bed = lerp(SOLE_BED_DEEP * R, -clr, smooth(hc, 0, 0.7));
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
@@ -1499,6 +1549,41 @@ function poseAll(L, dt, player) {
   for (let k = 0; k < COLL.length; k++) L.spine[k].set(COLL[k][0], COLL[k][1], COLL[k][2]).applyMatrix4(b.matrixWorld);
   L.head.set(0, 0.10, 0.80).applyMatrix4(b.matrixWorld);
   publishCols(L);
+}
+
+// (velfix, SETTLE) is he on the ground her body comes down on: within her shell's reach (shell plan, R x
+// rMax 1.29) + m u of her centre, or within m of a leg or claw seen from above (standing, her feet reach 28 u and
+// her claws 35 u; they fold in over the settle), and not up on her back (there he slides off; she never lifts him)
+function onHerGround(L, player, m) {
+  if (!player) return false;
+  if (player.pos.y > L.bodyY + 0.15 * L.R) return false;
+  if (SETTLE.plan) return shellPlanNear(player.pos.x, player.pos.y - 0.45, player.pos.z, m) || (SETTLE.limbs && limbNearXZ(player.pos.x, player.pos.z, m));
+  const reach = (L.shellProx ? L.shellProx.rMax : 1.3) * L.R;
+  return Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < reach + m || (SETTLE.limbs && limbNearXZ(player.pos.x, player.pos.z, m));
+}
+
+// THE BURN (see BURN): over the pose the ward block just wrote, every frame. Lit and calmed wards (remembered: scatter only).
+function wardBurn(L, haloK) {
+  const cp = camera.position;
+  const ck = L.calmed ? Math.max(0, 1 - L.calmT / BURN.calmT) : 1;
+  for (const g of L.sigils) {
+    const b = g.burn;
+    if (!b) continue;
+    if (!g.lit) { b.material.opacity = 0; continue; }          // (calmed, every ward is lit)
+    const d = g.grp.position.distanceTo(cp);
+    g.light.userData.scatter = BURN.scatter + (BURN.scatterFar - BURN.scatter) * smooth(d, BURN.scatterD[0], BURN.scatterD[1]);
+    // the remembered ward (a revisit) keeps wardMemPose's own look - the slow breath, the mid level, the amber
+    // glyph and halo - and takes only the scatter cap (its 34 cd was a full-weight lamp in the water too)
+    if (g.mem) { b.material.opacity = 0; continue; }
+    g.light.color.setHex(BURN.col);
+    g.halo.material.opacity = 0;                               // the fogged halo is the idle ward's
+    b.position.copy(g.grp.position);
+    b.scale.setScalar(Math.max(0.001, haloK * BURN.halo * (1 + 0.06 * Math.sin(g.pulse * 3))));
+    b.material.opacity = BURN.op * ck * smooth(d, BURN.near[0], BURN.near[1]);
+    const k = BURN.glyph * (BURN.ember + (1 - BURN.ember) * ck), T = BURN.tint;
+    g.rune.material.color.setRGB(k * T[0], k * T[1], k * T[2]);
+    g.rune.material.opacity = 1;
+  }
 }
 
 // HER BODY IS SOLID (brooderfix): the live pose as collision volumes (bodyCols.js) — every
@@ -1625,8 +1710,10 @@ export function updateBrooder(L, dt, t, player) {
   L.mPh = L.mPh + dt * (3.0 + 3.2 * L.agitation) * (0.8 + 0.3 * nz(L.t * 0.2, 23));
 
   // ---- stand / threat easing: she takes ~6 s to rise and ~4 s to settle ----
-  const rising = L.standTarget > L.stand;
-  L.rising = rising && !L.calmed;                     // (game.js: limbs unfolding past him are a shove, not a slam)
+  // (velfix) calmed, standing back up over him (SETTLE) is quiet: no wake (no leg puffs, no sink-and-heave, no
+  // shudder or quake, no silt pouring off her back), at the settle's own rate
+  const rising = L.standTarget > L.stand && !L.calmed;
+  L.rising = rising;                                  // (game.js: limbs unfolding past him are a shove, not a slam)
   const rate = rising ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
@@ -1638,7 +1725,7 @@ export function updateBrooder(L, dt, t, player) {
     const was = L.legSt[li];
     L.legSt[li] = win(u, LEG_DELAY[li], LEG_DELAY[li] + 0.30);
     // a leg dragging itself out of the silt throws a puff at the foot
-    if (rising && was < 0.12 && L.legSt[li] >= 0.12) { const f = L.feet[li].cur; silt(f.x, f.y + 0.3, f.z, 3, 3, 2.6, 1.2); }
+    if (rising && was < 0.12 && L.legSt[li] >= 0.12) { const f = L.feet[li].cur; silt(f.x, f.y + 0.3, f.z, 3, 3, 2.6, 1.2); L.wakeFx = (L.wakeFx | 0) + 1; }
   }
   L.clawSt = win(u, 0.55, 0.95);
   const heaveT = win(u, 0.45, 0.88) - (rising ? 0.12 * Math.sin(Math.PI * win(u, 0.22, 0.50)) : 0);
@@ -1652,12 +1739,13 @@ export function updateBrooder(L, dt, t, player) {
     L.bR.v += nz(L.t * 9, 1) * 0.9 * shud * dt * 60 * 0.02;
     L.bP.v += nz(L.t * 8, 2) * 0.6 * shud * dt * 60 * 0.02;
     if (!ev.quake) quake(L, ev, L.pos.x, L.pos.z, 0.12 * shud, player);
+    L.wakeFx = (L.wakeFx | 0) + 1;                    // (velfix probe: the wake's effects, counted)
   }
   // silt pours off her back as she rises: from the rim, faster while the shell is moving
   if (!L.dormant && u < 1 && rising) {
     L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud);
     if (L.dustT <= 0) {
-      L.dustT = 0.09;
+      L.dustT = 0.09; L.wakeFx = (L.wakeFx | 0) + 1;
       const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
       const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
       emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 6, 3.4);
@@ -1754,7 +1842,12 @@ export function updateBrooder(L, dt, t, player) {
     let dA = L.lairYaw - L.yaw; dA = Math.atan2(Math.sin(dA), Math.cos(dA));
     const under = (Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY)
       || (L.brood && player.pos.y < L.bodyY && L.brood.onBed(player.pos));
-    if (Math.abs(dA) < 0.12 && !under) { L.homeTurn = false; L.standTarget = 0; }
+    // (velfix) nor on her ground: her whole reach, not 0.95 R, and clear for SETTLE.hold s first
+    L.offT = under || onHerGround(L, player, SETTLE.release) ? 0 : (L.offT || 0) + dt;
+    if (Math.abs(dA) < 0.12 && L.offT > SETTLE.hold) { L.homeTurn = false; L.standTarget = 0; }
+  } else if (L.calmed && L.brood && SETTLE.rise >= 0 && L.standTarget === 0 && L.stand > 0.02 && onHerGround(L, player, SETTLE.rise)) {
+    // (velfix) settling, and he has come onto her ground: she stands back up over him and waits
+    L.homeTurn = true; L.standTarget = 1; L.offT = 0;
   } else if (hunt && L._pdT < 90) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
     // given up, she sweeps her front slowly across the cloud, searching.
@@ -2012,6 +2105,7 @@ export function updateBrooder(L, dt, t, player) {
     }
   } else {
     L.calmT += dt;
+    setBodyCalm(!L.dormant);                          // (velfix, review C1: bodyCols.js CALMCOL) her underside is closed to him
     for (const g of L.sigils) {
       g.pulse += dt;
       g.light.intensity = Math.max(0, 120 - L.calmT * 8);
@@ -2021,6 +2115,8 @@ export function updateBrooder(L, dt, t, player) {
   }
   // a ward lit is a wound: she flinches - rears back, claws snatched in - and it rings out
   if (ev.sigilLit) { L.seen = true; L.blindT = 0; L.lastSeen.copy(player.pos); L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
+  wardBurn(L, haloK);
+  L.flashK = BURN.flash;
   wardFlashes(L, dt, null);
   updatePlumes(dt);
   L.pPrev.copy(player.pos);
