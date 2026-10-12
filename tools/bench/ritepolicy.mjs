@@ -28,7 +28,7 @@ export const PROBE = `(() => {
   const st = { seen, f: 0, tears: 0, lastHit: -9, hits: 0, hitAt: [], dryN: 0, dryWas: false, low: 0, bowlN: 0, bowlAt: [], inBowl: false, camN: 0, camBad: 0, pressed: 0,
     wardT: L.sigils.map(g => g.lit ? 0 : null), calmT: null, retT: null, takeT: null, maxUp: 0, floatS: 0, tornPrev: SV.torn, pulledPrev: !!(L.harpoon && (L.harpoon.pulled && !L.harpoon.wound || L.harpoon.pressed)),
     lairFloor: terrainH(L.lairPos.x, L.lairPos.z, 0), minReserve: 1, minAir: 1, died: false, underS: 0,
-    hammer0: L.hits || 0, dropHit0: L.dropHits || 0, drops0: L.dropHitN || 0 };
+    hammer0: L.hits || 0, dropHit0: L.dropHits || 0, drops0: L.dropHitN || 0, sweep0: L.sweepN || 0, clean0: L.cleanN || 0 };
   const frame = () => {
     st.f++;
     const t = st.f / 60;
@@ -79,7 +79,7 @@ export const STATE = `(() => {
   const o = { pos: [r(P.pos.x), r(P.pos.y), r(P.pos.z)], vel: [r(P.vel.x), r(P.vel.y), r(P.vel.z)], agl: r(P.pos.y - 1.35 - fl), grounded: !!P.grounded,
     reserve: r(SV.reserve / (SV.reserveCap || 1)), fill: r(P.fill || 0), dormant: !!L.dormant, calmed: !!L.calmed, standE: r(L.standE),
     lev: [r(L.pos.x), r(L.bodyY - (L.dropY || 0)), r(L.pos.z)], R: r(L.R), lyaw: r(L.yaw), cock: r(L.cock || 0), threatE: r(L.threatE || 0), impT: r(L.impT == null ? 9 : L.impT),
-    drop: L.drop || 0, crouch: r(L.crouch ? L.crouch.x : 0),
+    drop: L.drop || 0, dropT: L.drop === 1 ? r(L.dropT) : -1, crouch: r(L.crouch ? L.crouch.x : 0),
     yaw: r(P.yaw), canTake: !!(L.rite && L.rite.prompt(P.pos)), wrenching: !!(Hp && Hp.wrenching),
     reach: L.reach, msg: window.__msg().live };
   o.wards = L.sigils.map(g => ({ p: [r(g.grp.position.x), r(g.grp.position.y), r(g.grp.position.z)], lit: !!g.lit, floor: r(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, 0)) }));
@@ -88,22 +88,24 @@ export const STATE = `(() => {
 })()`;
 
 // the ledger's closing read (page side): hits split by what landed them
-export const TALLY = `(() => { const L = window.lev, st = window.__rp.st; return { hammerHits: (L.hits || 0) - st.hammer0, dropHits: (L.dropHits || 0) - st.dropHit0, drops: (L.dropHitN || 0) - st.drops0 }; })()`;
+export const TALLY = `(() => { const L = window.lev, st = window.__rp.st; return { hammerHits: (L.hits || 0) - st.hammer0, dropHits: (L.dropHits || 0) - st.dropHit0, drops: (L.dropHitN || 0) - st.drops0, sweeps: (L.sweepN || 0) - st.sweep0, cleanDrops: (L.cleanN || 0) - st.clean0 }; })()`;
 
 // rnd: the run's seeded stream; now(): the game seconds the driver has played
 export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
   const UNDER = 0.72, RIM = 0.95;      // how far in under her shell the count runs (and slower under her rim), as he has learned it (R)
-  const EXIT_P = 1.5;                  // the perfect player's own count: out by then (her rule: ~2.4 s)
+  const EXIT_P = 2.0;                  // the perfect player's own count: out by then (her rule: ~3 s)
   let myU = 0, tPrev = null, prevLit = 0, wasUnder = false, wasRim = false, exitA = 2.5, outT = 0, commit = false, onTop = 0;
   let tgtI = -1, prevDrop = 0; const fails = [0, 0, 0, 0, 0];   // (average) drops taken going at each ward
+  let reactT = 0.5, lingerT = false, near = false;   // (average) its reaction to this drop's telegraph; (perfect) close to her
   let stX = 0, stZ = 0, stT = -9, backT = -9;   // walled off going round her (a leg, a claw): back out and go again
-  const decide = s => { const d = decide1(s); decide.dbg = dbg; return d; };
+  // (the perfect player's slices end the moment her telegraph starts: the driver watches for it, see abortTele)
+  const decide = s => { const d = decide1(s); decide.dbg = dbg; if (!AVG && near) d.abortTele = true; return d; };
   let dbg = '';
   return decide;
   function decide1(s) {
     const t = now();
     const P = s.pos, reach = s.reach || 6, RR = s.R;
-    const sec = AVG ? 0.5 + 0.5 * rnd() : 0.25;
+    let sec = AVG ? 0.5 + 0.5 * rnd() : 0.25;
     const noise = AVG ? (rnd() * 2 - 1) * 20 * DEG : 0;
     // the average player holds a burst ~1 s whatever the climb needs (the ledger's habit)
     const avgBurst = 0.6 + 0.6 * rnd();
@@ -118,12 +120,18 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     // HIS OWN COUNT of the time under her shell (the rule he has learned; it cools as he stays out)
     const dt = tPrev == null ? 0 : t - tPrev; tPrev = t;
     myU = wasUnder ? myU + dt : wasRim && !AVG ? myU + 0.3 * dt : Math.max(0, myU - dt);   // (the perfect one knows her rim counts slower)
-    if (under && !wasUnder && AVG) exitA = 2.2 + 0.6 * rnd();
+    if (under && !wasUnder && AVG) exitA = 2.4 + 0.8 * rnd();   // (a little too long, against her ~3 s)
+    near = rho < 1.15 * RR;
+    // (average) under her it watches her: short slices, so its reaction lands where it is drawn
+    if (AVG && (under || rimB)) sec = 0.15;
+    // a new telegraph: the average player's reaction to it (0.4-0.7 s late), or 3 times in 10 it lingers
+    // through it and leaves only on its own count
+    if (s.drop === 1 && prevDrop !== 1) { reactT = 0.4 + 0.3 * rnd(); lingerT = rnd() < 0.3; }
     wasUnder = under; wasRim = rimB;
     outT = under ? 0 : outT + dt;
     const nLit = s.wards.filter(w => w.lit).length, justLit = nLit > prevLit; prevLit = nLit;
     // (the perfect one has learned that a ward lit from under her brings the drop on: its count jumps too)
-    if (!AVG && justLit && (under || rimB)) myU = Math.max(myU, 1.4);
+    if (!AVG && justLit && (under || rimB)) myU = Math.max(myU, 2.0);
     dbg = `rho ${(rho / RR).toFixed(2)} fwd ${fwd.toFixed(2)} lat ${lat.toFixed(2)} myU ${myU.toFixed(1)} drop ${s.drop} imp ${s.impT}`;
     const away = Math.atan2(ox, oz);      // out from under her, radially
     // targets: the dark wards
@@ -134,10 +142,12 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     onTop = P[1] > s.lev[1] + 1 && rho < 1.25 * RR ? onTop + dt : 0;
     if (onTop > (AVG ? 2 : 0.3)) return { sec, yaw: away + noise, pitch: 0, keys: ['W', 'C'], why: 'off-back' };
     // ---- OUT FROM UNDER HER ----
-    if (under) {
+    if (under || rimB) {
       const tele = s.drop === 1;
       if (AVG && justLit && rnd() < 0.5) exitA = 0;     // half the time he reads her flinch and leaves
-      const go = AVG ? (myU > exitA || (tele && rnd() < 0.5)) : (tele || myU > EXIT_P || justLit);
+      // the perfect player leaves the moment the telegraph starts; the average one 0.4-0.7 s into it, unless
+      // it lingers through it
+      const go = AVG ? ((under && myU > exitA) || (tele && !lingerT && s.dropT >= reactT)) : (tele || (under && myU > EXIT_P) || justLit);
       if (go) {
         commit = false;
         const keys = s.grounded ? ['W', 'Shift'] : ['W'];

@@ -20,7 +20,7 @@ import { terrainH, terrainMeshes, fissurePatchSample } from '../../world/terrain
 import { setWardTargets } from '../../world/predators.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
-  rememberWard, wardMemPose, wardsRecall
+  rememberWard, wardMemPose, wardsRecall, wardRefuse
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
@@ -153,28 +153,40 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // NO SAFE SPOT (velhard, Michael 2026-10-12: "you were right beating her is too easy now"; he ruled
-// "No safe spot", VELHARD-BRIEF.md). The refuge under her body is gone (and with it the stance shift).
+// "No safe spot", VELHARD-BRIEF.md; the fairness rulings of the same day are folded in). The refuge under
+// her body is gone (and with it the ritefair stance shift).
 // THE COUNT: deep under her (plan within `under` R, below her shell) it runs at 1/s, under her rim (out to
 // `rim` R, where no ward is in reach) at `rimK`/s, so nowhere under her is a place to wait; it falls at
-// `decay`/s once he is out. Past `after` s THE DROP: a telegraph of `tele` s (her shell shudders, silt
-// sifts off her plates, a deep groan, the ground rumbles, her legs brace and lift her `brace` u), the body
-// slam (`fall` s, down to `depth` u, stopped over his helmet; her ground clearance rides it), then she rises
-// back to her standing height in `rise` s (no lingering crouch: Michael rejected it). Under her at the
-// impact (plan within `hitR` R; caught loitering under her rim, within 0.1 R outside where she found him, so
-// a quick step out still clears it): deep under (inside `slamR` R) the shell lands on him, nearer her edge
-// the leg on his side SWEEPS him out; either way the dress tears (game.js's slam path, SLAM_GAP), he staggers
-// (`stag` s at `stagK`) and is thrown flat out from under her (`knock` u/s, `up` vertical share, never toward
-// the crack: safeThrow). THE TURN: she keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5); a
-// diver hauling round her close beats it, a walker does not. THE WINDOW: for `slowT` s after a hammer blow
-// struck down her front lane at him, and after each drop, she turns at only `slowK` of it. `reach`: the ward
-// touch (7 since ritefair). THE WOUND (beyond the ruling, to make each ward its own dash): a ward lit from
-// under her jumps her count to `wound` s short of the drop, and her wards take no touch from the telegraph
-// to the end of the rise.
+// `decay`/s once he is out. Past `after` s THE DROP: a telegraph of `tele` s (her legs brace: silt bursts
+// from every planted foot and she rises `brace` u on them; the shell shudders harder and harder, silt sifts
+// off her plates, a deep groan, the ground rumbles), the body slam (`fall` s, down to `depth` u, stopped over
+// his helmet; her ground clearance rides it), then she rises back to her standing height in `rise` s (no
+// lingering crouch: Michael rejected it). What it does to him is read off how far OUT from under her he got
+// since she began to bear down (he walks ~1 u in that time from a stand: getting clear of her body is not
+// possible, getting off her mark is):
+//   * `outClean` u or more, or out from under her altogether (beyond `sweepR` R): nothing. A diver who
+//     moves at the telegraph's start always gets out; she comes down a hand's breadth over his helmet.
+//   * squarely under her (inside `hitR` R) and less than `outTear` u: THE SLAM. The dress tears (game.js's
+//     slam path, SLAM_GAP), he staggers (`stag` s at `stagK`), he is thrown flat out (`knock` u/s).
+//   * anyone else still under her (a late exit, the rim, her leg line): THE SWEEP. Flat throw out
+//     (`sweepKnock` u/s), a stagger (`sweepStag` s), no tear. A late exit costs position; only a very late
+//     one costs a tear.
+// Every throw is flat (`up` vertical share) and never toward the crack (safeThrow). Still under her when
+// she has risen, the count stands `again` s short of the next drop: dodging is no refuge either.
+// THE TURN: she keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5); a diver hauling round her
+// close beats it, a walker does not. THE WINDOW: for `slowT` s after a hammer blow struck down her front
+// lane at him, and after each drop, she turns at only `slowK` of it. `reach`: the ward touch (7 since
+// ritefair). THE WOUND (beyond the ruling: each ward its own dash): a ward lit from under her jumps her
+// count to `wound` s short of the drop. From the telegraph to the end of the rise her wards are shut: a
+// touch answers cold (common.js wardRefuse: the spark, the knock) and the first time says SHUT_LINE.
 export const NOSAFE = {
-  after: 2.4, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, tele: 0.7, brace: 0.45, fall: 0.16, depth: 3.6, rise: 0.45,
-  hitR: 0.82, slamR: 0.45, knock: 24, up: 0.10, stag: 0.9, stagK: 0.85,
+  after: 3.0, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, again: 1.0,
+  tele: 1.2, brace: 0.7, fall: 0.16, depth: 3.6, rise: 0.45,
+  hitR: 0.6, sweepR: 1.1, outClean: 0.8, outTear: 0.3,
+  knock: 24, sweepKnock: 18, up: 0.10, stag: 0.9, sweepStag: 0.6, stagK: 0.85,
   turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 1.0
 };
+const SHUT_LINE = 'SHE BEARS DOWN. THE WARDS ARE SHUT TO YOU.';
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -1633,16 +1645,17 @@ function sight(L, dt, player, ev) {
   L._pdT = d;
 }
 
-// ---- NO SAFE SPOT (velhard, 2026-10-12; knobs and the ruling: NOSAFE above) -------------------------
+// ---- NO SAFE SPOT (velhard, 2026-10-12; knobs and the rulings: NOSAFE above) ------------------------
 // The counter, the drop and the window. Called from updateBrooder's locomotion (where the ritefair stance
 // shift was), before she moves this frame; poseAll reads L.dropY (added to her body height and to her
-// shell's ground clearance, so the sole floor lets her come down). The hit is resolved HERE, like the hammer's (bodyCols zeroes a
-// shell faster than 14 u/s and its push never knows the crack): ev.slam (game.js tears the dress once per
-// SLAM_GAP), player.stagger, a flat throw out from under her through safeThrow. Audio edges for
-// audio/creatures.js: L.dropN (the groan, at the telegraph) and L.dropHitN (the impact). State:
-// L.nsT the counter (s), L.drop 0 none / 1 telegraph / 2 the slam / 3 the rise, L.dropT (s in phase),
-// L.dropD (u: how far she comes down), L.nsSlow (s of slow turn left), L.dropHits / L.dropKind (probes).
-// No allocation: module scratch only.
+// shell's ground clearance, so the sole floor lets her come down). What the drop does to him is resolved
+// HERE, like the hammer's (bodyCols zeroes a shell faster than 14 u/s and its push never knows the crack):
+// the slam through ev.slam (game.js tears the dress once per SLAM_GAP), the sweep without it; both stagger
+// him (player.stagger) and throw him flat out from under her through safeThrow. Audio edges for
+// audio/creatures.js: L.dropN (the groan, at the telegraph) and L.dropHitN (the impact). State: L.nsT the
+// counter (s), L.drop 0 none / 1 telegraph / 2 the slam / 3 the rise, L.dropT (s in phase), L.dropRho0 (u:
+// how far under her he was when she began to bear down), L.dropD (u: how far she comes down), L.nsSlow (s of
+// slow turn left); probes: L.dropHits (slams), L.sweepN, L.cleanN, L.dropKind. No allocation.
 const _ns = V3();
 function nsTurn(L) { return NOSAFE.turn * (L.drop || L.nsSlow > 0 ? NOSAFE.slowK : 1); }
 function noSafeSpot(L, dt, player, ev, hunt) {
@@ -1657,8 +1670,10 @@ function noSafeSpot(L, dt, player, ev, hunt) {
   if (!L.drop) {
     L.nsT = !live ? 0 : deep ? (L.nsT || 0) + dt : rim ? (L.nsT || 0) + N.rimK * dt : Math.max(0, (L.nsT || 0) - N.decay * dt);
     if (live && L.nsT >= N.after) {
-      L.drop = 1; L.dropT = 0; L.dropN = (L.dropN || 0) + 1; L.nsDust = 0;
-      L.dropR = Math.max(N.hitR, Math.min(N.rim + 0.05, rho / R + 0.1));   // (R) where it lands: see NOSAFE
+      L.drop = 1; L.dropT = 0; L.dropN = (L.dropN || 0) + 1; L.nsDust = 0; L.dropRho0 = rho;
+      // HER LEGS BRACE: every planted foot drives into the sand
+      for (const f of L.feet) if (f.t < 0) silt(f.cur.x, f.cur.y + 0.2, f.cur.z, 2, 3, 2.2, 0.8);
+      thump(L, ev, L.pos.x, L.pos.z, 0.35, player);
     }
     else { L.dropY = 0; return; }
   }
@@ -1668,26 +1683,28 @@ function noSafeSpot(L, dt, player, ev, hunt) {
   // planted for it: her stride dies away
   { const k = Math.min(1, 6 * dt); L.vel.x -= L.vel.x * k; L.vel.z -= L.vel.z * k; }
   if (L.drop === 1) {
-    // THE TELEGRAPH: her legs brace and lift her, the shell shudders, silt sifts off her plates, the
-    // ground rumbles under him (ev.quake: the lens shakes, game.js startles the reef past 0.3)
+    // THE TELEGRAPH: she rises on her braced legs, the shell shudders (harder as it runs), silt sifts off
+    // her plates, the ground rumbles under him (ev.quake: the lens shakes; game.js startles the reef past 0.3)
     const k = clamp(L.dropT / N.tele, 0, 1);
     L.dropY = N.brace * ease(k);
-    const sh = 0.5 + 0.5 * k;
+    const sh = 0.45 + 0.75 * k;
     L.bR.v += nz(L.t * 11, 3) * 0.9 * sh * dt * 60 * 0.02;
     L.bP.v += nz(L.t * 9, 4) * 0.6 * sh * dt * 60 * 0.02;
-    quake(L, ev, L.pos.x, L.pos.z, 0.10 + 0.12 * k, player);
+    quake(L, ev, L.pos.x, L.pos.z, 0.10 + 0.14 * k, player);
     L.nsDust = (L.nsDust || 0) - dt;
     if (L.nsDust <= 0) {
-      L.nsDust = 0.045;
+      L.nsDust = 0.04;
       const a = Math.random() * Math.PI * 2, r = R * (0.55 + 0.4 * Math.random());
       emitDust(L.pos.x + Math.cos(a) * r, L.bodyY + R * (0.02 + 0.08 * Math.random()), L.pos.z + Math.sin(a) * r, 4, 1.6);
     }
     if (L.dropT >= N.tele) {
-      // how far: all the way to the sand, but stopped over his helmet if he is under her
+      // how far: all the way to the sand, but over his helmet if he is under her: a hand's breadth when he
+      // stayed on her mark, clear of it when he moved off it (he sees her miss)
       let d = N.depth;
-      if (rho < L.dropR * R && player.pos.y < shellY) {
+      if (rho < N.sweepR * R && player.pos.y < shellY) {
         const crown = player.pos.y + 0.45 - groundAt(L, player.pos.x, player.pos.z, true);
-        d = clamp(L.bellyOver - crown - 0.25, 0.6, N.depth);
+        const off = rho - (L.dropRho0 || 0) >= N.outClean;
+        d = clamp(L.bellyOver - crown - (off ? 1.1 : 0.25), 0.6, N.depth);
       }
       L.drop = 2; L.dropT = 0; L.dropD = d + L.dropY; L.dropY0 = L.dropY;
     }
@@ -1700,7 +1717,12 @@ function noSafeSpot(L, dt, player, ev, hunt) {
     // THE RISE: back to her standing height, no lingering crouch
     const k = clamp(L.dropT / N.rise, 0, 1), e = 1 - (1 - k) * (1 - k) * (1 - k);
     L.dropY = -L.dropD * (1 - e);
-    if (k >= 1) { L.drop = 0; L.dropY = 0; L.nsT = 0; if (live) L.nsSlow = N.slowT; }
+    if (k >= 1) {
+      L.drop = 0; L.dropY = 0;
+      // still under her (he dodged): the next drop is `again` s off; put out from under her: a fresh count
+      L.nsT = live && L.nsUnder ? N.after - N.again : 0;
+      if (live) L.nsSlow = N.slowT;
+    }
   }
 }
 function dropImpact(L, ev, player, rho, ux, uz, shellY) {
@@ -1710,30 +1732,23 @@ function dropImpact(L, ev, player, rho, ux, uz, shellY) {
   quake(L, ev, L.pos.x, L.pos.z, 0.85, player);
   thump(L, ev, L.pos.x, L.pos.z, 0.9, player);
   silt(L.pos.x, gy + 0.3, L.pos.z, 10, 4, 3.4, R * 0.95);       // her rim meets the sand all round
-  if (!(rho < L.dropR * R && player.pos.y < shellY + 0.5)) return;   // he got out from under her
+  // how far out from under her he got since she began to bear down
+  const out = rho - (L.dropRho0 || 0);
+  if (!(rho < N.sweepR * R && player.pos.y < shellY + 0.5) || out >= N.outClean) {   // he got out
+    L.cleanN = (L.cleanN || 0) + 1; L.dropKind = 'clean';
+    return;
+  }
+  const slam = rho < N.hitR * R && out < N.outTear;
   // out from under her, flat (from her centre through him; dead under her, out of her nearer flank)
   if (rho > 1e-3) _ns.set(ux / rho, 0, uz / rho);
   else { const s = Math.sin(L.yaw), c = Math.cos(L.yaw); _ns.set(c, 0, -s); }
-  const sweep = rho > N.slamR * R;
-  if (sweep) {
-    // THE SWEEP: the leg on his side kicks out through him (a fast step past him; render + bodyCols)
-    let best = -1, bd = 1e9;
-    for (let li = 0; li < 8; li++) { const f = L.feet[li]; if (f.t >= 0) continue; const d = Math.hypot(f.planted.x - player.pos.x, f.planted.z - player.pos.z); if (d < bd) { bd = d; best = li; } }
-    if (best >= 0) {
-      const f = L.feet[best];
-      f.from.copy(f.planted);
-      f.to.copy(f.planted).addScaledVector(_ns, 0.3 * R);
-      reachFoot(L, best, f.to);
-      f.h = 0.22; f.t = 0; f.fast = 2.4;
-    }
-  }
   safeThrow(_ns, player.pos.x, player.pos.z, L.idx);
   _ns.y = N.up; _ns.normalize();
   player.vel.x *= 0.3; player.vel.z *= 0.3; if (player.vel.y > 0) player.vel.y *= 0.3;
-  player.vel.addScaledVector(_ns, N.knock);
-  player.stagger = player.staggerDur = sweep ? 0.7 * N.stag : N.stag; player.staggerK = N.stagK;
-  ev.slam = true; ev.lightDrain += 0.12;
-  L.dropHits = (L.dropHits || 0) + 1; L.dropKind = sweep ? 'sweep' : 'slam';
+  player.vel.addScaledVector(_ns, slam ? N.knock : N.sweepKnock);
+  player.stagger = player.staggerDur = slam ? N.stag : N.sweepStag; player.staggerK = N.stagK;
+  if (slam) { ev.slam = true; ev.lightDrain += 0.12; L.dropHits = (L.dropHits || 0) + 1; L.dropKind = 'slam'; }
+  else { L.sweepN = (L.sweepN || 0) + 1; L.dropKind = 'sweep'; }
 }
 
 const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
@@ -2007,7 +2022,7 @@ export function updateBrooder(L, dt, t, player) {
     restWorld(L, li, _rw);
     if (L.standE > 0.35 && f.t < 0) reachFoot(L, li, _rw);   // the rest spot she can really stand on
     if (f.t >= 0) {
-      f.t = Math.min(1, f.t + dt * (f.fast || 1) / swT);   // (velhard: a SWEEP kicks at f.fast x a step's pace)
+      f.t = Math.min(1, f.t + dt / swT);
       const e = win(f.t, 0.12, 0.92), lift = Math.sin(Math.PI * Math.pow(f.t, 0.72));
       f.cur.lerpVectors(f.from, f.to, e);
       f.cur.y += lift * f.h * L.R * L.standE;
@@ -2016,7 +2031,7 @@ export function updateBrooder(L, dt, t, player) {
       // weight comes off this corner: the body lists toward it and away from the step
       rollT -= sd * 0.016 * lift; pitchT += (k < 2 ? 0.011 : -0.008) * lift; yT += 0.006 * lift;
       if (f.t >= 1) {
-        f.t = -1; f.fast = 0; f.planted.copy(f.to); f.cur.copy(f.to);
+        f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to);
         f.sl = slopeAt(L, f.to.x, f.to.z);
         silt(f.cur.x, f.cur.y + 0.2, f.cur.z, f.h > 0.2 ? 3 : 1, 3, 1.4 + 1.4 * f.h / 0.30, 0.9);
         if (f.h > 0.2) spawnPlume(f.cur.x, f.cur.y, f.cur.z, 'small', 1, L.idx);   // a heavy foot throws its own small cloud
@@ -2122,8 +2137,12 @@ export function updateBrooder(L, dt, t, player) {
         // standing Brooder offers them
         // (fissure-and-harpoon Task 6: the brood rule, her last ward cold while a clump of her clutch
         // was out, is gone with the pry; every ward is simply lit by his touch)
-        // (velhard) braced for the drop and through it her wards are shut to his hand (one ward a dash)
-        if (L.standE > 0.6 && !L.drop) wardTouch(L, i, g, player, ev);
+        // (velhard) braced for the drop and through it her wards are shut to his hand (one ward a dash): a
+        // touch answers cold (the spark, the knock), and the first time she says why
+        if (L.standE > 0.6) {
+          if (!L.drop) wardTouch(L, i, g, player, ev);
+          else { wardRefuse(L, g, player, ev, L.shutSaid ? null : SHUT_LINE); if (ev.refuseMsg === SHUT_LINE) L.shutSaid = true; }
+        }
       }
     }
     let rem = 0;

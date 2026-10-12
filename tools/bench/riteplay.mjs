@@ -89,9 +89,24 @@ async function stepN(n) {
 }
 let t = 0, lastShot = 0, log = [];
 // one slice: keys held for `sec`, Space held only its first `spaceSec`, E tapped at the start
-async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false }) {
+// (velhard) abortTele: the slice ends the moment her drop's telegraph starts (the perfect player leaves at
+// once; a long burst is no excuse): stepped in 0.1 s chunks with the telegraph read between them
+let aborted = false;
+async function stepW(n, watch) {
+  if (!watch) { await stepN(n); return n; }
+  let k = 0;
+  while (k < n) {
+    const m = Math.min(6, n - k);
+    await stepN(m); k += m;
+    if (await c.ev(`window.lev && window.lev.drop === 1 ? 1 : 0`)) { aborted = true; return k; }
+  }
+  return k;
+}
+async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false, abortTele = false }) {
   const frames = Math.max(1, Math.round(sec * 60));
   await c.ev(`(window.player.yaw = ${yaw}, window.player.pitch = ${pitch}, 1)`);
+  const watch = abortTele && !(await c.ev(`window.lev && window.lev.drop === 1 ? 1 : 0`));
+  aborted = false;
   const MAP = { W: 'KeyW', S: 'KeyS', A: 'KeyA', D: 'KeyD', Shift: 'ShiftLeft', C: 'KeyC', E: 'KeyE', Space: 'Space' };
   for (const k of keys) await c.key(MAP[k], true);
   if (e) { await c.key('KeyE', true); await stepN(2); await c.key('KeyE', false); }
@@ -99,13 +114,12 @@ async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false }) {
   if (space > 0) {
     const sf = Math.max(2, Math.min(frames - done, Math.round(space * 60)));
     await c.key('Space', true);
-    await stepN(sf);
+    done += await stepW(sf, watch);
     await c.key('Space', false);
-    done += sf;
   }
-  if (frames > done) await stepN(frames - done);
+  if (frames > done && !aborted) done += await stepW(frames - done, watch);
   for (const k of keys) await c.key(MAP[k], false);
-  t += Math.max(frames, done) / 60;
+  t += done / 60;
 }
 
 const decide = makePolicy({ AVG, rnd, FLEE, now: () => t });
