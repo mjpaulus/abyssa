@@ -6,6 +6,14 @@
 // through its throat into zone 1. Video frames every 3rd game frame (RP_VIDEO=<dir>), assembled by the
 // orchestrator. No ?playtest: nothing is jumped to.
 //   RP_VIDEO=<dir> node tools/bench/fullplay.mjs <port> <mode: perfect|average> <tag> [seed] [maxSec]
+// (velfix 2026-10-12) Two opt-in additions, neither changes what is played:
+//   FP_GATE=1   the velfix gate, booked in the page every stepped frame and printed as a GATE line (exit 1 when
+//               RED): THE WASH (every 3rd frame, while the lens is under her or within WASH_R of a lit ward: the
+//               share of the drawn frame's pixels with Rec.709 luma > 230, read back right after the frame's own
+//               render) and THE LENS IN HER (every frame she is published awake: the camera inside her bodyCols
+//               volumes, margin 0 = inside, 0.15 = the near plane in it; split fight / after the calm).
+//   FP_STOP=<n> stop after n video-rate frames (every 3rd game frame, ~20 per game second: the RP_VIDEO index),
+//               print the state; FP_HOLD=1 leaves the (frozen) Chrome up for `drv.mjs eval` and A/B pokes.
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 if (!process.env.DRV_PORT) process.env.DRV_PORT = '9471';
@@ -102,6 +110,60 @@ await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
+// ---- (velfix) the gate's page side: wraps the ledger's frame hook ----
+const GATE = process.env.FP_GATE === '1';
+const WASH_BLOWN = 0.05, WASH_R = 14;   // RED: any booked frame with more than 5% of its pixels blown
+const GATE_JS = `(async () => {
+  const BC = await import('/src/entities/sleeper/bodyCols.js');
+  const { renderer } = await import('/src/core.js');
+  const gl = renderer.getContext();
+  const L = window.lev, cam = window.camera, P = window.player;
+  const g = { washN: 0, washRed: 0, washSum: 0, washMax: 0, washMaxAt: null, washMeanLuma: 0, washAt: [],
+    lens: { fightN: 0, fightIn: 0, fightNear: 0, calmN: 0, calmIn: 0, calmNear: 0, inAt: [], parts: {} } };
+  let buf = null;
+  const base = window.__rp.frame;
+  window.__rp.frame = () => {
+    base();
+    const f = window.__rp.st.f, t = f / 60;
+    if (window.zone !== 0 || L.dormant || !BC.bodyColsOn()) return;
+    const x = cam.position.x, y = cam.position.y, z = cam.position.z;
+    const inside = BC.bodyBlocked(x, y, z, 0), why = BC.blockWhy, near = inside || BC.bodyBlocked(x, y, z, 0.15);
+    const Lg = g.lens;
+    if (L.calmed) { Lg.calmN++; if (inside) Lg.calmIn++; if (near) Lg.calmNear++; }
+    else { Lg.fightN++; if (inside) Lg.fightIn++; if (near) Lg.fightNear++; }
+    if (inside) { const k = why === -1 ? 'shell' : why === -3 ? 'clutch' : 'cap' + why; Lg.parts[k] = (Lg.parts[k] || 0) + 1; if (Lg.inAt.length < 60) Lg.inAt.push(+t.toFixed(2));
+      if (window.__vfSnap && Lg.inAt.length <= 8) { const r = v => +v.toFixed(2); (Lg.snap = Lg.snap || []).push({ t: r(t), part: k, cam: [r(x), r(y), r(z)], sal: [r(P.pos.x), r(P.pos.y), r(P.pos.z)], vel: [r(P.vel.x), r(P.vel.y), r(P.vel.z)], grounded: !!P.grounded, yaw: r(P.yaw), pitch: r(P.pitch),
+        cre: window.__crecam.state(), boss: window.__bosscam.state(), throat: window.__throatCam.state(), lev: { standE: r(L.standE), calmT: r(L.calmT || 0), toBed: !!L.toBed, pos: [r(L.pos.x), r(L.bodyY), r(L.pos.z)] }, bc: BC.bodyColsState() }); }
+      if (window.__vfStopIn && !window.__vfHalt) { window.__vfHalt = true; return false; } }
+    if (f % 3) return;
+    let lit = false, dmin = 1e9;
+    for (const s of L.sigils) if (s.lit) { lit = true; dmin = Math.min(dmin, s.grp.position.distanceTo(cam.position)); }
+    if (!lit || !(BC.underShell(x, y, z) || BC.underShell(P.pos.x, P.pos.y + 1, P.pos.z) || dmin < ${WASH_R})) return;
+    const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    if (!buf || buf.length !== W * H * 4) buf = new Uint8Array(W * H * 4);
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+    gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    let n = 0, hi = 0, sum = 0;
+    for (let i = 0; i < W * H * 4; i += 8) { const l = 0.2126 * buf[i] + 0.7152 * buf[i + 1] + 0.0722 * buf[i + 2]; n++; sum += l; if (l > 230) hi++; }
+    const sh = hi / n;
+    g.washN++; g.washSum += sh; g.washMeanLuma += sum / n;
+    if (sh > ${WASH_BLOWN}) { g.washRed++; if (g.washAt.length < 60) g.washAt.push([+t.toFixed(2), +sh.toFixed(3)]); }
+    if (sh > g.washMax) { g.washMax = sh; g.washMaxAt = +t.toFixed(2); }
+  };
+  window.__vfGate = g;
+  return 1;
+})()`;
+if (GATE) { await c.ev(GATE_JS); if (process.env.FP_SNAP) await c.ev("(window.__vfSnap = true, 1)"); if (process.env.FP_STOPIN) await c.ev("(window.__vfStopIn = true, 1)"); }
+// ---- (velfix) FP_STOP / FP_HOLD ----
+const STOP = +(process.env.FP_STOP || 0), HOLD = process.env.FP_HOLD === '1';
+let gf = 0;
+async function atStop() {
+  const s = await c.ev(STATE);
+  console.log('STOP', gf, (gf / 60).toFixed(2), JSON.stringify({ pos: s.pos, lev: s.lev, calmed: s.calmed, standE: s.standE, wards: s.wards.map(w => w.lit ? 1 : 0).join(''), cam: await c.ev(`window.camera.position.toArray().map(v => +v.toFixed(2))`) }));
+  if (GATE) console.log('GATE-SO-FAR', JSON.stringify(await c.ev('window.__vfGate')));
+  if (HOLD) { console.log(`HOLD: Chrome left up on DRV_PORT ${process.env.DRV_PORT}`); c.close(); process.exit(0); }
+  c.close(); stop(); process.exit(0);
+}
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
 };
@@ -121,6 +183,14 @@ async function vgrab() {
 // fight (0 early hits in 12 runs vs 3 of 4 with renders). With RP_VIDEO every 3rd is captured.
 const RENDER = process.env.RP_RENDER !== '0';
 async function stepN(n) {
+  // (velfix) FP_STOP: never step past the stop frame
+  if (STOP) { if (gf >= STOP * 3) await atStop(); if (gf + n > STOP * 3) n = STOP * 3 - gf; }
+  gf += n;
+  await stepN0(n);
+  if (STOP && gf >= STOP * 3) await atStop();
+  if (process.env.FP_STOPIN && await c.ev('!!window.__vfHalt')) await atStop();
+}
+async function stepN0(n) {
   const R = RENDER ? ', { render: true }' : '';
   if (!VID) { await c.ev(`(window.__bench.step(${n}, () => window.__rp.frame()${R}), 1)`); return; }
   while (n > 0) {
@@ -308,10 +378,21 @@ const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != nul
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));
+let gateRed = false;
+if (GATE) {
+  const g = await c.ev('window.__vfGate');
+  const washRed = g.washRed > 0, lensRed = g.lens.calmIn > 0 || g.lens.fightIn > 0;
+  gateRed = washRed || lensRed;
+  ledger.gate = g;
+  console.log('GATE', gateRed ? 'RED' : 'GREEN', JSON.stringify({
+    wash: { booked: g.washN, red: g.washRed, meanBlown: g.washN ? +(g.washSum / g.washN).toFixed(4) : 0, maxBlown: +g.washMax.toFixed(3), maxAt: g.washMaxAt,
+      meanLuma: g.washN ? +(g.washMeanLuma / g.washN).toFixed(1) : 0, verdict: washRed ? `RED (${g.washRed} frames > ${WASH_BLOWN} blown)` : 'GREEN', at: g.washAt.slice(0, 12) },
+    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), verdict: lensRed ? 'RED' : 'GREEN' } }));
+}
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 if (errs.length) console.log('CONSOLE', errs.slice(0, 5).join('\n'));
 c.close();
 stop();
-process.exit(0);
+process.exit(gateRed ? 1 : 0);
