@@ -122,14 +122,17 @@ const GATE_JS = `(async () => {
   const L = window.lev, cam = window.camera, P = window.player;
   const g = { washN: 0, washRed: 0, washSum: 0, washMax: 0, washMaxAt: null, washMeanLuma: 0, washAt: [],
     lens: { fightN: 0, fightIn: 0, fightNear: 0, calmN: 0, calmIn: 0, calmNear: 0, inAt: [], parts: {}, salFight: 0, salCalm: 0,
-      rayN: 0, rayFight: 0, rayCalm: 0, rayAt: [] } };
+      rayN: 0, rayFight: 0, rayCalm: 0, rayAt: [], rayHit: {} },
+    // her shell's lowest point over the ground (u): the fight (up, hunting), the walk home (calmed, up), the settle
+    shellClr: { fight: 99, home: 99, settle: 99 } };
   let buf = null;
   // THE DRAWN SURFACE (every 3rd frame): bodyCols is a fit (85th-percentile capsules, a height-band shell), so the
   // lens can be outside it with her drawn mesh across the near plane. A ray from the lens toward his bonnet against
   // her opaque meshes: a hit within 0.35 u of the lens is a surface ON the lens (the dark wedge).
   const T = (await import('three'));
   const rc = new T.Raycaster(), dir = new T.Vector3(), from = new T.Vector3();
-  const meshes = []; L.grp.traverse(o => { if ((o.isMesh || o.isInstancedMesh) && !o.isSprite && o.material && !o.material.transparent && o.visible) meshes.push(o); });
+  // (custom-instanced meshes, InstancedBufferGeometry, are left out: three raycasts only their base geometry)
+  const meshes = []; L.grp.traverse(o => { if ((o.isMesh || o.isInstancedMesh) && !o.isSprite && o.material && !o.material.transparent && o.visible && !(o.geometry && o.geometry.isInstancedBufferGeometry)) meshes.push(o); });
   g.lens.rayMeshes = meshes.length;
   const base = window.__rp.frame;
   window.__rp.frame = () => {
@@ -153,10 +156,17 @@ const GATE_JS = `(async () => {
       const dl = dir.length();
       if (dl > 1e-3) {
         dir.multiplyScalar(1 / dl); rc.set(from, dir); rc.near = 0; rc.far = Math.min(0.35, dl);
-        const hit = rc.intersectObjects(meshes, false).length > 0;
+        const hits = rc.intersectObjects(meshes, false), hit = hits.length > 0;
         Lg.rayN++;
-        if (hit) { if (L.calmed) Lg.rayCalm++; else Lg.rayFight++; if (Lg.rayAt.length < 30) Lg.rayAt.push(+t.toFixed(2)); }
+        if (hit) { if (L.calmed) Lg.rayCalm++; else Lg.rayFight++; if (Lg.rayAt.length < 30) Lg.rayAt.push(+t.toFixed(2));
+          const o = hits[0].object, k = (o.name || o.type) + (o.isInstancedMesh ? '#' + hits[0].instanceId : '') + (o.geometry && o.geometry.attributes.position ? ':' + o.geometry.attributes.position.count : ''); Lg.rayHit[k] = (Lg.rayHit[k] || 0) + 1; }
       }
+    }
+    if (f % 12 === 0 && L.parts && L.parts.shell && L.standE > 0.05) {
+      const SP = L.parts.shell.geometry.attributes.position, mw = L.parts.shell.matrixWorld; let low = 1e9;
+      for (let k = 0; k < SP.count; k += 7) { from.fromBufferAttribute(SP, k).applyMatrix4(mw); low = Math.min(low, from.y - terrainH(from.x, from.z, 0)); }
+      const ph = !L.calmed ? (L.standE > 0.9 ? 'fight' : null) : (L.standE > 0.9 ? 'home' : 'settle');
+      if (ph) g.shellClr[ph] = Math.min(g.shellClr[ph], +low.toFixed(2));
     }
     let lit = false, dmin = 1e9;
     for (const s of L.sigils) if (s.lit) { lit = true; dmin = Math.min(dmin, s.grp.position.distanceTo(cam.position)); }
@@ -411,7 +421,7 @@ if (GATE) {
   console.log('GATE', gateRed ? 'RED' : 'GREEN', JSON.stringify({
     wash: { booked: g.washN, red: g.washRed, meanBlown: g.washN ? +(g.washSum / g.washN).toFixed(4) : 0, maxBlown: +g.washMax.toFixed(3), maxAt: g.washMaxAt,
       meanLuma: g.washN ? +(g.washMeanLuma / g.washN).toFixed(1) : 0, verdict: washRed ? `RED (${g.washRed} frames > ${WASH_BLOWN} blown)` : 'GREEN', at: g.washAt.slice(0, 12) },
-    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' } }));
+    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' }, shellClr: g.shellClr }));
 }
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const cons = await c.console();

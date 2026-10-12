@@ -1141,68 +1141,12 @@ const DECK_PIVOT = 0.4;
 // to stay clear before easing back out, so legs walking through it don't pump it. Under her
 // shell the lifts run into her belly and are refused; the lens stays low between her legs,
 // sprung, and tips up a little at the underside (the wards are there).
-// THE SWING (velfix 2026-10-12; Michael's recorded play-through: after the calm, as she walked home and
-// settled, a dark wedge covered half the frame - the lens in her leg). The boom above only ever looked
-// STRAIGHT BEHIND him: craned, dropped or pulled in to minD, and the guard below accepted the inside of
-// her at minD ("a moment inside it beats the inside of the bonnet"). Settling beside him, her rim and
-// legs come down over that whole line (measured on baa7f88: the lens inside her on 48-52 frames of each
-// post-calm walk, at minD on a drop lift with her shell over it) while a line 30-100 deg round him was
-// clear to its full length. So when the line behind him is blocked short of the stop (clear < minD +
-// swNeed at CRECAM.margin), the boom's BEARING swings round him: each bearing in CRE_SWINGS at the plain
-// lifts is walked the same way, the longest clear line wins, less swCost u per radian from where the lens
-// is (it goes the short way, to the near side). The swing rides a critically-damped spring (swW /s, no
-// cut), keeps the target while its line stays clear, and goes home once the line behind him has been
-// clear past swOk x base for `hold` s. The look's lead (6 u ahead of him) shrinks by cos(swing), so a
-// lens off his shoulder still frames him. Away from her, on the deck and in the open crack it is 0.
-// The guard's LAST RESORT (minIn): when even the stop is inside her, the lens may come in to minIn u
-// off his bonnet top rather than sit in her. And the DROPS are tried only while he is UNDER her shell
-// (BODY.under: the hanging clutch they were made for): at her rim a drop ran the lens down through her
-// settling rim and, at minD, into his own back. __crecam.state(): sw, swT, swings.
-const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2,
-  swNeed: 0.3, swOk: 0.6, swCost: 1.5, swW: 3.2, minIn: 1.0 };
+const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2 };
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
 // helmet is against the eggs and every rise runs into them, so the lens goes level or low
 // behind him instead (never under the floor's clearance)
 const CRE_LIFTS = [0, 1.4, 2.8, 4.2, -1.3, -2.4];
-const CRE_SWINGS = [0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0], CRE_SW_LIFTS = [0, 1.4, 2.8];
 let creLift = 0, creLiftV = 0, creLiftT = 0, creK = 0, creKV = 0, creHold = 1e9, creHoldT = 0, creUnder = 0, creStops = 0, creEggs = 0, creEggFail = 0;
-let creSw = 0, creSwV = 0, creSwT = 0, creSwHold = 0, creSwings = 0;
-const _cb0 = V3(), _swB = V3();
-// `src` turned `a` rad about world up (the swing's bearing)
-function swingBack(out, src, a) {
-  const c = Math.cos(a), sn = Math.sin(a), x = src.x, z = src.z;
-  return out.set(x * c + z * sn, src.y, -x * sn + z * c);
-}
-// clear length (u, along the boom's horizontal reach `base`) of the line at swing `off`, lift `lift`
-function creLineLen(off, lift, base) {
-  swingBack(_swB, _cb0, off);
-  camTo.copy(_swB).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + lift - DECK_PIVOT;
-  return base * creBoomClear(_piv, camTo);
-}
-// THE SWING's pick, once a frame while she is near (see CRECAM): `lenNow` is this frame's line (the
-// lens's own bearing, the lift chosen), clear length u. _piv is his bonnet top.
-function creSwingPick(dt, base, lenNow) {
-  // home: the line straight behind him (at the lift chosen) good for `hold` s
-  if (creSwT !== 0) {
-    if (creLineLen(0, creLiftT, base) >= CRECAM.swOk * base) { creSwHold += dt; if (creSwHold > CRECAM.hold) { creSwT = 0; creSwHold = 0; } }
-    else creSwHold = 0;
-  }
-  if (lenNow >= CRECAM.minD + CRECAM.swNeed) return;
-  // the target's own line still good: ride there
-  const tgtLen = creSwT === creSw ? lenNow : creLineLen(creSwT, 0, base);
-  if (creSwT !== 0 && tgtLen >= CRECAM.swOk * base) return;
-  let best = creSwT, bestS = -1e9, bestLen = 0;
-  for (let i = 0; i < CRE_SWINGS.length; i++) {
-    const off = CRE_SWINGS[i];
-    for (let j = 0; j < CRE_SW_LIFTS.length; j++) {
-      const len = creLineLen(off, CRE_SW_LIFTS[j], base);
-      const sc = len - CRECAM.swCost * Math.abs(off - creSw);
-      if (sc > bestS) { bestS = sc; best = off; bestLen = len; }
-      if (len >= base - 1e-3) break;            // (a full line at this bearing: the higher lifts can't beat it)
-    }
-  }
-  if (best !== creSwT && bestLen > Math.max(lenNow, tgtLen) + 1.0) { creSwT = best; creSwHold = 0; creSwings++; }
-}
 function creHit(from, boom, f, m) {
   _bp.copy(from).addScaledVector(boom, f);
   return bodyBlocked(_bp.x, _bp.y, _bp.z, m);
@@ -1255,8 +1199,7 @@ function bossFrame(dt) {
   bossLift = BOSSCAM.lift * bossK * (1 - creUnder);
 }
 window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)) }) };
-window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail,
-  sw: +creSw.toFixed(3), swT: creSwT, swings: creSwings, body: Object.assign({}, BODY) }) };
+window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -1637,9 +1580,6 @@ function updateCamera(dt, t, fwd) {
     const pb = player.pitch + (BOSSCAM.boomPitch - player.pitch) * bossK, cp = Math.cos(pb);
     camBack.set(-cp * Math.sin(player.yaw), -Math.sin(pb), -cp * Math.cos(player.yaw));
   }
-  // (velfix) THE SWING (CRECAM): the boom's bearing round him while her body fills the line behind
-  _cb0.copy(camBack);
-  if (creSw !== 0) swingBack(camBack, _cb0, creSw);
   camKick = Math.max(0, camKick - dt / 0.62);
   camKickPunch = Math.max(0, camKickPunch - dt / 0.34);
 
@@ -1713,7 +1653,7 @@ function updateCamera(dt, t, fwd) {
       for (let i = 0; i < CRE_LIFTS.length; i++) {
         const L = CRE_LIFTS[i];
         camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + L - DECK_PIVOT;
-        if (L < 0 && (!BODY.under || _piv.y + camTo.y < shutFloorY(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3)) continue;
+        if (L < 0 && _piv.y + camTo.y < shutFloorY(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
         const f = creBoomClear(_piv, camTo, CRECAM.margin + (L < creLiftT ? 0.25 : 0));
         if (f >= 1) { bestL = L; bestF = 2; break; }
         if (L === creLiftT) curF = f;
@@ -1722,8 +1662,7 @@ function updateCamera(dt, t, fwd) {
       if (bestF < 2 && curF >= 0 && bestF < curF + 0.12) bestL = creLiftT;
       creLiftT = bestL;
       camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + creLift - DECK_PIVOT;
-      const cwRaw = base * creBoomClear(_piv, camTo), cw = Math.max(CRECAM.minD, cwRaw);
-      if (!inCrack) creSwingPick(dt, base, cwRaw);
+      const cw = Math.max(CRECAM.minD, base * creBoomClear(_piv, camTo));
       // in at once; out only once the line has stayed clear for a beat
       if (cw < creHold - 0.05) { creHold = cw; creHoldT = 0; }
       // (while she is hammering the claw crosses the line every blow: the boom stays in for a
@@ -1738,10 +1677,6 @@ function updateCamera(dt, t, fwd) {
     if (creLiftT === 0 && Math.abs(creLift) < 1e-3 && Math.abs(creLiftV) < 1e-2) creLift = creLiftV = 0;
     creUnder += (underT - creUnder) * Math.min(1, 1.6 * dt);
     if (creUnder < 1e-4 && underT === 0) creUnder = 0;
-    // THE SWING's spring (applied to camBack from the next frame): home away from her, in the open crack, on deck
-    if (!near || inCrack) { creSwT = 0; creSwHold = 0; }
-    { const ws = CRECAM.swW; creSwV += (ws * ws * (creSwT - creSw) - 2 * ws * creSwV) * h; creSw += creSwV * h;
-      if (creSwT === 0 && Math.abs(creSw) < 1e-3 && Math.abs(creSwV) < 1e-3) creSw = creSwV = 0; }
   }
   // In fast (an obstacle must never be clipped through), out on a critically-damped
   // spring: the old first-order ease left the wall at full speed, a visible kink every
@@ -2074,10 +2009,7 @@ function updateCamera(dt, t, fwd) {
     // few centimetres is invisible, a frame inside the eggs is not), and may come nearer his
     // helmet than minD to do it (under the hanging mass his bonnet is against it)
     let eggs = inClutch(camera.position.x, camera.position.y, camera.position.z, 0.05) > 0;
-    // (velfix) the stop itself inside her: the lens may come in to minIn off his bonnet rather than sit in her
-    let stop = eggs ? 1.0 : CRECAM.minD;
-    if (!eggs && cl > CRECAM.minIn) { _bp.copy(_piv).addScaledVector(camTo, Math.min(1, stop / cl)); if (bodyBlocked(_bp.x, _bp.y, _bp.z, 0.15)) stop = CRECAM.minIn; }
-    const f = Math.max(Math.min(1, stop / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
+    const f = Math.max(Math.min(1, (eggs ? 1.0 : CRECAM.minD) / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
     _bp.copy(_piv).addScaledVector(camTo, f);
     // (a lens drawn out of her shell or a leg must not be drawn INTO the eggs on the way: the
     // sprung step toward its clear point is tested, and if it lands in them it snaps instead)
@@ -2103,7 +2035,7 @@ function updateCamera(dt, t, fwd) {
   // mouse lag, which is far more objectionable than a little jitter.
   // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
   // went (it swung the aim with every kick's surge).
-  camAim.copy(player.pos).addScaledVector(fwd, 6 * (creSw === 0 ? 1 : Math.max(0, Math.cos(creSw)))).add(camLead);
+  camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
   camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder - THROAT_CAM.aim * throatAim;
   // (ritefair) the look leans toward her (bossFrame): toward her belly / nearest dark ward, by a
   // share of the angle, capped, and only while she is in front of the lens (she is never

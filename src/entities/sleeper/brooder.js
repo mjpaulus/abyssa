@@ -175,6 +175,18 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
 // u/s straight up: it launched him over her back); a throw never carries him into the crack (safeThrow).
 export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
+// SHE DOES NOT LIE DOWN ON HIM (velfix 2026-10-12; Michael's recorded play-through: after the calm, as she
+// walked home and settled, the lens went into her leg). Two of the fight's protections ended at the calm:
+// her shell's STAND.clear over the ground (measured on baa7f88: 3.36 u at the lowest through the fight, 0.35
+// on the walk home) and her not settling onto him (the 'under' test ran once, as she turned home, at 0.95 R
+// from her centre: her shell reaches 1.29 R (19.8 u) and her standing feet 22-28 u, so with him at her rim
+// at 16.9 u she lay down on him; his bonnet ended up inside her leg capsules, every lens line from it in
+// her, and her settling body lifted him onto her back). Calmed, she now keeps her shell's clearance while she
+// stands (it eases down with the settle), and she will not settle while he is on her ground: within her
+// shell's reach + `release` u (and not up on her back), held `hold` s clear before she lies down; a settle
+// already under way stands back up if he comes within her reach + `rise` u. Post-calm only: the fight and
+// its difficulty are untouched.
+export const SETTLE = { release: 2.5, rise: 1.0, hold: 1.0 };
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -1427,7 +1439,9 @@ function poseAll(L, dt, player) {
   // (ritefair) awake and not stilled, her SHELL keeps STAND.clear u over whatever ground is under
   // it (a bank under her prow had the rim 0.3-0.7 u off the floor: the lane in was shut); her legs
   // still plant on the floor, the doors between them stay open. Stilled, she settles as before.
-  const clr = !L.dormant && !L.calmed ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
+  // (velfix, SETTLE) calmed too: on the walk home it held 0.35 u (SOLE_CLR) and her rim came down on him; it eases
+  // down with the settle (standE)
+  const clr = !L.dormant ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
   const bed = lerp(SOLE_BED_DEEP * R, -clr, smooth(hc, 0, 0.7));
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
@@ -1528,6 +1542,15 @@ function poseAll(L, dt, player) {
   for (let k = 0; k < COLL.length; k++) L.spine[k].set(COLL[k][0], COLL[k][1], COLL[k][2]).applyMatrix4(b.matrixWorld);
   L.head.set(0, 0.10, 0.80).applyMatrix4(b.matrixWorld);
   publishCols(L);
+}
+
+// (velfix, SETTLE) is he on the ground her body comes down on: within her shell's reach (shell plan, R x
+// rMax 1.29) + m u of her centre, and not up on her back (there he slides off; she never lifts him)
+function onHerGround(L, player, m) {
+  if (!player) return false;
+  if (player.pos.y > L.bodyY + 0.15 * L.R) return false;
+  const reach = (L.shellProx ? L.shellProx.rMax : 1.3) * L.R;
+  return Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < reach + m;
 }
 
 // THE BURN (see BURN): over the pose the ward block just wrote, every frame. Lit / remembered / calmed wards only.
@@ -1808,7 +1831,12 @@ export function updateBrooder(L, dt, t, player) {
     let dA = L.lairYaw - L.yaw; dA = Math.atan2(Math.sin(dA), Math.cos(dA));
     const under = (Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY)
       || (L.brood && player.pos.y < L.bodyY && L.brood.onBed(player.pos));
-    if (Math.abs(dA) < 0.12 && !under) { L.homeTurn = false; L.standTarget = 0; }
+    // (velfix) nor on her ground: her whole reach, not 0.95 R, and clear for SETTLE.hold s first
+    L.offT = under || onHerGround(L, player, SETTLE.release) ? 0 : (L.offT || 0) + dt;
+    if (Math.abs(dA) < 0.12 && L.offT > SETTLE.hold) { L.homeTurn = false; L.standTarget = 0; }
+  } else if (L.calmed && L.standTarget === 0 && L.stand > 0.02 && onHerGround(L, player, SETTLE.rise)) {
+    // (velfix) settling, and he has come onto her ground: she stands back up over him and waits
+    L.homeTurn = true; L.standTarget = 1; L.offT = 0;
   } else if (hunt && L._pdT < 90) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
     // given up, she sweeps her front slowly across the cloud, searching.
