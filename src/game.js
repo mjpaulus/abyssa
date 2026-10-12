@@ -1148,7 +1148,7 @@ const DECK_PIVOT = 0.4;
 // after the calm the guard also tests where the lens and her limbs will be `ahead` frames on (the lens on its own
 // velocity; each limb capsule on its last frame's motion, bodyCols.js bodyBlockedAhead), and its same sprung pull
 // starts before contact, toward the part of the line clear of both. Before the calm nothing changes: the fight's
-// lens is baa7f88's (changing it changed the fight itself: the camera-coupled render, 6 of 12 runs).
+// lens is baa7f88's, and the fight (and her difficulty) is left exactly as it was.
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2 };
 let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his

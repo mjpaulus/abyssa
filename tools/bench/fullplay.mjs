@@ -436,6 +436,9 @@ const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != nul
   camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
+// (velfix) the quality ladder as the run ended: the real loop's perf judge runs before the stepped loop takes over, and a
+// loaded machine (several of these at once) can shed passes, which changes the render the fight's colliders read back
+ledger.perf = await c.ev(`window.__perf ? window.__perf.state() : null`);
 console.log('LEDGER', JSON.stringify(ledger));
 let gateRed = false;
 if (GATE) {
