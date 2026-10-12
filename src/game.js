@@ -1147,11 +1147,13 @@ const DECK_PIVOT = 0.4;
 // her for a frame (1 frame in 1 of 4 fullplay runs once she no longer lay down on him; baa7f88: 26-59 a run). So
 // after the calm the guard also tests where the lens and her limbs will be `ahead` frames on (the lens on its own
 // velocity; each limb capsule on its last frame's motion, bodyCols.js bodyBlockedAhead), and its same sprung pull
-// starts before contact, toward the part of the line clear of both. (velmerge 2026-10-12) The look-ahead now runs
-// whenever she is awake, the fight too: "No safe spot" (velhard) has her drop and sweep a leg past him, and her
-// claws crossed the lens for 1-5 frames in the hunt. Paused, it is off (her limbs' last motion is stale).
+// starts before contact, toward the part of the line clear of both. Before the calm the fight's lens is unchanged
+// (a fight-time look-ahead pulled the lens to minD more often: velfix measured it inconclusive). Paused, it is off
+// (her limbs' last motion is stale).
+const SALCAP = { lo: -1.25, hi: 0.55, r: 1.05 };   // his body for the lens (player.pos is ~1.35 over his boots)
+let salCapPush = 0;
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2 };
-let creAheadK = 0;   // > 0 only inside the lens guard while she is awake: creHit also tests her limbs that many frames on
+let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
 // helmet is against the eggs and every rise runs into them, so the lens goes level or low
 // behind him instead (never under the floor's clearance)
@@ -1164,7 +1166,7 @@ function creHit(from, boom, f, m) {
 // (velfix) after the calm: will the lens be in her `ahead` frames on (it on its velocity, her limbs on theirs)?
 function creLensAhead(dt) {
   const k = CRECAM.ahead;
-  if (!(k > 0) || !lev || lev.dormant || paused) return false;
+  if (!(k > 0) || !lev || !lev.calmed || paused) return false;
   _bp2.copy(camera.position).addScaledVector(camVel, dt * k);
   return bodyBlockedAhead(_bp2.x, _bp2.y, _bp2.z, 0.15, k) || bodyBlocked(_bp2.x, _bp2.y, _bp2.z, 0.15);
 }
@@ -1231,7 +1233,7 @@ function bossFrame(dt) {
 }
 let calmPitchK = 0, calmPitchV = 0;
 window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)), calmPitch: +calmPitchK.toFixed(3) }) };
-window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, body: Object.assign({}, BODY) }) };
+window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -2033,7 +2035,7 @@ function updateCamera(dt, t, fwd) {
   // drawn back along its own line toward his helmet, quickly but sprung (a cut against a
   // moving leg read as a snap), and its velocity relative to him is bled.
   if (creK > 0 && (bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0.15) || creLensAhead(dt))) {
-    creAheadK = lev && !lev.dormant ? CRECAM.ahead : 0;
+    creAheadK = lev && lev.calmed ? CRECAM.ahead : 0;
     _piv.copy(player.pos); _piv.y += DECK_PIVOT;
     camTo.copy(camera.position).sub(_piv);
     const cl = camTo.length();
@@ -2112,6 +2114,20 @@ function updateCamera(dt, t, fwd) {
   }
   // (Task 6) wrenching the harpoon free, his eyes are on the iron, every frame
   if (lev && lev.rite && lev.rite.lookAt && lev.rite.wrenching) diverLookAt(lev.rite.lookAt);
+  // THE LENS IS NEVER INSIDE SAL (velmerge 2026-10-12: Velkath's drop throws him flat out at speed, often straight back
+  // at the lens, and the sprung follow arrived a moment later: the recorded fight had frames of his own sleeve). His
+  // body is a capsule (boots to bonnet); the lens is pushed out of it along the perpendicular, carried with him.
+  if (state === 'play' && !player.onDeck) {
+    const P = player.pos, y0 = P.y + SALCAP.lo, y1 = P.y + SALCAP.hi;
+    const cy = clamp(camera.position.y, y0, y1);
+    _bp.set(camera.position.x - P.x, camera.position.y - cy, camera.position.z - P.z);
+    const dl = _bp.length();
+    if (dl < SALCAP.r) {
+      if (dl < 1e-4) _bp.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw)); else _bp.multiplyScalar(1 / dl);
+      camera.position.set(P.x, cy, P.z).addScaledVector(_bp, SALCAP.r);
+      salCapPush++;
+    }
+  }
   camLook.lerp(camAim, Math.min(1, 40 * dt));
   camera.lookAt(camLook);
   if (hk > 0) {

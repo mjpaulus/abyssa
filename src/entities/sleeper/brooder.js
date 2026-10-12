@@ -154,7 +154,7 @@ export const THUMP = { k: 1, near: 12, far: 110 };
 //            s to a banked ember (the glyph keeps `ember` of its burn)
 //   flash    the light-up flash's extra light (common.js wardFlashes, 360 cd at its peak as shipped) x flash: with him
 //            at the ward it flooded her belly past the burn (6% of the frame blown outside it at the calm's flash)
-export const BURN = { scatter: 0.08, scatterFar: 0.6, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35, flash: 0.5 };
+export const BURN = { scatter: 0.08, scatterFar: 0.6, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35, flash: 0.5, closeD: [1.5, 6], closeK: 0.55, closeFlash: 0.2 };
 // (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
 // crouched too low and I kept colliding") RETIRED: drop 0.16 -> 0, lean 0.16 -> 0 (measured
 // before: the rim came down to 0.4-1.3 u over the floor on the lanes in as the spring ramped,
@@ -225,7 +225,7 @@ export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35,
 export const NOSAFE = {
   after: 3.0, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, again: 1.0,
   tele: 1.4, brace: 0.7, fall: 0.16, depth: 3.6, rise: 0.45,
-  hitR: 0.6, sweepR: 1.1, outClean: 1.5, outTear: 0.45,
+  hitR: 0.6, sweepR: 1.1, outClean: 1.5, outTear: 0.9,
   knock: 24, sweepKnock: 24, up: 0.10, stag: 0.9, sweepStag: 0.6, stagK: 0.85,
   turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 1.2
 };
@@ -1606,6 +1606,7 @@ function onHerGround(L, player, m) {
 function wardBurn(L, haloK) {
   const cp = camera.position;
   const ck = L.calmed ? Math.max(0, 1 - L.calmT / BURN.calmT) : 1;
+  let dMin = 1e9;
   for (const g of L.sigils) {
     const b = g.burn;
     if (!b) continue;
@@ -1620,10 +1621,16 @@ function wardBurn(L, haloK) {
     b.position.copy(g.grp.position);
     b.scale.setScalar(Math.max(0.001, haloK * BURN.halo * (1 + 0.06 * Math.sin(g.pulse * 3))));
     b.material.opacity = BURN.op * ck * smooth(d, BURN.near[0], BURN.near[1]);
-    const k = BURN.glyph * (BURN.ember + (1 - BURN.ember) * ck), T = BURN.tint;
+    // (velmerge) up close the gold glyph drops under unity (no bloom wash with the lens 1-4 u from it: the
+    // recorded fight had 64% of the frame blown at a light-up with the lens under her belly)
+    const kn = smooth(d, BURN.closeD[0], BURN.closeD[1]);
+    if (d < dMin) dMin = d;
+    const k = BURN.glyph * (BURN.ember + (1 - BURN.ember) * ck) * (BURN.closeK + (1 - BURN.closeK) * kn), T = BURN.tint;
     g.rune.material.color.setRGB(k * T[0], k * T[1], k * T[2]);
     g.rune.material.opacity = 1;
   }
+  // (velmerge) the light-up flash's extra light, x flash, and less again with the lens right at a lit ward
+  L.flashK = BURN.flash * (BURN.closeFlash + (1 - BURN.closeFlash) * smooth(dMin, BURN.closeD[0], BURN.closeD[1]));
 }
 
 // HER BODY IS SOLID (brooderfix): the live pose as collision volumes (bodyCols.js) — every
@@ -2270,7 +2277,6 @@ export function updateBrooder(L, dt, t, player) {
   // a ward lit is a wound: she flinches - rears back, claws snatched in - and it rings out
   if (ev.sigilLit) { L.seen = true; L.blindT = 0; L.lastSeen.copy(player.pos); L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
   wardBurn(L, haloK);
-  L.flashK = BURN.flash;
   // (velhard) THE WOUND ENDS THE DASH: a ward lit from under her and her count jumps to NOSAFE.wound s short
   // of the drop (each ward is a dash in and out, not a float across her belly lighting three)
   if (ev.sigilLit && L.nsUnder && !L.calmed && !L.drop) L.nsT = Math.max(L.nsT || 0, NOSAFE.after - NOSAFE.wound);
