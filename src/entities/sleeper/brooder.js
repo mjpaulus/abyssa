@@ -153,22 +153,23 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // NO SAFE SPOT (velhard, Michael 2026-10-12: "you were right beating her is too easy now"; he ruled
-// "No safe spot", VELHARD-BRIEF.md). The refuge under her body is gone (and with it the stance shift):
-// under her (plan within `under` R, below her shell) a counter runs at 1/s, and under her rim (out to
-// `rim` R, where no ward is in reach) at `rimK`/s, so nowhere under her is a place to wait; past `after` s she DROPS: a
-// telegraph of `tele` s (her shell shudders, silt sifts off her plates, a deep groan, her legs brace and
-// lift her `brace` u), then the body slam (`fall` s, down `depth` u, stopped over his helmet, her shell's
-// ground clearance let go for it), then she rises back to her standing height in `rise` s (no lingering
-// crouch: Michael rejected it). Under her at the impact (plan within `hitR` R, or, caught loitering under
-// her rim, within 0.1 R outside where she found him there, so a quick step out still clears it): deep under (inside
-// `slamR` R) the shell lands on him, at her edge the leg on his side SWEEPS him out; either way the dress
-// tears (game.js's slam path, SLAM_GAP), he staggers (`stag` s at `stagK`) and is thrown flat out from
-// under her (`knock` u/s, `up` vertical share, never toward the crack: safeThrow). The counter falls at
-// `decay`/s once he is out. She keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5, which no
-// diver could circle), and for `slowT` s after a landed hammer blow or a drop she turns at only `slowK`
-// of it: the dash-in window. `reach`: the ward touch (7 since ritefair). `wound`: a ward lit from under her
-// and her count jumps to `wound` s short of the drop, and her wards do not take his hand from the
-// telegraph to the end of the rise, so each ward is its own dash in and out.
+// "No safe spot", VELHARD-BRIEF.md). The refuge under her body is gone (and with it the stance shift).
+// THE COUNT: deep under her (plan within `under` R, below her shell) it runs at 1/s, under her rim (out to
+// `rim` R, where no ward is in reach) at `rimK`/s, so nowhere under her is a place to wait; it falls at
+// `decay`/s once he is out. Past `after` s THE DROP: a telegraph of `tele` s (her shell shudders, silt
+// sifts off her plates, a deep groan, the ground rumbles, her legs brace and lift her `brace` u), the body
+// slam (`fall` s, down to `depth` u, stopped over his helmet; her ground clearance rides it), then she rises
+// back to her standing height in `rise` s (no lingering crouch: Michael rejected it). Under her at the
+// impact (plan within `hitR` R; caught loitering under her rim, within 0.1 R outside where she found him, so
+// a quick step out still clears it): deep under (inside `slamR` R) the shell lands on him, nearer her edge
+// the leg on his side SWEEPS him out; either way the dress tears (game.js's slam path, SLAM_GAP), he staggers
+// (`stag` s at `stagK`) and is thrown flat out from under her (`knock` u/s, `up` vertical share, never toward
+// the crack: safeThrow). THE TURN: she keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5); a
+// diver hauling round her close beats it, a walker does not. THE WINDOW: for `slowT` s after a hammer blow
+// struck down her front lane at him, and after each drop, she turns at only `slowK` of it. `reach`: the ward
+// touch (7 since ritefair). THE WOUND (beyond the ruling, to make each ward its own dash): a ward lit from
+// under her jumps her count to `wound` s short of the drop, and her wards take no touch from the telegraph
+// to the end of the rise.
 export const NOSAFE = {
   after: 2.4, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, tele: 0.7, brace: 0.45, fall: 0.16, depth: 3.6, rise: 0.45,
   hitR: 0.82, slamR: 0.45, knock: 24, up: 0.10, stag: 0.9, stagK: 0.85,
