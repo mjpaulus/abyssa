@@ -185,7 +185,7 @@ export const NOSAFE = {
   tele: 1.4, brace: 0.7, fall: 0.16, depth: 3.6, rise: 0.45,
   hitR: 0.6, sweepR: 1.1, outClean: 1.5, outTear: 0.45,
   knock: 24, sweepKnock: 24, up: 0.10, stag: 0.9, sweepStag: 0.6, stagK: 0.85,
-  turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 0.6
+  turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 1.2
 };
 const SHUT_LINE = 'SHE BEARS DOWN. THE WARDS ARE SHUT TO YOU.';
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
