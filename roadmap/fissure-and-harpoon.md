@@ -1,8 +1,8 @@
 ---
 title: The fissure and the harpoon
-status: wip
+status: done
 tags: world, leviathan, zone 0, design, sal
-updated: 2026-10-11
+updated: 2026-10-12
 ---
 Each zone's rift is now a carved crack in the seabed, choked by rubble Sal can stand on, that pours open with a cold pale light when the zone's sleeper is calmed. Velkath wakes when Sal pulls an old harpoon from her side (her clutch stays, the brood rule is gone), and the harpoon then becomes his blade.
 
@@ -17,3 +17,4 @@ Each zone's rift is now a carved crack in the seabed, choked by rubble Sal can s
 
 ## Log
 - 2026-10-11 — built on branch fissure (Tasks 1-7 + 5b, each reviewed; final whole-branch review: 0 Critical, 2 Important fixed in the final wave); played and recorded.
+- 2026-10-12 — Merged to main (67b865e, --no-ff) and pushed, at Michael's call ("1, merge and push"). Fresh load of the merged tree: 14 lights, __lev.fp 15ce888c/c938fe6e/652d0412, ridge 3b526986, __safeFailed/__shaderFailed []; final suites fissure-probe 25/25, harpoon-probe 10/10. Moved wip -> done.
