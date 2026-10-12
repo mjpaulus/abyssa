@@ -45,6 +45,8 @@ import { fissureDist } from '../../world/fissureShape.js';
 import { emitDust } from '../../world/footfx.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as G from './brooderGeo.js';
+// (velfix) the clutch's pose after the calm moves at most this much a second (the re-rise's whole swing in ~0.6 s)
+const ST_CALM_RATE = 1.0;
 
 const TAU = Math.PI * 2;
 const RB = 0.0025;                      // a sparse (proud) bead's radius, shell units (x R 15.4 = 0.039 u: her eggs, true to her scale)
@@ -898,7 +900,11 @@ export function makeBrood(L, idx, trailFrom) {
     B.t += dt;
     // calmed she keeps it clamped under her (it does not spill again where she settles)
     // (home on her bed, at the heading she was seated on, it spills again as she settles)
-    B.st = L.calmed && (L.homeTurn || L.walkTo || Math.abs(Math.atan2(Math.sin(L.yaw - (L.lairYaw ?? L.yaw)), Math.cos(L.yaw - (L.lairYaw ?? L.yaw)))) > 0.2) ? 1 : L.standE;
+    const stT = L.calmed && (L.homeTurn || L.walkTo || Math.abs(Math.atan2(Math.sin(L.yaw - (L.lairYaw ?? L.yaw)), Math.cos(L.yaw - (L.lairYaw ?? L.yaw)))) > 0.2) ? 1 : L.standE;
+    // (velfix) calmed, the mass eases to its pose at ST_CALM_RATE /s: a settle that stands back up over him
+    // (brooder.js SETTLE) asked for 'clamped' mid-spill and the eggs jumped 0.41 -> 1.0 in one frame. Before the
+    // calm it is exactly as it was.
+    B.st = L.calmed && B.st != null ? B.st + clamp(stT - B.st, -ST_CALM_RATE * dt, ST_CALM_RATE * dt) : stT;
     liveLobes();
     const uN = matN.userData.u, uS = sMat.userData.u;
     uN.uStand.value = uS.uStand.value = B.st;

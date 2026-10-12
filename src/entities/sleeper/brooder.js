@@ -1706,8 +1706,10 @@ export function updateBrooder(L, dt, t, player) {
   L.mPh = L.mPh + dt * (3.0 + 3.2 * L.agitation) * (0.8 + 0.3 * nz(L.t * 0.2, 23));
 
   // ---- stand / threat easing: she takes ~6 s to rise and ~4 s to settle ----
-  const rising = L.standTarget > L.stand;
-  L.rising = rising && !L.calmed;                     // (game.js: limbs unfolding past him are a shove, not a slam)
+  // (velfix) calmed, standing back up over him (SETTLE) is quiet: no wake (no leg puffs, no sink-and-heave, no
+  // shudder or quake, no silt pouring off her back), at the settle's own rate
+  const rising = L.standTarget > L.stand && !L.calmed;
+  L.rising = rising;                                  // (game.js: limbs unfolding past him are a shove, not a slam)
   const rate = rising ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
