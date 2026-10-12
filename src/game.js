@@ -1219,7 +1219,8 @@ function bossFrame(dt) {
   // lens sat inside his helmet (measured 0.3-0.6 u off his eye, blown 13-15% of the frame). calmPitchK keeps that one
   // rule (not the lift, not the lean) while she is calmed, up and near, on the same spring. Zero before the calm.
   let ct = 0;
-  if (L && L.kind === 'brooder' && L.calmed && !L.dormant && (L.standE || 0) > 0.3 && deckK === 0 && L.pos) {
+  // (not in the open crack: the throat lens owns the boom there; last frame's throatOn, the spring keeps it smooth)
+  if (L && L.kind === 'brooder' && L.calmed && !L.dormant && (L.standE || 0) > 0.3 && deckK === 0 && !throatOn && L.pos) {
     const d = Math.hypot(L.pos.x - player.pos.x, L.pos.z - player.pos.z);
     ct = 1 - clamp((d - BOSSCAM.r * 0.8) / (BOSSCAM.r * 0.4), 0, 1);
   }

@@ -32,7 +32,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -183,14 +183,16 @@ export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, 
 // walked home and settled, the lens went into her leg). Two of the fight's protections ended at the calm:
 // her shell's STAND.clear over the ground (measured on baa7f88: 3.36 u at the lowest through the fight, 0.35
 // on the walk home) and her not settling onto him (the 'under' test ran once, as she turned home, at 0.95 R
-// from her centre: her shell reaches 1.29 R (19.8 u) and her standing feet 22-28 u, so with him at her rim
-// at 16.9 u she lay down on him; his bonnet ended up inside her leg capsules, every lens line from it in
-// her, and her settling body lifted him onto her back). Calmed, she now keeps her shell's clearance while she
-// stands (it eases down with the settle), and she will not settle while he is on her ground: within `release` u
-// of her shell's reach or of her limbs seen from above (bodyCols.js limbNearXZ: her claws fold in from 35 u) and
-// not up on her back, held `hold` s clear before she lies down; a settle already under way stands back up if he
-// comes within `rise` u of it. Post-calm only: the fight and its difficulty are untouched.
-export const SETTLE = { release: 2.5, rise: 1.0, hold: 1.0 };
+// from her centre: her shell reaches 1.29 R (19.8 u), so with him at her rim at 16.9 u she lay down on him; his
+// bonnet ended up inside her leg capsules, every lens line from it in her, and her settling body lifted him onto
+// her back). Calmed, she now keeps her shell's clearance while she stands (it eases down with the settle), and she
+// will not settle while he is within `release` u of her shell's own outline at his bearing (bodyCols.js
+// shellPlanNear; `plan` 0 = the old rMax circle) and not up on her back, held `hold` s clear before she lies down;
+// a settle already under way stands back up, quietly (no wake, the clutch eased), if he comes within `rise` u of
+// it. (`limbs` 1 also counts her limbs' plan: review M3, it kept her standing over a diver watching from 30 u,
+// her legs sprawled round the lens; off.) Her belly and egg mass are closed to him from below after the calm
+// (bodyCols.js CALMCOL, review C1). Post-calm only: the fight and its difficulty are untouched.
+export const SETTLE = { release: 1.5, rise: 0.5, hold: 1.0, limbs: 0, plan: 1 };
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -614,7 +616,7 @@ export function makeBrooder(idx, cfg) {
     grp.add(g);
     return g;
   });
-  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; }   // dev: the live sleeper object (motion probes); the burn's knobs
+  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; window.__settle = SETTLE; }   // dev: the live sleeper object (motion probes); the burn's knobs
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
@@ -1555,8 +1557,9 @@ function poseAll(L, dt, player) {
 function onHerGround(L, player, m) {
   if (!player) return false;
   if (player.pos.y > L.bodyY + 0.15 * L.R) return false;
+  if (SETTLE.plan) return shellPlanNear(player.pos.x, player.pos.y - 0.45, player.pos.z, m) || (SETTLE.limbs && limbNearXZ(player.pos.x, player.pos.z, m));
   const reach = (L.shellProx ? L.shellProx.rMax : 1.3) * L.R;
-  return Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < reach + m || limbNearXZ(player.pos.x, player.pos.z, m);
+  return Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < reach + m || (SETTLE.limbs && limbNearXZ(player.pos.x, player.pos.z, m));
 }
 
 // THE BURN (see BURN): over the pose the ward block just wrote, every frame. Lit and calmed wards (remembered: scatter only).
@@ -1842,7 +1845,7 @@ export function updateBrooder(L, dt, t, player) {
     // (velfix) nor on her ground: her whole reach, not 0.95 R, and clear for SETTLE.hold s first
     L.offT = under || onHerGround(L, player, SETTLE.release) ? 0 : (L.offT || 0) + dt;
     if (Math.abs(dA) < 0.12 && L.offT > SETTLE.hold) { L.homeTurn = false; L.standTarget = 0; }
-  } else if (L.calmed && L.brood && L.standTarget === 0 && L.stand > 0.02 && onHerGround(L, player, SETTLE.rise)) {
+  } else if (L.calmed && L.brood && SETTLE.rise >= 0 && L.standTarget === 0 && L.stand > 0.02 && onHerGround(L, player, SETTLE.rise)) {
     // (velfix) settling, and he has come onto her ground: she stands back up over him and waits
     L.homeTurn = true; L.standTarget = 1; L.offT = 0;
   } else if (hunt && L._pdT < 90) {
