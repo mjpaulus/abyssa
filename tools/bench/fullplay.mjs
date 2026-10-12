@@ -244,14 +244,16 @@ const GATE_JS = `(async () => {
     // the lens-in-Sal frames so far in this phase, calmed]
     if (so > ${WASH_BLOWN} || sh > ${WASH_CAP}) { g.washRed++; if (g.washAt.length < 60) g.washAt.push([+t.toFixed(2), +sh.toFixed(3), +so.toFixed(3),
       +Math.hypot(x - P.pos.x, y - P.pos.y - 0.4, z - P.pos.z).toFixed(2), +dmin.toFixed(1), wmin ? +Math.min(9, wmin.flashT).toFixed(2) : null,
-      L.calmed ? g.lens.salCalm : g.lens.salFight, !!L.calmed]); }
+      L.calmed ? g.lens.salCalm : g.lens.salFight, !!L.calmed]);
+      // (FP_WASHSHOT: the first few red frames after the calm stop the step so the node side can screenshot them)
+      if (window.__vfWashShot != null && L.calmed && window.__vfWashShot < 3 && !window.__vfWashNow) { window.__vfWashShot++; window.__vfWashNow = +t.toFixed(2); return false; } }
     if (sh > g.washMax) { g.washMax = sh; g.washMaxAt = +t.toFixed(2); }
     if (so > g.washOutMax) { g.washOutMax = so; g.washOutMaxAt = +t.toFixed(2); }
   };
   window.__vfGate = g; window.__vfBC = BC;
   return 1;
 })()`;
-if (GATE) { await c.ev(GATE_JS); if (process.env.FP_SNAP) await c.ev("(window.__vfSnap = true, 1)"); if (process.env.FP_STOPIN) await c.ev("(window.__vfStopIn = true, 1)"); }
+if (GATE) { await c.ev(GATE_JS); if (process.env.FP_SNAP) await c.ev("(window.__vfSnap = true, 1)"); if (process.env.FP_STOPIN) await c.ev("(window.__vfStopIn = true, 1)"); if (process.env.FP_WASHSHOT) await c.ev("(window.__vfWashShot = 0, 1)"); }
 // ---- (velfix) FP_STOP / FP_HOLD ----
 const STOP = +(process.env.FP_STOP || 0), HOLD = process.env.FP_HOLD === '1';
 let gf = 0;
@@ -287,6 +289,7 @@ async function stepN(n) {
   await stepN0(n);
   if (STOP && gf >= STOP * 3) await atStop();
   if (process.env.FP_STOPIN && await c.ev('!!window.__vfHalt')) await atStop();
+  if (process.env.FP_WASHSHOT) { const wt = await c.ev('window.__vfWashNow || 0'); if (wt) { await c.png(`${OUT}/${TAG}-washshot-${wt}.png`); await c.ev('(window.__vfWashNow = 0, 1)'); console.log('WASHSHOT', wt); } }
 }
 async function stepN0(n) {
   const R = RENDER ? ', { render: true }' : '';
