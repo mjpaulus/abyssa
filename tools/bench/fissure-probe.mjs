@@ -21,10 +21,10 @@ const fail = [];
 // u/s at both rates, and <= RISE_ON on EVERY frame with the shaft lens on (window or not; game.js THROAT_CAM.relVmax 45 + 1: the old shaft's
 // lens engages as he nears its floor: on 917d689 its target jumped up to 15 u in a frame and the lens flew in at
 // up to 133.8 u/s, 2.2 u a frame); the lens in the old crack's rock (inside its outline, under its heightfield,
-// him over it) <= RISE_HF in all (7cbcc49: 1033 over the reviewer's 32 rises; 917d689: 24 there, 32 here; now
+// him over it) <= RISE_HF in all (7cbcc49: 1033 over the reviewer's 32 rises; this probe on 70e775c: 38; now
 // 24); him HIDDEN (under the old floor, the lens over it) <= RISE_HID in all (a guard against the early
-// engagement trading rock for floor: 917d689 121, now 123, much of it beside the slot under the wall, pre-
-// existing); his lateral step <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own <= its 12 u/s; he came up.
+// engagement trading rock for floor: 70e775c 102, now 123 - the trade, Michael's eye; much of it beside the
+// slot under the wall, pre-existing). RED (this probe on 70e775c): 133.8 / 124.2 u/s, 19/24 and 11/16 over 60; his lateral step <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own <= its 12 u/s; he came up.
 const RISE_REL = 50, RISE_ON = 46, RISE_HF = 40, RISE_HID = 160;
 async function riseSet() {
   const rise = await c.ev(`(async () => {
