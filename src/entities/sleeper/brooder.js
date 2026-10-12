@@ -12,7 +12,7 @@
 //
 // This file is the body and its motion; the clutch and its rite are brood.js.
 import * as THREE from 'three';
-import { scene, envTexDeep as envTex } from '../../core.js';
+import { scene, camera, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
 import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
@@ -127,6 +127,30 @@ const HAMMER_T = 2.6;
 export const GLINT = { k: 0.9, scale: 1.0, near: 14, far: 130 };
 export const RIM = { k: 0.55, near: 16, far: 150, pow: 3 };
 export const THUMP = { k: 1, near: 12, far: 110 };
+// THE BURN (velfix 2026-10-12; Michael's recorded play-through: under her with lit wards the frame washed
+// white-green, 41-46 s, and again at 55-58 s as she walked home with all three lit and the lens under her belly).
+// Measured by A/B on the held frame (44.0 s, the lit ward 7 u from the lens; mean Rec.709 luma / share of pixels
+// over 230): as shipped 198 / 0.33; its light's in-scatter off (water.js lamp B) 125 / 0.06; the fogged halo off
+// 185 / 0.21; bloom off 174 / 0.21; the lit flash, embers and glyph ~0; the auto-exposure on its seabed floor
+// (x0.847: it could come down no further). Her pool lights never took the sigil kinds' scatter weight, so a lit ward
+// was a 140-180 cd lamp IN THE WATER at full weight (lamp-B gain ~1700, forty lanterns' worth), and its halo was the
+// idle ward's fogged sprite blown up to 3x her size (16.5 u at 0.8, additive): from under her the lens sat inside
+// both, and after the calm nothing faded either. Now a lit, flashing, remembered or calmed ward (an UNLIT ward is
+// untouched: how its idle glow reads is part of the rite's difficulty):
+//   scatter  its light's share of the in-scatter (the other kinds' wards run 0.04-0.05): the light is a burn on her
+//            shell and the sand under it, not a lamp in the water; scatterFar past scatterD (lens distance, u): from
+//            20-30 u off a modest warm haze round her is part of the read (a point lamp's in-scatter grows without
+//            bound as the lens nears it; a ward is a glyph on her shell, not a point)
+//   col      its light's colour while lit (warmer than the pool's 0xffe8a8: the water takes the red over a few u)
+//   halo/op  a warm glow (lib/textures.js warmGlow: fog off, its own distance fade, the glints' program) in place
+//            of the fogged halo: halo x size, opacity op, on the lit pose's throb; swell grows it with range as the
+//            murk grows a lamp's halo
+//   near     ...and faded out as the lens comes within near[1] of it, gone by near[0]: up close the light on her
+//            shell, the in-scatter and the glyph carry the ward; from 20-30 u the glow is the read
+//   glyph    the lit glyph burns warm gold over unity (bloom halates it): tint x glyph
+//   calmT    calmed: the light (120 - 8 calmT, as shipped), the glow and the glyph ease down together over calmT
+//            s to a banked ember (the glyph keeps `ember` of its burn)
+export const BURN = { scatter: 0.08, scatterFar: 0.35, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35 };
 // (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
 // crouched too low and I kept colliding") RETIRED: drop 0.16 -> 0, lean 0.16 -> 0 (measured
 // before: the rim came down to 0.4-1.3 u over the floor on the lanes in as the spring ramped,
@@ -488,6 +512,11 @@ export function makeBrooder(idx, cfg) {
     const s = SOCKETS[i - 1];
     w.local = V3(s.p[0], s.p[1], s.p[2]);
     w.q = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), V3(s.n[0], s.n[1], s.n[2]).normalize());
+    // THE BURN's glow (velfix): always in the scene at opacity 0, like the glints, so the shared warm-glow
+    // program is the one the boot built
+    w.burn = makeWarmGlow(0xffd49a, 0.001, { near: 30, far: BURN.far, nearW: 0, swell: BURN.swell, swellMax: BURN.swellMax });
+    w.burn.material.opacity = 0;
+    grp.add(w.burn);
     L.sigils.push(w);
   }
   // RITUAL, REMEMBERED: the ward the old calm keeps is the FRONT socket, under her prow
@@ -569,7 +598,7 @@ export function makeBrooder(idx, cfg) {
     grp.add(g);
     return g;
   });
-  if (typeof window !== 'undefined') window.__sl = L;        // dev: the live sleeper object (motion probes)
+  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; }   // dev: the live sleeper object (motion probes); the burn's knobs
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
@@ -1501,6 +1530,31 @@ function poseAll(L, dt, player) {
   publishCols(L);
 }
 
+// THE BURN (see BURN): over the pose the ward block just wrote, every frame. Lit / remembered / calmed wards only.
+function wardBurn(L, haloK) {
+  const cp = camera.position;
+  const ck = L.calmed ? Math.max(0, 1 - L.calmT / BURN.calmT) : 1;
+  for (const g of L.sigils) {
+    const b = g.burn;
+    if (!b) continue;
+    if (!g.lit) { b.material.opacity = 0; continue; }          // (calmed, every ward is lit)
+    const d = g.grp.position.distanceTo(cp);
+    g.light.userData.scatter = BURN.scatter + (BURN.scatterFar - BURN.scatter) * smooth(d, BURN.scatterD[0], BURN.scatterD[1]);
+    g.light.color.setHex(BURN.col);
+    g.halo.material.opacity = 0;                               // the fogged halo is the idle ward's
+    // the remembered ward (wardMemPose) is a banked ember until the calm: its glow at its own level
+    const lk = g.mem ? 0.35 * g.memK : ck;
+    b.position.copy(g.grp.position);
+    b.scale.setScalar(Math.max(0.001, haloK * BURN.halo * (1 + 0.06 * Math.sin(g.pulse * 3))));
+    b.material.opacity = BURN.op * lk * smooth(d, BURN.near[0], BURN.near[1]);
+    if (!g.mem) {
+      const k = BURN.glyph * (BURN.ember + (1 - BURN.ember) * ck), T = BURN.tint;
+      g.rune.material.color.setRGB(k * T[0], k * T[1], k * T[2]);
+      g.rune.material.opacity = 1;
+    }
+  }
+}
+
 // HER BODY IS SOLID (brooderfix): the live pose as collision volumes (bodyCols.js) — every
 // leg segment and claw piece a tapered capsule carried by its own matrix, and the shell's
 // height-band proxy carried by the body's. game.js pushes Sal out of them right after this
@@ -2021,6 +2075,7 @@ export function updateBrooder(L, dt, t, player) {
   }
   // a ward lit is a wound: she flinches - rears back, claws snatched in - and it rings out
   if (ev.sigilLit) { L.seen = true; L.blindT = 0; L.lastSeen.copy(player.pos); L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
+  wardBurn(L, haloK);
   wardFlashes(L, dt, null);
   updatePlumes(dt);
   L.pPrev.copy(player.pos);
