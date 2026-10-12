@@ -13,7 +13,8 @@
 //               in all, read back right after the frame's own render) and THE LENS IN HER (every frame she is
 //               published awake: the camera inside her bodyCols volumes, margin 0 = inside, 0.15 = the near plane in
 //               it, and every 3rd frame a ray from the lens toward his bonnet against her drawn meshes, a hit within
-//               0.35 u = her surface on the lens; split fight / after the calm; RED on the after-the-calm counts).
+//               0.35 u = her surface on the lens; split fight / after the calm; RED on the after-the-calm inside
+//               and ray counts).
 //               Also: the lens in Sal (0.45 u of his axis), and her shell's lowest point over the ground per phase.
 //   FP_STOP=<n> stop after n video-rate frames (every 3rd game frame, ~20 per game second: the RP_VIDEO index),
 //               print the state; FP_HOLD=1 leaves the (frozen) Chrome up for `drv.mjs eval` and A/B pokes.
@@ -439,10 +440,12 @@ console.log('LEDGER', JSON.stringify(ledger));
 let gateRed = false;
 if (GATE) {
   const g = await c.ev('window.__vfGate');
-  // the lens, after the calm (the walk home, the settle, him under her): inside her bodyCols, or the near plane in them
-  // (0.15), or her drawn surface on the lens (the ray). The fight's own counts are reported beside it: the fight's
-  // camera is baa7f88's, unchanged, and a claw blow can cross it for a frame or two (pre-existing, rare).
-  const lensRed = g.lens.calmIn + g.lens.calmNear + g.lens.rayCalm > 0;
+  // the lens, after the calm (the walk home, the settle, him under her): inside her bodyCols (margin 0), or her drawn
+  // surface on the lens (the ray). The near-plane count (0.15) is reported, not gated: it is the camera guard's own
+  // trigger zone (game.js draws the lens out of it on the next frames), so a frame of it is the guard working. The
+  // fight's own counts are reported beside it: the fight's camera is baa7f88's, unchanged, and a claw blow can cross
+  // it for a frame or two (pre-existing, rare).
+  const lensRed = g.lens.calmIn + g.lens.rayCalm > 0;
   const washRed = g.washRed > 0;
   gateRed = washRed || lensRed;
   ledger.gate = g;
