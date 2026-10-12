@@ -1681,6 +1681,10 @@ function noSafeSpot(L, dt, player, ev, hunt) {
   // stilled (the last ward lit under her) or held mid-drop: no blow, straight to the rise
   if (!live && L.drop < 3) { L.drop = 3; L.dropT = 0; L.dropD = -(L.dropY || 0); }
   L.dropT += dt;
+  // through the whole drop her body's contacts shove him but never tear (game.js reads L.rising: "a shove,
+  // not a slam"); what the drop does to him is dropImpact's alone (the telegraph's shudder rocked her rim
+  // into divers hanging at it at 3-5 u/s and tore the dress)
+  L.rising = true;
   // planted for it: her stride dies away
   { const k = Math.min(1, 6 * dt); L.vel.x -= L.vel.x * k; L.vel.z -= L.vel.z * k; }
   if (L.drop === 1) {
