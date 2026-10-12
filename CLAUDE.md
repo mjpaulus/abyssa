@@ -308,14 +308,28 @@ against explicit contracts and reviewed on return.
   docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre APRON + 1.3 R off
   the crack's lip (`STAND.keep`; the old rim crest, and the apron rising to the lip, hung her wards 12-17 u up) and rides at most 0.06 R over the ground
   under her belly; standing height 0.52 R, held over him (no settling onto him), shell 3.6 u over
-  the ground under it (STAND.clear), ward reach 7; the clutch is carried TUCKED under her apron (brood.js
+  the ground under it (STAND.clear), ward reach 5 (velhard; was 7); the clutch is carried TUCKED under her apron (brood.js
   TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up); the crouch is retired
-  (Michael: "crouched too low and I kept colliding"); under her body is a refuge (no hammer; she
-  shifts her stance every ~3 s instead); her claws spread open her front when he comes in
+  (Michael: "crouched too low and I kept colliding"). NO SAFE SPOT (velhard 2026-10-12, Michael: "beating her is too
+  easy now" -> "No safe spot"; brooder.js `NOSAFE`): under her body counts up (~3 s) to THE DROP — a readable
+  telegraph (shudder, silt, groan, legs bracing), then she bears down: squarely under her and not out `outTear` u ->
+  the slam (tear), elsewhere under her -> the sweep (flat throw, stagger, no tear), out `outClean` u -> nothing; she
+  rises back (no lingering crouch). A ward lit from under her brings the drop on (one ward per dash); wards touched
+  during the drop answer cold (wardRefuse). She turns her front to him; after a blow down her front lane she is slow
+  to turn (the dash-in window). Measured (riteplay, ritepolicy.mjs players): average 45-165 s, 0-3 hits; perfect
+  ~44 s home. her claws spread open her front when he comes in
   (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never into the crack (`safeThrow`: its whole ~16-29 u slide clears the lip; from inside the lip of an OPEN crack it leans out of it); a slam
   tears once per 0.8 s; her back is a slick dome (no tear, he slides off); game.js `BOSSCAM` cranes
   the lens up 1.5 u and leans the look toward her belly/nearest dark ward while she is up within
   30 u (drops on any mouse look). `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
+  LIT WARDS BURN, THEY DON'T WASH (velfix 2026-10-12, brooder.js `BURN`): a lit ward's light takes a small share of
+  the in-scatter (far more from 28 u), a warm glow fading near the lens replaces the fogged halo, the glyph burns gold
+  (under unity with the lens 1.5-6 u from it), the light-up flash at half (less again up close), all easing to an ember
+  over 15 s after the calm. AFTER THE CALM her belly and egg mass are closed from below to him (bodyCols CALMCOL), she
+  keeps her clearance on the walk home, won't lie down while he's on her ground, re-rises quietly, and the lens guard
+  looks ahead (`creLensAhead`). THE LENS IS NEVER INSIDE SAL (game.js `SALCAP`, a capsule boots-to-bonnet; her drop
+  throws him back at the lens). Gates: `tools/bench/velfix-gate.mjs` (fullplay-gate.mjs, three post-calm routes);
+  recorder: `tools/bench/fullplay.mjs` (raft to the rift, real keys, FP_HOSE).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (the blade frees: `lev.onSlash(pos, fwd, reach, tipReach, guard)`, held: knife 3 /
@@ -474,8 +488,8 @@ against explicit contracts and reviewed on return.
   about her trawler (lair.bear / idle), Mhor's furnace moves (lair.bear/r); `hard` =
   hammerT/threatR, pull/hold/lashCd/grabR, circleT/stunT/hitR/speed. Never more lights.
   `__chart.fp()` is the same canonical probe as `__ridge.fp()` (values above; the sites
-  branch's own probe was folded into it at merge). sleeperFingerprint(i) home: 49a7a176
-  ac04921e ce3eaf9d.
+  branch's own probe was folded into it at merge). sleeperFingerprint(i) home: ecfa371e
+  ac04921e ce3eaf9d (zone 0 since velhard 2026-10-12; was 49a7a176).
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own
