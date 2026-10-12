@@ -190,7 +190,11 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
         const sgn = lat >= 0 ? 1 : -1;
         return { sec, yaw: Math.atan2(fz * sgn, -fx * sgn), keys: s.grounded ? ['W', 'Shift'] : ['W'], why: 'lane' };
       }
-      if (de > 4) {
+      const aP0 = Math.atan2(ox, oz), aE0 = Math.atan2(ex - s.lev[0], ez - s.lev[2]);
+      let da0 = aE0 - aP0; da0 = Math.atan2(Math.sin(da0), Math.cos(da0));
+      // on the ward's side of her and close (a planted leg may keep him off the exact rim point): in from here
+      const onSide = Math.abs(da0) < 0.45 && rho < eR + 6;
+      if (de > 4 && !onSide) {
         if (AVG) dbg += ' learned';
         // walled off (no headway for 1.5 s against a planted leg or her claw): a human backs out and goes again
         if (hyp(fwd * RR - stX, lat * RR - stZ) > 0.6) { stX = fwd * RR; stZ = lat * RR; stT = t; }   // (in her frame: she carries him)

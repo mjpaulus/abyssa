@@ -176,15 +176,15 @@ export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35,
 // THE TURN: she keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5); a diver hauling round her
 // close beats it, a walker does not. THE WINDOW: for `slowT` s after a hammer blow struck down her front
 // lane at him, and after each drop, she turns at only `slowK` of it. `reach`: the ward touch (7 since
-// ritefair). THE WOUND (beyond the ruling: each ward its own dash): a ward lit from under her jumps her
-// count to `wound` s short of the drop. From the telegraph to the end of the rise her wards are shut: a
+// ritefair). THE WOUND (each ward its own dash): a ward lit from under her jumps her count to `wound` s
+// short of the drop (0: she bears down at once). From the telegraph to the end of the rise her wards are shut: a
 // touch answers cold (common.js wardRefuse: the spark, the knock) and the first time says SHUT_LINE.
 export const NOSAFE = {
   after: 3.0, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, again: 1.0,
   tele: 1.2, brace: 0.7, fall: 0.16, depth: 3.6, rise: 0.45,
   hitR: 0.6, sweepR: 1.1, outClean: 0.8, outTear: 0.3,
-  knock: 24, sweepKnock: 18, up: 0.10, stag: 0.9, sweepStag: 0.6, stagK: 0.85,
-  turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 1.0
+  knock: 24, sweepKnock: 24, up: 0.10, stag: 0.9, sweepStag: 0.6, stagK: 0.85,
+  turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 0
 };
 const SHUT_LINE = 'SHE BEARS DOWN. THE WARDS ARE SHUT TO YOU.';
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
