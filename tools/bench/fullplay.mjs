@@ -97,6 +97,8 @@ const c = c0;
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && window.__bench`, 240000, 1000);
 await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
 await sleep(3000);
+// FP_PRE=<js>: evaluated once play is up (live knobs for an A/B, e.g. "__crecam.knobs.swNeed = -100")
+if (process.env.FP_PRE) await c.ev(`(() => { ${process.env.FP_PRE}; return 1; })()`);
 const alt = async code => {
   await c.ev(`(window.dispatchEvent(new KeyboardEvent('keydown', { code: '${code}', key: 'x', altKey: true, bubbles: true })), window.dispatchEvent(new KeyboardEvent('keyup', { code: '${code}', key: 'x', altKey: true, bubbles: true })), 1)`);
   await c.ev(`(window.__helm = true, window.__bench.step(90), 1)`);
@@ -119,8 +121,16 @@ const GATE_JS = `(async () => {
   const gl = renderer.getContext();
   const L = window.lev, cam = window.camera, P = window.player;
   const g = { washN: 0, washRed: 0, washSum: 0, washMax: 0, washMaxAt: null, washMeanLuma: 0, washAt: [],
-    lens: { fightN: 0, fightIn: 0, fightNear: 0, calmN: 0, calmIn: 0, calmNear: 0, inAt: [], parts: {} } };
+    lens: { fightN: 0, fightIn: 0, fightNear: 0, calmN: 0, calmIn: 0, calmNear: 0, inAt: [], parts: {}, salFight: 0, salCalm: 0,
+      rayN: 0, rayFight: 0, rayCalm: 0, rayAt: [] } };
   let buf = null;
+  // THE DRAWN SURFACE (every 3rd frame): bodyCols is a fit (85th-percentile capsules, a height-band shell), so the
+  // lens can be outside it with her drawn mesh across the near plane. A ray from the lens toward his bonnet against
+  // her opaque meshes: a hit within 0.35 u of the lens is a surface ON the lens (the dark wedge).
+  const T = (await import('three'));
+  const rc = new T.Raycaster(), dir = new T.Vector3(), from = new T.Vector3();
+  const meshes = []; L.grp.traverse(o => { if ((o.isMesh || o.isInstancedMesh) && !o.isSprite && o.material && !o.material.transparent && o.visible) meshes.push(o); });
+  g.lens.rayMeshes = meshes.length;
   const base = window.__rp.frame;
   window.__rp.frame = () => {
     base();
@@ -129,13 +139,25 @@ const GATE_JS = `(async () => {
     const x = cam.position.x, y = cam.position.y, z = cam.position.z;
     const inside = BC.bodyBlocked(x, y, z, 0), why = BC.blockWhy, near = inside || BC.bodyBlocked(x, y, z, 0.15);
     const Lg = g.lens;
-    if (L.calmed) { Lg.calmN++; if (inside) Lg.calmIn++; if (near) Lg.calmNear++; }
-    else { Lg.fightN++; if (inside) Lg.fightIn++; if (near) Lg.fightNear++; }
+    // the lens in SAL (the other clip): within 0.45 u of his body's axis, boots (eye - 1.35) to bonnet top (eye + 0.4)
+    const sy = Math.max(P.pos.y - 1.35, Math.min(P.pos.y + 0.4, y)), inSal = Math.hypot(x - P.pos.x, y - sy, z - P.pos.z) < 0.45;
+    if (L.calmed) { Lg.calmN++; if (inside) Lg.calmIn++; if (near) Lg.calmNear++; if (inSal) Lg.salCalm++; }
+    else { Lg.fightN++; if (inside) Lg.fightIn++; if (near) Lg.fightNear++; if (inSal) Lg.salFight++; }
     if (inside) { const k = why === -1 ? 'shell' : why === -3 ? 'clutch' : 'cap' + why; Lg.parts[k] = (Lg.parts[k] || 0) + 1; if (Lg.inAt.length < 60) Lg.inAt.push(+t.toFixed(2));
       if (window.__vfSnap && Lg.inAt.length <= 8) { const r = v => +v.toFixed(2); (Lg.snap = Lg.snap || []).push({ t: r(t), part: k, cam: [r(x), r(y), r(z)], sal: [r(P.pos.x), r(P.pos.y), r(P.pos.z)], vel: [r(P.vel.x), r(P.vel.y), r(P.vel.z)], grounded: !!P.grounded, yaw: r(P.yaw), pitch: r(P.pitch),
         cre: window.__crecam.state(), boss: window.__bosscam.state(), throat: window.__throatCam.state(), lev: { standE: r(L.standE), calmT: r(L.calmT || 0), toBed: !!L.toBed, pos: [r(L.pos.x), r(L.bodyY), r(L.pos.z)] }, bc: BC.bodyColsState() }); }
       if (window.__vfStopIn && !window.__vfHalt) { window.__vfHalt = true; return false; } }
     if (f % 3) return;
+    {
+      from.set(x, y, z); dir.set(P.pos.x - x, P.pos.y + 0.4 - y, P.pos.z - z);
+      const dl = dir.length();
+      if (dl > 1e-3) {
+        dir.multiplyScalar(1 / dl); rc.set(from, dir); rc.near = 0; rc.far = Math.min(0.35, dl);
+        const hit = rc.intersectObjects(meshes, false).length > 0;
+        Lg.rayN++;
+        if (hit) { if (L.calmed) Lg.rayCalm++; else Lg.rayFight++; if (Lg.rayAt.length < 30) Lg.rayAt.push(+t.toFixed(2)); }
+      }
+    }
     let lit = false, dmin = 1e9;
     for (const s of L.sigils) if (s.lit) { lit = true; dmin = Math.min(dmin, s.grp.position.distanceTo(cam.position)); }
     if (!lit || !(BC.underShell(x, y, z) || BC.underShell(P.pos.x, P.pos.y + 1, P.pos.z) || dmin < ${WASH_R})) return;
@@ -329,7 +351,7 @@ await travel('the harpoon', 'anchor', 0, 60);
   for (let i = 0; i < 8; i++) await slice({ sec: 0.25, yaw, pitch: 0.05, keys: [] }); phase.push(`${t.toFixed(1)} facing the iron msg ${(await c.ev(NAV)).msg}`); }
 
 let s = await c.ev(STATE);
-console.log('START', JSON.stringify({ site: SITE, mode: MODE, pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`) }));
+console.log('START', JSON.stringify({ site: SITE, mode: MODE, t: +t.toFixed(2), pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`), cre: await c.ev('window.__crecam.state().swings') }));
 let lastWhy = '';
 while (t < +MAXS) {
   s = await c.ev(STATE);
@@ -381,13 +403,15 @@ console.log('LEDGER', JSON.stringify(ledger));
 let gateRed = false;
 if (GATE) {
   const g = await c.ev('window.__vfGate');
-  const washRed = g.washRed > 0, lensRed = g.lens.calmIn > 0 || g.lens.fightIn > 0;
+  // the lens: inside her bodyCols or with the near plane in them (0.15), or her drawn surface on the lens (the ray)
+  const lensRed = g.lens.calmNear + g.lens.fightNear + g.lens.rayFight + g.lens.rayCalm > 0;
+  const washRed = g.washRed > 0;
   gateRed = washRed || lensRed;
   ledger.gate = g;
   console.log('GATE', gateRed ? 'RED' : 'GREEN', JSON.stringify({
     wash: { booked: g.washN, red: g.washRed, meanBlown: g.washN ? +(g.washSum / g.washN).toFixed(4) : 0, maxBlown: +g.washMax.toFixed(3), maxAt: g.washMaxAt,
       meanLuma: g.washN ? +(g.washMeanLuma / g.washN).toFixed(1) : 0, verdict: washRed ? `RED (${g.washRed} frames > ${WASH_BLOWN} blown)` : 'GREEN', at: g.washAt.slice(0, 12) },
-    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), verdict: lensRed ? 'RED' : 'GREEN' } }));
+    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' } }));
 }
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const cons = await c.console();
