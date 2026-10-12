@@ -135,7 +135,8 @@ export const THUMP = { k: 1, near: 12, far: 110 };
 // (x0.847: it could come down no further). Her pool lights never took the sigil kinds' scatter weight, so a lit ward
 // was a 140-180 cd lamp IN THE WATER at full weight (lamp-B gain ~1700, forty lanterns' worth), and its halo was the
 // idle ward's fogged sprite blown up to 3x her size (16.5 u at 0.8, additive): from under her the lens sat inside
-// both, and after the calm nothing faded either. Now a lit, flashing, remembered or calmed ward (an UNLIT ward is
+// both, and after the calm nothing faded either. Now a lit, flashing or calmed ward (a remembered ward, on a revisit,
+// keeps wardMemPose's look and takes only the scatter cap; an UNLIT ward is
 // untouched: how its idle glow reads is part of the rite's difficulty):
 //   scatter  its light's share of the in-scatter (the other kinds' wards run 0.04-0.05): the light is a burn on her
 //            shell and the sand under it, not a lamp in the water; scatterFar past scatterD (lens distance, u): from
@@ -1557,7 +1558,7 @@ function onHerGround(L, player, m) {
   return Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < reach + m || limbNearXZ(player.pos.x, player.pos.z, m);
 }
 
-// THE BURN (see BURN): over the pose the ward block just wrote, every frame. Lit / remembered / calmed wards only.
+// THE BURN (see BURN): over the pose the ward block just wrote, every frame. Lit and calmed wards (remembered: scatter only).
 function wardBurn(L, haloK) {
   const cp = camera.position;
   const ck = L.calmed ? Math.max(0, 1 - L.calmT / BURN.calmT) : 1;
@@ -1567,18 +1568,17 @@ function wardBurn(L, haloK) {
     if (!g.lit) { b.material.opacity = 0; continue; }          // (calmed, every ward is lit)
     const d = g.grp.position.distanceTo(cp);
     g.light.userData.scatter = BURN.scatter + (BURN.scatterFar - BURN.scatter) * smooth(d, BURN.scatterD[0], BURN.scatterD[1]);
+    // the remembered ward (a revisit) keeps wardMemPose's own look - the slow breath, the mid level, the amber
+    // glyph and halo - and takes only the scatter cap (its 34 cd was a full-weight lamp in the water too)
+    if (g.mem) { b.material.opacity = 0; continue; }
     g.light.color.setHex(BURN.col);
     g.halo.material.opacity = 0;                               // the fogged halo is the idle ward's
-    // the remembered ward (wardMemPose) is a banked ember until the calm: its glow at its own level
-    const lk = g.mem ? 0.35 * g.memK : ck;
     b.position.copy(g.grp.position);
     b.scale.setScalar(Math.max(0.001, haloK * BURN.halo * (1 + 0.06 * Math.sin(g.pulse * 3))));
-    b.material.opacity = BURN.op * lk * smooth(d, BURN.near[0], BURN.near[1]);
-    if (!g.mem) {
-      const k = BURN.glyph * (BURN.ember + (1 - BURN.ember) * ck), T = BURN.tint;
-      g.rune.material.color.setRGB(k * T[0], k * T[1], k * T[2]);
-      g.rune.material.opacity = 1;
-    }
+    b.material.opacity = BURN.op * ck * smooth(d, BURN.near[0], BURN.near[1]);
+    const k = BURN.glyph * (BURN.ember + (1 - BURN.ember) * ck), T = BURN.tint;
+    g.rune.material.color.setRGB(k * T[0], k * T[1], k * T[2]);
+    g.rune.material.opacity = 1;
   }
 }
 
@@ -1838,7 +1838,7 @@ export function updateBrooder(L, dt, t, player) {
     // (velfix) nor on her ground: her whole reach, not 0.95 R, and clear for SETTLE.hold s first
     L.offT = under || onHerGround(L, player, SETTLE.release) ? 0 : (L.offT || 0) + dt;
     if (Math.abs(dA) < 0.12 && L.offT > SETTLE.hold) { L.homeTurn = false; L.standTarget = 0; }
-  } else if (L.calmed && L.standTarget === 0 && L.stand > 0.02 && onHerGround(L, player, SETTLE.rise)) {
+  } else if (L.calmed && L.brood && L.standTarget === 0 && L.stand > 0.02 && onHerGround(L, player, SETTLE.rise)) {
     // (velfix) settling, and he has come onto her ground: she stands back up over him and waits
     L.homeTurn = true; L.standTarget = 1; L.offT = 0;
   } else if (hunt && L._pdT < 90) {

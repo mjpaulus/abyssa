@@ -176,8 +176,8 @@ const GATE_JS = `(async () => {
       const ph = !L.calmed ? (L.standE > 0.9 ? 'fight' : null) : (L.standE > 0.9 ? 'home' : 'settle');
       if (ph) g.shellClr[ph] = Math.min(g.shellClr[ph], +low.toFixed(2));
     }
-    let lit = false, dmin = 1e9;
-    for (const s of L.sigils) if (s.lit) { lit = true; dmin = Math.min(dmin, s.grp.position.distanceTo(cam.position)); }
+    let lit = false, dmin = 1e9, wmin = null;
+    for (const s of L.sigils) if (s.lit) { lit = true; const dd = s.grp.position.distanceTo(cam.position); if (dd < dmin) { dmin = dd; wmin = s; } }
     if (!lit || !(BC.underShell(x, y, z) || BC.underShell(P.pos.x, P.pos.y + 1, P.pos.z) || dmin < ${WASH_R})) return;
     const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
     if (!buf || buf.length !== W * H * 4) buf = new Uint8Array(W * H * 4);
@@ -205,7 +205,11 @@ const GATE_JS = `(async () => {
     }
     const sh = hi / n, so = out / n;
     g.washN++; g.washSum += sh; g.washOutSum += so; g.washMeanLuma += sum / n;
-    if (so > ${WASH_BLOWN} || sh > ${WASH_CAP}) { g.washRed++; if (g.washAt.length < 60) g.washAt.push([+t.toFixed(2), +sh.toFixed(3), +so.toFixed(3)]); }
+    // a RED frame explains itself: [t, blown, blown outside the burns, lens-to-bonnet u, nearest lit ward u, its flashT,
+    // the lens-in-Sal frames so far in this phase, calmed]
+    if (so > ${WASH_BLOWN} || sh > ${WASH_CAP}) { g.washRed++; if (g.washAt.length < 60) g.washAt.push([+t.toFixed(2), +sh.toFixed(3), +so.toFixed(3),
+      +Math.hypot(x - P.pos.x, y - P.pos.y - 0.4, z - P.pos.z).toFixed(2), +dmin.toFixed(1), wmin ? +Math.min(9, wmin.flashT).toFixed(2) : null,
+      L.calmed ? g.lens.salCalm : g.lens.salFight, !!L.calmed]); }
     if (sh > g.washMax) { g.washMax = sh; g.washMaxAt = +t.toFixed(2); }
     if (so > g.washOutMax) { g.washOutMax = so; g.washOutMaxAt = +t.toFixed(2); }
   };
