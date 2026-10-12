@@ -154,21 +154,25 @@ export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, 
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // NO SAFE SPOT (velhard, Michael 2026-10-12: "you were right beating her is too easy now"; he ruled
 // "No safe spot", VELHARD-BRIEF.md). The refuge under her body is gone (and with it the stance shift):
-// under her (plan within `under` R, below her shell) a counter runs; past `after` s she DROPS: a
+// under her (plan within `under` R, below her shell) a counter runs at 1/s, and under her rim (out to
+// `rim` R, where no ward is in reach) at `rimK`/s, so nowhere under her is a place to wait; past `after` s she DROPS: a
 // telegraph of `tele` s (her shell shudders, silt sifts off her plates, a deep groan, her legs brace and
 // lift her `brace` u), then the body slam (`fall` s, down `depth` u, stopped over his helmet, her shell's
 // ground clearance let go for it), then she rises back to her standing height in `rise` s (no lingering
-// crouch: Michael rejected it). Under her at the impact (plan within `hitR` R): deep under (inside
+// crouch: Michael rejected it). Under her at the impact (plan within `hitR` R, or, caught loitering under
+// her rim, within 0.1 R outside where she found him there, so a quick step out still clears it): deep under (inside
 // `slamR` R) the shell lands on him, at her edge the leg on his side SWEEPS him out; either way the dress
 // tears (game.js's slam path, SLAM_GAP), he staggers (`stag` s at `stagK`) and is thrown flat out from
 // under her (`knock` u/s, `up` vertical share, never toward the crack: safeThrow). The counter falls at
 // `decay`/s once he is out. She keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5, which no
 // diver could circle), and for `slowT` s after a landed hammer blow or a drop she turns at only `slowK`
-// of it: the dash-in window. `reach`: the ward touch (7 since ritefair).
+// of it: the dash-in window. `reach`: the ward touch (7 since ritefair). `wound`: a ward lit from under her
+// and her count jumps to `wound` s short of the drop, and her wards do not take his hand from the
+// telegraph to the end of the rise, so each ward is its own dash in and out.
 export const NOSAFE = {
-  after: 2.0, decay: 1.0, under: 0.85, tele: 0.7, brace: 0.45, fall: 0.16, depth: 3.6, rise: 0.45,
-  hitR: 0.95, slamR: 0.55, knock: 18, up: 0.10, stag: 0.9, stagK: 0.85,
-  turn: 0.32, slowT: 1.2, slowK: 0.15, reach: 5
+  after: 2.0, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, tele: 0.7, brace: 0.45, fall: 0.16, depth: 3.6, rise: 0.45,
+  hitR: 0.82, slamR: 0.45, knock: 18, up: 0.10, stag: 0.9, stagK: 0.85,
+  turn: 0.12, slowT: 1.2, slowK: 0.15, reach: 5, wound: 0.4
 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
@@ -1646,11 +1650,15 @@ function noSafeSpot(L, dt, player, ev, hunt) {
   const live = hunt && L.standE > 0.9;
   const ux = player.pos.x - L.pos.x, uz = player.pos.z - L.pos.z, rho = Math.hypot(ux, uz);
   const shellY = L.bodyY - (L.dropY || 0);                    // her standing body height (last pose)
-  const under = live && rho < N.under * R && player.pos.y < shellY;
-  L.nsUnder = under;
+  const below = live && player.pos.y < shellY;
+  const deep = below && rho < N.under * R, rim = below && !deep && rho < N.rim * R;
+  L.nsUnder = deep || rim;
   if (!L.drop) {
-    L.nsT = !live ? 0 : under ? (L.nsT || 0) + dt : Math.max(0, (L.nsT || 0) - N.decay * dt);
-    if (live && L.nsT >= N.after) { L.drop = 1; L.dropT = 0; L.dropN = (L.dropN || 0) + 1; L.nsDust = 0; }
+    L.nsT = !live ? 0 : deep ? (L.nsT || 0) + dt : rim ? (L.nsT || 0) + N.rimK * dt : Math.max(0, (L.nsT || 0) - N.decay * dt);
+    if (live && L.nsT >= N.after) {
+      L.drop = 1; L.dropT = 0; L.dropN = (L.dropN || 0) + 1; L.nsDust = 0;
+      L.dropR = Math.max(N.hitR, Math.min(N.rim + 0.05, rho / R + 0.1));   // (R) where it lands: see NOSAFE
+    }
     else { L.dropY = 0; return; }
   }
   // stilled (the last ward lit under her) or held mid-drop: no blow, straight to the rise
@@ -1676,7 +1684,7 @@ function noSafeSpot(L, dt, player, ev, hunt) {
     if (L.dropT >= N.tele) {
       // how far: all the way to the sand, but stopped over his helmet if he is under her
       let d = N.depth;
-      if (rho < N.hitR * R && player.pos.y < shellY) {
+      if (rho < L.dropR * R && player.pos.y < shellY) {
         const crown = player.pos.y + 0.45 - groundAt(L, player.pos.x, player.pos.z, true);
         d = clamp(L.bellyOver - crown - 0.25, 0.6, N.depth);
       }
@@ -1701,7 +1709,7 @@ function dropImpact(L, ev, player, rho, ux, uz, shellY) {
   quake(L, ev, L.pos.x, L.pos.z, 0.85, player);
   thump(L, ev, L.pos.x, L.pos.z, 0.9, player);
   silt(L.pos.x, gy + 0.3, L.pos.z, 10, 4, 3.4, R * 0.95);       // her rim meets the sand all round
-  if (!(rho < N.hitR * R && player.pos.y < shellY + 0.5)) return;   // he got out from under her
+  if (!(rho < L.dropR * R && player.pos.y < shellY + 0.5)) return;   // he got out from under her
   // out from under her, flat (from her centre through him; dead under her, out of her nearer flank)
   if (rho > 1e-3) _ns.set(ux / rho, 0, uz / rho);
   else { const s = Math.sin(L.yaw), c = Math.cos(L.yaw); _ns.set(c, 0, -s); }
@@ -2109,7 +2117,8 @@ export function updateBrooder(L, dt, t, player) {
         // standing Brooder offers them
         // (fissure-and-harpoon Task 6: the brood rule, her last ward cold while a clump of her clutch
         // was out, is gone with the pry; every ward is simply lit by his touch)
-        if (L.standE > 0.6) wardTouch(L, i, g, player, ev);
+        // (velhard) braced for the drop and through it her wards are shut to his hand (one ward a dash)
+        if (L.standE > 0.6 && !L.drop) wardTouch(L, i, g, player, ev);
       }
     }
     let rem = 0;
@@ -2133,6 +2142,9 @@ export function updateBrooder(L, dt, t, player) {
   }
   // a ward lit is a wound: she flinches - rears back, claws snatched in - and it rings out
   if (ev.sigilLit) { L.seen = true; L.blindT = 0; L.lastSeen.copy(player.pos); L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
+  // (velhard) THE WOUND ENDS THE DASH: a ward lit from under her and her count jumps to NOSAFE.wound s short
+  // of the drop (each ward is a dash in and out, not a float across her belly lighting three)
+  if (ev.sigilLit && L.nsUnder && !L.calmed && !L.drop) L.nsT = Math.max(L.nsT || 0, NOSAFE.after - NOSAFE.wound);
   wardFlashes(L, dt, null);
   updatePlumes(dt);
   L.pPrev.copy(player.pos);
