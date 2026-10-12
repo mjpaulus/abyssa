@@ -52,7 +52,7 @@ export const CLUTCHCOL = { on: true, skin: 0.15, k: 10, step: 0.3, roof: 0.3 };
 // belly, or the egg mass where it hangs over him - eased down at most `rate` u/s, and nothing carries him up into it
 // (down to `depth` u under it: deeper, the open crack, is not under her). He may still stand under her: the refuge
 // stays a place, he just cannot float up into her. Never a blow: no hitV, no dress tear. The fight never sees it.
-export const CALMCOL = { on: true, rate: 3.0, roof: 2.5, depth: 16 };
+export const CALMCOL = { on: true, rate: 3.0, roof: 3.5, depth: 16 };
 let calmK = 0;
 export function setBodyCalm(onK) { calmK = onK ? 1 : 0; }
 export function bodyColsOn() { return on; }
