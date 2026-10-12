@@ -139,8 +139,9 @@ export const THUMP = { k: 1, near: 12, far: 110 };
 // untouched: how its idle glow reads is part of the rite's difficulty):
 //   scatter  its light's share of the in-scatter (the other kinds' wards run 0.04-0.05): the light is a burn on her
 //            shell and the sand under it, not a lamp in the water; scatterFar past scatterD (lens distance, u): from
-//            20-30 u off a modest warm haze round her is part of the read (a point lamp's in-scatter grows without
-//            bound as the lens nears it; a ward is a glyph on her shell, not a point)
+//            20-30 u off a warm haze round her is part of the read, and it shows past her legs where the glow sprite
+//            is hidden (a point lamp's in-scatter grows without bound as the lens nears it; a ward is a glyph on her
+//            shell, not a point). At 31 u, ward-disc contrast 1.34 (0.35 gave 1.15; shipped 1.54, all of it green)
 //   col      its light's colour while lit (warmer than the pool's 0xffe8a8: the water takes the red over a few u)
 //   halo/op  a warm glow (lib/textures.js warmGlow: fog off, its own distance fade, the glints' program) in place
 //            of the fogged halo: halo x size, opacity op, on the lit pose's throb; swell grows it with range as the
@@ -152,7 +153,7 @@ export const THUMP = { k: 1, near: 12, far: 110 };
 //            s to a banked ember (the glyph keeps `ember` of its burn)
 //   flash    the light-up flash's extra light (common.js wardFlashes, 360 cd at its peak as shipped) x flash: with him
 //            at the ward it flooded her belly past the burn (6% of the frame blown outside it at the calm's flash)
-export const BURN = { scatter: 0.08, scatterFar: 0.35, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35, flash: 0.5 };
+export const BURN = { scatter: 0.08, scatterFar: 0.6, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35, flash: 0.5 };
 // (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
 // crouched too low and I kept colliding") RETIRED: drop 0.16 -> 0, lean 0.16 -> 0 (measured
 // before: the rim came down to 0.4-1.3 u over the floor on the lanes in as the spring ramped,
