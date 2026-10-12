@@ -167,6 +167,7 @@ while (t < +MAXS) {
 // let the calm settle a beat
 for (let i = 0; i < 8; i++) await slice({ sec: 0.25, yaw: 0, keys: [] });
 s = await c.ev(STATE);
+const tally = await c.ev(TALLY);   // (her hits, read now: down in zone 1 window.lev is Orune)
 await shot('end');
 // THE WAY DOWN, WALKED: calmed, he turns to the crack (the pour and the light ahead of him), walks to
 // its middle and over the lip, and vents down through the opened throat into zone 1
@@ -197,7 +198,7 @@ if (s.calmed) {
 console.log(phase.join('\n'));
 const st = s.rp;
 const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
-  hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...(await c.ev(TALLY)), underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
+  hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...tally, underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
   camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);

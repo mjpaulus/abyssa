@@ -1460,19 +1460,24 @@ if (mode === 'rise') {
         let minC = 1e9, minO = 1e9, minClr = 1e9, frames = 0, minFoot = 1e9;
         const footScan = () => { for (const f of L.feet) { minFoot = Math.min(minFoot, S.fissureDist(f.cur.x, f.cur.z, 0), S.fissureDist(f.planted.x, f.planted.z, 0)); } };
         const P = L.parts.shell.geometry.attributes.position;
-        const shellScan = () => { const mw = L.parts.shell.matrixWorld; let low = 1e9;
+        // (velhard: her standing clearance; THE DROP brings her shell down to the sand on purpose, and the
+        // outline's distance to the lip is still scanned through it)
+        const shellScan = () => { const mw = L.parts.shell.matrixWorld; let low = 1e9; const dropping = !!L.drop;
           for (let k = 0; k < P.count; k += 7) { v.fromBufferAttribute(P, k).applyMatrix4(mw); minO = Math.min(minO, S.fissureDist(v.x, v.z, 0)); low = Math.min(low, v.y - T.terrainH(v.x, v.z, 0)); }
-          minClr = Math.min(minClr, low); };
+          if (!dropping) minClr = Math.min(minClr, low); };
         window.__bench.step(900, i => {
           window.player.pos.x = sx; window.player.pos.z = sz;   // he holds his ground at the lip
           if (L.standE < 0.9) return; frames++;
           minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan();
           if (i % 12 === 0) shellScan(); });
-        // then him under her (the refuge), 3 s: her dark wards over the floor under each (ritefair's table)
+        // then him under her, 3 s: her dark wards over the floor under each (ritefair's table; since velhard no
+        // refuge: past NOSAFE.after s she drops, and the clearance check above skips the drop)
         const ux = L.pos.x, uz = L.pos.z;
         window.__bench.place(ux, uz, 0, 0); window.player.vel.set(0, 0, 0);
-        window.__bench.step(180, i => { minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan(); if (i % 12 === 0) shellScan(); });
-        const wards = L.sigils.filter(g => !g.lit).map(g => +(g.grp.position.y - T.terrainH(g.grp.position.x, g.grp.position.z, 0)).toFixed(1));
+        const wardsNow = () => L.sigils.filter(g => !g.lit).map(g => +(g.grp.position.y - T.terrainH(g.grp.position.x, g.grp.position.z, 0)).toFixed(1));
+        let wards = null;   // (velhard: read on her standing frames; the drop's brace and slam move them on purpose)
+        window.__bench.step(180, i => { minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan(); if (i % 12 === 0) shellScan(); if (!L.drop) wards = wardsNow(); });
+        if (!wards) wards = wardsNow();
         out.hunt.push({ site, kind, frames, minCentre: +minC.toFixed(2), keep: +keep.toFixed(2), minOutline: +minO.toFixed(2), minFoot: +minFoot.toFixed(2), wardsUnder: wards, minShellClear: +minClr.toFixed(2),
           salFd: +S.fissureDist(sx, sz, 0).toFixed(1) });
       }
