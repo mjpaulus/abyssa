@@ -14,7 +14,8 @@
 //     ritefair stood under her belly, a refuge then), plus it lingers under her a little too long: it leaves when
 //     its own count passes 2.2-2.8 s (drawn each time it goes in), half the time when a ward it lit makes
 //     her flinch, half the time when it sees the telegraph, and it goes back in without waiting for the
-//     count to cool.
+//     count to cool. After two drops taken going at the same ward it goes round to that ward's side as the
+//     careful player does (it learns that a side ward is not reached from her face; she out-turns a walker).
 export const DEG = Math.PI / 180;
 const hyp = Math.hypot;
 export function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
@@ -94,6 +95,7 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
   const UNDER = 0.72, RIM = 0.95;      // how far in under her shell the count runs (and slower under her rim), as he has learned it (R)
   const EXIT_P = 1.5;                  // the perfect player's own count: out by then (her rule: ~2.4 s)
   let myU = 0, tPrev = null, prevLit = 0, wasUnder = false, wasRim = false, exitA = 2.5, outT = 0, commit = false, onTop = 0;
+  let tgtI = -1, prevDrop = 0; const fails = [0, 0, 0, 0, 0];   // (average) drops taken going at each ward
   let stX = 0, stZ = 0, stT = -9, backT = -9;   // walled off going round her (a leg, a claw): back out and go again
   const decide = s => { const d = decide1(s); decide.dbg = dbg; return d; };
   let dbg = '';
@@ -146,8 +148,14 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     let T = null, R = reach - 0.9;
     if (dark.length) {
       dark.sort((a, b) => hyp(a.p[0] - P[0], a.p[1] - P[1], a.p[2] - P[2]) - hyp(b.p[0] - P[0], b.p[1] - P[1], b.p[2] - P[2]));
-      T = dark[0].p;
-    }
+      T = dark[0].p; tgtI = dark[0].i;
+    } else tgtI = -1;
+    // (average) a drop that came while it went at a ward is a failed dash at that ward; after two it has
+    // learned that one is not reached from her face, and goes round to it like the careful player (still
+    // late, sloppy, never waiting for its count)
+    if (s.drop === 1 && prevDrop !== 1 && tgtI >= 0) fails[tgtI]++;
+    prevDrop = s.drop;
+    const smart = !AVG || (tgtI >= 0 && fails[tgtI] >= 2);
     // no dark ward seen yet: under her belly to look was the ritefair habit (a refuge then); under the new
     // rule that is 150 s of drops, so he walks round her outside her legs, looking up at her belly
     if (!T && nDark) {
@@ -159,20 +167,21 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     }
     if (!T) return { sec, yaw: 0, keys: [], why: 'idle' };
     // ---- THE PERFECT PLAYER OUTSIDE HER: round her rim to the point nearest the ward, in when cooled ----
-    if (!AVG && justLit) commit = false;
-    if (!AVG && commit && rho > (RIM * RR + 4)) commit = false;
-    if (!AVG && !under && !commit) {
+    if (smart && justLit) commit = false;
+    if (smart && commit && rho > (RIM * RR + 4)) commit = false;
+    if (smart && !under && !commit) {
       const tx = T[0] - s.lev[0], tz = T[2] - s.lev[2], tl = hyp(tx, tz) || 1;
       const eR = RIM * RR + 1.0;
       const ex = s.lev[0] + tx / tl * eR, ez = s.lev[2] + tz / tl * eR;
       const de = hyp(ex - P[0], ez - P[2]);
       // the hammer's lane: in front of her, 1.6-2.8 R, while she cocks or falls: step out of it sideways
-      const inLane = fwd > 1.6 && fwd < 2.8 && Math.abs(lat) < 0.7 && s.threatE > 0.5 && s.cock > 0.25;
+      const inLane = !AVG && fwd > 1.6 && fwd < 2.8 && Math.abs(lat) < 0.7 && s.threatE > 0.5 && s.cock > 0.25;
       if (inLane) {
         const sgn = lat >= 0 ? 1 : -1;
         return { sec, yaw: Math.atan2(fz * sgn, -fx * sgn), keys: s.grounded ? ['W', 'Shift'] : ['W'], why: 'lane' };
       }
       if (de > 4) {
+        if (AVG) dbg += ' learned';
         // walled off (no headway for 1.5 s against a planted leg or her claw): a human backs out and goes again
         if (hyp(fwd * RR - stX, lat * RR - stZ) > 0.6) { stX = fwd * RR; stZ = lat * RR; stT = t; }   // (in her frame: she carries him)
         else if (t - stT > 1.5) { backT = t + 1.2; stT = t; }
@@ -194,7 +203,7 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
         return { sec, yaw, pitch: 0, keys: s.grounded ? ['W', 'Shift'] : ['W', ...(s.vel[1] > 0.5 ? ['C'] : [])], why: 'round' };
       }
       // at her rim, by the ward: wait out the count, then in
-      if (myU > 0.35 || s.drop) return { sec, yaw: Math.atan2(-ox, -oz), keys: s.grounded ? [] : ['C'], why: 'wait' };
+      if (!AVG && (myU > 0.35 || s.drop)) return { sec, yaw: Math.atan2(-ox, -oz), keys: s.grounded ? [] : ['C'], why: 'wait' };
       commit = true;                     // cooled, at her rim by the ward: in, and no second thoughts
     }
     // ---- AT THE WARD (both players; the average one comes straight here) ----
