@@ -171,8 +171,9 @@ export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35,
 //   * anyone else still under her (a late exit, the rim, her leg line): THE SWEEP. Flat throw out
 //     (`sweepKnock` u/s), a stagger (`sweepStag` s), no tear. A late exit costs position; only a very late
 //     one costs a tear.
-// Every throw is flat (`up` vertical share) and never toward the crack (safeThrow). Still under her when
-// she has risen, the count stands `again` s short of the next drop: dodging is no refuge either.
+// Every throw is flat (`up` vertical share) and never toward the crack (safeThrow). When she has risen the
+// count stands `again` s short of the next drop and falls at `decay`/s as he stays out (it never starts
+// again from nothing): back in at once and she bears down again soon; dodging is no refuge either.
 // THE TURN: she keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5); a diver hauling round her
 // close beats it, a walker does not. THE WINDOW: for `slowT` s after a hammer blow struck down her front
 // lane at him, and after each drop, she turns at only `slowK` of it. `reach`: the ward touch (7 since
@@ -1719,8 +1720,9 @@ function noSafeSpot(L, dt, player, ev, hunt) {
     L.dropY = -L.dropD * (1 - e);
     if (k >= 1) {
       L.drop = 0; L.dropY = 0;
-      // still under her (he dodged): the next drop is `again` s off; put out from under her: a fresh count
-      L.nsT = live && L.nsUnder ? N.after - N.again : 0;
+      // the count does not start again from nothing: it stands `again` s short of the next drop and falls
+      // as he stays out (still under her, he dodged: the next drop is `again` s off)
+      L.nsT = live ? N.after - N.again : 0;
       if (live) L.nsSlow = N.slowT;
     }
   }
