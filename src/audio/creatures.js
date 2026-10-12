@@ -38,7 +38,7 @@ import { mix, cl01 } from './engine.js';
 export const KC = { BROODER: 1, HOARDER: 1, HUNTER: 1, FAUNA: 1, SLAM: 0.42 };
 
 export function buildCre(E) {
-  const c = { kind: null, L: null, creepN: 0, popN: 0, stillN: 0, cockN: 0, inkN: 0, snapN: 0, wetHush: 0, feet: new Float32Array(8), hamPh: 0, impT: 9, brPh: 0, lash: new Float32Array(16), strk: new Float32Array(16), grab: false,
+  const c = { kind: null, L: null, creepN: 0, popN: 0, stillN: 0, cockN: 0, inkN: 0, snapN: 0, wetHush: 0, feet: new Float32Array(8), hamPh: 0, impT: 9, dropN: 0, dropHitN: 0, brPh: 0, lash: new Float32Array(16), strk: new Float32Array(16), grab: false,
     hState: '', contract: 0, clickNext: 0, lastFoot: 0, footN: 0, sharkT: [0, 0], rayT: 0, fishT: 0, grabRe: 0, lastSlam: -9, silenceT: 0 };
   E.cre = c;
   // A body emitter that rides the sleeper: continuous joint grind (Velkath) and fin
@@ -142,6 +142,17 @@ function velkathHammer(E, L, k) {
   for (let i = 0; i < 9; i++) noiseHit(E, vg, t + E.r(0.08, 1.1), 'white', 'bandpass', E.r(700, 2400), 5, 0.001, E.r(0.02, 0.06), E.r(0.03, 0.09) * s);
   E.duck('amb', 0.4, 0.01, 1.8, t); E.duck('mus', 0.5, 0.01, 2.2, t);
   E.log('velkathHammer', null, k);
+}
+// (velhard) the drop's telegraph: a deep groan of the body taking its own weight (~0.7 s, then the slam)
+// under a short grinding of her plates bracing, and silt hissing off her back
+function velkathGroan(E, L) {
+  const p = L.pos, t = E.now() + 0.005, vg = E.emit('cre', p.x, p.y + 2, p.z, 2.2, 3, null); if (!vg) return; E.log('velkathGroan');
+  const g = E.g(0, vg), lp = E.f('lowpass', 170, 2.4, g), o = E.o('sawtooth', 36, lp);
+  o.frequency.setValueAtTime(36, t); o.frequency.exponentialRampToValueAtTime(27, t + 0.8);
+  E.ahr(g.gain, t, 0.25, 0.35, 0.5, 0.42 * KC.BROODER * E.startle);
+  E.fire(o, t, t + 1.2, [lp, g]);
+  grind(E, vg, t, 0.8, 0.35 * KC.BROODER, 30, 90, [[300, 7, 1], [820, 10, 0.6]]);
+  noiseHit(E, vg, t + 0.05, 'pink', 'bandpass', 1400, 0.8, 0.2, 0.7, 0.08, 500);
 }
 function velkathWake(E, L) {
   const p = L.pos, t = E.now() + 0.01, vg = E.emit('cre', p.x, p.y + 2, p.z, 7, 3, null); if (!vg) return;
@@ -371,7 +382,7 @@ export function frameCre(E, W) {
   if (L !== c.L) {                         // a new sleeper: reset the edge memory silently
     c.L = L; c.kind = L ? L.kind : null;
     if (L && L.feet) for (let i = 0; i < 8; i++) c.feet[i] = L.feet[i] ? L.feet[i].t : -1;
-    c.hamPh = L ? L.hamPh || 0 : 0; c.impT = L ? L.impT || 9 : 9; c.brPh = L ? L.brPh || 0 : 0; c.grab = !!(L && L.grab);
+    c.hamPh = L ? L.hamPh || 0 : 0; c.impT = L ? L.impT || 9 : 9; c.dropN = L ? L.dropN || 0 : 0; c.dropHitN = L ? L.dropHitN || 0 : 0; c.brPh = L ? L.brPh || 0 : 0; c.grab = !!(L && L.grab);
     c.hState = L ? L.state || '' : ''; c.contract = L ? L.contract || 0 : 0;
     if (L && L.arms) for (let i = 0; i < L.arms.length && i < 16; i++) { c.lash[i] = L.arms[i].lash || 0; c.strk[i] = L.arms[i].strikeN || 0; }
     if (L && L.creepN !== undefined) { c.creepN = L.creepN; c.popN = L.popN; c.stillN = L.stillN; c.cockN = L.cockN; c.inkN = L.inkN; c.snapN = L.beak ? L.beak.snapN : 0; }
@@ -398,6 +409,9 @@ export function frameCre(E, W) {
       const it = L.impT == null ? 9 : L.impT;
       if (it < c.impT - 0.5 && it < 0.1 && (L.threatE || 0) > 0.5) velkathHammer(E, L, L.threatE);
       c.impT = it;
+      // (velhard) THE DROP: her groan as she gathers over him (the telegraph), then her body meeting the sand
+      if ((L.dropN || 0) !== c.dropN) { c.dropN = L.dropN || 0; if (awake) velkathGroan(E, L); }
+      if ((L.dropHitN || 0) !== c.dropHitN) { c.dropHitN = L.dropHitN || 0; velkathHammer(E, L, 1); }
       bodyLvl = awake ? 0.5 : 0.15;
       hunt = awake ? (L.huntK || 0) : 0;
     } else if (c.kind === 'hoarder') {

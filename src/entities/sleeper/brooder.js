@@ -152,6 +152,24 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // u/s straight up: it launched him over her back); a throw never carries him into the crack (safeThrow).
 export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
 export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
+// NO SAFE SPOT (velhard, Michael 2026-10-12: "you were right beating her is too easy now"; he ruled
+// "No safe spot", VELHARD-BRIEF.md). The refuge under her body is gone (and with it the stance shift):
+// under her (plan within `under` R, below her shell) a counter runs; past `after` s she DROPS: a
+// telegraph of `tele` s (her shell shudders, silt sifts off her plates, a deep groan, her legs brace and
+// lift her `brace` u), then the body slam (`fall` s, down `depth` u, stopped over his helmet, her shell's
+// ground clearance let go for it), then she rises back to her standing height in `rise` s (no lingering
+// crouch: Michael rejected it). Under her at the impact (plan within `hitR` R): deep under (inside
+// `slamR` R) the shell lands on him, at her edge the leg on his side SWEEPS him out; either way the dress
+// tears (game.js's slam path, SLAM_GAP), he staggers (`stag` s at `stagK`) and is thrown flat out from
+// under her (`knock` u/s, `up` vertical share, never toward the crack: safeThrow). The counter falls at
+// `decay`/s once he is out. She keeps her front toward him at `turn` rad/s (HUNT.turn was 0.5, which no
+// diver could circle), and for `slowT` s after a landed hammer blow or a drop she turns at only `slowK`
+// of it: the dash-in window. `reach`: the ward touch (7 since ritefair).
+export const NOSAFE = {
+  after: 2.0, decay: 1.0, under: 0.85, tele: 0.7, brace: 0.45, fall: 0.16, depth: 3.6, rise: 0.45,
+  hitR: 0.95, slamR: 0.55, knock: 18, up: 0.10, stag: 0.9, stagK: 0.85,
+  turn: 0.32, slowT: 1.2, slowK: 0.15, reach: 5
+};
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -261,7 +279,8 @@ export function makeBrooder(idx, cfg) {
     // high hip ward a short burst (it was 5: every ward but the nearest needed a full burst)
     // (ritefair) 6 -> 7: her shell now keeps 3.6 u over the ground under it (Michael could not
     // get under her), which lifts the belly plane on uneven ground; the touch reaches up to meet it
-    reach: 7, collR: 0.33 * R, flare: 0,
+    // (velhard) 7 -> 5 (NOSAFE.reach): every ward is a hop or a burst from under her now
+    reach: NOSAFE.reach, collR: 0.33 * R, flare: 0,
     pos: V3(), yaw: 0, vel: V3(), stand: 0, standE: 0, standTarget: 0, threat: 0, threatE: 0, threatTarget: 0,
     walkTo: null, bodyY: 0, head: V3(), spine: COLL.map(() => V3()), sigils: [], feet: [], _pd: 1e9,
     uni: { uTime: { value: 0 } },
@@ -1380,6 +1399,7 @@ function poseAll(L, dt, player) {
   // threat's lift and front pitch going with it brought her 4.3 u down over him)
   const liftK = Math.max(L.threatE, L.underE ? L.underE.x : 0);
   L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  if (L.dropY) L.bodyY += L.dropY;   // (velhard) THE DROP: braced up, slammed down, risen (noSafeSpot)
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
   let leanP = 0, leanR = 0;
@@ -1398,7 +1418,9 @@ function poseAll(L, dt, player) {
   // (ritefair) awake and not stilled, her SHELL keeps STAND.clear u over whatever ground is under
   // it (a bank under her prow had the rim 0.3-0.7 u off the floor: the lane in was shut); her legs
   // still plant on the floor, the doors between them stay open. Stilled, she settles as before.
-  const clr = !L.dormant && !L.calmed ? lerp(SOLE_CLR, STAND.clear, L.standE) : SOLE_CLR;
+  // (velhard: the clearance rides THE DROP, L.dropY, so the shell moves by exactly that whether or not
+  // the sole holds her up: braced up, then down to the sand)
+  const clr = !L.dormant && !L.calmed ? lerp(SOLE_CLR, Math.max(SOLE_CLR, STAND.clear + (L.dropY || 0)), L.standE) : SOLE_CLR;
   const bed = lerp(SOLE_BED_DEEP * R, -clr, smooth(hc, 0, 0.7));
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
@@ -1606,6 +1628,105 @@ function sight(L, dt, player, ev) {
   L._pdT = d;
 }
 
+// ---- NO SAFE SPOT (velhard, 2026-10-12; knobs and the ruling: NOSAFE above) -------------------------
+// The counter, the drop and the window. Called from updateBrooder's locomotion (where the ritefair stance
+// shift was), before she moves this frame; poseAll reads L.dropY (added to her body height and to her
+// shell's ground clearance, so the sole floor lets her come down). The hit is resolved HERE, like the hammer's (bodyCols zeroes a
+// shell faster than 14 u/s and its push never knows the crack): ev.slam (game.js tears the dress once per
+// SLAM_GAP), player.stagger, a flat throw out from under her through safeThrow. Audio edges for
+// audio/creatures.js: L.dropN (the groan, at the telegraph) and L.dropHitN (the impact). State:
+// L.nsT the counter (s), L.drop 0 none / 1 telegraph / 2 the slam / 3 the rise, L.dropT (s in phase),
+// L.dropD (u: how far she comes down), L.nsSlow (s of slow turn left), L.dropHits / L.dropKind (probes).
+// No allocation: module scratch only.
+const _ns = V3();
+function nsTurn(L) { return NOSAFE.turn * (L.drop || L.nsSlow > 0 ? NOSAFE.slowK : 1); }
+function noSafeSpot(L, dt, player, ev, hunt) {
+  const N = NOSAFE, R = L.R;
+  if (L.nsSlow > 0) L.nsSlow = Math.max(0, L.nsSlow - dt);
+  const live = hunt && L.standE > 0.9;
+  const ux = player.pos.x - L.pos.x, uz = player.pos.z - L.pos.z, rho = Math.hypot(ux, uz);
+  const shellY = L.bodyY - (L.dropY || 0);                    // her standing body height (last pose)
+  const under = live && rho < N.under * R && player.pos.y < shellY;
+  L.nsUnder = under;
+  if (!L.drop) {
+    L.nsT = !live ? 0 : under ? (L.nsT || 0) + dt : Math.max(0, (L.nsT || 0) - N.decay * dt);
+    if (live && L.nsT >= N.after) { L.drop = 1; L.dropT = 0; L.dropN = (L.dropN || 0) + 1; L.nsDust = 0; }
+    else { L.dropY = 0; return; }
+  }
+  // stilled (the last ward lit under her) or held mid-drop: no blow, straight to the rise
+  if (!live && L.drop < 3) { L.drop = 3; L.dropT = 0; L.dropD = -(L.dropY || 0); }
+  L.dropT += dt;
+  // planted for it: her stride dies away
+  { const k = Math.min(1, 6 * dt); L.vel.x -= L.vel.x * k; L.vel.z -= L.vel.z * k; }
+  if (L.drop === 1) {
+    // THE TELEGRAPH: her legs brace and lift her, the shell shudders, silt sifts off her plates, the
+    // ground rumbles under him (ev.quake: the lens shakes, game.js startles the reef past 0.3)
+    const k = clamp(L.dropT / N.tele, 0, 1);
+    L.dropY = N.brace * ease(k);
+    const sh = 0.5 + 0.5 * k;
+    L.bR.v += nz(L.t * 11, 3) * 0.9 * sh * dt * 60 * 0.02;
+    L.bP.v += nz(L.t * 9, 4) * 0.6 * sh * dt * 60 * 0.02;
+    quake(L, ev, L.pos.x, L.pos.z, 0.10 + 0.12 * k, player);
+    L.nsDust = (L.nsDust || 0) - dt;
+    if (L.nsDust <= 0) {
+      L.nsDust = 0.045;
+      const a = Math.random() * Math.PI * 2, r = R * (0.55 + 0.4 * Math.random());
+      emitDust(L.pos.x + Math.cos(a) * r, L.bodyY + R * (0.02 + 0.08 * Math.random()), L.pos.z + Math.sin(a) * r, 4, 1.6);
+    }
+    if (L.dropT >= N.tele) {
+      // how far: all the way to the sand, but stopped over his helmet if he is under her
+      let d = N.depth;
+      if (rho < N.hitR * R && player.pos.y < shellY) {
+        const crown = player.pos.y + 0.45 - groundAt(L, player.pos.x, player.pos.z, true);
+        d = clamp(L.bellyOver - crown - 0.25, 0.6, N.depth);
+      }
+      L.drop = 2; L.dropT = 0; L.dropD = d + L.dropY; L.dropY0 = L.dropY;
+    }
+  } else if (L.drop === 2) {
+    // THE SLAM: accelerating
+    const k = clamp(L.dropT / N.fall, 0, 1);
+    L.dropY = L.dropY0 - L.dropD * k * k;
+    if (k >= 1) { dropImpact(L, ev, player, rho, ux, uz, shellY); L.drop = 3; L.dropT = 0; L.dropD = -L.dropY; }
+  } else {
+    // THE RISE: back to her standing height, no lingering crouch
+    const k = clamp(L.dropT / N.rise, 0, 1), e = 1 - (1 - k) * (1 - k) * (1 - k);
+    L.dropY = -L.dropD * (1 - e);
+    if (k >= 1) { L.drop = 0; L.dropY = 0; L.nsT = 0; if (live) L.nsSlow = N.slowT; }
+  }
+}
+function dropImpact(L, ev, player, rho, ux, uz, shellY) {
+  const N = NOSAFE, R = L.R;
+  L.dropHitN = (L.dropHitN || 0) + 1;
+  const gy = groundAt(L, L.pos.x, L.pos.z, true);
+  quake(L, ev, L.pos.x, L.pos.z, 0.85, player);
+  thump(L, ev, L.pos.x, L.pos.z, 0.9, player);
+  silt(L.pos.x, gy + 0.3, L.pos.z, 10, 4, 3.4, R * 0.95);       // her rim meets the sand all round
+  if (!(rho < N.hitR * R && player.pos.y < shellY + 0.5)) return;   // he got out from under her
+  // out from under her, flat (from her centre through him; dead under her, out of her nearer flank)
+  if (rho > 1e-3) _ns.set(ux / rho, 0, uz / rho);
+  else { const s = Math.sin(L.yaw), c = Math.cos(L.yaw); _ns.set(c, 0, -s); }
+  const sweep = rho > N.slamR * R;
+  if (sweep) {
+    // THE SWEEP: the leg on his side kicks out through him (a fast step past him; render + bodyCols)
+    let best = -1, bd = 1e9;
+    for (let li = 0; li < 8; li++) { const f = L.feet[li]; if (f.t >= 0) continue; const d = Math.hypot(f.planted.x - player.pos.x, f.planted.z - player.pos.z); if (d < bd) { bd = d; best = li; } }
+    if (best >= 0) {
+      const f = L.feet[best];
+      f.from.copy(f.planted);
+      f.to.copy(f.planted).addScaledVector(_ns, 0.3 * R);
+      reachFoot(L, best, f.to);
+      f.h = 0.22; f.t = 0; f.fast = 2.4;
+    }
+  }
+  safeThrow(_ns, player.pos.x, player.pos.z, L.idx);
+  _ns.y = N.up; _ns.normalize();
+  player.vel.x *= 0.3; player.vel.z *= 0.3; if (player.vel.y > 0) player.vel.y *= 0.3;
+  player.vel.addScaledVector(_ns, N.knock);
+  player.stagger = player.staggerDur = sweep ? 0.7 * N.stag : N.stag; player.staggerK = N.stagK;
+  ev.slam = true; ev.lightDrain += 0.12;
+  L.dropHits = (L.dropHits || 0) + 1; L.dropKind = sweep ? 'sweep' : 'slam';
+}
+
 const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
@@ -1721,6 +1842,7 @@ export function updateBrooder(L, dt, t, player) {
       L.bY.v -= R * 0.10 * L.threatE;
       L.bP.v += 0.9 * L.threatE;
       quake(L, ev, _ft.x, _ft.z, 0.7 * L.threatE, player);
+      L.nsSlow = NOSAFE.slowT;   // (velhard) the blow spent, she is slow to turn: the dash-in window
     }
   }
 
@@ -1796,7 +1918,7 @@ export function updateBrooder(L, dt, t, player) {
     let dA = want - L.yaw;
     while (dA > Math.PI) dA -= Math.PI * 2;
     while (dA < -Math.PI) dA += Math.PI * 2;
-    const wr = hunt ? HUNT.turn : 0.35;
+    const wr = hunt ? nsTurn(L) : 0.35;   // (velhard: NOSAFE.turn, slowed in the windows)
     yawWant = clamp(dA * 1.4, -wr, wr);
     if (Math.abs(dA) > 0.6) speed *= 0.2;                // turn on the spot before striding off
   }
@@ -1817,19 +1939,9 @@ export function updateBrooder(L, dt, t, player) {
   L.velPrev.copy(L.vel);
   L.vel.x = lerp(L.vel.x, vx, Math.min(1, 1.5 * dt));
   L.vel.z = lerp(L.vel.z, vz, Math.min(1, 1.5 * dt));
-  // (ritefair) THE SHIFT: a diver under her a while, and she moves her stance out from over
-  // him, sideways at a walk; her legs stepping round him nudge him, they never strike
-  L.underT = L.under && hunt ? (L.underT || 0) + dt : 0;
-  if (L.underT > STAND.shiftT && !(L.shiftT > 0)) {
-    L.underT = 0; L.shiftT = STAND.shiftD;
-    const a = L.yaw + (Math.random() < 0.5 ? 1 : -1) * Math.PI / 2;
-    L.shiftX = Math.sin(a); L.shiftZ = Math.cos(a);
-  }
-  if (L.shiftT > 0) {
-    L.shiftT -= dt;
-    const k = STAND.shiftV * Math.sin(Math.PI * clamp(1 - L.shiftT / STAND.shiftD, 0, 1));
-    L.vel.x += (L.shiftX * k - L.vel.x) * Math.min(1, 4 * dt); L.vel.z += (L.shiftZ * k - L.vel.z) * Math.min(1, 4 * dt);
-  }
+  // (velhard) NO SAFE SPOT: the ritefair stance shift (a diver under her ~3 s and she sidled out from
+  // over him; under her was a refuge) is retired; under her now counts up to THE DROP (noSafeSpot)
+  noSafeSpot(L, dt, player, ev, hunt);
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
   // (ritefair; Task 5) OFF THE CRACK: awake and hunting she keeps her centre APRON + STAND.keep R
@@ -1882,7 +1994,7 @@ export function updateBrooder(L, dt, t, player) {
     restWorld(L, li, _rw);
     if (L.standE > 0.35 && f.t < 0) reachFoot(L, li, _rw);   // the rest spot she can really stand on
     if (f.t >= 0) {
-      f.t = Math.min(1, f.t + dt / swT);
+      f.t = Math.min(1, f.t + dt * (f.fast || 1) / swT);   // (velhard: a SWEEP kicks at f.fast x a step's pace)
       const e = win(f.t, 0.12, 0.92), lift = Math.sin(Math.PI * Math.pow(f.t, 0.72));
       f.cur.lerpVectors(f.from, f.to, e);
       f.cur.y += lift * f.h * L.R * L.standE;
@@ -1891,7 +2003,7 @@ export function updateBrooder(L, dt, t, player) {
       // weight comes off this corner: the body lists toward it and away from the step
       rollT -= sd * 0.016 * lift; pitchT += (k < 2 ? 0.011 : -0.008) * lift; yT += 0.006 * lift;
       if (f.t >= 1) {
-        f.t = -1; f.planted.copy(f.to); f.cur.copy(f.to);
+        f.t = -1; f.fast = 0; f.planted.copy(f.to); f.cur.copy(f.to);
         f.sl = slopeAt(L, f.to.x, f.to.z);
         silt(f.cur.x, f.cur.y + 0.2, f.cur.z, f.h > 0.2 ? 3 : 1, 3, 1.4 + 1.4 * f.h / 0.30, 0.9);
         if (f.h > 0.2) spawnPlume(f.cur.x, f.cur.y, f.cur.z, 'small', 1, L.idx);   // a heavy foot throws its own small cloud
