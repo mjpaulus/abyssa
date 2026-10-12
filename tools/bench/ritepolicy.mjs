@@ -242,6 +242,9 @@ export function makePolicy({ AVG, rnd, FLEE = 0, now }) {
     }
     // in the water
     const vy = s.vel[1];
+    // (perfect) hanging at her rim at shell height, outside her: the shell walls him off and her lunge
+    // knocks him; a human sinks below her rim first (C) and goes in under it (g8: 20 s pressed into her front)
+    if (!AVG && !under && rho < (RIM + 0.25) * RR && s.agl > 2.0 && P[1] < s.lev[1] + 1) return { sec, yaw, pitch: -0.4, keys: ['C', ...(dh > 1.2 ? ['W'] : [])], why: 'duck' };
     const keys = [];
     if (dh > 1.2) keys.push('W');
     if (needUp < -1.0 || vy > 2.5 || (needUp < 0 && vy > 0.8)) keys.push('C');
