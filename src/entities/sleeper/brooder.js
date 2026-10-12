@@ -183,7 +183,7 @@ export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35,
 export const NOSAFE = {
   after: 3.0, decay: 1.0, under: 0.72, rim: 0.95, rimK: 0.3, again: 1.0,
   tele: 1.4, brace: 0.7, fall: 0.16, depth: 3.6, rise: 0.45,
-  hitR: 0.6, sweepR: 1.1, outClean: 1.2, outTear: 0.3,
+  hitR: 0.6, sweepR: 1.1, outClean: 1.2, outTear: 0.45,
   knock: 24, sweepKnock: 24, up: 0.10, stag: 0.9, sweepStag: 0.6, stagK: 0.85,
   turn: 0.18, slowT: 1.2, slowK: 0.15, reach: 5, wound: 0.6
 };
