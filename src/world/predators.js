@@ -40,7 +40,9 @@ import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { rng, clamp, lerp, V3 } from '../lib/math.js';
 import { glowTex, makeGlow } from '../lib/textures.js';
-import { terrainH } from './terrain.js';
+// (Task 5) every floor read here is the floor SAL stands on: over a shut crack that is the jam's
+// rubble, not the carved throat floor under it (terrainH), so nothing rests inside the rubble
+import { shutFloorY } from './terrain.js';
 import { rockColliders } from './flora.js';
 import { siteParams, stream } from './site.js';
 import { SKIN_COMMON, SKIN_LIGHTS } from './fauna.js';
@@ -744,7 +746,7 @@ function updateShark(S, dt, t, p) {
   // keep the circuit inside the world and off the seabed
   const hr = Math.hypot(_a.x, _a.z);
   if (hr > WORLD_R * 0.82) { const k = WORLD_R * 0.82 / hr; _a.x *= k; _a.z *= k; }
-  const aFloor = terrainH(_a.x, _a.z, cfg.zi) + cfg.size * 0.55 + 3;
+  const aFloor = shutFloorY(_a.x, _a.z, cfg.zi) + cfg.size * 0.55 + 3;
   _a.y = clamp(_a.y, aFloor, zoneTop(cfg.zi) - 8);
 
   // CRUISING GLIDES (anim-fauna): a patrolling shark beats for a few seconds, then
@@ -764,7 +766,7 @@ function updateShark(S, dt, t, p) {
   S.pos.addScaledVector(S.fwd, S.speed * dt);
 
   // hard terrain floor — nothing swims through the seabed
-  const floor = terrainH(S.pos.x, S.pos.z, cfg.zi) + cfg.size * 0.42 + 1.2;
+  const floor = shutFloorY(S.pos.x, S.pos.z, cfg.zi) + cfg.size * 0.42 + 1.2;
   if (S.pos.y < floor) { S.pos.y = floor; if (S.fwd.y < 0) { S.fwd.y *= -0.3; S.fwd.normalize(); } }
   const ceil = zoneTop(cfg.zi) - 5;
   if (S.pos.y > ceil) { S.pos.y = ceil; if (S.fwd.y > 0) { S.fwd.y *= -0.3; S.fwd.normalize(); } }
@@ -1192,14 +1194,14 @@ function buildOctopuses() {
       const scale = 1.5 + _pd() * 0.7;
       const a = _pd() * TAU, r = rock.r + scale * 0.75;
       const x = rock.x + Math.cos(a) * r, z = rock.z + Math.sin(a) * r;
-      const y = terrainH(x, z, zi) + 0.2;
+      const y = shutFloorY(x, z, zi) + 0.2;
       mesh.scale.setScalar(scale);
       scene.add(mesh);
       // the den mouth: a stride further out from the boulder, where a dropped lantern lies
       const mx = x + Math.cos(a) * 1.5, mz = z + Math.sin(a) * 1.5;
       octos.push({
         zi, mesh, mat, u: mat.userData.u,
-        den: V3(x, y, z), pos: V3(x, y, z), jet: V3(), mouth: V3(mx, terrainH(mx, mz, zi) + 0.35, mz),
+        den: V3(x, y, z), pos: V3(x, y, z), jet: V3(), mouth: V3(mx, shutFloorY(mx, mz, zi) + 0.35, mz),
         state: 'den', tState: 0, cool: rng(0, 10), reach: 0, active: 0, grab: 0, thief: false,
         // anim-fauna: jet pulse clock/strength, alarm blanch, body orientation
         jetT: 0, jetK: 0, blanch: 0, orient: new THREE.Quaternion()
@@ -1327,7 +1329,7 @@ function updateOctopus(O, dt, t, p, lp) {
   }
 
   // never sink into the seabed
-  const floor = terrainH(O.pos.x, O.pos.z, O.zi) + 0.2;
+  const floor = shutFloorY(O.pos.x, O.pos.z, O.zi) + 0.2;
   if (O.pos.y < floor) { O.pos.y = floor; if (O.jet.y < 0) O.jet.y = 0; }
   O.mesh.position.copy(O.pos);
 
@@ -1396,7 +1398,7 @@ function lanternAt(out) {
 function dropLantern(at, floorIt) {
   lantern.carried = false;
   lantern.pos.copy(at);
-  if (floorIt && lantern.by) lantern.pos.y = terrainH(at.x, at.z, lantern.by.zi) + 0.35;
+  if (floorIt && lantern.by) lantern.pos.y = shutFloorY(at.x, at.z, lantern.by.zi) + 0.35;
 }
 
 function updateLantern(dt, p) {
@@ -2023,7 +2025,7 @@ function stepDeadSquid(Q, dt, p, im, ia, gp, gs, gc) {
   Q.vel.multiplyScalar(Math.pow(0.30, dt));
   Q.vel.y -= SQ.sinkV * dt;
   if (Q.vel.y < -SQ.sinkV) Q.vel.y = -SQ.sinkV;
-  const floor = terrainH(Q.pos.x, Q.pos.z, 2) + Q.size * 0.3 + 0.4;
+  const floor = shutFloorY(Q.pos.x, Q.pos.z, 2) + Q.size * 0.3 + 0.4;
   if (Q.pos.y < floor) { Q.pos.y = floor; Q.vel.y = 0; }
   Q.spin += dt * 0.9;
 
@@ -2210,7 +2212,7 @@ function updateSquid(dt, t, p, lp) {
       _a.set(Math.cos(Q.orbitPh) * 80, zoneMidY(2) + Math.sin(t * 0.07 + Q.i) * 30, Math.sin(Q.orbitPh) * 80);
       wantGlow = 0.10;
     }
-    const aFloor = terrainH(_a.x, _a.z, 2) + 3;
+    const aFloor = shutFloorY(_a.x, _a.z, 2) + 3;
     _a.y = clamp(_a.y, aFloor, zoneTop(2) - 6);
 
     // ---- jet propulsion: impulses, not thrust; drift between them ----
@@ -2241,7 +2243,7 @@ function updateSquid(dt, t, p, lp) {
       Q.vel.multiplyScalar(Math.pow(0.16, dt));
       Q.pos.addScaledVector(Q.vel, dt);
     }
-    const floor = terrainH(Q.pos.x, Q.pos.z, 2) + Q.size * 0.4 + 0.8;
+    const floor = shutFloorY(Q.pos.x, Q.pos.z, 2) + Q.size * 0.4 + 0.8;
     if (Q.pos.y < floor) { Q.pos.y = floor; Q.vel.y = Math.abs(Q.vel.y) * 0.4; }
     const ceil = zoneTop(2) - 4;
     if (Q.pos.y > ceil) { Q.pos.y = ceil; Q.vel.y = -Math.abs(Q.vel.y) * 0.4; }
@@ -2879,10 +2881,10 @@ export function reseedDens() {
       const scale = O.mesh.scale.x;
       const a = _pd() * TAU, r = rock.r + scale * 0.75;
       const x = rock.x + Math.cos(a) * r, z = rock.z + Math.sin(a) * r;
-      const y = terrainH(x, z, zi) + 0.2;
+      const y = shutFloorY(x, z, zi) + 0.2;
       O.den.set(x, y, z);
       const mx = x + Math.cos(a) * 1.5, mz = z + Math.sin(a) * 1.5;
-      O.mouth.set(mx, terrainH(mx, mz, zi) + 0.35, mz);
+      O.mouth.set(mx, shutFloorY(mx, mz, zi) + 0.35, mz);
       O.thief = false;
       O.pos.copy(O.den);
       O.jet.set(0, 0, 0);
@@ -2945,7 +2947,14 @@ const slashResult = { killed: '', at: V3() };
 
 // Sharks and octopuses are not killable with a diving knife, and pretending otherwise
 // would cheapen both. They react instead — the swing registers as a threat, not damage.
-export function slash(pos, fwd, range = 3.4) {
+// (fissure-and-harpoon Task 7) `power` is the blade's weight: 1 the knife (exactly as it always was), 1.8 the
+// old harpoon. It scales the ABORT and the STAGGER only (ruled): the shark peels away blinder (blinded 0.7 x
+// power, to 1: the hard flee turn) and is knocked into a roll away from the iron (rollKick x power). Its
+// avoidance afterwards is the knife's 60-90 s. The REACH (range) is the blade's own and every test below
+// scales with it: the squid kill (range + size*0.35, in the 70 deg cone), the shark (range + size*0.5 — a
+// SPHERE, no cone: a long blade spooks a shark beside or behind him too) and the octopus (range + 2.2).
+// Nothing here kills a shark or an octopus.
+export function slash(pos, fwd, range = 3.4, power = 1) {
   const r2 = range * range;
   // a knife stroke in the water is a small hard jolt: fish in reach bolt, plumes snap in
   stirPulse(pos.x + fwd.x * 1.5, pos.y + fwd.y * 1.5, pos.z + fwd.z * 1.5, 12, 0, 0.8, P_STRIKE);
@@ -2986,7 +2995,9 @@ export function slash(pos, fwd, range = 3.4) {
     if (S.state !== 'flee') {
       sharkSetState(S, 'flee');
       S.arousal = 0; S.cool = rng(SH.coolMax, SH.coolMax * 1.5);
-      S.bit = true; S.blinded = 0.7;    // borrow the hard peel-away read
+      S.bit = true; S.blinded = Math.min(1, 0.7 * power);    // borrow the hard peel-away read
+      // the stagger: rolled off the blow, away from the side the iron came in on (the flee's own kick, larger)
+      if (power > 1) S.rollKick = (fwd.x * _k1.z - fwd.z * _k1.x >= 0 ? -1 : 1) * 1.35 * Math.min(power, 1.6);
       spooked = true;
     }
   }

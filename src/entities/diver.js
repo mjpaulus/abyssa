@@ -20,6 +20,7 @@ import { terrainH } from '../world/terrain.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet, canvasSet } from '../lib/textures.js';
 // SALSCULPT HOOK (1/2): the pipeline-built Mark V swaps onto this rig when assets/sal loads
 import { installSalSculpt } from './salInstall.js';
+import { harpoonModel, HARPOON_ASSET } from '../lib/harpoonModel.js';
 
 const TAU = Math.PI * 2;
 const ss = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
@@ -1633,6 +1634,27 @@ export const diver = (() => {
     g.slashArc = arc;
   }
 
+  // ---- (fissure-and-harpoon Task 7) THE OLD HARPOON: his blade once he owns it ----
+  // Velkath's iron (lib/harpoonModel.js: the sculpted set, the procedural build until it lands), 1x, in the
+  // LEFT fist (the knife hand; the right keeps the lantern). A GROUP under the hand bone, the mesh inside it:
+  // salInstall retires only a bone's direct meshes, so the sculpted Sal and ?salproc both carry it. Built
+  // here, hidden; the boot's warm frames draw everything hidden (forceAllDrawn), so it is compiled before
+  // the first pull. updateDiver poses it (the carry along the forearm, the thrust through both fists).
+  {
+    const grp = new THREE.Group();
+    grp.name = 'salHarpoon';
+    grp.visible = false;
+    g.armL.end.add(grp);
+    const M = harpoonModel();
+    const mesh = new THREE.Mesh(M.geometry, M.material);
+    mesh.name = 'salHarpoon:iron';
+    // it passes a hand's breadth from the lantern's flame in the thrust: a caster there throws a pole of
+    // shadow across the whole seabed out of the lantern's cube map
+    mesh.castShadow = false; mesh.receiveShadow = true;
+    grp.add(mesh);
+    g.harpoon = grp; g.harpoonMesh = mesh;
+  }
+
   // The old 5-segment "surface umbilical" stub that dangled off the neck is gone:
   // the real verlet tether (systems/tether.js) now docks at the backpack inlet, and
   // the stub just clipped through the torso next to it.
@@ -2121,6 +2143,147 @@ function evalSlash(ts) {
   const t0 = SLK[a], t1 = SLK[b];
   const u = t1 > t0 ? easeSeg(clamp((ts - t0) / (t1 - t0), 0, 1), SLK[b + 6]) : 1;
   for (let c = 0; c < 5; c++) slA[c] = SLK[a + 1 + c] + (SLK[b + 1 + c] - SLK[a + 1 + c]) * u;
+}
+
+// ---- (fissure-and-harpoon Task 7) THE HARPOON THRUST: a one-shot, two-handed, weighted jab ----
+// Reference, not an action game: a man in 90 kg of copper and lead on planted boots cannot dart. The
+// thrust is the whole body: he SITS BACK and draws the iron (the wind-up, 0 -> 0.18 s, the left shoulder
+// going back, the right fist coming across onto the shaft), then DRIVES it from the boots — the lean
+// carries the hands, the arms only finish it (contact at 0.30 s: game.js checks the hit at t+0.30 —
+// keep in sync), the weight goes on past the blow (a short follow-through), the frame SETTLES onto the
+// legs (the heel-strike settle springs, kicked at contact), and the slow recovery hands the arms back
+// to whatever they were doing by 0.9 s.
+// HANDS ARE PLACED, NOT ROTATED: the keys are the two PALM points in the SPINE's frame (x left, y up,
+// z forward), and a 2-bone solve (armIK) turns them into the shoulder/elbow; the LEFT palm drives the
+// shaft (grip HG_L on the iron), the RIGHT (lantern) palm closes on it HG_R further up. The keys are
+// authored so the line through them, turned by the keyed spine twist, points along the look at contact.
+// The lantern stays in the right fist, hung plumb from it for the length of the thrust (its light
+// never leaves: lantPivot is under that fist and the light follows it).
+const THRUST_DUR = 0.9, THK_ST = 12;
+// t, the LEFT palm (spine frame x, y, z), the iron's aim in the spine frame (yaw: + toward his left;
+// pitch: + up), body yaw off the look (+: turned to his left), spine yaw (+: left shoulder back), spine
+// pitch, body lean (+: forward), body drop (u), ease-into-key. The RIGHT palm is solved from them:
+// HG_R - HG_L further along the aim.
+// THE BLADED STANCE: he turns his body and twists his corselet LEFT (right shoulder leading, the left
+// fist back at the hip) so the iron runs down his LEFT FLANK, outside his silhouette — the follow lens
+// sits behind him, and an iron held in front of his belly is hidden by his own back. At contact the aim
+// is the twist taken back off (the iron points along the look) and its pitch carries the lean and the
+// spine's pitch back up, so the point comes in level with a man's chest.
+const THK = new Float32Array([
+  0.000, 0.36, -0.18, 0.14, -0.60, 0.10, 0.00, 0.00, 0.00, 0.00, 0.000, 0,
+  0.180, 0.40, -0.13, 0.25, -0.95, 0.18, 0.40, 0.55, -0.03, -0.06, -0.035, 1,   // the wind-up: sat back, iron drawn
+  0.300, 0.30, -0.06, 0.50, -0.70, 0.30, 0.35, 0.35, 0.07, 0.14, -0.060, 2,   // CONTACT: driven from the boots
+  0.400, 0.29, -0.05, 0.53, -0.66, 0.32, 0.33, 0.33, 0.09, 0.17, -0.070, 3,   // the weight goes on past it
+  0.560, 0.32, -0.08, 0.44, -0.75, 0.22, 0.35, 0.40, 0.05, 0.07, -0.040, 4,   // settled, the iron held out
+  0.900, 0.40, -0.20, 0.25, -0.60, 0.10, 0.00, 0.00, 0.00, 0.00, 0.000, 4    // handed back
+]);
+const THN = THK.length / THK_ST;
+// thA: 0-2 left palm, 3-5 right palm (derived), 6 spine yaw, 7 spine pitch, 8 lean, 9 drop, 10 body yaw
+const thA = new Float32Array(11);
+let thrustT = -1, thrustHit = false, thrW = 0, thIK = 0, thrustN = 0;
+function evalThrust(ts) {
+  let i = 0;
+  while (i < THN - 1 && THK[(i + 1) * THK_ST] <= ts) i++;
+  const a = i * THK_ST, b = Math.min(i + 1, THN - 1) * THK_ST;
+  const t0 = THK[a], t1 = THK[b];
+  const u = t1 > t0 ? easeSeg(clamp((ts - t0) / (t1 - t0), 0, 1), THK[b + 11]) : 1;
+  thA[0] = thk(a, b, u, 1); thA[1] = thk(a, b, u, 2); thA[2] = thk(a, b, u, 3);
+  const ay = thk(a, b, u, 4), ap = thk(a, b, u, 5), sp = HG_R - HG_L;
+  thA[3] = thA[0] + sp * Math.sin(ay) * Math.cos(ap);
+  thA[4] = thA[1] + sp * Math.sin(ap);
+  thA[5] = thA[2] + sp * Math.cos(ay) * Math.cos(ap);
+  thA[10] = thk(a, b, u, 6);
+  thA[6] = thk(a, b, u, 7); thA[7] = thk(a, b, u, 8); thA[8] = thk(a, b, u, 9); thA[9] = thk(a, b, u, 10);
+}
+function thk(a, b, u, c) { return THK[a + c] + (THK[b + c] - THK[a + c]) * u; }
+// where the fists close on the iron (model z, along its axis: + toward the head). HG_L is the carry's
+// grip too, so the shaft never slides in the left fist.
+const HG_L = -0.67, HG_R = -0.32;
+// the fitted grip bars in the hand frames (salSkinSculpt.js: KNIFE_C the left hilt, GRIP the right bail
+// mirrored): the palm points the solve places and the shaft runs through
+const PALM_L = V3(0.014, -0.206, 0.064), PALM_R = V3(-0.004, -0.200, 0.062);
+// the elbows' pole (spine frame): down, out and back — a man bracing a pole, not flapping his wings
+const POLE_L = V3(0.55, -1, -0.45), POLE_R = V3(-0.55, -1, -0.30);
+// THE CARRY (idle, walking, the haul): in the left fist's frame, the shaft out of the little-finger side
+// and back up past the elbow — the head past it, the butt a hand below the fist. It rides the forearm, so
+// in the haul it trails the arm. (fix round 1, ruled) SPLAYED ~16 deg off the sleeve: laid along it, the
+// dark iron sat on the sleeve's own outline and the follow lens never saw it; splayed it stands off the
+// arm as its own line. The butt swings inboard for it — measured clear of the thigh, hip and sheath over
+// a real stride (report).
+const CARRY_DIR = V3(0.60, 1, -0.10).normalize();
+const _ikV = V3(), _ikH = V3(), _ikE = V3(), _ikP = V3(), _ikX = V3(), _ikY = V3(), _ikZ = V3();
+const _ikQ = new THREE.Quaternion(), _ikQ2 = new THREE.Quaternion(), _ikQf = new THREE.Quaternion();
+const _ikM = new THREE.Matrix4();
+// THE BURST: the arms are flung back, the elbow ahead of the fist — along the forearm the head would
+// point forward past his helmet. In the burst the iron swings out and trails past the fist instead, the
+// head back along his wake. (fix round 1) Splayed both ways the turn is ~105 deg, not ~150, and it is
+// SPRUNG (bwS: the water swings it round a beat late and lets it settle), not a hand-frame flip.
+const BURST_DIR = V3(0.60, -1, -0.12).normalize();
+// ...and the fist slides to the butt end for it (the wash takes the iron; held at HG_L the butt, opposite
+// the trailing head, pointed into his hip)
+const BURST_HG = -0.92;
+// THE DRAW's WAYPOINT (world, per frame): carry -> jab (and back) goes through the iron held FORWARD AND UP
+// from the fist, so the head turns over in the fist's own fore-and-aft plane (never across the breastplate:
+// the straight slerp passed it through the corselet for ~6 frames each way) and the butt, opposite it, goes
+// back and down outside his hip (an outboard waypoint swung the butt into the thigh).
+const carryQ = new THREE.Quaternion(), carryP = V3(), burstQ = new THREE.Quaternion(), burstP = V3();
+const midQ = new THREE.Quaternion(), midP = V3();
+const _cQ = new THREE.Quaternion(), _cP = V3();
+const bwS = { x: 0, v: 0 };
+// THE PLUMB CARRIES (world frame, fix round 1): the valve check (the iron hangs from the raised fist, head
+// down the outside of his upper arm) and the ladder (both hands on the rungs; the iron hangs from his left
+// wrist by its butt, as on a lanyard). LADDER_HG: the model z that hangs at the wrist.
+const LADDER_HG = -0.94;
+// the valve check: the fist slides to the butt end and the iron hangs outboard of his raised arm (held at
+// HG_L the butt stood up into the bonnet)
+const VALVE_HG = -1.00;
+const _plQ = new THREE.Quaternion(), _plP = V3(), _plD = V3(), _plL = V3(), _plG = V3();
+const _puff = V3();
+{
+  // model +Z (toward the head) along the carry; model +Y (the leaf's flat, the line stub hangs -Y) outboard
+  for (const [D, Q, P, hg] of [[CARRY_DIR, carryQ, carryP, HG_L], [BURST_DIR, burstQ, burstP, BURST_HG]]) {
+    _ikZ.copy(D); _ikY.set(1, 0, 0); _ikX.crossVectors(_ikY, _ikZ).normalize(); _ikY.crossVectors(_ikZ, _ikX);
+    _ikM.makeBasis(_ikX, _ikY, _ikZ); Q.setFromRotationMatrix(_ikM);
+    P.copy(PALM_L).addScaledVector(D, -hg);
+  }
+}
+// Two-bone solve in the spine's frame: places arm A's palm point (`palm`, hand frame, wrist straight) at
+// (tx, ty, tz), elbow toward `pole`, and blends the result over the pose already on the bones by w.
+// The forearm link runs elbow -> palm (the hand held straight on it), so the solve is exact for the palm.
+function armIK(A, palm, tx, ty, tz, pole, w) {
+  const S = A.root.position, a = A.upLen;
+  const l2x = palm.x, l2y = -A.loLen + palm.y, l2z = palm.z;
+  const R2 = Math.hypot(l2y, l2z), L2sq = l2x * l2x + R2 * R2;
+  _ikV.set(tx - S.x, ty - S.y, tz - S.z);
+  const dMax = Math.hypot(a + R2, l2x) * 0.995;
+  const d = clamp(_ikV.length(), 0.32, dMax);
+  // |L1 + Rx(e) L2|^2 = a^2 + |L2|^2 - 2a (Rx(e) L2).y, (Rx(e) L2).y = R2 cos(e + phi)
+  const c = clamp((a * a + L2sq - d * d) / (2 * a * R2), -1, 1);
+  const e = Math.min(0, Math.acos(c) - Math.atan2(l2z, l2y));
+  const ce = Math.cos(e), se = Math.sin(e);
+  _ikH.set(l2x, -a + l2y * ce - l2z * se, l2y * se + l2z * ce).normalize();
+  _ikV.normalize();
+  _ikQ.setFromUnitVectors(_ikH, _ikV);
+  // twist about the shoulder->palm line so the elbow goes toward the pole
+  _ikE.set(0, -a, 0).applyQuaternion(_ikQ);
+  _ikE.addScaledVector(_ikV, -_ikE.dot(_ikV));
+  _ikP.copy(pole).addScaledVector(_ikV, -pole.dot(_ikV));
+  const tw = Math.atan2(_ikX.crossVectors(_ikE, _ikP).dot(_ikV), _ikE.dot(_ikP));
+  _ikQ2.setFromAxisAngle(_ikV, tw);
+  _ikQ.premultiply(_ikQ2);
+  A.root.quaternion.slerp(_ikQ, w);
+  A.mid.rotation.x += (e - A.mid.rotation.x) * w;
+  A.end.rotation.x -= A.end.rotation.x * w;
+}
+
+// A carry posed in WORLD terms, into the left hand's frame: model +Z along D (world, unit), the model
+// point `hg` at world point G, the leaf's flat (model +Y) toward `side` (world, his left). invHandQ is the
+// inverse of the hand bone's world quaternion; the hand's matrixWorld must be current. -> outQ, outP.
+function plumbLocal(handEnd, invHandQ, G, D, hg, side, outQ, outP) {
+  _ikZ.copy(D); _ikX.crossVectors(side, _ikZ).normalize(); _ikY.crossVectors(_ikZ, _ikX);
+  _ikM.makeBasis(_ikX, _ikY, _ikZ); outQ.setFromRotationMatrix(_ikM).premultiply(invHandQ);
+  outP.copy(G).addScaledVector(D, -hg);
+  handEnd.worldToLocal(outP);
 }
 
 // ---- runtime state ----
@@ -3114,6 +3277,11 @@ export function diverImpulse(kind, dx = 0, dz = 0, mag = 1) {
   rcD.v -= 2.2 * k;                   // the knees buckle under it
 }
 export function diverGrab(on) { grabOn = !!on; }
+// (fix round 1) the iron's point, world (last drawn pose): game.js puts the silt of the blow there
+export function diverBladeTip(target) { return diver.harpoonMesh.localToWorld(target.set(0, 0, 0.60)); }
+// (Task 7) game.js: true while Sal wrenches a lodged harpoon free (lev.rite.wrenching) — the carried one is not drawn
+let bladeStowed = false;
+export function diverBladeStowed(on) { bladeStowed = !!on; }
 // THE YANK (tether.js leash). The hose comes up hard on the bonnet and jerks him back
 // toward it: (dx, dz) is the world direction FROM Sal TOWARD the pull (the raft), str 0..1
 // is the snap's strength (his speed into the line). A heavy man jerked by a line, not a
@@ -3448,9 +3616,11 @@ export function updateDiver(dt, t, player) {
   // nailed and the IK twists the legs under the turning hips; a standing turn this big
   // triggers the shuffle step, which is what a real squaring-up does. The hit timing
   // and the swing curves are untouched — only WHERE the swing points moves.
-  const sqW = slashT >= 0 ? ss(0, 0.12, slashT) * (1 - ss(0.40, SLASH_DUR, slashT)) : 0;
+  // (Task 7) the harpoon's thrust squares him up the same way, held through the follow-through
+  const sqW = slashT >= 0 ? ss(0, 0.12, slashT) * (1 - ss(0.40, SLASH_DUR, slashT))
+    : thrustT >= 0 ? ss(0, 0.14, thrustT) * (1 - ss(0.56, THRUST_DUR, thrustT)) : 0;
   {
-    let d = player.yaw + strafeS.x * (1 - sqW) - yawF;
+    let d = player.yaw + strafeS.x * (1 - sqW) + thA[10] * thrW - yawF;
     d = Math.atan2(Math.sin(d), Math.cos(d));
     const rate = (player.grounded ? 4.5 + 4.5 * clamp(ampS * 2, 0, 1) : 1.6) * (1 - sqW) + 26 * sqW;   // in water: 1.6/s (was 2.6), the mass comes round late
     yawF += d * Math.min(1, rate * dt);
@@ -3774,7 +3944,7 @@ export function updateDiver(dt, t, player) {
     // thinking about it: stood still on the bottom for a while, the left hand comes up
     // to the side of the bonnet, rests there, turns a half-thought, comes down. Hashed
     // intervals (never Math.random), cancelled by any movement, never during a slash.
-    const still = gaitState === 0 && amp < 0.05 && slashT < 0 && grabW < 0.05 && ladderF < 0.05;
+    const still = gaitState === 0 && amp < 0.05 && slashT < 0 && thrustT < 0 && grabW < 0.05 && ladderF < 0.05;
     idleT = still ? idleT + dt : 0;
     // Two idle gestures share the one clock: the valve check, and (a bit under half the
     // time) THE PEER — the lantern comes up and forward, and the helmet sweeps slowly
@@ -4013,6 +4183,31 @@ export function updateDiver(dt, t, player) {
       diver.slashArc.visible = false; dragMat.opacity = 0;
     }
   }
+  // (Task 7) the harpoon's thrust: the spine's twist and pitch ride the pose (the corselet's springs give
+  // them the suit's lag); the body's lean and drop are applied on the body below, the arms after them.
+  thrW = 0;
+  if (thrustT >= 0) {
+    thrustT += dt;
+    evalThrust(Math.min(thrustT, THRUST_DUR));
+    thrW = ss(0, 0.10, thrustT) * (1 - ss(0.56, THRUST_DUR, thrustT));
+    po[CH.sYaw] += thA[6] * thrW;
+    po[CH.sPitch] += thA[7] * thrW;
+    // the blow lands: the weight drops through the frame onto the legs (the heel strike's own springs)
+    // and the trunk is carried on past it a beat
+    if (!thrustHit && thrustT >= 0.30) {
+      thrustHit = true; settle.v -= 1.9; kneeSoft.v += 3.2 * gb; rcP.v += 0.55;
+      // (fix round 1) the blow, seen from behind him: a spit of bubbles off the iron's point (the exhaust's
+      // own pool; game.js adds silt when the point is near the bed, and the lens punch)
+      if (diver.harpoon.visible) {
+        diver.harpoonMesh.localToWorld(_puff.set(0, 0, 0.60));
+        if (_puff.y < SURFACE_Y + surfaceHeightAt(_puff.x, _puff.z, t, stormLevel())) {
+          thrustN++;
+          for (let i = 0; i < 12; i++) emitBubble(_puff, player.vel, 0.035, i < 3 ? 0.12 : 0.07, thrustN * 31.7 + i * 5.3);
+        }
+      }
+    }
+    if (thrustT >= THRUST_DUR) { thrustT = -1; thrW = 0; }
+  }
 
   // a heel strike drops a little extra weight through the frame — the "settle"
   const side = strikeP() < 0.5 ? 0 : 1;
@@ -4075,7 +4270,7 @@ export function updateDiver(dt, t, player) {
   // heel-strike settle is allowed to travel twice as far grounded, because the knees can
   // genuinely absorb it against the ground instead of pushing the whole man through it.
   const yFree = LIFT + settle.x * (0.045 + 0.045 * ikOn) + rcD.x * 0.45 * gb;
-  b.position.set(pc[CH.shiftX] + shufX, yFree + pc[CH.bobY] * (1 - ikOn), pc[CH.shiftZ]);
+  b.position.set(pc[CH.shiftX] + shufX, yFree + pc[CH.bobY] * (1 - ikOn) + thA[9] * thrW, pc[CH.shiftZ]);
   // Lead boots below, a copper helmet full of air above: the centres of gravity and
   // buoyancy are a metre apart, so the righting moment is an order of magnitude larger
   // than any couple he can generate — and it GROWS with every litre in the dress. He
@@ -4150,7 +4345,7 @@ export function updateDiver(dt, t, player) {
     spring(seaH, hT, dt, 9, 0.75);
     seaHeave = seaH.x;
   }
-  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x + blP.x + hlApply, 0,
+  b.rotation.set(sPitch.x + pc[CH.pPitch] * (1 - gb) + leanP.x * gb + accLean.x + rcP.x + brP.x + pendP.x + ykP.x + seaP.x + blP.x + hlApply + thA[8] * thrW, 0,
     sRollT.x + bankG + rcR.x + hoseRoll + pendR.x + ykR.x + seaR.x + blR.x + hlR.x);
 
   const h = diver.hips;
@@ -4246,6 +4441,69 @@ export function updateDiver(dt, t, player) {
   AR.end.rotation.x = spring(wrR, (pc[CH.Re] - REST_RE) * 0.30, dt, 26, 0.75);
   AL.end.rotation.x = spring(wrL, (pc[CH.Le] - REST_LE) * 0.30, dt, 26, 0.75);
 
+  // ---- (Task 7) THE HARPOON: shown once owned; carried along the forearm; in the thrust both palms are
+  // placed on the keys (armIK) and the iron runs from the left palm through the line of the keys ----
+  thIK = 0;
+  {
+    const own = !!survival.hasHarpoon, hp = diver.harpoon;
+    // (wrenching another iron out of Velkath his hands are on THAT one: his own is not drawn till it comes
+    // free — then the one he carries is the one he pulled)
+    const shown = own && !bladeStowed;
+    if (hp.visible !== shown) hp.visible = shown;
+    if (own) {
+      thIK = thrustT >= 0 ? ss(0, 0.14, thrustT) * (1 - ss(0.58, 0.88, thrustT)) : 0;
+      const wP = thrustT >= 0 ? ss(0.02, 0.16, thrustT) * (1 - ss(0.62, 0.88, thrustT)) : 0;
+      // the carry of the moment: along the forearm, or (sprung) trailing past the fist through the burst
+      spring(bwS, ss(0.15, 0.85, burstW * (1 - ladderF)), dt, 6.5, 0.8);
+      const bw = clamp(bwS.x, 0, 1);
+      _cP.copy(carryP).lerp(burstP, bw); _cQ.copy(carryQ).slerp(burstQ, bw);
+      if (thIK > 1e-4) {
+        armIK(AL, PALM_L, thA[0], thA[1], thA[2], POLE_L, thIK);
+        armIK(AR, PALM_R, thA[3], thA[4], thA[5], POLE_R, thIK);
+      }
+      // the plumb carries: the valve check's raised fist, the ladder's wrist
+      const vW = valveW * (1 - thIK), lW = ladderF;
+      if (vW > 1e-3 || lW > 1e-3 || wP > 1e-4) {
+        AL.end.updateWorldMatrix(true, false);
+        AL.end.getWorldQuaternion(_ikQf); _ikQf.invert();
+        _plL.set(Math.cos(yawF), 0, -Math.sin(yawF));   // his left, world
+      }
+      if (vW > 1e-3) {
+        _plG.copy(PALM_L).applyMatrix4(AL.end.matrixWorld);
+        _plD.set(0, -1, 0).addScaledVector(_plL, 0.55).normalize();
+        plumbLocal(AL.end, _ikQf, _plG, _plD, VALVE_HG, _plL, _plQ, _plP);
+        _cP.lerp(_plP, vW); _cQ.slerp(_plQ, vW);
+      }
+      if (lW > 1e-3) {
+        _plG.setFromMatrixPosition(AL.end.matrixWorld).addScaledVector(_plL, 0.30);
+        _plD.set(0, -1, 0).addScaledVector(_plL, 0.25).normalize();
+        plumbLocal(AL.end, _ikQf, _plG, _plD, LADDER_HG, _plL, _plQ, _plP);
+        _cP.lerp(_plP, lW); _cQ.slerp(_plQ, lW);
+      }
+      if (wP > 1e-4) {
+        // the line through the two palm KEYS, spine frame -> world: where the iron points
+        _ikZ.set(thA[3] - thA[0], thA[4] - thA[1], thA[5] - thA[2]).normalize().transformDirection(sp.matrixWorld);
+        // the left palm holds it at HG_L
+        _ikP.copy(PALM_L).applyMatrix4(AL.end.matrixWorld).addScaledVector(_ikZ, -HG_L);
+        _ikY.set(0, 1, 0); _ikX.crossVectors(_ikY, _ikZ).normalize(); _ikY.crossVectors(_ikZ, _ikX);
+        _ikM.makeBasis(_ikX, _ikY, _ikZ); _ikQ.setFromRotationMatrix(_ikM).premultiply(_ikQf);
+        AL.end.worldToLocal(_ikP);
+        // the waypoint: forward and up from the fist (plumbLocal reuses _ikX/_ikY/_ikZ/_ikM: after the jab's)
+        _plG.copy(PALM_L).applyMatrix4(AL.end.matrixWorld);
+        _plD.set(Math.sin(yawF) * 0.75, 0.66, Math.cos(yawF) * 0.75).normalize();
+        plumbLocal(AL.end, _ikQf, _plG, _plD, HG_L, _plL, midQ, midP);
+        // carry -> out over the hip -> the jab (and back the same way)
+        if (wP < 0.5) {
+          const u = wP * 2;
+          hp.position.copy(_cP).lerp(midP, u); hp.quaternion.copy(_cQ).slerp(midQ, u);
+        } else {
+          const u = wP * 2 - 1;
+          hp.position.copy(midP).lerp(_ikP, u); hp.quaternion.copy(midQ).slerp(_ikQ, u);
+        }
+      } else { hp.position.copy(_cP); hp.quaternion.copy(_cQ); }
+    }
+  }
+
   // hand velocity in the diver's own frame drives the lantern pendulum
   const c = Math.cos(-yawF), s = Math.sin(-yawF);
 
@@ -4257,6 +4515,13 @@ export function updateDiver(dt, t, player) {
   spring(lnX, clamp(-hz * 0.055, -0.6, 0.6) - settle.x * 0.05, dt, 6.5, 0.24);
   spring(lnZ, clamp(hx * 0.055, -0.6, 0.6), dt, 6.5, 0.24);
   diver.lantPivot.rotation.set(lnX.x, 0, lnZ.x);
+  // (Task 7) through the thrust the right fist is on the shaft, turned every way: the lantern hangs plumb
+  // from it (the swing above rides on top), so its flame and light stay where a lamp would hang
+  if (thIK > 1e-4) {
+    AR.end.getWorldQuaternion(_ikQf);
+    _ikQ.copy(_ikQf.invert()).multiply(diver.quaternion).multiply(diver.lantPivot.quaternion);
+    diver.lantPivot.quaternion.slerp(_ikQ, thIK);
+  }
 
   // flame flicker, scaled by the player's remaining light
   const li = clamp(player.light, 0, 1);
@@ -4373,7 +4638,9 @@ export function updateDiver(dt, t, player) {
   {
     // left hand: the knife while it is out of the scabbard, a hand on the rung or the valve,
     // spread to scull off the bottom, an empty working hand on it. The right keeps the lantern.
-    const kw = slashT >= 0 ? ss(0.05, 0.085, slashT) * (1 - ss(0.50, 0.535, slashT)) : 0;
+    // (Task 7) owning the harpoon, the left fist is closed on its shaft (the hilt pose: the same bar radius)
+    // (fix round 1) ...except on the ladder: both hands on the rungs, the iron hung from his wrist
+    const kw = survival.hasHarpoon ? 1 - ladderF : slashT >= 0 ? ss(0.05, 0.085, slashT) * (1 - ss(0.50, 0.535, slashT)) : 0;
     const gw2 = Math.max(ladderF, 0.65 * valveW);
     const sw2 = Math.max(1 - gb, grabW, burstW) * (1 - ladderF);
     const L = salShared.hand.L, r = Math.min(1, (kw > L[2] ? 30 : 9) * dt);
@@ -4397,6 +4664,14 @@ const _hTg = new Float32Array(4);
 // SALSCULPT HOOK (2/2): sculpted meshes replace the procedural ones group by group
 // (salInstall.js); the rig, every timing and every anchor above stay exactly as built.
 installSalSculpt(diver, salShared);
+// (Task 7) the sculpted iron replaces the procedural build in his hand the moment its set lands (the boot
+// waits for it: sculptedLedger), so the warm frames compile the one he will carry
+HARPOON_ASSET.then(() => {
+  const M = harpoonModel(), m = diver.harpoonMesh;
+  if (!M.sculpted) { M.material.dispose(); return; }
+  m.material.dispose();
+  m.geometry = M.geometry; m.material = M.material;
+});
 
 export function lanternWorldPos(target) {
   diver.lant.getWorldPosition(target);
@@ -4429,8 +4704,11 @@ export function airInletWorldPos(target) {
 // ---- knife (implemented by the diver-knife agent) ----
 // triggerSlash(): play the draw-and-slash animation once; returns false while one is
 // already in flight so game.js can gate the hit check to the anim's contact frame.
-export function triggerSlash() {
-  if (slashT >= 0) return false;      // already committed; no cancelling mid-swing
+// (fissure-and-harpoon Task 7) kind 'knife' | 'harpoon' picks the swing: the knife's draw-and-slash
+// (contact 0.22 s, exactly as it always was) or the harpoon's two-handed thrust (contact 0.30 s, 0.9 s).
+export function triggerSlash(kind = 'knife') {
+  if (slashT >= 0 || thrustT >= 0) return false;      // already committed; no cancelling mid-swing
+  if (kind === 'harpoon') { thrustT = 0; thrustHit = false; return true; }
   slashT = 0;
   return true;
 }

@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // BROODER-CLUTCH: the whole rite with her UNHELD and real keys (W/Shift/Space/C/E): pry a clump
 // off her clutch at the Alt+6 jump (she wakes), get under her and light wards (Space up to
 // each), meet the brood rule, press the clump back into the clutch hanging under her (Space up

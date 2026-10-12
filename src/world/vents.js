@@ -16,7 +16,8 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
-import { riftPos, ZONE_SEEN } from '../config.js';
+import { ZONE_SEEN } from '../config.js';
+import { clearOfCrack } from './fissureShape.js';
 import { registerPaint } from '../lib/paint.js';
 import { clamp, vnoise } from '../lib/math.js';
 import { makeGlow, sulphideSet } from '../lib/textures.js';
@@ -43,11 +44,14 @@ const rng = (a, b) => a + rnd() * (b - a);
 // Placement rules (brief, hard constraints).
 // ---------------------------------------------------------------------------
 const FIELD_R = 240;          // stay inside radius 240 of the world origin
-const RIFT1_CLEAR = 45;       // clear of riftPos(1) — the zone's own exit funnel
-const RIFT0_CLEAR = 30;       // clear of riftPos(0) — divers descend that line
+// THE CRACKS (Task 5; fissureShape.js clearOfCrack: the lip + 6 u + a radius). Zone 1's own crack
+// (its way down) and, overhead, zone 0's: he falls through that one anywhere along its ~70 u and
+// lands under it, so the field keeps off its plan too (it was a 30 u circle round riftPos(0)).
+// VENT_R: a chimney with its tube worms and bacterial mats (gardens.js: up to bR + 6.5 + half a
+// 4.2 u mat out); a cluster centre keeps its scatter radius + 4 (the cones and crust reach 15 u).
+const VENT_R = 10;
 const SLOPE_MAX_DEG = 35;
 const SLOPE_MIN_NY = Math.cos(SLOPE_MAX_DEG * Math.PI / 180);   // 0.8192
-const RC1 = riftPos(1), RC0 = riftPos(0);
 
 const N_CLUSTERS = 4;
 const PER_CLUSTER = [4, 4, 4, 5];   // 17 chimneys total
@@ -737,8 +741,7 @@ function growField() {
       const a = rnd() * TAU, r = rng(40, 200);
       const x = Math.cos(a) * r, z = Math.sin(a) * r;
       const margin = CR + 6;
-      if (Math.hypot(x - RC1.x, z - RC1.z) < RIFT1_CLEAR + margin) continue;
-      if (Math.hypot(x - RC0.x, z - RC0.z) < RIFT0_CLEAR + margin) continue;
+      if (!clearOfCrack(x, z, 1, CR + 4) || !clearOfCrack(x, z, 0, CR + 4)) continue;
       if (Math.hypot(x, z) > FIELD_R - margin) continue;
       if (clusters.some(o => Math.hypot(o.x - x, o.z - z) < VK.sep)) continue;
       if (VK.avoid && Math.hypot(x - VK.avoid.x, z - VK.avoid.z) < AVOID_R + margin) continue;
@@ -758,8 +761,7 @@ function growField() {
     while (placed < want && guard++ < want * 60) {
       const a = rnd() * TAU, r = Math.sqrt(rnd()) * CR;
       const x = c.x + Math.cos(a) * r, z = c.z + Math.sin(a) * r;
-      if (Math.hypot(x - RC1.x, z - RC1.z) < RIFT1_CLEAR) continue;
-      if (Math.hypot(x - RC0.x, z - RC0.z) < RIFT0_CLEAR) continue;
+      if (!clearOfCrack(x, z, 1, VENT_R) || !clearOfCrack(x, z, 0, VENT_R)) continue;
       if (Math.hypot(x, z) > FIELD_R) continue;
       if (VK.avoid && Math.hypot(x - VK.avoid.x, z - VK.avoid.z) < AVOID_R) continue;
       const n = terrainNormal(x, z, ZI);

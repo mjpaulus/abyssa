@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 // CLUTCH2: the now-solid hanging mass against the rest of the rite (real keys: W/Space/C/E).
 // (a) Alt+6, E (the take wakes her), she is HELD still (lab verb) and Sal walks under each dark
 //     ward and goes up to it with Space taps/bursts, as brooder-clutch-rite.mjs did: does each

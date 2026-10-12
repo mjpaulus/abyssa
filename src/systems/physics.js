@@ -20,7 +20,9 @@
 // sleep: drag = per-body linear/angular damping, negative buoyancy = weak world gravity.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, riftPos, zoneBottom } from '../config.js';
+import { WORLD_R, zoneBottom } from '../config.js';
+import { clearOfCrack } from '../world/fissureShape.js';
+import { clearOfBed } from '../entities/sleeper/lair.js';
 import { terrainH } from '../world/terrain.js';
 import { rockColliders } from '../world/flora.js';
 
@@ -145,7 +147,6 @@ function hfAt(x, z, out) {
 const _grad = { dx: 0, dz: 0 };
 
 function buildDebris() {
-  const rp = riftPos(zone);
   instGeo = new THREE.DodecahedronGeometry(1, 0);
   instMat = new THREE.MeshStandardMaterial({
     color: ROCK_COL[zone % 3], roughness: 0.9, metalness: 0.03, flatShading: true
@@ -165,7 +166,8 @@ function buildDebris() {
     const a = Math.random() * Math.PI * 2, r = 30 + Math.random() * (WORLD_R * 0.62 - 30);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
     if (Math.abs(x) > HF_EXT - 4 || Math.abs(z) > HF_EXT - 4) continue;
-    if (Math.hypot(x - rp.x, z - rp.z) < 45) continue;      // keep the rift funnel clear
+    if (!clearOfCrack(x, z, zone, 0.75 + 1.5 * HF_STEP) || !clearOfBed(zone, x, z, 0.75)) continue;   // off the crack: a stone (<= 0.72 u) + 1.5 cells of
+    // this collider's own 3.1 u grid, so no cell it rests on straddles the lip (the drawn lip is the 0.5 u patch)
     const hy = hfAt(x, z, _grad);
     if (Math.hypot(_grad.dx, _grad.dz) > 0.26) continue;    // too steep: it would creep downhill and never sleep
     const s = 0.22 + Math.random() * 0.5, sy = s * (0.6 + Math.random() * 0.7);

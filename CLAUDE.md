@@ -157,13 +157,34 @@ against explicit contracts and reviewed on return.
   rides STYLE_U[0] (AIR_STORM_K).
 - `world/terrain.js` + `lib/triplanar.js` — 3 heightfield meshes, ZONE-GATED by
   camera Y with flora's bands (−332k tris/frame; verified 0 visibility violations
-  across the ending ascent and voyages). Rifts are flattened bowls, NOT holes;
-  fall-through is a player.js special case. Fingerprint probe = `terrainFingerprint()` /
+  across the ending ascent and voyages). THE FISSURE (2026-10-10, spec docs/superpowers/specs/
+  2026-10-10-fissure-and-harpoon-design.md; Michael: "more realistic... glowing when it opens, like a
+  portal"): each zone's rift is a kinked crack ~60-80 u long carved into terrainH through the frozen
+  `riftPos` (`world/fissureShape.js`: FISSURE frames, fissureDist interval SDF, inThroat, the jam
+  floor grid, clearOfCrack), drawn by a dense local PATCH (<= 0.5 u; drawn == stood on) plus real
+  strata WALL geometry inside the throat (drawn-only; fingerprints untouched). Still not a hole:
+  fall-through is a player.js special case (`inThroat`), only while the zone's fissure is open.
+  SHUT = `world/fissure.js` rubble jam Sal stands ON (block-top floor grid, `terrain.js jamAt` /
+  `shutFloorY`) + a gap-masked cold seep; the calm OPENS it (quake, pour, silt, then the light) and
+  the line "A RIFT OPENS BELOW." lands as the light arrives. Open state = calmed THIS VISIT
+  (game.js `visitCalm`, cleared on boot/voyage — "Ritual, remembered": a revisit is shut until she is
+  calmed again). OPEN = `world/rifts.js` the deep's own pale light: a soft curtain along the crack,
+  wall light (gated off below the throat floor), motes, a surface glow (fog:false, <= 0.16), colour
+  leaned per site/zone and calibrated on SETTLED frames. DOWN THE OPEN THROAT (final wave): Sal is held
+  in the shaft's OPEN interval at his feet (player.js `holdInShaft`; the shaft narrows with depth inside
+  inThroat's lip-level interval and the current set him into the walls), the follow lens is put in the
+  shaft (game.js `THROAT_CAM`: boom free of the floor test in the open crack, the lens walked from his
+  station, clamped off the faces, the lost reach put back as height, a sprung guard after the spring;
+  `__throatCam`), both on fissureShape.js `openRunAt`; the ending's lens waits under each throat floor
+  with him and shortens its arm to see past the kinks (ending.js FLOOR_UNDER / LOS_F). `__fissure` dev
+  surface; probes `tools/bench/fissure-probe.mjs` (24 modes; `fall-lens`, `ending`, `wave-minors` gate the
+  final wave). Fingerprint probe = `terrainFingerprint()` /
   `__ridge.fp(zones?)` (FNV-1a over the float32 BYTES of terrainH, 32x32 grid x,z
   −248..248 step 16, zone-major then z then x). The old quoted values (35acc2d0, 5e6cfe45)
   came from an unrecorded probe and reproduce under no variant of it; this one is canonical
   since 2026-10-04. Home: 4ff3a4f6 on main 7a41c43 -> 119f0cae after THE FAR RIDGE (zone 0
-  only: 776f4b37 -> 6b719d1f; zones 1+2 d47f42e0 unchanged at every site).
+  only: 776f4b37 -> 6b719d1f; zones 1+2 d47f42e0 unchanged at every site). THE FISSURE carving
+  (2026-10-10): home 3b526986, zones 1+2 d49d451d, Pallid Bank b1c58f8d, Burned Ground d2b6fb68.
   THE FAR RIDGE (roadmap/far-ridgeline-read.md, Michael "Raise it"): zone 0's rampart runs
   its own rows (`RIDGE` in terrain.js: envelope 300/348/540 — nearer than the W2 340/410
   — h 74, ridged 44 + a 48-u crag term 28, and a SOFT ceiling asymptotic to -8 over the
@@ -209,8 +230,34 @@ against explicit contracts and reviewed on return.
   than 41.4 degrees. 58 rakes the deck and slants the shafts.
 - `entities/diver.js` — procedural Mark V Sal (~40k tris): Part/bake merged
   geometry, spring secondary motion, curve-keyed gait, heel-strike `stepCount()`
-  drives footsteps+dust+prints on the same frame. Knife slash contact at t=0.22s
-  (game.js `pendingSlash` matches — keep in sync). `airInletWorldPos` = tether dock.
+  drives footsteps+dust+prints on the same frame. Knife slash contact at t=0.22s; the
+  harpoon's thrust contact at t=0.30s (game.js `BLADE` / `pendingSlash` match — keep in sync).
+  `airInletWorldPos` = tether dock.
+  THE HARPOON AS HIS BLADE (fissure-and-harpoon Task 7): once `survival.hasHarpoon`, left click / RT is
+  `triggerSlash('harpoon')` — a two-handed bladed thrust (wind-up 0.18, contact 0.30, back by 0.9; THK keys
+  are the two PALMS in the spine frame, solved by `armIK`; the iron runs through both fists; the lantern
+  hangs plumb from the right fist), reach 5.5, power 1.8 (`predators.slash` stagger, `lev.onSlash` reach
+  5.1). The prop (`diver.harpoon`, a Group under the left hand bone: lib/harpoonModel.js, sculpted swap on
+  HARPOON_ASSET) is carried along the left forearm SPLAYED ~16 deg off the sleeve (CARRY_DIR; laid on it the
+  follow lens never saw it); the knife stays sheathed. The draw/recover turns the iron over through a
+  forward-and-up waypoint (no corselet sweep); the burst trail is sprung; the valve check / low-air reach hang
+  it plumb from the raised fist and the ladder hangs it from the wrist (both hands on the rungs) — all
+  measured clear of the body by `tools/bench/blade-clear.js`. Contact: bubbles off the point (diver.js),
+  silt at it near the bed and a ~3 cm lens punch (game.js camYank). REACH SCALES EVERY BLADE TEST: squid
+  kill range+size*0.35 in the 70 deg cone, shark range+size*0.5 (a SPHERE: a long blade spooks a shark
+  beside/behind him too), octopus range+2.2; power scales only the shark's abort + stagger (blind, roll),
+  never its 60-90 s avoidance. ORUNE PARRY (ruled): `lev.onSlash(pos, fwd, reach, tipReach, guard)` — an arm
+  REACHING for him (a lash, not yet holding) with its tip inside the blade's full reach (knife 3.4: a last-
+  instant cut; harpoon 5.5) and in front is parried (recoils, lash spent); the harpoon's point held out after
+  contact is a 0.26 s guard (game.js bladeGuard). Held, one cut frees him with either blade. `BLADE.cd` gates
+  repeats (knife 0.55 = SLASH_DUR, harpoon 0.9); no swing (and no spear) while wrenching Velkath's iron. Not
+  owned: the knife's swing is bit-identical to before the harpoon (`tools/bench/knife-trace.mjs`: channels
+  within 1e-5) and its reach/power unchanged, with three ruled changes — it parries Orune's REACHING arm at
+  3.4 (above), repeats are cd-gated (0.55) and it is wrench-gated.
+  Alt+= (playtest) grants/revokes it. Probes:
+  harpoon-probe `thrust-contact` (programs read before the first grant + a control), `orune-cut`,
+  `orune-parry`, `shark-thrust`, `wrench-spear`; `blade-invariants.mjs` and `blade-clear.js` exit 1 on a
+  failure; look-dev: `tools/bench/blade-shots.mjs`.
   The helmet is generated (44-seg spun bonnet, Mark V hasp); `helmetSwap.js` loader
   is RETIRED under the hard rule. Sal breathes on ONE clock (`breathPhase()`):
   shoulders, exhaust bursts from the real valve, and the audio regulator share it;
@@ -232,32 +279,47 @@ against explicit contracts and reviewed on return.
   legs, underside wards buried and dark while she sleeps, touchable only standing).
   `__lev.fp(i)` is the serpent's regression hash (z0 15ce888c, z1 c938fe6e, z2
   652d0412); `__lev.swap/cmd/state` and the lab "sleeper" group drive the kinds.
-  Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge on the
-  rift lip with a BERRIED CLUTCH under her apron (2026-10-08, roadmap/brooder-clutch.md: the
+  Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge ALONGSIDE her
+  fissure (fissure Task 5: `sleeper/lair.js` velkathLair, pure; one flank to the crack, her NEAR flank
+  `L.nearFlank`/`L.sand` to open sand, her whole outline off the 14 u APRON; the scatter keeps her bed
+  clear, `clearOfBed`) with a BERRIED CLUTCH under her apron (2026-10-08, roadmap/brooder-clutch.md: the
   nest and helmet eggs are gone; clutch2 2026-10-08: each lobe's skin carries a generated BEAD
   FIELD (brood.js beadField: packed egg domes, eyespots, yolk; triplanar in the lobe's rest
   frame; lobes filleted into one mass) + ~2.8k sparse proud eggs on setae tips, lantern-lit; the
   mass is SOFT-SOLID: bodyCols setClutch, Sal stops at the drawn surface, the lens never rests in
-  it, calmed she won't settle her tongue of eggs onto him); [E] pries a clump
-  off her and wakes her; the last ward won't light while the clump is out (wardRefuse +
-  tally "CLUTCH ROBBED"); [E] under her presses it back. Awake she HUNTS the thief (HUNT in
-  brooder.js; 3.8 u/s with the clump out), and her body collides per part (sleeper/bodyCols.js;
+  it, calmed she won't settle her tongue of eggs onto him). THE TRIGGER IS THE HARPOON (fissure-and-harpoon
+  Task 6, `sleeper/harpoon.js`; the pry, the carried clump and the brood rule are gone): an old whaling iron
+  (src/lib/harpoonSculpt.js -> assets/harpoon, the same model Task 7 makes Sal's blade; `harpoonModel()`) is
+  lodged in her shell margin on the NEAR flank, in a gap between her folded legs (seat() searches her drawn
+  shell: the head + shank BURIED by a vertical-ray test against the drawn body, the pole clear of her limbs;
+  the silt drift is notched there); `L.harpoon.anchor` is where he stands (Alt+6). The model is
+  `src/lib/harpoonModel.js` (neutral: Sal's blade imports it). A pull ABORTS (nothing granted) if he leaves
+  it: on the deck (drowned), > REACH+1 from the anchor, or she woke. The brass GLINT is the eyeshine's
+  range cue (3-40 u, toward the lens) and CATCHES once ever per site when his light first finds it
+  (sighted[] persisted with pulled[]). [E] PULL THE HARPOON
+  = a 1.5 s wrench (his drive held off: player.stagger re-armed; pack off), it comes free ("IT COMES FREE.
+  SHE FEELS IT." / remote "ANOTHER DIVER'S HARPOON.", prio 3, her name follows at 3), the wound weeps (render
+  only), she wakes 0.7 s later; survival.hasHarpoon on the first pull EVER (save tools.harpoon); pulled[site]
+  saved with the chart: a revisit's rite starts at the OLD WOUND ([E] PRESS THE OLD WOUND, same commitment,
+  nothing granted). The trail adds the other diver's lead boot and a sheared hose coupling (brood.js). Awake
+  she HUNTS him at the unburdened speeds (HUNT in brooder.js), and her body collides per part (sleeper/bodyCols.js;
   belly deliberately open) for Sal and the camera (`__crecam`). `lev.dormant` hides name/
   bearing/dread until she wakes). THE RITE, FAIR (ritefair 2026-10-09, brooder.js `STAND`,
-  docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre 1.45 R off
-  the rift's rim crest (on it her wards hung 12-17 u up) and rides at most 0.06 R over the ground
+  docs/playtests/2026-10-09-velkath-after.md): awake and hunting she keeps her centre APRON + 1.3 R off
+  the crack's lip (`STAND.keep`; the old rim crest, and the apron rising to the lip, hung her wards 12-17 u up) and rides at most 0.06 R over the ground
   under her belly; standing height 0.52 R, held over him (no settling onto him), shell 3.6 u over
   the ground under it (STAND.clear), ward reach 7; the clutch is carried TUCKED under her apron (brood.js
-  TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up) and pressed back from RET_R 5; the crouch is retired
+  TUCK/TUCK_FLOOR, underside ~3.5-4.5 u up); the crouch is retired
   (Michael: "crouched too low and I kept colliding"); under her body is a refuge (no hammer; she
   shifts her stance every ~3 s instead); her claws spread open her front when he comes in
-  (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never toward the rift; a slam
+  (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never into the crack (`safeThrow`: its whole ~16-29 u slide clears the lip; from inside the lip of an OPEN crack it leans out of it); a slam
   tears once per 0.8 s; her back is a slick dome (no tear, he slides off); game.js `BOSSCAM` cranes
   the lens up 1.5 u and leans the look toward her belly/nearest dark ward while she is up within
   30 u (drops on any mouse look). `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
-  wakes her; arms lash/grab (knife frees: `lev.onSlash`), flinch from light; wards on
+  wakes her; arms lash/grab (the blade frees: `lev.onSlash(pos, fwd, reach, tipReach, guard)`, held: knife 3 /
+  harpoon 5.1; reaching: parried at the tip reach 3.4 / 5.5, see the blade above), flinch from light; wards on
   the sucker faces answer the sonar; calmed, a lighthouse. `lev.rite` is the generic
   [E]/prompt hook all three use. Zone 2 SHIPS MHOR THE HUNTER (`sleeper/hunter.js`):
   absent until THE LAST FURNACE is fed 2 bitumen (warm pocket refills air); arrives
@@ -363,15 +425,19 @@ against explicit contracts and reviewed on return.
     reads as a broken teleport.
 - THE CHART (multi-site ocean) — `world/site.js` is the registry (3 authored
   anchorages; site 0 = shipped world BIT-IDENTICAL, the regression anchor; terrain
-  fingerprints on the canonical probe (`__ridge.fp()`, see terrain.js above) since THE FAR
-  RIDGE + per-site shaping (main 21148ef, both merged): home 119f0cae, Pallid Bank 2c0df461,
-  Burned Ground ff316095 — were 4ff3a4f6 / bd02b8e3 / 4014c41e on 7a41c43; zones 1+2 at home
-  `__ridge.fp([1,2])` d47f42e0). The world
+  fingerprints on the canonical probe (`__ridge.fp()`, see terrain.js above), CURRENT since THE FISSURE
+  (2026-10-10): home 3b526986, Pallid Bank b1c58f8d, Burned Ground d2b6fb68, zones 1+2 at home
+  `__ridge.fp([1,2])` d49d451d. History, not current: THE FAR RIDGE + per-site shaping (main 21148ef) had
+  home 119f0cae / Pallid 2c0df461 / Burned ff316095 / zones 1+2 d47f42e0; before that 4ff3a4f6 / bd02b8e3 /
+  4014c41e on 7a41c43). The world
   reseeds IN PLACE around the raft: `reseedWorld(i)` in game.js runs
-  fillTerrain -> reseedWrecks(tools) -> reseedFlora -> reseedResources ->
+  fillTerrain -> resetJam -> reseatFissures -> reseedWrecks(tools) -> reseedFlora -> reseedResources ->
   reseedProps -> reseedVents -> reseedVentLife -> reseedGardens -> reseatRifts ->
   reseedDens -> reseedCreatures -> reseedFauna -> enterZone(0) — ORDER IS
-  CONTRACT (flora excludes around wreckSites(), dens re-pick from flora's colliders).
+  CONTRACT (the jam hangs under the new lips and is redrawn before anything is placed; flora excludes
+  around wreckSites(), dens re-pick from flora's colliders). Every placement
+  keeps off the crack with fissureShape.js `clearOfCrack(x, z, zi, r)` (lip + 6 u + its radius; it
+  replaced the riftPos circles, fissure Task 5) and off Velkath's bed (`sleeper/lair.js` clearOfBed).
   Discipline held everywhere: materials/programs never recreated, collider arrays
   keep object identity, layouts are pure functions of site seed streams (20x soak:
   programs constant, zero geometry/texture growth, zero scene drift).
@@ -404,7 +470,7 @@ against explicit contracts and reviewed on return.
   Water rides three shared fog-chunk vec4s (abyssaSite/SiteT/SiteK, DELTAS from the shipped
   constants, installed like abyssaStyle) + SITE_SURF on the CPU palette, so a voyage moves
   fog, dome, far sea and shafts together with zero recompiles. Sleepers: Velkath swings
-  round her rift's lip (lair.bear, or lair.arc + idle picks the lip height), Orune turns
+  round her crack (lair.bear / lair.arc pick the side and the station along it; idle the height), Orune turns
   about her trawler (lair.bear / idle), Mhor's furnace moves (lair.bear/r); `hard` =
   hammerT/threatR, pull/hold/lashCd/grabR, circleT/stunT/hitR/speed. Never more lights.
   `__chart.fp()` is the same canonical probe as `__ridge.fp()` (values above; the sites
@@ -494,11 +560,14 @@ against explicit contracts and reviewed on return.
   gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
   __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __shaderFailed.
 - INVARIANTS checked before every commit (fresh tab): 14 lights in the scene; `__lev.fp(0/1/2)`
-  15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 119f0cae; `__safeFailed()` returns [];
+  15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 3b526986 (zones 1+2 d49d451d; since THE
+  FISSURE 2026-10-10, was 119f0cae); `__safeFailed()` returns [];
   **`__shaderFailed()` returns []** (no shader program left broken; see lib/shaderWatch.js);
   console clean (no errors except a favicon 404).
 - Message discipline: `showMsg(text, dur, prio)` is a two-slot priority queue —
-  never clobber; sleeper-name lines are prio 0. Esc/blur is a real pause.
+  never clobber. A sleeper's name is prio 0 when a zone is announced (colour: it waits behind
+  everything) and prio 2 on her WAKE (ev.woke), 3 for Velkath's (it follows the harpoon's pull line,
+  also 3, ahead of the queued finds, which the wake strikes). Esc/blur is a real pause.
 - Reversed-edge `smoothstep(a,b,x)` with a>=b is GLSL UB and returns 0 on this
   driver — it silently killed eleven art systems for months. Always `1.0 -
   smoothstep(lo, hi, x)`. Transparent DoubleSide materials need `forceSinglePass`.
@@ -698,6 +767,10 @@ core.js):
   (shader patches): two loads, compare against an A/A pair of loads.
 - Cross-load ABBA (a branch against main): two worktrees served on two ports, alternate
   `goto` A B B A, `setup` + `live` in each (see roadmap/perf-budget-oct.md Log).
+- COLOUR/LOOK CAPTURES MUST SETTLE THE POST CHAIN: `__bench.step(n)` runs update() only, so after a
+  `gotoZone`/teleport the grade's air/zone blend, auto-exposure, AO and DoF stay on the last real frame's
+  state (a fresh page: the DECK look). Use `capture({ settle: 90 })` (90 rendered frames first) or
+  `step(n, null, { render: true })`; a light colour-calibrated without it was gold in zone 1 in play.
 - Hazards: ANGLE/Metal DROPS a render pass whose target is cleared again before anything
   reads it (a synthetic GPU load needs additive draws, no clears); any getBufferSubData /
   readPixels / getError is a synchronous round trip that first drains Chrome's GPU-process

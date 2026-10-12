@@ -19,7 +19,8 @@
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../core.js';
 import { V3, clamp, fbm } from '../lib/math.js';
-import { terrainH } from '../world/terrain.js';
+import { shutFloorY } from '../world/terrain.js';
+import { fissureShut } from '../world/fissureShape.js';
 import { survival } from './survival.js';
 import { pumpPos, raft } from './raft.js';
 import { resolveHoseNode, HOSE_BOUND_R2 } from './raft/colliders.js';
@@ -144,7 +145,7 @@ const arcAttr = [];              // one Float32Array per chunk: world arc at eac
 
 let anchor = V3(0, -1.2, 0);
 const meshes = [];
-let deployed = 0, restFor = -1, clockT = 0, primed = false, lastZi = -1;
+let deployed = 0, restFor = -1, clockT = 0, primed = false, lastZi = -1, lastShut = true;
 let contacts = 0, deckContacts = 0;
 // THE DECK (polish-leftovers-oct). The raft's world matrix and its inverse, refreshed once
 // a frame in updateTether; substep() takes nodes near the raft into raft-local space and
@@ -314,7 +315,7 @@ function substep(h, ax, ay, az, hx, hy, hz, zi) {
   const mu = 1 - Math.exp(-MU_RATE * h);
   for (let i = 1; i < N - 1; i++) {
     if (!flOK[i] || Math.abs(px[i] - flX[i]) + Math.abs(pz[i] - flZ[i]) > FLOOR_EPS) {
-      flH[i] = terrainH(px[i], pz[i], zi); flX[i] = px[i]; flZ[i] = pz[i]; flOK[i] = 1;
+      flH[i] = shutFloorY(px[i], pz[i], zi); flX[i] = px[i]; flZ[i] = pz[i]; flOK[i] = 1;   // the shut fissure's jam is floor too
     }
     const floor = flH[i] + RAD + 0.05;
     if (py[i] < floor) {
@@ -646,7 +647,10 @@ export const leash = {
   n: 0,                          // yanks since load
   last: { str: 0, v: 0, back: 0, grounded: false, t: 0 },
   maxIn: 0,                      // largest integration step past L (resolved the same frame)
-  maxEnd: 0                      // largest END-OF-FRAME distance past L: the hold's invariant
+  maxEnd: 0,                     // largest END-OF-FRAME distance past L: the hold's invariant
+  // probe surface: the lowest hose node within r (horizontal) of (x, z), or null (dev only)
+  lowNear(x, z, r) { let m = null; for (let i = 1; i < N - 1; i++) { const dx = px[i] - x, dz = pz[i] - z;
+    if (dx * dx + dz * dz < r * r && (m === null || py[i] < m)) m = py[i]; } return m; }
 };
 // twang: a render-only pulse that runs up the line from Sal's end after a snap
 let twA = 0, twT = 9, twPhi = 0;
@@ -809,6 +813,8 @@ export function updateTether(dt, player, zone) {
   clockT += dt;
   // The floor cache is keyed on position only, so a zone change has to drop all of it.
   if (zi !== lastZi) { flOK.fill(0); lastZi = zi; }
+  // the fissure opening (or shutting) takes the jam out from under resting nodes: re-sample them
+  if (fissureShut(zi) !== lastShut) { flOK.fill(0); lastShut = fissureShut(zi); }
 
   // THE LEASH: give, hold, snap (leashStep). window.__noLeash disables it so test
   // harnesses can teleport freely.

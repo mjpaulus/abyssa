@@ -30,11 +30,13 @@
 // without it the plume keeps core.js's boot density and stops sitting in the water.
 import * as THREE from 'three';
 import { scene, envTexDeep as envTex } from '../core.js';
-import { ZONE_GAP, RIFT_R, riftPos, zoneBottom } from '../config.js';
+import { ZONE_GAP, riftPos, zoneBottom } from '../config.js';
 import { rng, clamp } from '../lib/math.js';
 import { glowTex, canvas2d, noiseCanvas, warmGlow } from '../lib/textures.js';
-import { terrainH } from '../world/terrain.js';
+import { terrainH, shutFloorY } from '../world/terrain.js';
 import { motes } from '../world/rifts.js';
+import { fissureOpenK } from '../world/fissure.js';
+import { lipMeanY } from '../world/fissureShape.js';
 import { nodes } from '../world/resources.js';
 import { slash } from '../world/predators.js';
 import { RAFT_POS } from './raft.js';
@@ -224,10 +226,12 @@ export function sonarPing(pos, zi) {
       addEcho(_a.x, _a.y, _a.z, C_SIGIL, 7.0);
     }
   }
-  // the way down, once it has opened
-  if (L && L.calmed) {
+  // the way down, once it has opened: keyed on the FISSURE (open past half, the jam gone — the calm
+  // instant leaves it shut for ~3 s of pour, and a zone calmed this visit stays open behind him), rung at
+  // its lip (riftPos's floor is the throat floor ~70 u down)
+  if (fissureOpenK(zi) > 0.5) {
     const rp = riftPos(zi);
-    _a.set(rp.x, terrainH(rp.x, rp.z, zi) + RIFT_R * 0.5, rp.z);
+    _a.set(rp.x, lipMeanY(zi, terrainH) + 1, rp.z);
     if (_a.distanceToSquared(sonarOrigin) <= R2) addEcho(_a.x, _a.y, _a.z, C_RIFT, 9.0);
   }
   // the way home, from the shallows
@@ -259,7 +263,7 @@ function updateSonar(dt) {
       shell.scale.setScalar(Math.max(0.01, r));
       shell.material.uniforms.uA.value = 0.85 * fade;
       sweep.position.set(sonarOrigin.x, 0, sonarOrigin.z);
-      sweep.position.y = terrainH(sonarOrigin.x, sonarOrigin.z, curZone()) + 0.35;
+      sweep.position.y = shutFloorY(sonarOrigin.x, sonarOrigin.z, curZone()) + 0.35;
       sweep.scale.set(Math.max(0.01, r), 1, Math.max(0.01, r));
       sweep.material.uniforms.uA.value = 0.55 * fade;
     } else {
@@ -377,7 +381,7 @@ function layDown(S, zi) {
   if (_b.lengthSq() < 1e-6) _b.set(0, 0, 1);
   _b.normalize();
   S.grp.quaternion.setFromUnitVectors(FWD_Z, _b);
-  S.pos.y = terrainH(S.pos.x, S.pos.z, zi) + 0.09;
+  S.pos.y = shutFloorY(S.pos.x, S.pos.z, zi) + 0.09;   // on the shut fissure's jam, not 70 u under it
   S.grp.position.copy(S.pos);
   S.vel.set(0, 0, 0);
   S.trail.material.opacity = 0;
@@ -413,7 +417,7 @@ function updateSpears(dt, t, p) {
         continue;
       }
 
-      const th = terrainH(S.pos.x, S.pos.z, zi);
+      const th = shutFloorY(S.pos.x, S.pos.z, zi);
       if (S.pos.y <= th + 0.12) { layDown(S, zi); continue; }
       if (S.flown >= SPEAR_RANGE) {
         // spent: it stops driving forward and sinks the rest of the way
@@ -431,7 +435,7 @@ function updateSpears(dt, t, p) {
       S.grp.quaternion.slerp(_q.setFromUnitVectors(FWD_Z, _b.set(S.dir.x, -0.35, S.dir.z).normalize()),
         Math.min(1, dt * 2.5));
       S.trail.material.opacity = 0;
-      if (S.pos.y <= terrainH(S.pos.x, S.pos.z, zi) + 0.12) layDown(S, zi);
+      if (S.pos.y <= shutFloorY(S.pos.x, S.pos.z, zi) + 0.12) layDown(S, zi);
     } else if (S.state === 2) {
       S.stuckT -= dt;
       if (S.stuckT <= 0) { S.vel.set(0, -1.2, 0); S.state = 4; }
@@ -887,5 +891,7 @@ window.tools = {
   sonar: () => ({ cool: +sonarCool.toFixed(2), age: +sonarAge.toFixed(2), echoes: echoN, live: echoLive }),
   thruster: () => ({ jet: jAlive, bub: bAlive, ring: +ringT.toFixed(2), burstT: +burstT.toFixed(3), bursts: burstCount, held: +jetLvl.toFixed(2) }),
   jetPos: () => jet.pos, jetCol: () => jet.col, bubPos: () => bub.pos, bubCol: () => bub.col,
-  drop: () => spears.map(s => s.state)
+  drop: () => spears.map(s => s.state),
+  // the last ping's echoes, [x, y, z, r, g, b] each (dev: allocates on call only)
+  echoes: () => { const out = []; for (let k = 0; k < echoN; k++) out.push([ePos[k * 3], ePos[k * 3 + 1], ePos[k * 3 + 2], eCol[k * 3], eCol[k * 3 + 1], eCol[k * 3 + 2]]); return out; }
 };

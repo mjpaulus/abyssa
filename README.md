@@ -26,7 +26,7 @@ Open http://localhost:8777 and click to descend.
 | WASD | Move (walking is heavy — you're in lead boots) |
 | Space / Ctrl | Rise / sink |
 | Shift | Boost swim — or fire the **air thruster** once found (it burns your air) |
-| Left click | Knife slash |
+| Left click | The blade: the dive knife's slash; once Velkath's old harpoon is pulled, its two-handed thrust |
 | Right click | Spear gun (once found; spent spears can be recovered) |
 | Q | Vent an ink sac — breaks a hunting shark's charge |
 | T | Sonar ping (once found) |

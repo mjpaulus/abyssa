@@ -1,3 +1,6 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API — the clutch's B.prompt / B.reach — and no longer runs. Kept because roadmap logs cite its
+// results. The clutch as a soft solid is probed by clutch2-solid.mjs; Alt+6 by harpoon-probe routes.)
 // CLUTCH2: Alt+6 at all three anchorages (Alt+- sails on; its handler is called directly, the
 // Alt+6 is the real key). At each: prompt, reach, the clutch's push on him, Sal inside eggs.
 import { connect, sleep } from './drv.mjs';

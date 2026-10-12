@@ -3,7 +3,9 @@
 // costs only a handful of uniform writes regardless of instance count.
 import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
-import { WORLD_R, RIFT_R, riftPos, zoneTop, zoneBottom, zoneBand } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
+import { clearOfCrack } from './fissureShape.js';
+import { clearOfBed } from '../entities/sleeper/lair.js';
 import { rng, V3, clamp, fbm } from '../lib/math.js';
 import { makeGlow, warmGlow, rockMapSet, bladeMapSet, coralMazeSet } from '../lib/textures.js';
 import { registerPaint, styleTick, styleUniforms, injectStrokes, EDGE_GLSL } from '../lib/paint.js';
@@ -37,15 +39,14 @@ function nearWreck(zi, x, z) {
   return (x - w.x) * (x - w.x) + (z - w.z) * (z - w.z) < d * d;
 }
 
-// Rejection-sampled placement on the terrain, keeping clear of the rift funnel.
+// Rejection-sampled placement on the terrain, keeping clear of the crack.
 export function scatter(count, zi, minR, maxR) {
   const pts = [];
   let guard = 0;
   while (pts.length < count && guard++ < count * 30) {
     const a = Math.random() * Math.PI * 2, r = rng(minR, maxR);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    const rp = riftPos(zi);
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 2.6) continue;
+    if (!clearOfCrack(x, z, zi, 1)) continue;      // (a bubble vent's mound: ~1 u)
     if (nearWreck(zi, x, z)) continue;
     pts.push(V3(x, terrainH(x, z, zi), z));
   }
@@ -1177,13 +1178,14 @@ function rockGeo(detail, squash, amp, facet = 1) {
 }
 
 // -------------------------------------------------------------- placement ----
+// (a cluster's CENTRE keeps the lip clearance only: every member is checked with its own radius)
 function seedClusters(zi, n, minR, maxR, seed, thresh, radLo, radHi) {
-  const out = [], rp = riftPos(zi);
+  const out = [];
   let guard = 0;
   while (out.length < n && guard++ < n * 70) {
     const a = _fr() * TAU, r = rr(minR, maxR);
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 3) continue;
+    if (!clearOfCrack(x, z, zi)) continue;
     if (guard < n * 35 && fbm(x * 0.011 + seed, z * 0.011 - seed) < thresh) continue;
     if (out.some(s => Math.hypot(s[0] - x, s[1] - z) < radLo * 1.05)) continue;
     out.push([x, z, rr(radLo, radHi)]);
@@ -1193,8 +1195,10 @@ function seedClusters(zi, n, minR, maxR, seed, thresh, radLo, radHi) {
 
 // Clumped sampling with slope gating; relaxes the slope limit if the terrain
 // shape starves a species, so a terrain rewrite can never empty the world.
-function place(zi, count, seeds, minSlope, maxSlope = 1.01) {
-  const out = [], rp = riftPos(zi);
+// rad: the call's LARGEST object radius (its scale is drawn after placement: never draw it
+// earlier to feed this test, or every later draw in the stream moves).
+function place(zi, count, seeds, minSlope, maxSlope = 1.01, rad = 1) {
+  const out = [];
   if (!seeds.length) return out;
   let lo = minSlope, guard = 0, relaxed = false;
   while (out.length < count && guard++ < count * 40) {
@@ -1205,7 +1209,7 @@ function place(zi, count, seeds, minSlope, maxSlope = 1.01) {
     const x = s[0] + Math.cos(a) * s[2] * u, z = s[1] + Math.sin(a) * s[2] * u;
     const r = Math.hypot(x, z);
     if (r > WORLD_R * 0.98 || r < 10) continue;
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 2.4) continue;
+    if (!clearOfCrack(x, z, zi, rad) || !clearOfBed(zi, x, z, rad)) continue;   // off the crack and Velkath's bed
     if (nearWreck(zi, x, z)) continue;
     const n = terrainNormal(x, z, zi);
     if (n.y < lo || n.y > maxSlope) continue;
@@ -1378,7 +1382,7 @@ function buildOnce() {
 
     // ---- giant kelp: canopy giants plus a bushy understory ----
     {
-      const L = place(zi, zi === 0 ? 560 : 430, forest, 0.84);
+      const L = place(zi, zi === 0 ? 560 : 430, forest, 0.84, 1.01, 3.4);
       const im = mount(zi, G.kelp, M.kelp, L.length);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], under = _fr() < 0.34;
@@ -1399,7 +1403,7 @@ function buildOnce() {
     }
     // ---- seagrass turf ----
     {
-      const L = place(zi, [2600, 1500, 900][zi], turf, 0.72);
+      const L = place(zi, [2600, 1500, 900][zi], turf, 0.72, 1.01, 1.8);
       const im = mount(zi, G.grass, M.grass, L.length);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], H = rr(0.9, 2.8), W = rr(0.9, 1.8);
@@ -1425,7 +1429,7 @@ function buildOnce() {
       // Same 220 placements and the same draws per slot as ever; each slot now becomes a
       // full staghorn colony (every fourth), a table coral (every eighth, offset) or
       // nothing — fewer, far better colonies inside the same triangle budget.
-      const L = place(zi, 220, reef, 0.7);
+      const L = place(zi, 220, reef, 0.7, 1.01, 5.7);
       const im = mount(zi, G.stag, M.stag, Math.ceil(L.length / 4), true);
       const it = mount(zi, G.table, M.stag, Math.ceil(L.length / 8), true);
       let ks = 0, kt = 0;
@@ -1441,7 +1445,7 @@ function buildOnce() {
       plantAdopt('f_table' + zi, 'table', it, { cap: 28, glowZone: zi, mat: { glowZ: GLOWZ, sway: 0, cull: 105 } });
     }
     {
-      const L = place(zi, 150, reef, 0.5, 0.95);
+      const L = place(zi, 150, reef, 0.5, 0.95, 6.3);
       const im = mount(zi, G.fan, M.fan, L.length);
       const yaw = Math.atan2(Math.cos(CUR0), Math.sin(CUR0));
       for (let i = 0; i < L.length; i++) {
@@ -1454,7 +1458,7 @@ function buildOnce() {
       plantAdopt('f_fan' + zi, 'fan', im, { cap: 150, glowZone: zi, mat: { glowZ: GLOWZ, sway: 1, freq: 0.8, cull: 105, sss: 0.4, def: ['SSSL'] } });
     }
     {
-      const L = place(zi, 110, reef, 0.72);
+      const L = place(zi, 110, reef, 0.72, 1.01, 4.6);
       const im = mount(zi, G.brain, M.brain, L.length, true);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], S = rr(1.3, 4.6);
@@ -1465,7 +1469,7 @@ function buildOnce() {
       plantAdopt('f_brain' + zi, 'brain', im, { cap: 110, glowZone: zi, mat: { glowZ: GLOWZ, sway: 0, cull: 105 } });
     }
     {
-      const L = place(zi, 110, reef, 0.72);
+      const L = place(zi, 110, reef, 0.72, 1.01, 3.6);
       const im = mount(zi, G.sponge, M.sponge, L.length);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], S = rr(1.2, 3.6);
@@ -1478,7 +1482,7 @@ function buildOnce() {
     }
     const lit = [];
     {
-      const L = place(zi, 190, reef, 0.74);
+      const L = place(zi, 190, reef, 0.74, 1.01, 2.4);
       const im = mount(zi, G.anem, M.anem, L.length);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], S = rr(0.7, 2.4);
@@ -1502,8 +1506,8 @@ function buildOnce() {
     }
     // ---- rocks: pebbles, boulders, hero landmarks ----
     const fillets = [];   // x, z, footprint radius, size — for the sand fillets below
-    for (const [geo, mat, cnt, sLo, sHi, sq] of [[G.r0, M.rock, 300, 0.5, 2.2, 0.34], [G.r1, M.rockB, 110, 2, 7, 0.3]]) {
-      const L = place(zi, cnt, field.concat(reef), 0.42);
+    for (const [geo, mat, cnt, sLo, sHi, sq, rad] of [[G.r0, M.rock, 300, 0.5, 2.2, 0.34, 4.6], [G.r1, M.rockB, 110, 2, 7, 0.3, 14.6]]) {   // rad: sHi x 1.6 (the fbm) x 1.3 (the widest scale)
+      const L = place(zi, cnt, field.concat(reef), 0.42, 1.01, rad);
       const im = mount(zi, geo, mat, L.length, true, geo === G.r1);
       for (let i = 0; i < L.length; i++) {
         const p = L[i], S = rr(sLo, sHi) * (0.7 + 0.9 * fbm(p.x * 0.05 + 9, p.z * 0.05));
@@ -1516,7 +1520,7 @@ function buildOnce() {
       seal(im, L.length);
     }
     {
-      const L = place(zi, 10, field, 0.62);
+      const L = place(zi, 10, field, 0.62, 1.01, 25);   // hero: S <= 20, x 1.25
       const im = mount(zi, G.r2, M.rockH, L.length + 60, true, true);
       let i = 0;
       for (const p of L) {
@@ -1529,7 +1533,7 @@ function buildOnce() {
         // bed the landmark in with debris so it never reads as a floating prop
         for (let k = 0; k < 6 && i < L.length + 60; k++) {
           const a = rr(0, TAU), r = S * rr(0.7, 1.35), x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
-          if (nearWreck(zi, x, z)) continue;
+          if (nearWreck(zi, x, z) || !clearOfCrack(x, z, zi, S * 0.27) || !clearOfBed(zi, x, z, S * 0.27)) continue;   // (a bedding stone, s2 x 1.2 <= 0.27 S)
           const s2 = S * rr(0.08, 0.22);
           _c.set(P.rock).multiplyScalar(rr(0.6, 1.1));
           put(im, i++, stand(terrainNormal(x, z, zi), 0.85, rr(0, TAU)), s2 * 1.2, s2,
@@ -1585,6 +1589,19 @@ function mountFillets(zi, F) {
   m.receiveShadow = true;
   m.name = 'fillets' + zi;
   zones[zi].add(m);
+}
+
+// THE FISSURE's jam (world/fissure.js) is built from this rock kit, so its boulders ARE the
+// seabed's rocks: zone z's boulder material (the 'rock' program, already compiled and warmed),
+// one rock geometry shaped from the CALLER's stream (flora's own stream is swapped out for the
+// call and restored, so no layout or fingerprint here moves) and the zone's rock albedo.
+// The geometry carries flora's per-vertex attributes; the caller adds aInst (zeros: no sway) and
+// an instanceColor, as mount() / put() do, so the program key is the boulders' own.
+export function jamRockKit(zi, rand, detail = 4, squash = 0.8, amp = 0.75, facet = 1.6) {
+  if (!zoneMats) zoneMats = buildZoneMats();
+  const was = _fr; _fr = rand;
+  try { return { mat: zoneMats[zi].rockB, geo: rockGeo(detail, squash, amp, facet), rock: PAL[zi].rock }; }
+  finally { _fr = was; }
 }
 
 // First boot: identical path to every prior version of this file (buildZoneMats()

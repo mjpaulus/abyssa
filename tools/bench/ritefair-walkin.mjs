@@ -21,6 +21,7 @@ await start(`http://localhost:${PORT}/${process.env.RP_PATH || ""}?playtest&benc
 const c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && window.__bench`, 240000, 1000);
 await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); window.__fd = S.fissureDist; return 1; })()`);
 await sleep(3000);
 const alt = async code => {
   await c.ev(`(window.dispatchEvent(new KeyboardEvent('keydown', { code: '${code}', key: 'x', altKey: true, bubbles: true })), window.dispatchEvent(new KeyboardEvent('keyup', { code: '${code}', key: 'x', altKey: true, bubbles: true })), 1)`);
@@ -81,7 +82,7 @@ await c.ev(`(async () => {
           const h = q.y - fl(q.x, q.z); if (h < lo) { lo = h; m = { y: q.y, x: q.x, z: q.z }; } } }
       return { standE: r(L.standE), threatE: r(L.threatE), crouch: r(L.crouch ? L.crouch.x : 0), bellyOver: r(L.bellyOver || 0), soleLift: r(L.soleLift || 0),
         bodyOverFloor: r(L.bodyY - fl(L.pos.x, L.pos.z)), wards: L.sigils.map(g => r(g.grp.position.y - fl(g.grp.position.x, g.grp.position.z))),
-        massBottom: m ? r(m.y - fl(m.x, m.z)) : null, levR: L.riftC ? r(Math.hypot(L.pos.x - L.riftC.x, L.pos.z - L.riftC.z)) : null, keepR: L.crestR ? r(L.crestR + 1.45 * R) : null };
+        massBottom: m ? r(m.y - fl(m.x, m.z)) : null, levFd: window.__fd ? r(window.__fd(L.pos.x, L.pos.z, 0)) : null, keepFd: r(14 + 1.3 * R) };   // (fissure Task 5: her centre off the crack's lip, keep APRON + STAND.keep R)
     },
     lanes: () => [0, 90, 180, 270].map(b => ({ b, arcs: [1.15, 1.0, 0.85, 0.7].map(q => arc(b, q * R)), roof: roof(b) })),
     put: b => { const s = startAt(b); if (!s) return null; window.__bench.place(s.x, s.z, Math.atan2(L.pos.x - s.x, L.pos.z - s.z), 0); return { q: s.q, d: s.d }; },

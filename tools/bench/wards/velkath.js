@@ -1,3 +1,5 @@
+// RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives
+// that removed API and no longer runs. Kept because roadmap logs cite its results.)
 const W = window.__wt, A = window.__arg || { site: 0, rem: false };
 const cfg = W.setup(A.site, 0, A.rem);
 const L = window.lev, P = window.player, B = L.brood;

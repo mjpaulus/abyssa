@@ -16,16 +16,17 @@ import { scene, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
 import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
-import { terrainH, terrainMeshes } from '../../world/terrain.js';
+import { terrainH, terrainMeshes, fissurePatchSample } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
-  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers, lightWard,
-  rememberWard, wardMemPose, wardsRecall, wardRefuse, MSG_BROOD_COLD
+  setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
+  rememberWard, wardMemPose, wardsRecall
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
-import { riftPos, WORLD_R } from '../../config.js';
-import { wreckSites } from '../../world/wrecks.js';
+import { makeHarpoon } from './harpoon.js';
+import { FISSURE, fissureDist, fissureLocal, fissureShut, APRON } from '../../world/fissureShape.js';
+import { velkathLair, R_OF_SIZE, HEAD_R } from './lair.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
@@ -44,7 +45,6 @@ SCULPT.then(a => { SC = a; });
 
 const UP = V3(0, 1, 0);
 const smooth = THREE.MathUtils.smoothstep;
-const R_OF_SIZE = 2.8;                     // carapace half-width in cfg.size units (5.5 -> 15.4 u)
 // Walking legs, per side front to back: hip on the lip, rest-foot bearing off the side
 // (+ toward the front), length scale (the middle pairs are the longest, as in crabs).
 const LEGS = [
@@ -106,8 +106,8 @@ const WAKE_ORDER = [0, 5, 2, 7, 1, 4, 3, 6];         // leg unfold order (li), a
 const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;   // hammer cycle phases
 const HAMMER_T = 2.6;
 // THE HUNT (brooderfix): speeds are fractions of cfg.speed (9: Sal walks 2.15 u/s, 2.8 with
-// Shift, hauls ~6.6 off the bottom). chase 0.42 = 3.8 u/s after a thief (she runs a walker
-// down; a swimmer gets away), stalk 0.26 = 2.3 u/s otherwise. She closes to `hold` R from
+// Shift, hauls ~6.6 off the bottom). stalk 0.26 = 2.3 u/s (fissure-and-harpoon Task 6 retired the
+// 0.42 `chase` after a clutch thief with the pry). She closes to `hold` R from
 // her centre (the hammer's hinge lands ~2.3 R out, measured; the hit takes 0.42 R round it), keeps an unburdened
 // diver off `guard` R round her lair, and turns at up to `turn` rad/s while hunting.
 // knock: the hammer's throw (u/s). It was 38 when she never moved: measured, it carried him
@@ -136,18 +136,22 @@ export const CROUCH = { drop: 0, lean: 0, clear: 4.6, r: 0.6 };
 // (ritefair) THE RITE, FAIR. stand: her standing height (shell units over her feet; was 0.44):
 // with the clutch carried tucked under her apron (brood.js MAIN) and her wards on the belly
 // plane, 0.52 puts the wards ~6 u over flat ground (in reach standing, a hop at most) and the
-// egg mass's underside ~3.5 u up (over his helmet, in his reach to press back). ride: she rides
+// egg mass's underside ~3.5 u up (over his helmet). ride: she rides
 // at most this far (R) over the ground under her belly, whatever her feet stand on; clear: her
 // shell's lowest point keeps this many u over the ground under it while she is awake. Standing on
-// the rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
-// 12-17 u over him: `keep` holds her centre this far (R) outside the crest while she hunts a
-// diver on the plateau (she comes off her ledge to fight). underK: under her body (R) the
+// the old rift's rim crest the crest came up under her sole and lifted her 6-8 u, so her wards hung
+// 12-17 u over him. Since THE FISSURE (Task 5) `keep` holds her centre APRON + keep R off the crack's
+// lip while she hunts (1.3 R: her widest half extent is 1.29 R, so at any heading no part of her is
+// over the crack, its jam, or the 14 u apron where the ground rises to the lip: on it her crack-side
+// shell edge stood 5-6 u higher and STAND.clear lifted her wards to 13-17 u). Asleep she lies outside
+// the same line, so rising she does not lurch.
+// underK: under her body (R) the
 // hammer cannot reach him (a crab cannot strike under itself) and she lowers it; she shifts
 // her stance every `shiftT` s to dislodge him instead, at `shiftV` u/s for `shiftD` s.
 // knockUp: the vertical share of the hammer's throw (was 0.4 before normalising, ~37% of 26
-// u/s straight up: it launched him over her back); a throw never carries him toward the rift.
-export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.45, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
-export const HUNT = { chase: 0.42, stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
+// u/s straight up: it launched him over her back); a throw never carries him into the crack (safeThrow).
+export const STAND = { h: 0.52, ride: 0.06, clear: 3.6, keep: 1.3, under: 0.85, shiftT: 3.2, shiftV: 1.7, shiftD: 1.3, knockUp: 0.12 };
+export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35, knock: 26, guardUp: 0.6, spread: 0.4, upR: 2.4 };
 // implicit damped spring on a {x, v} pair: stable for any w*dt, overshoots for z < 1
 function spr(o, target, w, z, dt) {
   o.v = (o.v + w * w * dt * (target - o.x)) / (1 + 2 * z * w * dt + w * w * dt * dt);
@@ -159,7 +163,7 @@ const S = () => ({ x: 0, v: 0 });
 const nz = (t, s) => 0.6 * Math.sin(t * 1.13 + s * 1.7) * Math.sin(t * 0.71 + s * 3.1) + 0.4 * Math.sin(t * 2.37 + s * 5.3);
 const ease = x => x * x * (3 - 2 * x);
 const win = (x, a, b) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
-const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0 };
+const EV = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, plumeX: 0, plumeY: 0, plumeZ: 0, pulled: false, pullLine: null, sighted: false };
 
 // Scratch (never allocated per frame).
 const _hip = V3(), _d = V3(), _pn = V3(), _j1 = V3(), _ank = V3(), _ank2 = V3(), _knee = V3(), _ft = V3(), _v = V3();
@@ -187,48 +191,55 @@ function chitinSheen(m) {
   return m;
 }
 
-// OWN WATER: where she sleeps at a remote anchorage (site.js row `lair`, read only when
-// present — home never enters here). The rift itself never moves (THE CHART's frozen
-// frame), so her ridge swings ROUND ITS LIP instead: `bear` (degrees) turns the shipped
-// raft-side lip point about the rift centre; `arc` with the row's IDLE split [a, b]
-// searches that arc and takes the lip point whose ground sits at a/(a+b) of the arc's
-// height range (Pallid's [62, 38]: the HIGH lip — THE SLEEPERS SIT SHALLOW). Either way a
-// point whose ridge or trail head would sit on the zone's wreck is passed over, so the skiff
-// never lies under her. Returns the lip and the rift-ward `out` the shipped code faces by.
-// Pure function of the terrain and the row: a reseed lands her in the same place.
-function lairOf(idx, R, c) {
-  const rp = riftPos(idx), rad = 16 * 2.7 + R * 0.55, lr = c.lair;
-  const in0 = Math.atan2(-rp.z, -rp.x);                 // the shipped bearing: rift -> raft side
-  const W = idx < 3 ? wreckSites()[idx] : null;
-  const at = th => {
-    const dx = Math.cos(th), dz = Math.sin(th);
-    const lip = V3(rp.x + dx * rad, 0, rp.z + dz * rad), out = V3(-dx, 0, -dz);
-    const head = lip.clone().addScaledVector(V3(-out.z, 0, out.x), R * 2.8);      // (where the old nest stood: her trail's head)
-    const clear = !W || (Math.hypot(lip.x - W.x, lip.z - W.z) > R * 2 + 16 && Math.hypot(head.x - W.x, head.z - W.z) > 22);
-    const inBasin = Math.hypot(lip.x, lip.z) < WORLD_R * 0.66 && Math.hypot(head.x, head.z) < WORLD_R * 0.66;
-    let g = 0;
-    for (let k = 0; k < 5; k++) g += terrainH(lip.x + Math.cos(k * 1.2566) * R * 0.6, lip.z + Math.sin(k * 1.2566) * R * 0.6, idx);
-    return { lip, out, ok: clear && inBasin, g: g / 5 };
-  };
-  const d2r = Math.PI / 180;
-  if (lr.arc && c.idle) {
-    const C = [];
-    for (let a = lr.arc[0]; a <= lr.arc[1] + 1e-6; a += 10) { const q = at(in0 + a * d2r); if (q.ok) C.push(q); }
-    if (C.length) {
-      let lo = 1e9, hi = -1e9;
-      for (const q of C) { lo = Math.min(lo, q.g); hi = Math.max(hi, q.g); }
-      const want = lo + (hi - lo) * c.idle[0] / (c.idle[0] + c.idle[1]);
-      let best = C[0];
-      for (const q of C) if (Math.abs(q.g - want) < Math.abs(best.g - want)) best = q;
-      return best;
-    }
+// THE LAIR (Task 5): where she lies is sleeper/lair.js velkathLair (pure: the scatter keeps her bed clear).
+
+// (Task 5) the fissure's outward direction at (x, z): central differences of fissureDist (unit; into a
+// module scratch, no allocation). Points away from the lip, toward open ground.
+const _fg = { x: 0, z: 0 }, _fl = { u: 0, v: 0 };
+function crackAway(x, z, zi) {
+  const h = 0.75;
+  const gx = fissureDist(x + h, z, zi) - fissureDist(x - h, z, zi), gz = fissureDist(x, z + h, zi) - fissureDist(x, z - h, zi);
+  const l = Math.hypot(gx, gz) || 1;
+  _fg.x = gx / l; _fg.z = gz / l;
+  return _fg;
+}
+// (Task 5) the hammer's throw, flat direction v (unit, y 0), from (x, z): never toward the lip while he is
+// on the sand, and never a line that comes within 3 u of the lip inside THROW_REACH (26 u/s with the
+// flat knock slides him ~16-29 u through the suit's drag, measured through the real player step):
+// the throw turns away from the crack 15 degrees at a time until its line clears (at worst straight
+// out). Runs once per landed blow, no allocation. In place.
+const THROW_REACH = 32;
+function lineClear(x, z, vx, vz, zi) {
+  for (let d = 1; d <= THROW_REACH; d += 1) if (fissureDist(x + vx * d, z + vz * d, zi) < 3) return false;
+  return true;
+}
+export function safeThrow(v, x, z, zi) {   // (exported for the fissure probe's throw check)
+  if (fissureDist(x, z, zi) < 0) {
+    // already inside the lip. Shut, the jam is under him (the blow lands him on rubble): left alone. OPEN
+    // (final wave M4: a zone-0 rebuild after the calm, or a debug jump, can put her awake beside an open
+    // throat), never toward the throat: the part of the throw toward the crack's middle is taken off and
+    // it leans out over the nearer lip (fissureDist rises toward it from inside too)
+    if (fissureShut(zi)) return v;
+    const g = crackAway(x, z, zi), gx = g.x, gz = g.z;
+    const vin = v.x * gx + v.z * gz;
+    if (vin < 0.5) { v.x += (0.5 - vin) * gx; v.z += (0.5 - vin) * gz; }
+    v.y = 0; v.normalize();
+    return v;
   }
-  const b = (lr.bear || 0) * d2r;
-  for (let k = 0; k < 24; k++) {
-    const q = at(in0 + b + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * 15 * d2r);
-    if (q.ok) return q;
+  const g = crackAway(x, z, zi), gx = g.x, gz = g.z;
+  const vin = v.x * gx + v.z * gz;
+  if (vin < 0) { v.x -= vin * gx; v.z -= vin * gz; if (v.x * v.x + v.z * v.z < 0.04) { v.x = gx; v.z = gz; } v.y = 0; v.normalize(); }
+  if (lineClear(x, z, v.x, v.z, zi)) return v;
+  // turn toward straight out (the side of the outward normal the throw already leans to)
+  const crs = v.x * gz - v.z * gx, sgn = crs > 0 ? 1 : -1, x0 = v.x, z0 = v.z;
+  for (let k = 1; k <= 12; k++) {
+    const a = sgn * k * Math.PI / 12, ca = Math.cos(a), sa = Math.sin(a);
+    const rx = x0 * ca - z0 * sa, rz = x0 * sa + z0 * ca;
+    if ((rx * gz - rz * gx) * crs < 0) break;                      // turned past straight out
+    if (lineClear(x, z, rx, rz, zi)) { v.x = rx; v.z = rz; v.y = 0; return v; }
   }
-  return at(in0 + b);
+  v.x = gx; v.z = gz; v.y = 0;
+  return v;
 }
 
 export function makeBrooder(idx, cfg) {
@@ -480,53 +491,54 @@ export function makeBrooder(idx, cfg) {
     L.sigils.push(w);
   }
   // RITUAL, REMEMBERED: the ward the old calm keeps is the FRONT socket, under her prow
-  // between the claws. Two reasons. (1) THE BROOD RULE must survive the memory: it is not
-  // a fixed ward but "the last DARK ward will not light while the clutch is robbed". Pre-counting
-  // a ward that is lit from the boot means it can never BE the last dark one, so the rule
-  // still lands on a ward the diver has to reach (the second flank ward): one touch, then
-  // the clutch decides. Had the memory been "the last ward lights itself", the brood rule
-  // would have been the free ward and the clutch would no longer matter. (2) The front ward
-  // is the one inside the lunge and the hammer cycle; the flank wards are the ones her
-  // sideways stalk offers. The memory spares the cruellest approach and keeps the walk
-  // round her, the stand and the clutch: the rite is shorter, not different.
+  // between the claws: it is the one inside the lunge and the hammer cycle; the flank wards
+  // are the ones her sideways stalk offers. The memory spares the cruellest approach and
+  // keeps the walk round her and the stand: the rite is shorter, not different. (The memory's
+  // rite starts at the OLD WOUND where the harpoon was: sleeper/harpoon.js, wound mode.)
   rememberWard(L, 0);
   L.memLine = 'SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.';
   makeEmbers(L, c.size);
 
-  // THE RIDGE: she sleeps at this zone's rift, facing the open seabed the diver comes
-  // from, a reef-crusted mound in the silt. Her clutch bulges from under her rim, and a trail of
-  // tracks runs in from the open ground past a shed shell and spent egg skins. Prying a
-  // clump wakes her (brood.onTake); calmed, she walks back and settles over her clutch,
-  // which clears the way.
+  // THE RIDGE: she sleeps ALONGSIDE this zone's fissure (sleeper/lair.js: one flank to the crack, her near
+  // flank to the open sand the diver comes over), a reef-crusted mound in the silt. Her clutch
+  // bulges from under her rim, and a trail of tracks runs in from the open ground past a shed shell
+  // and spent egg skins, past the last of another diver. The HARPOON in her near flank wakes her
+  // (sleeper/harpoon.js; on a revisit, the old wound); calmed, she walks back and settles over her
+  // clutch, which clears the way.
   {
-    const rp = riftPos(idx);
-    let out = V3(rp.x, 0, rp.z).normalize(), lip;
-    // on the rift's LIP (its bowl is a deep funnel — sat in it she was a hole, not a
-    // ridge), between the rift and the open ground, facing the way a diver comes
-    if (!c.lair) lip = V3(rp.x, 0, rp.z).addScaledVector(out, -(16 * 2.7 + R * 0.55));   // shipped, exactly
-    else ({ lip, out } = lairOf(idx, R, c));
-    const perp = V3(-out.z, 0, out.x);
+    const { lip, out, sand } = velkathLair(idx, R, c);
     placeAt(L, lip, Math.atan2(-out.x, -out.z));
     L.lairPos = lip.clone();
-    // (ritefair) the rift's rim crest along her lair's bearing: she sleeps astride it, and
-    // awake she keeps off it (STAND.keep) while she hunts a diver out on the plateau
+    // (Task 5) her near flank: the rim point on the sand side, at the ground (Task 6's harpoon seam is
+    // on this flank); sandSide = which of her local flanks (+1: +x) faces it
+    L.sand = sand.clone();
+    L.sandSide = Math.cos(L.yaw) * sand.x - Math.sin(L.yaw) * sand.z >= 0 ? 1 : -1;
+    { const q = fissureLocal(lip.x, lip.z, idx, { u: 0, v: 0 }); L.lairSide = q.v >= 0 ? 1 : -1; }   // which side of the crack is hers
     {
-      const bx = lip.x - rp.x, bz = lip.z - rp.z, bl = Math.hypot(bx, bz) || 1;
-      let hi = -1e9, cr = 16;
-      for (let r = 16; r <= bl; r += 1) { const h = terrainH(rp.x + bx / bl * r, rp.z + bz / bl * r, idx); if (h > hi) { hi = h; cr = r; } }
-      L.riftC = V3(rp.x, 0, rp.z); L.crestR = cr;
+      const rr = G.rimR(L.sandSide > 0 ? 0 : Math.PI) * R;
+      L.nearFlank = lip.clone().addScaledVector(sand, rr);
+      L.nearFlank.y = terrainH(L.nearFlank.x, L.nearFlank.z, idx);
     }
     L.lairYaw = L.yaw;                                // (home: she turns back to it before settling, so the clutch fits her bed again)
-    // (her trail's head, where the old nest stood: the tracks run in from 95 u out past it,
-    // exactly where they always began)
-    const head = lip.clone().addScaledVector(perp, R * 2.8);
-    L.brood = makeBrood(L, idx, head.clone().addScaledVector(out, -95));
-    L.rite = L.brood;                                 // the game's generic [E] / prompt hook
+    // (her trail's head, out on her sand side (1.8 R: at 2.8 R, where the old nest stood, home's head
+    // fell on the skiff): the tracks run in to it from 95 u further out, leaning toward the basin's
+    // middle so they start on open floor)
+    const head = lip.clone().addScaledVector(sand, R * HEAD_R);
+    const tIn = V3(-head.x, 0, -head.z).normalize().multiplyScalar(0.6).add(sand).normalize();
+    L.brood = makeBrood(L, idx, head.clone().addScaledVector(tIn, 95));
+    // the rite's trigger: the old harpoon (a revisit to an anchorage whose iron was pulled: the old
+    // wound, cfg.pulled from the chart record, game.js makeZoneSleeper)
+    L.harpoon = makeHarpoon(L, { wound: !!c.pulled, sighted: !!c.sighted });
+    L.rite = L.harpoon;                               // the game's generic [E] / prompt hook
     L.lairWhere = 'BY THE RIFT';
     L.dormant = true;
-    L.brood.onTake = () => { if (L.dormant) wakeBrooder(L); };
+    L.harpoon.onWake = () => { if (L.dormant) wakeBrooder(L); };
+    // the lines only a SLEEPING ridge says (game.js drops any still queued the moment she wakes)
+    L.findLines = L.brood.findLines.concat([RIDGE_LINE, L.harpoon.sightLine]);
   }
 
+  // (playtest) her body's colliders now, for a spot search right after a (re)build, before her first update
+  L.publishCols = () => { L.grp.updateMatrixWorld(true); publishCols(L); };
   L.cmd = (name, arg) => {
     if (name === 'wake') { if (L.dormant) wakeBrooder(L); }
     else if (name === 'stand') L.standTarget = 1;
@@ -534,11 +546,11 @@ export function makeBrooder(idx, cfg) {
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
-    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); if (L.brood) L.brood.seat(); fitSkirt(L); } }
+    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); seatRite(L); fitSkirt(L); } }
     return L.probe();
   };
   L.probe = () => ({
-    kind: 'brooder', dormant: !!L.dormant, clutchOut: L.brood ? L.brood.out() : 0, held: L.brood ? L.brood.held : -1, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
+    kind: 'brooder', dormant: !!L.dormant, harpoon: L.harpoon ? { pulled: !!L.harpoon.pulled, wound: !!L.harpoon.wound, wrenching: !!L.harpoon.wrenching, pressed: !!L.harpoon.pressed } : null, stand: L.stand, threat: L.threat, yaw: L.yaw, pos: L.pos.toArray(), bodyY: L.bodyY,
     swinging: L.feet.filter(f => f.t >= 0).length, walking: !!L.walkTo, calmed: L.calmed,
     remembered: !!L.remembered, memWard: L.memWard >= 0 ? L.memWard : -1,
     wards: L.sigils.map(g => ({ lit: g.lit, mem: !!g.mem, y: +(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, L.idx)).toFixed(2) })),
@@ -562,13 +574,22 @@ export function makeBrooder(idx, cfg) {
   setLive(L);
   setWardTargets(-1, null);
   poseAll(L, 0, null);
-  if (L.brood) L.brood.seat();                       // the clutch rests on her bed (brood.js): before the drift, which leaves its side open
+  seatRite(L, !!SC);                                 // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
   buildSkirt(L);
-  if (SC) installSculpt(L, SC);
-  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.brood && L.dormant) { L.brood.seat(); fitSkirt(L); } } });
+  // (the harpoon seats in her DRAWN shell: with the sculpt already here it is swapped in after the first
+  // seat, so the iron is re-seated on it and the drift re-opened at its bearing)
+  if (SC) { installSculpt(L, SC); if (L.harpoon && L.dormant) { L.harpoon.seat(); fitSkirt(L); } }
+  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.dormant) { seatRite(L); fitSkirt(L); } } });
   const pd = L.onDispose;
   L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
   return L;
+}
+
+// The clutch on her bed and the harpoon in her drawn flank, in her dormant pose (the harpoon also
+// re-keeps its shared model after a sculpt install replaced L.keepGeo).
+function seatRite(L, noHarpoon = false) {
+  if (L.brood) L.brood.seat();
+  if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
 }
 
 // ---- THE SILT DRIFT (polish-followups) ----
@@ -607,8 +628,11 @@ function buildSkirt(L) {
   L.onDispose = () => { if (m.parent) m.parent.remove(m); g.dispose(); if (prev) prev(); };
 }
 
-// bilinear sample of the seabed mesh's vertex colour at world x,z (its grid is separable)
-function seabedColor(tm, x, z, out) {
+// bilinear sample of the seabed mesh's vertex colour at world x,z (its grid is separable); near the
+// crack the coarse cells are cut out and the fissure patch draws the floor, so its colour first (Task 5)
+function seabedColor(tm, x, z, out, zi) {
+  const hp = fissurePatchSample(zi, x, z, out);
+  if (hp === hp) return out;
   const P = tm.geometry.attributes.position.array, C = tm.geometry.attributes.color.array;
   const n = Math.round(Math.sqrt(P.length / 3));
   const find = (v, stride, off) => {                  // largest k with axis[k] <= v
@@ -646,15 +670,32 @@ function fitSkirt(L) {
   // THE CLUTCH'S SIDE (brooder-clutch): her fanning keeps the silt off the eggs that bulge out
   // from under her rim there, so the drift opens over that arc (brood.js seat picks it)
   const nB = L.brood && L.brood.seated ? L.brood.bear : null, nW = L.brood ? L.brood.notch : 0;
+  // (fissure-and-harpoon Task 6) and at the harpoon's seam: the old diver dug in to stand there, and
+  // the silt never banked over the iron (nor over the wound it left); a narrow gap
+  const hB = L.harpoon && L.harpoon.seated ? L.harpoon.bear : null, hW = 0.16;
   const notchK = j => {
-    if (nB === null) return 0;
-    let d = j / SK_COLS * Math.PI * 2 - nB;
-    d = Math.atan2(Math.sin(d), Math.cos(d));
-    return 1 - smooth(Math.abs(d), nW * 0.55, nW);
+    let k = 0;
+    if (nB !== null) {
+      let d = j / SK_COLS * Math.PI * 2 - nB;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      k = 1 - smooth(Math.abs(d), nW * 0.55, nW);
+    }
+    if (hB !== null) {
+      let d = j / SK_COLS * Math.PI * 2 - hB;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      k = Math.max(k, 1 - smooth(Math.abs(d), hW * 0.45, hW));
+    }
+    return k;
   };
   for (let j = 0; j < SK_COLS; j++) {
     const th = j / SK_COLS * Math.PI * 2, rr = G.rimR(th), c = Math.cos(th), sn = Math.sin(th);
-    const nk = notchK(j), gp = gs[j] * (1 - nk), w = clamp(gp * 1.7, 1.6, 9.5) / R;        // repose: ~30 degrees, wider for a deeper hollow
+    const nk = notchK(j), gp = gs[j] * (1 - nk);
+    let w = clamp(gp * 1.7, 1.6, 9.5) / R;                     // repose: ~30 degrees, wider for a deeper hollow
+    // (Task 5) the drift never runs over the crack's lip: on a bearing toward it the bank ends 1.5 u short
+    for (let q = 0.97; q <= 0.97 + w; q += 0.25 / R) {
+      _v.set(c * rr * q, -0.02, sn * rr * q).applyMatrix4(mw);
+      if (fissureDist(_v.x, _v.z, L.idx) < 1.5) { w = Math.max(0.2 / R, q - 0.97 - 0.25 / R); break; }
+    }
     for (let i = 0; i < SK_RINGS; i++) {
       let rho, ly = -0.02, s = 0;
       if (i === 0) { rho = 0.80; ly = -0.10; }
@@ -672,7 +713,7 @@ function fitSkirt(L) {
       if (i < 2 && nk > 0) y += (th0 - 0.12 - y) * nk;          // the open side: no curtain of silt under the rim
       if (y < th0 - 0.12 && i >= 1) y = th0 - 0.12;             // where the floor stands over her rim, the drift is under it
       P.setXYZ(i * SK_COLS + j, _v.x, y, _v.z);
-      seabedColor(tm, _v.x, _v.z, rgb);
+      seabedColor(tm, _v.x, _v.z, rgb, L.idx);
       const dk = i < 2 ? 0.42 : 0.42 + 0.58 * Math.pow(s, 0.6);  // darker where silt meets shell
       C.setXYZ(i * SK_COLS + j, rgb[0] * dk, rgb[1], rgb[2]);
     }
@@ -808,7 +849,7 @@ function installSculpt(L, A) {
   if (!g.body || !A.maps.body || !A.maps.limbs || L.sculpted) return;
   L.sculpted = true;
   L.keepTex = new Set([...L.keepTex, ...assetTextures(A), microTexture()]);   // the micro layer is shared by every creature
-  L.keepGeo = assetGeos(A);
+  L.keepGeo = new Set([...(L.keepGeo || []), ...assetGeos(A)]);   // (union: the harpoon keeps its shared model here too)
   const P = L.parts, body = L.body;
   // the fused shell replaces the scute shell, the belly, the barnacles and the shingles
   const sets = (A.meta && A.meta.sets) || {};
@@ -1501,7 +1542,7 @@ function publishCols(L) {
 }
 
 function resetEv() {
-  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0;
+  EV.sigilLit = 0; EV.calmed = false; EV.lightDrain = 0; EV.slam = false; EV.remaining = 0; EV.msg = null; EV.woke = false; EV.quake = 0; EV.thump = 0; EV.plume = 0; EV.pulled = false; EV.pullLine = null; EV.sighted = false;
   return EV;
 }
 // a ground shock at world x,z of strength k (0..1): the game's camera shake, by distance
@@ -1565,13 +1606,15 @@ function sight(L, dt, player, ev) {
   L._pdT = d;
 }
 
+const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
   if (L.woke) { L.woke = false; ev.woke = true; L.bY.v -= L.R * 0.25; }    // the first jolt: she tenses into the silt
+  if (L.harpoon) L.harpoon.update(dt, t, player, ev);
   if (L.brood) {
     L.brood.update(dt, player, ev);
-    if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = 'THE RIDGE IS WARM UNDER YOUR HAND.'; }
+    if (L.dormant && !ev.msg && !L.brood.found.ridge && L._pd < L.R * 1.3) { L.brood.found.ridge = true; ev.msg = RIDGE_LINE; }
   }
   if (!L.pPrev) L.pPrev = player.pos.clone();
   sight(L, dt, player, ev);
@@ -1686,17 +1729,13 @@ export function updateBrooder(L, dt, t, player) {
   for (const s of L.spine) { const d = s.distanceTo(player.pos); if (d < pd) pd = d; }
   L._pd = pd;
   let want = null, speed = 0;
-  // THE HUNT (brooderfix, Michael 2026-10-08: "Crab does not follow sal at all when he gets
-  // the egg"). Measured on main: awake she only ever TURNED and sidled (the stalk below is
-  // purely tangential, so it drifted her outward), from her first commit on; no step toward
-  // him was ever written, and the old nest sat just outside her 2.4 R threat ring, so a thief
-  // at it was never even struck. Now, once she is up, she COMES FOR HIM: her body
+  // THE HUNT (brooderfix, 2026-10-08: she never followed him). Awake she only ever TURNED and
+  // sidled (the stalk below is purely tangential, so it drifted her outward); no step toward him
+  // was ever written. Now, once she is up, she COMES FOR HIM: her body
   // moves in WORLD space toward what she is after (Sal, or blind, the spot she lost him),
   // crab-fashion, independent of where her face has got to; she stalks sideways as she
-  // closes, plants for every blow and lunges into it. While he carries a clump of her clutch she is
-  // relentless; unburdened she keeps him off her ground (HUNT.guard round her lair) and lets
-  // him go past it.
-  const thief = !!(L.brood && L.brood.held >= 0);
+  // closes, plants for every blow and lunges into it. She keeps him off her ground (HUNT.guard round
+  // her lair) and lets him go past it. She hunts whoever pulled the harpoon.
   const hunt = !L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.5;
   const tx = L.aim.x - L.pos.x, tz = L.aim.z - L.pos.z, dh = Math.hypot(tx, tz) || 1e-3;
   L.huntD = dh;
@@ -1716,10 +1755,9 @@ export function updateBrooder(L, dt, t, player) {
     const under = (Math.hypot(player.pos.x - L.pos.x, player.pos.z - L.pos.z) < L.R * 0.95 && player.pos.y < L.bodyY)
       || (L.brood && player.pos.y < L.bodyY && L.brood.onBed(player.pos));
     if (Math.abs(dA) < 0.12 && !under) { L.homeTurn = false; L.standTarget = 0; }
-  } else if (hunt && L._pdT < (thief ? 400 : 90)) {
+  } else if (hunt && L._pdT < 90) {
     // her face follows what she SEES: Sal, or (lost in the silt) where she last saw him;
-    // given up, she sweeps her front slowly across the cloud, searching. A thief she never
-    // stops facing, however far he gets.
+    // given up, she sweeps her front slowly across the cloud, searching.
     // (under her, the bearing to him swings wildly with every step he takes: she holds)
     want = L.blindT < SIGHT_GIVEUP ? (dh > 0.5 * R ? Math.atan2(tx, tz) : L.yaw)
       : L.searchYaw + 0.7 * Math.sin((L.blindT - SIGHT_GIVEUP) * 0.45);
@@ -1728,14 +1766,14 @@ export function updateBrooder(L, dt, t, player) {
   let vC = 0, cAng = Math.atan2(tx, tz);
   if (hunt && L.standE > 0.9 && want !== null) {
     const N = L.lairPos || L.pos;                       // her ground: the lair she sleeps on (not the clutch, which may move)
-    const terr = thief ? 1 : 1 - smooth(Math.hypot(L.aim.x - N.x, L.aim.z - N.z), HUNT.guard * 0.75 * R, HUNT.guard * R);
+    const terr = 1 - smooth(Math.hypot(L.aim.x - N.x, L.aim.z - N.z), HUNT.guard * 0.75 * R, HUNT.guard * R);
     const closeK = smooth(dh, HUNT.hold * R, (HUNT.hold + 0.6) * R) * terr * (L.blindT >= SIGHT_GIVEUP ? 0 : 1);
     // planted for the blow: from the fall to the end of the recoil
     const planted = L.threatE > 0.3 && (L.hamPh >= PH_SLAM0 || L.impT < 0.45);
-    vC = planted ? 0 : L.speed * (thief ? HUNT.chase : HUNT.stalk) * closeK * (1 - 0.45 * L.threatE);
+    vC = planted ? 0 : L.speed * HUNT.stalk * closeK * (1 - 0.45 * L.threatE);
   }
   // the hunting voice (audio/creatures.js): up while she comes for him, down when she stops
-  L.huntK = (L.huntK || 0) + ((hunt && (vC > 0.3 || thief) ? (thief ? 1 : 0.6) : 0) - (L.huntK || 0)) * Math.min(1, 1.2 * dt);
+  L.huntK = (L.huntK || 0) + ((hunt && vC > 0.3 ? 0.6 : 0) - (L.huntK || 0)) * Math.min(1, 1.2 * dt);
   const goal = want !== null && speed > 0 ? L.walkTo : vC > 0.3 ? L.aim : null;
   if (goal) {
     // round the rocks and hulls ahead; no headway for 3 s (a pocket between two of them)
@@ -1769,11 +1807,11 @@ export function updateBrooder(L, dt, t, player) {
   vx += Math.sin(cAng) * vC; vz += Math.cos(cAng) * vC;
   // STALK: awake and not yet striking, she circles the diver crab-fashion — sideways,
   // face locked on him — and changes direction every few seconds. (Sideways across the line
-  // to him, not across her own heading, so a thief behind her is not circled away from.)
+  // to him, not across her own heading, so a diver behind her is not circled away from.)
   if (hunt && L.standE > 0.9 && L.threatE < 0.5 && L.seen && dh > L.R * 1.4 && dh < L.R * 6) {
     L.strafeT = (L.strafeT || 0) - dt;
     if (L.strafeT <= 0) { L.strafeT = 4 + Math.random() * 4; L.strafeDir = Math.random() < 0.5 ? -1 : 1; }
-    const ss = L.speed * 0.22 * L.strafeDir * (thief ? 0.55 : 1);
+    const ss = L.speed * 0.22 * L.strafeDir;
     vx += tz / dh * ss; vz -= tx / dh * ss;
   }
   L.velPrev.copy(L.vel);
@@ -1794,17 +1832,30 @@ export function updateBrooder(L, dt, t, player) {
   }
   L.pos.x += L.vel.x * dt;
   L.pos.z += L.vel.z * dt;
-  // (ritefair) OFF THE LIP: hunting a diver out on the plateau she keeps her centre STAND.keep R
-  // outside the rift's rim crest (on it the crest lifted her and her wards 6-8 u); she walks off
-  // her ledge as she rises, and comes no nearer the rift while he stays out of its bowl
-  if (hunt && L.riftC && L.standE > 0.5) {
-    const rx = L.pos.x - L.riftC.x, rz = L.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
-    const keep = L.crestR + STAND.keep * R;
-    if (rr < keep && Math.hypot(L.aim.x - L.riftC.x, L.aim.z - L.riftC.z) > L.crestR) {
-      const k = Math.min(keep - rr, 3.0 * dt * L.standE);
-      L.pos.x += rx / rr * k; L.pos.z += rz / rr * k;
-      const vin = (L.vel.x * rx + L.vel.z * rz) / rr;
-      if (vin < 0) { L.vel.x -= vin * rx / rr; L.vel.z -= vin * rz / rr; }
+  // (ritefair; Task 5) OFF THE CRACK: awake and hunting she keeps her centre APRON + STAND.keep R
+  // off the fissure's lip (fissureDist, its outward gradient), whatever he does: her widest half
+  // extent is 1.29 R, so at any heading no part of her is over the crack, its jam or the apron that
+  // rises to the lip (the old rim crest she walked off; on it her wards hung 6-8 u up). She slides
+  // along the line, never into it.
+  // The same holds on the walk home to her bed (calm, walkTo), and past either tip she stays on her
+  // own side of the crack's line, so a diver across it cannot lead her round a tip and back over
+  // the jam on the walk home.
+  if ((hunt || L.walkTo) && !L.dormant && L.standE > 0.5) {
+    const keep = APRON + STAND.keep * R, fd = fissureDist(L.pos.x, L.pos.z, L.idx);
+    if (fd < keep) {
+      const g = crackAway(L.pos.x, L.pos.z, L.idx);
+      const k = Math.min(keep - fd, 3.0 * dt * L.standE);
+      L.pos.x += g.x * k; L.pos.z += g.z * k;
+      const vin = L.vel.x * g.x + L.vel.z * g.z;
+      if (vin < 0) { L.vel.x -= vin * g.x; L.vel.z -= vin * g.z; }
+    }
+    const F = FISSURE[L.idx];
+    fissureLocal(L.pos.x, L.pos.z, L.idx, _fl);
+    if (L.lairSide && Math.abs(_fl.u) > F.halfLen && _fl.v * L.lairSide < 0) {
+      const nx = -F.dz * L.lairSide, nz = F.dx * L.lairSide, k = Math.min(-_fl.v * L.lairSide, 3.0 * dt);
+      L.pos.x += nx * k; L.pos.z += nz * k;
+      const vin = L.vel.x * nx + L.vel.z * nz;
+      if (vin < 0) { L.vel.x -= vin * nx; L.vel.z -= vin * nz; }
     }
   }
   // the world is solid to her: out of every hull and big rock, sliding along it
@@ -1911,15 +1962,13 @@ export function updateBrooder(L, dt, t, player) {
     c.dj.getWorldPosition(_ft);
     if (_ft.distanceTo(player.pos) < L.R * 0.42 && !L.under) {
       // (ritefair) a throw along the ground away from the blow, a little up (was setY(0.4):
-      // ~10 u/s straight up, over her back), and never toward her rift's bowl
+      // ~10 u/s straight up, over her back), and (Task 5) never into the crack: out on the sand,
+      // the part of it toward the lip is taken off, and a line that would still slide him to the
+      // lip (a tangent throw at a kink or a tip) turns out until it clears
       _v.copy(player.pos).sub(_ft).setY(0);
       if (_v.lengthSq() < 1e-6) _v.set(player.pos.x - L.pos.x, 0, player.pos.z - L.pos.z);
       _v.normalize();
-      if (L.riftC) {
-        const rx = player.pos.x - L.riftC.x, rz = player.pos.z - L.riftC.z, rr = Math.hypot(rx, rz) || 1;
-        const vin = (_v.x * rx + _v.z * rz) / rr;
-        if (vin < 0 && rr > L.crestR) { _v.x -= vin * rx / rr; _v.z -= vin * rz / rr; if (_v.lengthSq() < 0.04) _v.set(rx / rr, 0, rz / rr); _v.normalize(); }
-      }
+      safeThrow(_v, player.pos.x, player.pos.z, L.idx);
       _v.y = STAND.knockUp; _v.normalize();
       player.vel.addScaledVector(_v, HUNT.knock);
       L.hits = (L.hits || 0) + 1;
@@ -1946,19 +1995,9 @@ export function updateBrooder(L, dt, t, player) {
         wardIdle(g, dt, haloK);
         // buried wards can sit within reach of her face through the sand: only a
         // standing Brooder offers them
-        if (L.standE > 0.6) {
-          // THE BROOD RULE: her last ward will not light while a clump of her clutch is
-          // out; pressed back into her, it lights on its own.
-          let dark = 0;
-          for (const q of L.sigils) if (!q.lit) dark++;
-          const last = dark === 1;
-          if (last && L.brood && L.brood.out() > 0) {
-            // (fifth-ward) every touch answers: a cold spark, a dead knock, the line (common.js)
-            wardRefuse(L, g, player, ev, MSG_BROOD_COLD);
-          } else if (last && L.brood && L.sigils.length > 1 && !ev.sigilLit) {
-            lightWard(L, g, ev);
-          } else wardTouch(L, i, g, player, ev);
-        }
+        // (fissure-and-harpoon Task 6: the brood rule, her last ward cold while a clump of her clutch
+        // was out, is gone with the pry; every ward is simply lit by his touch)
+        if (L.standE > 0.6) wardTouch(L, i, g, player, ev);
       }
     }
     let rem = 0;

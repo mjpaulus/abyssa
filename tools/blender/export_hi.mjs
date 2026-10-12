@@ -19,7 +19,8 @@ const [creature, ...only] = process.argv.slice(2);
 if (!creature) { console.error('usage: export_hi.mjs <creature> [piece ...]'); process.exit(1); }
 // a sleeper lives in src/entities/sleeper/; anything else (sal) in src/entities/
 // (additive, plants) sessile life lives in src/world/plants/
-const SRC = [path.join(ROOT, 'src/entities/sleeper', creature + 'Sculpt.js'), path.join(ROOT, 'src/entities', creature + 'Sculpt.js'), path.join(ROOT, 'src/world/plants', creature + 'Sculpt.js')].find(f => fs.existsSync(f));
+// (additive, harpoon) a prop shared by several owners (Velkath's flank, Sal's hand) lives in src/lib/
+const SRC = [path.join(ROOT, 'src/entities/sleeper', creature + 'Sculpt.js'), path.join(ROOT, 'src/entities', creature + 'Sculpt.js'), path.join(ROOT, 'src/world/plants', creature + 'Sculpt.js'), path.join(ROOT, 'src/lib', creature + 'Sculpt.js')].find(f => fs.existsSync(f));
 if (!SRC) { console.error('no sculpt module for', creature); process.exit(1); }
 const mod = await import(SRC);
 const P = mod.pipeline();

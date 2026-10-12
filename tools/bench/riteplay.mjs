@@ -19,8 +19,9 @@ mkdirSync(OUT, { recursive: true });
 let seed = +SEED >>> 0 || 1;
 const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
 const AVG = MODE === 'average';
-// RP_FLEE=<s>: after the take he runs off with the clump for that long (a thief's first
-// instinct), so the rite starts against a risen, hunting Velkath; the ledger's case
+// RP_FLEE=<s>: after the pull he runs off for that long, so the rite starts against a risen,
+// hunting Velkath; the ledger's case. (fissure-and-harpoon Task 6: the trigger is the harpoon in her
+// near flank, Alt+6 stands him at it; the pry, the carried clump and the brood rule are gone.)
 const FLEE = +(process.env.RP_FLEE || 0);
 
 // ---- the page side: the per-frame ledger ----
@@ -29,7 +30,7 @@ const PROBE = `(() => {
   const v = new V(), w = new V();
   const seen = L.sigils.map(() => false);
   const st = { seen, f: 0, tears: 0, lastHit: -9, hits: 0, hitAt: [], dryN: 0, dryWas: false, low: 0, bowlN: 0, bowlAt: [], inBowl: false, camN: 0, camBad: 0, pressed: 0,
-    wardT: L.sigils.map(g => g.lit ? 0 : null), calmT: null, retT: null, takeT: null, maxUp: 0, floatS: 0, tornPrev: SV.torn, heldPrev: L.brood ? L.brood.held : -1,
+    wardT: L.sigils.map(g => g.lit ? 0 : null), calmT: null, retT: null, takeT: null, maxUp: 0, floatS: 0, tornPrev: SV.torn, pulledPrev: !!(L.harpoon && (L.harpoon.pulled && !L.harpoon.wound || L.harpoon.pressed)),
     lairFloor: terrainH(L.lairPos.x, L.lairPos.z, 0), minReserve: 1 };
   const frame = () => {
     st.f++;
@@ -43,7 +44,7 @@ const PROBE = `(() => {
     st.dryWas = dry;
     const fl = terrainH(P.pos.x, P.pos.z, 0);
     const lairD = Math.hypot(P.pos.x - L.lairPos.x, P.pos.z - L.lairPos.z);
-    const inB = fl < st.lairFloor - 15 && lairD < 90;
+    const inB = window.__fd ? window.__fd(P.pos.x, P.pos.z, 0) < 0 : fl < st.lairFloor - 15 && lairD < 90;   // (fissure Task 5: the 'bowl' is the crack now)
     if (inB && !st.inBowl) { st.bowlN++; st.bowlAt.push(+t.toFixed(1)); }
     st.inBowl = inB;
     const agl = P.pos.y - 1.35 - fl;
@@ -51,10 +52,9 @@ const PROBE = `(() => {
     if (agl > 9) st.floatS += 1 / 60;
     for (let i = 0; i < L.sigils.length; i++) if (L.sigils[i].lit && st.wardT[i] == null) st.wardT[i] = +t.toFixed(1);
     if (L.calmed && st.calmT == null) st.calmT = +t.toFixed(1);
-    const h = L.brood ? L.brood.held : -1;
-    if (h >= 0 && st.heldPrev < 0 && st.takeT == null) st.takeT = +t.toFixed(1);
-    if (h < 0 && st.heldPrev >= 0) st.retT = +t.toFixed(1);
-    st.heldPrev = h;
+    const Hp = L.harpoon, pl = !!(Hp && ((Hp.pulled && !Hp.wound) || Hp.pressed));
+    if (pl && !st.pulledPrev && st.takeT == null) st.takeT = +t.toFixed(1);
+    st.pulledPrev = pl;
     // the framing: she is awake and inside 30 u; readable if her belly or a dark ward is on screen
     if (st.f % 4 === 0 && t >= (window.__rpFlee || 0) && !L.dormant && !L.calmed && L.standE > 0.5 && Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z) < 30) {
       st.camN++;
@@ -72,19 +72,14 @@ const PROBE = `(() => {
 })()`;
 
 const STATE = `(() => {
-  const P = window.player, SV = window.survival, L = window.lev, B = L.brood, V = P.pos.constructor, r = x => +x.toFixed(2);
+  const P = window.player, SV = window.survival, L = window.lev, Hp = L.harpoon, V = P.pos.constructor, r = x => +x.toFixed(2);
   const fl = terrainH(P.pos.x, P.pos.z, 0);
   const o = { pos: [r(P.pos.x), r(P.pos.y), r(P.pos.z)], vel: [r(P.vel.x), r(P.vel.y), r(P.vel.z)], agl: r(P.pos.y - 1.35 - fl), grounded: !!P.grounded,
     reserve: r(SV.reserve / (SV.reserveCap || 1)), fill: r(P.fill || 0), dormant: !!L.dormant, calmed: !!L.calmed, standE: r(L.standE),
     lev: [r(L.pos.x), r(L.bodyY), r(L.pos.z)], R: r(L.R), cock: r(L.cock || 0), threatE: r(L.threatE || 0), crouch: r(L.crouch ? L.crouch.x : 0),
-    held: B ? B.held : -1, canTake: B ? !!B.canTake(P.pos) : false, canReturn: B ? !!B.canReturn(P.pos) : false, clutchReach: B ? r(B.reach(P.pos)) : 99,
+    yaw: r(P.yaw), canTake: !!(L.rite && L.rite.prompt(P.pos)), wrenching: !!(Hp && Hp.wrenching),
     reach: L.reach, msg: window.__msg().live };
   o.wards = L.sigils.map(g => ({ p: [r(g.grp.position.x), r(g.grp.position.y), r(g.grp.position.z)], lit: !!g.lit, floor: r(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, 0)) }));
-  // the clutch's lowest point (live lobes), the spot he presses the clump back into
-  if (B && B.live) { const q = new V(); let lo = 1e9, m = null;
-    for (let k = 0; k < B.nL; k++) { const j = k * 4; if (B.live[j + 3] <= 0.002) continue; q.set(B.live[j], B.live[j + 1] - B.live[j + 3], B.live[j + 2]).applyMatrix4(L.body.matrixWorld);
-      if (q.y < lo) { lo = q.y; m = q.clone(); } }
-    if (m) { o.mass = [r(m.x), r(m.y), r(m.z)]; o.massFloor = r(m.y - terrainH(m.x, m.z, 0)); } }
   o.rp = window.__rp ? window.__rp.st : null;
   return o;
 })()`;
@@ -100,6 +95,9 @@ const alt = async code => {
 };
 const nSail = SITE === 'pallid' ? 1 : SITE === 'burned' ? 2 : 0;
 for (let i = 0; i < nSail; i++) { await alt('Minus'); await sleep(4000); await c.ev(`(window.__bench.step(120), 1)`); }
+// RP_PRE=<js>: evaluated before the jump (e.g. a revisit: the chart says pulled + calmed here, then a
+// sail away and back: "__chart.pulled()[0]=1; __chart.rec()[0][0]=1; __chart.arrive(1); __chart.arrive(0)")
+if (process.env.RP_PRE) await c.ev(`(() => { ${process.env.RP_PRE}; return 1; })()`);
 await alt('Digit6');
 await sleep(1500);
 await c.ev(`(window.__bench.step(60), 1)`);
@@ -110,6 +108,7 @@ await c.ev(`(window.__bench.step(60), 1)`);
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
+await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); window.__fd = S.fissureDist; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
@@ -172,14 +171,14 @@ function decide(s) {
   const noise = AVG ? (rnd() * 2 - 1) * 20 * DEG : 0;
   // the average player holds a burst ~1 s whatever the climb needs (the ledger's habit)
   const avgBurst = 0.6 + 0.6 * rnd();
-  if (s.dormant) return { sec: 0.2, yaw: 0, e: s.canTake, keys: [], why: 'take' };
+  // asleep: [E] at the harpoon (or the old wound), then hands off through the wrench
+  if (s.dormant) return { sec: 0.2, yaw: s.yaw, e: s.canTake && !s.wrenching, keys: [], why: s.wrenching ? 'wrench' : 'pull' };
   if (t < FLEE) { const ax = P[0] - s.lev[0], az = P[2] - s.lev[2]; return { sec, yaw: Math.atan2(ax, az) + noise, keys: ['W', 'Shift'], why: 'flee' }; }
-  // targets: the dark wards; the last one waits on the clutch while the clump is out
+  // targets: the dark wards
   const dark = s.wards.map((w, i) => ({ ...w, i })).filter(w => !w.lit && (!AVG || (s.rp && s.rp.seen[w.i])));
   const nDark = s.wards.filter(w => !w.lit).length;
   let T = null, kind = 'ward', R = reach - 0.9;
-  if (s.held >= 0 && nDark <= 1) { T = s.mass; kind = 'clutch'; R = 3.0; }
-  else if (dark.length) {
+  if (dark.length) {
     dark.sort((a, b) => hyp(a.p[0] - P[0], a.p[1] - P[1], a.p[2] - P[2]) - hyp(b.p[0] - P[0], b.p[1] - P[1], b.p[2] - P[2]));
     T = dark[0].p;
   }
@@ -188,7 +187,6 @@ function decide(s) {
   const dx = T[0] - P[0], dz = T[2] - P[2], dh = hyp(dx, dz), up = T[1] - P[1];
   const d3 = hyp(dh, up);
   const yaw = Math.atan2(dx, dz) + noise;
-  if (kind === 'clutch' && s.canReturn) return { sec, yaw, e: true, keys: s.grounded ? [] : ['C'], why: 'return' };
   // how high he must be at this horizontal distance to be in reach
   const hIn = Math.min(dh, R - 0.3), needUp = up - Math.sqrt(Math.max(0, R * R - hIn * hIn));
   const pitch = clamp(Math.atan2(up, Math.max(dh, 0.5)), -0.6, 1.2);
@@ -218,13 +216,13 @@ function decide(s) {
 function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
 
 let s = await c.ev(STATE);
-console.log('START', JSON.stringify({ site: SITE, mode: MODE, pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), massFloor: s.massFloor, canTake: s.canTake }));
+console.log('START', JSON.stringify({ site: SITE, mode: MODE, pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`) }));
 let lastWhy = '';
 while (t < +MAXS) {
   s = await c.ev(STATE);
   if (s.calmed) break;
   const d = decide(s);
-  if (d.why !== lastWhy || d.e) log.push(`${t.toFixed(1)} ${d.why} agl ${s.agl} res ${s.reserve} lit ${s.wards.map(w => w.lit ? 1 : 0).join('')} held ${s.held} cr ${s.crouch} reach ${s.clutchReach}`);
+  if (d.why !== lastWhy || d.e) log.push(`${t.toFixed(1)} ${d.why} agl ${s.agl} res ${s.reserve} lit ${s.wards.map(w => w.lit ? 1 : 0).join('')} cr ${s.crouch}`);
   lastWhy = d.why;
   await slice(d);
   if (t - lastShot >= 10) { lastShot = t; await shot(String(Math.round(t)).padStart(3, '0')); }
@@ -233,10 +231,20 @@ while (t < +MAXS) {
 for (let i = 0; i < 8; i++) await slice({ sec: 0.25, yaw: 0, keys: [] });
 s = await c.ev(STATE);
 await shot('end');
+// (fissure-and-harpoon Task 6) THE WAY DOWN: calmed, she walks home and the fissure opens (world/fissure.js);
+// then Sal, stood over the crack's middle, goes down into it
+let way = null;
+if (s.calmed) {
+  for (let i = 0; i < 100; i++) await slice({ sec: 0.25, yaw: 0, keys: [] });
+  way = await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); const L = window.lev, o = { x: 0, z: 0 };
+    const k = window.__fissure.k(0); const l = { u: 0, v: 0 }; S.fissureLocal(L.lairPos.x, L.lairPos.z, 0, l); S.fissureWorld(l.u, 0, 0, o);
+    window.__bench.place(o.x, o.z, 0); const T = await import('/src/world/terrain.js'); window.player.pos.y = T.terrainH(L.lairPos.x, L.lairPos.z, 0) + 2; window.player.grounded = false; const y0 = window.player.pos.y; window.__bench.step(240); return { openK: +k.toFixed(2), y0: +y0.toFixed(1), y4s: +window.player.pos.y.toFixed(1), fd: +S.fissureDist(window.player.pos.x, window.player.pos.z, 0).toFixed(1) }; })()`);
+  await shot('down');
+}
 const st = s.rp;
-const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT, retT: st.retT,
+const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
   hits: st.hits, tears: st.tears, hitAt: st.hitAt, dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
-  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1) };
+  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));

@@ -27,6 +27,7 @@ import { terrainH } from '../../world/terrain.js';
 import { setWardTargets, deployInk } from '../../world/predators.js';
 import { wreckSites } from '../../world/wrecks.js';
 import { riftPos, WORLD_R, RIFT_R } from '../../config.js';
+import { clearOfCrack } from '../../world/fissureShape.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, sigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
   rememberWard, wardMemPose, wardsRecall
@@ -35,6 +36,7 @@ import * as G from './hoarderGeo.js';
 import { makeHoard } from './hoard.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
+import { survival } from '../../systems/survival.js';
 
 // THE SCULPT (tools/blender pipeline; hoarderSculpt.js has the design). THE SPLIT, and why:
 //   RIGID or SHADER-MOVED -> sculpted, baked high-to-low: the mantle + head + web + beak +
@@ -187,7 +189,8 @@ function hoarderOut(idx, W, Rm, c) {
   const o0 = Math.atan2(W.z, W.x), rad = Rm * 1.4 + 9, rp = riftPos(idx);
   const at = th => {
     const ox = Math.cos(th), oz = Math.sin(th), x = W.x + ox * rad, z = W.z + oz * rad;
-    const ok = Math.hypot(x, z) < WORLD_R * 0.68 && Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + Rm + 8;
+    const ok = Math.hypot(x, z) < WORLD_R * 0.68 && Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + Rm + 8
+      && clearOfCrack(x, z, idx, Rm);                    // (Task 5) and off the crack itself: every row passes already
     return { out: V3(ox, 0, oz), ok, g: terrainH(x, z, idx) };
   };
   if (c.idle) {
@@ -516,11 +519,30 @@ export function makeHoarder(idx, cfg) {
     L.stage = sigilPool.map(() => ({ src: -1, cur: 0 }));
   }
 
-  L.onSlash = (pos, fwd) => {
-    if (!L.grab) return;
+  // reach: how far past the arm's own girth the blade carries (game.js: the knife 3, the harpoon 5.1)
+  // (fix round 1, ruled) tipReach: the blade's full reach (knife 3.4, harpoon 5.5). Not held, a blade at an
+  // arm REACHING for him (the cock or the throw of a lash) whose tip is inside that reach and in front of
+  // him PARRIES it: the arm recoils (no grab while it does) and the lash is spent. The knife's reach is a
+  // last-instant cut (her grab closes at hGrabR 3.2); the harpoon catches the throw early. Held, the cut
+  // frees him in one hit with either blade (unchanged).
+  // guard: the harpoon's point held out after its contact (game.js bladeGuard) — it parries, it does not cut
+  L.onSlash = (pos, fwd, reach = 3, tipReach = reach + 0.4, guard = false) => {
+    if (guard && L.grab) return;
+    if (!L.grab) {
+      let parried = 0;
+      for (let a = 0; a < L.arms.length; a++) {
+        const A = L.arms[a];
+        if (!(A.lash > 0) || A.recoil > 0.4) continue;
+        _p.copy(A.tip).sub(pos);
+        const d = _p.length();
+        if (d < tipReach && _p.dot(fwd) > 0.342 * d) { A.lash = 0; A.recoil = 1; parried++; }
+      }
+      if (parried) { L.parried = (L.parried || 0) + parried; L.pendingMsg = L.pendingMsg || 'THE ARM RECOILS FROM THE BLADE.'; }
+      return;
+    }
     const A = L.arms[L.grab.arm];
     // the cut lands if the blade is anywhere near the arm that holds him
-    for (let i = 8; i <= RINGS; i += 4) if (A.pts[i].distanceTo(pos) < A.r0 * 1.2 + 3) {
+    for (let i = 8; i <= RINGS; i += 4) if (A.pts[i].distanceTo(pos) < A.r0 * 1.2 + reach) {
       L.grab = null; A.recoil = 1; A.lash = 0; L.pendingMsg = L.pendingMsg || 'THE ARM LETS GO.';
       return;
     }
@@ -1349,7 +1371,8 @@ export function updateHoarder(L, dt, t, player) {
           // a grab is the DRAG, not a slam: no dress tear, the line is the teaching
           L.grab = { arm: a, t: 0 };
           ev.grabbed = true;
-          ev.msg = ev.msg || 'IT HAS YOU. CUT IT — CLICK TO SLASH.';
+          // (Task 7) the old harpoon, once he owns it, is the blade: a thrust, not a slash
+          ev.msg = ev.msg || (survival.hasHarpoon ? 'IT HAS YOU. CUT IT — CLICK TO THRUST.' : 'IT HAS YOU. CUT IT — CLICK TO SLASH.');
         }
       }
     } else if (L.still > 0) {

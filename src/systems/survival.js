@@ -40,6 +40,9 @@ export const survival = {
   hasSonar: false,
   hasSpear: false,
   hasThruster: false,
+  // (fissure-and-harpoon Task 6) the old whaling iron pulled from Velkath's side: granted on the first
+  // pull EVER, at any anchorage (sleeper/harpoon.js), saved as tools.harpoon; Task 7 makes it his blade
+  hasHarpoon: false,
   spears: 0,          // loaded spears; spent ones stick in the world and can be recovered
   // THE AIR PACK (roadmap/air-jet-pack.md, Michael 2026-10-04: "use the air like a jet
   // pack"). A RESERVE TANK on his back, separate from the air he breathes: Space taps

@@ -1,4 +1,5 @@
 #!/bin/sh
+# RETIRED (fissure-and-harpoon Task 6: the pry, the carried clump and the brood rule are gone; this script drives that removed API and no longer runs. Kept because roadmap logs cite its results.)
 # AFTER, continued from after_cold.sh: Sal back at the nest, the egg set down with a real E;
 # the held ward lights on its own (the brood rule). Frozen on the flash, camera still pinned.
 D=$(dirname "$0"); S=${BENCH:-node $D/../cdp.mjs}

@@ -1,19 +1,21 @@
 // Game state machine, camera, HUD, and the frame loop. Owned by the orchestrator.
 import * as THREE from 'three';
 import { scene, camera, clock, renderer, flushSize } from './core.js';
-import { ZONE_GAP, SURFACE_Y, RIFT_R, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
+import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS } from './config.js';
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
+import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
+import { lipMeanY, resetJam, setFissureShut, FISSURE, fissureDist, fissureLocal, fissureWorld, fissureShut, openRunAt } from './world/fissureShape.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
 import { buildWater, updateWater, updateAtmosphere, syncLamps, setLampOccluders, setWeatherWater, setWeatherEnv, setWeatherHand, setRayDim, localSurfaceY, renderRefraction, windState, setSiteWater } from './world/water.js';
 import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } from './world/creatures.js';
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
+import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
 import { resolveBodyCols, BODY, bodyBlocked, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
-import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank } from './entities/diver.js';
+import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed, diverBladeTip } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
   player, updatePlayer, requestLock, locked, forwardVec, rightVec, keys, clearKeys,
@@ -71,6 +73,11 @@ let chartRec = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], endingSeen = false;
 // (per site, per wreck berth).
 let chartFound = [1, 1, 1, 0];
 let keepsakes = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
+// (fissure-and-harpoon Task 6) per anchorage, Velkath's old harpoon has been pulled there: a revisit
+// finds the OLD WOUND in the seam instead (sleeper/harpoon.js; cfg.pulled, makeZoneSleeper)
+let pulledRec = [0, 0, 0, 0];
+// (fix round 1) and whether his light has found the harpoon there: its first-sight line is once EVER per site
+let sightRec = [0, 0, 0, 0];
 let muteSaved = false;
 // A save is UNTRUSTED input: hand-edited, torn, or written by an older build. Every
 // field is coerced to its shape and clamped to its range; nothing in it can put the
@@ -83,6 +90,8 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
   if (Array.isArray(sv.rec)) chartRec = grid43(sv.rec);
   if (Array.isArray(sv.found)) chartFound = [1, 1, 1, sv.found[3] ? 1 : 0];   // authored sites always start found
   if (Array.isArray(sv.keeps)) keepsakes = grid43(sv.keeps).map(r => Array.isArray(r) ? r : [0, 0, 0]);
+  if (Array.isArray(sv.pulled)) pulledRec = [0, 1, 2, 3].map(i => sv.pulled[i] ? 1 : 0);
+  if (Array.isArray(sv.sighted)) sightRec = [0, 1, 2, 3].map(i => sv.sighted[i] ? 1 : 0);
   endingSeen = !!sv.endingSeen;
   muteSaved = !!sv.mute;
   if (sv.site) setSite(sv.site);
@@ -94,14 +103,15 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
     survival.hasSpear = !!sv.tools.spear;
     if (sv.tools.spear) survival.spears = Math.max(survival.spears || 0, 2);
     survival.hasThruster = !!sv.tools.thruster;
+    survival.hasHarpoon = !!sv.tools.harpoon;     // the old iron from Velkath's side (Task 7: his blade)
     survival.reserve = survival.reserveCap = reserveCapacity();   // the upgraded tank arrives charged
   }
 } catch (e) { /* a torn save is a blank chart, never a crash */ } })();
 function saveChart() { try {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
-    site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes,
+    site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes, pulled: pulledRec, sighted: sightRec,
     endingSeen, hose: survival.hose, mute: muteSaved,
-    tools: { sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster }
+    tools: { sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster, harpoon: !!survival.hasHarpoon }
   }));
 } catch (e) { /* private mode etc: play on, remember nothing */ } }
 // A tab closed mid-dive keeps its crafts: pagehide is the last reliable beat on every browser.
@@ -195,6 +205,12 @@ buildLightning();   // bolt channels (one instanced draw) + the two-slot bolt li
 await buildStep('creatures', 'SEEDING THE SHOALS');
 buildCreatures();
 buildRifts();
+// THE FISSURE's jam, silt and seep (world/fissure.js): built here, inside the loader, so the warm
+// frames draw them (forceAllDrawn) and first sight builds nothing; shut at boot (calmed THIS
+// VISIT is empty: see syncFissureRecord)
+const visitCalm = [0, 0, 0];
+buildFissures();
+syncFissureRecord();
 await buildStep('raft', 'FITTING OUT THE TENDER');
 buildRaft();
 // TAA: Sal and the raft are rigid hierarchies -- exact motion vectors for both.
@@ -290,7 +306,7 @@ window.__slamLog = slamLog;   // inkBlind: Orune's ink smothering the lantern   
 let paused = false, pauseT = 0, blurred = false;
 let lanternHeld = false;   // predators.js STATE: the octopus has the lantern (see the snatch)
 const PEV_IDLE = { threat: 0, bite: 0, lightSteal: 0, inkPickup: 0, lanternStolen: false, msg: null };
-const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0 };
+const LEV_IDLE = { sigilLit: 0, calmed: false, lightDrain: 0, slam: false, remaining: 0, msg: null, woke: false, quake: 0, thump: 0, plume: 0, pulled: false, pullLine: null, sighted: false };
 
 const $hud = document.getElementById('hud');
 const $msg = document.getElementById('msg');
@@ -344,20 +360,15 @@ function setBearing(el, tx, ty, tz, show) {
 // THE WARD TALLY (roadmap/fifth-ward.md). How many wards remain used to live only in a
 // 2.5 s line ("TWO WARDS DARK") at the bottom of a one-slot message queue, which any slam,
 // tear or lantern line replaced, so a diver could light a ward, be hit, and never learn
-// the count; and the brood rule held Velkath's last ward cold with nothing on screen to
-// say so. Now the sleeper's own bearing mark carries a row of pips, one per ward: hollow
+// the count. Now the sleeper's own bearing mark carries a row of pips, one per ward: hollow
 // = dark, gold = lit (a fresh one swells as it takes), amber = the ward a past calm
-// remembers, a dashed cold ring = the last ward while a clump of her clutch is out, with the
-// count and the reason beside them. Rebuilt only when the state changes (an integer key),
+// remembers, with the count beside them. (Velkath's cold-ring variant, the brood rule's
+// "CLUTCH ROBBED", went with the pry: fissure-and-harpoon Task 6.) Rebuilt only when the state changes (an integer key),
 // so the frame cost is a loop over at most five wards.
 const $tally = document.createElement('div');
 $tally.className = 'tally';
 $bm.lev.appendChild($tally);
 let tallyKey = -1, tallyLit = 0, tallyNoT = 0;
-function clutchOut(L) {
-  const B = L && L.brood;
-  return B ? B.out() : 0;          // the clump of her clutch Sal carries (brood.js)
-}
 function updateTally(dt) {
   if (tallyNoT > 0 && (tallyNoT -= dt) <= 0) $tally.classList.remove('refuse');
   const S = lev && lev.sigils;
@@ -369,16 +380,14 @@ function updateTally(dt) {
     if (g.lit && !g.mem) litMask |= 1 << i;
     if (!g.lit) dark++;
   }
-  const held = dark === 1 && clutchOut(lev) > 0;
-  key = key * 2 + (held ? 1 : 0);
   if (key === tallyKey) return;
   tallyKey = key;
-  // mem first, then lit in the order they took, then the dark ones (the cold one last)
+  // mem first, then lit in the order they took, then the dark ones
   let h = '';
   for (let i = 0; i < S.length; i++) if (S[i].mem) h += '<i class="mem"></i>';
   for (let i = 0; i < S.length; i++) if (S[i].lit && !S[i].mem) h += (litMask & ~tallyLit) & (1 << i) ? '<i class="on new"></i>' : '<i class="on"></i>';
-  for (let i = 0; i < S.length; i++) if (!S[i].lit) h += held ? '<i class="cold"></i>' : '<i></i>';
-  h += dark ? `<b>${dark} DARK${held ? ' · CLUTCH ROBBED' : ''}</b>` : '';
+  for (let i = 0; i < S.length; i++) if (!S[i].lit) h += '<i></i>';
+  h += dark ? `<b>${dark} DARK</b>` : '';
   tallyLit = litMask;
   $tally.innerHTML = h;
 }
@@ -404,6 +413,8 @@ function packDir(out) {
 }
 // No water to push on: the planks, the ladder, his helmet out of the sea.
 function packUsable() {
+  // (Task 6) not while both hands are on the harpoon in her side
+  if (lev && lev.rite && lev.rite.wrenching) return false;
   return !player.onDeck && !player.onLadder && player.pos.y < localSurfaceY() - 0.6;
 }
 // Said in silence, at most every 8 s; the first time it is said whatever else is up.
@@ -525,12 +536,13 @@ addEventListener('keydown', e => {
   }
   // E near a wreck's relic: take the tool
   if (e.code === 'KeyE' && state === 'play' && lev && lev.rite) {
-    // THE RITE'S TRIGGER (a clump of the Brooder's clutch, the Hoarder's lamp): the sleeper's own
-    // object decides what [E] does here, and hands back the line to show
+    // THE RITE'S TRIGGER (Velkath's harpoon or her old wound, the Hoarder's lamp, the furnace): the
+    // sleeper's own object decides what [E] does here, and hands back the line to show. The harpoon's
+    // press starts a 1.5 s commitment (sleeper/harpoon.js): its line is said when it comes free.
     const r = lev.rite.interact(player.pos);
     if (r) {
       if (r.took) chime(740, 2.2, 0.2, 'pickup');
-      else if (r.returned) { chime(494, 2.4, 0.2, 'ward'); if (!r.out) { dropMsg(refuseLive); refuseLive = null; } }
+      else if (r.pulled) chime(r.wound ? 330 : 220, 1.6, 0.18, 'cold');
       if (r.lamp) player.hasLamp = true;
       if (r.msg) showMsg(r.msg, 3);
       return;
@@ -574,14 +586,43 @@ addEventListener('keydown', e => {
 });
 addEventListener('contextmenu', e => { if (locked) e.preventDefault(); });
 
-// Left-click while locked: knife slash. The anim gates repeats; the hit lands on the
+// Left-click while locked: the blade. The anim gates repeats; the hit lands on the
 // contact frame via pendingSlash so the blade connects when it visually connects.
-let pendingSlash = 0;
+// (fissure-and-harpoon Task 7) TWO BLADES, one input. The dive knife until he owns Velkath's old harpoon
+// (survival.hasHarpoon, saved tools.harpoon); then the harpoon is the blade: a heavier two-handed thrust,
+// later to land and further to reach, through the same systems (predators.slash scaled by power, lev.onSlash).
+// contact: s after the click (diver.js keys the swing to it — keep in sync); reach: u; cd: the swing's own
+// length (diver.js SLASH_DUR 0.55 / THRUST_DUR 0.9): no new swing until it is over (the anim gates it too —
+// triggerSlash returns false while one is in flight; the cd is checked half a frame short so it can never
+// refuse a click the anim would take); power: the shark's stagger and the abort.
+const BLADE = {
+  knife: { kind: 'knife', contact: 0.22, reach: 3.4, cd: 0.55, power: 1 },
+  harpoon: { kind: 'harpoon', contact: 0.30, reach: 5.5, cd: 0.9, power: 1.8 }
+};
+let bladeAt = -1e9;
+// (fix round 1, ruled) THE IRON HELD OUT is a guard: after the harpoon's contact the point stays out (diver.js
+// THK holds it to ~0.56 s), and an Orune arm thrown onto it in that time is parried as at the contact frame
+let bladeGuard = 0;
+const _tipV = new THREE.Vector3();
+let pendingSlash = 0, pendingBlade = BLADE.knife;
+// the last blow's contact, for probes: ONE reused object (set on the contact frame, never allocated in play)
+const bladeLast = { t: 0, reach: 0, kind: '', puff: 0 };   // puff: the contact churned silt at the point (1) or not (0)
+window.__bladeLast = null;
 const lampOcc = new Float32Array(8);   // diverOccluders -> setLampOccluders, every frame
-function doSlash() { if (triggerSlash()) { pendingSlash = 0.22; knife(); } }   // contact ~0.22s into the swing
-window.__slash = () => { if (state === 'play') doSlash(); };   // probes: the knife without pointer lock (tools/bench/play.mjs)
+function doSlash() {
+  // (fix round 1) not while both hands are on Velkath's iron (as packUsable)
+  if (lev && lev.rite && lev.rite.wrenching) return;
+  const b = survival.hasHarpoon ? BLADE.harpoon : BLADE.knife;
+  if (clock.elapsedTime - bladeAt < b.cd - 0.5 / 60) return;
+  if (triggerSlash(b.kind)) { pendingSlash = b.contact; pendingBlade = b; bladeAt = clock.elapsedTime; knife(); }
+}
+window.__slash = () => { if (state === 'play') doSlash(); };   // probes: the blade without pointer lock (tools/bench/play.mjs)
+window.__spear = () => { if (state === 'play') doSpear(); };   // probes: the spear gun without pointer lock (harpoon-probe wrench-spear)
+window.__programs = () => renderer.info.programs.length;     // probes: no first-sight compile (harpoon-probe thrust-contact)
 function doSpear() {
   if (!survival.hasSpear) return;
+  // (final wave) not while both hands are on Velkath's iron either (as doSlash, packUsable)
+  if (lev && lev.rite && lev.rite.wrenching) return;
   if (survival.spears > 0 && fireSpear(player.pos, forwardVec())) {
     survival.spears--;
     chime(330, 0.3, 0.24, 'pickup');
@@ -602,7 +643,7 @@ addEventListener('mousedown', e => {
 // prio 0: names and colour. prio 1 (default): everything the player must read.
 // (fifth-ward) The waiting room is a short QUEUE now, not one slot: with one slot every line
 // that arrived while another waited REPLACED it, so in a busy beat (a ward lit, a slam, the
-// dress tearing, the lantern guttering) the count, the brood rule's refusal and the sleepers'
+// dress tearing, the lantern guttering) the count, a held ward's refusal and the sleepers'
 // own beats ('THE FIRE BLINDS HIM', 'THE WARDS OF ORUNE ANSWER THE PING') were silently lost.
 // Up to MSGQ_N lines wait, highest priority first and in arrival order within one; a line
 // already live or waiting is not queued twice; a line that has waited MSGQ_STALE seconds is
@@ -636,8 +677,8 @@ function nextMsg() {
   while (msgQ.length && msgClock - msgQ[0].at > MSGQ_STALE) msgQ.shift();
   return msgQ.length ? msgQ.shift() : null;
 }
-// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once the clump is
-// back, the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
+// (fifth-ward) cut a line whose reason has just gone away (a ward's refusal once its rule lets go,
+// the ward has taken, Mhor hangs stunned, Orune's wards ring): it fades now and
 // whatever waits behind it shows; a waiting copy is struck too.
 function dropMsg(text) {
   if (!text) return;
@@ -674,6 +715,9 @@ function makeZoneSleeper(i, extra) {
     idle: row.idle || null, lair: row.lair || null, hard: row.hard || null
   } : undefined;
   if (calmedBefore(i)) over = Object.assign({}, over, { remembered: true });
+  // (Task 6) Velkath's harpoon already pulled at this anchorage: her rite starts at the old wound
+  if (i === 0 && pulledRec[currentSiteIndex()]) over = Object.assign({}, over, { pulled: true });
+  if (i === 0 && sightRec[currentSiteIndex()]) over = Object.assign({}, over, { sighted: true });
   return makeLeviathan(i, extra ? Object.assign({}, over, extra) : over);
 }
 // The remembered wake's one line ('SHE KNOWS YOUR HAND. ONE WARD STILL REMEMBERS.', per
@@ -701,11 +745,11 @@ function enterZone(i, quiet = false) {
   if (!quiet) announceZone();
   pendingWards = i > 0;
   riftShutSaid = false;
-  // The bowl's rim, for the rift-shut beat: the collar crest sits at 0.84 of the funnel
-  // radius, so sample the height there on four bearings and keep the mean.
-  const rp = riftPos(i), rr = RIFT_R * 2.7 * 0.84;
-  riftRimY = (terrainH(rp.x + rr, rp.z, i) + terrainH(rp.x - rr, rp.z, i)
-    + terrainH(rp.x, rp.z + rr, i) + terrainH(rp.x, rp.z - rr, i)) * 0.25;
+  calmLineT = -1;        // a calm's held line belongs to the zone it was said in
+  syncFissureRecord();   // every zone's fissure, open or shut, as calmed THIS visit (visitCalm)
+  // The fissure's lip, for the rift-shut beat: its mean lip height (fissureShape.js lipMeanY
+  // samples it along both broken lips).
+  riftRimY = lipMeanY(i, terrainH);
 }
 // colour, not instruction: it waits behind anything that matters. A dormant sleeper
 // (the Brooder asleep as a ridge) is not announced — her name is the reveal.
@@ -752,9 +796,34 @@ window.__lev = {
   state() { return lev ? (lev.probe ? lev.probe() : { kind: lev.kind, calmed: lev.calmed }) : null; },
   me() { return player.pos.clone(); }
 };
-// THE RIFT IS SHUT WHILE IT WAKES: a diver who drops into the bowl before the sleeper
-// stills falls into an unmarked hole in the dark. Said once per zone, 20u below the rim.
+// THE RIFT IS SHUT WHILE IT WAKES: a diver on the shut fissure's jam while the sleeper is awake is
+// told why it will not let him down. Said once per zone, once he stands on the jam with her awake
+// and not yet calmed (riftRimY is the fissure's mean lip height).
 let riftShutSaid = false, riftRimY = 0;
+// THE CALM'S LINE waits for the light (spec: "A RIFT OPENS BELOW." lands as the light arrives):
+// the calm starts the opening (openFissure, its duration back) and the line is held until
+// dur - 2.5 s on the opening's own clock (the fissure's dt: held while paused), then queued
+// through showMsg like any line. calmLineZ is the zone it belongs to; a zone change, a reseed or
+// leaving play cancels it (calmLineT < 0: none pending).
+let calmLineT = -1, calmLineZ = -1, calmLine = '';
+// every zone's open level for the light (rifts.js updateRifts), refilled each frame (no allocation)
+const openK = [0, 0, 0];
+// THE FISSURE'S OPEN STATE lives in world/fissure.js (fissureOpenK, 0 shut .. 1 open, open past
+// 0.5) for EVERY zone, not just the one he is in. It is "calmed THIS VISIT" (visitCalm, Michael's
+// "Ritual, remembered", roadmap/sleepers-persist-decision.md: the sleepers re-wake every visit and
+// "the water does not" remember): written at the calm, cleared at boot and on every arrival
+// (reseedWorldNow), never on a zone entry, so a zone calmed this visit stays open behind him (he
+// can come back up through it; a re-shut jam would close over his head) while an anchorage the
+// chart's pencil only REMEMBERS loads shut until she is calmed again. syncFissureRecord pushes the
+// set in on every zone entry and reseed (zones mid-opening are left to finish); the calm itself
+// starts the opening (openFissure). (visitCalm is declared before the boot build, which reads it.)
+function syncFissureRecord() {
+  for (let zi = 0; zi < 3; zi++) if (!fissureOpening(zi)) setFissureOpen(zi, visitCalm[zi] ? 1 : 0);
+}
+const fissureOpen = () => zone >= 0 && fissureOpenK(zone) > 0.5;
+// the shut flags every "ground under X" reader shares (terrain.js shutFloorY / jamAt), set before
+// anything steps this frame
+function syncFissureShut() { for (let zi = 0; zi < 3; zi++) setFissureShut(zi, fissureOpenK(zi) <= 0.5); }
 
 // Where a dressed diver waits before a dive: on the deck at the inboard end of the walk
 // to the boarding gap, facing out over the water he is about to step into. The gap is on
@@ -778,6 +847,7 @@ function snapCamBehind(onDeck) {
   const back = boomBack(), sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
   camera.position.set(player.pos.x - sy * back, player.pos.y + boomUp(), player.pos.z - cy * back);
   camDist = back; camDistV = 0; camBasePrev = back;
+  camCut();
 }
 
 export function start() {
@@ -818,6 +888,10 @@ const COUNT = ['NO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE'];
 function wardsLine() {
   const n = lev ? lev.sigils.length : 3;
   // a dormant sleeper (the Brooder asleep as a ridge) is not described: finding her is the point
+  // (Task 6) the Brooder's trigger is the iron in her side: the line points at what pins the ridge
+  if (lev && lev.dormant && lev.harpoon) return lev.harpoon.wound
+    ? `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND THE OLD WOUND IN THE RIDGE.`
+    : `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND WHAT PINS THE RIDGE.`;
   if (lev && lev.dormant) return `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND IT. LIGHT THEM.`;
   return `${COUNT[n] || n} IRON WARDS RIDE ITS HIDE. LIGHT THEM AND IT STILLS.`;
 }
@@ -905,6 +979,9 @@ function reseedWorldNow(i) {
   setSiteLight(currentSite().light || null);
   setSiteGrade(currentSite().grade || null);
   fillTerrain();
+  visitCalm[0] = visitCalm[1] = visitCalm[2] = 0;   // a new arrival: the water has forgotten (enterZone(0) below syncs it)
+  resetJam();   // the jam hangs under the new site's lips (enterZone below reads it)
+  reseatFissures();   // ...and the drawn jam with it (boulders, silt, seep refilled in place)
   reseedWrecks({ sonar: !!survival.hasSonar, spear: !!survival.hasSpear, thruster: !!survival.hasThruster });
   setKeepsakeState(keepsakes[currentSiteIndex()]);
   reseedFlora();
@@ -952,7 +1029,7 @@ window.__hit = () => ({ torn: +survival.torn.toFixed(2), refill: +o2RefillRate()
 window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zone ' + zone; };
 // Debug: sail without the fade (the fade is cosmetic; this is the state change), and
 // force the reseed directly. Kept for probes and for future harness runs.
-window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec,
+window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm, pulled: () => pulledRec, sighted: () => sightRec, site: () => currentSiteIndex(),
   found: () => chartFound, keeps: () => keepsakes, fp: () => terrainFingerprint() };
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
@@ -1311,12 +1388,18 @@ function hitFrom(list, mag, hasPos) {
   diverImpulse('hit', bx, bz, mag);
 }
 
-function clearCamDistance(from, dir, want, zi) {
+// `inCrack`: the pivot is inside the OPEN crack's outline: the floor test is off (a wall face is not a
+// floor: it stopped the boom anywhere from 0 to 1/8 of its length off the face and the 2.2 u minimum then
+// put the lens in the rock); throatLens puts the lens in the shaft instead, and a target it leaves outside
+// the outline (up at lip level: over the apron, the lip heave, the ground past a tip) gets the floor clamp
+// after it. (Testing the floor only for boom points outside the outline was tried: deep in the shaft it
+// pulled the boom in to the lip line and dropped him off the bottom of the frame on 144 fall samples.)
+function clearCamDistance(from, dir, want, zi, inCrack) {
   const STEPS = 8, MARGIN = 0.8;
   for (let i = 1; i <= STEPS; i++) {
     const d = want * (i / STEPS);
     const x = from.x + dir.x * d, y = from.y + dir.y * d, z = from.z + dir.z * d;
-    if (y < terrainH(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
+    if (!inCrack && y < shutFloorY(x, z, zi) + 1.1) return Math.max(2.2, want * ((i - 1) / STEPS));
     for (let list = 0; list < 5; list++) {
     const cols = list === 0 ? rockColliders : list === 1 ? propColliders : list === 2 ? wreckColliders : list === 3 ? ventColliders : dynCols;
     const nCols = list === 4 ? dynN : cols.length;
@@ -1332,6 +1415,143 @@ function clearCamDistance(from, dir, want, zi) {
     }
   }
   return want;
+}
+
+// THE LENS IN THE OPEN THROAT (final fix wave I1). In the crack the boom's floor test is no clearance:
+// a riser is a near-vertical face, a lens 1.1 u over the ledge beside it sat centimetres off the face,
+// the 2.2 u minimum boom put it in the rock, and once the lens's column was a wall the floor clamp
+// lifted it up that column to the lip while he fell 60 u (fissure-probe fall-lens RED on 1d68aa0: boom
+// to 85 u, 761 / 16853 frames within the near plane of drawn rock, 3843 inside it). So with the pivot
+// inside the OPEN crack's outline the boom runs free of the floor (clearCamDistance inCrack), the floor
+// clamp stands aside, and the LENS IS PUT IN THE SHAFT, after every offset, before the spring (the
+// spring still carries it there):
+//   - the shaft is walked from HIS station toward the lens's along the crack (throatLens): at each, the
+//     open interval across the crack (v) at the lens's height less `clear` (and less `ahead` s of his
+//     fall: the spring trails its target ~0.25 s, the shaft steps in at each ledge), marched in `step` u
+//     of the heightfield (fissureShape.js openRunAt, the march his own fall shares); the walk stops at a
+//     pinch (narrower than `minW`) so the lens stays in the part of the shaft joined to his;
+//   - at that station (and du either side: the lips jag) its v is clamped inside the interval less
+//     `margin` (the drawn walls stand up to ~0.8 u proud of the heightfield);
+//   - the horizontal distance that took is put back as HEIGHT (`raise`): the lens rides up the shaft,
+//     which only widens upward, and the aim drops by the same amount, eased on the lens spring's rate
+//     (`aim`), so he stays in the frame: the boom pitches down the shaft over him;
+//   - below the throat floor (no open water at his station: zone 2's ending plane lies under it) it holds
+//     at the last open station, over the floor, looking down where he sank;
+//   - after the spring, a GUARD (`guard`, `guardClear`) moves the lens itself across the crack if it has
+//     come too near a face (or will in guardAhead 0.1 s): a critically-damped spring in fixed sub-steps
+//     (guardW 40; guardW2 80 within a unit of the floor), speed-limited (guardVmax 45 u/s), a dead band,
+//     frame-rate independent. No cut anywhere.
+// Above the lip, or anywhere the march finds no wall, nothing changes; outside the crack, and over the
+// shut jam, the camera is the camera it was. __throatCam: knobs, last (dev), state().
+const THROAT_CAM = { margin: 1.0, clear: 1.2, ahead: 0.25, step: 0.2, du: 0.5, raise: 1.0, aim: 1.0, guard: 0.8, guardClear: 1.5, minW: 1.2, guardW: 40, guardW2: 80, guardAhead: 0.1, guardVmax: 45, relVmax: 45, riseAhead: 0.1 };
+const GUARD_DEAD = 1e-3, guardV = V3(), _gStart = V3();
+// the lens's speed limit relative to him while the throat lens is on (rise fix): his last offset, its time
+const _relPrev = V3(), _relD = V3();
+let throatRelOk = false, throatRelT = 0, throatOffT = 9, throatRelHits = 0;
+const _salPrev = V3();
+// Every camera CUT (camSnap, snapCamBehind) starts the throat lens's motion afresh: no last frame to limit
+// against, no let-go window carried across it, and no guard velocity to carry the lens on after it (rise fix 2).
+function camCut() { throatRelOk = false; throatOffT = 9; guardV.set(0, 0, 0); }
+// The guard's spring, one frame: p (the lens) and v (its velocity) toward `corr` (what is left of the correction,
+// worked down as p moves while `active`; with nothing to correct, damping only), in fixed sub-steps <= 1/240 s
+// (1/60 = 4 of them, 1/30 = 8 of the same size: the same motion at any frame rate), speed-limited per second.
+function guardSpring(p, v, corr, w, dt, active) {
+  const T = Math.min(dt, 0.1), n = Math.max(1, Math.ceil(T * 240)), h = T / n, vmax = THROAT_CAM.guardVmax;
+  for (let k = 0; k < n; k++) {
+    // a = w^2 (what is left of the correction) - 2 w v
+    v.x += (w * w * corr.x - 2 * w * v.x) * h; v.y += (w * w * corr.y - 2 * w * v.y) * h; v.z += (w * w * corr.z - 2 * w * v.z) * h;
+    const sp = v.length(); if (sp > vmax) v.multiplyScalar(vmax / sp);
+    p.addScaledVector(v, h);
+    if (active) corr.addScaledVector(v, -h);
+  }
+}
+const _tcL = { u: 0, v: 0 }, _tcP = { u: 0, v: 0 }, _tcW = { x: 0, z: 0 };
+const _tcRun = { lo: 0, hi: 0, loOpen: false, hiOpen: false };
+let throatRaise = 0, throatAim = 0, throatAimV = 0, throatOn = false, throatFixes = 0, throatGuards = 0, throatSnaps = 0;
+// the last station the march found open water at (the fallback under the throat floor, below)
+let throatGood = false, throatGoodU = 0, throatGoodV = 0, throatZone = -1;
+const throatLast = { st: -1, u: 0, v: 0, lo: 0, hi: 0, yT: 0, fail: 0, gx: 0, gy: 0, gz: 0, gr: 0, bx: 0, by: 0, bz: 0, stiffMax: 0 };   // the last frame's answer (dev)
+// stepResponse(x0, w, dt, T): the guard's own spring (guardSpring) answering a lens x0 u off where the march puts
+// it, the correction re-read each frame with the dead band as play does; positions at every 1/30 s and the
+// largest one-frame move as a speed (fissure-probe fall-lens: the same motion at 1/30 as at 1/60). Dev only.
+function guardStepResponse(x0, w, dt, T = 0.5) {
+  const p = V3(), v = V3(), c = V3(), at = []; let vmax = 0;
+  for (let f = 0; (f + 1) * dt <= T + 1e-9; f++) {
+    c.set(x0 - p.x, 0, 0); const on = Math.abs(c.x) > GUARD_DEAD; if (!on) c.set(0, 0, 0);
+    const x1 = p.x;
+    if (on || v.lengthSq() > 1e-8) { guardSpring(p, v, c, w, dt, on); if (!on && v.lengthSq() < 1e-6) v.set(0, 0, 0); }
+    vmax = Math.max(vmax, Math.abs(p.x - x1) / dt);
+    const k = (f + 1) * dt * 30; if (Math.abs(k - Math.round(k)) < 1e-6) at.push(p.x);
+  }
+  return { at, vmax };
+}
+window.__throatCam = { knobs: THROAT_CAM, last: throatLast, stepResponse: guardStepResponse, state: () => ({ on: throatOn, raise: +throatRaise.toFixed(3), aim: +throatAim.toFixed(3), fixes: throatFixes, guards: throatGuards, stiff: throatSnaps, stiffMax: +throatLast.stiffMax.toFixed(3), fail: throatLast.fail, relHits: throatRelHits, gv: +guardV.length().toFixed(3) }) };
+// the open run across the crack at station u, height yT (fissureShape.js openRunAt: the march Sal's fall shares)
+function tcRun(F, u, vRef, zi, yT) { return openRunAt(u, vRef, zi, yT, shutFloorY, _tcRun, THROAT_CAM.step); }
+// Puts L (the lens target; or, for the guard, the lens itself) in the shaft with `margin` off the faces
+// and `clear` over the floor, the horizontal distance it took put back as height x `raise` (the target:
+// THROAT_CAM.raise; the guard: 0, it only ever moves the lens across); returns how far it moved it, the
+// larger of the rise and the horizontal step (0: nothing to do). `track`: the target's call (it keeps
+// the last open station for the fallback and the dev record).
+// The station is found by WALKING THE SHAFT FROM HIS STATION toward the lens's along the crack (0.5 u
+// steps), each station's open run at yT at least minW wide and overlapping the last by half that: the
+// lens stays in the part of the shaft joined to his (the deep shaft pinches to a few tenths of a unit
+// at its kinks: a lens past a pinch sees him through rock, and the spring carried it through the pinch
+// when the answer jumped), and the answer slides along the crack as the pinch moves with height.
+function throatLens(zi, L, margin, clear, ahead, track, raise) {
+  const F = FISSURE[zi], P = player.pos, T = THROAT_CAM;
+  fissureLocal(L.x, L.z, zi, _tcL); fissureLocal(P.x, P.z, zi, _tcP);
+  const yT0 = L.y - clear - (player.grounded ? 0 : Math.max(0, -player.vel.y) * ahead);
+  const du = _tcL.u - _tcP.u, n = Math.ceil(Math.abs(du) / 0.5);
+  let uOk = NaN, lo = 0, hi = 0, loOpen = false, hiOpen = false, vRef = _tcP.v, yT = yT0, lift = 0;
+  // (final residual fix) no room at this height even at his own station (a tip's dead-end slot, the pinched
+  // bottom): look for it HIGHER, 2 u at a time up to 16 u — the shaft only widens upward — and lift the
+  // lens by as much (it hung at a stale station in a tip slot's rock: fall-lens standing, 3.3 u in)
+  for (let up = 0; up <= 16 && uOk !== uOk; up += 2) {
+    yT = yT0 + up; vRef = _tcP.v;
+    for (let i = 0; i <= n; i++) {
+      const u = _tcP.u + (n > 0 ? du * i / n : 0);
+      if (!tcRun(F, u, vRef, zi, yT)) break;
+      const rl = _tcRun.lo, rh = _tcRun.hi;
+      if (rh - rl < T.minW) break;                                              // a pinch: no room past it
+      if (i > 0 && Math.min(rh, hi) - Math.max(rl, lo) < 0.5 * T.minW) break;   // not joined to the last
+      uOk = u; lo = rl; hi = rh; loOpen = _tcRun.loOpen; hiOpen = _tcRun.hiOpen; vRef = (rl + rh) * 0.5;
+    }
+    if (uOk === uOk) lift = up;
+  }
+  if (uOk === uOk) {
+    // the lips jag: the faces either side of the station too (no overlap: the station decides)
+    const lo0 = lo, hi0 = hi, loO0 = loOpen, hiO0 = hiOpen, mid = (lo + hi) * 0.5;
+    for (let k = -1; k <= 1; k += 2) {
+      if (!tcRun(F, uOk + k * T.du, mid, zi, yT)) continue;
+      if (_tcRun.lo > lo) lo = _tcRun.lo;
+      if (_tcRun.hi < hi) hi = _tcRun.hi;
+      loOpen = loOpen && _tcRun.loOpen; hiOpen = hiOpen && _tcRun.hiOpen;
+    }
+    if (hi - lo < 0.5 * T.minW) { lo = lo0; hi = hi0; loOpen = loO0; hiOpen = hiO0; }
+    let a = loOpen ? -Infinity : lo + margin, b = hiOpen ? Infinity : hi - margin;
+    if (a > b) a = b = (lo + hi) * 0.5;
+    const v = clamp(_tcL.v, a, b);
+    if (track) { throatLast.st = n; throatLast.u = uOk; throatLast.v = v; throatLast.lo = lo; throatLast.hi = hi; throatLast.yT = yT;
+      throatGood = true; throatGoodU = uOk; throatGoodV = v; }
+    if (lift === 0 && Math.abs(uOk - _tcL.u) < 1e-6 && Math.abs(v - _tcL.v) < 1e-6) return 0;   // (an ulp is not a move)
+    fissureWorld(uOk, v, zi, _tcW);
+    const e = Math.hypot(_tcW.x - L.x, _tcW.z - L.z);
+    L.x = _tcW.x; L.z = _tcW.z; L.y += e * raise + lift;
+    if (track) throatFixes++;
+    return Math.max(e * raise + lift, e);
+  }
+  if (track) { throatLast.st = -1; throatLast.yT = yT; throatLast.fail++; }
+  // No open water at his station at this height: he has sunk below the throat floor (zone 2's ending
+  // plane lies ~5-10 u under it; the zone planes under a few stations' floors). The lens does not follow
+  // him into the rock: it holds at the last open station, over the floor there, and looks down at it.
+  if (!throatGood) return 0;
+  fissureWorld(throatGoodU, throatGoodV, zi, _tcW);
+  const fy = shutFloorY(_tcW.x, _tcW.z, zi) + clear;
+  const e = Math.hypot(_tcW.x - L.x, _tcW.z - L.z), y0 = L.y;
+  L.x = _tcW.x; L.z = _tcW.z; L.y = Math.max(L.y + e * raise, fy);
+  if (track) throatFixes++;
+  return Math.max(L.y - y0, e);
 }
 
 // (swimfix 3) THE SWIM FRAMING. While Sal hauls (W/S held) or bursts in open water the water
@@ -1376,7 +1596,18 @@ function updateCamera(dt, t, fwd) {
   }
   const base = boomBack(), up = boomUp();
   buildDynCols();
-  let want = clearCamDistance(player.pos, camBack, base, zi);
+  // the pivot inside the OPEN crack's outline: the throat lens owns the walls (THROAT_CAM). The crack he is IN
+  // (`czi`): his zone's, or (final residual fix) past the zone-change plane the shaft of the zone he fell
+  // from, until his chest is through its floor: zones 0/1 switch 10-16 u above the throat floor, and the
+  // new zone's crack is elsewhere and shut (the old shaft went unguarded: the lens in its rock on 1106
+  // post-switch fall-lens samples, Sal in its walls on 287)
+  let czi = zi, inCrack = deckK === 0 && !fissureShut(zi) && fissureDist(player.pos.x, player.pos.z, zi) < 0;
+  if (!inCrack && deckK === 0 && zi > 0 && !fissureShut(zi - 1) && fissureDist(player.pos.x, player.pos.z, zi - 1) < 0
+      && player.pos.y - 0.5 + Math.max(0, player.vel.y) * THROAT_CAM.riseAhead > terrainH(player.pos.x, player.pos.z, zi - 1) - 1) { inCrack = true; czi = zi - 1; }
+  // (rise fix) rising from the zone below, the old shaft's lens comes on `riseAhead` s of his climb early, so
+  // the lens (behind and over him: already in the throat's wall as his chest reaches the floor) starts for the
+  // slot while it is still in open water under the floor; falling, the look-ahead is 0 and the release stands
+  let want = clearCamDistance(player.pos, camBack, base, zi, inCrack);
   // On (or coming onto) the deck the boom is also walked against the raft's gear, along
   // the real line from the pivot to the lens (back AND up), and the lens slides in along
   // that same line: the rise shrinks with the pull-in so a pulled-in lens is still on a
@@ -1422,7 +1653,7 @@ function updateCamera(dt, t, fwd) {
       for (let i = 0; i < CRE_LIFTS.length; i++) {
         const L = CRE_LIFTS[i];
         camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + L - DECK_PIVOT;
-        if (L < 0 && _piv.y + camTo.y < terrainH(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
+        if (L < 0 && _piv.y + camTo.y < shutFloorY(_piv.x + camTo.x, _piv.z + camTo.z, zi) + 1.3) continue;
         const f = creBoomClear(_piv, camTo, CRECAM.margin + (L < creLiftT ? 0.25 : 0));
         if (f >= 1) { bestL = L; bestF = 2; break; }
         if (L === creLiftT) curF = f;
@@ -1473,7 +1704,7 @@ function updateCamera(dt, t, fwd) {
     const S = SWIMCAM;
     const open = !player.grounded && !player.onDeck && !player.onLadder && deckK <= 0 && player.pos.y < SURFACE_Y - 1;
     swimCamHeld = open && (Math.abs(player.haulZ || 0) > 0.5 || player.jet > 0.3) ? swimCamHeld + dt : 0;
-    const agl = player.pos.y - 1.35 - terrainH(player.pos.x, player.pos.z, zi);
+    const agl = player.pos.y - 1.35 - shutFloorY(player.pos.x, player.pos.z, zi);
     const tgt = S.on && swimCamHeld > S.hold ? clamp((agl - 1) / 2, 0, 1) : 0;
     const w = tgt > swimCamK ? S.wIn : S.wOut;
     for (let r = dt; r > 1e-6; r -= 0.02) {
@@ -1494,7 +1725,9 @@ function updateCamera(dt, t, fwd) {
   else camHeaveLP += (raft.position.y - camHeaveLP) * Math.min(1, dt / Math.max(0.05, DECKCAM.heaveTau));
   const camHeaveOff = DECKCAM.heave > 0 ? -DECKCAM.heave * deckK * (raft.position.y - camHeaveLP) : 0;
   camDesired.y += camHeaveOff;
-  camDesired.y = Math.max(camDesired.y, terrainH(camDesired.x, camDesired.z, zi) + 1.2);
+  // (in the open crack the throat lens below clears the floor under its own column: lifted here first,
+  // up a wall column, the lens hung at the lip while he fell)
+  if (!inCrack) camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, zi) + 1.2);
   // (The idle "breathing" drift — 0.09 u vertical, 0.07 u lateral, forever — is gone: a
   // locked frame on a still man is the point. Weight comes from Sal, not from the lens.)
   const rmK = reducedMotion() ? 0 : 1;
@@ -1591,11 +1824,29 @@ function updateCamera(dt, t, fwd) {
   // carries Sal's own velocity, so it has no lag to make up. The punch-in stays.)
   if (camKick > 0) camDesired.addScaledVector(camBack, -2.6 * camKick);
 
+  // THE LENS IN THE OPEN THROAT (THROAT_CAM): after every offset, before the cut and the spring. With
+  // the pivot outside the crack the lens is tested only when its own target is inside the outline.
+  throatOn = deckK === 0 && (inCrack || (!fissureShut(zi) && fissureDist(camDesired.x, camDesired.z, zi) < 0));
+  if (!throatOn || throatZone !== czi) throatGood = false;
+  throatZone = czi;
+  if (throatOn) { const y0 = camDesired.y; throatLens(czi, camDesired, THROAT_CAM.margin, THROAT_CAM.clear, THROAT_CAM.ahead, true, THROAT_CAM.raise); throatRaise = camDesired.y - y0; }
+  else throatRaise = 0;
+  // the floor clamp the open crack stood aside (above), for a target the shaft left OUTSIDE the outline: out
+  // there (over the apron, the lip heave, the ground past a tip) the floor is the ground again. (The shaft
+  // only ever leaves a target outside when the run is open past the lip at its height: up at lip level.)
+  if (inCrack && fissureDist(camDesired.x, camDesired.z, czi) >= 0) camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, czi) + 1.2);
+  {
+    const w = 7.75, h = Math.min(dt, 0.05);   // the lens spring's own rate (stiff 60)
+    throatAimV += (w * w * (throatRaise - throatAim) - 2 * w * throatAimV) * h; throatAim += throatAimV * h;
+    if (throatRaise === 0 && Math.abs(throatAim) < 1e-4 && Math.abs(throatAimV) < 1e-3) throatAim = throatAimV = 0;
+  }
+
   // Cut, don't fly. Done before the spring so camVel never integrates the teleport.
   if (camSnap) {
     camSnap = false;
     camera.position.copy(camDesired);
     camVel.set(0, 0, 0);
+    camCut();
     camLook.copy(player.pos).addScaledVector(fwd, 6);
     camLook.y += DECKCAM.look * deckK;
     camDist = want; camDistV = 0; camBasePrev = base;
@@ -1637,6 +1888,75 @@ function updateCamera(dt, t, fwd) {
     camera.position.z += rng(-1, 1) * sk;
     shake = Math.max(0, shake - dt * 2);
   }
+
+  // THE LENS NEVER RESTS IN THE THROAT'S ROCK (THROAT_CAM guard). The spring trails its target a frame
+  // or two, and a turn or a ledge can swing the target across a 2-4 u shaft faster than that: if the lens
+  // itself has come within `guard` of a face (or `guardClear` of the floor), it is moved across the crack
+  // to where the march puts it, on its own spring (below), and its velocity relative to him is bled.
+  // __throatCam.state(): guards / stiff = frames it acts / acts on the stiffer spring; stiffMax = the most
+  // it moved the lens in one frame.
+  // (final residual fix) The correction is a CRITICALLY-DAMPED SPRING with its own velocity (`guardV`), in
+  // fixed sub-steps (<= 1/240 s: the same motion at 30 fps as at 60, never a cut), toward the point the
+  // march gives this frame; a DEAD BAND (GUARD_DEAD) so a sub-millimetre answer (round-off) is no fire.
+  // With nothing to correct, its velocity bleeds out on the same spring's damping. w: `guardW` (40), and
+  // `guardW2` (80) within a unit of the floor (the drawn ledge corners stand 0.9-1.4 u proud of it).
+  let gk = 0;
+  _bp2.set(0, 0, 0);
+  if (throatOn) {
+    _bp.copy(camera.position);
+    throatLast.gx = camera.position.x; throatLast.gy = camera.position.y; throatLast.gz = camera.position.z;
+    throatLast.gr = throatLens(czi, _bp, THROAT_CAM.guard, THROAT_CAM.guardClear, 0, false, 0);
+    throatLast.bx = _bp.x; throatLast.by = _bp.y; throatLast.bz = _bp.z;
+    if (throatLast.gr > GUARD_DEAD) {
+      _bp2.copy(_bp).sub(camera.position);
+      gk = camera.position.y < shutFloorY(camera.position.x, camera.position.z, czi) + 1.0 ? 2 : 1;
+    } else if (THROAT_CAM.guardAhead > 0) {
+      // nothing to correct where it is: where it will be in `guardAhead` s (falling past a ledge, round a
+      // pinch), so the spring starts before the face instead of after it
+      _gStart.copy(camera.position).addScaledVector(camVel, THROAT_CAM.guardAhead); _bp.copy(_gStart);
+      if (throatLens(czi, _bp, THROAT_CAM.guard, THROAT_CAM.guardClear, 0, false, 0) > GUARD_DEAD) {
+        _bp2.copy(_bp).sub(_gStart);
+        gk = _gStart.y < shutFloorY(_gStart.x, _gStart.z, czi) + 1.0 ? 2 : 1;
+      }
+    }
+    if (gk === 0 && fissureDist(camera.position.x, camera.position.z, czi) >= 0) {
+      // out past the lip (the march's scan ends 1.5 u past it), the ground is the floor again: a lens the
+      // spring has carried within half a unit of it is lifted back toward the floor clamp's 1.2
+      const fy = shutFloorY(camera.position.x, camera.position.z, czi);
+      if (camera.position.y < fy + 0.5) { _bp2.set(0, fy + 1.2 - camera.position.y, 0); gk = 2; }
+    }
+    if (_bp2.lengthSq() < GUARD_DEAD * GUARD_DEAD) { _bp2.set(0, 0, 0); gk = 0; }
+  }
+  if (gk > 0 || guardV.lengthSq() > 1e-8) {
+    const w = gk === 2 ? THROAT_CAM.guardW2 : THROAT_CAM.guardW;
+    _gStart.copy(camera.position);
+    guardSpring(camera.position, guardV, _bp2, w, dt, gk > 0);
+    if (gk === 0 && guardV.lengthSq() < 1e-6) guardV.set(0, 0, 0);
+    const mv = camera.position.distanceTo(_gStart);
+    if (mv > throatLast.stiffMax) throatLast.stiffMax = mv;
+    if (gk > 0) { camVel.lerp(player.vel, 1 - Math.exp(-10 * dt)); throatGuards++; if (gk === 2) throatSnaps++; }
+  }
+
+  // THE THROAT LENS NEVER FLIES (rise fix). Rising from the zone below, the old shaft's lens switches on as his
+  // chest reaches its floor, with the lens out under the throat's wall: the follow target jumped up to 15 u into
+  // the shaft in one frame and the spring flew the lens in at up to 133 u/s (2.2 u a frame). While the throat
+  // lens is on, while its guard acts, and for 0.5 s after it lets go, the lens moves at most `relVmax` (45) u/s
+  // RELATIVE TO HIM, in any direction (per second: the same at any frame rate). A frame that meets the limit
+  // hands the follow spring the limited velocity, so it does not wind up behind it. A cut (camCut), a
+  // teleport of his, or a gap in this camera's frames (the ending, the deck) starts it afresh.
+  throatOffT = throatOn ? 0 : throatOffT + dt;
+  if (throatRelOk && dt > 0 && t - throatRelT > 0 && t - throatRelT < 0.25 && player.pos.distanceToSquared(_salPrev) < 25
+      && (throatOn || gk > 0 || throatOffT < 0.5)) {   // (he teleported: a respawn, a jump - not a frame to limit)
+    _relD.copy(camera.position).sub(player.pos).sub(_relPrev);   // this frame's move relative to him
+    const L = _relD.length(), lim = THROAT_CAM.relVmax * dt;
+    if (L > lim) {
+      _relD.multiplyScalar(lim / L);
+      camera.position.copy(player.pos).add(_relPrev).add(_relD);
+      camVel.copy(player.vel).addScaledVector(_relD, 1 / dt);
+      throatRelHits++;
+    }
+  }
+  _relPrev.copy(camera.position).sub(player.pos); _salPrev.copy(player.pos); throatRelOk = true; throatRelT = t;
 
   // There is no above-water world yet — no sky, and the raft deck sits at y = -2.08 — so
   // a camera that breaks the surface renders air through the WATER's optics and washes
@@ -1701,7 +2021,7 @@ function updateCamera(dt, t, fwd) {
         camTo.copy(camera.position).sub(_piv); camTo.y -= d;
         const l2 = camTo.length(), f2 = Math.max(Math.min(1, 1.0 / Math.max(l2, 1e-3)), creBoomClear(_piv, camTo, 0.3));
         _bp2.copy(_piv).addScaledVector(camTo, f2);
-        if (_bp2.y < terrainH(_bp2.x, _bp2.z, zone < 0 ? 0 : zone) + 0.6) break;
+        if (_bp2.y < shutFloorY(_bp2.x, _bp2.z, zone < 0 ? 0 : zone) + 0.6) break;
         if (inClutch(_bp2.x, _bp2.y, _bp2.z, 0.05) <= 0) { _bp.copy(_bp2); break; }
       }
     }
@@ -1716,7 +2036,7 @@ function updateCamera(dt, t, fwd) {
   // The look leads on the SLOW-smoothed velocity only (camLead); the raw-velocity term
   // went (it swung the aim with every kick's surge).
   camAim.copy(player.pos).addScaledVector(fwd, 6).add(camLead);
-  camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder;
+  camAim.y += DECKCAM.look * deckK + camHeaveOff - SWIMCAM.aimDrop * swimCamK + CRECAM.look * creUnder - THROAT_CAM.aim * throatAim;
   // (ritefair) the look leans toward her (bossFrame): toward her belly / nearest dark ward, by a
   // share of the angle, capped, and only while she is in front of the lens (she is never
   // dragged round from behind him); the mouse still owns the view
@@ -1755,6 +2075,8 @@ function updateCamera(dt, t, fwd) {
     diverLookCool = 0.25;
     diverLookAt(hhNearestLife(fwd) < Infinity ? hhTmp : null);
   }
+  // (Task 6) wrenching the harpoon free, his eyes are on the iron, every frame
+  if (lev && lev.rite && lev.rite.lookAt && lev.rite.wrenching) diverLookAt(lev.rite.lookAt);
   camLook.lerp(camAim, Math.min(1, 40 * dt));
   camera.lookAt(camLook);
   if (hk > 0) {
@@ -1997,7 +2319,21 @@ function update(dt, t) {
   safe('sky', () => updateSky(dt, t));         // after updateWater: reads its palette, hands back the horizon
   safe('rain', () => updateRain(dt, t));       // after updateWater: reads the surface height it just resolved
   pm('glue'); updateTerrain(dt, t, camera.position.y, wx.day * (1 - 0.85 * wx.storm)); pm('terrain');
-  updateRifts(dt, t, zone, !!(lev && lev.calmed)); pm('rifts');
+  // THE FISSURE (world/fissure.js): the seep's breath, and an opening's collapse (held while
+  // paused). Its quake is the seabed's: the lens shakes as it does for her blows.
+  { const fdt = state === 'play' && paused ? 0 : dt;
+    const fz = updateFissure(fdt, t, zone);
+    if (fz.quake > 0 && state === 'play') shake = Math.max(shake, fz.quake);
+    // the calm's line, on the opening's clock: it lands as the light arrives
+    if (calmLineT >= 0) {
+      if (state !== 'play' || zone !== calmLineZ) calmLineT = -1;
+      else if ((calmLineT -= fdt) <= 0) { calmLineT = -1; showMsg(calmLine, 6, 2); }
+    } }
+  pm('fissure');
+  // THE DEEP'S OWN LIGHT (rifts.js) reads each zone's open level, never the calm instant: it wells
+  // up as the jam pours (after updateFissure, so the light and k are the same frame's)
+  openK[0] = fissureOpenK(0); openK[1] = fissureOpenK(1); openK[2] = fissureOpenK(2);
+  updateRifts(dt, t, openK); pm('rifts');
 
   // ---- THE VOYAGE ------------------------------------------------------------------
   // The inked passage (ui/passage.js) runs on its own wall clock; it tells us when to
@@ -2076,8 +2412,9 @@ function update(dt, t) {
   // boat does not stop for a menu.
   updateRaft(dt, t); pm('raft');
   carryDeck(dt);
+  syncFissureShut();
   if (paused) fwd = forwardVec();
-  else ({ fwd } = updatePlayer(dt, t, zone, !!(lev && lev.calmed)));
+  else ({ fwd } = updatePlayer(dt, t, zone, fissureOpen()));
   pm('player');
   $mode.textContent = player.jet > 0.1 ? 'bursting' : player.grounded ? 'walking'
     : player.fill > NEUTRAL_FILL + 0.09 ? 'rising'
@@ -2106,21 +2443,24 @@ function update(dt, t) {
     showMsg('STEP OVER THE SIDE', 4);
   }
 
-  // THE RIFT IS SHUT WHILE IT WAKES: 20u below the bowl's rim with the sleeper awake.
-  if (!riftShutSaid && lev && !lev.calmed && zone >= 0 && msgT <= 0) {
-    const rq = riftPos(zone);
-    if (Math.hypot(player.pos.x - rq.x, player.pos.z - rq.z) < RIFT_R * 2.7 * 0.84
-        && player.pos.y < riftRimY - 20) {
+  // THE RIFT IS SHUT WHILE IT WAKES: said once he is down in the crack, standing on the jam
+  // (player.js publishes jamY while the jam is his floor) with the sleeper AWAKE and not yet calmed
+  // (final wave: the jam is a few units down and walkable, so most divers stand on it long before she
+  // stirs: while she still sleeps the line was false; asleep, the zone's own line already says FIND IT)
+  if (!riftShutSaid && lev && !lev.calmed && !lev.dormant && zone >= 0 && msgT <= 0) {
+    if (player.jamY != null && player.grounded && player.jamY < riftRimY - 1.5) {
       riftShutSaid = true;
       showMsg('THE RIFT IS SHUT WHILE IT WAKES.', 5);
     }
   }
   // zone progression through the rift, gated on having the line to work the next zone
-  if (lev && lev.calmed && zone < 2 && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
+  // (the way down is the fissure's: open past half, the jam gone -- not the calm instant; a zone
+  // calmed this visit stays open behind him)
+  if (zone >= 0 && zone < 2 && fissureOpen() && player.pos.y < zoneBottom(zone) - ZONE_GAP * 0.55) {
     if (canDescendTo(zone + 1)) enterZone(zone + 1);
     else if (msgT <= 0) showMsg(`THE LINE IS TOO SHORT — ${HOSE_REQ[zone + 1] * 3} M NEEDED`, 3);
   }
-  if (lev && lev.calmed && zone === 2 && player.pos.y < zoneBottom(2) - 70 && state === 'play') {
+  if (zone === 2 && fissureOpen() && player.pos.y < zoneBottom(2) - 70 && state === 'play') {
     // The full rite plays ONCE, the first triple-calm anywhere. Every later completion
     // is a quiet beat: the chart takes the ink and the dive simply ends where it is.
     if (endingSeen) {
@@ -2169,8 +2509,13 @@ function update(dt, t) {
       if (BODY.hitV > 2.5 && !lev.calmed && !lev.dormant && !lev.rising) { ev.slam = true; ev.lightDrain += dt * 0.5; slamWhy = BODY.last + ' ' + BODY.hitV.toFixed(1); }
     }
     audioSleeper(lev, ev);   // audio reads the sleeper's own animation edges this frame
+    // (Task 6) the harpoon's line ('IT COMES FREE. SHE FEELS IT.'): the beat of the rite, over the
+    // ambient finds still queued; her name, a breath later, at the same rank, so it follows it
+    if (ev.pullLine) { showMsg(ev.pullLine, 3, 3); dropMsg(lev.harpoon && lev.harpoon.sightLine); }   // (its first-sight line is old news now)
     if (ev.woke) {
-      showMsg(lev.name, 5, 2); growl(); shake = 1;
+      // (fix round 1) what only the sleeping ridge says is old news once she is up: struck from the queue
+      if (lev.findLines) for (const l of lev.findLines) dropMsg(l);
+      showMsg(lev.name, 5, lev.harpoon ? 3 : 2); growl(); shake = 1;
       const mk = currentSiteIndex() * 3 + zone;
       if (lev.memWard >= 0 && lev.memLine && !memSaid[mk]) { memPending = lev.memLine; memKey = mk; }
     }
@@ -2195,6 +2540,10 @@ function update(dt, t) {
     // (fifth-ward) the sleeper telling him its rule ('THE FIRE BLINDS HIM...', 'THE WARDS OF
     // ORUNE ANSWER THE PING.') ranks with the ward lines: at prio 1 the counts starved it
     if (ev.msg) showMsg(ev.msg, 4, 2);
+    // (Task 6) the harpoon came free: this anchorage's iron is pulled (a revisit finds the wound), and
+    // the blade, if this was the first ever (harpoon.js set survival.hasHarpoon), is saved with the tools
+    if (ev.pulled) { pulledRec[currentSiteIndex()] = 1; saveChart(); chime(147, 2.2, 0.3, 'cold'); }
+    if (ev.sighted) { sightRec[currentSiteIndex()] = 1; saveChart(); }
     // (fifth-ward) a held ward refused a touch: a dead iron knock, the pips shake, and the
     // reason at a priority no slam or lantern line can bump (common.js wardRefuse)
     // (one knock per 0.6 s per sleeper: a strike pass sweeps several held wards at once)
@@ -2239,25 +2588,33 @@ function update(dt, t) {
       chime(ev.sigilLit, 2, 0.3, 'ward');
       shake = 0.6;
       // (fifth-ward) the count at priority 2: a slam or a tear in the same breath used to
-      // replace it in the queue's one pending slot. And when the one ward left is the one
-      // the brood rule will hold, say so NOW, before he swims to it.
+      // replace it in the queue's one pending slot.
       if (ev.remaining > 0) {
-        const held = ev.remaining === 1 && clutchOut(lev) > 0;
         dropMsg(countLive);   // only the newest count is news
-        showMsg(countLive = held ? 'ONE WARD DARK. IT WILL NOT TAKE WHILE YOU CARRY HER EGGS.'
-          : (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), held ? 4.5 : 2.5, 2);
+        showMsg(countLive = (COUNT[ev.remaining] || ev.remaining) + (ev.remaining === 1 ? ' WARD DARK' : ' WARDS DARK'), 2.5, 2);
       }
     }
     if (ev.calmed) {
+      // (final wave) a ward count still waiting for a silence is stale once she stills: never said after it
+      pendingWards = false;
       chartRec[currentSiteIndex()][zone] = 1;
+      visitCalm[zone] = 1;   // the water keeps it open for THIS visit only
       saveChart();
       player.light = 1;
       setCalm(1);
-      // The one moment the player is reading: if the line will not reach the next zone,
-      // say so NOW with the real numbers, not 55% of the way down the rift.
-      showMsg(zone === 2 ? 'ALL WARDS LIT. THE LAST SLEEPER STILLS. THE RIFT WAITS.'
-        : canDescendTo(zone + 1) ? 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.'
-        : `IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6, 2);
+      // THE FISSURE OPENS (world/fissure.js): the seabed shudders, the jam pours, then the deep's
+      // light wells up. Its line is held to land as the light arrives (calmLineT, run on the
+      // opening's clock above); an already-open fissure (re-calmed within this visit after a zone
+      // re-entry rebuilt her) says it at once.
+      const dur = openFissure(zone);
+      if (zone < 2 && !canDescendTo(zone + 1)) {
+        // The one moment the player is reading: if the line will not reach the next zone,
+        // say so NOW with the real numbers, not 55% of the way down the rift.
+        showMsg(`IT STILLS. YOU HAVE ${Math.floor(survival.hose * 3)} M OF LINE. THE RIFT NEEDS ${HOSE_REQ[zone + 1] * 3}.`, 6, 2);
+      } else {
+        calmLine = zone === 2 ? 'ALL WARDS LIT. THE LAST SLEEPER STILLS. THE RIFT WAITS.' : 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.';
+        calmLineZ = zone; calmLineT = Math.max(0, dur - 2.5);
+      }
       chime(262, 3, 0.3, 'calm'); chime(330, 3, 0.25, 'calm'); chime(392, 3, 0.25, 'calm');
     }
   }
@@ -2345,7 +2702,7 @@ function update(dt, t) {
       $craft.style.opacity = 1;
     }
   } else {
-    // Same order as the E handler: the brood, the keepsake (or his mark), the relic.
+    // Same order as the E handler: the rite (Velkath's harpoon, the lamp, the furnace), the keepsake (or his mark), the relic.
     const bp = lev && lev.rite ? lev.rite.prompt(player.pos) : null;
     const kp = bp ? null : nearKeepsake(player.pos);
     const rel = kp || bp ? null : nearRelic(player.pos);
@@ -2378,7 +2735,7 @@ function update(dt, t) {
       if (lev && !lev.calmed) { showMsg(memPending, 5); memSaid[memKey] = 1; }
       memPending = null;
     } else if (pendingWards) {
-      pendingWards = false; showMsg(wardsLine(), 5);
+      pendingWards = false; if (lev && !lev.calmed) showMsg(wardsLine(), 5);
     } else if (!tips.submerged && player.pos.y < -6) {
       tips.submerged = 1; showMsg('YOUR AIR COMES DOWN THE LINE. THE PUMP ABOVE MUST STAY FED.', 5);
     } else if (!tips.taut && survival.tautness > 0.92) {
@@ -2458,18 +2815,38 @@ function update(dt, t) {
   setWalking(player.grounded);
   setAbove(aboveWater);            // the air side of the mix: gulls, wind, the pump in the open
   setWind(windState().speed);      // the eased wind, same curve as the chop
-  // knife: the hit lands on the swing's contact frame, not the click
+  // the blade: the hit lands on the swing's contact frame, not the click
   if (pendingSlash > 0) {
     pendingSlash -= dt;
     if (pendingSlash <= 0) {
-      const kill = slash(player.pos, forwardVec(), 3.4);
-      if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec());   // the Hoarder lets go of a cut arm
+      const B = pendingBlade;
+      const kill = slash(player.pos, forwardVec(), B.reach, B.power);
+      // the Hoarder lets go of a cut arm (knife 3.0 u, as it always was; the harpoon 5.1). Nothing against a
+      // sleeper: no other kind has an onSlash.
+      // (fix round 1, ruled) the full reach is also the parry: an arm REACHING for him with its tip inside it
+      if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), B.reach - 0.4, B.reach);
+      bladeLast.t = clock.elapsedTime; bladeLast.reach = B.reach; bladeLast.kind = B.kind; bladeLast.puff = 0; window.__bladeLast = bladeLast;
+      if (B.power > 1) {
+        bladeGuard = 0.26;
+        // (fix round 1, ruled) the thrust READS from the follow lens: a centimetre punch of the lens along the
+        // look (an event, the grounded-camera rule), and silt off the iron's point when it is near the bed
+        // (diver.js spits bubbles off it at the same beat)
+        camYankDir.copy(forwardVec()); camYank.v += 0.9;
+        diverBladeTip(_tipV);
+        // the silt it churns AT the point (the near-bed water is silt-laden: within 3 u of the bed), big enough
+        // to show past his shoulder from the follow lens
+        // (the ground under it is the shared floor: over the shut jam, the rubble — terrainH there is the throat floor ~70 u down)
+        if (zone >= 0 && !aboveWater) { const g = shutFloorY(_tipV.x, _tipV.z, zone); if (_tipV.y - g < 3) { emitDust(_tipV.x, _tipV.y - 0.15, _tipV.z, 16, 1.5); bladeLast.puff = 1; } }
+      }
       if (kill) {
         knifeHit('flesh');
         shake = Math.min(1, shake + 0.25);
         if (kill.killed === 'squid') showMsg('THE SHOAL SCATTERS — IT DROPPED SOMETHING', 3);
       }
     }
+  } else if (bladeGuard > 0) {
+    bladeGuard -= dt;
+    if (lev && lev.onSlash) lev.onSlash(player.pos, forwardVec(), pendingBlade.reach - 0.4, pendingBlade.reach, true);
   }
 
   // wrecks + relic tools
@@ -2532,6 +2909,8 @@ function update(dt, t) {
   // Debris reacts to the diver's push and the leviathan's sweep.
   updatePhysics(dt, player.pos, player.vel, lev ? lev.spine : null); pm('physics');
 
+  // (Task 7) both hands on the lodged iron: his own harpoon (if he carries one) is not drawn till it comes free
+  diverBladeStowed(!!(lev && lev.rite && lev.rite.wrenching));
   updateDiver(dt, t, player); pm('diver');
   // Bootfall audio, sand puff and boot print all key off the rig's real heel strikes
   // (counted inside updateDiver), so they land on the same frame the weight drops.
@@ -2545,7 +2924,7 @@ function update(dt, t) {
     // Silt and boot prints are SEABED effects. On the raft's planking they read as Sal
     // kicking up sand in mid-air and stamping footprints into timber, so the deck gets
     // the sound and nothing else.
-    if (!player.onDeck) { const ff = lastFootfall(); spawnFootfall(player.pos, ff.yaw, ff.side, zone < 0 ? 0 : zone, 1, ff); }   // at the boot that went down, on its heading
+    if (!player.onDeck) { const ff = lastFootfall(); spawnFootfall(player.pos, ff.yaw, ff.side, zone < 0 ? 0 : zone, 1, ff, player.jamY); }   // at the boot that went down, on its heading
   }
   // Landing after a drop kicks up a bigger cloud under both boots.
   // Terminal sink is 5.1 u/s vented (10.2 with the exhaust held open), not the 18 u/s
@@ -2554,8 +2933,8 @@ function update(dt, t) {
     const zi = zone < 0 ? 0 : zone;
     const p = Math.min(2.2, landVel * 0.42);
     land(p);
-    spawnFootfall(player.pos, player.yaw, 1, zi, p);
-    spawnFootfall(player.pos, player.yaw, -1, zi, p);
+    spawnFootfall(player.pos, player.yaw, 1, zi, p, null, player.jamY);
+    spawnFootfall(player.pos, player.yaw, -1, zi, p, null, player.jamY);
   }
   wasGrounded = player.grounded;
   landVel = player.grounded ? 0 : Math.max(landVel * 0.98, -player.vel.y);
@@ -2597,11 +2976,12 @@ function update(dt, t) {
   const levShown = !!(lev && !lev.calmed && !lev.dormant);   // a sleeping ridge has no bearing
   setBearing($bm.lev, lev ? lev.head.x : 0, lev ? lev.head.y : 0, lev ? lev.head.z : 0, levShown);
   const rp = zone >= 0 ? riftPos(zone) : null;
-  setBearing($bm.rift, rp ? rp.x : 0, rp ? terrainH(rp.x, rp.z, zone) : 0, rp ? rp.z : 0, !!(rp && lev && lev.calmed));
+  const riftShown = !!(rp && fissureOpen());   // the way down once the jam has gone, not the calm instant
+  setBearing($bm.rift, rp ? rp.x : 0, rp ? riftRimY : 0, rp ? rp.z : 0, riftShown);
   // the active target carries the bright tick: the sleeper until it stills, then the rift
   $bm.lev.classList.toggle('active', levShown);
   if (levShown) updateTally(dt);
-  $bm.rift.classList.toggle('active', !!(rp && lev && lev.calmed));
+  $bm.rift.classList.toggle('active', riftShown);
   // low-air vignette breathes in once the tank drops below a third
   $warn.style.opacity = survival.oxygen < 0.33 ? (0.33 - survival.oxygen) / 0.33 : 0;
 
@@ -2769,7 +3149,8 @@ const ASSET_LINE = {
   hoarder: 'GILDING THE HOARD', hunter: 'SOMETHING ELSE, DEEPER', plants: 'GROWING THE CORAL',
   blades: 'COMBING THE KELP', imp: 'DRAWING THE FAR REEFS', school: 'SCHOOLING THE FISH',
   octo: 'COILING THE ARMS', shark: 'COUNTING THE TEETH', vent: 'WARMING THE VENT LIFE',
-  reef: 'NAMING THE CREATURES', star: 'NAMING THE CREATURES', deep: 'NAMING THE CREATURES'
+  reef: 'NAMING THE CREATURES', star: 'NAMING THE CREATURES', deep: 'NAMING THE CREATURES',
+  harpoon: 'FORGING THE IRON'
 };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 // Wait on a moving set of rows ({ line, p, done }), moving the bar by rows landed and saying
@@ -3072,6 +3453,7 @@ if (/[?&](lab|bench)/.test(location.search)) import('./lib/bench.js').then(B => 
     if (zi !== zone) enterZone(zi);
     player.pos.set(x, terrainH(x, zz, zi) + 0.05, zz); player.vel.set(0, 0, 0); player.yaw = yaw;
     player.grounded = true; player.onDeck = false;
+    player.stepUp = player.stepUpV = 0;   // a teleport ends any step he was half-way up (it held him under the new floor)
     snapCamBehind(false);
     return { y: player.pos.y, zone };
   },
@@ -3113,6 +3495,7 @@ if (/[?&]playtest(?:[=&#]|$)/.test(location.search)) import('./ui/playtest.js').
   enterZone: i => enterZone(i, true),   // quiet: the jump's own toast says where he is
   reseedWorld: i => reseedWorld(i),
   consultChart: () => consultChart(),
+  saveChart: () => saveChart(),   // (Task 7) Alt+= grants / revokes the harpoon in the save
   // After a jump has set player.pos / yaw: the rest of a respawn, as start() and the rescue
   // do it — still, re-dressed at this depth, the pack shut, the line re-laid to him, the
   // lens CUT behind him (never flown), the surface crossing not counted as a dive.

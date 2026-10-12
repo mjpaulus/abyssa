@@ -22,6 +22,7 @@ import { registerPaint } from '../../lib/paint.js';
 import { terrainH } from '../../world/terrain.js';
 import { setWardTargets, wardGuardCount } from '../../world/predators.js';
 import { riftPos, WORLD_R, RIFT_R } from '../../config.js';
+import { clearOfCrack } from '../../world/fissureShape.js';
 import { wreckSites } from '../../world/wrecks.js';
 import { survival } from '../../systems/survival.js';
 import {
@@ -445,7 +446,8 @@ function furnaceAt(idx, lair) {
   for (let k = 0; k < 24; k++) {
     const a = a0 + b + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 12;
     const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + 45 && Math.hypot(x - W.x, z - W.z) > 45) return V3(x, 0, z);
+    if (Math.hypot(x - rp.x, z - rp.z) > RIFT_R * 2.7 + 45 && Math.hypot(x - W.x, z - W.z) > 45
+      && clearOfCrack(x, z, idx, 30)) return V3(x, 0, z);     // (Task 5) off the crack: the furnace + its stumps; every row passes already
   }
   return V3(Math.cos(a0 + b) * r, 0, Math.sin(a0 + b) * r);
 }

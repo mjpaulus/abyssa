@@ -16,6 +16,7 @@ import { camera, scene } from './core.js';
 import { player } from './player.js';
 import { zoneTop, zoneBottom, riftPos, RIFT_R } from './config.js';
 import { terrainH } from './world/terrain.js';
+import { FISSURE, fissureWorld, _widths } from './world/fissureShape.js';
 import { clamp, V3 } from './lib/math.js';
 import { glowTex as sharedGlowTex } from './lib/textures.js';
 import { updateDiver, lanternWorldPos } from './entities/diver.js';
@@ -51,18 +52,19 @@ function ascentCurve(u) {
 }
 
 // ---------------------------------------------------------------- the ascent path
-// He leaves the way he came: up through the three rift bowls, in order. All three zone
+// He leaves the way he came: up through the three opened fissures, in order. All three zone
 // terrains stay in the scene for the whole cinematic, so a straight lerp from the zone-2
 // rift to the raft drove him through two solid seafloors in open water. The only places
-// the floors may be crossed are the rift funnels — the game already reads a rift transit
-// as passing through the flattened bowl mesh, because that is what normal play does.
+// the floors may be crossed are the fissures' throats at riftPos — the game already reads a
+// rift transit as sinking through a throat floor, because that is what normal play does.
 //
 // The path is a spline through seven points, built once. Its shape is dictated by two
 // rules, and every waypoint is one of them:
 //   * before moving sideways off a rift, rise CLEAR above the highest ground the corridor
 //     to the next rift crosses in the zone he has just left;
-//   * arrive at the next rift still DIP below the lowest ground of the zone above, so the
-//     floor he is about to break through can only ever be crossed inside the funnel.
+//   * arrive at the next rift still DIP below the lowest ground of the zone above (and its
+//     throat floor), so the floor he is about to break through is only ever crossed at the
+//     throat, rising straight up the crack.
 // Both levels are measured off terrainH at startEnding rather than hardcoded: the
 // heightfield is seeded and identical every load, but a terrain retune would silently
 // invalidate numbers baked in here.
@@ -81,9 +83,10 @@ function corridorMax(a, b, zi) {
   }
   return m;
 }
-// Lowest ground of zone zi along the corridor, ignoring its own funnel — the funnel is
-// the hole he is aiming for, and counting its floor would drag the arrival level down
-// under the seafloor he is meant to stay beneath until he is inside it.
+// Lowest ground of zone zi along the corridor, ignoring a RIFT_R * 2.8 circle round its rift —
+// the crack there is the way he is aiming for (buildPath takes its throat floor separately),
+// and counting it here would drag the arrival level down under the seafloor he is meant to stay
+// beneath until he is in the crack.
 function corridorMin(a, b, zi) {
   const rp = riftPos(zi), rr = RIFT_R * 2.8;
   let m = Infinity;
@@ -98,34 +101,57 @@ function corridorMin(a, b, zi) {
 }
 
 let pathY = null, pathX = null, pathZ = null;
-// Per-rift transit bands, for the camera: [where he enters the funnel, where he clears it].
+// The higher of a crack's two lips at riftPos (u = 0), 2 u outside each.
+const _lw = { x: 0, z: 0 };
+function lipTop(zi) {
+  const W = _widths(FISSURE[zi], 0), w0 = W.w0, w1 = W.w1;
+  fissureWorld(0, w1 + 2, zi, _lw); const a = terrainH(_lw.x, _lw.z, zi);
+  fissureWorld(0, -(w0 + 2), zi, _lw); const b = terrainH(_lw.x, _lw.z, zi);
+  return Math.max(a, b);
+}
+// Per-rift transit bands, for the camera: [just under the throat floor, where he clears the crack].
 const trY0 = new Float32Array(3), trY1 = new Float32Array(3);
 const trX = new Float32Array(3), trZ = new Float32Array(3);
 const _pts = [];        // the seven control points, reused across wins
 const _path = V3(), _ahead = V3();
+const _fw = { x: 0, z: 0 };   // fissureWorld scratch for the camera
 
 function buildPath(sx, sy, sz, endX, endZ) {
   const r2 = riftPos(2), r1 = riftPos(1), r0 = riftPos(0);
   const end = { x: endX, z: endZ };
   // Clearance level above each floor he leaves, and arrival level under each floor above.
   const yA = corridorMax(r2, r1, 2) + CLEAR;   // clear of the zone-2 floor
-  const yB = corridorMin(r2, r1, 1) - DIP;     // still under the zone-1 floor, at rift 1
+  // THE FISSURE (2026-10-10): the opening is a narrow crack whose throat floor lies ~70 u under
+  // its lip, so arriving just under the general floor would track sideways through the crack's
+  // walls. Arrive under the throat floor at the rift (terrainH at riftPos) and rise up the crack.
+  const yB = Math.min(corridorMin(r2, r1, 1), terrainH(r1.x, r1.z, 1)) - DIP;   // under zone 1's floor and its throat
   const yC = corridorMax(r1, r0, 1) + CLEAR;   // clear of the zone-1 floor
-  const yD = corridorMin(r1, r0, 0) - DIP;     // still under the zone-0 floor, at rift 0
+  const yD = Math.min(corridorMin(r1, r0, 0), terrainH(r0.x, r0.z, 0)) - DIP;   // under zone 0's floor and its throat
   const yE = corridorMax(r0, end, 0) + CLEAR;  // clear of the zone-0 floor
 
+  // THE FISSURE: each opening is a crack ~5 u either side of riftPos, and a spline corner bleeds
+  // sideways ~8 u (the old 43 u bowl absorbed it). Pin the transit vertical: a point just under
+  // each throat floor and one just over each lip, both on riftPos, so the segment between them has
+  // vertical tangents at both ends and runs straight up the crack.
+  const tf = [terrainH(r0.x, r0.z, 0), terrainH(r1.x, r1.z, 1), terrainH(r2.x, r2.z, 2)];
+  const lp = [lipTop(0), lipTop(1), lipTop(2)];
   _pts.length = 0;
   _pts.push(new THREE.Vector3(sx, sy, sz));
+  if (lp[2] + 8 < yA - 4) _pts.push(new THREE.Vector3(r2.x, lp[2] + 8, r2.z));
   _pts.push(new THREE.Vector3(r2.x, yA, r2.z));
   _pts.push(new THREE.Vector3(r1.x, yB, r1.z));
+  if (tf[1] - 4 > yB + 2) _pts.push(new THREE.Vector3(r1.x, tf[1] - 4, r1.z));
+  if (lp[1] + 8 < yC - 4) _pts.push(new THREE.Vector3(r1.x, lp[1] + 8, r1.z));
   _pts.push(new THREE.Vector3(r1.x, yC, r1.z));
   _pts.push(new THREE.Vector3(r0.x, yD, r0.z));
+  if (tf[0] - 4 > yD + 2) _pts.push(new THREE.Vector3(r0.x, tf[0] - 4, r0.z));
+  if (lp[0] + 8 < yE - 4) _pts.push(new THREE.Vector3(r0.x, lp[0] + 8, r0.z));
   _pts.push(new THREE.Vector3(r0.x, yE, r0.z));
   _pts.push(new THREE.Vector3(end.x, SURFACE_END_Y, end.z));
 
   // Centripetal parameterisation, not uniform: the four right-angle corners where a
   // vertical hold turns into a lateral leg made the uniform curve loop out past the rift
-  // and swing back, which put him through the funnel wall on the way in.
+  // and swing back, which put him through the rift's wall on the way in.
   const curve = new THREE.CatmullRomCurve3(_pts, false, 'centripetal', 0.5);
   let prev = -Infinity;
   for (let i = 0; i < PATH_N; i++) {
@@ -142,7 +168,7 @@ function buildPath(sx, sy, sz, endX, endZ) {
   const top = [yE, yC, yA];
   for (let i = 0; i < 3; i++) {
     trX[i] = rr[i].x; trZ[i] = rr[i].z;
-    trY0[i] = terrainH(rr[i].x, rr[i].z, i) - 22;   // just under the bowl floor
+    trY0[i] = terrainH(rr[i].x, rr[i].z, i) - 22;   // just under the throat floor at riftPos
     trY1[i] = top[i];
   }
 }
@@ -175,6 +201,29 @@ function insideFloor(x, y, z) {
     if (y < h + 1.8 && y > h - UNDER) return true;
   }
   return false;
+}
+
+// Does the lens at (cx, cy, cz) see the point (px, py, pz)? Marched in 0.5 u steps against every zone's
+// heightfield within 40 u: blocked where the line goes from over a floor to under it (it enters the rock
+// from the water side: a front face as drawn, the throat walls included); from under a floor up through
+// it is a culled back face, not a block. No allocation.
+function losClear(cx, cy, cz, px, py, pz) {
+  const d = Math.hypot(px - cx, py - cy, pz - cz), n = Math.max(8, Math.ceil(d / 0.5));
+  let prev = sideOf(cx, cy, cz);
+  for (let k = 1; k < n; k++) {
+    const f = k / n, a = sideOf(cx + (px - cx) * f, cy + (py - cy) * f, cz + (pz - cz) * f);
+    if (prev > 0 && a < 0) return false;
+    if (a !== 0) prev = a;
+  }
+  return true;
+}
+// +1 over the floor of the zone whose floor lies within 40 u of y, -1 under it, 0 in the open water between
+function sideOf(x, y, z) {
+  for (let zi = 0; zi < 3; zi++) {
+    const h = terrainH(x, z, zi);
+    if (y - h < 40 && h - y < 40) return y > h ? 1 : -1;
+  }
+  return 0;
 }
 
 // ---------------------------------------------------------------- sleeper silhouettes
@@ -392,6 +441,20 @@ function hideTether() {
 // ---------------------------------------------------------------- state
 let T = -1, startY = -900, startX = 0, startZ = 0, lastY = -900;
 let camAz = 0, camDist = 8.5, camHeight = 1.9, camFov = 62, camRoll = 0, lookLift = 0, camPull = 0;
+// THE THROAT, SEEN (final fix wave M5). Two things hid him in the open throats (fissure-probe `ending`):
+//   - the floor's skin: he rises the last ~14 u to each throat floor UNDER it, on riftPos, while the lens
+//     rode 5-12 u above him, over the floor: he was inside the rock with the lens on the other side (74
+//     frames of 4500, 19/3/52 by zone). So while he is under the floor of the crack he is threading, the
+//     lens is held under it too (at its own column's floor less FLOOR_UNDER), released on a decay once he
+//     is through: from below the floor is a back face (culled) and he is seen rising through it.
+//   - the kinks: the orbit is held along the crack's line at the arm's length, and the deep shaft kinks
+//     and pinches: the line from the lens to him ran into a wall (292 rise frames). While he threads a
+//     crack, the arm is shortened to the longest of LOS_F that sees him (a heightfield march from the lens
+//     to his chest: no entry into the rock from the water side), the lost reach put back as height (the
+//     shaft widens upward); fast in, slow out.
+const FLOOR_UNDER = 1.5, UNDER_HIM = 1.5, LOS_F = [1, 0.8, 0.64, 0.5, 0.38, 0.28, 0.2], LOS_RAISE = 1.0, DROP_RATE = 45, LENS_REL = 40, LENS_ABS = 58;
+let losF = 1, floorDrop = 0, lensPrevOk = false;
+const lensPrev = V3(), diverPrev = V3();
 let endX = 34, endZ = 27;
 let cardOn = false, l2 = false, l3 = false, hintOn = false;
 let yawF = 0, pitchF = 0;
@@ -403,15 +466,20 @@ export function startEnding() {
   startY = player.pos.y;
   startX = player.pos.x;
   startZ = player.pos.z;
-  // In play he is standing in the zone-2 bowl when this fires, a few units under its
-  // floor. The debug hook drops him at the origin instead, 70u under the seafloor and
+  // In play he has just sunk through zone 2's throat floor when this fires (the trigger is
+  // zoneBottom(2) - 70). The debug hook drops him at the origin instead, 70u under the seafloor and
   // 118u off the rift — from there the first leg would drag him through the zone-2 floor
-  // from below. Either way the shot starts in the funnel, so put him in it.
+  // from below. Either way the shot starts under the rift, so put him there.
+  // THE FISSURE: he now falls through anywhere along a ~70 u crack, and the trigger
+  // (zoneBottom(2) - 70) lies only a few units under its throat floor, so an off-centre start held
+  // the lens in the floor's skin through the whole STILL beat (199 of 4500 frames, measured from a
+  // real fall 12 u along the crack). The STILL beat is the cut: always start on riftPos, under the
+  // throat, in open water.
   const r2 = riftPos(2);
-  if (Math.hypot(startX - r2.x, startZ - r2.z) > RIFT_R * 1.6) {
-    startX = r2.x; startZ = r2.z;
-    player.pos.x = startX; player.pos.z = startZ;
-  }
+  startX = r2.x; startZ = r2.z;
+  player.pos.x = startX; player.pos.z = startZ;
+  const under = terrainH(startX, startZ, 2) - 28;
+  if (startY > under) { startY = under; player.pos.y = startY; }
   // Far enough out that the raft reads as a small silhouette on the ceiling of light.
   // At 9u it filled the upper third of the frame with hull logs and float barrels.
   endX = raft.position.x + 34; endZ = raft.position.z + 27;
@@ -423,7 +491,7 @@ export function startEnding() {
   yawF = player.yaw;
   pitchF = player.pitch;
   camAz = player.yaw + Math.PI;
-  camDist = 8.5; camHeight = 1.9; camFov = 62; camRoll = 0; lookLift = 0; camPull = 0;
+  camDist = 8.5; camHeight = 1.9; camFov = 62; camRoll = 0; lookLift = 0; camPull = 0; losF = 1; floorDrop = 0; lensPrevOk = false;
   cardOn = l2 = l3 = hintOn = false;
   for (const s of SLEEPERS) { s.obj.seen = false; s.obj.live = false; s.obj.grp.visible = false; }
   for (let i = 0; i < NBUB; i++) respawnBubble(i, true);
@@ -678,16 +746,34 @@ export function updateEnding(dt, t) {
     camAz += d * Math.min(1, 1.1 * inSurf * dt);
   }
 
-  // Inside a funnel the orbit has to come in and sit higher: the bowl is 43u across and
-  // 100u deep, and a 19u arm swinging round the far side of it spent a second and a half
-  // buried in the wall. Pulled in, the arm stays in the throat where the water is.
-  let transit = 0;
+  // Threading a crack the orbit has to come in and sit higher (wantDist / wantH below take
+  // `transit`): a 19u arm swinging round across it is buried in a wall. Pulled in, the arm
+  // stays in the throat where the water is (and THE THROAT, SEEN below shortens it further).
+  let transit = 0, ti = 0;
   for (let i = 0; i < 3; i++) {
     const near = 1 - smooth(RIFT_R * 1.1, RIFT_R * 3.0,
       Math.hypot(player.pos.x - trX[i], player.pos.z - trZ[i]));
     const band = smooth(trY0[i] - 30, trY0[i] + 12, y) * (1 - smooth(trY1[i] - 26, trY1[i] + 16, y));
     const f = near * band;
-    if (f > transit) transit = f;
+    if (f > transit) { transit = f; ti = i; }
+  }
+  // THE FISSURE (2026-10-10): the opening is a crack ~13 u wide and ~70 long, not a 43 u bowl, so
+  // an orbit swinging across it buries the arm in a wall. While he threads one, the orbit is held
+  // to the crack's own (kinked) line, toward whichever end the camera is already nearer.
+  if (transit > 0.01) {
+    const F = FISSURE[ti], ax = Math.atan2(F.dz, F.dx);
+    let d = ax - camAz;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    // aim down the middle of the GAP: the two lips differ, so it sits at v = (w1 - w0) / 2, not v = 0
+    // at the arm's own length, so the camera itself (not just its bearing) lands in the gap
+    const arm = Math.max(3, camDist * (1 - 0.62 * camPull));
+    const ua = Math.abs(d) < Math.PI / 2 ? arm : -arm, W = _widths(F, ua);
+    fissureWorld(ua, (W.w1 - W.w0) * 0.5, ti, _fw);
+    let e = Math.atan2(_fw.z - player.pos.z, _fw.x - player.pos.x) - camAz;
+    while (e > Math.PI) e -= Math.PI * 2;
+    while (e < -Math.PI) e += Math.PI * 2;
+    camAz += e * Math.min(1, 3 * transit * dt);
   }
 
   const wantDist = (8.5 + 10.5 * inRise + 3.6 * Math.sin(T * 0.083) + 15 * inSurf) * (1 - 0.46 * transit);
@@ -706,16 +792,57 @@ export function updateEnding(dt, t) {
   // still ends up in rock, shorten it until it does not. Measured against the position it
   // is actually about to use, so it converges instead of hunting.
   const dEff = camDist * (1 - 0.62 * camPull);
-  const camY = player.pos.y + camHeight;
-  const hit = insideFloor(player.pos.x + Math.cos(camAz) * dEff, camY,
-                          player.pos.z + Math.sin(camAz) * dEff);
+  const cax = Math.cos(camAz), caz = Math.sin(camAz);
+  // THE THROAT, SEEN (see FLOOR_UNDER / LOS_F): the arm that sees him, while he threads a crack
+  let fWant = 1, hd = 0, cross = 0;
+  if (transit > 0.01) {
+    fWant = LOS_F[LOS_F.length - 1];
+    for (let k = 0; k < LOS_F.length; k++) {
+      const f = LOS_F[k], d = dEff * f;
+      const cy = player.pos.y + camHeight + (1 - f) * dEff * LOS_RAISE - floorDrop;
+      if (losClear(player.pos.x + cax * d, cy, player.pos.z + caz * d, player.pos.x, player.pos.y - 0.5, player.pos.z)) { fWant = f; break; }
+    }
+    // crossing the floor (his last ~16 u under it, his first few over it) the arm comes all the way in:
+    // the throat floor is at full depth only in a slot a few units wide round his own column, and a lens
+    // out along the crack sat in the rock of a pocket's wall (zone 2: black frames)
+    hd = terrainH(player.pos.x, player.pos.z, ti);
+    const rel = player.pos.y - hd; cross = smooth(-32, -15, rel) * (1 - smooth(2, 7, rel)) * transit;
+    fWant = Math.min(fWant, 1 - (1 - LOS_F[LOS_F.length - 1]) * cross);
+  }
+  losF += (fWant - losF) * (1 - Math.exp(-(fWant < losF ? 3 : 1.5) * dt));
+  const dArm = dEff * losF;
+  const camX = player.pos.x + cax * dArm, camZ = player.pos.z + caz * dArm;
+  let camY = player.pos.y + camHeight + (1 - losF) * dEff * LOS_RAISE;
+  // under the floor of the crack he threads while he is: the lens stays under it too, and through the
+  // crossing itself UNDER HIM (he rises through the pit at the throat floor's bottom: every floor round
+  // him is higher, so a line from below him stays under it all), held there continuously as both rise
+  // and let go on a ~0.7 s decay once he is through: from below, the floor is a culled back face
+  // (final residual fix 4) the under-him part rides `cross` as a share of the way down (it was a cap 40 u
+  // over him squeezed into cross's 5 u ramp: 6.6 u in one frame at the zone-1 crossing), and the drop is
+  // taken at <= DROP_RATE u/s: no step of the lens past ~1 u a frame at 60 fps
+  let need = 0;
+  if (transit > 0.01 && player.pos.y - 0.5 < hd + 0.3) {
+    need = Math.max(0, camY - (terrainH(camX, camZ, ti) - FLOOR_UNDER), cross * (camY - (player.pos.y - UNDER_HIM)));
+  }
+  const fd0 = floorDrop * Math.exp(-1.4 * dt);
+  floorDrop = need > fd0 ? Math.min(need, Math.max(fd0, floorDrop + DROP_RATE * dt)) : fd0;
+  camY -= floorDrop;
+  const hit = insideFloor(camX, camY, camZ);
   camPull += ((hit ? 1 : 0) - camPull) * Math.min(1, 3 * dt);
 
-  camera.position.set(
-    player.pos.x + Math.cos(camAz) * camDist * (1 - 0.62 * camPull),
-    camY,
-    player.pos.z + Math.sin(camAz) * camDist * (1 - 0.62 * camPull)
-  );
+  // and the lens never moves faster than LENS_REL u/s relative to him (frame-rate independent): every term
+  // above is eased, this is the backstop that keeps a ramp from ever reading as a cut
+  if (lensPrevOk && dt > 0) {
+    const ex = camX - (lensPrev.x + player.pos.x - diverPrev.x), ey = camY - (lensPrev.y + player.pos.y - diverPrev.y), ez = camZ - (lensPrev.z + player.pos.z - diverPrev.z);
+    const el = Math.hypot(ex, ey, ez), lim = LENS_REL * dt;
+    if (el > lim) { const k = lim / el; camera.position.set(camX - ex * (1 - k), camY - ey * (1 - k), camZ - ez * (1 - k)); }
+    else camera.position.set(camX, camY, camZ);
+    // ...and absolutely no faster than LENS_ABS u/s (~1 u a frame at 60 fps; he himself rides up to ~44 u/s)
+    const ax = camera.position.x - lensPrev.x, ay = camera.position.y - lensPrev.y, az = camera.position.z - lensPrev.z;
+    const al = Math.hypot(ax, ay, az), alim = LENS_ABS * dt;
+    if (al > alim) { const k = alim / al; camera.position.set(lensPrev.x + ax * k, lensPrev.y + ay * k, lensPrev.z + az * k); }
+  } else camera.position.set(camX, camY, camZ);
+  lensPrev.copy(camera.position); diverPrev.copy(player.pos); lensPrevOk = true;
   _v.set(player.pos.x, player.pos.y + 0.6 + lookLift, player.pos.z);
   camera.up.set(0, 1, 0);
   camera.lookAt(_v);

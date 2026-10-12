@@ -9,8 +9,10 @@
 //   Alt+1 DECK, CALM      Alt+2 DECK, GALE      Alt+3 SEABED, ZONE 0   Alt+4 HOSE END
 //   Alt+5 SHARK           Alt+6 VELKATH         Alt+7 ORUNE            Alt+8 MHOR
 //   Alt+9 CHART           Alt+0 RESTORE         Alt+- NEXT ANCHORAGE   Alt+/ the panel
+//   Alt+= THE BLADE: grants Velkath's old harpoon (Sal's blade, fissure-and-harpoon Task 7) without the
+//         rite, or takes it back (the knife again). Written to the save (tools.harpoon) both ways.
 //
-// Keys go by e.code (Digit1.., Minus, Slash) so Option's typed symbols never matter, and
+// Keys go by e.code (Digit1.., Minus, Slash, Equal) so Option's typed symbols never matter, and
 // every one is preventDefault'ed and stopped here (capture phase) so nothing else sees it.
 // None of this runs per frame: the panel and the toast change only on a key.
 // OWNED BY: orchestrator (dev tool).
@@ -23,9 +25,9 @@ import { wreckColliders } from '../world/wrecks.js';
 import { ventColliders } from '../world/vents.js';
 import { raft, pumpPos, chartAnchor } from '../systems/raft.js';
 import { placeOnDeck } from '../player.js';
-import { riftPos, RIFT_R, zoneTop } from '../config.js';
+import { riftPos, zoneTop } from '../config.js';
+import { clearOfCrack } from '../world/fissureShape.js';
 import { currentSiteIndex, siteAt } from '../world/site.js';
-import { bodyBlocked } from '../entities/sleeper/bodyCols.js';
 
 const EYE_H = 1.35;                 // player.js: his eye over his boots
 const TAU = Math.PI * 2;
@@ -41,7 +43,7 @@ let last = '—';
 const ORDER = [
   ['1', 'DECK, CALM'], ['2', 'DECK, GALE'], ['3', 'SEABED, ZONE 0'], ['4', 'HOSE END'],
   ['5', 'SHARK'], ['6', 'VELKATH'], ['7', 'ORUNE'], ['8', 'MHOR'],
-  ['9', 'CHART'], ['0', 'RESTORE'], ['−', 'NEXT ANCHORAGE'], ['/', 'HIDE / SHOW']
+  ['9', 'CHART'], ['0', 'RESTORE'], ['−', 'NEXT ANCHORAGE'], ['=', 'HARPOON / KNIFE'], ['/', 'HIDE / SHOW']
 ];
 
 export function installPlaytest(hooks) {
@@ -58,18 +60,20 @@ function onKey(e) {
   if (c.length === 6 && c.startsWith('Digit')) k = c[5];
   else if (c === 'Minus') k = '-';
   else if (c === 'Slash') k = '/';
+  else if (c === 'Equal') k = '=';
   if (k === null) return;
   e.preventDefault();               // Option+digit would type a symbol
   e.stopImmediatePropagation();     // nothing else in the game hears an Alt+key
   if (e.repeat) return;
   if (k === '/') { togglePanel(); return; }
+  if (k === '=') { toggleBlade(); return; }
   jump(k);
 }
 
 // ---- placement helpers (key-press time only: allocation is fine here) --------------------
 const yawTo = (dx, dz) => Math.atan2(dx, dz);   // he faces (sin yaw, cos yaw)
 const COLS = [rockColliders, propColliders, wreckColliders, ventColliders];
-// Gentle ground, clear of every solid the push-out knows, out of the rift bowls.
+// Gentle ground, clear of every solid the push-out knows, off the crack.
 function clearGround(x, z, zi, pad) {
   if (terrainNormal(x, z, zi).y < 0.9) return false;
   const y = terrainH(x, z, zi) + 1;
@@ -77,10 +81,7 @@ function clearGround(x, z, zi, pad) {
     const c = L[i], dx = x - c.x, dy = y - c.y, dz = z - c.z, rr = c.r + pad;
     if (dx * dx + dy * dy + dz * dz < rr * rr) return false;
   }
-  for (let r = zi; r <= zi; r++) {
-    const rp = riftPos(r);
-    if (Math.hypot(x - rp.x, z - rp.z) < RIFT_R * 3.2) return false;
-  }
+  if (!clearOfCrack(x, z, zi, pad)) return false;     // off the crack and its jam (Task 5): the lip + 6 u + pad
   return true;
 }
 // The lens hangs from his eye straight back along his look (game.js clearCamDistance stops
@@ -314,35 +315,16 @@ function shark(yaw) {
   return 'ONE CIRCLES IN FROM ' + SHARK_D + ' U. ITS RUN COMES IN ~5 S. SWIM, BURST, OR INK';
 }
 
-// The Brooder's clutch (brooder-clutch): stand him where it bulges out from under her rim,
-// in reach of it (the rite's own test, brood.canTake, says so), clear of her body (the
-// collider the push-out uses), facing it.
+// Velkath's harpoon (fissure-and-harpoon Task 6): stand him at the rite's own spot, L.harpoon.anchor (on
+// clear ground off her near flank, never on the crack, out of her body and her clutch: harpoon.js seat
+// chose it), facing the iron (or, on a revisit, the old wound in the same seam).
 function velkath() {
-  const L = H.lev, B = L && L.brood;
-  if (!B || !B.seated) return 'NO CLUTCH HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
-  const t = B.takeAt, bx = L.pos.x, bz = L.pos.z;
-  const out = yawTo(t.x - bx, t.z - bz);
-  const probe = player.pos.clone();
-  const ok = (x, z) => {
-    const y = terrainH(x, z, 0);
-    if (terrainNormal(x, z, 0).y < 0.6) return false;
-    probe.set(x, y + EYE_H, z);
-    if (!B.canTake(probe)) return false;
-    for (const h of [0.45, 1.0, 1.6]) if (bodyBlocked(x, y + h, z, 0.45)) return false;
-    return true;
-  };
-  let s = null;
-  for (const r of [2.0, 2.6, 1.4, 3.2, 3.8, 1.0, 4.4]) {
-    for (let k = 0; k < 24 && !s; k++) {
-      const a = out + (k & 1 ? 1 : -1) * Math.ceil(k / 2) * (TAU / 24);
-      const x = t.x + Math.sin(a) * r, z = t.z + Math.cos(a) * r;
-      if (ok(x, z)) s = { x, z };
-    }
-    if (s) break;
-  }
-  if (!s) s = { x: t.x + Math.sin(out) * 2.5, z: t.z + Math.cos(out) * 2.5 };
-  standAt(s.x, s.z, 0, yawTo(t.x - s.x, t.z - s.z), -0.3);
-  return 'AT HER CLUTCH, IN REACH. [E] PRIES A CLUMP AND SHE WAKES';
+  const L = H.lev, Hp = L && L.harpoon;
+  if (!Hp || !Hp.seated) return 'NO HARPOON HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
+  const a = Hp.anchor, t = Hp.seamWorld();
+  standAt(a.x, a.z, 0, yawTo(t.x - a.x, t.z - a.z), -0.15);
+  return Hp.wound ? 'AT THE OLD WOUND IN HER SIDE. [E] PRESSES IT AND SHE WAKES (THE REMEMBERED RITE)'
+    : 'AT THE HARPOON IN HER SIDE. [E] PULLS IT FREE AND SHE WAKES';
 }
 
 // Orune's hoard: stand him ~14 u off the ship's lamp, on the open side away from her body,
@@ -422,6 +404,15 @@ function buildDom() {
   let off = false;
   try { off = localStorage.getItem('abyssa.playtest.panel') === 'off'; } catch (e) { /* private mode */ }
   $panel.classList.toggle('off', off);
+}
+// Alt+= : the harpoon as his blade without the rite (or back to the knife). Not a jump: he stays where
+// he is, in whatever he was doing; the save is written so a reload keeps the choice.
+function toggleBlade() {
+  survival.hasHarpoon = !survival.hasHarpoon;
+  if (H && H.saveChart) H.saveChart();
+  toast(survival.hasHarpoon
+    ? 'BLADE — THE OLD HARPOON (CLICK: THE THRUST). SAVED WITH THE TOOLS · ALT+= AGAIN FOR THE KNIFE'
+    : 'BLADE — THE DIVE KNIFE (THE HARPOON TAKEN BACK, SAVED) · ALT+= FOR THE HARPOON');
 }
 function togglePanel() {
   const off = !$panel.classList.contains('off');
