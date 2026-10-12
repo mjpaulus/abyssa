@@ -16,6 +16,10 @@
 //               0.35 u = her surface on the lens; split fight / after the calm; RED on the after-the-calm inside
 //               and ray counts).
 //               Also: the lens in Sal (0.45 u of his axis), and her shell's lowest point over the ground per phase.
+//   FP_ROUTE    what he does after the calm: 'crack' (default: vent and walk down the crack into zone 1), 'follow'
+//               (still afloat, he follows her home under her body for 40 s, never venting: review C1) or 'resettle'
+//               (off her ground until she starts to lie down, back onto it mid-settle, off again: review I1).
+//               tools/bench/velfix-gate.mjs runs all three and is the gate.
 //   FP_STOP=<n> stop after n video-rate frames (every 3rd game frame, ~20 per game second: the RP_VIDEO index),
 //               print the state; FP_HOLD=1 leaves the (frozen) Chrome up for `drv.mjs eval` and A/B pokes.
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -132,7 +136,15 @@ const GATE_JS = `(async () => {
     lens: { fightN: 0, fightIn: 0, fightNear: 0, calmN: 0, calmIn: 0, calmNear: 0, inAt: [], parts: {}, salFight: 0, salCalm: 0,
       rayN: 0, rayFight: 0, rayCalm: 0, rayAt: [], rayHit: {} },
     // her shell's lowest point over the ground (u): the fight (up, hunting), the walk home (calmed, up), the settle
-    shellClr: { fight: 99, home: 99, settle: 99 } };
+    shellClr: { fight: 99, home: 99, settle: 99 },
+    // AFTER THE CALM, THE DRAWN VERDICT (every 3rd frame): her opaque drawn surface within 0.3 u of the lens along any
+    // of six axes (or 0.35 u toward his bonnet), or the lens in the egg mass (its collider IS its drawn surface:
+    // bodyCols setClutch / brood.js lump); and Sal inside her (his chest in her collision volumes or the egg mass:
+    // the push-out failed). I1: the clutch's largest one-frame move and the wake's effects (brooder.js L.wakeFx).
+    // Coverage: frames with him under her shell, frames of a calm re-rise.
+    calm: { n: 0, sampled: 0, lensSurf: 0, lensEggs: 0, salIn: 0, salAt: [], surfAt: [], under: 0, reRise: 0, stMaxD: 0, stMaxAt: null, wakeFx: 0, surfHit: {} } };
+  let stPrev = null, wakePrev = null;
+  const AX = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   let buf = null;
   // THE DRAWN SURFACE (every 3rd frame): bodyCols is a fit (85th-percentile capsules, a height-band shell), so the
   // lens can be outside it with her drawn mesh across the near plane. A ray from the lens toward his bonnet against
@@ -142,12 +154,33 @@ const GATE_JS = `(async () => {
   // (custom-instanced meshes, InstancedBufferGeometry, are left out: three raycasts only their base geometry)
   const meshes = []; L.grp.traverse(o => { if ((o.isMesh || o.isInstancedMesh) && !o.isSprite && o.material && !o.material.transparent && o.visible && !(o.geometry && o.geometry.isInstancedBufferGeometry)) meshes.push(o); });
   g.lens.rayMeshes = meshes.length;
+  let meshesC = null;   // (her drawn meshes, collected at the calm: the sculpted set is in by then)
   const base = window.__rp.frame;
   window.__rp.frame = () => {
     base();
     const f = window.__rp.st.f, t = f / 60;
     if (window.zone !== 0 || L.dormant || !BC.bodyColsOn()) return;
     const x = cam.position.x, y = cam.position.y, z = cam.position.z;
+    if (L.calmed) {
+      const C = g.calm; C.n++;
+      if (L.brood) { const st = L.brood.st; if (stPrev != null) { const d = Math.abs(st - stPrev); if (d > C.stMaxD) { C.stMaxD = +d.toFixed(3); C.stMaxAt = +t.toFixed(2); } } stPrev = st; }
+      const wf = L.wakeFx | 0; if (wakePrev != null && wf > wakePrev) C.wakeFx += wf - wakePrev; wakePrev = wf;
+      if (L.standTarget > L.stand + 1e-4) C.reRise++;
+      const cy = P.pos.y - 0.45;   // his chest
+      if (BC.underShell(P.pos.x, cy, P.pos.z) || BC.underShell(P.pos.x, P.pos.y + 0.4, P.pos.z)) C.under++;
+      if (BC.bodyBlocked(P.pos.x, cy, P.pos.z, 0) || BC.inClutch(P.pos.x, cy, P.pos.z, 0) > 0) { C.salIn++; if (C.salAt.length < 20) C.salAt.push(+t.toFixed(2)); }
+      if (f % 3 === 0) {
+        C.sampled++;
+        if (!meshesC) { meshesC = []; L.grp.traverse(o => { if ((o.isMesh || o.isInstancedMesh) && !o.isSprite && o.material && !o.material.transparent && !(o.geometry && o.geometry.isInstancedBufferGeometry)) meshesC.push(o); }); C.meshes = meshesC.length; }
+        const vis = []; for (const o of meshesC) { let v = o.visible, q = o.parent; while (v && q) { v = q.visible; q = q.parent; } if (v) vis.push(o); }
+        let hitK = null;
+        from.set(x, y, z); rc.near = 0; rc.far = 0.3;
+        for (const a of AX) { dir.set(a[0], a[1], a[2]); rc.set(from, dir); rc.far = 0.3; const h = rc.intersectObjects(vis, false); if (h.length) { hitK = h[0].object; break; } }
+        if (!hitK) { dir.set(P.pos.x - x, P.pos.y + 0.4 - y, P.pos.z - z); const dl = dir.length(); if (dl > 1e-3) { dir.multiplyScalar(1 / dl); rc.set(from, dir); rc.far = Math.min(0.35, dl); const h = rc.intersectObjects(vis, false); if (h.length) hitK = h[0].object; } }
+        if (hitK) { C.lensSurf++; if (C.surfAt.length < 20) C.surfAt.push(+t.toFixed(2)); const k = (hitK.name || hitK.type) + (hitK.geometry && hitK.geometry.attributes.position ? ':' + hitK.geometry.attributes.position.count : ''); C.surfHit[k] = (C.surfHit[k] || 0) + 1; }
+        if (BC.inClutch(x, y, z, 0) > 0) { C.lensEggs++; if (C.surfAt.length < 20) C.surfAt.push('eggs ' + t.toFixed(2)); }
+      }
+    }
     const inside = BC.bodyBlocked(x, y, z, 0), why = BC.blockWhy, near = inside || BC.bodyBlocked(x, y, z, 0.15);
     const Lg = g.lens;
     // the lens in SAL (the other clip): within 0.45 u of his body's axis, boots (eye - 1.35) to bonnet top (eye + 0.4)
@@ -407,10 +440,40 @@ while (t < +MAXS) {
 for (let i = 0; i < 8; i++) await slice({ sec: 0.25, yaw: 0, keys: [] });
 s = await c.ev(STATE);
 await shot('end');
+// (velfix) THE ROUTE AFTER THE CALM (FP_ROUTE): 'crack' (the default: vent and walk to the crack, down into zone 1),
+// 'follow' (the reviewer's C1 case: still off the floor, he follows her home under her body - W+Shift toward her
+// centre for 40 s, never venting; a burst first if he has come down) or 'resettle' (I1: he walks off her ground
+// until her settle is under way, back onto it mid-settle - she stands back up over him - then off again for her to
+// lie down). Each route must exercise its case or the gate is RED (see the verdict).
+const ROUTE = process.env.FP_ROUTE || 'crack';
+const TO_HER = `Math.atan2(window.lev.pos.x - window.player.pos.x, window.lev.pos.z - window.player.pos.z)`;
+const RS = `({ tgt: window.lev.standTarget, stand: window.lev.stand, ax: window.player.pos.x - window.lev.pos.x, az: window.player.pos.z - window.lev.pos.z, g: !!window.player.grounded })`;
 // THE WAY DOWN, WALKED: calmed, he turns to the crack (the pour and the light ahead of him), walks to
 // its middle and over the lip, and vents down through the opened throat into zone 1
 let way = null;
-if (s.calmed) {
+if (s.calmed && ROUTE === 'follow') {
+  // (the review's probe: he lit the last ward from under her with Space taps at pitch 0.6, so he is up at her belly and
+  // afloat at the calm; here a burst up toward her puts him there whatever the fight left, then W+Shift toward her
+  // centre at the review's pitch 0.15, never venting)
+  const n0 = await c.ev(`({ g: !!window.player.grounded, agl: window.player.pos.y - 1.35 - terrainH(window.player.pos.x, window.player.pos.z, 0) })`);
+  await slice({ sec: 0.6, yaw: await c.ev(TO_HER), pitch: 0.6, keys: ['W'], space: 0.35 });
+  const t0 = t;
+  while (t - t0 < 40) await slice({ sec: 0.25, yaw: await c.ev(TO_HER), pitch: 0.15, keys: ['W', 'Shift'] });
+  way = { route: 'follow', agl0: +n0.agl.toFixed(2) };
+  await shot('follow-end');
+} else if (s.calmed && ROUTE === 'resettle') {
+  let q = await c.ev(RS), t0 = t, reRose = false, settleAt = null;
+  const away = q => ({ sec: 0.25, yaw: Math.atan2(q.ax, q.az), pitch: -0.1, keys: q.g ? ['W', 'Shift'] : ['W', 'C'] });
+  const back = q => ({ sec: 0.25, yaw: Math.atan2(-q.ax, -q.az), pitch: -0.1, keys: q.g ? ['W', 'Shift'] : ['W', 'C'] });
+  while (t - t0 < 45) { q = await c.ev(RS); if (q.tgt === 0 && q.stand < 0.97) { settleAt = +q.stand.toFixed(2); break; } await slice(away(q)); }
+  phase.push(`${t.toFixed(1)} resettle: her settle under way (stand ${q.stand.toFixed(2)})`);
+  t0 = t; while (t - t0 < 25) { q = await c.ev(RS); if (q.tgt === 1) { reRose = true; break; } await slice(back(q)); }
+  phase.push(`${t.toFixed(1)} resettle: stood back up ${reRose} (stand ${q.stand.toFixed(2)})`);
+  t0 = t; while (t - t0 < 6) { q = await c.ev(RS); await slice(back(q)); }
+  t0 = t; while (t - t0 < 45) { q = await c.ev(RS); if (q.tgt === 0 && q.stand < 0.02) break; await slice(away(q)); }
+  way = { route: 'resettle', settleAt, reRose, settled: q.stand < 0.02 };
+  await shot('resettle-end');
+} else if (s.calmed) {
   const CRK = `(() => { const S = window.__fs, P = window.player, l = { u: 0, v: 0 }, o = { x: 0, z: 0 };
     S.fissureLocal(P.pos.x, P.pos.z, 0, l); S.fissureWorld(Math.max(-14, Math.min(14, l.u)), 0, 0, o);
     return { x: o.x, z: o.z, fd: S.fissureDist(P.pos.x, P.pos.z, 0), k: window.__fissure.k(0), zone: window.zone, y: P.pos.y, grounded: !!P.grounded, msg: window.__msg().live }; })()`;
@@ -430,7 +493,7 @@ if (s.calmed) {
     if (!q.grounded && q.fd >= -1) { await slice({ sec: 0.5, yaw, pitch: -0.2, keys: ['W', 'C'] }); continue; }
     await slice({ sec: 0.5, yaw, pitch: -0.1, keys: [] });   // the crack still pouring: watch it open
   }
-  way = { zoneAt: zoneAt == null ? null : +zoneAt.toFixed(1) };
+  way = { route: 'crack', zoneAt: zoneAt == null ? null : +zoneAt.toFixed(1) };
   await shot('down');
 }
 console.log(phase.join('\n'));
@@ -447,20 +510,36 @@ console.log('LEDGER', JSON.stringify(ledger));
 let gateRed = false;
 if (GATE) {
   const g = await c.ev('window.__vfGate');
-  // the lens, after the calm (the walk home, the settle, him under her): inside her bodyCols (margin 0), or her drawn
-  // surface on the lens (the ray). The near-plane count (0.15) is reported, not gated: it is the camera guard's own
-  // trigger zone (game.js draws the lens out of it on the next frames), so a frame of it is the guard working. The
-  // fight's own counts are reported beside it: the fight's camera is baa7f88's, unchanged, and a claw blow can cross
-  // it for a frame or two (pre-existing, rare).
-  const lensRed = g.lens.calmIn + g.lens.rayCalm > 0;
-  const washRed = g.washRed > 0;
-  gateRed = washRed || lensRed;
+  // THE VERDICT (velfix review I2). RED, with every reason listed, if:
+  //   the run never reached the calm, or booked under 600 frames after it, or under 20 wash frames (a vacuous run);
+  //   the wash: any booked frame over the limits;
+  //   after the calm, the DRAWN verdict: her opaque surface on the lens or the lens in the egg mass (C.lensSurf /
+  //     C.lensEggs) - the collision-proxy counts (calmIn / calmNear / rayCalm) are reported, not gated: her capsules
+  //     over-cover her limbs and book frames that look fine;
+  //   after the calm, Sal inside her (C.salIn);
+  //   I1: the clutch moving more than 0.05 in a frame after the calm, or any of the wake's effects after it;
+  //   the route not exercised: 'follow' with under 120 frames of him under her shell, 'resettle' without a re-rise.
+  // The fight's counts are reported beside it: the fight's camera is baa7f88's, unchanged.
+  const C = g.calm, why = [];
+  if (!(st.calmT != null)) why.push('never reached the calm');
+  if (C.n < 600) why.push(`only ${C.n} frames after the calm`);
+  if (g.washN < 20) why.push(`only ${g.washN} wash frames booked`);
+  if (g.washRed > 0) why.push(`wash: ${g.washRed} frames over the limits`);
+  if (C.lensSurf + C.lensEggs > 0) why.push(`lens: her drawn surface on it ${C.lensSurf}, in the egg mass ${C.lensEggs} (of ${C.sampled} sampled)`);
+  if (C.salIn > 0) why.push(`Sal inside her on ${C.salIn} frames`);
+  if (C.stMaxD > 0.05) why.push(`the clutch jumped ${C.stMaxD} in a frame (at ${C.stMaxAt})`);
+  if (C.wakeFx > 0) why.push(`${C.wakeFx} wake effects after the calm`);
+  if (ROUTE === 'follow' && C.under < 120) why.push(`follow: only ${C.under} frames under her`);
+  if (ROUTE === 'resettle' && C.reRise === 0) why.push('resettle: she never stood back up');
+  const washRed = g.washRed > 0, lensRed = C.lensSurf + C.lensEggs + C.salIn > 0;
+  gateRed = why.length > 0;
   ledger.gate = g;
   console.log('GATE', gateRed ? 'RED' : 'GREEN', JSON.stringify({
     wash: { booked: g.washN, red: g.washRed, meanBlown: g.washN ? +(g.washSum / g.washN).toFixed(4) : 0, maxBlown: +g.washMax.toFixed(3), maxAt: g.washMaxAt,
       meanOutside: g.washN ? +(g.washOutSum / g.washN).toFixed(4) : 0, maxOutside: +g.washOutMax.toFixed(3), maxOutsideAt: g.washOutMaxAt,
       meanLuma: g.washN ? +(g.washMeanLuma / g.washN).toFixed(1) : 0, verdict: washRed ? `RED (${g.washRed} frames > ${WASH_BLOWN} blown outside the burns or > ${WASH_CAP} in all)` : 'GREEN', at: g.washAt.slice(0, 12) },
-    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' }, shellClr: g.shellClr }));
+    lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' }, shellClr: g.shellClr,
+    calm: C, route: ROUTE, way, why }));
 }
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const cons = await c.console();

@@ -1,17 +1,20 @@
-// VELFIX LOOK (2026-10-12): a lit Velkath ward, framed the same way every run, for the before/after of the
-// white wash (Michael's recorded play-through: under her with lit wards the frame went white-green).
+// VELFIX LOOK (2026-10-12) - A CAPTURE TOOL, NOT A GATE: it always exits 0 and passes nothing. It frames a lit Velkath
+// ward the same way every run, for the before/after of the white wash (Michael's recorded play-through: under her with
+// lit wards the frame went white-green), and writes numbers and PNGs for eyes and the report. THE GATE is
+// tools/bench/velfix-gate.mjs (fullplay.mjs FP_GATE through three routes after the calm).
 //   node tools/bench/velfix-look.mjs <port> <tag> [outdir]     (serve.py must already serve <port>)
-// Env DRV_PORT (default 9491). She is woken and held (cmd 'hold': she stands and stops tracking him), ward 0 is
-// lit (no flash), and Sal is stood at fixed spots round it; after a 3 s settle (the auto-exposure's slow side)
-// the drawn frame is read back. Per scene: the frame's mean Rec.709 luma and blown share (> 230), and THE WARD'S
-// READ: its projected spot's peak luma and the share of a 40 px disc round it over 150, against the frame's mean.
+// Env DRV_PORT (default 9488). She is woken and held (cmd 'hold': she stands and stops tracking him), ward VL_WARD
+// (default 1, her right hip) is lit (no flash), and Sal is stood at fixed spots round it; after a 3 s settle (the
+// auto-exposure's slow side) the drawn frame is read back. Per scene: the frame's mean Rec.709 luma and blown share
+// (> 230), and THE WARD'S READ: its projected spot's peak luma and the share of a 40 px disc round it over 150,
+// against the frame's mean, and whether the line from the lens to the ward is CLEAR (her opaque meshes, and Sal's
+// body as a 0.6 u capsule).
 // Scenes: under-a/b (Sal 2.5 / 5 u out from under the lit ward, facing it), under-in (3 u in under her, the boom
-// behind him under her belly), far-20/25/30 (the LENS that far from it,
-// facing it, out from under her), flash (under-a, 0.1 s after the light-up flash), calm-2/6/10 (all three lit:
-// the calm; s after it, Sal re-stood under the first ward as she walks home).
-// No gate: the numbers and PNGs are for eyes and the report. The gate is fullplay.mjs FP_GATE.
+// behind him under her belly), far-15/20/25/30 (the LENS that far from the ward, out from under her, Sal stood off the line
+// so the ward is in clear view: the first of several side offsets with a clear line is used), flash (under-a, 0.1 s
+// after the light-up flash), calm-2/6/10 (all three lit: the calm; s after it, Sal re-stood under the ward).
 const [, , PORT, TAG = 'look', OUTD = '/Users/michaelpaulus/sc/.abyssa-wt/shots/velfix'] = process.argv;
-process.env.DRV_PORT = process.env.DRV_PORT || '9491';
+process.env.DRV_PORT = process.env.DRV_PORT || '9488';
 const { mkdtempSync, mkdirSync } = await import('node:fs'); const { tmpdir } = await import('node:os');
 process.env.DRV_DIR = mkdtempSync(tmpdir() + '/abyssa-velfix-look-');
 const { start, stop, connect, sleep } = await import('./drv.mjs');
@@ -54,7 +57,20 @@ await c.ev(`(async () => {
       } else o.ward = 'off-screen';
     }
     o.exp = window.__exposure.state().mult;
+    if (g) o.clear = clearTo(g);
     return o;
+  };
+  // the lens's line to the ward: her opaque meshes (stopping 2.5 u short: the ward sits in her belly) and Sal's body
+  const T = await import('three'), rc = new T.Raycaster(), rd = new T.Vector3(), seg = new T.Vector3();
+  const meshes = []; L.grp.traverse(o => { if ((o.isMesh || o.isInstancedMesh) && !o.isSprite && o.material && !o.material.transparent && !(o.geometry && o.geometry.isInstancedBufferGeometry)) meshes.push(o); });
+  const clearTo = (g) => {
+    const a = cam.position, b = g.grp.position, d = a.distanceTo(b);
+    rd.copy(b).sub(a).normalize(); rc.set(a, rd); rc.near = 0; rc.far = Math.max(0, d - 2.5);
+    const vis = meshes.filter(o => { let v = o.visible, q = o.parent; while (v && q) { v = q.visible; q = q.parent; } return v; });
+    if (rc.intersectObjects(vis, false).length) return false;
+    // Sal: his axis (boots to bonnet) against the segment, 0.6 u
+    for (let k = 0; k <= 8; k++) { seg.set(P.pos.x, P.pos.y - 1.35 + k * 0.22, P.pos.z); const t = Math.max(0, Math.min(1, seg.clone().sub(a).dot(rd) / d)); const q = a.clone().addScaledVector(rd, t * d); if (q.distanceTo(seg) < 0.6) return false; }
+    return true;
   };
   const standAt = (x, z, yaw, pitch) => { P.pos.set(x, terrainH(x, z, 0) + 1.35, z); P.vel.set(0, 0, 0); P.yaw = yaw; P.pitch = pitch; };
   window.__vl = { read, standAt, L, P };
@@ -91,8 +107,25 @@ const scene = async (name, i, off, n = 180) => {
 await scene('under-a', WI, 2.5);
 await scene('under-b', WI, 5);
 await scene('under-in', WI, -3);
-// the far read: the LENS 20 / 25 / 30 u from the ward (the boom hangs ~9 u behind him)
-for (const d of [20, 25, 30]) await scene('far-' + d, WI, Math.max(3, d - 9));
+// THE FAR READ: the LENS d u from the ward, out from under her, the ward in CLEAR view: Sal stood along the outward
+// bearing (the boom hangs ~9 u behind him), turned so the ward sits beside him in the frame, at the first of several
+// side offsets whose line from the lens to the ward is clear
+for (const d of [15, 20, 25, 30]) {
+  let got = null;
+  for (const side of [6, -6, 10, -10, 3, -3, 14, -14]) {
+    await c.ev(`(() => { const L = window.lev, g = L.sigils[${WI}].grp.position, P = window.player;
+      let ox = g.x - L.pos.x, oz = g.z - L.pos.z; const ol = Math.hypot(ox, oz) || 1; ox /= ol; oz /= ol;
+      const run = Math.max(3, ${d} - 9), x = g.x + ox * run + oz * ${side}, z = g.z + oz * run - ox * ${side};
+      const yaw = Math.atan2(g.x - x, g.z - z) + (${side} > 0 ? -0.35 : 0.35);
+      window.__vl.standAt(x, z, yaw, 0.15); return 1; })()`);
+    await settle(150);
+    const r = await readNow(WI);
+    if (r.clear && r.ward !== 'off-screen') { got = r; got.side = side; break; }
+    got = got || r;
+  }
+  results['far-' + d] = got;
+  await shot('far-' + d);
+}
 // the flash: re-stood under it, the light-up flash 0.1 s in
 await place(WI, 2.5); await settle(180);
 await c.ev(`(window.lev.sigils[${WI}].flashT = 0, 1)`); await settle(5);
