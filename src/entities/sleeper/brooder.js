@@ -150,7 +150,9 @@ export const THUMP = { k: 1, near: 12, far: 110 };
 //   glyph    the lit glyph burns warm gold over unity (bloom halates it): tint x glyph
 //   calmT    calmed: the light (120 - 8 calmT, as shipped), the glow and the glyph ease down together over calmT
 //            s to a banked ember (the glyph keeps `ember` of its burn)
-export const BURN = { scatter: 0.08, scatterFar: 0.35, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35 };
+//   flash    the light-up flash's extra light (common.js wardFlashes, 360 cd at its peak as shipped) x flash: with him
+//            at the ward it flooded her belly past the burn (6% of the frame blown outside it at the calm's flash)
+export const BURN = { scatter: 0.08, scatterFar: 0.35, scatterD: [10, 28], col: 0xffb060, halo: 1.4, op: 0.55, near: [4, 11], far: 140, swell: 0.012, swellMax: 0.8, glyph: 1.2, tint: [1, 0.72, 0.36], calmT: 15, ember: 0.35, flash: 0.5 };
 // (ritefair, Michael 2026-10-09 at 60 fps: "I was struggling to get under her as she was
 // crouched too low and I kept colliding") RETIRED: drop 0.16 -> 0, lean 0.16 -> 0 (measured
 // before: the rim came down to 0.4-1.3 u over the floor on the lanes in as the spring ramped,
@@ -2105,6 +2107,7 @@ export function updateBrooder(L, dt, t, player) {
   // a ward lit is a wound: she flinches - rears back, claws snatched in - and it rings out
   if (ev.sigilLit) { L.seen = true; L.blindT = 0; L.lastSeen.copy(player.pos); L.hurt.v += 5.5; L.bY.v += R * 0.12; quake(L, ev, L.pos.x, L.pos.z, 0.3, player); }
   wardBurn(L, haloK);
+  L.flashK = BURN.flash;
   wardFlashes(L, dt, null);
   updatePlumes(dt);
   L.pPrev.copy(player.pos);
