@@ -542,6 +542,23 @@ export function bodyBlocked(x, y, z, m) {
   }
   return false;
 }
+// (velfix) the same test against her limbs where they will be `k` frames on (each capsule's ends carried on by their
+// last frame's motion; the shell and the clutch move slowly and are tested as they are): game.js's lens guard reads
+// it after the calm, so a leg or claw coming to the lens (or the lens to it) is met before it arrives
+export function bodyBlockedAhead(x, y, z, m, k) {
+  if (!on || !prevOk) return false;
+  for (let i = 0; i < nC; i++) {
+    const o = i * 8;
+    const ax = CAP[o] + (CAP[o] - PREV[o]) * k, ay = CAP[o + 1] + (CAP[o + 1] - PREV[o + 1]) * k, az = CAP[o + 2] + (CAP[o + 2] - PREV[o + 2]) * k;
+    const dx = CAP[o + 3] + (CAP[o + 3] - PREV[o + 3]) * k - ax, dy = CAP[o + 4] + (CAP[o + 4] - PREV[o + 4]) * k - ay, dz = CAP[o + 5] + (CAP[o + 5] - PREV[o + 5]) * k - az;
+    const L2 = dx * dx + dy * dy + dz * dz;
+    let t = L2 > 1e-9 ? ((x - ax) * dx + (y - ay) * dy + (z - az) * dz) / L2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const ex = x - ax - dx * t, ey = y - ay - dy * t, ez = z - az - dz * t, r = CAP[o + 6] + (CAP[o + 7] - CAP[o + 6]) * t + m;
+    if (ex * ex + ey * ey + ez * ez < r * r) { blockWhy = i; return true; }
+  }
+  return false;
+}
 // probe: is the world point inside the clutch (grown by m)? (-1 = no clutch published)
 export function inClutch(x, y, z, m = 0) {
   if (!clOk) return -1;
