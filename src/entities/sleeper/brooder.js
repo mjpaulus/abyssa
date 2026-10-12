@@ -162,8 +162,8 @@ export const HUNT = { stalk: 0.26, hold: 2.05, guard: 7, turn: 0.5, lunge: 0.35,
 // off her plates, a deep groan, the ground rumbles), the body slam (`fall` s, down to `depth` u, stopped over
 // his helmet; her ground clearance rides it), then she rises back to her standing height in `rise` s (no
 // lingering crouch: Michael rejected it). What it does to him is read off how far OUT from under her he got
-// since she began to bear down (he walks ~1 u in that time from a stand: getting clear of her body is not
-// possible, getting off her mark is):
+// from the deepest he was while she bore down (he walks ~1-2 u in that time from a stand: getting clear of
+// her body is not possible, getting off her mark is; momentum he already had does not count against him):
 //   * `outClean` u or more, or out from under her altogether (beyond `sweepR` R): nothing. A diver who
 //     moves at the telegraph's start always gets out; she comes down a hand's breadth over his helmet.
 //   * squarely under her (inside `hitR` R) and less than `outTear` u: THE SLAM. The dress tears (game.js's
@@ -1655,7 +1655,7 @@ function sight(L, dt, player, ev) {
 // him (player.stagger) and throw him flat out from under her through safeThrow. Audio edges for
 // audio/creatures.js: L.dropN (the groan, at the telegraph) and L.dropHitN (the impact). State: L.nsT the
 // counter (s), L.drop 0 none / 1 telegraph / 2 the slam / 3 the rise, L.dropT (s in phase), L.dropRho0 (u:
-// how far under her he was when she began to bear down), L.dropD (u: how far she comes down), L.nsSlow (s of
+// the deepest under her he has been since she began to bear down), L.dropD (u: how far she comes down), L.nsSlow (s of
 // slow turn left); probes: L.dropHits (slams), L.sweepN, L.cleanN, L.dropKind. No allocation.
 const _ns = V3();
 function nsTurn(L) { return NOSAFE.turn * (L.drop || L.nsSlow > 0 ? NOSAFE.slowK : 1); }
@@ -1681,6 +1681,9 @@ function noSafeSpot(L, dt, player, ev, hunt) {
   // stilled (the last ward lit under her) or held mid-drop: no blow, straight to the rise
   if (!live && L.drop < 3) { L.drop = 3; L.dropT = 0; L.dropD = -(L.dropY || 0); }
   L.dropT += dt;
+  // how far out he gets is counted from the DEEPEST he was while she bore down (a diver carried further in
+  // by the momentum of the burst that lit the ward is not charged for it: he turned at once, ruling 1)
+  if (L.drop < 3 && rho < L.dropRho0) L.dropRho0 = rho;
   // through the whole drop her body's contacts shove him but never tear (game.js reads L.rising: "a shove,
   // not a slam"); what the drop does to him is dropImpact's alone (the telegraph's shudder rocked her rim
   // into divers hanging at it at 3-5 u/s and tore the dress)
