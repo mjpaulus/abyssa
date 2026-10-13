@@ -67,11 +67,25 @@ const SITES = [
     // floor, vents or grade of its own: every consumer reads null as "the shipped constant".
     water: null, light: null, floor: null, vents: null, grade: null,
     // THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §2): zone 0's uplands, an additive
-    // term on today's noise (measured starting values, trial Q0), masked to exactly 0 off the crack, her two stations,
-    // the raft column and the raft -> station band
+    // term on today's noise (trial Q0's values but r3amp, 1.5 -> 1.0: its rubble crests inside the hollow's reach drew
+    // ~0.27 u off the walked ground, gates S6), masked to exactly 0 off the crack, her two stations, the raft column and
+    // the raft -> station band, and faded out from r 250 to 300 off the origin (the far ridge and the isle shoals beyond
+    // are untouched)
     shape: {
-      uplands: { rbias: -0.10, ramp: 24, r3amp: 1.5, s2amp: 2.0, camp: 12,
-        keepOff: { crack: [35, 65], stations: [[89.7, 39.1], [43.5, 113.4]], station: [30, 55], raft: [25, 50], band: [20, 45] } }
+      uplands: { rbias: -0.10, ramp: 24, r3amp: 1.0, s2amp: 2.0, camp: 12, fade: [250, 300],
+        keepOff: { crack: [35, 65], stations: [[89.7, 39.1], [43.5, 113.4]], station: [30, 55], raft: [25, 50], band: [20, 45] } },
+      // §3-4: THE HOLLOW about riftPos(0) — D deep (+ a `dish` u dish within rDish of the crack), its flat bottom f0 -/+ fA
+      // and outer edge o0 -/+ oA from the crack (tight toward the raft), wandering by `wig` on the side bearings, faded out
+      // 250-290 u off the raft (under the NE wall); the bottom levelled `lvl` toward level0; N treads (risers take rw of
+      // each band, twisted by tw at twf), smooth in three ramp sectors; her flat at her frozen station (levelled sLvl over
+      // sR, sDrop u lower); soft outcrops in the bottom, kept off the crack's axis (keepOff). Trial Q0's values, tuned on
+      // the game's own mesh for S6 (drawn = stood on, <= 0.25 u added): N 3 -> 2 (each tread edge's curvature scales with
+      // N; three put the middle riser's feet ~0.25 u off the coarse NNW mesh, 3.7 u cells, at any rw) and oc.soft
+      // 0.1 -> 0.2 (the knolls' feet: their curvature is ~2 amp / soft).
+      hollow: { D: 28, f0: 80, fA: 6, o0: 185, oA: 35, wig: 0.15, fade: [250, 290], lvl: 0.7, level0: 17,
+        N: 2, rw: 0.85, tw: 0.05, twf: 0.012, ramp: [0.55, 0.85], rampPh: 0.9,
+        station: [89.7, 39.1], sR: [30, 46], sLvl: 0.92, sDrop: 4, dish: 3, rDish: 90,
+        oc: { f: 0.035, thr: 0.25, amp: 10, soft: 0.2, keepOff: [25, 45] } }
     },
     // THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §5): zone 0's skiff (the sonar) is
     // searched 100-140 u off riftPos(0), 30-75 deg counter-clockwise from the rift -> raft bearing (wrecks.js findSite's

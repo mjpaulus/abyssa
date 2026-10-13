@@ -194,8 +194,11 @@ function syncSite() {
 // THE UPLANDS: today's massif / secondary-ridge / outcrop / continental noise, reused (heightAt computes it anyway),
 // with a mask bias of its own, ADDED on top and masked to exactly 0 off the places that matter. Overriding the
 // shipped knobs instead (the first draft) moved the crack's lips to 1.39 u and its throat floor 1.4 u (trial H7):
-// camp and s2amp act everywhere.
+// camp and s2amp act everywhere. The term is bounded radially (the row's fade, r 250 -> 300 from the origin): the
+// uplands are the basin's edges, not the rampart beyond the rim — the far ridge (RIDGE, from r 300: Michael's ruled
+// skyline) and the isle shoals stay today's bit for bit (tools/relief/gates.mjs "far field untouched").
 let UPL = null;
+const sst01 = t => { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); };
 function keepOff(x, z, K) {
   let m = 1;
   for (let i = 0; i < K.length; i += 6) {
@@ -208,10 +211,55 @@ function keepOff(x, z, K) {
   return m;
 }
 function uplandsAt(x, z, nReg, nBase, nM, nS2, nR3) {
-  const U = UPL, m = keepOff(x, z, U.K);
+  const U = UPL, rr = Math.sqrt(x * x + z * z);
+  if (rr >= U.r1) return 0;
+  const m = keepOff(x, z, U.K) * (1 - sst01((rr - U.r0) / (U.r1 - U.r0)));   // x 1 exactly inside r0
   if (m <= 0) return 0;
   let rk = c01(nReg * 2.2 + 0.5 + U.rbias); rk = rk * rk * (3 - 2 * rk);
   return m * (nBase * U.camp + nM * U.ramp * rk + nS2 * U.s2amp * (0.30 + 0.70 * rk) + nR3 * U.r3amp * rk);
+}
+// THE HOLLOW: home zone 0's floor falls toward her crack. Bearing-varying about riftPos(0) (a round bowl would be "the
+// big pit" again, smaller): tight toward the raft so the raft column stays up on the flank (trial Q0: it sinks
+// 11.4 u, and falls 24.9 u to her bed), wide away from it; the outline wanders on low harmonics, held still toward
+// and away from the raft. Two treads (the row's N; three put the middle riser's feet ~0.25 u off the coarse mesh), each
+// riser taking 85% of its band (walkable slopes, not walls), smooth in three ramp sectors so no riser is a ring. The
+// UNIFORM part (depth + the crack-centred dish) acts everywhere, the crack's apron included; the apron target and the
+// throat's carve compensate exactly that part, so the crack just drops (lips 1.17 -> 1.18, the throat floor at today's
+// -315.3). The DETAIL (levelling, her flat, the outcrops) fades out toward the lip. Her flat (30-46 u about her
+// station, levelled 92%, 4 u lower than the bottom) makes her ground the deepest. It runs on under the NE wall (fade
+// 250-290 u from the raft): ending it before the wall's onset put a steep rise behind her crack (5.4% of the floor too
+// steep to walk, trial H0) — the wall stands ~30 u taller there.
+let HOL = null;
+const _hv = { uni: 0, det: 0, level: 0, flatW: 0, q: 0, rF: 0, rO: 0 };
+function hollowAt(x, z, o) {
+  const H = HOL;
+  o.uni = 0; o.det = 0; o.level = 0; o.flatW = 0; o.q = 0;
+  const rr = Math.sqrt(x * x + z * z);
+  if (rr >= H.fade1) return o;
+  const fade = 1 - sst01((rr - H.fade0) / (H.fade1 - H.fade0));
+  const dx = x - H.cx, dz = z - H.cz, d = Math.sqrt(dx * dx + dz * dz), id = 1 / (d > 1e-3 ? d : 1e-3), ux = dx * id, uz = dz * id;
+  const c = ux * H.rdx + uz * H.rdz, c2 = ux * ux - uz * uz, s2 = 2 * ux * uz, c3 = ux * c2 - uz * s2, s3 = ux * s2 + uz * c2;
+  const w = 1 + H.wig * (0.6 * (0.8 * c2 + 0.6 * s2) + 0.4 * (0.6 * c3 - 0.8 * s3)) * (1 - c * c);
+  const rF = (H.f0 - H.fA * c) * w, rO = (H.o0 - H.oA * c) * w;
+  const t = c01((d - rF) / (rO - rF) + H.tw * gn(x * H.twf + 5.1, z * H.twf - 2.7));
+  const q = 1 - t * t * t * (t * (t * 6 - 15) + 10);
+  let qt = q;
+  if (H.N > 0) { const sN = q * H.N, f = Math.min(Math.floor(sN), H.N - 1), r = sN - f, u = c01((r - (1 - H.rw)) / H.rw); qt = (f + u * u * (3 - 2 * u)) / H.N; }
+  const cp = c3 * H.cPh - s3 * H.sPh;                         // cos(3 bearing + rampPh): the three ramp sectors
+  const qq = q + (qt - q) * (1 - sst01((cp - H.ramp0) / (H.ramp1 - H.ramp0)));
+  const sx = x - H.sx, sz = z - H.sz, flat = H.sLvl * (1 - sst01((Math.sqrt(sx * sx + sz * sz) - H.sR0) / (H.sR1 - H.sR0)));
+  let oc = 0;
+  if (H.ocAmp > 0 && q > 0.2) {
+    const v = fbm2(x * H.ocF + 31.7, z * H.ocF - 12.9, 2) - H.ocThr;
+    // soft threshold: v^2 / (v + soft) leaves the knoll's foot C1 (a hard max(0, v) kink is a crease the mesh can't draw)
+    if (v > 0) oc = v * v / (v + H.ocSoft) * H.ocAmp * q * q * (1 - flat / H.sLvl) * keepOff(x, z, H.ocK);
+  }
+  o.uni = (-H.D * qq - H.dish * (1 - sst01(d / H.rDish))) * fade;
+  o.det = oc * fade;
+  o.level = (1 - (1 - H.lvl * q) * (1 - flat)) * fade;      // a soft union (a max() kink broke S6: trial Q0, 0.345 u)
+  o.flatW = flat / H.sLvl * fade;
+  o.q = q; o.rF = rF; o.rO = rO;
+  return o;
 }
 function capsules(ko, F) {
   const K = [];
@@ -224,7 +272,17 @@ function capsules(ko, F) {
 }
 function syncRelief(sh) {
   const u = sh && sh.uplands;
-  UPL = u ? { rbias: u.rbias, ramp: u.ramp, r3amp: u.r3amp, s2amp: u.s2amp, camp: u.camp, K: capsules(u.keepOff, FISSURE[0]), row: u } : null;
+  UPL = u ? { rbias: u.rbias, ramp: u.ramp, r3amp: u.r3amp, s2amp: u.s2amp, camp: u.camp, r0: u.fade[0], r1: u.fade[1],
+    K: capsules(u.keepOff, FISSURE[0]), row: u } : null;
+  const h = sh && sh.hollow, F = FISSURE[0];
+  if (h) {
+    const l = Math.hypot(F.cx, F.cz);
+    HOL = { D: h.D, f0: h.f0, fA: h.fA, o0: h.o0, oA: h.oA, wig: h.wig, fade0: h.fade[0], fade1: h.fade[1], lvl: h.lvl, level0: h.level0,
+      N: h.N, rw: h.rw, tw: h.tw, twf: h.twf, ramp0: h.ramp[0], ramp1: h.ramp[1], cPh: Math.cos(h.rampPh), sPh: Math.sin(h.rampPh),
+      sx: h.station[0], sz: h.station[1], sR0: h.sR[0], sR1: h.sR[1], sLvl: h.sLvl, sDrop: h.sDrop, dish: h.dish, rDish: h.rDish,
+      ocF: h.oc.f, ocThr: h.oc.thr, ocAmp: h.oc.amp, ocSoft: h.oc.soft, ocK: capsules({ crack: h.oc.keepOff }, F),
+      cx: F.cx, cz: F.cz, rdx: -F.cx / l, rdz: -F.cz / l, noComp: !!h.noComp, row: h };   // noComp: a RED mutant only (Tasks 6-7)
+  } else HOL = null;
 }
 
 // Second ridgeline. Zero new triangles: the graded axisMap already samples out here.
@@ -360,16 +418,29 @@ function heightAt(x, z, zi, slabs) {
   if (P.tamt > 0) h = terrace(h, P.tq, P.tamt * (P.tflat > 0 ? rk + P.tflat * (1 - rk) : rk));
 
   h += P.lift;
+  // THE RELIEF's cost here (tools/relief/cost.mjs, home zone 0, 200k basin points, best of 5): ~340 ns per call with
+  // home's rows off -> ~395 with the uplands and the hollow, ratio 1.16 (spec §7: <= 1.5). The uplands (+~22 ns) reuse
+  // this call's noise: a sqrt for their radial fade and the keep-off capsules; the hollow (+~33 ns) pays one gn for its
+  // tread twist, three sqrts and, where q > 0.2, a 2-octave fbm2 for the outcrops; past r 290 it is a sqrt and a compare.
   if (UPL && zi === 0) h += uplandsAt(x, z, nReg, nBase, nM, nS2, nR3);
   // Soft floor: canyons must not dig below the zone-change trigger plane. It sits ABOVE the
   // fissure carving on purpose: the throat is the one place meant to go deeper.
   if (h < 4) h = 4 + (h - 4) * 0.25;
+  // THE HOLLOW (above), after the knee (before it, the 4:1 compression ate a third of it and flattened the bottom): its
+  // uniform part `hu` is what the apron's target and the throat's carve compensate below
+  let hu = 0;
+  if (HOL && zi === 0) {
+    hollowAt(x, z, _hv);
+    hu = _hv.uni;
+    const g = fd < 14 ? sst01((fd - 4) / 10) : 1;   // the detail fades out toward the lip (fd is 1e3 outside apronR2)
+    h += (HOL.level0 - h) * _hv.level * g + hu + _hv.det - HOL.sDrop * _hv.flatW * g;
+  }
 
   if (fm > 0) {
     const F = FZ;
     // apron: flatten the landform near the crack so lips read as broken shelf, not noise
     const a = fm * fm * (3 - 2 * fm);
-    h = h * (1 - 0.6 * a) + 18 * 0.6 * a;
+    h = h * (1 - 0.6 * a) + (18 + hu) * 0.6 * a;      // relative to the hollow (shipped: hu = 0, the same 18)
     const lumps = fbm2(x * 0.11 + 7.7, z * 0.11 - 3.1, 2);                 // 9 u slumped blocks, ~-0.9..0.9
     // broken lip: the shelf heaves up a little at the edge before it fails, in blocks, so the
     // crack shows a lip line from standing height instead of vanishing into flat ground
@@ -401,6 +472,9 @@ function heightAt(x, z, zi, slabs) {
         const w = Math.min(1, Math.max(0, (st - 0.6) / 4.6)), wall = w * w * (3 - 2 * w);
         h -= F.lipDrop * lip + wall * (60 + st * 2.5) + lumps * 4 * wall      // ~60-80 u throat into black
            - (bk - 0.5) * 3.2 * wall * (1 - wall) * 4;                        // slumped blocks on the faces
+        // (the hollow) the carve is shortened by the hollow's uniform part from 60% of the wall's depth down, so the
+        // throat floor keeps today's depth (G3) while the upper walls drop with the lip
+        if (hu !== 0 && !HOL.noComp) h -= hu * sst01(wall / 0.6);
       }
     }
   }

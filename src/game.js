@@ -1032,6 +1032,21 @@ window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zon
 // force the reseed directly. Kept for probes and for future harness runs.
 window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm, pulled: () => pulledRec, sighted: () => sightRec, site: () => currentSiteIndex(),
   found: () => chartFound, keeps: () => keepsakes, fp: () => terrainFingerprint() };
+// (seafloor relief) live retune of a site's relief rows for tuning and RED mutants: set({hollow: {D: 60}}) deep-merges
+// into the current site's shape rows and reseeds the world (fillTerrain -> ... the full ORDER-IS-CONTRACT chain)
+const _reliefRows = new Map();
+window.__relief = {
+  rows: () => ({ ...currentSite().shape }),
+  set(patch) {
+    const s = currentSite(), i = currentSiteIndex();
+    if (!_reliefRows.has(i)) _reliefRows.set(i, JSON.parse(JSON.stringify(s.shape || null)));
+    const merge = (a, b) => { for (const k in b) a[k] = b[k] && typeof b[k] === 'object' && !Array.isArray(b[k]) ? merge(a[k] || {}, b[k]) : b[k]; return a; };
+    s.shape = merge(s.shape || {}, patch);
+    reseedWorld(i);
+    return window.__relief.rows();
+  },
+  reset() { const i = currentSiteIndex(); if (_reliefRows.has(i)) { currentSite().shape = _reliefRows.get(i); _reliefRows.delete(i); reseedWorld(i); } }
+};
 // Debug: jump straight to the ending cinematic from anywhere in a running game.
 window.playEnding = () => {
   if (state !== 'play') return 'start the game first';

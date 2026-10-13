@@ -22,9 +22,13 @@ function rows(on) { HOME.shape = on ? ROWS.shape : null; HOME.wrecks = on ? ROWS
 const grid = () => { const H = new Float64Array(N * N); for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) H[j * N + i] = T.terrainH(X0 + i, X0 + j, 0); return H; };
 const centre = () => { const o = [], w = { x: 0, z: 0 }; for (let u = -0.9 * F0.halfLen; u <= 0.9 * F0.halfLen; u += 0.5) { fissureWorld(u, 0, 0, w); o.push([w.x, w.z, T.terrainH(w.x, w.z, 0)]); } return o; };
 const raftCol = () => { let s = 0, n = 0; for (let z = -15; z <= 15; z++) for (let x = -15; x <= 15; x++) if (x * x + z * z <= 225) { s += T.terrainH(x, z, 0); n++; } return s / n; };
-// --- the shipped side (rows off): G3's centre line and S6's per-point mesh error
+// (Ruling 15) the far field: zone 0 on five rings from the origin, every 1 deg — the far ridge (RIDGE, r 300-540) and
+// the isle shoals (392-428) lie on them
+const RINGS = [300, 340, 400, 480, 540];
+const rings = () => { const v = []; for (const r of RINGS) for (let b = 0; b < 360; b++) { const a = b * Math.PI / 180; v.push(T.terrainH(r * Math.cos(a), r * Math.sin(a), 0)); } return v; };
+// --- the shipped side (rows off): G3's centre line, S6's per-point mesh error, the far field
 rows(false);
-const centre0 = centre();
+const centre0 = centre(), far0 = rings();
 const S6PTS = [];
 for (let z = C.z - 200; z <= C.z + 200; z += 0.5) for (let x = C.x - 200; x <= C.x + 200; x += 0.5) {
   if (Math.hypot(x, z) > 250 || fissureDist(x, z, 0) < 17) continue;
@@ -77,11 +81,23 @@ const lipW = { x: 0, z: 0 }; fissureWorld(0, F0.halfW + 1.5, 0, lipW);
 const route = { bed: !!sWalk[at(bed.x, bed.z)], skiff: !!sWalk[at(ws[0].x, ws[0].z)], lip: !!sWalk[at(lipW.x, lipW.z)] };
 gate('S5 mostly walkable', res.slope.over.sal_ny062 <= 0.015 && oy / on >= 0.97 && route.bed && route.skiff && route.lip,
   { over52: res.slope.over.sal_ny062, over33: res.slope.over.kelp_ny084, reach: +(oy / on).toFixed(4), route });
-// S6: the mesh error the change ADDS (today's floor already reaches 1.9 u near the NE rim)
-let e6 = 0, e6at = null, e6n = 0; const e6s = [];
-for (let i = 0; i < S6PTS.length; i += 3) { const x = S6PTS[i], z = S6PTS[i + 1]; const e = Math.abs(meshH(x, z, 0) - T.terrainH(x, z, 0)) - S6PTS[i + 2]; e6s.push(e); e6n++; if (e > e6) { e6 = e; e6at = [x, z]; } }
-e6s.sort((a, b) => a - b);
-gate('S6 drawn = stood on (added error)', e6 <= 0.3, { max: +e6.toFixed(3), p99: +e6s[Math.floor(e6s.length * 0.99)].toFixed(3), at: e6at, n: e6n });
+// S6: the mesh error the change ADDS (today's floor already reaches 1.9 u near the NE rim), over the hollow's FOOTPRINT
+// (q > 0) outside the fissure patch (fd >= 17), as the spec's S6 says (Ruling 14). Outside the footprint only the
+// uplands act: their added error there is reported below as INFO, not gated (upland crests ~258 u from the rift reach
+// ~0.85 u, the rmf crease error zones 1/2 ship with)
+let s6 = null, s6out = null;
+if (hasHollow) {
+  const hq = {}, ein = [], eout = []; let e6 = 0, e6at = null, eo = 0, eoAt = null;
+  for (let i = 0; i < S6PTS.length; i += 3) {
+    const x = S6PTS[i], z = S6PTS[i + 1], inside = T.hollowAt(x, z, hq).q > 0;   // a private scratch: heightAt writes T._hv
+    const e = Math.abs(meshH(x, z, 0) - T.terrainH(x, z, 0)) - S6PTS[i + 2];
+    if (inside) { ein.push(e); if (e > e6) { e6 = e; e6at = [x, z]; } } else { eout.push(e); if (e > eo) { eo = e; eoAt = [x, z]; } }
+  }
+  const p99 = a => a.length ? +a.sort((p, q) => p - q)[Math.floor(a.length * 0.99)].toFixed(3) : 0;
+  s6 = { max: +e6.toFixed(3), p99: p99(ein), at: e6at, n: ein.length };
+  s6out = { max: +eo.toFixed(3), p99: p99(eout), at: eoAt, n: eout.length };
+}
+gate('S6 drawn = stood on (added error)', s6 && s6.n > 0 && s6.max <= 0.3, s6 || 'no hollow');
 // S7
 const arena = res.lair.arena45.max - res.lair.arena45.min;
 gate('S7 her fight ground', res.lair.underR.relief <= 3 && res.lair.underBED.relief <= 6.5 && arena <= 11.5, { body: res.lair.underR.relief, bed: res.lair.underBED.relief, arena: +arena.toFixed(1) });
@@ -102,6 +118,13 @@ gate('L ending dip >= 150', endGap >= 150, +endGap.toFixed(1));
 const c1 = centre(); let g3 = 0, g3n = 0;
 for (let i = 0; i < c1.length; i++) if (centre0[i][2] < TRIG) { g3n++; g3 = Math.max(g3, Math.abs(c1[i][2] - centre0[i][2])); }
 gate('G3 the throat keeps its floor', g3n > 0 && g3 <= 1, { maxDev: +g3.toFixed(3), points: g3n, floorAtRift: +tf0.toFixed(1) });
+// (Ruling 15) THE FAR FIELD IS UNTOUCHED: the relief ends inside r 300, so the far ridge (Michael's ruled skyline) and
+// the isle shoals are today's bit for bit
+{
+  const far1 = rings(); let bad = 0, worst = 0, wAt = null;
+  for (let i = 0; i < far0.length; i++) if (!Object.is(far0[i], far1[i])) { bad++; const d = Math.abs(far1[i] - far0[i]); if (d >= worst) { worst = d; wAt = [RINGS[(i / 360) | 0], i % 360]; } }
+  gate('far field untouched (r >= 300)', bad === 0, { points: far0.length, differ: bad, maxDiff: +worst.toFixed(3), at: wAt });
+}
 // the skiff (spec §5)
 const sk = { raft: Math.hypot(ws[0].x, ws[0].z), bed: Math.hypot(ws[0].x - bed.x, ws[0].z - bed.z) };
 gate('skiff within 130 u of the raft, outside her arena', sk.raft <= 130 && sk.bed >= 57, { at: out.skiff, raft: +sk.raft.toFixed(1), bed: +sk.bed.toFixed(1) });
@@ -113,6 +136,7 @@ gate('skiff in its window', win && win.length >= 4 && rel >= win[2] - 0.5 && rel
 // the field is today's, bit for bit; and they do raise the relief
 {
   const ko = ROWS.shape && ROWS.shape.uplands && ROWS.shape.uplands.keepOff, pts = [];
+  let apronPts = 0;
   if (ko) {
     const caps = [];   // [ax, az, bx, bz, r0]
     if (ko.crack) caps.push([F0.cx - F0.dx * F0.halfLen, F0.cz - F0.dz * F0.halfLen, F0.cx + F0.dx * F0.halfLen, F0.cz + F0.dz * F0.halfLen, ko.crack[0]]);
@@ -126,6 +150,12 @@ gate('skiff in its window', win && win.length >= 4 && rel >= win[2] - 0.5 && rel
         if (Math.hypot(x - c[0] - vx * t, z - c[1] - vz * t) < r - 0.01) pts.push(x, z);
       }
     }
+    // (Ruling 16) and the crack's apron itself, asserted directly (spec §2: "exactly 0 near the crack and apron"): every
+    // 0.5 u grid point with fissureDist < 14, the throat included, over the apron's bounding box
+    const ar = Math.sqrt(F0.apronR2), a0 = pts.length;
+    for (let z = Math.floor((F0.cz - ar) * 2) / 2; z <= F0.cz + ar; z += 0.5) for (let x = Math.floor((F0.cx - ar) * 2) / 2; x <= F0.cx + ar; x += 0.5)
+      if (fissureDist(x, z, 0) < 14) pts.push(x, z);
+    apronPts = (pts.length - a0) / 2;
   }
   // (Ruling 1) the two sds are taken over an OPEN-FLOOR PROXY, not the whole +-300 grid, whose sd the rim's walls
   // dominate: the 2 u grid's points within r 170 of the origin and off the crack's apron (fissureDist >= 14), the same
@@ -140,7 +170,7 @@ gate('skiff in its window', win && win.length >= 4 && rel >= win[2] - 0.5 && rel
   let bad = 0; for (let i = 0; i < pts.length; i += 2) if (T.terrainH(pts[i], pts[i + 1], 0) !== upl[i / 2]) bad++;
   const sd0 = sdOF();
   rows(true);
-  gate('uplands exact in the keep-off', !!ko && pts.length > 0 && bad === 0, { points: pts.length / 2, differ: bad });
+  gate('uplands exact in the keep-off', !!ko && pts.length > 0 && apronPts > 0 && bad === 0, { points: pts.length / 2, apron: apronPts, differ: bad });
   gate('uplands raise the relief', !!ko && sdU > sd0 + 0.5, { sdUplandsOnly: +sdU.toFixed(2), sdToday: +sd0.toFixed(2), n: OF.length / 2 });
 }
 let hard = 0;
@@ -151,5 +181,7 @@ for (const [n, p, v, h] of g) { if (!p && h) hard++; console.log((p ? 'PASS ' : 
   for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) { const k = j * N + i; if (CL[k] !== 3) continue; sn++;
     const gx = (H[k + 1] - H[k - 1]) / 2, gz = (H[k + N] - H[k - N]) / 2; if (1 / Math.sqrt(1 + gx * gx + gz * gz) < cmax) s355++; }
   console.log('INFO open floor steeper than the gait clamp (35.5 deg):', +(s355 / sn * 100).toFixed(1) + '%'); }
+// (Ruling 14) the uplands' added mesh error OUTSIDE the hollow's footprint (S6 gates only inside it): kept visible
+if (s6out) console.log('INFO S6 outside the footprint (uplands only, not gated):', JSON.stringify(s6out));
 const ji = process.argv.indexOf('--json'); if (ji > 0) writeFileSync(process.argv[ji + 1], JSON.stringify({ out, gates: g }, null, 1));
 process.exit(hard ? 1 : 0);
