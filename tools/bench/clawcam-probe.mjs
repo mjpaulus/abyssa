@@ -201,6 +201,83 @@ if (MODE === 'framing' || MODE === 'all') {
   writeFileSync(`${OUT}/clawcam-${TAG}.json`, JSON.stringify({ summary, rows: allRows }, null, 1));
 }
 
+// ---- GROUNDED: her asleep, and awake but not threatening him: 300 frames each, the lens must be the on:0 lens
+// bit for bit (the look-up exactly 0 and the lens quaternion identical to the one before it) ----
+if (MODE === 'grounded' || MODE === 'all') {
+  summary.grounded = await c.ev(`(async () => {
+    const L = window.__sl, B = window.__bench, X = window.__ccp, CC = window.__clawcam;
+    const book = () => { const out = { n: 0, bad: 0, tiltMax: 0, thEmax: 0, why: {} };
+      B.step(300, () => { X.keep(); const st = CC ? CC.state() : null, q = window.camera.quaternion, p = st ? st.qPre : q;
+        out.n++; out.thEmax = Math.max(out.thEmax, L.threatE || 0);
+        if (st) { out.tiltMax = Math.max(out.tiltMax, st.tilt); out.why[st.why] = (out.why[st.why] || 0) + 1; }
+        if (!(q.x === p.x && q.y === p.y && q.z === p.z && q.w === p.w) || (st && st.tilt !== 0)) out.bad++; }, { render: true });
+      out.thEmax = +out.thEmax.toFixed(3); return out; };
+    await B.setup('z0b');
+    if (L.hold) window.__lev.cmd('hold');
+    X.place(24, 0);
+    const asleep = Object.assign({ dormant: !!L.dormant }, book());
+    window.__lev.cmd('wake');
+    X.place(70, 0);
+    B.step(60 * 9, i => { X.keep(); if (i % 60 === 0) X.place(70, 0); });
+    const far = Object.assign({ dormant: !!L.dormant, standE: +L.standE.toFixed(2) }, book());
+    // up, held with her threat at 0, and Sal stood in her face (24 u: where she hammers when she hunts him)
+    B.step(600, () => { X.keep(); X.place(70, 0); if (L.threatE < 1e-3) return false; });
+    if (!L.hold) window.__lev.cmd('hold');
+    X.place(24, 0);
+    B.step(90, () => X.keep());
+    const near = Object.assign({ standE: +L.standE.toFixed(2) }, book());
+    window.__lev.cmd('hold');
+    return { asleep, far, near };
+  })()`);
+  console.log('grounded', JSON.stringify(summary.grounded));
+  for (const [k, g] of Object.entries(summary.grounded))
+    asserts.push({ name: `GROUNDED ${k}: 300 frames, the lens identical to on:0`, value: `${g.n - g.bad}/${g.n} identical, tilt max ${g.tiltMax}, threatE max ${g.thEmax}`, pass: g.n === 300 && g.bad === 0 });
+}
+
+// ---- MOUSE: a look input during the cock drops the look-up within one frame, and it stays off for that blow ----
+// (headless Chrome has no pointer lock, so the look input is written the way player.js's mousemove handler writes
+// it: player.yaw -= movementX * 0.0022, here a 4 px nudge, on one frame)
+if (MODE === 'mouse' || MODE === 'all') {
+  summary.mouse = await c.ev(`(async () => {
+    const L = window.__sl, B = window.__bench, X = window.__ccp, CC = window.__clawcam, P = window.player;
+    if (!CC) return { skipped: 'no __clawcam (main)' };
+    await B.setup('z0b');
+    if (L.hold) window.__lev.cmd('hold');
+    window.__lev.cmd('wake');
+    B.step(60 * 9);
+    X.place(34, 0);
+    B.step(60 * 12, i => { X.keep(); if (i % 30 === 0) X.place(34, 0); if (i > 200 && L.threatE > 0.99 && L.hamPh > 0.02 && L.hamPh < 0.05) return false; });
+    if (!L.hold) window.__lev.cmd('hold');
+    X.place(34, 0);
+    // into a cock, until the look-up is well up
+    let n = 0;
+    B.step(600, () => { X.keep(); n++; if (n > 60 && L.hamPh > 0.55 && L.hamPh < 0.72 && CC.state().tilt > 0.1) return false; }, { render: true });
+    const before = { ph: +L.hamPh.toFixed(3), tiltDeg: CC.state().tiltDeg };
+    P.yaw -= 4 * 0.0022;                                  // the look input
+    B.step(1, () => X.keep(), { render: true });
+    const r = X.row();
+    const frame1 = { ph: r.ph, tilt: r.tilt, pitch: r.pitch, pre: r.pre, same: r.q.every((v, i) => v === r.qPre[i]), off: CC.state().off };
+    // the rest of this blow (to 0.6 s after its landing): never re-engaged
+    let maxTilt = 0, frames = 0, landed = false, after = 0, prev = L.hamPh;
+    B.step(400, () => { X.keep(); frames++; const st = CC.state(); maxTilt = Math.max(maxTilt, st.tilt);
+      if (prev < 0.90 && L.hamPh >= 0.90) landed = true; if (landed) after++; prev = L.hamPh; if (landed && after > 36) return false; }, { render: true });
+    const rest = { frames, maxTilt, coolPassed: frames / 60 > 0.6 };
+    // ...and the next blow's look-up is back
+    let next = 0;
+    B.step(400, () => { X.keep(); next = Math.max(next, CC.state().tiltDeg); if (L.hamPh >= 0.80 && L.hamPh < 0.84) return false; }, { render: true });
+    window.__lev.cmd('hold');
+    return { before, frame1, rest, nextBlowTiltDeg: next };
+  })()`);
+  console.log('mouse', JSON.stringify(summary.mouse));
+  const m = summary.mouse;
+  if (!m.skipped) {
+    asserts.push({ name: 'MOUSE look-up up before the input (> 5 deg)', value: m.before.tiltDeg, pass: m.before.tiltDeg > 5 });
+    asserts.push({ name: 'MOUSE dropped within one frame (tilt 0, lens = on:0 lens)', value: `tilt ${m.frame1.tilt}, same ${m.frame1.same}`, pass: m.frame1.tilt === 0 && m.frame1.same });
+    asserts.push({ name: 'MOUSE stays off for that blow (to 0.6 s after its landing)', value: `max tilt ${m.rest.maxTilt} over ${m.rest.frames} frames`, pass: m.rest.maxTilt === 0 && m.rest.frames > 36 });
+    asserts.push({ name: 'MOUSE back on the next blow (> 5 deg by its hold)', value: m.nextBlowTiltDeg, pass: m.nextBlowTiltDeg > 5 });
+  }
+}
+
 writeFileSync(`${OUT}/clawcam-${TAG}-summary.json`, JSON.stringify(summary, null, 1));
 for (const a of asserts) console.log(`${a.pass ? 'PASS' : 'FAIL'}  ${a.name}: ${a.value}`);
 const cons = (await c.console()).filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
