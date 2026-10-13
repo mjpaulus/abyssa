@@ -1,10 +1,10 @@
 ---
 title: Sea-floor relief, home zone 0
-status: decision
+status: wip
 tags: world, terrain, zone 0, design
 updated: 2026-10-13
 ---
-Zone 0's floor is a flat table in a ring wall ("like a big pit"). The design adds uplands and a terraced hollow, with Velkath's lair at the deepest point. The spec is written and waits on Michael's review and two calls.
+Zone 0's floor is a flat table in a ring wall ("like a big pit"). It is being rebuilt with uplands and a terraced hollow, with Velkath's lair at the deepest point. Michael approved the spec, the plan and all three calls.
 
 ## Detail
 - Michael (2026-10-13): "the sea floor is all one level, like a big pit. Lets make that more dynamic but keep velkaths lair in the deepest part."
@@ -34,3 +34,4 @@ Zone 0's floor is a flat table in a ring wall ("like a big pit"). The design add
 
 ## Log
 - 2026-10-13 — Spec written and committed (e0be4de); waiting on Michael's review.
+- 2026-10-13 — Michael ruled. On the spec: "floor card looks good". After the offline trials amended it (f63542d: additive uplands; the hollow runs under the NE wall; the skiff's bearing window), on call 3 and the plan: "yes, accept the NE wall and build it". Plan docs/superpowers/plans/2026-10-13-seafloor-relief.md (14 tasks) is being built subagent-driven on branch `relief`. Moved decision -> wip.
