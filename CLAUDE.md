@@ -321,7 +321,13 @@ against explicit contracts and reviewed on return.
   (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never into the crack (`safeThrow`: its whole ~16-29 u slide clears the lip; from inside the lip of an OPEN crack it leans out of it); a slam
   tears once per 0.8 s; her back is a slick dome (no tear, he slides off); game.js `BOSSCAM` cranes
   the lens up 1.5 u and leans the look toward her belly/nearest dark ward while she is up within
-  30 u (drops on any mouse look). `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
+  30 u (drops on any mouse look). THE CLAW IN THE LENS (clawcam 2026-10-13, Michael: "add the camera look-up"): game.js
+  `CLAWCAM` / `clawFrame` tips the lens up (cap 25 deg) toward her major claw's palm while a real blow cocks and holds
+  (PH_COCK0..PH_SLAM0), his bonnet held in frame, down with the fall, back ~0.35 s after the landing; it is the lens's
+  LAST rotation (off = the grounded lens bit for bit). A hand on the mouse is not a look (Michael: "ignore small mouse
+  movements"): a blow drops it only past 5 deg net or 15 deg of looking about (`lookNet`/`lookPath`), or a sweep
+  through the cock's start. At 14-24 u straight ahead pitch alone cannot frame the claw (57-78 deg up); it frames it
+  at her 30-35 u standoff and off her flanks. `__clawcam`; probe `tools/bench/clawcam-probe.mjs`. `__slamLog` = what tore the dress. PAUSED, the sleeper stands still (LEV_IDLE).
   LIT WARDS BURN, THEY DON'T WASH (velfix 2026-10-12, brooder.js `BURN`): a lit ward's light takes a small share of
   the in-scatter (far more from 28 u), a warm glow fading near the lens replaces the fogged halo, the glyph burns gold
   (under unity with the lens 1.5-6 u from it), the light-up flash at half (less again up close), all easing to an ember
