@@ -412,7 +412,10 @@ against explicit contracts and reviewed on return.
   three rift openings; terrain is always present, a straight ascent pops through
   floors) → three sleeper silhouette passes keyed to DEPTH → surface → title card.
   `playEnding()` on window = debug jump.
-- `systems/physics.js` — Rapier WASM via CDN, degrades to no-ops if the CDN fails.
+- `systems/physics.js` — SEABED DEBRIS (primfix 2026-10-13): static loose stone in the house rock kit (flora.js
+  jamRockKit + rockMapSet), half-buried with silt drifts, laid from its own site stream (`seeds.debris`), kept off
+  the crack/her bed/wrecks/boulders. Rapier is GONE (its 120 dodecahedra bodies were vestigial and fell through
+  the floor); the module keeps the old initPhysics/switchZone contract for game.js.
 - `world/vents.js` — ZONE 1's identity: THE BOILER ROOM. 17 black smoker chimneys in
   4 clusters on the zone-1 seabed (deterministic seed 0xB01Ec0DE, rejection-sampled
   clear of both rifts), merged to ~6 draw calls; dark plume/shimmer particle streams,
@@ -683,7 +686,7 @@ orchestrator redoes it, not the agent.
 
 ### Boot / loading (roadmap/loading-and-hitches.md)
 The loader (index.html `window.__load`, fed by game.js's boot tail) does ALL first-time work
-before 100: zone 0 + the 5 ward lights (`enterZone(0, true)`), Rapier, props, every sculpted
+before 100: zone 0 + the 5 ward lights (`enterZone(0, true)`), the seabed debris, props, every sculpted
 set (`sculptedLedger()` in lib/assets.js), plant batches, audio prebake, `precompile()` at both
 sun-shadow states, then WARM FRAMES through sky -> refraction -> composer from six cameras.
 Hazards learned: (1) the render target bound at compile is part of the program key (none =
