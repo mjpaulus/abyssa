@@ -66,7 +66,7 @@ await c.ev(`(async () => {
     const cs = window.__crecam.state(), bs = window.__bosscam.state();
     const qPre = st && st.qPre ? st.qPre : cam.quaternion;
     const o = { ph: +L.hamPh.toFixed(4), impT: r3(L.impT < 9 ? L.impT : 9), thE: r3(L.threatE), cock: r3(L.cock), swing: r3(L.swing),
-      pitch: pitchOf(cam.quaternion), pre: pitchOf(qPre), tilt: st ? r3(st.tilt) : 0, k: st ? r3(st.k) : 0, gate: st ? r3(st.gate) : 0, why: st ? st.why : '',
+      pitch: pitchOf(cam.quaternion), pre: pitchOf(qPre), tilt: st ? st.tilt : 0, tgt: st ? r3(st.tgt) : 0, gate: st ? r3(st.gate) : 0, why: st ? st.why : '', off: st ? st.off : false,
       fov: r2(cam.fov), camD: cs.camDist, creU: cs.under, bossK: bs.k };
     for (const k in pts) o[k] = ndc(pts[k]);
     // (for the what-if: angles above the PRE-tilt forward)

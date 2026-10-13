@@ -15,6 +15,7 @@ import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './
 import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
 import { resolveBodyCols, BODY, bodyBlocked, bodyBlockedAhead, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
+import { PH_COCK0, PH_SLAM0 } from './entities/sleeper/brooderClaw.js';   // (clawcam) her hammer's cock and fall
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed, diverBladeTip } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
 import {
@@ -1233,6 +1234,109 @@ function bossFrame(dt) {
 }
 let calmPitchK = 0, calmPitchV = 0;
 window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift: +bossLift.toFixed(2), f: bossF.toArray().map(v => +v.toFixed(1)), calmPitch: +calmPitchK.toFixed(3) }) };
+// ---- THE CLAW IN THE LENS (clawcam 2026-10-13; Michael: "add the camera look-up"). Her hammer wound up OUT of the
+// follow lens: the player saw only the snap at the bottom of the frame. Measured with Sal still in front of her
+// (tools/bench/clawcam-probe.mjs, main): at the trembling hold her cocked palm hangs 57-60 deg above the lens's
+// forward at her standoff (33-35 u off a still Sal) and 60-78 deg at 14-24 u; in frame on 0% of the cock+hold frames
+// at every spot. So while a REAL blow is coming at him (she is up, awake, hunting him, threatE; the hammer between
+// PH_COCK0 and PH_SLAM0) the lens tips its look UP toward her major claw's palm: eased in over the cock, held through
+// the hold, brought down from the first frame of the fall on a critically damped spring (no overshoot, no bob), back
+// on the grounded aim ~0.35 s after the landing: an operator glancing up at the threat, then back to the man. An
+// EVENT: outside it the tilt is exactly 0 and the lens is the grounded lens bit for bit. It is the LAST rotation the
+// lens takes (after the lean, the roll and the yank's nod), about the horizontal right axis: pitch only, no yaw, the
+// boom and the lens position untouched, and __clawcam.state().qPre is exactly the lens without it.
+//   maxDeg      the cap. 12-15 was the starting guess; measured it frames NOTHING of her claw at any front spot. 25
+//               puts her wrist / finger on screen through the hold at her standoff and the palm on ~1/3 of the
+//               cock+hold there (main 0%)
+//   aimY        it takes only as much as puts the palm at this NDC height (the upper part of the frame)
+//   helmLo/Y    Sal stays in frame: his bonnet's lowest point (u over player.pos; the helmet spans 0.97-1.86
+//               standing, 0.87 at the bottom of a stride) is held at NDC y >= helmY. At 14-24 u this, not the cap,
+//               is the limit: 13-19 deg, and her claw (60+ deg up) stays out of frame there
+//   wIn/wOut    the spring (/s): in over the cock (0.83 s; slow enough to swallow the hold's tremble), out from the
+//               fall (11: ~2% of the tilt left 0.4 s after the landing)
+//   rNear/rFar  the range, x BOSSCAM.r: full to 36 u, gone by 42. (The brief named BOSSCAM.r, 30 u; un-held with Sal
+//               still she hunts him from 33-35 u (closeK stops her 2.05 R off), so 30 u switched it off exactly where
+//               she swings)
+// Not run: asleep, calmed, not up, not hunting him, under her shell (creUnder), in the open crack (throatOn), on deck
+// (deckK), her body behind the lens (BOSSCAM's front test), past rFar, paused. THE MOUSE OWNS THE VIEW: a look input
+// drops it at once and it stays off for that blow (and, as BOSSCAM's lean, none within BOSSCAM.cool s of a look).
+const CLAWCAM = { on: 1, maxDeg: 25, aimY: 0.7, helmLo: 0.85, helmY: -0.92, wIn: 5, wOut: 11, rNear: 1.2, rFar: 1.4 };
+let clawTilt = 0, clawTiltV = 0, clawTgt = 0, clawGate = 0, clawOff = false, clawYawWas = 0, clawPitchWas = 0, clawWhy = '';
+const _ccF = V3(), _ccR = V3(), _ccU = V3(), _ccP = V3(), _ccW = V3(), _ccQ = new THREE.Quaternion();
+const ccStep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+// the lens's own pitch frame (forward, horizontal right, up in the pitch plane); false if it looks straight up/down
+function ccFrame() {
+  _ccF.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _ccR.crossVectors(_ccF, camUpAxis);
+  const l = _ccR.length();
+  if (l < 1e-3) return false;
+  _ccR.multiplyScalar(1 / l); _ccU.crossVectors(_ccR, _ccF);
+  return true;
+}
+// the angle of _ccW (a vector from the lens) above the lens's forward, in its pitch plane
+const ccAbove = () => Math.atan2(_ccW.dot(_ccU), _ccW.dot(_ccF));
+function clawFrame(dt) {
+  const L = lev, C = CLAWCAM;
+  _ccQ.copy(camera.quaternion);   // the lens without the look-up: the on:0 lens
+  // the mouse owns the view: any look input drops the tilt this frame, and the blow is his
+  const looked = Math.abs(player.yaw - clawYawWas) > 1e-6 || Math.abs(player.pitch - clawPitchWas) > 1e-6;
+  clawYawWas = player.yaw; clawPitchWas = player.pitch;
+  const brooder = !!(L && L.kind === 'brooder' && L.pos && L.claws && L.claws.length);
+  const ph = brooder ? L.hamPh : 0, win = brooder && ph >= PH_COCK0 && ph < PH_SLAM0;
+  if (!win && ph < PH_COCK0) clawOff = false;                                   // the guard: the next blow is a new one
+  if ((looked || paused) && (win || clawTilt > 0)) clawOff = true;              // this one stays off
+  if (looked) { clawTilt = 0; clawTiltV = 0; }
+  let tgt = 0, gate = 0, why = '';
+  if (!C.on) why = 'off';
+  else if (!win) why = brooder ? 'phase' : 'none';
+  else if (clawOff) why = 'mouse';
+  else if (paused || L.dormant || L.calmed || !((L.standE || 0) > 0.5)) why = 'her';
+  else if (deckK > 0 || throatOn) why = 'place';
+  else if (bossCool > 0) why = 'cool';
+  else {
+    const d = Math.hypot(L.pos.x - player.pos.x, L.pos.z - player.pos.z), r = BOSSCAM.r;
+    gate = ccStep(0.5, 0.9, L.threatE || 0) * (1 - ccStep(0.1, 0.5, creUnder)) * (1 - ccStep(C.rNear * r, C.rFar * r, d));
+    if (!(gate > 0)) { gate = 0; why = 'gate'; }
+    else if (!ccFrame()) { gate = 0; why = 'vertical'; }
+    else {
+      // BOSSCAM's front test, on her BODY (early in the cock her claw is over or behind the lens while she is ahead)
+      _ccW.set(L.pos.x, L.bodyY - 0.15 * L.R, L.pos.z).sub(camera.position);
+      const front = clamp((_ccW.dot(_ccF) / Math.max(_ccW.length(), 1e-3) + 0.15) / 0.55, 0, 1);
+      gate *= front * front * (3 - 2 * front);
+      if (!(gate > 0)) { gate = 0; why = 'behind'; }
+      else {
+        // her palm (the middle of the propodus: wrist to finger hinge; her pose step left these matrices current)
+        const c = L.claws[1] && L.claws[1].major ? L.claws[1] : L.claws[0];
+        _ccP.setFromMatrixPosition(c.pj.matrixWorld);
+        _ccW.setFromMatrixPosition(c.dj.matrixWorld).add(_ccP).multiplyScalar(0.5).sub(camera.position);
+        const need = ccAbove() - Math.atan(C.aimY * Math.tan(camera.fov * Math.PI / 360));
+        tgt = clamp(need, 0, C.maxDeg * Math.PI / 180) * gate;
+        why = 'on';
+      }
+    }
+  }
+  // SAL STAYS IN FRAME: the tilt that keeps his bonnet's lowest point at NDC y >= helmY (the target and the spring)
+  let allow = Infinity;
+  if (tgt > 0 || clawTilt > 0) {
+    if (ccFrame()) {
+      _ccW.set(player.pos.x, player.pos.y + C.helmLo, player.pos.z).sub(camera.position);
+      allow = Math.max(0, ccAbove() + Math.atan(-C.helmY * Math.tan(camera.fov * Math.PI / 360)));
+      if (tgt > allow) tgt = allow;
+    } else { tgt = 0; clawTilt = 0; clawTiltV = 0; }   // (a lens looking straight up or down has no pitch plane)
+  }
+  // critically damped (implicit: stable at any dt), in over the cock, out from the fall
+  const w = why === 'on' ? C.wIn : C.wOut, h = Math.min(dt, 0.05);
+  if (h > 0 && (tgt > 0 || clawTilt > 0 || clawTiltV !== 0)) {
+    clawTiltV = (clawTiltV + w * w * h * (tgt - clawTilt)) / (1 + 2 * w * h + w * w * h * h);
+    clawTilt += clawTiltV * h;
+  }
+  if (clawTilt > allow) { clawTilt = allow; if (clawTiltV > 0) clawTiltV = 0; }
+  if (clawTilt < 0) { clawTilt = 0; if (clawTiltV < 0) clawTiltV = 0; }
+  if (tgt === 0 && clawTilt < 1e-4 && Math.abs(clawTiltV) < 1e-3) { clawTilt = 0; clawTiltV = 0; }
+  clawTgt = tgt; clawGate = gate; clawWhy = why;
+  if (clawTilt > 0) camera.rotateOnWorldAxis(_ccR, clawTilt);   // (_ccR: the guard above framed the lens this frame)
+}
+window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone() }) };
 window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
@@ -2190,6 +2294,8 @@ function updateCamera(dt, t, fwd) {
   const fovRate = camKickPunch > 0 && wantFov > camFov ? 20 : 2.5;
   camFov += (wantFov - camFov) * Math.min(1, fovRate * dt);
   if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
+  // (clawcam) THE CLAW IN THE LENS: the look-up while her hammer cocks, the lens's last rotation (CLAWCAM)
+  clawFrame(dt);
   // DEV (look-dev stills): window.__camPin = { p: [x,y,z], t: [x,y,z] } pins the lens; nothing sets it in play
   const pin = window.__camPin;
   if (pin) { camera.position.fromArray(pin.p); camera.lookAt(pin.t[0], pin.t[1], pin.t[2]); }
