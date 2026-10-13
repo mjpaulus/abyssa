@@ -65,7 +65,14 @@ const SITES = [
     sleepers: null,                      // no overlay: LEVIATHAN_CFG untouched
     // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries no water, light,
     // floor, vents or grade of its own: every consumer reads null as "the shipped constant".
-    water: null, light: null, floor: null, shape: null, vents: null, grade: null,
+    water: null, light: null, floor: null, vents: null, grade: null,
+    // THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §2): zone 0's uplands, an additive
+    // term on today's noise (measured starting values, trial Q0), masked to exactly 0 off the crack, her two stations,
+    // the raft column and the raft -> station band
+    shape: {
+      uplands: { rbias: -0.10, ramp: 24, r3amp: 1.5, s2amp: 2.0, camp: 12,
+        keepOff: { crack: [35, 65], stations: [[89.7, 39.1], [43.5, 113.4]], station: [30, 55], raft: [25, 50], band: [20, 45] } }
+    },
     // THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §5): zone 0's skiff (the sonar) is
     // searched 100-140 u off riftPos(0), 30-75 deg counter-clockwise from the rift -> raft bearing (wrecks.js findSite's
     // window), on the raft-side terraces. 100 u keeps it >= 54.5 u from Velkath's lip and >= 26.8 u from her trail head

@@ -109,6 +109,40 @@ const th0 = Math.atan2(-F0.cz, -F0.cx), sa = Math.atan2(ws[0].z - F0.cz, ws[0].x
 let rel = (sa - th0) * 180 / Math.PI; rel = ((rel % 360) + 540) % 360 - 180;
 const win = (ROWS.wrecks && ROWS.wrecks.band && ROWS.wrecks.band[0]) || null;
 gate('skiff in its window', win && win.length >= 4 && rel >= win[2] - 0.5 && rel <= win[3] + 0.5 && sdist >= win[0] - 0.5 && sdist <= win[1] + 0.5, { rel: +rel.toFixed(1), d: +sdist.toFixed(1), win });
+// (Task 3) THE UPLANDS' MASK IS EXACT: with the uplands alone (no hollow), inside every keep-off capsule's inner radius
+// the field is today's, bit for bit; and they do raise the relief
+{
+  const ko = ROWS.shape && ROWS.shape.uplands && ROWS.shape.uplands.keepOff, pts = [];
+  if (ko) {
+    const caps = [];   // [ax, az, bx, bz, r0]
+    if (ko.crack) caps.push([F0.cx - F0.dx * F0.halfLen, F0.cz - F0.dz * F0.halfLen, F0.cx + F0.dx * F0.halfLen, F0.cz + F0.dz * F0.halfLen, ko.crack[0]]);
+    if (ko.stations && ko.station) for (const st of ko.stations) caps.push([st[0], st[1], st[0], st[1], ko.station[0]]);
+    if (ko.raft) caps.push([0, 0, 0, 0, ko.raft[0]]);
+    if (ko.band && ko.stations) caps.push([0, 0, ko.stations[0][0], ko.stations[0][1], ko.band[0]]);
+    for (const c of caps) {
+      const r = c[4], vx = c[2] - c[0], vz = c[3] - c[1], l2 = vx * vx + vz * vz;
+      for (let z = Math.min(c[1], c[3]) - r; z <= Math.max(c[1], c[3]) + r; z += 0.5) for (let x = Math.min(c[0], c[2]) - r; x <= Math.max(c[0], c[2]) + r; x += 0.5) {
+        let t = l2 > 0 ? ((x - c[0]) * vx + (z - c[1]) * vz) / l2 : 0; t = Math.min(1, Math.max(0, t));
+        if (Math.hypot(x - c[0] - vx * t, z - c[1] - vz * t) < r - 0.01) pts.push(x, z);
+      }
+    }
+  }
+  // (Ruling 1) the two sds are taken over an OPEN-FLOOR PROXY, not the whole +-300 grid, whose sd the rim's walls
+  // dominate: the 2 u grid's points within r 170 of the origin and off the crack's apron (fissureDist >= 14), the same
+  // point set for the uplands-only field and for today's. S1 stays the spec's measure of the relief.
+  const OF = [];
+  for (let j = 0; j < N; j += 2) for (let i = 0; i < N; i += 2) { const x = X0 + i, z = X0 + j; if (Math.hypot(x, z) < 170 && fissureDist(x, z, 0) >= 14) OF.push(x, z); }
+  const sdOF = () => { const v = []; for (let i = 0; i < OF.length; i += 2) v.push(T.terrainH(OF[i], OF[i + 1], 0)); const m = v.reduce((a, b) => a + b, 0) / v.length; return Math.sqrt(v.reduce((a, b) => a + (b - m) * (b - m), 0) / v.length); };
+  HOME.shape = ko ? { uplands: ROWS.shape.uplands } : null; HOME.wrecks = null; T.syncSite();
+  const upl = []; for (let i = 0; i < pts.length; i += 2) upl.push(T.terrainH(pts[i], pts[i + 1], 0));
+  const sdU = sdOF();
+  rows(false);
+  let bad = 0; for (let i = 0; i < pts.length; i += 2) if (T.terrainH(pts[i], pts[i + 1], 0) !== upl[i / 2]) bad++;
+  const sd0 = sdOF();
+  rows(true);
+  gate('uplands exact in the keep-off', !!ko && pts.length > 0 && bad === 0, { points: pts.length / 2, differ: bad });
+  gate('uplands raise the relief', !!ko && sdU > sd0 + 0.5, { sdUplandsOnly: +sdU.toFixed(2), sdToday: +sd0.toFixed(2), n: OF.length / 2 });
+}
 let hard = 0;
 for (const [n, p, v, h] of g) { if (!p && h) hard++; console.log((p ? 'PASS ' : h ? 'FAIL ' : 'MISS ') + n.padEnd(46), JSON.stringify(v)); }
 // INFO: the gait rig's pitch clamp is 35.5 deg (diver.js groundPitch); steeper planted soles sink by design. Reported so

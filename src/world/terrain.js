@@ -183,6 +183,48 @@ function syncSite() {
   set(SITE_PAL.uSiteGrav, fl && fl.grav);
   set(SITE_PAL.uSiteRock, fl && fl.rock);
   layIsles();
+  syncRelief(sh);
+}
+
+// ---- THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md; Michael 2026-10-13: "the sea
+// floor is all one level, like a big pit. Lets make that more dynamic but keep velkaths lair in the deepest part").
+// Zone-0 terms a site's shape row may carry (home is the only one that does). Null rows = the shipped field bit for
+// bit (tools/relief/validate.mjs: 3b526986). Keyed to FROZEN geometry only — FISSURE[0], the origin, the station
+// literals — never to bedAt()/velkathLair, which are placed after the terrain (the loop would close).
+// THE UPLANDS: today's massif / secondary-ridge / outcrop / continental noise, reused (heightAt computes it anyway),
+// with a mask bias of its own, ADDED on top and masked to exactly 0 off the places that matter. Overriding the
+// shipped knobs instead (the first draft) moved the crack's lips to 1.39 u and its throat floor 1.4 u (trial H7):
+// camp and s2amp act everywhere.
+let UPL = null;
+function keepOff(x, z, K) {
+  let m = 1;
+  for (let i = 0; i < K.length; i += 6) {
+    const ax = K[i], az = K[i + 1], vx = K[i + 2] - ax, vz = K[i + 3] - az, l2 = vx * vx + vz * vz;
+    let t = l2 > 0 ? ((x - ax) * vx + (z - az) * vz) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = x - ax - vx * t, dz = z - az - vz * t, d = Math.sqrt(dx * dx + dz * dz);
+    if (d <= K[i + 4]) return 0;
+    if (d < K[i + 5]) { const s = (d - K[i + 4]) / (K[i + 5] - K[i + 4]); m *= s * s * (3 - 2 * s); }
+  }
+  return m;
+}
+function uplandsAt(x, z, nReg, nBase, nM, nS2, nR3) {
+  const U = UPL, m = keepOff(x, z, U.K);
+  if (m <= 0) return 0;
+  let rk = c01(nReg * 2.2 + 0.5 + U.rbias); rk = rk * rk * (3 - 2 * rk);
+  return m * (nBase * U.camp + nM * U.ramp * rk + nS2 * U.s2amp * (0.30 + 0.70 * rk) + nR3 * U.r3amp * rk);
+}
+function capsules(ko, F) {
+  const K = [];
+  const add = (ax, az, bx, bz, r) => K.push(ax, az, bx, bz, r[0], r[1]);
+  if (ko.crack) add(F.cx - F.dx * F.halfLen, F.cz - F.dz * F.halfLen, F.cx + F.dx * F.halfLen, F.cz + F.dz * F.halfLen, ko.crack);
+  if (ko.stations && ko.station) for (const s of ko.stations) add(s[0], s[1], s[0], s[1], ko.station);
+  if (ko.raft) add(0, 0, 0, 0, ko.raft);
+  if (ko.band && ko.stations) add(0, 0, ko.stations[0][0], ko.stations[0][1], ko.band);
+  return Float64Array.from(K);
+}
+function syncRelief(sh) {
+  const u = sh && sh.uplands;
+  UPL = u ? { rbias: u.rbias, ramp: u.ramp, r3amp: u.r3amp, s2amp: u.s2amp, camp: u.camp, K: capsules(u.keepOff, FISSURE[0]), row: u } : null;
 }
 
 // Second ridgeline. Zero new triangles: the graded axisMap already samples out here.
@@ -278,17 +320,23 @@ function heightAt(x, z, zi, slabs) {
   const px = xs + gn(xs * 0.0042, zs * 0.0042) * P.warp;
   const pz = zs + gn(xs * 0.0042 + 41.7, zs * 0.0042 - 23.1) * P.warp;
 
-  // Continental base: broad basin/plateau shape.
-  let h = fbm2(px * P.cf, pz * P.cf, 3) * P.camp;
+  // Continental base: broad basin/plateau shape. (The raw noise values are kept in named
+  // locals: THE UPLANDS term, added after the lift below, reuses them rather than paying
+  // for the octaves twice.)
+  const nBase = fbm2(px * P.cf, pz * P.cf, 3);
+  let h = nBase * P.camp;
 
   // One regional mask drives both feature systems in opposition: uplifted massifs
   // where it is high, channelled lowland where it is low. Mixing them everywhere is
   // what turns ridged noise into mush.
-  let rk = c01(fbm2(px * 0.0028 + 9.1, pz * 0.0028 - 4.4, 2) * 2.2 + 0.5 + P.rbias);
+  const nReg = fbm2(px * 0.0028 + 9.1, pz * 0.0028 - 4.4, 2);
+  let rk = c01(nReg * 2.2 + 0.5 + P.rbias);
   rk = rk * rk * (3 - 2 * rk);
-  h += rmf(px * P.rf, pz * P.rf, P.roc) * P.ramp * rk;
+  const nM = rmf(px * P.rf, pz * P.rf, P.roc);
+  h += nM * P.ramp * rk;
   // Secondary ridges at 40-60m: without these the massifs above read as bare domes.
-  h += rmf(px * P.s2f + 13.7, pz * P.s2f + 4.2, 3) * P.s2amp * (0.30 + 0.70 * rk);
+  const nS2 = rmf(px * P.s2f + 13.7, pz * P.s2f + 4.2, 3);
+  h += nS2 * P.s2amp * (0.30 + 0.70 * rk);
 
   // Canyons / fissures: squared inverted ridges cut branching channels.
   const cv = rmf(px * P.cnf + 57.2, pz * P.cnf - 31.8, P.cnoc);
@@ -301,7 +349,8 @@ function heightAt(x, z, zi, slabs) {
   }
 
   // Outcrop rubble at ~15m: the smallest crests the mesh can still hold a silhouette for.
-  h += rmf(px * P.r3f + 71.3, pz * P.r3f - 29.6, 2) * P.r3amp * rk;
+  const nR3 = rmf(px * P.r3f + 71.3, pz * P.r3f - 29.6, 2);
+  h += nR3 * P.r3amp * rk;
 
   // Rubble and boulder-field lumps, then the finest scale the mesh can still resolve.
   h += fbm2(px * P.mf, pz * P.mf, 3) * P.mamp;
@@ -311,6 +360,7 @@ function heightAt(x, z, zi, slabs) {
   if (P.tamt > 0) h = terrace(h, P.tq, P.tamt * (P.tflat > 0 ? rk + P.tflat * (1 - rk) : rk));
 
   h += P.lift;
+  if (UPL && zi === 0) h += uplandsAt(x, z, nReg, nBase, nM, nS2, nR3);
   // Soft floor: canyons must not dig below the zone-change trigger plane. It sits ABOVE the
   // fissure carving on purpose: the throat is the one place meant to go deeper.
   if (h < 4) h = 4 + (h - 4) * 0.25;
