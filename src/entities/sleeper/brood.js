@@ -40,7 +40,8 @@ import { V3, clamp } from '../../lib/math.js';
 import { seededRand, maxAniso } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
 import { envTexDeep as envTex, camera } from '../../core.js';
-import { terrainH, terrainNormal } from '../../world/terrain.js';
+import { terrainH, terrainNormal, terrainMeshes } from '../../world/terrain.js';
+import { terrainSample, driftSkirt, leeOf } from '../../world/wrecks.js';
 import { fissureDist } from '../../world/fissureShape.js';
 import { emitDust } from '../../world/footfx.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -228,14 +229,15 @@ if (bskin) {
   objectNormal = dot(bnn, bd0) < 0.0 ? -bnn : bnn;
   bSkinP = bq0;
 }
+// (primfix) a spent casing is its own torn-skin geometry, turned to its own bearing (aSd.z)
+float bcs = cos(aSd.z), bsn = sin(aSd.z);
+if (bmode > 1.5 && bmode < 2.5) objectNormal = vec3(bcs * objectNormal.x + bsn * objectNormal.z, objectNormal.y, -bsn * objectNormal.x + bcs * objectNormal.z);
 vBN = objectNormal;`;
 const CL_VS_BEGIN = `
-vec3 bsc = vec3(1.0);
-if (bmode > 1.5 && bmode < 2.5) {
-  bsc = vec3(1.0, 0.42, 1.0);      // a spent casing: collapsed, a flat wrinkled skin
-  bc.y += 0.03 * brr * sin(uTime * 0.7 + aSd.x * 40.0);
-}
-vec3 transformed = bskin ? bc + bSkinP : bc + position * bsc * brr;
+vec3 bpos = position;
+// (primfix) a spent casing: an empty egg skin collapsed and torn (casingGeo), lying still on the silt
+if (bmode > 1.5 && bmode < 2.5) bpos = vec3(bcs * position.x + bsn * position.z, position.y, -bsn * position.x + bcs * position.z);
+vec3 transformed = bskin ? bc + bSkinP : bc + bpos * brr;
 {
   vec3 bwc = (modelMatrix * vec4(bc, 1.0)).xyz;
   float bdc = distance(bwc, cameraPosition);
@@ -294,7 +296,11 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
   bSpot = bB.x * smoothstep(0.26, 0.5, st) * bSee;
   bAlb *= 1.0 - 0.35 * bB.y * smoothstep(0.5, 0.9, st);           // the yolk
 } else if (bMode > 1.5 && bMode < 2.5) {
-  bAlb = vec3(0.30, 0.27, 0.22) * (0.8 + 0.4 * vBSd.x);
+  // (primfix) the empty chorion: thin, pale amber-grey (an old egg's shell with the colour gone out of
+  // it), silt-stained where it lies on the floor, the folds of the collapse in their own shade
+  float bLo = smoothstep(-0.16, 0.10, vBDir.y);
+  float bFold = 0.5 + 0.5 * sin(atan(vBDir.z, vBDir.x) * 5.0 + vBSd.x * 20.0 + vBDir.y * 9.0);
+  bAlb = mix(vec3(0.10, 0.075, 0.05), vec3(0.25, 0.19, 0.115), 0.25 + 0.6 * vBSd.x) * mix(0.55, 1.0, bLo) * mix(0.75, 1.0, bFold);
 } else {
   bAlb = clAlb(vBSd.y, vBSd.x);
   // the eyespot: a dark kidney inside the shell, on its own bearing per egg; eyed eggs only
@@ -310,7 +316,7 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
 bSpot = max(bSpot, uDbg.x);
 diffuseColor.rgb = bAlb * (1.0 - 0.93 * bSpot);`;
 const CL_FS_ROUGH = `
-roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.62 : bSkin > 0.5 ? mix(0.66, 0.36, smoothstep(0.25, 0.75, bH)) + 0.25 * bSpot : mix(0.14, 0.6, bSpot);`;
+roughnessFactor = bMode > 1.5 && bMode < 2.5 ? 0.48 : bSkin > 0.5 ? mix(0.66, 0.36, smoothstep(0.25, 0.75, bH)) + 0.25 * bSpot : mix(0.14, 0.6, bSpot);`;
 const CL_FS_NORMAL = `
 if (bSkin > 0.5) normal = normalize(normalMatrix * bLN);`;
 // translucency: the lantern lights the egg from INSIDE (its own in-scatter slot), wrapped
@@ -318,7 +324,7 @@ if (bSkin > 0.5) normal = normalize(normalMatrix * bLN);`;
 // the crowns carry it and the crevices do not
 const CL_FS_SSS = `
 #ifdef USE_FOG
-if (abyssaLampA.w > 0.0 && !(bMode > 1.5 && bMode < 2.5)) {
+if (abyssaLampA.w > 0.0) {
   vec3 bdl = abyssaLampA.xyz - vBW; float bd2 = dot(bdl, bdl);
   float bq = bd2 / max(abyssaLampAC.w * abyssaLampAC.w, 1.0), bwn = clamp(1.0 - bq * bq, 0.0, 1.0);
   vec3 bE = abyssaLampAC.rgb * (abyssaLampA.w * bwn * bwn / max(bd2, 6.0) * 0.3183);
@@ -327,7 +333,7 @@ if (abyssaLampA.w > 0.0 && !(bMode > 1.5 && bMode < 2.5)) {
   float bWrap = clamp((dot(bN, bL) + 0.75) / 1.75, 0.0, 1.0);
   float bNV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
   vec3 bIn = bAlb * vec3(1.6, 1.2, 0.85);
-  float bThk = bSkin > 0.5 ? mix(0.2, 1.0, smoothstep(0.15, 0.7, bH)) * mix(0.35, 1.0, smoothstep(0.0, ${(FIL * 1.6).toFixed(3)}, vBAO)) : 1.0;
+  float bThk = bSkin > 0.5 ? mix(0.2, 1.0, smoothstep(0.15, 0.7, bH)) * mix(0.35, 1.0, smoothstep(0.0, ${(FIL * 1.6).toFixed(3)}, vBAO)) : (bMode > 1.5 && bMode < 2.5 ? 0.3 : 1.0);   // (a spent skin: a thin membrane, the lantern through it)
   totalEmissiveRadiance += bIn * bE * bWrap * (0.30 + 0.70 * pow(bNV, 1.6)) * (1.0 - 0.9 * bSpot) * uSssK * bThk;
 }
 #endif`;
@@ -499,6 +505,169 @@ function couplingGeo(rnd) {
   return g;
 }
 
+// ---- THE TRAIL'S LEAVINGS, GENERATED (primfix 2026-10-13, reviews/primitives-audit.md items 2-4) ----
+const sst = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+// A SPENT CASING: an egg's empty skin (the chorion the larva tore out of), collapsed on the silt. A unit
+// dome slumped into a wrinkled dish (the crown fallen in below the wall), a ragged hatch torn in one side
+// with its flap folded down and out, the base pressed flat. Two-sided (the clutch program is
+// front-faced): every triangle again, reversed, a hair inside. ~380 tris; drawn by the clutch program
+// in its casing mode (aSd.w 2), turned per instance (aSd.z).
+let _geoK = null;
+function casingGeo() {
+  const NA = 12, NB = 6, pos = [], idx = [];
+  const tear = (th) => { const d = Math.atan2(Math.sin(th - 0.6), Math.cos(th - 0.6)); return Math.abs(d) < 0.55 + 0.12 * Math.sin(th * 7.0); };
+  for (let b = 0; b <= NB; b++) for (let a = 0; a <= NA; a++) {
+    const th = a / NA * TAU, ph = b / NB * Math.PI * 0.62;          // crown (b 0) down past the equator
+    const sy = Math.cos(ph), sr = Math.sin(ph);
+    const wr = 1 + 0.13 * Math.sin(th * 5 + b * 1.3) + 0.07 * Math.sin(th * 11 - b * 2.1);
+    let r = (0.18 + 0.95 * sr) * wr;
+    let y = sy > 0 ? 0.36 * sy * (1 - 0.82 * sy) : 0.2 * sy;          // the crown fallen in: a dish inside a wall
+    if (tear(th) && b < 5) { const f = 1 - b / 5; y -= 0.07 * f; r *= 1 + 0.32 * f; }   // the hatch's flap, folded out and down
+    y += 0.025 * Math.sin(th * 9 + b * 2.7);
+    pos.push(Math.cos(th) * r, y - 0.02, Math.sin(th) * r);
+  }
+  for (let b = 0; b < NB; b++) for (let a = 0; a < NA; a++) {
+    const i0 = b * (NA + 1) + a, i1 = i0 + 1, i2 = i0 + NA + 1, i3 = i2 + 1;
+    const th = (a + 0.5) / NA * TAU;
+    if (tear(th) && b < 2) continue;                                  // the hole itself
+    idx.push(i0, i2, i1, i1, i2, i3);
+  }
+  const nv = pos.length / 3;
+  for (let i = 0; i < nv; i++) pos.push(pos[i * 3] * 0.96, pos[i * 3 + 1] - 0.012, pos[i * 3 + 2] * 0.96);
+  const n0 = idx.length;
+  for (let i = 0; i < n0; i += 3) idx.push(idx[i] + nv, idx[i + 2] + nv, idx[i + 1] + nv);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  // the outer skin must face out (up): flip the whole winding if the crown's normal points down
+  if (g.attributes.normal.getY(0) < 0) { const I = g.index.array; for (let i = 0; i < I.length; i += 3) { const t = I[i + 1]; I[i + 1] = I[i + 2]; I[i + 2] = t; } g.computeVertexNormals(); }
+  return g;
+}
+// THE MOULT: her own carapace, shed. The dorsal shell only (a moult is open beneath), her lathe at low
+// resolution (brooderGeo shellAt / rimR; the uv her shell's planar top, so her own carapace maps lie on
+// its scutes), SPLIT DOWN THE BACK: the seam runs from the rear margin in toward the crown and the halves
+// have sprung apart along it, its lips ragged; the margin chipped, the dome slumped and dented. Vertex
+// colour weathers the maps: grime, silt on the upward faces and low on the dome, lime crust in patches on
+// the old scutes, the lip's underside and the torn edges dark.
+const MOULT = { COLS: 128, ROWS: 36, RIM: 6 };
+function moultGeo(rnd) {
+  const { COLS, ROWS, RIM } = MOULT, NR = ROWS + RIM;
+  const sh = {}, pos = [], uv = [], idx = [], edge = [];
+  const BACK = -Math.PI / 2, ph = rnd() * 10, ph2 = rnd() * 10;
+  const gapA = rho => rho < 0.2 ? 0 : 0.05 + 0.3 * Math.pow((rho - 0.2) / 0.8, 1.2);
+  for (let i = 0; i <= NR; i++) {
+    const rim = i > ROWS, k = rim ? (i - ROWS) / RIM : 0;
+    const rho = rim ? 1 : 0.004 + 0.996 * Math.pow(i / ROWS, 0.85);
+    const gp = gapA(rho);
+    for (let j = 0; j <= COLS; j++) {
+      const t = j / COLS, lip = j === 0 ? 1 : j === COLS ? -1 : 0;
+      const rag = lip && gp > 0 ? lip * (0.03 * Math.sin(i * 1.9 + ph) + 0.02 * Math.sin(i * 4.7 + ph2)) : 0;
+      const th = BACK + gp + t * (TAU - 2 * gp) + rag;
+      const c = Math.cos(th), s = Math.sin(th), rr = G.rimR(th);
+      const chip = 1 - 0.08 * sst(0.7, 1, rho) * Math.max(0, Math.sin(th * 6 + ph) * Math.sin(th * 2.7 + ph2 * 1.3));
+      let x, y, z;
+      if (!rim) { x = c * rr * rho * chip; z = s * rr * rho * chip; y = G.shellAt(x, z, sh).h; }
+      else {
+        const yE = G.shellAt(c * rr * 0.9999 * chip, s * rr * 0.9999 * chip, sh).h;
+        const rh = 1 + 0.015 * Math.sin(k * Math.PI) - 0.12 * sst(0.25, 1, k);
+        x = c * rr * rh * chip; z = s * rr * rh * chip;
+        y = yE * (1 - k) - 0.06 * Math.sin(k * Math.PI / 2);
+      }
+      uv.push(x * 0.5 + 0.5, z * 0.5 + 0.5);
+      const rear = sst(0.05, 0.95, -z), side = x >= 0 ? 1 : -1;
+      x += side * rear * (0.09 + 0.1 * Math.abs(x));                     // the halves sprung apart toward the rear
+      y = y * 0.9 - rear * 0.04 * Math.abs(x) - 0.024 * Math.max(0, Math.sin(x * 8 + ph) * Math.sin(z * 6.5 - ph2));   // slumped, dented
+      pos.push(x, y, z);
+      edge.push(lip && gp > 0 ? 1 : 0, rim ? k : 0);
+    }
+  }
+  for (let i = 0; i < NR; i++) for (let j = 0; j < COLS; j++) {
+    const a = i * (COLS + 1) + j, b = a + COLS + 1;
+    idx.push(a, a + 1, b, b, a + 1, b + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const P = g.attributes.position, N = g.attributes.normal, C = new Float32Array(P.count * 3);
+  for (let v = 0; v < P.count; v++) {
+    const x = P.getX(v), y = P.getY(v), z = P.getZ(v), ny = N.getY(v), torn = edge[v * 2], k = edge[v * 2 + 1];
+    const mot = 0.5 + 0.5 * Math.sin(x * 5.3 + ph) * Math.sin(z * 4.1 + ph2);
+    let r = 0.6 + 0.32 * mot, gg = r, b = r * 0.97;
+    const up = sst(0.35, 0.92, ny);
+    const crust = up * sst(0.45, 0.8, 0.5 + 0.5 * Math.sin(x * 11 + z * 7 + ph) * Math.sin(z * 9.5 - x * 3 + ph2));
+    r = r + (1.5 - r) * crust * 0.75; gg = gg + (1.45 - gg) * crust * 0.75; b = b + (1.22 - b) * crust * 0.75;
+    const silt = up * (0.35 + 0.65 * sst(0.16, 0.02, y));
+    r = r + (1.3 - r) * silt * 0.6; gg = gg + (1.27 - gg) * silt * 0.6; b = b + (1.12 - b) * silt * 0.6;
+    const dk = (1 - 0.65 * k) * (1 - 0.35 * torn);
+    C[v * 3] = r * dk; C[v * 3 + 1] = gg * dk; C[v * 3 + 2] = b * dk;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+  g.userData.rim0 = (ROWS - 1) * (COLS + 1);
+  return g;
+}
+// A PRINT: a leg tip pressed into the silt. A pointed oval (the dactyl's tip toward the walk), its floor
+// dished and shadowed, the silt shoved up round it in a lip (highest behind: the push-off), the outer ring
+// a hair under the seabed so the seam is buried. In the terrain's own vertex encoding (wrecks.js
+// terrainSample: r cavity AO, g rock bias, b height) on its own material: it IS seabed, lit like it.
+const PU = 10, PV = 8;
+const _tcol = [0, 0, 0];
+function printGeo(zi, cx, cz, yaw, sc, wob) {
+  const L0 = 0.74 * sc, W0 = 0.43 * sc, lipH = 0.04 + 0.045 * sc, EXT = 1.5;
+  const fx = Math.sin(yaw), fz = Math.cos(yaw), rx = Math.cos(yaw), rz = -Math.sin(yaw);
+  const nv = (PU + 1) * (PV + 1), pos = new Float32Array(nv * 3), col = new Float32Array(nv * 3), idx = [];
+  for (let i = 0; i <= PU; i++) for (let j = 0; j <= PV; j++) {
+    const u = (i / PU * 2 - 1) * EXT, v = (j / PV * 2 - 1) * EXT;
+    const wv = 1 - 0.4 * Math.max(0, u);
+    const d = Math.hypot(u, v / Math.max(0.3, wv)) * (1 + 0.07 * Math.sin(Math.atan2(v, u) * 3 + wob));
+    const x = cx + fx * u * L0 + rx * v * W0, z = cz + fz * u * L0 + rz * v * W0;
+    const hm = terrainSample(zi, x, z, _tcol);
+    const back = 1 + 0.7 * Math.max(0, -u);
+    let y, ao = 1;
+    if (d < 1) { y = hm + 0.02 + lipH * back * sst(0.5, 1, d); ao = 0.3 + 0.62 * sst(0.05, 0.98, d); }
+    else if (d < 1.45) { const q = (d - 1) / 0.45; y = hm + 0.02 + lipH * back * (1 - sst(0, 1, q)) - 0.05 * sst(0.7, 1, q); ao = 1.07 - 0.07 * q; }
+    else y = hm - 0.03;
+    const o = (i * (PV + 1) + j) * 3;
+    pos[o] = x; pos[o + 1] = y; pos[o + 2] = z;
+    col[o] = _tcol[0] * ao; col[o + 1] = _tcol[1]; col[o + 2] = _tcol[2];
+  }
+  for (let i = 0; i < PU; i++) for (let j = 0; j < PV; j++) {
+    const a = i * (PV + 1) + j, b = a + PV + 1;
+    idx.push(a, a + 1, b, b, a + 1, b + 1);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  const ci = (Math.round(PU / 2) * (PV + 1) + Math.round(PV / 2));
+  if (g.attributes.normal.getY(ci) < 0) { const I = g.index.array; for (let i = 0; i < I.length; i += 3) { const t = I[i + 1]; I[i + 1] = I[i + 2]; I[i + 2] = t; } g.computeVertexNormals(); }
+  return g;
+}
+// merge terrain-encoded pieces (position, normal, color, index) into one geometry
+function mergeSeabed(parts) {
+  let nv = 0, ni = 0;
+  for (const g of parts) { nv += g.attributes.position.count; ni += g.index.count; }
+  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), col = new Float32Array(nv * 3), idx = new Uint32Array(ni);
+  let vo = 0, io = 0;
+  for (const g of parts) {
+    pos.set(g.attributes.position.array, vo * 3); nor.set(g.attributes.normal.array, vo * 3); col.set(g.attributes.color.array, vo * 3);
+    const ix = g.index.array;
+    for (let i = 0; i < ix.length; i++) idx[io + i] = ix[i] + vo;
+    vo += g.attributes.position.count; io += ix.length;
+    g.dispose();
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.computeBoundingSphere();
+  return geo;
+}
+
 // the trail's found lines, once each (game.js drops any still queued when she wakes: L.findLines)
 const FIND = {
   tracks: 'TRACKS IN THE SILT. MANY LEGS, AND HEAVY.',
@@ -512,6 +681,7 @@ export function makeBrood(L, idx, trailFrom) {
   const grp = L.grp, R = L.R;
   const rnd = seededRand(0xB700D + idx * 131 + Math.round(trailFrom.x * 7 + trailFrom.z * 13));
   if (!_geoN) { _geoN = sphere(1); _geoC = sphere(4); _geoS = strandGeo(); }
+  if (!_geoK) _geoK = casingGeo();
   const B = {
     t: 0, seated: false, st: 0, fanT: 4,
     found: { tracks: false, shells: false, boot: false, coupling: false, clutch: false, ridge: false },
@@ -793,36 +963,93 @@ export function makeBrood(L, idx, trailFrom) {
     _v.subVectors(trailFrom, to).setY(0).normalize();
     B.shellsAt.copy(to).addScaledVector(_v, 34);
     B.shellsAt.y = terrainH(B.shellsAt.x, B.shellsAt.z, idx);
-    // THE SHED SHELL: a younger Velkath's carapace (her own lathe at low resolution), pale
-    // as a lantern glass, split along the back, half in the silt
+    // (primfix) the old shell and casing draws, spent so the relics after them stay bit-identical;
+    // the moult, the casings and the prints draw from the trail's own stream (tr)
+    for (let k = 0; k < 3; k++) rnd();
+    for (let i = 0; i < CASE_N; i++) { rnd(); rnd(); if (i >= CASE_N * 0.6) rnd(); if (rnd() < 0.1) rnd(); rnd(); rnd(); rnd(); }
+    const tr = seededRand(0x7EA11 + idx * 977 + Math.round(trailFrom.x * 3 + trailFrom.z * 5));
+    const seabed = [];   // terrain-encoded pieces, drawn as ONE seabed mesh: the moult's drift and the prints
+    const s = R * 0.42, fpS = new Float32Array(28);
+    const bankH = a => 0.42 * (0.4 + 0.6 * leeOf(a)), bankW = a => 1.9 * (0.5 + 0.8 * leeOf(a));
+    // THE SHED SHELL (primfix): her own moult (moultGeo) on her carapace maps, split down the back,
+    // weathered, half in the silt: seated so its whole margin lies a hand under the drawn floor (no rim
+    // floats, whatever the slope), the silt drifted over its margin, deeper on the lee
     {
-      const mg = G.carapaceGeo(72, 22, 6);
-      const mat = registerPaint(new THREE.MeshStandardMaterial({ color: 0xb9b19c, vertexColors: true, roughness: 0.7, metalness: 0, envMap: envTex, envMapIntensity: 0.3, side: THREE.DoubleSide }));
-      mat.customProgramCacheKey = () => 'brood|molt';
+      const mg = moultGeo(tr);
+      const maps = G.carapaceMaps();
+      const mat = registerPaint(new THREE.MeshStandardMaterial({
+        map: maps.map, normalMap: maps.normalMap, roughnessMap: maps.roughnessMap, normalScale: new THREE.Vector2(1, 1),
+        roughness: 1, metalness: 0, vertexColors: true, envMap: envTex, envMapIntensity: 0.3, side: THREE.DoubleSide
+      }));
+      mat.customProgramCacheKey = () => 'brood|moult';
       const molt = new THREE.Mesh(mg, mat);
-      const s = R * 0.42;
       molt.scale.set(s, s * 0.8, s);
-      const yaw = rnd() * TAU;
-      molt.rotation.set(0.18 * (rnd() - 0.5), yaw, 0.32 + 0.1 * rnd());
-      molt.position.set(B.shellsAt.x, B.shellsAt.y - s * 0.05, B.shellsAt.z);
+      // lying WITH the ground under it (its broad slope), a little askew
+      _n.copy(terrainNormal(B.shellsAt.x, B.shellsAt.z, idx, s * 0.6));
+      // its split back turned to the trail he comes in by (the first thing he sees of it), a little askew
+      const yawM = Math.atan2(B.shellsAt.x - trailFrom.x, B.shellsAt.z - trailFrom.z) + (tr() - 0.5) * 0.9;
+      _q.setFromUnitVectors(_up, _n).multiply(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.08 * (tr() - 0.5), yawM, 0.04 + 0.05 * tr(), 'YXZ')));
+      molt.quaternion.copy(_q);
+      molt.position.set(B.shellsAt.x, terrainSample(idx, B.shellsAt.x, B.shellsAt.z), B.shellsAt.z);
+      molt.updateMatrix();
+      const P = mg.attributes.position;
+      let lift = -1e9;
+      for (let v = mg.userData.rim0; v < P.count; v++) {
+        _a.fromBufferAttribute(P, v).applyMatrix4(molt.matrix);
+        lift = Math.max(lift, _a.y - terrainSample(idx, _a.x, _a.z));
+        const ex = _a.x - B.shellsAt.x, ez = _a.z - B.shellsAt.z;
+        const bi = Math.floor((Math.atan2(ez, ex) / TAU + 1) % 1 * fpS.length) % fpS.length;
+        fpS[bi] = Math.max(fpS[bi], Math.hypot(ex, ez));
+      }
+      molt.position.y -= lift + 0.06;
+      for (let k = 0; k < fpS.length * 2; k++) { const b = k % fpS.length; if (!fpS[b]) fpS[b] = fpS[(b + fpS.length - 1) % fpS.length]; }
+      for (let b = 0; b < fpS.length; b++) if (!fpS[b]) fpS[b] = s;
       molt.castShadow = molt.receiveShadow = true;
       grp.add(molt);
       B.molt = molt;
+      seabed.push(driftSkirt(idx, B.shellsAt.x, B.shellsAt.z, fpS, a => bankH(a / fpS.length * TAU), a => bankW(a / fpS.length * TAU), 0.9, 4));
     }
-    // SPENT CASINGS: the hatched eggs' skins, collapsed, drifting on the silt round the shell
-    // and thinning out along the trail in toward her
+    // the drift's height over the floor at (x, z) (driftSkirt's own profile), so what lies on it lies ON it
+    const onBank = (x, z) => {
+      const ex = x - B.shellsAt.x, ez = z - B.shellsAt.z, th = Math.atan2(ez, ex), rad = Math.hypot(ex, ez);
+      const R0 = fpS[Math.floor((th / TAU + 1) % 1 * fpS.length) % fpS.length], span = R0 * 0.1 + bankW(th), s0 = R0 * 0.1 / span;
+      const q = clamp(((rad - R0 * 0.9) / span - s0) / (1 - s0), 0, 1);
+      if (rad > R0 * 0.9 + span) return 0;
+      return Math.max(0, bankH(th) * (1 - q) * (1 - q) * (1 - 0.35 * q) * (1 + 0.12 * Math.sin(th * 5 + rad)) - 0.03);
+    };
+    // SPENT CASINGS (primfix): the hatched eggs' empty skins (casingGeo, the clutch program's casing mode:
+    // thin, pale, lantern-lit through), torn and collapsed, lying ON the silt. Fewer, in CLUMPS banked
+    // against the shed shell's margin (most on its lee, where the current piles them), and strays out along
+    // the trail in toward her, thinning.
     {
-      const g = beadSet(_geoN, CASE_N, false), P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, Sd = g.attributes.aSd.array;
-      const rw = RB * R * 1.7;            // (collapsed skins lie wider than the eggs were)
-      for (let i = 0; i < CASE_N; i++) {
-        let x, z;
-        if (i < CASE_N * 0.6) { const a = rnd() * TAU, r = Math.pow(rnd(), 0.6) * 9; x = B.shellsAt.x + Math.cos(a) * r; z = B.shellsAt.z + Math.sin(a) * r; }
-        else { const f = rnd(); x = B.shellsAt.x + (to.x - B.shellsAt.x) * f * 0.8 + (rnd() - 0.5) * 6; z = B.shellsAt.z + (to.z - B.shellsAt.z) * f * 0.8 + (rnd() - 0.5) * 6; }
-        const y = terrainH(x, z, idx) + rw * 0.35 + (rnd() < 0.1 ? 0.3 + rnd() * 0.8 : 0);
-        const o = i * 4;
-        P0[o] = P1[o] = x; P0[o + 1] = P1[o + 1] = y; P0[o + 2] = P1[o + 2] = z; P0[o + 3] = P1[o + 3] = rw * (0.7 + 0.5 * rnd());
-        Sd[o] = rnd(); Sd[o + 1] = 1; Sd[o + 2] = rnd() * TAU; Sd[o + 3] = 2;
+      const NC = 240;
+      const g = beadSet(_geoK, NC, false), P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, Sd = g.attributes.aSd.array;
+      const rw = RB * R;                   // an egg's radius (0.039 u); an empty skin (casingGeo ~1.2 wide) lies 1-1.9x that
+      let m = 0;
+      const put = (x, z, r) => {
+        if (m >= NC || fissureDist(x, z, idx) < 3) return;
+        const y = terrainSample(idx, x, z) + onBank(x, z) + r * 0.05;
+        const o = m * 4;
+        P0[o] = P1[o] = x; P0[o + 1] = P1[o + 1] = y; P0[o + 2] = P1[o + 2] = z; P0[o + 3] = P1[o + 3] = r;
+        Sd[o] = tr(); Sd[o + 1] = 1; Sd[o + 2] = tr() * TAU; Sd[o + 3] = 2;
+        m++;
+      };
+      for (let c = 0; c < 15; c++) {
+        let a = tr() * TAU;
+        if (leeOf(a) < 0.3 && tr() < 0.65) a = 0.9 + (tr() - 0.5) * 2.4;
+        const bi = Math.floor((a / TAU % 1 + 1) % 1 * fpS.length) % fpS.length, d = fpS[bi] * (0.98 + 0.2 * tr());
+        const cx = B.shellsAt.x + Math.cos(a) * d, cz = B.shellsAt.z + Math.sin(a) * d;
+        const nk = 5 + Math.floor(tr() * 10), cr = 0.18 + 0.4 * tr();
+        for (let k = 0; k < nk; k++) { const aa = tr() * TAU, r2 = Math.sqrt(tr()) * cr; put(cx + Math.cos(aa) * r2, cz + Math.sin(aa) * r2, rw * (1.1 + 0.8 * tr())); }
       }
+      const tdx = to.x - B.shellsAt.x, tdz = to.z - B.shellsAt.z, tdl = Math.hypot(tdx, tdz) || 1;
+      for (let guard = 0; m < NC && guard < NC * 4; guard++) {
+        const f = Math.pow(tr(), 1.6) * 0.8, lat = (tr() - 0.5) * 5;
+        const x = B.shellsAt.x + tdx * f - tdz / tdl * lat, z = B.shellsAt.z + tdz * f + tdx / tdl * lat;
+        const pair = tr() < 0.4 ? 2 : 1;
+        for (let k = 0; k < pair; k++) put(x + (tr() - 0.5) * 0.3, z + (tr() - 0.5) * 0.3, rw * (1.0 + 0.7 * tr()));
+      }
+      g.instanceCount = m;
       g.boundingSphere = new THREE.Sphere(new THREE.Vector3(B.shellsAt.x, B.shellsAt.y, B.shellsAt.z), Math.hypot(to.x - B.shellsAt.x, to.z - B.shellsAt.z) + 12);
       const cs = new THREE.Mesh(g, matN);
       cs.castShadow = false;
@@ -863,14 +1090,10 @@ export function makeBrood(L, idx, trailFrom) {
         place(couplingGeo(rnd), B.couplingAt, rnd() * TAU, 0.25, -0.07)
       ];
     }
-    // the trail: rows of paired pits, many legs, from the open seabed in to her
-    const pitGeo = new THREE.CircleGeometry(0.55, 10);
-    pitGeo.rotateX(-Math.PI / 2);
-    pitGeo.scale(1, 1, 1.6);
-    const pits = new THREE.InstancedMesh(pitGeo, new THREE.MeshBasicMaterial({
-      color: 0x000000, transparent: true, opacity: 0.32, depthWrite: false
-    }), 160);
-    pits.renderOrder = -1;
+    // THE TRACKS (primfix): rows of paired prints, many legs, from the open seabed in to her. Each leg
+    // tip's print is pressed into the silt (printGeo: a dished, shadowed floor and the silt shoved up round
+    // it), pointing along the trail's own heading, drawn as seabed with the moult's drift in one mesh
+    // (the terrain's own material: lit by the lantern, caustics and ripples as the floor is).
     let n = 0;
     const steps = 40;
     const dx = to.x - trailFrom.x, dz = to.z - trailFrom.z, dl = Math.hypot(dx, dz) || 1;
@@ -881,17 +1104,25 @@ export function makeBrood(L, idx, trailFrom) {
       _v.lerpVectors(trailFrom, to, f);
       if (Math.hypot(_v.x - to.x, _v.z - to.z) < R * 1.25) break;     // up to her
       const cx = _v.x + px * bend, cz = _v.z + pz * bend;
+      const hb = yaw - Math.atan(Math.cos(f * Math.PI) * Math.PI * 14 / dl);   // the bend's own heading
       for (const sd of [-1, 1]) for (const off of [11, 15]) {
         if (n >= 160) break;
-        const x = cx + px * sd * off + (rnd() - 0.5) * 1.2, z = cz + pz * sd * off + (rnd() - 0.5) * 1.2;
-        _n.copy(terrainNormal(x, z, idx));
-        _q.setFromUnitVectors(_up, _n).multiply(new THREE.Quaternion().setFromAxisAngle(_up, yaw + (rnd() - 0.5) * 0.5));
-        pits.setMatrixAt(n++, _m.compose(_v.set(x, terrainH(x, z, idx) + 0.04, z), _q, _w.setScalar(0.8 + 0.5 * rnd())));
+        const x = cx + px * sd * off + (tr() - 0.5) * 1.2, z = cz + pz * sd * off + (tr() - 0.5) * 1.2;
+        const py = hb + (tr() - 0.5) * 0.5 - sd * 0.12, sc = 0.8 + 0.5 * tr(), wob = tr() * 10;
+        if (fissureDist(x, z, idx) < 2) continue;
+        seabed.push(printGeo(idx, x, z, py, sc, wob));
+        n++;
       }
     }
-    pits.count = n;
-    pits.instanceMatrix.needsUpdate = true;
-    grp.add(pits);
+    const tg = mergeSeabed(seabed);
+    const tracks = new THREE.Mesh(tg, terrainMeshes[idx].material);
+    tracks.receiveShadow = true;
+    tracks.name = 'broodTracks';
+    grp.add(tracks);
+    B.tracks = tracks;
+    // (the seabed's own material: taken out of her group BEFORE her dispose traversal frees what is under it)
+    const pdT = L.onDispose;
+    L.onDispose = () => { if (tracks.parent) tracks.parent.remove(tracks); tg.dispose(); if (pdT) pdT(); };
   };
 
   // Per frame: the clutch breathes and rises with her; the trail announces itself once each as

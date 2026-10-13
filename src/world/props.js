@@ -35,12 +35,13 @@ import { clamp, fbm } from '../lib/math.js';
 import { terrainH, terrainNormal } from './terrain.js';
 import { barkSet, staveSet } from '../lib/textures.js';
 import { siteParams } from './site.js';
+import { terrainSample } from './wrecks.js';
 
 const TAU = Math.PI * 2;
 // Crack clearance: fissureShape.js clearOfCrack (the lip + 6 u + each prop's radius).
 
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion();
-const _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color();
+const _p = new THREE.Vector3(), _s = new THREE.Vector3(), _c = new THREE.Color(), _sv = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0), IDQ = new THREE.Quaternion();
 
 // ------------------------------------------------------------------ manifest --
@@ -649,6 +650,8 @@ async function run() {
       im.frustumCulled = false;
       const a = g.attributes.aInst.array;
       const base = PAL[zi][cfg.tint];
+      // (primfix) the shape's own points, sampled, for seating each instance on the DRAWN floor
+      const GP = g.attributes.position, gs = Math.max(1, Math.floor(GP.count / 96));
       for (let i = 0; i < L.length; i++) {
         const p = L[i];
         const H = rr(cfg.size[0], cfg.size[1]) * (0.75 + 0.6 * fbm(p.x * 0.05 + 3, p.z * 0.05));
@@ -656,6 +659,16 @@ async function run() {
         // Bed every prop slightly into the terrain so none ever reads as floating.
         // cfg.sink beds the prop into the silt (0 = base on the surface)
         _m.compose(_p.set(p.x, p.y - H * (0.12 + (cfg.sink || 0)), p.z), stand(p.n, cfg.stand, rr(0, TAU)), _s.set(W, H, W));
+        // (primfix) SEATED: no point of it may stand clear of the drawn floor (wrecks.js terrainSample:
+        // the mesh's own triangles, the fissure patch near a crack). A long log on a curved slope, or a
+        // prop over a coarse cell, stood up to ~1 u clear at its low end; its lowest point now goes to a
+        // small bed under the sand. Only ever lowered (what was bedded deeper stays as it was).
+        {
+          let lo = 1e9;
+          for (let k = 0; k < GP.count; k += gs) { _sv.fromBufferAttribute(GP, k).applyMatrix4(_m); const d = _sv.y - terrainSample(zi, _sv.x, _sv.z); if (d < lo) lo = d; }
+          const bed = H * 0.05;
+          if (lo > -bed) _m.elements[13] -= lo + bed;
+        }
         im.setMatrixAt(i, _m);
         // The zone mood as the instance colour: the generated surface multiplies its own
         // structure and part tints INTO it (bark, end grain, staves), so hue stays zonal.

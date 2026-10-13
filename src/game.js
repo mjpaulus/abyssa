@@ -3380,6 +3380,13 @@ async function rehearseSleepers(onProgress) {
     await warmFrames(f => onProgress((k + f) / (zs.length + 1)), sleeperPoses(zi), null, false);
   }
   keepingPrograms(() => enterZone(0, true));      // keeps Mhor's; the title's sleeper is a fresh zone-0 build
+  // (primfix) the fresh build has sets the boot's first zone-0 build never had (her trail is laid once its
+  // relics can be seated, with the sculpt in hand: the lead boot and the coupling, the casings): compile
+  // her whole group at both sun-shadow states, so walking up to the trail builds nothing in play
+  if (lev && lev.grp) for (const sh of [true, false]) {
+    const was = sun.castShadow; sun.castShadow = sh;
+    try { await precompile(null, paintGap, [lev.grp]); } finally { sun.castShadow = was; }
+  }
   onProgress(1);
 }
 // THE SHOALS' OTHER FACES. Each school swaps its mesh between three LODs at run time
