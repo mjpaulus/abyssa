@@ -17,7 +17,8 @@ export const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;
 //                 overshoot at the top and settle in the hold (the wrist later and looser than the elbow)
 //   eUp, wBack    the cocked pose: the elbow bends further up, the wrist cocks BACK (the shipped -0.25 cock on the
 //                 wrist cancelled the elbow's +0.25: the palm stayed level with the merus)
-//   foldE, foldW  the side bends: the hand tucks in as it cocks and unfolds into the blow
+//   foldE, foldW  the side bends: the hand tucks in as it cocks and unfolds into the blow (the elbow's; folded at
+//                 the wrist too, the open pincer turned edge-on to a diver in front of her: it is held up OPEN at him)
 //   pE, pW, xHit  the fall: the share of the cock the elbow / wrist still hold = 1 - u^p, u the fall's progress
 //                 reaching 1 at xHit of it (the shoulder lets go at once): the palm stays cocked back while the
 //                 merus comes down, then whips through, all of it home before the hit window
@@ -30,7 +31,7 @@ export const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;
 export const WHIP = {
   on: 1,
   wE: 9, zE: 0.5, wW: 6.5, zW: 0.38,
-  eUp: 0.12, wBack: 0.45, foldE: 0.22, foldW: 0.30,
+  eUp: 0.12, wBack: 0.55, foldE: 0.15, foldW: 0,
   pE: 2.0, pW: 3.4, xHit: 0.85,
   dE: 0.035, dW: 0.075, kRec: 1,
   apex: 0,

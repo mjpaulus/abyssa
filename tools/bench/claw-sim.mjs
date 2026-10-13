@@ -22,7 +22,8 @@ const HINGE = [0.60, 0.08, 0];
 function chain(J) {   // J: {ry, rz, ey, ez, wy, wz} -> merus axis, palm axis, hinge (body units, from the shoulder)
   const pal = rot(J.ey, J.ez, rot(J.wy, J.wz, [1, 0, 0]));                 // palm axis in the merus frame
   const hin = add([0.40, 0, 0], rot(J.ey, J.ez, add([0.24, 0, 0], rot(J.wy, J.wz, HINGE))));
-  return { mer: rot(J.ry, J.rz, [1, 0, 0]), palm: rot(J.ry, J.rz, pal), hinge: scl(rot(J.ry, J.rz, hin), k), mp: ang([1, 0, 0], pal) };
+  const nrm = rot(J.ry, J.rz, rot(J.ey, J.ez, rot(J.wy, J.wz, [0, 0, 1])));   // the gape plane's normal (palm +z)
+  return { mer: rot(J.ry, J.rz, [1, 0, 0]), palm: rot(J.ry, J.rz, pal), hinge: scl(rot(J.ry, J.rz, hin), k), mp: ang([1, 0, 0], pal), nrm };
 }
 const L = { swingT: 0, hamPh: 0, cock: 0, swing: 0, impT: 9, clackN: 0 };
 const c = { major: true }, th = 1, gape = 0.5, snap = 0;
@@ -46,7 +47,7 @@ for (let f = 0; f < 3 * 156; f++) {
   const shipDj = 0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck;
   const a = chain(S), b = chain(N);
   out.push({ f, ph, landed, impT: L.impT, ck, sw, G: w.G, mpS: a.mp * D, mpN: b.mp * D, palmPitchN: Math.asin(b.palm[1]) * D, merPitch: Math.asin(b.mer[1]) * D,
-    djS: shipDj * D, djN: fz * D, hingeS: a.hinge, hingeN: b.hinge, dHinge: Math.hypot(...a.hinge.map((v, i) => v - b.hinge[i])) * R, hitWin: L.swing > 0.85,
+    djS: shipDj * D, djN: fz * D, nS: a.nrm, nN: b.nrm, hingeS: a.hinge, hingeN: b.hinge, dHinge: Math.hypot(...a.hinge.map((v, i) => v - b.hinge[i])) * R, hitWin: L.swing > 0.85,
     J: N });
 }
 // the third cycle (both springs and the finger in their steady cycle)
@@ -59,6 +60,9 @@ const r1 = x => +x.toFixed(1);
 const sum = {
   WHIP, mpShipped: range('mpS').map(r1), mpNew: range('mpN').map(r1), mpRangeNew: r1(range('mpN')[1] - range('mpN')[0]), mpRangeShipped: r1(range('mpS')[1] - range('mpS')[0]),
   dactyl: { cockStart: r1(ckStart.djN), hold: r1(holdE[0].djN), lastFall: r1(cyc[li - 1].djN), landing: cyc.slice(li, li + 12).map(e => r1(e.djN)), shipLanding: cyc.slice(li - 1, li + 3).map(e => r1(e.djS)) },
+  // how the open finger faces her front at the hold: |gape-plane normal . forward| (1 = face-on to a lens in
+  // front of her, 0 = edge-on), and the hand's height over the shoulder (u)
+  holdFace: { shipped: +Math.abs(holdE[0].nS[2]).toFixed(2), new: +Math.abs(holdE[0].nN[2]).toFixed(2), handUpS: +(holdE[0].hingeS[1] * R).toFixed(1), handUpN: +(holdE[0].hingeN[1] * R).toFixed(1) },
   hitWindowFrames: hw.length, hitWindowMaxDrift_u: +Math.max(...hw.map(e => e.dHinge)).toFixed(4),
   clacks: L.clackN
 };

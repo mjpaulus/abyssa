@@ -44,7 +44,7 @@ const alt = async code => {
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
-await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
+await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
