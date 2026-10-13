@@ -43,6 +43,7 @@
 //                               persisted — a reading, not a taking; once per build.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { scene, camera, envTexDeep as envTex } from '../core.js';
 import { WORLD_R, riftPos, zoneTop, zoneBottom, ZONE_SEEN } from '../config.js';
 import { registerPaint } from '../lib/paint.js';
@@ -643,6 +644,112 @@ function dustCloud(n, sx, sy, sz, color) {
   return pts;
 }
 
+// (primfix) the live floor in a wreck's own frame, set by buildWrecks for the length of make()
+let SEAT = null;
+const _seatM = new THREE.Matrix4(), _seatI = new THREE.Matrix4(), _seatP = new THREE.Vector3(), _seatS = new THREE.Vector3(1, 1, 1);
+const seatAt = (lx, lz, fallback = 0) => SEAT ? SEAT(lx, lz) : fallback;
+
+// ---- THE DECK KIT, GENERATED (primfix 2026-10-13, reviews/primitives-audit.md item 6) ----
+// What a dive skiff carried, years on the bottom: plank crates (chamfered boards with gaps, corner
+// battens, iron straps and nail heads, a lid board sprung or gone, the timber grimed and darker where
+// it is buried), rope coils, the sounding lead on its line, a ship's lantern on its side. Every piece is
+// built in its own frame, placed with xform(), and SEATED on the live floor (seatAt). The palette's
+// materials only (wood, iron, rope, brass, glass): zero new programs.
+function boardGeo(w, h, d, r, tone, rnd) {
+  const g = new RoundedBoxGeometry(w, h, d, 1, Math.min(r, w * 0.45, h * 0.45, d * 0.45));
+  g.deleteAttribute('uv');
+  const P = g.attributes.position, uv = new Float32Array(P.count * 2);
+  for (let i = 0; i < P.count; i++) { uv[i * 2] = (P.getX(i) + P.getZ(i)) * 0.9 + rnd() * 0.001; uv[i * 2 + 1] = P.getY(i) * 0.9; }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  return grime(g, tone, 1.6, -0.5);
+}
+// a plank crate, bottom on y = 0, centred; returns [geo, matKey] in crate space
+function crateParts(rnd, W, H, D, o = {}) {
+  const out = [], gap = 0.022, t = 0.045, nb = Math.max(2, Math.round(H / 0.3));
+  const bh = (H - gap * (nb - 1)) / nb;
+  const side = (len, axis, sgn) => {
+    for (let b = 0; b < nb; b++) {
+      if (o.missing && o.missing(axis, sgn, b)) continue;
+      const tone = 0.78 + 0.32 * rnd(), y = bh / 2 + b * (bh + gap);
+      const g = axis === 'x' ? boardGeo(len, bh, t, 0.012, tone, rnd) : boardGeo(t, bh, len, 0.012, tone, rnd);
+      const sag = (rnd() - 0.5) * 0.03;
+      if (axis === 'x') g.translate(0, y + sag, sgn * (D / 2 - t / 2)); else g.translate(sgn * (W / 2 - t / 2), y + sag, 0);
+      out.push([g, 'wood']);
+    }
+  };
+  side(W, 'x', 1); side(W, 'x', -1); side(D - 2 * t, 'z', 1); side(D - 2 * t, 'z', -1);
+  // corner battens, a little proud
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) { const g = boardGeo(0.075, H * 0.98, 0.075, 0.01, 0.7 + 0.2 * rnd(), rnd); g.translate(sx * (W / 2 - 0.02), H * 0.49, sz * (D / 2 - 0.02)); out.push([g, 'wood']); }
+  // lid boards across the short way (some sprung, one gone)
+  if (!o.noLid) {
+    const nl = Math.max(3, Math.round(W / 0.32)), lw = (W - gap * (nl - 1)) / nl;
+    for (let b = 0; b < nl; b++) {
+      if (o.lidGone && o.lidGone(b)) continue;
+      const g = boardGeo(lw, t, D + 0.02, 0.012, 0.8 + 0.3 * rnd(), rnd);
+      const lift = o.sprung === b ? 0.06 : 0;
+      g.rotateX(o.sprung === b ? -0.12 : (rnd() - 0.5) * 0.02);
+      g.translate(-W / 2 + lw / 2 + b * (lw + gap), H + t / 2 + lift, 0);
+      out.push([g, 'wood']);
+    }
+  }
+  // two iron straps round it, nail heads where they cross the boards
+  for (const sy of [0.22, 0.78]) {
+    const y = H * sy;
+    for (const [len, axis, sgn] of [[W + 0.02, 'x', 1], [W + 0.02, 'x', -1], [D + 0.02, 'z', 1], [D + 0.02, 'z', -1]]) {
+      const g = axis === 'x' ? new THREE.BoxGeometry(len, 0.05, 0.012) : new THREE.BoxGeometry(0.012, 0.05, len);
+      if (axis === 'x') g.translate(0, y, sgn * (D / 2 + 0.004)); else g.translate(sgn * (W / 2 + 0.004), y, 0);
+      out.push([grime(g, 0.6 + 0.2 * rnd(), 3), 'iron']);
+      for (let k = -1; k <= 1; k++) {
+        const nh = new THREE.CylinderGeometry(0.013, 0.013, 0.012, 6);
+        if (axis === 'x') { nh.rotateX(Math.PI / 2); nh.translate(k * len * 0.4, y, sgn * (D / 2 + 0.01)); }
+        else { nh.rotateZ(Math.PI / 2); nh.translate(sgn * (W / 2 + 0.01), y, k * len * 0.4); }
+        out.push([grime(nh, 0.55, 3), 'iron']);
+      }
+    }
+  }
+  return out;
+}
+// a coil of rope lying flat: two layers of turns spiralling out, the tail run off across the floor
+function coilParts(rnd, rIn, rOut, turns, rad) {
+  const pts = [], N = Math.round(turns * 24);
+  for (let i = 0; i <= N; i++) {
+    const f = i / N, a = f * turns * TAU, r = rIn + (rOut - rIn) * ((f * 2) % 1), lay = f < 0.5 ? 0 : 1;
+    pts.push(V3(Math.cos(a) * r, rad + lay * rad * 1.7 + 0.01 * Math.sin(a * 3), Math.sin(a) * r));
+  }
+  const ta = turns * TAU, tx = Math.cos(ta) * rOut, tz = Math.sin(ta) * rOut;
+  pts.push(V3(tx + 0.25, rad, tz + 0.12), V3(tx + 0.7, rad * 0.8, tz + 0.05 + 0.2 * rnd()), V3(tx + 1.2 + 0.4 * rnd(), rad * 0.6, tz - 0.15));
+  const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 3, rad, 6, false);
+  return [[grime(g, 0.75 + 0.2 * rnd(), 4.5, -0.2), 'rope']];
+}
+// the sounding lead: a tapered octagonal lead with its arming cup and eye, its line coiled beside it
+function leadParts(rnd) {
+  const out = [];
+  const g = new THREE.CylinderGeometry(0.06, 0.1, 0.42, 8); g.rotateZ(Math.PI / 2); g.translate(0, 0.085, 0);
+  out.push([grime(g, 0.55, 3, -0.2), 'iron']);
+  const eye = new THREE.TorusGeometry(0.045, 0.014, 6, 12); eye.translate(0.25, 0.09, 0); out.push([grime(eye, 0.5, 3), 'iron']);
+  for (const [geo, k] of coilParts(rnd, 0.1, 0.24, 3.5, 0.016)) { geo.translate(0.62, 0, 0.1); out.push([geo, k]); }
+  return out;
+}
+// a ship's lantern on its side: brass fount and cap, glass chimney, four guard wires, the bail
+function lanternParts() {
+  const out = [];
+  const add = (g, k, y) => { g.translate(0, y, 0); out.push([g, k]); };
+  add(grime(new THREE.CylinderGeometry(0.11, 0.12, 0.09, 16), 0.85, 4), 'brass', 0.045);
+  add(new THREE.CylinderGeometry(0.085, 0.085, 0.24, 16, 1, true), 'glass', 0.21);
+  add(grime(new THREE.CylinderGeometry(0.045, 0.1, 0.1, 16, 1, true), 0.8, 4), 'brass', 0.38);
+  add(grime(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 10), 0.8, 4), 'brass', 0.455);
+  for (let k = 0; k < 4; k++) { const a = k / 4 * TAU + 0.3, g = new THREE.CylinderGeometry(0.007, 0.007, 0.26, 5); g.translate(Math.cos(a) * 0.1, 0.215, Math.sin(a) * 0.1); out.push([g, 'brass']); }
+  const bail = new THREE.TorusGeometry(0.1, 0.008, 5, 18, Math.PI); bail.translate(0, 0.48, 0); out.push([bail, 'brass']);
+  return out;
+}
+// place a kit (list of [geo, key]) into a Part at (x, z) on the live floor, yaw ry, tilt rx/rz, sunk
+const _kq = new THREE.Quaternion(), _ke = new THREE.Euler(), _km = new THREE.Matrix4(), _kp = new THREE.Vector3(), _ks = new THREE.Vector3(1, 1, 1);
+function placeKit(q, M, parts, x, z, ry, sink = 0.08, rx = 0, rz = 0, lift = 0) {
+  const y = seatAt(x, z) - sink + lift;
+  _km.compose(_kp.set(x, y, z), _kq.setFromEuler(_ke.set(rx, ry, rz, 'YXZ')), _ks);
+  for (const [g, k] of parts) q.add(g.applyMatrix4(_km), M[k]);
+}
+
 // ------------------------------------------------------------- relic + VFX ---
 const relicGeo = new THREE.IcosahedronGeometry(0.34, 1);
 
@@ -691,9 +798,29 @@ function burstFX(color) {
 // warm presence out to 110 u, the outer halo swelling with range the way murk swells a
 // lamp — and never brighter than the hoard lanterns it shares zone 1 with.
 const RELIC_FADE = { near: 30, far: 110, nearW: 0.6, swell: 0.02, swellMax: 1.0 };
-function relicMarker(color) {
+// (primfix) the core is a LAMP GLASS now, not an unlit ball: a small brass-capped globe in a wire guard,
+// its glass the wreck's own lit program (emissive x vertex colour: brightest round the mantle's band,
+// shaded under the cap and over the base), lit and fogged like the hull; the two warm glows carry the range.
+function lampGeo(M) {
+  const core = new THREE.Group();
+  const p = Part(core);
+  const glob = new THREE.SphereGeometry(0.12, 16, 12); glob.scale(1, 1.22, 1);
+  const gp = glob.attributes.position, gc = new Float32Array(gp.count * 3);
+  for (let i = 0; i < gp.count; i++) { const y = gp.getY(i) / 0.146, k = 0.28 + 0.72 * Math.exp(-y * y * 2.2); gc[i * 3] = k; gc[i * 3 + 1] = k * 0.92; gc[i * 3 + 2] = k * 0.8; }
+  glob.setAttribute('color', new THREE.BufferAttribute(gc, 3));
+  p.add(glob, M.lit);
+  p.add(grime(xf(new THREE.CylinderGeometry(0.1, 0.12, 0.06, 16), 0, -0.165, 0), 0.9, 3), M.brass);
+  p.add(grime(xf(new THREE.ConeGeometry(0.105, 0.09, 16, 1, true), 0, 0.185, 0), 0.9, 3), M.brass);
+  p.add(xf(new THREE.TorusGeometry(0.045, 0.01, 6, 14), 0, 0.25, 0), M.brass);
+  for (let k = 0; k < 4; k++) { const a = k / 4 * TAU + 0.4; p.add(xf(new THREE.CylinderGeometry(0.008, 0.008, 0.32, 5), Math.cos(a) * 0.132, 0.0, Math.sin(a) * 0.132), M.brass); }
+  p.add(xf(new THREE.TorusGeometry(0.133, 0.008, 5, 20), 0, 0.02, 0, Math.PI / 2), M.brass);
+  p.bake();
+  return core;
+}
+function relicMarker(color, M) {
   const grp = new THREE.Group();
-  const core = new THREE.Mesh(relicGeo, new THREE.MeshBasicMaterial({ color: 0xffe6b8, fog: false }));
+  grp.name = 'relicMarker';
+  const core = M ? lampGeo(M) : new THREE.Mesh(relicGeo, new THREE.MeshBasicMaterial({ color: 0xffe6b8, fog: false }));
   grp.add(core);
   const g1 = makeWarmGlow(color, 2.4, RELIC_FADE);
   const g2 = makeWarmGlow(color, 5.0, RELIC_FADE);
@@ -867,33 +994,76 @@ function skiff(M) {
     // jagged break: three splinters
     for (let i = 0; i < 4; i++)
       q.add(grime(xf(new THREE.ConeGeometry(rng(0.05, 0.11), rng(0.5, 1.2), 4), 5.0 + rng(-0.2, 0.2) + 1.2, 2.9, 1.6 + rng(-0.2, 0.2), 0.2, rng(0, 3), 0.42), 0.8, 0.6, 0), M.wood);
-    const fallen = new THREE.CylinderGeometry(0.20, 0.26, 9.5, 9);
-    q.add(grime(xf(fallen, -3.0, 0.30, 5.4, 0, 0.42, Math.PI / 2 - 0.06), 0.85, 0.4, 0), M.wood);
-    for (let i = 0; i < 4; i++)   // mast hoops
-      q.add(xf(new THREE.TorusGeometry(0.28, 0.045, 4, 10).rotateY(Math.PI / 2), -6 + i * 2.3, 0.30, 5.4 + (i - 1.5) * 0.0, 0, 0.42, 0), M.brass);
+    // (primfix) the broken length lies IN the silt where it fell: seated on the live floor, half sunk
+    const mY = seatAt(-3.0, 5.4, 0.2) + 0.1;
+    const fallen = new THREE.CylinderGeometry(0.20, 0.26, 9.5, 12);
+    q.add(grime(xf(fallen, -3.0, mY, 5.4, 0, 0.42, Math.PI / 2 - 0.06), 0.85, 0.4, mY - 0.3), M.wood);
+    // (primfix) the mast hoops are ON the fallen mast now (they stood alone in the sand): slipped
+    // down its length at odd intervals, a little cocked, half in the silt with it
+    const mE = new THREE.Euler(0, 0.42, Math.PI / 2 - 0.06), mDir = V3(0, 1, 0).applyEuler(mE);
+    const mQ = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), mDir);
+    for (const tt of [-3.6, -2.1, 1.3, 3.5]) {
+      const h = new THREE.TorusGeometry(0.29, 0.04, 8, 22);
+      h.applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.12 * Math.sin(tt * 3), 0.1 * Math.cos(tt * 2), 0)));
+      h.applyQuaternion(mQ);
+      h.translate(-3.0 + mDir.x * tt, mY + mDir.y * tt - 0.02, 5.4 + mDir.z * tt);
+      q.add(grime(h, 0.8, 3), M.brass);
+    }
   }
 
-  // scattered crates, plus the one holding the sounding set
-  const CRATES = [[-7.4, 0.55, -2.6, 0.6], [-5.9, 0.5, -4.2, 0.5], [6.2, 0.5, -3.0, 0.9], [8.0, 0.45, 0.6, 2.4], [-8.6, 0.5, 1.4, 1.1]];
-  for (const [cx, cy, cz, ry] of CRATES) {
-    const s = rng(0.85, 1.25);
-    q.add(grime(xf(new THREE.BoxGeometry(1.5 * s, 1.05 * s, 1.15 * s), cx, cy * s, cz, rng(-0.12, 0.12), ry, rng(-0.14, 0.14)), 0.95, 0.7, 0), M.wood);
-    for (let i = -1; i <= 1; i += 2)   // batten strips
-      q.add(grime(xf(new THREE.BoxGeometry(1.55 * s, 0.14, 0.10), cx, cy * s + i * 0.34 * s, cz + 0.60 * s, rng(-0.12, 0.12), ry, rng(-0.14, 0.14)), 0.8, 0.7, 0), M.wood);
+  // (primfix) the deck kit: plank crates, rope coils, the sounding lead, a lantern, each seated on the
+  // live floor in this wreck's frame. Own stream (kr); the old crates' 35 site-stream draws are spent so
+  // every later draw in the wreck build (the trawler, the submersible, the dust) is unchanged.
+  for (let i = 0; i < 35; i++) Math.random();
+  const kr = seededRand(0x5C1FF0 + Math.round(Math.abs(seatAt(0, 0, 0)) * 10));
+  {
+    const CR = [[-7.4, -2.6, 0.6, 1.0], [-5.9, -4.2, 0.5, 0.8], [6.2, -3.0, 0.9, 1.15], [8.0, 0.6, 2.4, 0.95], [-8.6, 1.4, 1.1, 1.2]];
+    CR.forEach(([cx, cz, ry, sc], ci) => {
+      const W = 1.4 * sc, H = 0.95 * sc, D = 1.05 * sc;
+      const gone = ci === 1 ? 2 : -1;
+      const parts = crateParts(kr, W, H, D, {
+        sprung: ci === 0 ? 1 : ci === 3 ? 0 : -1,
+        lidGone: b => b === gone || (ci === 4 && b === 3),
+        missing: (axis, sgn, b) => (ci === 2 && axis === 'x' && sgn === 1 && b === 1) || (ci === 4 && axis === 'z' && sgn === -1 && b === 0)
+      });
+      placeKit(q, M, parts, cx, cz, ry, 0.16 * sc + 0.1 * kr(), (kr() - 0.5) * 0.12, (kr() - 0.5) * 0.14);
+      // the board that came off it, lying in the silt beside it
+      if (ci === 2 || ci === 4) {
+        const bd = boardGeo(ci === 2 ? W : D, 0.26, 0.045, 0.012, 0.8, kr);
+        bd.rotateX(Math.PI / 2 - 0.08);
+        placeKit(q, M, [[bd, 'wood']], cx + Math.cos(ry) * (W * 0.9), cz - Math.sin(ry) * (W * 0.9), ry + 0.5, 0.0, 0, 0, 0.0);
+      }
+    });
+    // rope coils: one by the relic crate, one by the stump
+    placeKit(q, M, coilParts(kr, 0.14, 0.42, 4.5, 0.035), 1.4, -3.3, 0.8, 0.03);
+    placeKit(q, M, coilParts(kr, 0.12, 0.36, 3.5, 0.032), 4.0, 3.1, 2.4, 0.03);
+    // the sounding lead on its line, and the ship's lantern on its side, by the relic crate
+    placeKit(q, M, leadParts(kr), 5.2, -4.4, -0.6, 0.03);
+    placeKit(q, M, lanternParts(), 2.0, -6.4, 1.1, 0.05, 0, Math.PI / 2 - 0.12, 0.11);
   }
 
   // the relic crate: lid pried off and leaning, the brass sounding set inside
   const RC = V3(3.4, 0, -5.0);
-  q.add(grime(xf(new THREE.BoxGeometry(2.2, 1.3, 1.7), RC.x, 0.65, RC.z, 0, -0.35, 0), 1.0, 0.7, 0), M.wood);
-  q.add(grime(xf(new THREE.BoxGeometry(2.3, 0.14, 1.8), RC.x + 1.2, 0.9, RC.z - 0.9, 0.5, -0.35, 0.25), 0.9, 0.7, 0), M.wood);
+  {
+    const rcY = seatAt(RC.x, RC.z) - 0.12;
+    const parts = crateParts(kr, 2.1, 1.25, 1.6, { noLid: true });
+    placeKit(q, M, parts, RC.x, RC.z, -0.35, 0.12);
+    // the lid, its boards still battened together, pried off and leaning on the crate's side
+    const lid = [];
+    for (let b = 0; b < 6; b++) { const g = boardGeo(0.34, 0.045, 1.66, 0.012, 0.8 + 0.25 * kr(), kr); g.translate(-0.88 + b * 0.352, 0, 0); lid.push([g, 'wood']); }
+    for (const zz of [-0.55, 0.55]) { const g = boardGeo(2.05, 0.05, 0.12, 0.01, 0.7, kr); g.translate(0, -0.045, zz); lid.push([g, 'wood']); }
+    const lq = new THREE.Matrix4().compose(_kp.set(RC.x + 1.2, rcY + 0.62, RC.z - 0.9), _kq.setFromEuler(_ke.set(0.5, -0.35, 0.25, 'YXZ')), _ks);
+    for (const [g, k] of lid) q.add(g.applyMatrix4(lq), M[k]);
+    RC.y = rcY;
+  }
 
   // sounding set: a brass instrument box with a listening horn and a lead-line reel
   const rel = new THREE.Group();
-  rel.position.set(RC.x, 1.42, RC.z);
+  rel.position.set(RC.x, RC.y + 1.25 + 0.17, RC.z);
   rel.rotation.y = -0.35;
   const r = Part(rel);
-  r.add(new THREE.BoxGeometry(1.05, 0.62, 0.72), M.brass);
-  r.add(xf(new THREE.BoxGeometry(1.10, 0.07, 0.77), 0, 0.33, 0), M.brass);
+  r.add(grime(new RoundedBoxGeometry(1.05, 0.62, 0.72, 2, 0.035), 0.95, 2.5), M.brass);
+  r.add(grime(xf(new RoundedBoxGeometry(1.10, 0.07, 0.77, 1, 0.02), 0, 0.33, 0), 0.9, 2.5), M.brass);
   rivetRing(r, M.brass, 8, 0.42, 0.30, 0.045);
   // horn
   r.add(xf(new THREE.CylinderGeometry(0.40, 0.12, 0.85, 12, 1, true), 0.15, 0.72, 0.30, -0.5, 0, 0.45), M.brass);
@@ -1623,7 +1793,23 @@ export function buildWrecks() {
       const tB0 = performance.now();
       const M = palette(zi);
       const tB1 = performance.now();
+      // (primfix) the wreck's frame BEFORE it is built (the same settle as below), so the deck kit can
+      // seat each prop on the live floor (terrainSample) in the wreck's local frame
+      {
+        const n0 = terrainNormal(site.x, site.z, zi);
+        _q.setFromUnitVectors(UP, n0).slerp(IDQ, 1 - S.tilt);
+        _q.multiply(_q2.setFromAxisAngle(UP, zi * 2.1 + 0.6));
+        _seatM.compose(_v.set(site.x, site.y - S.sink, site.z), _q, _seatS);
+        _seatI.copy(_seatM).invert();
+        SEAT = (lx, lz) => {
+          const w = _seatP.set(lx, 0, lz).applyMatrix4(_seatM);
+          const fy = terrainSample(zi, w.x, w.z);
+          w.y = fy;
+          return w.applyMatrix4(_seatI).y;
+        };
+      }
       const W = S.make(M);
+      SEAT = null;
       const tB2 = performance.now();
 
       const g = new THREE.Group();
@@ -1640,7 +1826,7 @@ export function buildWrecks() {
       // Marker and burst share the relic's own parent frame, so they follow whatever
       // transform the hull section they sit on already carries.
       const host = W.relic.parent;
-      const marker = relicMarker(S.glow);
+      const marker = relicMarker(S.glow, M);
       marker.position.copy(W.relic.position).y += 0.5;
       host.add(marker);
       const burst = burstFX(S.glow);
@@ -1750,8 +1936,8 @@ export function updateWrecks(dt, t) {
     if (!W.taken) {
       const u = W.marker.userData;
       const s = 1 + 0.16 * Math.sin(t * 1.7 + W.ph);
-      u.core.rotation.y += dt * 0.8;
-      u.core.rotation.x += dt * 0.31;
+      u.core.rotation.y += dt * 0.22;                         // (primfix) a lamp turns, it does not tumble
+      u.core.rotation.z = 0.06 * Math.sin(t * 0.7 + W.ph);
       u.g1.scale.setScalar(2.4 * s);
       u.g2.scale.setScalar(5.0 * (1.9 - s * 0.85));
       u.g2.material.opacity = 0.22 + 0.10 * Math.sin(t * 1.15 + W.ph);

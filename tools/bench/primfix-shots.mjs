@@ -46,6 +46,7 @@ const DEBRIS_FIND = `(() => { let best = null, bd = 1e9; const m = new window.pl
 add('i1-debris-near', `const p = ${DEBRIS_FIND}; window.__pf.pin(p.x, p.z, 3.4, 2.2, 1.6); return await window.__pf.shot();`);
 add('i1-debris-wide', `window.__pf.stand(70, 40, -2.0); return await window.__pf.shot();`);
 add('i2-shell-near', `const S = window.lev.brood.shellsAt, T = window.lev.brood.trailA; const a = Math.atan2(T.x - S.x, T.z - S.z); window.__pf.pin(S.x, S.z, 9, a + 0.5, 3.2); return await window.__pf.shot();`);
+add('i2-shell-top', `const S = window.lev.brood.shellsAt; const y0 = window.__pfFloor(S.x, S.z); window.__pf.stand(S.x + 6, S.z - 3, -1.2); window.__camPin = { p: [S.x + 2.5, y0 + 10, S.z + 2.5], t: [S.x, y0, S.z] }; return await window.__pf.shot();`);
 add('i2-shell-wide', `const S = window.lev.brood.shellsAt, T = window.lev.brood.trailA; const a = Math.atan2(T.x - S.x, T.z - S.z); window.__pf.facing(S.x, S.z, 12, a - 0.4); return await window.__pf.shot();`);
 add('i3-casings', `const S = window.lev.brood.shellsAt, P = window.lev.pos; const a = Math.atan2(P.x - S.x, P.z - S.z); const tx = S.x + Math.sin(a) * 5, tz = S.z + Math.cos(a) * 5;
   const y0 = window.__pfFloor(tx, tz), sx = tx + Math.sin(a + 1.9) * 3.5, sz = tz + Math.cos(a + 1.9) * 3.5; window.__pf.stand(sx, sz, Math.atan2(tx - sx, tz - sz));
@@ -61,6 +62,12 @@ add('i5-reef', `const r = window.lev.parts.reef; r.updateMatrixWorld(true); cons
 add('i5-reef-low', `const r = window.lev.parts.reef; const b = new (window.camera.position.constructor)(); r.geometry.boundingBox.getCenter(b); r.localToWorld(b);
   const P = window.lev.pos; window.__pf.stand(P.x + 22, P.z + 4, -1.4);
   window.__camPin = { p: [b.x - 14, b.y + 1.5, b.z - 10], t: [b.x, b.y - 1, b.z] }; return await window.__pf.shot();`);
+const REEF_AT = (cx, cz) => `const r = window.lev.parts.reef, P = r.geometry.attributes.position, V = window.camera.position.constructor; let y = -1e9;
+  for (let i = 0; i < P.count; i++) if (Math.hypot(P.getX(i) - (${cx}), P.getZ(i) - (${cz})) < 0.06) y = Math.max(y, P.getY(i));
+  r.updateMatrixWorld(true); const c = r.localToWorld(new V(${cx}, y - 0.035, ${cz})), o = r.localToWorld(new V(${cx} + 0.16, y + 0.12, ${cz} + 0.16));
+  const Pl = window.lev.pos; window.__pf.stand(Pl.x + 22, Pl.z + 4, -1.4); window.__camPin = { p: o.toArray(), t: c.toArray() }; return await window.__pf.shot();`;
+add('i5-reef-c1', REEF_AT(-0.42, 0.33));
+add('i5-reef-c2', REEF_AT(0.25, -0.3));
 add('i6-skiff', `let mk = null; window.__pfScene.traverse(o => { if (!mk && (o.name === 'relicMarker' || (o.geometry && o.geometry.type === 'IcosahedronGeometry' && o.geometry.parameters.radius === 0.34))) mk = o.name === 'relicMarker' ? o : o.parent; });
   const host = mk.parent, V = window.camera.position.constructor; host.updateMatrixWorld(true);
   const cp = host.localToWorld(new V(1.5, 3.4, -12.5)), ct = host.localToWorld(new V(0.5, 0.4, -3.6)), st = host.localToWorld(new V(-1.5, 0, -6.5));
