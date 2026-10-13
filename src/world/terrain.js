@@ -12,7 +12,7 @@ import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textu
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams, currentSiteIndex, stream } from './site.js';
 import { buildIslands, fillIslands, updateIslands } from './islands.js';
-import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamFloorAt, jamSagAt, fissureShut, _widths, _slabReach, APRON } from './fissureShape.js';
+import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamFloorAt, jamSagAt, fissureShut, _widths, _slabReach, APRON, MID_MAX, JAG_MAX } from './fissureShape.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -270,9 +270,28 @@ function capsules(ko, F) {
   if (ko.band && ko.stations) add(0, 0, ko.stations[0][0], ko.stations[0][1], ko.band);
   return Float64Array.from(K);
 }
+// THE ROWS' CHECKS: a row the hollow would turn into NaN, or into a lip that is not exactly today's, throws a clear
+// Error before anything moves (syncRelief runs this first; __relief.set runs it on its candidate row before reseeding):
+//  - hollow.sLvl > 0 and hollow.rw > 0: hollowAt divides by both (flatW = flat / sLvl, the riser's u = .../rw). At 0
+//    each is 0/0: NaN over zone 0 out to r 290 (sLvl), over the flat bottom (rw).
+//  - hollow.oc.keepOff[0] > the crack's widest reach off its axis (fissureShape.js MID_MAX + JAG_MAX x halfW) + 4: heightAt
+//    fades the levelling and her flat out by g (0 for fd <= 4), but the outcrops only by this capsule, so the lip stays
+//    exactly the compensated uniform part only while every point within 4 u of the lip is inside its inner radius
+//    (home: 25 > 18.84). __relief can retune it.
+export function checkRelief(sh) {
+  const h = sh && sh.hollow;
+  if (!h) return;
+  const bad = m => { throw new Error('THE RELIEF: shape.hollow.' + m); };
+  if (!(h.sLvl > 0)) bad(`sLvl must be > 0 (got ${h.sLvl}): her flat divides by it, so 0 turns zone 0 into NaN out to r 290`);
+  if (!(h.rw > 0)) bad(`rw must be > 0 (got ${h.rw}): each riser divides by it, so 0 turns the flat bottom into NaN`);
+  const k = MID_MAX + JAG_MAX * FISSURE[0].halfW + 4, ko = h.oc && h.oc.keepOff;
+  if (!(ko && ko[0] > k)) bad(`oc.keepOff[0] must exceed ${k.toFixed(2)} u (the crack's widest reach off its axis + 4; got ` +
+    `${ko && ko[0]}): nearer, the outcrops reach the lip's 4 u, where only the hollow's uniform part may act`);
+}
 function syncRelief(sh) {
-  const u = sh && sh.uplands;
-  UPL = u ? { rbias: u.rbias, ramp: u.ramp, r3amp: u.r3amp, s2amp: u.s2amp, camp: u.camp, r0: u.fade[0], r1: u.fade[1],
+  checkRelief(sh);                                          // a bad row throws here, before UPL / HOL move
+  const u = sh && sh.uplands, uf = u && (u.fade || [250, 300]);   // a row without its fade gets Ruling 15's radii
+  UPL = u ? { rbias: u.rbias, ramp: u.ramp, r3amp: u.r3amp, s2amp: u.s2amp, camp: u.camp, r0: uf[0], r1: uf[1],
     K: capsules(u.keepOff, FISSURE[0]), row: u } : null;
   const h = sh && sh.hollow, F = FISSURE[0];
   if (h) {

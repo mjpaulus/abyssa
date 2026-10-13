@@ -5,7 +5,7 @@ import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint } from './world/terrain.js';
+import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint, checkRelief } from './world/terrain.js';
 import { lipMeanY, resetJam, setFissureShut, FISSURE, fissureDist, fissureLocal, fissureWorld, fissureShut, openRunAt } from './world/fissureShape.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
@@ -1033,16 +1033,24 @@ window.gotoZone = i => { enterZone(Math.max(0, Math.min(2, i | 0))); return 'zon
 window.__chart = { sail: i => startVoyage(i | 0), arrive: i => reseedWorld(i | 0), rec: () => chartRec, visit: () => visitCalm, pulled: () => pulledRec, sighted: () => sightRec, site: () => currentSiteIndex(),
   found: () => chartFound, keeps: () => keepsakes, fp: () => terrainFingerprint() };
 // (seafloor relief) live retune of a site's relief rows for tuning and RED mutants: set({hollow: {D: 60}}) deep-merges
-// into the current site's shape rows and reseeds the world (fillTerrain -> ... the full ORDER-IS-CONTRACT chain)
-const _reliefRows = new Map();
+// into the current site's shape rows and reseeds the world (fillTerrain -> ... the full ORDER-IS-CONTRACT chain). Each
+// set / reset is a FULL ARRIVAL: Sal respawns on the deck, the visit's calm is forgotten, the suit is refit and
+// saveChart() runs, so never measure across one. rows() is a deep copy (editing it changes nothing). set is
+// transactional: it merges into a copy, so the authored row is never edited in place; a row the terrain refuses
+// (terrain.js checkRelief) throws before anything moves; any other throw during the reseed puts the previous row back
+// and re-arrives on it before rethrowing.
+const _reliefRows = new Map(), _reliefCopy = o => JSON.parse(JSON.stringify(o === undefined ? null : o));
 window.__relief = {
-  rows: () => ({ ...currentSite().shape }),
+  rows: () => _reliefCopy(currentSite().shape || null),
   set(patch) {
-    const s = currentSite(), i = currentSiteIndex();
-    if (!_reliefRows.has(i)) _reliefRows.set(i, JSON.parse(JSON.stringify(s.shape || null)));
+    const s = currentSite(), i = currentSiteIndex(), prev = s.shape;
     const merge = (a, b) => { for (const k in b) a[k] = b[k] && typeof b[k] === 'object' && !Array.isArray(b[k]) ? merge(a[k] || {}, b[k]) : b[k]; return a; };
-    s.shape = merge(s.shape || {}, patch);
-    reseedWorld(i);
+    const next = merge(_reliefCopy(prev) || {}, _reliefCopy(patch));
+    checkRelief(next);                                   // throws here: nothing has moved
+    const fresh = !_reliefRows.has(i);
+    if (fresh) _reliefRows.set(i, _reliefCopy(prev));
+    s.shape = next;
+    try { reseedWorld(i); } catch (e) { s.shape = prev; if (fresh) _reliefRows.delete(i); reseedWorld(i); throw e; }
     return window.__relief.rows();
   },
   reset() { const i = currentSiteIndex(); if (_reliefRows.has(i)) { currentSite().shape = _reliefRows.get(i); _reliefRows.delete(i); reseedWorld(i); } }
