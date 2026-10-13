@@ -185,8 +185,8 @@ Run as `riteplay.mjs 8860 <site> <mode> <tag> <seed>`. Base passes 1 and 2 were 
 
   | claw | calm times | tears | hammer hits | logs |
   |---|---|---|---|---|
-  | OFF | 73.6, 53.9, 44.6 s | 2 of 3 runs (`leg26`, `leg8`) | 0 | `logs/ab-off-*` |
-  | ON | 52.1, 38.4, 79.6 s | 0 of 3 runs | 0 | `logs/ab-on-*` |
+  | OFF | 73.6, 53.9, 44.6 s | 2 of 3 runs (`leg26`, `leg8`) | 0 | `shots/clawfix-rp/ab-off-*.json` |
+  | ON | 52.1, 38.4, 79.6 s | 0 of 3 runs | 0 | `shots/clawfix-rp/ab-on-*.json` |
 
   - Leg contacts with her walking legs happen with or without the new claw. Base passes 1–3 just didn't draw one for the perfect player.
 - **What the claw can still change.** Its capsules (bodyCols) follow the drawn pieces, so they move:
