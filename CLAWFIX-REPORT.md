@@ -161,7 +161,14 @@ Run as `riteplay.mjs 8860 <site> <mode> <tag> <seed>`. Base passes 1 and 2 were 
   - average seed 1: 23.1 s and 0 hits in one pass, 39.2 s and 1 hit in another;
   - average seed 2: 3 hits, then 1.
 - **No hammer hit in any run**, base or new. Every hit was a drop slam or a leg contact (`__slamLog`: `blow`, `legNN`).
-- So the claw strike itself cannot have hit anyone. Its only route into the fight is the guard: the finger's three capsules now sit at 26° rather than about 70° open, inside the ritefair spread zone. A smaller claw there cannot wall him off more.
+- **What the claw can still change.** Its capsules (bodyCols) follow the drawn pieces, so they move:
+  - in the guard: the finger's three capsules sit at 26°, not about 70°;
+  - through the cock and the first half of the fall;
+  - in the recoil: the lagged drag, and the floor clamp's lift on those frames.
+- **What I measured:**
+  - no hammer hits in any run;
+  - the hit window unchanged within noise (the A/B above);
+  - the lens distance and the landing shove comparable at the two fight-range spots (the Lens table above).
 
 - **Summary, base (16 runs) against clawfix (12 runs).**
   - Perfect calm times: base 36.1, 36.1, 58.6, 58.9, 52.4, 38.9 s; clawfix 60.5, 48.4, 54.6, 37.7 s.
