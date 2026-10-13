@@ -33,7 +33,7 @@ import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDe
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
-import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA } from './brooderClaw.js';
+import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -654,7 +654,7 @@ export function makeBrooder(idx, cfg) {
     grp.add(g);
     return g;
   });
-  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; window.__settle = SETTLE; }   // dev: the live sleeper object (motion probes); the burn's knobs
+  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; window.__settle = SETTLE; window.__claw = { WHIP, CHELA }; }   // dev: the live sleeper object (motion probes); the burn's knobs
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
@@ -1288,8 +1288,12 @@ function poseClaws(L, dt) {
         lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h + 0.8 * spr + wh.rz);
       c.cj.rotation.set(0, -sd * (lerp(0.95, 0.40, th) + wh.ey), 0.30 - 0.25 * sw + 0.25 * ck + wh.ez);
       c.pj.rotation.set(0, -sd * (lerp(0.45, 0.15, th) + wh.wy), lerp(-0.55, -0.30, th) + 0.2 * sw - 0.25 * ck + 0.6 * dz + wh.wz);
-      // the finger has its own beat: open on the wind-up, SNAPPED shut on the landing frame, held, let go
-      c.dj.rotation.z = chela(c, L, th, gape, snap, hold, t, dt) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
+      // the finger has its own beat: open on the wind-up, SNAPPED shut on the landing frame, held, let go. The
+      // floor clamp still sees the shipped finger (c.djShip), so the blow is set on the sand where it always was
+      // (the hit point does not move); clampClaw then keeps the finger itself out of the sand (fingerFloor)
+      const hk = 1 - 0.8 * Math.min(1, Math.max(0, h));
+      c.dj.rotation.z = chela(c, L, th, gape, snap, hold, t, dt) * hk;
+      c.djShip = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * hk;
     } else {
       // the minor stays low and close, a guard across the mouth, working; it spreads
       // wide as the crusher cocks (the body opens up behind the blow)
@@ -1309,6 +1313,7 @@ function poseClaws(L, dt) {
       const T = c.major ? DORM.major : DORM.minor;
       tuckJoint(c.root, T.root, -Math.PI / 2, sd, d); tuckJoint(c.cj, T.cj, 0, sd, d); tuckJoint(c.pj, T.pj, 0, sd, d);
       c.dj.rotation.z += (T.dj - c.dj.rotation.z) * d;
+      if (c.major) c.djShip += (T.dj - c.djShip) * d;
     }
   }
 }
@@ -1364,8 +1369,26 @@ function liftAt(L, c, j, max, sg, prev) {
   r.z = z0 + sg * hi; c.root.updateMatrixWorld(true);
   return hi;
 }
+// (clawfix) The crusher's finger has its own beat now (brooderClaw.js), but the clamp is run with the SHIPPED
+// finger (c.djShip): it set the blow on the sand, so the hinge (the hit point) lands where it always did. The
+// finger then goes back to its own angle, and if that puts it under the ground it opens toward the shipped
+// angle (which the clamp cleared) just far enough: it stops on the sand.
+let _fC = null, _fL = null;
+function fingerUnder(a) { _fC.dj.rotation.z = a; _fC.dj.updateMatrixWorld(true); const s = _fC.samp[3]; return penetration(_fL, s.pts, s.mesh.matrixWorld, CLAW_M) > 0; }
+function fingerFloor(L, c, fz) {
+  _fC = c; _fL = L;
+  if (!fingerUnder(fz)) return;
+  let lo = fz, hi = c.djShip;
+  if (!fingerUnder(hi)) {
+    while (Math.abs(hi - lo) > LIFT_RES) { const mid = (lo + hi) * 0.5; if (fingerUnder(mid)) lo = mid; else hi = mid; }
+    fingerUnder(hi);
+  }
+  c.fingerLift = hi - fz;
+}
 function clampClaw(L, c, dt) {
-  const z0 = c.root.rotation.z, e0 = c.cj.rotation.z;
+  const z0 = c.root.rotation.z, e0 = c.cj.rotation.z, fz = c.dj.rotation.z;
+  if (c.djShip !== undefined) c.dj.rotation.z = c.djShip;
+  c.fingerLift = 0;
   c.root.updateMatrixWorld(true);
   let need = 0, el = 0;
   if (clawPen(L, c, true) > 0) {
@@ -1394,6 +1417,7 @@ function clampClaw(L, c, dt) {
   c.cj.rotation.z = e0 + el;
   c.root.updateMatrixWorld(true);
   c.need = need; c.liftNow = lift; c.elbow = el;
+  if (c.djShip !== undefined && fz !== c.djShip) fingerFloor(L, c, fz);
 }
 
 function poseAll(L, dt, player) {

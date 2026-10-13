@@ -24,14 +24,17 @@ export const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;
 //   dE, dW, kRec  the recoil: the elbow and the palm get the shoulder's bounce dE / dW s late, in world pitch
 //                 (kRec of it): the hand drags, then flicks up past the merus and settles
 //   apex          the shoulder's cock lowered by this (rad; 0.55 shipped) so more of the wind-up is in his lens
-//   gate          every offset fades out as L.swing rises through gate[0]..gate[1] (the hit test's 0.85)
+//   gate          every offset fades out as L.swing rises through gate[0]..gate[1]: home before the claw can meet the
+//                 sand (the floor clamp's first contact, ~0.8 on flat ground) and the hit test (0.85)
+//   on            1; 0 = the shipped rod (lab A/B: tools/bench/claw-pose-probe.mjs)
 export const WHIP = {
+  on: 1,
   wE: 9, zE: 0.5, wW: 6.5, zW: 0.38,
   eUp: 0.12, wBack: 0.45, foldE: 0.22, foldW: 0.30,
-  pE: 2.0, pW: 3.4, xHit: 0.90,
+  pE: 2.0, pW: 3.4, xHit: 0.85,
   dE: 0.035, dW: 0.075, kRec: 1,
   apex: 0,
-  gate: [0.55, 0.85]
+  gate: [0.45, 0.75]
 };
 
 // THE FINGER (rad): its own channel, keyed to the blow (hamPh, impT), not parked open by the threat. A small
@@ -42,9 +45,9 @@ export const WHIP = {
 //   open 1.35, not 1.6: past ~90 deg the knuckle shows out of its socket. shut 0.15: the crusher's biting
 //   edges meet at ~0.14, its base molars at ~0.48 (overlapping a little below 0.25 reads as molars biting).
 //   minor: the cutter never strikes; its tall fangs cut through its own finger below ~26 deg, so it never
-//   closes past `minor` (awake; asleep it is folded under her brow, DORM).
+//   closes past `minor` (awake; asleep it is folded under her brow, DORM). on: 0 = the shipped finger (lab A/B).
 export const CHELA = {
-  rest: 0.45, open: 1.35, shut: 0.15, past: 0.4, wOpen: 9, zOpen: 0.8, wSnap: 45, zSnap: 0.4, wSeat: 30, zSeat: 0.3,
+  on: 1, rest: 0.45, open: 1.35, shut: 0.15, past: 0.4, wOpen: 9, zOpen: 0.8, wSnap: 45, zSnap: 0.4, wSeat: 30, zSeat: 0.3,
   bounce: 0.4, holdT: 0.28, relT: 0.45, quiver: 0.035, minor: 0.455
 };
 
@@ -83,7 +86,7 @@ export function whip(c, L, th, dt) {
   // carries 1.10 of the swing, the palm 0.90, the shoulder 0.85)
   let lE = 0, lW = 0;
   if (!falling && L.impT < 3) { lE = W.kRec * (th * bounce(L.impT - W.dE) - sw); lW = W.kRec * (th * bounce(L.impT - W.dW) - sw); }
-  const G = 1 - sstep(W.gate[0], W.gate[1], L.swing);
+  const G = W.on * (1 - sstep(W.gate[0], W.gate[1], L.swing));
   s.G = G;
   s.rz = -G * W.apex * ck;
   s.ez = G * ((0.25 + W.eUp) * cE - 0.25 * ck - 1.10 * lE);
@@ -104,6 +107,7 @@ function chelaAim(L) {
 // hold: 1 while the cocked claw trembles at the top. State on the claw (c.fs, c.fHit).
 export function chela(c, L, th, gape, snap, hold, t, dt) {
   const C = CHELA, s = c.fs || (c.fs = { x: 0.08, v: 0 });
+  if (!C.on) return 0.08 + 0.20 * gape + snap + th * (1 - 0.9 * L.swing * th) + 0.35 * L.cock * th;   // as shipped
   const biting = th > 0.5 && L.impT >= 0 && L.impT < C.holdT;
   if (!biting) c.fHit = false;
   let aim = 0.08 + 0.20 * gape + snap, w = C.wOpen, z = C.zOpen;
