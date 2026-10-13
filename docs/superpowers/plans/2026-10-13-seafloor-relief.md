@@ -75,9 +75,9 @@ Five ways the spec's change can bite a player that no spec gate exercises. Each 
    - Steeper ground is measured and reported to Michael.
    - Test: Task 11, `relief-walk.mjs` `boots`.
 2. **A voyage away and back.** Home → Pallid → home must land on the new home field again (the rows reapply), with Pallid unchanged. Her bed must be recomputed on return: `lair.js` caches the bed on the wreck array's identity.
-   - Test: Task 6, step 5.
+   - Test: Task 5, step 5.
 3. **A save made before this change.** With `pulled[0]` true (her old wound) on the new ground, the rite must start at the old wound at her new station, and the anchor must be reachable.
-   - Test: Task 6, step 6.
+   - Test: Task 5, step 6.
 4. **The lens on the risers.** Walking down a 35–45° riser with the riser behind him, the follow lens must not go into the ground (`shutFloorY` clearance) or pop.
    - Test: Task 11, `relief-walk.mjs` `lens`.
 5. **Things placed at an absolute height.** Rifts' glowing motes spawn at y ≥ −242 anywhere in the basin and can land inside a 30 u ridge. Fauna's moray and crab candidates need rocks above −266, so the hollow gets none.
@@ -93,15 +93,15 @@ Five ways the spec's change can bite a player that no spec gate exercises. Each 
 | `tools/relief/validate.mjs` (new) | Offline fingerprints for every site, home with its rows removed, and the frozen wreck sites, against `expect.json` | 1 |
 | `tools/relief/gates.mjs` (new) | S1–S7, the §7 limits, G3, the skiff checks | 1 |
 | `tools/relief/cost.mjs` (new) | `heightAt` ns per call, rows on vs off | 1 |
-| `tools/relief/expect.json` (new) | Recorded anchors: fingerprints and frozen wreck sites | 1, 5 |
+| `tools/relief/expect.json` (new) | Recorded anchors: fingerprints and frozen wreck sites | 1, 4 |
 | `tools/relief/render/` (copied) | The browser hillshade/sections renderer (`drive.mjs`, `sample.page.js`, `render.page.js`, `upload.page.js`) | 13 |
 | `.gitignore` | Ignores `tools/relief/*.gen.mjs` | 1 |
-| `tools/bench/velfix-gate.mjs`, `tools/bench/fullplay-gate.mjs` | The crack-route flake and the route bound | 2 |
-| `src/world/wrecks.js` | `findSite` bearing window; `wreckSites` reads it | 3 |
-| `src/world/terrain.js` | Raw-noise locals in `heightAt`, `UPL`/`HOL` state, `syncRelief`, `keepOff`, `uplandsAt`, `hollowAt`, the hollow in `heightAt`, the relative apron, the carve compensation | 4, 5 |
-| `src/world/site.js` | Home's `shape.uplands` / `shape.hollow` / `wrecks` rows; the header's "bit-identical" paragraph | 3, 4, 5 |
-| `src/game.js` | `window.__relief` (rows, `set` → `reseedWorld`), used for tuning and RED mutants | 5 |
-| `tools/bench/fissure-probe.mjs` | Bounds re-derived for the new ground, with RED mutants | 7, 8 |
+| `tools/bench/velfix-gate.mjs`, `tools/bench/fullplay-gate.mjs` | The crack-route flake and the route bound | 9 |
+| `src/world/wrecks.js` | `findSite` bearing window; `wreckSites` reads it | 2 |
+| `src/world/terrain.js` | Raw-noise locals in `heightAt`, `UPL`/`HOL` state, `syncRelief`, `keepOff`, `uplandsAt`, `hollowAt`, the hollow in `heightAt`, the relative apron, the carve compensation | 3, 4 |
+| `src/world/site.js` | Home's `shape.uplands` / `shape.hollow` / `wrecks` rows; the header's "bit-identical" paragraph | 2, 3, 4 |
+| `src/game.js` | `window.__relief` (rows, `set` → `reseedWorld`), used for tuning and RED mutants | 4 |
+| `tools/bench/fissure-probe.mjs` | Bounds re-derived for the new ground, with RED mutants | 6, 7 |
 | `tools/bench/relief-walk.mjs` (new) | Real-key walks: boots on risers, the lens on risers, the hose to its binding point | 11 |
 | `tools/bench/seating-probe.mjs` (new) | Nothing hovers or sinks: props, nodes, debris, relics, moult, skiff kit (from the primfix survey `x3.mjs`) | 12 |
 | `src/world/fauna.js`, `src/world/rifts.js` | Moray/crab candidates reach the hollow; motes never spawn inside the ground | 12 |
@@ -109,9 +109,11 @@ Five ways the spec's change can bite a player that no spec gate exercises. Each 
 | `CLAUDE.md`, `roadmap/seafloor-relief.md`, `docs/reports/2026-10-13-seafloor-relief.md` | The record | 14 |
 
 Task order and dependencies:
-- **Tasks 1–3** are independent of the terrain change.
-- **Tasks 4–5** build it on the offline gates.
-- **Tasks 6–12** verify it in the game.
+- **Tasks 1–2** are independent of the terrain change.
+- **Tasks 3–4** build it on the offline gates.
+- **Tasks 5–12** verify it in the game.
+  - Task 9 (the `velfix-gate` flake) runs just before Task 10, the only task that uses its gate.
+  - Task 9 is capped, so an open debugging problem cannot hold up the rest.
 - **Task 13** produces Michael's look.
 - **Task 14** writes the record.
 
@@ -127,7 +129,7 @@ Task order and dependencies:
 **Interfaces:**
 - Produces:
   - `node tools/relief/slice.mjs` writes `tools/relief/terrain.gen.mjs` and `tools/relief/pins.gen.mjs`.
-  - `terrain.gen.mjs` exports `terrainH, terrainUnderH, heightAt, syncSite, buildClampTable, clampR, ZP, ZP0, RIM_KR, RIM_KH, gn, fbm2, rmf, c01, SEG, HALF, axisMap`. It also exports `HOL, UPL, hollowAt, uplandsAt, keepOff, _hv` when those identifiers exist in the slice; they do from Task 4/5 on.
+  - `terrain.gen.mjs` exports `terrainH, terrainUnderH, heightAt, syncSite, buildClampTable, clampR, ZP, ZP0, RIM_KR, RIM_KH, gn, fbm2, rmf, c01, SEG, HALF, axisMap`. It also exports `HOL, UPL, hollowAt, uplandsAt, keepOff, _hv` when those identifiers exist in the slice; they do from Task 3/4 on.
   - `pins.gen.mjs` exports `wreckSites, resetPins, findSite, SITE_SPEC, velkathLair`.
   - `mesh.mjs` exports `meshH(T, x, z, zi)` and `AX`.
   - `node tools/relief/validate.mjs` exits 1 on a fingerprint or wreck mismatch with `expect.json`.
@@ -226,7 +228,7 @@ Before using `meshH`, confirm the vertex layout against `terrain.js` `fillTerrai
 // THE RELIEF VALIDATOR: the canonical terrain fingerprint (terrain.js terrainFingerprint: FNV-1a over the float32
 // bytes of terrainH on the 32 x 32 grid x, z = -248..248 step 16, zone-major) on the SLICED code. It checks every
 // site, home with its relief rows removed (which must be the shipped 3b526986), and the frozen wreck sites, against
-// expect.json. Exit 1 on any mismatch.  --record rewrites expect.json (main, or Task 5's new home anchor only).
+// expect.json. Exit 1 on any mismatch.  --record rewrites expect.json (main, or Task 4's new home anchor only).
 import { readFileSync, writeFileSync } from 'node:fs';
 import { setSite, siteAt } from '../../src/world/site.js';
 const T = await import('./terrain.gen.mjs'), P = await import('./pins.gen.mjs');
@@ -380,6 +382,12 @@ const win = (ROWS.wrecks && ROWS.wrecks.band && ROWS.wrecks.band[0]) || null;
 gate('skiff in its window', win && win.length >= 4 && rel >= win[2] - 0.5 && rel <= win[3] + 0.5 && sdist >= win[0] - 0.5 && sdist <= win[1] + 0.5, { rel: +rel.toFixed(1), d: +sdist.toFixed(1), win });
 let hard = 0;
 for (const [n, p, v, h] of g) { if (!p && h) hard++; console.log((p ? 'PASS ' : h ? 'FAIL ' : 'MISS ') + n.padEnd(46), JSON.stringify(v)); }
+// INFO: the gait rig's pitch clamp is 35.5 deg (diver.js groundPitch); steeper planted soles sink by design. Reported so
+// tuning can push it down (today ~2.4% of the open floor is past 33 deg; trial Q0 ~15%) — Michael judges (Review Focus 1)
+{ let s355 = 0, sn = 0; const cmax = Math.cos(35.5 * Math.PI / 180);
+  for (let j = 1; j < N - 1; j++) for (let i = 1; i < N - 1; i++) { const k = j * N + i; if (CL[k] !== 3) continue; sn++;
+    const gx = (H[k + 1] - H[k - 1]) / 2, gz = (H[k + N] - H[k - N]) / 2; if (1 / Math.sqrt(1 + gx * gx + gz * gz) < cmax) s355++; }
+  console.log('INFO open floor steeper than the gait clamp (35.5 deg):', +(s355 / sn * 100).toFixed(1) + '%'); }
 const ji = process.argv.indexOf('--json'); if (ji > 0) writeFileSync(process.argv[ji + 1], JSON.stringify({ out, gates: g }, null, 1));
 process.exit(hard ? 1 : 0);
 ```
@@ -434,52 +442,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 2: `velfix-gate`'s crack route — green on main, and it gates the route
-
-**Background:** read `/Users/michaelpaulus/sc/.abyssa-wt/velfix/VELFIX-REPORT.md` (finding 1) and `docs/reports/2026-10-13-clawcam.md`.
-
-What is known:
-- The crack route is RED on main and was RED on clawfix.
-- Run alone, main had 9 wash frames (max outside 0.13) and 2 lens-on-surface frames, on her body mesh as she walks home with him under her. Under load it had 14 wash frames and 0 lens frames.
-- velfix found a load-induced "pressed" fight mode on pristine baa7f88. The mechanism is unidentified; a wall-clock dependence is suspected.
-
-Three code facts:
-- `fullplay-gate.mjs`'s fight uses its own inline `decide()`, which predates velhard's NO SAFE SPOT. It is not `ritepolicy.mjs`.
-- The wash counter books fight frames: it has no calm condition.
-- The crack route has no route bound. `way.zoneAt` is reported, never gated, so a crack run that never reaches zone 1 can be GREEN.
-
-**Files:** modify `tools/bench/fullplay-gate.mjs` and `tools/bench/velfix-gate.mjs`; game code only if the root cause is a game bug.
-
-- [ ] **Step 1: Reproduce.** Serve main (this branch's base) on your port. Run `velfix-gate.mjs` three times alone, then once with a second headless Chrome running the game on another port (load). Record per run:
-  - each route's verdict;
-  - wash frames, and max outside;
-  - lens-on-surface frames;
-  - the fight's length and drops.
-- [ ] **Step 2: Find the root cause** (superpowers:systematic-debugging; no fix without one).
-  - Look for wall-clock reads in the sim: `grep -n "performance.now\|Date.now" src/**/*.js` on any value that feeds gameplay rather than perf or UI.
-  - Compare a RED and a GREEN run's frame logs at the first divergence.
-  - Write the cause in the report, with the evidence.
-- [ ] **Step 3: Write the failing route bound first.** The crack route's verdict requires `way.zoneAt` (zone 1 reached) within its 90 s.
-  - The RED case: run the crack route with `FP_NOVENT=1` (add it: the route walks to the throat but never vents). It must print `GATE RED` because zone 1 is not reached.
-- [ ] **Step 4: Fix.** Fix the root cause. Also:
-  - replace `fullplay-gate.mjs`'s inline `decide()` with `ritepolicy.mjs`'s `makePolicy` in the `average` mode, the way `fullplay.mjs` uses it;
-  - book the wash gate per phase (fight / after the calm), and print both. The gate stays on both: velfix's "lit wards burn, they don't wash" holds during the fight too. Velhard's known 0.3 s light-up flash is ≤ 50%, which is under the per-frame red rule's 0.15 overall share only when it is short. If fight frames are red only at light-up, confirm that against `docs/playtests/2026-10-10-fissure-harpoon.md` and rule on it in the report.
-- [ ] **Step 5: Prove it.**
-  - Main plus this task's tool changes: all three routes GREEN on 3 of 3 consecutive runs alone and 1 of 1 under load.
-  - The `FP_NOVENT` crack run is RED.
-  - Paste the per-run table into the report.
-- [ ] **Step 6: Commit**
-
-```bash
-git add tools/bench/fullplay-gate.mjs tools/bench/velfix-gate.mjs   # plus any game file the root cause needed
-git commit -m "velfix-gate: the crack route gates reaching zone 1; the fight runs ritepolicy; <root cause, one line> — green on main 3/3 alone, 1/1 under load
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
-```
-
----
-
-### Task 3: The skiff's bearing window (`wrecks.js`), tested on today's ground
+### Task 2: The skiff's bearing window (`wrecks.js`), tested on today's ground
 
 **Files:**
 - Modify: `src/world/wrecks.js` (`findSite`, `wreckSites`).
@@ -528,7 +491,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 4: `heightAt` keeps its raw noise; THE UPLANDS (an additive, masked term)
+### Task 3: `heightAt` keeps its raw noise; THE UPLANDS (an additive, masked term)
 
 **Files:**
 - Modify: `src/world/terrain.js`. In `heightAt`, keep the raw noise values in locals. Add `UPL`, `syncRelief`, `keepOff` and `uplandsAt` inside the sliced region, after `syncSite`.
@@ -580,7 +543,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
   Add two gates to `gates.mjs`, before its final table:
 
 ```js
-// (Task 4) THE UPLANDS' MASK IS EXACT: with the uplands alone (no hollow), inside every keep-off capsule's inner radius
+// (Task 3) THE UPLANDS' MASK IS EXACT: with the uplands alone (no hollow), inside every keep-off capsule's inner radius
 // the field is today's, bit for bit; and they do raise the relief
 {
   const ko = ROWS.shape && ROWS.shape.uplands && ROWS.shape.uplands.keepOff, pts = [];
@@ -675,7 +638,7 @@ function syncRelief(sh) {
     - S5 `over52` ≤ 1.5%;
     - S1's sd above 5.55. S1 itself may still FAIL: the uplands alone gave about 10 in trial H7, so the hollow is needed.
   - `cost.mjs`: ratio ≤ 1.15. The term reuses the noise, so a higher ratio means the reuse failed.
-- [ ] **Step 5: Commit** (do not record the new home anchor yet; Task 5 records it once)
+- [ ] **Step 5: Commit** (do not record the new home anchor yet; Task 4 records it once)
 
 ```bash
 git add src/world/terrain.js src/world/site.js tools/relief/gates.mjs
@@ -686,7 +649,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 5: THE HOLLOW (uniform at the crack, treads, ramps, her flat, the dish, outcrops), the relative apron, the carve
+### Task 4: THE HOLLOW (uniform at the crack, treads, ramps, her flat, the dish, outcrops), the relative apron, the carve
 
 **Files:**
 - Modify: `src/world/terrain.js` (`HOL`, `_hv`, `hollowAt`, `syncRelief`, `heightAt`).
@@ -695,12 +658,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Test: `tools/relief/gates.mjs`, `validate.mjs` and `cost.mjs`. Record `expect.json`'s new home anchor.
 
 **Interfaces:**
-- Consumes: Task 4's `keepOff`, `capsules`, `syncRelief` and `UPL`.
+- Consumes: Task 3's `keepOff`, `capsules`, `syncRelief` and `UPL`.
 - Produces:
   - `let HOL`;
   - `const _hv = { uni, det, level, flatW, q, rF, rO }`;
   - `function hollowAt(x, z, o)`: fills `o`, returns `o`, allocates nothing;
-  - `window.__relief = { rows(), set(patch), reset() }` in `game.js`. `set` deep-merges `patch` into the live site's `shape` rows and runs `reseedWorld(currentSiteIndex())`. `reset` restores the authored rows. Tasks 7–8 use it for RED mutants.
+  - `window.__relief = { rows(), set(patch), reset() }` in `game.js`. `set` deep-merges `patch` into the live site's `shape` rows and runs `reseedWorld(currentSiteIndex())`. `reset` restores the authored rows. Tasks 6–7 use it for RED mutants.
 - Home row: `shape.hollow`, the values in Step 2.
 
 - [ ] **Step 1: The failing gates.**
@@ -773,7 +736,7 @@ function hollowAt(x, z, o) {
       N: h.N, rw: h.rw, tw: h.tw, twf: h.twf, ramp0: h.ramp[0], ramp1: h.ramp[1], cPh: Math.cos(h.rampPh), sPh: Math.sin(h.rampPh),
       sx: h.station[0], sz: h.station[1], sR0: h.sR[0], sR1: h.sR[1], sLvl: h.sLvl, sDrop: h.sDrop, dish: h.dish, rDish: h.rDish,
       ocF: h.oc.f, ocThr: h.oc.thr, ocAmp: h.oc.amp, ocSoft: h.oc.soft, ocK: capsules({ crack: h.oc.keepOff }, F),
-      cx: F.cx, cz: F.cz, rdx: -F.cx / l, rdz: -F.cz / l, noComp: !!h.noComp, row: h };   // noComp: a RED mutant only (Tasks 7-8)
+      cx: F.cx, cz: F.cz, rdx: -F.cx / l, rdz: -F.cz / l, noComp: !!h.noComp, row: h };   // noComp: a RED mutant only (Tasks 6-7)
   } else HOL = null;
 ```
 
@@ -862,12 +825,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 6: In the game — fresh loads, invariants, the new anchors, a voyage, an old save, boot
+### Task 5: In the game — fresh loads, invariants, the new anchors, a voyage, an old save, boot
 
 **Files:**
 - Create: `tools/bench/relief-load.mjs`. It is a CDP script modelled on `tools/bench/clawcam-probe.mjs`'s start/connect and the fresh-load check in `docs/reports/2026-10-13-clawcam.md`.
 
-**Interfaces:** consumes Tasks 3–5. Produces the recorded anchors (home `__ridge.fp()`, `sleeperFingerprint(0)`) for Task 14.
+**Interfaces:** consumes Tasks 2–4. Produces the recorded anchors (home `__ridge.fp()`, `sleeperFingerprint(0)`) for Task 14.
 
 - [ ] **Step 1: Write the probe.** It must:
   - load `?playtest` (plain) on your port in a fresh profile;
@@ -907,13 +870,13 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 
 ---
 
-### Task 7: `fissure-probe` on the new ground — the shut crack
+### Task 6: `fissure-probe` on the new ground — the shut crack
 
 **Files:** modify `tools/bench/fissure-probe.mjs`. For each mode below, change the bound named, and comment the requirement it now derives from.
 
-**RED mutants** (Task 5's `__relief.set`), each run against the bound it must break:
+**RED mutants** (Task 4's `__relief.set`), each run against the bound it must break:
 - `deep`: `{ hollow: { D: 60 } }`. The lip drops to about −303, so the jam top lands near the trigger and the throat under it is about 10 u.
-- `nocomp`: `{ hollow: { noComp: true } }`. The carve is not shortened, so the throat floor drops about 31 u, to about −346 (Task 5's `HOL.noComp`).
+- `nocomp`: `{ hollow: { noComp: true } }`. The carve is not shortened, so the throat floor drops about 31 u, to about −346 (Task 4's `HOL.noComp`).
 - `sink`: `{ hollow: { D: 60, noComp: true } }`. The throat floor drops about 60 u, to about −375, which pulls the ending's dip under 150.
 - `tilt`: `{ hollow: { sDrop: -14 } }`. A 14 u mound under her station puts her on a bank.
 
@@ -941,9 +904,9 @@ Write each mutant's verdict into the report.
 
 ---
 
-### Task 8: `fissure-probe` on the new ground — the open throat, the lens, the ending, her crack
+### Task 7: `fissure-probe` on the new ground — the open throat, the lens, the ending, her crack
 
-**Files:** modify `tools/bench/fissure-probe.mjs` and `tools/bench/walls-inside.page.js`. Same mutants as Task 7.
+**Files:** modify `tools/bench/fissure-probe.mjs` and `tools/bench/walls-inside.page.js`. Same mutants as Task 6.
 
 - [ ] **`rise`.** Its totals are frame counts over a rise that drops from about 87 u to 53 u, so they get easier silently.
   - Re-derive per unit of rise. Today: ΣhfIn 24 / Σhidden 123 over 40 rises × 87 u. The bars become `RISE_HF` 40 and `RISE_HID` 160 scaled by (new rise / 87). Print both.
@@ -972,7 +935,7 @@ Write each mutant's verdict into the report.
 
 ---
 
-### Task 9: Her rite on the new ground
+### Task 8: Her rite on the new ground
 
 **Files:** read-only except `tools/bench/riteplay.mjs`: add a `ward height over her ground` column to its ledger, `max(ward.y − terrainH(ward.x, ward.z))` while she is up.
 
@@ -987,9 +950,62 @@ Write each mutant's verdict into the report.
 - [ ] **Step 3: The other checks.**
   - `harpoon-probe`: all modes PASS.
   - `brooder-invariants`: prints.
-  - `fissure-probe velkath-crack clearance` (Task 8's bounds): PASS.
+  - `fissure-probe velkath-crack clearance` (Task 7's bounds): PASS.
 - [ ] **Step 4: The rite's start.** Press Alt+6 at home. The harpoon anchor is ≥ 6 u off the crack and on her sand side; the prompt reads; the pull wakes her.
 - [ ] **Commit** the ledger column, with the run table in the body.
+
+---
+
+### Task 9: `velfix-gate`'s crack route — green on main, and it gates the route
+
+**Background:** read `/Users/michaelpaulus/sc/.abyssa-wt/velfix/VELFIX-REPORT.md` (finding 1) and `docs/reports/2026-10-13-clawcam.md`.
+
+What is known:
+- The crack route is RED on main and was RED on clawfix.
+- Run alone, main had 9 wash frames (max outside 0.13) and 2 lens-on-surface frames, on her body mesh as she walks home with him under her. Under load it had 14 wash frames and 0 lens frames.
+- velfix found a load-induced "pressed" fight mode on pristine baa7f88. The mechanism is unidentified; a wall-clock dependence is suspected.
+
+Three code facts:
+- `fullplay-gate.mjs`'s fight uses its own inline `decide()`, which predates velhard's NO SAFE SPOT. It is not `ritepolicy.mjs`.
+- The wash counter books fight frames: it has no calm condition.
+- The crack route has no route bound. `way.zoneAt` is reported, never gated, so a crack run that never reaches zone 1 can be GREEN.
+
+**Files:** modify `tools/bench/fullplay-gate.mjs` and `tools/bench/velfix-gate.mjs`; game code only if the root cause is a game bug.
+
+- [ ] **Step 1: Reproduce.** Serve main (this branch's base) on your port. Run `velfix-gate.mjs` three times alone, then once with a second headless Chrome running the game on another port (load). Record per run:
+  - each route's verdict;
+  - wash frames, and max outside;
+  - lens-on-surface frames;
+  - the fight's length and drops.
+**Cap.** This is an open debugging problem that velfix could not close.
+- After three fix rounds without an identified root cause, stop and record a ledger ruling. The floor this task must still reach:
+  - the route bound, with its `FP_NOVENT` RED case;
+  - `ritepolicy` in place of the stale inline `decide()`;
+  - the wash booked per phase;
+  - all three routes GREEN on 3 of 3 consecutive runs ALONE on main.
+- The load sensitivity is then documented with its evidence, and Task 10 runs the gate alone.
+
+- [ ] **Step 2: Find the root cause** (superpowers:systematic-debugging; no fix without one).
+  - Look for wall-clock reads in the sim: `grep -n "performance.now\|Date.now" src/**/*.js` on any value that feeds gameplay rather than perf or UI.
+  - Compare a RED and a GREEN run's frame logs at the first divergence.
+  - Write the cause in the report, with the evidence.
+- [ ] **Step 3: Write the failing route bound first.** The crack route's verdict requires `way.zoneAt` (zone 1 reached) within its 90 s.
+  - The RED case: run the crack route with `FP_NOVENT=1` (add it: the route walks to the throat but never vents). It must print `GATE RED` because zone 1 is not reached.
+- [ ] **Step 4: Fix.** Fix the root cause. Also:
+  - replace `fullplay-gate.mjs`'s inline `decide()` with `ritepolicy.mjs`'s `makePolicy` in the `average` mode, the way `fullplay.mjs` uses it;
+  - book the wash gate per phase (fight / after the calm), and print both. The gate stays on both: velfix's "lit wards burn, they don't wash" holds during the fight too. Velhard's known 0.3 s light-up flash is ≤ 50%, which is under the per-frame red rule's 0.15 overall share only when it is short. If fight frames are red only at light-up, confirm that against `docs/playtests/2026-10-10-fissure-harpoon.md` and rule on it in the report.
+- [ ] **Step 5: Prove it.**
+  - Main plus this task's tool changes: all three routes GREEN on 3 of 3 consecutive runs alone and 1 of 1 under load.
+  - The `FP_NOVENT` crack run is RED.
+  - Paste the per-run table into the report.
+- [ ] **Step 6: Commit**
+
+```bash
+git add tools/bench/fullplay-gate.mjs tools/bench/velfix-gate.mjs   # plus any game file the root cause needed
+git commit -m "velfix-gate: the crack route gates reaching zone 1; the fight runs ritepolicy; <root cause, one line> — green on main 3/3 alone, 1/1 under load
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+```
 
 ---
 
@@ -997,7 +1013,7 @@ Write each mutant's verdict into the report.
 
 **Files:** modify `src/lib/bench.js` (`VIEWS.z0b`, `VIEWS.z0r` and their comment).
 
-- [ ] **Step 1: `velfix-gate` on the new ground.** All three routes are GREEN, with Task 2's tools and route bound. Runs: 3 alone and 1 under load.
+- [ ] **Step 1: `velfix-gate` on the new ground.** All three routes are GREEN, with Task 9's tools and route bound. Runs: 3 alone and 1 under load.
 - [ ] **Step 2: `fullplay.mjs`.** With `FP_HOSE=760`, the run reaches zone 1 through the new crack. The tool exits 0 regardless, so assert it from its ledger: `zone 1 reached`.
 - [ ] **Step 3: Bench views.**
   - `z0b`: "Velkath's ridge from 30 u". Retarget it to stand 30 u from (89.7, 39.1) on her open-sand side, facing her.
@@ -1090,6 +1106,9 @@ Write each mutant's verdict into the report.
   4. her bed;
   5. the skiff on its new ground;
   6. the open throat from its lip (call 1).
+- [ ] **L2b. Height-tied shading.** The terrain shader reads `vColor.b`, the height above `ZB[0]` (−260) over 220 u, clamped to 0..1 (`fillTerrain`). It uses it twice: `rockW += hb × 0.10`, and albedo × (… + 0.10 hb).
+  - Today's open floor sits at hb ≈ 0.07. The hollow clamps to 0 (−0.7% albedo) and the uplands reach ≈ 0.2 (+2%). Measured in the code this is negligible, but confirm it in the stills: the hollow's tonal variation comes from slope, AO and the macro bias, not a flat band.
+  - If a still shows the hollow reading as one flat tone, report it with the frame. Do not retune the encoding inside this plan.
 - [ ] **L3.** `__exposure.state()` at her bed, the raft column and an upland ridge: inside its depth clamp.
   - The ward glare at the new depth: light a ward with the lens under her and book the blown share per frame (velhard's check). The light-up flash must be ≤ 50% of the frame.
 - [ ] **L4.** A full take: `fullplay.mjs` with `RP_VIDEO`, average policy, from the raft to zone 1. Encode it to MP4 (`~/sc/.abyssa-wt/encode.mjs`, `ENC_MIME='video/mp4;codecs=avc1.640028'`, then `avconvert … --preset PresetHighestQuality --replace`) as `~/sc/.abyssa-wt/video/relief-full.mp4`.
