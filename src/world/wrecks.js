@@ -744,8 +744,15 @@ function lanternParts() {
 }
 // place a kit (list of [geo, key]) into a Part at (x, z) on the live floor, yaw ry, tilt rx/rz, sunk
 const _kq = new THREE.Quaternion(), _ke = new THREE.Euler(), _km = new THREE.Matrix4(), _kp = new THREE.Vector3(), _ks = new THREE.Vector3(1, 1, 1);
-function placeKit(q, M, parts, x, z, ry, sink = 0.08, rx = 0, rz = 0, lift = 0) {
-  const y = seatAt(x, z) - sink + lift;
+function placeKit(q, M, parts, x, z, ry, sink = 0.08, rx = 0, rz = 0, lift = 0, fx = 0, fz = 0) {
+  // with a footprint (half-extents fx, fz in its own frame): the LOWEST floor under its corners, so no
+  // corner of it stands clear of the relief (the far ones sink a little deeper into the silt)
+  let f = seatAt(x, z);
+  if (fx > 0) for (const [cx, cz] of [[fx, fz], [-fx, fz], [fx, -fz], [-fx, -fz]]) {
+    const c = Math.cos(ry), s = Math.sin(ry);
+    f = Math.min(f, seatAt(x + cx * c + cz * s, z - cx * s + cz * c));
+  }
+  const y = f - sink + lift;
   _km.compose(_kp.set(x, y, z), _kq.setFromEuler(_ke.set(rx, ry, rz, 'YXZ')), _ks);
   for (const [g, k] of parts) q.add(g.applyMatrix4(_km), M[k]);
 }
@@ -994,21 +1001,28 @@ function skiff(M) {
     // jagged break: three splinters
     for (let i = 0; i < 4; i++)
       q.add(grime(xf(new THREE.ConeGeometry(rng(0.05, 0.11), rng(0.5, 1.2), 4), 5.0 + rng(-0.2, 0.2) + 1.2, 2.9, 1.6 + rng(-0.2, 0.2), 0.2, rng(0, 3), 0.42), 0.8, 0.6, 0), M.wood);
-    // (primfix) the broken length lies IN the silt where it fell: seated on the live floor, half sunk
-    const mY = seatAt(-3.0, 5.4, 0.2) + 0.1;
-    const fallen = new THREE.CylinderGeometry(0.20, 0.26, 9.5, 12);
-    q.add(grime(xf(fallen, -3.0, mY, 5.4, 0, 0.42, Math.PI / 2 - 0.06), 0.85, 0.4, mY - 0.3), M.wood);
+    // (primfix) the broken length lies IN the silt where it fell: BOTH ENDS seated on the live floor
+    // (half sunk), its axis the line between them, so it follows whatever relief is under it
+    const mE = new THREE.Euler(0, 0.42, Math.PI / 2 - 0.06), mH = V3(0, 1, 0).applyEuler(mE).setY(0).normalize(), HALF = 4.75;
+    const mA = V3(-3.0 - mH.x * HALF, 0, 5.4 - mH.z * HALF), mB = V3(-3.0 + mH.x * HALF, 0, 5.4 + mH.z * HALF);
+    mA.y = seatAt(mA.x, mA.z, 0.2) + 0.08; mB.y = seatAt(mB.x, mB.z, 0.2) + 0.1;     // (the butt is the thicker end: B)
+    const mDir = mB.clone().sub(mA).normalize(), mC = mA.clone().add(mB).multiplyScalar(0.5);
+    const mQ = new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), mDir);
+    const fallen = new THREE.CylinderGeometry(0.20, 0.26, 9.5, 12);   // +Y the top (0.20), toward A
+    fallen.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), mDir.clone().negate()));
+    fallen.translate(mC.x, mC.y, mC.z);
+    q.add(grime(fallen, 0.85, 0.4, Math.min(mA.y, mB.y) - 0.3), M.wood);
     // (primfix) the mast hoops are ON the fallen mast now (they stood alone in the sand): slipped
     // down its length at odd intervals, a little cocked, half in the silt with it
-    const mE = new THREE.Euler(0, 0.42, Math.PI / 2 - 0.06), mDir = V3(0, 1, 0).applyEuler(mE);
-    const mQ = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), mDir);
+    const hQ = new THREE.Quaternion().setFromUnitVectors(V3(0, 0, 1), mDir);
     for (const tt of [-3.6, -2.1, 1.3, 3.5]) {
       const h = new THREE.TorusGeometry(0.29, 0.04, 8, 22);
       h.applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(0.12 * Math.sin(tt * 3), 0.1 * Math.cos(tt * 2), 0)));
-      h.applyQuaternion(mQ);
-      h.translate(-3.0 + mDir.x * tt, mY + mDir.y * tt - 0.02, 5.4 + mDir.z * tt);
+      h.applyQuaternion(hQ);
+      h.translate(mC.x + mDir.x * tt, mC.y + mDir.y * tt - 0.02, mC.z + mDir.z * tt);
       q.add(grime(h, 0.8, 3), M.brass);
     }
+    void mQ;
   }
 
   // (primfix) the deck kit: plank crates, rope coils, the sounding lead, a lantern, each seated on the
@@ -1026,7 +1040,7 @@ function skiff(M) {
         lidGone: b => b === gone || (ci === 4 && b === 3),
         missing: (axis, sgn, b) => (ci === 2 && axis === 'x' && sgn === 1 && b === 1) || (ci === 4 && axis === 'z' && sgn === -1 && b === 0)
       });
-      placeKit(q, M, parts, cx, cz, ry, 0.16 * sc + 0.1 * kr(), (kr() - 0.5) * 0.12, (kr() - 0.5) * 0.14);
+      placeKit(q, M, parts, cx, cz, ry, 0.16 * sc + 0.1 * kr(), (kr() - 0.5) * 0.12, (kr() - 0.5) * 0.14, 0, W / 2, D / 2);
       // the board that came off it, lying in the silt beside it
       if (ci === 2 || ci === 4) {
         const bd = boardGeo(ci === 2 ? W : D, 0.26, 0.045, 0.012, 0.8, kr);
@@ -1045,9 +1059,11 @@ function skiff(M) {
   // the relic crate: lid pried off and leaning, the brass sounding set inside
   const RC = V3(3.4, 0, -5.0);
   {
-    const rcY = seatAt(RC.x, RC.z) - 0.12;
+    let rcF = seatAt(RC.x, RC.z);
+    for (const [cx, cz] of [[1.05, 0.8], [-1.05, 0.8], [1.05, -0.8], [-1.05, -0.8]]) { const c = Math.cos(-0.35), s = Math.sin(-0.35); rcF = Math.min(rcF, seatAt(RC.x + cx * c + cz * s, RC.z - cx * s + cz * c)); }
+    const rcY = rcF - 0.12;
     const parts = crateParts(kr, 2.1, 1.25, 1.6, { noLid: true });
-    placeKit(q, M, parts, RC.x, RC.z, -0.35, 0.12);
+    placeKit(q, M, parts, RC.x, RC.z, -0.35, 0.12, 0, 0, 0, 1.05, 0.8);
     // the lid, its boards still battened together, pried off and leaning on the crate's side
     const lid = [];
     for (let b = 0; b < 6; b++) { const g = boardGeo(0.34, 0.045, 1.66, 0.012, 0.8 + 0.25 * kr(), kr); g.translate(-0.88 + b * 0.352, 0, 0); lid.push([g, 'wood']); }
