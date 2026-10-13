@@ -236,12 +236,16 @@ if (MODE === 'grounded' || MODE === 'all') {
     asserts.push({ name: `GROUNDED ${k}: 300 frames, the lens identical to on:0`, value: `${g.n - g.bad}/${g.n} identical, tilt max ${g.tiltMax}, threatE max ${g.thEmax}`, pass: g.n === 300 && g.bad === 0 });
 }
 
-// ---- MOUSE: a look input during the cock drops the look-up within one frame, and it stays off for that blow ----
+// ---- MOUSE: a hand on the mouse is not a look (Michael 2026-10-13: "ignore small mouse movements") ----
 // (headless Chrome has no pointer lock, so the look input is written the way player.js's mousemove handler writes
-// it: player.yaw -= movementX * 0.0022, here a 4 px nudge, on one frame)
+// it: player.yaw -= movementX * 0.0022). Her held 34 u ahead. In order: a 4 px nudge and a jittering hand (+-3 px a
+// frame for 20 frames: a 7.6 deg path, ~0 net) leave it up; a real look (50 px at once, 6.3 deg net) drops it that
+// frame, it stays off for that blow and is back on the next; looking about (+-12 px a frame, an 18 deg path, <= 1.5
+// deg net) drops it; a sweep running through the window's opening (6 px a frame, ~45 deg/s, from ~0.4 s before
+// the cock) never lets it start.
 if (MODE === 'mouse' || MODE === 'all') {
   summary.mouse = await c.ev(`(async () => {
-    const L = window.__sl, B = window.__bench, X = window.__ccp, CC = window.__clawcam, P = window.player;
+    const L = window.__sl, B = window.__bench, X = window.__ccp, CC = window.__clawcam, P = window.player, PX = 0.0022;
     if (!CC) return { skipped: 'no __clawcam (main)' };
     await B.setup('z0b');
     if (L.hold) window.__lev.cmd('hold');
@@ -251,32 +255,56 @@ if (MODE === 'mouse' || MODE === 'all') {
     B.step(60 * 12, i => { X.keep(); if (i % 30 === 0) X.place(34, 0); if (i > 200 && L.threatE > 0.99 && L.hamPh > 0.02 && L.hamPh < 0.05) return false; });
     if (!L.hold) window.__lev.cmd('hold');
     X.place(34, 0);
-    // into a cock, until the look-up is well up
-    let n = 0;
-    B.step(600, () => { X.keep(); n++; if (n > 60 && L.hamPh > 0.55 && L.hamPh < 0.72 && CC.state().tilt > 0.1) return false; }, { render: true });
-    const before = { ph: +L.hamPh.toFixed(3), tiltDeg: CC.state().tiltDeg };
-    P.yaw -= 4 * 0.0022;                                  // the look input
-    B.step(1, () => X.keep(), { render: true });
+    const st = () => CC.state();
+    // into the next cock, until the look-up is well up
+    const intoCock = () => { let n = 0; B.step(600, () => { X.keep(); n++; if (n > 30 && L.hamPh > 0.55 && L.hamPh < 0.72 && st().tilt > 0.1) return false; }, { render: true }); return st().tiltDeg; };
+    // to the first frame of the next blow's cycle (the phase wraps under the cock: the guard re-arms)
+    const toNext = () => { let prev = L.hamPh; B.step(600, () => { X.keep(); const w = L.hamPh < prev; prev = L.hamPh; if (w) return false; }, { render: true }); };
+    // the rest of a blow, to 0.6 s after its landing: the most the look-up rose
+    const restOf = () => { let maxTilt = 0, frames = 0, landed = false, after = 0, prev = L.hamPh;
+      B.step(400, () => { X.keep(); frames++; maxTilt = Math.max(maxTilt, st().tilt);
+        if (prev < 0.90 && L.hamPh >= 0.90) landed = true; if (landed) after++; prev = L.hamPh; if (landed && after > 36) return false; }, { render: true });
+      return { frames, maxTilt }; };
+    const out = {};
+    out.before = intoCock();
+    P.yaw -= 4 * PX; B.step(1, () => X.keep(), { render: true });
+    out.nudge = { tiltDeg: st().tiltDeg, why: st().why, netDeg: st().lookNetDeg };
+    let j = 0; B.step(20, () => { X.keep(); P.yaw += (j++ % 2 ? 3 : -3) * PX; }, { render: true });
+    out.jitter = { tiltDeg: st().tiltDeg, why: st().why, pathDeg: st().lookPathDeg, netDeg: st().lookNetDeg };
+    P.yaw -= 50 * PX; B.step(1, () => X.keep(), { render: true });
     const r = X.row();
-    const frame1 = { ph: r.ph, tilt: r.tilt, pitch: r.pitch, pre: r.pre, same: r.q.every((v, i) => v === r.qPre[i]), off: CC.state().off };
-    // the rest of this blow (to 0.6 s after its landing): never re-engaged
-    let maxTilt = 0, frames = 0, landed = false, after = 0, prev = L.hamPh;
-    B.step(400, () => { X.keep(); frames++; const st = CC.state(); maxTilt = Math.max(maxTilt, st.tilt);
-      if (prev < 0.90 && L.hamPh >= 0.90) landed = true; if (landed) after++; prev = L.hamPh; if (landed && after > 36) return false; }, { render: true });
-    const rest = { frames, maxTilt, coolPassed: frames / 60 > 0.6 };
-    // ...and the next blow's look-up is back
-    let next = 0;
-    B.step(400, () => { X.keep(); next = Math.max(next, CC.state().tiltDeg); if (L.hamPh >= 0.80 && L.hamPh < 0.84) return false; }, { render: true });
+    out.look = { tilt: r.tilt, same: r.q.every((v, i) => v === r.qPre[i]), why: st().why, netDeg: st().lookNetDeg };
+    out.rest = restOf();
+    toNext();
+    out.next = intoCock();
+    let k = 0, dropAt = -1;
+    B.step(12, () => { X.keep(); P.yaw += (k % 2 ? 12 : -12) * PX; k++; if (dropAt < 0 && st().tilt === 0) dropAt = k; }, { render: true });
+    out.about = { tilt: st().tilt, why: st().why, dropAt, pathDeg: st().lookPathDeg, netDeg: st().lookNetDeg };
+    out.aboutRest = restOf();
+    toNext();
+    // the sweep: from ~0.4 s before the cock to ~0.3 s into it
+    const pre = 0.40 - 0.4 / L.hammerT;
+    B.step(600, () => { X.keep(); if (L.hamPh > pre && L.hamPh < 0.40) return false; }, { render: true });
+    let sweepMax = 0, s = 0;
+    B.step(42, () => { X.keep(); P.yaw -= 6 * PX; s++; sweepMax = Math.max(sweepMax, st().tilt); }, { render: true });
+    out.sweep = { frames: s, maxTilt: sweepMax, why: st().why, ph: +L.hamPh.toFixed(3), rest: restOf() };
+    toNext();
+    out.after = intoCock();
     window.__lev.cmd('hold');
-    return { before, frame1, rest, nextBlowTiltDeg: next };
+    return out;
   })()`);
   console.log('mouse', JSON.stringify(summary.mouse));
   const m = summary.mouse;
   if (!m.skipped) {
-    asserts.push({ name: 'MOUSE look-up up before the input (> 5 deg)', value: m.before.tiltDeg, pass: m.before.tiltDeg > 5 });
-    asserts.push({ name: 'MOUSE dropped within one frame (tilt 0, lens = on:0 lens)', value: `tilt ${m.frame1.tilt}, same ${m.frame1.same}`, pass: m.frame1.tilt === 0 && m.frame1.same });
-    asserts.push({ name: 'MOUSE stays off for that blow (to 0.6 s after its landing)', value: `max tilt ${m.rest.maxTilt} over ${m.rest.frames} frames`, pass: m.rest.maxTilt === 0 && m.rest.frames > 36 });
-    asserts.push({ name: 'MOUSE back on the next blow (> 5 deg by its hold)', value: m.nextBlowTiltDeg, pass: m.nextBlowTiltDeg > 5 });
+    asserts.push({ name: 'MOUSE look-up up before any input (> 5 deg)', value: m.before, pass: m.before > 5 });
+    asserts.push({ name: 'MOUSE a 4 px nudge leaves it up', value: `${m.nudge.tiltDeg} deg, ${m.nudge.why}`, pass: m.nudge.tiltDeg > 5 && m.nudge.why === 'on' });
+    asserts.push({ name: 'MOUSE a jittering hand (+-3 px x 20) leaves it up', value: `${m.jitter.tiltDeg} deg, ${m.jitter.why}, path ${m.jitter.pathDeg} deg`, pass: m.jitter.tiltDeg > 5 && m.jitter.why === 'on' });
+    asserts.push({ name: 'MOUSE a real look (50 px) drops it that frame (tilt 0, lens = on:0 lens)', value: `tilt ${m.look.tilt}, same ${m.look.same}, net ${m.look.netDeg} deg`, pass: m.look.tilt === 0 && m.look.same });
+    asserts.push({ name: 'MOUSE ...and it stays off for that blow (to 0.6 s after its landing)', value: `max tilt ${m.rest.maxTilt} over ${m.rest.frames} frames`, pass: m.rest.maxTilt === 0 && m.rest.frames > 36 });
+    asserts.push({ name: 'MOUSE back on the next blow (> 5 deg)', value: m.next, pass: m.next > 5 });
+    asserts.push({ name: 'MOUSE looking about (+-12 px x 12) drops it', value: `tilt ${m.about.tilt}, dropped at frame ${m.about.dropAt}, path ${m.about.pathDeg} deg, net ${m.about.netDeg} deg; rest max ${m.aboutRest.maxTilt}`, pass: m.about.tilt === 0 && m.about.dropAt > 0 && m.aboutRest.maxTilt === 0 });
+    asserts.push({ name: 'MOUSE a sweep through the window opening never lets it start', value: `max tilt ${m.sweep.maxTilt} over ${m.sweep.frames} frames, rest max ${m.sweep.rest.maxTilt}`, pass: m.sweep.maxTilt === 0 && m.sweep.rest.maxTilt === 0 });
+    asserts.push({ name: 'MOUSE back on the blow after the sweep (> 5 deg)', value: m.after, pass: m.after > 5 });
   }
 }
 

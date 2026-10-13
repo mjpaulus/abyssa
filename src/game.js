@@ -1260,10 +1260,20 @@ window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift:
 //               still she hunts him from 33-35 u (closeK stops her 2.05 R off), so 30 u switched it off exactly where
 //               she swings)
 // Not run: asleep, calmed, not up, not hunting him, under her shell (creUnder), in the open crack (throatOn), on deck
-// (deckK), her body behind the lens (BOSSCAM's front test), past rFar, paused. THE MOUSE OWNS THE VIEW: a look input
-// drops it at once and it stays off for that blow (and, as BOSSCAM's lean, none within BOSSCAM.cool s of a look).
-const CLAWCAM = { on: 1, maxDeg: 25, aimY: 0.7, helmLo: 0.12, helmY: -0.92, wIn: 7, wOut: 12, rNear: 1.2, rFar: 1.4 };
+// (deckK), her body behind the lens (BOSSCAM's front test), past rFar, paused.
+// THE MOUSE OWNS THE VIEW, BUT A HAND ON THE MOUSE IS NOT A LOOK (Michael 2026-10-13: "ignore small mouse movements").
+// The first build dropped the blow on ANY look input (and waited out BOSSCAM.cool after one), so a player with his
+// hand on the mouse never saw it. His look input over a blow is measured from the frame its window opens: the NET turn
+// of the view (|yaw| + |pitch| since then) and its PATH (every movement summed, so a hand that keeps looking about
+// counts though it comes back). Under both, the look-up carries on and his input still turns the view under it; past
+// either it drops AT ONCE and stays off for that blow. A blow that opens while he is mid-sweep starts off (the look of
+// the last moments, a leak over lookTau s, already past lookNet).
+//   lookNet / lookPath  deg (0.126 deg a mouse pixel at player.js's 0.0022 rad/px: 5 deg ~ 40 px, 15 deg ~ 120 px)
+//   lookTau             s, the leak on the recent look
+const CLAWCAM = { on: 1, maxDeg: 25, aimY: 0.7, helmLo: 0.12, helmY: -0.92, wIn: 7, wOut: 12, rNear: 1.2, rFar: 1.4,
+  lookNet: 5, lookPath: 15, lookTau: 0.3 };
 let clawTilt = 0, clawTiltV = 0, clawTgt = 0, clawGate = 0, clawOff = false, clawYawWas = 0, clawPitchWas = 0, clawWhy = '';
+let clawOpen = false, clawY0 = 0, clawP0 = 0, clawPath = 0, clawRecent = 0;   // the blow's look: baseline, path, recent
 const _ccF = V3(), _ccR = V3(), _ccU = V3(), _ccP = V3(), _ccW = V3(), _ccQ = new THREE.Quaternion();
 const ccStep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
 // the lens's own pitch frame (forward, horizontal right, up in the pitch plane); false if it looks straight up/down
@@ -1280,21 +1290,31 @@ const ccAbove = () => Math.atan2(_ccW.dot(_ccU), _ccW.dot(_ccF));
 function clawFrame(dt) {
   const L = lev, C = CLAWCAM;
   _ccQ.copy(camera.quaternion);   // the lens without the look-up: the on:0 lens
-  // the mouse owns the view: any look input drops the tilt this frame, and the blow is his
-  const looked = Math.abs(player.yaw - clawYawWas) > 1e-6 || Math.abs(player.pitch - clawPitchWas) > 1e-6;
+  // his look input this frame (rad; the mouse and the stick write player.yaw / pitch, nothing else does in play)
+  const dl = Math.abs(player.yaw - clawYawWas) + Math.abs(player.pitch - clawPitchWas);
   clawYawWas = player.yaw; clawPitchWas = player.pitch;
+  clawRecent = clawRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
   const brooder = !!(L && L.kind === 'brooder' && L.pos && L.claws && L.claws.length);
   const ph = brooder ? L.hamPh : 0, win = brooder && ph >= PH_COCK0 && ph < PH_SLAM0;
-  if (!win && ph < PH_COCK0) clawOff = false;                                   // the guard: the next blow is a new one
-  if ((looked || paused) && (win || clawTilt > 0)) clawOff = true;              // this one stays off
-  if (looked) { clawTilt = 0; clawTiltV = 0; }
+  if (!win && ph < PH_COCK0) { clawOff = false; clawOpen = false; }            // the guard: the next blow is a new one
+  if (win || clawTilt > 0) {
+    const d2r = Math.PI / 180;
+    if (!clawOpen) {                                                            // the window opens: his look's baseline
+      clawOpen = true; clawY0 = player.yaw; clawP0 = player.pitch; clawPath = 0;
+      if (clawRecent > C.lookNet * d2r) clawOff = true;                         // (mid-sweep: this one starts off)
+    } else clawPath += dl;
+    // a real look (past lookNet net, or lookPath of looking about): dropped at once, and the blow is his
+    if (Math.abs(player.yaw - clawY0) + Math.abs(player.pitch - clawP0) > C.lookNet * d2r || clawPath > C.lookPath * d2r) {
+      clawOff = true; clawTilt = 0; clawTiltV = 0;
+    }
+    if (paused) clawOff = true;                                                 // (a pause ends it on the spring)
+  }
   let tgt = 0, gate = 0, why = '';
   if (!C.on) why = 'off';
   else if (!win) why = brooder ? 'phase' : 'none';
   else if (clawOff) why = 'mouse';
   else if (paused || L.dormant || L.calmed || !((L.standE || 0) > 0.5)) why = 'her';
   else if (deckK > 0 || throatOn) why = 'place';
-  else if (bossCool > 0) why = 'cool';
   else {
     const d = Math.hypot(L.pos.x - player.pos.x, L.pos.z - player.pos.z), r = BOSSCAM.r;
     gate = ccStep(0.5, 0.9, L.threatE || 0) * (1 - ccStep(0.1, 0.5, creUnder)) * (1 - ccStep(C.rNear * r, C.rFar * r, d));
@@ -1342,7 +1362,8 @@ function clawFrame(dt) {
   // (about _ccR as the guard framed it THIS frame; a tilt with no frame this frame is dropped, never turned on a stale axis)
   if (clawTilt > 0) { if (framed) camera.rotateOnWorldAxis(_ccR, clawTilt); else { clawTilt = 0; clawTiltV = 0; } }
 }
-window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone() }) };
+window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone(),
+  lookNetDeg: clawOpen ? +((Math.abs(player.yaw - clawY0) + Math.abs(player.pitch - clawP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(clawPath * 57.29578).toFixed(2), recentDeg: +(clawRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
