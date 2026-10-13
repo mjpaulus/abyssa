@@ -280,6 +280,34 @@ if (MODE === 'mouse' || MODE === 'all') {
   }
 }
 
+// ---- HUNT: un-held (her own hunt: she closes to her standoff, turns to him, lunges into each blow, rears to look
+// at him), Sal stood still 45 u ahead and no input, 40 s; booked, the bonnet asserted ----
+if (MODE === 'hunt' || MODE === 'all') {
+  const H = await c.ev(`(async () => {
+    const L = window.__sl, B = window.__bench, X = window.__ccp, P = window.player;
+    await B.setup('z0b');
+    if (L.hold) window.__lev.cmd('hold');
+    if (L.dormant) { window.__lev.cmd('wake'); B.step(60 * 9); }
+    X.place(45, 0);
+    const out = [];
+    B.step(60 * 40, () => { X.keep(); const r = X.row(); r.d = +Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z).toFixed(1); out.push(r); }, { render: true });
+    return out;
+  })()`);
+  const inW = e => e.ph >= PH.cock0 && e.ph < PH.slam0 && e.thE > 0.9, hdW = e => e.ph >= PH.cock1 && e.ph < PH.slam0 && e.thE > 0.9;
+  const anyC = e => inF(e.wrist) || inF(e.palm) || inF(e.hinge) || inF(e.tip);
+  const ch = H.filter(inW), hd = H.filter(hdW);
+  const lands = H.filter((e, i) => i > 0 && H[i - 1].ph < PH.slam1 && e.ph >= PH.slam1 && e.thE > 0.5).length;
+  const helmIn = H.filter(e => inF(e.helm) && inF(e.helmLo)).length;
+  summary.hunt = { frames: H.length, blows: lands, d: [r1(Math.min(...H.map(e => e.d))), r1(Math.max(...H.map(e => e.d)))],
+    cockHold: ch.length, clawInPct: Math.round(100 * ch.filter(anyC).length / Math.max(1, ch.length)), clawInHoldPct: Math.round(100 * hd.filter(anyC).length / Math.max(1, hd.length)),
+    palmInPct: Math.round(100 * ch.filter(e => inF(e.palm)).length / Math.max(1, ch.length)), tiltMaxDeg: r1(Math.max(...H.map(e => e.tilt)) * 57.29578),
+    tiltOnPct: Math.round(100 * ch.filter(e => e.tilt > 0).length / Math.max(1, ch.length)), helmIn: `${helmIn}/${H.length}`,
+    why: H.reduce((a, e) => (a[e.why] = (a[e.why] || 0) + 1, a), {}) };
+  writeFileSync(`${OUT}/clawcam-${TAG}-hunt.json`, JSON.stringify(H));
+  console.log('hunt', JSON.stringify(summary.hunt));
+  asserts.push({ name: 'HUNT (un-held) his bonnet in frame on every frame', value: summary.hunt.helmIn, pass: helmIn === H.length });
+}
+
 // ---- VIDEO (CC_VIDEO=<dir>): the same three blows from the follow camera, before (on 0) and after (on 1): Sal still
 // CC_VD u ahead of her (default 34: her standoff), her held so the blows repeat exactly (the hammer is 156 frames);
 // every 3rd frame (20 fps of game time) -> <dir>/before/0000.png ... and <dir>/after/0000.png ... at 960x534 ----
@@ -290,12 +318,15 @@ if (MODE === 'video') {
     const L = window.__sl, B = window.__bench, X = window.__ccp;
     await B.setup('z0b');
     B.size(1280, 712);
-    ['title', 'pause', 'ptPanel', 'ptToast', 'ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; });
+    ['title', 'pause', 'ptPanel', 'ptToast', 'ptDock', 'lab', 'labTab'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; });
     window.__lev.cmd('wake');
     B.step(60 * 9);
     X.place(${VD}, ${VS});
     B.step(60 * 12, i => { X.keep(); if (i % 30 === 0) X.place(${VD}, ${VS}); if (i > 200 && L.threatE > 0.99 && L.hamPh > 0.02 && L.hamPh < 0.05) return false; });
     if (!L.hold) window.__lev.cmd('hold');
+    // THE LIVE LOOP STOPS HERE (as riteplay.mjs): between the capture calls the page's own rAF played real-time
+    // frames (and a screenshot forces one), so the blows drifted off their phases. From now on only __bench.step moves.
+    window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; };
     return 1;
   })()`);
   summary.video = {};
