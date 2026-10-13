@@ -300,7 +300,7 @@ if (bMode > 0.5 && bMode < 1.5 || bMode > 3.5) {
   // it), silt-stained where it lies on the floor, the folds of the collapse in their own shade
   float bLo = smoothstep(-0.16, 0.10, vBDir.y);
   float bFold = 0.5 + 0.5 * sin(atan(vBDir.z, vBDir.x) * 5.0 + vBSd.x * 20.0 + vBDir.y * 9.0);
-  bAlb = mix(vec3(0.15, 0.12, 0.085), vec3(0.34, 0.29, 0.20), 0.3 + 0.55 * vBSd.x) * mix(0.55, 1.0, bLo) * mix(0.78, 1.0, bFold);
+  bAlb = mix(vec3(0.10, 0.075, 0.05), vec3(0.25, 0.19, 0.115), 0.25 + 0.6 * vBSd.x) * mix(0.55, 1.0, bLo) * mix(0.75, 1.0, bFold);
 } else {
   bAlb = clAlb(vBSd.y, vBSd.x);
   // the eyespot: a dark kidney inside the shell, on its own bearing per egg; eyed eggs only
@@ -333,7 +333,7 @@ if (abyssaLampA.w > 0.0) {
   float bWrap = clamp((dot(bN, bL) + 0.75) / 1.75, 0.0, 1.0);
   float bNV = clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0);
   vec3 bIn = bAlb * vec3(1.6, 1.2, 0.85);
-  float bThk = bSkin > 0.5 ? mix(0.2, 1.0, smoothstep(0.15, 0.7, bH)) * mix(0.35, 1.0, smoothstep(0.0, ${(FIL * 1.6).toFixed(3)}, vBAO)) : (bMode > 1.5 && bMode < 2.5 ? 0.45 : 1.0);   // (a spent skin: a thin membrane, the lantern through it)
+  float bThk = bSkin > 0.5 ? mix(0.2, 1.0, smoothstep(0.15, 0.7, bH)) * mix(0.35, 1.0, smoothstep(0.0, ${(FIL * 1.6).toFixed(3)}, vBAO)) : (bMode > 1.5 && bMode < 2.5 ? 0.3 : 1.0);   // (a spent skin: a thin membrane, the lantern through it)
   totalEmissiveRadiance += bIn * bE * bWrap * (0.30 + 0.70 * pow(bNV, 1.6)) * (1.0 - 0.9 * bSpot) * uSssK * bThk;
 }
 #endif`;
@@ -1024,7 +1024,7 @@ export function makeBrood(L, idx, trailFrom) {
     {
       const NC = 240;
       const g = beadSet(_geoK, NC, false), P0 = g.attributes.aP0.array, P1 = g.attributes.aP1.array, Sd = g.attributes.aSd.array;
-      const rw = RB * R;                   // an egg's radius (0.039 u); an empty skin lies 1.4-2.6x wider
+      const rw = RB * R;                   // an egg's radius (0.039 u); an empty skin (casingGeo ~1.2 wide) lies 1-1.9x that
       let m = 0;
       const put = (x, z, r) => {
         if (m >= NC || fissureDist(x, z, idx) < 3) return;
@@ -1040,14 +1040,14 @@ export function makeBrood(L, idx, trailFrom) {
         const bi = Math.floor((a / TAU % 1 + 1) % 1 * fpS.length) % fpS.length, d = fpS[bi] * (0.98 + 0.2 * tr());
         const cx = B.shellsAt.x + Math.cos(a) * d, cz = B.shellsAt.z + Math.sin(a) * d;
         const nk = 5 + Math.floor(tr() * 10), cr = 0.18 + 0.4 * tr();
-        for (let k = 0; k < nk; k++) { const aa = tr() * TAU, r2 = Math.sqrt(tr()) * cr; put(cx + Math.cos(aa) * r2, cz + Math.sin(aa) * r2, rw * (1.5 + 1.1 * tr())); }
+        for (let k = 0; k < nk; k++) { const aa = tr() * TAU, r2 = Math.sqrt(tr()) * cr; put(cx + Math.cos(aa) * r2, cz + Math.sin(aa) * r2, rw * (1.1 + 0.8 * tr())); }
       }
       const tdx = to.x - B.shellsAt.x, tdz = to.z - B.shellsAt.z, tdl = Math.hypot(tdx, tdz) || 1;
       for (let guard = 0; m < NC && guard < NC * 4; guard++) {
         const f = Math.pow(tr(), 1.6) * 0.8, lat = (tr() - 0.5) * 5;
         const x = B.shellsAt.x + tdx * f - tdz / tdl * lat, z = B.shellsAt.z + tdz * f + tdx / tdl * lat;
         const pair = tr() < 0.4 ? 2 : 1;
-        for (let k = 0; k < pair; k++) put(x + (tr() - 0.5) * 0.3, z + (tr() - 0.5) * 0.3, rw * (1.4 + 1.0 * tr()));
+        for (let k = 0; k < pair; k++) put(x + (tr() - 0.5) * 0.3, z + (tr() - 0.5) * 0.3, rw * (1.0 + 0.7 * tr()));
       }
       g.instanceCount = m;
       g.boundingSphere = new THREE.Sphere(new THREE.Vector3(B.shellsAt.x, B.shellsAt.y, B.shellsAt.z), Math.hypot(to.x - B.shellsAt.x, to.z - B.shellsAt.z) + 12);

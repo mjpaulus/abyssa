@@ -51,6 +51,9 @@ add('i2-shell-wide', `const S = window.lev.brood.shellsAt, T = window.lev.brood.
 add('i3-casings', `const S = window.lev.brood.shellsAt, P = window.lev.pos; const a = Math.atan2(P.x - S.x, P.z - S.z); const tx = S.x + Math.sin(a) * 5, tz = S.z + Math.cos(a) * 5;
   const y0 = window.__pfFloor(tx, tz), sx = tx + Math.sin(a + 1.9) * 3.5, sz = tz + Math.cos(a + 1.9) * 3.5; window.__pf.stand(sx, sz, Math.atan2(tx - sx, tz - sz));
   window.__camPin = { p: [tx + Math.sin(a) * 4.5, y0 + 2.4, tz + Math.cos(a) * 4.5], t: [tx - Math.sin(a) * 2, y0, tz - Math.cos(a) * 2] }; return await window.__pf.shot();`);
+add('i3-casings-lee', `const S = window.lev.brood.shellsAt, a = 0.9; const tx = S.x + Math.cos(a) * 7.2, tz = S.z + Math.sin(a) * 7.2, y0 = window.__pfFloor(tx, tz);
+  window.__pf.stand(S.x + Math.cos(a + 0.5) * 9, S.z + Math.sin(a + 0.5) * 9, Math.atan2(S.x - (S.x + Math.cos(a + 0.5) * 9), S.z - (S.z + Math.sin(a + 0.5) * 9)));
+  window.__camPin = { p: [S.x + Math.cos(a) * 12, y0 + 2.6, S.z + Math.sin(a) * 12], t: [tx, y0, tz] }; return await window.__pf.shot();`);
 add('i4-pits', `const B = window.lev.brood, T = B.trailA, P = window.lev.pos; const dx = P.x - T.x, dz = P.z - T.z, dl = Math.hypot(dx, dz);
   const f = 0.42, cx = T.x + dx * f, cz = T.z + dz * f, px = -dz / dl, pz = dx / dl, bend = Math.sin(f * Math.PI) * 14;
   const tx = cx + px * (bend + 13), tz = cz + pz * (bend + 13), y0 = window.__pfFloor(tx, tz);
