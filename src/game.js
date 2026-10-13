@@ -1250,17 +1250,17 @@ window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift:
 //               cock+hold there (main 0%)
 //   aimY        it takes only as much as puts the palm at this NDC height (the upper part of the frame)
 //   helmLo/Y    Sal stays in frame: his bonnet's lowest point (u over player.pos; the helmet spans 0.97-1.86
-//               standing, 0.87 at the bottom of a stride) is held at NDC y >= helmY. At 14-24 u this, not the cap,
-//               is the limit: 13-19 deg, and her claw (60+ deg up) stays out of frame there
-//   wIn/wOut    the spring (/s): in over the cock (0.83 s; slow enough to swallow the hold's tremble), out from the
-//               fall (11: ~2% of the tilt left 0.4 s after the landing)
+//               standing, 0.87 at the bottom of a stride: 0.8 keeps a margin) is held at NDC y >= helmY. At 14-24 u
+//               this, not the cap, is the limit (13-19 deg), and her claw (60+ deg up) stays out of frame there
+//   wIn/wOut    the spring (/s): in over the cock (0.83 s; 7 still takes the hold's 9-13 Hz tremble down to ~1%),
+//               out from the fall (12: ~1% of the tilt left 0.4 s after the landing, ~45% at the landing itself)
 //   rNear/rFar  the range, x BOSSCAM.r: full to 36 u, gone by 42. (The brief named BOSSCAM.r, 30 u; un-held with Sal
 //               still she hunts him from 33-35 u (closeK stops her 2.05 R off), so 30 u switched it off exactly where
 //               she swings)
 // Not run: asleep, calmed, not up, not hunting him, under her shell (creUnder), in the open crack (throatOn), on deck
 // (deckK), her body behind the lens (BOSSCAM's front test), past rFar, paused. THE MOUSE OWNS THE VIEW: a look input
 // drops it at once and it stays off for that blow (and, as BOSSCAM's lean, none within BOSSCAM.cool s of a look).
-const CLAWCAM = { on: 1, maxDeg: 25, aimY: 0.7, helmLo: 0.85, helmY: -0.92, wIn: 5, wOut: 11, rNear: 1.2, rFar: 1.4 };
+const CLAWCAM = { on: 1, maxDeg: 25, aimY: 0.7, helmLo: 0.8, helmY: -0.92, wIn: 7, wOut: 12, rNear: 1.2, rFar: 1.4 };
 let clawTilt = 0, clawTiltV = 0, clawTgt = 0, clawGate = 0, clawOff = false, clawYawWas = 0, clawPitchWas = 0, clawWhy = '';
 const _ccF = V3(), _ccR = V3(), _ccU = V3(), _ccP = V3(), _ccW = V3(), _ccQ = new THREE.Quaternion();
 const ccStep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -1324,11 +1324,13 @@ function clawFrame(dt) {
       if (tgt > allow) tgt = allow;
     } else { tgt = 0; clawTilt = 0; clawTiltV = 0; }   // (a lens looking straight up or down has no pitch plane)
   }
-  // critically damped (implicit: stable at any dt), in over the cock, out from the fall
+  // critically damped, in over the cock, out from the fall: the EXACT step for a target held over the frame (stable
+  // at any dt, and w is the real rate: an implicit-Euler step ran wOut 11 at an effective ~10/s and missed the settle)
   const w = why === 'on' ? C.wIn : C.wOut, h = Math.min(dt, 0.05);
   if (h > 0 && (tgt > 0 || clawTilt > 0 || clawTiltV !== 0)) {
-    clawTiltV = (clawTiltV + w * w * h * (tgt - clawTilt)) / (1 + 2 * w * h + w * w * h * h);
-    clawTilt += clawTiltV * h;
+    const ex = Math.exp(-w * h), e0 = clawTilt - tgt, k = clawTiltV + w * e0;
+    clawTilt = tgt + (e0 + k * h) * ex;
+    clawTiltV = (clawTiltV - w * k * h) * ex;
   }
   if (clawTilt > allow) { clawTilt = allow; if (clawTiltV > 0) clawTiltV = 0; }
   if (clawTilt < 0) { clawTilt = 0; if (clawTiltV < 0) clawTiltV = 0; }
