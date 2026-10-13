@@ -718,7 +718,7 @@ function coilParts(rnd, rIn, rOut, turns, rad) {
   }
   const ta = turns * TAU, tx = Math.cos(ta) * rOut, tz = Math.sin(ta) * rOut;
   pts.push(V3(tx + 0.25, rad, tz + 0.12), V3(tx + 0.7, rad * 0.8, tz + 0.05 + 0.2 * rnd()), V3(tx + 1.2 + 0.4 * rnd(), rad * 0.6, tz - 0.15));
-  const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 3, rad, 6, false);
+  const g = new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), pts.length * 2, rad, 5, false);
   return [[grime(g, 0.75 + 0.2 * rnd(), 4.5, -0.2), 'rope']];
 }
 // the sounding lead: a tapered octagonal lead with its arming cup and eye, its line coiled beside it
@@ -1076,6 +1076,10 @@ function skiff(M) {
   r.bake();
 
   q.bake();
+  // (primfix) the deck kit's small stuff (straps, nails, coils, the lead, the lantern, the hoops) never
+  // casts into the lantern's cube shadow: six faces of it cost ~100k triangles a frame beside the
+  // skiff and none of it reads; the timber (crates, boards, the mast) still does
+  for (const m of deck.children) if (m.isMesh && m.material !== M.wood) m.castShadow = false;
   p.bake();
 
   // ---- the trawl net, still made fast to her, draped off the high gunwale ----
@@ -1826,7 +1830,7 @@ export function buildWrecks() {
       // Marker and burst share the relic's own parent frame, so they follow whatever
       // transform the hull section they sit on already carries.
       const host = W.relic.parent;
-      const marker = relicMarker(S.glow, M);
+      const marker = relicMarker(S.glow, zi === 0 ? M : null);   // (primfix) the lamp sits on the skiff's sounding set; the trawler's and the sub's keep their beacon
       marker.position.copy(W.relic.position).y += 0.5;
       host.add(marker);
       const burst = burstFX(S.glow);
@@ -1936,8 +1940,8 @@ export function updateWrecks(dt, t) {
     if (!W.taken) {
       const u = W.marker.userData;
       const s = 1 + 0.16 * Math.sin(t * 1.7 + W.ph);
-      u.core.rotation.y += dt * 0.22;                         // (primfix) a lamp turns, it does not tumble
-      u.core.rotation.z = 0.06 * Math.sin(t * 0.7 + W.ph);
+      if (W.zi === 0) { u.core.rotation.y += dt * 0.22; u.core.rotation.z = 0.06 * Math.sin(t * 0.7 + W.ph); }   // (primfix) a lamp turns, it does not tumble
+      else { u.core.rotation.y += dt * 0.8; u.core.rotation.x += dt * 0.31; }
       u.g1.scale.setScalar(2.4 * s);
       u.g2.scale.setScalar(5.0 * (1.9 - s * 0.85));
       u.g2.material.opacity = 0.22 + 0.10 * Math.sin(t * 1.15 + W.ph);

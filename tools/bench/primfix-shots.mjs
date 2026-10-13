@@ -11,8 +11,9 @@ const { mkdtempSync, mkdirSync, writeFileSync } = await import('node:fs'); const
 process.env.DRV_DIR = mkdtempSync(tmpdir() + '/abyssa-primfix-shots-');
 const { start, stop, connect, sleep } = await import('./drv.mjs');
 const OUTD = OUTD0 + '/' + TAG;
+const BASE = process.env.PF_BASE || '';   // e.g. '/.pfbase': another checkout served under the same port (the before)
 mkdirSync(OUTD, { recursive: true });
-await start(`http://localhost:${PORT}/?bench`);
+await start(`http://localhost:${PORT}${BASE}/?bench`);
 process.on('exit', () => stop());
 const c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && window.__bench`, 240000, 1000);
@@ -80,6 +81,9 @@ add('i6-skiff-b', `let mk = null; window.__pfScene.traverse(o => { if (!mk && (o
   const cp = host.localToWorld(new V(-3.0, 3.6, 12.5)), ct = host.localToWorld(new V(-3.0, 0.3, 5.0)), st = host.localToWorld(new V(-1.0, 0, 8.5));
   window.__pf.stand(st.x, st.z, 3.1); window.__camPin = { p: cp.toArray(), t: ct.toArray() }; return await window.__pf.shot();`);
 add('i6-skiff-wide', `const W = window.wrecks.list()[0]; window.__pf.facing(W.x, W.z, 11, 2.4); return await window.__pf.shot();`);
+// the relic beacon at discovery range (45 u, 9 u up), the lens pinned, Sal stood under it
+add('m0-range', `const W = window.wrecks.list()[0]; window.__pf.stand(W.x + 30, W.z + 22, -2.2, 0); window.__camPin = { p: [W.x + 36, W.y + 9, W.z + 27], t: [W.x, W.y, W.z] }; return await window.__pf.shot();`);
+add('m0-mid', `const W = window.wrecks.list()[0]; window.__pf.stand(W.x + 14, W.z + 10, -2.2, 0); window.__camPin = { p: [W.x + 16, W.y + 4, W.z + 12], t: [W.x, W.y, W.z] }; return await window.__pf.shot();`);
 add('i7-polymer', `window.__pf.pin(27.1, 25.5, 6, -2.3, 2.5); return await window.__pf.shot();`);
 // ---- the survey: 20 home spots (rings + bearings), the follow lens ----
 const RING = [[30, 0.3], [30, 2.4], [30, 4.4], [55, 1.0], [55, 3.0], [55, 5.2], [80, 0.2], [80, 1.6], [80, 3.6], [80, 5.0],
@@ -93,7 +97,7 @@ add('p-debris', `const p = ${DEBRIS_FIND}; window.__pf.facing(p.x, p.z, 3.2, 2.2
 add('p-skiff', `const W = window.wrecks.list()[0]; window.__pf.facing(W.x, W.z, 6, 0.9); return await window.__pf.shot();`);
 add('h-back', `window.__chart.arrive(0); window.__helm = true; await new Promise(r => setTimeout(r, 1500)); const p = ${DEBRIS_FIND}; window.__pf.facing(p.x, p.z, 3.2, 2.2); return await window.__pf.shot();`);
 
-await c.ev(`(async () => { const { scene } = await import('/src/core.js'); const { terrainH } = await import('/src/world/terrain.js'); window.__pfScene = scene; window.__pfFloor = (x, z) => terrainH(x, z, 0); return 1; })()`);
+await c.ev(`(async () => { const { scene } = await import('${BASE}/src/core.js'); const { terrainH } = await import('${BASE}/src/world/terrain.js'); window.__pfScene = scene; window.__pfFloor = (x, z) => terrainH(x, z, 0); return 1; })()`);
 const only = ONLY ? ONLY.split(',') : null;
 const log = [];
 for (const s of SHOTS) {

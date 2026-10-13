@@ -514,7 +514,7 @@ const sst = (a, b, x) => { const t = Math.min(1, Math.max(0, (x - a) / (b - a)))
 // in its casing mode (aSd.w 2), turned per instance (aSd.z).
 let _geoK = null;
 function casingGeo() {
-  const NA = 16, NB = 7, pos = [], idx = [];
+  const NA = 12, NB = 6, pos = [], idx = [];
   const tear = (th) => { const d = Math.atan2(Math.sin(th - 0.6), Math.cos(th - 0.6)); return Math.abs(d) < 0.55 + 0.12 * Math.sin(th * 7.0); };
   for (let b = 0; b <= NB; b++) for (let a = 0; a <= NA; a++) {
     const th = a / NA * TAU, ph = b / NB * Math.PI * 0.62;          // crown (b 0) down past the equator
