@@ -113,6 +113,7 @@ Cost is **unmeasured**. The host was contended, so timings couldn't resolve anyt
 - Method: program-list diffs before and after standing at each spot, in a tab that never ran the `__lev.fp` probes. Those probes dispose her outside `keepingPrograms`, so her programs rebuild at first sight afterwards.
 
 **Cost** — unmeasured (host contended)
+- The bench's own calibration flagged the GPU as contaminated. Stepped sync run at the skiff on primfix: gcal 1.7 ms against about 1.2 nominal, `busyGpu: true`, cal 2.6 ms. Wall 11.1 ms, of which CPU update 0.8 and submit 3.2.
 - Frames ran 10–15 ms, where CLAUDE.md measured 3.7–6.3 ms.
 - Cross-load ABBA (bench host, dpr 2, vsync off): z0, z0b, the skiff and the trail all differed by less than the A-vs-A spread of ±3 ms.
 - In-page paired liveAB, each changed set shown vs hidden, 6 pairs × 2.5 s: medians were −0.05 to +0.30 ms on primfix and +0.2 to +0.5 ms on main. No set's cost could be told apart from noise on either build.
