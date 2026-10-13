@@ -10,7 +10,7 @@ The fight checks show no change I can attribute to the claw.
 
 - Not one hammer hit happened in any of the 28 riteplay runs, base or new.
 - Calm times, tears and drops sit inside base's own wide spread. The same seeds on unchanged code ran from 23 s to 130 s.
-- The one result I can't call noise: perfect seed 1 took a leg-contact tear in both clawfix runs, and no base perfect run took one (0 of 6).
+- Perfect seed 1 took a leg-contact tear in both clawfix passes, against 0 of 6 base perfect runs. I re-ran it on one build with the claw switched off and on, three runs each. Off took leg tears in 2 of 3 runs, on in 0 of 3. So the tears are noise, not the claw.
 - fissure-probe and harpoon-probe pass.
 - velfix-gate's crack route is RED on main too, so that was already broken.
 
@@ -161,6 +161,34 @@ Run as `riteplay.mjs 8860 <site> <mode> <tag> <seed>`. Base passes 1 and 2 were 
   - average seed 1: 23.1 s and 0 hits in one pass, 39.2 s and 1 hit in another;
   - average seed 2: 3 hits, then 1.
 - **No hammer hit in any run**, base or new. Every hit was a drop slam or a leg contact (`__slamLog`: `blow`, `legNN`).
+- **What the claw can still change.** Its capsules (bodyCols) follow the drawn pieces, so they move:
+  - in the guard: the finger's three capsules sit at 26°, not about 70°;
+  - through the cock and the first half of the fall;
+  - in the recoil: the lagged drag, and the floor clamp's lift on those frames.
+- **What I measured:**
+  - no hammer hits in any run;
+  - the hit window unchanged within noise (the A/B above);
+  - the lens distance and the landing shove comparable at the two fight-range spots (the Lens table above).
+
+- **Summary, base (16 runs) against clawfix (12 runs).**
+  - Perfect calm times: base 36.1, 36.1, 58.6, 58.9, 52.4, 38.9 s; clawfix 60.5, 48.4, 54.6, 37.7 s.
+  - Average calm times: base 23.1–130.4 s; clawfix 24.8–82.2 s.
+  - Tears per average run: base 0–3; clawfix 0–3.
+  - Drops per run: base 1–6; clawfix 0–6.
+  - Every clawfix calm time and drop count is inside base's spread for its mode. Against base's spread for the same seed, some sit just outside:
+    - perfect seed 1: 60.5 s against base's 36.1–58.6 s;
+    - average seed 1: 56.2 s against 23.1–39.2 s;
+    - average seed 3: 59.5 s against 31.9–58.1 s;
+    - Pallid: 24.8–25.1 s against 28.5–130.4 s.
+  - With 1–3 base samples per seed, the spread for a single seed is not known well enough to call these a change.
+- **Perfect seed 1's leg-contact tears are noise, not the claw.** It took one tear in each of the two clawfix passes (`leg34`, `leg29`), and none of 6 base perfect runs did. So I ran it again on one build with the lab switch, `RP_PRE="__claw.WHIP.on=0;__claw.CHELA.on=0"`. That gives the shipped rod, finger and cutter on otherwise identical code, under the same two-Chrome load.
+
+  | claw | calm times | tears | hammer hits | logs |
+  |---|---|---|---|---|
+  | OFF | 73.6, 53.9, 44.6 s | 2 of 3 runs (`leg26`, `leg8`) | 0 | `logs/ab-off-*` |
+  | ON | 52.1, 38.4, 79.6 s | 0 of 3 runs | 0 | `logs/ab-on-*` |
+
+  - Leg contacts with her walking legs happen with or without the new claw. Base passes 1–3 just didn't draw one for the perfect player.
 - **What the claw can still change.** Its capsules (bodyCols) follow the drawn pieces, so they move:
   - in the guard: the finger's three capsules sit at 26°, not about 70°;
   - through the cock and the first half of the fall;
