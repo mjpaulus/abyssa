@@ -8,14 +8,16 @@ All frames: `/Users/michaelpaulus/sc/.abyssa-wt/shots/primfix/{before,after}/` (
 
 ## Status
 
-All seven items are done and committed. Invariants hold. Cost is within noise: the host was contended, and the triangle deltas are measured below.
+All seven items are done and committed, and the invariants hold.
+
+Cost is **unmeasured**. The host was contended, so timings couldn't resolve anything below about ±1 ms. The measured triangle deltas are +1.8 % to +1.9 % at the changed sites; details below.
 
 | # | Item | Commit |
 |---|---|---|
 | 1 | Physics debris | `87b4586` (+ note `4ae350c`) |
 | 2–4 | Shed shell, spent casings, trail pits | `f8657e7` (+ tune `cc15ded`) |
 | 5 | Velkath's back reef | `f62a8a3` |
-| 6 | Skiff deck kit + relic beacon | `18c24aa` |
+| 6 | Skiff deck kit + relic beacon | `18c24aa` (+ seat `950837e`) |
 | 7 | Bugs: node in a boulder, hovering props and nodes | `08270ef` |
 | — | Cost trims, beacon on the skiff only, boot-tail compile of her fresh build | `6683c7a` |
 
@@ -61,16 +63,22 @@ All seven items are done and committed. Invariants hold. Cost is within noise: t
 - Still one merged vertex-coloured mesh on the same material, placed by `topH`, so `installSculpt` rebuilds it on her sculpted shell exactly as before (all frames are with the sculpt installed).
 
 **6. Skiff deck kit (`wrecks.js`).** Everything uses the palette's own materials, so there are no new programs. Each prop is seated on the live floor in the wreck's frame; buildWrecks now computes the settle before `make()`.
+- Each crate is seated on the lowest floor under its four corners.
+- The fallen mast is seated by both ends, with its axis (and the hoops on it) running between them.
+- Checked at home and at Pallid: every crate corner's lowest vertex is 0.11–0.28 u under the drawn floor, and both mast ends are 0.12–0.17 u under.
 - Plank crates: chamfered boards with gaps, corner battens, iron straps with nail heads, a sprung or missing lid board, a side board fallen off beside the crate.
 - The relic crate stands open, its lid of battened boards pried off and leaning.
 - Two rope coils, the sounding lead on its line, and a ship's lantern on its side.
 - The mast hoops are now on the fallen mast; they used to stand alone in the sand. The fallen mast is seated half in the silt. The sounding set's box is bevelled.
 - **Beacon:** the relic beacon on the skiff is now a small brass-capped lamp glass on the sounding set, using the wreck's lit program, and it turns slowly instead of tumbling.
-  - The trawler and the sub keep their old beacon, bit for bit (the advisor flagged that the lamp would float over their relics).
+  - The trawler and the sub keep their old beacon, bit for bit: a lamp floating over a spear gun or a thruster would read wrong.
   - At 20 u it reads as a warm lamp. It is a little dimmer than the old white ball, and the two warm halos still carry the range.
 
 **7. Bugs.**
-- The polymer node inside a boulder (home, 27.1, 25.5) was unreachable. Any node inside a flora boulder's footprint is now pushed out to the rim + 1.2 u. This makes no stream draw, so every other node is unchanged.
+- The polymer node "inside a boulder" (home, 27.1, 25.5) sat 6.7 u from the centre of a big boulder's collider ball (r 8.2), inside its circle at the floor.
+- Any node inside a flora boulder's footprint is now pushed out to the rim + 1.2 u. This makes no stream draw, so every other node is unchanged.
+- **Real input:** Sal stood 5 u out from the moved node, facing it, and W was held for 3.5 s through CDP. He picked it up: polymer 0 → 1, node taken at 1.6 u.
+- **Correction to the audit:** the same test on main also picked the node up (at 2.66 u; the pickup radius is 3.2). It was embedded in the collider, not unreachable from the open side.
 - Nodes now drape on the drawn floor. Using `terrainH` had left them 0.10–0.20 u clear.
 - Props (logs, barrels) are now seated by their own sampled points. One log stood 0.36 u clear at home and 1.03 u clear at Pallid.
 - Survey after the fix (fresh boot, then Pallid), covering 142 props, all nodes, all debris, the moult and the relics: nothing more than 0.08 u clear of the floor, nothing wholly under it, no node in a boulder.
@@ -88,14 +96,23 @@ All seven items are done and committed. Invariants hold. Cost is within noise: t
 **Programs**
 - Flat across home→Pallid→Burned→home ×2: 717 at every arrival. Main is flat at 725.
 
+**Memory**
+- Across the same soak, geometries stay flat at 308–309 and textures at 383 after the first voyage.
+- Boot holds 457 geometries, with the rehearsal's extras.
+
+**The crack**
+- Everything on the trail is far outside the crack's lip, at home and at Pallid. Minimum `fissureDist`: prints 52 u, casings 44 u, the moult's rim 64 u, the relics 60 u.
+- So the drawn floor (`terrainSample`, which includes the fissure patch) is the live floor for all of it. `shutFloorY` / the jam only exist inside the lip.
+- The debris keeps the lip + 6 u clearance.
+
 **First-sight compile**
 - I fixed one regression of mine: the relics' program used to ride on the old shell's program and lost that when the shell got its own.
 - Her trail is laid only once the sculpt is in hand. The boot's first zone-0 build therefore never had the relics. On main it also never compiled the clutch program (`brood|clutch|field`) or its micro layer, which were first-sight compiles.
 - `game.js rehearseSleepers` now precompiles her fresh group at both sun-shadow states.
 - Walking up to the shell now adds 3 generic shadow-depth programs (main adds 4). The skiff adds 1 (main adds 3). No material program is compiled at first sight any more.
-- Measured with `x6`, without the `__lev.fp` probes, which dispose her outside `keepingPrograms`.
+- Method: program-list diffs before and after standing at each spot, in a tab that never ran the `__lev.fp` probes. Those probes dispose her outside `keepingPrograms`, so her programs rebuild at first sight afterwards.
 
-**Cost** — host contended; unmeasured within noise
+**Cost** — unmeasured (host contended)
 - Frames ran 10–15 ms, where CLAUDE.md measured 3.7–6.3 ms.
 - Cross-load ABBA (bench host, dpr 2, vsync off): z0, z0b, the skiff and the trail all differed by less than the A-vs-A spread of ±3 ms.
 - In-page paired liveAB, each changed set shown vs hidden, 6 pairs × 2.5 s: medians were −0.05 to +0.30 ms on primfix and +0.2 to +0.5 ms on main. No set's cost could be told apart from noise on either build.
@@ -106,6 +123,7 @@ All seven items are done and committed. Invariants hold. Cost is within noise: t
 
 **Survey**
 - 20 home spots, 6 at Pallid plus her trail, the skiff and debris there, and home again: before and after, all re-shot on HEAD and paged through.
+- The 20 home spots are my own rings and bearings (r 30–150). The audit never recorded its coordinates.
 - Every dodecahedron and the white lens of the old shell are gone from the survey.
 - The new stones are sparse at survey range and read as rock.
 
@@ -119,4 +137,5 @@ All seven items are done and committed. Invariants hold. Cost is within noise: t
   - The Boot/loading text saying Rapier is awaited.
   - The loader's physics step still runs; it resolves at once.
 - **Fall-through claim:** commit `87b4586` states the fall-through cause too confidently. The measured version is in `4ae350c` and above.
+- **`game.js` changed (orchestrator-owned).** Four lines in the boot tail (`rehearseSleepers`): her fresh zone-0 group is precompiled at both sun-shadow states. Nothing else in game.js changed. physics.js keeps its contract, so the wiring is untouched.
 - **Out of scope:** the audit's medium items (drift logs, plantKit tube/table/barrel sponges, polymer material, flora boulder silhouettes, vent rubble, the submersible's crate) are untouched.
