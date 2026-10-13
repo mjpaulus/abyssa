@@ -56,7 +56,7 @@ const rows = await c.ev(`(async () => {
   const out = [], AB = ${process.env.CP_AB ? 1 : 0}, K = window.__claw;
   // A/B (CP_AB=1): five blows, the new claw OFF (the shipped rod and finger), ON, OFF, ON, OFF, switched at each
   // cock's start; the hammer's 2.6 s is exactly 156 frames, so the blows sample the same phases
-  let nCk = 0, prevPh = L.hamPh;
+  let nCk = 0, prevPh = L.hamPh, salPrev = null;
   const setOn = v => { if (K) { K.WHIP.on = v; K.CHELA.on = v; } };
   if (AB) setOn(0);
   B.step(AB ? 5 * 156 + 70 : 2 * 156 + 2, () => {
@@ -69,7 +69,9 @@ const rows = await c.ev(`(async () => {
       rootZ: d(c.root.rotation.z), cjZ: d(c.cj.rotation.z), pjZ: d(c.pj.rotation.z), cjY: d(c.cj.rotation.y), pjY: d(c.pj.rotation.y),
       dj: d(c.dj.rotation.z), minorDj: d(m.dj.rotation.z), lift: d(c.liftNow || 0), need: d(c.need || 0), elbow: d(c.elbow || 0),
       hinge: h.toArray().map(v => +v.toFixed(3)), hingeBody: hb.toArray().map(v => +v.toFixed(5)),
-      ndcHinge: ndc(h), ndcTip: ndc(tip), clackN: L.clackN || 0, hits: L.hits || 0, on: K ? K.WHIP.on : 1, blow: nCk });
+      ndcHinge: ndc(h), ndcTip: ndc(tip), clackN: L.clackN || 0, hits: L.hits || 0, on: K ? K.WHIP.on : 1, blow: nCk,
+      camD: +cam.position.distanceTo(P.pos).toFixed(3), salStep: +(salPrev ? P.pos.distanceTo(salPrev) : 0).toFixed(4) });
+    salPrev = (salPrev || P.pos.clone()).copy(P.pos);
   }, { render: true });
   setOn(1);
   B.hold(false);
@@ -118,6 +120,8 @@ const summary = {
   mp: [r1(Math.min(...mps)), r1(Math.max(...mps))], dactyl: { cockStart: r1(djCock), hold: r1(djHold), lastFall: r1(djLastFall), landing: blow.slice(li, li + 12).map(e => r1(e.dj)) },
   minorDjMin: r1(Math.min(...R.map(e => e.minorDj))), clacks: R[R.length - 1].clackN,
   hitWindow: hitWin.map(e => ({ i: e.i, ph: e.ph, swing: e.swing, hingeBody: e.hingeBody, lift: e.lift })),
+  lens: { camD: [Math.min(...R.map(e => e.camD)), Math.max(...R.map(e => e.camD))], camDstep: +Math.max(...R.slice(1).map((e, i) => Math.abs(e.camD - R[i].camD))).toFixed(3),
+    salSteps: R.filter(e => e.salStep > 0.001).map(e => [e.ph, e.salStep]), salMovedTotal: +R.reduce((a, e) => a + e.salStep, 0).toFixed(3) },
   framing: { seenFrames: `${seen}/${blow.length}`, seenBy, tipNdcYatHold: ndcHold.length ? [r1(Math.min(...ndcHold)), r1(Math.max(...ndcHold))] : null }
 };
 writeFileSync(`${OUT}/claw-pose-${TAG}.json`, JSON.stringify({ summary, rows: R }, null, 1));

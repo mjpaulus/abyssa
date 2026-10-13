@@ -1304,8 +1304,7 @@ function poseClaws(L, dt) {
         lerp(-0.30 - 0.25 * (1 - st), -0.25, th) + 0.18 * ck + dz + 0.25 * h + HUNT.guardUp * (L.guardUp ? L.guardUp.x : 0));
       c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th) + sd * 0.3 * ck, 0.30);
       c.pj.rotation.set(0, -sd * 0.45, -0.55 + 0.6 * dz);
-      // (clawfix) never past CHELA.minor: the cutter's tall fangs cut through its own finger below ~26 deg
-      c.dj.rotation.z = Math.max(CHELA.minor, (0.08 + 0.28 * gape + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th + 0.3 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h))));
+      c.dj.rotation.z = (0.08 + 0.28 * gape + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th + 0.3 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
     }
     // asleep: folded back flat under the prow, pincers shut
     const d = 1 - st;
@@ -1315,6 +1314,9 @@ function poseClaws(L, dt) {
       c.dj.rotation.z += (T.dj - c.dj.rotation.z) * d;
       if (c.major) c.djShip += (T.dj - c.djShip) * d;
     }
+    // (clawfix) the cutter's finger never closes past CHELA.minor (~26 deg), awake or folded: below it the tall
+    // fangs on its fixed finger cut through it (the shipped idle went to 5 deg, the fold to -17)
+    if (!c.major && CHELA.on && c.dj.rotation.z < CHELA.minor) c.dj.rotation.z = CHELA.minor;
   }
 }
 // x + (target - x) * d: at d = 0 nothing moves. y is mirrored by side (-sd turns inward)
