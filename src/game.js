@@ -1249,9 +1249,11 @@ window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift:
 //               puts her wrist / finger on screen through the hold at her standoff and the palm on ~1/3 of the
 //               cock+hold there (main 0%)
 //   aimY        it takes only as much as puts the palm at this NDC height (the upper part of the frame)
-//   helmLo/Y    Sal stays in frame: his bonnet's lowest point (u over player.pos; the helmet spans 0.97-1.86
-//               standing, 0.87 at the bottom of a stride: 0.8 keeps a margin) is held at NDC y >= helmY. At 14-24 u
-//               this, not the cap, is the limit (13-19 deg), and her claw (60+ deg up) stays out of frame there
+//   helmLo/Y    Sal stays in frame: his bonnet's lowest point is held at NDC y >= helmY. The point is the LIVE
+//               helmet (diver.helmGroup's origin, its neck ring, ~0.06 u over the lowest vertex, as the rig posed it
+//               last frame) less helmLo: a fixed player.pos + 0.8 let the real rim slip to -0.956 on a slope at 30 u
+//               (his body sits lower over sloped ground). At 14-24 u this, not the cap, is the limit (13-19 deg),
+//               and her claw (60+ deg up) stays out of frame there
 //   wIn/wOut    the spring (/s): in over the cock (0.83 s; 7 still takes the hold's 9-13 Hz tremble down to ~1%),
 //               out from the fall (12: ~1% of the tilt left 0.4 s after the landing, ~45% at the landing itself)
 //   rNear/rFar  the range, x BOSSCAM.r: full to 36 u, gone by 42. (The brief named BOSSCAM.r, 30 u; un-held with Sal
@@ -1260,7 +1262,7 @@ window.__bosscam = { knobs: BOSSCAM, state: () => ({ k: +bossK.toFixed(3), lift:
 // Not run: asleep, calmed, not up, not hunting him, under her shell (creUnder), in the open crack (throatOn), on deck
 // (deckK), her body behind the lens (BOSSCAM's front test), past rFar, paused. THE MOUSE OWNS THE VIEW: a look input
 // drops it at once and it stays off for that blow (and, as BOSSCAM's lean, none within BOSSCAM.cool s of a look).
-const CLAWCAM = { on: 1, maxDeg: 25, aimY: 0.7, helmLo: 0.8, helmY: -0.92, wIn: 7, wOut: 12, rNear: 1.2, rFar: 1.4 };
+const CLAWCAM = { on: 1, maxDeg: 25, aimY: 0.7, helmLo: 0.12, helmY: -0.92, wIn: 7, wOut: 12, rNear: 1.2, rFar: 1.4 };
 let clawTilt = 0, clawTiltV = 0, clawTgt = 0, clawGate = 0, clawOff = false, clawYawWas = 0, clawPitchWas = 0, clawWhy = '';
 const _ccF = V3(), _ccR = V3(), _ccU = V3(), _ccP = V3(), _ccW = V3(), _ccQ = new THREE.Quaternion();
 const ccStep = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
@@ -1316,10 +1318,11 @@ function clawFrame(dt) {
     }
   }
   // SAL STAYS IN FRAME: the tilt that keeps his bonnet's lowest point at NDC y >= helmY (the target and the spring)
-  let allow = Infinity;
+  let allow = Infinity, framed = false;
   if (tgt > 0 || clawTilt > 0) {
     if (ccFrame()) {
-      _ccW.set(player.pos.x, player.pos.y + C.helmLo, player.pos.z).sub(camera.position);
+      framed = true;
+      _ccW.setFromMatrixPosition(diver.helmGroup.matrixWorld); _ccW.y -= C.helmLo; _ccW.sub(camera.position);
       allow = Math.max(0, ccAbove() + Math.atan(-C.helmY * Math.tan(camera.fov * Math.PI / 360)));
       if (tgt > allow) tgt = allow;
     } else { tgt = 0; clawTilt = 0; clawTiltV = 0; }   // (a lens looking straight up or down has no pitch plane)
@@ -1336,7 +1339,8 @@ function clawFrame(dt) {
   if (clawTilt < 0) { clawTilt = 0; if (clawTiltV < 0) clawTiltV = 0; }
   if (tgt === 0 && clawTilt < 1e-4 && Math.abs(clawTiltV) < 1e-3) { clawTilt = 0; clawTiltV = 0; }
   clawTgt = tgt; clawGate = gate; clawWhy = why;
-  if (clawTilt > 0) camera.rotateOnWorldAxis(_ccR, clawTilt);   // (_ccR: the guard above framed the lens this frame)
+  // (about _ccR as the guard framed it THIS frame; a tilt with no frame this frame is dropped, never turned on a stale axis)
+  if (clawTilt > 0) { if (framed) camera.rotateOnWorldAxis(_ccR, clawTilt); else { clawTilt = 0; clawTiltV = 0; } }
 }
 window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone() }) };
 window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY) }) };
