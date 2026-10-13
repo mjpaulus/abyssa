@@ -904,7 +904,8 @@ if (mode === 'rise') {
   // NOTHING POPS IN THE LIGHT: with the deep's light welling up under the pour, every block must be
   // switched off only once it is wholly under the throat floor where it is NOW (every drawn vertex of
   // it, every third, under the ground at that vertex's x, z), and the silt
-  // only once every vertex of it is under the throat floor below it. One opening per zone, at home.
+  // only once every vertex of it is under the throat floor below it. One opening per zone, at every site (fix round 1,
+  // Ruling 21: this mode once opened home only, which hid main's own misses at Pallid z0, Burned z0 and Burned z1).
   // (seafloor relief Task 6) COVERAGE: the per-block check counts only blocks that sink out one by one (a block still
   // drawn when the rubble switches off is checked by the mesh-level bar instead), so it must have run over nearly the
   // whole pour. The old bar, hidden >= 100, was a count sized on main's 160-block jams; re-derived as a share of the
@@ -918,7 +919,9 @@ if (mode === 'rise') {
     const T = await import('/src/world/terrain.js'), THREE = await import('three');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
     const out = [], m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
-    for (const zi of [0, 1, 2]) {
+    let at = window.__chart.site();
+    for (const [site, zi] of [[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2], [2, 0], [2, 1], [2, 2]]) {
+      if (site !== at) { window.__chart.arrive(site); at = site; window.setState('play'); window.__helm = true; window.survival.hose = 5000; }
       window.gotoZone(zi); window.__fissure.setOpen(zi, 0); window.__bench.place(0, 0, 0, zi);
       const blocks = window.__fissure.state(zi).n;   // the blocks laid in this jam (the coverage bar scales with it)
       window.__fissure.open(zi);
@@ -957,22 +960,25 @@ if (mode === 'rise') {
           siltWorst = w;
         }
       });
-      out.push({ zi, blocks, hidden, ratio: blocks ? +(hidden / blocks).toFixed(4) : null, worstTopOverFloor: +worst.toFixed(3), worstAt, siltLastAboveFloor: +siltWorst.toFixed(3), left: window.__fissure.state(zi).left,
+      out.push({ site, zi, blocks, hidden, ratio: blocks ? +(hidden / blocks).toFixed(4) : null, worstTopOverFloor: +worst.toFixed(3), worstAt, siltLastAboveFloor: +siltWorst.toFixed(3), left: window.__fissure.state(zi).left,
         meshOffAt: +(meshOffAt / 60).toFixed(2), meshLeft, meshWorst: meshLeft ? +meshWorst.toFixed(3) : null });
     }
+    window.__chart.arrive(0);
     return out; })()`);
   for (const z of r) {
-    console.log(`zone ${z.zi}: ${z.hidden} of ${z.blocks} blocks hid one by one (bar >= ${HIDE_SHARE.toFixed(2)} x ${z.blocks} = ${(HIDE_SHARE * z.blocks).toFixed(1)}; blocks >= ${BLOCKS_MIN})`);
-    if (!(z.blocks >= BLOCKS_MIN)) fail.push(`zone ${z.zi}: a jam of ${z.blocks} blocks (bar >= ${BLOCKS_MIN}): nothing to check`);
-    if (!(z.hidden >= HIDE_SHARE * z.blocks)) fail.push(`zone ${z.zi}: only ${z.hidden} of ${z.blocks} blocks hid one by one (bar >= ${HIDE_SHARE.toFixed(2)} x blocks)`);
-    // (seafloor relief Task 6: this bar FAILS at home zone 0 on the relief, 3.9 u, NOT re-barred: fissure.js lays each
-    // block's hide depth from a 9 x 9 grid over its footprint, which misses the strata's 0.15-0.45 u pockets by up to
-    // 10-26 u; one home block's vertex hangs in one. Main's own pour fails it at Pallid z0, Burned z0 and z1 (this mode
-    // checks only home): a pre-existing defect in the hide grid, reported to the controller in the Task 6 report)
-    if (z.worstTopOverFloor > 0) fail.push(`zone ${z.zi}: a block hid ${z.worstTopOverFloor} u above the floor over it ` + JSON.stringify(z.worstAt));
-    if (z.meshLeft && z.meshWorst > 0) fail.push(`zone ${z.zi}: the rubble switched off with ${z.meshLeft} blocks still drawn, ${z.meshWorst} u above the ground`);
-    if (z.meshOffAt < 0) fail.push(`zone ${z.zi}: the rubble never switched off`);
-    if (z.siltLastAboveFloor > 0.05) fail.push(`zone ${z.zi}: the silt hid with a part ${z.siltLastAboveFloor} u above the floor`);
+    const tag = `site ${z.site} zone ${z.zi}`;
+    console.log(`${tag}: ${z.hidden} of ${z.blocks} blocks hid one by one (bar >= ${HIDE_SHARE.toFixed(2)} x ${z.blocks} = ${(HIDE_SHARE * z.blocks).toFixed(1)}; blocks >= ${BLOCKS_MIN})`);
+    if (!(z.blocks >= BLOCKS_MIN)) fail.push(`${tag}: a jam of ${z.blocks} blocks (bar >= ${BLOCKS_MIN}): nothing to check`);
+    if (!(z.hidden >= HIDE_SHARE * z.blocks)) fail.push(`${tag}: only ${z.hidden} of ${z.blocks} blocks hid one by one (bar >= ${HIDE_SHARE.toFixed(2)} x blocks)`);
+    // (seafloor relief Task 6, fix round 1, Ruling 21: fissure.js set each block's hide depth from a 9 x 9 grid over its
+    // footprint, which missed the strata's 0.15-0.45 u pockets by up to 10-26 u: blocks hid with a vertex hanging in
+    // one, +3.9 / +4.1 / +3.8 u at home / Pallid / Burned zone 0 and +1.4 at Burned zone 1, main's own pour at the
+    // remote sites. Now the lowest ground across the crack along the footprint (fissure.js THE HIDE DEPTH): -1.55 to
+    // -1.79 u at all nine planes, 2026-10-13)
+    if (z.worstTopOverFloor > 0) fail.push(`${tag}: a block hid ${z.worstTopOverFloor} u above the floor over it ` + JSON.stringify(z.worstAt));
+    if (z.meshLeft && z.meshWorst > 0) fail.push(`${tag}: the rubble switched off with ${z.meshLeft} blocks still drawn, ${z.meshWorst} u above the ground`);
+    if (z.meshOffAt < 0) fail.push(`${tag}: the rubble never switched off`);
+    if (z.siltLastAboveFloor > 0.05) fail.push(`${tag}: the silt hid with a part ${z.siltLastAboveFloor} u above the floor`);
   }
   console.log(JSON.stringify(r));
 } else if (mode === 'below-dark') {
