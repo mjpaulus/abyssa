@@ -55,6 +55,10 @@ await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
+// (clawcam) book the lens's look-up while the policy plays (frames it is on, its peak); main has no __clawcam
+await c.ev(`(() => { const f0 = window.__rp.frame, st = window.__rp.st; st.ccN = 0; st.ccMax = 0; st.ccOff = 0;
+  window.__rp.frame = () => { f0(); const C = window.__clawcam; if (!C) return; const s = C.state();
+    if (s.tilt > 0) { st.ccN++; if (s.tiltDeg > st.ccMax) st.ccMax = s.tiltDeg; } if (s.why === 'mouse' || s.why === 'cool') st.ccOff++; }; return 1; })()`);
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
 };
@@ -153,7 +157,7 @@ if (s.calmed) {
 const st = s.rp;
 const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
   hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...(await c.ev(TALLY)), underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
-  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
+  ccN: st.ccN, ccMax: st.ccMax, ccOff: st.ccOff, camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));

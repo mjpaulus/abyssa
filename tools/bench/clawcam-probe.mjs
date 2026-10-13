@@ -4,9 +4,11 @@
 // middle of the propodus, wrist to finger hinge), its dactyl tip and Sal's helmet, the lens pitch, and
 // the pitch the lens would have had without the look-up (__clawcam.state().pre: the look-up is the
 // LAST rotation updateCamera makes, so the lens without it is exactly the on:0 lens).
-//   DRV_PORT=9512 node tools/bench/clawcam-probe.mjs <port> [path ''|'x/'] [tag] [mode framing|grounded|mouse|all]
+//   DRV_PORT=9512 node tools/bench/clawcam-probe.mjs <port> [path ''|'x/'] [tag] [mode framing|grounded|mouse|video|all]
 //   env CC_ON=0|1 (default 1): __clawcam.knobs.on for the run (main has no __clawcam: on 0)
 //       CC_SET='{"maxDeg":30}': more knobs. CC_SPOTS='[[18,0],[24,0]]': [ahead u, left u] of her centre.
+//       video: CC_VIDEO=<dir> [CC_VD=34 CC_VS=0]: the same three blows before/after as PNG frames (see below).
+//   RED/GREEN: `CC_ON=0 ... framing` exits 1 (the claw bars fail, as on main), `CC_ON=1 ... framing` exits 0.
 // Velkath is woken, her threat raised with Sal 24 u ahead, then HELD (__lev.cmd('hold'): no hunt, turn
 // or lunge; the hammer keeps its clock and her threat stays up), and Sal is stood at each spot facing her.
 // Each spot books two whole blows from a cock's start (156 frames each), every frame rendered.
@@ -275,6 +277,49 @@ if (MODE === 'mouse' || MODE === 'all') {
     asserts.push({ name: 'MOUSE dropped within one frame (tilt 0, lens = on:0 lens)', value: `tilt ${m.frame1.tilt}, same ${m.frame1.same}`, pass: m.frame1.tilt === 0 && m.frame1.same });
     asserts.push({ name: 'MOUSE stays off for that blow (to 0.6 s after its landing)', value: `max tilt ${m.rest.maxTilt} over ${m.rest.frames} frames`, pass: m.rest.maxTilt === 0 && m.rest.frames > 36 });
     asserts.push({ name: 'MOUSE back on the next blow (> 5 deg by its hold)', value: m.nextBlowTiltDeg, pass: m.nextBlowTiltDeg > 5 });
+  }
+}
+
+// ---- VIDEO (CC_VIDEO=<dir>): the same three blows from the follow camera, before (on 0) and after (on 1): Sal still
+// CC_VD u ahead of her (default 34: her standoff), her held so the blows repeat exactly (the hammer is 156 frames);
+// every 3rd frame (20 fps of game time) -> <dir>/before/0000.png ... and <dir>/after/0000.png ... at 960x534 ----
+if (MODE === 'video') {
+  const VID = process.env.CC_VIDEO, VD = +(process.env.CC_VD || 34), VS = +(process.env.CC_VS || 0);
+  if (!VID) throw new Error('CC_VIDEO=<dir> required');
+  await c.ev(`(async () => {
+    const L = window.__sl, B = window.__bench, X = window.__ccp;
+    await B.setup('z0b');
+    B.size(1280, 712);
+    ['title', 'pause', 'ptPanel', 'ptToast', 'ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; });
+    window.__lev.cmd('wake');
+    B.step(60 * 9);
+    X.place(${VD}, ${VS});
+    B.step(60 * 12, i => { X.keep(); if (i % 30 === 0) X.place(${VD}, ${VS}); if (i > 200 && L.threatE > 0.99 && L.hamPh > 0.02 && L.hamPh < 0.05) return false; });
+    if (!L.hold) window.__lev.cmd('hold');
+    return 1;
+  })()`);
+  summary.video = {};
+  for (const [lab, on] of [['before', 0], ['after', 1]]) {
+    const dir = `${VID}/${lab}`;
+    mkdirSync(dir, { recursive: true });
+    // stand him on his mark, let the lens settle, start a little before a cock
+    const at = await c.ev(`(async () => {
+      const L = window.__sl, B = window.__bench, X = window.__ccp;
+      if (window.__clawcam) window.__clawcam.knobs.on = ${on};
+      X.place(${VD}, ${VS});
+      let n = 0, prev = L.hamPh;
+      B.step(600, () => { X.keep(); n++; const go = n > 90 && prev < 0.2 && L.hamPh >= 0.2; prev = L.hamPh; if (go) return false; }, { render: true });
+      return +L.hamPh.toFixed(3);
+    })()`);
+    let k = 0, maxTilt = 0;
+    for (let f = 0; f < 3 * 156; f += 3) {
+      const t = await c.ev(`(() => { const B = window.__bench, X = window.__ccp; B.step(3, () => X.keep(), { render: true }); const C = window.__clawcam; return C ? C.state().tiltDeg : 0; })()`);
+      if (t > maxTilt) maxTilt = t;
+      const r = await c.send('Page.captureScreenshot', { format: 'png', clip: { x: 0, y: 0, width: 1280, height: 712, scale: 0.75 } });
+      writeFileSync(`${dir}/${String(k++).padStart(4, '0')}.png`, Buffer.from(r.result.data, 'base64'));
+    }
+    summary.video[lab] = { dir, frames: k, startPh: at, maxTiltDeg: maxTilt };
+    console.log('video', lab, JSON.stringify(summary.video[lab]));
   }
 }
 
