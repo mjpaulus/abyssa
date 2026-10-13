@@ -1,266 +1,197 @@
-// Rapier physics for WORLD PHYSICALITY only — dynamic debris that the player and the
-// leviathan shove around. The player controller stays entirely in player.js; here the
-// player is only a kinematic pusher sphere.
+// SEABED DEBRIS: the loose stone of the open floor (rubble, cobbles, broken slabs), in the
+// house rock vocabulary, half in the silt with the silt drifted against it.
 //
-// CONTRACT (game.js wires these):
-//   await initPhysics(zi)      -> builds statics + debris for zone zi. Always resolves;
-//                                 if Rapier fails to load every export becomes a no-op.
-//   updatePhysics(dt, playerPos, playerVel, levSpine)  -> fixed-step + mesh sync.
-//                                 levSpine may be null; array of THREE.Vector3 otherwise.
-//   switchZone(zi)             -> tears down and rebuilds statics + debris (sync, reuses WASM).
-//   physicsReady               -> live-binding boolean; false until the WASM world is up.
-//   physicsStats()             -> { bodies, awake, ms, maxV } for HUD/debug (on-demand only).
+// HISTORY (primfix 2026-10-13, reviews/primitives-audit.md item 1): this module was Rapier
+// "world physicality" — 120 flat-shaded dodecahedra per zone, placed with Math.random, as
+// dynamic bodies that Sal's boots (a 0.9 u kinematic ball at his feet) and the sleeper's
+// spine shoved about. THE BODIES WERE VESTIGIAL and are gone: nothing read them (no
+// gameplay, no camera, no collision on Sal's side), the contact rate was ~1 stone per
+// 250 u walked, a half-buried stone in a silt drift cannot be kicked loose, and one body
+// fell through the floor on boot (spawned inside a flora boulder's fixed ball, the solver
+// pushed it under the one-sided heightfield). Rapier is no longer fetched (it was only ever
+// loaded for these). The debris is static decor now, laid as a pure function of the site:
 //
-// Statics: one heightfield collider sampled from terrainH over +/-HF_EXT (200m) at
-// HF_N+1 = 129 samples per axis (3.125 m cell) — coarse relative to the mesh, but debris
-// is pebble-scale and rests on the interpolated triangles. Plus one fixed ball per entry
-// in rockColliders (large boulders only, which is all that array holds).
+//   * its OWN stream (site.js seeds.debris, mixed with the zone): boot and arrive-back lay the
+//     same stones, and no terrain/flora/wreck stream or fingerprint moves;
+//   * flora.js jamRockKit's four shapes (the fissure jam's: a fresh-broken block, a rounded
+//     boulder, a slab, a shard), flora's 'rock' program and generated rock map set (rockMapSet,
+//     triplanar) — zero new programs; one InstancedMesh per shape;
+//   * in clusters (a parent stone and the pieces broken off it), varied size, tilt and squash,
+//     each SEATED on the drawn floor (wrecks.js terrainSample: the terrain mesh's own triangles,
+//     or the fissure patch near a crack) and sunk 28-42 % of its height;
+//   * a SILT DRIFT round each (wrecks.js driftSkirt, the terrain's own material, deeper on the
+//     lee of the current): one merged mesh per zone, the seabed's own program;
+//   * kept off the crack (clearOfCrack), Velkath's bed (clearOfBed), the wreck sites and flora's
+//     boulders (rockColliders footprints), and off steep ground.
 //
-// Water is modelled without any per-frame force application, so bodies can actually
-// sleep: drag = per-body linear/angular damping, negative buoyancy = weak world gravity.
+// CONTRACT (game.js wires these; kept so game.js needs no change):
+//   await initPhysics(zi)  -> lays zone zi's debris (sync; the boot awaits it in the loader).
+//   switchZone(zi)         -> re-lays for zone zi (a zone entry, the voyage's enterZone(0));
+//                             a no-op until initPhysics has run (the boot's enterZone(0, true)
+//                             precedes it).
+//   updatePhysics()        -> nothing per frame (static).
+//   physicsReady, physicsStats() -> { stones, drift, ms } (debug).
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, zoneBottom } from '../config.js';
+import { WORLD_R } from '../config.js';
 import { clearOfCrack } from '../world/fissureShape.js';
 import { clearOfBed } from '../entities/sleeper/lair.js';
-import { terrainH } from '../world/terrain.js';
-import { rockColliders } from '../world/flora.js';
+import { terrainNormal, terrainMeshes } from '../world/terrain.js';
+import { rockColliders, jamRockKit } from '../world/flora.js';
+import { terrainSample, driftSkirt, leeOf, wreckSites } from '../world/wrecks.js';
+import { siteParams } from '../world/site.js';
+import { seededRand } from '../lib/textures.js';
 
-const RAPIER_CDN = 'https://cdn.jsdelivr.net/npm/@dimforge/rapier3d-compat@0.12.0/+esm';
-
-const HF_EXT = 200;          // half-extent of the heightfield, x and z
-const HF_N = 128;            // cells per axis -> (HF_N+1)^2 terrainH samples at init
-const N_DEBRIS = 120;
-const FIXED = 1 / 60;
-const MAX_SUB = 5;           // hard cap so a tab-switch stall can never spiral the step count
-const GRAV = -2.4;           // slight negative buoyancy, not real gravity
-const PLAYER_R = 0.9;
-const LEV_R = 6, LEV_N = 4;  // nearest N spine points act as kinematic shovers
-const PARK_Y = -20000;       // where unused kinematic pushers go
-
-// Muted rock palette, mirrored from flora.js P[].rock (flora does not export it).
-const ROCK_COL = [0x1a2730, 0x211b2b, 0x2a1f1c];
+const TAU = Math.PI * 2;
+const N_CLUSTER = 34;          // clusters per zone (a parent stone + 0-4 pieces): ~90 stones
+// flora rockGeo shapes [detail, squash, amp, facet] (fissure.js SHAPES at detail 3: 320 tris)
+const SHAPES = [[3, 0.95, 0.5, 2.4], [3, 0.85, 0.75, 1.0], [3, 0.55, 0.55, 2.0], [3, 1.0, 0.9, 3.0]];
+const CAP = 72;                // instances per shape (the cluster draws stop at CAP)
 
 export let physicsReady = false;
-export function physicsStats() {
-  let maxV = 0;
-  for (let i = 0; i < bodies.length; i++) {
-    const v = bodies[i].b.linvel(), m = Math.hypot(v.x, v.y, v.z);
-    if (m > maxV) maxV = m;
-  }
-  return { bodies: bodies.length, awake: awakeCount, ms: lastMs, maxV };
-}
+let started = false, zone = 0, lastMs = 0, nStones = 0;
+let kinds = null, drift = null;
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
+const _n = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0), _ax = new THREE.Vector3(), _c = new THREE.Color();
 
-let RAPIER = null, world = null, zone = 0, loadFailed = false;
-let bodies = [], inst = null, instGeo = null, instMat = null;
-let playerBody = null, levBodies = [];
-let hfHeights = null;
-let acc = 0, awakeCount = 0, lastMs = 0;
-
-// hot-path temps — updatePhysics must not allocate
-const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _p = new THREE.Vector3(), _s = new THREE.Vector3();
-const _t = { x: 0, y: 0, z: 0 };
-const _order = new Int32Array(64), _dist = new Float32Array(64);
+export function physicsStats() { return { stones: nStones, drift: drift ? drift.geometry.attributes.position.count : 0, ms: lastMs }; }
 
 export async function initPhysics(zi) {
-  if (loadFailed) return;
-  if (!RAPIER) {
-    try {
-      RAPIER = await import(/* @vite-ignore */ RAPIER_CDN);
-      await RAPIER.init();
-    } catch (e) {
-      loadFailed = true; RAPIER = null;
-      console.warn('[physics] Rapier unavailable, running without physics:', e && e.message);
-      return;
-    }
-  }
+  started = true;
   build(zi);
   physicsReady = true;
 }
-
 export function switchZone(zi) {
-  if (!RAPIER || loadFailed) return;
-  teardown();
+  if (!started) return;
   build(zi);
-  physicsReady = true;
 }
-
-// ---------------------------------------------------------------------------
-function build(zi) {
-  zone = zi | 0;
-  world = new RAPIER.World({ x: 0, y: GRAV, z: 0 });
-  world.timestep = FIXED;
-
-  // ---- heightfield ----
-  // Rapier's layout is heights[j*(n+1)+i] where i runs along +Z and j along +X — NOT the
-  // other way round. Verified empirically (a ramp built along i slides bodies in -z); the
-  // transposed version silently spawned half the debris inside the terrain.
-  const n1 = HF_N + 1, heights = new Float32Array(n1 * n1);
-  const step = (HF_EXT * 2) / HF_N;
-  for (let j = 0; j < n1; j++) {
-    const x = -HF_EXT + j * step;
-    for (let i = 0; i < n1; i++) heights[j * n1 + i] = terrainH(x, -HF_EXT + i * step, zone);
-  }
-  hfHeights = heights;
-  const hfBody = world.createRigidBody(RAPIER.RigidBodyDesc.fixed());
-  world.createCollider(
-    RAPIER.ColliderDesc.heightfield(HF_N, HF_N, heights, { x: HF_EXT * 2, y: 1, z: HF_EXT * 2 })
-      .setFriction(0.9).setRestitution(0.05), hfBody);
-
-  // ---- boulders ----
-  for (const c of rockColliders) {
-    if (Math.abs(c.x) > HF_EXT || Math.abs(c.z) > HF_EXT) continue;
-    // flora fills rockColliders for every zone into one array; keep only this zone's band
-    if (c.y > zoneBottom(zone) - 40 && c.y < zoneBottom(zone) + 400) {
-      const b = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(c.x, c.y, c.z));
-      world.createCollider(RAPIER.ColliderDesc.ball(c.r).setFriction(0.8), b);
-    }
-  }
-
-  // ---- kinematic pushers ----
-  playerBody = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, PARK_Y, 0));
-  world.createCollider(RAPIER.ColliderDesc.ball(PLAYER_R), playerBody);
-  levBodies.length = 0;
-  for (let i = 0; i < LEV_N; i++) {
-    const b = world.createRigidBody(RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(0, PARK_Y, 0));
-    world.createCollider(RAPIER.ColliderDesc.ball(LEV_R), b);
-    levBodies.push(b);
-  }
-
-  buildDebris();
-}
-
-// Bilinear sample of the collider's OWN surface. Spawning against terrainH instead left
-// debris either buried in or floating above the 3.1m-cell heightfield, and the resulting
-// penetration/drop kept dozens of bodies creeping forever instead of sleeping.
-const HF_STEP = (HF_EXT * 2) / HF_N;
-function hfAt(x, z, out) {
-  const fi = (z + HF_EXT) / HF_STEP, fj = (x + HF_EXT) / HF_STEP;   // i->z, j->x
-  const i = Math.max(0, Math.min(HF_N - 1, fi | 0)), j = Math.max(0, Math.min(HF_N - 1, fj | 0));
-  const u = fi - i, v = fj - j, n1 = HF_N + 1;
-  const h00 = hfHeights[j * n1 + i], h10 = hfHeights[j * n1 + i + 1];
-  const h01 = hfHeights[(j + 1) * n1 + i], h11 = hfHeights[(j + 1) * n1 + i + 1];
-  const a = h00 + (h10 - h00) * u, b = h01 + (h11 - h01) * u;
-  if (out) { out.dz = ((h10 - h00) + (h11 - h01)) * 0.5 / HF_STEP; out.dx = (b - a) / HF_STEP; }
-  return a + (b - a) * v;
-}
-const _grad = { dx: 0, dz: 0 };
-
-function buildDebris() {
-  instGeo = new THREE.DodecahedronGeometry(1, 0);
-  instMat = new THREE.MeshStandardMaterial({
-    color: ROCK_COL[zone % 3], roughness: 0.9, metalness: 0.03, flatShading: true
-  });
-  inst = new THREE.InstancedMesh(instGeo, instMat, N_DEBRIS);
-  inst.frustumCulled = false;               // bodies move; a stale bounds would pop them out
-  inst.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-  inst.castShadow = false; inst.receiveShadow = true;
-  scene.add(inst);
-
-  const hull = new Float32Array(instGeo.attributes.position.count * 3);
-  const src = instGeo.attributes.position.array;
-  bodies.length = 0;
-  const col = new THREE.Color();
-  let placed = 0, guard = 0;
-  while (placed < N_DEBRIS && guard++ < N_DEBRIS * 40) {
-    const a = Math.random() * Math.PI * 2, r = 30 + Math.random() * (WORLD_R * 0.62 - 30);
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
-    if (Math.abs(x) > HF_EXT - 4 || Math.abs(z) > HF_EXT - 4) continue;
-    if (!clearOfCrack(x, z, zone, 0.75 + 1.5 * HF_STEP) || !clearOfBed(zone, x, z, 0.75)) continue;   // off the crack: a stone (<= 0.72 u) + 1.5 cells of
-    // this collider's own 3.1 u grid, so no cell it rests on straddles the lip (the drawn lip is the 0.5 u patch)
-    const hy = hfAt(x, z, _grad);
-    if (Math.hypot(_grad.dx, _grad.dz) > 0.26) continue;    // too steep: it would creep downhill and never sleep
-    const s = 0.22 + Math.random() * 0.5, sy = s * (0.6 + Math.random() * 0.7);
-    const y = hy + sy + 0.02;
-
-    const body = world.createRigidBody(
-      RAPIER.RigidBodyDesc.dynamic().setTranslation(x, y, z)
-        .setLinearDamping(1.6).setAngularDamping(2.2));   // water drag; no per-frame forces
-    for (let i = 0; i < src.length; i += 3) {
-      hull[i] = src[i] * s; hull[i + 1] = src[i + 1] * sy; hull[i + 2] = src[i + 2] * s;
-    }
-    const cd = RAPIER.ColliderDesc.convexHull(hull);
-    world.createCollider((cd || RAPIER.ColliderDesc.ball(s)).setDensity(2.2).setFriction(0.85).setRestitution(0.08), body);
-
-    _p.set(x, y, z); _q.identity(); _s.set(s, sy, s);
-    inst.setMatrixAt(placed, _m.compose(_p, _q, _s));
-    col.setHex(ROCK_COL[zone % 3]);
-    const k = 0.7 + Math.random() * 0.6;
-    inst.setColorAt(placed, col.setRGB(col.r * k, col.g * k, col.b * k));
-    bodies.push({ b: body, sx: s, sy, live: true });
-    placed++;
-  }
-  inst.count = placed;
-  inst.instanceMatrix.needsUpdate = true;
-  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
-}
+export function updatePhysics() { /* static: nothing per frame */ }
 
 function teardown() {
-  if (inst) { scene.remove(inst); inst.geometry.dispose(); inst.material.dispose(); inst = null; }
-  bodies.length = 0; levBodies.length = 0; playerBody = null;
-  if (world) { world.free(); world = null; }
-  acc = 0; awakeCount = 0;
+  // geometry is this build's own; the materials are flora's rock / the terrain's: never disposed
+  if (kinds) for (const k of kinds) { scene.remove(k.im); k.im.geometry.dispose(); }
+  if (drift) { scene.remove(drift); drift.geometry.dispose(); }
+  kinds = null; drift = null; nStones = 0;
 }
 
-// ---------------------------------------------------------------------------
-export function updatePhysics(dt, playerPos, playerVel, levSpine) {
-  if (!world || !physicsReady) return;
+// a stone's footprint test against flora's boulders (their fixed balls: the ground-level circle)
+function inBoulder(x, z, r, y) {
+  for (let i = 0; i < rockColliders.length; i++) {
+    const c = rockColliders[i], dx = x - c.x, dz = z - c.z, dy = c.y - y;
+    const gr = c.r * c.r - dy * dy;
+    if (gr <= 0) continue;
+    const R = Math.sqrt(gr) + r + 0.4;
+    if (dx * dx + dz * dz < R * R) return true;
+  }
+  return false;
+}
+
+function build(zi) {
   const t0 = performance.now();
+  teardown();
+  zone = zi | 0;
+  // OWN stream: the site's debris seed, mixed with the zone (a pure function of both)
+  const base = siteParams('debris').rng;
+  const rand = seededRand(((base() * 4294967296) >>> 0) ^ Math.imul(zone + 1, 0x9E3779B1));
+  const rr = (a, b) => a + (b - a) * rand();
+  if (!terrainMeshes[zone]) return;
 
-  // Kinematic targets. Rapier derives the pusher's velocity from the position delta it
-  // is asked to reach, which is what actually imparts the impulse on contact.
-  if (playerPos) {
-    _t.x = playerPos.x; _t.y = playerPos.y; _t.z = playerPos.z;
-    if (playerVel) { _t.x += playerVel.x * dt; _t.y += playerVel.y * dt; _t.z += playerVel.z * dt; }
-    playerBody.setNextKinematicTranslation(_t);
-  }
-  applySpine(levSpine, playerPos);
+  // the four shapes: flora's generator on our stream, flora's rock material ('rock' program)
+  kinds = SHAPES.map((S, k) => {
+    const kit = jamRockKit(zone, rand, S[0], S[1], S[2], S[3]);
+    const g = kit.geo;
+    g.setAttribute('aInst', new THREE.InstancedBufferAttribute(new Float32Array(CAP * 4), 4));   // zeros: no sway
+    const im = new THREE.InstancedMesh(g, kit.mat, CAP);
+    im.name = 'debris' + zone + '_' + k;
+    im.receiveShadow = true;             // as flora's boulders and the jam (part of the program key)
+    im.castShadow = false;
+    im.frustumCulled = false;            // one mesh spans the zone; the material's own range cull does the rest
+    const P = g.attributes.position;
+    let lo = 1e9, hi = -1e9, rx = 0;
+    for (let i = 0; i < P.count; i++) { const y = P.getY(i); lo = Math.min(lo, y); hi = Math.max(hi, y); rx = Math.max(rx, Math.hypot(P.getX(i), P.getZ(i))); }
+    return { im, lo, hi, rx, n: 0, rock: kit.rock };
+  });
 
-  acc += dt;
-  if (acc > FIXED * MAX_SUB) acc = FIXED * MAX_SUB;
-  let steps = 0;
-  while (acc >= FIXED && steps < MAX_SUB) { world.step(); acc -= FIXED; steps++; }
-  if (!steps) { lastMs = performance.now() - t0; return; }
-
-  // ---- sync ----
-  let awake = 0, dirty = false;
-  for (let i = 0; i < bodies.length; i++) {
-    const e = bodies[i], b = e.b;
-    if (b.isSleeping()) { if (!e.live) continue; e.live = false; } else { e.live = true; awake++; }
-    const p = b.translation(), r = b.rotation();
-    _p.set(p.x, p.y, p.z); _q.set(r.x, r.y, r.z, r.w); _s.set(e.sx, e.sy, e.sx);
-    inst.setMatrixAt(i, _m.compose(_p, _q, _s));
-    dirty = true;
-  }
-  if (dirty) inst.instanceMatrix.needsUpdate = true;
-  awakeCount = awake;
-  lastMs = performance.now() - t0;
-}
-
-// Nearest LEV_N spine points to the player become kinematic shovers; the rest park.
-function applySpine(spine, playerPos) {
-  if (!spine || !spine.length || !playerPos) {
-    for (let i = 0; i < levBodies.length; i++) {
-      const p = levBodies[i].translation();
-      if (p.y !== PARK_Y) { _t.x = 0; _t.y = PARK_Y; _t.z = 0; levBodies[i].setNextKinematicTranslation(_t); }
+  const sites = wreckSites().filter(w => w.zi === zone);
+  const skirts = [];
+  let guard = 0, clusters = 0;
+  while (clusters < N_CLUSTER && guard++ < N_CLUSTER * 60) {
+    const a = rand() * TAU, r = 26 + Math.sqrt(rand()) * (WORLD_R * 0.64 - 26);
+    const cx = Math.cos(a) * r, cz = Math.sin(a) * r;
+    const nPiece = rand() < 0.3 ? 0 : 1 + Math.floor(rand() * 4);
+    const S0 = rr(0.34, 0.85) * (rand() < 0.16 ? 1.45 : 1);       // the parent stone's half-size (u)
+    if (!placeStone(cx, cz, S0, true)) continue;
+    clusters++;
+    // the pieces broken off it: smaller, scattered round its downslope / lee side
+    for (let k = 0; k < nPiece; k++) {
+      const pa = rand() * TAU, pr = S0 * rr(1.3, 3.2), s = S0 * rr(0.25, 0.6);
+      placeStone(cx + Math.cos(pa) * pr, cz + Math.sin(pa) * pr, s, false);
     }
-    return;
   }
-  const n = Math.min(spine.length, _order.length);
-  for (let i = 0; i < n; i++) {
-    const s = spine[i], dx = s.x - playerPos.x, dy = s.y - playerPos.y, dz = s.z - playerPos.z;
-    _order[i] = i; _dist[i] = dx * dx + dy * dy + dz * dz;
+  // the stone itself: shape, size, squash, tilt, burial; rejected where it does not belong
+  function placeStone(x, z, S, parent) {
+    const kind = kinds[Math.floor(rand() * kinds.length)];
+    const sq = rr(0.55, 0.95), yaw = rand() * TAU, tilt = rr(0, 0.42), tAz = rand() * TAU, bury = rr(0.28, 0.42), shade = rr(0.72, 1.18);
+    if (kind.n >= CAP) return false;
+    const fr = S * kind.rx * 1.15;
+    if (!clearOfCrack(x, z, zone, fr + 0.5) || !clearOfBed(zone, x, z, fr)) return false;
+    for (const w of sites) if (Math.hypot(x - w.x, z - w.z) < w.clear + fr) return false;
+    const n = terrainNormal(x, z, zone);
+    if (n.y < 0.86) return false;                                   // too steep to hold loose stone
+    const y0 = terrainSample(zone, x, z);
+    if (inBoulder(x, z, fr, y0)) return false;
+    // lean: mostly onto the slope, plus the stone's own random tilt
+    _n.set(n.x, n.y, n.z);
+    _q.setFromUnitVectors(_up, _n).slerp(_q2.identity(), 0.25);
+    _ax.set(Math.cos(tAz), 0, Math.sin(tAz));
+    _q.multiply(_q2.setFromAxisAngle(_ax, tilt)).multiply(_q2.setFromAxisAngle(_up, yaw));
+    const sx = S * rr(0.85, 1.25), sy = S * sq, sz = S * rr(0.85, 1.25);
+    // sunk `bury` of its height: its lowest point that far under the drawn floor (tilt adds a little)
+    const h = (kind.hi - kind.lo) * sy;
+    const y = y0 - kind.lo * sy - bury * h - Math.sin(tilt) * S * 0.25;
+    _p.set(x, y, z); _s.set(sx, sy, sz);
+    kind.im.setMatrixAt(kind.n, _m.compose(_p, _q, _s));
+    _c.set(kind.rock).multiplyScalar(shade);
+    kind.im.setColorAt(kind.n, _c);
+    kind.n++;
+    nStones++;
+    // the drift: footprint ~ the stone's waterline radius, banked deeper on the lee
+    const R = Math.max(sx, sz) * kind.rx * 0.82;
+    const fp = new Float32Array(12);
+    for (let i = 0; i < 12; i++) fp[i] = R * (0.82 + 0.3 * Math.abs(Math.sin(i * 1.7 + x * 3.1 + z * 1.3)));
+    const H = Math.min(0.32, 0.05 + 0.2 * S * (parent ? 1 : 0.7)), W = 0.22 + 1.05 * S;
+    skirts.push(driftSkirt(zone, x, z, fp, i => H * (0.45 + 0.55 * leeOf(i / 12 * TAU)), i => W * (0.5 + 0.8 * leeOf(i / 12 * TAU)), 0.72, 3));
+    return true;
   }
-  // partial selection sort — LEV_N passes, no allocation
-  const k = Math.min(LEV_N, n);
-  for (let a = 0; a < k; a++) {
-    let m = a;
-    for (let b = a + 1; b < n; b++) if (_dist[_order[b]] < _dist[_order[m]]) m = b;
-    const tmp = _order[a]; _order[a] = _order[m]; _order[m] = tmp;
+  for (const k of kinds) {
+    k.im.count = k.n;
+    k.im.instanceMatrix.needsUpdate = true;
+    if (k.im.instanceColor) k.im.instanceColor.needsUpdate = true;
+    scene.add(k.im);
   }
-  for (let i = 0; i < levBodies.length; i++) {
-    if (i < k) { const s = spine[_order[i]]; _t.x = s.x; _t.y = s.y; _t.z = s.z; }
-    else { _t.x = 0; _t.y = PARK_Y; _t.z = 0; }
-    levBodies[i].setNextKinematicTranslation(_t);
+  // one merged drift mesh, the terrain's own zone material (it IS seabed: same program)
+  if (skirts.length) {
+    let nv = 0, ni = 0;
+    for (const g of skirts) { nv += g.attributes.position.count; ni += g.index.count; }
+    const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), col = new Float32Array(nv * 3), idx = new Uint32Array(ni);
+    let vo = 0, io = 0;
+    for (const g of skirts) {
+      pos.set(g.attributes.position.array, vo * 3); nor.set(g.attributes.normal.array, vo * 3); col.set(g.attributes.color.array, vo * 3);
+      const ix = g.index.array;
+      for (let i = 0; i < ix.length; i++) idx[io + i] = ix[i] + vo;
+      vo += g.attributes.position.count; io += ix.length;
+      g.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    geo.computeBoundingSphere();
+    drift = new THREE.Mesh(geo, terrainMeshes[zone].material);
+    drift.receiveShadow = true;
+    drift.name = 'debrisDrift' + zone;
+    scene.add(drift);
   }
+  lastMs = +(performance.now() - t0).toFixed(1);
 }
