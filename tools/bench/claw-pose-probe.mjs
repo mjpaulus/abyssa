@@ -39,6 +39,8 @@ const setup = await c.ev(`(async () => {
   return { k, hold: L.hold, threatE: +L.threatE.toFixed(3), ph: +L.hamPh.toFixed(3), sculpted: !!L.sculpted, sal: P.pos.toArray().map(v => +v.toFixed(2)), fromCentre: +Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z).toFixed(1) };
 })()`);
 console.log('setup', JSON.stringify(setup));
+// CP_SET='{"apex":0.15}': lab knobs on WHIP before the blows (brooderClaw.js)
+if (process.env.CP_SET) console.log('set', JSON.stringify(await c.ev(`window.__claw ? Object.assign(window.__claw.WHIP, ${process.env.CP_SET}) : null`)));
 // two full cycles, every frame rendered through the real pipeline (the game camera with it)
 const rows = await c.ev(`(async () => {
   const L = window.__sl, B = window.__bench, P = window.player, S = window.survival;
