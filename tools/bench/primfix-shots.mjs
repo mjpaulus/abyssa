@@ -84,6 +84,8 @@ add('i6-skiff-wide', `const W = window.wrecks.list()[0]; window.__pf.facing(W.x,
 // the relic beacon at discovery range (45 u, 9 u up), the lens pinned, Sal stood under it
 add('m0-range', `const W = window.wrecks.list()[0]; window.__pf.stand(W.x + 30, W.z + 22, -2.2, 0); window.__camPin = { p: [W.x + 36, W.y + 9, W.z + 27], t: [W.x, W.y, W.z] }; return await window.__pf.shot();`);
 add('m0-mid', `const W = window.wrecks.list()[0]; window.__pf.stand(W.x + 14, W.z + 10, -2.2, 0); window.__camPin = { p: [W.x + 16, W.y + 4, W.z + 12], t: [W.x, W.y, W.z] }; return await window.__pf.shot();`);
+add('m0-20', `const W = window.wrecks.list()[0]; window.__pf.stand(W.x - 22, W.z + 16, 2.2, 0); window.__camPin = { p: [W.x - 16, W.y + 3, W.z + 12], t: [W.x, W.y + 0.5, W.z] }; return await window.__pf.shot();`);
+add('m0-40', `const W = window.wrecks.list()[0]; window.__pf.stand(W.x - 40, W.z + 30, 2.2, 0); window.__camPin = { p: [W.x - 32, W.y + 5, W.z + 24], t: [W.x, W.y + 0.5, W.z] }; return await window.__pf.shot();`);
 add('i7-polymer', `window.__pf.pin(27.1, 25.5, 6, -2.3, 2.5); return await window.__pf.shot();`);
 // ---- the survey: 20 home spots (rings + bearings), the follow lens ----
 const RING = [[30, 0.3], [30, 2.4], [30, 4.4], [55, 1.0], [55, 3.0], [55, 5.2], [80, 0.2], [80, 1.6], [80, 3.6], [80, 5.0],

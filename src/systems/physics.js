@@ -6,10 +6,12 @@
 // dynamic bodies that Sal's boots (a 0.9 u kinematic ball at his feet) and the sleeper's
 // spine shoved about. THE BODIES WERE VESTIGIAL and are gone: nothing read them (no
 // gameplay, no camera, no collision on Sal's side), the contact rate was ~1 stone per
-// 250 u walked, a half-buried stone in a silt drift cannot be kicked loose, and one body
-// fell through the floor on boot (spawned inside a flora boulder's fixed ball, the solver
-// pushed it under the one-sided heightfield). Rapier is no longer fetched (it was only ever
-// loaded for these). The debris is static decor now, laid as a pure function of the site:
+// 250 u walked, and a half-buried stone in a silt drift cannot be kicked loose. Bodies also
+// FELL THROUGH THE FLOOR: measured on main over three boots, 4-6 of the 120 were 25-87 u under
+// the drawn floor ~10 s in; about half had spawned inside a flora boulder's fixed ball (pushed
+// down through the one-sided heightfield), the rest were unexplained (placement read a
+// bilinear sample of a triangulated 3.1 u collider). Rapier is no longer fetched (it was only
+// ever loaded for these). The debris is static decor now, laid as a pure function of the site:
 //
 //   * its OWN stream (site.js seeds.debris, mixed with the zone): boot and arrive-back lay the
 //     same stones, and no terrain/flora/wreck stream or fingerprint moves;
