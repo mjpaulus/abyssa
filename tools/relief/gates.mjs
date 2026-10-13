@@ -1,14 +1,16 @@
 // THE RELIEF GATES — spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md: the §7 hard limits, the shape
-// acceptance S1-S7 and G3, measured on the SLICED REAL code at home zone 0 (run slice.mjs first), against the same
+// acceptance S1-S7 and G3, measured on the SLICED REAL code at home zone 0 (re-sliced on every run), against the same
 // code with home's relief rows removed (= the shipped world; validate.mjs proves it bit for bit). Exit 1 if a hard
 // gate fails. S3 is a target: reported, never fails the run.
-//   node tools/relief/slice.mjs && node tools/relief/gates.mjs [--json out.json]
+// Every bar is judged at stats.mjs's reported precision (r1/r2/r3); S5's share counts n.y < 0.62 (51.7 deg), its BFS steps tan 52 deg: the share is the stricter.
+//   node tools/relief/gates.mjs [--json out.json]
 import { writeFileSync } from 'node:fs';
 import { setSite, siteAt } from '../../src/world/site.js';
 import { riftPos } from '../../src/config.js';
 import { FISSURE, resetJam, jamTopY, fissureDist, fissureWorld } from '../../src/world/fissureShape.js';
 import { analyze, classify, N, X0, idx } from './stats.mjs';
 import { makeMesh } from './mesh.mjs';
+await import('./slice.mjs');          // re-slice first: the gen files are always the code on disk
 const T = await import('./terrain.gen.mjs'), P = await import('./pins.gen.mjs');
 const { meshH } = makeMesh(T);
 const PUMP = [5.382, 4.232, 2.895];              // the live pump head the leash anchors to (audit §3; stats.analyze takes [x, y, z])

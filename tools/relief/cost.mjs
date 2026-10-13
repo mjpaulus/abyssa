@@ -1,6 +1,7 @@
 // heightAt's cost at home zone 0, home's relief rows ON vs removed (= the shipped path): ns per call over a fixed
 // 200k-point set in the basin, the best of 5 alternating runs each. Exit 1 if on / off > 1.5 (spec §7).
 import { setSite, siteAt } from '../../src/world/site.js';
+await import('./slice.mjs');          // re-slice first: the gen files are always the code on disk
 const T = await import('./terrain.gen.mjs');
 setSite(0);
 const HOME = siteAt(0), keep = HOME.shape, n = 200000, X = new Float64Array(n), Z = new Float64Array(n);

@@ -1,4 +1,4 @@
-// Relief statistics over a 1 u height grid (x, z in [-300, 300]) — shared by analyze.mjs and levers.mjs.
+// Relief statistics over a 1 u height grid (x, z in [-300, 300]) — used by tools/relief/gates.mjs.
 import { FISSURE, fissureDist, fissureWorld, _halfWAt, APRON } from '../../src/world/fissureShape.js';
 import { zoneBottom, ZONE_GAP } from '../../src/config.js';
 export const N = 601, X0 = -300;
