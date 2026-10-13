@@ -2,6 +2,7 @@
 //   node tools/bench/fissure-probe.mjs <clearance|velkath-crack|walls-inside|fall-lens|rise|ending|wave-minors|shape|jam-stand|throat-edges|slabs|tips|walls|climb-out|open-ledge|floor-readers|opening|jam-mesh|reascend|seep-depth|open-persist|calm-open|open-light|pour-hide|below-dark> <port>   (serve.py must already serve <port>)
 // Env DRV_PORT (CDP debug port, default 9481). drv.mjs reads DRV_PORT when it is first
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
+// Env FP_MUTANT='<json patch>' (seafloor relief): a RED mutant of home's relief rows, applied before the mode (below).
 const [, , mode, port] = process.argv;
 process.env.DRV_PORT = process.env.DRV_PORT || '9481';
 // A FRESH PROFILE per run: the game saves its chart (endingSeen, calms) to localStorage, and a run
@@ -13,6 +14,30 @@ await start(`http://localhost:${port}/?bench&playtest${['below-dark', 'ending'].
 process.on('exit', () => { stop(); try { rmSync(process.env.DRV_DIR, { recursive: true, force: true }); } catch (e) { } });   // a throwing probe must not leave its Chrome on the port
 const c = await connect();
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__fissure`, 240000, 1000);
+// RED MUTANTS (seafloor relief, spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md G2: every bound
+// re-derived for the new ground has a case that fails). FP_MUTANT='<json patch>' deep-merges the patch into HOME's relief
+// rows through game.js __relief.set once the page is in play, before the mode's own setup, and logs what it moved:
+//   FP_MUTANT='{"hollow":{"D":60}}' DRV_PORT=9520 node tools/bench/fissure-probe.mjs shape 8870
+// The set is a full arrival (the world reseeds; Sal respawns on the deck). It survives __chart.arrive (the site's row
+// object is replaced) but not a page reload, so the two modes that reload refuse it. Positive control: the run stops
+// (exit 2) unless the mutant moved home's fingerprint: __relief.set deep-merges ANY key, so a mistyped one (`nocomp`) is
+// a silent no-op, and a refused row throws. Probe runs only: a mutant is never committed.
+const MUTANT = process.env.FP_MUTANT ? JSON.parse(process.env.FP_MUTANT) : null;
+if (MUTANT) {
+  if (['calm-open', 'open-persist'].includes(mode)) { console.error(`FP_MUTANT: ${mode} reloads the page, which drops the mutant`); process.exit(2); }
+  const m = await c.ev(`(async () => {
+    const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), F = S.FISSURE[0];
+    window.setState('play'); window.__helm = true;
+    if (!window.__relief || !window.__relief.rows()) return { err: 'no relief rows to mutate here (main has no __relief)' };
+    if (window.__chart.site() !== 0) return { err: 'the mutants are home rows; the page is at site ' + window.__chart.site() };
+    const look = () => ({ fp: window.__ridge.fp(), lip: +S.lipMeanY(0, T.terrainH).toFixed(2), jamTop: +S.jamTopY(0, T.terrainH).toFixed(2),
+      floorAtRift: +T.terrainH(F.cx, F.cz, 0).toFixed(2) });
+    const before = look();
+    try { window.__relief.set(${JSON.stringify(MUTANT)}); } catch (e) { return { err: 'refused: ' + (e && e.message || e), before }; }
+    return { before, after: look(), site: window.__chart.site(), hollow: window.__relief.rows().hollow }; })()`);
+  console.log('FP_MUTANT ' + JSON.stringify(MUTANT) + ' -> ' + JSON.stringify(m));
+  if (m.err || m.after.fp === m.before.fp) { console.error('FP_MUTANT did not take: ' + (m.err || 'home fp unchanged ' + m.after.fp)); process.exit(2); }
+}
 const fail = [];
 // THE RE-ASCENT (rise fix): Sal rising from the zone below up through an open throat and out over the lip, as
 // play has it (walls-inside.page.js riseShaft). 1/60: zones 0/1, u -4 / 9, under the slot and beside it (dv
@@ -55,32 +80,58 @@ async function riseSet() {
 if (mode === 'rise') {
   await riseSet();
 } else if (mode === 'shape') {
+  // THE THROAT'S DEPTH (seafloor relief Task 6; spec §6, G3). The old bar, depthCentre >= 25, was the fissure plan's
+  // literal: on the relief home zone 0's throat is 40.8 u deep (main 71.2) and it passed silently. Re-derived from the
+  // spec: the throat floor keeps today's depth (-315.3 at riftPos(0), G3) under a lip ~33 u lower (~-276), so the throat
+  // stands ~39 u under the ground beside it; >= 35 holds that with 4 u for the lip's wander, in every zone (zones 1-2,
+  // unchanged ground, are 86.4 / 85.4). And the floor itself: home zone 0's floor at riftPos(0) within +-1 u of main's
+  // -315.33 (this mode's floorAtRift on main, 2026-10-13; G3). RED (FP_MUTANT, 2026-10-13): {"hollow":{"D":60}} (the lip
+  // 32 u lower, the floor kept: depth 8.85) breaks the depth; {"hollow":{"noComp":true}} (the carve not shortened: the
+  // floor -346.33) and {"hollow":{"D":60,"noComp":true}} (-378.33) break the floor.
+  const DEPTH_MIN = 35, FLOOR0 = -315.33, FLOOR_TOL = 1;
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
-    const out = [];
+    const out = [], site = window.__chart.site();
     for (let zi = 0; zi < 3; zi++) {
       const F = S.FISSURE[zi], o = {};
-      const atC = T.terrainH(F.cx, F.cz, zi);                          // opening centre
+      const atC = T.terrainH(F.cx, F.cz, zi);                          // opening centre (riftPos(zi)): the throat floor there
       const lipL = T.terrainH(F.cx + F.dx * F.halfLen * 0.9, F.cz + F.dz * F.halfLen * 0.9, zi);
       const side = T.terrainH(F.cx - F.dz * (F.halfW + 8), F.cz + F.dx * (F.halfW + 8), zi);
-      out.push({ zi, len: F.halfLen * 2, w: F.halfW * 2, depthCentre: side - atC, depthEnd: side - lipL,
+      out.push({ site, zi, len: F.halfLen * 2, w: F.halfW * 2, depthCentre: side - atC, depthEnd: side - lipL, floorAtRift: atC, side,
         inC: S.inThroat(F.cx, F.cz, zi), outSide: S.inThroat(F.cx - F.dz * (F.halfW + 3), F.cz + F.dx * (F.halfW + 3), zi) });
     }
     return out; })()`);
   for (const z of r) {
+    console.log(`site ${z.site} zone ${z.zi}: depthCentre ${z.depthCentre.toFixed(2)} (bar >= ${DEPTH_MIN}), floor at riftPos ${z.floorAtRift.toFixed(2)}` +
+      (z.site === 0 && z.zi === 0 ? ` (bar ${FLOOR0} +- ${FLOOR_TOL})` : ''));
     if (z.len < 60 || z.len > 80) fail.push(`zone ${z.zi} length ${z.len}`);
     if (z.w < 10 || z.w > 16) fail.push(`zone ${z.zi} width ${z.w}`);
-    if (z.depthCentre < 25) fail.push(`zone ${z.zi} throat too shallow ${z.depthCentre}`);
+    if (!(z.depthCentre >= DEPTH_MIN)) fail.push(`site ${z.site} zone ${z.zi}: throat too shallow, ${z.depthCentre.toFixed(2)} u under the ground beside it (bar >= ${DEPTH_MIN})`);
+    if (z.site === 0 && z.zi === 0 && !(Math.abs(z.floorAtRift - FLOOR0) <= FLOOR_TOL))
+      fail.push(`site 0 zone 0: the throat floor at riftPos(0) is ${z.floorAtRift.toFixed(2)}, not today's ${FLOOR0} +- ${FLOOR_TOL} (G3)`);
     if (!z.inC || z.outSide) fail.push(`zone ${z.zi} throat test wrong`);
   }
+  if (r[0].site !== 0) fail.push('shape: the page is not at home (site ' + r[0].site + '): the G3 floor bar is home zone 0\'s');
   console.log(JSON.stringify(r));
 } else if (mode === 'jam-stand') {
   // SHUT: per zone, stood on the jam over the opening for 5 s he never sinks below it and never
   // jitters (and never leaves the zone); DROPPED onto it from 15 u above the lip (C held, venting)
-  // he lands on it, never below. At every site, every zone: the jam is >= 55 u above the calm-gated
+  // he lands on it, never below. At every site, every zone: the jam is >= JAM_MARGIN (25) u above the calm-gated
   // trigger plane, under both lip points everywhere (stepping in is a step DOWN), the LOWER lip at
   // most 3 u above it along its whole length (spec: "a few units below the lip"), never steeper
-  // than 1. The higher lip's height above it is reported.
+  // than 1. The higher lip's height above it is reported. At home zone 0 the lips differ by <= LIPS_MAX (1.2).
+  // (seafloor relief Task 6) THE TRIGGER MARGIN: the old bar, >= 55 u, was the fissure ledger's literal (home zone 0
+  // stood 63.9 u over the trigger then; on the relief 33.2, and it failed). The requirement is the same on every plane:
+  // the jam stays far enough above the trigger plane that standing, hopping or venting on it never fires the descent,
+  // and spec §7 sets that margin at 25 u. Every plane's margin is printed beside the bar.
+  // THE LIPS (spec §7, home zone 0): the two lips' height difference along the whole crack, sampled as the relief gates
+  // sample it (tools/relief/stats.mjs: both lips every 0.25 u from -halfLen), <= 1.2 u: past 1.6 (fissureShape.js
+  // JAM_BELOW_LIP - JAM_UNDER_LIP) the jam's cap engages and the higher lip stands further above it. Shipped 1.17, the
+  // relief 1.18. Zones 1-2 and the remote sites' lips differ by design (0.8-6.8 u, the cap holds the jam there): reported.
+  // RED (FP_MUTANT, 2026-10-13): {"hollow":{"D":60}} (the lip 32 u lower: the jam 1.2 u over the trigger) breaks the
+  // margin; {"hollow":{"dish":6,"rDish":12}} (a steep 6 u dish at the crack's centre, so the hollow's "uniform" part
+  // tilts the ground across the crack) breaks only the lips (2.17).
+  const JAM_MARGIN = 25, LIPS_MAX = 1.2;
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     const C = await import('/src/config.js');
@@ -122,9 +173,14 @@ if (mode === 'rise') {
             S.fissureWorld(u, (sd ? 1 : -1) * S._halfWAt(F, u, sd), zi, o); const h = T.terrainH(o.x, o.z, zi);
             lo = Math.min(lo, h); hi = Math.max(hi, h); }
           under = Math.min(under, lo - jy); loAbove = Math.max(loAbove, lo - jy); hiAbove = Math.max(hiAbove, hi - jy); }
+        // the lips' difference, on the relief gates' own stations (tools/relief/stats.mjs crack.lipDiffMax)
+        let lips = 0;
+        for (let u = -F.halfLen; u <= F.halfLen + 1e-9; u += 0.25) {
+          S.fissureWorld(u, S._halfWAt(F, u, 1), zi, o); const a = T.terrainH(o.x, o.z, zi);
+          S.fissureWorld(u, -S._halfWAt(F, u, 0), zi, o); lips = Math.max(lips, Math.abs(a - T.terrainH(o.x, o.z, zi))); }
         out.planes.push({ site, zi, jamLowest: +jam.toFixed(2), centre: +S.jamYAt(0, zi, T.terrainH).toFixed(2),
           trigger: trig(zi), aboveTrigger: +(jam - trig(zi)).toFixed(2), underLip: +under.toFixed(3),
-          lowerLipMaxAbove: +loAbove.toFixed(2), higherLipMaxAbove: +hiAbove.toFixed(2), maxSlope: +slope.toFixed(3) });
+          lowerLipMaxAbove: +loAbove.toFixed(2), higherLipMaxAbove: +hiAbove.toFixed(2), maxSlope: +slope.toFixed(3), lips: +lips.toFixed(3) });
       }
     }
     window.__chart.arrive(0);
@@ -141,7 +197,11 @@ if (mode === 'rise') {
     if (z.zone !== z.zi) fail.push(`zone ${z.zi}: the drop left the zone`);
   }
   for (const p of r.planes) {
-    if (!(p.aboveTrigger >= 55)) fail.push(`site ${p.site} zone ${p.zi}: jam under 55 u above the trigger plane ` + JSON.stringify(p));
+    const home0 = p.site === 0 && p.zi === 0;
+    console.log(`site ${p.site} zone ${p.zi}: jam ${p.jamLowest} over the trigger ${p.trigger} by ${p.aboveTrigger} (bar >= ${JAM_MARGIN}); ` +
+      `lower lip <= ${p.lowerLipMaxAbove} over it (bar <= 3); lips differ <= ${p.lips}` + (home0 ? ` (bar <= ${LIPS_MAX})` : ' (reported)'));
+    if (!(p.aboveTrigger >= JAM_MARGIN)) fail.push(`site ${p.site} zone ${p.zi}: jam ${p.aboveTrigger} u above the trigger plane (bar >= ${JAM_MARGIN}) ` + JSON.stringify(p));
+    if (home0 && !(p.lips <= LIPS_MAX)) fail.push(`site 0 zone 0: the lips differ by ${p.lips} u (bar <= ${LIPS_MAX}; the jam's cap engages at 1.6) ` + JSON.stringify(p));
     if (!(p.underLip > 0)) fail.push(`site ${p.site} zone ${p.zi}: a lip point dips below the jam ` + JSON.stringify(p));
     if (!(p.lowerLipMaxAbove <= 3)) fail.push(`site ${p.site} zone ${p.zi}: the lower lip stands more than 3 u above the jam ` + JSON.stringify(p));
     if (!(p.maxSlope <= 1.0)) fail.push(`site ${p.site} zone ${p.zi}: jam ramp too steep ` + JSON.stringify(p));
@@ -516,14 +576,28 @@ if (mode === 'rise') {
   // lip at most 2.2 u (a tap-hop) over the walkable floor beside it, stepping in at most 0.6 u up; the
   // seep fog off. Then the BOOTS: at home, zone 0, stood at 40 spots on the jam (the live player, 20
   // frames), the drawn top under his soles within 0.2 u of them at 95%.
+  // (seafloor relief Task 6) THE DROP UNDER EVERY BLOCK: fissure.js lays a block only over >= DROP_MIN of throat (tryBlock
+  // rejects the rest), so the audit's dropMin >= DROP_MIN holds by construction and cannot see the ground (the old
+  // dropMin >= 20 was that tautology). The requirement is the module's own number, DROP_MIN = 20 u (every block sinks that
+  // far out of sight when the jam goes), read from the module and pinned here: lowering it to fit blocks over a shallower
+  // throat fails. The ground shows in the COUNT: the shallower the throat under the jam, the fewer places a block may go.
+  // THE COUNT, 60-160 (N_BOULDER caps it at 160): on the relief the throat under home zone 0's jam goes from ~70 u to ~37 u
+  // and it still lays 160, as every other plane does, so the literal band stands (the density rule the plan held in
+  // reserve is not needed). Every plane's count is printed beside the band. RED (FP_MUTANT, 2026-10-13):
+  // {"hollow":{"D":60}} (the jam 7 u over the throat floor at riftPos(0): 17 blocks find 20 u under them, in the deep
+  // pockets) breaks the count; a build with DROP_MIN = 15 breaks the pin (the old dropMin >= 20 passed it: 23.1 u).
+  const DROP_REQ = 20;
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    const Fi = await import('/src/world/fissure.js');
     window.setState('play'); window.__helm = true;
-    const out = { audit: [], boots: null };
+    const out = { DROP_MIN: Fi.DROP_MIN, audit: [], boots: null };
     for (const site of [0, 1, 2]) {
       if (site) window.__chart.arrive(site);
       for (let zi = 0; zi < 3; zi++) { window.__fissure.setOpen(zi, 0); }
-      for (let zi = 0; zi < 3; zi++) out.audit.push(Object.assign({ site, zi }, window.__fissure.audit(zi)));
+      // (an empty jam: audit() indexes its empty block lists and throws; the count still fails its band below)
+      for (let zi = 0; zi < 3; zi++) { let a; try { a = window.__fissure.audit(zi); } catch (e) { a = { err: String(e && e.message || e) }; }
+        out.audit.push(Object.assign({ site, zi, boulders: window.__fissure.state(zi).n }, a)); }
     }
     window.__chart.arrive(0); window.setState('play'); window.__helm = true;
     window.gotoZone(0); window.lev.calmed = false; window.__fissure.setOpen(0, 0);
@@ -537,19 +611,24 @@ if (mode === 'rise') {
       if (!isNaN(d)) errs.push(Math.abs(p.y - 1.35 - d));
     }
     errs.sort((a, b) => a - b);
-    out.boots = { n: errs.length, p50: +errs[Math.floor(errs.length * 0.5)].toFixed(3), p95: +errs[Math.floor(errs.length * 0.95)].toFixed(3), max: +errs[errs.length - 1].toFixed(3) };
+    out.boots = errs.length ? { n: errs.length, p50: +errs[Math.floor(errs.length * 0.5)].toFixed(3), p95: +errs[Math.floor(errs.length * 0.95)].toFixed(3), max: +errs[errs.length - 1].toFixed(3) } : { n: 0 };
     return out; })()`);
+  console.log(`DROP_MIN (fissure.js) ${r.DROP_MIN} (required ${DROP_REQ})`);
+  if (r.DROP_MIN !== DROP_REQ) fail.push(r.DROP_MIN === undefined ? 'fissure.js does not export DROP_MIN (a build older than this probe)'
+    : `fissure.js DROP_MIN is ${r.DROP_MIN}: every block must keep ${DROP_REQ} u of throat to sink out of sight through`);
   for (const z of r.audit) {
     const tag = `site ${z.site} zone ${z.zi}`;
+    console.log(`${tag}: ${z.boulders} blocks (band 60-160), the least drop under one ${z.dropMin} u (>= DROP_MIN ${r.DROP_MIN} by construction)`);
+    if (z.boulders > 160 || z.boulders < 60) fail.push(`${tag}: ${z.boulders} blocks (band 60-160)`);
+    if (z.err) { fail.push(`${tag}: the audit threw (${z.err})`); continue; }
     if (!(z.p95 <= 0.15)) fail.push(`${tag}: floor vs drawn p95 ${z.p95}`);
     if (z.clipPct > 1) fail.push(`${tag}: drawn rock over his boots at ${z.clipPct}%`);
     if (z.hoverPct > 2) fail.push(`${tag}: boots over the drawn ground at ${z.hoverPct}%`);
     if (z.slabGap < 0.05) fail.push(`${tag}: silt within ${z.slabGap} of a slab top`);
-    if (z.boulders > 160 || z.boulders < 60) fail.push(`${tag}: ${z.boulders} blocks`);
     if (z.shapes < 3) fail.push(`${tag}: ${z.shapes} rock shapes`);
     if (!(z.nnCV >= 0.4)) fail.push(`${tag}: blocks evenly spaced (nearest-neighbour CV ${z.nnCV})`);
     if (z.inSlab) fail.push(`${tag}: ${z.inSlab} blocks in slab footprints`);
-    if (!(z.dropMin >= 20)) fail.push(`${tag}: a block over only ${z.dropMin} u of throat`);
+    if (typeof r.DROP_MIN === 'number' && !(z.dropMin >= r.DROP_MIN)) fail.push(`${tag}: a block over only ${z.dropMin} u of throat (DROP_MIN ${r.DROP_MIN})`);
     if (!(z.lowerLipOver <= 2.2)) fail.push(`${tag}: the lower lip ${z.lowerLipOver} u over the floor beside it`);
     if (!(z.stepIn <= 0.6)) fail.push(`${tag}: stepping in is ${z.stepIn} u up`);
     if (!z.seepFogOff) fail.push(`${tag}: seep fogged`);
@@ -826,12 +905,22 @@ if (mode === 'rise') {
   // switched off only once it is wholly under the throat floor where it is NOW (every drawn vertex of
   // it, every third, under the ground at that vertex's x, z), and the silt
   // only once every vertex of it is under the throat floor below it. One opening per zone, at home.
+  // (seafloor relief Task 6) COVERAGE: the per-block check counts only blocks that sink out one by one (a block still
+  // drawn when the rubble switches off is checked by the mesh-level bar instead), so it must have run over nearly the
+  // whole pour. The old bar, hidden >= 100, was a count sized on main's 160-block jams; re-derived as a share of the
+  // jam's own blocks: hidden >= (main's hidden / blocks - 0.05) x blocks. Main (this mode on a main copy, 2026-10-13,
+  // home): 160 / 160 = 1.000 in zone 0 (and in zones 1 and 2), so hidden >= 0.95 x blocks. And blocks >= 60 (jam-mesh's
+  // band for a jam): on an empty jam the share passes on nothing. RED (FP_MUTANT, 2026-10-13): {"hollow":{"D":60}} (17
+  // blocks) breaks the blocks floor. The share itself has no relief RED: it drops only if blocks are still sinking at
+  // ROCK_T (22 s), and no relief row makes a throat deeper than today's ~73 u (every mutant: 160 / 160 or 17 / 17).
+  const HIDE_SHARE = 1.000 - 0.05, BLOCKS_MIN = 60;
   const r = await c.ev(`(async () => {
     const T = await import('/src/world/terrain.js'), THREE = await import('three');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
     const out = [], m = new THREE.Matrix4(), p = new THREE.Vector3(), q = new THREE.Quaternion(), s = new THREE.Vector3();
     for (const zi of [0, 1, 2]) {
       window.gotoZone(zi); window.__fissure.setOpen(zi, 0); window.__bench.place(0, 0, 0, zi);
+      const blocks = window.__fissure.state(zi).n;   // the blocks laid in this jam (the coverage bar scales with it)
       window.__fissure.open(zi);
       const ims = [0, 1, 2, 3].map(k => window.scene.getObjectByName('fissureJam' + zi + '_' + k)).filter(Boolean);
       const prev = ims.map(im => new Float32Array(im.instanceMatrix.array));
@@ -868,12 +957,18 @@ if (mode === 'rise') {
           siltWorst = w;
         }
       });
-      out.push({ zi, hidden, worstTopOverFloor: +worst.toFixed(3), worstAt, siltLastAboveFloor: +siltWorst.toFixed(3), left: window.__fissure.state(zi).left,
+      out.push({ zi, blocks, hidden, ratio: blocks ? +(hidden / blocks).toFixed(4) : null, worstTopOverFloor: +worst.toFixed(3), worstAt, siltLastAboveFloor: +siltWorst.toFixed(3), left: window.__fissure.state(zi).left,
         meshOffAt: +(meshOffAt / 60).toFixed(2), meshLeft, meshWorst: meshLeft ? +meshWorst.toFixed(3) : null });
     }
     return out; })()`);
   for (const z of r) {
-    if (z.hidden < 100) fail.push(`zone ${z.zi}: only ${z.hidden} blocks hid`);
+    console.log(`zone ${z.zi}: ${z.hidden} of ${z.blocks} blocks hid one by one (bar >= ${HIDE_SHARE.toFixed(2)} x ${z.blocks} = ${(HIDE_SHARE * z.blocks).toFixed(1)}; blocks >= ${BLOCKS_MIN})`);
+    if (!(z.blocks >= BLOCKS_MIN)) fail.push(`zone ${z.zi}: a jam of ${z.blocks} blocks (bar >= ${BLOCKS_MIN}): nothing to check`);
+    if (!(z.hidden >= HIDE_SHARE * z.blocks)) fail.push(`zone ${z.zi}: only ${z.hidden} of ${z.blocks} blocks hid one by one (bar >= ${HIDE_SHARE.toFixed(2)} x blocks)`);
+    // (seafloor relief Task 6: this bar FAILS at home zone 0 on the relief, 3.9 u, NOT re-barred: fissure.js lays each
+    // block's hide depth from a 9 x 9 grid over its footprint, which misses the strata's 0.15-0.45 u pockets by up to
+    // 10-26 u; one home block's vertex hangs in one. Main's own pour fails it at Pallid z0, Burned z0 and z1 (this mode
+    // checks only home): a pre-existing defect in the hide grid, reported to the controller in the Task 6 report)
     if (z.worstTopOverFloor > 0) fail.push(`zone ${z.zi}: a block hid ${z.worstTopOverFloor} u above the floor over it ` + JSON.stringify(z.worstAt));
     if (z.meshLeft && z.meshWorst > 0) fail.push(`zone ${z.zi}: the rubble switched off with ${z.meshLeft} blocks still drawn, ${z.meshWorst} u above the ground`);
     if (z.meshOffAt < 0) fail.push(`zone ${z.zi}: the rubble never switched off`);

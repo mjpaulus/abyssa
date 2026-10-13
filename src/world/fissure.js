@@ -60,6 +60,7 @@ const N_BOULDER = 160, COLLAPSE = 3.6, SWELL = 3.0;
 const T_BREAK = 0.4, T_OPEN = 0.5 * (COLLAPSE + SWELL);        // the break; k passes 0.5 (the floor goes)
 const SAG_MAX = 2.0, A_SILT = 10, SILT_GONE = 55;               // u, u/s^2, u of drain by which all of it is under the throat floor (3.3 s)
 const A_ROCK = 9, V_ROCK = 10, ROCK_T = 22, DROP_MIN = 20;      // u/s^2, terminal u/s, the pour's longest clock (s), u of throat under every block
+export { DROP_MIN };   // (fissure-probe jam-mesh reads it: the 20 u every block sinks out of sight is pinned there, not here)
 const GD = 0.25, FD = GD / 2;          // the silt mesh's spacing; the floor grid's (twice as fine: block edges), u
 const JAM_STEP_OK = 0.45, DRIFT = 0.9; // a block stands at most this proud of the silt banked round it; the bank's slope (rise / run)
 // the four rock shapes: [detail, squash, amp, facet] for flora's rockGeo
