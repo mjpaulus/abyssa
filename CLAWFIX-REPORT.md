@@ -6,7 +6,15 @@ Branch `clawfix`, from main `5ab282b`. Michael: "velkath's claw strikes are very
 
 Built and verified. The pose probe fails on main and passes on the branch. The blow lands on the shipped pose: on the hit-test frames the hinge differs from main by no more than the run-to-run noise.
 
-The fight checks show no claw-driven change. Not one hammer hit happened in any riteplay run, base or new, so the hammer cannot be what moved the results. The table, the gates and the open concerns are below.
+The fight checks show no change I can attribute to the claw.
+
+- Not one hammer hit happened in any of the 28 riteplay runs, base or new.
+- Calm times, tears and drops sit inside base's own wide spread. The same seeds on unchanged code ran from 23 s to 130 s.
+- The one result I can't call noise: perfect seed 1 took a leg-contact tear in both clawfix runs, and no base perfect run took one (0 of 6).
+- fissure-probe and harpoon-probe pass.
+- velfix-gate's crack route is RED on main too, so that was already broken.
+
+The table, the gates and the open concerns are below.
 
 The framing goal is only partly met. The wind-up is still above the follow lens at fight range, and the probe showed that a modest drop in the cock apex makes this worse, not better. The landing snap is the beat the player sees.
 
@@ -137,7 +145,16 @@ Setup: Sal 35 u out, boom free, BOSSCAM off.
 
 Each cell: calm time / hammer and drop hits (h) and tears (t) / drops (clean, sweeps, slams). Base passes ran on unchanged code. The new passes ran on the final code.
 
-RIteplay_TABLE
+Run as `riteplay.mjs 8860 <site> <mode> <tag> <seed>`. Base passes 1 and 2 were served from the root before the code changed. Base pass 3 went through `_base/`. Two Chromes ran in parallel throughout.
+
+| run | base pass 1 | base pass 2 | base pass 3 | clawfix pass 1 | clawfix pass 2 |
+|---|---|---|---|---|---|
+| home perfect 1 | 36.1s / 0h 0t / 2d (2c 0s 0x) | 58.6s / 0h 0t / 2d (2c 0s 0x) | 52.4s / 0h 0t / 1d (1c 0s 0x) | 60.5s / 1h 1t / 2d (2c 0s 0x) | 54.6s / 1h 1t / 2d (2c 0s 0x) |
+| home perfect 2 | 36.1s / 0h 0t / 2d (2c 0s 0x) | 58.9s / 0h 0t / 1d (1c 0s 0x) | 38.9s / 0h 0t / 2d (2c 0s 0x) | 48.4s / 0h 0t / 2d (2c 0s 0x) | 37.7s / 0h 0t / 2d (2c 0s 0x) |
+| home average 1 | 23.1s / 0h 0t / 3d (3c 0s 0x) | (no ledger: stale Chrome) | 39.2s / 1h 1t / 5d (4c 0s 1x) | 25.3s / 1h 1t / 2d (1c 1s 0x) | 56.2s / 2h 2t / 5d (3c 0s 2x) |
+| home average 2 | 36.5s / 3h 3t / 3d (1c 0s 2x) | 24.9s / 1h 1t / 2d (2c 0s 0x) | 126.4s / 2h 2t / 6d (4c 1s 1x) | 82.2s / 3h 3t / 3d (1c 1s 1x) | 68.9s / 3h 3t / 6d (3c 0s 3x) |
+| home average 3 | 31.9s / 1h 1t / 5d (4c 0s 1x) | (no ledger: stale Chrome) | 58.1s / 1h 1t / 4d (3c 0s 1x) | 57.3s / 0h 0t / 5d (4c 1s 0x) | 59.5s / 1h 1t / 4d (4c 0s 0x) |
+| pallid average 1 | 31.5s / 0h 0t / 3d (3c 0s 0x) | 28.5s / 0h 0t / 2d (2c 0s 0x) | 130.4s / 2h 2t / 4d (3c 0s 1x) | 25.1s / 0h 0t / 1d (1c 0s 0x) | 24.8s / 0h 0t / 0d (0c 0s 0x) |
 
 - **Base is noisy.** The same seeds on unchanged code spread widely:
   - perfect: 36.1 s in one pass, 58.6–58.9 s in the next;
@@ -146,11 +163,33 @@ RIteplay_TABLE
 - **No hammer hit in any run**, base or new. Every hit was a drop slam or a leg contact (`__slamLog`: `blow`, `legNN`).
 - So the claw strike itself cannot have hit anyone. Its only route into the fight is the guard: the finger's three capsules now sit at 26° rather than about 70° open, inside the ritefair spread zone. A smaller claw there cannot wall him off more.
 
-RITEPLAY_NOTES
+- **Summary, base (16 runs) against clawfix (12 runs).**
+  - Perfect calm times: base 36.1, 36.1, 58.6, 58.9, 52.4, 38.9 s; clawfix 60.5, 48.4, 54.6, 37.7 s.
+  - Average calm times: base 23.1–130.4 s; clawfix 24.8–82.2 s.
+  - Tears per average run: base 0–3; clawfix 0–3.
+  - Drops per run: base 1–6; clawfix 0–6.
+  - Every clawfix calm time and drop count is inside base's spread for its mode. Against base's spread for the same seed, some sit just outside:
+    - perfect seed 1: 60.5 s against base's 36.1–58.6 s;
+    - average seed 1: 56.2 s against 23.1–39.2 s;
+    - average seed 3: 59.5 s against 31.9–58.1 s;
+    - Pallid: 24.8–25.1 s against 28.5–130.4 s.
+  - With 1–3 base samples per seed, the spread for a single seed is not known well enough to call these a change.
+- **Not explained by noise with certainty: perfect seed 1.** It took one tear in each clawfix run (`leg34` at 52 s and `leg29` at 48 s, two legs coming into him). It took none in 3 base runs of that seed, and no base perfect run of either seed took a hit (0 of 6).
+  - Leg contacts do happen on base too: `leg29`, `leg7` and `shell` in the average runs.
+  - The claw strike cannot move her legs. My best explanation is that the perfect player's path diverges after its first changed contact with the guard claw, but two runs cannot prove it.
+  - If Michael feels her as harder, this is the place to look. The first thing to try is the guard finger's capsules: `CHELA.rest` back toward the old ~70° under threat.
 
 ### Gates
 
-GATES
+Final code, on 8860:
+
+- `tools/bench/fissure-probe.mjs velkath-crack`: **PASS**.
+- `tools/bench/harpoon-probe.mjs rite`: **PASS**. The earlier code passed both too.
+- `tools/bench/velfix-gate.mjs` (crack route): **RED on both main and clawfix, so the RED was already on main.**
+  - Alone (no other Chrome): main wash 9 frames (max outside 0.13), lens on her drawn surface 2 frames after the calm. Clawfix wash 11 frames (max outside 0.088), lens surface 0.
+  - Under load (two Chromes): main wash 14, lens surface 0; clawfix wash 9–15, lens surface 4–13.
+  - The post-calm lens hits are her body mesh (`Mesh:3591` under the body group) as she walks home with him under her. They are not a claw. The claws are idle after the calm, where only the cutter's ≥26° floor differs.
+  - The gate is load-sensitive (VELFIX-REPORT Finding 1), and it fails on main in this environment.
 
 ### Invariants
 
