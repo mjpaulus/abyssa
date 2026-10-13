@@ -15,7 +15,8 @@
 //   vents   field size/density/heat             -> vents.js ventKnobs
 //   wrecks  search ring about each rift         -> wrecks.js wreckSites
 //   sleepers[i].idle / lair / hard              -> the kinds (brooder/hoarder/hunter)
-// Every one is null at home and every consumer treats null as the shipped constant.
+// Every one is null at home except `shape` and `wrecks` (seafloor relief, 2026-10-13),
+// and every consumer treats null as the shipped constant.
 // All authored, never generated: the register is the product.
 //
 // SITE 0 IS THE SHIPPED WORLD, BIT-IDENTICAL. Its rows below are copied verbatim from
@@ -62,9 +63,15 @@ const SITES = [
     seeds: { flora: 0x5EAF00D1, wrecks: 0x57EE1B0A, vents: 0xB01Ec0DE, resources: 0xC0FFEE01, props: 0x9A11A5E1, creatures: 0xF15C0011, fauna: 0xFA0BA001, debris: 0xDEB0C0A1 },
     scarcity: { polymer: 1, bitumen: 1 },
     sleepers: null,                      // no overlay: LEVIATHAN_CFG untouched
-    // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries none of it:
-    // every consumer reads null as "the shipped constant", so site 0 stays bit-identical.
-    water: null, light: null, floor: null, shape: null, vents: null, wrecks: null, grade: null
+    // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries no water, light,
+    // floor, vents or grade of its own: every consumer reads null as "the shipped constant".
+    water: null, light: null, floor: null, shape: null, vents: null, grade: null,
+    // THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §5): zone 0's skiff (the sonar) is
+    // searched 100-140 u off riftPos(0), 30-75 deg counter-clockwise from the rift -> raft bearing (wrecks.js findSite's
+    // window), on the raft-side terraces. 100 u keeps it >= 54.5 u from Velkath's lip and >= 26.8 u from her trail head
+    // (the lair's vetoes are 46.8 / 22), so she always takes her designed raft-side station. Moves no terrain; zones 1
+    // and 2 keep the shipped search.
+    wrecks: { band: [[100, 140, 30, 75]] }
   },
   {
     key: 'pallid',
