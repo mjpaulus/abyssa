@@ -1113,38 +1113,70 @@ function paint(g, hex, fn) {
   g.setAttribute('color', new THREE.BufferAttribute(c, 3));
   return g;
 }
-function tubeSponge(rnd, r, h) {
+// (primfix 2026-10-13, reviews/primitives-audit.md item 5) THE GROWTH ON AN OLD SHELL: what reads on her
+// skyline is encrusting life, not pipes. Tube sponges come in budding CLUMPS (a main tube with shorter buds
+// leaning out of its foot), each tube BENT, its wall lumpy and constricted, its osculum oblique and uneven,
+// short; muted ochre / olive / rust / bone (the zone's own sponge hues, greyed by the water), never the old
+// slate blue. Round them: encrusting sponge mats, coralline lumps, and the two lattice fans.
+function tubeSponge(rnd, r, h, bend) {
   // profile bottom -> lip -> down the throat
-  const P = [[1.25, -0.05], [1.05, 0.05], [0.96, 0.2], [0.90, 0.45], [0.94, 0.7], [1.0, 0.9], [1.10, 0.98], [1.04, 1.02], [0.84, 1.0], [0.74, 0.9], [0.66, 0.6]];
+  const P = [[1.3, -0.05], [1.08, 0.05], [0.97, 0.18], [0.9, 0.4], [0.95, 0.62], [1.0, 0.82], [1.12, 0.96], [1.05, 1.02], [0.84, 1.0], [0.74, 0.9], [0.66, 0.6]];
   const pts = P.map(([a, b]) => new THREE.Vector2(a * r, b * h));
   const g = new THREE.LatheGeometry(pts, 14);
-  const p = g.attributes.position, ph = rnd() * 10;
+  const p = g.attributes.position, ph = rnd() * 10, cph = rnd() * 6, tilt = (rnd() - 0.5) * 0.5;
   for (let i = 0; i < p.count; i++) {
-    const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.atan2(z, x);
-    const body = sst(0.08, 0.2, y / h) * (1 - sst(0.8, 0.95, y / h));
-    const k = 1 + body * (0.12 * Math.sin(a * 3 + ph + y / h * 5) + 0.16 * (fbm(a / TAU + ph, y / h * 0.7, 2, 6) - 0.5) * 2);
-    p.setX(i, x * k); p.setZ(i, z * k);
+    let x = p.getX(i), y = p.getY(i), z = p.getZ(i);
+    const a = Math.atan2(z, x), t = y / h;
+    const body = sst(0.06, 0.2, t) * (1 - sst(0.82, 0.96, t));
+    // lumps, a constriction or two, an uneven rim
+    const k = (1 + body * (0.16 * Math.sin(a * 3 + ph + t * 5) + 0.22 * (fbm(a / TAU + ph, t * 0.9, 2, 6) - 0.5) * 2))
+      * (1 - 0.14 * body * Math.max(0, Math.sin(t * 9 + cph)));
+    x *= k; z *= k;
+    if (t > 0.8) y += (tilt * x / r + 0.06 * Math.sin(a * 2 + ph)) * h * 0.12 * sst(0.8, 1, t);
+    // bent: the axis curves over toward +x as it grows
+    x += bend * t * t * h;
+    y -= 0.25 * bend * bend * t * t * h;
+    p.setXYZ(i, x, y, z);
   }
   g.computeVertexNormals();
   return g;
 }
-function tubes(rnd, cx, cz, n, rMin, rMax, hMin, hMax, spread, hex) {
+function tubeClump(rnd, cx, cz, rMin, rMax, hMin, hMax, hex) {
   const sh = {}, parts = [];
-  for (let k = 0; k < n; k++) {
-    const x = cx + (rnd() - 0.5) * spread, z = cz + (rnd() - 0.5) * spread;
-    const r = rMin + (rMax - rMin) * rnd(), h = hMin + (hMax - hMin) * rnd();
-    const t = tubeSponge(rnd, r, h);
-    const shade = 0.8 + 0.3 * rnd();
+  const r0 = rMin + (rMax - rMin) * rnd(), h0 = hMin + (hMax - hMin) * rnd(), yaw0 = rnd() * TAU;
+  const nb = 1 + Math.floor(rnd() * 3);
+  for (let k = 0; k <= nb; k++) {
+    const bud = k > 0, ang = yaw0 + k * 2.1 + rnd() * 0.8, d = bud ? r0 * (1.2 + 0.7 * rnd()) : 0;
+    const r = bud ? r0 * (0.55 + 0.3 * rnd()) : r0, h = bud ? h0 * (0.4 + 0.35 * rnd()) : h0;
+    const t = tubeSponge(rnd, r, h, (0.15 + 0.55 * rnd()) * (bud ? 1.4 : 1));
+    const shade = 0.75 + 0.35 * rnd();
     paint(t, hex, (i, p) => {
       const y = p.getY(i), rr = Math.hypot(p.getX(i), p.getZ(i));
       const inside = y > 0.5 * h && rr < r * 0.8 ? 0.12 : 1;             // the dark throat
-      return shade * inside * (0.75 + 0.35 * sst(0, h, y));
+      return shade * inside * (0.62 + 0.45 * sst(0, h, y));             // darker at the foot, the silt on it
     });
-    t.rotateX((rnd() - 0.5) * 0.6); t.rotateZ((rnd() - 0.5) * 0.6);
-    t.translate(x, topH(x, z, sh) - 0.012, z);
+    t.rotateY(bud ? ang : yaw0);
+    if (bud) { t.rotateX(Math.sin(ang) * 0.35); t.rotateZ(-Math.cos(ang) * 0.35); }
+    else { t.rotateX((rnd() - 0.5) * 0.3); t.rotateZ((rnd() - 0.5) * 0.3); }
+    const x = cx + Math.cos(ang) * d, z = cz + Math.sin(ang) * d;
+    t.translate(x, topH(x, z, sh) - 0.014, z);
     parts.push(t);
   }
   return parts;
+}
+// A coralline / massive-sponge lump: a squashed, knobbled dome moulded onto the shell.
+function lump(rnd, cx, cz, rad, hex) {
+  const sh = {}, g = new THREE.SphereGeometry(1, 14, 8, 0, TAU, 0, Math.PI * 0.55), ph = rnd() * 10;
+  const p = g.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    const x = p.getX(i), y = p.getY(i), z = p.getZ(i), a = Math.atan2(z, x);
+    const k = 1 + 0.18 * (fbm(x * 2 + ph, z * 2 + y, 2, 5) - 0.5) * 2 + 0.06 * Math.sin(a * 7 + ph);
+    p.setXYZ(i, x * k * rad, (y * 0.55 - 0.08) * k * rad, z * k * rad);
+  }
+  g.computeVertexNormals();
+  paint(g, hex, (i, q) => 0.6 + 0.5 * sst(-0.05 * rad, 0.5 * rad, q.getY(i)) * (0.8 + 0.4 * fbm(q.getX(i) * 40 + ph, q.getZ(i) * 40, 2, 5)));
+  g.translate(cx, topH(cx, cz, sh) - 0.006, cz);
+  return g;
 }
 // A gorgonian sea fan, in one plane: a short trunk forking into tapering branches, and
 // the branches fused sideways into a LATTICE (each branch node bridged to its nearest
@@ -1213,16 +1245,23 @@ function crust(rnd, cx, cz, rad, hex) {
 }
 export function reefGeo(seed) {
   const rnd = seededRand(seed);
+  // muted (linear via colour management): ochre, olive, rust, bone, umber, a greyed coralline rose
+  const OCH = 0x6a5133, OLV = 0x4f5236, RST = 0x5a3726, BON = 0x766e5c, UMB = 0x3d3226, ROS = 0x695a4f, FAN = 0x5a3532;
   const parts = [
-    ...tubes(rnd, -0.42, 0.30, 9, 0.010, 0.018, 0.08, 0.17, 0.16, 0x3d4f6e),
-    ...tubes(rnd, 0.30, -0.10, 6, 0.009, 0.015, 0.06, 0.13, 0.12, 0x3d4f6e),
-    ...tubes(rnd, 0.20, -0.52, 7, 0.013, 0.022, 0.07, 0.14, 0.14, 0x7a4a2c),
-    ...tubes(rnd, -0.10, -0.25, 5, 0.006, 0.010, 0.04, 0.09, 0.10, 0x8a7c6c),
-    fan(rnd, -0.66, 0.46, 0.26, 0x7e3a3c), fan(rnd, 0.05, 0.20, 0.20, 0x7e3a3c),
-    crust(rnd, -0.28, -0.05, 0.09, 0x6e5836), crust(rnd, 0.46, 0.22, 0.07, 0x5a5358), crust(rnd, -0.05, -0.55, 0.08, 0x6e5836)
+    ...tubeClump(rnd, -0.44, 0.30, 0.011, 0.018, 0.06, 0.12, OCH), ...tubeClump(rnd, -0.33, 0.39, 0.008, 0.013, 0.04, 0.08, OLV),
+    ...tubeClump(rnd, 0.30, -0.10, 0.009, 0.015, 0.05, 0.10, BON), ...tubeClump(rnd, 0.21, -0.50, 0.012, 0.02, 0.05, 0.11, RST),
+    ...tubeClump(rnd, -0.12, -0.27, 0.006, 0.01, 0.03, 0.07, OCH),
+    fan(rnd, -0.66, 0.46, 0.22, FAN), fan(rnd, 0.05, 0.20, 0.17, FAN),
+    crust(rnd, -0.28, -0.05, 0.10, OCH), crust(rnd, 0.46, 0.22, 0.08, ROS), crust(rnd, -0.05, -0.55, 0.09, OLV),
+    crust(rnd, -0.47, 0.22, 0.07, UMB), crust(rnd, 0.27, -0.33, 0.065, ROS), crust(rnd, 0.12, 0.42, 0.06, OLV), crust(rnd, -0.6, -0.1, 0.05, OCH),
+    lump(rnd, -0.22, 0.12, 0.035, BON), lump(rnd, 0.38, 0.04, 0.03, OLV), lump(rnd, 0.0, -0.4, 0.028, ROS), lump(rnd, -0.5, 0.05, 0.03, OCH),
+    lump(rnd, 0.32, -0.62, 0.025, BON), lump(rnd, -0.2, 0.5, 0.024, UMB)
   ];
   for (const p of parts) for (const k of Object.keys(p.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color' && k !== 'uv') p.deleteAttribute(k);
-  return mergeGeometries(parts.map(p => p.index ? p : p));
+  // (every part carries a uv for the shared grain normal map: the lathe and sphere their own, the
+  // crusts theirs, the fans' bars none -> give the missing ones a planar one)
+  for (const p of parts) if (!p.attributes.uv) { const P = p.attributes.position, U = new Float32Array(P.count * 2); for (let i = 0; i < P.count; i++) { U[i * 2] = P.getX(i) * 4; U[i * 2 + 1] = P.getZ(i) * 4; } p.setAttribute('uv', new THREE.BufferAttribute(U, 2)); }
+  return mergeGeometries(parts);
 }
 
 // ---- the eyes ------------------------------------------------------------------------
