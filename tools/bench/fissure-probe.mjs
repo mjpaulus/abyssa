@@ -5,6 +5,11 @@
 // Env FP_MUTANT='<json patch>' (seafloor relief): a RED mutant of home's relief rows, applied before the mode (below).
 // Env FP_WALLS_SINK=<u> (walls only): a RED mutant, the floor Sal stands on sunk <u> under the jam the probe reads.
 const [, , mode, port] = process.argv;
+// (M4) FP_WALLS_SINK's positive control: a finite sink > 0, and only for walls (anywhere else it would be ignored, and a
+// RED run would pass as GREEN)
+const WALLS_SINK = process.env.FP_WALLS_SINK;
+if (WALLS_SINK !== undefined && (mode !== 'walls' || !(Number.isFinite(+WALLS_SINK) && +WALLS_SINK > 0))) {
+  console.error(`FP_WALLS_SINK must be a finite number > 0, for walls only (got ${JSON.stringify(WALLS_SINK)}, mode ${mode})`); process.exit(2); }
 process.env.DRV_PORT = process.env.DRV_PORT || '9481';
 // A FRESH PROFILE per run: the game saves its chart (endingSeen, calms) to localStorage, and a run
 // that played the ending would turn the next run's zone-2 fall into the quiet ink beat.
@@ -340,22 +345,21 @@ if (mode === 'rise') {
 } else if (mode === 'walls') {
   // SHUT, THE WALLS FROM INSIDE: at u = -0.3/0/+0.3 halfLen in each zone, stood on the jam's centreline
   // facing each wall: (a) W held 4 s; (b) W held with a 0.5 s pack burst, then 3 s more. Every
-  // frame inside the crack he is on the jam, never more than one frame's step up a block's side under it
-  // (WALLS_UNDER: never under it from the sides), and never rises more than a step (0.85 u) in one frame.
-  // (seafloor relief Task 6, fix round 1; controller Ruling 22) WALLS_UNDER IS ONE FRAME'S STEP UP A BLOCK'S SIDE.
+  // frame inside the crack he is on the jam, never under it by more than that frame's own rise (TRAIL_SLACK: never
+  // under it from the sides), and never rises more than a step (0.85 u) in one frame.
+  // (seafloor relief Task 6, fix rounds 1-2; controller Rulings 22, 26) THE TRAIL IS ONE FRAME'S RISE, per frame.
   // player.js samples his floor at the frame's starting spot (floorY, player.js:768) and moves him after (:974); a
   // rise under CRACK_STEP (0.25 u, :552) is followed as ground, not stepped (stepped frames are held to -0.5 below).
-  // So on the frame he crosses rising rubble he trails the floor at his new spot by that frame's rise: the floor's
-  // slope x his run. The jam floor's steepest rise is a block's side: fissure.js JAM_STEP_OK 0.45 + DRIFT 0.9 x FD
-  // 0.125 over one FD cell, 4.5 rise per unit run. This mode crosses one at up to 1.59 u/s (its readout below,
-  // 2026-10-13: relief home zone 0 a -0.3 sd 1, 0.110 u at 1.589 u/s; main's worst, zone 2, 0.103 at 1.37), and
-  // 4.5 x 1.594 / 60 = 0.12: the bar is -(0.113 + 0.007) = -0.12. The old -0.1 was tighter than that frame, so it
-  // tested the integrator, not the ground (main failed it from a clean load: zone 2, -0.112). It is not a player.js
-  // constant: the same side crossed at the bed's top speed (WALK_TOP_BED 2.15, :425) trails 0.161, so a failure
-  // between -0.12 and -0.17 is read against the speed and rise the readout prints before it is called a regression.
-  // RED: FP_WALLS_SINK=0.3 (fissureShape.js setJamSag sinks the floor he stands on 0.3 u under the jam this probe
-  // reads, cleared for every read): all 36 cases FAIL, -0.298 .. -0.41 (2026-10-13).
-  const WALLS_UNDER = -0.12, SINK = +(process.env.FP_WALLS_SINK || 0);
+  // So on a frame he crosses rising rubble he trails the floor at his new spot by exactly that frame's rise (the
+  // floor's slope x his run; the readout prints both). The bar is that mechanism itself, frame by frame:
+  // d >= -(max(0, rise) + TRAIL_SLACK), with d his eye over the jam less EYE_H and rise the jam's rise from the
+  // frame's starting spot; it does not depend on the rubble's layout or his speed. (Round 1's static -0.12 was the
+  // same thing at the steepest block side, 4.5 rise per unit run, at the fastest crossing measured, 1.59 u/s; the old
+  // -0.1 was tighter than one such frame: main failed it from a clean load, zone 2, -0.112.) TRAIL_SLACK 0.01 is the
+  // grid's float32 rounding and the snap's, two orders under a sink. RED: FP_WALLS_SINK=<u> (fissureShape.js
+  // setJamSag sinks the floor he stands on <u> under the jam this probe reads; both reads clear it, so the rise stays
+  // ~0 while he sits <u> under).
+  const TRAIL_SLACK = 0.01, SINK = WALLS_SINK === undefined ? 0 : +WALLS_SINK;
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
@@ -370,7 +374,9 @@ if (mode === 'rise') {
         window.__bench.step(10);
         const sg = sd ? 1 : -1, nx = -F.dz * sg, nz = F.dx * sg;
         window.player.yaw = Math.atan2(nx, nz);
-        let under = 1e9, underStep = 1e9, underN = 0, up = 0, last = null, n = 0, worst = null, pj = null, px = 0, pz = 0;
+        let under = 1e9, underStep = 1e9, underN = 0, up = 0, last = null, n = 0, worst = null, trail = 1e9, trailAt = null;
+        // (M5) the frame-to-frame readout starts from where he stands (unsunk: before the sag below)
+        let px = window.player.pos.x, pz = window.player.pos.z, pj = T.jamAt(px, pz, zi); if (pj < -1e8) pj = null;
         window.keys.KeyW = true;
         if (${SINK}) S.setJamSag(zi, ${SINK});   // (FP_WALLS_SINK: the floor he stands on, sunk; cleared for every read below)
         try { window.__bench.step(burst ? 420 : 240, i => {
@@ -380,22 +386,29 @@ if (mode === 'rise') {
           // (a step up a block's side in progress eases him up on the sill spring, briefly under the new
           // floor by design: those frames are held to half a step instead)
           if (j > -1e8) { if (window.player.stepUp > 1e-3) underStep = Math.min(underStep, p.y - (j + 1.35)); else { const d = p.y - (j + 1.35);
-            // the worst frame: his speed, this frame's run and the floor's rise across it (j at the frame's start spot)
-            if (d < under) { under = d; worst = { i, hs: +Math.hypot(window.player.vel.x, window.player.vel.z).toFixed(3), run: +Math.hypot(p.x - px, p.z - pz).toFixed(4), rise: pj == null ? null : +(j - pj).toFixed(4) }; }
+            // this frame: his speed, its run and the floor's rise across it (j at the frame's start spot, 0 if unknown)
+            const rise = pj == null ? 0 : j - pj, ex = d + Math.max(0, rise);   // ex: how far he trails BEYOND the frame's rise
+            const at = () => ({ i, d: +d.toFixed(4), hs: +Math.hypot(window.player.vel.x, window.player.vel.z).toFixed(3), run: +Math.hypot(p.x - px, p.z - pz).toFixed(4), rise: pj == null ? null : +rise.toFixed(4) });
+            if (d < under) { under = d; worst = at(); }
+            if (ex < trail) { trail = ex; trailAt = at(); }
             if (d < -0.03) underN++; } }
           pj = j > -1e8 ? j : null; px = p.x; pz = p.z;
           if (last != null) up = Math.max(up, p.y - last); last = p.y; n = i;
           if (${SINK}) S.setJamSag(zi, ${SINK}); }); }
         finally { window.keys.KeyW = false; window.keys.Space = false; if (${SINK}) S.setJamSag(zi, 0); }
         const p = window.player.pos;
-        out.push({ zi, a, sd, burst, minAboveJam: +under.toFixed(3), worstAt: worst, minInStep: +underStep.toFixed(3), underFrames: underN, maxRise: +up.toFixed(3), endFd: +S.fissureDist(p.x, p.z, zi).toFixed(2), zone: window.zone });
+        out.push({ zi, a, sd, burst, minAboveJam: +under.toFixed(3), worstAt: worst, trail: +trail.toFixed(4), trailAt, minInStep: +underStep.toFixed(3), underFrames: underN, maxRise: +up.toFixed(3), endFd: +S.fissureDist(p.x, p.z, zi).toFixed(2), zone: window.zone });
       }
     }
     return out; })()`);
   if (SINK) console.log(`FP_WALLS_SINK ${SINK}: the floor he stands on is ${SINK} u under the jam this probe reads (fissureShape.js setJamSag)`);
-  for (const z of r) if (z.minAboveJam < -0.05) console.log(`zone ${z.zi} a ${z.a} sd ${z.sd}${z.burst ? ' burst' : ''}: under the jam ${z.minAboveJam} (bar ${WALLS_UNDER}) at frame ${z.worstAt.i}: speed ${z.worstAt.hs} u/s, run ${z.worstAt.run} u, the floor rose ${z.worstAt.rise} u across it`);
+  const tag = z => `zone ${z.zi} a ${z.a} sd ${z.sd}${z.burst ? ' burst' : ''}`;
+  for (const z of r) if (z.minAboveJam < -0.05 || z.trail < -TRAIL_SLACK) console.log(`${tag(z)}: under the jam ${z.minAboveJam} at frame ${z.worstAt.i} (speed ${z.worstAt.hs} u/s, ` +
+    `run ${z.worstAt.run} u, the floor rose ${z.worstAt.rise} u across it); beyond the frame's rise ${z.trail} (bar -${TRAIL_SLACK}) at frame ${z.trailAt.i}: d ${z.trailAt.d}, rise ${z.trailAt.rise}`);
+  const tw = r.filter(z => z.trailAt).sort((p, q) => p.trail - q.trail)[0];
+  if (tw) console.log(`worst trail beyond its frame's rise: ${tw.trail} (bar -${TRAIL_SLACK}) at ${tag(tw)} frame ${tw.trailAt.i} (d ${tw.trailAt.d}, rise ${tw.trailAt.rise}, ${tw.trailAt.hs} u/s)`);
   for (const z of r) {
-    if (z.minAboveJam < WALLS_UNDER) fail.push('under the jam ' + JSON.stringify(z));
+    if (z.trail < -TRAIL_SLACK) fail.push(`under the jam beyond the frame's rise (${z.trail}, bar -${TRAIL_SLACK}) ` + JSON.stringify(z));
     if (z.minInStep < -0.5) fail.push('under the jam mid-step ' + JSON.stringify(z));
     if (z.maxRise > 0.85) fail.push('snapped up ' + JSON.stringify(z));
     if (z.zone !== z.zi) fail.push('left the zone ' + JSON.stringify(z));
@@ -934,8 +947,11 @@ if (mode === 'rise') {
   // jam's own blocks: hidden >= (main's hidden / blocks - 0.05) x blocks. Main (this mode on a main copy, 2026-10-13,
   // home): 160 / 160 = 1.000 in zone 0 (and in zones 1 and 2), so hidden >= 0.95 x blocks. And blocks >= 60 (jam-mesh's
   // band for a jam): on an empty jam the share passes on nothing. RED (FP_MUTANT, 2026-10-13): {"hollow":{"D":60}} (17
-  // blocks) breaks the blocks floor. The share itself has no relief RED: it drops only if blocks are still sinking at
-  // ROCK_T (22 s), and no relief row makes a throat deeper than today's ~73 u (every mutant: 160 / 160 or 17 / 17).
+  // blocks) breaks the blocks floor. The share drops only if blocks are still sinking at ROCK_T (22 s; the cap hides the
+  // rubble mesh, it does not zero a block's matrix, so a capped block is never counted hidden), and no relief row makes a
+  // throat deeper than today's ~73 u (every relief mutant: 160 / 160 or 17 / 17). Its RED (fix round 2, Ruling 24) is a
+  // served copy of this build with fissure.js ROCK_T cut under the pour (10.6-14.3 s from open()): ROCK_T 12, home zone 0
+  // (gone at 10.6 s) 160 / 160 and every other plane 10-51 / 160, FAIL; ROCK_T 9, 39 / 160 and 0 / 160, FAIL (2026-10-13).
   const HIDE_SHARE = 1.000 - 0.05, BLOCKS_MIN = 60;
   const r = await c.ev(`(async () => {
     const T = await import('/src/world/terrain.js'), THREE = await import('three');
@@ -995,8 +1011,8 @@ if (mode === 'rise') {
     // (seafloor relief Task 6, fix round 1, Ruling 21: fissure.js set each block's hide depth from a 9 x 9 grid over its
     // footprint, which missed the strata's 0.15-0.45 u pockets by up to 10-26 u: blocks hid with a vertex hanging in
     // one, +3.9 / +4.1 / +3.8 u at home / Pallid / Burned zone 0 and +1.4 at Burned zone 1, main's own pour at the
-    // remote sites. Now the lowest ground across the crack along the footprint (fissure.js THE HIDE DEPTH): -1.55 to
-    // -1.79 u at all nine planes, 2026-10-13)
+    // remote sites. Now the lowest ground under the footprint and its drift toward the throat (fissure.js THE HIDE
+    // DEPTH, per bin since fix round 2): -1.545 to -1.754 u at all nine planes, 2026-10-13)
     if (z.worstTopOverFloor > 0) fail.push(`${tag}: a block hid ${z.worstTopOverFloor} u above the floor over it ` + JSON.stringify(z.worstAt));
     if (z.meshLeft && z.meshWorst > 0) fail.push(`${tag}: the rubble switched off with ${z.meshLeft} blocks still drawn, ${z.meshWorst} u above the ground`);
     if (z.meshOffAt < 0) fail.push(`${tag}: the rubble never switched off`);
