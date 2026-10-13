@@ -12,6 +12,8 @@ import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 import { terrainH } from './terrain.js';
 import { collect } from '../systems/survival.js';
 import { siteParams } from './site.js';
+import { rockColliders } from './flora.js';
+import { terrainSample } from './wrecks.js';
 
 // RESPAWN: 55 s meant a lump came back before the diver had left its sight, so salvage
 // was never scarce and the hose was ground out in one sitting. Four minutes is longer
@@ -40,11 +42,35 @@ function place(zi, count, minR, maxR) {
   let guard = 0;
   while (out.length < count && guard++ < count * 40) {
     const a = rnd() * Math.PI * 2, r = rr(minR, maxR);
-    const x = Math.cos(a) * r, z = Math.sin(a) * r;
+    let x = Math.cos(a) * r, z = Math.sin(a) * r;
     if (!clearOfCrack(x, z, zi, 1.5) || !clearOfBed(zi, x, z, 1.5)) continue;     // (a node and its glow: ~1.5 u)
-    out.push(V3(x, terrainH(x, z, zi), z));
+    // (primfix) never inside a boulder: pushed straight out past its rim (no stream draw, so every node
+    // that was already clear, and the stream's phases and respawns, are unchanged)
+    const o = outOfBoulders(x, z, zi);
+    if (clearOfCrack(o.x, o.z, zi, 1.5) && clearOfBed(zi, o.x, o.z, 1.5)) { x = o.x; z = o.z; }
+    out.push(V3(x, terrainSample(zi, x, z), z));    // (primfix) on the DRAWN floor (terrainH stood some 0.1-0.2 clear)
   }
   return out;
+}
+// flora's boulders are fixed balls (rockColliders, every zone in one array): the circle each cuts
+// through the floor at the node is its footprint; a node inside one goes out along the centre line
+// to the rim + 1.2 u (the node and its glow). Passes repeat for a node pushed into a neighbour.
+const _ob = { x: 0, z: 0 };
+function outOfBoulders(x, z, zi) {
+  _ob.x = x; _ob.z = z;
+  for (let pass = 0; pass < 4; pass++) {
+    let moved = false;
+    for (let i = 0; i < rockColliders.length; i++) {
+      const c = rockColliders[i], dy = c.y - terrainH(_ob.x, _ob.z, zi), gr = c.r * c.r - dy * dy;
+      if (gr <= 0) continue;
+      const Rg = Math.sqrt(gr) + 1.2, dx = _ob.x - c.x, dz = _ob.z - c.z, d = Math.hypot(dx, dz);
+      if (d >= Rg) continue;
+      if (d < 1e-3) { _ob.x = c.x + Rg; } else { _ob.x = c.x + dx / d * Rg; _ob.z = c.z + dz / d * Rg; }
+      moved = true;
+    }
+    if (!moved) break;
+  }
+  return _ob;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +301,7 @@ function drape(g, at, zi, fade) {
   for (let i = 0; i < p.count; i++) {
     const x = p.getX(i), y = p.getY(i), z = p.getZ(i);
     const k = fade > 0 ? Math.max(0, 1 - Math.max(0, y) / fade) : 1;
-    p.setY(i, y + (terrainH(at.x + x, at.z + z, zi) - at.y) * k);
+    p.setY(i, y + (terrainSample(zi, at.x + x, at.z + z) - at.y) * k);   // (primfix) the drawn floor
   }
   g.computeVertexNormals();
   return g;
