@@ -53,7 +53,7 @@ await c.ev(`(window.__bench.step(60), 1)`);
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
-await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); window.__fd = S.fissureDist; return 1; })()`);   // the crack test for the bowl ledger
+await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
@@ -145,9 +145,9 @@ await shot('end');
 let way = null;
 if (s.calmed) {
   for (let i = 0; i < 100; i++) await slice({ sec: 0.25, yaw: 0, keys: [] });
-  way = await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); const L = window.lev, o = { x: 0, z: 0 };
+  way = await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); const L = window.lev, o = { x: 0, z: 0 };
     const k = window.__fissure.k(0); const l = { u: 0, v: 0 }; S.fissureLocal(L.lairPos.x, L.lairPos.z, 0, l); S.fissureWorld(l.u, 0, 0, o);
-    window.__bench.place(o.x, o.z, 0); const T = await import('/src/world/terrain.js'); window.player.pos.y = T.terrainH(L.lairPos.x, L.lairPos.z, 0) + 2; window.player.grounded = false; const y0 = window.player.pos.y; window.__bench.step(240); return { openK: +k.toFixed(2), y0: +y0.toFixed(1), y4s: +window.player.pos.y.toFixed(1), fd: +S.fissureDist(window.player.pos.x, window.player.pos.z, 0).toFixed(1) }; })()`);
+    window.__bench.place(o.x, o.z, 0); const T = await import(new URL('src/world/terrain.js', document.baseURI).href); window.player.pos.y = T.terrainH(L.lairPos.x, L.lairPos.z, 0) + 2; window.player.grounded = false; const y0 = window.player.pos.y; window.__bench.step(240); return { openK: +k.toFixed(2), y0: +y0.toFixed(1), y4s: +window.player.pos.y.toFixed(1), fd: +S.fissureDist(window.player.pos.x, window.player.pos.z, 0).toFixed(1) }; })()`);
   await shot('down');
 }
 const st = s.rp;

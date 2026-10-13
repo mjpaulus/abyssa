@@ -33,6 +33,7 @@ import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDe
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
+import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -103,7 +104,7 @@ export const DORM = {
 //   * eyes saccade onto the diver; claws idle open/close with the weight on the crusher
 // ev.quake (0..1, distance-weighted) is published for the game's camera shake.
 const WAKE_ORDER = [0, 5, 2, 7, 1, 4, 3, 6];         // leg unfold order (li), alternating sides
-const PH_COCK0 = 0.40, PH_COCK1 = 0.72, PH_SLAM0 = 0.84, PH_SLAM1 = 0.90;   // hammer cycle phases
+// hammer cycle phases: PH_COCK0/1, PH_SLAM0/1 (0.40/0.72, 0.84/0.90) live in brooderClaw.js with the claw's strike
 const HAMMER_T = 2.6;
 // THE HUNT (brooderfix): speeds are fractions of cfg.speed (9: Sal walks 2.15 u/s, 2.8 with
 // Shift, hauls ~6.6 off the bottom). stalk 0.26 = 2.3 u/s (fissure-and-harpoon Task 6 retired the
@@ -653,7 +654,7 @@ export function makeBrooder(idx, cfg) {
     grp.add(g);
     return g;
   });
-  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; window.__settle = SETTLE; }   // dev: the live sleeper object (motion probes); the burn's knobs
+  if (typeof window !== 'undefined') { window.__sl = L; window.__burn = BURN; window.__settle = SETTLE; window.__claw = { WHIP, CHELA }; }   // dev: the live sleeper object (motion probes); the burn's knobs
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
@@ -1250,7 +1251,7 @@ function poseLeg(L, li, footL) {
 // Arm pose, after the reference: a forward guard — upper arms reaching ahead under the
 // prow, forearms turned in, the hooked pincers hanging open-mouthed before her face.
 // Threat lifts both hands to the height of her brow and gapes them wide.
-function poseClaws(L) {
+function poseClaws(L, dt) {
   const th = L.threatE, t = L.t, st = L.clawSt, h = L.hurt.x;
   // the hammer's anticipation: cocked high and back, holding with a tremble, then the fall
   const ck = L.cock * th, hold = ck > 0.98 ? 1 : 0;
@@ -1279,11 +1280,20 @@ function poseClaws(L) {
       // up and back, the pincer wide - holds trembling, and comes DOWN across her front
       const sw = L.swing * th;
       const spr = HUNT.spread * gu * (1 - ck) * (1 - sw);
+      // (clawfix) ...and it strikes as a cheliped, not a rod (brooderClaw.js): the elbow and the wrist trail the
+      // shoulder up, the wrist cocks BACK and the hand tucks in, the palm whips through on the fall, the arm
+      // refolds in sequence on the recoil; all of it gone before the hit window, so the blow lands on this pose
+      const wh = whip(c, L, th, dt);
       c.root.rotation.set(0, -Math.PI / 2 + sd * lerp(0.22, 0.45, th) - sd * 0.25 * sw + sd * 0.30 * ck + dy - sd * 0.2 * h + sd * spr,
-        lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h + 0.8 * spr);
-      c.cj.rotation.set(0, -sd * lerp(0.95, 0.40, th), 0.30 - 0.25 * sw + 0.25 * ck);
-      c.pj.rotation.set(0, -sd * lerp(0.45, 0.15, th), lerp(-0.55, -0.30, th) + 0.2 * sw - 0.25 * ck + 0.6 * dz);
-      c.dj.rotation.z = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
+        lerp(-0.34 - 0.25 * (1 - st), 0.40, th) - 0.85 * sw + 0.55 * ck + dz + trem + 0.25 * h + 0.8 * spr + wh.rz);
+      c.cj.rotation.set(0, -sd * (lerp(0.95, 0.40, th) + wh.ey), 0.30 - 0.25 * sw + 0.25 * ck + wh.ez);
+      c.pj.rotation.set(0, -sd * (lerp(0.45, 0.15, th) + wh.wy), lerp(-0.55, -0.30, th) + 0.2 * sw - 0.25 * ck + 0.6 * dz + wh.wz);
+      // the finger has its own beat: open on the wind-up, SNAPPED shut on the landing frame, held, let go. The
+      // floor clamp still sees the shipped finger (c.djShip), so the blow is set on the sand where it always was
+      // (the hit point does not move); clampClaw then keeps the finger itself out of the sand (fingerFloor)
+      const hk = 1 - 0.8 * Math.min(1, Math.max(0, h));
+      c.dj.rotation.z = chela(c, L, th, gape, snap, hold, t, dt) * hk;
+      c.djShip = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * hk;
     } else {
       // the minor stays low and close, a guard across the mouth, working; it spreads
       // wide as the crusher cocks (the body opens up behind the blow)
@@ -1302,7 +1312,11 @@ function poseClaws(L) {
       const T = c.major ? DORM.major : DORM.minor;
       tuckJoint(c.root, T.root, -Math.PI / 2, sd, d); tuckJoint(c.cj, T.cj, 0, sd, d); tuckJoint(c.pj, T.pj, 0, sd, d);
       c.dj.rotation.z += (T.dj - c.dj.rotation.z) * d;
+      if (c.major) c.djShip += (T.dj - c.djShip) * d;
     }
+    // (clawfix) the cutter's finger never closes past CHELA.minor (~26 deg), awake or folded: below it the tall
+    // fangs on its fixed finger cut through it (the shipped idle went to 5 deg, the fold to -17)
+    if (!c.major && CHELA.on && c.dj.rotation.z < CHELA.minor) c.dj.rotation.z = CHELA.minor;
   }
 }
 // x + (target - x) * d: at d = 0 nothing moves. y is mirrored by side (-sd turns inward)
@@ -1357,8 +1371,26 @@ function liftAt(L, c, j, max, sg, prev) {
   r.z = z0 + sg * hi; c.root.updateMatrixWorld(true);
   return hi;
 }
+// (clawfix) The crusher's finger has its own beat now (brooderClaw.js), but the clamp is run with the SHIPPED
+// finger (c.djShip): it set the blow on the sand, so the hinge (the hit point) lands where it always did. The
+// finger then goes back to its own angle, and if that puts it under the ground it opens toward the shipped
+// angle (which the clamp cleared) just far enough: it stops on the sand.
+let _fC = null, _fL = null;
+function fingerUnder(a) { _fC.dj.rotation.z = a; _fC.dj.updateMatrixWorld(true); const s = _fC.samp[3]; return penetration(_fL, s.pts, s.mesh.matrixWorld, CLAW_M) > 0; }
+function fingerFloor(L, c, fz) {
+  _fC = c; _fL = L;
+  if (!fingerUnder(fz)) return;
+  let lo = fz, hi = c.djShip;
+  if (!fingerUnder(hi)) {
+    while (Math.abs(hi - lo) > LIFT_RES) { const mid = (lo + hi) * 0.5; if (fingerUnder(mid)) lo = mid; else hi = mid; }
+    fingerUnder(hi);
+  }
+  c.fingerLift = hi - fz;
+}
 function clampClaw(L, c, dt) {
-  const z0 = c.root.rotation.z, e0 = c.cj.rotation.z;
+  const z0 = c.root.rotation.z, e0 = c.cj.rotation.z, fz = c.dj.rotation.z;
+  if (c.djShip !== undefined) c.dj.rotation.z = c.djShip;
+  c.fingerLift = 0;
   c.root.updateMatrixWorld(true);
   let need = 0, el = 0;
   if (clawPen(L, c, true) > 0) {
@@ -1387,6 +1419,7 @@ function clampClaw(L, c, dt) {
   c.cj.rotation.z = e0 + el;
   c.root.updateMatrixWorld(true);
   c.need = need; c.liftNow = lift; c.elbow = el;
+  if (c.djShip !== undefined && fz !== c.djShip) fingerFloor(L, c, fz);
 }
 
 function poseAll(L, dt, player) {
@@ -1511,7 +1544,7 @@ function poseAll(L, dt, player) {
     poseLeg(L, li, _lp.applyMatrix4(_inv));
   }
   for (const k in L.legs) L.legs[k].instanceMatrix.needsUpdate = true;
-  poseClaws(L);
+  poseClaws(L, dt);
   L.clawRes = 0;
   if (L.clawSt > 0.02) for (const c of L.claws) clampClaw(L, c, dt);
   // the front lifts by what the arms could not (lever ~ the crusher's length), and sinks

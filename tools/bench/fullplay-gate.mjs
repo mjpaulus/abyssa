@@ -120,7 +120,7 @@ const alt = async code => {
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
-await c.ev(`(async () => { const S = await import('/src/world/fissureShape.js'); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
+await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
 // ---- (velfix) the gate's page side: wraps the ledger's frame hook ----
 const GATE = process.env.FP_GATE === '1';
@@ -130,8 +130,8 @@ const GATE = process.env.FP_GATE === '1';
 // the frame blown outside the burns, or more than WASH_CAP blown in all (the burn itself never fills the screen).
 const WASH_BLOWN = 0.05, WASH_CAP = 0.15, WASH_R = 14, WASH_DISC = 4;
 const GATE_JS = `(async () => {
-  const BC = await import('/src/entities/sleeper/bodyCols.js');
-  const { renderer } = await import('/src/core.js');
+  const BC = await import(new URL('src/entities/sleeper/bodyCols.js', document.baseURI).href);
+  const { renderer } = await import(new URL('src/core.js', document.baseURI).href);
   const gl = renderer.getContext();
   const L = window.lev, cam = window.camera, P = window.player;
   const g = { washN: 0, washRed: 0, washSum: 0, washMax: 0, washMaxAt: null, washMeanLuma: 0, washAt: [], washOutSum: 0, washOutMax: 0, washOutMaxAt: null,
