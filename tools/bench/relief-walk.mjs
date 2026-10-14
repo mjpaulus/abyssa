@@ -3,13 +3,13 @@
 //   DRV_PORT=9520 node tools/bench/relief-walk.mjs <boots|lens|hose> <port>        (serve.py serves <port>; branch 8870 / 9520, main 8871 / 9521)
 // Env  RW_REPS=<n>   walks per line and direction (boots 2, lens 3)
 //      RW_JSON=<f>   write the result (the lens's main run hands its bar to the branch's through this file)
-//      RW_BAR=<u/s>  the lens step bar, or  RW_MAIN=<f>  main's RW_JSON  (the bar is main's p99 on its steepest 20-35 deg line, walked down)
+//      RW_MAIN=<f>   (lens, on the branch) main's RW_JSON: the bars below are main's own numbers on the same probe
 //      RW_RED=<v>    an opt-in RED case, never part of the default run. It must fail ITS bar: exit 1 = it did, exit 3 = that bar did NOT fail
 //                    boots noslope   window.__sal.slope = false (diver.js's slope rig off, a live knob it ships): the boots must fail the gap bar
 //                    lens  nofloor   window.__camNoFloor = true (game.js updateCamera's floor clamp off): the lens must fail clearance
 //                    hose  short20   the line is 20 u short of the binding point's range (survival.hose = range - 20): the walk must yank
 //                    hose  past20    the ruled case as written: the walk goes on 20 u past the binding point, straight out. It cannot yank (below)
-//      RW_UP_PITCH=<rad> (lens) the look-up pitch of the stress walks and stands (0.9); RW_TRACE=1 (lens) per-frame trace of each line's first pop
+//      RW_UP_PITCH=<rad> (lens) the look-up pitch of the stress walks and stands (0.9, inside the mouse's +-1.45 rad: player.js)
 //      RW_STOP=lines, RW_ONLY=wall, RW_DUMPLIB=<f>   dev: stop after the lines / the wall-foot control alone / write the page library for node --check
 // All three modes run on the live loop: W is a real CDP key (the mouse's job, yaw and pitch, is set in the page, as the other real-key probes
 // do: fissure-probe climb-out, the t12 walks), and __bench.place only puts him at a line's foot. NEVER __bench.step: game.js's bench hold(false)
@@ -50,11 +50,17 @@
 // lens    the same lines walked DOWN (the riser behind him), 3 walks each at pitch -0.1, and once more looking up (pitch 0.9: a diver looking
 //         up swings the boom DOWN behind him, toward the hill; the lens's worst case), plus a WALL-FOOT CONTROL: he stands 3 s with a 54+ deg
 //         face behind him (the rim wall's foot), level and looking up. Per sim frame: clearance = camera.y - shutFloorY(camera.x, camera.z, 0),
-//         the lens's step (|d camera| / dt, u/s; and relative to him), the boom (the lens to his centre). PASS: clearance >= 0.3 u on EVERY
-//         frame of every walk and stand, and the step's p99 on the riser and upland lines (20-35 deg) <= main's p99 on its steepest 20-35
-//         deg line (A) walked down, + 0.1 u/s (the table's precision: two lines' p99s are not one number to the last digit). The bed route's turns swing the boom: it is booked and clearance-gated, never step-gated; the
-//         steep line's step is reported. RED nofloor: the walk down (level) does not fail clearance (the boom's own pull-in, game.js
-//         clearCamDistance, holds the lens over 1.1 u of floor before the clamp is asked); looking up, it does, and so does the control.
+//         the lens's step (|d camera| / dt, u/s), the boom (the lens to his centre). The lens is booked from the frame after the place, so the
+//         2.6 s settle is booked too; W is pressed at the end of it. PASS (Ruling 48, like for like): CLEARANCE >= 0.3 u on EVERY frame of every
+//         walk and stand, no exclusions; (a) THE SWOOP is an event: each walk's first boom pull-in IN THE WALK (the boom falls >= 1 u; see below),
+//         its peak frame step; each relief line's peak <= the MAX peak over main's A, B and S, + 0.5 u/s (identical runs scatter by 0.1-0.25); a
+//         line pulled in at the place has none in the walk (the place's own peak scatters 14-26 u/s, printed, not gated); (b) THE SETTLED WALK: the frames from 2 s after that pull-in
+//         has completed (never before W), on both builds alike: each relief line's settled p99 <= main's on its equivalent line (riser and upland:
+//         A, the steepest 20-35 deg line, ruled, and the closest in mean slope; steep: S, main's only line above 36 deg); both + 0.1 u/s (the
+//         table's precision; the strict difference is printed). Printed beside them: where each first pull-in fell (at the place, in the walk),
+//         the pull-ins in the walk alone, and the settled frames still over 6 u/s. The bed route's turns swing the boom: booked, clearance-gated,
+//         never step-gated. RED nofloor: the walk down (level) does not fail clearance (the boom's own pull-in, game.js clearCamDistance, holds
+//         the lens over 1.1 u of floor before the clamp is asked); looking up, it does, and so does the control.
 // hose    from the deck with HOSE_START 380 (survival.hose is never set; FP_HOSE unset): real W over the side, C down to the seabed, then real
 //         W along the route to the binding point (gates.mjs --json hose.at). PASS: arrives (within 3 u) with __leash.n === 0 and last.str === 0
 //         (no yank), the farthest range the leash read <= HOSE_START - GIVE - 10 = 365 (spec §7: 10 u spare under the give). Books __leash
@@ -65,13 +71,13 @@
 // Also: fuel and oxygen are refilled at each walk's start (survival.js FUEL_BURN 1/420 per second down the line: a long run's pump runs
 // dry, the oxygen goes in ~35 s and he is hauled to the deck; measured as the third bed walk of a lens run, ~7 min in, thrown 36 u off its
 // line with 580 airborne frames on BOTH builds, and the same empty pump reproduced alone); a walk that a creature or the haul disturbs
-// (thrown, stalled, bitten) is run again, twice at most, and kept flagged if it stays disturbed. The lens's boom is 9 u back (CAM_BACK) and is pulled in, in
-// eighths, wherever its line comes within 1.1 u of the floor (clearCamDistance), then eased at 14/s: walking down with a riser behind him the
-// boom meets the rising ground and the lens SWOOPS in from 9.5 to 3.4 u in ~0.4 s (6-16 u/s). Every place() starts the boom at the full 9 u,
-// so every line swoops ONCE: in the 2.6 s settle before the first booked frame when the hill is already behind him at the line's top (A,
-// riser, steep: boom 3.4 from frame 1, no step over 6 u/s), or inside the walk when it is not (B, S, upland: 9.4 until the hill meets the boom,
-// then 6-16 u/s). It is the shipped lens, on main's own lines too, and the step's p99 therefore measures where the line's top stands against
-// the hill (the probe's start window), not the slope: the ruled bar (main's A) is open (a run-in before booking, or the first pull-in excluded).
+// (thrown, stalled, bitten) is run again, twice at most, and kept flagged if it stays disturbed.
+// THE BOOM'S SWOOP. The lens's boom is 9 u back (CAM_BACK), starts at its full length at every place() and is pulled in, in eighths, wherever its
+// line comes within 1.1 u of the floor (clearCamDistance), then eased at 14/s: where the hill meets it, the lens SWOOPS in from 9.5 to 3.4 u in
+// ~0.4 s (6-25 u/s). The first pull-in of a walk falls either at the place (the hill is already behind him at the line's top: the spring's step
+// response to the snap) or in the walk (the hill meets the boom as he descends); a later one can follow (main's B: pulled in at the place,
+// eased back out, pulled in again at u 11). It is the shipped lens, on both builds, and a single line's whole-walk p99 measures where the line's
+// top stands against the hill, not the slope: hence Ruling 48's two parts.
 const [, , MODE, PORT] = process.argv;
 const RED = process.env.RW_RED;
 const RED_OF = { boots: ['noslope'], lens: ['nofloor'], hose: ['past20', 'short20'] };
@@ -91,6 +97,7 @@ const HERE = dirname(fileURLToPath(import.meta.url)), REPO = join(HERE, '..', '.
 
 // ---- the bars ----
 const GAP_BAR = 0.15, GAP_DEG = 35, MIN_FRAMES = 300;          // boots: p95 |gap| on <= 35 deg ground
+const SWOOP_TOL = 0.5;                                          // lens: u/s, the swoop's peak is a 60 Hz sampling of a 0.4 s event: identical runs scatter by 0.1-0.25 (main S 15.61-15.87 over four runs, the upland 15.90-16.02)
 const STEP_TOL = 0.1;                                           // lens: u/s, the table's own precision: two different lines' p99s are not the same number to the last digit (the riser's 2.43-2.45 against main A's 2.42)
 const CLEAR_BAR = 0.3;                                          // lens: u over shutFloorY, every frame
 const STALL_WIN = 2.0, STALL_MIN = 0.5, STALL_DEG = 52;         // progress
@@ -285,7 +292,7 @@ const LIB = `(async () => {
     const o = R.o, rem = R.total - R.prog;
     if (o.target) { const dT = Math.hypot(px - o.target[0], pz - o.target[1]); if (dT < R.minTo) R.minTo = dT; }
     if (o.pushT && R.minTo <= ${ARRIVE_R}) { if (R.pushT0 === undefined) R.pushT0 = R.t; else if (R.t - R.pushT0 > o.pushT) { R.done = true; R.why = 'pushed'; } }   // past20: pushT s on from the binding point, then stop
-    if (rem < o.stopAt && !o.noStop) { R.done = true; R.why = 'arrived'; }
+    if (rem < o.stopAt && !o.noStop && !R.hold) { R.done = true; R.why = 'arrived'; }
     // steer toward the point 'look' u ahead of the progress
     let ta = Math.min(R.total, R.prog + o.look), k = 0; while (k < R.cum.length - 2 && R.cum[k + 1] < ta) k++;
     const l = R.cum[k + 1] - R.cum[k], u = l > 0 ? (ta - R.cum[k]) / l : 0, tx = pts[k][0] + (pts[k + 1][0] - pts[k][0]) * u, tz = pts[k][1] + (pts[k + 1][1] - pts[k][1]) * u;
@@ -297,6 +304,7 @@ const LIB = `(async () => {
     const clr = cp.y - T.shutFloorY(cp.x, cp.z, 0); f.clr.push(clr); f.bm.push(Math.hypot(cp.x - px, cp.y - P.pos.y, cp.z - pz)); f.pg.push(R.prog); f.cr.push(cp.x - px, cp.y - P.pos.y, cp.z - pz); f.py.push(P.pos.y);   // bm: the boom, lens to his centre
     if (R.pc) { f.cst.push(Math.hypot(cp.x - R.pc[0], cp.y - R.pc[1], cp.z - R.pc[2]) / dt);
       f.crl.push(Math.hypot((cp.x - px) - (R.pc[0] - R.pp[0]), (cp.y - P.pos.y) - (R.pc[1] - R.pp[1]), (cp.z - pz) - (R.pc[2] - R.pp[2])) / dt); }
+    else { f.cst.push(0); f.crl.push(0); }   // frame 0 has no step: every per-frame array is indexed alike
     R.pc = [cp.x, cp.y, cp.z]; R.pp = [px, P.pos.y, pz];
     for (let i = 0; i < 2; i++) { const ft = window.__fts[i]; if (!ft.planted) continue;
       if (ft.deck || P.onDeck) { R.ex.deck++; continue; } if (!P.grounded) { R.ex.air++; continue; } if (P.stagger > 0) { R.ex.stag++; continue; }
@@ -304,7 +312,7 @@ const LIB = `(async () => {
       R.feet.gap.push(g); R.feet.own.push(own(i)); R.feet.sl.push(Math.acos(Math.min(1, nn.y)) * D); R.feet.who.push(i); }
     // progress: a 2 s window of him moving under 0.5 u, off the ground steeper than 52 deg
     R.ring.push([clk, px, pz]); while (R.ring.length > 2 && R.ring[1][0] <= clk - ${STALL_WIN}) R.ring.shift();
-    if (clk - R.ring[0][0] >= ${STALL_WIN} - 1e-6 && R.t >= ${STALL_WIN} && !R.done) {
+    if (clk - R.ring[0][0] >= ${STALL_WIN} - 1e-6 && R.t - R.tGo >= ${STALL_WIN} && !R.done && !R.hold) {
       const mv = Math.hypot(px - R.ring[0][1], pz - R.ring[0][2]);
       if (mv < ${STALL_MIN} && slS <= ${STALL_DEG}) { R.stall.n++; R.stall.run++; if (!R.stall.first) R.stall.first = { t: +R.t.toFixed(2), x: +px.toFixed(1), z: +pz.toFixed(1), slope: +slS.toFixed(1), moved: +mv.toFixed(2), prog: +R.prog.toFixed(1) }; }
       else R.stall.run = 0;
@@ -312,7 +320,7 @@ const LIB = `(async () => {
     // the hose
     if (L.r > R.maxR) R.maxR = L.r; if (L.state !== 'slack') R.nGive++; if (L.state === 'hold') R.nHold++;
     if (o.stopOnYank && L.n > R.n0) { R.done = true; R.why = 'yank'; }
-    if (R.t > o.maxT) { R.done = true; R.why = 'timeout'; }
+    if (R.t - R.tGo > o.maxT) { R.done = true; R.why = 'timeout'; }
     if (R.stall.run > 180) { R.done = true; R.why = 'stalled'; }
   };
   requestAnimationFrame(tick);
@@ -320,11 +328,13 @@ const LIB = `(async () => {
     const pts = o.pts, cum = [0]; for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
     RW.run = { o, pts, cum, total: cum[cum.length - 1], prog: 0, seg: 0, off: 0, done: false, why: '', t: 0, ticks: 0, skips: 0, clk0: L.clock, lastClk: L.clock, lastRaf: 0, pc: null, pp: null,
       f: { dt: [], raf: [], clr: [], cst: [], crl: [], bm: [], pg: [], cr: [], py: [], sl: [], gr: [], x: [], z: [] }, feet: { gap: [], own: [], sl: [], who: [] }, ex: { deck: 0, air: 0, stag: 0 }, ring: [], stall: { n: 0, run: 0, first: null },
-      maxR: 0, nGive: 0, nHold: 0, n0: L.n, minTo: 1e9 };
+      maxR: 0, nGive: 0, nHold: 0, n0: L.n, minTo: 1e9, hold: !!o.hold, tGo: 0, walkIdx: 0 };
     P.pitch = o.pitch; return 1;
   };
+  // go(): the settle is over, the walk is on: the frames from here are the walk's (the ones before are the lens settling after the place)
+  RW.go = () => { const R = RW.run; R.hold = false; R.tGo = R.t; R.walkIdx = R.f.dt.length; R.ring = []; return R.walkIdx; };
   RW.status = () => { const R = RW.run; return R ? { done: R.done, why: R.why, prog: +R.prog.toFixed(1), total: +R.total.toFixed(1), t: +R.t.toFixed(1), ticks: R.ticks, skips: R.skips, stall: R.stall.n, off: +R.off.toFixed(2), n: L.n } : null; };
-  RW.end = () => { const R = RW.run; RW.run = null; if (!R) return null; R.f.sl = R.f.sl.map(v => +v.toFixed(2)); R.f.bm = R.f.bm.map(v => +v.toFixed(3)); R.f.pg = R.f.pg.map(v => +v.toFixed(2)); R.f.cr = R.f.cr.map(v => +v.toFixed(2)); R.f.py = R.f.py.map(v => +v.toFixed(2)); return { f: R.f, feet: R.feet, ex: R.ex, why: R.why, total: R.total, prog: R.prog, t: R.t, ticks: R.ticks, skips: R.skips, stall: R.stall, off: R.off, maxR: R.maxR, nGive: R.nGive, nHold: R.nHold, minTo: R.minTo }; };
+  RW.end = () => { const R = RW.run; RW.run = null; if (!R) return null; R.f.sl = R.f.sl.map(v => +v.toFixed(2)); R.f.bm = R.f.bm.map(v => +v.toFixed(3)); R.f.pg = R.f.pg.map(v => +v.toFixed(2)); R.f.cr = R.f.cr.map(v => +v.toFixed(2)); R.f.py = R.f.py.map(v => +v.toFixed(2)); return { f: R.f, walkIdx: R.walkIdx, tGo: R.tGo, feet: R.feet, ex: R.ex, why: R.why, total: R.total, prog: R.prog, t: R.t, ticks: R.ticks, skips: R.skips, stall: R.stall, off: R.off, maxR: R.maxR, nGive: R.nGive, nHold: R.nHold, minTo: R.minTo }; };
   RW.nav = () => ({ x: P.pos.x, y: P.pos.y, z: P.pos.z, vy: P.vel.y, grounded: !!P.grounded, onDeck: !!P.onDeck, yaw: P.yaw, stagger: P.stagger || 0, state: window.gameState, dead: window.gameState === 'dead' });
   RW.leash = () => ({ state: L.state, r: +L.r.toFixed(2), give: +L.give.toFixed(3), n: L.n, last: { ...L.last }, maxIn: +L.maxIn.toFixed(3), maxEnd: +L.maxEnd.toFixed(3), clock: +L.clock.toFixed(2), hose: window.survival.hose });
   RW.survival = () => ({ oxygen: +window.survival.oxygen.toFixed(3), fuel: +window.survival.fuel.toFixed(3), torn: +window.survival.torn.toFixed(2), strain: +window.survival.strain.toFixed(2) });
@@ -390,11 +400,12 @@ const yawOf = (a, b) => Math.atan2(b[0] - a[0], b[1] - a[1]);
 async function walkOnce(L, dir, rep, o = {}) {
   const pts = dir === 'rev' ? L.pts.slice().reverse() : L.pts.slice();
   await c.ev(`(window.__rw.run = null, window.__bench.place(${pts[0][0]}, ${pts[0][1]}, ${yawOf(pts[0], pts[1])}, 0), window.player.pitch = ${o.pitch === undefined ? -0.1 : o.pitch}, window.survival.hose = ${o.hose || 5000}, window.survival.fuel = 1, window.survival.oxygen = 1, 1)`);   // fuel: the pump burns 1/420 per second down the line, so a long run's pump stops, he drowns and is hauled (measured: a bed walk at ~440 s of play thrown 36 u and 10 s airborne on both builds)
-  await sleep(2600);   // stood, the lens settled behind him (a place snaps it: ~150 frames)
+  if (!o.hold) await sleep(2600);   // stood, the lens settled behind him (a place snaps it: ~150 frames)
   const total = pts.reduce((s, p, k) => k ? s + Math.hypot(p[0] - pts[k - 1][0], p[1] - pts[k - 1][1]) : 0, 0);
   const D0 = await c.ev(`window.__rw.leash()`);
   const maxT = o.maxT || Math.max(60, total / 0.5 + 30);
-  await c.ev(`window.__rw.begin(${JSON.stringify({ pts, look: o.look || 4, rate: o.rate || 1.4, pitch: o.pitch === undefined ? -0.1 : o.pitch, stopAt: o.stopAt === undefined ? 1.2 : o.stopAt, maxT, stopOnYank: !!o.stopOnYank, noStop: !!o.noStop })})`);
+  await c.ev(`window.__rw.begin(${JSON.stringify({ pts, look: o.look || 4, rate: o.rate || 1.4, pitch: o.pitch === undefined ? -0.1 : o.pitch, stopAt: o.stopAt === undefined ? 1.2 : o.stopAt, maxT, stopOnYank: !!o.stopOnYank, noStop: !!o.noStop, hold: !!o.hold })})`);
+  if (o.hold) { await sleep(2600); await c.ev(`window.__rw.go()`); }   // the lens books its settle too: the first pull-in of the boom is an event
   if (!o.stand) await c.key('KeyW', true);
   const t0 = Date.now(); let st;
   for (;;) { await sleep(250); st = await c.ev(`window.__rw.status()`); if (st.done || Date.now() - t0 > (maxT + 20) * 1000) break; }
@@ -402,7 +413,7 @@ async function walkOnce(L, dir, rep, o = {}) {
   const R = await c.ev(`window.__rw.end()`);
   R.line = L.name; R.dir = dir; R.rep = rep; R.fromLeash = D0; R.leashEnd = await c.ev(`window.__rw.leash()`); R.surv = await c.ev(`window.__rw.survival()`); R.nav = await c.ev(`window.__rw.nav()`);
   const dts = R.f.dt, n = dts.length;
-  console.log(`  ${pad(L.name, 6)} ${pad(dir === 'rev' ? 'rev' : 'fwd', 3)} #${rep}: ${R.why}, ${f1(R.t)} s, ${f1(R.prog)}/${f1(R.total)} u, ${n} sim frames (dt p50 ${f1(pct(dts, 0.5) * 1000)} ms, max ${f1(Math.max(...dts) * 1000)} ms, ${dts.filter(d => d > 0.0499).length} at the 50 ms clamp, ${R.skips} skipped rAF), ` +
+  console.log(`  ${pad(L.name, 6)} ${pad(dir === 'rev' ? 'rev' : 'fwd', 3)} #${rep}: ${R.why}, ${f1(R.t - R.tGo)} s, ${f1(R.prog)}/${f1(R.total)} u, ${n} sim frames (dt p50 ${f1(pct(dts, 0.5) * 1000)} ms, max ${f1(Math.max(...dts) * 1000)} ms, ${dts.filter(d => d > 0.0499).length} at the 50 ms clamp, ${R.skips} skipped rAF), ` +
     `${R.feet.gap.length} planted-boot samples (excl ${R.ex.deck + R.ex.air + R.ex.stag}), stall ${R.stall.n}, off the line <= ${f2(R.off)} u`);
   return R;
 }
@@ -440,8 +451,8 @@ if (MODE === 'boots' || MODE === 'lens') {
     const d = L.kind === 'route' && MODE === 'lens' ? 'fwd' : dir;
     if (MODE === 'lens' && RED === 'nofloor') await c.ev(`(window.__camNoFloor = true, 1)`);
     if (MODE === 'boots' && RED === 'noslope') await c.ev(`(window.__sal.slope = false, 1)`);
-    runs.push(await walk(L, d, rep));
-    if (MODE === 'lens' && rep === REPS) runs.push(await walk({ ...L, name: L.name + '/up' }, d, 1, { pitch: UP_PITCH }));   // once per line, looking up
+    runs.push(await walk(L, d, rep, { hold: MODE === 'lens' }));
+    if (MODE === 'lens' && rep === REPS) runs.push(await walk({ ...L, name: L.name + '/up' }, d, 1, { pitch: UP_PITCH, hold: true }));   // once per line, looking up
   }
   tables.frames = frameTimes(runs); result.frameTimes = tables.frames;
   console.log('frame times (live loop, ruling 42: no __bench.step, no hold, no clock leak):', JSON.stringify(tables.frames));
@@ -501,51 +512,89 @@ if (MODE === 'boots' || MODE === 'lens') {
     result.boots = { byLine, bins: binRows, dir: dirRows, all: { n: allLo.length, p50: +f3(pct(allLo.map(Math.abs), 0.5)), p95: +f3(pct(allLo.map(Math.abs), 0.95)), briefP95: +f3(pct(allB.map(Math.abs), 0.95)) }, excluded: runs.reduce((o, r) => ({ deck: o.deck + r.ex.deck, air: o.air + r.ex.air, stag: o.stag + r.ex.stag }), { deck: 0, air: 0, stag: 0 }) };
     console.log(`pooled <= 35 deg: n ${allLo.length}, OWN p50 |gap| ${f3(pct(allLo.map(Math.abs), 0.5))}, p95 ${f3(pct(allLo.map(Math.abs), 0.95))}; BRIEF p95 ${f3(pct(allB.map(Math.abs), 0.95))}; excluded samples ${JSON.stringify(result.boots.excluded)}`);
   } else {
-    // THE LENS
-    const bar = process.env.RW_BAR ? +process.env.RW_BAR : process.env.RW_MAIN ? JSON.parse(readFileSync(process.env.RW_MAIN, 'utf8')).lens.barA : null;
-    const straight = n => lines.find(l => l.name === n) && lines.find(l => l.name === n).kind === 'line';
-    const rows = {}, linesAll = lines.flatMap(l => [l]).concat(lines.map(l => ({ ...l, name: l.name + '/up' })));
-    console.log(`\nLENS (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): clearance = camera.y - shutFloorY(camera.x, camera.z, 0); step = |d camera| / dt (u/s), rel = the lens against him; walked DOWN`);
-    console.log(pad('line', 7) + lpad('runs', 5) + lpad('frames', 8) + '  | ' + lpad('min clr', 8) + lpad('p1 clr', 8) + lpad('<0.3', 6) + '  | ' + lpad('step p50', 9) + lpad('p95', 7) + lpad('p99', 7) + lpad('max', 7) + '  | ' + lpad('rel p99', 8) + lpad('rel max', 8) + '  | ' + lpad('boom p50', 9) + lpad('min', 6) + '  | ' + lpad('slope p50', 10) + lpad('max', 6));
+    // THE LENS. Ruling 48: the step is compared like for like, in two parts. (a) THE SWOOP is an event: game.js starts the boom at its full
+    // 9 u at every place and pulls it in (clearCamDistance, eased at 14/s) where its line meets the hill, so each walk has a first pull-in,
+    // booked from the place on (the settle too: the lens is booked from the frame after the place, W is pressed 2.6 s later): the boom
+    // falling by >= 1 u, its peak frame step (u/s) from its start to 3 frames after it ends (the boom no longer falling). It is in the SETTLE
+    // when the hill is already behind him at the line's top (the spring's step response to the place: 14-25 u/s, it varies with the frame the
+    // first booking lands on) or in the WALK (the hill meets the boom as he descends: 15.6-16.2 u/s, the spring's own ceiling). Ruling 48's
+    // 'first pull-in' is gated where it falls IN THE WALK (a lens event of the descent); the place's is printed as INFO. (b) THE SETTLED WALK:
+    // the frames from 2 s after that pull-in has completed (never before W), on both builds alike; no swoop in the walk = the whole walk.
+    const SWOOP_DROP = 1.0, SETTLE_AFTER = 2.0;
+    const swoopOf = R => {
+      const bm = R.f.bm, cst = R.f.cst, n = bm.length, W = R.walkIdx || 0; let tAcc = 0; const tt = R.f.dt.map(d => (tAcc += d));
+      for (let k = 1; k < n;) {
+        if (bm[k] < bm[k - 1] - 0.02) {
+          let ke = k, calm = 0;
+          while (ke < n - 1 && calm < 6) { if (bm[ke + 1] < bm[ke] - 0.01) calm = 0; else calm++; ke++; }
+          ke -= calm;   // the last frame the boom was still falling
+          if (bm[k - 1] - bm[ke] >= SWOOP_DROP) {
+            let pk = 0, at = k, rl = 0; for (let j = k; j <= Math.min(n - 1, ke + 3); j++) { if (cst[j] > pk) { pk = cst[j]; at = j; } if (R.f.crl[j] > rl) rl = R.f.crl[j]; }
+            return { k0: k, kc: ke, from: bm[k - 1], to: bm[ke], peak: pk, rel: rl, u: R.f.pg[at], where: k < W ? 'place' : 'walk', tC: tt[ke], tWalk: tt[ke] - (W ? tt[W - 1] : 0) };
+          }
+          k = ke + 1; continue;
+        }
+        k++;
+      }
+      return null;
+    };
+    const settledOf = (R, sw) => { const W = R.walkIdx || 0; let tAcc = 0; const tt = R.f.dt.map(d => (tAcc += d)); let j0 = W;
+      if (sw) { const tS = sw.tC + SETTLE_AFTER; while (j0 < tt.length && tt[j0] < tS) j0++; } return R.f.cst.slice(Math.max(1, j0)); };
+    const walkOf = (r, key) => r.f[key].slice(Math.max(1, r.walkIdx || 0));   // the walk's own frames (W pressed), as before the settle was booked
+    const mainJ = process.env.RW_MAIN ? JSON.parse(readFileSync(process.env.RW_MAIN, 'utf8')).lens : null;
+    const rows = {}, linesAll = lines.concat(lines.map(l => ({ ...l, name: l.name + '/up' })));
+    console.log(`\nLENS (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): clearance = camera.y - shutFloorY(camera.x, camera.z, 0), every frame from W pressed; step = |d camera| / dt (u/s), rel = against him; walked DOWN; '/up' = looking up (pitch ${UP_PITCH})`);
+    console.log(pad('line', 9) + lpad('runs', 5) + lpad('frames', 8) + '  | ' + lpad('min clr', 8) + lpad('p1 clr', 8) + lpad('<0.3', 6) + lpad('settle clr', 11) + lpad('<0.3 settle', 12) + '  | ' + lpad('step p50', 9) + lpad('p95', 7) + lpad('p99', 7) + lpad('max', 7) + '  | ' + lpad('boom p50', 9) + lpad('min', 6) + '  | ' + lpad('slope p50', 10) + lpad('max', 6));
     for (const L of linesAll) {
-      const rs = runs.filter(r => r.line === L.name), clr = rs.flatMap(r => r.f.clr), cst = rs.flatMap(r => r.f.cst), crl = rs.flatMap(r => r.f.crl), sl = rs.flatMap(r => r.f.sl);
-      const below = clr.filter(v => v < CLEAR_BAR).length;
-      const bm = rs.flatMap(r => r.f.bm);
-      rows[L.name] = { runs: rs.length, frames: clr.length, boomP50: +f2(pct(bm, 0.5)), boomMin: +f2(Math.min(...bm)), minClr: +f3(Math.min(...clr)), p1Clr: +f3(pct(clr, 0.01)), below, stepP50: +f2(pct(cst, 0.5)), stepP95: +f2(pct(cst, 0.95)), stepP99: +f2(pct(cst, 0.99)), stepMax: +f2(Math.max(...cst)), relP99: +f2(pct(crl, 0.99)), relMax: +f2(Math.max(...crl)), slopeP50: +f1(pct(sl, 0.5)), slopeMax: +f1(Math.max(...sl)) };
+      const rs = runs.filter(r => r.line === L.name), clr = rs.flatMap(r => walkOf(r, 'clr')), cst = rs.flatMap(r => walkOf(r, 'cst')), sl = rs.flatMap(r => walkOf(r, 'sl')), bm = rs.flatMap(r => walkOf(r, 'bm'));
+      const setl = rs.flatMap(r => r.f.clr.slice(0, r.walkIdx || 0)), below = clr.filter(v => v < CLEAR_BAR).length;
+      // the settle's own clearance (not gated: the frames between the place and W): the snap puts the lens at its full boom behind him, in the hill
+      // where one stands behind the line's top, for the frames before the first update lifts it; counted and dated so it is not hidden
+      const setBelow = rs.map(r => { const c = r.f.clr.slice(0, r.walkIdx || 0); let last = -1, n = 0; c.forEach((v, k) => { if (v < CLEAR_BAR) { n++; last = k; } }); return { n, last: last + 1 }; });
+      const sws = rs.map(swoopOf), walkSw = sws.filter(w => w && w.where === 'walk'), placeSw = sws.filter(w => w && w.where === 'place');
+      const setd = rs.flatMap((r, i) => settledOf(r, sws[i]));
+      rows[L.name] = { runs: rs.length, frames: clr.length, minClr: +f3(Math.min(...clr)), p1Clr: +f3(pct(clr, 0.01)), below, settleMinClr: setl.length ? +f3(Math.min(...setl)) : null, settleBelow: Math.max(...setBelow.map(x => x.n)), settleBelowLastFrame: Math.max(...setBelow.map(x => x.last)),
+        stepP50: +f2(pct(cst, 0.5)), stepP95: +f2(pct(cst, 0.95)), stepP99: +f2(pct(cst, 0.99)), stepMax: +f2(Math.max(...cst)), boomP50: +f2(pct(bm, 0.5)), boomMin: +f2(Math.min(...bm)), slopeP50: +f1(pct(sl, 0.5)), slopeMax: +f1(Math.max(...sl)),
+        swoop: { runs: rs.length, inWalk: walkSw.length, atPlace: placeSw.length, none: sws.filter(w => !w).length,
+          peak: walkSw.length + placeSw.length ? +f2(Math.max(...sws.filter(Boolean).map(w => w.peak))) : null, peakMin: walkSw.length + placeSw.length ? +f2(Math.min(...sws.filter(Boolean).map(w => w.peak))) : null,
+          peakWalk: walkSw.length ? +f2(Math.max(...walkSw.map(w => w.peak))) : null, peakWalkMin: walkSw.length ? +f2(Math.min(...walkSw.map(w => w.peak))) : null, atU: walkSw.length ? +f1(walkSw[0].u) : null,
+          boom: walkSw.length ? [+f1(walkSw[0].from), +f1(walkSw[0].to)] : placeSw.length ? [+f1(placeSw[0].from), +f1(placeSw[0].to)] : null, doneAtS: walkSw.length ? +f1(walkSw[0].tWalk) : null,
+          peakPlace: placeSw.length ? +f2(Math.max(...placeSw.map(w => w.peak))) : null },
+        settled: { n: setd.length, p50: +f2(pct(setd, 0.5)), p95: +f2(pct(setd, 0.95)), p99: +f2(pct(setd, 0.99)), max: setd.length ? +f2(Math.max(...setd)) : NaN, over6: setd.filter(v => v > 6).length } };
       const r = rows[L.name];
-      console.log(pad(L.name, 7) + lpad(rs.length, 5) + lpad(clr.length, 8) + '  | ' + lpad(f3(r.minClr), 8) + lpad(f3(r.p1Clr), 8) + lpad(below, 6) + '  | ' + lpad(f2(r.stepP50), 9) + lpad(f2(r.stepP95), 7) + lpad(f2(r.stepP99), 7) + lpad(f2(r.stepMax), 7) + '  | ' + lpad(f2(r.relP99), 8) + lpad(f2(r.relMax), 8) + '  | ' + lpad(f2(r.boomP50), 9) + lpad(f2(r.boomMin), 6) + '  | ' + lpad(f1(r.slopeP50), 10) + lpad(f1(r.slopeMax), 6));
+      console.log(pad(L.name, 9) + lpad(rs.length, 5) + lpad(clr.length, 8) + '  | ' + lpad(f3(r.minClr), 8) + lpad(f3(r.p1Clr), 8) + lpad(below, 6) + lpad(r.settleMinClr === null ? '-' : f3(r.settleMinClr), 11) + lpad(r.settleBelow ? r.settleBelow + ' (to #' + r.settleBelowLastFrame + ')' : '0', 12) + '  | ' + lpad(f2(r.stepP50), 9) + lpad(f2(r.stepP95), 7) + lpad(f2(r.stepP99), 7) + lpad(f2(r.stepMax), 7) + '  | ' + lpad(f2(r.boomP50), 9) + lpad(f2(r.boomMin), 6) + '  | ' + lpad(f1(r.slopeP50), 10) + lpad(f1(r.slopeMax), 6));
       if (clr.length < MIN_FRAMES) bad('vacuous', `${L.name}: only ${clr.length} lens frames booked`);
       if (below > 0) bad('clearance', `${L.name}: the lens was under ${CLEAR_BAR} u over the floor on ${below} of ${clr.length} frames (lowest ${f3(r.minClr)} u)`);
     }
-    result.lens = { rows, frameTimes: tables.frames, pops: {}, wall };
-    // where the lens steps over 6 u/s: the first walk of each line, (u along the line, u/s, boom, slope under him)
-    for (const L of lines) { const r1 = runs.find(r => r.line === L.name); if (!r1 || L.kind !== 'line') continue; const ev = [];
-      for (let k = 0; k < r1.f.cst.length; k++) if (r1.f.cst[k] > 6) ev.push([r1.f.pg[k + 1], +r1.f.cst[k].toFixed(1), r1.f.bm[k + 1], r1.f.sl[k + 1]]);
-      if (process.env.RW_TRACE && ev.length) { const k0 = r1.f.cst.findIndex(v => v > 6); console.log('  TRACE ' + L.name + ' (frame, u, u/s, camera - Sal x y z, boom, Sal y, slope):');
-        for (let k = 1; k < Math.min(r1.f.cst.length, k0 + 24); k += (k < k0 - 10 ? 8 : 1)) console.log('    ' + k + ' ' + r1.f.pg[k + 1] + ' ' + f1(r1.f.cst[k]) + ' ' + [0, 1, 2].map(j => r1.f.cr[(k + 1) * 3 + j]).join(' ') + ' ' + r1.f.bm[k + 1] + ' ' + r1.f.py[k + 1] + ' ' + r1.f.sl[k + 1]); }
-      result.lens.pops[L.name] = ev; console.log(`  ${L.name}: ${ev.length} frames over 6 u/s in the first walk` + (ev.length ? '; at u along the line (u/s, boom, slope): ' + ev.slice(0, 8).map(e => `${e[0]} (${e[1]}, ${e[2]}, ${e[3]})`).join('; ') : '')); }
-    // THE BAR (ruling 2): main's p99 on its steepest line in the 20-35 deg band (ruling 1's rule: A), walked down. The step is a property of
-    // the line's own micro-terrain: game.js clearCamDistance pulls the boom in, in eighths, wherever its line comes within 1.1 u of the
-    // floor, so a line with a lip behind him steps the lens 9-13 u/s and a smooth one 2.4 (measured on main: A 2.4, B 9.1, S 13.2), and
-    // both are deterministic per line. The pooled and steep-to-steep comparisons are printed beside the ruled bar as INFO.
-    const pool = ns => runs.filter(r => ns.includes(r.line)).flatMap(r => r.f.cst);
-    const bandNames = TAG === 'main' ? ['A', 'B'] : ['riser', 'upland'], steepName = TAG === 'main' ? 'S' : 'steep';
-    const allNames = [...bandNames, steepName];
-    result.lens.pool2035 = +f2(pct(pool(bandNames), 0.99)); result.lens.poolMax = +f2(Math.max(...pool(bandNames)));
-    result.lens.poolAll = +f2(pct(pool(allNames), 0.99)); result.lens.poolAllMax = +f2(Math.max(...pool(allNames)));
-    const swoop = ns => { const a = pool(ns); return +f1(a.filter(v => v > 6).length / a.length * 100); };   // the share of frames over 6 u/s
-    result.lens.swoopPct = swoop(allNames);
-    if (TAG === 'main') { result.lens.barA = rows.A ? rows.A.stepP99 : null; result.lens.rowsMainS = rows.S || null;
-      console.log(`main's lens step p99 on A (the ruled bar the branch is held to): ${result.lens.barA} u/s; B ${rows.B && rows.B.stepP99}, S ${rows.S && rows.S.stepP99}; the two 20-35 lines pooled ${result.lens.pool2035} (max ${result.lens.poolMax})`); }
-    else if (bar == null) { fail.push('no step bar: give RW_BAR=<u/s> or RW_MAIN=<main\'s RW_JSON> (main\'s p99 on its steepest line walked down)'); }
+    console.log(`\nTHE SWOOP (the boom's first pull-in: a fall of >= ${SWOOP_DROP} u; peak frame step u/s, from its start to 3 frames after it ends) AND THE SETTLED WALK (from ${SETTLE_AFTER} s after it completes)`);
+    console.log(pad('line', 9) + lpad('walks', 6) + lpad('in walk', 8) + lpad('at place', 9) + lpad('none', 5) + '  | ' + lpad('boom from-to', 13) + lpad('peak min-max', 14) + lpad('in-walk peak', 13) + lpad('at u', 6) + lpad('done at s', 10) + '  | ' + lpad('settled n', 10) + lpad('p50', 6) + lpad('p95', 7) + lpad('p99', 7) + lpad('max', 7) + lpad('>6 u/s', 8));
+    for (const L of linesAll) { const r = rows[L.name], w = r.swoop, st = r.settled;
+      console.log(pad(L.name, 9) + lpad(w.runs, 6) + lpad(w.inWalk, 8) + lpad(w.atPlace, 9) + lpad(w.none, 5) + '  | ' + lpad(w.boom ? w.boom.join('-') : '-', 13) + lpad(w.peak === null ? '-' : f2(w.peakMin) + '-' + f2(w.peak), 14) + lpad(w.peakWalk === null ? '-' : f2(w.peakWalk), 13) + lpad(w.atU === null ? '-' : w.atU, 6) + lpad(w.doneAtS === null ? '-' : w.doneAtS, 10) + '  | ' + lpad(st.n, 10) + lpad(f2(st.p50), 6) + lpad(f2(st.p95), 7) + lpad(f2(st.p99), 7) + lpad(f2(st.max), 7) + lpad(st.over6, 8)); }
+    result.lens = { rows, frameTimes: tables.frames, wall };
+    // THE BARS (Ruling 48). (a) each relief line's swoop peak (where it swoops in the walk) <= the MAX swoop peak over main's A, B and S; (b) each
+    // relief line's settled p99 <= main's settled p99 on its equivalent line: A for the 20-35 deg lines (the steepest 20-35 deg line, ruled; also
+    // the closest in mean slope: A 27.4 against the riser's 27.0 and the upland's 29.1, B 25.2), S for the 35-45 deg line (main's only line
+    // above 36 deg: A and B top out at 32.8 and 36.2). Both + STEP_TOL (0.1 u/s, the table's precision); the strict difference is printed.
+    const EQ = TAG === 'main' ? {} : { riser: 'A', upland: 'A', steep: 'S' };
+    const inWalkMax = ns => { const v = ns.map(n => rows[n] && rows[n].swoop.peakWalk).filter(x => x !== null && x !== undefined); return v.length ? Math.max(...v) : null; };
+    const anyMax = ns => { const v = ns.map(n => rows[n] && rows[n].swoop.peak).filter(x => x !== null && x !== undefined); return v.length ? Math.max(...v) : null; };
+    if (TAG === 'main') {
+      result.lens.maxSwoopPeak = anyMax(['A', 'B', 'S']); result.lens.maxSwoopPeakWalk = inWalkMax(['A', 'B', 'S']);
+      console.log(`main: the max swoop peak over A, B, S in the walk ${f2(result.lens.maxSwoopPeakWalk)} u/s (first pull-ins anywhere, the place's included: ${f2(result.lens.maxSwoopPeak)}); settled p99 A ${rows.A && f2(rows.A.settled.p99)}, B ${rows.B && f2(rows.B.settled.p99)}, S ${rows.S && f2(rows.S.settled.p99)}`);
+    } else if (!mainJ) { fail.push('no main to compare with: give RW_MAIN=<main\'s RW_JSON>'); }
     else {
-      result.lens.bar = bar;
-      for (const n of ['riser', 'upland']) { const r = rows[n]; if (!r) continue; const over = runs.filter(x => x.line === n).flatMap(x => x.f.cst).filter(v => v > bar).length;
-        console.log(`${n}: step p99 ${f2(r.stepP99)} vs the ruled bar ${f2(bar)} (+ ${STEP_TOL}) u/s (${over} of ${r.frames} frames over it, ${f1(over / r.frames * 100)}%; 1% is the bar's own share); max ${f2(r.stepMax)}`);
-        if (!(r.stepP99 <= bar + STEP_TOL)) bad('step', `${n}: the lens's step p99 ${f2(r.stepP99)} u/s is over main's ${f2(bar)}`); }
-      if (process.env.RW_MAIN) { const M = JSON.parse(readFileSync(process.env.RW_MAIN, 'utf8')).lens, S_ = rows[steepName];
-        console.log(`INFO (not gated): the two 20-35 lines pooled, p99 ${result.lens.pool2035} (max ${result.lens.poolMax}) against main's pooled ${M.pool2035} (max ${M.poolMax}); the steep line p99 ${S_ && S_.stepP99} (max ${S_ && S_.stepMax}) against main's steepest S ${M.rows.S && M.rows.S.stepP99} (max ${M.rows.S && M.rows.S.stepMax}); main's B ${M.rows.B && M.rows.B.stepP99} (max ${M.rows.B && M.rows.B.stepMax})`);
-        console.log(`INFO (not gated): all three straight lines pooled, p99 ${result.lens.poolAll} / max ${result.lens.poolAllMax}, ${result.lens.swoopPct}% of frames over 6 u/s (the boom's pull-in swoop); main's three pooled p99 ${M.poolAll} / max ${M.poolAllMax}, ${M.swoopPct}%`); }
+      const mx = n => mainJ.rows[n].swoop, barWalk = mainJ.maxSwoopPeakWalk, barAny = mainJ.maxSwoopPeak;
+      console.log(`\nRULING 48 (a): the swoop is an event: each line's first pull-in IN THE WALK, its peak step, relief against the MAX over main's A, B, S = ${f2(barWalk)} u/s (main: ${['A', 'B', 'S'].map(n => n + ' ' + (mx(n).peakWalk === null ? 'none in the walk (pulled in at the place: ' + f2(mx(n).peak) + ')' : f2(mx(n).peakWalkMin) + '-' + f2(mx(n).peakWalk))).join(', ')}) (+ ${SWOOP_TOL}, the scatter of identical runs):`);
+      for (const n of ['riser', 'upland', 'steep']) { const w = rows[n] && rows[n].swoop; if (!w) continue;
+        const ok = w.peakWalk === null || w.peakWalk <= barWalk + SWOOP_TOL;
+        console.log(`  ${pad(n, 7)} ${w.peakWalk === null ? 'no pull-in in the walk (the boom was already in at the line\'s top: pulled in at the place, ' + f2(w.peakMin) + '-' + f2(w.peak) + ' u/s)' : 'peak ' + f2(w.peakWalkMin) + '-' + f2(w.peakWalk) + ' u/s in the walk (' + (w.peakWalk <= barWalk ? 'at most' : 'strict +' + f2(w.peakWalk - barWalk)) + ')'}: ${ok ? 'PASS' : 'FAIL'}`);
+        if (!ok) bad('swoop', `${n}: the swoop in the walk peaks at ${f2(w.peakWalk)} u/s, over the max ${f2(barWalk)} over main's A, B, S`); }
+      console.log(`  INFO (not gated): the first pull-ins at the PLACE (the spring's step response to the snap, 14-26 u/s: it scatters by 10 u/s between identical placements, the first booked frame landing at an unpredictable phase of it): relief max ${f2(anyMax(['riser', 'upland', 'steep']))} against main's ${f2(barAny)} u/s.`);
+      console.log(`RULING 48 (b): the settled walk's p99, relief against main's equivalent line (+ ${STEP_TOL}):`);
+      for (const n of ['riser', 'upland', 'steep']) { const r = rows[n]; if (!r) continue; const e = EQ[n], bar = mainJ.rows[e].settled.p99, ok = r.settled.n >= MIN_FRAMES && r.settled.p99 <= bar + STEP_TOL;
+        console.log(`  ${pad(n, 7)} settled p99 ${f2(r.settled.p99)} (n ${r.settled.n}, ${r.settled.over6} over 6 u/s) against main ${e} ${f2(bar)} (strict ${r.settled.p99 <= bar ? 'at most' : '+' + f2(r.settled.p99 - bar)}): ${ok ? 'PASS' : 'FAIL'}`);
+        if (r.settled.n < MIN_FRAMES) bad('vacuous', `${n}: only ${r.settled.n} settled frames`);
+        else if (!ok) bad('step', `${n}: the settled walk's step p99 ${f2(r.settled.p99)} u/s is over main ${e}'s ${f2(bar)}`); }
     }
   }
 }
