@@ -7,6 +7,20 @@
 // through its throat into zone 1. Video frames every 3rd game frame (RP_VIDEO=<dir>), assembled by the
 // orchestrator. No ?playtest: nothing is jumped to.
 //   RP_VIDEO=<dir> node tools/bench/fullplay.mjs <port> <mode: perfect|average> <tag> [seed] [maxSec]
+// THE GAME CLOCK IS THE STEPPED CLOCK (Ruling 52, Task 12b; the plug tools/bench/fullplay-gate.mjs has had since Task 9).
+// game.js's bench hook releases its hold with clock.getDelta(), and three r184's getDelta ADDS the wall time since its last
+// call to clock.elapsedTime: every __bench.step call pushed the game's `t` on by its own wall time and the CDP round trip
+// before it (1.5-2.1x the stepped time), so the recorded game ran fast: the current that drifts a swimmer, the weather, the
+// slam gaps. On the relief it also cost the take (0 of 3 runs took the harpoon). Traced in Task 12b: on the leaky clock he
+// reached the anchor still AFLOAT, gliding in at ~3.7 u/s (travel() stops on the first frame the prompt shows), and the 2 s
+// no-key "facing the iron" beat coasted him through the 2.6 u reach (3.8 u off at touchdown); on the stepped clock he arrived
+// on his feet (v 2.3 u/s, damped inside 0.8 u) and kept the prompt. Standing at the iron he never drifts (grounded, the
+// current does not act on him). Once the live loop is held the clock is stopped (getDelta then returns 0), every stepped
+// frame is counted, and the ledger books the drift (`clock`, and the CLOCK line).
+//   EXIT CODES: 0 the take played on the stepped clock; 4 LOST: the game clock moved other than by the stepped frames
+//   (|drift| > 0.05 s) or is still running, so the recording is a faster game than the one stepped: discard it. (A crash is
+//   node's own 1; nothing else exits non-zero.) FP_NOPLUG=1 leaves the clock UNPLUGGED (no clock.stop()), the frame counter
+//   in place: the drift's RED case, as in fullplay-gate.mjs (FP_NOPLUG=1 ... <tag> 1 5 must print CLOCK LOST and exit 4).
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 if (!process.env.DRV_PORT) process.env.DRV_PORT = '9471';
@@ -43,6 +57,22 @@ const alt = async code => {
 // only through __bench.step.
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
+// ...AND THE CLOCK STOPS WITH IT (see the header). clock.stop() leaves getDelta at 0, so the hold's release no longer adds
+// wall time to elapsedTime; __bench.step's `elapsedTime += dt` is the only thing that moves it. Every stepped frame is counted
+// here (the wrapper sees each frame step runs, including the shots' single frames), so the drift at the end is what moved the
+// clock besides them. (The same lines as fullplay-gate.mjs.)
+await c.ev(`(async () => {
+  const { clock } = await import(new URL('src/core.js', document.baseURI).href);
+  ${process.env.FP_NOPLUG === '1' ? '/* FP_NOPLUG: the clock is left running (the drift bound\'s RED case) */' : 'clock.stop();'}
+  const S0 = window.__bench.step;
+  window.__fpClk = { clock, e0: clock.elapsedTime, n: 0 };
+  window.__bench.step = (n, fn, o) => S0(n, i => { window.__fpClk.n++; return fn ? fn(i) : undefined; }, o);
+  return 1;
+})()`);
+const DRIFT_MAX = 0.05;
+// THE DRIFT BOUND: the clock moved other than by the stepped frames (|drift| > 0.05 s), or is still running (not plugged)
+const clockLost = k => !(Math.abs(k.drift) <= DRIFT_MAX) || !!k.running;
+const CLOCK = `(() => { const k = window.__fpClk, run = k.clock.elapsedTime - k.e0, stepped = k.n / 60; return { run: +run.toFixed(3), stepped: +stepped.toFixed(3), drift: +(run - stepped).toFixed(4), running: !!k.clock.running }; })()`;
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
@@ -211,16 +241,19 @@ if (s.calmed) {
 }
 console.log(phase.join('\n'));
 const st = s.rp;
+const clock = await c.ev(CLOCK);
+const lost = clockLost(clock);
 const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
   hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...tally, underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
-  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
+  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way, clock };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));
+console.log('CLOCK', lost ? 'LOST' : 'OK', JSON.stringify({ ...clock, bound: DRIFT_MAX, plug: process.env.FP_NOPLUG === '1' ? 'removed' : 'in' }));
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 if (errs.length) console.log('CONSOLE', errs.slice(0, 5).join('\n'));
 c.close();
 stop();
-process.exit(0);
+process.exit(lost ? 4 : 0);   // 4 = LOST: the game clock ran on wall time (see the header)
