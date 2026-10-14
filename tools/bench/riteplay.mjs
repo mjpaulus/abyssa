@@ -13,11 +13,15 @@
 // HUNTING stance apart (wardHuntP50: no drop, standE > 0.9), and the START line and the ledger name the ground the fight ran
 // on (`ground`: __ridge.fp(); `lair`: her lairPos x, z). The ledger also books every tear's source and phase (hitLog) and
 // every drop's outcome (dropLog), read-only, never gated.
+// (Task 8b, Ruling 42) THE GAME CLOCK IS THE STEPPED CLOCK: once the live loop is stopped the clock is stopped too
+// (fullplay-gate.mjs's plug, below), and the ledger books `clock` { run, stepped, drift, running }.
 // Env RP_WARD_BAR=<u> (a number > 0) gates the column (main's highest over its fights + 0.5). EXIT CODES:
 //   0  WARD PASS (or no bar)
 //   3  WARD FAIL: over the bar, or a reading that was not finite
 //   2  WARD UNMEASURED: she was never up (no frame booked: no reading at all, neither a pass nor a RED); or a bad bar
 //      (blank, not a number, or <= 0), refused before Chrome starts
+//   4  LOST: the game clock moved other than by the stepped frames (drift over 0.05 s, or it runs again). Over any ward
+//      verdict: a lost fight is never gated; re-run it
 //   1  the run itself failed (node's own code for an uncaught throw; 13 if it was killed mid-await)
 // Its one RED attempt (Task 8): her station on a mound's flank (a set is a full arrival, so before the jump, never
 // mid-fight). On that mound the harpoon's seat search falls back to the flank and Sal slides off the anchor within 90
@@ -81,6 +85,25 @@ await c.ev(`(window.__bench.step(60), 1)`);
 // only through __bench.step.
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
+// ...AND THE CLOCK STOPS WITH IT (seafloor relief Task 8b, Ruling 42: fullplay-gate.mjs's plug, Task 9). game.js's bench
+// hook releases its hold with clock.getDelta(), and three's getDelta ADDS the wall time since its last call to
+// clock.elapsedTime: every __bench.step pushed the game's `t` on by its own wall time and the CDP round trip before it
+// (1.5x the stepped time alone, 1.7-2.1x with another Chrome stepping: the current, the slam's tear gap, the weather, the
+// sea all played a load-dependent fight). clock.stop() leaves getDelta at 0, so __bench.step's `elapsedTime += dt` is the
+// only thing that moves it. Every stepped frame is counted here (the wrapper sees each frame step runs: the slices, the
+// shots' single frames, the way down), so the drift at the end is what moved the clock besides them. Tool-side: it runs
+// identically on every build. A fight whose drift is over CLOCK_LOST s (or whose clock runs again) is LOST: exit 4, never
+// gated, re-run it.
+await c.ev(`(async () => {
+  const { clock } = await import(new URL('src/core.js', document.baseURI).href);
+  clock.stop();
+  const S0 = window.__bench.step;
+  window.__rpClk = { clock, e0: clock.elapsedTime, n: 0 };
+  window.__bench.step = (n, fn, o) => S0(n, i => { window.__rpClk.n++; return fn ? fn(i) : undefined; }, o);
+  return 1;
+})()`);
+const CLOCK = `(() => { const k = window.__rpClk, run = k.clock.elapsedTime - k.e0, stepped = k.n / 60; return { run: +run.toFixed(3), stepped: +stepped.toFixed(3), drift: +(run - stepped).toFixed(4), running: !!k.clock.running }; })()`;
+const CLOCK_LOST = 0.05;
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
@@ -268,10 +291,11 @@ if (s.calmed) {
   await shot('down');
 }
 const st = s.rp;
+const clock = await c.ev(CLOCK);
 const ledger = { site: SITE, mode: MODE, seed: +SEED, ...ground, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
   hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...(await c.ev(TALLY)), underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
   ccN: st.ccN, ccMax: st.ccMax, ccOff: st.ccOff, camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1),
-  ...(await c.ev(`window.__rpWard()`)), ...(await c.ev(`window.__rpHits()`)), way };
+  ...(await c.ev(`window.__rpWard()`)), ...(await c.ev(`window.__rpHits()`)), way, clock };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));
@@ -296,6 +320,11 @@ if (WARD_BAR !== null) {
     if (!ok) code = 3;
   }
 }
+// (Task 8b) A LOST fight: the game clock moved other than by the stepped frames (drift over CLOCK_LOST s, or it runs
+// again), so what was played is not the stepped fight. Never gated, whatever its ward verdict: exit 4, re-run it
+const lost = !(Math.abs(clock.drift) <= CLOCK_LOST) || clock.running;
+console.log(`CLOCK ${lost ? 'LOST' : 'OK'}: the game clock ran ${clock.run} s over ${clock.stepped} s stepped, drift ${clock.drift} s (lost over ${CLOCK_LOST})` + (clock.running ? ', the clock RUNNING' : ''));
+if (lost) code = 4;
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 if (errs.length) console.log('CONSOLE', errs.slice(0, 5).join('\n'));
