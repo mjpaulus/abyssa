@@ -8,9 +8,14 @@
 // VG_LOAD=<port>:<debugPort> runs the gate UNDER LOAD: a second headless Chrome on <debugPort> plays fullplay.mjs (the
 // average player) from the server on <port>, back to back, from before the first route until the last one ends; the
 // routes wait for its first fight to start. Its logs go to <out>/load/.
+// (Task 10) The gate stays ABSOLUTE (RED on main: the pressed fight lens, the light-up flash); the relief is judged against main
+// on the same tools, 3 alone runs per build interleaved + 1 under load, by per-phase and per-class bounds read off each run's JSON
+// (reviews/t10-scripts/analyze.py, PREREG.md; docs in the task-10 report). VG_LOAD's ports are normalised, range-checked and
+// kept off the reserved ones, and its Chrome kill is anchored. One route per invocation (the third argument) re-runs a route whose
+// boot crashed: a fresh-profile Chrome's module fetch from unpkg fails now and then (net::ERR_FAILED) and the page never boots.
 // Logs: shots/velfix/gates/<tag>-<route>.log
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 const [, , PORT, TAG = 'vgate', ROUTES = 'crack,follow,resettle'] = process.argv;
 const OUT = '/Users/michaelpaulus/sc/.abyssa-wt/shots/velfix/gates';
 const CWD = new URL('../..', import.meta.url).pathname;
@@ -40,6 +45,7 @@ if (process.env.VG_LOAD) {
   }
   const LD = `${OUT}/load`; mkdirSync(LD, { recursive: true });
   const sh = `i=0; while true; do i=$((i+1)); DRV_PORT=${String(ldp)} RP_OUT=${LD} node tools/bench/fullplay.mjs ${String(lp)} average ${TAG}-load-$i $i 240 > ${LD}/${TAG}-load-$i.log 2>&1; done`;
+  const tLoad = Date.now();   // (the load's first log counts only if written after this: a stale one from an earlier run with the same tag has START in it and started the routes before the load was in its fight, Task 10)
   const lenv = { ...process.env }; for (const k of Object.keys(lenv)) if (/^(DRV_DIR|FP_|RP_)/.test(k)) delete lenv[k];   // (its own profile; none of the gate's knobs)
   const ch = spawn('/bin/sh', ['-c', sh], { cwd: CWD, detached: true, stdio: 'ignore', env: lenv });
   ch.unref();
@@ -51,7 +57,7 @@ if (process.env.VG_LOAD) {
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { if (load) load.stop(); process.exit(130); });
   const first = `${LD}/${TAG}-load-1.log`;
   let up = false;
-  for (let i = 0; i < 300 && !(up = existsSync(first) && /START/.test(readFileSync(first, 'utf8'))); i++) await sleep(1000);
+  for (let i = 0; i < 300 && !(up = existsSync(first) && statSync(first).mtimeMs >= tLoad && /START/.test(readFileSync(first, 'utf8'))); i++) await sleep(1000);
   if (!up) { console.log(`VELFIX-GATE: the load never reached its fight in 300 s (${first}); no run under load`); load.stop(); load = null; process.exit(2); }
   console.log(`load: fullplay.mjs on ${lp} (Chrome ${ldp}) is in its fight; routes start`);
 }

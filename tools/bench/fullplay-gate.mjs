@@ -50,6 +50,9 @@ if (!process.env.DRV_PORT) process.env.DRV_PORT = '9471';
 // a FRESH profile every run: the chart save would otherwise remember a calm (a lit ward)
 if (!process.env.DRV_DIR) { process.env.DRV_DIR = tmpdir() + '/abyssa-rp-' + process.env.DRV_PORT + '-' + Date.now(); }
 const { start, stop, connect, sleep } = await import('./drv.mjs');
+// (Task 10) a crash (a boot that never finished: unpkg's net::ERR_FAILED) left its Chrome on the debug port, and the next run then
+// drove that stale page; the Chrome goes with the process (FP_HOLD=1 keeps it up on purpose)
+process.on('exit', () => { if (process.env.FP_HOLD !== '1') { try { stop(); } catch (e) { } } });
 const [, , PORT, MODE = 'perfect', TAG = 'full', SEED = '1', MAXS = '240'] = process.argv;
 const SITE = 'home';
 const OUT = process.env.RP_OUT || '/Users/michaelpaulus/sc/.abyssa-wt/shots/ritefair-play';
