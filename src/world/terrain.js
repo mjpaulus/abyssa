@@ -225,7 +225,8 @@ function uplandsAt(x, z, nReg, nBase, nM, nS2, nR3) {
 // riser taking 85% of its band (walkable slopes, not walls), smooth in three ramp sectors so no riser is a ring. The
 // UNIFORM part (depth + the crack-centred dish) acts everywhere, the crack's apron included; the apron target and the
 // throat's carve compensate exactly that part, so the crack just drops (lips 1.17 -> 1.18, the throat floor at today's
-// -315.3). The DETAIL (levelling, her flat, the outcrops) fades out toward the lip. Her flat (30-46 u about her
+// -315.3). The DETAIL: the levelling and her flat fade out toward the lip (by fd 4); the outcrops are kept off it by
+// oc.keepOff (checkRelief enforces its inner radius). Her flat (30-46 u about her
 // station, levelled 92%, 4 u lower than the bottom) makes her ground the deepest. It runs on under the NE wall (fade
 // 250-290 u from the raft): ending it before the wall's onset put a steep rise behind her crack (5.4% of the floor too
 // steep to walk, trial H0) — the wall stands ~30 u taller there.
@@ -451,7 +452,7 @@ function heightAt(x, z, zi, slabs) {
   if (HOL && zi === 0) {
     hollowAt(x, z, _hv);
     hu = _hv.uni;
-    const g = fd < 14 ? sst01((fd - 4) / 10) : 1;   // the detail fades out toward the lip (fd is 1e3 outside apronR2)
+    const g = fd < 14 ? sst01((fd - 4) / 10) : 1;   // the levelling and her flat fade out toward the lip (fd is 1e3 outside apronR2); the outcrops (_hv.det) are kept off it by oc.keepOff
     h += (HOL.level0 - h) * _hv.level * g + hu + _hv.det - HOL.sDrop * _hv.flatW * g;
   }
 

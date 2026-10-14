@@ -5,7 +5,7 @@
 //   node tools/bench/blade-invariants.mjs <port> [extra query, e.g. salproc]
 // (final fix wave) It FAILS (exit 1): the fresh profile already owns the harpoon (the first-sight check would be
 // vacuous); lights != 14 anywhere; __lev.fp off 15ce888c / c938fe6e / 652d0412; a terrain fingerprint off its
-// anchorage's (home 3b526986, Pallid b1c58f8d, Burned d2b6fb68; zones 1+2 at home d49d451d); the first thrust
+// anchorage's (home 5c0705a1 since THE RELIEF, was 3b526986; Pallid b1c58f8d, Burned d2b6fb68; zones 1+2 at home d49d451d: tools/relief/expect.json); the first thrust
 // at home compiles a program; the soak grows (programs / geometries / textures at a stop vs the same anchorage
 // one cycle earlier); the harpoon's thrust did not land at a stop (per stop: the record is cleared before each
 // stop's thrust and must be rewritten by it, residual fix 5); __safeFailed / __shaderFailed non-empty; a
@@ -56,7 +56,7 @@ const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 console.log('console errors', errs.length, errs.slice(0, 5).join('\n'));
 c.close(); stop();
-const FP = ['15ce888c', 'c938fe6e', '652d0412'], SITE_FP = { 0: '3b526986', 1: 'b1c58f8d', 2: 'd2b6fb68' };
+const FP = ['15ce888c', 'c938fe6e', '652d0412'], SITE_FP = { 0: '5c0705a1', 1: 'b1c58f8d', 2: 'd2b6fb68' };   // home since THE RELIEF (was 3b526986); Pallid and Burned unmoved
 const fail = [];
 if (base.owned) fail.push('the fresh profile owned the harpoon before the first grant (the first-sight check is vacuous)');
 if (base.lights !== 14) fail.push('lights at boot ' + base.lights);

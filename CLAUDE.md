@@ -177,9 +177,9 @@ against explicit contracts and reviewed on return.
   (game.js `visitCalm`, cleared on boot/voyage — "Ritual, remembered": a revisit is shut until she is
   calmed again). OPEN = `world/rifts.js` the deep's own pale light: a soft curtain along the crack,
   wall light (gated off below the throat floor), motes (`seedMotes` lifts every mote to `terrainH + 4`, AFTER its
-  draws so no stream moves: a height drawn from the zone's band alone put 59-61 of 1,260 seeded motes inside the
-  ground on main, in every zone and site; the clamp is global, 8.3% of motes lift, drawn-only, no fingerprint reads
-  them), a surface glow (fog:false, <= 0.16), colour
+  draws so no stream moves: a height drawn from the zone's band alone put 59-61 of 1,260 seeded motes within 3 u of
+  the floor on main (some below it), in every zone and site; the clamp is global, 8.3% of motes lift, drawn-only, no
+  fingerprint reads them), a surface glow (fog:false, <= 0.16), colour
   leaned per site/zone and calibrated on SETTLED frames. DOWN THE OPEN THROAT (final wave): Sal is held
   in the shaft's OPEN interval at his feet (player.js `holdInShaft`; the shaft narrows with depth inside
   inThroat's lip-level interval and the current set him into the walls), the follow lens is put in the
@@ -232,8 +232,9 @@ against explicit contracts and reviewed on return.
   THE CRACK TAKES ONLY THE UNIFORM PART (`hu`: the depth + the dish): the apron target is relative (`18 + hu`) and the
   carve is shortened by `hu * sst01(wall / 0.6)`, so the lips drop together (1.18 u apart, was 1.17) and the throat
   floor holds at -315.3 (call 1; G3: 0 deviation over 62 centre-line points; the throat is 40.9 u under its lip, was
-  71.2); the detail (levelling, her flat, outcrops) fades to 0 by fd 4. `checkRelief` refuses a row the terrain
-  cannot take (sLvl or rw <= 0: 0/0 = NaN over zone 0; an `oc.keepOff` inside the crack's reach + 4 u). Spec §7
+  71.2); the levelling and her flat fade out by fd 4, and the outcrops are kept off the lip by `oc.keepOff`.
+  `checkRelief` refuses a row the terrain cannot take (sLvl or rw <= 0: 0/0 = NaN over zone 0; an `oc.keepOff` inside
+  the crack's reach + 4 u). Spec §7
   limits held: lowest walkable ground -280.1 (>= -285), descent margin 29.4 u (>= 24.5), jam top 33.2 over the
   trigger (>= 25), hose 20.8 u spare (>= 10; walked: 22.5), berm 0.9, ending dip 198.6 (>= 150); heightAt costs 1.16x
   (+22 ns uplands, +33 ns hollow, of ~340). KNOWN RESIDUALS: S6 (drawn == stood on) is gated on the hollow's footprint
@@ -264,7 +265,8 @@ against explicit contracts and reviewed on return.
   height-tied shading probe), `exposure.mjs` (auto-exposure at three places), `glare.mjs` (the ward-glare flash series).
   In-game probes, all `DRV_PORT=<own> node tools/bench/<x>.mjs <port>`: `relief-load.mjs [all|load|parity|voyage|
   oldsave]` (fresh loads in fresh profiles with the console from byte one: the invariants and home's anchors; the
-  game's terrainH against the sliced replica on 40,401 points, |d| <= 1e-9 on all; three round trips via Pallid with
+  game's terrainH against the sliced replica on 40,401 points: the probe gates >= 99% within 1e-9, measured 100%
+  (99.81% bit-identical, max 1.14e-13); three round trips via Pallid with
   her bed recomputed; an old save with `pulled[0]` on the new ground, "[E] PRESS THE OLD WOUND"), `relief-walk.mjs
   <boots|lens|hose>` (REAL keys on the LIVE loop at 60 fps by focus emulation, never `__bench.step`, so no clock leak;
   `RW_RED` noslope / nofloor / short20 exit 5 = the RED failed as it must, 3 = it did not; `selftest` is offline),
@@ -405,7 +407,8 @@ against explicit contracts and reviewed on return.
   `lair.face -1` turns her in place at her bed (lair.js: the bed is the one that clears the apron facing either way,
   today's, 0.021 u from the station; re-fitted at the turned face alone she moved 1.011 u, S2 allows 0.5; yaw 58.49
   -> -121.51, exactly 180 deg), so the harpoon is in her LEFT flank again and Alt+6 opens at her
-  back-left CORNER (fwd -0.81 / lat -0.59 R; main's mid-flank is -0.45 / -1.13). `lair.seat 'back'` keeps the seat's
+  back-left CORNER (fwd -0.81 / lat -0.59 R at the key press, -0.84 / -0.61 at riteplay's START line; main's is also
+  back-left, -0.45 / -1.13 at the key, -0.48 / -1.16 at START). `lair.seat 'back'` keeps the seat's
   seam to her back half (harpoon.js `seat()`: on the levelled flat the middle of her left flank lies at the ground and
   the search's best was her front corner). `hard.lift` 0.55 raises her stance (brooder.js `L.standLift`: her body height,
   STAND.clear, CROUCH.clear and NOSAFE.depth, else the sole lift eats it) by the gap between main's hunting stance and
@@ -444,7 +447,9 @@ against explicit contracts and reviewed on return.
   Sal under her (card fight-lens-off-sal; its acceptance is the absolute GREEN, run on main). On the relief the gate was
   judged RELATIVE to main (Task 10, pre-registered) and FAILED AS REGISTERED (Ruling 52: the baseline came from four
   short fights and C used totals that scale with fight length; the per-frame red rate is equal, 8.3 per 100 booked
-  frames on both builds); main is absolutely RED, so it did not block. Recorder: `tools/bench/fullplay.mjs` (raft to the
+  frames on both builds, the CLEAN rate is not, 0.97 against 0.43 per 100; the relief's gate fights ran 39.6 s against
+  main's 23.6 and booked 16 hits against 1, but riteplay's drop slams are 7 against 9, so that hit gap is main's gate
+  approach, not a harder fight); main is absolutely RED, so it did not block. Recorder: `tools/bench/fullplay.mjs` (raft to the
   rift, real keys, FP_HOSE; its clock is plugged, exit 4 = LOST).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
@@ -943,8 +948,10 @@ core.js):
   see it. It is in EVERY `__bench.step` probe (fissure-, harpoon-, clawcam-probe...). PLUGGED TOOL-SIDE in
   fullplay-gate.mjs, fullplay.mjs and riteplay.mjs: `clock.stop()` once the live loop is held (getDelta then returns
   0, and step's own `+= dt` is the only thing that moves the clock), every stepped frame counted, the ledger books
-  `clock { run, stepped, drift, running }`, and drift > 0.05 s (or a running clock) is LOST: exit 4 (`FP_NOPLUG=1`
-  is the RED). The game.js ROOT FIX (`const e = clock.elapsedTime; clock.getDelta(); clock.elapsedTime = e;`) is
+  `clock { run, stepped, drift, running }`, and drift > 0.05 s (or a running clock) is LOST, which each tool reports
+  its own way: fullplay.mjs exits 4 (`FP_NOPLUG=1` is its RED: it must print CLOCK LOST); riteplay.mjs exits 4 over any
+  ward verdict (it has NO FP_NOPLUG, so no RED switch); fullplay-gate.mjs (hence velfix-gate) folds the drift into its
+  verdict and exits 1 (`FP_GATE=1 FP_NOPLUG=1 FP_STOP=200` must print DRIFT RED; the plugged control, GREEN). The game.js ROOT FIX (`const e = clock.elapsedTime; clock.getDelta(); clock.elapsedTime = e;`) is
   DEFERRED (Ruling 42): every probe bar on the relief branch was derived on main under the same leak, so fixing it
   alone would break that symmetry; it wants its own card with a baseline re-derivation pass. Live-loop probes
   (relief-walk, the real-key walks) have no hold and no leak.
