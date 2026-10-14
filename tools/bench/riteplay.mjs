@@ -9,6 +9,18 @@
 //   ritepolicy.mjs now (shared with fullplay.mjs): the perfect one plays her windows and counts its own
 //   time under her; the average one lingers under her a little too long.
 // Env DRV_PORT (default 9471). Frames -> SHOTS dir (env RP_OUT, default shots/ritefair-play).
+// (seafloor relief Task 8) The ledger books her wards' height over her ground while she is up (wardUp, below), and the
+// START line and the ledger name the ground the fight ran on (`ground`: __ridge.fp(); `lair`: her lairPos x, z).
+// Env RP_WARD_BAR=<u> gates the column (main's highest over its fights + 0.5): a WARD PASS / FAIL line, exit 1 over the bar
+// (or on a reading that was not finite); WARD UNMEASURED, exit 2, when she was never up (no frame booked: no reading at
+// all, neither a pass nor a RED). Its one RED attempt (Task 8): her station on a mound's flank (a set is a full arrival, so
+// before the jump, never mid-fight). On that mound the harpoon's seat search falls back to the flank and Sal slides off the
+// anchor within 90 frames of Alt+6 (no prompt: the pull never comes), so it wakes her through the game's own command
+// instead, after the jump (RP_POST: the jump rebuilds her, dormant):
+//   RP_PRE='window.__relief.set({hollow:{sDrop:-14,sR:[8,24]}})' RP_POST='window.lev.cmd("wake")' RP_WARD_BAR=<u> \
+//     node tools/bench/riteplay.mjs <port> home perfect <tag> 1
+// Measured: it does NOT fail the bar (highest 12.50 u over 14523 frames up against 15.01; p50 7.82 against the shipped
+// relief's 9.3-9.6; 240 s, not calmed), so the bound stands on its derivation from main's fights.
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 if (!process.env.DRV_PORT) process.env.DRV_PORT = '9471';
@@ -16,6 +28,9 @@ if (!process.env.DRV_PORT) process.env.DRV_PORT = '9471';
 if (!process.env.DRV_DIR) { process.env.DRV_DIR = tmpdir() + '/abyssa-rp-' + process.env.DRV_PORT + '-' + Date.now(); }
 const { start, stop, connect, sleep } = await import('./drv.mjs');
 const [, , PORT, SITE = 'home', MODE = 'perfect', TAG = 'run', SEED = '1', MAXS = '240'] = process.argv;
+// (the bar's positive control: a bar that is not a number would gate nothing)
+const WARD_BAR = process.env.RP_WARD_BAR === undefined ? null : +process.env.RP_WARD_BAR;
+if (WARD_BAR !== null && !Number.isFinite(WARD_BAR)) { console.error(`RP_WARD_BAR must be a finite number (got ${JSON.stringify(process.env.RP_WARD_BAR)})`); process.exit(2); }
 const OUT = process.env.RP_OUT || '/Users/michaelpaulus/sc/.abyssa-wt/shots/ritefair-play';
 mkdirSync(OUT, { recursive: true });
 let seed = +SEED >>> 0 || 1;
@@ -44,6 +59,9 @@ for (let i = 0; i < nSail; i++) { await alt('Minus'); await sleep(4000); await c
 // sail away and back: "__chart.pulled()[0]=1; __chart.rec()[0][0]=1; __chart.arrive(1); __chart.arrive(0)")
 if (process.env.RP_PRE) await c.ev(`(() => { ${process.env.RP_PRE}; return 1; })()`);
 await alt('Digit6');
+// (Task 8) RP_POST=<js>: evaluated after the jump. The jump runs enterZone(0), which disposes her and builds a fresh,
+// dormant sleeper, so anything done to HER (e.g. waking her) must come after it; RP_PRE is for the world before the jump
+if (process.env.RP_POST) await c.ev(`(() => { ${process.env.RP_POST}; return 1; })()`);
 await sleep(1500);
 await c.ev(`(window.__bench.step(60), 1)`);
 // THE LIVE LOOP STOPS HERE: __bench.step only holds the game loop while it steps, so between
@@ -59,8 +77,45 @@ await c.ev(PROBE);
 await c.ev(`(() => { const f0 = window.__rp.frame, st = window.__rp.st; st.ccN = 0; st.ccMax = 0; st.ccOff = 0;
   window.__rp.frame = () => { f0(); const C = window.__clawcam; if (!C) return; const s = C.state();
     if (s.tilt > 0) { st.ccN++; if (s.tiltDeg > st.ccMax) st.ccMax = s.tiltDeg; } if (s.why === 'mouse' || s.why === 'cool') st.ccOff++; }; return 1; })()`);
+// (seafloor relief Task 8) HER WARDS' HEIGHT OVER HER GROUND: the spec's G5 line, "her wards stay at today's height over
+// her ground" (docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §4: the rite assumes level ground; a bank
+// under one side once lifted them to 10-17 u). Booked on EVERY frame she is UP: awake (the pull woke her: !L.dormant),
+// not yet calmed (!L.calmed: calmed she walks home to her bed by the crack, which is not the fight) and risen past half
+// (L.standE > 0.5, the framing ledger's own "awake" in ritepolicy.mjs PROBE: below it her wards are still coming up out
+// of the silt). Every ward, lit or dark (a lit ward hangs where it did): h = ward.y - terrainH(ward.x, ward.z, 0), the
+// brooder's own measure (brooder.js L.probe().wards[].y). Read-only: the ward positions are world space after her pose.
+//   wardUp      the fight's highest h (u), the gated number; wardUpAt: when (ledger s), which ward, lit, her drop phase
+//               (the drop's frames count: its telegraph braces her up to NOSAFE.brace 0.7 u, its slam lowers her),
+//               standE, her standing body height over the ground under her centre (`body`: the drop's offset taken out,
+//               as STATE reads her), how much lower the ground under that ward lies than under her centre (`bank`) and
+//               the ward's distance off the crack (`fd`: a ward over the crack reads its depth)
+//   wardUpDark  the same over dark wards only (what fissure-probe velkath-crack reads)
+//   wardUpP50 / wardUpP95  over the frames up, each frame's highest ward: the stance beside the peak
+//   wardUpN     frames booked; 0 = never up: unmeasured, never a pass. wardUpBad: readings that were not finite (each fails)
+// It is a second wrap of __rp.frame (after the clawcam's) and returns nothing: a `false` would stop __bench.step.
+await c.ev(`(() => { const f0 = window.__rp.frame, L = window.lev, st = window.__rp.st, W = { n: 0, bad: 0, max: null, dark: null, at: null, fr: [] };
+  window.__rp.frame = () => { f0();
+    if (L.dormant || L.calmed || !(L.standE > 0.5)) return;
+    let fm = -Infinity;
+    for (let i = 0; i < L.sigils.length; i++) {
+      const g = L.sigils[i], p = g.grp.position, gw = terrainH(p.x, p.z, 0), h = p.y - gw;
+      if (!Number.isFinite(h)) { W.bad++; continue; }
+      if (h > fm) fm = h;
+      if (!g.lit && (W.dark === null || h > W.dark)) W.dark = h;
+      if (W.max === null || h > W.max) {
+        const gc = terrainH(L.pos.x, L.pos.z, 0);
+        W.max = h;
+        W.at = { t: +(st.f / 60).toFixed(2), i, lit: !!g.lit, drop: L.drop || 0, standE: +L.standE.toFixed(2), body: +(L.bodyY - (L.dropY || 0) - gc).toFixed(2), bank: +(gc - gw).toFixed(2), fd: window.__fd ? +window.__fd(p.x, p.z, 0).toFixed(1) : null };
+      }
+    }
+    W.n++; W.fr.push(fm); };
+  window.__rpWard = () => { const s = W.fr.slice().sort((a, b) => a - b), q = k => s.length ? +s[Math.round(k * (s.length - 1))].toFixed(2) : null, r = x => x === null ? null : +x.toFixed(2);
+    return { wardUp: r(W.max), wardUpDark: r(W.dark), wardUpP50: q(0.5), wardUpP95: q(0.95), wardUpN: W.n, wardUpBad: W.bad, wardUpAt: W.at }; };
+  return 1; })()`);
+// (Task 8) a shot's frame is a game frame like the others, so the ledger books it (it stepped unbooked before: one frame in
+// every 10 s of play went past the ledger, and past the ward column, which reads every frame she is up)
 const render = async () => {
-  await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
+  await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, () => window.__rp.frame(), { render: true }), 1)`);
 };
 const shot = async name => { await render(); await c.png(`${OUT}/${TAG}-${name}.png`); };
 // THE VIDEO (RP_VIDEO=<dir>): every 3rd game frame is rendered through the real pipeline and
@@ -129,7 +184,10 @@ async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false, abo
 const decide = makePolicy({ AVG, rnd, FLEE, now: () => t });
 
 let s = await c.ev(STATE);
-console.log('START', JSON.stringify({ site: SITE, mode: MODE, pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`) }));
+// (Task 8) the ground this fight runs on: the canonical fingerprint (main 3b526986, the relief 5c0705a1, a mutant neither)
+// and her bed (main's far flank (43.5, 113.4), the relief's station (89.7, 39.1))
+const ground = await c.ev(`({ ground: window.__ridge.fp(), lair: [+window.lev.lairPos.x.toFixed(1), +window.lev.lairPos.z.toFixed(1)] })`);
+console.log('START', JSON.stringify({ site: SITE, mode: MODE, ...ground, pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`) }));
 let lastWhy = '';
 while (t < +MAXS) {
   s = await c.ev(STATE);
@@ -155,16 +213,33 @@ if (s.calmed) {
   await shot('down');
 }
 const st = s.rp;
-const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
+const ledger = { site: SITE, mode: MODE, seed: +SEED, ...ground, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
   hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...(await c.ev(TALLY)), underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
-  ccN: st.ccN, ccMax: st.ccMax, ccOff: st.ccOff, camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
+  ccN: st.ccN, ccMax: st.ccMax, ccOff: st.ccOff, camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1),
+  ...(await c.ev(`window.__rpWard()`)), way };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
+const wa = ledger.wardUpAt;
+console.log(`WARD her wards over her ground while she was up: highest ${ledger.wardUp} u` + (wa ? ` (ward ${wa.i} ${wa.lit ? 'lit' : 'dark'} at ${wa.t} s, drop ${wa.drop}, standE ${wa.standE}, her body ${wa.body} u over her ground, bank ${wa.bank} u, fd ${wa.fd})` : '') +
+  `, dark ${ledger.wardUpDark}, p50 ${ledger.wardUpP50} / p95 ${ledger.wardUpP95} over ${ledger.wardUpN} frames up` + (ledger.wardUpBad ? `, ${ledger.wardUpBad} NOT FINITE` : ''));
+// the gate: PASS, FAIL (exit 1: over the bar, or a reading that was not finite; NaN-safe) or UNMEASURED (exit 2: she was
+// never up, so there is no reading; a fight that never happened must not read as the bound's RED, nor as a pass)
+let code = 0;
+if (WARD_BAR !== null) {
+  if (!(ledger.wardUpN > 0)) {
+    console.log(`WARD UNMEASURED: she was never up (0 frames booked; woken: ${!s.dormant}): no reading against the bar (<= ${WARD_BAR})`);
+    code = 2;
+  } else {
+    const ok = ledger.wardUpBad === 0 && Number.isFinite(ledger.wardUp) && ledger.wardUp <= WARD_BAR;
+    console.log(`WARD ${ok ? 'PASS' : 'FAIL'}: highest ${ledger.wardUp} u over her ground (bar <= ${WARD_BAR}: main's highest + 0.5) over ${ledger.wardUpN} frames up` + (ledger.wardUpBad ? `, ${ledger.wardUpBad} readings not finite` : ''));
+    if (!ok) code = 1;
+  }
+}
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 if (errs.length) console.log('CONSOLE', errs.slice(0, 5).join('\n'));
 c.close();
 stop();
-process.exit(0);
+process.exit(code);
