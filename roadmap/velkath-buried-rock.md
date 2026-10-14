@@ -1,0 +1,28 @@
+---
+title: Velkath buried — a rock with a harpoon in it
+status: backlog
+tags: brooder, sleepers, rite, particles, design
+updated: 2026-10-14
+---
+Michael's idea: Velkath sleeps fully buried in the sand and reads as a rock with an old harpoon in it. Pulling the harpoon wakes her, and she rises out of the sand as it pours off her in a dust plume. In design with Michael; to be built after the sea-floor relief lands.
+
+## Detail
+- **Michael, 2026-10-14:** "it would be interesting if she was buried in the sand and looked like a rock. Sal would just see what looked like a harpoon in the rock and pulls it out and she rises from the sand. There would be a dust plum as the sand falls off of her"
+- **Builds on:**
+  - her bedded shale-ridge sleep and its generated silt drift (`brooder.js` dormant terms, `brood.js`; polish-brooder follow-ups);
+  - the wake heave, about 6 s;
+  - `plume.js` silt clouds, and the `SIGHT` rule that a cloud blinds her (brooder-ground-plume);
+  - the harpoon seat in her near flank (`sleeper/harpoon.js` `seat()`; fissure-and-harpoon);
+  - her new bed on the relief's flat, turned so the harpoon sits in her left flank, with her stance raised (seafloor-relief, Task 8b; Michael 2026-10-14).
+- **Acceptance (the spec will sharpen these):**
+  - From 10–20 u, in his own light, a player reads a rock with a harpoon in it, not a creature.
+  - The pull raises her out of the sand. The plume reads as sand falling off her.
+  - Once she stands, the rite plays as shipped: riteplay parity against main, the same pre-registered campaign as relief Task 8b.
+- **Hazards:**
+  - The harpoon seat must still find a seam in her drawn shell. A mound under her broke it in relief Task 8b's bank mutant.
+  - Her wards stay buried and dark until she stands.
+  - A wake plume blinds her by the existing `SIGHT` rule. It must not hand him a free blind window unless that is intended.
+  - Any change to where the harpoon sits moves the fight's opening, so re-measure fight parity.
+
+## Log
+- 2026-10-14 — created from Michael's idea; brainstorming started (it changes her sleep and her wake, so it gets a spec and a plan).
