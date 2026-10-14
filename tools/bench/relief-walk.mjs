@@ -4,13 +4,21 @@
 // Env  RW_REPS=<n>   walks per line and direction (boots 2, lens 3)
 //      RW_JSON=<f>   write the result (the lens's main run hands its bar to the branch's through this file)
 //      RW_MAIN=<f>   (lens, on the branch) main's RW_JSON: the bars below are main's own numbers on the same probe
-//      RW_RED=<v>    an opt-in RED case, never part of the default run. It must fail ITS bar: exit 1 = it did, exit 3 = that bar did NOT fail
+//      RW_RED=<v>    an opt-in RED case, never part of the default run. It must fail ITS bar: exit 5 = it did, exit 3 = that bar did NOT fail
 //                    boots noslope   window.__sal.slope = false (diver.js's slope rig off, a live knob it ships): the boots must fail the gap bar
 //                    lens  nofloor   window.__camNoFloor = true (game.js updateCamera's floor clamp off): the lens must fail clearance
 //                    hose  short20   the line is 20 u short of the binding point's range (survival.hose = range - 20): the walk must yank
 //                    hose  past20    the ruled case as written: the walk goes on 20 u past the binding point, straight out. It cannot yank (below)
 //      RW_UP_PITCH=<rad> (lens) the look-up pitch of the stress walks and stands (0.9, inside the mouse's +-1.45 rad: player.js)
-//      RW_STOP=lines, RW_ONLY=wall, RW_DUMPLIB=<f>   dev: stop after the lines / the wall-foot control alone / write the page library for node --check
+//      RW_STOP=lines, RW_ONLY=wall   dev runs: stop after the lines / the wall-foot control alone. They print 'DEV RUN - NOT A VERDICT' and exit 2
+//      RW_DUMPLIB=<f>   dev: write the page library to a file for node --check (exits 0 before any Chrome; it never touches a debug port)
+//      node tools/bench/relief-walk.mjs selftest   OFFLINE (no browser, no port): the analysis on synthetic cases (a place swoop + an in-walk swoop, a
+//                    disturbed walk, a NaN clearance, a bad main JSON); exit 0 = all hold, 1 = one does not
+// EXIT CODES: 0 pass | 1 a bar failed (or the probe crashed: an uncaught throw is also 1) | 2 usage, environment, a refused port, a dev run |
+//             3 an RW_RED run whose targeted bar did NOT fail (the case discriminates nothing) | 5 an RW_RED run whose targeted bar failed, as it must
+//             (5, not 1: a crash must not read as a RED that worked) | 130 killed (SIGINT / SIGTERM / SIGHUP: the exit handler stops OUR Chrome).
+// PORTS: the Chrome debug port (DRV_PORT, 9520) must be free: if it already answers /json/version the probe refuses (exit 2) and touches nothing, since
+// drv.mjs stop() is a pkill of that port's Chrome and would kill whoever holds it. Only a Chrome this run started is ever stopped.
 // All three modes run on the live loop: W is a real CDP key (the mouse's job, yaw and pitch, is set in the page, as the other real-key probes
 // do: fissure-probe climb-out, the t12 walks), and __bench.place only puts him at a line's foot. NEVER __bench.step: game.js's bench hold(false)
 // adds wall time to the game clock on every step (Ruling 42), so a stepped probe needs fullplay-gate.mjs's clock plug; a live loop has no hold and
@@ -52,9 +60,9 @@
 //         face behind him (the rim wall's foot), level and looking up. Per sim frame: clearance = camera.y - shutFloorY(camera.x, camera.z, 0),
 //         the lens's step (|d camera| / dt, u/s), the boom (the lens to his centre). The lens is booked from the frame after the place, so the
 //         2.6 s settle is booked too; W is pressed at the end of it. PASS (Ruling 48, like for like): CLEARANCE >= 0.3 u on EVERY frame of every
-//         walk and stand, no exclusions; (a) THE SWOOP is an event: each walk's first boom pull-in IN THE WALK (the boom falls >= 1 u; see below),
+//         walk and stand, no exclusions; (a) THE SWOOP is an event: every boom pull-in IN THE WALK (a fall of >= 1 u that starts after W; see below), the max of its peaks per walk,
 //         its peak frame step; each relief line's peak <= the MAX peak over main's A, B and S, + 0.5 u/s (identical runs scatter by 0.1-0.25); a
-//         line pulled in at the place has none in the walk (the place's own peak scatters 14-26 u/s, printed, not gated); (b) THE SETTLED WALK: the frames from 2 s after that pull-in
+//         line whose boom stays in after the place has none in the walk (the place's own peak scatters 14-26 u/s, printed, not gated); (b) THE SETTLED WALK: the frames from 2 s after the walk's FIRST fall
 //         has completed (never before W), on both builds alike: each relief line's settled p99 <= main's on its equivalent line (riser and upland:
 //         A, the steepest 20-35 deg line, ruled, and the closest in mean slope; steep: S, main's only line above 36 deg); both + 0.1 u/s (the
 //         table's precision; the strict difference is printed). Printed beside them: where each first pull-in fell (at the place, in the walk),
@@ -81,8 +89,8 @@
 const [, , MODE, PORT] = process.argv;
 const RED = process.env.RW_RED;
 const RED_OF = { boots: ['noslope'], lens: ['nofloor'], hose: ['past20', 'short20'] };
-if (!RED_OF[MODE] || !PORT) { console.error('usage: node tools/bench/relief-walk.mjs <boots|lens|hose> <port>'); process.exit(2); }
-if (RED !== undefined && !RED_OF[MODE].includes(RED)) {   // a RED this mode lacks would be ignored, and the run would pass as GREEN
+if (MODE !== 'selftest' && (!RED_OF[MODE] || !PORT)) { console.error('usage: node tools/bench/relief-walk.mjs <boots|lens|hose> <port>   |   selftest'); process.exit(2); }
+if (MODE !== 'selftest' && RED !== undefined && !RED_OF[MODE].includes(RED)) {   // a RED this mode lacks would be ignored, and the run would pass as GREEN
   console.error(`RW_RED: mode ${MODE} has ${RED_OF[MODE].length ? 'the variants ' + RED_OF[MODE].join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 process.env.DRV_PORT = process.env.DRV_PORT || '9520';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
@@ -90,10 +98,8 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-process.env.DRV_DIR = mkdtempSync(join(tmpdir(), 'abyssa-relief-walk-'));   // a fresh profile: no save, no caches
-const { start, stop, connect, sleep } = await import('./drv.mjs');
-process.on('exit', () => { stop(); try { rmSync(process.env.DRV_DIR, { recursive: true, force: true }); } catch (e) { } });
 const HERE = dirname(fileURLToPath(import.meta.url)), REPO = join(HERE, '..', '..');
+const DEV = process.env.RW_STOP || process.env.RW_ONLY;
 
 // ---- the bars ----
 const GAP_BAR = 0.15, GAP_DEG = 35, MIN_FRAMES = 300;          // boots: p95 |gap| on <= 35 deg ground
@@ -110,6 +116,118 @@ const bad = (tag, msg) => { tags.add(tag); fail.push(msg); };
 const pct = (a, p) => { if (!a.length) return NaN; const s = Float64Array.from(a).sort(), f = (s.length - 1) * p, i = Math.floor(f); return s[i] + (s[Math.min(s.length - 1, i + 1)] - s[i]) * (f - i); };
 const f3 = v => Number.isFinite(v) ? v.toFixed(3) : String(v), f2 = v => Number.isFinite(v) ? v.toFixed(2) : String(v), f1 = v => Number.isFinite(v) ? v.toFixed(1) : String(v);
 const pad = (v, n) => String(v).padEnd(n), lpad = (v, n) => String(v).padStart(n);
+const ord = n => { const t = ['th', 'st', 'nd', 'rd'], v = n % 100; return n + (t[(v - 20) % 10] || t[v] || t[0]); };
+
+// ---- the analysis: pure functions of the booked frames (the offline selftest below runs them on synthetic frames) ----
+const SWOOP_DROP = 1.0, SETTLE_AFTER = 2.0;
+const nBelowClear = a => a.filter(v => !(v >= CLEAR_BAR)).length;   // a NaN clearance is a failure, not a pass
+// EVERY fall of the boom by >= SWOOP_DROP u (the lens's swoop): from the frame it starts to falling for 6 frames running at most 0.01/frame; the
+// peak frame step (u/s) from its start to 3 frames after it ends; where = 'place' if it starts before W was pressed (walkIdx), else 'walk'
+function swoopsOf(R) {
+  const bm = R.f.bm, cst = R.f.cst, n = bm.length, W = R.walkIdx || 0, out = []; let tAcc = 0; const tt = R.f.dt.map(d => (tAcc += d));
+  for (let k = 1; k < n;) {
+    if (bm[k] < bm[k - 1] - 0.02) {
+      let ke = k, calm = 0;
+      while (ke < n - 1 && calm < 6) { if (bm[ke + 1] < bm[ke] - 0.01) calm = 0; else calm++; ke++; }
+      ke -= calm;   // the last frame the boom was still falling
+      if (bm[k - 1] - bm[ke] >= SWOOP_DROP) {
+        let pk = 0, at = k, rl = 0; for (let j = k; j <= Math.min(n - 1, ke + 3); j++) { if (cst[j] > pk) { pk = cst[j]; at = j; } if (R.f.crl[j] > rl) rl = R.f.crl[j]; }
+        out.push({ k0: k, kc: ke, from: bm[k - 1], to: bm[ke], peak: pk, rel: rl, u: R.f.pg[at], where: k < W ? 'place' : 'walk', tC: tt[ke], tWalk: tt[ke] - (W ? tt[W - 1] : 0) });
+      }
+      k = ke + 1; continue;
+    }
+    k++;
+  }
+  return out;
+}
+// one line's swoop row from its walks. The FIRST fall of a walk fixes where its settled window starts (Ruling 48 b); gate (a) takes, per walk, the max
+// peak over EVERY fall that starts in the walk (a walk pulled in at the place can swoop again later: main's B, at u 11), so a place fall never hides it
+function swoopRow(rs) {
+  const all = rs.map(swoopsOf), first = all.map(a => a[0] || null), inW = all.map(a => a.filter(w => w.where === 'walk')), placeFirst = first.filter(w => w && w.where === 'place');
+  const wpk = inW.map(a => a.length ? Math.max(...a.map(w => w.peak)) : null).filter(v => v !== null), fw = inW.find(a => a.length);
+  const ff = first.filter(Boolean), r2 = v => Math.round(v * 100) / 100, r1 = v => Math.round(v * 10) / 10;
+  return { runs: rs.length, inWalk: wpk.length, atPlace: placeFirst.length, none: first.filter(w => !w).length, nWalkFalls: inW.reduce((s, a) => s + a.length, 0),
+    peak: ff.length ? r2(Math.max(...ff.map(w => w.peak))) : null, peakMin: ff.length ? r2(Math.min(...ff.map(w => w.peak))) : null,
+    peakWalk: wpk.length ? r2(Math.max(...wpk)) : null, peakWalkMin: wpk.length ? r2(Math.min(...wpk)) : null, atU: fw ? r1(fw[0].u) : null,
+    boom: fw ? [r1(fw[0].from), r1(fw[0].to)] : ff.length ? [r1(ff[0].from), r1(ff[0].to)] : null, doneAtS: fw ? r1(fw[0].tWalk) : null,
+    peakPlace: placeFirst.length ? r2(Math.max(...placeFirst.map(w => w.peak))) : null, first };
+}
+// the frames of the settled walk (never before W; from SETTLE_AFTER s after the walk's first fall has completed)
+function settledOf(R, sw) { const W = R.walkIdx || 0; let tAcc = 0; const tt = R.f.dt.map(d => (tAcc += d)); let j0 = W;
+  if (sw) { const tS = sw.tC + SETTLE_AFTER; while (j0 < tt.length && tt[j0] < tS) j0++; } return R.f.cst.slice(Math.max(1, j0)); }
+// what is wrong with a walk, as strings: a walk the retries could not clean is not a reading of the ground (its stagger and airborne frames are
+// dropped from the gap sample, which then shrinks without a word), and a walk walk() never vouched for has no `disturbed` at all
+function walkProblems(r) {
+  const p = [];
+  if (!Array.isArray(r.disturbed)) p.push('never checked for disturbance (no `disturbed` list)');
+  else if (r.disturbed.length) p.push(`still disturbed after ${r.attempt || '?'} attempts: ${r.disturbed.join(', ')}` + (r.stall && r.stall.n > 0 ? ` (first stall ${JSON.stringify(r.stall.first)})` : '') + (r.why !== 'arrived' ? ` (the walk ended '${r.why}' at ${r.prog}/${r.total} u)` : ''));
+  if (r.nav && (r.nav.dead || (r.surv && r.surv.torn > 0))) p.push(`state ${r.nav.state}, torn ${r.surv && r.surv.torn}: a bite is not a gait reading`);
+  return p;
+}
+// main's RW_JSON, vetted before a Chrome starts: an old, a RED, a short or a hand-made file would set the bars silently
+function checkMain(J) {
+  const p = [], L = J && J.lens;
+  if (!J || typeof J !== 'object') return ['not a JSON object'];
+  if (J.tag !== 'main') p.push(`tag ${JSON.stringify(J.tag)}, not "main": this is not main's run`);
+  if (J.mode !== 'lens') p.push(`mode ${JSON.stringify(J.mode)}, not "lens"`);
+  if (J.red !== null) p.push(`red ${JSON.stringify(J.red)}: a RED run sets no bar`);
+  if (!L || !L.rows || L.schema !== 2) p.push('lens.schema is not 2: written by an older probe (re-run main)');
+  else {
+    for (const n of ['A', 'B', 'S']) { const r = L.rows[n]; if (!r || !r.settled || !r.swoop) p.push(`no row ${n}`); else if (!(r.settled.n >= MIN_FRAMES)) p.push(`${n}: only ${r.settled.n} settled frames (need ${MIN_FRAMES})`); }
+    if (!Number.isFinite(L.maxSwoopPeakWalk)) p.push('no swoop peak in main\'s walks: no bar for gate (a)');
+  }
+  return p;
+}
+
+// ---- OFFLINE SELFTEST (node tools/bench/relief-walk.mjs selftest): no browser, no port; the analysis above on synthetic frames ----
+if (MODE === 'selftest') {
+  let bad_ = 0; const t = (name, ok, v) => { console.log((ok ? 'PASS ' : 'FAIL ') + name + (v === undefined ? '' : ' -> ' + JSON.stringify(v))); if (!ok) bad_++; };
+  // a synthetic walk: 60 Hz, the boom starts at 9.3 and is pulled in to 3.5 over the first 20 frames (the place's snap, peak step 20 u/s), W is pressed at
+  // frame 156 (2.6 s), the boom eases back out to 9.4 by frame 260 and is pulled in again from frame 340 to 360 (an in-walk swoop, peak step 12 u/s)
+  const mk = (withWalkSwoop) => { const n = 600, bm = [], cst = [], dt = [], crl = [], pg = [];
+    for (let k = 0; k < n; k++) { let b = 3.5, c = 2; if (k === 0) { b = 9.3; c = 0; } else if (k <= 20) { b = 9.3 - (5.8 * k) / 20; c = k === 3 ? 20 : 8; }
+      else if (k >= 200 && k <= 260) b = 3.5 + (5.9 * (k - 200)) / 60; else if (k > 260 && k < 340) b = 9.4; else if (withWalkSwoop && k >= 340 && k <= 360) { b = 9.4 - (5.9 * (k - 340)) / 20; c = k === 345 ? 12 : 6; } else if (k > 360 && withWalkSwoop) b = 3.5; else if (k >= 340) b = 9.4;
+      bm.push(b); cst.push(c); dt.push(k ? 1 / 60 : 0); crl.push(1); pg.push(k / 20); }
+    return { f: { bm, cst, dt, crl, pg }, walkIdx: 156 }; };
+  const sw = swoopsOf(mk(true)), only = swoopsOf(mk(false));
+  t('swoopsOf finds BOTH falls of a walk pulled in at the place and again in the walk', sw.length === 2 && sw[0].where === 'place' && sw[1].where === 'walk', sw.map(w => [w.where, w.peak]));
+  const row = swoopRow([mk(true), mk(true)]);
+  t('swoopRow: the first fall is at the place (peak 20) yet the in-walk peak 12 is booked, not skipped', row.atPlace === 2 && row.peak === 20 && row.peakWalk === 12 && row.inWalk === 2 && row.nWalkFalls === 2, { atPlace: row.atPlace, peak: row.peak, peakWalk: row.peakWalk, inWalk: row.inWalk });
+  const row0 = swoopRow([mk(false)]);
+  t('swoopRow: a walk with only the place fall has no in-walk peak (null, not 0)', row0.peakWalk === null && row0.atPlace === 1 && only.length === 1, { peakWalk: row0.peakWalk });
+  t('the old first-fall-only reading would have missed it (its first fall is the place)', sw[0].where === 'place');
+  // disturbed walks fail
+  const clean = { line: 'x', dir: 'rev', rep: 1, attempt: 1, disturbed: [], why: 'arrived', stall: { n: 0 }, nav: { dead: false }, surv: { torn: 0 }, prog: 38.8, total: 40 };
+  const dirty = { ...clean, attempt: 3, disturbed: ['36.3 u off the line', '576 airborne planted-boot frames'], why: 'stalled', stall: { n: 222, first: { t: 36.5 } } };
+  t('walkProblems: a clean walk has none', walkProblems(clean).length === 0);
+  t('walkProblems: a walk still disturbed after its retries is a problem', walkProblems(dirty).length === 1 && /still disturbed after 3 attempts/.test(walkProblems(dirty)[0]), walkProblems(dirty));
+  t('walkProblems: a walk nobody vouched for (no disturbed list) is a problem', walkProblems({ ...clean, disturbed: undefined }).length === 1);
+  t('walkProblems: a bite (torn) is a problem', walkProblems({ ...clean, surv: { torn: 1 } }).length === 1);
+  // clearance
+  t('nBelowClear counts a NaN as failing', nBelowClear([1, NaN, 0.1, 0.3, 2]) === 2, nBelowClear([1, NaN, 0.1, 0.3, 2]));
+  // main's json
+  const goodRow = { settled: { n: 3800 }, swoop: {} }, good = { tag: 'main', mode: 'lens', red: null, lens: { schema: 2, maxSwoopPeakWalk: 15.87, rows: { A: goodRow, B: goodRow, S: goodRow } } };
+  t('checkMain: a good main json passes', checkMain(good).length === 0, checkMain(good));
+  t('checkMain: a branch json, a RED json, an old schema, a short settled window and a missing bar are each refused',
+    checkMain({ ...good, tag: 'relief' }).length === 1 && checkMain({ ...good, red: 'nofloor' }).length === 1 && checkMain({ ...good, lens: { ...good.lens, schema: 1 } }).length === 1
+    && checkMain({ ...good, lens: { ...good.lens, rows: { ...good.lens.rows, S: { settled: { n: 12 }, swoop: {} } } } }).length === 1 && checkMain({ ...good, lens: { ...good.lens, maxSwoopPeakWalk: null } }).length === 1);
+  t('ord: 1st 2nd 3rd 4th 11th 12th 21st 111th', [1, 2, 3, 4, 11, 12, 21, 111].map(ord).join(' ') === '1st 2nd 3rd 4th 11th 12th 21st 111th', [1, 2, 3, 4, 11, 12, 21, 111].map(ord).join(' '));
+  console.log(bad_ ? `SELFTEST FAIL (${bad_})` : 'SELFTEST PASS'); process.exit(bad_ ? 1 : 0);
+}
+
+// ---- the run: a fresh profile, the debug port refused if it is taken, only OUR Chrome ever stopped ----
+process.env.DRV_DIR = mkdtempSync(join(tmpdir(), 'abyssa-relief-walk-'));   // a fresh profile: no save, no caches
+const { start, stop, connect, sleep } = await import('./drv.mjs');
+let chromeStarted = false;   // drv.mjs stop() is a pkill of the debug port's Chrome: it runs only if THIS run started one
+process.on('exit', () => { if (chromeStarted) stop(); try { rmSync(process.env.DRV_DIR, { recursive: true, force: true }); } catch (e) { } });
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(130));   // the exit handler above then stops our Chrome (velfix-gate.mjs's pattern)
+if (DEV) console.log('DEV RUN - NOT A VERDICT (RW_STOP / RW_ONLY): this run exits 2 whatever it reads');
+// main's RW_JSON is vetted now, before anything starts
+let mainRaw = null;
+if (MODE === 'lens' && process.env.RW_MAIN) {
+  try { mainRaw = JSON.parse(readFileSync(process.env.RW_MAIN, 'utf8')); } catch (e) { console.error('RW_MAIN: ' + e.message); process.exit(2); }
+  const probs = checkMain(mainRaw); if (probs.length) { console.error('RW_MAIN ' + process.env.RW_MAIN + ' is not a usable main run:\n  ' + probs.join('\n  ')); process.exit(2); }
+}
 
 // ---- the ranking: pure, self-contained (it runs in node on the replica AND in the page on main's terrainH; toString() carries it) ----
 function mkLim(tbl) {   // player.js's wall-foot clamp: lerp over the 128-bearing table
@@ -343,6 +461,11 @@ const LIB = `(async () => {
 
 if (process.env.RW_DUMPLIB) { writeFileSync(process.env.RW_DUMPLIB, 'const lib = ' + LIB + ';\n'); process.exit(0); }   // dev: the page library as a file, for node --check (it is a string to node)
 // ---- boot: about:blank, the domains on, the focus a player's window has, then the game ----
+// the debug port must be free: whoever answers on it (Task 10's Chrome, a stale run) is not ours to pkill, and not ours to drive
+try { const r = await fetch(`http://127.0.0.1:${process.env.DRV_PORT}/json/version`, { signal: AbortSignal.timeout(2000) });
+  console.error(`the debug port ${process.env.DRV_PORT} already answers /json/version (HTTP ${r.status}): not starting, nothing touched`); process.exit(2); }
+catch (e) { if (!(e && e.cause && e.cause.code === 'ECONNREFUSED')) { console.error(`the debug port ${process.env.DRV_PORT} is not free (${e && e.name}: ${e && e.cause && e.cause.code || e && e.message}): not starting, nothing touched`); process.exit(2); } }
+chromeStarted = true;
 await start('about:blank');
 const c = await connect();
 await c.send('Runtime.enable'); await c.send('Log.enable'); await c.send('Page.enable');
@@ -382,7 +505,7 @@ let first = null;
 for (const nm of names) {
   const p = await pickClean(cands[nm], nm === 'B' ? first : null);
   if (!p) { fail.push(`no clean ${nm} line among ${cands[nm].length} candidates`); continue; }
-  console.log(`${nm}: the ${cands[nm].indexOf(p) + 1}th ranked candidate is the first clean one (of ${cands[nm].length})`);
+  console.log(`${nm}: the ${ord(cands[nm].indexOf(p) + 1)} ranked candidate is the first clean one (of ${cands[nm].length})`);
   if (nm === 'A') first = p;
   const y = await c.ev(`[window.__rw.h(${p.lo[0]}, ${p.lo[1]}), window.__rw.h(${p.hi[0]}, ${p.hi[1]})]`);
   lines.push({ name: nm, kind: 'line', pts: [p.lo, p.hi], info: { centre: p.centre.map(v => +v.toFixed(1)), inBand: p.n + '/' + (2 * (SEG / 2) + 1), meanDeg: p.mean, maxDeg: p.max, centreDeg: p.s, rise: +(y[1] - y[0]).toFixed(1) } });
@@ -393,7 +516,7 @@ if (MODE !== 'hose') {   // the raft column -> her bed: from the column's free c
   else lines.push({ name: 'bed', kind: 'route', pts: r.pts, info: { legs: r.pts.length - 1, len: +r.len.toFixed(1), from: r.pts[0], to: r.pts[r.pts.length - 1], dBed: +Math.hypot(r.pts[r.pts.length - 1][0] - bedAt.x, r.pts[r.pts.length - 1][1] - bedAt.z).toFixed(1) } });
 }
 for (const L of lines) console.log(`line ${pad(L.name, 6)} ${L.kind}: ${JSON.stringify(L.info)}`);
-if (process.env.RW_STOP === 'lines') { console.log(fail.length ? 'FAIL ' + JSON.stringify(fail) : 'lines ok'); c.close(); stop(); process.exit(0); }   // dev: the lines, no walk
+if (process.env.RW_STOP === 'lines') { console.log(fail.length ? 'lines: ' + JSON.stringify(fail) : 'lines ok'); console.log('DEV RUN - NOT A VERDICT'); c.close(); process.exit(2); }   // dev: the lines, no walk (exit 2: the exit handler stops our Chrome)
 
 // ---- the walker ----
 const yawOf = (a, b) => Math.atan2(b[0] - a[0], b[1] - a[1]);
@@ -435,9 +558,7 @@ const tables = {};
 const frameTimes = rs => { const dt = rs.flatMap(r => r.f.dt), raf = rs.flatMap(r => r.f.raf).filter(v => v > 0); return { frames: dt.length, dtP50ms: +f2(pct(dt, 0.5) * 1000), dtP95ms: +f2(pct(dt, 0.95) * 1000), dtMaxMs: +f2(Math.max(...dt) * 1000), over50ms: dt.filter(d => d > 0.0499).length, rafP50ms: +f2(pct(raf, 0.5)), rafMaxMs: +f2(Math.max(...raf)), skippedTicks: rs.reduce((s, r) => s + r.skips, 0) }; };
 const STEEP = n => n === 'steep' || n === 'S';   // the 35-45 deg line: Review Focus 4's riser. Walked and booked everywhere; the boots' gap and the lens's step are only REPORTED on it (steeper than 35 is not gated), its lens clearance is gated
 const progressVerdict = (rs) => { for (const r of rs) {
-  if (r.stall.n > 0) fail.push(`${r.line} ${r.dir} #${r.rep}: ${r.stall.n} frames in 2 s windows under ${STALL_MIN} u moved (first ${JSON.stringify(r.stall.first)})`);
-  if (r.why !== 'arrived') fail.push(`${r.line} ${r.dir} #${r.rep}: the walk ended '${r.why}' at ${f1(r.prog)}/${f1(r.total)} u`);
-  if (r.nav.dead || r.surv.torn > 0) fail.push(`${r.line} ${r.dir} #${r.rep}: disturbed (state ${r.nav.state}, torn ${r.surv.torn}): a bite is not a gait reading`);
+  for (const m of walkProblems(r)) bad('progress', `${r.line} ${r.dir} #${r.rep}: ${m}`);
   if (r.attempt > 1) console.log(`  (${r.line} ${r.dir} #${r.rep} took ${r.attempt} attempts)`); } };
 const lonely = async () => { const d = await c.ev(`!!window.lev.dormant`); if (!d) fail.push('her lev.dormant is false after the walks (a walk woke her)'); return d; };
 let result = { mode: MODE, tag: TAG, red: RED || null, port: PORT };
@@ -467,7 +588,7 @@ if (MODE === 'boots' || MODE === 'lens') {
       wall = { spot: [+sp.x.toFixed(1), +sp.z.toFixed(1)], rise: sp.rise };
       for (const [nm, pitch] of [['level', -0.1], ['up', UP_PITCH]]) {
         const R = await walk({ name: 'wall-' + nm, pts: [[sp.x, sp.z], to] }, 'fwd', 1, { stand: true, maxT: 3, stopAt: -1, noStop: true, pitch });
-        const clr = R.f.clr; wall[nm] = { pitch, frames: clr.length, minClr: +f3(Math.min(...clr)), below: clr.filter(v => v < CLEAR_BAR).length, boomMin: +f2(Math.min(...R.f.bm)) };
+        const clr = R.f.clr; wall[nm] = { pitch, frames: clr.length, minClr: +f3(Math.min(...clr)), below: nBelowClear(clr), boomMin: +f2(Math.min(...R.f.bm)) };
         console.log(`WALL-FOOT CONTROL ${nm} (${TAG}${RED ? ', RED ' + RED : ''}): stood at (${wall.spot}), pitch ${pitch}, ground ${wall.rise} u higher 2.6 u behind him: ${clr.length} frames, the lens's lowest clearance ${wall[nm].minClr} u (bar ${CLEAR_BAR}), ${wall[nm].below} frames under it, the boom ${wall[nm].boomMin} u at its shortest`);
         if (clr.length < 100) bad('vacuous', `the wall-foot control (${nm}) booked ${clr.length} frames`);
         if (wall[nm].below > 0) bad('clearance', `wall-foot control (${nm}): the lens was under ${CLEAR_BAR} u over the floor on ${wall[nm].below} of ${clr.length} frames (lowest ${wall[nm].minClr} u)`);
@@ -515,62 +636,40 @@ if (MODE === 'boots' || MODE === 'lens') {
     // THE LENS. Ruling 48: the step is compared like for like, in two parts. (a) THE SWOOP is an event: game.js starts the boom at its full
     // 9 u at every place and pulls it in (clearCamDistance, eased at 14/s) where its line meets the hill, so each walk has a first pull-in,
     // booked from the place on (the settle too: the lens is booked from the frame after the place, W is pressed 2.6 s later): the boom
-    // falling by >= 1 u, its peak frame step (u/s) from its start to 3 frames after it ends (the boom no longer falling). It is in the SETTLE
+    // falling by >= 1 u, its peak frame step (u/s) from its start to 3 frames after it ends (the boom no longer falling); swoopsOf finds EVERY
+    // such fall, and gate (a) takes the max peak over every one that starts at or after W (a walk pulled in at the place can swoop again). It is in the SETTLE
     // when the hill is already behind him at the line's top (the spring's step response to the place: 14-25 u/s, it varies with the frame the
     // first booking lands on) or in the WALK (the hill meets the boom as he descends: 15.6-16.2 u/s, the spring's own ceiling). Ruling 48's
-    // 'first pull-in' is gated where it falls IN THE WALK (a lens event of the descent); the place's is printed as INFO. (b) THE SETTLED WALK:
-    // the frames from 2 s after that pull-in has completed (never before W), on both builds alike; no swoop in the walk = the whole walk.
-    const SWOOP_DROP = 1.0, SETTLE_AFTER = 2.0;
-    const swoopOf = R => {
-      const bm = R.f.bm, cst = R.f.cst, n = bm.length, W = R.walkIdx || 0; let tAcc = 0; const tt = R.f.dt.map(d => (tAcc += d));
-      for (let k = 1; k < n;) {
-        if (bm[k] < bm[k - 1] - 0.02) {
-          let ke = k, calm = 0;
-          while (ke < n - 1 && calm < 6) { if (bm[ke + 1] < bm[ke] - 0.01) calm = 0; else calm++; ke++; }
-          ke -= calm;   // the last frame the boom was still falling
-          if (bm[k - 1] - bm[ke] >= SWOOP_DROP) {
-            let pk = 0, at = k, rl = 0; for (let j = k; j <= Math.min(n - 1, ke + 3); j++) { if (cst[j] > pk) { pk = cst[j]; at = j; } if (R.f.crl[j] > rl) rl = R.f.crl[j]; }
-            return { k0: k, kc: ke, from: bm[k - 1], to: bm[ke], peak: pk, rel: rl, u: R.f.pg[at], where: k < W ? 'place' : 'walk', tC: tt[ke], tWalk: tt[ke] - (W ? tt[W - 1] : 0) };
-          }
-          k = ke + 1; continue;
-        }
-        k++;
-      }
-      return null;
-    };
-    const settledOf = (R, sw) => { const W = R.walkIdx || 0; let tAcc = 0; const tt = R.f.dt.map(d => (tAcc += d)); let j0 = W;
-      if (sw) { const tS = sw.tC + SETTLE_AFTER; while (j0 < tt.length && tt[j0] < tS) j0++; } return R.f.cst.slice(Math.max(1, j0)); };
+    // pull-ins are gated where they fall IN THE WALK (a lens event of the descent), every one of them; the place's is printed as INFO. (b) THE SETTLED WALK:
+    // the frames from 2 s after the walk's first pull-in has completed (never before W), on both builds alike (a later swoop stays in it: its frames
+    // over 6 u/s are counted in the table); no pull-in at all = the whole walk.
     const walkOf = (r, key) => r.f[key].slice(Math.max(1, r.walkIdx || 0));   // the walk's own frames (W pressed), as before the settle was booked
-    const mainJ = process.env.RW_MAIN ? JSON.parse(readFileSync(process.env.RW_MAIN, 'utf8')).lens : null;
+    const mainJ = mainRaw ? mainRaw.lens : null;   // vetted at the start (checkMain)
     const rows = {}, linesAll = lines.concat(lines.map(l => ({ ...l, name: l.name + '/up' })));
     console.log(`\nLENS (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): clearance = camera.y - shutFloorY(camera.x, camera.z, 0), every frame from W pressed; step = |d camera| / dt (u/s), rel = against him; walked DOWN; '/up' = looking up (pitch ${UP_PITCH})`);
     console.log(pad('line', 9) + lpad('runs', 5) + lpad('frames', 8) + '  | ' + lpad('min clr', 8) + lpad('p1 clr', 8) + lpad('<0.3', 6) + lpad('settle clr', 11) + lpad('<0.3 settle', 12) + '  | ' + lpad('step p50', 9) + lpad('p95', 7) + lpad('p99', 7) + lpad('max', 7) + '  | ' + lpad('boom p50', 9) + lpad('min', 6) + '  | ' + lpad('slope p50', 10) + lpad('max', 6));
     for (const L of linesAll) {
       const rs = runs.filter(r => r.line === L.name), clr = rs.flatMap(r => walkOf(r, 'clr')), cst = rs.flatMap(r => walkOf(r, 'cst')), sl = rs.flatMap(r => walkOf(r, 'sl')), bm = rs.flatMap(r => walkOf(r, 'bm'));
-      const setl = rs.flatMap(r => r.f.clr.slice(0, r.walkIdx || 0)), below = clr.filter(v => v < CLEAR_BAR).length;
+      const setl = rs.flatMap(r => r.f.clr.slice(0, r.walkIdx || 0)), below = nBelowClear(clr);
       // the settle's own clearance (not gated: the frames between the place and W): the snap puts the lens at its full boom behind him, in the hill
       // where one stands behind the line's top, for the frames before the first update lifts it; counted and dated so it is not hidden
-      const setBelow = rs.map(r => { const c = r.f.clr.slice(0, r.walkIdx || 0); let last = -1, n = 0; c.forEach((v, k) => { if (v < CLEAR_BAR) { n++; last = k; } }); return { n, last: last + 1 }; });
-      const sws = rs.map(swoopOf), walkSw = sws.filter(w => w && w.where === 'walk'), placeSw = sws.filter(w => w && w.where === 'place');
+      const setBelow = rs.map(r => { const c = r.f.clr.slice(0, r.walkIdx || 0); let last = -1, n = 0; c.forEach((v, k) => { if (!(v >= CLEAR_BAR)) { n++; last = k; } }); return { n, last: last + 1 }; });
+      const { first: sws, ...swoop } = swoopRow(rs);   // sws: each walk's FIRST fall, from which its settled window starts
       const setd = rs.flatMap((r, i) => settledOf(r, sws[i]));
       rows[L.name] = { runs: rs.length, frames: clr.length, minClr: +f3(Math.min(...clr)), p1Clr: +f3(pct(clr, 0.01)), below, settleMinClr: setl.length ? +f3(Math.min(...setl)) : null, settleBelow: Math.max(...setBelow.map(x => x.n)), settleBelowLastFrame: Math.max(...setBelow.map(x => x.last)),
         stepP50: +f2(pct(cst, 0.5)), stepP95: +f2(pct(cst, 0.95)), stepP99: +f2(pct(cst, 0.99)), stepMax: +f2(Math.max(...cst)), boomP50: +f2(pct(bm, 0.5)), boomMin: +f2(Math.min(...bm)), slopeP50: +f1(pct(sl, 0.5)), slopeMax: +f1(Math.max(...sl)),
-        swoop: { runs: rs.length, inWalk: walkSw.length, atPlace: placeSw.length, none: sws.filter(w => !w).length,
-          peak: walkSw.length + placeSw.length ? +f2(Math.max(...sws.filter(Boolean).map(w => w.peak))) : null, peakMin: walkSw.length + placeSw.length ? +f2(Math.min(...sws.filter(Boolean).map(w => w.peak))) : null,
-          peakWalk: walkSw.length ? +f2(Math.max(...walkSw.map(w => w.peak))) : null, peakWalkMin: walkSw.length ? +f2(Math.min(...walkSw.map(w => w.peak))) : null, atU: walkSw.length ? +f1(walkSw[0].u) : null,
-          boom: walkSw.length ? [+f1(walkSw[0].from), +f1(walkSw[0].to)] : placeSw.length ? [+f1(placeSw[0].from), +f1(placeSw[0].to)] : null, doneAtS: walkSw.length ? +f1(walkSw[0].tWalk) : null,
-          peakPlace: placeSw.length ? +f2(Math.max(...placeSw.map(w => w.peak))) : null },
+        swoop,
         settled: { n: setd.length, p50: +f2(pct(setd, 0.5)), p95: +f2(pct(setd, 0.95)), p99: +f2(pct(setd, 0.99)), max: setd.length ? +f2(Math.max(...setd)) : NaN, over6: setd.filter(v => v > 6).length } };
       const r = rows[L.name];
       console.log(pad(L.name, 9) + lpad(rs.length, 5) + lpad(clr.length, 8) + '  | ' + lpad(f3(r.minClr), 8) + lpad(f3(r.p1Clr), 8) + lpad(below, 6) + lpad(r.settleMinClr === null ? '-' : f3(r.settleMinClr), 11) + lpad(r.settleBelow ? r.settleBelow + ' (to #' + r.settleBelowLastFrame + ')' : '0', 12) + '  | ' + lpad(f2(r.stepP50), 9) + lpad(f2(r.stepP95), 7) + lpad(f2(r.stepP99), 7) + lpad(f2(r.stepMax), 7) + '  | ' + lpad(f2(r.boomP50), 9) + lpad(f2(r.boomMin), 6) + '  | ' + lpad(f1(r.slopeP50), 10) + lpad(f1(r.slopeMax), 6));
       if (clr.length < MIN_FRAMES) bad('vacuous', `${L.name}: only ${clr.length} lens frames booked`);
       if (below > 0) bad('clearance', `${L.name}: the lens was under ${CLEAR_BAR} u over the floor on ${below} of ${clr.length} frames (lowest ${f3(r.minClr)} u)`);
     }
-    console.log(`\nTHE SWOOP (the boom's first pull-in: a fall of >= ${SWOOP_DROP} u; peak frame step u/s, from its start to 3 frames after it ends) AND THE SETTLED WALK (from ${SETTLE_AFTER} s after it completes)`);
-    console.log(pad('line', 9) + lpad('walks', 6) + lpad('in walk', 8) + lpad('at place', 9) + lpad('none', 5) + '  | ' + lpad('boom from-to', 13) + lpad('peak min-max', 14) + lpad('in-walk peak', 13) + lpad('at u', 6) + lpad('done at s', 10) + '  | ' + lpad('settled n', 10) + lpad('p50', 6) + lpad('p95', 7) + lpad('p99', 7) + lpad('max', 7) + lpad('>6 u/s', 8));
+    console.log(`\nTHE SWOOP (the boom's pull-ins: a fall of >= ${SWOOP_DROP} u; peak frame step u/s, from its start to 3 frames after it ends; 'in walk' = walks with a fall that starts after W, 'falls' = how many, 'peak' = the walk's first fall anywhere, 'in-walk peak' = the max over every fall in the walk) AND THE SETTLED WALK (from ${SETTLE_AFTER} s after its first fall completes)`);
+    console.log(pad('line', 9) + lpad('walks', 6) + lpad('in walk', 8) + lpad('falls', 6) + lpad('1st at place', 13) + lpad('none', 5) + '  | ' + lpad('boom from-to', 13) + lpad('peak min-max', 14) + lpad('in-walk peak', 13) + lpad('at u', 6) + lpad('done at s', 10) + '  | ' + lpad('settled n', 10) + lpad('p50', 6) + lpad('p95', 7) + lpad('p99', 7) + lpad('max', 7) + lpad('>6 u/s', 8));
     for (const L of linesAll) { const r = rows[L.name], w = r.swoop, st = r.settled;
-      console.log(pad(L.name, 9) + lpad(w.runs, 6) + lpad(w.inWalk, 8) + lpad(w.atPlace, 9) + lpad(w.none, 5) + '  | ' + lpad(w.boom ? w.boom.join('-') : '-', 13) + lpad(w.peak === null ? '-' : f2(w.peakMin) + '-' + f2(w.peak), 14) + lpad(w.peakWalk === null ? '-' : f2(w.peakWalk), 13) + lpad(w.atU === null ? '-' : w.atU, 6) + lpad(w.doneAtS === null ? '-' : w.doneAtS, 10) + '  | ' + lpad(st.n, 10) + lpad(f2(st.p50), 6) + lpad(f2(st.p95), 7) + lpad(f2(st.p99), 7) + lpad(f2(st.max), 7) + lpad(st.over6, 8)); }
-    result.lens = { rows, frameTimes: tables.frames, wall };
+      console.log(pad(L.name, 9) + lpad(w.runs, 6) + lpad(w.inWalk, 8) + lpad(w.nWalkFalls, 6) + lpad(w.atPlace, 13) + lpad(w.none, 5) + '  | ' + lpad(w.boom ? w.boom.join('-') : '-', 13) + lpad(w.peak === null ? '-' : f2(w.peakMin) + '-' + f2(w.peak), 14) + lpad(w.peakWalk === null ? '-' : f2(w.peakWalk), 13) + lpad(w.atU === null ? '-' : w.atU, 6) + lpad(w.doneAtS === null ? '-' : w.doneAtS, 10) + '  | ' + lpad(st.n, 10) + lpad(f2(st.p50), 6) + lpad(f2(st.p95), 7) + lpad(f2(st.p99), 7) + lpad(f2(st.max), 7) + lpad(st.over6, 8)); }
+    result.lens = { schema: 2, rows, frameTimes: tables.frames, wall };
     // THE BARS (Ruling 48). (a) each relief line's swoop peak (where it swoops in the walk) <= the MAX swoop peak over main's A, B and S; (b) each
     // relief line's settled p99 <= main's settled p99 on its equivalent line: A for the 20-35 deg lines (the steepest 20-35 deg line, ruled; also
     // the closest in mean slope: A 27.4 against the riser's 27.0 and the upland's 29.1, B 25.2), S for the 35-45 deg line (main's only line
@@ -584,10 +683,10 @@ if (MODE === 'boots' || MODE === 'lens') {
     } else if (!mainJ) { fail.push('no main to compare with: give RW_MAIN=<main\'s RW_JSON>'); }
     else {
       const mx = n => mainJ.rows[n].swoop, barWalk = mainJ.maxSwoopPeakWalk, barAny = mainJ.maxSwoopPeak;
-      console.log(`\nRULING 48 (a): the swoop is an event: each line's first pull-in IN THE WALK, its peak step, relief against the MAX over main's A, B, S = ${f2(barWalk)} u/s (main: ${['A', 'B', 'S'].map(n => n + ' ' + (mx(n).peakWalk === null ? 'none in the walk (pulled in at the place: ' + f2(mx(n).peak) + ')' : f2(mx(n).peakWalkMin) + '-' + f2(mx(n).peakWalk))).join(', ')}) (+ ${SWOOP_TOL}, the scatter of identical runs):`);
+      console.log(`\nRULING 48 (a): the swoop is an event: each line's pull-ins IN THE WALK (every fall that starts after W, whatever the first fall was), the max peak step, relief against the MAX over main's A, B, S = ${f2(barWalk)} u/s (main: ${['A', 'B', 'S'].map(n => n + ' ' + (mx(n).peakWalk === null ? 'none in the walk (pulled in at the place: ' + f2(mx(n).peak) + ')' : f2(mx(n).peakWalkMin) + '-' + f2(mx(n).peakWalk))).join(', ')}) (+ ${SWOOP_TOL}, the scatter of identical runs):`);
       for (const n of ['riser', 'upland', 'steep']) { const w = rows[n] && rows[n].swoop; if (!w) continue;
         const ok = w.peakWalk === null || w.peakWalk <= barWalk + SWOOP_TOL;
-        console.log(`  ${pad(n, 7)} ${w.peakWalk === null ? 'no pull-in in the walk (the boom was already in at the line\'s top: pulled in at the place, ' + f2(w.peakMin) + '-' + f2(w.peak) + ' u/s)' : 'peak ' + f2(w.peakWalkMin) + '-' + f2(w.peakWalk) + ' u/s in the walk (' + (w.peakWalk <= barWalk ? 'at most' : 'strict +' + f2(w.peakWalk - barWalk)) + ')'}: ${ok ? 'PASS' : 'FAIL'}`);
+        console.log(`  ${pad(n, 7)} ${w.peakWalk === null ? 'no pull-in in the walk (the boom was already in at the line\'s top and stayed in: pulled in at the place, ' + f2(w.peakMin) + '-' + f2(w.peak) + ' u/s)' : 'peak ' + f2(w.peakWalkMin) + '-' + f2(w.peakWalk) + ' u/s in the walk (' + (w.peakWalk <= barWalk ? 'at most' : 'strict +' + f2(w.peakWalk - barWalk)) + ')'}: ${ok ? 'PASS' : 'FAIL'}`);
         if (!ok) bad('swoop', `${n}: the swoop in the walk peaks at ${f2(w.peakWalk)} u/s, over the max ${f2(barWalk)} over main's A, B, S`); }
       console.log(`  INFO (not gated): the first pull-ins at the PLACE (the spring's step response to the snap, 14-26 u/s: it scatters by 10 u/s between identical placements, the first booked frame landing at an unpredictable phase of it): relief max ${f2(anyMax(['riser', 'upland', 'steep']))} against main's ${f2(barAny)} u/s.`);
       console.log(`RULING 48 (b): the settled walk's p99, relief against main's equivalent line (+ ${STEP_TOL}):`);
@@ -603,9 +702,11 @@ if (MODE === 'hose') {
   const B = plan.hose.at, dB = 375 - plan.hose.spare;   // the binding point and its range from the live pump head (stats.mjs: the 3D range, the floor under it)
   const ang = Math.atan2(B.z - 2.895, B.x - 5.382), PAST = { x: B.x + Math.cos(ang) * 20, z: B.z + Math.sin(ang) * 20 };
   console.log(`\nHOSE: the binding point ${JSON.stringify(B)} at range ${f1(dB)} from the pump head (spec §7: ${HOSE_START} - ${GIVE} give - ${f1(dB)} = ${f1(HOSE_START - GIVE - dB)} u spare, bar ${SPARE_BAR})`);
+  const h0 = await c.ev('window.survival.hose');
+  if (h0 !== HOSE_START) { console.error(`survival.hose is ${h0} at the deck, not HOSE_START ${HOSE_START}: this is not a fresh diver's line (FP_HOSE / a save / a stale page?)`); process.exit(2); }
+  console.log(`survival.hose at the deck: ${h0} (HOSE_START ${HOSE_START}; FP_HOSE never applied)`);
   if (RED === 'short20') { const Lr = Math.round(dB - 20); await c.ev(`(window.survival.hose = ${Lr}, 1)`); console.log(`RED short20: the line is ${Lr} u (the binding point's range ${f1(dB)} less 20), so the point lies 20 u past what the hose reaches`); }
   else if (RED === 'past20') console.log(`RED past20: after the binding point he walks on 20 u straight out, to (${f1(PAST.x)}, ${f1(PAST.z)})`);
-  console.log(`survival.hose at the deck: ${await c.ev('window.survival.hose')} (HOSE_START ${HOSE_START}; FP_HOSE never applied)`);
   await c.ev(`(window.__leash.reset(), 1)`);
   // THE DIVE, real keys: W over the side (yaw +X, through the bulwark gap), then C (vent) down to the seabed
   const t0 = Date.now(), nav = () => c.ev(`window.__rw.nav()`);
@@ -637,18 +738,20 @@ if (MODE === 'hose') {
     await c.key('KeyW', false);
     const R = await c.ev(`window.__rw.end()`); R.line = 'hose'; R.dir = 'fwd'; R.rep = 1; R.surv = await c.ev(`window.__rw.survival()`); R.nav = await c.ev(`window.__rw.nav()`);
     const lk = await c.ev(`window.__rw.leash()`);
-    const fin = R.nav, dEnd = Math.hypot(fin.x - B.x, fin.z - B.z), spare = HOSE_START - GIVE - R.maxR;
+    const fin = R.nav, dEnd = Math.hypot(fin.x - B.x, fin.z - B.z), spare = lk.hose - GIVE - R.maxR;   // the line as it is LIVE (380, or short20's), not the constant
     tables.frames = frameTimes([R]);
     console.log('frame times (live loop, ruling 42):', JSON.stringify(tables.frames));
     console.log(`\nHOSE RUN (${TAG}${RED ? ', RED ' + RED : ''}): ${R.why} after ${f1(R.t)} s sim, ${f1(R.prog)}/${f1(R.total)} u of the route; closest to the binding point ${f1(R.minTo)} u (ruled arrival: within ${ARRIVE_R}), ends ${f1(dEnd)} u from it at (${f1(fin.x)}, ${f1(fin.z)})`);
     console.log(`  __leash at the end: ${JSON.stringify(lk)}`);
-    console.log(`  the leash's farthest range over the walk ${f1(R.maxR)} u (the give starts at ${HOSE_START - GIVE}: ${f1(spare)} u spare, bar ${SPARE_BAR}); frames in the give ${R.nGive}, in the hold ${R.nHold}; stall frames ${R.stall.n}; oxygen ${R.surv.oxygen}, fuel ${R.surv.fuel}, torn ${R.surv.torn}, strain ${R.surv.strain}`);
+    console.log(`  the leash's farthest range over the walk ${f1(R.maxR)} u (the give starts at ${lk.hose - GIVE}: ${f1(spare)} u spare, bar ${SPARE_BAR}); frames in the give ${R.nGive}, in the hold ${R.nHold}; stall frames ${R.stall.n}; oxygen ${R.surv.oxygen}, fuel ${R.surv.fuel}, torn ${R.surv.torn}, strain ${R.surv.strain}`);
     result.hose = { why: R.why, simSec: +f1(R.t), prog: +f1(R.prog), total: +f1(R.total), minTo: +f1(R.minTo), dEnd: +f1(dEnd), leash: lk, maxR: +f1(R.maxR), spare: +f1(spare), nGive: R.nGive, nHold: R.nHold, surv: R.surv, rangeBinding: +f1(dB), red: RED || null, past: RED === 'past20' ? PAST : null, frameTimes: tables.frames };
     // the criteria are the PASS run's in every case; a RED is the same bar failing (past20 walks on to a point nothing lets him reach: its stall is its end)
     if (!(R.minTo <= ARRIVE_R)) bad('arrive', `he did not arrive at the binding point (${R.why}; closest ${f1(R.minTo)} u)`);
     if (RED !== 'past20' && R.why !== 'arrived' && !(RED === 'short20' && R.why === 'yank')) fail.push(`the walk ended '${R.why}'`);
     if (lk.n !== 0 || lk.last.str !== 0) bad('yank', `a yank: __leash.n ${lk.n}, last ${JSON.stringify(lk.last)}`);
     if (!(spare >= SPARE_BAR)) bad('spare', `the leash read ${f1(R.maxR)} u: ${f1(spare)} u short of the give's start (bar ${SPARE_BAR})`);
+    // the spare means nothing unless the leash really read the binding range: a leash that read 0 would "have 375 u spare"
+    if (RED !== 'short20' && !(R.maxR >= dB - 5)) bad('range', `the leash's farthest range ${f1(R.maxR)} u is under the binding point's ${f1(dB)} - 5: it did not read the range, so the spare is vacuous`);
     if (RED !== 'past20' && R.stall.n > 0) fail.push(`${R.stall.n} frames in 2 s windows under ${STALL_MIN} u moved (first ${JSON.stringify(R.stall.first)})`);
     if (R.surv.torn > 0) fail.push(`disturbed (torn ${R.surv.torn}): a bite is not a hose reading`);
     if (!(await lonely())) { }
@@ -661,11 +764,12 @@ const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 if (errs.length) { console.log('CONSOLE', errs.slice(0, 5).join('\n')); fail.push('console errors: ' + errs.length); }
 if (process.env.RW_JSON) { writeFileSync(process.env.RW_JSON, JSON.stringify(result, null, 1)); console.log('wrote ' + process.env.RW_JSON); }
 c.close(); stop();
+if (DEV) { console.log('DEV RUN - NOT A VERDICT' + (fail.length ? ' (it read: ' + fail.length + ' failure(s))' : '')); process.exit(2); }
 if (RED) {
-  // a RED run must fail THE BAR IT TARGETS (not merely something). Exit 1 = it did; exit 3 = that bar did NOT fail: the case discriminates nothing
+  // a RED run must fail THE BAR IT TARGETS (not merely something). Exit 5 = it did (a crash is 1: it cannot read as a RED that worked); exit 3 = that bar did NOT fail: the case discriminates nothing
   const target = { noslope: 'gap', nofloor: 'clearance', short20: 'yank', past20: 'yank' }[RED], hit = tags.has(target);
   console.log(hit ? `RED ${RED}: the ${target} bar FAILED, as it must:` : `RED ${RED}: the ${target} bar did NOT fail: NOT RED` + (fail.length ? ` (other bars failed: ${[...tags].join(', ') || 'untagged'})` : ''));
   for (const f of fail) console.log('  ' + f);
-  process.exit(hit ? 1 : 3);
+  process.exit(hit ? 5 : 3);
 }
 if (fail.length) { console.error('FAIL'); for (const f of fail) console.error('  ' + f); process.exit(1); } else console.log('PASS');
