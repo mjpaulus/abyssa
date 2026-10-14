@@ -9,7 +9,7 @@
 // average player) from the server on <port>, back to back, from before the first route until the last one ends; the
 // routes wait for its first fight to start. Its logs go to <out>/load/.
 // Logs: shots/velfix/gates/<tag>-<route>.log
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 const [, , PORT, TAG = 'vgate', ROUTES = 'crack,follow,resettle'] = process.argv;
 const OUT = '/Users/michaelpaulus/sc/.abyssa-wt/shots/velfix/gates';
@@ -19,22 +19,33 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const run = (cmd, args, env) => new Promise(res => {
   const ch = spawn(cmd, args, { env, cwd: CWD });
   let out = '';
+  ch.stdout.setEncoding('utf8'); ch.stderr.setEncoding('utf8');   // (a multi-byte character split across two chunks stays whole)
   ch.stdout.on('data', d => { out += d; }); ch.stderr.on('data', d => { out += d; });
   ch.on('close', status => res({ status, out }));
 });
-// THE LOAD (VG_LOAD): a detached shell loop, killed (its process group, then its Chrome by debug port) at the end
+// THE LOAD (VG_LOAD): a detached shell loop, killed (its process group, then its Chrome by debug port) at the end.
+// (Task 10) The ports are NORMALISED (String(+x)) and range-checked, and the Chrome kill's pattern is anchored: it must never
+// reach a port that merely begins with the load's (941 -> 9419), nor a reserved one (8777 the game, 8790, 9419 the shared
+// Chrome), nor the gate's own server or Chrome.
+const RESERVED = [8777, 8790, 9419];
+const portOk = n => Number.isInteger(n) && n >= 1024 && n <= 65535 && !RESERVED.includes(n);
+const GATE_DBG = +(process.env.DRV_PORT || 9488);
+if (!portOk(GATE_DBG)) { console.log(`VELFIX-GATE: DRV_PORT ${process.env.DRV_PORT || 9488} is not a usable port (1024-65535, not ${RESERVED.join('/')})`); process.exit(2); }
 let load = null;
 if (process.env.VG_LOAD) {
-  const [lp, ldp] = process.env.VG_LOAD.split(':');
-  if (!/^\d+$/.test(lp || '') || !/^\d+$/.test(ldp || '') || ldp === (process.env.DRV_PORT || '9488') || !/^[\w.-]+$/.test(TAG)) { console.log('VG_LOAD=<port>:<debugPort> (numbers; a debug port of its own) and a plain tag'); process.exit(2); }
+  const [lpRaw, ldpRaw] = process.env.VG_LOAD.split(':');
+  const lp = +lpRaw, ldp = +ldpRaw, own = [+PORT, GATE_DBG];
+  if (!/^\d+$/.test(lpRaw || '') || !/^\d+$/.test(ldpRaw || '') || !portOk(lp) || !portOk(ldp) || ldp === lp || own.includes(lp) || own.includes(ldp) || !/^[\w.-]+$/.test(TAG)) {
+    console.log(`VG_LOAD=<port>:<debugPort>: two numbers of their own in 1024-65535, not ${RESERVED.join('/')} and not the gate's server ${PORT} or Chrome ${GATE_DBG}; and a plain tag`); process.exit(2);
+  }
   const LD = `${OUT}/load`; mkdirSync(LD, { recursive: true });
-  const sh = `i=0; while true; do i=$((i+1)); DRV_PORT=${ldp} RP_OUT=${LD} node tools/bench/fullplay.mjs ${lp} average ${TAG}-load-$i $i 240 > ${LD}/${TAG}-load-$i.log 2>&1; done`;
+  const sh = `i=0; while true; do i=$((i+1)); DRV_PORT=${String(ldp)} RP_OUT=${LD} node tools/bench/fullplay.mjs ${String(lp)} average ${TAG}-load-$i $i 240 > ${LD}/${TAG}-load-$i.log 2>&1; done`;
   const lenv = { ...process.env }; for (const k of Object.keys(lenv)) if (/^(DRV_DIR|FP_|RP_)/.test(k)) delete lenv[k];   // (its own profile; none of the gate's knobs)
   const ch = spawn('/bin/sh', ['-c', sh], { cwd: CWD, detached: true, stdio: 'ignore', env: lenv });
   ch.unref();
   load = { pid: ch.pid, ldp, stop() {
     try { process.kill(-ch.pid, 'SIGTERM'); } catch (e) { }
-    try { execSync(`pkill -f "remote-debugging-port=${ldp}"`); } catch (e) { }
+    try { execFileSync('pkill', ['-f', `remote-debugging-port=${String(ldp)}( |$)`]); } catch (e) { }
   } };
   process.on('exit', () => load && load.stop());
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { if (load) load.stop(); process.exit(130); });
@@ -46,7 +57,7 @@ if (process.env.VG_LOAD) {
 }
 let red = 0;
 for (const route of ROUTES.split(',')) {
-  const env = { ...process.env, DRV_PORT: process.env.DRV_PORT || '9488', FP_HOSE: '760', FP_GATE: '1', FP_ROUTE: route, RP_OUT: OUT };
+  const env = { ...process.env, DRV_PORT: String(GATE_DBG), FP_HOSE: '760', FP_GATE: '1', FP_ROUTE: route, RP_OUT: OUT };
   const r = await run('node', ['tools/bench/fullplay-gate.mjs', PORT, 'average', `${TAG}-${route}`, '1'], env);
   const log = r.out;
   writeFileSync(`${OUT}/${TAG}-${route}.log`, log);

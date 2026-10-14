@@ -2,7 +2,7 @@
 //   import { start, connect } from './drv.mjs'
 //   node tools/bench/drv.mjs start <url>   |   node tools/bench/drv.mjs stop
 // Env: DRV_PORT (debug port, default 9419), DRV_DIR (profile dir), DRV_W/DRV_H.
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,7 +23,12 @@ export async function start(url) {
   for (let i = 0; i < 60; i++) { try { await json('/json/version'); break; } catch (e) { await sleep(250); } }
   return ch.pid;
 }
-export function stop() { try { execSync(`pkill -f "remote-debugging-port=${DBG}"`); } catch (e) { } }
+// (Task 10) the kill pattern is ANCHORED, 'remote-debugging-port=<port>' followed by a space or the end of the command line:
+// the old unanchored one also matched a longer port that begins with it (941 -> 9419). No shell: the pattern is one argv entry.
+export function stop() {
+  if (!Number.isInteger(DBG) || DBG < 1024 || DBG > 65535) return;
+  try { execFileSync('pkill', ['-f', `remote-debugging-port=${DBG}( |$)`]); } catch (e) { }
+}
 export async function connect() {
   const list = await json('/json/list');
   const p = list.find(t => t.type === 'page');

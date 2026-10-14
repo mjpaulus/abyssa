@@ -37,7 +37,10 @@
 //               he stops on his feet 2 u short of the lip (withholding C alone is not enough: the dress sinks an unvented
 //               diver through the open throat, measured in zone 1 34 s after the calm).
 //   FP_STOP=<n> stop after n video-rate frames (every 3rd game frame, ~20 per game second: the RP_VIDEO index),
-//               print the state; FP_HOLD=1 leaves the (frozen) Chrome up for `drv.mjs eval` and A/B pokes.
+//               print the state; FP_HOLD=1 leaves the (frozen) Chrome up for `drv.mjs eval` and A/B pokes. With FP_GATE=1 it
+//               also prints the CLOCK verdict (Task 10: `DRIFT GREEN|RED`, the same bound as the verdict's) and exits 1 on RED.
+//   FP_NOPLUG=1 (the drift bound's RED case, Task 10) leaves the game clock UNPLUGGED (no clock.stop()), the frame counter in
+//               place: FP_GATE=1 FP_NOPLUG=1 FP_STOP=200 (10 s of game time) must print DRIFT RED; the plugged control, GREEN.
 //   FP_WASHSHOT=<n> (diagnosis) the first n red wash frames of each phase and the first n after-the-calm frames with her
 //               drawn surface on the lens, read back with the gate's own readback and written as PNGs (<tag>-shot-*.png);
 //               the step is never broken for them, so the run plays as it would without.
@@ -85,12 +88,15 @@ await sleep(300);
 // drift at the end is what moved the clock besides them.
 await c.ev(`(async () => {
   const { clock } = await import(new URL('src/core.js', document.baseURI).href);
-  clock.stop();
+  ${process.env.FP_NOPLUG === '1' ? '/* FP_NOPLUG: the clock is left running (the drift bound\'s RED case) */' : 'clock.stop();'}
   const S0 = window.__bench.step;
   window.__fpClk = { clock, e0: clock.elapsedTime, n: 0 };
   window.__bench.step = (n, fn, o) => S0(n, i => { window.__fpClk.n++; return fn ? fn(i) : undefined; }, o);
   return 1;
 })()`);
+const DRIFT_MAX = 0.05;
+// THE DRIFT BOUND: the clock moved other than by the stepped frames (|drift| > 0.05 s), or is still running (not plugged)
+const clockRed = k => !(Math.abs(k.drift) <= DRIFT_MAX) || !!k.running;
 const CLOCK = `(() => { const k = window.__fpClk, run = k.clock.elapsedTime - k.e0, stepped = k.n / 60; return { run: +run.toFixed(3), stepped: +stepped.toFixed(3), drift: +(run - stepped).toFixed(4), running: !!k.clock.running }; })()`;
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
@@ -260,9 +266,15 @@ let gf = 0;
 async function atStop() {
   const s = await c.ev(STATE);
   console.log('STOP', gf, (gf / 60).toFixed(2), JSON.stringify({ pos: s.pos, lev: s.lev, calmed: s.calmed, standE: s.standE, wards: s.wards.map(w => w.lit ? 1 : 0).join(''), cam: await c.ev(`window.camera.position.toArray().map(v => +v.toFixed(2))`), clock: await c.ev(CLOCK) }));
-  if (GATE) console.log('GATE-SO-FAR', JSON.stringify(await c.ev('(() => { const g = Object.assign({}, window.__vfGate); delete g.shots; delete g.washLog; return g; })()')));
-  if (HOLD) { console.log(`HOLD: Chrome left up on DRV_PORT ${process.env.DRV_PORT}`); c.close(); process.exit(0); }
-  c.close(); stop(); process.exit(0);
+  let stopRed = false;
+  if (GATE) {
+    console.log('GATE-SO-FAR', JSON.stringify(await c.ev('(() => { const g = Object.assign({}, window.__vfGate); delete g.shots; delete g.washLog; return g; })()')));
+    // (Task 10) the clock verdict, evaluated where FP_STOP ends the run: the same bound as the full verdict's
+    const k = await c.ev(CLOCK); stopRed = clockRed(k);
+    console.log('DRIFT', stopRed ? 'RED' : 'GREEN', JSON.stringify({ ...k, bound: DRIFT_MAX, driftOver: !(Math.abs(k.drift) <= DRIFT_MAX), plug: process.env.FP_NOPLUG === '1' ? 'removed' : 'in' }));
+  }
+  if (HOLD) { console.log(`HOLD: Chrome left up on DRV_PORT ${process.env.DRV_PORT}`); c.close(); process.exit(stopRed ? 1 : 0); }
+  c.close(); stop(); process.exit(stopRed ? 1 : 0);
 }
 const render = async () => {
   await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), window.__bench.step(1, null, { render: true }), 1)`);
@@ -501,7 +513,8 @@ if (GATE) {
   const shotList = (g.shots || []).map(sh => ({ kind: sh.kind, t: sh.t, ...sh.extra }));
   delete g.shots;
   // THE VERDICT (velfix review I2; Task 9). RED, with every reason listed, if:
-  //   the run never reached the calm, or booked under 600 frames after it, or under 20 wash frames (a vacuous run);
+  //   the run never reached the calm, or booked under 600 frames after it, or under 20 wash frames (a vacuous run), or (Task 10)
+  //     under 100 after-calm wash frames on the follow and resettle routes;
   //   the game clock moved other than by the stepped frames (Task 9: the run played on wall time);
   //   the wash, IN EITHER PHASE (the fight, after the calm): any booked frame over the limits;
   //   after the calm, the DRAWN verdict: her opaque surface on the lens or the lens in the egg mass (C.lensSurf /
@@ -516,7 +529,11 @@ if (GATE) {
   if (!(st.calmT != null)) why.push('never reached the calm');
   if (C.n < 600) why.push(`only ${C.n} frames after the calm`);
   if (WF.n + WC.n < 20) why.push(`only ${WF.n + WC.n} wash frames booked`);
-  if (!(Math.abs(clock.drift) <= 0.05) || clock.running) why.push(`the game clock ran on wall time (drift ${clock.drift} s over ${clock.stepped} s stepped)`);
+  // (Task 10) a floor PER PHASE: after the calm the follow and resettle routes must book at least 100 wash frames (main books
+  // 224-855), or "no wash after the calm" could be read off a phase that was never sampled. The crack route is exempt: he
+  // leaves her quickly (26 booked on main in two runs).
+  if ((ROUTE === 'follow' || ROUTE === 'resettle') && WC.n < 100) why.push(`only ${WC.n} wash frames booked after the calm on the ${ROUTE} route (floor 100)`);
+  if (clockRed(clock)) why.push(`the game clock ran on wall time (drift ${clock.drift} s over ${clock.stepped} s stepped)`);
   if (WF.red > 0) why.push(`wash in the fight: ${WF.red} frames over the limits`);
   if (WC.red > 0) why.push(`wash after the calm: ${WC.red} frames over the limits`);
   if (C.lensSurf + C.lensEggs > 0) why.push(`lens: her drawn surface on it ${C.lensSurf}, in the egg mass ${C.lensEggs} (of ${C.sampled} sampled)`);
