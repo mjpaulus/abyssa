@@ -21,12 +21,20 @@ const OUT = '/Users/michaelpaulus/sc/.abyssa-wt/shots/velfix/gates';
 const CWD = new URL('../..', import.meta.url).pathname;
 mkdirSync(OUT, { recursive: true });
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// (Task 10) route names: a typo must not fall through to the crack walk in the child (it reads FP_ROUTE and ran 'crack' for anything)
+const BAD_ROUTE = ROUTES.split(',').find(r => !['crack', 'follow', 'resettle'].includes(r));
+if (BAD_ROUTE !== undefined) { console.log(`VELFIX-GATE: route '${BAD_ROUTE}' is not one of crack, follow, resettle`); process.exit(2); }
+// the in-flight route child and the load go with this process on any exit or signal (the child's own handler then stops its Chrome)
+let load = null, child = null;
+const cleanup = () => { try { if (child && child.exitCode === null) child.kill('SIGTERM'); } catch (e) { } if (load) load.stop(); };
+process.on('exit', cleanup);
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(130));
 const run = (cmd, args, env) => new Promise(res => {
-  const ch = spawn(cmd, args, { env, cwd: CWD });
+  const ch = spawn(cmd, args, { env, cwd: CWD }); child = ch;
   let out = '';
   ch.stdout.setEncoding('utf8'); ch.stderr.setEncoding('utf8');   // (a multi-byte character split across two chunks stays whole)
   ch.stdout.on('data', d => { out += d; }); ch.stderr.on('data', d => { out += d; });
-  ch.on('close', status => res({ status, out }));
+  ch.on('close', status => { if (child === ch) child = null; res({ status, out }); });
 });
 // THE LOAD (VG_LOAD): a detached shell loop, killed (its process group, then its Chrome by debug port) at the end.
 // (Task 10) The ports are NORMALISED (String(+x)) and range-checked, and the Chrome kill's pattern is anchored: it must never
@@ -36,7 +44,6 @@ const RESERVED = [8777, 8790, 9419];
 const portOk = n => Number.isInteger(n) && n >= 1024 && n <= 65535 && !RESERVED.includes(n);
 const GATE_DBG = +(process.env.DRV_PORT || 9488);
 if (!portOk(GATE_DBG)) { console.log(`VELFIX-GATE: DRV_PORT ${process.env.DRV_PORT || 9488} is not a usable port (1024-65535, not ${RESERVED.join('/')})`); process.exit(2); }
-let load = null;
 if (process.env.VG_LOAD) {
   const [lpRaw, ldpRaw] = process.env.VG_LOAD.split(':');
   const lp = +lpRaw, ldp = +ldpRaw, own = [+PORT, GATE_DBG];
@@ -53,8 +60,6 @@ if (process.env.VG_LOAD) {
     try { process.kill(-ch.pid, 'SIGTERM'); } catch (e) { }
     try { execFileSync('pkill', ['-f', `remote-debugging-port=${String(ldp)}( |$)`]); } catch (e) { }
   } };
-  process.on('exit', () => load && load.stop());
-  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { if (load) load.stop(); process.exit(130); });
   const first = `${LD}/${TAG}-load-1.log`;
   let up = false;
   for (let i = 0; i < 300 && !(up = existsSync(first) && statSync(first).mtimeMs >= tLoad && /START/.test(readFileSync(first, 'utf8'))); i++) await sleep(1000);

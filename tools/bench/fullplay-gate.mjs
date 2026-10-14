@@ -51,9 +51,14 @@ if (!process.env.DRV_PORT) process.env.DRV_PORT = '9471';
 if (!process.env.DRV_DIR) { process.env.DRV_DIR = tmpdir() + '/abyssa-rp-' + process.env.DRV_PORT + '-' + Date.now(); }
 const { start, stop, connect, sleep } = await import('./drv.mjs');
 // (Task 10) a crash (a boot that never finished: unpkg's net::ERR_FAILED) left its Chrome on the debug port, and the next run then
-// drove that stale page; the Chrome goes with the process (FP_HOLD=1 keeps it up on purpose)
-process.on('exit', () => { if (process.env.FP_HOLD !== '1') { try { stop(); } catch (e) { } } });
+// drove that stale page; the Chrome goes with the process (FP_HOLD=1 keeps it up on purpose). drv.mjs stop() is a pkill of the
+// port's Chrome, so it runs only if THIS run started one (chromeStarted, as relief-walk.mjs); a signal exits, so the hook runs.
+let chromeStarted = false;
+process.on('exit', () => { if (chromeStarted && process.env.FP_HOLD !== '1') { try { stop(); } catch (e) { } } });
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(130));
 const [, , PORT, MODE = 'perfect', TAG = 'full', SEED = '1', MAXS = '240'] = process.argv;
+// FP_ROUTE must be one of the three: a typo used to fall through to the crack walk and read as that route (exit 2, nothing started)
+if (!['crack', 'follow', 'resettle'].includes(process.env.FP_ROUTE || 'crack')) { console.error(`FP_ROUTE '${process.env.FP_ROUTE}' is not one of crack, follow, resettle`); process.exit(2); }
 const SITE = 'home';
 const OUT = process.env.RP_OUT || '/Users/michaelpaulus/sc/.abyssa-wt/shots/ritefair-play';
 mkdirSync(OUT, { recursive: true });
@@ -68,7 +73,11 @@ const FLEE = +(process.env.RP_FLEE || 0);
 // ---- the page side (the ledger), the state a player reads and the two players: ritepolicy.mjs (as fullplay.mjs) ----
 const { PROBE, STATE, TALLY, makePolicy } = await import('./ritepolicy.mjs');
 
-const c0 = await (async () => { await start(`http://localhost:${PORT}/${process.env.RP_PATH || ""}?bench`); return connect(); })();
+// the debug port must be free: whoever answers on it (a stale run's Chrome, another task's) is not ours to pkill or to drive
+try { const r = await fetch(`http://127.0.0.1:${process.env.DRV_PORT}/json/version`, { signal: AbortSignal.timeout(2000) });
+  console.error(`the debug port ${process.env.DRV_PORT} already answers /json/version (HTTP ${r.status}): not starting, nothing touched`); process.exit(2); }
+catch (e) { if (!(e && e.cause && e.cause.code === 'ECONNREFUSED')) { console.error(`the debug port ${process.env.DRV_PORT} is not free (${e && e.name}: ${e && e.cause && e.cause.code || e && e.message}): not starting, nothing touched`); process.exit(2); } }
+const c0 = await (async () => { chromeStarted = true; await start(`http://localhost:${PORT}/${process.env.RP_PATH || ""}?bench`); return connect(); })();
 const c = c0;
 await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && window.__bench`, 240000, 1000);
 await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
@@ -517,7 +526,7 @@ if (GATE) {
   delete g.shots;
   // THE VERDICT (velfix review I2; Task 9). RED, with every reason listed, if:
   //   the run never reached the calm, or booked under 600 frames after it, or under 20 wash frames (a vacuous run), or (Task 10)
-  //     under 100 after-calm wash frames on the follow and resettle routes;
+  //     under 20 in the fight, or under 100 after-calm wash frames on the follow and resettle routes;
   //   the game clock moved other than by the stepped frames (Task 9: the run played on wall time);
   //   the wash, IN EITHER PHASE (the fight, after the calm): any booked frame over the limits;
   //   after the calm, the DRAWN verdict: her opaque surface on the lens or the lens in the egg mass (C.lensSurf /
@@ -532,9 +541,12 @@ if (GATE) {
   if (!(st.calmT != null)) why.push('never reached the calm');
   if (C.n < 600) why.push(`only ${C.n} frames after the calm`);
   if (WF.n + WC.n < 20) why.push(`only ${WF.n + WC.n} wash frames booked`);
-  // (Task 10) a floor PER PHASE: after the calm the follow and resettle routes must book at least 100 wash frames (main books
-  // 224-855), or "no wash after the calm" could be read off a phase that was never sampled. The crack route is exempt: he
-  // leaves her quickly (26 booked on main in two runs).
+  // (Task 10) a floor PER PHASE. The fight must book at least 20 wash frames (main books 106-798 there). After the calm the follow
+  // and resettle routes must book at least 100 (main books 66-858 there: its resettle runs booked 67 and 66 on 2 of 3 alone runs,
+  // short fights with him off her ground, and so trip it; the relief books 350-862), or "no wash after the calm" could be read off a
+  // phase that was never sampled. The crack route is exempt: he leaves her quickly (main's crack booked 26 on one of four runs,
+  // 238-301 on the others).
+  if (WF.n < 20) why.push(`only ${WF.n} wash frames booked in the fight (floor 20)`);
   if ((ROUTE === 'follow' || ROUTE === 'resettle') && WC.n < 100) why.push(`only ${WC.n} wash frames booked after the calm on the ${ROUTE} route (floor 100)`);
   if (clockRed(clock)) why.push(`the game clock ran on wall time (drift ${clock.drift} s over ${clock.stepped} s stepped)`);
   if (WF.red > 0) why.push(`wash in the fight: ${WF.red} frames over the limits`);

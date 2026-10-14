@@ -429,16 +429,18 @@ function size(w, h) {
 
 // THE STANDARD VIEWS (perf-budget-oct; z0r and z0b re-found on the relief, seafloor relief Task 10). Each is a reproducible
 // spot: Sal is placed at terrainH(x, z) + 0.05 (H.place: on the seabed, not at a fixed height), facing `yaw` (he faces
-// (sin yaw, cos yaw)), the follow camera settled behind him. On a slope he slides a metre or two in setup's last frames and
-// then holds his mark.
+// (sin yaw, cos yaw)), the follow camera settled behind him. On a slope he slides a little in setup's last frames and then holds
+// his mark (z0r, below, slides 2.28 u).
 // Arrivals: z0 under the raft, z1 under rift 0, z2 under rift 1 (where a descent lands).
 // Dense views: z0r / z2r the densest 40 u plant cells of site 0 (reef, grass, kelp). z0r: the 40 u window (5 u stride) that holds
-// the most zone-0 instances whose userData.plantKey is set (scene traversal of the instanced meshes, matrixWorld applied, the
-// ones standing on zone 0's ground), 268 of 4397, centred (32, 2); an aligned 40 u grid would pick a different cell (60, 140),
-// 248, so the grid's alignment is not the measure.
+// the most zone-0 plant instances (scene traversal of the instanced meshes with userData.plantKey, matrixWorld applied; zone 0's
+// are those standing from 3 u under to 8 u over its terrain, y - terrainH(x, z, 0) in [-3, 8], with scale >= 0.01): 268 of 4397,
+// the window centred (32, 2). An aligned 40 u grid would pick a different cell (x 40-80, z 120-160, 248), so the grid's alignment
+// is not the measure. (32, 2) is on a 32.3 deg riser: setup places him there, he slides 2.28 u (2.24 u in z) to (32.45, -0.24)
+// and holds THERE (0.01 u over a 4 s live window); that is the view's mark, which setup returns.
 // Sleepers: z0b Velkath's ridge from 30 u: she lies at her bed, the levelled flat at (89.7, 39.1), and z0b stands 30 u out
-// from it on her open-sand side (L.sand, read live: (0.523, -0.853) at home, after her turn), facing her. z1b Orune on the
-// trawler from 21 u (asleep).
+// from it on her open-sand side (L.sand, read live: (0.523, -0.853) at home, after her turn), facing her, 3.3 deg ground, no slide.
+// z1b Orune on the trawler from 21 u (asleep).
 // Positions are the authored site-0 layout (a voyage moves them).
 const VIEWS = {
   z0: { zone: 0, x: 4, z: 4, yaw: 0.5 },

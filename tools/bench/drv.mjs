@@ -2,16 +2,29 @@
 //   import { start, connect } from './drv.mjs'
 //   node tools/bench/drv.mjs start <url>   |   node tools/bench/drv.mjs stop
 // Env: DRV_PORT (debug port, default 9419), DRV_DIR (profile dir), DRV_W/DRV_H.
+// (Task 10, Ruling 53) 9419 is the default for Michael's MANUAL use of the CLI above, and only there. A probe that IMPORTS this
+// module must set DRV_PORT to a port of its own BEFORE the import (a dynamic `await import('./drv.mjs')` after the assignment:
+// a static import is hoisted above it and DBG is already 9419); start() and stop() then refuse 8777 (the game), 8790 and 9419
+// (the shared Chrome) with an error that says so, and start() refuses a port that is not an integer in 1024-65535.
 import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 export const DBG = +(process.env.DRV_PORT || 9419);
+const RESERVED = [8777, 8790, 9419];
+const CLI = !!(process.argv[1] && process.argv[1].endsWith('drv.mjs'));   // (the test the CLI block at the bottom uses)
+function badPort(forStop) {
+  const was = process.env.DRV_PORT ? `DRV_PORT ${process.env.DRV_PORT}` : 'DRV_PORT unset (the default 9419)';
+  if (!CLI && RESERVED.includes(DBG)) return `drv.mjs: ${was} is a reserved port (${RESERVED.join(' / ')}): a probe that imports drv.mjs must set DRV_PORT to a port of its own (e.g. 9520) before the import`;
+  if (!forStop && (!Number.isInteger(DBG) || DBG < 1024 || DBG > 65535)) return `drv.mjs: ${was} is not an integer in 1024-65535`;
+  return null;
+}
 const DIR = process.env.DRV_DIR || join(tmpdir(), 'abyssa-drv-' + DBG);
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 export const sleep = ms => new Promise(r => setTimeout(r, ms));
 async function json(p) { const r = await fetch(`http://127.0.0.1:${DBG}${p}`); return r.json(); }
 export async function start(url) {
+  const bad = badPort(false); if (bad) throw new Error(bad);
   mkdirSync(DIR, { recursive: true });
   const W = process.env.DRV_W || 1280, H = process.env.DRV_H || 800;
   const ch = spawn(CHROME, [`--user-data-dir=${join(DIR, 'profile')}`, `--remote-debugging-port=${DBG}`,
@@ -26,6 +39,7 @@ export async function start(url) {
 // (Task 10) the kill pattern is ANCHORED, 'remote-debugging-port=<port>' followed by a space or the end of the command line:
 // the old unanchored one also matched a longer port that begins with it (941 -> 9419). No shell: the pattern is one argv entry.
 export function stop() {
+  const bad = badPort(true); if (bad) throw new Error(bad);
   if (!Number.isInteger(DBG) || DBG < 1024 || DBG > 65535) return;
   try { execFileSync('pkill', ['-f', `remote-debugging-port=${DBG}( |$)`]); } catch (e) { }
 }
@@ -70,7 +84,7 @@ export async function connect() {
   }
   return { send, ev, until, key, tap, click, png, events, console: console_, close: () => ws.close() };
 }
-if (process.argv[1] && process.argv[1].endsWith('drv.mjs')) {
+if (CLI) {
   const [, , cmd, url] = process.argv;
   if (cmd === 'start') console.log(await start(url));
   else if (cmd === 'stop') { stop(); console.log('stopped'); }
