@@ -4,12 +4,24 @@
 // evaluated, so the default is set BEFORE the driver is imported (a static import is hoisted).
 // Env FP_MUTANT='<json patch>' (seafloor relief): a RED mutant of home's relief rows, applied before the mode (below).
 // Env FP_WALLS_SINK=<u> (walls only): a RED mutant, the floor Sal stands on sunk <u> under the jam the probe reads.
+// Env FP_RED=<variant> (seafloor relief Task 7, Ruling 32): an opt-in RED case of one mode, never part of the default
+// run, one per bar, each measured to fail it (the line at the mode): rise `no-rel-limit` (__throatCam.knobs.relVmax huge:
+// RISE_HID), throat-edges `haul-low` (his eye, the height the switch reads, 1 u under the switch: the coverage floor),
+// walls-inside `rays-1.2` (a ray depth at 1.2 x the column, under the floor: the ray-count floor), fall-lens `cut-1s`
+// (each case measured over its first second only: the samples floor).
 const [, , mode, port] = process.argv;
 // (M4) FP_WALLS_SINK's positive control: a finite sink > 0, and only for walls (anywhere else it would be ignored, and a
 // RED run would pass as GREEN)
 const WALLS_SINK = process.env.FP_WALLS_SINK;
 if (WALLS_SINK !== undefined && (mode !== 'walls' || !(Number.isFinite(+WALLS_SINK) && +WALLS_SINK > 0))) {
   console.error(`FP_WALLS_SINK must be a finite number > 0, for walls only (got ${JSON.stringify(WALLS_SINK)}, mode ${mode})`); process.exit(2); }
+// FP_RED's positive control, the same way: a variant this mode has (anywhere else it would be ignored, and a RED run would
+// pass as GREEN)
+const RED_OF = { rise: ['no-rel-limit'], 'throat-edges': ['haul-low'], 'walls-inside': ['rays-1.2'], 'fall-lens': ['cut-1s'] };
+const RED = process.env.FP_RED;
+if (RED !== undefined && !(RED_OF[mode] || []).includes(RED)) {
+  console.error(`FP_RED: mode ${mode} has ${RED_OF[mode] ? 'the variants ' + RED_OF[mode].join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
+if (RED) console.log(`FP_RED ${RED}: the ${mode} RED case (opt-in; never a default run)`);
 process.env.DRV_PORT = process.env.DRV_PORT || '9481';
 // A FRESH PROFILE per run: the game saves its chart (endingSeen, calms) to localStorage, and a run
 // that played the ending would turn the next run's zone-2 fall into the quiet ink beat.
@@ -56,17 +68,33 @@ const fail = [];
 // 24); him HIDDEN (under the old floor, the lens over it) <= RISE_HID in all (a guard against the early
 // engagement trading rock for floor: 70e775c 102, now 123 - the trade, Michael's eye; much of it beside the
 // slot under the wall, pre-existing). RED (this probe on 70e775c): 133.8 / 124.2 u/s, 19/24 and 11/16 over 60; his lateral step <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own <= its 12 u/s; he came up.
-const RISE_REL = 50, RISE_ON = 46, RISE_HF = 40, RISE_HID = 160;
+// (seafloor relief Task 7) PER UNIT OF RISE: RISE_HF and RISE_HID are frame counts summed over every rise, and a rise is
+// his whole climb, 10 u under the old throat floor at his column to 4 u over the lip (riseShaft: lip + 4 - (floorY - 10)).
+// On the relief home zone 0's lip stands ~31 u lower over the same floor, so its rises are ~35% shorter and fixed totals
+// get easier silently. The two bars are main's, per unit of rise: RISE_X x (mean rise here / RISE_REF), RISE_REF main's
+// mean rise over these 40 (this mode on a main copy, 2026-10-13: 87.64 u, zone 0 90.15 / zone 1 85.13; ΣhfIn 24-26,
+// Σhidden 122 there), each rise's own lip and floor read live; both bars are printed beside the totals. (On the relief
+// zone 0's rises are 59.5 u and zone 1's unchanged, mean 72.3: x 0.825; zone 1 holds ~98 of the ~122 hidden frames on
+// both builds.) RED (FP_RED=no-rel-limit: __throatCam.knobs.relVmax 1e9, the rise fix's limit on the lens's speed relative
+// to him lifted): Σhidden 168 against 132.0 on the relief (2026-10-13; also RISE_ON / RISE_REL, 140.8 u/s). (The plan's
+// guard = 0 alone: Σhidden 119, passes: `guard` is only the guard's margin off the faces.)
+const RISE_REL = 50, RISE_ON = 46, RISE_HF = 40, RISE_HID = 160, RISE_REF = 87.64;
 async function riseSet() {
   const rise = await c.ev(`(async () => {
-    const W = await import('/tools/bench/walls-inside.page.js'); const out = [];
-    for (const dt of [1 / 60, 1 / 30]) for (const zi of [0, 1]) for (const u of [-4, 9]) for (const dv of [-1.5, 0, 1.5]) for (const yaw of [0, Math.PI / 2]) {
-      if (dt > 0.02 && dv !== 0 && yaw !== 0) continue;
-      out.push(await W.riseShaft(zi, { u, dv, yaw, dt, t0: 4000 + out.length * 13 }));
-    }
+    const W = await import('/tools/bench/walls-inside.page.js'); const out = [], K = window.__throatCam.knobs, relVmax = K.relVmax;
+    if (${RED === 'no-rel-limit' && mode === 'rise'}) K.relVmax = 1e9;
+    try {
+      for (const dt of [1 / 60, 1 / 30]) for (const zi of [0, 1]) for (const u of [-4, 9]) for (const dv of [-1.5, 0, 1.5]) for (const yaw of [0, Math.PI / 2]) {
+        if (dt > 0.02 && dv !== 0 && yaw !== 0) continue;
+        out.push(await W.riseShaft(zi, { u, dv, yaw, dt, t0: 4000 + out.length * 13 }));
+      }
+    } finally { K.relVmax = relVmax; }
     window.gotoZone(0); return out; })()`);
   const stepCap = dt => dt > 0.02 ? 0.5 : 0.25, holdCap = dt => 12 * dt + 1e-3;
   let hf = 0, hid = 0, over = 0;
+  // the bars, per unit of rise (a rise the page did not measure is NaN: it fails both bars, never passes them)
+  const riseMean = rise.reduce((a, q) => a + q.rise, 0) / rise.length, kRise = riseMean / RISE_REF;
+  const barHF = RISE_HF * kRise, barHID = RISE_HID * kRise;
   for (const q of rise) {
     hf += q.hfIn; hid += q.hidden; if (q.relMax > RISE_REL || q.relOn > RISE_ON) over++;
     if (q.relOn > RISE_ON) fail.push(`rising zone ${q.zi} u ${q.u} dv ${q.dv} yaw ${q.yaw} dt ${q.dt}: with the shaft lens on, the lens moved ${q.relOn} u/s relative to him (bound ${RISE_ON})`);
@@ -75,8 +103,11 @@ async function riseSet() {
     if (q.holdStepMax > holdCap(q.dt)) fail.push('rising: the shaft hold moved him ' + q.holdStepMax + ' u in a frame ' + JSON.stringify(q));
     if (q.relMax > RISE_REL) fail.push(`rising zone ${q.zi} u ${q.u} dv ${q.dv} yaw ${q.yaw} dt ${q.dt}: the lens moved ${q.relMax} u/s relative to him (bound ${RISE_REL}; ${q.over60} frames over 60) at ${JSON.stringify(q.relAt)}`);
   }
-  if (hf > RISE_HF) fail.push(`rising: the lens in the old crack's rock on ${hf} frames over ${rise.length} rises (bound ${RISE_HF})`);
-  if (hid > RISE_HID) fail.push(`rising: him under the old floor with the lens over it on ${hid} frames over ${rise.length} rises (bound ${RISE_HID})`);
+  const z = zi => rise.filter(q => q.zi === zi), mean = a => +(a.reduce((x, q) => x + q.rise, 0) / a.length).toFixed(2);
+  console.log(`rise: ${rise.length} rises, mean ${riseMean.toFixed(2)} u (zone 0 ${mean(z(0))}, zone 1 ${mean(z(1))}; main ${RISE_REF}): x ${kRise.toFixed(4)}` +
+    ` -> RISE_HF ${RISE_HF} -> ${barHF.toFixed(1)}, measured ΣhfIn ${hf}; RISE_HID ${RISE_HID} -> ${barHID.toFixed(1)}, measured Σhidden ${hid}`);
+  if (!(hf <= barHF)) fail.push(`rising: the lens in the old crack's rock on ${hf} frames over ${rise.length} rises (bound ${RISE_HF} x ${kRise.toFixed(4)} = ${barHF.toFixed(1)}, per unit of rise)`);
+  if (!(hid <= barHID)) fail.push(`rising: him under the old floor with the lens over it on ${hid} frames over ${rise.length} rises (bound ${RISE_HID} x ${kRise.toFixed(4)} = ${barHID.toFixed(1)}, per unit of rise)`);
   const by = dt => rise.filter(q => Math.abs(q.dt - dt) < 1e-3);
   const sum = a => ({ n: a.length, relMax: Math.max(...a.map(q => q.relMax)), relOn: Math.max(...a.map(q => q.relOn)), over60Rises: a.filter(q => q.relMax > 60).length, over60Frames: a.reduce((x, q) => x + q.over60, 0), hfIn: a.reduce((x, q) => x + q.hfIn, 0), hidden: a.reduce((x, q) => x + q.hidden, 0), step: Math.max(...a.map(q => q.salStepMax)), hold: Math.max(...a.map(q => q.holdStepMax || 0)) });
   console.log(JSON.stringify({ rise: { dt60: sum(by(0.0167)), dt30: sum(by(0.0333)), overBound: over } }));
@@ -219,13 +250,22 @@ if (mode === 'rise') {
   // (W held at a wall, C held to vent), started 5 u below the wall face at the throat's edges (so he
   // is in the shaft, not over a strata ledge he could land on), he is held in the throat column and
   // falls through (zone 2: the ending), never snapped up onto the wall.
+  // (seafloor relief Task 7) THE HAUL'S COVERAGE: the haul is the shaft's test only for as long as he hauls across it. On
+  // the relief zone 0's haul starts with his eye 20.4 u over its switch (zoneBottom(0) - ZONE_GAP * 0.55 = -309.5; main
+  // 49.1 u), so a haul that switched zones at once would still pass "fell through". Every haul must spend >= HAUL_MIN_S
+  // (0.5 s at the stepped 1/60) in the shaft above the switch (in play, in its own zone, inThroat, his eye over the switch
+  // plane, the height the switch reads; zone 2's is the ending's, zoneBottom(2) - 70); each haul prints that time and how
+  // far over the switch his eye started. RED (FP_RED=haul-low, Ruling 32): every haul starts with his eye 1 u under its
+  // switch, so it fails the floor in every zone. (The plan's start at wallLo - 25: zone 0 0.517 / 0.500 s, passes: his
+  // boots 1 u under the switch, his eye 0.35 u over it.)
+  const HAUL_MIN_S = 0.5, HAUL_LOW = RED === 'haul-low';
   const r = await c.ev(`(async () => {
-    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js');
+    const S = await import('/src/world/fissureShape.js'); const T = await import('/src/world/terrain.js'), C = await import('/src/config.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
     const o = { x: 0, z: 0 }, out = [];
     const open = zi => { window.gotoZone(zi); window.lev.calmed = true; window.__fissure.setOpen(zi, 1); };
     for (let zi = 0; zi < 3; zi++) {
-      const F = S.FISSURE[zi], res = { zi };
+      const F = S.FISSURE[zi], res = { zi }, trig = zi < 2 ? C.zoneBottom(zi) - C.ZONE_GAP * 0.55 : C.zoneBottom(2) - 70;
       open(zi);
       S.fissureWorld(0, S._halfWAt(F, 0, 1) + 1, zi, o);
       window.__bench.place(o.x, o.z, 0, zi); res.lipN = +T.terrainNormal(o.x, o.z, zi).y.toFixed(3);
@@ -234,22 +274,25 @@ if (mode === 'rise') {
       // the shaft: below the lower wall face at the throat's two edges (u = 0)
       const k = F.throatHalfW / F.halfW; let wallLo = 1e9;
       for (const sd of [0, 1]) { S.fissureWorld(0, (sd ? 1 : -1) * S._halfWAt(F, 0, sd) * k, zi, o); wallLo = Math.min(wallLo, T.terrainH(o.x, o.z, zi)); }
-      res.shaftY = +(wallLo - 5).toFixed(1);
+      // the haul's start: his eye 5 u + EYE under the lower wall face (FP_RED haul-low: 1 u under the switch)
+      const eye0 = ${HAUL_LOW} ? trig - 1 : wallLo - 5 + 1.35;
+      res.shaftY = +(eye0 - 1.35).toFixed(1); res.trig = +trig.toFixed(1); res.overSwitch = +(eye0 - trig).toFixed(1);
       for (const sd of (zi < 2 ? [1, 0] : [1])) {   // zone 2: the first haul ends the game
         open(zi);
         window.__bench.place(F.cx, F.cz, 0, zi);
-        window.player.pos.y = wallLo - 5 + 1.35; window.player.grounded = false;
+        window.player.pos.y = eye0; window.player.grounded = false;
         const nx = -F.dz * (sd ? 1 : -1), nz = F.dx * (sd ? 1 : -1);  // across the crack toward side sd
         window.player.yaw = Math.atan2(nx, nz);   // forward is (sin yaw, cos yaw)
-        window.keys.KeyW = true; window.keys.KeyC = true; let up = 0, last = null, n = 0, outT = 0;
+        window.keys.KeyW = true; window.keys.KeyC = true; let up = 0, last = null, n = 0, outT = 0, shaft = 0;
         try {
           window.__bench.step(2400, i => {
             if (window.gameState !== 'play' || window.zone !== zi) return false;
-            const y = window.player.pos.y; if (last != null) up = Math.max(up, y - last); last = y; n = i;
-            if (!S.inThroat(window.player.pos.x, window.player.pos.z, zi)) outT++;
+            const p = window.player.pos, y = p.y; if (last != null) up = Math.max(up, y - last); last = y; n = i;
+            if (!S.inThroat(p.x, p.z, zi)) outT++;
+            else if (y > trig) shaft++;   // a frame of the haul in the shaft, above the switch
           });
         } finally { window.keys.KeyW = false; window.keys.KeyC = false; }
-        res['haul' + sd] = { zone: window.zone, state: window.gameState, maxRise: +up.toFixed(3), frames: n, outOfThroat: outT };
+        res['haul' + sd] = { zone: window.zone, state: window.gameState, maxRise: +up.toFixed(3), frames: n, outOfThroat: outT, shaftS: +(shaft / 60).toFixed(3) };
       }
       if (zi < 2) {   // no input at all: stood where the jam was, he sinks through on his own
         open(zi); window.__bench.place(F.cx, F.cz, 0, zi); window.player.pos.y = S.jamTopY(zi, T.terrainH) + 1.35;
@@ -264,8 +307,10 @@ if (mode === 'rise') {
     if (z.freeSink && z.freeSink.zone !== z.zi + 1) fail.push(`zone ${z.zi}: did not sink through the open throat unaided ` + JSON.stringify(z.freeSink));
     for (const k of ['haul1', 'haul0']) {
       const h = z[k]; if (!h) continue;
+      console.log(`zone ${z.zi} ${k}: ${h.shaftS} s in the shaft above the switch (bar >= ${HAUL_MIN_S} s); his eye started ${z.overSwitch} u over it (boots y ${z.shaftY}, switch ${z.trig})`);
       if (z.zi < 2 ? h.zone !== z.zi + 1 : h.state !== 'won') fail.push(`zone ${z.zi} ${k}: did not fall through the open throat ` + JSON.stringify(h));
       if (h.maxRise > 0.5) fail.push(`zone ${z.zi} ${k}: snapped up out of the throat by ${h.maxRise}`);
+      if (!(h.shaftS >= HAUL_MIN_S)) fail.push(`zone ${z.zi} ${k}: only ${h.shaftS} s in the shaft above the switch (bar >= ${HAUL_MIN_S} s; his eye started ${z.overSwitch} u over it)`);
     }
   }
   console.log(JSON.stringify(r));
@@ -1079,6 +1124,21 @@ if (mode === 'rise') {
   //     (terrain.js fissureWallAB) the old patch walls are measured too and the new must halve them.
   //     (The facet energy, the mean normal change, is reported: it was the RED's first metric and
   //     does not tell teeth from relief: the layered walls carry more relief than the teeth did.)
+  // (seafloor relief Task 7) PER COLUMN: the look's depth (25 u under the lip) and the rays' depths (4 / 10 / 20 / 35 u)
+  // were sized on a ~73 u throat; on the relief home zone 0's is ~42 u, where a depth-35 axis lies under the floor at
+  // most stations and its rays were skipped without a word. Both are fractions of the zone's column now (the lip mean
+  // over the throat floor at riftPos(zi), read live at each anchorage: walls-inside.page.js column, LOOK_FR 0.34,
+  // RAY_FR [0.055, 0.14, 0.28, 0.48]), and a RAY-COUNT FLOOR: of the rays planned (every station x depth x 18
+  // directions) >= RAYS_CAST share are cast (their depth's axis in the water there). RED (FP_RED=rays-1.2): a fifth
+  // depth at 1.2 x the column (under the floor) fails the count floor (2026-10-13: 80.0% at every plane; the four depths
+  // cast 96.4% at home zone 0 on the relief, 100% elsewhere). The look's new depth moves every view, unchanged ground too
+  // (home zones 1 / 2 at 27.3 / 29.2 u, the remote sites 24.9-29.2 u; all pass); on the relief home zone 0 looks from
+  // 14.3 u, where the old patch walls draw few slivers (2026-10-13: streak 1.889 vs 3.775, 0.5004 against the 0.5; at 20 u
+  // 0.301, at 25 u 0.253). So (Ruling 30) THE A/B (the new walls must halve the old patch walls' streak) looks from main's
+  // calibrated AB_DEP 25 u under the lip, held to at most AB_COL_MAX 0.6 of the column: on unchanged ground that is main's
+  // own A/B, view for view; the absolute bars (streak, grain, detail) keep LOOK_FR. Its cost: the A/B no longer judges the
+  // 14.3 u view at home zone 0 on the relief; the absolute bars still gate that view.
+  const RAYS_CAST = 0.9, AB_DEP = 25, AB_COL_MAX = 0.6;
   const fs = await import('node:fs');
   // (WALL_OUT25: the worst measured share is 0.20%; the geometry is deterministic, the bound keeps 50%
   // headroom for later changes to the walls. WALL_GRAIN (fix round 1) = LINES x LINE SHARE: the zone-1
@@ -1088,18 +1148,25 @@ if (mode === 'rise') {
   const bound = await c.ev(`(async () => {
     const W = await import('/tools/bench/walls-inside.page.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
-    const out = [];
+    const out = [], fr = ${RED === 'rays-1.2'} ? W.RAY_FR.concat(1.2) : W.RAY_FR;
     for (const site of [0, 1, 2]) {
       if (site) window.__chart.arrive(site);
-      for (let zi = 0; zi < 3; zi++) out.push(Object.assign({ site, zi }, W.bound(zi), { rays: W.rays(zi) }));
+      for (let zi = 0; zi < 3; zi++) out.push(Object.assign({ site, zi }, W.bound(zi), { rays: W.rays(zi, fr) }));
     }
     window.__chart.arrive(0);
     return out; })()`);
+  for (const b of bound) {
+    const r = b.rays;
+    console.log(`site ${b.site} zone ${b.zi}: column ${r.col} u; rays at ${r.depths.join(' / ')} u under the lip: cast ${r.cast} of ${r.planned} planned` +
+      ` (${(100 * r.cast / Math.max(1, r.planned)).toFixed(1)}%, bar >= ${RAYS_CAST * 100}%), ${r.rays} met the rock; recess max ${b.wall ? b.wall.recessMax : '-'} (bound ${WALL_RECESS})`);
+    if (!(r.planned > 0 && r.cast >= RAYS_CAST * r.planned)) fail.push(`site ${b.site} zone ${b.zi}: ${r.cast} of ${r.planned} rays planned for the column cast (bar >= ${RAYS_CAST * 100}%: depths ${r.depths.join(' / ')} u, column ${r.col} u)`);
+  }
   for (const b of bound) {
     for (const k of ['patch', 'wall']) {
       const s = b[k]; if (!s) continue;
       if (s.protrudeMax > WALL_PROTRUDE) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock stands ${s.protrudeMax} u out into the water (bound ${WALL_PROTRUDE}) at ${s.worstOut}`);
       if (s.over025 > WALL_OUT25) fail.push(`site ${b.site} zone ${b.zi} ${k}: ${(s.over025 * 100).toFixed(2)}% of the drawn rock stands > 0.25 u out into the water (bound ${WALL_OUT25 * 100}%)`);
+      // (home z0 west-tip recess 2.925 (relief) -> Task 7b)
       if (s.recessMax > WALL_RECESS) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock lies ${s.recessMax} u back in the rock (bound ${WALL_RECESS}) at ${s.worstIn}`);
     }
     const r = b.rays;
@@ -1117,27 +1184,34 @@ if (mode === 'rise') {
       for (let zi = 0; zi < 3; zi++) {
         window.gotoZone(zi); window.lev.calmed = true; window.__fissure.setOpen(zi, 1);
         const row = { site, zi };
-        const one = async tag => { const r = await W.look(zi); if (r.err) return r;
+        const one = async (tag, dep) => { const r = await W.look(zi, dep ? { dep } : {}); if (r.err) return r;
           row['png_' + tag] = window.__bench.png(r.cap, 0.5); delete r.cap; delete r.normals; return r; };
-        row.now = await one('now');
-        if (site === 0 && T.fissureWallAB) { T.fissureWallAB(false); try { row.old = await one('old'); } finally { T.fissureWallAB(true); } }
+        row.now = await one('now');   // (LOOK_FR x the column: the absolute bars)
+        if (site === 0 && T.fissureWallAB) {   // the A/B, new walls against the old patch walls, at the same depth
+          const abDep = Math.min(${AB_DEP}, ${AB_COL_MAX} * W.column(zi).col);
+          row.ab = await one('ab', abDep);
+          T.fissureWallAB(false); try { row.old = await one('old', abDep); } finally { T.fissureWallAB(true); }
+        }
         out.push(row);
       }
     }
     window.__chart.arrive(0); window.__bench.size();
     return out; })()`);
   for (const z of look) {
-    for (const k of ['now', 'old']) if (z['png_' + k]) { fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t5b-probe-s${z.site}-z${z.zi}-${k}.png`, Buffer.from(z['png_' + k].split(',')[1], 'base64')); delete z['png_' + k]; }
+    for (const k of ['now', 'ab', 'old']) if (z['png_' + k]) { fs.writeFileSync(`/Users/michaelpaulus/sc/.abyssa-wt/shots/fissure-t5b-probe-s${z.site}-z${z.zi}-${k}.png`, Buffer.from(z['png_' + k].split(',')[1], 'base64')); delete z['png_' + k]; }
     const n = z.now, at = `site ${z.site} zone ${z.zi}`;
     if (n.err) { fail.push(`${at}: ${n.err}`); continue; }
     if (n.streak > WALL_STREAK) fail.push(`${at}: the walls draw as vertical slivers (teeth, stretched) from inside: streak ${n.streak} > ${WALL_STREAK}`);
     if (n.localContrast < WALL_DETAIL) fail.push(`${at}: the walls lost their detail: local contrast ${n.localContrast} < ${WALL_DETAIL}`);
     const grain = +(n.lines * n.lineShare).toFixed(4); n.grain = grain;
     if (grain > WALL_GRAIN) fail.push(`${at}: the walls' grain runs in fine coherent lines (wood grain, agate): grain ${grain} = lines ${n.lines} x share ${n.lineShare} (bound ${WALL_GRAIN})`);
-    if (z.old && !(n.streak < 0.5 * z.old.streak)) fail.push(`${at}: no better than the old patch walls (streak ${n.streak} vs ${z.old.streak})`);
+    if (z.old) { const a = z.ab || {};
+      console.log(`${at}: the A/B at ${a.dep} u under the lip: streak ${a.streak} against the old patch walls' ${z.old.streak} (ratio ${(a.streak / z.old.streak).toFixed(4)}, bar < 0.5)`);
+      if (!(a.streak < 0.5 * z.old.streak)) fail.push(`${at}: no better than the old patch walls (streak ${a.streak} vs ${z.old.streak} at ${a.dep} u)`); }
   }
-  console.log(JSON.stringify(look.map(z => ({ site: z.site, zi: z.zi, now: z.now && { streak: z.now.streak, grain: z.now.grain, lines: z.now.lines, lineShare: z.now.lineShare, localContrast: z.now.localContrast, facet: z.now.facet },
-    old: z.old && { streak: z.old.streak, lines: z.old.lines, lineShare: z.old.lineShare, localContrast: z.old.localContrast } }))));
+  console.log(JSON.stringify(look.map(z => ({ site: z.site, zi: z.zi, now: z.now && { dep: z.now.dep, streak: z.now.streak, grain: z.now.grain, lines: z.now.lines, lineShare: z.now.lineShare, localContrast: z.now.localContrast, facet: z.now.facet },
+    ab: z.ab && { dep: z.ab.dep, streak: z.ab.streak, lines: z.ab.lines, lineShare: z.ab.lineShare, localContrast: z.ab.localContrast },
+    old: z.old && { dep: z.old.dep, streak: z.old.streak, lines: z.old.lines, lineShare: z.old.lineShare, localContrast: z.old.localContrast } }))));
   // (3) THE LENS ON THE FALL PATH: the real follow camera while Sal sinks through each open throat (three
   //     places along it), the frames its lens sits within the near plane (0.1 u) of drawn crack rock,
   //     the throat walls against the old patch walls on the same paths. The camera keeps no
@@ -1194,6 +1268,20 @@ if (mode === 'rise') {
   // minimum, the floor clamp lifted the lens up a wall column; Sal drifted into the walls with no wall
   // test while overRift). GREEN (game.js THROAT_CAM, player.js holdInShaft): zones 0-1 all 0; zone 2
   // near 4-6, inside 1-2; out of frame 0; in the walls 0. Then the STANDING cases (below).
+  // (seafloor relief Task 7) COVERAGE PER COLUMN. samples >= 150 a case was a coverage floor sized on home zone 0's column
+  // on main (COL_REF 72.7 u: its lip mean over its throat floor at riftPos(0)). On the relief that column is ~42 u, a case
+  // falls ~42% less shaft and a fixed floor gets easier silently. Re-derived per column at the case's zone (the column =
+  // lip mean - throat floor at riftPos(zi), read live: walls-inside.page.js column): samples >= 150 x column / COL_REF; the
+  // count gates beside it (close / hfIn / salIn: each case's, and each total over the cases it sums, at their mean)
+  // scale the same way, rounded up, but never above 1: zones 1 and 2 (unchanged ground) stand 80.2 / 85.8 u deep, over
+  // COL_REF, and a factor over 1 would LOOSEN bars measured on those very columns (zone 1 close 2 -> 3, zone 2 9 -> 11);
+  // their samples floors (165 / 177) only tighten. Every zone prints its column and bars. The STANDING cases (2 s stood)
+  // and the FRAME-RATE set below (no coverage floor) keep theirs. RED: FP_MUTANT nocomp ({"hollow":{"noComp":true}}: the
+  // floor ~31 u lower, a ~73 u column) must still pass; FP_RED=cut-1s (Ruling 32: each zone's u -4 across case again, on
+  // its own clock, measured over its first second only, a descent the probe stopped following) fails the samples floor.
+  // (The plan's case with C let go after 1 s: 295 / 452 / 468 samples, passes: the dress is dumped in ~0.2 s, so he sinks
+  // on, slower.)
+  const COL_REF = 72.7, up = (bar, k) => Math.ceil(bar * Math.min(1, k) - 1e-9);
   const D90 = Math.PI / 2, cases = [];
   for (let zi = 0; zi < 3; zi++) {
     for (const u of [-15, -4, 9]) for (const yaw of [0, D90, -D90, D90 / 2, 3 * D90 / 2, 2 * D90]) cases.push({ zi, u, yaw });
@@ -1201,36 +1289,49 @@ if (mode === 'rise') {
     cases.push({ zi, u: -4, yaw: 0, yawRate: 1.0 }, { zi, u: 9, yaw: D90, yawRate: -1.0 });
   }
   cases.forEach((k, i) => { k.t0 = 1000 + 37 * i; });   // each case its own repeatable clock (the current is fbm in t)
+  if (RED === 'cut-1s') for (const k of cases.filter(k => k.u === -4 && k.yaw === D90 && !k.pitch)) cases.push(Object.assign({}, k, { frames: 60, cut: 1 }));
   const r = await c.ev(`(async () => {
     const W = await import('/tools/bench/walls-inside.page.js'); const out = [];
-    for (const k of ${JSON.stringify(cases)}) out.push(await W.descentLens(k.zi, k));
+    for (const k of ${JSON.stringify(cases)}) out.push(Object.assign(await W.descentLens(k.zi, k), { cut: k.cut || 0 }));
     window.gotoZone(0);
-    return out; })()`);
+    return { cases: out, cols: [0, 1, 2].map(zi => W.column(zi)) }; })()`);
+  const cols = r.cols, kz = cols.map(cz => cz.col / COL_REF), meanK = a => a.reduce((x, q) => x + Math.min(1, kz[q.zi]), 0) / Math.max(1, a.length);   // (the count gates' factor, <= 1)
+  const barOf = zi => ({ samples: 150 * kz[zi], close: up(zi < 2 ? 2 : 9, kz[zi]), hfIn: up(2, kz[zi]), salIn: up(3, kz[zi]) });
+  for (let zi = 0; zi < 3; zi++) { const b = barOf(zi), a = r.cases.filter(q => q.zi === zi);
+    console.log(`fall-lens zone ${zi}: column ${cols[zi].col.toFixed(2)} u (lip ${cols[zi].lip.toFixed(2)}, floor ${cols[zi].floor.toFixed(2)}) x ${kz[zi].toFixed(4)}: a case samples >= ${b.samples.toFixed(1)}` +
+      ` (measured ${Math.min(...a.map(q => q.samples))}-${Math.max(...a.map(q => q.samples))}), close <= ${b.close}${zi < 2 ? `, hfIn <= ${b.hfIn}` : ''}, salIn <= ${b.salIn}`); }
   let close = 0, hfIn = 0, inside = 0, off = 0, samples = 0, salIn = 0, salFloor = 0, guards = 0, snaps = 0;
   const post = { n: 0, close: 0, hfIn: 0, salIn: 0 };
-  for (const q of r) {
+  for (const q of r.cases) {
+    const b = barOf(q.zi);
     close += q.close; hfIn += q.hfIn; inside += q.inside; off += q.offFrame; samples += q.samples; salIn += q.salIn; salFloor += q.salFloor; guards += q.guards || 0; snaps += q.snaps || 0;
     for (const k in post) post[k] += q.post[k];
-    if (q.zi < 2 && !q.through) fail.push(`zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}: the descent was not followed through the throat floor`);
-    const at = `zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}${q.pitch ? ' pitch ' + q.pitch : ''}${q.yawRate ? ' turning ' + q.yawRate : ''}`;
-    if (q.samples < 150) fail.push(`${at}: only ${q.samples} samples below the lip (the fall was not measured)`);
+    const at = `zone ${q.zi} u ${q.u} yaw ${Math.round(q.yaw * 57.3)}${q.pitch ? ' pitch ' + q.pitch : ''}${q.yawRate ? ' turning ' + q.yawRate : ''}${q.cut ? ' (RED: measured over its first ' + q.cut + ' s)' : ''}`;
+    if (q.cut) console.log(`${at}: ${q.samples} samples below the lip (bar >= ${b.samples.toFixed(1)}), through ${q.through}, ended ${q.endBelowLip} u under the lip`);
+    if (q.zi < 2 && !q.through) fail.push(`${at}: the descent was not followed through the throat floor`);
+    if (!(q.samples >= b.samples)) fail.push(`${at}: only ${q.samples} samples below the lip (the fall was not measured; bar >= 150 x ${cols[q.zi].col.toFixed(2)} / ${COL_REF} = ${b.samples.toFixed(1)})`);
     // (rise fix 3: +1 headroom on every per-case bound that sat on the worst seen over four whole runs: zones 0/1
     // near-plane / in-rock 1 -> 2, zone 2 near-plane 8 -> 9, Sal in the walls 2 -> 3; the totals keep theirs)
-    if (q.zi < 2 && q.close > 2) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames (bound 2; min ${q.minD} at ${JSON.stringify(q.at)})`);
-    if (q.zi < 2 && q.hfIn > 2) fail.push(`${at}: the lens inside the rock on ${q.hfIn}/${q.samples} frames (bound 2)`);
-    if (q.zi === 2 && q.close > 9) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames, over the zone-2 bound 9 (min ${q.minD})`);
+    if (q.zi < 2 && q.close > b.close) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames (bound ${b.close}; min ${q.minD} at ${JSON.stringify(q.at)})`);
+    if (q.zi < 2 && q.hfIn > b.hfIn) fail.push(`${at}: the lens inside the rock on ${q.hfIn}/${q.samples} frames (bound ${b.hfIn})`);
+    if (q.zi === 2 && q.close > b.close) fail.push(`${at}: the lens within ${q.near} u of drawn rock on ${q.close}/${q.samples} frames, over the zone-2 bound ${b.close} (min ${q.minD})`);
     if (q.offFrame && !(q.pitch > 0)) fail.push(`${at}: Sal out of frame on ${q.offFrame}/${q.samples} frames (ndc y ${q.ndcLow}..${q.ndcHigh}, |x| ${q.ndcSide})`);
     // (residual: the eased hold lets him graze a ledge corner; three whole runs at HEAD measured 1 / 1 / 2 samples a case,
     // 3 / 4 / 4 in all, <= 0.6 u deep: the page is not deterministic run to run, the same case at the same t0 differs)
-    if (q.salIn > 3 || q.salInMax > 0.75) fail.push(`${at}: Sal inside the shaft walls on ${q.salIn}/${q.samples} frames (up to ${q.salInMax} u under the rock; bound 3 a case, 0.75 u)`);
+    if (q.salIn > b.salIn || q.salInMax > 0.75) fail.push(`${at}: Sal inside the shaft walls on ${q.salIn}/${q.samples} frames (up to ${q.salInMax} u under the rock; bound ${b.salIn} a case, 0.75 u)`);
   }
-  const z2 = r.filter(q => q.zi === 2), z2close = z2.reduce((a, q) => a + q.close, 0), z2hf = z2.reduce((a, q) => a + q.hfIn, 0);
-  const z01close = r.filter(q => q.zi < 2).reduce((a, q) => a + q.close, 0), z01hf = r.filter(q => q.zi < 2).reduce((a, q) => a + q.hfIn, 0);
-  if (z01hf > 3) fail.push(`zones 0/1: the lens under the heightfield on ${z01hf} samples (bound 3, <= 2 a case)`);
-  if (salIn > 6) fail.push(`Sal inside the shaft walls on ${salIn} samples in all (bound 6: grazes <= 0.75 u, the eased hold; RED 289 post-switch on 7cbcc49)`);
-  if (z01close > 3) fail.push(`zones 0/1: the lens near drawn rock on ${z01close} samples (bound 3, <= 2 a case)`);
-  if (z2close > 12 || z2hf > 4) fail.push(`zone 2: the lens near drawn rock on ${z2close} frames / inside it on ${z2hf} (bound 12 / 4)`);
-  console.log(JSON.stringify({ cases: r.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, postSwitch: post, lensGuardFrames: guards, lensStiffFrames: snaps }));
+  const z2 = r.cases.filter(q => q.zi === 2), z01 = r.cases.filter(q => q.zi < 2);
+  const z2close = z2.reduce((a, q) => a + q.close, 0), z2hf = z2.reduce((a, q) => a + q.hfIn, 0);
+  const z01close = z01.reduce((a, q) => a + q.close, 0), z01hf = z01.reduce((a, q) => a + q.hfIn, 0);
+  // the totals, at the mean column of the cases each sums
+  const T01 = up(3, meanK(z01)), TSAL = up(6, meanK(r.cases)), TZ2C = up(12, meanK(z2)), TZ2H = up(4, meanK(z2));
+  console.log(`fall-lens totals: zones 0/1 near ${z01close} / under ${z01hf} (bound ${T01} each: 3 x ${meanK(z01).toFixed(4)}), Sal in the walls ${salIn} (bound ${TSAL}: 6 x ${meanK(r.cases).toFixed(4)}),` +
+    ` zone 2 near ${z2close} / inside ${z2hf} (bound ${TZ2C} / ${TZ2H}: 12 / 4 x ${meanK(z2).toFixed(4)})`);
+  if (z01hf > T01) fail.push(`zones 0/1: the lens under the heightfield on ${z01hf} samples (bound ${T01}, per column)`);
+  if (salIn > TSAL) fail.push(`Sal inside the shaft walls on ${salIn} samples in all (bound ${TSAL}, per column: grazes <= 0.75 u, the eased hold; RED 289 post-switch on 7cbcc49)`);
+  if (z01close > T01) fail.push(`zones 0/1: the lens near drawn rock on ${z01close} samples (bound ${T01}, per column)`);
+  if (z2close > TZ2C || z2hf > TZ2H) fail.push(`zone 2: the lens near drawn rock on ${z2close} frames / inside it on ${z2hf} (bound ${TZ2C} / ${TZ2H}, per column)`);
+  console.log(JSON.stringify({ cases: r.cases.length, samples, close, hfIn, inside, offFrame: off, salIn, salUnderFloor: salFloor, z2close, z2hf, postSwitch: post, lensGuardFrames: guards, lensStiffFrames: snaps }));
   // STANDING in or at the open crack (the boom's floor test and the floor clamp stand aside only inside the
   // outline): per zone, stood on the broken lip (fd -0.4 / -1.2 on each side) at three stations and at both
   // tips, plus the probe's strata ledge, facing out of the crack, along it and into it, 3 s settled then 2 s
@@ -1332,14 +1433,14 @@ if (mode === 'rise') {
   // lateral step <= 0.25 u a frame at 1/60 (0.5 at 1/30), the hold's own step <= its 12 u/s limit.
   const rise = await riseSet();
   const stepCap = dt => dt > 0.02 ? 0.5 : 0.25, holdCap = dt => 12 * dt + 1e-3;
-  const desc = r.concat(fr.map(q => ({ zi: q.zi, u: q.u, yaw: q.yaw * Math.PI / 180, dt: q.dt, salStepMax: q.salStepMax, holdStepMax: null })));
+  const desc = r.cases.concat(fr.map(q => ({ zi: q.zi, u: q.u, yaw: q.yaw * Math.PI / 180, dt: q.dt, salStepMax: q.salStepMax, holdStepMax: null })));
   let stepW = 0, holdW = 0;
   for (const q of desc) { stepW = Math.max(stepW, q.salStepMax || 0); holdW = Math.max(holdW, q.holdStepMax || 0);
     if ((q.salStepMax || 0) > stepCap(q.dt || 1 / 60)) fail.push(`zone ${q.zi} u ${q.u} yaw ${Math.round((q.yaw || 0) * 57.3)}: Sal stepped ${q.salStepMax} u in one frame (dt ${q.dt || '1/60'})`);
     if ((q.holdStepMax || 0) > holdCap(q.dt || 1 / 60)) fail.push(`zone ${q.zi} u ${q.u}: the shaft hold moved him ${q.holdStepMax} u in a frame`); }
   for (const q of rise) stepW = Math.max(stepW, q.salStepMax);   // (the rises' own gates: riseSet)
   console.log(JSON.stringify({ salStep: { worst: +stepW.toFixed(3), holdWorst: +holdW.toFixed(3), rises: rise.length, riseWorst: Math.max(...rise.map(q => q.salStepMax)), riseHoldWorst: Math.max(...rise.map(q => q.holdStepMax || 0)) } }));
-  for (const q of r) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
+  for (const q of r.cases) console.log(JSON.stringify({ zi: q.zi, u: q.u, yaw: Math.round(q.yaw * 57.3), pitch: q.pitch, turn: q.yawRate, cut: q.cut, n: q.samples, close: q.close, hfIn: q.hfIn, inside: q.inside, off: q.offFrame,
     minD: q.minD, ndc: [q.ndcLow, q.ndcHigh, q.ndcSide], boom: [q.boomMin, q.boomMax], end: q.endBelowLip, salIn: q.salIn, salInMax: q.salInMax, salAt: q.salAt, salFloor: q.salFloor, salFloorAt: q.salFloorAt, offAll: q.offAll, holds: q.shaftHolds, closeAt: q.closeAt, hfAt: q.hfAt, offAt: q.offAt }));
 } else if (mode === 'ending') {
   // THE ENDING THREADS THE OPEN THROATS (final fix wave M5). playEnding() with all three fissures open
@@ -1363,12 +1464,38 @@ if (mode === 'rise') {
   // under each throat floor with the lens 5-12 u over it), occluded 292 (zone 2's pinched throat: 230).
   // GREEN (ending.js FLOOR_UNDER / UNDER_HIM / LOS_F): hidden 0, occluded 33; the lens's own band frames
   // rise (2/19/0 -> 32/5/118: it now waits under each floor with him, where the floor is a culled back face).
+  // (seafloor relief Task 7) THE ZONE-0 DIP (spec §7: "Ending ascent: zone-0 dip to zone-1 clear >= 150 u"): ending.js
+  // buildPath leaves riftPos(1) at yC, clear of zone 1's ground along the corridor to riftPos(0) (its crest + CLEAR 18),
+  // and arrives at riftPos(0) at yD, still under zone 0's floor and its throat (min(the corridor's lowest zone-0 ground
+  // outside RIFT_R x 2.8 of the rift, the throat floor at riftPos(0)) - DIP 14); the dip is yD - yC, the lateral leg's
+  // climb. READ LIVE off the spline the ending builds: its control points, taken off the CatmullRomCurve3 it samples
+  // (a prototype hook held only across playEnding()), the leg being the one point on riftPos(1) followed by one on
+  // riftPos(0); the tools/relief/gates.mjs replica of the same formula is computed in the page and must agree. 198.6 u
+  // on main and on the relief (2026-10-13): the throat floor at riftPos(0) is zone 0's lowest point on both. RED
+  // (FP_MUTANT sink, {"hollow":{"D":60,"noComp":true}}: the throat floor ~63 u lower) must fail it; deep ({"D":60}) must
+  // not: its lower lip leaves the compensated throat floor (-315.3) the dip's lowest point.
+  const DIP_MIN = 150;
   const r = await c.ev(`(async () => {
-    const T = await import('/src/world/terrain.js'), C = await import('/src/config.js');
+    const T = await import('/src/world/terrain.js'), C = await import('/src/config.js'), THREE = await import('three');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
     for (let zi = 0; zi < 3; zi++) window.__fissure.setOpen(zi, 1);
     window.__bench.step(5);
-    window.playEnding();
+    // every curve sampled while the ending starts (its first start also builds its own meshes); the path is the one
+    // holding the leg
+    const P3 = THREE.CatmullRomCurve3.prototype, gp = P3.getPoint, seen = new Set(), curves = [];
+    P3.getPoint = function (t, o) { if (!seen.has(this) && this.points) { seen.add(this); curves.push(this.points.map(q => [q.x, q.y, q.z])); } return gp.call(this, t, o); };
+    try { window.playEnding(); } finally { P3.getPoint = gp; }
+    const r0 = C.riftPos(0), r1 = C.riftPos(1), on = (q, rp) => Math.abs(q[0] - rp.x) < 1e-6 && Math.abs(q[2] - rp.z) < 1e-6;
+    let leg = -1, pts = null;
+    for (const cp of curves) for (let i = 0; i + 1 < cp.length; i++) if (on(cp[i], r1) && on(cp[i + 1], r0)) { leg = i; pts = cp; }
+    let z1max = -Infinity, cmin = Infinity;
+    for (let i = 0; i <= 56; i++) { const t = i / 56, x = r1.x + (r0.x - r1.x) * t, z = r1.z + (r0.z - r1.z) * t;
+      z1max = Math.max(z1max, T.terrainH(x, z, 1));
+      if (Math.hypot(x - r0.x, z - r0.z) >= C.RIFT_R * 2.8) cmin = Math.min(cmin, T.terrainH(x, z, 0)); }
+    const tf0 = T.terrainH(r0.x, r0.z, 0);
+    const dip = { points: pts ? pts.length : 0, curves: curves.length, yC: leg >= 0 ? pts[leg][1] : null, yD: leg >= 0 ? pts[leg + 1][1] : null,
+      rep: { yC: z1max + 18, yD: Math.min(cmin, tf0) - 14, tf0, cmin, z1max } };
+    dip.live = leg >= 0 ? dip.yD - dip.yC : null; dip.rep.dip = dip.rep.yD - dip.rep.yC;
     const bandOf = (x, y, z, win) => { for (let zi = 0; zi < 3; zi++) { if (win && (y < C.zoneBottom(zi) - 62 || y > C.zoneBottom(zi) + 190)) continue;
       const h = T.terrainH(x, z, zi); if (y < h + 1.8 && y > h - 26) return zi; } return -1; };
     const nearZone = y => { let best = -1, bd = 1e9; for (let zi = 0; zi < 3; zi++) { const d = Math.abs(y - (C.zoneBottom(zi) - 40)); if (d < bd) { bd = d; best = zi; } } return best; };
@@ -1396,10 +1523,18 @@ if (mode === 'rise') {
             const a = above(x, y, z); if (prev > 0 && a < 0) { occ = true; break; } if (a !== 0) prev = a; }
           if (occ) { out.occluded++; if (out.occAt.length < 16) out.occAt.push([i, +p.y.toFixed(1)]); } } }
     });
-    out.state = window.gameState;
+    out.state = window.gameState; out.dip = dip;
     return out; })()`);
   console.log(JSON.stringify(r));
-  const sum = a => a.reduce((x, y) => x + y, 0);
+  const sum = a => a.reduce((x, y) => x + y, 0), d = r.dip;
+  console.log(`ending: the zone-0 dip yD - yC = ${d.live == null ? 'not read' : d.live.toFixed(2)} u (bar >= ${DIP_MIN}; spec §7, 198.6 today): yD ${d.yD == null ? '-' : d.yD.toFixed(2)}` +
+    ` (the ${d.rep.tf0 <= d.rep.cmin ? 'throat floor at riftPos(0)' : "corridor's lowest zone-0 ground"} - 14: throat floor ${d.rep.tf0.toFixed(2)}, corridor ${d.rep.cmin.toFixed(2)}),` +
+    ` yC ${d.yC == null ? '-' : d.yC.toFixed(2)} (zone 1's corridor crest ${d.rep.z1max.toFixed(2)} + 18); the replica's dip ${d.rep.dip.toFixed(2)}; ${d.points} control points (${d.curves} curves sampled)`);
+  if (d.live == null) fail.push(`ending: the zone-0 dip was not read off the ending's spline (${d.points} control points captured; no leg from riftPos(1) to riftPos(0))`);
+  else {
+    if (!(Math.abs(d.yC - d.rep.yC) <= 1e-6 && Math.abs(d.yD - d.rep.yD) <= 1e-6)) fail.push(`ending: the spline's yC/yD (${d.yC}, ${d.yD}) are not the replica's (${d.rep.yC}, ${d.rep.yD}): re-derive the dip's readout`);
+    if (!(d.live >= DIP_MIN)) fail.push(`ending: the zone-0 dip is ${d.live.toFixed(2)} u (bar >= ${DIP_MIN}, spec §7): yD ${d.yD.toFixed(2)} under yC ${d.yC.toFixed(2)}`);
+  }
   if (r.state !== 'won') fail.push('the ending did not hold the won state: ' + r.state);
   if (sum(r.hidden)) fail.push(`the diver was inside the rock with the lens on the other side on ${sum(r.hidden)} frames (${r.hidden.join('/')}) ` + JSON.stringify(r.hidAt));
   if (r.occluded > 60) fail.push(`the lens's line to him ran through rock on ${r.occluded}/${r.rise} rise frames ` + JSON.stringify(r.occAt));
@@ -1443,17 +1578,32 @@ if (mode === 'rise') {
     const BL = window.__bladeLast;
     out.m2 = { contact: !!BL && BL.t !== t0, kind: BL && BL.kind, puff: BL ? BL.puff : null, onJam: window.player.jamY != null };
     window.survival.hasHarpoon = false; window.player.pitch = 0;
-    // ---- M9
+    // ---- M9 (seafloor relief Task 7, Ruling 33): he stands where the line's own rule can hold, the jam point nearest the
+    // crack's centre whose floor lies under riftRimY - 1.5 - 0.3 (game.js: the line needs jamY < riftRimY - 1.5, riftRimY
+    // being lipMeanY on entering the zone). The fixed centre spot (u 0, v 0) stood on a block 0.91 u under the rim on the
+    // relief (main 1.72), where the line can never fire, and the asleep half passed vacuously there. No such point in the
+    // jam's middle (|u| <= 0.5 halfLen, half of each side's width) is a FAIL, never a skip. Both halves stand on it, and his
+    // floor there (player.jamY, every frame he stands) must stay under the rule's height in each.
     window.gotoZone(0); window.__fissure.setOpen(0, 0); window.lev.calmed = false;
-    S.fissureWorld(0, 0, 0, o); const hx = o.x, hz = o.z;
-    const hold = () => { window.player.pos.x = hx; window.player.pos.z = hz; };
-    window.__bench.place(hx, hz, 0, 0); window.player.pos.y = T.shutFloorY(hx, hz, 0) + 1.35;
-    const asleep = said(1500, hold);
-    out.m9 = { dormant: !!window.lev.dormant, asleepSaid: asleep.includes('THE RIFT IS SHUT WHILE IT WAKES.'), asleep };
-    window.lev.cmd('wake'); window.__bench.step(10); window.lev.cmd('wake');
-    window.__bench.place(hx, hz, 0, 0); window.player.pos.y = T.shutFloorY(hx, hz, 0) + 1.35;
-    const awake = said(1500, hold);
-    out.m9.awakeDormant = !!window.lev.dormant; out.m9.awakeSaid = awake.includes('THE RIFT IS SHUT WHILE IT WAKES.'); out.m9.awake = awake;
+    const rim = S.lipMeanY(0, T.terrainH), want = rim - 1.5 - 0.3; let spot = null;
+    for (let u = -0.5 * F.halfLen; u <= 0.5 * F.halfLen + 1e-9; u += 0.25) { const w0 = S._halfWAt(F, u, 0), w1 = S._halfWAt(F, u, 1);
+      for (let v = -0.5 * w0; v <= 0.5 * w1 + 1e-9; v += 0.25) { S.fissureWorld(u, v, 0, o); const j = T.jamAt(o.x, o.z, 0);
+        if (j > -1e8 && j < want && (!spot || Math.hypot(u, v) < spot.d)) spot = { u: +u.toFixed(2), v: +v.toFixed(2), d: Math.hypot(u, v), x: o.x, z: o.z, floor: j }; } }
+    out.m9 = { rim: +rim.toFixed(2), want: +want.toFixed(2), centre: (S.fissureWorld(0, 0, 0, o), +(rim - T.jamAt(o.x, o.z, 0)).toFixed(2)),
+      spot: spot && { u: spot.u, v: spot.v, floor: +spot.floor.toFixed(2), under: +(rim - spot.floor).toFixed(2) } };
+    if (spot) {
+      const hx = spot.x, hz = spot.z, jam = { n: 0, hi: -1e9 };
+      const hold = () => { window.player.pos.x = hx; window.player.pos.z = hz;
+        if (window.player.grounded && window.player.jamY != null) { jam.n++; jam.hi = Math.max(jam.hi, window.player.jamY); } };
+      window.__bench.place(hx, hz, 0, 0); window.player.pos.y = T.shutFloorY(hx, hz, 0) + 1.35;
+      const asleep = said(1500, hold);
+      Object.assign(out.m9, { dormant: !!window.lev.dormant, asleepSaid: asleep.includes('THE RIFT IS SHUT WHILE IT WAKES.'), asleep, asleepJam: { n: jam.n, hi: +jam.hi.toFixed(2) } });
+      jam.n = 0; jam.hi = -1e9;
+      window.lev.cmd('wake'); window.__bench.step(10); window.lev.cmd('wake');
+      window.__bench.place(hx, hz, 0, 0); window.player.pos.y = T.shutFloorY(hx, hz, 0) + 1.35;
+      const awake = said(1500, hold);
+      Object.assign(out.m9, { awakeDormant: !!window.lev.dormant, awakeSaid: awake.includes('THE RIFT IS SHUT WHILE IT WAKES.'), awake, awakeJam: { n: jam.n, hi: +jam.hi.toFixed(2) } });
+    }
     // ---- M10
     window.gotoZone(1); window.__fissure.setOpen(1, 0);
     S.fissureWorld(0, 30, 1, o); window.__bench.place(o.x, o.z, 0, 1);
@@ -1469,12 +1619,22 @@ if (mode === 'rise') {
   else if (Math.abs(r.m1.y - 1) > 0.5) fail.push('M1: the way-down echo is not at the lip (' + r.m1.y + ' u off lipMeanY)');
   if (!r.m2.contact) fail.push('M2: the thrust never landed ' + JSON.stringify(r.m2));
   else if (r.m2.puff !== 1) fail.push('M2: no silt at the point over the shut jam ' + JSON.stringify(r.m2));
-  if (!r.m9.dormant) fail.push('M9: she was not asleep for the asleep half');
-  if (r.m9.asleepSaid) fail.push('M9: "THE RIFT IS SHUT WHILE IT WAKES." said while she slept');
-  if (r.m9.awakeDormant || !r.m9.awakeSaid) fail.push('M9: not said on the jam with her awake ' + JSON.stringify(r.m9.awake));
+  const m9 = r.m9;
+  if (!m9.spot) fail.push(`M9: no point on the jam's middle stands down in the crack (its floor under riftRimY ${m9.rim} - 1.8 = ${m9.want}): the line's rule cannot hold anywhere there`);
+  else {
+    console.log(`M9: stood at u ${m9.spot.u} v ${m9.spot.v}: the jam's floor ${m9.spot.floor}, ${m9.spot.under} u under riftRimY ${m9.rim} (the rule: > 1.5, the probe's margin 0.3; the centre ${m9.centre})`);
+    for (const [half, j] of [['asleep', m9.asleepJam], ['awake', m9.awakeJam]])
+      if (!(j.n > 0 && j.hi < m9.rim - 1.5)) fail.push(`M9 ${half}: his floor there was not under the rule's height (${j.n} frames on the jam, highest jamY ${j.hi}, riftRimY - 1.5 = ${(m9.rim - 1.5).toFixed(2)})`);
+    if (!m9.dormant) fail.push('M9: she was not asleep for the asleep half');
+    if (m9.asleepSaid) fail.push('M9: "THE RIFT IS SHUT WHILE IT WAKES." said while she slept');
+    if (m9.awakeDormant || !m9.awakeSaid) fail.push('M9: not said on the jam with her awake ' + JSON.stringify(m9.awake));
+  }
   // R2 (rise fix): A CAMERA CUT ZEROES THE GUARD'S VELOCITY. Falling in zone 0's open shaft until the guard is
   // moving the lens (its velocity over 1 u/s), then cut away (__bench.place: snapCamBehind) to open seabed 40 u
   // off the crack: one frame later the guard's velocity is 0 (it used to carry the lens on after the cut, <= ~0.56 u).
+  // (seafloor relief Task 7) The fall starts at lipMeanY - 2 of the lip as it is (read live), so the relief's shorter
+  // shaft needs nothing new: the guard is at its 45 u/s limit on the fall's first frame on both builds (2026-10-13: before
+  // 45, frame 1, after 0); the vacuity check below stays.
   const cut = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js'), { clock } = await import('/src/core.js');
     const zi = 0, F = S.FISSURE[zi], w = { x: 0, z: 0 }, u = 9;
@@ -1502,6 +1662,10 @@ if (mode === 'rise') {
   // Velkath: her lair centre (radius R), her whole REST OUTLINE (every shell vertex) >= 6 u, her silt
   // skirt never over the lip (>= 1 u), her near flank (L.nearFlank, Task 6's harpoon side) out on
   // open walkable sand.
+  // (seafloor relief Task 7) Her near flank's normal.y >= 0.8 holds on her levelled flat (2026-10-13: home 1.00 on the
+  // relief, 0.96 on main). RED (Ruling 32; FP_MUTANT {"hollow":{"sDrop":-14,"sR":[8,24]}}: her flat a mound 18 u up whose
+  // flank, 8-24 u out, passes under her near flank, 15.4 u out; her bed stays at her station) fails it: ny 0.597.
+  // (The plan's tilt, sR 30-46: home 1.00, passes: the flank point lay on the mound's flat top.)
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js');
     const Fl = await import('/src/world/flora.js'), Pr = await import('/src/world/props.js'), Wr = await import('/src/world/wrecks.js');
@@ -1571,18 +1735,34 @@ if (mode === 'rise') {
   // either side of her, and out on the shut jam itself); over 15 s each: her centre never comes
   // inside APRON + STAND.keep R of the lip (0.3 u slack for the per-frame push), her drawn
   // shell never inside 12 u of it (the 14 u apron, 2 u slack); then him under her for 3 s: her dark wards over
-  // the floor stay where ritefair left them (6.7-9.6 u; fail > 10.5: reach 7 + one tap-hop) and the shell keeps its STAND.clear. THROWS: from 160 spots by the lip (fd 0.5-10, either side,
+  // the floor stay where they stand today (WARD_MAX, below) and the shell keeps its STAND.clear. THROWS: from 160 spots by the lip (fd 0.5-10, either side,
   // along the whole crack) in 8 directions each, the guarded hammer throw (safeThrow, knockUp,
   // 26 u/s through the real player step) never carries him into the crack (fd < 0 at any frame);
   // the unguarded share is reported as the discriminator. (final wave M4) Her feet (planted and
   // swinging) never stand inside the lip (fd >= 0). OPEN, from inside the lip on the broken lip (off
   // the throat): the guarded throw always leans out of the crack; shut there, it is left alone.
+  // (seafloor relief Task 7) HER DARK WARDS: the old bar, 10.5 as "reach 7 + one tap-hop", was stale: her ward reach has
+  // been 5 (NOSAFE.reach) since velhard. The requirement is the spec's (G5): her wards over her ground stay at today's
+  // heights. (Rulings 31, 34) PER SITE, each ward read as its highest over ~1 s of her settled stance over him, every ward
+  // dark (below): WARD_MAX[site] = main's highest dark ward at that site over these hunts + 0.5, this mode on a main copy,
+  // three runs, 2026-10-13: home 8.9 / 8.4 / 8.9, Pallid 10.2 / 10.0 / 10.3, Burned 10.3 / 10.3 / 10.1 (on main home is her
+  // far-flank station, on the relief her raft-side one). The one RED attempt (Ruling 34), FP_MUTANT
+  // {"hollow":{"sDrop":-14,"sR":[8,24]}} (her flat a mound 18 u up, its flank 8-24 u out under her body, at the station where
+  // she hunts; her ground 13-16 u from low to high under her) does NOT fail it: her settled wards read 7.5 / 6.8 / 8.9 at
+  // home, and one hunt fails as unmeasured (her body 6.5 -> 8.4 u over the ground, rising: no settle) (2026-10-13). The bound
+  // stands on its derivation; Task 8's riteplay ward column is the home gate. Her KEEP
+  // line is APRON + STAND.keep x R with R read live from the sleeper the zone built (window.lev, asserted the brooder:
+  // every kind's build assigns window.__sl, and the boot builds all three), never a literal.
+  const WARD_MAX = [8.9 + 0.5, 10.3 + 0.5, 10.3 + 0.5];   // (per site: home, Pallid, Burned)
+  const SETTLE_DROP = 0.5, SETTLE_DH = 0.2, SETTLE_N = 12;
   const r = await c.ev(`(async () => {
     const S = await import('/src/world/fissureShape.js'), T = await import('/src/world/terrain.js');
     const B = await import('/src/entities/sleeper/brooder.js'), THREE = await import('three');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
     const out = { hunt: [], throws: [] }, v = new THREE.Vector3(), o = { x: 0, z: 0 };
-    const EYE = 1.35, keep = S.APRON + B.STAND.keep * 15.4;
+    const EYE = 1.35;
+    // her R, from the zone-0 sleeper as built (the kind asserted by its own probe), and the keep line it sets
+    const herR = L => L && L.kind === 'brooder' && L.probe && L.probe().kind === 'brooder' && L.R > 0 ? L.R : NaN;
     for (const site of [0, 1, 2]) {
       window.__chart.arrive(site); window.gotoZone(0); window.__fissure.setOpen(0, 0);
       const L = window.lev; if (!L || L.kind !== 'brooder') { out.hunt.push({ site, err: 'no brooder' }); continue; }
@@ -1594,7 +1774,10 @@ if (mode === 'rise') {
       S.fissureWorld(l.u, 0, 0, o); spots.push([o.x, o.z, 'jam']);
       for (const [sx, sz, kind] of spots) {
         window.__chart.arrive(site); window.gotoZone(0); window.__fissure.setOpen(0, 0);
-        const L = window.lev; L.cmd('wake');
+        const L = window.lev, R = herR(L);
+        if (!(R > 0)) { out.hunt.push({ site, kind, err: 'zone 0 sleeper is not the brooder (no live R): ' + (L && L.kind) }); continue; }
+        const keep = S.APRON + B.STAND.keep * R;
+        L.cmd('wake');
         window.__bench.place(sx, sz, 0, 0); window.player.pos.y = T.shutFloorY(sx, sz, 0) + EYE; window.player.vel.set(0, 0, 0);
         let minC = 1e9, minO = 1e9, minClr = 1e9, frames = 0, minFoot = 1e9;
         const footScan = () => { for (const f of L.feet) { minFoot = Math.min(minFoot, S.fissureDist(f.cur.x, f.cur.z, 0), S.fissureDist(f.planted.x, f.planted.z, 0)); } };
@@ -1610,15 +1793,46 @@ if (mode === 'rise') {
           minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan();
           if (i % 12 === 0) shellScan(); });
         // then him under her, 3 s: her dark wards over the floor under each (ritefair's table; since velhard no
-        // refuge: past NOSAFE.after s she drops, and the clearance check above skips the drop)
+        // refuge: past NOSAFE.after s she drops, and the clearance check above skips the drop). WHAT IT MEASURES (Rulings
+        // 31, 34): her SETTLED stance over him, every ward dark, the same on both builds. Each ward's height over the floor,
+        // its highest over a 60-frame (~1 s) window of her pose (one frame of it moved the same hunt ~0.3 u run to run);
+        // bank is the ground's range under her body there (her centre and 24 points out to R).
+        //  - HIS PLACEMENT. A ward lights on a SWEPT touch from where she last had him (common.js wardTouch:
+        //    segDist(ward, L.pPrev, him) < L.reach), so the probe's move from the lip spot, ~33 u, swept that segment under
+        //    her body past her lowest ward (4.3-6.2 u against reach 5, measured 2026-10-13), lit it, and the ward rule
+        //    (brooder.js: her count jumps to NOSAFE.after - wound) brought the drop on 1.2 s later. A spot 1-2 u off her
+        //    centre away from that ward only lengthens the sweep (4.56 -> 4.33 u); stood still at her centre no ward is
+        //    within 9.6 u of him. So he is put at her centre and her record of his last position (the live sleeper's
+        //    pPrev, read by the touch alone; no game code) with him, as having stood there would leave it.
+        //  - HER SETTLE. Her body's height over the ground under her centre, read live each frame (L.bodyY less any drop's
+        //    L.dropY, over terrainH at L.pos): she comes down from her hunt stance at ~3 u/s for 0.4-1.1 s. The settle has
+        //    completed at the first frame she stands SETTLE_DROP (0.5 u) under her highest since the move and has moved under
+        //    SETTLE_DH (0.2 u) over the last SETTLE_N (12) frames (under 1 u/s).
+        //  - THE WINDOW: the last 60 frames from her settle to the first frame of any drop (or the 3 s's end). A ward lit
+        //    anywhere under her, no settle, or fewer than 60 settled frames before a drop is a FAIL with its reason, never
+        //    a reading.
         const ux = L.pos.x, uz = L.pos.z;
         window.__bench.place(ux, uz, 0, 0); window.player.vel.set(0, 0, 0);
-        const wardsNow = () => L.sigils.filter(g => !g.lit).map(g => +(g.grp.position.y - T.terrainH(g.grp.position.x, g.grp.position.z, 0)).toFixed(1));
-        let wards = null;   // (velhard: read on her standing frames; the drop's brace and slam move them on purpose)
-        window.__bench.step(180, i => { minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan(); if (i % 12 === 0) shellScan(); if (!L.drop) wards = wardsNow(); });
-        if (!wards) wards = wardsNow();
-        out.hunt.push({ site, kind, frames, minCentre: +minC.toFixed(2), keep: +keep.toFixed(2), minOutline: +minO.toFixed(2), minFoot: +minFoot.toFixed(2), wardsUnder: wards, minShellClear: +minClr.toFixed(2),
-          salFd: +S.fissureDist(sx, sz, 0).toFixed(1) });
+        const darkAtMove = L.sigils.every(g => !g.lit);
+        L.pPrev.copy(window.player.pos);
+        const wardsNow = () => L.sigils.map(g => g.lit ? NaN : g.grp.position.y - T.terrainH(g.grp.position.x, g.grp.position.z, 0));
+        const hist = [], hts = []; let top = -1e9, settleAt = -1, litAt = -1, dropAt = -1;
+        window.__bench.step(180, i => { minC = Math.min(minC, S.fissureDist(L.pos.x, L.pos.z, 0)); footScan(); if (i % 12 === 0) shellScan();
+          if (litAt < 0 && L.sigils.some(g => g.lit)) litAt = i;
+          if (dropAt < 0 && L.drop) dropAt = i;
+          const h = L.bodyY - (L.dropY || 0) - T.terrainH(L.pos.x, L.pos.z, 0); hts.push(h); top = Math.max(top, h);
+          if (settleAt < 0 && i >= ${SETTLE_N} && h < top - ${SETTLE_DROP} && Math.abs(h - hts[i - ${SETTLE_N}]) < ${SETTLE_DH}) settleAt = i;
+          if (settleAt >= 0 && dropAt < 0) { hist.push(wardsNow()); if (hist.length > 60) hist.shift(); } });
+        const settled = settleAt < 0 ? 0 : (dropAt < 0 ? 180 : dropAt) - settleAt;
+        const why = !darkAtMove ? 'a ward was lit before he was put under her' : litAt >= 0 ? 'a ward lit at frame ' + litAt + ' under her'
+          : settleAt < 0 ? 'she never settled from her hunt stance (her body ' + (+hts[0].toFixed(2)) + ' -> ' + (+hts[hts.length - 1].toFixed(2)) + ' u over the ground)'
+          : settled < 60 ? 'only ' + settled + ' settled frames before ' + (dropAt >= 0 ? 'the drop at frame ' + dropAt : 'the end') : null;
+        const wards = why ? [] : hist[0].map((_, k) => Math.max(...hist.map(h => h[k]))).filter(Number.isFinite).map(w => +w.toFixed(1));
+        let gLo = 1e9, gHi = -1e9;
+        for (const [f, n] of [[0, 1], [0.5, 12], [1, 12]]) for (let a = 0; a < n; a++) { const h = T.terrainH(ux + Math.cos(a / n * 6.2832) * f * R, uz + Math.sin(a / n * 6.2832) * f * R, 0); gLo = Math.min(gLo, h); gHi = Math.max(gHi, h); }
+        out.hunt.push({ site, kind, frames, R: +R.toFixed(3), minCentre: +minC.toFixed(2), keep: +keep.toFixed(2), minOutline: +minO.toFixed(2), minFoot: +minFoot.toFixed(2), wardsUnder: wards, wardWhy: why,
+          settleAt, dropAt, litAt, body: [+hts[0].toFixed(2), +top.toFixed(2), +hts[hts.length - 1].toFixed(2)], wardFrames: hist.length, minShellClear: +minClr.toFixed(2),
+          salFd: +S.fissureDist(sx, sz, 0).toFixed(1), at: [+ux.toFixed(1), +uz.toFixed(1)], bank: +(gHi - gLo).toFixed(2), slIsHer: window.__sl === L });
       }
     }
     // throws (home terrain)
@@ -1675,12 +1889,17 @@ if (mode === 'rise') {
     window.__chart.arrive(0);
     return out; })()`);
   console.log(JSON.stringify(r));
+  for (const h of r.hunt) if (!h.err) console.log(`site ${h.site} ${h.kind}: ` + (h.wardWhy ? `her wards NOT measured: ${h.wardWhy}` :
+    `her highest dark ward ${Math.max(...h.wardsUnder)} u over the floor over ~1 s settled (bar <= ${WARD_MAX[h.site]}; settled at frame ${h.settleAt}, body ${h.body.join(' / ')} u at the move / top / end)`) +
+    `; her ground ${h.bank} u from low to high under her at (${h.at}); her centre ${h.minCentre} off the lip (keep ${h.keep} = APRON + ${h.R} x STAND.keep, -0.3 slack)`);
   for (const h of r.hunt) {
-    if (h.err) { fail.push(h.err); continue; }
+    if (h.err) { fail.push(`site ${h.site}${h.kind ? ' ' + h.kind : ''}: ${h.err}`); continue; }
     if (h.frames < 200) fail.push(`site ${h.site} ${h.kind}: she never stood (${h.frames} frames)`);
     if (h.minCentre < h.keep - 0.3) fail.push(`site ${h.site} ${h.kind}: her centre came ${h.minCentre} off the lip (keep ${h.keep})`);
     if (h.minOutline < 12) fail.push(`site ${h.site} ${h.kind}: her shell came ${h.minOutline} off the lip (onto the 14 u apron)`);
-    if (Math.max(...h.wardsUnder) > 10.5) fail.push(`site ${h.site} ${h.kind}: a dark ward hung ${Math.max(...h.wardsUnder)} u over him under her (ritefair: 6.7-9.6, reach 7 + a tap-hop)`);
+    if (h.wardWhy) fail.push(`site ${h.site} ${h.kind}: her settled wards were not measured: ${h.wardWhy}`);
+    else if (!h.wardsUnder.length) fail.push(`site ${h.site} ${h.kind}: no dark ward to measure under her`);
+    else if (!(Math.max(...h.wardsUnder) <= WARD_MAX[h.site])) fail.push(`site ${h.site} ${h.kind}: a dark ward hung ${Math.max(...h.wardsUnder)} u over him under her (bar ${WARD_MAX[h.site]}: main's highest at this site + 0.5)`);
     if (h.minShellClear < 3.0) fail.push(`site ${h.site} ${h.kind}: her shell came ${h.minShellClear} u over the ground (STAND.clear 3.6)`);
   }
   for (const h of r.hunt) if (!h.err && h.minFoot < 0) fail.push(`site ${h.site} ${h.kind}: one of her feet stood ${h.minFoot} u inside the lip`);

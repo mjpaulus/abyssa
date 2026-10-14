@@ -10,11 +10,14 @@
 //                collision rock. Size: the nearest surface point on twelve horizontal bearings out to
 //                2.5 u (a ground point at sqrt(d^2 + gap^2), or a riser crossing the point's height);
 //                sign: the vertical gap's.
-//   rays(zi)   - rays from the throat's axis to both walls (several depths, along the crack, three
-//                elevations x three bearings): the drawn hit (THREE.Raycaster on every drawn crack mesh)
-//                against the heightfield hit (a CPU march). A drawn miss = a gap; drawn rock > 0.3 u in
-//                front of the heightfield's = protrusion. Grazes of a lip and overhang-slab faces aside.
-//   look(zi)   - a settled frame from inside the throat looking up along it (open):
+//   column(zi) - the zone's lip-to-floor column at this anchorage, read live: the lip mean (fissureShape.js
+//                lipMeanY) over the throat floor at riftPos(zi) (terrainH at the opening's centre).
+//   rays(zi, fr) - rays from the throat's axis to both walls (depths = fractions fr of the column, RAY_FR by default,
+//                along the crack, three elevations x three bearings): the drawn hit (THREE.Raycaster on every drawn
+//                crack mesh) against the heightfield hit (a CPU march). A drawn miss = a gap; drawn rock > 0.3 u in
+//                front of the heightfield's = protrusion. Grazes of a lip and overhang-slab faces aside. `planned`
+//                every station x depth x 18 directions, `cast` those whose depth's axis is in the water there.
+//   look(zi)   - a settled frame from inside the throat looking up along it (open), LOOK_FR of the column under the lip:
 //                STREAK (geometry: a view-space normal pass): the normals' change across the wall's
 //                  vertical axis over their change along it. The old grid's vertical slivers: 6-8;
 //                  the throat walls: 2.0-2.5.
@@ -30,6 +33,15 @@ const S = await import('/src/world/fissureShape.js');
 const T = await import('/src/world/terrain.js');
 const THREE = await import('three');
 const { renderer, scene, camera, clock } = await import('/src/core.js');
+
+// (seafloor relief Task 7) THE DEPTHS ARE FRACTIONS OF THE COLUMN. The look's 25 u and the rays' 4 / 10 / 20 / 35 u under
+// the lip were sized on a ~73 u throat (home zone 0 on main: 72.7); on the relief home zone 0's column is ~42 u, where a
+// 35 u axis lies under the floor at most stations. The same depths as shares of 72.7: look 0.34, rays below.
+export const RAY_FR = [0.055, 0.14, 0.28, 0.48], LOOK_FR = 0.34;
+export function column(zi) {
+  const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), floor = T.terrainH(F.cx, F.cz, zi);
+  return { zi, lip, floor, col: lip - floor };
+}
 
 // every drawn crack triangle: { pos (Float32Array), tris: Int32Array of vertex triples, mesh list }
 function drawn(zi) {
@@ -110,23 +122,25 @@ function crackMeshes(zi) {
   if (w) m.push(w);
   return m;
 }
-export function rays(zi) {
-  const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), o = { x: 0, z: 0 };
+export function rays(zi, fr = RAY_FR) {
+  const F = S.FISSURE[zi], cl = column(zi), lip = cl.lip, deps = fr.map(f => f * cl.col), o = { x: 0, z: 0 };
   const meshes = crackMeshes(zi), vis = meshes.map(m => m.visible);
   meshes.forEach(m => { m.visible = true; m.updateMatrixWorld(true); });
   const rc = new THREE.Raycaster(); rc.far = 45;
   const org = new THREE.Vector3(), dir = new THREE.Vector3();
-  let n = 0, gaps = 0, behind = 0, protrude = 0, worstIn = 0, worstOut = 0, outAt = null; const bad = [];
+  let n = 0, gaps = 0, behind = 0, protrude = 0, worstIn = 0, worstOut = 0, outAt = null, planned = 0, cast = 0; const bad = [];
   try {
     for (let u = -0.7 * F.halfLen; u <= 0.7 * F.halfLen; u += 3.1) {
       if (S.SLABS[zi].some(sl => Math.abs(u - sl.u0) < sl.hu + 1.5)) continue;
       const wd = S._widths(F, u);
-      for (const dep of [4, 10, 20, 35]) {
+      for (const dep of deps) {
         // the axis at this depth: the middle of the open interval across the crack at y
         const y = lip - dep;
+        planned += 18;                                     // (2 sides x 3 elevations x 3 bearings, below)
         let lo = null, hi = null;
         for (let v = -wd.w0; v <= wd.w1; v += 0.05) { S.fissureWorld(u, v, zi, o); if (T.terrainUnderH(o.x, o.z, zi) < y - 0.6) { if (lo === null) lo = v; hi = v; } }
-        if (lo === null || hi - lo < 0.4) continue;
+        if (lo === null || hi - lo < 0.4) continue;         // no water at this depth here: none of its rays is cast
+        cast += 18;
         S.fissureWorld(u, (lo + hi) / 2, zi, o); org.set(o.x, y, o.z);
         for (const sg of [-1, 1]) for (const el of [-0.35, 0, 0.45]) for (const al of [-0.4, 0, 0.4]) {
           dir.set(-F.dz * sg + F.dx * al, 0, F.dx * sg + F.dz * al).normalize();
@@ -160,7 +174,8 @@ export function rays(zi) {
       }
     }
   } finally { meshes.forEach((m, i) => { m.visible = vis[i]; }); }
-  return { rays: n, gaps, behind, protrude, hitBehindMax: +worstIn.toFixed(3), hitInFrontMax: +worstOut.toFixed(3), inFrontAt: outAt, bad };
+  return { rays: n, gaps, behind, protrude, hitBehindMax: +worstIn.toFixed(3), hitInFrontMax: +worstOut.toFixed(3), inFrontAt: outAt, bad,
+    col: +cl.col.toFixed(2), depths: deps.map(d => +d.toFixed(2)), planned, cast };
 }
 
 // ---- the look ----------------------------------------------------------------------------------
@@ -185,8 +200,8 @@ function normalPass(zi, W, H) {
   }
   return px;
 }
-// the throat view: on the open interval's middle, `dep` under the lip, looking up and along the crack
-export function throatPin(zi, dep = 25, u0 = -3) {
+// the throat view: on the open interval's middle, `dep` under the lip (LOOK_FR of the column), looking up and along the crack
+export function throatPin(zi, dep = LOOK_FR * column(zi).col, u0 = -3) {
   const F = S.FISSURE[zi], lip = S.lipMeanY(zi, T.terrainH), o = { x: 0, z: 0 }, o2 = { x: 0, z: 0 }, wd = S._widths(F, u0);
   const y = lip - dep;
   let lo = null, hi = null;
@@ -197,7 +212,8 @@ export function throatPin(zi, dep = 25, u0 = -3) {
   return { p, t, pos: p, look: t, open: +(hi - lo).toFixed(2), inVoid: T.terrainUnderH(o.x, o.z, zi) < y - 0.6 };
 }
 export async function look(zi, o = {}) {
-  const pin = throatPin(zi, o.dep || 25, o.u0 == null ? -3 : o.u0);
+  const dep = o.dep || LOOK_FR * column(zi).col;
+  const pin = throatPin(zi, dep, o.u0 == null ? -3 : o.u0);
   if (!pin || !pin.inVoid) return { zi, err: 'the throat view is not in the water', pin };
   window.__camPin = pin;
   const cap = await window.__bench.capture({ settle: o.settle || 120 });
@@ -337,7 +353,7 @@ export async function look(zi, o = {}) {
   }
   const lineShare = lineE / Math.max(1e-9, allE), lines = Math.sqrt(lineE / Math.max(1, ln)) / Math.max(1e-6, lum / Math.max(1, ln));
   window.__camPin = null;
-  return { zi, open: pin.open, rockPx: fn, lines: +lines.toFixed(4), lineShare: +lineShare.toFixed(3), turn: +turn.toFixed(2), tilt: +tilt.toFixed(1), spread: +spread.toFixed(3), align: +align.toFixed(3), coherence: +coher.toFixed(3), wander: +wander.toFixed(3), blocks: strong.length, facet: +(fe / Math.max(1, fn)).toFixed(3), streak: +(eT / Math.max(1, eR)).toFixed(3), bandV: +(ev / Math.max(1, en)).toFixed(4), bandA: +(ea / Math.max(1, en)).toFixed(4),
+  return { zi, dep: +dep.toFixed(2), open: pin.open, rockPx: fn, lines: +lines.toFixed(4), lineShare: +lineShare.toFixed(3), turn: +turn.toFixed(2), tilt: +tilt.toFixed(1), spread: +spread.toFixed(3), align: +align.toFixed(3), coherence: +coher.toFixed(3), wander: +wander.toFixed(3), blocks: strong.length, facet: +(fe / Math.max(1, fn)).toFixed(3), streak: +(eT / Math.max(1, eR)).toFixed(3), bandV: +(ev / Math.max(1, en)).toFixed(4), bandA: +(ea / Math.max(1, en)).toFixed(4),
     localContrast: +(lc / Math.max(1, en)).toFixed(4), meanL: +(mean / Math.max(1, en)).toFixed(2), cap, normals: N, W, H };
 }
 // PNG of a normal pass (for eyes)
@@ -598,6 +614,7 @@ export async function riseShaft(zi, o = {}) {
   window.__bench.place(w.x, w.z, Math.atan2(fx, fz), zi + 1);
   const floorY = T.terrainH(w.x, w.z, zi), lip = S.lipMeanY(zi, T.terrainH);
   window.player.pos.y = floorY - 10; window.player.vel.set(0, 0, 0); window.player.grounded = false;
+  const rise = lip + 4 - (floorY - 10);   // his whole climb: from 10 u under the old floor to 4 u over the lip (the loop's end)
   window.__bench.step(Math.round(0.5 / fdt), null, { dt: fdt });
   if (window.survival.reserveCap != null) window.survival.reserve = window.survival.reserveCap;
   if (window.__shaftStep) window.__shaftStep(true);
@@ -633,6 +650,7 @@ export async function riseShaft(zi, o = {}) {
     }
   } finally { window.keys.Space = false; }
   return { zi, u: u0, dv: o.dv || 0, yaw: Math.round(a * 57.3), dt: +fdt.toFixed(4), startZone, zEnd: window.zone, frames: n, measured: m, onAt,
+    floorY: +floorY.toFixed(2), lip: +lip.toFixed(2), rise: +rise.toFixed(2),
     topOverLip: +(top - lip).toFixed(1), relMax: +relMax.toFixed(1), relAt, relOn: +relOn.toFixed(1), over60, hfIn, hfAt, hidden,
     salStepMax: +stepMax.toFixed(3), holdStepMax: window.__shaftStep ? +window.__shaftStep(false).toFixed(3) : null };
 }
