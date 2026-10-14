@@ -10,7 +10,8 @@
 //   time under her; the average one lingers under her a little too long.
 // Env DRV_PORT (default 9471). Frames -> SHOTS dir (env RP_OUT, default shots/ritefair-play).
 // (seafloor relief Task 8) The ledger books her wards' height over her ground while she is up (wardUp, below), and the
-// START line and the ledger name the ground the fight ran on (`ground`: __ridge.fp(); `lair`: her lairPos x, z).
+// START line and the ledger name the ground the fight ran on (`ground`: __ridge.fp(); `lair`: her lairPos x, z). The
+// ledger also books every tear's source and phase (hitLog) and every drop's outcome (dropLog), read-only, never gated.
 // Env RP_WARD_BAR=<u> gates the column (main's highest over its fights + 0.5): a WARD PASS / FAIL line, exit 1 over the bar
 // (or on a reading that was not finite); WARD UNMEASURED, exit 2, when she was never up (no frame booked: no reading at
 // all, neither a pass nor a RED). Its one RED attempt (Task 8): her station on a mound's flank (a set is a full arrival, so
@@ -111,6 +112,35 @@ await c.ev(`(() => { const f0 = window.__rp.frame, L = window.lev, st = window._
     W.n++; W.fr.push(fm); };
   window.__rpWard = () => { const s = W.fr.slice().sort((a, b) => a - b), q = k => s.length ? +s[Math.round(k * (s.length - 1))].toFixed(2) : null, r = x => x === null ? null : +x.toFixed(2);
     return { wardUp: r(W.max), wardUpDark: r(W.dark), wardUpP50: q(0.5), wardUpP95: q(0.95), wardUpN: W.n, wardUpBad: W.bad, wardUpAt: W.at }; };
+  return 1; })()`);
+// (seafloor relief Task 8, context round: Ruling 37 (e), booked for Michael, never gated) EVERY TEAR, what tore it and
+// when in her fight. A third wrap of __rp.frame, read-only, after the ledger's own frame (which counts the tear: st.tears,
+// and st.hits when it is > 0.5 s after the last). The source, in the game's own terms: her drop's slam (L.dropHits), the
+// hammer (L.hits: her major claw's blow), else the body contact game.js booked in __slamLog this frame (legN / clawN / shell
+// / clutch, with its speed), else 'other' (no sleeper source: a predator's bite). A sleeper tear game.js booked while the
+// dress was already at its cap (survival.js TORN_CAP: torn does not rise, so the ledger cannot see it) is booked with
+// ledger: false. The phase: her drop phase (L.drop: 0 none, 1 the telegraph, 2 the fall, 3 the rise) and the last drop's
+// kind, the hammer's cock and swing, rising (her wake's rise), under her (L.nsUnder), his distance from her centre in R,
+// his height over the ground, standE, the wards lit. Every drop's outcome is booked too (dropLog: clean / sweep / slam; a
+// sweep throws him and never tears). Any throw in here is caught and counted (hitErr): this booking cannot stop a fight.
+await c.ev(`(() => { const f0 = window.__rp.frame, L = window.lev, st = window.__rp.st, P = window.player;
+  const H = { tears: st.tears, hits: st.hits, hammer: L.hits || 0, slam: L.dropHits || 0, dropN: L.dropHitN || 0, logN: (window.__slamLog || []).length, hitLog: [], dropLog: [], err: 0, errMsg: null };
+  window.__rp.frame = () => { f0();
+    try {
+      const t = +(st.f / 60).toFixed(2), dropN = L.dropHitN || 0, hammer = L.hits || 0, slam = L.dropHits || 0;
+      if (dropN > H.dropN) H.dropLog.push({ t, kind: L.dropKind || null });
+      const log = window.__slamLog || [], game = log.length > H.logN ? log[log.length - 1] : null;
+      const tore = st.tears > H.tears;
+      if (tore || game) {
+        let lit = 0; for (const g of L.sigils) if (g.lit) lit++;
+        const src = slam > H.slam ? 'drop slam' : hammer > H.hammer ? 'hammer' : game && game.why !== 'blow' ? String(game.why).split(' ')[0].replace(/[0-9]+$/, '') : game ? 'blow' : 'other';
+        H.hitLog.push({ t, ledger: tore, hit: st.hits > H.hits, src, game: game ? game.why : null, drop: L.drop || 0, dropKind: L.dropKind || null,
+          cock: +(L.cock || 0).toFixed(2), swing: +(L.swing || 0).toFixed(2), rising: !!L.rising, under: !!L.nsUnder,
+          rho: +(Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z) / L.R).toFixed(2), agl: +(P.pos.y - 1.35 - terrainH(P.pos.x, P.pos.z, 0)).toFixed(2), standE: +L.standE.toFixed(2), lit });
+      }
+      H.tears = st.tears; H.hits = st.hits; H.hammer = hammer; H.slam = slam; H.dropN = dropN; H.logN = log.length;
+    } catch (e) { H.err++; if (!H.errMsg) H.errMsg = String(e && e.message || e); } };
+  window.__rpHits = () => ({ hitLog: H.hitLog, dropLog: H.dropLog, hitErr: H.err, hitErrMsg: H.errMsg });
   return 1; })()`);
 // (Task 8) a shot's frame is a game frame like the others, so the ledger books it (it stepped unbooked before: one frame in
 // every 10 s of play went past the ledger, and past the ward column, which reads every frame she is up)
@@ -216,7 +246,7 @@ const st = s.rp;
 const ledger = { site: SITE, mode: MODE, seed: +SEED, ...ground, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
   hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...(await c.ev(TALLY)), underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
   ccN: st.ccN, ccMax: st.ccMax, ccOff: st.ccOff, camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1),
-  ...(await c.ev(`window.__rpWard()`)), way };
+  ...(await c.ev(`window.__rpWard()`)), ...(await c.ev(`window.__rpHits()`)), way };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 console.log('LEDGER', JSON.stringify(ledger));
@@ -224,6 +254,8 @@ writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const wa = ledger.wardUpAt;
 console.log(`WARD her wards over her ground while she was up: highest ${ledger.wardUp} u` + (wa ? ` (ward ${wa.i} ${wa.lit ? 'lit' : 'dark'} at ${wa.t} s, drop ${wa.drop}, standE ${wa.standE}, her body ${wa.body} u over her ground, bank ${wa.bank} u, fd ${wa.fd})` : '') +
   `, dark ${ledger.wardUpDark}, p50 ${ledger.wardUpP50} / p95 ${ledger.wardUpP95} over ${ledger.wardUpN} frames up` + (ledger.wardUpBad ? `, ${ledger.wardUpBad} NOT FINITE` : ''));
+console.log(`HITS ${ledger.hits} (tears ${ledger.tears}): ` + (ledger.hitLog.map(h => `${h.t} s ${h.src}${h.game && h.src !== h.game ? ' [' + h.game + ']' : ''} drop ${h.drop}${h.rising ? ' rising' : ''}${h.under ? ' under' : ''} rho ${h.rho}R${h.ledger ? '' : ' (dress at its cap: not in the ledger)'}`).join('; ') || 'none') +
+  `; drops ${ledger.dropLog.map(d => d.kind).join(' ') || 'none'}` + (ledger.hitErr ? `; HIT BOOKING ERRORS ${ledger.hitErr}: ${ledger.hitErrMsg}` : ''));
 // the gate: PASS, FAIL (exit 1: over the bar, or a reading that was not finite; NaN-safe) or UNMEASURED (exit 2: she was
 // never up, so there is no reading; a fight that never happened must not read as the bound's RED, nor as a pass)
 let code = 0;
