@@ -1,30 +1,47 @@
-// FULL PLAY, GATE COPY (velmerge 2026-10-12): velfix's fullplay.mjs kept for tools/bench/velfix-gate.mjs (FP_GATE, the three
-// post-calm routes, the wash / lens verdicts). Its inline rite policy predates velhard; fullplay.mjs is the play recorder.
+// FULL PLAY, GATE COPY (velmerge 2026-10-12; Task 9 of the seafloor relief, 2026-10-14): velfix's fullplay.mjs kept for
+// tools/bench/velfix-gate.mjs (FP_GATE, the three post-calm routes, the wash / lens verdicts). The fight is ritepolicy.mjs's
+// (the players riteplay.mjs and fullplay.mjs share; velfix-gate.mjs plays the AVERAGE one), no longer the pre-velhard inline
+// policy, which rushed in under her while she cocked ('dodge-under') against a Velkath who drops on a diver under her.
 // FULL PLAY (2026-10-12, Michael: "record a full play through video from the raft to beating velkath
 // and entering the rift after its open"). One continuous run through REAL key events on the freeze-step
-// loop (riteplay.mjs's machinery and its fight policy, unchanged): from the raft deck, over the side,
+// loop (riteplay.mjs's machinery and its fight policy): from the raft deck, over the side,
 // vented down and hauled across to her near flank by way of the other diver's trail (the boot, the
 // coupling), [E] at the harpoon, the fight to the calm, then he walks to the opened fissure and sinks
 // through its throat into zone 1. Video frames every 3rd game frame (RP_VIDEO=<dir>), assembled by the
 // orchestrator. No ?playtest: nothing is jumped to.
-//   RP_VIDEO=<dir> node tools/bench/fullplay.mjs <port> <mode: perfect|average> <tag> [seed] [maxSec]
+//   RP_VIDEO=<dir> node tools/bench/fullplay-gate.mjs <port> <mode: perfect|average> <tag> [seed] [maxSec]
+// THE GAME CLOCK IS THE STEPPED CLOCK (Task 9). game.js's bench hook releases its hold with clock.getDelta(), and three's
+// getDelta ADDS the wall time since its last call to clock.elapsedTime: every __bench.step call pushed the game's `t` on by
+// its own wall time and the CDP round trip before it (measured: t ran 1.5x the stepped time alone, 1.7-2.1x with another
+// Chrome stepping). Everything keyed on t then played a load-dependent game: the current that drifts a swimmer
+// (player.js sampleCurrent, the hose's in tether.js), the slam's tear gap (game.js SLAM_GAP), the weather's day and storm,
+// the sea under the raft, the lantern's flicker. Once the live loop is stopped the clock is stopped (getDelta returns 0),
+// so only __bench.step's own dt moves it; the ledger books the drift and the gate is RED if the clock moved otherwise.
 // (velfix 2026-10-12) Two opt-in additions, neither changes what is played:
 //   FP_GATE=1   the velfix gate, booked in the page every stepped frame and printed as a GATE line (exit 1 when
 //               RED): THE WASH (every 3rd frame, while the lens is under her or within WASH_R of a lit ward: the
 //               share of the drawn frame's pixels with Rec.709 luma > 230 outside each lit ward's own burn disc, and
-//               in all, read back right after the frame's own render) and THE LENS IN HER (every frame she is
+//               in all, read back right after the frame's own render), booked PER PHASE (the fight; after the calm)
+//               and gated in both (Task 9) and THE LENS IN HER (every frame she is
 //               published awake: the camera inside her bodyCols volumes, margin 0 = inside, 0.15 = the near plane in
 //               it, and every 3rd frame a ray from the lens toward his bonnet against her drawn meshes, a hit within
 //               0.35 u = her surface on the lens; split fight / after the calm; RED on the after-the-calm inside
 //               and ray counts).
 //               Also: the lens in Sal (0.45 u of his axis), and her shell's lowest point over the ground per phase.
-//   FP_ROUTE    what he does after the calm: 'crack' (default: vent and walk down the crack into zone 1), 'follow'
-//               (still afloat, he follows her home under her body for 40 s, never venting: review C1) or 'resettle'
-//               (off her ground until she starts to lie down, back onto it mid-settle, off again: review I1).
-//               tools/bench/velfix-gate.mjs runs all three and is the gate.
+//   FP_ROUTE    what he does after the calm: 'crack' (default: vent and walk down the crack into zone 1; RED unless
+//               zone 1 is reached inside the route's 90 s - Task 9's route bound), 'follow' (still afloat, he follows her
+//               home under her body for 40 s, never venting: review C1) or 'resettle' (off her ground until she starts to
+//               lie down, back onto it mid-settle, off again: review I1). tools/bench/velfix-gate.mjs runs all three and is
+//               the gate.
+//   FP_NOVENT=1 (the route bound's RED case) the crack route walks to the throat but never vents (C) and never goes down it:
+//               he stops on his feet 2 u short of the lip (withholding C alone is not enough: the dress sinks an unvented
+//               diver through the open throat, measured in zone 1 34 s after the calm).
 //   FP_STOP=<n> stop after n video-rate frames (every 3rd game frame, ~20 per game second: the RP_VIDEO index),
 //               print the state; FP_HOLD=1 leaves the (frozen) Chrome up for `drv.mjs eval` and A/B pokes.
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+//   FP_WASHSHOT=<n> (diagnosis) the first n red wash frames of each phase and the first n after-the-calm frames with her
+//               drawn surface on the lens, read back with the gate's own readback and written as PNGs (<tag>-shot-*.png);
+//               the step is never broken for them, so the run plays as it would without.
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 if (!process.env.DRV_PORT) process.env.DRV_PORT = '9471';
 // a FRESH profile every run: the chart save would otherwise remember a calm (a lit ward)
@@ -42,65 +59,8 @@ const AVG = MODE === 'average';
 // near flank, Alt+6 stands him at it; the pry, the carried clump and the brood rule are gone.)
 const FLEE = +(process.env.RP_FLEE || 0);
 
-// ---- the page side: the per-frame ledger ----
-const PROBE = `(() => {
-  const P = window.player, SV = window.survival, L = window.lev, cam = window.camera, V = P.pos.constructor;
-  const v = new V(), w = new V();
-  const seen = L.sigils.map(() => false);
-  const st = { seen, f: 0, tears: 0, lastHit: -9, hits: 0, hitAt: [], dryN: 0, dryWas: false, low: 0, bowlN: 0, bowlAt: [], inBowl: false, camN: 0, camBad: 0, pressed: 0,
-    wardT: L.sigils.map(g => g.lit ? 0 : null), calmT: null, retT: null, takeT: null, maxUp: 0, floatS: 0, tornPrev: SV.torn, pulledPrev: !!(L.harpoon && (L.harpoon.pulled && !L.harpoon.wound || L.harpoon.pressed)),
-    lairFloor: terrainH(L.lairPos.x, L.lairPos.z, 0), minReserve: 1 };
-  const frame = () => {
-    st.f++;
-    const t = st.f / 60;
-    if (SV.torn > st.tornPrev + 0.5) { st.tears++; if (t - st.lastHit > 0.5) { st.hits++; st.hitAt.push(+t.toFixed(1)); } st.lastHit = t; }
-    st.tornPrev = SV.torn;
-    const res = SV.reserve / (SV.reserveCap || 1);
-    if (res < st.minReserve) st.minReserve = res;
-    const dry = res < 0.12;
-    if (dry && !st.dryWas) st.dryN++;
-    st.dryWas = dry;
-    const fl = terrainH(P.pos.x, P.pos.z, 0);
-    const lairD = Math.hypot(P.pos.x - L.lairPos.x, P.pos.z - L.lairPos.z);
-    const inB = window.__fd ? window.__fd(P.pos.x, P.pos.z, 0) < 0 : fl < st.lairFloor - 15 && lairD < 90;   // (fissure Task 5: the 'bowl' is the crack now)
-    if (inB && !st.inBowl) { st.bowlN++; st.bowlAt.push(+t.toFixed(1)); }
-    st.inBowl = inB;
-    const agl = P.pos.y - 1.35 - fl;
-    if (agl > st.maxUp) st.maxUp = agl;
-    if (agl > 9) st.floatS += 1 / 60;
-    for (let i = 0; i < L.sigils.length; i++) if (L.sigils[i].lit && st.wardT[i] == null) st.wardT[i] = +t.toFixed(1);
-    if (L.calmed && st.calmT == null) st.calmT = +t.toFixed(1);
-    const Hp = L.harpoon, pl = !!(Hp && ((Hp.pulled && !Hp.wound) || Hp.pressed));
-    if (pl && !st.pulledPrev && st.takeT == null) st.takeT = +t.toFixed(1);
-    st.pulledPrev = pl;
-    // the framing: she is awake and inside 30 u; readable if her belly or a dark ward is on screen
-    if (st.f % 4 === 0 && t >= (window.__rpFlee || 0) && !L.dormant && !L.calmed && L.standE > 0.5 && Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z) < 30) {
-      st.camN++;
-      cam.updateMatrixWorld();
-      const on = p => { w.copy(p).project(cam); return Math.abs(w.x) < 0.95 && Math.abs(w.y) < 0.95 && w.z < 1 && w.z > -1; };
-      let ok = on(v.set(L.pos.x, L.bodyY - 0.12 * L.R, L.pos.z));
-      if (!ok) for (const g of L.sigils) if (!g.lit && on(g.grp.position)) { ok = true; break; }
-      if (!ok) st.camBad++;
-      for (let i = 0; i < L.sigils.length; i++) if (!seen[i] && on(L.sigils[i].grp.position)) seen[i] = true;
-      if (cam.position.distanceTo(v.set(P.pos.x, P.pos.y + 0.3, P.pos.z)) < 2.6) st.pressed++;
-    }
-  };
-  window.__rp = { st, frame };
-  return 1;
-})()`;
-
-const STATE = `(() => {
-  const P = window.player, SV = window.survival, L = window.lev, Hp = L.harpoon, V = P.pos.constructor, r = x => +x.toFixed(2);
-  const fl = terrainH(P.pos.x, P.pos.z, 0);
-  const o = { pos: [r(P.pos.x), r(P.pos.y), r(P.pos.z)], vel: [r(P.vel.x), r(P.vel.y), r(P.vel.z)], agl: r(P.pos.y - 1.35 - fl), grounded: !!P.grounded,
-    reserve: r(SV.reserve / (SV.reserveCap || 1)), fill: r(P.fill || 0), dormant: !!L.dormant, calmed: !!L.calmed, standE: r(L.standE),
-    lev: [r(L.pos.x), r(L.bodyY), r(L.pos.z)], R: r(L.R), cock: r(L.cock || 0), threatE: r(L.threatE || 0), crouch: r(L.crouch ? L.crouch.x : 0),
-    yaw: r(P.yaw), canTake: !!(L.rite && L.rite.prompt(P.pos)), wrenching: !!(Hp && Hp.wrenching),
-    reach: L.reach, msg: window.__msg().live };
-  o.wards = L.sigils.map(g => ({ p: [r(g.grp.position.x), r(g.grp.position.y), r(g.grp.position.z)], lit: !!g.lit, floor: r(g.grp.position.y - terrainH(g.grp.position.x, g.grp.position.z, 0)) }));
-  o.rp = window.__rp ? window.__rp.st : null;
-  return o;
-})()`;
+// ---- the page side (the ledger), the state a player reads and the two players: ritepolicy.mjs (as fullplay.mjs) ----
+const { PROBE, STATE, TALLY, makePolicy } = await import('./ritepolicy.mjs');
 
 const c0 = await (async () => { await start(`http://localhost:${PORT}/${process.env.RP_PATH || ""}?bench`); return connect(); })();
 const c = c0;
@@ -119,6 +79,19 @@ const alt = async code => {
 // only through __bench.step.
 await c.ev(`(window.requestAnimationFrame = cb => { window.__rafCb = cb; return 0; }, 1)`);
 await sleep(300);
+// ...AND THE CLOCK STOPS WITH IT (Task 9: see the header). clock.stop() leaves getDelta at 0, so the hold's release
+// no longer adds wall time to elapsedTime; __bench.step's `elapsedTime += dt` is the only thing that moves it. Every
+// stepped frame is counted here (the wrapper sees each frame step runs, including the shots' single frames), so the
+// drift at the end is what moved the clock besides them.
+await c.ev(`(async () => {
+  const { clock } = await import(new URL('src/core.js', document.baseURI).href);
+  clock.stop();
+  const S0 = window.__bench.step;
+  window.__fpClk = { clock, e0: clock.elapsedTime, n: 0 };
+  window.__bench.step = (n, fn, o) => S0(n, i => { window.__fpClk.n++; return fn ? fn(i) : undefined; }, o);
+  return 1;
+})()`);
+const CLOCK = `(() => { const k = window.__fpClk, run = k.clock.elapsedTime - k.e0, stepped = k.n / 60; return { run: +run.toFixed(3), stepped: +stepped.toFixed(3), drift: +(run - stepped).toFixed(4), running: !!k.clock.running }; })()`;
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; window.__fs = S; return 1; })()`);   // the crack test for the bowl ledger
 await c.ev(PROBE);
@@ -128,13 +101,18 @@ const GATE = process.env.FP_GATE === '1';
 // projected (the glyph is 2.4 u, its ring 2.6; the light's hot spot on her shell round it). Inside it the burn may
 // clip: that is the strong gold burn on her shell the fix asks for. RED: any booked frame with more than WASH_BLOWN of
 // the frame blown outside the burns, or more than WASH_CAP blown in all (the burn itself never fills the screen).
+// (Task 9) Booked per phase, the fight and after the calm, and gated in both: "lit wards burn, they don't wash" holds
+// in the fight too. Each booked frame also notes the newest light-up among the lit wards (its flashT, s since the ward
+// lit) and the lens's distance to that ward.
 const WASH_BLOWN = 0.05, WASH_CAP = 0.15, WASH_R = 14, WASH_DISC = 4;
+const SHOTS = +(process.env.FP_WASHSHOT || 0);
 const GATE_JS = `(async () => {
   const BC = await import(new URL('src/entities/sleeper/bodyCols.js', document.baseURI).href);
   const { renderer } = await import(new URL('src/core.js', document.baseURI).href);
   const gl = renderer.getContext();
   const L = window.lev, cam = window.camera, P = window.player;
-  const g = { washN: 0, washRed: 0, washSum: 0, washMax: 0, washMaxAt: null, washMeanLuma: 0, washAt: [], washOutSum: 0, washOutMax: 0, washOutMaxAt: null,
+  const book = () => ({ n: 0, red: 0, sum: 0, max: 0, maxAt: null, outSum: 0, outMax: 0, outMaxAt: null, luma: 0, at: [] });
+  const g = { wash: { fight: book(), calm: book() }, washLog: [], shots: [],
     lens: { fightN: 0, fightIn: 0, fightNear: 0, calmN: 0, calmIn: 0, calmNear: 0, inAt: [], parts: {}, salFight: 0, salCalm: 0,
       rayN: 0, rayFight: 0, rayCalm: 0, rayAt: [], rayHit: {} },
     // her shell's lowest point over the ground (u): the fight (up, hunting), the walk home (calmed, up), the settle
@@ -148,6 +126,23 @@ const GATE_JS = `(async () => {
   let stPrev = null, wakePrev = null;
   const AX = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
   let buf = null;
+  // (FP_WASHSHOT) a frame read back here, as a PNG data URL (rows flipped; the step is never broken for it)
+  const SHOTS = ${SHOTS}, shotN = { fight: 0, calm: 0, surf: 0 };
+  let shotCv = null, shotHalf = null;
+  const grab = (kind, t, extra) => {
+    if (shotN[kind] >= SHOTS) return;
+    shotN[kind]++;
+    const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
+    if (!buf || buf.length !== W * H * 4) buf = new Uint8Array(W * H * 4);
+    if (kind === 'surf') { gl.bindFramebuffer(gl.READ_FRAMEBUFFER, null); gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, buf); }
+    if (!shotCv) { shotCv = document.createElement('canvas'); shotHalf = document.createElement('canvas'); }
+    shotCv.width = W; shotCv.height = H; shotHalf.width = W >> 1; shotHalf.height = H >> 1;
+    const cx = shotCv.getContext('2d'), im = cx.createImageData(W, H), row = W * 4;
+    for (let y = 0; y < H; y++) im.data.set(buf.subarray((H - 1 - y) * row, (H - y) * row), y * row);
+    cx.putImageData(im, 0, 0);
+    shotHalf.getContext('2d').drawImage(shotCv, 0, 0, W >> 1, H >> 1);   // (half size: a run's shots stay a few MB)
+    g.shots.push({ kind, t: +t.toFixed(2), extra, url: shotHalf.toDataURL('image/png') });
+  };
   // THE DRAWN SURFACE (every 3rd frame): bodyCols is a fit (85th-percentile capsules, a height-band shell), so the
   // lens can be outside it with her drawn mesh across the near plane. A ray from the lens toward his bonnet against
   // her opaque meshes: a hit within 0.35 u of the lens is a surface ON the lens (the dark wedge).
@@ -181,7 +176,8 @@ const GATE_JS = `(async () => {
         if (!hitK) { dir.set(P.pos.x - x, P.pos.y + 0.4 - y, P.pos.z - z); const dl = dir.length(); if (dl > 1e-3) { dir.multiplyScalar(1 / dl); rc.set(from, dir); rc.far = Math.min(0.35, dl); const h = rc.intersectObjects(vis, false); if (h.length) hitK = h[0].object; } }
         if (hitK) { C.lensSurf++; if (C.surfAt.length < 20) C.surfAt.push(+t.toFixed(2)); const k = (hitK.name || hitK.type) + (hitK.geometry && hitK.geometry.attributes.position ? ':' + hitK.geometry.attributes.position.count : ''); C.surfHit[k] = (C.surfHit[k] || 0) + 1;
           if ((C.surfDet = C.surfDet || []).length < 6) { const cs = window.__crecam.state(), r2 = v => +v.toFixed(2); let par = hitK.parent, chain = []; while (par && par !== L.grp && chain.length < 3) { chain.push(par.type + (par === L.body ? '(body)' : '')); par = par.parent; }
-            C.surfDet.push({ t: r2(t), mesh: k, chain: chain.join('<'), stand: r2(L.stand), tgt: L.standTarget, home: !!L.homeTurn, walk: !!L.walkTo, dSal: r2(Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z)), camSal: r2(cam.position.distanceTo(P.pos)), cd: cs.camDist, lift: cs.lift, under: cs.under, inProxy: BC.bodyBlocked(x, y, z, 0), inProxy03: BC.bodyBlocked(x, y, z, 0.3) }); } }
+            C.surfDet.push({ t: r2(t), mesh: k, chain: chain.join('<'), stand: r2(L.stand), tgt: L.standTarget, home: !!L.homeTurn, walk: !!L.walkTo, dSal: r2(Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z)), camSal: r2(cam.position.distanceTo(P.pos)), cd: cs.camDist, lift: cs.lift, under: cs.under, inProxy: BC.bodyBlocked(x, y, z, 0), inProxy03: BC.bodyBlocked(x, y, z, 0.3) }); }
+          grab('surf', t, { mesh: k, camSal: +cam.position.distanceTo(P.pos).toFixed(2) }); }
         if (BC.inClutch(x, y, z, 0) > 0) { C.lensEggs++; if (C.surfAt.length < 20) C.surfAt.push('eggs ' + t.toFixed(2)); }
       }
     }
@@ -213,8 +209,9 @@ const GATE_JS = `(async () => {
       const ph = !L.calmed ? (L.standE > 0.9 ? 'fight' : null) : (L.standE > 0.9 ? 'home' : 'settle');
       if (ph) g.shellClr[ph] = Math.min(g.shellClr[ph], +low.toFixed(2));
     }
-    let lit = false, dmin = 1e9, wmin = null;
-    for (const s of L.sigils) if (s.lit) { lit = true; const dd = s.grp.position.distanceTo(cam.position); if (dd < dmin) { dmin = dd; wmin = s; } }
+    // the lit wards: the nearest to the lens, and the newest light-up (the smallest flashT) and the lens's distance to it
+    let lit = false, dmin = 1e9, wmin = null, fmin = 9, fD = null;
+    for (const s of L.sigils) if (s.lit) { lit = true; const dd = s.grp.position.distanceTo(cam.position); if (dd < dmin) { dmin = dd; wmin = s; } if (s.flashT < fmin) { fmin = s.flashT; fD = dd; } }
     if (!lit || !(BC.underShell(x, y, z) || BC.underShell(P.pos.x, P.pos.y + 1, P.pos.z) || dmin < ${WASH_R})) return;
     const W = gl.drawingBufferWidth, H = gl.drawingBufferHeight;
     if (!buf || buf.length !== W * H * 4) buf = new Uint8Array(W * H * 4);
@@ -240,29 +237,30 @@ const GATE_JS = `(async () => {
       for (let k = 0; k < discs.length; k += 3) { const dx = px - discs[k], dy = py - discs[k + 1]; if (discs[k + 2] > 1e8 || dx * dx + dy * dy < discs[k + 2] * discs[k + 2]) { inD = true; break; } }
       if (!inD) out++;
     }
-    const sh = hi / n, so = out / n;
-    g.washN++; g.washSum += sh; g.washOutSum += so; g.washMeanLuma += sum / n;
+    const sh = hi / n, so = out / n, ph = L.calmed ? 'calm' : 'fight', B = g.wash[ph];
+    const camSal = Math.hypot(x - P.pos.x, y - P.pos.y - 0.4, z - P.pos.z);
+    B.n++; B.sum += sh; B.outSum += so; B.luma += sum / n;
+    if (g.washLog.length < 4000) g.washLog.push([+t.toFixed(2), +sh.toFixed(3), +so.toFixed(3), +dmin.toFixed(1), +Math.min(9, fmin).toFixed(2), fD == null ? null : +fD.toFixed(1), +camSal.toFixed(2), L.calmed ? 1 : 0, +(P.jet || 0).toFixed(2), L.drop || 0]);
     // a RED frame explains itself: [t, blown, blown outside the burns, lens-to-bonnet u, nearest lit ward u, its flashT,
-    // the lens-in-Sal frames so far in this phase, calmed]
-    if (so > ${WASH_BLOWN} || sh > ${WASH_CAP}) { g.washRed++; if (g.washAt.length < 60) g.washAt.push([+t.toFixed(2), +sh.toFixed(3), +so.toFixed(3),
-      +Math.hypot(x - P.pos.x, y - P.pos.y - 0.4, z - P.pos.z).toFixed(2), +dmin.toFixed(1), wmin ? +Math.min(9, wmin.flashT).toFixed(2) : null,
-      L.calmed ? g.lens.salCalm : g.lens.salFight, !!L.calmed]);
-      // (FP_WASHSHOT: the first few red frames after the calm stop the step so the node side can screenshot them)
-      if (window.__vfWashShot != null && L.calmed && window.__vfWashShot < 3 && !window.__vfWashNow) { window.__vfWashShot++; window.__vfWashNow = +t.toFixed(2); return false; } }
-    if (sh > g.washMax) { g.washMax = sh; g.washMaxAt = +t.toFixed(2); }
-    if (so > g.washOutMax) { g.washOutMax = so; g.washOutMaxAt = +t.toFixed(2); }
+    // the lens-in-Sal frames so far in this phase, calmed, the newest light-up's flashT, the lens to that ward u]
+    if (so > ${WASH_BLOWN} || sh > ${WASH_CAP}) { B.red++; if (B.at.length < 60) B.at.push([+t.toFixed(2), +sh.toFixed(3), +so.toFixed(3),
+      +camSal.toFixed(2), +dmin.toFixed(1), wmin ? +Math.min(9, wmin.flashT).toFixed(2) : null,
+      L.calmed ? g.lens.salCalm : g.lens.salFight, !!L.calmed, +Math.min(9, fmin).toFixed(2), fD == null ? null : +fD.toFixed(1)]);
+      grab(ph, t, { blown: +sh.toFixed(3), outside: +so.toFixed(3), camSal: +camSal.toFixed(2), ward: +dmin.toFixed(1), flashT: +Math.min(9, fmin).toFixed(2) }); }
+    if (sh > B.max) { B.max = sh; B.maxAt = +t.toFixed(2); }
+    if (so > B.outMax) { B.outMax = so; B.outMaxAt = +t.toFixed(2); }
   };
   window.__vfGate = g; window.__vfBC = BC;
   return 1;
 })()`;
-if (GATE) { await c.ev(GATE_JS); if (process.env.FP_SNAP) await c.ev("(window.__vfSnap = true, 1)"); if (process.env.FP_STOPIN) await c.ev("(window.__vfStopIn = true, 1)"); if (process.env.FP_WASHSHOT) await c.ev("(window.__vfWashShot = 0, 1)"); }
+if (GATE) { await c.ev(GATE_JS); if (process.env.FP_SNAP) await c.ev("(window.__vfSnap = true, 1)"); if (process.env.FP_STOPIN) await c.ev("(window.__vfStopIn = true, 1)"); }
 // ---- (velfix) FP_STOP / FP_HOLD ----
 const STOP = +(process.env.FP_STOP || 0), HOLD = process.env.FP_HOLD === '1';
 let gf = 0;
 async function atStop() {
   const s = await c.ev(STATE);
-  console.log('STOP', gf, (gf / 60).toFixed(2), JSON.stringify({ pos: s.pos, lev: s.lev, calmed: s.calmed, standE: s.standE, wards: s.wards.map(w => w.lit ? 1 : 0).join(''), cam: await c.ev(`window.camera.position.toArray().map(v => +v.toFixed(2))`) }));
-  if (GATE) console.log('GATE-SO-FAR', JSON.stringify(await c.ev('window.__vfGate')));
+  console.log('STOP', gf, (gf / 60).toFixed(2), JSON.stringify({ pos: s.pos, lev: s.lev, calmed: s.calmed, standE: s.standE, wards: s.wards.map(w => w.lit ? 1 : 0).join(''), cam: await c.ev(`window.camera.position.toArray().map(v => +v.toFixed(2))`), clock: await c.ev(CLOCK) }));
+  if (GATE) console.log('GATE-SO-FAR', JSON.stringify(await c.ev('(() => { const g = Object.assign({}, window.__vfGate); delete g.shots; delete g.washLog; return g; })()')));
   if (HOLD) { console.log(`HOLD: Chrome left up on DRV_PORT ${process.env.DRV_PORT}`); c.close(); process.exit(0); }
   c.close(); stop(); process.exit(0);
 }
@@ -291,7 +289,6 @@ async function stepN(n) {
   await stepN0(n);
   if (STOP && gf >= STOP * 3) await atStop();
   if (process.env.FP_STOPIN && await c.ev('!!window.__vfHalt')) await atStop();
-  if (process.env.FP_WASHSHOT) { const wt = await c.ev('window.__vfWashNow || 0'); if (wt) { await c.png(`${OUT}/${TAG}-washshot-${wt}.png`); await c.ev('(window.__vfWashNow = 0, 1)'); console.log('WASHSHOT', wt); } }
 }
 async function stepN0(n) {
   const R = RENDER ? ', { render: true }' : '';
@@ -307,12 +304,26 @@ async function stepN0(n) {
     n -= k;
   }
 }
-const DEG = Math.PI / 180;
 let t = 0, lastShot = 0, log = [];
 // one slice: keys held for `sec`, Space held only its first `spaceSec`, E tapped at the start
-async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false }) {
+// (velhard, as fullplay.mjs) abortTele: the slice ends the moment her drop's telegraph starts (the perfect player leaves
+// at once; a long burst is no excuse): stepped in 0.1 s chunks with the telegraph read between them
+let aborted = false;
+async function stepW(n, watch) {
+  if (!watch) { await stepN(n); return n; }
+  let k = 0;
+  while (k < n) {
+    const m = Math.min(6, n - k);
+    await stepN(m); k += m;
+    if (await c.ev(`window.lev && window.lev.drop === 1 ? 1 : 0`)) { aborted = true; return k; }
+  }
+  return k;
+}
+async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false, abortTele = false }) {
   const frames = Math.max(1, Math.round(sec * 60));
   await c.ev(`(window.player.yaw = ${yaw}, window.player.pitch = ${pitch}, 1)`);
+  const watch = abortTele && !(await c.ev(`window.lev && window.lev.drop === 1 ? 1 : 0`));
+  aborted = false;
   const MAP = { W: 'KeyW', S: 'KeyS', A: 'KeyA', D: 'KeyD', Shift: 'ShiftLeft', C: 'KeyC', E: 'KeyE', Space: 'Space' };
   for (const k of keys) await c.key(MAP[k], true);
   if (e) { await c.key('KeyE', true); await stepN(2); await c.key('KeyE', false); }
@@ -320,65 +331,15 @@ async function slice({ keys = [], sec, yaw, pitch = 0, space = 0, e = false }) {
   if (space > 0) {
     const sf = Math.max(2, Math.min(frames - done, Math.round(space * 60)));
     await c.key('Space', true);
-    await stepN(sf);
+    done += await stepW(sf, watch);
     await c.key('Space', false);
-    done += sf;
   }
-  if (frames > done) await stepN(frames - done);
+  if (frames > done && !aborted) done += await stepW(frames - done, watch);
   for (const k of keys) await c.key(MAP[k], false);
-  t += Math.max(frames, done) / 60;
+  t += done / 60;
 }
 
-const hyp = Math.hypot;
-function decide(s) {
-  const P = s.pos, reach = s.reach || 6;
-  const sec = AVG ? 0.5 + 0.5 * rnd() : 0.25;
-  const noise = AVG ? (rnd() * 2 - 1) * 20 * DEG : 0;
-  // the average player holds a burst ~1 s whatever the climb needs (the ledger's habit)
-  const avgBurst = 0.6 + 0.6 * rnd();
-  // asleep: [E] at the harpoon (or the old wound), then hands off through the wrench
-  if (s.dormant) return { sec: 0.2, yaw: s.yaw, e: s.canTake && !s.wrenching, keys: [], why: s.wrenching ? 'wrench' : 'pull' };
-  if (t < FLEE) { const ax = P[0] - s.lev[0], az = P[2] - s.lev[2]; return { sec, yaw: Math.atan2(ax, az) + noise, keys: ['W', 'Shift'], why: 'flee' }; }
-  // targets: the dark wards
-  const dark = s.wards.map((w, i) => ({ ...w, i })).filter(w => !w.lit && (!AVG || (s.rp && s.rp.seen[w.i])));
-  const nDark = s.wards.filter(w => !w.lit).length;
-  let T = null, kind = 'ward', R = reach - 0.9;
-  if (dark.length) {
-    dark.sort((a, b) => hyp(a.p[0] - P[0], a.p[1] - P[1], a.p[2] - P[2]) - hyp(b.p[0] - P[0], b.p[1] - P[1], b.p[2] - P[2]));
-    T = dark[0].p;
-  }
-  if (!T && nDark) { T = [s.lev[0], s.lev[1] - 0.3 * s.R, s.lev[2]]; kind = 'belly'; }
-  if (!T) return { sec, yaw: 0, keys: [], why: 'idle' };
-  const dx = T[0] - P[0], dz = T[2] - P[2], dh = hyp(dx, dz), up = T[1] - P[1];
-  const d3 = hyp(dh, up);
-  const yaw = Math.atan2(dx, dz) + noise;
-  // how high he must be at this horizontal distance to be in reach
-  const hIn = Math.min(dh, R - 0.3), needUp = up - Math.sqrt(Math.max(0, R * R - hIn * hIn));
-  const pitch = clamp(Math.atan2(up, Math.max(dh, 0.5)), -0.6, 1.2);
-  // under the hammer, out in front of her and she is cocking: rush in under her
-  const lx = s.lev[0] - P[0], lz = s.lev[2] - P[2], ld = hyp(lx, lz);
-  if (!AVG && s.threatE > 0.5 && s.cock > 0.5 && ld > 0.9 * s.R && ld < 3.0 * s.R) {
-    return { sec, yaw: Math.atan2(lx, lz), keys: s.grounded ? ['W', 'Shift'] : ['W'], why: 'dodge-under' };
-  }
-  if (d3 < R - 0.3) return { sec, yaw, keys: s.grounded ? [] : (s.vel[1] > 0.5 ? ['C'] : []), why: 'in-reach' };
-  if (s.grounded) {
-    const lookP = clamp(pitch, -0.3, 0.7);
-    if (dh > 3.5 && needUp > -1) return { sec, yaw, pitch: lookP, keys: ['W', 'Shift'], why: 'walk' };
-    if (needUp <= 0.2) return { sec, yaw, pitch: lookP, keys: ['W', 'Shift'], why: 'walk-in' };
-    if (needUp <= 2.2) return { sec, yaw, pitch: clamp(pitch, -0.3, 0.7), keys: dh > 1.5 ? ['W'] : [], space: 0.05, why: 'hop' };
-    // a burst toward it: held for what the climb needs
-    const sp = AVG ? avgBurst : clamp(0.22 + 0.05 * needUp, 0.22, 1.2);
-    return { sec: Math.max(sec, sp + 0.05), yaw, pitch, keys: dh > 1.5 ? ['W'] : [], space: sp, why: 'burst ' + needUp.toFixed(1) };
-  }
-  // in the water
-  const vy = s.vel[1];
-  const keys = [];
-  if (dh > 1.2) keys.push('W');
-  if (needUp < -1.0 || vy > 2.5 || (needUp < 0 && vy > 0.8)) keys.push('C');
-  if (needUp > 1.5 && vy < 1.0 && s.reserve > 0.25) return { sec: Math.max(sec, 0.3), yaw, pitch, keys, space: AVG ? avgBurst : 0.25, why: 'swim-burst' };
-  return { sec, yaw, pitch, keys, why: 'swim' };
-}
-function clamp(x, a, b) { return x < a ? a : x > b ? b : x; }
+const decide = makePolicy({ AVG, rnd, FLEE, now: () => t });
 
 
 // ---- THE APPROACH: deck -> over the side -> down and across, by the other diver's trail ----
@@ -432,13 +393,13 @@ await travel('the harpoon', 'anchor', 0, 60);
   for (let i = 0; i < 8; i++) await slice({ sec: 0.25, yaw, pitch: 0.05, keys: [] }); phase.push(`${t.toFixed(1)} facing the iron msg ${(await c.ev(NAV)).msg}`); }
 
 let s = await c.ev(STATE);
-console.log('START', JSON.stringify({ site: SITE, mode: MODE, t: +t.toFixed(2), pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`), cre: await c.ev('window.__crecam.state().swings') }));
+console.log('START', JSON.stringify({ site: SITE, mode: MODE, t: +t.toFixed(2), pos: s.pos, lev: s.lev, wards: s.wards.map(w => w.floor), lit: s.wards.map(w => w.lit ? 1 : 0).join(''), canTake: s.canTake, prompt: await c.ev(`window.lev.rite.prompt(window.player.pos)`), cre: await c.ev('window.__crecam.state().swings'), clock: await c.ev(CLOCK) }));
 let lastWhy = '';
 while (t < +MAXS) {
   s = await c.ev(STATE);
   if (s.calmed) break;
   const d = decide(s);
-  if (d.why !== lastWhy || d.e) log.push(`${t.toFixed(1)} ${d.why} agl ${s.agl} res ${s.reserve} lit ${s.wards.map(w => w.lit ? 1 : 0).join('')} cr ${s.crouch}`);
+  if (d.why !== lastWhy || d.e || process.env.RP_LOGALL) log.push(`${t.toFixed(1)} ${d.why} agl ${s.agl} res ${s.reserve} lit ${s.wards.map(w => w.lit ? 1 : 0).join('')} ${decide.dbg || ''}`);
   lastWhy = d.why;
   await slice(d);
   if (t - lastShot >= 10) { lastShot = t; await shot(String(Math.round(t)).padStart(3, '0')); }
@@ -446,6 +407,7 @@ while (t < +MAXS) {
 // let the calm settle a beat
 for (let i = 0; i < 8; i++) await slice({ sec: 0.25, yaw: 0, keys: [] });
 s = await c.ev(STATE);
+const tally = await c.ev(TALLY);   // (her hits by source, read now: down in zone 1 window.lev is Orune)
 await shot('end');
 // (velfix) THE ROUTE AFTER THE CALM (FP_ROUTE): 'crack' (the default: vent and walk to the crack, down into zone 1),
 // 'follow' (the reviewer's C1 case: still off the floor, he follows her home under her body - W+Shift toward her
@@ -453,6 +415,7 @@ await shot('end');
 // until her settle is under way, back onto it mid-settle - she stands back up over him - then off again for her to
 // lie down). Each route must exercise its case or the gate is RED (see the verdict).
 const ROUTE = process.env.FP_ROUTE || 'crack';
+const NOVENT = process.env.FP_NOVENT === '1';
 const TO_HER = `Math.atan2(window.lev.pos.x - window.player.pos.x, window.lev.pos.z - window.player.pos.z)`;
 const RS = `({ tgt: window.lev.standTarget, stand: window.lev.stand, ax: window.player.pos.x - window.lev.pos.x, az: window.player.pos.z - window.lev.pos.z, g: !!window.player.grounded,
   off: !(window.__vfBC && window.__vfBC.shellPlanNear ? window.__vfBC.shellPlanNear(window.player.pos.x, window.player.pos.y - 0.45, window.player.pos.z, 3.5) : Math.hypot(window.player.pos.x - window.lev.pos.x, window.player.pos.z - window.lev.pos.z) < 24) })`;
@@ -489,30 +452,41 @@ if (s.calmed && ROUTE === 'follow') {
   const CRK = `(() => { const S = window.__fs, P = window.player, l = { u: 0, v: 0 }, o = { x: 0, z: 0 };
     S.fissureLocal(P.pos.x, P.pos.z, 0, l); S.fissureWorld(Math.max(-14, Math.min(14, l.u)), 0, 0, o);
     return { x: o.x, z: o.z, fd: S.fissureDist(P.pos.x, P.pos.z, 0), k: window.__fissure.k(0), zone: window.zone, y: P.pos.y, grounded: !!P.grounded, msg: window.__msg().live }; })()`;
-  const t0 = t; let last = null, lastT = t, zoneAt = null;
+  // (FP_NOVENT, the route bound's RED case: the same walk to the throat, but he never vents and never goes down it.
+  // Withholding C alone is not enough: measured, the dress sinks an unvented diver through the open throat and he was in
+  // zone 1 34 s after the calm. So at the lip he stops, on his feet, 2 u short of it; and afloat near it he hauls back out
+  // to 5 u rather than drift over it.)
+  const C_ = NOVENT ? [] : ['C'];
+  const t0 = t; let last = null, lastT = t, zoneAt = null, minY = 1e9, overLip = null, minFd = 1e9;
   while (t - t0 < 90) {
     const q = await c.ev(CRK);
+    if (q.y < minY) minY = q.y;
+    if (q.fd < minFd) minFd = q.fd;
+    if (q.fd < -1 && overLip == null) overLip = +t.toFixed(1);
     if (q.zone === 1 && zoneAt == null) { zoneAt = t; phase.push(`${t.toFixed(1)} zone 1 y ${q.y.toFixed(1)} msg ${q.msg}`); }
     if (zoneAt != null && t - zoneAt > 5) break;
     const yaw = Math.atan2(q.x - (await c.ev('window.player.pos.x')), q.z - (await c.ev('window.player.pos.z')));
     if (!q._l && (t - (globalThis.__dl || -9) >= 2)) { globalThis.__dl = t; const pp = await c.ev('[window.player.pos.x, window.player.pos.y, window.player.pos.z].map(v => +v.toFixed(1))'); const inT = await c.ev('window.__fs.inThroat ? window.__fs.inThroat(window.player.pos.x, window.player.pos.z, 0) : null'); phase.push(`${t.toFixed(1)} down fd ${q.fd.toFixed(1)} k ${q.k.toFixed(2)} gr ${q.grounded} pos ${pp} inT ${inT} zone ${q.zone} tgt ${q.x.toFixed(1)},${q.z.toFixed(1)}`); }
-    if (q.fd < -1 && !q.grounded) { await slice({ sec: 0.5, yaw, pitch: -0.35, keys: ['C'] }); continue; }   // in the throat: down
+    if (NOVENT && !q.grounded && q.fd < 5 && q.fd >= -1) { await slice({ sec: 0.5, yaw: yaw + Math.PI, pitch: 0, keys: ['W'] }); continue; }   // (FP_NOVENT) afloat by the lip: back out
+    if (NOVENT && q.grounded && q.fd < 2) { await slice({ sec: 0.5, yaw, pitch: -0.1, keys: [] }); continue; }   // (FP_NOVENT) at the lip: he stops
+    if (q.fd < -1 && !q.grounded) { await slice({ sec: 0.5, yaw, pitch: -0.35, keys: C_ }); continue; }   // in the throat: down
     if (q.grounded && q.k > 0.5) {
       if (!last || t - lastT >= 2) { const p = await c.ev('[window.player.pos.x, window.player.pos.z]'); const moved = last ? Math.hypot(p[0] - last[0], p[1] - last[1]) : 9; last = p; lastT = t;
         if (moved < 0.8) { await slice({ sec: 0.6, yaw, pitch: 0, keys: ['W'], space: 0.3 }); continue; } }
       await slice({ sec: 0.5, yaw, pitch: -0.2, keys: ['W', 'Shift'] }); continue;
     }
-    if (!q.grounded && q.fd >= -1) { await slice({ sec: 0.5, yaw, pitch: -0.2, keys: ['W', 'C'] }); continue; }
+    if (!q.grounded && q.fd >= -1) { await slice({ sec: 0.5, yaw, pitch: -0.2, keys: ['W', ...C_] }); continue; }
     await slice({ sec: 0.5, yaw, pitch: -0.1, keys: [] });   // the crack still pouring: watch it open
   }
-  way = { route: 'crack', zoneAt: zoneAt == null ? null : +zoneAt.toFixed(1) };
+  way = { route: 'crack', novent: NOVENT, zoneAt: zoneAt == null ? null : +zoneAt.toFixed(1), overLip, minFd: +minFd.toFixed(1), minY: +minY.toFixed(1), sec: +(t - t0).toFixed(1) };
   await shot('down');
 }
 console.log(phase.join('\n'));
 const st = s.rp;
+const clock = await c.ev(CLOCK);
 const ledger = { site: SITE, mode: MODE, seed: +SEED, completed: st.calmT != null, calmT: st.calmT, takeT: st.takeT, wardT: st.wardT,
-  hits: st.hits, tears: st.tears, hitAt: st.hitAt, dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
-  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way };
+  hits: st.hits, tears: st.tears, hitAt: st.hitAt, ...tally, underS: +st.underS.toFixed(1), dryN: st.dryN, minReserve: +st.minReserve.toFixed(2), minAir: +st.minAir.toFixed(2), died: st.died, bowlN: st.bowlN, bowlAt: st.bowlAt, maxUp: +st.maxUp.toFixed(1), floatS: +st.floatS.toFixed(1),
+  camN: st.camN, camBad: st.camBad, camBadPct: st.camN ? Math.round(100 * st.camBad / st.camN) : 0, pressedPct: st.camN ? Math.round(100 * st.pressed / st.camN) : 0, pressed: st.pressed, gameSec: +t.toFixed(1), way, clock };
 console.log(log.join('\n'));
 ledger.slamLog = await c.ev(`window.__slamLog || null`);
 // (velfix) the quality ladder as the run ended: the real loop's perf judge runs before the stepped loop takes over, and a
@@ -522,37 +496,47 @@ console.log('LEDGER', JSON.stringify(ledger));
 let gateRed = false;
 if (GATE) {
   const g = await c.ev('window.__vfGate');
-  // THE VERDICT (velfix review I2). RED, with every reason listed, if:
+  // (FP_WASHSHOT) the frames read back in the page, written out here
+  for (const [i, sh] of (g.shots || []).entries()) writeFileSync(`${OUT}/${TAG}-shot-${sh.kind}-${String(i).padStart(2, '0')}-${sh.t}.png`, Buffer.from(sh.url.split(',')[1], 'base64'));
+  const shotList = (g.shots || []).map(sh => ({ kind: sh.kind, t: sh.t, ...sh.extra }));
+  delete g.shots;
+  // THE VERDICT (velfix review I2; Task 9). RED, with every reason listed, if:
   //   the run never reached the calm, or booked under 600 frames after it, or under 20 wash frames (a vacuous run);
-  //   the wash: any booked frame over the limits;
+  //   the game clock moved other than by the stepped frames (Task 9: the run played on wall time);
+  //   the wash, IN EITHER PHASE (the fight, after the calm): any booked frame over the limits;
   //   after the calm, the DRAWN verdict: her opaque surface on the lens or the lens in the egg mass (C.lensSurf /
   //     C.lensEggs) - the collision-proxy counts (calmIn / calmNear / rayCalm) are reported, not gated: her capsules
   //     over-cover her limbs and book frames that look fine;
   //   after the calm, Sal inside her (C.salIn), or the lens inside Sal (lens.salCalm: within 0.45 u of his axis);
   //   I1: the clutch moving more than 0.05 in a frame after the calm, or any of the wake's effects after it;
-  //   the route not exercised: 'follow' with under 120 frames of him under her shell, 'resettle' without a re-rise.
-  // The fight's counts are reported beside it: the fight's camera is baa7f88's, unchanged.
-  const C = g.calm, why = [];
+  //   the route not exercised: 'crack' without zone 1 inside its 90 s (Task 9's route bound), 'follow' with under 120
+  //     frames of him under her shell, 'resettle' without a re-rise.
+  // The fight's lens counts are reported beside it: the fight's camera is the shipped one, unchanged.
+  const C = g.calm, why = [], WF = g.wash.fight, WC = g.wash.calm;
   if (!(st.calmT != null)) why.push('never reached the calm');
   if (C.n < 600) why.push(`only ${C.n} frames after the calm`);
-  if (g.washN < 20) why.push(`only ${g.washN} wash frames booked`);
-  if (g.washRed > 0) why.push(`wash: ${g.washRed} frames over the limits`);
+  if (WF.n + WC.n < 20) why.push(`only ${WF.n + WC.n} wash frames booked`);
+  if (!(Math.abs(clock.drift) <= 0.05) || clock.running) why.push(`the game clock ran on wall time (drift ${clock.drift} s over ${clock.stepped} s stepped)`);
+  if (WF.red > 0) why.push(`wash in the fight: ${WF.red} frames over the limits`);
+  if (WC.red > 0) why.push(`wash after the calm: ${WC.red} frames over the limits`);
   if (C.lensSurf + C.lensEggs > 0) why.push(`lens: her drawn surface on it ${C.lensSurf}, in the egg mass ${C.lensEggs} (of ${C.sampled} sampled)`);
   if (C.salIn > 0) why.push(`Sal inside her on ${C.salIn} frames`);
   if (g.lens.salCalm > 0) why.push(`the lens in Sal on ${g.lens.salCalm} frames after the calm`);
   if (C.stMaxD > 0.05) why.push(`the clutch jumped ${C.stMaxD} in a frame (at ${C.stMaxAt})`);
   if (C.wakeFx > 0) why.push(`${C.wakeFx} wake effects after the calm`);
+  if (ROUTE === 'crack' && !(way && way.zoneAt != null)) why.push(`crack: zone 1 not reached in the route's 90 s${way ? ` (over the lip at ${way.overLip}, nearest the lip ${way.minFd} u, lowest y ${way.minY}${way.novent ? ', FP_NOVENT' : ''})` : ''}`);
   if (ROUTE === 'follow' && C.under < 120) why.push(`follow: only ${C.under} frames under her`);
   if (ROUTE === 'resettle' && C.reRise === 0) why.push('resettle: she never stood back up');
-  const washRed = g.washRed > 0, lensRed = C.lensSurf + C.lensEggs + C.salIn + g.lens.salCalm > 0;
+  const lensRed = C.lensSurf + C.lensEggs + C.salIn + g.lens.salCalm > 0;
   gateRed = why.length > 0;
   ledger.gate = g;
+  const phaseOut = (B, nm) => ({ booked: B.n, red: B.red, meanBlown: B.n ? +(B.sum / B.n).toFixed(4) : 0, maxBlown: +B.max.toFixed(3), maxAt: B.maxAt,
+    meanOutside: B.n ? +(B.outSum / B.n).toFixed(4) : 0, maxOutside: +B.outMax.toFixed(3), maxOutsideAt: B.outMaxAt, meanLuma: B.n ? +(B.luma / B.n).toFixed(1) : 0,
+    verdict: B.red ? `RED (${B.red} frames ${nm} > ${WASH_BLOWN} blown outside the burns or > ${WASH_CAP} in all)` : 'GREEN', at: B.at.slice(0, 16) });
   console.log('GATE', gateRed ? 'RED' : 'GREEN', JSON.stringify({
-    wash: { booked: g.washN, red: g.washRed, meanBlown: g.washN ? +(g.washSum / g.washN).toFixed(4) : 0, maxBlown: +g.washMax.toFixed(3), maxAt: g.washMaxAt,
-      meanOutside: g.washN ? +(g.washOutSum / g.washN).toFixed(4) : 0, maxOutside: +g.washOutMax.toFixed(3), maxOutsideAt: g.washOutMaxAt,
-      meanLuma: g.washN ? +(g.washMeanLuma / g.washN).toFixed(1) : 0, verdict: washRed ? `RED (${g.washRed} frames > ${WASH_BLOWN} blown outside the burns or > ${WASH_CAP} in all)` : 'GREEN', at: g.washAt.slice(0, 12) },
+    wash: { fight: phaseOut(WF, 'in the fight'), calm: phaseOut(WC, 'after the calm') },
     lens: { ...g.lens, inAt: g.lens.inAt.slice(0, 20), rayAt: g.lens.rayAt.slice(0, 20), snap: undefined, verdict: lensRed ? 'RED' : 'GREEN' }, shellClr: g.shellClr,
-    calm: C, route: ROUTE, way, why }));
+    calm: C, route: ROUTE, way, clock, shots: shotList, why }));
 }
 writeFileSync(`${OUT}/${TAG}.json`, JSON.stringify({ ledger, log }, null, 1));
 const cons = await c.console();
