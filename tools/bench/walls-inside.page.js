@@ -4,12 +4,13 @@
 // Runs on any build: where terrain.js has no throat wall (fissureWallGeo, Task 5b) the drawn wall is
 // the fissure patch's own triangles inside the lip (b511877 and before), so the same probe gives the
 // RED there and the GREEN after.
-//   bound(zi)  - the DRAWN crack surfaces against the heightfield Sal stands on (terrainUnderH): a
+//   bound(zi, bars) - the DRAWN crack surfaces against the heightfield Sal stands on (terrainUnderH): a
 //                signed 3-D distance per sample (every ~9th triangle: its centroid and a corner),
 //                + = the drawn rock stands out in the water (lens, body), - = it lies back inside the
 //                collision rock. Size: the nearest surface point on twelve horizontal bearings out to
-//                2.5 u (a ground point at sqrt(d^2 + gap^2), or a riser crossing the point's height);
-//                sign: the vertical gap's.
+//                2.5 u (a ground point at sqrt(d^2 + gap^2), or a riser crossing the point's height),
+//                refined to the true distance from half of each bar up (sdist, refine); sign: the
+//                vertical gap's. Per surface: the max each way, the count over each bar and the top 3.
 //   column(zi) - the zone's lip-to-floor column at this anchorage, read live: the lip mean (fissureShape.js
 //                lipMeanY) over the throat floor at riftPos(zi) (terrainH at the opening's centre).
 //   rays(zi, fr) - rays from the throat's axis to both walls (depths = fractions fr of the column, RAY_FR by default,
@@ -68,11 +69,15 @@ function drawn(zi) {
 }
 const _l = { u: 0, v: 0 };
 // signed distance of a drawn point to the heightfield surface: + in the water, - in the rock. Its
-// size: the nearest surface point found on twelve horizontal bearings out to 2.5 u: a ground point
-// (x', h(x')) at sqrt(d^2 + (y - h)^2), or a riser crossing the point's own height at d (a riser is
-// the heightfield's vertical face between two samples). Its sign: the vertical gap's at the point.
+// size: THE MARCH, the nearest surface point found on twelve horizontal bearings out to 2.5 u: a ground
+// point (x', h(x')) at sqrt(d^2 + (y - h)^2), or a riser crossing the point's own height at d (a riser is
+// the heightfield's vertical face between two samples). Every candidate is a real surface point, so the
+// march is an upper bound on the 3-D distance. With `bars` ({ recess, protrude }: the probe's bars) a
+// reading at or past HALF its bar is then refined to the true distance (refine, below); under half the
+// bar the march's reading is returned bit for bit. Its sign: the vertical gap's at the point.
 const DIRS = [];
-export function sdist(x, y, z, zi, F) {
+let rfMarch = 0, rfDid = false;   // the last call's march reading, and whether it was refined (bound reports both)
+export function sdist(x, y, z, zi, F, bars) {
   if (!DIRS.length || DIRS.zi !== zi) { DIRS.length = 0; DIRS.zi = zi;
     for (let k = 0; k < 12; k++) { const a = k * Math.PI / 6, cu = Math.cos(a), cv = Math.sin(a); DIRS.push([F.dx * cu - F.dz * cv, F.dz * cu + F.dx * cv]); } }
   const h = T.terrainUnderH(x, z, zi), dv = y - h;
@@ -86,31 +91,105 @@ export function sdist(x, y, z, zi, F) {
       prev = g;
     }
   }
-  return Math.sign(dv) * best;
+  const d = Math.sign(dv) * best;
+  rfMarch = d; rfDid = false;
+  if (!bars || (d > -0.5 * bars.recess && d < 0.5 * bars.protrude)) return d;
+  rfDid = true;
+  return Math.sign(dv) * refine(x, y, z, zi, best);
 }
-export function bound(zi) {
-  const F = S.FISSURE[zi], out = {};
-  for (const s of drawn(zi)) {
-    const A = s.A, I = s.tris, n = I.length / 3;
-    const step = Math.max(1, Math.floor(n / 8000));
-    let pMax = -1e9, rMax = -1e9, cnt = 0, gt = 0, wp = null, wr = null; const hist = [];
-    const take = (x, y, z) => {
-      const d = sdist(x, y, z, zi, F); cnt++;
-      if (d > pMax) { pMax = d; wp = [+x.toFixed(2), +y.toFixed(2), +z.toFixed(2)]; }
-      if (-d > rMax) { rMax = -d; wr = [+x.toFixed(2), +y.toFixed(2), +z.toFixed(2)]; }
-      if (d > 0.25) gt++;
-      hist.push(d);
-    };
-    for (let t = 0; t < n; t += step) {
-      const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
-      take((A[a] + A[b] + A[c]) / 3, (A[a + 1] + A[b + 1] + A[c + 1]) / 3, (A[a + 2] + A[b + 2] + A[c + 2]) / 3);
-      take(A[a], A[a + 1], A[a + 2]);
-    }
-    hist.sort((p, q) => p - q);
-    const q = f => +hist[Math.min(hist.length - 1, Math.floor(f * hist.length))].toFixed(3);
-    out[s.name] = { tris: n, samples: cnt, protrudeMax: +pMax.toFixed(3), recessMax: +rMax.toFixed(3), over025: +(gt / Math.max(1, cnt)).toFixed(4),
-      p001: q(0.001), p50: q(0.5), p999: q(0.999), worstOut: wp, worstIn: wr };
+// THE TRUE DISTANCE (seafloor relief Task 7b, Ruling 35). Twelve bearings 30 deg apart miss a crease that
+// runs between them. In a fin or a needle (a pocket ~0.3 u wide) the nearest surface point is such a crease,
+// and there the march read 2.925 / 2.502 where the true distance was 0.207 / 0.206 (home zone 0's west and
+// east tips, Task 7b). So sdist refines a reading at half its bar by an exact local search:
+//   - the heightfield on a world-aligned RF_STEP lattice, within the march's own distance (capped at RF_R);
+//   - each lattice point a riser from its height down to its lowest 4-neighbour;
+//   - the result is min(march, search), so it only ever lowers a reading.
+// Exact to the lattice for any distance up to RF_R (both bars and both REDs' offsets, fissure-probe.mjs FP_RED, sit under
+// it); past RF_R the march (an upper bound) stands. The lattice is read through RF_T-cell tiles, cached for one
+// bound() call: a plane's heightfield, fixed while it runs
+// (a caller of sdist outside bound() calls trueReset() whenever the heightfield changes: a site or zone).
+const RF_STEP = 0.02, RF_R = 4, RF_T = 128;
+const rfTiles = new Map();
+let rfWin = new Float32Array(0);
+export function trueReset() { rfTiles.clear(); }
+function rfTile(zi, tx, tz) {
+  const key = ((zi * 65536 + tx + 32768) * 65536) + (tz + 32768);
+  let t = rfTiles.get(key);
+  if (!t) {
+    t = new Float32Array(RF_T * RF_T);
+    for (let j = 0; j < RF_T; j++) for (let i = 0; i < RF_T; i++) t[j * RF_T + i] = T.terrainUnderH((tx * RF_T + i) * RF_STEP, (tz * RF_T + j) * RF_STEP, zi);
+    rfTiles.set(key, t);
   }
+  return t;
+}
+function refine(x, y, z, zi, march) {
+  const R = Math.min(march, RF_R), R2 = R * R, s = RF_STEP;
+  const gx0 = Math.floor((x - R) / s) - 1, gx1 = Math.ceil((x + R) / s) + 1, gz0 = Math.floor((z - R) / s) - 1, gz1 = Math.ceil((z + R) / s) + 1;
+  const nx = gx1 - gx0 + 1, nz = gz1 - gz0 + 1;
+  if (rfWin.length < nx * nz) rfWin = new Float32Array(nx * nz);
+  const H = rfWin;
+  for (let j = 0; j < nz; j++) {           // the window's heights, a tile's row run at a time
+    const gz = gz0 + j, tz = Math.floor(gz / RF_T), jz = gz - tz * RF_T;
+    for (let i = 0; i < nx;) {
+      const gx = gx0 + i, tx = Math.floor(gx / RF_T), ix = gx - tx * RF_T, t = rfTile(zi, tx, tz), run = Math.min(nx - i, RF_T - ix);
+      for (let k = 0; k < run; k++) H[j * nx + i + k] = t[jz * RF_T + ix + k];
+      i += run;
+    }
+  }
+  let best2 = Infinity;
+  for (let j = 1; j < nz - 1; j++) {
+    const dz = (gz0 + j) * s - z, dz2 = dz * dz;
+    for (let i = 1; i < nx - 1; i++) {
+      const dx = (gx0 + i) * s - x, h2 = dx * dx + dz2;
+      if (h2 > R2 || h2 >= best2) continue;
+      const o = j * nx + i, hg = H[o], lo = Math.min(hg, H[o - 1], H[o + 1], H[o - nx], H[o + nx]);
+      const dy = y > hg ? y - hg : y < lo ? lo - y : 0, d2 = h2 + dy * dy;
+      if (d2 < best2) best2 = d2;
+    }
+  }
+  return best2 < Infinity ? Math.min(march, Math.sqrt(best2)) : march;
+}
+// bars (the probe's { recess, protrude }): sdist refines from half of each; each surface also reports its COUNT
+// over each bar and its TOP 3 (distinct points) each way (the worst alone hid a second failure behind the first:
+// Task 7b), and the refined samples, march -> true.
+export function bound(zi, bars) {
+  const F = S.FISSURE[zi], out = {};
+  rfTiles.clear();
+  try {
+    for (const s of drawn(zi)) {
+      const A = s.A, I = s.tris, n = I.length / 3;
+      const step = Math.max(1, Math.floor(n / 8000));
+      let pMax = -1e9, rMax = -1e9, cnt = 0, gt = 0, wp = null, wr = null, rOver = 0, pOver = 0, nRef = 0;
+      const hist = [], rTop = [], pTop = [], refined = [];
+      const top3 = (L, v, at) => {
+        if (L.length === 3 && v <= L[2][0]) return;
+        for (const e of L) if (e[1][0] === at[0] && e[1][1] === at[1] && e[1][2] === at[2]) return;
+        L.push([v, at]); L.sort((p, q) => q[0] - p[0]); if (L.length > 3) L.length = 3;
+      };
+      const take = (x, y, z) => {
+        const d = sdist(x, y, z, zi, F, bars); cnt++;
+        const at = [+x.toFixed(2), +y.toFixed(2), +z.toFixed(2)];
+        if (d > pMax) { pMax = d; wp = at; }
+        if (-d > rMax) { rMax = -d; wr = at; }
+        if (d > 0.25) gt++;
+        hist.push(d);
+        if (rfDid) { nRef++; if (refined.length < 200) refined.push([+rfMarch.toFixed(3), +d.toFixed(3), at]); }
+        if (bars) { if (-d > bars.recess) rOver++; if (d > bars.protrude) pOver++; }
+        if (d < 0) top3(rTop, -d, at); else if (d > 0) top3(pTop, d, at);
+      };
+      for (let t = 0; t < n; t += step) {
+        const a = I[t * 3] * 3, b = I[t * 3 + 1] * 3, c = I[t * 3 + 2] * 3;
+        take((A[a] + A[b] + A[c]) / 3, (A[a + 1] + A[b + 1] + A[c + 1]) / 3, (A[a + 2] + A[b + 2] + A[c + 2]) / 3);
+        take(A[a], A[a + 1], A[a + 2]);
+      }
+      hist.sort((p, q) => p - q);
+      const q = f => +hist[Math.min(hist.length - 1, Math.floor(f * hist.length))].toFixed(3);
+      const r3 = L => L.map(e => [+e[0].toFixed(3), e[1]]);
+      out[s.name] = { tris: n, samples: cnt, protrudeMax: +pMax.toFixed(3), recessMax: +rMax.toFixed(3), over025: +(gt / Math.max(1, cnt)).toFixed(4),
+        p001: q(0.001), p50: q(0.5), p999: q(0.999), worstOut: wp, worstIn: wr,
+        recessOver: rOver, protrudeOver: pOver, over025n: gt, recessTop: r3(rTop), protrudeTop: r3(pTop), refined: nRef, refinedList: refined };
+    }
+  } finally { rfTiles.clear(); }
   return out;
 }
 

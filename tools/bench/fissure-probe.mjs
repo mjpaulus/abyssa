@@ -7,7 +7,8 @@
 // Env FP_RED=<variant> (seafloor relief Task 7, Ruling 32): an opt-in RED case of one mode, never part of the default
 // run, one per bar, each measured to fail it (the line at the mode): rise `no-rel-limit` (__throatCam.knobs.relVmax huge:
 // RISE_HID), throat-edges `haul-low` (his eye, the height the switch reads, 1 u under the switch: the coverage floor),
-// walls-inside `rays-1.2` (a ray depth at 1.2 x the column, under the floor: the ray-count floor), fall-lens `cut-1s`
+// walls-inside `rays-1.2` (a ray depth at 1.2 x the column, under the floor: the ray-count floor), `wall-back-3` / `wall-out-1`
+// (Task 7b, Ruling 35: the drawn wall 3 u back into the rock / 1 u out along its normals: the recess / protrusion bars), fall-lens `cut-1s`
 // (each case measured over its first second only: the samples floor).
 const [, , mode, port] = process.argv;
 // (M4) FP_WALLS_SINK's positive control: a finite sink > 0, and only for walls (anywhere else it would be ignored, and a
@@ -17,7 +18,7 @@ if (WALLS_SINK !== undefined && (mode !== 'walls' || !(Number.isFinite(+WALLS_SI
   console.error(`FP_WALLS_SINK must be a finite number > 0, for walls only (got ${JSON.stringify(WALLS_SINK)}, mode ${mode})`); process.exit(2); }
 // FP_RED's positive control, the same way: a variant this mode has (anywhere else it would be ignored, and a RED run would
 // pass as GREEN)
-const RED_OF = { rise: ['no-rel-limit'], 'throat-edges': ['haul-low'], 'walls-inside': ['rays-1.2'], 'fall-lens': ['cut-1s'] };
+const RED_OF = { rise: ['no-rel-limit'], 'throat-edges': ['haul-low'], 'walls-inside': ['rays-1.2', 'wall-back-3', 'wall-out-1'], 'fall-lens': ['cut-1s'] };
 const RED = process.env.FP_RED;
 if (RED !== undefined && !(RED_OF[mode] || []).includes(RED)) {
   console.error(`FP_RED: mode ${mode} has ${RED_OF[mode] ? 'the variants ' + RED_OF[mode].join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -1138,6 +1139,19 @@ if (mode === 'rise') {
   // calibrated AB_DEP 25 u under the lip, held to at most AB_COL_MAX 0.6 of the column: on unchanged ground that is main's
   // own A/B, view for view; the absolute bars (streak, grain, detail) keep LOOK_FR. Its cost: the A/B no longer judges the
   // 14.3 u view at home zone 0 on the relief; the absolute bars still gate that view.
+  // (seafloor relief Task 7b, Ruling 35) THE TRUE DISTANCE. The bound's march (walls-inside.page.js sdist: twelve bearings)
+  // is an upper bound, and in a fin or a needle narrower than its bearings it overstates. At home zone 0's west and east
+  // tips it read 2.925 / 2.502 where the true distance was 0.207 / 0.206. So a reading at or past HALF its bar (recess 1.0,
+  // protrusion 0.4) is refined to the true 3-D distance by an exact local search (a 0.02 u lattice, risers included;
+  // walls-inside.page.js refine). Every reading under that is the march's, bit for bit, so WALL_PROTRUDE and WALL_OUT25 keep
+  // main's calibration. Each bound line gives the COUNT over its bar and the TOP 3: printing the worst alone hid home zone
+  // 0's east-tip 2.242 behind the west's 2.925 until Task 7b. Refinement only lowers a reading, so the bars keep REDs
+  // (FP_RED; the drawn wall's position buffer edited in the page for the bound only, no game code):
+  //   - `wall-back-3`: every drawn wall vertex 3 u back along its normal, into the rock. Fails the recess bar at every plane
+  //     (2026-10-14: 8769-12273 samples over, max 3.59-3.82; it also pushes 10-37 past the protrusion bar).
+  //   - `wall-out-1`: every drawn wall vertex 1 u out along its normal. Fails the protrusion bar at every plane (3885-5455
+  //     samples over, max 0.98-1.008; the recess bar holds, max 1.12-1.39).
+  // The per-plane refined samples (march -> true) are printed beside the bars.
   const RAYS_CAST = 0.9, AB_DEP = 25, AB_COL_MAX = 0.6;
   const fs = await import('node:fs');
   // (WALL_OUT25: the worst measured share is 0.20%; the geometry is deterministic, the bound keeps 50%
@@ -1145,29 +1159,42 @@ if (mode === 'rise') {
   // wood grain at 85e22f8 measured 0.049-0.066 at the four anchorages (zone 2's at Burned and the
   // Shelf 0.045-0.046), the 1-D beds <= 0.039 everywhere: the bound sits ~12% from each side.)
   const WALL_PROTRUDE = 0.8, WALL_OUT25 = 0.003, WALL_RECESS = 2.0, WALL_STREAK = 3.5, WALL_DETAIL = 0.035, WALL_GRAIN = 0.044;
+  const BARS = { recess: WALL_RECESS, protrude: WALL_PROTRUDE }, SHIFT = RED === 'wall-back-3' ? -3 : RED === 'wall-out-1' ? 1 : 0;
   const bound = await c.ev(`(async () => {
-    const W = await import('/tools/bench/walls-inside.page.js');
+    const W = await import('/tools/bench/walls-inside.page.js'), T = await import('/src/world/terrain.js');
     window.setState('play'); window.__helm = true; window.survival.hose = 5000;
-    const out = [], fr = ${RED === 'rays-1.2'} ? W.RAY_FR.concat(1.2) : W.RAY_FR;
+    const out = [], fr = ${RED === 'rays-1.2'} ? W.RAY_FR.concat(1.2) : W.RAY_FR, bars = ${JSON.stringify(BARS)}, shift = ${SHIFT};
+    // (FP_RED wall-back-3 / wall-out-1) the drawn wall's vertices moved shift u along their own normals, for the bound only
+    const bnd = zi => { const G = shift && T.fissureWallGeo(zi); if (!G) return W.bound(zi, bars);
+      const P = G.pos.array, N = G.nor.array, keep = P.slice();
+      for (let i = 0; i < P.length; i++) P[i] += shift * N[i];
+      try { return W.bound(zi, bars); } finally { P.set(keep); } };
     for (const site of [0, 1, 2]) {
       if (site) window.__chart.arrive(site);
-      for (let zi = 0; zi < 3; zi++) out.push(Object.assign({ site, zi }, W.bound(zi), { rays: W.rays(zi, fr) }));
+      for (let zi = 0; zi < 3; zi++) out.push(Object.assign({ site, zi }, bnd(zi), { rays: W.rays(zi, fr) }));
     }
     window.__chart.arrive(0);
     return out; })()`);
+  const tops = L => (L || []).map(e => `${e[0]} at ${e[1].join(',')}`).join('; ') || 'none';
   for (const b of bound) {
-    const r = b.rays;
+    const r = b.rays, w = b.wall;
     console.log(`site ${b.site} zone ${b.zi}: column ${r.col} u; rays at ${r.depths.join(' / ')} u under the lip: cast ${r.cast} of ${r.planned} planned` +
-      ` (${(100 * r.cast / Math.max(1, r.planned)).toFixed(1)}%, bar >= ${RAYS_CAST * 100}%), ${r.rays} met the rock; recess max ${b.wall ? b.wall.recessMax : '-'} (bound ${WALL_RECESS})`);
+      ` (${(100 * r.cast / Math.max(1, r.planned)).toFixed(1)}%, bar >= ${RAYS_CAST * 100}%), ${r.rays} met the rock; recess max ${w ? w.recessMax : '-'} (bound ${WALL_RECESS}` +
+      `${w ? `; ${w.recessOver} over; top 3: ${tops(w.recessTop)}` : ''}), protrusion max ${w ? w.protrudeMax : '-'} (bound ${WALL_PROTRUDE}${w ? `; ${w.protrudeOver} over; top 3: ${tops(w.protrudeTop)}` : ''})`);
+    for (const k of ['patch', 'wall']) { const s = b[k]; if (!s) continue;
+      console.log(`  site ${b.site} zone ${b.zi} ${k}: ${s.samples} samples; recess max ${s.recessMax}, ${s.recessOver} over ${WALL_RECESS}; protrusion max ${s.protrudeMax}, ${s.protrudeOver} over ${WALL_PROTRUDE};` +
+        ` > 0.25 u out ${s.over025n} (${(100 * s.over025).toFixed(2)}%); refined ${s.refined} (march -> true): ` + (s.refinedList.slice(0, 12).map(e => `${e[0]} -> ${e[1]}`).join(', ') || 'none') +
+        (s.refined > 12 ? `, ... (${s.refined - 12} more)` : '')); }
     if (!(r.planned > 0 && r.cast >= RAYS_CAST * r.planned)) fail.push(`site ${b.site} zone ${b.zi}: ${r.cast} of ${r.planned} rays planned for the column cast (bar >= ${RAYS_CAST * 100}%: depths ${r.depths.join(' / ')} u, column ${r.col} u)`);
   }
   for (const b of bound) {
     for (const k of ['patch', 'wall']) {
       const s = b[k]; if (!s) continue;
-      if (s.protrudeMax > WALL_PROTRUDE) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock stands ${s.protrudeMax} u out into the water (bound ${WALL_PROTRUDE}) at ${s.worstOut}`);
-      if (s.over025 > WALL_OUT25) fail.push(`site ${b.site} zone ${b.zi} ${k}: ${(s.over025 * 100).toFixed(2)}% of the drawn rock stands > 0.25 u out into the water (bound ${WALL_OUT25 * 100}%)`);
-      // (home z0 west-tip recess 2.925 (relief) -> Task 7b)
-      if (s.recessMax > WALL_RECESS) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock lies ${s.recessMax} u back in the rock (bound ${WALL_RECESS}) at ${s.worstIn}`);
+      if (s.protrudeMax > WALL_PROTRUDE) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock stands ${s.protrudeMax} u out into the water (bound ${WALL_PROTRUDE}) at ${s.worstOut}; ${s.protrudeOver} samples over the bound, top 3: ${tops(s.protrudeTop)}`);
+      if (s.over025 > WALL_OUT25) fail.push(`site ${b.site} zone ${b.zi} ${k}: ${(s.over025 * 100).toFixed(2)}% of the drawn rock stands > 0.25 u out into the water (bound ${WALL_OUT25 * 100}%; ${s.over025n} of ${s.samples} samples; top 3: ${tops(s.protrudeTop)})`);
+      // (Task 7b, Ruling 35) the readings are the true 3-D distance from half the bar up: home zone 0's west / east tips read
+      // 2.925 / 2.242 here on the march alone, 0.204 / 0.273 refined (the relief at e6a44e0, whose walls this keeps)
+      if (s.recessMax > WALL_RECESS) fail.push(`site ${b.site} zone ${b.zi} ${k}: drawn rock lies ${s.recessMax} u back in the rock (bound ${WALL_RECESS}) at ${s.worstIn}; ${s.recessOver} samples over the bound, top 3: ${tops(s.recessTop)}`);
     }
     const r = b.rays;
     if (r.gaps) fail.push(`site ${b.site} zone ${b.zi}: ${r.gaps}/${r.rays} rays see a gap (no drawn rock where the heightfield is) ` + JSON.stringify(r.bad));
