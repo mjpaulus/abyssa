@@ -45,7 +45,8 @@ const g = [];   // [name, pass, value, hard]
 const gate = (name, pass, value, hard = true) => g.push([name, !!pass, value, hard]);
 // S1
 gate('S1 relief', res.open.sd >= 12 && res.relief50.p50 >= 17 && res.relief100.p50 >= 30, { sd: res.open.sd, r50: res.relief50.p50, r100: res.relief100.p50 });
-// S2
+// S2 (her bed's POSITION: velkathLair with no row above. Home's sleeper row (Task 8b, Ruling 44) turns her IN PLACE, on the bed
+// the fit gives today's face, so the position is hers; her heading and the harpoon's seat are relief-load.mjs's LIVE anchor)
 gate('S2 her lair is the deepest part', res.lair.pctOfOpen <= 0.05 && res.low.minOpen.dBed <= 40 && Math.hypot(bed.x - STATION.x, bed.z - STATION.z) <= 0.5,
   { pct: res.lair.pctOfOpen, minOpenDBed: res.low.minOpen.dBed, bed: out.bed });
 // S3 (target)

@@ -15,8 +15,8 @@
 //   vents   field size/density/heat             -> vents.js ventKnobs
 //   wrecks  search ring about each rift         -> wrecks.js wreckSites
 //   sleepers[i].idle / lair / hard              -> the kinds (brooder/hoarder/hunter)
-// Every one is null at home except `shape` and `wrecks` (seafloor relief, 2026-10-13),
-// and every consumer treats null as the shipped constant.
+// Every one is null at home except `shape` and `wrecks` (seafloor relief, 2026-10-13) and Velkath's sleeper row (Task 8b,
+// Ruling 44: her turn, her harpoon's seat, her stance), and every consumer treats null as the shipped constant.
 // All authored, never generated: the register is the product.
 //
 // SITE 0 IS THE SHIPPED WORLD, BIT-IDENTICAL. Its rows below are copied verbatim from
@@ -62,7 +62,17 @@ const SITES = [
     },
     seeds: { flora: 0x5EAF00D1, wrecks: 0x57EE1B0A, vents: 0xB01Ec0DE, resources: 0xC0FFEE01, props: 0x9A11A5E1, creatures: 0xF15C0011, fauna: 0xFA0BA001, debris: 0xDEB0C0A1 },
     scarcity: { polymer: 1, bitumen: 1 },
-    sleepers: null,                      // no overlay: LEVIATHAN_CFG untouched
+    // (seafloor relief Task 8b, Ruling 44; Michael 2026-10-14: "Turn her around", "Raise her to match") VELKATH KEEPS HER
+    // SHIPPED FIGHT ON THE NEW GROUND. At her raft-side station she lay MIRRORED across her crack from the shipped far-flank bed,
+    // so Alt+6 opened at her front-right and the average fight reached its last ward without circling (24 s against main's 60 s,
+    // Task 8). lair.face -1: she faces the other way along the crack, turned at the bed the fit gives her today's face (her bed
+    // stays at her frozen station, S2), so the harpoon is in her LEFT flank again; lair.seat 'back': its seam on her back half
+    // (on the levelled flat her left flank's middle lies at the ground: the search's best was her front corner), so the fight
+    // opens at her back-left, as shipped. hard.lift: her stance raised 0.55 u (brooder.js L.standLift), the gap between main's
+    // hunting stance and hers, turned (riteplay wardHuntP50, the median over 4 paired average fights, seeds 901-904, the clock
+    // plugged: main 10.04, the relief 9.475, gap 0.565 -> 0.55). sigils / hueShift are the shipped values (game.js
+    // makeZoneSleeper reads every row's). Zones 1 and 2 keep no row.
+    sleepers: [{ sigils: 3, hueShift: 0, idle: null, lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 } }, null, null],
     // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries no water, light,
     // floor, vents or grade of its own: every consumer reads null as "the shipped constant".
     water: null, light: null, floor: null, vents: null, grade: null,

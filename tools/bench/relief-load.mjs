@@ -9,7 +9,9 @@
 //          Exit 1 on: lights != 14; fp([1,2]) != d49d451d; __lev.fp(1/2) != c938fe6e / 652d0412;
 //          sleeperFingerprint(1/2) != ac04921e / ce3eaf9d; a failure list not []; a console error but the favicon 404;
 //          and home's anchors: __ridge.fp() != tools/relief/expect.json's `home`, __lev.fp(0) / sleeperFingerprint(0)
-//          != ANCHOR below (recorded by Task 5; a move is a finding: name its cause before re-recording it).
+//          != ANCHOR below (recorded by Task 5; a move is a finding: name its cause before re-recording it); and the live
+//          Velkath (Task 8b, Ruling 44: her heading, where Alt+6 stands him in her frame, her stance offset, the seat found)
+//          != LIVE below, on the boot's build or the chart's rebuild.
 // parity   terrainH, zone 0, on the 2 u grid x, z in [-120, 280] (the hollow) in the page, as float64 bytes, against the
 //          sliced replica in node (tools/relief/terrain.gen.mjs, re-sliced first; its canonical fingerprint must be
 //          expect.json's home). Exit 1 unless |d| <= 1e-9 on >= 99% of the points (Chrome's and node's Math.exp can
@@ -54,6 +56,18 @@ const SHIPPED = { fp12: 'd49d451d', lev1: 'c938fe6e', lev2: '652d0412', sl1: 'ac
 // blob meshes, which leviathan.js sleeperFingerprint does not hash. sleeperFingerprint(0) moved ecfa371e -> 1ca3b28c: her
 // wards and body sit over the new ground.
 const ANCHOR = { home: EXP.home, lev0: '15ce888c', sl0: '1ca3b28c' };
+// (Task 8b, Ruling 44) THE LIVE HOME ANCHOR. sleeperFingerprint(i) keeps its meaning: no row, LEVIATHAN_CFG alone (so sl0 is
+// still 1ca3b28c, which also shows the no-key path untouched). It therefore cannot see home's sleeper row (site.js: her turn,
+// lair.face; her harpoon's seat, lair.seat; her stance, hard.lift). Those are read off the LIVE Velkath as the game builds her,
+// on the boot's build and again on the chart's rebuild: her heading (lairYaw), where Alt+6 stands him (the harpoon's anchor) in
+// her frame (fwd along her face, lat her local +x, in R: riteplay-diag's convention; main's shipped bed reads -0.45 / -1.13:
+// her back-left), her stance offset (L.standLift), and the seat found (seatOk). Recorded with its cause: Michael 2026-10-14,
+// turned at her home bed, harpoon seat on her back half; Ruling 44. (gates.mjs S2 and the voyage replica below check her bed's
+// POSITION only, velkathLair with no row: the turn is in place, so that position is the one the fit gives today's face.)
+const LIVE = { cause: 'Michael 2026-10-14: turned at her home bed, harpoon seat on her back half; Ruling 44', yawDeg: -121.51, anchor: [-0.81, -0.59], lift: 0.55, tol: 0.01 };
+const LIVE_JS = `(() => { const L = window.lev, H = L && L.harpoon; if (!L || L.kind !== 'brooder' || !H || !L.lairPos) return { err: 'no brooder / harpoon (' + (L && L.kind) + ')' };
+  const s = Math.sin(L.lairYaw), c = Math.cos(L.lairYaw), ox = H.anchor.x - L.lairPos.x, oz = H.anchor.z - L.lairPos.z;
+  return { yawDeg: +(L.lairYaw * 180 / Math.PI).toFixed(2), anchor: [+((ox * s + oz * c) / L.R).toFixed(2), +((ox * c - oz * s) / L.R).toFixed(2)], lift: L.standLift, seatOk: !!H.seatOk, dormant: !!L.dormant }; })()`;
 const STATION = { x: 89.7, z: 39.1 };       // her raft-side station (spec §5; a pure function of the frozen fissure frame)
 const fails = [];
 const show = v => typeof v === 'string' ? v : JSON.stringify(v);
@@ -119,6 +133,7 @@ if (MODE === 'load') {
   const lights = await c.ev(LIGHTS);
   const safe = await c.ev(`__safeFailed()`), shader = await c.ev(`__shaderFailed()`);
   const ridge = await c.ev(`__ridge.fp()`), ridge12 = await c.ev(`__ridge.fp([1, 2])`);
+  const live0 = await c.ev(LIVE_JS);   // (Task 8b) the boot's build, before the fingerprints touch the live sleeper
   const lev = await c.ev(`[__lev.fp(0), __lev.fp(1), __lev.fp(2)]`);
   // brooder-invariants.mjs's take (zone 0 twice: deterministic). It builds over the live sleeper; the live one is then
   // rebuilt as the chart builds her (__lev.remember(null)), not set down 45 u ahead of Sal as brooder-invariants' swap() does
@@ -141,6 +156,12 @@ if (MODE === 'load') {
   check('sleeperFingerprint(0) deterministic (twice in one load)', sfp[0] === sfp[3], [sfp[0], sfp[3]]);
   check(`sleeperFingerprint(0) = the anchor ${ANCHOR.sl0}`, sfp[0] === ANCHOR.sl0, sfp[0]);
   check('the live sleeper rebuilt (the Brooder, __sl live)', live.kind === 'brooder' && live.same && live.state === 'play', live);
+  // (Task 8b, Ruling 44) the live home anchor, on the boot's build and on the chart's rebuild
+  const live1 = await c.ev(LIVE_JS), near = (a, b) => Math.abs(a - b) <= LIVE.tol;
+  console.log(`  live Velkath (boot) ${show(live0)}; (rebuilt) ${show(live1)}; anchor ${show({ yawDeg: LIVE.yawDeg, anchor: LIVE.anchor, lift: LIVE.lift })} (${LIVE.cause})`);
+  for (const [tag, v] of [['boot', live0], ['rebuilt', live1]])
+    check(`live Velkath (${tag}) = the anchor: heading ${LIVE.yawDeg} deg, Alt+6 at fwd ${LIVE.anchor[0]} lat ${LIVE.anchor[1]} R (her back-left), lift ${LIVE.lift} u, seat found`,
+      !v.err && near(v.yawDeg, LIVE.yawDeg) && near(v.anchor[0], LIVE.anchor[0]) && near(v.anchor[1], LIVE.anchor[1]) && v.lift === LIVE.lift && v.seatOk && v.dormant, v);
 }
 
 if (MODE === 'parity') {
@@ -182,6 +203,8 @@ if (MODE === 'voyage') {
       her: L ? [L.pos.x, L.pos.y, L.pos.z, L.yaw] : null, wound: !!(H && H.wound), lights, safe: __safeFailed(), shader: __shaderFailed() };
   })()`;
   const arrive = async i => { await c.ev(`(window.__helm = true, window.__chart.arrive(${i}), 1)`); await sleep(1500); };
+  // (her bed's POSITION: the replica takes no row; home's row turns her in place (Task 8b, Ruling 44), so the position is the
+  // one the fit gives today's face, and her heading is the load mode's LIVE anchor)
   const R = await replica(), w0 = R.P.wreckSites()[0], lr = R.P.velkathLair(0, R.CFG.LEVIATHAN_CFG[0].size * R.P.R_OF_SIZE, null);
   const REP = { skiff: [w0.x, w0.z], lair: [lr.lip.x, lr.lip.z] };
   console.log('  replica (node): skiff site ' + show(REP.skiff) + ', her lair ' + show(REP.lair));
