@@ -14,7 +14,7 @@ During Velkath's fight the camera can press against Sal when he is under her. It
     - the light-up's hide ring up close (17–59% of the frame, over the 15% cap to flashT 0.55–0.72 s);
     - his dress or lantern in an air-pack burst (4 full white-outs in 18 runs);
     - the lens inside her shell (12 frames) or a leg (29) after the calm.
-  - Report: relief `.superpowers/sdd/.../task-9-report.md` §2b; frames `~/sc/.abyssa-wt/shots/t9-*`.
+  - Report: relief `.superpowers/sdd/.../task-9-report.md` §2b; frames `~/sc/.abyssa-wt/shots/velfix/gates/t9-*`.
 - **Michael's ruling (2026-10-14):** "A is good", confirmed "yes", after seeing four frames: the light-up at ~48% of the frame, his suit in a burst, his lantern white-out at the calm, the lens inside her shell at the calm.
   - Picked: A, keep the lens off Sal under her.
   - Not picked: B (soften the light-up ring) or C (both).
