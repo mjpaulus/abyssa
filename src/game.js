@@ -1916,7 +1916,7 @@ function updateCamera(dt, t, fwd) {
   camDesired.y += camHeaveOff;
   // (in the open crack the throat lens below clears the floor under its own column: lifted here first,
   // up a wall column, the lens hung at the lip while he fell)
-  if (!inCrack) camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, zi) + 1.2);
+  if (!inCrack && !window.__camNoFloor) camDesired.y = Math.max(camDesired.y, shutFloorY(camDesired.x, camDesired.z, zi) + 1.2);   // __camNoFloor: a dev flag for tools/bench/relief-walk.mjs's lens RED (floor clamp off); unset, this is the line it always was, bit for bit
   // (The idle "breathing" drift — 0.09 u vertical, 0.07 u lateral, forever — is gone: a
   // locked frame on a still man is the point. Weight comes from Sal, not from the lens.)
   const rmK = reducedMotion() ? 0 : 1;
