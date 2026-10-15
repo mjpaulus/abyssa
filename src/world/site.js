@@ -12,19 +12,24 @@
 //   grade   per-zone look overrides             -> postfx.js setSiteGrade
 //   floor   silt/gravel/rock albedo multipliers -> terrain.js uSite* uniforms
 //   shape   per-zone landform overrides + rim   -> terrain.js syncSite (not RAM_H)
+//     .uplands / .hollow  zone 0's relief rows  -> terrain.js syncRelief (checkRelief first), heightAt (home only)
 //   vents   field size/density/heat             -> vents.js ventKnobs
-//   wrecks  search ring about each rift         -> wrecks.js wreckSites
+//   wrecks  search ring about each rift         -> wrecks.js wreckSites; a 4-element band entry
+//           [minR, maxR, from, to] also fences the bearing (findSite's window; home's zone 0)
 //   sleepers[i].idle / lair / hard              -> the kinds (brooder/hoarder/hunter)
 // Every one is null at home except `shape` and `wrecks` (seafloor relief, 2026-10-13) and Velkath's sleeper row (Task 8b,
 // Ruling 44: her turn, her harpoon's seat, her stance), and every consumer treats null as the shipped constant.
 // All authored, never generated: the register is the product.
 //
-// SITE 0 IS THE SHIPPED WORLD, BIT-IDENTICAL. Its rows below are copied verbatim from
-// terrain.js's ZP/RIM tables and every stream seed matches the constant the module it
-// feeds used before this file existed (flora's placement was raw Math.random() — that
-// latent nondeterminism dies here; vents shipped on 0xB01Ec0DE). That identity is the
-// whole regression story: every reseed path can be verified by hashing site 0 against
-// the world as it ships today.
+// SITE 0 WAS THE SHIPPED WORLD BIT FOR BIT UNTIL THE RELIEF (2026-10-14); IT IS NOT NOW. Its terra
+// rows are still copied verbatim from terrain.js's ZP/RIM tables, every stream seed still matches
+// the constant the module it feeds used before this file existed (flora's placement was raw
+// Math.random() — that latent nondeterminism died here; vents shipped on 0xB01Ec0DE), and zones
+// 1 and 2 are still the shipped ground (d49d451d). But home now carries the relief rows above
+// (shape.uplands + shape.hollow, zone 0) and its sleeper row (Velkath turned, her seat, her
+// lift), so its zone 0 is new ground: home's canonical fingerprint is 5c0705a1 (`__ridge.fp()`).
+// The regression anchor that still proves the shipped field is `homeNull`: home with its relief
+// rows removed reproduces THE FISSURE's 3b526986 (tools/relief/validate.mjs, hard-coded there).
 
 // Deterministic stream factory — mulberry32, the same generator weather.js trusts.
 export function stream(seed) {

@@ -138,8 +138,12 @@ const RIM_KH = [
 // is current: syncSite copies the active site's rows over them IN PLACE, so terrainH
 // keeps reading the same objects it always has — no per-call registry lookup on the
 // hottest function in the game, and no stale captured copies either, because every
-// caller reaches these tables through the module scope. Site 0's registry rows are
-// verbatim copies of the literals, so the shipped world survives bit-identical.
+// caller reaches these tables through the module scope. Site 0's terra rows are
+// verbatim copies of the literals, but site 0 is no longer the shipped world bit for bit:
+// since THE RELIEF (2026-10-14) home carries zone 0's relief rows (shape.uplands +
+// shape.hollow, syncRelief below) and its sleeper row, and fingerprints 5c0705a1. With
+// the relief rows removed it still reproduces the shipped field, 3b526986 (`homeNull` in
+// tools/relief/validate.mjs: the regression anchor).
 // Amplitudes, frequencies and the mesh itself never vary by site — only where in the
 // infinite noise field each zone looks, and which skyline harmonics it wears.
 //
@@ -279,10 +283,54 @@ function capsules(ko, F) {
 //    fades the levelling and her flat out by g (0 for fd <= 4), but the outcrops only by this capsule, so the lip stays
 //    exactly the compensated uniform part only while every point within 4 u of the lip is inside its inner radius
 //    (home: 25 > 18.84). __relief can retune it.
+//  - (final review M4) every number either row carries is finite: the scalars and points syncRelief reads by name must be
+//    there, and every leaf present (objects and arrays walked) must be a finite number, so a NaN, a string or a missing
+//    scalar cannot reach heightAt as NaN over zone 0 (hollow.noComp, a RED mutant's switch, is the one boolean);
+//  - every [r0, r1] band has r1 > r0 (a smoothstep's edges, divided by r1 - r0, or a keep-off capsule's inner and outer
+//    radius): hollow.fade / sR / ramp / oc.keepOff, and uplands.fade and uplands.keepOff's capsules where present
+//    (uplands.ramp is a scalar; hollow.station and uplands.keepOff.stations are points, not bands).
+// A row that is absent, null or otherwise falsy is the shipped field (no check), as syncRelief reads it.
+const RELIEF_NUM = {
+  uplands: ['rbias', 'ramp', 'r3amp', 's2amp', 'camp'],
+  hollow: ['D', 'f0', 'fA', 'o0', 'oA', 'wig', 'lvl', 'level0', 'N', 'rw', 'tw', 'twf', 'rampPh', 'station.0', 'station.1', 'sLvl',
+    'sDrop', 'dish', 'rDish', 'oc.f', 'oc.thr', 'oc.amp', 'oc.soft']
+};
+const RELIEF_BAND = {   // [path, required]
+  uplands: [['fade', false], ['keepOff.crack', false], ['keepOff.station', false], ['keepOff.raft', false], ['keepOff.band', false]],
+  hollow: [['fade', true], ['sR', true], ['ramp', true], ['oc.keepOff', true]]
+};
+// may be absent or null (syncRelief defaults uplands.fade and skips a missing capsule; noComp is off unless true)
+const RELIEF_OPT = new Set(['uplands.fade', 'uplands.keepOff.crack', 'uplands.keepOff.stations', 'uplands.keepOff.station',
+  'uplands.keepOff.raft', 'uplands.keepOff.band', 'hollow.noComp']);
+function checkReliefRow(name, row, refuse) {
+  const at = p => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), row);
+  const got = v => `got ${typeof v === 'string' ? JSON.stringify(v) : String(v)}`;
+  if (typeof row !== 'object' || Array.isArray(row)) refuse(`${name} must be an object (${got(row)})`);
+  for (const p of RELIEF_NUM[name]) { const v = at(p); if (!Number.isFinite(v)) refuse(`${name}.${p} must be a finite number (${got(v)})`); }
+  if (name === 'uplands' && (typeof row.keepOff !== 'object' || row.keepOff === null)) refuse(`uplands.keepOff must be an object of capsules (${got(row.keepOff)})`);
+  if (name === 'hollow' && (typeof row.oc !== 'object' || row.oc === null)) refuse(`hollow.oc must be an object (${got(row.oc)})`);
+  const walk = (v, p) => {
+    if (v == null && RELIEF_OPT.has(p)) return;
+    if (v !== null && typeof v === 'object') { for (const k in v) walk(v[k], Array.isArray(v) ? `${p}[${k}]` : `${p}.${k}`); return; }
+    if (p === 'hollow.noComp') { if (typeof v !== 'boolean') refuse(`hollow.noComp must be a boolean (${got(v)})`); return; }
+    if (!Number.isFinite(v)) refuse(`${p} must be a finite number (${got(v)}): heightAt would read it as NaN`);
+  };
+  walk(row, name);
+  for (const [p, req] of RELIEF_BAND[name]) {
+    const b = at(p);
+    if (b == null && !req) continue;
+    if (!(Array.isArray(b) && b.length === 2 && b[1] > b[0])) refuse(`${name}.${p} must be a band [r0, r1] with r1 > r0 (got ` +
+      `${Array.isArray(b) ? '[' + b.join(', ') + ']' : String(b)}): ` + (/keepOff/.test(p) ? "a keep-off capsule's outer radius must lie past its inner"
+      : 'its smoothstep divides by r1 - r0 (0 is NaN, less inverts the ramp)'));
+  }
+}
 export function checkRelief(sh) {
+  const refuse = m => { throw new Error('THE RELIEF: shape.' + m); };
+  if (sh && sh.uplands) checkReliefRow('uplands', sh.uplands, refuse);   // (truthy, as syncRelief reads the rows)
   const h = sh && sh.hollow;
   if (!h) return;
-  const bad = m => { throw new Error('THE RELIEF: shape.hollow.' + m); };
+  checkReliefRow('hollow', h, refuse);
+  const bad = m => refuse('hollow.' + m);
   if (!(h.sLvl > 0)) bad(`sLvl must be > 0 (got ${h.sLvl}): her flat divides by it, so 0 turns zone 0 into NaN out to r 290`);
   if (!(h.rw > 0)) bad(`rw must be > 0 (got ${h.rw}): each riser divides by it, so 0 turns the flat bottom into NaN`);
   const k = MID_MAX + JAG_MAX * FISSURE[0].halfW + 4, ko = h.oc && h.oc.keepOff;

@@ -242,9 +242,32 @@ function sideOf(x, y, z) {
 const SLEEPERS = [
   { kind: 'squid', yFrom: -840, yTo: -670, dist: 72, len: 118, rad: 9.5, segs: 34, travel: 205, bearing: 4.2, note: 233, tint: 0xffa060 },
   { kind: 'octopus', yFrom: -560, yTo: -380, dist: 57, len: 100, rad: 12.0, segs: 30, travel: 165, bearing: 2.75, note: 262, tint: 0xd8a8ff },
-  // her pass is timed to the moment he rises past the zone-0 floor, so she walks by at eye level
+  // her pass is timed to the moment he rises past the zone-0 floor, so she walks by at eye level (yFrom / yTo: on main's
+  // home ground; startEnding moves the window with the ground under her, floorShift below)
   { kind: 'crab', yFrom: -300, yTo: -170, dist: 50, len: 84, rad: 13.0, segs: 26, travel: 110, bearing: 4.65, note: 311, tint: 0xcfe9d6, floor: 0 }
 ];
+// A FLOOR PASS'S WINDOW IS MEASURED OFF HER GROUND (seafloor relief, final review I1). Velkath walks the zone-0 floor (gy in
+// updateEnding), so where he rises past her eye level within her window depends on how deep that floor lies, and the window
+// above was tuned on main's home ground: there he passes her eye level at uu 0.455 and she walks 7 u under him at uu 0.5. The
+// relief's hollow lies 27 u deeper under her pass, and the same hard-coded window put the crossing at uu 0.26 (34 u under
+// him at mid-pass). So, by this file's rule (levels are measured off terrainH at startEnding, never hard-coded), startEnding
+// moves a floor pass's whole window by `ys`: the ground under her at mid-pass (uu 0.5, her anchor carried as updateEnding
+// carries it) less FLOOR_G0, that ground on main's home. FLOOR_G0 is the exact double (read live on main, and on the relief
+// with its rows removed), so main's window is -300 / -170 bit for bit. Four fixed-point rounds: the window moves where he is
+// when she goes live, so where she walks. The swimmers keep ys 0 (their windows are open water, gy off yFrom).
+const FLOOR_G0 = -249.2839673401641;
+const FOLLOW = 0.85;          // her anchor follows this share of his sideways travel (updateEnding)
+const _fa = V3(), _fm = V3();
+function floorShift(sp) {
+  let s = 0;
+  for (let k = 0; k < 4; k++) {
+    pathAt(sp.yFrom + s, _fa);                        // where she goes live: her anchor is where he is
+    pathAt(0.5 * (sp.yFrom + sp.yTo) + s, _fm);       // mid-pass: no offset along her travel
+    const ax = _fa.x + (_fm.x - _fa.x) * FOLLOW, az = _fa.z + (_fm.z - _fa.z) * FOLLOW;
+    s = terrainH(ax + Math.cos(sp.bearing) * sp.dist, az + Math.sin(sp.bearing) * sp.dist, sp.floor) - FLOOR_G0;
+  }
+  return s;
+}
 
 let built = false;
 let bubbles = null, bubbleData = null, bubblePos = null;
@@ -484,6 +507,7 @@ export function startEnding() {
   // At 9u it filled the upper third of the frame with hull logs and float barrels.
   endX = raft.position.x + 34; endZ = raft.position.z + 27;
   buildPath(startX, startY, startZ, endX, endZ);
+  for (const s of SLEEPERS) s.ys = s.floor != null ? floorShift(s) : 0;   // (after the path: her window off her ground)
   lastY = startY;
   player.vel.set(0, 0, 0);
   player.grounded = false;
@@ -594,7 +618,7 @@ export function updateEnding(dt, t) {
   let sleeperAz = 0, sleeperFocus = 0, sleeperEl = 0;
   for (let i = 0; i < SLEEPERS.length; i++) {
     const sp = SLEEPERS[i], o = sp.obj;
-    const u = (y - sp.yFrom) / (sp.yTo - sp.yFrom);
+    const u = (y - sp.yFrom - sp.ys) / (sp.yTo - sp.yFrom);   // (ys: a floor pass's window off her ground, startEnding)
     if (u <= 0 || u >= 1.06) {
       if (o.live) { o.live = false; o.grp.visible = false; }
       continue;
@@ -609,8 +633,8 @@ export function updateEnding(dt, t) {
     // it drags the anchor along. A fully world-fixed anchor was fine when the ascent moved
     // 40u sideways in total; on the rift chain he covers 200u inside a single window and
     // left every animal a dot in the fog. 15% of that is 30u of genuine parallax, which is
-    // what the fixed anchor used to be worth, and the pass still frames at 40-125u.
-    const FOLLOW = 0.85;
+    // what the fixed anchor used to be worth, and the pass still frames at 40-125u. (FOLLOW
+    // 0.85 is declared by SLEEPERS: floorShift carries her anchor the same way.)
     const ax0 = o.ax + (player.pos.x - o.px) * FOLLOW;
     const az0 = o.az + (player.pos.z - o.pz) * FOLLOW;
     const uu = clamp(u, 0, 1);

@@ -1,12 +1,13 @@
 # The sea-floor relief, home zone 0: the record
 
-2026-10-14 · branch `relief` (cut from main `bf514e9`; head `d9dcec5` plus this record; nothing pushed) · spec
+2026-10-14 · branch `relief` (cut from main `bf514e9`; head `d9dcec5` plus this record, the final verification sweep on
+`281c0d6`, then the final review's fixes; nothing pushed) · spec
 `docs/superpowers/specs/2026-10-13-seafloor-relief-design.md` · plan `docs/superpowers/plans/2026-10-13-seafloor-relief.md`
 (14 tasks, built subagent-driven).
 
 Michael: "the sea floor is all one level, like a big pit. Lets make that more dynamic but keep velkaths lair in the deepest part."
 
-The ledger of every ruling (Rulings 1-54, each task's outcome, his words where he ruled) is
+The ledger of every ruling (Rulings 1-57, each task's outcome, his words where he ruled) is
 `.superpowers/sdd/2026-10-13-seafloor-relief/progress.md` in the worktree. It is git-ignored, so the rulings this record and
 CLAUDE.md cite are restated at the end. The task reports sit beside it (`task-N-report.md`). Numbers below are from those
 reports. The offline gates were re-run on `d9dcec5` for this record (validate 10/10, gates exit 0, cost 1.16); no browser
@@ -19,11 +20,12 @@ probe was run for it.
 | Terrain | Home zone 0 only: THE UPLANDS (additive, masked) and THE HOLLOW (bearing-varying, two treads, her flat), keyed to frozen geometry. The crack takes only the hollow's uniform part: lips 1.18 u apart (was 1.17), throat floor -315.3 (unchanged). |
 | Anchors | Home `__ridge.fp()` **5c0705a1** (was 3b526986). Zones 1+2 d49d451d, Pallid b1c58f8d, Burned d2b6fb68, the shelf e5a8d9bf: unmoved. `sleeperFingerprint(0)` **1ca3b28c** (was ecfa371e). `__lev.fp` unchanged. |
 | Velkath | Takes her designed raft-side station (89.7, 39.1). Turned in place, harpoon seat on her back half, stance +0.55 u (Michael 2026-10-14). |
+| The ending | Her silhouette pass walks the zone-0 floor; its depth window is now measured off the ground under her mid-pass at `startEnding` (final review I1). He passes her eye level at uu **0.446** at home (was 0.256, she walked 34 u under him at mid-pass); main's home window is unchanged bit for bit (0.4553); Pallid 0.444, Burned 0.445, the Shelf 0.440 (were 0.434 / 0.519 / 0.593). |
 | Skiff | Searched 100-140 u off riftPos(0) at 30-75 deg: (107.6, -53.6), 120.2 u from the raft. |
 | Placements | Fauna floor `zoneBottom(0) - 32`; motes clamped to `terrainH + 4` (global: it fixes main's motes within 3 u of the floor, some below it). |
 | Tools | `tools/relief/` (offline gates), `relief-load`, `relief-walk`, `seating-probe`; riteplay's ward column and hit/drop booking; `fissure-probe` bounds re-derived with REDs. |
 | Perf harness | The bench clock leak found and plugged tool-side; the game.js root fix deferred. `drv.mjs` refuses reserved ports when imported. |
-| Open | velfix-gate RED on main (the pressed fight lens; Michael: keep the lens off Sal under her). Average fights 40 s against main's 54 s (accepted). G8's quiet ABBA and a final sweep of all 25 fissure-probe modes are not done (sections 5, 6). |
+| Open | velfix-gate RED on main (the pressed fight lens; Michael: keep the lens off Sal under her). **L3's ward glare is over 50% of the frame at the pressed lens on both builds** (peak 0.614 relief, 0.617 main; the same card). Average fights 40 s against main's 54 s (accepted). Fish schools and motes are held off the hollow floor by absolute heights: Michael's look call (M1, section 10). The final verification sweep (Rulings 55-56, section 5) closed G8 and found no relief regression: 24 of 25 fissure-probe modes PASS, and `open-ledge` is the Ruling 23 defect. |
 
 ### Commits, by plan task
 
@@ -130,13 +132,31 @@ Task 1 recorded the RED on main (S1, S2, S4, the skiff window failed; S3 missed)
 | Gate | Verdict | Number |
 |---|---|---|
 | **G1** hard limits | PASS | Every §7 row as in section 4. The hose by a real walk (`relief-walk hose`): farthest range **352.5 u, 22.5 u short** of the 375 give, 0 frames in the give, `__leash.n` 0. RED `short20` yanks (exit 5). Ending dip 198.61 read live from the spline. |
-| **G2** fissure probes | PASS, one carve-out | Every mode whose bound moved was re-derived with a RED (section 6). `open-ledge` zone 1 fails from a clean load on **both** builds (8.3 u, 130 frames in the throat): parked, main's card `zone1-open-ledge-throat` (Ruling 23). |
+| **G2** fissure probes | PASS, one carve-out | Every mode whose bound moved was re-derived with a RED (section 6). `open-ledge` zone 1 fails from a clean load on **both** builds (8.3 u, 130 frames in the throat): parked, main's card `zone1-open-ledge-throat` (Ruling 23). The final sweep's split (Ruling 56): in the full-mode run `open-ledge` FAILS on the relief (zone 1: dy -6.085, moved 8.82 u, 145 throat frames; 3 of 3) and passes on main only through gait state carried over from its zone-0 case; zone 1 alone from a clean load fails identically on both (dy -2.823, moved 8.3 u, 130 frames: the card's numbers). Not a relief regression; the carry-over goes on the card. |
 | **G3** throat keeps its floor | PASS | Offline 0 over 62 points; `fissure-probe shape` floor -315.33 +-1; RED `nocomp` -346.33 fails. |
 | **G4** after the calm (`velfix-gate`) | **NOT MET as written** | RED on main, 12 of 12 route runs; the relative gate on the relief failed as registered (section 8). Michael chose the camera fix (card `fight-lens-off-sal`). |
 | **G5** her rite | PASS on the ward column; **average band failed as registered, accepted** | Ward heights: hunting stance +0.09 u of main's (relief 10.185, main 10.095; bar +-0.5); max 13.33 against main 13.98 + 0.5. Average fights 40.4 s against main's 54.2 s; 4/12 in the 45-165 s band against 7/12 (sections 8, 9). `brooder-invariants` PASS; `harpoon-probe` 10 of 10 modes exit 0 after the turn; real Alt+6 + E at the new station: prompt, wake. |
 | **G6** placements | PASS | `seating-probe` 22 PASS, RED `prop-lift` exits 1. Plants: 33 of 35 keys identical to main, `g_worm` +2.6%, `g_mat` +7.8%, none starved. Skiff 120.2 u from the raft, outside her arena; a real walk raft -> skiff: 146.4 u in 74 s, no hop. Keepsakes: the skiff's sextant -> his mark -> the sounding set, in main's order; remote sites bit-identical. |
 | **G7** invariants | PASS | 14 lights; the anchors of section 3; `__safeFailed()` and `__shaderFailed()` []; console clean but the favicon 404. `relief-load all` PASS on the Task 8b tree (`ee72957`); `load` PASS again in Tasks 10, 11 and 12 (`79507ad`); Task 13 read home 5c0705a1 on the branch and 3b526986 on main, and zones 1+2 d49d451d on both, on fresh tabs. |
-| **G8** cost and boot | **Partly reported, not closed** | Views re-anchored (`z0b`, `z0r`). `heightAt` 1.16x. Boot 9,563 ms against main's 9,696 (hitch ABBA); the terrain step 325-331 ms against 319 (relief-load; hitch 357-367 against 330-365). The pour hide adds ~80 ms per reseed. **ABBA** (not quiet; cycle deltas span +-1 ms; only z1 is like for like): z1 -0.03 ms, z0 +0.07; z0r +0.55 and z0b +1.10 stand on different ground from main's. **hitch `jet`**: +1 shadow program on the branch, 0 on main (Ruling 18: three r184's draw-order shadow variant; main compiles the same program at another spot). `hitch.mjs` last ran at `aa7cb42`, before the `fissure.js`, `brooder.js`, `fauna.js` and `rifts.js` changes: not re-run. The quiet ABBA is the controller's (Ruling 52). |
+| **G8** cost and boot | **Closed** (Ruling 56) | Views re-anchored (`z0b`, `z0r`). `heightAt` 1.16x (1.15-1.16 in the final sweep). Boot 9,563 ms against main's 9,696 (hitch ABBA); the terrain step 325-331 ms against 319 (relief-load; hitch 357-367 against 330-365). The pour hide adds ~80 ms per reseed. The earlier ABBA (Task 10, not quiet; cycle deltas span +-1 ms): z1 -0.03 ms, z0 +0.07; z0r +0.55, z0b +1.10. **The final sweep on `281c0d6`** (Ruling 55): the **quiet ABBA** reads z1, the only like-for-like view, **+0.076 ms, inside its 0.115 noise**; the zone-0 views read the relief 0.15-0.35 ms faster, but they stand on different scenes, so that is not a saving. **`hitch.mjs`**: no new first-sight compile beyond Ruling 18's jet shadow variant `89b0adba` (three r184's draw-order variant; main compiles it by the voyage's end). Machine caveat: four iOS / watchOS simulators were booted during the run (CPU bursts about every 7.5 min); 3 flagged cycles were re-run clean. |
+| **L3** exposure and ward glare | Exposure PASS; **glare over 50% on both builds** | The exposure multiplier is inside its depth clamp at her bed, the raft column and an upland ridge on both builds (section 7). The light-up flash at the PRESSED lens (1.8 u): peak blown share **0.614 relief against 0.617 main** (max 0.816 / 0.795), over the spec's 50% on both, so not a relief regression; 2.5 u 0.405 / 0.375; 4.0 u 0.230 / 0.251; a stood Sal (lens ~9 u off) peaks at 0.03. It is `fight-lens-off-sal`'s. |
+
+### The final verification sweep (Rulings 55-56, on `281c0d6`, alone on the machine)
+
+| Probe | Result |
+|---|---|
+| `validate` / `gates` / `cost` | 10 of 10; exit 0 (20 PASS, 2 INFO); 1.15-1.16x |
+| `relief-load all` | PASS: the LIVE anchor held, parity 100% within 1e-9, voyage, old save |
+| `fissure-probe`, all 25 modes | **24 PASS**. `open-ledge` FAILS on the relief in the full-mode run and passes on main there only through state carried over from its zone-0 case; zone 1 alone fails identically on both builds: the Ruling 23 card (G2 above) |
+| `harpoon-probe`, all modes | 10 of 10 |
+| `brooder-invariants` | clean: `sleeperFingerprint` 1ca3b28c / ac04921e / ce3eaf9d |
+| `blade-invariants` | exit 1 on **both** builds: "the first thrust at home compiled: programs 722 -> 713". A pre-existing probe bug: its `!==` read a DROP as a compile (the first thrust releases programs). Fixed in the final review's fixes (a compile is an increase, `>`); it now exits 0 on the relief. Everything else passed, home 5c0705a1 |
+| `hitch.mjs` | only Ruling 18's jet shadow variant (G8) |
+| quiet ABBA | z1 +0.076 ms within its 0.115 noise; the zone-0 views are not like for like (G8) |
+
+After the sweep, the final review's I1 moved Velkath's ending pass (section 1): `fissure-probe ending` was re-run on the fix,
+PASS (dip 198.61, hidden 0, occluded 36 of 2,729 rise frames, was 40; the lens's largest step 0.967 u, unchanged), and the
+ending holds `won` through its 75 s.
 
 ### Review Focus 1-5
 
@@ -175,7 +195,8 @@ passes is not re-deriving it. Bars measured on main are measured the same way on
 | `open-ledge` | | zone 1 FAILS on both builds from a clean load | parked (Ruling 23) |
 
 Each mode was last run at its own task's head (Tasks 6-7b); `velkath-crack` and `clearance` again after the turn (`ee72957`).
-**No sweep of all 25 modes on `d9dcec5` is recorded**: the controller's final review should run one.
+The final verification sweep ran all 25 on `281c0d6` (section 5): 24 PASS, `open-ledge` as Ruling 56. `ending` ran again
+after the final review's I1: PASS.
 
 ### The other probes
 
@@ -187,7 +208,7 @@ Each mode was last run at its own task's head (Tasks 6-7b); `velkath-crack` and 
 | `seating-probe.mjs` | Hover (lowest vertex > 0.08 u over the drawn floor), sunk, node-in-boulder, motes within 3 u; count floors | `prop-lift`, `node-sink`, `node-boulder` exit 1; main fails the motes at all three surveys (61 / 59 / 61) |
 | `riteplay.mjs` ward column | `RP_WARD_BAR` = main's max + 0.5. Exit **0** pass / **3** WARD FAIL / **2** UNMEASURED or a bad bar / **4** LOST clock / **1** crash | The bank mutant cannot host the rite (Alt+6 slides off the mound; woken by command it reads 12.50 < 15.01); the trivial-bar path `RP_WARD_BAR=0.1` fails. The bound stands on its derivation. |
 | `velfix-gate.mjs` / `fullplay-gate.mjs` | Crack route must reach zone 1 in 90 s; per-phase wash; after-calm floor >= 100 frames; drift <= 0.05 s | `FP_NOVENT=1` stops him at the lip; `FP_NOPLUG=1` reads 13.6 s over 10 s stepped, exit 1 |
-| The clock plug (`fullplay.mjs`, `riteplay.mjs`, `fullplay-gate.mjs`) | `clock.stop()`, every stepped frame counted, drift <= 0.05 s. LOST is reported per tool: `fullplay.mjs` and `riteplay.mjs` exit **4** (riteplay over any ward verdict); `fullplay-gate.mjs` (so velfix-gate) folds it into its verdict and exits **1** | `fullplay.mjs` `FP_NOPLUG=1` prints CLOCK LOST (drift 9.14 s), exit 4; `fullplay-gate.mjs` `FP_GATE=1 FP_NOPLUG=1 FP_STOP=200` prints DRIFT RED, exit 1; **`riteplay.mjs` has no `FP_NOPLUG`, so no RED switch** |
+| The clock plug (`fullplay.mjs`, `riteplay.mjs`, `fullplay-gate.mjs`) | `clock.stop()`, every stepped frame counted, drift <= 0.05 s. LOST is reported per tool: `fullplay.mjs` and `riteplay.mjs` exit **4** (riteplay over any ward verdict); `fullplay-gate.mjs` (so velfix-gate) folds it into its verdict and exits **1**, only under `FP_GATE=1` (without it the drift is booked and does not set the exit) | `fullplay.mjs` `FP_NOPLUG=1` prints CLOCK LOST (drift 9.14 s), exit 4; `fullplay-gate.mjs` `FP_GATE=1 FP_NOPLUG=1 FP_STOP=200` prints DRIFT RED, exit 1; **`riteplay.mjs` has no `FP_NOPLUG`, so no RED switch** |
 
 ## 7. The look (for Michael)
 
@@ -242,9 +263,11 @@ used totals that scale with fight length: the relief's gate fights ran 39.6 s on
 approach walks straight in and samples the fight's quick end). The per-frame red rate is equal, **8.3 per 100 booked frames on
 both builds**; the CLEAN rate is 0.97 against 0.43 per 100 (21 of 35 in her drop, 9 flash tails at flashT 0.62-0.63). Not
 re-registered. The exposure differs too (9 alone runs per build): the relief's gate fights booked **16 hits against main's 1**
-and the lens was pressed (within 2.6 u of his head) for **74% of the fight against 49%**. The hit gap is not a harder relief
-fight: riteplay's Phase B average drop slams are relief 7 against main 9, so the ledger attributes it to main's gate
-approach (it walks straight in and samples the fight's quick end). It does not block under G2, since main is absolutely RED too. The absolute GREEN moves to `fight-lens-off-sal`'s
+and the lens was pressed (within 2.6 u of his head) for **74% of the fight against 49%**. Main's near-zero is
+explained by its gate approach (it walks straight in and samples the fight's quick end). The relief's own count is not: its
+gate fights took about **1.8 hits a fight** (16 in 9) against **0.75** in riteplay's Phase B average fights of similar length
+(relief 9 hits in 12, main 13 in 12; drop slams relief 7, main 9). That gap remains unexplained; Task 10's report guessed her
+turn plus the lift. The data neither shows a harder relief fight nor rules one out. It does not block under G2, since main is absolutely RED too. The absolute GREEN moves to `fight-lens-off-sal`'s
 acceptance, run on main after the merge so it covers her new bed.
 
 ### Task 8b: the band criterion (c) (Ruling 39 pre-registered, Ruling 46: no waiver)
@@ -298,18 +321,20 @@ All 8 out-of-band relief fights are under 45 s (24.6-43.1), none for hits; main'
 | Exist already on main | `shadow-variant-warmup` (the first-jet shadow compile, Ruling 18), `zone1-open-ledge-throat` (Ruling 23), `velkath-buried-rock`, `bench-zone0-stalls`. |
 | The `fissure-and-harpoon` card's flash Open line (the controller's, on main) | The measured numbers: 54 light-ups, peak blown share median 0.21, max 1.0; 34 over the 0.15 cap, 23 over 0.30, 4 over 0.50; over the cap to flashT 0.55-0.72 s; the glare series of section 7. |
 
-### Stale text in code (not touched: this record is documentation only)
+### Stale text in code
 
-`src/world/site.js` line 16's row table (no `uplands` / `hollow` / window) and line 22's "SITE 0 IS THE SHIPPED WORLD, BIT-IDENTICAL" paragraph (true of the terra and seed rows, not of zone 0); `src/world/terrain.js`
-lines 141-142 ("so the shipped world survives bit-identical": true of the ZP / RIM literals, not of home's zone-0 field); the spec's "Q0 has three treads" and "outcrop +1.5" (the shipped row is two
-treads, `soft` 0.2).
+Fixed in the final review's fixes (I2, comments only; `validate` 10 of 10): `src/world/site.js`'s row table (now with
+`uplands` / `hollow` and the wrecks bearing window) and its SITE 0 paragraph (site 0 is no longer bit-identical: home
+carries the relief rows and its sleeper row, fingerprint 5c0705a1; `homeNull` 3b526986, the rows absent, is the regression
+anchor that still proves the shipped field); `src/world/terrain.js`'s "so the shipped world survives bit-identical". Still
+stale: the spec's "Q0 has three treads" and "outcrop +1.5" (the shipped row is two treads, `soft` 0.2).
 
 ### Tools: relief, walk, load, seating
 
-- `tools/relief`: `gates.mjs:5` says every bar is judged at `stats.mjs`'s precision, true only for bars read from it (Ruling 10: a rounding loosens a bar by half a unit; S5's two 52 deg definitions); deleting `expect.json` and re-recording would re-baseline the non-hard keys (never delete it); no check that `capsules()` has `keepOff` or `r1 > r0`; the fade band r 250-300 is never sampled for mesh error; `__relief.set`'s JSON copy drops `undefined` and turns `Infinity` / `NaN` into null; `checkRelief` requires `oc.keepOff` even when `oc.amp` is 0; unguarded divisors (`sR0 = sR1`, `fade0 = fade1`, `ramp0 = ramp1`, `rDish = 0`, `rO = rF`) give NaN only on a measure-zero set; a throwing re-arrival in `set`'s catch would mask the original error.
-- `relief-load`: parity gates only the share (>= 99%), so tighten the tail to <= 1e-6; the "no pull line" check can pass vacuously (it needs a positive control); `all` reuses one debug port (the pkill does not wait: flaky, never a false PASS); the LIVE tolerance compares 2-dp roundings at 0.01 (use integers or 0.015); LIVE's `lift` echoes config, nothing measures the stance plumbing; `gates.mjs` S2 and the voyage replica call `velkathLair(..., null)`, a path home no longer takes (pass `siteAt(0).sleepers[0]`); the `ANCHOR` comment lacks "re-record only with a named cause".
+- `tools/relief`: `gates.mjs:5` says every bar is judged at `stats.mjs`'s precision, true only for bars read from it (Ruling 10: a rounding loosens a bar by half a unit; S5's two 52 deg definitions); deleting `expect.json` and re-recording would re-baseline the non-hard keys (never delete it); the fade band r 250-300 is never sampled for mesh error; `__relief.set`'s JSON copy drops `undefined` and turns `Infinity` / `NaN` into null (a null leaf is now refused by `checkRelief`, M4, except where a row may omit it); `checkRelief` requires `oc.keepOff` even when `oc.amp` is 0; two divisors stay unguarded (`rDish = 0`, `rO = rF`: NaN only on a measure-zero set). Done in the final review's fixes (M4): `checkRelief` refuses any scalar it reads missing, any leaf of either row that is not a finite number, and any band without `r1 > r0` (hollow `fade` / `sR` / `ramp` / `oc.keepOff`, uplands `fade` and `keepOff` capsules); `{hollow:{D:'x'}}` is refused live with the world untouched; a throwing re-arrival in `set`'s catch would mask the original error.
+- `relief-load`: parity gates only the share (>= 99%), so tighten the tail to <= 1e-6; the "no pull line" check can pass vacuously (it needs a positive control); `all` reuses one debug port (the pkill does not wait: flaky, never a false PASS); the LIVE tolerance compares 2-dp roundings at 0.01 (use integers or 0.015); LIVE's `lift` echoes config, nothing measures the stance plumbing; **M5**: `gates.mjs` S2 and `relief-load.mjs`'s voyage replica call `velkathLair(..., null)`, a path home no longer takes (pass `siteAt(0).sleepers[0]`); the `ANCHOR` comment lacks "re-record only with a named cause".
 - `relief-walk`: the selftest covers the pure functions, not their call sites; wall-foot stands are not checked for disturbance; the place's snap puts the lens inside the hill for the first frames after a teleport (steep line -7.18 u for 35 frames; main's B -1.04 for 13): booked, not gated (Ruling 50), and it happens on main after a playtest Alt jump.
-- `seating-probe`: a lifted mote lands inside a boulder's collider ball 5.6% of the time (about 1 layout in 20); the mote comment lacks its measurement; the egg-skin bar tests centre height <= 0.55, looser than the 0.08 lowest-vertex bar; in a RED run "home again = home" prints PASS unconditionally; count floors guard only total absence; the probe duplicates `wrecks.js`'s deck constants (stale values fail loudly); `zone0Floor`'s 32 margin is unexplained.
+- `seating-probe`: **M2**: it does not cover the plants, Sal's prints or the skiff's hull (a plan gap: the plan listed what it seats); a lifted mote lands inside a boulder's collider ball 5.6% of the time (about 1 layout in 20); the mote comment lacks its measurement; the egg-skin bar tests centre height <= 0.55, looser than the 0.08 lowest-vertex bar; in a RED run "home again = home" prints PASS unconditionally; count floors guard only total absence; the probe duplicates `wrecks.js`'s deck constants (stale values fail loudly); `zone0Floor`'s 32 margin is unexplained.
 - `tools/relief/render`: the default `OUT` is inside the repo and not ignored; Chrome profile dirs are never removed (~1.4 GB of `abyssa-relief-*` in `$TMPDIR`); `lens.page.js` / `sample.page.js` fail a raw `node --check` (async bodies); `shade.mjs` lacks a try/finally around its restore; the README lacks the L1 pipeline order; no signal handlers.
 
 ### Tools: fissure-probe, walls, riteplay, gates
@@ -318,11 +343,18 @@ treads, `soft` 0.2).
 - `fissure-probe`: `fall-lens` count gates compare `x > bar` (NaN-unsafe: use `!(x <= bar)`); `RISE_HF` and the scaled count gates lack a RED at their new values; the per-unit-of-rise premise is not borne out (zone 0's counts held while its rise fell 90 -> 60; the scaling only tightens `RISE_HID` to 132); an erroring A/B look reports "streak undefined"; `velkath-crack`'s hunt is dense inside a page template (move its settle and window logic to a page helper if it grows).
 - `walls-inside`: the refined list prints 12 entries without location dedupe; the patch surface summary lacks a top 3 and the top-3 dedupe keeps the first sample at a location, not its max; a RED on a plane whose `fissureWallGeo(zi)` is null reads GREEN (throw when `shift && !G`); the riser bias (rock-side readings up to 0.02 u under the truth) is unstated; `wall-back-3` proves no gross collapse, not accuracy near the bar; the shelf is missing from its bound loop.
 - `riteplay`: `wardHuntP50` can be -Infinity (written null) when every ward is non-finite (treat as tainted whenever `wardUpBad` > 0); the header's "13 if killed mid-await"; `LOG_CAP` duplicates game.js's literal 64.
-- `velfix-gate` / `fullplay*`: fresh-profile boots fail on unpkg now and then (`net::ERR_FAILED`, about 5 of 25); the CLI test is `argv[1].endsWith('drv.mjs')`; `connect()` is unguarded (a connect-only tool with `DRV_PORT` unset attaches to 9419); `seating-probe` and `relief-load` install an exit hook calling `stop()` before `start()` (a noisy throw on misuse); the port check is not atomic with `start()`; `velfix-gate` could print `r.status` to tell a refusal (2) from a crash (1); the rim light steers on `performance.now()` (render only); `fullplay.mjs` exits 0 or 4 only (no signal handlers) and its LOST test also fires on a running clock.
+- `velfix-gate` / `fullplay*`: fresh-profile boots fail on unpkg now and then (`net::ERR_FAILED`, about 5 of 25); the CLI test is `argv[1].endsWith('drv.mjs')`; **M3**: `drv.mjs` `connect()` is unguarded (a connect-only tool with `DRV_PORT` unset attaches to 9419); `seating-probe` and `relief-load` install an exit hook calling `stop()` before `start()` (a noisy throw on misuse); the port check is not atomic with `start()`; `velfix-gate` could print `r.status` to tell a refusal (2) from a crash (1); the rim light steers on `performance.now()` (render only); `fullplay.mjs` exits 0 or 4 only (no signal handlers) and its LOST test also fires on a running clock.
 - Home's `__lev.swap(kind)` at zone 0 hands Velkath's `lair` / `hard` row to a swapped hoarder or hunter (dev only, no play path).
 
 ### Game and world
 
+- **M1, a look call for Michael** (the final review; a card if he wants it): fish schools and motes are held off the hollow
+  floor by ABSOLUTE heights, not by the ground. `creatures.js:790` keeps a school's floor at `max(zoneBottom + 8, floor +
+  radius + 5)`; the `zoneBottom(0) + 8` term binds over **24.7%** of the relief's open floor and keeps schools up to ~26 u
+  over her flat. The same family (zone 0's `zoneBottom` is -260): `creatures.js:595` (a school's goal height from
+  `zoneBottom + 22`), `:1511` / `:1565` (jellies seeded from `zoneBottom + 45` and held over `zoneBottom + 22`), `:1762` (the
+  sparks from `zoneBottom + 10`), and `rifts.js:592` (the open rift's motes drawn from `zoneBottom + 18`: their band floor is
+  -242, above the hollow's floor at about -276 to -280; the `terrainH + 4` lift only ever raises them).
 - Velkath's four leg InstancedMeshes are `frustumCulled = false` with `castShadow` on, so they are drawn into all six lantern cube faces every frame, wherever Sal is: 24 draws a frame on both builds. A distance cull in the shadow pass would save them.
 - The first-jet shadow compile (+1 program on the branch at (4, 4), main at (-40, 30)): a boot warm-up of each caster's distance and depth variants for both `map` states at both sun-shadow states.
 - The home skiff's sonar prompt waits behind the sextant and his mark (shipped; main the same).
@@ -356,3 +388,6 @@ treads, `soft` 0.2).
 | 51, 52 | Task 10's relative gate pre-registered; failed as registered, not re-registered. |
 | 53 | `drv.mjs` refuses 8777 / 8790 / 9419 when imported. |
 | 54 | The video is re-encoded at true speed before Michael sees it. |
+| 55 | One final verification sweep on the final head, alone on the machine, before the final review. |
+| 56 | `open-ledge` is the Ruling 23 defect (zone 1 alone fails identically on both builds), not a relief regression; blade-invariants' `!==` program test is a pre-existing probe bug, fixed in the final fixes (a compile is an increase); G8 closed. |
+| 57 | One fix dispatch for the final review's I1 (the ending's Velkath pass), I2 (site 0's comments), I3 (the record, blade-invariants) and M4 (`checkRelief`); M1 goes to Michael; M2, M3, M5 recorded here. |

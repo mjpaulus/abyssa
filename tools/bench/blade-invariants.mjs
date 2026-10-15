@@ -32,7 +32,7 @@ const NOGRANT = process.env.NOGRANT === '1';   // the control: the same soak nev
 const home = await c.ev(`(async () => { const C = await import('/src/core.js'); window.__helm = true;
   if (!${NOGRANT}) window.survival.hasHarpoon = true; window.__bench.step(30, null, { render: true }); window.__slash(); window.__bench.step(70, null, { render: true });
   return { programs: C.renderer.info.programs.length, owned: !!window.survival.hasHarpoon }; })()`);
-console.log('first-sight at home', base.programs, '->', home.programs, home.programs === base.programs ? 'OK' : 'COMPILED', 'owned', home.owned);
+console.log('first-sight at home', base.programs, '->', home.programs, home.programs > base.programs ? 'COMPILED' : 'OK', 'owned', home.owned);
 const stops = [];
 for (let k = 0; k < 6; k++) {
   const r = await c.ev(`(async () => {
@@ -63,7 +63,9 @@ if (base.lights !== 14) fail.push('lights at boot ' + base.lights);
 if (base.fp.join() !== FP.join()) fail.push('__lev.fp at boot ' + base.fp.join(' '));
 if (base.all !== SITE_FP[0]) fail.push('home terrain fingerprint ' + base.all);
 if (base.z12 !== 'd49d451d') fail.push('zones 1+2 fingerprint ' + base.z12);
-if (!NOGRANT && home.programs !== base.programs) fail.push(`the first thrust at home compiled: programs ${base.programs} -> ${home.programs}`);
+// (Ruling 56) a compile is an INCREASE: the first thrust RELEASES programs (the final verification sweep measured 722 -> 713,
+// identically on main and the relief), and the old `!==` read that drop as a compile (exit 1 on both builds)
+if (!NOGRANT && home.programs > base.programs) fail.push(`the first thrust at home compiled: programs ${base.programs} -> ${home.programs}`);
 stops.forEach((r, k) => {
   if (r.lights !== 14) fail.push(`stop ${k} (site ${r.site}): lights ${r.lights}`);
   if (SITE_FP[r.site] && r.fpAll !== SITE_FP[r.site]) fail.push(`stop ${k} (site ${r.site}): terrain fingerprint ${r.fpAll}, want ${SITE_FP[r.site]}`);

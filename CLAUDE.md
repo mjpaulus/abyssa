@@ -234,7 +234,9 @@ against explicit contracts and reviewed on return.
   floor holds at -315.3 (call 1; G3: 0 deviation over 62 centre-line points; the throat is 40.9 u under its lip, was
   71.2); the levelling and her flat fade out by fd 4, and the outcrops are kept off the lip by `oc.keepOff`.
   `checkRelief` refuses a row the terrain cannot take (sLvl or rw <= 0: 0/0 = NaN over zone 0; an `oc.keepOff` inside
-  the crack's reach + 4 u). Spec §7
+  the crack's reach + 4 u; since the final review (M4) any scalar it reads missing, any leaf of either row not a finite
+  number (`hollow.noComp` the one boolean), and any band [r0, r1] (hollow fade / sR / ramp / oc.keepOff, uplands fade
+  and keepOff capsules) without r1 > r0). Spec §7
   limits held: lowest walkable ground -280.1 (>= -285), descent margin 29.4 u (>= 24.5), jam top 33.2 over the
   trigger (>= 25), hose 20.8 u spare (>= 10; walked: 22.5), berm 0.9, ending dip 198.6 (>= 150); heightAt costs 1.16x
   (+22 ns uplands, +33 ns hollow, of ~340). KNOWN RESIDUALS: S6 (drawn == stood on) is gated on the hollow's footprint
@@ -448,8 +450,9 @@ against explicit contracts and reviewed on return.
   judged RELATIVE to main (Task 10, pre-registered) and FAILED AS REGISTERED (Ruling 52: the baseline came from four
   short fights and C used totals that scale with fight length; the per-frame red rate is equal, 8.3 per 100 booked
   frames on both builds, the CLEAN rate is not, 0.97 against 0.43 per 100; the relief's gate fights ran 39.6 s against
-  main's 23.6 and booked 16 hits against 1, but riteplay's drop slams are 7 against 9, so that hit gap is main's gate
-  approach, not a harder fight); main is absolutely RED, so it did not block. Recorder: `tools/bench/fullplay.mjs` (raft to the
+  main's 23.6 and booked 16 hits against 1: main's near-zero is its gate approach, but the relief's ~1.8 hits a fight against
+  0.75 in riteplay's similar-length average fights is unexplained (Task 10 guessed the turn plus the lift)); main is
+  absolutely RED, so it did not block. Recorder: `tools/bench/fullplay.mjs` (raft to the
   rift, real keys, FP_HOSE; its clock is plugged, exit 4 = LOST).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
@@ -535,6 +538,10 @@ against explicit contracts and reviewed on return.
 - `ending.js` — 75s cinematic: stillness → rift-threaded ascent (spline through all
   three rift openings; terrain is always present, a straight ascent pops through
   floors) → three sleeper silhouette passes keyed to DEPTH → surface → title card.
+  Velkath's pass walks the zone-0 floor, so its depth window is measured off the ground under her mid-pass at
+  startEnding (`floorShift`: main's home window -300 / -170 shifted by that ground less main's, FLOOR_G0; seafloor
+  relief final review I1): he passes her eye level at uu 0.455 on main's home, 0.446 on the relief (was 0.26),
+  0.440-0.445 at Pallid, Burned and the Shelf (were 0.43-0.59).
   `playEnding()` on window = debug jump.
 - `systems/physics.js` — SEABED DEBRIS (primfix 2026-10-13): static loose stone in the house rock kit (flora.js
   jamRockKit + rockMapSet), half-buried with silt drifts, laid from its own site stream (`seeds.debris`), kept off
@@ -951,7 +958,8 @@ core.js):
   `clock { run, stepped, drift, running }`, and drift > 0.05 s (or a running clock) is LOST, which each tool reports
   its own way: fullplay.mjs exits 4 (`FP_NOPLUG=1` is its RED: it must print CLOCK LOST); riteplay.mjs exits 4 over any
   ward verdict (it has NO FP_NOPLUG, so no RED switch); fullplay-gate.mjs (hence velfix-gate) folds the drift into its
-  verdict and exits 1 (`FP_GATE=1 FP_NOPLUG=1 FP_STOP=200` must print DRIFT RED; the plugged control, GREEN). The game.js ROOT FIX (`const e = clock.elapsedTime; clock.getDelta(); clock.elapsedTime = e;`) is
+  verdict and exits 1, ONLY under FP_GATE=1 (without it the drift is booked in the ledger and does not set the exit;
+  `FP_GATE=1 FP_NOPLUG=1 FP_STOP=200` must print DRIFT RED; the plugged control, GREEN). The game.js ROOT FIX (`const e = clock.elapsedTime; clock.getDelta(); clock.elapsedTime = e;`) is
   DEFERRED (Ruling 42): every probe bar on the relief branch was derived on main under the same leak, so fixing it
   alone would break that symmetry; it wants its own card with a baseline re-derivation pass. Live-loop probes
   (relief-walk, the real-key walks) have no hold and no leak.
