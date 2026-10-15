@@ -1184,13 +1184,16 @@ function turtleStep(G) {
 }
 
 // ---- MORAY: in a crevice. Head out, mouth working; withdraws when Sal nears. ----
+// (seafloor relief) zone 0's real floor: home's hollow falls to about -278, 12 u under the old bound (zoneBottom - 6 = -266), so
+// a rock there was never a candidate; zone 1's rocks lie over 130 u under this (the highest, at any of the four sites: -424.6, the Shelf)
+const zone0Floor = () => zoneBottom(0) - 32;
 function morayLayout(G) {
   const st = G.st;
   // candidate rocks: zone-0 boulders big enough to hold a body
   let cnt = 0;
   for (let i = 0; i < rockColliders.length; i++) {
     const c = rockColliders[i];
-    if (cnt < G.cand.length && c.r >= 1.9 && c.y > zoneBottom(0) - 6 && c.y < zoneTop(0)) G.cand[cnt++] = i;
+    if (cnt < G.cand.length && c.r >= 1.9 && c.y > zone0Floor() && c.y < zoneTop(0)) G.cand[cnt++] = i;
   }
   for (let i = 0; i < G.n; i++) {
     const o = i * STN;
@@ -1268,7 +1271,7 @@ function crabLayout(G) {
   let cnt = 0;
   for (let i = 0; i < rockColliders.length; i++) {
     const c = rockColliders[i];
-    if (cnt < G.cand.length && c.y > zoneBottom(0) - 6 && c.y < zoneTop(0)) G.cand[cnt++] = i;
+    if (cnt < G.cand.length && c.y > zone0Floor() && c.y < zoneTop(0)) G.cand[cnt++] = i;
   }
   for (let i = 0; i < G.n; i++) {
     const o = i * STN;

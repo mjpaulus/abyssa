@@ -44,6 +44,13 @@ procedural fallback (lib/assets.js loadSculpted never throws).**
   OBJECT on the same name, which until 2026-10-04 silently disabled pause for everyone).
 - Screenshot-based FPS/motion readings in the pane are unreliable under load; the
   user's own focused window is the ground truth for feel.
+- tools/bench/drv.mjs (the CDP driver most probes import) is port-safe since Ruling 53: IMPORTED, `start()` / `stop()`
+  REFUSE 8777 (the game), 8790 and 9419 (the shared Chrome), and `start()` a port that is not an integer in
+  1024-65535, so set `DRV_PORT` to a port of the probe's own BEFORE a dynamic `await import('./drv.mjs')` (a static
+  import hoists above the assignment and `DBG` is already 9419; play.mjs had this bug). The CLI keeps 9419 for
+  Michael's manual use. `stop()` is `pkill -f 'remote-debugging-port=<port>( |$)'`, anchored (the old pattern also
+  killed 9419 when the port was 941). Convention: the relief branch served on 8870 with Chrome 9520, a main copy on
+  8871 / 9521, a load on 8873 / 9523.
 - SHADER LINK FAILURES ON METAL ARE A TRANSLATOR HICCUP, NOT OUR GLSL (roadmap/shader-link-
   failure.md). ANGLE's GLSL->MSL step now and then gives one random function parameter a
   spurious `constant T &` / `thread T &` and the program fails to link ("no matching function
@@ -169,7 +176,10 @@ against explicit contracts and reviewed on return.
   the line "A RIFT OPENS BELOW." lands as the light arrives. Open state = calmed THIS VISIT
   (game.js `visitCalm`, cleared on boot/voyage — "Ritual, remembered": a revisit is shut until she is
   calmed again). OPEN = `world/rifts.js` the deep's own pale light: a soft curtain along the crack,
-  wall light (gated off below the throat floor), motes, a surface glow (fog:false, <= 0.16), colour
+  wall light (gated off below the throat floor), motes (`seedMotes` lifts every mote to `terrainH + 4`, AFTER its
+  draws so no stream moves: a height drawn from the zone's band alone put 59-61 of 1,260 seeded motes within 3 u of
+  the floor on main (some below it), in every zone and site; the clamp is global, 8.3% of motes lift, drawn-only, no
+  fingerprint reads them), a surface glow (fog:false, <= 0.16), colour
   leaned per site/zone and calibrated on SETTLED frames. DOWN THE OPEN THROAT (final wave): Sal is held
   in the shaft's OPEN interval at his feet (player.js `holdInShaft`; the shaft narrows with depth inside
   inThroat's lip-level interval and the current set him into the walls), the follow lens is put in the
@@ -177,14 +187,18 @@ against explicit contracts and reviewed on return.
   station, clamped off the faces, the lost reach put back as height, a sprung guard after the spring;
   `__throatCam`), both on fissureShape.js `openRunAt`; the ending's lens waits under each throat floor
   with him and shortens its arm to see past the kinks (ending.js FLOOR_UNDER / LOS_F). `__fissure` dev
-  surface; probes `tools/bench/fissure-probe.mjs` (24 modes; `fall-lens`, `ending`, `wave-minors` gate the
-  final wave). Fingerprint probe = `terrainFingerprint()` /
+  surface; probes `tools/bench/fissure-probe.mjs` (25 modes; `fall-lens`, `ending`, `wave-minors` gate the
+  final wave; THE RELIEF re-derived the bounds that moved with the ground, each with a RED: `FP_MUTANT='<json>'`
+  runs `__relief.set` before the mode, `FP_RED=<variant>`, `FP_WALLS_SINK=<u>`). Fingerprint probe = `terrainFingerprint()` /
   `__ridge.fp(zones?)` (FNV-1a over the float32 BYTES of terrainH, 32x32 grid x,z
   −248..248 step 16, zone-major then z then x). The old quoted values (35acc2d0, 5e6cfe45)
   came from an unrecorded probe and reproduce under no variant of it; this one is canonical
   since 2026-10-04. Home: 4ff3a4f6 on main 7a41c43 -> 119f0cae after THE FAR RIDGE (zone 0
   only: 776f4b37 -> 6b719d1f; zones 1+2 d47f42e0 unchanged at every site). THE FISSURE carving
   (2026-10-10): home 3b526986, zones 1+2 d49d451d, Pallid Bank b1c58f8d, Burned Ground d2b6fb68.
+  THE RELIEF (2026-10-14): home 5c0705a1 (zone 0 alone 2e296b41), zones 1+2 d49d451d, Pallid b1c58f8d and
+  Burned d2b6fb68 unmoved; 3b526986 is history, and is what home still reproduces with its relief rows removed
+  (tools/relief/validate.mjs `homeNull`).
   THE FAR RIDGE (roadmap/far-ridgeline-read.md, Michael "Raise it"): zone 0's rampart runs
   its own rows (`RIDGE` in terrain.js: envelope 300/348/540 — nearer than the W2 340/410
   — h 74, ridged 44 + a 48-u crag term 28, and a SOFT ceiling asymptotic to -8 over the
@@ -192,6 +206,74 @@ against explicit contracts and reviewed on return.
   a pale carbonate DRAPE on its upper faces in the terrain shader (`uDrape`, zone 0 only,
   faded in past ~100 u from the eye so the crest is rock up close). Zones 1/2 keep W2.
   `__ridge.set({...})` retunes live (refills the terrain); `__ridge.RIDGE` / `.ISLES`.
+  THE RELIEF (2026-10-14, branch relief; spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md, record
+  docs/reports/2026-10-13-seafloor-relief.md; Michael: "the sea floor is all one level, like a big pit. Lets make that
+  more dynamic but keep velkaths lair in the deepest part"): HOME ZONE 0 ONLY. Home's site row (site.js) carries
+  `shape.uplands` + `shape.hollow` and `wrecks.band`; ZP[0] and every other site's rows are untouched, and with the
+  rows absent heightAt is the pre-relief field bit for bit (0 of 8,668,824 dense float64 samples differ from main;
+  home with its rows removed = 3b526986). Both terms are keyed to FROZEN geometry only (`FISSURE[0]` = riftPos(0),
+  the origin, the station literals (89.7, 39.1) and (43.5, 113.4)), never `bedAt()` / `velkathLair`: her bed is placed
+  after the terrain. THE UPLANDS (d1e1b0e): the massif / secondary-ridge / outcrop / continental noise heightAt already
+  computes (named nBase/nReg/nM/nS2/nR3 now, bit-identical) re-weighted with a mask bias of its own and ADDED
+  (rbias -0.10, ramp 24, r3amp 1.0, s2amp 2.0, camp 12) times `keepOff`: five capsules (the crack 35/65 u inner/outer,
+  both flank stations 30/55, the raft column 25/50, the raft -> station band 20/45) inside which the term is exactly 0
+  (99,829 grid points incl. 13,258 of the crack's apron: 0 differ), and a radial fade (smoothstep r 250 -> 300 from
+  the origin, row `fade`) that leaves the far ridge and the isle shoals bit-identical (gate "far field untouched": 1800
+  ring samples, 0 differ). Overriding the shipped knobs instead moved the lips 1.39 u and the throat floor 1.4 u (trial
+  H7: camp and s2amp act everywhere). THE HOLLOW (f97b919, terrain.js `hollowAt`): a sunk floor about riftPos(0),
+  added AFTER the soft-floor knee (before it the 4:1 compression ate a third of it), 28 u deep + a 3 u dish within 90 u
+  of the crack; NOT a lathe: its flat-bottom and outer radii (80 / 185 u, 74 / 150 toward the raft, 86 / 220 away)
+  wander on low harmonics (26.7% / 39.6% peak-to-peak), TWO treads (`N` 2: three put the middle riser's feet ~0.25 u
+  off the coarse mesh) whose risers take 85% of their band and are smooth in three ramp sectors (no riser is a ring),
+  her flat at her station (89.7, 39.1) (levelled 92% over 30-46 u, 4 u lower: the deepest ground), the bottom levelled
+  70%, soft outcrops (`v^2/(v + soft)`: a hard max() is a crease the mesh cannot draw). Its fade (r 250 -> 290) runs on
+  UNDER THE NE WALL, which stands ~30 u taller over the lowered floor (Michael's call 3): her crack sits ~55 u from the
+  wall's foot, and ending the hollow before it put a steep rise right behind her (5.4% of the floor unwalkable).
+  THE CRACK TAKES ONLY THE UNIFORM PART (`hu`: the depth + the dish): the apron target is relative (`18 + hu`) and the
+  carve is shortened by `hu * sst01(wall / 0.6)`, so the lips drop together (1.18 u apart, was 1.17) and the throat
+  floor holds at -315.3 (call 1; G3: 0 deviation over 62 centre-line points; the throat is 40.9 u under its lip, was
+  71.2); the levelling and her flat fade out by fd 4, and the outcrops are kept off the lip by `oc.keepOff`.
+  `checkRelief` refuses a row the terrain cannot take (sLvl or rw <= 0: 0/0 = NaN over zone 0; an `oc.keepOff` inside
+  the crack's reach + 4 u; since the final review (M4) any scalar it reads missing, any leaf of either row not a finite
+  number (`hollow.noComp` the one boolean), and any band [r0, r1] (hollow fade / sR / ramp / oc.keepOff, uplands fade
+  and keepOff capsules) without r1 > r0). Spec §7
+  limits held: lowest walkable ground -280.1 (>= -285), descent margin 29.4 u (>= 24.5), jam top 33.2 over the
+  trigger (>= 25), hose 20.8 u spare (>= 10; walked: 22.5), berm 0.9, ending dip 198.6 (>= 150); heightAt costs 1.16x
+  (+22 ns uplands, +33 ns hollow, of ~340). KNOWN RESIDUALS: S6 (drawn == stood on) is gated on the hollow's footprint
+  (added mesh error 0.231 u max, p99 0.085); outside it upland crests draw up to 0.852 u off the walked ground (INFO);
+  11.6% of the open floor is steeper than the gait clamp (35.5 deg; main 1.3%), where boots sink by design (worst
+  -0.124 u, 45-50 deg); the play boundary `clampR[0]` moved -12.7..+7.6 u per bearing (min 235, max 266.9; no gate
+  covers it). THE LOOK (call 2, the hollow reads darker and somewhat murkier; Task 13): the 25 u fall toward her crack
+  and the taller NE wall read on the map and sections, not from the water (visibility ~100 u; the wall's foot is 110-130 u
+  from her bed); auto-exposure sits on its LOW fence at her bed and the raft column (the meter wants 0.5-0.7 EV darker,
+  main 0.3: the clamp sets the hollow's brightness); the height-tied shading (`vColor.b`) is negligible there. Stills,
+  the L1 maps and the full-take video are listed in the report. `window.__relief` (game.js): `rows()` is a deep copy of the live site's shape rows, `set(patch)`
+  deep-merges into a copy, runs `checkRelief` (a bad row throws before anything moves) and then `reseedWorld`:
+  a FULL ARRIVAL (Sal respawns on the deck, the visit's calm is forgotten, the suit is refit, saveChart runs: never
+  measure across one), transactional (a throw in the reseed puts the previous row back and re-arrives on it);
+  `reset()` restores the first-set snapshot. Its RED mutants: `{hollow:{noComp:true}}` (floor -346.3), `{hollow:{D:60}}`
+  (jam 1.2 u over the trigger), `{hollow:{D:60,noComp:true}}` (ending dip 135.6), `{hollow:{sDrop:-14,sR:[8,24]}}` (her
+  flat a mound: near flank normal.y 0.6). `tools/relief/` (node only, no browser) slices terrain.js, wrecks.js, lair.js
+  and brooderGeo.js by MARKER LINES on every run into git-ignored `terrain.gen.mjs` / `pins.gen.mjs`, so the gates
+  test the real code: `node tools/relief/slice.mjs`; `node tools/relief/validate.mjs [--record]` (the fingerprint of
+  every site incl. the hidden shelf, home with its rows removed, the frozen wreck sites, vs `expect.json`; the four
+  shipped anchors (homeNull, zones 1+2, Pallid, Burned) are also hard-coded; `--record` rewrites ONLY `home` and exits 1 if anything else moved);
+  `node tools/relief/gates.mjs [--json f]` (S1-S7, the §7 limits, G3, the far field, the skiff, the uplands; exit 1 on a
+  hard FAIL, S3 is a target); `node tools/relief/cost.mjs` (heightAt ns per call, rows on vs off; exit 1 above 1.5x);
+  `stats.mjs` (masks, statistics) and `mesh.mjs` (the drawn coarse mesh, for S6) feed them. `tools/relief/render/`
+  (set DRV_PORT; game on 8870 / Chrome 9520, main 8871 / 9521) is the look: `drive.mjs boot|run|stop`, `prep.mjs` with
+  `sample.page.js` / `render.page.js` / `upload.page.js` (L1: side-by-side hillshade maps and sections),
+  `stills.mjs <port> <tag>` + `pairs.mjs` (settled stills at a terrain-relative pinned camera), `shade.mjs` (the
+  height-tied shading probe), `exposure.mjs` (auto-exposure at three places), `glare.mjs` (the ward-glare flash series).
+  In-game probes, all `DRV_PORT=<own> node tools/bench/<x>.mjs <port>`: `relief-load.mjs [all|load|parity|voyage|
+  oldsave]` (fresh loads in fresh profiles with the console from byte one: the invariants and home's anchors; the
+  game's terrainH against the sliced replica on 40,401 points: the probe gates >= 99% within 1e-9, measured 100%
+  (99.81% bit-identical, max 1.14e-13); three round trips via Pallid with
+  her bed recomputed; an old save with `pulled[0]` on the new ground, "[E] PRESS THE OLD WOUND"), `relief-walk.mjs
+  <boots|lens|hose>` (REAL keys on the LIVE loop at 60 fps by focus emulation, never `__bench.step`, so no clock leak;
+  `RW_RED` noslope / nofloor / short20 exit 5 = the RED failed as it must, 3 = it did not; `selftest` is offline),
+  `seating-probe.mjs` (nothing the game puts on the ground hovers or sinks: props, nodes, debris, her relics and
+  moult, egg skins, the skiff's kit, the seeded motes; every vertex; `SP_RED` prop-lift / node-sink / node-boulder).
   Triplanar CC0 PBR (channel-packed, 3.3 MB) multiplies ON TOP of zone palettes:
   texture = structure, palette = hue. ROCKS (flora.js) use a GENERATED rock map set
   (lib/textures.js rockMapSet, two variants) triplanar via onBeforeCompile + screen-
@@ -316,8 +398,32 @@ against explicit contracts and reviewed on return.
   the slam (tear), elsewhere under her -> the sweep (flat throw, stagger, no tear), out `outClean` u -> nothing; she
   rises back (no lingering crouch). A ward lit from under her brings the drop on (one ward per dash); wards touched
   during the drop answer cold (wardRefuse). She turns her front to him; after a blow down her front lane she is slow
-  to turn (the dash-in window). Measured (riteplay, ritepolicy.mjs players): average 45-165 s, 0-3 hits; perfect
-  ~44 s home. her claws spread open her front when he comes in
+  to turn (the dash-in window). Measured on main (riteplay, ritepolicy.mjs players): average 45-165 s, 0-3 hits;
+  perfect ~44 s home.
+  THE RELIEF'S VELKATH (seafloor relief Task 8b; Michael 2026-10-14: "Turn her around", "Raise her to match"): the
+  hollow gives her her DESIGNED raft-side station at home, (89.7, 39.1), always (the skiff's window keeps it off her
+  vetoes, see THE CHART). There she lay MIRRORED across her crack from the shipped far-flank bed, so Alt+6 opened at
+  her front-right and average fights ran 2.5x shorter (median 24.3 s against main's 59.8, p 0.009, 12 paired
+  fights; the perfect player was hit in 8 of 12 fights, 7 of its 10 tears by her shell's heave at ~9.2 s, main in 1 of
+  12). Home's sleeper row fixes it.
+  `lair.face -1` turns her in place at her bed (lair.js: the bed is the one that clears the apron facing either way,
+  today's, 0.021 u from the station; re-fitted at the turned face alone she moved 1.011 u, S2 allows 0.5; yaw 58.49
+  -> -121.51, exactly 180 deg), so the harpoon is in her LEFT flank again and Alt+6 opens at her
+  back-left CORNER (fwd -0.81 / lat -0.59 R at the key press, -0.84 / -0.61 at riteplay's START line; main's is also
+  back-left, -0.45 / -1.13 at the key, -0.48 / -1.16 at START). `lair.seat 'back'` keeps the seat's
+  seam to her back half (harpoon.js `seat()`: on the levelled flat the middle of her left flank lies at the ground and
+  the search's best was her front corner). `hard.lift` 0.55 raises her stance (brooder.js `L.standLift`: her body height,
+  STAND.clear, CROUCH.clear and NOSAFE.depth, else the sole lift eats it) by the gap between main's hunting stance and
+  hers (riteplay `wardHuntP50`, 4 paired average fights, seeds 901-904: 10.04 vs 9.475). Paired n = 12 per mode on the
+  plugged clock: perfect 49.8 vs main 44.6 s (ratio 1.12, p 0.18); average 40.4 vs 54.2 s (ratio 0.745, p 0.58; 4/12 in
+  the 45-165 s band against main's 7/12); her hunting wards +0.09 u of main's; her shell hits nobody (0 vs 0). Michael
+  ACCEPTED the remaining gap ("A is good", 2026-10-14); the buried-rock work (roadmap/velkath-buried-rock.md) resets
+  her opening and re-measures. The spec's "~6 u" ward height matches neither build: a standing p50 is 9-10.6 u.
+  riteplay.mjs books her wards' height over her ground while she is up (`wardUp`; `wardHuntP50` = no drop and
+  standE > 0.9), every tear's source and phase (`hitLog`) and every drop's outcome (`dropLog`), read-only;
+  `RP_WARD_BAR=<u>` (main's max + 0.5) gates the column. EXIT CODES: 0 pass (or no bar) / 3 WARD FAIL / 2 UNMEASURED
+  (never up) or a bad bar / 4 LOST (the game clock moved other than by the stepped frames) / 1 the run itself failed.
+  her claws spread open her front when he comes in
   (HUNT.spread/upR); the hammer's throw is flat (knockUp 0.12) and never into the crack (`safeThrow`: its whole ~16-29 u slide clears the lip; from inside the lip of an OPEN crack it leans out of it); a slam
   tears once per 0.8 s; her back is a slick dome (no tear, he slides off); game.js `BOSSCAM` cranes
   the lens up 1.5 u and leans the look toward her belly/nearest dark ward while she is up within
@@ -334,8 +440,20 @@ against explicit contracts and reviewed on return.
   over 15 s after the calm. AFTER THE CALM her belly and egg mass are closed from below to him (bodyCols CALMCOL), she
   keeps her clearance on the walk home, won't lie down while he's on her ground, re-rises quietly, and the lens guard
   looks ahead (`creLensAhead`). THE LENS IS NEVER INSIDE SAL (game.js `SALCAP`, a capsule boots-to-bonnet; her drop
-  throws him back at the lens). Gates: `tools/bench/velfix-gate.mjs` (fullplay-gate.mjs, three post-calm routes);
-  recorder: `tools/bench/fullplay.mjs` (raft to the rift, real keys, FP_HOSE).
+  throws him back at the lens). Gates: `tools/bench/velfix-gate.mjs` (fullplay-gate.mjs, three post-calm routes). THE
+  GATE IS RED ON MAIN, 12 of 12 route runs (relief Task 9, clock plugged, alone and under load): the fight lens is
+  PRESSED on Sal under her (CRECAM `minD` 2.2 u, SALCAP inside it) - the light-up's hide ring (17-59% of the frame,
+  over the 15% cap to flashT 0.55-0.72 s, peaks 0.59 / 0.57), his dress or lantern in an air-pack burst (4 full
+  white-outs in 18 runs), the lens in her shell (12 frames) or legs (29) after the calm; 0 of 8,471 frames are red with
+  the lens >= 2 u off his bonnet and no light-up within 0.6 s. Michael chose "A is good" (2026-10-14): keep the lens off
+  Sal under her (card fight-lens-off-sal; its acceptance is the absolute GREEN, run on main). On the relief the gate was
+  judged RELATIVE to main (Task 10, pre-registered) and FAILED AS REGISTERED (Ruling 52: the baseline came from four
+  short fights and C used totals that scale with fight length; the per-frame red rate is equal, 8.3 per 100 booked
+  frames on both builds, the CLEAN rate is not, 0.97 against 0.43 per 100; the relief's gate fights ran 39.6 s against
+  main's 23.6 and booked 16 hits against 1: main's near-zero is its gate approach, but the relief's ~1.8 hits a fight against
+  0.75 in riteplay's similar-length average fights is unexplained (Task 10 guessed the turn plus the lift)); main is
+  absolutely RED, so it did not block. Recorder: `tools/bench/fullplay.mjs` (raft to the
+  rift, real keys, FP_HOSE; its clock is plugged, exit 4 = LOST).
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (the blade frees: `lev.onSlash(pos, fwd, reach, tipReach, guard)`, held: knife 3 /
@@ -368,7 +486,10 @@ against explicit contracts and reviewed on return.
 - `world/fauna.js` — the animal vocabulary (loft/blade/limb/gape/eyes/photophores,
   part-id vertex animation, 30 Hz steering): ray, turtle, moray, crabs, stars/urchins;
   vent fish, flapjack, isopods; anglerfish, gulper, lanternfish. Own 'fauna' stream;
-  hidden during the rite (hideFauna).
+  hidden during the rite (hideFauna). Morays and crabs sit on zone-0 rocks above `zone0Floor() = zoneBottom(0) - 32`
+  (was `- 6`: the relief's hollow floor lies at ~-278, so its 39 rocks were never candidates and it held no animal; now 2
+  morays + 2 crabs stand in it; the highest zone-1 rock, -424.6 at the Shelf, stays 132 u under the bound; Pallid, Burned
+  and the Shelf lay bit-identically, and the stream's draw order is untouched).
 - `world/creatures.js` — boid schools (floorBias reef layering), jellies, drifters,
   sparks. NOTE: shared MeshStandardMaterial variants need distinct
   `customProgramCacheKey` or three silently shares compiled programs.
@@ -417,6 +538,10 @@ against explicit contracts and reviewed on return.
 - `ending.js` — 75s cinematic: stillness → rift-threaded ascent (spline through all
   three rift openings; terrain is always present, a straight ascent pops through
   floors) → three sleeper silhouette passes keyed to DEPTH → surface → title card.
+  Velkath's pass walks the zone-0 floor, so its depth window is measured off the ground under her mid-pass at
+  startEnding (`floorShift`: main's home window -300 / -170 shifted by that ground less main's, FLOOR_G0; seafloor
+  relief final review I1): he passes her eye level at uu 0.455 on main's home, 0.446 on the relief (was 0.26),
+  0.440-0.445 at Pallid, Burned and the Shelf (were 0.43-0.59).
   `playEnding()` on window = debug jump.
 - `systems/physics.js` — SEABED DEBRIS (primfix 2026-10-13): static loose stone in the house rock kit (flora.js
   jamRockKit + rockMapSet), half-buried with silt drifts, laid from its own site stream (`seeds.debris`), kept off
@@ -447,10 +572,12 @@ against explicit contracts and reviewed on return.
     without it a teleported probe gets floored back to the OLD zone's seabed and
     reads as a broken teleport.
 - THE CHART (multi-site ocean) — `world/site.js` is the registry (3 authored
-  anchorages; site 0 = shipped world BIT-IDENTICAL, the regression anchor; terrain
-  fingerprints on the canonical probe (`__ridge.fp()`, see terrain.js above), CURRENT since THE FISSURE
-  (2026-10-10): home 3b526986, Pallid Bank b1c58f8d, Burned Ground d2b6fb68, zones 1+2 at home
-  `__ridge.fp([1,2])` d49d451d. History, not current: THE FAR RIDGE + per-site shaping (main 21148ef) had
+  anchorages; site 0 WAS the shipped world bit for bit until THE RELIEF (2026-10-14): its terra / seeds rows and zones
+  1+2 are still the shipped ones, but zone 0 is not, and the regression anchor is the story below, not "identical to
+  main"; terrain fingerprints on the canonical probe (`__ridge.fp()`, see terrain.js above), CURRENT since THE RELIEF:
+  home 5c0705a1, Pallid Bank b1c58f8d, Burned Ground d2b6fb68, zones 1+2 at home `__ridge.fp([1,2])` d49d451d
+  (home with its relief rows removed still reproduces THE FISSURE's 3b526986: `homeNull`). History, not current: THE
+  FISSURE had home 3b526986; THE FAR RIDGE + per-site shaping (main 21148ef) had
   home 119f0cae / Pallid 2c0df461 / Burned ff316095 / zones 1+2 d47f42e0; before that 4ff3a4f6 / bd02b8e3 /
   4014c41e on 7a41c43). The world
   reseeds IN PLACE around the raft: `reseedWorld(i)` in game.js runs
@@ -489,7 +616,17 @@ against explicit contracts and reviewed on return.
   arrive-back). Soak: 12 voyages flat at 353 programs / 148 geometries.
   OWN WATER (2026-10-04, roadmap/fly-remote-sites.md, Michael: "Give each its own water"):
   site rows now carry water / light / grade / floor / shape / vents / wrecks and the
-  sleeper rows' idle / lair / hard are LIVE (they were dead data). All null at home.
+  sleeper rows' idle / lair / hard are LIVE (they were dead data). Null at home EXCEPT, since THE RELIEF:
+  `shape` = { uplands, hollow } (zone 0; terrain.js above); `wrecks.band` = [[100, 140, 30, 75]] (wrecks.js `findSite`
+  takes an optional bearing window as band entries [2], [3], degrees counter-clockwise from the rift -> raft bearing:
+  the skiff, the sonar, is searched 100-140 u off riftPos(0) at 30-75 deg, on the raft-side terraces; 100 u keeps it
+  >= 54.5 u from her lip and >= 26.8 u from her trail head, past the lair's 46.8 / 22 u vetoes, so she always takes
+  her designed station (89.7, 39.1), a pure function of the frozen fissure frame; today's skiff (107.6, -53.6),
+  120.2 u from the raft, 94.4 u from her bed, with a 0.114 u flatness lead over the runner-up: the window is a tuned
+  knob, the gates `skiff within 130 u` and `skiff in its window` judge it); and `sleepers[0]` = { sigils 3, hueShift 0,
+  lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 } }: Velkath turned at her bed, the harpoon seat on her back
+  half, her stance raised 0.55 u (from Michael on 2026-10-14 via Rulings 44-45; the fight story is in the
+  `entities/leviathan.js` bullet above; game.js `makeZoneSleeper` reads every row's sigils / hueShift, so a row must carry the shipped 3 / 0).
   Water rides three shared fog-chunk vec4s (abyssaSite/SiteT/SiteK, DELTAS from the shipped
   constants, installed like abyssaStyle) + SITE_SURF on the CPU palette, so a voyage moves
   fog, dome, far sea and shafts together with zero recompiles. Sleepers: Velkath swings
@@ -497,8 +634,17 @@ against explicit contracts and reviewed on return.
   about her trawler (lair.bear / idle), Mhor's furnace moves (lair.bear/r); `hard` =
   hammerT/threatR, pull/hold/lashCd/grabR, circleT/stunT/hitR/speed. Never more lights.
   `__chart.fp()` is the same canonical probe as `__ridge.fp()` (values above; the sites
-  branch's own probe was folded into it at merge). sleeperFingerprint(i) home: ecfa371e
-  ac04921e ce3eaf9d (zone 0 since velhard 2026-10-12; was 49a7a176).
+  branch's own probe was folded into it at merge). sleeperFingerprint(i) home: 1ca3b28c
+  ac04921e ce3eaf9d (zone 0 since THE RELIEF: her bed moved to her station and her wards and body sit over the new
+  ground, deterministic over four fresh loads; was ecfa371e since velhard 2026-10-12, 49a7a176 before). `__lev.fp`
+  15ce888c / c938fe6e / 652d0412 is unchanged: it is the serpent's hash, and serpent.js reads terrainH only for blobs
+  it does not hash. sleeperFingerprint's BLIND SPOT: it is taken with NO site row (LEVIATHAN_CFG alone), as are
+  brooder-invariants.mjs, gates.mjs S2 and relief-load's voyage replica (`velkathLair(..., null)`: position only), so
+  none of them can see home's sleeper row (the turn, the seat, the lift): built from its row home reads edb51a28
+  (Pallid 014f3101, Burned 5dc323ad, Shelf 874758d2 with theirs; the no-row values are unchanged at every site).
+  relief-load `load` gates a LIVE anchor in its place, on the boot's build and on the chart's rebuild: heading
+  -121.51 deg, Alt+6 stands him at fwd -0.81 / lat -0.59 R in her frame (her back-left corner), lift 0.55, seat found
+  (tolerance 0.01; a later sculpt or seat change moves it, and the cause is recorded with it).
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own
@@ -581,10 +727,12 @@ against explicit contracts and reviewed on return.
   short lines, period voice ("BITUMEN — FOOD FOR THE PUMP").
 - Debug surfaces are namespaced on window and kept: player, survival, lev, zone,
   gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
-  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __shaderFailed.
+  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __relief, __shaderFailed.
 - INVARIANTS checked before every commit (fresh tab): 14 lights in the scene; `__lev.fp(0/1/2)`
-  15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 3b526986 (zones 1+2 d49d451d; since THE
-  FISSURE 2026-10-10, was 119f0cae); `__safeFailed()` returns [];
+  15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 5c0705a1 (zones 1+2 d49d451d, Pallid b1c58f8d, Burned
+  d2b6fb68; since THE RELIEF 2026-10-14, was 3b526986 since THE FISSURE 2026-10-10 and 119f0cae before);
+  `sleeperFingerprint(0/1/2)` 1ca3b28c / ac04921e / ce3eaf9d (zone 0 since THE RELIEF; it is blind to home's sleeper
+  row, so `relief-load.mjs load` also gates the LIVE anchor: THE CHART); `__safeFailed()` returns [];
   **`__shaderFailed()` returns []** (no shader program left broken; see lib/shaderWatch.js);
   console clean (no errors except a favicon 404).
 - Message discipline: `showMsg(text, dur, prio)` is a two-slot priority queue —
@@ -763,8 +911,12 @@ THE HARNESS (`__bench`, src/lib/bench.js; the frame hooks are in game.js, owner 
 core.js):
 - `await __bench.setup('z0')` - a STANDARD VIEW: Sal stood on a fixed seabed spot, camera
   settled, canvas CSS fixed at 1512x982 (`size(w,h)`), DRS pinned 1.0. Views: z0 (under the
-  raft), z0r (dense reef/kelp), z0b (Velkath's ridge), z1 (under rift 0), z1b (Orune, 21 u),
-  z2 (under rift 1), z2r (zone-2 reef). Site 0 only.
+  raft; (4, 4); its floor is 15 u deeper on the relief), z0r (dense reef/kelp: since THE RELIEF the densest 40 u
+  plant window of zone 0 (268 of 4,397 instances, found by walking the instanced meshes' `plantKey`), centred (32, 2)
+  yaw 0.8 on a 32.3 deg riser: he slides 2.28 u to (32.45, -0.24) and holds there; was (30, -10)), z0b (Velkath's
+  bed from 30 u: (105.4, 13.5) yaw -0.55, 30 u out along `L.sand` from her centre on her open-sand side, facing
+  her, on 3.3 deg ground, no slide; was (15, 18), 100 u off), z1 (under rift 0), z1b (Orune, 21 u),
+  z2 (under rift 1), z2r (zone-2 reef). Site 0 only; positions are the authored layout (a voyage moves them).
 - `await __bench.live(ms)` - the REAL rAF loop, governor uncapped: mean frame interval =
   the pipelined frame cost. **The number to report.** `liveAB({a, b})` = ABBA paired;
   noise floor +-0.1-0.3 ms on a quiet machine.
@@ -794,6 +946,23 @@ core.js):
   `gotoZone`/teleport the grade's air/zone blend, auto-exposure, AO and DoF stay on the last real frame's
   state (a fresh page: the DECK look). Use `capture({ settle: 90 })` (90 rendered frames first) or
   `step(n, null, { render: true })`; a light colour-calibrated without it was gold in zone 1 in play.
+- THE BENCH CLOCK LEAK (seafloor relief Task 9, Ruling 42): game.js's bench `hold(false)` calls `clock.getDelta()`,
+  and three r184's `getDelta` ADDS the wall time since its last call to `elapsedTime`, so every `__bench.step` pushes
+  `t` on by its own wall time plus the CDP round trip before it: `t` ran 1.5-1.6x the stepped time alone and
+  1.7-2.1x under load (measured against the slam log). `t` feeds the current that drifts a swimmer (player.js
+  `sampleCurrent`), the swell, the hose's current, the weather and storm, the lantern flicker and the tear gate
+  (`SLAM_GAP` 0.8 s was 0.4-0.53 s of play), so load changed the game: a grep for `performance.now|Date.now` cannot
+  see it. It is in EVERY `__bench.step` probe (fissure-, harpoon-, clawcam-probe...). PLUGGED TOOL-SIDE in
+  fullplay-gate.mjs, fullplay.mjs and riteplay.mjs: `clock.stop()` once the live loop is held (getDelta then returns
+  0, and step's own `+= dt` is the only thing that moves the clock), every stepped frame counted, the ledger books
+  `clock { run, stepped, drift, running }`, and drift > 0.05 s (or a running clock) is LOST, which each tool reports
+  its own way: fullplay.mjs exits 4 (`FP_NOPLUG=1` is its RED: it must print CLOCK LOST); riteplay.mjs exits 4 over any
+  ward verdict (it has NO FP_NOPLUG, so no RED switch); fullplay-gate.mjs (hence velfix-gate) folds the drift into its
+  verdict and exits 1, ONLY under FP_GATE=1 (without it the drift is booked in the ledger and does not set the exit;
+  `FP_GATE=1 FP_NOPLUG=1 FP_STOP=200` must print DRIFT RED; the plugged control, GREEN). The game.js ROOT FIX (`const e = clock.elapsedTime; clock.getDelta(); clock.elapsedTime = e;`) is
+  DEFERRED (Ruling 42): every probe bar on the relief branch was derived on main under the same leak, so fixing it
+  alone would break that symmetry; it wants its own card with a baseline re-derivation pass. Live-loop probes
+  (relief-walk, the real-key walks) have no hold and no leak.
 - Hazards: ANGLE/Metal DROPS a render pass whose target is cleared again before anything
   reads it (a synthetic GPU load needs additive draws, no clears); any getBufferSubData /
   readPixels / getError is a synchronous round trip that first drains Chrome's GPU-process

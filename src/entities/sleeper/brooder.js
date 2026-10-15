@@ -560,6 +560,13 @@ export function makeBrooder(idx, cfg) {
   // is unchanged, so every blow still telegraphs; there is just less time between them.
   L.hammerT = c.hard && c.hard.hammerT || HAMMER_T;
   L.threatR = c.hard && c.hard.threatR || 2.4;
+  // (seafloor relief Task 8b, Ruling 44; Michael 2026-10-14, "Raise her to match") her STANCE raised `hard.lift` u (home's row
+  // only; absent = 0, the shipped stance bit for bit): on the relief's levelled flat her hunting stance hung her wards lower
+  // over her ground than main's. A stance offset, so everything measured from her standing height moves with it (poseAll,
+  // noSafeSpot): her body (with the heave, so asleep she lies as before and the harpoon's seat is unmoved), her shell's
+  // STAND.clear (or the sole lift, 0.87 u at the median on the flat, would take the offset back), the crouch's CROUCH.clear
+  // floor under her belly, and THE DROP's NOSAFE.depth (her slam still meets the sand). Live: lab / probes may set it.
+  L.standLift = c.hard && c.hard.lift || 0;
 
   // ---- wards ----
   const wardScale = 4.2;
@@ -1488,7 +1495,7 @@ function poseAll(L, dt, player) {
       const px = player.pos.x - L.pos.x, pz = player.pos.z - L.pos.z;
       if (Math.hypot(px, pz) < CROUCH.r * R && player.pos.y < L.bodyY - 0.08 * R) cw = 1;
     }
-    if (L.bellyOver < CROUCH.clear) cw = Math.min(cw, L.crouch.x - 0.15);
+    if (L.bellyOver < CROUCH.clear + L.standLift) cw = Math.min(cw, L.crouch.x - 0.15);   // (Ruling 44: the floor rides her stance)
     spr(L.crouch, clamp(cw, 0, 1), 1.4, 0.95, dt > 0 ? dt : 1);
   }
   const cK = L.crouch.x;
@@ -1496,7 +1503,8 @@ function poseAll(L, dt, player) {
   // him: she holds the height (and front) she stood at, so the lanes in stay open (measured: the
   // threat's lift and front pitch going with it brought her 4.3 u down over him)
   const liftK = Math.max(L.threatE, L.underE ? L.underE.x : 0);
-  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.bY.x;
+  // (Ruling 44) + her stance offset (makeBrooder: L.standLift), with the heave: asleep she lies as she did
+  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.standLift * hv + L.bY.x;
   if (L.dropY) L.bodyY += L.dropY;   // (velhard) THE DROP: braced up, slammed down, risen (noSafeSpot)
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
@@ -1521,7 +1529,9 @@ function poseAll(L, dt, player) {
   // under her belly is the lens's, not a floating diver's.)
   // (velhard: in the fight the clearance rides THE DROP, L.dropY, so the shell moves by exactly that whether or not
   // the sole holds her up: braced up, then down to the sand)
-  const clr = !L.dormant ? lerp(SOLE_CLR, L.calmed ? STAND.clear : Math.max(SOLE_CLR, STAND.clear + (L.dropY || 0)), L.standE) : SOLE_CLR;
+  // (Ruling 44: the clearance rides her stance offset too, or the sole lift would take it back)
+  const sclr = STAND.clear + L.standLift;
+  const clr = !L.dormant ? lerp(SOLE_CLR, L.calmed ? sclr : Math.max(SOLE_CLR, sclr + (L.dropY || 0)), L.standE) : SOLE_CLR;
   const bed = lerp(SOLE_BED_DEEP * R, -clr, smooth(hc, 0, 0.7));
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
@@ -1833,11 +1843,13 @@ function noSafeSpot(L, dt, player, ev, hunt) {
     if (L.dropT >= N.tele) {
       // how far: all the way to the sand, but over his helmet if he is under her: a hand's breadth when he
       // stayed on her mark, clear of it when he moved off it (he sees her miss)
-      let d = N.depth;
+      // (Ruling 44: from her raised stance, all the way down is that much further)
+      const depth = N.depth + L.standLift;
+      let d = depth;
       if (rho < N.sweepR * R && player.pos.y < shellY) {
         const crown = player.pos.y + 0.45 - groundAt(L, player.pos.x, player.pos.z, true);
         const off = rho - (L.dropRho0 || 0) >= N.outClean;
-        d = clamp(L.bellyOver - crown - (off ? 1.1 : 0.25), 0.6, N.depth);
+        d = clamp(L.bellyOver - crown - (off ? 1.1 : 0.25), 0.6, depth);
       }
       L.drop = 2; L.dropT = 0; L.dropD = d + L.dropY; L.dropY0 = L.dropY;
     }
