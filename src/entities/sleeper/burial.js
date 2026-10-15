@@ -57,16 +57,16 @@ export function fitSink(L, crest) {
 }
 
 // ---- THE MOUND ----
-const NB = 128;   // bearings (the skirt's SK_COLS)
+const NB = 128, LEAN = 0.5;   // bearings (the skirt's SK_COLS); LEAN: ring 1's contour (fitMound)
 const RIN = new Float32Array(NB), RS = new Float32Array(NB);
-const _rgb = [0, 0, 0], RING = new Float32Array(NB), _mi = new THREE.Matrix4(), REND = new Float32Array(NB), RE1 = new Float32Array(NB), RE2 = new Float32Array(NB), CAPR = new Float32Array(NB);
+const _rgb = [0, 0, 0], RING = new Float32Array(NB), _mi = new THREE.Matrix4(), R1S = new Float32Array(NB), REND = new Float32Array(NB), RE1 = new Float32Array(NB), RE2 = new Float32Array(NB), CAPR = new Float32Array(NB);
 // THE DRAWN SHELL under the dune, binned (Task 3a, measured on the baked shell at home): the bake's top heightfield (L.topAt) is a
 // coarse bilinear grid, and her shell is not a smooth dome under it. Her keel's spines read +-0.5 u off it, and the lip of her
 // back is a near-vertical face (the top falls 2-4 u inside 0.5 u of run: the grid reads half-way down it), which stood 1.8 u over a
 // dune fitted to topAt alone, outside the strip. So the fit reads her DRAWN vertices too: SHN, the highest drawn shell vertex per
 // bearing (both bearings either side of it) and per radial bin (ringStep), for the strip's edge and each ring's need; VSRC, per
 // drawn vertex, whether it stands over the floor less the cover (the vertices the dune must cover). Built at the fit (an event).
-const NRAD = 160, SHN = new Float32Array(NB * NRAD), _sv = V3();
+const NRAD = 160, SHN = new Float32Array(NB * NRAD), SHO = new Float32Array(NB * NRAD), _sv = V3();
 let VSRC = new Uint8Array(0);
 // THE SAND PILE (Task 3a fix round; the controller's ruling C1: a dune fitted bearing by bearing ran out in thin rays, each bearing
 // its own length, with walls and 70 deg faces between them: a star, not drifted sand). The dune's height is a pile of sand at its
@@ -118,8 +118,10 @@ export function shellTopW(MD, x, z) {
 // where it meets the floor; the last two rings a hair under the floor (the heightfield mesh is a linear sampling of terrainH: the
 // edge must never float). Every drawn vertex outside the strip is then put under the cover (coverShell: the pile's linear
 // sampling cuts its peaks). Drawn in the seabed's own material with its vertex channels resampled (seabedColor), so dune and floor
-// read as one. Drawn-only: terrainH is untouched. Cost (measured, M5 Max headless): 11-15 ms, + prepGrowth 1.5-2.5 ms, of a 35 ms
-// re-bed. Judged by burial-probe disguise `repose` (the free sand's steepest triangle <= atan(repose) + 5 deg).
+// read as one. Drawn-only: terrainH is untouched. After coverShell and the ring smoothing the requirements go back into the pile
+// (repile) and the sand settles (settle): ring 1's contour holds its lean so the quads at the strip's ends are not slivers. Cost
+// (measured, M5 Max headless): 12-14 ms, + prepGrowth 2.5 ms, of a 37 ms re-bed. Judged by burial-probe disguise `repose` (every
+// triangle of rows 1 .. NI-1 <= a fixed 33.81 deg).
 export function fitMound(L, MD, seabedColor, fissureDist) {
   const K = BURY, R = L.R, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw), NR = MD.NR, NI = K.rings;
   L.body.updateMatrixWorld(true);
@@ -136,12 +138,14 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
     for (let q = k - 1; q <= k + 1; q++) if (q >= 0 && q < NRAD) { const v = SHN[j * NRAD + q]; if (v > m) m = v; }
     return m > -1e8 ? (t === t && t > m ? t : m) : t;
   };
-  // her DRAWN shell's top near radius r on bearing j (SHN alone), NaN where none of it is binned: a ring's need. (The heightfield's
-  // edge cells fall back on a neighbour's height, so just outside her outline it read her rim 1.3 u over the floor where the nearest
-  // drawn shell lay 3.6 u under it: a need there lifted three rings of the dune's edge 1.6 u, measured, Task 3a fix round)
+  // her DRAWN shell's top near radius r on bearing j, NaN where none of it is binned: a ring's need. SHO: only the pile's sources
+  // (outside the strip's band, over the floor less the cover). (The heightfield's edge cells fall back on a neighbour's height, so
+  // just outside her outline it read her rim 1.3 u over the floor where the nearest drawn shell lay 3.6 u under it: a need there
+  // lifted three rings of the dune's edge 1.6 u; and SHN's +-1 bin window read ring 1's need off her crest INSIDE the band, which
+  // stood ring 1 0.8 u over ring 2 at both strip ends: measured, Task 3a fix rounds)
   const shDrawn = (j, r) => {
     const k = Math.floor(r / st); let m = -1e9;
-    for (let q = k - 1; q <= k + 1; q++) if (q >= 0 && q < NRAD) { const v = SHN[j * NRAD + q]; if (v > m) m = v; }
+    for (let q = k - 1; q <= k + 1; q++) if (q >= 0 && q < NRAD) { const v = SHO[j * NRAD + q]; if (v > m) m = v; }
     return m > -1e8 ? m : NaN;
   };
   for (let j = 0; j < NB; j++) {
@@ -154,9 +158,17 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
     RIN[j] = Math.max(0.02, r);
   }
   for (let j = 0; j < NB; j++) { let s = 0; for (let q = -2; q <= 2; q++) s += RIN[(j + q + NB) % NB]; RS[j] = s / 5; }   // no corners
+  // RING 1's CONTOUR, its lean held (Task 3a fix round 2; review I1): the strip is a slender lens round C, so at its ends its edge
+  // radius falls ~1.5 u a bearing over ~0.34 u of arc, and rings started 0.6 u past it leaned 77 deg: every quad there a thin
+  // parallelogram, whose slivers (median largest angle 149 deg) stood the pile's slope up to 45-63 deg (the spokes at the strip's
+  // ends, measured). Ring 1 runs on the smallest contour outside RS + 0.6 u whose radius changes by at most LEAN x its own size per
+  // radian (r(j) = max over j' of r1(j') exp(-LEAN |j - j'| dtheta)); the strip's band (ring 0 -> 1) widens there, at the ends' flanks
+  // only (the crest's length and top did not move: 17.8 / 3.50 u). LEAN measured with the repile, no settle: 1 -> 25 faces over 33.81
+  // deg (worst 44.7), 0.7 -> 19, 0.5 -> 15 (worst 41.8, none over 45); stretching the polar frame across her keel instead was worse
+  for (let j = 0; j < NB; j++) { let m = 0; for (let q = -32; q <= 32; q++) { const v = (RS[(j + q + NB) % NB] + dl) * Math.exp(-Math.abs(q) * Math.PI * 2 / NB * LEAN); if (v > m) m = v; } R1S[j] = m; }
   // the strip's centre, then the pile round it (sources: her drawn shell outside the strip's band, over the floor less the cover)
   MD.bx = wx(0, K.crestZ); MD.bz = wz(0, K.crestZ);
-  pileUp(L, MD, dl);
+  pileUp(L, MD, dl, st);
   const C = MD.geo.attributes.color.array, rgb = _rgb, run0 = (NI - 2) * 0.1 / R;
   for (let j = 0; j < NB; j++) {
     const th = j / NB * Math.PI * 2, ux = Math.cos(th), uz = Math.sin(th), r0 = RS[j];
@@ -174,13 +186,15 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
         rLast = r;
       } else if (h < fl - 4) break;
     }
-    CAPR[j] = cap; REND[j] = Math.min(cap, Math.max(rLast + st, r0 + dl + run0));
+    CAPR[j] = cap; REND[j] = Math.min(cap, Math.max(rLast + st, R1S[j] + run0));
   }
   // the run-outs round the bearings, closed and smoothed (the max over +-3 bearings, averaged over +-3, never under a bearing's own):
   // where the pile's edge runs nearly along a bearing the run-out jumps 1.4 u from one bearing to the next, and the rings sheared
   // into slivers whose planes stood 50-75 deg (measured, Task 3a fix round); past the pile's edge the rings lie on the floor
   for (let j = 0; j < NB; j++) { let m = 0; for (let q = -3; q <= 3; q++) m = Math.max(m, REND[(j + q + NB) % NB]); RE1[j] = m; }
-  for (let j = 0; j < NB; j++) { let a2 = 0; for (let q = -3; q <= 3; q++) a2 += RE1[(j + q + NB) % NB]; RE2[j] = Math.min(CAPR[j], Math.max(REND[j], a2 / 7)); }
+  // (+ 1.5 u: the requirements put back into the pile (repile) run it out up to ~1 u farther round her shell; the dune's last rings
+  // must lie on the floor, or the step down to the buried ring is a wall)
+  for (let j = 0; j < NB; j++) { let a2 = 0; for (let q = -3; q <= 3; q++) a2 += RE1[(j + q + NB) % NB]; RE2[j] = Math.min(CAPR[j], Math.max(REND[j], a2 / 7) + 1.5 / R); }
   for (let j = 0; j < NB; j++) {
     const th = j / NB * Math.PI * 2, ux = Math.cos(th), uz = Math.sin(th), r0 = RS[j], rEnd = RE2[j];
     const set = (i, r, dk) => {
@@ -194,7 +208,8 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
     };
     set(0, r0, 0.42);
     { const h0 = topW(ux * r0, K.crestZ + uz * r0), o = j * 3; MD.M[o + 1] = (h0 === h0 ? h0 : L.meanG) - K.reveal; }
-    for (let i = 1; i < NI; i++) { const s = (i - 1) / (NI - 2); set(i, r0 + dl + (rEnd - r0 - dl) * s, 0.42 + 0.58 * Math.pow(s, 0.6)); }
+    const r1 = R1S[j];
+    for (let i = 1; i < NI; i++) { const s = (i - 1) / (NI - 2); set(i, r1 + (rEnd - r1) * s, 0.42 + 0.58 * Math.pow(s, 0.6)); }
     set(NI, rEnd + 0.4 / R, 1); set(NI + 1, rEnd + 0.8 / R, 1);
     for (const i of [NI, NI + 1]) { const o = (i * NB + j) * 3; MD.M[o + 1] = terrainH(MD.M[o], MD.M[o + 2], L.idx) - (i === NI ? 0.10 : 0.12); }
   }
@@ -202,6 +217,8 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   // bearings (5-tap average of rings 1..NI-1, never under its cover again)
   coverShell(L, MD);
   smoothRings(MD);
+  repile(L, MD);
+  settle(MD);
   // normals of the fitted dune, facing up (the seabed material is FrontSide); the floor state's normal is straight up
   MD.P.set(MD.M); MD.geo.computeVertexNormals();
   let ny = 0; const N = MD.geo.attributes.normal.array; for (let i = 1; i < N.length; i += 3) ny += N[i];
@@ -231,11 +248,11 @@ function binShell(L, MD, st) {
 }
 // THE SAND PILE (above): VSRC per drawn vertex (over the floor less the cover), the sources outside the strip's band (RS + dl at
 // its bearing) deposited at the four grid cells round them, then the chamfer passes
-function pileUp(L, MD, dl) {
+function pileUp(L, MD, dl, st) {
   const sh = L.parts.shell, P = sh.geometry.attributes.position, mw = sh.matrixWorld, cover = BURY.cover, lo = L.meanG - 2.5, R = L.R;
   const HS = 1.9 * R;                                    // (her rim ~1 R from C, a 4.5 u pile runs out ~8 u past it)
   gn = Math.min(GMAX, Math.ceil(2 * HS / GH) + 1); gh = 2 * HS / (gn - 1); gx0 = MD.bx - HS; gz0 = MD.bz - HS;
-  EH.fill(-1e9, 0, gn * gn);
+  EH.fill(-1e9, 0, gn * gn); SHO.fill(-1e9);
   if (VSRC.length < P.count) VSRC = new Uint8Array(P.count);   // (grown at a fit, an event; the shell's count only changes with the sculpt)
   for (let i = 0; i < P.count; i++) {
     VSRC[i] = 0;
@@ -246,11 +263,19 @@ function pileUp(L, MD, dl) {
     toPolar(MD, _sv.x, _sv.z);
     const f = Math.floor(_fa), t = _fa - f, b0 = f % NB, b1 = (b0 + 1) % NB;
     if (_rho < RS[b0] * (1 - t) + RS[b1] * t + dl) continue;   // (the strip's band: her crest is rock, the sand stops at its edge)
-    const fx = (_sv.x - gx0) / gh, fz = (_sv.z - gz0) / gh, ix = Math.floor(fx), iz = Math.floor(fz);
-    if (ix < 0 || iz < 0 || ix >= gn - 1 || iz >= gn - 1) continue;
-    for (let q = 0; q < 4; q++) { const c = (iz + (q >> 1)) * gn + ix + (q & 1); if (need > EH[c]) EH[c] = need; }
+    { const k = Math.floor(_rho / st); if (k < NRAD) { if (_sv.y > SHO[b0 * NRAD + k]) SHO[b0 * NRAD + k] = _sv.y; if (_sv.y > SHO[b1 * NRAD + k]) SHO[b1 * NRAD + k] = _sv.y; } }
+    deposit(_sv.x, _sv.z, need);
   }
-  // the 5 x 5 chamfer, twice each way: a cell takes (a neighbour - repose x the true step length) when that is higher
+  chamfer();
+}
+// a requirement at world (x, z) into the pile: the four cells round it (the bilinear read at it is then >= need)
+function deposit(x, z, need) {
+  const fx = (x - gx0) / gh, fz = (z - gz0) / gh, ix = Math.floor(fx), iz = Math.floor(fz);
+  if (ix < 0 || iz < 0 || ix >= gn - 1 || iz >= gn - 1) return;
+  for (let q = 0; q < 4; q++) { const c = (iz + (q >> 1)) * gn + ix + (q & 1); if (need > EH[c]) EH[c] = need; }
+}
+// the 5 x 5 chamfer, twice each way: a cell takes (a neighbour - repose x the true step length) when that is higher
+function chamfer() {
   const k = BURY.repose, w1 = k * gh, w2 = k * gh * Math.SQRT2, w3 = k * gh * Math.sqrt(5), n = gn;
   for (let rep = 0; rep < 2; rep++) {
     for (let iz = 0; iz < n; iz++) for (let ix = 0; ix < n; ix++) {
@@ -311,6 +336,82 @@ function coverShell(L, MD) {
     }
   }
   MD.uncov = un;
+}
+// THE REQUIREMENTS BACK INTO THE PILE (Task 3a fix round 2; review I1): the pile is sampled at the rings and the linear mesh cuts its
+// peaks, so the cover lifts corners back over her shell (coverShell) and the ring smoothing clamps them; a lifted corner beside its
+// sampled neighbours stood faces of up to 84 deg, 0.9 u tall, at both strip ends (the faint spokes from above). After the ring
+// smoothing, every ring vertex whose requirement stands over the pile's sample there goes into the pile as a source at its own
+// (x, z), the pile is spread again, and the rings (at the same radii: the quads coverShell read are unchanged) take its heights
+// where higher: the clamped corner's neighbours now fall from it at the repose, and the requirement holds at every corner (the
+// deposit's bilinear read is >= it). Measured (with SHO, before the ring 1 contour and the settle): over 33.81 deg 162 -> 60, worst
+// 84.2 -> 63.1 deg, none of the remaining faces clamped
+function repile(L, MD) {
+  const NI = BURY.rings, M = MD.M;
+  let n = 0;
+  for (let v = NB; v < NI * NB; v++) { const o = v * 3; if (MD.NEED[v] > pileAt(M[o], M[o + 2]) + 1e-4) { deposit(M[o], M[o + 2], MD.NEED[v]); n++; } }
+  MD.repiled = n;
+  if (!n) return;
+  chamfer();
+  for (let v = NB; v < NI * NB; v++) { const o = v * 3, h = pileAt(M[o], M[o + 2]); if (h > M[o + 1]) M[o + 1] = h; }
+}
+// THE SAND SETTLES (Task 3a fix round 2; review I1): what is left after the repile is the pile's own creases and cone tips sampled
+// on the mesh (a triangle across a crease interpolates two flanks at once: measured 34-42 deg, 15 faces, none of them clamped).
+// Raise-only, so every cover still holds: each vertex of rings 1 .. NI-2 rises to the lowest height at which every triangle round
+// it (rows 1 .. NI-1) is no steeper than the repose + SETTLE_SLACK (the smaller root of |g0 - h w|^2 = k^2; skipped where that is
+// over both its other corners: then the far edge is the steep one and its own corners rise), Gauss-Seidel sweeps alternating
+// direction until nothing moves 0.1 mm (MD.settleN, MD.settleMax: the largest raise). Ring 0 (in the rock), the dune's last ring
+// (where it meets the floor) and the buried rings are fixed. THE SLACK IS LOAD-BEARING: a raise travels downhill, shrinking by
+// (k_settle - the pile's slope) per unit run, so at the repose itself it ran out to the dune's edge and stood it 2 u over the floor;
+// at + 3 deg it still ran 1 u (faces of 66 deg at ring 12); at + 4.2 deg (33.0 deg; the probe's bar is a fixed 33.81) it stops
+// within a ring or two: 1 sweep, largest raise 0.32 u, worst face 33.01 deg (measured at home)
+// (SETTLE_CAP u: no vertex rises more than this over its pile height, so a raise that will not die out is booked as a steep face the
+// probe sees, never a 2 u shelf at the dune's edge. Not a guarantee off the shipped knobs: at repose 0.45 the raise ran 1 u to ring
+// 12 and stood 63 deg faces there, measured; a repose change re-runs burial-probe disguise)
+const SETTLE_SWEEPS = 64, SETTLE_SLACK = 4.2 * Math.PI / 180, SETTLE_CAP = 0.5;
+let M0 = new Float32Array(0);
+let _ks = 0;
+function lowFrom(M, v, a, b, lo) {
+  const vx = M[v * 3], vz = M[v * 3 + 2], base = M[v * 3 + 1];
+  const eax = M[a * 3] - vx, eaz = M[a * 3 + 2] - vz, ebx = M[b * 3] - vx, ebz = M[b * 3 + 2] - vz, det = eax * ebz - eaz * ebx;
+  if (Math.abs(det) < 1e-9) return lo;
+  const ra = M[a * 3 + 1] - base, rb = M[b * 3 + 1] - base, k = _ks;
+  const g0x = (ebz * ra - eaz * rb) / det, g0z = (eax * rb - ebx * ra) / det, wx = (ebz - eaz) / det, wz = (eax - ebx) / det;
+  const A = wx * wx + wz * wz, B = g0x * wx + g0z * wz, C = g0x * g0x + g0z * g0z - k * k, disc = B * B - A * C;
+  if (!(A > 0) || disc < 0) return lo;                   // (the far edge alone is steeper: its own corners rise instead)
+  const d = (B - Math.sqrt(disc)) / A;
+  if (d > Math.max(ra, rb)) return lo;                   // (only over both its neighbours: the far edge is the steep one; it rises)
+  return base + d > lo ? base + d : lo;
+}
+function settle(MD) {
+  const NI = BURY.rings, nb = NB, M = MD.M;
+  if (M0.length < NB * MD.NR) M0 = new Float32Array(NB * MD.NR);   // (grown at a fit, an event)
+  for (let v = 0; v < NB * MD.NR; v++) M0[v] = M[v * 3 + 1];
+  _ks = Math.tan(Math.atan(BURY.repose) + SETTLE_SLACK);
+  let n = 0, top = 0;
+  for (; n < SETTLE_SWEEPS; n++) {
+    let mx = 0;
+    const fwd = (n & 1) === 0;
+    for (let ii = 1; ii < NI - 1; ii++) {                 // (rings 1 .. NI-2: the dune's last ring stays where it meets the floor)
+      const i = fwd ? ii : NI - 1 - ii;
+      for (let jj = 0; jj < nb; jj++) {
+        const j = fwd ? jj : nb - 1 - jj, v = i * nb + j, jm = (j - 1 + nb) % nb, jp = (j + 1) % nb, h = M[v * 3 + 1];
+        // the six triangles round v (makeMound: quad (r, c) is a (r, c) b (r, c+1) c (r+1, c) d (r+1, c+1); triangles a b c, b d c)
+        let lo = h;
+        lo = lowFrom(M, v, i * nb + jp, (i + 1) * nb + j, lo);                  // v = a of quad (i, j)
+        lo = lowFrom(M, v, i * nb + jm, (i + 1) * nb + jm, lo);                 // v = b of quad (i, j-1): a b c
+        lo = lowFrom(M, v, (i + 1) * nb + j, (i + 1) * nb + jm, lo);            // v = b of quad (i, j-1): b d c
+        if (i >= 2) {
+          lo = lowFrom(M, v, (i - 1) * nb + j, (i - 1) * nb + jp, lo);          // v = c of quad (i-1, j): a b c
+          lo = lowFrom(M, v, (i - 1) * nb + jp, i * nb + jp, lo);               // v = c of quad (i-1, j): b d c
+          lo = lowFrom(M, v, (i - 1) * nb + j, i * nb + jm, lo);                // v = d of quad (i-1, j-1): b d c
+        }
+        if (lo > M0[v] + SETTLE_CAP) lo = M0[v] + SETTLE_CAP;
+        if (lo > h) { M[v * 3 + 1] = lo; if (lo - h > mx) mx = lo - h; if (lo - M0[v] > top) top = lo - M0[v]; }
+      }
+    }
+    if (mx < 1e-4) break;
+  }
+  MD.settleN = n; MD.settleMax = top;
 }
 // rings 1..NI-1: a 5-tap average round the ring, never under the vertex's own need (the cover over her shell, the floor)
 function smoothRings(MD) {
