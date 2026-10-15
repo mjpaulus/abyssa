@@ -1687,7 +1687,7 @@ if (mode === 'rise') {
   // gardens, props, physics debris), every resource node, the wrecks' sites and the three lairs
   // keep >= 6 u + their own radius off the lip (fissureDist is negative inside the crack).
   // Velkath: her lair centre (radius R), her whole REST OUTLINE (every shell vertex) >= 6 u, her silt
-  // skirt never over the lip (>= 1 u), her near flank (L.nearFlank, Task 6's harpoon side) out on
+  // skirt (buried: the mound, L.mound.mesh) never over the lip (>= 1 u), her near flank (L.nearFlank, Task 6's harpoon side) out on
   // open walkable sand.
   // (seafloor relief Task 7) Her near flank's normal.y >= 0.8 holds on her levelled flat (2026-10-13: home 1.00 on the
   // relief, 0.96 on main). RED (Ruling 32; FP_MUTANT {"hollow":{"sDrop":-14,"sR":[8,24]}}: her flat a mound 18 u up whose
@@ -1735,8 +1735,10 @@ if (mode === 'rise') {
           let om = 1e9;
           for (let i = 0; i < P.count; i += 3) { v.fromBufferAttribute(P, i).applyMatrix4(mw); om = Math.min(om, S.fissureDist(v.x, v.z, zi)); }
           if (om < 6) out.push({ site, zi, n: 'velkath outline', d: +om.toFixed(1) });
+          // (velkath-buried-rock Task 3a) buried she has no silt drift: the MOUND grown over her is the drift there (burial.js), same bar
           let sm = 1e9;
-          if (L.skirt) { const Q = L.skirt.geometry.attributes.position; for (let i = 0; i < Q.count; i++) sm = Math.min(sm, S.fissureDist(Q.getX(i), Q.getZ(i), zi)); }
+          const drift = L.skirt || (L.mound && L.mound.mesh);
+          if (drift) { const Q = drift.geometry.attributes.position; for (let i = 0; i < Q.count; i++) sm = Math.min(sm, S.fissureDist(Q.getX(i), Q.getZ(i), zi)); }
           if (sm < 1) out.push({ site, zi, n: 'velkath skirt', d: +sm.toFixed(1) });
           const nf = L.nearFlank, fd = nf ? S.fissureDist(nf.x, nf.z, zi) : -1e9;
           const ny = nf ? T.terrainNormal(nf.x, nf.z, zi).y : 0;

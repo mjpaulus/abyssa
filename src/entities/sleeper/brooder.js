@@ -34,7 +34,7 @@ import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos,
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
-import { BURY, fitSink } from './burial.js';
+import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth } from './burial.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -693,6 +693,8 @@ export function makeBrooder(idx, cfg) {
     else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L); else poseAll(L, 0, null); } });
   }
   const pd = L.onDispose;
+  // (pd holds makeMound's link when she is buried: the mound's mesh lifted out of L.grp, its geometry disposed, before disposeSleeper
+  // frees the seabed's SHARED material, as the skirt's link does)
   L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
   return L;
 }
@@ -706,7 +708,8 @@ function seatRite(L, noHarpoon = false) {
 
 // HER BED, in the order the burial needs (velkath-buried-rock): the clutch rests on the floor of her UNSUNK pose (so after a calm her
 // tongue of eggs lies on the sand exactly as shipped, and buried it is under the floor with her); then the sink, then (Task 3a) the
-// mound over the sunk pose, then (Task 4) the harpoon on the crest. Called only when L.buried: the shipped paths keep their own lines.
+// mound over the sunk pose and the growth on her back buried under it, then (Task 4) the harpoon on the crest. Called only when
+// L.buried: the shipped paths keep their own lines.
 function bedDown(L, noHarpoon = false) {
   L.bury = 0; poseAll(L, 0, null);
   if (L.brood) L.brood.seat();
@@ -714,6 +717,13 @@ function bedDown(L, noHarpoon = false) {
   L.bury = 1;
   for (let li = 0; li < 8; li++) { const f = L.feet[li]; restWorld(L, li, f.planted); f.cur.copy(f.planted); f.t = -1; }   // the feet sunk now, not over a second
   poseAll(L, 0, null);
+  // THE MOUND (burial.js): the dune of the seabed's own material grown over her sunk shell, a strip of her crest left showing; built
+  // once (its mesh in L.grp, lifted out before her dispose: makeMound chains L.onDispose), re-fitted at every bed
+  if (terrainMeshes[L.idx]) {
+    if (!L.mound) L.mound = makeMound(L, terrainMeshes[L.idx].material);
+    fitMound(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
+    prepGrowth(L, L.mound);
+  }
   if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
 }
 
@@ -1958,6 +1968,9 @@ export function updateBrooder(L, dt, t, player) {
   }
   if (!L.pPrev) L.pPrev = player.pos.clone();
   sight(L, dt, player, ev);
+  // (velkath-buried-rock) the mound: the tell's breath and trickle, the dune drawn at L.bury (L.moundK: the rise, Task 7a), the growth
+  // outside the strip hidden while she is buried (a write only on the frame bury crosses 0.5). Only a buried build has a mound
+  if (L.mound) { breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY); buryGrowth(L, L.bury > 0.5); }
   L.t += dt;
   L.uni.uTime.value = L.t;
   const R = L.R;

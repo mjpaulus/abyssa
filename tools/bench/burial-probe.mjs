@@ -11,7 +11,9 @@
 //             grid; bar 3.0-4.0 u), length along her keel (bar 16-24 u). THE CLUTCH (Task 6 on): every live lobe's top (r x
 //             1.25) <= -0.05 u under the sand. THE HARPOON (Task 4 on): the seam >= +0.25 u, every pole sample >= 0 u over the
 //             DRAWN SAND (terrain or dune, never the crest: harpoon.js seat()'s own test). THE GROWTH ON HER BACK (Task 3a on):
-//             every reef and weed vertex OUTSIDE the strip <= 0 over the sand (inside it, growth on a rock is allowed).
+//             every DRAWN reef and weed vertex OUTSIDE the strip <= 0 over the sand (inside it, growth on a rock is allowed);
+//             buried, burial.js hides the growth outside the strip, so none drawn there passes; n = every growth vertex examined
+//             (the vacuity floor), nOut = those drawn outside the strip.
 //             BP_CHECK=<comma list> limits the verdict to those checks (the tasks before the mound check height / limbs only).
 //   breath    THE TELL (Task 3a; spec §1 "Every 8-10 s the sand over her lifts a few centimetres and settles", "visible only
 //             within about 8 u"). Home, her asleep: he is stood 6 u off the strip's edge on her SAND side, facing it (__bench.place,
@@ -95,9 +97,10 @@ const DISGUISE = `(async () => {
   const inv = new THREE.Matrix4().copy(L.body.matrixWorld).invert(), v = new THREE.Vector3(), lv = new THREE.Vector3();
   const m = new THREE.Matrix4(), m2 = new THREE.Matrix4();
   const stripEll = (lx, lz) => { const a = BD.crestW / 2 / L.R, b = BD.crestL / 2 / L.R, q = lz - BD.crestZ; return (lx / a) ** 2 + (q / b) ** 2 < 1; };
-  const inStrip = (x, z) => B && B.inStrip ? B.inStrip(x, z) : (lv.set(x, L.bodyY, z).applyMatrix4(inv), stripEll(lv.x, lv.z));
+  // (the mound's strip where she has one; with none (main, BP_RED=ridge's {on:0} rebuild) the default ellipse, as main reads it)
+  const inStrip = (x, z) => B && B.inStrip && L.mound ? B.inStrip(x, z) : (lv.set(x, L.bodyY, z).applyMatrix4(inv), stripEll(lv.x, lv.z));
   const worst = {}, n = {};
-  const book = (part, x, y, z) => { const d = y - sand(x, z); n[part] = (n[part] || 0) + 1;
+  const book = (part, x, y, z) => { const d = y - sand(x, z); if (part !== 'reef' && part !== 'weed') n[part] = (n[part] || 0) + 1;
     if (!(part in worst) || d > worst[part].d) worst[part] = { d: +d.toFixed(3), at: [+x.toFixed(1), +y.toFixed(1), +z.toFixed(1)] }; };
   const mesh = (part, o, stride = 1) => { o.updateMatrixWorld(true); const P = o.geometry.attributes.position;
     const each = mw => { for (let i = 0; i < P.count; i += stride) { v.fromBufferAttribute(P, i).applyMatrix4(mw); book(part, v.x, v.y, v.z); } };
@@ -107,13 +110,18 @@ const DISGUISE = `(async () => {
   mesh('eyes', L.parts.eyes); if (L.parts.stalks) mesh('eyes', L.parts.stalks);
   for (const q of L.mouth) mesh('mouth', q.hook, 3);
   for (const g of L.sigils) book('wards', g.grp.position.x, g.grp.position.y, g.grp.position.z);
-  // the growth on her back, outside the strip only (a sea fan standing out of a dune is a tell; on the rock it is growth)
-  const grow = (part, o) => { o.updateMatrixWorld(true); const P = o.geometry.attributes.position, I = o.geometry.index;
-    const at = (i, mw) => { v.fromBufferAttribute(P, i).applyMatrix4(mw); if (!inStrip(v.x, v.z)) book(part, v.x, v.y, v.z); };
-    if (o.isInstancedMesh) { for (let k = 0; k < o.count; k++) { o.getMatrixAt(k, m); if (m.elements[0] === 0 && m.elements[5] === 0) continue;   // (a buried frond: scale 0)
+  // the growth on her back, outside the strip only (a sea fan standing out of a dune is a tell; on the rock it is growth). n counts
+  // EVERY vertex of the growth examined, drawn or not (the vacuity floor is the growth itself: buried, the growth outside the strip
+  // is hidden and books nothing, which is the best outcome, not a missing measurement); every DRAWN vertex outside the strip is booked
+  // (out[part]), the reef's by its drawn index (all three corners of every drawn triangle), a frond's unless it is scaled to 0
+  const outN = {}, grow = (part, o) => { o.updateMatrixWorld(true); const P = o.geometry.attributes.position, I = o.geometry.index;
+    const at = (i, mw) => { v.fromBufferAttribute(P, i).applyMatrix4(mw); if (!inStrip(v.x, v.z)) { outN[part] = (outN[part] || 0) + 1; book(part, v.x, v.y, v.z); } };
+    if (o.isInstancedMesh) { for (let k = 0; k < o.count; k++) { o.getMatrixAt(k, m); n[part] = (n[part] || 0) + Math.ceil(P.count / 2);
+      if (m.elements[0] === 0 && m.elements[5] === 0) continue;   // (a buried frond: scale 0)
       m2.multiplyMatrices(o.matrixWorld, m); for (let i = 0; i < P.count; i += 2) at(i, m2); } }
-    else if (I) { const ix = I.array; for (let q = 0; q < ix.length; q += 3) at(ix[q], o.matrixWorld); }   // (the index DRAWN: buried, burial.js swaps in the strip's own)
-    else for (let i = 0; i < P.count; i += 2) at(i, o.matrixWorld); };
+    else if (I) { const ix = I.array, seen = new Uint8Array(P.count); for (let q = 0; q < ix.length; q++) seen[ix[q]] = 1;   // (the index DRAWN: buried, burial.js swaps in the strip's own)
+      n[part] = (n[part] || 0) + P.count; for (let i = 0; i < P.count; i++) if (seen[i]) at(i, o.matrixWorld); }
+    else { n[part] = (n[part] || 0) + Math.ceil(P.count / 2); for (let i = 0; i < P.count; i += 2) at(i, o.matrixWorld); } };
   if (L.parts.reef) grow('reef', L.parts.reef);
   if (L.parts.weed) grow('weed', L.parts.weed);
   // her shell: sides vs crest
@@ -127,7 +135,7 @@ const DISGUISE = `(async () => {
   for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) { const lx = (-0.8 + 0.4 * i) * L.R, lz = (-0.84 + 0.425 * j) * L.R;
     g += T.terrainH(L.pos.x + lx * cy + lz * sy, L.pos.z - lx * sy + lz * cy, 0); }
   g /= 25;
-  const out = { worst, n, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, buried: !!(B && L.buried), bury: L.bury ?? null };
+  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, buried: !!(B && L.buried), bury: L.bury ?? null };
   // (Task 6) the clutch, (Task 4) the harpoon: added there
   return out; })()`;
 
@@ -302,7 +310,10 @@ const hasSand = !!record.hasSand;
 const checks = [];
 const part = (name, bar) => { const w = out.worst[name], n = out.n[name] || 0; checks.push({ name, val: w ? w.d : null, at: w ? w.at : null, n, bar, ok: !!w && w.d <= 0, vacuous: !w || n === 0, judged: true }); };
 for (const p of ['legs', 'claws', 'eyes', 'mouth', 'wards']) part(p, '<= 0');
-for (const p of ['reef', 'weed']) { part(p, '<= 0 (outside the strip)'); checks[checks.length - 1].judged = hasSand; }   // (from Task 3a on: before the dune covers her flanks they stand on the floor's level by design)
+// (from Task 3a on: before the dune covers her flanks they stand on the floor's level by design.) n = the growth's vertices examined
+// (the vacuity floor); nOut = those DRAWN outside the strip; none drawn there passes (the growth outside the strip is buried)
+for (const p of ['reef', 'weed']) { const w = out.worst[p], n = out.n[p] || 0, nOut = (out.outN || {})[p] || 0;
+  checks.push({ name: p, val: w ? w.d : null, at: w ? w.at : null, n, nOut, bar: '<= 0 (drawn, outside the strip)', ok: n > 0 && (!w || w.d <= 0), vacuous: n === 0, judged: hasSand }); }
 checks.push({ name: 'sides', val: out.sides.d, at: out.sides.at, bar: '<= +0.02', ok: out.sides.at != null && out.sides.d <= 0.02, vacuous: out.sides.at == null, judged: true });
 // no shell vertex over the sand in the strip = no crest at all: a finding (the bar fails), not a missing measurement
 checks.push({ name: 'top', val: out.crest.n ? out.crest.top : null, n: out.crest.n, bar: '3.0 - 4.0 u', ok: out.crest.n > 0 && out.crest.top >= 3.0 && out.crest.top <= 4.0, vacuous: false, judged: true });
@@ -312,7 +323,7 @@ for (const k of checks) if (ONLY) k.judged = ONLY.includes(k.name);
 for (const need of ONLY || []) if (!checks.some(k => k.name === need)) { console.error(`UNMEASURED: BP_CHECK ${need} is not built into this probe yet`); finish(2, 'BP_CHECK ' + need + ' not built'); }
 record.checks = checks;
 console.log(`DISGUISE ${JSON.stringify({ ...out, checks: checks.map(k => ({ name: k.name, val: k.val, ok: k.ok, judged: k.judged })) })}`);
-for (const k of checks) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(6)} ${k.val == null ? 'n/a' : k.val} (bar ${k.bar}; n ${k.n ?? '-'}${k.at ? '; worst at ' + JSON.stringify(k.at) : ''})${k.judged ? '' : ' [not judged here]'}`);
+for (const k of checks) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(6)} ${k.val == null ? 'n/a' : k.val} (bar ${k.bar}; n ${k.n ?? '-'}${k.nOut != null ? '; drawn outside the strip ' + k.nOut : ''}${k.at ? '; worst at ' + JSON.stringify(k.at) : ''})${k.judged ? '' : ' [not judged here]'}`);
 const judged = checks.filter(k => k.judged);
 const vac = judged.filter(k => k.vacuous);
 if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous: ' + vac.map(k => k.name).join(',')); }
