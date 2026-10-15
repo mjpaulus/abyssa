@@ -1176,6 +1176,12 @@ const DECK_PIVOT = 0.4;
 // (her limbs' last motion is stale).
 const SALCAP = { lo: -1.25, hi: 0.55, r: 1.05 };   // his body for the lens (player.pos is ~1.35 over his boots)
 let salCapPush = 0;
+// (lensfix, dev) THE LENS'S STAGES, booked only while window.__crecamDbg is true (read by tools, never by play): the
+// distance from his pivot (the top of his helmet, player.pos + DECK_PIVOT) of the target after every offset (tgt), of
+// the lens after the spring and the burst's lerp (spring), after the body guard (guard), at the end (final); the
+// burst's kick, the chosen lift, the chosen line's clear length (raw, before minD), the boom (cd)
+const CREDBG = { on: false, tgt: 0, spring: 0, guard: 0, final: 0, kick: 0, liftT: 0, raw: 0, cd: 0, guardOn: 0 };
+const credPiv = p => Math.hypot(p.x - player.pos.x, p.y - player.pos.y - DECK_PIVOT, p.z - player.pos.z);
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2 };
 let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
@@ -1387,7 +1393,7 @@ function clawFrame(dt) {
 }
 window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone(),
   lookNetDeg: clawOpen ? +((Math.abs(player.yaw - clawY0) + Math.abs(player.pitch - clawP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(clawPath * 57.29578).toFixed(2), recentDeg: +(clawRecent * 57.29578).toFixed(2) }) };
-window.__crecam = { knobs: CRECAM, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY) }) };
+window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -1757,6 +1763,7 @@ window.__swimCam = SWIMCAM;
 window.__swimCamState = () => ({ k: +swimCamK.toFixed(3), held: +swimCamHeld.toFixed(2) });
 
 function updateCamera(dt, t, fwd) {
+  CREDBG.on = window.__crecamDbg === true;
   const zi = zone < 0 ? 0 : zone;
   const speed = player.vel.length();
   bossFrame(dt);
@@ -1851,7 +1858,8 @@ function updateCamera(dt, t, fwd) {
       if (bestF < 2 && curF >= 0 && bestF < curF + 0.12) bestL = creLiftT;
       creLiftT = bestL;
       camTo.copy(camBack).multiplyScalar(base); camTo.y += CAM_UP + bossLift - CRECAM.under * creUnder + creLift - DECK_PIVOT;
-      const cw = Math.max(CRECAM.minD, base * creBoomClear(_piv, camTo));
+      const raw = base * creBoomClear(_piv, camTo), cw = Math.max(CRECAM.minD, raw);
+      if (CREDBG.on) CREDBG.raw = raw;
       // in at once; out only once the line has stayed clear for a beat
       if (cw < creHold - 0.05) { creHold = cw; creHoldT = 0; }
       // (while she is hammering the claw crosses the line every blow: the boom stays in for a
@@ -2057,6 +2065,7 @@ function updateCamera(dt, t, fwd) {
   // Leading the target is not enough on its own: the spring needs ~0.31 s to respond and
   // the whole burst is 0.26 s. Close the rest of the gap directly, scoped to the kick.
   if (camKick > 0) camera.position.lerp(camDesired, Math.min(1, 7 * camKick * dt));
+  if (CREDBG.on) { CREDBG.tgt = credPiv(camDesired); CREDBG.spring = credPiv(camera.position); CREDBG.kick = camKick; CREDBG.liftT = creLiftT; CREDBG.cd = camDist; CREDBG.guardOn = 0; }
 
   // the yank: the frame is jerked along the line with him and settles inside ~0.3 s
   if (camYank.x !== 0 || camYank.v !== 0) {
@@ -2220,7 +2229,9 @@ function updateCamera(dt, t, fwd) {
     camVel.lerp(player.vel, Math.min(1, 10 * dt));
     creStops++;
     creAheadK = 0;
+    if (CREDBG.on) CREDBG.guardOn = 1;
   }
+  if (CREDBG.on) CREDBG.guard = credPiv(camera.position);
   // aim slightly ahead of travel so fast movement leads the frame
   // Aim tracks the look direction almost immediately. Heavy smoothing here reads as
   // mouse lag, which is far more objectionable than a little jitter.
@@ -2282,6 +2293,7 @@ function updateCamera(dt, t, fwd) {
       salCapPush++;
     }
   }
+  if (CREDBG.on) CREDBG.final = credPiv(camera.position);
   camLook.lerp(camAim, Math.min(1, 40 * dt));
   camera.lookAt(camLook);
   if (hk > 0) {
