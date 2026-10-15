@@ -29,15 +29,20 @@
 //                     (clear of her ground). `disguise` is geometry only and does not place him (the value is still checked).
 //   BP_NOPLUG=1       the drift RED: plug(c, { stop: false }), the counter on and clock.stop() skipped. It must print CLOCK LOST
 //                     with a NUMERIC drift over 0.05 s (exit 4). A missing reading is exit 2 and is not the RED.
-//   BP_CHECK=<list>   disguise: legs,claws,eyes,mouth,wards,reef,weed,sides,top,len (crest = top + len),clutch,harpoon
+//   BP_CHECK=<list>   disguise: legs,claws,eyes,mouth,wards,reef,weed,sides,top,len (crest = top + len; height = top, the crest's
+//                     height alone, as the plan's briefs name it),clutch,harpoon
 //   BP_OUT=<file>     the JSON (default ~/sc/.abyssa-wt/reviews/buried/burial-<mode>-<tag>.json); BP_TAG=<tag> (default port<port>)
-const P = +process.env.DRV_PORT; if (!Number.isInteger(P) || [8777, 8790, 9419].includes(P)) { console.error('burial-probe: set DRV_PORT to a port of its own (not 8777 / 8790 / 9419)'); process.exit(2); }
+// (an empty DRV_PORT is +'' = 0, an integer: the port must be all digits and inside 1024-65535, as drv.mjs's start() demands)
+const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
+if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error(`burial-probe: set DRV_PORT to a port of its own, an integer in 1024-65535 (not 8777 / 8790 / 9419; got ${JSON.stringify(process.env.DRV_PORT)})`); process.exit(2); }
 const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BUILT = ['disguise'];
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/burial-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 if (!BUILT.includes(MODE)) { console.error(`burial-probe: mode ${MODE} is not built yet (a later task of the velkath-buried-rock plan adds it)`); process.exit(2); }
-// (the header's `crest` for `ridge` is read as the crest HEIGHT (`top`): main's ridge is 19.8 u long, inside 16-24, so `len` can never fail for it.
-// Task 1 ledger: the literal reading (sides + top + len must all fail) exits 3 on main. The controller rules whether this narrowing stands)
+// (ridge's `crest`: RULED (controller, Task 1 ledger) as the crest GROUP, which fails if its top OR its length fails. main's ridge is
+// 19.8 u long, inside 16-24, so `len` can never fail for it and the group fails on `top` alone: bars ['sides', 'top'] are the same
+// verdict on the shipped ridge, nothing loosened (its top, 8.02 u, and its sides, +6.62 u, are what make it a ridge). A crest with
+// n 0 (no shell vertex over the sand in the strip) is FAIL, not UNMEASURED: also ruled there)
 const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], mainIsIt: true }, shallow: { set: { crest: 5.5 }, bars: ['top'] } } };
 const RED = process.env.BP_RED || '';
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -48,9 +53,9 @@ if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } ca
 const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'clutch', 'harpoon'];
 let ONLY = null;
 if (process.env.BP_CHECK) {
-  ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : [s]);
+  ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : [s]);
   const bad = ONLY.filter(s => !CHECKS.includes(s));
-  if (bad.length || !ONLY.length) { console.error(`BP_CHECK: ${CHECKS.join(',')},crest (got ${JSON.stringify(process.env.BP_CHECK)})`); process.exit(2); }
+  if (bad.length || !ONLY.length) { console.error(`BP_CHECK: ${CHECKS.join(',')},crest,height (got ${JSON.stringify(process.env.BP_CHECK)})`); process.exit(2); }
 }
 
 const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import('node:fs');
@@ -124,17 +129,28 @@ const finish = (code, why) => {
   try { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(record, null, 1)); console.log('JSON ' + OUT); } catch (e) { console.error('could not write ' + OUT + ': ' + e.message); }
   process.exit(code);
 };
-chromeStarted = true;
-await start('about:blank');
-const c = await connect();
-await c.send('Runtime.enable'); await c.send('Log.enable'); await c.send('Page.enable');
-await c.send('Emulation.setFocusEmulationEnabled', { enabled: true });
-const URL0 = `http://localhost:${PORT}/?bench&playtest`, tNav = Date.now();
-await c.send('Page.navigate', { url: URL0 });
-await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__chart && !!window.lev`, 300000, 500);
-console.log(`burial-probe ${MODE}${RED ? ' RED ' + RED : ''}${record.noplug ? ' NOPLUG' : ''} ${URL0} (fresh profile): loaded in ${((Date.now() - tNav) / 1000).toFixed(1)} s`);
-await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
-await sleep(1000);
+// a boot that never got to the game (Chrome would not start, no CDP connection, the page never loaded: a game port nobody
+// serves waits out the 300 s) is UNMEASURED with its JSON, never exit 1, which would read as a failed bar
+const URL0 = `http://localhost:${PORT}/?bench&playtest`;
+let c = null;
+try {
+  chromeStarted = true;
+  await start('about:blank');
+  c = await connect();
+  await c.send('Runtime.enable'); await c.send('Log.enable'); await c.send('Page.enable');
+  await c.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  const tNav = Date.now();
+  await c.send('Page.navigate', { url: URL0 });
+  await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__chart && !!window.lev`, 300000, 500);
+  console.log(`burial-probe ${MODE}${RED ? ' RED ' + RED : ''}${record.noplug ? ' NOPLUG' : ''} ${URL0} (fresh profile): loaded in ${((Date.now() - tNav) / 1000).toFixed(1)} s`);
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  await sleep(1000);
+} catch (e) {
+  const why = String(e && e.message || e);
+  console.error('UNMEASURED: boot: ' + why);
+  try { if (c) c.close(); } catch (e2) { }
+  finish(2, 'boot: ' + why);
+}
 
 // ---- the clock is plugged once the page is up; then home, zone 0, her asleep ----
 let out = null, fatal = null;
@@ -151,7 +167,8 @@ try {
   if (!hasBurial && RED && REDS[MODE][RED].mainIsIt) console.log(`BP_RED ${RED}: no __burial on this build, which already IS the shipped ridge: the unpatched reading is the RED`);
   if (Object.keys(patch).length) {
     if (!hasBurial) throw new Error(`BP_KNOBS / BP_RED patch ${JSON.stringify(patch)}, but this build has no __burial.set: nothing to act on`);
-    await c.ev(`(window.__burial.set(${JSON.stringify(patch)}), window.__bench.step(30), 1)`);
+    // (awaited: a `crest` key makes set() import site.js before it rebuilds her, so an unawaited call stepped the OLD sleeper)
+    await c.ev(`(await window.__burial.set(${JSON.stringify(patch)}), window.__bench.step(30), 1)`);
     record.patch = patch;
   }
   if (MODE === 'disguise') {
@@ -168,6 +185,7 @@ c.close();
 // ---- the verdicts: UNMEASURED (2) and LOST (4) come before any bar ----
 if (fatal) { console.error('UNMEASURED: page-side throw: ' + fatal); finish(2, 'throw: ' + fatal); }
 if (out && out.err) { console.error('UNMEASURED: ' + out.err); finish(2, out.err); }
+if (!out) { console.error('UNMEASURED: the page returned no reading (no out, no err)'); finish(2, 'no reading'); }
 if (unmeasured(clock)) { console.error('UNMEASURED: no clock reading ' + JSON.stringify(clock)); finish(2, 'no clock reading'); }
 record.disguise = out;
 if (lost(clock)) {
