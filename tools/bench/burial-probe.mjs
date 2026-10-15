@@ -14,6 +14,15 @@
 //             every DRAWN reef and weed vertex OUTSIDE the strip <= 0 over the sand (inside it, growth on a rock is allowed);
 //             buried, burial.js hides the growth outside the strip, so none drawn there passes; n = every growth vertex examined
 //             (the vacuity floor), nOut = those drawn outside the strip.
+//             THE REPOSE (Task 3a fix round, pre-registered on 86fd2ba BEFORE the envelope fit was written; the controller's ruling C1):
+//             the drawn dune's free sand is never steeper than drifted sand lies. Every triangle of the mound's quad rows 1 .. NI-1
+//             (ring 1, the dune's first, out to the first buried ring; row 0 is the strip's band where sand meets rock) is judged by
+//             its plane's steepest slope in ANY direction, in degrees, unless it lies in THE SHELL-COVER ZONE (the quads within 1 ring
+//             and 3 bearings of a quad over a drawn shell vertex outside the strip whose height + BURY.cover stands over the floor:
+//             there her shell holds the sand up, at the cover, as steep as she is) or wholly under the floor (all corners 5 mm
+//             under terrainH: not drawn). A plan-degenerate triangle with more than 5 mm of height to it is a wall: 90 deg. Bar:
+//             max <= atan(BURY.repose) + 5 deg (0.55 -> 28.81 + 5 = 33.81 deg); >= 200 triangles judged, else UNMEASURED. Every
+//             judged triangle [row, bearing, half, deg] goes to the JSON. Judged only where she has a mound.
 //             BP_CHECK=<comma list> limits the verdict to those checks (the tasks before the mound check height / limbs only).
 //   breath    THE TELL (Task 3a; spec §1 "Every 8-10 s the sand over her lifts a few centimetres and settles", "visible only
 //             within about 8 u"). Home, her asleep: he is stood 6 u off the strip's edge on her SAND side, facing it (__bench.place,
@@ -43,7 +52,7 @@
 //                     (clear of her ground). `disguise` is geometry only and does not place him (the value is still checked).
 //   BP_NOPLUG=1       the drift RED: plug(c, { stop: false }), the counter on and clock.stop() skipped. It must print CLOCK LOST
 //                     with a NUMERIC drift over 0.05 s (exit 4). A missing reading is exit 2 and is not the RED.
-//   BP_CHECK=<list>   disguise: legs,claws,eyes,mouth,wards,reef,weed,sides,top,len (crest = top + len; height = top, the crest's
+//   BP_CHECK=<list>   disguise: legs,claws,eyes,mouth,wards,reef,weed,sides,top,len,repose (crest = top + len; height = top, the crest's
 //                     height alone, as the plan's briefs name it),clutch,harpoon
 //   BP_OUT=<file>     the JSON (default ~/sc/.abyssa-wt/reviews/buried/burial-<mode>-<tag>.json); BP_TAG=<tag> (default port<port>)
 // (an empty DRV_PORT is +'' = 0, an integer: the port must be all digits and inside 1024-65535, as drv.mjs's start() demands)
@@ -65,7 +74,7 @@ const AT = process.env.BP_AT || '';
 if (AT && !['anchor', 'crest', 'off'].includes(AT)) { console.error(`BP_AT: anchor | crest | off (got ${JSON.stringify(AT)})`); process.exit(2); }
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
-const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'clutch', 'harpoon'];
+const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'repose', 'clutch', 'harpoon'];
 let ONLY = null;
 if (process.env.BP_CHECK) {
   ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : [s]);
@@ -135,7 +144,49 @@ const DISGUISE = `(async () => {
   for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) { const lx = (-0.8 + 0.4 * i) * L.R, lz = (-0.84 + 0.425 * j) * L.R;
     g += T.terrainH(L.pos.x + lx * cy + lz * sy, L.pos.z - lx * sy + lz * cy, 0); }
   g /= 25;
-  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, buried: !!(B && L.buried), bury: L.bury ?? null };
+  // THE REPOSE (header; pre-registered in the Task 3a fix round before the envelope was built): the drawn dune's FREE sand, every
+  // triangle of quad rows 1 .. NI-1 (ring 1 out to the first buried ring) outside the shell-cover zone and not wholly under the floor
+  let repose = null;
+  if (L.mound && B && B.knobs && B.knobs.repose) {
+    const MD = L.mound, NB = MD.COLS, NR = MD.NR, NI = NR - 2, Pm = MD.P, RR = MD.RR, cover = B.knobs.cover, DT = Math.PI * 2 / NB, SD = Math.sin(DT);
+    const barDeg = +(Math.atan(B.knobs.repose) * 180 / Math.PI + 5).toFixed(2);
+    // the mesh's quad over (x, z), row * NB + column, or -1: its bearings are rays from C, its ring edges chords between them
+    const quadOf = (x, z) => {
+      const dx = x - MD.cx, dz = z - MD.cz, lx = (dx * MD.c - dz * MD.s) / MD.R, qz = (dx * MD.s + dz * MD.c) / MD.R - MD.crestZ, rho = Math.hypot(lx, qz);
+      let a = Math.atan2(qz, lx) / (Math.PI * 2); if (a < 0) a += 1;
+      const fa = a * NB, b0 = Math.floor(fa) % NB, b1 = (b0 + 1) % NB, t = fa - Math.floor(fa), sa = Math.sin(t * DT), sb = Math.sin((1 - t) * DT);
+      const rr = i => { const r0 = RR[b0 * NR + i], r1 = RR[b1 * NR + i]; return r0 * r1 * SD / (r0 * sa + r1 * sb); };
+      if (rho < rr(0) || rho > rr(NR - 1)) return -1;
+      let i = 0; while (i < NR - 2 && rr(i + 1) < rho) i++; return i * NB + b0; };
+    // THE SHELL-COVER ZONE: the quads within 1 ring and 3 bearings of a quad over a drawn shell vertex outside the strip standing
+    // over the floor less the cover (the vertices her cover is enforced for: +-1 ring for the corners it lifts, +-3 bearings for
+    // the ring smoothing's 5-tap spread)
+    const zone = new Uint8Array(NR * NB); let nSrc = 0;
+    for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i).applyMatrix4(sh.matrixWorld);
+      if (inStrip(v.x, v.z) || v.y + cover <= T.terrainH(v.x, v.z, 0)) continue;
+      const q = quadOf(v.x, v.z); if (q < 0) continue; nSrc++;
+      const qi = Math.floor(q / NB), qb = q % NB;
+      for (let di = -1; di <= 1; di++) for (let db = -3; db <= 3; db++) { const ii = qi + di; if (ii >= 0 && ii < NR - 1) zone[ii * NB + (qb + db + NB) % NB] = 1; } }
+    // a triangle's slope: its plane's steepest, in degrees (a plan-degenerate one with any height to it is a wall: 90)
+    const tris = []; let wst = null, nZone = 0, nUnder = 0, nDeg = 0;
+    const tri = (i, j, t, ia, ib, ic) => {
+      const ax = Pm[ia * 3], ay = Pm[ia * 3 + 1], az = Pm[ia * 3 + 2], bx = Pm[ib * 3], by = Pm[ib * 3 + 1], bz = Pm[ib * 3 + 2], cx = Pm[ic * 3], cy = Pm[ic * 3 + 1], cz = Pm[ic * 3 + 2];
+      if (ay < T.terrainH(ax, az, 0) - 0.005 && by < T.terrainH(bx, bz, 0) - 0.005 && cy < T.terrainH(cx, cz, 0) - 0.005) { nUnder++; return; }
+      const d = (bx - ax) * (cz - az) - (cx - ax) * (bz - az);
+      let deg;
+      if (Math.abs(d) < 2e-6) { nDeg++; if (Math.max(ay, by, cy) - Math.min(ay, by, cy) <= 0.005) return; deg = 90; }
+      else { const gx = ((by - ay) * (cz - az) - (cy - ay) * (bz - az)) / d, gz = ((bx - ax) * (cy - ay) - (cx - ax) * (by - ay)) / d; deg = Math.atan(Math.hypot(gx, gz)) * 180 / Math.PI; }
+      tris.push([i, j, t, +deg.toFixed(2)]);
+      if (!wst || deg > wst.deg) wst = { deg: +deg.toFixed(2), ring: i, bearing: j, at: [+((ax + bx + cx) / 3).toFixed(1), +((ay + by + cy) / 3).toFixed(1), +((az + bz + cz) / 3).toFixed(1)] }; };
+    for (let i = 1; i <= NI - 1; i++) for (let j = 0; j < NB; j++) {
+      if (zone[i * NB + j]) { nZone += 2; continue; }
+      const a = i * NB + j, b = i * NB + (j + 1) % NB, c2 = a + NB, d2 = b + NB;
+      tri(i, j, 0, a, b, c2); tri(i, j, 1, b, d2, c2); }
+    const sorted = tris.map(q => q[3]).sort((p1, p2) => p1 - p2);
+    repose = { barDeg, n: tris.length, nZone, nUnder, nDeg, nSrc, worst: wst, over: sorted.filter(x => x > barDeg).length,
+      p50: sorted.length ? sorted[Math.floor(sorted.length * 0.5)] : null, p99: sorted.length ? sorted[Math.floor(sorted.length * 0.99)] : null, tris };
+  }
+  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, buried: !!(B && L.buried), bury: L.bury ?? null, repose };
   // (Task 6) the clutch, (Task 4) the harpoon: added there
   return out; })()`;
 
@@ -318,12 +369,18 @@ checks.push({ name: 'sides', val: out.sides.d, at: out.sides.at, bar: '<= +0.02'
 // no shell vertex over the sand in the strip = no crest at all: a finding (the bar fails), not a missing measurement
 checks.push({ name: 'top', val: out.crest.n ? out.crest.top : null, n: out.crest.n, bar: '3.0 - 4.0 u', ok: out.crest.n > 0 && out.crest.top >= 3.0 && out.crest.top <= 4.0, vacuous: false, judged: true });
 checks.push({ name: 'len', val: out.crest.len, n: out.crest.n, bar: '16 - 24 u', ok: out.crest.n > 0 && out.crest.len >= 16 && out.crest.len <= 24, vacuous: false, judged: true });
+// the repose (Task 3a fix round): judged where she has a mound (main / the ridge RED have no dune to judge); >= 200 free-sand
+// triangles booked, else UNMEASURED
+{ const r = out.repose;
+  checks.push(r ? { name: 'repose', val: r.worst ? r.worst.deg : null, at: r.worst ? r.worst.at : null, n: r.n, bar: `<= ${r.barDeg} deg (atan(BURY.repose) + 5)`, ok: r.n >= 200 && !!r.worst && r.worst.deg <= r.barDeg, vacuous: r.n < 200, judged: true,
+      info: { over: r.over, p50: r.p50, p99: r.p99, zoneTris: r.nZone, underFloor: r.nUnder, degenerate: r.nDeg, coverSources: r.nSrc, worstRing: r.worst && r.worst.ring, worstBearing: r.worst && r.worst.bearing } }
+    : { name: 'repose', val: null, n: 0, bar: 'n/a (no mound)', ok: false, vacuous: true, judged: false }); }
 // (Task 6) clutch, (Task 4) harpoon: pushed here when the page side reports them
 for (const k of checks) if (ONLY) k.judged = ONLY.includes(k.name);
 for (const need of ONLY || []) if (!checks.some(k => k.name === need)) { console.error(`UNMEASURED: BP_CHECK ${need} is not built into this probe yet`); finish(2, 'BP_CHECK ' + need + ' not built'); }
 record.checks = checks;
-console.log(`DISGUISE ${JSON.stringify({ ...out, checks: checks.map(k => ({ name: k.name, val: k.val, ok: k.ok, judged: k.judged })) })}`);
-for (const k of checks) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(6)} ${k.val == null ? 'n/a' : k.val} (bar ${k.bar}; n ${k.n ?? '-'}${k.nOut != null ? '; drawn outside the strip ' + k.nOut : ''}${k.at ? '; worst at ' + JSON.stringify(k.at) : ''})${k.judged ? '' : ' [not judged here]'}`);
+console.log(`DISGUISE ${JSON.stringify({ ...out, repose: out.repose ? { ...out.repose, tris: out.repose.tris.length + ' triangles (JSON)' } : null, checks: checks.map(k => ({ name: k.name, val: k.val, ok: k.ok, judged: k.judged })) })}`);
+for (const k of checks) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(6)} ${k.val == null ? 'n/a' : k.val} (bar ${k.bar}; n ${k.n ?? '-'}${k.nOut != null ? '; drawn outside the strip ' + k.nOut : ''}${k.at ? '; worst at ' + JSON.stringify(k.at) : ''}${k.info ? '; ' + JSON.stringify(k.info) : ''})${k.judged ? '' : ' [not judged here]'}`);
 const judged = checks.filter(k => k.judged);
 const vac = judged.filter(k => k.vacuous);
 if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous: ' + vac.map(k => k.name).join(',')); }
