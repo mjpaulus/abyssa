@@ -29,3 +29,9 @@ During Velkath's fight the camera can press against Sal when he is under her. It
 
 ## Log
 - 2026-10-14 — created from Michael's camera decision (velfix option 1, his "A").
+- 2026-10-14 — Data from relief Task 10 for whoever builds this (from the final review). The relief's velfix runs had more CLEAN reds (neither pressed nor in a fresh flash) than main's: 0.97 vs 0.43 per 100 booked frames.
+  - Relief: 9 frames are first-light-up tails at flashT 0.62-0.63 (just past the 0.6 s cut). 21 fall during her drop (mostly blown 0.05-0.15, the lens 2-6.6 u from his bonnet).
+  - Main: 6 fall during her drop.
+  - The relief's 0.55 u lift lengthens her drop by exactly that much (brooder.js NOSAFE.depth). It is the only game-side difference in that phase.
+  - Per-drop CLEAN rates on post-merge main would show whether any of these are relief-made. CLEAN frames are by definition not pressed, so this fix alone won't clear them.
+  - Listing: ~/sc/.abyssa-wt/reviews/t10-scripts/clean.md.
