@@ -1200,9 +1200,9 @@ const credPiv = p => Math.hypot(p.x - player.pos.x, p.y - player.pos.y - DECK_PI
 //   2 THE PUNCH (the target): the burst's punch-in never takes the target nearer his body than minD.
 //   4 THE GUARD: the lens drawn out of her goes out to minD from his helmet at least (the eggs too: was 1.0) and, still
 //     in her there, to the drop's first clear spot at minD on its own bearing (0.3 over her, 0.6 over the floor: the
-//     eggs' own drop, generalised to her shell and legs), else, while the drop holds the target, to the drop's spot;
-//     with none of those clear it is main's guard exactly, so it never moves the lens INTO her (from outside her, after
-//     the calm's look-ahead, it travels to a spot at most `travel` u/s).
+//     eggs' own drop, generalised to her shell and legs), else, while the drop holds the target, to the drop's spot,
+//     else to the frame's own target if that is clear; with none of those clear it is main's guard exactly, so it never
+//     moves the lens INTO her (from outside her, after the calm's look-ahead, it travels at most `travel` u/s).
 //   8 THE KEEP (the lens's last move): while her guard is on (creK) the lens is never nearer his BODY than minD (his
 //     axis from just over his boots to his helmet: off his helmet, the gate's PRESSED, and off his boots and dress, a
 //     lens trailing under a burst): put back out from his axis; where that is in her or under the floor, out from his
@@ -1213,7 +1213,7 @@ const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, loo
   drop: 1, dropR: 2.8, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5, travel: 12 };
 let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 let creDrop = 0, creDropV = 0, creDropT = 0, creDropHT = 0, creEng = 0;
-let creNearN = 0, creNearMin = 9, creDropN = 0, creDropMiss = 0, crePunchN = 0, creGuardN = 0, creGuardArc = 0, creGuardOff = 0, creGuardMain = 0, creKeepN = 0, creKeepArc = 0, creKeepSph = 0, creKeepMax = 0, creKeepFail = 0;
+let creNearN = 0, creNearMin = 9, creDropN = 0, creDropMiss = 0, crePunchN = 0, creGuardN = 0, creGuardArc = 0, creGuardOff = 0, creGuardTgt = 0, creGuardMain = 0, creKeepN = 0, creKeepArc = 0, creKeepSph = 0, creKeepMax = 0, creKeepFail = 0;
 const creDropOff = V3(), _arcS = V3(), _arcP = V3(), _lfA = V3(), _lfB = V3();
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
 // helmet is against the eggs and every rise runs into them, so the lens goes level or low
@@ -1446,7 +1446,7 @@ function clawFrame(dt) {
 window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone(),
   lookNetDeg: clawOpen ? +((Math.abs(player.yaw - clawY0) + Math.abs(player.pitch - clawP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(clawPath * 57.29578).toFixed(2), recentDeg: +(clawRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
-  drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
+  drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -2307,8 +2307,9 @@ function updateCamera(dt, t, fwd) {
       // (lensfix) THE GUARD: out to minD at least, the eggs too (main: min(1, minD / cl) never pushed out, and the eggs
       // came to 1.0 u of his helmet); still in her there, the drop's first clear spot at minD on its own bearing (0.3 over
       // her, 0.6 over the floor: the eggs' own drop, generalised to her shell and legs), else, while the drop holds the
-      // target, its spot. With none of those clear the guard is MAIN'S, exactly (below): it never moves the lens into her
-      // (standing aside for the spring held it in a claw for 19 frames after the calm, GREEN's resettle). Engaged
+      // target, its spot, else the frame's own target if clear (main's guard held the lens in a claw that had come down
+      // between him and it, 10 frames after the calm). With none of those clear the guard is MAIN'S, exactly (below): it
+      // never moves the lens into her (standing aside for the spring held it in a claw for 19 frames after the calm). Engaged
       // (creEng 4) only where the answer differs from main's; otherwise this is main's point and main's step, exactly.
       const clr = creBoomClear(_piv, camTo, 0.3), cd = Math.max(cl, 1e-3);
       const f = Math.max(CRECAM.minD / cd, clr), f0 = Math.max(Math.min(1, (eggs ? 1.0 : CRECAM.minD) / cd), clr);
@@ -2321,13 +2322,15 @@ function updateCamera(dt, t, fwd) {
         const bx = hl > 1e-4 ? camTo.x / hl : -Math.sin(player.yaw), bz = hl > 1e-4 ? camTo.z / hl : -Math.cos(player.yaw);
         // (a spot can be most of a half-circle round him: from outside her (the look-ahead after the calm) the lens
         // travels there at most `travel` u/s; from inside her it goes at the guard's own rate, as main's)
-        if (creSpot(_piv, bx, bz, CRECAM.minD, 0.3, 0.6, zi)) {
-          _lfA.copy(_arcP); creGuardArc++;
-          if (!bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0)) lim = CRECAM.travel * dt;
-        } else if (creDrop > 0.5 && creDropT > 0) {
+        if (creSpot(_piv, bx, bz, CRECAM.minD, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardArc++; } else {
+          // else the drop's spot while the drop holds the target, else the frame's own target (camDesired: the boom as
+          // it tested clear, the drop blended in), if clear of her and off his body
           _lfB.copy(player.pos).add(creDropOff);
-          if (!bodyBlocked(_lfB.x, _lfB.y, _lfB.z, 0.15)) { _lfA.copy(_lfB); creGuardOff++; } else gNew = false;
-        } else gNew = false;
+          if (creDrop > 0.5 && creDropT > 0 && !bodyBlocked(_lfB.x, _lfB.y, _lfB.z, 0.15)) { _lfA.copy(_lfB); creGuardOff++; }
+          else if (!bodyBlocked(camDesired.x, camDesired.y, camDesired.z, 0.15) && creCapD(camDesired.x, camDesired.y, camDesired.z) >= CRECAM.minD) { _lfA.copy(camDesired); creGuardTgt++; }
+          else gNew = false;
+        }
+        if (gNew && lim === Infinity && !bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0)) lim = CRECAM.travel * dt;
       }
       if (gNew) {
         if (eng) { creEng |= 4; creGuardN++; }
