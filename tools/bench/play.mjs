@@ -7,12 +7,14 @@
 //   node tools/bench/play.mjs alt <digit>           playtest jump (Alt+digit)
 //   node tools/bench/play.mjs state | shot <tag> | stop
 // Env DRV_PORT (default 9461). Frames -> /Users/michaelpaulus/sc/.abyssa-wt/shots/play/
-import { start, stop, connect, sleep } from './drv.mjs';
 import { mkdirSync } from 'node:fs';
+// (Task 10, Ruling 53) DRV_PORT is set BEFORE drv.mjs is imported: a static import is hoisted above the assignment, and drv.mjs
+// read DRV_PORT as unset (9419, Michael's shared Chrome) before this file's 9461 default was ever assigned
+if (!process.env.DRV_PORT) process.env.DRV_PORT = '9461';
+const { start, stop, connect, sleep } = await import('./drv.mjs');
 const OUT = process.env.PLAY_OUT || '/Users/michaelpaulus/sc/.abyssa-wt/shots/play';
 mkdirSync(OUT, { recursive: true });
 const [, , cmd, a1, a2, a3, a4] = process.argv;
-if (!process.env.DRV_PORT) process.env.DRV_PORT = '9461';
 
 const STATE = `(() => {
   const P = window.player, SV = window.survival, L = window.lev, m = window.__msg();

@@ -590,6 +590,9 @@ export function seedMotes(zi) {
     const a = Math.random() * Math.PI * 2, r = rng(15, WORLD_R * 0.85);
     const grp = new THREE.Group();
     grp.position.set(Math.cos(a) * r, rng(zoneBottom(zi) + 18, zoneTop(zi) - 15), Math.sin(a) * r);
+    // (seafloor relief) a height drawn from the zone's band alone can fall inside a ridge or an upland: lift it clear of the
+    // ground (the bob in updateMotes is +-0.9, so this stays over 3 u). AFTER the draw: the random stream is not reordered.
+    grp.position.y = Math.max(grp.position.y, terrainH(grp.position.x, grp.position.z, zi) + 4);
     const coreMat = moteMat.clone();
     grp.add(new THREE.Mesh(moteGeo, coreMat));
     grp.add(makeGlow(0x9fffcf, 10));

@@ -20,7 +20,8 @@ const PH = [
 ];
 // Bound for the cheap reject in terrainH: |midAt| <= 2.2*2 + 0.8*2 = 6.0 (triangle-wave differences),
 // half width <= 1.36 * halfW (jag), so every point with fissureDist < 14 lies inside this radius.
-const MID_MAX = 6.0, JAG_MAX = 1.36;
+// (Exported: terrain.js's relief checks bound its outcrops' keep-off by the crack's widest reach off its axis.)
+export const MID_MAX = 6.0, JAG_MAX = 1.36;
 export const FISSURE = ROWS.map((r, zi) => {
   const p = riftPos(zi);
   const reach = Math.hypot(r.halfLen, MID_MAX + JAG_MAX * r.halfW) + 14 + 0.5;

@@ -12,7 +12,7 @@ import { canvas2d, noiseCanvas, normalFromHeight, toTexture } from '../lib/textu
 import { pbrUniforms, PBR_GLSL } from '../lib/triplanar.js';
 import { siteParams, currentSiteIndex, stream } from './site.js';
 import { buildIslands, fillIslands, updateIslands } from './islands.js';
-import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamFloorAt, jamSagAt, fissureShut, _widths, _slabReach, APRON } from './fissureShape.js';
+import { FISSURE, fissureDist, slabProbe, SLABS, fissureWorld, fissureLocal, jamFloorAt, jamSagAt, fissureShut, _widths, _slabReach, APRON, MID_MAX, JAG_MAX } from './fissureShape.js';
 
 // ---------------------------------------------------------------------------
 // Noise. lib/math's vnoise hashes with Math.sin, which measures ~15x slower than
@@ -138,8 +138,12 @@ const RIM_KH = [
 // is current: syncSite copies the active site's rows over them IN PLACE, so terrainH
 // keeps reading the same objects it always has — no per-call registry lookup on the
 // hottest function in the game, and no stale captured copies either, because every
-// caller reaches these tables through the module scope. Site 0's registry rows are
-// verbatim copies of the literals, so the shipped world survives bit-identical.
+// caller reaches these tables through the module scope. Site 0's terra rows are
+// verbatim copies of the literals, but site 0 is no longer the shipped world bit for bit:
+// since THE RELIEF (2026-10-14) home carries zone 0's relief rows (shape.uplands +
+// shape.hollow, syncRelief below) and its sleeper row, and fingerprints 5c0705a1. With
+// the relief rows removed it still reproduces the shipped field, 3b526986 (`homeNull` in
+// tools/relief/validate.mjs: the regression anchor).
 // Amplitudes, frequencies and the mesh itself never vary by site — only where in the
 // infinite noise field each zone looks, and which skyline harmonics it wears.
 //
@@ -183,6 +187,170 @@ function syncSite() {
   set(SITE_PAL.uSiteGrav, fl && fl.grav);
   set(SITE_PAL.uSiteRock, fl && fl.rock);
   layIsles();
+  syncRelief(sh);
+}
+
+// ---- THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md; Michael 2026-10-13: "the sea
+// floor is all one level, like a big pit. Lets make that more dynamic but keep velkaths lair in the deepest part").
+// Zone-0 terms a site's shape row may carry (home is the only one that does). Null rows = the shipped field bit for
+// bit (tools/relief/validate.mjs: 3b526986). Keyed to FROZEN geometry only — FISSURE[0], the origin, the station
+// literals — never to bedAt()/velkathLair, which are placed after the terrain (the loop would close).
+// THE UPLANDS: today's massif / secondary-ridge / outcrop / continental noise, reused (heightAt computes it anyway),
+// with a mask bias of its own, ADDED on top and masked to exactly 0 off the places that matter. Overriding the
+// shipped knobs instead (the first draft) moved the crack's lips to 1.39 u and its throat floor 1.4 u (trial H7):
+// camp and s2amp act everywhere. The term is bounded radially (the row's fade, r 250 -> 300 from the origin): the
+// uplands are the basin's edges, not the rampart beyond the rim — the far ridge (RIDGE, from r 300: Michael's ruled
+// skyline) and the isle shoals stay today's bit for bit (tools/relief/gates.mjs "far field untouched").
+let UPL = null;
+const sst01 = t => { t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); };
+function keepOff(x, z, K) {
+  let m = 1;
+  for (let i = 0; i < K.length; i += 6) {
+    const ax = K[i], az = K[i + 1], vx = K[i + 2] - ax, vz = K[i + 3] - az, l2 = vx * vx + vz * vz;
+    let t = l2 > 0 ? ((x - ax) * vx + (z - az) * vz) / l2 : 0; t = t < 0 ? 0 : t > 1 ? 1 : t;
+    const dx = x - ax - vx * t, dz = z - az - vz * t, d = Math.sqrt(dx * dx + dz * dz);
+    if (d <= K[i + 4]) return 0;
+    if (d < K[i + 5]) { const s = (d - K[i + 4]) / (K[i + 5] - K[i + 4]); m *= s * s * (3 - 2 * s); }
+  }
+  return m;
+}
+function uplandsAt(x, z, nReg, nBase, nM, nS2, nR3) {
+  const U = UPL, rr = Math.sqrt(x * x + z * z);
+  if (rr >= U.r1) return 0;
+  const m = keepOff(x, z, U.K) * (1 - sst01((rr - U.r0) / (U.r1 - U.r0)));   // x 1 exactly inside r0
+  if (m <= 0) return 0;
+  let rk = c01(nReg * 2.2 + 0.5 + U.rbias); rk = rk * rk * (3 - 2 * rk);
+  return m * (nBase * U.camp + nM * U.ramp * rk + nS2 * U.s2amp * (0.30 + 0.70 * rk) + nR3 * U.r3amp * rk);
+}
+// THE HOLLOW: home zone 0's floor falls toward her crack. Bearing-varying about riftPos(0) (a round bowl would be "the
+// big pit" again, smaller): tight toward the raft so the raft column stays up on the flank (trial Q0: it sinks
+// 11.4 u, and falls 24.9 u to her bed), wide away from it; the outline wanders on low harmonics, held still toward
+// and away from the raft. Two treads (the row's N; three put the middle riser's feet ~0.25 u off the coarse mesh), each
+// riser taking 85% of its band (walkable slopes, not walls), smooth in three ramp sectors so no riser is a ring. The
+// UNIFORM part (depth + the crack-centred dish) acts everywhere, the crack's apron included; the apron target and the
+// throat's carve compensate exactly that part, so the crack just drops (lips 1.17 -> 1.18, the throat floor at today's
+// -315.3). The DETAIL: the levelling and her flat fade out toward the lip (by fd 4); the outcrops are kept off it by
+// oc.keepOff (checkRelief enforces its inner radius). Her flat (30-46 u about her
+// station, levelled 92%, 4 u lower than the bottom) makes her ground the deepest. It runs on under the NE wall (fade
+// 250-290 u from the raft): ending it before the wall's onset put a steep rise behind her crack (5.4% of the floor too
+// steep to walk, trial H0) — the wall stands ~30 u taller there.
+let HOL = null;
+const _hv = { uni: 0, det: 0, level: 0, flatW: 0, q: 0, rF: 0, rO: 0 };
+function hollowAt(x, z, o) {
+  const H = HOL;
+  o.uni = 0; o.det = 0; o.level = 0; o.flatW = 0; o.q = 0;
+  const rr = Math.sqrt(x * x + z * z);
+  if (rr >= H.fade1) return o;
+  const fade = 1 - sst01((rr - H.fade0) / (H.fade1 - H.fade0));
+  const dx = x - H.cx, dz = z - H.cz, d = Math.sqrt(dx * dx + dz * dz), id = 1 / (d > 1e-3 ? d : 1e-3), ux = dx * id, uz = dz * id;
+  const c = ux * H.rdx + uz * H.rdz, c2 = ux * ux - uz * uz, s2 = 2 * ux * uz, c3 = ux * c2 - uz * s2, s3 = ux * s2 + uz * c2;
+  const w = 1 + H.wig * (0.6 * (0.8 * c2 + 0.6 * s2) + 0.4 * (0.6 * c3 - 0.8 * s3)) * (1 - c * c);
+  const rF = (H.f0 - H.fA * c) * w, rO = (H.o0 - H.oA * c) * w;
+  const t = c01((d - rF) / (rO - rF) + H.tw * gn(x * H.twf + 5.1, z * H.twf - 2.7));
+  const q = 1 - t * t * t * (t * (t * 6 - 15) + 10);
+  let qt = q;
+  if (H.N > 0) { const sN = q * H.N, f = Math.min(Math.floor(sN), H.N - 1), r = sN - f, u = c01((r - (1 - H.rw)) / H.rw); qt = (f + u * u * (3 - 2 * u)) / H.N; }
+  const cp = c3 * H.cPh - s3 * H.sPh;                         // cos(3 bearing + rampPh): the three ramp sectors
+  const qq = q + (qt - q) * (1 - sst01((cp - H.ramp0) / (H.ramp1 - H.ramp0)));
+  const sx = x - H.sx, sz = z - H.sz, flat = H.sLvl * (1 - sst01((Math.sqrt(sx * sx + sz * sz) - H.sR0) / (H.sR1 - H.sR0)));
+  let oc = 0;
+  if (H.ocAmp > 0 && q > 0.2) {
+    const v = fbm2(x * H.ocF + 31.7, z * H.ocF - 12.9, 2) - H.ocThr;
+    // soft threshold: v^2 / (v + soft) leaves the knoll's foot C1 (a hard max(0, v) kink is a crease the mesh can't draw)
+    if (v > 0) oc = v * v / (v + H.ocSoft) * H.ocAmp * q * q * (1 - flat / H.sLvl) * keepOff(x, z, H.ocK);
+  }
+  o.uni = (-H.D * qq - H.dish * (1 - sst01(d / H.rDish))) * fade;
+  o.det = oc * fade;
+  o.level = (1 - (1 - H.lvl * q) * (1 - flat)) * fade;      // a soft union (a max() kink broke S6: trial Q0, 0.345 u)
+  o.flatW = flat / H.sLvl * fade;
+  o.q = q; o.rF = rF; o.rO = rO;
+  return o;
+}
+function capsules(ko, F) {
+  const K = [];
+  const add = (ax, az, bx, bz, r) => K.push(ax, az, bx, bz, r[0], r[1]);
+  if (ko.crack) add(F.cx - F.dx * F.halfLen, F.cz - F.dz * F.halfLen, F.cx + F.dx * F.halfLen, F.cz + F.dz * F.halfLen, ko.crack);
+  if (ko.stations && ko.station) for (const s of ko.stations) add(s[0], s[1], s[0], s[1], ko.station);
+  if (ko.raft) add(0, 0, 0, 0, ko.raft);
+  if (ko.band && ko.stations) add(0, 0, ko.stations[0][0], ko.stations[0][1], ko.band);
+  return Float64Array.from(K);
+}
+// THE ROWS' CHECKS: a row the hollow would turn into NaN, or into a lip that is not exactly today's, throws a clear
+// Error before anything moves (syncRelief runs this first; __relief.set runs it on its candidate row before reseeding):
+//  - hollow.sLvl > 0 and hollow.rw > 0: hollowAt divides by both (flatW = flat / sLvl, the riser's u = .../rw). At 0
+//    each is 0/0: NaN over zone 0 out to r 290 (sLvl), over the flat bottom (rw).
+//  - hollow.oc.keepOff[0] > the crack's widest reach off its axis (fissureShape.js MID_MAX + JAG_MAX x halfW) + 4: heightAt
+//    fades the levelling and her flat out by g (0 for fd <= 4), but the outcrops only by this capsule, so the lip stays
+//    exactly the compensated uniform part only while every point within 4 u of the lip is inside its inner radius
+//    (home: 25 > 18.84). __relief can retune it.
+//  - (final review M4) every number either row carries is finite: the scalars and points syncRelief reads by name must be
+//    there, and every leaf present (objects and arrays walked) must be a finite number, so a NaN, a string or a missing
+//    scalar cannot reach heightAt as NaN over zone 0 (hollow.noComp, a RED mutant's switch, is the one boolean);
+//  - every [r0, r1] band has r1 > r0 (a smoothstep's edges, divided by r1 - r0, or a keep-off capsule's inner and outer
+//    radius): hollow.fade / sR / ramp / oc.keepOff, and uplands.fade and uplands.keepOff's capsules where present
+//    (uplands.ramp is a scalar; hollow.station and uplands.keepOff.stations are points, not bands).
+// A row that is absent, null or otherwise falsy is the shipped field (no check), as syncRelief reads it.
+const RELIEF_NUM = {
+  uplands: ['rbias', 'ramp', 'r3amp', 's2amp', 'camp'],
+  hollow: ['D', 'f0', 'fA', 'o0', 'oA', 'wig', 'lvl', 'level0', 'N', 'rw', 'tw', 'twf', 'rampPh', 'station.0', 'station.1', 'sLvl',
+    'sDrop', 'dish', 'rDish', 'oc.f', 'oc.thr', 'oc.amp', 'oc.soft']
+};
+const RELIEF_BAND = {   // [path, required]
+  uplands: [['fade', false], ['keepOff.crack', false], ['keepOff.station', false], ['keepOff.raft', false], ['keepOff.band', false]],
+  hollow: [['fade', true], ['sR', true], ['ramp', true], ['oc.keepOff', true]]
+};
+// may be absent or null (syncRelief defaults uplands.fade and skips a missing capsule; noComp is off unless true)
+const RELIEF_OPT = new Set(['uplands.fade', 'uplands.keepOff.crack', 'uplands.keepOff.stations', 'uplands.keepOff.station',
+  'uplands.keepOff.raft', 'uplands.keepOff.band', 'hollow.noComp']);
+function checkReliefRow(name, row, refuse) {
+  const at = p => p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), row);
+  const got = v => `got ${typeof v === 'string' ? JSON.stringify(v) : String(v)}`;
+  if (typeof row !== 'object' || Array.isArray(row)) refuse(`${name} must be an object (${got(row)})`);
+  for (const p of RELIEF_NUM[name]) { const v = at(p); if (!Number.isFinite(v)) refuse(`${name}.${p} must be a finite number (${got(v)})`); }
+  if (name === 'uplands' && (typeof row.keepOff !== 'object' || row.keepOff === null)) refuse(`uplands.keepOff must be an object of capsules (${got(row.keepOff)})`);
+  if (name === 'hollow' && (typeof row.oc !== 'object' || row.oc === null)) refuse(`hollow.oc must be an object (${got(row.oc)})`);
+  const walk = (v, p) => {
+    if (v == null && RELIEF_OPT.has(p)) return;
+    if (v !== null && typeof v === 'object') { for (const k in v) walk(v[k], Array.isArray(v) ? `${p}[${k}]` : `${p}.${k}`); return; }
+    if (p === 'hollow.noComp') { if (typeof v !== 'boolean') refuse(`hollow.noComp must be a boolean (${got(v)})`); return; }
+    if (!Number.isFinite(v)) refuse(`${p} must be a finite number (${got(v)}): heightAt would read it as NaN`);
+  };
+  walk(row, name);
+  for (const [p, req] of RELIEF_BAND[name]) {
+    const b = at(p);
+    if (b == null && !req) continue;
+    if (!(Array.isArray(b) && b.length === 2 && b[1] > b[0])) refuse(`${name}.${p} must be a band [r0, r1] with r1 > r0 (got ` +
+      `${Array.isArray(b) ? '[' + b.join(', ') + ']' : String(b)}): ` + (/keepOff/.test(p) ? "a keep-off capsule's outer radius must lie past its inner"
+      : 'its smoothstep divides by r1 - r0 (0 is NaN, less inverts the ramp)'));
+  }
+}
+export function checkRelief(sh) {
+  const refuse = m => { throw new Error('THE RELIEF: shape.' + m); };
+  if (sh && sh.uplands) checkReliefRow('uplands', sh.uplands, refuse);   // (truthy, as syncRelief reads the rows)
+  const h = sh && sh.hollow;
+  if (!h) return;
+  checkReliefRow('hollow', h, refuse);
+  const bad = m => refuse('hollow.' + m);
+  if (!(h.sLvl > 0)) bad(`sLvl must be > 0 (got ${h.sLvl}): her flat divides by it, so 0 turns zone 0 into NaN out to r 290`);
+  if (!(h.rw > 0)) bad(`rw must be > 0 (got ${h.rw}): each riser divides by it, so 0 turns the flat bottom into NaN`);
+  const k = MID_MAX + JAG_MAX * FISSURE[0].halfW + 4, ko = h.oc && h.oc.keepOff;
+  if (!(ko && ko[0] > k)) bad(`oc.keepOff[0] must exceed ${k.toFixed(2)} u (the crack's widest reach off its axis + 4; got ` +
+    `${ko && ko[0]}): nearer, the outcrops reach the lip's 4 u, where only the hollow's uniform part may act`);
+}
+function syncRelief(sh) {
+  checkRelief(sh);                                          // a bad row throws here, before UPL / HOL move
+  const u = sh && sh.uplands, uf = u && (u.fade || [250, 300]);   // a row without its fade gets Ruling 15's radii
+  UPL = u ? { rbias: u.rbias, ramp: u.ramp, r3amp: u.r3amp, s2amp: u.s2amp, camp: u.camp, r0: uf[0], r1: uf[1],
+    K: capsules(u.keepOff, FISSURE[0]), row: u } : null;
+  const h = sh && sh.hollow, F = FISSURE[0];
+  if (h) {
+    const l = Math.hypot(F.cx, F.cz);
+    HOL = { D: h.D, f0: h.f0, fA: h.fA, o0: h.o0, oA: h.oA, wig: h.wig, fade0: h.fade[0], fade1: h.fade[1], lvl: h.lvl, level0: h.level0,
+      N: h.N, rw: h.rw, tw: h.tw, twf: h.twf, ramp0: h.ramp[0], ramp1: h.ramp[1], cPh: Math.cos(h.rampPh), sPh: Math.sin(h.rampPh),
+      sx: h.station[0], sz: h.station[1], sR0: h.sR[0], sR1: h.sR[1], sLvl: h.sLvl, sDrop: h.sDrop, dish: h.dish, rDish: h.rDish,
+      ocF: h.oc.f, ocThr: h.oc.thr, ocAmp: h.oc.amp, ocSoft: h.oc.soft, ocK: capsules({ crack: h.oc.keepOff }, F),
+      cx: F.cx, cz: F.cz, rdx: -F.cx / l, rdz: -F.cz / l, noComp: !!h.noComp, row: h };   // noComp: a RED mutant only (Tasks 6-7)
+  } else HOL = null;
 }
 
 // Second ridgeline. Zero new triangles: the graded axisMap already samples out here.
@@ -278,17 +446,23 @@ function heightAt(x, z, zi, slabs) {
   const px = xs + gn(xs * 0.0042, zs * 0.0042) * P.warp;
   const pz = zs + gn(xs * 0.0042 + 41.7, zs * 0.0042 - 23.1) * P.warp;
 
-  // Continental base: broad basin/plateau shape.
-  let h = fbm2(px * P.cf, pz * P.cf, 3) * P.camp;
+  // Continental base: broad basin/plateau shape. (The raw noise values are kept in named
+  // locals: THE UPLANDS term, added after the lift below, reuses them rather than paying
+  // for the octaves twice.)
+  const nBase = fbm2(px * P.cf, pz * P.cf, 3);
+  let h = nBase * P.camp;
 
   // One regional mask drives both feature systems in opposition: uplifted massifs
   // where it is high, channelled lowland where it is low. Mixing them everywhere is
   // what turns ridged noise into mush.
-  let rk = c01(fbm2(px * 0.0028 + 9.1, pz * 0.0028 - 4.4, 2) * 2.2 + 0.5 + P.rbias);
+  const nReg = fbm2(px * 0.0028 + 9.1, pz * 0.0028 - 4.4, 2);
+  let rk = c01(nReg * 2.2 + 0.5 + P.rbias);
   rk = rk * rk * (3 - 2 * rk);
-  h += rmf(px * P.rf, pz * P.rf, P.roc) * P.ramp * rk;
+  const nM = rmf(px * P.rf, pz * P.rf, P.roc);
+  h += nM * P.ramp * rk;
   // Secondary ridges at 40-60m: without these the massifs above read as bare domes.
-  h += rmf(px * P.s2f + 13.7, pz * P.s2f + 4.2, 3) * P.s2amp * (0.30 + 0.70 * rk);
+  const nS2 = rmf(px * P.s2f + 13.7, pz * P.s2f + 4.2, 3);
+  h += nS2 * P.s2amp * (0.30 + 0.70 * rk);
 
   // Canyons / fissures: squared inverted ridges cut branching channels.
   const cv = rmf(px * P.cnf + 57.2, pz * P.cnf - 31.8, P.cnoc);
@@ -301,7 +475,8 @@ function heightAt(x, z, zi, slabs) {
   }
 
   // Outcrop rubble at ~15m: the smallest crests the mesh can still hold a silhouette for.
-  h += rmf(px * P.r3f + 71.3, pz * P.r3f - 29.6, 2) * P.r3amp * rk;
+  const nR3 = rmf(px * P.r3f + 71.3, pz * P.r3f - 29.6, 2);
+  h += nR3 * P.r3amp * rk;
 
   // Rubble and boulder-field lumps, then the finest scale the mesh can still resolve.
   h += fbm2(px * P.mf, pz * P.mf, 3) * P.mamp;
@@ -311,15 +486,29 @@ function heightAt(x, z, zi, slabs) {
   if (P.tamt > 0) h = terrace(h, P.tq, P.tamt * (P.tflat > 0 ? rk + P.tflat * (1 - rk) : rk));
 
   h += P.lift;
+  // THE RELIEF's cost here (tools/relief/cost.mjs, home zone 0, 200k basin points, best of 5): ~340 ns per call with
+  // home's rows off -> ~395 with the uplands and the hollow, ratio 1.16 (spec §7: <= 1.5). The uplands (+~22 ns) reuse
+  // this call's noise: a sqrt for their radial fade and the keep-off capsules; the hollow (+~33 ns) pays one gn for its
+  // tread twist, three sqrts and, where q > 0.2, a 2-octave fbm2 for the outcrops; past r 290 it is a sqrt and a compare.
+  if (UPL && zi === 0) h += uplandsAt(x, z, nReg, nBase, nM, nS2, nR3);
   // Soft floor: canyons must not dig below the zone-change trigger plane. It sits ABOVE the
   // fissure carving on purpose: the throat is the one place meant to go deeper.
   if (h < 4) h = 4 + (h - 4) * 0.25;
+  // THE HOLLOW (above), after the knee (before it, the 4:1 compression ate a third of it and flattened the bottom): its
+  // uniform part `hu` is what the apron's target and the throat's carve compensate below
+  let hu = 0;
+  if (HOL && zi === 0) {
+    hollowAt(x, z, _hv);
+    hu = _hv.uni;
+    const g = fd < 14 ? sst01((fd - 4) / 10) : 1;   // the levelling and her flat fade out toward the lip (fd is 1e3 outside apronR2); the outcrops (_hv.det) are kept off it by oc.keepOff
+    h += (HOL.level0 - h) * _hv.level * g + hu + _hv.det - HOL.sDrop * _hv.flatW * g;
+  }
 
   if (fm > 0) {
     const F = FZ;
     // apron: flatten the landform near the crack so lips read as broken shelf, not noise
     const a = fm * fm * (3 - 2 * fm);
-    h = h * (1 - 0.6 * a) + 18 * 0.6 * a;
+    h = h * (1 - 0.6 * a) + (18 + hu) * 0.6 * a;      // relative to the hollow (shipped: hu = 0, the same 18)
     const lumps = fbm2(x * 0.11 + 7.7, z * 0.11 - 3.1, 2);                 // 9 u slumped blocks, ~-0.9..0.9
     // broken lip: the shelf heaves up a little at the edge before it fails, in blocks, so the
     // crack shows a lip line from standing height instead of vanishing into flat ground
@@ -351,6 +540,9 @@ function heightAt(x, z, zi, slabs) {
         const w = Math.min(1, Math.max(0, (st - 0.6) / 4.6)), wall = w * w * (3 - 2 * w);
         h -= F.lipDrop * lip + wall * (60 + st * 2.5) + lumps * 4 * wall      // ~60-80 u throat into black
            - (bk - 0.5) * 3.2 * wall * (1 - wall) * 4;                        // slumped blocks on the faces
+        // (the hollow) the carve is shortened by the hollow's uniform part from 60% of the wall's depth down, so the
+        // throat floor keeps today's depth (G3) while the upper walls drop with the lip
+        if (hu !== 0 && !HOL.noComp) h -= hu * sst01(wall / 0.6);
       }
     }
   }

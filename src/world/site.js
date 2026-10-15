@@ -12,18 +12,24 @@
 //   grade   per-zone look overrides             -> postfx.js setSiteGrade
 //   floor   silt/gravel/rock albedo multipliers -> terrain.js uSite* uniforms
 //   shape   per-zone landform overrides + rim   -> terrain.js syncSite (not RAM_H)
+//     .uplands / .hollow  zone 0's relief rows  -> terrain.js syncRelief (checkRelief first), heightAt (home only)
 //   vents   field size/density/heat             -> vents.js ventKnobs
-//   wrecks  search ring about each rift         -> wrecks.js wreckSites
+//   wrecks  search ring about each rift         -> wrecks.js wreckSites; a 4-element band entry
+//           [minR, maxR, from, to] also fences the bearing (findSite's window; home's zone 0)
 //   sleepers[i].idle / lair / hard              -> the kinds (brooder/hoarder/hunter)
-// Every one is null at home and every consumer treats null as the shipped constant.
+// Every one is null at home except `shape` and `wrecks` (seafloor relief, 2026-10-13) and Velkath's sleeper row (Task 8b,
+// Ruling 44: her turn, her harpoon's seat, her stance), and every consumer treats null as the shipped constant.
 // All authored, never generated: the register is the product.
 //
-// SITE 0 IS THE SHIPPED WORLD, BIT-IDENTICAL. Its rows below are copied verbatim from
-// terrain.js's ZP/RIM tables and every stream seed matches the constant the module it
-// feeds used before this file existed (flora's placement was raw Math.random() — that
-// latent nondeterminism dies here; vents shipped on 0xB01Ec0DE). That identity is the
-// whole regression story: every reseed path can be verified by hashing site 0 against
-// the world as it ships today.
+// SITE 0 WAS THE SHIPPED WORLD BIT FOR BIT UNTIL THE RELIEF (2026-10-14); IT IS NOT NOW. Its terra
+// rows are still copied verbatim from terrain.js's ZP/RIM tables, every stream seed still matches
+// the constant the module it feeds used before this file existed (flora's placement was raw
+// Math.random() — that latent nondeterminism died here; vents shipped on 0xB01Ec0DE), and zones
+// 1 and 2 are still the shipped ground (d49d451d). But home now carries the relief rows above
+// (shape.uplands + shape.hollow, zone 0) and its sleeper row (Velkath turned, her seat, her
+// lift), so its zone 0 is new ground: home's canonical fingerprint is 5c0705a1 (`__ridge.fp()`).
+// The regression anchor that still proves the shipped field is `homeNull`: home with its relief
+// rows removed reproduces THE FISSURE's 3b526986 (tools/relief/validate.mjs, hard-coded there).
 
 // Deterministic stream factory — mulberry32, the same generator weather.js trusts.
 export function stream(seed) {
@@ -61,10 +67,47 @@ const SITES = [
     },
     seeds: { flora: 0x5EAF00D1, wrecks: 0x57EE1B0A, vents: 0xB01Ec0DE, resources: 0xC0FFEE01, props: 0x9A11A5E1, creatures: 0xF15C0011, fauna: 0xFA0BA001, debris: 0xDEB0C0A1 },
     scarcity: { polymer: 1, bitumen: 1 },
-    sleepers: null,                      // no overlay: LEVIATHAN_CFG untouched
-    // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries none of it:
-    // every consumer reads null as "the shipped constant", so site 0 stays bit-identical.
-    water: null, light: null, floor: null, shape: null, vents: null, wrecks: null, grade: null
+    // (seafloor relief Task 8b, Ruling 44; Michael 2026-10-14: "Turn her around", "Raise her to match") VELKATH KEEPS HER
+    // SHIPPED FIGHT ON THE NEW GROUND. At her raft-side station she lay MIRRORED across her crack from the shipped far-flank bed,
+    // so Alt+6 opened at her front-right and the average fight reached its last ward without circling (24 s against main's 60 s,
+    // Task 8). lair.face -1: she faces the other way along the crack, turned at the bed the fit gives her today's face (her bed
+    // stays at her frozen station, S2), so the harpoon is in her LEFT flank again; lair.seat 'back': its seam on her back half
+    // (on the levelled flat her left flank's middle lies at the ground: the search's best was her front corner), so the fight
+    // opens at her back-left, as shipped. hard.lift: her stance raised 0.55 u (brooder.js L.standLift), the gap between main's
+    // hunting stance and hers, turned (riteplay wardHuntP50, the median over 4 paired average fights, seeds 901-904, the clock
+    // plugged: main 10.04, the relief 9.475, gap 0.565 -> 0.55). sigils / hueShift are the shipped values (game.js
+    // makeZoneSleeper reads every row's). Zones 1 and 2 keep no row.
+    sleepers: [{ sigils: 3, hueShift: 0, idle: null, lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 } }, null, null],
+    // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries no water, light,
+    // floor, vents or grade of its own: every consumer reads null as "the shipped constant".
+    water: null, light: null, floor: null, vents: null, grade: null,
+    // THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §2): zone 0's uplands, an additive
+    // term on today's noise (trial Q0's values but r3amp, 1.5 -> 1.0: its rubble crests inside the hollow's reach drew
+    // ~0.27 u off the walked ground, gates S6), masked to exactly 0 off the crack, her two stations, the raft column and
+    // the raft -> station band, and faded out from r 250 to 300 off the origin (the far ridge and the isle shoals beyond
+    // are untouched)
+    shape: {
+      uplands: { rbias: -0.10, ramp: 24, r3amp: 1.0, s2amp: 2.0, camp: 12, fade: [250, 300],
+        keepOff: { crack: [35, 65], stations: [[89.7, 39.1], [43.5, 113.4]], station: [30, 55], raft: [25, 50], band: [20, 45] } },
+      // §3-4: THE HOLLOW about riftPos(0) — D deep (+ a `dish` u dish within rDish of the crack), its flat bottom f0 -/+ fA
+      // and outer edge o0 -/+ oA from the crack (tight toward the raft), wandering by `wig` on the side bearings, faded out
+      // 250-290 u off the raft (under the NE wall); the bottom levelled `lvl` toward level0; N treads (risers take rw of
+      // each band, twisted by tw at twf), smooth in three ramp sectors; her flat at her frozen station (levelled sLvl over
+      // sR, sDrop u lower); soft outcrops in the bottom, kept off the crack's axis (keepOff). Trial Q0's values, tuned on
+      // the game's own mesh for S6 (drawn = stood on, <= 0.25 u added): N 3 -> 2 (each tread edge's curvature scales with
+      // N; three put the middle riser's feet ~0.25 u off the coarse NNW mesh, 3.7 u cells, at any rw) and oc.soft
+      // 0.1 -> 0.2 (the knolls' feet: their curvature is ~2 amp / soft).
+      hollow: { D: 28, f0: 80, fA: 6, o0: 185, oA: 35, wig: 0.15, fade: [250, 290], lvl: 0.7, level0: 17,
+        N: 2, rw: 0.85, tw: 0.05, twf: 0.012, ramp: [0.55, 0.85], rampPh: 0.9,
+        station: [89.7, 39.1], sR: [30, 46], sLvl: 0.92, sDrop: 4, dish: 3, rDish: 90,
+        oc: { f: 0.035, thr: 0.25, amp: 10, soft: 0.2, keepOff: [25, 45] } }
+    },
+    // THE RELIEF (spec docs/superpowers/specs/2026-10-13-seafloor-relief-design.md §5): zone 0's skiff (the sonar) is
+    // searched 100-140 u off riftPos(0), 30-75 deg counter-clockwise from the rift -> raft bearing (wrecks.js findSite's
+    // window), on the raft-side terraces. 100 u keeps it >= 54.5 u from Velkath's lip and >= 26.8 u from her trail head
+    // (the lair's vetoes are 46.8 / 22), so she always takes her designed raft-side station. Moves no terrain; zones 1
+    // and 2 keep the shipped search.
+    wrecks: { band: [[100, 140, 30, 75]] }
   },
   {
     key: 'pallid',

@@ -47,7 +47,7 @@
 import * as THREE from 'three';
 import { scene, renderer } from '../core.js';
 import { zoneBottom } from '../config.js';
-import { FISSURE, jamYAt, jamTopY, fissureWorld, fissureLocal, slabProbe, _widths, setFissureShut, setJamSag, jamSagProfile, lipMeanY, fissureShut, setJamGrid, jamFloorAt } from './fissureShape.js';
+import { FISSURE, jamYAt, jamTopY, fissureWorld, fissureLocal, slabProbe, _widths, setFissureShut, setJamSag, jamSagProfile, lipMeanY, fissureShut, setJamGrid, jamFloorAt, JAG_MAX } from './fissureShape.js';
 import { terrainH, terrainUnderH, terrainMeshes, jamAt, shutFloorY } from './terrain.js';
 import { stirPulse, P_STRIKE, P_SLAM } from './stir.js';
 import { jamRockKit } from './flora.js';
@@ -60,8 +60,26 @@ const N_BOULDER = 160, COLLAPSE = 3.6, SWELL = 3.0;
 const T_BREAK = 0.4, T_OPEN = 0.5 * (COLLAPSE + SWELL);        // the break; k passes 0.5 (the floor goes)
 const SAG_MAX = 2.0, A_SILT = 10, SILT_GONE = 55;               // u, u/s^2, u of drain by which all of it is under the throat floor (3.3 s)
 const A_ROCK = 9, V_ROCK = 10, ROCK_T = 22, DROP_MIN = 20;      // u/s^2, terminal u/s, the pour's longest clock (s), u of throat under every block
+export { DROP_MIN };   // (fissure-probe jam-mesh reads it: the 20 u every block sinks out of sight is pinned there, not here)
 const GD = 0.25, FD = GD / 2;          // the silt mesh's spacing; the floor grid's (twice as fine: block edges), u
 const JAM_STEP_OK = 0.45, DRIFT = 0.9; // a block stands at most this proud of the silt banked round it; the bank's slope (rise / run)
+// THE HIDE DEPTH (seafloor relief Task 6, fix rounds 1-2; controller Rulings 21, 25): a block goes out of sight only once
+// its top is under the LOWEST ground anywhere under its footprint and the drift it makes toward the throat as it sinks
+// (u - Rb .. u + Rb along the crack; min(v, targetV) - Rb .. max(v, targetV) + Rb across it), less 1.5 u.
+// - The 9 x 9 grid over the footprint it replaces missed the strata's narrow pockets (0.15-0.45 u wide within 5 u of
+//   their bottoms, toward the tips) by up to 10-26 u, so blocks were switched off with a vertex still hanging in one:
+//   fissure-probe pour-hide measured 3.9 / 4.1 / 3.8 u at home / Pallid / Burned zone 0 and 1.4 u at Burned zone 1
+//   (main's own pour, at the remote sites).
+// - The ground is sampled per station every HIDE_DU along the crack, every HIDE_DV across its width, and kept as the
+//   minimum per HIDE_BW bin across (layout: floorMin, the stations' centreline offsets in floorMid). Against a
+//   0.0625 x 0.0025 u reference that sampling misses a bottom by at most 1.11 u over all nine site x zone planes (0.05
+//   across missed by 2.16; 0.02 by 1.33, the u gaps then dominate): inside the 1.5 u margin.
+// - Per bin, not per station (Ruling 25): the minimum across the WHOLE width (round 1) hid every block under the
+//   throat's deepest pocket at its stations, so the pour ran long (Pallid zone 0 gone at 14.0 s against opening's 14 s,
+//   every zone 2 past it). v is measured from the kinked centreline, so each station's window is shifted by the
+//   centreline's offset there (floorMid) to stay over the same ground.
+// 108-133k samples a zone, at every layout (boot and each reseed).
+const HIDE_DU = 0.25, HIDE_DV = 0.025, HIDE_BW = 0.25;
 // the four rock shapes: [detail, squash, amp, facet] for flora's rockGeo
 const SHAPES = [[4, 0.95, 0.5, 2.4], [4, 0.85, 0.75, 1.0], [4, 0.55, 0.55, 2.0], [3, 1.0, 0.9, 3.0]];
 // pale blue-white as it lands on screen: zone 1's water grade warms, zone 2's cools toward violet, so
@@ -229,6 +247,10 @@ function buildZone(zi) {
     S0: new Float32Array(NF), D: new Float32Array(NF), FL: new Float32Array(NF), dist: new Float32Array(NF), SL: new Float32Array(NF),
     sY: new Float32Array(NVX), sP: new Float32Array(NVX), sM: new Float32Array(NVX), wispY: new Float32Array(N_WISP), wispP: new Float32Array(N_WISP),
     n: 0, B: new Float32Array(N_BOULDER * BS),
+    // THE HIDE DEPTH's grid (stations x bins across, |v| within the widest lip, JAG_MAX x halfW) and centreline offsets
+    hideVB: JAG_MAX * F.halfW, hideNB: Math.ceil(2 * JAG_MAX * F.halfW / HIDE_BW) + 1,
+    floorMin: new Float64Array((Math.round(2 * F.halfLen / HIDE_DU) + 1) * (Math.ceil(2 * JAG_MAX * F.halfW / HIDE_BW) + 1)),
+    floorMid: new Float64Array(Math.round(2 * F.halfLen / HIDE_DU) + 1),
     k: 0, t: -1, rt: -1, q: 0, sag: 0, drop: 0, topMax: -1e9, siltOn: true, rockOn: true };
 }
 
@@ -249,7 +271,9 @@ function cellOf(Fz, x, z) {
 }
 const _tv = new Float32Array(3 * 1024);   // one block's vertices in world space (largest shape: 642 verts)
 const _tg = new Float32Array(2 * 1024);   // ...and in grid coordinates
+const LAYOUT_MS = [0, 0, 0];   // dev (__fissure.layoutMs): each zone's last layout, ms (boot and every reseed)
 function layout(zi) {
+  const tL = performance.now();
   const Fz = Z[zi], F = FISSURE[zi], B = Fz.B, g = Fz.grid, nu = g.nu, nv = g.nv;
   const rand = seededRand(0x6A3C5 ^ (currentSiteIndex() * 92821) ^ (zi * 104729));
   const rr = (a, b) => a + (b - a) * rand();
@@ -275,6 +299,20 @@ function layout(zi) {
     }
   }
   const surf = c => Math.max(S0[c], D[c]);
+  // the hide depth's grid (THE HIDE DEPTH, above): per station, the lowest ground in each bin across the crack's width,
+  // and the kinked centreline's offset there (midAt: the normal offset of v = 0). The widths are copied out first:
+  // _widths returns fissureShape.js's shared scratch, which terrainUnderH (fissureDist) rewrites
+  const FM = Fz.floorMin, MID = Fz.floorMid, NB = Fz.hideNB, VB = Fz.hideVB, nS = MID.length;
+  FM.fill(1e9);
+  for (let i = 0; i < nS; i++) {
+    const u = -F.halfLen + i * HIDE_DU, wd = _widths(F, u), w0 = wd.w0, w1 = wd.w1, nj = Math.floor((w0 + w1) / HIDE_DV), row = i * NB;
+    fissureWorld(u, 0, zi, _w); MID[i] = (_w.z - F.cz) * F.dx - (_w.x - F.cx) * F.dz;
+    for (let j = 0; j <= nj; j++) {
+      const v = -w0 + j * HIDE_DV; fissureWorld(u, v, zi, _w);
+      const h = terrainUnderH(_w.x, _w.z, zi), c = row + Math.min(NB - 1, Math.max(0, Math.floor((v + VB) / HIDE_BW)));
+      if (h < FM[c]) FM[c] = h;
+    }
+  }
   // 2. THE RUBBLE: clumps (an anchor and its pile), big blocks wedged at the walls, a few strays
   for (const K of Fz.kinds) K.n = 0;
   let n = 0;
@@ -349,14 +387,20 @@ function layout(zi) {
     B[o + 6] = _q.x; B[o + 7] = _q.y; B[o + 8] = _q.z; B[o + 9] = _q.w;
     // the pour: as the floor goes, the middle first; the wall blocks last
     B[o + 10] = T_OPEN + 1.3 * Math.pow(1 - p, 0.7) + 0.35 * rand();
-    // where it goes out of sight: under the LOWEST ground over its whole footprint at its target (u, tv)
-    // (the throat is a steep V: under the floor at its centre, a block still hangs half out over the void,
-    // and with the deep's light welling up under it a block switched off there pops)
-    fissureWorld(u, tv, zi, _w);
+    // where it goes out of sight: under the LOWEST ground under its footprint and its drift from v toward tv (THE HIDE
+    // DEPTH, above; stations and bins rounded outward, each station's bins shifted by the centreline's offset there).
+    // The throat is a steep V cut with narrow pockets: under the floor at its centre, a block can still hang a vertex
+    // in one, and with the deep's light welling up under it a block switched off there pops
     const Rb = Math.max(sx, sy, sz) * K.rmax;
     let hideY = floorY;
-    for (let a = -4; a <= 4; a++) for (let b = -4; b <= 4; b++) hideY = Math.min(hideY, terrainUnderH(_w.x + a / 4 * Rb, _w.z + b / 4 * Rb, zi));   // a 9 x 9 grid over it
-    B[o + 11] = hideY - 1.5; B[o + 12] = tv;   // (1.5: the ground can dip between grid points on a steep face)
+    fissureWorld(u, 0, zi, _w); const cm = (_w.z - F.cz) * F.dx - (_w.x - F.cx) * F.dz;   // midAt(u)
+    const vlo = Math.min(v, tv) - Rb + VB, vhi = Math.max(v, tv) + Rb + VB;
+    const s0 = Math.max(0, Math.floor((u - Rb + F.halfLen) / HIDE_DU)), s1 = Math.min(nS - 1, Math.ceil((u + Rb + F.halfLen) / HIDE_DU));
+    for (let i = s0; i <= s1; i++) {
+      const sh = cm - MID[i], b0 = Math.max(0, Math.floor((vlo + sh) / HIDE_BW)), b1 = Math.min(NB - 1, Math.floor((vhi + sh) / HIDE_BW));
+      for (let bb = b0; bb <= b1; bb++) if (FM[i * NB + bb] < hideY) hideY = FM[i * NB + bb];
+    }
+    B[o + 11] = hideY - 1.5; B[o + 12] = tv;   // (1.5: the sampling's miss, <= 1.11 u)
     _ax.set(rr(-1, 1), rr(-0.4, 0.4), rr(-1, 1)).normalize();
     B[o + 13] = _ax.x; B[o + 14] = _ax.y; B[o + 15] = _ax.z; B[o + 16] = rr(0.6, 2.2) * (rand() < 0.5 ? 1 : -1) / Math.max(0.6, R);
     B[o + 17] = p; B[o + 18] = hi; B[o + 19] = rr(0, 6.2832); B[o + 20] = k; B[o + 21] = K.n;
@@ -482,6 +526,7 @@ function layout(zi) {
   }
   for (const a of ['position', 'uv', 'aPh', 'aSide']) WG.attributes[a].needsUpdate = true;
   Fz.wispBase = new Float32Array(WP);   // rest positions (the slump moves them)
+  LAYOUT_MS[zi] = performance.now() - tL;
 }
 
 // On a reseed (game.js reseedWorldNow, after resetJam): the jam hangs under the new site's lips.
@@ -724,6 +769,7 @@ function seepTest(zi, on) {
   lg.attributes.aLeak.needsUpdate = true; lg.index.needsUpdate = true;
 }
 export const __fissure = { seep: SEEP_TUNE, seepK: SEEP_K, seepTest, setOpen: setFissureOpen, open: openFissure, k: fissureOpenK, state, audit, programs: () => renderer.info.programs.length,
+  layoutMs: () => LAYOUT_MS.map(t => +t.toFixed(2)),
   progList: () => renderer.info.programs.map(p => p.id + '|' + p.name + '|' + p.cacheKey.length),
   // which drawables use program id (dev: first-sight audits)
   progUsers: id => { const out = []; scene.traverse(o => { const m = o.material; if (!m || Array.isArray(m)) return; const pr = renderer.properties.get(m).currentProgram;

@@ -1730,11 +1730,15 @@ function buildGrowth(zi, M, hulls, g, rnd) {
 // coordinates are stable between runs and can be quoted in a bug report.
 // The ring is still centred on the opening (riftPos); what it keeps off is the CRACK: the whole
 // claimed ground (clear) 6 u outside its lip (Task 5). A spot that already passed is unchanged.
-function findSite(zi, minR, maxR, footprint, clear) {
+function findSite(zi, minR, maxR, footprint, clear, win) {
   const rp = riftPos(zi);
+  // (seafloor relief, spec §5) a site's band may carry a bearing WINDOW [from, to] (deg from the rift -> raft bearing,
+  // counter-clockwise in atan2(z, x)): the 48 samples spread across it instead of the whole circle. Home's puts the
+  // skiff on the raft-side terraces; without it the flattest-ground search wandered 60-170 u between variants.
+  const a0 = win ? Math.atan2(-rp.z, -rp.x) + win[0] * Math.PI / 180 : 0, span = win ? (win[1] - win[0]) * Math.PI / 180 : 0;
   let best = null;
   for (let ai = 0; ai < 48; ai++) {
-    const a = ai / 48 * TAU;
+    const a = win ? a0 + span * (ai / 47) : ai / 48 * TAU;
     for (let ri = 0; ri < 9; ri++) {
       const rad = minR + (maxR - minR) * (ri / 8);
       const x = rp.x + Math.cos(a) * rad, z = rp.z + Math.sin(a) * rad;
@@ -1772,11 +1776,13 @@ const SITE_SPEC = [
 let SITES = null;
 export function wreckSites() {
   // OWN GROUND: a site's `wrecks.band` row moves each wreck's search ring about its
-  // rift (Pallid: out on the bank; Burned: close in, in the ash). Home has none.
+  // rift (Pallid: out on the bank; Burned: close in, in the ash). A 4-element entry
+  // [minR, maxR, from, to] also fences the bearing (findSite's window): home's zone 0
+  // (seafloor relief, spec §5). A 2-element or missing entry is the shipped search.
   const wr = !SITES && siteParams().wrecks;
   if (!SITES) SITES = SITE_SPEC.map((s, zi) => {
     const b = wr && wr.band && wr.band[zi];
-    const site = findSite(zi, b ? b[0] : s.minR, b ? b[1] : s.maxR, s.foot, s.clear);
+    const site = findSite(zi, b ? b[0] : s.minR, b ? b[1] : s.maxR, s.foot, s.clear, b && b.length >= 4 ? [b[2], b[3]] : null);
     return { zi, x: site.x, y: site.y, z: site.z, clear: s.clear, site };
   });
   return SITES;

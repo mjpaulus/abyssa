@@ -5,7 +5,7 @@
 //   node tools/bench/blade-invariants.mjs <port> [extra query, e.g. salproc]
 // (final fix wave) It FAILS (exit 1): the fresh profile already owns the harpoon (the first-sight check would be
 // vacuous); lights != 14 anywhere; __lev.fp off 15ce888c / c938fe6e / 652d0412; a terrain fingerprint off its
-// anchorage's (home 3b526986, Pallid b1c58f8d, Burned d2b6fb68; zones 1+2 at home d49d451d); the first thrust
+// anchorage's (home 5c0705a1 since THE RELIEF, was 3b526986; Pallid b1c58f8d, Burned d2b6fb68; zones 1+2 at home d49d451d: tools/relief/expect.json); the first thrust
 // at home compiles a program; the soak grows (programs / geometries / textures at a stop vs the same anchorage
 // one cycle earlier); the harpoon's thrust did not land at a stop (per stop: the record is cleared before each
 // stop's thrust and must be rewritten by it, residual fix 5); __safeFailed / __shaderFailed non-empty; a
@@ -32,7 +32,7 @@ const NOGRANT = process.env.NOGRANT === '1';   // the control: the same soak nev
 const home = await c.ev(`(async () => { const C = await import('/src/core.js'); window.__helm = true;
   if (!${NOGRANT}) window.survival.hasHarpoon = true; window.__bench.step(30, null, { render: true }); window.__slash(); window.__bench.step(70, null, { render: true });
   return { programs: C.renderer.info.programs.length, owned: !!window.survival.hasHarpoon }; })()`);
-console.log('first-sight at home', base.programs, '->', home.programs, home.programs === base.programs ? 'OK' : 'COMPILED', 'owned', home.owned);
+console.log('first-sight at home', base.programs, '->', home.programs, home.programs > base.programs ? 'COMPILED' : 'OK', 'owned', home.owned);
 const stops = [];
 for (let k = 0; k < 6; k++) {
   const r = await c.ev(`(async () => {
@@ -56,14 +56,16 @@ const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 console.log('console errors', errs.length, errs.slice(0, 5).join('\n'));
 c.close(); stop();
-const FP = ['15ce888c', 'c938fe6e', '652d0412'], SITE_FP = { 0: '3b526986', 1: 'b1c58f8d', 2: 'd2b6fb68' };
+const FP = ['15ce888c', 'c938fe6e', '652d0412'], SITE_FP = { 0: '5c0705a1', 1: 'b1c58f8d', 2: 'd2b6fb68' };   // home since THE RELIEF (was 3b526986); Pallid and Burned unmoved
 const fail = [];
 if (base.owned) fail.push('the fresh profile owned the harpoon before the first grant (the first-sight check is vacuous)');
 if (base.lights !== 14) fail.push('lights at boot ' + base.lights);
 if (base.fp.join() !== FP.join()) fail.push('__lev.fp at boot ' + base.fp.join(' '));
 if (base.all !== SITE_FP[0]) fail.push('home terrain fingerprint ' + base.all);
 if (base.z12 !== 'd49d451d') fail.push('zones 1+2 fingerprint ' + base.z12);
-if (!NOGRANT && home.programs !== base.programs) fail.push(`the first thrust at home compiled: programs ${base.programs} -> ${home.programs}`);
+// (Ruling 56) a compile is an INCREASE: the first thrust RELEASES programs (the final verification sweep measured 722 -> 713,
+// identically on main and the relief), and the old `!==` read that drop as a compile (exit 1 on both builds)
+if (!NOGRANT && home.programs > base.programs) fail.push(`the first thrust at home compiled: programs ${base.programs} -> ${home.programs}`);
 stops.forEach((r, k) => {
   if (r.lights !== 14) fail.push(`stop ${k} (site ${r.site}): lights ${r.lights}`);
   if (SITE_FP[r.site] && r.fpAll !== SITE_FP[r.site]) fail.push(`stop ${k} (site ${r.site}): terrain fingerprint ${r.fpAll}, want ${SITE_FP[r.site]}`);

@@ -402,9 +402,16 @@ export function makeHarpoon(L, opts = {}) {
     let best = Infinity, bi = -1;
     const cand = [];
     const sa = L.sandSide > 0 ? 0 : Math.PI;
+    // (seafloor relief Task 8b, Ruling 44) the site's sleeper row may keep the seam to her BACK half (lair.seat 'back': her
+    // body-local z < 0; her front is +z). Home's does: turned at her raft-side bed, her left flank's middle lies at the
+    // ground on the levelled flat (its margin -0.4..+0.5 u over the ground 1.5 u out, main's 1.5-2.0), so only the two ends
+    // of the arc reach a man's hands and the front one scored best (1.267 against her back corner's 1.534): the fight
+    // opened at her front-left. Kept to her back half, Alt+6 stands him at her back-left, as shipped. No key: no change.
+    const backHalf = !!(L.lair && L.lair.seat === 'back');
     for (let i = 0; i < P.count; i++) {
       _v.fromBufferAttribute(P, i);
       if (_v.y < -0.13 || _v.y > 0.08) continue;                 // the margin band (the sculpt's margin droops to -0.11 mid-flank)
+      if (backHalf && _v.z > 0) continue;
       const th = Math.atan2(_v.z, _v.x);
       let dth = th - sa; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
       if (Math.abs(dth) > 1.15) continue;
