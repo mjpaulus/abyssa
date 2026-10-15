@@ -6,9 +6,10 @@
 //   disguise  home, zone 0, Velkath dormant at her bed. THE DRAWN SAND at (x, z) = max(terrainH, the dune's drawn surface
 //             (__burial.sandAt; absent on main)). Every vertex of her legs, claws, eyes / stalks, mouthparts and every ward
 //             centre: its height over the drawn sand (max, per part; bar <= 0). HER SIDES: her shell's vertices outside the
-//             crest strip (__burial.inStrip; on main the strip's default ellipse, BURY_DEFAULT below) over the drawn sand
-//             (bar <= +0.02). THE CREST: her shell's vertices over the drawn sand: top over the mean ground (poseAll's 5 x 5
-//             grid; bar 3.0-4.0 u), length along her keel (bar 16-24 u). THE CLUTCH (Task 6 on): every live lobe's top (r x
+//             crest strip over the drawn sand (bar <= +0.02). THE STRIP, here and for the crest and the growth: the brief's band,
+//             ring 0's edge + 0.6 u, computed from the mound by the probe itself, never the build's inStrip (Task 3a fix round 3); on
+//             main (no mound) the strip's default ellipse, BURY_DEFAULT below. THE CREST: her shell's vertices over the drawn sand:
+//             top over the mean ground (poseAll's 5 x 5 grid; bar 3.0-4.0 u), length along her keel (bar 16-24 u). THE CLUTCH (Task 6 on): every live lobe's top (r x
 //             1.25) <= -0.05 u under the sand. THE HARPOON (Task 4 on): the seam >= +0.25 u, every pole sample >= 0 u over the
 //             DRAWN SAND (terrain or dune, never the crest: harpoon.js seat()'s own test). THE GROWTH ON HER BACK (Task 3a on):
 //             every DRAWN reef and weed vertex OUTSIDE the strip <= 0 over the sand (inside it, growth on a rock is allowed);
@@ -107,8 +108,17 @@ const DISGUISE = `(async () => {
   const inv = new THREE.Matrix4().copy(L.body.matrixWorld).invert(), v = new THREE.Vector3(), lv = new THREE.Vector3();
   const m = new THREE.Matrix4(), m2 = new THREE.Matrix4();
   const stripEll = (lx, lz) => { const a = BD.crestW / 2 / L.R, b = BD.crestL / 2 / L.R, q = lz - BD.crestZ; return (lx / a) ** 2 + (q / b) ** 2 < 1; };
-  // (the mound's strip where she has one; with none (main, BP_RED=ridge's {on:0} rebuild) the default ellipse, as main reads it)
-  const inStrip = (x, z) => B && B.inStrip && L.mound ? B.inStrip(x, z) : (lv.set(x, L.bodyY, z).applyMatrix4(inv), stripEll(lv.x, lv.z));
+  // THE STRIP (Task 3a fix round 3, the controller's ruling on review N1): where she has a mound, the BRIEF'S band, computed here
+  // from the mound itself and never from the build's inStrip: inside the straight edge, between the two bearings round the point,
+  // through ring 0's ends pushed out 0.6 u (the brief's dl), i.e. ring 0's edge + 0.6 u, whatever contour the mesh's ring 1 runs on.
+  // With no mound (main, BP_RED=ridge's {on:0} rebuild) the default ellipse, as main reads it
+  const stripMD = (x, z) => { const MD = L.mound, NB = MD.COLS, NR = MD.NR, DT = Math.PI * 2 / NB, dlr = 0.6 / MD.R;
+    const dx = x - MD.cx, dz = z - MD.cz, lx = (dx * MD.c - dz * MD.s) / MD.R, qz = (dx * MD.s + dz * MD.c) / MD.R - MD.crestZ, rho = Math.hypot(lx, qz);
+    let a = Math.atan2(qz, lx) / (Math.PI * 2); if (a < 0) a += 1;
+    const fa = a * NB, b0 = Math.floor(fa) % NB, b1 = (b0 + 1) % NB, t = fa - Math.floor(fa);
+    const r0 = MD.RR[b0 * NR] + dlr, r1 = MD.RR[b1 * NR] + dlr;
+    return rho < r0 * r1 * Math.sin(DT) / (r0 * Math.sin(t * DT) + r1 * Math.sin((1 - t) * DT)); };
+  const inStrip = (x, z) => L.mound ? stripMD(x, z) : (lv.set(x, L.bodyY, z).applyMatrix4(inv), stripEll(lv.x, lv.z));
   const worst = {}, n = {};
   const book = (part, x, y, z) => { const d = y - sand(x, z); if (part !== 'reef' && part !== 'weed') n[part] = (n[part] || 0) + 1;
     if (!(part in worst) || d > worst[part].d) worst[part] = { d: +d.toFixed(3), at: [+x.toFixed(1), +y.toFixed(1), +z.toFixed(1)] }; };
