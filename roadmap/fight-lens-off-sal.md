@@ -1,8 +1,8 @@
 ---
 title: Velkath's fight — the camera keeps off Sal under her
-status: next
+status: wip
 tags: camera, brooder, game.js, velfix
-updated: 2026-10-14
+updated: 2026-10-15
 ---
 During Velkath's fight the camera can press against Sal when he is under her. It then rests against his dress or lantern, or inside her shell or legs after the calm, and her ward light-ups wash the frame. Michael's call: when the camera has no clear spot, it drops below Sal's helmet, as it already does for her eggs, instead of resting against him or inside her.
 
@@ -35,3 +35,4 @@ During Velkath's fight the camera can press against Sal when he is under her. It
   - The relief's 0.55 u lift lengthens her drop by exactly that much (brooder.js NOSAFE.depth). It is the only game-side difference in that phase.
   - Per-drop CLEAN rates on post-merge main would show whether any of these are relief-made. CLEAN frames are by definition not pressed, so this fix alone won't clear them.
   - Listing: ~/sc/.abyssa-wt/reviews/t10-scripts/clean.md.
+- 2026-10-15 — Started at Michael's "yes" (camera fix first, then the buried rock): building on branch `lensfix` (worktree ~/sc/.abyssa-wt/lensfix, off main 15bc610), one Opus agent, brief ~/sc/.abyssa-wt/reviews/lensfix/brief.md (RED on the unchanged branch, GREEN = PRESSED and calm shell/leg frames 0 over 3 gate runs alone + 1 under load). Moved next -> wip.
