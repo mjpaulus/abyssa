@@ -16,7 +16,7 @@
 //   vents   field size/density/heat             -> vents.js ventKnobs
 //   wrecks  search ring about each rift         -> wrecks.js wreckSites; a 4-element band entry
 //           [minR, maxR, from, to] also fences the bearing (findSite's window; home's zone 0)
-//   sleepers[i].idle / lair / hard              -> the kinds (brooder/hoarder/hunter)
+//   sleepers[i].idle / lair / hard / bury       -> the kinds (brooder/hoarder/hunter)
 // Every one is null at home except `shape` and `wrecks` (seafloor relief, 2026-10-13) and Velkath's sleeper row (Task 8b,
 // Ruling 44: her turn, her harpoon's seat, her stance), and every consumer treats null as the shipped constant.
 // All authored, never generated: the register is the product.
@@ -77,7 +77,8 @@ const SITES = [
     // hunting stance and hers, turned (riteplay wardHuntP50, the median over 4 paired average fights, seeds 901-904, the clock
     // plugged: main 10.04, the relief 9.475, gap 0.565 -> 0.55). sigils / hueShift are the shipped values (game.js
     // makeZoneSleeper reads every row's). Zones 1 and 2 keep no row.
-    sleepers: [{ sigils: 3, hueShift: 0, idle: null, lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 } }, null, null],
+    // bury: velkath-buried-rock, home only (Michael 2026-10-15); the crest's height over her ground (spec 3–4 u)
+    sleepers: [{ sigils: 3, hueShift: 0, idle: null, lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 }, bury: { crest: 3.5 } }, null, null],
     // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries no water, light,
     // floor, vents or grade of its own: every consumer reads null as "the shipped constant".
     water: null, light: null, floor: null, vents: null, grade: null,

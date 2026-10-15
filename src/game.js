@@ -713,7 +713,7 @@ function makeZoneSleeper(i, extra) {
     nSigils: row.sigils,
     hue: (LEVIATHAN_CFG[i].hue + row.hueShift + 1) % 1,
     name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name,
-    idle: row.idle || null, lair: row.lair || null, hard: row.hard || null
+    idle: row.idle || null, lair: row.lair || null, hard: row.hard || null, bury: row.bury || null
   } : undefined;
   if (calmedBefore(i)) over = Object.assign({}, over, { remembered: true });
   // (Task 6) Velkath's harpoon already pulled at this anchorage: her rite starts at the old wound

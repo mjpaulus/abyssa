@@ -34,6 +34,7 @@ import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos,
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
+import { BURY, fitSink } from './burial.js';
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -250,6 +251,7 @@ const _x = V3(), _y = V3(), _z = V3(), _sc = V3(), _r = V3(), _rw = V3(), _lp = 
 const _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _q = new THREE.Quaternion(), _qs = new THREE.Quaternion();
 const _col = new THREE.Color();
 const _u = V3(), _hz = V3();
+const _sa = {};                                       // (velkath-buried-rock) L.topAt's shellAt scratch
 
 // CHITIN SHEEN (polish-brooder): a pale, subsurface-ish rim on the arms, legs and mouth.
 // A view-grazing Fresnel of the PERTURBED normal, scaled by the diffuse light the surface
@@ -567,6 +569,12 @@ export function makeBrooder(idx, cfg) {
   // STAND.clear (or the sole lift, 0.87 u at the median on the flat, would take the offset back), the crouch's CROUCH.clear
   // floor under her belly, and THE DROP's NOSAFE.depth (her slam still meets the sand). Live: lab / probes may set it.
   L.standLift = c.hard && c.hard.lift || 0;
+  // (velkath-buried-rock) BURIED (site.js sleeper row `bury`: home only). Absent, L.bury and L.buryD stay 0 and every term they
+  // enter is the shipped one bit for bit (x * (1 - 0), y - 0 * 0).
+  L.buried = !!(c.bury && BURY.on);
+  L.crest = L.buried ? (c.bury.crest ?? BURY.crest) : 0;
+  L.bury = 0; L.buryD = 0; L.breathU = 0; L.breathY = 0;
+  L.topAt = (x, z) => { const h = G.shellAt(x, z, _sa).h; return Math.hypot(x, z) <= G.rimR(Math.atan2(z, x)) ? h : null; };   // procedural; installSculpt swaps in the bake's
 
   // ---- wards ----
   const wardScale = 4.2;
@@ -638,7 +646,10 @@ export function makeBrooder(idx, cfg) {
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
-    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); seatRite(L); fitSkirt(L); } }
+    else if (name === 'place') {
+      if (!L.buried) { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); seatRite(L); fitSkirt(L); } }
+      else { placeAt(L, arg.pos, arg.yaw); if (L.dormant) bedDown(L); }   // (velkath-buried-rock) sunk again at the new bed
+    }
     return L.probe();
   };
   L.probe = () => ({
@@ -649,7 +660,8 @@ export function makeBrooder(idx, cfg) {
     tris: countTris(L.body), sculpted: L.sculpted,
     eyes: L.eyeSt ? L.eyeSt.map(e => ({ errDeg: +(e.err * 57.3).toFixed(1), saccades: e.n })) : null,
     sight: { seen: L.seen, tau: +L.tau.toFixed(2), blindT: +L.blindT.toFixed(2), aim: L.aim.toArray().map(v => +v.toFixed(1)), lost: L.lostN || 0 },
-    ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), climb: +(L.climbT > 0 ? L.climbT : 0).toFixed(1), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)), elbow: L.claws.map(c => +(c.elbow || 0).toFixed(3)) }
+    ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), climb: +(L.climbT > 0 ? L.climbT : 0).toFixed(1), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)), elbow: L.claws.map(c => +(c.elbow || 0).toFixed(3)) },
+    bury: +L.bury.toFixed(4), buryD: +L.buryD.toFixed(3), buried: !!L.buried, meanG: L.meanG ?? null   // (velkath-buried-rock)
   });
 
   // the eyeshine pinpoints (poseAll writes them; always in the scene at opacity 0 so the
@@ -665,13 +677,21 @@ export function makeBrooder(idx, cfg) {
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
-  poseAll(L, 0, null);
-  seatRite(L, !!SC);                                 // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
-  buildSkirt(L);
-  // (the harpoon seats in her DRAWN shell: with the sculpt already here it is swapped in after the first
-  // seat, so the iron is re-seated on it and the drift re-opened at its bearing)
-  if (SC) { installSculpt(L, SC); if (L.harpoon && L.dormant) { L.harpoon.seat(); fitSkirt(L); } }
-  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.dormant) { seatRite(L); fitSkirt(L); } } });
+  if (!L.buried) {
+    poseAll(L, 0, null);
+    seatRite(L, !!SC);                                 // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
+    buildSkirt(L);
+    // (the harpoon seats in her DRAWN shell: with the sculpt already here it is swapped in after the first
+    // seat, so the iron is re-seated on it and the drift re-opened at its bearing)
+    if (SC) { installSculpt(L, SC); if (L.harpoon && L.dormant) { L.harpoon.seat(); fitSkirt(L); } }
+    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.dormant) { seatRite(L); fitSkirt(L); } } });
+  } else {
+    // (velkath-buried-rock) buried: her bed in the burial's order (bedDown), no silt drift (the mound covers her: Task 3a). The sink
+    // is read off the drawn shell, so the sculpt's landing beds her down again on the baked one
+    bedDown(L, !!SC);
+    if (SC) { installSculpt(L, SC); if (L.dormant) bedDown(L); }
+    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L); else poseAll(L, 0, null); } });
+  }
   const pd = L.onDispose;
   L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
   return L;
@@ -681,6 +701,19 @@ export function makeBrooder(idx, cfg) {
 // re-keeps its shared model after a sculpt install replaced L.keepGeo).
 function seatRite(L, noHarpoon = false) {
   if (L.brood) L.brood.seat();
+  if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
+}
+
+// HER BED, in the order the burial needs (velkath-buried-rock): the clutch rests on the floor of her UNSUNK pose (so after a calm her
+// tongue of eggs lies on the sand exactly as shipped, and buried it is under the floor with her); then the sink, then (Task 3a) the
+// mound over the sunk pose, then (Task 4) the harpoon on the crest. Called only when L.buried: the shipped paths keep their own lines.
+function bedDown(L, noHarpoon = false) {
+  L.bury = 0; poseAll(L, 0, null);
+  if (L.brood) L.brood.seat();
+  L.buryD = fitSink(L, L.crest);
+  L.bury = 1;
+  for (let li = 0; li < 8; li++) { const f = L.feet[li]; restWorld(L, li, f.planted); f.cur.copy(f.planted); f.t = -1; }   // the feet sunk now, not over a second
+  poseAll(L, 0, null);
   if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
 }
 
@@ -975,6 +1008,14 @@ function installSculpt(L, A) {
     wm.forEach((m, i) => P.weed.setMatrixAt(i, m));
     P.weed.count = wm.length;
     P.weed.instanceMatrix.needsUpdate = true;
+    L.topAt = (x, z) => {   // (velkath-buried-rock) the bake's own top probe, kept: the mound and the crest's footing read it
+      const fx = (x - x0) / (x1 - x0) * (n - 1), fz = (z - z0) / (z1 - z0) * (n - 1);
+      if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) return null;
+      const i = Math.min(n - 2, fx | 0), j = Math.min(n - 2, fz | 0), tx = fx - i, tz = fz - j;
+      const a = h[j * n + i], b = h[j * n + i + 1], c2 = h[(j + 1) * n + i], d = h[(j + 1) * n + i + 1];
+      if (a == null || b == null || c2 == null || d == null) return a != null ? a : b != null ? b : c2 != null ? c2 : d;
+      return (a * (1 - tx) + b * tx) * (1 - tz) + (c2 * (1 - tx) + d * tx) * tz;
+    };
     G.setShellHeight(null);
   }
   // limbs: one shared atlas, the chitin sheen program the procedural limbs used
@@ -1198,6 +1239,9 @@ function restWorld(L, li, out) {
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   out.set(L.pos.x + (lx * cy + lz * sy) * L.R, 0, L.pos.z + (-lx * sy + lz * cy) * L.R);
   out.y = groundAt(L, out.x, out.z, true);           // a rock's top is ground too
+  // (velkath-buried-rock) her folded feet go down with her: buried, the rest spot is under her bed by the sink (rising, bury eases to 0
+  // and the sprawl's lerp brings them up with her; awake they are planted on the ground by reachFoot, as shipped)
+  if (L.buried) out.y -= L.buryD * L.bury;
   return out;
 }
 
@@ -1481,7 +1525,11 @@ function poseAll(L, dt, player) {
   // takes it up through a critically damped follower, never a snap
   if (!(dt > 0) || !L.gG) { L.gG = { x: gy, v: 0 }; L.gP = { x: pit, v: 0 }; L.gRl = { x: rol, v: 0 }; }
   else { gy = spr(L.gG, gy, 4.5, 1, dt); pit = spr(L.gP, pit, 4.5, 1, dt); rol = spr(L.gRl, rol, 4.5, 1, dt); }
-  const breath = (0.012 * Math.sin(L.t * 0.45) + 0.004 * Math.sin(L.t * 1.07 + 1)) * (1 - hc);
+  const breath0 = (0.012 * Math.sin(L.t * 0.45) + 0.004 * Math.sin(L.t * 1.07 + 1)) * (1 - hc);
+  // (velkath-buried-rock) buried, her own breath is the SAND's (burial.js: a few cm every 8-10 s, L.breathY): the 0.18 u bob of the
+  // bedded ridge would be the tell at any range
+  const breath = breath0 * (1 - L.bury);
+  L.breathU = breath0 * R;
   // THE BROODING CROUCH (brooder-clutch): a diver UNDER her shell (at her wards, at the clutch
   // hanging there) and she bears down on him: the legs bend, the body comes down 2.5 u and
   // leans over him, her threat lift dropped. Standing on the rift lip she rides the crest
@@ -1504,7 +1552,8 @@ function poseAll(L, dt, player) {
   // threat's lift and front pitch going with it brought her 4.3 u down over him)
   const liftK = Math.max(L.threatE, L.underE ? L.underE.x : 0);
   // (Ruling 44) + her stance offset (makeBrooder: L.standLift), with the heave: asleep she lies as she did
-  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.standLift * hv + L.bY.x;
+  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.standLift * hv + L.bY.x
+    - L.buryD * L.bury + L.breathY * L.bury;   // (velkath-buried-rock) sunk under her bed, the sand's breath with her
   if (L.dropY) L.bodyY += L.dropY;   // (velhard) THE DROP: braced up, slammed down, risen (noSafeSpot)
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
