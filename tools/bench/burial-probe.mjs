@@ -13,7 +13,7 @@
 //             DRAWN SAND (terrain or dune, never the crest: harpoon.js seat()'s own test). THE GROWTH ON HER BACK (Task 3a on):
 //             every reef and weed vertex OUTSIDE the strip <= 0 over the sand (inside it, growth on a rock is allowed).
 //             BP_CHECK=<comma list> limits the verdict to those checks (the tasks before the mound check height / limbs only).
-// BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest height;
+// BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height. A page-side throw is UNMEASURED (exit 2), never a fail (1) or a RED's pass (5).
 // __burial.set rebuilds her through __lev.remember(null), outside game.js keepingPrograms: her programs are released and
 // rebuilt, so a `programs` reading taken after a set is not a play reading (that mode never sets knobs).
@@ -36,7 +36,8 @@ const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BU
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/burial-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 if (!BUILT.includes(MODE)) { console.error(`burial-probe: mode ${MODE} is not built yet (a later task of the velkath-buried-rock plan adds it)`); process.exit(2); }
-// (`ridge` names no `len`: main's ridge is 19.8 u long, inside 16-24, so that bar is no discriminator for it)
+// (the header's `crest` for `ridge` is read as the crest HEIGHT (`top`): main's ridge is 19.8 u long, inside 16-24, so `len` can never fail for it.
+// Task 1 ledger: the literal reading (sides + top + len must all fail) exits 3 on main. The controller rules whether this narrowing stands)
 const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], mainIsIt: true }, shallow: { set: { crest: 5.5 }, bars: ['top'] } } };
 const RED = process.env.BP_RED || '';
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
