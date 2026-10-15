@@ -441,12 +441,33 @@ against explicit contracts and reviewed on return.
   keeps her clearance on the walk home, won't lie down while he's on her ground, re-rises quietly, and the lens guard
   looks ahead (`creLensAhead`). THE LENS IS NEVER INSIDE SAL (game.js `SALCAP`, a capsule boots-to-bonnet; her drop
   throws him back at the lens). Gates: `tools/bench/velfix-gate.mjs` (fullplay-gate.mjs, three post-calm routes). THE
-  GATE IS RED ON MAIN, 12 of 12 route runs (relief Task 9, clock plugged, alone and under load): the fight lens is
+  GATE WAS RED ON MAIN, 12 of 12 route runs (relief Task 9, clock plugged, alone and under load): the fight lens is
   PRESSED on Sal under her (CRECAM `minD` 2.2 u, SALCAP inside it) - the light-up's hide ring (17-59% of the frame,
   over the 15% cap to flashT 0.55-0.72 s, peaks 0.59 / 0.57), his dress or lantern in an air-pack burst (4 full
   white-outs in 18 runs), the lens in her shell (12 frames) or legs (29) after the calm; 0 of 8,471 frames are red with
   the lens >= 2 u off his bonnet and no light-up within 0.6 s. Michael chose "A is good" (2026-10-14): keep the lens off
-  Sal under her (card fight-lens-off-sal; its acceptance is the absolute GREEN, run on main). On the relief the gate was
+  Sal under her (card fight-lens-off-sal; its acceptance is the absolute GREEN, run on main).
+  THE LENS KEEPS OFF SAL UNDER HER (lensfix 2026-10-15, branch lensfix, report reviews/lensfix/report.md): nothing on
+  main held `minD`; booked by stage, 69% of the frames under 2 u were the SPRING carrying the lens on past its target when
+  he stopped short (her belly, a burst's end, a throw), 29% the burst's PUNCH-IN putting the target through him, 2% the
+  guard (it never pushed out, and held the eggs at 1.0 u). game.js `CRECAM.drop` (0 = main's lens, bit for bit; `creEng`
+  books which rule engaged, a bit each): 1 THE DROP, the target goes to a spot BEHIND HIM BELOW HIS HELMET (`creSpot`:
+  dropR 2.8 / minD off his axis, 0.5-2.0 u under his pivot, line clear of her) when the boom has no clear spot at minD;
+  2 THE PUNCH never takes the target inside minD of his body; 4 THE GUARD pushes out to minD (the eggs too), then the
+  drop's spot on its bearing, the drop target's spot, the frame's target, and with none clear it is main's guard exactly
+  (never moves the lens into her); 8 THE KEEP (last) holds the lens minD off his whole body (boots to helmet), falling
+  back to off-his-helmet, then a speed-limited move toward a spot, never into her. GREEN on 3462824 (3 alone + 1 under
+  load, every route re-run until it took the harpoon / re-rose): PRESSED 0 in the fight on all 12 route runs, and 3 frames
+  after the calm in one resettle run; calm shell / leg 14 / 2 / 1 in three of the twelve (the rest 0). NOT 0: when she
+  settles or re-rises with her claws closing round him there is no clear spot below his helmet, and the lens is then
+  either nearer him than minD or in her (main's resettle baseline, 5 runs: calm shell / leg 13 / 0 / 4 / 18 / 2, PRESSED
+  14 / 20 / 3 / 28 / 5). A sideways swing round him (or a claw-proxy change) is the next call, Michael's. The gate stays
+  RED on FLASH (the light-up's ring, B, not picked) and on CLEAN, which rose because the same light-up-tail frames moved
+  from 1.1 u (PRESSED) to 2.2 u (CLEAN). Its after-calm lens-surface frames at a full 9 u boom are claw-proxy
+  under-coverage (main has them). riteplay A/B (on 2f4eac9): the average bot's fights ran longer with the new lens in 12 of 16 pairs
+  (median 51 vs 31 s), unexplained (no lens path into his controls or her sight; ward first-seen times identical; a seeded
+  A/A of one build differs by 26 s); dark wards occlusion-visible less often. `__crecam.dbg` (window.__crecamDbg = true)
+  books the stages; `state()` books drop / punch / guard / keep counts, keepMax, nearN / nearMin. On the relief the gate was
   judged RELATIVE to main (Task 10, pre-registered) and FAILED AS REGISTERED (Ruling 52: the baseline came from four
   short fights and C used totals that scale with fight length; the per-frame red rate is equal, 8.3 per 100 booked
   frames on both builds, the CLEAN rate is not, 0.97 against 0.43 per 100; the relief's gate fights ran 39.6 s against
