@@ -2,7 +2,7 @@
 title: Velkath buried — a rock with a harpoon in it
 status: backlog
 tags: brooder, sleepers, rite, particles, design
-updated: 2026-10-14
+updated: 2026-10-15
 ---
 Michael's idea: Velkath sleeps fully buried in the sand and reads as a rock with an old harpoon in it. Pulling the harpoon wakes her, and she rises out of the sand as it pours off her in a dust plume. Michael approved the spec; the implementation plan comes once the relief lands. To be built after the sea-floor relief lands.
 
@@ -28,3 +28,4 @@ Michael's idea: Velkath sleeps fully buried in the sand and reads as a rock with
 - 2026-10-14 — created from Michael's idea; brainstorming started (it changes her sleep and her wake, so it gets a spec and a plan).
 - 2026-10-14 — his picks: tell B (the sand breathes up close), crest only A (a ~20 u low outcrop), slow 6 s rise A (blind 3-4 s in the plume), after the calm she points her great claw at the opening crack (his idea) and digs back in A, the camera follows the point A, build approach 1 (a drawn burial skin over a sunken body); sections 1-4 approved; spec docs/superpowers/specs/2026-10-14-velkath-buried-rock-design.md.
 - 2026-10-14 — Michael approved the spec ("approved", confirmed "yes"); next: writing-plans after the sea-floor relief lands.
+- 2026-10-15 — The sea-floor relief has landed (merged a5d3ee2), so the plan is unblocked. Scope note from Michael's call to focus on home ("we should focus on getting one right now", card anchorages-as-missions): the spec says she is buried at every anchorage; the plan builds and judges home and only keeps the other anchorages working.
