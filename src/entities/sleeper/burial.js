@@ -57,9 +57,9 @@ export function fitSink(L, crest) {
 }
 
 // ---- THE MOUND ----
-const NB = 128, LEAN = 2;   // bearings (the skirt's SK_COLS); LEAN: ring 1's contour (fitMound)
+const NB = 128;   // bearings (the skirt's SK_COLS)
 const RIN = new Float32Array(NB), RS = new Float32Array(NB);
-const _rgb = [0, 0, 0], RING = new Float32Array(NB), _mi = new THREE.Matrix4(), R1S = new Float32Array(NB), REND = new Float32Array(NB), RE1 = new Float32Array(NB), RE2 = new Float32Array(NB), CAPR = new Float32Array(NB);
+const _rgb = [0, 0, 0], RING = new Float32Array(NB), _mi = new THREE.Matrix4(), REND = new Float32Array(NB), RE1 = new Float32Array(NB), RE2 = new Float32Array(NB), CAPR = new Float32Array(NB);
 // THE DRAWN SHELL under the dune, binned (Task 3a, measured on the baked shell at home): the bake's top heightfield (L.topAt) is a
 // coarse bilinear grid, and her shell is not a smooth dome under it. Her keel's spines read +-0.5 u off it, and the lip of her
 // back is a near-vertical face (the top falls 2-4 u inside 0.5 u of run: the grid reads half-way down it), which stood 1.8 u over a
@@ -119,7 +119,7 @@ export function shellTopW(MD, x, z) {
 // edge must never float). Every drawn vertex outside the strip is then put under the cover (coverShell: the pile's linear
 // sampling cuts its peaks). Drawn in the seabed's own material with its vertex channels resampled (seabedColor), so dune and floor
 // read as one. Drawn-only: terrainH is untouched. After coverShell and the ring smoothing the requirements go back into the pile
-// (repile) and the sand settles (settle): ring 1's contour holds its lean so the quads at the strip's ends are not slivers. Cost
+// (repile), each quad takes its shorter diagonal (diagonals) and the sand settles (settle). Cost
 // (measured, M5 Max headless): 12-14 ms, + prepGrowth 2.5 ms, of a 37 ms re-bed. Judged by burial-probe disguise `repose` (every
 // triangle of rows 1 .. NI-1 <= a fixed 33.81 deg).
 export function fitMound(L, MD, seabedColor, fissureDist) {
@@ -158,15 +158,6 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
     RIN[j] = Math.max(0.02, r);
   }
   for (let j = 0; j < NB; j++) { let s = 0; for (let q = -2; q <= 2; q++) s += RIN[(j + q + NB) % NB]; RS[j] = s / 5; }   // no corners
-  // RING 1's CONTOUR, its lean held (Task 3a fix round 2; review I1): the strip is a slender lens round C, so at its ends its edge
-  // radius falls ~1.5 u a bearing over ~0.34 u of arc, and rings started 0.6 u past it leaned 77 deg: every quad there a thin
-  // parallelogram, whose slivers (median largest angle 149 deg) stood the pile's slope up to 45-63 deg (the spokes at the strip's
-  // ends, measured). Ring 1 runs on the smallest contour outside RS + 0.6 u whose radius changes by at most LEAN x its own size per
-  // radian (r(j) = max over j' of r1(j') exp(-LEAN |j - j'| dtheta)); the strip's band (ring 0 -> 1) widens there, at the ends' flanks
-  // only (measured at LEAN 2: 0.6 u on her sand side as before, up to 4.4 u at the ends' flanks; the crest's top and length held,
-  // 3.50 / 17.9 u). With the shorter diagonals (diagonals()) and the settle, faces over 33.81 deg: LEAN 1 / 1.3 / 2 -> 0 (no
-  // contour at all: 0 too, but only with the settle raising 0.5 u, at its cap); LEAN 0.5 widened her sand side's band to 4.5 u
-  for (let j = 0; j < NB; j++) { let m = 0; for (let q = -32; q <= 32; q++) { const v = (RS[(j + q + NB) % NB] + dl) * Math.exp(-Math.abs(q) * Math.PI * 2 / NB * LEAN); if (v > m) m = v; } R1S[j] = m; }
   // the strip's centre, then the pile round it (sources: her drawn shell outside the strip's band, over the floor less the cover)
   MD.bx = wx(0, K.crestZ); MD.bz = wz(0, K.crestZ);
   pileUp(L, MD, dl, st);
@@ -187,7 +178,7 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
         rLast = r;
       } else if (h < fl - 4) break;
     }
-    CAPR[j] = cap; REND[j] = Math.min(cap, Math.max(rLast + st, R1S[j] + run0));
+    CAPR[j] = cap; REND[j] = Math.min(cap, Math.max(rLast + st, r0 + dl + run0));
   }
   // the run-outs round the bearings, closed and smoothed (the max over +-3 bearings, averaged over +-3, never under a bearing's own):
   // where the pile's edge runs nearly along a bearing the run-out jumps 1.4 u from one bearing to the next, and the rings sheared
@@ -209,7 +200,7 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
     };
     set(0, r0, 0.42);
     { const h0 = topW(ux * r0, K.crestZ + uz * r0), o = j * 3; MD.M[o + 1] = (h0 === h0 ? h0 : L.meanG) - K.reveal; }
-    const r1 = R1S[j];
+    const r1 = r0 + dl;
     for (let i = 1; i < NI; i++) { const s = (i - 1) / (NI - 2); set(i, r1 + (rEnd - r1) * s, 0.42 + 0.58 * Math.pow(s, 0.6)); }
     set(NI, rEnd + 0.4 / R, 1); set(NI + 1, rEnd + 0.8 / R, 1);
     for (const i of [NI, NI + 1]) { const o = (i * NB + j) * 3; MD.M[o + 1] = terrainH(MD.M[o], MD.M[o + 2], L.idx) - (i === NI ? 0.10 : 0.12); }
@@ -364,8 +355,9 @@ function repile(L, MD) {
 // alternating direction, until nothing moves 0.1 mm (MD.settleN; MD.settleMax: the largest raise). Ring 0 (in the rock), the dune's
 // last ring (where it meets the floor) and the buried rings are fixed. A raise travels downhill, shrinking by (k_settle - the pile's
 // slope) per unit run, so the slack is load-bearing: on the sliver quads of the first cut, at the repose itself a raise ran out to
-// the dune's edge and stood it 2 u over the floor, at + 3 deg 1 u. With ring 1's contour and the shorter diagonals it is nearly idle
-// (at home: 2 sweeps, largest raise 0.03 u; at repose 0.45: 0.04 u; worst faces 33.01 / 28.43 deg, measured)
+// the dune's edge and stood it 2 u over the floor, at + 3 deg 1 u. With the shorter diagonals it works at the strip's ends only (at
+// home: 7 sweeps, MD.settleRaised vertices raised over 5 cm, the largest at its 0.5 u cap; worst face 33.01 deg; at repose 0.45: worst
+// 32.12 deg, under the probe's bar, measured)
 // (SETTLE_CAP u: no vertex rises more than this over its height before the settle, so a raise that will not die out is booked as a
 // steep face the probe sees, never a shelf at the dune's edge)
 const SETTLE_SWEEPS = 64, SETTLE_SLACK = 4.2 * Math.PI / 180, SETTLE_CAP = 0.5;
@@ -409,12 +401,15 @@ function settle(MD) {
     }
     if (mx < 1e-4) break;
   }
-  MD.settleN = n; MD.settleMax = top;
+  let nr = 0; for (let v = 0; v < NB * MD.NR; v++) if (M[v * 3 + 1] > M0[v] + 0.05) nr++;
+  MD.settleN = n; MD.settleMax = top; MD.settleRaised = nr;
 }
-// EACH QUAD'S DIAGONAL, the shorter one (Task 3a fix round 2): where the rings lean (round the strip's ends) a quad is a leaning
-// parallelogram, and its long diagonal makes two slivers (a largest angle of 147 deg, measured: a sliver's plane stood 56 deg over
-// three vertices 0.2 u apart). The index is rewritten at the fit (an event; the same vertices, the same winding as makeMound's);
-// moundY reads MD.DG to find the drawn triangle
+// EACH QUAD'S DIAGONAL, the shorter one (Task 3a fix rounds 2-3): the strip is a slender lens round C, so at its ends its edge
+// radius falls ~1.5 u a bearing over ~0.34 u of arc and the rings there lean up to 77 deg: each quad a leaning parallelogram, whose
+// long diagonal made two slivers (median largest angle 149 deg) that stood the pile's slope up to 45-63 deg (the spokes at the strip's
+// ends, measured). The index is rewritten at the fit (an event; the same vertices, the same winding as makeMound's); moundY reads
+// MD.DG to find the drawn triangle. (A ring-1 contour with its lean held made the quads kinder but widened the band past the brief's
+// 0.6 u: growth there was left drawn and her shell unjudged; review N1. Ring 1 stays at the strip's edge + 0.6 u, as the brief.)
 function diagonals(MD) {
   const nb = NB, NR = MD.NR, M = MD.M, ix = MD.geo.index.array, DG = MD.DG;
   for (let i = 0; i < NR - 1; i++) for (let j = 0; j < nb; j++) {
