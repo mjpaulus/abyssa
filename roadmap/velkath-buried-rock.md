@@ -1,6 +1,6 @@
 ---
 title: Velkath buried — a rock with a harpoon in it
-status: backlog
+status: wip
 tags: brooder, sleepers, rite, particles, design
 updated: 2026-10-15
 ---
@@ -32,3 +32,4 @@ Michael's idea: Velkath sleeps fully buried in the sand and reads as a rock with
 - 2026-10-15 — Plan being drafted (Opus agent; brief ~/sc/.abyssa-wt/reviews/buried-plan/brief.md) to docs/superpowers/plans/2026-10-15-velkath-buried-rock.md, home only, built after lensfix lands; Michael reviews it before anything is built.
 - 2026-10-15 — Plan drafted (docs/superpowers/plans/2026-10-15-velkath-buried-rock.md, 17 tasks, home only; under review before commit). Its open feel calls went to Michael: she is blind 3-4 s from about 3 s into the rise (so she finds him ~6-7 s after the wake), the sand's breathing may be too subtle to see (he judges it on stills), and if no crest seat is both buried and in reach the build stops for his call. Michael: "I thought I already approved this but yes these are fine to proceed with". Builds after lensfix lands.
 - 2026-10-15 — Plan committed (docs/superpowers/plans/2026-10-15-velkath-buried-rock.md, 2,241 lines, 17 tasks with 7a/7b, home only by a site-row key `bury`). Reviewed twice (Opus review: 5 Critical / 14 Important / 12 Minor, all fixed; Sonnet re-review: all closed, 1 new Important (the crest seat's burial test could not see the crest) + 12 Minor, all fixed). Builds on branch `buried` once lensfix merges. Michael's look-ins: the disguise with the harpoon in the rock (Task 5), the turn speed only if its bar fails, the look (Task 16), and the stop rules (no crest seat).
+- 2026-10-15 — Building: lensfix merged (4bc2db6), so branch `buried` was cut from main 644879b (worktree ~/sc/.abyssa-wt/buried), subagent-driven (ledger .superpowers/sdd/2026-10-15-velkath-buried-rock/progress.md in the worktree). Task 1 (the base) started. Moved backlog -> wip.
