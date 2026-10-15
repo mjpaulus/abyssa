@@ -1202,7 +1202,8 @@ const credPiv = p => Math.hypot(p.x - player.pos.x, p.y - player.pos.y - DECK_PI
 //     in her there, to the drop's first clear spot at minD on its own bearing (0.3 over her, 0.6 over the floor: the
 //     eggs' own drop, generalised to her shell and legs), else, while the drop holds the target, to the drop's spot,
 //     else to the frame's own target if that is clear; with none of those clear it is main's guard exactly, so it never
-//     moves the lens INTO her (from outside her, after the calm's look-ahead, it travels at most `travel` u/s).
+//     moves the lens INTO her. To any of its own answers it travels at most `travel` u/s from outside her (the calm's
+//     look-ahead) and `guardTravel` from inside her (uncapped, a spot half round him was a 1.5-1.9 u jump in a frame).
 //   8 THE KEEP (the lens's last move): while her guard is on (creK) the lens is never nearer his BODY than minD (his
 //     axis from just over his boots to his helmet: off his helmet, the gate's PRESSED, and off his boots and dress, a
 //     lens trailing under a burst): put back out from his axis; where that is in her or under the floor, out from his
@@ -1210,7 +1211,7 @@ const credPiv = p => Math.hypot(p.x - player.pos.x, p.y - player.pos.y - DECK_PI
 //     her. A contact, as SALCAP's: its velocity toward him is bled, the rest kept (it slides round him on the spring).
 //     creKeepMax: its largest move in a frame; nearN / nearMin: frames it ended nearer his helmet than minD, the least.
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2,
-  drop: 1, dropR: 2.8, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5, travel: 12 };
+  drop: 1, dropR: 2.8, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5, travel: 12, guardTravel: 30 };
 let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 let creDrop = 0, creDropV = 0, creDropT = 0, creDropHT = 0, creEng = 0;
 let creNearN = 0, creNearMin = 9, creDropN = 0, creDropMiss = 0, crePunchN = 0, creGuardN = 0, creGuardArc = 0, creGuardOff = 0, creGuardTgt = 0, creGuardMain = 0, creKeepN = 0, creKeepArc = 0, creKeepSph = 0, creKeepMax = 0, creKeepFail = 0;
@@ -2330,7 +2331,7 @@ function updateCamera(dt, t, fwd) {
           else if (!bodyBlocked(camDesired.x, camDesired.y, camDesired.z, 0.15) && creCapD(camDesired.x, camDesired.y, camDesired.z) >= CRECAM.minD) { _lfA.copy(camDesired); creGuardTgt++; }
           else gNew = false;
         }
-        if (gNew && lim === Infinity && !bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0)) lim = CRECAM.travel * dt;
+        if (gNew && lim === Infinity) lim = (bodyBlocked(camera.position.x, camera.position.y, camera.position.z, 0) ? CRECAM.guardTravel : CRECAM.travel) * dt;
       }
       if (gNew) {
         if (eng) { creEng |= 4; creGuardN++; }
