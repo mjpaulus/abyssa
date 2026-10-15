@@ -1204,10 +1204,10 @@ const credPiv = p => Math.hypot(p.x - player.pos.x, p.y - player.pos.y - DECK_PI
 //     back on that sphere along its own bearing (in her, or under the floor, there: down the arc), its velocity toward
 //     him bled - a contact, like SALCAP's, never a wander. creKeepMax books its largest move in a frame.
 const CRECAM = { margin: 0.4, hold: 1.2, holdFight: 3.0, w: 4.2, under: 0.5, look: 2.0, minD: 2.2, ahead: 2,
-  drop: 1, dropR: 2.8, dropStep: 12, dropMax: 72, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5 };
+  drop: 1, dropR: 2.8, dropStep: 12, dropMax: 72, dropClr: 1.2, dropW: 10, dropWOut: 4, dropHold: 0.5, travel: 12 };
 let creAheadK = 0;   // > 0 only inside the lens guard after the calm: creHit also tests her limbs that many frames on
 let creDrop = 0, creDropV = 0, creDropT = 0, creDropHT = 0, creEng = 0;
-let creDropN = 0, creDropMiss = 0, crePunchN = 0, creGuardN = 0, creGuardArc = 0, creKeepN = 0, creKeepMax = 0, creKeepFail = 0;
+let creDropN = 0, creDropMiss = 0, crePunchN = 0, creGuardN = 0, creGuardArc = 0, creGuardOff = 0, creKeepN = 0, creKeepArc = 0, creKeepMax = 0, creKeepFail = 0;
 const creDropOff = V3(), _arcS = V3(), _arcP = V3(), _lfA = V3(), _lfB = V3();
 // (clutch2) and two DROPS, tried only when every lift is blocked: under the hanging clutch his
 // helmet is against the eggs and every rise runs into them, so the lens goes level or low
@@ -1433,7 +1433,7 @@ function clawFrame(dt) {
 window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone(),
   lookNetDeg: clawOpen ? +((Math.abs(player.yaw - clawY0) + Math.abs(player.pitch - clawP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(clawPath * 57.29578).toFixed(2), recentDeg: +(clawRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
-  drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, keepN: creKeepN, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail }) };
+  drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, keepN: creKeepN, keepArc: creKeepArc, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail }) };
 function deckTarget() {
   if (!DECKCAM.on) return 0;
   if (player.onDeck) return 1;
@@ -2280,7 +2280,7 @@ function updateCamera(dt, t, fwd) {
     // (clutch2) inside her EGGS the lens goes straight out (the mass barely moves: a snap of a
     // few centimetres is invisible, a frame inside the eggs is not), and may come nearer his
     // helmet than minD to do it (under the hanging mass his bonnet is against it)
-    let eggs = inClutch(camera.position.x, camera.position.y, camera.position.z, 0.05) > 0;
+    let eggs = inClutch(camera.position.x, camera.position.y, camera.position.z, 0.05) > 0, gMove = true;
     if (CRECAM.drop) {
       // (lensfix) THE GUARD: out to minD at least, the eggs too (main: min(1, minD / cl) never pushed out, and the eggs
       // came to 1.0 u of his helmet), and still in her there, down the arc at minD (0.3 over her, 0.6 over the floor: the
@@ -2289,19 +2289,27 @@ function updateCamera(dt, t, fwd) {
       const clr = creBoomClear(_piv, camTo, 0.3), cd = Math.max(cl, 1e-3);
       const f = Math.max(CRECAM.minD / cd, clr), f0 = Math.max(Math.min(1, (eggs ? 1.0 : CRECAM.minD) / cd), clr);
       _lfA.copy(_piv).addScaledVector(camTo, f);
-      let eng = f !== f0;
+      let eng = f !== f0, lim = Infinity;
       if (bodyBlocked(_lfA.x, _lfA.y, _lfA.z, 0.15)) {
         eng = true;
         const hl = Math.hypot(camTo.x, camTo.z);
         const bx = hl > 1e-4 ? camTo.x / hl : -Math.sin(player.yaw), bz = hl > 1e-4 ? camTo.z / hl : -Math.cos(player.yaw);
         const el0 = Math.min(Math.atan2(camTo.y, hl), 0) - CRECAM.dropStep * Math.PI / 180;
-        if (creArc(_piv, bx, bz, CRECAM.minD, el0, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardArc++; }
+        if (creArc(_piv, bx, bz, CRECAM.minD, el0, 0.3, 0.6, zi)) { _lfA.copy(_arcP); creGuardArc++; lim = CRECAM.travel * dt; }
+        // (no spot under it on its own bearing, while the drop holds a clear one for the target: the guard stands aside
+        // and the spring carries the lens there; held at minD inside her it fought the spring, a leg for a second)
+        else if (creDrop > 0) gMove = false;
       }
       if (eng) { creEng |= 4; creGuardN++; }
-      if (!eggs) { _lfB.lerpVectors(camera.position, _lfA, Math.min(1, 30 * dt)); eggs = inClutch(_lfB.x, _lfB.y, _lfB.z, 0.05) > 0; }
-      if (CREDBG.on && !eng && eggs && inClutch(_lfA.x, _lfA.y, _lfA.z, 0.05) > 0) CREDBG.mis++;   // (main's eggs drop would have run: never, by the test above)
-      camera.position.lerp(_lfA, eggs ? 1 : Math.min(1, 30 * dt));
-      if (eggs) { creEggs++; if (inClutch(camera.position.x, camera.position.y, camera.position.z, 0) > 0) creEggFail++; }
+      if (gMove) {
+        // (to the arc's spot it travels at most `travel` u/s: the spot can be most of a half-circle round him)
+        let k = Math.min(1, 30 * dt);
+        if (lim < Infinity) { const dd = _lfA.distanceTo(camera.position); if (dd * k > lim) k = lim / dd; }
+        if (!eggs) { _lfB.lerpVectors(camera.position, _lfA, k); eggs = inClutch(_lfB.x, _lfB.y, _lfB.z, 0.05) > 0; }
+        if (CREDBG.on && !eng && eggs && inClutch(_lfA.x, _lfA.y, _lfA.z, 0.05) > 0) CREDBG.mis++;   // (main's eggs drop would have run: never, by the test above)
+        camera.position.lerp(_lfA, eggs && lim === Infinity ? 1 : k);
+        if (eggs) { creEggs++; if (inClutch(camera.position.x, camera.position.y, camera.position.z, 0) > 0) creEggFail++; }
+      } else creGuardOff++;
     } else {
     const f = Math.max(Math.min(1, (eggs ? 1.0 : CRECAM.minD) / Math.max(cl, 1e-3)), creBoomClear(_piv, camTo, 0.3));
     _bp.copy(_piv).addScaledVector(camTo, f);
@@ -2322,7 +2330,7 @@ function updateCamera(dt, t, fwd) {
     camera.position.lerp(_bp, eggs ? 1 : Math.min(1, 30 * dt));
     if (eggs) { creEggs++; if (inClutch(camera.position.x, camera.position.y, camera.position.z, 0) > 0) creEggFail++; }
     }
-    camVel.lerp(player.vel, Math.min(1, 10 * dt));
+    if (gMove) camVel.lerp(player.vel, Math.min(1, 10 * dt));
     creStops++;
     creAheadK = 0;
     if (CREDBG.on) CREDBG.guardOn = 1;
@@ -2399,18 +2407,30 @@ function updateCamera(dt, t, fwd) {
       else { const hl = Math.hypot(camBack.x, camBack.z); if (hl > 1e-4) _lfA.set(camBack.x / hl, 0, camBack.z / hl); else _lfA.set(-Math.sin(player.yaw), 0, -Math.cos(player.yaw)); }
       _lfB.copy(_piv).addScaledVector(_lfA, CRECAM.minD);
       if (bodyBlocked(_lfB.x, _lfB.y, _lfB.z, 0.15) || _lfB.y < shutFloorY(_lfB.x, _lfB.z, zi) + 0.6) {
+        // in her, or under the floor, there: down the arc on its own bearing, travelling along his sphere at most
+        // `travel` u/s from the point out from him toward the arc's spot (the spot can be most of a half-circle round)
         const hl = Math.hypot(_lfA.x, _lfA.z);
         const bx = hl > 1e-4 ? _lfA.x / hl : -Math.sin(player.yaw), bz = hl > 1e-4 ? _lfA.z / hl : -Math.cos(player.yaw);
-        if (creArc(_piv, bx, bz, CRECAM.minD, Math.atan2(_lfA.y, hl) - CRECAM.dropStep * Math.PI / 180, 0.15, 0.6, zi)) _lfB.copy(_arcP);
-        else creKeepFail++;   // (no clear spot on the arc: his sphere along its own bearing, as it was)
+        if (creArc(_piv, bx, bz, CRECAM.minD, Math.atan2(_lfA.y, hl) - CRECAM.dropStep * Math.PI / 180, 0.15, 0.6, zi)) {
+          _arcS.multiplyScalar(1 / CRECAM.minD);   // (creArc left the spot's offset from the pivot here: its unit)
+          const c = clamp(_lfA.dot(_arcS), -1, 1), ang = Math.acos(c), a = Math.min(ang, CRECAM.travel * dt / CRECAM.minD);
+          if (ang > 1e-6 && a < ang) {
+            const sa = Math.sin(ang), g0 = Math.sin(ang - a) / sa, g1 = Math.sin(a) / sa;
+            _lfA.multiplyScalar(g0).addScaledVector(_arcS, g1).normalize();
+          } else _lfA.copy(_arcS);
+          _lfB.copy(_piv).addScaledVector(_lfA, CRECAM.minD);
+          creKeepArc++;
+        } else creKeepFail++;   // (no clear spot on the arc: his sphere along its own bearing, as it was)
       }
       const mv = _lfB.distanceTo(camera.position);
       if (mv > creKeepMax) creKeepMax = mv;
       camera.position.copy(_lfB);
-      // its velocity toward him is bled (the normal is the new spot's, out from his pivot)
+      // a contact that holds: its velocity relative to him is bled but for any part of it outward (the normal is the new
+      // spot's, out from his pivot), so the spring takes it on from rest toward its target: sliding round his sphere it
+      // rode on up to her belly when he stopped short there
       _lfA.copy(_lfB).sub(_piv).multiplyScalar(1 / CRECAM.minD);
       const vn = (camVel.x - player.vel.x) * _lfA.x + (camVel.y - player.vel.y) * _lfA.y + (camVel.z - player.vel.z) * _lfA.z;
-      if (vn < 0) camVel.addScaledVector(_lfA, -vn);
+      camVel.copy(player.vel); if (vn > 0) camVel.addScaledVector(_lfA, vn);
       creEng |= 8; creKeepN++;
     }
   }
