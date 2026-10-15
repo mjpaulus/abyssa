@@ -1,10 +1,10 @@
 ---
 title: Velkath's fight — the camera keeps off Sal under her
-status: wip
+status: done
 tags: camera, brooder, game.js, velfix
 updated: 2026-10-15
 ---
-During Velkath's fight the camera can press against Sal when he is under her. It then rests against his dress or lantern, or inside her shell or legs after the calm, and her ward light-ups wash the frame. Michael's call: when the camera has no clear spot, it drops below Sal's helmet, as it already does for her eggs, instead of resting against him or inside her.
+During Velkath's fight the camera no longer presses against Sal under her: with no clear spot it drops behind and below his helmet. Merged for now at Michael's word; the leftovers (boot soles in frame, wards hidden more often, the camera in her after the calm) are on a follow-up card.
 
 ## Detail
 - **Found by** relief Task 9 (velfix-gate on main, the clock plugged), reproduced on main 12/12 route runs.
@@ -36,3 +36,4 @@ During Velkath's fight the camera can press against Sal when he is under her. It
   - Per-drop CLEAN rates on post-merge main would show whether any of these are relief-made. CLEAN frames are by definition not pressed, so this fix alone won't clear them.
   - Listing: ~/sc/.abyssa-wt/reviews/t10-scripts/clean.md.
 - 2026-10-15 — Started at Michael's "yes" (camera fix first, then the buried rock): building on branch `lensfix` (worktree ~/sc/.abyssa-wt/lensfix, off main 15bc610), one Opus agent, brief ~/sc/.abyssa-wt/reviews/lensfix/brief.md (RED on the unchanged branch, GREEN = PRESSED and calm shell/leg frames 0 over 3 gate runs alone + 1 under load). Moved next -> wip.
+- 2026-10-15 — Built on branch lensfix (final 3462824; report ~/sc/.abyssa-wt/reviews/lensfix/report.md). Root cause: nothing held CRECAM minD (69% the spring carrying the lens past its target, 29% the burst punch-in, 2% the guard). Fix under `CRECAM.drop` (0 = main): the drop, the punch bound, the guard, the keep. GREEN: PRESSED 0 in the fight over 12 gate route runs (main 16-18 a route); NOT met: after the calm the lens is in her in 3 of 12 runs (14/2/1 frames) and pressed 3 frames in one, when her claws close round him (main does the same, 37 frames over 5 runs); the gate stays RED on FLASH and CLEAN. Seen in the stills: his boot soles fill the frame when he hauls flat under her. riteplay: the average bot's fights ran longer (median 51 vs 31 s), dark wards visible past her body less often. Michael, shown the stills and the trade-offs: "dont worry about the camera fix just merge it for now". Merged to main 4bc2db6 (not pushed); fresh load on the merged tree: relief-load load PASS (14 lights, every fingerprint, LIVE anchor, console clean). Leftovers: card fight-camera-followups. Moved wip -> done.
