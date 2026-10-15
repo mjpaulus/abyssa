@@ -163,9 +163,11 @@ const DISGUISE = `(async () => {
       const at = [+((ax + bx + cx) / 3).toFixed(1), +((ay + by + cy) / 3).toFixed(1), +((az + bz + cz) / 3).toFixed(1)];
       if (!wst || deg > wst.deg) wst = { deg: +deg.toFixed(2), span: +span.toFixed(3), ring: i, bearing: j, at };
       if (deg > 33.81 && (!tall || span > tall.span)) tall = { deg: +deg.toFixed(2), span: +span.toFixed(3), ring: i, bearing: j, at }; };
-    for (let i = 1; i <= NI - 1; i++) for (let j = 0; j < NB; j++) {
-      const a = i * NB + j, b = i * NB + (j + 1) % NB, c2 = a + NB, d2 = b + NB;
-      tri(i, j, 0, a, b, c2); tri(i, j, 1, b, d2, c2); }
+    // (the triangles AS DRAWN: makeMound's index holds quad (row i, column j)'s two at ((i NB + j) 2 + half) 3; the fit may pick
+    // either diagonal of a quad, so they are read from the index, never assumed)
+    const IX = MD.geo.index.array;
+    for (let i = 1; i <= NI - 1; i++) for (let j = 0; j < NB; j++) for (let h = 0; h < 2; h++) {
+      const o = ((i * NB + j) * 2 + h) * 3; tri(i, j, h, IX[o], IX[o + 1], IX[o + 2]); }
     const over = x => tris.filter(q => q[3] > x).length;
     repose = { barDeg: 33.81, n: tris.length, nDeg, worst: wst, tallestSteep: tall, over33: over(33.81), over45: over(45), over60: over(60),
       over45tall: tris.filter(q => q[3] > 45 && q[4] > 0.2).length, tris };

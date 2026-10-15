@@ -57,7 +57,7 @@ export function fitSink(L, crest) {
 }
 
 // ---- THE MOUND ----
-const NB = 128, LEAN = 0.5;   // bearings (the skirt's SK_COLS); LEAN: ring 1's contour (fitMound)
+const NB = 128, LEAN = 2;   // bearings (the skirt's SK_COLS); LEAN: ring 1's contour (fitMound)
 const RIN = new Float32Array(NB), RS = new Float32Array(NB);
 const _rgb = [0, 0, 0], RING = new Float32Array(NB), _mi = new THREE.Matrix4(), R1S = new Float32Array(NB), REND = new Float32Array(NB), RE1 = new Float32Array(NB), RE2 = new Float32Array(NB), CAPR = new Float32Array(NB);
 // THE DRAWN SHELL under the dune, binned (Task 3a, measured on the baked shell at home): the bake's top heightfield (L.topAt) is a
@@ -96,7 +96,7 @@ export function makeMound(L, material) {
   L.onDispose = () => { if (mesh.parent) mesh.parent.remove(mesh); g.dispose(); if (prev) prev(); };
   return { mesh, geo: g, P, N, M: new Float32Array(n * 3), F: new Float32Array(n * 3), NM: new Float32Array(n * 3),
     RR: new Float32Array(NB * NR), NEED: new Float32Array(n), COLS: NB, NR, k: -1, br: 0, drawn: false, c: 1, s: 0, R: L.R, cx: 0, cz: 0, crestZ: BURY.crestZ,
-    bx: 0, bz: 0, br2: 0, topAt: null, mw: new Float32Array(16), mwInv: new Float32Array(16) };
+    bx: 0, bz: 0, br2: 0, topAt: null, mw: new Float32Array(16), mwInv: new Float32Array(16), DG: new Uint8Array(NB * NR) };
 }
 // her shell's top under WORLD (x, z), at the fit pose: into her frame by the FULL inverse (dormant she is pitched and rolled to her
 // bed: a yaw-only map put a point 6 u up her back ~0.3 u off on a 3 deg tilt, against 0.3 u of cover), the height found in two passes
@@ -163,8 +163,9 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   // parallelogram, whose slivers (median largest angle 149 deg) stood the pile's slope up to 45-63 deg (the spokes at the strip's
   // ends, measured). Ring 1 runs on the smallest contour outside RS + 0.6 u whose radius changes by at most LEAN x its own size per
   // radian (r(j) = max over j' of r1(j') exp(-LEAN |j - j'| dtheta)); the strip's band (ring 0 -> 1) widens there, at the ends' flanks
-  // only (the crest's length and top did not move: 17.8 / 3.50 u). LEAN measured with the repile, no settle: 1 -> 25 faces over 33.81
-  // deg (worst 44.7), 0.7 -> 19, 0.5 -> 15 (worst 41.8, none over 45); stretching the polar frame across her keel instead was worse
+  // only (measured at LEAN 2: 0.6 u on her sand side as before, up to 4.4 u at the ends' flanks; the crest's top and length held,
+  // 3.50 / 17.9 u). With the shorter diagonals (diagonals()) and the settle, faces over 33.81 deg: LEAN 1 / 1.3 / 2 -> 0 (no
+  // contour at all: 0 too, but only with the settle raising 0.5 u, at its cap); LEAN 0.5 widened her sand side's band to 4.5 u
   for (let j = 0; j < NB; j++) { let m = 0; for (let q = -32; q <= 32; q++) { const v = (RS[(j + q + NB) % NB] + dl) * Math.exp(-Math.abs(q) * Math.PI * 2 / NB * LEAN); if (v > m) m = v; } R1S[j] = m; }
   // the strip's centre, then the pile round it (sources: her drawn shell outside the strip's band, over the floor less the cover)
   MD.bx = wx(0, K.crestZ); MD.bz = wz(0, K.crestZ);
@@ -218,6 +219,7 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   coverShell(L, MD);
   smoothRings(MD);
   repile(L, MD);
+  diagonals(MD);
   settle(MD);
   // normals of the fitted dune, facing up (the seabed material is FrontSide); the floor state's normal is straight up
   MD.P.set(MD.M); MD.geo.computeVertexNormals();
@@ -355,18 +357,17 @@ function repile(L, MD) {
   for (let v = NB; v < NI * NB; v++) { const o = v * 3, h = pileAt(M[o], M[o + 2]); if (h > M[o + 1]) M[o + 1] = h; }
 }
 // THE SAND SETTLES (Task 3a fix round 2; review I1): what is left after the repile is the pile's own creases and cone tips sampled
-// on the mesh (a triangle across a crease interpolates two flanks at once: measured 34-42 deg, 15 faces, none of them clamped).
-// Raise-only, so every cover still holds: each vertex of rings 1 .. NI-2 rises to the lowest height at which every triangle round
-// it (rows 1 .. NI-1) is no steeper than the repose + SETTLE_SLACK (the smaller root of |g0 - h w|^2 = k^2; skipped where that is
-// over both its other corners: then the far edge is the steep one and its own corners rise), Gauss-Seidel sweeps alternating
-// direction until nothing moves 0.1 mm (MD.settleN, MD.settleMax: the largest raise). Ring 0 (in the rock), the dune's last ring
-// (where it meets the floor) and the buried rings are fixed. THE SLACK IS LOAD-BEARING: a raise travels downhill, shrinking by
-// (k_settle - the pile's slope) per unit run, so at the repose itself it ran out to the dune's edge and stood it 2 u over the floor;
-// at + 3 deg it still ran 1 u (faces of 66 deg at ring 12); at + 4.2 deg (33.0 deg; the probe's bar is a fixed 33.81) it stops
-// within a ring or two: 1 sweep, largest raise 0.32 u, worst face 33.01 deg (measured at home)
-// (SETTLE_CAP u: no vertex rises more than this over its pile height, so a raise that will not die out is booked as a steep face the
-// probe sees, never a 2 u shelf at the dune's edge. Not a guarantee off the shipped knobs: at repose 0.45 the raise ran 1 u to ring
-// 12 and stood 63 deg faces there, measured; a repose change re-runs burial-probe disguise)
+// on the mesh (a triangle across a crease interpolates two flanks at once: measured 34-42 deg, none of those faces clamped).
+// Raise-only, so every cover still holds: a vertex of rings 1 .. NI-2 rises to the lowest height at which a drawn triangle of rows
+// 1 .. NI-1 round it is no steeper than the repose + SETTLE_SLACK (the smaller root of |g0 - h w|^2 = k^2; skipped where that is over
+// both its other corners: then the far edge is the steep one and its own corners rise), Gauss-Seidel sweeps over the triangles,
+// alternating direction, until nothing moves 0.1 mm (MD.settleN; MD.settleMax: the largest raise). Ring 0 (in the rock), the dune's
+// last ring (where it meets the floor) and the buried rings are fixed. A raise travels downhill, shrinking by (k_settle - the pile's
+// slope) per unit run, so the slack is load-bearing: on the sliver quads of the first cut, at the repose itself a raise ran out to
+// the dune's edge and stood it 2 u over the floor, at + 3 deg 1 u. With ring 1's contour and the shorter diagonals it is nearly idle
+// (at home: 2 sweeps, largest raise 0.03 u; at repose 0.45: 0.04 u; worst faces 33.01 / 28.43 deg, measured)
+// (SETTLE_CAP u: no vertex rises more than this over its height before the settle, so a raise that will not die out is booked as a
+// steep face the probe sees, never a shelf at the dune's edge)
 const SETTLE_SWEEPS = 64, SETTLE_SLACK = 4.2 * Math.PI / 180, SETTLE_CAP = 0.5;
 let M0 = new Float32Array(0);
 let _ks = 0;
@@ -383,35 +384,47 @@ function lowFrom(M, v, a, b, lo) {
   return base + d > lo ? base + d : lo;
 }
 function settle(MD) {
-  const NI = BURY.rings, nb = NB, M = MD.M;
+  const NI = BURY.rings, nb = NB, M = MD.M, DG = MD.DG;
+  _ks = Math.tan(Math.atan(BURY.repose) + SETTLE_SLACK);
   if (M0.length < NB * MD.NR) M0 = new Float32Array(NB * MD.NR);   // (grown at a fit, an event)
   for (let v = 0; v < NB * MD.NR; v++) M0[v] = M[v * 3 + 1];
-  _ks = Math.tan(Math.atan(BURY.repose) + SETTLE_SLACK);
-  let n = 0, top = 0;
+  let n = 0, top = 0, mx = 0;
+  // one vertex of a triangle: raised to its lowest height under the slope (free: rings 1 .. NI-2; the rest are fixed)
+  const up = (v, a, b) => {
+    const r = (v / nb) | 0; if (r < 1 || r > NI - 2) return;
+    const h = M[v * 3 + 1]; let lo = lowFrom(M, v, a, b, h);
+    if (lo > M0[v] + SETTLE_CAP) lo = M0[v] + SETTLE_CAP;
+    if (lo > h) { M[v * 3 + 1] = lo; if (lo - h > mx) mx = lo - h; if (lo - M0[v] > top) top = lo - M0[v]; }
+  };
   for (; n < SETTLE_SWEEPS; n++) {
-    let mx = 0;
+    mx = 0;
     const fwd = (n & 1) === 0;
-    for (let ii = 1; ii < NI - 1; ii++) {                 // (rings 1 .. NI-2: the dune's last ring stays where it meets the floor)
-      const i = fwd ? ii : NI - 1 - ii;
+    for (let ii = 1; ii < NI; ii++) {                    // (the triangles of rows 1 .. NI-1, as drawn: diagonals() picked each quad's)
+      const i = fwd ? ii : NI - ii;
       for (let jj = 0; jj < nb; jj++) {
-        const j = fwd ? jj : nb - 1 - jj, v = i * nb + j, jm = (j - 1 + nb) % nb, jp = (j + 1) % nb, h = M[v * 3 + 1];
-        // the six triangles round v (makeMound: quad (r, c) is a (r, c) b (r, c+1) c (r+1, c) d (r+1, c+1); triangles a b c, b d c)
-        let lo = h;
-        lo = lowFrom(M, v, i * nb + jp, (i + 1) * nb + j, lo);                  // v = a of quad (i, j)
-        lo = lowFrom(M, v, i * nb + jm, (i + 1) * nb + jm, lo);                 // v = b of quad (i, j-1): a b c
-        lo = lowFrom(M, v, (i + 1) * nb + j, (i + 1) * nb + jm, lo);            // v = b of quad (i, j-1): b d c
-        if (i >= 2) {
-          lo = lowFrom(M, v, (i - 1) * nb + j, (i - 1) * nb + jp, lo);          // v = c of quad (i-1, j): a b c
-          lo = lowFrom(M, v, (i - 1) * nb + jp, i * nb + jp, lo);               // v = c of quad (i-1, j): b d c
-          lo = lowFrom(M, v, (i - 1) * nb + j, i * nb + jm, lo);                // v = d of quad (i-1, j-1): b d c
-        }
-        if (lo > M0[v] + SETTLE_CAP) lo = M0[v] + SETTLE_CAP;
-        if (lo > h) { M[v * 3 + 1] = lo; if (lo - h > mx) mx = lo - h; if (lo - M0[v] > top) top = lo - M0[v]; }
+        const j = fwd ? jj : nb - 1 - jj, a = i * nb + j, b = i * nb + (j + 1) % nb, c = a + nb, d = b + nb;
+        if (DG[i * nb + j]) { up(a, b, d); up(b, a, d); up(d, a, b); up(a, d, c); up(d, a, c); up(c, a, d); }
+        else { up(a, b, c); up(b, a, c); up(c, a, b); up(b, d, c); up(d, b, c); up(c, b, d); }
       }
     }
     if (mx < 1e-4) break;
   }
   MD.settleN = n; MD.settleMax = top;
+}
+// EACH QUAD'S DIAGONAL, the shorter one (Task 3a fix round 2): where the rings lean (round the strip's ends) a quad is a leaning
+// parallelogram, and its long diagonal makes two slivers (a largest angle of 147 deg, measured: a sliver's plane stood 56 deg over
+// three vertices 0.2 u apart). The index is rewritten at the fit (an event; the same vertices, the same winding as makeMound's);
+// moundY reads MD.DG to find the drawn triangle
+function diagonals(MD) {
+  const nb = NB, NR = MD.NR, M = MD.M, ix = MD.geo.index.array, DG = MD.DG;
+  for (let i = 0; i < NR - 1; i++) for (let j = 0; j < nb; j++) {
+    const a = i * nb + j, b = i * nb + (j + 1) % nb, c = a + nb, d = b + nb, q = i * nb + j, o = q * 6;
+    const ad = Math.hypot(M[d * 3] - M[a * 3], M[d * 3 + 2] - M[a * 3 + 2]), bc = Math.hypot(M[c * 3] - M[b * 3], M[c * 3 + 2] - M[b * 3 + 2]);
+    DG[q] = ad < bc ? 1 : 0;
+    if (DG[q]) { ix[o] = a; ix[o + 1] = b; ix[o + 2] = d; ix[o + 3] = a; ix[o + 4] = d; ix[o + 5] = c; }
+    else { ix[o] = a; ix[o + 1] = b; ix[o + 2] = c; ix[o + 3] = b; ix[o + 4] = d; ix[o + 5] = c; }
+  }
+  MD.geo.index.needsUpdate = true;
 }
 // rings 1..NI-1: a 5-tap average round the ring, never under the vertex's own need (the cover over her shell, the floor)
 function smoothRings(MD) {
@@ -485,11 +498,20 @@ export function moundY(MD, x, z) {
   const i = quadAt(MD, x, z);
   if (i < 0) return -1e9;
   const nb = MD.COLS, P = MD.P, ia = (i * nb + _b0) * 3, ib = (i * nb + _b1) * 3, ic = ((i + 1) * nb + _b0) * 3, id = ((i + 1) * nb + _b1) * 3;
-  // which side of the diagonal b-c: a's side is triangle a b c
-  const ex = P[ic] - P[ib], ez = P[ic + 2] - P[ib + 2];
-  const sp = ex * (z - P[ib + 2]) - ez * (x - P[ib]), sa = ex * (P[ia + 2] - P[ib + 2]) - ez * (P[ia] - P[ib]);
-  let y = sp * sa >= 0 ? triY(P, ia, ib, ic, x, z) : triY(P, ib, id, ic, x, z);
-  if (y !== y) y = sp * sa >= 0 ? triY(P, ib, id, ic, x, z) : triY(P, ia, ib, ic, x, z);
+  let y;
+  if (MD.DG[i * nb + _b0]) {
+    // the diagonal a-d (diagonals()): b's side is triangle a b d, else a d c
+    const ex = P[id] - P[ia], ez = P[id + 2] - P[ia + 2];
+    const sp = ex * (z - P[ia + 2]) - ez * (x - P[ia]), sb = ex * (P[ib + 2] - P[ia + 2]) - ez * (P[ib] - P[ia]);
+    y = sp * sb >= 0 ? triY(P, ia, ib, id, x, z) : triY(P, ia, id, ic, x, z);
+    if (y !== y) y = sp * sb >= 0 ? triY(P, ia, id, ic, x, z) : triY(P, ia, ib, id, x, z);
+  } else {
+    // the diagonal b-c: a's side is triangle a b c, else b d c
+    const ex = P[ic] - P[ib], ez = P[ic + 2] - P[ib + 2];
+    const sp = ex * (z - P[ib + 2]) - ez * (x - P[ib]), sa = ex * (P[ia + 2] - P[ib + 2]) - ez * (P[ia] - P[ib]);
+    y = sp * sa >= 0 ? triY(P, ia, ib, ic, x, z) : triY(P, ib, id, ic, x, z);
+    if (y !== y) y = sp * sa >= 0 ? triY(P, ib, id, ic, x, z) : triY(P, ia, ib, ic, x, z);
+  }
   return y === y ? y : -1e9;
 }
 // the drawn SAND under (x, z): the floor or the dune, never her crest (harpoon.js seat(): a seam is "over the sand" by this)
