@@ -570,7 +570,8 @@ const LIB = `(async () => {
     for (let i = 0; i < 2; i++) { const ft = window.__fts[i]; if (!ft.planted) continue;
       if (ft.deck || P.onDeck) { R.ex.deck++; continue; } if (!P.grounded) { R.ex.air++; continue; } if (P.stagger > 0) { R.ex.stag++; continue; }
       const g = ft.wlo - GR(ft.wx, ft.wz), nn = T.terrainNormal(ft.wx, ft.wz, 0);
-      R.feet.gap.push(g); R.feet.own.push(own(i)); R.feet.sl.push(Math.acos(Math.min(1, nn.y)) * D); R.feet.who.push(i); }
+      R.feet.gap.push(g); R.feet.own.push(own(i)); R.feet.sl.push(Math.acos(Math.min(1, nn.y)) * D); R.feet.who.push(i);
+      if (o.mound) { const Bu = window.__burial; R.feet.zone.push(Bu.inStrip(ft.wx, ft.wz) ? 2 : Bu.sandAt(ft.wx, ft.wz) > -1e8 ? 1 : 0); } }   // (mound, booked) 2 the strip (her crest), 1 the dune, 0 the floor
     // progress: a 2 s window of him moving under 0.5 u, off the ground steeper than 52 deg
     R.ring.push([clk, px, pz]); while (R.ring.length > 2 && R.ring[1][0] <= clk - ${STALL_WIN}) R.ring.shift();
     if (clk - R.ring[0][0] >= ${STALL_WIN} - 1e-6 && R.t - R.tGo >= ${STALL_WIN} && !R.done && !R.hold) {
@@ -588,7 +589,7 @@ const LIB = `(async () => {
   RW.begin = o => {
     const pts = o.pts, cum = [0]; for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
     RW.run = { o, pts, cum, total: cum[cum.length - 1], prog: 0, seg: 0, off: 0, done: false, why: '', t: 0, ticks: 0, skips: 0, clk0: L.clock, lastClk: L.clock, lastRaf: 0, pc: null, pp: null,
-      f: { dt: [], raf: [], clr: [], cst: [], crl: [], bm: [], pg: [], cr: [], py: [], sl: [], gr: [], x: [], z: [], dclr: [], blk: [], shl: [], lmb: [], bc: [] }, feet: { gap: [], own: [], sl: [], who: [] }, ex: { deck: 0, air: 0, stag: 0 }, ring: [], stall: { n: 0, run: 0, first: null },
+      f: { dt: [], raf: [], clr: [], cst: [], crl: [], bm: [], pg: [], cr: [], py: [], sl: [], gr: [], x: [], z: [], dclr: [], blk: [], shl: [], lmb: [], bc: [] }, feet: { gap: [], own: [], sl: [], who: [], zone: [] }, ex: { deck: 0, air: 0, stag: 0 }, ring: [], stall: { n: 0, run: 0, first: null },
       maxR: 0, nGive: 0, nHold: 0, n0: L.n, minTo: 1e9, hold: !!o.hold, tGo: 0, walkIdx: 0 };
     P.pitch = o.pitch; return 1;
   };
@@ -894,6 +895,10 @@ if (MODE === 'mound') {
     const row = rows[L.name] = { walks: rs.length, frames: clr.length, planted: own.length, offGrid: own.length - ok.length, p50: +f3(pct(ab, 0.5)), p95: +f3(pct(ab, 0.95)), sink: ok.length ? +f3(Math.min(...ok)) : null, under015: ok.filter(v => v < -0.15).length, hang: ok.length ? +f3(Math.max(...ok)) : null,
       onGrid: +share.toFixed(4), minClr: on.length ? +f3(Math.min(...on)) : null, below: nBelowClear(on), blocked: blk, shellFrames: shl, limbFrames: lmb, clamped: clamp, stall, attempts: rs.map(r => r.attempt) };
     console.log(pad(L.name, 8) + lpad(rs.length, 6) + lpad(clr.length, 8) + '  | ' + lpad(own.length, 8) + lpad(row.offGrid, 5) + lpad(f3(row.p50), 8) + lpad(f3(row.p95), 8) + lpad(f3(row.sink), 8) + lpad(row.under015, 7) + lpad(f3(row.hang), 7) + '  | ' + lpad((share * 100).toFixed(1) + '%', 8) + lpad(f3(row.minClr), 8) + lpad(row.below, 6) + lpad(blk, 8) + '  | ' + lpad(shl, 6) + lpad(lmb, 6) + lpad(clamp, 6) + lpad(stall, 6));
+    // (booked, not gated) the same samples by where the boot stood: the floor, the dune, the strip (her crest)
+    row.byZone = {}; for (const [zk, zn] of [[0, 'floor'], [1, 'dune'], [2, 'strip']]) { const zs = []; for (const r of rs) for (let k = 0; k < r.feet.own.length; k++) if (r.feet.zone[k] === zk && num(r.feet.own[k])) zs.push(r.feet.own[k]);
+      row.byZone[zn] = { n: zs.length, p95: zs.length ? +f3(pct(zs.map(Math.abs), 0.95)) : null, sink: zs.length ? +f3(Math.min(...zs)) : null, hang: zs.length ? +f3(Math.max(...zs)) : null, under015: zs.filter(v => v < -0.15).length }; }
+    console.log('         by where the boot stood (booked): ' + Object.entries(row.byZone).map(([k, v]) => `${k} n ${v.n} p95 ${f3(v.p95)} sink ${f3(v.sink)} hang ${f3(v.hang)} <-0.15 ${v.under015}`).join('; '));
     if (ok.length < MIN_FRAMES) unmeasured.push(`${L.name}: only ${ok.length} planted-boot samples on the grid (need ${MIN_FRAMES})`);
     else {
       if (row.p95 > GAP_BAR) bad('gap', `${L.name}: OWN p95 |gap| ${f3(row.p95)} u over the drawn surface (bar ${GAP_BAR})`);
@@ -911,7 +916,7 @@ if (MODE === 'mound') {
   const r3 = v => num(v) ? Math.round(v * 1000) / 1000 : null;
   result.mound = { schema: 1, lines: lines.map(L => ({ name: L.name, pts: L.pts, info: L.info })), prep: moundPrep, rows, tolerance: { breath: 0.045, grid: '0.25 u bilinear; buckets 0.5 u' },
     walks: runs.map(r => ({ line: r.line, dir: r.dir, rep: r.rep, attempt: r.attempt, why: r.why, prog: r.prog, total: r.total, disturbed: r.disturbed, clampN: r.clampN, stall: r.stall, off: r.off,
-      dt: r.f.dt.map(v => Math.round(v * 1e5) / 1e5), clr: r.f.dclr.map(r3), blk: r.f.blk, shell: r.f.shl, limb: r.f.lmb, contacts: r.f.bc, own: r.feet.own.map(r3), x: r.f.x.map(v => +v.toFixed(2)), z: r.f.z.map(v => +v.toFixed(2)), y: r.f.py })) };
+      dt: r.f.dt.map(v => Math.round(v * 1e5) / 1e5), clr: r.f.dclr.map(r3), blk: r.f.blk, shell: r.f.shl, limb: r.f.lmb, contacts: r.f.bc, own: r.feet.own.map(r3), ownZone: r.feet.zone, x: r.f.x.map(v => +v.toFixed(2)), z: r.f.z.map(v => +v.toFixed(2)), y: r.f.py })) };
 }
 
 if (MODE === 'hose') {
