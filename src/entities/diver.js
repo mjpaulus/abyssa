@@ -16,7 +16,7 @@ import { V3, clamp, lerp, rng, fbm } from '../lib/math.js';
 import { surfaceHeightAt, stormLevel, surfaceBoil } from '../world/water.js';
 import { survival } from '../systems/survival.js';
 // Per-foot ground height on the seabed (slope adaptation). terrain.js does not import us.
-import { terrainH } from '../world/terrain.js';
+import { terrainH, extraFloorAt } from '../world/terrain.js';
 import { makeGlow, canvas2d, toTexture, noiseCanvas, normalFromHeight, twillSet, castSet, dropletSet, braidSet, canvasSet } from '../lib/textures.js';
 // SALSCULPT HOOK (1/2): the pipeline-built Mark V swaps onto this rig when assets/sal loads
 import { installSalSculpt } from './salInstall.js';
@@ -2767,9 +2767,10 @@ function driveLegs(dt, player, ikOn, amp, stepRate) {
     gdOn = true; gdDeck = true; gdC = deckH(player.pos.x, player.pos.z); gdFx = sy; gdFz = cy;
   } else if (SAL.slope && !onDeck && player.grounded) {
     const px = player.pos.x, pz = player.pos.z;
-    let hC = terrainH(px, pz, slopeZi);
+    // (velkath-buried-rock) a buried Velkath's dune and crest are ground (terrain.js extraFloorAt; -1e9 elsewhere: the shipped seabed)
+    let hC = Math.max(terrainH(px, pz, slopeZi), extraFloorAt(px, pz, slopeZi));
     if (Math.abs(hC - soleY) > 0.6) {
-      for (let z = 0; z < 3; z++) { const h = terrainH(px, pz, z); if (Math.abs(h - soleY) < Math.abs(hC - soleY)) { hC = h; slopeZi = z; } }
+      for (let z = 0; z < 3; z++) { const h = Math.max(terrainH(px, pz, z), extraFloorAt(px, pz, z)); if (Math.abs(h - soleY) < Math.abs(hC - soleY)) { hC = h; slopeZi = z; } }
     }
     if (Math.abs(hC - soleY) < 0.6) { gdOn = true; gdC = hC; gdFx = sy; gdFz = cy; }
   }
@@ -3410,7 +3411,7 @@ function deckH(x, z) {
   const px = e[12] + 0.11 * e[4], py = e[13] + 0.11 * e[5], pz = e[14] + 0.11 * e[6];
   return py - (e[4] * (x - px) + e[6] * (z - pz)) / ny;
 }
-function gH(x, z) { return gdDeck ? deckH(x, z) : terrainH(x, z, slopeZi); }
+function gH(x, z) { return gdDeck ? deckH(x, z) : Math.max(terrainH(x, z, slopeZi), extraFloorAt(x, z, slopeZi)); }   // (velkath-buried-rock: her dune and crest)
 let slopeK = 1;                    // stride shortening on a grade (1 = level)
 let soleBase = 0;                  // the ground the boots stand on at his centre (last driveLegs)
 

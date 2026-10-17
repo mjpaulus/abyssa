@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { renderer } from './core.js';
 import { WORLD_R, SURFACE_Y, GLASS } from './config.js';
 import { V3, clamp, fbm } from './lib/math.js';
-import { terrainH, terrainUnderH, terrainNormal, clampR, jamAt } from './world/terrain.js';
+import { terrainH, terrainUnderH, terrainNormal, clampR, jamAt, extraFloorAt } from './world/terrain.js';
 import { FISSURE, fissureDist, inThroat, fissureLocal, fissureWorld, slabProbe, slabAt, _widths, openRunAt, fissureShut } from './world/fissureShape.js';
 import { rockColliders } from './world/flora.js';
 import { propColliders } from './world/props.js';
@@ -765,7 +765,10 @@ export function updatePlayer(dt, t, zone, riftOpen) {
       player.pos.z -= clamp(dzr - LADDER_Z, -0.5 * dt, 0.5 * dt);
     }
   }
-  const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY, jamFloor);
+  // (velkath-buried-rock) a buried Velkath's dune and crest are ground (terrain.js extraFloorAt; -1e9 everywhere else, so this is the
+  // shipped floor bit for bit there)
+  const xFloor = extraFloorAt(player.pos.x, player.pos.z, zi) + EYE_H;
+  const floorY = overRift ? -1e5 : Math.max(th + EYE_H, deckY, jamFloor, xFloor);
   // Published for diver.js: where the boots actually stand (the grounded snap below holds
   // his centre up to 1.2 above it for a few frames while he settles).
   player.floorY = overRift ? null : floorY;

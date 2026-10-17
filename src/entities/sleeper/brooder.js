@@ -32,9 +32,13 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth } from './burial.js';
+// (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
+// (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
+// ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
+Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -1769,9 +1773,13 @@ function publishCols(L) {
       addCapsule(_ca.x, _ca.y, _ca.z, _cb.x, _cb.y, _cb.z, F.ra * sc, F.rb * sc);
     }
   }
-  setShell(L.shellProx, bw.elements, R);
+  setShell(L.shellProx, bw.elements, R, !(L.buried && L.bury >= BURY.solidK));
   // her clutch: soft, the drawn surface (brood.js B.live, refreshed by its update this frame)
   if (L.brood && L.brood.seated && !L.brood.off) setClutch(L.brood.live, L.brood.seeds, L.brood.nL, bw.elements, R);
+  // (velkath-buried-rock) her dune (while drawn) and, fully buried, her crest: ground (bodyCols.js buriedFloorAt); her shell's collider
+  // capped at that ground while she is fully buried
+  const MDd = L.mound && L.mound.drawn && BURY.floor ? L.mound : null;
+  setMound(MDd, L.idx, MDd && L.bury >= BURY.solidK && (L.dormant || L.dugIn), BURY.capShell > 0);
   endBodyCols(L.pos.x, L.bodyY, L.pos.z, 2.9 * R);
 }
 

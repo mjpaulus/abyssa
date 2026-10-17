@@ -5,7 +5,7 @@ import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint, checkRelief } from './world/terrain.js';
+import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint, checkRelief, setExtraFloor } from './world/terrain.js';
 import { lipMeanY, resetJam, setFissureShut, FISSURE, fissureDist, fissureLocal, fissureWorld, fissureShut, openRunAt } from './world/fissureShape.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
@@ -14,7 +14,7 @@ import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } fr
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { resolveBodyCols, BODY, bodyBlocked, bodyBlockedAhead, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
+import { resolveBodyCols, BODY, bodyBlocked, bodyBlockedAhead, bodyNear, bodyColsOn, inClutch, buriedFloorAt } from './entities/sleeper/bodyCols.js';
 import { PH_COCK0, PH_SLAM0 } from './entities/sleeper/brooderClaw.js';   // (clawcam) her hammer's cock and fall
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed, diverBladeTip } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
@@ -189,6 +189,7 @@ performance.mark('abyssa:world-build-start');
 LOAD.stage(0.07, 0.19, 'RAISING THE SEABED');
 await buildStep('terrain', 'RAISING THE SEABED');
 buildTerrain();
+setExtraFloor(buriedFloorAt);   // (velkath-buried-rock) the buried sleeper's ground (bodyCols.js): -1e9 unless one is published
 await buildStep('flora', 'SETTING THE STONES');
 buildFlora();
 await buildStep('water', 'MIXING THE WATER');

@@ -426,9 +426,16 @@ export function jamAt(x, z, zi) {
   fissureLocal(x, z, zi, _jl);
   return jamFloorAt(_jl.u, _jl.v, zi, terrainH) - jamSagAt(_jl.u, _jl.v, zi);   // the rubble's baked floor; (the slump: 0 but mid-opening)
 }
+// (velkath-buried-rock) A FLOOR THAT IS A SLEEPER'S: a buried Velkath's dune and her crest (sleeper/bodyCols.js buriedFloorAt, wired
+// once by game.js: this module never imports the sleepers). -1e9 where there is none. shutFloorY, player.js and the gait's slope rig
+// take the max with it; unset (no provider) every one of them is the shipped one bit for bit.
+let EXTRA_FLOOR = null;
+export function setExtraFloor(fn) { EXTRA_FLOOR = fn; }
+export function extraFloorAt(x, z, zi) { return EXTRA_FLOOR ? EXTRA_FLOOR(x, z, zi) : -1e9; }
 export function shutFloorY(x, z, zi) {
-  const h = terrainH(x, z, zi), j = jamAt(x, z, zi);
-  return j > h ? j : h;
+  const h = terrainH(x, z, zi), j = jamAt(x, z, zi), g = j > h ? j : h;
+  const e = EXTRA_FLOOR ? EXTRA_FLOOR(x, z, zi) : -1e9;
+  return e > g ? e : g;
 }
 // The ground with or without the fissure's overhang slabs: terrainH (collision, scatter, the
 // patch's slab tops) stands on them; the fissure patch draws the carved wall UNDER them.
