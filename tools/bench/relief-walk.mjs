@@ -1,6 +1,6 @@
 // RELIEF WALK (seafloor relief Task 11; the plan's Review Focus 1 and 4, G1's hose; spec docs/superpowers/specs/
 // 2026-10-13-seafloor-relief-design.md §7): Sal walks over the new ground with REAL keys on the LIVE loop.
-//   DRV_PORT=9520 node tools/bench/relief-walk.mjs <boots|lens|hose> <port>        (serve.py serves <port>; branch 8870 / 9520, main 8871 / 9521)
+//   DRV_PORT=9520 node tools/bench/relief-walk.mjs <boots|lens|hose|mound> <port>        (serve.py serves <port>; branch 8870 / 9520, main 8871 / 9521)
 // Env  RW_REPS=<n>   walks per line and direction (boots 2, lens 3)
 //      RW_JSON=<f>   write the result (the lens's main run hands its bar to the branch's through this file)
 //      RW_MAIN=<f>   (lens, on the branch) main's RW_JSON: the bars below are main's own numbers on the same probe
@@ -69,6 +69,29 @@
 //         the pull-ins in the walk alone, and the settled frames still over 6 u/s. The bed route's turns swing the boom: booked, clearance-gated,
 //         never step-gated. RED nofloor: the walk down (level) does not fail clearance (the boom's own pull-in, game.js clearCamDistance, holds
 //         the lens over 1.1 u of floor before the clamp is asked); looking up, it does, and so does the control.
+// mound   (velkath-buried-rock Task 3b, "Footing": "He walks up the sand and stands on the rock") a BURIED Velkath's dune and crest are ground,
+//         for him and for the lens. Three lines picked from the live mound (window.lev.mound): ACROSS, from 6 u out on the flat straight up the
+//         dune's flank, across the crest through its drawn top, down the far flank to 6 u out; KEEL, along the crest's length through the
+//         strip's centre, 6 u out at both ends; FLANK, the sand side's mid-bearing (L.sand; from Task 4 the harpoon's anchor) from 6 u out on
+//         the flat up to the strip's centre. Each walked both ways with real W, RW_REPS (2) each, booked from the walk (after the place's 2.6 s
+//         settle). THE DRAWN SURFACE IS PRECOMPUTED, never raycast in the frame hook (her body is ~70k triangles with no BVH: a raycast per sole
+//         point per frame would put the walk at the 50 ms clamp and the probe would change the gait it measures): once per run, she lying
+//         still, her shell's and the dune's world triangles are bucketed on 0.5 u x/z cells (harpoon.js gatherTris' CSR layout), and a
+//         drawn-height grid at 0.25 u is filled over each line's corridor (14 u past each end along it, 6 u to each side: the lens trails him
+//         ~9 u) with max(terrainH, the topmost dune or shell hit); per frame own(i) and the lens read it bilinearly (drawnY), NaN off every grid
+//         (never a fallback: such frames are booked and excluded). The breath lifts the dune's inner rings <= 0.045 u: the grid's stated
+//         tolerance. Under RW.ground = 'drawn', own(i) reads drawnY in place of terrainH. Per frame also: the lens's clearance over
+//         drawnY(camera), bodyCols bodyBlocked(camera, 0), her shell's contacts with him (BODY.shell, or BODY.contacts with BODY.last 'shell':
+//         BODY.last alone can be overwritten by a later leg or claw contact in the same frame, so gating on either is the stricter reading),
+//         leg / claw contacts (booked), the frame time. Once per run: the published shell proxy's excess over the drawn ground,
+//         max(bodyCols shellHiAt - drawnY) over the dune and the strip (Task 3b's conflict C1, shown, not assumed; n/a before 3b), and the
+//         provider's floor (max(moundY, crestY): bodyCols buriedFloorAt's own formula) less drawnY along each line (booked). PASS per line:
+//         OWN p95 |gap| <= 0.15 u (every planted frame, no slope filter) and none under -0.15; her shell's contacts 0; the lens >= 0.3 u over
+//         drawnY on every walk frame and never bodyBlocked(lens, 0) (both lens bars need >= 90% of the line's frames on the grid, else
+//         UNMEASURED, exit 2); progress (no 2 s window under 0.5 u moved); no frame at the 50 ms clamp (a clamped walk is not a reading: it is
+//         run once more, and a walk still clamped fails the bar). A measured FAIL outranks UNMEASURED. REDs (run before the footing, then after):
+//         nofloor-mound  window.__burial.set({ floor: 0 }) first: his boots walk the floor under the drawn dune; the gap bar must fail
+//         nocap          window.__burial.set({ capShell: 0 }): the proxy's shell term is solid over the drawn sand; the shell-contact bar must fail
 // hose    from the deck with HOSE_START 380 (survival.hose is never set; FP_HOSE unset): real W over the side, C down to the seabed, then real
 //         W along the route to the binding point (gates.mjs --json hose.at). PASS: arrives (within 3 u) with __leash.n === 0 and last.str === 0
 //         (no yank), the farthest range the leash read <= HOSE_START - GIVE - 10 = 365 (spec §7: 10 u spare under the give). Books __leash
@@ -88,8 +111,8 @@
 // top stands against the hill, not the slope: hence Ruling 48's two parts.
 const [, , MODE, PORT] = process.argv;
 const RED = process.env.RW_RED;
-const RED_OF = { boots: ['noslope'], lens: ['nofloor'], hose: ['past20', 'short20'] };
-if (MODE !== 'selftest' && (!RED_OF[MODE] || !PORT)) { console.error('usage: node tools/bench/relief-walk.mjs <boots|lens|hose> <port>   |   selftest'); process.exit(2); }
+const RED_OF = { boots: ['noslope'], lens: ['nofloor'], hose: ['past20', 'short20'], mound: ['nofloor-mound', 'nocap'] };
+if (MODE !== 'selftest' && (!RED_OF[MODE] || !PORT)) { console.error('usage: node tools/bench/relief-walk.mjs <boots|lens|hose|mound> <port>   |   selftest'); process.exit(2); }
 if (MODE !== 'selftest' && RED !== undefined && !RED_OF[MODE].includes(RED)) {   // a RED this mode lacks would be ignored, and the run would pass as GREEN
   console.error(`RW_RED: mode ${MODE} has ${RED_OF[MODE].length ? 'the variants ' + RED_OF[MODE].join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 process.env.DRV_PORT = process.env.DRV_PORT || '9520';
@@ -304,9 +327,122 @@ const LIB = `(async () => {
   // rig's own test (diver.js driveLegs: heel and ball each over their own ground). - sinks, + hangs.
   const ENDS = [DV.diver.legR.end, DV.diver.legL.end], V = new cam.position.constructor();
   const SOLE_PTS = [[0, -0.16], [0.08, -0.14], [-0.08, -0.14], [0.12, 0.215], [-0.12, 0.215], [0.06, 0.30], [-0.06, 0.30]];
+  // (mound) the ground the boots are judged against: terrainH, or under RW.ground = 'drawn' the drawn surface (drawnY, NaN off its grid:
+  // a sole point off the grid makes the sample NaN, booked and excluded, never a fallback)
+  const GR = (x, z) => RW.ground === 'drawn' ? RW.drawnY(x, z) : TH(x, z);
   const own = i => { const e = ENDS[i]; e.updateWorldMatrix(true, false); let m = 1e9;
-    for (const q of SOLE_PTS) { V.set(q[0], -0.15, q[1]); e.localToWorld(V); const g = V.y - TH(V.x, V.z); if (g < m) m = g; } return m; };
-  const RW = window.__rw = { run: null, h: TH };
+    for (const q of SOLE_PTS) { V.set(q[0], -0.15, q[1]); e.localToWorld(V); const g = V.y - GR(V.x, V.z); if (!(g === g)) return NaN; if (g < m) m = g; } return m; };
+  const RW = window.__rw = { run: null, h: TH, ground: 'terrain' };
+  let BC = null; try { BC = await import('/src/entities/sleeper/bodyCols.js'); } catch (e) { }
+  const BU = await import('/src/entities/sleeper/burial.js').catch(() => null);
+  // ---- THE DRAWN SURFACE (mound): her shell's and the dune's world triangles, bucketed once per run on 0.5 u cells (harpoon.js gatherTris'
+  // CSR layout: CELL0 offsets into CELLT); per line a drawn-height grid at 0.25 u (14 u past each end along it, 6 u to each side), each node
+  // max(terrainH, the topmost dune or shell hit there). drawnY reads the grids bilinearly (the first grid holding the point), NaN off them all.
+  const DGC = 0.5, DGH = 0.25, GRIDS = [];
+  let DTRI = new Float32Array(0), DN = 0, DNS = 0, DC0 = new Int32Array(1), DCT = new Int32Array(0), dgx0 = 0, dgz0 = 0, dgnx = 0, dgnz = 0;
+  RW.drawnY = (x, z) => {
+    for (let g = 0; g < GRIDS.length; g++) { const G = GRIDS[g], dx = x - G.ax, dz = z - G.az, fu = (dx * G.ux + dz * G.uz - G.u0) / DGH, fv = (dx * G.nx + dz * G.nz - G.v0) / DGH;
+      if (!(fu >= 0 && fv >= 0 && fu <= G.nu - 1 && fv <= G.nv - 1)) continue;
+      const i = Math.min(G.nu - 2, Math.floor(fu)), j = Math.min(G.nv - 2, Math.floor(fv)), tu = fu - i, tv = fv - j, H = G.H, o = j * G.nu + i;
+      return (H[o] * (1 - tu) + H[o + 1] * tu) * (1 - tv) + (H[o + G.nu] * (1 - tu) + H[o + G.nu + 1] * tu) * tv; }
+    return NaN; };
+  // her shell (shellOnly) or her shell and the dune: the topmost drawn hit over (px, pz), -1e9 where none; which in _dw (1 dune, 2 shell)
+  let _dw = 0;
+  const topHit = (px, pz, shellOnly) => {
+    _dw = 0; const a = Math.floor((px - dgx0) / DGC), b = Math.floor((pz - dgz0) / DGC);
+    if (a < 0 || b < 0 || a >= dgnx || b >= dgnz) return -1e9;
+    const c = b * dgnx + a; let best = -1e9;
+    for (let q = DC0[c]; q < DC0[c + 1]; q++) { const t = DCT[q]; if (shellOnly && t >= DNS) continue; const o = t * 9;
+      const ax = DTRI[o], az = DTRI[o + 2], bx = DTRI[o + 3], bz = DTRI[o + 5], cx = DTRI[o + 6], cz = DTRI[o + 8], d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+      if (d > -1e-12 && d < 1e-12) continue;
+      const l1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d, l2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d, l3 = 1 - l1 - l2;
+      if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+      const y = l1 * DTRI[o + 1] + l2 * DTRI[o + 4] + l3 * DTRI[o + 7]; if (y > best) { best = y; _dw = t < DNS ? 2 : 1; } }
+    return best; };
+  // the bucket: every triangle of her shell, then of the dune, in world space, over the box C +- 40 u (the corridors reach ~37 u from C)
+  RW.drawnBucket = () => {
+    const lv = window.lev, MD = lv.mound, sh = lv.parts.shell, t0 = performance.now(), cx = MD.bx, cz = MD.bz, HB = 40;
+    const meshes = [[sh, sh.geometry.attributes.position.array, sh.geometry.index ? sh.geometry.index.array : null], [MD.mesh, MD.geo.attributes.position.array, MD.geo.index.array]];
+    let nAll = 0; for (const [, P, I] of meshes) nAll += I ? I.length / 3 : P.length / 9;
+    DTRI = new Float32Array(nAll * 9); DN = 0;
+    for (let k = 0; k < 2; k++) { const [mesh, P, I] = meshes[k]; mesh.updateWorldMatrix(true, false); const e = mesh.matrixWorld.elements, n = I ? I.length / 3 : P.length / 9;
+      for (let t = 0; t < n; t++) { const o = DN * 9; let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+        for (let q = 0; q < 3; q++) { const i = I ? I[t * 3 + q] : t * 3 + q, x = P[i * 3], y = P[i * 3 + 1], z = P[i * 3 + 2];
+          const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+          DTRI[o + q * 3] = wx; DTRI[o + q * 3 + 1] = wy; DTRI[o + q * 3 + 2] = wz; if (wx < x0) x0 = wx; if (wx > x1) x1 = wx; if (wz < z0) z0 = wz; if (wz > z1) z1 = wz; }
+        if (x1 < cx - HB || x0 > cx + HB || z1 < cz - HB || z0 > cz + HB) continue;
+        DN++; }
+      if (k === 0) DNS = DN; }
+    dgx0 = cx - HB; dgz0 = cz - HB; dgnx = dgnz = Math.ceil(2 * HB / DGC);
+    const cnt = new Int32Array(dgnx * dgnz + 1);
+    const each = (t, fn) => { const o = t * 9;
+      const a0 = Math.max(0, Math.floor((Math.min(DTRI[o], DTRI[o + 3], DTRI[o + 6]) - dgx0) / DGC)), a1 = Math.min(dgnx - 1, Math.floor((Math.max(DTRI[o], DTRI[o + 3], DTRI[o + 6]) - dgx0) / DGC));
+      const b0 = Math.max(0, Math.floor((Math.min(DTRI[o + 2], DTRI[o + 5], DTRI[o + 8]) - dgz0) / DGC)), b1 = Math.min(dgnz - 1, Math.floor((Math.max(DTRI[o + 2], DTRI[o + 5], DTRI[o + 8]) - dgz0) / DGC));
+      for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) fn(b * dgnx + a); };
+    for (let t = 0; t < DN; t++) each(t, c => { cnt[c + 1]++; });
+    for (let c = 0; c < dgnx * dgnz; c++) cnt[c + 1] += cnt[c];
+    DC0 = cnt; DCT = new Int32Array(cnt[dgnx * dgnz]); const fill = new Int32Array(dgnx * dgnz);
+    for (let t = 0; t < DN; t++) each(t, c => { DCT[DC0[c] + fill[c]++] = t; });
+    return { shellTris: DNS, duneTris: DN - DNS, cells: dgnx * dgnz, refs: DCT.length, ms: +(performance.now() - t0).toFixed(1), breathY: lv.breathY || 0, sculpted: !!lv.sculpted };
+  };
+  // THE LINES from the live mound: through point p along unit d, out to where the dune or the strip stops (0.1 u march) + 6 u on the flat
+  RW.moundLines = () => {
+    const lv = window.lev, MD = lv.mound, B = window.__burial;
+    const on = (x, z) => B.sandAt(x, z) > -1e8 || B.inStrip(x, z);
+    const reach = (p, d) => { let tl = 0; for (let t = 0; t <= 40; t += 0.1) if (on(p[0] + d[0] * t, p[1] + d[1] * t)) tl = t; return tl; };
+    const C = [MD.bx, MD.bz], acr = [MD.c, -MD.s], keel = [MD.s, MD.c], sand = [lv.sand.x, lv.sand.z];
+    // the crest's drawn top: the highest point of her drawn shell inside the strip (0.25 u scan)
+    let top = null;
+    for (let x = C[0] - 24; x <= C[0] + 24; x += 0.25) for (let z = C[1] - 24; z <= C[1] + 24; z += 0.25) { if (!B.inStrip(x, z)) continue;
+      const y = topHit(x, z, true); if (y > -1e8 && (!top || y > top.y)) top = { x, z, y }; }
+    const mk = (name, p, d, oneWay) => { const tp = reach(p, d), tn = oneWay ? 0 : reach(p, [-d[0], -d[1]]);
+      const lo = oneWay ? [p[0] + d[0] * (tp + 6), p[1] + d[1] * (tp + 6)] : [p[0] - d[0] * (tn + 6), p[1] - d[1] * (tn + 6)];
+      const hi = oneWay ? [p[0], p[1]] : [p[0] + d[0] * (tp + 6), p[1] + d[1] * (tp + 6)];
+      return { name, pts: [lo, hi], info: { through: [+p[0].toFixed(2), +p[1].toFixed(2)], dir: [+d[0].toFixed(3), +d[1].toFixed(3)], duneReach: [+tn.toFixed(1), +tp.toFixed(1)], len: +Math.hypot(hi[0] - lo[0], hi[1] - lo[1]).toFixed(1) } }; };
+    const lines = [mk('across', [top.x, top.z], acr), mk('keel', C, keel), mk('flank', C, sand, true)];
+    lines[0].info.crestTop = { x: +top.x.toFixed(2), z: +top.z.toFixed(2), overMeanG: +(top.y - lv.meanG).toFixed(2) };
+    lines[2].info.bearing = 'the sand side\\'s mid-bearing (L.sand); Task 4 on, the harpoon\\'s anchor';
+    return lines;
+  };
+  // the corridors clear of every collider his body or the lens's boom could meet (RW.clean's test without the blocked mask: her disc is the
+  // ground under test) and of the crack (fissureDist over every grid node, booked: inside the lip the ground is the jam, not terrainH)
+  RW.moundClean = (lines) => { const cols = [].concat(FL.rockColliders, PR.propColliders, WR.wreckColliders, VE ? VE.ventColliders : []), out = [];
+    for (const Ln of lines) { const a = Ln.pts[0], b = Ln.pts[1], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz); let hits = [];
+      for (let t = -9; t <= l + 9; t += 0.5) { const x = a[0] + dx * t / l, z = a[1] + dz * t / l, fl = TH(x, z);
+        for (const c of cols) { if (!(c && c.r > 0)) continue; if (Math.abs(c.x - x) > c.r + 3.6 || Math.abs(c.z - z) > c.r + 3.6) continue;
+          if (Math.hypot(c.x - x, c.z - z) < c.r + 3.6 && c.y - c.r < fl + 7 && c.y + c.r > fl - 0.5 && !hits.includes(c)) hits.push(c); } }
+      out.push({ name: Ln.name, clean: hits.length === 0, colliders: hits.map(c => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), y: +c.y.toFixed(1), r: +c.r.toFixed(2) })) }); }
+    return out; };
+  // the grids (after the bucket and the lines); also, per line, the provider's floor (bodyCols buriedFloorAt's formula, max(moundY, crestY),
+  // read off burial.js directly so the RED's head reads it too) less drawnY along the line's centre, and over every node of the dune and the
+  // strip the published shell proxy's excess, shellHiAt - drawnY (bodyCols.js, Task 3b on)
+  RW.drawnPrep = (lines) => {
+    const lv = window.lev, MD = lv.mound, B = window.__burial, t0 = performance.now(); GRIDS.length = 0;
+    const summ = a => { if (!a.length) return null; const s = Float64Array.from(a).sort(), q = p => +s[Math.min(s.length - 1, Math.floor((s.length - 1) * p))].toFixed(3);
+      const ab = Float64Array.from(a.map(Math.abs)).sort(); return { n: s.length, min: q(0), p05: q(0.05), p50: q(0.5), p95: q(0.95), max: q(1), absP95: +ab[Math.floor((ab.length - 1) * 0.95)].toFixed(3) }; };
+    const out = { grids: [], delta: {}, excess: null };
+    let exMax = -1e9, exAt = null, exN = 0, exOver = 0; const hasHi = !!(BC && BC.shellHiAt);
+    for (const Ln of lines) { const a = Ln.pts[0], b = Ln.pts[1], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz), ux = dx / l, uz = dz / l;
+      const u0 = -14, nu = Math.round((l + 28) / DGH) + 1, v0 = -6, nv = Math.round(12 / DGH) + 1;
+      const G = { name: Ln.name, ax: a[0], az: a[1], ux, uz, nx: -uz, nz: ux, u0, v0, nu, nv, H: new Float32Array(nu * nv) };
+      let nDune = 0, nShell = 0, fdMin = 1e9;
+      for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const u = u0 + i * DGH, v = v0 + j * DGH, x = a[0] + ux * u + G.nx * v, z = a[1] + uz * u + G.nz * v;
+        const th = TH(x, z), tp = topHit(x, z, false), h = tp > th ? tp : th; G.H[j * nu + i] = h; if (tp > th) { if (_dw === 1) nDune++; else nShell++; }
+        if ((i & 3) === 0 && (j & 3) === 0) { const fd = S.fissureDist(x, z, 0); if (fd < fdMin) fdMin = fd; } }
+      GRIDS.push(G);
+      // the provider's floor less the drawn, along the centre (v 0), where the dune or the strip is
+      const dS = [], dD = [], series = [];
+      for (let i = 0; i < nu; i++) { const u = u0 + i * DGH, x = a[0] + ux * u, z = a[1] + uz * u, st = B.inStrip(x, z), m = BU.moundY(MD, x, z);
+        if (!st && !(m > -1e8)) continue;
+        const pf = Math.max(TH(x, z), m, BU.crestY(MD, x, z)), d = pf - RW.drawnY(x, z); (st ? dS : dD).push(d); series.push([+u.toFixed(2), st ? 1 : 0, +d.toFixed(3)]); }
+      out.delta[Ln.name] = { strip: summ(dS), dune: summ(dD), series };
+      out.grids.push({ name: Ln.name, nodes: nu * nv, len: +l.toFixed(1), duneNodes: nDune, shellNodes: nShell, fissureDistMin: +fdMin.toFixed(1) });
+      if (hasHi) for (let j = 0; j < nv; j += 2) for (let i = 0; i < nu; i += 2) { const u = u0 + i * DGH, v = v0 + j * DGH, x = a[0] + ux * u + G.nx * v, z = a[1] + uz * u + G.nz * v;
+        if (!(B.sandAt(x, z) > -1e8 || B.inStrip(x, z))) continue; const hi = BC.shellHiAt(x, z); if (!(hi > -1e8)) continue;
+        const e = hi - G.H[j * nu + i]; exN++; if (e > 0.05) exOver++; if (e > exMax) { exMax = e; exAt = [+x.toFixed(2), +z.toFixed(2), B.inStrip(x, z) ? 'strip' : 'dune']; } } }
+    out.excess = hasHi ? { n: exN, max: exN ? +exMax.toFixed(3) : null, at: exAt, over005: exOver } : 'n/a (no bodyCols shellHiAt: before Task 3b)';
+    out.ms = +(performance.now() - t0).toFixed(1); out.breathY = lv.breathY || 0;
+    return out; };
   ${mkLim.toString()}
   ${rankLines.toString()}
   RW.rankMain = (p) => rankLines({ h: TH, fd: (x, z) => S.fissureDist(x, z, 0), lim: mkLim(T.clampR[0]), centre: () => true, all: (x, z) => x * x + z * z <= 200 * 200,
@@ -424,9 +560,16 @@ const LIB = `(async () => {
       f.crl.push(Math.hypot((cp.x - px) - (R.pc[0] - R.pp[0]), (cp.y - P.pos.y) - (R.pc[1] - R.pp[1]), (cp.z - pz) - (R.pc[2] - R.pp[2])) / dt); }
     else { f.cst.push(0); f.crl.push(0); }   // frame 0 has no step: every per-frame array is indexed alike
     R.pc = [cp.x, cp.y, cp.z]; R.pp = [px, P.pos.y, pz];
+    if (o.mound) {   // (mound) the lens over the drawn surface (NaN off the grid), inside her, and her body's contacts with him this frame
+      const dy = RW.drawnY(cp.x, cp.z); f.dclr.push(dy === dy ? cp.y - dy : NaN);
+      f.blk.push(BC && BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0);
+      const B = BC && BC.BODY, last = B ? B.last : '';
+      f.shl.push(B && (B.shell || (B.contacts > 0 && last === 'shell')) ? 1 : 0);
+      f.lmb.push(B && (last.startsWith('leg') || last.startsWith('claw')) ? 1 : 0); f.bc.push(B ? B.contacts : 0);
+    }
     for (let i = 0; i < 2; i++) { const ft = window.__fts[i]; if (!ft.planted) continue;
       if (ft.deck || P.onDeck) { R.ex.deck++; continue; } if (!P.grounded) { R.ex.air++; continue; } if (P.stagger > 0) { R.ex.stag++; continue; }
-      const g = ft.wlo - TH(ft.wx, ft.wz), nn = T.terrainNormal(ft.wx, ft.wz, 0);
+      const g = ft.wlo - GR(ft.wx, ft.wz), nn = T.terrainNormal(ft.wx, ft.wz, 0);
       R.feet.gap.push(g); R.feet.own.push(own(i)); R.feet.sl.push(Math.acos(Math.min(1, nn.y)) * D); R.feet.who.push(i); }
     // progress: a 2 s window of him moving under 0.5 u, off the ground steeper than 52 deg
     R.ring.push([clk, px, pz]); while (R.ring.length > 2 && R.ring[1][0] <= clk - ${STALL_WIN}) R.ring.shift();
@@ -445,7 +588,7 @@ const LIB = `(async () => {
   RW.begin = o => {
     const pts = o.pts, cum = [0]; for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
     RW.run = { o, pts, cum, total: cum[cum.length - 1], prog: 0, seg: 0, off: 0, done: false, why: '', t: 0, ticks: 0, skips: 0, clk0: L.clock, lastClk: L.clock, lastRaf: 0, pc: null, pp: null,
-      f: { dt: [], raf: [], clr: [], cst: [], crl: [], bm: [], pg: [], cr: [], py: [], sl: [], gr: [], x: [], z: [] }, feet: { gap: [], own: [], sl: [], who: [] }, ex: { deck: 0, air: 0, stag: 0 }, ring: [], stall: { n: 0, run: 0, first: null },
+      f: { dt: [], raf: [], clr: [], cst: [], crl: [], bm: [], pg: [], cr: [], py: [], sl: [], gr: [], x: [], z: [], dclr: [], blk: [], shl: [], lmb: [], bc: [] }, feet: { gap: [], own: [], sl: [], who: [] }, ex: { deck: 0, air: 0, stag: 0 }, ring: [], stall: { n: 0, run: 0, first: null },
       maxR: 0, nGive: 0, nHold: 0, n0: L.n, minTo: 1e9, hold: !!o.hold, tGo: 0, walkIdx: 0 };
     P.pitch = o.pitch; return 1;
   };
@@ -487,7 +630,8 @@ if (FPS.site !== 0 || FPS.zone !== 0) { console.error('the page is not at home z
 const bedAt = await c.ev(`({ x: window.lev.lairPos.x, z: window.lev.lairPos.z, R: window.lev.R, dormant: !!window.lev.dormant, kind: window.lev.kind })`);
 let plan = null, cands;
 if (MODE === 'hose' && TAG !== 'relief') { console.error('hose: the binding point is the relief replica\'s (gates.mjs --json); main has none'); process.exit(2); }
-if (TAG === 'relief') { plan = await replicaPlan(MODE !== 'hose'); cands = plan.riser ? { riser: plan.riser, upland: plan.upland, steep: plan.steep } : null;
+if (MODE === 'mound') { }   // (mound) its own lines, from the live mound, below
+else if (TAG === 'relief') { plan = await replicaPlan(MODE !== 'hose'); cands = plan.riser ? { riser: plan.riser, upland: plan.upland, steep: plan.steep } : null;
   console.log(`replica: ${plan.cand ? plan.cand.riser + ' riser-band, ' + plan.cand.upland + ' upland and ' + plan.cand.steep + ' steep-riser (35-45 deg) candidate centres; ' : ''}her bed ${JSON.stringify(plan.bed)} (live ${bedAt.x.toFixed(1)}, ${bedAt.z.toFixed(1)}); hose.at ${JSON.stringify(plan.hose.at)} spare ${plan.hose.spare}`);
   if (Math.hypot(plan.bed[0] - bedAt.x, plan.bed[1] - bedAt.z) > 0.5) fail.push(`the live bed (${bedAt.x.toFixed(1)}, ${bedAt.z.toFixed(1)}) is not the replica's ${JSON.stringify(plan.bed)}`);
 } else if (MODE !== 'hose') {
@@ -495,12 +639,12 @@ if (TAG === 'relief') { plan = await replicaPlan(MODE !== 'hose'); cands = plan.
   const rs = await c.ev(`window.__rw.rankMain(${JSON.stringify({ seg: SEG / 2, R: RANK_R, keep: 150, sep: SEP, band: [35, 45] })})`);
   cands = { A: rk.picks, B: rk.picks, S: rs.picks }; console.log(`main: ${rk.cand} candidate centres in the 20-35 deg band and ${rs.cand} in 35-45 (r <= 200, off the apron), ${rk.picks.length} / ${rs.picks.length} distinct lines`);
 }
-const blk = await c.ev(`window.__rw.block()`);
-console.log(`blocked mask: ${blk.colliders} colliders (rocks, props, wrecks, vents), her body's disc, the apron, the wall-foot clamp`);
+if (MODE !== 'mound') { const blk = await c.ev(`window.__rw.block()`);
+  console.log(`blocked mask: ${blk.colliders} colliders (rocks, props, wrecks, vents), her body's disc, the apron, the wall-foot clamp`); }
 const lines = [];   // { name, pts: [lo, hi] or a route, kind: 'line'|'route', info }
 const pickClean = async (list, not) => { for (const p of list) { if (not && Math.hypot(p.centre[0] - not.centre[0], p.centre[1] - not.centre[1]) < 60) continue;
     if (await c.ev(`window.__rw.clean(${JSON.stringify(p.lo)}, ${JSON.stringify(p.hi)})`)) return p; } return null; };
-const names = MODE === 'hose' ? [] : TAG === 'relief' ? ['riser', 'upland', 'steep'] : ['A', 'B', 'S'];
+const names = MODE === 'hose' || MODE === 'mound' ? [] : TAG === 'relief' ? ['riser', 'upland', 'steep'] : ['A', 'B', 'S'];
 let first = null;
 for (const nm of names) {
   const p = await pickClean(cands[nm], nm === 'B' ? first : null);
@@ -510,10 +654,40 @@ for (const nm of names) {
   const y = await c.ev(`[window.__rw.h(${p.lo[0]}, ${p.lo[1]}), window.__rw.h(${p.hi[0]}, ${p.hi[1]})]`);
   lines.push({ name: nm, kind: 'line', pts: [p.lo, p.hi], info: { centre: p.centre.map(v => +v.toFixed(1)), inBand: p.n + '/' + (2 * (SEG / 2) + 1), meanDeg: p.mean, maxDeg: p.max, centreDeg: p.s, rise: +(y[1] - y[0]).toFixed(1) } });
 }
-if (MODE !== 'hose') {   // the raft column -> her bed: from the column's free cell nearest the ladder's foot to 26 u from her centre
+if (MODE !== 'hose' && MODE !== 'mound') {   // the raft column -> her bed: from the column's free cell nearest the ladder's foot to 26 u from her centre
   const r = await c.ev(`window.__rw.route(5, 0, (x, z) => Math.hypot(x - ${bedAt.x}, z - ${bedAt.z}) <= ${BED_STOP}, ${bedAt.x}, ${bedAt.z})`);
   if (r.err) fail.push('no route from the raft column to her bed: ' + JSON.stringify(r));
   else lines.push({ name: 'bed', kind: 'route', pts: r.pts, info: { legs: r.pts.length - 1, len: +r.len.toFixed(1), from: r.pts[0], to: r.pts[r.pts.length - 1], dBed: +Math.hypot(r.pts[r.pts.length - 1][0] - bedAt.x, r.pts[r.pts.length - 1][1] - bedAt.z).toFixed(1) } });
+}
+// (mound) THE RED first (each rebuilds her in place: __burial.set -> __lev.remember(null)), then the bucket, the lines from the live mound, their
+// corridors, and the drawn-height grids, she lying still (dormant, buried, sculpted)
+let moundPrep = null;
+const unmeasured = [];   // (mound) a bar that could not be read (exit 2 unless a measured bar failed)
+if (MODE === 'mound') {
+  const st0 = await c.ev(`window.__burial && window.__burial.state()`);
+  if (!st0 || !st0.buried || !(st0.bury >= 0.999)) { console.error('mound: no buried Velkath at home (window.__burial.state() ' + JSON.stringify(st0) + ')'); process.exit(2); }
+  if (RED) {
+    const patch = RED === 'nofloor-mound' ? { floor: 0 } : { capShell: 0 };
+    await c.ev(`(window.__rwL0 = window.lev, 1)`);
+    const st = await c.ev(`window.__burial.set(${JSON.stringify(patch)})`);
+    await c.until(`window.lev !== window.__rwL0 && !!window.lev.mound && window.lev.mound.drawn && !!window.lev.sculpted && !!window.lev.dormant`, 60000, 250);
+    console.log(`RED ${RED}: window.__burial.set(${JSON.stringify(patch)}) -> ${JSON.stringify(st)}; she is rebuilt in place (knobs ${JSON.stringify(await c.ev(`({ floor: window.__burial.knobs.floor, capShell: window.__burial.knobs.capShell, solidK: window.__burial.knobs.solidK })`))})`);
+  }
+  await c.until(`!!window.lev.mound && window.lev.mound.drawn && !!window.lev.sculpted && !!window.lev.dormant`, 60000, 250);
+  await sleep(500);
+  const bk = await c.ev(`window.__rw.drawnBucket()`);
+  console.log(`drawn surface: ${bk.shellTris} shell + ${bk.duneTris} dune triangles in a C +- 40 u box, ${bk.cells} cells of 0.5 u, ${bk.refs} refs, ${bk.ms} ms (sculpted ${bk.sculpted}; the breath at the bucket ${f3(bk.breathY)} u, the grid's tolerance 0.045 u)`);
+  const ml = await c.ev(`window.__rw.moundLines()`);
+  for (const Ln of ml) lines.push({ ...Ln, kind: 'line' });
+  const cl = await c.ev(`window.__rw.moundClean(${JSON.stringify(lines)})`);
+  for (const q of cl) { console.log(`corridor ${pad(q.name, 7)}: ${q.clean ? 'clean of every collider (r + 3.6 u, the floor - 0.5 .. + 7 u, 9 u past each end)' : 'NOT CLEAN: ' + JSON.stringify(q.colliders)}`); if (!q.clean) unmeasured.push(`${q.name}: a collider in the corridor (${JSON.stringify(q.colliders)}): the walk would read it, not her ground`); }
+  moundPrep = await c.ev(`window.__rw.drawnPrep(${JSON.stringify(lines)})`);
+  console.log(`drawn-height grids (0.25 u, 14 u past each end, 6 u to each side) in ${moundPrep.ms} ms: ${moundPrep.grids.map(g => `${g.name} ${g.nodes} nodes (${g.duneNodes} dune, ${g.shellNodes} shell; fissureDist >= ${g.fissureDistMin})`).join('; ')}`);
+  for (const g of moundPrep.grids) if (!(g.fissureDistMin > 0)) unmeasured.push(`${g.name}: the grid reaches inside the crack's lip (fissureDist ${g.fissureDistMin}): the ground there is the jam, not terrainH`);
+  console.log(`the published shell proxy's excess over the drawn ground (shellHiAt - drawnY, dune and strip nodes): ${JSON.stringify(moundPrep.excess)}`);
+  console.log(`the provider's floor (max(terrainH, moundY, crestY): bodyCols buriedFloorAt's formula) less drawnY along each line's centre (booked, not gated):`);
+  for (const Ln of lines) { const d = moundPrep.delta[Ln.name]; console.log(`  ${pad(Ln.name, 7)} strip ${JSON.stringify(d.strip)}  dune ${JSON.stringify(d.dune)}`); }
+  await c.ev(`(window.__rw.ground = 'drawn', 1)`);
 }
 for (const L of lines) console.log(`line ${pad(L.name, 6)} ${L.kind}: ${JSON.stringify(L.info)}`);
 if (process.env.RW_STOP === 'lines') { console.log(fail.length ? 'lines: ' + JSON.stringify(fail) : 'lines ok'); console.log('DEV RUN - NOT A VERDICT'); c.close(); process.exit(2); }   // dev: the lines, no walk (exit 2: the exit handler stops our Chrome)
@@ -527,7 +701,7 @@ async function walkOnce(L, dir, rep, o = {}) {
   const total = pts.reduce((s, p, k) => k ? s + Math.hypot(p[0] - pts[k - 1][0], p[1] - pts[k - 1][1]) : 0, 0);
   const D0 = await c.ev(`window.__rw.leash()`);
   const maxT = o.maxT || Math.max(60, total / 0.5 + 30);
-  await c.ev(`window.__rw.begin(${JSON.stringify({ pts, look: o.look || 4, rate: o.rate || 1.4, pitch: o.pitch === undefined ? -0.1 : o.pitch, stopAt: o.stopAt === undefined ? 1.2 : o.stopAt, maxT, stopOnYank: !!o.stopOnYank, noStop: !!o.noStop, hold: !!o.hold })})`);
+  await c.ev(`window.__rw.begin(${JSON.stringify({ pts, look: o.look || 4, rate: o.rate || 1.4, pitch: o.pitch === undefined ? -0.1 : o.pitch, stopAt: o.stopAt === undefined ? 1.2 : o.stopAt, maxT, stopOnYank: !!o.stopOnYank, noStop: !!o.noStop, hold: !!o.hold, mound: !!o.mound })})`);
   if (o.hold) { await sleep(2600); await c.ev(`window.__rw.go()`); }   // the lens books its settle too: the first pull-in of the boom is an event
   if (!o.stand) await c.key('KeyW', true);
   const t0 = Date.now(); let st;
@@ -548,8 +722,11 @@ async function walk(L, dir, rep, o = {}) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     R = await walkOnce(L, dir, rep, o); R.attempt = attempt;
     const why = o.stand ? [] : [R.off > 5 && `${f1(R.off)} u off the line`, R.ex.air > 30 && `${R.ex.air} airborne planted-boot frames`, R.ex.stag > 0 && `${R.ex.stag} staggered frames`, R.surv.torn > 0 && `torn ${R.surv.torn}`, R.surv.oxygen < 0.5 && `oxygen ${R.surv.oxygen}`, R.stall.n > 0 && `stalled ${R.stall.n} frames`, R.why !== 'arrived' && `ended '${R.why}'`].filter(Boolean);
+    // (mound) a frame at the game's 50 ms clamp: the walk is not a reading. It is run once more, and a walk still clamped is kept (its bar fails)
+    // (booked in R.clampN, its own bar, not a progress disturbance)
+    R.clampN = R.f.dt.filter(d => d > 0.0499).length;
     R.disturbed = why;
-    if (!why.length) break;
+    if (!why.length) { if (!(o.mound && R.clampN && attempt < 2)) break; console.log(`    ${R.clampN} frames at the 50 ms clamp: not a reading; run again`); continue; }
     console.log(`    disturbed (${why.join(', ')}); ${attempt < 3 ? 'run again' : 'kept'}`);
   }
   return R;
@@ -698,6 +875,45 @@ if (MODE === 'boots' || MODE === 'lens') {
   }
 }
 
+if (MODE === 'mound') {
+  const runs = [];
+  for (const L of lines) for (let rep = 1; rep <= REPS; rep++) for (const dir of ['fwd', 'rev']) runs.push(await walk(L, dir, rep, { mound: true }));
+  tables.frames = frameTimes(runs); result.frameTimes = tables.frames;
+  console.log('frame times (live loop, ruling 42: no __bench.step, no hold, no clock leak):', JSON.stringify(tables.frames));
+  progressVerdict(runs);
+  tables.dormant = await lonely();
+  // per line, both ways pooled. (NaN crossed CDP as null: a sample off the grid is anything not a finite number)
+  const num = v => typeof v === 'number' && Number.isFinite(v), sum = a => a.reduce((q, v) => q + v, 0);
+  const rows = {};
+  console.log(`\nMOUND (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): OWN = the planted sole's lowest point over the DRAWN surface (drawnY: her shell, the dune, the floor), u (- sinks, + hangs); clr = the lens over drawnY; blocked = bodyBlocked(lens, 0); shell = frames with her shell's contact`);
+  console.log(pad('line', 8) + lpad('walks', 6) + lpad('frames', 8) + '  | ' + lpad('planted', 8) + lpad('off', 5) + lpad('p50|g|', 8) + lpad('p95|g|', 8) + lpad('sink', 8) + lpad('<-0.15', 7) + lpad('hang', 7) + '  | ' + lpad('on grid', 8) + lpad('min clr', 8) + lpad('<0.3', 6) + lpad('blocked', 8) + '  | ' + lpad('shell', 6) + lpad('limb', 6) + lpad('clamp', 6) + lpad('stall', 6));
+  for (const L of lines) {
+    const rs = runs.filter(r => r.line === L.name), own = rs.flatMap(r => r.feet.own), ok = own.filter(num), ab = ok.map(Math.abs);
+    const clr = rs.flatMap(r => r.f.dclr), on = clr.filter(num), share = clr.length ? on.length / clr.length : 0;
+    const blk = sum(rs.map(r => sum(r.f.blk))), shl = sum(rs.map(r => sum(r.f.shl))), lmb = sum(rs.map(r => sum(r.f.lmb))), clamp = sum(rs.map(r => r.clampN || 0)), stall = sum(rs.map(r => r.stall.n));
+    const row = rows[L.name] = { walks: rs.length, frames: clr.length, planted: own.length, offGrid: own.length - ok.length, p50: +f3(pct(ab, 0.5)), p95: +f3(pct(ab, 0.95)), sink: ok.length ? +f3(Math.min(...ok)) : null, under015: ok.filter(v => v < -0.15).length, hang: ok.length ? +f3(Math.max(...ok)) : null,
+      onGrid: +share.toFixed(4), minClr: on.length ? +f3(Math.min(...on)) : null, below: nBelowClear(on), blocked: blk, shellFrames: shl, limbFrames: lmb, clamped: clamp, stall, attempts: rs.map(r => r.attempt) };
+    console.log(pad(L.name, 8) + lpad(rs.length, 6) + lpad(clr.length, 8) + '  | ' + lpad(own.length, 8) + lpad(row.offGrid, 5) + lpad(f3(row.p50), 8) + lpad(f3(row.p95), 8) + lpad(f3(row.sink), 8) + lpad(row.under015, 7) + lpad(f3(row.hang), 7) + '  | ' + lpad((share * 100).toFixed(1) + '%', 8) + lpad(f3(row.minClr), 8) + lpad(row.below, 6) + lpad(blk, 8) + '  | ' + lpad(shl, 6) + lpad(lmb, 6) + lpad(clamp, 6) + lpad(stall, 6));
+    if (ok.length < MIN_FRAMES) unmeasured.push(`${L.name}: only ${ok.length} planted-boot samples on the grid (need ${MIN_FRAMES})`);
+    else {
+      if (row.p95 > GAP_BAR) bad('gap', `${L.name}: OWN p95 |gap| ${f3(row.p95)} u over the drawn surface (bar ${GAP_BAR})`);
+      if (row.under015 > 0) bad('sink', `${L.name}: ${row.under015} planted-boot samples under -${GAP_BAR} u (lowest ${f3(row.sink)})`);
+    }
+    if (shl > 0) bad('shell', `${L.name}: her shell met him on ${shl} frames (bar 0)`);
+    if (clr.length < MIN_FRAMES || share < 0.9) unmeasured.push(`${L.name}: the lens bars are UNMEASURED: ${(share * 100).toFixed(1)}% of ${clr.length} frames on the drawn-height grid (need >= 90% of >= ${MIN_FRAMES})`);
+    else {
+      if (row.below > 0) bad('clearance', `${L.name}: the lens under ${CLEAR_BAR} u over the drawn surface on ${row.below} of ${on.length} frames (lowest ${f3(row.minClr)} u)`);
+      if (blk > 0) bad('blocked', `${L.name}: the lens inside her (bodyBlocked(lens, 0)) on ${blk} frames`);
+    }
+    if (clamp > 0) bad('clamp', `${L.name}: ${clamp} frames at the 50 ms clamp after a re-run: not a reading`);
+  }
+  // the per-frame series judged, per walk (rounded): dt, the lens's clearance over drawnY (null off the grid), blocked, shell, limb contacts, OWN per planted sample
+  const r3 = v => num(v) ? Math.round(v * 1000) / 1000 : null;
+  result.mound = { schema: 1, lines: lines.map(L => ({ name: L.name, pts: L.pts, info: L.info })), prep: moundPrep, rows, tolerance: { breath: 0.045, grid: '0.25 u bilinear; buckets 0.5 u' },
+    walks: runs.map(r => ({ line: r.line, dir: r.dir, rep: r.rep, attempt: r.attempt, why: r.why, prog: r.prog, total: r.total, disturbed: r.disturbed, clampN: r.clampN, stall: r.stall, off: r.off,
+      dt: r.f.dt.map(v => Math.round(v * 1e5) / 1e5), clr: r.f.dclr.map(r3), blk: r.f.blk, shell: r.f.shl, limb: r.f.lmb, contacts: r.f.bc, own: r.feet.own.map(r3), x: r.f.x.map(v => +v.toFixed(2)), z: r.f.z.map(v => +v.toFixed(2)), y: r.f.py })) };
+}
+
 if (MODE === 'hose') {
   const B = plan.hose.at, dB = 375 - plan.hose.spare;   // the binding point and its range from the live pump head (stats.mjs: the 3D range, the floor under it)
   const ang = Math.atan2(B.z - 2.895, B.x - 5.382), PAST = { x: B.x + Math.cos(ang) * 20, z: B.z + Math.sin(ang) * 20 };
@@ -762,14 +978,18 @@ if (MODE === 'hose') {
 const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 if (errs.length) { console.log('CONSOLE', errs.slice(0, 5).join('\n')); fail.push('console errors: ' + errs.length); }
-if (process.env.RW_JSON) { writeFileSync(process.env.RW_JSON, JSON.stringify(result, null, 1)); console.log('wrote ' + process.env.RW_JSON); }
+if (MODE === 'mound') result.unmeasured = unmeasured;
+if (process.env.RW_JSON) { writeFileSync(process.env.RW_JSON, JSON.stringify(result, null, MODE === 'mound' ? 0 : 1)); console.log('wrote ' + process.env.RW_JSON); }
 c.close(); stop();
 if (DEV) { console.log('DEV RUN - NOT A VERDICT' + (fail.length ? ' (it read: ' + fail.length + ' failure(s))' : '')); process.exit(2); }
 if (RED) {
   // a RED run must fail THE BAR IT TARGETS (not merely something). Exit 5 = it did (a crash is 1: it cannot read as a RED that worked); exit 3 = that bar did NOT fail: the case discriminates nothing
-  const target = { noslope: 'gap', nofloor: 'clearance', short20: 'yank', past20: 'yank' }[RED], hit = tags.has(target);
+  const target = { noslope: 'gap', nofloor: 'clearance', short20: 'yank', past20: 'yank', 'nofloor-mound': 'gap', nocap: 'shell' }[RED], hit = tags.has(target);
   console.log(hit ? `RED ${RED}: the ${target} bar FAILED, as it must:` : `RED ${RED}: the ${target} bar did NOT fail: NOT RED` + (fail.length ? ` (other bars failed: ${[...tags].join(', ') || 'untagged'})` : ''));
   for (const f of fail) console.log('  ' + f);
+  if (!hit && unmeasured.length) { console.log('UNMEASURED (the RED read nothing it could fail on):'); for (const u of unmeasured) console.log('  ' + u); process.exit(2); }
   process.exit(hit ? 5 : 3);
 }
-if (fail.length) { console.error('FAIL'); for (const f of fail) console.error('  ' + f); process.exit(1); } else console.log('PASS');
+if (fail.length) { console.error('FAIL'); for (const f of fail) console.error('  ' + f); if (unmeasured.length) { console.error('and UNMEASURED:'); for (const u of unmeasured) console.error('  ' + u); } process.exit(1); }
+if (unmeasured.length) { console.error('UNMEASURED (a bar with nothing to read is never a pass)'); for (const u of unmeasured) console.error('  ' + u); process.exit(2); }
+console.log('PASS');
