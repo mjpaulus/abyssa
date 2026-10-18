@@ -85,13 +85,20 @@
 //         BODY.last alone can be overwritten by a later leg or claw contact in the same frame, so gating on either is the stricter reading),
 //         leg / claw contacts (booked), the frame time. Once per run: the published shell proxy's excess over the drawn ground,
 //         max(bodyCols shellHiAt - drawnY) over the dune and the strip (Task 3b's conflict C1, shown, not assumed; n/a before 3b), and the
-//         provider's floor (max(moundY, crestY): bodyCols buriedFloorAt's own formula) less drawnY along each line (booked). PASS per line:
-//         OWN p95 |gap| <= 0.15 u (every planted frame, no slope filter) and none under -0.15; her shell's contacts 0; the lens >= 0.3 u over
+//         provider's floor (max(terrainH, extraFloorAt); before 3b max(moundY, crestY)) less the exact drawn top along each line (booked).
+//         THE STRIP IS MEASURED EXACTLY (controller ruling 1, 2026-10-18; pre-registered before the envelope floor): there the bilinear grid's
+//         own error is three times the bar (p95 0.45 u, max 1.62 u: it reads her crest's near-vertical lips half-way up), so a planted sample
+//         with any vertex of the lead sole (diver.js's casting outline, 18, and 3 on its centre line) in the strip is read as the SMALLEST
+//         clearance of those vertices over the drawn surface, exact-hit from the bucket (PENETRATION when negative, CONTACT otherwise); the
+//         floor and the dune keep OWN. PASS per line, over those readings pooled:
+//         p95 |reading| <= 0.15 u (every planted frame, no slope filter) and none under -0.15; her shell's contacts 0; the lens >= 0.3 u over
 //         drawnY on every walk frame and never bodyBlocked(lens, 0) (both lens bars need >= 90% of the line's frames on the grid, else
 //         UNMEASURED, exit 2); progress (no 2 s window under 0.5 u moved); no frame at the 50 ms clamp (a clamped walk is not a reading: it is
 //         run once more, and a walk still clamped fails the bar). A measured FAIL outranks UNMEASURED. REDs (run before the footing, then after):
 //         nofloor-mound  window.__burial.set({ floor: 0 }) first: his boots walk the floor under the drawn dune; the gap bar must fail
 //         nocap          window.__burial.set({ capShell: 0 }): the proxy's shell term is solid over the drawn sand; the shell-contact bar must fail
+//         boots and lens (ruling 1 item 4) also count the frames with a sleeper's extra floor (terrain.js extraFloorAt > -1e9) under him or the
+//         lens: bar 0, their walks never meet it; and book the lensfix CRECAM rules' engagement (game.js drop / punch / guard / keep counters)
 // hose    from the deck with HOSE_START 380 (survival.hose is never set; FP_HOSE unset): real W over the side, C down to the seabed, then real
 //         W along the route to the binding point (gates.mjs --json hose.at). PASS: arrives (within 3 u) with __leash.n === 0 and last.str === 0
 //         (no yank), the farthest range the leash read <= HOSE_START - GIVE - 10 = 365 (spec §7: 10 u spare under the give). Books __leash
@@ -333,6 +340,10 @@ const LIB = `(async () => {
   const own = i => { const e = ENDS[i]; e.updateWorldMatrix(true, false); let m = 1e9;
     for (const q of SOLE_PTS) { V.set(q[0], -0.15, q[1]); e.localToWorld(V); const g = V.y - GR(V.x, V.z); if (!(g === g)) return NaN; if (g < m) m = g; } return m; };
   const RW = window.__rw = { run: null, h: TH, ground: 'terrain' };
+  const XF = typeof T.extraFloorAt === 'function' ? T.extraFloorAt : null;
+  // (ruling 1 item 4) the lensfix CRECAM rules' engagement over a walk: game.js books a counter per rule (drop, punch, guard, keep), each
+  // bumped on every frame its creEng bit is set, so all four unchanged over a walk = creEng 0 on every frame (main's lens, bit for bit)
+  const creN = () => { const c = window.__crecam; if (!c || !c.state) return null; const s = c.state(); return [s.dropN, s.punchN, s.guardN, s.keepN]; };
   let BC = null; try { BC = await import('/src/entities/sleeper/bodyCols.js'); } catch (e) { }
   const BU = await import('/src/entities/sleeper/burial.js').catch(() => null);
   // ---- THE DRAWN SURFACE (mound): her shell's and the dune's world triangles, bucketed once per run on 0.5 u cells (harpoon.js gatherTris'
@@ -359,6 +370,20 @@ const LIB = `(async () => {
       if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
       const y = l1 * DTRI[o + 1] + l2 * DTRI[o + 4] + l3 * DTRI[o + 7]; if (y > best) { best = y; _dw = t < DNS ? 2 : 1; } }
     return best; };
+  // (mound; controller ruling 1 on Task 3b, 2026-10-18) THE STRIP, MEASURED EXACTLY: the bilinear grid reads her crest's near-vertical lips
+  // half-way up their faces (its own error there: p95 0.45 u, max 1.62 u, three times the bar), so on the strip every vertex of the planted
+  // lead sole (diver.js's casting outline, 18 vertices, and 3 on its centre line: heel, waist, ball) is exact-hit against the drawn triangles
+  // (her shell, the dune) under it, max with terrainH: the clearance is the vertex's height over the drawn surface there (- inside the rock).
+  // A sample is the strip's when any of those vertices lies in the strip (__burial.inStrip); its reading is the SMALLEST clearance over the
+  // sole (PENETRATION when negative, CONTACT otherwise), independent of how the floor is built. The floor and the dune keep OWN (bilinear).
+  const SOLE_OUT = [[0.000, -0.185], [0.070, -0.176], [0.100, -0.140], [0.104, -0.060], [0.098, 0.030], [0.122, 0.130], [0.130, 0.215], [0.112, 0.285], [0.066, 0.328], [0.000, 0.338]];
+  const SOLE_V = SOLE_OUT.concat(SOLE_OUT.slice(1, -1).map(q => [-q[0], q[1]]), [[0, -0.10], [0, 0.08], [0, 0.22]]);
+  let _soleStrip = false;
+  const soleExact = i => { const e = ENDS[i]; e.updateWorldMatrix(true, false); let m = 1e9; _soleStrip = false; const Bu = window.__burial;
+    for (let k = 0; k < SOLE_V.length; k++) { const q = SOLE_V[k]; V.set(q[0], -0.15, q[1]); e.localToWorld(V);
+      if (!_soleStrip && Bu.inStrip(V.x, V.z)) _soleStrip = true;
+      const t = topHit(V.x, V.z, false), th = TH(V.x, V.z), g = V.y - (t > th ? t : th); if (g < m) m = g; }
+    return m; };
   // the bucket: every triangle of her shell, then of the dune, in world space, over the box C +- 40 u (the corridors reach ~37 u from C)
   RW.drawnBucket = () => {
     const lv = window.lev, MD = lv.mound, sh = lv.parts.shell, t0 = performance.now(), cx = MD.bx, cz = MD.bz, HB = 40;
@@ -434,7 +459,8 @@ const LIB = `(async () => {
       const dS = [], dD = [], series = [];
       for (let i = 0; i < nu; i++) { const u = u0 + i * DGH, x = a[0] + ux * u, z = a[1] + uz * u, st = B.inStrip(x, z), m = BU.moundY(MD, x, z);
         if (!st && !(m > -1e8)) continue;
-        const pf = Math.max(TH(x, z), m, BU.crestY(MD, x, z)), d = pf - RW.drawnY(x, z); (st ? dS : dD).push(d); series.push([+u.toFixed(2), st ? 1 : 0, +d.toFixed(3)]); }
+        const th = TH(x, z), tp = topHit(x, z, false), ex = tp > th ? tp : th;
+        const pf = Math.max(th, XF ? XF(x, z, 0) : Math.max(m, BU.crestY(MD, x, z))), d = pf - ex; (st ? dS : dD).push(d); series.push([+u.toFixed(2), st ? 1 : 0, +d.toFixed(3)]); }
       out.delta[Ln.name] = { strip: summ(dS), dune: summ(dD), series };
       out.grids.push({ name: Ln.name, nodes: nu * nv, len: +l.toFixed(1), duneNodes: nDune, shellNodes: nShell, fissureDistMin: +fdMin.toFixed(1) });
       if (hasHi) for (let j = 0; j < nv; j += 2) for (let i = 0; i < nu; i += 2) { const u = u0 + i * DGH, v = v0 + j * DGH, x = a[0] + ux * u + G.nx * v, z = a[1] + uz * u + G.nz * v;
@@ -560,6 +586,9 @@ const LIB = `(async () => {
       f.crl.push(Math.hypot((cp.x - px) - (R.pc[0] - R.pp[0]), (cp.y - P.pos.y) - (R.pc[1] - R.pp[1]), (cp.z - pz) - (R.pc[2] - R.pp[2])) / dt); }
     else { f.cst.push(0); f.crl.push(0); }   // frame 0 has no step: every per-frame array is indexed alike
     R.pc = [cp.x, cp.y, cp.z]; R.pp = [px, P.pos.y, pz];
+    // (Task 3b, ruling 1 item 4) frames where a sleeper's extra floor is set under him or under the lens (terrain.js extraFloorAt; a build
+    // without it books -1): boots and lens must read 0 (their walks never meet the provider)
+    if (XF) { if (XF(px, pz, 0) > -1e9 || XF(cp.x, cp.z, 0) > -1e9) R.xfN++; } else R.xfN = -1;
     if (o.mound) {   // (mound) the lens over the drawn surface (NaN off the grid), inside her, and her body's contacts with him this frame
       const dy = RW.drawnY(cp.x, cp.z); f.dclr.push(dy === dy ? cp.y - dy : NaN);
       f.blk.push(BC && BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0);
@@ -571,7 +600,7 @@ const LIB = `(async () => {
       if (ft.deck || P.onDeck) { R.ex.deck++; continue; } if (!P.grounded) { R.ex.air++; continue; } if (P.stagger > 0) { R.ex.stag++; continue; }
       const g = ft.wlo - GR(ft.wx, ft.wz), nn = T.terrainNormal(ft.wx, ft.wz, 0);
       R.feet.gap.push(g); R.feet.own.push(own(i)); R.feet.sl.push(Math.acos(Math.min(1, nn.y)) * D); R.feet.who.push(i);
-      if (o.mound) { const Bu = window.__burial; R.feet.zone.push(Bu.inStrip(ft.wx, ft.wz) ? 2 : Bu.sandAt(ft.wx, ft.wz) > -1e8 ? 1 : 0); } }   // (mound, booked) 2 the strip (her crest), 1 the dune, 0 the floor
+      if (o.mound) { const Bu = window.__burial, ex = soleExact(i); R.feet.exact.push(ex); R.feet.zone.push(_soleStrip ? 2 : Bu.sandAt(ft.wx, ft.wz) > -1e8 ? 1 : 0); } }   // (mound) 2 the strip (a sole vertex in it: gated on the exact reading), 1 the dune, 0 the floor (OWN)
     // progress: a 2 s window of him moving under 0.5 u, off the ground steeper than 52 deg
     R.ring.push([clk, px, pz]); while (R.ring.length > 2 && R.ring[1][0] <= clk - ${STALL_WIN}) R.ring.shift();
     if (clk - R.ring[0][0] >= ${STALL_WIN} - 1e-6 && R.t - R.tGo >= ${STALL_WIN} && !R.done && !R.hold) {
@@ -589,14 +618,14 @@ const LIB = `(async () => {
   RW.begin = o => {
     const pts = o.pts, cum = [0]; for (let k = 1; k < pts.length; k++) cum.push(cum[k - 1] + Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]));
     RW.run = { o, pts, cum, total: cum[cum.length - 1], prog: 0, seg: 0, off: 0, done: false, why: '', t: 0, ticks: 0, skips: 0, clk0: L.clock, lastClk: L.clock, lastRaf: 0, pc: null, pp: null,
-      f: { dt: [], raf: [], clr: [], cst: [], crl: [], bm: [], pg: [], cr: [], py: [], sl: [], gr: [], x: [], z: [], dclr: [], blk: [], shl: [], lmb: [], bc: [] }, feet: { gap: [], own: [], sl: [], who: [], zone: [] }, ex: { deck: 0, air: 0, stag: 0 }, ring: [], stall: { n: 0, run: 0, first: null },
-      maxR: 0, nGive: 0, nHold: 0, n0: L.n, minTo: 1e9, hold: !!o.hold, tGo: 0, walkIdx: 0 };
+      f: { dt: [], raf: [], clr: [], cst: [], crl: [], bm: [], pg: [], cr: [], py: [], sl: [], gr: [], x: [], z: [], dclr: [], blk: [], shl: [], lmb: [], bc: [] }, feet: { gap: [], own: [], sl: [], who: [], zone: [], exact: [] }, ex: { deck: 0, air: 0, stag: 0 }, ring: [], stall: { n: 0, run: 0, first: null },
+      maxR: 0, nGive: 0, nHold: 0, n0: L.n, minTo: 1e9, hold: !!o.hold, tGo: 0, walkIdx: 0, xfN: 0, cre0: creN() };
     P.pitch = o.pitch; return 1;
   };
   // go(): the settle is over, the walk is on: the frames from here are the walk's (the ones before are the lens settling after the place)
   RW.go = () => { const R = RW.run; R.hold = false; R.tGo = R.t; R.walkIdx = R.f.dt.length; R.ring = []; return R.walkIdx; };
   RW.status = () => { const R = RW.run; return R ? { done: R.done, why: R.why, prog: +R.prog.toFixed(1), total: +R.total.toFixed(1), t: +R.t.toFixed(1), ticks: R.ticks, skips: R.skips, stall: R.stall.n, off: +R.off.toFixed(2), n: L.n } : null; };
-  RW.end = () => { const R = RW.run; RW.run = null; if (!R) return null; R.f.sl = R.f.sl.map(v => +v.toFixed(2)); R.f.bm = R.f.bm.map(v => +v.toFixed(3)); R.f.pg = R.f.pg.map(v => +v.toFixed(2)); R.f.cr = R.f.cr.map(v => +v.toFixed(2)); R.f.py = R.f.py.map(v => +v.toFixed(2)); return { f: R.f, walkIdx: R.walkIdx, tGo: R.tGo, feet: R.feet, ex: R.ex, why: R.why, total: R.total, prog: R.prog, t: R.t, ticks: R.ticks, skips: R.skips, stall: R.stall, off: R.off, maxR: R.maxR, nGive: R.nGive, nHold: R.nHold, minTo: R.minTo }; };
+  RW.end = () => { const R = RW.run; RW.run = null; if (!R) return null; R.f.sl = R.f.sl.map(v => +v.toFixed(2)); R.f.bm = R.f.bm.map(v => +v.toFixed(3)); R.f.pg = R.f.pg.map(v => +v.toFixed(2)); R.f.cr = R.f.cr.map(v => +v.toFixed(2)); R.f.py = R.f.py.map(v => +v.toFixed(2)); const c1 = creN(); return { xfN: R.xfN, cre: R.cre0 && c1 ? c1.map((v, k) => v - R.cre0[k]) : null, f: R.f, walkIdx: R.walkIdx, tGo: R.tGo, feet: R.feet, ex: R.ex, why: R.why, total: R.total, prog: R.prog, t: R.t, ticks: R.ticks, skips: R.skips, stall: R.stall, off: R.off, maxR: R.maxR, nGive: R.nGive, nHold: R.nHold, minTo: R.minTo }; };
   RW.nav = () => ({ x: P.pos.x, y: P.pos.y, z: P.pos.z, vy: P.vel.y, grounded: !!P.grounded, onDeck: !!P.onDeck, yaw: P.yaw, stagger: P.stagger || 0, state: window.gameState, dead: window.gameState === 'dead' });
   RW.leash = () => ({ state: L.state, r: +L.r.toFixed(2), give: +L.give.toFixed(3), n: L.n, last: { ...L.last }, maxIn: +L.maxIn.toFixed(3), maxEnd: +L.maxEnd.toFixed(3), clock: +L.clock.toFixed(2), hose: window.survival.hose });
   RW.survival = () => ({ oxygen: +window.survival.oxygen.toFixed(3), fuel: +window.survival.fuel.toFixed(3), torn: +window.survival.torn.toFixed(2), strain: +window.survival.strain.toFixed(2) });
@@ -686,7 +715,7 @@ if (MODE === 'mound') {
   console.log(`drawn-height grids (0.25 u, 14 u past each end, 6 u to each side) in ${moundPrep.ms} ms: ${moundPrep.grids.map(g => `${g.name} ${g.nodes} nodes (${g.duneNodes} dune, ${g.shellNodes} shell; fissureDist >= ${g.fissureDistMin})`).join('; ')}`);
   for (const g of moundPrep.grids) if (!(g.fissureDistMin > 0)) unmeasured.push(`${g.name}: the grid reaches inside the crack's lip (fissureDist ${g.fissureDistMin}): the ground there is the jam, not terrainH`);
   console.log(`the published shell proxy's excess over the drawn ground (shellHiAt - drawnY, dune and strip nodes): ${JSON.stringify(moundPrep.excess)}`);
-  console.log(`the provider's floor (max(terrainH, moundY, crestY): bodyCols buriedFloorAt's formula) less drawnY along each line's centre (booked, not gated):`);
+  console.log(`the provider's floor (max(terrainH, extraFloorAt); before Task 3b max(terrainH, moundY, crestY)) less the EXACT drawn top along each line's centre (booked, not gated):`);
   for (const Ln of lines) { const d = moundPrep.delta[Ln.name]; console.log(`  ${pad(Ln.name, 7)} strip ${JSON.stringify(d.strip)}  dune ${JSON.stringify(d.dune)}`); }
   await c.ev(`(window.__rw.ground = 'drawn', 1)`);
 }
@@ -757,6 +786,13 @@ if (MODE === 'boots' || MODE === 'lens') {
   console.log('frame times (live loop, ruling 42: no __bench.step, no hold, no clock leak):', JSON.stringify(tables.frames));
   progressVerdict(runs);
   tables.dormant = await lonely();
+  // (velkath-buried-rock Task 3b, ruling 1 item 4) these walks never meet a sleeper's extra floor: frames with extraFloorAt > -1e9 under him or
+  // under the lens must be 0 (-1: a build without one); and the lensfix CRECAM rules' engagement on them (drop, punch, guard, keep), booked
+  const xfAll = runs.map(r => r.xfN), xfN = xfAll.reduce((q, v) => q + Math.max(0, v || 0), 0), noXF = xfAll.every(v => v === -1);
+  const creAll = runs.map(r => r.cre).filter(Boolean), cre = creAll.length ? creAll.reduce((q, v) => q.map((w, k) => w + v[k]), [0, 0, 0, 0]) : null;
+  result.provider = { frames: noXF ? 'n/a (no extraFloorAt)' : xfN, crecam: cre ? { drop: cre[0], punch: cre[1], guard: cre[2], keep: cre[3], walks: creAll.length } : 'n/a (no __crecam)' };
+  console.log(`a sleeper's extra floor under him or the lens: ${noXF ? 'n/a (this build has no extraFloorAt)' : xfN + ' frames (bar 0)'}; the lensfix CRECAM rules engaged over the walks: ${cre ? `drop ${cre[0]}, punch ${cre[1]}, guard ${cre[2]}, keep ${cre[3]} frames (${creAll.length} walks; all 0 = creEng 0 on every frame: main's lens bit for bit)` : 'n/a (no __crecam)'}`);
+  if (!noXF && xfN > 0) bad('provider', `${xfN} frames with a sleeper's extra floor under him or the lens: the walk met the provider`);
   let wall = null;
   if (MODE === 'lens') {   // the wall-foot control: he stands 2 s with a 54+ deg face 2.6 u behind him; clearance with the floor clamp on (bar 0.3), off under RED
     const sp = await c.ev(`window.__rw.wallSpot()`);
@@ -886,19 +922,23 @@ if (MODE === 'mound') {
   // per line, both ways pooled. (NaN crossed CDP as null: a sample off the grid is anything not a finite number)
   const num = v => typeof v === 'number' && Number.isFinite(v), sum = a => a.reduce((q, v) => q + v, 0);
   const rows = {};
-  console.log(`\nMOUND (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): OWN = the planted sole's lowest point over the DRAWN surface (drawnY: her shell, the dune, the floor), u (- sinks, + hangs); clr = the lens over drawnY; blocked = bodyBlocked(lens, 0); shell = frames with her shell's contact`);
+  console.log(`\nMOUND (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): the planted sole over the DRAWN surface, u (- sinks, + hangs): on the strip the EXACT smallest clearance over the sole's vertices, elsewhere OWN (its lowest point over drawnY); clr = the lens over drawnY; blocked = bodyBlocked(lens, 0); shell = frames with her shell's contact`);
   console.log(pad('line', 8) + lpad('walks', 6) + lpad('frames', 8) + '  | ' + lpad('planted', 8) + lpad('off', 5) + lpad('p50|g|', 8) + lpad('p95|g|', 8) + lpad('sink', 8) + lpad('<-0.15', 7) + lpad('hang', 7) + '  | ' + lpad('on grid', 8) + lpad('min clr', 8) + lpad('<0.3', 6) + lpad('blocked', 8) + '  | ' + lpad('shell', 6) + lpad('limb', 6) + lpad('clamp', 6) + lpad('stall', 6));
   for (const L of lines) {
-    const rs = runs.filter(r => r.line === L.name), own = rs.flatMap(r => r.feet.own), ok = own.filter(num), ab = ok.map(Math.abs);
+    // the gated reading per planted sample: on the strip the EXACT smallest clearance over the sole (ruling 1), elsewhere OWN (bilinear)
+    const rs = runs.filter(r => r.line === L.name), own = rs.flatMap(r => r.feet.own.map((v, k) => r.feet.zone[k] === 2 ? r.feet.exact[k] : v)), ok = own.filter(num), ab = ok.map(Math.abs);
     const clr = rs.flatMap(r => r.f.dclr), on = clr.filter(num), share = clr.length ? on.length / clr.length : 0;
     const blk = sum(rs.map(r => sum(r.f.blk))), shl = sum(rs.map(r => sum(r.f.shl))), lmb = sum(rs.map(r => sum(r.f.lmb))), clamp = sum(rs.map(r => r.clampN || 0)), stall = sum(rs.map(r => r.stall.n));
     const row = rows[L.name] = { walks: rs.length, frames: clr.length, planted: own.length, offGrid: own.length - ok.length, p50: +f3(pct(ab, 0.5)), p95: +f3(pct(ab, 0.95)), sink: ok.length ? +f3(Math.min(...ok)) : null, under015: ok.filter(v => v < -0.15).length, hang: ok.length ? +f3(Math.max(...ok)) : null,
       onGrid: +share.toFixed(4), minClr: on.length ? +f3(Math.min(...on)) : null, below: nBelowClear(on), blocked: blk, shellFrames: shl, limbFrames: lmb, clamped: clamp, stall, attempts: rs.map(r => r.attempt) };
     console.log(pad(L.name, 8) + lpad(rs.length, 6) + lpad(clr.length, 8) + '  | ' + lpad(own.length, 8) + lpad(row.offGrid, 5) + lpad(f3(row.p50), 8) + lpad(f3(row.p95), 8) + lpad(f3(row.sink), 8) + lpad(row.under015, 7) + lpad(f3(row.hang), 7) + '  | ' + lpad((share * 100).toFixed(1) + '%', 8) + lpad(f3(row.minClr), 8) + lpad(row.below, 6) + lpad(blk, 8) + '  | ' + lpad(shl, 6) + lpad(lmb, 6) + lpad(clamp, 6) + lpad(stall, 6));
     // (booked, not gated) the same samples by where the boot stood: the floor, the dune, the strip (her crest)
-    row.byZone = {}; for (const [zk, zn] of [[0, 'floor'], [1, 'dune'], [2, 'strip']]) { const zs = []; for (const r of rs) for (let k = 0; k < r.feet.own.length; k++) if (r.feet.zone[k] === zk && num(r.feet.own[k])) zs.push(r.feet.own[k]);
+    // (booked) the same samples by where the boot stood: the floor and the dune (OWN), the strip (EXACT, gated), and the strip's bilinear OWN
+    // beside it (the reading ruling 1 retired there: its grid error is three times the bar)
+    row.byZone = {}; for (const [zk, zn, key] of [[0, 'floor', 'own'], [1, 'dune', 'own'], [2, 'strip', 'exact'], [2, 'stripOwn', 'own']]) { const zs = []; for (const r of rs) for (let k = 0; k < r.feet.own.length; k++) if (r.feet.zone[k] === zk && num(r.feet[key][k])) zs.push(r.feet[key][k]);
       row.byZone[zn] = { n: zs.length, p95: zs.length ? +f3(pct(zs.map(Math.abs), 0.95)) : null, sink: zs.length ? +f3(Math.min(...zs)) : null, hang: zs.length ? +f3(Math.max(...zs)) : null, under015: zs.filter(v => v < -0.15).length }; }
-    console.log('         by where the boot stood (booked): ' + Object.entries(row.byZone).map(([k, v]) => `${k} n ${v.n} p95 ${f3(v.p95)} sink ${f3(v.sink)} hang ${f3(v.hang)} <-0.15 ${v.under015}`).join('; '));
+    row.provider = sum(rs.map(r => Math.max(0, r.xfN || 0)));
+    console.log('         by where the boot stood: ' + Object.entries(row.byZone).map(([k, v]) => `${k} n ${v.n} p95 ${f3(v.p95)} sink ${f3(v.sink)} hang ${f3(v.hang)} <-0.15 ${v.under015}`).join('; '));
     if (ok.length < MIN_FRAMES) unmeasured.push(`${L.name}: only ${ok.length} planted-boot samples on the grid (need ${MIN_FRAMES})`);
     else {
       if (row.p95 > GAP_BAR) bad('gap', `${L.name}: OWN p95 |gap| ${f3(row.p95)} u over the drawn surface (bar ${GAP_BAR})`);
@@ -916,7 +956,7 @@ if (MODE === 'mound') {
   const r3 = v => num(v) ? Math.round(v * 1000) / 1000 : null;
   result.mound = { schema: 1, lines: lines.map(L => ({ name: L.name, pts: L.pts, info: L.info })), prep: moundPrep, rows, tolerance: { breath: 0.045, grid: '0.25 u bilinear; buckets 0.5 u' },
     walks: runs.map(r => ({ line: r.line, dir: r.dir, rep: r.rep, attempt: r.attempt, why: r.why, prog: r.prog, total: r.total, disturbed: r.disturbed, clampN: r.clampN, stall: r.stall, off: r.off,
-      dt: r.f.dt.map(v => Math.round(v * 1e5) / 1e5), clr: r.f.dclr.map(r3), blk: r.f.blk, shell: r.f.shl, limb: r.f.lmb, contacts: r.f.bc, own: r.feet.own.map(r3), ownZone: r.feet.zone, x: r.f.x.map(v => +v.toFixed(2)), z: r.f.z.map(v => +v.toFixed(2)), y: r.f.py })) };
+      dt: r.f.dt.map(v => Math.round(v * 1e5) / 1e5), clr: r.f.dclr.map(r3), blk: r.f.blk, shell: r.f.shl, limb: r.f.lmb, contacts: r.f.bc, own: r.feet.own.map(r3), exact: r.feet.exact.map(r3), ownZone: r.feet.zone, x: r.f.x.map(v => +v.toFixed(2)), z: r.f.z.map(v => +v.toFixed(2)), y: r.f.py })) };
 }
 
 if (MODE === 'hose') {
