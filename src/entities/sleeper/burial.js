@@ -226,7 +226,7 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   // the queries' early-out: a circle round C holding every ring (shutFloorY runs this for every hose node, every frame)
   let rMax = 0; for (let q = 0; q < MD.RR.length; q++) if (MD.RR[q] > rMax) rMax = MD.RR[q];
   MD.br2 = (rMax * R + 1) * (rMax * R + 1);
-  fitFooting(L, MD);
+  { const t0 = performance.now(); fitFooting(L, MD); MD.footMs = performance.now() - t0; }   // (booked: the bake's cost, an event)
 }
 // THE FOOTING OVER HER CREST (Task 3b; controller ruling 1, 2026-10-18). His floor on the strip is NOT her crest's drawn top (crestY / sandY
 // stay that, for the disguise and the harpoon's seat): her exposed back is all near-vertical lips and spines, and a rigid lead sole (0.52 u
