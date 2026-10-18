@@ -232,9 +232,10 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
 // stay that, for the disguise and the harpoon's seat): her exposed back is all near-vertical lips and spines, and a rigid lead sole (0.52 u
 // heel to toe) laid on the drawn top, or on the bake's coarse topAt (the first footing: the boots ran 0.8 u off the drawn rock, sinks to
 // -1.25 u), cut into the rock wherever a spine stood under it. A sole on a spiky crest rests on the high points under it, so the footing is a
-// WALKABLE ENVELOPE: at each point the highest drawn shell over the sole's footprint (a disc of BURY.foot.r round it). Baked here, at the fit
-// (an event): her drawn shell's triangles exact-hit on an h-u grid over the strip's box (the topmost hit per node, each vertex also splatted
-// into its nearest node so no spine top falls between nodes), then max-filtered over a disc of r + h sqrt2 (so the bilinear read between
+// WALKABLE ENVELOPE: at each point the highest drawn ground (her rock, else the dune or the floor) over the sole's footprint (a disc of
+// BURY.foot.r round it). Baked here, at the fit (an event): her drawn shell's triangles exact-hit on an h-u grid over the strip's box (the
+// topmost hit per node, each vertex also splatted into its nearest node so no spine top falls between nodes; max'd with terrainH and the
+// drawn dune), then max-filtered over a disc of r + h sqrt2 (so the bilinear read between
 // four nodes is never under the true footprint max). Kept to the strip and r + h sqrt2 round it (where her rock is ground: under the dune
 // the sand is), and buriedFloorAt takes max(the dune, this): one surface across the strip's edge, no seam. Zero per-frame cost but a read.
 function fitFooting(L, MD) {
@@ -266,7 +267,11 @@ function fitFooting(L, MD) {
   // every vertex into its nearest node (a spine's tip between nodes is still under the footprint of its neighbours: rho carries the offset)
   for (let v = 0; v < nv; v++) { const a = Math.round((W[v * 3] - x0) / h), b = Math.round((W[v * 3 + 2] - z0) / h);
     if (a < 0 || b < 0 || a >= nx || b >= nz) continue; const o = b * nx + a; if (W[v * 3 + 1] > G[o]) G[o] = W[v * 3 + 1]; }
-  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) IN[b * nx + a] = inStrip(MD, x0 + a * h, z0 + b * h) ? 1 : 0;
+  // the drawn GROUND under each node is her rock or, where it is lower, the floor or the dune: so a node of the strip with no rock over the
+  // floor (her back's lip at the strip's ends falls under the sand: the first envelope left those nodes -1e9, buriedFloorAt then let her
+  // shell's proxy stand solid there, and the keel walk stalled against it, 220 shell frames) is the floor's, never a hole
+  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) { const x = x0 + a * h, z = z0 + b * h, o = b * nx + a, th = terrainH(x, z, L.idx), m = moundY(MD, x, z);
+    if (th > G[o]) G[o] = th; if (m > G[o]) G[o] = m; IN[o] = inStrip(MD, x, z) ? 1 : 0; }
   // the footprint max, over the strip and rho round it
   const E = new Float32Array(nx * nz).fill(-1e9), K2 = (rho / h) * (rho / h);
   for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
