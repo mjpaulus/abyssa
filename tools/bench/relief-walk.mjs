@@ -4,6 +4,10 @@
 // Env  RW_REPS=<n>   walks per line and direction (boots 2, lens 3)
 //      RW_JSON=<f>   write the result (the lens's main run hands its bar to the branch's through this file)
 //      RW_MAIN=<f>   (lens, on the branch) main's RW_JSON: the bars below are main's own numbers on the same probe
+//      RW_BASE=<f>   (lens; velkath-buried-rock Task 3b, ruling 1 item 4) a lens RW_JSON recorded with THIS probe on a relief build with lensfix
+//                    (buried-main, 8887 / 9541): the same lines, compared like for like (each line's in-walk swoop peak <= the base's same
+//                    line + 0.5 u/s, settled p99 <= + 0.1, riser / upland / steep and their /up); in place of RW_MAIN, whose pre-lensfix main
+//                    cannot see the lensfix rules (CRECAM's keep engages on the look-up walks)
 //      RW_RED=<v>    an opt-in RED case, never part of the default run. It must fail ITS bar: exit 5 = it did, exit 3 = that bar did NOT fail
 //                    boots noslope   window.__sal.slope = false (diver.js's slope rig off, a live knob it ships): the boots must fail the gap bar
 //                    lens  nofloor   window.__camNoFloor = true (game.js updateCamera's floor clamp off): the lens must fail clearance
@@ -253,7 +257,14 @@ process.on('exit', () => { if (chromeStarted) stop(); try { rmSync(process.env.D
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process.exit(130));   // the exit handler above then stops our Chrome (velfix-gate.mjs's pattern)
 if (DEV) console.log('DEV RUN - NOT A VERDICT (RW_STOP / RW_ONLY): this run exits 2 whatever it reads');
 // main's RW_JSON is vetted now, before anything starts
-let mainRaw = null;
+let mainRaw = null, baseRaw = null;
+if (MODE === 'lens' && process.env.RW_BASE) {
+  try { baseRaw = JSON.parse(readFileSync(process.env.RW_BASE, 'utf8')); } catch (e) { console.error('RW_BASE: ' + e.message); process.exit(2); }
+  const L = baseRaw && baseRaw.lens, pr = [];
+  if (baseRaw.mode !== 'lens' || baseRaw.red !== null || baseRaw.tag !== 'relief' || !L || L.schema !== 2 || !L.rows || !L.lines) pr.push('not a relief-tagged, non-RED, schema 2 lens run of this probe (with its lines)');
+  else for (const n of ['riser', 'upland', 'steep']) if (!L.rows[n] || !L.rows[n + '/up']) pr.push('no row ' + n);
+  if (pr.length) { console.error('RW_BASE ' + process.env.RW_BASE + ': ' + pr.join('; ')); process.exit(2); }
+}
 if (MODE === 'lens' && process.env.RW_MAIN) {
   try { mainRaw = JSON.parse(readFileSync(process.env.RW_MAIN, 'utf8')); } catch (e) { console.error('RW_MAIN: ' + e.message); process.exit(2); }
   const probs = checkMain(mainRaw); if (probs.length) { console.error('RW_MAIN ' + process.env.RW_MAIN + ' is not a usable main run:\n  ' + probs.join('\n  ')); process.exit(2); }
@@ -883,7 +894,7 @@ if (MODE === 'boots' || MODE === 'lens') {
     console.log(pad('line', 9) + lpad('walks', 6) + lpad('in walk', 8) + lpad('falls', 6) + lpad('1st at place', 13) + lpad('none', 5) + '  | ' + lpad('boom from-to', 13) + lpad('peak min-max', 14) + lpad('in-walk peak', 13) + lpad('at u', 6) + lpad('done at s', 10) + '  | ' + lpad('settled n', 10) + lpad('p50', 6) + lpad('p95', 7) + lpad('p99', 7) + lpad('max', 7) + lpad('>6 u/s', 8));
     for (const L of linesAll) { const r = rows[L.name], w = r.swoop, st = r.settled;
       console.log(pad(L.name, 9) + lpad(w.runs, 6) + lpad(w.inWalk, 8) + lpad(w.nWalkFalls, 6) + lpad(w.atPlace, 13) + lpad(w.none, 5) + '  | ' + lpad(w.boom ? w.boom.join('-') : '-', 13) + lpad(w.peak === null ? '-' : f2(w.peakMin) + '-' + f2(w.peak), 14) + lpad(w.peakWalk === null ? '-' : f2(w.peakWalk), 13) + lpad(w.atU === null ? '-' : w.atU, 6) + lpad(w.doneAtS === null ? '-' : w.doneAtS, 10) + '  | ' + lpad(st.n, 10) + lpad(f2(st.p50), 6) + lpad(f2(st.p95), 7) + lpad(f2(st.p99), 7) + lpad(f2(st.max), 7) + lpad(st.over6, 8)); }
-    result.lens = { schema: 2, rows, frameTimes: tables.frames, wall };
+    result.lens = { schema: 2, rows, frameTimes: tables.frames, wall, lines: lines.map(l => ({ name: l.name, pts: l.pts })) };
     // THE BARS (Ruling 48). (a) each relief line's swoop peak (where it swoops in the walk) <= the MAX swoop peak over main's A, B and S; (b) each
     // relief line's settled p99 <= main's settled p99 on its equivalent line: A for the 20-35 deg lines (the steepest 20-35 deg line, ruled; also
     // the closest in mean slope: A 27.4 against the riser's 27.0 and the upland's 29.1, B 25.2), S for the 35-45 deg line (main's only line
@@ -894,7 +905,19 @@ if (MODE === 'boots' || MODE === 'lens') {
     if (TAG === 'main') {
       result.lens.maxSwoopPeak = anyMax(['A', 'B', 'S']); result.lens.maxSwoopPeakWalk = inWalkMax(['A', 'B', 'S']);
       console.log(`main: the max swoop peak over A, B, S in the walk ${f2(result.lens.maxSwoopPeakWalk)} u/s (first pull-ins anywhere, the place's included: ${f2(result.lens.maxSwoopPeak)}); settled p99 A ${rows.A && f2(rows.A.settled.p99)}, B ${rows.B && f2(rows.B.settled.p99)}, S ${rows.S && f2(rows.S.settled.p99)}`);
-    } else if (!mainJ) { fail.push('no main to compare with: give RW_MAIN=<main\'s RW_JSON>'); }
+    } else if (baseRaw) {
+      // LIKE FOR LIKE against a lensfix base (RW_BASE): the same lines (checked), the same bars as Ruling 48 on each line against its own
+      const B = baseRaw.lens, same = B.lines.length === lines.length && B.lines.every((l, k) => l.name === lines[k].name && JSON.stringify(l.pts) === JSON.stringify(lines[k].pts));
+      if (!same) fail.push('RW_BASE was walked on other lines: not like for like');
+      console.log(`\nAGAINST THE LENSFIX BASE (RW_BASE ${process.env.RW_BASE}, port ${baseRaw.port}; the same lines: ${same}; its CRECAM engagement ${JSON.stringify(baseRaw.provider && baseRaw.provider.crecam)}):`);
+      for (const n of ['riser', 'upland', 'steep', 'riser/up', 'upland/up', 'steep/up']) { const r = rows[n], b = B.rows[n]; if (!r || !b) continue;
+        const pw = r.swoop.peakWalk, bw = b.swoop.peakWalk, okA = pw === null || (bw !== null ? pw <= bw + SWOOP_TOL : pw <= (inWalkMaxB() + SWOOP_TOL));
+        const okB = r.settled.n >= MIN_FRAMES && r.settled.p99 <= b.settled.p99 + STEP_TOL;
+        console.log(`  ${pad(n, 10)} in-walk swoop ${pw === null ? '-' : f2(pw)} against ${bw === null ? '- (max over the base: ' + f2(inWalkMaxB()) + ')' : f2(bw)}: ${okA ? 'PASS' : 'FAIL'}; settled p99 ${f2(r.settled.p99)} (n ${r.settled.n}) against ${f2(b.settled.p99)}: ${okB ? 'PASS' : 'FAIL'}; clearance min ${f3(r.minClr)} (base ${f3(b.minClr)})`);
+        if (!okA) bad('swoop', `${n}: the in-walk swoop ${f2(pw)} u/s is over the lensfix base's ${f2(bw)}`);
+        if (r.settled.n < MIN_FRAMES) bad('vacuous', `${n}: only ${r.settled.n} settled frames`); else if (!okB) bad('step', `${n}: settled p99 ${f2(r.settled.p99)} over the base's ${f2(b.settled.p99)}`); }
+      function inWalkMaxB() { const v = ['riser', 'upland', 'steep'].map(n => B.rows[n] && B.rows[n].swoop.peakWalk).filter(x => x !== null && x !== undefined); return v.length ? Math.max(...v) : 0; }
+    } else if (!mainJ) { fail.push('no main to compare with: give RW_MAIN=<main\'s RW_JSON> or RW_BASE=<a lensfix base>'); }
     else {
       const mx = n => mainJ.rows[n].swoop, barWalk = mainJ.maxSwoopPeakWalk, barAny = mainJ.maxSwoopPeak;
       console.log(`\nRULING 48 (a): the swoop is an event: each line's pull-ins IN THE WALK (every fall that starts after W, whatever the first fall was), the max peak step, relief against the MAX over main's A, B, S = ${f2(barWalk)} u/s (main: ${['A', 'B', 'S'].map(n => n + ' ' + (mx(n).peakWalk === null ? 'none in the walk (pulled in at the place: ' + f2(mx(n).peak) + ')' : f2(mx(n).peakWalkMin) + '-' + f2(mx(n).peakWalk))).join(', ')}) (+ ${SWOOP_TOL}, the scatter of identical runs):`);
