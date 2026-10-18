@@ -24,7 +24,7 @@
 // Zero per-frame allocation: fixed typed pools, module scratch.
 // OWNED BY: the sleepers (brooder.js publishes; game.js resolves and probes).
 import { lump } from './brood.js';
-import { moundY, crestY } from './burial.js';
+import { moundY, footY } from './burial.js';
 import { currentSiteIndex } from '../../world/site.js';
 
 const MAXC = 64;
@@ -301,7 +301,9 @@ export function underShell(x, y, z) {
 // (velkath-buried-rock) THE DUNE AND THE CREST ARE GROUND (spec §1 "Footing": "He walks up the sand and stands on the rock").
 // Published by a buried sleeper with the rest of her body each frame (brooder.js publishCols); cleared with the rest. Ground, not
 // a collider: game.js hands buriedFloorAt to terrain.js setExtraFloor once, so his floor, the lens's floor clamp and the boom's
-// floor test, the hose and the sonar all stand on the drawn sand. The crest is ground only while she is fully buried (crestOn);
+// floor test, the hose and the sonar all stand on the drawn sand. Her crest's ground is the walkable FOOTING over it (burial.js footY:
+// the highest drawn rock under a sole's footprint; ruling 1), max'd with the dune: one surface, no seam at the strip's edge. It is ground
+// only while she is fully buried (crestOn);
 // rising, her shell's own collider takes him. KEYED TO THE SITE it was published at: a voyage's reseed (game.js reseedWorldNow sets
 // the new site first) places the next site's dens on shutFloorY before her old build is disposed, and home's dune must not be
 // ground there.
@@ -309,13 +311,13 @@ let mound = null, moundZi = -1, moundSite = -1, crestOn = false, capOn = false;
 export function setMound(MD, zi, cOn, cap = true) { mound = MD; moundZi = zi; moundSite = currentSiteIndex(); crestOn = !!cOn; capOn = !!(MD && cOn && cap); }
 export function buriedFloorAt(x, z, zi) {
   if (!mound || zi !== moundZi || currentSiteIndex() !== moundSite) return -1e9;
-  const m = moundY(mound, x, z), c = crestOn ? crestY(mound, x, z) : -1e9;
+  const m = moundY(mound, x, z), c = crestOn ? footY(mound, x, z) : -1e9;
   return m > c ? m : c;
 }
 // (velkath-buried-rock) THE SHELL'S COLLIDER STOPS AT THE DRAWN GROUND while she is fully buried. Her shell proxy's top is the highest
 // vertex per cell (48 bearings x 8 rings), interpolated between cell centres: on her sloping, scuted back it sits ~0.2-0.8 u over the
-// real shell (measured from the bake's top heightfield), while the dune covers her by only 0.3 u and the crest's ground IS the real
-// top. Left solid, it pushed a man on the dune up and sideways every frame against player.js's floor (hover, jitter, a shove back
+// real shell (measured from the bake's top heightfield), while the dune covers her by only 0.3 u and the crest's ground is at (or, the
+// footing's envelope, over) the real top. Left solid, it pushed a man on the dune up and sideways every frame against player.js's floor (hover, jitter, a shove back
 // down the dune), and bodyBlocked called every stand spot on the thin dune "inside her" (harpoon.js clearAt: no seat). So with capOn
 // a sample at or over the drawn ground (buriedFloorAt - 0.05) is never inside her shell. Below the drawn ground she stays solid;
 // rising (crestOn false) everything is as shipped. The shell is still published: shellPlanNear (onHerGround, onHerDune) reads it.

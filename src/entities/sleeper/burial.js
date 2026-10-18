@@ -28,7 +28,10 @@ export const BURY = { on: 1, crest: 3.5 };
 //            to see; he judges it on stills ("I thought I already approved this but yes these are fine to proceed with"); the knob
 //            is `lift`
 Object.assign(BURY, { crestL: 20, crestW: 6, crestZ: -0.07, sandOpen: 0, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
-  breath: { lift: 0.045, period: [8, 10], up: 1.6, down: 2.6, draw: 12, near: 8 } });
+  breath: { lift: 0.045, period: [8, 10], up: 1.6, down: 2.6, draw: 12, near: 8 },
+  // THE FOOTING over her crest (Task 3b, controller ruling 1; fitFooting below): r u, the lead sole's footprint (a disc the sole's half
+  // length: diver.js's casting runs 0.52 u heel to toe); h u, the baked grid
+  foot: { r: 0.25, h: 0.0625 } });
 const _v = V3();
 
 // the mean ground under her: poseAll's own 5 x 5 support grid over her footprint, bare floor. (The grid's constants live in THREE
@@ -223,6 +226,67 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   // the queries' early-out: a circle round C holding every ring (shutFloorY runs this for every hose node, every frame)
   let rMax = 0; for (let q = 0; q < MD.RR.length; q++) if (MD.RR[q] > rMax) rMax = MD.RR[q];
   MD.br2 = (rMax * R + 1) * (rMax * R + 1);
+  fitFooting(L, MD);
+}
+// THE FOOTING OVER HER CREST (Task 3b; controller ruling 1, 2026-10-18). His floor on the strip is NOT her crest's drawn top (crestY / sandY
+// stay that, for the disguise and the harpoon's seat): her exposed back is all near-vertical lips and spines, and a rigid lead sole (0.52 u
+// heel to toe) laid on the drawn top, or on the bake's coarse topAt (the first footing: the boots ran 0.8 u off the drawn rock, sinks to
+// -1.25 u), cut into the rock wherever a spine stood under it. A sole on a spiky crest rests on the high points under it, so the footing is a
+// WALKABLE ENVELOPE: at each point the highest drawn shell over the sole's footprint (a disc of BURY.foot.r round it). Baked here, at the fit
+// (an event): her drawn shell's triangles exact-hit on an h-u grid over the strip's box (the topmost hit per node, each vertex also splatted
+// into its nearest node so no spine top falls between nodes), then max-filtered over a disc of r + h sqrt2 (so the bilinear read between
+// four nodes is never under the true footprint max). Kept to the strip and r + h sqrt2 round it (where her rock is ground: under the dune
+// the sand is), and buriedFloorAt takes max(the dune, this): one surface across the strip's edge, no seam. Zero per-frame cost but a read.
+function fitFooting(L, MD) {
+  const sh = L.parts.shell, PA = sh.geometry.attributes.position, P = PA.array, I = sh.geometry.index ? sh.geometry.index.array : null, nb = MD.COLS;
+  const { r, h } = BURY.foot, rho = r + h * Math.SQRT2, K = Math.ceil(rho / h);
+  sh.updateMatrixWorld(true);
+  const e = sh.matrixWorld.elements, nv = PA.count, W = new Float32Array(nv * 3);
+  for (let v = 0; v < nv; v++) { const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+    W[v * 3] = e[0] * x + e[4] * y + e[8] * z + e[12]; W[v * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; W[v * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14]; }
+  // the box: the strip's edge (ring 1) + rho + a node
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let j = 0; j < nb; j++) { const o = (nb + j) * 3; if (MD.M[o] < x0) x0 = MD.M[o]; if (MD.M[o] > x1) x1 = MD.M[o]; if (MD.M[o + 2] < z0) z0 = MD.M[o + 2]; if (MD.M[o + 2] > z1) z1 = MD.M[o + 2]; }
+  const pad = rho + h; x0 -= pad; z0 -= pad; x1 += pad; z1 += pad;
+  const nx = Math.ceil((x1 - x0) / h) + 1, nz = Math.ceil((z1 - z0) / h) + 1, G = new Float32Array(nx * nz).fill(-1e9), IN = new Uint8Array(nx * nz);
+  // her drawn shell's topmost hit at every node
+  const nt = I ? I.length / 3 : nv / 3;
+  for (let t = 0; t < nt; t++) {
+    const ia = (I ? I[t * 3] : t * 3) * 3, ib = (I ? I[t * 3 + 1] : t * 3 + 1) * 3, ic = (I ? I[t * 3 + 2] : t * 3 + 2) * 3;
+    const ax = W[ia], az = W[ia + 2], bx = W[ib], bz = W[ib + 2], cx = W[ic], cz = W[ic + 2];
+    const a0 = Math.max(0, Math.ceil((Math.min(ax, bx, cx) - x0) / h)), a1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) - x0) / h));
+    const b0 = Math.max(0, Math.ceil((Math.min(az, bz, cz) - z0) / h)), b1 = Math.min(nz - 1, Math.floor((Math.max(az, bz, cz) - z0) / h));
+    if (a0 > a1 || b0 > b1) continue;
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (d > -1e-12 && d < 1e-12) continue;
+    for (let b = b0; b <= b1; b++) for (let a = a0; a <= a1; a++) {
+      const px = x0 + a * h, pz = z0 + b * h, l1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d, l2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d, l3 = 1 - l1 - l2;
+      if (l1 < -1e-9 || l2 < -1e-9 || l3 < -1e-9) continue;
+      const y = l1 * W[ia + 1] + l2 * W[ib + 1] + l3 * W[ic + 1], o = b * nx + a; if (y > G[o]) G[o] = y; } }
+  // every vertex into its nearest node (a spine's tip between nodes is still under the footprint of its neighbours: rho carries the offset)
+  for (let v = 0; v < nv; v++) { const a = Math.round((W[v * 3] - x0) / h), b = Math.round((W[v * 3 + 2] - z0) / h);
+    if (a < 0 || b < 0 || a >= nx || b >= nz) continue; const o = b * nx + a; if (W[v * 3 + 1] > G[o]) G[o] = W[v * 3 + 1]; }
+  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) IN[b * nx + a] = inStrip(MD, x0 + a * h, z0 + b * h) ? 1 : 0;
+  // the footprint max, over the strip and rho round it
+  const E = new Float32Array(nx * nz).fill(-1e9), K2 = (rho / h) * (rho / h);
+  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
+    let m = -1e9, near = false;
+    for (let db = -K; db <= K; db++) { const bb = b + db; if (bb < 0 || bb >= nz) continue;
+      for (let da = -K; da <= K; da++) { const aa = a + da; if (aa < 0 || aa >= nx || da * da + db * db > K2) continue;
+        const o = bb * nx + aa; if (IN[o]) near = true; if (G[o] > m) m = G[o]; } }
+    if (near) E[b * nx + a] = m; }
+  MD.foot = { x0, z0, nx, nz, h, E };
+}
+// THE FOOTING's height under world (x, z): the envelope, bilinear; -1e9 off it (the dune or the floor is the ground there). Ground only, never
+// the drawn top: the disguise and the harpoon's seat read crestY / sandY
+export function footY(MD, x, z) {
+  const F = MD && MD.foot; if (!F) return -1e9;
+  const fx = (x - F.x0) / F.h, fz = (z - F.z0) / F.h, i = Math.floor(fx), k = Math.floor(fz);
+  if (i < 0 || k < 0 || i >= F.nx - 1 || k >= F.nz - 1) return -1e9;
+  const o = k * F.nx + i, E = F.E, a = E[o], b = E[o + 1], c = E[o + F.nx], d = E[o + F.nx + 1];
+  if (a < -1e8 || b < -1e8 || c < -1e8 || d < -1e8) { const m = Math.max(a, b, c, d); return m > -1e8 ? Math.min(a < -1e8 ? m : a, b < -1e8 ? m : b, c < -1e8 ? m : c, d < -1e8 ? m : d) : -1e9; }
+  const tx = fx - i, tz = fz - k;
+  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
 }
 // SHN (above) off her drawn shell at the fit pose (no floor reads: the strip's edge needs only the shell)
 function binShell(L, MD, st) {
