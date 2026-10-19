@@ -8,6 +8,11 @@
 //                    (buried-main, 8887 / 9541): the same lines, compared like for like (each line's in-walk swoop peak <= the base's same
 //                    line + 0.5 u/s, settled p99 <= + 0.1, riser / upland / steep and their /up); in place of RW_MAIN, whose pre-lensfix main
 //                    cannot see the lensfix rules (CRECAM's keep engages on the look-up walks)
+//                    A base that failed its own bars (or records no fail list: recorded before the probe booked one) is REFUSED, exit 2, with its list printed;
+//      RW_BASE_ALLOW_FAIL=1   (lens, with RW_BASE) use it anyway, the base's own failures printed first
+//      RW_PARKED=strip   (mound only; velkath-buried-rock Task 3b fix round 1; remove it when Michael rules on the strip) the strip's gap and sink bars
+//                    are BOOKED and printed (what they read, and whether they would fail) but not gated: they gate the floor and dune samples only, and the
+//                    exit reflects every other bar. Without it nothing changes. Refused with RW_RED (a RED must fail its own bar on the full gate).
 //      RW_RED=<v>    an opt-in RED case, never part of the default run. It must fail ITS bar: exit 5 = it did, exit 3 = that bar did NOT fail
 //                    boots noslope   window.__sal.slope = false (diver.js's slope rig off, a live knob it ships): the boots must fail the gap bar
 //                    lens  nofloor   window.__camNoFloor = true (game.js updateCamera's floor clamp off): the lens must fail clearance
@@ -126,6 +131,9 @@ const RED_OF = { boots: ['noslope'], lens: ['nofloor'], hose: ['past20', 'short2
 if (MODE !== 'selftest' && (!RED_OF[MODE] || !PORT)) { console.error('usage: node tools/bench/relief-walk.mjs <boots|lens|hose|mound> <port>   |   selftest'); process.exit(2); }
 if (MODE !== 'selftest' && RED !== undefined && !RED_OF[MODE].includes(RED)) {   // a RED this mode lacks would be ignored, and the run would pass as GREEN
   console.error(`RW_RED: mode ${MODE} has ${RED_OF[MODE].length ? 'the variants ' + RED_OF[MODE].join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
+const PARKED = process.env.RW_PARKED;   // 'strip': the mound's strip bars (gap, sink) are booked, not gated
+if (MODE !== 'selftest' && PARKED !== undefined && (PARKED !== 'strip' || MODE !== 'mound' || RED !== undefined)) {
+  console.error(`RW_PARKED: only 'strip', only in mound mode, and not with an RW_RED (got ${JSON.stringify(PARKED)}, mode ${MODE}${RED !== undefined ? ', RW_RED ' + RED : ''})`); process.exit(2); }
 process.env.DRV_PORT = process.env.DRV_PORT || '9520';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -264,6 +272,13 @@ if (MODE === 'lens' && process.env.RW_BASE) {
   if (baseRaw.mode !== 'lens' || baseRaw.red !== null || baseRaw.tag !== 'relief' || !L || L.schema !== 2 || !L.rows || !L.lines) pr.push('not a relief-tagged, non-RED, schema 2 lens run of this probe (with its lines)');
   else for (const n of ['riser', 'upland', 'steep']) if (!L.rows[n] || !L.rows[n + '/up']) pr.push('no row ' + n);
   if (pr.length) { console.error('RW_BASE ' + process.env.RW_BASE + ': ' + pr.join('; ')); process.exit(2); }
+  // the base's OWN verdict: a base that failed a bar is not a reference (its failures are printed, and it is refused unless told)
+  if (!Array.isArray(baseRaw.fail)) { console.error(`RW_BASE ${process.env.RW_BASE}: it records no fail list (recorded before the probe booked one), so its own verdict is unknown`); if (process.env.RW_BASE_ALLOW_FAIL !== '1') { console.error('  refused (RW_BASE_ALLOW_FAIL=1 uses it anyway)'); process.exit(2); } }
+  else if (baseRaw.fail.length) {
+    console.error(`RW_BASE ${process.env.RW_BASE}: the base itself FAILED ${baseRaw.fail.length} bar(s) when it was recorded:`); for (const f of baseRaw.fail) console.error('  ' + f);
+    if (process.env.RW_BASE_ALLOW_FAIL !== '1') { console.error('  refused (RW_BASE_ALLOW_FAIL=1 uses it anyway)'); process.exit(2); }
+    console.log('RW_BASE_ALLOW_FAIL=1: using the failed base above'); }
+  else console.log(`RW_BASE ${process.env.RW_BASE}: the base passed its own bars when it was recorded`);
 }
 if (MODE === 'lens' && process.env.RW_MAIN) {
   try { mainRaw = JSON.parse(readFileSync(process.env.RW_MAIN, 'utf8')); } catch (e) { console.error('RW_MAIN: ' + e.message); process.exit(2); }
@@ -356,7 +371,9 @@ const LIB = `(async () => {
   // bumped on every frame its creEng bit is set, so all four unchanged over a walk = creEng 0 on every frame (main's lens, bit for bit)
   const creN = () => { const c = window.__crecam; if (!c || !c.state) return null; const s = c.state(); return [s.dropN, s.punchN, s.guardN, s.keepN]; };
   let BC = null; try { BC = await import('/src/entities/sleeper/bodyCols.js'); } catch (e) { }
-  const BU = await import('/src/entities/sleeper/burial.js').catch(() => null);
+  // burial.js exists only on a build with a buried Velkath, and only the mound mode reads it (drawnPrep): importing it in every mode logged a 404 on
+  // main and on buried-main, and the probe's own console bar then failed the reference build's run (velkath-buried-rock Task 3b, fix round 1, I1)
+  const BU = ${MODE === 'mound' ? "await import('/src/entities/sleeper/burial.js').catch(() => null)" : 'null'};
   // ---- THE DRAWN SURFACE (mound): her shell's and the dune's world triangles, bucketed once per run on 0.5 u cells (harpoon.js gatherTris'
   // CSR layout: CELL0 offsets into CELLT); per line a drawn-height grid at 0.25 u (14 u past each end along it, 6 u to each side), each node
   // max(terrainH, the topmost dune or shell hit there). drawnY reads the grids bilinearly (the first grid holding the point), NaN off them all.
@@ -945,27 +962,36 @@ if (MODE === 'mound') {
   // per line, both ways pooled. (NaN crossed CDP as null: a sample off the grid is anything not a finite number)
   const num = v => typeof v === 'number' && Number.isFinite(v), sum = a => a.reduce((q, v) => q + v, 0);
   const rows = {};
+  if (PARKED) console.log(`\nRW_PARKED=strip: the strip's gap and sink bars are BOOKED below (printed, in the result, not gated); the floor and dune samples, her shell's contact, the lens, progress and the clamp are gated as ever`);
   console.log(`\nMOUND (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): the planted sole over the DRAWN surface, u (- sinks, + hangs): on the strip the EXACT smallest clearance over the sole's vertices, elsewhere OWN (its lowest point over drawnY); clr = the lens over drawnY; blocked = bodyBlocked(lens, 0); shell = frames with her shell's contact`);
   console.log(pad('line', 8) + lpad('walks', 6) + lpad('frames', 8) + '  | ' + lpad('planted', 8) + lpad('off', 5) + lpad('p50|g|', 8) + lpad('p95|g|', 8) + lpad('sink', 8) + lpad('<-0.15', 7) + lpad('hang', 7) + '  | ' + lpad('on grid', 8) + lpad('min clr', 8) + lpad('<0.3', 6) + lpad('blocked', 8) + '  | ' + lpad('shell', 6) + lpad('limb', 6) + lpad('clamp', 6) + lpad('stall', 6));
   for (const L of lines) {
     // the gated reading per planted sample: on the strip the EXACT smallest clearance over the sole (ruling 1), elsewhere OWN (bilinear)
-    const rs = runs.filter(r => r.line === L.name), own = rs.flatMap(r => r.feet.own.map((v, k) => r.feet.zone[k] === 2 ? r.feet.exact[k] : v)), ok = own.filter(num), ab = ok.map(Math.abs);
+    const rs = runs.filter(r => r.line === L.name), own = rs.flatMap(r => r.feet.own.map((v, k) => r.feet.zone[k] === 2 ? r.feet.exact[k] : v)), zn = rs.flatMap(r => r.feet.zone), ok = own.filter(num), ab = ok.map(Math.abs);
     const clr = rs.flatMap(r => r.f.dclr), on = clr.filter(num), share = clr.length ? on.length / clr.length : 0;
     const blk = sum(rs.map(r => sum(r.f.blk))), shl = sum(rs.map(r => sum(r.f.shl))), lmb = sum(rs.map(r => sum(r.f.lmb))), clamp = sum(rs.map(r => r.clampN || 0)), stall = sum(rs.map(r => r.stall.n));
     const row = rows[L.name] = { walks: rs.length, frames: clr.length, planted: own.length, offGrid: own.length - ok.length, p50: +f3(pct(ab, 0.5)), p95: +f3(pct(ab, 0.95)), sink: ok.length ? +f3(Math.min(...ok)) : null, under015: ok.filter(v => v < -0.15).length, hang: ok.length ? +f3(Math.max(...ok)) : null,
       onGrid: +share.toFixed(4), minClr: on.length ? +f3(Math.min(...on)) : null, below: nBelowClear(on), blocked: blk, shellFrames: shl, limbFrames: lmb, clamped: clamp, stall, attempts: rs.map(r => r.attempt) };
     console.log(pad(L.name, 8) + lpad(rs.length, 6) + lpad(clr.length, 8) + '  | ' + lpad(own.length, 8) + lpad(row.offGrid, 5) + lpad(f3(row.p50), 8) + lpad(f3(row.p95), 8) + lpad(f3(row.sink), 8) + lpad(row.under015, 7) + lpad(f3(row.hang), 7) + '  | ' + lpad((share * 100).toFixed(1) + '%', 8) + lpad(f3(row.minClr), 8) + lpad(row.below, 6) + lpad(blk, 8) + '  | ' + lpad(shl, 6) + lpad(lmb, 6) + lpad(clamp, 6) + lpad(stall, 6));
-    // (booked, not gated) the same samples by where the boot stood: the floor, the dune, the strip (her crest)
     // (booked) the same samples by where the boot stood: the floor and the dune (OWN), the strip (EXACT, gated), and the strip's bilinear OWN
     // beside it (the reading ruling 1 retired there: its grid error is three times the bar)
     row.byZone = {}; for (const [zk, zn, key] of [[0, 'floor', 'own'], [1, 'dune', 'own'], [2, 'strip', 'exact'], [2, 'stripOwn', 'own']]) { const zs = []; for (const r of rs) for (let k = 0; k < r.feet.own.length; k++) if (r.feet.zone[k] === zk && num(r.feet[key][k])) zs.push(r.feet[key][k]);
       row.byZone[zn] = { n: zs.length, p95: zs.length ? +f3(pct(zs.map(Math.abs), 0.95)) : null, sink: zs.length ? +f3(Math.min(...zs)) : null, hang: zs.length ? +f3(Math.max(...zs)) : null, under015: zs.filter(v => v < -0.15).length }; }
     row.provider = sum(rs.map(r => Math.max(0, r.xfN || 0)));
     console.log('         by where the boot stood: ' + Object.entries(row.byZone).map(([k, v]) => `${k} n ${v.n} p95 ${f3(v.p95)} sink ${f3(v.sink)} hang ${f3(v.hang)} <-0.15 ${v.under015}`).join('; '));
-    if (ok.length < MIN_FRAMES) unmeasured.push(`${L.name}: only ${ok.length} planted-boot samples on the grid (need ${MIN_FRAMES})`);
+    // RW_PARKED=strip: the gap and sink bars gate the floor and dune samples only; the strip's own reading (byZone.strip: the exact one) is
+    // printed with the verdict it would have had, and booked in the result, never gated
+    let G = { n: ok.length, p95: row.p95, under: row.under015, sink: row.sink };
+    if (PARKED) {
+      const gs = own.filter((v, k) => zn[k] !== 2 && num(v)); G = { n: gs.length, p95: gs.length ? +f3(pct(gs.map(Math.abs), 0.95)) : NaN, under: gs.filter(v => v < -GAP_BAR).length, sink: gs.length ? +f3(Math.min(...gs)) : null };
+      const sp = row.byZone.strip, would = []; if (sp.n && sp.p95 > GAP_BAR) would.push('gap'); if (sp.under015 > 0) would.push('sink');
+      row.parked = { strip: { n: sp.n, p95: sp.p95, sink: sp.sink, hang: sp.hang, under015: sp.under015, wouldFail: would }, gated: { n: G.n, p95: G.p95, sink: G.sink, under015: G.under } };
+      console.log(`         PARKED strip (booked, NOT gated): n ${sp.n} p95 ${f3(sp.p95)} sink ${f3(sp.sink)} <-0.15 ${sp.under015}: ${would.length ? 'would FAIL the ' + would.join(' and ') + ' bar' + (would.length > 1 ? 's' : '') : 'would pass'}; gated here (floor + dune): n ${G.n} p95 ${f3(G.p95)} sink ${f3(G.sink)} <-0.15 ${G.under}`);
+    }
+    if (G.n < MIN_FRAMES) unmeasured.push(`${L.name}: only ${G.n} planted-boot samples on the grid${PARKED ? ' (the strip parked)' : ''} (need ${MIN_FRAMES})`);
     else {
-      if (row.p95 > GAP_BAR) bad('gap', `${L.name}: OWN p95 |gap| ${f3(row.p95)} u over the drawn surface (bar ${GAP_BAR})`);
-      if (row.under015 > 0) bad('sink', `${L.name}: ${row.under015} planted-boot samples under -${GAP_BAR} u (lowest ${f3(row.sink)})`);
+      if (G.p95 > GAP_BAR) bad('gap', `${L.name}: OWN p95 |gap| ${f3(G.p95)} u over the drawn surface (bar ${GAP_BAR})`);
+      if (G.under > 0) bad('sink', `${L.name}: ${G.under} planted-boot samples under -${GAP_BAR} u (lowest ${f3(G.sink)})`);
     }
     if (shl > 0) bad('shell', `${L.name}: her shell met him on ${shl} frames (bar 0)`);
     if (clr.length < MIN_FRAMES || share < 0.9) unmeasured.push(`${L.name}: the lens bars are UNMEASURED: ${(share * 100).toFixed(1)}% of ${clr.length} frames on the drawn-height grid (need >= 90% of >= ${MIN_FRAMES})`);
@@ -977,7 +1003,7 @@ if (MODE === 'mound') {
   }
   // the per-frame series judged, per walk (rounded): dt, the lens's clearance over drawnY (null off the grid), blocked, shell, limb contacts, OWN per planted sample
   const r3 = v => num(v) ? Math.round(v * 1000) / 1000 : null;
-  result.mound = { schema: 1, lines: lines.map(L => ({ name: L.name, pts: L.pts, info: L.info })), prep: moundPrep, rows, tolerance: { breath: 0.045, grid: '0.25 u bilinear; buckets 0.5 u' },
+  result.mound = { schema: 1, parked: PARKED || null, lines: lines.map(L => ({ name: L.name, pts: L.pts, info: L.info })), prep: moundPrep, rows, tolerance: { breath: 0.045, grid: '0.25 u bilinear; buckets 0.5 u' },
     walks: runs.map(r => ({ line: r.line, dir: r.dir, rep: r.rep, attempt: r.attempt, why: r.why, prog: r.prog, total: r.total, disturbed: r.disturbed, clampN: r.clampN, stall: r.stall, off: r.off,
       dt: r.f.dt.map(v => Math.round(v * 1e5) / 1e5), clr: r.f.dclr.map(r3), blk: r.f.blk, shell: r.f.shl, limb: r.f.lmb, contacts: r.f.bc, own: r.feet.own.map(r3), exact: r.feet.exact.map(r3), ownZone: r.feet.zone, x: r.f.x.map(v => +v.toFixed(2)), z: r.f.z.map(v => +v.toFixed(2)), y: r.f.py })) };
 }
@@ -1047,6 +1073,7 @@ const cons = await c.console();
 const errs = cons.filter(l => /error|EXC/i.test(l) && !/favicon/.test(l));
 if (errs.length) { console.log('CONSOLE', errs.slice(0, 5).join('\n')); fail.push('console errors: ' + errs.length); }
 if (MODE === 'mound') result.unmeasured = unmeasured;
+result.fail = fail.slice();   // the run's own verdict, so a later RW_BASE can refuse a base that failed
 if (process.env.RW_JSON) { writeFileSync(process.env.RW_JSON, JSON.stringify(result, null, MODE === 'mound' ? 0 : 1)); console.log('wrote ' + process.env.RW_JSON); }
 c.close(); stop();
 if (DEV) { console.log('DEV RUN - NOT A VERDICT' + (fail.length ? ' (it read: ' + fail.length + ' failure(s))' : '')); process.exit(2); }
@@ -1060,4 +1087,4 @@ if (RED) {
 }
 if (fail.length) { console.error('FAIL'); for (const f of fail) console.error('  ' + f); if (unmeasured.length) { console.error('and UNMEASURED:'); for (const u of unmeasured) console.error('  ' + u); } process.exit(1); }
 if (unmeasured.length) { console.error('UNMEASURED (a bar with nothing to read is never a pass)'); for (const u of unmeasured) console.error('  ' + u); process.exit(2); }
-console.log('PASS');
+console.log(PARKED ? "PASS (RW_PARKED=strip: the strip's gap and sink bars were booked, not gated)" : 'PASS');
