@@ -359,10 +359,13 @@ export function makeHarpoon(L, opts = {}) {
   // seams trySeam strict stands him at; `pass`: seam x entry-rise pairs that do), the best score and where it sits. Every crack survivor
   // is tried (seat() stops at SEAT_TRY passes). `measured` is false when `under` is under 90% of `crack`: the gather does not cover the
   // crest and a 0 is a data gap, never "no seat". Leaves seat()'s scratch as it found it (axUp, H.dbg, the gather: re-seat to rebuild).
-  // (opts.side, diagnosis only, never seat()'s: 'body' (default, seat()'s own: the bearing from her centre), 'crest' (the bearing from
-  // the strip's centre, burial.js MD.bx / bz), 'off' (no bearing test; the facing test alone keeps the seam toward the sand)
+  // (opts.side, diagnosis only, never run by seat(): 'off' (default, seat()'s own since the Task 4 ruling: no bearing test, the facing
+  // test keeps the seam toward the sand), 'body' (the plan's 1.15 rad bearing from her centre: 28 / 12 / 8 survivors, 0 buried), 'crest'
+  // (the bearing from the strip's centre, burial.js MD.bx / bz). opts.keelR widens the crest gather's keel radius for a diagnosis.)
+  // COVERAGE: `under` alone undercounts on a thin knob (0.1 u in exits its far face), so the scan also gathers EVERY triangle and re-counts
+  // buried / reach: equal counts mean the crest gather misses nothing the test reads, and the scan is measured (Task 4 ruling 2)
   H._crestScan = (opts = {}) => {
-    const sideMode = opts.side || 'body';
+    const sideMode = opts.side || 'off';
     const sh = L.parts && L.parts.shell; if (!sh || !L.buried || !L.mound) return { err: 'not a buried build (L.buried ' + !!L.buried + ', mound ' + !!L.mound + ')' };
     L.grp.updateMatrixWorld(true);
     const mw = sh.matrixWorld, P = sh.geometry.attributes.position, N = sh.geometry.attributes.normal, idx = L.idx, sand = L.sand;
@@ -414,7 +417,18 @@ export function makeHarpoon(L, opts = {}) {
       if (isB) out.buried++; if (isR) out.reach++;
     }
     out.reject = H.dbg;
-    out.measured = out.crack > 0 && out.under >= 0.9 * out.crack;
+    // the full-shell control: every triangle gathered (keelR past her whole plan), buried / reach re-counted
+    keelR = 9; gatherTris(sh, mw, sa, true); keelR = 0.6;
+    let fb = 0, fr = 0;
+    H.dbg = { tried: 0, shaft: 0, high: 0, body: 0, sand: 0 };
+    for (const [i] of surv) { _v.fromBufferAttribute(P, i).applyMatrix4(mw); _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
+      let b = false, r = false; for (const up of AX_UPS) { axUp = up; if (buried(_v, _n) < 0) continue; b = true; if (trySeam(_v, _n, true) < Infinity) r = true; }
+      if (b) fb++; if (r) fr++; }
+    out.full = { tris: nTri, buried: fb, reach: fr };
+    const underOk = out.crack > 0 && out.under >= 0.9 * out.crack, sameFull = fb === out.buried && fr === out.reach;
+    out.measured = out.crack > 0 && (underOk || sameFull);
+    out.measuredBy = !out.crack ? 'nothing to measure' : underOk ? 'under >= 90% of crack' : sameFull ? 'the full-shell gather gives the same buried / reach (under ' + out.under + ' / ' + out.crack + ' is the test\'s own geometry)' : 'UNMEASURED: the crest gather misses triangles the burial test reads';
+    gatherTris(sh, mw, sa, true);
     if (bi >= 0) {
       _v.fromBufferAttribute(P, bi); const lx = _v.x, lz = _v.z, ly = _v.y;
       _v.applyMatrix4(mw); _n.fromBufferAttribute(N, bi).applyMatrix3(_nm).normalize();
@@ -512,8 +526,10 @@ export function makeHarpoon(L, opts = {}) {
         _w.copy(_v).applyMatrix4(mw);                     // (_v stays body-local for the back-half and bearing tests)
         if (!(_w.y >= sandY(L.mound, _w.x, _w.z, idx) + SEAM_UP)) continue;
         if (backHalf && _v.z > 0) continue;
+        // (no bearing test here, Task 4 ruling (a): the exposed crest is a thin strip along her keel, where a bearing from her centre is
+        // ~90 deg off either flank whatever side a vertex faces; the brief's 1.15 rad test left 28 of 2722 exposed vertices, none buried.
+        // The facing test below keeps the seam toward the sand. dth stays in the pre-score only.)
         const th = Math.atan2(_v.z, _v.x); let dth = th - sa; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
-        if (Math.abs(dth) > 1.15) continue;
         _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
         const ns = _n.x * sand.x + _n.z * sand.z;
         if (ns < 0.35 || _n.y > 0.8) continue;

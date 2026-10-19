@@ -323,6 +323,9 @@ function velkath() {
   if (!Hp || !Hp.seated) return 'NO HARPOON HERE (' + (L ? L.kind : 'NO SLEEPER') + ')';
   const a = Hp.anchor, t = Hp.seamWorld();
   standAt(a.x, a.z, 0, yawTo(t.x - a.x, t.z - a.z), -0.15);
+  // (velkath-buried-rock Task 4) buried, the anchor's ground is the DRAWN ground (the dune or her crest), over terrainH; elsewhere a.y is
+  // terrainH and this changes nothing
+  player.pos.y = Math.max(player.pos.y, a.y + EYE_H);
   return Hp.wound ? 'AT THE OLD WOUND IN HER SIDE. [E] PRESSES IT AND SHE WAKES (THE REMEMBERED RITE)'
     : 'AT THE HARPOON IN HER SIDE. [E] PULLS IT FREE AND SHE WAKES';
 }
