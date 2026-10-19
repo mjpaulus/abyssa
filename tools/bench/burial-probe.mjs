@@ -63,6 +63,10 @@
 //             siteKey: her shell's program at every site is home's. With the crust (__burial.crust present): crustOne: exactly ONE
 //             '|crust' program at every checkpoint, boot included (built in the boot tail, never at first sight); siteBury: uBury 0
 //             on every frame off home. Booked per frame (the series) into the JSON.
+//             BP_BASE=<a programs JSON of the base build>: vsBase, every checkpoint's count (boot, first, a, the max over (b), b,
+//             each site's max and last) equal to the base's, and the programs new at first sight and in (b) the same kinds: what a
+//             task's change adds, when the base itself compiles in the rise (the Task 4 head does: one MeshDistance program ~1.9 s
+//             into it, pre-existing). BP_RED=lazy fails it too.
 //             hitch.mjs's scenarios (jet, z1, z2, voyage) do not include the rise, the point or the dig-in: this mode is the gate for those.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height; steep (repose 2.0: the dune fitted to fall at 63 deg; the bar is fixed, so it must fail) ->
@@ -116,7 +120,7 @@ if (process.env.BP_CHECK) {
   if (MODE !== 'disguise') { console.error(`BP_CHECK is disguise's (mode ${MODE} judges all its bars)`); process.exit(2); }
 }
 
-const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import('node:fs');
+const { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } = await import('node:fs');
 const { tmpdir, homedir } = await import('node:os');
 const { join, dirname } = await import('node:path');
 // a fresh profile (no save, no caches), the debug port refused if it is taken, only OUR Chrome ever stopped. DRV_PORT is set above,
@@ -448,6 +452,14 @@ if (MODE === 'programs') {
     { name: 'siteKey', val: o.sites.map(q => q.si + ':' + (q.key === o.homeKey)), bar: 'her shell\'s program at every site is home\'s', ok: !!o.homeKey && o.sites.length === 3 && o.sites.every(q => q.key === o.homeKey), vacuous: !o.homeKey || o.sites.length < 3, judged: true },
     { name: 'crustOne', val: marks.map(m => m.tag + ':' + m.crust), bar: 'exactly one \'|crust\' program at every checkpoint, boot included', ok: marks.every(m => m.crust === 1) && o.homeKey && o.homeKey.indexOf('|crust') >= 0, vacuous: !marks.length, judged: hasCrust },
     { name: 'siteBury', val: o.sites.map(q => q.si + ':' + q.frames.buryMax), bar: 'uBury 0 on every frame off home', ok: o.sites.length === 3 && o.sites.every(q => q.frames.buryMax === 0 && !q.buried), vacuous: o.sites.length < 3, judged: hasCrust }];
+  if (process.env.BP_BASE) { let B = null; try { B = JSON.parse(readFileSync(process.env.BP_BASE, 'utf8')).programs; } catch (e) { console.error('BP_BASE: ' + e.message); finish(2, 'BP_BASE'); }
+    const P0 = record.programs, kind = a => (a || []).map(q => q.split(' ~')[0]).sort().join(';');
+    const pair = (k, a, b) => ({ k, base: b, now: a, ok: a === b });
+    const rows = [pair('boot', P0.boot, B.boot), pair('first', P0.first, B.first), pair('a', P0.a, B.a), pair('bMax', P0.bMax, B.bMax), pair('b', P0.b, B.b),
+      pair('firstNew', kind(P0.firstNew), kind(B.firstNew)), pair('bNew', kind(P0.bNew), kind(B.bNew)),
+      ...P0.sites.flatMap((q, i) => [pair('s' + q.si + 'max', q.max, B.sites[i] && B.sites[i].max), pair('s' + q.si, q.n, B.sites[i] && B.sites[i].n)])];
+    ck.push({ name: 'vsBase', val: rows.filter(r => !r.ok), bar: 'every checkpoint equal to the base build (BP_BASE)', ok: rows.every(r => r.ok), vacuous: !B, judged: true });
+    record.vsBase = rows; if (RED) REDS.programs[RED].bars.push('vsBase'); }
   if (RED) for (const k of ck) k.judged = REDS.programs[RED].bars.includes(k.name);
   record.checks = ck;
   for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(8)} ${JSON.stringify(k.val)} (bar ${k.bar})`);
