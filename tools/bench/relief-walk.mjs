@@ -12,7 +12,8 @@
 //      RW_BASE_ALLOW_FAIL=1   (lens, with RW_BASE) use it anyway, the base's own failures printed first
 //      RW_PARKED=strip   (mound only; velkath-buried-rock Task 3b fix round 1; remove it when Michael rules on the strip) the strip's gap and sink bars
 //                    are BOOKED and printed (what they read, and whether they would fail) but not gated: they gate the floor and dune samples only, and the
-//                    exit reflects every other bar. Without it nothing changes. Refused with RW_RED (a RED must fail its own bar on the full gate).
+//                    exit reflects every other bar. The parked zone is the strip plus the footing envelope's reach (rho = r + h sqrt2, BURY.foot read from
+//                    the build): a sole with any vertex within it of the strip counts as the strip's. Without it nothing changes. Refused with RW_RED (a RED must fail its own bar on the full gate).
 //      RW_RED=<v>    an opt-in RED case, never part of the default run. It must fail ITS bar: exit 5 = it did, exit 3 = that bar did NOT fail
 //                    boots noslope   window.__sal.slope = false (diver.js's slope rig off, a live knob it ships): the boots must fail the gap bar
 //                    lens  nofloor   window.__camNoFloor = true (game.js updateCamera's floor clamp off): the lens must fail clearance
@@ -406,10 +407,19 @@ const LIB = `(async () => {
   // sole (PENETRATION when negative, CONTACT otherwise), independent of how the floor is built. The floor and the dune keep OWN (bilinear).
   const SOLE_OUT = [[0.000, -0.185], [0.070, -0.176], [0.100, -0.140], [0.104, -0.060], [0.098, 0.030], [0.122, 0.130], [0.130, 0.215], [0.112, 0.285], [0.066, 0.328], [0.000, 0.338]];
   const SOLE_V = SOLE_OUT.concat(SOLE_OUT.slice(1, -1).map(q => [-q[0], q[1]]), [[0, -0.10], [0, 0.08], [0, 0.22]]);
-  let _soleStrip = false;
-  const soleExact = i => { const e = ENDS[i]; e.updateWorldMatrix(true, false); let m = 1e9; _soleStrip = false; const Bu = window.__burial;
+  // RW_PARKED=strip: the strip's reach. fitFooting (burial.js) bakes the footing envelope as a max-filter over a disc of rho = r + h sqrt2 (BURY.foot,
+  // read from the build, nothing hard-coded here), so inside that reach of the strip the floor under a sole IS the parked envelope: a sole with a vertex
+  // within rho of the strip is booked as the strip's too. Near = the point or any of 16 points on its rho ring and 8 on its rho/2 ring in the strip.
+  const PARK_REACH = ${PARKED ? 'true' : 'false'}, FOOT = window.__burial && window.__burial.knobs && window.__burial.knobs.foot, RHO = FOOT ? FOOT.r + FOOT.h * Math.SQRT2 : NaN;
+  const nearStrip = (x, z) => { const Bu = window.__burial; if (Bu.inStrip(x, z)) return true;
+    for (let k = 0; k < 16; k++) { const a = k * Math.PI / 8; if (Bu.inStrip(x + RHO * Math.cos(a), z + RHO * Math.sin(a))) return true; }
+    for (let k = 0; k < 8; k++) { const a = k * Math.PI / 4; if (Bu.inStrip(x + RHO * 0.5 * Math.cos(a), z + RHO * 0.5 * Math.sin(a))) return true; }
+    return false; };
+  let _soleStrip = false, _soleNear = false;
+  const soleExact = i => { const e = ENDS[i]; e.updateWorldMatrix(true, false); let m = 1e9; _soleStrip = false; _soleNear = false; const Bu = window.__burial;
     for (let k = 0; k < SOLE_V.length; k++) { const q = SOLE_V[k]; V.set(q[0], -0.15, q[1]); e.localToWorld(V);
       if (!_soleStrip && Bu.inStrip(V.x, V.z)) _soleStrip = true;
+      if (PARK_REACH && !_soleNear && nearStrip(V.x, V.z)) _soleNear = true;
       const t = topHit(V.x, V.z, false), th = TH(V.x, V.z), g = V.y - (t > th ? t : th); if (g < m) m = g; }
     return m; };
   // the bucket: every triangle of her shell, then of the dune, in world space, over the box C +- 40 u (the corridors reach ~37 u from C)
@@ -628,7 +638,7 @@ const LIB = `(async () => {
       if (ft.deck || P.onDeck) { R.ex.deck++; continue; } if (!P.grounded) { R.ex.air++; continue; } if (P.stagger > 0) { R.ex.stag++; continue; }
       const g = ft.wlo - GR(ft.wx, ft.wz), nn = T.terrainNormal(ft.wx, ft.wz, 0);
       R.feet.gap.push(g); R.feet.own.push(own(i)); R.feet.sl.push(Math.acos(Math.min(1, nn.y)) * D); R.feet.who.push(i);
-      if (o.mound) { const Bu = window.__burial, ex = soleExact(i); R.feet.exact.push(ex); R.feet.zone.push(_soleStrip ? 2 : Bu.sandAt(ft.wx, ft.wz) > -1e8 ? 1 : 0); } }   // (mound) 2 the strip (a sole vertex in it: gated on the exact reading), 1 the dune, 0 the floor (OWN)
+      if (o.mound) { const Bu = window.__burial, ex = soleExact(i); R.feet.exact.push(ex); R.feet.zone.push(_soleStrip || _soleNear ? 2 : Bu.sandAt(ft.wx, ft.wz) > -1e8 ? 1 : 0); } }   // (mound) 2 the strip (a sole vertex in it: gated on the exact reading), 1 the dune, 0 the floor (OWN)
     // progress: a 2 s window of him moving under 0.5 u, off the ground steeper than 52 deg
     R.ring.push([clk, px, pz]); while (R.ring.length > 2 && R.ring[1][0] <= clk - ${STALL_WIN}) R.ring.shift();
     if (clk - R.ring[0][0] >= ${STALL_WIN} - 1e-6 && R.t - R.tGo >= ${STALL_WIN} && !R.done && !R.hold) {
@@ -962,7 +972,8 @@ if (MODE === 'mound') {
   // per line, both ways pooled. (NaN crossed CDP as null: a sample off the grid is anything not a finite number)
   const num = v => typeof v === 'number' && Number.isFinite(v), sum = a => a.reduce((q, v) => q + v, 0);
   const rows = {};
-  if (PARKED) console.log(`\nRW_PARKED=strip: the strip's gap and sink bars are BOOKED below (printed, in the result, not gated); the floor and dune samples, her shell's contact, the lens, progress and the clamp are gated as ever`);
+  if (PARKED) { const ft = await c.ev(`window.__burial.knobs.foot`);
+    console.log(`\nRW_PARKED=strip: the parked zone is the strip plus the footing envelope's reach, rho = r + h sqrt2 = ${ft.r} + ${ft.h} x sqrt2 = ${(ft.r + ft.h * Math.SQRT2).toFixed(4)} u (BURY.foot, read from the build): a sole with any vertex within it of the strip is booked as the strip's. Its gap and sink bars are BOOKED below (printed, in the result, not gated); the floor and dune samples, her shell's contact, the lens, progress and the clamp are gated as ever`); }
   console.log(`\nMOUND (${TAG}, port ${PORT}${RED ? ', RED ' + RED : ''}): the planted sole over the DRAWN surface, u (- sinks, + hangs): on the strip the EXACT smallest clearance over the sole's vertices, elsewhere OWN (its lowest point over drawnY); clr = the lens over drawnY; blocked = bodyBlocked(lens, 0); shell = frames with her shell's contact`);
   console.log(pad('line', 8) + lpad('walks', 6) + lpad('frames', 8) + '  | ' + lpad('planted', 8) + lpad('off', 5) + lpad('p50|g|', 8) + lpad('p95|g|', 8) + lpad('sink', 8) + lpad('<-0.15', 7) + lpad('hang', 7) + '  | ' + lpad('on grid', 8) + lpad('min clr', 8) + lpad('<0.3', 6) + lpad('blocked', 8) + '  | ' + lpad('shell', 6) + lpad('limb', 6) + lpad('clamp', 6) + lpad('stall', 6));
   for (const L of lines) {
