@@ -60,9 +60,11 @@
 //                        frames each from the same framing: her shell's program is home's (the same cacheKey), and with the crust
 //                        (Task 5) L.crustU.uBury.value is 0 on EVERY frame
 //             Bars: rise: every frame of (b), (c), (d) equal to (a) (max and last); shader: __shaderFailed() [] at every checkpoint;
-//             siteKey: her shell's program at every site is home's. With the crust (__burial.crust present): crustOne: exactly ONE
-//             '|crust' program at every checkpoint, boot included (built in the boot tail, never at first sight); siteBury: uBury 0
-//             on every frame off home. Booked per frame (the series) into the JSON.
+//             siteKey: her shell's program at every site is home's. With the crust (__burial.crust present): crustBoot: the
+//             '|crust' programs at every checkpoint are those the boot built (> 0; her body already compiles four variants on the
+//             Task 4 head, two flags of three's key apart, measured: each carries '|crust', the crust adds no variant of its own) and no
+//             program of her body ('|vkRim') lacks it, so nothing of the crust compiles at first sight; siteBury: uBury 0 on every
+//             frame off home. Booked per frame (the series) into the JSON.
 //             BP_BASE=<a programs JSON of the base build>: vsBase, every checkpoint's count (boot, first, a, the max over (b), b,
 //             each site's max and last) equal to the base's, and the programs new at first sight and in (b) the same kinds: what a
 //             task's change adds, when the base itself compiles in the rise (the Task 4 head does: one MeshDistance program ~1.9 s
@@ -290,11 +292,11 @@ const PROG_INSTALL = `(async () => {
   const P = () => renderer.info.programs;
   let seen = new Set(P().map(p => p.cacheKey));
   const failed = () => window.__shaderFailed ? window.__shaderFailed().length : -1;
-  const crustN = () => P().filter(p => p.cacheKey.indexOf('|crust') >= 0).length;
+  const crustN = () => P().filter(p => p.cacheKey.indexOf('|crust') >= 0).length, bareN = () => P().filter(p => p.cacheKey.indexOf('|vkRim') >= 0 && p.cacheKey.indexOf('|crust') < 0).length;
   const S = window.__bpProg = { series: [], marks: [],
     read(tag) { const now = P(), nw = now.filter(p => !seen.has(p.cacheKey)).map(p => (p.name || p.cacheKey.split(',')[0].slice(0, 40)) + ' ~' + p.cacheKey.slice(-60).replace(/,/g, ' '));
       seen = new Set(now.map(p => p.cacheKey));
-      const m = { tag, n: now.length, crust: crustN(), failed: failed(), newNames: nw, frames: S.series.length }; S.marks.push(m); return m; },
+      const m = { tag, n: now.length, crust: crustN(), bare: bareN(), failed: failed(), newNames: nw, frames: S.series.length }; S.marks.push(m); return m; },
     frames(n, tag) { const L = window.lev; let mx = -1, bmx = -1;
       window.__bench.step(n, () => { const c = P().length; if (c > mx) mx = c; const b = L && L.crustU ? L.crustU.uBury.value : null; if (b != null && b > bmx) bmx = b;
         S.series.push([tag, c, b == null ? null : +b.toFixed(4), L && L.dormant ? 1 : 0]); }, { render: true });
@@ -450,7 +452,7 @@ if (MODE === 'programs') {
     { name: 'digin', val: o.d.skipped, bar: '(d) == (a)', ok: false, vacuous: true, judged: false },
     { name: 'shader', val: marks.map(m => m.tag + ':' + m.failed), bar: '__shaderFailed() [] at every checkpoint', ok: marks.every(m => m.failed === 0), vacuous: !marks.length, judged: true },
     { name: 'siteKey', val: o.sites.map(q => q.si + ':' + (q.key === o.homeKey)), bar: 'her shell\'s program at every site is home\'s', ok: !!o.homeKey && o.sites.length === 3 && o.sites.every(q => q.key === o.homeKey), vacuous: !o.homeKey || o.sites.length < 3, judged: true },
-    { name: 'crustOne', val: marks.map(m => m.tag + ':' + m.crust), bar: 'exactly one \'|crust\' program at every checkpoint, boot included', ok: marks.every(m => m.crust === 1) && o.homeKey && o.homeKey.indexOf('|crust') >= 0, vacuous: !marks.length, judged: hasCrust },
+    { name: 'crustBoot', val: marks.map(m => m.tag + ':' + m.crust + '/' + m.bare), bar: 'the \'|crust\' programs (crust / body programs without it) at every checkpoint those the boot built (> 0), none of her body\'s without it', ok: marks.length > 0 && marks[0].crust > 0 && marks.every(m => m.crust === marks[0].crust && m.bare === 0) && !!o.homeKey && o.homeKey.indexOf('|crust') >= 0, vacuous: !marks.length, judged: hasCrust },
     { name: 'siteBury', val: o.sites.map(q => q.si + ':' + q.frames.buryMax), bar: 'uBury 0 on every frame off home', ok: o.sites.length === 3 && o.sites.every(q => q.frames.buryMax === 0 && !q.buried), vacuous: o.sites.length < 3, judged: hasCrust }];
   if (process.env.BP_BASE) { let B = null; try { B = JSON.parse(readFileSync(process.env.BP_BASE, 'utf8')).programs; } catch (e) { console.error('BP_BASE: ' + e.message); finish(2, 'BP_BASE'); }
     const P0 = record.programs, kind = a => (a || []).map(q => q.split(' ~')[0]).sort().join(';');

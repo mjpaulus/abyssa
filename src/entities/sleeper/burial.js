@@ -594,6 +594,78 @@ export function crestY(MD, x, z) {
   const y = shellTopW(MD, x, z); return y === y ? y : -1e9;
 }
 
+// ---- THE CRUST ----
+// THE CRUST (spec §1 "The crest reads as stone"): her shell takes the hollow outcrops' rock shading - flora.js's rock: lib/textures.js
+// rockMapSet(0) sampled triplanar at flora's two scales (R_DET 0.32, R_MAC 0.073), under the zone's rock hue - blended in by uBury,
+// with sand settled in its hollows (the bake's ambient occlusion, on faces that look up), and on the rise's first beat its own
+// fissure network cracks open along her (uCrack). A shading term on her body material, driven by uniforms: ONE program for every
+// brooder build (installed at every site, uBury 0 off home), chained after the silhouette rim, its own key; the branch on uBury is
+// uniform, so off home it costs a compare. (The procedural fallback shell gets none: it buries, it does not look like stone, which
+// is acceptable for a fallback.)
+//   alb/nrm/rough  how far her albedo, normal and roughness go to the stone's at full burial; sand: the hollows' fill; crack: the
+//                  crack's darkening
+//   sandC          the hollows' sand, a hex over the zone's silt hue (null = flora's silt, 0x2c3d4a at home: bluer and darker than the
+//                  dune beside it); 0x3f4744 is zone 0's seabed silt (terrain.js zoneMat 0), so the sand in her hollows is the dune's
+//                  own (Task 5 look-dev, trial 2 of 3, stills t5-try*: the best two, this and null, went to the controller)
+export const CRUST = { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7, crack: 0.85, sandC: 0x3f4744 };
+const CRUST_HEAD = `
+varying vec3 vCrW;
+uniform float uBury, uCrack;
+uniform sampler2D uCrustPack, uCrustNrm;
+uniform vec3 uRockC, uSand;
+uniform vec4 uCrustK;
+uniform float uCrustRough;
+vec4 crTri(sampler2D t, vec3 p, vec3 bw, float f) { return texture2D(t, p.zy * f) * bw.x + texture2D(t, p.xz * f) * bw.y + texture2D(t, p.xy * f) * bw.z; }
+vec3 crNrm(vec3 p, vec3 n, vec3 bw, float f, float str) {
+  vec3 tx = texture2D(uCrustNrm, p.zy * f).xyz * 2.0 - 1.0, ty = texture2D(uCrustNrm, p.xz * f).xyz * 2.0 - 1.0, tz = texture2D(uCrustNrm, p.xy * f).xyz * 2.0 - 1.0;
+  vec3 wx = vec3(tx.xy * str + n.zy, abs(tx.z) * n.x), wy = vec3(ty.xy * str + n.xz, abs(ty.z) * n.y), wz = vec3(tz.xy * str + n.xy, abs(tz.z) * n.z);
+  return normalize(wx.zyx * bw.x + wy.xzy * bw.y + wz.xyz * bw.z);
+}`;
+const CRUST_APPLY = `
+if (uBury > 0.001) {
+  vec3 crWN = normalize(inverseTransformDirection(normal, viewMatrix));
+  vec3 crBW = pow(abs(crWN), vec3(4.0)); crBW /= (crBW.x + crBW.y + crBW.z);
+  vec4 crPd = crTri(uCrustPack, vCrW, crBW, 0.32), crPc = crTri(uCrustPack, vCrW + vec3(7.3, 2.9, 5.1), crBW, 0.073);
+  float crAlb = (crPd.r * 1.6) * mix(1.0, crPc.r * 1.6, 0.55);
+  float crK = uBury * uCrustK.x;
+  diffuseColor.rgb = mix(diffuseColor.rgb, uRockC * crAlb, crK);
+  vec3 crN2 = crNrm(vCrW, crWN, crBW, 0.32, 0.9);
+  normal = normalize(mix(normal, normalize((viewMatrix * vec4(crN2, 0.0)).xyz), crK * uCrustK.y));
+  roughnessFactor = mix(roughnessFactor, uCrustRough, crK);
+  float crAO = 1.0;
+  #ifdef USE_AOMAP
+    crAO = texture2D(aoMap, vAoMapUv).r;
+  #endif
+  float crSand = uBury * uCrustK.z * smoothstep(0.2, 0.7, crWN.y) * (1.0 - smoothstep(0.35, 0.85, crAO));
+  diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
+  float crCrk = uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPd.b));
+  diffuseColor.rgb *= 1.0 - 0.85 * crCrk;
+}`;
+export function crustTerm(L, m, rockSet, rockC, sandC) {
+  const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
+    uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
+    uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough } };
+  L.crustU = u;
+  const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
+  m.onBeforeCompile = function (sh, r) {
+    if (prev) prev.call(this, sh, r);
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCrW;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvCrW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>' + CRUST_HEAD)
+      .replace('#include <lights_physical_fragment>', CRUST_APPLY + '\n#include <lights_physical_fragment>');
+  };
+  m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|crust';
+  m.needsUpdate = true;
+}
+// the crust's uniforms each frame (brooder.js updateBrooder): uniform writes only, never a program change
+export function crustTick(L) {
+  const u = L.crustU;
+  u.uBury.value = L.bury; u.uCrack.value = L.crackK || 0;
+  u.uCrustK.value.set(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack); u.uCrustRough.value = CRUST.rough;
+  if (CRUST.sandC != null) u.uSand.value.setHex(CRUST.sandC);
+}
+
 // ---- THE TELL ----
 const ease = x => x * x * (3 - 2 * x);
 const TRICKLE_J = [-2, 0, 2];                         // the trickle's three bearings round the nearest one (module scratch, not a literal per breath)
@@ -689,5 +761,8 @@ if (typeof window !== 'undefined') window.__burial = {
   },
   // the drawn sand (the dune; -1e9 where the floor or the rock is) and the strip, for the probes
   sandAt: (x, z) => { const L = liveV(); return moundY(L && L.mound, x, z); },
-  inStrip: (x, z) => { const L = liveV(); return inStrip(L && L.mound, x, z); }
+  inStrip: (x, z) => { const L = liveV(); return inStrip(L && L.mound, x, z); },
+  // THE CRUST's knobs (Task 5): a patch, no rebuild (updateBrooder writes them into the uniforms every frame)
+  crust: CRUST,
+  setCrust(p) { Object.assign(CRUST, p); return Object.assign({}, CRUST); }
 };

@@ -1597,6 +1597,9 @@ function mountFillets(zi, F) {
 // call and restored, so no layout or fingerprint here moves) and the zone's rock albedo.
 // The geometry carries flora's per-vertex attributes; the caller adds aInst (zeros: no sway) and
 // an instanceColor, as mount() / put() do, so the program key is the boulders' own.
+// (velkath-buried-rock) the zone's rock and silt hues, for her crust (brooder.js / burial.js crustTerm)
+export function rockHue(zi) { return PAL[zi].rock; }
+export function siltHue(zi) { return PAL[zi].silt; }
 export function jamRockKit(zi, rand, detail = 4, squash = 0.8, amp = 0.75, facet = 1.6) {
   if (!zoneMats) zoneMats = buildZoneMats();
   const was = _fr; _fr = rand;

@@ -14,7 +14,8 @@
 import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
-import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
+import { makeGlow, makeWarmGlow, seededRand, rockMapSet } from '../../lib/textures.js';
+import { rockHue, siltHue } from '../../world/flora.js';
 import { registerPaint } from '../../lib/paint.js';
 import { terrainH, terrainMeshes, fissurePatchSample } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
@@ -34,7 +35,7 @@ import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos,
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
-import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth } from './burial.js';
+import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
@@ -997,6 +998,12 @@ function installSculpt(L, A) {
   const bodyMat = finishSculpt(registerPaint(sculptMat(A.maps.body, { envMapIntensity: 0.35, aoMapIntensity: 0.8 })), A.maps.body, sets.body,
     { scale: 20, normal: 0.9, cavity: 0.45, rough: 0.3 });
   silhouetteRim(L, bodyMat);
+  // (velkath-buried-rock) THE CRUST (burial.js crustTerm): on EVERY build, so the program is one at every site (uBury 0 off home) and
+  // the boot builds it; the rock maps are flora's shared set (kept, never disposed with her). The sand in her hollows starts at the
+  // zone's silt hue (a look knob: CRUST.sandC), never the seabed's vertex colours (terrain.js: data channels, not a tint)
+  const RS = rockMapSet(0);
+  L.keepTex.add(RS.pack); L.keepTex.add(RS.nrm);
+  crustTerm(L, bodyMat, RS, rockHue(0), siltHue(0));
   P.shell.geometry.dispose(); P.shell.material.dispose();
   P.shell.geometry = g.body; P.shell.material = bodyMat;
   L.sole = soleFromGeos([g.body]);                   // the baked shell's own underside
@@ -1979,6 +1986,7 @@ export function updateBrooder(L, dt, t, player) {
   // (velkath-buried-rock) the mound: the tell's breath and trickle, the dune drawn at L.bury (L.moundK: the rise, Task 7a), the growth
   // outside the strip hidden while she is buried (a write only on the frame bury crosses 0.5). Only a buried build has a mound
   if (L.mound) { breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY); buryGrowth(L, L.bury > 0.5); }
+  if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there)
   L.t += dt;
   L.uni.uTime.value = L.t;
   const R = L.R;
