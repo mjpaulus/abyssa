@@ -82,7 +82,7 @@
 // mound   (velkath-buried-rock Task 3b, "Footing": "He walks up the sand and stands on the rock") a BURIED Velkath's dune and crest are ground,
 //         for him and for the lens. Three lines picked from the live mound (window.lev.mound): ACROSS, from 6 u out on the flat straight up the
 //         dune's flank, across the crest through its drawn top, down the far flank to 6 u out; KEEL, along the crest's length through the
-//         strip's centre, 6 u out at both ends; FLANK, the sand side's mid-bearing (L.sand; from Task 4 the harpoon's anchor) from 6 u out on
+//         strip's centre, 6 u out at both ends; FLANK, from the strip's centre out through the harpoon's real anchor (Task 4; L.sand with no seat) from 6 u out on
 //         the flat up to the strip's centre. Each walked both ways with real W, RW_REPS (2) each, booked from the walk (after the place's 2.6 s
 //         settle). THE DRAWN SURFACE IS PRECOMPUTED, never raycast in the frame hook (her body is ~70k triangles with no BVH: a raycast per sole
 //         point per frame would put the walk at the 50 ms clamp and the probe would change the gait it measures): once per run, she lying
@@ -453,7 +453,11 @@ const LIB = `(async () => {
     const lv = window.lev, MD = lv.mound, B = window.__burial;
     const on = (x, z) => B.sandAt(x, z) > -1e8 || B.inStrip(x, z);
     const reach = (p, d) => { let tl = 0; for (let t = 0; t <= 40; t += 0.1) if (on(p[0] + d[0] * t, p[1] + d[1] * t)) tl = t; return tl; };
-    const C = [MD.bx, MD.bz], acr = [MD.c, -MD.s], keel = [MD.s, MD.c], sand = [lv.sand.x, lv.sand.z];
+    const C = [MD.bx, MD.bz], acr = [MD.c, -MD.s], keel = [MD.s, MD.c];
+    // (Task 4) FLANK runs through the harpoon's REAL anchor (where Alt+6 stands him): from the strip's centre out through the anchor, so
+    // the walk crosses the spot he pulls from, up the harpoon side's flank. With no seat found it falls back on L.sand (booked)
+    const Hh = lv.harpoon, ha = Hh && Hh.seatOk ? [Hh.anchor.x - C[0], Hh.anchor.z - C[1]] : null, hl = ha ? Math.hypot(ha[0], ha[1]) : 0;
+    const sand = hl > 0.5 ? [ha[0] / hl, ha[1] / hl] : [lv.sand.x, lv.sand.z];
     // the crest's drawn top: the highest point of her drawn shell inside the strip (0.25 u scan)
     let top = null;
     for (let x = C[0] - 24; x <= C[0] + 24; x += 0.25) for (let z = C[1] - 24; z <= C[1] + 24; z += 0.25) { if (!B.inStrip(x, z)) continue;
@@ -464,7 +468,8 @@ const LIB = `(async () => {
       return { name, pts: [lo, hi], info: { through: [+p[0].toFixed(2), +p[1].toFixed(2)], dir: [+d[0].toFixed(3), +d[1].toFixed(3)], duneReach: [+tn.toFixed(1), +tp.toFixed(1)], len: +Math.hypot(hi[0] - lo[0], hi[1] - lo[1]).toFixed(1) } }; };
     const lines = [mk('across', [top.x, top.z], acr), mk('keel', C, keel), mk('flank', C, sand, true)];
     lines[0].info.crestTop = { x: +top.x.toFixed(2), z: +top.z.toFixed(2), overMeanG: +(top.y - lv.meanG).toFixed(2) };
-    lines[2].info.bearing = 'the sand side\\'s mid-bearing (L.sand); Task 4 on, the harpoon\\'s anchor';
+    lines[2].info.bearing = hl > 0.5 ? 'through the harpoon\\'s anchor (Task 4)' : 'the sand side\\'s mid-bearing (L.sand): no seat found';
+    if (hl > 0.5) lines[2].info.anchor = { x: +Hh.anchor.x.toFixed(2), z: +Hh.anchor.z.toFixed(2), fromC: +hl.toFixed(2) };
     return lines;
   };
   // the corridors clear of every collider his body or the lens's boom could meet (RW.clean's test without the blocked mask: her disc is the
