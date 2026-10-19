@@ -37,7 +37,7 @@ import { V3, clamp } from '../../lib/math.js';
 import { makeWarmGlow, seededRand } from '../../lib/textures.js';
 import { HARPOON_ASSET, harpoonModel, harpoonSculpted } from '../../lib/harpoonModel.js';
 import { DIM } from '../../lib/harpoonSculpt.js';
-import { terrainH } from '../../world/terrain.js';
+import { terrainH, extraFloorAt } from '../../world/terrain.js';
 import { fissureDist } from '../../world/fissureShape.js';
 import { currentSiteIndex } from '../../world/site.js';
 import { emitDust } from '../../world/footfx.js';
@@ -46,11 +46,14 @@ import { survival } from '../../systems/survival.js';
 import { diverImpulse } from '../diver.js';
 import { bodyBlocked, inClutch, blockWhy } from './bodyCols.js';
 import { rimR as G_rimR } from './brooderGeo.js';
+import { sandY, shellTopW } from './burial.js';
 const G = { rimR: G_rimR };
 
 
 export const WRENCH_T = 1.5;          // the commitment (s): brace, wrench, wrench, free
 const BEATS = [0.28, 0.72, 1.12];     // the three heaves (s into the wrench)
+// (velkath-buried-rock Task 4) a buried seam stands over the DRAWN SAND (the floor or the dune, never her crest) by this much (u)
+const SEAM_UP = 0.25;
 const SEAT_TRY = 10;                  // buried + reachable seams scored before the search stops (best pre-score first)
 const AX_UPS = [0.18, 0.06, 0.3];     // the entry's rise per unit in (tried in turn per seam)
 export const REACH = 2.6;             // prompt / interact range from the anchor (horizontal, u)
@@ -244,7 +247,8 @@ export function makeHarpoon(L, opts = {}) {
   // the triangles over the point's own cell: the whole test is a few dozen triangles.)
   const GC = 0.5;
   let TRI = new Float32Array(0), nTri = 0, CELL0 = new Int32Array(0), CELLT = new Int32Array(0), gx0 = 0, gz0 = 0, gnx = 0, gnz = 0;
-  const gatherTris = (sh, mw, sa) => {
+  let keelR = 0.6;                    // (the crest gather's keel radius; _crestScan's opts.keelR may widen it for a diagnosis, then puts it back)
+  const gatherTris = (sh, mw, sa, crest = false) => {
     const P = sh.geometry.attributes.position, I = sh.geometry.index, n = I ? I.count / 3 : P.count / 3;
     if (TRI.length < n * 9) TRI = new Float32Array(n * 9);
     nTri = 0;
@@ -252,9 +256,12 @@ export function makeHarpoon(L, opts = {}) {
     for (let t = 0; t < n; t++) {
       const i0 = I ? I.getX(t * 3) : t * 3, i1 = I ? I.getX(t * 3 + 1) : t * 3 + 1, i2 = I ? I.getX(t * 3 + 2) : t * 3 + 2;
       const cx = (P.getX(i0) + P.getX(i1) + P.getX(i2)) / 3, cy = (P.getY(i0) + P.getY(i1) + P.getY(i2)) / 3, cz = (P.getZ(i0) + P.getZ(i1) + P.getZ(i2)) / 3;
-      if (cy < -0.4 || cy > 0.4) continue;
+      // (velkath-buried-rock) buried, the seam is in her CREST: the band reaches her top and there is no radial floor (near her keel,
+      // where a candidate's bearing from her centre means little, every triangle within 0.6 of her centre is kept whatever its bearing).
+      // This widens the DATA the burial test reads, never its thresholds (BURY's depths, AX_UPS). Seat time only.
+      if (crest ? (cy < -0.4 || cy > 0.5) : (cy < -0.4 || cy > 0.4)) continue;
       const th = Math.atan2(cz, cx); let dth = th - sa; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
-      if (Math.abs(dth) > 1.45 || Math.hypot(cx, cz) < G.rimR(th) * 0.5) continue;
+      if (crest ? (Math.abs(dth) > 1.45 && Math.hypot(cx, cz) > keelR) : (Math.abs(dth) > 1.45 || Math.hypot(cx, cz) < G.rimR(th) * 0.5)) continue;
       const o = nTri * 9;
       _v.fromBufferAttribute(P, i0).applyMatrix4(mw); TRI[o] = _v.x; TRI[o + 1] = _v.y; TRI[o + 2] = _v.z;
       _v.fromBufferAttribute(P, i1).applyMatrix4(mw); TRI[o + 3] = _v.x; TRI[o + 4] = _v.y; TRI[o + 5] = _v.z;
@@ -307,17 +314,19 @@ export function makeHarpoon(L, opts = {}) {
     return Math.min(up, RAY.t);
   };
   const _bx = V3(), _by = V3();
+  let buriedFail = -1, buriedDep = 0;   // (dev: the BURY point a failed burial test stopped at, and its depth; _crestScan books them)
   // the head and the shank buried (every BURY point at its depth), for a seam p with normal n
   const buried = (p, n) => {
     axisFor(n, _ax);
     _by.copy(_up).addScaledVector(_ax, -_up.dot(_ax)).normalize();
     _bx.crossVectors(_by, _ax);
     _o.copy(p).addScaledVector(_ax, -(DIM.tip - LODGE_IN) * LODGED_S);
-    let worst = 1e9;
+    let worst = 1e9, k = 0;
     for (const [x, y, z, d] of BURY) {
       _g.copy(_o).addScaledVector(_bx, x * LODGED_S).addScaledVector(_by, y * LODGED_S).addScaledVector(_ax, z * LODGED_S);
       const dep = depthIn(_g.x, _g.y, _g.z);
-      if (dep < d) return -1;
+      if (dep < d) { buriedFail = k; buriedDep = dep; return -1; }
+      k++;
       worst = Math.min(worst, dep - d);
     }
     return worst;
@@ -343,8 +352,88 @@ export function makeHarpoon(L, opts = {}) {
     }
     return { n, ok, bestW, fail };
   };
+  // (velkath-buried-rock Task 4, dev probe) THE CREST SCAN: seat()'s buried candidate filter run vertex by vertex over the whole shell,
+  // counting the survivors after each filter in order (exposed, side, back, facing, crack), then the data column `under` (of crack's
+  // survivors, those 0.1 u inside whose vertical rays find gathered triangles both above and below: the crest gather covers them), the
+  // burial test with the crest gather (`buried`) and with the shipped margin gather beside it (`buriedMargin`), the reach (`reach`:
+  // seams trySeam strict stands him at; `pass`: seam x entry-rise pairs that do), the best score and where it sits. Every crack survivor
+  // is tried (seat() stops at SEAT_TRY passes). `measured` is false when `under` is under 90% of `crack`: the gather does not cover the
+  // crest and a 0 is a data gap, never "no seat". Leaves seat()'s scratch as it found it (axUp, H.dbg, the gather: re-seat to rebuild).
+  // (opts.side, diagnosis only, never seat()'s: 'body' (default, seat()'s own: the bearing from her centre), 'crest' (the bearing from
+  // the strip's centre, burial.js MD.bx / bz), 'off' (no bearing test; the facing test alone keeps the seam toward the sand)
+  H._crestScan = (opts = {}) => {
+    const sideMode = opts.side || 'body';
+    const sh = L.parts && L.parts.shell; if (!sh || !L.buried || !L.mound) return { err: 'not a buried build (L.buried ' + !!L.buried + ', mound ' + !!L.mound + ')' };
+    L.grp.updateMatrixWorld(true);
+    const mw = sh.matrixWorld, P = sh.geometry.attributes.position, N = sh.geometry.attributes.normal, idx = L.idx, sand = L.sand;
+    _nm.getNormalMatrix(mw); _fw.set(Math.sin(L.yaw), 0, Math.cos(L.yaw));
+    if (L.publishCols) L.publishCols();
+    const sa = L.sandSide > 0 ? 0 : Math.PI, backHalf = !!(L.lair && L.lair.seat === 'back');
+    const out = { sideMode, keelR: opts.keelR || 0.6, n: P.count, exposed: 0, side: 0, back: 0, facing: 0, crack: 0, under: 0, buried: 0, buriedMargin: 0, reach: 0, pass: 0, best: null, measured: false, backHalf,
+      buryFail: BURY.map(() => 0), buryDep: [] };
+    const surv = [];
+    for (let i = 0; i < P.count; i++) {
+      _v.fromBufferAttribute(P, i); _w.copy(_v).applyMatrix4(mw);
+      if (!(_w.y >= sandY(L.mound, _w.x, _w.z, idx) + SEAM_UP)) continue; out.exposed++;
+      let th = Math.atan2(_v.z, _v.x);
+      if (sideMode === 'crest') { _a.set(L.mound.bx, _w.y, L.mound.bz).applyMatrix4(_m2.copy(L.body.matrixWorld).invert()); _b.copy(_w).applyMatrix4(_m2); th = Math.atan2(_b.z - _a.z, _b.x - _a.x); }
+      let dth = th - sa; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
+      if (sideMode !== 'off' && Math.abs(dth) > 1.15) continue; out.side++;
+      if (backHalf && _v.z > 0) continue; out.back++;
+      _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
+      const ns = _n.x * sand.x + _n.z * sand.z;
+      if (ns < 0.35 || _n.y > 0.8) continue; out.facing++;
+      if (fissureDist(_w.x, _w.z, idx) < 8) continue; out.crack++;
+      const gh = groundY(_w.x + _n.x * 1.5, _w.z + _n.z * 1.5);
+      surv.push([i, 0.25 * Math.abs(dth) + 0.6 * (1 - ns) + 0.3 * Math.abs(_w.y - gh - 1.6)]);
+    }
+    const ax0 = axUp, dbg0 = H.dbg;
+    H.dbg = { tried: 0, shaft: 0, high: 0, body: 0, sand: 0 };
+    // the shipped margin gather first (buriedMargin), then the crest gather (under, buried, reach)
+    gatherTris(sh, mw, sa, false);
+    for (const [i] of surv) { _v.fromBufferAttribute(P, i).applyMatrix4(mw); _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
+      if (AX_UPS.some(up => (axUp = up, buried(_v, _n) >= 0))) out.buriedMargin++; }
+    if (opts.keelR) keelR = opts.keelR;
+    gatherTris(sh, mw, sa, true);
+    keelR = 0.6;
+    out.tris = nTri;
+    let best = Infinity, bi = -1, bUp = 0;
+    for (const [i, pre] of surv) {
+      _v.fromBufferAttribute(P, i).applyMatrix4(mw); _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
+      _a.copy(_v).addScaledVector(_n, -0.1);
+      vray(_a.x, _a.y, _a.z, 1); const hu = RAY.t < 1e8; vray(_a.x, _a.y, _a.z, -1); const hd = RAY.t < 1e8;
+      if (hu && hd) out.under++;
+      let isB = false, isR = false;
+      for (const up of AX_UPS) {
+        axUp = up;
+        if (buried(_v, _n) < 0) { out.buryFail[buriedFail]++; if (up === AX_UPS[0]) out.buryDep.push(+buriedDep.toFixed(2)); continue; }
+        isB = true;
+        const sc = trySeam(_v, _n, true);
+        if (sc < Infinity) { isR = true; out.pass++; if (sc + pre < best) { best = sc + pre; bi = i; bUp = up; } }
+      }
+      if (isB) out.buried++; if (isR) out.reach++;
+    }
+    out.reject = H.dbg;
+    out.measured = out.crack > 0 && out.under >= 0.9 * out.crack;
+    if (bi >= 0) {
+      _v.fromBufferAttribute(P, bi); const lx = _v.x, lz = _v.z, ly = _v.y;
+      _v.applyMatrix4(mw); _n.fromBufferAttribute(N, bi).applyMatrix3(_nm).normalize();
+      axUp = bUp; trySeam(_v, _n, true);
+      // the slope of her drawn top round it (burial.js shellTopW, the fit pose; central differences 0.25 u)
+      const MD = L.mound, e = 0.25, tx = (shellTopW(MD, _v.x + e, _v.z) - shellTopW(MD, _v.x - e, _v.z)) / (2 * e), tz = (shellTopW(MD, _v.x, _v.z + e) - shellTopW(MD, _v.x, _v.z - e)) / (2 * e);
+      out.best = { score: +best.toFixed(3), i: bi, axUp: bUp, local: [+lx.toFixed(4), +ly.toFixed(4), +lz.toFixed(4)], world: [+_v.x.toFixed(2), +_v.y.toFixed(2), +_v.z.toFixed(2)],
+        normal: [+_n.x.toFixed(3), +_n.y.toFixed(3), +_n.z.toFixed(3)], overSand: +(_v.y - sandY(MD, _v.x, _v.z, idx)).toFixed(2),
+        topSlopeDeg: +(Math.atan(Math.hypot(tx, tz)) * 180 / Math.PI).toFixed(1), stand: [+_p.x.toFixed(2), +_p.y.toFixed(2), +_p.z.toFixed(2)] };
+    }
+    axUp = ax0; H.dbg = dbg0;
+    return out;
+  };
   H._depthIn = (x, y, z) => depthIn(x, y, z);   // (dev probe; after a seat)
   const clearAt = (x, y, z, m) => !bodyBlocked(x, y, z, m) && !(inClutch(x, y, z, m) > 0);
+  // (velkath-buried-rock) HIS ground, where he stands and what his hands are judged over: the drawn ground (the dune, or her crest's
+  // footing once she is fully buried: bodyCols buriedFloorAt through terrain.js extraFloorAt). Off home extraFloorAt is -1e9 and
+  // this is terrainH exactly. (The seam and the pole are judged against the drawn SAND instead: burial.js sandY.)
+  const groundY = (x, z) => Math.max(terrainH(x, z, L.idx), extraFloorAt(x, z, L.idx));
   // Try a seam (world point p, normal n). The iron's outside length must stand clear of her limbs; a
   // standing spot must exist on clear ground (his whole body out of hers and out of her clutch, off
   // the crack) within arm's reach of the grip, the grip at his hands' height over it. Returns a score
@@ -359,16 +448,22 @@ export function makeHarpoon(L, opts = {}) {
       _g.copy(_o).addScaledVector(_ax, z * LODGED_S);
       if (bodyBlocked(_g.x, _g.y, _g.z, 0.05) && blockWhy !== -1) { H.dbg.shaft++; return Infinity; }
     }
+    // (velkath-buried-rock) buried, the pole is CLEAR of the sand: its samples from the ferrule to the break stand >= 0.05 u over the
+    // drawn sand (the floor or the dune; never her crest, which is rock the iron came out of)
+    if (strict && L.buried) for (const z of [-0.1, -0.3, -0.55, -0.8, -0.95]) {
+      _g.copy(_o).addScaledVector(_ax, z * LODGED_S);
+      if (!(_g.y >= sandY(L.mound, _g.x, _g.z, idx) + 0.05)) { H.dbg.sand = (H.dbg.sand || 0) + 1; return Infinity; }
+    }
     _g.copy(_o).addScaledVector(_ax, GRIP_Z * LODGED_S);
     // (cheap first: a grip far off a man's hands over the ground under it is never in reach)
-    if (strict) { const g0 = _g.y - terrainH(_g.x, _g.z, idx); if (g0 < 0.6 || g0 > 2.2) { H.dbg.high++; return Infinity; } }
+    if (strict) { const g0 = _g.y - groundY(_g.x, _g.z); if (g0 < 0.6 || g0 > 2.2) { H.dbg.high++; return Infinity; } }
     const nh = Math.hypot(n.x, n.z) || 1, nx = n.x / nh, nz = n.z / nh;
     let best = Infinity;
     H.dbg.tried++;
     for (const d of [0.55, 0.7, 0.85, 1.0, 1.15, 1.3]) {
       for (const a of [0, 0.4, -0.4, 0.8, -0.8]) {
         const c = Math.cos(a), sn = Math.sin(a), dx = nx * c - nz * sn, dz = nx * sn + nz * c;
-        const ax = _g.x + dx * d, az = _g.z + dz * d, ay = terrainH(ax, az, idx);
+        const ax = _g.x + dx * d, az = _g.z + dz * d, ay = groundY(ax, az);
         const gu = _g.y - ay;
         if (strict && (gu < 0.9 || gu > 1.9)) { H.dbg.high++; continue; }
         if (fissureDist(ax, az, idx) < 8) continue;
@@ -410,6 +505,23 @@ export function makeHarpoon(L, opts = {}) {
     const backHalf = !!(L.lair && L.lair.seat === 'back');
     for (let i = 0; i < P.count; i++) {
       _v.fromBufferAttribute(P, i);
+      if (L.buried) {
+        // (velkath-buried-rock) THE CREST SEAT: only her EXPOSED crest, on the sand side, her back half (lair.seat 'back'): a vertex
+        // over the DRAWN SAND by SEAM_UP u (sandY: never the crest's own top, which is his ground there), its normal toward the sand
+        // side and not her top (a flank of the rock, not its crown)
+        _w.copy(_v).applyMatrix4(mw);                     // (_v stays body-local for the back-half and bearing tests)
+        if (!(_w.y >= sandY(L.mound, _w.x, _w.z, idx) + SEAM_UP)) continue;
+        if (backHalf && _v.z > 0) continue;
+        const th = Math.atan2(_v.z, _v.x); let dth = th - sa; dth = Math.atan2(Math.sin(dth), Math.cos(dth));
+        if (Math.abs(dth) > 1.15) continue;
+        _n.fromBufferAttribute(N, i).applyMatrix3(_nm).normalize();
+        const ns = _n.x * sand.x + _n.z * sand.z;
+        if (ns < 0.35 || _n.y > 0.8) continue;
+        if (fissureDist(_w.x, _w.z, idx) < 8) continue;
+        const gh = groundY(_w.x + _n.x * 1.5, _w.z + _n.z * 1.5);   // (where he stands: the dune, or the crest)
+        cand.push(0.25 * Math.abs(dth) + 0.6 * (1 - ns) + 0.3 * Math.abs(_w.y - gh - 1.6), i);
+        continue;
+      }
       if (_v.y < -0.13 || _v.y > 0.08) continue;                 // the margin band (the sculpt's margin droops to -0.11 mid-flank)
       if (backHalf && _v.z > 0) continue;
       const th = Math.atan2(_v.z, _v.x);
@@ -433,7 +545,7 @@ export function makeHarpoon(L, opts = {}) {
     // her drawn body at one of the entry rises AX_UPS (the sculpted shell is closed; the procedural one,
     // before the sculpt lands, is not, and is only reached), then the reach test; the best score wins
     const tg0 = performance.now();
-    gatherTris(sh, mw, sa);
+    gatherTris(sh, mw, sa, !!L.buried);
     H.dbg.tGather = +(performance.now() - tg0).toFixed(1); H.dbg.tris = nTri; H.dbg.bury = 0; H.dbg.pass = 0;
     let bestUp = AX_UPS[0];
     for (let q = 0; q < ord.length && H.dbg.pass < SEAT_TRY; q++) {
@@ -485,11 +597,13 @@ export function makeHarpoon(L, opts = {}) {
     // the line: from the stub's frayed end (meta.lineEnd in the model's frame), a sag down to the
     // silt and a length lying on it, half buried, out toward the sand
     {
+      // (velkath-buried-rock) buried, it lies on the drawn SAND (the dune over her, else the floor): on terrainH it dove into the dune
+      const gnd = L.buried ? (x, z) => sandY(L.mound, x, z, idx) : (x, z) => terrainH(x, z, idx);
       _v.set(0.052, -0.215, -0.318).applyMatrix4(H.worldM);
-      const gx = _v.x + sand.x * 0.7 + _fw.x * 0.25, gz = _v.z + sand.z * 0.7 + _fw.z * 0.25, gy = terrainH(gx, gz, idx);
-      const ex = _v.x + sand.x * 2.6 - _fw.x * 0.4, ez = _v.z + sand.z * 2.6 - _fw.z * 0.4, ey = terrainH(ex, ez, idx) - 0.03;
+      const gx = _v.x + sand.x * 0.7 + _fw.x * 0.25, gz = _v.z + sand.z * 0.7 + _fw.z * 0.25, gy = gnd(gx, gz);
+      const ex = _v.x + sand.x * 2.6 - _fw.x * 0.4, ez = _v.z + sand.z * 2.6 - _fw.z * 0.4, ey = gnd(ex, ez) - 0.03;
       const c = new THREE.CatmullRomCurve3([_v.clone(), V3((_v.x + gx) / 2, Math.max(gy + 0.15, (_v.y + gy) / 2 - 0.12), (_v.z + gz) / 2), V3(gx, gy + 0.02, gz),
-        V3((gx + ex) / 2, terrainH((gx + ex) / 2, (gz + ez) / 2, idx) + 0.0, (gz + ez) / 2), V3(ex, ey, ez)]);
+        V3((gx + ex) / 2, gnd((gx + ex) / 2, (gz + ez) / 2) + 0.0, (gz + ez) / 2), V3(ex, ey, ez)]);
       rope.geometry.dispose();
       rope.geometry = new THREE.TubeGeometry(c, 40, 0.0105 * LODGED_S, 6, false);
     }
