@@ -1000,7 +1000,8 @@ function installSculpt(L, A) {
   silhouetteRim(L, bodyMat);
   // (velkath-buried-rock) THE CRUST (burial.js crustTerm): on EVERY build, so the program is one at every site (uBury 0 off home) and
   // the boot builds it; the rock maps are flora's shared set (kept, never disposed with her). The sand in her hollows starts at the
-  // zone's silt hue (a look knob: CRUST.sandC), never the seabed's vertex colours (terrain.js: data channels, not a tint)
+  // zone's silt hue and the look knob CRUST.sandC (zone 0's seabed silt) overrides it; never the seabed's vertex colours (terrain.js:
+  // data channels, not a tint)
   const RS = rockMapSet(0);
   L.keepTex.add(RS.pack); L.keepTex.add(RS.nrm);
   crustTerm(L, bodyMat, RS, rockHue(0), siltHue(0));

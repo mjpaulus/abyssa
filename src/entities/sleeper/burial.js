@@ -599,7 +599,8 @@ export function crestY(MD, x, z) {
 // rockMapSet(0) sampled triplanar at flora's two scales (R_DET 0.32, R_MAC 0.073), under the zone's rock hue - blended in by uBury,
 // with sand settled in its hollows (the bake's ambient occlusion, on faces that look up), and on the rise's first beat its own
 // fissure network cracks open along her (uCrack). A shading term on her body material, driven by uniforms: ONE program for every
-// brooder build (installed at every site, uBury 0 off home), chained after the silhouette rim, its own key; the branch on uBury is
+// brooder build (installed at every site, uBury 0 off home; her body's lighting variants, four on the Task 4 head too, each carry it:
+// burial-probe programs crustBoot), chained after the silhouette rim, its own key; the branch on uBury is
 // uniform, so off home it costs a compare. (The procedural fallback shell gets none: it buries, it does not look like stone, which
 // is acceptable for a fallback.)
 //   alb/nrm/rough  how far her albedo, normal and roughness go to the stone's at full burial; sand: the hollows' fill; crack: the
