@@ -55,7 +55,11 @@ const SHIPPED = { fp12: 'd49d451d', lev1: 'c938fe6e', lev2: '652d0412', sl1: 'ac
 // (Task 5, on 5c0705a1) __lev.fp(0) held 15ce888c: the serpent's one terrain read (serpent.js updateBlobs) moves only its
 // blob meshes, which leviathan.js sleeperFingerprint does not hash. sleeperFingerprint(0) moved ecfa371e -> 1ca3b28c: her
 // wards and body sit over the new ground.
-const ANCHOR = { home: EXP.home, lev0: '15ce888c', sl0: '1ca3b28c' };
+// (velkath-buried-rock Task 4) slRow: the ROW-BUILT home fingerprint, sleeperFingerprint(0, home's row as game.js makeZoneSleeper builds
+// it, bury included), the one sleeperFingerprint take that sees home's row. edb51a28 on the relief; moved by the burial (its only cause).
+const ANCHOR = { home: EXP.home, lev0: '15ce888c', sl0: '1ca3b28c', slRow: 'unrecorded', slRowCause: 'the burial: the crest seat, Michael 2026-10-14 (spec), home only 2026-10-15' };
+const SL_ROW = `(() => { const S = window.__slRowS, C = window.__slRowC, row = S.currentSite().sleepers[0];
+  return { nSigils: row.sigils, hue: (C.LEVIATHAN_CFG[0].hue + row.hueShift + 1) % 1, name: C.LEVIATHAN_CFG[0].name, idle: row.idle || null, lair: row.lair || null, hard: row.hard || null, bury: row.bury || null }; })()`;
 // (Task 8b, Ruling 44) THE LIVE HOME ANCHOR. sleeperFingerprint(i) keeps its meaning: no row, LEVIATHAN_CFG alone (so sl0 is
 // still 1ca3b28c, which also shows the no-key path untouched). It therefore cannot see home's sleeper row (site.js: her turn,
 // lair.face; her harpoon's seat, lair.seat; her stance, hard.lift). Those are read off the LIVE Velkath as the game builds her,
@@ -64,10 +68,19 @@ const ANCHOR = { home: EXP.home, lev0: '15ce888c', sl0: '1ca3b28c' };
 // her back-left), her stance offset (L.standLift), and the seat found (seatOk). Recorded with its cause: Michael 2026-10-14,
 // turned at her home bed, harpoon seat on her back half; Ruling 44. (gates.mjs S2 and the voyage replica below check her bed's
 // POSITION only, velkathLair with no row: the turn is in place, so that position is the one the fit gives today's face.)
-const LIVE = { cause: 'Michael 2026-10-14: turned at her home bed, harpoon seat on her back half; Ruling 44', yawDeg: -121.51, anchor: [-0.81, -0.59], lift: 0.55, tol: 0.01 };
+// (velkath-buried-rock Task 4) RE-RECORDED with the burial: she lies sunk under a dune with only her crest showing, and the harpoon is
+// seated in that crest (her sand-facing back half), so Alt+6 stands him at a new place in her frame. bury 1 = buried; crest = her drawn
+// shell's highest vertex over the mean ground under her (__burial.state().meanG), the spec's 3-4 u; buryD = the sink, recorded.
+const LIVE = { cause: 'the burial: the crest seat, Michael 2026-10-14 (spec), home only 2026-10-15', yawDeg: -121.51, anchor: [NaN, NaN], lift: 0.55,
+  bury: 1, crest: [3.0, 4.0], buryD: NaN, tol: 0.01 };
 const LIVE_JS = `(() => { const L = window.lev, H = L && L.harpoon; if (!L || L.kind !== 'brooder' || !H || !L.lairPos) return { err: 'no brooder / harpoon (' + (L && L.kind) + ')' };
   const s = Math.sin(L.lairYaw), c = Math.cos(L.lairYaw), ox = H.anchor.x - L.lairPos.x, oz = H.anchor.z - L.lairPos.z;
-  return { yawDeg: +(L.lairYaw * 180 / Math.PI).toFixed(2), anchor: [+((ox * s + oz * c) / L.R).toFixed(2), +((ox * c - oz * s) / L.R).toFixed(2)], lift: L.standLift, seatOk: !!H.seatOk, dormant: !!L.dormant }; })()`;
+  // her crest: the drawn shell's highest vertex over the mean ground (burial-probe disguise's reading: every vertex through matrixWorld)
+  const B = window.__burial, st = B && B.state ? B.state() : null, sh = L.parts && L.parts.shell; let top = -1e9;
+  if (sh) { sh.updateMatrixWorld(true); const P = sh.geometry.attributes.position, e = sh.matrixWorld.elements;
+    for (let i = 0; i < P.count; i++) { const x = P.getX(i), y = P.getY(i), z = P.getZ(i), wy = e[1] * x + e[5] * y + e[9] * z + e[13]; if (wy > top) top = wy; } }
+  return { yawDeg: +(L.lairYaw * 180 / Math.PI).toFixed(2), anchor: [+((ox * s + oz * c) / L.R).toFixed(2), +((ox * c - oz * s) / L.R).toFixed(2)], lift: L.standLift, seatOk: !!H.seatOk, dormant: !!L.dormant,
+    bury: L.bury, buryD: +(L.buryD || 0).toFixed(3), crest: st && st.meanG != null ? +(top - st.meanG).toFixed(2) : null }; })()`;
 const STATION = { x: 89.7, z: 39.1 };       // her raft-side station (spec §5; a pure function of the frozen fissure frame)
 const fails = [];
 const show = v => typeof v === 'string' ? v : JSON.stringify(v);
@@ -137,12 +150,13 @@ if (MODE === 'load') {
   const lev = await c.ev(`[__lev.fp(0), __lev.fp(1), __lev.fp(2)]`);
   // brooder-invariants.mjs's take (zone 0 twice: deterministic). It builds over the live sleeper; the live one is then
   // rebuilt as the chart builds her (__lev.remember(null)), not set down 45 u ahead of Sal as brooder-invariants' swap() does
-  const sfp = await c.ev(`(async () => { const M = await import('/src/entities/leviathan.js'); const out = []; for (let i = 0; i < 3; i++) out.push(M.sleeperFingerprint(i)); out.push(M.sleeperFingerprint(0)); return out; })()`);
+  const sfp = await c.ev(`(async () => { const M = await import('/src/entities/leviathan.js'); window.__slRowS = await import('/src/world/site.js'); window.__slRowC = await import('/src/config.js');
+    const out = []; for (let i = 0; i < 3; i++) out.push(M.sleeperFingerprint(i)); out.push(M.sleeperFingerprint(0)); out.push(M.sleeperFingerprint(0, ${SL_ROW})); return out; })()`);
   await c.ev(`(window.__lev.remember(null), 1)`);
   const lights2 = await c.ev(LIGHTS), safe2 = await c.ev(`__safeFailed()`), shader2 = await c.ev(`__shaderFailed()`), live = await c.ev(`({ kind: lev && lev.kind, same: window.__sl === lev, state: window.gameState })`);
   console.log('  state ' + show(s));
   console.log(`  lights ${lights} (after the fingerprints ${lights2}); __ridge.fp() ${ridge} (expect.json home ${EXP.home}); fp([1,2]) ${ridge12}`);
-  console.log(`  __lev.fp(0..2) ${lev.join(' ')}; sleeperFingerprint(0..2) ${sfp.slice(0, 3).join(' ')} (zone 0 again ${sfp[3]}); live after ${show(live)}`);
+  console.log(`  __lev.fp(0..2) ${lev.join(' ')}; sleeperFingerprint(0..2) ${sfp.slice(0, 3).join(' ')} (zone 0 again ${sfp[3]}; home's row ${sfp[4]}); live after ${show(live)}`);
   console.log(`  __safeFailed() ${show(safe)} / after ${show(safe2)}; __shaderFailed() ${show(shader)} / after ${show(shader2)}`);
   check('in play, page visible', s.gameState === 'play' && !s.hidden && s.site === 0 && s.zone === 0, s.gameState);
   check('lights 14 (and after the fingerprints)', lights === 14 && lights2 === 14, [lights, lights2]);
@@ -155,13 +169,15 @@ if (MODE === 'load') {
   check(`__lev.fp(0) = the anchor ${ANCHOR.lev0}`, lev[0] === ANCHOR.lev0, lev[0]);
   check('sleeperFingerprint(0) deterministic (twice in one load)', sfp[0] === sfp[3], [sfp[0], sfp[3]]);
   check(`sleeperFingerprint(0) = the anchor ${ANCHOR.sl0}`, sfp[0] === ANCHOR.sl0, sfp[0]);
+  check(`sleeperFingerprint(0, home's row) = the anchor ${ANCHOR.slRow} (${ANCHOR.slRowCause})`, sfp[4] === ANCHOR.slRow, sfp[4]);
   check('the live sleeper rebuilt (the Brooder, __sl live)', live.kind === 'brooder' && live.same && live.state === 'play', live);
   // (Task 8b, Ruling 44) the live home anchor, on the boot's build and on the chart's rebuild
   const live1 = await c.ev(LIVE_JS), near = (a, b) => Math.abs(a - b) <= LIVE.tol;
-  console.log(`  live Velkath (boot) ${show(live0)}; (rebuilt) ${show(live1)}; anchor ${show({ yawDeg: LIVE.yawDeg, anchor: LIVE.anchor, lift: LIVE.lift })} (${LIVE.cause})`);
+  console.log(`  live Velkath (boot) ${show(live0)}; (rebuilt) ${show(live1)}; anchor ${show({ yawDeg: LIVE.yawDeg, anchor: LIVE.anchor, lift: LIVE.lift, bury: LIVE.bury, crest: LIVE.crest, buryD: LIVE.buryD })} (${LIVE.cause})`);
   for (const [tag, v] of [['boot', live0], ['rebuilt', live1]])
-    check(`live Velkath (${tag}) = the anchor: heading ${LIVE.yawDeg} deg, Alt+6 at fwd ${LIVE.anchor[0]} lat ${LIVE.anchor[1]} R (her back-left), lift ${LIVE.lift} u, seat found`,
-      !v.err && near(v.yawDeg, LIVE.yawDeg) && near(v.anchor[0], LIVE.anchor[0]) && near(v.anchor[1], LIVE.anchor[1]) && v.lift === LIVE.lift && v.seatOk && v.dormant, v);
+    check(`live Velkath (${tag}) = the anchor: heading ${LIVE.yawDeg} deg, Alt+6 at fwd ${LIVE.anchor[0]} lat ${LIVE.anchor[1]} R (her crest), lift ${LIVE.lift} u, seat found, bury ${LIVE.bury}, crest ${LIVE.crest.join('-')} u, buryD ${LIVE.buryD}`,
+      !v.err && near(v.yawDeg, LIVE.yawDeg) && near(v.anchor[0], LIVE.anchor[0]) && near(v.anchor[1], LIVE.anchor[1]) && v.lift === LIVE.lift && v.seatOk && v.dormant
+        && v.bury === LIVE.bury && v.crest >= LIVE.crest[0] && v.crest <= LIVE.crest[1] && near(v.buryD, LIVE.buryD), v);
 }
 
 if (MODE === 'parity') {
@@ -248,7 +264,7 @@ if (MODE === 'oldsave') {
   const L = window.lev, P = window.player, H = L && L.harpoon;
   if (!H) return { err: 'no harpoon (' + (L ? L.kind : 'no sleeper') + ')' };
   const hp = H.seamWorld ? H.seamWorld() : null, a = H.anchor;
-  const fl = T.terrainH(a.x, a.z, 0);
+  const fl = Math.max(T.terrainH(a.x, a.z, 0), T.extraFloorAt(a.x, a.z, 0));   // (velkath-buried-rock Task 4) his drawn ground: the dune or her crest at home, terrainH elsewhere
   let blocked = false; L.publishCols && L.publishCols();
   for (const h of [0.45, 1.0, 1.6]) if (BC.bodyBlocked(a.x, fl + h, a.z, 0.45)) blocked = true;
   const sand = L.sand, side = hp ? (hp.x - L.pos.x) * sand.x + (hp.z - L.pos.z) * sand.z : null;
@@ -285,6 +301,13 @@ if (MODE === 'oldsave') {
   check('routes: a seam on her flank qualified (no fallback seat)', r.seatOk, r.seatOk);
   check('routes: the anchor is not inside her body', !r.blocked, r.blocked);
   check('routes: Alt+6 left him <= 0.6 u off the anchor', !(r.dSal > 0.6), r.dSal);
+  // (velkath-buried-rock Task 4) the old wound is a scar in the crest seat: drawn, and over the drawn sand (the floor or the dune)
+  const scar = await c.ev(`(async () => { const T = await import('/src/world/terrain.js'); const H = lev.harpoon; H.scar.updateMatrixWorld(true);
+    const e = H.scar.matrixWorld.elements, x = e[12], y = e[13], z = e[14], B = window.__burial, d = B && B.sandAt ? B.sandAt(x, z) : -1e9;
+    return { visible: !!H.scar.visible, at: [+x.toFixed(2), +y.toFixed(2), +z.toFixed(2)], overSand: +(y - Math.max(T.terrainH(x, z, 0), d)).toFixed(3) }; })()`);
+  console.log('  the scar: ' + show(scar));
+  check('the old wound: the scar drawn, >= 0.2 u over the drawn sand', scar.visible && scar.overSand >= 0.2, scar);
+  const save0 = await c.ev(`localStorage.getItem('abyssa.chart.v1')`);
   // the remembered rite starts there: a real E presses the wound, she wakes, nothing new is said or granted
   const seen = [];
   await c.ev(`(window.__rlSeen = [], window.__rlI = setInterval(() => { const m = window.__msg && window.__msg().live; if (m && window.__rlSeen[window.__rlSeen.length - 1] !== m) window.__rlSeen.push(m); }, 50), 1)`);
@@ -295,6 +318,9 @@ if (MODE === 'oldsave') {
   console.log('  after E: ' + show(w));
   check('E at the wound: pressed, she wakes', w.pressed && !w.dormant, [w.pressed, w.dormant]);
   check('...and no pull line', !seen.includes('IT COMES FREE. SHE FEELS IT.') && !seen.includes("ANOTHER DIVER'S HARPOON."), seen);
+  // nothing granted: the saved tools and pulled[] are what the old save held (the wound grants nothing new)
+  const save1 = await c.ev(`localStorage.getItem('abyssa.chart.v1')`), tp = j => { const o = JSON.parse(j || '{}'); return JSON.stringify([o.tools, o.pulled]); };
+  check('...and nothing granted (saved tools and pulled[] unchanged)', tp(save0) === tp(save1), { before: tp(save0), after: tp(save1) });
 }
 
 consoleCheck();

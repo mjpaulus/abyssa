@@ -26,7 +26,7 @@ const AT = `(async () => {
   const L = window.lev, P = window.player, H = L && L.harpoon;
   if (!H) return { err: 'no harpoon (' + (L ? L.kind : 'no sleeper') + ')' };
   const hp = H.seamWorld ? H.seamWorld() : null, a = H.anchor;
-  const fl = T.terrainH(a.x, a.z, 0);
+  const fl = Math.max(T.terrainH(a.x, a.z, 0), T.extraFloorAt(a.x, a.z, 0));   // (velkath-buried-rock Task 4) his drawn ground: the dune or her crest at home, terrainH elsewhere
   let blocked = false; L.publishCols && L.publishCols();
   for (const h of [0.45, 1.0, 1.6]) if (BC.bodyBlocked(a.x, fl + h, a.z, 0.45)) blocked = true;
   const sand = L.sand, side = hp ? (hp.x - L.pos.x) * sand.x + (hp.z - L.pos.z) * sand.z : null;
