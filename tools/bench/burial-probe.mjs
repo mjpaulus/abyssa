@@ -10,7 +10,8 @@
 //             ring 0's edge + 0.6 u, computed from the mound by the probe itself, never the build's inStrip (Task 3a fix round 3); on
 //             main (no mound) the strip's default ellipse, BURY_DEFAULT below. THE CREST: her shell's vertices over the drawn sand:
 //             top over the mean ground (poseAll's 5 x 5 grid; bar 3.0-4.0 u), length along her keel (bar 16-24 u). THE CLUTCH (Task 6 on): every live lobe's top (r x
-//             1.25) <= -0.05 u under the sand. THE HARPOON (Task 4 on): the seam >= +0.25 u, every pole sample >= 0 u over the
+//             1.25) <= -0.05 u under the sand. THE HARPOON (Task 4 on; IRON: its head and shank inside her drawn shell by harpoon-probe
+//             lodged's exact-hit test, and seatOk; RED on 9e6a01b's fallback seat): the seam >= +0.25 u, every pole sample >= 0 u over the
 //             DRAWN SAND (terrain or dune, never the crest: harpoon.js seat()'s own test). THE GROWTH ON HER BACK (Task 3a on):
 //             every DRAWN reef and weed vertex OUTSIDE the strip <= 0 over the sand (inside it, growth on a rock is allowed);
 //             buried, burial.js hides the growth outside the strip, so none drawn there passes; n = every growth vertex examined
@@ -54,7 +55,7 @@
 //   BP_NOPLUG=1       the drift RED: plug(c, { stop: false }), the counter on and clock.stop() skipped. It must print CLOCK LOST
 //                     with a NUMERIC drift over 0.05 s (exit 4). A missing reading is exit 2 and is not the RED.
 //   BP_CHECK=<list>   disguise: legs,claws,eyes,mouth,wards,reef,weed,sides,top,len,repose (crest = top + len; height = top, the crest's
-//                     height alone, as the plan's briefs name it),clutch,seam,pole (harpoon = seam + pole: Task 4)
+//                     height alone, as the plan's briefs name it),clutch,seam,pole,iron (harpoon = seam + pole + iron: Task 4)
 //   BP_OUT=<file>     the JSON (default ~/sc/.abyssa-wt/reviews/buried/burial-<mode>-<tag>.json); BP_TAG=<tag> (default port<port>)
 // (an empty DRV_PORT is +'' = 0, an integer: the port must be all digits and inside 1024-65535, as drv.mjs's start() demands)
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
@@ -76,10 +77,10 @@ const AT = process.env.BP_AT || '';
 if (AT && !['anchor', 'crest', 'off'].includes(AT)) { console.error(`BP_AT: anchor | crest | off (got ${JSON.stringify(AT)})`); process.exit(2); }
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
-const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'repose', 'clutch', 'seam', 'pole'];
+const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'repose', 'clutch', 'seam', 'pole', 'iron'];
 let ONLY = null;
 if (process.env.BP_CHECK) {
-  ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : s === 'harpoon' ? ['seam', 'pole'] : [s]);
+  ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : s === 'harpoon' ? ['seam', 'pole', 'iron'] : [s]);
   const bad = ONLY.filter(s => !CHECKS.includes(s));
   if (bad.length || !ONLY.length) { console.error(`BP_CHECK: ${CHECKS.join(',')},crest,height,harpoon (got ${JSON.stringify(process.env.BP_CHECK)})`); process.exit(2); }
   if (MODE !== 'disguise') { console.error(`BP_CHECK is disguise's (mode ${MODE} judges all its bars)`); process.exit(2); }
@@ -190,7 +191,23 @@ const DISGUISE = `(async () => {
     const pole = [];
     for (const z of [-0.1, -0.3, -0.55, -0.8, -0.95]) { v.set(0, 0, z).applyMatrix4(H.worldM); pole.push({ z, d: +(v.y - sand(v.x, v.z)).toFixed(3), at: [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)] }); }
     const sm = H.seamWorld();
-    out.harpoon = { seatOk: !!H.seatOk, seam: +(sm.y - sand(sm.x, sm.z)).toFixed(3), seamAt: [+sm.x.toFixed(2), +sm.y.toFixed(2), +sm.z.toFixed(2)], pole, poleMin: Math.min(...pole.map(q => q.d)) };
+    // THE IRON IN HER (Task 4 ruling: an independent check, never the build's own seatOk alone): harpoon-probe's 'lodged' test, its logic
+    // and its points: each head / shank point (model coords through H.worldM, the lodged pose) cast against her DRAWN shell (DoubleSide for
+    // the test) along +-Y and +-the seam normal; INSIDE = every first hit is an exit face, depth = the nearest. Head >= 0.1 u, shank >= 0
+    const shl = L.parts.shell, side0 = shl.material.side; shl.material.side = THREE.DoubleSide;
+    const rc = new THREE.Raycaster(), nm = new THREE.Matrix3(), wn = new THREE.Vector3(), nn = H.normal.clone();
+    const dirs = [new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0), nn.clone(), nn.clone().negate()];
+    const inside = p => { let dmin = 1e9;
+      for (const d of dirs) { rc.set(p, d); rc.far = 40; const h = rc.intersectObject(shl, false)[0]; if (!h) return -1;
+        nm.getNormalMatrix(shl.matrixWorld); wn.copy(h.face.normal).applyMatrix3(nm).normalize(); if (wn.dot(d) <= 0) return -1; dmin = Math.min(dmin, h.distance); }
+      return dmin; };
+    const HEAD = { tip: [0, 0, 0.62], mid: [0, 0, 0.52], barbL: [0.06, 0, 0.45], barbR: [-0.06, 0, 0.45], pin: [0, 0, 0.448], shank: [0, 0, 0.25] }, iron = {};
+    let ironOk = true;
+    for (const k in HEAD) { const p = new THREE.Vector3(...HEAD[k]).applyMatrix4(H.worldM), d = +inside(p).toFixed(3), need = k === 'shank' ? 0 : 0.1;
+      iron[k] = d; if (!(d >= need)) ironOk = false; }
+    shl.material.side = side0;
+    out.harpoon = { seatOk: !!H.seatOk, seam: +(sm.y - sand(sm.x, sm.z)).toFixed(3), seamAt: [+sm.x.toFixed(2), +sm.y.toFixed(2), +sm.z.toFixed(2)], pole, poleMin: Math.min(...pole.map(q => q.d)),
+      iron, ironIn: ironOk };
   } else out.harpoon = null;
   // (Task 6) the clutch: added there
   return out; })()`;
@@ -384,6 +401,8 @@ checks.push({ name: 'len', val: out.crest.len, n: out.crest.n, bar: '16 - 24 u',
 { const h = out.harpoon;
   checks.push({ name: 'seam', val: h ? h.seam : null, at: h ? h.seamAt : null, n: h ? 1 : 0, bar: '>= +0.25 u over the drawn sand', ok: !!h && h.seam >= 0.25, vacuous: !h, judged: !!h, info: h ? { seatOk: h.seatOk } : undefined });
   const pw = h ? h.pole.reduce((a, q) => (q.d < a.d ? q : a)) : null;
+  checks.push({ name: 'iron', val: h ? (h.ironIn && h.seatOk ? 'in her' : 'NOT in her') : null, at: h ? h.seamAt : null, n: h ? 6 : 0, bar: 'head (tip, mid, barbs, pin) >= 0.1 u and shank >= 0 inside her drawn shell (lodged test, exact hits) AND seatOk',
+    ok: !!h && h.ironIn && h.seatOk, vacuous: !h, judged: !!h, info: h ? { depths: h.iron, seatOk: h.seatOk } : undefined });
   checks.push({ name: 'pole', val: h ? h.poleMin : null, at: pw ? pw.at : null, n: h ? h.pole.length : 0, bar: '>= 0 u over the drawn sand (min of 5 samples)', ok: !!h && h.poleMin >= 0, vacuous: !h, judged: !!h }); }
 // (Task 6) clutch: pushed here when the page side reports it
 for (const k of checks) if (ONLY) k.judged = ONLY.includes(k.name);
