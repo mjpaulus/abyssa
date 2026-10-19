@@ -405,7 +405,7 @@ function coverShell(L, MD) {
 // smoothing, every ring vertex whose requirement stands over the pile's sample there goes into the pile as a source at its own
 // (x, z), the pile is spread again, and the rings (at the same radii: the quads coverShell read are unchanged) take its heights
 // where higher: the clamped corner's neighbours now fall from it at the repose, and the requirement holds at every corner (the
-// deposit's bilinear read is >= it). Measured (with SHO, before the ring 1 contour and the settle): over 33.81 deg 162 -> 60, worst
+// deposit's bilinear read is >= it). Measured (with SHO, the repile alone, before the settle): over 33.81 deg 162 -> 60, worst
 // 84.2 -> 63.1 deg, none of the remaining faces clamped
 function repile(L, MD) {
   const NI = BURY.rings, M = MD.M;
@@ -425,7 +425,7 @@ function repile(L, MD) {
 // last ring (where it meets the floor) and the buried rings are fixed. A raise travels downhill, shrinking by (k_settle - the pile's
 // slope) per unit run, so the slack is load-bearing: on the sliver quads of the first cut, at the repose itself a raise ran out to
 // the dune's edge and stood it 2 u over the floor, at + 3 deg 1 u. With the shorter diagonals it works at the strip's ends only (at
-// home: 7 sweeps, MD.settleRaised vertices raised over 5 cm, the largest at its 0.5 u cap; worst face 33.01 deg; at repose 0.45: worst
+// home: 7 sweeps, 19 vertices raised over 5 cm (MD.settleRaised), the largest at its 0.5 u cap; worst face 33.01 deg; at repose 0.45: worst
 // 32.12 deg, under the probe's bar, measured)
 // (SETTLE_CAP u: no vertex rises more than this over its height before the settle, so a raise that will not die out is booked as a
 // steep face the probe sees, never a shelf at the dune's edge)
