@@ -412,7 +412,7 @@ export function makeHarpoon(L, opts = {}) {
         if (buried(_v, _n) < 0) { out.buryFail[buriedFail]++; if (up === AX_UPS[0]) out.buryDep.push(+buriedDep.toFixed(2)); continue; }
         isB = true;
         const sc = trySeam(_v, _n, true);
-        if (sc < Infinity) { isR = true; out.pass++; if (sc + pre < best) { best = sc + pre; bi = i; bUp = up; } }
+        if (sc < Infinity) { isR = true; out.pass++; (out.seams || (out.seams = [])).push({ i, up, score: +(sc + pre).toFixed(3), side: +((_v.x - L.pos.x) * sand.x + (_v.z - L.pos.z) * sand.z).toFixed(2), world: [+_v.x.toFixed(2), +_v.y.toFixed(2), +_v.z.toFixed(2)] }); if (sc + pre < best) { best = sc + pre; bi = i; bUp = up; } }
       }
       if (isB) out.buried++; if (isR) out.reach++;
     }
