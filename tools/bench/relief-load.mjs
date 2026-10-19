@@ -270,9 +270,12 @@ if (MODE === 'oldsave') {
   let blocked = false; L.publishCols && L.publishCols();
   for (const h of [0.45, 1.0, 1.6]) if (BC.bodyBlocked(a.x, fl + h, a.z, 0.45)) blocked = true;
   const sand = L.sand, side = hp ? (hp.x - L.pos.x) * sand.x + (hp.z - L.pos.z) * sand.z : null;
+  // (velkath-buried-rock Task 4 ruling) buried, the near-flank bar is re-derived: he reaches the iron from the open sand (the stand spot on
+  // her sand side) and the seam faces the sand (seat()'s own facing test, n . sand >= 0.35)
+  const anchorSide = (a.x - L.pos.x) * sand.x + (a.z - L.pos.z) * sand.z, ns = H.normal ? H.normal.x * sand.x + H.normal.z * sand.z : null;
   return { prompt: L.rite ? L.rite.prompt(P.pos) : null, dSal: +Math.hypot(P.pos.x - a.x, P.pos.z - a.z).toFixed(2),
     anchorFd: +S.fissureDist(a.x, a.z, 0).toFixed(1), seamFd: hp ? +S.fissureDist(hp.x, hp.z, 0).toFixed(1) : null,
-    seamUp: hp ? +(hp.y - T.terrainH(hp.x, hp.z, 0)).toFixed(2) : null, seamUpSal: hp ? +(hp.y - fl).toFixed(2) : null, sandSide: side == null ? null : +side.toFixed(1),
+    seamUp: hp ? +(hp.y - T.terrainH(hp.x, hp.z, 0)).toFixed(2) : null, seamUpSal: hp ? +(hp.y - fl).toFixed(2) : null, sandSide: side == null ? null : +side.toFixed(1), buried: !!L.buried, anchorSide: +anchorSide.toFixed(2), ns: ns == null ? null : +ns.toFixed(3),
     gripUp: H.gripWorld ? +(H.gripWorld(new (a.constructor)()).y - fl).toFixed(2) : null, seatOk: !!H.seatOk,
     blocked, wound: !!H.wound, pulled: !!H.pulled, dormant: !!L.dormant, site: window.__chart.site ? window.__chart.site() : null };
 })()`;
@@ -297,7 +300,8 @@ if (MODE === 'oldsave') {
   // harpoon-probe.mjs routes' checks at this site, its bounds verbatim (its prompt check is the wound's, above)
   check('routes: Sal stands >= 6 u off the crack', !(r.anchorFd < 6), r.anchorFd);
   check('routes: the harpoon sits >= 6 u off the crack', !(r.seamFd < 6), r.seamFd);
-  check('routes: on her near (sand) flank', r.sandSide > 0, r.sandSide);
+  // (Task 4 ruling) buried: the stand spot on her sand side and the seam facing the sand; not buried: the shipped bar, unchanged
+  check('routes: on her near (sand) flank', r.buried ? (r.anchorSide > 0 && r.ns >= 0.35) : r.sandSide > 0, r.buried ? { anchorSide: r.anchorSide, ns: r.ns } : r.sandSide);
   check('routes: the seam 0.5-2.8 u over his boots', r.seamUpSal > 0.5 && r.seamUpSal < 2.8, r.seamUpSal);
   check("routes: the grip 0.85-1.95 u over his boots (his hands)", r.gripUp > 0.85 && r.gripUp < 1.95, r.gripUp);
   check('routes: a seam on her flank qualified (no fallback seat)', r.seatOk, r.seatOk);
