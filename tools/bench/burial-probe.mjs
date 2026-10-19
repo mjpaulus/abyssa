@@ -36,9 +36,38 @@
 //             BURY.breath.up, inside the leg; none booked = UNMEASURED); trickles 0 at 12 u (>= 1 breath booked there).
 //             VERDICT ORDER (breath): a bar that FAILED on a real measurement is FAIL (exit 1) even if another is UNMEASURED; with
 //             no failure, any UNMEASURED bar is exit 2; nothing vacuous ever passes. A RED judges only its own bars.
+//   programs  NO COMPILE IN PLAY (Task 5 on; the gate table's "No compile in play"). A program compiles only on a RENDERED draw
+//             (__bench.step runs update() alone unless o.render: bench.js step), so every frame here is rendered
+//             (__bench.step(n, fn, { render: true })), with her in the frame: he is stood 14 u off the strip's edge on her SAND side,
+//             facing it (breath's PLACE), the follow lens behind him, so the slabs, the plume, the dune, the claw's reach and the haze
+//             stay in view through every phase. Booked at each checkpoint: renderer.info.programs.length, the programs whose
+//             cacheKey holds '|crust' (the crust's ONE program: Task 5), and __shaderFailed(). In order:
+//               boot     right after the arrival, before anything near her is drawn (what the boot tail built)
+//               first    120 rendered frames at the framing spot (first sight: on the Task 4 head three shadow-depth programs, two
+//                        MeshDepth + one MeshDistance, compile here, a pre-existing count; booked by name, not judged)
+//               control  THE POSITIVE CONTROL: a visible MeshBasicMaterial box with a new customProgramCacheKey 3 u in front of the
+//                        lens for ONE rendered frame: the count must rise >= 1 and hold a program with that key (a draw through the
+//                        composer's passes may add more than one), else exit 2 (the probe cannot see a compile); then the box is
+//                        removed and its material disposed (its programs released) and the count must be back where it was, else
+//                        exit 2, so (a) does not carry it. (Run after first sight, so first sight's own compiles cannot pass it.)
+//               (a)      home dormant, 120 rendered frames more: THE BASELINE
+//               (b)      the whole rise, rendered: she is woken with lev.cmd('wake') (the pull's onWake, wakeBrooder; a pull from
+//                        the framing spot would abort: harpoon.js H.update, he is more than REACH + 1 from the anchor), stepped to
+//                        L.hasStood (Task 7a on; before it, 9 s after the wake)
+//               (c)      after __lev.cmd('calm'), the point and the walk home (Task 10 adds it: until then SKIPPED and booked so)
+//               (d)      the dig-in (Task 12: until then SKIPPED and booked so)
+//               sites    Pallid Bank, the Burned Ground, the Unsounded Shelf (__chart.arrive(i)), her asleep there, 120 rendered
+//                        frames each from the same framing: her shell's program is home's (the same cacheKey), and with the crust
+//                        (Task 5) L.crustU.uBury.value is 0 on EVERY frame
+//             Bars: rise: every frame of (b), (c), (d) equal to (a) (max and last); shader: __shaderFailed() [] at every checkpoint;
+//             siteKey: her shell's program at every site is home's. With the crust (__burial.crust present): crustOne: exactly ONE
+//             '|crust' program at every checkpoint, boot included (built in the boot tail, never at first sight); siteBury: uBury 0
+//             on every frame off home. Booked per frame (the series) into the JSON.
+//             hitch.mjs's scenarios (jet, z1, z2, voyage) do not include the rise, the point or the dig-in: this mode is the gate for those.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height; steep (repose 2.0: the dune fitted to fall at 63 deg; the bar is fixed, so it must fail) ->
-// repose; still (breath: __burial.set({breath:{lift:0}})) -> amplitude. A page-side throw is
+// repose; still (breath: __burial.set({breath:{lift:0}})) -> amplitude; lazy (programs: after (a) her shell material's key gains
+// '|lazyRED' and needsUpdate, a variant compiled in play, as a crust installed at first sight would be) -> rise. A page-side throw is
 // UNMEASURED (exit 2), never a fail (1) or a RED's pass (5).
 // __burial.set rebuilds her through __lev.remember(null), outside game.js keepingPrograms: her programs are released and
 // rebuilt, so a `programs` reading taken after a set is not a play reading (that mode never sets knobs).
@@ -48,7 +77,7 @@
 // ENV (besides DRV_PORT, a port of this probe's own: never 8777 / 8790 / 9419; the probe exits 2 before importing drv.mjs):
 //   BP_KNOBS=<json>   patched through `__burial.set` before the mode (absent on main: exit 2, a patch has nothing to act on)
 //   BP_RED=<variant>  an opt-in RED, never part of the default run: it must fail ITS bar (exit 5; 3 = it did not). disguise:
-//                     ridge | shallow | steep; breath: still. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
+//                     ridge | shallow | steep; breath: still; programs: lazy. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
 //                     `ridge` on main: main already is the shipped ridge, the unpatched reading is that RED (exit 5 there).
 //   BP_AT=<where>     where he stands for the modes that place him: anchor (Alt+6's harpoon anchor) | crest (on her) | off
 //                     (clear of her ground). `disguise` is geometry only and does not place him (the value is still checked).
@@ -60,7 +89,7 @@
 // (an empty DRV_PORT is +'' = 0, an integer: the port must be all digits and inside 1024-65535, as drv.mjs's start() demands)
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error(`burial-probe: set DRV_PORT to a port of its own, an integer in 1024-65535 (not 8777 / 8790 / 9419; got ${JSON.stringify(process.env.DRV_PORT)})`); process.exit(2); }
-const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BUILT = ['disguise', 'breath'];
+const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BUILT = ['disguise', 'breath', 'programs'];
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/burial-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 if (!BUILT.includes(MODE)) { console.error(`burial-probe: mode ${MODE} is not built yet (a later task of the velkath-buried-rock plan adds it)`); process.exit(2); }
@@ -70,7 +99,8 @@ if (!BUILT.includes(MODE)) { console.error(`burial-probe: mode ${MODE} is not bu
 // n 0 (no shell vertex over the sand in the strip) is FAIL, not UNMEASURED: also ruled there)
 const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], mainIsIt: true }, shallow: { set: { crest: 5.5 }, bars: ['top'] },
     steep: { set: { repose: 2.0 }, bars: ['repose'] } },
-  breath: { still: { set: { breath: { lift: 0 } }, bars: ['amp'] } } };
+  breath: { still: { set: { breath: { lift: 0 } }, bars: ['amp'] } },
+  programs: { lazy: { set: {}, bars: ['rise'], page: true } } };
 const RED = process.env.BP_RED || '';
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 const AT = process.env.BP_AT || '';
@@ -248,6 +278,36 @@ const BREATH_BOOK = (n, leg) => `(async () => {
   });
   return S.length; })()`;
 
+// the page side of `programs` (header). PROG_INSTALL puts window.__bpProg: read(tag) books a checkpoint (count, the '|crust' programs,
+// __shaderFailed(), the programs new since the last read by name); frames(n, tag) steps n RENDERED frames booking the count (and, off
+// home, the crust's uBury) on every frame; control() / uncontrol() the positive control; shellKey() her shell's program's cacheKey
+const PROG_INSTALL = `(async () => {
+  const THREE = await import('three'), { renderer, scene, camera } = await import('/src/core.js');
+  const P = () => renderer.info.programs;
+  let seen = new Set(P().map(p => p.cacheKey));
+  const failed = () => window.__shaderFailed ? window.__shaderFailed().length : -1;
+  const crustN = () => P().filter(p => p.cacheKey.indexOf('|crust') >= 0).length;
+  const S = window.__bpProg = { series: [], marks: [],
+    read(tag) { const now = P(), nw = now.filter(p => !seen.has(p.cacheKey)).map(p => (p.name || p.cacheKey.split(',')[0].slice(0, 40)) + ' ~' + p.cacheKey.slice(-60).replace(/,/g, ' '));
+      seen = new Set(now.map(p => p.cacheKey));
+      const m = { tag, n: now.length, crust: crustN(), failed: failed(), newNames: nw, frames: S.series.length }; S.marks.push(m); return m; },
+    frames(n, tag) { const L = window.lev; let mx = -1, bmx = -1;
+      window.__bench.step(n, () => { const c = P().length; if (c > mx) mx = c; const b = L && L.crustU ? L.crustU.uBury.value : null; if (b != null && b > bmx) bmx = b;
+        S.series.push([tag, c, b == null ? null : +b.toFixed(4), L && L.dormant ? 1 : 0]); }, { render: true });
+      return { max: mx, buryMax: bmx < 0 ? null : bmx }; },
+    shellKey() { const L = window.lev, pr = L && L.parts && L.parts.shell ? renderer.properties.get(L.parts.shell.material).currentProgram : null; return pr ? pr.cacheKey : null; },
+    control() { const key = 'bp-control-' + Date.now(), f = new THREE.Vector3(); camera.getWorldDirection(f);
+      const m = new THREE.MeshBasicMaterial({ color: 0xff00ff }); m.customProgramCacheKey = () => key;
+      const box = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.6), m); box.frustumCulled = false;
+      box.position.copy(camera.position).addScaledVector(f, 3); scene.add(box); S.ctl = { box, key };
+      const n0 = P().length; window.__bench.step(1, null, { render: true });
+      return { n0, n1: P().length, hasKey: P().some(p => p.cacheKey.indexOf(key) >= 0), at: box.position.toArray().map(v => +v.toFixed(2)) }; },
+    uncontrol() { const { box, key } = S.ctl; scene.remove(box); box.geometry.dispose(); box.material.dispose(); S.ctl = null;
+      seen = new Set(P().map(p => p.cacheKey)); return { n: P().length, hasKey: P().some(p => p.cacheKey.indexOf(key) >= 0) }; },
+    lazyRed() { const L = window.lev, m = L.parts.shell.material, k = m.customProgramCacheKey; m.customProgramCacheKey = () => k.call(m) + '|lazyRED'; m.needsUpdate = true; return 1; }
+  };
+  return { n: P().length, crust: crustN(), hasCrust: !!(window.__burial && window.__burial.crust) }; })()`;
+
 // ---- boot: about:blank, the domains on, the focus a player's window has, then the game ----
 try { const r = await fetch(`http://127.0.0.1:${P}/json/version`, { signal: AbortSignal.timeout(2000) });
   console.error(`the debug port ${P} already answers /json/version (HTTP ${r.status}): not starting, nothing touched`); process.exit(2); }
@@ -293,7 +353,7 @@ try {
   console.log(`build: ${record.build}`);
   // the patches: __burial.set is absent on main, where there is nothing to patch (the unpatched reading IS the main RED)
   // (`ridge` is the shipped ridge, so on main its patch is the build itself and is skipped; every other patch needs __burial.set)
-  const redSet = RED && !(!hasBurial && REDS[MODE][RED].mainIsIt) ? REDS[MODE][RED].set : {};
+  const redSet = RED && !(!hasBurial && REDS[MODE][RED].mainIsIt) && !REDS[MODE][RED].page ? REDS[MODE][RED].set : {};
   const patch = Object.assign({}, KNOBS || {}, redSet);
   if (!hasBurial && RED && REDS[MODE][RED].mainIsIt) console.log(`BP_RED ${RED}: no __burial on this build, which already IS the shipped ridge: the unpatched reading is the RED`);
   if (Object.keys(patch).length) {
@@ -319,6 +379,39 @@ try {
       up: await c.ev(`(window.__burial && window.__burial.knobs.breath ? window.__burial.knobs.breath.up : null)`),
       knobs: await c.ev(`(window.__burial && window.__burial.knobs.breath ? JSON.parse(JSON.stringify(window.__burial.knobs.breath)) : null)`) };
   }
+  if (MODE === 'programs') {
+    const inst = await c.ev(PROG_INSTALL);
+    const ph = { install: inst };
+    ph.boot = await c.ev(`window.__bpProg.read('boot')`);
+    const place = async () => { const pl = await c.ev(BREATH_PLACE(14)); if (!pl || pl.err) throw new Error('place: ' + (pl && pl.err)); return pl; };
+    ph.place = await place();
+    console.log(`framing: ${JSON.stringify(ph.place)}`);
+    ph.firstF = await c.ev(`window.__bpProg.frames(120, 'first')`); ph.first = await c.ev(`window.__bpProg.read('first')`);
+    ph.control = await c.ev(`window.__bpProg.control()`);
+    ph.controlGone = await c.ev(`window.__bpProg.uncontrol()`);
+    console.log(`control: ${JSON.stringify(ph.control)} -> removed ${JSON.stringify(ph.controlGone)}`);
+    ph.aF = await c.ev(`window.__bpProg.frames(120, 'a')`); ph.a = await c.ev(`window.__bpProg.read('a')`);
+    ph.homeKey = await c.ev(`window.__bpProg.shellKey()`);
+    if (RED === 'lazy') ph.lazy = await c.ev(`window.__bpProg.lazyRed()`);
+    // (b) the rise: woken as the pull's onWake wakes her; to L.hasStood (Task 7a), else 9 s
+    ph.wake = await c.ev(`(window.__lev.cmd('wake'), { dormant: !!window.lev.dormant, hasStoodKnown: 'hasStood' in window.lev })`);
+    let bF = { max: -1 }, nb = 0;
+    for (let k = 0; k < (ph.wake.hasStoodKnown ? 60 : 9); k++) {
+      const f = await c.ev(`window.__bpProg.frames(60, 'b')`); nb += 60; if (f.max > bF.max) bF = f;
+      if (ph.wake.hasStoodKnown && await c.ev(`!!window.lev.hasStood`)) break; }
+    ph.bF = Object.assign(bF, { frames: nb }); ph.b = await c.ev(`window.__bpProg.read('b')`);
+    ph.c = { skipped: 'Task 10 adds __lev.cmd(\'calm\')' }; ph.d = { skipped: 'Task 12 adds the dig-in' };
+    // the other sites: her shell's program is home's; the crust's uBury 0 on every frame
+    ph.sites = [];
+    for (const si of [1, 2, 3]) {
+      await c.ev(`(window.__chart.arrive(${si}), window.gotoZone(0), window.__bench.step(30), 1)`);
+      const pl = await place();
+      const f = await c.ev(`window.__bpProg.frames(120, 's${si}')`), r = await c.ev(`window.__bpProg.read('s${si}')`);
+      const st = await c.ev(`({ site: window.__chart.site(), buried: !!window.lev.buried, crustU: !!window.lev.crustU, key: window.__bpProg.shellKey() })`);
+      ph.sites.push({ si, place: pl.him, frames: f, read: r, ...st });
+    }
+    out = { ...ph, marks: await c.ev(`window.__bpProg.marks`), series: await c.ev(`window.__bpProg.series`) };
+  }
 } catch (e) { fatal = String(e && e.message || e); }
 const clock = await drift(c).catch(() => null);
 record.clock = clock;
@@ -333,9 +426,42 @@ if (!out) { console.error('UNMEASURED: the page returned no reading (no out, no 
 if (unmeasured(clock)) { console.error('UNMEASURED: no clock reading ' + JSON.stringify(clock)); finish(2, 'no clock reading'); }
 record[MODE] = out;
 if (lost(clock)) {
-  console.log(`${MODE.toUpperCase()} ${JSON.stringify(MODE === 'breath' ? { legs: out.legs, frames: out.series.length } : out)}`);
+  console.log(`${MODE.toUpperCase()} ${JSON.stringify(MODE === 'breath' ? { legs: out.legs, frames: out.series.length } : MODE === 'programs' ? { marks: out.marks } : out)}`);
   console.log(`CLOCK LOST: drift ${clock.drift} s over ${clock.stepped} s stepped (the bar is ${CLOCK_LOST} s), clock ${clock.running ? 'RUNNING' : 'stopped'}: ${JSON.stringify(clock)}`);
   finish(4, 'clock lost');
+}
+
+// programs: the bars (header). Control failures are UNMEASURED (the probe cannot see a compile)
+if (MODE === 'programs') {
+  const o = out, hasCrust = !!o.install.hasCrust, A = o.a.n, marks = o.marks;
+  const ctlOk = o.control.n1 >= o.control.n0 + 1 && o.control.hasKey, goneOk = o.controlGone.n === o.control.n0 && !o.controlGone.hasKey;
+  record.programs = { boot: o.boot.n, first: o.first.n, firstNew: o.first.newNames, control: o.control, controlGone: o.controlGone, a: A, b: o.b.n, bMax: o.bF.max, bFrames: o.bF.frames,
+    bNew: o.b.newNames, c: o.c, d: o.d, homeKeyCrust: o.homeKey ? o.homeKey.indexOf('|crust') >= 0 : null, sites: o.sites.map(q => ({ si: q.si, n: q.read.n, max: q.frames.max, buryMax: q.frames.buryMax, crust: q.read.crust, sameKey: q.key === o.homeKey, buried: q.buried, newNames: q.read.newNames })) };
+  console.log(`PROGRAMS ${JSON.stringify(record.programs)}`);
+  if (!ctlOk) { console.error(`UNMEASURED: the positive control did not move the count (${o.control.n0} -> ${o.control.n1}, key ${o.control.hasKey}): the probe cannot see a compile`); finish(2, 'control'); }
+  if (!goneOk) { console.error(`UNMEASURED: the control's program was not released (${o.controlGone.n} vs ${o.control.n0}, key ${o.controlGone.hasKey}): (a) would carry it`); finish(2, 'control not released'); }
+  const ck = [
+    { name: 'rise', val: { a: A, bMax: o.bF.max, b: o.b.n, frames: o.bF.frames }, bar: '(b) every rendered frame == (a) (max and last)', ok: o.bF.max === A && o.b.n === A, vacuous: !(o.bF.frames > 0), judged: true },
+    { name: 'calm', val: o.c.skipped, bar: '(c) == (a)', ok: false, vacuous: true, judged: false },
+    { name: 'digin', val: o.d.skipped, bar: '(d) == (a)', ok: false, vacuous: true, judged: false },
+    { name: 'shader', val: marks.map(m => m.tag + ':' + m.failed), bar: '__shaderFailed() [] at every checkpoint', ok: marks.every(m => m.failed === 0), vacuous: !marks.length, judged: true },
+    { name: 'siteKey', val: o.sites.map(q => q.si + ':' + (q.key === o.homeKey)), bar: 'her shell\'s program at every site is home\'s', ok: !!o.homeKey && o.sites.length === 3 && o.sites.every(q => q.key === o.homeKey), vacuous: !o.homeKey || o.sites.length < 3, judged: true },
+    { name: 'crustOne', val: marks.map(m => m.tag + ':' + m.crust), bar: 'exactly one \'|crust\' program at every checkpoint, boot included', ok: marks.every(m => m.crust === 1) && o.homeKey && o.homeKey.indexOf('|crust') >= 0, vacuous: !marks.length, judged: hasCrust },
+    { name: 'siteBury', val: o.sites.map(q => q.si + ':' + q.frames.buryMax), bar: 'uBury 0 on every frame off home', ok: o.sites.length === 3 && o.sites.every(q => q.frames.buryMax === 0 && !q.buried), vacuous: o.sites.length < 3, judged: hasCrust }];
+  if (RED) for (const k of ck) k.judged = REDS.programs[RED].bars.includes(k.name);
+  record.checks = ck;
+  for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(8)} ${JSON.stringify(k.val)} (bar ${k.bar})`);
+  console.log(`  info first sight +${o.first.n - o.boot.n}: ${JSON.stringify(o.first.newNames)}; (b) new: ${JSON.stringify(o.b.newNames)}`);
+  if (cons.length) console.error('console errors (booked, not part of the bar): ' + JSON.stringify(cons));
+  const J = ck.filter(k => k.judged), failed = J.filter(k => !k.vacuous && !k.ok), vac = J.filter(k => k.vacuous);
+  if (RED) {
+    if (vac.length) { console.error(`UNMEASURED: BP_RED ${RED}: nothing booked for ${vac.map(k => k.name).join(', ')}`); finish(2, 'RED bars vacuous'); }
+    if (failed.length === J.length) { console.log(`RED ${RED}: ${J.map(k => k.name).join(', ')} failed as it must: exit 5`); finish(5); }
+    console.error(`RED ${RED} did not fail as written: exit 3`); finish(3, 'RED did not fail');
+  }
+  if (failed.length) { console.error('FAIL ' + failed.map(k => `${k.name} ${JSON.stringify(k.val)} (bar ${k.bar})`).join('; ')); finish(1, 'failed: ' + failed.map(k => k.name).join(',')); }
+  if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous'); }
+  console.log('PASS ((c), (d) skipped: their tasks add them)'); finish(0);
 }
 
 // breath: the bars (header). A RED judges only its own bars; otherwise a real FAIL beats an UNMEASURED, and nothing vacuous passes
