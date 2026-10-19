@@ -15,7 +15,8 @@
 //                    wake a beat later (H.onWake), the glint and the first-sight line
 //   H.seat()         lays it in her drawn shell (her dormant pose; again when her sculpt lands)
 //   H.pulled, H.wound, H.wrenching, H.anchor (where Sal stands, world, at his EYE height convention:
-//                    x/z on the ground spot; y = the ground), H.seamWorld() (the entry point), H.dispose()
+//                    x/z on the ground spot; y = the ground he stands on: terrainH, or buried the DRAWN ground there (the dune, or her
+//                    crest's footing: groundY below)), H.seamWorld() (the entry point), H.dispose()
 //
 // THE REWARD: survival.hasHarpoon on the first pull EVER, at any site (saved as tools.harpoon by game.js
 // on ev.pulled). A remote anchorage's harpoon is another diver's: the trigger, and the blade only if
@@ -246,6 +247,7 @@ export function makeHarpoon(L, opts = {}) {
   // closed and wound outward: an exit face); its depth is the nearer of the two. (Vertical rays only need
   // the triangles over the point's own cell: the whole test is a few dozen triangles.)
   const GC = 0.5;
+  const ROPE_STEP = 0.02, ROPE_LIE = 0.01, ROPE_CREST = 0.05;   // (buried: the rope's control spacing along its lying length, and how far each sits over the drawn ground)
   let TRI = new Float32Array(0), nTri = 0, CELL0 = new Int32Array(0), CELLT = new Int32Array(0), gx0 = 0, gz0 = 0, gnx = 0, gnz = 0;
   let keelR = 0.6;                    // (the crest gather's keel radius; _crestScan's opts.keelR may widen it for a diagnosis, then puts it back)
   const gatherTris = (sh, mw, sa, crest = false) => {
@@ -391,6 +393,7 @@ export function makeHarpoon(L, opts = {}) {
       surv.push([i, 0.25 * Math.abs(dth) + 0.6 * (1 - ns) + 0.3 * Math.abs(_w.y - gh - 1.6)]);
     }
     const ax0 = axUp, dbg0 = H.dbg;
+    try {   // (a throw mid-scan must not leave keelR at 9 / axUp / H.dbg for the next seat(): the finally puts them back)
     H.dbg = { tried: 0, shaft: 0, high: 0, body: 0, sand: 0 };
     // the shipped margin gather first (buriedMargin), then the crest gather (under, buried, reach)
     gatherTris(sh, mw, sa, false);
@@ -439,7 +442,7 @@ export function makeHarpoon(L, opts = {}) {
         normal: [+_n.x.toFixed(3), +_n.y.toFixed(3), +_n.z.toFixed(3)], overSand: +(_v.y - sandY(MD, _v.x, _v.z, idx)).toFixed(2),
         topSlopeDeg: +(Math.atan(Math.hypot(tx, tz)) * 180 / Math.PI).toFixed(1), stand: [+_p.x.toFixed(2), +_p.y.toFixed(2), +_p.z.toFixed(2)] };
     }
-    axUp = ax0; H.dbg = dbg0;
+    } finally { keelR = 0.6; axUp = ax0; H.dbg = dbg0; }
     return out;
   };
   H._depthIn = (x, y, z) => depthIn(x, y, z);   // (dev probe; after a seat)
@@ -615,14 +618,36 @@ export function makeHarpoon(L, opts = {}) {
     {
       // (velkath-buried-rock) buried, it lies on what is DRAWN there: the dune (else the floor), or her rock in the strip (burial.js crestY,
       // her drawn top). On terrainH it dove into the dune; on sandY alone (the floor under the strip) it ran 1 u through her crest
-      const gnd = L.buried ? (x, z) => Math.max(sandY(L.mound, x, z, idx), crestY(L.mound, x, z)) : (x, z) => terrainH(x, z, idx);
+      const gnd = L.buried ? (x, z) => Math.max(sandY(L.mound, x, z, idx), crestY(L.mound, x, z) - ROPE_CREST) : (x, z) => terrainH(x, z, idx);
       _v.set(0.052, -0.215, -0.318).applyMatrix4(H.worldM);
       const gx = _v.x + sand.x * 0.7 + _fw.x * 0.25, gz = _v.z + sand.z * 0.7 + _fw.z * 0.25, gy = gnd(gx, gz);
       const ex = _v.x + sand.x * 2.6 - _fw.x * 0.4, ez = _v.z + sand.z * 2.6 - _fw.z * 0.4, ey = gnd(ex, ez) - 0.03;
-      const c = new THREE.CatmullRomCurve3([_v.clone(), V3((_v.x + gx) / 2, Math.max(gy + 0.15, (_v.y + gy) / 2 - 0.12), (_v.z + gz) / 2), V3(gx, gy + 0.02, gz),
-        V3((gx + ex) / 2, gnd((gx + ex) / 2, (gz + ez) / 2) + 0.0, (gz + ez) / 2), V3(ex, ey, ez)]);
-      rope.geometry.dispose();
-      rope.geometry = new THREE.TubeGeometry(c, 40, 0.0105 * LODGED_S, 6, false);
+      const c0 = V3((_v.x + gx) / 2, Math.max(gy + 0.15, (_v.y + gy) / 2 - 0.12), (_v.z + gz) / 2);
+      let c;
+      if (!L.buried) {
+        c = new THREE.CatmullRomCurve3([_v.clone(), c0, V3(gx, gy + 0.02, gz),
+          V3((gx + ex) / 2, gnd((gx + ex) / 2, (gz + ez) / 2) + 0.0, (gz + ez) / 2), V3(ex, ey, ez)]);
+        rope.geometry.dispose();
+        rope.geometry = new THREE.TubeGeometry(c, 40, 0.0105 * LODGED_S, 6, false);
+      } else {
+        // (velkath-buried-rock, Task 4 fix r1 I1) the lying length is followed on the drawn ground every ROPE_STEP u. The shipped 3 control points
+        // sampled gnd only at gx, the midpoint and ex, and the spline passed 0.181 u UNDER the dune where the strip ends (inStrip flips, and the
+        // surface steps from her crest up the dune's lip: -0.181 u at t 0.42-0.68, 98 of 401 samples more than two radii under). In the strip the
+        // baked top (crestY) stands 0.05-0.08 u over her drawn triangles, so there the rope is bedded ROPE_CREST under it (without it +0.09 u).
+        // MEASURED (tube centreline, 401 samples vs the drawn ground: shell + dune meshes by ray, else terrainH; radius 0.0137): home, from the
+        // gx control (t 0.323) to the end, -0.030 .. +0.048 u (the -0.030 is the end's deliberate half-bury, ey; max +0.048 where the line comes
+        // down off the stub; the last half of the rope -0.030 .. +0.011), 0 samples inside her shell, 1 of 401 more than two radii under (that
+        // end). Was -0.181 .. +0.076. Bar: no lower than the remote worst (Pallid -0.044) and no higher than +0.05. The tube gets 2 segments a
+        // control point. Remote ropes keep the shipped 5 points, bit-identical (position-buffer hash Pallid 850c13b5, Burned 65fba35b, Shelf
+        // 37d0bf08; Burned's own sag still dips and crosses her shell, untouched).
+        const pts = [_v.clone(), c0, V3(gx, gy + 0.02, gz)];
+        const nn = Math.max(2, Math.ceil(Math.hypot(ex - gx, ez - gz) / ROPE_STEP));
+        for (let k = 1; k < nn; k++) { const x = gx + (ex - gx) * k / nn, z = gz + (ez - gz) * k / nn; pts.push(V3(x, gnd(x, z) + ROPE_LIE, z)); }
+        pts.push(V3(ex, ey, ez));
+        c = new THREE.CatmullRomCurve3(pts);
+        rope.geometry.dispose();
+        rope.geometry = new THREE.TubeGeometry(c, pts.length * 2, 0.0105 * LODGED_S, 6, false);
+      }
     }
     rope.visible = !H.pulled;
     iron.visible = !H.pulled;
