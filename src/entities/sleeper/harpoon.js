@@ -46,7 +46,7 @@ import { survival } from '../../systems/survival.js';
 import { diverImpulse } from '../diver.js';
 import { bodyBlocked, inClutch, blockWhy } from './bodyCols.js';
 import { rimR as G_rimR } from './brooderGeo.js';
-import { sandY, shellTopW } from './burial.js';
+import { sandY, crestY, shellTopW } from './burial.js';
 const G = { rimR: G_rimR };
 
 
@@ -613,8 +613,9 @@ export function makeHarpoon(L, opts = {}) {
     // the line: from the stub's frayed end (meta.lineEnd in the model's frame), a sag down to the
     // silt and a length lying on it, half buried, out toward the sand
     {
-      // (velkath-buried-rock) buried, it lies on the drawn SAND (the dune over her, else the floor): on terrainH it dove into the dune
-      const gnd = L.buried ? (x, z) => sandY(L.mound, x, z, idx) : (x, z) => terrainH(x, z, idx);
+      // (velkath-buried-rock) buried, it lies on what is DRAWN there: the dune (else the floor), or her rock in the strip (burial.js crestY,
+      // her drawn top). On terrainH it dove into the dune; on sandY alone (the floor under the strip) it ran 1 u through her crest
+      const gnd = L.buried ? (x, z) => Math.max(sandY(L.mound, x, z, idx), crestY(L.mound, x, z)) : (x, z) => terrainH(x, z, idx);
       _v.set(0.052, -0.215, -0.318).applyMatrix4(H.worldM);
       const gx = _v.x + sand.x * 0.7 + _fw.x * 0.25, gz = _v.z + sand.z * 0.7 + _fw.z * 0.25, gy = gnd(gx, gz);
       const ex = _v.x + sand.x * 2.6 - _fw.x * 0.4, ez = _v.z + sand.z * 2.6 - _fw.z * 0.4, ey = gnd(ex, ez) - 0.03;
