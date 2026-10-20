@@ -789,14 +789,18 @@ export function prepGrowth(L, MD) {
     // a frond stays only if EVERY vertex of it lies in the strip, as a reef triangle does (Task 3a, measured: judged by its root, 22
     // vertices of fronds rooted near the strip's edge leaned out over the dune, the worst 2.0 u over the sand)
     // (Task 5b) and none of her own fronds over the iron: with the strip widened her rim tufts stand round the seam and hid the iron (seen
-    // nearly end-on, ~30 px of pole at 3 u) from 3 and 6 u (stills t5b-dev/g2-h3 .. g5; 1.5 u was not enough: fronds rooted 2-3 u off it
-    // stood in the line of sight); a frond with any vertex within GROW.near u of the seam is buried with the rest (the strip's new fronds
-    // keep GROW.clear off it already)
+    // nearly end-on, ~30 px of pole at 3 u) from 3 and 6 u (stills t5b-dev/g2-h3 .. g5). A frond is buried with the rest if any vertex lies
+    // within GROW.near u of the seam, or in the corridor his eye looks down at it from the sand: out from the seam along its normal's level
+    // part, 0 .. GROW.sight[0] u, within GROW.sight[1] u of that line (a sphere of 3 u buried 24 of her 32 fronds on the strip; 1.5 u alone
+    // left the ones rooted 2-3 u off it in the line of sight). The strip's new fronds keep GROW.clear off it already
     const WP = weed.geometry.attributes.position, Hs = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, nr2 = GROW.near * GROW.near;
+    let snx = 0, snz = 0; if (Hs) { const hn = L.harpoon.normal, l = Math.hypot(hn.x, hn.z) || 1; snx = hn.x / l; snz = hn.z / l; }
+    const overIron = p => { if (!Hs) return false; const dx = p.x - Hs.x, dy = p.y - Hs.y, dz = p.z - Hs.z; if (dx * dx + dy * dy + dz * dz < nr2) return true;
+      const t = dx * snx + dz * snz; if (t < 0 || t > GROW.sight[0]) return false; const qx = dx - snx * t, qz = dz - snz * t; return qx * qx + dy * dy + qz * qz < GROW.sight[1] * GROW.sight[1]; };
     for (let k = 0; k < weed.count; k++) {
       weed.getMatrixAt(k, _gm); _gm.premultiply(weed.matrixWorld);
       let all = true;
-      for (let v = 0; v < WP.count && all; v++) { _gp.fromBufferAttribute(WP, v).applyMatrix4(_gm); all = inStrip(MD, _gp.x, _gp.z) && (!Hs || _gp.distanceToSquared(Hs) > nr2); }
+      for (let v = 0; v < WP.count && all; v++) { _gp.fromBufferAttribute(WP, v).applyMatrix4(_gm); all = inStrip(MD, _gp.x, _gp.z) && !overIron(_gp); }
       L.weedOut[k] = all ? 0 : 1;
     }
   }
@@ -812,7 +816,7 @@ export function prepGrowth(L, MD) {
 //   weed     fronds added (the spare slots), in GROW.tufts clumps at the rock's foot and flanks (her shell 1-3.5 u over the mean ground:
 //            where sand lodges and weed roots), small (k 0.45-0.95: a frond 1.0-2.0 u)
 //   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 3.0 };
+export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 export function growRock(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
