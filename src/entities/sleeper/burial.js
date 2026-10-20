@@ -655,7 +655,9 @@ export function crestY(MD, x, z) {
 // brooder build (installed at every site, uBury 0 off home; her body's lighting variants, four on the Task 4 head too, each carry it:
 // burial-probe programs crustBoot), chained after the silhouette rim, its own key; the branch on uBury is
 // uniform, so off home it costs a compare. (The procedural fallback shell gets none: it buries, it does not look like stone, which
-// is acceptable for a fallback.)
+// is acceptable for a fallback.) Its home cost (9 fetches per shell fragment; Task 5 review minor 2), measured Task 5b on the 6.5 u crest,
+// look 'light': __bench.liveAB at z0b, crust on against uBury held at 0, 6 pairs x 3 s, two runs (headless host, vsync off): d (off - on)
+// median -0.12 / +0.04 ms over frames of 8.0-8.6 ms, inside the harness's +-0.1-0.3 ms noise: no cost the harness can see
 //   alb/nrm/rough  how far her albedo, normal and roughness go to the stone's at full burial; sand: the hollows' fill; crack: the
 //                  crack's darkening
 //   sandC          the hollows' sand, a hex over the zone's silt hue (null = flora's silt, 0x2c3d4a at home: bluer and darker than the
