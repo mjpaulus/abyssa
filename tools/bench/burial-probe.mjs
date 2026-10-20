@@ -9,7 +9,9 @@
 //             crest strip over the drawn sand (bar <= +0.02). THE STRIP, here and for the crest and the growth: the brief's band,
 //             ring 0's edge + 0.6 u, computed from the mound by the probe itself, never the build's inStrip (Task 3a fix round 3); on
 //             main (no mound) the strip's default ellipse, BURY_DEFAULT below. THE CREST: her shell's vertices over the drawn sand:
-//             top over the mean ground (poseAll's 5 x 5 grid; bar 3.0-4.0 u), length along her keel (bar 16-24 u). THE CLUTCH (Task 6 on): every live lobe's top (r x
+//             top over the mean ground (poseAll's 5 x 5 grid; bar 6.0-7.0 u since Task 5b, Michael's checkpoint 2026-10-20: was 3.0-4.0), length along
+//             her keel (bar 16-24 u). THE EXPOSED ROCK (Task 5b): the true area of her drawn shell triangles whose three corners all stand > +0.02 u over
+//             the drawn sand; bar >= 1.8 x 1ddb11a's 95.24 u^2 (pre-registered: "roughly twice"); face (>= 1.0 u over) and tips booked. THE CLUTCH (Task 6 on): every live lobe's top (r x
 //             1.25) <= -0.05 u under the sand. THE HARPOON (Task 4 on; IRON: its head and shank inside her drawn shell by harpoon-probe
 //             lodged's exact-hit test, and seatOk; RED on 9e6a01b's fallback seat): the seam >= +0.25 u, every pole sample >= 0 u over the
 //             DRAWN SAND (terrain or dune, never the crest: harpoon.js seat()'s own test). THE GROWTH ON HER BACK (Task 3a on):
@@ -113,10 +115,10 @@ const AT = process.env.BP_AT || '';
 if (AT && !['anchor', 'crest', 'off'].includes(AT)) { console.error(`BP_AT: anchor | crest | off (got ${JSON.stringify(AT)})`); process.exit(2); }
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
-const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'repose', 'clutch', 'seam', 'pole', 'iron'];
+const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'exposed', 'repose', 'clutch', 'seam', 'pole', 'iron'];
 let ONLY = null;
 if (process.env.BP_CHECK) {
-  ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : s === 'harpoon' ? ['seam', 'pole', 'iron'] : [s]);
+  ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : s === 'rock' ? ['top', 'exposed'] : s === 'harpoon' ? ['seam', 'pole', 'iron'] : [s]);
   const bad = ONLY.filter(s => !CHECKS.includes(s));
   if (bad.length || !ONLY.length) { console.error(`BP_CHECK: ${CHECKS.join(',')},crest,height,harpoon (got ${JSON.stringify(process.env.BP_CHECK)})`); process.exit(2); }
   if (MODE !== 'disguise') { console.error(`BP_CHECK is disguise's (mode ${MODE} judges all its bars)`); process.exit(2); }
@@ -187,6 +189,21 @@ const DISGUISE = `(async () => {
   for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i).applyMatrix4(sh.matrixWorld); const d = v.y - sand(v.x, v.z);
     if (!inStrip(v.x, v.z)) { if (d > sides.d) sides = { d: +d.toFixed(3), at: [+v.x.toFixed(1), +v.y.toFixed(1), +v.z.toFixed(1)] }; continue; }
     if (d > 0.02) { ne++; top = Math.max(top, v.y); lv.copy(v).applyMatrix4(inv); zLo = Math.min(zLo, lv.z); zHi = Math.max(zHi, lv.z); } }
+  // (Task 5b) THE EXPOSED ROCK: every drawn shell triangle whose three corners all stand > +0.02 u over the drawn sand, its true area
+  // (u^2); face = those whose corners all stand >= 1.0 u over it; tips = exposed vertices >= 0.5 u over the sand, the highest within
+  // 1.0 u (plan) of themselves (info)
+  const exp = (() => { const W = new Float32Array(P.count * 4), I = sh.geometry.index;
+    for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i).applyMatrix4(sh.matrixWorld); W[i * 4] = v.x; W[i * 4 + 1] = v.y; W[i * 4 + 2] = v.z; W[i * 4 + 3] = v.y - sand(v.x, v.z); }
+    const nt = I ? I.count / 3 : P.count / 3, ix = k => I ? I.array[k] : k, a = new THREE.Vector3(), b = new THREE.Vector3(), c3 = new THREE.Vector3();
+    let area = 0, face = 0, nTri = 0;
+    for (let t = 0; t < nt; t++) { const i0 = ix(t * 3), i1 = ix(t * 3 + 1), i2 = ix(t * 3 + 2), h = Math.min(W[i0 * 4 + 3], W[i1 * 4 + 3], W[i2 * 4 + 3]);
+      if (!(h > 0.02)) continue;
+      a.set(W[i0 * 4], W[i0 * 4 + 1], W[i0 * 4 + 2]); b.set(W[i1 * 4], W[i1 * 4 + 1], W[i1 * 4 + 2]); c3.set(W[i2 * 4], W[i2 * 4 + 1], W[i2 * 4 + 2]);
+      const ar = b.sub(a).cross(c3.sub(a)).length() / 2; area += ar; nTri++; if (h >= 1.0) face += ar; }
+    const up = []; for (let i = 0; i < P.count; i++) if (W[i * 4 + 3] >= 0.5) up.push(i);
+    let tips = 0;
+    for (const i of up) { let top = true; for (const j of up) { if (j === i || W[j * 4 + 1] <= W[i * 4 + 1]) continue; const dx = W[j * 4] - W[i * 4], dz = W[j * 4 + 2] - W[i * 4 + 2]; if (dx * dx + dz * dz < 1) { top = false; break; } } if (top) tips++; }
+    return { area: +area.toFixed(2), face: +face.toFixed(2), n: nTri, tips }; })();
   // the mean ground under her: poseAll's 5 x 5 support grid
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw); let g = 0;
   for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) { const lx = (-0.8 + 0.4 * i) * L.R, lz = (-0.84 + 0.425 * j) * L.R;
@@ -219,7 +236,7 @@ const DISGUISE = `(async () => {
     repose = { barDeg: 33.81, n: tris.length, nDeg, worst: wst, tallestSteep: tall, over33: over(33.81), over45: over(45), over60: over(60),
       over45tall: tris.filter(q => q[3] > 45 && q[4] > 0.2).length, tris };
   }
-  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, buried: !!(B && L.buried), bury: L.bury ?? null, repose };
+  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, exposed: exp, buried: !!(B && L.buried), bury: L.bury ?? null, repose };
   // (Task 4) THE HARPOON, against the drawn SAND (sand(): the floor or the dune, never the crest), as harpoon.js seat() judges it: the
   // seam's height over it, and every pole sample's (model z -0.1 .. -0.95 through H.worldM, the lodged pose). Only an iron still in her
   const H = L.harpoon;
@@ -520,6 +537,7 @@ if (MODE === 'breath') {
 
 // disguise: every check as { name, val, bar, ok, judged }. judged = in BP_CHECK if given, else those this build can judge
 const hasSand = !!record.hasSand;
+const EXPOSED_K = 1.8, EXPOSED_BASE = 95.24;   // (Task 5b: 1ddb11a's reading, the RED run burial-disguise-t5b-red-1ddb11a.json: 3313 triangles, face 81.22, tips 11)
 const checks = [];
 const part = (name, bar) => { const w = out.worst[name], n = out.n[name] || 0; checks.push({ name, val: w ? w.d : null, at: w ? w.at : null, n, bar, ok: !!w && w.d <= 0, vacuous: !w || n === 0, judged: true }); };
 for (const p of ['legs', 'claws', 'eyes', 'mouth', 'wards']) part(p, '<= 0');
@@ -529,7 +547,14 @@ for (const p of ['reef', 'weed']) { const w = out.worst[p], n = out.n[p] || 0, n
   checks.push({ name: p, val: w ? w.d : null, at: w ? w.at : null, n, nOut, bar: '<= 0 (drawn, outside the strip)', ok: n > 0 && (!w || w.d <= 0), vacuous: n === 0, judged: hasSand }); }
 checks.push({ name: 'sides', val: out.sides.d, at: out.sides.at, bar: '<= +0.02', ok: out.sides.at != null && out.sides.d <= 0.02, vacuous: out.sides.at == null, judged: true });
 // no shell vertex over the sand in the strip = no crest at all: a finding (the bar fails), not a missing measurement
-checks.push({ name: 'top', val: out.crest.n ? out.crest.top : null, n: out.crest.n, bar: '3.0 - 4.0 u', ok: out.crest.n > 0 && out.crest.top >= 3.0 && out.crest.top <= 4.0, vacuous: false, judged: true });
+// (Task 5b, Michael's checkpoint 2026-10-20: "it doesnt really read a rock"; his ruling re-registers the crest's height 3.0-4.0 -> 6.0-7.0 u,
+// the approved proposal's "about 6-7 u high")
+checks.push({ name: 'top', val: out.crest.n ? out.crest.top : null, n: out.crest.n, bar: '6.0 - 7.0 u', ok: out.crest.n > 0 && out.crest.top >= 6.0 && out.crest.top <= 7.0, vacuous: false, judged: true });
+// (Task 5b, pre-registered in the ledger before any reading) THE EXPOSED ROCK: >= EXPOSED_K x the 1ddb11a reading (EXPOSED_BASE, read by
+// the RED run on 1ddb11a; the approved proposal's "roughly twice as much of her back stands out"); >= 50 triangles or UNMEASURED
+{ const e = out.exposed;
+  checks.push({ name: 'exposed', val: e ? e.area : null, n: e ? e.n : 0, bar: `>= ${EXPOSED_K} x ${EXPOSED_BASE} u^2 (1ddb11a) = ${+(EXPOSED_K * EXPOSED_BASE).toFixed(1)}`, ok: !!e && e.n >= 50 && e.area >= EXPOSED_K * EXPOSED_BASE,
+    vacuous: !e || e.n < 50, judged: hasSand, info: e ? { face: e.face, tips: e.tips, ratio: +(e.area / EXPOSED_BASE).toFixed(2) } : undefined }); }
 checks.push({ name: 'len', val: out.crest.len, n: out.crest.n, bar: '16 - 24 u', ok: out.crest.n > 0 && out.crest.len >= 16 && out.crest.len <= 24, vacuous: false, judged: true });
 // the repose (Task 3a, narrowed in fix round 2): judged where she has a mound (main / the ridge RED have no dune to judge); >= 200
 // triangles booked, else UNMEASURED
