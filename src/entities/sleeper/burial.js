@@ -878,8 +878,12 @@ export function growRock(L, MD) {
   if (!co) {
     co = L.parts.coral = new THREE.Mesh(new THREE.BufferGeometry(), reef.material);   // (the reef's material OBJECT: its program)
     co.castShadow = true; reef.parent.add(co);
+    // (lifted out before her dispose, as the mound is: the generic dispose walks her meshes and disposes each one's material, and the
+    // reef's material disposed a SECOND time released its programs under game.js keepingPrograms (the first call anchors it, the second
+    // really disposes): the boot's rehearsal lost the reef's 4 programs and they compiled at first sight in play, measured by bootkeys:
+    // 711 -> 707 at boot, the programs gate's first sight +10 against the base's +7)
     const prev = L.onDispose;
-    L.onDispose = () => { co.geometry.dispose(); if (prev) prev(); };
+    L.onDispose = () => { if (co.parent) co.parent.remove(co); co.geometry.dispose(); if (prev) prev(); };
   }
   co.geometry.dispose();
   co.geometry = keep.length ? mergeGeo(keep) : new THREE.BufferGeometry();
