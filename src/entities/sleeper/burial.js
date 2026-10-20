@@ -9,9 +9,11 @@ import * as THREE from 'three';
 import { V3 } from '../../lib/math.js';
 import { terrainH } from '../../world/terrain.js';
 
-// crest   u: her crest's top over the mean ground under her (spec: 3-4 u); the row may set it (home: 3.5)
+// crest   u: her crest's top over the mean ground under her (spec: 3-4 u; Michael's checkpoint 2026-10-20, "it doesnt really read a rock":
+//         sunk less, 6-7 u, his call beyond the spec); the row may set it (home: 6.5). At 7.0 her folded legs stood +0.22 u out of the dune
+//         (burial-probe disguise), and the exposed rock gained 1.5% over 6.5
 // on      dev A/B (__burial.set): 0 = the shipped ridge at home too
-export const BURY = { on: 1, crest: 3.5 };
+export const BURY = { on: 1, crest: 6.5 };
 // THE MOUND (spec §1 "The sand mound"): a dune over her sunk shell that leaves only a strip of her back's crest showing.
 //   crestL / crestW  u: the strip, an ellipse along her keel (spec: "about 20 u long"); crestZ its centre (shell units: the bake's
 //                    top lies at z -0.10)
@@ -27,7 +29,14 @@ export const BURY = { on: 1, crest: 3.5 };
 //            trickle only with him within `near` u (spec: "visible only within about 8 u"). Michael, 2026-10-15: it may be too subtle
 //            to see; he judges it on stills ("I thought I already approved this but yes these are fine to proceed with"); the knob
 //            is `lift`
-Object.assign(BURY, { crestL: 20, crestW: 6, crestZ: -0.07, sandOpen: 0, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
+//   clawSink u: buried, her folded claws sit this much deeper than her body's sink (brooder.js poseClaws, by L.bury). Sunk 1.4 u (crest 6.5)
+//            the palm and finger of both claws, folded under her prow, stood up to +2.06 u over the bare floor inside her drawn shell (every one
+//            enclosed: the burial-probe's literal bar failed on points nobody can see); 3.0 u = the 3.5 u crest's sink less the 6.5's (4.41 - 1.41):
+//            the claws lie where Michael saw them at Task 5's checkpoint
+// (Task 5b) crestW 6 -> 20: sunk less, a 6 u strip only lifted the whole dune with her (exposed rock 171 u^2, 1.8x 1ddb11a's 95, a plate on a
+// sand hill in the stills); the strip's edge is now set by edgeMin round her back (her shell standing 1.2 u over the mean ground), so the
+// sand meets her flanks and her back stands out of it as rock (500 u^2, 5.3x; crestW 14: 355, 3.7x)
+Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSink: 3.0, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
   breath: { lift: 0.045, period: [8, 10], up: 1.6, down: 2.6, draw: 12, near: 8 },
   // THE FOOTING over her crest (Task 3b, controller ruling 1; fitFooting below): r u, the lead sole's footprint (a disc the sole's half
   // length: diver.js's casting runs 0.52 u heel to toe); h u, the baked grid
@@ -310,6 +319,33 @@ function binShell(L, MD, st) {
 }
 // THE SAND PILE (above): VSRC per drawn vertex (over the floor less the cover), the sources outside the strip's band (RS + dl at
 // its bearing) deposited at the four grid cells round them, then the chamfer passes
+// HER LIMBS UNDER THE SAND TOO (Task 5b, Michael's checkpoint 2026-10-20: sunk less, so more of her back stands out): at the 3.5 u crest
+// her shell's own pile covered her folded legs, claws and face; sunk only 1.4 u (crest 6.5) her major claw stood 2.0 u out of the dune
+// (burial-probe disguise, BP_KNOBS crest 6.5: claws +2.02, legs -0.15). So every drawn vertex of her legs, claws, eyes, eyestalks and
+// mouthparts is a source of the pile as her shell's are (LSRC, world x y z, built at the fit: an event). Off the strip's band only, as the
+// shell's (her crest is rock; a limb in the band would stand in it)
+let LSRC = new Float32Array(0), LN = 0;
+const _lm = new THREE.Matrix4(), _lm2 = new THREE.Matrix4();
+function limbPoints(L) {
+  const objs = [];
+  if (L.legs) for (const k in L.legs) objs.push(L.legs[k]);
+  if (L.claws) for (const c of L.claws) objs.push(c.merus, c.carpus, c.palm, c.dact);
+  if (L.parts.eyes) objs.push(L.parts.eyes);
+  if (L.parts.stalks) objs.push(L.parts.stalks);
+  if (L.mouth) for (const q of L.mouth) objs.push(q.hook);
+  let need = 0;
+  for (const o of objs) if (o && o.geometry) need += o.geometry.attributes.position.count * (o.isInstancedMesh ? o.count : 1);
+  if (LSRC.length < need * 3) LSRC = new Float32Array(need * 3);   // (grown at a fit, an event)
+  LN = 0;
+  for (const o of objs) {
+    if (!o || !o.geometry) continue;
+    o.updateMatrixWorld(true);
+    const P = o.geometry.attributes.position, each = mw => { for (let i = 0; i < P.count; i++) { _sv.fromBufferAttribute(P, i).applyMatrix4(mw); LSRC[LN * 3] = _sv.x; LSRC[LN * 3 + 1] = _sv.y; LSRC[LN * 3 + 2] = _sv.z; LN++; } };
+    if (o.isInstancedMesh) for (let k = 0; k < o.count; k++) { o.getMatrixAt(k, _lm); each(_lm2.multiplyMatrices(o.matrixWorld, _lm)); }
+    else each(o.matrixWorld);
+  }
+}
+let LV = new Uint8Array(0);
 function pileUp(L, MD, dl, st) {
   const sh = L.parts.shell, P = sh.geometry.attributes.position, mw = sh.matrixWorld, cover = BURY.cover, lo = L.meanG - 2.5, R = L.R;
   const HS = 1.9 * R;                                    // (her rim ~1 R from C, a 4.5 u pile runs out ~8 u past it)
@@ -327,6 +363,20 @@ function pileUp(L, MD, dl, st) {
     if (_rho < RS[b0] * (1 - t) + RS[b1] * t + dl) continue;   // (the strip's band: her crest is rock, the sand stops at its edge)
     { const k = Math.floor(_rho / st); if (k < NRAD) { if (_sv.y > SHO[b0 * NRAD + k]) SHO[b0 * NRAD + k] = _sv.y; if (_sv.y > SHO[b1 * NRAD + k]) SHO[b1 * NRAD + k] = _sv.y; } }
     deposit(_sv.x, _sv.z, need);
+  }
+  // her limbs (limbPoints above): the same rule, flagged in LV for coverShell
+  limbPoints(L);
+  if (LV.length < LN) LV = new Uint8Array(LN);
+  for (let i = 0; i < LN; i++) {
+    LV[i] = 0;
+    const x = LSRC[i * 3], y = LSRC[i * 3 + 1], z = LSRC[i * 3 + 2], need = y + cover;
+    if (need < lo || need <= terrainH(x, z, L.idx)) continue;
+    toPolar(MD, x, z);
+    const f = Math.floor(_fa), t = _fa - f, b0 = f % NB, b1 = (b0 + 1) % NB;
+    if (_rho < RS[b0] * (1 - t) + RS[b1] * t + dl) continue;
+    LV[i] = 1;
+    { const k = Math.floor(_rho / st); if (k < NRAD) { if (y > SHO[b0 * NRAD + k]) SHO[b0 * NRAD + k] = y; if (y > SHO[b1 * NRAD + k]) SHO[b1 * NRAD + k] = y; } }
+    deposit(x, z, need);
   }
   chamfer();
 }
@@ -385,9 +435,9 @@ function pileAt(x, z) {
 function coverShell(L, MD) {
   const sh = L.parts.shell, P = sh.geometry.attributes.position, mw = sh.matrixWorld, cover = BURY.cover, NI = BURY.rings;
   let un = 0;
-  for (let v = 0; v < P.count; v++) {
-    if (!VSRC[v]) continue;
-    _sv.fromBufferAttribute(P, v).applyMatrix4(mw);
+  for (let v = 0, nv = P.count + LN; v < nv; v++) {
+    if (v < P.count) { if (!VSRC[v]) continue; _sv.fromBufferAttribute(P, v).applyMatrix4(mw); }
+    else { const q = v - P.count; if (!LV[q]) continue; _sv.set(LSRC[q * 3], LSRC[q * 3 + 1], LSRC[q * 3 + 2]); }   // (her limbs: pileUp)
     const i = quadAt(MD, _sv.x, _sv.z);
     if (i < 1) continue;                                 // (the strip's band, inside the rock, or off the dune: the floor's)
     const need = _sv.y + cover;

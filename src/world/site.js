@@ -77,8 +77,9 @@ const SITES = [
     // hunting stance and hers, turned (riteplay wardHuntP50, the median over 4 paired average fights, seeds 901-904, the clock
     // plugged: main 10.04, the relief 9.475, gap 0.565 -> 0.55). sigils / hueShift are the shipped values (game.js
     // makeZoneSleeper reads every row's). Zones 1 and 2 keep no row.
-    // bury: velkath-buried-rock, home only (Michael 2026-10-15); the crest's height over her ground (spec 3–4 u)
-    sleepers: [{ sigils: 3, hueShift: 0, idle: null, lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 }, bury: { crest: 3.5 } }, null, null],
+    // bury: velkath-buried-rock, home only (Michael 2026-10-15); the crest's height over her ground (spec 3–4 u; Michael's checkpoint
+    // 2026-10-20, "it doesnt really read a rock": sunk less, 6-7 u)
+    sleepers: [{ sigils: 3, hueShift: 0, idle: null, lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 }, bury: { crest: 6.5 } }, null, null],
     // OWN WATER (Michael 2026-10-04, "Give each its own water"). Home carries no water, light,
     // floor, vents or grade of its own: every consumer reads null as "the shipped constant".
     water: null, light: null, floor: null, vents: null, grade: null,

@@ -1335,8 +1335,12 @@ function poseClaws(L, dt) {
   // from the front, and she always turns to face him (Pallid: a perfect walker stuck at the
   // claws for 200 s in 3 of 3 runs)
   const gu = L.guardUp ? L.guardUp.x : 0;
+  // (velkath-buried-rock Task 5b) buried, her folded claws go down BURY.clawSink u deeper than her body's sink (burial.js: at the 6.5 u crest
+  // they sit where the 3.5 u crest put them); off home L.buried is false and the root stays at -0.10 bit for bit
+  const clawY = -0.10 - (L.buried ? BURY.clawSink * L.bury / L.R : 0);
   for (const c of L.claws) {
     const sd = c.sd;
+    c.root.position.y = clawY;
     // never quite still: slow drift in two axes (noise, not a metronome), a heavier and
     // slower sway on the crusher, and a slow open/close of the pincers
     const kM = c.major ? 0.7 : 1.25;
