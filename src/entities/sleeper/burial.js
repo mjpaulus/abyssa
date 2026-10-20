@@ -27,7 +27,8 @@ export const BURY = { on: 1, crest: 6.5 };
 //   sandOpen u: the strip's edge pushed out on her SAND side (where he comes in and the harpoon goes), so more of that flank shows as
 //            a face of rock: a lopsided outcrop. 0 = the symmetric strip. Task 4's seat scan decides whether it is needed; if it is,
 //            the shape goes to Michael at Task 5's checkpoint as a choice
-//   breath   the tell (spec): a lift of `lift` u every period s (up s, down s); drawn only with the lens within `draw` u; the
+//   breath   the tell (spec): a lift of `lift` u every period s (up s, down s); drawn only with the lens within `draw` u of the strip's edge
+//            (Task 5b: was 12 u of a crestL / 2 circle round her centre); the
 //            trickle only with him within `near` u (spec: "visible only within about 8 u"). Michael, 2026-10-15: it may be too subtle
 //            to see; he judges it on stills ("I thought I already approved this but yes these are fine to proceed with"); the knob
 //            is `lift`
@@ -39,7 +40,7 @@ export const BURY = { on: 1, crest: 6.5 };
 // sand hill in the stills); the strip's edge is now set by edgeMin round her back (her shell standing 1.2 u over the mean ground), so the
 // sand meets her flanks and her back stands out of it as rock (500 u^2, 5.3x; crestW 14: 355, 3.7x)
 Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSink: 3.0, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
-  breath: { lift: 0.045, period: [8, 10], up: 1.6, down: 2.6, draw: 12, near: 8 },
+  breath: { lift: 0.045, period: [8, 10], up: 1.6, down: 2.6, draw: 18, near: 8 },
   // THE FOOTING over her crest (Task 3b, controller ruling 1; fitFooting below): r u, the lead sole's footprint (a disc the sole's half
   // length: diver.js's casting runs 0.52 u heel to toe); h u, the baked grid
   foot: { r: 0.25, h: 0.0625 } });
@@ -731,7 +732,7 @@ export function crustTick(L) {
 const ease = x => x * x * (3 - 2 * x);
 const TRICKLE_J = [-2, 0, 2];                         // the trickle's three bearings round the nearest one (module scratch, not a literal per breath)
 // THE TELL (spec §1): every 8-10 s the sand over her lifts a few centimetres and settles; a thin trickle of silt slides off the
-// crest's edge with each breath. Only a careful eye catches it: the lift is drawn only with the lens within BURY.breath.draw u (a
+// crest's edge with each breath. Only a careful eye catches it: the lift is drawn only with the lens within BURY.breath.draw u of the strip's edge (a
 // few cm is nothing past that), the trickle only with him within BURY.breath.near u of the strip's edge.
 export function breathTick(L, dt, player, camPos, emitDust) {
   const B = BURY.breath, MD = L.mound;
@@ -742,7 +743,12 @@ export function breathTick(L, dt, player, camPos, emitDust) {
   if ((L.brT = (L.brT ?? 2) - dt) <= 0) { L.brT = B.period[0] + (B.period[1] - B.period[0]) * Math.random(); L.brAge = 0; L.brTrk = false; }
   L.brAge += dt;
   const a = L.brAge, y = a < B.up ? ease(a / B.up) : a < B.up + B.down ? 1 - ease((a - B.up) / B.down) : 0;
-  const near = Math.hypot(camPos.x - MD.cx, camPos.z - MD.cz) < B.draw + BURY.crestL / 2;
+  // (the lens within `draw` u of the strip's edge on its own bearing, ring 0's straight edge there: locate / ringR, no allocation. Task 5b:
+  // the centre's distance less crestL / 2 stood for it while the strip was 6 u wide; 20 u wide, him 6 u off its sand-side edge put the lens
+  // 21.8-23.9 u from the centre and the breath was not drawn: burial-probe breath amp 0. From the edge, the lens trails him ~9 u, so draw
+  // 18 = him within ~9 u, the spec's "about 8 u")
+  locate(MD, camPos.x, camPos.z);
+  const near = (_rho - ringR(MD, 0)) * MD.R < B.draw;
   L.breathY = near ? B.lift * y : 0;
   if (!L.brTrk && a >= B.up && player) {
     L.brTrk = true;
