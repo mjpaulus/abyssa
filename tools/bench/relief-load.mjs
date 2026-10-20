@@ -58,7 +58,9 @@ const SHIPPED = { fp12: 'd49d451d', lev1: 'c938fe6e', lev2: '652d0412', sl1: 'ac
 // (velkath-buried-rock Task 4) slRow: the ROW-BUILT home fingerprint, sleeperFingerprint(0, home's row as game.js makeZoneSleeper builds
 // it, bury included), the one sleeperFingerprint take that sees home's row. edb51a28 on the relief -> 1199bc26: the burial its only cause
 // (Task 2; the harpoon is not hashed, so the crest seat leaves it; fp-sites-bury.mjs and this probe agree, Task 4).
-const ANCHOR = { home: EXP.home, lev0: '15ce888c', sl0: '1ca3b28c', slRow: '1199bc26', slRowCause: 'the burial: the crest seat, Michael 2026-10-14 (spec), home only 2026-10-15' };
+// (Task 5b) RE-RECORDED 1199bc26 -> b9fd3c26: sunk less (crest 3.5 -> 6.5 u, buryD 4.414 -> 1.414), Michael's checkpoint 2026-10-20 (the
+// growth on her back is not hashed; the dune's limb sources and the claws' sink move her wards' and body's heights, which are)
+const ANCHOR = { home: EXP.home, lev0: '15ce888c', sl0: '1ca3b28c', slRow: 'b9fd3c26', slRowCause: "Michael's checkpoint 2026-10-20: more of her rocky back (the burial, Michael 2026-10-14/15)" };
 const SL_ROW = `(() => { const S = window.__slRowS, C = window.__slRowC, row = S.currentSite().sleepers[0];
   return { nSigils: row.sigils, hue: (C.LEVIATHAN_CFG[0].hue + row.hueShift + 1) % 1, name: C.LEVIATHAN_CFG[0].name, idle: row.idle || null, lair: row.lair || null, hard: row.hard || null, bury: row.bury || null }; })()`;
 // (Task 8b, Ruling 44) THE LIVE HOME ANCHOR. sleeperFingerprint(i) keeps its meaning: no row, LEVIATHAN_CFG alone (so sl0 is
@@ -73,8 +75,11 @@ const SL_ROW = `(() => { const S = window.__slRowS, C = window.__slRowC, row = S
 // seated in that crest (her sand-facing back half), so Alt+6 stands him at a new place in her frame. bury 1 = buried; crest = her drawn
 // shell's highest vertex over the mean ground under her (__burial.state().meanG), the spec's 3-4 u (3.5); buryD = the sink, recorded. Alt+6
 // now stands him at fwd -0.22 / lat -0.10 R (on the dune by her keel, aft of her centre; was -0.81 / -0.59, her back-left corner).
-const LIVE = { cause: 'the burial: the crest seat, Michael 2026-10-14 (spec), home only 2026-10-15', yawDeg: -121.51, anchor: [-0.22, -0.1], lift: 0.55,
-  bury: 1, crest: [3.0, 4.0], buryD: 4.414, tol: 0.01 };
+// (Task 5b) RE-RECORDED with Michael's checkpoint 2026-10-20 ("it doesnt really read a rock"): sunk less, the crest 6.5 u (his 6-7 u), buryD
+// 1.414; the seat found again on the bigger rock (Task 4's rulings): Alt+6 now stands him at fwd -0.53 / lat -0.23 R, on a shelf of her rock
+// aft of her centre on her sand side (was -0.22 / -0.10, by her keel)
+const LIVE = { cause: "Michael's checkpoint 2026-10-20: more of her rocky back", yawDeg: -121.51, anchor: [-0.53, -0.23], lift: 0.55,
+  bury: 1, crest: [6.0, 7.0], buryD: 1.414, tol: 0.01 };
 const LIVE_JS = `(() => { const L = window.lev, H = L && L.harpoon; if (!L || L.kind !== 'brooder' || !H || !L.lairPos) return { err: 'no brooder / harpoon (' + (L && L.kind) + ')' };
   const s = Math.sin(L.lairYaw), c = Math.cos(L.lairYaw), ox = H.anchor.x - L.lairPos.x, oz = H.anchor.z - L.lairPos.z;
   // her crest: the drawn shell's highest vertex over the mean ground (burial-probe disguise's reading: every vertex through matrixWorld)

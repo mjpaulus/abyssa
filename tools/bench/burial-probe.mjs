@@ -42,7 +42,8 @@
 //             (__bench.step runs update() alone unless o.render: bench.js step), so every frame here is rendered
 //             (__bench.step(n, fn, { render: true })), with her in the frame: he is stood 14 u off the strip's edge on her SAND side,
 //             facing it (breath's PLACE), the follow lens behind him, so the slabs, the plume, the dune, the claw's reach and the haze
-//             stay in view through every phase. Booked at each checkpoint: renderer.info.programs.length, the programs whose
+//             stay in view through every phase (he faces ring 1's vertex on the sand side's bearing, breath's PLACE, so the look runs
+//             ~20 deg off the strip's centre: she is in frame, not centred; Task 5 review minor 5). Booked at each checkpoint: renderer.info.programs.length, the programs whose
 //             cacheKey holds '|crust' (the crust's ONE program: Task 5), and __shaderFailed(). In order:
 //               boot     right after the arrival, before anything near her is drawn (what the boot tail built)
 //               first    120 rendered frames at the framing spot (first sight: on the Task 4 head three shadow-depth programs, two
@@ -70,7 +71,10 @@
 //             BP_BASE=<a programs JSON of the base build>: vsBase, every checkpoint's count (boot, first, a, the max over (b), b,
 //             each site's max and last) equal to the base's, and the programs new at first sight and in (b) the same kinds: what a
 //             task's change adds, when the base itself compiles in the rise (the Task 4 head does: one MeshDistance program ~1.9 s
-//             into it, pre-existing). BP_RED=lazy fails it too.
+//             into it, pre-existing). BP_RED=lazy fails it too. (Task 5b, Task 5 review minor 1) Under BP_BASE `rise` is booked as info,
+//             not judged, when the base's own rise failed with the same kinds new in (b) (the pre-existing compile is the base's, carried
+//             to Task 7b; vsBase still holds every count equal); BP_RED=lazy is refused without BP_BASE (its rise bar alone cannot tell
+//             the RED's compile from the base's).
 //             hitch.mjs's scenarios (jet, z1, z2, voyage) do not include the rise, the point or the dig-in: this mode is the gate for those.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height; steep (repose 2.0: the dune fitted to fall at 63 deg; the bar is fixed, so it must fail) ->
@@ -110,6 +114,7 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
   breath: { still: { set: { breath: { lift: 0 } }, bars: ['amp'] } },
   programs: { lazy: { set: {}, bars: ['rise'], page: true } } };
 const RED = process.env.BP_RED || '';
+if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 const AT = process.env.BP_AT || '';
 if (AT && !['anchor', 'crest', 'off'].includes(AT)) { console.error(`BP_AT: anchor | crest | off (got ${JSON.stringify(AT)})`); process.exit(2); }
@@ -479,7 +484,10 @@ if (MODE === 'programs') {
       pair('firstNew', kind(P0.firstNew), kind(B.firstNew)), pair('bNew', kind(P0.bNew), kind(B.bNew)),
       ...P0.sites.flatMap((q, i) => [pair('s' + q.si + 'max', q.max, B.sites[i] && B.sites[i].max), pair('s' + q.si, q.n, B.sites[i] && B.sites[i].n)])];
     ck.push({ name: 'vsBase', val: rows.filter(r => !r.ok), bar: 'every checkpoint equal to the base build (BP_BASE)', ok: rows.every(r => r.ok), vacuous: !B, judged: true });
-    record.vsBase = rows; if (RED) REDS.programs[RED].bars.push('vsBase'); }
+    record.vsBase = rows; if (RED) REDS.programs[RED].bars.push('vsBase');
+    // the base's own rise failed with the same kinds new in (b): rise is the base's (info), vsBase judges the counts
+    const baseRiseFail = !(B.bMax === B.a && B.b === B.a), sameKinds = kind(P0.bNew) === kind(B.bNew);
+    if (baseRiseFail && sameKinds && !RED) { const r = ck.find(k => k.name === 'rise'); r.judged = false; r.bar += ' (info under BP_BASE: the base\'s rise failed with the same kinds, ' + kind(B.bNew) + ')'; } }
   if (RED) for (const k of ck) k.judged = REDS.programs[RED].bars.includes(k.name);
   record.checks = ck;
   for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(8)} ${JSON.stringify(k.val)} (bar ${k.bar})`);
