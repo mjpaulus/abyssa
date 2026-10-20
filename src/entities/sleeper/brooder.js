@@ -35,7 +35,7 @@ import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos,
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
-import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick } from './burial.js';
+import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
@@ -727,9 +727,11 @@ function bedDown(L, noHarpoon = false) {
   if (terrainMeshes[L.idx]) {
     if (!L.mound) L.mound = makeMound(L, terrainMeshes[L.idx].material);
     fitMound(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
-    prepGrowth(L, L.mound);
   }
   if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
+  // (Task 5b) the weed and coral on the exposed rock (burial.js growRock: after the seat, so they keep clear of the iron), then the growth
+  // outside the strip buried with her (prepGrowth)
+  if (L.mound) { growRock(L, L.mound); prepGrowth(L, L.mound); }
 }
 
 // ---- THE SILT DRIFT (polish-followups) ----
@@ -1029,6 +1031,7 @@ function installSculpt(L, A) {
     const wm = G.weedMatrices(Math.min(P.weed.count, 60), 0x77EED + L.idx);
     wm.forEach((m, i) => P.weed.setMatrixAt(i, m));
     P.weed.count = wm.length;
+    L.weedBase = wm.length;                           // (velkath-buried-rock Task 5b: burial.js growRock lays the strip's fronds past these)
     P.weed.instanceMatrix.needsUpdate = true;
     L.topAt = (x, z) => {   // (velkath-buried-rock) the bake's own top probe, kept: the mound and the crest's footing read it
       const fx = (x - x0) / (x1 - x0) * (n - 1), fz = (z - z0) / (z1 - z0) * (n - 1);

@@ -1278,3 +1278,26 @@ export function eyeGeo() {
   const g = mergeGeometries([dome, ring].map(x => { for (const k of Object.keys(x.attributes)) if (!['position', 'normal', 'color', 'uv'].includes(k)) x.deleteAttribute(k); return x; }));
   return g;
 }
+
+// THE GROWTH ON THE EXPOSED ROCK (velkath-buried-rock Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and
+// coral"): her own reef's parts (the lattice fans, the encrusting mats, the coralline lumps, the budding tube clumps, reefGeo above), laid at
+// the spots burial.js growRock picks on the strip of her back that stands out of the dune (body-local shell units; the caller sets the
+// shell's height to the bake's top, setShellHeight, so every part moulds onto the sculpted rock). One geometry PER SPOT, so the caller can
+// drop any that strays off the strip; merged by the caller. spot: [kind, x, z, size, hueIndex]
+const RG_HUE = [0x6a5133, 0x4f5236, 0x5a3726, 0x766e5c, 0x3d3226, 0x695a4f, 0x5a3532];
+export function rockGrowthParts(seed, spots) {
+  const rnd = seededRand(seed), out = [];
+  for (const [kind, x, z, size, hi] of spots) {
+    const hex = RG_HUE[hi % RG_HUE.length];
+    let parts;
+    if (kind === 'fan') parts = [fan(rnd, x, z, size, RG_HUE[6])];
+    else if (kind === 'crust') parts = [crust(rnd, x, z, size, hex)];
+    else if (kind === 'lump') parts = [lump(rnd, x, z, size, hex)];
+    else parts = tubeClump(rnd, x, z, size * 0.5, size * 0.8, size * 3.5, size * 6.5, hex);
+    for (const p of parts) for (const k of Object.keys(p.attributes)) if (k !== 'position' && k !== 'normal' && k !== 'color' && k !== 'uv') p.deleteAttribute(k);
+    for (const p of parts) if (!p.attributes.uv) { const P = p.attributes.position, U = new Float32Array(P.count * 2); for (let i = 0; i < P.count; i++) { U[i * 2] = P.getX(i) * 4; U[i * 2 + 1] = P.getZ(i) * 4; } p.setAttribute('uv', new THREE.BufferAttribute(U, 2)); }
+    out.push(parts.length === 1 ? parts[0] : mergeGeometries(parts));
+  }
+  return out;
+}
+export const mergeParts = parts => mergeGeometries(parts);

@@ -182,6 +182,7 @@ const DISGUISE = `(async () => {
       n[part] = (n[part] || 0) + P.count; for (let i = 0; i < P.count; i++) if (seen[i]) at(i, o.matrixWorld); }
     else { n[part] = (n[part] || 0) + Math.ceil(P.count / 2); for (let i = 0; i < P.count; i += 2) at(i, o.matrixWorld); } };
   if (L.parts.reef) grow('reef', L.parts.reef);
+  if (L.parts.coral) grow('reef', L.parts.coral);   // (Task 5b: the coral on the exposed rock, her reef's parts in its material: judged as the reef)
   if (L.parts.weed) grow('weed', L.parts.weed);
   // her shell: sides vs crest
   const sh = L.parts.shell, P = sh.geometry.attributes.position; sh.updateMatrixWorld(true);
@@ -236,7 +237,7 @@ const DISGUISE = `(async () => {
     repose = { barDeg: 33.81, n: tris.length, nDeg, worst: wst, tallestSteep: tall, over33: over(33.81), over45: over(45), over60: over(60),
       over45tall: tris.filter(q => q[3] > 45 && q[4] > 0.2).length, tris };
   }
-  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, exposed: exp, buried: !!(B && L.buried), bury: L.bury ?? null, repose };
+  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, exposed: exp, growN: L.growN || null, weedN: L.parts.weed ? L.parts.weed.count : null, buried: !!(B && L.buried), bury: L.bury ?? null, repose };
   // (Task 4) THE HARPOON, against the drawn SAND (sand(): the floor or the dune, never the crest), as harpoon.js seat() judges it: the
   // seam's height over it, and every pole sample's (model z -0.1 .. -0.95 through H.worldM, the lodged pose). Only an iron still in her
   const H = L.harpoon;
