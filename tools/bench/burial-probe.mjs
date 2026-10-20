@@ -40,7 +40,7 @@
 //             no failure, any UNMEASURED bar is exit 2; nothing vacuous ever passes. A RED judges only its own bars.
 //   programs  NO COMPILE IN PLAY (Task 5 on; the gate table's "No compile in play"). A program compiles only on a RENDERED draw
 //             (__bench.step runs update() alone unless o.render: bench.js step), so every frame here is rendered
-//             (__bench.step(n, fn, { render: true })), with her in the frame: he is stood 14 u off the strip's edge on her SAND side,
+//             (__bench.step(n, fn, { render: true })), with her in the frame: he is stood 23 u from the strip's centre on her SAND side (Task 5b; was 14 u off its edge),
 //             facing it (breath's PLACE), the follow lens behind him, so the slabs, the plume, the dune, the claw's reach and the haze
 //             stay in view through every phase (he faces ring 1's vertex on the sand side's bearing, breath's PLACE, so the look runs
 //             ~20 deg off the strip's centre: she is in frame, not centred; Task 5 review minor 5). Booked at each checkpoint: renderer.info.programs.length, the programs whose
@@ -274,7 +274,7 @@ const DISGUISE = `(async () => {
 // the page side of `breath`. PLACE(d): him d u off the strip's edge on her SAND side (where he comes in), facing it; the point
 // booked is the ring-1 vertex nearest him (breathTick's own pick for the trickle), or with no mound the drawn sand where ring 1
 // would lie (0.6 u outside BURY_DEFAULT's edge). BOOK(n, leg): n stepped frames, every one booked into window.__bpS
-const BREATH_PLACE = d => `(async () => {
+const BREATH_PLACE = (d, fromC = false) => `(async () => {
   const T = await import('/src/world/terrain.js');
   const L = window.lev; if (!L || L.kind !== 'brooder' || !L.dormant) return { err: 'no dormant brooder (' + (L && L.kind) + ')' };
   const MD = L.mound || null, R = L.R, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
@@ -283,7 +283,8 @@ const BREATH_PLACE = d => `(async () => {
   if (MD) { const j = Math.round((L.sandSide > 0 ? 0 : 0.5) * MD.COLS) % MD.COLS; ex = MD.P[j * 3]; ez = MD.P[j * 3 + 2]; cx = MD.bx; cz = MD.bz; src = 'the mound: ring 1'; }
   else { const a = 6 / 2 / R * L.sandSide, zc = -0.07; ex = wx(a, zc); ez = wz(a, zc); cx = wx(0, zc); cz = wz(0, zc); src = 'no mound: the drawn sand 0.6 u outside the default strip'; }
   let ux = ex - cx, uz = ez - cz; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
-  const x = ex + ux * ${d}, z = ez + uz * ${d};
+  // (fromC: d u from the strip's centre along the same bearing, not from ring 1's edge: the programs framing, the same spot on any build)
+  const x = ${fromC ? 'cx' : 'ex'} + ux * ${d}, z = ${fromC ? 'cz' : 'ez'} + uz * ${d};
   window.__bench.place(x, z, Math.atan2(ex - x, ez - z), 0);
   window.player.pos.y = T.shutFloorY(x, z, 0) + 1.35; window.player.vel.set(0, 0, 0);
   let bj = -1, px = ex + ux * 0.6, pz = ez + uz * 0.6;
@@ -412,7 +413,10 @@ try {
     const inst = await c.ev(PROG_INSTALL);
     const ph = { install: inst };
     ph.boot = await c.ev(`window.__bpProg.read('boot')`);
-    const place = async () => { const pl = await c.ev(BREATH_PLACE(14)); if (!pl || pl.err) throw new Error('place: ' + (pl && pl.err)); return pl; };
+    // (Task 5b) him 23 u from the strip's CENTRE on the sand side's bearing (was 14 u off ring 1's edge: the 20 u strip moved that edge, and
+    // the framing with it, 8.7 u out, so a base run and this build framed different spots and her moult relic came into the new frame at
+    // first sight: vsBase compared two cameras). 23 u is the old framing's distance on the 20 u strip; run the base with this probe too
+    const place = async () => { const pl = await c.ev(BREATH_PLACE(23, true)); if (!pl || pl.err) throw new Error('place: ' + (pl && pl.err)); return pl; };
     ph.place = await place();
     console.log(`framing: ${JSON.stringify(ph.place)}`);
     ph.firstF = await c.ev(`window.__bpProg.frames(120, 'first')`); ph.first = await c.ev(`window.__bpProg.read('first')`);
