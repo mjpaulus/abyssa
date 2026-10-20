@@ -782,11 +782,15 @@ export function prepGrowth(L, MD) {
     weed.updateMatrixWorld(true);
     // a frond stays only if EVERY vertex of it lies in the strip, as a reef triangle does (Task 3a, measured: judged by its root, 22
     // vertices of fronds rooted near the strip's edge leaned out over the dune, the worst 2.0 u over the sand)
-    const WP = weed.geometry.attributes.position;
+    // (Task 5b) and none of her own fronds over the iron: with the strip widened her rim tufts stand round the seam and hid the iron (seen
+    // nearly end-on, ~30 px of pole at 3 u) from 3 and 6 u (stills t5b-dev/g2-h3 .. g5; 1.5 u was not enough: fronds rooted 2-3 u off it
+    // stood in the line of sight); a frond with any vertex within GROW.near u of the seam is buried with the rest (the strip's new fronds
+    // keep GROW.clear off it already)
+    const WP = weed.geometry.attributes.position, Hs = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, nr2 = GROW.near * GROW.near;
     for (let k = 0; k < weed.count; k++) {
       weed.getMatrixAt(k, _gm); _gm.premultiply(weed.matrixWorld);
       let all = true;
-      for (let v = 0; v < WP.count && all; v++) { _gp.fromBufferAttribute(WP, v).applyMatrix4(_gm); all = inStrip(MD, _gp.x, _gp.z); }
+      for (let v = 0; v < WP.count && all; v++) { _gp.fromBufferAttribute(WP, v).applyMatrix4(_gm); all = inStrip(MD, _gp.x, _gp.z) && (!Hs || _gp.distanceToSquared(Hs) > nr2); }
       L.weedOut[k] = all ? 0 : 1;
     }
   }
@@ -798,11 +802,11 @@ export function prepGrowth(L, MD) {
 // mesh of her own reef's parts (brooderGeo.js rockGrowthParts: fans, encrusting mats, coralline lumps, tube clumps) drawn in the reef's
 // own material object (the same program; the parts carry its uv). Every vertex of every frond and part on the strip (inStrip, as
 // prepGrowth keeps the reef's triangles), so nothing of it stands out of the dune; a part that strays is dropped. Clear of the harpoon's
-// seam by GROW.clear u. Seeded per site; at most GROW.* of each (fewer where the strip has no room). Rebuilt at every bed (an event).
+// seam by GROW.clear u (fronds hid the iron from 3 u: stills t5b-dev/g2-h3 .. g5, prepGrowth). Seeded per site; at most GROW.* of each (fewer where the strip has no room). Rebuilt at every bed (an event).
 //   weed     fronds added (the spare slots), in GROW.tufts clumps at the rock's foot and flanks (her shell 1-3.5 u over the mean ground:
 //            where sand lodges and weed roots), small (k 0.45-0.95: a frond 1.0-2.0 u)
 //   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 1.2 };
+export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 3.0 };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 export function growRock(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;

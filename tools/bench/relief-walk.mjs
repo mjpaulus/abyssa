@@ -493,10 +493,16 @@ const LIB = `(async () => {
     for (const Ln of lines) { const a = Ln.pts[0], b = Ln.pts[1], dx = b[0] - a[0], dz = b[1] - a[1], l = Math.hypot(dx, dz), ux = dx / l, uz = dz / l;
       const u0 = -14, nu = Math.round((l + 28) / DGH) + 1, v0 = -6, nv = Math.round(12 / DGH) + 1;
       const G = { name: Ln.name, ax: a[0], az: a[1], ux, uz, nx: -uz, nz: ux, u0, v0, nu, nv, H: new Float32Array(nu * nv) };
-      let nDune = 0, nShell = 0, fdMin = 1e9;
+      // (velkath-buried-rock Task 5b) inside the crack's lip the drawn ground is the shut jam's block tops (terrain.js jamAt), not terrainH:
+      // sunk less, her dune runs out to its cap 1.5 u off the lip and the across line's grid (14 u past its end, for the trailing lens) now
+      // reaches 4.7 u inside it. Such nodes read max(terrainH, jamAt) and are counted (jamNodes); the guard below is then on a jam that is
+      // NOT shut there (jamAt -1e9 inside the lip: the open crack, no ground a grid can stand for)
+      let nDune = 0, nShell = 0, fdMin = 1e9, nJam = 0, nOpen = 0;
       for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) { const u = u0 + i * DGH, v = v0 + j * DGH, x = a[0] + ux * u + G.nx * v, z = a[1] + uz * u + G.nz * v;
-        const th = TH(x, z), tp = topHit(x, z, false), h = tp > th ? tp : th; G.H[j * nu + i] = h; if (tp > th) { if (_dw === 1) nDune++; else nShell++; }
-        if ((i & 3) === 0 && (j & 3) === 0) { const fd = S.fissureDist(x, z, 0); if (fd < fdMin) fdMin = fd; } }
+        const th = TH(x, z), tp = topHit(x, z, false); let h = tp > th ? tp : th; if (tp > th) { if (_dw === 1) nDune++; else nShell++; }
+        const fd = S.fissureDist(x, z, 0); if (fd < fdMin) fdMin = fd;
+        if (fd < 0) { const jm = T.jamAt(x, z, 0); if (jm > -1e8) { nJam++; if (jm > h) h = jm; } else nOpen++; }
+        G.H[j * nu + i] = h; }
       GRIDS.push(G);
       // the provider's floor less the drawn, along the centre (v 0), where the dune or the strip is
       const dS = [], dD = [], series = [];
@@ -505,7 +511,7 @@ const LIB = `(async () => {
         const th = TH(x, z), tp = topHit(x, z, false), ex = tp > th ? tp : th;
         const pf = Math.max(th, XF ? XF(x, z, 0) : Math.max(m, BU.crestY(MD, x, z))), d = pf - ex; (st ? dS : dD).push(d); series.push([+u.toFixed(2), st ? 1 : 0, +d.toFixed(3)]); }
       out.delta[Ln.name] = { strip: summ(dS), dune: summ(dD), series };
-      out.grids.push({ name: Ln.name, nodes: nu * nv, len: +l.toFixed(1), duneNodes: nDune, shellNodes: nShell, fissureDistMin: +fdMin.toFixed(1) });
+      out.grids.push({ name: Ln.name, nodes: nu * nv, len: +l.toFixed(1), duneNodes: nDune, shellNodes: nShell, fissureDistMin: +fdMin.toFixed(1), jamNodes: nJam, openNodes: nOpen });
       if (hasHi) for (let j = 0; j < nv; j += 2) for (let i = 0; i < nu; i += 2) { const u = u0 + i * DGH, v = v0 + j * DGH, x = a[0] + ux * u + G.nx * v, z = a[1] + uz * u + G.nz * v;
         if (!(B.sandAt(x, z) > -1e8 || B.inStrip(x, z))) continue; const hi = BC.shellHiAt(x, z); if (!(hi > -1e8)) continue;
         const e = hi - G.H[j * nu + i]; exN++; if (e > 0.05) exOver++; if (e > exMax) { exMax = e; exAt = [+x.toFixed(2), +z.toFixed(2), B.inStrip(x, z) ? 'strip' : 'dune']; } } }
@@ -755,8 +761,8 @@ if (MODE === 'mound') {
   const cl = await c.ev(`window.__rw.moundClean(${JSON.stringify(lines)})`);
   for (const q of cl) { console.log(`corridor ${pad(q.name, 7)}: ${q.clean ? 'clean of every collider (r + 3.6 u, the floor - 0.5 .. + 7 u, 9 u past each end)' : 'NOT CLEAN: ' + JSON.stringify(q.colliders)}`); if (!q.clean) unmeasured.push(`${q.name}: a collider in the corridor (${JSON.stringify(q.colliders)}): the walk would read it, not her ground`); }
   moundPrep = await c.ev(`window.__rw.drawnPrep(${JSON.stringify(lines)})`);
-  console.log(`drawn-height grids (0.25 u, 14 u past each end, 6 u to each side) in ${moundPrep.ms} ms: ${moundPrep.grids.map(g => `${g.name} ${g.nodes} nodes (${g.duneNodes} dune, ${g.shellNodes} shell; fissureDist >= ${g.fissureDistMin})`).join('; ')}`);
-  for (const g of moundPrep.grids) if (!(g.fissureDistMin > 0)) unmeasured.push(`${g.name}: the grid reaches inside the crack's lip (fissureDist ${g.fissureDistMin}): the ground there is the jam, not terrainH`);
+  console.log(`drawn-height grids (0.25 u, 14 u past each end, 6 u to each side) in ${moundPrep.ms} ms: ${moundPrep.grids.map(g => `${g.name} ${g.nodes} nodes (${g.duneNodes} dune, ${g.shellNodes} shell, ${g.jamNodes} on the shut jam; fissureDist >= ${g.fissureDistMin})`).join('; ')}`);
+  for (const g of moundPrep.grids) if (g.openNodes > 0) unmeasured.push(`${g.name}: the grid reaches inside the crack's lip where no jam is drawn (${g.openNodes} nodes, fissureDist ${g.fissureDistMin}): no ground there for the grid to stand for`);
   console.log(`the published shell proxy's excess over the drawn ground (shellHiAt - drawnY, dune and strip nodes): ${JSON.stringify(moundPrep.excess)}`);
   console.log(`the provider's floor (max(terrainH, extraFloorAt); before Task 3b max(terrainH, moundY, crestY)) less the EXACT drawn top along each line's centre (booked, not gated):`);
   for (const Ln of lines) { const d = moundPrep.delta[Ln.name]; console.log(`  ${pad(Ln.name, 7)} strip ${JSON.stringify(d.strip)}  dune ${JSON.stringify(d.dune)}`); }
