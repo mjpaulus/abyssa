@@ -69,6 +69,27 @@ Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSi
 // 4.30 / 4.25 / 4.20 / 3.90-3.93 / 2.85 / touch-ended (7 touch-ended too), and the crest's footing (g) fails at 8 / 9 / 9.5 (sliding down her
 // flank in contact with her shell collider 3.5 u over the floor), passes at 5, 7, 10-12. The shove's line still goes through safeThrow (crackBeat)
 Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 11, shoveStag: 0.8, holdRise: 1, riseVmax: 7, footRise: 1, footStep: 0.6, plume: 1 });
+// DIGGING BACK IN (spec §3; Task 12, brooder.js the dig-in): once he is off her ground (today's settle rule's margin and hold: SETTLE.release,
+// SETTLE.hold s; tested by onHerDune, because onHerGround's height cutoff sinks with her), bury runs 0 -> 1 over digT s: she sinks, the sand
+// slides back up her flanks (growCover below), the crust fades back in, a low haze of silt drifts off (render only: calmed, she is blinded by
+// nothing). He comes back onto her ground: it pauses; it resumes when he has been off SETTLE.hold s again. At its start the mound is fitted
+// to where she actually lay down (her walk home stops within 3 u and 0.12 rad of her bed): the sink re-measured there, the dune re-fitted
+// over the sunk pose. When it ends she is the outcrop again, the harpoon's scar in the rock, her burning wards embers under the sand.
+//   digT s (spec 15-20); pause 1 (0: burial-probe's RED nopause); haze s between haze puffs
+//   job ms: THE REFIT AS A JOB OVER FRAMES (booked item 6). The re-bed measured 165 ms in one frame at home on this branch (fitMound 114 ms,
+//        76 of them the footing's envelope; prepGrowth 4 ms; headless M5 Max, the page's CPU calibrated against node), so the dig-in's fit
+//        runs as generators (fitMoundJ, prepGrowthJ) that yield whenever a frame's slice of `job` ms is spent; the pose is held for it (brooder.js
+//        digStep). burial-probe digin's pre-registered bar: the window's worst frame <= 4.0 ms over its median. bedDown runs the same
+//        generators to the end in one call (the deadline Infinity: never a yield), so a bed is the same arithmetic as before, bit for bit
+Object.assign(BURY, { digT: 17.5, pause: 1, haze: 0.8, job: 0.8 });
+// the job's clock: _dl the frame's deadline (performance.now() ms), Infinity outside a job (a bed: the checks below are one compare)
+let _dl = Infinity, _ck = 0;
+const due = () => _dl !== Infinity && (++_ck & 15) === 0 && performance.now() > _dl;   // (fine loops: a vertex, a triangle)
+const dueNow = () => _dl !== Infinity && performance.now() > _dl;                        // (coarse loops: a bearing, a row)
+// run a job to its end in this call (bedDown's fits)
+function runAll(g) { const d = _dl; _dl = Infinity; try { while (!g.next().done); } finally { _dl = d; } }
+// one slice of a job: until `ms` from now, or the job's end; true when it is done
+export function jobSlice(g, ms) { const d = _dl; _dl = performance.now() + ms; try { return !!g.next().done; } finally { _dl = d; } }
 const _v = V3();
 
 // the mean ground under her: poseAll's own 5 x 5 support grid over her footprint, bare floor. (The grid's constants live in THREE
@@ -163,16 +184,23 @@ function shellTopM(MD, e, n, x, z) {
 // (repile), each quad takes its shorter diagonal (diagonals) and the sand settles (settle). Cost
 // (measured, M5 Max headless): 12-14 ms, + prepGrowth 2.5 ms, of a 37 ms re-bed. Judged by burial-probe disguise `repose` (every
 // triangle of rows 1 .. NI-1 <= a fixed 33.81 deg).
-export function fitMound(L, MD, seabedColor, fissureDist) {
+export function fitMound(L, MD, seabedColor, fissureDist) { runAll(fitMoundJ(L, MD, seabedColor, fissureDist)); }
+// (Task 12) the fit as a generator (BURY.job): a yield wherever a frame's slice is spent. Its first slice must run in the fit pose (her body's
+// matrix and her limbs are read there: MD.mw, limbPoints); every later one reads only her shell through her body's matrixWorld, which the caller
+// holds at the fit pose (brooder.js digStep)
+export function* fitMoundJ(L, MD, seabedColor, fissureDist) {
   const K = BURY, R = L.R, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw), NR = MD.NR, NI = K.rings;
   L.body.updateMatrixWorld(true);
   MD.mw.set(L.body.matrixWorld.elements); MD.mwInv.set(_mi.copy(L.body.matrixWorld).invert().elements);
+  limbCapture(L);   // (Task 12: her limbs' matrices kept here, in the fit pose, for pileUp's sources; limbPoints was pileUp's own first call, the same pose at a bed)
+  if (dueNow()) yield;   // (the job's first slice ends here: digStep poses her twice round it)
+  yield* limbPointsJ();
   MD.c = cy; MD.s = sy; MD.R = R; MD.cx = L.pos.x; MD.cz = L.pos.z; MD.crestZ = K.crestZ; MD.topAt = L.topAt;
   // the mesh's (x, z) by her yaw (as restWorld and toPolar map it); every HEIGHT read at that world (x, z) through the full matrix
   const wx = (lx, lz) => L.pos.x + (lx * cy + lz * sy) * R, wz = (lx, lz) => L.pos.z + (-lx * sy + lz * cy) * R;
   const topW = (lx, lz) => shellTopW(MD, wx(lx, lz), wz(lx, lz));
   const a = K.crestW / 2 / R, b = K.crestL / 2 / R, st = K.ringStep / R, dl = 0.6 / R, thS = L.sandSide > 0 ? 0 : Math.PI;
-  binShell(L, MD, st);
+  yield* binShellJ(L, MD, st);
   // her shell's top at radius r on bearing j: the heightfield's, or the highest drawn vertex binned there if higher; NaN off her plan
   const shAt = (j, r, lx, lz) => {
     const t = topW(lx, lz), k = Math.floor(r / st); let m = -1e9;
@@ -190,6 +218,7 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
     return m > -1e8 ? m : NaN;
   };
   for (let j = 0; j < NB; j++) {
+    if (dueNow()) yield;
     const th = j / NB * Math.PI * 2, ux = Math.cos(th), uz = Math.sin(th);
     const ws = Math.max(0, Math.cos(th - thS)), aj = a + K.sandOpen / R * ws * ws;   // (sandOpen: the sand side's face opened)
     let r = 1 / Math.sqrt((ux / aj) ** 2 + (uz / b) ** 2);
@@ -201,9 +230,10 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   for (let j = 0; j < NB; j++) { let s = 0; for (let q = -2; q <= 2; q++) s += RIN[(j + q + NB) % NB]; RS[j] = s / 5; }   // no corners
   // the strip's centre, then the pile round it (sources: her drawn shell outside the strip's band, over the floor less the cover)
   MD.bx = wx(0, K.crestZ); MD.bz = wz(0, K.crestZ);
-  pileUp(L, MD, dl, st);
+  yield* pileUpJ(L, MD, dl, st);
   const C = MD.geo.attributes.color.array, rgb = _rgb, run0 = (NI - 2) * 0.1 / R;
   for (let j = 0; j < NB; j++) {
+    if (dueNow()) yield;
     const th = j / NB * Math.PI * 2, ux = Math.cos(th), uz = Math.sin(th), r0 = RS[j];
     // the pile's run-out on this bearing: one step past the last sample standing over the floor (never over the crack's lip), and
     // never shorter than 0.1 u a ring (rings at one radius drew walls between bearings)
@@ -229,6 +259,7 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   // must lie on the floor, or the step down to the buried ring is a wall)
   for (let j = 0; j < NB; j++) { let a2 = 0; for (let q = -3; q <= 3; q++) a2 += RE1[(j + q + NB) % NB]; RE2[j] = Math.min(CAPR[j], Math.max(REND[j], a2 / 7) + 1.5 / R); }
   for (let j = 0; j < NB; j++) {
+    if (dueNow()) yield;
     const th = j / NB * Math.PI * 2, ux = Math.cos(th), uz = Math.sin(th), r0 = RS[j], rEnd = RE2[j];
     const set = (i, r, dk) => {
       const lx = ux * r, lz = K.crestZ + uz * r, x = wx(lx, lz), z = wz(lx, lz), o = (i * NB + j) * 3, sh = shDrawn(j, r), fl = terrainH(x, z, L.idx);
@@ -248,23 +279,26 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
   }
   // every drawn shell vertex outside the strip under its cover (coverShell), then across bearings: a dune has no ridges between
   // bearings (5-tap average of rings 1..NI-1, never under its cover again)
-  coverShell(L, MD);
+  yield* coverShellJ(L, MD);
   smoothRings(MD);
-  repile(L, MD);
+  yield* repileJ(L, MD);
   diagonals(MD);
-  settle(MD);
+  yield* settleJ(MD);
+  if (dueNow()) yield;
   // normals of the fitted dune, facing up (the seabed material is FrontSide); the floor state's normal is straight up
   MD.P.set(MD.M); MD.geo.computeVertexNormals();
   let ny = 0; const N = MD.geo.attributes.normal.array; for (let i = 1; i < N.length; i += 3) ny += N[i];
   if (ny < 0) { const ix = MD.geo.index.array; for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; } MD.geo.index.needsUpdate = true; MD.geo.computeVertexNormals(); }
   MD.NM.set(MD.geo.attributes.normal.array);
   MD.geo.attributes.color.needsUpdate = true;
-  MD.k = -1; setMoundK(MD, L.bury, 0);
+  // (Task 12, booked item 4, Task 3a M3) the bounding sphere of the FITTED dune (P = M here), never of the state drawn at L.bury: the dig-in
+  // fits at bury 0, where setMoundK lays it flat under the floor, and a sphere of that would cull the dune as it rises
   MD.geo.computeBoundingSphere();
+  MD.k = -1; setMoundK(MD, L.bury, 0);
   // the queries' early-out: a circle round C holding every ring (shutFloorY runs this for every hose node, every frame)
   let rMax = 0; for (let q = 0; q < MD.RR.length; q++) if (MD.RR[q] > rMax) rMax = MD.RR[q];
   MD.br2 = (rMax * R + 1) * (rMax * R + 1);
-  { const t0 = performance.now(); fitFooting(L, MD); MD.footMs = performance.now() - t0; }   // (booked: the bake's cost, an event)
+  { const t0 = performance.now(); yield* fitFootingJ(L, MD); MD.footMs = performance.now() - t0; }   // (booked: the bake's cost, an event; a job's spans its frames)
 }
 // THE FOOTING OVER HER CREST (Task 3b; controller ruling 1, 2026-10-18). His floor on the strip is NOT her crest's drawn top (crestY / sandY
 // stay that, for the disguise and the harpoon's seat): her exposed back is all near-vertical lips and spines, and a rigid lead sole (0.52 u
@@ -276,21 +310,30 @@ export function fitMound(L, MD, seabedColor, fissureDist) {
 // drawn dune), then max-filtered over a disc of r + h sqrt2 (so the bilinear read between
 // four nodes is never under the true footprint max). Kept to the strip and r + h sqrt2 round it (where her rock is ground: under the dune
 // the sand is), and buriedFloorAt takes max(the dune, this): one surface across the strip's edge, no seam. Zero per-frame cost but a read.
-function fitFooting(L, MD) {
+let FW = new Float32Array(0), FG = new Float32Array(0), FIN = new Uint8Array(0);
+function* fitFootingJ(L, MD) {
   const sh = L.parts.shell, PA = sh.geometry.attributes.position, P = PA.array, I = sh.geometry.index ? sh.geometry.index.array : null, nb = MD.COLS;
   const { r, h } = BURY.foot, rho = r + h * Math.SQRT2, K = Math.ceil(rho / h);
   sh.updateMatrixWorld(true);
-  const e = sh.matrixWorld.elements, nv = PA.count, W = new Float32Array(nv * 3);
-  for (let v = 0; v < nv; v++) { const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
+  // (Task 12) the grids in scratch grown at a fit (an event), not allocated per fit: in the dig-in's job a 2 MB allocation and its fill were
+  // one slice that could not yield (E is the mound's own: MD.foot holds it)
+  const e = sh.matrixWorld.elements, nv = PA.count;
+  if (FW.length < nv * 3) FW = new Float32Array(nv * 3);
+  const W = FW;
+  for (let v = 0; v < nv; v++) { if (due()) yield; const x = P[v * 3], y = P[v * 3 + 1], z = P[v * 3 + 2];
     W[v * 3] = e[0] * x + e[4] * y + e[8] * z + e[12]; W[v * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13]; W[v * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14]; }
   // the box: the strip's edge (ring 1) + rho + a node
   let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
   for (let j = 0; j < nb; j++) { const o = (nb + j) * 3; if (MD.M[o] < x0) x0 = MD.M[o]; if (MD.M[o] > x1) x1 = MD.M[o]; if (MD.M[o + 2] < z0) z0 = MD.M[o + 2]; if (MD.M[o + 2] > z1) z1 = MD.M[o + 2]; }
   const pad = rho + h; x0 -= pad; z0 -= pad; x1 += pad; z1 += pad;
-  const nx = Math.ceil((x1 - x0) / h) + 1, nz = Math.ceil((z1 - z0) / h) + 1, G = new Float32Array(nx * nz).fill(-1e9), IN = new Uint8Array(nx * nz);
+  const nx = Math.ceil((x1 - x0) / h) + 1, nz = Math.ceil((z1 - z0) / h) + 1;
+  if (FG.length < nx * nz) { FG = new Float32Array(nx * nz); FIN = new Uint8Array(nx * nz); }
+  const G = FG, IN = FIN;
+  G.fill(-1e9, 0, nx * nz);
   // her drawn shell's topmost hit at every node
   const nt = I ? I.length / 3 : nv / 3;
   for (let t = 0; t < nt; t++) {
+    if (due()) yield;
     const ia = (I ? I[t * 3] : t * 3) * 3, ib = (I ? I[t * 3 + 1] : t * 3 + 1) * 3, ic = (I ? I[t * 3 + 2] : t * 3 + 2) * 3;
     const ax = W[ia], az = W[ia + 2], bx = W[ib], bz = W[ib + 2], cx = W[ic], cz = W[ic + 2];
     const a0 = Math.max(0, Math.ceil((Math.min(ax, bx, cx) - x0) / h)), a1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) - x0) / h));
@@ -308,11 +351,17 @@ function fitFooting(L, MD) {
   // the drawn GROUND under each node is her rock or, where it is lower, the floor or the dune: so a node of the strip with no rock over the
   // floor (her back's lip at the strip's ends falls under the sand: the first envelope left those nodes -1e9, buriedFloorAt then let her
   // shell's proxy stand solid there, and the keel walk stalled against it, 220 shell frames) is the floor's, never a hole
-  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) { const x = x0 + a * h, z = z0 + b * h, o = b * nx + a, th = terrainH(x, z, L.idx), m = moundY(MD, x, z);
+  // (Task 12) the dune as FITTED: at a bed it is drawn (k 1, P the fit); the dig-in fits it at bury 0, flat under the floor and not drawn, so the
+  // ground term reads a view of it at the fit (P = M) instead: never the hidden state, and never the real mound drawn mid-job (ground nobody sees)
+  const MDf = MD.drawn ? MD : Object.assign({}, MD, { P: MD.M, drawn: true });
+  for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) { if (due()) yield; const x = x0 + a * h, z = z0 + b * h, o = b * nx + a, th = terrainH(x, z, L.idx), m = moundY(MDf, x, z);
     if (th > G[o]) G[o] = th; if (m > G[o]) G[o] = m; IN[o] = inStrip(MD, x, z) ? 1 : 0; }
   // the footprint max, over the strip and rho round it
-  const E = new Float32Array(nx * nz).fill(-1e9), K2 = (rho / h) * (rho / h);
+  if (!MD.footE || MD.footE.length < nx * nz) MD.footE = new Float32Array(nx * nz);
+  const E = MD.footE, K2 = (rho / h) * (rho / h);
+  E.fill(-1e9, 0, nx * nz);
   for (let b = 0; b < nz; b++) for (let a = 0; a < nx; a++) {
+    if (due()) yield;
     let m = -1e9, near = false;
     for (let db = -K; db <= K; db++) { const bb = b + db; if (bb < 0 || bb >= nz) continue;
       for (let da = -K; da <= K; da++) { const aa = a + da; if (aa < 0 || aa >= nx || da * da + db * db > K2) continue;
@@ -332,11 +381,12 @@ export function footY(MD, x, z) {
   return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
 }
 // SHN (above) off her drawn shell at the fit pose (no floor reads: the strip's edge needs only the shell)
-function binShell(L, MD, st) {
+function* binShellJ(L, MD, st) {
   SHN.fill(-1e9);
   const sh = L.parts.shell, P = sh.geometry.attributes.position, mw = sh.matrixWorld, cover = BURY.cover, lo = L.meanG - 3;
   sh.updateMatrixWorld(true);
   for (let i = 0; i < P.count; i++) {
+    if (due()) yield;
     _sv.fromBufferAttribute(P, i).applyMatrix4(mw);
     if (_sv.y + cover < lo) continue;                    // (deep under the floor: the floor under her stays within ~0.7 u of meanG)
     toPolar(MD, _sv.x, _sv.z);
@@ -355,33 +405,50 @@ function binShell(L, MD, st) {
 // shell's (her crest is rock; a limb in the band would stand in it)
 let LSRC = new Float32Array(0), LN = 0;
 const _lm = new THREE.Matrix4(), _lm2 = new THREE.Matrix4();
-function limbPoints(L) {
-  const objs = [];
-  if (L.legs) for (const k in L.legs) objs.push(L.legs[k]);
-  if (L.claws) for (const c of L.claws) objs.push(c.merus, c.carpus, c.palm, c.dact);
-  if (L.parts.eyes) objs.push(L.parts.eyes);
-  if (L.parts.stalks) objs.push(L.parts.stalks);
-  if (L.mouth) for (const q of L.mouth) objs.push(q.hook);
-  let need = 0;
-  for (const o of objs) if (o && o.geometry) need += o.geometry.attributes.position.count * (o.isInstancedMesh ? o.count : 1);
+// (Task 12) in two steps, so the dig-in's job can slice the second: limbCapture keeps each limb's world matrix (an instanced one's, each
+// instance's) as posed NOW (the fit pose: fitMoundJ's prologue), limbPointsJ transforms every vertex through the kept matrices. The same
+// matrices and the same products as the one-step version, so a bed's sources are bit for bit as before
+const LOBJ = [];
+let LMAT = new Float64Array(0), LMN = 0;
+function limbCapture(L) {
+  LOBJ.length = 0;
+  if (L.legs) for (const k in L.legs) LOBJ.push(L.legs[k]);
+  if (L.claws) for (const c of L.claws) LOBJ.push(c.merus, c.carpus, c.palm, c.dact);
+  if (L.parts.eyes) LOBJ.push(L.parts.eyes);
+  if (L.parts.stalks) LOBJ.push(L.parts.stalks);
+  if (L.mouth) for (const q of L.mouth) LOBJ.push(q.hook);
+  let need = 0, nm = 0;
+  for (const o of LOBJ) if (o && o.geometry) { need += o.geometry.attributes.position.count * (o.isInstancedMesh ? o.count : 1); nm += o.isInstancedMesh ? o.count : 1; }
   if (LSRC.length < need * 3) LSRC = new Float32Array(need * 3);   // (grown at a fit, an event)
-  LN = 0;
-  for (const o of objs) {
+  if (LMAT.length < nm * 16) LMAT = new Float64Array(nm * 16);
+  LMN = 0;
+  for (const o of LOBJ) {
     if (!o || !o.geometry) continue;
     o.updateMatrixWorld(true);
-    const P = o.geometry.attributes.position, each = mw => { for (let i = 0; i < P.count; i++) { _sv.fromBufferAttribute(P, i).applyMatrix4(mw); LSRC[LN * 3] = _sv.x; LSRC[LN * 3 + 1] = _sv.y; LSRC[LN * 3 + 2] = _sv.z; LN++; } };
-    if (o.isInstancedMesh) for (let k = 0; k < o.count; k++) { o.getMatrixAt(k, _lm); each(_lm2.multiplyMatrices(o.matrixWorld, _lm)); }
-    else each(o.matrixWorld);
+    if (o.isInstancedMesh) for (let k = 0; k < o.count; k++) { o.getMatrixAt(k, _lm); _lm2.multiplyMatrices(o.matrixWorld, _lm); LMAT.set(_lm2.elements, LMN * 16); LMN++; }
+    else { LMAT.set(o.matrixWorld.elements, LMN * 16); LMN++; }
+  }
+}
+function* limbPointsJ() {
+  LN = 0; let q = 0;
+  for (const o of LOBJ) {
+    if (!o || !o.geometry) continue;
+    const P = o.geometry.attributes.position, nk = o.isInstancedMesh ? o.count : 1;
+    for (let k = 0; k < nk; k++, q++) {
+      _lm2.fromArray(LMAT, q * 16);
+      for (let i = 0; i < P.count; i++) { if (due()) yield; _sv.fromBufferAttribute(P, i).applyMatrix4(_lm2); LSRC[LN * 3] = _sv.x; LSRC[LN * 3 + 1] = _sv.y; LSRC[LN * 3 + 2] = _sv.z; LN++; }
+    }
   }
 }
 let LV = new Uint8Array(0);
-function pileUp(L, MD, dl, st) {
+function* pileUpJ(L, MD, dl, st) {
   const sh = L.parts.shell, P = sh.geometry.attributes.position, mw = sh.matrixWorld, cover = BURY.cover, lo = L.meanG - 2.5, R = L.R;
   const HS = 1.9 * R;                                    // (her rim ~1 R from C, a 4.5 u pile runs out ~8 u past it)
   gn = Math.min(GMAX, Math.ceil(2 * HS / GH) + 1); gh = 2 * HS / (gn - 1); gx0 = MD.bx - HS; gz0 = MD.bz - HS;
   EH.fill(-1e9, 0, gn * gn); SHO.fill(-1e9);
   if (VSRC.length < P.count) VSRC = new Uint8Array(P.count);   // (grown at a fit, an event; the shell's count only changes with the sculpt)
   for (let i = 0; i < P.count; i++) {
+    if (due()) yield;
     VSRC[i] = 0;
     _sv.fromBufferAttribute(P, i).applyMatrix4(mw);
     const need = _sv.y + cover;
@@ -393,10 +460,10 @@ function pileUp(L, MD, dl, st) {
     { const k = Math.floor(_rho / st); if (k < NRAD) { if (_sv.y > SHO[b0 * NRAD + k]) SHO[b0 * NRAD + k] = _sv.y; if (_sv.y > SHO[b1 * NRAD + k]) SHO[b1 * NRAD + k] = _sv.y; } }
     deposit(_sv.x, _sv.z, need);
   }
-  // her limbs (limbPoints above): the same rule, flagged in LV for coverShell
-  limbPoints(L);
+  // her limbs (limbPoints above, read by fitMoundJ in the fit pose): the same rule, flagged in LV for coverShell
   if (LV.length < LN) LV = new Uint8Array(LN);
   for (let i = 0; i < LN; i++) {
+    if (due()) yield;
     LV[i] = 0;
     const x = LSRC[i * 3], y = LSRC[i * 3 + 1], z = LSRC[i * 3 + 2], need = y + cover;
     if (need < lo || need <= terrainH(x, z, L.idx)) continue;
@@ -407,7 +474,7 @@ function pileUp(L, MD, dl, st) {
     { const k = Math.floor(_rho / st); if (k < NRAD) { if (y > SHO[b0 * NRAD + k]) SHO[b0 * NRAD + k] = y; if (y > SHO[b1 * NRAD + k]) SHO[b1 * NRAD + k] = y; } }
     deposit(x, z, need);
   }
-  chamfer();
+  yield* chamferJ();
 }
 // a requirement at world (x, z) into the pile: the four cells round it (the bilinear read at it is then >= need)
 function deposit(x, z, need) {
@@ -416,10 +483,11 @@ function deposit(x, z, need) {
   for (let q = 0; q < 4; q++) { const c = (iz + (q >> 1)) * gn + ix + (q & 1); if (need > EH[c]) EH[c] = need; }
 }
 // the 5 x 5 chamfer, twice each way: a cell takes (a neighbour - repose x the true step length) when that is higher
-function chamfer() {
+function* chamferJ() {
   const k = BURY.repose, w1 = k * gh, w2 = k * gh * Math.SQRT2, w3 = k * gh * Math.sqrt(5), n = gn;
   for (let rep = 0; rep < 2; rep++) {
     for (let iz = 0; iz < n; iz++) for (let ix = 0; ix < n; ix++) {
+      if (ix === 0 && dueNow()) yield;
       const c = iz * n + ix; let v = EH[c], u;
       if (ix > 0 && (u = EH[c - 1] - w1) > v) v = u;
       if (iz > 0) {
@@ -433,6 +501,7 @@ function chamfer() {
       EH[c] = v;
     }
     for (let iz = n - 1; iz >= 0; iz--) for (let ix = n - 1; ix >= 0; ix--) {
+      if (ix === n - 1 && dueNow()) yield;
       const c = iz * n + ix; let v = EH[c], u;
       if (ix < n - 1 && (u = EH[c + 1] - w1) > v) v = u;
       if (iz < n - 1) {
@@ -461,10 +530,11 @@ function pileAt(x, z) {
 // cover. The drawn dune is linear across each of the quad's two triangles, so it then lies >= cover over every one of them
 // (smoothRings clamps to NEED, never takes it back). The two outer rings stay buried under the floor (the edge must never float):
 // a vertex in that last quad needing cover is booked in MD.uncov
-function coverShell(L, MD) {
+function* coverShellJ(L, MD) {
   const sh = L.parts.shell, P = sh.geometry.attributes.position, mw = sh.matrixWorld, cover = BURY.cover, NI = BURY.rings;
   let un = 0;
   for (let v = 0, nv = P.count + LN; v < nv; v++) {
+    if (due()) yield;
     if (v < P.count) { if (!VSRC[v]) continue; _sv.fromBufferAttribute(P, v).applyMatrix4(mw); }
     else { const q = v - P.count; if (!LV[q]) continue; _sv.set(LSRC[q * 3], LSRC[q * 3 + 1], LSRC[q * 3 + 2]); }   // (her limbs: pileUp)
     const i = quadAt(MD, _sv.x, _sv.z);
@@ -486,13 +556,13 @@ function coverShell(L, MD) {
 // where higher: the clamped corner's neighbours now fall from it at the repose, and the requirement holds at every corner (the
 // deposit's bilinear read is >= it). Measured (with SHO, the repile alone, before the settle): over 33.81 deg 162 -> 60, worst
 // 84.2 -> 63.1 deg, none of the remaining faces clamped
-function repile(L, MD) {
+function* repileJ(L, MD) {
   const NI = BURY.rings, M = MD.M;
   let n = 0;
   for (let v = NB; v < NI * NB; v++) { const o = v * 3; if (MD.NEED[v] > pileAt(M[o], M[o + 2]) + 1e-4) { deposit(M[o], M[o + 2], MD.NEED[v]); n++; } }
   MD.repiled = n;
   if (!n) return;
-  chamfer();
+  yield* chamferJ();
   for (let v = NB; v < NI * NB; v++) { const o = v * 3, h = pileAt(M[o], M[o + 2]); if (h > M[o + 1]) M[o + 1] = h; }
 }
 // THE SAND SETTLES (Task 3a fix round 2; review I1): what is left after the repile is the pile's own creases and cone tips sampled
@@ -523,7 +593,7 @@ function lowFrom(M, v, a, b, lo) {
   if (d > Math.max(ra, rb)) return lo;                   // (only over both its neighbours: the far edge is the steep one; it rises)
   return base + d > lo ? base + d : lo;
 }
-function settle(MD) {
+function* settleJ(MD) {
   const NI = BURY.rings, nb = NB, M = MD.M, DG = MD.DG;
   _ks = Math.tan(Math.atan(BURY.repose) + SETTLE_SLACK);
   if (M0.length < NB * MD.NR) M0 = new Float32Array(NB * MD.NR);   // (grown at a fit, an event)
@@ -540,6 +610,7 @@ function settle(MD) {
     mx = 0;
     const fwd = (n & 1) === 0;
     for (let ii = 1; ii < NI; ii++) {                    // (the triangles of rows 1 .. NI-1, as drawn: diagonals() picked each quad's)
+      if (dueNow()) yield;
       const i = fwd ? ii : NI - ii;
       for (let jj = 0; jj < nb; jj++) {
         const j = fwd ? jj : nb - 1 - jj, a = i * nb + j, b = i * nb + (j + 1) % nb, c = a + nb, d = b + nb;
@@ -780,10 +851,14 @@ let _sOnShell = false;
 // spines and its edge answers with a neighbour cell's height past her rim, and slabs on it stood 0.3-0.68 u over her DRAWN shell (rise (i),
 // first two runs: a slab must ride what is drawn). Bilinear inside a cell whose four corners she covers, NaN otherwise (her rim: the
 // slab then reads the sand under it, and bursts at the ledge as she rises out of it)
+// (Task 12, booked item 3) CACHED BY THE SHELL'S GEOMETRY AND ITS MATRIX IN HER BODY: the grid lies in her body's frame, so it does not move with
+// her bed, and a re-bed on the same shell (the dig-in's: slabsBed in its job) keeps it; only the sculpt's landing (a new geometry) re-rasterizes
 const SLAB_GN = 320;
 function slabsTopGrid(L, Sl) {
   const sh = L.parts.shell, g = sh.geometry, P = g.attributes.position, I = g.index; sh.updateMatrix();
   const m = sh.matrix.elements; let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  if (Sl.TH && Sl.topGeo === g && Sl.topM) { let same = true; for (let q = 0; q < 16 && same; q++) same = Sl.topM[q] === m[q]; if (same) return; }
+  Sl.topGeo = g; Sl.topM = Float64Array.from(m);
   const W = Sl.TW && Sl.TW.length === P.count * 3 ? Sl.TW : (Sl.TW = new Float32Array(P.count * 3));
   for (let i = 0; i < P.count; i++) { const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
     const bx = m[0] * x + m[4] * y + m[8] * z + m[12], by = m[1] * x + m[5] * y + m[9] * z + m[13], bz = m[2] * x + m[6] * y + m[10] * z + m[14];
@@ -1118,7 +1193,9 @@ export function breathTick(L, dt, player, camPos, emitDust) {
 // index holding only the strip's triangles, swapped in and out (no program changes); a weed frond is scaled to 0. Undone as she rises
 // past bury 0.5, redone as she digs back in past it.
 const _gm = new THREE.Matrix4(), _gp = V3();
-export function prepGrowth(L, MD) {
+export function prepGrowth(L, MD) { runAll(prepGrowthJ(L, MD)); }
+// (Task 12) as a generator, for the dig-in's job (fitMoundJ's rule: her body's matrixWorld held at the fit pose by the caller)
+export function* prepGrowthJ(L, MD) {
   const reef = L.parts.reef, weed = L.parts.weed;
   // a re-fit on the SAME growth (a re-bed at a new spot, the dig-in) first puts the full growth back: else the strip's index would be
   // taken for the full one and the zeroed fronds for the grown ones, and rising she would never get them back. The sculpt's landing
@@ -1128,6 +1205,7 @@ export function prepGrowth(L, MD) {
     const g = reef.geometry, ix = g.index.array, P = g.attributes.position, keep = [], hid = [];
     reef.updateMatrixWorld(true);
     for (let q = 0; q < ix.length; q += 3) {
+      if (due()) yield;
       // kept only if ALL THREE corners lie in the strip: a triangle straddling its edge would leave a corner standing out of the
       // dune (and burial-probe's `reef` check books every drawn vertex outside the strip)
       let all = true;
@@ -1160,6 +1238,7 @@ export function prepGrowth(L, MD) {
     const overIron = p => { if (!Hs) return false; const dx = p.x - Hs.x, dy = p.y - Hs.y, dz = p.z - Hs.z; if (dx * dx + dy * dy + dz * dz < nr2) return true;
       const t = dx * snx + dz * snz; if (t < 0 || t > GROW.sight[0]) return false; const qx = dx - snx * t, qz = dz - snz * t; return qx * qx + dy * dy + qz * qz < GROW.sight[1] * GROW.sight[1]; };
     for (let k = 0; k < weed.count; k++) {
+      if (dueNow()) yield;
       weed.getMatrixAt(k, _gm); _gm.premultiply(weed.matrixWorld);
       let all = true;
       for (let v = 0; v < WP.count && all; v++) { _gp.fromBufferAttribute(WP, v).applyMatrix4(_gm); all = inStrip(MD, _gp.x, _gp.z) && !overIron(_gp); }
@@ -1212,6 +1291,34 @@ export function growReveal(L, dt) {
   }
 }
 const RI_ok = L => L.reefIdx.geo === L.parts.reef.geometry && !!L.reefIdx.ordered;
+// (Task 12) THE SAND SLIDES BACK UP HER FLANKS: the dig-in covers the growth outside the strip as the reveal uncovered it, in reverse (the
+// farthest from the strip first: the dune rises from the floor up her sides), over GROW.coverU of bury, through the same ordered index and draw
+// range (prepGrowth re-sorted it for the strip where she lies now) and each frond shrunk back to its root over GROW.revRamp u of the front; at
+// the end of the range the buried state proper (buryGrowth). Writes only while the front moves. (The shipped toggle at bury 0.5 would pop: of
+// 1346 hidden reef triangles 1150 stand out of the drawn dune even at bury 1: growReveal's measurement)
+export function growCover(L, b) {
+  const k = Math.max(0, Math.min(1, (b - GROW.coverU[0]) / (GROW.coverU[1] - GROW.coverU[0])));
+  if (k >= 1) { buryGrowth(L, true); return; }
+  const reef = L.parts.reef, weed = L.parts.weed, RI = L.reefIdx && reef && RI_ok(L) ? L.reefIdx : null, top = L.revMax || 0;
+  if (L.growthBuried !== 3) {
+    if (L.growthBuried === 1) buryGrowth(L, false);                // (from buried: the full growth first, then covered from its edge)
+    L.growthBuried = 3; L.covW = -1; L.revN = RI ? RI.key.length : 0; if (RI) { reef.geometry.setIndex(RI.ordered); reef.geometry.setDrawRange(0, (RI.nStrip + L.revN) * 3); }
+  }
+  const w = (1 - k) * top;
+  if (w === L.covW) return;
+  L.covW = w;
+  if (RI) { let n = L.revN; while (n > 0 && RI.key[n - 1] > w) n--; L.revN = n; reef.geometry.setDrawRange(0, (RI.nStrip + n) * 3); }
+  if (weed && L.weedM0 && L.weedKey) {
+    const A = weed.instanceMatrix.array, M0 = L.weedM0;
+    for (let q = 0; q < weed.count; q++) {
+      if (!L.weedOut[q]) continue;
+      const f = Math.max(0, Math.min(1, (w - L.weedKey[q]) / GROW.revRamp)), sc = f * f * (3 - 2 * f), o = q * 16;
+      A[o] = M0[o] * sc; A[o + 1] = M0[o + 1] * sc; A[o + 2] = M0[o + 2] * sc; A[o + 4] = M0[o + 4] * sc; A[o + 5] = M0[o + 5] * sc; A[o + 6] = M0[o + 6] * sc;
+      A[o + 8] = M0[o + 8] * sc; A[o + 9] = M0[o + 9] * sc; A[o + 10] = M0[o + 10] * sc;
+    }
+    weed.instanceMatrix.needsUpdate = true;
+  }
+}
 // THE GROWTH ON THE EXPOSED ROCK (Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and coral"). Laid at the
 // bed (bedDown: after the fit and the harpoon's seat, before prepGrowth), home only (only a buried build beds down). No new program: the
 // weed's spare slots (her weed InstancedMesh is built for 150 fronds and the sculpt keeps 60: the same mesh, the same material) and ONE
@@ -1224,7 +1331,9 @@ const RI_ok = L => L.reefIdx.geo === L.parts.reef.geometry && !!L.reefIdx.ordere
 //   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
 // (Task 7b, M6) revealT s: the growth outside the strip uncovered from the crack over this long (growReveal); revRamp u: a frond grows from
 // its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80 };
+// (Task 12) coverU: the bury over which the dig-in covers it (growCover): from 0.1 (the dune's first tenth up) to 0.7, before her flanks are
+// under it (the dune's rings draw at bury x their fitted height)
+export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 export function growRock(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;

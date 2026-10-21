@@ -36,7 +36,8 @@ import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos,
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
-import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal } from './burial.js';
+import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
+  fitMoundJ, prepGrowthJ, jobSlice, growCover } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
@@ -676,7 +677,7 @@ export function makeBrooder(idx, cfg) {
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
     else if (name === 'place') {
       if (!L.buried) { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); seatRite(L); fitSkirt(L); } }
-      else { placeAt(L, arg.pos, arg.yaw); if (L.dormant) bedDown(L); }   // (velkath-buried-rock) sunk again at the new bed
+      else { digReset(L); placeAt(L, arg.pos, arg.yaw); if (L.dormant) bedDown(L); }   // (velkath-buried-rock) sunk again at the new bed
     }
     return L.probe();
   };
@@ -742,6 +743,7 @@ function bedDown(L, noHarpoon = false) {
   // (Task 7a) the rise's state, defined before use and reset at every bed (bedDown runs only while she is dormant): the dune drawn whole
   // (moundK 1), no crack, not stood
   L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0; L.riseSheetN = 0;   // (Task 8: the plume's sheets spawned)
+  digReset(L);   // (Task 12, booked item 1: no point, no calm verb, no dig-in carried into a bed)
   L.bury = 0; poseAll(L, 0, null);
   // (Task 8 review, Minor 2) the shell's keep outline (keepShell): the 32 outline points of her shell, picked here, off the shell's own geometry,
   // not on the first frame the keep engages; bedDown re-runs when the sculpt lands (the fused shell replaces the baked one)
@@ -764,6 +766,56 @@ function bedDown(L, noHarpoon = false) {
   // (Task 5b) the weed and coral on the exposed rock (burial.js growRock: after the seat, so they keep clear of the iron), then the growth
   // outside the strip buried with her (prepGrowth)
   if (L.mound) { growRock(L, L.mound); prepGrowth(L, L.mound); }
+}
+
+// (velkath-buried-rock Task 12) a live L reused at a new bed (bedDown, the lab's place): no point under way, no calm verb pending (Task 10 review,
+// for Task 12: the point's phases and the claw's reach are read every frame), no dig-in or its job
+function digReset(L) { L.pointPh = 0; L.pointK = 0; L.calmNext = false; L.digging = false; L.dugIn = false; L.digJob = null; L.digOff = 0; }
+// THE DIG-IN'S START (burial.js BURY.digT): the sink re-measured and the dune re-fitted where she actually lay down. One event, but run as a JOB
+// over frames (booked item 6: the re-bed is ~165 ms in one frame here, fitMound 114 of it): digStep does it in BURY.job ms slices at the end of
+// her update, the dig-in waits for it (bury stays 0, the dune hidden, so nothing reads the mound mid-fit). She lies still for it (no velocity,
+// no turn: nothing moves her while settled and calmed). Here: the state a buried bed expects (booked item 2: the rise's crack, stand and slab
+// flags back, which only bedDown reset), no point or calm verb (item 1), the dune flat
+function beginDig(L) {
+  L.vel.set(0, 0, 0); L.yawV = 0;
+  L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.shoveN = 0; L.riseSheetN = 0; L.footLatch = false;
+  L.pointPh = 0; L.pointK = 0; L.calmNext = false;
+  L.bury = 0; L.moundK = 0; setMoundK(L.mound, 0, 0);
+  L.digJob = { ph: 0, gen: null, mw1: L.digMw1 || (L.digMw1 = new THREE.Matrix4()) };
+}
+// one frame of the job (updateBrooder's last step: her pose this frame is posed and drawn), each frame's share at most BURY.job ms of fitting
+// (burial-probe digin's cost: the base update has a ~2.5 ms beat every ~23 frames, and a slice on that frame must stay under the 4.0 ms bar).
+// Frame 1: the sink off her live pose (bury 0: this frame's poseAll, the brief's pose). Frame 2: her pose at bury 1 (poseAll, the brief's), its
+// body matrix kept, the fit's prologue there (burial.js fitMoundJ: her body's matrix and her limbs are read in the fit pose), her pose at bury
+// 0 again. Later frames: her body's matrixWorld held at the kept bury-1 matrix for the slice (every later read is her shell, reef and weed
+// through it: rigid children of her body), then put back from her live position (the frame is drawn as posed): the fit, then prepGrowth (the
+// growth's strip index for where she lies now), then the slabs' bed (their grid is cached: booked item 3). Returns its ms
+function digStep(L) {
+  const J = L.digJob, t0 = performance.now();
+  if (J.ph === 0) { L.buryD = fitSink(L, L.crest); J.ph = 1; }
+  else if (J.ph === 1) {
+    L.bury = 1; poseAll(L, 0, null); J.mw1.copy(L.body.matrixWorld);
+    J.gen = fitMoundJ(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
+    if (jobSlice(J.gen, 0)) { J.ph = 3; J.gen = null; } else J.ph = 2;
+    L.bury = 0; poseAll(L, 0, null);
+  } else {
+    L.body.matrixWorld.copy(J.mw1);
+    for (const ch of L.body.children) ch.updateMatrixWorld(true);
+    if (J.ph === 2) { if (jobSlice(J.gen, BURY.job)) { J.ph = 3; J.gen = null; } }
+    else if (J.ph === 3) { if (!J.gen) J.gen = prepGrowthJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 4; J.gen = null; } }
+    else { slabsBed(L); L.digJob = null; }
+    L.body.updateMatrixWorld(true);
+  }
+  return performance.now() - t0;
+}
+// (velkath-buried-rock) THE DIG-IN'S "ON HER GROUND": her shell's plan + m, by plan alone, up to a ceiling over the drawn ground (a
+// swimmer far overhead does not freeze it). Not onHerGround: its height cutoff (pos.y > bodyY + 0.15 R) rides her body, and digging
+// in she sinks ~4 u under him, so a man on the rising dune, or beside it afloat, would read as off her ground mid-dig.
+function onHerDune(L, player, m) {
+  if (!player) return false;
+  const g = Math.max(terrainH(player.pos.x, player.pos.z, L.idx), extraFloorAt(player.pos.x, player.pos.z, L.idx));
+  if (player.pos.y - 1.35 > g + 6) return false;
+  return shellPlanNear(player.pos.x, player.pos.y - 0.45, player.pos.z, m);
 }
 
 // ---- THE SILT DRIFT (polish-followups) ----
@@ -2149,7 +2201,9 @@ export function updateBrooder(L, dt, t, player) {
   // at bury 0.5 with half a dune drawn
   if (L.mound) {
     breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY);
-    if (L.buried && L.cracked && !L.hasStood && !L.dormant) growReveal(L, dt); else buryGrowth(L, L.bury > 0.5);
+    if (L.buried && L.cracked && !L.hasStood && !L.dormant) growReveal(L, dt);
+    else if (L.digging && !L.digJob) growCover(L, L.bury);   // (Task 12) the sand slides back up over it as she digs in
+    else buryGrowth(L, L.bury > 0.5);
   }
   if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there. uCrack / uCrackO lag the body a frame: M6, see crustTick)
   L.t += dt;
@@ -2366,6 +2420,21 @@ export function updateBrooder(L, dt, t, player) {
     // (under her, the bearing to him swings wildly with every step he takes: she holds)
     want = L.blindT < SIGHT_GIVEUP ? (dh > 0.5 * R ? Math.atan2(tx, tz) : L.yaw)
       : L.searchYaw + 0.7 * Math.sin((L.blindT - SIGHT_GIVEUP) * 0.45);
+  }
+  // (velkath-buried-rock Task 12) DIGGING BACK IN (burial.js BURY.digT): calmed and lain down on her bed (the point done, home, the settle's
+  // stand at 0, the heave landed), once he is off her ground (onHerDune, SETTLE.release, for SETTLE.hold s) the refit's job runs (beginDig,
+  // digStep) and then bury runs 0 -> 1 over digT s, paused while he is on her ground (resumed after SETTLE.hold s off it); a puff of the low haze
+  // every BURY.haze s off the dune's ring 5 as it rises (plume.js 'wake': render only). Dug in (L.dugIn) she is the outcrop again: breathTick
+  // breathes her, publishCols makes her crest ground. Home only (L.buried): elsewhere the shipped settle, unchanged
+  if (L.buried && L.mound && L.calmed && !L.dormant && !L.dugIn && !L.pointPh && !L.homeTurn && !L.walkTo && L.standTarget === 0 && L.stand <= 0.001 && L.heave.x < 0.02) {
+    const near = BURY.pause > 0 && onHerDune(L, player, SETTLE.release);
+    L.digOff = near ? 0 : (L.digOff || 0) + dt;
+    if (!L.digging && L.digOff > SETTLE.hold) { L.digging = true; beginDig(L); }
+    if (L.digging && !L.digJob && (!near && L.digOff > SETTLE.hold || BURY.pause <= 0)) {
+      L.bury = Math.min(1, L.bury + dt / BURY.digT); L.moundK = L.bury;
+      if ((L.hazeT = (L.hazeT || 0) - dt) <= 0) { L.hazeT = BURY.haze; const j = (Math.random() * L.mound.COLS) | 0, o = (5 * L.mound.COLS + j) * 3; spawnWake(L.mound.P[o], L.mound.P[o + 1], L.mound.P[o + 2], 0.4, L.idx); }
+      if (L.bury >= 1) { L.digging = false; L.dugIn = true; }
+    }
   }
   // the hunt's closing speed and heading (world space)
   let vC = 0, cAng = Math.atan2(tx, tz);
@@ -2645,5 +2714,7 @@ export function updateBrooder(L, dt, t, player) {
   wardFlashes(L, dt, null);
   updatePlumes(dt);
   L.pPrev.copy(player.pos);
+  // (Task 12) the dig-in's refit, a slice a frame (digStep); its ms booked for burial-probe digin's cost
+  if (L.digJob) L.digJobMs = digStep(L); else if (L.digJobMs) L.digJobMs = 0;
   return ev;
 }

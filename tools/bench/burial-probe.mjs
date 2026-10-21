@@ -270,7 +270,12 @@
 //               pause   (Review Focus 3, on foot) once bury >= 0.33 he is placed 3 u outside the boundary of the probe's own test on the sand
 //                       side's bearing (scanned in from 40 u off the strip's centre, at the ground) facing her, and REAL W walks him in;
 //                       W is released 0.5 s after his first frame on her ground; he stands until 3 s after that first frame, then is
-//                       PLACED 35 u off (the leave). Bars:
+//                       PLACED 35 u off (the leave). AMENDED after the first build run (t12-dev7; no bar changed, the procedure did): the
+//                       teleport to 35 u dragged the follow lens 13 u through the ground behind it for 18 frames (lens -1.56 u, him 35 u from
+//                       the dune, off her ground): a probe artifact. Now he is placed at the approach spot when the window opens (bury 0), 60
+//                       frames settle him (the span the boots and lens bars judge starts after them), he waits there for bury >= 0.33, walks
+//                       in as above, and the leave is a WALK OFF: turned about (player.yaw + PI) and REAL W until 30 frames off her ground,
+//                       then he stands; the leave's first frame is the first frame off her ground after the 3 s on it. Bars:
 //                 pause  every frame he is on her ground while the dig-in runs (0 < bury < 1 on the frame before): |d bury| <= 1e-9;
 //                        >= 60 such frames, else UNMEASURED
 //                 resume the first frame bury rises after the leave is <= SETTLE.hold x 60 + 1 frames after it (counting the leave's
@@ -874,15 +879,16 @@ const DIG_INSTALL = `(async () => {
         ph: L.pointPh || 0, walk: L.walkTo ? 1 : 0, ht: L.homeTurn ? 1 : 0, calmed: L.calmed ? 1 : 0, dorm: L.dormant ? 1 : 0, mk: L.mound ? r3(L.mound.k) : null,
         px: r2(p.x), py: r3(p.y), pz: r2(p.z), gr: P.grounded ? 1 : 0, on: onAt(p.x, p.y, p.z), own: r3(own()), lens: r3(cp.y - Math.max(T.shutFloorY(cp.x, cp.z, 0), sand(cp.x, cp.z))),
         hov: r3(p.y - 1.35 - g), drop: R.hold ? r3(R.holdY - p.y) : null, held: R.hold ? 1 : 0, buoy: r3(P.buoy || 0), calmOut: r3(BC.BODY.calmOut || 0),
-        upd: upd == null ? null : r3(upd), job: L.digJobMs == null ? null : r3(L.digJobMs), wl: r3(wl), wg: r3(wg), her: [r2(L.pos.x), r2(L.pos.z), r3(L.yaw)] });
+        upd: upd == null ? null : r3(upd), job: L.digJobMs == null ? null : r3(L.digJobMs), hp: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1024) : null, wl: r3(wl), wg: r3(wg), her: [r2(L.pos.x), r2(L.pos.z), r3(L.yaw)] });
     },
-    // n frames booked; stop: 'settled' | 'stood' | 'woke' | 'u03' | 'ph2' | 'b033' | 'b04' | 'b05' | 'dug' | 'on30' | null
+    // n frames booked; stop: 'settled' | 'stood' | 'woke' | 'u03' | 'ph2' | 'b033' | 'b04' | 'b05' | 'dug' | 'on30' | 'off30' | null
     step(n, stop) {
       if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking');
       let k = 0;
       const c = { settled: () => R.settled(), stood: () => !!L.hasStood, woke: () => !L.dormant, u03: () => L.stand >= 0.3, ph2: () => L.pointPh === 2,
         b033: () => L.bury >= 0.33, b04: () => L.bury >= 0.4, b05: () => L.bury >= 0.5, dug: () => !!L.dugIn,
-        on30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && S[i].on; i--) m++; return m >= 30; } }[stop] || null;
+        on30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && S[i].on; i--) m++; return m >= 30; },
+        off30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && !S[i].on; i--) m++; return m >= 30; } }[stop] || null;
       R.tEnd = performance.now();
       window.__bench.step(n, () => { const t = performance.now(), upd = t - R.tEnd; R.row(upd); if (R.hold) R.put(); k++; R.tEnd = performance.now(); if (c && c()) return false; });
       return { rows: R.S.length, k, hit: c ? c() : null, bury: L.bury, dug: !!L.dugIn, stand: L.stand, ph: L.pointPh || 0 };
@@ -1120,20 +1126,26 @@ try {
           }
         } else {
           let st = null;
+          if (run === 'pause') { sess.appr = await c.ev(`window.__bpDig.approach()`); if (sess.appr.err) throw new Error(sess.appr.err); await dig(60); sess.apprF = (await c.ev(`window.__bpDig.S.length`)); }
           for (let k = 0; k < 4; k++) { st = await dig(600, run === 'pause' ? 'b033' : 'b04'); if (st.hit) break; }
           if (!st.hit) throw new Error(`MIDWAY: bury never reached ${run === 'pause' ? 0.33 : 0.4} within 40 s of the settle (the dig-in never ran)`);
-          sess.apprF = st.rows;
           if (run === 'pause') {
-            sess.appr = await c.ev(`window.__bpDig.approach()`); if (sess.appr.err) throw new Error(sess.appr.err);
+            sess.walkF = st.rows;
             await c.key('KeyW', true); const on = await dig(300, 'on30'); await c.key('KeyW', false);
             if (!on.hit) throw new Error('walking in, he never reached her ground (' + JSON.stringify(sess.appr) + ')');
             await dig(150);
+            sess.turn = await c.ev(`(window.player.yaw += Math.PI, window.player.yaw)`);
+            await c.key('KeyW', true); const off = await dig(600, 'off30'); await c.key('KeyW', false);
+            if (!off.hit) throw new Error('walking off, he never left her ground');
+            const S0 = await c.ev(`window.__bpDig.S.map(r => r.on)`); let i = sess.walkF; while (i < S0.length && !S0[i]) i++; i += 150; while (i < S0.length && S0[i]) i++;
+            sess.leaveF = i;
           } else {
+            sess.apprF = st.rows;
             sess.fl = await c.ev(`window.__bpDig.afloat()`); if (sess.fl.err) throw new Error(sess.fl.err);
             await dig(180);
+            sess.leaveF = (await c.ev(`window.__bpDig.S.length`));
+            sess.leave = await c.ev(`window.__bpDig.place35()`);
           }
-          sess.leaveF = (await c.ev(`window.__bpDig.S.length`));
-          sess.leave = await c.ev(`window.__bpDig.place35()`);
           for (let k = 0; k < 4; k++) { const st2 = await dig(600, 'dug'); if (st2.hit) break; }
           await dig(30);
           sess.endState = await c.ev(`window.__bpDig.state()`);
