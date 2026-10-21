@@ -692,9 +692,14 @@ export function crestY(MD, x, z) {
 //     drawn surface on a frame or two, burial-probe rise (iShell), booked: the review's I1)
 //   SLAB_FOOT 0.15: the five reads' spread, a little over half the shell grid's ~0.25 u cell, so a lowest point finds the crevice a cell bridges (the
 //     game seats on the lowest of the five, the probe's slab() reads the highest of five +-0.05: the review's gMin -0.234 u inside her crest is that gap)
-const SLAB_FOOT = 0.15, FOOT_X = [SLAB_FOOT, -SLAB_FOOT, 0, 0], FOOT_Z = [0, 0, SLAB_FOOT, -SLAB_FOOT];
+const SLAB_STEP = 0.35, SLAB_DIP = 0.1, SLAB_FOOT = 0.15, FOOT_X = [SLAB_FOOT, -SLAB_FOOT, 0, 0], FOOT_Z = [0, 0, SLAB_FOOT, -SLAB_FOOT];
 const SLAB_BEND = 1.6, SLAB_T = 3.0, SS = 12, SLAB_SINK = 0.45, SLAB_LEDGE = 0.25, SLAB_VMAX = 2.5, SLAB_G = 6.0, SLAB_DRAG = 1.2;
-Object.assign(BURY, { slabs: 14, pourRate: 2.5 });
+// (fix round 2, M3) THE RISE'S SILT BUDGET, particles a burst: the footfx pool holds 420 (life 1.2-2.4 s, shared with his boots), so the rise
+// must emit under ~175 a second to cut no live puff short. On f6b4077 it emitted 1650-1850 in the 14 s after the wake, ~400 a second at its
+// peak, and overwrote 280-514 live puffs a rise (burial-probe rise info.dust, first at ~1.5 s). pour: the dune's streams (was 3; stronger, 4.0:
+// a larger puff for the one cut); rim: the pour off her rim once the dune is gone, buried builds only (the shipped 6 off home is untouched);
+// crumble / ledge: a slab's puffs (were 3 / 6); reveal: a puff every GROW.revPuff (80, was 40) uncovered triangles (was 3)
+Object.assign(BURY, { slabs: 14, pourRate: 2.5, dust: { pour: 2, pourStr: 4.0, rim: 3, crumble: 2, ledge: 4, reveal: 2 } });
 let _ico = null;
 const _sq = new THREE.Quaternion(), _sq2 = new THREE.Quaternion(), _sn = V3(), _sUp = V3(0, 1, 0), _slv = V3(), _sInv = new THREE.Matrix4();
 function icoIndexed() {
@@ -873,13 +878,19 @@ function slabWrite(L, dt) {
     let ly = 1e9, lx = 0, lz = 0;
     for (let i = i0; i < i0 + nv; i++) { _slv.set(LP[i * 3], LP[i * 3 + 1], LP[i * 3 + 2]).applyQuaternion(_sq); if (_slv.y < ly) { ly = _slv.y; lx = _slv.x; lz = _slv.z; } }
     // (the lowest of five reads round it, SLAB_FOOT u apart: a clod's lowest point settles into a crevice of her shell the grid's cells
-    // bridge, rather than hang over it)
+    // bridge, rather than hang over it; but never more than SLAB_DIP u under the read at the vertex itself: fix round 2, at a lip of her
+    // shell (a step 0.4-0.7 u down within 0.15 u, measured on f08a683) the lowest read sank a piece 0.45 u into her where it stood:
+    // burial-probe rise (iShell) 0.348 u at t 1.683 s, piece 7)
     const nx = S[o] + lx * sc, nz = S[o + 1] + lz * sc;
-    let gl = slabSurf(L, MD, e, nx, nz), lowShell = _sOnShell;
-    for (let q = 0; q < 4; q++) { const v = slabSurf(L, MD, e, nx + FOOT_X[q], nz + FOOT_Z[q]); if (v < gl) { gl = v; lowShell = _sOnShell; } }
-    // a ledge under it (the surface fell away more than SLAB_LEDGE u since last frame): it bursts into silt rather than hang in the water
-    if (dt > 0 && (gl < S[o + 9] - SLAB_LEDGE || sc <= 0.001)) {
-      if (sc > 0.001) emitSlabDust(S[o], S[o + 10], S[o + 1], 6, 1.8);
+    const g0c = slabSurf(L, MD, e, nx, nz), c0Shell = _sOnShell;
+    let gl = g0c, lowShell = c0Shell, gh = g0c;
+    for (let q = 0; q < 4; q++) { const v = slabSurf(L, MD, e, nx + FOOT_X[q], nz + FOOT_Z[q]); if (v < gl) { gl = v; lowShell = _sOnShell; } if (v > gh) gh = v; }
+    if (gl < g0c - SLAB_DIP) { gl = g0c - SLAB_DIP; lowShell = c0Shell; }
+    // a ledge under it (the surface fell away more than SLAB_LEDGE u since last frame), or a STEP under its lowest point (the five reads span more
+    // than SLAB_STEP u: a lip or wall of her shell, where no seat both keeps it out of her and off the water; fix round 2, a piece at a wall,
+    // ny 0.13, read 0.30 u into her): it bursts into silt rather than hang in the water or sit in her
+    if (dt > 0 && (gl < S[o + 9] - SLAB_LEDGE || gh - gl > SLAB_STEP || sc <= 0.001)) {
+      if (sc > 0.001) emitSlabDust(S[o], S[o + 10], S[o + 1], BURY.dust.ledge, 1.8);
       S[o + 8] = 0;
       for (let i = i0; i < i0 + nv; i++) { P[i * 3] = S[o]; P[i * 3 + 1] = S[o + 10]; P[i * 3 + 2] = S[o + 1]; }
       continue;
@@ -889,7 +900,7 @@ function slabWrite(L, dt) {
     const sink = !lowShell && !onShell ? Math.max(0, age - 0.8) * SLAB_SINK : 0;
     const cy = gl - ly * sc - sink;
     S[o + 10] = cy;
-    if (sc < 0.6 && S[o + 11] < 1) { S[o + 11] = 1; emitSlabDust(S[o], cy, S[o + 1], 3, 1.2); }
+    if (sc < 0.6 && S[o + 11] < 1) { S[o + 11] = 1; emitSlabDust(S[o], cy, S[o + 1], BURY.dust.crumble, 1.2); }
     for (let i = i0; i < i0 + nv; i++) {
       _slv.set(LP[i * 3], LP[i * 3 + 1], LP[i * 3 + 2]).applyQuaternion(_sq);
       P[i * 3] = S[o] + _slv.x * sc; P[i * 3 + 1] = cy + _slv.y * sc; P[i * 3 + 2] = S[o + 1] + _slv.z * sc;
@@ -1172,7 +1183,7 @@ export function growReveal(L, dt) {
     let n = L.revN;
     reef.updateMatrixWorld();
     while (n < RI.key.length && RI.key[n] <= w) {
-      if (n % GROW.revPuff === 0) { _gp.set(RI.cen[n * 3], RI.cen[n * 3 + 1], RI.cen[n * 3 + 2]).applyMatrix4(reef.matrixWorld); emitSlabDust(_gp.x, _gp.y, _gp.z, 3, 1.4); }
+      if (n % GROW.revPuff === 0) { _gp.set(RI.cen[n * 3], RI.cen[n * 3 + 1], RI.cen[n * 3 + 2]).applyMatrix4(reef.matrixWorld); emitSlabDust(_gp.x, _gp.y, _gp.z, BURY.dust.reveal, 1.4); }
       n++;
     }
     L.revN = n; reef.geometry.setDrawRange(0, (RI.nStrip + n) * 3);
@@ -1201,7 +1212,7 @@ const RI_ok = L => L.reefIdx.geo === L.parts.reef.geometry && !!L.reefIdx.ordere
 //   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
 // (Task 7b, M6) revealT s: the growth outside the strip uncovered from the crack over this long (growReveal); revRamp u: a frond grows from
 // its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 40 };
+export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80 };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 export function growRock(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;

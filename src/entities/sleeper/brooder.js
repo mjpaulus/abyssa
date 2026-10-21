@@ -2128,11 +2128,11 @@ export function updateBrooder(L, dt, t, player) {
         // fallen; fewer particles a burst (3, the shipped 6) at BURY.pourRate x the rate: the footfx pool (420) is shared with his boots
         // (M3, measured: burial-probe rise info.dust, 280-514 live-slot overwrites of 1650-1850 puffs a rise over six placements, see burial.js setSlabDust)
         const MD = L.mound, o = ((4 + ((Math.random() * 5) | 0)) * MD.COLS + ((Math.random() * MD.COLS) | 0)) * 3;
-        emitDust(MD.M[o], MD.P[o + 1] + (MD.M[o + 1] - MD.P[o + 1]) * Math.random(), MD.M[o + 2], 3, 3.4);
+        emitDust(MD.M[o], MD.P[o + 1] + (MD.M[o + 1] - MD.P[o + 1]) * Math.random(), MD.M[o + 2], BURY.dust.pour, BURY.dust.pourStr);
       } else {
         const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
         const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
-        emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 6, 3.4);
+        emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, L.buried ? BURY.dust.rim : 6, 3.4);   // (fix round 2, M3: the rise's silt budget, burial.js BURY.dust; off home 6 as shipped)
       }
     }
   }
