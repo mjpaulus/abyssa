@@ -17,7 +17,7 @@ import { V3, clamp, lerp, fbm } from '../../lib/math.js';
 import { makeGlow, makeWarmGlow, seededRand, rockMapSet } from '../../lib/textures.js';
 import { rockHue, siltHue } from '../../world/flora.js';
 import { registerPaint } from '../../lib/paint.js';
-import { terrainH, terrainMeshes, fissurePatchSample } from '../../world/terrain.js';
+import { terrainH, terrainMeshes, fissurePatchSample, extraFloorAt } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
@@ -716,6 +716,9 @@ function seatRite(L, noHarpoon = false) {
 // mound over the sunk pose and the growth on her back buried under it, then (Task 4) the harpoon on the crest. Called only when
 // L.buried: the shipped paths keep their own lines.
 function bedDown(L, noHarpoon = false) {
+  // (Task 7a) the rise's state, defined before use and reset at every bed (bedDown runs only while she is dormant): the dune drawn whole
+  // (moundK 1), no crack, not stood
+  L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0;
   L.bury = 0; poseAll(L, 0, null);
   if (L.brood) L.brood.seat();
   L.buryD = fitSink(L, L.crest);
@@ -1808,6 +1811,26 @@ function quake(L, ev, x, z, k, player) {
   const q = k * (1 - smooth(d, 8, 70));
   if (q > ev.quake) ev.quake = q;
 }
+// (velkath-buried-rock) THE CRACK (spec §2, beat 1): the crust cracks along her length, the ground jolts, slabs slough off; a man on her is
+// shoved flat off her with a stagger (safeThrow: never toward the crack), never torn
+function crackBeat(L, ev, player) {
+  const MD = L.mound;
+  quake(L, ev, MD ? MD.cx : L.pos.x, MD ? MD.cz : L.pos.z, 0.6, player);
+  if (L.slabs) slabsBreak(L);   // (Task 7b: until then L.slabs is undefined)
+  if (!player || !(BURY.shoveV > 0)) return;
+  // (onHerGround alone can miss a man up on the crest: its height cutoff is her sunk body's + 0.15 R. The extraFloorAt term is what
+  // catches him there: last frame, dormant, her crest and dune were ground under him.)
+  const on = onHerGround(L, player, 1.0) || extraFloorAt(player.pos.x, player.pos.z, L.idx) > terrainH(player.pos.x, player.pos.z, L.idx) + 0.3;
+  if (!on) return;
+  const cx = MD ? MD.cx : L.pos.x, cz = MD ? MD.cz : L.pos.z;
+  let dx = player.pos.x - cx, dz = player.pos.z - cz; const dl = Math.hypot(dx, dz);
+  if (dl > 1e-3) _ns.set(dx / dl, 0, dz / dl); else _ns.set(L.sand.x, 0, L.sand.z);
+  safeThrow(_ns, player.pos.x, player.pos.z, L.idx);
+  _ns.y = 0.10; _ns.normalize();
+  player.vel.addScaledVector(_ns, BURY.shoveV);
+  player.stagger = player.staggerDur = BURY.shoveStag; player.staggerK = 0.85;
+  L.shoveN = (L.shoveN || 0) + 1;
+}
 // a footfall you FEEL (brooder-clutch): event-shaped, distance-weighted out to THUMP.far;
 // game.js turns it into a vertical dip of the lens and sand lifting round his boots
 function thump(L, ev, x, z, k, player) {
@@ -1879,7 +1902,7 @@ function nsTurn(L) { return NOSAFE.turn * (L.drop || L.nsSlow > 0 ? NOSAFE.slowK
 function noSafeSpot(L, dt, player, ev, hunt) {
   const N = NOSAFE, R = L.R;
   if (L.nsSlow > 0) L.nsSlow = Math.max(0, L.nsSlow - dt);
-  const live = hunt && L.standE > 0.9;
+  const live = hunt && L.standE > 0.9 && L.risenUp !== false;   // (velkath-buried-rock: held until a buried rise has stood; else shipped)
   const ux = player.pos.x - L.pos.x, uz = player.pos.z - L.pos.z, rho = Math.hypot(ux, uz);
   const shellY = L.bodyY - (L.dropY || 0);                    // her standing body height (last pose)
   const below = live && player.pos.y < shellY;
@@ -2005,7 +2028,12 @@ export function updateBrooder(L, dt, t, player) {
   // (velfix) calmed, standing back up over him (SETTLE) is quiet: no wake (no leg puffs, no sink-and-heave, no
   // shudder or quake, no silt pouring off her back), at the settle's own rate
   const rising = L.standTarget > L.stand && !L.calmed;
-  L.rising = rising;                                  // (game.js: limbs unfolding past him are a shove, not a slam)
+  // (velkath-buried-rock) the rise is not over until she STANDS (the clock done and the heave settled): until then her body's contacts
+  // are a shove, not a slam (game.js reads L.rising), her threat is held and the drop's count does not run (L.risenUp, below).
+  // Not buried: exactly the shipped line, and L.risenUp true.
+  if (L.buried && !L.dormant && !L.calmed && !L.hasStood && L.stand >= 1 && Math.abs(L.heave.x - 1) < 0.02 && Math.abs(L.heave.v) < 0.05) { L.hasStood = true; L.crackK = 0; }
+  L.risenUp = !(L.buried && BURY.holdRise > 0 && !L.dormant && !L.calmed && !L.hasStood);
+  L.rising = rising || !L.risenUp;                    // (game.js: limbs unfolding past him are a shove, not a slam)
   const rate = rising ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
@@ -2023,6 +2051,14 @@ export function updateBrooder(L, dt, t, player) {
   const heaveT = win(u, 0.45, 0.88) - (rising ? 0.12 * Math.sin(Math.PI * win(u, 0.22, 0.50)) : 0);
   const hv0 = L.heave.x;
   spr(L.heave, heaveT, 2.6, rising ? 0.42 : 0.55, dt);
+  // (velkath-buried-rock) THE RISE OUT OF THE SAND (BURY above): only ever down while she rises; the beats on the same clock
+  if (L.buried && !L.calmed && !L.dormant && rising) {
+    const b = 1 - win(u, BURY.riseU[0], BURY.riseU[1]);
+    if (b < L.bury) L.bury = b;
+    L.moundK = Math.min(L.bury, 1 - win(u, BURY.pourU[0], BURY.pourU[1]));
+    if (!L.cracked) { L.cracked = true; L.crackT = 0; crackBeat(L, ev, player); }
+  }
+  if (L.cracked && L.crackT < BURY.crackT + 1) L.crackT += dt;
   // settling, the shell lands: the moment the fall stops it thumps the floor
   if (!rising && hv0 > 0.02 && L.heave.x <= 0.02 && L.heave.v < -0.05) { quake(L, ev, L.pos.x, L.pos.z, 0.5, player); silt(L.pos.x, L.bodyY - R * 0.1, L.pos.z, 8, 3, 3.4, R * 0.9); }
   // the shudder as she wakes: the whole shell trembles while the silt pours
@@ -2058,7 +2094,7 @@ export function updateBrooder(L, dt, t, player) {
   }
   if (!L.underE) L.underE = S();
   spr(L.underE, L.under ? L.standE : 0, 2.0, 1.0, dt > 0 ? dt : 1);
-  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP && !L.under ? 1 : 0;
+  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.risenUp && L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP && !L.under ? 1 : 0;
   // a fresh threat starts the hammer at the top of its guard, so the first blow is
   // always preceded by the full wind-up
   if (L.threatTarget > 0.5 && L.threat < 0.02) L.swingT = 0;

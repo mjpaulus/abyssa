@@ -414,7 +414,7 @@ const RISE_INSTALL = `(async () => {
       for (const g of L.sigils) { const d = g.grp.position.y - sand(g.grp.position.x, g.grp.position.z); wh.push(r2(d)); if (d > wmax) wmax = d; if (d < wmin) wmin = d; if (g.lit) lit++; }
       R.S.push({ dorm: L.dormant ? 1 : 0, stand: r3(L.stand), standE: r3(L.standE), bury: r3(L.bury || 0), moundK: L.moundK == null ? null : r3(L.moundK), mk: MD ? r3(MD.k) : null, drawn: MD ? (MD.drawn ? 1 : 0) : null,
         hx: r3(L.heave.x), hv: r3(L.heave.v), rising: L.rising ? 1 : 0, hasStood: L.hasStood == null ? null : (L.hasStood ? 1 : 0), risenUp: L.risenUp == null ? null : (L.risenUp ? 1 : 0),
-        bodyY: r3(L.bodyY), threatE: r3(L.threatE), nsT: r3(L.nsT || 0), drop: L.drop || 0, seen: L.seen ? 1 : 0, tau: r2(L.tau || 0), blindT: r2(L.blindT || 0), lost: L.lostN || 0,
+        bodyY: r3(L.bodyY), sl: r3(L.soleLift || 0), gG: L.gG ? r3(L.gG.x) : null, threatE: r3(L.threatE), nsT: r3(L.nsT || 0), drop: L.drop || 0, seen: L.seen ? 1 : 0, tau: r2(L.tau || 0), blindT: r2(L.blindT || 0), lost: L.lostN || 0,
         stag: r3(P.stagger || 0), px: r2(p.x), py: r2(p.y), pz: r2(p.z), gr: P.grounded ? 1 : 0, gap: r3(bo - T.shutFloorY(p.x, p.z, 0)), dC: r3(Math.hypot(p.x - cx, p.z - cz)),
         slam: window.__slamLog ? window.__slamLog.length : -1, torn: r2(sv ? sv.torn : -1), wh, wmin: r2(wmin), wmax: r2(wmax), lit,
         blk0: blk(p.x, bo, p.z, 0), blk45: blk(p.x, bo, p.z, 0.45), lensClr: r3(cp.y - T.shutFloorY(cp.x, cp.z, 0)), lensBlk: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0,
@@ -568,7 +568,7 @@ try {
         if (!wr.wrenching) throw new Error('real E did not start the wrench at the anchor: ' + JSON.stringify(wr));
         for (let k = 0; k < 20; k++) { st = await c.ev(`window.__bpRise.step(30)`); if (st.wakeF >= 0) break; }
         if (!(st && st.wakeF >= 0)) throw new Error('she did not wake within 10 s of E at the anchor (' + JSON.stringify(pl) + '; ' + JSON.stringify(st) + '; ' + JSON.stringify(await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { wrenching: !!H.wrenching, wT: H.wT, pulled: !!H.pulled, wakeT: H.wakeT, d: Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z), dormant: window.lev.dormant, onDeck: window.player.onDeck, state: window.gameState }; })()`)) + ')');
-      } else { await c.ev(`(window.__lev.cmd('wake'), 1)`); st = await c.ev(`window.__bpRise.step(1)`); }
+      } else { await c.ev(`window.__bpRise.step(1)`); await c.ev(`(window.__lev.cmd('wake'), 1)`); st = await c.ev(`window.__bpRise.step(1)`); }
       for (let k = 0; k < 40 && st.rows - st.wakeF < RISE_SECS * 60; k++) st = await c.ev(`window.__bpRise.step(${Math.min(300, RISE_SECS * 60 - (st.rows - st.wakeF))})`);
       out = { where, place: pl, settle, ins, wakeF: st.wakeF, S: await c.ev(`window.__bpRise.S`) };
     }
@@ -699,7 +699,8 @@ if (MODE === 'rise') {
   const aTears = A.length ? A.reduce((n, q, k) => n + ((k === 0 ? q.slam > tear0.slam || q.torn > tear0.torn + 0.5 : q.slam > A[k - 1].slam || q.torn > A[k - 1].torn + 0.5) ? 1 : 0), 0) : null;
   const aThr = A.length ? Math.max(...A.map(q => q.threatE)) : null, aNs = A.length ? Math.max(...A.map(q => q.nsT)) : null;
   // (b)
-  const B0 = S.slice(w + 1, w + f60 + 1), stagSet = B0.findIndex((q, k) => q.stag > (k === 0 ? S[w].stag : B0[k - 1].stag) + 1e-6);
+  // (the wake frame itself included: the crack beat shoves him on it; compared with the frame before, booked before the wake on every BP_AT)
+  const B0 = S.slice(w, w + f60 + 1), stagSet = w < 1 ? -1 : B0.findIndex((q, k) => q.stag > (k === 0 ? S[w - 1].stag : B0[k - 1].stag) + 1e-6);
   const d0 = S[w] ? S[w].dC : null, d15 = S[w + 90] ? S[w + 90].dC : null;
   // (c)
   const cW = S[w] ? S[w].wmax : null, cS = s >= 0 ? S[s].wmin : null, litN = S.filter(q => q.lit > 0).length;
@@ -718,7 +719,7 @@ if (MODE === 'rise') {
     { name: 'a', val: { tears: aTears, threatEmax: aThr, nsTmax: aNs, frames: A.length }, bar: 'from E to STOOD: tears 0, threatE 0, nsT 0', ok: aTears === 0 && aThr === 0 && aNs === 0, vacuous: vacA, judged: true },
     { name: 'aTear', val: { tears: aTears, frames: A.length }, bar: '(a)\'s tear part: no tear from E to STOOD (a holdRise RED\'s bar)', ok: aTears === 0, vacuous: vacA, judged: false },
     { name: 'aHammer', val: { threatEmax: aThr, nsTmax: aNs, frames: A.length }, bar: '(a)\'s hammer and drop part: threatE 0, nsT 0 from E to STOOD (a holdRise RED\'s bar)', ok: aThr === 0 && aNs === 0, vacuous: vacA, judged: false },
-    { name: 'b', val: { stagSetT: stagSet < 0 ? null : +((stagSet + 1) / f60).toFixed(3), dC0: d0, dC15: d15, out: d0 != null && d15 != null ? r(d15 - d0) : null }, bar: 'a stagger set within 1.0 s of the wake, and the strip-centre distance +>= 0.5 u by 1.5 s', ok: stagSet >= 0 && d0 != null && d15 != null && d15 - d0 >= 0.5, vacuous: !S[w + 90], judged: where === 'crest' || where === 'anchor' },
+    { name: 'b', val: { stagSetT: stagSet < 0 ? null : +(stagSet / f60).toFixed(3), dC0: d0, dC15: d15, out: d0 != null && d15 != null ? r(d15 - d0) : null }, bar: 'a stagger set within 1.0 s of the wake, and the strip-centre distance +>= 0.5 u by 1.5 s', ok: stagSet >= 0 && stagSet <= f60 && d0 != null && d15 != null && d15 - d0 >= 0.5, vacuous: !S[w + 90], judged: where === 'crest' || where === 'anchor' },
     { name: 'c', val: { wardsAtWakeMax: cW, wardsAtStoodMin: cS, litFrames: litN, n: S[w] ? S[w].wh.length : 0 }, bar: 'wards < 0 over the sand at the wake, > 2 at STOOD, none lit', ok: cW != null && cW < 0 && cS != null && cS > 2 && litN === 0, vacuous: s < 0 || !S[w] || !S[w].wh.length, judged: true },
     { name: 'd', val: dR, bar: '|dY/dt| <= 8 u/s, E to STOOD', ok: !!dR && dR.max <= 8, vacuous: vacA, judged: true },
     { name: 'e', val: { capBlk0: capN, capFrames: cap.length, capBlk45: cap45, lensBlk, lensLow, lensMin }, bar: 'capsule never inside her from wake + 1.5 s to STOOD; the lens never inside her nor under the drawn surface + 0.3, E to STOOD', ok: capN === 0 && lensBlk === 0 && lensLow === 0, vacuous: vacA || !cap.length, judged: true },
