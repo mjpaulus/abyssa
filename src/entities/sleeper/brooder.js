@@ -33,7 +33,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
@@ -1721,7 +1721,7 @@ function poseAll(L, dt, player) {
   }
   for (let k = 0; k < COLL.length; k++) L.spine[k].set(COLL[k][0], COLL[k][1], COLL[k][2]).applyMatrix4(b.matrixWorld);
   L.head.set(0, 0.10, 0.80).applyMatrix4(b.matrixWorld);
-  publishCols(L);
+  publishCols(L, player, dt);
 }
 
 // (velfix, SETTLE) is he on the ground her body comes down on: within her shell's reach (shell plan, R x
@@ -1775,7 +1775,8 @@ const LEG_KEYS = ['coxa', 'femur', 'tibia', 'dactyl'];
 const LEG_N = { coxa: 1, femur: 1, tibia: 1, dactyl: 2 };
 function fitLegs(legs) { const o = {}; for (const k of LEG_KEYS) o[k] = fitCapsules(legs[k].geometry, LEG_N[k]); return o; }
 const _cm = new THREE.Matrix4(), _cm2 = new THREE.Matrix4(), _ca = V3(), _cb = V3();
-function publishCols(L) {
+const FOOT_SLIDE = 7;   // u/s^2: (Task 7a) off her carried footing once she has stood, as off her slick back (bodyCols.js SHELL_SLIDE)
+function publishCols(L, player = null, dt = 0) {
   if (!L.legFit || L.gone) return;
   beginBodyCols();
   const bw = L.body.matrixWorld, R = L.R;
@@ -1801,10 +1802,13 @@ function publishCols(L) {
     }
   }
   setShell(L.shellProx, bw.elements, R, !(L.buried && L.bury >= BURY.solidK));
-  // (Task 7a) RISING OUT OF THE SAND (from the crack until she has stood): her crest's footing stays ground, carried by her body (bodyCols
-  // setMound), capped on her strip once bury < solidK (her flanks out of the dune solid again); the mound is published while it is drawn OR
-  // while she rises out of it (moundY reads nothing once the dune is down, the footing still carries)
-  const out = L.buried && L.mound && !L.dormant && !L.dugIn && L.cracked && !L.hasStood && BURY.footRise > 0;
+  // (Task 7a) RISING OUT OF THE SAND, from the crack until she has stood, and not once calmed (fix round 1, M5): her crest's footing is carried
+  // by her body (bodyCols setMound) and is ground only while HE is on it: his boots within BURY.footStep under it or over it (fix round 1,
+  // C1: as ground for the whole column it lifted a man under her belly 17 u onto her back). Latched past her stand while he stays on it, and
+  // then he slides off it as off her slick back (SHELL_SLIDE's 7 u/s^2, outward), so the hand-off to the slick proxy is a step off its edge,
+  // never a jump onto the proxy (fix round 1, M7). The cap: full while bury >= solidK (the dune still covers her), then her strip's only.
+  // The mound is published while it is drawn OR while she rises out of it (moundY reads nothing once the dune is down; the footing carries)
+  const out = L.buried && L.mound && !L.dormant && !L.dugIn && !L.calmed && L.cracked && BURY.footRise > 0 && (!L.hasStood || L.footLatch);
   // her clutch: soft, the drawn surface (brood.js B.live, refreshed by its update this frame)
   if (L.brood && L.brood.seated && !L.brood.off) setClutch(L.brood.live, L.brood.seeds, L.brood.nL, bw.elements, R);
   // (velkath-buried-rock) her dune (while drawn) and, fully buried, her crest: ground (bodyCols.js buriedFloorAt); her shell's collider
@@ -1812,8 +1816,22 @@ function publishCols(L) {
   const MDd = L.mound && (L.mound.drawn || out) && BURY.floor ? L.mound : null;
   if (MDd && out) {
     _cm.fromArray(MDd.mwInv).premultiply(bw); _cm2.copy(_cm).invert();
-    setMound(MDd, L.idx, true, BURY.capShell > 0, _cm.elements, _cm2.elements, L.bury < BURY.solidK);
-  } else setMound(MDd, L.idx, MDd && L.bury >= BURY.solidK && (L.dormant || L.dugIn), BURY.capShell > 0);
+    const capAll = L.bury >= BURY.solidK && !L.hasStood, cap = BURY.capShell > 0;
+    setMound(MDd, L.idx, false, cap, _cm.elements, _cm2.elements, true, capAll);
+    let on = false;
+    if (player) { const f = crestFootAt(player.pos.x, player.pos.z); on = f > -1e8 && player.pos.y - 1.35 >= f - BURY.footStep; }
+    L.footLatch = on && (!L.hasStood || !!L.footLatch);
+    if (L.footLatch) {
+      setMound(MDd, L.idx, true, cap, _cm.elements, _cm2.elements, true, capAll);
+      if (L.hasStood && dt > 0) {
+        let hx = player.pos.x - L.pos.x, hz = player.pos.z - L.pos.z; const hl = Math.hypot(hx, hz) || 1;
+        player.vel.x += hx / hl * FOOT_SLIDE * dt; player.vel.z += hz / hl * FOOT_SLIDE * dt;
+      }
+    }
+  } else {
+    L.footLatch = false;
+    setMound(MDd, L.idx, MDd && L.bury >= BURY.solidK && (L.dormant || L.dugIn), BURY.capShell > 0);
+  }
   endBodyCols(L.pos.x, L.bodyY, L.pos.z, 2.9 * R);
 }
 
@@ -1832,7 +1850,7 @@ function quake(L, ev, x, z, k, player) {
 function crackBeat(L, ev, player) {
   const MD = L.mound;
   quake(L, ev, MD ? MD.cx : L.pos.x, MD ? MD.cz : L.pos.z, 0.6, player);
-  if (L.slabs) slabsBreak(L);   // (Task 7b: until then L.slabs is undefined)
+  if (L.slabs && typeof slabsBreak === 'function') slabsBreak(L);   // (Task 7b declares it; until then L.slabs is undefined: guarded, fix round 1 M8)
   if (!player || !(BURY.shoveV > 0)) return;
   // (onHerGround alone can miss a man up on the crest: its height cutoff is her sunk body's + 0.15 R. The extraFloorAt term is what
   // catches him there: last frame, dormant, her crest and dune were ground under him.)

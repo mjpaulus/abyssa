@@ -308,17 +308,23 @@ export function underShell(x, y, z) {
 // the new site first) places the next site's dens on shutFloorY before her old build is disposed, and home's dune must not be
 // ground there.
 // (velkath-buried-rock Task 7a, the controller's ruling: footing follows what is DRAWN through the rise) RISING OUT OF THE SAND her crest's
-// footing stays ground, CARRIED by her body: `carry` = her body's matrix now x the inverse of the fit's (burial.js MD.mw), `carryInv` its
-// inverse, so the envelope fitted at her bed is read where her rock is now (it hung, on the wake frame, from under a man on her crest: he
-// was left afloat 6.7 u over the sand). footCap: the cap holds only where that footing is the ground (her strip), so her flanks coming up
-// out of the drawn-down dune are solid to him again (a full cap would let him walk into them); while bury >= solidK the full cap holds
-// (the dune still covers her: the uncapped, not-slick proxy threw a man at the harpoon's anchor up 0.7 u in 2 frames on the wake).
+// footing can stay ground, CARRIED by her body: `carry` = her body's matrix now x the inverse of the fit's (burial.js MD.mw), `carryInv` its
+// inverse, so the envelope fitted at her bed is read where her rock is now (it went on the wake frame from under a man on her crest: he was
+// left afloat 6.7 u over the sand). It is ground (cOn) only while HE is on it (brooder.js publishCols: his boots within a step under it or
+// over it; fix round 1, C1: as ground for the whole column it lifted a man under her belly 17 u onto her back in one frame). The cap: with
+// capAll (bury >= solidK: the dune still covers her) the full cap, dune and footing, whoever stands where (the uncapped, not-slick proxy
+// threw a man at the harpoon's anchor up 0.7 u in 2 frames on the wake, and pokes 0.2-0.8 u through the dune's 0.3 u of cover); after it,
+// fCap: capped only where the carried footing is his ground (her strip), so her flanks coming up out of the drawn-down dune are solid again.
 let mound = null, moundZi = -1, moundSite = -1, crestOn = false, capOn = false, carryOn = false, footCap = false, carryY = 0;
 const CARRY = new Float32Array(16), CARRYI = new Float32Array(16);
-export function setMound(MD, zi, cOn, cap = true, carry = null, carryInv = null, fCap = false) {
-  mound = MD; moundZi = zi; moundSite = currentSiteIndex(); crestOn = !!cOn; capOn = !!(MD && cOn && cap);
-  carryOn = !!(MD && cOn && carry); if (carryOn) { CARRY.set(carry); CARRYI.set(carryInv); const W = MD.mw; carryY = carry[1] * W[12] + carry[5] * W[13] + carry[9] * W[14] + carry[13]; }   // (the first guess: her body's height now) footCap = capOn && !!fCap;
+export function setMound(MD, zi, cOn, cap = true, carry = null, carryInv = null, fCap = false, capAll = false) {
+  mound = MD; moundZi = zi; moundSite = currentSiteIndex(); crestOn = !!cOn; capOn = !!(MD && (cOn || capAll) && cap);
+  carryOn = !!(MD && carry);
+  if (carryOn) { CARRY.set(carry); CARRYI.set(carryInv); const W = MD.mw; carryY = carry[1] * W[12] + carry[5] * W[13] + carry[9] * W[14] + carry[13]; }   // (the first guess: her body's height now)
+  footCap = capOn && !!fCap && !capAll;
 }
+// (Task 7a) the carried footing under (x, z) whether or not it is ground this frame (brooder.js publishCols's latch reads it), or -1e9
+export function crestFootAt(x, z) { return mound && carryOn ? footAt(x, z) : -1e9; }
 // her crest's footing under world (x, z): burial.js footY, or carried (setMound): into the fit pose, read, and back, three passes (the
 // carry's tilt makes the fit's x, z depend on the height); -1e9 off it. No allocation
 function footAt(x, z) {
@@ -346,7 +352,7 @@ export function buriedFloorAt(x, z, zi) {
 // rising (crestOn false) everything is as shipped. The shell is still published: shellPlanNear (onHerGround, onHerDune) reads it.
 function overGround(x, y, z) {
   if (!capOn) return false;
-  const g = footCap ? (currentSiteIndex() === moundSite ? footAt(x, z) : -1e9) : buriedFloorAt(x, z, moundZi);
+  const g = footCap ? (crestOn && currentSiteIndex() === moundSite ? footAt(x, z) : -1e9) : buriedFloorAt(x, z, moundZi);
   return g > -1e8 && y >= g - 0.05;
 }
 // (probe) the published proxy's top under world (x, z), world y, or -1e9

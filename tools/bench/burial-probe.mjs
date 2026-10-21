@@ -526,7 +526,7 @@ const RISE_INSTALL = `(async () => {
         lift: L.claws.map(c => r3(c.liftNow || 0)), elbow: L.claws.map(c => r3(c.elbow || 0)), frontUp: r3(L.frontUp || 0), clawRes: r3(L.clawRes || 0), clawSt: r3(L.clawSt || 0), belly: r2(L.bellyOver ?? 99),
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
         gBase: r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, pb + 1.5, p.z))), gFoot: r3(footCarried(p.x, p.z)), boots: r3(bo), pb: r3(pb), forced: R.lastForce || 0,
-        calmed: L.calmed ? 1 : 0, under: R.underF === R.S.length ? 1 : 0 });
+        calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0 });
       R.prevBoots = bo;
     },
     step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { R.row(); R.lastForce = 0; if (${FORCE ? 'true' : 'false'} && R.wakeF >= 0 && L.stand >= 1 && !R.stoodSeen) { if (L.hasStood) { R.stoodSeen = true; if (R.reach0 != null) L.reach = R.reach0; } else { if (R.reach0 == null) { R.reach0 = L.reach; L.reach = -1; } R.lastForce = R.force(); } } }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
@@ -817,7 +817,8 @@ if (MODE === 'rise') {
   const B0 = S.slice(w, w + f60 + 1), stagSet = w < 1 ? -1 : B0.findIndex((q, k) => q.stag > (k === 0 ? S[w - 1].stag : B0[k - 1].stag) + 1e-6);
   const d0 = S[w] ? S[w].dC : null, d15 = S[w + 90] ? S[w + 90].dC : null;
   // (c)
-  const cW = S[w] ? S[w].wmax : null, cS = s >= 0 ? S[s].wmin : null, litN = S.filter(q => q.lit > 0).length;
+  // (fix round 1) at BP_AT=under he is set under her: a ward he lights from there is his (the rite), not the rise's: lit judged before it
+  const cW = S[w] ? S[w].wmax : null, cS = s >= 0 ? S[s].wmin : null, litN = S.filter((q, k) => q.lit > 0 && (out.underF == null || k < out.underF)).length;
   // (d)
   const vy = (a, b) => { let m = 0, at = -1; for (let i = Math.max(1, a); i <= b && i < S.length; i++) { const v = Math.abs(S[i].bodyY - S[i - 1].bodyY) * f60; if (v > m) { m = v; at = i; } } return { max: r(m), at: sec(at) }; };
   const dR = s >= 0 ? vy(e + 1, s) : null, dAfter = s >= 0 ? vy(s + 1, S.length - 1) : null;
@@ -839,6 +840,11 @@ if (MODE === 'rise') {
     { name: 'e', val: { capBlk0: capN, capFrames: cap.length, capBlk45: cap45, lensBlk, lensLow, lensMin }, bar: 'capsule never inside her from wake + 1.5 s to STOOD; the lens never inside her nor under the drawn surface + 0.3, E to STOOD', ok: capN === 0 && lensBlk === 0 && lensLow === 0, vacuous: vacA || !cap.length, judged: true },
     { name: 'f', val: fS ? { mk: fS.mk, drawn: fS.drawn, moundK: fS.moundK } : null, bar: 'at STOOD MD.k 0 and MD.drawn false', ok: !!fS && fS.mk === 0 && fS.drawn === 0, vacuous: !fS || fS.mk == null, judged: true }];
   info.dAfter = dAfter;
+  // (fix round 1, M7) THE HAND-OFF at STOOD for a man still on her carried footing: per frame his boots' rise and plan step, BODY.push, the
+  // frames until the latch lets go (booked, not gated)
+  if (s >= 0 && S[s].latch != null) { const H = S.slice(Math.max(1, s - 15), Math.min(S.length, s + 121)); let up = 0, st = 0, push = 0, off = null;
+    H.forEach((q, k) => { const p = S[Math.max(1, s - 15) + k - 1]; up = Math.max(up, q.boots - p.boots); st = Math.max(st, Math.hypot(q.px - p.px, q.pz - p.pz)); push = Math.max(push, q.body.push); if (off == null && k > 15 && !q.latch) off = k - 15; });
+    info.handoff = { latchedAtStood: S[s].latch, bootsUpMax: r(up), planStepMax: r(st), pushMax: r(push), latchOffAfter: off }; }
   // (g) THE FOOTING (header)
   ck.push(FOOTING(S, w, out.underF != null ? out.underF : null, s));
   // (BP_FORCE) the forced contact: legs closing on him in the window the hold adds
