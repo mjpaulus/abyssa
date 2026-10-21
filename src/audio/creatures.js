@@ -164,13 +164,12 @@ function velkathCrack(E, vg, t) {
   E.log('velkathCrack');
 }
 function velkathWake(E, L) {
-  const p = L.pos, t = E.now() + 0.01, vg = E.emit('cre', p.x, p.y + 2, p.z, 7, 3, null); if (!vg) return;
-  // the crust cracks L.crackDelay s after the wake (brooder.js: BURY.crackT, ~0.8 s): the crack and the pour ride that, the shipped voice does not
-  const tc = t + (L.crackDelay || 0);
-  if (L.buried) velkathCrack(E, vg, tc);
+  const p = L.pos, t = E.now() + 0.01, vg = E.emit('cre', p.x, p.y + 2, p.z, L.buried ? 8.5 : 7, 3, null); if (!vg) return;
+  // the crust cracks at the wake, together with the quake and the shove; the pour hisses 0.6 s after it
+  if (L.buried) velkathCrack(E, vg, t);
   grind(E, vg, t + 0.3, 5.5, 0.6 * E.startle, 12, 55, [[260, 6, 1], [640, 9, 0.8], [1500, 12, 0.4]]);
   noiseHit(E, vg, t, 'pink', 'bandpass', 1200, 0.7, 1.2, 5.5, 0.12, 300);           // silt pouring off her back
-  if (L.buried) noiseHit(E, vg, tc + 0.6, 'pink', 'bandpass', 900, 0.6, 1.6, 7.5, 0.20, 240);   // (velkath-buried-rock) the long hiss of the pour, under her growl
+  if (L.buried) noiseHit(E, vg, t + 0.6, 'pink', 'bandpass', 900, 0.6, 1.6, 7.5, 0.20, 240);   // (velkath-buried-rock) the long hiss of the pour, under her growl
   thump(E, vg, t, 40, 20, 3, 0.5 * E.startle);
   const g = E.g(0, vg), lp = E.f('lowpass', 160, 3, g), o = E.o('sawtooth', 32, lp);
   o.frequency.setValueAtTime(32, t); o.frequency.exponentialRampToValueAtTime(44, t + 5);
