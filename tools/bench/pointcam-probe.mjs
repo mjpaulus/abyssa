@@ -432,8 +432,8 @@ async function session(o) {
       while (rF < 0 && at < N - 200) { await c.ev(`window.__pcR.step(1)`); at++; rF = await c.ev(`window.__pcR.S.findIndex(r => r.ph >= 2)`); }
       if (rF < 0) throw new Error('the raise never came (no pointPh 2 by 10.7 s)');
       await c.ev(`window.__pcR.step(${rF + 30 - at})`); at = rF + 30;
-      ses.raiseF = rF; ses.walkF = [at, at + 120];
-      await c.key('KeyW', true); await c.ev(`window.__pcR.step(120)`); at += 120; await c.key('KeyW', false);
+      ses.raiseF = rF; ses.walkF = [at, at + 180];
+      await c.key('KeyW', true); await c.ev(`window.__pcR.step(180)`); at += 180; await c.key('KeyW', false);   // (3 s: 2 s walked 1.97-2.34 u, under the premise)
     }
     for (const [name, s] of SHOTS ? SHOT_AT : []) {
       const f = Math.round(s * 60);
@@ -680,7 +680,7 @@ if (MODE === 'mouse') {
 }
 
 // ============================================ walk / lastward (fix round 1) ============================================
-//   walk      the framing placement and calm; W held (a real key over CDP, player.js's own listener) for 2 s from 0.5 s after the raise:
+//   walk      the framing placement and calm; W held (a real key over CDP, player.js's own listener) for 3 s from 0.5 s after the raise:
 //             he walks toward her through the hold. Premise: he moved >= 2 u (else VOID). Bars: lensBars (bonnet, aimStep, amtStep, noEarly,
 //             easeIn): the gait's bob must not read as a nod (I2)
 //   lastward  where the calm comes in play: every ward lit but one, he is put under it (4 u below it, the pack's hop) with her standing

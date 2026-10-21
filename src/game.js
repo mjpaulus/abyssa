@@ -1457,30 +1457,40 @@ window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(
 // lens bit for bit (qPre). The LAST rotation the lens takes (after clawFrame; CLAWCAM never runs once she is calmed, so the two never
 // overlap): yaw about world up, then pitch about the lens's own right axis; the boom and the lens position untouched.
 // SAL STAYS IN FRAME (ruling (b), clawFrame's rule): the cue takes only as much of its turn as keeps his bonnet (diver.helmGroup, the neck
-// ring as the rig posed it last) inside NDC helmNdc; the largest share of the turn that does is found by bisection (ptGuard), and the
-// drawn share is min(k, that). Measured: unguarded, ~60 deg of yaw on the framing placement put him out of frame on 380 of 494 frames.
+// ring as the rig posed it last) inside NDC helmNdc on each axis, or inside where the grounded lens already has him if that is further
+// out (review I2: a fixed bound made the share fall off a cliff to 0, the full turn back the next frame, whenever the grounded lens had
+// him past it; continuous now: the share 0 always passes). The largest share that does is found by bisection (ptGuard). The DRAWN share
+// is min(k, that), rate-limited both ways to the springs' fastest (wIn / e up, wOut / e down: gait bob or a guard that binds never reads
+// as a nod), except a real look, which drops it at once.
 // THE OPENING BEHIND HIM (ruling (c), BOSSCAM's front test): an opening past the caps (at `ahead` it is ~179 deg behind the lens) is not
-// turned toward: the cue frames her CLAW instead, within the caps, and only if her palm is in frame at half the guarded turn (so it stays in
-// frame through the hold, not only at its end); else the cue stays off. Unruled, the lens ran into both caps (-75 / +25) and showed only
-// her shell's underside, Sal and her claw out of frame.
-// THE MOUSE OWNS THE VIEW: his look input is measured from the frame the point opens (pointPh 1; CLAWCAM's lookNet / lookPath, Michael
-// 2026-10-13 "ignore small mouse movements"); past 5 deg net or 15 deg of looking about the cue drops AT ONCE and stays off for the rest
-// of this calm (a look during her turn forgoes it); a point that opens while he is mid-sweep starts off.
+// turned toward: the cue frames her CLAW instead, within the caps, and only if her palm is in frame at half the guarded turn; else the
+// cue stays off. The source (opening / claw) switches with `hyst` deg of hysteresis on the caps, the opening-palm midpoint blends in
+// across frame +- frameBand (x hfov), and the full turn the cue is aiming at SLEWS at most `slew` deg/s (review I1: the source flipped at
+// the 75 deg cap and the re-aim landed as a 4 deg pitch step in one frame).
+// UNDER HER SHELL it stays off (review I3; CLAWCAM's gate, 1 - smoothstep(0.1, 0.5, creUnder)): in play the calm comes as he lights her
+// last ward, from under her.
+// THE MOUSE OWNS THE VIEW: his look input is measured from the frame the cue's window opens (the raise; a look during her turn or the
+// fight's last moments does not forfeit a cue that has not started); past 5 deg net or 15 deg of looking about (CLAWCAM's lookNet /
+// lookPath, Michael 2026-10-13 "ignore small mouse movements") it drops AT ONCE and stays off for the rest of this calm; a raise that
+// comes while he is mid-sweep starts off.
 // The spec's "it also pulls the lens out of her shell at the calm instant" is NOT this cue's: a rotation cannot move the lens. Keeping
 // the lens out of her is the position guard's (CRECAM's bodyBlocked pull and lensfix's fallbacks), gated after the calm by velfix-gate's
 // lensSurf / salIn (the plan's Task 13), the point's delay to the walk home included.
-//   maxYaw/maxPitch  deg caps; an aim past either is "behind" (the claw instead, or nothing)
-//   frame            the claw is framed with the opening when they lie within frame x the horizontal FOV of each other (the aim is then
-//                    the midpoint of her palm and the opening)
+//   maxYaw/maxPitch  deg caps; an aim past either (+ hyst while it is the source, - hyst to come back) is "behind"
+//   frame/frameBand  the claw is framed with the opening (the aim their midpoint) when they lie within frame x hfov of each other,
+//                    blended over +- frameBand x hfov
 //   helmNdc          his bonnet's NDC bound (pointcam-probe's bar is 0.9 on the bonnet's centre; the neck ring sits ~0.25 u under it)
 //   palmNdc          the claw aim's palm bound, at half the guarded turn
+//   slew             deg/s, the most the cue's full turn moves (a frame at 60 fps: 0.75 deg)
 //   wIn/wOut         /s, critically damped (in ~95% by 1.5 s, out ~94% by 0.5 s)
-// Measured (tools/bench/pointcam-probe.mjs framing / mouse / off / point).
-const POINTCAM = { on: 1, maxYaw: 75, maxPitch: 25, frame: 0.8, helmNdc: 0.82, palmNdc: 0.85, wIn: 3.2, wOut: 9, lookNet: 5, lookPath: 15, lookTau: 0.3 };
+// Measured (tools/bench/pointcam-probe.mjs framing / mouse / off / point / walk / lastward).
+const POINTCAM = { on: 1, maxYaw: 75, maxPitch: 25, hyst: 5, frame: 0.8, frameBand: 0.05, helmNdc: 0.82, palmNdc: 0.85, slew: 45, wIn: 3.2, wOut: 9,
+  lookNet: 5, lookPath: 15, lookTau: 0.3 };
 let ptK = 0, ptKV = 0, ptOff = false, ptOpen = false, ptY0 = 0, ptP0 = 0, ptPath = 0, ptRecent = 0, ptYawWas = 0, ptPitchWas = 0, ptWhy = '', ptTgt = 0;
-let ptYaw = 0, ptPitch = 0, ptAmt = 0, ptDy = 0, ptDp = 0, ptG = 0, ptAy = 0, ptAp = 0, ptNx = 0, ptNy = 0, ptAim = '';
+let ptYaw = 0, ptPitch = 0, ptAmt = 0, ptDy = 0, ptDp = 0, ptG = 0, ptAy = 0, ptAp = 0, ptNx = 0, ptNy = 0, ptMode = '', ptCy = 0, ptCp = 0, ptLimX = 0, ptLimY = 0;
 const _ptQ = new THREE.Quaternion(), _ptQ2 = new THREE.Quaternion(), _ptQ3 = new THREE.Quaternion(), _ptX = V3(1, 0, 0);
-const _ptA = V3(), _ptF = V3(), _ptR = V3(), _ptP = V3(), _ptH = V3(), _ptV = V3();
+const _ptA = V3(), _ptF = V3(), _ptR = V3(), _ptP = V3(), _ptH = V3(), _ptV = V3(), _ptHO = V3(), _ptBox = new THREE.Box3();
+let ptFy = 0, ptFp = 0, ptHOk = false;
 // p's NDC (ptNx / ptNy) under the pre-cue lens turned by yaw (world up) then pitch (its own right): false if behind the lens
 function ptNdc(p, yaw, pitch) {
   _ptQ2.setFromAxisAngle(camUpAxis, yaw).multiply(_ptQ);
@@ -1491,42 +1501,79 @@ function ptNdc(p, yaw, pitch) {
   ptNx = _ptV.x * iz / (tf * camera.aspect); ptNy = _ptV.y * iz / tf;
   return true;
 }
-const ptIn = (p, yaw, pitch, lim) => ptNdc(p, yaw, pitch) && Math.abs(ptNx) <= lim && Math.abs(ptNy) <= lim;
-// the turn (ptAy, ptAp) that puts a at the pre-cue lens's centre; true if it is within the caps
+// the turn (ptAy, ptAp) that puts a at the pre-cue lens's centre
 function ptAimAt(a) {
   _ptF.set(0, 0, -1).applyQuaternion(_ptQ);
   _ptR.copy(a).sub(camera.position);
   let dy = Math.atan2(_ptR.x, _ptR.z) - Math.atan2(_ptF.x, _ptF.z); dy = Math.atan2(Math.sin(dy), Math.cos(dy));
   ptAy = dy; ptAp = Math.atan2(_ptR.y, Math.hypot(_ptR.x, _ptR.z)) - Math.asin(clamp(_ptF.y, -1, 1));
-  const d2r = Math.PI / 180;
-  return Math.abs(ptAy) <= POINTCAM.maxYaw * d2r && Math.abs(ptAp) <= POINTCAM.maxPitch * d2r;
 }
-// the largest share g of the turn (ptAy, ptAp) that keeps his bonnet inside helmNdc (0: not even the grounded lens frames it)
-function ptGuard() {
-  const lim = POINTCAM.helmNdc;
-  if (ptIn(_ptH, ptAy, ptAp, lim)) return 1;
-  if (!ptIn(_ptH, 0, 0, lim)) return 0;
+// the bonnet's bounds this frame: helmNdc, or where the grounded lens already has him if further out; false if it has him behind it
+function ptLims() {
+  _ptH.setFromMatrixPosition(diver.helmGroup.matrixWorld).add(_ptHO);   // (the bonnet's centre: the neck ring + its offset, ptHelmOff)
+  if (!ptNdc(_ptH, 0, 0)) return false;
+  ptLimX = Math.max(POINTCAM.helmNdc, Math.abs(ptNx)); ptLimY = Math.max(POINTCAM.helmNdc, Math.abs(ptNy));
+  return true;
+}
+// the bonnet's centre over its neck ring (world), measured from its own vertices when a cue starts (an event; the guard then holds the
+// point pointcam-probe's bar reads: guarded at the neck ring the centre ran to NDC 1.19 with him walking at 2.2 u from the lens)
+function ptHelmOff() {
+  _ptBox.setFromObject(diver.helmGroup, true); _ptBox.getCenter(_ptHO);
+  _ptHO.sub(_ptV.setFromMatrixPosition(diver.helmGroup.matrixWorld));
+}
+// THE KEEP: the drawn turn (yaw, pitch) eased inward where the rate-limited share leaves his bonnet past its bound (the grounded lens
+// lurching under him, a guard that drops faster than wOut / e): the least extra yaw, then pitch (<= 0.35 rad each) that brings it back.
+// Writes ptFy / ptFp; it follows the grounded lens's own lurch, it never leads it
+function ptKeep(yaw, pitch) {
+  ptFy = yaw; ptFp = pitch;
+  for (let ax = 0; ax < 2; ax++) {
+    if (!ptNdc(_ptH, ptFy, ptFp)) return;
+    const v0 = ax ? ptNy : ptNx, lim = ax ? ptLimY : ptLimX;
+    if (Math.abs(v0) <= lim) continue;
+    const e = 0.01; ptNdc(_ptH, ptFy + (ax ? 0 : e), ptFp + (ax ? e : 0));
+    const dir = Math.abs(ax ? ptNy : ptNx) < Math.abs(v0) ? 1 : -1;
+    let lo = 0, hi = 0.35;
+    for (let i = 0; i < 12; i++) {
+      const m = 0.5 * (lo + hi), ok = ptNdc(_ptH, ptFy + (ax ? 0 : dir * m), ptFp + (ax ? dir * m : 0)) && Math.abs(ax ? ptNy : ptNx) <= lim;
+      if (ok) hi = m; else lo = m;
+    }
+    if (ax) ptFp += dir * hi; else ptFy += dir * hi;
+  }
+}
+// the share is bounded on x only: y is the keep's (a little pitch). With the lens pressed in to ~2.2 u by her raised claw the grounded lens has
+// his bonnet at NDC y ~1.05, and a yaw grows that by 1 / cos(yaw) (perspective): bounded on y too, the share fell to ~0.36 (framing, t11r1)
+const ptHelmIn = (yaw, pitch) => ptNdc(_ptH, yaw, pitch) && Math.abs(ptNx) <= ptLimX;
+// the largest share g of the turn (yaw, pitch) that keeps his bonnet inside the bounds (ptLims first; share 0 always does)
+function ptGuard(yaw, pitch) {
+  if (ptHelmIn(yaw, pitch)) return 1;
   let lo = 0, hi = 1;
-  for (let i = 0; i < 12; i++) { const m = 0.5 * (lo + hi); if (ptIn(_ptH, m * ptAy, m * ptAp, lim)) lo = m; else hi = m; }
+  for (let i = 0; i < 12; i++) { const m = 0.5 * (lo + hi); if (ptHelmIn(m * yaw, m * pitch)) lo = m; else hi = m; }
   return lo;
 }
-// this frame's aim: the opening (or its midpoint with her palm when both fit) within the caps; else her claw within the caps, its palm in
-// frame at half the guarded turn; else none (false). Writes ptDy / ptDp (the full turn) and ptG (its guard)
-function ptSolve(L) {
-  const C = POINTCAM;
-  _ptH.setFromMatrixPosition(diver.helmGroup.matrixWorld);
+// this frame's candidate full turn (ptCy, ptCp) and source (ptMode): the opening (blended toward its midpoint with her palm where both fit)
+// within the caps; else her claw within the caps, its palm in frame at half the guarded turn; else none (false). ptLims() first
+function ptCand(L) {
+  const C = POINTCAM, d2r = Math.PI / 180, hfY = C.hyst * d2r;
   const c = L.claws && L.claws.length ? (L.claws[1] && L.claws[1].major ? L.claws[1] : L.claws[0]) : null;
   _ptA.copy(L.pointAt);
   if (c) {
     _ptP.setFromMatrixPosition(c.pj.matrixWorld); _ptR.setFromMatrixPosition(c.dj.matrixWorld); _ptP.add(_ptR).multiplyScalar(0.5);
     const hf = 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * camera.aspect);
     _ptR.copy(_ptP).sub(camera.position).normalize(); _bp.copy(_ptA).sub(camera.position).normalize();
-    if (Math.acos(clamp(_ptR.dot(_bp), -1, 1)) <= C.frame * hf) _ptA.add(_ptP).multiplyScalar(0.5);
+    const sep = Math.acos(clamp(_ptR.dot(_bp), -1, 1)), m = 1 - ccStep((C.frame - C.frameBand) * hf, (C.frame + C.frameBand) * hf, sep);
+    if (m > 0) _ptA.lerp(_ptP, 0.5 * m);
   }
-  if (ptAimAt(_ptA)) { const g = ptGuard(); if (g > 0) { ptDy = ptAy; ptDp = ptAp; ptG = g; ptAim = 'open'; return true; } return false; }
-  if (c && ptAimAt(_ptP)) {
-    const g = ptGuard();
-    if (g > 0 && ptIn(_ptP, 0.5 * g * ptAy, 0.5 * g * ptAp, C.palmNdc)) { ptDy = ptAy; ptDp = ptAp; ptG = g; ptAim = 'claw'; return true; }
+  const yC = C.maxYaw * d2r, pC = C.maxPitch * d2r;
+  ptAimAt(_ptA);
+  const eo = ptMode === 'open' ? hfY : ptMode === 'claw' ? -hfY : 0;
+  if (Math.abs(ptAy) <= yC + eo && Math.abs(ptAp) <= pC + eo) { ptMode = 'open'; ptCy = clamp(ptAy, -yC, yC); ptCp = clamp(ptAp, -pC, pC); return true; }
+  if (c) {
+    ptAimAt(_ptP);
+    const ec = ptMode === 'claw' ? hfY : 0;
+    if (Math.abs(ptAy) <= yC + ec && Math.abs(ptAp) <= pC + ec) {
+      const cy = clamp(ptAy, -yC, yC), cp = clamp(ptAp, -pC, pC), g = ptGuard(cy, cp);
+      if (g > 0 && ptNdc(_ptP, 0.5 * g * cy, 0.5 * g * cp) && Math.abs(ptNx) <= C.palmNdc && Math.abs(ptNy) <= C.palmNdc) { ptMode = 'claw'; ptCy = cy; ptCp = cp; return true; }
+    }
   }
   return false;
 }
@@ -1537,34 +1584,43 @@ function pointFrame(dt) {
   ptYawWas = player.yaw; ptPitchWas = player.pitch;
   ptRecent = ptRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
   const brooder = !!(L && L.kind === 'brooder' && L.pointAt);
-  const ph = brooder ? L.pointPh || 0 : 0, track = ph >= 1 && ph <= 3, win = ph >= 2 && ph <= 3;
-  if (!ph) { ptOff = false; ptOpen = false; }                     // the guard: the next point is a new one
+  const ph = brooder ? L.pointPh || 0 : 0, win = ph >= 2 && ph <= 3;
+  if (!ph) { ptOff = false; ptOpen = false; ptHOk = false; }      // the guard: the next point is a new one
   const d2r = Math.PI / 180;
-  if (track) {                                                    // his look, from the point's first frame
+  if (win) {                                                      // his look, from the raise
     if (!ptOpen) { ptOpen = true; ptY0 = player.yaw; ptP0 = player.pitch; ptPath = 0; if (ptRecent > C.lookNet * d2r) ptOff = true; }
     else ptPath += dl;
     if (Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0) > C.lookNet * d2r || ptPath > C.lookPath * d2r) { ptOff = true; ptK = 0; ptKV = 0; }
   }
-  let tgt = 0, why = '', aimed = false;
-  if (!C.on) why = 'off'; else if (!track) why = ph ? 'lower' : 'none'; else if (ptOff) why = 'mouse'; else if (!win) why = 'turn';
+  // the candidate aim, once a frame, while the cue can be on or is still drawn
+  if (brooder && C.on && win && !ptHOk) { ptHelmOff(); ptHOk = true; }   // (the window opens: its bonnet point, once a point)
+  const lims = brooder && C.on && (win || ptK > 0) && ptLims();
+  const cand = lims && ptCand(L);
+  let tgt = 0, why = '';
+  if (!C.on) why = 'off'; else if (!win) why = ph === 1 ? 'turn' : ph ? 'lower' : 'none'; else if (ptOff) why = 'mouse';
   else if (paused || deckK > 0 || throatOn) why = 'place';
-  else if ((aimed = ptSolve(L))) { tgt = 1; why = 'on'; }
-  else why = 'behind';
+  else if (!cand) why = 'behind';
+  else { tgt = 1 - ccStep(0.1, 0.5, creUnder); why = tgt > 0 ? 'on' : 'under'; }
   // critically damped, the exact step for a target held over the frame (clawFrame's)
   const w = tgt > ptK ? C.wIn : C.wOut, h = Math.min(dt, 0.05);
   if (h > 0 && (tgt > 0 || ptK > 0 || ptKV !== 0)) { const ex = Math.exp(-w * h), e0 = ptK - tgt, k = ptKV + w * e0; ptK = tgt + (e0 + k * h) * ex; ptKV = (ptKV - w * k * h) * ex; }
   if (ptK < 0) { ptK = 0; if (ptKV < 0) ptKV = 0; }
   if (tgt === 0 && ptK < 1e-4 && Math.abs(ptKV) < 1e-3) { ptK = 0; ptKV = 0; }
-  if (!brooder) { ptK = 0; ptKV = 0; }                            // (she is gone: a zone change is a cut, no aim to turn to)
+  if (!brooder || why === 'mouse') { ptK = 0; ptKV = 0; }        // (she is gone, or a real look: at once)
   ptWhy = why; ptTgt = tgt;
-  if (!(ptK > 0)) { ptYaw = 0; ptPitch = 0; ptAmt = 0; return; }  // (off: no rotation call at all)
-  // easing out (or the aim lost this frame): re-aimed if it can be, else the last aim and its guard re-taken on this frame's lens
-  if (!aimed && !ptSolve(L)) { ptAy = ptDy; ptAp = ptDp; _ptH.setFromMatrixPosition(diver.helmGroup.matrixWorld); ptG = Math.min(ptG, ptGuard()); }
-  ptAmt = Math.min(ptK, ptG);
-  ptYaw = clamp(ptDy, -C.maxYaw * d2r, C.maxYaw * d2r) * ptAmt; ptPitch = clamp(ptDp, -C.maxPitch * d2r, C.maxPitch * d2r) * ptAmt;
+  if (!(ptK > 0)) { ptYaw = 0; ptPitch = 0; ptAmt = 0; ptMode = ''; return; }
+  // the full turn: taken as it is when the cue starts, then slewed (review I1); no candidate this frame: the last one held
+  if (ptAmt === 0) { if (!cand) { ptYaw = 0; ptPitch = 0; return; } ptDy = ptCy; ptDp = ptCp; }
+  else if (cand) { const s = C.slew * d2r * h; ptDy += clamp(ptCy - ptDy, -s, s); ptDp += clamp(ptCp - ptDp, -s, s); }
+  ptG = lims ? ptGuard(ptDy, ptDp) : 0;
+  const up = C.wIn / Math.E * h, down = C.wOut / Math.E * h;
+  ptAmt = clamp(Math.min(ptK, ptG), ptAmt - down, ptAmt + up);
+  ptYaw = ptDy * ptAmt; ptPitch = ptDp * ptAmt;
+  if (ptAmt > 0 && lims) { ptKeep(ptYaw, ptPitch); ptYaw = ptFy; ptPitch = ptFp; }
   if (ptAmt > 0) { camera.rotateOnWorldAxis(camUpAxis, ptYaw); camera.rotateX(ptPitch); }
 }
-window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), amt: +ptAmt.toFixed(4), guard: +ptG.toFixed(4), aim: ptAim, tgt: ptTgt, yawDeg: +(ptYaw * 57.29578).toFixed(2), pitchDeg: +(ptPitch * 57.29578).toFixed(2), off: ptOff, why: ptWhy, qPre: _ptQ.clone(),
+window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), amt: +ptAmt.toFixed(4), guard: +ptG.toFixed(4), aim: ptMode, tgt: ptTgt, yawDeg: +(ptYaw * 57.29578).toFixed(2), pitchDeg: +(ptPitch * 57.29578).toFixed(2),
+  aimYawDeg: +(ptDy * 57.29578).toFixed(3), aimPitchDeg: +(ptDp * 57.29578).toFixed(3), off: ptOff, why: ptWhy, qPre: _ptQ.clone(),
   lookNetDeg: ptOpen ? +((Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(ptPath * 57.29578).toFixed(2), recentDeg: +(ptRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
   drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
