@@ -132,7 +132,9 @@
 //                   judged from that frame on (its window as above). (v) CONTROLLER RULING 2026-10-20 (the spec: her rising body shoves him
 //                   back; the proxy's over-reach is Task 3b's, measured): on a frame in the air in contact with her shell's collider
 //                   (BODY.last 'shell', or a shell push that frame) the fall's sink rule pauses, his rise is at most her body's rise + 0.3
-//                   u/s, and his gap over the drawn ground (her drawn shell) at most 1.0 u; out of contact the rules above. Judged at every BP_AT; BP_AT=dune stands
+//                   u/s, and his gap over the drawn ground (her drawn shell) at most 1.0 u; out of contact the rules above. CONTROLLER RULING
+//                   2026-10-20 (2nd, the last change to this bar): "in contact" includes a 0.25 s (15 frame) grace after each shell contact
+//                   (resting contact on a rising surface flickers frame to frame: 19 of 74 frames at the anchor); the bounds unchanged. Judged at every BP_AT; BP_AT=dune stands
 //                   him half-way down the dune on her sand side (the dune floor following moundK as it draws down)
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
@@ -446,7 +448,7 @@ function FOOTING(S, w, from = null, stood = -1) {
   // the drawn ground under him (header (g) (i)): the floor / dune / shell rays (gBase) and her carried footing only if last frame's boots were
   // within a step under it. (A series booked before fix round 1 has drawnG only: read as before)
   const G = (q, p) => q.gBase == null ? q.drawnG : Math.max(q.gBase, q.gFoot != null && q.gFoot > -1e8 && (q.pb != null ? q.pb : p.boots) >= q.gFoot - STEP ? q.gFoot : -1e9);
-  let air = 0, k = 0, tx = 0, tz = 0, throws = 0, falls = 0, gN = 0, tN = 0, gMax = -1e9, gMin = 1e9, last = -1, winS = 0, winN = 0; const gBad = [], tBad = [];
+  let lastShell = -99, air = 0, k = 0, tx = 0, tz = 0, throws = 0, falls = 0, gN = 0, tN = 0, gMax = -1e9, gMin = 1e9, last = -1, winS = 0, winN = 0; const gBad = [], tBad = [];
   const i0 = Math.max(1, from == null ? w - 1 : from), iEnd = stood >= 0 ? stood : S.length - 1;
   for (let i = i0; i < S.length; i++) {
     if (i > i0 + 120 && (!air || i > iEnd)) break;
@@ -459,7 +461,8 @@ function FOOTING(S, w, from = null, stood = -1) {
     if (air) { tN++; k++; const vb = (q.boots - p.boots) * f60, onSpot = air === 1 && Math.hypot(q.px - tx, q.pz - tz) < 0.3;
       // (controller ruling 2026-10-20) IN CONTACT WITH HER SHELL'S COLLIDER (BODY.last 'shell' or a shell push this frame): the fall's sink
       // rule pauses; he rises no faster than her body + 0.3 u/s and stands no more than 1.0 u over the drawn ground (her drawn shell)
-      const onShell = !!(q.body && (q.body.last === 'shell' || q.body.shell)), vHer = q.bodyY != null && p.bodyY != null ? (q.bodyY - p.bodyY) * f60 : 0;
+      if (q.body && (q.body.last === 'shell' || q.body.shell)) lastShell = i;
+      const onShell = i - lastShell <= 15, vHer = q.bodyY != null && p.bodyY != null ? (q.bodyY - p.bodyY) * f60 : 0;
       let bad = (onShell ? vb > vHer + 0.3 || gap > 1.0 : vb > 1.0 && gap > 0.3) || gap < -0.3 || (onSpot && Math.abs(gap) > 0.3);
       if (air === 2 && onShell) { winS = 0; winN = 0; }
       else if (air === 2 && k > 6) { if (vb > 0) bad = true; winS += vb; winN++; if (winN === 15) { if (winS / 15 > -0.15) bad = true; winS = 0; winN = 0; } }
