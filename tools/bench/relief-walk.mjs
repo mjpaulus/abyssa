@@ -741,7 +741,7 @@ for (const nm of names) {
   const y = await c.ev(`[window.__rw.h(${p.lo[0]}, ${p.lo[1]}), window.__rw.h(${p.hi[0]}, ${p.hi[1]})]`);
   lines.push({ name: nm, kind: 'line', pts: [p.lo, p.hi], info: { centre: p.centre.map(v => +v.toFixed(1)), inBand: p.n + '/' + (2 * (SEG / 2) + 1), meanDeg: p.mean, maxDeg: p.max, centreDeg: p.s, rise: +(y[1] - y[0]).toFixed(1) } });
 }
-if (MODE !== 'hose' && MODE !== 'mound') {   // the raft column -> her bed: from the column's free cell nearest the ladder's foot to 26 u from her centre
+if (MODE !== 'hose' && MODE !== 'mound') {   // the raft column -> her bed: from the column's free cell nearest the ladder's foot to BED_STOP (37 u) from her centre
   const r = await c.ev(`window.__rw.route(5, 0, (x, z) => Math.hypot(x - ${bedAt.x}, z - ${bedAt.z}) <= ${BED_STOP}, ${bedAt.x}, ${bedAt.z})`);
   if (r.err) fail.push('no route from the raft column to her bed: ' + JSON.stringify(r));
   else lines.push({ name: 'bed', kind: 'route', pts: r.pts, info: { legs: r.pts.length - 1, len: +r.len.toFixed(1), from: r.pts[0], to: r.pts[r.pts.length - 1], dBed: +Math.hypot(r.pts[r.pts.length - 1][0] - bedAt.x, r.pts[r.pts.length - 1][1] - bedAt.z).toFixed(1) } });

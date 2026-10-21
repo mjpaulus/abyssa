@@ -317,7 +317,8 @@
 //             (Task 13, the Task 12 re-review's minor 1: the amendment allowed remembered wards but never barred their count) rise.c also bars
 //             the remembered count: memN (the most wards lit AND g.mem on any booked frame) <= 1. BP_RED=mem2 (session iii only, the second rise
 //             run): after the return and the second rise's Alt+6 (the jump rebuilds her), before its E, a page-side transplant flags ONE more ward
-//             remembered (g.lit, g.mem, memK 0, as common.js rememberWard does), so two are: iii.rise.c must fail, exit 5
+//             remembered with rememberWard's four writes (g.lit, g.mem, g.memK 0, L.memWard = its index; common.js), so two are lit AND
+//             remembered: iii.rise.c must fail, exit 5
 //             BP_RED=keepdig (session iii only, no second rise): the mutant re-entry that keeps the old sleeper's dig state (after the return
 //             the new L is given the old L's dormant / bury / digging), which must fail iii.dormant and iii.cue: exit 5.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
@@ -1158,10 +1159,11 @@ try {
   // the point, the settle and the dig-in again. sess.rise2 = rise's out for riseChecks; sess.after2 the dig-in's
   const secondRise = async sess => {
     await alt(c, 6);
-    // (Task 13, BP_RED=mem2) the transplant: one more ward flagged remembered (rememberWard's three writes), AFTER Alt+6 (the jump rebuilds
+    // (Task 13, BP_RED=mem2) the transplant: one more ward flagged remembered (rememberWard's four writes: lit, mem, memK, L.memWard), AFTER Alt+6 (the jump rebuilds
     // her: a transplant made before it was lost, measured: 2 flagged, 1 booked) and before the rise's booking and the E
     if (RED === 'mem2') sess.mutant = await c.ev(`(() => { const L = window.lev, was = L.sigils.filter(g => g.lit && g.mem).length, g = L.sigils.find(q => !q.mem);
-      if (g) { g.lit = true; g.mem = true; g.memK = 0; } return { was, now: L.sigils.filter(q => q.lit && q.mem).length, marked: g ? L.sigils.indexOf(g) : -1, memWard: L.memWard }; })()`);
+      const memWardWas = L.memWard; if (g) { g.lit = true; g.mem = true; g.memK = 0; L.memWard = L.sigils.indexOf(g); }
+      return { was, now: L.sigils.filter(q => q.lit && q.mem).length, marked: g ? L.sigils.indexOf(g) : -1, memWardWas, memWard: L.memWard }; })()`);
     const pl = await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { where: 'anchor', him: [+p.x.toFixed(2), +p.z.toFixed(2)], dAnchor: H && H.anchor ? +Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z).toFixed(2) : null, prompt: window.lev.rite ? window.lev.rite.prompt(p) : null, wound: !!(H && H.wound), dormant: !!window.lev.dormant }; })()`);
     const ins = await c.ev(RISE_INSTALL); if (!ins || ins.err) throw new Error('second rise: install: ' + (ins && ins.err));
     const settle = await c.ev(`window.__bpRise.settle(30)`);
