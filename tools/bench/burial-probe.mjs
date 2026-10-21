@@ -244,7 +244,9 @@
 //             build of the dig-in (the Task 11 head 90e1f99 never digs in: every run there is a reading of that). THE CHAIN, every run a fresh
 //             load: home, Alt+6 and REAL E at the harpoon's anchor (rise's anchor: the iron comes free, the scar shows, she wakes 0.7 s on);
 //             stepped until L.hasStood (at most 20 s); him PLACED 35 u from her centre along her sand side (L.sand), facing her, standing
-//             on the drawn ground; __lev.cmd('calm') (every dark ward lit); stepped through the point and the walk home until she has
+//             on the drawn ground; BP_HUNT s (default 6) stepped while she hunts him (AMENDED before any build, after the head runs: on
+//             90e1f99 she settled 0.00 u off her bed, so the refit at a new bed went unexercised; hunting she walks off it toward him, and
+//             her walk home stops within 3 u and 0.12 rad of it); __lev.cmd('calm') (every dark ward lit); stepped through the point and the walk home until she has
 //             SETTLED, the probe's own frame: calmed, L.stand 0, |heave.x| < 0.02, |heave.v| < 0.05, no pointPh, walkTo or homeTurn (at most
 //             40 s; none = UNMEASURED); him PLACED again (the same rule, she may have moved). Every stepped frame is booked from there (the
 //             WINDOW). The dig-in's FIRST frame: the first with L.bury over the last frame's by > 1e-9; its LAST: the first with bury >= 1.
@@ -381,6 +383,8 @@ if (RED && REDS[MODE][RED].runs) {
   if (process.env.BP_RUNS && RUNS.join() !== REDS[MODE][RED].runs.join()) { console.error(`BP_RED ${RED} is written for BP_RUNS=${REDS[MODE][RED].runs.join(',')}`); process.exit(2); }
   RUNS = REDS[MODE][RED].runs;
 }
+const HUNT_S = process.env.BP_HUNT == null ? 6 : +process.env.BP_HUNT;
+if (!(HUNT_S >= 0 && HUNT_S <= 30)) { console.error('BP_HUNT: 0-30 s'); process.exit(2); }
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
 const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'exposed', 'repose', 'clutch', 'seam', 'pole', 'iron', 'scar'];
@@ -1087,13 +1091,15 @@ try {
     st = await dig(1200, 'stood'); if (!st.hit) throw new Error('she did not stand within 20 s of the wake');
     sess.pulled = await c.ev(`!!window.lev.harpoon.pulled`);
     sess.place1 = await c.ev(`window.__bpDig.place35()`);
+    if (HUNT_S > 0) { await dig(Math.round(HUNT_S * 60)); sess.hunted = await c.ev(`(() => { const L = window.lev; return { her: [+L.pos.x.toFixed(2), +L.pos.z.toFixed(2)], offBed: +Math.hypot(L.pos.x - L.lairPos.x, L.pos.z - L.lairPos.z).toFixed(2), calmed: !!L.calmed }; })()`); }
     sess.calmBy = await c.ev(`(window.__lev.cmd('calm'), 'calmNext' in window.lev ? 'verb' : 'none')`);
     for (let k = 0; k < 4; k++) { st = await dig(600, 'settled'); if (st.hit) break; }
     if (!st.hit) throw new Error('UNSETTLED: she had not settled 40 s after the calm (' + JSON.stringify(st) + ')');
     sess.settleF = st.rows;
     sess.place2 = await c.ev(`window.__bpDig.place35()`);
     sess.winF = st.rows;
-    console.log(`  [${sess.run}] pulled ${sess.pulled}, calm by ${sess.calmBy}, settled at row ${sess.settleF}; him ${JSON.stringify(sess.place2)}; ${JSON.stringify(ins)}`);
+    sess.bed = await c.ev(`(() => { const L = window.lev; return { offBed: +Math.hypot(L.pos.x - L.lairPos.x, L.pos.z - L.lairPos.z).toFixed(3), dYaw: +Math.atan2(Math.sin(L.yaw - L.lairYaw), Math.cos(L.yaw - L.lairYaw)).toFixed(4) }; })()`);
+    console.log(`  [${sess.run}] pulled ${sess.pulled}, hunted ${JSON.stringify(sess.hunted || null)}, settled at row ${sess.settleF} ${JSON.stringify(sess.bed)}; him ${JSON.stringify(sess.place2)}; ${JSON.stringify(ins)}`);
   };
   if (MODE === 'digin') {
     const sessions = [];
