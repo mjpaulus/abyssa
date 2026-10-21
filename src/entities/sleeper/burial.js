@@ -62,7 +62,13 @@ Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSi
 // her body, from the crack until she stands (0 = it vanished on the wake frame: BP_RED=nofoot), for him only while his boots are within footStep u
 // under it or over it (fix round 1, C1: never the floor under her belly)
 // (Task 8) plume: 1 the rise's dust cloud (plume.js 'rise', spawned by brooder.js on the crack and the sheets), 0 none (burial-probe BP_RED=noplume)
-Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 5, shoveStag: 0.8, holdRise: 1, riseVmax: 7, footRise: 1, footStep: 0.6, plume: 1 });
+// (Task 8, the controller's ruling 3) shoveV 5 -> 11: from the harpoon's anchor the crack must carry him clear of her bump re-find (sight():
+// L._pd < collR x 1.05 = 5.34 u off her spine), or a blind spell ends on the next frame. At 5 he stood 4.6-5.2 u off it through 3.8-5.3 s (46 bump
+// re-finds); at 11 her spine is 9+ u off at the loss and his capsule never meets her shell in the spell (burial-probe rise anchor: lost 3.97 s,
+// found 7.87 s by line of sight, 3.90 s). MEASURED SENSITIVE: the anchor's spell at 8 / 9 / 9.5 / 10 / 10.5 / 11 / 11.5 / 12 u/s read 2.97 / 3.55 /
+// 4.30 / 4.25 / 4.20 / 3.90-3.93 / 2.85 / touch-ended (7 touch-ended too), and the crest's footing (g) fails at 8 / 9 / 9.5 (sliding down her
+// flank in contact with her shell collider 3.5 u over the floor), passes at 5, 7, 10-12. The shove's line still goes through safeThrow (crackBeat)
+Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 11, shoveStag: 0.8, holdRise: 1, riseVmax: 7, footRise: 1, footStep: 0.6, plume: 1 });
 const _v = V3();
 
 // the mean ground under her: poseAll's own 5 x 5 support grid over her footprint, bare floor. (The grid's constants live in THREE
