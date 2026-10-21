@@ -43,9 +43,9 @@ import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, 
 Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
 // THE POINT (spec §3; Michael: "can she turn and point to the void with her giant claw"). The calm itself is unchanged (game.js:
 // the wards burn, the crack opens over fissure.js's 6.6 s - quake, pour, silt, then the light from 3.6 s - and the line lands at
-// 6.6 - 2.5 = 4.1 s). During the pour she turns her front to the opening (the throat's centre, riftPos(idx), at its lip height); as
-// the light comes up her major claw rises and reaches toward it; she holds it ~3 s through the line, lowers it, and only then walks
-// home. Not a blow: calmed, her contacts only push him aside (game.js's slam test needs !calmed). Buried sites only (home): BURY.point
+// 6.6 - 2.5 = 4.1 s). During the pour she turns her front to the opening (the throat's centre, riftPos(idx), at its lip height); at
+// the raise (at turnT, or once she faces the opening: `face` below) her major claw rises and reaches toward it, the reach solved once
+// there; she holds it ~3 s (through the line when she already faced it), lowers it, and only then walks home. Not a blow: calmed, her contacts only push him aside (game.js's slam test needs !calmed). Buried sites only (home): BURY.point
 // 0 is the shipped calm (__burial.set({ point: 0 }): pointcam-probe's RED nopoint).
 //   turn     rad/s (pre-registered; past it is Michael's feel call, never a tuning knob)
 //   turnT / raiseT / holdT / lowerT  s on her own clock from the calm: the raise from 2.9 s (late in the pour, the light at 3.6), so
@@ -668,7 +668,7 @@ export function makeBrooder(idx, cfg) {
   L.publishCols = () => { L.grp.updateMatrixWorld(true); publishCols(L); };
   L.cmd = (name, arg) => {
     if (name === 'wake') { if (L.dormant) wakeBrooder(L); }
-    else if (name === 'calm') L.calmNext = !L.calmed;      // (Task 10) every dark ward lit on her next update (the ward loop)
+    else if (name === 'calm') L.calmNext = !L.calmed && !L.dormant;   // (Task 10) every dark ward lit on her next update (the ward loop); refused asleep (Task 11, review M4)
     else if (name === 'stand') L.standTarget = 1;
     else if (name === 'settle') { L.standTarget = 0; L.walkTo = null; }
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
@@ -1445,7 +1445,7 @@ function tuckJoint(j, T, base, sd, d) {
 }
 // (velkath-buried-rock Task 10) THE REACH's elbow and wrist (tuckJoint targets: near straight, the wrist a little open) and the finger
 const PT_CJ = [0, 0.15, 0.10], PT_PJ = [0, 0.10, -0.05], PT_DJ = 0.35;
-// THE REACH, solved once as the light comes up: the major claw's root (merus) aimed down the shoulder -> opening line, the elbow and
+// THE REACH, solved once at the raise (at turnT, or once she faces the opening): the major claw's root (merus) aimed down the shoulder -> opening line, the elbow and
 // wrist near straight. The arm is a 'YZX' chain whose rest heading -PI/2 points it along her +z (buildClaw), so a unit direction t in
 // her body frame from the shoulder is reached by rz = asin(t.y), ry = atan2(-t.z, t.x); one correction pass takes out what the elbow
 // and wrist bend adds, measured with the elbow, wrist and finger AT the reach's own pose (PT_*; the frame's idle pose bends them
@@ -2322,7 +2322,8 @@ export function updateBrooder(L, dt, t, player) {
   const tx = L.aim.x - L.pos.x, tz = L.aim.z - L.pos.z, dh = Math.hypot(tx, tz) || 1e-3;
   L.huntD = dh;
   if (L.pointPh) {
-    // (velkath-buried-rock Task 10) THE POINT (POINT): her front to the opening; the reach solved once as the light comes up; home after
+    // (velkath-buried-rock Task 10) THE POINT (POINT): her front to the opening; the reach solved once at the raise (at turnT, or once she
+    // faces the opening); home after
     // (Michael's ruling, POINT.face) the turn holds until she faces the opening; the raise, hold and lower run from that moment (pointR)
     const P = POINT, t = (L.pointT += dt), wP = Math.atan2(L.pointAt.x - L.pos.x, L.pointAt.z - L.pos.z);
     if (L.pointPh === 1) {

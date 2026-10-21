@@ -261,7 +261,7 @@ try { const r = await fetch(`http://127.0.0.1:${P}/json/version`, { signal: Abor
   console.error(`the debug port ${P} already answers /json/version (HTTP ${r.status}): not starting, nothing touched`); process.exit(2); }
 catch (e) { if (!(e && e.cause && e.cause.code === 'ECONNREFUSED')) { console.error(`the debug port ${P} is not free (${e && e.name}: ${e && e.cause && e.cause.code || e && e.message}): not starting, nothing touched`); process.exit(2); } }
 const TAG = process.env.PC_TAG || 'port' + PORT;
-const OUT = process.env.PC_OUT || join(homedir(), 'sc/.abyssa-wt/reviews/buried', `pointcam-${MODE}-${AT}${ONRED ? '-on0' : ''}-${TAG}.json`);
+const OUT = process.env.PC_OUT || join(homedir(), 'sc/.abyssa-wt/reviews/buried', `pointcam-${MODE}-${AT}${ONRED ? '-on0' : ''}${RED ? '-' + RED : ''}-${TAG}.json`);
 const SHOT_DIR = join(homedir(), 'sc/.abyssa-wt/shots/buried');
 const record = { mode: MODE, at: AT, port: +PORT, tag: TAG, red: RED || (ONRED ? 'PC_ON=0' : null), on: ON, noplug: process.env.PC_NOPLUG === '1', shots: SHOTS || null, sessions: [] };
 const finish = (code, why) => {
