@@ -26,6 +26,10 @@
 //             Bar: a FIXED 33.81 deg (the repose's 28.81, BURY.repose 0.55, + 5; fixed so a knob cannot move it); >= 200 triangles
 //             judged, else UNMEASURED. Booked: the counts over 33.81 / 45 / 60 deg, the worst face, the tallest face over the bar,
 //             and every triangle [row, bearing, half, deg, height span, clamped corners] in the JSON. Judged only where she has a mound.
+//             THE CORAL (final review item 6): every drawn vertex of her rock's coral (L.parts.coral) inside THIS bed's strip band (the
+//             probe's own, from the live mound), growRock's own rule at the source; judged where she has a mound (it runs on every DISGUISE:
+//             disguise, digin's clear / offbed disg, reentry's disg). Its vertices under the drawn sand are booked (info): on the first
+//             build 48 of 20859 stand up to 0.57 u under the local floor, a crust following her shell where it dips under it.
 //             BP_CHECK=<comma list> limits the verdict to those checks (the tasks before the mound check height / limbs only).
 //   breath    THE TELL (Task 3a; spec §1 "Every 8-10 s the sand over her lifts a few centimetres and settles", "visible only
 //             within about 8 u"). Home, her asleep: he is stood 6 u off the strip's edge on her SAND side, facing it (__bench.place,
@@ -267,6 +271,12 @@
 //                        before each step call so a batch's first frame carries no round trip): the WORST frame of the window, from the
 //                        re-placement to the dig-in's last frame, less the window's MEDIAN frame, <= 4.0 ms. The build's own timer of its
 //                        job (L.digJobMs, per frame) is booked beside it, not judged
+//                 relay  (final review item 6, pre-registered before the fix; RED on c4d60ac) the session's LAST step, after breath: the
+//                        rock's growth as it stands (the coral's vertex hash and count, L.growN, the rock fronds' matrices in L.weedM0 slots
+//                        weedBase .. count) equals what burial.js growRock lays for THIS bed when run page side on the live sleeper (it
+//                        rewrites them: nothing is booked after it). The dig-in re-fits her dune and strip where she lies down; the coral and
+//                        the rock's fronds must be re-laid with them (the same seeds: the same set, laid for the new bed). On c4d60ac, 1.26 u
+//                        off her bed: fan 4 crust 10 lump 10 tube 4 weed 90 as built, the bed's own lay fan 5 crust 8 lump 11 tube 4 weed 88
 //               pause   (Review Focus 3, on foot) once bury >= 0.33 he is placed 3 u outside the boundary of the probe's own test on the sand
 //                       side's bearing (scanned in from 40 u off the strip's centre, at the ground) facing her, and REAL W walks him in;
 //                       W is released 0.5 s after his first frame on her ground; he stands until 3 s after that first frame, then is
@@ -292,6 +302,15 @@
 //                       his boots 0.1 u over it, put back after every frame as afloat) for 3 s, then PLACED 35 u off. Bars: pause and resume
 //                       as above. On c3eaa00 the build's onHerDune measures its 6 u ceiling from max(terrainH, extraFloorAt), and mid-dig her
 //                       crest is not ground, so up there he reads as off her ground and the dig-in runs under him: this run's RED is that head
+//               offbed  (final review item 6, pre-registered before the fix) at the calm her bed (L.lairPos) is moved OFFBED_D 6 u along her
+//                       sand side and L.lairYaw OFFBED_YAW 0.1 rad round, so the walk home lays her down well off the bed she was built on
+//                       (it stops within 3 u of the moved one; on c4d60ac 6.2 u off the first, 0.17 rad); then as clear to dug in, the
+//                       DISGUISE on that pose and the relay. Bars: off (premise, >= OFFBED_MIN 2 u off the first bed, else VOID); coral
+//                       (DISGUISE's coral check: every coral vertex inside the NEW bed's strip band); relay (as clear's). The other
+//                       disguise checks booked (offbed.disg, info: her clutch stays on the first bed). (The reviewer's reading, "the coral's
+//                       lowest points sit on the new bed's surface", assumed coral laid in world space; it rides her body, so coral stays
+//                       inside the band at 1.26 and 6.2 u on c4d60ac: what goes stale is the LAY, its strip / floor / seam filters, which
+//                       relay judges)
 //             THE PROBE'S OWN TEST (fix round 1, M1, the coordinator's ruling): the ceiling's ground is max(terrainH, extraFloorAt, bodyCols
 //             shellHiAt) under him: her shell's top is ground for "on her ground" whatever the dig-in's bury.
 //             BP_RED=fastdig ({digT: 8}, run clear only) must fail dur; BP_RED=nopause ({pause: 0}, run pause only) must fail pause.
@@ -401,7 +420,7 @@ const FORCE = process.env.BP_FORCE === '1' || !!(RED && REDS[MODE][RED].force);
 if (FORCE && MODE !== 'rise') { console.error('BP_FORCE is rise\'s'); process.exit(2); }
 if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
 // (Task 12) BP_RUNS: digin clear | pause | afloat, reentry i | ii | iii (default all; a RED's own runs)
-const RUNS_ALL = { digin: ['clear', 'pause', 'afloat', 'crest'], reentry: ['i', 'ii', 'iii', 'iv'] };
+const RUNS_ALL = { digin: ['clear', 'pause', 'afloat', 'crest', 'offbed'], reentry: ['i', 'ii', 'iii', 'iv'] };
 let RUNS = RUNS_ALL[MODE] || null;
 if (process.env.BP_RUNS) {
   if (!RUNS) { console.error('BP_RUNS is digin\'s and reentry\'s'); process.exit(2); }
@@ -414,6 +433,9 @@ if (RED && REDS[MODE][RED].runs) {
   RUNS = REDS[MODE][RED].runs;
 }
 const HUNT_S = process.env.BP_HUNT == null ? 6 : +process.env.BP_HUNT;
+// (final review item 6) digin's offbed run: her bed moved OFFBED_D u along her sand side and OFFBED_YAW rad at the calm (the walk home stops
+// within 3 u of it: she lies down ~3 u off the bed she was built on); premise OFFBED_MIN u off it at the dig-in
+const OFFBED_D = 6, OFFBED_YAW = 0.1, OFFBED_MIN = 2.0;
 // (Task 12) BP_SHOTS=<prefix>: digin's clear run takes stills (mid dig-in at bury ~0.42 with him 25 u off, the scar dug in from 3.5 u, night 8 u off
 // the strip's edge) into ~/sc/.abyssa-wt/shots/buried/<prefix>-{mid,scar,night}.png; its frames are rendered there, so its cost bar is not a reading
 const SHOTS = process.env.BP_SHOTS || '';
@@ -421,7 +443,7 @@ if (SHOTS && (!/^[\w.-]+$/.test(SHOTS) || MODE !== 'digin')) { console.error('BP
 if (!(HUNT_S >= 0 && HUNT_S <= 30)) { console.error('BP_HUNT: 0-30 s'); process.exit(2); }
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
-const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'exposed', 'repose', 'clutch', 'seam', 'pole', 'iron', 'scar'];
+const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'exposed', 'repose', 'clutch', 'seam', 'pole', 'iron', 'scar', 'coral'];
 let ONLY = null;
 if (process.env.BP_CHECK) {
   ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : s === 'rock' ? ['top', 'exposed'] : s === 'harpoon' ? ['seam', 'pole', 'iron'] : [s]);
@@ -490,6 +512,20 @@ const DISGUISE = `(async () => {
   if (L.parts.reef) grow('reef', L.parts.reef);
   if (L.parts.coral) grow('reef', L.parts.coral);   // (Task 5b: the coral on the exposed rock, her reef's parts in its material: judged as the reef)
   if (L.parts.weed) grow('weed', L.parts.weed);
+  // (final review item 6) THE CORAL ON THE ROCK OF THIS BED, judged as growRock lays it (burial.js: every vertex of every part on the
+  // strip, each part on her rock where it stands over the floor): every drawn coral vertex inside THIS bed's strip (the probe's own band,
+  // stripMD of the live mound) and none of it under the drawn sand (terrain or dune). After a dig-in the strip is the NEW bed's: coral laid
+  // against the first bed's strip and floor reads outside it, or sunk in the ground she now lies on
+  let coral = null;
+  if (L.parts.coral && L.parts.coral.visible && L.parts.coral.geometry.attributes.position) {
+    const co = L.parts.coral; co.updateMatrixWorld(true); const P = co.geometry.attributes.position;
+    let n = 0, outB = 0, under = 0, low = null, wOut = null;
+    for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i).applyMatrix4(co.matrixWorld); n++; const d = v.y - sand(v.x, v.z), at = [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)];
+      if (!inStrip(v.x, v.z)) { outB++; if (!wOut) wOut = at; }
+      if (d < 0) under++;
+      if (!low || d < low.d) low = { d: +d.toFixed(3), at }; }
+    coral = { n, outBand: outB, under, low, firstOut: wOut };
+  }
   // her shell: sides vs crest
   const sh = L.parts.shell, P = sh.geometry.attributes.position; sh.updateMatrixWorld(true);
   let top = -1e9, zLo = 1e9, zHi = -1e9, ne = 0, sides = { d: -1e9, at: null };
@@ -543,7 +579,7 @@ const DISGUISE = `(async () => {
     repose = { barDeg: 33.81, n: tris.length, nDeg, worst: wst, tallestSteep: tall, over33: over(33.81), over45: over(45), over60: over(60),
       over45tall: tris.filter(q => q[3] > 45 && q[4] > 0.2).length, tris };
   }
-  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, exposed: exp, growN: L.growN || null, weedN: L.parts.weed ? L.parts.weed.count : null, buried: !!(B && L.buried), bury: L.bury ?? null, repose };
+  const out = { worst, n, outN, sides, crest: { top: +(top - g).toFixed(2), len: ne ? +((zHi - zLo) * L.R).toFixed(1) : 0, n: ne }, exposed: exp, growN: L.growN || null, weedN: L.parts.weed ? L.parts.weed.count : null, buried: !!(B && L.buried), bury: L.bury ?? null, repose, coral };
   // (Task 4) THE HARPOON, against the drawn SAND (sand(): the floor or the dune, never the crest), as harpoon.js seat() judges it: the
   // seam's height over it, and every pole sample's (model z -0.1 .. -0.95 through H.worldM, the lodged pose). Only an iron still in her
   const H = L.harpoon;
@@ -940,6 +976,24 @@ const DIG_INSTALL = `(async () => {
         const x = (MD.P[a] + MD.P[b] + MD.P[c2] + MD.P[d]) / 4, z = (MD.P[a + 2] + MD.P[b + 2] + MD.P[c2 + 2] + MD.P[d + 2]) / 4, sa = B.sandAt(x, z), xf = T.extraFloorAt(x, z, 0);
         n++; if (!(sa > -1e8)) { off++; continue; } const e = Math.abs(xf - sa); if (e > worst) worst = e; if (e > 1e-9) bad++; }
       return { n, bad, off, worst }; },
+    // (final review item 6, offbed) her bed moved OFFBED_D u along her sand side and OFFBED_YAW rad round before the walk home (at the calm: the
+    // walk home's goal is L.lairPos, its last turn L.lairYaw), so she lies down ~3 u off the bed she was built on (the walk home's own envelope:
+    // it stops within 3 u); the bed she was built on is kept (bed0) and her offset from it booked
+    shiftBed(d, a) { R.bed0 = { x: L.lairPos.x, z: L.lairPos.z, yaw: L.lairYaw }; L.lairPos.x += L.sand.x * d; L.lairPos.z += L.sand.z * d; L.lairYaw += a;
+      return { bed0: [r2(R.bed0.x), r2(R.bed0.z), r3(R.bed0.yaw)], bed: [r2(L.lairPos.x), r2(L.lairPos.z), r3(L.lairYaw)] }; },
+    offBed0() { const b = R.bed0 || { x: L.lairPos.x, z: L.lairPos.z, yaw: L.lairYaw }; return { off: r3(Math.hypot(L.pos.x - b.x, L.pos.z - b.z)), dYaw: r3(Math.atan2(Math.sin(L.yaw - b.yaw), Math.cos(L.yaw - b.yaw))) }; },
+    // (final review item 6) the coral and the rock's fronds as they stand, then as burial.js growRock lays them for THIS bed (its own rule, run
+    // page side on the live sleeper: the LAST step of a session, it rewrites them): booked, the coral's vertex hash, its count and growN, and the
+    // rock fronds' matrices (weed slots weedBase .. count: L.weedM0, the full growth prepGrowth kept, against the instance matrices growRock writes)
+    async relay() { const BU = await import('/src/entities/sleeper/burial.js'), co = L.parts.coral, w = L.parts.weed;
+      if (!co || !w || !L.mound) return { err: 'no coral / weed / mound' };
+      const hashA = (a, i0, i1) => { let h = 0; for (let i = i0; i < i1; i++) h = (Math.imul(h, 31) + Math.round(a[i] * 1e4)) | 0; return h; };
+      const coH = () => { const Pa = co.geometry.attributes.position; return Pa ? { h: hashA(Pa.array, 0, Pa.array.length), nv: Pa.count } : { h: 0, nv: 0 }; };
+      const base = L.weedBase ?? w.count;
+      const before = { co: coH(), growN: JSON.stringify(L.growN), wn: w.count, weed: L.weedM0 ? hashA(L.weedM0, base * 16, w.count * 16) : null };
+      BU.growRock(L, L.mound);
+      const after = { co: coH(), growN: JSON.stringify(L.growN), wn: w.count, weed: hashA(w.instanceMatrix.array, base * 16, w.count * 16) };
+      return { before, after, same: before.co.h === after.co.h && before.co.nv === after.co.nv && before.growN === after.growN && before.wn === after.wn && before.weed === after.weed }; },
     state() { const pc = window.__pointcam ? window.__pointcam.state() : null, Bd = L.brood;
       return { dormant: !!L.dormant, bury: L.bury, pointPh: L.pointPh || 0, pointK: L.pointK || 0, calmNext: !!L.calmNext, digging: !!L.digging, dugIn: !!L.dugIn,
         k: pc ? pc.k : null, drop: Bd ? Bd.drop : null, dropWant: B ? B.knobs.clutchSink / L.R : null, shader: window.__shaderFailed ? window.__shaderFailed().length : -1, sameL: window.lev === L }; } };
@@ -1147,11 +1201,13 @@ try {
     sess.place1 = await c.ev(`window.__bpDig.place35()`);
     if (HUNT_S > 0) { await dig(Math.round(HUNT_S * 60)); sess.hunted = await c.ev(`(() => { const L = window.lev; return { her: [+L.pos.x.toFixed(2), +L.pos.z.toFixed(2)], offBed: +Math.hypot(L.pos.x - L.lairPos.x, L.pos.z - L.lairPos.z).toFixed(2), calmed: !!L.calmed }; })()`); }
     sess.calmBy = await c.ev(`(window.__lev.cmd('calm'), 'calmNext' in window.lev ? 'verb' : 'none')`);
+    if (sess.run === 'offbed') sess.shift = await c.ev(`window.__bpDig.shiftBed(${OFFBED_D}, ${OFFBED_YAW})`);
     for (let k = 0; k < 4; k++) { st = await dig(600, 'settled'); if (st.hit) break; }
     if (!st.hit) throw new Error('UNSETTLED: she had not settled 40 s after the calm (' + JSON.stringify(st) + ')');
     sess.settleF = st.rows;
     sess.place2 = await c.ev(`window.__bpDig.place35()`);
     sess.winF = st.rows;
+    if (sess.run === 'offbed') sess.off0 = await c.ev(`window.__bpDig.offBed0()`);
     sess.bed = await c.ev(`(() => { const L = window.lev; return { offBed: +Math.hypot(L.pos.x - L.lairPos.x, L.pos.z - L.lairPos.z).toFixed(3), dYaw: +Math.atan2(Math.sin(L.yaw - L.lairYaw), Math.cos(L.yaw - L.lairYaw)).toFixed(4) }; })()`);
     console.log(`  [${sess.run}] pulled ${sess.pulled}, hunted ${JSON.stringify(sess.hunted || null)}, settled at row ${sess.settleF} ${JSON.stringify(sess.bed)}; him ${JSON.stringify(sess.place2)}; ${JSON.stringify(ins)}`);
   };
@@ -1214,7 +1270,16 @@ try {
           if (sess.endState.dugIn) {
             const pl = await c.ev(BREATH_PLACE(6)); sess.breathPlace = pl;
             if (pl && !pl.err) { await c.ev(`(window.__bpS = [], 1)`); for (let f = 0; f < 2400; f += 300) await c.ev(BREATH_BOOK(300, 6)); sess.breath = await c.ev(`window.__bpS`); }
+            sess.relay = await c.ev(`window.__bpDig.relay()`);   // (final review item 6: the session's last step, it rewrites the growth; info)
           }
+        } else if (run === 'offbed') {
+          let st = null;
+          for (let k = 0; k < 8; k++) { st = await dig(300, 'dug'); if (st.hit) break; }
+          await dig(120);
+          sess.endState = await c.ev(`window.__bpDig.state()`);
+          sess.disg = sess.endState.dugIn ? await c.ev(DISGUISE) : { err: 'not dug in' };
+          sess.relay = sess.endState.dugIn ? await c.ev(`window.__bpDig.relay()`) : { err: 'not dug in' };
+          console.log(`  [offbed] off the first bed ${JSON.stringify(sess.off0)}; coral ${JSON.stringify(sess.disg.coral)}; relay ${JSON.stringify(sess.relay && { same: sess.relay.same, before: sess.relay.before, after: sess.relay.after })}`);
         } else {
           let st = null;
           if (run === 'pause') { sess.appr = await c.ev(`window.__bpDig.approach()`); if (sess.appr.err) throw new Error(sess.appr.err); await dig(60); sess.apprF = (await c.ev(`window.__bpDig.S.length`)); }
@@ -1409,6 +1474,13 @@ if (MODE === 'digin') {
         const iMax = C.indexOf(mx), jobs = S.filter(q => q.job != null && q.job > 0).map(q => q.job), jmx = jobs.length ? Math.max(...jobs) : null;
         add({ name: 'clear.cost', val: { worst: mx, median: med, extra: mx != null ? r(mx - med) : null, atS: r(iMax / f60), p99: srt.length ? srt[Math.floor(srt.length * 0.99)] : null, jobFrames: jobs.length, jobMax: jmx },
           bar: 'the window\'s worst update() frame less its median <= 4.0 ms (pre-registered)', ok: mx != null && mx - med <= 4.0, vacuous: C.length < 600 }); }
+      add({ name: 'clear.relay', val: sess.relay ? (sess.relay.err || { same: sess.relay.same, before: sess.relay.before, after: sess.relay.after }) : err, bar: 'the rock\'s growth after the dig-in (coral vertices, growN, the rock fronds) is growRock\'s lay of THIS bed', ok: !!(sess.relay && sess.relay.same), vacuous: !sess.relay || !!sess.relay.err });
+    } else if (run === 'offbed') {
+      const o = sess.off0, d = sess.disg, q = d && !d.err ? d.coral : null;
+      add({ name: 'offbed.off', val: o || err, bar: `premise: she lies >= ${OFFBED_MIN} u off the bed she was built on at the dig-in`, ok: !!o && o.off >= OFFBED_MIN, vacuous: !!err || !o || !(o.off >= OFFBED_MIN) });
+      add({ name: 'offbed.coral', val: q ? { outBand: q.outBand, n: q.n, firstOut: q.firstOut, under: q.under, low: q.low } : (d && d.err) || err, bar: 'dug in off her first bed: every coral vertex inside the NEW bed\'s strip band (DISGUISE coral, growRock\'s own rule at the source)', ok: !!q && q.n > 0 && q.outBand === 0, vacuous: !q || !q.n });
+      add({ name: 'offbed.relay', val: sess.relay ? (sess.relay.err || { same: sess.relay.same, before: sess.relay.before, after: sess.relay.after }) : err, bar: 'the rock\'s growth after the dig-in (coral vertices, growN, the rock fronds) is growRock\'s lay of THIS bed', ok: !!(sess.relay && sess.relay.same), vacuous: !sess.relay || !!sess.relay.err });
+      ck.push(Object.assign(disgCheck('offbed.disg', d), { judged: false }));
     } else {
       const from = sess.apprF ?? S.length, A = S.slice(from), on = [], lv = sess.leaveF;
       for (let i = Math.max(1, from); i < S.length; i++) if (S[i].on && S[i - 1].bury > 0 && S[i - 1].bury < 1) on.push({ i, d: Math.abs(S[i].bury - S[i - 1].bury) });
@@ -1716,6 +1788,13 @@ checks.push({ name: 'len', val: out.crest.len, n: out.crest.n, bar: '16 - 24 u',
 { const q = out.clutch, bar = '<= -0.05 u (every live lobe: centre world y + 1.25 r, under the drawn sand)';
   checks.push({ name: 'clutch', val: q && q.worst ? q.worst.d : null, at: q && q.worst ? q.worst.at : null, n: q ? q.n : 0, bar, ok: !!q && q.n >= 1 && q.worst.d <= -0.05, vacuous: !q || q.n < 1,
     judged: hasSand && !!out.buried, info: q ? { lobes: q.n, of: q.nL, worstLobe: q.worst && q.worst.k, spill: q.worst && q.worst.spill, topOverFloor: q.worst && q.worst.over, st: q.st } : undefined }); }
+// (final review item 6) THE CORAL ON THIS BED'S ROCK (DISGUISE's coral): every drawn coral vertex inside the probe's strip band of the LIVE
+// mound (growRock's own rule at the source, every vertex of a part on the strip, judged here by the probe's band). Judged wherever she has a
+// mound and coral (a bed, a dug-in pose, a re-entry). Its vertices under the drawn sand are booked, not judged: on the first build (c4d60ac)
+// 48 of 20859 stand up to 0.57 u under the local floor, a crust or lump following her shell where it dips under the floor inside the strip
+{ const q = out.coral;
+  checks.push({ name: 'coral', val: q ? `outBand ${q.outBand} of ${q.n}` : null, at: q ? q.firstOut : null, n: q ? q.n : 0, info: q ? { under: q.under, low: q.low } : undefined,
+    bar: 'every coral vertex inside this bed\'s strip band', ok: !!q && q.n > 0 && q.outBand === 0, vacuous: !q || !q.n, judged: hasSand && !!out.repose }); }
 // (Task 12) THE SCAR, where the iron came out: judged where the harpoon is out of her (out.scar), in place of the seam
 { const q = out.scar;
   checks.push({ name: 'scar', val: q ? q.d : null, at: q ? q.at : null, n: q ? 1 : 0, bar: '>= +0.2 u over the drawn sand (the scar\'s centre)', ok: !!q && q.d >= 0.2, vacuous: !q, judged: !!q }); }
