@@ -311,6 +311,20 @@
 //                       lowest points sit on the new bed's surface", assumed coral laid in world space; it rides her body, so coral stays
 //                       inside the band at 1.26 and 6.2 u on c4d60ac: what goes stale is the LAY, its strip / floor / seam filters, which
 //                       relay judges)
+//               early   (final review item 1, pre-registered before the fix) THE CALM BEFORE SHE STANDS: Alt+6, __lev.cmd('wake') (the pull's
+//                       own onWake), 0.5 s, __lev.cmd('calm') (the lab verb), 1 s booked; then him 35 u off, stepped to her settle and to dug
+//                       in. Bars: snap (premise: bury > 0.5 on the frame before the first calmed frame, else VOID): within 2 frames of that
+//                       frame bury 0, L.hasStood, L.moundK 0 and L.crackK 0, held for the 60 frames after it (on c4d60ac the rise froze
+//                       part-way: the rise's easing and the stood test both want !L.calmed); dug (L.dugIn and bury 1 at the end)
+//               throwpose / throwfit  (final review item 7, pre-registered before the fix) A THROW INSIDE A SLICE of the dig-in's job,
+//                       injected page side after digin's chain: throwpose, the fit pose's matrix (L.digMw1, which beginDig takes) throws on
+//                       its first copy, in phase 1 after digStep has posed her at bury 1; throwfit, the fit's generator, once it is the job's
+//                       (phase 2), throws INSIDE it on its next slice (g.throw at its yield: it closes, as a real throw in the fit would).
+//                       Every frame is then stepped on its own, a throw out of one caught and booked (esc), to 10 s after the injection.
+//                       Bars: escape (no throw escapes the frame), warn (exactly one console.warn naming the dig-in's job, every page
+//                       console.warn hooked), state (from the injected frame's row to 10 s after it: no L.digJob, not digging, never dug in,
+//                       awake, bury 0, the dune hidden (moundK 0, MD.k <= 0), L.noPub false, her body's matrixWorld its pose's within 1e-6:
+//                       bodyOff, parent matrixWorld x her local matrix). VOID when the injection never fired
 //             THE PROBE'S OWN TEST (fix round 1, M1, the coordinator's ruling): the ceiling's ground is max(terrainH, extraFloorAt, bodyCols
 //             shellHiAt) under him: her shell's top is ground for "on her ground" whatever the dig-in's bury.
 //             BP_RED=fastdig ({digT: 8}, run clear only) must fail dur; BP_RED=nopause ({pause: 0}, run pause only) must fail pause.
@@ -419,8 +433,8 @@ if (process.env.BP_PLUME) { try { PLUME_P = JSON.parse(process.env.BP_PLUME); } 
 const FORCE = process.env.BP_FORCE === '1' || !!(RED && REDS[MODE][RED].force);
 if (FORCE && MODE !== 'rise') { console.error('BP_FORCE is rise\'s'); process.exit(2); }
 if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
-// (Task 12) BP_RUNS: digin clear | pause | afloat, reentry i | ii | iii (default all; a RED's own runs)
-const RUNS_ALL = { digin: ['clear', 'pause', 'afloat', 'crest', 'offbed'], reentry: ['i', 'ii', 'iii', 'iv'] };
+// (Task 12) BP_RUNS: digin clear | pause | afloat | crest | offbed | early | throwpose | throwfit, reentry i | ii | iii | iv (default all; a RED's own runs)
+const RUNS_ALL = { digin: ['clear', 'pause', 'afloat', 'crest', 'offbed', 'early', 'throwpose', 'throwfit'], reentry: ['i', 'ii', 'iii', 'iv'] };
 let RUNS = RUNS_ALL[MODE] || null;
 if (process.env.BP_RUNS) {
   if (!RUNS) { console.error('BP_RUNS is digin\'s and reentry\'s'); process.exit(2); }
@@ -918,6 +932,8 @@ const DIG_INSTALL = `(async () => {
   const ENDS = [DV.diver.legR.end, DV.diver.legL.end], V = new THREE.Vector3();
   const SOLE_PTS = [[0, -0.16], [0.08, -0.14], [-0.08, -0.14], [0.12, 0.215], [-0.12, 0.215], [0.06, 0.30], [-0.06, 0.30]];
   const own = () => { let m = 1e9; for (const e of ENDS) { e.updateWorldMatrix(true, false); for (const q of SOLE_PTS) { V.set(q[0], -0.15, q[1]); e.localToWorld(V); const g = V.y - sand(V.x, V.z); if (g < m) m = g; } } return m; };
+  // (final review item 7) every console.warn of the page, kept (the job's abandonment must log ONE): hooked once a page
+  if (!window.__bpWarns) { const W = window.__bpWarns = [], w0 = console.warn; console.warn = function (...a) { W.push(a.map(q => String(q && q.message || q)).join(' ').slice(0, 240)); return w0.apply(this, a); }; }
   const R = window.__bpDig = { S: [], tEnd: 0, hold: null, holdY: 0, stops: {},
     onDune() { const p = P.pos; return onAt(p.x, p.y, p.z); },
     settled() { return !!(L.calmed && L.stand <= 0 && Math.abs(L.heave.x) < 0.02 && Math.abs(L.heave.v) < 0.05 && !L.pointPh && !L.walkTo && !L.homeTurn); },
@@ -955,7 +971,8 @@ const DIG_INSTALL = `(async () => {
         ph: L.pointPh || 0, walk: L.walkTo ? 1 : 0, ht: L.homeTurn ? 1 : 0, calmed: L.calmed ? 1 : 0, dorm: L.dormant ? 1 : 0, mk: L.mound ? r3(L.mound.k) : null,
         px: r2(p.x), py: r3(p.y), pz: r2(p.z), gr: P.grounded ? 1 : 0, on: onAt(p.x, p.y, p.z), own: r3(own()), lens: r3(cp.y - Math.max(T.shutFloorY(cp.x, cp.z, 0), sand(cp.x, cp.z))),
         hov: r3(p.y - 1.35 - g), drop: R.hold ? r3(R.holdY - p.y) : null, held: R.hold ? 1 : 0, buoy: r3(P.buoy || 0), calmOut: r3(BC.BODY.calmOut || 0),
-        upd: upd == null ? null : r3(upd), job: L.digJobMs == null ? null : r3(L.digJobMs), hp: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1024) : null, wl: r3(wl), wg: r3(wg), her: [r2(L.pos.x), r2(L.pos.z), r3(L.yaw)] });
+        upd: upd == null ? null : r3(upd), job: L.digJobMs == null ? null : r3(L.digJobMs),
+        hs: L.hasStood ? 1 : 0, mk2: L.moundK == null ? null : r3(L.moundK), ck: L.crackK == null ? null : r3(L.crackK), jph: L.digJob ? L.digJob.ph : -1, np: L.noPub ? 1 : 0, bm: R.bodyOff(), esc: 0, hp: performance.memory ? Math.round(performance.memory.usedJSHeapSize / 1024) : null, wl: r3(wl), wg: r3(wg), her: [r2(L.pos.x), r2(L.pos.z), r3(L.yaw)] });
     },
     // n frames booked; stop: 'settled' | 'stood' | 'woke' | 'u03' | 'ph2' | 'b033' | 'b04' | 'b05' | 'dug' | 'on30' | 'off30' | null
     step(n, stop) {
@@ -963,7 +980,7 @@ const DIG_INSTALL = `(async () => {
       let k = 0;
       const c = { settled: () => R.settled(), stood: () => !!L.hasStood, woke: () => !L.dormant, u03: () => L.stand >= 0.3, ph2: () => L.pointPh === 2,
         b033: () => L.bury >= 0.33, b04: () => L.bury >= 0.4, b05: () => L.bury >= 0.5, dug: () => !!L.dugIn,
-        job: () => !!L.digJob, b03: () => L.bury >= 0.3,
+        job: () => !!L.digJob, b03: () => L.bury >= 0.3, calmed: () => !!L.calmed,
         on30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && S[i].on; i--) m++; return m >= 30; },
         off30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && !S[i].on; i--) m++; return m >= 30; } }[stop] || null;
       R.tEnd = performance.now();
@@ -976,6 +993,29 @@ const DIG_INSTALL = `(async () => {
         const x = (MD.P[a] + MD.P[b] + MD.P[c2] + MD.P[d]) / 4, z = (MD.P[a + 2] + MD.P[b + 2] + MD.P[c2 + 2] + MD.P[d + 2]) / 4, sa = B.sandAt(x, z), xf = T.extraFloorAt(x, z, 0);
         n++; if (!(sa > -1e8)) { off++; continue; } const e = Math.abs(xf - sa); if (e > worst) worst = e; if (e > 1e-9) bad++; }
       return { n, bad, off, worst }; },
+    // (final review item 7) her body's drawn matrix against the one her pose gives (parent's matrixWorld x her local matrix): the largest
+    // element difference; a slice left holding the fit's bury-1 matrix reads ~1.4 u (the sink) here
+    bodyOff() { const b = L.body; if (!b.parent) return null; if (b.matrixAutoUpdate) b.updateMatrix(); R.m4.multiplyMatrices(b.parent.matrixWorld, b.matrix);
+      let m = 0; for (let i = 0; i < 16; i++) { const d = Math.abs(R.m4.elements[i] - b.matrixWorld.elements[i]); if (d > m) m = d; } return Math.round(m * 1e6) / 1e6; },
+    m4: new THREE.Matrix4(),
+    // (final review item 7) THE THROW INSIDE A JOB SLICE, injected page side. trapPose: the fit pose's matrix (beginDig takes L.digMw1 when it
+    // is set) throws on its first copy, digStep's phase 1 after it has posed her at bury 1. trapFit: the fit's generator, once it is the job's
+    // (phase 2), is wrapped so its next slice THROWS INSIDE it (g.throw at its yield: the generator closes, as a real throw in the fit would)
+    trapPose() { const m = new THREE.Matrix4(); m.copy = function () { delete this.copy; R.injF = R.S.length; throw new Error('bp inject: the fit pose'); }; L.digMw1 = m; R.trap = 'pose'; return true; },
+    trapFit() { R.trap = 'fit'; return true; },
+    wrapFit() { const J = L.digJob; if (R.trap !== 'fit' || R.wrapped || !J || J.ph !== 2 || !J.gen) return; const g = J.gen; R.wrapped = R.S.length;
+      J.gen = { next(a) { if (R.injF < 0) { R.injF = R.S.length; return g.throw(new Error('bp inject: the fit')); } return g.next(a); }, throw(e) { return g.throw(e); }, return(v) { return g.return(v); }, [Symbol.iterator]() { return this; } }; },
+    // n frames one at a time, a throw out of a frame caught and booked (esc 1, its message in R.escaped), the frame's row booked anyway
+    stepSafe(n, stop) {
+      let k = 0;
+      for (; k < n; k++) {
+        try { window.__bench.step(1, () => { R.row(null); R.wrapFit(); }); }
+        catch (e) { R.escaped.push({ f: R.S.length, msg: String(e && e.message || e).slice(0, 160) }); R.row(null); R.S[R.S.length - 1].esc = 1; }
+        if (stop === 'inj600' && R.injF >= 0 && R.S.length >= R.injF + 600) { k++; break; }
+      }
+      return { rows: R.S.length, k, injF: R.injF, escaped: R.escaped.length, warns: R.warns.length, bury: L.bury, dug: !!L.dugIn, job: L.digJob ? L.digJob.ph : -1 };
+    },
+    injF: -1, trap: null, wrapped: null, escaped: [], warns: window.__bpWarns || [],
     // (final review item 6, offbed) her bed moved OFFBED_D u along her sand side and OFFBED_YAW rad round before the walk home (at the calm: the
     // walk home's goal is L.lairPos, its last turn L.lairYaw), so she lies down ~3 u off the bed she was built on (the walk home's own envelope:
     // it stops within 3 u); the bed she was built on is kept (bed0) and her offset from it booked
@@ -1250,8 +1290,40 @@ try {
       const run = RUNS[ri], sess = { run }; sessions.push(sess);
       if (ri > 0) await reload();
       try {
-        await digChain(sess);
-        if (run === 'clear') {
+        if (run === 'early') {
+          // (final review item 1) THE CALM BEFORE SHE STANDS: woken (the pull's own onWake), 0.5 s, then the lab calm; 1 s booked, then him
+          // 35 u off, settled and dug in
+          await alt(c, 6);
+          const ins = await c.ev(DIG_INSTALL); if (!ins || ins.err) throw new Error('install: ' + (ins && ins.err));
+          sess.ins = ins;
+          await dig(30);
+          await c.ev(`(window.__lev.cmd('wake'), 1)`);
+          sess.wakeF = (await dig(1)).rows - 1;
+          await dig(29);
+          sess.calmAt = await c.ev(`(() => { const L = window.lev; window.__lev.cmd('calm'); return { rows: window.__bpDig.S.length, bury: L.bury, stand: L.stand, cracked: !!L.cracked, hasStood: !!L.hasStood, calmNext: !!L.calmNext }; })()`);
+          await dig(60);
+          sess.place1 = await c.ev(`window.__bpDig.place35()`);
+          let st = null;
+          for (let k = 0; k < 4; k++) { st = await dig(600, 'settled'); if (st.hit) break; }
+          sess.settled = !!(st && st.hit);
+          if (sess.settled) { sess.place2 = await c.ev(`window.__bpDig.place35()`); for (let k = 0; k < 8; k++) { st = await dig(300, 'dug'); if (st.hit) break; } }
+          sess.endState = await c.ev(`window.__bpDig.state()`);
+          console.log(`  [early] calm at ${JSON.stringify(sess.calmAt)}; settled ${sess.settled}; end ${JSON.stringify(sess.endState)}`);
+        } else await digChain(sess);
+        if (run === 'early') { }
+        else if (run === 'throwpose' || run === 'throwfit') {
+          // (final review item 7) the throw injected, then every frame stepped on its own (a throw out of one caught and booked) to 10 s after it
+          sess.trap = await c.ev(run === 'throwpose' ? `window.__bpDig.trapPose()` : `window.__bpDig.trapFit()`);
+          sess.warn0 = await c.ev(`window.__bpWarns.length`);
+          let st = null;
+          for (let k = 0; k < 8; k++) { st = await c.ev(`window.__bpDig.stepSafe(300, 'inj600')`); if (st.injF >= 0 && st.rows >= st.injF + 600) break; }
+          sess.inj = st; sess.injF = st ? st.injF : -1;
+          sess.escaped = await c.ev(`window.__bpDig.escaped`);
+          sess.warns = await c.ev(`window.__bpWarns.slice(${sess.warn0})`);
+          sess.endState = await c.ev(`window.__bpDig.state()`);
+          console.log(`  [${run}] injected at row ${sess.injF}; escaped ${JSON.stringify(sess.escaped)}; warns ${JSON.stringify(sess.warns)}; end ${JSON.stringify(sess.endState)}`);
+        }
+        else if (run === 'clear') {
           let st = null;
           if (SHOTS) {   // (BP_SHOTS) mid dig-in: him 25 u off on her sand side (off her ground), stepped to bury 0.42
             await c.ev(`(window.weather.set(0.5, 0), 1)`); sess.midShot = await c.ev(`window.__bpDig.place35(25)`);
@@ -1475,6 +1547,26 @@ if (MODE === 'digin') {
         add({ name: 'clear.cost', val: { worst: mx, median: med, extra: mx != null ? r(mx - med) : null, atS: r(iMax / f60), p99: srt.length ? srt[Math.floor(srt.length * 0.99)] : null, jobFrames: jobs.length, jobMax: jmx },
           bar: 'the window\'s worst update() frame less its median <= 4.0 ms (pre-registered)', ok: mx != null && mx - med <= 4.0, vacuous: C.length < 600 }); }
       add({ name: 'clear.relay', val: sess.relay ? (sess.relay.err || { same: sess.relay.same, before: sess.relay.before, after: sess.relay.after }) : err, bar: 'the rock\'s growth after the dig-in (coral vertices, growN, the rock fronds) is growRock\'s lay of THIS bed', ok: !!(sess.relay && sess.relay.same), vacuous: !sess.relay || !!sess.relay.err });
+    } else if (run === 'early') {
+      // (final review item 1, pre-registered before the fix) the calm at wake + 0.5 s: within 2 frames of the first frame she is calmed, bury 0,
+      // L.hasStood, the dune drawn down (moundK 0) and the crack's crust gone (crackK 0), held for the 60 booked frames after the calm
+      const cf = S.findIndex(q => q.calmed), pre = cf > 0 ? S[cf - 1] : null;
+      const snap = cf >= 0 ? S.slice(cf, cf + 3).findIndex(q => q.bury === 0 && q.hs === 1 && q.mk2 === 0 && q.ck === 0) : -1;
+      const heldBad = snap >= 0 ? S.slice(cf + snap, cf + 61).filter(q => !(q.bury === 0 && q.hs === 1)).length : null;
+      const at = i => S[i] ? { bury: r(S[i].bury), hs: S[i].hs, mk2: S[i].mk2, ck: S[i].ck, stand: S[i].stand } : null;
+      add({ name: 'early.snap', val: { calmF: cf, calmS: cf >= 0 && sess.wakeF != null ? r((cf - sess.wakeF) / f60) : null, buryBefore: pre ? r(pre.bury) : null, snapF: snap >= 0 ? snap : null, heldBad, at0: at(cf), at2: at(cf + 2), at60: at(cf + 60) },
+        bar: 'a calm in the rise (bury > 0.5 the frame before): bury 0, hasStood, moundK 0, crackK 0 within 2 frames of the calm, held 60 frames', ok: snap >= 0 && heldBad === 0, vacuous: !!err || cf < 0 || !(pre && pre.bury > 0.5) });
+      add({ name: 'early.dug', val: sess.endState ? { settled: sess.settled, dugIn: sess.endState.dugIn, bury: sess.endState.bury } : err, bar: 'after it she points, walks home, settles and digs in (L.dugIn, bury 1)', ok: !!sess.endState && sess.endState.dugIn && sess.endState.bury === 1, vacuous: !!err || !sess.endState });
+    } else if (run === 'throwpose' || run === 'throwfit') {
+      // (final review item 7, pre-registered before the fix) a throw inside a slice of the dig-in's job abandons it cleanly: nothing escapes the
+      // frame; ONE console.warn; from the injected frame's row to 10 s after it the job gone (no digJob), not digging and never dug in, awake,
+      // bury 0 and the dune hidden (moundK 0, MD.k <= 0), noPub false, and her body's drawn matrix her pose's (<= 1e-6)
+      const f = sess.injF, A = f >= 0 ? S.slice(f) : [], bad = A.filter(q => !(q.jph === -1 && q.dig === 0 && q.dug === 0 && q.dorm === 0 && q.bury === 0 && q.mk2 === 0 && !(q.mk > 0) && q.np === 0 && q.bm != null && q.bm <= 1e-6));
+      const w = (sess.warns || []).filter(q => /dig-in/i.test(q));
+      add({ name: run + '.escape', val: { escaped: sess.escaped || null }, bar: 'no throw escapes the frame (the job catches its own)', ok: f >= 0 && !(sess.escaped || []).length, vacuous: !!err || f < 0 });
+      add({ name: run + '.warn', val: { n: w.length, warns: (sess.warns || []).slice(0, 4) }, bar: 'exactly one console.warn of the dig-in\'s job', ok: f >= 0 && w.length === 1, vacuous: !!err || f < 0 });
+      add({ name: run + '.state', val: { rows: A.length, bad: bad.length, first: bad.length ? { f: S.indexOf(bad[0]) - f, jph: bad[0].jph, dig: bad[0].dig, dug: bad[0].dug, bury: bad[0].bury, mk2: bad[0].mk2, mk: bad[0].mk, np: bad[0].np, bm: bad[0].bm, esc: bad[0].esc } : null },
+        bar: 'from the injected frame to 10 s after: no job, not digging, never dug in, awake, bury 0, the dune hidden, noPub false, her body\'s matrix her pose\'s', ok: A.length >= 600 && !bad.length, vacuous: !!err || A.length < 600 });
     } else if (run === 'offbed') {
       const o = sess.off0, d = sess.disg, q = d && !d.err ? d.coral : null;
       add({ name: 'offbed.off', val: o || err, bar: `premise: she lies >= ${OFFBED_MIN} u off the bed she was built on at the dig-in`, ok: !!o && o.off >= OFFBED_MIN, vacuous: !!err || !o || !(o.off >= OFFBED_MIN) });
