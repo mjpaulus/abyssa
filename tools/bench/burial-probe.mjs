@@ -181,7 +181,8 @@
 //               blind     her FIRST blind spell: L.lostN rises from the wake to STOOD (she loses him; never = FAIL, not UNMEASURED: the head's
 //                         RED), and the spell's length, (the find row - the loss row) / 60 (sight() zeroes blindT on the find frame itself), is
 //                         in [3.0, 4.0] s. The loss and the find are booked from the wake too. HOW IT ENDED is booked off the find row (sight()
-//                         reacquires on any of four): los = clearT > SIGHT.reacq (clearT is not reset on a find), pd = the PREVIOUS row's
+//                         reacquires on any of four): los = clearT >= SIGHT.reacq (clearT is not reset on a find; the row books it to 1e-3, and
+//                         sight's own test is > 0.6 unrounded: a LOS find books 0.6), pd = the PREVIOUS row's
 //                         L._pd < collR x 1.05 (sight runs first in the frame, _pd is written later), touch = the previous row's touchT > 0,
 //                         sigil = a ward lit on the find row (brooder.js :2505 sets seen at the frame's end). Only a LOS ending is judged; a
 //                         spell ended any other way is UNMEASURED (reported); a spell still open at the series' end is a FAIL (>= 4 s blind
@@ -196,6 +197,8 @@
 //                         after the wake less its height at the first sample after the wake with a maximum > 0.02: >= 3 u. (Booked beside it,
 //                         not judged: the plan-integrated profile's peak height, sum over the grid's columns per height, the same samples.)
 //                         No cloud > 0.02 in the first 4 s: FAIL (no climb); < 10 samples: UNMEASURED
+//                         Booked beside it (info.blindWindow, not judged): from the first loss to the first LOS find, with the bump / touch
+//                         re-finds between them counted (beside her shell sight() re-finds him the frame after each loss).
 //               quadEv    no live particle overwritten in the 448-quad ring over the rise: __plume.state().quadEvicted from the frame before
 //                         the wake to STOOD does not rise. UNMEASURED where the field is absent (the head: a count that cannot be read cannot
 //                         pass) or no rise record was ever live (__plume.state().rise)
@@ -1068,15 +1071,20 @@ if (MODE === 'rise') {
     const spells = [];
     for (let i = Math.max(1, w); i < S.length; i++) if (S[i].lost > S[i - 1].lost) {
       let f = -1; for (let j = i + 1; j < S.length; j++) if (S[j].seen === 1 && S[j - 1].seen === 0) { f = j; break; }
-      const how = f < 0 ? null : { los: S[f].clearT > reacq, pd: S[f - 1].pd < collR * 1.05, touch: S[f - 1].touchT > 0, sigil: S[f].lit > S[f - 1].lit,
+      const how = f < 0 ? null : { los: S[f].clearT >= reacq, pd: S[f - 1].pd < collR * 1.05, touch: S[f - 1].touchT > 0, sigil: S[f].lit > S[f - 1].lit,
         clearT: S[f].clearT, pdPrev: S[f - 1].pd, touchPrev: S[f - 1].touchT, blindTPrev: S[f - 1].blindT, tauLoss: S[i].tau, tauFind: S[f].tau };
       spells.push({ lossRow: i, findRow: f, lossT: sec(i), findT: f < 0 ? null : sec(f), len: f < 0 ? null : +((f - i) / f60).toFixed(3), openFor: f < 0 ? +((S.length - i) / f60).toFixed(3) : null, how,
         ended: how ? ['los', 'pd', 'touch', 'sigil'].filter(k => how[k]) : ['open'] });
       if (f < 0) break; i = f; }
     const sp = spells.length && spells[0].lossRow <= end ? spells[0] : null;
-    info.blind = { spells, reacq, collR, lostAtEnd: S.length ? S[S.length - 1].lost : null, tauMaxRise: S.slice(w, end + 1).reduce((m, q) => Math.max(m, q.tau), 0) };
+    // (booked, not judged) THE BLIND WINDOW: from the first loss to the first find by line of sight, the bump / touch re-finds in between
+    // counted (beside her shell, sight() re-finds him on a bump the frame after each loss: brooder.js sight, L._pd < collR x 1.05)
+    const losI = spells.findIndex(q => q.how && q.how.los);
+    info.blindWindow = sp ? { from: sp.lossT, losFind: losI >= 0 ? spells[losI].findT : null, len: losI >= 0 ? +(spells[losI].findT - sp.lossT).toFixed(3) : null, losSpell: losI >= 0 ? spells[losI].len : null,
+      refinds: losI >= 0 ? spells.slice(0, losI).reduce((m, q) => { for (const k of q.ended) m[k] = (m[k] || 0) + 1; return m; }, {}) : null } : null;
+    info.blind = { spells: spells.slice(0, 6).concat(spells.length > 6 ? [{ more: spells.length - 6 }] : []), nSpells: spells.length, reacq, collR, lostAtEnd: S.length ? S[S.length - 1].lost : null, tauMaxRise: S.slice(w, end + 1).reduce((m, q) => Math.max(m, q.tau), 0) };
     ck.push({ name: 'blind', val: sp ? { lossT: sp.lossT, findT: sp.findT, len: sp.len, openFor: sp.openFor, ended: sp.ended, how: sp.how } : { lost: 'never, from the wake to STOOD' },
-      bar: 'she loses him between the wake and STOOD (lostN rises), and her first blind spell, ended by line of sight (clearT > SIGHT.reacq), lasts 3.0-4.0 s',
+      bar: 'she loses him between the wake and STOOD (lostN rises), and her first blind spell, ended by line of sight (clearT >= SIGHT.reacq), lasts 3.0-4.0 s',
       ok: !!sp && sp.findRow >= 0 && sp.len >= 3.0 && sp.len <= 4.0, vacuous: vacA || (!!sp && sp.findRow >= 0 && !sp.how.los), judged: true });
     // footprint: the widest over the rise (wake -> STOOD) of the frame's farthest bearing
     const FP = S.map((q, k) => [k, q.pf]).filter(([k, q]) => k >= w && q), FPr = FP.filter(([k]) => k <= end);

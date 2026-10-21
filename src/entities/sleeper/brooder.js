@@ -2113,8 +2113,8 @@ export function updateBrooder(L, dt, t, player) {
       const sheet = L.moundK < 0.25 ? 3 : L.moundK < 0.5 ? 2 : L.moundK < 0.75 ? 1 : 0;
       while ((L.riseSheetN || 0) < sheet) {
         const j0 = (L.riseSheetN || 0) * 37;
-        let o = ringAt(MD, 6, j0); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
-        o = ringAt(MD, 6, j0 + 64); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
+        let o = ringAt(MD, 5, j0); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
+        o = ringAt(MD, 5, j0 + 64); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
         L.riseSheetN = (L.riseSheetN || 0) + 1;
       }
     }

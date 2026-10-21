@@ -38,8 +38,8 @@ export const PLUME = {
   // THE RISE (velkath-buried-rock §2): the sand pouring off her as she comes up out of it. A ring at the crack, more as the sheets
   // fall; it spreads to 15-20 u and climbs, and it is REAL to her (the density model): the SIGHT rule blinds her in it, no new rule.
   // Long-lived and slow (kd), so the line from her eyes stays thick past her first look (standE 0.5, ~3 s in).
-  rise: { n: 16, life: [6.5, 8.5], vr: [2.0, 8.0], vy: [0.8, 3.2], s0: [4.0, 6.0], s1: [10, 15], a: 0.62, kd: 0.55,
-    rh0: 3.0, rhA: 13.0, rhK: 0.45, hv0: 2.0, hvA: 6.0, hvK: 0.45, D: 4.2 }
+  rise: { n: 16, life: [5.5, 6.5], vr: [1.0, 3.5], vy: [2.0, 7.0], s0: [4.0, 6.0], s1: [8, 12], a: 0.62, kd: 0.55,
+    rh0: 2.0, rhA: 3.0, rhK: 0.45, hv0: 2.0, hvA: 12.0, hvK: 0.45, D: 4.2 }
 };
 // HER WAKE (brooder-clutch: "the chase must read"): a footfall at a run throws a low, slow
 // cloud that HANGS where she went, so in the zone-0 murk her path is a pale haze on the dark
@@ -376,4 +376,4 @@ export function plumeState() {
   for (let i = 0; i < PL; i++) if (rec[i * 8 + 7] && clock - rec[i * 8 + 3] < rec[i * 8 + 4]) { n++; if (i < 4) big++; else if (i >= 12) rise++; }
   return { live: n, big, rise, riseEvicted, quadEvicted, clock, visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
 }
-if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, densKind, spawn: spawnPlume, clear: clearPlumes };
+if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, densKind, rec, spawn: spawnPlume, clear: clearPlumes };
