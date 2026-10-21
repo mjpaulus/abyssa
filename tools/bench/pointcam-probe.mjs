@@ -28,11 +28,16 @@
 //             the lens bodyBlocked(lens, 0) (INFO: the base's lensfix residual, the camera follow-ups' card, never this mode's bar).
 //             Bars (both placements unless named):
 //               line   the calm line that showed is "ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW." (else UNMEASURED: the hose was not set)
-//               turn   (back only) her front within 12 deg of the bearing to P on the first frame __fissure.k(0) >= 0.6, at the
-//                      pre-registered POINT.turn 0.5 rad/s. FAILING IT IS MICHAEL'S FEEL CALL, never a tuning knob: her heading error at the
-//                      calm and at the light (per placement) and her yaw travel across the hold are booked for him either way
-//               aim    the angle between shoulder->palm and shoulder->P <= 20 deg on every frame pointK >= 0.95 (>= 1 such frame, else VOID)
-//               hold   pointK >= 0.95 on ONE contiguous span of 2.5-3.5 s, and that span contains the frame the calm line first shows
+//               turn   RE-REGISTERED 2026-10-21 on Michael's ruling ("1": she finishes turning at 0.5 rad/s, then points; the raise waits
+//                      for her facing, even past the light and the line): her front within 12 deg of the bearing to P on the frame the
+//                      raise starts (the first frame pointPh is 2; VOID when it never is), both placements. Her facing at the light is
+//                      booked, not judged. (Was: back only, within 12 deg on the first frame __fissure.k(0) >= 0.6, at POINT.turn 0.5 rad/s:
+//                      FAIL on b3e903f, -63.58 deg)
+//               aim    the angle between shoulder->palm and shoulder->P <= 20 deg on every frame pointK >= 0.95 (>= 1 such frame, else VOID),
+//                      both placements
+//               hold   pointK >= 0.95 on ONE contiguous span of 2.5-3.5 s; at `ahead` (she already faces it) that span contains the frame
+//                      the calm line first shows; at `back` the raise starts within 0.5 s (30 frames) of the first frame she faces the
+//                      opening (|error| <= 12 deg), and not before it
 //               tears  0 over the 14 s (slamLog and torn never rise)
 //               walk   L.walkTo null on every frame with pointPh > 0, and set within 1.2 s (72 frames) of pointPh leaving 4 (VOID when
 //                      pointPh never reached 4: the shipped calm's walkTo at the calm cannot pass it). AMENDED on the first GREEN run
@@ -253,6 +258,8 @@ if (S.some(r => r.zone !== 0)) { console.error('UNMEASURED: he left zone 0 under
 const lineF = out.lineF;
 // the light: the first frame __fissure.k(0) >= 0.6
 const lightF = S.findIndex(r => r.fk >= 0.6);
+// the raise's first frame (pointPh 2) and the first frame she faces the opening (|err| <= 12 deg)
+const raiseF = S.findIndex(r => r.ph === 2), faceOpenF = S.findIndex(r => Math.abs(r.err) <= 12);
 // the hold: frames with pointK >= 0.95, and whether they are one contiguous span
 const up = S.map((r, i) => r.k >= 0.95 ? i : -1).filter(i => i >= 0);
 const contiguous = up.length > 0 && up[up.length - 1] - up[0] + 1 === up.length;
@@ -266,7 +273,7 @@ const slam0 = S.length ? S[0].slam : 0, torn0 = S.length ? S[0].torn : 0;
 const slamN = S.length ? Math.max(...S.map(r => r.slam)) - slam0 : 0, tornUp = S.length ? +(Math.max(...S.map(r => r.torn)) - torn0).toFixed(3) : 0;
 const yawAt = i => i >= 0 && i < S.length ? S[i].yaw : null;
 const travel = up.length ? +(Math.abs(Math.atan2(Math.sin(S[up[up.length - 1]].yaw - S[up[0]].yaw), Math.cos(S[up[up.length - 1]].yaw - S[up[0]].yaw))) * D).toFixed(2) : null;
-record.book = { calmBy: out.calmBy, errAtCalm: out.pre.errOpen, errHimAtCalm: out.pre.errHim, errAtLight: lightF >= 0 ? S[lightF].err : null, lightF, lightS: lightF >= 0 ? +(lightF / 60).toFixed(3) : null,
+record.book = { raiseF, raiseS: raiseF >= 0 ? +(raiseF / 60).toFixed(3) : null, faceOpenF, faceOpenS: faceOpenF >= 0 ? +(faceOpenF / 60).toFixed(3) : null, errAtRaise: raiseF >= 0 ? S[raiseF].err : null, calmBy: out.calmBy, errAtCalm: out.pre.errOpen, errHimAtCalm: out.pre.errHim, errAtLight: lightF >= 0 ? S[lightF].err : null, lightF, lightS: lightF >= 0 ? +(lightF / 60).toFixed(3) : null,
   lineF, lineS: lineF >= 0 ? +(lineF / 60).toFixed(3) : null, upF: up.length ? [up[0], up[up.length - 1]] : null, upS: up.length ? [+(up[0] / 60).toFixed(3), +(up[up.length - 1] / 60).toFixed(3)] : null,
   span, contiguous, angMax, angAtUp: up.length ? S[up[0]].ang : null, yawTravelHold: travel, errOverHold: up.length ? [Math.min(...up.map(i => S[i].err)), Math.max(...up.map(i => S[i].err))] : null,
   endF, walkF, walkDuring, slamN, tornUp, keepN: S.length ? S[S.length - 1].keepN - S[0].keepN : 0, keepDuringPoint: S.filter((r, i) => i > 0 && r.ph > 0 && r.keepN > S[i - 1].keepN).length,
@@ -275,9 +282,12 @@ record.book = { calmBy: out.calmBy, errAtCalm: out.pre.errOpen, errHimAtCalm: ou
   knobs: out.knobs, placed: out.place, faceF: out.faceF, pre: out.pre };
 console.log(`POINT ${JSON.stringify(record.book)}`);
 const ck = [
-  { name: 'turn', val: lightF >= 0 ? S[lightF].err : null, bar: '(back) |her heading error to P| <= 12 deg on the first frame __fissure.k(0) >= 0.6 (POINT.turn ' + (out.knobs ? out.knobs.turn : '?') + ' rad/s)', ok: lightF >= 0 && Math.abs(S[lightF].err) <= 12, vacuous: lightF < 0, judged: AT === 'back' },
+  { name: 'turn', val: raiseF >= 0 ? S[raiseF].err : null, bar: '|her heading error to P| <= 12 deg on the frame the raise starts (POINT.turn ' + (out.knobs ? out.knobs.turn : '?') + ' rad/s)', ok: raiseF >= 0 && Math.abs(S[raiseF].err) <= 12, vacuous: raiseF < 0, judged: true },
   { name: 'aim', val: angMax, bar: 'shoulder->palm vs shoulder->P <= 20 deg on every frame pointK >= 0.95', ok: angMax != null && angMax <= 20, vacuous: !up.length, judged: true },
-  { name: 'hold', val: { span, contiguous, upS: record.book.upS, lineS: record.book.lineS }, bar: 'pointK >= 0.95 on one contiguous span of 2.5-3.5 s containing the calm line\'s first frame', ok: contiguous && span >= 2.5 && span <= 3.5 && lineF >= up[0] && lineF <= up[up.length - 1], vacuous: lineF < 0, judged: true },
+  { name: 'hold', val: { span, contiguous, upS: record.book.upS, lineS: record.book.lineS, raiseS: record.book.raiseS, faceOpenS: record.book.faceOpenS },
+    bar: 'pointK >= 0.95 on one contiguous span of 2.5-3.5 s; ' + (AT === 'ahead' ? 'containing the calm line\'s first frame' : 'the raise starting 0-30 frames after she first faces the opening'),
+    ok: contiguous && span >= 2.5 && span <= 3.5 && (AT === 'ahead' ? lineF >= up[0] && lineF <= up[up.length - 1] : raiseF >= 0 && faceOpenF >= 0 && raiseF - faceOpenF >= 0 && raiseF - faceOpenF <= 30),
+    vacuous: AT === 'ahead' ? lineF < 0 : false, judged: true },
   { name: 'tears', val: { slamN, tornUp }, bar: '0 tears over the 14 s', ok: slamN === 0 && tornUp <= 0, vacuous: !S.length, judged: true },
   { name: 'walk', val: { endF, walkF, dF: endF >= 0 && walkF >= 0 ? walkF - endF : null, walkDuring }, bar: 'walkTo / homeTurn null while pointPh > 0; set within 72 frames of pointPh leaving 4', ok: endF >= 0 && walkF >= 0 && walkF - endF <= 72 && walkDuring === 0, vacuous: endF < 0, judged: true }];
 if (RED) for (const k of ck) k.judged = REDS[MODE][RED].bars.includes(k.name);
