@@ -314,6 +314,10 @@
 //             again: dig2 (L.dugIn within 40 s of the settle, its first -> last 15-20 s).
 //             (AMENDED on c3eaa00, after data: rite reads `pressed` after the wake (it is set when the wound gives, after the 1.5 s wrench);
 //             rise.c allows the REMEMBERED ward (the rebuilt sleeper is remembered: one ward dim-lit by design), every other ward unlit)
+//             (Task 13, the Task 12 re-review's minor 1: the amendment allowed remembered wards but never barred their count) rise.c also bars
+//             the remembered count: memN (the most wards lit AND g.mem on any booked frame) <= 1. BP_RED=mem2 (session iii only, the second rise
+//             run): after the return and the second rise's Alt+6 (the jump rebuilds her), before its E, a page-side transplant flags ONE more ward
+//             remembered (g.lit, g.mem, memK 0, as common.js rememberWard does), so two are: iii.rise.c must fail, exit 5
 //             BP_RED=keepdig (session iii only, no second rise): the mutant re-entry that keeps the old sleeper's dig state (after the return
 //             the new L is given the old L's dormant / bury / digging), which must fail iii.dormant and iii.cue: exit 5.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
@@ -378,7 +382,9 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
     noplume: { set: { plume: 0 }, bars: ['blind', 'footprint', 'climb'] } },
   // (Task 12) runs: the only BP_RUNS the RED is written for
   digin: { fastdig: { set: { digT: 8 }, bars: ['dur'], runs: ['clear'] }, nopause: { set: { pause: 0 }, bars: ['pause'], runs: ['pause'] } },
-  reentry: { keepdig: { set: {}, page: true, bars: ['dormant', 'cue'], runs: ['iii'] } } };
+  reentry: { keepdig: { set: {}, page: true, bars: ['dormant', 'cue'], runs: ['iii'] },
+    // (Task 13) a second ward flagged remembered after the return -> the second rise's rise.c (memN <= 1)
+    mem2: { set: {}, page: true, bars: ['rise.c'], runs: ['iii'] } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -1152,6 +1158,10 @@ try {
   // the point, the settle and the dig-in again. sess.rise2 = rise's out for riseChecks; sess.after2 the dig-in's
   const secondRise = async sess => {
     await alt(c, 6);
+    // (Task 13, BP_RED=mem2) the transplant: one more ward flagged remembered (rememberWard's three writes), AFTER Alt+6 (the jump rebuilds
+    // her: a transplant made before it was lost, measured: 2 flagged, 1 booked) and before the rise's booking and the E
+    if (RED === 'mem2') sess.mutant = await c.ev(`(() => { const L = window.lev, was = L.sigils.filter(g => g.lit && g.mem).length, g = L.sigils.find(q => !q.mem);
+      if (g) { g.lit = true; g.mem = true; g.memK = 0; } return { was, now: L.sigils.filter(q => q.lit && q.mem).length, marked: g ? L.sigils.indexOf(g) : -1, memWard: L.memWard }; })()`);
     const pl = await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { where: 'anchor', him: [+p.x.toFixed(2), +p.z.toFixed(2)], dAnchor: H && H.anchor ? +Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z).toFixed(2) : null, prompt: window.lev.rite ? window.lev.rite.prompt(p) : null, wound: !!(H && H.wound), dormant: !!window.lev.dormant }; })()`);
     const ins = await c.ev(RISE_INSTALL); if (!ins || ins.err) throw new Error('second rise: install: ' + (ins && ins.err));
     const settle = await c.ev(`window.__bpRise.settle(30)`);
@@ -1269,7 +1279,7 @@ try {
         sess.floor = await c.ev(`window.__bpDig.floorEq()`);
         sess.disg = await c.ev(DISGUISE);
         console.log(`  [${run}] mid ${JSON.stringify(sess.mid)}; after ${JSON.stringify(sess.after)}; floor ${JSON.stringify(sess.floor)}`);
-        if ((run === 'iii' || run === 'iv') && !RED) await secondRise(sess);
+        if ((run === 'iii' || run === 'iv') && (!RED || RED === 'mem2')) await secondRise(sess);
       } catch (e) { sess.err = String(e && e.message || e); console.error(`  [${run}] ${sess.err}`); }
     }
     out = { sessions };
@@ -1433,17 +1443,18 @@ if (MODE === 'reentry') {
       ck.push({ name: run + '.clutch', val: a ? { clutch: d ? d.val : null, drop: a.drop, want: a.dropWant } : err, bar: 'the disguise clutch check and B.drop == clutchSink / R', ok: !!a && !!d && d.ok && a.drop != null && Math.abs(a.drop - a.dropWant) < 1e-12, vacuous: vac || !d, judged: true }); }
     ck.push({ name: run + '.shader', val: a ? a.shader : err, bar: '__shaderFailed() []', ok: !!a && a.shader === 0, vacuous: vac, judged: true });
     // (fix round 1, I1) THE SECOND RISE (header), sessions iii and iv
-    if ((run === 'iii' || run === 'iv') && !RED) {
+    if ((run === 'iii' || run === 'iv') && (!RED || RED === 'mem2')) {
       const r2 = sess.rite2, R2 = sess.rise2, v2 = !!err && !R2;
       ck.push({ name: run + '.rite', val: r2 || err, bar: 'the prompt "[E] PRESS THE OLD WOUND", the wound pressed by real E, she wakes within 10 s', ok: !!r2 && r2.prompt === '[E] PRESS THE OLD WOUND' && r2.pressed && r2.wokeF >= 0, vacuous: !r2, judged: true });
       if (R2) { const { ck: rc } = riseChecks(R2), keep = ['a', 'b', 'c', 'd', 'f', 'g', 'h', 'i', 'iShell'];
-        for (const k of rc) ck.push(Object.assign({}, k, { name: run + '.rise.' + k.name, judged: keep.includes(k.name) && k.name !== 'c' }));
+        // (Task 13) the shipped (c), "none lit", is booked as rise.cShipped (info): rise.c is the amended reading below, the only one BP_RED=mem2 judges
+        for (const k of rc) ck.push(Object.assign({}, k, { name: run + '.rise.' + (k.name === 'c' ? 'cShipped' : k.name), judged: keep.includes(k.name) && k.name !== 'c' }));
         // (c) AMENDED on c3eaa00 (data: litFrames 971): the rebuilt sleeper is REMEMBERED (game.js calmedBefore: the chart recorded the calm), so one
         // ward is dim-lit from her build by design (common.js rememberWard); "none lit" is read as none lit but the remembered ward
         { const S = R2.S, w = R2.wakeF; let s1 = -1; for (let i = w; i < S.length; i++) { const q = S[i]; if (q.stand >= 1 && Math.abs(q.hx - 1) < 0.02 && Math.abs(q.hv) < 0.05) { s1 = i; break; } }
           const cW = S[w] ? S[w].wmax : null, cS = s1 >= 0 ? S[s1].wmin : null, litN = S.filter(q => q.lit - (q.mem || 0) > 0).length, memN = S.length ? Math.max(...S.map(q => q.mem || 0)) : 0;
-          ck.push({ name: run + '.rise.c', val: { wardsAtWakeMax: cW, wardsAtStoodMin: cS, litFrames: litN, remembered: memN }, bar: 'wards < 0 over the sand at the wake, > 2 at STOOD, none lit but the remembered one',
-            ok: cW != null && cW < 0 && cS != null && cS > 2 && litN === 0, vacuous: s1 < 0, judged: true }); }
+          ck.push({ name: run + '.rise.c', val: { wardsAtWakeMax: cW, wardsAtStoodMin: cS, litFrames: litN, remembered: memN, mutant: sess.mutant || null }, bar: 'wards < 0 over the sand at the wake, > 2 at STOOD, none lit but the remembered one, and at most one remembered (memN <= 1)',
+            ok: cW != null && cW < 0 && cS != null && cS > 2 && litN === 0 && memN <= 1, vacuous: s1 < 0, judged: true }); }
         const S = R2.S, w = R2.wakeF; let s0 = -1; for (let i = w; i < S.length; i++) { const q = S[i]; if (q.stand >= 1 && Math.abs(q.hx - 1) < 0.02 && Math.abs(q.hv) < 0.05) { s0 = i; break; } }
         const g2 = S.findIndex((q, k) => k >= w && q.gb === 2), g0 = g2 < 0 ? -1 : S.findIndex((q, k) => k > g2 && q.gb === 0);
         ck.push({ name: run + '.reveal', val: { revealAt: g2 < 0 ? null : +((g2 - w) / 60).toFixed(3), fullAt: g0 < 0 ? null : +((g0 - w) / 60).toFixed(3), stoodAt: s0 < 0 ? null : +((s0 - w) / 60).toFixed(3) },
