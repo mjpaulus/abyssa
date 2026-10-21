@@ -146,17 +146,32 @@
 //                   vertex (the highest of terrainH, the drawn dune and her drawn shell, downward rays from the vertex + 1.5 u, the highest of five
 //                   0.05 u apart, amended after rays fell through slits in her drawn shell: see slab() below; never the fit pose, her back rises under them) on every frame the mesh is drawn (sunk into the SAND is allowed: this side is one-sided), and the mesh
 //                   hidden by 3.1 s after the wake. No L.slabs (the Task 7a head), or none drawn with a piece live: UNMEASURED
-//               (iShell) THE SLABS' SHELL SIDE (Task 7b fix round 1, I1; PRE-REGISTERED here, before any run of it, from the review's numbers: G-off
-//                   read gMin -0.234 u at t 0.0, every piece age 0, laid on her crest: a clod's lowest vertex ~0.23 u inside her drawn shell, the
-//                   game seating on the lowest of 5 reads +-0.15 and the probe reading the highest of 5 +-0.05): on every frame the mesh is drawn,
-//                   every piece whose drawn surface under its lowest vertex is HER SHELL (the shell's read is the highest of the three surfaces,
-//                   strictly over terrainH and the dune, the upward-ray fallback of slab() counting as shell: the slab's `kind`) has its lowest
-//                   vertex >= -0.3 u (gap = vertex minus that surface). Designed sinking into SAND or the floor (SLAB_SINK) is NOT judged here
-//                   and stays allowed. gMin and the kind of the surface it was read on (shell | dune | floor) are booked on every frame and in
-//                   info.slabs (gMin, gMinKind, gMinShell, nShell). No slab read on her shell on any drawn frame (nShell 0), or none drawn: UNMEASURED.
-//                   RED (BP_RED=sunk, rise, any BP_AT): after each stepped frame the probe lowers the first shell-kind piece's drawn vertices by 0.5 u
-//                   (the game rewrites every vertex each frame: no accumulation), so a piece stands ~0.5 u into her shell; it judges (iShell) alone
-//                   and must exit 5. (i)'s hover side must still hold under it (lowering cannot raise a piece): booked, not judged.
+//               (iShell) THE SLABS' SHELL SIDE (Task 7b fix round 1, I1). PRE-REGISTERED before any run, then AMENDED TWICE AFTER THE FIRST RUNS (the
+//                   review's premise was a misreading, below; every amendment is recorded with the reading that forced it; the bound, 0.3 u, never moved).
+//                   AS REGISTERED: the vertical gap (the slab's lowest vertex less the highest of terrainH / dune / her shell under it, slab()'s own
+//                   read) >= -0.3 u for every piece whose surface is her shell. The review's "gMin -0.234 u at t 0.0" is the FIRST frame's minimum; over
+//                   the whole series gMin was already -0.867 u in burial-rise-t7b-G-off.json (the same on f6b4077 at crest and off, deterministic), a piece
+//                   on her shell: so the registered bar FAILED the shipped build (gMinShell -0.867 u, 66 of 173 frames). Why: burial.js seats a piece on the
+//                   LOWEST of five reads (vertex, +-0.15 u), and where her face is steep a vertical gap measured at the vertex's own x, z is large for a
+//                   point that is within 0.15 u of her surface (probe lo - game gl: within 0.01 u on 23 of 29 sampled frames, the game's seat IS the lowest
+//                   of five reads off the drawn mesh; the other six -0.284 .. +0.026 u).
+//                   AMENDMENT 1 (kind): a piece is a SHELL piece when the lowest of those five reads (slab() re-reads them off the drawn mesh) is her
+//                   shell, else dune / floor (the game's lowShell: pieces straddling her rim sink into the sand by design and are not judged). All 173
+//                   frames' lowest piece was shell either way: it moved nothing.
+//                   AMENDMENT 2 (the measure): DEPTH IN HER = the shortest distance from the lowest vertex to her drawn surface, an upper bound off the
+//                   drawn mesh's ray heights out to 0.3 u (rings 0.075 apart, 8 bearings: sqrt(r^2 + (h - vertex)^2), 0 where the vertex is not under her
+//                   top). Bar: <= 0.3 u (BP_SHELL_D overrides it for a ruling or to show a RED's reach; the default is the bar) on every drawn frame, for
+//                   every shell piece. The vertical gap is booked (info.slabs.gMinShell), gMin and the kind it was read on (shell | dune | floor) on
+//                   every frame and in info.slabs (gMin, gMinKind, gMinAt, kinds). No shell piece on any drawn frame, or none drawn: UNMEASURED.
+//                   READING on f6b4077 (bar 0.3; fix round 1 runs, deterministic): off / crest / front / dune / under max depth 0.348 u on ONE frame
+//                   (anchor 0.322 on two), so the bar FAILS the shipped build by 0.05 u; vertical gap min -0.867 u (-0.886 anchor), every lowest piece
+//                   a SHELL piece. At BP_SHELL_D=0.4 off passes (exit 0) and the sunk RED (max depth 0.524, 170 of 173 frames over) still exits 5, so the
+//                   bar separates the build from a forced 0.5 u; the default stays 0.3 (not widened to fit: the controller's ruling). Frame: (t 1.683 s, piece 7, on a flat face, ny 0.96, vertical gap -0.452); the
+//                   cause (the game's top grid against the drawn mesh, spine tips, a slit) is not established here. Booked in the report; game code is not
+//                   this round's.
+//                   RED (BP_RED=sunk, rise, any BP_AT): after each stepped frame the probe lowers the shell piece standing on the flattest face by
+//                   0.5 u in the DRAWN mesh (the game rewrites every vertex each frame: no accumulation), so it is ~0.5 u deep; it judges (iShell)
+//                   alone and must exit 5. (i)'s hover side must still hold under it: booked, not judged.
 //             (M3, booked, not judged) info.dust: the footfx puff pool's (420 particles, shared with his boots) emissions and live-slot
 //                   OVERWRITES from the wake to the end of the series (src/world/footfx.js dustStats()).
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
@@ -192,6 +207,7 @@
 //                     with a NUMERIC drift over 0.05 s (exit 4). A missing reading is exit 2 and is not the RED.
 //   BP_CHECK=<list>   disguise: legs,claws,eyes,mouth,wards,reef,weed,sides,top,len,repose (crest = top + len; height = top, the crest's
 //                     height alone, as the plan's briefs name it),clutch,seam,pole,iron (harpoon = seam + pole + iron: Task 4)
+//   BP_SHELL_D=<u>    rise (iShell): the depth bound in u (default 0.3, the bar); for a ruling, or to show where a RED lies against the build
 //   BP_OUT=<file>     the JSON (default ~/sc/.abyssa-wt/reviews/buried/burial-<mode>-<tag>.json); BP_TAG=<tag> (default port<port>)
 // (an empty DRV_PORT is +'' = 0, an integer: the port must be all digits and inside 1024-65535, as drv.mjs's start() demands)
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
@@ -229,6 +245,8 @@ if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs B
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 const AT = process.env.BP_AT || '';
 if (AT && !['anchor', 'crest', 'off', 'front', 'dune', 'under'].includes(AT)) { console.error(`BP_AT: anchor | crest | off | front | dune | under (got ${JSON.stringify(AT)})`); process.exit(2); }
+const SHELL_D = process.env.BP_SHELL_D == null ? 0.3 : +process.env.BP_SHELL_D;
+if (!(SHELL_D > 0 && SHELL_D <= 2)) { console.error(`BP_SHELL_D: a depth in u, 0 < d <= 2 (default 0.3; got ${JSON.stringify(process.env.BP_SHELL_D)})`); process.exit(2); }
 const FORCE = process.env.BP_FORCE === '1' || !!(RED && REDS[MODE][RED].force);
 if (FORCE && MODE !== 'rise') { console.error('BP_FORCE is rise\'s'); process.exit(2); }
 if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
@@ -532,7 +550,7 @@ const RISE_INSTALL = `(async () => {
     let wy = L.body.matrixWorld.elements[13];
     for (let it = 0; it < 3; it++) { q3.set(x, wy, z).applyMatrix4(Mci); const h = BU.footY(MD, q3.x, q3.z); if (h < -1e8) return -1e9; q3.y = h; q3.applyMatrix4(Mc); wy = q3.y; }
     return wy; };
-  let capPrev = null;
+  let capPrev = null; const COS8 = [], SIN8 = []; for (let i = 0; i < 8; i++) { COS8.push(Math.cos(i * Math.PI / 4)); SIN8.push(Math.sin(i * Math.PI / 4)); }
   const R = window.__bpRise = { S: [], wakeF: -1, cx, cz, R: L.R,
     foot() { const p = P.pos, fl = T.shutFloorY(p.x, p.z, 0); return { him: [r2(p.x), r2(p.y), r2(p.z)], grounded: !!P.grounded, gap: r3(p.y - 1.35 - fl), sand: r3(p.y - 1.35 - sand(p.x, p.z)),
       xf: r3(T.extraFloorAt(p.x, p.z, 0)), terr: r3(T.terrainH(p.x, p.z, 0)), dC: r2(Math.hypot(p.x - cx, p.z - cz)), dormant: !!L.dormant }; },
@@ -570,7 +588,7 @@ const RISE_INSTALL = `(async () => {
     // booked. null: no slabs on this build. { v: 0 }: the mesh hidden
     slab() { const Sl = L.slabs; if (!Sl) return null; const m = Sl.mesh; if (!m || !m.visible) return { v: 0 };
       m.updateMatrixWorld(true); const A = m.geometry.attributes.position.array, e = m.matrixWorld.elements, vpc = Sl.vpc;
-      let n = 0, gMax = -1e9, gMin = 1e9, wk = -1, wAt = null, gKind = null, gDet = null, gSh = 1e9, nSh = 0; const pcs = [];
+      let n = 0, gMax = -1e9, gMin = 1e9, wk = -1, wAt = null, gKind = null, gDet = null, gSh = 1e9, nSh = 0, dSh = 0, dDet = null; const pcs = [];
       for (let k = 0; k < Sl.n; k++) { let ly = 1e9, lx = 0, lz = 0, hi = -1e9;
         for (let i = k * vpc; i < (k + 1) * vpc; i++) { const x = A[i * 3], y = A[i * 3 + 1], z = A[i * 3 + 2];
           const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
@@ -589,15 +607,25 @@ const RISE_INSTALL = `(async () => {
         for (let q = 0; q < 4; q++) { const nx = lx + (q < 2 ? (q ? -0.15 : 0.15) : 0), nz = lz + (q < 2 ? 0 : (q === 2 ? 0.15 : -0.15)), t2 = T.terrainH(nx, nz, 0), d2 = B && B.sandAt ? B.sandAt(nx, nz) : -1e9, s2 = shellTop(nx, ly + 1.5, nz), g2 = Math.max(t2, d2);
           const v = Math.max(g2, s2); if (v < lo) { lo = v; kind = s2 > g2 ? 'shell' : d2 > t2 ? 'dune' : 'floor'; } }
         const g = ly - Math.max(sand0, sh);
-        pcs.push([k, kind, g]);
-        if (g > gMax) { gMax = g; wk = k; wAt = [r2(lx), r2(ly), r2(lz)]; } if (g < gMin) { gMin = g; gKind = kind; gDet = { k, age: r2(Sl.S[k * 12 + 6]), gl: r3(Sl.S[k * 12 + 9]), cy: r3(Sl.S[k * 12 + 10]), kind, sh: r3(sh), du: r3(du), tr: r3(tr), ly: r3(ly) }; }
-        if (kind === 'shell') { nSh++; if (g < gSh) gSh = g; } }
+        // (AMENDED after the first runs, header iShell) a shell piece's DEPTH IN HER: the shortest distance from its lowest vertex to her drawn
+        // surface, an upper bound off the drawn mesh's ray heights at 0 .. 0.3 u out (rings 0.075 apart, 8 bearings): sqrt(r^2 + (h - vertex)^2)
+        // to the surface point (x + r dx, h, z + r dz). 0 where the vertex is not under her top (g >= 0)
+        let dep = 0;
+        if (kind === 'shell' && g < 0) { dep = -g;
+          for (let ri = 1; ri <= 4; ri++) for (let bi = 0; bi < 8; bi++) { const rr = ri * 0.075, hh = shellTop(lx + rr * COS8[bi], ly + 1.5, lz + rr * SIN8[bi]); if (hh > -1e8) dep = Math.min(dep, Math.hypot(rr, hh - ly)); } }
+        pcs.push([k, kind, g, dep, lx, ly, lz]);
+        if (g > gMax) { gMax = g; wk = k; wAt = [r2(lx), r2(ly), r2(lz)]; } if (g < gMin) { gMin = g; gKind = kind; gDet = { k, age: r2(Sl.S[k * 12 + 6]), gl: r3(Sl.S[k * 12 + 9]), cy: r3(Sl.S[k * 12 + 10]), kind, lo: r3(lo), ny: R.faceNY(lx, ly + 1.5, lz), sh: r3(sh), du: r3(du), tr: r3(tr), ly: r3(ly) }; }
+        if (kind === 'shell') { nSh++; if (g < gSh) gSh = g; if (dep > dSh) { dSh = dep; dDet = { k, g: r3(g), dep: r3(dep), ny: R.faceNY(lx, ly + 1.5, lz), age: r2(Sl.S[k * 12 + 6]) }; } } }
       R.pcs = pcs;
-      return { v: 1, n, gMax: n ? r3(gMax) : null, gMin: n ? r3(gMin) : null, gMinKind: n ? gKind : null, gDet, gMinShell: nSh ? r3(gSh) : null, nShell: nSh, wk, at: wAt }; },
-    // (BP_RED=sunk, I1's RED) after a frame: the first piece whose surface is her shell is lowered 0.5 u in the DRAWN mesh (the game rewrites
+      return { v: 1, n, gMax: n ? r3(gMax) : null, gMin: n ? r3(gMin) : null, gMinKind: n ? gKind : null, gDet, gMinShell: nSh ? r3(gSh) : null, depthShell: nSh ? r3(dSh) : null, dDet, nShell: nSh, wk, at: wAt }; },
+    // (BP_RED=sunk, I1's RED) after a frame: the shell piece standing on the flattest face is lowered 0.5 u in the DRAWN mesh (the game rewrites
     // every vertex of every piece each frame, so it does not accumulate); the row that follows reads it
-    sink() { const Sl = L.slabs; if (!Sl || !Sl.mesh.visible) return 0; R.slab(); const p = (R.pcs || []).find(q => q[1] === 'shell'); if (!p) return 0;
+    sink() { const Sl = L.slabs; if (!Sl || !Sl.mesh.visible) return 0; R.slab(); let p = null, py = -1; for (const q of R.pcs || []) if (q[1] === 'shell') { const ny = R.faceNY(q[4], q[5] + 1.5, q[6]); if (ny != null && ny > py) { py = ny; p = q; } } if (!p) return 0;   // (the flattest face under a shell piece: 0.5 u down there is 0.5 u deep)
+     
       const A = Sl.mesh.geometry.attributes.position.array; for (let i = p[0] * Sl.vpc; i < (p[0] + 1) * Sl.vpc; i++) A[i * 3 + 1] -= 0.5; R.sunk = (R.sunk || 0) + 1; return 1; },
+    // the hit face's world normal.y under (x, y, z) (down ray): 1 flat, 0 a wall; null no hit
+    faceNY(x, y, z) { const sh = L.parts.shell; sh.updateMatrixWorld(true); rc.set(o3.set(x, y, z), dn); rc.far = 40; const h = rc.intersectObject(sh, false)[0]; if (!h) return null;
+      nm3.getNormalMatrix(sh.matrixWorld); wn3.copy(h.face.normal).applyMatrix3(nm3).normalize(); return r3(wn3.y); },
     settle(n) { const g = []; window.__bench.step(n, () => { g.push(P.grounded ? 1 : 0); }); return Object.assign(R.foot(), { groundedFrames: g.reduce((a, b) => a + b, 0), of: n }); },
     row() {
       const p = P.pos, bo = p.y - 1.35, cp = camera.position, BD = BC.BODY, sv = window.survival;
@@ -957,9 +985,10 @@ if (MODE === 'rise') {
     { const lo = V.reduce((a, [k, q]) => !a || q.gMin < a.gMin ? { t: sec(k), gMin: q.gMin, kind: q.gMinKind } : a, null), ls = V.reduce((a, [k, q]) => q.gMinShell != null && (!a || q.gMinShell < a.gMin) ? { t: sec(k), gMin: q.gMinShell } : a, null);
       info.slabs.gMinAt = lo; info.slabs.gMinKind = lo && lo.kind; info.slabs.gMinShell = ls; info.slabs.nShellMax = V.length ? Math.max(...V.map(([, q]) => q.nShell || 0)) : 0;
       info.slabs.shellFrames = V.filter(([, q]) => q.nShell > 0).length; info.slabs.kinds = ['shell', 'dune', 'floor'].map(kd => [kd, V.filter(([, q]) => q.gMinKind === kd).length]);
-      const badS = V.filter(([, q]) => q.gMinShell != null && q.gMinShell < -0.3);
-      ck.push({ name: 'iShell', val: { frames: V.length, shellFrames: info.slabs.shellFrames, gMinShell: ls, bad: badS.length, firstBad: badS.length ? { t: sec(badS[0][0]), gap: badS[0][1].gMinShell } : null },
-        bar: 'every slab whose surface is her drawn shell: lowest vertex >= -0.3 u (sinking into sand / floor stays allowed)', ok: !badS.length && info.slabs.shellFrames > 0, vacuous: !hasSl || !V.length || info.slabs.shellFrames === 0, judged: true }); }
+      const badS = V.filter(([, q]) => q.depthShell != null && q.depthShell > SHELL_D), dp = V.reduce((a, [k, q]) => q.depthShell != null && (!a || q.depthShell > a.depth) ? { t: sec(k), depth: q.depthShell, det: q.dDet } : a, null);
+      info.slabs.depthShell = dp;
+      ck.push({ name: 'iShell', val: { frames: V.length, shellFrames: info.slabs.shellFrames, maxDepth: dp && dp.depth, at: dp && dp.det && { t: dp.t, ...dp.det }, verticalGapMin: ls, bad: badS.length, firstBad: badS.length ? { t: sec(badS[0][0]), depth: badS[0][1].depthShell } : null },
+        bar: `every slab on her drawn shell (its lowest of five reads is shell): lowest vertex <= ${SHELL_D} u from her drawn surface, inside it (sinking into sand / floor stays allowed)`, ok: !badS.length && info.slabs.shellFrames > 0, vacuous: !hasSl || !V.length || info.slabs.shellFrames === 0, judged: true }); }
     ck.push({ name: 'i', val: { frames: V.length, bad: bad.length, firstBad: bad.length ? { t: sec(bad[0][0]), gMax: bad[0][1].gMax, k: bad[0][1].wk, at: bad[0][1].at } : null, worstGap: worst && worst.gMax, lastVisibleT: info.slabs.lastVisibleT },
       bar: 'every drawn slab\'s lowest point <= +0.3 u over the drawn surface (terrainH, the dune, her drawn shell), hidden by 3.1 s after the wake', ok: !bad.length && lastV >= 0 && lastV <= w + Math.round(3.1 * f60), vacuous: !hasSl || !V.length, judged: true }); }
   // (BP_FORCE) the forced contact: legs closing on him in the window the hold adds

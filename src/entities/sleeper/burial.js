@@ -683,12 +683,13 @@ export function crestY(MD, x, z) {
 // she rises out of the dune) it bursts into silt instead of hanging in the water.
 // State per piece (SS floats): x z vx vz yaw spin age tEnd alive lastG y puffs
 // WHY THESE (Task 7b fix round 1, M5; by eye in the dev stills t7b-dev-*, NOT measured beyond burial-probe rise (i) / (iShell); the arithmetic is the check):
-//   SLAB_G 6.0, SLAB_DRAG 1.2: terminal slide speed on a face of slope s is G s / (DRAG (1 + s^2)) = 5 s / (1 + s^2) u/s (1.2 s to get there):
+//   SLAB_G 6.0, SLAB_DRAG 1.2: terminal slide speed on a face of slope s is G s / (DRAG (1 + s^2)) = 5 s / (1 + s^2) u/s (time constant 1 / DRAG = 0.83 s):
 //     2.0 u/s at 27 deg, 2.5 at 45 deg (its peak), so the header's "1-2.5 u/s" and SLAB_VMAX 2.5 agree and the cap is only ever touched on a 45 deg face
 //   SLAB_LEDGE 0.25: the surface under a piece dropping more than 0.25 u in a frame (15 u/s at 60 fps, 6x the fastest slide's 0.042 u a frame) is a
 //     cliff, not a slope it rides: her rim as she rises out of the dune, so the piece bursts rather than hangs
 //   SLAB_SINK 0.45: on sand a piece goes down 0.45 u for each second past 0.8 s of age: ~1.0 u by SLAB_T, about its whole thickness (0.28-0.42 of a
-//     1.1-2.0 u width), so it is in the dune as it crumbles; never on her shell (the probe's (iShell) bars a piece in it by more than 0.3 u)
+//     1.1-2.0 u width), so it is in the dune as it crumbles; never sunk on her shell (the sink is off there; a piece on it still reads up to 0.35 u inside her
+//     drawn surface on a frame or two, burial-probe rise (iShell), booked: the review's I1)
 //   SLAB_FOOT 0.15: the five reads' spread, a little over half the shell grid's ~0.25 u cell, so a lowest point finds the crevice a cell bridges (the
 //     game seats on the lowest of the five, the probe's slab() reads the highest of five +-0.05: the review's gMin -0.234 u inside her crest is that gap)
 const SLAB_FOOT = 0.15, FOOT_X = [SLAB_FOOT, -SLAB_FOOT, 0, 0], FOOT_Z = [0, 0, SLAB_FOOT, -SLAB_FOOT];
@@ -898,7 +899,9 @@ function slabWrite(L, dt) {
   }
   Sl.geo.attributes.position.needsUpdate = true; Sl.geo.attributes.normal.needsUpdate = true;
 }
-// the silt a crumbling piece sheds: the brooder's emitDust (footfx's puff pool), handed in by brooder.js (setSlabDust)
+// the silt a crumbling piece sheds: the brooder's emitDust (footfx's puff pool), handed in by brooder.js (setSlabDust). The pool (420) is
+// shared with the dune's streams and his boots; measured (M3, burial-probe rise info.dust, f6b4077, six placements): 1650-1850 puffs emitted in the
+// 14 s after the wake, 280-514 of them over a slot whose puff was still alive (the first at 1.5-1.75 s), the oldest cut short; not changed
 let emitSlabDust = () => {};
 export function setSlabDust(f) { emitSlabDust = f; }
 

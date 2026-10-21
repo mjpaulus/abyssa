@@ -2062,7 +2062,7 @@ export function updateBrooder(L, dt, t, player) {
     breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY);
     if (L.buried && L.cracked && !L.hasStood && !L.dormant) growReveal(L, dt); else buryGrowth(L, L.bury > 0.5);
   }
-  if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there)
+  if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there. uCrack / uCrackO lag the body a frame: M6, see crustTick)
   L.t += dt;
   L.uni.uTime.value = L.t;
   const R = L.R;
@@ -2126,6 +2126,7 @@ export function updateBrooder(L, dt, t, player) {
         // (Task 7b) buried, the sand streams off the DUNE'S FLANK as it draws back down her sides (where the sand was): a random bearing's
         // ring 4..8 vertex, anywhere between the drawn sand there now (P) and the fitted dune (M), so the streams fall the height it has
         // fallen; fewer particles a burst (3, the shipped 6) at BURY.pourRate x the rate: the footfx pool (420) is shared with his boots
+        // (M3, measured: burial-probe rise info.dust, 280-514 live-slot overwrites of 1650-1850 puffs a rise over six placements, see burial.js setSlabDust)
         const MD = L.mound, o = ((4 + ((Math.random() * 5) | 0)) * MD.COLS + ((Math.random() * MD.COLS) | 0)) * 3;
         emitDust(MD.M[o], MD.P[o + 1] + (MD.M[o + 1] - MD.P[o + 1]) * Math.random(), MD.M[o + 2], 3, 3.4);
       } else {
