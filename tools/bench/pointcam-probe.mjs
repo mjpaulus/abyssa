@@ -1,6 +1,6 @@
 // THE POINT AND ITS LENS PROBE (velkath-buried-rock; spec docs/superpowers/specs/2026-10-14-velkath-buried-rock-design.md §3, the gate table's
 // "The point" (Task 10) and "POINTCAM" (Task 11)). Michael: "actually can she turn and point to the void with her giant claw".
-//   DRV_PORT=9540 node tools/bench/pointcam-probe.mjs <point|framing|mouse|off> <game port>
+//   DRV_PORT=9540 node tools/bench/pointcam-probe.mjs <point|framing|mouse|off|walk|lastward|handback> <game port>
 // Stepped on the PLUGGED clock (clockplug.mjs). Exit 0 pass | 1 a bar failed | 2 UNMEASURED | 3 a RED whose bar did NOT fail | 4 LOST
 // (clock drift) | 5 a RED whose bar failed, as it must. JSON of every series judged -> PC_OUT (default
 // ~/sc/.abyssa-wt/reviews/buried/pointcam-<mode>-<at>-<tag>.json).
@@ -134,7 +134,7 @@
 //   PC_OUT=<file>     the JSON; PC_TAG=<tag> (default port<port>)
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error(`pointcam-probe: set DRV_PORT to a port of its own, an integer in 1024-65535 (not 8777 / 8790 / 9419; got ${JSON.stringify(process.env.DRV_PORT)})`); process.exit(2); }
-const MODES = ['point', 'framing', 'mouse', 'off', 'walk', 'lastward'];
+const MODES = ['point', 'framing', 'mouse', 'off', 'walk', 'lastward', 'handback'];
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/pointcam-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 const REDS = { point: { nopoint: { set: { point: 0 }, bars: ['hold'] }, fastturn: { pt: { turn: 1.0 }, bars: ['turnRate'] },
@@ -165,6 +165,8 @@ const PLACE_BAND = process.env.PC_PLACE === 'band';
 if (process.env.PC_PLACE && (!PLACE_BAND || MODE !== 'framing' || RED || ON === 0)) { console.error('PC_PLACE=band: framing only, without a RED (it is inband\'s GREEN)'); process.exit(2); }
 const BAND = RED && REDS[MODE] && REDS[MODE][RED] && REDS[MODE][RED].band ? REDS[MODE][RED].band : PLACE_BAND ? [71, 75, 73] : null;   // (PC_RED=inband / PC_PLACE=band) the placement's band and target
 const BON_IN = 0.9, EASE_F = 12, CLOSE_K = 0.5, TURN_BAR = 0.5, TURN_EPS = 0.005, FRAME = 0.8, NDC_IN = 0.85, TH_LO = 61, TH_HI = 69, TH_PREM = 60;
+// (handback) the event HB_AT frames after the raise (1.5 s: the cue engaged); the rebuild's frames booked after it HB_N; the pause HB_P frames
+const HB_AT = 90, HB_N = 90, HB_P = 20, HELD_EPS = 0.001;
 const PX = 0.0022, PATTERNS = { six: [48], four: [32], path: [8, -8, 8, -8, 8, -8, 8, -8, 16] };
 // (PC_SHOT_AT=name:s,...: other moments; at `back` since Michael's ruling the claw is up ~7.1-10.4 s, not through the line)
 const SHOT_AT = process.env.PC_SHOT_AT ? process.env.PC_SHOT_AT.split(',').map(q => { const [n, v] = q.split(':'); return [n, +v]; }) : [['turn', 2.0], ['up', 4.5], ['lower', 7.6]];
@@ -251,11 +253,20 @@ const INSTALL = `(async () => {
         under: window.__crecam ? window.__crecam.state().under : null, camD: r2(cp.distanceTo(window.player.pos)), him: [r2(window.player.pos.x), r2(window.player.pos.y), r2(window.player.pos.z)],
         thPre: r3(vPre.ang), th: r3(vPost.ang), ndcPre: [r3(vPre.x), r3(vPre.y), vPre.front ? 1 : 0], ndc: [r3(vPost.x), r3(vPost.y), vPost.front ? 1 : 0],
         pIn: inF(vPost) ? 1 : 0, palmNdc: [r3(vPalm.x), r3(vPalm.y), vPalm.front ? 1 : 0], palmIn: inF(vPalm) ? 1 : 0, sep: r2(sep), fits: sep <= ${FRAME} * hf ? 1 : 0,
-        q: [r6(q.x), r6(q.y), r6(q.z), r6(q.w)], qPre: [r6(qp.x), r6(qp.y), r6(qp.z), r6(qp.w)], eq: eq ? 1 : 0, pyaw: r6(window.player.yaw), inp: R.inp, cap: R.cap ? 1 : 0,
+        q: [r6(q.x), r6(q.y), r6(q.z), r6(q.w)], qPre: [r6(qp.x), r6(qp.y), r6(qp.z), r6(qp.w)], eq: eq ? 1 : 0, pyaw: r6(window.player.yaw), inp: R.inp, cap: R.cap ? 1 : 0, hp: window.__helm === true ? 0 : 1,
         bon: [r3(vBon.x), r3(vBon.y), vBon.front ? 1 : 0], bonIn: vBon.front && Math.abs(vBon.x) <= ${BON_IN} && Math.abs(vBon.y) <= ${BON_IN} ? 1 : 0, bonPre: [r3(vBonPre.x), r3(vBonPre.y), vBonPre.front ? 1 : 0], amt: st && st.amt != null ? st.amt : null });
       R.inp = 0; R.cap = 0;
     },
     step(n, o) { window.__bench.step(n, () => R.row(), o); return R.S.length; },
+    // (handback, final review items 2 and 3) the cue alone (__pointcam.state()), for frames after a rebuild (R.row is the old sleeper's)
+    cam() { const st = window.__pointcam.state(), lv = window.lev;
+      return { k: st.k, amt: st.amt, ay: st.aimYawDeg, ap: st.aimPitchDeg, yaw: st.yawDeg, pitch: st.pitchDeg, why: st.why, off: st.off, aim: st.aim, ph: lv ? lv.pointPh || 0 : 0, same: lv === L ? 1 : 0 }; },
+    // the zone's sleeper rebuilt in place under the cue (__lev.remember(null): a fresh build at her bed, as __burial.set and a zone's
+    // rebuild make her, pointPh 0, L.pointAt (0, 0, 0)); its frame and n more booked into R.H
+    rebuild(n) { R.H = [R.cam()]; window.__lev.remember(null); window.__bench.step(n, () => { R.H.push(R.cam()); });
+      return { n: R.H.length, newL: window.lev !== L, pointAt: window.lev && window.lev.pointAt ? window.lev.pointAt.toArray() : null, dormant: !!(window.lev && window.lev.dormant) }; },
+    // the game paused under the cue for n frames (window.__helm off: no pointer lock here, so game.js's paused is true), booked as usual
+    pause(n) { const from = R.S.length; window.__helm = false; try { R.step(n); } finally { window.__helm = true; } return { from, to: R.S.length }; },
     // turn to face him: stepped until her heading error to him is <= 10 deg (or max frames); { n: frames used, faced }
     face(max) { let n = 0, faced = false; window.__bench.step(max, () => { n++; const p = window.player.pos; if (Math.abs(R.errTo(p.x, p.z)) * D <= 10) { faced = true; return false; } }); return { n, faced }; },
     state() { const p = window.player.pos, e = R.errTo(Pt.x, Pt.z) * D;
@@ -450,6 +461,16 @@ async function session(o) {
         else await c.ev(`(window.player.yaw -= ${px} * ${PX}, window.__pcR.inp = ${px}, 1)`);
         await c.ev(`window.__pcR.step(1)`); at++;
       }
+    }
+    if (o.handback) {
+      // (final review items 2 and 3) 1.5 s into the raise (the cue engaged), the rebuild or the pause
+      let rF = -1;
+      while (rF < 0 && at < N - 300) { await c.ev(`window.__pcR.step(1)`); at++; rF = await c.ev(`window.__pcR.S.findIndex(r => r.ph >= 2)`); }
+      if (rF < 0) throw new Error('the raise never came (no pointPh 2 by 9 s)');
+      await c.ev(`window.__pcR.step(${rF + HB_AT - at})`); at = rF + HB_AT;
+      ses.raiseF = rF; ses.hbF = at;
+      if (o.handback === 'rebuild') { ses.hb = await c.ev(`window.__pcR.rebuild(${HB_N})`); ses.H = await c.ev(`window.__pcR.H`); at = N; }
+      else { ses.hb = await c.ev(`window.__pcR.pause(${HB_P})`); at += HB_P; }
     }
     if (o.walk) {
       let rF = -1;
@@ -732,6 +753,51 @@ if (MODE === 'walk' || MODE === 'lastward') {
   }
   console.log(`${MODE.toUpperCase()} ${JSON.stringify(record.book)}`);
   if (KNOBS) for (const k of ck) k.judged = ['walked', 'bonnet', 'aimStep', 'amtStep'].includes(k.name);
+  const { failed, vac } = verdict(ck, '', null);
+  conclude(failed, vac);
+}
+
+// ============================================ handback (final review items 2 and 3) ============================================
+//   handback  the framing placement and calm, TWO sessions (a fresh load each), the cue engaged (HB_AT 90 frames, 1.5 s, after the raise):
+//               rebuild  her sleeper rebuilt in place under the cue (__lev.remember(null): Alt+1-6 / Alt+9 and __burial.set rebuild her the
+//                        same way; the new L has pointPh 0 and L.pointAt (0, 0, 0)), then HB_N 90 frames booked off __pointcam.state()
+//                        alone. Bars (pre-registered before the fix; premise: k >= 0.5 on the rebuild's frame, else VOID): held, on every
+//                        frame of the hand-back (k > 0 after the rebuild) the cue's full-turn aim (aimYawDeg / aimPitchDeg) within
+//                        HELD_EPS 0.001 deg of where it was on the rebuild's frame: a held aim does not slew (on c4d60ac the candidate
+//                        aimed at the new L's pointAt, (0, 0, 0), and the aim slewed toward it at 45 deg/s through the ~0.5 s hand-back);
+//                        out, k <= 0.1 within 36 frames (0.6 s) of the rebuild and 0 by its last booked frame
+//               pause    the game paused under the cue for HB_P 20 frames (window.__helm off; there is no pointer lock here), then resumed,
+//                        booked to the 14 s. CLAWCAM's house rule (game.js clawFrame: "a pause ends it on the spring": clawOff, and it
+//                        stays off for the rest of the blow). Bars (pre-registered before the fix; premise: k >= 0.5 on the frame before
+//                        the pause, else VOID): spring, k > 0 on the first paused frame (eased out, not dropped at once); off, from the
+//                        first paused frame to the last frame of pointPh 2-3, __pointcam's off held and k never rises (k <= the frame
+//                        before's + 1e-6), so the cue does not come back after the pause (on c4d60ac it targeted 0 while paused and came
+//                        back on resume)
+if (MODE === 'handback') {
+  const runs = [];
+  for (const name of ['rebuild', 'pause']) {
+    const ses = await session({ on: 1, handback: name, label: name });
+    if (ses.fatal) { console.error('UNMEASURED: ' + ses.fatal); finish(2, 'throw: ' + ses.fatal); }
+    if (unmeasured(ses.clock)) { console.error('UNMEASURED: no clock reading'); finish(2, 'no clock'); }
+    if (lost(ses.clock)) { console.log(`CLOCK LOST: ${JSON.stringify(ses.clock)} (the bar is ${CLOCK_LOST} s)`); finish(4, 'clock lost'); }
+    runs.push([name, ses]);
+  }
+  await consoleErrors(); if (c) c.close();
+  const ck = [], R3 = v => v == null ? null : +v.toFixed(4);
+  { const ses = runs[0][1], H = ses.H || [], h0 = H[0], back = H.slice(1).filter(q => q.k > 0);
+    const drift = back.length ? Math.max(...back.map(q => Math.max(Math.abs(q.ay - h0.ay), Math.abs(q.ap - h0.ap)))) : null;
+    const stepMax = H.length > 1 ? Math.max(...H.slice(1).map((q, i) => Math.max(Math.abs(q.ay - H[i].ay), Math.abs(q.ap - H[i].ap)))) : null;
+    const outF = H.findIndex((q, i) => i > 0 && q.k <= 0.1);
+    record.book = { rebuild: { hb: ses.hb, raiseF: ses.raiseF, hbF: ses.hbF, at0: h0, handbackFrames: back.length, driftDeg: R3(drift), stepMaxDeg: R3(stepMax), outF, last: H[H.length - 1], whys: [...new Set(H.map(q => q.why))] } };
+    ck.push({ name: 'rebuild.held', val: { driftDeg: R3(drift), stepMaxDeg: R3(stepMax), frames: back.length, k0: h0 ? h0.k : null, newL: ses.hb && ses.hb.newL }, bar: `the cue's full-turn aim within ${HELD_EPS} deg of the rebuild's frame on every hand-back frame (a held aim does not slew)`, ok: back.length > 0 && drift <= HELD_EPS, vacuous: !h0 || !(h0.k >= 0.5) || !(ses.hb && ses.hb.newL), judged: true });
+    ck.push({ name: 'rebuild.out', val: { outF, lastK: H.length ? H[H.length - 1].k : null }, bar: 'k <= 0.1 within 36 frames of the rebuild, 0 by the last booked frame', ok: outF > 0 && outF <= 36 && H[H.length - 1].k === 0, vacuous: !h0 || !(h0.k >= 0.5), judged: true }); }
+  { const ses = runs[1][1], S = ses.S || [], p0 = ses.hb ? ses.hb.from : -1, pre = p0 > 0 ? S[p0 - 1] : null, { lastHold } = phases(S);
+    const span = p0 >= 0 ? S.slice(p0, lastHold + 1).map((r, i) => ({ i: p0 + i, k: r.cam.k, off: r.cam.off, why: r.cam.why, hp: r.hp, ph: r.ph })) : [];
+    const rise = span.filter((q, i) => i > 0 && q.k > span[i - 1].k + 1e-6), notOff = span.filter(q => q.off !== true);
+    record.book.pause = { hb: ses.hb, raiseF: ses.raiseF, hbF: ses.hbF, pre: pre ? pre.cam : null, first: span[0] || null, lastHold, rises: rise.length, firstRise: rise[0] || null, notOff: notOff.length, kAfter: span.filter(q => !q.hp).slice(0, 3).concat(span.slice(-1)) };
+    ck.push({ name: 'pause.spring', val: { kBefore: pre ? pre.cam.k : null, kFirst: span[0] ? span[0].k : null, why: span[0] ? span[0].why : null }, bar: 'k > 0 on the first paused frame (eased out on the spring, not dropped at once)', ok: !!span[0] && span[0].k > 0 && span[0].hp === 1, vacuous: !pre || !(pre.cam.k >= 0.5), judged: true });
+    ck.push({ name: 'pause.off', val: { frames: span.length, rises: rise.length, firstRise: rise[0] || null, notOff: notOff.length, kMaxAfter: span.length ? Math.max(...span.filter(q => !q.hp).map(q => q.k)) : null }, bar: 'from the pause to the last frame of pointPh 2-3: off held and k never rises (the cue does not come back)', ok: span.length > HB_P && !rise.length && !notOff.length, vacuous: !pre || !(pre.cam.k >= 0.5) || span.length <= HB_P, judged: true }); }
+  console.log(`HANDBACK ${JSON.stringify(record.book)}`);
   const { failed, vac } = verdict(ck, '', null);
   conclude(failed, vac);
 }
