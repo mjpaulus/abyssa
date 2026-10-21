@@ -129,7 +129,10 @@
 //                   player.js A_SETTLE): a man hanging still in the water fails; (iii) the window runs on past 2 s while he is in the air,
 //                   to his landing (within 0.3 u) or STOOD. BP_AT=under: stood at 'off' for the wake, then at wake + 5.5 s (standE ~0.98,
 //                   not yet stood: the harmless window a player dashes under her in) set on the sand under her centre, afloat 0, and (g)
-//                   judged from that frame on (its window as above). Judged at every BP_AT; BP_AT=dune stands
+//                   judged from that frame on (its window as above). (v) CONTROLLER RULING 2026-10-20 (the spec: her rising body shoves him
+//                   back; the proxy's over-reach is Task 3b's, measured): on a frame in the air in contact with her shell's collider
+//                   (BODY.last 'shell', or a shell push that frame) the fall's sink rule pauses, his rise is at most her body's rise + 0.3
+//                   u/s, and his gap over the drawn ground (her drawn shell) at most 1.0 u; out of contact the rules above. Judged at every BP_AT; BP_AT=dune stands
 //                   him half-way down the dune on her sand side (the dune floor following moundK as it draws down)
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
@@ -454,8 +457,12 @@ function FOOTING(S, w, from = null, stood = -1) {
     else if (air && (air === 2 || q.stag <= 0) && Math.abs(gap) <= 0.3) air = 0;
     last = i;
     if (air) { tN++; k++; const vb = (q.boots - p.boots) * f60, onSpot = air === 1 && Math.hypot(q.px - tx, q.pz - tz) < 0.3;
-      let bad = (vb > 1.0 && gap > 0.3) || gap < -0.3 || (onSpot && Math.abs(gap) > 0.3);
-      if (air === 2 && k > 6) { if (vb > 0) bad = true; winS += vb; winN++; if (winN === 15) { if (winS / 15 > -0.15) bad = true; winS = 0; winN = 0; } }
+      // (controller ruling 2026-10-20) IN CONTACT WITH HER SHELL'S COLLIDER (BODY.last 'shell' or a shell push this frame): the fall's sink
+      // rule pauses; he rises no faster than her body + 0.3 u/s and stands no more than 1.0 u over the drawn ground (her drawn shell)
+      const onShell = !!(q.body && (q.body.last === 'shell' || q.body.shell)), vHer = q.bodyY != null && p.bodyY != null ? (q.bodyY - p.bodyY) * f60 : 0;
+      let bad = (onShell ? vb > vHer + 0.3 || gap > 1.0 : vb > 1.0 && gap > 0.3) || gap < -0.3 || (onSpot && Math.abs(gap) > 0.3);
+      if (air === 2 && onShell) { winS = 0; winN = 0; }
+      else if (air === 2 && k > 6) { if (vb > 0) bad = true; winS += vb; winN++; if (winN === 15) { if (winS / 15 > -0.15) bad = true; winS = 0; winN = 0; } }
       if (bad && tBad.length < 12) tBad.push([sec(i), r(vb), r(gap), air]); }
     else { gN++; if (gap > gMax) gMax = gap; if (gap < gMin) gMin = gap; if (Math.abs(gap) > 0.3 && gBad.length < 12) gBad.push([sec(i), r(gap)]); } }
   return { name: 'g', val: { from: sec(i0), to: sec(last), judged: gN, gapMax: gN ? r(gMax) : null, gapMin: gN ? r(gMin) : null, bad: gBad, throws, falls, airFrames: tN, air: tBad },
