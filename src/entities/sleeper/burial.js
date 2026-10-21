@@ -669,21 +669,41 @@ export function crestY(MD, x, z) {
 // shell lightly stoned over (Task 5's stone at about half: alb 0.92 -> 0.45, nrm 0.85 -> 0.35, rough 0.9 -> 0.5, sand 0.7 -> 0.45). Both
 // are uniforms of the one '|crust' program (crustTick): no program changes. The crack (the rise's first beat) is the same in both.
 // Task 5's full stone stays a third look, 'stone', for the A/B.
-export const CRUST_LOOKS = { shell: { alb: 0, nrm: 0, rough: 0, sand: 0 }, light: { alb: 0.45, nrm: 0.35, rough: 0.5, sand: 0.45 },
-  stone: { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7 } };
-export const CRUST = { look: 'light', ...CRUST_LOOKS.light, crack: 0.85, sandC: 0x3f4744 };
+// (Task 5c, Michael's second checkpoint 2026-10-20: "reads as a rock now, but it should be her shell but lightly covered in sand") the
+// shipped look is 'sand': no stone (alb / nrm / rough 0: her own shell's colour and texture), and a COVER of the dune's silt (sandC)
+// settled on her: uSandK = (cover, drift, dust, flat), 0 cover in every other look (their path is Task 5b's, unchanged). Where it
+// lies: her GEOMETRIC normal facing up (nonPerturbedNormal: steep sides thin), her micro normal facing up, her convex edges bare (a
+// signed curvature from the screen derivatives of that normal over world position: ridges and shard edges show through), pooled in
+// her hollows (the bake's AO, the same signal as the hollow sand above, and concave curvature); broken by a generated 3D value noise
+// (two octaves, ~2.5 u and ~0.7 u, scaled by drift) and THRESHOLDED at 1 - uBury * cover, so it reads as drifts with edges, not a
+// wash; a thin dust veil (dust) on her up faces between them. Under it she is matte (roughness 0.95) and her relief is flattened by
+// flat. ONE value takes it off: uBury (L.bury): as it falls the threshold climbs, so the sides and thin drifts go first and the
+// hollows last, and at 0 none is left (the rise, Tasks 7a/7b/12, needs no new path). Off home L.bury is 0: the branch is not taken.
+// Look-dev (stills t5c-dev/, his light weather 0.5): cover 0.45 / drift 0.6 / dust 0.15 / flat 0.4 laid a smooth sand plate over
+// her tops (her shell gone from above); cover 0.15 / drift 1 / dust 0 / flat 0.25 barely showed (Task 5b's bare shell); shipped
+// cover 0.3 / drift 1 / dust 0.1 / flat 0.3: drifts on her tops and in her hollows, her plates and ridges showing between.
+export const CRUST_LOOKS = { shell: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0 }, light: { alb: 0.45, nrm: 0.35, rough: 0.5, sand: 0.45, cover: 0 },
+  stone: { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7, cover: 0 },
+  sand: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0.3, drift: 1.0, dust: 0.1, flat: 0.3 } };
+export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x3f4744 };
 const CRUST_HEAD = `
 varying vec3 vCrW;
 uniform float uBury, uCrack;
 uniform sampler2D uCrustPack, uCrustNrm;
 uniform vec3 uRockC, uSand;
-uniform vec4 uCrustK;
+uniform vec4 uCrustK, uSandK;
 uniform float uCrustRough;
 vec4 crTri(sampler2D t, vec3 p, vec3 bw, float f) { return texture2D(t, p.zy * f) * bw.x + texture2D(t, p.xz * f) * bw.y + texture2D(t, p.xy * f) * bw.z; }
 vec3 crNrm(vec3 p, vec3 n, vec3 bw, float f, float str) {
   vec3 tx = texture2D(uCrustNrm, p.zy * f).xyz * 2.0 - 1.0, ty = texture2D(uCrustNrm, p.xz * f).xyz * 2.0 - 1.0, tz = texture2D(uCrustNrm, p.xy * f).xyz * 2.0 - 1.0;
   vec3 wx = vec3(tx.xy * str + n.zy, abs(tx.z) * n.x), wy = vec3(ty.xy * str + n.xz, abs(ty.z) * n.y), wz = vec3(tz.xy * str + n.xy, abs(tz.z) * n.z);
   return normalize(wx.zyx * bw.x + wy.xzy * bw.y + wz.xyz * bw.z);
+}
+float crH(vec3 p) { p = fract(p * 0.3183099 + 0.1); p *= 17.0; return fract(p.x * p.y * p.z * (p.x + p.y + p.z)); }
+float crVN(vec3 x) {
+  vec3 i = floor(x), f = fract(x); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(crH(i), crH(i + vec3(1.0, 0.0, 0.0)), f.x), mix(crH(i + vec3(0.0, 1.0, 0.0)), crH(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+    mix(mix(crH(i + vec3(0.0, 0.0, 1.0)), crH(i + vec3(1.0, 0.0, 1.0)), f.x), mix(crH(i + vec3(0.0, 1.0, 1.0)), crH(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
 }`;
 const CRUST_APPLY = `
 if (uBury > 0.001) {
@@ -693,22 +713,41 @@ if (uBury > 0.001) {
   float crAlb = (crPd.r * 1.6) * mix(1.0, crPc.r * 1.6, 0.55);
   float crK = uBury * uCrustK.x;
   diffuseColor.rgb = mix(diffuseColor.rgb, uRockC * crAlb, crK);
-  vec3 crN2 = crNrm(vCrW, crWN, crBW, 0.32, 0.9);
-  normal = normalize(mix(normal, normalize((viewMatrix * vec4(crN2, 0.0)).xyz), crK * uCrustK.y));
+  if (crK * uCrustK.y > 0.001) {
+    vec3 crN2 = crNrm(vCrW, crWN, crBW, 0.32, 0.9);
+    normal = normalize(mix(normal, normalize((viewMatrix * vec4(crN2, 0.0)).xyz), crK * uCrustK.y));
+  }
   roughnessFactor = mix(roughnessFactor, uCrustRough, crK);
   float crAO = 1.0;
   #ifdef USE_AOMAP
     crAO = texture2D(aoMap, vAoMapUv).r;
   #endif
   float crSand = uBury * uCrustK.z * smoothstep(0.2, 0.7, crWN.y) * (1.0 - smoothstep(0.35, 0.85, crAO));
-  diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
+  if (uSandK.x > 0.001) {
+    vec3 crGN = normalize(inverseTransformDirection(nonPerturbedNormal, viewMatrix));
+    vec3 crDx = dFdx(vCrW), crDy = dFdy(vCrW);
+    float crCv = (dot(dFdx(crGN), crDx) + dot(dFdy(crGN), crDy)) / max(dot(crDx, crDx) + dot(crDy, crDy), 1e-6);
+    float crUp = smoothstep(0.3, 0.85, crGN.y) * smoothstep(0.15, 0.6, crWN.y) * (1.0 - smoothstep(0.8, 2.5, crCv));
+    float crPool = max(1.0 - smoothstep(0.35, 0.85, crAO), smoothstep(0.3, 1.5, -crCv)) * smoothstep(0.0, 0.3, crGN.y);
+    float crN0 = crVN(vCrW * vec3(0.4, 0.55, 0.4)), crN1 = crVN(vCrW * 1.4 + 17.0);
+    float crS = crUp * 0.6 + crPool * 0.4 + (crN0 * 0.65 + crN1 * 0.35 - 0.5) * 3.0 * uSandK.y * 0.5;
+    float crT = 1.0 - uBury * uSandK.x;
+    float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 + uBury * uSandK.z * crUp;
+    crSand = max(crSand, min(crCov, 0.92));
+    roughnessFactor = mix(roughnessFactor, 0.95, crSand);
+    normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
+    diffuseColor.rgb = mix(diffuseColor.rgb, uSand * (0.85 + 0.3 * crN1), crSand);
+  } else {
+    diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
+  }
   float crCrk = uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPd.b));
   diffuseColor.rgb *= 1.0 - 0.85 * crCrk;
 }`;
 export function crustTerm(L, m, rockSet, rockC, sandC) {
   const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
     uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
-    uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough } };
+    uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough },
+    uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) } };
   L.crustU = u; L.crustSilt = new THREE.Color(sandC);   // (the zone's silt: setCrust({ sandC: null }) goes back to it)
   const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
   m.onBeforeCompile = function (sh, r) {
@@ -727,6 +766,7 @@ export function crustTick(L) {
   const u = L.crustU;
   u.uBury.value = L.bury; u.uCrack.value = L.crackK || 0;
   u.uCrustK.value.set(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack); u.uCrustRough.value = CRUST.rough;
+  u.uSandK.value.set(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat);
   if (CRUST.sandC != null) u.uSand.value.setHex(CRUST.sandC); else u.uSand.value.copy(L.crustSilt);
 }
 
