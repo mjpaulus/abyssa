@@ -1472,7 +1472,10 @@ window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(
 // THE MOUSE OWNS THE VIEW: his look input is measured from the frame the cue's window opens (the raise; a look during her turn or the
 // fight's last moments does not forfeit a cue that has not started); past 5 deg net or 15 deg of looking about (CLAWCAM's lookNet /
 // lookPath, Michael 2026-10-13 "ignore small mouse movements") it drops AT ONCE and stays off for the rest of this calm; a raise that
-// comes while he is mid-sweep starts off.
+// comes while he is mid-sweep starts off. A PAUSE is CLAWCAM's house rule (final review item 3): it ends the cue on the spring (wOut) and
+// it stays off for the rest of this point (on resume it does not come back).
+// THE HAND-BACK (pointPh 4, or a sleeper rebuilt under the cue) eases k out on the LAST aim, held: the candidate is computed only while the
+// cue can be on (final review item 2: a rebuild's fresh L, pointPh 0 and pointAt (0, 0, 0), slewed it up to ~22 deg the wrong way).
 // The spec's "it also pulls the lens out of her shell at the calm instant" is NOT this cue's: a rotation cannot move the lens. Keeping
 // the lens out of her is the position guard's (CRECAM's bodyBlocked pull and lensfix's fallbacks), gated after the calm by velfix-gate's
 // lensSurf / salIn (the plan's Task 13), the point's delay to the walk home included.
@@ -1489,7 +1492,7 @@ const POINTCAM = { on: 1, maxYaw: 75, maxPitch: 25, hyst: 5, frame: 0.8, frameBa
 let ptK = 0, ptKV = 0, ptOff = false, ptOpen = false, ptY0 = 0, ptP0 = 0, ptPath = 0, ptRecent = 0, ptYawWas = 0, ptPitchWas = 0, ptWhy = '', ptTgt = 0;
 let ptYaw = 0, ptPitch = 0, ptAmt = 0, ptDy = 0, ptDp = 0, ptG = 0, ptAy = 0, ptAp = 0, ptNx = 0, ptNy = 0, ptMode = '', ptCy = 0, ptCp = 0, ptLimX = 0, ptLimY = 0;
 const _ptQ = new THREE.Quaternion(), _ptQ2 = new THREE.Quaternion(), _ptQ3 = new THREE.Quaternion(), _ptX = V3(1, 0, 0);
-const _ptA = V3(), _ptF = V3(), _ptR = V3(), _ptP = V3(), _ptH = V3(), _ptV = V3(), _ptHO = V3(), _ptBox = new THREE.Box3();
+const _ptA = V3(), _ptF = V3(), _ptR = V3(), _ptP = V3(), _ptH = V3(), _ptV = V3(), _ptHO = V3(), _ptO = V3(), _ptBox = new THREE.Box3();   // (_ptO: ptCand's own, never CRECAM's _bp)
 let ptFy = 0, ptFp = 0, ptHOk = false;
 // p's NDC (ptNx / ptNy) under the pre-cue lens turned by yaw (world up) then pitch (its own right): false if behind the lens
 function ptNdc(p, yaw, pitch) {
@@ -1559,8 +1562,8 @@ function ptCand(L) {
   if (c) {
     _ptP.setFromMatrixPosition(c.pj.matrixWorld); _ptR.setFromMatrixPosition(c.dj.matrixWorld); _ptP.add(_ptR).multiplyScalar(0.5);
     const hf = 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * camera.aspect);
-    _ptR.copy(_ptP).sub(camera.position).normalize(); _bp.copy(_ptA).sub(camera.position).normalize();
-    const sep = Math.acos(clamp(_ptR.dot(_bp), -1, 1)), m = 1 - ccStep((C.frame - C.frameBand) * hf, (C.frame + C.frameBand) * hf, sep);
+    _ptR.copy(_ptP).sub(camera.position).normalize(); _ptO.copy(_ptA).sub(camera.position).normalize();
+    const sep = Math.acos(clamp(_ptR.dot(_ptO), -1, 1)), m = 1 - ccStep((C.frame - C.frameBand) * hf, (C.frame + C.frameBand) * hf, sep);
     if (m > 0) _ptA.lerp(_ptP, 0.5 * m);
   }
   const yC = C.maxYaw * d2r, pC = C.maxPitch * d2r;
@@ -1591,11 +1594,14 @@ function pointFrame(dt) {
     if (!ptOpen) { ptOpen = true; ptY0 = player.yaw; ptP0 = player.pitch; ptPath = 0; if (ptRecent > C.lookNet * d2r) ptOff = true; }
     else ptPath += dl;
     if (Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0) > C.lookNet * d2r || ptPath > C.lookPath * d2r) { ptOff = true; ptK = 0; ptKV = 0; }
+    if (paused) ptOff = true;                                     // (CLAWCAM's house rule: a pause ends it on the spring, off for the rest of this point)
   }
-  // the candidate aim, once a frame, while the cue can be on or is still drawn
+  // the bonnet's bounds while the cue can be on or is still drawn; the candidate aim only while it can be on (the raise and the hold, final
+  // review item 2): through the hand-back the last aim is held, so a sleeper rebuilt under the cue (Alt+1-6 / Alt+9: pointPh 0, L.pointAt
+  // (0, 0, 0)) cannot slew it the wrong way as it eases out
   if (brooder && C.on && win && !ptHOk) { ptHelmOff(); ptHOk = true; }   // (the window opens: its bonnet point, once a point)
   const lims = brooder && C.on && (win || ptK > 0) && ptLims();
-  const cand = lims && ptCand(L);
+  const cand = lims && win && ptCand(L);
   let tgt = 0, why = '';
   if (!C.on) why = 'off'; else if (!win) why = ph === 1 ? 'turn' : ph ? 'lower' : 'none'; else if (ptOff) why = 'mouse';
   else if (paused || deckK > 0 || throatOn) why = 'place';
@@ -1606,7 +1612,7 @@ function pointFrame(dt) {
   if (h > 0 && (tgt > 0 || ptK > 0 || ptKV !== 0)) { const ex = Math.exp(-w * h), e0 = ptK - tgt, k = ptKV + w * e0; ptK = tgt + (e0 + k * h) * ex; ptKV = (ptKV - w * k * h) * ex; }
   if (ptK < 0) { ptK = 0; if (ptKV < 0) ptKV = 0; }
   if (tgt === 0 && ptK < 1e-4 && Math.abs(ptKV) < 1e-3) { ptK = 0; ptKV = 0; }
-  if (!brooder || why === 'mouse') { ptK = 0; ptKV = 0; }        // (she is gone, or a real look: at once)
+  if (!brooder) { ptK = 0; ptKV = 0; }                            // (she is gone: at once; a real look dropped it above, a pause eases it out)
   ptWhy = why; ptTgt = tgt;
   if (!(ptK > 0)) { ptYaw = 0; ptPitch = 0; ptAmt = 0; ptMode = ''; return; }
   // the full turn: taken as it is when the cue starts, then slewed (review I1); no candidate this frame: the last one held
