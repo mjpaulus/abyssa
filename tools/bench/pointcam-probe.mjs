@@ -72,7 +72,9 @@ if (!['back', 'ahead'].includes(AT)) { console.error(`PC_AT: back | ahead (got $
 const SHOTS = process.env.PC_SHOTS || '';
 if (SHOTS && !/^[\w.-]+$/.test(SHOTS)) { console.error(`PC_SHOTS: a plain file prefix (got ${JSON.stringify(SHOTS)})`); process.exit(2); }
 const CALM_LINE = 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.', HOSE = 760, SECS = 14, D_HIM = 25;
-const SHOT_AT = [['turn', 2.0], ['up', 4.5], ['lower', 7.6]];
+// (PC_SHOT_AT=name:s,...: other moments; at `back` since Michael's ruling the claw is up ~7.1-10.4 s, not through the line)
+const SHOT_AT = process.env.PC_SHOT_AT ? process.env.PC_SHOT_AT.split(',').map(q => { const [n, v] = q.split(':'); return [n, +v]; }) : [['turn', 2.0], ['up', 4.5], ['lower', 7.6]];
+if (SHOT_AT.some(([n, v]) => !/^\w+$/.test(n) || !(v > 0 && v < SECS))) { console.error('PC_SHOT_AT: name:s,... with 0 < s < 14'); process.exit(2); }
 
 const { mkdtempSync, rmSync, writeFileSync, mkdirSync } = await import('node:fs');
 const { tmpdir, homedir } = await import('node:os');
