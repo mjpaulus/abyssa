@@ -2042,6 +2042,29 @@ function dropImpact(L, ev, player, rho, ux, uz, shellY) {
   else { L.sweepN = (L.sweepN || 0) + 1; L.dropKind = 'sweep'; }
 }
 
+// (Task 8) THE SHELL'S KEEP (home only, under L.buried): her shell's plan outline, KEEP_N vertices (the farthest per bearing from the shell's
+// own origin, picked once from its geometry: an event), read through last frame's matrixWorld; the nearest to the lip held APRON u off
+const KEEP_N = 32;
+function keepOutline(L) {
+  const P = L.parts.shell.geometry.attributes.position, best = new Float32Array(KEEP_N).fill(-1), idx = new Int32Array(KEEP_N).fill(-1);
+  for (let i = 0; i < P.count; i++) { const x = P.getX(i), z = P.getZ(i), b = ((Math.atan2(z, x) / (2 * Math.PI) + 1) * KEEP_N | 0) % KEEP_N, r = x * x + z * z;
+    if (r > best[b]) { best[b] = r; idx[b] = i; } }
+  return idx;
+}
+function keepShell(L, dt) {
+  if (!L.keepIdx) L.keepIdx = keepOutline(L);
+  const P = L.parts.shell.geometry.attributes.position, e = L.parts.shell.matrixWorld.elements;
+  let dmin = 1e9, bx = 0, bz = 0;
+  for (let k = 0; k < KEEP_N; k++) { const i = L.keepIdx[k]; if (i < 0) continue;
+    const x = P.getX(i), y = P.getY(i), z = P.getZ(i), wx = e[0] * x + e[4] * y + e[8] * z + e[12], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+    const d = fissureDist(wx, wz, L.idx); if (d < dmin) { dmin = d; bx = wx; bz = wz; } }
+  if (dmin >= APRON) return;
+  const g = crackAway(bx, bz, L.idx), k = Math.min(APRON - dmin, 3.0 * dt * L.standE);
+  L.pos.x += g.x * k; L.pos.z += g.z * k;
+  const vin = L.vel.x * g.x + L.vel.z * g.z;
+  if (vin < 0) { L.vel.x -= vin * g.x; L.vel.z -= vin * g.z; }
+  L.keepShellN = (L.keepShellN || 0) + 1;
+}
 const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
 // (Task 8) the rise plume's spawn points on the FITTED dune (MD.M: a cloud bursts where the sand was); module level, so no closure or
 // array literal per rising frame
@@ -2338,6 +2361,11 @@ export function updateBrooder(L, dt, t, player) {
       const vin = L.vel.x * g.x + L.vel.z * g.z;
       if (vin < 0) { L.vel.x -= vin * g.x; L.vel.z -= vin * g.z; }
     }
+    // (velkath-buried-rock Task 8, the controller's ruling) HOME ONLY (L.buried): her SHELL is held off the lip too, not her centre alone.
+    // The centre rule assumes a widest half extent of 1.29 R; on home's kinked lip her shell reached 20.95 u (1.36 R) toward it from a
+    // centre on the keep line, and blind in the rise's plume (no stalk) she reached the keep line where a corner came 11.77 u off the lip
+    // (fissure-probe velkath-crack, bar 12). Her drawn outline (last frame's pose: keepOutline) is kept APRON u off, at the centre rule's rate
+    if (L.buried) keepShell(L, dt);
     const F = FISSURE[L.idx];
     fissureLocal(L.pos.x, L.pos.z, L.idx, _fl);
     if (L.lairSide && Math.abs(_fl.u) > F.halfLen && _fl.v * L.lairSide < 0) {
