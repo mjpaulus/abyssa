@@ -35,7 +35,11 @@
 //               hold   pointK >= 0.95 on ONE contiguous span of 2.5-3.5 s, and that span contains the frame the calm line first shows
 //               tears  0 over the 14 s (slamLog and torn never rise)
 //               walk   L.walkTo null on every frame with pointPh > 0, and set within 1.2 s (72 frames) of pointPh leaving 4 (VOID when
-//                      pointPh never reached 4: the shipped calm's walkTo at the calm cannot pass it)
+//                      pointPh never reached 4: the shipped calm's walkTo at the calm cannot pass it). AMENDED on the first GREEN run
+//                      (t10-g1, before any change to the build for it): the walk home is L.walkTo OR L.homeTurn (its arrival stage). At her
+//                      bed already (she hunts him from it: 0.00 u off at the calm in both placements) brooder.js's walk branch clears
+//                      walkTo on the SAME update that set it (dist < 3 with toBed: homeTurn), so a per-frame read never sees walkTo (walkF
+//                      -1 on a build that did walk home); homeTurn is booked beside it and both are held to null/false while pointPh > 0
 //             VERDICT ORDER: a bar that FAILED on a real measurement is FAIL (exit 1) even if another is VOID; with no failure, any VOID is
 //             exit 2; nothing vacuous ever passes. A RED judges only its own bars.
 //   framing / mouse / off   POINTCAM (Task 11 adds them).
@@ -256,8 +260,8 @@ const span = up.length ? +(up.length / 60).toFixed(3) : 0;
 const angs = up.map(i => S[i].ang), angMax = angs.length ? Math.max(...angs) : null;
 // the lower's end: the first frame pointPh goes from 4 to 0; the walk home's first frame after it
 const endF = S.findIndex((r, i) => i > 0 && S[i - 1].ph === 4 && r.ph === 0);
-const walkF = endF >= 0 ? S.findIndex((r, i) => i >= endF && r.walk) : -1;
-const walkDuring = S.filter(r => r.ph > 0 && r.walk).length;
+const walkF = endF >= 0 ? S.findIndex((r, i) => i >= endF && (r.walk || r.homeTurn)) : -1;
+const walkDuring = S.filter(r => r.ph > 0 && (r.walk || r.homeTurn)).length;
 const slam0 = S.length ? S[0].slam : 0, torn0 = S.length ? S[0].torn : 0;
 const slamN = S.length ? Math.max(...S.map(r => r.slam)) - slam0 : 0, tornUp = S.length ? +(Math.max(...S.map(r => r.torn)) - torn0).toFixed(3) : 0;
 const yawAt = i => i >= 0 && i < S.length ? S[i].yaw : null;
@@ -275,7 +279,7 @@ const ck = [
   { name: 'aim', val: angMax, bar: 'shoulder->palm vs shoulder->P <= 20 deg on every frame pointK >= 0.95', ok: angMax != null && angMax <= 20, vacuous: !up.length, judged: true },
   { name: 'hold', val: { span, contiguous, upS: record.book.upS, lineS: record.book.lineS }, bar: 'pointK >= 0.95 on one contiguous span of 2.5-3.5 s containing the calm line\'s first frame', ok: contiguous && span >= 2.5 && span <= 3.5 && lineF >= up[0] && lineF <= up[up.length - 1], vacuous: lineF < 0, judged: true },
   { name: 'tears', val: { slamN, tornUp }, bar: '0 tears over the 14 s', ok: slamN === 0 && tornUp <= 0, vacuous: !S.length, judged: true },
-  { name: 'walk', val: { endF, walkF, dF: endF >= 0 && walkF >= 0 ? walkF - endF : null, walkDuring }, bar: 'walkTo null while pointPh > 0; set within 72 frames of pointPh leaving 4', ok: endF >= 0 && walkF >= 0 && walkF - endF <= 72 && walkDuring === 0, vacuous: endF < 0, judged: true }];
+  { name: 'walk', val: { endF, walkF, dF: endF >= 0 && walkF >= 0 ? walkF - endF : null, walkDuring }, bar: 'walkTo / homeTurn null while pointPh > 0; set within 72 frames of pointPh leaving 4', ok: endF >= 0 && walkF >= 0 && walkF - endF <= 72 && walkDuring === 0, vacuous: endF < 0, judged: true }];
 if (RED) for (const k of ck) k.judged = REDS[MODE][RED].bars.includes(k.name);
 record.checks = ck;
 for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(6)} ${JSON.stringify(k.val)} (bar ${k.bar})`);

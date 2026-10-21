@@ -21,12 +21,13 @@ import { terrainH, terrainMeshes, fissurePatchSample, extraFloorAt } from '../..
 import { setWardTargets } from '../../world/predators.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
-  rememberWard, wardMemPose, wardsRecall, wardRefuse
+  rememberWard, wardMemPose, wardsRecall, wardRefuse, lightWard
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
 import { makeHarpoon } from './harpoon.js';
-import { FISSURE, fissureDist, fissureLocal, fissureShut, APRON } from '../../world/fissureShape.js';
+import { FISSURE, fissureDist, fissureLocal, fissureShut, APRON, lipMeanY } from '../../world/fissureShape.js';
+import { riftPos } from '../../config.js';
 import { velkathLair, R_OF_SIZE, HEAD_R } from './lair.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
@@ -40,6 +41,18 @@ import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, 
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
 Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
+// THE POINT (spec §3; Michael: "can she turn and point to the void with her giant claw"). The calm itself is unchanged (game.js:
+// the wards burn, the crack opens over fissure.js's 6.6 s - quake, pour, silt, then the light from 3.6 s - and the line lands at
+// 6.6 - 2.5 = 4.1 s). During the pour she turns her front to the opening (the throat's centre, riftPos(idx), at its lip height); as
+// the light comes up her major claw rises and reaches toward it; she holds it ~3 s through the line, lowers it, and only then walks
+// home. Not a blow: calmed, her contacts only push him aside (game.js's slam test needs !calmed). Buried sites only (home): BURY.point
+// 0 is the shipped calm (__burial.set({ point: 0 }): pointcam-probe's RED nopoint).
+//   turn     rad/s (pre-registered; past it is Michael's feel call, never a tuning knob)
+//   turnT / raiseT / holdT / lowerT  s on her own clock from the calm: the raise from 2.9 s (late in the pour, the light at 3.6), so
+//            the claw is up (pointK 0.95) by ~3.8 s, before the line at 4.1; held to 6.9 s, down by 7.9 s. (A raise from 3.6 s put
+//            the claw at 0.95 only at ~4.5 s: the line landed mid-raise and "holds it ... through the line" failed its own bar.)
+export const POINT = { turn: 0.5, turnT: 2.9, raiseT: 1.0, holdT: 3.0, lowerT: 1.0 };
+BURY.point = 1;
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -357,7 +370,10 @@ export function makeBrooder(idx, cfg) {
     yawV: 0, velPrev: V3(), cock: 0, swing: 0, impT: 9, hamPh: 0, hurt: S(), shuffleT: 3, quake: 0,
     mPh: 0, segL0: { coxa: 1, femur: 1, tibia: 1, dactyl: 1 }, sculpted: false, eyeSt: null,
     // ground + sight (brooder-ground-plume): sole lift, collider push, what she can see
-    soleLift: 0, pushed: 0, seen: true, lastSeen: V3(), blindT: 0, clearT: 0, tau: 0, aim: V3()
+    soleLift: 0, pushed: 0, seen: true, lastSeen: V3(), blindT: 0, clearT: 0, tau: 0, aim: V3(),
+    // (velkath-buried-rock Task 10) THE POINT (POINT above): its phase (0 none / 1 turn / 2 raise / 3 hold / 4 lower), its clock, the
+    // claw's reach 0..1, the crack's opening and the reach's root pose [ry, rz] (aimPoint); calmNext: the lab verb 'calm'
+    pointPh: 0, pointT: 0, pointK: 0, pointAt: V3(), pointPose: [0, 0], calmNext: false
   };
 
   // ---- materials ----
@@ -646,6 +662,7 @@ export function makeBrooder(idx, cfg) {
   L.publishCols = () => { L.grp.updateMatrixWorld(true); publishCols(L); };
   L.cmd = (name, arg) => {
     if (name === 'wake') { if (L.dormant) wakeBrooder(L); }
+    else if (name === 'calm') L.calmNext = !L.calmed;      // (Task 10) every dark ward lit on her next update (the ward loop)
     else if (name === 'stand') L.standTarget = 1;
     else if (name === 'settle') { L.standTarget = 0; L.walkTo = null; }
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
@@ -1383,6 +1400,12 @@ function poseClaws(L, dt) {
       const hk = 1 - 0.8 * Math.min(1, Math.max(0, h));
       c.dj.rotation.z = chela(c, L, th, gape, snap, hold, t, dt) * hk;
       c.djShip = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * hk;
+      if (L.pointK > 0) {   // (velkath-buried-rock Task 10) THE POINT: the reach, blended in by L.pointK (no swing, no threat: she is calmed)
+        const k = L.pointK, r = c.root.rotation;
+        r.set(r.x + (0 - r.x) * k, r.y + (L.pointPose[0] - r.y) * k, r.z + (L.pointPose[1] - r.z) * k);
+        tuckJoint(c.cj, PT_CJ, 0, sd, k); tuckJoint(c.pj, PT_PJ, 0, sd, k);
+        c.dj.rotation.z += (PT_DJ - c.dj.rotation.z) * k; c.djShip += (PT_DJ - c.djShip) * k;
+      }
     } else {
       // the minor stays low and close, a guard across the mouth, working; it spreads
       // wide as the crusher cocks (the body opens up behind the blow)
@@ -1413,6 +1436,32 @@ function poseClaws(L, dt) {
 function tuckJoint(j, T, base, sd, d) {
   const r = j.rotation;
   r.set(r.x + (T[0] - r.x) * d, r.y + (base - sd * T[1] - r.y) * d, r.z + (T[2] - r.z) * d);
+}
+// (velkath-buried-rock Task 10) THE REACH's elbow and wrist (tuckJoint targets: near straight, the wrist a little open) and the finger
+const PT_CJ = [0, 0.15, 0.10], PT_PJ = [0, 0.10, -0.05], PT_DJ = 0.35;
+// THE REACH, solved once as the light comes up: the major claw's root (merus) aimed down the shoulder -> opening line, the elbow and
+// wrist near straight. The arm is a 'YZX' chain whose rest heading -PI/2 points it along her +z (buildClaw), so a unit direction t in
+// her body frame from the shoulder is reached by rz = asin(t.y), ry = atan2(-t.z, t.x); one correction pass takes out what the elbow
+// and wrist bend adds, measured with the elbow, wrist and finger AT the reach's own pose (PT_*; the frame's idle pose bends them
+// 0.2-0.8 rad more). ry is wrapped into (-3PI/2, PI/2], within PI of the rest heading, so the blend in poseClaws never swings the arm
+// the long way round through her back. Every joint is restored. Writes L.pointPose; no allocation.
+const _pa = V3(), _pb = V3(), _pinv = new THREE.Matrix4();
+function aimPoint(L) {
+  const c = L.claws[1].major ? L.claws[1] : L.claws[0], sd = c.sd;
+  L.body.updateMatrixWorld(true);
+  _pinv.copy(L.body.matrixWorld).invert();
+  _pa.copy(L.pointAt).applyMatrix4(_pinv).sub(c.root.position).normalize();   // her frame, from the shoulder
+  let ry = Math.atan2(-_pa.z, _pa.x), rz = Math.asin(clamp(_pa.y, -1, 1));
+  const r = c.root.rotation, r0x = r.x, r0y = r.y, r0z = r.z;
+  const e = c.cj.rotation, e0x = e.x, e0y = e.y, e0z = e.z, w = c.pj.rotation, w0x = w.x, w0y = w.y, w0z = w.z, f0 = c.dj.rotation.z;
+  tuckJoint(c.cj, PT_CJ, 0, sd, 1); tuckJoint(c.pj, PT_PJ, 0, sd, 1); c.dj.rotation.z = PT_DJ;
+  r.set(0, ry, rz); c.root.updateMatrixWorld(true);
+  _pb.setFromMatrixPosition(c.pj.matrixWorld).add(_v.setFromMatrixPosition(c.dj.matrixWorld)).multiplyScalar(0.5)   // the palm
+    .applyMatrix4(_pinv).sub(c.root.position).normalize();
+  ry += Math.atan2(-_pa.z, _pa.x) - Math.atan2(-_pb.z, _pb.x); rz += Math.asin(clamp(_pa.y, -1, 1)) - Math.asin(clamp(_pb.y, -1, 1));
+  ry = Math.atan2(Math.sin(ry), Math.cos(ry)); if (ry > Math.PI / 2) ry -= Math.PI * 2;
+  r.set(r0x, r0y, r0z); e.set(e0x, e0y, e0z); w.set(w0x, w0y, w0z); c.dj.rotation.z = f0; c.root.updateMatrixWorld(true);
+  L.pointPose[0] = ry; L.pointPose[1] = rz;
 }
 
 // THE GROUND UNDER HER (brooder-ground-plume). The shell's SOLE (lowest vertex per cell of
@@ -2261,6 +2310,16 @@ export function updateBrooder(L, dt, t, player) {
   const hunt = !L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.5;
   const tx = L.aim.x - L.pos.x, tz = L.aim.z - L.pos.z, dh = Math.hypot(tx, tz) || 1e-3;
   L.huntD = dh;
+  if (L.pointPh) {
+    // (velkath-buried-rock Task 10) THE POINT (POINT): her front to the opening; the reach solved once as the light comes up; home after
+    const P = POINT, t = (L.pointT += dt), t1 = P.turnT, t2 = t1 + P.raiseT, t3 = t2 + P.holdT, t4 = t3 + P.lowerT;
+    const ph = t < t1 ? 1 : t < t2 ? 2 : t < t3 ? 3 : t < t4 ? 4 : 0;
+    if (ph === 2 && L.pointPh === 1) aimPoint(L);                       // the reach is solved once, as the light comes up
+    L.pointPh = ph;
+    L.pointK = ph === 2 ? ease((t - t1) / P.raiseT) : ph === 3 ? 1 : ph === 4 ? 1 - ease((t - t3) / P.lowerT) : 0;
+    if (!ph) { L.walkTo = L.lairPos.clone(); L.toBed = true; }           // done: the shipped walk home
+    else want = Math.atan2(L.pointAt.x - L.pos.x, L.pointAt.z - L.pos.z);
+  }
   if (L.walkTo && L.standE > 0.9) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
     if (dist < (L.toBed ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
@@ -2323,7 +2382,7 @@ export function updateBrooder(L, dt, t, player) {
     let dA = want - L.yaw;
     while (dA > Math.PI) dA -= Math.PI * 2;
     while (dA < -Math.PI) dA += Math.PI * 2;
-    const wr = hunt ? nsTurn(L) : 0.35;   // (velhard: NOSAFE.turn, slowed in the windows)
+    const wr = hunt ? nsTurn(L) : L.pointPh ? POINT.turn : 0.35;   // (velhard: NOSAFE.turn, slowed in the windows; Task 10: the point's turn)
     yawWant = clamp(dA * 1.4, -wr, wr);
     if (Math.abs(dA) > 0.6) speed *= 0.2;                // turn on the spot before striding off
   }
@@ -2357,7 +2416,8 @@ export function updateBrooder(L, dt, t, player) {
   // The same holds on the walk home to her bed (calm, walkTo), and past either tip she stays on her
   // own side of the crack's line, so a diver across it cannot lead her round a tip and back over
   // the jam on the walk home.
-  if ((hunt || L.walkTo) && !L.dormant && L.standE > 0.5) {
+  // (Task 10) and through THE POINT, before the walk home (home only: pointPh is 0 elsewhere): she turns in place and her outline sweeps
+  if ((hunt || L.walkTo || L.pointPh) && !L.dormant && L.standE > 0.5) {
     const keep = APRON + STAND.keep * R, fd = fissureDist(L.pos.x, L.pos.z, L.idx);
     if (fd < keep) {
       const g = crackAway(L.pos.x, L.pos.z, L.idx);
@@ -2511,6 +2571,8 @@ export function updateBrooder(L, dt, t, player) {
     let allLit = true;
     for (let i = 0; i < L.sigils.length; i++) {
       const g = L.sigils[i];
+      // (Task 10) the lab verb 'calm' (L.cmd): every dark ward lit as a touch lights it, on this update (dev: probes and the lab)
+      if (L.calmNext && !g.lit) lightWard(L, g, ev);
       // (a remembered ward is buried with the rest while she sleeps: it rises with her)
       if (g.lit) { if (g.mem) wardMemPose(g, dt, haloK, L.standE); else wardLitPose(g, dt, haloK); }
       else {
@@ -2530,6 +2592,7 @@ export function updateBrooder(L, dt, t, player) {
         }
       }
     }
+    L.calmNext = false;
     let rem = 0;
     for (const q of L.sigils) if (!q.lit) rem++;
     ev.remaining = rem;
@@ -2537,7 +2600,11 @@ export function updateBrooder(L, dt, t, player) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
       if (L.memWard >= 0) wardsRecall(L, haloK);
       // she goes home: back to her bed on the lip, to settle over her clutch
-      if (L.brood) { L.walkTo = L.lairPos.clone(); L.toBed = true; L.standTarget = 1; }
+      if (L.buried && BURY.point) {
+        // (velkath-buried-rock) THE POINT first (POINT above); she walks home when it is done
+        const rp = riftPos(L.idx);
+        L.pointPh = 1; L.pointT = 0; L.pointAt.set(rp.x, lipMeanY(L.idx, terrainH), rp.z); L.standTarget = 1;
+      } else if (L.brood) { L.walkTo = L.lairPos.clone(); L.toBed = true; L.standTarget = 1; }
       else { L.standTarget = 0; L.walkTo = null; }
     }
   } else {
