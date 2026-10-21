@@ -466,8 +466,8 @@ export const HAND = {
   minor: { len: 0.70, hgt: 0.30, wid: 0.22, hinge: [0.66, 0.06, 0] }
 };
 function palmSpec(kind, seed) {
-  // the outer face: the major rides on the right (+X) and its hand's local +Z faces inward
-  // there, so its knobs go on -Z; the minor (left) keeps them on +Z
+  // the outer face: the major rides on the left (+X) and its hand's local +Z faces inward
+  // there, so its knobs go on -Z; the minor (right) keeps them on +Z
   const rnd = mulberry(seed), H = HAND[kind], major = kind === 'major', out = major ? -1 : 1;
   const { len, hgt, wid } = H, c = [len * 0.50, 0, 0];
   // a compressed, flat-faced hand: an ellipsoid cut by a rounded box (flat faces, keeled

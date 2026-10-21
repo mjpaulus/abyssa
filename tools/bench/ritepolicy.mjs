@@ -42,6 +42,7 @@ export const PROBE = `(() => {
     const dry = res < 0.12;
     if (dry && !st.dryWas) st.dryN++;
     st.dryWas = dry;
+    // (the host page must set window.__xf = T.extraFloorAt || null: riteplay.mjs does; fullplay.mjs, fullplay-gate.mjs and velfix-gate.mjs do not, so agl reads terrainH alone there)
     const fl = Math.max(terrainH(P.pos.x, P.pos.z, 0), window.__xf ? window.__xf(P.pos.x, P.pos.z, 0) : -1e9);   // (buried Task 14: the ground he stands on, a dune or a crest included; main has no __xf)
     const lairD = Math.hypot(P.pos.x - L.lairPos.x, P.pos.z - L.lairPos.z);
     const inB = window.__fd ? window.__fd(P.pos.x, P.pos.z, 0) < 0 : fl < st.lairFloor - 15 && lairD < 90;   // (fissure Task 5: the 'bowl' is the crack now)

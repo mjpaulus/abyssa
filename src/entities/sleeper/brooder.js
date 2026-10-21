@@ -487,7 +487,7 @@ export function makeBrooder(idx, cfg) {
 
   // Round 3 arms, after the reference: two huge armoured arms held forward like a guard,
   // grey-teal chitin with a wet sheen, set with pale knobs, ending in long hooked
-  // pincers that run to rust at the tips. The right (+X) arm is the major.
+  // pincers that run to rust at the tips. The left (+X) arm is the major.
   // AAA pass: a generated chitin atlas (G.chitinMaps) — fine stipple normal, teal and pale
   // flecks, pale wrinkled membranes at every joint, rust on the pincers as a MAP running to
   // dark horn at the points — plus a pale subsurface-ish rim (chitinSheen).

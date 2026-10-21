@@ -124,6 +124,8 @@
 //   PC_AT=back|ahead  the placement (point; default back)
 //   PC_RED=<variant>  an opt-in RED (exit 5 when its bar failed, as it must; 3 when it did not)
 //   PC_ON=0|1         __pointcam.knobs.on for the run (framing / point; default: the build's)
+//   PC_PLACE=band     unset or band: the framing placement at 71-75 deg, the cue as the build has it, inFrame judged on the band alone
+//                     (the other bars as usual; inband's GREEN). Framing only, not with a RED
 //   PC_NOPLUG=1       the drift RED: plug(c, { stop: false }). It must print CLOCK LOST (exit 4)
 //   PC_SHOTS=<prefix> stills (point, framing): every frame of the 14 s RENDERED ({ render: true }) and __bench.capture({}) (frozen, settle 0:
 //                     a settle's frames run outside __bench.step and would leak past the plug) at 2.0 s (the turn), 4.5 s (the claw up, the

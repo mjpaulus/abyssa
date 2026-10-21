@@ -38,7 +38,7 @@
 //               end before the point (about 8 s after the calm), the walk home and the 17.5 s dig-in are through, and its last action
 //               (hanging under her centre) keeps him on her ground, where she neither lies down nor digs in: what is stepped from there
 //               is HE STANDS OFF HER GROUND, facing her (the resettle route's walk-off and wait, turned round). FP_UNTIL='window.lev && window.lev.dugIn' ends the
-//               take on the dig-in.
+//               take on the dig-in. A recording knob only, not for FP_GATE comparisons: its extra frames feed the wash counts.
 //   FP_NOVENT=1 (the route bound's RED case) the crack route walks to the throat but never vents (C) and never goes down it:
 //               he stops on his feet 2 u short of the lip (withholding C alone is not enough: the dress sinks an unvented
 //               diver through the open throat, measured in zone 1 34 s after the calm).
@@ -65,7 +65,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process
 const [, , PORT, MODE = 'perfect', TAG = 'full', SEED = '1', MAXS = '240'] = process.argv;
 // FP_ROUTE must be one of the three: a typo used to fall through to the crack walk and read as that route (exit 2, nothing started)
 if (!['crack', 'follow', 'resettle'].includes(process.env.FP_ROUTE || 'crack')) { console.error(`FP_ROUTE '${process.env.FP_ROUTE}' is not one of crack, follow, resettle`); process.exit(2); }
-if (process.env.FP_UNTIL && process.env.FP_ROUTE !== 'follow') { console.error('FP_UNTIL needs FP_ROUTE=follow (its last action is the one stepped on)'); process.exit(2); }
+if (process.env.FP_UNTIL && process.env.FP_ROUTE !== 'follow') { console.error('FP_UNTIL needs FP_ROUTE=follow (it continues that route\'s post-calm walk)'); process.exit(2); }
 const SITE = 'home';
 const OUT = process.env.RP_OUT || '/Users/michaelpaulus/sc/.abyssa-wt/shots/ritefair-play';
 mkdirSync(OUT, { recursive: true });
@@ -91,6 +91,8 @@ await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
 await sleep(3000);
 // FP_PRE=<js>: evaluated once play is up (live knobs for an A/B, e.g. "__crecam.knobs.swNeed = -100")
 if (process.env.FP_PRE) await c.ev(`(() => { ${process.env.FP_PRE}; return 1; })()`);
+// FP_UNTIL is evaluated once here, the same c.ev call the route's loop makes, so a typo exits 2 at once instead of after the fight
+if (process.env.FP_UNTIL) { try { await c.ev(process.env.FP_UNTIL); } catch (e) { console.error(`FP_UNTIL '${process.env.FP_UNTIL}' does not evaluate: ${e.message}`); process.exit(2); } }
 const alt = async code => {
   await c.ev(`(window.dispatchEvent(new KeyboardEvent('keydown', { code: '${code}', key: 'x', altKey: true, bubbles: true })), window.dispatchEvent(new KeyboardEvent('keyup', { code: '${code}', key: 'x', altKey: true, bubbles: true })), 1)`);
   await c.ev(`(window.__helm = true, window.__bench.step(90), 1)`);
@@ -531,6 +533,12 @@ if (s.calmed && ROUTE === 'follow') {
   }
   way = { route: 'crack', novent: NOVENT, zoneAt: zoneAt == null ? null : +zoneAt.toFixed(1), overLip, minFd: +minFd.toFixed(1), minY: +minY.toFixed(1), sec: +(t - t0).toFixed(1) };
   await shot('down');
+} else if (FP_UNTIL) {
+  // (FP_UNTIL on a fight that never calmed: no route ran, so the ledger gets the smallest way object and the until is booked as not reached)
+  way = { route: 'follow' };
+  way.until = { expr: FP_UNTIL, hit: false, extraSec: 0, cap: FP_UNTIL_MAX, offAt: null, reason: 'no calm' };
+  phase.push(`${t.toFixed(1)} FP_UNTIL NOT reached: the fight never calmed`);
+  console.log('FP_UNTIL', JSON.stringify(way.until));
 }
 console.log(phase.join('\n'));
 const st = s.rp;

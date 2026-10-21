@@ -9,8 +9,8 @@
 //              lat -0.23 R, lift 0.55, seat found, dormant, bury 1, crest 6-7 u, buryD 1.414); POSITIVE CONTROL: her dune is ground at home
 //              (extraFloorAt(x, z, 0) > -1e8 on >= 1 cell of a 1 u grid +-40 u round her bed (89.7, 39.1), the FOOTPRINT, and over terrainH at
 //              the bed), else UNMEASURED (the grid below could not see ground)
-//   the reseed the provider is wrapped page-side (terrain.js setExtraFloor with a wrapper round bodyCols buriedFloorAt): every extraFloorAt
-//              call made from inside reseedDens's stack while the site is not home is booked, and the first three read extraFloorAt at home's
+//   the reseed the provider is wrapped page-side (terrain.js setExtraFloor with a wrapper round bodyCols buriedFloorAt): every buriedFloorAt (extraFloorAt's provider)
+//              call made from inside reseedDens's stack while the site is not home is booked, and the first three read buriedFloorAt (extraFloorAt's provider) at home's
 //              bed. Restored after the arrival. No read booked = UNMEASURED
 //   Pallid     arrive(1): __chart.fp() b1c58f8d; extraFloorAt === -1e9 on a 2 u grid +-40 u round home's bed AND round Pallid's bed (the live
 //              sleeper's lairPos), zones 0-2; every octopus den (window.pred.octos[i].den, its own zone) within 0.05 u of Pallid's terrainH + 0.2
@@ -57,6 +57,12 @@ const LIVE_JS = `(() => { const L = window.lev, H = L && L.harpoon; if (!L || L.
     for (let i = 0; i < P.count; i++) { const x = P.getX(i), y = P.getY(i), z = P.getZ(i), wy = e[1] * x + e[5] * y + e[9] * z + e[13]; if (wy > top) top = wy; } }
   return { yawDeg: +(L.lairYaw * 180 / Math.PI).toFixed(2), anchor: [+((ox * s + oz * c) / L.R).toFixed(2), +((ox * c - oz * s) / L.R).toFixed(2)], lift: L.standLift, seatOk: !!H.seatOk, dormant: !!L.dormant,
     bury: L.bury, buryD: +(L.buryD || 0).toFixed(3), crest: st && st.meanG != null ? +(top - st.meanG).toFixed(2) : null }; })()`;
+// a site's arrival as the page reports it (__chart.site()), polled; 10 s without it is UNMEASURED (exit 2), then a 500 ms settle
+const arrived = async n => {
+  try { await c.until(`!!window.__chart && __chart.site() === ${n}`, 10000, 200); }
+  catch (e) { console.error(`UNMEASURED: arrive(${n}): the page did not report site ${n} within 10 s`); finish(2, `arrive(${n}) timeout`); }
+  await sleep(500);
+};
 const near = (a, b) => Math.abs(a - b) <= LIVE.tol;
 const liveOk = v => !!v && !v.err && near(v.yawDeg, LIVE.yawDeg) && near(v.anchor[0], LIVE.anchor[0]) && near(v.anchor[1], LIVE.anchor[1]) && v.lift === LIVE.lift && v.seatOk && v.dormant
   && v.bury === LIVE.bury && v.crest >= LIVE.crest[0] && v.crest <= LIVE.crest[1] && near(v.buryD, LIVE.buryD);
@@ -96,7 +102,7 @@ try {
         if (k.bed.length < 3) k.bed.push(BC.buriedFloorAt(${HB.x}, ${HB.z}, 0)); if (v > k.max) k.max = v; if (v > -1e8 && k.high.length < 20) k.high.push([x, z, zi, v]); } }
       return v; });
     return 1; })()`);
-  await c.ev(`(window.__helm = true, window.__chart.arrive(1), 1)`); await sleep(2000);
+  await c.ev(`(window.__helm = true, window.__chart.arrive(1), 1)`); await arrived(1);
   const pal = await c.ev(`(async () => { const T = await import('/src/world/terrain.js'), BC = await import('/src/entities/sleeper/bodyCols.js');
     const k = window.__vpR; k.arm = false; T.setExtraFloor(BC.buriedFloorAt);   // the provider restored
     const L = window.__sl, pb = L && L.lairPos ? { x: L.lairPos.x, z: L.lairPos.z } : null;
@@ -110,7 +116,7 @@ try {
   record.pallid = pal;
   console.log(`Pallid: site ${pal.site} fp ${pal.fp} bed ${show(pal.palBed)}; reseedDens reads ${show(pal.reseed)}`);
   const judged = pal.dens.filter(d => !d.jam), badD = judged.filter(d => Math.abs(d.d) > 0.05), inFoot = pal.dens.filter(d => d.inFoot);
-  check('the reseed: every extraFloorAt read of home\'s bed from inside reseedDens -1e9 (home\'s dune is not ground at Pallid)', pal.reseed.inDens > 0 && pal.reseed.bed.length > 0 && pal.reseed.bed.every(v => v === -1e9),
+  check('the reseed: every buriedFloorAt (extraFloorAt\'s provider) read of home\'s bed from inside reseedDens -1e9 (home\'s dune is not ground at Pallid)', pal.reseed.inDens > 0 && pal.reseed.bed.length > 0 && pal.reseed.bed.every(v => v === -1e9),
     { inDens: pal.reseed.inDens, bed: pal.reseed.bed }, !(pal.reseed.inDens > 0 && pal.reseed.bed.length > 0));
   check('arrive(1): Pallid __chart.fp() b1c58f8d', pal.site === 1 && pal.fp === 'b1c58f8d', [pal.site, pal.fp]);
   check('Pallid: extraFloorAt -1e9 on the 2 u grid +-40 u round home\'s bed (zones 0-2)', pal.gHome.bad === 0, pal.gHome);
@@ -126,7 +132,7 @@ try {
   check('Pallid: the row-built sleeperFingerprint(0, its row) 014f3101, no bury key', row.row === '014f3101' && !row.bury, row);
 
   // ---- home again ----
-  await c.ev(`(window.__helm = true, window.__chart.arrive(0), 1)`); await sleep(2000);
+  await c.ev(`(window.__helm = true, window.__chart.arrive(0), 1)`); await arrived(0);
   const h1 = await c.ev(`({ site: __chart.site(), fp: __ridge.fp() })`), live1 = await c.ev(LIVE_JS);
   record.homeAgain = { h1, live1 };
   console.log('home again: ' + show(h1) + '; live ' + show(live1));
