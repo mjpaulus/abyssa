@@ -288,6 +288,12 @@
 //                       then PLACED 35 u off. Bars: pause and resume as above; calm: BODY.calmOut 0 on every frame he is held (Task 3b's
 //                       CALMCOL skip); sink: each held frame's drop <= what his own settle can give in one frame from rest,
 //                       0.5 (|A_SETTLE| 0.11 + |min(0, buoy)| + the current's vertical 0.121) dt^2 + 1e-4 u (CALMCOL's 3 u/s is 0.05 u a frame)
+//               crest   (fix round 1, M1, pre-registered before the fix) at bury >= 0.3 he is HELD on her crest top (the highest drawn shell vertex,
+//                       his boots 0.1 u over it, put back after every frame as afloat) for 3 s, then PLACED 35 u off. Bars: pause and resume
+//                       as above. On c3eaa00 the build's onHerDune measures its 6 u ceiling from max(terrainH, extraFloorAt), and mid-dig her
+//                       crest is not ground, so up there he reads as off her ground and the dig-in runs under him: this run's RED is that head
+//             THE PROBE'S OWN TEST (fix round 1, M1, the coordinator's ruling): the ceiling's ground is max(terrainH, extraFloorAt, bodyCols
+//             shellHiAt) under him: her shell's top is ground for "on her ground" whatever the dig-in's bury.
 //             BP_RED=fastdig ({digT: 8}, run clear only) must fail dur; BP_RED=nopause ({pause: 0}, run pause only) must fail pause.
 //   reentry   LEAVING ZONE 0 MID-WAY AND COMING BACK (Review Focus 1). Three sessions (BP_RUNS, default i,ii,iii), each a fresh load:
 //               i    mid-rise: __lev.cmd('wake'), stepped until L.stand >= 0.3
@@ -299,6 +305,15 @@
 //             extraFloorAt == __burial.sandAt (the LIVE sleeper's dune) within 1e-9 at every mid-quad point of rings 3 .. rings-2 on
 //             every 4th bearing (>= 100 points, every one on the dune); clutch: the disguise's clutch check and B.drop == clutchSink / R;
 //             shader __shaderFailed() []. A session whose midway state never came is UNMEASURED (iii on a head with no dig-in).
+//               iv   (fix round 1, I1) mid-JOB: digin's chain, stepped until L.digJob is set (the refit under way, bury 0), then left as above
+//             THE SECOND RISE (fix round 1, I1; sessions iii and iv, after the checks above): Alt+6 to the harpoon's anchor (the build there is the
+//             old wound's: pulledRec), rise's booking installed, REAL E; bars: rite (the prompt "[E] PRESS THE OLD WOUND", the wound pressed,
+//             she wakes within 10 s); rise's own bars on the booked 14 s at the anchor, the subset a, b, c, d, f, g, h, i, iShell (e and the
+//             plume's are the anchor's parked / noisy readings, booked); reveal (L.growthBuried reaches 2 after the wake and 0 before STOOD:
+//             growReveal ran and finished); then him PLACED 35 u off, the calm: point2 (pointPh 2 seen within 20 s); settled, then the dig-in
+//             again: dig2 (L.dugIn within 40 s of the settle, its first -> last 15-20 s).
+//             BP_RED=keepdig (session iii only, no second rise): the mutant re-entry that keeps the old sleeper's dig state (after the return
+//             the new L is given the old L's dormant / bury / digging), which must fail iii.dormant and iii.cue: exit 5.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height; steep (repose 2.0: the dune fitted to fall at 63 deg; the bar is fixed, so it must fail) ->
 // repose; still (breath: __burial.set({breath:{lift:0}})) -> amplitude; lazy (programs: after (a) her shell material's key gains
@@ -360,7 +375,8 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
     // (Task 8) noplume: no rise plume -> she never loses him, and there is no cloud to spread or climb
     noplume: { set: { plume: 0 }, bars: ['blind', 'footprint', 'climb'] } },
   // (Task 12) runs: the only BP_RUNS the RED is written for
-  digin: { fastdig: { set: { digT: 8 }, bars: ['dur'], runs: ['clear'] }, nopause: { set: { pause: 0 }, bars: ['pause'], runs: ['pause'] } } };
+  digin: { fastdig: { set: { digT: 8 }, bars: ['dur'], runs: ['clear'] }, nopause: { set: { pause: 0 }, bars: ['pause'], runs: ['pause'] } },
+  reentry: { keepdig: { set: {}, page: true, bars: ['dormant', 'cue'], runs: ['iii'] } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -376,7 +392,7 @@ const FORCE = process.env.BP_FORCE === '1' || !!(RED && REDS[MODE][RED].force);
 if (FORCE && MODE !== 'rise') { console.error('BP_FORCE is rise\'s'); process.exit(2); }
 if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
 // (Task 12) BP_RUNS: digin clear | pause | afloat, reentry i | ii | iii (default all; a RED's own runs)
-const RUNS_ALL = { digin: ['clear', 'pause', 'afloat'], reentry: ['i', 'ii', 'iii'] };
+const RUNS_ALL = { digin: ['clear', 'pause', 'afloat', 'crest'], reentry: ['i', 'ii', 'iii', 'iv'] };
 let RUNS = RUNS_ALL[MODE] || null;
 if (process.env.BP_RUNS) {
   if (!RUNS) { console.error('BP_RUNS is digin\'s and reentry\'s'); process.exit(2); }
@@ -808,7 +824,7 @@ const RISE_INSTALL = `(async () => {
         lift: L.claws.map(c => r3(c.liftNow || 0)), elbow: L.claws.map(c => r3(c.elbow || 0)), frontUp: r3(L.frontUp || 0), clawRes: r3(L.clawRes || 0), clawSt: r3(L.clawSt || 0), belly: r2(L.bellyOver ?? 99),
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
         gBase: r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, pb + 1.5, p.z))), gFoot: r3(footCarried(p.x, p.z)), boots: r3(bo), pb: r3(pb), forced: R.lastForce || 0,
-        calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0,
+        calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0, gb: L.growthBuried ?? null,
         crackK: L.crackK == null ? null : r3(L.crackK), slab: R.slab(), dust: FF && FF.dustStats ? FF.dustStats() : null,
         // (Task 8) sight's reacquire inputs (header: blind) and the plume's state and field; ps fields absent on a build without them are null
         clearT: r3(L.clearT || 0), pd: r3(L._pd), touchT: r3(L.touchT || 0),
@@ -851,7 +867,7 @@ const DIG_INSTALL = `(async () => {
   const sand = (x, z) => Math.max(T.terrainH(x, z, 0), B && B.sandAt ? B.sandAt(x, z) : -1e9);
   const r3 = v => Math.round(v * 1000) / 1000, r2 = v => Math.round(v * 100) / 100;
   // THE PROBE'S OWN "ON HER GROUND" (header): the plan's onHerDune, re-computed here on the published shell
-  const onAt = (x, y, z) => { const g = Math.max(T.terrainH(x, z, 0), T.extraFloorAt(x, z, 0)); if (y - 1.35 > g + 6) return 0; return BC.shellPlanNear(x, y - 0.45, z, SET.release) ? 1 : 0; };
+  const onAt = (x, y, z) => { const g = Math.max(T.terrainH(x, z, 0), T.extraFloorAt(x, z, 0), BC.shellHiAt(x, z)); if (y - 1.35 > g + 6) return 0; return BC.shellPlanNear(x, y - 0.45, z, SET.release) ? 1 : 0; };
   // his OWN boot gap: the drawn sole's lowest point (relief-walk's SOLE_PTS, the lead casting's underside at SOLE_Y -0.15 in the foot's frame)
   const ENDS = [DV.diver.legR.end, DV.diver.legL.end], V = new THREE.Vector3();
   const SOLE_PTS = [[0, -0.16], [0.08, -0.14], [-0.08, -0.14], [0.12, 0.215], [-0.12, 0.215], [0.06, 0.30], [-0.06, 0.30]];
@@ -880,7 +896,12 @@ const DIG_INSTALL = `(async () => {
     afloat() { const E = R.edge(); if (!E) return { err: 'no boundary on the sand bearing' }; const d = E.d - 2, x = E.cx + E.ux * d, z = E.cz + E.uz * d;
       window.__bench.place(x, z, Math.atan2(E.cx - x, E.cz - z), 0); R.hold = { x, z }; R.put();
       return { edge: r2(E.d), him: [r2(x), r2(z)], on: R.onDune(), y: r3(P.pos.y) }; },
-    put() { const H = R.hold, g = Math.max(T.terrainH(H.x, H.z, 0), T.extraFloorAt(H.x, H.z, 0)); P.pos.set(H.x, g + 1.35 + 1.5, H.z); P.vel.set(0, 0, 0); P.grounded = false; R.holdY = P.pos.y; },
+    put() { const H = R.hold, g = H.y != null ? H.y : Math.max(T.terrainH(H.x, H.z, 0), T.extraFloorAt(H.x, H.z, 0)) + 1.5; P.pos.set(H.x, g + 1.35, H.z); P.vel.set(0, 0, 0); P.grounded = false; R.holdY = P.pos.y; },
+    // (crest) held with his boots 0.1 u over her drawn crest top (the highest drawn shell vertex now)
+    crestHold() { const sh = L.parts.shell, Pa = sh.geometry.attributes.position; sh.updateMatrixWorld(true); let top = -1e9, x = 0, z = 0;
+      for (let i = 0; i < Pa.count; i++) { V.fromBufferAttribute(Pa, i).applyMatrix4(sh.matrixWorld); if (V.y > top) { top = V.y; x = V.x; z = V.z; } }
+      window.__bench.place(x, z, Math.atan2(L.pos.x - x, L.pos.z - z), 0); R.hold = { x, z, y: top + 0.1 }; R.put();
+      return { top: r3(top), at: [r2(x), r2(z)], on: R.onDune(), over: r3(top - T.terrainH(x, z, 0)) }; },
     row(upd) {
       const p = P.pos, cp = camera.position, g = Math.max(T.terrainH(p.x, p.z, 0), T.extraFloorAt(p.x, p.z, 0));
       let wl = 0, wg = 0; for (const s of L.sigils) { if (s.light && s.light.intensity > wl) wl = s.light.intensity; if (s.burn && s.burn.material.opacity > wg) wg = s.burn.material.opacity; }
@@ -896,6 +917,7 @@ const DIG_INSTALL = `(async () => {
       let k = 0;
       const c = { settled: () => R.settled(), stood: () => !!L.hasStood, woke: () => !L.dormant, u03: () => L.stand >= 0.3, ph2: () => L.pointPh === 2,
         b033: () => L.bury >= 0.33, b04: () => L.bury >= 0.4, b05: () => L.bury >= 0.5, dug: () => !!L.dugIn,
+        job: () => !!L.digJob, b03: () => L.bury >= 0.3,
         on30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && S[i].on; i--) m++; return m >= 30; },
         off30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && !S[i].on; i--) m++; return m >= 30; } }[stop] || null;
       R.tEnd = performance.now();
@@ -1123,6 +1145,33 @@ try {
     sess.bed = await c.ev(`(() => { const L = window.lev; return { offBed: +Math.hypot(L.pos.x - L.lairPos.x, L.pos.z - L.lairPos.z).toFixed(3), dYaw: +Math.atan2(Math.sin(L.yaw - L.lairYaw), Math.cos(L.yaw - L.lairYaw)).toFixed(4) }; })()`);
     console.log(`  [${sess.run}] pulled ${sess.pulled}, hunted ${JSON.stringify(sess.hunted || null)}, settled at row ${sess.settleF} ${JSON.stringify(sess.bed)}; him ${JSON.stringify(sess.place2)}; ${JSON.stringify(ins)}`);
   };
+  // (fix round 1, I1) THE SECOND RISE after a dig-in and a return (header): the old wound at the anchor, rise's booking, real E; then the calm,
+  // the point, the settle and the dig-in again. sess.rise2 = rise's out for riseChecks; sess.after2 the dig-in's
+  const secondRise = async sess => {
+    await alt(c, 6);
+    const pl = await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { where: 'anchor', him: [+p.x.toFixed(2), +p.z.toFixed(2)], dAnchor: H && H.anchor ? +Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z).toFixed(2) : null, prompt: window.lev.rite ? window.lev.rite.prompt(p) : null, wound: !!(H && H.wound), dormant: !!window.lev.dormant }; })()`);
+    const ins = await c.ev(RISE_INSTALL); if (!ins || ins.err) throw new Error('second rise: install: ' + (ins && ins.err));
+    const settle = await c.ev(`window.__bpRise.settle(30)`);
+    await c.key('KeyE', true); await c.ev(`window.__bpRise.step(2)`); await c.key('KeyE', false);
+    sess.rite2 = Object.assign({ prompt: pl.prompt, wound: pl.wound }, await c.ev(`({ pressed: !!window.lev.harpoon.pressed, wrenching: !!window.lev.harpoon.wrenching })`));
+    let st = null;
+    for (let k = 0; k < 20; k++) { st = await c.ev(`window.__bpRise.step(30)`); if (st.wakeF >= 0) break; }
+    sess.rite2.wokeF = st.wakeF; sess.rite2.wokeT = st.wakeF >= 0 ? +(st.wakeF / 60).toFixed(3) : null;
+    if (st.wakeF < 0) throw new Error('second rise: she did not wake within 10 s of E at the old wound');
+    for (let k = 0; k < 40 && st.rows - st.wakeF < RISE_SECS * 60; k++) st = await c.ev(`window.__bpRise.step(${Math.min(300, RISE_SECS * 60 - (st.rows - st.wakeF))})`);
+    sess.rise2 = { where: 'anchor', place: pl, settle, ins, wakeF: st.wakeF, under: null, underF: null, S: await c.ev(`window.__bpRise.S`) };
+    // the calm, the point, the settle, the dig-in again (digin's booking on the same sleeper)
+    const di = await c.ev(DIG_INSTALL); if (!di || di.err) throw new Error('second rise: dig install: ' + (di && di.err));
+    sess.place2b = await c.ev(`window.__bpDig.place35()`);
+    await c.ev(`(window.__lev.cmd('calm'), 1)`);
+    st = await dig(1200, 'ph2'); sess.point2 = { hit: st.hit, rows: st.rows };
+    for (let k = 0; k < 4; k++) { st = await dig(600, 'settled'); if (st.hit) break; }
+    sess.settled2 = st.hit;
+    if (st.hit) { sess.winF2 = st.rows; await c.ev(`window.__bpDig.place35()`); for (let k = 0; k < 4; k++) { st = await dig(600, 'dug'); if (st.hit) break; } }
+    sess.after2 = await c.ev(`window.__bpDig.state()`);
+    sess.S2 = await c.ev(`window.__bpDig.S`);
+    console.log(`  [${sess.run}] second rise: rite ${JSON.stringify(sess.rite2)}; point2 ${JSON.stringify(sess.point2)}; settled ${sess.settled2}; after ${JSON.stringify(sess.after2)}`);
+  };
   if (MODE === 'digin') {
     const sessions = [];
     for (let ri = 0; ri < RUNS.length; ri++) {
@@ -1153,8 +1202,9 @@ try {
         } else {
           let st = null;
           if (run === 'pause') { sess.appr = await c.ev(`window.__bpDig.approach()`); if (sess.appr.err) throw new Error(sess.appr.err); await dig(60); sess.apprF = (await c.ev(`window.__bpDig.S.length`)); }
-          for (let k = 0; k < 4; k++) { st = await dig(600, run === 'pause' ? 'b033' : 'b04'); if (st.hit) break; }
-          if (!st.hit) throw new Error(`MIDWAY: bury never reached ${run === 'pause' ? 0.33 : 0.4} within 40 s of the settle (the dig-in never ran)`);
+          const stopAt = run === 'pause' ? 'b033' : run === 'crest' ? 'b03' : 'b04';
+          for (let k = 0; k < 4; k++) { st = await dig(600, stopAt); if (st.hit) break; }
+          if (!st.hit) throw new Error(`MIDWAY: bury never reached ${stopAt} within 40 s of the settle (the dig-in never ran)`);
           if (run === 'pause') {
             sess.walkF = st.rows;
             await c.key('KeyW', true); const on = await dig(300, 'on30'); await c.key('KeyW', false);
@@ -1167,7 +1217,7 @@ try {
             sess.leaveF = i;
           } else {
             sess.apprF = st.rows;
-            sess.fl = await c.ev(`window.__bpDig.afloat()`); if (sess.fl.err) throw new Error(sess.fl.err);
+            sess.fl = await c.ev(run === 'crest' ? `window.__bpDig.crestHold()` : `window.__bpDig.afloat()`); if (sess.fl.err) throw new Error(sess.fl.err);
             await dig(180);
             sess.leaveF = (await c.ev(`window.__bpDig.S.length`));
             sess.leave = await c.ev(`window.__bpDig.place35()`);
@@ -1188,11 +1238,11 @@ try {
       const run = RUNS[ri], sess = { run }; sessions.push(sess);
       if (ri > 0) await reload();
       try {
-        if (run === 'iii') {
+        if (run === 'iii' || run === 'iv') {
           await digChain(sess);
           let st = null;
-          for (let k = 0; k < 4; k++) { st = await dig(600, 'b05'); if (st.hit) break; }
-          if (!st.hit) throw new Error('MIDWAY: bury never reached 0.5 within 40 s of the settle (the dig-in never ran)');
+          for (let k = 0; k < 4; k++) { st = await dig(600, run === 'iii' ? 'b05' : 'job'); if (st.hit) break; }
+          if (!st.hit) throw new Error(`MIDWAY: ${run === 'iii' ? 'bury never reached 0.5' : 'the refit job never started'} within 40 s of the settle (the dig-in never ran)`);
         } else {
           const ins = await c.ev(DIG_INSTALL); if (!ins || ins.err) throw new Error('install: ' + (ins && ins.err));
           await c.ev(`(window.__lev.cmd('wake'), 1)`);
@@ -1205,13 +1255,17 @@ try {
           }
         }
         sess.mid = await c.ev(`window.__bpDig.state()`);
-        sess.mid.stand = await c.ev(`window.lev.stand`);
-        await c.ev(`(window.gotoZone(1), window.__bench.step(30), window.gotoZone(0), window.__bench.step(30), 1)`);
+        sess.mid.stand = await c.ev(`window.lev.stand`); sess.mid.job = await c.ev(`!!window.lev.digJob`);
+        await c.ev(`(window.__bpOldL = window.lev, window.gotoZone(1), window.__bench.step(30), window.gotoZone(0), 1)`);
+        // (BP_RED=keepdig) the mutant: the new sleeper given the old one's dig state
+        if (RED === 'keepdig') sess.mutant = await c.ev(`(() => { const o = window.__bpOldL, L = window.lev; L.dormant = o.dormant; L.calmed = o.calmed; L.bury = o.bury; L.moundK = o.moundK; L.digging = o.digging; L.dugIn = o.dugIn; return { dormant: L.dormant, bury: L.bury, digging: L.digging }; })()`);
+        await c.ev(`(window.__bpOldL = null, window.__bench.step(30), 1)`);
         const ins2 = await c.ev(DIG_INSTALL); if (!ins2 || ins2.err) throw new Error('install after the return: ' + (ins2 && ins2.err));
         sess.after = await c.ev(`window.__bpDig.state()`);
         sess.floor = await c.ev(`window.__bpDig.floorEq()`);
         sess.disg = await c.ev(DISGUISE);
         console.log(`  [${run}] mid ${JSON.stringify(sess.mid)}; after ${JSON.stringify(sess.after)}; floor ${JSON.stringify(sess.floor)}`);
+        if ((run === 'iii' || run === 'iv') && !RED) await secondRise(sess);
       } catch (e) { sess.err = String(e && e.message || e); console.error(`  [${run}] ${sess.err}`); }
     }
     out = { sessions };
@@ -1351,7 +1405,7 @@ if (MODE === 'digin') {
         const own = A.map(q => q.own), lens = A.map(q => q.lens);
         add({ name: 'pause.boots', val: { min: own.length ? Math.min(...own) : null, n: own.length }, bar: 'his OWN boot gap over the drawn sand >= -0.15 u, every frame from the approach', ok: own.length > 0 && Math.min(...own) >= -0.15, vacuous: !!err || !own.length });
         add({ name: 'pause.lens', val: { min: lens.length ? Math.min(...lens) : null, n: lens.length }, bar: 'the lens >= 0.3 u over the drawn surface, every frame from the approach', ok: lens.length > 0 && Math.min(...lens) >= 0.3, vacuous: !!err || !lens.length });
-      } else {
+      } else if (run === 'afloat') {
         const H = A.filter(q => q.held), dt = 1 / f60, over = H.filter(q => q.drop > 0.5 * (0.11 + Math.max(0, -q.buoy) + 0.121) * dt * dt + 1e-4);
         add({ name: 'afloat.calm', val: { held: H.length, calmOutMax: H.length ? Math.max(...H.map(q => q.calmOut)) : null, onHeld: H.filter(q => q.on).length }, bar: 'BODY.calmOut 0 on every held frame (>= 60)', ok: H.length >= 60 && H.every(q => q.calmOut === 0), vacuous: !!err || H.length < 60 });
         add({ name: 'afloat.sink', val: { held: H.length, over: over.length, dropMax: H.length ? Math.max(...H.map(q => q.drop)) : null, hovMin: H.length ? Math.min(...H.map(q => q.hov)) : null }, bar: 'each held frame\'s drop <= 0.5 (0.11 + |min(0, buoy)| + 0.121) dt^2 + 1e-4 u', ok: H.length >= 60 && !over.length, vacuous: !!err || H.length < 60 });
@@ -1374,7 +1428,25 @@ if (MODE === 'reentry') {
     { const d = sess.disg && !sess.disg.err ? disguiseChecks(sess.disg, true).find(k => k.name === 'clutch') : null;
       ck.push({ name: run + '.clutch', val: a ? { clutch: d ? d.val : null, drop: a.drop, want: a.dropWant } : err, bar: 'the disguise clutch check and B.drop == clutchSink / R', ok: !!a && !!d && d.ok && a.drop != null && Math.abs(a.drop - a.dropWant) < 1e-12, vacuous: vac || !d, judged: true }); }
     ck.push({ name: run + '.shader', val: a ? a.shader : err, bar: '__shaderFailed() []', ok: !!a && a.shader === 0, vacuous: vac, judged: true });
+    // (fix round 1, I1) THE SECOND RISE (header), sessions iii and iv
+    if ((run === 'iii' || run === 'iv') && !RED) {
+      const r2 = sess.rite2, R2 = sess.rise2, v2 = !!err && !R2;
+      ck.push({ name: run + '.rite', val: r2 || err, bar: 'the prompt "[E] PRESS THE OLD WOUND", the wound pressed by real E, she wakes within 10 s', ok: !!r2 && r2.prompt === '[E] PRESS THE OLD WOUND' && r2.pressed && r2.wokeF >= 0, vacuous: !r2, judged: true });
+      if (R2) { const { ck: rc } = riseChecks(R2), keep = ['a', 'b', 'c', 'd', 'f', 'g', 'h', 'i', 'iShell'];
+        for (const k of rc) ck.push(Object.assign({}, k, { name: run + '.rise.' + k.name, judged: keep.includes(k.name) }));
+        const S = R2.S, w = R2.wakeF; let s0 = -1; for (let i = w; i < S.length; i++) { const q = S[i]; if (q.stand >= 1 && Math.abs(q.hx - 1) < 0.02 && Math.abs(q.hv) < 0.05) { s0 = i; break; } }
+        const g2 = S.findIndex((q, k) => k >= w && q.gb === 2), g0 = g2 < 0 ? -1 : S.findIndex((q, k) => k > g2 && q.gb === 0);
+        ck.push({ name: run + '.reveal', val: { revealAt: g2 < 0 ? null : +((g2 - w) / 60).toFixed(3), fullAt: g0 < 0 ? null : +((g0 - w) / 60).toFixed(3), stoodAt: s0 < 0 ? null : +((s0 - w) / 60).toFixed(3) },
+          bar: 'L.growthBuried 2 after the wake, then 0 before STOOD (growReveal ran and finished)', ok: g2 >= 0 && g0 >= 0 && s0 >= 0 && g0 <= s0, vacuous: s0 < 0, judged: true }); }
+      else ck.push({ name: run + '.rise', val: err, bar: 'the second rise booked', ok: false, vacuous: true, judged: true });
+      ck.push({ name: run + '.point2', val: sess.point2 || err, bar: 'pointPh 2 seen within 20 s of the calm', ok: !!sess.point2 && sess.point2.hit, vacuous: !sess.point2, judged: true });
+      { const S = sess.S2 || [], w = sess.winF2; let f = -1, l = -1;
+        if (w != null) for (let i = w + 1; i < S.length; i++) { if (f < 0 && S[i].bury > S[i - 1].bury + 1e-9) f = i; if (f >= 0 && S[i].bury >= 1) { l = i; break; } }
+        const dur = f >= 0 && l >= 0 ? +((l - f) / 60).toFixed(3) : null, a2 = sess.after2;
+        ck.push({ name: run + '.dig2', val: { settled: !!sess.settled2, dur, dugIn: a2 ? a2.dugIn : null, bury: a2 ? a2.bury : null }, bar: 'settled, then L.dugIn within 40 s, its first -> last 15-20 s', ok: !!a2 && a2.dugIn && dur != null && dur >= 15 && dur <= 20, vacuous: !sess.point2, judged: true }); }
+    }
   }
+  if (RED) for (const k of ck) k.judged = REDS.reentry[RED].runs.some(rn => REDS.reentry[RED].bars.some(b => k.name === rn + '.' + b));
   console.log(`REENTRY ${JSON.stringify(out.sessions.map(q => ({ run: q.run, err: q.err || null, mid: q.mid || null })))}`);
   verdict(ck);
 }
@@ -1420,7 +1492,9 @@ if (MODE === 'breath') {
 }
 
 // rise: the bars (header). A RED judges only its own bars; a real FAIL beats an UNMEASURED; nothing vacuous passes
-if (MODE === 'rise') {
+// (Task 12 fix round 1) the rise's bars as a function of a booked rise (out: { S, wakeF, where, ins, settle, place, underF }): `rise` judges
+// them all; `reentry` judges a subset on the second rise after a dig-in (header)
+function riseChecks(out) {
   const S = out.S, w = out.wakeF, where = out.where, f60 = 60, r = v => Math.round(v * 1000) / 1000;
   const e = where === 'anchor' ? 0 : w;
   let s = -1; for (let i = w; i < S.length; i++) { const q = S[i]; if (q.stand >= 1 && Math.abs(q.hx - 1) < 0.02 && Math.abs(q.hv) < 0.05) { s = i; break; } }
@@ -1557,6 +1631,10 @@ if (MODE === 'rise') {
   { const d0 = S[Math.max(0, w - 1)] && S[Math.max(0, w - 1)].dust, d1 = S.length && S[S.length - 1].dust;
     info.dust = d0 && d1 ? { emitted: d1.emitted - d0.emitted, overwrites: d1.over - d0.over, pool: 420 } : null;
     if (info.dust) { const at = S.findIndex((q, k) => k >= w && q.dust && q.dust.over > d0.over); info.dust.firstOverwriteT = at < 0 ? null : sec(at); } }
+  return { ck, info };
+}
+if (MODE === 'rise') {
+  const { ck, info } = riseChecks(out), where = out.where;
   const red = RED ? REDS.rise[RED].bars : null;
   if (red) for (const k of ck) k.judged = red.includes(k.name);
   record.force = FORCE;
