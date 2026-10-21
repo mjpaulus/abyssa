@@ -50,7 +50,7 @@ procedural fallback (lib/assets.js loadSculpted never throws).**
   import hoists above the assignment and `DBG` is already 9419; play.mjs had this bug). The CLI keeps 9419 for
   Michael's manual use. `stop()` is `pkill -f 'remote-debugging-port=<port>( |$)'`, anchored (the old pattern also
   killed 9419 when the port was 941). Convention: the relief branch served on 8870 with Chrome 9520, a main copy on
-  8871 / 9521, a load on 8873 / 9523.
+  8871 / 9521, a load on 8873 / 9523; the buried branch on 8886 / 9540, its main copy 8887 / 9541, a load 8888 / 9542, extra Chromes 9543-9549.
 - SHADER LINK FAILURES ON METAL ARE A TRANSLATOR HICCUP, NOT OUR GLSL (roadmap/shader-link-
   failure.md). ANGLE's GLSL->MSL step now and then gives one random function parameter a
   spurious `constant T &` / `thread T &` and the program fails to link ("no matching function
@@ -101,6 +101,13 @@ against explicit contracts and reviewed on return.
   the Flow handheld noise layers / stroke roll / interest drift are zeroed (knobs kept on
   `__hh`), FEEL.surgeK 0, FOV on smoothed speed. Weight cues are EVENTS only: heel-strike
   nudge/dip, landing sag, burst punch, shake + flinch. Don't re-add continuous wander.
+  The two CUED LOOKS are events too, each the lens's LAST rotation (the lens position untouched; off = the grounded lens bit for
+  bit, `q === qPre`): CLAWCAM tips it up to her major claw's palm while a real blow cocks (see Velkath, below), and POINTCAM
+  (VELKATH BURIED, 2026-10-21; `POINTCAM` / `__pointcam` in game.js) eases it round to the opening crack while she points. POINTCAM runs
+  beside it (CLAWCAM never runs once she is calmed): keyed to the point's raise and hold (`pointPh` 2-3), framed with her claw
+  where both fit, his bonnet held inside NDC `helmNdc` 0.82 (a bisected share, rate-limited), an opening behind the lens frames her
+  claw or nothing, the full turn slewed 45 deg/s, and it hands back over ~0.5 s; any real look (5 deg net or 15 deg of looking about,
+  CLAWCAM's tolerances) drops it at once for the rest of that calm. It cannot move the lens out of her: that is CRECAM's guard.
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
   AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
@@ -269,7 +276,16 @@ against explicit contracts and reviewed on return.
   oldsave]` (fresh loads in fresh profiles with the console from byte one: the invariants and home's anchors; the
   game's terrainH against the sliced replica on 40,401 points: the probe gates >= 99% within 1e-9, measured 100%
   (99.81% bit-identical, max 1.14e-13); three round trips via Pallid with
-  her bed recomputed; an old save with `pulled[0]` on the new ground, "[E] PRESS THE OLD WOUND"), `relief-walk.mjs
+  her bed recomputed; an old save with `pulled[0]` on the new ground, "[E] PRESS THE OLD WOUND"; since VELKATH BURIED the oldsave
+  and routes bars judge a buried seat by the stand spot and the seam's facing, not the shipped near flank), `voyage-pallid.mjs
+  <game port>` (VELKATH BURIED, Review Focus 5: home's dune must never be ground at another site; a fresh profile, real-time, ends
+  PASS/FAIL/UNMEASURED: home fp 5c0705a1 and the LIVE anchor; `extraFloorAt` wrapped page-side through the reseed so every provider
+  read of home's bed from inside `reseedDens` while the site is not home is booked and must be -1e9; at Pallid fp b1c58f8d,
+  `extraFloorAt` -1e9 on a 2 u grid +-40 u round home's bed AND Pallid's (zones 0-2), every octopus den within 0.05 u of
+  `terrainH + 0.2`, the row-built 014f3101 with no `bury` key; home again with the same anchor; waits on `__chart.site()`, 10 s;
+  its RED `VP_RED=nositekey` needs a scratch snapshot served whose bodyCols `buriedFloorAt` has no `currentSiteIndex()` key: exit 5
+  = the during-reseed read hit the dune (-271.217), exit 2 on an unmutated build; no den of this seed falls in home's footprint, so
+  that read is the RED; `DRV_PORT=9540 node tools/bench/voyage-pallid.mjs 8886`), `relief-walk.mjs
   <boots|lens|hose>` (REAL keys on the LIVE loop at 60 fps by focus emulation, never `__bench.step`, so no clock leak;
   `RW_RED` noslope / nofloor / short20 exit 5 = the RED failed as it must, 3 = it did not; `selftest` is offline),
   `seating-probe.mjs` (nothing the game puts on the ground hovers or sinks: props, nodes, debris, her relics and
@@ -475,6 +491,82 @@ against explicit contracts and reviewed on return.
   0.75 in riteplay's similar-length average fights is unexplained (Task 10 guessed the turn plus the lift)); main is
   absolutely RED, so it did not block. Recorder: `tools/bench/fullplay.mjs` (raft to the
   rift, real keys, FP_HOSE; its clock is plugged, exit 4 = LOST).
+  VELKATH BURIED (2026-10-21, branch buried; card roadmap/velkath-buried-rock.md, spec docs/superpowers/specs/2026-10-14-velkath-
+  buried-rock-design.md, record docs/reports/2026-10-15-velkath-buried-rock.md; Michael 2026-10-14: "it would be interesting if she
+  was buried in the sand and looked like a rock. Sal would just see what looked like a harpoon in the rock and pulls it out and she
+  rises from the sand. There would be a dust plum as the sand falls off of her", and "can she turn and point to the void with her
+  giant claw"). HOME ONLY (Michael 2026-10-15, "we should focus on getting one right now"): home's sleeper row (site.js) carries
+  `bury: { crest: 6.5 }`, `makeZoneSleeper` passes it, and without the key nothing in `sleeper/burial.js` runs (Pallid, Burned and the
+  Shelf are the shipped ridge bit for bit: their row-built fingerprints are unmoved). She is built ASLEEP AND BURIED: `L.bury` (1 buried
+  .. 0 risen) drives it, `L.buried` marks the build, `poseAll` sinks her body `L.buryD * L.bury` (`fitSink`: her drawn crest top less
+  `meanGround` less BURY.crest; 1.414 u at home). The crest stands 6.5 u over the mean ground, NOT the spec's 3-4: Michael at the Task 5
+  checkpoint (2026-10-20, "it doesnt really read a rock"), his call beyond the spec; her claws (`BURY.clawSink` 3.0) and clutch
+  (`clutchSink` 1.2) sink deeper than her body so that nothing but the crest stands over the sand (burial-probe disguise). THE MOUND
+  (burial.js `makeMound` / `fitMound`, an event at her bed, never per frame; it replaces the silt drift): a dune of the seabed's own
+  material, a sand PILE at the angle of repose (`BURY.repose` 0.55; a per-bearing fit left starburst rays) over her DRAWN shell, leaving
+  a ~20 x 20 u strip of her back out of it as exposed shell (`edgeMin`); drawn-only, the terrain heightfield and every fingerprint
+  untouched (`moundY` / `sandY` / `crestY` / `inStrip`). THE TELL: `breathTick` lifts the dune 0.045 u every 8-10 s with the lens within
+  18 u of the strip, and silt trickles off the crest only with him within 8 u. THE FOOTING: the dune and her crest are GROUND (for him
+  and the lens), not a collider: bodyCols `buriedFloorAt` (the dune max'd with a walkable ENVELOPE of her rock baked at the fit,
+  `fitFooting`; `setMound` keys it to the zone AND site, so a voyage's reseed, which places Pallid's octopus dens on `shutFloorY`
+  before her old build is disposed, never reads home's dune) is handed once by game.js to terrain.js `setExtraFloor`; `extraFloorAt`
+  (-1e9 where there is none = the shipped floor bit for bit) is read by player.js (his floor: the higher of the frame's start and
+  end), diver.js (the slope rig's `gH`), `shutFloorY` (hose, sonar, lens floor, dens), harpoon.js and the rite policies. Her shell's
+  collider is capped at the drawn ground while she is fully buried (`capOn`, the shell not `slick`, CALMCOL skipped). PARKED by ruling:
+  the crest strip's exact contact (a max filter keeps her lips vertical, so a rigid sole hangs to +2 u or cuts to -1.5 u at a lip;
+  only reshaping the lips would fix it), so `relief-walk mound` is gated with `RW_PARKED=strip`, which books the strip. THE CRUST
+  (burial.js `crustTerm`: ONE program on EVERY build at every site, uBury 0 off home, compiled in the boot tail; her body's four
+  lighting variants each carry it): sand lying on her shell in object space (`vCrO`, it rides her as she rises and breathes), look
+  `CRUST.look` 'sand' shipped ('shell' / 'light' / 'stone' kept), `sandC` 0x3f4744 = zone 0's seabed silt, the crack network in
+  her own frame; weed and coral stand on the exposed rock (`growRock`: her reef's parts and the weed's spare slots, no new
+  program) and the rest is buried (`prepGrowth`, uncovered from the crack by `growReveal`, covered again by `growCover`). Michael's third look
+  at the disguise (2026-10-20): "that looks right, keep going". THE HARPOON: `seat()` takes a CREST seat (harpoon.js,
+  no bearing test, `H._crestScan`): seam 4.45 u over the sand, the anchor on a ledge of her rock, the rope laid on the drawn ground;
+  from the sand the iron is seen end-on. THE RISE: [E] PULL, the 1.5 s wrench and the wake are as shipped; at the wake `L.crackK` runs
+  0 -> 1 over `BURY.crackT` 0.8 s (the crust cracks; 14 sand-crust SLABS, `makeSlabs` / `slabTick`, in the DUNE's program, burst into
+  silt; `velkathCrack` at the wake and the pour's hiss 0.6 s on, audio/creatures.js), `ev.quake`, and THE SHOVE (`crackBeat`:
+  BURY.shoveV 11 u/s through `safeThrow`, stagger 0.8 s; it must carry an anchor-standing Sal clear of her 5.34 u bump re-find or the
+  blind spell ends the next frame; MEASURED SENSITIVE, 11 is the only value in band that also passes the crest). `bury` eases 1 -> 0
+  on `riseU` [0.04, 0.62] and the dune draws down on `pourU` (`setMoundK`), sand streams off its flanks, and her body's rise is rate
+  limited to `riseVmax` 7 u/s until she has stood (the shipped sole-floor surge was 12-18 u/s). The `rise` plume kind (plume.js: its own
+  ring of 12 records beside the hammer's 4 and the footfalls' 8, `riseEvicted` / `quadEvicted`; a ring at the crack, more as the
+  sheets fall) blinds her by the SHIPPED `SIGHT` rule, no new rule: lost ~3.2-4.0 s after the wake, found ~6.6-7.9 s by line of
+  sight. THE RISING GUARD (`BURY.holdRise`): until `L.hasStood` (the clock done and the heave settled) `L.risenUp` is false: her
+  contact is a shove, not a slam (game.js reads `L.rising`), her hammer's threat is held at 0 and the drop's count does not run, so
+  nothing tears him in the rise (relief Task 8's rise-time shell tear is closed). Her crest's footing is carried by her body
+  (`crestFootAt`, ground only while his boots are within `footStep` 0.6 u of it, latched past the stand and slid off at 7 u/s^2), and
+  while she is blind her shell's outline is kept APRON 14 u off the crack's lip (`keepShell`, home only; the plume made
+  fissure-probe velkath-crack fail at 11.77 u without it). THE POINT (brooder.js `POINT`, `BURY.point`): after the calm she turns IN
+  PLACE to the opening crack (riftPos(0) at the lip height, `aimPoint`) at the pre-registered `POINT.turn` 0.5 rad/s, and only once
+  she FACES it (`POINT.face` 10 deg, `faceMax` 14 s so a blocked turn cannot stall her) does her major claw (claws[1], her left, body
+  +X) rise, hold ~3 s through the line "A RIFT OPENS BELOW." and lower; then she walks home (Michael 2026-10-21, "1": finish turning,
+  then point). Not a blow: calmed, her contacts only push him aside. POINTCAM (game.js `POINTCAM`, `__pointcam`) is the lens: see the
+  camera bullet. THE DIG-IN (brooder.js `onHerDune`, `beginDig` / `digStep`, `BURY.digT` 17.5 s): once he has been off her DUNE
+  `SETTLE.hold` s the refit runs as a JOB over frames (burial.js `fitMoundJ` / `fitFootingJ` / `prepGrowthJ` generators, `BURY.job` 0.8 ms a slice;
+  `bedDown` runs the same generators to the end and builds the same bed, hash-checked) and `bury` runs 0 -> 1, paused while he is on her
+  ground (afloat over it too), the crust fading back, a low haze of silt; it ends `L.dugIn`, the outcrop again. Her wards are DARK
+  under the sand (BURN's 15 s fade has run out before the 17.5 s; the spec's "embers" were built dark, an open question to Michael), and the
+  scar of the wound does not read.
+  Leaving zone 0 mid-rise, mid-point or mid-dig and returning rebuilds her at her bed, buried and still (the zone rebuild; a
+  second rise after a dig-in works). A save with `pulled[0]` rebuilds her buried with the OLD WOUND at the seat ("[E] PRESS THE OLD
+  WOUND" raises her the same way, grants nothing). THE FIGHT IS NOT MAIN'S: the paired 48-fight campaign (Task 14) FAILED bar (b)
+  on the scripted perfect player (median 73.5 s against main's 49.7, ratio 1.48, p 0.0073; the average player 56.8 vs 49.2, inside),
+  and the diagnosis puts it on the bench policy meeting the designed opening (he pulls the iron standing on her crest: the off-back
+  rule +2.3 s, a failed dash then a drop +3 s, a walk-only close-in stall on her flank +22.5 s; the tool change, the burial after the
+  stand and the blind spell ~0 s). The opening is KEPT by ruling and Michael was told. Cost: z0b -0.06 +- 0.12 ms, near -0.14 +- 0.08
+  (the breath ~0), the plume's sight ~0.003 ms/frame. Debug: `window.__burial` (`set(patch)` rebuilds her in place, `state()`,
+  `sandAt`, `inStrip`, `setCrust`, `knobs` = BURY, `crust` = CRUST), `window.__pointcam`, `window.__plume` (`densKind`, `rec`), lab verb
+  `calm`. Probes (all `DRV_PORT=<own> node tools/bench/<x>.mjs`, stepped ones on the PLUGGED clock, `tools/bench/clockplug.mjs`:
+  `plug` / `drift` / `lost` / `unmeasured`, CLOCK_LOST 0.05, exit 4): `burial-probe.mjs <disguise|breath|programs|rise|digin|
+  reentry> <port>` (the plan's gates, each with a `BP_RED`: ridge shallow steep late still lazy noshove tearable early nofoot sunk
+  noplume fastdig nopause keepdig mem2; `BP_AT` anchor / crest / off / front / dune / under; `BP_BASE` = a base run's programs JSON,
+  because the base compiles its own first-sight shadow variants; `BP_CHECK`), `relief-walk.mjs mound` (real keys, live loop; `RW_RED`
+  nofloor-mound / nocap; `RW_PARKED=strip`), `pointcam-probe.mjs <point|framing|mouse|off|walk|lastward> <port>` (`PC_AT` back / ahead;
+  `PC_PLACE=band` puts framing at 71-75 deg; `PC_RED` nopoint / fastturn / noface / inband, `PC_ON=0`), `clutch-line-probe.mjs` (the clutch's find line and fan
+  are held while she is buried; ridge and Pallid are the controls). `fullplay-gate.mjs FP_UNTIL=<js>` (needs FP_ROUTE=follow; walks him
+  off her ground, facing her, until the expression is true, 60 s cap; RECORDING ONLY, not for FP_GATE comparisons) took the dig-in
+  video. `ritepolicy.mjs` reads his height off `max(terrainH, window.__xf)` where riteplay's setup sets `__xf = extraFloorAt`; the other
+  hosts (fullplay, fullplay-gate, velfix-gate) run it without `__xf`, so their `agl` reads terrainH only.
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (the blade frees: `lev.onSlash(pos, fwd, reach, tipReach, guard)`, held: knife 3 /
@@ -665,7 +757,11 @@ against explicit contracts and reviewed on return.
   (Pallid 014f3101, Burned 5dc323ad, Shelf 874758d2 with theirs; the no-row values are unchanged at every site).
   relief-load `load` gates a LIVE anchor in its place, on the boot's build and on the chart's rebuild: heading
   -121.51 deg, Alt+6 stands him at fwd -0.81 / lat -0.59 R in her frame (her back-left corner), lift 0.55, seat found
-  (tolerance 0.01; a later sculpt or seat change moves it, and the cause is recorded with it).
+  (tolerance 0.01; a later sculpt or seat change moves it, and the cause is recorded with it). SINCE VELKATH BURIED (home's row
+  `bury`, above) the row-built home value is b9fd3c26 (was edb51a28; Task 2's sink moved it to 1199bc26, Task 5b's less-sunk crest
+  to b9fd3c26) and the LIVE anchor is heading -121.51 deg (unchanged), Alt+6 at fwd -0.53 / lat -0.23 R (it stands him on a ledge of
+  her rock; -0.81 / -0.59 on main), lift 0.55, seat found, dormant, `bury` 1, crest 6-7 u over the mean ground, buryD 1.414.
+  `sleeperFingerprint(0)` with no row is STILL 1ca3b28c (burial-probe and relief-load fp-sites-bury read the row-built one).
 - `systems/raft.js` + `systems/raft/` — the dive tender. It is a PLACE now (Sal stands
   on it, walks it, steps off it), not a prop seen from below. `raft.js` owns the
   material palette, the hose reel, the lantern and all wiring; five builders own
@@ -748,12 +844,14 @@ against explicit contracts and reviewed on return.
   short lines, period voice ("BITUMEN — FOOD FOR THE PUMP").
 - Debug surfaces are namespaced on window and kept: player, survival, lev, zone,
   gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
-  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __relief, __shaderFailed.
+  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __relief, __shaderFailed, __burial, __pointcam.
 - INVARIANTS checked before every commit (fresh tab): 14 lights in the scene; `__lev.fp(0/1/2)`
   15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 5c0705a1 (zones 1+2 d49d451d, Pallid b1c58f8d, Burned
   d2b6fb68; since THE RELIEF 2026-10-14, was 3b526986 since THE FISSURE 2026-10-10 and 119f0cae before);
   `sleeperFingerprint(0/1/2)` 1ca3b28c / ac04921e / ce3eaf9d (zone 0 since THE RELIEF; it is blind to home's sleeper
-  row, so `relief-load.mjs load` also gates the LIVE anchor: THE CHART); `__safeFailed()` returns [];
+  row, so `relief-load.mjs load` also gates the LIVE anchor: THE CHART; since VELKATH BURIED the row-built home value is b9fd3c26,
+  was edb51a28, its one cause the burial's sink, crest seat and look, and the LIVE anchor is fwd -0.53 / lat -0.23 R, buryD 1.414,
+  crest 6-7 u; Pallid 014f3101, Burned 5dc323ad and the Shelf 874758d2 row-built are unchanged); `__safeFailed()` returns [];
   **`__shaderFailed()` returns []** (no shader program left broken; see lib/shaderWatch.js);
   console clean (no errors except a favicon 404).
 - Message discipline: `showMsg(text, dur, prio)` is a two-slot priority queue —
@@ -974,7 +1072,7 @@ core.js):
   `sampleCurrent`), the swell, the hose's current, the weather and storm, the lantern flicker and the tear gate
   (`SLAM_GAP` 0.8 s was 0.4-0.53 s of play), so load changed the game: a grep for `performance.now|Date.now` cannot
   see it. It is in EVERY `__bench.step` probe (fissure-, harpoon-, clawcam-probe...). PLUGGED TOOL-SIDE in
-  fullplay-gate.mjs, fullplay.mjs and riteplay.mjs: `clock.stop()` once the live loop is held (getDelta then returns
+  fullplay-gate.mjs, fullplay.mjs and riteplay.mjs (inline), and by `tools/bench/clockplug.mjs` for every newer stepped probe (burial-, pointcam-, clutch-line-probe): `clock.stop()` once the live loop is held (getDelta then returns
   0, and step's own `+= dt` is the only thing that moves the clock), every stepped frame counted, the ledger books
   `clock { run, stepped, drift, running }`, and drift > 0.05 s (or a running clock) is LOST, which each tool reports
   its own way: fullplay.mjs exits 4 (`FP_NOPLUG=1` is its RED: it must print CLOCK LOST); riteplay.mjs exits 4 over any
