@@ -389,6 +389,10 @@ if (RED && REDS[MODE][RED].runs) {
   RUNS = REDS[MODE][RED].runs;
 }
 const HUNT_S = process.env.BP_HUNT == null ? 6 : +process.env.BP_HUNT;
+// (Task 12) BP_SHOTS=<prefix>: digin's clear run takes stills (mid dig-in at bury ~0.42 with him 25 u off, the scar dug in from 7 u, night 8 u off
+// the strip's edge) into ~/sc/.abyssa-wt/shots/buried/<prefix>-{mid,scar,night}.png; its frames are rendered there, so its cost bar is not a reading
+const SHOTS = process.env.BP_SHOTS || '';
+if (SHOTS && (!/^[\w.-]+$/.test(SHOTS) || MODE !== 'digin')) { console.error('BP_SHOTS: a plain prefix, digin only'); process.exit(2); }
 if (!(HUNT_S >= 0 && HUNT_S <= 30)) { console.error('BP_HUNT: 0-30 s'); process.exit(2); }
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
@@ -856,9 +860,14 @@ const DIG_INSTALL = `(async () => {
     onDune() { const p = P.pos; return onAt(p.x, p.y, p.z); },
     settled() { return !!(L.calmed && L.stand <= 0 && Math.abs(L.heave.x) < 0.02 && Math.abs(L.heave.v) < 0.05 && !L.pointPh && !L.walkTo && !L.homeTurn); },
     // him 35 u from her centre along her sand side (L.sand), facing her, on the drawn ground
-    place35() { const x = L.pos.x + L.sand.x * 35, z = L.pos.z + L.sand.z * 35;
+    place35(d = 35) { const x = L.pos.x + L.sand.x * d, z = L.pos.z + L.sand.z * d;
       window.__bench.place(x, z, Math.atan2(L.pos.x - x, L.pos.z - z), 0); P.pos.y = T.shutFloorY(x, z, 0) + 1.35; P.vel.set(0, 0, 0); R.hold = null;
       return { him: [r2(x), r2(z)], her: [r2(L.pos.x), r2(L.pos.z)], on: R.onDune() }; },
+    // (BP_SHOTS) him d u out from the scar along its normal's level part, facing it, pitched down a little
+    scarView(d) { const H = L.harpoon; if (!H || !H.scar) return { err: 'no scar' }; L.grp.updateMatrixWorld(true); const v = new THREE.Vector3().setFromMatrixPosition(H.scar.matrixWorld);
+      let nx = H.normal.x, nz = H.normal.z; const l = Math.hypot(nx, nz) || 1; nx /= l; nz /= l; const x = v.x + nx * d, z = v.z + nz * d;
+      window.__bench.place(x, z, Math.atan2(v.x - x, v.z - z), 0); P.pitch = -0.2; P.pos.y = T.shutFloorY(x, z, 0) + 1.35; P.vel.set(0, 0, 0); R.hold = null;
+      return { scar: [r2(v.x), r2(v.y), r2(v.z)], him: [r2(x), r2(z)] }; },
     // the boundary of the probe's own test along the sand side's bearing from the strip's centre, at the ground (scanned in from 40 u)
     edge() { const MD = L.mound, cx = MD ? MD.bx : L.pos.x, cz = MD ? MD.bz : L.pos.z, ux = L.sand.x, uz = L.sand.z;
       for (let d = 40; d > 0; d -= 0.25) { const x = cx + ux * d, z = cz + uz * d, g = Math.max(T.terrainH(x, z, 0), T.extraFloorAt(x, z, 0)); if (onAt(x, g + 1.35, z)) return { d, cx, cz, ux, uz }; }
@@ -1085,6 +1094,13 @@ try {
   // (Task 12) THE DIG-IN CHAIN (header): the pull at the anchor, her stand, him 35 u off, the calm, the point, the walk home, her settle,
   // him re-placed; sess.winF = the window's first row
   const dig = (n, stop) => c.ev(`window.__bpDig.step(${n}, ${stop ? JSON.stringify(stop) : 'null'})`);
+  // (BP_SHOTS) a still: n RENDERED frames counted on the plugged clock (the post chain settles), then a frozen capture (its 25 frames at dt 1e-4)
+  const shot = async (name, n = 90) => {
+    await c.ev(`(window.__bench.step(${n}, null, { render: true }), 1)`);
+    const url = await c.ev(`(async () => window.__bench.png(await window.__bench.capture({}), 1))()`);
+    const dir = join(homedir(), 'sc/.abyssa-wt/shots/buried'), file = join(dir, `${SHOTS}-${name}.png`);
+    mkdirSync(dir, { recursive: true }); writeFileSync(file, Buffer.from(url.split(',')[1], 'base64'));
+    console.log(`still ${file} (bury ${await c.ev('window.lev.bury')})`); };
   const digChain = async sess => {
     await alt(c, 6);
     const ins = await c.ev(DIG_INSTALL); if (!ins || ins.err) throw new Error('install: ' + (ins && ins.err));
@@ -1116,10 +1132,20 @@ try {
         await digChain(sess);
         if (run === 'clear') {
           let st = null;
+          if (SHOTS) {   // (BP_SHOTS) mid dig-in: him 25 u off on her sand side (off her ground), stepped to bury 0.42
+            await c.ev(`(window.weather.set(0.5, 0), 1)`); sess.midShot = await c.ev(`window.__bpDig.place35(25)`);
+            for (let k = 0; k < 4; k++) { st = await dig(600, 'b04'); if (st.hit) break; }
+            await shot('mid');
+          }
           for (let k = 0; k < 8; k++) { st = await dig(300, 'dug'); if (st.hit) break; }
           await dig(120);
           sess.endState = await c.ev(`window.__bpDig.state()`);
           sess.disg = sess.endState.dugIn ? await c.ev(DISGUISE) : { err: 'not dug in' };
+          if (SHOTS && sess.endState.dugIn) {
+            sess.scarShot = await c.ev(`window.__bpDig.scarView(7)`); await shot('scar');
+            await c.ev(`(window.weather.set(0, 0), 1)`); sess.nightShot = await c.ev(BREATH_PLACE(8)); await shot('night', 150);
+            await c.ev(`(window.weather.set(0.5, 0), 1)`);
+          }
           if (sess.endState.dugIn) {
             const pl = await c.ev(BREATH_PLACE(6)); sess.breathPlace = pl;
             if (pl && !pl.err) { await c.ev(`(window.__bpS = [], 1)`); for (let f = 0; f < 2400; f += 300) await c.ev(BREATH_BOOK(300, 6)); sess.breath = await c.ev(`window.__bpS`); }

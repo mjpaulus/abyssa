@@ -800,7 +800,7 @@ function digStep(L) {
     L.bury = 0; poseAll(L, 0, null);
   } else {
     L.body.matrixWorld.copy(J.mw1);
-    for (const ch of L.body.children) ch.updateMatrixWorld(true);
+    for (let q = 0, K = L.body.children; q < K.length; q++) K[q].updateMatrixWorld(true);
     if (J.ph === 2) { if (jobSlice(J.gen, BURY.job)) { J.ph = 3; J.gen = null; } }
     else if (J.ph === 3) { if (!J.gen) J.gen = prepGrowthJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 4; J.gen = null; } }
     else { slabsBed(L); L.digJob = null; }
