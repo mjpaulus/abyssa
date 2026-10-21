@@ -117,20 +117,25 @@
 //   PC_OUT=<file>     the JSON; PC_TAG=<tag> (default port<port>)
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error(`pointcam-probe: set DRV_PORT to a port of its own, an integer in 1024-65535 (not 8777 / 8790 / 9419; got ${JSON.stringify(process.env.DRV_PORT)})`); process.exit(2); }
-const MODES = ['point', 'framing', 'mouse', 'off'];
+const MODES = ['point', 'framing', 'mouse', 'off', 'walk', 'lastward'];
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/pointcam-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 const REDS = { point: { nopoint: { set: { point: 0 }, bars: ['hold'] }, fastturn: { pt: { turn: 1.0 }, bars: ['turnRate'] },
   noface: { pt: { face: -1, faceMax: 4 }, bars: ['turn'], at: 'back' } } };
 const RED = process.env.PC_RED || '';
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`PC_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no PC_RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
-const AT = MODE === 'point' ? process.env.PC_AT || 'back' : 'framing';
+const AT = MODE === 'point' ? process.env.PC_AT || 'back' : MODE === 'lastward' ? 'lastward' : 'framing';
 if (MODE === 'point' && !['back', 'ahead'].includes(AT)) { console.error(`PC_AT: back | ahead (got ${JSON.stringify(AT)})`); process.exit(2); }
 if (RED && REDS[MODE][RED].at && REDS[MODE][RED].at !== AT) { console.error(`PC_RED ${RED} runs at PC_AT=${REDS[MODE][RED].at} only`); process.exit(2); }
 const ON = process.env.PC_ON == null || process.env.PC_ON === '' ? null : +process.env.PC_ON;
 if (ON != null && ON !== 0 && ON !== 1) { console.error('PC_ON: 0 | 1'); process.exit(2); }
 if (ON != null && !['point', 'framing'].includes(MODE)) { console.error('PC_ON: point / framing only (mouse and off set the knob themselves)'); process.exit(2); }
 const ONRED = MODE === 'framing' && ON === 0;
+// PC_KNOBS='{"helmNdc":0.3}': merged into __pointcam.knobs before the calm (a stress: framing / walk). With helmNdc under the grounded
+// bonnet's own |NDC| (~0.3-0.5 on the framing placement) the review's I2 cliff (g -> 0 when the grounded lens already has him past the
+// bound) fires: amtStep must hold on the continuous guard
+const KNOBS = process.env.PC_KNOBS ? JSON.parse(process.env.PC_KNOBS) : null;
+if (KNOBS && !['framing', 'walk'].includes(MODE)) { console.error('PC_KNOBS: framing / walk only'); process.exit(2); }
 const SHOTS = process.env.PC_SHOTS || '';
 if (SHOTS && !/^[\w.-]+$/.test(SHOTS)) { console.error(`PC_SHOTS: a plain file prefix (got ${JSON.stringify(SHOTS)})`); process.exit(2); }
 if (SHOTS && !['point', 'framing'].includes(MODE)) { console.error('PC_SHOTS: point / framing only'); process.exit(2); }
@@ -206,7 +211,7 @@ const INSTALL = `(async () => {
       const PC = window.__pointcam, st = PC ? PC.state() : null, q = camera.quaternion, qp = st ? st.qPre : q;
       const eq = q.x === qp.x && q.y === qp.y && q.z === qp.z && q.w === qp.w;
       const vPre = view(qp, Pt), vPost = view(q, Pt), vPalm = view(q, pa);
-      hbox.setFromObject(DV.diver.helmGroup, true); hbox.getCenter(hc); const vBon = view(q, hc);   // his bonnet (its own vertices), drawn
+      hbox.setFromObject(DV.diver.helmGroup, true); hbox.getCenter(hc); const vBon = view(q, hc), vBonPre = view(qp, hc);   // his bonnet (its own vertices), drawn
       const a = w.copy(pa).sub(cp).normalize().clone(), b = u.copy(Pt).sub(cp).normalize();
       const sep = Math.acos(Math.max(-1, Math.min(1, a.dot(b)))) * D, hf = 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * camera.aspect) * D;
       R.S.push({ ph: L.pointPh || 0, k: r3(L.pointK || 0), yaw: r3(L.yaw), dyaw: r6(dyaw), brg: r3(brg), err: r2(err * D), ang: r2(ang),
@@ -216,11 +221,14 @@ const INSTALL = `(async () => {
         hd: r2(Math.hypot(window.player.pos.x - L.pos.x, window.player.pos.z - L.pos.z)), lift: r3(c.liftNow || 0), elbow: r3(c.elbow || 0),
         lensBlk: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0, zone: window.zone,
         cam: { k: st ? st.k : null, tgt: st ? st.tgt : null, yaw: st ? st.yawDeg : null, pitch: st ? st.pitchDeg : null, off: st ? st.off : null, why: st ? st.why : null,
-          net: st ? st.lookNetDeg : null, path: st ? st.lookPathDeg : null },
+          net: st ? st.lookNetDeg : null, path: st ? st.lookPathDeg : null, rec: st ? st.recentDeg : null, amt: st && st.amt != null ? st.amt : null, aim: st ? st.aim || null : null,
+          ay: st ? (st.aimYawDeg != null ? st.aimYawDeg : st.amt >= 0.05 ? +(st.yawDeg / st.amt).toFixed(3) : null) : null,
+          ap: st ? (st.aimPitchDeg != null ? st.aimPitchDeg : st.amt >= 0.05 ? +(st.pitchDeg / st.amt).toFixed(3) : null) : null },
+        under: window.__crecam ? window.__crecam.state().under : null, camD: r2(cp.distanceTo(window.player.pos)), him: [r2(window.player.pos.x), r2(window.player.pos.y), r2(window.player.pos.z)],
         thPre: r3(vPre.ang), th: r3(vPost.ang), ndcPre: [r3(vPre.x), r3(vPre.y), vPre.front ? 1 : 0], ndc: [r3(vPost.x), r3(vPost.y), vPost.front ? 1 : 0],
         pIn: inF(vPost) ? 1 : 0, palmNdc: [r3(vPalm.x), r3(vPalm.y), vPalm.front ? 1 : 0], palmIn: inF(vPalm) ? 1 : 0, sep: r2(sep), fits: sep <= ${FRAME} * hf ? 1 : 0,
         q: [r6(q.x), r6(q.y), r6(q.z), r6(q.w)], qPre: [r6(qp.x), r6(qp.y), r6(qp.z), r6(qp.w)], eq: eq ? 1 : 0, pyaw: r6(window.player.yaw), inp: R.inp, cap: R.cap ? 1 : 0,
-        bon: [r3(vBon.x), r3(vBon.y), vBon.front ? 1 : 0], bonIn: vBon.front && Math.abs(vBon.x) <= ${BON_IN} && Math.abs(vBon.y) <= ${BON_IN} ? 1 : 0, amt: st && st.amt != null ? st.amt : null });
+        bon: [r3(vBon.x), r3(vBon.y), vBon.front ? 1 : 0], bonIn: vBon.front && Math.abs(vBon.x) <= ${BON_IN} && Math.abs(vBon.y) <= ${BON_IN} ? 1 : 0, bonPre: [r3(vBonPre.x), r3(vBonPre.y), vBonPre.front ? 1 : 0], amt: st && st.amt != null ? st.amt : null });
       R.inp = 0; R.cap = 0;
     },
     step(n, o) { window.__bench.step(n, () => R.row(), o); return R.S.length; },
@@ -252,6 +260,23 @@ const INSTALL = `(async () => {
       return { alpha: r2(alpha), side: s, him: [r2(p.x), r2(p.z)], her: [r2(L.pos.x), r2(L.pos.z)], dHim: p.d, fd: r2(p.fd), apron: S.APRON };
     },
     theta() { return r3(view(camera.quaternion, Pt).ang); },
+    // the touch: up to 4 u under the last ward (his pack's hop), so her ward loop lights it on the next update (wardTouch, reach 5)
+    lift() { const p = R.lastG.grp.position, fy = T.shutFloorY(p.x, p.z, 0); window.player.pos.set(p.x, Math.max(fy + 1.35, p.y - 4), p.z); window.player.vel.set(0, 0, 0); return { calmed: !!L.calmed, under: window.__crecam ? window.__crecam.state().under : null }; },
+    // (lastward) every ward lit but the one nearest the point 0.6 R out from her centre toward L.sand (his side); he is put under it,
+    // 4 u below it (the pack's hop: the touch needs him within reach 5), never under her floor + 1.35, facing her centre
+    lastWard() {
+      const ax = L.pos.x + L.sand.x * 0.6 * L.R, az = L.pos.z + L.sand.z * 0.6 * L.R;
+      let best = null, bd = Infinity;
+      for (const g of L.sigils) { const p = g.grp.position, d = Math.hypot(p.x - ax, p.z - az); if (d < bd) { bd = d; best = g; } }
+      if (!best) return { err: 'no wards' };
+      for (const g of L.sigils) if (g !== best && !g.lit) { g.lit = true; g.rev = 1; }
+      const p = best.grp.position, fy = T.shutFloorY(p.x, p.z, 0);
+      // his yaw is KEPT (a teleport's yaw reads as a look sweep in the cue's leak), and he waits 6.5 u under it, out of its reach (5)
+      window.__bench.place(p.x, p.z, window.player.yaw, 0);
+      window.player.pos.set(p.x, Math.max(fy + 1.35, p.y - 6.5), p.z); window.player.vel.set(0, 0, 0);
+      R.lastG = best;
+      return { ward: [r2(p.x), r2(p.y), r2(p.z)], wardOverFloor: r2(p.y - fy), him: [r2(p.x), r2(window.player.pos.y), r2(p.z)], fromHer: r2(Math.hypot(p.x - L.pos.x, p.z - L.pos.z)), R: L.R, lit: L.sigils.filter(g => g.lit).length, of: L.sigils.length };
+    },
     // (mouse) the look input: emulated lock, and the pattern's moves queued one a frame from frame index patAt (the probe dispatches them)
     lock() {
       const cv = renderer.domElement;
@@ -268,7 +293,7 @@ try { const r = await fetch(`http://127.0.0.1:${P}/json/version`, { signal: Abor
   console.error(`the debug port ${P} already answers /json/version (HTTP ${r.status}): not starting, nothing touched`); process.exit(2); }
 catch (e) { if (!(e && e.cause && e.cause.code === 'ECONNREFUSED')) { console.error(`the debug port ${P} is not free (${e && e.name}: ${e && e.cause && e.cause.code || e && e.message}): not starting, nothing touched`); process.exit(2); } }
 const TAG = process.env.PC_TAG || 'port' + PORT;
-const OUT = process.env.PC_OUT || join(homedir(), 'sc/.abyssa-wt/reviews/buried', `pointcam-${MODE}-${AT}${ONRED ? '-on0' : ''}${RED ? '-' + RED : ''}-${TAG}.json`);
+const OUT = process.env.PC_OUT || join(homedir(), 'sc/.abyssa-wt/reviews/buried', `pointcam-${MODE}-${AT}${ONRED ? '-on0' : ''}${RED ? '-' + RED : ''}${KNOBS ? '-knobs' : ''}-${TAG}.json`);
 const SHOT_DIR = join(homedir(), 'sc/.abyssa-wt/shots/buried');
 const record = { mode: MODE, at: AT, port: +PORT, tag: TAG, red: RED || (ONRED ? 'PC_ON=0' : null), on: ON, noplug: process.env.PC_NOPLUG === '1', shots: SHOTS || null, sessions: [] };
 const finish = (code, why) => {
@@ -348,6 +373,16 @@ async function session(o) {
       pl = await c.ev(PLACE);
       if (!pl || pl.err) throw new Error('place: ' + (pl && pl.err));
       fc = await c.ev(`window.__pcR.face(480)`);
+    } else if (MODE === 'lastward') {
+      pl = await c.ev(`window.__pcR.lastWard()`);
+      if (!pl || pl.err) throw new Error('lastward: ' + (pl && pl.err));
+      await c.ev(`window.__bench.step(90)`);   // 1.5 s under her, out of the ward's reach, before the touch: CRECAM's lens settles as when he swims in
+      // (placed AT 4 u under the ward his own touch calmed her on the first frame, with the teleport's yaw in the cue's leak: why 'mouse')
+      ses.lift = await c.ev(`window.__pcR.lift()`);   // (still dark: the touch comes on the first booked frame)
+      if (ses.lift.calmed) throw new Error('she was calmed before the touch (he reached the ward from 6.5 u)');
+      ses.underAtCalm = ses.lift.under;
+      ses.camAtCalm = await c.ev(`window.__pointcam ? (({ qPre, ...o }) => o)(window.__pointcam.state()) : null`);
+      fc = { n: 0, faced: true };
     } else {
       const fdA = await c.ev(`window.__pcR.spot(55, 1).fd`), fdB = await c.ev(`window.__pcR.spot(55, -1).fd`);
       const side = fdA >= fdB ? 1 : -1;
@@ -371,6 +406,7 @@ async function session(o) {
     const pre = await c.ev(`window.__pcR.state()`);
     console.log(`stood ${(stoodF / 60).toFixed(2)} s after the wake; placed ${JSON.stringify(pl)}; faced him in ${fc.n} frames: ${JSON.stringify(pre)}`);
     if (o.on != null) ses.knobs = await c.ev(`(() => { const C = window.__pointcam; if (!C) return null; C.knobs.on = ${o.on}; return Object.assign({}, C.knobs); })()`);
+    if (KNOBS) ses.knobs = await c.ev(`(() => { const C = window.__pointcam; if (!C) return null; Object.assign(C.knobs, ${JSON.stringify(KNOBS)}); return Object.assign({}, C.knobs); })()`);
     else ses.knobs = await c.ev(`window.__pointcam ? Object.assign({}, window.__pointcam.knobs) : null`);
     // the calm, and 14 s
     const calmBy = await c.ev(`window.__pcR.calm()`);
@@ -390,6 +426,14 @@ async function session(o) {
         else await c.ev(`(window.player.yaw -= ${px} * ${PX}, window.__pcR.inp = ${px}, 1)`);
         await c.ev(`window.__pcR.step(1)`); at++;
       }
+    }
+    if (o.walk) {
+      let rF = -1;
+      while (rF < 0 && at < N - 200) { await c.ev(`window.__pcR.step(1)`); at++; rF = await c.ev(`window.__pcR.S.findIndex(r => r.ph >= 2)`); }
+      if (rF < 0) throw new Error('the raise never came (no pointPh 2 by 10.7 s)');
+      await c.ev(`window.__pcR.step(${rF + 30 - at})`); at = rF + 30;
+      ses.raiseF = rF; ses.walkF = [at, at + 120];
+      await c.key('KeyW', true); await c.ev(`window.__pcR.step(120)`); at += 120; await c.key('KeyW', false);
     }
     for (const [name, s] of SHOTS ? SHOT_AT : []) {
       const f = Math.round(s * 60);
@@ -467,18 +511,45 @@ async function consoleErrors() {
 //            every engaged frame (k > 0): (b)
 //   aheadLens (PC_AT=ahead only) no engaged frame with BOTH the palm and his bonnet out of frame (NDC 0.9), and the palm in frame on every
 //            frame with k >= 0.5 (past the ease): (c), the cue frames her claw within the caps or stays off; never pinned on her shell
+//   (fix round 1, 2026-10-21, the review's I1-I3, registered BEFORE the build changes for them)
+//   bonnet   RE-REGISTERED (I2: the guard bounds each axis by max(helmNdc, the grounded lens's own |NDC|)): on every engaged frame his bonnet
+//            in front and |x|, |y| <= max(0.9, the grounded lens's |x|, |y| (bonPre, from qPre) + 0.005): the cue never puts him further
+//            out than 0.9, or than the grounded lens already had him
+//   aimStep  (I1) the cue's FULL-TURN aim (state().aimYawDeg / aimPitchDeg; a build without them: yawDeg / amt and pitchDeg / amt where
+//            amt >= 0.05) moves < 1 deg per frame, max of yaw and pitch, between consecutive engaged frames (k > 0 on both). VOID when no
+//            pair is booked at framing / back / walk / mouse; at ahead and lastward the cue may be off throughout
+//   amtStep  (I2) the drawn share of the turn (state().amt) moves <= 0.06 per frame between consecutive frames with k > 0 on either,
+//            except the frame a real look drops it (why 'mouse', "at once"); 0.06 = the wOut spring's fastest fall (wOut / e = 3.3 /s)
+//   gate     (I3, lastward only) on every frame of pointPh 2-3 with creUnder >= 0.5: the cue's target is 0, and amt <= 0.1 where
+//            creUnder >= 0.5 held over the 36 frames before (CLAWCAM's gate, 1 - smoothstep(0.1, 0.5, creUnder)). VOID when he is never
+//            under her (>= 0.5) through pointPh 2-3
 function lensBars(S, place) {
   const raiseF = S.findIndex(r => r.ph >= 2), known = S.length && S[0].cam.k != null;
   const early = raiseF >= 0 ? S.slice(0, raiseF).filter(r => r.cam.k > 0).length : null;
   const f1 = raiseF >= 0 ? S.findIndex((r, i) => i >= raiseF && r.cam.k > 0) : -1;
-  const eng = S.map((r, i) => r.cam.k > 0 ? i : -1).filter(i => i >= 0), bonOut = eng.filter(i => !S[i].bonIn);
+  const lim = (r, a) => Math.max(0.9, r.bonPre && r.bonPre[2] === 1 ? Math.abs(r.bonPre[a]) + 0.005 : 0.9);
+  const bonOk = r => r.bon[2] === 1 && Math.abs(r.bon[0]) <= lim(r, 0) && Math.abs(r.bon[1]) <= lim(r, 1);
+  const eng = S.map((r, i) => r.cam.k > 0 ? i : -1).filter(i => i >= 0), bonOut = eng.filter(i => !bonOk(S[i]));
+  const pairs = eng.filter(i => i > 0 && S[i - 1].cam.k > 0 && S[i].cam.ay != null && S[i - 1].cam.ay != null);
+  const stepOf = i => Math.max(Math.abs(S[i].cam.ay - S[i - 1].cam.ay), Math.abs(S[i].cam.ap - S[i - 1].cam.ap));
+  const aimMax = pairs.length ? +Math.max(...pairs.map(stepOf)).toFixed(3) : null, aimAt = pairs.length ? pairs.find(i => stepOf(i) === Math.max(...pairs.map(stepOf))) : -1;
+  const amtP = S.map((r, i) => i > 0 && (r.cam.k > 0 || S[i - 1].cam.k > 0) && r.cam.why !== 'mouse' && r.cam.amt != null && S[i - 1].cam.amt != null ? i : -1).filter(i => i >= 0);
+  const amtOf = i => Math.abs(S[i].cam.amt - S[i - 1].cam.amt), amtMax = amtP.length ? +Math.max(...amtP.map(amtOf)).toFixed(4) : null;
+  const amtAt = amtP.length ? amtP.find(i => amtOf(i) === Math.max(...amtP.map(amtOf))) : -1;
   const pin9 = r => r.palmNdc[2] === 1 && Math.abs(r.palmNdc[0]) <= 0.9 && Math.abs(r.palmNdc[1]) <= 0.9;
   const both = eng.filter(i => !pin9(S[i]) && !S[i].bonIn), past = eng.filter(i => S[i].cam.k >= 0.5), pastOut = past.filter(i => !pin9(S[i]));
   const bonMax = eng.length ? +Math.max(...eng.map(i => Math.max(Math.abs(S[i].bon[0]), Math.abs(S[i].bon[1])))).toFixed(3) : null;
   const ck = [
     { name: 'noEarly', val: { raiseS: raiseF >= 0 ? +(raiseF / 60).toFixed(3) : null, early }, bar: 'k = 0 on every frame before the raise (pointPh 2)', ok: early === 0, vacuous: raiseF < 0 || !known, judged: true },
-    { name: 'easeIn', val: { dF: f1 >= 0 ? f1 - raiseF : null }, bar: 'the first k > 0 within 12 frames (0.2 s) of the raise', ok: f1 >= 0 && f1 - raiseF <= 12, vacuous: raiseF < 0 || !known, judged: place !== 'ahead' },
-    { name: 'bonnet', val: { engaged: eng.length, out: bonOut.length, ndcMax: bonMax, firstOutS: bonOut.length ? +(bonOut[0] / 60).toFixed(3) : null }, bar: 'his bonnet in frame (NDC <= 0.9, in front) on every engaged frame', ok: bonOut.length === 0, vacuous: !known || (!eng.length && place !== 'ahead'), judged: true }];
+    { name: 'easeIn', val: { dF: f1 >= 0 ? f1 - raiseF : null }, bar: 'the first k > 0 within 12 frames (0.2 s) of the raise', ok: f1 >= 0 && f1 - raiseF <= 12, vacuous: raiseF < 0 || !known, judged: !['ahead', 'lastward'].includes(place) },
+    { name: 'bonnet', val: { engaged: eng.length, out: bonOut.length, ndcMax: bonMax, firstOutS: bonOut.length ? +(bonOut[0] / 60).toFixed(3) : null }, bar: 'his bonnet in front and |NDC| <= max(0.9, the grounded lens\'s + 0.005) on every engaged frame', ok: bonOut.length === 0, vacuous: !known || (!eng.length && !['ahead', 'lastward'].includes(place)), judged: true },
+    { name: 'aimStep', val: { pairs: pairs.length, maxDeg: aimMax, atF: aimAt, aim: aimAt >= 0 ? [S[aimAt - 1].cam.aim, S[aimAt].cam.aim] : null }, bar: 'the full-turn aim moves < 1 deg per frame between engaged frames', ok: aimMax == null || aimMax < 1, vacuous: !known || (!pairs.length && !['ahead', 'lastward'].includes(place)), judged: true },
+    { name: 'amtStep', val: { pairs: amtP.length, max: amtMax, atF: amtAt }, bar: 'the drawn share moves <= 0.06 per frame (but the look\'s drop)', ok: amtMax == null || amtMax <= 0.06, vacuous: !known || S[0].cam.amt == null, judged: true }];
+  if (place === 'lastward') {
+    const win = S.map((r, i) => r.ph >= 2 && r.ph <= 3 && r.under != null && r.under >= 0.5 ? i : -1).filter(i => i >= 0);
+    const tgtBad = win.filter(i => S[i].cam.tgt > 0), held = win.filter(i => i >= 36 && S.slice(i - 36, i).every(q => q.under >= 0.5)), amtBad = held.filter(i => S[i].cam.amt > 0.1);
+    ck.push({ name: 'gate', val: { underWin: win.length, tgtBad: tgtBad.length, held: held.length, amtBad: amtBad.length }, bar: 'creUnder >= 0.5 in pointPh 2-3: tgt 0, and amt <= 0.1 where it held 36 frames', ok: tgtBad.length === 0 && amtBad.length === 0, vacuous: !win.length || !known, judged: true });
+  }
   if (place === 'ahead') ck.push({ name: 'aheadLens', val: { engaged: eng.length, bothOut: both.length, pastK05: past.length, palmOutPast: pastOut.length }, bar: 'no engaged frame with palm and bonnet both out; the palm in frame on every k >= 0.5 frame (or the cue off)', ok: both.length === 0 && pastOut.length === 0, vacuous: !known, judged: true });
   return ck;
 }
@@ -545,8 +616,9 @@ if (MODE === 'framing') {
   record.premise = { t0, thetaPre: thPre0, ok: thPre0 >= TH_PREM };
   if (!(thPre0 >= TH_PREM)) { console.error(`UNMEASURED: thetaPre ${thPre0} deg < ${TH_PREM}: the closing bar would be vacuous`); finish(2, 'premise'); }
   // (re-registered 2026-10-21, ruling (a)) the hold runs from raiseF + 96 (1.6 s after the raise, where k must be >= 0.9) to the last frame
-  // before pointPh 4; kIn counts from raiseF. (b) re-registers CLOSE: with his bonnet held at NDC <= 0.9 the turn is bounded at ~42-44 deg
-  // (atan(0.9 x tan(hfov / 2))), so 0.8 x min(thetaPre, 70) = 49-56 deg at the placement's 61-69 is unreachable with Sal in frame; the bar
+  // before pointPh 4; kIn counts from raiseF. (b) re-registers CLOSE: with his bonnet held near the frame's edge the turn is bounded at ~46 deg
+  // (the guard's 0.82; ~48.5 at the bar's 0.9, atan(0.9 x tan(hfov / 2)) at aspect ~1.8; the review's correction of "42-44"), so 0.8 x
+  // min(thetaPre, 70) = 49-56 deg at the placement's 61-69 is unreachable with Sal in frame; the bar
   // is now 0.5 x min(thetaPre, 70) (with inFrame: the opening in frame on every hold frame with thetaPre <= 70); the 0.8 count is booked
   const raiseF = S.findIndex(r => r.ph >= 2);
   const hold = []; if (raiseF >= 0) for (let i = raiseF + 96; i <= lastHold; i++) if (S[i] && S[i].ph >= 2 && S[i].ph <= 3) hold.push(i);
@@ -573,6 +645,7 @@ if (MODE === 'framing') {
     { name: 'kOut', val: { kOutS: record.book.kOutS, ph4S: ph4F >= 0 ? +((ph4F - t0) / 60).toFixed(3) : null }, bar: 'k <= 0.1 by 0.6 s after pointPh reaches 4', ok: kOutF >= 0 && kOutF - ph4F <= 36, vacuous: ph4F < 0 || S[0].cam.k == null, judged: true },
     { name: 'palm', val: { frac: record.book.fitFrac, n: fitIn.length, of: fit.length, nofit: nofit.length }, bar: 'the palm in frame on >= 50% of the hold frames where palm and P fit (<= 0.8 x hfov)', ok: fit.length > 0 && fitIn.length / fit.length >= 0.5, vacuous: !fit.length, judged: true },
     ...lensBars(S, 'framing')];
+  if (KNOBS) for (const k of ck) k.judged = ['bonnet', 'aimStep', 'amtStep'].includes(k.name);   // (the stress judges the guard's bars only)
   const { failed, vac } = verdict(ck, ONRED ? 'PC_ON=0' : '', ['close']);
   conclude(failed, vac);
 }
@@ -601,6 +674,35 @@ if (MODE === 'mouse') {
       ck.push({ name, val: { ...look, frames: span.length, bad: bad.length, kMin: span.length ? Math.min(...span.map(q => q.cam.k)) : null }, bar: (name === 'four' ? 'a 4 deg net turn' : 'a 10 deg path netting 2 deg') + ': why on, k > 0 from the input to the last frame of pointPh 1-3', ok: span.length > 0 && bad.length === 0, vacuous: !pre || !span.length, judged: true });
     }
   }
+  for (const [name, ses] of runs) for (const k of lensBars(ses.S, 'mouse')) if (k.name === 'aimStep' || k.name === 'amtStep') ck.push({ ...k, name: name + '.' + k.name });
+  const { failed, vac } = verdict(ck, '', null);
+  conclude(failed, vac);
+}
+
+// ============================================ walk / lastward (fix round 1) ============================================
+//   walk      the framing placement and calm; W held (a real key over CDP, player.js's own listener) for 2 s from 0.5 s after the raise:
+//             he walks toward her through the hold. Premise: he moved >= 2 u (else VOID). Bars: lensBars (bonnet, aimStep, amtStep, noEarly,
+//             easeIn): the gait's bob must not read as a nod (I2)
+//   lastward  where the calm comes in play: every ward lit but one, he is put under it (4 u below it, the pack's hop) with her standing
+//             over him, 0.75 s, then the touch (the calm verb). Bars: lensBars incl. gate (I3); creUnder, the lens's distance to him, its
+//             body-blocked frames and his drift are booked
+if (MODE === 'walk' || MODE === 'lastward') {
+  const ses = await session({ on: 1, walk: MODE === 'walk' });
+  await consoleErrors(); if (c) c.close();
+  sane(ses);
+  const S = ses.S, ck = lensBars(S, MODE);
+  const under = S.map(r => r.under), raiseF = S.findIndex(r => r.ph >= 2);
+  record.book = { placed: ses.place, underAtCalm: ses.underAtCalm ?? null, raiseF, walkF: ses.walkF || null,
+    underAtRaise: raiseF >= 0 ? S[raiseF].under : null, underMinMax: [Math.min(...under), Math.max(...under)], camD: [Math.min(...S.map(r => r.camD)), Math.max(...S.map(r => r.camD))],
+    lensBlk: S.filter(r => r.lensBlk).length, whys: [...new Set(S.map(r => r.cam.why))], kMax: Math.max(...S.map(r => r.cam.k || 0)),
+    himFirst: S[0].him, himLast: S[S.length - 1].him, hdRaise: raiseF >= 0 ? S[raiseF].hd : null };
+  if (MODE === 'walk') {
+    const [a, b] = ses.walkF, moved = Math.hypot(S[b].him[0] - S[a - 1].him[0], S[b].him[2] - S[a - 1].him[2]);
+    record.book.moved = +moved.toFixed(2);
+    ck.unshift({ name: 'walked', val: { moved: record.book.moved }, bar: 'premise: he walked >= 2 u', ok: moved >= 2, vacuous: !(moved >= 2), judged: true });
+  }
+  console.log(`${MODE.toUpperCase()} ${JSON.stringify(record.book)}`);
+  if (KNOBS) for (const k of ck) k.judged = ['walked', 'bonnet', 'aimStep', 'amtStep'].includes(k.name);
   const { failed, vac } = verdict(ck, '', null);
   conclude(failed, vac);
 }
