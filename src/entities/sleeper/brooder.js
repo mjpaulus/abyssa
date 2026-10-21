@@ -2060,7 +2060,7 @@ export function updateBrooder(L, dt, t, player) {
   // at bury 0.5 with half a dune drawn
   if (L.mound) {
     breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY);
-    if (L.buried && L.cracked && !L.hasStood && !L.dormant) growReveal(L, L.crackT); else buryGrowth(L, L.bury > 0.5);
+    if (L.buried && L.cracked && !L.hasStood && !L.dormant) growReveal(L, dt); else buryGrowth(L, L.bury > 0.5);
   }
   if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there)
   L.t += dt;

@@ -1143,14 +1143,17 @@ export function prepGrowth(L, MD) {
 // moment of the rise when showing it all at once is not a pop (the shipped toggle at bury 0.5, ~2 s: every one of them out, half a dune
 // drawn). From the crack it is UNCOVERED instead, outward from the strip over GROW.revealT s as the sand sloughs off her (the slabs slide the
 // same way): each reef triangle drawn once the front passes its centroid (the ordered index's draw range), each frond grown from its root over
-// GROW.revRamp u of the front, a puff of silt every GROW.revPuff triangles where the front is (the crust coming off what it hid). t: s since
-// the crack (L.crackT). Writes only while the front moves; then buryGrowth(L, false) puts the full growth back (growthBuried 0)
-export function growReveal(L, t) {
+// GROW.revRamp u of the front, a puff of silt every GROW.revPuff triangles where the front is (the crust coming off what it hid). Its own
+// clock from the crack (L.revT, dt a frame). Measured on 31a3b94's growth: the front runs 7.3 u (the farthest frond) over revealT 2.5 s,
+// ~2.9 u/s, about the slabs' slide; the reef's 1346 hidden triangles lie within ~2 u of the band and are out in ~0.8 s. Writes only while
+// the front moves; then buryGrowth(L, false) puts the full growth back (growthBuried 0)
+export function growReveal(L, dt) {
   if (L.growthBuried === 0) return;
   const reef = L.parts.reef, weed = L.parts.weed, RI = L.reefIdx && reef && RI_ok(L) ? L.reefIdx : null, top = L.revMax || 0;
-  const w = Math.min(1, t / GROW.revealT) * top;
+  if (L.growthBuried !== 2) { L.growthBuried = 2; L.revN = 0; L.revT = 0; if (RI) reef.geometry.setIndex(RI.ordered); }
+  L.revT += dt;
+  const w = Math.min(1, L.revT / GROW.revealT) * top;
   if (w >= top) { buryGrowth(L, false); return; }
-  if (L.growthBuried !== 2) { L.growthBuried = 2; L.revN = 0; if (RI) reef.geometry.setIndex(RI.ordered); }
   if (RI) {
     let n = L.revN;
     reef.updateMatrixWorld();
@@ -1184,7 +1187,7 @@ const RI_ok = L => L.reefIdx.geo === L.parts.reef.geometry && !!L.reefIdx.ordere
 //   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
 // (Task 7b, M6) revealT s: the growth outside the strip uncovered from the crack over this long (growReveal); revRamp u: a frond grows from
 // its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 1.5, revRamp: 1.5, revPuff: 40 };
+export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 40 };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 export function growRock(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
