@@ -1143,7 +1143,10 @@ export function makeBrood(L, idx, trailFrom) {
     {
       const dr = L.buried ? BURY.clutchSink * L.bury / L.R : 0, oy = dr ? -dr : 0;
       B.drop = dr;
-      for (const o of [B.core, B.beadsN, B.setae]) if (o && o.position.y !== oy) o.position.y = oy;   // (the beads and setae are built at seat, after the core)
+      // (no array or iterator: this runs every frame; the beads and setae are built at seat, after the core)
+      if (B.core.position.y !== oy) B.core.position.y = oy;
+      if (B.beadsN && B.beadsN.position.y !== oy) B.beadsN.position.y = oy;
+      if (B.setae && B.setae.position.y !== oy) B.setae.position.y = oy;
     }
     // calmed she keeps it clamped under her (it does not spill again where she settles)
     // (home on her bed, at the heading she was seated on, it spills again as she settles)

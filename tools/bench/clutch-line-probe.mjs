@@ -79,10 +79,14 @@ try {
   // the controls: the same stand, not buried
   const ctl = async (name, prep) => {
     await c.ev(prep); await c.ev(`window.__bench.step(90)`);
+    // the line must book DURING the measured leg: stand him 60 u off, forget it, and wait out any live message (a message up blocks the next; 12 s is past any dur)
+    await c.ev(`(() => { const L = window.lev, T = L.brood.takeAt; window.__bench.place(T.x + 45, T.z + 45, 0, 0); L.brood.found.clutch = false; window.__bench.step(2); return 1; })()`);
+    for (let k = 0; k < 8 && await c.ev(`!!(window.__msg().live || window.__msg().pend)`); k++) await c.ev(`window.__bench.step(120)`);
     const r = await c.ev(LEG('stand', 4, 12)); rec.legs[name] = r;
     if (!r || r.err) { vac.push(name + ': ' + (r && r.err)); return; }
     console.log(`${name} stand: ${JSON.stringify({ ...r, takeAt: undefined })}`);
     if (r.buried) vac.push(name + ': still buried');
+    if (r.found0) fail.push(`${name}: the line was already booked when the leg began (found0)`);
     if (!(r.found && r.clutchText)) fail.push(`${name}: the clutch line did not book (found ${r.found}, texts ${JSON.stringify(r.texts)}): the probe cannot see it`);
     if (!(r.fanRuns >= 1 || r.fanMoved)) fail.push(`${name}: the fan clock did not run (${r.fanT.join(' -> ')})`);
     if (r.drop !== 0 || r.massY.some(y => y !== 0)) fail.push(`${name}: the mass is not at its shipped transform (drop ${r.drop}, y ${JSON.stringify(r.massY)})`);
