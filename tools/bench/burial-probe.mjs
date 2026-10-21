@@ -389,7 +389,7 @@ if (RED && REDS[MODE][RED].runs) {
   RUNS = REDS[MODE][RED].runs;
 }
 const HUNT_S = process.env.BP_HUNT == null ? 6 : +process.env.BP_HUNT;
-// (Task 12) BP_SHOTS=<prefix>: digin's clear run takes stills (mid dig-in at bury ~0.42 with him 25 u off, the scar dug in from 7 u, night 8 u off
+// (Task 12) BP_SHOTS=<prefix>: digin's clear run takes stills (mid dig-in at bury ~0.42 with him 25 u off, the scar dug in from 3.5 u, night 8 u off
 // the strip's edge) into ~/sc/.abyssa-wt/shots/buried/<prefix>-{mid,scar,night}.png; its frames are rendered there, so its cost bar is not a reading
 const SHOTS = process.env.BP_SHOTS || '';
 if (SHOTS && (!/^[\w.-]+$/.test(SHOTS) || MODE !== 'digin')) { console.error('BP_SHOTS: a plain prefix, digin only'); process.exit(2); }
@@ -1142,7 +1142,7 @@ try {
           sess.endState = await c.ev(`window.__bpDig.state()`);
           sess.disg = sess.endState.dugIn ? await c.ev(DISGUISE) : { err: 'not dug in' };
           if (SHOTS && sess.endState.dugIn) {
-            sess.scarShot = await c.ev(`window.__bpDig.scarView(7)`); await shot('scar');
+            sess.scarShot = await c.ev(`window.__bpDig.scarView(3.5)`); await shot('scar');
             await c.ev(`(window.weather.set(0, 0), 1)`); sess.nightShot = await c.ev(BREATH_PLACE(8)); await shot('night', 150);
             await c.ev(`(window.weather.set(0.5, 0), 1)`);
           }
