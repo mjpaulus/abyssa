@@ -682,6 +682,15 @@ export function crestY(MD, x, z) {
 // carried up with her; on the sand it sinks (SLAB_SINK u/s); where the surface drops more than SLAB_LEDGE u under it in a frame (her rim, as
 // she rises out of the dune) it bursts into silt instead of hanging in the water.
 // State per piece (SS floats): x z vx vz yaw spin age tEnd alive lastG y puffs
+// WHY THESE (Task 7b fix round 1, M5; by eye in the dev stills t7b-dev-*, NOT measured beyond burial-probe rise (i) / (iShell); the arithmetic is the check):
+//   SLAB_G 6.0, SLAB_DRAG 1.2: terminal slide speed on a face of slope s is G s / (DRAG (1 + s^2)) = 5 s / (1 + s^2) u/s (1.2 s to get there):
+//     2.0 u/s at 27 deg, 2.5 at 45 deg (its peak), so the header's "1-2.5 u/s" and SLAB_VMAX 2.5 agree and the cap is only ever touched on a 45 deg face
+//   SLAB_LEDGE 0.25: the surface under a piece dropping more than 0.25 u in a frame (15 u/s at 60 fps, 6x the fastest slide's 0.042 u a frame) is a
+//     cliff, not a slope it rides: her rim as she rises out of the dune, so the piece bursts rather than hangs
+//   SLAB_SINK 0.45: on sand a piece goes down 0.45 u for each second past 0.8 s of age: ~1.0 u by SLAB_T, about its whole thickness (0.28-0.42 of a
+//     1.1-2.0 u width), so it is in the dune as it crumbles; never on her shell (the probe's (iShell) bars a piece in it by more than 0.3 u)
+//   SLAB_FOOT 0.15: the five reads' spread, a little over half the shell grid's ~0.25 u cell, so a lowest point finds the crevice a cell bridges (the
+//     game seats on the lowest of the five, the probe's slab() reads the highest of five +-0.05: the review's gMin -0.234 u inside her crest is that gap)
 const SLAB_FOOT = 0.15, FOOT_X = [SLAB_FOOT, -SLAB_FOOT, 0, 0], FOOT_Z = [0, 0, SLAB_FOOT, -SLAB_FOOT];
 const SLAB_BEND = 1.6, SLAB_T = 3.0, SS = 12, SLAB_SINK = 0.45, SLAB_LEDGE = 0.25, SLAB_VMAX = 2.5, SLAB_G = 6.0, SLAB_DRAG = 1.2;
 Object.assign(BURY, { slabs: 14, pourRate: 2.5 });
@@ -995,8 +1004,8 @@ if (uBury > 0.001) {
     float crT = 1.0 - uBury * uSandK.x;
     float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, uBury * 4.0) + uBury * uSandK.z * crUp;
     crSand = max(crSand, min(crCov, 0.92));
-    // (Task 7b) THE CRUST CRACKS: the sand on her breaks into plates along a network of iso-lines of two octaves of value noise in her
-    // OWN frame (vCrO: it rides her as she rises), the lines widening with uCrack; in a line the sand is gone and the gap is dark
+    // (Task 7b) THE CRUST CRACKS: the sand on her breaks into plates along the rock map's crevice channel (crPk.b, the shipped fissure
+    // network, sampled triplanar in her OWN frame: vCrO, it rides her as she rises), the lines widening with uCrack; in a line the sand is gone and the gap is dark
     float crGap = 0.0;
     if (uCrack > 0.001) {
       vec4 crPk = crTri(uCrustPack, vCrO, crBW, uCrackS);
@@ -1037,6 +1046,8 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
 // the crust's uniforms each frame (brooder.js updateBrooder): uniform writes only, never a program change
 export function crustTick(L) {
   const u = L.crustU;
+  // (M6) uCrack and uCrackO lag the body one frame: crustTick runs where updateBrooder calls it, before this frame's poseAll has moved her
+  // body (L.crackK is last frame's too), so the network trails her by a frame's rise (<= 8 u/s x 1/60 = 0.13 u, bar (d)); cosmetic
   u.uBury.value = L.bury; u.uCrack.value = L.crackK || 0;
   // (Task 7b) the crack's network rides her: sampled where her body was at the crack (vCrW less how far she has risen since)
   if (L.crackK > 0 && L.crackO0) u.uCrackO.value.subVectors(L.body.position, L.crackO0); else u.uCrackO.value.set(0, 0, 0);

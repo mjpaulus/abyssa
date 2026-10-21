@@ -221,7 +221,9 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
     early: { set: { holdRise: 0 }, bars: ['aHammer'], at: 'front' },
     // (g)'s RED as a knob (BURY.footRise 0: her crest's footing vanishes on the wake frame, 1ddae5e's behaviour), at the crest with no shove
     // (thrown off the crest's pinnacle he may fall: unthrown he must stay on it)
-    nofoot: { set: { footRise: 0, shoveV: 0, shoveStag: 0 }, bars: ['g'], at: 'crest' } } };
+    nofoot: { set: { footRise: 0, shoveV: 0, shoveStag: 0 }, bars: ['g'], at: 'crest' },
+    // (Task 7b fix round 1, I1) sunk: a piece forced 0.5 u into her drawn shell (page side: R.sink) -> (iShell), the slabs' shell side
+    sunk: { set: {}, bars: ['iShell'], page: true } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -523,6 +525,7 @@ const RISE_INSTALL = `(async () => {
   // strip residual of Task 3b), carried to her body now: (x, y, z) into the fit pose by MD.mw . inv(body now), the envelope read there, and
   // back by body now . inv(MD.mw); two passes (the map's tilt makes x, z depend on y). -1e9 off the envelope or with no burial build
   let BU = null; try { BU = await import('/src/entities/sleeper/burial.js'); } catch (e) { }
+  let FF = null; try { FF = await import('/src/world/footfx.js'); } catch (e) { }   // (M3) the puff pool's totals; absent on a build without dustStats
   const Mf = new THREE.Matrix4(), Mi = new THREE.Matrix4(), Mc = new THREE.Matrix4(), Mci = new THREE.Matrix4(), q3 = new THREE.Vector3();
   const footCarried = (x, z) => { if (!BU || !BU.footY || !MD || !MD.foot) return -1e9;
     L.body.updateMatrixWorld(true); Mf.fromArray(MD.mw); Mc.copy(L.body.matrixWorld).multiply(Mi.copy(Mf).invert()); Mci.copy(Mc).invert();
@@ -567,7 +570,7 @@ const RISE_INSTALL = `(async () => {
     // booked. null: no slabs on this build. { v: 0 }: the mesh hidden
     slab() { const Sl = L.slabs; if (!Sl) return null; const m = Sl.mesh; if (!m || !m.visible) return { v: 0 };
       m.updateMatrixWorld(true); const A = m.geometry.attributes.position.array, e = m.matrixWorld.elements, vpc = Sl.vpc;
-      let n = 0, gMax = -1e9, gMin = 1e9, wk = -1, wAt = null;
+      let n = 0, gMax = -1e9, gMin = 1e9, wk = -1, wAt = null, gKind = null, gDet = null, gSh = 1e9, nSh = 0; const pcs = [];
       for (let k = 0; k < Sl.n; k++) { let ly = 1e9, lx = 0, lz = 0, hi = -1e9;
         for (let i = k * vpc; i < (k + 1) * vpc; i++) { const x = A[i * 3], y = A[i * 3 + 1], z = A[i * 3 + 2];
           const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
@@ -575,9 +578,26 @@ const RISE_INSTALL = `(async () => {
         if (hi - ly < 1e-4) continue;
         n++; let sh = Math.max(shellTop(lx, ly + 1.5, lz), shellTop(lx + 0.05, ly + 1.5, lz), shellTop(lx - 0.05, ly + 1.5, lz), shellTop(lx, ly + 1.5, lz + 0.05), shellTop(lx, ly + 1.5, lz - 0.05));
         if (sh < -1e8) { const up = R.shellIn(lx, ly, lz); if (up != null) sh = up; }
-        const g = ly - Math.max(T.terrainH(lx, lz, 0), B && B.sandAt ? B.sandAt(lx, lz) : -1e9, sh);
-        if (g > gMax) { gMax = g; wk = k; wAt = [r2(lx), r2(ly), r2(lz)]; } if (g < gMin) gMin = g; }
-      return { v: 1, n, gMax: n ? r3(gMax) : null, gMin: n ? r3(gMin) : null, wk, at: wAt }; },
+        // (I1) which surface the gap was read on: her shell where it is strictly the highest of the three, else the dune where it stands over
+        // the floor, else the floor. Designed sinking is into the sand / floor; the shell side has its own bound (header, iShell)
+        const tr = T.terrainH(lx, lz, 0), du = B && B.sandAt ? B.sandAt(lx, lz) : -1e9, sand0 = Math.max(tr, du);
+        // (AMENDED after the first run, header: the game's own test.) kind = the surface of the LOWEST of the five reads the game seats on
+        // (burial.js slabWrite: the vertex and +-SLAB_FOOT 0.15 u, each the highest of terrain / dune / her shell): her shell if that lowest read is
+        // shell, else dune / floor. A piece straddling her rim has a dune read lower than the shell under its vertex: the game sinks it into the
+        // sand by design (lowShell false), and it is not a shell piece
+        let kind = sh > sand0 ? 'shell' : du > tr ? 'dune' : 'floor', lo = Math.max(sand0, sh);
+        for (let q = 0; q < 4; q++) { const nx = lx + (q < 2 ? (q ? -0.15 : 0.15) : 0), nz = lz + (q < 2 ? 0 : (q === 2 ? 0.15 : -0.15)), t2 = T.terrainH(nx, nz, 0), d2 = B && B.sandAt ? B.sandAt(nx, nz) : -1e9, s2 = shellTop(nx, ly + 1.5, nz), g2 = Math.max(t2, d2);
+          const v = Math.max(g2, s2); if (v < lo) { lo = v; kind = s2 > g2 ? 'shell' : d2 > t2 ? 'dune' : 'floor'; } }
+        const g = ly - Math.max(sand0, sh);
+        pcs.push([k, kind, g]);
+        if (g > gMax) { gMax = g; wk = k; wAt = [r2(lx), r2(ly), r2(lz)]; } if (g < gMin) { gMin = g; gKind = kind; gDet = { k, age: r2(Sl.S[k * 12 + 6]), gl: r3(Sl.S[k * 12 + 9]), cy: r3(Sl.S[k * 12 + 10]), kind, sh: r3(sh), du: r3(du), tr: r3(tr), ly: r3(ly) }; }
+        if (kind === 'shell') { nSh++; if (g < gSh) gSh = g; } }
+      R.pcs = pcs;
+      return { v: 1, n, gMax: n ? r3(gMax) : null, gMin: n ? r3(gMin) : null, gMinKind: n ? gKind : null, gDet, gMinShell: nSh ? r3(gSh) : null, nShell: nSh, wk, at: wAt }; },
+    // (BP_RED=sunk, I1's RED) after a frame: the first piece whose surface is her shell is lowered 0.5 u in the DRAWN mesh (the game rewrites
+    // every vertex of every piece each frame, so it does not accumulate); the row that follows reads it
+    sink() { const Sl = L.slabs; if (!Sl || !Sl.mesh.visible) return 0; R.slab(); const p = (R.pcs || []).find(q => q[1] === 'shell'); if (!p) return 0;
+      const A = Sl.mesh.geometry.attributes.position.array; for (let i = p[0] * Sl.vpc; i < (p[0] + 1) * Sl.vpc; i++) A[i * 3 + 1] -= 0.5; R.sunk = (R.sunk || 0) + 1; return 1; },
     settle(n) { const g = []; window.__bench.step(n, () => { g.push(P.grounded ? 1 : 0); }); return Object.assign(R.foot(), { groundedFrames: g.reduce((a, b) => a + b, 0), of: n }); },
     row() {
       const p = P.pos, bo = p.y - 1.35, cp = camera.position, BD = BC.BODY, sv = window.survival;
@@ -595,10 +615,10 @@ const RISE_INSTALL = `(async () => {
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
         gBase: r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, pb + 1.5, p.z))), gFoot: r3(footCarried(p.x, p.z)), boots: r3(bo), pb: r3(pb), forced: R.lastForce || 0,
         calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0,
-        crackK: L.crackK == null ? null : r3(L.crackK), slab: R.slab() });
+        crackK: L.crackK == null ? null : r3(L.crackK), slab: R.slab(), dust: FF && FF.dustStats ? FF.dustStats() : null });
       R.prevBoots = bo;
     },
-    step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { R.row(); R.lastForce = 0; if (${FORCE ? 'true' : 'false'} && R.wakeF >= 0 && L.stand >= 1 && !R.stoodSeen) { if (L.hasStood) { R.stoodSeen = true; if (R.reach0 != null) L.reach = R.reach0; } else { if (R.reach0 == null) { R.reach0 = L.reach; L.reach = -1; } R.lastForce = R.force(); } } }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
+    step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { if (${RED === 'sunk' ? 'true' : 'false'}) R.sink(); R.row(); R.lastForce = 0; if (${FORCE ? 'true' : 'false'} && R.wakeF >= 0 && L.stand >= 1 && !R.stoodSeen) { if (L.hasStood) { R.stoodSeen = true; if (R.reach0 != null) L.reach = R.reach0; } else { if (R.reach0 == null) { R.reach0 = L.reach; L.reach = -1; } R.lastForce = R.force(); } } }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
   return { R: L.R, buried: !!L.buried, hasMound: !!MD, centre: [r2(cx), r2(cz)], hasStoodKnown: 'hasStood' in L, knobs: B ? { shoveV: B.knobs.shoveV ?? null, shoveStag: B.knobs.shoveStag ?? null, holdRise: B.knobs.holdRise ?? null, riseU: B.knobs.riseU ?? null, pourU: B.knobs.pourU ?? null, crackT: B.knobs.crackT ?? null, slabs: B.knobs.slabs ?? null } : null, hasSlabs: !!L.slabs };
 })()`;
 const RISE_PLACE = where => `(async () => {
@@ -933,6 +953,13 @@ if (MODE === 'rise') {
     const bad = V.filter(([k, q]) => q.gMax > 0.3), lastV = S.reduce((m, q, k) => k >= w && q.slab && q.slab.v === 1 ? k : m, -1);
     const worst = V.reduce((a, [k, q]) => !a || q.gMax > a.gMax ? { t: sec(k), gMax: q.gMax, k: q.wk, at: q.at } : a, null);
     info.slabs = { has: hasSl, frames: V.length, firstT: V.length ? sec(V[0][0]) : null, lastVisibleT: lastV < 0 ? null : sec(lastV), worst, gMin: V.length ? Math.min(...V.map(([, q]) => q.gMin)) : null, nMax: V.length ? Math.max(...V.map(([, q]) => q.n)) : 0 };
+    // (I1) gMin with the surface it was read on and when, and the shell side apart (iShell below)
+    { const lo = V.reduce((a, [k, q]) => !a || q.gMin < a.gMin ? { t: sec(k), gMin: q.gMin, kind: q.gMinKind } : a, null), ls = V.reduce((a, [k, q]) => q.gMinShell != null && (!a || q.gMinShell < a.gMin) ? { t: sec(k), gMin: q.gMinShell } : a, null);
+      info.slabs.gMinAt = lo; info.slabs.gMinKind = lo && lo.kind; info.slabs.gMinShell = ls; info.slabs.nShellMax = V.length ? Math.max(...V.map(([, q]) => q.nShell || 0)) : 0;
+      info.slabs.shellFrames = V.filter(([, q]) => q.nShell > 0).length; info.slabs.kinds = ['shell', 'dune', 'floor'].map(kd => [kd, V.filter(([, q]) => q.gMinKind === kd).length]);
+      const badS = V.filter(([, q]) => q.gMinShell != null && q.gMinShell < -0.3);
+      ck.push({ name: 'iShell', val: { frames: V.length, shellFrames: info.slabs.shellFrames, gMinShell: ls, bad: badS.length, firstBad: badS.length ? { t: sec(badS[0][0]), gap: badS[0][1].gMinShell } : null },
+        bar: 'every slab whose surface is her drawn shell: lowest vertex >= -0.3 u (sinking into sand / floor stays allowed)', ok: !badS.length && info.slabs.shellFrames > 0, vacuous: !hasSl || !V.length || info.slabs.shellFrames === 0, judged: true }); }
     ck.push({ name: 'i', val: { frames: V.length, bad: bad.length, firstBad: bad.length ? { t: sec(bad[0][0]), gMax: bad[0][1].gMax, k: bad[0][1].wk, at: bad[0][1].at } : null, worstGap: worst && worst.gMax, lastVisibleT: info.slabs.lastVisibleT },
       bar: 'every drawn slab\'s lowest point <= +0.3 u over the drawn surface (terrainH, the dune, her drawn shell), hidden by 3.1 s after the wake', ok: !bad.length && lastV >= 0 && lastV <= w + Math.round(3.1 * f60), vacuous: !hasSl || !V.length, judged: true }); }
   // (BP_FORCE) the forced contact: legs closing on him in the window the hold adds
@@ -942,6 +969,10 @@ if (MODE === 'rise') {
     info.force = { from: sec(f0), to: sec(s), calmedAt: c0 >= 0 ? sec(c0) : null, litMax: F.length ? Math.max(...F.map(q => q.lit)) : null, frames: F.length, forced: F.filter(q => q.forced > 0).length, hitFrames: hits, hitVmax: F.length ? Math.max(...F.map(q => q.body.hitV)) : null, tearsInWindow: F.length ? F[F.length - 1].slam - S[Math.max(0, f0 - 1)].slam : null };
     aT.vacuous = aT.vacuous || hits === 0; aT.val.force = info.force;
     for (const k of ck) k.judged = k.name === 'aTear'; }
+  // (M3, booked) the puff pool's emissions and live-slot overwrites from the wake to the end of the series (the frame before the wake is the zero)
+  { const d0 = S[Math.max(0, w - 1)] && S[Math.max(0, w - 1)].dust, d1 = S.length && S[S.length - 1].dust;
+    info.dust = d0 && d1 ? { emitted: d1.emitted - d0.emitted, overwrites: d1.over - d0.over, pool: 420 } : null;
+    if (info.dust) { const at = S.findIndex((q, k) => k >= w && q.dust && q.dust.over > d0.over); info.dust.firstOverwriteT = at < 0 ? null : sec(at); } }
   const red = RED ? REDS.rise[RED].bars : null;
   if (red) for (const k of ck) k.judged = red.includes(k.name);
   record.force = FORCE;
