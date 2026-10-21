@@ -62,8 +62,8 @@
 //             at the bearing alpha off her centre -> opening line that puts the opening 61-69 deg off the grounded look. Found ITERATIVELY,
 //             not from an analytic lens offset: stood at alpha, she turns to face him (face(), as `point`), the angle between the LIVE
 //             lens's forward and P is read; alpha moves by the miss from 65 and it repeats (<= 6 tries, each printed). The side is the one whose
-//             alpha-55 spot lies farther from the crack. (theta FALLS as alpha grows: alpha moves by (theta - 65).) Why 61-69, not just >= 60: the in-frame bar below is conditioned on thetaPre <= 70,
-//             and thetaPre is ~constant over the hold (Sal still, BOSSCAM off once she is calmed), so a placement at 75 deg would book it
+//             alpha-55 spot lies farther from the crack. (theta FALLS as alpha grows: alpha moves by (theta - 65).) Why 61-69, not just >= 60: the in-frame bar below is conditioned on thetaPre <= TH_IN (70 until Task 13, now 76),
+//             and thetaPre is ~constant over the hold (Sal still, BOSSCAM off once she is calmed), so a placement past it would book it
 //             nothing (VOID). (Placed facing her from her sand side the opening lay ~12 deg off the grounded look, in frame with the cue off.)
 //             PREMISE: thetaPre at the calm (the first frame pointPh >= 1) >= 60 deg, printed; under it the run is UNMEASURED (exit 2), the
 //             closing bar would be vacuous.
@@ -78,9 +78,17 @@
 //             before pointPh first reaches 4 (the end of the 14 s if it never does), pointPh 1-3.
 //             Bars:
 //               close    on >= 90% of the hold frames, thetaPre - theta >= 0.8 x min(thetaPre, 70)
-//               inFrame  on EVERY hold frame with thetaPre <= 76 (TH_IN; was 70 until Task 13): P in frame (drawn NDC |x|, |y| <= 0.85, in
+//               inFrame  on EVERY hold frame with thetaPre <= TH_IN 76 (was 70 until Task 13): P in frame (drawn NDC |x|, |y| <= 0.85, in
 //                        front). VOID when none. (Task 13, booked from Task 11's re-review: VOID in 2 of 3 head runs, her raised claw pressing
-//                        the base lens to 2.2 u, thetaPre 72-73 deg across the hold, the opening in frame at NDC 0.35-0.38 on those frames)
+//                        the base lens to 2.2 u, thetaPre 72-73 deg across the hold, the opening in frame at NDC 0.35-0.38 on those frames.)
+//                        TH_IN's DERIVATION (Task 13 fix round 2): the bar asks the cue to frame the opening only where the cue's own rule
+//                        makes the opening its target: game.js POINTCAM aims at P ('open') while P's yaw off the grounded look is within
+//                        maxYaw 75 deg (+ hyst 5 once 'open'; past it P is "behind" and the cue frames the claw or stays off); thetaPre, the
+//                        full angle, bounds that yaw, so thetaPre <= 75 is inside the cap, and TH_IN = 75 + 1 takes 1 deg of the cap's
+//                        hysteresis (measured: the pressed run's aim yaw 66.5 deg at thetaPre 72.4-73, 'open' throughout). Reachable: in frame
+//                        at NDC 0.85 is atan(0.85 x tan(hfov / 2)) = 47.6 deg off the lens's axis (hfov / 2 52.2 deg, read off the framing
+//                        runs' NDC: theta 25.5 deg at NDC 0.37), so thetaPre 76 needs a turn >= 28.4 deg, inside the bonnet-guarded turn
+//                        measured at the band (~47 deg: theta 24.9-26 at thetaPre 72.4-73)
 //               kIn      k >= 0.9 on some frame <= t0 + 96 (1.6 s)
 //               kOut     k <= 0.1 on some frame <= 36 frames (0.6 s) after the first frame pointPh is 4 (VOID if it never is)
 //               palm     on the hold frames where palm and P FIT, the palm in frame (NDC |x|, |y| <= 0.85, in front) on >= 50%; where they do
@@ -90,6 +98,11 @@
 //             mouse's input lands 1.0 s after raiseF.
 //             RED: PC_ON=0 (__pointcam.knobs.on = 0 for the run; on a build with no __pointcam, the lens as it is) judges `close` only and
 //             must exit 5 (theta stays thetaPre), its premise shown: the printed thetaPre >= 60.
+//             RED: PC_RED=inband (Task 13 fix round 2, TH_IN's RED): the placement aims thetaPre at 73 (accepts 71-75, not 61-69) and the
+//             cue is off (__pointcam.knobs.on = 0), so the opening stays ~73 deg off the lens, out of frame. inFrame is judged on the hold
+//             frames with 70 < thetaPre <= TH_IN only (the band TH_IN added; VOID when none): it must fail, exit 5. Its GREEN is
+//             PC_PLACE=band: the same 71-75 placement with the cue as the build has it, inFrame judged on the band alone (the other bars
+//             as usual)
 //   mouse     (Task 11) the framing placement and calm, THREE sessions (a fresh load each). Pointer lock is EMULATED (headless Chrome has
 //             none: document.pointerLockElement is defined as the canvas and 'pointerlockchange' dispatched, so player.js's own `locked`
 //             turns true) and the look input is REAL mouse movement over CDP (Input.dispatchMouseEvent mouseMoved, one move a frame), through
@@ -106,7 +119,7 @@
 //             component for component, on EVERY frame of the 14 s (840; read in the step hook, after the frame's update), and the point ran
 //             (pointPh >= 1 booked); (B) the positive control, on = 1: every engaged frame (k > 0, >= 1 of them, else VOID) has q != qPre.
 // PC_RED variants (each must fail ITS bar): nopoint (__burial.set({ point: 0 }): the claw never raises) -> hold; fastturn (POINT.turn 1.0)
-// -> turnRate; noface (PC_AT=back; POINT.face -1, faceMax 4) -> turn. Framing's RED is PC_ON=0 (above).
+// -> turnRate; noface (PC_AT=back; POINT.face -1, faceMax 4) -> turn. Framing's REDs: PC_ON=0 (close) and PC_RED=inband (inFrame's band), above.
 // ENV (besides DRV_PORT, a port of this probe's own: never 8777 / 8790 / 9419; the probe exits 2 before importing drv.mjs):
 //   PC_AT=back|ahead  the placement (point; default back)
 //   PC_RED=<variant>  an opt-in RED (exit 5 when its bar failed, as it must; 3 when it did not)
@@ -123,7 +136,9 @@ const MODES = ['point', 'framing', 'mouse', 'off', 'walk', 'lastward'];
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/pointcam-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 const REDS = { point: { nopoint: { set: { point: 0 }, bars: ['hold'] }, fastturn: { pt: { turn: 1.0 }, bars: ['turnRate'] },
-  noface: { pt: { face: -1, faceMax: 4 }, bars: ['turn'], at: 'back' } } };
+  noface: { pt: { face: -1, faceMax: 4 }, bars: ['turn'], at: 'back' } },
+  // (Task 13 fix round 2) the opening out of frame with thetaPre in TH_IN's band: placed at 71-75 deg, the cue off
+  framing: { inband: { band: [71, 75, 73], on: 0, bars: ['inFrame'] } } };
 const RED = process.env.PC_RED || '';
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`PC_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no PC_RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 const AT = MODE === 'point' ? process.env.PC_AT || 'back' : MODE === 'lastward' ? 'lastward' : 'framing';
@@ -133,6 +148,7 @@ const ON = process.env.PC_ON == null || process.env.PC_ON === '' ? null : +proce
 if (ON != null && ON !== 0 && ON !== 1) { console.error('PC_ON: 0 | 1'); process.exit(2); }
 if (ON != null && !['point', 'framing'].includes(MODE)) { console.error('PC_ON: point / framing only (mouse and off set the knob themselves)'); process.exit(2); }
 const ONRED = MODE === 'framing' && ON === 0;
+if (ONRED && RED) { console.error('PC_ON=0 and PC_RED are two different REDs: one at a time'); process.exit(2); }
 // PC_KNOBS='{"helmNdc":0.3}': merged into __pointcam.knobs before the calm (a stress: framing / walk). With helmNdc under the grounded
 // bonnet's own |NDC| (~0.3-0.5 on the framing placement) the review's I2 cliff (g -> 0 when the grounded lens already has him past the
 // bound) fires: amtStep must hold on the continuous guard
@@ -142,7 +158,10 @@ const SHOTS = process.env.PC_SHOTS || '';
 if (SHOTS && !/^[\w.-]+$/.test(SHOTS)) { console.error(`PC_SHOTS: a plain file prefix (got ${JSON.stringify(SHOTS)})`); process.exit(2); }
 if (SHOTS && !['point', 'framing'].includes(MODE)) { console.error('PC_SHOTS: point / framing only'); process.exit(2); }
 const CALM_LINE = 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.', HOSE = 760, SECS = 14, D_HIM = 25;
-const TH_IN = 76, BON_REL = 0.02;   // (Task 13) inFrame's thetaPre ceiling (was 70); the bonnet's tolerance over the grounded lens's own NDC (was 0.005)
+const TH_IN = 76, BON_REL = 0.005;   // (Task 13) inFrame's thetaPre ceiling (was 70; derivation in the header); the bonnet's tolerance over the grounded lens's own NDC
+const PLACE_BAND = process.env.PC_PLACE === 'band';
+if (process.env.PC_PLACE && (!PLACE_BAND || MODE !== 'framing' || RED || ON === 0)) { console.error('PC_PLACE=band: framing only, without a RED (it is inband\'s GREEN)'); process.exit(2); }
+const BAND = RED && REDS[MODE] && REDS[MODE][RED] && REDS[MODE][RED].band ? REDS[MODE][RED].band : PLACE_BAND ? [71, 75, 73] : null;   // (PC_RED=inband / PC_PLACE=band) the placement's band and target
 const BON_IN = 0.9, EASE_F = 12, CLOSE_K = 0.5, TURN_BAR = 0.5, TURN_EPS = 0.005, FRAME = 0.8, NDC_IN = 0.85, TH_LO = 61, TH_HI = 69, TH_PREM = 60;
 const PX = 0.0022, PATTERNS = { six: [48], four: [32], path: [8, -8, 8, -8, 8, -8, 8, -8, 16] };
 // (PC_SHOT_AT=name:s,...: other moments; at `back` since Michael's ruling the claw is up ~7.1-10.4 s, not through the line)
@@ -396,8 +415,8 @@ async function session(o) {
         const th = await c.ev(`window.__pcR.theta()`);
         ses.tries.push({ alpha: +alpha.toFixed(2), th, him: pl.him, dHim: pl.dHim, fd: pl.fd, face: fc });
         console.log(`  framing try ${k}: alpha ${alpha.toFixed(2)} side ${side} -> theta ${th} deg (him ${JSON.stringify(pl.him)}, d ${pl.dHim}, fd ${pl.fd}, faced ${fc.faced} in ${fc.n})`);
-        if (th >= TH_LO && th <= TH_HI && fc.faced) break;
-        alpha = Math.max(15, Math.min(150, alpha + (th - 65)));   // (theta falls as alpha grows: he goes round her, the opening comes in front)
+        if (th >= (BAND ? BAND[0] : TH_LO) && th <= (BAND ? BAND[1] : TH_HI) && fc.faced) break;
+        alpha = Math.max(15, Math.min(150, alpha + (th - (BAND ? BAND[2] : 65))));   // (theta falls as alpha grows: he goes round her, the opening comes in front)
       }
       // (2026-10-21) the placement's teleport sets player.yaw, and POINTCAM's leak on the recent look (lookTau 0.3 s) read it as a sweep
       // when face() took 1 frame: the mouse run 'six' opened OFF (net 0, path 0). He stands >= 90 frames (1.5 s) after it before the calm
@@ -517,7 +536,9 @@ async function consoleErrors() {
 //   (fix round 1, 2026-10-21, the review's I1-I3, registered BEFORE the build changes for them)
 //   bonnet   RE-REGISTERED (I2: the guard bounds each axis by max(helmNdc, the grounded lens's own |NDC|)): on every engaged frame his bonnet
 //            in front and |x|, |y| <= max(0.9, the grounded lens's |x|, |y| (bonPre, from qPre) + BON_REL): the cue never puts him further
-//            out than 0.9, or than the grounded lens already had him. (Task 13: BON_REL 0.005 -> 0.02; pressed runs had 0.001 of margin)
+//            out than 0.9, or than the grounded lens already had him. (Task 13 fix round 2: BON_REL stays 0.005. The task review recomputed the
+//            excess over the grounded lens on Task 13's three framing runs: 0.000 on the pressed run (bon 0.906 vs bonPre 0.906, frame 275),
+//            and every run passed at 0.005; a widening to 0.02 had no data behind it and was reverted)
 //   aimStep  (I1) the cue's FULL-TURN aim (state().aimYawDeg / aimPitchDeg; a build without them: yawDeg / amt and pitchDeg / amt where
 //            amt >= 0.05) moves < 1 deg per frame, max of yaw and pitch, between consecutive engaged frames (k > 0 on both). VOID when no
 //            pair is booked at framing / back / walk / mouse; at ahead and lastward the cue may be off throughout
@@ -609,7 +630,7 @@ if (MODE === 'point') {
 
 // ============================================ framing ============================================
 if (MODE === 'framing') {
-  const ses = await session({ on: ON });
+  const ses = await session({ on: RED && BAND ? REDS.framing[RED].on : ON });
   await consoleErrors(); if (c) c.close();
   sane(ses);
   const S = ses.S, { t0, ph4F, lastHold } = phases(S);
@@ -622,19 +643,21 @@ if (MODE === 'framing') {
   // before pointPh 4; kIn counts from raiseF. (b) re-registers CLOSE: with his bonnet held near the frame's edge the turn is bounded at ~46 deg
   // (the guard's 0.82; ~48.5 at the bar's 0.9, atan(0.9 x tan(hfov / 2)) at aspect ~1.8; the review's correction of "42-44"), so 0.8 x
   // min(thetaPre, 70) = 49-56 deg at the placement's 61-69 is unreachable with Sal in frame; the bar
-  // is now 0.5 x min(thetaPre, 70) (with inFrame: the opening in frame on every hold frame with thetaPre <= 70); the 0.8 count is booked
+  // is now 0.5 x min(thetaPre, 70) (with inFrame: the opening in frame on every hold frame with thetaPre <= TH_IN, 70 until Task 13, 76 now);
+  // the 0.8 count is booked
   const raiseF = S.findIndex(r => r.ph >= 2);
   const hold = []; if (raiseF >= 0) for (let i = raiseF + 96; i <= lastHold; i++) if (S[i] && S[i].ph >= 2 && S[i].ph <= 3) hold.push(i);
   const closeOk = hold.filter(i => S[i].thPre - S[i].th >= CLOSE_K * Math.min(S[i].thPre, 70));
   const close80 = hold.filter(i => S[i].thPre - S[i].th >= 0.8 * Math.min(S[i].thPre, 70)).length;
-  const in70 = hold.filter(i => S[i].thPre <= TH_IN), in70Bad = in70.filter(i => !S[i].pIn);
+  const inTh = hold.filter(i => S[i].thPre <= TH_IN), inThBad = inTh.filter(i => !S[i].pIn);
+  const inBand = inTh.filter(i => S[i].thPre > 70), inBandBad = inBand.filter(i => !S[i].pIn);   // (the band TH_IN added: PC_RED=inband judges it alone)
   const kInF = raiseF >= 0 ? S.findIndex((r, i) => i >= raiseF && r.cam.k != null && r.cam.k >= 0.9) : -1;
   const kOutF = ph4F >= 0 ? S.findIndex((r, i) => i >= ph4F && r.cam.k != null && r.cam.k <= 0.1) : -1;
   const fit = hold.filter(i => S[i].fits), fitIn = fit.filter(i => S[i].palmIn), nofit = hold.filter(i => !S[i].fits);
   const stat = (a, f) => a.length ? [+Math.min(...a.map(f)).toFixed(2), +Math.max(...a.map(f)).toFixed(2)] : null;
   record.book = { t0, ph4F, lastHold, holdN: hold.length, holdS: hold.length ? [+(hold[0] / 60).toFixed(3), +(hold[hold.length - 1] / 60).toFixed(3)] : null,
     thPre: stat(hold, i => S[i].thPre), th: stat(hold, i => S[i].th), closeN: closeOk.length, closeFrac: hold.length ? +(closeOk.length / hold.length).toFixed(4) : null,
-    in70N: in70.length, in70Bad: in70Bad.length, ndc: stat(hold, i => Math.max(Math.abs(S[i].ndc[0]), Math.abs(S[i].ndc[1]))),
+    inThN: inTh.length, inThBad: inThBad.length, inBandN: inBand.length, inBandBad: inBandBad.length, ndc: stat(hold, i => Math.max(Math.abs(S[i].ndc[0]), Math.abs(S[i].ndc[1]))),
     raiseF, close80, kInF, kInS: kInF >= 0 ? +((kInF - raiseF) / 60).toFixed(3) : null, kOutF, kOutS: kOutF >= 0 ? +((kOutF - ph4F) / 60).toFixed(3) : null,
     fitN: fit.length, fitInN: fitIn.length, fitFrac: fit.length ? +(fitIn.length / fit.length).toFixed(4) : null, nofitN: nofit.length, sep: stat(hold, i => S[i].sep),
     yawDeg: stat(hold, i => S[i].cam.yaw || 0), pitchDeg: stat(hold, i => S[i].cam.pitch || 0), why: [...new Set(S.map(r => r.cam.why))],
@@ -643,13 +666,14 @@ if (MODE === 'framing') {
   console.log(`FRAMING ${JSON.stringify(record.book)}`);
   const ck = [
     { name: 'close', val: { frac: record.book.closeFrac, n: closeOk.length, of: hold.length, close80, thPre: record.book.thPre, th: record.book.th }, bar: 'thetaPre - theta >= 0.5 x min(thetaPre, 70) on >= 90% of the hold (re-registered from 0.8 for the bonnet guard)', ok: hold.length > 0 && closeOk.length / hold.length >= 0.9, vacuous: !hold.length, judged: true },
-    { name: 'inFrame', val: { n: in70.length, bad: in70Bad.length, ndcMax: record.book.ndc }, bar: 'P in frame (|x|, |y| <= 0.85, in front) on every hold frame with thetaPre <= ' + TH_IN, ok: in70.length > 0 && in70Bad.length === 0, vacuous: !in70.length, judged: true },
+    BAND ? { name: 'inFrame', val: { n: inBand.length, bad: inBandBad.length, all: inTh.length, ndcMax: record.book.ndc, thPre: record.book.thPre }, bar: 'P in frame (|x|, |y| <= 0.85, in front) on every hold frame with 70 < thetaPre <= ' + TH_IN + ' (' + (RED ? 'PC_RED=inband' : 'PC_PLACE=band') + ': the band alone)', ok: inBand.length > 0 && inBandBad.length === 0, vacuous: !inBand.length, judged: true }
+      : { name: 'inFrame', val: { n: inTh.length, bad: inThBad.length, band: inBand.length, ndcMax: record.book.ndc }, bar: 'P in frame (|x|, |y| <= 0.85, in front) on every hold frame with thetaPre <= ' + TH_IN, ok: inTh.length > 0 && inThBad.length === 0, vacuous: !inTh.length, judged: true },
     { name: 'kIn', val: { kInS: record.book.kInS }, bar: 'k >= 0.9 by 1.6 s after the raise', ok: kInF >= 0 && kInF - raiseF <= 96, vacuous: S[0].cam.k == null || raiseF < 0, judged: true },
     { name: 'kOut', val: { kOutS: record.book.kOutS, ph4S: ph4F >= 0 ? +((ph4F - t0) / 60).toFixed(3) : null }, bar: 'k <= 0.1 by 0.6 s after pointPh reaches 4', ok: kOutF >= 0 && kOutF - ph4F <= 36, vacuous: ph4F < 0 || S[0].cam.k == null, judged: true },
     { name: 'palm', val: { frac: record.book.fitFrac, n: fitIn.length, of: fit.length, nofit: nofit.length }, bar: 'the palm in frame on >= 50% of the hold frames where palm and P fit (<= 0.8 x hfov)', ok: fit.length > 0 && fitIn.length / fit.length >= 0.5, vacuous: !fit.length, judged: true },
     ...lensBars(S, 'framing')];
   if (KNOBS) for (const k of ck) k.judged = ['bonnet', 'aimStep', 'amtStep'].includes(k.name);   // (the stress judges the guard's bars only)
-  const { failed, vac } = verdict(ck, ONRED ? 'PC_ON=0' : '', ['close']);
+  const { failed, vac } = verdict(ck, ONRED ? 'PC_ON=0' : RED, ONRED ? ['close'] : RED ? REDS.framing[RED].bars : null);
   conclude(failed, vac);
 }
 
