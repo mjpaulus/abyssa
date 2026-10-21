@@ -110,7 +110,10 @@ if (!BUILT.includes(MODE)) { console.error(`burial-probe: mode ${MODE} is not bu
 // verdict on the shipped ridge, nothing loosened (its top, 8.02 u, and its sides, +6.62 u, are what make it a ridge). A crest with
 // n 0 (no shell vertex over the sand in the strip) is FAIL, not UNMEASURED: also ruled there)
 const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], mainIsIt: true }, shallow: { set: { crest: 5.5 }, bars: ['top'] },
-    steep: { set: { repose: 2.0 }, bars: ['repose'] } },
+    steep: { set: { repose: 2.0 }, bars: ['repose'] },
+    // late (Task 6): the clutch seated AFTER the sink, as bedDown would if it kept the shipped order (page side: brood.seat() on the sunk
+    // pose, then the lobes rest on the sunk floor with their tops out of the sand)
+    late: { set: {}, bars: ['clutch'], page: true } },
   breath: { still: { set: { breath: { lift: 0 } }, bars: ['amp'] } },
   programs: { lazy: { set: {}, bars: ['rise'], page: true } } };
 const RED = process.env.BP_RED || '';
@@ -268,7 +271,21 @@ const DISGUISE = `(async () => {
     out.harpoon = { seatOk: !!H.seatOk, seam: +(sm.y - sand(sm.x, sm.z)).toFixed(3), seamAt: [+sm.x.toFixed(2), +sm.y.toFixed(2), +sm.z.toFixed(2)], pole, poleMin: Math.min(...pole.map(q => q.d)),
       iron, ironIn: ironOk };
   } else out.harpoon = null;
-  // (Task 6) the clutch: added there
+  // (Task 6) THE CLUTCH: every live lobe's top, in WORLD, against the drawn sand over its centre. L.brood.live is x y z r per lobe in the body's
+  // frame (the shell units the lobes are authored in; the body matrix carries R, the sink and the tilt). A lobe's drawn skin stands to
+  // 1.25 r (the bead field's domes and the fillets), so its top is the centre's world y + 1.25 r x the matrix's scale: the sphere's own
+  // top, which is never lower than the tilted body-local y + 1.25 r. d = top - sand, bar <= -0.05 on every lobe. Lobes with r 0 (an
+  // unseated clutch) are not booked: n counts the lobes judged, the vacuity floor is the lobe count itself
+  const Bd = L.brood;
+  if (Bd && Bd.seated && Bd.live) {
+    const bwm = L.body.matrixWorld, sc = bwm.getMaxScaleOnAxis(), lobes = []; let wc = null;
+    for (let k = 0; k < Bd.nL; k++) { const o = k * 4, r = Bd.live[o + 3]; if (!(r > 0)) continue;
+      v.set(Bd.live[o], Bd.live[o + 1], Bd.live[o + 2]).applyMatrix4(bwm);
+      const top = v.y + 1.25 * r * sc, s = sand(v.x, v.z), d = +(top - s).toFixed(3);
+      lobes.push({ k, spill: !!(Bd.lobes[k] && Bd.lobes[k].spill), r: +r.toFixed(4), at: [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)], top: +top.toFixed(3), sand: +s.toFixed(3), d, over: +(top - T.terrainH(v.x, v.z, 0)).toFixed(3) });
+      if (!wc || d > wc.d) wc = lobes[lobes.length - 1]; }
+    out.clutch = { n: lobes.length, nL: Bd.nL, worst: wc, st: Bd.st, scale: +sc.toFixed(3), lobes };
+  } else out.clutch = null;
   return out; })()`;
 
 // the page side of `breath`. PLACE(d): him d u off the strip's edge on her SAND side (where he comes in), facing it; the point
@@ -393,6 +410,8 @@ try {
     record.patch = patch;
   }
   if (MODE === 'disguise') {
+    if (RED === 'late') record.late = await c.ev(`(async () => { const L = window.lev; if (!L || !L.brood || !L.buried) return { err: 'no buried brooder' }; L.grp.updateMatrixWorld(true); L.brood.seat(); window.__bench.step(5); return { reseated: true, bury: L.bury }; })()`);
+    if (RED === 'late' && (!record.late || record.late.err)) throw new Error('BP_RED late: ' + (record.late && record.late.err));
     out = await c.ev(DISGUISE);
     record.hasSand = await c.ev(`!!(window.__burial && window.__burial.sandAt)`);
   }
@@ -582,7 +601,11 @@ checks.push({ name: 'len', val: out.crest.len, n: out.crest.n, bar: '16 - 24 u',
   checks.push({ name: 'iron', val: h ? (h.ironIn && h.seatOk ? 'in her' : 'NOT in her') : null, at: h ? h.seamAt : null, n: h ? 6 : 0, bar: 'head (tip, mid, barbs, pin) >= 0.1 u and shank >= 0 inside her drawn shell (lodged test, exact hits) AND seatOk',
     ok: !!h && h.ironIn && h.seatOk, vacuous: !h, judged: !!h, info: h ? { depths: h.iron, seatOk: h.seatOk } : undefined });
   checks.push({ name: 'pole', val: h ? h.poleMin : null, at: pw ? pw.at : null, n: h ? h.pole.length : 0, bar: '>= 0 u over the drawn sand (min of 5 samples)', ok: !!h && h.poleMin >= 0, vacuous: !h, judged: !!h }); }
-// (Task 6) clutch: pushed here when the page side reports it
+// (Task 6) THE CLUTCH (header): every live lobe's top <= -0.05 u under the drawn sand. Judged where she is buried (L.buried: there is a
+// dune to be under); on the shipped ridge the clutch rests on the floor by design (its tops stand over it), so it is not judged there
+{ const q = out.clutch, bar = '<= -0.05 u (every live lobe: centre world y + 1.25 r, under the drawn sand)';
+  checks.push({ name: 'clutch', val: q && q.worst ? q.worst.d : null, at: q && q.worst ? q.worst.at : null, n: q ? q.n : 0, bar, ok: !!q && q.n >= 1 && q.worst.d <= -0.05, vacuous: !q || q.n < 1,
+    judged: hasSand && !!out.buried, info: q ? { lobes: q.n, of: q.nL, worstLobe: q.worst && q.worst.k, spill: q.worst && q.worst.spill, topOverFloor: q.worst && q.worst.over, st: q.st } : undefined }); }
 for (const k of checks) if (ONLY) k.judged = ONLY.includes(k.name);
 for (const need of ONLY || []) if (!checks.some(k => k.name === need)) { console.error(`UNMEASURED: BP_CHECK ${need} is not built into this probe yet`); finish(2, 'BP_CHECK ' + need + ' not built'); }
 record.checks = checks;
