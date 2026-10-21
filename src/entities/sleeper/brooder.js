@@ -578,6 +578,8 @@ export function makeBrooder(idx, cfg) {
   // enter is the shipped one bit for bit (x * (1 - 0), y - 0 * 0).
   L.buried = !!(c.bury && BURY.on);
   L.crest = L.buried ? (c.bury.crest ?? BURY.crest) : 0;
+  // (Task 9) when the crust visibly cracks after the wake, for the sound: audio/creatures.js reads it off E.in.lev (it cannot import burial.js: three, terrain)
+  L.crackDelay = L.buried ? BURY.crackT : 0;
   L.bury = 0; L.buryD = 0; L.breathU = 0; L.breathY = 0;
   L.topAt = (x, z) => { const h = G.shellAt(x, z, _sa).h; return Math.hypot(x, z) <= G.rimR(Math.atan2(z, x)) ? h : null; };   // procedural; installSculpt swaps in the bake's
 
