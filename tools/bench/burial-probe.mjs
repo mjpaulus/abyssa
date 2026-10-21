@@ -116,7 +116,7 @@
 //                   stagger is spent AND his boots are back within 0.3 u of the drawn ground. On a throw's frames: while he is still within
 //                   0.3 u (plan) of where he stood when it landed, within [-0.3, +0.3] u (the ground under his feet did not vanish under
 //                   him: thrown off a ledge of her rock he may fall, but not before he has left it), and his boots never rise faster than
-//                   1.0 u/s (the shove's own lift is 0.10 x 5 = 0.5 u/s: anything faster is her body throwing him up). (Amended twice
+//                   1.0 u/s (the shove's own lift is 0.10 x 11 = 1.1 u/s: anything faster is her body throwing him up). (Amended twice
 //                   before any fix ran, on 1ddae5e's readings: an exempt throw passed the crest's float; a +1.2 u bound failed a man thrown
 //                   off the crest's pinnacle, a legitimate fall.) AMENDED A THIRD TIME AFTER THE FIX'S FIRST GREEN RUN (anchor; recorded,
 //                   and the REDs re-judged under it, FOOTING() below): (1) the rise limit applies only IN THE AIR (boots > 0.3 u over the
@@ -163,12 +163,16 @@
 //                   top). Bar: <= 0.3 u (BP_SHELL_D overrides it for a ruling or to show a RED's reach; the default is the bar) on every drawn frame, for
 //                   every shell piece. The vertical gap is booked (info.slabs.gMinShell), gMin and the kind it was read on (shell | dune | floor) on
 //                   every frame and in info.slabs (gMin, gMinKind, gMinAt, kinds). No shell piece on any drawn frame, or none drawn: UNMEASURED.
-//                   READING on f6b4077 (bar 0.3; fix round 1 runs, deterministic): off / crest / front / dune / under max depth 0.348 u on ONE frame
+//                   READING on f6b4077 (ROUND 1: bar 0.3; fix round 1 runs, deterministic): off / crest / front / dune / under max depth 0.348 u on ONE frame
 //                   (anchor 0.322 on two), so the bar FAILS the shipped build by 0.05 u; vertical gap min -0.867 u (-0.886 anchor), every lowest piece
 //                   a SHELL piece. At BP_SHELL_D=0.4 off passes (exit 0) and the sunk RED (max depth 0.524, 170 of 173 frames over) still exits 5, so the
 //                   bar separates the build from a forced 0.5 u; the default stays 0.3 (not widened to fit: the controller's ruling). Frame: (t 1.683 s, piece 7, on a flat face, ny 0.96, vertical gap -0.452); the
-//                   cause (the game's top grid against the drawn mesh, spine tips, a slit) is not established here. Booked in the report; game code is not
-//                   this round's.
+//                   cause (the game's top grid against the drawn mesh, spine tips, a slit) was not established in round 1.
+//                   ROUND 2 (599c72a + 4fc8e38; the build with SLAB_DIP 0.1 and SLAB_STEP 0.35): CAUSE FOUND: at a lip of her shell (a step 0.4-0.7 u
+//                   down within 0.15 u, measured on f08a683) the lowest of the five reads seated a piece up to 0.45 u into her where it stood. The seat
+//                   is now clamped to SLAB_DIP under the read at the vertex itself, and a piece whose five reads span more than SLAB_STEP bursts into
+//                   silt. READING: off / crest / front / dune / under max depth 0.094 u (anchor 0.118 u, which exits 1 on parked (e) only); the bar
+//                   0.3 holds with 0.18 u to spare and the sunk RED (0.5 u) still exits 5.
 //                   RED (BP_RED=sunk, rise, any BP_AT): after each stepped frame the probe lowers the shell piece standing on the flattest face by
 //                   0.5 u in the DRAWN mesh (the game rewrites every vertex each frame: no accumulation), so it is ~0.5 u deep; it judges (iShell)
 //                   alone and must exit 5. (i)'s hover side must still hold under it: booked, not judged.
@@ -188,8 +192,9 @@
 //                         spell ended any other way is UNMEASURED (reported); a spell still open at the series' end is a FAIL (>= 4 s blind
 //                         by then). The brief needs a LOS ending at BP_AT anchor and off. JUDGED AT anchor AND off (12 u, the default) ONLY,
 //                         booked elsewhere (AMENDED after the first GREEN runs, recorded: the brief registers the bar "with BP_AT=anchor" and
-//                         asks a LOS ending at anchor and off; at crest (on her back) and front (2.3 R before her face) no cloud lies on the
-//                         line from her eyes (never lost: tau < 1), dune / under / BP_OFF are the brief's "booked, not gated" readings).
+//                         asks a LOS ending at anchor and off). `blind` is judged at the anchor (where he stands when he pulls) and at off 12 u
+//                         (the spec's frame). Every other placement is booked as a reading, because Michael's 3-4 s is a feel target. The crest's
+//                         4.28 s (she does lose him there at shoveV 11, tau 3.87) is on record for his look (controller ruling, Task 8 review Minor 1).
 //               footprint the plume's density footprint 1.5 u over the floor: every 3rd frame, on 32 bearings from the strip's centre (MD.bx,
 //                         MD.bz; no mound: her centre), the farthest r (0.25 .. 30 u, 0.25 u steps, every step read, not the first exit) where
 //                         __plume.dens(x, terrainH + 1.5, z) > 0.02; the frame's reading is the farthest bearing's. At its widest from the

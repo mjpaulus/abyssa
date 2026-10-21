@@ -695,7 +695,7 @@ export function makeBrooder(idx, cfg) {
     // is read off the drawn shell, so the sculpt's landing beds her down again on the baked one
     bedDown(L, !!SC);
     if (SC) { installSculpt(L, SC); if (L.dormant) bedDown(L); }
-    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L); else poseAll(L, 0, null); } });
+    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L); else { poseAll(L, 0, null); L.keepIdx = keepOutline(L); } } });
   }
   const pd = L.onDispose;
   // (pd holds makeMound's link when she is buried: the mound's mesh lifted out of L.grp, its geometry disposed, before disposeSleeper
@@ -720,6 +720,9 @@ function bedDown(L, noHarpoon = false) {
   // (moundK 1), no crack, not stood
   L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0; L.riseSheetN = 0;   // (Task 8: the plume's sheets spawned)
   L.bury = 0; poseAll(L, 0, null);
+  // (Task 8 review, Minor 2) the shell's keep outline (keepShell): the 32 outline points of her shell, picked here, off the shell's own geometry,
+  // not on the first frame the keep engages; bedDown re-runs when the sculpt lands (the fused shell replaces the baked one)
+  L.keepIdx = keepOutline(L);
   if (L.brood) L.brood.seat();
   L.buryD = fitSink(L, L.crest);
   L.bury = 1;
@@ -2052,7 +2055,6 @@ function keepOutline(L) {
   return idx;
 }
 function keepShell(L, dt) {
-  if (!L.keepIdx) L.keepIdx = keepOutline(L);
   const P = L.parts.shell.geometry.attributes.position, e = L.parts.shell.matrixWorld.elements;
   let dmin = 1e9, bx = 0, bz = 0;
   for (let k = 0; k < KEEP_N; k++) { const i = L.keepIdx[k]; if (i < 0) continue;
@@ -2128,11 +2130,14 @@ export function updateBrooder(L, dt, t, player) {
     const b = 1 - win(u, BURY.riseU[0], BURY.riseU[1]);
     if (b < L.bury) L.bury = b;
     L.moundK = Math.min(L.bury, 1 - win(u, BURY.pourU[0], BURY.pourU[1]));
-    if (!L.cracked) { L.cracked = true; L.crackT = 0; crackBeat(L, ev, player); }
-    // (velkath-buried-rock) THE PLUME (spec §2, beat 3): a ring at the crack, more as the sheets fall (plume.js 'rise')
+    if (!L.cracked) {
+      L.cracked = true; L.crackT = 0; crackBeat(L, ev, player);
+      // (velkath-buried-rock) THE PLUME (spec §2, beat 3): a ring at the crack, once, in the cracking block (a zero-dt frame cannot repeat it)
+      if (BURY.plume && L.mound) { const MD = L.mound; for (let q = 0; q < 6; q++) { const o = ringAt(MD, 3, RISE_J[q]); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx); } }
+    }
+    // more as the sheets fall (plume.js 'rise')
     if (BURY.plume && L.mound) {
       const MD = L.mound;
-      if (L.crackT === 0) for (let q = 0; q < 6; q++) { const o = ringAt(MD, 3, RISE_J[q]); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx); }
       const sheet = L.moundK < 0.25 ? 3 : L.moundK < 0.5 ? 2 : L.moundK < 0.75 ? 1 : 0;
       while ((L.riseSheetN || 0) < sheet) {
         const j0 = (L.riseSheetN || 0) * 37;

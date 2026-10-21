@@ -65,7 +65,7 @@ Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSi
 // (Task 8, the controller's ruling 3) shoveV 5 -> 11: from the harpoon's anchor the crack must carry him clear of her bump re-find (sight():
 // L._pd < collR x 1.05 = 5.34 u off her spine), or a blind spell ends on the next frame. At 5 he stood 4.6-5.2 u off it through 3.8-5.3 s (46 bump
 // re-finds); at 11 her spine is 9+ u off at the loss and his capsule never meets her shell in the spell (burial-probe rise anchor: lost 3.97 s,
-// found 7.87 s by line of sight, 3.90 s). MEASURED SENSITIVE: the anchor's spell at 8 / 9 / 9.5 / 10 / 10.5 / 11 / 11.5 / 12 u/s read 2.97 / 3.55 /
+// found 7.90 s by line of sight, a 3.933 s spell: the final run). MEASURED SENSITIVE: the anchor's spell at 8 / 9 / 9.5 / 10 / 10.5 / 11 / 11.5 / 12 u/s read 2.97 / 3.55 /
 // 4.30 / 4.25 / 4.20 / 3.90-3.93 / 2.85 / touch-ended (7 touch-ended too), and the crest's footing (g) fails at 8 / 9 / 9.5 (sliding down her
 // flank in contact with her shell collider 3.5 u over the floor), passes at 5, 7, 10-12. The shove's line still goes through safeThrow (crackBeat)
 Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 11, shoveStag: 0.8, holdRise: 1, riseVmax: 7, footRise: 1, footStep: 0.6, plume: 1 });
@@ -695,10 +695,15 @@ export function crestY(MD, x, z) {
 //   SLAB_LEDGE 0.25: the surface under a piece dropping more than 0.25 u in a frame (15 u/s at 60 fps, 6x the fastest slide's 0.042 u a frame) is a
 //     cliff, not a slope it rides: her rim as she rises out of the dune, so the piece bursts rather than hangs
 //   SLAB_SINK 0.45: on sand a piece goes down 0.45 u for each second past 0.8 s of age: ~1.0 u by SLAB_T, about its whole thickness (0.28-0.42 of a
-//     1.1-2.0 u width), so it is in the dune as it crumbles; never sunk on her shell (the sink is off there; a piece on it still reads up to 0.35 u inside her
-//     drawn surface on a frame or two, burial-probe rise (iShell), booked: the review's I1)
+//     1.1-2.0 u width), so it is in the dune as it crumbles; never sunk on her shell (the sink is off there). On her shell the seat is clamped by SLAB_DIP
+//     and a stepped piece bursts (below): the measured max depth in her is 0.094 u (anchor 0.118 u), burial-probe rise (iShell)
 //   SLAB_FOOT 0.15: the five reads' spread, a little over half the shell grid's ~0.25 u cell, so a lowest point finds the crevice a cell bridges (the
 //     game seats on the lowest of the five, the probe's slab() reads the highest of five +-0.05: the review's gMin -0.234 u inside her crest is that gap)
+//   SLAB_DIP 0.1: the seat never goes more than 0.1 u under the read at the vertex itself. WHY: at a lip of her shell (a step 0.4-0.7 u down within
+//     0.15 u) the lowest of the five reads sank a piece 0.45 u into her where it stood (0.348 u measured, iShell round 1); 0.1 is about a third of the
+//     0.3 u bar, enough to still find a crevice a cell bridges
+//   SLAB_STEP 0.35: a piece whose five reads span more than 0.35 u bursts into silt. WHY: that is a lip or wall of her shell, where no seat both
+//     keeps it out of her and off the water (a piece at a wall, ny 0.13, read 0.30 u into her), so it is spent rather than left hanging or buried
 const SLAB_STEP = 0.35, SLAB_DIP = 0.1, SLAB_FOOT = 0.15, FOOT_X = [SLAB_FOOT, -SLAB_FOOT, 0, 0], FOOT_Z = [0, 0, SLAB_FOOT, -SLAB_FOOT];
 const SLAB_BEND = 1.6, SLAB_T = 3.0, SS = 12, SLAB_SINK = 0.45, SLAB_LEDGE = 0.25, SLAB_VMAX = 2.5, SLAB_G = 6.0, SLAB_DRAG = 1.2;
 // (fix round 2, M3) THE RISE'S SILT BUDGET, particles a burst: the footfx pool holds 420 (life 1.2-2.4 s, shared with his boots), so the rise
@@ -919,7 +924,7 @@ function slabWrite(L, dt) {
 }
 // the silt a crumbling piece sheds: the brooder's emitDust (footfx's puff pool), handed in by brooder.js (setSlabDust). The pool (420) is
 // shared with the dune's streams and his boots; measured (M3, burial-probe rise info.dust, f6b4077, six placements): 1650-1850 puffs emitted in the
-// 14 s after the wake, 280-514 of them over a slot whose puff was still alive (the first at 1.5-1.75 s), the oldest cut short; not changed
+// 14 s after the wake, 280-514 of them over a slot whose puff was still alive (the first at 1.5-1.75 s), the oldest cut short; BURY.dust has since changed it
 let emitSlabDust = () => {};
 export function setSlabDust(f) { emitSlabDust = f; }
 
