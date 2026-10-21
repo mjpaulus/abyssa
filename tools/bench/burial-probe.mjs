@@ -76,10 +76,40 @@
 //             to Task 7b; vsBase still holds every count equal); BP_RED=lazy is refused without BP_BASE (its rise bar alone cannot tell
 //             the RED's compile from the base's).
 //             hitch.mjs's scenarios (jet, z1, z2, voyage) do not include the rise, the point or the dig-in: this mode is the gate for those.
+//   rise      THE RISE OUT OF THE SAND (Task 7a; spec §2 "A slow, heavy rise of about 6 s", "Her rising body shoves him back with a
+//             stagger, but cannot tear the dress", "The fight's dangers (the drop, the hammer, the tear) start once she stands"). Home, her
+//             asleep, him stood per BP_AT (default anchor): anchor = Alt+6 (the harpoon's anchor) and REAL E (the wrench, the free, the
+//             wake 0.7 s later); crest = the highest drawn shell vertex (her crest's top, Review Focus 2); off = 12 u off the strip's edge on
+//             her sand side (breath's PLACE); front = 2.3 R in front of her (the ring her hammer's hinge lands on: brooder.js HUNT), facing
+//             her. Away from the anchor a pull would abort (harpoon.js H.update: more than REACH + 1 from it), so there she is woken with
+//             lev.cmd('wake') (wakeBrooder, the pull's own onWake). Placed, 30 frames settle him (booked: grounded, his boots' gap to
+//             shutFloorY), then every stepped frame is booked until 14 s after the wake (the frame L.dormant goes false). E = the E press
+//             (anchor) or the wake. STOOD = the probe's OWN frame (never the build's flag alone: the code grading itself): the first frame
+//             after the wake with L.stand >= 1, |heave.x - 1| < 0.02 and |heave.v| < 0.05 (brooder.js's hasStood test, read off the
+//             series); L.hasStood's first frame is booked beside it. Bars (Task 7a's, pre-registered in its brief):
+//               (a) from E until STOOD: no tear (window.__slamLog.length and survival.torn never rise), threatE 0 (no blow cocked), nsT 0
+//                   (no drop counting); the first frame of threatE > 0, nsT > 0 and drop > 0 over the whole run booked
+//               (b) BP_AT crest or anchor only: a stagger SET within 1.0 s of the wake (player.stagger rising frame on frame, so the
+//                   wrench's own stagger, 0.45 s at the free and spent by the wake, cannot pass it), and his distance (plan) from the
+//                   strip's centre (MD.bx, MD.bz; no mound: her centre) 1.5 s after the wake >= 0.5 u more than at the wake
+//               (c) every ward's centre < 0 u over the drawn sand at the wake, > 2 u at STOOD, and none lit on any frame
+//               (d) her body's |dY/dt| (L.bodyY, frame on frame x 60) <= 8 u/s on every frame from E to STOOD (after it: booked)
+//               (e) his capsule (bodyBlocked at 0.45 / 1.0 / 1.6 u over his boots, margin 0: his axis inside her; the 0.45 margin, his
+//                   radius, booked) on no frame from 1.5 s after the wake to STOOD; the lens never bodyBlocked(lens, 0) nor under
+//                   shutFloorY(lens) + 0.3 from E to STOOD. After STOOD she hunts him: those frames are the fight's (the lensfix
+//                   residual), booked apart, not judged here
+//               (f) at STOOD the dune is drawn back: MD.k (the k setMoundK drew) 0 and MD.drawn false
+//             >= 60 frames from E to STOOD and a STOOD frame, else UNMEASURED. Booked besides (the 7a bookings): L.bury when standE first
+//             passes 0.5 and 0.9, L.bellyOver, her claws' lift / elbow and L.frontUp / clawRes through the rise, the first 12 frames
+//             after the wake's BODY (bodyCols: last, hitV, push, contacts, shell) and L.shoveN, his gap to the drawn ground. The blind
+//             bar is Task 8's.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height; steep (repose 2.0: the dune fitted to fall at 63 deg; the bar is fixed, so it must fail) ->
 // repose; still (breath: __burial.set({breath:{lift:0}})) -> amplitude; lazy (programs: after (a) her shell material's key gains
-// '|lazyRED' and needsUpdate, a variant compiled in play, as a crust installed at first sight would be) -> rise. A page-side throw is
+// '|lazyRED' and needsUpdate, a variant compiled in play, as a crust installed at first sight would be) -> rise; noshove (rise:
+// {shoveV: 0, shoveStag: 0}) -> (b); tearable (rise, BP_AT=crest only: {holdRise: 0}, the holds off) -> (a), a tear from her rising
+// shell; early (rise, BP_AT=front only: {holdRise: 0}) -> (a), her hammer cocks (or lands) before she has stood. The two holdRise
+// REDs judge (a)'s named PART (aTear, aHammer: see REDS), so neither can pass on the other's reason. A page-side throw is
 // UNMEASURED (exit 2), never a fail (1) or a RED's pass (5).
 // __burial.set rebuilds her through __lev.remember(null), outside game.js keepingPrograms: her programs are released and
 // rebuilt, so a `programs` reading taken after a set is not a play reading (that mode never sets knobs).
@@ -89,10 +119,10 @@
 // ENV (besides DRV_PORT, a port of this probe's own: never 8777 / 8790 / 9419; the probe exits 2 before importing drv.mjs):
 //   BP_KNOBS=<json>   patched through `__burial.set` before the mode (absent on main: exit 2, a patch has nothing to act on)
 //   BP_RED=<variant>  an opt-in RED, never part of the default run: it must fail ITS bar (exit 5; 3 = it did not). disguise:
-//                     ridge | shallow | steep; breath: still; programs: lazy. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
+//                     ridge | shallow | steep | late; breath: still; programs: lazy; rise: noshove | tearable | early. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
 //                     `ridge` on main: main already is the shipped ridge, the unpatched reading is that RED (exit 5 there).
 //   BP_AT=<where>     where he stands for the modes that place him: anchor (Alt+6's harpoon anchor) | crest (on her) | off
-//                     (clear of her ground). `disguise` is geometry only and does not place him (the value is still checked).
+//                     (clear of her ground) | front (rise: 2.3 R in front of her). `disguise` is geometry only and does not place him (the value is still checked).
 //   BP_NOPLUG=1       the drift RED: plug(c, { stop: false }), the counter on and clock.stop() skipped. It must print CLOCK LOST
 //                     with a NUMERIC drift over 0.05 s (exit 4). A missing reading is exit 2 and is not the RED.
 //   BP_CHECK=<list>   disguise: legs,claws,eyes,mouth,wards,reef,weed,sides,top,len,repose (crest = top + len; height = top, the crest's
@@ -101,7 +131,7 @@
 // (an empty DRV_PORT is +'' = 0, an integer: the port must be all digits and inside 1024-65535, as drv.mjs's start() demands)
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error(`burial-probe: set DRV_PORT to a port of its own, an integer in 1024-65535 (not 8777 / 8790 / 9419; got ${JSON.stringify(process.env.DRV_PORT)})`); process.exit(2); }
-const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BUILT = ['disguise', 'breath', 'programs'];
+const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BUILT = ['disguise', 'breath', 'programs', 'rise'];
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/burial-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 if (!BUILT.includes(MODE)) { console.error(`burial-probe: mode ${MODE} is not built yet (a later task of the velkath-buried-rock plan adds it)`); process.exit(2); }
@@ -115,12 +145,19 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
     // pose, then the lobes rest on the sunk floor with their tops out of the sand)
     late: { set: {}, bars: ['clutch'], page: true } },
   breath: { still: { set: { breath: { lift: 0 } }, bars: ['amp'] } },
-  programs: { lazy: { set: {}, bars: ['rise'], page: true } } };
+  programs: { lazy: { set: {}, bars: ['rise'], page: true } },
+  // (Task 7a) at: the only BP_AT the RED is written for
+  // (a) is judged by its PARTS for the holdRise REDs, each the part its brief names (with the holds off, her threat comes on from close
+  // range too, so (a) whole would fail at the crest for the hammer's reason and prove nothing about the tear): aTear = a tear from E to
+  // STOOD; aHammer = threatE > 0 or nsT > 0 from E to STOOD (a blow cocked, a drop counting)
+  rise: { noshove: { set: { shoveV: 0, shoveStag: 0 }, bars: ['b'] }, tearable: { set: { holdRise: 0 }, bars: ['aTear'], at: 'crest' },
+    early: { set: { holdRise: 0 }, bars: ['aHammer'], at: 'front' } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 const AT = process.env.BP_AT || '';
-if (AT && !['anchor', 'crest', 'off'].includes(AT)) { console.error(`BP_AT: anchor | crest | off (got ${JSON.stringify(AT)})`); process.exit(2); }
+if (AT && !['anchor', 'crest', 'off', 'front'].includes(AT)) { console.error(`BP_AT: anchor | crest | off | front (got ${JSON.stringify(AT)})`); process.exit(2); }
+if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
 const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'exposed', 'repose', 'clutch', 'seam', 'pole', 'iron'];
@@ -355,6 +392,53 @@ const PROG_INSTALL = `(async () => {
   };
   return { n: P().length, crust: crustN(), hasCrust: !!(window.__burial && window.__burial.crust) }; })()`;
 
+// the page side of `rise` (header). RISE_INSTALL puts window.__bpRise: settle(n) steps n frames booking his footing (not the series);
+// step(n) steps n frames booking one row per frame into S (wake = the first row with L.dormant false, recorded as wakeF). Reads the
+// sleeper's fields directly (L.probe() counts triangles: too heavy per frame). RISE_PLACE(where) stands him at crest | front.
+const RISE_INSTALL = `(async () => {
+  const T = await import('/src/world/terrain.js'), BC = await import('/src/entities/sleeper/bodyCols.js'), { camera } = await import('/src/core.js');
+  const L = window.lev; if (!L || L.kind !== 'brooder' || !L.dormant) return { err: 'no dormant brooder (' + (L && L.kind) + ')' };
+  const B = window.__burial || null, P = window.player, MD = L.mound || null;
+  const sand = (x, z) => Math.max(T.terrainH(x, z, 0), B && B.sandAt ? B.sandAt(x, z) : -1e9);
+  const cx = MD ? MD.bx : L.pos.x, cz = MD ? MD.bz : L.pos.z;
+  const r3 = v => Math.round(v * 1000) / 1000, r2 = v => Math.round(v * 100) / 100;
+  const blk = (x, y, z, m) => { for (const h of [0.45, 1.0, 1.6]) if (BC.bodyBlocked(x, y + h, z, m)) return 1; return 0; };
+  const R = window.__bpRise = { S: [], wakeF: -1, cx, cz, R: L.R,
+    foot() { const p = P.pos, fl = T.shutFloorY(p.x, p.z, 0); return { him: [r2(p.x), r2(p.y), r2(p.z)], grounded: !!P.grounded, gap: r3(p.y - 1.35 - fl), sand: r3(p.y - 1.35 - sand(p.x, p.z)),
+      xf: r3(T.extraFloorAt(p.x, p.z, 0)), terr: r3(T.terrainH(p.x, p.z, 0)), dC: r2(Math.hypot(p.x - cx, p.z - cz)), dormant: !!L.dormant }; },
+    settle(n) { const g = []; window.__bench.step(n, () => { g.push(P.grounded ? 1 : 0); }); return Object.assign(R.foot(), { groundedFrames: g.reduce((a, b) => a + b, 0), of: n }); },
+    row() {
+      const p = P.pos, bo = p.y - 1.35, cp = camera.position, BD = BC.BODY, sv = window.survival;
+      if (R.wakeF < 0 && !L.dormant) R.wakeF = R.S.length;
+      let wmax = -1e9, wmin = 1e9, lit = 0; const wh = [];
+      for (const g of L.sigils) { const d = g.grp.position.y - sand(g.grp.position.x, g.grp.position.z); wh.push(r2(d)); if (d > wmax) wmax = d; if (d < wmin) wmin = d; if (g.lit) lit++; }
+      R.S.push({ dorm: L.dormant ? 1 : 0, stand: r3(L.stand), standE: r3(L.standE), bury: r3(L.bury || 0), moundK: L.moundK == null ? null : r3(L.moundK), mk: MD ? r3(MD.k) : null, drawn: MD ? (MD.drawn ? 1 : 0) : null,
+        hx: r3(L.heave.x), hv: r3(L.heave.v), rising: L.rising ? 1 : 0, hasStood: L.hasStood == null ? null : (L.hasStood ? 1 : 0), risenUp: L.risenUp == null ? null : (L.risenUp ? 1 : 0),
+        bodyY: r3(L.bodyY), threatE: r3(L.threatE), nsT: r3(L.nsT || 0), drop: L.drop || 0, seen: L.seen ? 1 : 0, tau: r2(L.tau || 0), blindT: r2(L.blindT || 0), lost: L.lostN || 0,
+        stag: r3(P.stagger || 0), px: r2(p.x), py: r2(p.y), pz: r2(p.z), gr: P.grounded ? 1 : 0, gap: r3(bo - T.shutFloorY(p.x, p.z, 0)), dC: r3(Math.hypot(p.x - cx, p.z - cz)),
+        slam: window.__slamLog ? window.__slamLog.length : -1, torn: r2(sv ? sv.torn : -1), wh, wmin: r2(wmin), wmax: r2(wmax), lit,
+        blk0: blk(p.x, bo, p.z, 0), blk45: blk(p.x, bo, p.z, 0.45), lensClr: r3(cp.y - T.shutFloorY(cp.x, cp.z, 0)), lensBlk: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0,
+        lift: L.claws.map(c => r3(c.liftNow || 0)), elbow: L.claws.map(c => r3(c.elbow || 0)), frontUp: r3(L.frontUp || 0), clawRes: r3(L.clawRes || 0), clawSt: r3(L.clawSt || 0), belly: r2(L.bellyOver ?? 99),
+        body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0 });
+    },
+    step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { R.row(); }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
+  return { R: L.R, buried: !!L.buried, hasMound: !!MD, centre: [r2(cx), r2(cz)], hasStoodKnown: 'hasStood' in L, knobs: B ? { shoveV: B.knobs.shoveV ?? null, shoveStag: B.knobs.shoveStag ?? null, holdRise: B.knobs.holdRise ?? null, riseU: B.knobs.riseU ?? null, pourU: B.knobs.pourU ?? null } : null };
+})()`;
+const RISE_PLACE = where => `(async () => {
+  const T = await import('/src/world/terrain.js'), S = await import('/src/world/fissureShape.js');
+  const L = window.lev, R = L.R; let x, z;
+  if (${JSON.stringify(where)} === 'crest') {
+    // the highest drawn shell vertex (her crest's top)
+    const sh = L.parts.shell, P = sh.geometry.attributes.position, v = new (L.pos.constructor)(); sh.updateMatrixWorld(true); let top = -1e9;
+    for (let i = 0; i < P.count; i++) { v.fromBufferAttribute(P, i).applyMatrix4(sh.matrixWorld); if (v.y > top) { top = v.y; x = v.x; z = v.z; } }
+  } else { x = L.pos.x + Math.sin(L.yaw) * 2.3 * R; z = L.pos.z + Math.cos(L.yaw) * 2.3 * R; }
+  window.__bench.place(x, z, Math.atan2(L.pos.x - x, L.pos.z - z), 0);
+  window.player.pos.y = T.shutFloorY(x, z, 0) + 1.35; window.player.vel.set(0, 0, 0);
+  return { where: ${JSON.stringify(where)}, him: [+x.toFixed(2), +z.toFixed(2)], fd: +S.fissureDist(x, z, 0).toFixed(2), floor: +T.shutFloorY(x, z, 0).toFixed(2), terr: +T.terrainH(x, z, 0).toFixed(2) };
+})()`;
+const alt = (cc, d) => cc.ev(`(window.dispatchEvent(new KeyboardEvent('keydown',{code:'Digit${d}',key:'${d}',altKey:true,bubbles:true})), window.dispatchEvent(new KeyboardEvent('keyup',{code:'Digit${d}',key:'${d}',altKey:true,bubbles:true})), window.__helm=true, window.__bench.step(60), 1)`);
+const RISE_SECS = 14;
+
 // ---- boot: about:blank, the domains on, the focus a player's window has, then the game ----
 try { const r = await fetch(`http://127.0.0.1:${P}/json/version`, { signal: AbortSignal.timeout(2000) });
   console.error(`the debug port ${P} already answers /json/version (HTTP ${r.status}): not starting, nothing touched`); process.exit(2); }
@@ -464,6 +548,31 @@ try {
     }
     out = { ...ph, marks: await c.ev(`window.__bpProg.marks`), series: await c.ev(`window.__bpProg.series`) };
   }
+  if (MODE === 'rise') {
+    // (placed FIRST: Alt+6 rebuilds the zone's sleeper, so the booking is installed on the one he then wakes)
+    const where = AT || 'anchor';
+    let pl;
+    if (where === 'anchor') { await alt(c, 6); pl = await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { where: 'anchor', him: [+p.x.toFixed(2), +p.z.toFixed(2)], dAnchor: H && H.anchor ? +Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z).toFixed(2) : null, prompt: window.lev.rite ? window.lev.rite.prompt(p) : null }; })()`); }
+    else if (where === 'off') pl = await c.ev(BREATH_PLACE(12));
+    else pl = await c.ev(RISE_PLACE(where));
+    if (!pl || pl.err) throw new Error('place: ' + (pl && pl.err));
+    const ins = await c.ev(RISE_INSTALL);
+    if (!ins || ins.err) out = ins;
+    else {
+      const settle = await c.ev(`window.__bpRise.settle(30)`);
+      console.log(`rise at ${where}: ${JSON.stringify(pl)}; settled ${JSON.stringify(settle)}; ${JSON.stringify(ins)}`);
+      let st;
+      if (where === 'anchor') {
+        await c.key('KeyE', true); await c.ev(`window.__bpRise.step(2)`); await c.key('KeyE', false);
+        const wr = await c.ev(`({ wrenching: !!window.lev.harpoon.wrenching, state: window.gameState, focus: document.hasFocus(), hidden: document.hidden })`);
+        if (!wr.wrenching) throw new Error('real E did not start the wrench at the anchor: ' + JSON.stringify(wr));
+        for (let k = 0; k < 20; k++) { st = await c.ev(`window.__bpRise.step(30)`); if (st.wakeF >= 0) break; }
+        if (!(st && st.wakeF >= 0)) throw new Error('she did not wake within 10 s of E at the anchor (' + JSON.stringify(pl) + '; ' + JSON.stringify(st) + '; ' + JSON.stringify(await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { wrenching: !!H.wrenching, wT: H.wT, pulled: !!H.pulled, wakeT: H.wakeT, d: Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z), dormant: window.lev.dormant, onDeck: window.player.onDeck, state: window.gameState }; })()`)) + ')');
+      } else { await c.ev(`(window.__lev.cmd('wake'), 1)`); st = await c.ev(`window.__bpRise.step(1)`); }
+      for (let k = 0; k < 40 && st.rows - st.wakeF < RISE_SECS * 60; k++) st = await c.ev(`window.__bpRise.step(${Math.min(300, RISE_SECS * 60 - (st.rows - st.wakeF))})`);
+      out = { where, place: pl, settle, ins, wakeF: st.wakeF, S: await c.ev(`window.__bpRise.S`) };
+    }
+  }
 } catch (e) { fatal = String(e && e.message || e); }
 const clock = await drift(c).catch(() => null);
 record.clock = clock;
@@ -478,7 +587,7 @@ if (!out) { console.error('UNMEASURED: the page returned no reading (no out, no 
 if (unmeasured(clock)) { console.error('UNMEASURED: no clock reading ' + JSON.stringify(clock)); finish(2, 'no clock reading'); }
 record[MODE] = out;
 if (lost(clock)) {
-  console.log(`${MODE.toUpperCase()} ${JSON.stringify(MODE === 'breath' ? { legs: out.legs, frames: out.series.length } : MODE === 'programs' ? { marks: out.marks } : out)}`);
+  console.log(`${MODE.toUpperCase()} ${JSON.stringify(MODE === 'breath' ? { legs: out.legs, frames: out.series.length } : MODE === 'programs' ? { marks: out.marks } : MODE === 'rise' ? { where: out.where, wakeF: out.wakeF, frames: out.S.length } : out)}`);
   console.log(`CLOCK LOST: drift ${clock.drift} s over ${clock.stepped} s stepped (the bar is ${CLOCK_LOST} s), clock ${clock.running ? 'RUNNING' : 'stopped'}: ${JSON.stringify(clock)}`);
   finish(4, 'clock lost');
 }
@@ -563,6 +672,71 @@ if (MODE === 'breath') {
     console.error(`RED ${RED} did not fail as written (${J.filter(k => k.ok).map(k => k.name).join(', ')} held): exit 3`); finish(3, 'RED did not fail');
   }
   if (failed.length) { console.error('FAIL ' + failed.map(k => `${k.name} ${JSON.stringify(k.val)} (bar ${k.bar})`).join('; ') + (vac.length ? '; UNMEASURED ' + vac.map(k => k.name).join(', ') : '')); finish(1, 'failed: ' + failed.map(k => k.name).join(',')); }
+  if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous: ' + vac.map(k => k.name).join(',')); }
+  console.log('PASS'); finish(0);
+}
+
+// rise: the bars (header). A RED judges only its own bars; a real FAIL beats an UNMEASURED; nothing vacuous passes
+if (MODE === 'rise') {
+  const S = out.S, w = out.wakeF, where = out.where, f60 = 60, r = v => Math.round(v * 1000) / 1000;
+  const e = where === 'anchor' ? 0 : w;
+  let s = -1; for (let i = w; i < S.length; i++) { const q = S[i]; if (q.stand >= 1 && Math.abs(q.hx - 1) < 0.02 && Math.abs(q.hv) < 0.05) { s = i; break; } }
+  const hs = S.findIndex(q => q.hasStood === 1);
+  const sec = i => i < 0 ? null : +((i - w) / f60).toFixed(3);
+  const win = (a, b) => S.slice(Math.max(0, a), b < 0 ? S.length : b + 1);
+  const A = s >= 0 ? win(e, s) : [];
+  const first = f => { const i = S.findIndex((q, k) => k >= w && f(q)); return i < 0 ? null : sec(i); };
+  const info = { wakeAt: w, stoodAt: s, stoodT: sec(s), hasStoodT: hs < 0 ? null : sec(hs), hasStoodKnown: !!out.ins.hasStoodKnown, frames: S.length, eFrames: w - e,
+    firstThreat: first(q => q.threatE > 0), firstNs: first(q => q.nsT > 0), firstDrop: first(q => q.drop > 0), firstTear: (() => { const i = S.findIndex((q, k) => k > 0 && (q.slam > S[k - 1].slam || q.torn > S[k - 1].torn + 0.5)); return i < 0 ? null : sec(i); })(),
+    buryAtE5: (() => { const q = S.find((q, k) => k >= w && q.standE >= 0.5); return q ? q.bury : null; })(), buryAtE9: (() => { const q = S.find((q, k) => k >= w && q.standE >= 0.9); return q ? q.bury : null; })(),
+    buryZeroT: first(q => q.bury === 0), moundZeroT: first(q => q.mk === 0), standE9T: first(q => q.standE >= 0.9), standE5T: first(q => q.standE >= 0.5),
+    belly: A.length ? { min: Math.min(...A.map(q => q.belly)), atE9: (S.find((q, k) => k >= w && q.standE >= 0.9) || {}).belly } : null,
+    claws: A.length ? { liftMax: Math.max(...A.flatMap(q => q.lift)), elbowMax: Math.max(...A.flatMap(q => q.elbow.map(Math.abs))), frontUpMax: Math.max(...A.map(q => q.frontUp)), clawResMax: Math.max(...A.map(q => q.clawRes)),
+      frontUpFrames: A.filter(q => q.frontUp > 0.001).length, frontUpAtStood: s >= 0 ? S[s].frontUp : null } : null,
+    wakeBody: S.slice(w, w + 12).map(q => q.body), shoveN: S.length ? S[S.length - 1].shoveN : null, settle: out.settle, place: out.place, knobs: out.ins.knobs };
+  // (a)
+  const tear0 = e > 0 ? S[e - 1] : S[e];
+  const aTears = A.length ? A.reduce((n, q, k) => n + ((k === 0 ? q.slam > tear0.slam || q.torn > tear0.torn + 0.5 : q.slam > A[k - 1].slam || q.torn > A[k - 1].torn + 0.5) ? 1 : 0), 0) : null;
+  const aThr = A.length ? Math.max(...A.map(q => q.threatE)) : null, aNs = A.length ? Math.max(...A.map(q => q.nsT)) : null;
+  // (b)
+  const B0 = S.slice(w + 1, w + f60 + 1), stagSet = B0.findIndex((q, k) => q.stag > (k === 0 ? S[w].stag : B0[k - 1].stag) + 1e-6);
+  const d0 = S[w] ? S[w].dC : null, d15 = S[w + 90] ? S[w + 90].dC : null;
+  // (c)
+  const cW = S[w] ? S[w].wmax : null, cS = s >= 0 ? S[s].wmin : null, litN = S.filter(q => q.lit > 0).length;
+  // (d)
+  const vy = (a, b) => { let m = 0, at = -1; for (let i = Math.max(1, a); i <= b && i < S.length; i++) { const v = Math.abs(S[i].bodyY - S[i - 1].bodyY) * f60; if (v > m) { m = v; at = i; } } return { max: r(m), at: sec(at) }; };
+  const dR = s >= 0 ? vy(e + 1, s) : null, dAfter = s >= 0 ? vy(s + 1, S.length - 1) : null;
+  // (e)
+  const cap = s >= 0 ? win(w + 90, s) : [], capN = cap.filter(q => q.blk0).length, cap45 = cap.filter(q => q.blk45).length;
+  const lensBlk = A.filter(q => q.lensBlk).length, lensLow = A.filter(q => q.lensClr < 0.3).length, lensMin = A.length ? Math.min(...A.map(q => q.lensClr)) : null;
+  const F = s >= 0 ? S.slice(s + 1) : [];
+  info.fight = { frames: F.length, capBlk0: F.filter(q => q.blk0).length, lensBlk: F.filter(q => q.lensBlk).length, lensLow: F.filter(q => q.lensClr < 0.3).length, tears: F.length ? F[F.length - 1].slam - S[s].slam : null, capBlk45: cap45 };
+  // (f)
+  const fS = s >= 0 ? S[s] : null;
+  const vacA = s < 0 || A.length < 60;
+  const ck = [
+    { name: 'a', val: { tears: aTears, threatEmax: aThr, nsTmax: aNs, frames: A.length }, bar: 'from E to STOOD: tears 0, threatE 0, nsT 0', ok: aTears === 0 && aThr === 0 && aNs === 0, vacuous: vacA, judged: true },
+    { name: 'aTear', val: { tears: aTears, frames: A.length }, bar: '(a)\'s tear part: no tear from E to STOOD (a holdRise RED\'s bar)', ok: aTears === 0, vacuous: vacA, judged: false },
+    { name: 'aHammer', val: { threatEmax: aThr, nsTmax: aNs, frames: A.length }, bar: '(a)\'s hammer and drop part: threatE 0, nsT 0 from E to STOOD (a holdRise RED\'s bar)', ok: aThr === 0 && aNs === 0, vacuous: vacA, judged: false },
+    { name: 'b', val: { stagSetT: stagSet < 0 ? null : +((stagSet + 1) / f60).toFixed(3), dC0: d0, dC15: d15, out: d0 != null && d15 != null ? r(d15 - d0) : null }, bar: 'a stagger set within 1.0 s of the wake, and the strip-centre distance +>= 0.5 u by 1.5 s', ok: stagSet >= 0 && d0 != null && d15 != null && d15 - d0 >= 0.5, vacuous: !S[w + 90], judged: where === 'crest' || where === 'anchor' },
+    { name: 'c', val: { wardsAtWakeMax: cW, wardsAtStoodMin: cS, litFrames: litN, n: S[w] ? S[w].wh.length : 0 }, bar: 'wards < 0 over the sand at the wake, > 2 at STOOD, none lit', ok: cW != null && cW < 0 && cS != null && cS > 2 && litN === 0, vacuous: s < 0 || !S[w] || !S[w].wh.length, judged: true },
+    { name: 'd', val: dR, bar: '|dY/dt| <= 8 u/s, E to STOOD', ok: !!dR && dR.max <= 8, vacuous: vacA, judged: true },
+    { name: 'e', val: { capBlk0: capN, capFrames: cap.length, capBlk45: cap45, lensBlk, lensLow, lensMin }, bar: 'capsule never inside her from wake + 1.5 s to STOOD; the lens never inside her nor under the drawn surface + 0.3, E to STOOD', ok: capN === 0 && lensBlk === 0 && lensLow === 0, vacuous: vacA || !cap.length, judged: true },
+    { name: 'f', val: fS ? { mk: fS.mk, drawn: fS.drawn, moundK: fS.moundK } : null, bar: 'at STOOD MD.k 0 and MD.drawn false', ok: !!fS && fS.mk === 0 && fS.drawn === 0, vacuous: !fS || fS.mk == null, judged: true }];
+  info.dAfter = dAfter;
+  const red = RED ? REDS.rise[RED].bars : null;
+  if (red) for (const k of ck) k.judged = red.includes(k.name);
+  record.checks = ck; record.riseInfo = info;
+  console.log(`RISE ${where} ${JSON.stringify(info)}`);
+  for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} (${k.name}) ${JSON.stringify(k.val)} (bar ${k.bar})`);
+  if (cons.length) console.error('console errors (booked, not part of the bar): ' + JSON.stringify(cons));
+  const J = ck.filter(k => k.judged), failed = J.filter(k => !k.vacuous && !k.ok), vac = J.filter(k => k.vacuous);
+  if (RED) {
+    if (vac.length) { console.error(`UNMEASURED: BP_RED ${RED}: nothing booked for ${vac.map(k => k.name).join(', ')}`); finish(2, 'RED bars vacuous'); }
+    if (failed.length === J.length) { console.log(`RED ${RED}: (${red.join(', ')}) failed as it must: exit 5`); finish(5); }
+    console.error(`RED ${RED} did not fail as written (${J.filter(k => k.ok).map(k => k.name).join(', ')} held): exit 3`); finish(3, 'RED did not fail');
+  }
+  if (failed.length) { console.error('FAIL ' + failed.map(k => `(${k.name}) ${JSON.stringify(k.val)} (bar ${k.bar})`).join('; ') + (vac.length ? '; UNMEASURED ' + vac.map(k => k.name).join(', ') : '')); finish(1, 'failed: ' + failed.map(k => k.name).join(',')); }
   if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous: ' + vac.map(k => k.name).join(',')); }
   console.log('PASS'); finish(0);
 }
