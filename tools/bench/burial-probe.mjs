@@ -75,6 +75,8 @@
 //             not judged, when the base's own rise failed with the same kinds new in (b) (the pre-existing compile is the base's, carried
 //             to Task 7b; vsBase still holds every count equal); BP_RED=lazy is refused without BP_BASE (its rise bar alone cannot tell
 //             the RED's compile from the base's).
+//             (Task 7b) slabDraw: on a build with slabs (L.slabs), they are DRAWN (visible and in the lens's frustum by their bounding
+//             sphere) on >= 1 rendered frame of (b), so (b) == (a) covers their first draw; booked per frame (the series' fifth column).
 //             hitch.mjs's scenarios (jet, z1, z2, voyage) do not include the rise, the point or the dig-in: this mode is the gate for those.
 //   rise      THE RISE OUT OF THE SAND (Task 7a; spec §2 "A slow, heavy rise of about 6 s", "Her rising body shoves him back with a
 //             stagger, but cannot tear the dress", "The fight's dangers (the drop, the hammer, the tear) start once she stands"). Home, her
@@ -136,6 +138,14 @@
 //                   2026-10-20 (2nd, the last change to this bar): "in contact" includes a 0.25 s (15 frame) grace after each shell contact
 //                   (resting contact on a rising surface flickers frame to frame: 19 of 74 frames at the anchor); the bounds unchanged. Judged at every BP_AT; BP_AT=dune stands
 //                   him half-way down the dune on her sand side (the dune floor following moundK as it draws down)
+//               (h) THE CRACK (Task 7b, pre-registered in its brief): L.crackK >= 0.9 x L.bury on some frame within BURY.crackT + 0.1 s of the
+//                   wake (the crust's crack drawn at its full strength for the sand still on her). A crack that never drew (crackK never > 0
+//                   after the wake: the Task 7a head) books nothing: UNMEASURED
+//               (i) THE SLABS (Task 7b, its brief: "A slab hovering more than 0.3 u is a fail: they ride the surface until they sink"): read off
+//                   the DRAWN mesh (L.slabs { mesh, n, vpc }), every live piece's lowest drawn vertex <= +0.3 u over the drawn surface under that
+//                   vertex (the highest of terrainH, the drawn dune and her drawn shell, a downward ray from the vertex + 1.5 u: never the fit
+//                   pose, her back rises under them) on every frame the mesh is drawn (sunk into the sand is allowed: one-sided), and the mesh
+//                   hidden by 3.1 s after the wake. No L.slabs (the Task 7a head), or none drawn with a piece live: UNMEASURED
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
 //             leg capsule (bodyColsCaps, the first 40: 8 legs x 5; moving 3-18 u/s, under bodyCols' LIMB_VMAX 20), 0.2 u in, afloat,
@@ -424,10 +434,17 @@ const PROG_INSTALL = `(async () => {
     read(tag) { const now = P(), nw = now.filter(p => !seen.has(p.cacheKey)).map(p => (p.name || p.cacheKey.split(',')[0].slice(0, 40)) + ' ~' + p.cacheKey.slice(-60).replace(/,/g, ' '));
       seen = new Set(now.map(p => p.cacheKey));
       const m = { tag, n: now.length, crust: crustN(), bare: bareN(), failed: failed(), newNames: nw, frames: S.series.length }; S.marks.push(m); return m; },
-    frames(n, tag) { const L = window.lev; let mx = -1, bmx = -1;
+    // (Task 7b) sl: the slabs' mesh drawn this frame (visible, in the lens's frustum by its bounding sphere): the frames the slabs' own draw
+    // could compile on
+    frames(n, tag) { const L = window.lev; let mx = -1, bmx = -1, sln = 0;
       window.__bench.step(n, () => { const c = P().length; if (c > mx) mx = c; const b = L && L.crustU ? L.crustU.uBury.value : null; if (b != null && b > bmx) bmx = b;
-        S.series.push([tag, c, b == null ? null : +b.toFixed(4), L && L.dormant ? 1 : 0]); }, { render: true });
-      return { max: mx, buryMax: bmx < 0 ? null : bmx }; },
+        let sl = 0; const Sm = L && L.slabs && L.slabs.mesh;
+        if (Sm && Sm.visible) { const g = Sm.geometry; if (!g.boundingSphere) g.computeBoundingSphere(); Sm.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+          const fr = new THREE.Frustum().setFromProjectionMatrix(new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+          sl = fr.intersectsSphere(g.boundingSphere.clone().applyMatrix4(Sm.matrixWorld)) ? 1 : 0; }
+        sln += sl;
+        S.series.push([tag, c, b == null ? null : +b.toFixed(4), L && L.dormant ? 1 : 0, sl]); }, { render: true });
+      return { max: mx, buryMax: bmx < 0 ? null : bmx, slabFrames: sln }; },
     shellKey() { const L = window.lev, pr = L && L.parts && L.parts.shell ? renderer.properties.get(L.parts.shell.material).currentProgram : null; return pr ? pr.cacheKey : null; },
     control() { const key = 'bp-control-' + Date.now(), f = new THREE.Vector3(); camera.getWorldDirection(f);
       const m = new THREE.MeshBasicMaterial({ color: 0xff00ff }); m.customProgramCacheKey = () => key;
@@ -520,6 +537,21 @@ const RISE_INSTALL = `(async () => {
     // (BP_AT=under) on the sand under her centre, afloat 0, still; booked from the next row (R.underF)
     under() { const x = L.pos.x, z = L.pos.z; P.pos.set(x, T.terrainH(x, z, 0) + 1.35, z); P.vel.set(0, 0, 0); P.grounded = true; R.prevBoots = T.terrainH(x, z, 0); R.underF = R.S.length;
       return { at: [r2(x), r2(z)], floor: r3(T.terrainH(x, z, 0)), xf: r3(T.extraFloorAt(x, z, 0)), bodyY: r3(L.bodyY), standE: r3(L.standE), hasStood: !!L.hasStood }; },
+    // (Task 7b) THE CRUST'S SLABS, read off the DRAWN mesh (L.slabs: { mesh, n, vpc }: n pieces of vpc vertices each, in the mesh's own
+    // frame): per piece its lowest drawn vertex (world) and the drawn surface under that vertex (the highest of terrainH, the drawn dune
+    // and her drawn shell, a downward ray from the vertex + 1.5 u); a piece drawn collapsed (every vertex within 1e-4 u: gone) is not
+    // booked. null: no slabs on this build. { v: 0 }: the mesh hidden
+    slab() { const Sl = L.slabs; if (!Sl) return null; const m = Sl.mesh; if (!m || !m.visible) return { v: 0 };
+      m.updateMatrixWorld(true); const A = m.geometry.attributes.position.array, e = m.matrixWorld.elements, vpc = Sl.vpc;
+      let n = 0, gMax = -1e9, gMin = 1e9, wk = -1, wAt = null;
+      for (let k = 0; k < Sl.n; k++) { let ly = 1e9, lx = 0, lz = 0, hi = -1e9;
+        for (let i = k * vpc; i < (k + 1) * vpc; i++) { const x = A[i * 3], y = A[i * 3 + 1], z = A[i * 3 + 2];
+          const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+          if (wy < ly) { ly = wy; lx = wx; lz = wz; } if (wy > hi) hi = wy; }
+        if (hi - ly < 1e-4) continue;
+        n++; const g = ly - Math.max(T.terrainH(lx, lz, 0), B && B.sandAt ? B.sandAt(lx, lz) : -1e9, shellTop(lx, ly + 1.5, lz));
+        if (g > gMax) { gMax = g; wk = k; wAt = [r2(lx), r2(ly), r2(lz)]; } if (g < gMin) gMin = g; }
+      return { v: 1, n, gMax: n ? r3(gMax) : null, gMin: n ? r3(gMin) : null, wk, at: wAt }; },
     settle(n) { const g = []; window.__bench.step(n, () => { g.push(P.grounded ? 1 : 0); }); return Object.assign(R.foot(), { groundedFrames: g.reduce((a, b) => a + b, 0), of: n }); },
     row() {
       const p = P.pos, bo = p.y - 1.35, cp = camera.position, BD = BC.BODY, sv = window.survival;
@@ -536,11 +568,12 @@ const RISE_INSTALL = `(async () => {
         lift: L.claws.map(c => r3(c.liftNow || 0)), elbow: L.claws.map(c => r3(c.elbow || 0)), frontUp: r3(L.frontUp || 0), clawRes: r3(L.clawRes || 0), clawSt: r3(L.clawSt || 0), belly: r2(L.bellyOver ?? 99),
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
         gBase: r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, pb + 1.5, p.z))), gFoot: r3(footCarried(p.x, p.z)), boots: r3(bo), pb: r3(pb), forced: R.lastForce || 0,
-        calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0 });
+        calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0,
+        crackK: L.crackK == null ? null : r3(L.crackK), slab: R.slab() });
       R.prevBoots = bo;
     },
     step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { R.row(); R.lastForce = 0; if (${FORCE ? 'true' : 'false'} && R.wakeF >= 0 && L.stand >= 1 && !R.stoodSeen) { if (L.hasStood) { R.stoodSeen = true; if (R.reach0 != null) L.reach = R.reach0; } else { if (R.reach0 == null) { R.reach0 = L.reach; L.reach = -1; } R.lastForce = R.force(); } } }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
-  return { R: L.R, buried: !!L.buried, hasMound: !!MD, centre: [r2(cx), r2(cz)], hasStoodKnown: 'hasStood' in L, knobs: B ? { shoveV: B.knobs.shoveV ?? null, shoveStag: B.knobs.shoveStag ?? null, holdRise: B.knobs.holdRise ?? null, riseU: B.knobs.riseU ?? null, pourU: B.knobs.pourU ?? null } : null };
+  return { R: L.R, buried: !!L.buried, hasMound: !!MD, centre: [r2(cx), r2(cz)], hasStoodKnown: 'hasStood' in L, knobs: B ? { shoveV: B.knobs.shoveV ?? null, shoveStag: B.knobs.shoveStag ?? null, holdRise: B.knobs.holdRise ?? null, riseU: B.knobs.riseU ?? null, pourU: B.knobs.pourU ?? null, crackT: B.knobs.crackT ?? null, slabs: B.knobs.slabs ?? null } : null, hasSlabs: !!L.slabs };
 })()`;
 const RISE_PLACE = where => `(async () => {
   const T = await import('/src/world/terrain.js'), S = await import('/src/world/fissureShape.js');
@@ -653,11 +686,12 @@ try {
     if (RED === 'lazy') ph.lazy = await c.ev(`window.__bpProg.lazyRed()`);
     // (b) the rise: woken as the pull's onWake wakes her; to L.hasStood (Task 7a), else 9 s
     ph.wake = await c.ev(`(window.__lev.cmd('wake'), { dormant: !!window.lev.dormant, hasStoodKnown: 'hasStood' in window.lev })`);
-    let bF = { max: -1 }, nb = 0;
+    let bF = { max: -1 }, nb = 0, slF = 0;
+    ph.hasSlabs = await c.ev(`!!window.lev.slabs`);
     for (let k = 0; k < (ph.wake.hasStoodKnown ? 60 : 9); k++) {
-      const f = await c.ev(`window.__bpProg.frames(60, 'b')`); nb += 60; if (f.max > bF.max) bF = f;
+      const f = await c.ev(`window.__bpProg.frames(60, 'b')`); nb += 60; slF += f.slabFrames || 0; if (f.max > bF.max) bF = f;
       if (ph.wake.hasStoodKnown && await c.ev(`!!window.lev.hasStood`)) break; }
-    ph.bF = Object.assign(bF, { frames: nb }); ph.b = await c.ev(`window.__bpProg.read('b')`);
+    ph.bF = Object.assign(bF, { frames: nb, slabFrames: slF }); ph.b = await c.ev(`window.__bpProg.read('b')`);
     ph.c = { skipped: 'Task 10 adds __lev.cmd(\'calm\')' }; ph.d = { skipped: 'Task 12 adds the dig-in' };
     // the other sites: her shell's program is home's; the crust's uBury 0 on every frame
     ph.sites = [];
@@ -721,12 +755,14 @@ if (MODE === 'programs') {
   const o = out, hasCrust = !!o.install.hasCrust, A = o.a.n, marks = o.marks;
   const ctlOk = o.control.n1 >= o.control.n0 + 1 && o.control.hasKey, goneOk = o.controlGone.n === o.control.n0 && !o.controlGone.hasKey;
   record.programs = { boot: o.boot.n, first: o.first.n, firstNew: o.first.newNames, control: o.control, controlGone: o.controlGone, a: A, b: o.b.n, bMax: o.bF.max, bFrames: o.bF.frames,
-    bNew: o.b.newNames, c: o.c, d: o.d, homeKeyCrust: o.homeKey ? o.homeKey.indexOf('|crust') >= 0 : null, sites: o.sites.map(q => ({ si: q.si, n: q.read.n, max: q.frames.max, buryMax: q.frames.buryMax, crust: q.read.crust, sameKey: q.key === o.homeKey, buried: q.buried, newNames: q.read.newNames })) };
+    bNew: o.b.newNames, slabFrames: o.bF.slabFrames ?? null, hasSlabs: !!o.hasSlabs, c: o.c, d: o.d, homeKeyCrust: o.homeKey ? o.homeKey.indexOf('|crust') >= 0 : null, sites: o.sites.map(q => ({ si: q.si, n: q.read.n, max: q.frames.max, buryMax: q.frames.buryMax, crust: q.read.crust, sameKey: q.key === o.homeKey, buried: q.buried, newNames: q.read.newNames })) };
   console.log(`PROGRAMS ${JSON.stringify(record.programs)}`);
   if (!ctlOk) { console.error(`UNMEASURED: the positive control did not move the count (${o.control.n0} -> ${o.control.n1}, key ${o.control.hasKey}): the probe cannot see a compile`); finish(2, 'control'); }
   if (!goneOk) { console.error(`UNMEASURED: the control's program was not released (${o.controlGone.n} vs ${o.control.n0}, key ${o.controlGone.hasKey}): (a) would carry it`); finish(2, 'control not released'); }
   const ck = [
     { name: 'rise', val: { a: A, bMax: o.bF.max, b: o.b.n, frames: o.bF.frames }, bar: '(b) every rendered frame == (a) (max and last)', ok: o.bF.max === A && o.b.n === A, vacuous: !(o.bF.frames > 0), judged: true },
+    // (Task 7b) the slabs' first draw is inside (b): it compiles nothing only if they were drawn there (in the lens's frustum)
+    { name: 'slabDraw', val: { slabFrames: o.bF.slabFrames ?? null }, bar: 'the slabs drawn (visible, in the frustum) on >= 1 rendered frame of (b)', ok: (o.bF.slabFrames || 0) > 0, vacuous: false, judged: !!o.hasSlabs },
     { name: 'calm', val: o.c.skipped, bar: '(c) == (a)', ok: false, vacuous: true, judged: false },
     { name: 'digin', val: o.d.skipped, bar: '(d) == (a)', ok: false, vacuous: true, judged: false },
     { name: 'shader', val: marks.map(m => m.tag + ':' + m.failed), bar: '__shaderFailed() [] at every checkpoint', ok: marks.every(m => m.failed === 0), vacuous: !marks.length, judged: true },
@@ -857,6 +893,22 @@ if (MODE === 'rise') {
     info.handoff = { latchedAtStood: S[s].latch, bootsUpMax: r(up), planStepMax: r(st), pushMax: r(push), latchOffAfter: off }; }
   // (g) THE FOOTING (header)
   ck.push(FOOTING(S, w, out.underF != null ? out.underF : null, s));
+  // (h) THE CRACK (Task 7b, header): L.crackK >= 0.9 x L.bury on a frame within crackT + 0.1 s of the wake. A crack that never drew
+  // (crackK never over 0 after the wake, or not booked) books nothing: UNMEASURED
+  { const cT = out.ins.knobs && out.ins.knobs.crackT != null ? out.ins.knobs.crackT : 0.8, hEnd = w + Math.round((cT + 0.1) * f60);
+    const H = S.slice(w, hEnd + 1), drew = S.some((q, k) => k >= w && q.crackK > 0), hit = H.findIndex(q => q.crackK != null && q.crackK >= 0.9 * q.bury);
+    const cMax = S.reduce((m, q, k) => k >= w && q.crackK > m ? q.crackK : m, 0);
+    info.crack = { crackT: cT, hitT: hit < 0 ? null : +(hit / f60).toFixed(3), crackKmax: cMax, atEnd: H.length ? { crackK: H[H.length - 1].crackK, bury: H[H.length - 1].bury } : null, zeroAt: first(q => q.crackK === 0 && q.cracked) };
+    ck.push({ name: 'h', val: { hitT: info.crack.hitT, crackKmax: cMax, atEnd: info.crack.atEnd }, bar: `crackK >= 0.9 x bury within crackT + 0.1 s (${+(cT + 0.1).toFixed(2)} s) of the wake`, ok: hit >= 0, vacuous: !drew, judged: true }); }
+  // (i) THE SLABS (Task 7b, header): while drawn, every piece's lowest drawn vertex within 0.3 u over the drawn surface under it (a slab
+  // hovering is a fail; sunk into the sand is not), and the mesh hidden by 3.1 s after the wake. No slabs on the build, or none ever
+  // drawn with a piece live: UNMEASURED
+  { const V = S.map((q, k) => [k, q.slab]).filter(([k, q]) => k >= w && q && q.v === 1 && q.n > 0), hasSl = !!out.ins.hasSlabs;
+    const bad = V.filter(([k, q]) => q.gMax > 0.3), lastV = S.reduce((m, q, k) => k >= w && q.slab && q.slab.v === 1 ? k : m, -1);
+    const worst = V.reduce((a, [k, q]) => !a || q.gMax > a.gMax ? { t: sec(k), gMax: q.gMax, k: q.wk, at: q.at } : a, null);
+    info.slabs = { has: hasSl, frames: V.length, firstT: V.length ? sec(V[0][0]) : null, lastVisibleT: lastV < 0 ? null : sec(lastV), worst, gMin: V.length ? Math.min(...V.map(([, q]) => q.gMin)) : null, nMax: V.length ? Math.max(...V.map(([, q]) => q.n)) : 0 };
+    ck.push({ name: 'i', val: { frames: V.length, bad: bad.length, firstBad: bad.length ? { t: sec(bad[0][0]), gMax: bad[0][1].gMax, k: bad[0][1].wk, at: bad[0][1].at } : null, worstGap: worst && worst.gMax, lastVisibleT: info.slabs.lastVisibleT },
+      bar: 'every drawn slab\'s lowest point <= +0.3 u over the drawn surface (terrainH, the dune, her drawn shell), hidden by 3.1 s after the wake', ok: !bad.length && lastV >= 0 && lastV <= w + Math.round(3.1 * f60), vacuous: !hasSl || !V.length, judged: true }); }
   // (BP_FORCE) the forced contact: legs closing on him in the window the hold adds
   // (fix round 1, M4: ward touch is suppressed in the window, L.reach -1; and the window is cut at a calm, where game.js forbids tears whatever holdRise is)
   if (FORCE) { const f0 = S.findIndex((q, k) => k >= w && q.stand >= 1), c0 = S.findIndex((q, k) => k >= f0 && f0 >= 0 && q.calmed), F = f0 >= 0 && s >= 0 ? S.slice(f0, (c0 >= 0 && c0 <= s ? c0 : s + 1)) : [];
