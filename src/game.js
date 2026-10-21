@@ -1447,6 +1447,75 @@ function clawFrame(dt) {
 }
 window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone(),
   lookNetDeg: clawOpen ? +((Math.abs(player.yaw - clawY0) + Math.abs(player.pitch - clawP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(clawPath * 57.29578).toFixed(2), recentDeg: +(clawRecent * 57.29578).toFixed(2) }) };
+// ---- THE POINT IN THE LENS (velkath-buried-rock §3, Task 11; Michael: "can she turn and point to the void with her giant claw"). When
+// the calm comes at a buried site (home) she turns her front to the opening crack and, once she faces it, raises her great claw toward
+// it and holds it ~3 s (brooder.js POINT; Michael 2026-10-21 "1": finish turning, then point). While she points (L.pointPh 1-3: the
+// turn, the raise, the hold) the lens EASES ROUND to the opening, framing her claw where both fit, holds through the point (which is
+// through the light and the line when she already faced the opening, and after them when she had to turn), and hands back as she lowers
+// it (pointPh 4). Keyed to the point's own phases, never to the light. An EVENT: outside it the rotation is exactly 0 and the lens is the
+// grounded lens bit for bit (qPre). The LAST rotation the lens takes (after clawFrame; CLAWCAM never runs once she is calmed, so the two
+// never overlap): yaw about world up, then pitch about the lens's own right axis; the boom and the lens position untouched. The mouse
+// owns the view: his look input measured from the frame the point opens (CLAWCAM's lookNet / lookPath, Michael 2026-10-13 "ignore small
+// mouse movements") drops it AT ONCE past 5 deg net or 15 deg of looking about, for the rest of this calm; a point that opens while he is
+// mid-sweep starts off.
+// The spec's "it also pulls the lens out of her shell at the calm instant" is NOT this cue's: a rotation cannot move the lens. Keeping
+// the lens out of her is the position guard's (CRECAM's bodyBlocked pull and lensfix's fallbacks), gated after the calm by velfix-gate's
+// lensSurf / salIn (the plan's Task 13), the point's delay to the walk home included.
+//   maxYaw/maxPitch  deg caps ("where it can": an opening behind the lens is turned toward, not reached)
+//   frame            the claw is framed with the opening when they lie within frame x the horizontal FOV of each other (the aim is then
+//                    the midpoint of her palm and the opening)
+//   wIn/wOut         /s, critically damped (in ~95% by 1.5 s, out ~94% by 0.5 s)
+// Measured (tools/bench/pointcam-probe.mjs framing / mouse / off).
+const POINTCAM = { on: 1, maxYaw: 75, maxPitch: 25, frame: 0.8, wIn: 3.2, wOut: 9, lookNet: 5, lookPath: 15, lookTau: 0.3 };
+let ptK = 0, ptKV = 0, ptOff = false, ptOpen = false, ptY0 = 0, ptP0 = 0, ptPath = 0, ptRecent = 0, ptYawWas = 0, ptPitchWas = 0, ptWhy = '', ptTgt = 0;
+let ptYaw = 0, ptPitch = 0;
+const _ptQ = new THREE.Quaternion(), _ptA = V3(), _ptF = V3(), _ptR = V3();
+function pointFrame(dt) {
+  const L = lev, C = POINTCAM;
+  _ptQ.copy(camera.quaternion);                                   // the lens without the cue: the on:0 lens
+  const dl = Math.abs(player.yaw - ptYawWas) + Math.abs(player.pitch - ptPitchWas);
+  ptYawWas = player.yaw; ptPitchWas = player.pitch;
+  ptRecent = ptRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
+  const brooder = !!(L && L.kind === 'brooder' && L.pointAt);
+  const ph = brooder ? L.pointPh || 0 : 0, win = ph >= 1 && ph <= 3;
+  if (!ph) { ptOff = false; ptOpen = false; }                     // the guard: the next point is a new one
+  const d2r = Math.PI / 180;
+  if (win) {
+    if (!ptOpen) { ptOpen = true; ptY0 = player.yaw; ptP0 = player.pitch; ptPath = 0; if (ptRecent > C.lookNet * d2r) ptOff = true; }
+    else ptPath += dl;
+    if (Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0) > C.lookNet * d2r || ptPath > C.lookPath * d2r) { ptOff = true; ptK = 0; ptKV = 0; }
+  }
+  let tgt = 0, why = '';
+  if (!C.on) why = 'off'; else if (!win) why = ph ? 'lower' : 'none'; else if (ptOff) why = 'mouse';
+  else if (paused || deckK > 0 || throatOn) why = 'place';
+  else { tgt = 1; why = 'on'; }
+  // critically damped, the exact step for a target held over the frame (clawFrame's)
+  const w = tgt > ptK ? C.wIn : C.wOut, h = Math.min(dt, 0.05);
+  if (h > 0 && (tgt > 0 || ptK > 0 || ptKV !== 0)) { const ex = Math.exp(-w * h), e0 = ptK - tgt, k = ptKV + w * e0; ptK = tgt + (e0 + k * h) * ex; ptKV = (ptKV - w * k * h) * ex; }
+  if (ptK < 0) { ptK = 0; if (ptKV < 0) ptKV = 0; }
+  if (tgt === 0 && ptK < 1e-4 && Math.abs(ptKV) < 1e-3) { ptK = 0; ptKV = 0; }
+  if (!brooder) { ptK = 0; ptKV = 0; }                            // (she is gone: a zone change is a cut, no aim to turn to)
+  ptWhy = why; ptTgt = tgt;
+  if (!(ptK > 0)) { ptYaw = 0; ptPitch = 0; return; }             // (off: no rotation call at all)
+  // the aim: the opening, or its midpoint with her palm when both fit
+  _ptA.copy(L.pointAt);
+  const c = L.claws && L.claws.length ? (L.claws[1] && L.claws[1].major ? L.claws[1] : L.claws[0]) : null;
+  if (c) {
+    _ptF.setFromMatrixPosition(c.pj.matrixWorld); _ptR.setFromMatrixPosition(c.dj.matrixWorld); _ptF.add(_ptR).multiplyScalar(0.5);
+    const hf = 2 * Math.atan(Math.tan(camera.fov * d2r / 2) * camera.aspect);
+    _ptR.copy(_ptF).sub(camera.position).normalize(); _bp.copy(_ptA).sub(camera.position).normalize();
+    if (Math.acos(clamp(_ptR.dot(_bp), -1, 1)) <= C.frame * hf) _ptA.add(_ptF).multiplyScalar(0.5);
+  }
+  _ptF.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  _ptR.copy(_ptA).sub(camera.position);
+  let dy = Math.atan2(_ptR.x, _ptR.z) - Math.atan2(_ptF.x, _ptF.z); dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+  const dp = Math.atan2(_ptR.y, Math.hypot(_ptR.x, _ptR.z)) - Math.asin(clamp(_ptF.y, -1, 1));
+  ptYaw = clamp(dy, -C.maxYaw * d2r, C.maxYaw * d2r) * ptK; ptPitch = clamp(dp, -C.maxPitch * d2r, C.maxPitch * d2r) * ptK;
+  camera.rotateOnWorldAxis(camUpAxis, ptYaw);
+  camera.rotateX(ptPitch);
+}
+window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), tgt: ptTgt, yawDeg: +(ptYaw * 57.29578).toFixed(2), pitchDeg: +(ptPitch * 57.29578).toFixed(2), off: ptOff, why: ptWhy, qPre: _ptQ.clone(),
+  lookNetDeg: ptOpen ? +((Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(ptPath * 57.29578).toFixed(2), recentDeg: +(ptRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
   drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
 function deckTarget() {
@@ -2539,6 +2608,8 @@ function updateCamera(dt, t, fwd) {
   if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
   // (clawcam) THE CLAW IN THE LENS: the look-up while her hammer cocks, the lens's last rotation (CLAWCAM)
   clawFrame(dt);
+  // (velkath-buried-rock Task 11) THE POINT IN THE LENS: round to the opening crack while she points (POINTCAM), the very last rotation
+  pointFrame(dt);
   // DEV (look-dev stills): window.__camPin = { p: [x,y,z], t: [x,y,z] } pins the lens; nothing sets it in play
   const pin = window.__camPin;
   if (pin) { camera.position.fromArray(pin.p); camera.lookAt(pin.t[0], pin.t[1], pin.t[2]); }
