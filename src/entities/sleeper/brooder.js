@@ -51,7 +51,13 @@ Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
 //   turnT / raiseT / holdT / lowerT  s on her own clock from the calm: the raise from 2.9 s (late in the pour, the light at 3.6), so
 //            the claw is up (pointK 0.95) by ~3.8 s, before the line at 4.1; held to 6.9 s, down by 7.9 s. (A raise from 3.6 s put
 //            the claw at 0.95 only at ~4.5 s: the line landed mid-raise and "holds it ... through the line" failed its own bar.)
-export const POINT = { turn: 0.5, turnT: 2.9, raiseT: 1.0, holdT: 3.0, lowerT: 1.0 };
+//   face     deg: FINISH TURNING, THEN POINT (Michael's ruling 2026-10-21, "1"). The raise waits, past turnT, until her front is within
+//            `face` of the bearing to the opening, even after the light and the line. At 0.5 rad/s a diver on her far side left the opening
+//            ~166 deg behind her front at the calm: she faced it only ~5.8 s in, and a reach solved at turnT (her body frame) ended ~100 deg
+//            out to her side (pointcam-probe back, b3e903f). 10 deg, under the probe's 12: the claw solved there drifts by the last ~10 deg of
+//            the turn. Already facing (pointcam-probe ahead) the raise is at turnT as before, the claw up through the line
+//   faceMax  s: past it she raises facing or not (never stuck standing: a blocked turn cannot keep her from going home)
+export const POINT = { turn: 0.5, turnT: 2.9, raiseT: 1.0, holdT: 3.0, lowerT: 1.0, face: 10, faceMax: 14 };
 BURY.point = 1;
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
@@ -373,7 +379,7 @@ export function makeBrooder(idx, cfg) {
     soleLift: 0, pushed: 0, seen: true, lastSeen: V3(), blindT: 0, clearT: 0, tau: 0, aim: V3(),
     // (velkath-buried-rock Task 10) THE POINT (POINT above): its phase (0 none / 1 turn / 2 raise / 3 hold / 4 lower), its clock, the
     // claw's reach 0..1, the crack's opening and the reach's root pose [ry, rz] (aimPoint); calmNext: the lab verb 'calm'
-    pointPh: 0, pointT: 0, pointK: 0, pointAt: V3(), pointPose: [0, 0], calmNext: false
+    pointPh: 0, pointT: 0, pointR: 0, pointK: 0, pointAt: V3(), pointPose: [0, 0], calmNext: false
   };
 
   // ---- materials ----
@@ -2312,13 +2318,20 @@ export function updateBrooder(L, dt, t, player) {
   L.huntD = dh;
   if (L.pointPh) {
     // (velkath-buried-rock Task 10) THE POINT (POINT): her front to the opening; the reach solved once as the light comes up; home after
-    const P = POINT, t = (L.pointT += dt), t1 = P.turnT, t2 = t1 + P.raiseT, t3 = t2 + P.holdT, t4 = t3 + P.lowerT;
-    const ph = t < t1 ? 1 : t < t2 ? 2 : t < t3 ? 3 : t < t4 ? 4 : 0;
-    if (ph === 2 && L.pointPh === 1) aimPoint(L);                       // the reach is solved once, as the light comes up
-    L.pointPh = ph;
-    L.pointK = ph === 2 ? ease((t - t1) / P.raiseT) : ph === 3 ? 1 : ph === 4 ? 1 - ease((t - t3) / P.lowerT) : 0;
-    if (!ph) { L.walkTo = L.lairPos.clone(); L.toBed = true; }           // done: the shipped walk home
-    else want = Math.atan2(L.pointAt.x - L.pos.x, L.pointAt.z - L.pos.z);
+    // (Michael's ruling, POINT.face) the turn holds until she faces the opening; the raise, hold and lower run from that moment (pointR)
+    const P = POINT, t = (L.pointT += dt), wP = Math.atan2(L.pointAt.x - L.pos.x, L.pointAt.z - L.pos.z);
+    if (L.pointPh === 1) {
+      const dA = Math.atan2(Math.sin(wP - L.yaw), Math.cos(wP - L.yaw));
+      if (t >= P.turnT && (Math.abs(dA) <= P.face * Math.PI / 180 || t >= P.faceMax)) { L.pointR = t; L.pointPh = 2; aimPoint(L); }   // solved once
+    }
+    if (L.pointPh > 1) {
+      const u = t - L.pointR, t3 = P.raiseT + P.holdT, t4 = t3 + P.lowerT;
+      const ph = u < P.raiseT ? 2 : u < t3 ? 3 : u < t4 ? 4 : 0;
+      L.pointPh = ph;
+      L.pointK = ph === 2 ? ease(u / P.raiseT) : ph === 3 ? 1 : ph === 4 ? 1 - ease((u - t3) / P.lowerT) : 0;
+    } else L.pointK = 0;
+    if (!L.pointPh) { L.walkTo = L.lairPos.clone(); L.toBed = true; }    // done: the shipped walk home
+    else want = wP;
   }
   if (L.walkTo && L.standE > 0.9) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
