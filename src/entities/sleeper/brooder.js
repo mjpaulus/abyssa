@@ -1451,12 +1451,17 @@ const PT_CJ = [0, 0.15, 0.10], PT_PJ = [0, 0.10, -0.05], PT_DJ = 0.35;
 // and wrist bend adds, measured with the elbow, wrist and finger AT the reach's own pose (PT_*; the frame's idle pose bends them
 // 0.2-0.8 rad more). ry is wrapped into (-3PI/2, PI/2], within PI of the rest heading, so the blend in poseClaws never swings the arm
 // the long way round through her back. Every joint is restored. Writes L.pointPose; no allocation.
+// dA: her heading error to the opening at the solve (rad; she raises within POINT.face of it and turns on through the raise): the target
+// is solved FOR THE HEADING SHE IS TURNING TO (turned dA round her centre), not for this frame's. Solved for this frame's, pointcam-probe
+// back (c392030) raised at -9.4 deg and the claw ran 18-19 deg off the opening once she had come round (the bar is 20)
 const _pa = V3(), _pb = V3(), _pinv = new THREE.Matrix4();
-function aimPoint(L) {
+function aimPoint(L, dA) {
   const c = L.claws[1].major ? L.claws[1] : L.claws[0], sd = c.sd;
   L.body.updateMatrixWorld(true);
   _pinv.copy(L.body.matrixWorld).invert();
-  _pa.copy(L.pointAt).applyMatrix4(_pinv).sub(c.root.position).normalize();   // her frame, from the shoulder
+  const ox = L.pointAt.x - L.pos.x, oz = L.pointAt.z - L.pos.z, cd = Math.cos(dA), sn = Math.sin(dA);
+  _pa.set(L.pos.x + ox * cd - oz * sn, L.pointAt.y, L.pos.z + oz * cd + ox * sn)
+    .applyMatrix4(_pinv).sub(c.root.position).normalize();   // her frame, from the shoulder
   let ry = Math.atan2(-_pa.z, _pa.x), rz = Math.asin(clamp(_pa.y, -1, 1));
   const r = c.root.rotation, r0x = r.x, r0y = r.y, r0z = r.z;
   const e = c.cj.rotation, e0x = e.x, e0y = e.y, e0z = e.z, w = c.pj.rotation, w0x = w.x, w0y = w.y, w0z = w.z, f0 = c.dj.rotation.z;
@@ -2322,7 +2327,7 @@ export function updateBrooder(L, dt, t, player) {
     const P = POINT, t = (L.pointT += dt), wP = Math.atan2(L.pointAt.x - L.pos.x, L.pointAt.z - L.pos.z);
     if (L.pointPh === 1) {
       const dA = Math.atan2(Math.sin(wP - L.yaw), Math.cos(wP - L.yaw));
-      if (t >= P.turnT && (Math.abs(dA) <= P.face * Math.PI / 180 || t >= P.faceMax)) { L.pointR = t; L.pointPh = 2; aimPoint(L); }   // solved once
+      if (t >= P.turnT && (Math.abs(dA) <= P.face * Math.PI / 180 || t >= P.faceMax)) { L.pointR = t; L.pointPh = 2; aimPoint(L, dA); }   // solved once
     }
     if (L.pointPh > 1) {
       const u = t - L.pointR, t3 = P.raiseT + P.holdT, t4 = t3 + P.lowerT;
