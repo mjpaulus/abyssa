@@ -144,8 +144,21 @@
 //               (i) THE SLABS (Task 7b, its brief: "A slab hovering more than 0.3 u is a fail: they ride the surface until they sink"): read off
 //                   the DRAWN mesh (L.slabs { mesh, n, vpc }), every live piece's lowest drawn vertex <= +0.3 u over the drawn surface under that
 //                   vertex (the highest of terrainH, the drawn dune and her drawn shell, downward rays from the vertex + 1.5 u, the highest of five
-//                   0.05 u apart, amended after rays fell through slits in her drawn shell: see slab() below; never the fit pose, her back rises under them) on every frame the mesh is drawn (sunk into the sand is allowed: one-sided), and the mesh
+//                   0.05 u apart, amended after rays fell through slits in her drawn shell: see slab() below; never the fit pose, her back rises under them) on every frame the mesh is drawn (sunk into the SAND is allowed: this side is one-sided), and the mesh
 //                   hidden by 3.1 s after the wake. No L.slabs (the Task 7a head), or none drawn with a piece live: UNMEASURED
+//               (iShell) THE SLABS' SHELL SIDE (Task 7b fix round 1, I1; PRE-REGISTERED here, before any run of it, from the review's numbers: G-off
+//                   read gMin -0.234 u at t 0.0, every piece age 0, laid on her crest: a clod's lowest vertex ~0.23 u inside her drawn shell, the
+//                   game seating on the lowest of 5 reads +-0.15 and the probe reading the highest of 5 +-0.05): on every frame the mesh is drawn,
+//                   every piece whose drawn surface under its lowest vertex is HER SHELL (the shell's read is the highest of the three surfaces,
+//                   strictly over terrainH and the dune, the upward-ray fallback of slab() counting as shell: the slab's `kind`) has its lowest
+//                   vertex >= -0.3 u (gap = vertex minus that surface). Designed sinking into SAND or the floor (SLAB_SINK) is NOT judged here
+//                   and stays allowed. gMin and the kind of the surface it was read on (shell | dune | floor) are booked on every frame and in
+//                   info.slabs (gMin, gMinKind, gMinShell, nShell). No slab read on her shell on any drawn frame (nShell 0), or none drawn: UNMEASURED.
+//                   RED (BP_RED=sunk, rise, any BP_AT): after each stepped frame the probe lowers the first shell-kind piece's drawn vertices by 0.5 u
+//                   (the game rewrites every vertex each frame: no accumulation), so a piece stands ~0.5 u into her shell; it judges (iShell) alone
+//                   and must exit 5. (i)'s hover side must still hold under it (lowering cannot raise a piece): booked, not judged.
+//             (M3, booked, not judged) info.dust: the footfx puff pool's (420 particles, shared with his boots) emissions and live-slot
+//                   OVERWRITES from the wake to the end of the series (src/world/footfx.js dustStats()).
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
 //             leg capsule (bodyColsCaps, the first 40: 8 legs x 5; moving 3-18 u/s, under bodyCols' LIMB_VMAX 20), 0.2 u in, afloat,
@@ -171,7 +184,7 @@
 // ENV (besides DRV_PORT, a port of this probe's own: never 8777 / 8790 / 9419; the probe exits 2 before importing drv.mjs):
 //   BP_KNOBS=<json>   patched through `__burial.set` before the mode (absent on main: exit 2, a patch has nothing to act on)
 //   BP_RED=<variant>  an opt-in RED, never part of the default run: it must fail ITS bar (exit 5; 3 = it did not). disguise:
-//                     ridge | shallow | steep | late; breath: still; programs: lazy; rise: noshove | tearable | early | nofoot. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
+//                     ridge | shallow | steep | late; breath: still; programs: lazy; rise: noshove | tearable | early | nofoot | sunk. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
 //                     `ridge` on main: main already is the shipped ridge, the unpatched reading is that RED (exit 5 there).
 //   BP_AT=<where>     where he stands for the modes that place him: anchor (Alt+6's harpoon anchor) | crest (on her) | off
 //                     (clear of her ground) | front (rise: 2.3 R in front of her). `disguise` is geometry only and does not place him (the value is still checked).
