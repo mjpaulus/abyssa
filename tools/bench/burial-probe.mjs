@@ -186,7 +186,10 @@
 //                         L._pd < collR x 1.05 (sight runs first in the frame, _pd is written later), touch = the previous row's touchT > 0,
 //                         sigil = a ward lit on the find row (brooder.js :2505 sets seen at the frame's end). Only a LOS ending is judged; a
 //                         spell ended any other way is UNMEASURED (reported); a spell still open at the series' end is a FAIL (>= 4 s blind
-//                         by then). The brief needs a LOS ending at BP_AT anchor and off.
+//                         by then). The brief needs a LOS ending at BP_AT anchor and off. JUDGED AT anchor AND off (12 u, the default) ONLY,
+//                         booked elsewhere (AMENDED after the first GREEN runs, recorded: the brief registers the bar "with BP_AT=anchor" and
+//                         asks a LOS ending at anchor and off; at crest (on her back) and front (2.3 R before her face) no cloud lies on the
+//                         line from her eyes (never lost: tau < 1), dune / under / BP_OFF are the brief's "booked, not gated" readings).
 //               footprint the plume's density footprint 1.5 u over the floor: every 3rd frame, on 32 bearings from the strip's centre (MD.bx,
 //                         MD.bz; no mound: her centre), the farthest r (0.25 .. 30 u, 0.25 u steps, every step read, not the first exit) where
 //                         __plume.dens(x, terrainH + 1.5, z) > 0.02; the frame's reading is the farthest bearing's. At its widest from the
@@ -1085,7 +1088,7 @@ if (MODE === 'rise') {
     info.blind = { spells: spells.slice(0, 6).concat(spells.length > 6 ? [{ more: spells.length - 6 }] : []), nSpells: spells.length, reacq, collR, lostAtEnd: S.length ? S[S.length - 1].lost : null, tauMaxRise: S.slice(w, end + 1).reduce((m, q) => Math.max(m, q.tau), 0) };
     ck.push({ name: 'blind', val: sp ? { lossT: sp.lossT, findT: sp.findT, len: sp.len, openFor: sp.openFor, ended: sp.ended, how: sp.how } : { lost: 'never, from the wake to STOOD' },
       bar: 'she loses him between the wake and STOOD (lostN rises), and her first blind spell, ended by line of sight (clearT >= SIGHT.reacq), lasts 3.0-4.0 s',
-      ok: !!sp && sp.findRow >= 0 && sp.len >= 3.0 && sp.len <= 4.0, vacuous: vacA || (!!sp && sp.findRow >= 0 && !sp.how.los), judged: true });
+      ok: !!sp && sp.findRow >= 0 && sp.len >= 3.0 && sp.len <= 4.0, vacuous: vacA || (!!sp && sp.findRow >= 0 && !sp.how.los), judged: where === 'anchor' || (where === 'off' && OFF_D === 12) });
     // footprint: the widest over the rise (wake -> STOOD) of the frame's farthest bearing
     const FP = S.map((q, k) => [k, q.pf]).filter(([k, q]) => k >= w && q), FPr = FP.filter(([k]) => k <= end);
     const wid = FPr.reduce((a, [k, q]) => !a || q.far > a.far ? { t: sec(k), far: q.far, bearings: q.nb, b: q.b } : a, null), widAll = FP.reduce((a, [k, q]) => !a || q.far > a.far ? { t: sec(k), far: q.far } : a, null);
