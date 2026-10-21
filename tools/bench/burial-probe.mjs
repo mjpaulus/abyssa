@@ -64,7 +64,10 @@
 //                        sphere in the lens's frustum), as slabDraw is. PRE-REGISTERED (Task 10, before its GREEN): (c) every rendered
 //                        frame == (a) (max and last); under BP_BASE, the base's (c) counts join vsBase when the base JSON has them, and
 //                        (c) is info (not judged) when the base's own (c) failed with the same kinds new in (c), as the rise's rule
-//               (d)      the dig-in (Task 12: until then SKIPPED and booked so)
+//               (d)      THE DIG-IN (Task 12, pre-registered before its build): after (c), him re-placed 35 u from her centre on her sand
+//                        side facing her (digin's PLACE: she is in the frame and he is off her ground), rendered until L.dugIn (the dig-in
+//                        done, bury 1), at most 45 s: the refit's job, the dune drawn back up, the haze. (d) every rendered frame == (a) (max and
+//                        last); no dug-in within 45 s is UNMEASURED (the head never digs in). Her in the frame booked (dFrames)
 //               sites    Pallid Bank, the Burned Ground, the Unsounded Shelf (__chart.arrive(i)), her asleep there, 120 rendered
 //                        frames each from the same framing: her shell's program is home's (the same cacheKey), and with the crust
 //                        (Task 5) L.crustU.uBury.value is 0 on EVERY frame
@@ -237,6 +240,58 @@
 //             and the window is cut at a calm, booked per row.) Her shell moves < 1 u/s there (the heave settling,
 //             she does not walk: measured), so her planting legs are what can close on him. Judged: aTear only, and >= 1 frame with
 //             BODY.hitV > 2.5 (game.js's slam threshold) in the window, else UNMEASURED.
+//   digin     DIGGING BACK IN (Task 12; spec §3 "`bury` runs from 0 back to 1 over 15-20 s"; Review Focus 3). PRE-REGISTERED here before any
+//             build of the dig-in (the Task 11 head 90e1f99 never digs in: every run there is a reading of that). THE CHAIN, every run a fresh
+//             load: home, Alt+6 and REAL E at the harpoon's anchor (rise's anchor: the iron comes free, the scar shows, she wakes 0.7 s on);
+//             stepped until L.hasStood (at most 20 s); him PLACED 35 u from her centre along her sand side (L.sand), facing her, standing
+//             on the drawn ground; __lev.cmd('calm') (every dark ward lit); stepped through the point and the walk home until she has
+//             SETTLED, the probe's own frame: calmed, L.stand 0, |heave.x| < 0.02, |heave.v| < 0.05, no pointPh, walkTo or homeTurn (at most
+//             40 s; none = UNMEASURED); him PLACED again (the same rule, she may have moved). Every stepped frame is booked from there (the
+//             WINDOW). The dig-in's FIRST frame: the first with L.bury over the last frame's by > 1e-9; its LAST: the first with bury >= 1.
+//             ON HER GROUND (the pause's test) is the PROBE'S OWN, never the build's flag: the plan's onHerDune, re-computed page side
+//             (bodyCols shellPlanNear(his x, y - 0.45, z, SETTLE.release) on the published shell, under a ceiling of 6 u over max(terrainH,
+//             extraFloorAt)), so a build with no pause (BP_RED=nopause) still books the frames he is on it. Runs (BP_RUNS, default all):
+//               clear   him 35 u off throughout; the window booked to the last frame + 2 s (at most 40 s). Bars:
+//                 dur    first -> last 15.0-20.0 s (spec)
+//                 end    bury >= 1 and L.dugIn on the window's last frame
+//                 disg   the disguise checks on the dug-in pose (DISGUISE with L.dugIn in place of L.dormant), every check `disguise`
+//                        judges but the harpoon's pole and iron (the iron came out with the pull; out.harpoon is null), and `scar` in place
+//                        of `seam`: the scar's centre (H.scar's world origin, laid flush on the seam) >= +0.2 u over the drawn sand
+//                 wards  on the window's last frame every ward's light.intensity 0 and its burn glow's (g.burn) material.opacity 0
+//                 breath dug in, then him 6 u off the strip's edge (breath's PLACE, unchanged), 40 s booked: the ring-1 vertex's
+//                        amplitude 0.03-0.06 u (breath's amp bar) over the frames L.dugIn holds; >= 1 frame, else UNMEASURED
+//                 cost   (booked item 6, PRE-REGISTERED before the dig-in was measured): every frame of the window's update() wall time,
+//                        ms (performance.now() between successive frames of __bench.step, which runs update() alone; the clock is set
+//                        before each step call so a batch's first frame carries no round trip): the WORST frame of the window, from the
+//                        re-placement to the dig-in's last frame, less the window's MEDIAN frame, <= 4.0 ms. The build's own timer of its
+//                        job (L.digJobMs, per frame) is booked beside it, not judged
+//               pause   (Review Focus 3, on foot) once bury >= 0.33 he is placed 3 u outside the boundary of the probe's own test on the sand
+//                       side's bearing (scanned in from 40 u off the strip's centre, at the ground) facing her, and REAL W walks him in;
+//                       W is released 0.5 s after his first frame on her ground; he stands until 3 s after that first frame, then is
+//                       PLACED 35 u off (the leave). Bars:
+//                 pause  every frame he is on her ground while the dig-in runs (0 < bury < 1 on the frame before): |d bury| <= 1e-9;
+//                        >= 60 such frames, else UNMEASURED
+//                 resume the first frame bury rises after the leave is <= SETTLE.hold x 60 + 1 frames after it (counting the leave's
+//                        first frame off her ground as 1); UNMEASURED if none
+//                 boots  his OWN boot gap (the drawn sole's lowest point, relief-walk's SOLE_PTS on diver.legR/L.end at SOLE_Y, both boots)
+//                        over the drawn sand there (max(terrainH, __burial.sandAt)) >= -0.15 u on every frame from the approach to the end
+//                 lens   the lens >= 0.3 u over the drawn surface (max(shutFloorY, the drawn sand) under it) on every frame of that span
+//               afloat  the same at bury >= 0.4, but he is HELD 1.5 u over the drawn ground on a dune spot inside the boundary (2 u in from
+//                       it on the same bearing) for 3 s: after every frame his height is booked and he is put back (vel 0, not grounded),
+//                       then PLACED 35 u off. Bars: pause and resume as above; calm: BODY.calmOut 0 on every frame he is held (Task 3b's
+//                       CALMCOL skip); sink: each held frame's drop <= what his own settle can give in one frame from rest,
+//                       0.5 (|A_SETTLE| 0.11 + |min(0, buoy)| + the current's vertical 0.121) dt^2 + 1e-4 u (CALMCOL's 3 u/s is 0.05 u a frame)
+//             BP_RED=fastdig ({digT: 8}, run clear only) must fail dur; BP_RED=nopause ({pause: 0}, run pause only) must fail pause.
+//   reentry   LEAVING ZONE 0 MID-WAY AND COMING BACK (Review Focus 1). Three sessions (BP_RUNS, default i,ii,iii), each a fresh load:
+//               i    mid-rise: __lev.cmd('wake'), stepped until L.stand >= 0.3
+//               ii   mid-point: woken, stood, him PLACED 35 u off, calmed, stepped until pointPh 2
+//               iii  mid-dig-in: digin's chain (the pull at the anchor), stepped until bury >= 0.5 after the dig-in's first frame
+//             then gotoZone(1), 30 frames, gotoZone(0), 30 frames. Bars, each session: dormant (lev.dormant) and bury exactly 1; disg the
+//             disguise checks (as digin: with the iron pulled in iii the scar replaces seam, pole and iron are not judged); cue
+//             __pointcam.state().k 0 and the new sleeper's pointPh 0, pointK 0, calmNext false, digging / dugIn false; floor
+//             extraFloorAt == __burial.sandAt (the LIVE sleeper's dune) within 1e-9 at every mid-quad point of rings 3 .. rings-2 on
+//             every 4th bearing (>= 100 points, every one on the dune); clutch: the disguise's clutch check and B.drop == clutchSink / R;
+//             shader __shaderFailed() []. A session whose midway state never came is UNMEASURED (iii on a head with no dig-in).
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height; steep (repose 2.0: the dune fitted to fall at 63 deg; the bar is fixed, so it must fail) ->
 // repose; still (breath: __burial.set({breath:{lift:0}})) -> amplitude; lazy (programs: after (a) her shell material's key gains
@@ -267,7 +322,7 @@
 // (an empty DRV_PORT is +'' = 0, an integer: the port must be all digits and inside 1024-65535, as drv.mjs's start() demands)
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error(`burial-probe: set DRV_PORT to a port of its own, an integer in 1024-65535 (not 8777 / 8790 / 9419; got ${JSON.stringify(process.env.DRV_PORT)})`); process.exit(2); }
-const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BUILT = ['disguise', 'breath', 'programs', 'rise'];
+const MODES = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'], BUILT = ['disguise', 'breath', 'programs', 'rise', 'digin', 'reentry'];
 const [, , MODE, PORT] = process.argv;
 if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: DRV_PORT=<own> node tools/bench/burial-probe.mjs <' + MODES.join('|') + '> <game port>'); process.exit(2); }
 if (!BUILT.includes(MODE)) { console.error(`burial-probe: mode ${MODE} is not built yet (a later task of the velkath-buried-rock plan adds it)`); process.exit(2); }
@@ -296,7 +351,9 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
     // (Task 7b fix round 1, I1) sunk: a piece forced 0.5 u into her drawn shell (page side: R.sink) -> (iShell), the slabs' shell side
     sunk: { set: {}, bars: ['iShell'], page: true },
     // (Task 8) noplume: no rise plume -> she never loses him, and there is no cloud to spread or climb
-    noplume: { set: { plume: 0 }, bars: ['blind', 'footprint', 'climb'] } } };
+    noplume: { set: { plume: 0 }, bars: ['blind', 'footprint', 'climb'] } },
+  // (Task 12) runs: the only BP_RUNS the RED is written for
+  digin: { fastdig: { set: { digT: 8 }, bars: ['dur'], runs: ['clear'] }, nopause: { set: { pause: 0 }, bars: ['pause'], runs: ['pause'] } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -311,9 +368,22 @@ if (process.env.BP_PLUME) { try { PLUME_P = JSON.parse(process.env.BP_PLUME); } 
 const FORCE = process.env.BP_FORCE === '1' || !!(RED && REDS[MODE][RED].force);
 if (FORCE && MODE !== 'rise') { console.error('BP_FORCE is rise\'s'); process.exit(2); }
 if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
+// (Task 12) BP_RUNS: digin clear | pause | afloat, reentry i | ii | iii (default all; a RED's own runs)
+const RUNS_ALL = { digin: ['clear', 'pause', 'afloat'], reentry: ['i', 'ii', 'iii'] };
+let RUNS = RUNS_ALL[MODE] || null;
+if (process.env.BP_RUNS) {
+  if (!RUNS) { console.error('BP_RUNS is digin\'s and reentry\'s'); process.exit(2); }
+  const want = process.env.BP_RUNS.split(',').map(q => q.trim()).filter(Boolean);
+  if (!want.length || want.some(q => !RUNS.includes(q))) { console.error(`BP_RUNS: ${RUNS.join(',')} (got ${JSON.stringify(process.env.BP_RUNS)})`); process.exit(2); }
+  RUNS = want;
+}
+if (RED && REDS[MODE][RED].runs) {
+  if (process.env.BP_RUNS && RUNS.join() !== REDS[MODE][RED].runs.join()) { console.error(`BP_RED ${RED} is written for BP_RUNS=${REDS[MODE][RED].runs.join(',')}`); process.exit(2); }
+  RUNS = REDS[MODE][RED].runs;
+}
 let KNOBS = null;
 if (process.env.BP_KNOBS) { try { KNOBS = JSON.parse(process.env.BP_KNOBS); } catch (e) { console.error('BP_KNOBS is not JSON: ' + e.message); process.exit(2); } }
-const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'exposed', 'repose', 'clutch', 'seam', 'pole', 'iron'];
+const CHECKS = ['legs', 'claws', 'eyes', 'mouth', 'wards', 'reef', 'weed', 'sides', 'top', 'len', 'exposed', 'repose', 'clutch', 'seam', 'pole', 'iron', 'scar'];
 let ONLY = null;
 if (process.env.BP_CHECK) {
   ONLY = process.env.BP_CHECK.split(',').map(s => s.trim()).filter(Boolean).flatMap(s => s === 'crest' ? ['top', 'len'] : s === 'height' ? ['top'] : s === 'rock' ? ['top', 'exposed'] : s === 'harpoon' ? ['seam', 'pole', 'iron'] : [s]);
@@ -337,7 +407,7 @@ for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(sig, () => process
 // BURY_DEFAULT (the crest strip's default ellipse) and the page side of `disguise`: see the header
 const DISGUISE = `(async () => {
   const THREE = await import('three'), T = await import('/src/world/terrain.js');
-  const L = window.lev; if (!L || L.kind !== 'brooder' || !L.dormant) return { err: 'no dormant brooder (' + (L && L.kind) + ')' };
+  const L = window.lev; if (!L || L.kind !== 'brooder' || !(L.dormant || L.dugIn)) return { err: 'no dormant or dug-in brooder (' + (L && L.kind) + ')' };
   L.grp.updateMatrixWorld(true);
   const B = window.__burial || null;
   const BD = { crestL: 20, crestW: 6, crestZ: -0.07 };            // BURY_DEFAULT: main has no __burial
@@ -461,6 +531,10 @@ const DISGUISE = `(async () => {
     out.harpoon = { seatOk: !!H.seatOk, seam: +(sm.y - sand(sm.x, sm.z)).toFixed(3), seamAt: [+sm.x.toFixed(2), +sm.y.toFixed(2), +sm.z.toFixed(2)], pole, poleMin: Math.min(...pole.map(q => q.d)),
       iron, ironIn: ironOk };
   } else out.harpoon = null;
+  // (Task 12) THE SCAR, where the iron came out (or the revisit's old wound): its centre, the scar mesh's world origin (harpoon.js lays it
+  // flush on the seam, its +Z out along the normal), over the drawn sand
+  if (H && H.pulled && H.scar && H.scar.visible) { v.setFromMatrixPosition(H.scar.matrixWorld);
+    out.scar = { d: +(v.y - sand(v.x, v.z)).toFixed(3), at: [+v.x.toFixed(2), +v.y.toFixed(2), +v.z.toFixed(2)] }; } else out.scar = null;
   // (Task 6) THE CLUTCH: every live lobe's top, in WORLD, against the drawn sand over its centre. L.brood.live is x y z r per lobe in the body's
   // frame (the shell units the lobes are authored in; the body matrix carries R, the sink and the tilt). A lobe's drawn skin stands to
   // 1.25 r (the bead field's domes and the fillets), so its top is the centre's world y + 1.25 r x the matrix's scale: the sphere's own
@@ -483,7 +557,7 @@ const DISGUISE = `(async () => {
 // would lie (0.6 u outside BURY_DEFAULT's edge). BOOK(n, leg): n stepped frames, every one booked into window.__bpS
 const BREATH_PLACE = (d, fromC = false) => `(async () => {
   const T = await import('/src/world/terrain.js');
-  const L = window.lev; if (!L || L.kind !== 'brooder' || !L.dormant) return { err: 'no dormant brooder (' + (L && L.kind) + ')' };
+  const L = window.lev; if (!L || L.kind !== 'brooder' || !(L.dormant || L.dugIn)) return { err: 'no dormant or dug-in brooder (' + (L && L.kind) + ')' };
   const MD = L.mound || null, R = L.R, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   const wx = (lx, lz) => L.pos.x + (lx * cy + lz * sy) * R, wz = (lx, lz) => L.pos.z + (-lx * sy + lz * cy) * R;
   let ex, ez, cx, cz, src;
@@ -510,7 +584,7 @@ const BREATH_BOOK = (n, leg) => `(async () => {
     const y = MD ? MD.P[(MD.COLS + Q.bj) * 3 + 1] : Math.max(T.terrainH(Q.px, Q.pz, 0), B && B.sandAt ? B.sandAt(Q.px, Q.pz) : -1e9);
     let dh = Math.hypot(Q.px - p.x, Q.pz - p.z);
     if (MD) for (let j = 0; j < MD.COLS; j++) { const o = (MD.COLS + j) * 3, dd = Math.hypot(MD.P[o] - p.x, MD.P[o + 2] - p.z); if (dd < dh) dh = dd; }
-    S.push([${leg}, +y.toFixed(5), L.trickleN || 0, L.brAge == null ? null : +L.brAge.toFixed(4), +(L.breathY || 0).toFixed(5), L.dormant ? 1 : 0,
+    S.push([${leg}, +y.toFixed(5), L.trickleN || 0, L.brAge == null ? null : +L.brAge.toFixed(4), +(L.breathY || 0).toFixed(5), L.dormant || L.dugIn ? 1 : 0,
       +dh.toFixed(2), +Math.hypot(camera.position.x - L.pos.x, camera.position.z - L.pos.z).toFixed(2)]);
   });
   return S.length; })()`;
@@ -754,6 +828,73 @@ const RISE_PLACE = where => `(async () => {
 const alt = (cc, d) => cc.ev(`(window.dispatchEvent(new KeyboardEvent('keydown',{code:'Digit${d}',key:'${d}',altKey:true,bubbles:true})), window.dispatchEvent(new KeyboardEvent('keyup',{code:'Digit${d}',key:'${d}',altKey:true,bubbles:true})), window.__helm=true, window.__bench.step(60), 1)`);
 const RISE_SECS = 14;
 
+// (Task 12) the page side of `digin` and `reentry` (header). __bpDig: row() books a frame; step(n, stop) steps n frames booking each
+// (stop: a page-side condition name that ends the batch); place35(), settled(), onDune(), approach(), hold(), floorEq(), state()
+const DIG_INSTALL = `(async () => {
+  const THREE = await import('three'), T = await import('/src/world/terrain.js'), BC = await import('/src/entities/sleeper/bodyCols.js');
+  const { camera } = await import('/src/core.js'), DV = await import('/src/entities/diver.js');
+  const L = window.lev; if (!L || L.kind !== 'brooder') return { err: 'no brooder (' + (L && L.kind) + ')' };
+  const B = window.__burial || null, P = window.player, SET = window.__settle;
+  const sand = (x, z) => Math.max(T.terrainH(x, z, 0), B && B.sandAt ? B.sandAt(x, z) : -1e9);
+  const r3 = v => Math.round(v * 1000) / 1000, r2 = v => Math.round(v * 100) / 100;
+  // THE PROBE'S OWN "ON HER GROUND" (header): the plan's onHerDune, re-computed here on the published shell
+  const onAt = (x, y, z) => { const g = Math.max(T.terrainH(x, z, 0), T.extraFloorAt(x, z, 0)); if (y - 1.35 > g + 6) return 0; return BC.shellPlanNear(x, y - 0.45, z, SET.release) ? 1 : 0; };
+  // his OWN boot gap: the drawn sole's lowest point (relief-walk's SOLE_PTS, the lead casting's underside at SOLE_Y -0.15 in the foot's frame)
+  const ENDS = [DV.diver.legR.end, DV.diver.legL.end], V = new THREE.Vector3();
+  const SOLE_PTS = [[0, -0.16], [0.08, -0.14], [-0.08, -0.14], [0.12, 0.215], [-0.12, 0.215], [0.06, 0.30], [-0.06, 0.30]];
+  const own = () => { let m = 1e9; for (const e of ENDS) { e.updateWorldMatrix(true, false); for (const q of SOLE_PTS) { V.set(q[0], -0.15, q[1]); e.localToWorld(V); const g = V.y - sand(V.x, V.z); if (g < m) m = g; } } return m; };
+  const R = window.__bpDig = { S: [], tEnd: 0, hold: null, holdY: 0, stops: {},
+    onDune() { const p = P.pos; return onAt(p.x, p.y, p.z); },
+    settled() { return !!(L.calmed && L.stand <= 0 && Math.abs(L.heave.x) < 0.02 && Math.abs(L.heave.v) < 0.05 && !L.pointPh && !L.walkTo && !L.homeTurn); },
+    // him 35 u from her centre along her sand side (L.sand), facing her, on the drawn ground
+    place35() { const x = L.pos.x + L.sand.x * 35, z = L.pos.z + L.sand.z * 35;
+      window.__bench.place(x, z, Math.atan2(L.pos.x - x, L.pos.z - z), 0); P.pos.y = T.shutFloorY(x, z, 0) + 1.35; P.vel.set(0, 0, 0); R.hold = null;
+      return { him: [r2(x), r2(z)], her: [r2(L.pos.x), r2(L.pos.z)], on: R.onDune() }; },
+    // the boundary of the probe's own test along the sand side's bearing from the strip's centre, at the ground (scanned in from 40 u)
+    edge() { const MD = L.mound, cx = MD ? MD.bx : L.pos.x, cz = MD ? MD.bz : L.pos.z, ux = L.sand.x, uz = L.sand.z;
+      for (let d = 40; d > 0; d -= 0.25) { const x = cx + ux * d, z = cz + uz * d, g = Math.max(T.terrainH(x, z, 0), T.extraFloorAt(x, z, 0)); if (onAt(x, g + 1.35, z)) return { d, cx, cz, ux, uz }; }
+      return null; },
+    // (pause) 3 u outside it, facing her centre, standing
+    approach() { const E = R.edge(); if (!E) return { err: 'no boundary on the sand bearing' }; const d = E.d + 3, x = E.cx + E.ux * d, z = E.cz + E.uz * d;
+      window.__bench.place(x, z, Math.atan2(E.cx - x, E.cz - z), 0); P.pos.y = T.shutFloorY(x, z, 0) + 1.35; P.vel.set(0, 0, 0); R.hold = null;
+      return { edge: r2(E.d), him: [r2(x), r2(z)], on: R.onDune() }; },
+    // (afloat) 2 u inside it, held 1.5 u over the drawn ground after every frame
+    afloat() { const E = R.edge(); if (!E) return { err: 'no boundary on the sand bearing' }; const d = E.d - 2, x = E.cx + E.ux * d, z = E.cz + E.uz * d;
+      window.__bench.place(x, z, Math.atan2(E.cx - x, E.cz - z), 0); R.hold = { x, z }; R.put();
+      return { edge: r2(E.d), him: [r2(x), r2(z)], on: R.onDune(), y: r3(P.pos.y) }; },
+    put() { const H = R.hold, g = Math.max(T.terrainH(H.x, H.z, 0), T.extraFloorAt(H.x, H.z, 0)); P.pos.set(H.x, g + 1.35 + 1.5, H.z); P.vel.set(0, 0, 0); P.grounded = false; R.holdY = P.pos.y; },
+    row(upd) {
+      const p = P.pos, cp = camera.position, g = Math.max(T.terrainH(p.x, p.z, 0), T.extraFloorAt(p.x, p.z, 0));
+      let wl = 0, wg = 0; for (const s of L.sigils) { if (s.light && s.light.intensity > wl) wl = s.light.intensity; if (s.burn && s.burn.material.opacity > wg) wg = s.burn.material.opacity; }
+      R.S.push({ bury: L.bury, dig: L.digging ? 1 : 0, dug: L.dugIn ? 1 : 0, off: L.digOff == null ? null : r3(L.digOff), stand: r3(L.stand), hx: r3(L.heave.x), hv: r3(L.heave.v),
+        ph: L.pointPh || 0, walk: L.walkTo ? 1 : 0, ht: L.homeTurn ? 1 : 0, calmed: L.calmed ? 1 : 0, dorm: L.dormant ? 1 : 0, mk: L.mound ? r3(L.mound.k) : null,
+        px: r2(p.x), py: r3(p.y), pz: r2(p.z), gr: P.grounded ? 1 : 0, on: onAt(p.x, p.y, p.z), own: r3(own()), lens: r3(cp.y - Math.max(T.shutFloorY(cp.x, cp.z, 0), sand(cp.x, cp.z))),
+        hov: r3(p.y - 1.35 - g), drop: R.hold ? r3(R.holdY - p.y) : null, held: R.hold ? 1 : 0, buoy: r3(P.buoy || 0), calmOut: r3(BC.BODY.calmOut || 0),
+        upd: upd == null ? null : r3(upd), job: L.digJobMs == null ? null : r3(L.digJobMs), wl: r3(wl), wg: r3(wg), her: [r2(L.pos.x), r2(L.pos.z), r3(L.yaw)] });
+    },
+    // n frames booked; stop: 'settled' | 'stood' | 'woke' | 'u03' | 'ph2' | 'b033' | 'b04' | 'b05' | 'dug' | 'on30' | null
+    step(n, stop) {
+      if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking');
+      let k = 0;
+      const c = { settled: () => R.settled(), stood: () => !!L.hasStood, woke: () => !L.dormant, u03: () => L.stand >= 0.3, ph2: () => L.pointPh === 2,
+        b033: () => L.bury >= 0.33, b04: () => L.bury >= 0.4, b05: () => L.bury >= 0.5, dug: () => !!L.dugIn,
+        on30: () => { const S = R.S; let m = 0; for (let i = S.length - 1; i >= 0 && S[i].on; i--) m++; return m >= 30; } }[stop] || null;
+      R.tEnd = performance.now();
+      window.__bench.step(n, () => { const t = performance.now(), upd = t - R.tEnd; R.row(upd); if (R.hold) R.put(); k++; R.tEnd = performance.now(); if (c && c()) return false; });
+      return { rows: R.S.length, k, hit: c ? c() : null, bury: L.bury, dug: !!L.dugIn, stand: L.stand, ph: L.pointPh || 0 };
+    },
+    // the floor provider over her dune (reentry): extraFloorAt against the LIVE sleeper's drawn dune at mid-quad points
+    floorEq() { const MD = L.mound; if (!MD) return { n: 0, err: 'no mound' }; const NB = MD.COLS, NR = MD.NR; let n = 0, bad = 0, off = 0, worst = 0;
+      for (let i = 3; i <= NR - 4; i++) for (let j = 0; j < NB; j += 4) { const a = (i * NB + j) * 3, b = (i * NB + (j + 1) % NB) * 3, c2 = ((i + 1) * NB + j) * 3, d = ((i + 1) * NB + (j + 1) % NB) * 3;
+        const x = (MD.P[a] + MD.P[b] + MD.P[c2] + MD.P[d]) / 4, z = (MD.P[a + 2] + MD.P[b + 2] + MD.P[c2 + 2] + MD.P[d + 2]) / 4, sa = B.sandAt(x, z), xf = T.extraFloorAt(x, z, 0);
+        n++; if (!(sa > -1e8)) { off++; continue; } const e = Math.abs(xf - sa); if (e > worst) worst = e; if (e > 1e-9) bad++; }
+      return { n, bad, off, worst }; },
+    state() { const pc = window.__pointcam ? window.__pointcam.state() : null, Bd = L.brood;
+      return { dormant: !!L.dormant, bury: L.bury, pointPh: L.pointPh || 0, pointK: L.pointK || 0, calmNext: !!L.calmNext, digging: !!L.digging, dugIn: !!L.dugIn,
+        k: pc ? pc.k : null, drop: Bd ? Bd.drop : null, dropWant: B ? B.knobs.clutchSink / L.R : null, shader: window.__shaderFailed ? window.__shaderFailed().length : -1, sameL: window.lev === L }; } };
+  return { R: L.R, buried: !!L.buried, hasDig: 'digging' in L || !!(B && B.knobs.digT), knobs: B ? { digT: B.knobs.digT ?? null, pause: B.knobs.pause ?? null, haze: B.knobs.haze ?? null } : null, settle: SET ? { release: SET.release, hold: SET.hold } : null };
+})()`;
+
 // ---- boot: about:blank, the domains on, the focus a player's window has, then the game ----
 try { const r = await fetch(`http://127.0.0.1:${P}/json/version`, { signal: AbortSignal.timeout(2000) });
   console.error(`the debug port ${P} already answers /json/version (HTTP ${r.status}): not starting, nothing touched`); process.exit(2); }
@@ -790,7 +931,20 @@ try {
 }
 
 // ---- the clock is plugged once the page is up; then home, zone 0, her asleep ----
-let out = null, fatal = null;
+let out = null, fatal = null, patch = {};
+// (Task 12) a fresh load for the next run of digin / reentry: the clock booked for the run before, then the same boot as the first
+const sessClocks = [];
+async function reload() {
+  sessClocks.push(await drift(c).catch(() => null));
+  await c.ev(`(window.__bpOld = 1, 1)`).catch(() => 0);
+  await c.send('Page.navigate', { url: URL0 });
+  await c.until(`!window.__bpOld && !document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__chart && !!window.lev`, 300000, 500);
+  await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
+  await sleep(1000);
+  await plug(c, { stop: !record.noplug });
+  await c.ev(`(window.__helm = true, window.__chart.arrive(0), window.gotoZone(0), window.__bench.step(30), 1)`);
+  if (Object.keys(patch).length) await c.ev(`(await window.__burial.set(${JSON.stringify(patch)}), window.__bench.step(30), 1)`);
+}
 try {
   await plug(c, { stop: !record.noplug });
   await c.ev(`(window.__helm = true, window.__chart.arrive(0), window.gotoZone(0), window.__bench.step(30), 1)`);
@@ -800,7 +954,7 @@ try {
   // the patches: __burial.set is absent on main, where there is nothing to patch (the unpatched reading IS the main RED)
   // (`ridge` is the shipped ridge, so on main its patch is the build itself and is skipped; every other patch needs __burial.set)
   const redSet = RED && !(!hasBurial && REDS[MODE][RED].mainIsIt) && !REDS[MODE][RED].page ? REDS[MODE][RED].set : {};
-  const patch = Object.assign({}, KNOBS || {}, redSet);
+  patch = Object.assign({}, KNOBS || {}, redSet);
   if (!hasBurial && RED && REDS[MODE][RED].mainIsIt) console.log(`BP_RED ${RED}: no __burial on this build, which already IS the shipped ridge: the unpatched reading is the RED`);
   if (Object.keys(patch).length) {
     if (!hasBurial) throw new Error(`BP_KNOBS / BP_RED patch ${JSON.stringify(patch)}, but this build has no __burial.set: nothing to act on`);
@@ -865,7 +1019,19 @@ try {
         return Object.assign(r, { inF, ph: L.pointPh || 0, calmed: !!L.calmed }); })()`);
       nc += 60; cIn += f.inF; if (f.max > cF.max) cF = f; if (f.ph > 0) ran = true;
       if (nc >= 600 && f.ph === 0 && (ran || !ph.calm.pointKnown)) break; }
-    ph.c = Object.assign(await c.ev(`window.__bpProg.read('c')`), { max: cF.max, frames: nc, inFrame: cIn, of: nc / 60, pointRan: ran, by: ph.calm.by }); ph.d = { skipped: 'Task 12 adds the dig-in' };
+    ph.c = Object.assign(await c.ev(`window.__bpProg.read('c')`), { max: cF.max, frames: nc, inFrame: cIn, of: nc / 60, pointRan: ran, by: ph.calm.by });
+    // (d) the dig-in (Task 12, header): him 35 u off on her sand side facing her, rendered until L.dugIn, at most 45 s
+    { const ins = await c.ev(DIG_INSTALL); ph.dPlace = ins && !ins.err ? await c.ev(`window.__bpDig.place35()`) : ins;
+      let dF = { max: -1 }, nd = 0, dIn = 0, dug = false;
+      for (let k = 0; k < 45 && !dug; k++) {
+        const f = await c.ev(`(async () => { const THREE = await import('three'), { camera } = await import('/src/core.js'), L = window.lev, sh = L.parts.shell;
+          const fr = new THREE.Frustum(), m4 = new THREE.Matrix4(), sp = new THREE.Sphere();
+          if (!sh.geometry.boundingSphere) sh.geometry.computeBoundingSphere();
+          const r = window.__bpProg.frames(60, 'd'); sh.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+          fr.setFromProjectionMatrix(m4.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse));
+          return Object.assign(r, { inF: fr.intersectsSphere(sp.copy(sh.geometry.boundingSphere).applyMatrix4(sh.matrixWorld)) ? 1 : 0, dug: !!L.dugIn, bury: L.bury }); })()`);
+        nd += 60; dIn += f.inF; if (f.max > dF.max) dF = f; dug = f.dug; }
+      ph.d = Object.assign(await c.ev(`window.__bpProg.read('d')`), { max: dF.max, frames: nd, inFrame: dIn, of: nd / 60, dug }); }
     // the other sites: her shell's program is home's; the crust's uBury 0 on every frame
     ph.sites = [];
     for (const si of [1, 2, 3]) {
@@ -906,6 +1072,106 @@ try {
       out = { where, place: pl, settle, ins, wakeF: st.wakeF, under, underF: under ? await c.ev(`window.__bpRise.underF`) : null, S: await c.ev(`window.__bpRise.S`) };
     }
   }
+  // (Task 12) THE DIG-IN CHAIN (header): the pull at the anchor, her stand, him 35 u off, the calm, the point, the walk home, her settle,
+  // him re-placed; sess.winF = the window's first row
+  const dig = (n, stop) => c.ev(`window.__bpDig.step(${n}, ${stop ? JSON.stringify(stop) : 'null'})`);
+  const digChain = async sess => {
+    await alt(c, 6);
+    const ins = await c.ev(DIG_INSTALL); if (!ins || ins.err) throw new Error('install: ' + (ins && ins.err));
+    sess.ins = ins;
+    await dig(30);
+    await c.key('KeyE', true); await dig(2); await c.key('KeyE', false);
+    const wr = await c.ev(`({ wrenching: !!window.lev.harpoon.wrenching, state: window.gameState })`);
+    if (!wr.wrenching) throw new Error('real E did not start the wrench at the anchor: ' + JSON.stringify(wr));
+    let st = await dig(600, 'woke'); if (!st.hit) throw new Error('she did not wake within 10 s of E');
+    st = await dig(1200, 'stood'); if (!st.hit) throw new Error('she did not stand within 20 s of the wake');
+    sess.pulled = await c.ev(`!!window.lev.harpoon.pulled`);
+    sess.place1 = await c.ev(`window.__bpDig.place35()`);
+    sess.calmBy = await c.ev(`(window.__lev.cmd('calm'), 'calmNext' in window.lev ? 'verb' : 'none')`);
+    for (let k = 0; k < 4; k++) { st = await dig(600, 'settled'); if (st.hit) break; }
+    if (!st.hit) throw new Error('UNSETTLED: she had not settled 40 s after the calm (' + JSON.stringify(st) + ')');
+    sess.settleF = st.rows;
+    sess.place2 = await c.ev(`window.__bpDig.place35()`);
+    sess.winF = st.rows;
+    console.log(`  [${sess.run}] pulled ${sess.pulled}, calm by ${sess.calmBy}, settled at row ${sess.settleF}; him ${JSON.stringify(sess.place2)}; ${JSON.stringify(ins)}`);
+  };
+  if (MODE === 'digin') {
+    const sessions = [];
+    for (let ri = 0; ri < RUNS.length; ri++) {
+      const run = RUNS[ri], sess = { run }; sessions.push(sess);
+      if (ri > 0) await reload();
+      try {
+        await digChain(sess);
+        if (run === 'clear') {
+          let st = null;
+          for (let k = 0; k < 8; k++) { st = await dig(300, 'dug'); if (st.hit) break; }
+          await dig(120);
+          sess.endState = await c.ev(`window.__bpDig.state()`);
+          sess.disg = sess.endState.dugIn ? await c.ev(DISGUISE) : { err: 'not dug in' };
+          if (sess.endState.dugIn) {
+            const pl = await c.ev(BREATH_PLACE(6)); sess.breathPlace = pl;
+            if (pl && !pl.err) { await c.ev(`(window.__bpS = [], 1)`); for (let f = 0; f < 2400; f += 300) await c.ev(BREATH_BOOK(300, 6)); sess.breath = await c.ev(`window.__bpS`); }
+          }
+        } else {
+          let st = null;
+          for (let k = 0; k < 4; k++) { st = await dig(600, run === 'pause' ? 'b033' : 'b04'); if (st.hit) break; }
+          if (!st.hit) throw new Error(`MIDWAY: bury never reached ${run === 'pause' ? 0.33 : 0.4} within 40 s of the settle (the dig-in never ran)`);
+          sess.apprF = st.rows;
+          if (run === 'pause') {
+            sess.appr = await c.ev(`window.__bpDig.approach()`); if (sess.appr.err) throw new Error(sess.appr.err);
+            await c.key('KeyW', true); const on = await dig(300, 'on30'); await c.key('KeyW', false);
+            if (!on.hit) throw new Error('walking in, he never reached her ground (' + JSON.stringify(sess.appr) + ')');
+            await dig(150);
+          } else {
+            sess.fl = await c.ev(`window.__bpDig.afloat()`); if (sess.fl.err) throw new Error(sess.fl.err);
+            await dig(180);
+          }
+          sess.leaveF = (await c.ev(`window.__bpDig.S.length`));
+          sess.leave = await c.ev(`window.__bpDig.place35()`);
+          for (let k = 0; k < 4; k++) { const st2 = await dig(600, 'dug'); if (st2.hit) break; }
+          await dig(30);
+          sess.endState = await c.ev(`window.__bpDig.state()`);
+        }
+      } catch (e) { sess.err = String(e && e.message || e); console.error(`  [${run}] ${sess.err}`); }
+      try { sess.S = await c.ev(`window.__bpDig ? window.__bpDig.S : null`); } catch (e) { sess.S = null; }
+      console.log(`  [${run}] rows ${sess.S ? sess.S.length : 0}${sess.endState ? '; end ' + JSON.stringify(sess.endState) : ''}`);
+    }
+    out = { sessions };
+  }
+  if (MODE === 'reentry') {
+    const sessions = [];
+    for (let ri = 0; ri < RUNS.length; ri++) {
+      const run = RUNS[ri], sess = { run }; sessions.push(sess);
+      if (ri > 0) await reload();
+      try {
+        if (run === 'iii') {
+          await digChain(sess);
+          let st = null;
+          for (let k = 0; k < 4; k++) { st = await dig(600, 'b05'); if (st.hit) break; }
+          if (!st.hit) throw new Error('MIDWAY: bury never reached 0.5 within 40 s of the settle (the dig-in never ran)');
+        } else {
+          const ins = await c.ev(DIG_INSTALL); if (!ins || ins.err) throw new Error('install: ' + (ins && ins.err));
+          await c.ev(`(window.__lev.cmd('wake'), 1)`);
+          if (run === 'i') { const st = await dig(600, 'u03'); if (!st.hit) throw new Error('MIDWAY: L.stand never reached 0.3'); }
+          else {
+            let st = await dig(1200, 'stood'); if (!st.hit) throw new Error('she did not stand within 20 s of the wake');
+            sess.place1 = await c.ev(`window.__bpDig.place35()`);
+            await c.ev(`(window.__lev.cmd('calm'), 1)`);
+            st = await dig(1200, 'ph2'); if (!st.hit) throw new Error('MIDWAY: pointPh never reached 2 (no point on this build?)');
+          }
+        }
+        sess.mid = await c.ev(`window.__bpDig.state()`);
+        sess.mid.stand = await c.ev(`window.lev.stand`);
+        await c.ev(`(window.gotoZone(1), window.__bench.step(30), window.gotoZone(0), window.__bench.step(30), 1)`);
+        const ins2 = await c.ev(DIG_INSTALL); if (!ins2 || ins2.err) throw new Error('install after the return: ' + (ins2 && ins2.err));
+        sess.after = await c.ev(`window.__bpDig.state()`);
+        sess.floor = await c.ev(`window.__bpDig.floorEq()`);
+        sess.disg = await c.ev(DISGUISE);
+        console.log(`  [${run}] mid ${JSON.stringify(sess.mid)}; after ${JSON.stringify(sess.after)}; floor ${JSON.stringify(sess.floor)}`);
+      } catch (e) { sess.err = String(e && e.message || e); console.error(`  [${run}] ${sess.err}`); }
+    }
+    out = { sessions };
+  }
 } catch (e) { fatal = String(e && e.message || e); }
 const clock = await drift(c).catch(() => null);
 record.clock = clock;
@@ -920,7 +1186,7 @@ if (!out) { console.error('UNMEASURED: the page returned no reading (no out, no 
 if (unmeasured(clock)) { console.error('UNMEASURED: no clock reading ' + JSON.stringify(clock)); finish(2, 'no clock reading'); }
 record[MODE] = out;
 if (lost(clock)) {
-  console.log(`${MODE.toUpperCase()} ${JSON.stringify(MODE === 'breath' ? { legs: out.legs, frames: out.series.length } : MODE === 'programs' ? { marks: out.marks } : MODE === 'rise' ? { where: out.where, wakeF: out.wakeF, frames: out.S.length } : out)}`);
+  console.log(`${MODE.toUpperCase()} ${JSON.stringify(MODE === 'breath' ? { legs: out.legs, frames: out.series.length } : MODE === 'programs' ? { marks: out.marks } : MODE === 'rise' ? { where: out.where, wakeF: out.wakeF, frames: out.S.length } : out.sessions ? out.sessions.map(q => ({ run: q.run, err: q.err || null })) : out)}`);
   console.log(`CLOCK LOST: drift ${clock.drift} s over ${clock.stepped} s stepped (the bar is ${CLOCK_LOST} s), clock ${clock.running ? 'RUNNING' : 'stopped'}: ${JSON.stringify(clock)}`);
   finish(4, 'clock lost');
 }
@@ -939,7 +1205,7 @@ if (MODE === 'programs') {
     // (Task 7b) the slabs' first draw is inside (b): it compiles nothing only if they were drawn there (in the lens's frustum)
     { name: 'slabDraw', val: { slabFrames: o.bF.slabFrames ?? null }, bar: 'the slabs drawn (visible, in the frustum) on >= 1 rendered frame of (b)', ok: (o.bF.slabFrames || 0) > 0, vacuous: false, judged: !!o.hasSlabs },
     { name: 'calm', val: { a: A, cMax: o.c.max, c: o.c.n, frames: o.c.frames, inFrame: o.c.inFrame + '/' + o.c.of, pointRan: o.c.pointRan, by: o.c.by }, bar: '(c) every rendered frame == (a) (max and last)', ok: o.c.max === A && o.c.n === A, vacuous: !(o.c.frames > 0), judged: true },
-    { name: 'digin', val: o.d.skipped, bar: '(d) == (a)', ok: false, vacuous: true, judged: false },
+    { name: 'digin', val: { a: A, dMax: o.d.max, d: o.d.n, frames: o.d.frames, inFrame: o.d.inFrame + '/' + o.d.of, dug: o.d.dug }, bar: '(d) every rendered frame == (a) (max and last), to L.dugIn', ok: o.d.max === A && o.d.n === A, vacuous: !o.d.dug, judged: true },
     { name: 'shader', val: marks.map(m => m.tag + ':' + m.failed), bar: '__shaderFailed() [] at every checkpoint', ok: marks.every(m => m.failed === 0), vacuous: !marks.length, judged: true },
     { name: 'siteKey', val: o.sites.map(q => q.si + ':' + (q.key === o.homeKey)), bar: 'her shell\'s program at every site is home\'s', ok: !!o.homeKey && o.sites.length === 3 && o.sites.every(q => q.key === o.homeKey), vacuous: !o.homeKey || o.sites.length < 3, judged: true },
     { name: 'crustBoot', val: marks.map(m => m.tag + ':' + m.crust + '/' + m.bare), bar: 'the \'|crust\' programs (crust / body programs without it) at every checkpoint those the boot built (> 0), none of her body\'s without it', ok: marks.length > 0 && marks[0].crust > 0 && marks.every(m => m.crust === marks[0].crust && m.bare === 0) && !!o.homeKey && o.homeKey.indexOf('|crust') >= 0, vacuous: !marks.length, judged: hasCrust },
@@ -951,7 +1217,9 @@ if (MODE === 'programs') {
       pair('firstNew', kind(P0.firstNew), kind(B.firstNew)), pair('bNew', kind(P0.bNew), kind(B.bNew)),
       ...P0.sites.flatMap((q, i) => [pair('s' + q.si + 'max', q.max, B.sites[i] && B.sites[i].max), pair('s' + q.si, q.n, B.sites[i] && B.sites[i].n)]),
       // (Task 10) the calm's counts, when the base JSON has them (a base run before Task 10 skipped (c))
-      ...(B.c && B.c.n != null ? [pair('cMax', P0.c.max, B.c.max), pair('c', P0.c.n, B.c.n), pair('cNew', kind(P0.c.newNames), kind(B.c.newNames))] : [])];
+      ...(B.c && B.c.n != null ? [pair('cMax', P0.c.max, B.c.max), pair('c', P0.c.n, B.c.n), pair('cNew', kind(P0.c.newNames), kind(B.c.newNames))] : []),
+      // (Task 12) the dig-in's counts, when the base JSON has them
+      ...(B.d && B.d.n != null && B.d.dug ? [pair('dMax', P0.d.max, B.d.max), pair('d', P0.d.n, B.d.n), pair('dNew', kind(P0.d.newNames), kind(B.d.newNames))] : [])];
     ck.push({ name: 'vsBase', val: rows.filter(r => !r.ok), bar: 'every checkpoint equal to the base build (BP_BASE)', ok: rows.every(r => r.ok), vacuous: !B, judged: true });
     record.vsBase = rows; if (RED) REDS.programs[RED].bars.push('vsBase');
     // the base's own rise failed with the same kinds new in (b): rise is the base's (info), vsBase judges the counts
@@ -962,7 +1230,7 @@ if (MODE === 'programs') {
   if (RED) for (const k of ck) k.judged = REDS.programs[RED].bars.includes(k.name);
   record.checks = ck;
   for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(8)} ${JSON.stringify(k.val)} (bar ${k.bar})`);
-  console.log(`  info first sight +${o.first.n - o.boot.n}: ${JSON.stringify(o.first.newNames)}; (b) new: ${JSON.stringify(o.b.newNames)}; (c) new: ${JSON.stringify(o.c.newNames)}`);
+  console.log(`  info first sight +${o.first.n - o.boot.n}: ${JSON.stringify(o.first.newNames)}; (b) new: ${JSON.stringify(o.b.newNames)}; (c) new: ${JSON.stringify(o.c.newNames)}; (d) new: ${JSON.stringify(o.d.newNames)}`);
   if (cons.length) console.error('console errors (booked, not part of the bar): ' + JSON.stringify(cons));
   const J = ck.filter(k => k.judged), failed = J.filter(k => !k.vacuous && !k.ok), vac = J.filter(k => k.vacuous);
   if (RED) {
@@ -972,7 +1240,99 @@ if (MODE === 'programs') {
   }
   if (failed.length) { console.error('FAIL ' + failed.map(k => `${k.name} ${JSON.stringify(k.val)} (bar ${k.bar})`).join('; ')); finish(1, 'failed: ' + failed.map(k => k.name).join(',')); }
   if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous'); }
-  console.log('PASS ((d) skipped: Task 12 adds it)'); finish(0);
+  console.log('PASS'); finish(0);
+}
+
+// (Task 12) digin and reentry: the bars (header). Every session's clock is booked (a LOST one is exit 4); a check is { name: run.bar, ... };
+// a RED judges only its own bars on its own runs; a real FAIL beats an UNMEASURED; nothing vacuous passes
+function verdict(ck) {
+  record.checks = ck;
+  for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(14)} ${JSON.stringify(k.val)} (bar ${k.bar}${k.n != null ? '; n ' + k.n : ''})`);
+  if (cons.length) console.error('console errors (booked, not part of the bar): ' + JSON.stringify(cons));
+  const J = ck.filter(k => k.judged), failed = J.filter(k => !k.vacuous && !k.ok), vac = J.filter(k => k.vacuous);
+  if (RED) {
+    if (vac.length) { console.error(`UNMEASURED: BP_RED ${RED}: nothing booked for ${vac.map(k => k.name).join(', ')}`); finish(2, 'RED bars vacuous'); }
+    if (failed.length === J.length && J.length) { console.log(`RED ${RED}: ${J.map(k => k.name).join(', ')} failed as it must: exit 5`); finish(5); }
+    console.error(`RED ${RED} did not fail as written (${J.filter(k => k.ok).map(k => k.name).join(', ')} held): exit 3`); finish(3, 'RED did not fail');
+  }
+  if (failed.length) { console.error('FAIL ' + failed.map(k => `${k.name} ${JSON.stringify(k.val)} (bar ${k.bar})`).join('; ') + (vac.length ? '; UNMEASURED ' + vac.map(k => k.name).join(', ') : '')); finish(1, 'failed: ' + failed.map(k => k.name).join(',')); }
+  if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous: ' + vac.map(k => k.name).join(',')); }
+  console.log('PASS'); finish(0);
+}
+// the disguise on a pose, as one check: every judged check of `disguise` ok (record: the failures and the readings)
+function disgCheck(name, d) {
+  if (!d || d.err) return { name, val: d ? d.err : 'no reading', bar: 'every disguise check judged on the pose passes', ok: false, vacuous: true, judged: true };
+  const ck = disguiseChecks(d, true).filter(k => k.judged), bad = ck.filter(k => k.vacuous || !k.ok);
+  return { name, val: bad.length ? bad.map(k => `${k.name} ${k.vacuous ? 'VOID' : k.val}`) : ck.map(k => `${k.name} ${typeof k.val === 'number' ? k.val : 'ok'}`), bar: 'every disguise check judged on the pose passes (' + ck.map(k => k.name).join(' ') + ')',
+    ok: ck.length > 0 && !bad.length, vacuous: !ck.length, judged: true, detail: ck.map(k => ({ name: k.name, val: k.val, ok: k.ok, at: k.at })) };
+}
+if (MODE === 'digin' || MODE === 'reentry') {
+  const lostS = sessClocks.concat([clock]).filter(q => !unmeasured(q) && lost(q));
+  record.sessClocks = sessClocks.concat([clock]);
+  if (lostS.length) { console.log(`CLOCK LOST in ${lostS.length} session(s): ${JSON.stringify(lostS)}`); finish(4, 'clock lost'); }
+}
+if (MODE === 'digin') {
+  const ck = [], f60 = 60, r = v => Math.round(v * 1000) / 1000;
+  const redBars = RED ? REDS.digin[RED].runs.flatMap(rn => REDS.digin[RED].bars.map(b => rn + '.' + b)) : null;
+  const add = q => { q.judged = !redBars || redBars.includes(q.name); ck.push(q); };
+  for (const sess of out.sessions) {
+    const run = sess.run, S = sess.S || [], W = sess.winF != null ? S.slice(sess.winF) : [], err = sess.err || null;
+    const hold = sess.ins && sess.ins.settle ? sess.ins.settle.hold : 1.0;
+    // the dig-in's first frame (bury over the last by > 1e-9) and last (bury >= 1), as rows of S
+    let first = -1, last = -1;
+    for (let i = (sess.winF ?? S.length) + 1; i < S.length; i++) { if (first < 0 && S[i].bury > S[i - 1].bury + 1e-9) first = i; if (first >= 0 && S[i].bury >= 1) { last = i; break; } }
+    sess.first = first; sess.last = last;
+    if (run === 'clear') {
+      const dur = first >= 0 && last >= 0 ? r((last - first) / f60) : null;
+      add({ name: 'clear.dur', val: { dur, first: first >= 0 ? r((first - sess.winF) / f60) : null, window: r(W.length / f60) }, bar: 'first -> last 15.0-20.0 s', ok: dur != null && dur >= 15 && dur <= 20, vacuous: !!err || W.length < 20 * f60 && last < 0 });
+      const lr = W[W.length - 1];
+      add({ name: 'clear.end', val: lr ? { bury: lr.bury, dugIn: lr.dug } : err, bar: 'bury >= 1 and L.dugIn on the window\'s last frame', ok: !!lr && lr.bury >= 1 && lr.dug === 1, vacuous: !lr });
+      add(disgCheck('clear.disg', sess.disg));
+      add({ name: 'clear.wards', val: lr ? { light: lr.wl, glow: lr.wg } : err, bar: 'every ward\'s light.intensity 0 and burn glow opacity 0 on the last frame', ok: !!lr && lr.wl === 0 && lr.wg === 0, vacuous: !lr });
+      { const B = sess.breath || [], ys = B.filter(q => q[5] === 1).map(q => q[1]), amp = ys.length ? +(Math.max(...ys) - Math.min(...ys)).toFixed(5) : null;
+        add({ name: 'clear.breath', val: { amp, frames: ys.length, of: B.length }, bar: 'dug in, 6 u off the strip\'s edge, 40 s: the ring-1 vertex\'s amplitude 0.03-0.06 u', ok: amp != null && amp >= 0.03 && amp <= 0.06, vacuous: !ys.length }); }
+      { const C = (last >= 0 ? S.slice(sess.winF, last + 1) : W).map(q => q.upd).filter(q => q != null), srt = C.slice().sort((a, b) => a - b), med = srt.length ? srt[srt.length >> 1] : null, mx = srt.length ? srt[srt.length - 1] : null;
+        const iMax = C.indexOf(mx), jobs = S.filter(q => q.job != null && q.job > 0).map(q => q.job), jmx = jobs.length ? Math.max(...jobs) : null;
+        add({ name: 'clear.cost', val: { worst: mx, median: med, extra: mx != null ? r(mx - med) : null, atS: r(iMax / f60), p99: srt.length ? srt[Math.floor(srt.length * 0.99)] : null, jobFrames: jobs.length, jobMax: jmx },
+          bar: 'the window\'s worst update() frame less its median <= 4.0 ms (pre-registered)', ok: mx != null && mx - med <= 4.0, vacuous: C.length < 600 }); }
+    } else {
+      const from = sess.apprF ?? S.length, A = S.slice(from), on = [], lv = sess.leaveF;
+      for (let i = Math.max(1, from); i < S.length; i++) if (S[i].on && S[i - 1].bury > 0 && S[i - 1].bury < 1) on.push({ i, d: Math.abs(S[i].bury - S[i - 1].bury) });
+      const worst = on.reduce((a, q) => Math.max(a, q.d), 0), moved = on.filter(q => q.d > 1e-9).length;
+      add({ name: run + '.pause', val: { onFrames: on.length, moved, worst: +worst.toExponential(3) }, bar: '|d bury| <= 1e-9 on every frame he is on her ground mid dig-in (>= 60)', ok: on.length >= 60 && moved === 0, vacuous: !!err || on.length < 60 });
+      let rs = -1; if (lv != null) for (let i = lv; i < S.length; i++) if (S[i].bury > S[i - 1].bury + 1e-9) { rs = i; break; }
+      const k = rs >= 0 ? rs - lv + 1 : null, kMax = Math.round(hold * f60) + 1;
+      add({ name: run + '.resume', val: { frames: k, max: kMax, buryAtLeave: lv != null && S[lv] ? S[lv].bury : null }, bar: '<= SETTLE.hold x 60 + 1 frames after he leaves', ok: k != null && k <= kMax, vacuous: !!err || k == null });
+      if (run === 'pause') {
+        const own = A.map(q => q.own), lens = A.map(q => q.lens);
+        add({ name: 'pause.boots', val: { min: own.length ? Math.min(...own) : null, n: own.length }, bar: 'his OWN boot gap over the drawn sand >= -0.15 u, every frame from the approach', ok: own.length > 0 && Math.min(...own) >= -0.15, vacuous: !!err || !own.length });
+        add({ name: 'pause.lens', val: { min: lens.length ? Math.min(...lens) : null, n: lens.length }, bar: 'the lens >= 0.3 u over the drawn surface, every frame from the approach', ok: lens.length > 0 && Math.min(...lens) >= 0.3, vacuous: !!err || !lens.length });
+      } else {
+        const H = A.filter(q => q.held), dt = 1 / f60, over = H.filter(q => q.drop > 0.5 * (0.11 + Math.max(0, -q.buoy) + 0.121) * dt * dt + 1e-4);
+        add({ name: 'afloat.calm', val: { held: H.length, calmOutMax: H.length ? Math.max(...H.map(q => q.calmOut)) : null, onHeld: H.filter(q => q.on).length }, bar: 'BODY.calmOut 0 on every held frame (>= 60)', ok: H.length >= 60 && H.every(q => q.calmOut === 0), vacuous: !!err || H.length < 60 });
+        add({ name: 'afloat.sink', val: { held: H.length, over: over.length, dropMax: H.length ? Math.max(...H.map(q => q.drop)) : null, hovMin: H.length ? Math.min(...H.map(q => q.hov)) : null }, bar: 'each held frame\'s drop <= 0.5 (0.11 + |min(0, buoy)| + 0.121) dt^2 + 1e-4 u', ok: H.length >= 60 && !over.length, vacuous: !!err || H.length < 60 });
+      }
+    }
+    if (err) ck.push({ name: run + '.err', val: err, bar: 'the run completed', ok: false, vacuous: true, judged: false });
+  }
+  console.log(`DIGIN ${JSON.stringify(out.sessions.map(q => ({ run: q.run, err: q.err || null, rows: q.S ? q.S.length : 0, winF: q.winF, first: q.first, last: q.last, place: q.place2, end: q.endState || null })))}`);
+  verdict(ck);
+}
+if (MODE === 'reentry') {
+  const ck = [];
+  for (const sess of out.sessions) {
+    const run = sess.run, a = sess.after, err = sess.err || null, vac = !!err || !a;
+    ck.push({ name: run + '.dormant', val: a ? { dormant: a.dormant, bury: a.bury } : err, bar: 'lev.dormant and bury exactly 1', ok: !!a && a.dormant && a.bury === 1, vacuous: vac, judged: true });
+    ck.push(Object.assign(disgCheck(run + '.disg', vac ? { err: err || 'no reading' } : sess.disg)));
+    ck.push({ name: run + '.cue', val: a ? { k: a.k, pointPh: a.pointPh, pointK: a.pointK, calmNext: a.calmNext, digging: a.digging, dugIn: a.dugIn } : err, bar: '__pointcam k 0; pointPh 0, pointK 0, calmNext false, digging / dugIn false',
+      ok: !!a && a.k === 0 && a.pointPh === 0 && a.pointK === 0 && !a.calmNext && !a.digging && !a.dugIn, vacuous: vac || (a && a.k == null), judged: true });
+    ck.push({ name: run + '.floor', val: sess.floor || err, bar: 'extraFloorAt == the live dune (sandAt) within 1e-9 at every mid-quad point (>= 100, all on the dune)', ok: !!sess.floor && sess.floor.n >= 100 && !sess.floor.bad && !sess.floor.off, vacuous: vac || !sess.floor || sess.floor.n < 100, judged: true });
+    { const d = sess.disg && !sess.disg.err ? disguiseChecks(sess.disg, true).find(k => k.name === 'clutch') : null;
+      ck.push({ name: run + '.clutch', val: a ? { clutch: d ? d.val : null, drop: a.drop, want: a.dropWant } : err, bar: 'the disguise clutch check and B.drop == clutchSink / R', ok: !!a && !!d && d.ok && a.drop != null && Math.abs(a.drop - a.dropWant) < 1e-12, vacuous: vac || !d, judged: true }); }
+    ck.push({ name: run + '.shader', val: a ? a.shader : err, bar: '__shaderFailed() []', ok: !!a && a.shader === 0, vacuous: vac, judged: true });
+  }
+  console.log(`REENTRY ${JSON.stringify(out.sessions.map(q => ({ run: q.run, err: q.err || null, mid: q.mid || null })))}`);
+  verdict(ck);
 }
 
 // breath: the bars (header). A RED judges only its own bars; otherwise a real FAIL beats an UNMEASURED, and nothing vacuous passes
@@ -1171,8 +1531,9 @@ if (MODE === 'rise') {
   console.log('PASS'); finish(0);
 }
 
-// disguise: every check as { name, val, bar, ok, judged }. judged = in BP_CHECK if given, else those this build can judge
-const hasSand = !!record.hasSand;
+// disguise: every check as { name, val, bar, ok, judged }. judged = in BP_CHECK if given, else those this build can judge. A function
+// (Task 12): digin and reentry judge the same checks on the dug-in and the rebuilt poses
+function disguiseChecks(out, hasSand) {
 const EXPOSED_K = 1.8, EXPOSED_BASE = 95.24;   // (Task 5b: 1ddb11a's reading, the RED run burial-disguise-t5b-red-1ddb11a.json: 3313 triangles, face 81.22, tips 11)
 const checks = [];
 const part = (name, bar) => { const w = out.worst[name], n = out.n[name] || 0; checks.push({ name, val: w ? w.d : null, at: w ? w.at : null, n, bar, ok: !!w && w.d <= 0, vacuous: !w || n === 0, judged: true }); };
@@ -1210,6 +1571,13 @@ checks.push({ name: 'len', val: out.crest.len, n: out.crest.n, bar: '16 - 24 u',
 { const q = out.clutch, bar = '<= -0.05 u (every live lobe: centre world y + 1.25 r, under the drawn sand)';
   checks.push({ name: 'clutch', val: q && q.worst ? q.worst.d : null, at: q && q.worst ? q.worst.at : null, n: q ? q.n : 0, bar, ok: !!q && q.n >= 1 && q.worst.d <= -0.05, vacuous: !q || q.n < 1,
     judged: hasSand && !!out.buried, info: q ? { lobes: q.n, of: q.nL, worstLobe: q.worst && q.worst.k, spill: q.worst && q.worst.spill, topOverFloor: q.worst && q.worst.over, st: q.st } : undefined }); }
+// (Task 12) THE SCAR, where the iron came out: judged where the harpoon is out of her (out.scar), in place of the seam
+{ const q = out.scar;
+  checks.push({ name: 'scar', val: q ? q.d : null, at: q ? q.at : null, n: q ? 1 : 0, bar: '>= +0.2 u over the drawn sand (the scar\'s centre)', ok: !!q && q.d >= 0.2, vacuous: !q, judged: !!q }); }
+return checks;
+}
+const hasSand = !!record.hasSand;
+const checks = MODE === 'disguise' ? disguiseChecks(out, hasSand) : [];
 for (const k of checks) if (ONLY) k.judged = ONLY.includes(k.name);
 for (const need of ONLY || []) if (!checks.some(k => k.name === need)) { console.error(`UNMEASURED: BP_CHECK ${need} is not built into this probe yet`); finish(2, 'BP_CHECK ' + need + ' not built'); }
 record.checks = checks;
