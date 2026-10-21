@@ -57,7 +57,13 @@
 //               (b)      the whole rise, rendered: she is woken with lev.cmd('wake') (the pull's onWake, wakeBrooder; a pull from
 //                        the framing spot would abort: harpoon.js H.update, he is more than REACH + 1 from the anchor), stepped to
 //                        L.hasStood (Task 7a on; before it, 9 s after the wake)
-//               (c)      after __lev.cmd('calm'), the point and the walk home (Task 10 adds it: until then SKIPPED and booked so)
+//               (c)      THE CALM (Task 10): survival.hose 760 (the rift line, not the short-line one), __lev.cmd('calm') (a build without the
+//                        verb, the Task 9 head, is calmed directly: every unlit ward's g.lit set, booked calmBy 'direct'), then rendered until
+//                        the point is done and she is on her way home (pointPh 0 after it ran, or no point at all, and >= 10 s), at most 20 s:
+//                        the opening's light, the claw's reach, the walk home. Her in the frame is booked (cFrames: her shell's bounding
+//                        sphere in the lens's frustum), as slabDraw is. PRE-REGISTERED (Task 10, before its GREEN): (c) every rendered
+//                        frame == (a) (max and last); under BP_BASE, the base's (c) counts join vsBase when the base JSON has them, and
+//                        (c) is info (not judged) when the base's own (c) failed with the same kinds new in (c), as the rise's rule
 //               (d)      the dig-in (Task 12: until then SKIPPED and booked so)
 //               sites    Pallid Bank, the Burned Ground, the Unsounded Shelf (__chart.arrive(i)), her asleep there, 120 rendered
 //                        frames each from the same framing: her shell's program is home's (the same cacheKey), and with the crust
@@ -846,7 +852,20 @@ try {
       const f = await c.ev(`window.__bpProg.frames(60, 'b')`); nb += 60; slF += f.slabFrames || 0; if (f.max > bF.max) bF = f;
       if (ph.wake.hasStoodKnown && await c.ev(`!!window.lev.hasStood`)) break; }
     ph.bF = Object.assign(bF, { frames: nb, slabFrames: slF }); ph.b = await c.ev(`window.__bpProg.read('b')`);
-    ph.c = { skipped: 'Task 10 adds __lev.cmd(\'calm\')' }; ph.d = { skipped: 'Task 12 adds the dig-in' };
+    // (c) the calm (Task 10): the point and the walk home, rendered (header)
+    ph.calm = await c.ev(`(() => { const L = window.lev; window.survival.hose = 760; window.__lev.cmd('calm'); let by = 'verb';
+      if (!('calmNext' in L)) { by = 'direct'; for (const g of L.sigils) if (!g.lit) { g.lit = true; g.rev = 1; } } return { by, pointKnown: 'pointPh' in L }; })()`);
+    let cF = { max: -1 }, nc = 0, cIn = 0, ran = false;
+    for (let k = 0; k < 20; k++) {
+      const f = await c.ev(`(async () => { const THREE = await import('three'), { camera } = await import('/src/core.js'), L = window.lev, sh = L.parts.shell; let inF = 0, ph = 0;
+        const fr = new THREE.Frustum(), m4 = new THREE.Matrix4(), sp = new THREE.Sphere();
+        if (!sh.geometry.boundingSphere) sh.geometry.computeBoundingSphere();
+        const r = window.__bpProg.frames(60, 'c'); sh.updateMatrixWorld(true); camera.updateMatrixWorld(true);
+        fr.setFromProjectionMatrix(m4.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)); inF = fr.intersectsSphere(sp.copy(sh.geometry.boundingSphere).applyMatrix4(sh.matrixWorld)) ? 1 : 0;
+        return Object.assign(r, { inF, ph: L.pointPh || 0, calmed: !!L.calmed }); })()`);
+      nc += 60; cIn += f.inF; if (f.max > cF.max) cF = f; if (f.ph > 0) ran = true;
+      if (nc >= 600 && f.ph === 0 && (ran || !ph.calm.pointKnown)) break; }
+    ph.c = Object.assign(await c.ev(`window.__bpProg.read('c')`), { max: cF.max, frames: nc, inFrame: cIn, of: nc / 60, pointRan: ran, by: ph.calm.by }); ph.d = { skipped: 'Task 12 adds the dig-in' };
     // the other sites: her shell's program is home's; the crust's uBury 0 on every frame
     ph.sites = [];
     for (const si of [1, 2, 3]) {
@@ -919,7 +938,7 @@ if (MODE === 'programs') {
     { name: 'rise', val: { a: A, bMax: o.bF.max, b: o.b.n, frames: o.bF.frames }, bar: '(b) every rendered frame == (a) (max and last)', ok: o.bF.max === A && o.b.n === A, vacuous: !(o.bF.frames > 0), judged: true },
     // (Task 7b) the slabs' first draw is inside (b): it compiles nothing only if they were drawn there (in the lens's frustum)
     { name: 'slabDraw', val: { slabFrames: o.bF.slabFrames ?? null }, bar: 'the slabs drawn (visible, in the frustum) on >= 1 rendered frame of (b)', ok: (o.bF.slabFrames || 0) > 0, vacuous: false, judged: !!o.hasSlabs },
-    { name: 'calm', val: o.c.skipped, bar: '(c) == (a)', ok: false, vacuous: true, judged: false },
+    { name: 'calm', val: { a: A, cMax: o.c.max, c: o.c.n, frames: o.c.frames, inFrame: o.c.inFrame + '/' + o.c.of, pointRan: o.c.pointRan, by: o.c.by }, bar: '(c) every rendered frame == (a) (max and last)', ok: o.c.max === A && o.c.n === A, vacuous: !(o.c.frames > 0), judged: true },
     { name: 'digin', val: o.d.skipped, bar: '(d) == (a)', ok: false, vacuous: true, judged: false },
     { name: 'shader', val: marks.map(m => m.tag + ':' + m.failed), bar: '__shaderFailed() [] at every checkpoint', ok: marks.every(m => m.failed === 0), vacuous: !marks.length, judged: true },
     { name: 'siteKey', val: o.sites.map(q => q.si + ':' + (q.key === o.homeKey)), bar: 'her shell\'s program at every site is home\'s', ok: !!o.homeKey && o.sites.length === 3 && o.sites.every(q => q.key === o.homeKey), vacuous: !o.homeKey || o.sites.length < 3, judged: true },
@@ -930,16 +949,20 @@ if (MODE === 'programs') {
     const pair = (k, a, b) => ({ k, base: b, now: a, ok: a === b });
     const rows = [pair('boot', P0.boot, B.boot), pair('first', P0.first, B.first), pair('a', P0.a, B.a), pair('bMax', P0.bMax, B.bMax), pair('b', P0.b, B.b),
       pair('firstNew', kind(P0.firstNew), kind(B.firstNew)), pair('bNew', kind(P0.bNew), kind(B.bNew)),
-      ...P0.sites.flatMap((q, i) => [pair('s' + q.si + 'max', q.max, B.sites[i] && B.sites[i].max), pair('s' + q.si, q.n, B.sites[i] && B.sites[i].n)])];
+      ...P0.sites.flatMap((q, i) => [pair('s' + q.si + 'max', q.max, B.sites[i] && B.sites[i].max), pair('s' + q.si, q.n, B.sites[i] && B.sites[i].n)]),
+      // (Task 10) the calm's counts, when the base JSON has them (a base run before Task 10 skipped (c))
+      ...(B.c && B.c.n != null ? [pair('cMax', P0.c.max, B.c.max), pair('c', P0.c.n, B.c.n), pair('cNew', kind(P0.c.newNames), kind(B.c.newNames))] : [])];
     ck.push({ name: 'vsBase', val: rows.filter(r => !r.ok), bar: 'every checkpoint equal to the base build (BP_BASE)', ok: rows.every(r => r.ok), vacuous: !B, judged: true });
     record.vsBase = rows; if (RED) REDS.programs[RED].bars.push('vsBase');
     // the base's own rise failed with the same kinds new in (b): rise is the base's (info), vsBase judges the counts
     const baseRiseFail = !(B.bMax === B.a && B.b === B.a), sameKinds = kind(P0.bNew) === kind(B.bNew);
-    if (baseRiseFail && sameKinds && !RED) { const r = ck.find(k => k.name === 'rise'); r.judged = false; r.bar += ' (info under BP_BASE: the base\'s rise failed with the same kinds, ' + kind(B.bNew) + ')'; } }
+    if (baseRiseFail && sameKinds && !RED) { const r = ck.find(k => k.name === 'rise'); r.judged = false; r.bar += ' (info under BP_BASE: the base\'s rise failed with the same kinds, ' + kind(B.bNew) + ')'; }
+    // (Task 10, pre-registered) the same rule for the calm: the base's own (c) failed with the same kinds new in (c) -> (c) is info, vsBase judges
+    if (B.c && B.c.n != null && !(B.c.max === B.a && B.c.n === B.a) && kind(P0.c.newNames) === kind(B.c.newNames) && !RED) { const r = ck.find(k => k.name === 'calm'); r.judged = false; r.bar += ' (info under BP_BASE: the base\'s calm failed with the same kinds, ' + kind(B.c.newNames) + ')'; } }
   if (RED) for (const k of ck) k.judged = REDS.programs[RED].bars.includes(k.name);
   record.checks = ck;
   for (const k of ck) console.log(`  ${k.judged ? (k.vacuous ? 'VOID' : k.ok ? 'ok  ' : 'FAIL') : 'info'} ${k.name.padEnd(8)} ${JSON.stringify(k.val)} (bar ${k.bar})`);
-  console.log(`  info first sight +${o.first.n - o.boot.n}: ${JSON.stringify(o.first.newNames)}; (b) new: ${JSON.stringify(o.b.newNames)}`);
+  console.log(`  info first sight +${o.first.n - o.boot.n}: ${JSON.stringify(o.first.newNames)}; (b) new: ${JSON.stringify(o.b.newNames)}; (c) new: ${JSON.stringify(o.c.newNames)}`);
   if (cons.length) console.error('console errors (booked, not part of the bar): ' + JSON.stringify(cons));
   const J = ck.filter(k => k.judged), failed = J.filter(k => !k.vacuous && !k.ok), vac = J.filter(k => k.vacuous);
   if (RED) {
@@ -949,7 +972,7 @@ if (MODE === 'programs') {
   }
   if (failed.length) { console.error('FAIL ' + failed.map(k => `${k.name} ${JSON.stringify(k.val)} (bar ${k.bar})`).join('; ')); finish(1, 'failed: ' + failed.map(k => k.name).join(',')); }
   if (vac.length) { console.error('UNMEASURED: nothing booked for ' + vac.map(k => k.name).join(', ')); finish(2, 'vacuous'); }
-  console.log('PASS ((c), (d) skipped: their tasks add them)'); finish(0);
+  console.log('PASS ((d) skipped: Task 12 adds it)'); finish(0);
 }
 
 // breath: the bars (header). A RED judges only its own bars; otherwise a real FAIL beats an UNMEASURED, and nothing vacuous passes
