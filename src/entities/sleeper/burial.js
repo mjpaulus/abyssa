@@ -32,6 +32,9 @@ export const BURY = { on: 1, crest: 6.5 };
 //            trickle only with him within `near` u (spec: "visible only within about 8 u"). Michael, 2026-10-15: it may be too subtle
 //            to see; he judges it on stills ("I thought I already approved this but yes these are fine to proceed with"); the knob
 //            is `lift`
+//   clutchSink u: buried, her whole clutch sits this much deeper than her body's sink (brood.js B.update, by L.bury). Sunk 1.41 u (crest 6.5)
+//            her spill tongue's outer lobe (17, at the strip's rear end, inside the band where there is no dune) stood +0.711 u over the drawn
+//            sand (burial-probe disguise clutch, ddd8133); it needs 0.761 u to meet the bar (-0.05 under); 1.2 u leaves 0.44 u of margin
 //   clawSink u: buried, her folded claws sit this much deeper than her body's sink (brooder.js poseClaws, by L.bury). Sunk 1.4 u (crest 6.5)
 //            the palm and finger of both claws, folded under her prow, stood up to +2.06 u over the bare floor inside her drawn shell (every one
 //            enclosed: the burial-probe's literal bar failed on points nobody can see); 3.0 u = the 3.5 u crest's sink less the 6.5's (4.41 - 1.41):
@@ -39,7 +42,7 @@ export const BURY = { on: 1, crest: 6.5 };
 // (Task 5b) crestW 6 -> 20: sunk less, a 6 u strip only lifted the whole dune with her (exposed rock 171 u^2, 1.8x 1ddb11a's 95, a plate on a
 // sand hill in the stills); the strip's edge is now set by edgeMin round her back (her shell standing 1.2 u over the mean ground), so the
 // sand meets her flanks and her back stands out of it as rock (500 u^2, 5.3x; crestW 14: 355, 3.7x)
-Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSink: 3.0, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
+Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSink: 3.0, clutchSink: 1.2, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
   breath: { lift: 0.045, period: [8, 10], up: 1.6, down: 2.6, draw: 18, near: 8 },
   // THE FOOTING over her crest (Task 3b, controller ruling 1; fitFooting below): r u, the lead sole's footprint (a disc the sole's half
   // length: diver.js's casting runs 0.52 u heel to toe); h u, the baked grid
