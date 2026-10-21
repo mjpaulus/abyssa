@@ -174,6 +174,37 @@
 //                   alone and must exit 5. (i)'s hover side must still hold under it: booked, not judged.
 //             (M3, booked, not judged) info.dust: the footfx puff pool's (420 particles, shared with his boots) emissions and live-slot
 //                   OVERWRITES from the wake to the end of the series (src/world/footfx.js dustStats()).
+//             THE PLUME AND HER BLIND START (Task 8, pre-registered in its brief before any plume was built; the brief letters them (g)-(k),
+//             which this probe already used for 7a / 7b, so here they are NAMED: brief (g) = blind, (h) = footprint, (i) = climb,
+//             (j) = quadEv, (k) = riseEv). The reading is Michael's ruling (2026-10-15): she is blind for 3-4 s starting about 3 s into the
+//             rise (sight() cannot lose him before standE 0.5), so she finds him about 6-7 s after the wake. He stays still after the shove.
+//               blind     her FIRST blind spell: L.lostN rises from the wake to STOOD (she loses him; never = FAIL, not UNMEASURED: the head's
+//                         RED), and the spell's length, (the find row - the loss row) / 60 (sight() zeroes blindT on the find frame itself), is
+//                         in [3.0, 4.0] s. The loss and the find are booked from the wake too. HOW IT ENDED is booked off the find row (sight()
+//                         reacquires on any of four): los = clearT > SIGHT.reacq (clearT is not reset on a find), pd = the PREVIOUS row's
+//                         L._pd < collR x 1.05 (sight runs first in the frame, _pd is written later), touch = the previous row's touchT > 0,
+//                         sigil = a ward lit on the find row (brooder.js :2505 sets seen at the frame's end). Only a LOS ending is judged; a
+//                         spell ended any other way is UNMEASURED (reported); a spell still open at the series' end is a FAIL (>= 4 s blind
+//                         by then). The brief needs a LOS ending at BP_AT anchor and off.
+//               footprint the plume's density footprint 1.5 u over the floor: every 3rd frame, on 32 bearings from the strip's centre (MD.bx,
+//                         MD.bz; no mound: her centre), the farthest r (0.25 .. 30 u, 0.25 u steps, every step read, not the first exit) where
+//                         __plume.dens(x, terrainH + 1.5, z) > 0.02; the frame's reading is the farthest bearing's. At its widest from the
+//                         wake to STOOD: in [15, 20] u (the full series' widest booked). No __plume on the page, or < 20 samples: UNMEASURED;
+//                         no density anywhere is a reading of 0 (FAIL)
+//               climb     it climbs: every 6th frame, the density's maximum over a plan grid (the centre and 16 bearings x 2 .. 20 u, 2 u apart)
+//                         x heights 0 .. 20 u over terrainH (0.5 u apart): the height over the floor of that maximum. That height at 4.0 s
+//                         after the wake less its height at the first sample after the wake with a maximum > 0.02: >= 3 u. (Booked beside it,
+//                         not judged: the plan-integrated profile's peak height, sum over the grid's columns per height, the same samples.)
+//                         No cloud > 0.02 in the first 4 s: FAIL (no climb); < 10 samples: UNMEASURED
+//               quadEv    no live particle overwritten in the 448-quad ring over the rise: __plume.state().quadEvicted from the frame before
+//                         the wake to STOOD does not rise. UNMEASURED where the field is absent (the head: a count that cannot be read cannot
+//                         pass) or no rise record was ever live (__plume.state().rise)
+//               riseEv    __plume.state().riseEvicted does not rise over the same window (every live rise cloud keeps its density record);
+//                         UNMEASURED as quadEv
+//             BP_RED=noplume (__burial.set({ plume: 0 }): no rise plume) judges blind, footprint and climb (the two eviction counts would be
+//             0 with no plume and are not its bars). BP_OFF=<u> moves the `off` placement to <u> off the strip's edge (default 12): the
+//             blind spell at 10 and 25 u off her flank is booked with it, not gated. BP_PLUME=<json> patches __plume.kinds.rise before
+//             the run (tuning trials; booked in the JSON).
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
 //             leg capsule (bodyColsCaps, the first 40: 8 legs x 5; moving 3-18 u/s, under bodyCols' LIMB_VMAX 20), 0.2 u in, afloat,
@@ -199,7 +230,7 @@
 // ENV (besides DRV_PORT, a port of this probe's own: never 8777 / 8790 / 9419; the probe exits 2 before importing drv.mjs):
 //   BP_KNOBS=<json>   patched through `__burial.set` before the mode (absent on main: exit 2, a patch has nothing to act on)
 //   BP_RED=<variant>  an opt-in RED, never part of the default run: it must fail ITS bar (exit 5; 3 = it did not). disguise:
-//                     ridge | shallow | steep | late; breath: still; programs: lazy; rise: noshove | tearable | early | nofoot | sunk. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
+//                     ridge | shallow | steep | late; breath: still; programs: lazy; rise: noshove | tearable | early | nofoot | sunk | noplume. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
 //                     `ridge` on main: main already is the shipped ridge, the unpatched reading is that RED (exit 5 there).
 //   BP_AT=<where>     where he stands for the modes that place him: anchor (Alt+6's harpoon anchor) | crest (on her) | off
 //                     (clear of her ground) | front (rise: 2.3 R in front of her). `disguise` is geometry only and does not place him (the value is still checked).
@@ -239,7 +270,9 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
     // (thrown off the crest's pinnacle he may fall: unthrown he must stay on it)
     nofoot: { set: { footRise: 0, shoveV: 0, shoveStag: 0 }, bars: ['g'], at: 'crest' },
     // (Task 7b fix round 1, I1) sunk: a piece forced 0.5 u into her drawn shell (page side: R.sink) -> (iShell), the slabs' shell side
-    sunk: { set: {}, bars: ['iShell'], page: true } } };
+    sunk: { set: {}, bars: ['iShell'], page: true },
+    // (Task 8) noplume: no rise plume -> she never loses him, and there is no cloud to spread or climb
+    noplume: { set: { plume: 0 }, bars: ['blind', 'footprint', 'climb'] } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -247,6 +280,10 @@ const AT = process.env.BP_AT || '';
 if (AT && !['anchor', 'crest', 'off', 'front', 'dune', 'under'].includes(AT)) { console.error(`BP_AT: anchor | crest | off | front | dune | under (got ${JSON.stringify(AT)})`); process.exit(2); }
 const SHELL_D = process.env.BP_SHELL_D == null ? 0.3 : +process.env.BP_SHELL_D;
 if (!(SHELL_D > 0 && SHELL_D <= 2)) { console.error(`BP_SHELL_D: a depth in u, 0 < d <= 2 (default 0.3; got ${JSON.stringify(process.env.BP_SHELL_D)})`); process.exit(2); }
+const OFF_D = process.env.BP_OFF == null ? 12 : +process.env.BP_OFF;
+if (!(OFF_D > 0 && OFF_D <= 60) || (process.env.BP_OFF != null && MODE !== 'rise')) { console.error(`BP_OFF: rise's off placement, 0 < u <= 60 (got ${JSON.stringify(process.env.BP_OFF)})`); process.exit(2); }
+let PLUME_P = null;
+if (process.env.BP_PLUME) { try { PLUME_P = JSON.parse(process.env.BP_PLUME); } catch (e) { console.error('BP_PLUME is not JSON: ' + e.message); process.exit(2); } if (MODE !== 'rise') { console.error('BP_PLUME is rise\'s'); process.exit(2); } }
 const FORCE = process.env.BP_FORCE === '1' || !!(RED && REDS[MODE][RED].force);
 if (FORCE && MODE !== 'rise') { console.error('BP_FORCE is rise\'s'); process.exit(2); }
 if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
@@ -543,7 +580,8 @@ const RISE_INSTALL = `(async () => {
   // strip residual of Task 3b), carried to her body now: (x, y, z) into the fit pose by MD.mw . inv(body now), the envelope read there, and
   // back by body now . inv(MD.mw); two passes (the map's tilt makes x, z depend on y). -1e9 off the envelope or with no burial build
   let BU = null; try { BU = await import('/src/entities/sleeper/burial.js'); } catch (e) { }
-  let FF = null; try { FF = await import('/src/world/footfx.js'); } catch (e) { }   // (M3) the puff pool's totals; absent on a build without dustStats
+  let FF = null; try { FF = await import('/src/world/footfx.js'); } catch (e) { }
+  let BRD = null; try { BRD = await import('/src/entities/sleeper/brooder.js'); } catch (e) { }   // (Task 8) SIGHT.reacq, the LOS find's clear time   // (M3) the puff pool's totals; absent on a build without dustStats
   const Mf = new THREE.Matrix4(), Mi = new THREE.Matrix4(), Mc = new THREE.Matrix4(), Mci = new THREE.Matrix4(), q3 = new THREE.Vector3();
   const footCarried = (x, z) => { if (!BU || !BU.footY || !MD || !MD.foot) return -1e9;
     L.body.updateMatrixWorld(true); Mf.fromArray(MD.mw); Mc.copy(L.body.matrixWorld).multiply(Mi.copy(Mf).invert()); Mci.copy(Mc).invert();
@@ -551,6 +589,21 @@ const RISE_INSTALL = `(async () => {
     for (let it = 0; it < 3; it++) { q3.set(x, wy, z).applyMatrix4(Mci); const h = BU.footY(MD, q3.x, q3.z); if (h < -1e8) return -1e9; q3.y = h; q3.applyMatrix4(Mc); wy = q3.y; }
     return wy; };
   let capPrev = null; const COS8 = [], SIN8 = []; for (let i = 0; i < 8; i++) { COS8.push(Math.cos(i * Math.PI / 4)); SIN8.push(Math.sin(i * Math.PI / 4)); }
+  // (Task 8, header: footprint / climb) the plume's density field, read off the game's own model (__plume.dens); null without one
+  const PLD = window.__plume && window.__plume.dens ? window.__plume.dens : null;
+  const fieldFoot = () => { if (!PLD) return null; let far = 0, nb = 0, fb = -1;
+    for (let b = 0; b < 32; b++) { const a = b * Math.PI / 16, dx = Math.sin(a), dz = Math.cos(a); let fr = 0;
+      for (let k = 1; k <= 120; k++) { const rr = k * 0.25, x = cx + dx * rr, z = cz + dz * rr; if (PLD(x, T.terrainH(x, z, 0) + 1.5, z) > 0.02) fr = rr; }
+      if (fr > 0) nb++; if (fr > far) { far = fr; fb = b; } }
+    return { far, nb, b: fb }; };
+  const PROF = new Float64Array(41);
+  const fieldPeak = () => { if (!PLD) return null; let best = 0, bh = null, bx = 0, bz = 0; PROF.fill(0);
+    for (let ri = 0; ri <= 10; ri++) { const rr = ri * 2, nbz = ri ? 16 : 1;
+      for (let b = 0; b < nbz; b++) { const a = b * Math.PI / 8, x = cx + Math.sin(a) * rr, z = cz + Math.cos(a) * rr, g = T.terrainH(x, z, 0);
+        for (let hi = 0; hi <= 40; hi++) { const d = PLD(x, g + hi * 0.5, z); PROF[hi] += d; if (d > best) { best = d; bh = hi * 0.5; bx = x; bz = z; } } } }
+    let pm = 0, ph = null; for (let hi = 0; hi <= 40; hi++) if (PROF[hi] > pm) { pm = PROF[hi]; ph = hi * 0.5; }
+    return { d: r3(best), h: bh, at: [r2(bx), r2(bz)], prof: ph, profD: r3(pm) }; };
+  let fieldN = 0;
   const R = window.__bpRise = { S: [], wakeF: -1, cx, cz, R: L.R,
     foot() { const p = P.pos, fl = T.shutFloorY(p.x, p.z, 0); return { him: [r2(p.x), r2(p.y), r2(p.z)], grounded: !!P.grounded, gap: r3(p.y - 1.35 - fl), sand: r3(p.y - 1.35 - sand(p.x, p.z)),
       xf: r3(T.extraFloorAt(p.x, p.z, 0)), terr: r3(T.terrainH(p.x, p.z, 0)), dC: r2(Math.hypot(p.x - cx, p.z - cz)), dormant: !!L.dormant }; },
@@ -643,11 +696,17 @@ const RISE_INSTALL = `(async () => {
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
         gBase: r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, pb + 1.5, p.z))), gFoot: r3(footCarried(p.x, p.z)), boots: r3(bo), pb: r3(pb), forced: R.lastForce || 0,
         calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0,
-        crackK: L.crackK == null ? null : r3(L.crackK), slab: R.slab(), dust: FF && FF.dustStats ? FF.dustStats() : null });
+        crackK: L.crackK == null ? null : r3(L.crackK), slab: R.slab(), dust: FF && FF.dustStats ? FF.dustStats() : null,
+        // (Task 8) sight's reacquire inputs (header: blind) and the plume's state and field; ps fields absent on a build without them are null
+        clearT: r3(L.clearT || 0), pd: r3(L._pd), touchT: r3(L.touchT || 0),
+        ps: (() => { const q = window.__plume ? window.__plume.state() : null; return q ? { live: q.live, rise: q.rise ?? null, riseEv: q.riseEvicted ?? null, quadEv: q.quadEvicted ?? null } : null; })(),
+        pf: fieldN % 3 === 0 ? fieldFoot() : null, pk: fieldN % 6 === 0 ? fieldPeak() : null });
+      fieldN++;
       R.prevBoots = bo;
     },
     step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { if (${RED === 'sunk' ? 'true' : 'false'}) R.sink(); R.row(); R.lastForce = 0; if (${FORCE ? 'true' : 'false'} && R.wakeF >= 0 && L.stand >= 1 && !R.stoodSeen) { if (L.hasStood) { R.stoodSeen = true; if (R.reach0 != null) L.reach = R.reach0; } else { if (R.reach0 == null) { R.reach0 = L.reach; L.reach = -1; } R.lastForce = R.force(); } } }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
-  return { R: L.R, buried: !!L.buried, hasMound: !!MD, centre: [r2(cx), r2(cz)], hasStoodKnown: 'hasStood' in L, knobs: B ? { shoveV: B.knobs.shoveV ?? null, shoveStag: B.knobs.shoveStag ?? null, holdRise: B.knobs.holdRise ?? null, riseU: B.knobs.riseU ?? null, pourU: B.knobs.pourU ?? null, crackT: B.knobs.crackT ?? null, slabs: B.knobs.slabs ?? null } : null, hasSlabs: !!L.slabs };
+  return { R: L.R, buried: !!L.buried, hasMound: !!MD, centre: [r2(cx), r2(cz)], hasStoodKnown: 'hasStood' in L, knobs: B ? { shoveV: B.knobs.shoveV ?? null, shoveStag: B.knobs.shoveStag ?? null, holdRise: B.knobs.holdRise ?? null, riseU: B.knobs.riseU ?? null, pourU: B.knobs.pourU ?? null, crackT: B.knobs.crackT ?? null, slabs: B.knobs.slabs ?? null, plume: B.knobs.plume ?? null } : null, hasSlabs: !!L.slabs,
+    collR: L.collR, reacq: BRD && BRD.SIGHT ? BRD.SIGHT.reacq : null, hasPlume: !!PLD, riseKind: !!(window.__plume && window.__plume.kinds && window.__plume.kinds.rise), plumeRise: window.__plume && window.__plume.kinds && window.__plume.kinds.rise ? JSON.parse(JSON.stringify(window.__plume.kinds.rise)) : null };
 })()`;
 const RISE_PLACE = where => `(async () => {
   const T = await import('/src/world/terrain.js'), S = await import('/src/world/fissureShape.js');
@@ -674,7 +733,7 @@ try { const r = await fetch(`http://127.0.0.1:${P}/json/version`, { signal: Abor
 catch (e) { if (!(e && e.cause && e.cause.code === 'ECONNREFUSED')) { console.error(`the debug port ${P} is not free (${e && e.name}: ${e && e.cause && e.cause.code || e && e.message}): not starting, nothing touched`); process.exit(2); } }
 const TAG = process.env.BP_TAG || 'port' + PORT;
 const OUT = process.env.BP_OUT || join(homedir(), 'sc/.abyssa-wt/reviews/buried', `burial-${MODE}-${TAG}.json`);
-const record = { mode: MODE, port: +PORT, tag: TAG, red: RED || null, noplug: process.env.BP_NOPLUG === '1', knobs: KNOBS, at: AT || null, only: ONLY };
+const record = { mode: MODE, port: +PORT, tag: TAG, red: RED || null, noplug: process.env.BP_NOPLUG === '1', knobs: KNOBS, at: AT || null, only: ONLY, offD: MODE === 'rise' ? OFF_D : undefined };
 const finish = (code, why) => {
   record.exit = code; if (why) record.why = why;
   try { mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(OUT, JSON.stringify(record, null, 1)); console.log('JSON ' + OUT); } catch (e) { console.error('could not write ' + OUT + ': ' + e.message); }
@@ -783,9 +842,11 @@ try {
     const where = AT || 'anchor';
     let pl;
     if (where === 'anchor') { await alt(c, 6); pl = await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { where: 'anchor', him: [+p.x.toFixed(2), +p.z.toFixed(2)], dAnchor: H && H.anchor ? +Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z).toFixed(2) : null, prompt: window.lev.rite ? window.lev.rite.prompt(p) : null }; })()`); }
-    else if (where === 'off' || where === 'under') pl = await c.ev(BREATH_PLACE(12));
+    else if (where === 'off' || where === 'under') pl = await c.ev(BREATH_PLACE(where === 'off' ? OFF_D : 12));
     else pl = await c.ev(RISE_PLACE(where));
     if (!pl || pl.err) throw new Error('place: ' + (pl && pl.err));
+    // (Task 8) BP_PLUME: a tuning trial's patch of the rise kind (plume.js PLUME.rise), applied before the wake
+    if (PLUME_P) { record.plumePatch = PLUME_P; const k = await c.ev(`(window.__plume && window.__plume.kinds.rise ? (Object.assign(window.__plume.kinds.rise, ${JSON.stringify(PLUME_P)}), JSON.parse(JSON.stringify(window.__plume.kinds.rise))) : null)`); if (!k) throw new Error('BP_PLUME: no __plume.kinds.rise on this build'); console.log('BP_PLUME rise kind: ' + JSON.stringify(k)); }
     const ins = await c.ev(RISE_INSTALL);
     if (!ins || ins.err) out = ins;
     else {
@@ -991,6 +1052,43 @@ if (MODE === 'rise') {
         bar: `every slab on her drawn shell (its lowest of five reads is shell): lowest vertex <= ${SHELL_D} u from her drawn surface, inside it (sinking into sand / floor stays allowed)`, ok: !badS.length && info.slabs.shellFrames > 0, vacuous: !hasSl || !V.length || info.slabs.shellFrames === 0, judged: true }); }
     ck.push({ name: 'i', val: { frames: V.length, bad: bad.length, firstBad: bad.length ? { t: sec(bad[0][0]), gMax: bad[0][1].gMax, k: bad[0][1].wk, at: bad[0][1].at } : null, worstGap: worst && worst.gMax, lastVisibleT: info.slabs.lastVisibleT },
       bar: 'every drawn slab\'s lowest point <= +0.3 u over the drawn surface (terrainH, the dune, her drawn shell), hidden by 3.1 s after the wake', ok: !bad.length && lastV >= 0 && lastV <= w + Math.round(3.1 * f60), vacuous: !hasSl || !V.length, judged: true }); }
+  // (Task 8, header) THE PLUME AND HER BLIND START: blind, footprint, climb, quadEv, riseEv
+  { const reacq = out.ins.reacq != null ? out.ins.reacq : 0.6, collR = out.ins.collR, end = s >= 0 ? s : S.length - 1, hasP = !!out.ins.hasPlume;
+    // every spell after the wake: the loss row (lostN rises: sight() set seen false) and its find row (seen 0 -> 1), and how it ended
+    const spells = [];
+    for (let i = Math.max(1, w); i < S.length; i++) if (S[i].lost > S[i - 1].lost) {
+      let f = -1; for (let j = i + 1; j < S.length; j++) if (S[j].seen === 1 && S[j - 1].seen === 0) { f = j; break; }
+      const how = f < 0 ? null : { los: S[f].clearT > reacq, pd: S[f - 1].pd < collR * 1.05, touch: S[f - 1].touchT > 0, sigil: S[f].lit > S[f - 1].lit,
+        clearT: S[f].clearT, pdPrev: S[f - 1].pd, touchPrev: S[f - 1].touchT, blindTPrev: S[f - 1].blindT, tauLoss: S[i].tau, tauFind: S[f].tau };
+      spells.push({ lossRow: i, findRow: f, lossT: sec(i), findT: f < 0 ? null : sec(f), len: f < 0 ? null : +((f - i) / f60).toFixed(3), openFor: f < 0 ? +((S.length - i) / f60).toFixed(3) : null, how,
+        ended: how ? ['los', 'pd', 'touch', 'sigil'].filter(k => how[k]) : ['open'] });
+      if (f < 0) break; i = f; }
+    const sp = spells.length && spells[0].lossRow <= end ? spells[0] : null;
+    info.blind = { spells, reacq, collR, lostAtEnd: S.length ? S[S.length - 1].lost : null, tauMaxRise: S.slice(w, end + 1).reduce((m, q) => Math.max(m, q.tau), 0) };
+    ck.push({ name: 'blind', val: sp ? { lossT: sp.lossT, findT: sp.findT, len: sp.len, openFor: sp.openFor, ended: sp.ended, how: sp.how } : { lost: 'never, from the wake to STOOD' },
+      bar: 'she loses him between the wake and STOOD (lostN rises), and her first blind spell, ended by line of sight (clearT > SIGHT.reacq), lasts 3.0-4.0 s',
+      ok: !!sp && sp.findRow >= 0 && sp.len >= 3.0 && sp.len <= 4.0, vacuous: vacA || (!!sp && sp.findRow >= 0 && !sp.how.los), judged: true });
+    // footprint: the widest over the rise (wake -> STOOD) of the frame's farthest bearing
+    const FP = S.map((q, k) => [k, q.pf]).filter(([k, q]) => k >= w && q), FPr = FP.filter(([k]) => k <= end);
+    const wid = FPr.reduce((a, [k, q]) => !a || q.far > a.far ? { t: sec(k), far: q.far, bearings: q.nb, b: q.b } : a, null), widAll = FP.reduce((a, [k, q]) => !a || q.far > a.far ? { t: sec(k), far: q.far } : a, null);
+    info.footprint = { samples: FPr.length, widest: wid, widestSeries: widAll, at: [1, 2, 3, 4, 5, 6].map(t => { const e2 = FP.find(([k]) => k >= w + t * f60); return e2 ? [t, e2[1].far, e2[1].nb] : [t, null]; }) };
+    ck.push({ name: 'footprint', val: wid, bar: 'at its widest, wake to STOOD, the farthest of 32 bearings from the strip\'s centre with __plume.dens(x, floor + 1.5, z) > 0.02 is 15-20 u',
+      ok: !!wid && wid.far >= 15 && wid.far <= 20, vacuous: !hasP || FPr.length < 20, judged: true });
+    // climb: the density maximum's height over the floor at 4.0 s less at the first sample with a maximum > 0.02
+    const PK = S.map((q, k) => [k, q.pk]).filter(([k, q]) => k >= w && q && k <= w + 4 * f60), p0 = PK.find(([, q]) => q.d > 0.02), p4 = PK.length ? PK[PK.length - 1] : null;
+    const climb = p0 && p4 && p4[1].d > 0.02 ? +(p4[1].h - p0[1].h).toFixed(2) : null;
+    info.climb = { samples: PK.length, first: p0 ? { t: sec(p0[0]), ...p0[1] } : null, at4: p4 ? { t: sec(p4[0]), ...p4[1] } : null, profClimb: p0 && p4 && p4[1].prof != null && p0[1].prof != null ? +(p4[1].prof - p0[1].prof).toFixed(2) : null,
+      series: PK.filter((x, i) => i % 5 === 0).map(([k, q]) => [sec(k), q.h, q.d, q.prof]) };
+    ck.push({ name: 'climb', val: { climb, h0: p0 ? p0[1].h : null, t0: p0 ? sec(p0[0]) : null, h4: p4 ? p4[1].h : null, d4: p4 ? p4[1].d : null }, bar: 'the density maximum\'s height over the floor rises >= 3 u from its first sample (> 0.02) to 4.0 s after the wake',
+      ok: climb != null && climb >= 3, vacuous: !hasP || PK.length < 10, judged: true });
+    // the two eviction counts over the rise (the frame before the wake -> STOOD)
+    const ps0 = S[Math.max(0, w - 1)] && S[Math.max(0, w - 1)].ps, PSr = S.slice(w, end + 1).map(q => q.ps).filter(Boolean);
+    const riseMax = PSr.reduce((m, q) => Math.max(m, q.rise || 0), 0), dEv = key => ps0 && ps0[key] != null && PSr.length ? Math.max(...PSr.map(q => q[key])) - ps0[key] : null;
+    info.plume = { riseLiveMax: riseMax, quadEv: dEv('quadEv'), riseEv: dEv('riseEv'), liveMax: PSr.reduce((m, q) => Math.max(m, q.live || 0), 0) };
+    ck.push({ name: 'quadEv', val: { quadEvicted: info.plume.quadEv, riseLiveMax: riseMax }, bar: 'no live particle overwritten in the 448-quad ring over the rise (plumeState().quadEvicted does not rise)',
+      ok: info.plume.quadEv === 0, vacuous: info.plume.quadEv == null || riseMax === 0, judged: true });
+    ck.push({ name: 'riseEv', val: { riseEvicted: info.plume.riseEv, riseLiveMax: riseMax }, bar: 'no live rise record overwritten over the rise (plumeState().riseEvicted does not rise)',
+      ok: info.plume.riseEv === 0, vacuous: info.plume.riseEv == null || riseMax === 0, judged: true }); }
   // (BP_FORCE) the forced contact: legs closing on him in the window the hold adds
   // (fix round 1, M4: ward touch is suppressed in the window, L.reach -1; and the window is cut at a calm, where game.js forbids tears whatever holdRise is)
   if (FORCE) { const f0 = S.findIndex((q, k) => k >= w && q.stand >= 1), c0 = S.findIndex((q, k) => k >= f0 && f0 >= 0 && q.calmed), F = f0 >= 0 && s >= 0 ? S.slice(f0, (c0 >= 0 && c0 <= s ? c0 : s + 1)) : [];
