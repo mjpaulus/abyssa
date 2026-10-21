@@ -116,7 +116,12 @@
 //                   him: thrown off a ledge of her rock he may fall, but not before he has left it), and his boots never rise faster than
 //                   1.0 u/s (the shove's own lift is 0.10 x 5 = 0.5 u/s: anything faster is her body throwing him up). (Amended twice
 //                   before any fix ran, on 1ddae5e's readings: an exempt throw passed the crest's float; a +1.2 u bound failed a man thrown
-//                   off the crest's pinnacle, a legitimate fall.) Judged at every BP_AT; BP_AT=dune stands
+//                   off the crest's pinnacle, a legitimate fall.) AMENDED A THIRD TIME AFTER THE FIX'S FIRST GREEN RUN (anchor; recorded,
+//                   and the REDs re-judged under it, FOOTING() below): (1) the rise limit applies only IN THE AIR (boots > 0.3 u over the
+//                   drawn ground): shoved up the steep rock at the strip's edge he walked up it at 6 u/s ON it (gap -0.02); (2) a FALL is
+//                   air too: the drawn ground dropping > 0.3 u from under him in a frame (she turned as she rose and the lip of her rock went
+//                   from under his boots: 1.7 u, a ledge leaving him, not a footing gone); in the air he is never under the drawn ground by
+//                   more than 0.3 u (the vanished-footing case sinks him into her rock: nofoot, -1.2 u). Judged at every BP_AT; BP_AT=dune stands
 //                   him half-way down the dune on her sand side (the dune floor following moundK as it draws down)
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
@@ -130,7 +135,8 @@
 // '|lazyRED' and needsUpdate, a variant compiled in play, as a crust installed at first sight would be) -> rise; noshove (rise:
 // {shoveV: 0, shoveStag: 0}) -> (b); tearable (rise, BP_AT=crest only: {holdRise: 0}, the holds off) -> (a), a tear from her rising
 // shell; early (rise, BP_AT=front only: {holdRise: 0}) -> (a), her hammer cocks (or lands) before she has stood. The two holdRise
-// REDs judge (a)'s named PART (aTear, aHammer: see REDS), so neither can pass on the other's reason. A page-side throw is
+// REDs judge (a)'s named PART (aTear, aHammer: see REDS), so neither can pass on the other's reason. nofoot (rise, BP_AT=crest only:
+// {footRise: 0, shoveV: 0, shoveStag: 0}) -> (g). A page-side throw is
 // UNMEASURED (exit 2), never a fail (1) or a RED's pass (5).
 // __burial.set rebuilds her through __lev.remember(null), outside game.js keepingPrograms: her programs are released and
 // rebuilt, so a `programs` reading taken after a set is not a play reading (that mode never sets knobs).
@@ -140,7 +146,7 @@
 // ENV (besides DRV_PORT, a port of this probe's own: never 8777 / 8790 / 9419; the probe exits 2 before importing drv.mjs):
 //   BP_KNOBS=<json>   patched through `__burial.set` before the mode (absent on main: exit 2, a patch has nothing to act on)
 //   BP_RED=<variant>  an opt-in RED, never part of the default run: it must fail ITS bar (exit 5; 3 = it did not). disguise:
-//                     ridge | shallow | steep | late; breath: still; programs: lazy; rise: noshove | tearable | early. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
+//                     ridge | shallow | steep | late; breath: still; programs: lazy; rise: noshove | tearable | early | nofoot. Applied through `__burial.set` too, so it needs a build that has `__burial`, except
 //                     `ridge` on main: main already is the shipped ridge, the unpatched reading is that RED (exit 5 there).
 //   BP_AT=<where>     where he stands for the modes that place him: anchor (Alt+6's harpoon anchor) | crest (on her) | off
 //                     (clear of her ground) | front (rise: 2.3 R in front of her). `disguise` is geometry only and does not place him (the value is still checked).
@@ -174,7 +180,10 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
   // (controller's ruling, Task 7a NEEDS_CONTEXT) tearable is a FORCED-CONTACT case (force: BP_FORCE's hold, below): the old crest placement
   // could not reach her in the window the hold adds. footing: Task 7a's footing RED, judged on the build BEFORE the footing fix (1ddae5e)
   rise: { noshove: { set: { shoveV: 0, shoveStag: 0 }, bars: ['b'] }, tearable: { set: { holdRise: 0 }, bars: ['aTear'], at: 'crest', force: true },
-    early: { set: { holdRise: 0 }, bars: ['aHammer'], at: 'front' } } };
+    early: { set: { holdRise: 0 }, bars: ['aHammer'], at: 'front' },
+    // (g)'s RED as a knob (BURY.footRise 0: her crest's footing vanishes on the wake frame, 1ddae5e's behaviour), at the crest with no shove
+    // (thrown off the crest's pinnacle he may fall: unthrown he must stay on it)
+    nofoot: { set: { footRise: 0, shoveV: 0, shoveStag: 0 }, bars: ['g'], at: 'crest' } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -417,6 +426,22 @@ const PROG_INSTALL = `(async () => {
   };
   return { n: P().length, crust: crustN(), hasCrust: !!(window.__burial && window.__burial.crust) }; })()`;
 
+// (g) THE FOOTING, judged off a booked series (a function so a saved JSON can be re-judged: the REDs on 1ddae5e were)
+function FOOTING(S, w) {
+  const f60 = 60, sec = i => +((i - w) / f60).toFixed(3), r = v => Math.round(v * 1000) / 1000;
+  let air = 0, tx = 0, tz = 0, throws = 0, falls = 0, gN = 0, tN = 0, gMax = -1e9, gMin = 1e9; const gBad = [], tBad = [];
+  for (let i = Math.max(1, w - 1); i <= Math.min(S.length - 1, w + 120); i++) { const q = S[i], p = S[i - 1]; if (q.drawnG == null) continue;
+    const gap = q.boots - q.drawnG, pg = p.drawnG == null ? null : p.boots - p.drawnG;
+    if (q.shoveN > p.shoveN) { air = 1; throws++; tx = p.px; tz = p.pz; }
+    else if (!air && pg != null && Math.abs(pg) <= 0.3 && q.drawnG < p.drawnG - 0.3) { air = 2; falls++; tx = p.px; tz = p.pz; }
+    else if (air && (air === 2 || q.stag <= 0) && Math.abs(gap) <= 0.3) air = 0;
+    if (air) { tN++; const vb = (q.boots - p.boots) * f60, onSpot = air === 1 && Math.hypot(q.px - tx, q.pz - tz) < 0.3;
+      if (((vb > 1.0 && gap > 0.3) || gap < -0.3 || (onSpot && Math.abs(gap) > 0.3)) && tBad.length < 12) tBad.push([sec(i), r(vb), r(gap), air]); }
+    else { gN++; if (gap > gMax) gMax = gap; if (gap < gMin) gMin = gap; if (Math.abs(gap) > 0.3 && gBad.length < 12) gBad.push([sec(i), r(gap)]); } }
+  return { name: 'g', val: { judged: gN, gapMax: gN ? r(gMax) : null, gapMin: gN ? r(gMin) : null, bad: gBad, throws, falls, airFrames: tN, air: tBad },
+    bar: 'wake - 1 frame .. + 2 s: boots within +-0.3 u of the drawn ground; in the air (a throw, or the drawn ground dropping > 0.3 u from under him) never rising > 1.0 u/s, never under it by > 0.3, on the spot of a throw within 0.3',
+    ok: !gBad.length && !tBad.length, vacuous: gN + tN < 30, judged: true };
+}
 // the page side of `rise` (header). RISE_INSTALL puts window.__bpRise: settle(n) steps n frames booking his footing (not the series);
 // step(n) steps n frames booking one row per frame into S (wake = the first row with L.dormant false, recorded as wakeF). Reads the
 // sleeper's fields directly (L.probe() counts triangles: too heavy per frame). RISE_PLACE(where) stands him at crest | front.
@@ -474,7 +499,7 @@ const RISE_INSTALL = `(async () => {
         bodyY: r3(L.bodyY), sl: r3(L.soleLift || 0), gG: L.gG ? r3(L.gG.x) : null, threatE: r3(L.threatE), nsT: r3(L.nsT || 0), drop: L.drop || 0, seen: L.seen ? 1 : 0, tau: r2(L.tau || 0), blindT: r2(L.blindT || 0), lost: L.lostN || 0,
         stag: r3(P.stagger || 0), px: r2(p.x), py: r2(p.y), pz: r2(p.z), gr: P.grounded ? 1 : 0, gap: r3(bo - T.shutFloorY(p.x, p.z, 0)), dC: r3(Math.hypot(p.x - cx, p.z - cz)),
         slam: window.__slamLog ? window.__slamLog.length : -1, torn: r2(sv ? sv.torn : -1), wh, wmin: r2(wmin), wmax: r2(wmax), lit,
-        blk0: blk(p.x, bo, p.z, 0), blk45: blk(p.x, bo, p.z, 0.45), lensClr: r3(cp.y - T.shutFloorY(cp.x, cp.z, 0)), lensBlk: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0,
+        blk0: blk(p.x, bo, p.z, 0), blk45: blk(p.x, bo, p.z, 0.45), lensClr: r3(cp.y - T.shutFloorY(cp.x, cp.z, 0)), lensBlk: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0, lensWhy: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? BC.blockWhy : null, crecam: window.__crecam && window.__crecam.state ? window.__crecam.state().creEng ?? null : null,
         lift: L.claws.map(c => r3(c.liftNow || 0)), elbow: L.claws.map(c => r3(c.elbow || 0)), frontUp: r3(L.frontUp || 0), clawRes: r3(L.clawRes || 0), clawSt: r3(L.clawSt || 0), belly: r2(L.bellyOver ?? 99),
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
         drawnG: near ? r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, bo + 1.5, p.z), footCarried(p.x, p.z))) : null, boots: r3(bo), forced: R.lastForce || 0 });
@@ -788,15 +813,7 @@ if (MODE === 'rise') {
     { name: 'f', val: fS ? { mk: fS.mk, drawn: fS.drawn, moundK: fS.moundK } : null, bar: 'at STOOD MD.k 0 and MD.drawn false', ok: !!fS && fS.mk === 0 && fS.drawn === 0, vacuous: !fS || fS.mk == null, judged: true }];
   info.dAfter = dAfter;
   // (g) THE FOOTING (header)
-  { let thrown = false, tx = 0, tz = 0, throws = 0, gN = 0, tN = 0, gMax = -1e9, gMin = 1e9; const gBad = [], tBad = [];
-    for (let i = Math.max(1, w - 1); i <= Math.min(S.length - 1, w + 120); i++) { const q = S[i]; if (q.drawnG == null) continue;
-      const gap = q.boots - q.drawnG;
-      if (q.shoveN > S[i - 1].shoveN) { thrown = true; throws++; tx = S[i - 1].px; tz = S[i - 1].pz; } else if (thrown && q.stag <= 0 && Math.abs(gap) <= 0.3) thrown = false;
-      if (thrown) { tN++; const vb = (q.boots - S[i - 1].boots) * f60, onSpot = Math.hypot(q.px - tx, q.pz - tz) < 0.3;
-        if ((vb > 1.0 || (onSpot && Math.abs(gap) > 0.3)) && tBad.length < 12) tBad.push([sec(i), r(vb), r(gap), onSpot ? 1 : 0]); }
-      else { gN++; if (gap > gMax) gMax = gap; if (gap < gMin) gMin = gap; if (Math.abs(gap) > 0.3 && gBad.length < 12) gBad.push([sec(i), r(gap)]); } }
-    ck.push({ name: 'g', val: { judged: gN, gapMax: gN ? r(gMax) : null, gapMin: gN ? r(gMin) : null, bad: gBad, throws, throwFrames: tN, throwUp: tBad },
-      bar: 'wake - 1 frame .. + 2 s: boots within +-0.3 u of the drawn ground (floor / dune / her drawn shell), a throw\'s frames: within 0.3 u of it until he has moved 0.3 u, rising <= 1.0 u/s', ok: !gBad.length && !tBad.length, vacuous: gN + tN < 30, judged: true }); }
+  ck.push(FOOTING(S, w));
   // (BP_FORCE) the forced contact: legs closing on him in the window the hold adds
   if (FORCE) { const f0 = S.findIndex((q, k) => k >= w && q.stand >= 1), F = f0 >= 0 && s >= 0 ? S.slice(f0, s + 1) : [];
     const hits = F.filter(q => q.body.hitV > 2.5).length, aT = ck.find(k => k.name === 'aTear');

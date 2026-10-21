@@ -56,7 +56,10 @@ Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSi
 // but cannot tear the dress". holdRise: "The fight's dangers (the drop, the hammer, the tear) start once she stands": until she has
 // STOOD (the rise clock done and the heave settled) her body's contacts are a shove, her threat is held at 0 (no hammer) and the drop's
 // count does not run (relief Task 8: the heave's overshoot closing her rise tore a perfect player in 8 of 12 fights).
-Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 5, shoveStag: 0.8, holdRise: 1 });
+// (Task 7a, the controller's rulings) riseVmax u/s: her body's rise is rate limited until she stands (brooder.js poseAll: the sole floor's
+// 12-18 u/s surge at heave ~0.45; burial-probe rise (d) bar 8 u/s, 6 leaves margin). footRise 1: her crest's footing stays ground, carried by
+// her body, from the crack until she stands (0 = it vanished on the wake frame: BP_RED=nofoot)
+Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 5, shoveStag: 0.8, holdRise: 1, riseVmax: 6, footRise: 1 });
 const _v = V3();
 
 // the mean ground under her: poseAll's own 5 x 5 support grid over her footprint, bare floor. (The grid's constants live in THREE

@@ -1617,6 +1617,15 @@ function poseAll(L, dt, player) {
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
   if (pen > 0) { b.position.y += pen; L.bodyY += pen; }
+  // (velkath-buried-rock Task 7a, the controller's ruling: "a slow, heavy rise") rising out of the sand, until she has stood, her body comes up
+  // no faster than BURY.riseVmax u/s: the heave's sole floor (bed above) engages at heave ~0.45 and carried her shell up 12-18 u/s for ~0.3 s
+  // (the shipped rise at home: 16.1 u/s at 4.3 s; burial-probe rise (d), bar 8 u/s). Home only (L.buried); elsewhere the shipped rise bit
+  // for bit. The lag it leaves is caught up long before she stands (the heave settles ~2 s later); her sole may sit in the sand meanwhile
+  if (L.buried && !L.dormant && !L.calmed && L.cracked && !L.hasStood && dt > 0 && L.riseY != null) {
+    const top = L.riseY + BURY.riseVmax * dt;
+    if (L.bodyY > top) { b.position.y -= L.bodyY - top; L.bodyY = top; }
+  }
+  L.riseY = L.bodyY;
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
   // the belly over his helmet, off the floor under him (the crouch's limit, next frame)
@@ -1765,7 +1774,7 @@ const LEG_KEYS = ['coxa', 'femur', 'tibia', 'dactyl'];
 // (the dactyl curls to its point: two capsules follow it; one chord left 0.7 u of claw outside)
 const LEG_N = { coxa: 1, femur: 1, tibia: 1, dactyl: 2 };
 function fitLegs(legs) { const o = {}; for (const k of LEG_KEYS) o[k] = fitCapsules(legs[k].geometry, LEG_N[k]); return o; }
-const _cm = new THREE.Matrix4(), _ca = V3(), _cb = V3();
+const _cm = new THREE.Matrix4(), _cm2 = new THREE.Matrix4(), _ca = V3(), _cb = V3();
 function publishCols(L) {
   if (!L.legFit || L.gone) return;
   beginBodyCols();
@@ -1792,12 +1801,19 @@ function publishCols(L) {
     }
   }
   setShell(L.shellProx, bw.elements, R, !(L.buried && L.bury >= BURY.solidK));
+  // (Task 7a) RISING OUT OF THE SAND (from the crack until she has stood): her crest's footing stays ground, carried by her body (bodyCols
+  // setMound), capped on her strip once bury < solidK (her flanks out of the dune solid again); the mound is published while it is drawn OR
+  // while she rises out of it (moundY reads nothing once the dune is down, the footing still carries)
+  const out = L.buried && L.mound && !L.dormant && !L.dugIn && L.cracked && !L.hasStood && BURY.footRise > 0;
   // her clutch: soft, the drawn surface (brood.js B.live, refreshed by its update this frame)
   if (L.brood && L.brood.seated && !L.brood.off) setClutch(L.brood.live, L.brood.seeds, L.brood.nL, bw.elements, R);
   // (velkath-buried-rock) her dune (while drawn) and, fully buried, her crest: ground (bodyCols.js buriedFloorAt); her shell's collider
   // capped at that ground while she is fully buried
-  const MDd = L.mound && L.mound.drawn && BURY.floor ? L.mound : null;
-  setMound(MDd, L.idx, MDd && L.bury >= BURY.solidK && (L.dormant || L.dugIn), BURY.capShell > 0);
+  const MDd = L.mound && (L.mound.drawn || out) && BURY.floor ? L.mound : null;
+  if (MDd && out) {
+    _cm.fromArray(MDd.mwInv).premultiply(bw); _cm2.copy(_cm).invert();
+    setMound(MDd, L.idx, true, BURY.capShell > 0, _cm.elements, _cm2.elements, L.bury < BURY.solidK);
+  } else setMound(MDd, L.idx, MDd && L.bury >= BURY.solidK && (L.dormant || L.dugIn), BURY.capShell > 0);
   endBodyCols(L.pos.x, L.bodyY, L.pos.z, 2.9 * R);
 }
 

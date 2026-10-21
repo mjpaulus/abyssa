@@ -58,7 +58,7 @@ export const CALMCOL = { on: true, rate: 3.0, roof: 3.5, depth: 16 };
 let calmK = 0;
 export function setBodyCalm(onK) { calmK = onK ? 1 : 0; }
 export function bodyColsOn() { return on; }
-export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; calmK = 0; mound = null; crestOn = false; capOn = false; }
+export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; calmK = 0; mound = null; crestOn = false; capOn = false; carryOn = false; footCap = false; }
 
 // ---- publishing (the sleeper's pose step) -----------------------------------------------
 export function beginBodyCols() {
@@ -307,11 +307,34 @@ export function underShell(x, y, z) {
 // rising, her shell's own collider takes him. KEYED TO THE SITE it was published at: a voyage's reseed (game.js reseedWorldNow sets
 // the new site first) places the next site's dens on shutFloorY before her old build is disposed, and home's dune must not be
 // ground there.
-let mound = null, moundZi = -1, moundSite = -1, crestOn = false, capOn = false;
-export function setMound(MD, zi, cOn, cap = true) { mound = MD; moundZi = zi; moundSite = currentSiteIndex(); crestOn = !!cOn; capOn = !!(MD && cOn && cap); }
+// (velkath-buried-rock Task 7a, the controller's ruling: footing follows what is DRAWN through the rise) RISING OUT OF THE SAND her crest's
+// footing stays ground, CARRIED by her body: `carry` = her body's matrix now x the inverse of the fit's (burial.js MD.mw), `carryInv` its
+// inverse, so the envelope fitted at her bed is read where her rock is now (it hung, on the wake frame, from under a man on her crest: he
+// was left afloat 6.7 u over the sand). footCap: the cap holds only where that footing is the ground (her strip), so her flanks coming up
+// out of the drawn-down dune are solid to him again (a full cap would let him walk into them); while bury >= solidK the full cap holds
+// (the dune still covers her: the uncapped, not-slick proxy threw a man at the harpoon's anchor up 0.7 u in 2 frames on the wake).
+let mound = null, moundZi = -1, moundSite = -1, crestOn = false, capOn = false, carryOn = false, footCap = false, carryY = 0;
+const CARRY = new Float32Array(16), CARRYI = new Float32Array(16);
+export function setMound(MD, zi, cOn, cap = true, carry = null, carryInv = null, fCap = false) {
+  mound = MD; moundZi = zi; moundSite = currentSiteIndex(); crestOn = !!cOn; capOn = !!(MD && cOn && cap);
+  carryOn = !!(MD && cOn && carry); if (carryOn) { CARRY.set(carry); CARRYI.set(carryInv); const W = MD.mw; carryY = carry[1] * W[12] + carry[5] * W[13] + carry[9] * W[14] + carry[13]; }   // (the first guess: her body's height now) footCap = capOn && !!fCap;
+}
+// her crest's footing under world (x, z): burial.js footY, or carried (setMound): into the fit pose, read, and back, three passes (the
+// carry's tilt makes the fit's x, z depend on the height); -1e9 off it. No allocation
+function footAt(x, z) {
+  if (!carryOn) return footY(mound, x, z);
+  const C = CARRY, I = CARRYI;
+  let wy = carryY;
+  for (let it = 0; it < 3; it++) {
+    const fx = I[0] * x + I[4] * wy + I[8] * z + I[12], fz = I[2] * x + I[6] * wy + I[10] * z + I[14];
+    const h = footY(mound, fx, fz); if (h < -1e8) return -1e9;
+    wy = C[1] * fx + C[5] * h + C[9] * fz + C[13];
+  }
+  return wy;
+}
 export function buriedFloorAt(x, z, zi) {
   if (!mound || zi !== moundZi || currentSiteIndex() !== moundSite) return -1e9;
-  const m = moundY(mound, x, z), c = crestOn ? footY(mound, x, z) : -1e9;
+  const m = moundY(mound, x, z), c = crestOn ? footAt(x, z) : -1e9;
   return m > c ? m : c;
 }
 // (velkath-buried-rock) THE SHELL'S COLLIDER STOPS AT THE DRAWN GROUND while she is fully buried. Her shell proxy's top is the highest
@@ -321,7 +344,11 @@ export function buriedFloorAt(x, z, zi) {
 // down the dune), and bodyBlocked called every stand spot on the thin dune "inside her" (harpoon.js clearAt: no seat). So with capOn
 // a sample at or over the drawn ground (buriedFloorAt - 0.05) is never inside her shell. Below the drawn ground she stays solid;
 // rising (crestOn false) everything is as shipped. The shell is still published: shellPlanNear (onHerGround, onHerDune) reads it.
-function overGround(x, y, z) { if (!capOn) return false; const g = buriedFloorAt(x, z, moundZi); return g > -1e8 && y >= g - 0.05; }
+function overGround(x, y, z) {
+  if (!capOn) return false;
+  const g = footCap ? (currentSiteIndex() === moundSite ? footAt(x, z) : -1e9) : buriedFloorAt(x, z, moundZi);
+  return g > -1e8 && y >= g - 0.05;
+}
 // (probe) the published proxy's top under world (x, z), world y, or -1e9
 export function shellHiAt(x, z) {
   if (!on || !shellOk) return -1e9;
