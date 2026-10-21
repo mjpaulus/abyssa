@@ -37,7 +37,9 @@
 //                      her heading moved in one frame while she turns (rows with pointPh 1), |dyaw| x 60 (dyaw booked UNROUNDED in the page:
 //                      the row's yaw is rounded to 1e-3 rad, 0.06 rad/s at 60 fps), <= 0.5 + 0.005 rad/s: the PRE-REGISTERED 0.5 (the
 //                      live POINT.turn is booked beside it, never the bar: a RED that patches the knob must not move its own bar). VOID
-//                      when no row has pointPh 1
+//                      when no row has pointPh 1. A stills run's row right after a capture is left out (booked `cap`): __bench.capture
+//                      runs 25 frozen frames (dt 1e-4) between two booked frames, so that row's dyaw carries 2.5 ms more of her turn
+//                      (+0.075 rad/s at 0.5: the t11-back stills run read 0.573 on the frame after its 3.5 s capture, 0.498 either side)
 //               aim    the angle between shoulder->palm and shoulder->P <= 20 deg on every frame pointK >= 0.95 (>= 1 such frame, else VOID),
 //                      both placements
 //               hold   pointK >= 0.95 on ONE contiguous span of 2.5-3.5 s; at `ahead` (she already faces it) that span contains the frame
@@ -213,8 +215,8 @@ const INSTALL = `(async () => {
           net: st ? st.lookNetDeg : null, path: st ? st.lookPathDeg : null },
         thPre: r3(vPre.ang), th: r3(vPost.ang), ndcPre: [r3(vPre.x), r3(vPre.y), vPre.front ? 1 : 0], ndc: [r3(vPost.x), r3(vPost.y), vPost.front ? 1 : 0],
         pIn: inF(vPost) ? 1 : 0, palmNdc: [r3(vPalm.x), r3(vPalm.y), vPalm.front ? 1 : 0], palmIn: inF(vPalm) ? 1 : 0, sep: r2(sep), fits: sep <= ${FRAME} * hf ? 1 : 0,
-        q: [r6(q.x), r6(q.y), r6(q.z), r6(q.w)], qPre: [r6(qp.x), r6(qp.y), r6(qp.z), r6(qp.w)], eq: eq ? 1 : 0, pyaw: r6(window.player.yaw), inp: R.inp });
-      R.inp = 0;
+        q: [r6(q.x), r6(q.y), r6(q.z), r6(q.w)], qPre: [r6(qp.x), r6(qp.y), r6(qp.z), r6(qp.w)], eq: eq ? 1 : 0, pyaw: r6(window.player.yaw), inp: R.inp, cap: R.cap ? 1 : 0 });
+      R.inp = 0; R.cap = 0;
     },
     step(n, o) { window.__bench.step(n, () => R.row(), o); return R.S.length; },
     // turn to face him: stepped until her heading error to him is <= 10 deg (or max frames); { n: frames used, faced }
@@ -383,6 +385,7 @@ async function session(o) {
       const f = Math.round(s * 60);
       await c.ev(`window.__pcR.step(${f - at}, { render: true })`); at = f;
       const url = await c.ev(`(async () => window.__bench.png(await window.__bench.capture({}), 1))()`);
+      await c.ev(`(window.__pcR.cap = 1, 1)`);   // (the capture's 25 frozen frames, dt 1e-4, move her outside the booking: the next row is marked)
       const file = join(SHOT_DIR, `${SHOTS}-${name}.png`);
       mkdirSync(SHOT_DIR, { recursive: true }); writeFileSync(file, Buffer.from(url.split(',')[1], 'base64'));
       shots.push({ name, s, file, row: await c.ev(`window.__pcR.S[window.__pcR.S.length - 1]`) });
@@ -468,8 +471,8 @@ if (MODE === 'point') {
   const slamN = S.length ? Math.max(...S.map(r => r.slam)) - slam0 : 0, tornUp = S.length ? +(Math.max(...S.map(r => r.torn)) - torn0).toFixed(3) : 0;
   const travel = up.length ? +(Math.abs(Math.atan2(Math.sin(S[up[up.length - 1]].yaw - S[up[0]].yaw), Math.cos(S[up[up.length - 1]].yaw - S[up[0]].yaw))) * D).toFixed(2) : null;
   // (M1) her turn's rate: the most her heading moved in one frame while pointPh is 1, rad/s
-  const ph1 = S.filter(r => r.ph === 1), rateMax = ph1.length ? +(Math.max(...ph1.map(r => Math.abs(r.dyaw))) * 60).toFixed(5) : null;
-  const rateAt = ph1.length ? S.findIndex(r => r.ph === 1 && Math.abs(r.dyaw) * 60 === Math.max(...ph1.map(q => Math.abs(q.dyaw))) * 60) : -1;
+  const ph1 = S.filter(r => r.ph === 1 && !r.cap), rateMax = ph1.length ? +(Math.max(...ph1.map(r => Math.abs(r.dyaw))) * 60).toFixed(5) : null;
+  const rateAt = ph1.length ? S.findIndex(r => r.ph === 1 && !r.cap && Math.abs(r.dyaw) * 60 === Math.max(...ph1.map(q => Math.abs(q.dyaw))) * 60) : -1;
   const faceMax = ses.ptKnobs ? ses.ptKnobs.faceMax : null;
   record.book = { raiseF, raiseS: raiseF >= 0 ? +(raiseF / 60).toFixed(3) : null, faceOpenF, faceOpenS: faceOpenF >= 0 ? +(faceOpenF / 60).toFixed(3) : null, errAtRaise: raiseF >= 0 ? S[raiseF].err : null, calmBy: out.calmBy, errAtCalm: out.pre.errOpen, errHimAtCalm: out.pre.errHim, errAtLight: lightF >= 0 ? S[lightF].err : null, lightF, lightS: lightF >= 0 ? +(lightF / 60).toFixed(3) : null,
     lineF, lineS: lineF >= 0 ? +(lineF / 60).toFixed(3) : null, upF: up.length ? [up[0], up[up.length - 1]] : null, upS: up.length ? [+(up[0] / 60).toFixed(3), +(up[up.length - 1] / 60).toFixed(3)] : null,
