@@ -678,7 +678,7 @@ export function crestY(MD, x, z) {
 // lies: her GEOMETRIC normal facing up (nonPerturbedNormal: steep sides thin), her micro normal facing up, her convex edges bare (a
 // signed curvature from the screen derivatives of that normal over world position: ridges and shard edges show through), pooled in
 // her hollows (the bake's AO, the same signal as the hollow sand above, and concave curvature); broken by a generated 3D value noise
-// (two octaves, ~2.5 u and ~0.7 u, scaled by drift) and THRESHOLDED at 1 - uBury * cover, so it reads as drifts with edges, not a
+// (two octaves, ~2.5 u and ~0.7 u; drift sets its amplitude, not its size), sampled in her BODY's object space (vCrO: the sand lies ON her, so it rides her rise and her breath; vCrW stays for the stone triplanar) and THRESHOLDED at 1 - uBury * cover, so it reads as drifts with edges, not a
 // wash; a thin dust veil (dust) on her up faces between them. Under it she is matte (roughness 0.95) and her relief is flattened by
 // flat. ONE value takes it off: uBury (L.bury): as it falls the threshold climbs, so the sides and thin drifts go first and the
 // hollows last; the drifts also fade out over uBury 0.25 -> 0 (the field reaches ~1.4 in a hollow, over the threshold's 1.0, so
@@ -686,12 +686,12 @@ export function crestY(MD, x, z) {
 // Look-dev (stills t5c-dev/, his light weather 0.5): cover 0.45 / drift 0.6 / dust 0.15 / flat 0.4 laid a smooth sand plate over
 // her tops (her shell gone from above); cover 0.15 / drift 1 / dust 0 / flat 0.25 barely showed (Task 5b's bare shell); shipped
 // cover 0.3 / drift 1 / dust 0.1 / flat 0.3: drifts on her tops and in her hollows, her plates and ridges showing between.
-export const CRUST_LOOKS = { shell: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0 }, light: { alb: 0.45, nrm: 0.35, rough: 0.5, sand: 0.45, cover: 0 },
-  stone: { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7, cover: 0 },
+export const CRUST_LOOKS = { shell: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0, drift: 0, dust: 0, flat: 0 }, light: { alb: 0.45, nrm: 0.35, rough: 0.5, sand: 0.45, cover: 0, drift: 0, dust: 0, flat: 0 },
+  stone: { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7, cover: 0, drift: 0, dust: 0, flat: 0 },
   sand: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0.3, drift: 1.0, dust: 0.1, flat: 0.3 } };
 export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x3f4744 };
 const CRUST_HEAD = `
-varying vec3 vCrW;
+varying vec3 vCrW, vCrO;
 uniform float uBury, uCrack;
 uniform sampler2D uCrustPack, uCrustNrm;
 uniform vec3 uRockC, uSand;
@@ -733,8 +733,8 @@ if (uBury > 0.001) {
     float crCv = (dot(dFdx(crGN), crDx) + dot(dFdy(crGN), crDy)) / max(dot(crDx, crDx) + dot(crDy, crDy), 1e-6);
     float crUp = smoothstep(0.3, 0.85, crGN.y) * smoothstep(0.15, 0.6, crWN.y) * (1.0 - smoothstep(0.8, 2.5, crCv));
     float crPool = max(1.0 - smoothstep(0.35, 0.85, crAO), smoothstep(0.3, 1.5, -crCv)) * smoothstep(0.0, 0.3, crGN.y);
-    float crN0 = crVN(vCrW * vec3(0.4, 0.55, 0.4)), crN1 = crVN(vCrW * 1.4 + 17.0);
-    float crS = crUp * 0.6 + crPool * 0.4 + (crN0 * 0.65 + crN1 * 0.35 - 0.5) * 3.0 * uSandK.y * 0.5;
+    float crN0 = crVN(vCrO * vec3(0.4, 0.55, 0.4)), crN1 = crVN(vCrO * 1.4 + 17.0);
+    float crS = crUp * 0.6 + crPool * 0.4 + (crN0 * 0.65 + crN1 * 0.35 - 0.5) * 1.5 * uSandK.y;
     float crT = 1.0 - uBury * uSandK.x;
     float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, uBury * 4.0) + uBury * uSandK.z * crUp;
     crSand = max(crSand, min(crCov, 0.92));
@@ -757,8 +757,8 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
   m.onBeforeCompile = function (sh, r) {
     if (prev) prev.call(this, sh, r);
     Object.assign(sh.uniforms, u);
-    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCrW;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvCrW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCrW, vCrO;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvCrW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvCrO = transformed;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>' + CRUST_HEAD)
       .replace('#include <lights_physical_fragment>', CRUST_APPLY + '\n#include <lights_physical_fragment>');
   };
@@ -974,6 +974,6 @@ if (typeof window !== 'undefined') window.__burial = {
   inStrip: (x, z) => { const L = liveV(); return inStrip(L && L.mound, x, z); },
   // THE CRUST's knobs (Task 5): a patch, no rebuild (updateBrooder writes them into the uniforms every frame)
   crust: CRUST,
-  // { look: 'shell' | 'light' | 'stone' } sets that look's four values (Task 5b); any other key patches its own value
+  // { look: 'sand' (the shipped default) | 'shell' | 'light' | 'stone' } sets that look's values (alb, nrm, rough, sand, and the sand cover's cover / drift / dust / flat; the three non-sand looks zero the cover keys); any other key patches its own value
   setCrust(p) { if (p.look && !CRUST_LOOKS[p.look]) throw new Error('setCrust: look is ' + Object.keys(CRUST_LOOKS).join(' | ')); Object.assign(CRUST, p.look ? CRUST_LOOKS[p.look] : null, p); return Object.assign({}, CRUST); }
 };
