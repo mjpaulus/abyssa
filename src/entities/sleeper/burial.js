@@ -79,8 +79,12 @@ Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, sho
 //   job ms: THE REFIT AS A JOB OVER FRAMES (booked item 6). The re-bed measured 165 ms in one frame at home on this branch (fitMound 114 ms,
 //        76 of them the footing's envelope; prepGrowth 4 ms; headless M5 Max, the page's CPU calibrated against node), so the dig-in's fit
 //        runs as generators (fitMoundJ, prepGrowthJ) that yield whenever a frame's slice of `job` ms is spent; the pose is held for it (brooder.js
-//        digStep). burial-probe digin's pre-registered bar: the window's worst frame <= 4.0 ms over its median. bedDown runs the same
-//        generators to the end in one call (the deadline Infinity: never a yield), so a bed is the same arithmetic as before, bit for bit
+//        digStep). burial-probe digin's pre-registered bar: the window's worst frame <= 4.0 ms over its median. The base update has a beat of
+//        +2.5-2.9 ms every ~23 frames, so the bar sees a slice landing on it: slices of 2.5 ms gave a worst frame 5.2 ms over the median (FAIL), 1.0 ms
+//        3.8-3.9, 0.8 ms (with the first two frames split and the limbs captured, below) 3.5-3.7. A scavenge inside a slice (terrainH boxes ~470 B a
+//        call, ~80 MB a fit: terrain.js, pre-existing) can stretch one to ~2 ms. The job is ~187 frames (~3.1 s) before bury rises. bedDown runs the
+//        same generators to the end in one call (the deadline Infinity: never a yield), so a bed is the same arithmetic as before, bit for bit
+//        (hash-checked against 90e1f99: reviews/buried/t12-bedhash-*.json); its checks cost a re-bed ~7 ms (the footing 76 -> 83)
 Object.assign(BURY, { digT: 17.5, pause: 1, haze: 0.8, job: 0.8 });
 // the job's clock: _dl the frame's deadline (performance.now() ms), Infinity outside a job (a bed: the checks below are one compare)
 let _dl = Infinity, _ck = 0;
@@ -182,7 +186,8 @@ function shellTopM(MD, e, n, x, z) {
 // sampling cuts its peaks). Drawn in the seabed's own material with its vertex channels resampled (seabedColor), so dune and floor
 // read as one. Drawn-only: terrainH is untouched. After coverShell and the ring smoothing the requirements go back into the pile
 // (repile), each quad takes its shorter diagonal (diagonals) and the sand settles (settle). Cost
-// (measured, M5 Max headless): 12-14 ms, + prepGrowth 2.5 ms, of a 37 ms re-bed. Judged by burial-probe disguise `repose` (every
+// (measured, M5 Max headless): 12-14 ms, + prepGrowth 2.5 ms, of a 37 ms re-bed on the Task 3a strip (6 u); on the 20 u strip since Task 5b (Task 12,
+// the page's CPU calibrated against node): fitMound 114-128 ms (the footing 76-83 of it), prepGrowth 4-6, a re-bed 165-175 ms. Judged by burial-probe disguise `repose` (every
 // triangle of rows 1 .. NI-1 <= a fixed 33.81 deg).
 export function fitMound(L, MD, seabedColor, fissureDist) { runAll(fitMoundJ(L, MD, seabedColor, fissureDist)); }
 // (Task 12) the fit as a generator (BURY.job): a yield wherever a frame's slice is spent. Its first slice must run in the fit pose (her body's

@@ -355,7 +355,7 @@ function overGround(x, y, z) {
   const g = footCap ? (crestOn && currentSiteIndex() === moundSite ? footAt(x, z) : -1e9) : buriedFloorAt(x, z, moundZi);
   return g > -1e8 && y >= g - 0.05;
 }
-// (probe) the published proxy's top under world (x, z), world y, or -1e9
+// the published proxy's top under world (x, z), world y, or -1e9 (probes; and since Task 12 fix round 1, brooder.js onHerDune's ground)
 export function shellHiAt(x, z) {
   if (!on || !shellOk) return -1e9;
   const M = SHI, S = shell, W = SHM;

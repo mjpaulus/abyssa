@@ -34,7 +34,7 @@ import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
   fitMoundJ, prepGrowthJ, jobSlice, growCover } from './burial.js';
@@ -794,10 +794,16 @@ function digStep(L) {
   const J = L.digJob, t0 = performance.now();
   if (J.ph === 0) { L.buryD = fitSink(L, L.crest); J.ph = 1; }
   else if (J.ph === 1) {
-    L.bury = 1; poseAll(L, 0, null); J.mw1.copy(L.body.matrixWorld);
-    J.gen = fitMoundJ(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
-    if (jobSlice(J.gen, 0)) { J.ph = 3; J.gen = null; } else J.ph = 2;
-    L.bury = 0; poseAll(L, 0, null);
+    // (fix round 1, M2) neither pose publishes her colliders: each would have republished them (publishCols), leaving bodyCols' PREV at the
+    // bury-1 pose, so the next resolve read every capsule rising ~1.4 u in a frame (LIMB_VMAX / SHELL_VMAX zeroed it: benign, but wrong). This
+    // frame's colliders stay the ones its own poseAll published, at bury 0
+    L.noPub = true;
+    try {
+      L.bury = 1; poseAll(L, 0, null); J.mw1.copy(L.body.matrixWorld);
+      J.gen = fitMoundJ(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
+      if (jobSlice(J.gen, 0)) { J.ph = 3; J.gen = null; } else J.ph = 2;
+      L.bury = 0; poseAll(L, 0, null);
+    } finally { L.noPub = false; }
   } else {
     L.body.matrixWorld.copy(J.mw1);
     for (let q = 0, K = L.body.children; q < K.length; q++) K[q].updateMatrixWorld(true);
@@ -811,9 +817,12 @@ function digStep(L) {
 // (velkath-buried-rock) THE DIG-IN'S "ON HER GROUND": her shell's plan + m, by plan alone, up to a ceiling over the drawn ground (a
 // swimmer far overhead does not freeze it). Not onHerGround: its height cutoff (pos.y > bodyY + 0.15 R) rides her body, and digging
 // in she sinks ~4 u under him, so a man on the rising dune, or beside it afloat, would read as off her ground mid-dig.
+// (fix round 1, M1, the coordinator's ruling) the ceiling's ground includes her shell's top under him (bodyCols shellHiAt, the published proxy):
+// mid-dig her crest is not ground (crestOn needs dugIn), and a man on her back's top band (crest 6.46 u at bury 1, ~7.9 u at bury 0 over the floor)
+// read as off her ground, so the dig-in ran under him (burial-probe digin crest on c3eaa00: 180 of 180 frames moved)
 function onHerDune(L, player, m) {
   if (!player) return false;
-  const g = Math.max(terrainH(player.pos.x, player.pos.z, L.idx), extraFloorAt(player.pos.x, player.pos.z, L.idx));
+  const g = Math.max(terrainH(player.pos.x, player.pos.z, L.idx), extraFloorAt(player.pos.x, player.pos.z, L.idx), shellHiAt(player.pos.x, player.pos.z));
   if (player.pos.y - 1.35 > g + 6) return false;
   return shellPlanNear(player.pos.x, player.pos.y - 0.45, player.pos.z, m);
 }
@@ -1895,7 +1904,7 @@ function fitLegs(legs) { const o = {}; for (const k of LEG_KEYS) o[k] = fitCapsu
 const _cm = new THREE.Matrix4(), _cm2 = new THREE.Matrix4(), _ca = V3(), _cb = V3();
 const FOOT_SLIDE = 7;   // u/s^2: (Task 7a) off her carried footing once she has stood, as off her slick back (bodyCols.js SHELL_SLIDE)
 function publishCols(L, player = null, dt = 0) {
-  if (!L.legFit || L.gone) return;
+  if (!L.legFit || L.gone || L.noPub) return;   // (Task 12 fix round 1, M2: digStep's capture poses publish nothing)
   beginBodyCols();
   const bw = L.body.matrixWorld, R = L.R;
   for (let q = 0; q < 4; q++) {

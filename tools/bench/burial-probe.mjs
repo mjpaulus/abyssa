@@ -312,6 +312,8 @@
 //             plume's are the anchor's parked / noisy readings, booked); reveal (L.growthBuried reaches 2 after the wake and 0 before STOOD:
 //             growReveal ran and finished); then him PLACED 35 u off, the calm: point2 (pointPh 2 seen within 20 s); settled, then the dig-in
 //             again: dig2 (L.dugIn within 40 s of the settle, its first -> last 15-20 s).
+//             (AMENDED on c3eaa00, after data: rite reads `pressed` after the wake (it is set when the wound gives, after the 1.5 s wrench);
+//             rise.c allows the REMEMBERED ward (the rebuilt sleeper is remembered: one ward dim-lit by design), every other ward unlit)
 //             BP_RED=keepdig (session iii only, no second rise): the mutant re-entry that keeps the old sleeper's dig state (after the return
 //             the new L is given the old L's dormant / bury / digging), which must fail iii.dormant and iii.cue: exit 5.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
@@ -814,7 +816,8 @@ const RISE_INSTALL = `(async () => {
       if (R.wakeF < 0 && !L.dormant) R.wakeF = R.S.length;
       const pb = R.prevBoots == null ? bo : R.prevBoots;   // (the shell rays start at LAST frame's boots + 1.5: header (g) (i))
       let wmax = -1e9, wmin = 1e9, lit = 0; const wh = [];
-      for (const g of L.sigils) { const d = g.grp.position.y - sand(g.grp.position.x, g.grp.position.z); wh.push(r2(d)); if (d > wmax) wmax = d; if (d < wmin) wmin = d; if (g.lit) lit++; }
+      let mem = 0;
+      for (const g of L.sigils) { const d = g.grp.position.y - sand(g.grp.position.x, g.grp.position.z); wh.push(r2(d)); if (d > wmax) wmax = d; if (d < wmin) wmin = d; if (g.lit) lit++; if (g.lit && g.mem) mem++; }
       R.S.push({ dorm: L.dormant ? 1 : 0, stand: r3(L.stand), standE: r3(L.standE), bury: r3(L.bury || 0), moundK: L.moundK == null ? null : r3(L.moundK), mk: MD ? r3(MD.k) : null, drawn: MD ? (MD.drawn ? 1 : 0) : null,
         hx: r3(L.heave.x), hv: r3(L.heave.v), rising: L.rising ? 1 : 0, hasStood: L.hasStood == null ? null : (L.hasStood ? 1 : 0), risenUp: L.risenUp == null ? null : (L.risenUp ? 1 : 0),
         bodyY: r3(L.bodyY), sl: r3(L.soleLift || 0), gG: L.gG ? r3(L.gG.x) : null, threatE: r3(L.threatE), nsT: r3(L.nsT || 0), drop: L.drop || 0, seen: L.seen ? 1 : 0, tau: r2(L.tau || 0), blindT: r2(L.blindT || 0), lost: L.lostN || 0,
@@ -824,7 +827,7 @@ const RISE_INSTALL = `(async () => {
         lift: L.claws.map(c => r3(c.liftNow || 0)), elbow: L.claws.map(c => r3(c.elbow || 0)), frontUp: r3(L.frontUp || 0), clawRes: r3(L.clawRes || 0), clawSt: r3(L.clawSt || 0), belly: r2(L.bellyOver ?? 99),
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
         gBase: r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, pb + 1.5, p.z))), gFoot: r3(footCarried(p.x, p.z)), boots: r3(bo), pb: r3(pb), forced: R.lastForce || 0,
-        calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0, gb: L.growthBuried ?? null,
+        calmed: L.calmed ? 1 : 0, latch: L.footLatch ? 1 : 0, under: R.underF === R.S.length ? 1 : 0, gb: L.growthBuried ?? null, mem,
         crackK: L.crackK == null ? null : r3(L.crackK), slab: R.slab(), dust: FF && FF.dustStats ? FF.dustStats() : null,
         // (Task 8) sight's reacquire inputs (header: blind) and the plume's state and field; ps fields absent on a build without them are null
         clearT: r3(L.clearT || 0), pd: r3(L._pd), touchT: r3(L.touchT || 0),
@@ -1157,6 +1160,7 @@ try {
     let st = null;
     for (let k = 0; k < 20; k++) { st = await c.ev(`window.__bpRise.step(30)`); if (st.wakeF >= 0) break; }
     sess.rite2.wokeF = st.wakeF; sess.rite2.wokeT = st.wakeF >= 0 ? +(st.wakeF / 60).toFixed(3) : null;
+    sess.rite2.pressed = await c.ev(`!!window.lev.harpoon.pressed`);   // (AMENDED on c3eaa00: pressed is set when the wound gives, after the 1.5 s wrench, not on the E frame)
     if (st.wakeF < 0) throw new Error('second rise: she did not wake within 10 s of E at the old wound');
     for (let k = 0; k < 40 && st.rows - st.wakeF < RISE_SECS * 60; k++) st = await c.ev(`window.__bpRise.step(${Math.min(300, RISE_SECS * 60 - (st.rows - st.wakeF))})`);
     sess.rise2 = { where: 'anchor', place: pl, settle, ins, wakeF: st.wakeF, under: null, underF: null, S: await c.ev(`window.__bpRise.S`) };
@@ -1433,7 +1437,13 @@ if (MODE === 'reentry') {
       const r2 = sess.rite2, R2 = sess.rise2, v2 = !!err && !R2;
       ck.push({ name: run + '.rite', val: r2 || err, bar: 'the prompt "[E] PRESS THE OLD WOUND", the wound pressed by real E, she wakes within 10 s', ok: !!r2 && r2.prompt === '[E] PRESS THE OLD WOUND' && r2.pressed && r2.wokeF >= 0, vacuous: !r2, judged: true });
       if (R2) { const { ck: rc } = riseChecks(R2), keep = ['a', 'b', 'c', 'd', 'f', 'g', 'h', 'i', 'iShell'];
-        for (const k of rc) ck.push(Object.assign({}, k, { name: run + '.rise.' + k.name, judged: keep.includes(k.name) }));
+        for (const k of rc) ck.push(Object.assign({}, k, { name: run + '.rise.' + k.name, judged: keep.includes(k.name) && k.name !== 'c' }));
+        // (c) AMENDED on c3eaa00 (data: litFrames 971): the rebuilt sleeper is REMEMBERED (game.js calmedBefore: the chart recorded the calm), so one
+        // ward is dim-lit from her build by design (common.js rememberWard); "none lit" is read as none lit but the remembered ward
+        { const S = R2.S, w = R2.wakeF; let s1 = -1; for (let i = w; i < S.length; i++) { const q = S[i]; if (q.stand >= 1 && Math.abs(q.hx - 1) < 0.02 && Math.abs(q.hv) < 0.05) { s1 = i; break; } }
+          const cW = S[w] ? S[w].wmax : null, cS = s1 >= 0 ? S[s1].wmin : null, litN = S.filter(q => q.lit - (q.mem || 0) > 0).length, memN = S.length ? Math.max(...S.map(q => q.mem || 0)) : 0;
+          ck.push({ name: run + '.rise.c', val: { wardsAtWakeMax: cW, wardsAtStoodMin: cS, litFrames: litN, remembered: memN }, bar: 'wards < 0 over the sand at the wake, > 2 at STOOD, none lit but the remembered one',
+            ok: cW != null && cW < 0 && cS != null && cS > 2 && litN === 0, vacuous: s1 < 0, judged: true }); }
         const S = R2.S, w = R2.wakeF; let s0 = -1; for (let i = w; i < S.length; i++) { const q = S[i]; if (q.stand >= 1 && Math.abs(q.hx - 1) < 0.02 && Math.abs(q.hv) < 0.05) { s0 = i; break; } }
         const g2 = S.findIndex((q, k) => k >= w && q.gb === 2), g0 = g2 < 0 ? -1 : S.findIndex((q, k) => k > g2 && q.gb === 0);
         ck.push({ name: run + '.reveal', val: { revealAt: g2 < 0 ? null : +((g2 - w) / 60).toFixed(3), fullAt: g0 < 0 ? null : +((g0 - w) / 60).toFixed(3), stoodAt: s0 < 0 ? null : +((s0 - w) / 60).toFixed(3) },
