@@ -683,7 +683,7 @@ export function crestY(MD, x, z) {
 // she rises out of the dune) it bursts into silt instead of hanging in the water.
 // State per piece (SS floats): x z vx vz yaw spin age tEnd alive lastG y puffs
 const SLAB_FOOT = 0.15, FOOT_X = [SLAB_FOOT, -SLAB_FOOT, 0, 0], FOOT_Z = [0, 0, SLAB_FOOT, -SLAB_FOOT];
-const SLAB_T = 3.0, SS = 12, SLAB_SINK = 0.45, SLAB_LEDGE = 0.25, SLAB_VMAX = 2.5, SLAB_G = 6.0, SLAB_DRAG = 1.2;
+const SLAB_BEND = 1.6, SLAB_T = 3.0, SS = 12, SLAB_SINK = 0.45, SLAB_LEDGE = 0.25, SLAB_VMAX = 2.5, SLAB_G = 6.0, SLAB_DRAG = 1.2;
 Object.assign(BURY, { slabs: 14, pourRate: 2.5 });
 let _ico = null;
 const _sq = new THREE.Quaternion(), _sq2 = new THREE.Quaternion(), _sn = V3(), _sUp = V3(0, 1, 0), _slv = V3(), _sInv = new THREE.Matrix4();
@@ -702,12 +702,15 @@ export function makeSlabs(L) {
   const n = BURY.slabs, ico = icoIndexed(), nv = ico.nv, ni = ico.I.length, rnd = seededRand(0x51AB5);
   const LP = new Float32Array(n * nv * 3), LN = new Float32Array(n * nv * 3), LO = new Float32Array(n);
   for (let k = 0; k < n; k++) {
-    const sz = 0.55 + 0.45 * rnd(), sx = sz * (0.8 + 0.5 * rnd()), sw = sz * (0.8 + 0.5 * rnd()), sy = sz * (0.28 + 0.14 * rnd());
+    const sz = 0.6 + 0.5 * rnd(), sx = sz * (0.8 + 0.6 * rnd()), sw = sz * (0.8 + 0.6 * rnd()), sy = sz * (0.22 + 0.14 * rnd());
     const W = []; for (let q = 0; q < 3; q++) { const a = rnd() * 6.283, b = Math.acos(2 * rnd() - 1); W.push(Math.sin(b) * Math.cos(a), Math.cos(b), Math.sin(b) * Math.sin(a), 1.6 + 1.6 * rnd(), rnd() * 6.283); }
+    // a PLATE of crust, not a pebble: an irregular outline (three and five lobes round its rim), a flat-ish top, a lumpy underside
+    const l3 = rnd() * 6.283, l5 = rnd() * 6.283, l2 = rnd() * 6.283;
     for (let i = 0; i < nv; i++) {
-      const dx = ico.V[i * 3], dy = ico.V[i * 3 + 1], dz = ico.V[i * 3 + 2];
-      let r = 1; for (let q = 0; q < 15; q += 5) r += 0.13 * Math.sin((dx * W[q] + dy * W[q + 1] + dz * W[q + 2]) * W[q + 3] + W[q + 4]);
-      const o = (k * nv + i) * 3; LP[o] = dx * r * sx; LP[o + 1] = dy * r * sy; LP[o + 2] = dz * r * sw;
+      const dx = ico.V[i * 3], dy = ico.V[i * 3 + 1], dz = ico.V[i * 3 + 2], th = Math.atan2(dz, dx);
+      let r = 1; for (let q = 0; q < 15; q += 5) r += 0.12 * Math.sin((dx * W[q] + dy * W[q + 1] + dz * W[q + 2]) * W[q + 3] + W[q + 4]);
+      const rim = 1 + 0.22 * Math.sin(2 * th + l2) + 0.2 * Math.sin(3 * th + l3) + 0.12 * Math.sin(5 * th + l5);
+      const o = (k * nv + i) * 3; LP[o] = dx * r * rim * sx; LP[o + 1] = dy * r * sy * (dy > 0 ? 0.65 : 1.1); LP[o + 2] = dz * r * rim * sw;
     }
     // smooth normals off the faces (a clod of sand, not a cut stone)
     for (let t = 0; t < ni; t += 3) {
@@ -716,7 +719,10 @@ export function makeSlabs(L) {
       const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
       for (const q of [a, b, c]) { LN[q] += nx; LN[q + 1] += ny; LN[q + 2] += nz; }
     }
-    for (let i = 0; i < nv; i++) { const o = (k * nv + i) * 3, l = Math.hypot(LN[o], LN[o + 1], LN[o + 2]) || 1; LN[o] /= l; LN[o + 1] /= l; LN[o + 2] /= l; }
+    // BENT toward its up (SLAB_BEND): the seabed's shader picks its material by slope (a face steeper than ~0.13-0.46 of 1 - n.y turns to its
+    // rock and gravel, terrain.js color_fragment), and a clod's sides at their true normals drew it as pale stone; bent, the whole clod is
+    // the silt's and its shape is told by its outline and its darkened underside (the cavity channel, slabsBreak)
+    for (let i = 0; i < nv; i++) { const o = (k * nv + i) * 3; LN[o + 1] += SLAB_BEND * Math.hypot(LN[o], LN[o + 1], LN[o + 2]); const l = Math.hypot(LN[o], LN[o + 1], LN[o + 2]) || 1; LN[o] /= l; LN[o + 1] /= l; LN[o + 2] /= l; }
     LO[k] = rnd();
   }
   const g = new THREE.BufferGeometry(), P = new Float32Array(n * nv * 3), N = new Float32Array(n * nv * 3), C = new Float32Array(n * nv * 3), IX = new Uint16Array(n * ni);
@@ -803,7 +809,7 @@ export function slabsBreak(L) {
   L.body.updateMatrixWorld(true); _sInv.copy(L.body.matrixWorld).invert();
   const e = L.body.matrixWorld.elements;
   for (let k = 0; k < n; k++) {
-    const f = (k + 0.5) / n, lz = MD.crestZ + (f - 0.5) * BURY.crestL / R * 0.8, side = (k & 1) ? 1 : -1, lx = side * (0.1 + 0.9 * rnd()) * BURY.crestW / R * 0.3;
+    const f = (k + 0.2 + 0.6 * rnd()) / n, lz = MD.crestZ + (f - 0.5) * BURY.crestL / R * 0.85, side = (k & 1) ? 1 : -1, lx = side * (0.05 + 0.95 * rnd()) * BURY.crestW / R * 0.32;
     const x = MD.cx + (lx * MD.c + lz * MD.s) * R, z = MD.cz + (-lx * MD.s + lz * MD.c) * R, o = k * SS;
     S[o] = x; S[o + 1] = z;
     const sp = 0.5 + 0.7 * rnd(); S[o + 2] = side * MD.c * sp; S[o + 3] = -side * MD.s * sp;
@@ -812,8 +818,14 @@ export function slabsBreak(L) {
     // the dune's colour channels at the strip's edge on this piece's bearing (ring 1, the sand nearest the rock)
     let bj = 0, bd = 1e9;
     for (let j = 0; j < nb; j++) { const q = (nb + j) * 3, d = (MD.P[q] - x) ** 2 + (MD.P[q + 2] - z) ** 2; if (d < bd) { bd = d; bj = j; } }
-    const q = (nb + bj) * 3;
-    for (let i = k * Sl.nv, i1 = (k + 1) * Sl.nv; i < i1; i++) { Sl.C[i * 3] = CA[q]; Sl.C[i * 3 + 1] = CA[q + 1]; Sl.C[i * 3 + 2] = CA[q + 2]; }
+    // (r the cavity AO, darkened under the clod and toward its rim; g the rock bias, held low: it is silt; b the height over the basin).
+    // Read off the dune's OPEN flank on that bearing (ring NR - 4): ring 1's cavity is darkened toward her (fitMound), and clods coloured
+    // from it drew as dark stones on her back (stills t7b-dev-d)
+    const q = ((MD.NR - 4) * nb + bj) * 3;
+    for (let i = k * Sl.nv, i1 = (k + 1) * Sl.nv; i < i1; i++) {
+      const up = Sl.LN[i * 3 + 1];
+      Sl.C[i * 3] = CA[q] * (0.45 + 0.55 * Math.max(0, Math.min(1, (up - 0.55) / 0.4))); Sl.C[i * 3 + 1] = Math.min(CA[q + 1], 0.25); Sl.C[i * 3 + 2] = CA[q + 2];
+    }
   }
   Sl.geo.attributes.color.needsUpdate = true;
   Sl.geo.boundingSphere.center.set(MD.bx, MD.mw[13], MD.bz); Sl.geo.boundingSphere.radius = BURY.crestL * 0.5 + 12;
@@ -898,9 +910,14 @@ export function setSlabDust(f) { emitSlabDust = f; }
 //   alb/nrm/rough  how far her albedo, normal and roughness go to the stone's at full burial; sand: the hollows' fill; crack: the
 //                  crack's darkening
 // (Task 7b) THE CRACK (uCrack = L.crackK: up over BURY.crackT s from the wake, times L.bury, so it goes with the sand): with the sand cover
-// on (the 'sand' look) the crack opens only IN THE SAND (gated by the cover: her bare shell has no crust to crack); its network is the rock
-// map's crevice channel sampled where her body WAS at the crack (uCrackO: she rises up to 1.4 u while it shows, and a world-anchored
-// network slid over her), a fourth set of fetches only while uCrack > 0 (the rise's first ~3.7 s)
+// on (the 'sand' look, shipped) the crack opens only where sand lies on her, drifts or the dust veil between them (her bare steep shell has
+// no crust to crack; on her up faces the veil is ~0.05-0.1 of cover, so the gate opens at 0.06: gated at 0.08-0.3 the network never drew,
+// t7b-dev-ngate): the rock map's crevice channel
+// (Task 5's network: polygonal plates, the look of a crust drying and splitting) sampled in her OWN frame (vCrO at the world scale, uCrackS:
+// it rides her as she rises; triplanar weights off the world normal, true on her up faces, where the sand lies), widening with uCrack;
+// in a crack the sand is taken off and the gap is dark. (Value-noise iso-lines were tried first: 1-3 codes of contrast, invisible in
+// his light, stills t7b-dev-g/h.) The stone looks keep the network in the world, sampled where her body WAS at the crack (uCrackO: she
+// rises up to 1.4 u while it shows). Branches on uniforms only: no program change; a fourth fetch set only while uCrack > 0 (~3.7 s)
 //   sandC          the hollows' sand, a hex over the zone's silt hue (null = flora's silt, 0x2c3d4a at home: bluer and darker than the
 //                  dune beside it); 0x3f4744 is zone 0's seabed silt (terrain.js zoneMat 0), so the sand in her hollows is the dune's
 //                  own (Task 5 look-dev, trial 2 of 3, stills t5-try*: the best two, this and null, went to the controller)
@@ -932,6 +949,7 @@ const CRUST_HEAD = `
 varying vec3 vCrW, vCrO;
 uniform float uBury, uCrack;
 uniform vec3 uCrackO;
+uniform float uCrackS;
 uniform sampler2D uCrustPack, uCrustNrm;
 uniform vec3 uRockC, uSand;
 uniform vec4 uCrustK, uSandK;
@@ -977,21 +995,29 @@ if (uBury > 0.001) {
     float crT = 1.0 - uBury * uSandK.x;
     float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, uBury * 4.0) + uBury * uSandK.z * crUp;
     crSand = max(crSand, min(crCov, 0.92));
+    // (Task 7b) THE CRUST CRACKS: the sand on her breaks into plates along a network of iso-lines of two octaves of value noise in her
+    // OWN frame (vCrO: it rides her as she rises), the lines widening with uCrack; in a line the sand is gone and the gap is dark
+    float crGap = 0.0;
+    if (uCrack > 0.001) {
+      vec4 crPk = crTri(uCrustPack, vCrO, crBW, uCrackS);
+      crGap = min(1.0, uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPk.b)) * smoothstep(0.0, 0.06, crSand));
+      crSand *= 1.0 - crGap;
+    }
     roughnessFactor = mix(roughnessFactor, 0.95, crSand);
     normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand * (0.85 + 0.3 * crN1), crSand);
+    diffuseColor.rgb *= 1.0 - 0.85 * crGap;
   } else {
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
+    // (the stone looks: the shipped fissure network off the rock map's crevice channel, where her body was at the crack: uCrackO)
+    if (uCrack > 0.001) {
+      vec4 crPk = crTri(uCrustPack, vCrW - uCrackO, crBW, 0.32);
+      diffuseColor.rgb *= 1.0 - 0.85 * uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPk.b));
+    }
   }
-  float crCrk = 0.0;
-  if (uCrack > 0.001) {
-    vec4 crPk = crTri(uCrustPack, vCrW - uCrackO, crBW, 0.32);
-    crCrk = uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPk.b)) * mix(1.0, smoothstep(0.05, 0.35, crSand), step(0.001, uSandK.x));
-  }
-  diffuseColor.rgb *= 1.0 - 0.85 * crCrk;
 }`;
 export function crustTerm(L, m, rockSet, rockC, sandC) {
-  const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrackO: { value: V3() }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
+  const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrackO: { value: V3() }, uCrackS: { value: 0.32 * L.R }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
     uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
     uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough },
     uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) } };
