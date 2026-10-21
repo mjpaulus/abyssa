@@ -35,7 +35,7 @@ import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos,
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
-import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock } from './burial.js';
+import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
@@ -730,6 +730,9 @@ function bedDown(L, noHarpoon = false) {
   if (terrainMeshes[L.idx]) {
     if (!L.mound) L.mound = makeMound(L, terrainMeshes[L.idx].material);
     fitMound(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
+    // (Task 7b) the crack's slabs: built once, in the dune's material (burial.js makeSlabs), hidden until the crack
+    if (!L.slabs) makeSlabs(L);
+    slabsBed(L);
   }
   if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
   // (Task 5b) the weed and coral on the exposed rock (burial.js growRock: after the seat, so they keep clear of the iron), then the growth
@@ -1850,7 +1853,9 @@ function quake(L, ev, x, z, k, player) {
 function crackBeat(L, ev, player) {
   const MD = L.mound;
   quake(L, ev, MD ? MD.cx : L.pos.x, MD ? MD.cz : L.pos.z, 0.6, player);
-  if (L.slabs && typeof slabsBreak === 'function') slabsBreak(L);   // (Task 7b declares it; until then L.slabs is undefined: guarded, fix round 1 M8)
+  if (!L.crackO0) L.crackO0 = new THREE.Vector3();
+  L.crackO0.copy(L.body.position);                    // (Task 7b: the crack's network rides her from here; burial.js crustTick)
+  if (L.slabs) slabsBreak(L);                         // (Task 7b: the slabs laid over her back)
   if (!player || !(BURY.shoveV > 0)) return;
   // (onHerGround alone can miss a man up on the crest: its height cutoff is her sunk body's + 0.15 R. The extraFloorAt term is what
   // catches him there: last frame, dormant, her crest and dune were ground under him.)
@@ -1882,6 +1887,7 @@ function silt(x, y, z, k, n, str, r) {
     emitDust(x + Math.cos(a) * rr, y, z + Math.sin(a) * rr, n, str);
   }
 }
+setSlabDust(emitDust);                                // (Task 7b: the slabs' and the uncovered growth's silt, the shared puff pool)
 const LEG_DELAY = new Float32Array(8);
 WAKE_ORDER.forEach((li, o) => { LEG_DELAY[li] = 0.08 + o * 0.055; });
 const _busy = new Int8Array(2);
@@ -2050,7 +2056,12 @@ export function updateBrooder(L, dt, t, player) {
   sight(L, dt, player, ev);
   // (velkath-buried-rock) the mound: the tell's breath and trickle, the dune drawn at L.bury (L.moundK: the rise, Task 7a), the growth
   // outside the strip hidden while she is buried (a write only on the frame bury crosses 0.5). Only a buried build has a mound
-  if (L.mound) { breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY); buryGrowth(L, L.bury > 0.5); }
+  // (Task 7b, M6) from the crack until she stands the growth is uncovered outward from the strip (burial.js growReveal), not snapped back
+  // at bury 0.5 with half a dune drawn
+  if (L.mound) {
+    breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY);
+    if (L.buried && L.cracked && !L.hasStood && !L.dormant) growReveal(L, L.crackT); else buryGrowth(L, L.bury > 0.5);
+  }
   if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there)
   L.t += dt;
   L.uni.uTime.value = L.t;
@@ -2093,6 +2104,8 @@ export function updateBrooder(L, dt, t, player) {
     if (!L.cracked) { L.cracked = true; L.crackT = 0; crackBeat(L, ev, player); }
   }
   if (L.cracked && L.crackT < BURY.crackT + 1) L.crackT += dt;
+  // (Task 7b) the crust's crack (uCrack, burial.js crustTick): up over crackT s from the wake, times the sand still on her
+  if (L.buried && L.cracked && !L.hasStood) L.crackK = Math.min(1, L.crackT / BURY.crackT) * L.bury;
   // settling, the shell lands: the moment the fall stops it thumps the floor
   if (!rising && hv0 > 0.02 && L.heave.x <= 0.02 && L.heave.v < -0.05) { quake(L, ev, L.pos.x, L.pos.z, 0.5, player); silt(L.pos.x, L.bodyY - R * 0.1, L.pos.z, 8, 3, 3.4, R * 0.9); }
   // the shudder as she wakes: the whole shell trembles while the silt pours
@@ -2105,12 +2118,21 @@ export function updateBrooder(L, dt, t, player) {
   }
   // silt pours off her back as she rises: from the rim, faster while the shell is moving
   if (!L.dormant && u < 1 && rising) {
-    L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud);
+    const dune = L.buried && L.mound && L.moundK > 0.02;
+    L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud) * (dune ? BURY.pourRate : 1);
     if (L.dustT <= 0) {
       L.dustT = 0.09; L.wakeFx = (L.wakeFx | 0) + 1;
-      const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
-      const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
-      emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 6, 3.4);
+      if (dune) {
+        // (Task 7b) buried, the sand streams off the DUNE'S FLANK as it draws back down her sides (where the sand was): a random bearing's
+        // ring 4..8 vertex, anywhere between the drawn sand there now (P) and the fitted dune (M), so the streams fall the height it has
+        // fallen; fewer particles a burst (3, the shipped 6) at BURY.pourRate x the rate: the footfx pool (420) is shared with his boots
+        const MD = L.mound, o = ((4 + ((Math.random() * 5) | 0)) * MD.COLS + ((Math.random() * MD.COLS) | 0)) * 3;
+        emitDust(MD.M[o], MD.P[o + 1] + (MD.M[o + 1] - MD.P[o + 1]) * Math.random(), MD.M[o + 2], 3, 3.4);
+      } else {
+        const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
+        const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
+        emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 6, 3.4);
+      }
     }
   }
   // the drift sinks away as she rises out of it, and is gone once she has stood
@@ -2400,6 +2422,9 @@ export function updateBrooder(L, dt, t, player) {
   }
 
   poseAll(L, dt, player);
+  // (Task 7b) the slabs ride her shell where it is now (poseAll has just set her body's matrix); on the crack's frame slabsBreak laid them
+  // before this first write
+  if (L.slabs) slabTick(L, dt);
 
   // (contact: her body is solid now — bodyCols.js, resolved by game.js after this update,
   // which also raises the slam when a part of her comes INTO him. The old shove here was a

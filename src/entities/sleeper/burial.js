@@ -135,8 +135,9 @@ export function makeMound(L, material) {
 // bed: a yaw-only map put a point 6 u up her back ~0.3 u off on a 3 deg tilt, against 0.3 u of cover), the height found in two passes
 // (brood.js floorL's way: the local x, z depend on the height through the tilt), back to world y. NaN off her plan. (MD.topAt is
 // L.topAt: procedural, null outside her rim; baked, null outside the probe box only, with a neighbour-cell fallback at its edge.)
-export function shellTopW(MD, x, z) {
-  const e = MD.mw, n = MD.mwInv;
+export function shellTopW(MD, x, z) { return shellTopM(MD, MD.mw, MD.mwInv, x, z); }
+// the same through any body matrix e and its inverse n (column-major arrays): (Task 7b) the slabs read her shell where it is NOW
+function shellTopM(MD, e, n, x, z) {
   let wy = e[13];
   for (let it = 0; it < 2; it++) {
     const lx = n[0] * x + n[4] * wy + n[8] * z + n[12], lz = n[2] * x + n[6] * wy + n[10] * z + n[14];
@@ -665,6 +666,221 @@ export function crestY(MD, x, z) {
   const y = shellTopW(MD, x, z); return y === y ? y : -1e9;
 }
 
+// ---- THE CRACK'S SLABS (Task 7b; spec §2, beat 1: "Slabs of crust slough off") ----
+// Her exposed back is her OWN SHELL lightly covered in sand (Task 5c, Michael 2026-10-20: "her shell but lightly covered in sand. When she
+// rises the sand should fall off and create a dust cloud"), so what cracks off her at the wake is PACKED SAND: BURY.slabs clods and sheets of
+// it, laid over her exposed back at the crack, sliding down whatever is under them (her shell where it is NOW, the dune, the floor), ridden
+// with her as she rises, crumbling to silt as they go (a puff each, and a burst where one slides off a ledge: sand does not fall as a
+// lump), gone in SLAB_T s. Hidden otherwise. (The dust cloud is Task 8's plume.)
+// DRAWN IN THE SEABED'S OWN MATERIAL, one merged mesh (the dune's: makeMound, position / normal / color, the program the floor compiles at
+// boot), the pieces' vertices written on the CPU while they live (14 x 42 vertices, ~0.6k, module scratch). The brief's route was the house
+// rock kit's instanced program with a sand hue; its generated rock maps and cleavage read as stone, and the controller's direction for 7b
+// (the 'sand' look) is sand: the dune's own grain and colour channels make a clod read as a piece of the dune. The material is
+// triplanar in WORLD space, so a moving clod's grain slides over it (fine-grained sand, 1-2.5 u/s, for 3 s: it reads as sand on the move).
+// Each piece: a seeded icosphere (detail 1), its radius rippled by three waves, squashed to a sheet (sy 0.28-0.42 of its width): 1.1-2.0 u
+// across. A piece's lowest vertex rides the surface under it (burial-probe rise (i): never > 0.3 u over it), so on her rising back it is
+// carried up with her; on the sand it sinks (SLAB_SINK u/s); where the surface drops more than SLAB_LEDGE u under it in a frame (her rim, as
+// she rises out of the dune) it bursts into silt instead of hanging in the water.
+// State per piece (SS floats): x z vx vz yaw spin age tEnd alive lastG y puffs
+const SLAB_FOOT = 0.15, FOOT_X = [SLAB_FOOT, -SLAB_FOOT, 0, 0], FOOT_Z = [0, 0, SLAB_FOOT, -SLAB_FOOT];
+const SLAB_T = 3.0, SS = 12, SLAB_SINK = 0.45, SLAB_LEDGE = 0.25, SLAB_VMAX = 2.5, SLAB_G = 6.0, SLAB_DRAG = 1.2;
+Object.assign(BURY, { slabs: 14, pourRate: 2.5 });
+let _ico = null;
+const _sq = new THREE.Quaternion(), _sq2 = new THREE.Quaternion(), _sn = V3(), _sUp = V3(0, 1, 0), _slv = V3(), _sInv = new THREE.Matrix4();
+function icoIndexed() {
+  if (_ico) return _ico;
+  const g = new THREE.IcosahedronGeometry(1, 1), A = g.attributes.position.array, map = new Map(), V = [], I = [];
+  for (let i = 0; i < A.length / 3; i++) {
+    const k = A[i * 3].toFixed(4) + ',' + A[i * 3 + 1].toFixed(4) + ',' + A[i * 3 + 2].toFixed(4);
+    let j = map.get(k); if (j === undefined) { j = V.length / 3; map.set(k, j); V.push(A[i * 3], A[i * 3 + 1], A[i * 3 + 2]); }
+    I.push(j);
+  }
+  g.dispose();
+  return (_ico = { V: Float32Array.from(V), I: Uint16Array.from(I), nv: V.length / 3 });
+}
+export function makeSlabs(L) {
+  const n = BURY.slabs, ico = icoIndexed(), nv = ico.nv, ni = ico.I.length, rnd = seededRand(0x51AB5);
+  const LP = new Float32Array(n * nv * 3), LN = new Float32Array(n * nv * 3), LO = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    const sz = 0.55 + 0.45 * rnd(), sx = sz * (0.8 + 0.5 * rnd()), sw = sz * (0.8 + 0.5 * rnd()), sy = sz * (0.28 + 0.14 * rnd());
+    const W = []; for (let q = 0; q < 3; q++) { const a = rnd() * 6.283, b = Math.acos(2 * rnd() - 1); W.push(Math.sin(b) * Math.cos(a), Math.cos(b), Math.sin(b) * Math.sin(a), 1.6 + 1.6 * rnd(), rnd() * 6.283); }
+    for (let i = 0; i < nv; i++) {
+      const dx = ico.V[i * 3], dy = ico.V[i * 3 + 1], dz = ico.V[i * 3 + 2];
+      let r = 1; for (let q = 0; q < 15; q += 5) r += 0.13 * Math.sin((dx * W[q] + dy * W[q + 1] + dz * W[q + 2]) * W[q + 3] + W[q + 4]);
+      const o = (k * nv + i) * 3; LP[o] = dx * r * sx; LP[o + 1] = dy * r * sy; LP[o + 2] = dz * r * sw;
+    }
+    // smooth normals off the faces (a clod of sand, not a cut stone)
+    for (let t = 0; t < ni; t += 3) {
+      const a = (k * nv + ico.I[t]) * 3, b = (k * nv + ico.I[t + 1]) * 3, c = (k * nv + ico.I[t + 2]) * 3;
+      const ux = LP[b] - LP[a], uy = LP[b + 1] - LP[a + 1], uz = LP[b + 2] - LP[a + 2], wx = LP[c] - LP[a], wy = LP[c + 1] - LP[a + 1], wz = LP[c + 2] - LP[a + 2];
+      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      for (const q of [a, b, c]) { LN[q] += nx; LN[q + 1] += ny; LN[q + 2] += nz; }
+    }
+    for (let i = 0; i < nv; i++) { const o = (k * nv + i) * 3, l = Math.hypot(LN[o], LN[o + 1], LN[o + 2]) || 1; LN[o] /= l; LN[o + 1] /= l; LN[o + 2] /= l; }
+    LO[k] = rnd();
+  }
+  const g = new THREE.BufferGeometry(), P = new Float32Array(n * nv * 3), N = new Float32Array(n * nv * 3), C = new Float32Array(n * nv * 3), IX = new Uint16Array(n * ni);
+  for (let k = 0; k < n; k++) for (let t = 0; t < ni; t++) IX[k * ni + t] = k * nv + ico.I[t];
+  g.setAttribute('position', new THREE.BufferAttribute(P, 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('normal', new THREE.BufferAttribute(N, 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('color', new THREE.BufferAttribute(C, 3));
+  g.setIndex(new THREE.BufferAttribute(IX, 1));
+  g.boundingSphere = new THREE.Sphere(V3(), 1);
+  // the dune's material OBJECT (the seabed's: SHARED, lifted out before her dispose, as the mound is): receives shadows, casts none (the
+  // mound's own flags: anything else is a shadow-depth variant compiled on first sight at the crack)
+  const mesh = new THREE.Mesh(g, L.mound.mesh.material);
+  mesh.receiveShadow = true; mesh.castShadow = false; mesh.visible = false; mesh.frustumCulled = false;
+  L.grp.add(mesh);
+  L.slabs = { mesh, geo: g, P, N, C, LP, LN, LO, S: new Float32Array(n * SS), n, nv, vpc: nv, t: SLAB_T, on: false };
+  const prev = L.onDispose;
+  L.onDispose = () => { if (mesh.parent) mesh.parent.remove(mesh); g.dispose(); if (prev) prev(); };
+}
+// hidden, when the slabs are spent
+export function slabsHide(L) { const Sl = L.slabs; if (!Sl) return; Sl.on = false; Sl.t = SLAB_T; Sl.mesh.visible = false; }
+// at every bed (bedDown, after the fit; the sculpt's landing beds her again on the baked shell): hidden, her drawn top re-gridded
+export function slabsBed(L) { const Sl = L.slabs; if (!Sl) return; slabsHide(L); slabsTopGrid(L, Sl); }
+// the drawn surface under (x, z): the floor, the drawn dune, her shell where it is now (through _sInv, set by the caller); _sOnShell: the
+// shell was the highest
+let _sOnShell = false;
+// HER DRAWN TOP for the slabs: her shell's triangles rasterized at the bed (slabsBed, an event) into a grid in her body's frame, the
+// highest drawn surface per cell (SLAB_GN^2 cells over the shell's plan, ~0.25 u). Not the bake's top probe (L.topAt): it reads the sculpt's
+// spines and its edge answers with a neighbour cell's height past her rim, and slabs on it stood 0.3-0.68 u over her DRAWN shell (rise (i),
+// first two runs: a slab must ride what is drawn). Bilinear inside a cell whose four corners she covers, NaN otherwise (her rim: the
+// slab then reads the sand under it, and bursts at the ledge as she rises out of it)
+const SLAB_GN = 320;
+function slabsTopGrid(L, Sl) {
+  const sh = L.parts.shell, g = sh.geometry, P = g.attributes.position, I = g.index; sh.updateMatrix();
+  const m = sh.matrix.elements; let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  const W = Sl.TW && Sl.TW.length === P.count * 3 ? Sl.TW : (Sl.TW = new Float32Array(P.count * 3));
+  for (let i = 0; i < P.count; i++) { const x = P.getX(i), y = P.getY(i), z = P.getZ(i);
+    const bx = m[0] * x + m[4] * y + m[8] * z + m[12], by = m[1] * x + m[5] * y + m[9] * z + m[13], bz = m[2] * x + m[6] * y + m[10] * z + m[14];
+    W[i * 3] = bx; W[i * 3 + 1] = by; W[i * 3 + 2] = bz; if (bx < x0) x0 = bx; if (bx > x1) x1 = bx; if (bz < z0) z0 = bz; if (bz > z1) z1 = bz; }
+  const n = SLAB_GN, H = Sl.TH || (Sl.TH = new Float32Array(n * n)); H.fill(-1e9);
+  const sx = (n - 1) / (x1 - x0), sz = (n - 1) / (z1 - z0), nt = I ? I.count / 3 : P.count / 3;
+  for (let t = 0; t < nt; t++) {
+    const a = (I ? I.array[t * 3] : t * 3) * 3, b = (I ? I.array[t * 3 + 1] : t * 3 + 1) * 3, c = (I ? I.array[t * 3 + 2] : t * 3 + 2) * 3;
+    const ax = (W[a] - x0) * sx, az = (W[a + 2] - z0) * sz, bx = (W[b] - x0) * sx, bz = (W[b + 2] - z0) * sz, cx = (W[c] - x0) * sx, cz = (W[c + 2] - z0) * sz;
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz); if (Math.abs(d) < 1e-9) continue;
+    const i0 = Math.max(0, Math.ceil(Math.min(ax, bx, cx) - 1e-6)), i1 = Math.min(n - 1, Math.floor(Math.max(ax, bx, cx) + 1e-6));
+    const j0 = Math.max(0, Math.ceil(Math.min(az, bz, cz) - 1e-6)), j1 = Math.min(n - 1, Math.floor(Math.max(az, bz, cz) + 1e-6));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const wa = ((bz - cz) * (i - cx) + (cx - bx) * (j - cz)) / d, wb = ((cz - az) * (i - cx) + (ax - cx) * (j - cz)) / d, wc = 1 - wa - wb;
+      if (wa < -1e-6 || wb < -1e-6 || wc < -1e-6) continue;
+      const y = wa * W[a + 1] + wb * W[b + 1] + wc * W[c + 1]; if (y > H[j * n + i]) H[j * n + i] = y;
+    }
+  }
+  Sl.tx0 = x0; Sl.tz0 = z0; Sl.tsx = sx; Sl.tsz = sz;
+}
+function slabTopAt(Sl, lx, lz) {
+  const n = SLAB_GN, fx = (lx - Sl.tx0) * Sl.tsx, fz = (lz - Sl.tz0) * Sl.tsz;
+  if (!(fx >= 0 && fz >= 0 && fx < n - 1 && fz < n - 1)) return NaN;
+  const i = fx | 0, j = fz | 0, tx = fx - i, tz = fz - j, H = Sl.TH, a = H[j * n + i], b = H[j * n + i + 1], c = H[(j + 1) * n + i], d = H[(j + 1) * n + i + 1];
+  if (a < -1e8 || b < -1e8 || c < -1e8 || d < -1e8) return NaN;
+  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+}
+// her drawn shell's top under world (x, z), through her body now (e, n: its matrix and inverse), two passes as shellTopW; NaN off her
+function slabShell(Sl, e, n, x, z) {
+  let wy = e[13];
+  for (let it = 0; it < 2; it++) {
+    const lx = n[0] * x + n[4] * wy + n[8] * z + n[12], lz = n[2] * x + n[6] * wy + n[10] * z + n[14];
+    const h = slabTopAt(Sl, lx, lz); if (h !== h) return NaN;
+    wy = e[1] * lx + e[5] * h + e[9] * lz + e[13];
+  }
+  return wy;
+}
+function slabSurf(L, MD, e, x, z) {
+  const t = terrainH(x, z, L.idx), m = moundY(MD, x, z), sh = slabShell(L.slabs, e, _sInv.elements, x, z);
+  const g = m > t ? m : t;
+  _sOnShell = sh === sh && sh > g;
+  return _sOnShell ? sh : g;
+}
+// THE CRACK: the pieces laid over her exposed back (crackBeat, the wake's first rising frame): along the strip's length, jittered across it,
+// each pushed outward across her back (her local +-x) and spinning slowly; its colour the dune's at the strip's edge on that bearing
+export function slabsBreak(L) {
+  const Sl = L.slabs, MD = L.mound; if (!Sl || !MD) return;
+  // (seeded: the same crack every rise, so a probe's run and a still can be repeated)
+  const S = Sl.S, n = Sl.n, R = L.R, nb = MD.COLS, CA = MD.geo.attributes.color.array, rnd = seededRand(0xC4AC + L.idx);
+  L.body.updateMatrixWorld(true); _sInv.copy(L.body.matrixWorld).invert();
+  const e = L.body.matrixWorld.elements;
+  for (let k = 0; k < n; k++) {
+    const f = (k + 0.5) / n, lz = MD.crestZ + (f - 0.5) * BURY.crestL / R * 0.8, side = (k & 1) ? 1 : -1, lx = side * (0.1 + 0.9 * rnd()) * BURY.crestW / R * 0.3;
+    const x = MD.cx + (lx * MD.c + lz * MD.s) * R, z = MD.cz + (-lx * MD.s + lz * MD.c) * R, o = k * SS;
+    S[o] = x; S[o + 1] = z;
+    const sp = 0.5 + 0.7 * rnd(); S[o + 2] = side * MD.c * sp; S[o + 3] = -side * MD.s * sp;
+    S[o + 4] = rnd() * 6.283; S[o + 5] = (rnd() - 0.5) * 1.2; S[o + 6] = 0; S[o + 7] = SLAB_T - 0.5 * Sl.LO[k]; S[o + 8] = 1;
+    S[o + 9] = slabSurf(L, MD, e, x, z); S[o + 10] = S[o + 9]; S[o + 11] = 0;
+    // the dune's colour channels at the strip's edge on this piece's bearing (ring 1, the sand nearest the rock)
+    let bj = 0, bd = 1e9;
+    for (let j = 0; j < nb; j++) { const q = (nb + j) * 3, d = (MD.P[q] - x) ** 2 + (MD.P[q + 2] - z) ** 2; if (d < bd) { bd = d; bj = j; } }
+    const q = (nb + bj) * 3;
+    for (let i = k * Sl.nv, i1 = (k + 1) * Sl.nv; i < i1; i++) { Sl.C[i * 3] = CA[q]; Sl.C[i * 3 + 1] = CA[q + 1]; Sl.C[i * 3 + 2] = CA[q + 2]; }
+  }
+  Sl.geo.attributes.color.needsUpdate = true;
+  Sl.geo.boundingSphere.center.set(MD.bx, MD.mw[13], MD.bz); Sl.geo.boundingSphere.radius = BURY.crestL * 0.5 + 12;
+  Sl.t = 0; Sl.on = true; Sl.mesh.visible = true;
+  slabWrite(L, 0);
+}
+// a frame of the slabs (updateBrooder, after poseAll: her body's matrix is this frame's), from the crack until SLAB_T
+export function slabTick(L, dt) {
+  const Sl = L.slabs; if (!Sl || !Sl.on) return;
+  Sl.t += dt;
+  if (Sl.t >= SLAB_T) { slabsHide(L); return; }
+  slabWrite(L, dt);
+}
+function slabWrite(L, dt) {
+  const Sl = L.slabs, MD = L.mound, S = Sl.S, nv = Sl.nv, P = Sl.P, N = Sl.N, LP = Sl.LP, LN = Sl.LN, e = L.body.matrixWorld.elements;
+  if (dt > 0) _sInv.copy(L.body.matrixWorld).invert();
+  for (let k = 0; k < Sl.n; k++) {
+    const o = k * SS, i0 = k * nv;
+    if (!S[o + 8]) continue;
+    S[o + 6] += dt;
+    const age = S[o + 6], x = S[o], z = S[o + 1];
+    // down the slope of what is under it: g along the surface's fall, drag, at most SLAB_VMAX (it slides; it does not fly)
+    const h = 0.35, g0 = slabSurf(L, MD, e, x, z), onShell = _sOnShell, gx = (slabSurf(L, MD, e, x + h, z) - g0) / h, gz = (slabSurf(L, MD, e, x, z + h) - g0) / h;
+    if (dt > 0) {
+      S[o + 2] += (-SLAB_G * gx / (1 + gx * gx + gz * gz) - SLAB_DRAG * S[o + 2]) * dt; S[o + 3] += (-SLAB_G * gz / (1 + gx * gx + gz * gz) - SLAB_DRAG * S[o + 3]) * dt;
+      const sp = Math.hypot(S[o + 2], S[o + 3]); if (sp > SLAB_VMAX) { S[o + 2] *= SLAB_VMAX / sp; S[o + 3] *= SLAB_VMAX / sp; }
+      S[o] += S[o + 2] * dt; S[o + 1] += S[o + 3] * dt; S[o + 4] += S[o + 5] * dt;
+    }
+    // lying on the surface: its up the surface's normal, turned about it
+    _sn.set(-gx, 1, -gz).normalize();
+    _sq.setFromUnitVectors(_sUp, _sn).multiply(_sq2.setFromAxisAngle(_sUp, S[o + 4]));
+    // crumbling: over its last 0.6 s it shrinks to nothing (and sheds a puff or two)
+    const cr = Math.max(0, Math.min(1, (S[o + 7] - age) / 0.6)), sc = cr * cr * (3 - 2 * cr);
+    // its lowest vertex (rotated, scaled) and the surface under that vertex
+    let ly = 1e9, lx = 0, lz = 0;
+    for (let i = i0; i < i0 + nv; i++) { _slv.set(LP[i * 3], LP[i * 3 + 1], LP[i * 3 + 2]).applyQuaternion(_sq); if (_slv.y < ly) { ly = _slv.y; lx = _slv.x; lz = _slv.z; } }
+    // (the lowest of five reads round it, SLAB_FOOT u apart: a clod's lowest point settles into a crevice of her shell the grid's cells
+    // bridge, rather than hang over it)
+    const nx = S[o] + lx * sc, nz = S[o + 1] + lz * sc;
+    let gl = slabSurf(L, MD, e, nx, nz), lowShell = _sOnShell;
+    for (let q = 0; q < 4; q++) { const v = slabSurf(L, MD, e, nx + FOOT_X[q], nz + FOOT_Z[q]); if (v < gl) { gl = v; lowShell = _sOnShell; } }
+    // a ledge under it (the surface fell away more than SLAB_LEDGE u since last frame): it bursts into silt rather than hang in the water
+    if (dt > 0 && (gl < S[o + 9] - SLAB_LEDGE || sc <= 0.001)) {
+      if (sc > 0.001) emitSlabDust(S[o], S[o + 10], S[o + 1], 6, 1.8);
+      S[o + 8] = 0;
+      for (let i = i0; i < i0 + nv; i++) { P[i * 3] = S[o]; P[i * 3 + 1] = S[o + 10]; P[i * 3 + 2] = S[o + 1]; }
+      continue;
+    }
+    S[o + 9] = gl;
+    // on the sand (not her shell) it sinks into it once it has slid a while
+    const sink = !lowShell && !onShell ? Math.max(0, age - 0.8) * SLAB_SINK : 0;
+    const cy = gl - ly * sc - sink;
+    S[o + 10] = cy;
+    if (sc < 0.6 && S[o + 11] < 1) { S[o + 11] = 1; emitSlabDust(S[o], cy, S[o + 1], 3, 1.2); }
+    for (let i = i0; i < i0 + nv; i++) {
+      _slv.set(LP[i * 3], LP[i * 3 + 1], LP[i * 3 + 2]).applyQuaternion(_sq);
+      P[i * 3] = S[o] + _slv.x * sc; P[i * 3 + 1] = cy + _slv.y * sc; P[i * 3 + 2] = S[o + 1] + _slv.z * sc;
+      _slv.set(LN[i * 3], LN[i * 3 + 1], LN[i * 3 + 2]).applyQuaternion(_sq);
+      N[i * 3] = _slv.x; N[i * 3 + 1] = _slv.y; N[i * 3 + 2] = _slv.z;
+    }
+  }
+  Sl.geo.attributes.position.needsUpdate = true; Sl.geo.attributes.normal.needsUpdate = true;
+}
+// the silt a crumbling piece sheds: the brooder's emitDust (footfx's puff pool), handed in by brooder.js (setSlabDust)
+let emitSlabDust = () => {};
+export function setSlabDust(f) { emitSlabDust = f; }
+
 // ---- THE CRUST ----
 // THE CRUST (spec §1 "The crest reads as stone"): her shell takes the hollow outcrops' rock shading - flora.js's rock: lib/textures.js
 // rockMapSet(0) sampled triplanar at flora's two scales (R_DET 0.32, R_MAC 0.073), under the zone's rock hue - blended in by uBury,
@@ -681,6 +897,10 @@ export function crestY(MD, x, z) {
 // cdp.mjs host, vsync off): d median -0.01 / +0.07 ms over frames of 5.8-6.2 ms: inside the noise again
 //   alb/nrm/rough  how far her albedo, normal and roughness go to the stone's at full burial; sand: the hollows' fill; crack: the
 //                  crack's darkening
+// (Task 7b) THE CRACK (uCrack = L.crackK: up over BURY.crackT s from the wake, times L.bury, so it goes with the sand): with the sand cover
+// on (the 'sand' look) the crack opens only IN THE SAND (gated by the cover: her bare shell has no crust to crack); its network is the rock
+// map's crevice channel sampled where her body WAS at the crack (uCrackO: she rises up to 1.4 u while it shows, and a world-anchored
+// network slid over her), a fourth set of fetches only while uCrack > 0 (the rise's first ~3.7 s)
 //   sandC          the hollows' sand, a hex over the zone's silt hue (null = flora's silt, 0x2c3d4a at home: bluer and darker than the
 //                  dune beside it); 0x3f4744 is zone 0's seabed silt (terrain.js zoneMat 0), so the sand in her hollows is the dune's
 //                  own (Task 5 look-dev, trial 2 of 3, stills t5-try*: the best two, this and null, went to the controller)
@@ -711,6 +931,7 @@ export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x
 const CRUST_HEAD = `
 varying vec3 vCrW, vCrO;
 uniform float uBury, uCrack;
+uniform vec3 uCrackO;
 uniform sampler2D uCrustPack, uCrustNrm;
 uniform vec3 uRockC, uSand;
 uniform vec4 uCrustK, uSandK;
@@ -762,11 +983,15 @@ if (uBury > 0.001) {
   } else {
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
   }
-  float crCrk = uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPd.b));
+  float crCrk = 0.0;
+  if (uCrack > 0.001) {
+    vec4 crPk = crTri(uCrustPack, vCrW - uCrackO, crBW, 0.32);
+    crCrk = uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPk.b)) * mix(1.0, smoothstep(0.05, 0.35, crSand), step(0.001, uSandK.x));
+  }
   diffuseColor.rgb *= 1.0 - 0.85 * crCrk;
 }`;
 export function crustTerm(L, m, rockSet, rockC, sandC) {
-  const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
+  const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrackO: { value: V3() }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
     uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
     uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough },
     uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) } };
@@ -787,6 +1012,8 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
 export function crustTick(L) {
   const u = L.crustU;
   u.uBury.value = L.bury; u.uCrack.value = L.crackK || 0;
+  // (Task 7b) the crack's network rides her: sampled where her body was at the crack (vCrW less how far she has risen since)
+  if (L.crackK > 0 && L.crackO0) u.uCrackO.value.subVectors(L.body.position, L.crackO0); else u.uCrackO.value.set(0, 0, 0);
   u.uCrustK.value.set(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack); u.uCrustRough.value = CRUST.rough;
   u.uSandK.value.set(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat);
   if (CRUST.sandC != null) u.uSand.value.setHex(CRUST.sandC); else u.uSand.value.copy(L.crustSilt);
@@ -835,16 +1062,24 @@ export function prepGrowth(L, MD) {
   // replaces the reef geometry AND rewrites the weed's matrices, so a new reef geometry means both are whole already.
   if (reef && L.reefIdx && L.reefIdx.geo === reef.geometry) buryGrowth(L, false);
   if (reef && reef.geometry.index) {
-    const g = reef.geometry, ix = g.index.array, P = g.attributes.position, keep = [];
+    const g = reef.geometry, ix = g.index.array, P = g.attributes.position, keep = [], hid = [];
     reef.updateMatrixWorld(true);
     for (let q = 0; q < ix.length; q += 3) {
       // kept only if ALL THREE corners lie in the strip: a triangle straddling its edge would leave a corner standing out of the
       // dune (and burial-probe's `reef` check books every drawn vertex outside the strip)
       let all = true;
       for (let k = 0; k < 3 && all; k++) { _gp.fromBufferAttribute(P, ix[q + k]).applyMatrix4(reef.matrixWorld); all = inStrip(MD, _gp.x, _gp.z); }
-      if (all) keep.push(ix[q], ix[q + 1], ix[q + 2]);
+      if (all) keep.push(ix[q], ix[q + 1], ix[q + 2]); else hid.push(q);
     }
-    L.reefIdx = { full: g.index, strip: new THREE.BufferAttribute(Uint32Array.from(keep), 1), geo: g };
+    // (Task 7b, M6) THE REVEAL ORDER: the hidden triangles by how far their centroid lies outside the strip's band (u; growReveal uncovers
+    // them in that order from the crack), after the strip's own: drawn through a draw range, never a rebuilt buffer
+    const key = new Float32Array(hid.length), cen = new Float32Array(hid.length * 3), ord = new Uint32Array(keep.length + hid.length * 3);
+    ord.set(keep);
+    const kk = hid.map(q => { let cx = 0, cy = 0, cz = 0; for (let k = 0; k < 3; k++) { cx += P.getX(ix[q + k]); cy += P.getY(ix[q + k]); cz += P.getZ(ix[q + k]); }
+      _gp.set(cx / 3, cy / 3, cz / 3).applyMatrix4(reef.matrixWorld); locate(MD, _gp.x, _gp.z);
+      return [q, Math.max(0, (_rho - ringR(MD, 1)) * MD.R), cx / 3, cy / 3, cz / 3]; }).sort((a, b) => a[1] - b[1]);
+    kk.forEach(([q, k, cx, cy, cz], i) => { ord[keep.length + i * 3] = ix[q]; ord[keep.length + i * 3 + 1] = ix[q + 1]; ord[keep.length + i * 3 + 2] = ix[q + 2]; key[i] = k; cen[i * 3] = cx; cen[i * 3 + 1] = cy; cen[i * 3 + 2] = cz; });
+    L.reefIdx = { full: g.index, strip: new THREE.BufferAttribute(Uint32Array.from(keep), 1), geo: g, ordered: new THREE.BufferAttribute(ord, 1), nStrip: keep.length / 3, key, cen };
   }
   if (weed) {
     L.weedM0 = Float32Array.from(weed.instanceMatrix.array);
@@ -867,9 +1102,50 @@ export function prepGrowth(L, MD) {
       for (let v = 0; v < WP.count && all; v++) { _gp.fromBufferAttribute(WP, v).applyMatrix4(_gm); all = inStrip(MD, _gp.x, _gp.z) && !overIron(_gp); }
       L.weedOut[k] = all ? 0 : 1;
     }
+    // (Task 7b, M6) a hidden frond's reveal key: its root's distance outside the strip's band (u), as the reef's
+    L.weedKey = new Float32Array(weed.count);
+    for (let k = 0; k < weed.count; k++) { if (!L.weedOut[k]) continue; weed.getMatrixAt(k, _gm); _gp.setFromMatrixPosition(_gm.premultiply(weed.matrixWorld)); locate(MD, _gp.x, _gp.z); L.weedKey[k] = Math.max(0, (_rho - ringR(MD, 1)) * MD.R); }
   }
+  let km = 0;
+  if (L.reefIdx && L.reefIdx.key.length) km = L.reefIdx.key[L.reefIdx.key.length - 1];
+  if (L.weedKey) for (let k = 0; k < L.weedKey.length; k++) if (L.weedKey[k] > km) km = L.weedKey[k];
+  L.revMax = km + GROW.revRamp;
   L.growthBuried = -1;
 }
+// (Task 7b, M6: the growth's snap) Buried, the growth outside the strip is hidden (prepGrowth); measured on 31a3b94, 1150 of its 1346 reef
+// triangles and 38 of its 53 fronds stand OUT of the drawn dune even at bury 1 (up to 1.3 u and 3.6 u: the cover is 0.3 u), so there is no
+// moment of the rise when showing it all at once is not a pop (the shipped toggle at bury 0.5, ~2 s: every one of them out, half a dune
+// drawn). From the crack it is UNCOVERED instead, outward from the strip over GROW.revealT s as the sand sloughs off her (the slabs slide the
+// same way): each reef triangle drawn once the front passes its centroid (the ordered index's draw range), each frond grown from its root over
+// GROW.revRamp u of the front, a puff of silt every GROW.revPuff triangles where the front is (the crust coming off what it hid). t: s since
+// the crack (L.crackT). Writes only while the front moves; then buryGrowth(L, false) puts the full growth back (growthBuried 0)
+export function growReveal(L, t) {
+  if (L.growthBuried === 0) return;
+  const reef = L.parts.reef, weed = L.parts.weed, RI = L.reefIdx && reef && RI_ok(L) ? L.reefIdx : null, top = L.revMax || 0;
+  const w = Math.min(1, t / GROW.revealT) * top;
+  if (w >= top) { buryGrowth(L, false); return; }
+  if (L.growthBuried !== 2) { L.growthBuried = 2; L.revN = 0; if (RI) reef.geometry.setIndex(RI.ordered); }
+  if (RI) {
+    let n = L.revN;
+    reef.updateMatrixWorld();
+    while (n < RI.key.length && RI.key[n] <= w) {
+      if (n % GROW.revPuff === 0) { _gp.set(RI.cen[n * 3], RI.cen[n * 3 + 1], RI.cen[n * 3 + 2]).applyMatrix4(reef.matrixWorld); emitSlabDust(_gp.x, _gp.y, _gp.z, 3, 1.4); }
+      n++;
+    }
+    L.revN = n; reef.geometry.setDrawRange(0, (RI.nStrip + n) * 3);
+  }
+  if (weed && L.weedM0 && L.weedKey) {
+    const A = weed.instanceMatrix.array, M0 = L.weedM0;
+    for (let k = 0; k < weed.count; k++) {
+      if (!L.weedOut[k]) continue;
+      const f = Math.max(0, Math.min(1, (w - L.weedKey[k]) / GROW.revRamp)), sc = f * f * (3 - 2 * f), o = k * 16;
+      A[o] = M0[o] * sc; A[o + 1] = M0[o + 1] * sc; A[o + 2] = M0[o + 2] * sc; A[o + 4] = M0[o + 4] * sc; A[o + 5] = M0[o + 5] * sc; A[o + 6] = M0[o + 6] * sc;
+      A[o + 8] = M0[o + 8] * sc; A[o + 9] = M0[o + 9] * sc; A[o + 10] = M0[o + 10] * sc;
+    }
+    weed.instanceMatrix.needsUpdate = true;
+  }
+}
+const RI_ok = L => L.reefIdx.geo === L.parts.reef.geometry && !!L.reefIdx.ordered;
 // THE GROWTH ON THE EXPOSED ROCK (Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and coral"). Laid at the
 // bed (bedDown: after the fit and the harpoon's seat, before prepGrowth), home only (only a buried build beds down). No new program: the
 // weed's spare slots (her weed InstancedMesh is built for 150 fronds and the sculpt keeps 60: the same mesh, the same material) and ONE
@@ -880,7 +1156,9 @@ export function prepGrowth(L, MD) {
 //   weed     fronds added (the spare slots), in GROW.tufts clumps at the rock's foot and flanks (her shell 1-3.5 u over the mean ground:
 //            where sand lodges and weed roots), small (k 0.45-0.95: a frond 1.0-2.0 u)
 //   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5] };
+// (Task 7b, M6) revealT s: the growth outside the strip uncovered from the crack over this long (growReveal); revRamp u: a frond grows from
+// its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
+export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 1.5, revRamp: 1.5, revPuff: 40 };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 export function growRock(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
@@ -963,7 +1241,7 @@ export function buryGrowth(L, on) {
   if (L.growthBuried === (on ? 1 : 0)) return;
   L.growthBuried = on ? 1 : 0;
   const reef = L.parts.reef, weed = L.parts.weed;
-  if (reef && L.reefIdx) reef.geometry.setIndex(on ? L.reefIdx.strip : L.reefIdx.full);
+  if (reef && L.reefIdx) { reef.geometry.setIndex(on ? L.reefIdx.strip : L.reefIdx.full); reef.geometry.setDrawRange(0, Infinity); }
   if (weed && L.weedM0) {
     const A = weed.instanceMatrix.array;
     A.set(L.weedM0);

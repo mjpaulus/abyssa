@@ -143,8 +143,8 @@
 //                   after the wake: the Task 7a head) books nothing: UNMEASURED
 //               (i) THE SLABS (Task 7b, its brief: "A slab hovering more than 0.3 u is a fail: they ride the surface until they sink"): read off
 //                   the DRAWN mesh (L.slabs { mesh, n, vpc }), every live piece's lowest drawn vertex <= +0.3 u over the drawn surface under that
-//                   vertex (the highest of terrainH, the drawn dune and her drawn shell, a downward ray from the vertex + 1.5 u: never the fit
-//                   pose, her back rises under them) on every frame the mesh is drawn (sunk into the sand is allowed: one-sided), and the mesh
+//                   vertex (the highest of terrainH, the drawn dune and her drawn shell, downward rays from the vertex + 1.5 u, the highest of five
+//                   0.05 u apart, amended after rays fell through slits in her drawn shell: see slab() below; never the fit pose, her back rises under them) on every frame the mesh is drawn (sunk into the sand is allowed: one-sided), and the mesh
 //                   hidden by 3.1 s after the wake. No L.slabs (the Task 7a head), or none drawn with a piece live: UNMEASURED
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
@@ -500,7 +500,7 @@ const RISE_INSTALL = `(async () => {
   const cx = MD ? MD.bx : L.pos.x, cz = MD ? MD.bz : L.pos.z;
   const r3 = v => Math.round(v * 1000) / 1000, r2 = v => Math.round(v * 100) / 100;
   const blk = (x, y, z, m) => { for (const h of [0.45, 1.0, 1.6]) if (BC.bodyBlocked(x, y + h, z, m)) return 1; return 0; };
-  const THREE = await import('three'), rc = new THREE.Raycaster(), o3 = new THREE.Vector3(), dn = new THREE.Vector3(0, -1, 0);
+  const THREE = await import('three'), rc = new THREE.Raycaster(), o3 = new THREE.Vector3(), dn = new THREE.Vector3(0, -1, 0), up3 = new THREE.Vector3(0, 1, 0), nm3 = new THREE.Matrix3(), wn3 = new THREE.Vector3();
   // her drawn shell's top under (x, z), searched down from y (the first hit), or -1e9
   const shellTop = (x, y, z) => { L.parts.shell.updateMatrixWorld(true); rc.set(o3.set(x, y, z), dn); rc.far = 40; const h = rc.intersectObject(L.parts.shell, false); return h.length ? h[0].point.y : -1e9; };
   // under his sole's footprint (burial.js BURY.foot.r 0.25, the footing's own disc): the highest of five rays, centre and +-0.25 u
@@ -537,9 +537,20 @@ const RISE_INSTALL = `(async () => {
     // (BP_AT=under) on the sand under her centre, afloat 0, still; booked from the next row (R.underF)
     under() { const x = L.pos.x, z = L.pos.z; P.pos.set(x, T.terrainH(x, z, 0) + 1.35, z); P.vel.set(0, 0, 0); P.grounded = true; R.prevBoots = T.terrainH(x, z, 0); R.underF = R.S.length;
       return { at: [r2(x), r2(z)], floor: r3(T.terrainH(x, z, 0)), xf: r3(T.extraFloorAt(x, z, 0)), bodyY: r3(L.bodyY), standE: r3(L.standE), hasStood: !!L.hasStood }; },
+    // (Task 7b) the vertex INSIDE her shell (the slab's lowest point under a spine of her drawn top, more than 1.5 u under it: the downward
+    // rays start inside her and find nothing, and the floor far below read as a 3.4 u hover, AMENDED after the third green run): an upward
+    // ray, both sides, whose first hit faces UP (her top seen from inside) -> that hit's y (the vertex is in her: gap < 0); a hit facing
+    // down is her underside over it (an overhang): null, the sand under it is the surface
+    shellIn(x, y, z) { const sh = L.parts.shell, s0 = sh.material.side; sh.material.side = THREE.DoubleSide; sh.updateMatrixWorld(true);
+      rc.set(o3.set(x, y, z), up3); rc.far = 40; const h = rc.intersectObject(sh, false)[0]; sh.material.side = s0;
+      if (!h) return null; nm3.getNormalMatrix(sh.matrixWorld); wn3.copy(h.face.normal).applyMatrix3(nm3); return wn3.y > 0 ? h.point.y : null; },
     // (Task 7b) THE CRUST'S SLABS, read off the DRAWN mesh (L.slabs: { mesh, n, vpc }: n pieces of vpc vertices each, in the mesh's own
     // frame): per piece its lowest drawn vertex (world) and the drawn surface under that vertex (the highest of terrainH, the drawn dune
-    // and her drawn shell, a downward ray from the vertex + 1.5 u); a piece drawn collapsed (every vertex within 1e-4 u: gone) is not
+    // and her drawn shell, a downward ray from the vertex + 1.5 u, the highest of five, the vertex and +-0.05 u in x and z: AMENDED twice after
+    // the build's first green runs, where single frames read 0.6-3.4 u at the same two spots, the piece neither moving nor bursting (the
+    // game's own surface had not changed): her drawn (sculpted) shell has SLITS there, 0.01-0.03 u wide, that a ray falls through (a dense
+    // 0.01 u ray scan, dormant: 285 misses of 39,600 along a line at z ~30.61 from x 91.0, 58 of 14,520 round (90.4, 47.01); 0.01 u apart
+    // was the first amendment and was not enough). 0.05 u on her steepest faces is ~0.1 u of slack against the 0.3 u bar); a piece drawn collapsed (every vertex within 1e-4 u: gone) is not
     // booked. null: no slabs on this build. { v: 0 }: the mesh hidden
     slab() { const Sl = L.slabs; if (!Sl) return null; const m = Sl.mesh; if (!m || !m.visible) return { v: 0 };
       m.updateMatrixWorld(true); const A = m.geometry.attributes.position.array, e = m.matrixWorld.elements, vpc = Sl.vpc;
@@ -549,7 +560,9 @@ const RISE_INSTALL = `(async () => {
           const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
           if (wy < ly) { ly = wy; lx = wx; lz = wz; } if (wy > hi) hi = wy; }
         if (hi - ly < 1e-4) continue;
-        n++; const g = ly - Math.max(T.terrainH(lx, lz, 0), B && B.sandAt ? B.sandAt(lx, lz) : -1e9, shellTop(lx, ly + 1.5, lz));
+        n++; let sh = Math.max(shellTop(lx, ly + 1.5, lz), shellTop(lx + 0.05, ly + 1.5, lz), shellTop(lx - 0.05, ly + 1.5, lz), shellTop(lx, ly + 1.5, lz + 0.05), shellTop(lx, ly + 1.5, lz - 0.05));
+        if (sh < -1e8) { const up = R.shellIn(lx, ly, lz); if (up != null) sh = up; }
+        const g = ly - Math.max(T.terrainH(lx, lz, 0), B && B.sandAt ? B.sandAt(lx, lz) : -1e9, sh);
         if (g > gMax) { gMax = g; wk = k; wAt = [r2(lx), r2(ly), r2(lz)]; } if (g < gMin) gMin = g; }
       return { v: 1, n, gMax: n ? r3(gMax) : null, gMin: n ? r3(gMin) : null, wk, at: wAt }; },
     settle(n) { const g = []; window.__bench.step(n, () => { g.push(P.grounded ? 1 : 0); }); return Object.assign(R.foot(), { groundedFrames: g.reduce((a, b) => a + b, 0), of: n }); },
