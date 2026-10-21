@@ -61,7 +61,8 @@ Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSi
 // fissure-probe velkath-crack's shell clearance, >= 3.0 u, begin) is 1.41 u, at 6 1.98 u (home's clearance read 2.89-2.98; at 7, 3.60-3.74). footRise 1: her crest's footing stays ground, carried by
 // her body, from the crack until she stands (0 = it vanished on the wake frame: BP_RED=nofoot), for him only while his boots are within footStep u
 // under it or over it (fix round 1, C1: never the floor under her belly)
-Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 5, shoveStag: 0.8, holdRise: 1, riseVmax: 7, footRise: 1, footStep: 0.6 });
+// (Task 8) plume: 1 the rise's dust cloud (plume.js 'rise', spawned by brooder.js on the crack and the sheets), 0 none (burial-probe BP_RED=noplume)
+Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, shoveV: 5, shoveStag: 0.8, holdRise: 1, riseVmax: 7, footRise: 1, footStep: 0.6, plume: 1 });
 const _v = V3();
 
 // the mean ground under her: poseAll's own 5 x 5 support grid over her footprint, bare floor. (The grid's constants live in THREE

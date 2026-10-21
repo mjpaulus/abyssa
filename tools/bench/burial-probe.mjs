@@ -201,6 +201,13 @@
 //                         pass) or no rise record was ever live (__plume.state().rise)
 //               riseEv    __plume.state().riseEvicted does not rise over the same window (every live rise cloud keeps its density record);
 //                         UNMEASURED as quadEv
+//             AMENDED BEFORE ANY PLUME WAS BUILT (the RED run on 4fc8e38, burial-rise-t8-red-4fc8e38-{anchor,off}.json): footprint and
+//             climb read the RISE clouds' density alone (__plume.densKind(x, y, z, 'rise'): the same model, the rise kind's records only).
+//             As registered (__plume.dens, every cloud) the footprint read 28-30 u (the scan's end) from 4.0 s on with NO rise plume:
+//             her heavy footfalls' own 'small' clouds (brooder.js, standE > 0.35) at her feet ~2 R (R 15.4) from the strip's centre, so
+//             the bar could not pass whatever the rise plume did; and a footfall cloud is the field's maximum (d 0.20 at 1.0 u, 5 s) in
+//             the climb's grid. The bands are unchanged; the every-cloud readings are booked beside them (footprintAll, climbAll). On a
+//             build with no rise kind (the head) the rise density is 0 everywhere: a reading, not UNMEASURED.
 //             BP_RED=noplume (__burial.set({ plume: 0 }): no rise plume) judges blind, footprint and climb (the two eviction counts would be
 //             0 with no plume and are not its bars). BP_OFF=<u> moves the `off` placement to <u> off the strip's edge (default 12): the
 //             blind spell at 10 and 25 u off her flank is booked with it, not gated. BP_PLUME=<json> patches __plume.kinds.rise before
@@ -590,14 +597,16 @@ const RISE_INSTALL = `(async () => {
     return wy; };
   let capPrev = null; const COS8 = [], SIN8 = []; for (let i = 0; i < 8; i++) { COS8.push(Math.cos(i * Math.PI / 4)); SIN8.push(Math.sin(i * Math.PI / 4)); }
   // (Task 8, header: footprint / climb) the plume's density field, read off the game's own model (__plume.dens); null without one
-  const PLD = window.__plume && window.__plume.dens ? window.__plume.dens : null;
-  const fieldFoot = () => { if (!PLD) return null; let far = 0, nb = 0, fb = -1;
+  // (AMENDED, header) the rise clouds' density (densKind); a build with no rise kind has none (0); PLA every cloud (booked)
+  const PLA = window.__plume && window.__plume.dens ? window.__plume.dens : null;
+  const PLD = !PLA ? null : window.__plume.densKind ? (x, y, z) => window.__plume.densKind(x, y, z, 'rise') : window.__plume.kinds && window.__plume.kinds.rise ? null : () => 0;
+  const fieldFoot = (PLD) => { if (!PLD) return null; let far = 0, nb = 0, fb = -1;
     for (let b = 0; b < 32; b++) { const a = b * Math.PI / 16, dx = Math.sin(a), dz = Math.cos(a); let fr = 0;
       for (let k = 1; k <= 120; k++) { const rr = k * 0.25, x = cx + dx * rr, z = cz + dz * rr; if (PLD(x, T.terrainH(x, z, 0) + 1.5, z) > 0.02) fr = rr; }
       if (fr > 0) nb++; if (fr > far) { far = fr; fb = b; } }
     return { far, nb, b: fb }; };
   const PROF = new Float64Array(41);
-  const fieldPeak = () => { if (!PLD) return null; let best = 0, bh = null, bx = 0, bz = 0; PROF.fill(0);
+  const fieldPeak = (PLD) => { if (!PLD) return null; let best = 0, bh = null, bx = 0, bz = 0; PROF.fill(0);
     for (let ri = 0; ri <= 10; ri++) { const rr = ri * 2, nbz = ri ? 16 : 1;
       for (let b = 0; b < nbz; b++) { const a = b * Math.PI / 8, x = cx + Math.sin(a) * rr, z = cz + Math.cos(a) * rr, g = T.terrainH(x, z, 0);
         for (let hi = 0; hi <= 40; hi++) { const d = PLD(x, g + hi * 0.5, z); PROF[hi] += d; if (d > best) { best = d; bh = hi * 0.5; bx = x; bz = z; } } } }
@@ -700,7 +709,8 @@ const RISE_INSTALL = `(async () => {
         // (Task 8) sight's reacquire inputs (header: blind) and the plume's state and field; ps fields absent on a build without them are null
         clearT: r3(L.clearT || 0), pd: r3(L._pd), touchT: r3(L.touchT || 0),
         ps: (() => { const q = window.__plume ? window.__plume.state() : null; return q ? { live: q.live, rise: q.rise ?? null, riseEv: q.riseEvicted ?? null, quadEv: q.quadEvicted ?? null } : null; })(),
-        pf: fieldN % 3 === 0 ? fieldFoot() : null, pk: fieldN % 6 === 0 ? fieldPeak() : null });
+        pf: fieldN % 3 === 0 ? fieldFoot(PLD) : null, pk: fieldN % 6 === 0 ? fieldPeak(PLD) : null,
+        pfA: fieldN % 3 === 0 ? fieldFoot(PLA) : null, pkA: fieldN % 6 === 0 ? fieldPeak(PLA) : null });
       fieldN++;
       R.prevBoots = bo;
     },
@@ -1079,6 +1089,10 @@ if (MODE === 'rise') {
     const climb = p0 && p4 && p4[1].d > 0.02 ? +(p4[1].h - p0[1].h).toFixed(2) : null;
     info.climb = { samples: PK.length, first: p0 ? { t: sec(p0[0]), ...p0[1] } : null, at4: p4 ? { t: sec(p4[0]), ...p4[1] } : null, profClimb: p0 && p4 && p4[1].prof != null && p0[1].prof != null ? +(p4[1].prof - p0[1].prof).toFixed(2) : null,
       series: PK.filter((x, i) => i % 5 === 0).map(([k, q]) => [sec(k), q.h, q.d, q.prof]) };
+    // (AMENDED, header) the every-cloud readings, booked beside the judged ones
+    { const FA = S.map((q, k) => [k, q.pfA]).filter(([k, q]) => k >= w && k <= end && q), KA = S.map((q, k) => [k, q.pkA]).filter(([k, q]) => k >= w && q && k <= w + 4 * f60), a0 = KA.find(([, q]) => q.d > 0.02), a4 = KA.length ? KA[KA.length - 1] : null;
+      info.footprintAll = FA.reduce((a, [k, q]) => !a || q.far > a.far ? { t: sec(k), far: q.far, bearings: q.nb } : a, null);
+      info.climbAll = { first: a0 ? { t: sec(a0[0]), ...a0[1] } : null, at4: a4 ? { t: sec(a4[0]), ...a4[1] } : null, climb: a0 && a4 && a4[1].d > 0.02 ? +(a4[1].h - a0[1].h).toFixed(2) : null }; }
     ck.push({ name: 'climb', val: { climb, h0: p0 ? p0[1].h : null, t0: p0 ? sec(p0[0]) : null, h4: p4 ? p4[1].h : null, d4: p4 ? p4[1].d : null }, bar: 'the density maximum\'s height over the floor rises >= 3 u from its first sample (> 0.02) to 4.0 s after the wake',
       ok: climb != null && climb >= 3, vacuous: !hasP || PK.length < 10, judged: true });
     // the two eviction counts over the rise (the frame before the wake -> STOOD)

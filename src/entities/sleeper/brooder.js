@@ -718,7 +718,7 @@ function seatRite(L, noHarpoon = false) {
 function bedDown(L, noHarpoon = false) {
   // (Task 7a) the rise's state, defined before use and reset at every bed (bedDown runs only while she is dormant): the dune drawn whole
   // (moundK 1), no crack, not stood
-  L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0;
+  L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0; L.riseSheetN = 0;   // (Task 8: the plume's sheets spawned)
   L.bury = 0; poseAll(L, 0, null);
   if (L.brood) L.brood.seat();
   L.buryD = fitSink(L, L.crest);
@@ -2043,6 +2043,10 @@ function dropImpact(L, ev, player, rho, ux, uz, shellY) {
 }
 
 const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
+// (Task 8) the rise plume's spawn points on the FITTED dune (MD.M: a cloud bursts where the sand was); module level, so no closure or
+// array literal per rising frame
+const RISE_J = [0, 21, 43, 64, 85, 107];                                     // the crack's ring of six bearings
+const ringAt = (MD, ring, j) => (ring * MD.COLS + (j % MD.COLS)) * 3;       // a dune vertex's offset
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
@@ -2102,6 +2106,18 @@ export function updateBrooder(L, dt, t, player) {
     if (b < L.bury) L.bury = b;
     L.moundK = Math.min(L.bury, 1 - win(u, BURY.pourU[0], BURY.pourU[1]));
     if (!L.cracked) { L.cracked = true; L.crackT = 0; crackBeat(L, ev, player); }
+    // (velkath-buried-rock) THE PLUME (spec §2, beat 3): a ring at the crack, more as the sheets fall (plume.js 'rise')
+    if (BURY.plume && L.mound) {
+      const MD = L.mound;
+      if (L.crackT === 0) for (let q = 0; q < 6; q++) { const o = ringAt(MD, 3, RISE_J[q]); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx); }
+      const sheet = L.moundK < 0.25 ? 3 : L.moundK < 0.5 ? 2 : L.moundK < 0.75 ? 1 : 0;
+      while ((L.riseSheetN || 0) < sheet) {
+        const j0 = (L.riseSheetN || 0) * 37;
+        let o = ringAt(MD, 6, j0); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
+        o = ringAt(MD, 6, j0 + 64); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
+        L.riseSheetN = (L.riseSheetN || 0) + 1;
+      }
+    }
   }
   if (L.cracked && L.crackT < BURY.crackT + 1) L.crackT += dt;
   // (Task 7b) the crust's crack (uCrack, burial.js crustTick): up over crackT s from the wake, times the sand still on her
