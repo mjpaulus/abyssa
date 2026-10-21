@@ -4,7 +4,7 @@ status: backlog
 tags: brooder, sleepers, rite, particles, design
 updated: 2026-10-21
 ---
-Michael's idea: Velkath sleeps fully buried in the sand and reads as a rock with an old harpoon in it. Pulling the harpoon wakes her, and she rises out of the sand as it pours off her in a dust plume. Michael approved the spec; the implementation plan comes once the relief lands. To be built after the sea-floor relief lands.
+Built on branch `buried`: 17 tasks reviewed, waiting on Michael's look and his word to merge.
 
 ## Detail
 - **Michael, 2026-10-14:** "it would be interesting if she was buried in the sand and looked like a rock. Sal would just see what looked like a harpoon in the rock and pulls it out and she rises from the sand. There would be a dust plum as the sand falls off of her"

@@ -53,8 +53,8 @@ scar, night). The seven questions put to him, each with its default (what is bui
    `BURY.breath.lift` (his own ruling 2026-10-15: "may be too subtle... he judges it on stills").
 3. **RIDGE_LINE: keep or not.** "THE RIDGE IS WARM UNDER YOUR HAND." is still said within 1.3 R while she is dormant (brooder.js). Does it give the rock
    away? DEFAULT: keep (unchanged, the spec says the sleeping lines stay).
-4. **The coral and weeds have no surface.** The growth on her back has no collider, so the lens and boots pass through: coral through
-   Sal's boots on 168 of 2,718 crest frames (to the full boot height), coral swallowing both lower legs at one crest spot, a weed frond on the lens
+4. **The coral and weeds have no surface.** The growth on her back has no collider, so the lens and boots pass through: growth inside
+   Sal's boot volume on 168 of 2,718 crest frames (coral 139, weed 29), up to 0.449 u deep (about the boot's height), coral swallowing both lower legs at one crest spot, a weed frond on the lens
    for 4 frames at wake + 3.6 s (and another at wake + 0.9 s in the afloat pull: the "Mesh:18" hits, identified as a weed frond, not a ward disc). DEFAULT: keep as is.
 5. **The scar after the dig-in does not read.** In no still, from 10 u, 6 u or 3.5 u, is the harpoon's scar resolved (he stands among her growth
    at the seat). DEFAULT: leave as is.
@@ -124,7 +124,7 @@ Checked on the head (Task 13 sweep, `relief-load all`; Task 17 re-ran `voyage-pa
 | The point (`pointcam-probe point`, hose 760) | back: she faces within -9.29 deg at the raise (bar 12), aim 10.04 deg (20), claw up 3.283 s [7.083, 10.35] s, raise 6.217 s after facing at 6.117 s; ahead: -0.79 deg, aim 5.33, hold [3.783, 7.05] containing the line at 4.117 s; tears 0; she walks home after | `PC_RED=nopoint` exit 5; back on b3e903f exit 1 (-103 deg at the raise) |
 | POINTCAM (`framing`/`mouse`/`off`/`walk`/`lastward`) | framing theta 5.6-10.4 deg over the hold, close 320/320 (0.5 x min(thetaPre, 70)); a 6 deg look drops it in a frame and it stays off, 4 net / 10 path keeps it; off: lens quaternion == `qPre` 840/840 (positive control 494 engaged); aim step < 1 deg/frame; bonnet in frame; `clawcam-probe` 22/22 | `PC_ON=0`, `nopoint`, `fastturn`, `noface`, `inband` exit 5 |
 | Digging back in (`digin`, `reentry`) | 17.5 s (15-20) once he is clear; ends `bury` 1 `dugIn`, disguise passes on the new pose (1.26 u off her bed); pause: 313 frames still while he is on her ground, resume in 60 frames (= `SETTLE.hold` x 60), boots min -0.027, lens min 3.61 u; afloat: 180 held frames still, `calmOut` 0, no sink; crest top: 180 frames still; wards light 0 / glow 0; breath 0.045; cost: worst frame +3.5-3.7 ms over the median (bar 4.0) | `fastdig` (8.0 s), `nopause` (316 frames moved), `keepdig`, the crest run on c3eaa00 (180/180 moved), `mem2` exit 5 |
-| Existing probes (Task 13 sweep on 70ae5a3) | `relief-load all` exit 0; `seating-probe` 0 hover/sunk/boulder at home, Pallid, home; `harpoon-probe` x10 modes exit 0 (seams 4.45 / 2.03 / 1.35 / 1.42; lodged home tip 0.207 shank 0.191); `fissure-probe velkath-crack clearance ending opening calm-open open-persist` exit 0 (ending dip 198.61; the calm with the point running); `brooder-invariants`, `blade-invariants` 0; `clawcam-probe framing` 5/7 pass, 2 fail "bonnet 30 u ahead" (corrected to 2 of 5 on disk); `gates.mjs` 20 PASS; `clutch-line-probe` 0; `voyage-pallid` 0 | `velfix-gate` absolute RED (below) |
+| Existing probes (Task 13 sweep on 70ae5a3) | `relief-load all` exit 0; `seating-probe` 0 hover/sunk/boulder at home, Pallid, home; `harpoon-probe` x10 modes exit 0 (seams 4.45 / 2.03 / 1.35 / 1.42; lodged home tip 0.207 shank 0.191); `fissure-probe velkath-crack clearance ending opening calm-open open-persist` exit 0 (ending dip 198.61; the calm with the point running); `brooder-invariants`, `blade-invariants` 0; clawcam-probe framing: the bonnet-30-u bar flakes 2/5 on the head and 2/6 on 644879b (pre-existing); `gates.mjs` 20 PASS; `clutch-line-probe` 0; `voyage-pallid` 0 | `velfix-gate` absolute RED (below) |
 | Voyage (`voyage-pallid.mjs`) | **Task 17 rerun at head 1589669: exit 0** (JSON `reviews/buried/voyage-pallid-t17-green.json`): home fp `5c0705a1` and the LIVE anchor; home's dune is ground at home (1,403 footprint cells, -271.217 over terrainH -276.669 at her bed); 18 reseed reads of home's bed all -1e9; Pallid fp `b1c58f8d`, `extraFloorAt` -1e9 on 5,043 + 5,043 grid points, 9 dens exactly on `terrainH + 0.2`, row-built `014f3101` with no `bury`; home again the same anchor; console clean | `VP_RED=nositekey` on a scratch snapshot exit 5 (the reseed read -271.217); exit 2 on an unmutated head |
 | Fight parity | section 8 | pre-registered, n/a |
 | Cost | section 9 | n/a |
@@ -242,7 +242,7 @@ Parked, booked, or follow-ups. None blocks the merge unless Michael says so.
 
 ## 12. Every ruling in the ledger (grouped by task)
 
-70 rulings, each with the decision, its reason and the cost if wrong, as recorded. "Controller" = the orchestrator.
+70 rulings, each with the decision, its reason and, where the ledger recorded one, the cost if wrong, as recorded. "Controller" = the orchestrator.
 
 ### Pre-flight
 1. The cross-task scan rests on the two independent plan reviews (Opus: 5 Critical / 14 Important / 12 Minor; Sonnet re-review: all closed, 1 new Important + 12 Minor, fixed) plus spot-checks, not a third read of 2,241 lines. Cost if wrong: a mismatch surfaces in a task review.

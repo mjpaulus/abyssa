@@ -377,7 +377,7 @@ against explicit contracts and reviewed on return.
   legs, underside wards buried and dark while she sleeps, touchable only standing).
   `__lev.fp(i)` is the serpent's regression hash (z0 15ce888c, z1 c938fe6e, z2
   652d0412); `__lev.swap/cmd/state` and the lab "sleeper" group drive the kinds.
-  Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge ALONGSIDE her
+  Zone 0 SHIPS the Brooder (her rite: `sleeper/brood.js` — asleep as a ridge (at home since VELKATH BURIED: buried as an outcrop, the iron in her crest — see below) ALONGSIDE her
   fissure (fissure Task 5: `sleeper/lair.js` velkathLair, pure; one flank to the crack, her NEAR flank
   `L.nearFlank`/`L.sand` to open sand, her whole outline off the 14 u APRON; the scatter keeps her bed
   clear, `clearOfBed`) with a BERRIED CLUTCH under her apron (2026-10-08, roadmap/brooder-clutch.md: the
@@ -388,7 +388,7 @@ against explicit contracts and reviewed on return.
   it, calmed she won't settle her tongue of eggs onto him). THE TRIGGER IS THE HARPOON (fissure-and-harpoon
   Task 6, `sleeper/harpoon.js`; the pry, the carried clump and the brood rule are gone): an old whaling iron
   (src/lib/harpoonSculpt.js -> assets/harpoon, the same model Task 7 makes Sal's blade; `harpoonModel()`) is
-  lodged in her shell margin on the NEAR flank, in a gap between her folded legs (seat() searches her drawn
+  lodged in her shell margin on the NEAR flank (at home since VELKATH BURIED: buried as an outcrop, the iron in her crest — see below), in a gap between her folded legs (seat() searches her drawn
   shell: the head + shank BURIED by a vertical-ray test against the drawn body, the pole clear of her limbs;
   the silt drift is notched there); `L.harpoon.anchor` is where he stands (Alt+6). The model is
   `src/lib/harpoonModel.js` (neutral: Sal's blade imports it). A pull ABORTS (nothing granted) if he leaves
@@ -425,7 +425,7 @@ against explicit contracts and reviewed on return.
   `lair.face -1` turns her in place at her bed (lair.js: the bed is the one that clears the apron facing either way,
   today's, 0.021 u from the station; re-fitted at the turned face alone she moved 1.011 u, S2 allows 0.5; yaw 58.49
   -> -121.51, exactly 180 deg), so the harpoon is in her LEFT flank again and Alt+6 opens at her
-  back-left CORNER (fwd -0.81 / lat -0.59 R at the key press, -0.84 / -0.61 at riteplay's START line; main's is also
+  back-left CORNER (main's / pre-burial: fwd -0.81 / lat -0.59 R at the key press, -0.84 / -0.61 at riteplay's START line; home now, VELKATH BURIED: fwd -0.53 / lat -0.23 R; main's is also
   back-left, -0.45 / -1.13 at the key, -0.48 / -1.16 at START). `lair.seat 'back'` keeps the seat's
   seam to her back half (harpoon.js `seat()`: on the levelled flat the middle of her left flank lies at the ground and
   the search's best was her front corner). `hard.lift` 0.55 raises her stance (brooder.js `L.standLift`: her body height,
@@ -737,7 +737,7 @@ against explicit contracts and reviewed on return.
   her designed station (89.7, 39.1), a pure function of the frozen fissure frame; today's skiff (107.6, -53.6),
   120.2 u from the raft, 94.4 u from her bed, with a 0.114 u flatness lead over the runner-up: the window is a tuned
   knob, the gates `skiff within 130 u` and `skiff in its window` judge it); and `sleepers[0]` = { sigils 3, hueShift 0,
-  lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 } }: Velkath turned at her bed, the harpoon seat on her back
+  lair: { face: -1, seat: 'back' }, hard: { lift: 0.55 }, bury (VELKATH BURIED): { crest: 6.5 } }: Velkath turned at her bed, the harpoon seat on her back
   half, her stance raised 0.55 u (from Michael on 2026-10-14 via Rulings 44-45; the fight story is in the
   `entities/leviathan.js` bullet above; game.js `makeZoneSleeper` reads every row's sigils / hueShift, so a row must carry the shipped 3 / 0).
   Water rides three shared fog-chunk vec4s (abyssaSite/SiteT/SiteK, DELTAS from the shipped
@@ -753,7 +753,7 @@ against explicit contracts and reviewed on return.
   15ce888c / c938fe6e / 652d0412 is unchanged: it is the serpent's hash, and serpent.js reads terrainH only for blobs
   it does not hash. sleeperFingerprint's BLIND SPOT: it is taken with NO site row (LEVIATHAN_CFG alone), as are
   brooder-invariants.mjs, gates.mjs S2 and relief-load's voyage replica (`velkathLair(..., null)`: position only), so
-  none of them can see home's sleeper row (the turn, the seat, the lift): built from its row home reads edb51a28
+  none of them can see home's sleeper row (the turn, the seat, the lift): built from its row home read edb51a28 before VELKATH BURIED
   (Pallid 014f3101, Burned 5dc323ad, Shelf 874758d2 with theirs; the no-row values are unchanged at every site).
   relief-load `load` gates a LIVE anchor in its place, on the boot's build and on the chart's rebuild: heading
   -121.51 deg, Alt+6 stands him at fwd -0.81 / lat -0.59 R in her frame (her back-left corner), lift 0.55, seat found
