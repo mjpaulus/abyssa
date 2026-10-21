@@ -121,12 +121,22 @@
 //                   drawn ground): shoved up the steep rock at the strip's edge he walked up it at 6 u/s ON it (gap -0.02); (2) a FALL is
 //                   air too: the drawn ground dropping > 0.3 u from under him in a frame (she turned as she rose and the lip of her rock went
 //                   from under his boots: 1.7 u, a ledge leaving him, not a footing gone); in the air he is never under the drawn ground by
-//                   more than 0.3 u (the vanished-footing case sinks him into her rock: nofoot, -1.2 u). Judged at every BP_AT; BP_AT=dune stands
+//                   more than 0.3 u (the vanished-footing case sinks him into her rock: nofoot, -1.2 u). TIGHTENED (fix round 1, I3 and C1;
+//                   committed and run on b2564ff before the fix): (i) her carried crest footing is his ground only if his boots on the frame
+//                   before stood no more than 0.6 u (a step) under it (or over it), and the shell rays start at last frame's boots + 1.5 u: a
+//                   floor that snaps a man up from under her belly onto her back is not ground he could stand on; (ii) a FALL, after its
+//                   first 6 frames, sinks on every frame (boots' dY/dt <= 0) and by >= 0.15 u/s over each 0.25 s (the suit settles ~0.3 u/s,
+//                   player.js A_SETTLE): a man hanging still in the water fails; (iii) the window runs on past 2 s while he is in the air,
+//                   to his landing (within 0.3 u) or STOOD. BP_AT=under: stood at 'off' for the wake, then at wake + 5.5 s (standE ~0.98,
+//                   not yet stood: the harmless window a player dashes under her in) set on the sand under her centre, afloat 0, and (g)
+//                   judged from that frame on (its window as above). Judged at every BP_AT; BP_AT=dune stands
 //                   him half-way down the dune on her sand side (the dune floor following moundK as it draws down)
 //             BP_FORCE=1 (and BP_RED=tearable): THE FORCED CONTACT. Through the window the hold adds (from the first frame L.stand
 //             reaches 1, where the shipped rising flag ends, to STOOD) he is set, after every frame, in the path of her fastest moving
 //             leg capsule (bodyColsCaps, the first 40: 8 legs x 5; moving 3-18 u/s, under bodyCols' LIMB_VMAX 20), 0.2 u in, afloat,
-//             so the next frame's resolve meets a leg coming INTO him (BODY.hitV). Her shell moves < 1 u/s there (the heave settling,
+//             so the next frame's resolve meets a leg coming INTO him (BODY.hitV). (Fix round 1, M4: teleported each frame he lit her wards
+//             and calmed her before STOOD, and calmed game.js forbids tears: in the window ward touch is off (L.reach -1, restored at STOOD)
+//             and the window is cut at a calm, booked per row.) Her shell moves < 1 u/s there (the heave settling,
 //             she does not walk: measured), so her planting legs are what can close on him. Judged: aTear only, and >= 1 frame with
 //             BODY.hitV > 2.5 (game.js's slam threshold) in the window, else UNMEASURED.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
@@ -188,7 +198,7 @@ const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
 const AT = process.env.BP_AT || '';
-if (AT && !['anchor', 'crest', 'off', 'front', 'dune'].includes(AT)) { console.error(`BP_AT: anchor | crest | off | front | dune (got ${JSON.stringify(AT)})`); process.exit(2); }
+if (AT && !['anchor', 'crest', 'off', 'front', 'dune', 'under'].includes(AT)) { console.error(`BP_AT: anchor | crest | off | front | dune | under (got ${JSON.stringify(AT)})`); process.exit(2); }
 const FORCE = process.env.BP_FORCE === '1' || !!(RED && REDS[MODE][RED].force);
 if (FORCE && MODE !== 'rise') { console.error('BP_FORCE is rise\'s'); process.exit(2); }
 if (RED && REDS[MODE][RED].at && (AT || 'anchor') !== REDS[MODE][RED].at) { console.error(`BP_RED ${RED} is written for BP_AT=${REDS[MODE][RED].at} (got ${JSON.stringify(AT || 'anchor')})`); process.exit(2); }
@@ -426,20 +436,30 @@ const PROG_INSTALL = `(async () => {
   };
   return { n: P().length, crust: crustN(), hasCrust: !!(window.__burial && window.__burial.crust) }; })()`;
 
-// (g) THE FOOTING, judged off a booked series (a function so a saved JSON can be re-judged: the REDs on 1ddae5e were)
-function FOOTING(S, w) {
-  const f60 = 60, sec = i => +((i - w) / f60).toFixed(3), r = v => Math.round(v * 1000) / 1000;
-  let air = 0, tx = 0, tz = 0, throws = 0, falls = 0, gN = 0, tN = 0, gMax = -1e9, gMin = 1e9; const gBad = [], tBad = [];
-  for (let i = Math.max(1, w - 1); i <= Math.min(S.length - 1, w + 120); i++) { const q = S[i], p = S[i - 1]; if (q.drawnG == null) continue;
-    const gap = q.boots - q.drawnG, pg = p.drawnG == null ? null : p.boots - p.drawnG;
-    if (q.shoveN > p.shoveN) { air = 1; throws++; tx = p.px; tz = p.pz; }
-    else if (!air && pg != null && Math.abs(pg) <= 0.3 && q.drawnG < p.drawnG - 0.3) { air = 2; falls++; tx = p.px; tz = p.pz; }
+// (g) THE FOOTING, judged off a booked series (a function so a saved JSON can be re-judged: the REDs on 1ddae5e were). from: the first frame
+// judged (default the frame before the wake); stood: STOOD's frame (the window's last possible frame)
+function FOOTING(S, w, from = null, stood = -1) {
+  const f60 = 60, sec = i => +((i - w) / f60).toFixed(3), r = v => Math.round(v * 1000) / 1000, STEP = 0.6;
+  // the drawn ground under him (header (g) (i)): the floor / dune / shell rays (gBase) and her carried footing only if last frame's boots were
+  // within a step under it. (A series booked before fix round 1 has drawnG only: read as before)
+  const G = (q, p) => q.gBase == null ? q.drawnG : Math.max(q.gBase, q.gFoot != null && q.gFoot > -1e8 && (q.pb != null ? q.pb : p.boots) >= q.gFoot - STEP ? q.gFoot : -1e9);
+  let air = 0, k = 0, tx = 0, tz = 0, throws = 0, falls = 0, gN = 0, tN = 0, gMax = -1e9, gMin = 1e9, last = -1, winS = 0, winN = 0; const gBad = [], tBad = [];
+  const i0 = Math.max(1, from == null ? w - 1 : from), iEnd = stood >= 0 ? stood : S.length - 1;
+  for (let i = i0; i < S.length; i++) {
+    if (i > i0 + 120 && (!air || i > iEnd)) break;
+    const q = S[i], p = S[i - 1]; if (q.drawnG == null && q.gBase == null) continue;
+    const g = G(q, p), gp = i - 1 >= i0 && (p.drawnG != null || p.gBase != null) ? G(p, S[i - 2] || p) : null, gap = q.boots - g, pg = gp == null ? null : p.boots - gp;
+    if (q.shoveN > p.shoveN) { air = 1; k = 0; throws++; tx = p.px; tz = p.pz; }
+    else if (!air && pg != null && Math.abs(pg) <= 0.3 && g < gp - 0.3) { air = 2; k = 0; winS = 0; winN = 0; falls++; tx = p.px; tz = p.pz; }
     else if (air && (air === 2 || q.stag <= 0) && Math.abs(gap) <= 0.3) air = 0;
-    if (air) { tN++; const vb = (q.boots - p.boots) * f60, onSpot = air === 1 && Math.hypot(q.px - tx, q.pz - tz) < 0.3;
-      if (((vb > 1.0 && gap > 0.3) || gap < -0.3 || (onSpot && Math.abs(gap) > 0.3)) && tBad.length < 12) tBad.push([sec(i), r(vb), r(gap), air]); }
+    last = i;
+    if (air) { tN++; k++; const vb = (q.boots - p.boots) * f60, onSpot = air === 1 && Math.hypot(q.px - tx, q.pz - tz) < 0.3;
+      let bad = (vb > 1.0 && gap > 0.3) || gap < -0.3 || (onSpot && Math.abs(gap) > 0.3);
+      if (air === 2 && k > 6) { if (vb > 0) bad = true; winS += vb; winN++; if (winN === 15) { if (winS / 15 > -0.15) bad = true; winS = 0; winN = 0; } }
+      if (bad && tBad.length < 12) tBad.push([sec(i), r(vb), r(gap), air]); }
     else { gN++; if (gap > gMax) gMax = gap; if (gap < gMin) gMin = gap; if (Math.abs(gap) > 0.3 && gBad.length < 12) gBad.push([sec(i), r(gap)]); } }
-  return { name: 'g', val: { judged: gN, gapMax: gN ? r(gMax) : null, gapMin: gN ? r(gMin) : null, bad: gBad, throws, falls, airFrames: tN, air: tBad },
-    bar: 'wake - 1 frame .. + 2 s: boots within +-0.3 u of the drawn ground; in the air (a throw, or the drawn ground dropping > 0.3 u from under him) never rising > 1.0 u/s, never under it by > 0.3, on the spot of a throw within 0.3',
+  return { name: 'g', val: { from: sec(i0), to: sec(last), judged: gN, gapMax: gN ? r(gMax) : null, gapMin: gN ? r(gMin) : null, bad: gBad, throws, falls, airFrames: tN, air: tBad },
+    bar: 'boots within +-0.3 u of the drawn ground (her carried footing only within a step of last frame\'s boots); in the air never rising > 1.0 u/s, never under it by > 0.3, on a throw\'s spot within 0.3, a fall sinking (<= 0 per frame, <= -0.15 u/s per 0.25 s after 6 frames)',
     ok: !gBad.length && !tBad.length, vacuous: gN + tN < 30, judged: true };
 }
 // the page side of `rise` (header). RISE_INSTALL puts window.__bpRise: settle(n) steps n frames booking his footing (not the series);
@@ -487,11 +507,14 @@ const RISE_INSTALL = `(async () => {
       const mx = (C[o] + C[o + 3]) / 2 + bx / 60 + bx * k, my = (C[o + 1] + C[o + 4]) / 2 + by / 60 + by * k, mz = (C[o + 2] + C[o + 5]) / 2 + bz / 60 + bz * k;
       P.pos.set(mx, my + 0.5, mz); P.vel.set(0, 0, 0); P.grounded = false;
       R.forced = (R.forced || 0) + 1; return bv; },
+    // (BP_AT=under) on the sand under her centre, afloat 0, still; booked from the next row (R.underF)
+    under() { const x = L.pos.x, z = L.pos.z; P.pos.set(x, T.terrainH(x, z, 0) + 1.35, z); P.vel.set(0, 0, 0); P.grounded = true; R.prevBoots = T.terrainH(x, z, 0); R.underF = R.S.length;
+      return { at: [r2(x), r2(z)], floor: r3(T.terrainH(x, z, 0)), xf: r3(T.extraFloorAt(x, z, 0)), bodyY: r3(L.bodyY), standE: r3(L.standE), hasStood: !!L.hasStood }; },
     settle(n) { const g = []; window.__bench.step(n, () => { g.push(P.grounded ? 1 : 0); }); return Object.assign(R.foot(), { groundedFrames: g.reduce((a, b) => a + b, 0), of: n }); },
     row() {
       const p = P.pos, bo = p.y - 1.35, cp = camera.position, BD = BC.BODY, sv = window.survival;
       if (R.wakeF < 0 && !L.dormant) R.wakeF = R.S.length;
-      const near = R.wakeF < 0 || R.S.length - R.wakeF <= 125;   // (the footing bar's window: the drawn ground is booked there)
+      const pb = R.prevBoots == null ? bo : R.prevBoots;   // (the shell rays start at LAST frame's boots + 1.5: header (g) (i))
       let wmax = -1e9, wmin = 1e9, lit = 0; const wh = [];
       for (const g of L.sigils) { const d = g.grp.position.y - sand(g.grp.position.x, g.grp.position.z); wh.push(r2(d)); if (d > wmax) wmax = d; if (d < wmin) wmin = d; if (g.lit) lit++; }
       R.S.push({ dorm: L.dormant ? 1 : 0, stand: r3(L.stand), standE: r3(L.standE), bury: r3(L.bury || 0), moundK: L.moundK == null ? null : r3(L.moundK), mk: MD ? r3(MD.k) : null, drawn: MD ? (MD.drawn ? 1 : 0) : null,
@@ -502,9 +525,11 @@ const RISE_INSTALL = `(async () => {
         blk0: blk(p.x, bo, p.z, 0), blk45: blk(p.x, bo, p.z, 0.45), lensClr: r3(cp.y - T.shutFloorY(cp.x, cp.z, 0)), lensBlk: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? 1 : 0, lensWhy: BC.bodyBlocked(cp.x, cp.y, cp.z, 0) ? BC.blockWhy : null, crecam: window.__crecam && window.__crecam.state ? window.__crecam.state().creEng ?? null : null,
         lift: L.claws.map(c => r3(c.liftNow || 0)), elbow: L.claws.map(c => r3(c.elbow || 0)), frontUp: r3(L.frontUp || 0), clawRes: r3(L.clawRes || 0), clawSt: r3(L.clawSt || 0), belly: r2(L.bellyOver ?? 99),
         body: { last: BD.last, hitV: r2(BD.hitV), push: r3(BD.push), n: BD.contacts, shell: BD.shell ? 1 : 0 }, shoveN: L.shoveN || 0, cracked: L.cracked ? 1 : 0,
-        drawnG: near ? r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, bo + 1.5, p.z), footCarried(p.x, p.z))) : null, boots: r3(bo), forced: R.lastForce || 0 });
+        gBase: r3(Math.max(T.terrainH(p.x, p.z, 0), B && B.sandAt ? B.sandAt(p.x, p.z) : -1e9, shellFoot(p.x, pb + 1.5, p.z))), gFoot: r3(footCarried(p.x, p.z)), boots: r3(bo), pb: r3(pb), forced: R.lastForce || 0,
+        calmed: L.calmed ? 1 : 0, under: R.underF === R.S.length ? 1 : 0 });
+      R.prevBoots = bo;
     },
-    step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { R.row(); R.lastForce = 0; if (${FORCE ? 'true' : 'false'} && R.wakeF >= 0 && L.stand >= 1 && !R.stoodSeen) { if (L.hasStood) R.stoodSeen = true; else R.lastForce = R.force(); } }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
+    step(n) { if (window.lev !== L) throw new Error('the sleeper was rebuilt under the booking'); window.__bench.step(n, () => { R.row(); R.lastForce = 0; if (${FORCE ? 'true' : 'false'} && R.wakeF >= 0 && L.stand >= 1 && !R.stoodSeen) { if (L.hasStood) { R.stoodSeen = true; if (R.reach0 != null) L.reach = R.reach0; } else { if (R.reach0 == null) { R.reach0 = L.reach; L.reach = -1; } R.lastForce = R.force(); } } }); return { rows: R.S.length, wakeF: R.wakeF, dormant: !!L.dormant }; } };
   return { R: L.R, buried: !!L.buried, hasMound: !!MD, centre: [r2(cx), r2(cz)], hasStoodKnown: 'hasStood' in L, knobs: B ? { shoveV: B.knobs.shoveV ?? null, shoveStag: B.knobs.shoveStag ?? null, holdRise: B.knobs.holdRise ?? null, riseU: B.knobs.riseU ?? null, pourU: B.knobs.pourU ?? null } : null };
 })()`;
 const RISE_PLACE = where => `(async () => {
@@ -640,7 +665,7 @@ try {
     const where = AT || 'anchor';
     let pl;
     if (where === 'anchor') { await alt(c, 6); pl = await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { where: 'anchor', him: [+p.x.toFixed(2), +p.z.toFixed(2)], dAnchor: H && H.anchor ? +Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z).toFixed(2) : null, prompt: window.lev.rite ? window.lev.rite.prompt(p) : null }; })()`); }
-    else if (where === 'off') pl = await c.ev(BREATH_PLACE(12));
+    else if (where === 'off' || where === 'under') pl = await c.ev(BREATH_PLACE(12));
     else pl = await c.ev(RISE_PLACE(where));
     if (!pl || pl.err) throw new Error('place: ' + (pl && pl.err));
     const ins = await c.ev(RISE_INSTALL);
@@ -656,8 +681,10 @@ try {
         for (let k = 0; k < 20; k++) { st = await c.ev(`window.__bpRise.step(30)`); if (st.wakeF >= 0) break; }
         if (!(st && st.wakeF >= 0)) throw new Error('she did not wake within 10 s of E at the anchor (' + JSON.stringify(pl) + '; ' + JSON.stringify(st) + '; ' + JSON.stringify(await c.ev(`(() => { const H = window.lev.harpoon, p = window.player.pos; return { wrenching: !!H.wrenching, wT: H.wT, pulled: !!H.pulled, wakeT: H.wakeT, d: Math.hypot(p.x - H.anchor.x, p.z - H.anchor.z), dormant: window.lev.dormant, onDeck: window.player.onDeck, state: window.gameState }; })()`)) + ')');
       } else { await c.ev(`window.__bpRise.step(1)`); await c.ev(`(window.__lev.cmd('wake'), 1)`); st = await c.ev(`window.__bpRise.step(1)`); }
+      let under = null;
+      if (where === 'under') { st = await c.ev(`window.__bpRise.step(${330 - (st.rows - st.wakeF)})`); under = await c.ev(`window.__bpRise.under()`); console.log('under: ' + JSON.stringify(under)); }
       for (let k = 0; k < 40 && st.rows - st.wakeF < RISE_SECS * 60; k++) st = await c.ev(`window.__bpRise.step(${Math.min(300, RISE_SECS * 60 - (st.rows - st.wakeF))})`);
-      out = { where, place: pl, settle, ins, wakeF: st.wakeF, S: await c.ev(`window.__bpRise.S`) };
+      out = { where, place: pl, settle, ins, wakeF: st.wakeF, under, underF: under ? await c.ev(`window.__bpRise.underF`) : null, S: await c.ev(`window.__bpRise.S`) };
     }
   }
 } catch (e) { fatal = String(e && e.message || e); }
@@ -813,11 +840,12 @@ if (MODE === 'rise') {
     { name: 'f', val: fS ? { mk: fS.mk, drawn: fS.drawn, moundK: fS.moundK } : null, bar: 'at STOOD MD.k 0 and MD.drawn false', ok: !!fS && fS.mk === 0 && fS.drawn === 0, vacuous: !fS || fS.mk == null, judged: true }];
   info.dAfter = dAfter;
   // (g) THE FOOTING (header)
-  ck.push(FOOTING(S, w));
+  ck.push(FOOTING(S, w, out.underF != null ? out.underF : null, s));
   // (BP_FORCE) the forced contact: legs closing on him in the window the hold adds
-  if (FORCE) { const f0 = S.findIndex((q, k) => k >= w && q.stand >= 1), F = f0 >= 0 && s >= 0 ? S.slice(f0, s + 1) : [];
+  // (fix round 1, M4: ward touch is suppressed in the window, L.reach -1; and the window is cut at a calm, where game.js forbids tears whatever holdRise is)
+  if (FORCE) { const f0 = S.findIndex((q, k) => k >= w && q.stand >= 1), c0 = S.findIndex((q, k) => k >= f0 && f0 >= 0 && q.calmed), F = f0 >= 0 && s >= 0 ? S.slice(f0, (c0 >= 0 && c0 <= s ? c0 : s + 1)) : [];
     const hits = F.filter(q => q.body.hitV > 2.5).length, aT = ck.find(k => k.name === 'aTear');
-    info.force = { from: sec(f0), to: sec(s), frames: F.length, forced: F.filter(q => q.forced > 0).length, hitFrames: hits, hitVmax: F.length ? Math.max(...F.map(q => q.body.hitV)) : null, tearsInWindow: F.length ? F[F.length - 1].slam - S[Math.max(0, f0 - 1)].slam : null };
+    info.force = { from: sec(f0), to: sec(s), calmedAt: c0 >= 0 ? sec(c0) : null, litMax: F.length ? Math.max(...F.map(q => q.lit)) : null, frames: F.length, forced: F.filter(q => q.forced > 0).length, hitFrames: hits, hitVmax: F.length ? Math.max(...F.map(q => q.body.hitV)) : null, tearsInWindow: F.length ? F[F.length - 1].slam - S[Math.max(0, f0 - 1)].slam : null };
     aT.vacuous = aT.vacuous || hits === 0; aT.val.force = info.force;
     for (const k of ck) k.judged = k.name === 'aTear'; }
   const red = RED ? REDS.rise[RED].bars : null;
