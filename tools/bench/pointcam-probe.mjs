@@ -83,6 +83,9 @@
 //               kOut     k <= 0.1 on some frame <= 36 frames (0.6 s) after the first frame pointPh is 4 (VOID if it never is)
 //               palm     on the hold frames where palm and P FIT, the palm in frame (NDC |x|, |y| <= 0.85, in front) on >= 50%; where they do
 //                        not fit, booked (VOID when no hold frame fits)
+//             RE-REGISTERED 2026-10-21 (the coordinator's ruling (a)-(b), before the build changed for it): the hold and kIn count from the
+//             raise (raiseF, the first pointPh 2), not t0; close is 0.5 x min(thetaPre, 70) (0.8 booked), see lensBars and the framing block.
+//             mouse's input lands 1.0 s after raiseF.
 //             RED: PC_ON=0 (__pointcam.knobs.on = 0 for the run; on a build with no __pointcam, the lens as it is) judges `close` only and
 //             must exit 5 (theta stays thetaPre), its premise shown: the printed thetaPre >= 60.
 //   mouse     (Task 11) the framing placement and calm, THREE sessions (a fresh load each). Pointer lock is EMULATED (headless Chrome has
@@ -132,7 +135,7 @@ const SHOTS = process.env.PC_SHOTS || '';
 if (SHOTS && !/^[\w.-]+$/.test(SHOTS)) { console.error(`PC_SHOTS: a plain file prefix (got ${JSON.stringify(SHOTS)})`); process.exit(2); }
 if (SHOTS && !['point', 'framing'].includes(MODE)) { console.error('PC_SHOTS: point / framing only'); process.exit(2); }
 const CALM_LINE = 'ALL WARDS LIT. IT STILLS. A RIFT OPENS BELOW.', HOSE = 760, SECS = 14, D_HIM = 25;
-const TURN_BAR = 0.5, TURN_EPS = 0.005, FRAME = 0.8, NDC_IN = 0.85, TH_LO = 61, TH_HI = 69, TH_PREM = 60;
+const BON_IN = 0.9, EASE_F = 12, CLOSE_K = 0.5, TURN_BAR = 0.5, TURN_EPS = 0.005, FRAME = 0.8, NDC_IN = 0.85, TH_LO = 61, TH_HI = 69, TH_PREM = 60;
 const PX = 0.0022, PATTERNS = { six: [48], four: [32], path: [8, -8, 8, -8, 8, -8, 8, -8, 16] };
 // (PC_SHOT_AT=name:s,...: other moments; at `back` since Michael's ruling the claw is up ~7.1-10.4 s, not through the line)
 const SHOT_AT = process.env.PC_SHOT_AT ? process.env.PC_SHOT_AT.split(',').map(q => { const [n, v] = q.split(':'); return [n, +v]; }) : [['turn', 2.0], ['up', 4.5], ['lower', 7.6]];
@@ -168,12 +171,12 @@ const PLACE = `(async () => {
 
 const INSTALL = `(async () => {
   const THREE = await import('three'), T = await import('/src/world/terrain.js'), S = await import('/src/world/fissureShape.js'), C = await import('/src/config.js');
-  const BC = await import('/src/entities/sleeper/bodyCols.js'), { camera, renderer } = await import('/src/core.js');
+  const BC = await import('/src/entities/sleeper/bodyCols.js'), { camera, renderer } = await import('/src/core.js'), DV = await import('/src/entities/diver.js');
   const L = window.lev; if (!L || L.kind !== 'brooder') return { err: 'no brooder' };
   const rp = C.riftPos(0), Pt = new THREE.Vector3(rp.x, S.lipMeanY(0, T.terrainH), rp.z);
   const c = L.claws.find(q => q.major); if (!c) return { err: 'no major claw' };
   const sh = new THREE.Vector3(), pa = new THREE.Vector3(), pb = new THREE.Vector3(), u = new THREE.Vector3(), w = new THREE.Vector3();
-  const qi = new THREE.Quaternion();
+  const qi = new THREE.Quaternion(), hbox = new THREE.Box3(), hc = new THREE.Vector3();
   const r3 = v => Math.round(v * 1000) / 1000, r2 = v => Math.round(v * 100) / 100, r6 = v => Math.round(v * 1e6) / 1e6, D = 180 / Math.PI;
   const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
   // the lens's view of p under quaternion q (camera.position, fov, aspect): the angle off its forward (deg), the NDC, in front
@@ -203,6 +206,7 @@ const INSTALL = `(async () => {
       const PC = window.__pointcam, st = PC ? PC.state() : null, q = camera.quaternion, qp = st ? st.qPre : q;
       const eq = q.x === qp.x && q.y === qp.y && q.z === qp.z && q.w === qp.w;
       const vPre = view(qp, Pt), vPost = view(q, Pt), vPalm = view(q, pa);
+      hbox.setFromObject(DV.diver.helmGroup, true); hbox.getCenter(hc); const vBon = view(q, hc);   // his bonnet (its own vertices), drawn
       const a = w.copy(pa).sub(cp).normalize().clone(), b = u.copy(Pt).sub(cp).normalize();
       const sep = Math.acos(Math.max(-1, Math.min(1, a.dot(b)))) * D, hf = 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * camera.aspect) * D;
       R.S.push({ ph: L.pointPh || 0, k: r3(L.pointK || 0), yaw: r3(L.yaw), dyaw: r6(dyaw), brg: r3(brg), err: r2(err * D), ang: r2(ang),
@@ -215,7 +219,8 @@ const INSTALL = `(async () => {
           net: st ? st.lookNetDeg : null, path: st ? st.lookPathDeg : null },
         thPre: r3(vPre.ang), th: r3(vPost.ang), ndcPre: [r3(vPre.x), r3(vPre.y), vPre.front ? 1 : 0], ndc: [r3(vPost.x), r3(vPost.y), vPost.front ? 1 : 0],
         pIn: inF(vPost) ? 1 : 0, palmNdc: [r3(vPalm.x), r3(vPalm.y), vPalm.front ? 1 : 0], palmIn: inF(vPalm) ? 1 : 0, sep: r2(sep), fits: sep <= ${FRAME} * hf ? 1 : 0,
-        q: [r6(q.x), r6(q.y), r6(q.z), r6(q.w)], qPre: [r6(qp.x), r6(qp.y), r6(qp.z), r6(qp.w)], eq: eq ? 1 : 0, pyaw: r6(window.player.yaw), inp: R.inp, cap: R.cap ? 1 : 0 });
+        q: [r6(q.x), r6(q.y), r6(q.z), r6(q.w)], qPre: [r6(qp.x), r6(qp.y), r6(qp.z), r6(qp.w)], eq: eq ? 1 : 0, pyaw: r6(window.player.yaw), inp: R.inp, cap: R.cap ? 1 : 0,
+        bon: [r3(vBon.x), r3(vBon.y), vBon.front ? 1 : 0], bonIn: vBon.front && Math.abs(vBon.x) <= ${BON_IN} && Math.abs(vBon.y) <= ${BON_IN} ? 1 : 0, amt: st && st.amt != null ? st.amt : null });
       R.inp = 0; R.cap = 0;
     },
     step(n, o) { window.__bench.step(n, () => R.row(), o); return R.S.length; },
@@ -369,12 +374,13 @@ async function session(o) {
     const N = SECS * 60;
     let at = 0;
     if (o.pattern) {
-      // t0: the first frame pointPh >= 1; the input's first frame t0 + 60 (1.0 s after the calm)
-      let t0 = -1;
-      while (t0 < 0 && at < 60) { await c.ev(`window.__pcR.step(1)`); at++; t0 = await c.ev(`window.__pcR.S.findIndex(r => r.ph >= 1)`); }
-      if (t0 < 0) throw new Error('the point never started (no pointPh >= 1 within 1 s of the calm)');
-      await c.ev(`window.__pcR.step(${t0 + 60 - at})`); at = t0 + 60;
-      ses.t0 = t0; ses.inF = at;
+      // (re-registered 2026-10-21, the coordinator's ruling (a): the cue is keyed to the raise) the input's first frame is raiseF + 60, 1.0 s
+      // after the first frame pointPh is 2 (was t0 + 60, 1.0 s after the calm)
+      let rF = -1;
+      while (rF < 0 && at < N - 120) { await c.ev(`window.__pcR.step(1)`); at++; rF = await c.ev(`window.__pcR.S.findIndex(r => r.ph >= 2)`); }
+      if (rF < 0) throw new Error('the raise never came (no pointPh 2 by 12 s)');
+      await c.ev(`window.__pcR.step(${rF + 60 - at})`); at = rF + 60;
+      ses.t0 = await c.ev(`window.__pcR.S.findIndex(r => r.ph >= 1)`); ses.raiseF = rF; ses.inF = at;
       for (const px of o.pattern) {
         if (ses.input === 'cdp') { ses.mx += px; await c.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: ses.mx, y: ses.my }); await c.ev(`(window.__pcR.inp = ${px}, 1)`); }
         else await c.ev(`(window.player.yaw -= ${px} * ${PX}, window.__pcR.inp = ${px}, 1)`);
@@ -450,6 +456,29 @@ async function consoleErrors() {
   if (cons.length) console.error('console errors (booked, not part of the bar): ' + JSON.stringify(cons));
 }
 
+// THE CUE'S RE-REGISTERED BARS (2026-10-21, the coordinator's ruling on Task 11's concerns 1-3, BEFORE the build changes for them):
+//   noEarly  k = 0 on every frame before the raise (raiseF, the first frame pointPh is 2): (a) the cue is keyed to the raise, not the calm
+//   easeIn   the cue's first frame k > 0 within 12 frames (0.2 s) of raiseF (judged at framing and back; at ahead booked, the cue may stay off)
+//   bonnet   his bonnet (the centre of diver.helmGroup's own vertices, Box3 precise) in frame, drawn NDC |x|, |y| <= 0.9 and in front, on
+//            every engaged frame (k > 0): (b)
+//   aheadLens (PC_AT=ahead only) no engaged frame with BOTH the palm and his bonnet out of frame (NDC 0.9), and the palm in frame on every
+//            frame with k >= 0.5 (past the ease): (c), the cue frames her claw within the caps or stays off; never pinned on her shell
+function lensBars(S, place) {
+  const raiseF = S.findIndex(r => r.ph >= 2), known = S.length && S[0].cam.k != null;
+  const early = raiseF >= 0 ? S.slice(0, raiseF).filter(r => r.cam.k > 0).length : null;
+  const f1 = raiseF >= 0 ? S.findIndex((r, i) => i >= raiseF && r.cam.k > 0) : -1;
+  const eng = S.map((r, i) => r.cam.k > 0 ? i : -1).filter(i => i >= 0), bonOut = eng.filter(i => !S[i].bonIn);
+  const pin9 = r => r.palmNdc[2] === 1 && Math.abs(r.palmNdc[0]) <= 0.9 && Math.abs(r.palmNdc[1]) <= 0.9;
+  const both = eng.filter(i => !pin9(S[i]) && !S[i].bonIn), past = eng.filter(i => S[i].cam.k >= 0.5), pastOut = past.filter(i => !pin9(S[i]));
+  const bonMax = eng.length ? +Math.max(...eng.map(i => Math.max(Math.abs(S[i].bon[0]), Math.abs(S[i].bon[1])))).toFixed(3) : null;
+  const ck = [
+    { name: 'noEarly', val: { raiseS: raiseF >= 0 ? +(raiseF / 60).toFixed(3) : null, early }, bar: 'k = 0 on every frame before the raise (pointPh 2)', ok: early === 0, vacuous: raiseF < 0 || !known, judged: true },
+    { name: 'easeIn', val: { dF: f1 >= 0 ? f1 - raiseF : null }, bar: 'the first k > 0 within 12 frames (0.2 s) of the raise', ok: f1 >= 0 && f1 - raiseF <= 12, vacuous: raiseF < 0 || !known, judged: place !== 'ahead' },
+    { name: 'bonnet', val: { engaged: eng.length, out: bonOut.length, ndcMax: bonMax, firstOutS: bonOut.length ? +(bonOut[0] / 60).toFixed(3) : null }, bar: 'his bonnet in frame (NDC <= 0.9, in front) on every engaged frame', ok: bonOut.length === 0, vacuous: !known || (!eng.length && place !== 'ahead'), judged: true }];
+  if (place === 'ahead') ck.push({ name: 'aheadLens', val: { engaged: eng.length, bothOut: both.length, pastK05: past.length, palmOutPast: pastOut.length }, bar: 'no engaged frame with palm and bonnet both out; the palm in frame on every k >= 0.5 frame (or the cue off)', ok: both.length === 0 && pastOut.length === 0, vacuous: !known, judged: true });
+  return ck;
+}
+
 // ============================================ point ============================================
 if (MODE === 'point') {
   const ses = await session({ on: ON });
@@ -493,7 +522,8 @@ if (MODE === 'point') {
       ok: contiguous && span >= 2.5 && span <= 3.5 && (AT === 'ahead' ? lineF >= up[0] && lineF <= up[up.length - 1] : raiseF >= 0 && faceOpenF >= 0 && raiseF - faceOpenF >= 0 && raiseF - faceOpenF <= 30),
       vacuous: AT === 'ahead' ? lineF < 0 : false, judged: true },
     { name: 'tears', val: { slamN, tornUp }, bar: '0 tears over the 14 s', ok: slamN === 0 && tornUp <= 0, vacuous: !S.length, judged: true },
-    { name: 'walk', val: { endF, walkF, dF: endF >= 0 && walkF >= 0 ? walkF - endF : null, walkDuring }, bar: 'walkTo / homeTurn null while pointPh > 0; set within 72 frames of pointPh leaving 4', ok: endF >= 0 && walkF >= 0 && walkF - endF <= 72 && walkDuring === 0, vacuous: endF < 0, judged: true }];
+    { name: 'walk', val: { endF, walkF, dF: endF >= 0 && walkF >= 0 ? walkF - endF : null, walkDuring }, bar: 'walkTo / homeTurn null while pointPh > 0; set within 72 frames of pointPh leaving 4', ok: endF >= 0 && walkF >= 0 && walkF - endF <= 72 && walkDuring === 0, vacuous: endF < 0, judged: true },
+    ...lensBars(S, AT)];
   if (RED === 'noface') console.log(`  info faceMax path: the raise at ${record.book.faceMaxPath.raiseS} s against faceMax ${faceMax} s (${raiseF >= 0 && faceMax != null && Math.abs(raiseF - faceMax * 60) <= 2 ? 'at faceMax' : 'NOT at faceMax'})`);
   const { failed, vac } = verdict(ck, RED, RED ? REDS[MODE][RED].bars : null);
   conclude(failed, vac);
@@ -510,28 +540,35 @@ if (MODE === 'framing') {
   console.log(`thetaPre at the calm (frame ${t0}): ${thPre0} deg (premise >= ${TH_PREM}); placement tries ${JSON.stringify(ses.tries)}`);
   record.premise = { t0, thetaPre: thPre0, ok: thPre0 >= TH_PREM };
   if (!(thPre0 >= TH_PREM)) { console.error(`UNMEASURED: thetaPre ${thPre0} deg < ${TH_PREM}: the closing bar would be vacuous`); finish(2, 'premise'); }
-  const hold = []; for (let i = t0 + 96; i <= lastHold; i++) if (S[i] && S[i].ph >= 1 && S[i].ph <= 3) hold.push(i);
-  const closeOk = hold.filter(i => S[i].thPre - S[i].th >= 0.8 * Math.min(S[i].thPre, 70));
+  // (re-registered 2026-10-21, ruling (a)) the hold runs from raiseF + 96 (1.6 s after the raise, where k must be >= 0.9) to the last frame
+  // before pointPh 4; kIn counts from raiseF. (b) re-registers CLOSE: with his bonnet held at NDC <= 0.9 the turn is bounded at ~42-44 deg
+  // (atan(0.9 x tan(hfov / 2))), so 0.8 x min(thetaPre, 70) = 49-56 deg at the placement's 61-69 is unreachable with Sal in frame; the bar
+  // is now 0.5 x min(thetaPre, 70) (with inFrame: the opening in frame on every hold frame with thetaPre <= 70); the 0.8 count is booked
+  const raiseF = S.findIndex(r => r.ph >= 2);
+  const hold = []; if (raiseF >= 0) for (let i = raiseF + 96; i <= lastHold; i++) if (S[i] && S[i].ph >= 2 && S[i].ph <= 3) hold.push(i);
+  const closeOk = hold.filter(i => S[i].thPre - S[i].th >= CLOSE_K * Math.min(S[i].thPre, 70));
+  const close80 = hold.filter(i => S[i].thPre - S[i].th >= 0.8 * Math.min(S[i].thPre, 70)).length;
   const in70 = hold.filter(i => S[i].thPre <= 70), in70Bad = in70.filter(i => !S[i].pIn);
-  const kInF = S.findIndex(r => r.cam.k != null && r.cam.k >= 0.9);
+  const kInF = raiseF >= 0 ? S.findIndex((r, i) => i >= raiseF && r.cam.k != null && r.cam.k >= 0.9) : -1;
   const kOutF = ph4F >= 0 ? S.findIndex((r, i) => i >= ph4F && r.cam.k != null && r.cam.k <= 0.1) : -1;
   const fit = hold.filter(i => S[i].fits), fitIn = fit.filter(i => S[i].palmIn), nofit = hold.filter(i => !S[i].fits);
   const stat = (a, f) => a.length ? [+Math.min(...a.map(f)).toFixed(2), +Math.max(...a.map(f)).toFixed(2)] : null;
   record.book = { t0, ph4F, lastHold, holdN: hold.length, holdS: hold.length ? [+(hold[0] / 60).toFixed(3), +(hold[hold.length - 1] / 60).toFixed(3)] : null,
     thPre: stat(hold, i => S[i].thPre), th: stat(hold, i => S[i].th), closeN: closeOk.length, closeFrac: hold.length ? +(closeOk.length / hold.length).toFixed(4) : null,
     in70N: in70.length, in70Bad: in70Bad.length, ndc: stat(hold, i => Math.max(Math.abs(S[i].ndc[0]), Math.abs(S[i].ndc[1]))),
-    kInF, kInS: kInF >= 0 ? +((kInF - t0) / 60).toFixed(3) : null, kOutF, kOutS: kOutF >= 0 ? +((kOutF - ph4F) / 60).toFixed(3) : null,
+    raiseF, close80, kInF, kInS: kInF >= 0 ? +((kInF - raiseF) / 60).toFixed(3) : null, kOutF, kOutS: kOutF >= 0 ? +((kOutF - ph4F) / 60).toFixed(3) : null,
     fitN: fit.length, fitInN: fitIn.length, fitFrac: fit.length ? +(fitIn.length / fit.length).toFixed(4) : null, nofitN: nofit.length, sep: stat(hold, i => S[i].sep),
     yawDeg: stat(hold, i => S[i].cam.yaw || 0), pitchDeg: stat(hold, i => S[i].cam.pitch || 0), why: [...new Set(S.map(r => r.cam.why))],
     kMax: S[0].cam.k != null ? Math.max(...S.map(r => r.cam.k)) : null, lensBlk: S.filter(r => r.lensBlk).length, lensBlkPoint: S.filter(r => r.lensBlk && r.ph > 0).length,
     camKnobs: ses.knobs, placed: ses.place, tries: ses.tries, pre: ses.pre };
   console.log(`FRAMING ${JSON.stringify(record.book)}`);
   const ck = [
-    { name: 'close', val: { frac: record.book.closeFrac, n: closeOk.length, of: hold.length, thPre: record.book.thPre, th: record.book.th }, bar: 'thetaPre - theta >= 0.8 x min(thetaPre, 70) on >= 90% of the hold', ok: hold.length > 0 && closeOk.length / hold.length >= 0.9, vacuous: !hold.length, judged: true },
+    { name: 'close', val: { frac: record.book.closeFrac, n: closeOk.length, of: hold.length, close80, thPre: record.book.thPre, th: record.book.th }, bar: 'thetaPre - theta >= 0.5 x min(thetaPre, 70) on >= 90% of the hold (re-registered from 0.8 for the bonnet guard)', ok: hold.length > 0 && closeOk.length / hold.length >= 0.9, vacuous: !hold.length, judged: true },
     { name: 'inFrame', val: { n: in70.length, bad: in70Bad.length, ndcMax: record.book.ndc }, bar: 'P in frame (|x|, |y| <= 0.85, in front) on every hold frame with thetaPre <= 70', ok: in70.length > 0 && in70Bad.length === 0, vacuous: !in70.length, judged: true },
-    { name: 'kIn', val: { kInS: record.book.kInS }, bar: 'k >= 0.9 by 1.6 s after t0', ok: kInF >= 0 && kInF - t0 <= 96, vacuous: S[0].cam.k == null, judged: true },
+    { name: 'kIn', val: { kInS: record.book.kInS }, bar: 'k >= 0.9 by 1.6 s after the raise', ok: kInF >= 0 && kInF - raiseF <= 96, vacuous: S[0].cam.k == null || raiseF < 0, judged: true },
     { name: 'kOut', val: { kOutS: record.book.kOutS, ph4S: ph4F >= 0 ? +((ph4F - t0) / 60).toFixed(3) : null }, bar: 'k <= 0.1 by 0.6 s after pointPh reaches 4', ok: kOutF >= 0 && kOutF - ph4F <= 36, vacuous: ph4F < 0 || S[0].cam.k == null, judged: true },
-    { name: 'palm', val: { frac: record.book.fitFrac, n: fitIn.length, of: fit.length, nofit: nofit.length }, bar: 'the palm in frame on >= 50% of the hold frames where palm and P fit (<= 0.8 x hfov)', ok: fit.length > 0 && fitIn.length / fit.length >= 0.5, vacuous: !fit.length, judged: true }];
+    { name: 'palm', val: { frac: record.book.fitFrac, n: fitIn.length, of: fit.length, nofit: nofit.length }, bar: 'the palm in frame on >= 50% of the hold frames where palm and P fit (<= 0.8 x hfov)', ok: fit.length > 0 && fitIn.length / fit.length >= 0.5, vacuous: !fit.length, judged: true },
+    ...lensBars(S, 'framing')];
   const { failed, vac } = verdict(ck, ONRED ? 'PC_ON=0' : '', ['close']);
   conclude(failed, vac);
 }
