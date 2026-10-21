@@ -361,6 +361,10 @@ async function session(o) {
         if (th >= TH_LO && th <= TH_HI && fc.faced) break;
         alpha = Math.max(15, Math.min(150, alpha + (th - 65)));   // (theta falls as alpha grows: he goes round her, the opening comes in front)
       }
+      // (2026-10-21) the placement's teleport sets player.yaw, and POINTCAM's leak on the recent look (lookTau 0.3 s) read it as a sweep
+      // when face() took 1 frame: the mouse run 'six' opened OFF (net 0, path 0). He stands >= 90 frames (1.5 s) after it before the calm
+      ses.settleF = Math.max(0, 90 - fc.n);
+      if (ses.settleF) await c.ev(`window.__bench.step(${ses.settleF})`);
     }
     // (Task 10 review M4) a face() that ran out of frames is no placement: UNMEASURED
     if (!fc.faced) throw new Error(`UNFACED: she did not come within 10 deg of facing him in ${fc.n} frames`);
