@@ -2695,6 +2695,10 @@ export function updateBrooder(L, dt, t, player) {
     ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
+      // (velkath-buried-rock, final review item 1) calmed before she has stood (the lab's calm early in the rise; in play a ward is offered
+      // from standE 0.6, bury ~0.03 by then): the rise's easing and the stood test both want !L.calmed, so bury, the dune and the crack would
+      // freeze part-way. She is out of the sand at once: the stood transition's own writes (hasStood, crackK 0), bury 0, the dune drawn down
+      if (L.buried && L.cracked && !L.hasStood) { L.hasStood = true; L.crackK = 0; L.bury = 0; L.moundK = 0; }
       if (L.memWard >= 0) wardsRecall(L, haloK);
       // she goes home: back to her bed on the lip, to settle over her clutch
       if (L.buried && BURY.point) {
