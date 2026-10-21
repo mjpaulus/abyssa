@@ -681,7 +681,8 @@ export function crestY(MD, x, z) {
 // (two octaves, ~2.5 u and ~0.7 u, scaled by drift) and THRESHOLDED at 1 - uBury * cover, so it reads as drifts with edges, not a
 // wash; a thin dust veil (dust) on her up faces between them. Under it she is matte (roughness 0.95) and her relief is flattened by
 // flat. ONE value takes it off: uBury (L.bury): as it falls the threshold climbs, so the sides and thin drifts go first and the
-// hollows last, and at 0 none is left (the rise, Tasks 7a/7b/12, needs no new path). Off home L.bury is 0: the branch is not taken.
+// hollows last; the drifts also fade out over uBury 0.25 -> 0 (the field reaches ~1.4 in a hollow, over the threshold's 1.0, so
+// without that fade a patch would hold to the gate and pop off), and at 0 none is left (the rise, Tasks 7a/7b/12, needs no new path). Off home L.bury is 0: the branch is not taken.
 // Look-dev (stills t5c-dev/, his light weather 0.5): cover 0.45 / drift 0.6 / dust 0.15 / flat 0.4 laid a smooth sand plate over
 // her tops (her shell gone from above); cover 0.15 / drift 1 / dust 0 / flat 0.25 barely showed (Task 5b's bare shell); shipped
 // cover 0.3 / drift 1 / dust 0.1 / flat 0.3: drifts on her tops and in her hollows, her plates and ridges showing between.
@@ -735,7 +736,7 @@ if (uBury > 0.001) {
     float crN0 = crVN(vCrW * vec3(0.4, 0.55, 0.4)), crN1 = crVN(vCrW * 1.4 + 17.0);
     float crS = crUp * 0.6 + crPool * 0.4 + (crN0 * 0.65 + crN1 * 0.35 - 0.5) * 3.0 * uSandK.y * 0.5;
     float crT = 1.0 - uBury * uSandK.x;
-    float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 + uBury * uSandK.z * crUp;
+    float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, uBury * 4.0) + uBury * uSandK.z * crUp;
     crSand = max(crSand, min(crCov, 0.92));
     roughnessFactor = mix(roughnessFactor, 0.95, crSand);
     normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
