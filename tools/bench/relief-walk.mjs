@@ -47,7 +47,15 @@
 //   upland  20-35 deg, outside the footprint (q <= 0.02), r <= 200: the uplands' own
 //   steep   35-45 deg, on a riser (Review Focus 4's riser; reported, not gated, for the boots; its lens CLEARANCE is gated)
 //   bed     the raft column -> her bed: the cheapest walkable route (Dijkstra over a 1 u grid, steps <= 50 deg, steep steps dear),
-//           string-pulled to a few legs, ending 26 u from her centre (R x 1.7: short of her body; she must still be dormant after)
+//           string-pulled to a few legs, ending BED_STOP 37 u from her centre (velkath-buried-rock Task 13 fix round 1, the coordinator's
+//           ruling A; was 26 = R x 1.7, short of her body, derived from the shipped ridge). Re-derived from the requirement behind boots' and
+//           lens's provider bar (their walks are the RELIEF's ground: no sleeper's extra floor under him or the lens; the dune is mound's):
+//           the dune's max reach from her centre, 25.1 u (extraFloorAt > -1e9 scanned on 180 bearings, 0.1 u steps, Task 13), + the boom's
+//           longest, 9.5 u (the lens table's boom from-to), so the lens trailing him toward her at a walk's start stays off it, + 2.4 u: 1.4 u
+//           (the route ends on the first 1 u grid cell inside the stop, up to a cell diagonal short of it) and 1.0 u clear of the provider's
+//           edge. One FIXED constant, the same on branch and base (a base has no dune: the stop is not read from the build), so the lens's
+//           RW_BASE like-for-like stays point-identical. RED: Task 13's boots run at 26 u, 344 provider frames, all the lens at the rev
+//           walks' start, 16.9-20.5 u from her centre (reviews/buried/t13-rw-boots.txt, t13/rw-boots-diag.txt). She must still be dormant after
 // The branch's candidates come from the SLICED REAL CODE in node (tools/relief/terrain.gen.mjs, re-sliced by gates.mjs first; gates.mjs --json
 // gives her bed and the hose's binding point). Main has no replica and no hollow: the SAME ranking runs in the page on main's own terrainH,
 // over the same disc, with no category (ruling 1: main's steepest floor cells in the 20-35 deg band): its A is the steepest line, its B the
@@ -152,7 +160,7 @@ const CLEAR_BAR = 0.3;                                          // lens: u over 
 const STALL_WIN = 2.0, STALL_MIN = 0.5, STALL_DEG = 52;         // progress
 const HOSE_START = 380, GIVE = 5, SPARE_BAR = 10, ARRIVE_R = 3;  // hose (tether.js GIVE 5; spec §7: >= 10 u spare under the give)
 const UP_PITCH = +(process.env.RW_UP_PITCH || 0.9);   // lens: the look-up walks and stands (looking up 52 deg, inside the mouse's +-1.45 rad (player.js), swings the boom DOWN behind him, toward the hill: the lens's worst case, and what the floor clamp is for)
-const SEG = 40, RANK_R = 235, SEP = 45, BED_STOP = 26;   // SEG: a line's length (rankLines takes its half)
+const SEG = 40, RANK_R = 235, SEP = 45, BED_STOP = 37;   // SEG: a line's length (rankLines takes its half); BED_STOP: Task 13 fix round 1, the header's bed line (was 26)
 const REPS = +(process.env.RW_REPS || (MODE === 'lens' ? 3 : 2));
 const fail = [], tags = new Set();   // tags: which bar each failure belongs to (a RED must fail ITS bar)
 const bad = (tag, msg) => { tags.add(tag); fail.push(msg); };
