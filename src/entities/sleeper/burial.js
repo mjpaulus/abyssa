@@ -78,8 +78,9 @@ Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, sho
 //   digT s (spec 15-20); pause 1 (0: burial-probe's RED nopause); haze s between haze puffs
 //   job ms: THE REFIT AS A JOB OVER FRAMES (booked item 6). The re-bed measured 165 ms in one frame at home on this branch (fitMound 114 ms,
 //        76 of them the footing's envelope; prepGrowth 4 ms; headless M5 Max, the page's CPU calibrated against node), so the dig-in's fit
-//        runs as generators (fitMoundJ, prepGrowthJ) that yield whenever a frame's slice of `job` ms is spent; the pose is held for it (brooder.js
-//        digStep). burial-probe digin's pre-registered bar: the window's worst frame <= 4.0 ms over its median. The base update has a beat of
+//        runs as generators (fitMoundJ, then growRockJ (final review item 6: the rock's growth laid again for the re-fitted strip, ~12 ms
+//        whole, sliced a spot at a time), then prepGrowthJ) that yield whenever a frame's slice of `job` ms is spent; the pose is held for it
+//        (brooder.js digStep; a throw inside a slice abandons the job, final review item 7). burial-probe digin's pre-registered bar: the window's worst frame <= 4.0 ms over its median. The base update has a beat of
 //        +2.5-2.9 ms every ~23 frames, so the bar sees a slice landing on it: slices of 2.5 ms gave a worst frame 5.2 ms over the median (FAIL), 1.0 ms
 //        3.8-3.9, 0.8 ms (with the first two frames split and the limbs captured, below) 3.5-3.7. A scavenge inside a slice (terrainH boxes ~470 B a
 //        call, ~80 MB a fit: terrain.js, pre-existing) can stretch one to ~2 ms. The job is ~187 frames (~3.1 s) before bury rises. bedDown runs the
@@ -1340,7 +1341,14 @@ export function growCover(L, b) {
 // under it (the dune's rings draw at bury x their fitted height)
 export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
-export function growRock(L, MD) {
+export function growRock(L, MD) { runAll(growRockJ(L, MD)); }
+// (final review item 6) as a generator, for the dig-in's job (digStep: after the fit, before prepGrowth, as bedDown orders them): the dig-in
+// re-fits her strip where she lies down and the rock's growth is laid again for it, the same seeds (the same set, re-laid). Its yields sit
+// between the coarse steps (a candidate row, a frond's try, a part's check); what it draws is written only at its end (the fronds into the
+// weed's matrices, the coral's geometry swapped), so no frame draws a half-laid rock. bedDown runs it to its end in one call (runAll), the
+// same arithmetic in the same order as the one-step version
+const _gA = { a: new Float32Array(0) };   // the fronds' matrices as laid, written into the weed at the end (grown at a lay: an event)
+export function* growRockJ(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
   L.growN = { weed: 0, fan: 0, crust: 0, lump: 0, tube: 0 };
   if (!weed || !reef || !top || !MD) return;
@@ -1353,22 +1361,25 @@ export function growRock(L, MD) {
   const offSeam = (x, y, z) => !H || (x - H.x) ** 2 + (y - H.y) ** 2 + (z - H.z) ** 2 > clr2;
   // the candidates: her top on a 0.03 grid (0.46 u), on the strip and over the floor (the strip has no dune)
   const C = [];
-  for (let x = -1.3; x <= 1.3; x += 0.03) for (let z = -1.0; z <= 1.15; z += 0.03) {
+  for (let x = -1.3; x <= 1.3; x += 0.03) { if (dueNow()) yield; for (let z = -1.0; z <= 1.15; z += 0.03) {
     const h = top(x, z); if (h == null) continue;
     _gs.set(x, h, z).applyMatrix4(mw);
     if (!inStrip(MD, _gs.x, _gs.z) || _gs.y < terrainH(_gs.x, _gs.z, L.idx) + 0.3) continue;
     const e = 0.02, hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
     C.push({ x, z, h, wy: _gs.y, up: _gs.y - L.meanG, nx: -(hx - h) / e, nz: -(hz - h) / e });
-  }
+  } }
   if (!C.length) return;
   const pick = f => { const s = C.filter(f); return s.length ? s[Math.floor(rnd() * s.length)] : null; };
   // THE WEED: clumps at the rock's foot and flanks
-  const WP = weed.geometry.attributes.position, A = weed.instanceMatrix.array, want = Math.min(GROW.weed, cap - base);
+  const WP = weed.geometry.attributes.position, want = Math.min(GROW.weed, cap - base);
+  if (_gA.a.length < cap * 16) _gA.a = new Float32Array(cap * 16);
+  const A = _gA.a;
   let n = base;
   for (let t = 0; t < GROW.tufts && n < base + want; t++) {
     const c = pick(q => q.up > 1.0 && q.up < 3.5); if (!c) break;
     const per = Math.ceil(want / GROW.tufts);
     for (let k = 0, tries = 0; k < per && n < base + want && tries < per * 6; tries++) {
+      if (dueNow()) yield;
       const x = c.x + (rnd() - 0.5) * 0.09, z = c.z + (rnd() - 0.5) * 0.09, h = top(x, z); if (h == null) continue;
       const e = 0.02, hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
       _gn.set(-(hx - h) / e, 1, -(hz - h) / e).normalize().lerp(_gu, 0.45).normalize();
@@ -1382,7 +1393,7 @@ export function growRock(L, MD) {
       _gm2.toArray(A, n * 16); n++; k++;
     }
   }
-  weed.count = n; weed.instanceMatrix.needsUpdate = true; weed.computeBoundingSphere();
+  const nW = n;
   L.growN.weed = n - base;
   // THE CORAL: spots by kind, then every part kept only if all of it lies on the strip and clear of the seam
   const spots = [];
@@ -1391,15 +1402,24 @@ export function growRock(L, MD) {
   put('crust', GROW.crust, q => q.nx * q.nx + q.nz * q.nz < 0.6, () => 0.04 + 0.05 * rnd());
   put('lump', GROW.lump, () => true, () => 0.018 + 0.016 * rnd());
   put('tube', GROW.tube, q => q.up > 2.0, () => 0.010 + 0.006 * rnd());
-  G.setShellHeight(top);
-  let parts;
-  try { parts = G.rockGrowthParts(0xC0BA1 + L.idx, spots); } finally { G.setShellHeight(null); }
+  // the parts a spot at a time (brooderGeo rockGrowthPart, rockGrowthParts' own stream: the same parts), the shell's height set for each one
+  // only (a job left mid-way must never leave brooderGeo reading her top: the next build would mould onto it)
+  const prnd = seededRand(0xC0BA1 + L.idx), parts = [];
+  for (let i = 0; i < spots.length; i++) {
+    if (dueNow()) yield;
+    G.setShellHeight(top);
+    try { parts.push(G.rockGrowthPart(prnd, spots[i])); } finally { G.setShellHeight(null); }
+  }
   const keep = [];
   for (let i = 0; i < parts.length; i++) {
+    if (dueNow()) yield;
     const P = parts[i].attributes.position; let ok = true;
     for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z); }
     if (ok) { keep.push(parts[i]); L.growN[spots[i][0]]++; } else parts[i].dispose();
   }
+  // drawn from here, in one step: the fronds (over the full growth the first step put back), then the coral
+  weed.instanceMatrix.array.set(A.subarray(base * 16, nW * 16), base * 16);
+  weed.count = nW; weed.instanceMatrix.needsUpdate = true; weed.computeBoundingSphere();
   let co = L.parts.coral;
   if (!co) {
     co = L.parts.coral = new THREE.Mesh(new THREE.BufferGeometry(), reef.material);   // (the reef's material OBJECT: its program)

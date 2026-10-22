@@ -37,7 +37,7 @@ import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './pl
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
-  fitMoundJ, prepGrowthJ, jobSlice, growCover } from './burial.js';
+  fitMoundJ, prepGrowthJ, growRockJ, jobSlice, growCover } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
@@ -770,7 +770,7 @@ function bedDown(L, noHarpoon = false) {
 
 // (velkath-buried-rock Task 12) a live L reused at a new bed (bedDown, the lab's place): no point under way, no calm verb pending (Task 10 review,
 // for Task 12: the point's phases and the claw's reach are read every frame), no dig-in or its job
-function digReset(L) { L.pointPh = 0; L.pointK = 0; L.calmNext = false; L.digging = false; L.dugIn = false; L.digJob = null; L.digOff = 0; }
+function digReset(L) { L.pointPh = 0; L.pointK = 0; L.calmNext = false; L.digging = false; L.dugIn = false; L.digJob = null; L.digOff = 0; L.digFail = false; }
 // THE DIG-IN'S START (burial.js BURY.digT): the sink re-measured and the dune re-fitted where she actually lay down. One event, but run as a JOB
 // over frames (booked item 6: the re-bed is ~165 ms in one frame here, fitMound 114 of it): digStep does it in BURY.job ms slices at the end of
 // her update, the dig-in waits for it (bury stays 0, the dune hidden, so nothing reads the mound mid-fit). She lies still for it (no velocity,
@@ -788,29 +788,44 @@ function beginDig(L) {
 // Frame 1: the sink off her live pose (bury 0: this frame's poseAll, the brief's pose). Frame 2: her pose at bury 1 (poseAll, the brief's), its
 // body matrix kept, the fit's prologue there (burial.js fitMoundJ: her body's matrix and her limbs are read in the fit pose), her pose at bury
 // 0 again. Later frames: her body's matrixWorld held at the kept bury-1 matrix for the slice (every later read is her shell, reef and weed
-// through it: rigid children of her body), then put back from her live position (the frame is drawn as posed): the fit, then prepGrowth (the
-// growth's strip index for where she lies now), then the slabs' bed (their grid is cached: booked item 3). Returns its ms
+// through it: rigid children of her body), then put back from her live position (the frame is drawn as posed): the fit, then (final review
+// item 6) the rock's growth laid again for the strip where she lies now (growRockJ: bedDown's order, the fit, the growth, prepGrowth), then
+// prepGrowth (the growth's strip index for where she lies now), then the slabs' bed (their grid is cached: booked item 3). Returns its ms.
+// (final review item 7) A THROW INSIDE A SLICE abandons the job: every phase puts back what it holds in a finally (bury, her body's pose and
+// matrices, noPub), and the catch drops the job (digJob null, not digging, L.digFail: never begun again on this bed) with ONE console.warn.
+// She stays as she is, awake and risen, the dune hidden; nothing claims the dig-in done (a closed generator would report done on the next
+// slice and the job would have "finished" on a half-written fit)
 function digStep(L) {
-  const J = L.digJob, t0 = performance.now();
-  if (J.ph === 0) { L.buryD = fitSink(L, L.crest); J.ph = 1; }
-  else if (J.ph === 1) {
-    // (fix round 1, M2) neither pose publishes her colliders: each would have republished them (publishCols), leaving bodyCols' PREV at the
-    // bury-1 pose, so the next resolve read every capsule rising ~1.4 u in a frame (LIMB_VMAX / SHELL_VMAX zeroed it: benign, but wrong). This
-    // frame's colliders stay the ones its own poseAll published, at bury 0
-    L.noPub = true;
-    try {
-      L.bury = 1; poseAll(L, 0, null); J.mw1.copy(L.body.matrixWorld);
+  const J = L.digJob, t0 = performance.now(), b0 = L.bury;   // (b0: 0, beginDig's)
+  let posed = false, held = false;
+  try {
+    if (J.ph === 0) { L.buryD = fitSink(L, L.crest); J.ph = 1; }
+    else if (J.ph === 1) {
+      // (fix round 1, M2) neither pose publishes her colliders: each would have republished them (publishCols), leaving bodyCols' PREV at the
+      // bury-1 pose, so the next resolve read every capsule rising ~1.4 u in a frame (LIMB_VMAX / SHELL_VMAX zeroed it: benign, but wrong). This
+      // frame's colliders stay the ones its own poseAll published, at bury 0
+      L.noPub = true;
+      L.bury = 1; posed = true; poseAll(L, 0, null); J.mw1.copy(L.body.matrixWorld);
       J.gen = fitMoundJ(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
       if (jobSlice(J.gen, 0)) { J.ph = 3; J.gen = null; } else J.ph = 2;
-      L.bury = 0; poseAll(L, 0, null);
-    } finally { L.noPub = false; }
-  } else {
-    L.body.matrixWorld.copy(J.mw1);
-    for (let q = 0, K = L.body.children; q < K.length; q++) K[q].updateMatrixWorld(true);
-    if (J.ph === 2) { if (jobSlice(J.gen, BURY.job)) { J.ph = 3; J.gen = null; } }
-    else if (J.ph === 3) { if (!J.gen) J.gen = prepGrowthJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 4; J.gen = null; } }
-    else { slabsBed(L); L.digJob = null; }
-    L.body.updateMatrixWorld(true);
+      L.bury = b0; poseAll(L, 0, null); posed = false;
+    } else {
+      held = true;
+      L.body.matrixWorld.copy(J.mw1);
+      for (let q = 0, K = L.body.children; q < K.length; q++) K[q].updateMatrixWorld(true);
+      if (J.ph === 2) { if (jobSlice(J.gen, BURY.job)) { J.ph = 3; J.gen = null; } }
+      else if (J.ph === 3) { if (!J.gen) J.gen = growRockJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 4; J.gen = null; } }
+      else if (J.ph === 4) { if (!J.gen) J.gen = prepGrowthJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 5; J.gen = null; } }
+      else { slabsBed(L); L.digJob = null; }
+    }
+  } catch (e) {
+    L.digJob = null; L.digging = false; L.digFail = true;
+    console.warn(`[velkath dig-in] the refit job threw in phase ${J.ph} and is abandoned (she stays risen, the dune hidden): ${e && e.message || e}`);
+  } finally {
+    L.bury = b0;
+    if (posed) poseAll(L, 0, null);          // (a throw between the two poses: her bury-0 pose back, still unpublished)
+    if (held) L.body.updateMatrixWorld(true);  // (her body's and its children's matrices from her live pose)
+    L.noPub = false;
   }
   return performance.now() - t0;
 }
@@ -2438,7 +2453,7 @@ export function updateBrooder(L, dt, t, player) {
   if (L.buried && L.mound && L.calmed && !L.dormant && !L.dugIn && !L.pointPh && !L.homeTurn && !L.walkTo && L.standTarget === 0 && L.stand <= 0.001 && L.heave.x < 0.02) {
     const near = BURY.pause > 0 && onHerDune(L, player, SETTLE.release);
     L.digOff = near ? 0 : (L.digOff || 0) + dt;
-    if (!L.digging && L.digOff > SETTLE.hold) { L.digging = true; beginDig(L); }
+    if (!L.digging && !L.digFail && L.digOff > SETTLE.hold) { L.digging = true; beginDig(L); }   // (digFail: the job threw on this bed, digStep)
     if (L.digging && !L.digJob && (!near && L.digOff > SETTLE.hold || BURY.pause <= 0)) {
       L.bury = Math.min(1, L.bury + dt / BURY.digT); L.moundK = L.bury;
       if ((L.hazeT = (L.hazeT || 0) - dt) <= 0) { L.hazeT = BURY.haze; const j = (Math.random() * L.mound.COLS) | 0, o = (5 * L.mound.COLS + j) * 3; spawnWake(L.mound.P[o], L.mound.P[o + 1], L.mound.P[o + 2], 0.4, L.idx); }
