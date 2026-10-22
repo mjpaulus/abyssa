@@ -164,6 +164,8 @@ function velkathCrack(E, vg, t) {
   E.log('velkathCrack');
 }
 function velkathWake(E, L) {
+  // (velkath-buried-rock) L.buried is a BUILD flag (home's row carries bury), not "still in the sand": every rise at home is a fresh build,
+  // buried at her bed (a dig-in's outcrop is woken again only after the zone rebuild), so a wake there always cracks the crust
   const p = L.pos, t = E.now() + 0.01, vg = E.emit('cre', p.x, p.y + 2, p.z, L.buried ? 8.5 : 7, 3, null); if (!vg) return;
   // the crust cracks at the wake, together with the quake and the shove; the pour hisses 0.6 s after it
   if (L.buried) velkathCrack(E, vg, t);

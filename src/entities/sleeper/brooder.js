@@ -37,7 +37,7 @@ import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './pl
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
-  fitMoundJ, prepGrowthJ, growRockJ, jobSlice, growCover } from './burial.js';
+  fitMoundJ, prepGrowthJ, growRockJ, jobSlice, growCover, limbRelease } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
@@ -600,7 +600,7 @@ export function makeBrooder(idx, cfg) {
   // (velkath-buried-rock) BURIED (site.js sleeper row `bury`: home only). Absent, L.bury and L.buryD stay 0 and every term they
   // enter is the shipped one bit for bit (x * (1 - 0), y - 0 * 0).
   L.buried = !!(c.bury && BURY.on);
-  L.crest = L.buried ? (c.bury.crest ?? BURY.crest) : 0;
+  L.crest = L.buried ? c.bury.crest : 0;   // (the row's alone: burial.js BURY has no crest of its own, final review item 9)
   L.bury = 0; L.buryD = 0; L.breathU = 0; L.breathY = 0;
   L.topAt = (x, z) => { const h = G.shellAt(x, z, _sa).h; return Math.hypot(x, z) <= G.rimR(Math.atan2(z, x)) ? h : null; };   // procedural; installSculpt swaps in the bake's
 
@@ -724,7 +724,7 @@ export function makeBrooder(idx, cfg) {
   const pd = L.onDispose;
   // (pd holds makeMound's link when she is buried: the mound's mesh lifted out of L.grp, its geometry disposed, before disposeSleeper
   // frees the seabed's SHARED material, as the skirt's link does)
-  L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
+  L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); limbRelease(L); if (pd) pd(); };
   return L;
 }
 

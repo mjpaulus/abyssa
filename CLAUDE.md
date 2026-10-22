@@ -106,8 +106,10 @@ against explicit contracts and reviewed on return.
   (VELKATH BURIED, 2026-10-21; `POINTCAM` / `__pointcam` in game.js) eases it round to the opening crack while she points. POINTCAM runs
   beside it (CLAWCAM never runs once she is calmed): keyed to the point's raise and hold (`pointPh` 2-3), framed with her claw
   where both fit, his bonnet held inside NDC `helmNdc` 0.82 (a bisected share, rate-limited), an opening behind the lens frames her
-  claw or nothing, the full turn slewed 45 deg/s, and it hands back over ~0.5 s; any real look (5 deg net or 15 deg of looking about,
-  CLAWCAM's tolerances) drops it at once for the rest of that calm. It cannot move the lens out of her: that is CRECAM's guard.
+  claw or nothing, the full turn slewed 45 deg/s, and it hands back over ~0.5 s on its LAST aim, held (the candidate is computed only in the
+  raise and the hold: a sleeper rebuilt under it has pointPh 0 and pointAt (0, 0, 0)); any real look (5 deg net or 15 deg of looking about,
+  CLAWCAM's tolerances) drops it at once for the rest of that calm, and a pause ends it on the spring for the rest of that point (CLAWCAM's
+  house rule). It cannot move the lens out of her: that is CRECAM's guard.
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
   AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
@@ -499,7 +501,7 @@ against explicit contracts and reviewed on return.
   `bury: { crest: 6.5 }`, `makeZoneSleeper` passes it, and without the key nothing in `sleeper/burial.js` runs (Pallid, Burned and the
   Shelf are the shipped ridge bit for bit: their row-built fingerprints are unmoved). She is built ASLEEP AND BURIED: `L.bury` (1 buried
   .. 0 risen) drives it, `L.buried` marks the build, `poseAll` sinks her body `L.buryD * L.bury` (`fitSink`: her drawn crest top less
-  `meanGround` less BURY.crest; 1.414 u at home). The crest stands 6.5 u over the mean ground, NOT the spec's 3-4: Michael at the Task 5
+  `meanGround` less `L.crest`, the row's `bury.crest` and its only source; 1.414 u at home). The crest stands 6.5 u over the mean ground, NOT the spec's 3-4: Michael at the Task 5
   checkpoint (2026-10-20, "it doesnt really read a rock"), his call beyond the spec; her claws (`BURY.clawSink` 3.0) and clutch
   (`clutchSink` 1.2) sink deeper than her body so that nothing but the crest stands over the sand (burial-probe disguise). THE MOUND
   (burial.js `makeMound` / `fitMound`, an event at her bed, never per frame; it replaces the silt drift): a dune of the seabed's own
@@ -535,15 +537,19 @@ against explicit contracts and reviewed on return.
   contact is a shove, not a slam (game.js reads `L.rising`), her hammer's threat is held at 0 and the drop's count does not run, so
   nothing tears him in the rise (relief Task 8's rise-time shell tear is closed). Her crest's footing is carried by her body
   (`crestFootAt`, ground only while his boots are within `footStep` 0.6 u of it, latched past the stand and slid off at 7 u/s^2), and
-  while she is blind her shell's outline is kept APRON 14 u off the crack's lip (`keepShell`, home only; the plume made
-  fissure-probe velkath-crack fail at 11.77 u without it). THE POINT (brooder.js `POINT`, `BURY.point`): after the calm she turns IN
+  wherever the centre keep runs (awake with standE > 0.5 and hunting, walking or pointing: her hunts, the blind spell, the point and the
+  walk home) her shell's outline is kept APRON 14 u off the crack's lip too (`keepShell`, under `L.buried`: home only; the plume made
+  fissure-probe velkath-crack fail at 11.77 u without it). A calm before she has stood (the lab's `calm` early in the rise) takes her out
+  of the sand at once (hasStood, bury 0, the dune and the crack gone), never a rise frozen part-way. THE POINT (brooder.js `POINT`, `BURY.point`): after the calm she turns IN
   PLACE to the opening crack (riftPos(0) at the lip height, `aimPoint`) at the pre-registered `POINT.turn` 0.5 rad/s, and only once
   she FACES it (`POINT.face` 10 deg, `faceMax` 14 s so a blocked turn cannot stall her) does her major claw (claws[1], her left, body
   +X) rise, hold ~3 s through the line "A RIFT OPENS BELOW." and lower; then she walks home (Michael 2026-10-21, "1": finish turning,
   then point). Not a blow: calmed, her contacts only push him aside. POINTCAM (game.js `POINTCAM`, `__pointcam`) is the lens: see the
   camera bullet. THE DIG-IN (brooder.js `onHerDune`, `beginDig` / `digStep`, `BURY.digT` 17.5 s): once he has been off her DUNE
-  `SETTLE.hold` s the refit runs as a JOB over frames (burial.js `fitMoundJ` / `fitFootingJ` / `prepGrowthJ` generators, `BURY.job` 0.8 ms a slice;
-  `bedDown` runs the same generators to the end and builds the same bed, hash-checked) and `bury` runs 0 -> 1, paused while he is on her
+  `SETTLE.hold` s the refit runs as a JOB over frames (burial.js `fitMoundJ` / `fitFootingJ`, then `growRockJ`, the rock's coral and
+  fronds laid again for the re-fitted strip with the same seeds and drawn in one step at its end, then `prepGrowthJ`; `BURY.job` 0.8 ms a
+  slice; `bedDown` runs the same generators to the end and builds the same bed, hash-checked; a throw inside a slice abandons the job, its
+  state put back in a finally, `L.digFail`, one console.warn, and she stays risen) and `bury` runs 0 -> 1, paused while he is on her
   ground (afloat over it too), the crust fading back, a low haze of silt; it ends `L.dugIn`, the outcrop again. Her wards are DARK
   under the sand (BURN's 15 s fade has run out before the 17.5 s; the spec's "embers" were built dark, an open question to Michael), and the
   scar of the wound does not read.
@@ -559,9 +565,10 @@ against explicit contracts and reviewed on return.
   `calm`. Probes (all `DRV_PORT=<own> node tools/bench/<x>.mjs`, stepped ones on the PLUGGED clock, `tools/bench/clockplug.mjs`:
   `plug` / `drift` / `lost` / `unmeasured`, CLOCK_LOST 0.05, exit 4): `burial-probe.mjs <disguise|breath|programs|rise|digin|
   reentry> <port>` (the plan's gates, each with a `BP_RED`: ridge shallow steep late still lazy noshove tearable early nofoot sunk
-  noplume fastdig nopause keepdig mem2; `BP_AT` anchor / crest / off / front / dune / under; `BP_BASE` = a base run's programs JSON,
+  noplume fastdig nopause keepdig mem2; `BP_AT` anchor / crest / off / front / dune / under; digin's runs clear pause afloat crest offbed
+  early throwpose throwfit; every DISGUISE judges `coral`, the rock's coral inside this bed's strip; `BP_BASE` = a base run's programs JSON,
   because the base compiles its own first-sight shadow variants; `BP_CHECK`), `relief-walk.mjs mound` (real keys, live loop; `RW_RED`
-  nofloor-mound / nocap; `RW_PARKED=strip`), `pointcam-probe.mjs <point|framing|mouse|off|walk|lastward> <port>` (`PC_AT` back / ahead;
+  nofloor-mound / nocap; `RW_PARKED=strip`), `pointcam-probe.mjs <point|framing|mouse|off|walk|lastward|handback> <port>` (`PC_AT` back / ahead;
   `PC_PLACE=band` puts framing at 71-75 deg; `PC_RED` nopoint / fastturn / noface / inband, `PC_ON=0`), `clutch-line-probe.mjs` (the clutch's find line and fan
   are held while she is buried; ridge and Pallid are the controls). `fullplay-gate.mjs FP_UNTIL=<js>` (needs FP_ROUTE=follow; walks him
   off her ground, facing her, until the expression is true, 60 s cap; RECORDING ONLY, not for FP_GATE comparisons) took the dig-in

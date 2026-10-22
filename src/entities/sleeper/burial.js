@@ -3,19 +3,21 @@
 // in the sand and looked like a rock"). HOME ONLY (Michael 2026-10-15: "we should focus on getting one right now"): the site row's
 // sleepers[0].bury switches it on; without it nothing here is called and she is the shipped ridge bit for bit.
 // ONE VALUE DRIVES IT: L.bury, 0 risen .. 1 buried. brooder.js poseAll sinks her body L.buryD * L.bury under her bed; the mound is
-// drawn over her at L.bury (Task 3a); the crust shades her shell at L.bury (Task 5). Fits run at events (her build, the dig-in's
-// start), never per frame; zero per-frame allocation.
+// drawn over her at L.bury (Task 3a); the crust shades her shell at L.bury (Task 5). Fits run at events: her build (in one call), and the
+// dig-in's refit, which runs as a JOB sliced over frames (BURY.job, brooder.js digStep: the same generators, at most job ms a frame); outside
+// a fit, zero per-frame allocation.
 import * as THREE from 'three';
 import { V3 } from '../../lib/math.js';
 import { terrainH } from '../../world/terrain.js';
 import { seededRand } from '../../lib/textures.js';
 import * as G from './brooderGeo.js';
 
-// crest   u: her crest's top over the mean ground under her (spec: 3-4 u; Michael's checkpoint 2026-10-20, "it doesnt really read a rock":
-//         sunk less, 6-7 u, his call beyond the spec); the row may set it (home: 6.5). At 7.0 her folded legs stood +0.22 u out of the dune
-//         (burial-probe disguise), and the exposed rock gained 1.5% over 6.5
 // on      dev A/B (__burial.set): 0 = the shipped ridge at home too
-export const BURY = { on: 1, crest: 6.5 };
+// (the crest, u: her crest's top over the mean ground under her, is the SITE ROW's alone, sleepers[0].bury.crest (home 6.5; brooder.js L.crest
+// reads it at her build), final review item 9: spec 3-4 u; Michael's checkpoint 2026-10-20, "it doesnt really read a rock": sunk less, 6-7 u, his
+// call beyond the spec. At 7.0 her folded legs stood +0.22 u out of the dune (burial-probe disguise), and the exposed rock gained 1.5% over 6.5.
+// __burial.set({ crest }) writes the live row and rebuilds her)
+export const BURY = { on: 1 };
 // THE MOUND (spec §1 "The sand mound"): a dune over her sunk shell that leaves only a strip of her back's crest showing.
 //   crestL / crestW  u: the strip, an ellipse along her keel (spec: "about 20 u long"); crestZ its centre (shell units: the bake's
 //                    top lies at z -0.10)
@@ -24,9 +26,6 @@ export const BURY = { on: 1, crest: 6.5 };
 //   reveal   u: the rock stands this far out of the sand at the strip's edge (ring 0 lies this far inside her shell)
 //   cover    u: sand over her shell outside the strip, at the least; repose: the dune's fall per unit run (0.55 ~ 29 deg)
 //   rings    the dune's rings from the edge to where it meets the floor (+2 buried a hair under it); ringStep u, the march
-//   sandOpen u: the strip's edge pushed out on her SAND side (where he comes in and the harpoon goes), so more of that flank shows as
-//            a face of rock: a lopsided outcrop. 0 = the symmetric strip. Task 4's seat scan decides whether it is needed; if it is,
-//            the shape goes to Michael at Task 5's checkpoint as a choice
 //   breath   the tell (spec): a lift of `lift` u every period s (up s, down s); drawn only with the lens within `draw` u of the strip's edge
 //            (Task 5b: was 12 u of a crestL / 2 circle round her centre); the
 //            trickle only with him within `near` u (spec: "visible only within about 8 u"). Michael, 2026-10-15: it may be too subtle
@@ -42,7 +41,7 @@ export const BURY = { on: 1, crest: 6.5 };
 // (Task 5b) crestW 6 -> 20: sunk less, a 6 u strip only lifted the whole dune with her (exposed rock 171 u^2, 1.8x 1ddb11a's 95, a plate on a
 // sand hill in the stills); the strip's edge is now set by edgeMin round her back (her shell standing 1.2 u over the mean ground), so the
 // sand meets her flanks and her back stands out of it as rock (500 u^2, 5.3x; crestW 14: 355, 3.7x)
-Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, sandOpen: 0, clawSink: 3.0, clutchSink: 1.2, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
+Object.assign(BURY, { crestL: 20, crestW: 20, crestZ: -0.07, clawSink: 3.0, clutchSink: 1.2, edgeMin: 1.2, reveal: 0.35, cover: 0.3, repose: 0.55, rings: 14, ringStep: 0.25,
   breath: { lift: 0.045, period: [8, 10], up: 1.6, down: 2.6, draw: 18, near: 8 },
   // THE FOOTING over her crest (Task 3b, controller ruling 1; fitFooting below): r u, the lead sole's footprint (a disc the sole's half
   // length: diver.js's casting runs 0.52 u heel to toe); h u, the baked grid
@@ -74,7 +73,8 @@ Object.assign(BURY, { riseU: [0.04, 0.62], pourU: [0.08, 0.66], crackT: 0.8, sho
 // slides back up her flanks (growCover below), the crust fades back in, a low haze of silt drifts off (render only: calmed, she is blinded by
 // nothing). He comes back onto her ground: it pauses; it resumes when he has been off SETTLE.hold s again. At its start the mound is fitted
 // to where she actually lay down (her walk home stops within 3 u and 0.12 rad of her bed): the sink re-measured there, the dune re-fitted
-// over the sunk pose. When it ends she is the outcrop again, the harpoon's scar in the rock, her burning wards embers under the sand.
+// over the sunk pose. When it ends she is the outcrop again, the harpoon's scar in the rock, her wards DARK under the sand: the spec's
+// "embers" were built dark (BURN's 15 s fade has run out before the 17.5 s dig-in), an open question to Michael.
 //   digT s (spec 15-20); pause 1 (0: burial-probe's RED nopause); haze s between haze puffs
 //   job ms: THE REFIT AS A JOB OVER FRAMES (booked item 6). The re-bed measured 165 ms in one frame at home on this branch (fitMound 114 ms,
 //        76 of them the footing's envelope; prepGrowth 4 ms; headless M5 Max, the page's CPU calibrated against node), so the dig-in's fit
@@ -205,7 +205,7 @@ export function* fitMoundJ(L, MD, seabedColor, fissureDist) {
   // the mesh's (x, z) by her yaw (as restWorld and toPolar map it); every HEIGHT read at that world (x, z) through the full matrix
   const wx = (lx, lz) => L.pos.x + (lx * cy + lz * sy) * R, wz = (lx, lz) => L.pos.z + (-lx * sy + lz * cy) * R;
   const topW = (lx, lz) => shellTopW(MD, wx(lx, lz), wz(lx, lz));
-  const a = K.crestW / 2 / R, b = K.crestL / 2 / R, st = K.ringStep / R, dl = 0.6 / R, thS = L.sandSide > 0 ? 0 : Math.PI;
+  const a = K.crestW / 2 / R, b = K.crestL / 2 / R, st = K.ringStep / R, dl = 0.6 / R;
   yield* binShellJ(L, MD, st);
   // her shell's top at radius r on bearing j: the heightfield's, or the highest drawn vertex binned there if higher; NaN off her plan
   const shAt = (j, r, lx, lz) => {
@@ -226,8 +226,7 @@ export function* fitMoundJ(L, MD, seabedColor, fissureDist) {
   for (let j = 0; j < NB; j++) {
     if (dueNow()) yield;
     const th = j / NB * Math.PI * 2, ux = Math.cos(th), uz = Math.sin(th);
-    const ws = Math.max(0, Math.cos(th - thS)), aj = a + K.sandOpen / R * ws * ws;   // (sandOpen: the sand side's face opened)
-    let r = 1 / Math.sqrt((ux / aj) ** 2 + (uz / b) ** 2);
+    let r = 1 / Math.sqrt((ux / a) ** 2 + (uz / b) ** 2);
     // (her shell's drawn top, shAt: the heightfield alone read the lip of her back half-way down its face and pulled the edge 0.6 u
     // inside it, which left the lip outside the strip, standing 1.8 u over the floor)
     for (; r > 0.02; r -= st) { const h = shAt(j, r, ux * r, K.crestZ + uz * r); if (h === h && h >= L.meanG + K.edgeMin) break; }
@@ -415,9 +414,9 @@ const _lm = new THREE.Matrix4(), _lm2 = new THREE.Matrix4();
 // instance's) as posed NOW (the fit pose: fitMoundJ's prologue), limbPointsJ transforms every vertex through the kept matrices. The same
 // matrices and the same products as the one-step version, so a bed's sources are bit for bit as before
 const LOBJ = [];
-let LMAT = new Float64Array(0), LMN = 0;
+let LMAT = new Float64Array(0), LMN = 0, LOWN = null;   // (LOWN: the sleeper whose limbs LOBJ holds)
 function limbCapture(L) {
-  LOBJ.length = 0;
+  LOBJ.length = 0; LOWN = L;
   if (L.legs) for (const k in L.legs) LOBJ.push(L.legs[k]);
   if (L.claws) for (const c of L.claws) LOBJ.push(c.merus, c.carpus, c.palm, c.dact);
   if (L.parts.eyes) LOBJ.push(L.parts.eyes);
@@ -435,6 +434,9 @@ function limbCapture(L) {
     else { LMAT.set(o.matrixWorld.elements, LMN * 16); LMN++; }
   }
 }
+// (final review item 12) her limb meshes let go when she is disposed (brooder.js L.onDispose), so a module array never holds a dead sleeper's
+// geometry; only her own (a later sleeper's fit may already hold it)
+export function limbRelease(L) { if (LOWN === L) { LOBJ.length = 0; LOWN = null; } }
 function* limbPointsJ() {
   LN = 0; let q = 0;
   for (const o of LOBJ) {
@@ -1456,11 +1458,11 @@ const liveV = () => { const L = window.__sl, lv = window.lev; return L && !L.gon
 if (typeof window !== 'undefined') window.__burial = {
   knobs: BURY,
   state: () => { const L = liveV(); return L ? { buried: !!L.buried, bury: L.bury, buryD: L.buryD, crest: L.crest, meanG: L.meanG } : null; },
-  // patch the knobs (a `crest` key also writes the live home row) and rebuild the zone's sleeper IN PLACE (__lev.remember(null):
+  // patch the knobs (a `crest` key writes only the live home row, the crest's one source) and rebuild the zone's sleeper IN PLACE (__lev.remember(null):
   // a fresh build at her bed, as enterZone builds her; __lev.swap would set her down in front of the diver). Off zone 0 (or with
   // another kind live) the knobs are patched for her next build and nothing is rebuilt (state() is then null)
   async set(p) {
-    for (const k in p) { if (BURY[k] && typeof BURY[k] === 'object' && !Array.isArray(BURY[k])) Object.assign(BURY[k], p[k]); else BURY[k] = p[k]; }
+    for (const k in p) { if (k === 'crest') continue; if (BURY[k] && typeof BURY[k] === 'object' && !Array.isArray(BURY[k])) Object.assign(BURY[k], p[k]); else BURY[k] = p[k]; }
     if ('crest' in p) { const S = await import('../../world/site.js'); const r = S.currentSite().sleepers[0]; if (r && r.bury) r.bury.crest = p.crest; }
     if (liveV()) window.__lev.remember(null);
     return this.state();
