@@ -63,6 +63,8 @@ scar, night). The seven questions put to him, each with its default (what is bui
    first 30-45 s also read differently (section 8).
 7. **Embers under the sand, built dark.** The spec says her burning wards are embers under the sand; the plan's bar (light 0, glow 0) built them
    dark, because BURN's 15 s fade has run out before the 17.5 s dig-in ends. Does he want a faint glow through the sand? DEFAULT: dark.
+8. **The mouse drop while she points.** A mouse look hands the lens back at once (CLAWCAM's house rule), and POINTCAM's turn tops out at
+   ~42-44°, so a small look jumps the lens ~40° in one frame. DEFAULT: as built.
 
 Also given for his information with the look: her walk home starts about 8 s later because of the point; the camera fix (lensfix), not POINTCAM,
 keeps the lens out of her shell after the calm (a rotation cannot move the lens). Other things Task 16 found and flagged for his eye: the
@@ -237,7 +239,7 @@ Parked, booked, or follow-ups. None blocks the merge unless Michael says so.
 - **The boot-tail shadow warm (9 first-sight programs, also on main).** On first sight near her three's depth and distance shadow variants (`mapUv` 'uv') for her mapped casters compile (+9: 2 depth + 2 distance + 5 physical, identical on main). A boot-tail warm of the lantern's shadow pass over her would build them: a small separate game.js change.
 - **`terrainH`'s allocation (~470 B a call).** Pre-existing boxing in terrain.js `heightAt`; ~80 MB a fit. It is the GC that threatens the dig-in's 4 ms margin (no scavenge landed in a slice in 6+ runs, but a GC-inflated slice on a beat frame would exceed 4.0) and every fit. A follow-up card.
 - **The clawcam bonnet flake (also on base).** `clawcam-probe framing` "bonnet, 30 u ahead" fails 2 of 5 on the head (316/319, 318/319) and 2 of 6 on 644879b: pre-existing.
-- **`digStep` does not restore `L.bury` on a throw.** Its `finally` puts `L.noPub` back but not `L.bury`: a throw between `L.bury = 1` and `L.bury = 0` (the capture pose and the fit's prologue) would leave the drawn pose at bury 1. Drawn pose only; parked at the Task 12 re-review.
+- ~~`digStep` does not restore `L.bury` on a throw.~~ FIXED in the final review round (965fc39): every phase restores `L.bury`, the body matrices and `L.noPub` in a `finally`; a throw abandons the job (`L.digFail`, one console warning) and never claims done. Residual (parked): if `poseAll` itself throws, the `finally`'s re-pose throws again.
 - Also booked: the strip's exact contact (boots to +-1 u on her lips; `RW_PARKED=strip`), the relief-walk boots provider bar fixed by `BED_STOP` 37 u; bar (g) at the anchor passes now (a carried diver rose ~1.65 u/s after a fall at shoveV 5; gone at 11); the home rope sits -0.030 .. +0.048 u of the drawn ground (the +0.05 bar has 0.0015 u of margin; deterministic); the breath's +0.045 u lifts faces on rings 1-4 to 34.93 deg for a few cm (transient); the `exposed` bar would have passed the rejected plate-on-a-hill look (judge on `face` if reused); `shoveV` 11 sits 0.07 s under the blind window limit; the claws come up 3 u more than her body in the rise; the average riteplay bot's fights ran longer with lensfix's lens (unexplained, base); the fullplay-gate `FP_UNTIL` is recording-only.
 
 ## 12. Every ruling in the ledger (grouped by task)
@@ -354,3 +356,11 @@ Parked, booked, or follow-ups. None blocks the merge unless Michael says so.
 
 Michael's rulings (his own words) are in section 2; the "CHECKPOINT" ledger lines are those rows. The ledger also records the review outcomes (every task's spec and quality review, the fix rounds and the findings files
 `task-*-findings-r*.md`) and the deferred minors; the ones still open are in section 11.
+
+## 13. The final whole-branch review (2026-10-21)
+Opus, 644879b..c4d60ac: ready to merge, no Critical or Important findings. One fix round (Opus) fixed:
+- a lab calm before she stands snaps the rise done (d56bb78);
+- POINTCAM holds its aim through a rebuild's hand-back, drops on pause as CLAWCAM does, and has its own scratch (b5fefbc);
+- dig-in throw handling (965fc39);
+- comments, the dead `BURY.sandOpen`, the crest read from the site row only, `LOBJ` released on dispose (7fb7621).
+Each fix has its RED, failing on c4d60ac. The coral re-lay in the dig-in (item 6) was built and then reverted by ruling (0300542): the coral rides her body, and re-laying it popped visibly on her back. The probe's coral check now judges every disguise reading, including the dug-in and a 6.2 u re-bed. A scoped re-review (Sonnet) found everything addressed: ready to merge. Not taken: de-duplicating the helpers and renaming the "keep" family (churn with no change in behaviour). The mouse-drop snap while she points (~40°) joins Michael's look list as question 8.
