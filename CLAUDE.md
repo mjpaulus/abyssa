@@ -546,13 +546,15 @@ against explicit contracts and reviewed on return.
   +X) rise, hold ~3 s through the line "A RIFT OPENS BELOW." and lower; then she walks home (Michael 2026-10-21, "1": finish turning,
   then point). Not a blow: calmed, her contacts only push him aside. POINTCAM (game.js `POINTCAM`, `__pointcam`) is the lens: see the
   camera bullet. THE DIG-IN (brooder.js `onHerDune`, `beginDig` / `digStep`, `BURY.digT` 17.5 s): once he has been off her DUNE
-  `SETTLE.hold` s the refit runs as a JOB over frames (burial.js `fitMoundJ` / `fitFootingJ`, then `growRockJ`, the rock's coral and
-  fronds laid again for the re-fitted strip with the same seeds and drawn in one step at its end, then `prepGrowthJ`; `BURY.job` 0.8 ms a
+  `SETTLE.hold` s the refit runs as a JOB over frames (burial.js `fitMoundJ` / `fitFootingJ` / `prepGrowthJ` generators, `BURY.job` 0.8 ms a
   slice; `bedDown` runs the same generators to the end and builds the same bed, hash-checked; a throw inside a slice abandons the job, its
   state put back in a finally, `L.digFail`, one console.warn, and she stays risen) and `bury` runs 0 -> 1, paused while he is on her
   ground (afloat over it too), the crust fading back, a low haze of silt; it ends `L.dugIn`, the outcrop again. Her wards are DARK
   under the sand (BURN's 15 s fade has run out before the 17.5 s; the spec's "embers" were built dark, an open question to Michael), and the
-  scar of the wound does not read.
+  scar of the wound does not read. THE DIG-IN DOES NOT RE-LAY THE GROWTH (the coordinator's ruling, final review: a re-lay read as a visible
+  pop of coral on her exposed back): the coral and the rock's fronds ride her body, and their placement filters (the strip, the floor
+  + 0.3, the harpoon seam) stay those of the FIRST bed, a known open reading; burial-probe's `coral` check judges the re-bed (digin clear
+  and offbed, ~6.2 u off the first bed: every coral vertex inside the strip she lies in now).
   Leaving zone 0 mid-rise, mid-point or mid-dig and returning rebuilds her at her bed, buried and still (the zone rebuild; a
   second rise after a dig-in works). A save with `pulled[0]` rebuilds her buried with the OLD WOUND at the seat ("[E] PRESS THE OLD
   WOUND" raises her the same way, grants nothing). THE FIGHT IS NOT MAIN'S: the paired 48-fight campaign (Task 14) FAILED bar (b)

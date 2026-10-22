@@ -37,7 +37,7 @@ import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './pl
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
 import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
-  fitMoundJ, prepGrowthJ, growRockJ, jobSlice, growCover, limbRelease } from './burial.js';
+  fitMoundJ, prepGrowthJ, jobSlice, growCover, limbRelease } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
 // ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
@@ -788,9 +788,9 @@ function beginDig(L) {
 // Frame 1: the sink off her live pose (bury 0: this frame's poseAll, the brief's pose). Frame 2: her pose at bury 1 (poseAll, the brief's), its
 // body matrix kept, the fit's prologue there (burial.js fitMoundJ: her body's matrix and her limbs are read in the fit pose), her pose at bury
 // 0 again. Later frames: her body's matrixWorld held at the kept bury-1 matrix for the slice (every later read is her shell, reef and weed
-// through it: rigid children of her body), then put back from her live position (the frame is drawn as posed): the fit, then (final review
-// item 6) the rock's growth laid again for the strip where she lies now (growRockJ: bedDown's order, the fit, the growth, prepGrowth), then
-// prepGrowth (the growth's strip index for where she lies now), then the slabs' bed (their grid is cached: booked item 3). Returns its ms.
+// through it: rigid children of her body), then put back from her live position (the frame is drawn as posed): the fit, then prepGrowth (the
+// growth's strip index for where she lies now), then the slabs' bed (their grid is cached: booked item 3). The rock's growth is not laid again
+// (burial.js growRock, a bed's alone): it rides her body (final review: a re-lay read as a visible pop on her exposed back). Returns its ms.
 // (final review item 7) A THROW INSIDE A SLICE abandons the job: every phase puts back what it holds in a finally (bury, her body's pose and
 // matrices, noPub), and the catch drops the job (digJob null, not digging, L.digFail: never begun again on this bed) with ONE console.warn.
 // She stays as she is, awake and risen, the dune hidden; nothing claims the dig-in done (a closed generator would report done on the next
@@ -814,8 +814,7 @@ function digStep(L) {
       L.body.matrixWorld.copy(J.mw1);
       for (let q = 0, K = L.body.children; q < K.length; q++) K[q].updateMatrixWorld(true);
       if (J.ph === 2) { if (jobSlice(J.gen, BURY.job)) { J.ph = 3; J.gen = null; } }
-      else if (J.ph === 3) { if (!J.gen) J.gen = growRockJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 4; J.gen = null; } }
-      else if (J.ph === 4) { if (!J.gen) J.gen = prepGrowthJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 5; J.gen = null; } }
+      else if (J.ph === 3) { if (!J.gen) J.gen = prepGrowthJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 4; J.gen = null; } }
       else { slabsBed(L); L.digJob = null; }
     }
   } catch (e) {
