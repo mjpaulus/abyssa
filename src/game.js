@@ -904,14 +904,23 @@ let pendingWards = false;   // zones after the first say their count once the na
 document.getElementById('title').addEventListener('click', start);
 
 // START OVER (roadmap/start-over-saved-harpoon.md; Michael 2026-10-26, "1 start over on the title screen"). Only when a save
-// exists. One click ARMS it (the text becomes the confirm); a second, at least 0.5 s later (a double click is not a confirm)
+// holds progress. One click ARMS it (the text becomes the confirm); a second, at least 0.5 s later (a double click is not a confirm)
 // and within 4 s, removes the chart's key and reloads, the simplest exactly-fresh state. Any key, any other click, losing the
 // window or the 4 s disarms it. Its click is stopped here: the title's own click starts the dive. The one other key the game
 // writes, 'abyssa.playtest.panel', is a UI preference and stays. DOM only, nothing per frame.
 (() => {
   const el = document.querySelector('#title .startover');
+  // A save is not progress by existing: pagehide writes the default chart of anyone who opened the game and closed it. Progress is
+  // what the load above reads that a fresh boot does not write: a pulled flag, a sighting, a chart record, the hidden shelf found
+  // (found[0..2] are authored: always 1), a keepsake, a site but the start, any tool, a longer hose, the ending seen. `mute` is a
+  // preference and does not count. A torn save loads as a blank chart, so it is none either.
   let has = false;
-  try { has = !!localStorage.getItem(SAVE_KEY); } catch (e) { /* private mode: nothing was saved */ }
+  try {
+    const raw = localStorage.getItem(SAVE_KEY), sv = raw ? JSON.parse(raw) : null;
+    const any = v => Array.isArray(v) && v.some(x => Array.isArray(x) ? any(x) : !!x);
+    has = !!sv && typeof sv === 'object' && (any(sv.pulled) || any(sv.sighted) || any(sv.rec) || any(sv.keeps) || !!(sv.found && sv.found[3])
+      || (+sv.site > 0) || !!(sv.tools && Object.values(sv.tools).some(Boolean)) || (+sv.hose > HOSE_START) || !!sv.endingSeen);
+  } catch (e) { /* private mode, or a torn save: nothing to start over from */ }
   if (!el || !has) return;
   const IDLE = 'START OVER', ARMED = 'START OVER? THE SEA FORGETS YOU — CLICK AGAIN';
   let armed = 0, timer = 0;

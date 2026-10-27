@@ -3,7 +3,8 @@
 // within ~4 s wipes `abyssa.chart.v1` and reloads. REAL mouse and key events over tools/bench/drv.mjs, a fresh private profile,
 // the console captured from byte one (the page is navigated from about:blank after the domains are on).
 //   DRV_PORT=9540 node tools/bench/startover-probe.mjs <port>      (serve.py must already serve <port>; SO_SHOTS=<dir> saves PNGs)
-// It walks: a FRESH load (empty storage): no START OVER, and no save written by the title alone -> a load with a SAVED HARPOON
+// It walks: a FRESH load (empty storage): no START OVER, and no save written by the title alone -> open, close (pagehide writes the
+// default save), reopen: still no START OVER, and each progress field set on that save shows it -> a load with a SAVED HARPOON
 // (pulled [1,0,0,0], tools.harpoon: shaped as saveChart() writes it): START OVER shown -> one click arms it and the game does NOT
 // start -> a key disarms it -> the 4 s timeout disarms it -> a double click (two clicks 80 ms apart) does not confirm -> two clicks
 // clear the save and reload -> after the reload: the key is gone (pagehide's saveChart must not write it back), no START OVER,
@@ -46,6 +47,11 @@ async function main() {
   await c.send('Runtime.enable'); await c.send('Log.enable'); await c.send('Page.enable');
   const URL0 = `http://localhost:${PORT}/?bench&playtest`;
   const load = async () => { await c.send('Page.navigate', { url: URL0 }); await c.until(`window.__soMark === undefined && ${READY}`, 240000, 500); };
+  const loadWith = async save => {
+    const id = (await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('${KEY}', ${JSON.stringify(typeof save === 'string' ? save : JSON.stringify(save))}); } catch (e) { }` })).result.identifier;
+    await load();
+    await c.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: id });   // a reload must not seed it back
+  };
   try {
     // ---- 1. a FRESH load: empty storage ----
     await load(); await sleep(3000);
@@ -54,10 +60,32 @@ async function main() {
     check('fresh load: no START OVER is shown', !s.shown && !/START OVER/i.test(s.titleInner), s.titleInner);
     if (SHOTS) await c.png(join(SHOTS, 'title-fresh.png'));
 
+    // ---- 1b. open, close, reopen: closing writes the DEFAULT save (pagehide's saveChart); that is not progress ----
+    await c.send('Page.navigate', { url: 'about:blank' }); await sleep(800);
+    await load(); await sleep(1500);
+    s = await c.ev(SEE);
+    check('a fresh session closed (pagehide) left its default save behind', s.save !== null, s.save === null ? null : 'a save of ' + s.save.length + ' chars');
+    check('reopened over that default save: START OVER stays hidden', !s.shown && !/START OVER/i.test(s.titleInner), [s.shown, s.titleInner.includes('START OVER')]);
+    let def = null; try { def = JSON.parse(s.save); } catch (e) { }
+    check('the default save parses (the variants below are made from it)', !!def && typeof def === 'object', def && Object.keys(def));
+    // each field that is progress, set on the save a fresh boot wrote: START OVER shows. Nothing is hard-coded but the one change.
+    if (def) {
+      const mut = f => { const d = JSON.parse(s.save); f(d); return d; };
+      const VARIANTS = {
+        'a pulled flag': d => { d.pulled[0] = 1; }, 'a sighting': d => { d.sighted[1] = 1; }, 'a chart record': d => { d.rec[2][1] = 1; },
+        'the hidden shelf found': d => { d.found[3] = 1; }, 'a keepsake': d => { d.keeps[1][0] = 1; }, 'a site other than the start': d => { d.site = 1; },
+        'a tool owned (sonar)': d => { d.tools.sonar = true; }, 'the harpoon': d => { d.tools.harpoon = true; },
+        'a longer hose': d => { d.hose = d.hose + 40; }, 'the ending seen': d => { d.endingSeen = true; }
+      };
+      for (const [name, f] of Object.entries(VARIANTS)) {
+        await loadWith(mut(f)); await sleep(800);
+        const v = await c.ev(SEE);
+        check('progress shows START OVER: ' + name, v.shown && v.text === IDLE, [v.shown, v.text]);
+      }
+    }
+
     // ---- 2. a load with a SAVED HARPOON (seeded before the page's first script, on this one navigation only) ----
-    const seed = (await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('${KEY}', ${JSON.stringify(JSON.stringify(SAVE))}); } catch (e) { }` })).result.identifier;
-    await load();
-    await c.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: seed });   // a reload must not seed it back
+    await loadWith(SAVE);
     await sleep(3000);
     const pre = await c.ev(`({ site: __chart.site(), pulled: __chart.pulled(), harpoon: !!survival.hasHarpoon, wound: !!(lev && lev.harpoon && lev.harpoon.wound) })`);
     console.log('  the save, read: ' + show(pre));

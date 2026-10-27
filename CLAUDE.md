@@ -718,8 +718,8 @@ against explicit contracts and reviewed on return.
   Voyage = 'voyage' state in game.js: fade to black, reseed at full black, arrive.
   Persistence = localStorage 'abyssa.chart.v1' loaded BEFORE the world builds (saved
   site builds directly, no boot reseed): site, pencil record, tools, hose,
-  endingSeen. START OVER (title, 2026-10-26, game.js beside the title click; probe tools/bench/startover-probe.mjs): shown only when the key is
-  non-empty; click arms, a second click 0.5-4 s later removes `abyssa.chart.v1` and reloads, and `startingOver` stops saveChart (the reload's pagehide would write it back). `abyssa.playtest.panel` (UI) and `abyssa.boot.mods` (loader count) are not progress and stay.
+  endingSeen. START OVER (title, 2026-10-26, game.js beside the title click; probe tools/bench/startover-probe.mjs): shown only when the save holds
+  progress (not the default chart pagehide writes); click arms, a second click 0.5-4 s later removes `abyssa.chart.v1` and reloads, and `startingOver` stops saveChart (the reload's pagehide would write it back). `abyssa.playtest.panel` (UI) and `abyssa.boot.mods` (loader count) are not progress and stay.
   endingSeen. The full rite plays ONCE ever; later triple-calms get the quiet
   chart-inking beat. Sleeper overlays (sigils/hue/epithet) merge over LEVIATHAN_CFG
   in makeLeviathan(idx, over) and flow via the ...c spread. Debug: window.__chart
