@@ -14,26 +14,52 @@
 import * as THREE from 'three';
 import { scene, camera, envTexDeep as envTex } from '../../core.js';
 import { V3, clamp, lerp, fbm } from '../../lib/math.js';
-import { makeGlow, makeWarmGlow, seededRand } from '../../lib/textures.js';
+import { makeGlow, makeWarmGlow, seededRand, rockMapSet } from '../../lib/textures.js';
+import { rockHue, siltHue } from '../../world/flora.js';
 import { registerPaint } from '../../lib/paint.js';
-import { terrainH, terrainMeshes, fissurePatchSample } from '../../world/terrain.js';
+import { terrainH, terrainMeshes, fissurePatchSample, extraFloorAt } from '../../world/terrain.js';
 import { setWardTargets } from '../../world/predators.js';
 import {
   setLive, SIGIL_POOL_N, ensureSigilPool, makeWard, wardIdle, wardLitPose, wardTouch, wardFlashes, makeEmbers,
-  rememberWard, wardMemPose, wardsRecall, wardRefuse
+  rememberWard, wardMemPose, wardsRecall, wardRefuse, lightWard
 } from './common.js';
 import * as G from './brooderGeo.js';
 import { makeBrood } from './brood.js';
 import { makeHarpoon } from './harpoon.js';
-import { FISSURE, fissureDist, fissureLocal, fissureShut, APRON } from '../../world/fissureShape.js';
+import { FISSURE, fissureDist, fissureLocal, fissureShut, APRON, lipMeanY } from '../../world/fissureShape.js';
+import { riftPos } from '../../config.js';
 import { velkathLair, R_OF_SIZE, HEAD_R } from './lair.js';
 import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
-import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear } from './bodyCols.js';
+import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
+import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
+  fitMoundJ, prepGrowthJ, jobSlice, growCover, limbRelease } from './burial.js';
+// (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
+// (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
+// ground, her shell's collider capped at it, her back not slick); capShell 0 = the shell's collider solid over the drawn sand again (RED nocap)
+Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
+// THE POINT (spec §3; Michael: "can she turn and point to the void with her giant claw"). The calm itself is unchanged (game.js:
+// the wards burn, the crack opens over fissure.js's 6.6 s - quake, pour, silt, then the light from 3.6 s - and the line lands at
+// 6.6 - 2.5 = 4.1 s). During the pour she turns her front to the opening (the throat's centre, riftPos(idx), at its lip height); at
+// the raise (at turnT, or once she faces the opening: `face` below) her major claw rises and reaches toward it, the reach solved once
+// there; she holds it ~3 s (through the line when she already faced it), lowers it, and only then walks home. Not a blow: calmed, her contacts only push him aside (game.js's slam test needs !calmed). Buried sites only (home): BURY.point
+// 0 is the shipped calm (__burial.set({ point: 0 }): pointcam-probe's RED nopoint).
+//   turn     rad/s (pre-registered; past it is Michael's feel call, never a tuning knob)
+//   turnT / raiseT / holdT / lowerT  s on her own clock from the calm: the raise from 2.9 s (late in the pour, the light at 3.6), so
+//            the claw is up (pointK 0.95) by ~3.8 s, before the line at 4.1; held to 6.9 s, down by 7.9 s. (A raise from 3.6 s put
+//            the claw at 0.95 only at ~4.5 s: the line landed mid-raise and "holds it ... through the line" failed its own bar.)
+//   face     deg: FINISH TURNING, THEN POINT (Michael's ruling 2026-10-21, "1"). The raise waits, past turnT, until her front is within
+//            `face` of the bearing to the opening, even after the light and the line. At 0.5 rad/s a diver on her far side left the opening
+//            ~166 deg behind her front at the calm: she faced it only ~5.8 s in, and a reach solved at turnT (her body frame) ended ~100 deg
+//            out to her side (pointcam-probe back, b3e903f). 10 deg, under the probe's 12: the claw solved there drifts by the last ~10 deg of
+//            the turn. Already facing (pointcam-probe ahead) the raise is at turnT as before, the claw up through the line
+//   faceMax  s: past it she raises facing or not (never stuck standing: a blocked turn cannot keep her from going home)
+export const POINT = { turn: 0.5, turnT: 2.9, raiseT: 1.0, holdT: 3.0, lowerT: 1.0, face: 10, faceMax: 14 };
+BURY.point = 1;
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
 // baked game meshes (DC-meshed SDF high poly -> Blender decimate/unwrap -> Cycles bakes).
@@ -250,6 +276,7 @@ const _x = V3(), _y = V3(), _z = V3(), _sc = V3(), _r = V3(), _rw = V3(), _lp = 
 const _m = new THREE.Matrix4(), _inv = new THREE.Matrix4(), _q = new THREE.Quaternion(), _qs = new THREE.Quaternion();
 const _col = new THREE.Color();
 const _u = V3(), _hz = V3();
+const _sa = {};                                       // (velkath-buried-rock) L.topAt's shellAt scratch
 
 // CHITIN SHEEN (polish-brooder): a pale, subsurface-ish rim on the arms, legs and mouth.
 // A view-grazing Fresnel of the PERTURBED normal, scaled by the diffuse light the surface
@@ -350,7 +377,10 @@ export function makeBrooder(idx, cfg) {
     yawV: 0, velPrev: V3(), cock: 0, swing: 0, impT: 9, hamPh: 0, hurt: S(), shuffleT: 3, quake: 0,
     mPh: 0, segL0: { coxa: 1, femur: 1, tibia: 1, dactyl: 1 }, sculpted: false, eyeSt: null,
     // ground + sight (brooder-ground-plume): sole lift, collider push, what she can see
-    soleLift: 0, pushed: 0, seen: true, lastSeen: V3(), blindT: 0, clearT: 0, tau: 0, aim: V3()
+    soleLift: 0, pushed: 0, seen: true, lastSeen: V3(), blindT: 0, clearT: 0, tau: 0, aim: V3(),
+    // (velkath-buried-rock Task 10) THE POINT (POINT above): its phase (0 none / 1 turn / 2 raise / 3 hold / 4 lower), its clock, the
+    // claw's reach 0..1, the crack's opening and the reach's root pose [ry, rz] (aimPoint); calmNext: the lab verb 'calm'
+    pointPh: 0, pointT: 0, pointR: 0, pointK: 0, pointAt: V3(), pointPose: [0, 0], calmNext: false
   };
 
   // ---- materials ----
@@ -457,7 +487,7 @@ export function makeBrooder(idx, cfg) {
 
   // Round 3 arms, after the reference: two huge armoured arms held forward like a guard,
   // grey-teal chitin with a wet sheen, set with pale knobs, ending in long hooked
-  // pincers that run to rust at the tips. The right (+X) arm is the major.
+  // pincers that run to rust at the tips. The left (+X) arm is the major.
   // AAA pass: a generated chitin atlas (G.chitinMaps) — fine stipple normal, teal and pale
   // flecks, pale wrinkled membranes at every joint, rust on the pincers as a MAP running to
   // dark horn at the points — plus a pale subsurface-ish rim (chitinSheen).
@@ -567,6 +597,12 @@ export function makeBrooder(idx, cfg) {
   // STAND.clear (or the sole lift, 0.87 u at the median on the flat, would take the offset back), the crouch's CROUCH.clear
   // floor under her belly, and THE DROP's NOSAFE.depth (her slam still meets the sand). Live: lab / probes may set it.
   L.standLift = c.hard && c.hard.lift || 0;
+  // (velkath-buried-rock) BURIED (site.js sleeper row `bury`: home only). Absent, L.bury and L.buryD stay 0 and every term they
+  // enter is the shipped one bit for bit (x * (1 - 0), y - 0 * 0).
+  L.buried = !!(c.bury && BURY.on);
+  L.crest = L.buried ? c.bury.crest : 0;   // (the row's alone: burial.js BURY has no crest of its own, final review item 9)
+  L.bury = 0; L.buryD = 0; L.breathU = 0; L.breathY = 0;
+  L.topAt = (x, z) => { const h = G.shellAt(x, z, _sa).h; return Math.hypot(x, z) <= G.rimR(Math.atan2(z, x)) ? h : null; };   // procedural; installSculpt swaps in the bake's
 
   // ---- wards ----
   const wardScale = 4.2;
@@ -633,12 +669,16 @@ export function makeBrooder(idx, cfg) {
   L.publishCols = () => { L.grp.updateMatrixWorld(true); publishCols(L); };
   L.cmd = (name, arg) => {
     if (name === 'wake') { if (L.dormant) wakeBrooder(L); }
+    else if (name === 'calm') L.calmNext = !L.calmed && !L.dormant;   // (Task 10) every dark ward lit on her next update (the ward loop); refused asleep (Task 11, review M4)
     else if (name === 'stand') L.standTarget = 1;
     else if (name === 'settle') { L.standTarget = 0; L.walkTo = null; }
     else if (name === 'walk') { L.walkTo = arg ? arg.clone() : null; L.standTarget = 1; }
     else if (name === 'rear') L.threatTarget = L.threatTarget > 0.5 ? 0 : 1;
     else if (name === 'hold') L.hold = !L.hold;         // lab framing: stop tracking the diver
-    else if (name === 'place') { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); seatRite(L); fitSkirt(L); } }
+    else if (name === 'place') {
+      if (!L.buried) { placeAt(L, arg.pos, arg.yaw); if (L.dormant && L.skirt) { poseAll(L, 0, null); seatRite(L); fitSkirt(L); } }
+      else { digReset(L); placeAt(L, arg.pos, arg.yaw); if (L.dormant) bedDown(L); }   // (velkath-buried-rock) sunk again at the new bed
+    }
     return L.probe();
   };
   L.probe = () => ({
@@ -649,7 +689,8 @@ export function makeBrooder(idx, cfg) {
     tris: countTris(L.body), sculpted: L.sculpted,
     eyes: L.eyeSt ? L.eyeSt.map(e => ({ errDeg: +(e.err * 57.3).toFixed(1), saccades: e.n })) : null,
     sight: { seen: L.seen, tau: +L.tau.toFixed(2), blindT: +L.blindT.toFixed(2), aim: L.aim.toArray().map(v => +v.toFixed(1)), lost: L.lostN || 0 },
-    ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), climb: +(L.climbT > 0 ? L.climbT : 0).toFixed(1), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)), elbow: L.claws.map(c => +(c.elbow || 0).toFixed(3)) }
+    ground: { soleLift: +L.soleLift.toFixed(2), pushed: +L.pushed.toFixed(3), climb: +(L.climbT > 0 ? L.climbT : 0).toFixed(1), clawLift: L.claws.map(c => +(c.liftNow || 0).toFixed(3)), elbow: L.claws.map(c => +(c.elbow || 0).toFixed(3)) },
+    bury: +L.bury.toFixed(4), buryD: +L.buryD.toFixed(3), buried: !!L.buried, meanG: L.meanG ?? null   // (velkath-buried-rock)
   });
 
   // the eyeshine pinpoints (poseAll writes them; always in the scene at opacity 0 so the
@@ -665,15 +706,25 @@ export function makeBrooder(idx, cfg) {
   scene.add(grp);
   setLive(L);
   setWardTargets(-1, null);
-  poseAll(L, 0, null);
-  seatRite(L, !!SC);                                 // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
-  buildSkirt(L);
-  // (the harpoon seats in her DRAWN shell: with the sculpt already here it is swapped in after the first
-  // seat, so the iron is re-seated on it and the drift re-opened at its bearing)
-  if (SC) { installSculpt(L, SC); if (L.harpoon && L.dormant) { L.harpoon.seat(); fitSkirt(L); } }
-  else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.dormant) { seatRite(L); fitSkirt(L); } } });
+  if (!L.buried) {
+    poseAll(L, 0, null);
+    seatRite(L, !!SC);                                 // the clutch rests on her bed (brood.js), the harpoon in her flank: before the drift, which leaves the clutch's side open
+    buildSkirt(L);
+    // (the harpoon seats in her DRAWN shell: with the sculpt already here it is swapped in after the first
+    // seat, so the iron is re-seated on it and the drift re-opened at its bearing)
+    if (SC) { installSculpt(L, SC); if (L.harpoon && L.dormant) { L.harpoon.seat(); fitSkirt(L); } }
+    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); poseAll(L, 0, null); if (L.dormant) { seatRite(L); fitSkirt(L); } } });
+  } else {
+    // (velkath-buried-rock) buried: her bed in the burial's order (bedDown), no silt drift (the mound covers her: Task 3a). The sink
+    // is read off the drawn shell, so the sculpt's landing beds her down again on the baked one
+    bedDown(L, !!SC);
+    if (SC) { installSculpt(L, SC); if (L.dormant) bedDown(L); }
+    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L); else { poseAll(L, 0, null); L.keepIdx = keepOutline(L); } } });
+  }
   const pd = L.onDispose;
-  L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); if (pd) pd(); };
+  // (pd holds makeMound's link when she is buried: the mound's mesh lifted out of L.grp, its geometry disposed, before disposeSleeper
+  // frees the seabed's SHARED material, as the skirt's link does)
+  L.onDispose = () => { L.gone = true; clearPlumes(); clearBodyCols(); limbRelease(L); if (pd) pd(); };
   return L;
 }
 
@@ -682,6 +733,112 @@ export function makeBrooder(idx, cfg) {
 function seatRite(L, noHarpoon = false) {
   if (L.brood) L.brood.seat();
   if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
+}
+
+// HER BED, in the order the burial needs (velkath-buried-rock): the clutch rests on the floor of her UNSUNK pose (so after a calm her
+// tongue of eggs lies on the sand exactly as shipped, and buried it is under the floor with her); then the sink, then (Task 3a) the
+// mound over the sunk pose and the growth on her back buried under it, then (Task 4) the harpoon on the crest. Called only when
+// L.buried: the shipped paths keep their own lines.
+function bedDown(L, noHarpoon = false) {
+  // (Task 7a) the rise's state, defined before use and reset at every bed (bedDown runs only while she is dormant): the dune drawn whole
+  // (moundK 1), no crack, not stood
+  L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0; L.riseSheetN = 0;   // (Task 8: the plume's sheets spawned)
+  digReset(L);   // (Task 12, booked item 1: no point, no calm verb, no dig-in carried into a bed)
+  L.bury = 0; poseAll(L, 0, null);
+  // (Task 8 review, Minor 2) the shell's keep outline (keepShell): the 32 outline points of her shell, picked here, off the shell's own geometry,
+  // not on the first frame the keep engages; bedDown re-runs when the sculpt lands (the fused shell replaces the baked one)
+  L.keepIdx = keepOutline(L);
+  if (L.brood) L.brood.seat();
+  L.buryD = fitSink(L, L.crest);
+  L.bury = 1;
+  for (let li = 0; li < 8; li++) { const f = L.feet[li]; restWorld(L, li, f.planted); f.cur.copy(f.planted); f.t = -1; }   // the feet sunk now, not over a second
+  poseAll(L, 0, null);
+  // THE MOUND (burial.js): the dune of the seabed's own material grown over her sunk shell, a strip of her crest left showing; built
+  // once (its mesh in L.grp, lifted out before her dispose: makeMound chains L.onDispose), re-fitted at every bed
+  if (terrainMeshes[L.idx]) {
+    if (!L.mound) L.mound = makeMound(L, terrainMeshes[L.idx].material);
+    fitMound(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
+    // (Task 7b) the crack's slabs: built once, in the dune's material (burial.js makeSlabs), hidden until the crack
+    if (!L.slabs) makeSlabs(L);
+    slabsBed(L);
+  }
+  if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
+  // (Task 5b) the weed and coral on the exposed rock (burial.js growRock: after the seat, so they keep clear of the iron), then the growth
+  // outside the strip buried with her (prepGrowth)
+  if (L.mound) { growRock(L, L.mound); prepGrowth(L, L.mound); }
+}
+
+// (velkath-buried-rock Task 12) a live L reused at a new bed (bedDown, the lab's place): no point under way, no calm verb pending (Task 10 review,
+// for Task 12: the point's phases and the claw's reach are read every frame), no dig-in or its job
+function digReset(L) { L.pointPh = 0; L.pointK = 0; L.calmNext = false; L.digging = false; L.dugIn = false; L.digJob = null; L.digOff = 0; L.digFail = false; }
+// THE DIG-IN'S START (burial.js BURY.digT): the sink re-measured and the dune re-fitted where she actually lay down. One event, but run as a JOB
+// over frames (booked item 6: the re-bed is ~165 ms in one frame here, fitMound 114 of it): digStep does it in BURY.job ms slices at the end of
+// her update, the dig-in waits for it (bury stays 0, the dune hidden, so nothing reads the mound mid-fit). She lies still for it (no velocity,
+// no turn: nothing moves her while settled and calmed). Here: the state a buried bed expects (booked item 2: the rise's crack, stand and slab
+// flags back, which only bedDown reset), no point or calm verb (item 1), the dune flat
+function beginDig(L) {
+  L.vel.set(0, 0, 0); L.yawV = 0;
+  L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.shoveN = 0; L.riseSheetN = 0; L.footLatch = false;
+  L.pointPh = 0; L.pointK = 0; L.calmNext = false;
+  L.bury = 0; L.moundK = 0; setMoundK(L.mound, 0, 0);
+  L.digJob = { ph: 0, gen: null, mw1: L.digMw1 || (L.digMw1 = new THREE.Matrix4()) };
+}
+// one frame of the job (updateBrooder's last step: her pose this frame is posed and drawn), each frame's share at most BURY.job ms of fitting
+// (burial-probe digin's cost: the base update has a ~2.5 ms beat every ~23 frames, and a slice on that frame must stay under the 4.0 ms bar).
+// Frame 1: the sink off her live pose (bury 0: this frame's poseAll, the brief's pose). Frame 2: her pose at bury 1 (poseAll, the brief's), its
+// body matrix kept, the fit's prologue there (burial.js fitMoundJ: her body's matrix and her limbs are read in the fit pose), her pose at bury
+// 0 again. Later frames: her body's matrixWorld held at the kept bury-1 matrix for the slice (every later read is her shell, reef and weed
+// through it: rigid children of her body), then put back from her live position (the frame is drawn as posed): the fit, then prepGrowth (the
+// growth's strip index for where she lies now), then the slabs' bed (their grid is cached: booked item 3). The rock's growth is not laid again
+// (burial.js growRock, a bed's alone): it rides her body (final review: a re-lay read as a visible pop on her exposed back). Returns its ms.
+// (final review item 7) A THROW INSIDE A SLICE abandons the job: every phase puts back what it holds in a finally (bury, her body's pose and
+// matrices, noPub), and the catch drops the job (digJob null, not digging, L.digFail: never begun again on this bed) with ONE console.warn.
+// She stays as she is, awake and risen, the dune hidden; nothing claims the dig-in done (a closed generator would report done on the next
+// slice and the job would have "finished" on a half-written fit)
+function digStep(L) {
+  const J = L.digJob, t0 = performance.now(), b0 = L.bury;   // (b0: 0, beginDig's)
+  let posed = false, held = false;
+  try {
+    if (J.ph === 0) { L.buryD = fitSink(L, L.crest); J.ph = 1; }
+    else if (J.ph === 1) {
+      // (fix round 1, M2) neither pose publishes her colliders: each would have republished them (publishCols), leaving bodyCols' PREV at the
+      // bury-1 pose, so the next resolve read every capsule rising ~1.4 u in a frame (LIMB_VMAX / SHELL_VMAX zeroed it: benign, but wrong). This
+      // frame's colliders stay the ones its own poseAll published, at bury 0
+      L.noPub = true;
+      L.bury = 1; posed = true; poseAll(L, 0, null); J.mw1.copy(L.body.matrixWorld);
+      J.gen = fitMoundJ(L, L.mound, (x, z, out) => seabedColor(terrainMeshes[L.idx], x, z, out, L.idx), fissureDist);
+      if (jobSlice(J.gen, 0)) { J.ph = 3; J.gen = null; } else J.ph = 2;
+      L.bury = b0; poseAll(L, 0, null); posed = false;
+    } else {
+      held = true;
+      L.body.matrixWorld.copy(J.mw1);
+      for (let q = 0, K = L.body.children; q < K.length; q++) K[q].updateMatrixWorld(true);
+      if (J.ph === 2) { if (jobSlice(J.gen, BURY.job)) { J.ph = 3; J.gen = null; } }
+      else if (J.ph === 3) { if (!J.gen) J.gen = prepGrowthJ(L, L.mound); if (jobSlice(J.gen, BURY.job)) { J.ph = 4; J.gen = null; } }
+      else { slabsBed(L); L.digJob = null; }
+    }
+  } catch (e) {
+    L.digJob = null; L.digging = false; L.digFail = true;
+    console.warn(`[velkath dig-in] the refit job threw in phase ${J.ph} and is abandoned (she stays risen, the dune hidden): ${e && e.message || e}`);
+  } finally {
+    L.bury = b0;
+    if (posed) poseAll(L, 0, null);          // (a throw between the two poses: her bury-0 pose back, still unpublished)
+    if (held) L.body.updateMatrixWorld(true);  // (her body's and its children's matrices from her live pose)
+    L.noPub = false;
+  }
+  return performance.now() - t0;
+}
+// (velkath-buried-rock) THE DIG-IN'S "ON HER GROUND": her shell's plan + m, by plan alone, up to a ceiling over the drawn ground (a
+// swimmer far overhead does not freeze it). Not onHerGround: its height cutoff (pos.y > bodyY + 0.15 R) rides her body, and digging
+// in she sinks ~4 u under him, so a man on the rising dune, or beside it afloat, would read as off her ground mid-dig.
+// (fix round 1, M1, the coordinator's ruling) the ceiling's ground includes her shell's top under him (bodyCols shellHiAt, the published proxy):
+// mid-dig her crest is not ground (crestOn needs dugIn), and a man on her back's top band (crest 6.46 u at bury 1, ~7.9 u at bury 0 over the floor)
+// read as off her ground, so the dig-in ran under him (burial-probe digin crest on c3eaa00: 180 of 180 frames moved)
+function onHerDune(L, player, m) {
+  if (!player) return false;
+  const g = Math.max(terrainH(player.pos.x, player.pos.z, L.idx), extraFloorAt(player.pos.x, player.pos.z, L.idx), shellHiAt(player.pos.x, player.pos.z));
+  if (player.pos.y - 1.35 > g + 6) return false;
+  return shellPlanNear(player.pos.x, player.pos.y - 0.45, player.pos.z, m);
 }
 
 // ---- THE SILT DRIFT (polish-followups) ----
@@ -950,6 +1107,13 @@ function installSculpt(L, A) {
   const bodyMat = finishSculpt(registerPaint(sculptMat(A.maps.body, { envMapIntensity: 0.35, aoMapIntensity: 0.8 })), A.maps.body, sets.body,
     { scale: 20, normal: 0.9, cavity: 0.45, rough: 0.3 });
   silhouetteRim(L, bodyMat);
+  // (velkath-buried-rock) THE CRUST (burial.js crustTerm): on EVERY build, so the program is one at every site (uBury 0 off home) and
+  // the boot builds it; the rock maps are flora's shared set (kept, never disposed with her). The sand in her hollows starts at the
+  // zone's silt hue and the look knob CRUST.sandC (zone 0's seabed silt) overrides it; never the seabed's vertex colours (terrain.js:
+  // data channels, not a tint)
+  const RS = rockMapSet(0);
+  L.keepTex.add(RS.pack); L.keepTex.add(RS.nrm);
+  crustTerm(L, bodyMat, RS, rockHue(0), siltHue(0));
   P.shell.geometry.dispose(); P.shell.material.dispose();
   P.shell.geometry = g.body; P.shell.material = bodyMat;
   L.sole = soleFromGeos([g.body]);                   // the baked shell's own underside
@@ -974,7 +1138,16 @@ function installSculpt(L, A) {
     const wm = G.weedMatrices(Math.min(P.weed.count, 60), 0x77EED + L.idx);
     wm.forEach((m, i) => P.weed.setMatrixAt(i, m));
     P.weed.count = wm.length;
+    L.weedBase = wm.length;                           // (velkath-buried-rock Task 5b: burial.js growRock lays the strip's fronds past these)
     P.weed.instanceMatrix.needsUpdate = true;
+    L.topAt = (x, z) => {   // (velkath-buried-rock) the bake's own top probe, kept: the mound and the crest's footing read it
+      const fx = (x - x0) / (x1 - x0) * (n - 1), fz = (z - z0) / (z1 - z0) * (n - 1);
+      if (fx < 0 || fz < 0 || fx > n - 1 || fz > n - 1) return null;
+      const i = Math.min(n - 2, fx | 0), j = Math.min(n - 2, fz | 0), tx = fx - i, tz = fz - j;
+      const a = h[j * n + i], b = h[j * n + i + 1], c2 = h[(j + 1) * n + i], d = h[(j + 1) * n + i + 1];
+      if (a == null || b == null || c2 == null || d == null) return a != null ? a : b != null ? b : c2 != null ? c2 : d;
+      return (a * (1 - tx) + b * tx) * (1 - tz) + (c2 * (1 - tx) + d * tx) * tz;
+    };
     G.setShellHeight(null);
   }
   // limbs: one shared atlas, the chitin sheen program the procedural limbs used
@@ -1198,6 +1371,9 @@ function restWorld(L, li, out) {
   const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
   out.set(L.pos.x + (lx * cy + lz * sy) * L.R, 0, L.pos.z + (-lx * sy + lz * cy) * L.R);
   out.y = groundAt(L, out.x, out.z, true);           // a rock's top is ground too
+  // (velkath-buried-rock) her folded feet go down with her: buried, the rest spot is under her bed by the sink (rising, bury eases to 0
+  // and the sprawl's lerp brings them up with her; awake they are planted on the ground by reachFoot, as shipped)
+  if (L.buried) out.y -= L.buryD * L.bury;
   return out;
 }
 
@@ -1269,8 +1445,12 @@ function poseClaws(L, dt) {
   // from the front, and she always turns to face him (Pallid: a perfect walker stuck at the
   // claws for 200 s in 3 of 3 runs)
   const gu = L.guardUp ? L.guardUp.x : 0;
+  // (velkath-buried-rock Task 5b) buried, her folded claws go down BURY.clawSink u deeper than her body's sink (burial.js: at the 6.5 u crest
+  // they sit where the 3.5 u crest put them); off home L.buried is false and the root stays at -0.10 bit for bit
+  const clawY = -0.10 - (L.buried ? BURY.clawSink * L.bury / L.R : 0);
   for (const c of L.claws) {
     const sd = c.sd;
+    c.root.position.y = clawY;
     // never quite still: slow drift in two axes (noise, not a metronome), a heavier and
     // slower sway on the crusher, and a slow open/close of the pincers
     const kM = c.major ? 0.7 : 1.25;
@@ -1301,6 +1481,12 @@ function poseClaws(L, dt) {
       const hk = 1 - 0.8 * Math.min(1, Math.max(0, h));
       c.dj.rotation.z = chela(c, L, th, gape, snap, hold, t, dt) * hk;
       c.djShip = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * hk;
+      if (L.pointK > 0) {   // (velkath-buried-rock Task 10) THE POINT: the reach, blended in by L.pointK (no swing, no threat: she is calmed)
+        const k = L.pointK, r = c.root.rotation;
+        r.set(r.x + (0 - r.x) * k, r.y + (L.pointPose[0] - r.y) * k, r.z + (L.pointPose[1] - r.z) * k);
+        tuckJoint(c.cj, PT_CJ, 0, sd, k); tuckJoint(c.pj, PT_PJ, 0, sd, k);
+        c.dj.rotation.z += (PT_DJ - c.dj.rotation.z) * k; c.djShip += (PT_DJ - c.djShip) * k;
+      }
     } else {
       // the minor stays low and close, a guard across the mouth, working; it spreads
       // wide as the crusher cocks (the body opens up behind the blow)
@@ -1331,6 +1517,37 @@ function poseClaws(L, dt) {
 function tuckJoint(j, T, base, sd, d) {
   const r = j.rotation;
   r.set(r.x + (T[0] - r.x) * d, r.y + (base - sd * T[1] - r.y) * d, r.z + (T[2] - r.z) * d);
+}
+// (velkath-buried-rock Task 10) THE REACH's elbow and wrist (tuckJoint targets: near straight, the wrist a little open) and the finger
+const PT_CJ = [0, 0.15, 0.10], PT_PJ = [0, 0.10, -0.05], PT_DJ = 0.35;
+// THE REACH, solved once at the raise (at turnT, or once she faces the opening): the major claw's root (merus) aimed down the shoulder -> opening line, the elbow and
+// wrist near straight. The arm is a 'YZX' chain whose rest heading -PI/2 points it along her +z (buildClaw), so a unit direction t in
+// her body frame from the shoulder is reached by rz = asin(t.y), ry = atan2(-t.z, t.x); one correction pass takes out what the elbow
+// and wrist bend adds, measured with the elbow, wrist and finger AT the reach's own pose (PT_*; the frame's idle pose bends them
+// 0.2-0.8 rad more). ry is wrapped into (-3PI/2, PI/2], within PI of the rest heading, so the blend in poseClaws never swings the arm
+// the long way round through her back. Every joint is restored. Writes L.pointPose; no allocation.
+// dA: her heading error to the opening at the solve (rad; she raises within POINT.face of it and turns on through the raise): the target
+// is solved FOR THE HEADING SHE IS TURNING TO (turned dA round her centre), not for this frame's. Solved for this frame's, pointcam-probe
+// back (c392030) raised at -9.4 deg and the claw ran 18-19 deg off the opening once she had come round (the bar is 20)
+const _pa = V3(), _pb = V3(), _pinv = new THREE.Matrix4();
+function aimPoint(L, dA) {
+  const c = L.claws[1].major ? L.claws[1] : L.claws[0], sd = c.sd;
+  L.body.updateMatrixWorld(true);
+  _pinv.copy(L.body.matrixWorld).invert();
+  const ox = L.pointAt.x - L.pos.x, oz = L.pointAt.z - L.pos.z, cd = Math.cos(dA), sn = Math.sin(dA);
+  _pa.set(L.pos.x + ox * cd - oz * sn, L.pointAt.y, L.pos.z + oz * cd + ox * sn)
+    .applyMatrix4(_pinv).sub(c.root.position).normalize();   // her frame, from the shoulder
+  let ry = Math.atan2(-_pa.z, _pa.x), rz = Math.asin(clamp(_pa.y, -1, 1));
+  const r = c.root.rotation, r0x = r.x, r0y = r.y, r0z = r.z;
+  const e = c.cj.rotation, e0x = e.x, e0y = e.y, e0z = e.z, w = c.pj.rotation, w0x = w.x, w0y = w.y, w0z = w.z, f0 = c.dj.rotation.z;
+  tuckJoint(c.cj, PT_CJ, 0, sd, 1); tuckJoint(c.pj, PT_PJ, 0, sd, 1); c.dj.rotation.z = PT_DJ;
+  r.set(0, ry, rz); c.root.updateMatrixWorld(true);
+  _pb.setFromMatrixPosition(c.pj.matrixWorld).add(_v.setFromMatrixPosition(c.dj.matrixWorld)).multiplyScalar(0.5)   // the palm
+    .applyMatrix4(_pinv).sub(c.root.position).normalize();
+  ry += Math.atan2(-_pa.z, _pa.x) - Math.atan2(-_pb.z, _pb.x); rz += Math.asin(clamp(_pa.y, -1, 1)) - Math.asin(clamp(_pb.y, -1, 1));
+  ry = Math.atan2(Math.sin(ry), Math.cos(ry)); if (ry > Math.PI / 2) ry -= Math.PI * 2;
+  r.set(r0x, r0y, r0z); e.set(e0x, e0y, e0z); w.set(w0x, w0y, w0z); c.dj.rotation.z = f0; c.root.updateMatrixWorld(true);
+  L.pointPose[0] = ry; L.pointPose[1] = rz;
 }
 
 // THE GROUND UNDER HER (brooder-ground-plume). The shell's SOLE (lowest vertex per cell of
@@ -1481,7 +1698,11 @@ function poseAll(L, dt, player) {
   // takes it up through a critically damped follower, never a snap
   if (!(dt > 0) || !L.gG) { L.gG = { x: gy, v: 0 }; L.gP = { x: pit, v: 0 }; L.gRl = { x: rol, v: 0 }; }
   else { gy = spr(L.gG, gy, 4.5, 1, dt); pit = spr(L.gP, pit, 4.5, 1, dt); rol = spr(L.gRl, rol, 4.5, 1, dt); }
-  const breath = (0.012 * Math.sin(L.t * 0.45) + 0.004 * Math.sin(L.t * 1.07 + 1)) * (1 - hc);
+  const breath0 = (0.012 * Math.sin(L.t * 0.45) + 0.004 * Math.sin(L.t * 1.07 + 1)) * (1 - hc);
+  // (velkath-buried-rock) buried, her own breath is the SAND's (burial.js: a few cm every 8-10 s, L.breathY): the 0.18 u bob of the
+  // bedded ridge would be the tell at any range
+  const breath = breath0 * (1 - L.bury);
+  L.breathU = breath0 * R;
   // THE BROODING CROUCH (brooder-clutch): a diver UNDER her shell (at her wards, at the clutch
   // hanging there) and she bears down on him: the legs bend, the body comes down 2.5 u and
   // leans over him, her threat lift dropped. Standing on the rift lip she rides the crest
@@ -1504,7 +1725,8 @@ function poseAll(L, dt, player) {
   // threat's lift and front pitch going with it brought her 4.3 u down over him)
   const liftK = Math.max(L.threatE, L.underE ? L.underE.x : 0);
   // (Ruling 44) + her stance offset (makeBrooder: L.standLift), with the heave: asleep she lies as she did
-  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.standLift * hv + L.bY.x;
+  L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.standLift * hv + L.bY.x
+    - L.buryD * L.bury + L.breathY * L.bury;   // (velkath-buried-rock) sunk under her bed, the sand's breath with her
   if (L.dropY) L.bodyY += L.dropY;   // (velhard) THE DROP: braced up, slammed down, risen (noSafeSpot)
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
@@ -1536,6 +1758,15 @@ function poseAll(L, dt, player) {
   const pen = hc > 0.001 ? penetration(L, L.sole, b.matrix, -bed) : 0;
   L.soleLift = pen > 0 ? pen : 0;
   if (pen > 0) { b.position.y += pen; L.bodyY += pen; }
+  // (velkath-buried-rock Task 7a, the controller's ruling: "a slow, heavy rise") rising out of the sand, until she has stood, her body comes up
+  // no faster than BURY.riseVmax u/s: the heave's sole floor (bed above) engages at heave ~0.45 and carried her shell up 12-18 u/s for ~0.3 s
+  // (the shipped rise at home: 16.1 u/s at 4.3 s; burial-probe rise (d), bar 8 u/s). Home only (L.buried); elsewhere the shipped rise bit
+  // for bit. The lag it leaves is caught up long before she stands (the heave settles ~2 s later); her sole may sit in the sand meanwhile
+  if (L.buried && !L.dormant && !L.calmed && L.cracked && !L.hasStood && dt > 0 && L.riseY != null) {
+    const top = L.riseY + BURY.riseVmax * dt;
+    if (L.bodyY > top) { b.position.y -= L.bodyY - top; L.bodyY = top; }
+  }
+  L.riseY = L.bodyY;
   b.updateMatrixWorld(true);
   _inv.copy(b.matrixWorld).invert();
   // the belly over his helmet, off the floor under him (the crouch's limit, next frame)
@@ -1631,7 +1862,7 @@ function poseAll(L, dt, player) {
   }
   for (let k = 0; k < COLL.length; k++) L.spine[k].set(COLL[k][0], COLL[k][1], COLL[k][2]).applyMatrix4(b.matrixWorld);
   L.head.set(0, 0.10, 0.80).applyMatrix4(b.matrixWorld);
-  publishCols(L);
+  publishCols(L, player, dt);
 }
 
 // (velfix, SETTLE) is he on the ground her body comes down on: within her shell's reach (shell plan, R x
@@ -1684,9 +1915,10 @@ const LEG_KEYS = ['coxa', 'femur', 'tibia', 'dactyl'];
 // (the dactyl curls to its point: two capsules follow it; one chord left 0.7 u of claw outside)
 const LEG_N = { coxa: 1, femur: 1, tibia: 1, dactyl: 2 };
 function fitLegs(legs) { const o = {}; for (const k of LEG_KEYS) o[k] = fitCapsules(legs[k].geometry, LEG_N[k]); return o; }
-const _cm = new THREE.Matrix4(), _ca = V3(), _cb = V3();
-function publishCols(L) {
-  if (!L.legFit || L.gone) return;
+const _cm = new THREE.Matrix4(), _cm2 = new THREE.Matrix4(), _ca = V3(), _cb = V3();
+const FOOT_SLIDE = 7;   // u/s^2: (Task 7a) off her carried footing once she has stood, as off her slick back (bodyCols.js SHELL_SLIDE)
+function publishCols(L, player = null, dt = 0) {
+  if (!L.legFit || L.gone || L.noPub) return;   // (Task 12 fix round 1, M2: digStep's capture poses publish nothing)
   beginBodyCols();
   const bw = L.body.matrixWorld, R = L.R;
   for (let q = 0; q < 4; q++) {
@@ -1710,9 +1942,37 @@ function publishCols(L) {
       addCapsule(_ca.x, _ca.y, _ca.z, _cb.x, _cb.y, _cb.z, F.ra * sc, F.rb * sc);
     }
   }
-  setShell(L.shellProx, bw.elements, R);
+  setShell(L.shellProx, bw.elements, R, !(L.buried && L.bury >= BURY.solidK));
+  // (Task 7a) RISING OUT OF THE SAND, from the crack until she has stood, and not once calmed (fix round 1, M5): her crest's footing is carried
+  // by her body (bodyCols setMound) and is ground only while HE is on it: his boots within BURY.footStep under it or over it (fix round 1,
+  // C1: as ground for the whole column it lifted a man under her belly 17 u onto her back). Latched past her stand while he stays on it, and
+  // then he slides off it as off her slick back (SHELL_SLIDE's 7 u/s^2, outward), so the hand-off to the slick proxy is a step off its edge,
+  // never a jump onto the proxy (fix round 1, M7). The cap: full while bury >= solidK (the dune still covers her), then her strip's only.
+  // The mound is published while it is drawn OR while she rises out of it (moundY reads nothing once the dune is down; the footing carries)
+  const out = L.buried && L.mound && !L.dormant && !L.dugIn && !L.calmed && L.cracked && BURY.footRise > 0 && (!L.hasStood || L.footLatch);
   // her clutch: soft, the drawn surface (brood.js B.live, refreshed by its update this frame)
   if (L.brood && L.brood.seated && !L.brood.off) setClutch(L.brood.live, L.brood.seeds, L.brood.nL, bw.elements, R);
+  // (velkath-buried-rock) her dune (while drawn) and, fully buried, her crest: ground (bodyCols.js buriedFloorAt); her shell's collider
+  // capped at that ground while she is fully buried
+  const MDd = L.mound && (L.mound.drawn || out) && BURY.floor ? L.mound : null;
+  if (MDd && out) {
+    _cm.fromArray(MDd.mwInv).premultiply(bw); _cm2.copy(_cm).invert();
+    const capAll = L.bury >= BURY.solidK && !L.hasStood, cap = BURY.capShell > 0;
+    setMound(MDd, L.idx, false, cap, _cm.elements, _cm2.elements, true, capAll);
+    let on = false;
+    if (player) { const f = crestFootAt(player.pos.x, player.pos.z); on = f > -1e8 && player.pos.y - 1.35 >= f - BURY.footStep; }
+    L.footLatch = on && (!L.hasStood || !!L.footLatch);
+    if (L.footLatch) {
+      setMound(MDd, L.idx, true, cap, _cm.elements, _cm2.elements, true, capAll);
+      if (L.hasStood && dt > 0) {
+        let hx = player.pos.x - L.pos.x, hz = player.pos.z - L.pos.z; const hl = Math.hypot(hx, hz) || 1;
+        player.vel.x += hx / hl * FOOT_SLIDE * dt; player.vel.z += hz / hl * FOOT_SLIDE * dt;
+      }
+    }
+  } else {
+    L.footLatch = false;
+    setMound(MDd, L.idx, MDd && L.bury >= BURY.solidK && (L.dormant || L.dugIn), BURY.capShell > 0);
+  }
   endBodyCols(L.pos.x, L.bodyY, L.pos.z, 2.9 * R);
 }
 
@@ -1725,6 +1985,28 @@ function quake(L, ev, x, z, k, player) {
   const d = Math.hypot(player.pos.x - x, player.pos.z - z);
   const q = k * (1 - smooth(d, 8, 70));
   if (q > ev.quake) ev.quake = q;
+}
+// (velkath-buried-rock) THE CRACK (spec §2, beat 1): the crust cracks along her length, the ground jolts, slabs slough off; a man on her is
+// shoved flat off her with a stagger (safeThrow: never toward the crack), never torn
+function crackBeat(L, ev, player) {
+  const MD = L.mound;
+  quake(L, ev, MD ? MD.cx : L.pos.x, MD ? MD.cz : L.pos.z, 0.6, player);
+  if (!L.crackO0) L.crackO0 = new THREE.Vector3();
+  L.crackO0.copy(L.body.position);                    // (Task 7b: the crack's network rides her from here; burial.js crustTick)
+  if (L.slabs) slabsBreak(L);                         // (Task 7b: the slabs laid over her back)
+  if (!player || !(BURY.shoveV > 0)) return;
+  // (onHerGround alone can miss a man up on the crest: its height cutoff is her sunk body's + 0.15 R. The extraFloorAt term is what
+  // catches him there: last frame, dormant, her crest and dune were ground under him.)
+  const on = onHerGround(L, player, 1.0) || extraFloorAt(player.pos.x, player.pos.z, L.idx) > terrainH(player.pos.x, player.pos.z, L.idx) + 0.3;
+  if (!on) return;
+  const cx = MD ? MD.cx : L.pos.x, cz = MD ? MD.cz : L.pos.z;
+  let dx = player.pos.x - cx, dz = player.pos.z - cz; const dl = Math.hypot(dx, dz);
+  if (dl > 1e-3) _ns.set(dx / dl, 0, dz / dl); else _ns.set(L.sand.x, 0, L.sand.z);
+  safeThrow(_ns, player.pos.x, player.pos.z, L.idx);
+  _ns.y = 0.10; _ns.normalize();
+  player.vel.addScaledVector(_ns, BURY.shoveV);
+  player.stagger = player.staggerDur = BURY.shoveStag; player.staggerK = 0.85;
+  L.shoveN = (L.shoveN || 0) + 1;
 }
 // a footfall you FEEL (brooder-clutch): event-shaped, distance-weighted out to THUMP.far;
 // game.js turns it into a vertical dip of the lens and sand lifting round his boots
@@ -1743,6 +2025,7 @@ function silt(x, y, z, k, n, str, r) {
     emitDust(x + Math.cos(a) * rr, y, z + Math.sin(a) * rr, n, str);
   }
 }
+setSlabDust(emitDust);                                // (Task 7b: the slabs' and the uncovered growth's silt, the shared puff pool)
 const LEG_DELAY = new Float32Array(8);
 WAKE_ORDER.forEach((li, o) => { LEG_DELAY[li] = 0.08 + o * 0.055; });
 const _busy = new Int8Array(2);
@@ -1797,7 +2080,7 @@ function nsTurn(L) { return NOSAFE.turn * (L.drop || L.nsSlow > 0 ? NOSAFE.slowK
 function noSafeSpot(L, dt, player, ev, hunt) {
   const N = NOSAFE, R = L.R;
   if (L.nsSlow > 0) L.nsSlow = Math.max(0, L.nsSlow - dt);
-  const live = hunt && L.standE > 0.9;
+  const live = hunt && L.standE > 0.9 && L.risenUp !== false;   // (velkath-buried-rock: held until a buried rise has stood; else shipped)
   const ux = player.pos.x - L.pos.x, uz = player.pos.z - L.pos.z, rho = Math.hypot(ux, uz);
   const shellY = L.bodyY - (L.dropY || 0);                    // her standing body height (last pose)
   const below = live && player.pos.y < shellY;
@@ -1897,7 +2180,33 @@ function dropImpact(L, ev, player, rho, ux, uz, shellY) {
   else { L.sweepN = (L.sweepN || 0) + 1; L.dropKind = 'sweep'; }
 }
 
+// (Task 8) THE SHELL'S KEEP (home only, under L.buried): her shell's plan outline, KEEP_N vertices (the farthest per bearing from the shell's
+// own origin, picked once from its geometry: an event), read through last frame's matrixWorld; the nearest to the lip held APRON u off
+const KEEP_N = 32;
+function keepOutline(L) {
+  const P = L.parts.shell.geometry.attributes.position, best = new Float32Array(KEEP_N).fill(-1), idx = new Int32Array(KEEP_N).fill(-1);
+  for (let i = 0; i < P.count; i++) { const x = P.getX(i), z = P.getZ(i), b = ((Math.atan2(z, x) / (2 * Math.PI) + 1) * KEEP_N | 0) % KEEP_N, r = x * x + z * z;
+    if (r > best[b]) { best[b] = r; idx[b] = i; } }
+  return idx;
+}
+function keepShell(L, dt) {
+  const P = L.parts.shell.geometry.attributes.position, e = L.parts.shell.matrixWorld.elements;
+  let dmin = 1e9, bx = 0, bz = 0;
+  for (let k = 0; k < KEEP_N; k++) { const i = L.keepIdx[k]; if (i < 0) continue;
+    const x = P.getX(i), y = P.getY(i), z = P.getZ(i), wx = e[0] * x + e[4] * y + e[8] * z + e[12], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+    const d = fissureDist(wx, wz, L.idx); if (d < dmin) { dmin = d; bx = wx; bz = wz; } }
+  if (dmin >= APRON) return;
+  const g = crackAway(bx, bz, L.idx), k = Math.min(APRON - dmin, 3.0 * dt * L.standE);
+  L.pos.x += g.x * k; L.pos.z += g.z * k;
+  const vin = L.vel.x * g.x + L.vel.z * g.z;
+  if (vin < 0) { L.vel.x -= vin * g.x; L.vel.z -= vin * g.z; }
+  L.keepShellN = (L.keepShellN || 0) + 1;
+}
 const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
+// (Task 8) the rise plume's spawn points on the FITTED dune (MD.M: a cloud bursts where the sand was); module level, so no closure or
+// array literal per rising frame
+const RISE_J = [0, 21, 43, 64, 85, 107];                                     // the crack's ring of six bearings
+const ringAt = (MD, ring, j) => (ring * MD.COLS + (j % MD.COLS)) * 3;       // a dune vertex's offset
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
   if (L.pendingMsg) { ev.msg = L.pendingMsg; L.pendingMsg = null; }
@@ -1909,6 +2218,17 @@ export function updateBrooder(L, dt, t, player) {
   }
   if (!L.pPrev) L.pPrev = player.pos.clone();
   sight(L, dt, player, ev);
+  // (velkath-buried-rock) the mound: the tell's breath and trickle, the dune drawn at L.bury (L.moundK: the rise, Task 7a), the growth
+  // outside the strip hidden while she is buried (a write only on the frame bury crosses 0.5). Only a buried build has a mound
+  // (Task 7b, M6) from the crack until she stands the growth is uncovered outward from the strip (burial.js growReveal), not snapped back
+  // at bury 0.5 with half a dune drawn
+  if (L.mound) {
+    breathTick(L, dt, player, camera.position, emitDust); setMoundK(L.mound, L.moundK ?? L.bury, L.breathY);
+    if (L.buried && L.cracked && !L.hasStood && !L.dormant) growReveal(L, dt);
+    else if (L.digging && !L.digJob) growCover(L, L.bury);   // (Task 12) the sand slides back up over it as she digs in
+    else buryGrowth(L, L.bury > 0.5);
+  }
+  if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there. uCrack / uCrackO lag the body a frame: M6, see crustTick)
   L.t += dt;
   L.uni.uTime.value = L.t;
   const R = L.R;
@@ -1919,7 +2239,12 @@ export function updateBrooder(L, dt, t, player) {
   // (velfix) calmed, standing back up over him (SETTLE) is quiet: no wake (no leg puffs, no sink-and-heave, no
   // shudder or quake, no silt pouring off her back), at the settle's own rate
   const rising = L.standTarget > L.stand && !L.calmed;
-  L.rising = rising;                                  // (game.js: limbs unfolding past him are a shove, not a slam)
+  // (velkath-buried-rock) the rise is not over until she STANDS (the clock done and the heave settled): until then her body's contacts
+  // are a shove, not a slam (game.js reads L.rising), her threat is held and the drop's count does not run (L.risenUp, below).
+  // Not buried: exactly the shipped line, and L.risenUp true.
+  if (L.buried && !L.dormant && !L.calmed && !L.hasStood && L.stand >= 1 && Math.abs(L.heave.x - 1) < 0.02 && Math.abs(L.heave.v) < 0.05) { L.hasStood = true; L.crackK = 0; }
+  L.risenUp = !(L.buried && BURY.holdRise > 0 && !L.dormant && !L.calmed && !L.hasStood);
+  L.rising = rising || !L.risenUp;                    // (game.js: limbs unfolding past him are a shove, not a slam)
   const rate = rising ? 1 / RISE_T : 1 / SETTLE_T;
   L.stand += clamp(L.standTarget - L.stand, -rate * dt, rate * dt);
   L.standE = smooth(L.stand, 0, 1);
@@ -1937,6 +2262,31 @@ export function updateBrooder(L, dt, t, player) {
   const heaveT = win(u, 0.45, 0.88) - (rising ? 0.12 * Math.sin(Math.PI * win(u, 0.22, 0.50)) : 0);
   const hv0 = L.heave.x;
   spr(L.heave, heaveT, 2.6, rising ? 0.42 : 0.55, dt);
+  // (velkath-buried-rock) THE RISE OUT OF THE SAND (BURY above): only ever down while she rises; the beats on the same clock
+  if (L.buried && !L.calmed && !L.dormant && rising) {
+    const b = 1 - win(u, BURY.riseU[0], BURY.riseU[1]);
+    if (b < L.bury) L.bury = b;
+    L.moundK = Math.min(L.bury, 1 - win(u, BURY.pourU[0], BURY.pourU[1]));
+    if (!L.cracked) {
+      L.cracked = true; L.crackT = 0; crackBeat(L, ev, player);
+      // (velkath-buried-rock) THE PLUME (spec §2, beat 3): a ring at the crack, once, in the cracking block (a zero-dt frame cannot repeat it)
+      if (BURY.plume && L.mound) { const MD = L.mound; for (let q = 0; q < 6; q++) { const o = ringAt(MD, 3, RISE_J[q]); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx); } }
+    }
+    // more as the sheets fall (plume.js 'rise')
+    if (BURY.plume && L.mound) {
+      const MD = L.mound;
+      const sheet = L.moundK < 0.25 ? 3 : L.moundK < 0.5 ? 2 : L.moundK < 0.75 ? 1 : 0;
+      while ((L.riseSheetN || 0) < sheet) {
+        const j0 = (L.riseSheetN || 0) * 37;
+        let o = ringAt(MD, 5, j0); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
+        o = ringAt(MD, 5, j0 + 64); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
+        L.riseSheetN = (L.riseSheetN || 0) + 1;
+      }
+    }
+  }
+  if (L.cracked && L.crackT < BURY.crackT + 1) L.crackT += dt;
+  // (Task 7b) the crust's crack (uCrack, burial.js crustTick): up over crackT s from the wake, times the sand still on her
+  if (L.buried && L.cracked && !L.hasStood) L.crackK = Math.min(1, L.crackT / BURY.crackT) * L.bury;
   // settling, the shell lands: the moment the fall stops it thumps the floor
   if (!rising && hv0 > 0.02 && L.heave.x <= 0.02 && L.heave.v < -0.05) { quake(L, ev, L.pos.x, L.pos.z, 0.5, player); silt(L.pos.x, L.bodyY - R * 0.1, L.pos.z, 8, 3, 3.4, R * 0.9); }
   // the shudder as she wakes: the whole shell trembles while the silt pours
@@ -1949,12 +2299,22 @@ export function updateBrooder(L, dt, t, player) {
   }
   // silt pours off her back as she rises: from the rim, faster while the shell is moving
   if (!L.dormant && u < 1 && rising) {
-    L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud);
+    const dune = L.buried && L.mound && L.moundK > 0.02;
+    L.dustT = (L.dustT || 0) - dt * (1 + 6 * Math.abs(L.heave.v) + 2 * shud) * (dune ? BURY.pourRate : 1);
     if (L.dustT <= 0) {
       L.dustT = 0.09; L.wakeFx = (L.wakeFx | 0) + 1;
-      const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
-      const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
-      emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, 6, 3.4);
+      if (dune) {
+        // (Task 7b) buried, the sand streams off the DUNE'S FLANK as it draws back down her sides (where the sand was): a random bearing's
+        // ring 4..8 vertex, anywhere between the drawn sand there now (P) and the fitted dune (M), so the streams fall the height it has
+        // fallen; fewer particles a burst (3, the shipped 6) at BURY.pourRate x the rate: the footfx pool (420) is shared with his boots
+        // (M3, measured: burial-probe rise info.dust, 280-514 live-slot overwrites of 1650-1850 puffs a rise over six placements, see burial.js setSlabDust)
+        const MD = L.mound, o = ((4 + ((Math.random() * 5) | 0)) * MD.COLS + ((Math.random() * MD.COLS) | 0)) * 3;
+        emitDust(MD.M[o], MD.P[o + 1] + (MD.M[o + 1] - MD.P[o + 1]) * Math.random(), MD.M[o + 2], BURY.dust.pour, BURY.dust.pourStr);
+      } else {
+        const a = Math.random() * Math.PI * 2, r = R * (0.75 + 0.3 * Math.random());
+        const x = L.pos.x + Math.cos(a) * r, z = L.pos.z + Math.sin(a) * r;
+        emitDust(x, L.bodyY + R * 0.05 * Math.random(), z, L.buried ? BURY.dust.rim : 6, 3.4);   // (fix round 2, M3: the rise's silt budget, burial.js BURY.dust; off home 6 as shipped)
+      }
     }
   }
   // the drift sinks away as she rises out of it, and is gone once she has stood
@@ -1972,7 +2332,7 @@ export function updateBrooder(L, dt, t, player) {
   }
   if (!L.underE) L.underE = S();
   spr(L.underE, L.under ? L.standE : 0, 2.0, 1.0, dt > 0 ? dt : 1);
-  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP && !L.under ? 1 : 0;
+  if (!L.hold && !L.calmed && !L.dormant) L.threatTarget = L.risenUp && L.standE > 0.9 && L._pdT < L.R * L.threatR && L.blindT < SIGHT_GIVEUP && !L.under ? 1 : 0;
   // a fresh threat starts the hammer at the top of its guard, so the first blow is
   // always preceded by the full wind-up
   if (L.threatTarget > 0.5 && L.threat < 0.02) L.swingT = 0;
@@ -2038,6 +2398,24 @@ export function updateBrooder(L, dt, t, player) {
   const hunt = !L.walkTo && !L.calmed && !L.hold && !L.dormant && L.standE > 0.5;
   const tx = L.aim.x - L.pos.x, tz = L.aim.z - L.pos.z, dh = Math.hypot(tx, tz) || 1e-3;
   L.huntD = dh;
+  if (L.pointPh) {
+    // (velkath-buried-rock Task 10) THE POINT (POINT): her front to the opening; the reach solved once at the raise (at turnT, or once she
+    // faces the opening); home after
+    // (Michael's ruling, POINT.face) the turn holds until she faces the opening; the raise, hold and lower run from that moment (pointR)
+    const P = POINT, t = (L.pointT += dt), wP = Math.atan2(L.pointAt.x - L.pos.x, L.pointAt.z - L.pos.z);
+    if (L.pointPh === 1) {
+      const dA = Math.atan2(Math.sin(wP - L.yaw), Math.cos(wP - L.yaw));
+      if (t >= P.turnT && (Math.abs(dA) <= P.face * Math.PI / 180 || t >= P.faceMax)) { L.pointR = t; L.pointPh = 2; aimPoint(L, dA); }   // solved once
+    }
+    if (L.pointPh > 1) {
+      const u = t - L.pointR, t3 = P.raiseT + P.holdT, t4 = t3 + P.lowerT;
+      const ph = u < P.raiseT ? 2 : u < t3 ? 3 : u < t4 ? 4 : 0;
+      L.pointPh = ph;
+      L.pointK = ph === 2 ? ease(u / P.raiseT) : ph === 3 ? 1 : ph === 4 ? 1 - ease((u - t3) / P.lowerT) : 0;
+    } else L.pointK = 0;
+    if (!L.pointPh) { L.walkTo = L.lairPos.clone(); L.toBed = true; }    // done: the shipped walk home
+    else want = wP;
+  }
   if (L.walkTo && L.standE > 0.9) {
     const dx = L.walkTo.x - L.pos.x, dz = L.walkTo.z - L.pos.z, dist = Math.hypot(dx, dz);
     if (dist < (L.toBed ? 3 : L.R * 1.9)) {            // stop with the claws short of the target
@@ -2065,6 +2443,21 @@ export function updateBrooder(L, dt, t, player) {
     // (under her, the bearing to him swings wildly with every step he takes: she holds)
     want = L.blindT < SIGHT_GIVEUP ? (dh > 0.5 * R ? Math.atan2(tx, tz) : L.yaw)
       : L.searchYaw + 0.7 * Math.sin((L.blindT - SIGHT_GIVEUP) * 0.45);
+  }
+  // (velkath-buried-rock Task 12) DIGGING BACK IN (burial.js BURY.digT): calmed and lain down on her bed (the point done, home, the settle's
+  // stand at 0, the heave landed), once he is off her ground (onHerDune, SETTLE.release, for SETTLE.hold s) the refit's job runs (beginDig,
+  // digStep) and then bury runs 0 -> 1 over digT s, paused while he is on her ground (resumed after SETTLE.hold s off it); a puff of the low haze
+  // every BURY.haze s off the dune's ring 5 as it rises (plume.js 'wake': render only). Dug in (L.dugIn) she is the outcrop again: breathTick
+  // breathes her, publishCols makes her crest ground. Home only (L.buried): elsewhere the shipped settle, unchanged
+  if (L.buried && L.mound && L.calmed && !L.dormant && !L.dugIn && !L.pointPh && !L.homeTurn && !L.walkTo && L.standTarget === 0 && L.stand <= 0.001 && L.heave.x < 0.02) {
+    const near = BURY.pause > 0 && onHerDune(L, player, SETTLE.release);
+    L.digOff = near ? 0 : (L.digOff || 0) + dt;
+    if (!L.digging && !L.digFail && L.digOff > SETTLE.hold) { L.digging = true; beginDig(L); }   // (digFail: the job threw on this bed, digStep)
+    if (L.digging && !L.digJob && (!near && L.digOff > SETTLE.hold || BURY.pause <= 0)) {
+      L.bury = Math.min(1, L.bury + dt / BURY.digT); L.moundK = L.bury;
+      if ((L.hazeT = (L.hazeT || 0) - dt) <= 0) { L.hazeT = BURY.haze; const j = (Math.random() * L.mound.COLS) | 0, o = (5 * L.mound.COLS + j) * 3; spawnWake(L.mound.P[o], L.mound.P[o + 1], L.mound.P[o + 2], 0.4, L.idx); }
+      if (L.bury >= 1) { L.digging = false; L.dugIn = true; }
+    }
   }
   // the hunt's closing speed and heading (world space)
   let vC = 0, cAng = Math.atan2(tx, tz);
@@ -2100,7 +2493,7 @@ export function updateBrooder(L, dt, t, player) {
     let dA = want - L.yaw;
     while (dA > Math.PI) dA -= Math.PI * 2;
     while (dA < -Math.PI) dA += Math.PI * 2;
-    const wr = hunt ? nsTurn(L) : 0.35;   // (velhard: NOSAFE.turn, slowed in the windows)
+    const wr = hunt ? nsTurn(L) : L.pointPh ? POINT.turn : 0.35;   // (velhard: NOSAFE.turn, slowed in the windows; Task 10: the point's turn)
     yawWant = clamp(dA * 1.4, -wr, wr);
     if (Math.abs(dA) > 0.6) speed *= 0.2;                // turn on the spot before striding off
   }
@@ -2134,7 +2527,8 @@ export function updateBrooder(L, dt, t, player) {
   // The same holds on the walk home to her bed (calm, walkTo), and past either tip she stays on her
   // own side of the crack's line, so a diver across it cannot lead her round a tip and back over
   // the jam on the walk home.
-  if ((hunt || L.walkTo) && !L.dormant && L.standE > 0.5) {
+  // (Task 10) and through THE POINT, before the walk home (home only: pointPh is 0 elsewhere): she turns in place and her outline sweeps
+  if ((hunt || L.walkTo || L.pointPh) && !L.dormant && L.standE > 0.5) {
     const keep = APRON + STAND.keep * R, fd = fissureDist(L.pos.x, L.pos.z, L.idx);
     if (fd < keep) {
       const g = crackAway(L.pos.x, L.pos.z, L.idx);
@@ -2143,6 +2537,11 @@ export function updateBrooder(L, dt, t, player) {
       const vin = L.vel.x * g.x + L.vel.z * g.z;
       if (vin < 0) { L.vel.x -= vin * g.x; L.vel.z -= vin * g.z; }
     }
+    // (velkath-buried-rock Task 8, the controller's ruling) HOME ONLY (L.buried): her SHELL is held off the lip too, not her centre alone.
+    // The centre rule assumes a widest half extent of 1.29 R; on home's kinked lip her shell reached 20.95 u (1.36 R) toward it from a
+    // centre on the keep line, and blind in the rise's plume (no stalk) she reached the keep line where a corner came 11.77 u off the lip
+    // (fissure-probe velkath-crack, bar 12). Her drawn outline (last frame's pose: keepOutline) is kept APRON u off, at the centre rule's rate
+    if (L.buried) keepShell(L, dt);
     const F = FISSURE[L.idx];
     fissureLocal(L.pos.x, L.pos.z, L.idx, _fl);
     if (L.lairSide && Math.abs(_fl.u) > F.halfLen && _fl.v * L.lairSide < 0) {
@@ -2244,6 +2643,9 @@ export function updateBrooder(L, dt, t, player) {
   }
 
   poseAll(L, dt, player);
+  // (Task 7b) the slabs ride her shell where it is now (poseAll has just set her body's matrix); on the crack's frame slabsBreak laid them
+  // before this first write
+  if (L.slabs) slabTick(L, dt);
 
   // (contact: her body is solid now — bodyCols.js, resolved by game.js after this update,
   // which also raises the slam when a part of her comes INTO him. The old shove here was a
@@ -2280,6 +2682,8 @@ export function updateBrooder(L, dt, t, player) {
     let allLit = true;
     for (let i = 0; i < L.sigils.length; i++) {
       const g = L.sigils[i];
+      // (Task 10) the lab verb 'calm' (L.cmd): every dark ward lit as a touch lights it, on this update (dev: probes and the lab)
+      if (L.calmNext && !g.lit) lightWard(L, g, ev);
       // (a remembered ward is buried with the rest while she sleeps: it rises with her)
       if (g.lit) { if (g.mem) wardMemPose(g, dt, haloK, L.standE); else wardLitPose(g, dt, haloK); }
       else {
@@ -2299,14 +2703,23 @@ export function updateBrooder(L, dt, t, player) {
         }
       }
     }
+    L.calmNext = false;
     let rem = 0;
     for (const q of L.sigils) if (!q.lit) rem++;
     ev.remaining = rem;
     if (allLit) {
       L.calmed = true; L.calmT = 0; ev.calmed = true; L.threatTarget = 0;
+      // (velkath-buried-rock, final review item 1) calmed before she has stood (the lab's calm early in the rise; in play a ward is offered
+      // from standE 0.6, bury ~0.03 by then): the rise's easing and the stood test both want !L.calmed, so bury, the dune and the crack would
+      // freeze part-way. She is out of the sand at once: the stood transition's own writes (hasStood, crackK 0), bury 0, the dune drawn down
+      if (L.buried && L.cracked && !L.hasStood) { L.hasStood = true; L.crackK = 0; L.bury = 0; L.moundK = 0; }
       if (L.memWard >= 0) wardsRecall(L, haloK);
       // she goes home: back to her bed on the lip, to settle over her clutch
-      if (L.brood) { L.walkTo = L.lairPos.clone(); L.toBed = true; L.standTarget = 1; }
+      if (L.buried && BURY.point) {
+        // (velkath-buried-rock) THE POINT first (POINT above); she walks home when it is done
+        const rp = riftPos(L.idx);
+        L.pointPh = 1; L.pointT = 0; L.pointAt.set(rp.x, lipMeanY(L.idx, terrainH), rp.z); L.standTarget = 1;
+      } else if (L.brood) { L.walkTo = L.lairPos.clone(); L.toBed = true; L.standTarget = 1; }
       else { L.standTarget = 0; L.walkTo = null; }
     }
   } else {
@@ -2328,5 +2741,7 @@ export function updateBrooder(L, dt, t, player) {
   wardFlashes(L, dt, null);
   updatePlumes(dt);
   L.pPrev.copy(player.pos);
+  // (Task 12) the dig-in's refit, a slice a frame (digStep); its ms booked for burial-probe digin's cost
+  if (L.digJob) L.digJobMs = digStep(L); else if (L.digJobMs) L.digJobMs = 0;
   return ev;
 }

@@ -42,7 +42,8 @@ export const PROBE = `(() => {
     const dry = res < 0.12;
     if (dry && !st.dryWas) st.dryN++;
     st.dryWas = dry;
-    const fl = terrainH(P.pos.x, P.pos.z, 0);
+    // (the host page must set window.__xf = T.extraFloorAt || null: riteplay.mjs does; fullplay.mjs, fullplay-gate.mjs and velfix-gate.mjs do not, so agl reads terrainH alone there)
+    const fl = Math.max(terrainH(P.pos.x, P.pos.z, 0), window.__xf ? window.__xf(P.pos.x, P.pos.z, 0) : -1e9);   // (buried Task 14: the ground he stands on, a dune or a crest included; main has no __xf)
     const lairD = Math.hypot(P.pos.x - L.lairPos.x, P.pos.z - L.lairPos.z);
     const inB = window.__fd ? window.__fd(P.pos.x, P.pos.z, 0) < 0 : fl < st.lairFloor - 15 && lairD < 90;   // (fissure Task 5: the 'bowl' is the crack now)
     if (inB && !st.inBowl) { st.bowlN++; st.bowlAt.push(+t.toFixed(1)); }
@@ -75,7 +76,7 @@ export const PROBE = `(() => {
 // blow landing, her drop's telegraph), her wards
 export const STATE = `(() => {
   const P = window.player, SV = window.survival, L = window.lev, Hp = L.harpoon, V = P.pos.constructor, r = x => +x.toFixed(2);
-  const fl = terrainH(P.pos.x, P.pos.z, 0);
+  const fl = Math.max(terrainH(P.pos.x, P.pos.z, 0), window.__xf ? window.__xf(P.pos.x, P.pos.z, 0) : -1e9);   // (buried Task 14: as PROBE's)
   const o = { pos: [r(P.pos.x), r(P.pos.y), r(P.pos.z)], vel: [r(P.vel.x), r(P.vel.y), r(P.vel.z)], agl: r(P.pos.y - 1.35 - fl), grounded: !!P.grounded,
     reserve: r(SV.reserve / (SV.reserveCap || 1)), fill: r(P.fill || 0), dormant: !!L.dormant, calmed: !!L.calmed, standE: r(L.standE),
     lev: [r(L.pos.x), r(L.bodyY - (L.dropY || 0)), r(L.pos.z)], R: r(L.R), lyaw: r(L.yaw), cock: r(L.cock || 0), threatE: r(L.threatE || 0), impT: r(L.impT == null ? 9 : L.impT),

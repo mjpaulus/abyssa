@@ -1591,6 +1591,9 @@ function mountFillets(zi, F) {
   zones[zi].add(m);
 }
 
+// (velkath-buried-rock) the zone's rock and silt hues, for her crust (brooder.js / burial.js crustTerm)
+export function rockHue(zi) { return PAL[zi].rock; }
+export function siltHue(zi) { return PAL[zi].silt; }
 // THE FISSURE's jam (world/fissure.js) is built from this rock kit, so its boulders ARE the
 // seabed's rocks: zone z's boulder material (the 'rock' program, already compiled and warmed),
 // one rock geometry shaped from the CALLER's stream (flora's own stream is swapped out for the

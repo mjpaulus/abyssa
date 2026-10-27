@@ -26,13 +26,16 @@ const AT = `(async () => {
   const L = window.lev, P = window.player, H = L && L.harpoon;
   if (!H) return { err: 'no harpoon (' + (L ? L.kind : 'no sleeper') + ')' };
   const hp = H.seamWorld ? H.seamWorld() : null, a = H.anchor;
-  const fl = T.terrainH(a.x, a.z, 0);
+  const fl = Math.max(T.terrainH(a.x, a.z, 0), T.extraFloorAt(a.x, a.z, 0));   // (velkath-buried-rock Task 4) his drawn ground: the dune or her crest at home, terrainH elsewhere
   let blocked = false; L.publishCols && L.publishCols();
   for (const h of [0.45, 1.0, 1.6]) if (BC.bodyBlocked(a.x, fl + h, a.z, 0.45)) blocked = true;
   const sand = L.sand, side = hp ? (hp.x - L.pos.x) * sand.x + (hp.z - L.pos.z) * sand.z : null;
+  // (velkath-buried-rock Task 4 ruling) buried, the near-flank bar is re-derived: he reaches the iron from the open sand (the stand spot on
+  // her sand side) and the seam faces the sand (seat()'s own facing test, n . sand >= 0.35)
+  const anchorSide = (a.x - L.pos.x) * sand.x + (a.z - L.pos.z) * sand.z, ns = H.normal ? H.normal.x * sand.x + H.normal.z * sand.z : null;
   return { prompt: L.rite ? L.rite.prompt(P.pos) : null, dSal: +Math.hypot(P.pos.x - a.x, P.pos.z - a.z).toFixed(2),
     anchorFd: +S.fissureDist(a.x, a.z, 0).toFixed(1), seamFd: hp ? +S.fissureDist(hp.x, hp.z, 0).toFixed(1) : null,
-    seamUp: hp ? +(hp.y - T.terrainH(hp.x, hp.z, 0)).toFixed(2) : null, seamUpSal: hp ? +(hp.y - fl).toFixed(2) : null, sandSide: side == null ? null : +side.toFixed(1),
+    seamUp: hp ? +(hp.y - T.terrainH(hp.x, hp.z, 0)).toFixed(2) : null, seamUpSal: hp ? +(hp.y - fl).toFixed(2) : null, sandSide: side == null ? null : +side.toFixed(1), buried: !!L.buried, anchorSide: +anchorSide.toFixed(2), ns: ns == null ? null : +ns.toFixed(3),
     gripUp: H.gripWorld ? +(H.gripWorld(new (a.constructor)()).y - fl).toFixed(2) : null, seatOk: !!H.seatOk,
     blocked, wound: !!H.wound, pulled: !!H.pulled, dormant: !!L.dormant, site: window.__chart.site ? window.__chart.site() : null };
 })()`;
@@ -46,7 +49,8 @@ if (mode === 'routes') {
     if (r.prompt !== '[E] PULL THE HARPOON') fail.push(`site ${site} prompt: ${r.prompt}`);
     if (r.anchorFd < 6) fail.push(`site ${site}: Sal stands ${r.anchorFd} u off the crack`);
     if (r.seamFd < 6) fail.push(`site ${site}: the harpoon sits ${r.seamFd} u off the crack`);
-    if (!(r.sandSide > 0)) fail.push(`site ${site}: the harpoon is not on her near (sand) flank (${r.sandSide})`);
+    // (Task 4 ruling) buried: the stand spot on her sand side and the seam facing the sand; not buried: the shipped bar, unchanged
+    if (r.buried ? !(r.anchorSide > 0 && r.ns >= 0.35) : !(r.sandSide > 0)) fail.push(`site ${site}: the harpoon is not on her near (sand) flank (${r.buried ? 'buried: anchorSide ' + r.anchorSide + ', ns ' + r.ns : r.sandSide})`);
     if (!(r.seamUpSal > 0.5 && r.seamUpSal < 2.8)) fail.push(`site ${site}: the seam is ${r.seamUpSal} u over his boots (0.5-2.8)`);
     if (!(r.gripUp > 0.85 && r.gripUp < 1.95)) fail.push(`site ${site}: the harpoon's grip is ${r.gripUp} u over his boots (his hands: 0.85-1.95)`);
     if (!r.seatOk) fail.push(`site ${site}: no seam on her flank qualified (fallback seat)`);

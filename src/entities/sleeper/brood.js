@@ -46,6 +46,7 @@ import { fissureDist } from '../../world/fissureShape.js';
 import { emitDust } from '../../world/footfx.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as G from './brooderGeo.js';
+import { BURY } from './burial.js';
 // (velfix) the clutch's pose after the calm moves at most this much a second (the re-rise's whole swing in ~0.6 s)
 const ST_CALM_RATE = 1.0;
 
@@ -683,7 +684,7 @@ export function makeBrood(L, idx, trailFrom) {
   if (!_geoN) { _geoN = sphere(1); _geoC = sphere(4); _geoS = strandGeo(); }
   if (!_geoK) _geoK = casingGeo();
   const B = {
-    t: 0, seated: false, st: 0, fanT: 4,
+    t: 0, seated: false, st: 0, drop: 0, fanT: 4,
     found: { tracks: false, shells: false, boot: false, coupling: false, clutch: false, ridge: false },
     trailA: trailFrom.clone(), shellsAt: V3(), bootAt: V3(), couplingAt: V3(), takeAt: V3(), bear: 0, notch: 0.5,
     lobes: [], nL: 0, findLines: FIND_LINES
@@ -717,6 +718,7 @@ export function makeBrood(L, idx, trailFrom) {
     for (let k = 0; k < B.nL; k++) {
       const lb = B.lobes[k], o = k * 4;
       for (let c = 0; c < 4; c++) B.live[o + c] = lb.s[c] + (lb.h[c] - lb.s[c]) * s;
+      B.live[o + 1] -= B.drop;                         // (buried: the whole mass sits B.drop deeper, see B.update; 0 is exactly as shipped)
     }
   };
   // the lowest point of the mass over body-local (x, z), shell units (or `none`): the
@@ -1129,6 +1131,23 @@ export function makeBrood(L, idx, trailFrom) {
   // it is found.
   B.update = (dt, player, ev) => {
     B.t += dt;
+    // (velkath-buried-rock Task 6) BURIED, THE WHOLE MASS SITS BURY.clutchSink u DEEPER THAN HER BODY'S SINK, by L.bury (as brooder.js poseClaws
+    // sinks the claws, 5b): her spill tongue lies on the floor of the UNSUNK pose past her rim, and sunk 1.41 u (crest 6.5) its outer lobes
+    // stood out of the sand: burial-probe disguise clutch on ddd8133, lobe 17 +0.711 u over the drawn sand (r 0.09 = 1.39 u, centre 1.02 u
+    // under the floor), lobe 18 +0.59 over the bare floor; it lies at the strip's rear end, inside the band where there is no dune to cover it
+    // (the pile's sources are skipped there), and her shell is lower than it there. One offset for the mass's meshes (the beads and setae carry
+    // no lobe index, so a per-lobe drop would have to be baked into them), the live lobes (reach, soft-solid bodyCols setClutch, underY) and
+    // the fillet uniform below agree on B.drop. Her main lobes are 0.55-1.5 u under the sand already and under her, so they go deeper unseen.
+    // At L.bury 0, and at every site that is not buried, B.drop is 0 and every term is the shipped one bit for bit. B.takeAt stays the
+    // unsunk seat-time point: it is only read risen (the find line and the fan are held while buried, below)
+    {
+      const dr = L.buried ? BURY.clutchSink * L.bury / L.R : 0, oy = dr ? -dr : 0;
+      B.drop = dr;
+      // (no array or iterator: this runs every frame; the beads and setae are built at seat, after the core)
+      if (B.core.position.y !== oy) B.core.position.y = oy;
+      if (B.beadsN && B.beadsN.position.y !== oy) B.beadsN.position.y = oy;
+      if (B.setae && B.setae.position.y !== oy) B.setae.position.y = oy;
+    }
     // calmed she keeps it clamped under her (it does not spill again where she settles)
     // (home on her bed, at the heading she was seated on, it spills again as she settles)
     const stT = L.calmed && (L.homeTurn || L.walkTo || Math.abs(Math.atan2(Math.sin(L.yaw - (L.lairYaw ?? L.yaw)), Math.cos(L.yaw - (L.lairYaw ?? L.yaw)))) > 0.2) ? 1 : L.standE;
@@ -1145,7 +1164,7 @@ export function makeBrood(L, idx, trailFrom) {
     {
       const UL = uN.uLobes.value, br = uN.uBreath.value, Lv = B.live;
       for (let k = 0; k < B.nL; k++) {
-        const o = k * 4, x = Lv[o], y = Lv[o + 1], z = Lv[o + 2];
+        const o = k * 4, x = Lv[o], y = Lv[o + 1] + B.drop, z = Lv[o + 2];   // (the fillets live in the meshes' own frame: the drop is theirs)
         const dx = x - MASS_C[0], dy = y - MASS_C[1], dz = z - MASS_C[2], dl = Math.hypot(dx, dy, dz) + 1e-4;
         const bw = 0.5 + 0.5 * Math.sin(B.t * 1.25 + z * 11 + x * 4), f = 0.0065 * bw * bw * br / dl;
         UL[k].set(x + dx * f, y + dy * f, z + dz * f, Lv[o + 3]);
@@ -1164,7 +1183,8 @@ export function makeBrood(L, idx, trailFrom) {
     }
     // (asleep she fans it slowly; awake she clamps the apron down: uBreath above)
     // the fanning lifts a breath of silt off the open lobes now and then
-    if (L.dormant && B.seated && (B.fanT -= dt) <= 0) {
+    // (Task 6) buried there are no eggs to see, and a puff of silt off them would be a lie; risen (L.bury under 0.5) and calmed, as shipped
+    if (L.dormant && B.seated && !(L.bury > 0.5) && (B.fanT -= dt) <= 0) {
       B.fanT = 5 + 4 * Math.random();
       emitDust(B.takeAt.x + (Math.random() - 0.5) * 2, B.takeAt.y - 0.3, B.takeAt.z + (Math.random() - 0.5) * 2, 4, 0.8);
     }
@@ -1175,7 +1195,8 @@ export function makeBrood(L, idx, trailFrom) {
     else if (!F.shells && near(B.shellsAt, 12)) { F.shells = true; ev.msg = FIND.shells; }
     else if (!F.boot && B.relics && near(B.bootAt, 6)) { F.boot = true; ev.msg = FIND.boot; }
     else if (!F.coupling && B.relics && near(B.couplingAt, 6)) { F.coupling = true; ev.msg = FIND.coupling; }
-    else if (!F.clutch && L.dormant && B.seated && near(B.takeAt, 11)) { F.clutch = true; ev.msg = FIND.clutch; }
+    // (Task 6) the same for the line about them: buried, a line about eggs nobody can see would give her away; risen, as shipped
+    else if (!F.clutch && L.dormant && !(L.bury > 0.5) && B.seated && near(B.takeAt, 11)) { F.clutch = true; ev.msg = FIND.clutch; }
   };
   return B;
 }

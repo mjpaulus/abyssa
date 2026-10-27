@@ -94,6 +94,7 @@ const pSize = new Float32Array(P_MAX);
 const pVel = new Float32Array(P_MAX * 3);
 let pHead = 0;
 let pAlive = 0;   // live-particle count: zero means zero buffer uploads this frame
+let pEmit = 0, pOver = 0;   // (read-only booking, burial-probe rise info.dust) puffs emitted, and emitted over a slot still alive
 let points = null;
 const lanternU = { value: new THREE.Vector3(0, 1e9, 0) };
 
@@ -181,10 +182,13 @@ export function setLanternPos(v) { lanternU.value.copy(v); }
 // Exported for the sleepers: the Brooder's footfalls and the silt that pours off her as
 // she rises use the same puff pool as Sal's boots.
 export function emitDust(x, y, z, count = 12, strength = 1) { emitPuff(x, y, z, count, strength); }
+// (burial-probe, M3) the pool's running totals: emissions, and the ones that took a slot whose puff was still alive (the pool is shared)
+export function dustStats() { return { emitted: pEmit, over: pOver }; }
 function emitPuff(x, y, z, count, strength) {
   for (let i = 0; i < count; i++) {
     const k = pHead; pHead = (pHead + 1) % P_MAX;
-    if (pLife[k] <= 0) pAlive++;   // reusing a live slot keeps the count honest
+    pEmit++;
+    if (pLife[k] <= 0) pAlive++; else pOver++;   // reusing a live slot keeps the count honest
     const a = rng(0, Math.PI * 2), r = rng(0.04, 0.28);
     pPos[k * 3] = x + Math.cos(a) * r;
     pPos[k * 3 + 1] = y + rng(0.02, 0.12);

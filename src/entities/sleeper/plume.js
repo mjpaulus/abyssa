@@ -21,20 +21,25 @@
 // the same clocks the particles spread on (checked against frames; see the card).
 //
 // Budget: 1 draw (+1 veil draw while the camera is inside a cloud). CPU per frame: a clock,
-// a light read, the veil density (<= 12 plumes). Zero per-frame allocation.
+// a light read, the veil density (<= 24 plume records: Task 8's rise ring). Zero per-frame allocation.
 import * as THREE from 'three';
 import { scene, camera } from '../../core.js';
 import { canvas2d, noiseCanvas, seededRand } from '../../lib/textures.js';
 import { terrainH } from '../../world/terrain.js';
 
 const N0 = 448, NW = 192, N = N0 + NW;   // particle ring: [0, N0) the plumes, [N0, N) her wake (render only)
-const PL = 12;                       // plume records (density model): 0..3 the hammer's, 4..11 footfalls'
-// the two kinds: a hammer blow and a footfall
+const PL = 24;                       // plume records (density model): 0..3 the hammer's, 4..11 footfalls', 12..23 the rise's
+// the three kinds: a hammer blow, a footfall, and (velkath-buried-rock Task 8) her rise out of the sand
 export const PLUME = {
   big: { n: 38, life: [4.6, 6.0], vr: [3.0, 14.0], vy: [1.0, 6.5], s0: [3.5, 5.5], s1: [9, 13], a: 0.72, kd: 1.05,
     rh0: 2.0, rhA: 10.5, rhK: 1.0, hv0: 1.6, hvA: 4.4, hvK: 0.8, D: 3.6 },
   small: { n: 7, life: [2.4, 3.4], vr: [1.2, 3.8], vy: [0.4, 1.4], s0: [1.2, 1.8], s1: [3.0, 4.4], a: 0.30, kd: 1.3,
-    rh0: 0.8, rhA: 2.8, rhK: 1.2, hv0: 0.6, hvA: 1.3, hvK: 1.0, D: 0.9 }
+    rh0: 0.8, rhA: 2.8, rhK: 1.2, hv0: 0.6, hvA: 1.3, hvK: 1.0, D: 0.9 },
+  // THE RISE (velkath-buried-rock §2): the sand pouring off her as she comes up out of it. A ring at the crack, more as the sheets
+  // fall; it spreads to 15-20 u and climbs, and it is REAL to her (the density model): the SIGHT rule blinds her in it, no new rule.
+  // Long-lived and slow (kd), so the line from her eyes stays thick past her first look (standE 0.5, ~3 s in).
+  rise: { n: 16, life: [5.5, 6.5], vr: [1.0, 3.5], vy: [2.0, 7.0], s0: [4.0, 6.0], s1: [8, 12], a: 0.62, kd: 0.55,
+    rh0: 2.0, rhA: 3.0, rhK: 0.45, hv0: 2.0, hvA: 12.0, hvK: 0.45, D: 4.2 }
 };
 // HER WAKE (brooder-clutch: "the chase must read"): a footfall at a run throws a low, slow
 // cloud that HANGS where she went, so in the zone-0 murk her path is a pale haze on the dark
@@ -44,9 +49,13 @@ export const WAKE = { n: 2, life: [7.0, 10.0], vr: [0.5, 2.0], vy: [0.8, 2.4], s
 export const PLUME_TUNE = { ambK: 1.6, lampK: 0.6, veilK: 1.0, sink: 0.30, off: false };   // off: render A/B (the gameplay model still runs)
 
 let mesh = null, veil = null, uni = null, head = 0, headW = 0, clock = 0, alive = 0;
-const rec = new Float32Array(PL * 8);   // x y z t0 life kindIdx(0 big / 1 small) k used
+const rec = new Float32Array(PL * 8);   // x y z t0 life kindIdx(0 big / 1 small / 2 rise) k used
 let recHead = 0, recHeadS = 0;    // two rings: a footfall never evicts a hammer cloud
-const KINDS = [PLUME.big, PLUME.small];
+// (Task 8) the rise's own ring of 12 (a rise spawns at most 6 + 2 x 3 = 12 clouds, brooder.js: none evicts another while it lives), and
+// two counts the burial probe reads: a live rise record overwritten (riseEvicted) and a still-living particle's quad overwritten in the
+// ring of 448 (quadEvicted; the ring wraps by construction, so a count of quads could not fail, a live one overwritten can)
+let recHeadR = 0, riseEvicted = 0, quadEvicted = 0;
+const KINDS = [PLUME.big, PLUME.small, PLUME.rise];
 let lights = null;
 const _c = new THREE.Color();
 
@@ -199,16 +208,17 @@ function build() {
 const rr = (a) => a[0] + (a[1] - a[0]) * Math.random();
 const AKEYS = ['aA', 'aB', 'aC', 'aD'];
 
-// A plume at x,y(floor),z: kind 'big' (the hammer) or 'small' (a footfall); k scales it.
+// A plume at x,y(floor),z: kind 'big' (the hammer), 'small' (a footfall) or 'rise' (Task 8: her rise out of the sand); k scales it.
 export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
   if (!mesh) build();
-  const K = kind === 'small' ? PLUME.small : PLUME.big, ki = kind === 'small' ? 1 : 0;
+  const ki = kind === 'small' ? 1 : kind === 'rise' ? 2 : 0, K = KINDS[ki];
   const A = mesh.geometry.attributes, a = A.aA.array, b = A.aB.array, c = A.aC.array, d = A.aD.array;
   const n = Math.max(1, Math.round(K.n * (0.6 + 0.4 * k)));
   const start = head;
   let lifeMax = 0;
   for (let i = 0; i < n; i++) {
     const p = head * 4; head = (head + 1) % N0;
+    if (c[p + 2] > 0 && clock - a[p + 3] < c[p + 2]) quadEvicted++;   // (Task 8) that slot's particle is still alive
     const ang = Math.random() * 6.283, vr = rr(K.vr) * (0.7 + 0.3 * k), kd = K.kd;
     const dx = Math.cos(ang), dz = Math.sin(ang), life = rr(K.life);
     if (life > lifeMax) lifeMax = life;
@@ -231,7 +241,10 @@ export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
   }
   let o;
   if (ki === 0) { o = recHead * 8; recHead = (recHead + 1) % 4; }
-  else { o = (4 + recHeadS) * 8; recHeadS = (recHeadS + 1) % (PL - 4); }
+  else if (ki === 2) { o = (12 + recHeadR) * 8; if (rec[o + 7] && clock - rec[o + 3] < rec[o + 4]) riseEvicted++; recHeadR = (recHeadR + 1) % 12; }
+  // (Task 8) the footfalls' ring is its shipped 8 (records 4..11), written out: as PL - 4 it would run on into the rise's records, and her
+  // legs step during the rise (standE > 0.35: brooder.js's 'small' plume on a heavy footfall), inside her blind window
+  else { o = (4 + recHeadS) * 8; recHeadS = (recHeadS + 1) % 8; }
   rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = clock; rec[o + 4] = lifeMax; rec[o + 5] = ki; rec[o + 6] = k; rec[o + 7] = 1;
   alive = Math.max(alive, clock + lifeMax + 0.2);
   mesh.visible = true;
@@ -276,6 +289,13 @@ function densRec(o, x, y, z) {
 export function plumeDensity(x, y, z) {
   let s = 0;
   for (let i = 0; i < PL; i++) s += densRec(i * 8, x, y, z);
+  return s;
+}
+// (Task 8, the burial probe's footprint and climb) one kind's share of the same density; debug only, never in a frame
+function densKind(x, y, z, kind) {
+  const ki = kind === 'small' ? 1 : kind === 'rise' ? 2 : 0;
+  let s = 0;
+  for (let i = 0; i < PL; i++) if (rec[i * 8 + 5] === ki) s += densRec(i * 8, x, y, z);
   return s;
 }
 // Optical depth along a->b (16 midpoint samples).
@@ -347,12 +367,13 @@ export function updatePlumes(dt) {
 
 export function clearPlumes() {
   rec.fill(0);
+  recHeadR = riseEvicted = quadEvicted = 0;   // (Task 8) every new sleeper calls this on dispose: a rise's counters belong to that rise
   alive = 0;
   if (mesh) { mesh.visible = false; veil.visible = false; }
 }
 export function plumeState() {
-  let n = 0, big = 0;
-  for (let i = 0; i < PL; i++) if (rec[i * 8 + 7] && clock - rec[i * 8 + 3] < rec[i * 8 + 4]) { n++; if (i < 4) big++; }
-  return { live: n, big, clock, visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
+  let n = 0, big = 0, rise = 0;
+  for (let i = 0; i < PL; i++) if (rec[i * 8 + 7] && clock - rec[i * 8 + 3] < rec[i * 8 + 4]) { n++; if (i < 4) big++; else if (i >= 12) rise++; }
+  return { live: n, big, rise, riseEvicted, quadEvicted, clock, visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
 }
-if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, spawn: spawnPlume, clear: clearPlumes };
+if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, densKind, rec, spawn: spawnPlume, clear: clearPlumes };

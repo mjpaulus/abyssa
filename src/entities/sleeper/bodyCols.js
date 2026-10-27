@@ -24,12 +24,14 @@
 // Zero per-frame allocation: fixed typed pools, module scratch.
 // OWNED BY: the sleepers (brooder.js publishes; game.js resolves and probes).
 import { lump } from './brood.js';
+import { moundY, footY } from './burial.js';
+import { currentSiteIndex } from '../../world/site.js';
 
 const MAXC = 64;
 const CAP = new Float32Array(MAXC * 8), PREV = new Float32Array(MAXC * 8);   // ax ay az bx by bz ra rb
 let nC = 0, nPrev = 0, prevOk = false, nLeg = 0;
 const SHM = new Float32Array(16), SHP = new Float32Array(16), SHI = new Float32Array(16);
-let shell = null, shellOk = false, shellPrevOk = false, shR = 1;
+let shell = null, shellOk = false, shellPrevOk = false, shR = 1, shSlick = true;
 let bx = 0, by = 0, bz = 0, bRad = 0;           // a bounding sphere over everything published
 let on = false;
 // dev A/B: claws = false takes the claws out of Sal's resolve (the camera still sees them)
@@ -56,7 +58,7 @@ export const CALMCOL = { on: true, rate: 3.0, roof: 3.5, depth: 16 };
 let calmK = 0;
 export function setBodyCalm(onK) { calmK = onK ? 1 : 0; }
 export function bodyColsOn() { return on; }
-export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; calmK = 0; }
+export function clearBodyCols() { on = false; nC = nPrev = 0; prevOk = shellOk = shellPrevOk = false; shell = null; nLob = 0; clOk = false; calmK = 0; mound = null; crestOn = false; capOn = false; carryOn = false; footCap = false; }
 
 // ---- publishing (the sleeper's pose step) -----------------------------------------------
 export function beginBodyCols() {
@@ -74,9 +76,10 @@ export function addCapsule(ax, ay, az, bx_, by_, bz_, ra, rb) {
   CAP[o] = ax; CAP[o + 1] = ay; CAP[o + 2] = az; CAP[o + 3] = bx_; CAP[o + 4] = by_; CAP[o + 5] = bz_; CAP[o + 6] = ra; CAP[o + 7] = rb;
   nC++;
 }
-// m: the body's matrixWorld elements (local shell units -> world, uniform scale R)
-export function setShell(proxy, m, R) {
-  shell = proxy; shR = R;
+// m: the body's matrixWorld elements (local shell units -> world, uniform scale R). slick (velkath-buried-rock): her back is the slick
+// dome he slides off (ritefair, SHELL_SLIDE); false while she is buried (brooder.js publishCols): a buried crest is stone underfoot
+export function setShell(proxy, m, R, slick = true) {
+  shell = proxy; shR = R; shSlick = slick;
   if (!proxy) { shellOk = false; return; }
   SHM.set(m); shellOk = true;
   invertAffine(SHM, SHI, R);
@@ -295,6 +298,75 @@ export function underShell(x, y, z) {
   return rho < _ro * 0.9 && py < _lo;
 }
 
+// (velkath-buried-rock) THE DUNE AND THE CREST ARE GROUND (spec §1 "Footing": "He walks up the sand and stands on the rock").
+// Published by a buried sleeper with the rest of her body each frame (brooder.js publishCols); cleared with the rest. Ground, not
+// a collider: game.js hands buriedFloorAt to terrain.js setExtraFloor once, so his floor, the lens's floor clamp and the boom's
+// floor test, the hose and the sonar all stand on the drawn sand. Her crest's ground is the walkable FOOTING over it (burial.js footY:
+// the highest drawn rock under a sole's footprint; ruling 1), max'd with the dune: one surface, no seam at the strip's edge. It is ground
+// only while she is fully buried (crestOn);
+// rising, her shell's own collider takes him. KEYED TO THE SITE it was published at: a voyage's reseed (game.js reseedWorldNow sets
+// the new site first) places the next site's dens on shutFloorY before her old build is disposed, and home's dune must not be
+// ground there.
+// (velkath-buried-rock Task 7a, the controller's ruling: footing follows what is DRAWN through the rise) RISING OUT OF THE SAND her crest's
+// footing can stay ground, CARRIED by her body: `carry` = her body's matrix now x the inverse of the fit's (burial.js MD.mw), `carryInv` its
+// inverse, so the envelope fitted at her bed is read where her rock is now (it went on the wake frame from under a man on her crest: he was
+// left afloat 6.7 u over the sand). It is ground (cOn) only while HE is on it (brooder.js publishCols: his boots within a step under it or
+// over it; fix round 1, C1: as ground for the whole column it lifted a man under her belly 17 u onto her back in one frame). The cap: with
+// capAll (bury >= solidK: the dune still covers her) the full cap, dune and footing, whoever stands where (the uncapped, not-slick proxy
+// threw a man at the harpoon's anchor up 0.7 u in 2 frames on the wake, and pokes 0.2-0.8 u through the dune's 0.3 u of cover); after it,
+// fCap: capped only where the carried footing is his ground (her strip), so her flanks coming up out of the drawn-down dune are solid again.
+let mound = null, moundZi = -1, moundSite = -1, crestOn = false, capOn = false, carryOn = false, footCap = false, carryY = 0;
+const CARRY = new Float32Array(16), CARRYI = new Float32Array(16);
+export function setMound(MD, zi, cOn, cap = true, carry = null, carryInv = null, fCap = false, capAll = false) {
+  mound = MD; moundZi = zi; moundSite = currentSiteIndex(); crestOn = !!cOn; capOn = !!(MD && (cOn || capAll) && cap);
+  carryOn = !!(MD && carry);
+  if (carryOn) { CARRY.set(carry); CARRYI.set(carryInv); const W = MD.mw; carryY = carry[1] * W[12] + carry[5] * W[13] + carry[9] * W[14] + carry[13]; }   // (the first guess: her body's height now)
+  footCap = capOn && !!fCap && !capAll;
+}
+// (Task 7a) the carried footing under (x, z) whether or not it is ground this frame (brooder.js publishCols's latch reads it), or -1e9
+export function crestFootAt(x, z) { return mound && carryOn ? footAt(x, z) : -1e9; }
+// her crest's footing under world (x, z): burial.js footY, or carried (setMound): into the fit pose, read, and back, three passes (the
+// carry's tilt makes the fit's x, z depend on the height); -1e9 off it. No allocation
+function footAt(x, z) {
+  if (!carryOn) return footY(mound, x, z);
+  const C = CARRY, I = CARRYI;
+  let wy = carryY;
+  for (let it = 0; it < 3; it++) {
+    const fx = I[0] * x + I[4] * wy + I[8] * z + I[12], fz = I[2] * x + I[6] * wy + I[10] * z + I[14];
+    const h = footY(mound, fx, fz); if (h < -1e8) return -1e9;
+    wy = C[1] * fx + C[5] * h + C[9] * fz + C[13];
+  }
+  return wy;
+}
+export function buriedFloorAt(x, z, zi) {
+  if (!mound || zi !== moundZi || currentSiteIndex() !== moundSite) return -1e9;
+  const m = moundY(mound, x, z), c = crestOn ? footAt(x, z) : -1e9;
+  return m > c ? m : c;
+}
+// (velkath-buried-rock) THE SHELL'S COLLIDER STOPS AT THE DRAWN GROUND while she is fully buried. Her shell proxy's top is the highest
+// vertex per cell (48 bearings x 8 rings), interpolated between cell centres: on her sloping, scuted back it sits ~0.2-0.8 u over the
+// real shell (measured from the bake's top heightfield), while the dune covers her by only 0.3 u and the crest's ground is at (or, the
+// footing's envelope, over) the real top. Left solid, it pushed a man on the dune up and sideways every frame against player.js's floor (hover, jitter, a shove back
+// down the dune), and bodyBlocked called every stand spot on the thin dune "inside her" (harpoon.js clearAt: no seat). So with capOn
+// a sample at or over the drawn ground (buriedFloorAt - 0.05) is never inside her shell. Below the drawn ground she stays solid;
+// rising (crestOn false) everything is as shipped. The shell is still published: shellPlanNear (onHerGround, onHerDune) reads it.
+function overGround(x, y, z) {
+  if (!capOn) return false;
+  const g = footCap ? (crestOn && currentSiteIndex() === moundSite ? footAt(x, z) : -1e9) : buriedFloorAt(x, z, moundZi);
+  return g > -1e8 && y >= g - 0.05;
+}
+// the published proxy's top under world (x, z), world y, or -1e9 (probes; and since Task 12 fix round 1, brooder.js onHerDune's ground)
+export function shellHiAt(x, z) {
+  if (!on || !shellOk) return -1e9;
+  const M = SHI, S = shell, W = SHM;
+  const px = M[0] * x + M[4] * by + M[8] * z + M[12], pz = M[2] * x + M[6] * by + M[10] * z + M[14];
+  const dx = px - S.cx, dz = pz - S.cz, rho = Math.hypot(dx, dz);
+  let a = Math.atan2(dz, dx) / (Math.PI * 2); if (a < 0) a += 1;
+  band(S, a * S.B, rho);
+  if (!(_hi > -1e8) || rho > _ro) return -1e9;
+  return W[1] * px + W[5] * _hi + W[9] * pz + W[13];
+}
+
 // ---- segment math ------------------------------------------------------------------------
 // closest points between segments P0P1 and Q0Q1 (Ericson 5.1.9); writes s, t
 let _s = 0, _t = 0;
@@ -423,6 +495,7 @@ export function resolveBodyCols(player, dt, grounded) {
       _upMax = grounded ? 0.4 / shR : 1e9;
       for (let q = 0; q < 3; q++) {
         const wy = q === 0 ? p.y - EYE_H + SAL_R : q === 1 ? p.y - 0.45 : p.y;
+        if (overGround(p.x, wy, p.z)) continue;          // (velkath-buried-rock) at or over the drawn ground: not inside her
         const lx = M[0] * p.x + M[4] * wy + M[8] * p.z + M[12];
         const ly = M[1] * p.x + M[5] * wy + M[9] * p.z + M[13];
         const lz = M[2] * p.x + M[6] * wy + M[10] * p.z + M[14];
@@ -460,7 +533,7 @@ export function resolveBodyCols(player, dt, grounded) {
           BODY.top = true;
           let hx = nx, hz = nz, hl = Math.hypot(hx, hz);
           if (hl < 0.05) { hx = p.x - bx; hz = p.z - bz; hl = Math.hypot(hx, hz) || 1; }
-          v.x += hx / hl * SHELL_SLIDE * dt; v.z += hz / hl * SHELL_SLIDE * dt;
+          if (shSlick) { v.x += hx / hl * SHELL_SLIDE * dt; v.z += hz / hl * SHELL_SLIDE * dt; }   // (velkath-buried-rock: buried, stone underfoot)
           const hv = BODY.hitV;
           contactVel(v, nx, ny, nz, pvx, pvy, pvz);
           BODY.hitV = hv;
@@ -470,7 +543,10 @@ export function resolveBodyCols(player, dt, grounded) {
     }
   }
   if (clOk) resolveClutch(p, v, dt, grounded);
-  if (calmK && shellOk && CALMCOL.on) resolveUnderCalm(p, v, dt);
+  // (velkath-buried-rock) once her dune is drawn her underside is under the sand: there is no room under her to close (and after the wake
+  // calmK stays on through the dig-in, so a man on, or afloat over, the dug-in dune inside her plan would be pressed down at 3 u/s and
+  // could not hop or jet off it). `mound` is published only while the dune is drawn: before the dig-in CALMCOL is the shipped one
+  if (calmK && shellOk && CALMCOL.on && !mound) resolveUnderCalm(p, v, dt);
   if (shellOk && underShell(p.x, p.y, p.z)) BODY.under = true;
   return BODY.contacts;
 }
@@ -569,7 +645,7 @@ export function bodyBlocked(x, y, z, m) {
     const ex = x - ax - dx * t, ey = y - ay - dy * t, ez = z - az - dz * t, r = CAP[o + 6] + (CAP[o + 7] - CAP[o + 6]) * t + m;
     if (ex * ex + ey * ey + ez * ez < r * r) { blockWhy = i; return true; }
   }
-  if (shellOk) {
+  if (shellOk && !overGround(x, y, z)) {          // (velkath-buried-rock) at or over the drawn ground: not inside her
     const M = SHI;
     const lx = M[0] * x + M[4] * y + M[8] * z + M[12], ly = M[1] * x + M[5] * y + M[9] * z + M[13], lz = M[2] * x + M[6] * y + M[10] * z + M[14];
     if (shellPen(shell, lx, ly, lz, m / shR) > 0) { blockWhy = -1; return true; }

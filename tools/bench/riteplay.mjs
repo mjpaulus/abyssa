@@ -106,6 +106,8 @@ const CLOCK = `(() => { const k = window.__rpClk, run = k.clock.elapsedTime - k.
 const CLOCK_LOST = 0.05;
 await c.ev(`(window.__rpFlee = ${FLEE}, 1)`);
 await c.ev(`(async () => { const S = await import(new URL('src/world/fissureShape.js', document.baseURI).href); window.__fd = S.fissureDist; return 1; })()`);   // the crack test for the bowl ledger
+// (buried Task 14) HIS HEIGHT OVER THE GROUND he stands on: the branch's extra floor (the dune, the crest; src/world/terrain.js extraFloorAt) read with terrainH by ritepolicy.mjs's PROBE and STATE and the hit log's agl. Main has no extraFloorAt: __xf is null there and every read is terrainH alone, so both arms run this one file
+await c.ev(`(async () => { const T = await import(new URL('src/world/terrain.js', document.baseURI).href); window.__xf = T.extraFloorAt || null; return 1; })()`);
 await c.ev(PROBE);
 // (clawcam) book the lens's look-up while the policy plays (frames it is on, its peak); main has no __clawcam
 await c.ev(`(() => { const f0 = window.__rp.frame, st = window.__rp.st; st.ccN = 0; st.ccMax = 0; st.ccOff = 0;
@@ -182,7 +184,7 @@ await c.ev(`(() => { const f0 = window.__rp.frame, L = window.lev, st = window._
         const src = slam > H.slam ? 'drop slam' : hammer > H.hammer ? 'hammer' : game && game.why !== 'blow' ? String(game.why).split(' ')[0].replace(/[0-9]+$/, '') : game ? 'blow' : log.length >= LOG_CAP ? 'unknown' : 'other';
         H.hitLog.push({ t: tNow(), ledger: tore, hit: st.hits > H.hits, src, game: game ? game.why : null, drop: L.drop || 0, dropKind: L.dropKind || null,
           cock: +(L.cock || 0).toFixed(2), swing: +(L.swing || 0).toFixed(2), rising: !!L.rising, under: !!L.nsUnder,
-          rho: +(Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z) / L.R).toFixed(2), agl: +(P.pos.y - 1.35 - terrainH(P.pos.x, P.pos.z, 0)).toFixed(2), standE: +L.standE.toFixed(2), lit });
+          rho: +(Math.hypot(P.pos.x - L.pos.x, P.pos.z - L.pos.z) / L.R).toFixed(2), agl: +(P.pos.y - 1.35 - Math.max(terrainH(P.pos.x, P.pos.z, 0), window.__xf ? window.__xf(P.pos.x, P.pos.z, 0) : -1e9)).toFixed(2), standE: +L.standE.toFixed(2), lit });
       }
       H.tears = st.tears; H.hits = st.hits; H.hammer = hammer; H.slam = slam; H.dropN = dropN; H.logN = log.length;
     } catch (e) { H.err++; if (!H.errMsg) H.errMsg = String(e && e.message || e); } };

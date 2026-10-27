@@ -5,7 +5,7 @@ import { ZONE_GAP, SURFACE_Y, zoneTop, zoneBottom, riftPos, LEVIATHAN_CFG, GLASS
 import { V3, rng, clamp } from './lib/math.js';
 import { render, samplePerf, frameStart, gpuFrameBegin, gpuFrameEnd, warmUp, precompile, settleAfterWarm, setPostBypass, getPostBypass, getVolumetrics, setChromaReduced, resetTemporal, addTemporalMover, setSiteGrade } from './postfx.js';
 import { lanternLight, playerLightSrc, updateLighting, setWeatherLight, kickLantern, lanternGutter, setSiteLight, sun } from './lighting.js';
-import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint, checkRelief } from './world/terrain.js';
+import { buildTerrain, updateTerrain, terrainH, shutFloorY, fillTerrain, updateZoneSight, terrainFingerprint, checkRelief, setExtraFloor } from './world/terrain.js';
 import { lipMeanY, resetJam, setFissureShut, FISSURE, fissureDist, fissureLocal, fissureWorld, fissureShut, openRunAt } from './world/fissureShape.js';
 import { buildFlora, updateFlora, rockColliders, reseedFlora } from './world/flora.js';
 import { stirPulse, P_SLAM, P_STEP } from './world/stir.js';
@@ -14,7 +14,7 @@ import { buildCreatures, updateCreatures, reseedCreatures, schools, jellies } fr
 import { buildRifts, updateRifts, seedMotes, updateMotes, reseatRifts } from './world/rifts.js';
 import { buildFissures, updateFissure, setFissureOpen, fissureOpenK, fissureOpening, reseatFissures, openFissure } from './world/fissure.js';
 import { makeLeviathan, disposeLeviathan, updateLeviathan, BODY_R_MAX, sleeperFingerprint } from './entities/leviathan.js';
-import { resolveBodyCols, BODY, bodyBlocked, bodyBlockedAhead, bodyNear, bodyColsOn, inClutch } from './entities/sleeper/bodyCols.js';
+import { resolveBodyCols, BODY, bodyBlocked, bodyBlockedAhead, bodyNear, bodyColsOn, inClutch, buriedFloorAt } from './entities/sleeper/bodyCols.js';
 import { PH_COCK0, PH_SLAM0 } from './entities/sleeper/brooderClaw.js';   // (clawcam) her hammer's cock and fall
 import { diver, updateDiver, lanternWorldPos, diverOccluders, stepCount, lastFootfall, triggerSlash, breathPhase, breathCount, breathStress, diverImpulse, diverGrab, diverLookAt, diverYank, diverBladeStowed, diverBladeTip } from './entities/diver.js';
 import './entities/helmetSwap.js';   // mounts the authored helmet if the glb is present
@@ -108,7 +108,9 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
     survival.reserve = survival.reserveCap = reserveCapacity();   // the upgraded tank arrives charged
   }
 } catch (e) { /* a torn save is a blank chart, never a crash */ } })();
-function saveChart() { try {
+// START OVER (the title) sets this the moment it clears the save: the reload's own pagehide would otherwise write the whole chart back.
+let startingOver = false;
+function saveChart() { if (startingOver) return; try {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
     site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes, pulled: pulledRec, sighted: sightRec,
     endingSeen, hose: survival.hose, mute: muteSaved,
@@ -189,6 +191,7 @@ performance.mark('abyssa:world-build-start');
 LOAD.stage(0.07, 0.19, 'RAISING THE SEABED');
 await buildStep('terrain', 'RAISING THE SEABED');
 buildTerrain();
+setExtraFloor(buriedFloorAt);   // (velkath-buried-rock) the buried sleeper's ground (bodyCols.js): -1e9 unless one is published
 await buildStep('flora', 'SETTING THE STONES');
 buildFlora();
 await buildStep('water', 'MIXING THE WATER');
@@ -713,7 +716,7 @@ function makeZoneSleeper(i, extra) {
     nSigils: row.sigils,
     hue: (LEVIATHAN_CFG[i].hue + row.hueShift + 1) % 1,
     name: currentSite().epithet ? currentSite().epithet[i] : LEVIATHAN_CFG[i].name,
-    idle: row.idle || null, lair: row.lair || null, hard: row.hard || null
+    idle: row.idle || null, lair: row.lair || null, hard: row.hard || null, bury: row.bury || null
   } : undefined;
   if (calmedBefore(i)) over = Object.assign({}, over, { remembered: true });
   // (Task 6) Velkath's harpoon already pulled at this anchorage: her rite starts at the old wound
@@ -899,6 +902,51 @@ function wardsLine() {
 let pendingWards = false;   // zones after the first say their count once the name has faded
 
 document.getElementById('title').addEventListener('click', start);
+
+// START OVER (roadmap/start-over-saved-harpoon.md; Michael 2026-10-26, "1 start over on the title screen"). Only when a save
+// holds progress. One click ARMS it (the text becomes the confirm); a second, at least 0.5 s later (a double click is not a confirm)
+// and within 4 s, removes the chart's key and reloads, the simplest exactly-fresh state. Any key, any other click, losing the
+// window or the 4 s disarms it. Its click is stopped here: the title's own click starts the dive. The one other key the game
+// writes, 'abyssa.playtest.panel', is a UI preference and stays. DOM only, nothing per frame.
+(() => {
+  const el = document.querySelector('#title .startover');
+  // A save is not progress by existing: pagehide writes the default chart of anyone who opened the game and closed it. Progress is
+  // what the load above reads that a fresh boot does not write: a pulled flag, a sighting, a chart record, the hidden shelf found
+  // (found[0..2] are authored: always 1), a keepsake, a site but the start, any tool, a longer hose, the ending seen. `mute` is a
+  // preference and does not count. A torn save loads as a blank chart, so it is none either.
+  let has = false;
+  try {
+    const raw = localStorage.getItem(SAVE_KEY), sv = raw ? JSON.parse(raw) : null;
+    const any = v => Array.isArray(v) && v.some(x => Array.isArray(x) ? any(x) : !!x);
+    has = !!sv && typeof sv === 'object' && (any(sv.pulled) || any(sv.sighted) || any(sv.rec) || any(sv.keeps) || !!(sv.found && sv.found[3])
+      || (+sv.site > 0) || !!(sv.tools && Object.values(sv.tools).some(Boolean)) || (+sv.hose > HOSE_START) || !!sv.endingSeen);
+  } catch (e) { /* private mode, or a torn save: nothing to start over from */ }
+  if (!el || !has) return;
+  const IDLE = 'START OVER', ARMED = 'START OVER? THE SEA FORGETS YOU — CLICK AGAIN';
+  let armed = 0, timer = 0;
+  const disarm = () => {
+    if (!armed) return;
+    armed = 0; clearTimeout(timer);
+    el.textContent = IDLE; el.classList.remove('armed');
+  };
+  el.hidden = false;
+  el.addEventListener('click', e => {
+    e.stopPropagation();
+    const now = performance.now();
+    if (!armed) {
+      armed = now; el.textContent = ARMED; el.classList.add('armed');
+      timer = setTimeout(disarm, 4000);
+      return;
+    }
+    if (now - armed < 500) return;
+    startingOver = true; clearTimeout(timer);
+    try { localStorage.removeItem(SAVE_KEY); } catch (err) { /* nothing to clear */ }
+    location.reload();
+  });
+  document.addEventListener('click', e => { if (e.target !== el) disarm(); }, true);
+  addEventListener('keydown', disarm);
+  addEventListener('blur', disarm);
+})();
 addEventListener('click', () => {
   if (state !== 'title' && !locked && !isChartOpen()) requestLock();
 });
@@ -1446,6 +1494,187 @@ function clawFrame(dt) {
 }
 window.__clawcam = { knobs: CLAWCAM, state: () => ({ tilt: clawTilt, tiltDeg: +(clawTilt * 57.29578).toFixed(2), v: clawTiltV, tgt: clawTgt, gate: +clawGate.toFixed(3), off: clawOff, why: clawWhy, qPre: _ccQ.clone(),
   lookNetDeg: clawOpen ? +((Math.abs(player.yaw - clawY0) + Math.abs(player.pitch - clawP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(clawPath * 57.29578).toFixed(2), recentDeg: +(clawRecent * 57.29578).toFixed(2) }) };
+// ---- THE POINT IN THE LENS (velkath-buried-rock §3, Task 11; Michael: "can she turn and point to the void with her giant claw"). When
+// the calm comes at a buried site (home) she turns her front to the opening crack and, once she faces it, raises her great claw toward
+// it and holds it ~3 s (brooder.js POINT; Michael 2026-10-21 "1": finish turning, then point). THE CUE IS KEYED TO THE RAISE (the
+// coordinator's ruling 2026-10-21, (a)): from the first frame of the raise (L.pointPh 2) through the hold (3) the lens EASES ROUND to the
+// opening, framing her claw where both fit, and it hands back as she lowers it (pointPh 4). Keyed to the point's own phases, never to
+// the light; through her turn (pointPh 1, up to ~6 s with her back to the opening) the lens is the grounded lens (keyed to the calm, at
+// `back` it sat on the opening ~6 s before her claw moved). An EVENT: outside it the rotation is exactly 0 and the lens is the grounded
+// lens bit for bit (qPre). The LAST rotation the lens takes (after clawFrame; CLAWCAM never runs once she is calmed, so the two never
+// overlap): yaw about world up, then pitch about the lens's own right axis; the boom and the lens position untouched.
+// SAL STAYS IN FRAME (ruling (b), clawFrame's rule): the cue takes only as much of its turn as keeps his bonnet (diver.helmGroup, the neck
+// ring as the rig posed it last) inside NDC helmNdc on each axis, or inside where the grounded lens already has him if that is further
+// out (review I2: a fixed bound made the share fall off a cliff to 0, the full turn back the next frame, whenever the grounded lens had
+// him past it; continuous now: the share 0 always passes). The largest share that does is found by bisection (ptGuard). The DRAWN share
+// is min(k, that), rate-limited both ways to the springs' fastest (wIn / e up, wOut / e down: gait bob or a guard that binds never reads
+// as a nod), except a real look, which drops it at once.
+// THE OPENING BEHIND HIM (ruling (c), BOSSCAM's front test): an opening past the caps (at `ahead` it is ~179 deg behind the lens) is not
+// turned toward: the cue frames her CLAW instead, within the caps, and only if her palm is in frame at half the guarded turn; else the
+// cue stays off. The source (opening / claw) switches with `hyst` deg of hysteresis on the caps, the opening-palm midpoint blends in
+// across frame +- frameBand (x hfov), and the full turn the cue is aiming at SLEWS at most `slew` deg/s (review I1: the source flipped at
+// the 75 deg cap and the re-aim landed as a 4 deg pitch step in one frame).
+// UNDER HER SHELL it stays off (review I3; CLAWCAM's gate, 1 - smoothstep(0.1, 0.5, creUnder)): in play the calm comes as he lights her
+// last ward, from under her.
+// THE MOUSE OWNS THE VIEW: his look input is measured from the frame the cue's window opens (the raise; a look during her turn or the
+// fight's last moments does not forfeit a cue that has not started); past 5 deg net or 15 deg of looking about (CLAWCAM's lookNet /
+// lookPath, Michael 2026-10-13 "ignore small mouse movements") it drops AT ONCE and stays off for the rest of this calm; a raise that
+// comes while he is mid-sweep starts off. A PAUSE is CLAWCAM's house rule (final review item 3): it ends the cue on the spring (wOut) and
+// it stays off for the rest of this point (on resume it does not come back).
+// THE HAND-BACK (pointPh 4, or a sleeper rebuilt under the cue) eases k out on the LAST aim, held: the candidate is computed only while the
+// cue can be on (final review item 2: a rebuild's fresh L, pointPh 0 and pointAt (0, 0, 0), slewed it up to ~22 deg the wrong way).
+// The spec's "it also pulls the lens out of her shell at the calm instant" is NOT this cue's: a rotation cannot move the lens. Keeping
+// the lens out of her is the position guard's (CRECAM's bodyBlocked pull and lensfix's fallbacks), gated after the calm by velfix-gate's
+// lensSurf / salIn (the plan's Task 13), the point's delay to the walk home included.
+//   maxYaw/maxPitch  deg caps; an aim past either (+ hyst while it is the source, - hyst to come back) is "behind"
+//   frame/frameBand  the claw is framed with the opening (the aim their midpoint) when they lie within frame x hfov of each other,
+//                    blended over +- frameBand x hfov
+//   helmNdc          his bonnet's NDC bound (pointcam-probe's bar is 0.9 on the bonnet's centre; the neck ring sits ~0.25 u under it)
+//   palmNdc          the claw aim's palm bound, at half the guarded turn
+//   slew             deg/s, the most the cue's full turn moves (a frame at 60 fps: 0.75 deg)
+//   wIn/wOut         /s, critically damped (in ~95% by 1.5 s, out ~94% by 0.5 s)
+// Measured (tools/bench/pointcam-probe.mjs framing / mouse / off / point / walk / lastward).
+const POINTCAM = { on: 1, maxYaw: 75, maxPitch: 25, hyst: 5, frame: 0.8, frameBand: 0.05, helmNdc: 0.82, palmNdc: 0.85, slew: 45, wIn: 3.2, wOut: 9,
+  lookNet: 5, lookPath: 15, lookTau: 0.3 };
+let ptK = 0, ptKV = 0, ptOff = false, ptOpen = false, ptY0 = 0, ptP0 = 0, ptPath = 0, ptRecent = 0, ptYawWas = 0, ptPitchWas = 0, ptWhy = '', ptTgt = 0;
+let ptYaw = 0, ptPitch = 0, ptAmt = 0, ptDy = 0, ptDp = 0, ptG = 0, ptAy = 0, ptAp = 0, ptNx = 0, ptNy = 0, ptMode = '', ptCy = 0, ptCp = 0, ptLimX = 0, ptLimY = 0;
+const _ptQ = new THREE.Quaternion(), _ptQ2 = new THREE.Quaternion(), _ptQ3 = new THREE.Quaternion(), _ptX = V3(1, 0, 0);
+const _ptA = V3(), _ptF = V3(), _ptR = V3(), _ptP = V3(), _ptH = V3(), _ptV = V3(), _ptHO = V3(), _ptO = V3(), _ptBox = new THREE.Box3();   // (_ptO: ptCand's own, never CRECAM's _bp)
+let ptFy = 0, ptFp = 0, ptHOk = false;
+// p's NDC (ptNx / ptNy) under the pre-cue lens turned by yaw (world up) then pitch (its own right): false if behind the lens
+function ptNdc(p, yaw, pitch) {
+  _ptQ2.setFromAxisAngle(camUpAxis, yaw).multiply(_ptQ);
+  _ptQ3.setFromAxisAngle(_ptX, pitch); _ptQ2.multiply(_ptQ3).invert();
+  _ptV.copy(p).sub(camera.position).applyQuaternion(_ptQ2);
+  if (!(_ptV.z < -1e-6)) return false;
+  const tf = Math.tan(camera.fov * Math.PI / 360), iz = -1 / _ptV.z;
+  ptNx = _ptV.x * iz / (tf * camera.aspect); ptNy = _ptV.y * iz / tf;
+  return true;
+}
+// the turn (ptAy, ptAp) that puts a at the pre-cue lens's centre
+function ptAimAt(a) {
+  _ptF.set(0, 0, -1).applyQuaternion(_ptQ);
+  _ptR.copy(a).sub(camera.position);
+  let dy = Math.atan2(_ptR.x, _ptR.z) - Math.atan2(_ptF.x, _ptF.z); dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+  ptAy = dy; ptAp = Math.atan2(_ptR.y, Math.hypot(_ptR.x, _ptR.z)) - Math.asin(clamp(_ptF.y, -1, 1));
+}
+// the bonnet's bounds this frame: helmNdc, or where the grounded lens already has him if further out; false if it has him behind it
+function ptLims() {
+  _ptH.setFromMatrixPosition(diver.helmGroup.matrixWorld).add(_ptHO);   // (the bonnet's centre: the neck ring + its offset, ptHelmOff)
+  if (!ptNdc(_ptH, 0, 0)) return false;
+  ptLimX = Math.max(POINTCAM.helmNdc, Math.abs(ptNx)); ptLimY = Math.max(POINTCAM.helmNdc, Math.abs(ptNy));
+  return true;
+}
+// the bonnet's centre over its neck ring (world), measured from its own vertices when a cue starts (an event; the guard then holds the
+// point pointcam-probe's bar reads: guarded at the neck ring the centre ran to NDC 1.19 with him walking at 2.2 u from the lens)
+function ptHelmOff() {
+  _ptBox.setFromObject(diver.helmGroup, true); _ptBox.getCenter(_ptHO);
+  _ptHO.sub(_ptV.setFromMatrixPosition(diver.helmGroup.matrixWorld));
+}
+// THE KEEP: the drawn turn (yaw, pitch) eased inward where the rate-limited share leaves his bonnet past its bound (the grounded lens
+// lurching under him, a guard that drops faster than wOut / e): the least extra yaw, then pitch (<= 0.35 rad each) that brings it back.
+// Writes ptFy / ptFp; it follows the grounded lens's own lurch, it never leads it
+function ptKeep(yaw, pitch) {
+  ptFy = yaw; ptFp = pitch;
+  for (let ax = 0; ax < 2; ax++) {
+    if (!ptNdc(_ptH, ptFy, ptFp)) return;
+    const v0 = ax ? ptNy : ptNx, lim = ax ? ptLimY : ptLimX;
+    if (Math.abs(v0) <= lim) continue;
+    const e = 0.01; ptNdc(_ptH, ptFy + (ax ? 0 : e), ptFp + (ax ? e : 0));
+    const dir = Math.abs(ax ? ptNy : ptNx) < Math.abs(v0) ? 1 : -1;
+    let lo = 0, hi = 0.35;
+    for (let i = 0; i < 12; i++) {
+      const m = 0.5 * (lo + hi), ok = ptNdc(_ptH, ptFy + (ax ? 0 : dir * m), ptFp + (ax ? dir * m : 0)) && Math.abs(ax ? ptNy : ptNx) <= lim;
+      if (ok) hi = m; else lo = m;
+    }
+    if (ax) ptFp += dir * hi; else ptFy += dir * hi;
+  }
+}
+// the share is bounded on x only: y is the keep's (a little pitch). With the lens pressed in to ~2.2 u by her raised claw the grounded lens has
+// his bonnet at NDC y ~1.05, and a yaw grows that by 1 / cos(yaw) (perspective): bounded on y too, the share fell to ~0.36 (framing, t11r1)
+const ptHelmIn = (yaw, pitch) => ptNdc(_ptH, yaw, pitch) && Math.abs(ptNx) <= ptLimX;
+// the largest share g of the turn (yaw, pitch) that keeps his bonnet inside the bounds (ptLims first; share 0 always does)
+function ptGuard(yaw, pitch) {
+  if (ptHelmIn(yaw, pitch)) return 1;
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 12; i++) { const m = 0.5 * (lo + hi); if (ptHelmIn(m * yaw, m * pitch)) lo = m; else hi = m; }
+  return lo;
+}
+// this frame's candidate full turn (ptCy, ptCp) and source (ptMode): the opening (blended toward its midpoint with her palm where both fit)
+// within the caps; else her claw within the caps, its palm in frame at half the guarded turn; else none (false). ptLims() first
+function ptCand(L) {
+  const C = POINTCAM, d2r = Math.PI / 180, hfY = C.hyst * d2r;
+  const c = L.claws && L.claws.length ? (L.claws[1] && L.claws[1].major ? L.claws[1] : L.claws[0]) : null;
+  _ptA.copy(L.pointAt);
+  if (c) {
+    _ptP.setFromMatrixPosition(c.pj.matrixWorld); _ptR.setFromMatrixPosition(c.dj.matrixWorld); _ptP.add(_ptR).multiplyScalar(0.5);
+    const hf = 2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) * camera.aspect);
+    _ptR.copy(_ptP).sub(camera.position).normalize(); _ptO.copy(_ptA).sub(camera.position).normalize();
+    const sep = Math.acos(clamp(_ptR.dot(_ptO), -1, 1)), m = 1 - ccStep((C.frame - C.frameBand) * hf, (C.frame + C.frameBand) * hf, sep);
+    if (m > 0) _ptA.lerp(_ptP, 0.5 * m);
+  }
+  const yC = C.maxYaw * d2r, pC = C.maxPitch * d2r;
+  ptAimAt(_ptA);
+  const eo = ptMode === 'open' ? hfY : ptMode === 'claw' ? -hfY : 0;
+  if (Math.abs(ptAy) <= yC + eo && Math.abs(ptAp) <= pC + eo) { ptMode = 'open'; ptCy = clamp(ptAy, -yC, yC); ptCp = clamp(ptAp, -pC, pC); return true; }
+  if (c) {
+    ptAimAt(_ptP);
+    const ec = ptMode === 'claw' ? hfY : 0;
+    if (Math.abs(ptAy) <= yC + ec && Math.abs(ptAp) <= pC + ec) {
+      const cy = clamp(ptAy, -yC, yC), cp = clamp(ptAp, -pC, pC), g = ptGuard(cy, cp);
+      if (g > 0 && ptNdc(_ptP, 0.5 * g * cy, 0.5 * g * cp) && Math.abs(ptNx) <= C.palmNdc && Math.abs(ptNy) <= C.palmNdc) { ptMode = 'claw'; ptCy = cy; ptCp = cp; return true; }
+    }
+  }
+  return false;
+}
+function pointFrame(dt) {
+  const L = lev, C = POINTCAM;
+  _ptQ.copy(camera.quaternion);                                   // the lens without the cue: the on:0 lens
+  const dl = Math.abs(player.yaw - ptYawWas) + Math.abs(player.pitch - ptPitchWas);
+  ptYawWas = player.yaw; ptPitchWas = player.pitch;
+  ptRecent = ptRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
+  const brooder = !!(L && L.kind === 'brooder' && L.pointAt);
+  const ph = brooder ? L.pointPh || 0 : 0, win = ph >= 2 && ph <= 3;
+  if (!ph) { ptOff = false; ptOpen = false; ptHOk = false; }      // the guard: the next point is a new one
+  const d2r = Math.PI / 180;
+  if (win) {                                                      // his look, from the raise
+    if (!ptOpen) { ptOpen = true; ptY0 = player.yaw; ptP0 = player.pitch; ptPath = 0; if (ptRecent > C.lookNet * d2r) ptOff = true; }
+    else ptPath += dl;
+    if (Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0) > C.lookNet * d2r || ptPath > C.lookPath * d2r) { ptOff = true; ptK = 0; ptKV = 0; }
+    if (paused) ptOff = true;                                     // (CLAWCAM's house rule: a pause ends it on the spring, off for the rest of this point)
+  }
+  // the bonnet's bounds while the cue can be on or is still drawn; the candidate aim only while it can be on (the raise and the hold, final
+  // review item 2): through the hand-back the last aim is held, so a sleeper rebuilt under the cue (Alt+1-6 / Alt+9: pointPh 0, L.pointAt
+  // (0, 0, 0)) cannot slew it the wrong way as it eases out
+  if (brooder && C.on && win && !ptHOk) { ptHelmOff(); ptHOk = true; }   // (the window opens: its bonnet point, once a point)
+  const lims = brooder && C.on && (win || ptK > 0) && ptLims();
+  const cand = lims && win && ptCand(L);
+  let tgt = 0, why = '';
+  if (!C.on) why = 'off'; else if (!win) why = ph === 1 ? 'turn' : ph ? 'lower' : 'none'; else if (ptOff) why = 'mouse';
+  else if (paused || deckK > 0 || throatOn) why = 'place';
+  else if (!cand) why = 'behind';
+  else { tgt = 1 - ccStep(0.1, 0.5, creUnder); why = tgt > 0 ? 'on' : 'under'; }
+  // critically damped, the exact step for a target held over the frame (clawFrame's)
+  const w = tgt > ptK ? C.wIn : C.wOut, h = Math.min(dt, 0.05);
+  if (h > 0 && (tgt > 0 || ptK > 0 || ptKV !== 0)) { const ex = Math.exp(-w * h), e0 = ptK - tgt, k = ptKV + w * e0; ptK = tgt + (e0 + k * h) * ex; ptKV = (ptKV - w * k * h) * ex; }
+  if (ptK < 0) { ptK = 0; if (ptKV < 0) ptKV = 0; }
+  if (tgt === 0 && ptK < 1e-4 && Math.abs(ptKV) < 1e-3) { ptK = 0; ptKV = 0; }
+  if (!brooder) { ptK = 0; ptKV = 0; }                            // (she is gone: at once; a real look dropped it above, a pause eases it out)
+  ptWhy = why; ptTgt = tgt;
+  if (!(ptK > 0)) { ptYaw = 0; ptPitch = 0; ptAmt = 0; ptMode = ''; return; }
+  // the full turn: taken as it is when the cue starts, then slewed (review I1); no candidate this frame: the last one held
+  if (ptAmt === 0) { if (!cand) { ptYaw = 0; ptPitch = 0; return; } ptDy = ptCy; ptDp = ptCp; }
+  else if (cand) { const s = C.slew * d2r * h; ptDy += clamp(ptCy - ptDy, -s, s); ptDp += clamp(ptCp - ptDp, -s, s); }
+  ptG = lims ? ptGuard(ptDy, ptDp) : 0;
+  const up = C.wIn / Math.E * h, down = C.wOut / Math.E * h;
+  ptAmt = clamp(Math.min(ptK, ptG), ptAmt - down, ptAmt + up);
+  ptYaw = ptDy * ptAmt; ptPitch = ptDp * ptAmt;
+  if (ptAmt > 0 && lims) { ptKeep(ptYaw, ptPitch); ptYaw = ptFy; ptPitch = ptFp; }
+  if (ptAmt > 0) { camera.rotateOnWorldAxis(camUpAxis, ptYaw); camera.rotateX(ptPitch); }
+}
+window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), amt: +ptAmt.toFixed(4), guard: +ptG.toFixed(4), aim: ptMode, tgt: ptTgt, yawDeg: +(ptYaw * 57.29578).toFixed(2), pitchDeg: +(ptPitch * 57.29578).toFixed(2),
+  aimYawDeg: +(ptDy * 57.29578).toFixed(3), aimPitchDeg: +(ptDp * 57.29578).toFixed(3), off: ptOff, why: ptWhy, qPre: _ptQ.clone(),
+  lookNetDeg: ptOpen ? +((Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(ptPath * 57.29578).toFixed(2), recentDeg: +(ptRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
   drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
 function deckTarget() {
@@ -2538,6 +2767,8 @@ function updateCamera(dt, t, fwd) {
   if (Math.abs(camera.fov - camFov) > 0.01) { camera.fov = camFov; camera.updateProjectionMatrix(); }
   // (clawcam) THE CLAW IN THE LENS: the look-up while her hammer cocks, the lens's last rotation (CLAWCAM)
   clawFrame(dt);
+  // (velkath-buried-rock Task 11) THE POINT IN THE LENS: round to the opening crack while she points (POINTCAM), the very last rotation
+  pointFrame(dt);
   // DEV (look-dev stills): window.__camPin = { p: [x,y,z], t: [x,y,z] } pins the lens; nothing sets it in play
   const pin = window.__camPin;
   if (pin) { camera.position.fromArray(pin.p); camera.lookAt(pin.t[0], pin.t[1], pin.t[2]); }
