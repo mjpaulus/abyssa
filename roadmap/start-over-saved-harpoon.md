@@ -1,8 +1,8 @@
 ---
 title: Starting over, and the harpoon on the raft
-status: decision
+status: wip
 tags: save, harpoon, title, user
-updated: 2026-10-15
+updated: 2026-10-26
 ---
 Sal carries the harpoon on the raft every time Michael opens the game, because the save keeps it once it has been pulled, and nothing in the game can start over. Michael picks what should happen.
 
@@ -19,3 +19,5 @@ Sal carries the harpoon on the raft every time Michael opens the game, because t
 
 ## Log
 - 2026-10-15 — created from Michael's report; cause traced; options and the question put to him.
+- 2026-10-26 — Michael ruled: "1 start over on the title screen" (decision -> wip). Raised again by his playtest of the buried branch: with home's harpoon saved as pulled, he went down and "there was no harpoon to pull". Built on branch `buried`.
+- 2026-10-26 — built on branch `buried`: a quiet START OVER on the title, only with a save; click arms, a second click clears `abyssa.chart.v1` and reloads (99ec986 probe RED on 94de095, bcae48b the feature, startover-probe GREEN). Not merged.
