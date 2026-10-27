@@ -108,7 +108,9 @@ const grid43 = v => Array.from({ length: 4 }, (_, i) =>
     survival.reserve = survival.reserveCap = reserveCapacity();   // the upgraded tank arrives charged
   }
 } catch (e) { /* a torn save is a blank chart, never a crash */ } })();
-function saveChart() { try {
+// START OVER (the title) sets this the moment it clears the save: the reload's own pagehide would otherwise write the whole chart back.
+let startingOver = false;
+function saveChart() { if (startingOver) return; try {
   localStorage.setItem(SAVE_KEY, JSON.stringify({
     site: currentSiteIndex(), rec: chartRec, found: chartFound, keeps: keepsakes, pulled: pulledRec, sighted: sightRec,
     endingSeen, hose: survival.hose, mute: muteSaved,
@@ -900,6 +902,42 @@ function wardsLine() {
 let pendingWards = false;   // zones after the first say their count once the name has faded
 
 document.getElementById('title').addEventListener('click', start);
+
+// START OVER (roadmap/start-over-saved-harpoon.md; Michael 2026-10-26, "1 start over on the title screen"). Only when a save
+// exists. One click ARMS it (the text becomes the confirm); a second, at least 0.5 s later (a double click is not a confirm)
+// and within 4 s, removes the chart's key and reloads, the simplest exactly-fresh state. Any key, any other click, losing the
+// window or the 4 s disarms it. Its click is stopped here: the title's own click starts the dive. The one other key the game
+// writes, 'abyssa.playtest.panel', is a UI preference and stays. DOM only, nothing per frame.
+(() => {
+  const el = document.querySelector('#title .startover');
+  let has = false;
+  try { has = !!localStorage.getItem(SAVE_KEY); } catch (e) { /* private mode: nothing was saved */ }
+  if (!el || !has) return;
+  const IDLE = 'START OVER', ARMED = 'START OVER? THE SEA FORGETS YOU — CLICK AGAIN';
+  let armed = 0, timer = 0;
+  const disarm = () => {
+    if (!armed) return;
+    armed = 0; clearTimeout(timer);
+    el.textContent = IDLE; el.classList.remove('armed');
+  };
+  el.hidden = false;
+  el.addEventListener('click', e => {
+    e.stopPropagation();
+    const now = performance.now();
+    if (!armed) {
+      armed = now; el.textContent = ARMED; el.classList.add('armed');
+      timer = setTimeout(disarm, 4000);
+      return;
+    }
+    if (now - armed < 500) return;
+    startingOver = true; clearTimeout(timer);
+    try { localStorage.removeItem(SAVE_KEY); } catch (err) { /* nothing to clear */ }
+    location.reload();
+  });
+  document.addEventListener('click', e => { if (e.target !== el) disarm(); }, true);
+  addEventListener('keydown', disarm);
+  addEventListener('blur', disarm);
+})();
 addEventListener('click', () => {
   if (state !== 'title' && !locked && !isChartOpen()) requestLock();
 });
