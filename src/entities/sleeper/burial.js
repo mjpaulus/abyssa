@@ -1129,7 +1129,7 @@ if (uBury > 0.001) {
     // uWoundN its normal, uWoundD world down, both in her object space; uWoundS object units per world unit): only on a remembered build
     // at home (w 0 everywhere else, a uniform branch). Round the puncture the sand has given way and the shell is broken and stained dark
     // with old rust (crWb, ~0.7 u, a ragged edge), a ridge of pale healed callus rims it (crWc), fractures run out of it (crWf), the
-    // puncture itself is a black pit (crWp), and a rust weep has run down whatever face lies under it (crWr: a curtain, world down, ~2 u)
+    // puncture itself is a black pit (crWp), and a rust weep has run down from it (crWr: a tongue, world down, ~1.5 u, on whatever of her lies within 0.9 u of its plane)
     float crWb = 0.0, crWp = 0.0, crWf = 0.0, crWc = 0.0, crWr = 0.0, crWv = 0.0;
     if (uWound.w > 0.001) {
       vec3 wq = (vCrO - uWound.xyz) / uWoundS;
@@ -1137,17 +1137,17 @@ if (uBury > 0.001) {
       float wy = dot(wq, uWoundD), wx = dot(wq, wsd), wd = dot(wq, wnh);
       float wR = length(wq), wz = crVN(wq * 3.3 + 11.0), wz2 = crVN(wq * 9.0 + 3.0);
       float wK = uWound.w * smoothstep(0.0, 0.3, uBury);
-      float wrb = 0.55 + 0.3 * wz;
+      float wrb = 0.65 + 0.3 * wz;
       crWb = wK * (1.0 - smoothstep(wrb - 0.12, wrb, wR));
       float wrp = 0.09 + 0.06 * wz2;
       crWp = wK * (1.0 - smoothstep(wrp, wrp + 0.04, wR));
       float wa = atan(wx, wy);
       crWf = wK * pow(abs(sin(wa * 3.5 + wz * 4.0)), 14.0) * (1.0 - smoothstep(0.15, 0.6 + 0.15 * wz2, wR)) * step(0.08, wR);
-      crWc = wK * exp(-pow((wR - (wrb - 0.06)) / 0.05, 2.0));
-      float wu = clamp(wy / 2.0, 0.0, 1.0), wob = 0.06 * sin(wy * 3.1 + 1.7) + 0.03 * sin(wy * 8.0);
-      float wwd = mix(0.17, 0.05, wu) * (0.75 + 0.5 * wz2);
-      crWr = wK * smoothstep(0.0, 0.25, wy) * (1.0 - smoothstep(1.3, 2.1, wy)) * (1.0 - smoothstep(wwd * 0.5, wwd, abs(wx - wob)))
-        * (1.0 - smoothstep(0.3, 0.6, wd)) * (1.0 - smoothstep(1.2, 1.6, -wd));
+      crWc = wK * exp(-pow((wR - (wrb - 0.08)) / 0.07, 2.0));
+      float wu = clamp(wy / 1.6, 0.0, 1.0), wob = 0.06 * sin(wy * 3.1 + 1.7) + 0.03 * sin(wy * 8.0);
+      float wwd = mix(0.24, 0.07, wu) * (0.75 + 0.5 * wz2);
+      crWr = wK * smoothstep(0.0, 0.2, wy) * (1.0 - smoothstep(1.0, 1.6, wy)) * (1.0 - smoothstep(wwd * 0.5, wwd, abs(wx - wob)))
+        * (1.0 - smoothstep(0.6, 0.9, abs(wd)));
       crWv = wz2;
       crSand *= 1.0 - max(crWb, crWr);
     }
@@ -1160,7 +1160,7 @@ if (uBury > 0.001) {
       // came out no darker than the crust round it; anchor read, first build)
       diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.032, 0.016, 0.009) * (0.8 + 0.4 * crWv), crWb * 0.9);
       diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.028, 0.01), min(1.0, crWr) * 0.9);
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.27, 0.22), crWc * 0.8);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.33, 0.27), crWc * 0.85);
       diffuseColor.rgb *= 1.0 - 0.85 * crWf;
       diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.004, 0.003, 0.002), crWp);
       roughnessFactor = mix(roughnessFactor, 0.92, crWb);

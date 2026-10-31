@@ -969,12 +969,12 @@ const WOUND_INSTALL = `(async () => {
       anchor: [r2(H.anchor.x), r2(H.anchor.y), r2(H.anchor.z)] },
     show,
     _pk: null, _pg: null, _pw: null,
-    // him on the sand d u out from the seam along her sand side (mode 'sand'), or at Alt+6's anchor (mode 'anchor'); yaw so the seam sits at
+    // him on the sand d u out from the seam along her sand side (mode 'sand'; 'normal': along the seam's normal, for stills), or at Alt+6's anchor (mode 'anchor'); yaw so the seam sits at
     // ndc.x ~ tx beside him (a player looks past his diver, not through him); the post chain settled over each try
     aim(mode, d, tx) {
       L.grp.updateMatrixWorld(true);
       const s = H.seam; let x, z;
-      if (mode === 'anchor') { x = H.anchor.x; z = H.anchor.z; } else { const l = Math.hypot(L.sand.x, L.sand.z) || 1; x = s.x + L.sand.x / l * d; z = s.z + L.sand.z / l * d; }
+      if (mode === 'anchor') { x = H.anchor.x; z = H.anchor.z; } else { const v = mode === 'normal' ? H.normal : L.sand, l = Math.hypot(v.x, v.z) || 1; x = s.x + v.x / l * d; z = s.z + v.z / l * d; }
       const y0 = Math.atan2(s.x - x, s.z - z); let yo = 0, nd = new THREE.Vector3(), prev = null, k = 2.5, tries = 0;
       for (; tries < 7; tries++) {
         window.__bench.place(x, z, y0 + yo, 0); P.pitch = 0; P.pos.y = T.shutFloorY(x, z, 0) + 1.35; P.vel.set(0, 0, 0);

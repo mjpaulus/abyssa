@@ -75,8 +75,8 @@ const GLINT_K = 1.0, GLINT_FAR = 120, SIGHT_R = 24;   // (the sprite's own fade 
 const GL_NEAR = 3, GL_FULL = 6.5, GL_OUT0 = 26, GL_OUT1 = 40, GL_CATCH = 0.4;
 // (oldwound) the old wound's broken barb glints on the same curve, colder, smaller and dimmer than the brass did (k of the iron's)
 const OLD_GLINT_K = 0.45, OLD_GLINT_C = 0xc4d6e6, OLD_GLINT_S = 0.4;
-// (oldwound) the ray that finds the seam's OUTER surface: from OUT_R u out along the normal, back in, through her shell's triangles within OUT_NEAR u
-const OUT_R = 1.2, OUT_NEAR = 2.5;
+// (oldwound) the ray that finds the seam's OUTER surface: from OUT_R u out over the lip (the normal's level part, OUT_UP up), back in, through her shell's triangles within OUT_NEAR u
+const OUT_R = 1.2, OUT_NEAR = 2.5, OUT_UP = 0.7;
 export const LINE_FIRST_SIGHT = 'A HARPOON IN HER SIDE. SOMEONE CAME BEFORE YOU.';
 export const LINE_FREE_HOME = 'IT COMES FREE. SHE FEELS IT.';
 export const LINE_FREE_REMOTE = "ANOTHER DIVER'S HARPOON.";
@@ -706,7 +706,10 @@ export function makeHarpoon(L, opts = {}) {
     // (oldwound) the old wound at home: on her OUTER surface over the seam (the seam is a crevice under an overhang of her rock), the
     // crust painted there, this piece seated flush on it
     if (oldW) {
-      outerHit(sh, mw, H.seam, H.normal);
+      // (in from over the lip, not along the seam's own normal: the seam faces 25 deg DOWN, under an overhang, and the stain laid on
+      // that underside was hidden from every lens above it; the lip's top-front over it faces the sand and the lens)
+      _n.set(H.normal.x, 0, H.normal.z).normalize(); _n.y = OUT_UP; _n.normalize();
+      outerHit(sh, mw, H.seam, _n);
       H.woundP = (H.woundP || V3()).copy(_oh.p); H.woundN = (H.woundN || V3()).copy(_oh.n);
       H.woundOut = +_oh.t.toFixed(3);
       _b.copy(_up).addScaledVector(H.woundN, -_up.dot(H.woundN)).normalize();
