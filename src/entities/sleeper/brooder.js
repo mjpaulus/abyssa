@@ -777,7 +777,7 @@ function bedDown(L, noHarpoon = false) {
 
 // (velkath-buried-rock Task 12) a live L reused at a new bed (bedDown, the lab's place): no point under way, no calm verb pending (Task 10 review,
 // for Task 12: the point's phases and the claw's reach are read every frame), no dig-in or its job
-function digReset(L) { L.pointPh = 0; L.pointK = 0; L.calmNext = false; L.digging = false; L.dugIn = false; L.digJob = null; L.digOff = 0; L.digFail = false; }
+function digReset(L) { L.pointPh = 0; L.pointK = 0; L.braceAt = -1; L.calmNext = false; L.digging = false; L.dugIn = false; L.digJob = null; L.digOff = 0; L.digFail = false; }
 // THE DIG-IN'S START (burial.js BURY.digT): the sink re-measured and the dune re-fitted where she actually lay down. One event, but run as a JOB
 // over frames (booked item 6: the re-bed is ~165 ms in one frame here, fitMound 114 of it): digStep does it in BURY.job ms slices at the end of
 // her update, the dig-in waits for it (bury stays 0, the dune hidden, so nothing reads the mound mid-fit). She lies still for it (no velocity,
@@ -786,7 +786,7 @@ function digReset(L) { L.pointPh = 0; L.pointK = 0; L.calmNext = false; L.diggin
 function beginDig(L) {
   L.vel.set(0, 0, 0); L.yawV = 0;
   L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.shoveN = 0; L.riseSheetN = 0; L.footLatch = false;
-  L.pointPh = 0; L.pointK = 0; L.calmNext = false;
+  L.pointPh = 0; L.pointK = 0; L.calmNext = false; L.braceAt = -1;
   L.bury = 0; L.moundK = 0; setMoundK(L.mound, 0, 0);
   L.digJob = { ph: 0, gen: null, mw1: L.digMw1 || (L.digMw1 = new THREE.Matrix4()) };
 }
@@ -2769,7 +2769,7 @@ export function updateBrooder(L, dt, t, player) {
       if (L.buried && BURY.point) {
         // (velkath-buried-rock) THE POINT first (POINT above); she walks home when it is done
         const rp = riftPos(L.idx);
-        L.pointPh = 1; L.pointT = 0; L.pointAt.set(rp.x, lipMeanY(L.idx, terrainH), rp.z); L.standTarget = 1;
+        L.pointPh = 1; L.pointT = 0; L.braceAt = -1; L.pointAt.set(rp.x, lipMeanY(L.idx, terrainH), rp.z); L.standTarget = 1;
       } else if (L.brood) { L.walkTo = L.lairPos.clone(); L.toBed = true; L.standTarget = 1; }
       else { L.standTarget = 0; L.walkTo = null; }
     }
