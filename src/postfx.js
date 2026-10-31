@@ -81,6 +81,8 @@ if (typeof window !== 'undefined') {
     // set({ ev, tauBright, ... }) pokes knobs; set(false) / set(true) is the switch.
     set: (o) => { const E = GLASS.exposure; if (o === false || o === true) E.on = o ? 1 : 0; else if (o) Object.assign(E, o); return { ...E }; },
     pass: () => expPass,
+    // paced frames with a map-back due: read at frame start (ran) or left to render() under a GPU backlog (skipped)
+    get early() { return expEarly; },
     // Per-pass GPU cost (lab): profile(n) holds the frame timer (one query may be open)
     // and times the meter's own draws + readback issue for n metered frames; cost()
     // reads the ring {n, gpuMean, gpuMax}. Releases the frame timer when done.
@@ -1009,7 +1011,7 @@ const gpuPending = new Uint8Array(GPU_RING);       // 1 = query issued, result n
 // 60 and no slow frames to the wall-time judge -- the frames queue -- so this is the only
 // non-blocking signal that sees it.
 const gpuIssueF = new Float64Array(GPU_RING), lagWin = new Float64Array(GPU_WIN), lagScratch = new Float64Array(GPU_WIN);
-let gpuFrameNo = 0, lagN = 0, lagAt = 0;
+let gpuFrameNo = 0, lagN = 0, lagAt = 0, lagLast = 0;   // lagLast: the most recent readable query's lag
 let gpuExt = null, gpuSupported = false, gpuInit = false, gpuHead = 0, gpuTail = 0, gpuOpen = -1;
 let gpuPaused = false;                              // __rays.profile owns the timer while it runs
 const gpuWin = new Float64Array(GPU_WIN), gpuScratch = new Float64Array(GPU_WIN);
@@ -1031,7 +1033,7 @@ function gpuPoll(gl) {
     if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
     const disjoint = gl.getParameter(gpuExt.GPU_DISJOINT_EXT);
     const ns = gl.getQueryParameter(q, gl.QUERY_RESULT);
-    lagWin[lagAt] = gpuFrameNo - gpuIssueF[gpuHead]; lagAt = (lagAt + 1) % GPU_WIN; if (lagN < GPU_WIN) lagN++;
+    lagLast = lagWin[lagAt] = gpuFrameNo - gpuIssueF[gpuHead]; lagAt = (lagAt + 1) % GPU_WIN; if (lagN < GPU_WIN) lagN++;
     gpuPending[gpuHead] = 0; gpuHead = (gpuHead + 1) % GPU_RING;
     if (disjoint) { gpuN = 0; gpuAt = 0; continue; }   // the window is poisoned; start over
     const ms = ns / 1e6;
@@ -1100,8 +1102,20 @@ const LAT = { every: LAT_EVERY, on: 0 };
 const latWin = new Float64Array(LAT_WIN), latCpu = new Float64Array(LAT_WIN), latScratch = new Float64Array(LAT_WIN);
 const latPx = new Uint8Array(4);
 let latN = 0, latAt = 0, latRT = null, latFrame = 0, latStart = 0;
-// game.js, first thing in a frame that will render.
-export function frameStart() { latStart = performance.now(); latDue = !!LAT.on && (++latFrame % Math.max(1, LAT.every | 0)) === 0; }
+// game.js, first thing in a frame that will render. `cap` is the governor's (0 = uncapped):
+// a paced frame maps the auto-exposure readback back here, while Chrome's GPU process is idle
+// (postfx.exposure.js early(); bench-zone0-stalls).
+// A frame whose last readable GPU query took 2+ frames to come back (DRS's backlog tell, below) may
+// still have the GPU process busy at its start, so the read would wait there instead: it steps
+// aside and render() maps it back as before. No timer extension: no tell, the paced read runs.
+export const expEarly = { ran: 0, skipped: 0 };
+export function frameStart(cap = 0) {
+  latStart = performance.now(); latDue = !!LAT.on && (++latFrame % Math.max(1, LAT.every | 0)) === 0;
+  if (cap > 0 && expPass && expPass.due()) {
+    if (gpuSupported && lagN > 0 && lagLast >= 2) expEarly.skipped++;
+    else { expPass.early(); expEarly.ran++; }
+  }
+}
 let frameCpu = 0;   // this frame's main-thread time to the end of submission (gpuFrameEnd), every frame
 let latDue = false;
 // Called from the TAA pass just before its canvas draw (the sync must not wait on a free

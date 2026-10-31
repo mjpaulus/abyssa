@@ -36,7 +36,7 @@
 // visible=false and skipped entirely. Nothing is allocated per frame.
 import * as THREE from 'three';
 import { scene } from '../core.js';
-import { WORLD_R, zoneTop, zoneBottom } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, fogWall } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { rng, clamp, lerp, V3 } from '../lib/math.js';
 import { glowTex, makeGlow } from '../lib/textures.js';
@@ -99,7 +99,6 @@ const TAU = Math.PI * 2;
 // column is stratified since THE SILT LINE and the real wall reaches ~380-480 out of
 // the silt. Mirror creatures.js's computation off scene.fog.density (updated every
 // frame in updatePredators) so predators stop popping at half the visible range.
-const CULL_MAX = 420;                   // above any reachable clear-band sightline
 let CULL = 205;
 
 // hot-path temps — module-owned, never allocated per frame
@@ -2905,7 +2904,7 @@ export function updatePredators(dt, t, p, lanternPos) {
   if (scene.fog) {
     uFogD.value = scene.fog.density;
     // same formula as creatures.js cullR: range where green transmittance hits 2%
-    CULL = Math.min(CULL_MAX, 3.912 / Math.max(scene.fog.density * 1.45, 1e-4));
+    CULL = fogWall(scene.fog.density);   // config.js THE FOG WALL
   }
 
   // lanternPos is written at the end of game.js's frame, so on frame one it is still

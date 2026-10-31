@@ -25,7 +25,9 @@
 //        queued ahead of it: ~1.8 ms of main thread after the scene pass on this machine
 //        (the bench saw submit alternate 5.5 / 3.3 ms frame to frame at every 2). Moving
 //        the read to frame start measured WORSE (+0.4 ms live: the wait then idles the
-//        GPU). What helps is reading less often: GLASS.exposure.every 2 -> 8 (7.5 Hz
+//        GPU) -- UNCAPPED. In a PACED frame (real play) frame start is where the queue is
+//        empty, so that is where it runs now (early(), below; bench-zone0-stalls).
+//        What helps uncapped is reading less often: GLASS.exposure.every 2 -> 8 (7.5 Hz
 //        metering against 0.6 / 3 s time constants) bought 0.33 ms live at 1.0x and
 //        0.88 ms at 1.5x in zone 0 (paired live A/B, noise +-0.3). ONE program, no depth
 //        attachments (depthBuffer: false on all three).
@@ -136,9 +138,10 @@ export class ExposurePass extends Pass {
     this.scene.add(m);
     this.u = this.material.uniforms;
 
-    // Readback ring: PBOs + fences, created lazily on the live context.
+    // Readback ring: PBOs, created lazily on the live context.
     this.gl = null; this.pbo = null; this.issued = 0; this.read = 0;   // monotonic counters; slot = n % PBO_RING
     this.out = new Float32Array(4);
+    this.pend = new Float32Array(2 * PBO_RING); this.nPend = 0;   // early() map-backs not yet ingested
     this.frame = 0; this.failed = false;
 
     // Adaptation state. ev = log2 of the multiplier on `base`; lum = last metered mean.
@@ -191,16 +194,55 @@ export class ExposurePass extends Pass {
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
     return true;
   }
-  // Map back every readback that is at least PBO_LAG issues old, in issue order.
+  // Map back every readback that is at least PBO_LAG issues old, in issue order. The
+  // samples are INGESTED here, inside render(), whichever moment they were read at: a
+  // map-back done early by early() waits in `pend` until now, so the exposure series is
+  // the same sample for sample whether the read ran at frame start or here.
   _poll() {
+    for (let i = 0; i < this.nPend; i++) this._ingest(this.pend[2 * i], this.pend[2 * i + 1]);
+    this.nPend = 0;
+    while (this.issued - this.read > PBO_LAG) { this._mapBack(); this._ingest(this.out[0], this.out[1]); }
+  }
+  _mapBack() {
     const gl = this.gl;
-    while (this.issued - this.read > PBO_LAG) {
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.read % PBO_RING]);
-      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-      this.read++;
-      const w = this.out[1];
-      if (w > 1e-6 && isFinite(this.out[0])) { this.meanLog = this.out[0] / w; this.lum = Math.pow(2, this.meanLog); this.samples++; this.age = 0; }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.read % PBO_RING]);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.read++;
+  }
+  _ingest(sum, w) {
+    if (w > 1e-6 && isFinite(sum)) { this.meanLog = sum / w; this.lum = Math.pow(2, this.meanLog); this.samples++; this.age = 0; }
+  }
+  // THE READ AT FRAME START (bench-zone0-stalls, 2026-10-31). postfx.frameStart calls this
+  // first thing in a frame the governor PACED (cap > 0: every frame of real play, 60 with
+  // the helm, 30 idle). getBufferSubData's cost is not the age of the data (the 1x1 was
+  // written 24 frames ago) but WHAT IS QUEUED AHEAD OF THE CALL: Blink's getBufferSubData
+  // is GetBufferSubDataCHROMIUM, an unconditional WaitForCmd, so the main thread waits for
+  // Chrome's GPU process to work through every command the page has issued so far. Mid-
+  // frame, after the scene pass, that was the scene pass: 1.7-1.9 ms in zone 0 (0.4 in zone
+  // 1) on 1 frame in 8. At the start of a paced frame the GPU process has long finished the
+  // last one, and the same call is an IPC round trip: 0.1 ms (headful 60 Hz, z0 @1.5x).
+  // Uncapped (cap 0, the bench's live()) there is no idle moment: the queue is always
+  // frames deep, the read waits ~26-30 ms wherever it sits (the primfix bench's every-8th
+  // 11-38 ms frames), and at frame start it measured +0.4 ms mean (perf-budget-oct; again
+  // 2026-10-31), so cap 0 keeps the read in render() as before. A paced frame under a GPU
+  // BACKLOG (postfx.frameStart: the last readable timer query came back 2+ frames late, DRS's
+  // tell) also leaves it to render(): there the GPU process may still be busy at frame start.
+  // Forced (4x canvas, DRS pinned): every due read stepped aside; DRS free: 18 stepped aside
+  // while it shed the backlog, then 132 ran at 0.2 ms.
+  // MEASURED NEGATIVES (2026-10-31, roadmap/bench-zone0-stalls.md): ring depth and lag
+  // change nothing (lag 1 / 3 / 7: 1.8 / 1.9 / 1.8 ms); a fence per readback changes
+  // nothing either (1.9 ms) -- Blink's fenceSync is a READBACK_SHADOW_COPIES_UPDATED query
+  // that fills a shadow copy only MapBufferRange reads, which WebGL does not expose, and it
+  // logs "written, then fenced, but written again" warnings for every READ-usage PBO.
+  // a map-back is due this frame (the ring holds a readback PBO_LAG issues old)
+  due() { return !!this.gl && this.issued - this.read > PBO_LAG; }
+  early() {
+    const E = GLASS.exposure;
+    if (!this.gl || this.failed || !E || !(E.on > 0)) return;
+    while (this.issued - this.read > PBO_LAG && this.nPend < PBO_RING) {
+      this._mapBack();
+      this.pend[2 * this.nPend] = this.out[0]; this.pend[2 * this.nPend + 1] = this.out[1]; this.nPend++;
     }
   }
 

@@ -123,7 +123,15 @@ against explicit contracts and reviewed on return.
   as-is the loop gain was ~0.1 and the exposure walked to its fence) and taking depth-
   1.0 taps raw (dome, far sea: unexposed shaders). The 1x1 is read through a 4-deep
   PBO ring three issues later with NO fence (a fence makes ANGLE/Metal commit mid-
-  frame). The CPU adapts `renderer.toneMappingExposure` = 1.32 x 2^ev, fast down
+  frame; and Blink's getBufferSubData is an unconditional WaitForCmd whatever is fenced,
+  so its cost is the GPU-process backlog ahead of the call, never the data's age). THE
+  PACED EARLY READ (bench-zone0-stalls, 2026-10-31): a frame the governor paced (cap > 0)
+  maps the PBO back at FRAME START (`postfx.frameStart(cap)` -> `ExposurePass.early()`),
+  where the backlog is empty (0.1 ms; mid-frame after the scene pass it was 1.5-1.9 ms
+  on 1 frame in 8 in zone 0), and the sample is still ingested inside render(), so the
+  exposure series is unchanged. A paced frame under a GPU BACKLOG (the last timer query
+  2+ frames late, DRS's tell) and every uncapped frame keep the old in-render read.
+  `__exposure.early` = { ran, skipped }. The CPU adapts `renderer.toneMappingExposure` = 1.32 x 2^ev, fast down
   (0.6 s) slow up (3 s), inside a HARD per-depth clamp on lighting's depth01 (deck
   [0.7,1.4], seabeds [0.85,1.15] / [0.85,1.12] / [0.90,1.05]) so the deep never
   brightens past its authored look; `GLASS.exposure`, lab group 'exposure',
@@ -1032,7 +1040,10 @@ Every frame number taken before October 2026 was noise (+-3-6 ms) for three meas
 THE HOST: a private headless Chrome over CDP, visible to itself (rAF live), normal QoS,
 dpr 2, vsync OFF so rAF is unthrottled and the frame interval IS the frame cost:
 `node tools/bench/cdp.mjs start 9021` (own --user-data-dir under $TMPDIR, debug port 9333;
-`BENCH_VSYNC=1` keeps a 60 Hz vsync for DRS/judge checks), then `eval "<expr>"`,
+`BENCH_VSYNC=1` keeps a 60 Hz vsync for DRS/judge checks; `BENCH_HEADFUL=1` drops --headless for a
+real visible window, the player's compositor, and `BENCH_WINPOS=x,y` places it, e.g. `2156,60` on the
+60 Hz Studio Display (the built-in panel is 120 Hz); it appears on Michael's screen, keep runs short),
+then `eval "<expr>"`,
 `run file.js` (an async function body), `png out.png "<expr -> dataURL>"`, `reload`,
 `goto <url>`, `console`, `stop`. Serve with `python3 serve.py <port>` and load `?bench`
 (or `?lab`): game.js then imports `src/lib/bench.js` -> `window.__bench`. Kill both when done.
@@ -1048,7 +1059,11 @@ core.js):
   her, on 3.3 deg ground, no slide; was (15, 18), 100 u off), z1 (under rift 0), z1b (Orune, 21 u),
   z2 (under rift 1), z2r (zone-2 reef). Site 0 only; positions are the authored layout (a voyage moves them).
 - `await __bench.live(ms)` - the REAL rAF loop, governor uncapped: mean frame interval =
-  the pipelined frame cost. **The number to report.** `liveAB({a, b})` = ABBA paired;
+  the pipelined frame cost. **The number to report.** It runs at cap 0, so it NEVER takes
+  the paced path (the auto-exposure's frame-start read): the exposure readback's cost, and
+  anything else that differs paced, must be measured paced, with `tools/bench/stalls.mjs`
+  (per-frame series under the shipping cap 60: p50-max, missed vsyncs, the 8-frame bump,
+  getBufferSubData block per frame; `STALL_TRACE` adds a DevTools trace). `liveAB({a, b})` = ABBA paired;
   noise floor +-0.1-0.3 ms on a quiet machine.
 - `await __bench.run({frames, mode, split, freeze, prof})` - the FIXED-STEP offscreen loop:
   the game loop is held and the real update + sky + refraction + composer step back to back

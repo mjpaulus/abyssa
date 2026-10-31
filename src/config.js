@@ -112,6 +112,13 @@ setSun(SUN_ELEV_DEG, 26.565);
 // what the old two-point night/day lerp reached at day = 0. Do not "improve" either.
 // THE ABYSS WEIGHT (world/abyss.js, GLASS.abyss): 0 above -640, 1 below -700 (the zone-2
 // top is -660), times GLASS.abyss.on. Pure, so every consumer can read it import-free.
+// THE FOG WALL: the range at which GREEN, the water's most transmitted channel (water.js K_EXT[1]
+// 1.45 x the fog density at the eye), is down to 2% (ln 50 = 3.912), capped at 420 u (above any
+// reachable clear-band sightline). Everything culled "past the fog" culls here: creatures.js's
+// schools / jellies / drifters, predators.js, fauna.js's dither, brood.js's trail set. One formula,
+// one place (bench-zone0-stalls); the value is bit-identical to the four copies it replaced.
+export const FOG_WALL_MAX = 420;
+export function fogWall(density) { return Math.min(FOG_WALL_MAX, 3.912 / Math.max(density * 1.45, 1e-4)); }
 export function abyssK(camY) {
   const A = GLASS.abyss;
   if (!A || !(A.on > 0)) return 0;

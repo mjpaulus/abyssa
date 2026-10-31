@@ -6,7 +6,7 @@
 // motion and glow all live in vertex shaders so the frame cost stays flat.
 import * as THREE from 'three';
 import { scene, camera, renderer } from '../core.js';
-import { WORLD_R, zoneTop, zoneBottom, zoneBand, ZONE_SEEN } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand, ZONE_SEEN, fogWall } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp, V3 } from '../lib/math.js';
 import { glowTex } from '../lib/textures.js';
@@ -45,7 +45,6 @@ const uFogD = { value: 0.016 };
 // ~380 in zone 0 and ~480 in zone 2, and a fixed radius popped whole schools in and
 // out at half the distance the player could see them — at exactly the payoff altitude.
 // Track the wall off the density updateCreatures already reads. K_EXT green is 1.45.
-const CULL_MAX = 420;              // above any reachable clear-band sightline
 let cullR = 205;
 
 const tmpV = V3(), tmpV2 = V3(), tmpQ = new THREE.Quaternion(), tmpM = new THREE.Matrix4();
@@ -1807,7 +1806,7 @@ export function updateCreatures(dt, t) {
   uTime.value = t;
   if (scene.fog) {
     uFogD.value = scene.fog.density;
-    cullR = Math.min(CULL_MAX, 3.912 / Math.max(scene.fog.density * 1.45, 1e-4));
+    cullR = fogWall(scene.fog.density);   // config.js THE FOG WALL (cap 420: above any clear-band sightline)
   }
   for (const S of schools) updateSchool(S, dt, t);
   updateJellies(dt, t);

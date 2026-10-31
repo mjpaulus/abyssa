@@ -39,7 +39,7 @@ import * as THREE from 'three';
 import { V3, clamp } from '../../lib/math.js';
 import { seededRand, maxAniso } from '../../lib/textures.js';
 import { registerPaint } from '../../lib/paint.js';
-import { envTexDeep as envTex, camera } from '../../core.js';
+import { envTexDeep as envTex, camera, scene } from '../../core.js';
 import { terrainH, terrainNormal, terrainMeshes } from '../../world/terrain.js';
 import { terrainSample, driftSkirt, leeOf } from '../../world/wrecks.js';
 import { fissureDist } from '../../world/fissureShape.js';
@@ -47,6 +47,7 @@ import { emitDust } from '../../world/footfx.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as G from './brooderGeo.js';
 import { BURY } from './burial.js';
+import { fogWall } from '../../config.js';
 // (velfix) the clutch's pose after the calm moves at most this much a second (the re-rise's whole swing in ~0.6 s)
 const ST_CALM_RATE = 1.0;
 
@@ -1122,6 +1123,21 @@ export function makeBrood(L, idx, trailFrom) {
     tracks.name = 'broodTracks';
     grp.add(tracks);
     B.tracks = tracks;
+    // THE TRAIL'S FOG CULL (bench-zone0-stalls): the trail set (moult, egg skins, the other diver's relics,
+    // the prints) is ~100k triangles that three culled only by frustum, so every zone-0 view facing it drew
+    // them through the whole silt. Each piece's world box (its drawn extent: the skins from their instance
+    // points) is taken once here; B.update hides a piece whose box lies past the fog wall.
+    B.trailParts = [];
+    const boxOf = (o, pts) => {
+      const bx = new THREE.Box3();
+      if (pts) { for (let i = 0; i < pts.count; i++) { const k = i * 4; bx.expandByPoint(_a.set(pts.a[k], pts.a[k + 1], pts.a[k + 2])); } bx.expandByScalar(1); }
+      else bx.setFromObject(o, true);
+      B.trailParts.push({ o, box: bx, on: true });
+    };
+    boxOf(B.molt);
+    boxOf(B.casings, { a: B.casings.geometry.attributes.aP0.array, count: B.casings.geometry.instanceCount });
+    if (B.relics) for (const r of B.relics) boxOf(r);
+    boxOf(tracks);
     // (the seabed's own material: taken out of her group BEFORE her dispose traversal frees what is under it)
     const pdT = L.onDispose;
     L.onDispose = () => { if (tracks.parent) tracks.parent.remove(tracks); tg.dispose(); if (pdT) pdT(); };
@@ -1180,6 +1196,27 @@ export function makeBrood(L, idx, trailFrom) {
       B.beadsN.visible = on && dc < LOD_N + 14;
       B.setae.visible = on && dc < 40;
       B.core.visible = on;
+    }
+    // THE TRAIL'S FOG CULL (built in buildTrail). The wall is config.js fogWall, the radius every school,
+    // jelly, predator and fauna dither is culled at: the range at which GREEN, the water's most transmitted
+    // channel, is down to 2%, from the fog density AT THE EYE. That is exact for a path in the eye's own water,
+    // and safe when the eye is at or above the piece: the silt pools on the bed, so the path down to it is no
+    // clearer than the eye's water. With the eye BELOW a piece (on a lower tread looking up at one) the path
+    // thins over its last few metres; the +20 u hysteresis absorbs that. Clear-water density is highest at the
+    // surface (water.js rhoClearAt), so above the silt the wall shrinks slightly as he rises: nothing here
+    // assumes it only grows. A piece draws while the nearest point of its box is inside the wall + 10 u and is
+    // dropped past + 20 u (no flicker at the edge). Off for the first 12 s of her clock, as the bead gate above
+    // (the boot's warm frames also force everything drawn). Programs: none new (visibility only).
+    // DEV PATHS ONLY (review Minor 2): it reads the camera as the last frame left it, so a teleport draws one
+    // frame on the old verdict; and a jump that lands paused (Alt+6 without the helm) runs no update, so pieces
+    // culled where he was stay hidden until play resumes. Real play moves the camera a few cm a frame.
+    if (B.trailParts && scene.fog) {
+      const wall = fogWall(scene.fog.density);
+      for (let i = 0; i < B.trailParts.length; i++) {
+        const P = B.trailParts[i], d = B.t < 12 ? 0 : P.box.distanceToPoint(camera.position);
+        P.on = P.on ? d < wall + 20 : d < wall + 10;
+        if (P.o.visible !== P.on) P.o.visible = P.on;
+      }
     }
     // (asleep she fans it slowly; awake she clamps the apron down: uBreath above)
     // the fanning lifts a breath of silt off the open lobes now and then
