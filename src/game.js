@@ -3727,7 +3727,7 @@ function frame(now = performance.now()) {
     // return from hidden) rather than bursting to catch up.
     frameDue = now - frameDue > slot * 2 ? now + slot : frameDue + slot;
   }
-  frameStart();   // the latency probe's clock (postfx.js): this frame will render
+  frameStart(cap);   // the latency probe's clock (postfx.js): this frame will render; a paced one maps the exposure readback back here
   const dt = Math.min(0.05, clock.getDelta()), t = clock.elapsedTime;
   try {
     flushSize();   // one resize per frame, before anything reads the camera or the targets

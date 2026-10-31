@@ -1100,8 +1100,13 @@ const LAT = { every: LAT_EVERY, on: 0 };
 const latWin = new Float64Array(LAT_WIN), latCpu = new Float64Array(LAT_WIN), latScratch = new Float64Array(LAT_WIN);
 const latPx = new Uint8Array(4);
 let latN = 0, latAt = 0, latRT = null, latFrame = 0, latStart = 0;
-// game.js, first thing in a frame that will render.
-export function frameStart() { latStart = performance.now(); latDue = !!LAT.on && (++latFrame % Math.max(1, LAT.every | 0)) === 0; }
+// game.js, first thing in a frame that will render. `cap` is the governor's (0 = uncapped):
+// a paced frame maps the auto-exposure readback back here, while Chrome's GPU process is idle
+// (postfx.exposure.js early(); bench-zone0-stalls).
+export function frameStart(cap = 0) {
+  latStart = performance.now(); latDue = !!LAT.on && (++latFrame % Math.max(1, LAT.every | 0)) === 0;
+  if (cap > 0 && expPass) expPass.early();
+}
 let frameCpu = 0;   // this frame's main-thread time to the end of submission (gpuFrameEnd), every frame
 let latDue = false;
 // Called from the TAA pass just before its canvas draw (the sync must not wait on a free

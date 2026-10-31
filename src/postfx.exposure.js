@@ -25,7 +25,9 @@
 //        queued ahead of it: ~1.8 ms of main thread after the scene pass on this machine
 //        (the bench saw submit alternate 5.5 / 3.3 ms frame to frame at every 2). Moving
 //        the read to frame start measured WORSE (+0.4 ms live: the wait then idles the
-//        GPU). What helps is reading less often: GLASS.exposure.every 2 -> 8 (7.5 Hz
+//        GPU) -- UNCAPPED. In a PACED frame (real play) frame start is where the queue is
+//        empty, so that is where it runs now (early(), below; bench-zone0-stalls).
+//        What helps uncapped is reading less often: GLASS.exposure.every 2 -> 8 (7.5 Hz
 //        metering against 0.6 / 3 s time constants) bought 0.33 ms live at 1.0x and
 //        0.88 ms at 1.5x in zone 0 (paired live A/B, noise +-0.3). ONE program, no depth
 //        attachments (depthBuffer: false on all three).
@@ -136,12 +138,10 @@ export class ExposurePass extends Pass {
     this.scene.add(m);
     this.u = this.material.uniforms;
 
-    // Readback ring: PBOs + fences, created lazily on the live context.
-    this.gl = null; this.pbo = null; this.issued = 0; this.read = 0;   // monotonic counters; slot = n % ring
-    this.ring = PBO_RING; this.lag = PBO_LAG;   // experiment knobs (__exposure.ring(n, lag)); shipped 4 / 3
-    this.sync = [];                              // per slot: the fence issued right after its readPixels
-    this.waits = 0;                              // map-backs deferred because the fence had not signalled
+    // Readback ring: PBOs, created lazily on the live context.
+    this.gl = null; this.pbo = null; this.issued = 0; this.read = 0;   // monotonic counters; slot = n % PBO_RING
     this.out = new Float32Array(4);
+    this.pend = new Float32Array(2 * PBO_RING); this.nPend = 0;   // early() map-backs not yet ingested
     this.frame = 0; this.failed = false;
 
     // Adaptation state. ev = log2 of the multiplier on `base`; lum = last metered mean.
@@ -185,39 +185,58 @@ export class ExposurePass extends Pass {
     if (!gl.PIXEL_PACK_BUFFER || !gl.getBufferSubData) { this.failed = true; return false; }
     this.gl = gl;
     this.pbo = [];
-    for (let i = 0; i < this.ring; i++) {
+    for (let i = 0; i < PBO_RING; i++) {
       const b = gl.createBuffer();
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, b);
       gl.bufferData(gl.PIXEL_PACK_BUFFER, 16, gl.STREAM_READ);
       this.pbo.push(b);
     }
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    this.sync = new Array(this.ring).fill(null);
     return true;
   }
-  // Experiment only: rebuild the ring at another depth / lag (drops whatever is in flight).
-  setRing(n = PBO_RING, lag = PBO_LAG) {
-    if (this.gl && this.pbo) { for (const b of this.pbo) this.gl.deleteBuffer(b); for (const s of this.sync) if (s) this.gl.deleteSync(s); }
-    this.gl = null; this.pbo = null; this.sync = []; this.issued = 0; this.read = 0;
-    this.ring = Math.max(2, n | 0); this.lag = Math.max(0, Math.min(this.ring - 1, lag | 0));
-    return { ring: this.ring, lag: this.lag };
-  }
-  // Map back every readback that is at least PBO_LAG issues old, in issue order.
+  // Map back every readback that is at least PBO_LAG issues old, in issue order. The
+  // samples are INGESTED here, inside render(), whichever moment they were read at: a
+  // map-back done early by early() waits in `pend` until now, so the exposure series is
+  // the same sample for sample whether the read ran at frame start or here.
   _poll() {
+    for (let i = 0; i < this.nPend; i++) this._ingest(this.pend[2 * i], this.pend[2 * i + 1]);
+    this.nPend = 0;
+    while (this.issued - this.read > PBO_LAG) { this._mapBack(); this._ingest(this.out[0], this.out[1]); }
+  }
+  _mapBack() {
     const gl = this.gl;
-    const fenced = GLASS.exposure.fence > 0;
-    while (this.issued - this.read > this.lag) {
-      const slot = this.read % this.ring, sy = this.sync[slot];
-      if (sy) {
-        if (fenced && gl.getSyncParameter(sy, gl.SYNC_STATUS) !== gl.SIGNALED) { this.waits++; break; }
-        gl.deleteSync(sy); this.sync[slot] = null;
-      }
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[slot]);
-      gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-      this.read++;
-      const w = this.out[1];
-      if (w > 1e-6 && isFinite(this.out[0])) { this.meanLog = this.out[0] / w; this.lum = Math.pow(2, this.meanLog); this.samples++; this.age = 0; }
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.read % PBO_RING]);
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.read++;
+  }
+  _ingest(sum, w) {
+    if (w > 1e-6 && isFinite(sum)) { this.meanLog = sum / w; this.lum = Math.pow(2, this.meanLog); this.samples++; this.age = 0; }
+  }
+  // THE READ AT FRAME START (bench-zone0-stalls, 2026-10-31). postfx.frameStart calls this
+  // first thing in a frame the governor PACED (cap > 0: every frame of real play, 60 with
+  // the helm, 30 idle). getBufferSubData's cost is not the age of the data (the 1x1 was
+  // written 24 frames ago) but WHAT IS QUEUED AHEAD OF THE CALL: Blink's getBufferSubData
+  // is GetBufferSubDataCHROMIUM, an unconditional WaitForCmd, so the main thread waits for
+  // Chrome's GPU process to work through every command the page has issued so far. Mid-
+  // frame, after the scene pass, that was the scene pass: 1.7-1.9 ms in zone 0 (0.4 in zone
+  // 1) on 1 frame in 8. At the start of a paced frame the GPU process has long finished the
+  // last one, and the same call is an IPC round trip: 0.1 ms (headful 60 Hz, z0 @1.5x).
+  // Uncapped (cap 0, the bench's live()) there is no idle moment: the queue is always
+  // frames deep, the read waits ~26-30 ms wherever it sits (the primfix bench's every-8th
+  // 11-38 ms frames), and at frame start it measured +0.4 ms mean (perf-budget-oct; again
+  // 2026-10-31), so cap 0 keeps the read in render() as before.
+  // MEASURED NEGATIVES (2026-10-31, roadmap/bench-zone0-stalls.md): ring depth and lag
+  // change nothing (lag 1 / 3 / 7: 1.8 / 1.9 / 1.8 ms); a fence per readback changes
+  // nothing either (1.9 ms) -- Blink's fenceSync is a READBACK_SHADOW_COPIES_UPDATED query
+  // that fills a shadow copy only MapBufferRange reads, which WebGL does not expose, and it
+  // logs "written, then fenced, but written again" warnings for every READ-usage PBO.
+  early() {
+    const E = GLASS.exposure;
+    if (!this.gl || this.failed || !E || !(E.on > 0)) return;
+    while (this.issued - this.read > PBO_LAG && this.nPend < PBO_RING) {
+      this._mapBack();
+      this.pend[2 * this.nPend] = this.out[0]; this.pend[2 * this.nPend + 1] = this.out[1]; this.nPend++;
     }
   }
 
@@ -229,7 +248,7 @@ export class ExposurePass extends Pass {
     this._poll();
     // Sparse in time as well as space: meter every `every` frames, and never with the
     // ring full (a slow readback simply drops this frame's sample).
-    if ((this.frame++ % Math.max(1, E.every | 0)) !== 0 || this.issued - this.read >= this.ring) return;
+    if ((this.frame++ % Math.max(1, E.every | 0)) !== 0 || this.issued - this.read >= PBO_RING) return;
     const u = this.u;
     if (this.profiling > 0) this._profBegin(gl);
     u.uCentre.value = Math.max(0, Math.min(1, E.centre));
@@ -242,11 +261,9 @@ export class ExposurePass extends Pass {
     renderer.setRenderTarget(this.rtC); renderer.render(this.scene, this.camera);
     // The 1x1 is bound now: queue the read into the next PBO. No fence, no flush.
     try {
-      const slot = this.issued % this.ring;
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[slot]);
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.issued % PBO_RING]);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, 0);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-      if (E.fence > 0) this.sync[slot] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
       this.issued++;
       if (this.profiling > 0) this._profEnd(gl);
     } catch (e) {
@@ -315,7 +332,7 @@ export class ExposurePass extends Pass {
   }
   dispose() {
     this.rtA.dispose(); this.rtB.dispose(); this.rtC.dispose(); this.material.dispose();
-    if (this.gl && this.pbo) { for (const b of this.pbo) this.gl.deleteBuffer(b); for (const s of this.sync) if (s) this.gl.deleteSync(s); }
+    if (this.gl && this.pbo) for (const b of this.pbo) this.gl.deleteBuffer(b);
     this.pbo = null;
   }
 }
