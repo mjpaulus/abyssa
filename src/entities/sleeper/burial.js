@@ -1073,6 +1073,9 @@ uniform sampler2D uCrustPack, uCrustNrm;
 uniform vec3 uRockC, uSand;
 uniform vec4 uCrustK, uSandK;
 uniform float uCrustRough;
+uniform vec4 uWound;
+uniform vec3 uWoundN, uWoundD;
+uniform float uWoundS;
 vec4 crTri(sampler2D t, vec3 p, vec3 bw, float f) { return texture2D(t, p.zy * f) * bw.x + texture2D(t, p.xz * f) * bw.y + texture2D(t, p.xy * f) * bw.z; }
 vec3 crNrm(vec3 p, vec3 n, vec3 bw, float f, float str) {
   vec3 tx = texture2D(uCrustNrm, p.zy * f).xyz * 2.0 - 1.0, ty = texture2D(uCrustNrm, p.xz * f).xyz * 2.0 - 1.0, tz = texture2D(uCrustNrm, p.xy * f).xyz * 2.0 - 1.0;
@@ -1122,10 +1125,49 @@ if (uBury > 0.001) {
       crGap = min(1.0, uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPk.b)) * smoothstep(0.0, 0.06, crSand));
       crSand *= 1.0 - crGap;
     }
+    // (oldwound) THE OLD WOUND, painted into her shell where the iron was (uWound: the seam's outer surface in her object space, w on;
+    // uWoundN its normal, uWoundD world down, both in her object space; uWoundS object units per world unit): only on a remembered build
+    // at home (w 0 everywhere else, a uniform branch). Round the puncture the sand has given way and the shell is broken and stained dark
+    // with old rust (crWb, ~0.7 u, a ragged edge), a ridge of pale healed callus rims it (crWc), fractures run out of it (crWf), the
+    // puncture itself is a black pit (crWp), and a rust weep has run down from it (crWr: a tongue, world down, ~1.5 u, on whatever of her lies within 0.9 u of its plane)
+    float crWb = 0.0, crWp = 0.0, crWf = 0.0, crWc = 0.0, crWr = 0.0, crWv = 0.0;
+    if (uWound.w > 0.001) {
+      vec3 wq = (vCrO - uWound.xyz) / uWoundS;
+      vec3 wnh = normalize(uWoundN - uWoundD * dot(uWoundN, uWoundD) + vec3(1e-5)), wsd = normalize(cross(uWoundD, wnh));
+      float wy = dot(wq, uWoundD), wx = dot(wq, wsd), wd = dot(wq, wnh);
+      float wR = length(wq), wz = crVN(wq * 3.3 + 11.0), wz2 = crVN(wq * 9.0 + 3.0);
+      float wK = uWound.w * smoothstep(0.0, 0.3, uBury);
+      float wrb = 0.65 + 0.3 * wz;
+      crWb = wK * (1.0 - smoothstep(wrb - 0.12, wrb, wR));
+      float wrp = 0.09 + 0.06 * wz2;
+      crWp = wK * (1.0 - smoothstep(wrp, wrp + 0.04, wR));
+      float wa = atan(wx, wy);
+      crWf = wK * pow(abs(sin(wa * 3.5 + wz * 4.0)), 14.0) * (1.0 - smoothstep(0.15, 0.6 + 0.15 * wz2, wR)) * step(0.08, wR);
+      crWc = wK * exp(-pow((wR - (wrb - 0.08)) / 0.07, 2.0));
+      float wu = clamp(wy / 1.6, 0.0, 1.0), wob = 0.06 * sin(wy * 3.1 + 1.7) + 0.03 * sin(wy * 8.0);
+      float wwd = mix(0.24, 0.07, wu) * (0.75 + 0.5 * wz2);
+      crWr = wK * smoothstep(0.0, 0.2, wy) * (1.0 - smoothstep(1.0, 1.6, wy)) * (1.0 - smoothstep(wwd * 0.5, wwd, abs(wx - wob)))
+        * (1.0 - smoothstep(0.6, 0.9, abs(wd)));
+      crWv = wz2;
+      crSand *= 1.0 - max(crWb, crWr);
+    }
     roughnessFactor = mix(roughnessFactor, 0.95, crSand);
     normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand * (0.85 + 0.3 * crN1), crSand);
     diffuseColor.rgb *= 1.0 - 0.85 * crGap;
+    if (uWound.w > 0.001) {
+      // (absolute colours, not a tint: under the sand her own shell is paler than the sand, so a tint of what the cleared patch shows
+      // came out no darker than the crust round it; anchor read, first build)
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.032, 0.016, 0.009) * (0.8 + 0.4 * crWv), crWb * 0.9);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.028, 0.01), min(1.0, crWr) * 0.9);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.33, 0.27), crWc * 0.85);
+      diffuseColor.rgb *= 1.0 - 0.85 * crWf;
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.004, 0.003, 0.002), crWp);
+      roughnessFactor = mix(roughnessFactor, 0.92, crWb);
+      roughnessFactor = mix(roughnessFactor, 0.6, crWr);
+      // (the probe's paint: burial-probe wound sets w 2 for ONE capture to find the wound's pixels; the game never writes over 1)
+      if (uWound.w > 1.5) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.0, 1.0), step(0.02, max(max(crWb, crWr), max(crWc, crWp))));
+    }
   } else {
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
     // (the stone looks: the shipped fissure network off the rock map's crevice channel, where her body was at the crack: uCrackO)
@@ -1139,7 +1181,8 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
   const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrackO: { value: V3() }, uCrackS: { value: 0.32 * L.R }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
     uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
     uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough },
-    uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) } };
+    uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) },
+    uWound: { value: new THREE.Vector4(0, 0, 0, 0) }, uWoundN: { value: V3(0, 0, 1) }, uWoundD: { value: V3(0, -1, 0) }, uWoundS: { value: 1 } };
   L.crustU = u; L.crustSilt = new THREE.Color(sandC);   // (the zone's silt: setCrust({ sandC: null }) goes back to it)
   const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
   m.onBeforeCompile = function (sh, r) {
@@ -1152,6 +1195,36 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
   };
   m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|crust';
   m.needsUpdate = true;
+}
+// (oldwound) THE OLD WOUND's place in the crust (harpoon.js seat, a remembered build at home): p / n the seam's OUTER surface point and
+// its normal (world, her dormant pose), into her shell's object space, where the crust samples it (vCrO: it rides her). on false clears
+// it (w 0: the branch is not taken). (A pure down normal leaves the weep's side axis to the shader's epsilon.) No-op before the sculpt lands (no crust yet): seat runs again then. Uniform writes only
+const _wInv = new THREE.Matrix4();
+export function setCrustWound(L, p, n, on) {
+  const rec = on ? crustWoundRec(L, p, n) : null;
+  return on ? setCrustWoundRec(L, rec, true) : setCrustWoundRec(L, null, false);
+}
+// (oldwound) the same, split: crustWoundRec measures the place once (in her shell's object space, so it rides her body through a rise and
+// a dig-in's re-bed: harpoon.js seat, her dormant pose) and setCrustWoundRec writes it, uniform writes only (a heal mid-dig-in costs nothing)
+export function crustWoundRec(L, p, n, out = null) {
+  const sh = L.parts && L.parts.shell;
+  if (!L.crustU || !L.crustU.uWound || !sh) return null;
+  sh.updateMatrixWorld(true);
+  _wInv.copy(sh.matrixWorld).invert();
+  const r = out || { c: V3(), n: V3(), d: V3(), s: 1 };
+  r.c.copy(p).applyMatrix4(_wInv);
+  r.n.copy(n).transformDirection(_wInv);
+  r.d.set(0, -1, 0).transformDirection(_wInv);   // world down (the weep runs down from it)
+  r.s = 1 / sh.matrixWorld.getMaxScaleOnAxis();
+  return r;
+}
+export function setCrustWoundRec(L, rec, on) {
+  const u = L.crustU;
+  if (!u || !u.uWound) return false;
+  if (!on || !rec) { u.uWound.value.w = 0; return !on; }
+  u.uWound.value.set(rec.c.x, rec.c.y, rec.c.z, 1);
+  u.uWoundN.value.copy(rec.n); u.uWoundD.value.copy(rec.d); u.uWoundS.value = rec.s;
+  return true;
 }
 // the crust's uniforms each frame (brooder.js updateBrooder): uniform writes only, never a program change
 export function crustTick(L) {

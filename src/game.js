@@ -893,8 +893,9 @@ function wardsLine() {
   const n = lev ? lev.sigils.length : 3;
   // a dormant sleeper (the Brooder asleep as a ridge) is not described: finding her is the point
   // (Task 6) the Brooder's trigger is the iron in her side: the line points at what pins the ridge
+  // (oldwound) buried at home she is a rock, not a ridge: the old wound is in the ROCK there (the other anchorages keep their line)
   if (lev && lev.dormant && lev.harpoon) return lev.harpoon.wound
-    ? `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND THE OLD WOUND IN THE RIDGE.`
+    ? `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND THE OLD WOUND IN THE ${lev.buried ? 'ROCK' : 'RIDGE'}.`
     : `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND WHAT PINS THE RIDGE.`;
   if (lev && lev.dormant) return `SOMETHING SLEEPS ${lev.lairWhere || 'HERE'}, ${COUNT[n] || n} IRON WARDS SET IN IT. FIND IT. LIGHT THEM.`;
   return `${COUNT[n] || n} IRON WARDS RIDE ITS HIDE. LIGHT THEM AND IT STILLS.`;
