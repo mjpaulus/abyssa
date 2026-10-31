@@ -1073,6 +1073,9 @@ uniform sampler2D uCrustPack, uCrustNrm;
 uniform vec3 uRockC, uSand;
 uniform vec4 uCrustK, uSandK;
 uniform float uCrustRough;
+uniform vec4 uWound;
+uniform vec3 uWoundN, uWoundD;
+uniform float uWoundS;
 vec4 crTri(sampler2D t, vec3 p, vec3 bw, float f) { return texture2D(t, p.zy * f) * bw.x + texture2D(t, p.xz * f) * bw.y + texture2D(t, p.xy * f) * bw.z; }
 vec3 crNrm(vec3 p, vec3 n, vec3 bw, float f, float str) {
   vec3 tx = texture2D(uCrustNrm, p.zy * f).xyz * 2.0 - 1.0, ty = texture2D(uCrustNrm, p.xz * f).xyz * 2.0 - 1.0, tz = texture2D(uCrustNrm, p.xy * f).xyz * 2.0 - 1.0;
@@ -1122,10 +1125,43 @@ if (uBury > 0.001) {
       crGap = min(1.0, uCrack * uCrustK.w * (1.0 - smoothstep(0.24, 0.40 + 0.25 * uCrack, crPk.b)) * smoothstep(0.0, 0.06, crSand));
       crSand *= 1.0 - crGap;
     }
+    // (oldwound) THE OLD WOUND, painted into her shell where the iron was (uWound: the seam's outer surface in her object space, w on;
+    // uWoundN its normal, uWoundD down the shell there, uWoundS object units per world unit): only on a remembered build at home (w 0
+    // everywhere else, a uniform branch). The sand gives way round it (a bare, scraped patch ~0.6 u), the puncture is a dark torn
+    // pit with fractures running out of it and a ridge of healed callus round them, and a rust weep runs ~1.6 u down the shell
+    float crWb = 0.0, crWp = 0.0, crWf = 0.0, crWc = 0.0, crWr = 0.0;
+    if (uWound.w > 0.001) {
+      vec3 wq = (vCrO - uWound.xyz) / uWoundS;
+      float wn = dot(wq, uWoundN);
+      vec3 wt = wq - uWoundN * wn;
+      float wy = dot(wt, uWoundD), wx = dot(wt, cross(uWoundN, uWoundD));
+      float wR = length(wq), wz = crVN(wq * 3.3 + 11.0), wz2 = crVN(wq * 9.0 + 3.0);
+      float wK = uWound.w * smoothstep(0.0, 0.3, uBury);
+      float wrb = 0.5 + 0.3 * wz;
+      crWb = wK * (1.0 - smoothstep(wrb - 0.16, wrb, wR));
+      float wrp = 0.10 + 0.07 * wz2;
+      crWp = wK * (1.0 - smoothstep(wrp, wrp + 0.05, wR));
+      float wa = atan(wx, wy);
+      crWf = wK * pow(abs(sin(wa * 3.5 + wz * 4.0)), 18.0) * (1.0 - smoothstep(0.12, 0.42 + 0.12 * wz2, wR)) * step(0.08, wR);
+      crWc = wK * exp(-pow((wR - (0.27 + 0.05 * wz2)) / 0.055, 2.0)) * (0.6 + 0.4 * wz);
+      float wu = clamp(wy / 1.6, 0.0, 1.0), wob = 0.05 * sin(wy * 4.3 + 1.7) + 0.03 * sin(wy * 11.0);
+      float wwd = mix(0.11, 0.035, wu) * (0.75 + 0.5 * wz2);
+      crWr = wK * smoothstep(-0.05, 0.12, wy) * (1.0 - smoothstep(0.9, 1.6, wy)) * (1.0 - smoothstep(wwd * 0.55, wwd, abs(wx - wob))) * (1.0 - smoothstep(0.35, 0.6, abs(wn)));
+      crWr = max(crWr, wK * (1.0 - smoothstep(0.1, 0.32, wR)) * 0.8);
+      crSand *= 1.0 - crWb;
+    }
     roughnessFactor = mix(roughnessFactor, 0.95, crSand);
     normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand * (0.85 + 0.3 * crN1), crSand);
     diffuseColor.rgb *= 1.0 - 0.85 * crGap;
+    if (uWound.w > 0.001) {
+      diffuseColor.rgb *= 1.0 - 0.35 * crWb;
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.27, 0.22), crWc * 0.75);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.20, 0.055, 0.018), min(1.0, crWr) * 0.85);
+      diffuseColor.rgb *= 1.0 - 0.8 * crWf;
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.005, 0.004), crWp);
+      roughnessFactor = mix(roughnessFactor, 0.45, crWr);
+    }
   } else {
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
     // (the stone looks: the shipped fissure network off the rock map's crevice channel, where her body was at the crack: uCrackO)
@@ -1139,7 +1175,8 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
   const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrackO: { value: V3() }, uCrackS: { value: 0.32 * L.R }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
     uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
     uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough },
-    uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) } };
+    uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) },
+    uWound: { value: new THREE.Vector4(0, 0, 0, 0) }, uWoundN: { value: V3(0, 0, 1) }, uWoundD: { value: V3(0, -1, 0) }, uWoundS: { value: 1 } };
   L.crustU = u; L.crustSilt = new THREE.Color(sandC);   // (the zone's silt: setCrust({ sandC: null }) goes back to it)
   const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
   m.onBeforeCompile = function (sh, r) {
@@ -1152,6 +1189,25 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
   };
   m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|crust';
   m.needsUpdate = true;
+}
+// (oldwound) THE OLD WOUND's place in the crust (harpoon.js seat, a remembered build at home): p / n the seam's OUTER surface point and
+// its normal (world, her dormant pose), into her shell's object space, where the crust samples it (vCrO: it rides her). on false clears
+// it (w 0: the branch is not taken). No-op before the sculpt lands (no crust yet): seat runs again then. Uniform writes only
+const _wInv = new THREE.Matrix4(), _wa = V3(), _wb = V3();
+export function setCrustWound(L, p, n, on) {
+  const u = L.crustU, sh = L.parts && L.parts.shell;
+  if (!u || !u.uWound || !sh) return false;
+  if (!on) { u.uWound.value.w = 0; return true; }
+  sh.updateMatrixWorld(true);
+  _wInv.copy(sh.matrixWorld).invert();
+  _wa.copy(p).applyMatrix4(_wInv);
+  u.uWound.value.set(_wa.x, _wa.y, _wa.z, 1);
+  u.uWoundN.value.copy(n).transformDirection(_wInv);
+  _wb.set(0, -1, 0).addScaledVector(n, n.y);                 // world down, in the surface's plane
+  if (_wb.lengthSq() < 1e-6) _wb.set(1, 0, 0).addScaledVector(n, -n.x);
+  u.uWoundD.value.copy(_wb.normalize()).transformDirection(_wInv);
+  u.uWoundS.value = 1 / sh.matrixWorld.getMaxScaleOnAxis();
+  return true;
 }
 // the crust's uniforms each frame (brooder.js updateBrooder): uniform writes only, never a program change
 export function crustTick(L) {

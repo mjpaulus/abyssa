@@ -47,7 +47,7 @@ import { survival } from '../../systems/survival.js';
 import { diverImpulse } from '../diver.js';
 import { bodyBlocked, inClutch, blockWhy } from './bodyCols.js';
 import { rimR as G_rimR } from './brooderGeo.js';
-import { sandY, crestY, shellTopW } from './burial.js';
+import { sandY, crestY, shellTopW, setCrustWound } from './burial.js';
 const G = { rimR: G_rimR };
 
 
@@ -73,6 +73,10 @@ const GLINT_K = 1.0, GLINT_FAR = 120, SIGHT_R = 24;   // (the sprite's own fade 
 // the range cue: nothing inside GL_NEAR u of him (the lit brass carries it there), full from GL_FULL, gone
 // between GL_OUT0 and GL_OUT1 (the murk has it by then)
 const GL_NEAR = 3, GL_FULL = 6.5, GL_OUT0 = 26, GL_OUT1 = 40, GL_CATCH = 0.4;
+// (oldwound) the old wound's broken barb glints on the same curve, colder, smaller and dimmer than the brass did (k of the iron's)
+const OLD_GLINT_K = 0.6, OLD_GLINT_C = 0xc4d6e6, OLD_GLINT_S = 0.5;
+// (oldwound) the ray that finds the seam's OUTER surface: from OUT_R u out along the normal, back in, through her shell's triangles within OUT_NEAR u
+const OUT_R = 1.2, OUT_NEAR = 2.5;
 export const LINE_FIRST_SIGHT = 'A HARPOON IN HER SIDE. SOMEONE CAME BEFORE YOU.';
 export const LINE_FREE_HOME = 'IT COMES FREE. SHE FEELS IT.';
 export const LINE_FREE_REMOTE = "ANOTHER DIVER'S HARPOON.";
@@ -117,6 +121,55 @@ function woundGeo() {
   return g;
 }
 
+// (oldwound) THE OLD WOUND AT HOME (a remembered build, buried): the healed scar above sat flush on the crest seam, which is a crevice
+// vertex under an overhang of her rock: 154 of its 176 vertices lay inside her drawn shell (up to 0.54 u, its centre 0.26 u under the
+// overhang), and ~1 px of it reached the screen from 10 u. The wound is now painted into her shell by the crust (burial.js
+// setCrustWound: the bare patch, the torn pit, the callus, the rust weep) at the seam's OUTER surface (seat: a ray in along the normal),
+// and this small piece is what stands proud of it there: the torn lip of the puncture, and in it the broken BARB of the iron, a dull
+// cold flake whose glint is the range cue (H.update). Its own geometry in the scar's own material: the same program
+let _oldGeo = null;
+export const BARB_TIP = [0.028, 0.034, 0.15];      // (the barb's tip in the piece's frame: the glint's seat)
+function oldWoundGeo() {
+  if (_oldGeo) return _oldGeo;
+  const RINGS = 5, SEG = 18, rnd = seededRand(0x01D3);
+  const jit = Array.from({ length: SEG }, () => 0.7 + 0.6 * rnd());
+  const pos = [], colr = [], idx = [];
+  for (let i = 0; i <= RINGS; i++) {
+    const f = i / RINGS;
+    for (let j = 0; j < SEG; j++) {
+      const a = j / SEG * Math.PI * 2, r = 0.13 * f * (i === 0 ? 0 : (i === RINGS ? jit[j] : 0.85 + 0.15 * jit[j]));
+      // a pit, and a torn lip standing up round it (the shell broken outward where the iron was wrenched)
+      const zz = -0.07 * Math.pow(1 - f, 1.6) + 0.035 * Math.exp(-(((f - 0.7) / 0.18) ** 2)) * jit[j];
+      pos.push(Math.cos(a) * r, Math.sin(a) * r, zz);
+      const pit = Math.pow(1 - f, 1.2), lip = Math.exp(-(((f - 0.7) / 0.2) ** 2));
+      colr.push(0.02 + 0.16 * lip * (1 - pit), 0.012 + 0.07 * lip * (1 - pit), 0.008 + 0.035 * lip * (1 - pit));
+    }
+  }
+  for (let i = 0; i < RINGS; i++) for (let j = 0; j < SEG; j++) {
+    const a = i * SEG + j, b = i * SEG + (j + 1) % SEG, c = a + SEG, d = b + SEG;
+    idx.push(a, c, b, b, c, d);
+  }
+  let g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.Float32BufferAttribute(colr, 3));
+  g.setIndex(idx);
+  g = g.toNonIndexed();
+  // the barb: a flat broken wedge of iron out of the pit, leaning off the normal (flat shaded, cold dark grey)
+  const A = [-0.032, -0.008, -0.03], B = [0.032, -0.008, -0.03], C = [0, 0.012, -0.03], T = BARB_TIP;
+  const bp = [...A, ...B, ...T, ...B, ...C, ...T, ...C, ...A, ...T], bc = [];
+  for (let k = 0; k < 9; k++) bc.push(...(k % 3 === 2 ? [0.30, 0.31, 0.33] : [0.09, 0.09, 0.10]));
+  const P0 = g.attributes.position.array, C0 = g.attributes.color.array;
+  const P1 = new Float32Array(P0.length + bp.length), C1 = new Float32Array(C0.length + bc.length);
+  P1.set(P0); P1.set(bp, P0.length); C1.set(C0); C1.set(bc, C0.length);
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(P1, 3));
+  out.setAttribute('color', new THREE.BufferAttribute(C1, 3));
+  out.computeVertexNormals();
+  g.dispose();
+  _oldGeo = out;
+  return out;
+}
+
 // ---- the weep (render only) ----------------------------------------------------------------------
 const WEEP_N = 32;
 let _puff = null;
@@ -150,6 +203,37 @@ function weepMat() {
   };
   m.customProgramCacheKey = () => 'harpoon|weep';
   return m;
+}
+
+// (oldwound) the seam's OUTER surface: a ray from OUT_R u out along the normal, back in, against her drawn shell's triangles near it (an
+// event at seat; a distance cull first, so a few hundred of her ~70k triangles are tested). _oh: p the first surface it meets, n its
+// normal (her face's, turned out to the seam's side, eased half to the seam's), t how far over the seam it is; no hit = the seam itself
+const _oh = { p: V3(), n: V3(), t: 0 }, _ta = V3(), _tb = V3(), _tc = V3(), _e1 = V3(), _e2 = V3(), _pv = V3(), _tv = V3(), _qv = V3(), _ro = V3(), _rd = V3(), _fn = V3();
+function outerHit(sh, mw, seam, n) {
+  const P = sh.geometry.attributes.position, I = sh.geometry.index, nT = I ? I.count / 3 : P.count / 3, near2 = OUT_NEAR * OUT_NEAR;
+  _ro.copy(seam).addScaledVector(n, OUT_R); _rd.copy(n).negate();
+  let best = Infinity;
+  for (let t = 0; t < nT; t++) {
+    const ia = I ? I.getX(t * 3) : t * 3;
+    _ta.fromBufferAttribute(P, ia).applyMatrix4(mw);
+    if (_ta.distanceToSquared(seam) > near2) continue;
+    _tb.fromBufferAttribute(P, I ? I.getX(t * 3 + 1) : t * 3 + 1).applyMatrix4(mw);
+    _tc.fromBufferAttribute(P, I ? I.getX(t * 3 + 2) : t * 3 + 2).applyMatrix4(mw);
+    _e1.subVectors(_tb, _ta); _e2.subVectors(_tc, _ta);
+    _pv.crossVectors(_rd, _e2); const det = _e1.dot(_pv);
+    if (Math.abs(det) < 1e-12) continue;
+    const inv = 1 / det; _tv.subVectors(_ro, _ta);
+    const u = _tv.dot(_pv) * inv; if (u < 0 || u > 1) continue;
+    _qv.crossVectors(_tv, _e1); const v = _rd.dot(_qv) * inv; if (v < 0 || u + v > 1) continue;
+    const d = _e2.dot(_qv) * inv;
+    if (d <= 0 || d >= best) continue;
+    _fn.crossVectors(_e1, _e2).normalize();
+    if (_fn.dot(n) < 0) _fn.negate();
+    best = d; _oh.n.copy(_fn);
+  }
+  if (best < Infinity) { _oh.p.copy(_ro).addScaledVector(_rd, best); _oh.n.add(n).normalize(); _oh.t = OUT_R - best; }
+  else { _oh.p.copy(seam); _oh.n.copy(n); _oh.t = 0; }
+  return _oh;
 }
 
 // ---- the build ---------------------------------------------------------------------------------
@@ -198,13 +282,17 @@ export function makeHarpoon(L, opts = {}) {
   const woundMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.5, metalness: 0, envMap: envTex, envMapIntensity: 0.35,
     polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
   woundMat.customProgramCacheKey = () => 'harpoon|wound';
-  const scar = new THREE.Mesh(woundGeo(), woundMat);
+  // (oldwound) a remembered build at home, buried: the old wound is painted into her shell (the crust) and this mesh is its proud piece
+  const oldW = wound && !!L.buried;
+  H.oldW = oldW;
+  const scarGeo = oldW ? oldWoundGeo() : woundGeo();
+  const scar = new THREE.Mesh(scarGeo, woundMat);
   scar.castShadow = false; scar.receiveShadow = true;
   scar.matrixAutoUpdate = false;
   scar.visible = wound;
   L.body.add(scar);
   H.scar = scar;
-  L.keepGeo = new Set([...(L.keepGeo || []), woundGeo()]);
+  L.keepGeo = new Set([...(L.keepGeo || []), scarGeo]);
   // the weep (world space, in her group)
   {
     if (!_weepQuad) _weepQuad = new THREE.PlaneGeometry(1, 1);
@@ -227,6 +315,8 @@ export function makeHarpoon(L, opts = {}) {
   const gl = makeWarmGlow(0xffe0a6, 0.9, { near: 40, far: GLINT_FAR, nearW: 0, swell: 0.02, swellMax: 1.5 });
   gl.material.opacity = 0;
   gl.renderOrder = 3;
+  // (oldwound) the barb's glint: cold and small (the brass's is warm); a uniform, the same program
+  if (oldW) { gl.material.color.setHex(OLD_GLINT_C); gl.scale.setScalar(OLD_GLINT_S); }
   L.grp.add(gl);
   H.glintSpr = gl;
 
@@ -613,6 +703,19 @@ export function makeHarpoon(L, opts = {}) {
     _m.makeBasis(_a, _b, H.normal).setPosition(_w.copy(H.seam).addScaledVector(H.normal, 0.025));
     scar.matrix.multiplyMatrices(_m2, _m);
     scar.matrixWorldNeedsUpdate = true;
+    // (oldwound) the old wound at home: on her OUTER surface over the seam (the seam is a crevice under an overhang of her rock), the
+    // crust painted there, this piece seated flush on it
+    if (oldW) {
+      outerHit(sh, mw, H.seam, H.normal);
+      H.woundP = (H.woundP || V3()).copy(_oh.p); H.woundN = (H.woundN || V3()).copy(_oh.n);
+      H.woundOut = +_oh.t.toFixed(3);
+      _b.copy(_up).addScaledVector(H.woundN, -_up.dot(H.woundN)).normalize();
+      _a.crossVectors(_b, H.woundN);
+      _m.makeBasis(_a, _b, H.woundN).setPosition(_w.copy(H.woundP).addScaledVector(H.woundN, 0.012));
+      scar.matrix.multiplyMatrices(_m2, _m);
+      scar.matrixWorldNeedsUpdate = true;
+      setCrustWound(L, H.woundP, H.woundN, !H.woundHidden);
+    }
     // the line: from the stub's frayed end (meta.lineEnd in the model's frame), a sag down to the
     // silt and a length lying on it, half buried, out toward the sand
     {
@@ -655,6 +758,8 @@ export function makeHarpoon(L, opts = {}) {
     return H;
   };
   H.seamWorld = () => H.seam;
+  // (oldwound) the old wound on / off whole (the probe's A/B: burial-probe wound): the piece, the crust's paint, the barb's glint
+  H._woundShow = on => { H.woundHidden = !on; scar.visible = !!on && (H.wound || H.pulled); if (oldW && H.woundP) setCrustWound(L, H.woundP, H.woundN, !!on); return !!on; };
   // grip: where his hands close (for the look while he wrenches)
   H.gripWorld = out => out.set(0, 0, GRIP_Z).applyMatrix4(H.worldM || _m.identity());
 
@@ -709,8 +814,8 @@ export function makeHarpoon(L, opts = {}) {
   const spawnWeep = () => {
     const i = H.weepHead, o = i * 8;
     H.weepHead = (H.weepHead + 1) % WEEP_N;
-    const nx = H.normal.x, ny = H.normal.y, nz = H.normal.z, j = 0.12;
-    H.wp[o] = H.seam.x + nx * 0.08; H.wp[o + 1] = H.seam.y + ny * 0.08; H.wp[o + 2] = H.seam.z + nz * 0.08;
+    const nx = H.normal.x, ny = H.normal.y, nz = H.normal.z, j = 0.12, sp = oldW && H.woundP ? H.woundP : H.seam;
+    H.wp[o] = sp.x + nx * 0.08; H.wp[o + 1] = sp.y + ny * 0.08; H.wp[o + 2] = sp.z + nz * 0.08;
     H.wp[o + 3] = nx * 0.28 + (Math.random() - 0.5) * j; H.wp[o + 4] = ny * 0.28 + 0.10 + (Math.random() - 0.5) * j; H.wp[o + 5] = nz * 0.28 + (Math.random() - 0.5) * j;
     H.wp[o + 6] = 0; H.wp[o + 7] = 2.6 + 1.6 * Math.random();
     H.weep.count = WEEP_N;          // (the unborn and the spent draw at scale 0, fade 0)
@@ -806,8 +911,10 @@ export function makeHarpoon(L, opts = {}) {
     // it (once ever per anchorage, persisted with the chart: opts.sighted / ev.sighted), it CATCHES: a
     // GL_CATCH s swell to full.
     let f = 0;
-    if (iron.visible && L.dormant && player) {
-      _a.set(0, 0, (DIM.fer0 + DIM.fer1) * 0.5).applyMatrix4(H.worldM);
+    const ironOn = iron.visible && L.dormant && player, barbOn = !ironOn && oldW && !H.pressed && !H.woundHidden && L.dormant && player;
+    if (ironOn || barbOn) {
+      if (ironOn) _a.set(0, 0, (DIM.fer0 + DIM.fer1) * 0.5).applyMatrix4(H.worldM);
+      else _a.set(BARB_TIP[0], BARB_TIP[1], BARB_TIP[2]).applyMatrix4(scar.matrixWorld);
       _b.subVectors(camera.position, _a);
       const dc = _b.length() || 1;
       gl.position.copy(_a).addScaledVector(_b, Math.min(1.2, 0.1 * dc) / dc);
@@ -817,11 +924,11 @@ export function makeHarpoon(L, opts = {}) {
       _fw.set(Math.sin(player.yaw), 0, Math.cos(player.yaw));
       const face = Math.max(0, _fw.x * _v.x + _fw.z * _v.z);
       const lit = Math.max(0, player.light == null ? 1 : player.light);
-      const sq = 1 - Math.abs(H.axis.dot(_b) / dc);
+      const sq = ironOn ? 1 - Math.abs(H.axis.dot(_b) / dc) : 1;
       const rng = clamp((dp - GL_NEAR) / (GL_FULL - GL_NEAR), 0, 1), far = 1 - clamp((dp - GL_OUT0) / (GL_OUT1 - GL_OUT0), 0, 1);
-      f = face * face * lit * rng * rng * (3 - 2 * rng) * far * (0.7 + 0.3 * sq * sq) * (0.9 + 0.1 * Math.sin(H.t * 2.3));
+      f = face * face * lit * rng * rng * (3 - 2 * rng) * far * (0.7 + 0.3 * sq * sq) * (0.9 + 0.1 * Math.sin(H.t * 2.3)) * (ironOn ? 1 : OLD_GLINT_K);
       // first sight: once EVER per anchorage, when his light finds it
-      if (!H.sighted && !sightSaid[site] && face > 0.85 && lit > 0.2 && dp > GL_NEAR && dp < SIGHT_R && !ev.msg) {
+      if (ironOn && !H.sighted && !sightSaid[site] && face > 0.85 && lit > 0.2 && dp > GL_NEAR && dp < SIGHT_R && !ev.msg) {
         H.sighted = true; sightSaid[site] = 1; ev.msg = LINE_FIRST_SIGHT; ev.sighted = true; H.catchT = GL_CATCH;
       }
     }
