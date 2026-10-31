@@ -961,8 +961,14 @@ const WOUND_INSTALL = `(async () => {
   const cam = core.camera, r2 = q => +q.toFixed(2);
   // what the wound (or, on a fresh save, the iron) adds to the frame: the build's own hook when it has one, else the scar mesh alone
   // (983224c's old wound IS the scar mesh), or the iron and its line; the glint is its own switch
+  // (the seam and the anchor kept in her body's frame from the install: after a dig-in's re-bed she lies elsewhere and the wound rides her;
+  // on a build that has not moved they are H.seam and H.anchor)
+  L.grp.updateMatrixWorld(true);
+  const bInv = new THREE.Matrix4().copy(L.body.matrixWorld).invert(), seamL = H.seam.clone().applyMatrix4(bInv), anchorL = H.anchor.clone().applyMatrix4(bInv);
+  const seamNow = () => { L.grp.updateMatrixWorld(true); return seamL.clone().applyMatrix4(L.body.matrixWorld); };
+  const anchorNow = () => anchorL.clone().applyMatrix4(L.body.matrixWorld);
   const show = (on, glint) => {
-    if (H.wound) { if (H._woundShow) H._woundShow(on); else H.scar.visible = on; }
+    if (H.wound || H.pulled) { if (H._woundShow) H._woundShow(on); else H.scar.visible = on; }
     else { H.iron.visible = on; H.rope.visible = on; }
     H.glintSpr.visible = !!(on && glint);
   };
@@ -975,9 +981,8 @@ const WOUND_INSTALL = `(async () => {
     // him on the sand d u out from the seam along her sand side (mode 'sand'; 'normal': along the seam's normal, for stills), or at Alt+6's anchor (mode 'anchor'); yaw so the seam sits at
     // ndc.x ~ tx beside him (a player looks past his diver, not through him); the post chain settled over each try
     aim(mode, d, tx) {
-      L.grp.updateMatrixWorld(true);
-      const s = H.seam; let x, z;
-      if (mode === 'anchor') { x = H.anchor.x; z = H.anchor.z; } else { const v = mode === 'normal' ? H.normal : L.sand, l = Math.hypot(v.x, v.z) || 1; x = s.x + v.x / l * d; z = s.z + v.z / l * d; }
+      const s = seamNow(); let x, z;
+      if (mode === 'anchor') { const a = anchorNow(); x = a.x; z = a.z; } else { const v = mode === 'normal' ? H.normal : L.sand, l = Math.hypot(v.x, v.z) || 1; x = s.x + v.x / l * d; z = s.z + v.z / l * d; }
       const y0 = Math.atan2(s.x - x, s.z - z); let yo = 0, nd = new THREE.Vector3(), prev = null, k = 2.5, tries = 0;
       for (; tries < 7; tries++) {
         window.__bench.place(x, z, y0 + yo, 0); P.pitch = 0; P.pos.y = T.shutFloorY(x, z, 0) + 1.35; P.vel.set(0, 0, 0);
@@ -997,7 +1002,7 @@ const WOUND_INSTALL = `(async () => {
     // piece and the iron and its line by their emissive, the glint by its colour, the crust's paint by uWound.w 2 (burial.js: the probe's
     // paint, where the wound's terms are > 0.02); all uniforms, no program change
     paint(on) {
-      const ms = H.wound ? [H.scar.material] : [H.iron.material, H.rope.material], u = L.crustU && L.crustU.uWound;
+      const ms = H.wound || H.pulled ? [H.scar.material] : [H.iron.material, H.rope.material], u = L.crustU && L.crustU.uWound;
       if (on) { R._pk = ms.map(m => m.emissive ? m.emissive.clone() : null); R._pg = H.glintSpr.material.color.clone();
         for (const m of ms) if (m.emissive) m.emissive.setRGB(1.5, 0, 1.5);
         H.glintSpr.material.color.setRGB(1, 0, 1);
@@ -1015,7 +1020,7 @@ const WOUND_INSTALL = `(async () => {
       try { c = await cap(); cc = await cap(); R.paint(true); m = await cap(); } finally { R.paint(false); show(true, true); }
       const W = c.w, Hh = c.h;
       // the WINDOW: +-o.win u (default 3) round the seam's projection at its distance from the lens (pixel rows bottom-up, as read back)
-      cam.updateMatrixWorld(); const sp = H.seam.clone().project(cam), dist = cam.position.distanceTo(H.seam);
+      const sw = seamNow(); cam.updateMatrixWorld(); const sp = sw.clone().project(cam), dist = cam.position.distanceTo(sw);
       const pxu = (Hh / 2) / Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) / dist, half = Math.max(24, Math.round((o.win || 3) * pxu));
       const cx = Math.round((sp.x + 1) / 2 * W), cy = Math.round((sp.y + 1) / 2 * Hh);
       // a footprint pixel: painted magenta (red and blue both >= 40 codes over green) and >= 40 codes off the plain frame; floor = the same
@@ -1043,7 +1048,7 @@ const WOUND_INSTALL = `(async () => {
     // the growth kept off the seam (burial.js prepGrowth / growRock): every DRAWN frond (an instance not scaled to 0) and every coral vertex
     // within GROW.near u of the seam, or in the sight corridor out of it along its normal's level part (GROW.sight)
     fronds() {
-      const G = Bu.GROW, s = H.seam, hn = H.normal, l = Math.hypot(hn.x, hn.z) || 1, snx = hn.x / l, snz = hn.z / l, nr2 = G.near * G.near;
+      const G = Bu.GROW, s = seamNow(), hn = H.normal, l = Math.hypot(hn.x, hn.z) || 1, snx = hn.x / l, snz = hn.z / l, nr2 = G.near * G.near;
       const over = p => { const dx = p.x - s.x, dy = p.y - s.y, dz = p.z - s.z; if (dx * dx + dy * dy + dz * dz < nr2) return 1;
         const t = dx * snx + dz * snz; if (t < 0 || t > G.sight[0]) return 0; const qx = dx - snx * t, qz = dz - snz * t; return qx * qx + dy * dy + qz * qz < G.sight[1] * G.sight[1] ? 2 : 0; };
       const w = L.parts.weed, co = L.parts.coral, m = new THREE.Matrix4(), v = new THREE.Vector3(), out = { weedN: 0, weedNear: 0, weedSight: 0, coralN: 0, coralNear: 0, coralSight: 0, nearest: 1e9 };
@@ -1358,7 +1363,31 @@ try {
     const dir = join(homedir(), 'sc/.abyssa-wt/shots/buried'), file = join(dir, `${SHOTS}-${name}.png`);
     mkdirSync(dir, { recursive: true }); writeFileSync(file, Buffer.from(url.split(',')[1], 'base64'));
     console.log(`still ${file} (bury ${await c.ev('window.lev.bury')})`); };
+  // (oldwound) THE WOUND AFTER THE DIG-IN (clear and offbed, not under a RED): before the pull, the iron's read at 10 u (the wound mode's
+  // reference, glint on; her sculpt waited for, so the framing's seam is the seated one); dug in, the wound's read at 10 u (glint on) and at
+  // the anchor (glint hidden), both riding her body (WOUND_INSTALL keeps the seam and the anchor in her frame). Weather 0.5 for the reads
+  // only, as the wound mode's, then handed back
+  const woundRef = async sess => {
+    if (RED || !(sess.run === 'clear' || sess.run === 'offbed')) return;
+    await c.until(`(window.__bench.step(10), !!(window.lev && window.lev.sculpted))`, 30000, 100).catch(() => null);
+    await c.ev(`(window.weather.set(0.5, 0), 1)`);
+    const p = await c.ev(WOUND_INSTALL); if (!p || p.err || p.wound || !p.iron) throw new Error('wound install (the iron): ' + JSON.stringify(p));
+    sess.woundIron = { prem: p, aim: await c.ev(`window.__bpWound.aim('sand', 10, 0.3)`) };
+    sess.woundIron.d10 = await c.ev(`window.__bpWound.read({ glint: true })`);
+    await c.ev(`(window.weather.set(null, null), 1)`);
+  };
+  const woundAfter = async sess => {
+    if (!sess.woundIron || !sess.endState || !sess.endState.dugIn) return;
+    await c.ev(`(window.weather.set(0.5, 0), 1)`);
+    const W = sess.woundAfter = {};
+    W.d10aim = await c.ev(`window.__bpWound.aim('sand', 10, 0.3)`); W.d10 = await c.ev(`window.__bpWound.read({ glint: true })`);
+    W.anaim = await c.ev(`window.__bpWound.aim('anchor', 0, 0.3)`); W.anchor = await c.ev(`window.__bpWound.read({ glint: false })`);
+    W.state = await c.ev(`(() => { const L = window.lev, H = L.harpoon; return { healed: H.healed ?? null, pulled: !!H.pulled, dugIn: !!L.dugIn, w: L.crustU && L.crustU.uWound ? L.crustU.uWound.value.w : null }; })()`);
+    await c.ev(`(window.weather.set(null, null), 1)`);
+    console.log(`  [${sess.run}] wound after the dig-in: d10 ${JSON.stringify(W.d10aim)} ${JSON.stringify(W.d10)}; anchor ${JSON.stringify(W.anaim)} ${JSON.stringify(W.anchor)}; ${JSON.stringify(W.state)}`);
+  };
   const digChain = async sess => {
+    await woundRef(sess);
     await alt(c, 6);
     const ins = await c.ev(DIG_INSTALL); if (!ins || ins.err) throw new Error('install: ' + (ins && ins.err));
     sess.ins = ins;
@@ -1474,12 +1503,14 @@ try {
             const pl = await c.ev(BREATH_PLACE(6)); sess.breathPlace = pl;
             if (pl && !pl.err) { await c.ev(`(window.__bpS = [], 1)`); for (let f = 0; f < 2400; f += 300) await c.ev(BREATH_BOOK(300, 6)); sess.breath = await c.ev(`window.__bpS`); }
           }
+          await woundAfter(sess);
         } else if (run === 'offbed') {
           let st = null;
           for (let k = 0; k < 8; k++) { st = await dig(300, 'dug'); if (st.hit) break; }
           await dig(120);
           sess.endState = await c.ev(`window.__bpDig.state()`);
           sess.disg = sess.endState.dugIn ? await c.ev(DISGUISE) : { err: 'not dug in' };
+          await woundAfter(sess);
           console.log(`  [offbed] off the first bed ${JSON.stringify(sess.off0)}; coral ${JSON.stringify(sess.disg.coral)}; end ${JSON.stringify(sess.endState)}`);
         } else {
           let st = null;
@@ -1699,6 +1730,16 @@ if (MODE === 'digin' || MODE === 'reentry' || MODE === 'wound') {
   record.sessClocks = sessClocks.concat([clock]);
   if (lostS.length) { console.log(`CLOCK LOST in ${lostS.length} session(s): ${JSON.stringify(lostS)}`); finish(4, 'clock lost'); }
 }
+// (oldwound) the wound after the dig-in (header, digin): the remembered build's bars, on the fresh pull's wound once she has dug back in
+function woundChecks(sess, add) {
+  if (RED) return;
+  const I = sess.woundIron && sess.woundIron.d10, W = sess.woundAfter || {}, pick = q => q ? { visible: q.visible, weber: q.weber, area: q.area, eqD: q.eqD, Lm: q.Lm, La: q.La, floor: q.floor } : null;
+  const voidOf = q => !q || q.floor > 0.02 * Math.pow(2 * q.half + 1, 2);
+  add({ name: sess.run + '.wound10', val: { wound: pick(W.d10), iron: pick(I), state: W.state || null, ndc: W.d10aim && W.d10aim.ndc }, bar: 'dug in after the pull: glint on, visible >= the iron\'s at 10 u before the pull (the wound mode\'s d10.range)',
+    ok: !!W.d10 && !!I && W.d10.visible >= I.visible, vacuous: !W.d10 || voidOf(W.d10) || voidOf(I) || !I.visible });
+  add({ name: sess.run + '.woundAnchor', val: Object.assign(pick(W.anchor) || {}, { ndc: W.anaim && W.anaim.ndc, camD: W.anaim && W.anaim.camD }), bar: 'dug in after the pull: glint hidden, visible >= 1200 px and >= 60% of the footprint (the wound mode\'s anchor.read)',
+    ok: !!W.anchor && W.anchor.visible >= 1200 && W.anchor.visible >= 0.6 * W.anchor.area, vacuous: voidOf(W.anchor) });
+}
 if (MODE === 'digin') {
   const ck = [], f60 = 60, r = v => Math.round(v * 1000) / 1000;
   const redBars = RED ? REDS.digin[RED].runs.flatMap(rn => REDS.digin[RED].bars.map(b => rn + '.' + b)) : null;
@@ -1723,6 +1764,7 @@ if (MODE === 'digin') {
         const iMax = C.indexOf(mx), jobs = S.filter(q => q.job != null && q.job > 0).map(q => q.job), jmx = jobs.length ? Math.max(...jobs) : null;
         add({ name: 'clear.cost', val: { worst: mx, median: med, extra: mx != null ? r(mx - med) : null, atS: r(iMax / f60), p99: srt.length ? srt[Math.floor(srt.length * 0.99)] : null, jobFrames: jobs.length, jobMax: jmx },
           bar: 'the window\'s worst update() frame less its median <= 4.0 ms (pre-registered)', ok: mx != null && mx - med <= 4.0, vacuous: C.length < 600 }); }
+      woundChecks(sess, add);
     } else if (run === 'early') {
       // (final review item 1, pre-registered before the fix) the calm at wake + 0.5 s: within 2 frames of the first frame she is calmed, bury 0,
       // L.hasStood, the dune drawn down (moundK 0) and the crack's crust gone (crackK 0), held for the 60 booked frames after the calm
@@ -1749,6 +1791,7 @@ if (MODE === 'digin') {
       add({ name: 'offbed.coral', val: q ? { outBand: q.outBand, n: q.n, firstOut: q.firstOut, under: q.under, low: q.low } : (d && d.err) || err, bar: 'dug in off her first bed: every coral vertex inside the NEW bed\'s strip band (DISGUISE coral, growRock\'s own rule at the source)', ok: !!q && q.n > 0 && q.outBand === 0, vacuous: !q || !q.n });
       add({ name: 'offbed.end', val: sess.endState ? { bury: sess.endState.bury, dugIn: sess.endState.dugIn } : err, bar: 'dug in off her first bed: L.dugIn and bury 1', ok: !!sess.endState && sess.endState.dugIn && sess.endState.bury === 1, vacuous: !!err || !sess.endState });
       ck.push(Object.assign(disgCheck('offbed.disg', d), { judged: false }));
+      woundChecks(sess, add);
     } else {
       const from = sess.apprF ?? S.length, A = S.slice(from), on = [], lv = sess.leaveF;
       for (let i = Math.max(1, from); i < S.length; i++) if (S[i].on && S[i - 1].bury > 0 && S[i - 1].bury < 1) on.push({ i, d: Math.abs(S[i].bury - S[i - 1].bury) });

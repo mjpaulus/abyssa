@@ -47,7 +47,7 @@ import { survival } from '../../systems/survival.js';
 import { diverImpulse } from '../diver.js';
 import { bodyBlocked, inClutch, blockWhy } from './bodyCols.js';
 import { rimR as G_rimR } from './brooderGeo.js';
-import { sandY, crestY, shellTopW, setCrustWound } from './burial.js';
+import { sandY, crestY, shellTopW, crustWoundRec, setCrustWoundRec } from './burial.js';
 const G = { rimR: G_rimR };
 
 
@@ -286,6 +286,9 @@ export function makeHarpoon(L, opts = {}) {
   // (oldwound) a remembered build at home, buried: the old wound is painted into her shell (the crust) and this mesh is its proud piece
   const oldW = wound && !!L.buried;
   H.oldW = oldW;
+  // (oldwound) H.healed: the old wound is what shows at the seam (the remembered build from the start; a fresh pull's wound once she digs
+  // back in: heal, H.update); a pull or a press opens it fresh again (free)
+  H.healed = oldW;
   const scarGeo = oldW ? oldWoundGeo() : woundGeo();
   const scar = new THREE.Mesh(scarGeo, woundMat);
   scar.castShadow = false; scar.receiveShadow = true;
@@ -294,6 +297,7 @@ export function makeHarpoon(L, opts = {}) {
   L.body.add(scar);
   H.scar = scar;
   L.keepGeo = new Set([...(L.keepGeo || []), scarGeo]);
+  if (L.buried) { L.keepGeo.add(woundGeo()); L.keepGeo.add(oldWoundGeo()); }   // (a buried build may swap one for the other: heal)
   // the weep (world space, in her group)
   {
     if (!_weepQuad) _weepQuad = new THREE.PlaneGeometry(1, 1);
@@ -317,7 +321,8 @@ export function makeHarpoon(L, opts = {}) {
   gl.material.opacity = 0;
   gl.renderOrder = 3;
   // (oldwound) the barb's glint: cold and small (the brass's is warm); a uniform, the same program
-  if (oldW) { gl.material.color.setHex(OLD_GLINT_C); gl.scale.setScalar(OLD_GLINT_S); }
+  const glintOld = () => { gl.material.color.setHex(OLD_GLINT_C); gl.scale.setScalar(OLD_GLINT_S); };
+  if (oldW) glintOld();
   L.grp.add(gl);
   H.glintSpr = gl;
 
@@ -705,8 +710,10 @@ export function makeHarpoon(L, opts = {}) {
     scar.matrix.multiplyMatrices(_m2, _m);
     scar.matrixWorldNeedsUpdate = true;
     // (oldwound) the old wound at home: on her OUTER surface over the seam (the seam is a crevice under an overhang of her rock), the
-    // crust painted there, this piece seated flush on it
-    if (oldW) {
+    // crust painted there, this piece seated flush on it. Measured at EVERY buried seat (her dormant pose), kept in her body's frame (the
+    // piece's matrix) and her shell's (the crust's place): the remembered build shows it now; a fresh pull's wound heals into it when she
+    // digs back in (heal: no ray then, the dig-in's frames stay under its cost bar), riding her body through the re-bed
+    if (L.buried) {
       // (in from over the lip, not along the seam's own normal: the seam faces 25 deg DOWN, under an overhang, and the stain laid on
       // that underside was hidden from every lens above it; the lip's top-front over it faces the sand and the lens)
       _n.set(H.normal.x, 0, H.normal.z).normalize(); _n.y = OUT_UP; _n.normalize();
@@ -716,9 +723,10 @@ export function makeHarpoon(L, opts = {}) {
       _b.copy(_up).addScaledVector(H.woundN, -_up.dot(H.woundN)).normalize();
       _a.crossVectors(_b, H.woundN);
       _m.makeBasis(_a, _b, H.woundN).setPosition(_w.copy(H.woundP).addScaledVector(H.woundN, 0.012));
-      scar.matrix.multiplyMatrices(_m2, _m);
-      scar.matrixWorldNeedsUpdate = true;
-      setCrustWound(L, H.woundP, H.woundN, !H.woundHidden);
+      H.outerM = (H.outerM || new THREE.Matrix4()).multiplyMatrices(_m2, _m);
+      H.crustRec = crustWoundRec(L, H.woundP, H.woundN, H.crustRec || undefined);
+      if (H.healed) { scar.matrix.copy(H.outerM); scar.matrixWorldNeedsUpdate = true; }
+      setCrustWoundRec(L, H.crustRec, H.healed && !H.woundHidden);
     }
     // the line: from the stub's frayed end (meta.lineEnd in the model's frame), a sag down to the
     // silt and a length lying on it, half buried, out toward the sand
@@ -763,7 +771,19 @@ export function makeHarpoon(L, opts = {}) {
   };
   H.seamWorld = () => H.seam;
   // (oldwound) the old wound on / off whole (the probe's A/B: burial-probe wound): the piece, the crust's paint, the barb's glint
-  H._woundShow = on => { H.woundHidden = !on; scar.visible = !!on && (H.wound || H.pulled); if (oldW && H.woundP) setCrustWound(L, H.woundP, H.woundN, !!on); return !!on; };
+  H._woundShow = on => { H.woundHidden = !on; scar.visible = !!on && (H.wound || H.pulled); if (H.healed) setCrustWoundRec(L, H.crustRec, !!on); return !!on; };
+  // (oldwound) THE HEAL: a buried build's opened wound (a fresh pull, or the remembered wound pressed) becomes the old wound as she digs
+  // back in: the piece and the barb at the outer surface, the crust's stain (it comes up with the sand: the crust's own uBury fade), the
+  // cold glint. Matrix copies and uniform writes only
+  const heal = () => {
+    if (!H.outerM) return;
+    H.healed = true;
+    if (scar.geometry !== oldWoundGeo()) scar.geometry = oldWoundGeo();
+    scar.matrix.copy(H.outerM); scar.matrixWorldNeedsUpdate = true;
+    woundMat.color.setRGB(1, 1, 1);
+    glintOld();
+    setCrustWoundRec(L, H.crustRec, !H.woundHidden);
+  };
   // grip: where his hands close (for the look while he wrenches)
   H.gripWorld = out => out.set(0, 0, GRIP_Z).applyMatrix4(H.worldM || _m.identity());
 
@@ -800,6 +820,7 @@ export function makeHarpoon(L, opts = {}) {
     }
     iron.visible = false; rope.visible = false;
     scar.visible = true;
+    H.healed = oldW && H.healed;   // (opened: the fresh scar until she digs back in; the remembered piece stays where it is)
     woundMat.color.setRGB(H.wound ? 1 : 0.82, H.wound ? 1 : 0.62, H.wound ? 1 : 0.6);
     H.pendingLine = H.line;
     H.wakeT = WAKE_DELAY;
@@ -828,6 +849,8 @@ export function makeHarpoon(L, opts = {}) {
   H.update = (dt, t, player, ev) => {
     H.t += dt;
     if (!H.seated) return;
+    // (oldwound) dug back in after the pull: the wound heals into the old wound (once the re-bed's job is done and the sand comes back)
+    if (!H.healed && H.pulled && L.buried && L.digging && !L.digJob) heal();
     // ---- the wrench ----
     // the commitment holds only while he is AT it: drowned and brought up on the deck, hauled off by the
     // line, thrown by her, or she woke some other way, and the pull is undone (no reward, no wake, no line)
@@ -915,7 +938,7 @@ export function makeHarpoon(L, opts = {}) {
     // it (once ever per anchorage, persisted with the chart: opts.sighted / ev.sighted), it CATCHES: a
     // GL_CATCH s swell to full.
     let f = 0;
-    const ironOn = iron.visible && L.dormant && player, barbOn = !ironOn && oldW && !H.pressed && !H.woundHidden && L.dormant && player;
+    const ironOn = iron.visible && L.dormant && player, barbOn = !ironOn && H.healed && !(oldW && H.pressed && L.dormant) && !H.woundHidden && (L.dormant || L.dugIn) && player;
     if (ironOn || barbOn) {
       if (ironOn) _a.set(0, 0, (DIM.fer0 + DIM.fer1) * 0.5).applyMatrix4(H.worldM);
       else _a.set(BARB_TIP[0], BARB_TIP[1], BARB_TIP[2]).applyMatrix4(scar.matrixWorld);

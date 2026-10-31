@@ -1199,18 +1199,31 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
 // (oldwound) THE OLD WOUND's place in the crust (harpoon.js seat, a remembered build at home): p / n the seam's OUTER surface point and
 // its normal (world, her dormant pose), into her shell's object space, where the crust samples it (vCrO: it rides her). on false clears
 // it (w 0: the branch is not taken). (A pure down normal leaves the weep's side axis to the shader's epsilon.) No-op before the sculpt lands (no crust yet): seat runs again then. Uniform writes only
-const _wInv = new THREE.Matrix4(), _wa = V3(), _wb = V3();
+const _wInv = new THREE.Matrix4();
 export function setCrustWound(L, p, n, on) {
-  const u = L.crustU, sh = L.parts && L.parts.shell;
-  if (!u || !u.uWound || !sh) return false;
-  if (!on) { u.uWound.value.w = 0; return true; }
+  const rec = on ? crustWoundRec(L, p, n) : null;
+  return on ? setCrustWoundRec(L, rec, true) : setCrustWoundRec(L, null, false);
+}
+// (oldwound) the same, split: crustWoundRec measures the place once (in her shell's object space, so it rides her body through a rise and
+// a dig-in's re-bed: harpoon.js seat, her dormant pose) and setCrustWoundRec writes it, uniform writes only (a heal mid-dig-in costs nothing)
+export function crustWoundRec(L, p, n, out = null) {
+  const sh = L.parts && L.parts.shell;
+  if (!L.crustU || !L.crustU.uWound || !sh) return null;
   sh.updateMatrixWorld(true);
   _wInv.copy(sh.matrixWorld).invert();
-  _wa.copy(p).applyMatrix4(_wInv);
-  u.uWound.value.set(_wa.x, _wa.y, _wa.z, 1);
-  u.uWoundN.value.copy(n).transformDirection(_wInv);
-  u.uWoundD.value.copy(_wb.set(0, -1, 0)).transformDirection(_wInv);   // world down (the weep runs down whatever face lies under it)
-  u.uWoundS.value = 1 / sh.matrixWorld.getMaxScaleOnAxis();
+  const r = out || { c: V3(), n: V3(), d: V3(), s: 1 };
+  r.c.copy(p).applyMatrix4(_wInv);
+  r.n.copy(n).transformDirection(_wInv);
+  r.d.set(0, -1, 0).transformDirection(_wInv);   // world down (the weep runs down from it)
+  r.s = 1 / sh.matrixWorld.getMaxScaleOnAxis();
+  return r;
+}
+export function setCrustWoundRec(L, rec, on) {
+  const u = L.crustU;
+  if (!u || !u.uWound) return false;
+  if (!on || !rec) { u.uWound.value.w = 0; return !on; }
+  u.uWound.value.set(rec.c.x, rec.c.y, rec.c.z, 1);
+  u.uWoundN.value.copy(rec.n); u.uWoundD.value.copy(rec.d); u.uWoundS.value = rec.s;
   return true;
 }
 // the crust's uniforms each frame (brooder.js updateBrooder): uniform writes only, never a program change
