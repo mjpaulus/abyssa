@@ -20,6 +20,8 @@
 //   Env: BENCH_DBG_PORT (as cdp.mjs), STALL_SCALE (DRS pin; default the ceiling RES_SCALE),
 //        STALL_OUT (append one JSON line per view to this file), STALL_TRACE=<file> (also a
 //        DevTools trace of the last 4 s of each view: <file>.<view>.json).
+// The map-back block is split by owner (the bound PIXEL_PACK_BUFFER: the exposure ring's, else the sky probe's): `gbExp`, `gbSky`,
+// the work on sky read / issue / no-sky frames, and `skySeries` (the per-frame check that stats.sunVis is the last value the ring read).
 // Prints per view: p50/p95/p99/max interval, missed-vsync count, stall-gap histogram, the
 // autocorrelation of frame() main-thread time at lags 1..24, and the cost split by frame kind.
 import { writeFileSync, appendFileSync } from 'node:fs';
@@ -52,17 +54,32 @@ const INSTALL = `(async () => {
   if (window.__stall) return true;
   const Lm = await import('/src/lighting.js');
   const R = window.__stall = { on: false, rec: [], gb: 0, gbN: 0, Lm };
-  const P = WebGL2RenderingContext.prototype, gbsd = P.getBufferSubData;
-  P.getBufferSubData = function () { const a = performance.now(); const r = gbsd.apply(this, arguments); R.gb += performance.now() - a; R.gbN++; return r; };
+  const P = WebGL2RenderingContext.prototype, gbsd = P.getBufferSubData, bb = P.bindBuffer, rp = P.readPixels;
+  // Each map-back is booked to its OWNER by the PIXEL_PACK_BUFFER bound at the call: the exposure ring's PBOs
+  // (ep.pbo) are the exposure's, any other is the sky's probe ring (sky-probe-readback). gbE / gbS = ms, nE / nS = calls.
+  // skyVals = every value the sky ring read, in read order; skyIss = sky readbacks issued (readPixels into a non-exposure PBO).
+  R.gbE = 0; R.gbS = 0; R.nS = 0; R.skyIss = 0; R.skyVals = []; R.pack = null; let expSet = null;
+  const isExp = (b) => { const ep = window.__exposure.pass(); if (!expSet || expSet.size !== ep.pbo.length) expSet = new Set(ep.pbo); return expSet.has(b); };
+  P.bindBuffer = function (t, b) { if (t === 35051) R.pack = b; return bb.apply(this, arguments); };
+  P.readPixels = function () { if (arguments.length === 7 && R.pack && !isExp(R.pack)) R.skyIss++; return rp.apply(this, arguments); };
+  P.getBufferSubData = function (t, o, dst) {
+    const a = performance.now(); const r = gbsd.apply(this, arguments); const d = performance.now() - a;
+    R.gb += d; R.gbN++;
+    if (R.pack && isExp(R.pack)) R.gbE += d; else { R.gbS += d; R.nS++; R.skyVals.push(dst[0], dst[1]); }
+    return r;
+  };
   const raf = window.requestAnimationFrame.bind(window);
   window.requestAnimationFrame = function (cb) {
     if (cb.name !== 'rafTick') return raf(cb);
     return raf(function (t) {
       if (!R.on) return cb(t);
       const ep = window.__exposure.pass(), f0 = ep.frame, i0 = ep.issued, r0 = ep.read, s0 = Lm.floorShadow.refreshes;
-      R.gb = 0; R.gbN = 0;
+      R.gb = 0; R.gbN = 0; R.gbE = 0; R.gbS = 0; R.nS = 0; const iss0 = R.skyIss;
       const a = performance.now(); if (R.pre) R.pre(); cb(t); const w = performance.now() - a;
-      R.rec.push([t, w, R.gb, R.gbN, ep.frame - f0, ep.issued - i0, ep.read - r0, Lm.floorShadow.refreshes - s0, +window.__exposure.state().exposure]);
+      // [9] exposure map-back ms, [10] sky map-back ms, [11] sky map-backs, [12] sky issued BEFORE this frame, [13] stats.sunVis after it,
+      // [14] sky issues this frame, [15] sky values read so far (R.skyVals.length / 2)
+      R.rec.push([t, w, R.gb, R.gbN, ep.frame - f0, ep.issued - i0, ep.read - r0, Lm.floorShadow.refreshes - s0, +window.__exposure.state().exposure,
+        R.gbE, R.gbS, R.nS, iss0, window.__vsky.stats.sunVis, R.skyIss - iss0, R.skyVals.length / 2]);
     });
   };
   return true;
@@ -86,6 +103,7 @@ async function setupView(view) {
 
 function pct(a, p) { const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * (s.length - 1) + 0.5))]; }
 const r2 = (x) => +(+x).toFixed(2);
+const split = (a) => a.length ? { n: a.length, mean: r2(a.reduce((s, v) => s + v, 0) / a.length), p50: r2(pct(a, 0.5)), p95: r2(pct(a, 0.95)), max: r2(Math.max(...a)) } : null;
 function acf(x, maxLag) {
   const n = x.length, m = x.reduce((s, v) => s + v, 0) / n; let d = 0;
   for (const v of x) d += (v - m) * (v - m);
@@ -93,7 +111,7 @@ function acf(x, maxLag) {
   for (let L = 1; L <= maxLag; L++) { let s = 0; for (let i = 0; i + L < n; i++) s += (x[i] - m) * (x[i + L] - m); out.push(r2(d ? s / d : 0)); }
   return out;
 }
-function analyse(rec) {
+function analyse(rec, skyVals = []) {
   const iv = []; for (let i = 1; i < rec.length; i++) iv.push(rec[i][0] - rec[i - 1][0]);
   const work = rec.map(r => r[1]);
   const slot = pct(iv, 0.5);
@@ -120,6 +138,30 @@ function analyse(rec) {
     byKind: kstat,
     // the 8-frame bump: median work on the read phase (relative to the first map-back, mod 8) less the median of the other 7
     bump8: (() => { const i0 = rec.findIndex(r => r[6] > 0); if (i0 < 0) return null; const ph = [[], []]; for (let i = i0; i < rec.length; i++) ph[(i - i0) % 8 === 0 ? 0 : 1].push(rec[i][1]); return r2(pct(ph[0], 0.5) - pct(ph[1], 0.5)); })(),
+    // THE SPLIT (sky-probe-readback): the exposure's map-back and the sky probe's, each over the frames that made one
+    gbExp: split(rec.filter(r => r[9] > 0).map(r => r[9])),
+    gbSky: split(rec.filter(r => r[11] > 0).map(r => r[10])),
+    skyFrames: rec.filter(r => r[11] > 0).length, skyIssued: rec.reduce((n, r) => n + r[14], 0),
+    // frame work by sky traffic, exposure-read frames left out. The sky READS the frame after it issues (the loop at the top of
+    // probeIssue, before its own issue test), so read frames and issue frames are disjoint: work on a read frame against a frame
+    // with no sky traffic is the read's cost (plus whatever else differs, which A/B between builds cancels).
+    workSkyRead: split(rec.filter(r => r[11] > 0 && r[14] === 0 && r[6] === 0 && r[4] > 0).map(r => r[1])),
+    workSkyIssue: split(rec.filter(r => r[14] > 0 && r[11] === 0 && r[6] === 0 && r[4] > 0).map(r => r[1])),
+    workNoSky: split(rec.filter(r => r[14] === 0 && r[11] === 0 && r[6] === 0 && r[4] > 0).map(r => r[1])),
+    // THE SKY SERIES, frame by frame (sky-probe-readback). The ring reads exactly the readbacks that are PBO_LAG issues old, so after
+    // every frame the sky ran, (reads so far) - (issued before the frame) is one constant c, and stats.sunVis is that last read's
+    // value clamped to [0, 1] (the first channel; a non-finite read leaves the last good one). It holds whether the read ran at
+    // frame start (the branch) or inside renderSkyInner (main): same readbacks, same count, same value, on the same frame.
+    skySeries: (() => {
+      const f = rec.filter(r => r[4] > 0 && r[13] !== undefined); let ok = 0, bad = 0, last = 1; const cs = {};
+      for (const r of f) {
+        const reads = r[15], c = reads - r[12], v = reads > 0 ? skyVals[2 * (reads - 1)] : NaN;
+        if (Number.isFinite(v)) last = Math.min(1, Math.max(0, v));
+        if (reads === 0 || r[13] === last) ok++; else bad++;
+        cs[c] = (cs[c] || 0) + 1;
+      }
+      return { frames: f.length, ok, bad, c: cs, sunVis: { min: r2(Math.min(...f.map(r => r[13]))), max: r2(Math.max(...f.map(r => r[13]))) } };
+    })(),
     expo: { first: exp[0], last: exp[exp.length - 1], min: Math.min(...exp), max: Math.max(...exp) }
   };
 }
@@ -137,7 +179,8 @@ for (const view of VIEWS.split(',')) {
   const secs = +SECS;
   let traceFile = null;
   const early0 = await ev(`window.__exposure.early ? { ...window.__exposure.early } : null`);
-  await ev(`(() => { __stall.rec.length = 0; __stall.on = true; return 1; })()`);
+  const skyEarly0 = await ev(`window.__vsky.early ? { ...window.__vsky.early } : null`);
+  await ev(`(() => { __stall.rec.length = 0; __stall.skyVals.length = 0; __stall.skyIss = 0; __stall.on = true; return 1; })()`);
   if (process.env.STALL_TRACE) {
     await sleep(Math.max(0, secs - 4) * 1000);
     traceFile = `${process.env.STALL_TRACE}.${view}.json`;
@@ -150,12 +193,13 @@ for (const view of VIEWS.split(',')) {
     writeFileSync(traceFile, JSON.stringify({ traceEvents: chunks }));
   } else await sleep(secs * 1000);
   const rec = await ev(`(() => { __stall.on = false; return __stall.rec.slice(); })()`);
-  const post = await ev(`({ early: window.__exposure.early ? { ...window.__exposure.early } : null, lag: __gpu.lag ? __gpu.lag() : null, lagMax: __gpu.lagMax ? __gpu.lagMax() : null })`);
-  const a = analyse(rec);
-  const row = { label: LABEL, view, variant: VARIANT, secs, env, ...a, post, early0, traceFile, t: new Date().toISOString() };
+  const skyVals = await ev(`__stall.skyVals.slice()`);
+  const post = await ev(`({ early: window.__exposure.early ? { ...window.__exposure.early } : null, skyEarly: window.__vsky.early ? { ...window.__vsky.early } : null, lag: __gpu.lag ? __gpu.lag() : null, lagMax: __gpu.lagMax ? __gpu.lagMax() : null })`);
+  const a = analyse(rec, skyVals);
+  const row = { label: LABEL, view, variant: VARIANT, secs, env, ...a, post, early0, skyEarly0, traceFile, t: new Date().toISOString() };
   out.push(row);
   console.log(JSON.stringify(row));
-  if (process.env.STALL_OUT) { appendFileSync(process.env.STALL_OUT, JSON.stringify(row) + '\n'); appendFileSync(process.env.STALL_OUT.replace(/\.jsonl$/, '') + '.raw.jsonl', JSON.stringify({ label: LABEL, view, variant: VARIANT, rec }) + '\n'); }
+  if (process.env.STALL_OUT) { appendFileSync(process.env.STALL_OUT, JSON.stringify(row) + '\n'); appendFileSync(process.env.STALL_OUT.replace(/\.jsonl$/, '') + '.raw.jsonl', JSON.stringify({ label: LABEL, view, variant: VARIANT, rec, skyVals }) + '\n'); }
 }
 await send('Page.navigate', { url: ownTab ? 'about:blank' : tgt.url });   // a tab that was not a bench page goes back where it was
 ws.close();

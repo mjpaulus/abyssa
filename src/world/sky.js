@@ -1188,6 +1188,9 @@ let shadowSunVis = 1, camSunVis = 1;
 const PBO_RING = 4, PBO_LAG = 3;
 let pbo = null, pboIssued = 0, pboRead = 0, pboFailed = false;
 const pboOut = new Float32Array(4);
+// map-backs done early by skyProbeEarly() wait here until probeIssue() ingests them (same order, same moment)
+const pboPend = new Float32Array(2 * PBO_RING);
+let nPboPend = 0;
 
 function physicalElevation() {
   // weather.js holds the drawn sun at >= 8 degrees (night is the moon regime there). The
@@ -1473,6 +1476,41 @@ function renderSkyInner() {
   renderer.autoClear = prevAuto;
 }
 
+function probeMapBack(gl) {
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo[pboRead % PBO_RING]);
+  gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pboOut);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  pboRead++;
+}
+function probeIngest(a, b) {
+  if (isFinite(a)) { shadowSunVis = clamp(a, 0, 1); camSunVis = clamp(b, 0, 1); }
+}
+
+// THE READ AT FRAME START (sky-probe-readback, 2026-10-31; the auto-exposure's trick,
+// postfx.exposure.js early()). postfx.frameStart calls these first thing in a frame the
+// governor PACED (cap > 0). Blink's getBufferSubData is an unconditional WaitForCmd: the main
+// thread waits for Chrome's GPU process to drain everything the page has issued so far.
+// Inside renderSkyInner that is the frame's earlier work (the weather map and the seabed
+// shadow pass just above probeIssue) and the read blocked ~0.5 ms on every other frame at
+// the deck; at the start of a paced frame the queue is empty and it is an IPC round trip.
+// The issue cadence, the ring and the lag are untouched, and probeIssue() still ingests the
+// sample at the same point, so every consumer sees the same series.
+// skyProbeDue(): a map-back is due AND probeIssue() would reach it this frame (built, on,
+// above y = -60, not skipped; the camera is read before update() moves it, so a frame that
+// crosses the line just leaves the read to probeIssue, which ingests whatever is pending).
+export function skyProbeDue() {
+  return built && !!VSKY.on && !(skipMask & 2) && camera.position.y >= -60 &&
+    !!pbo && !pboFailed && pboIssued - pboRead > PBO_LAG;
+}
+export function skyProbeEarly() {
+  if (!skyProbeDue()) return;
+  const gl = renderer.getContext();
+  while (pboIssued - pboRead > PBO_LAG && nPboPend < PBO_RING) {
+    probeMapBack(gl);
+    pboPend[2 * nPboPend] = pboOut[0]; pboPend[2 * nPboPend + 1] = pboOut[1]; nPboPend++;
+  }
+}
+
 function probeIssue() {
   if (pboFailed) return;
   const gl = renderer.getContext();
@@ -1487,12 +1525,15 @@ function probeIssue() {
     }
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
   }
+  // The samples are INGESTED here, inside renderSkyInner, whichever moment they were read at: a
+  // map-back done early by skyProbeEarly() waits in `pboPend` until now, so shadowSunVis,
+  // camSunVis and stats.sunVis are the same sample for sample whether the read ran at frame
+  // start or here.
+  for (let i = 0; i < nPboPend; i++) probeIngest(pboPend[2 * i], pboPend[2 * i + 1]);
+  nPboPend = 0;
   while (pboIssued - pboRead > PBO_LAG) {
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, pbo[pboRead % PBO_RING]);
-    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, pboOut);
-    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
-    pboRead++;
-    if (isFinite(pboOut[0])) { shadowSunVis = clamp(pboOut[0], 0, 1); camSunVis = clamp(pboOut[1], 0, 1); }
+    probeMapBack(gl);
+    probeIngest(pboOut[0], pboOut[1]);
   }
   stats.sunVis = shadowSunVis;
   if ((frameN & 1) || pboIssued - pboRead >= PBO_RING) return;

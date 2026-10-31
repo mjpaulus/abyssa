@@ -131,7 +131,10 @@ against explicit contracts and reviewed on return.
   on 1 frame in 8 in zone 0), and the sample is still ingested inside render(), so the
   exposure series is unchanged. A paced frame under a GPU BACKLOG (the last timer query
   2+ frames late, DRS's tell) and every uncapped frame keep the old in-render read.
-  `__exposure.early` = { ran, skipped }. The CPU adapts `renderer.toneMappingExposure` = 1.32 x 2^ev, fast down
+  `__exposure.early` = { ran, skipped }. THE SKY PROBE'S READ rides the same gate (sky-probe-readback, 2026-10-31):
+  world/sky.js `skyProbeEarly()` maps its sun-visibility PBO ring back at that frame start (every other frame on the
+  deck, ~0.5 ms mid-frame after the shadow pass -> 0.12 ms), `probeIssue()` still ingests it where it always did, so
+  `shadowSunVis` / `camSunVis` / airAmbience.sunVis are the same series; `__vsky.early` = { ran, skipped }. The CPU adapts `renderer.toneMappingExposure` = 1.32 x 2^ev, fast down
   (0.6 s) slow up (3 s), inside a HARD per-depth clamp on lighting's depth01 (deck
   [0.7,1.4], seabeds [0.85,1.15] / [0.85,1.12] / [0.90,1.05]) so the deep never
   brightens past its authored look; `GLASS.exposure`, lab group 'exposure',

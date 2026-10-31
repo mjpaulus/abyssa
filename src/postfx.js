@@ -26,7 +26,7 @@ import { setOceanRate } from './world/ocean.js';
 // CREPUSCULAR RAYS (roadmap/crepuscular-sky.md): the sky's own fan, after the
 // underwater volumetrics and before the main EffectPass so bloom/grade see it.
 import { SkyRaysPass } from './postfx.skyrays.js';
-import { warmUpSky, degradeSky, restoreSky } from './world/sky.js';
+import { warmUpSky, degradeSky, restoreSky, skyProbeDue, skyProbeEarly } from './world/sky.js';
 // AUTO-EXPOSURE (roadmap/ref-auto-exposure.md): a metering shell around three tiny RTs.
 import { ExposurePass } from './postfx.exposure.js';
 // Read-only subject sources for the Flow-lean focus pull (item 5). creatures.js has no
@@ -95,6 +95,8 @@ if (typeof window !== 'undefined') {
       return { n: a.length, gpuMean: a.length ? +(s / a.length).toFixed(4) : null, gpuMax: +mx.toFixed(4), profiling: expPass.profiling };
     }
   };
+  // the same book for the sky's sun-visibility readback (world/sky.js skyProbeEarly): { ran, skipped }
+  if (window.__vsky) Object.defineProperty(window.__vsky, 'early', { get: () => skyEarly, configurable: true });
 }
 
 const bloom = new BloomEffect({
@@ -1103,17 +1105,26 @@ const latWin = new Float64Array(LAT_WIN), latCpu = new Float64Array(LAT_WIN), la
 const latPx = new Uint8Array(4);
 let latN = 0, latAt = 0, latRT = null, latFrame = 0, latStart = 0;
 // game.js, first thing in a frame that will render. `cap` is the governor's (0 = uncapped):
-// a paced frame maps the auto-exposure readback back here, while Chrome's GPU process is idle
-// (postfx.exposure.js early(); bench-zone0-stalls).
+// a paced frame maps the auto-exposure readback and the sky's sun-visibility readback back here,
+// while Chrome's GPU process is idle (postfx.exposure.js early(), world/sky.js skyProbeEarly();
+// bench-zone0-stalls, sky-probe-readback).
 // A frame whose last readable GPU query took 2+ frames to come back (DRS's backlog tell, below) may
 // still have the GPU process busy at its start, so the read would wait there instead: it steps
-// aside and render() maps it back as before. No timer extension: no tell, the paced read runs.
+// aside and render() / probeIssue() map it back as before. No timer extension: no tell, the paced read runs.
 export const expEarly = { ran: 0, skipped: 0 };
+export const skyEarly = { ran: 0, skipped: 0 };
 export function frameStart(cap = 0) {
   latStart = performance.now(); latDue = !!LAT.on && (++latFrame % Math.max(1, LAT.every | 0)) === 0;
-  if (cap > 0 && expPass && expPass.due()) {
-    if (gpuSupported && lagN > 0 && lagLast >= 2) expEarly.skipped++;
-    else { expPass.early(); expEarly.ran++; }
+  if (cap > 0) {
+    const backlog = gpuSupported && lagN > 0 && lagLast >= 2;
+    if (expPass && expPass.due()) {
+      if (backlog) expEarly.skipped++;
+      else { expPass.early(); expEarly.ran++; }
+    }
+    if (skyProbeDue()) {
+      if (backlog) skyEarly.skipped++;
+      else { skyProbeEarly(); skyEarly.ran++; }
+    }
   }
 }
 let frameCpu = 0;   // this frame's main-thread time to the end of submission (gpuFrameEnd), every frame
