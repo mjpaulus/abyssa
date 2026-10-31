@@ -16,6 +16,7 @@
 //   node tools/bench/cdp.mjs stop
 //
 // Own --user-data-dir under $TMPDIR (never the user's profile), debugging port 9333.
+// Env: BENCH_VSYNC=1 (60 Hz vsync), BENCH_HEADFUL=1 (+ BENCH_WINPOS=x,y) a visible window.
 import { spawn, execSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -53,7 +54,10 @@ if (cmd === 'start') {
   const url = `http://localhost:${port}/?bench`;
   const ch = spawn(CHROME, [
     `--user-data-dir=${join(DIR, 'profile')}`, `--remote-debugging-port=${DBG}`,
-    '--headless=new', '--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--force-device-scale-factor=2',
+    // BENCH_HEADFUL=1: a real, visible, foreground window (the player's compositor and vsync)
+    // instead of headless; BENCH_WINPOS="x,y" places it (e.g. on a 60 Hz display).
+    ...(process.env.BENCH_HEADFUL ? (process.env.BENCH_WINPOS ? [`--window-position=${process.env.BENCH_WINPOS}`] : []) : ['--headless=new']),
+    '--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist', '--force-device-scale-factor=2',
     // vsync off (default): rAF is unthrottled, so __bench.live() reads the real frame cost.
     // BENCH_VSYNC=1 keeps a 60 Hz vsync, the way a player's window paces (DRS / judge checks).
     ...(process.env.BENCH_VSYNC ? [] : ['--disable-gpu-vsync', '--disable-frame-rate-limit']),
