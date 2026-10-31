@@ -111,6 +111,8 @@ function analyse(rec) {
     ivByKind: (() => { const o = {}; for (let i = 1; i < rec.length; i++) { const r = rec[i - 1]; const k = r[4] === 0 ? 'idle' : r[6] > 0 ? 'read' : r[7] > 0 ? 'shadow' : 'plain'; (o[k] = o[k] || []).push(iv[i - 1]); } for (const k in o) o[k] = { n: o[k].length, p50: r2(pct(o[k], 0.5)), p99: r2(pct(o[k], 0.99)), max: r2(Math.max(...o[k])) }; return o; })(),
     gbsd: gb.length ? { n: gb.length, p50: r2(pct(gb, 0.5)), p95: r2(pct(gb, 0.95)), max: r2(Math.max(...gb)) } : null,
     byKind: kstat,
+    // the 8-frame bump: median work on the read phase (relative to the first map-back, mod 8) less the median of the other 7
+    bump8: (() => { const i0 = rec.findIndex(r => r[6] > 0); if (i0 < 0) return null; const ph = [[], []]; for (let i = i0; i < rec.length; i++) ph[(i - i0) % 8 === 0 ? 0 : 1].push(rec[i][1]); return r2(pct(ph[0], 0.5) - pct(ph[1], 0.5)); })(),
     expo: { first: exp[0], last: exp[exp.length - 1], min: Math.min(...exp), max: Math.max(...exp) }
   };
 }
