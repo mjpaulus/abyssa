@@ -1,8 +1,8 @@
 ---
 title: Zone-0 frame stalls and an unculled trail set (found by the primfix bench)
-status: backlog
+status: wip
 tags: perf, zone 0
-updated: 2026-10-13
+updated: 2026-10-31
 ---
 The primfix bench found two perf leads. In zone 0 roughly every 8th frame stalls for 11-38 ms, probably the auto-exposure readback. Velkath's trail set is drawn at every zone-0 spot (58-62k tris), even 127 u away.
 
@@ -17,3 +17,4 @@ The primfix bench found two perf leads. In zone 0 roughly every 8th frame stalls
 
 ## Log
 - 2026-10-13 — Captured from the primfix bench's concerns.
+- 2026-10-31 — started (backlog -> wip) after the buried merge, on branch `stalls` (~/sc/.abyssa-wt/stalls): the felt hitches at home are next while Michael judges the old wound.
