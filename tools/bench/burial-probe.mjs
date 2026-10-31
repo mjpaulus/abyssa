@@ -322,6 +322,16 @@
 //             THE PROBE'S OWN TEST (fix round 1, M1, the coordinator's ruling): the ceiling's ground is max(terrainH, extraFloorAt, bodyCols
 //             shellHiAt) under him: her shell's top is ground for "on her ground" whatever the dig-in's bury.
 //             BP_RED=fastdig ({digT: 8}, run clear only) must fail dur; BP_RED=nopause ({pause: 0}, run pause only) must fail pause.
+//             (oldwound) THE WOUND AFTER THE DIG-IN (runs clear and offbed, never under a BP_RED): a fresh pull's wound heals into the old
+//             wound when she digs back in (harpoon.js heal), so it must read as the remembered build's does. Right after Alt+6 (which
+//             rebuilds her) and before the pull: the wound mode's framing installed (WOUND_INSTALL keeps the seam and the anchor in her
+//             body's frame, so they ride her through the re-bed) and the IRON's read at 10 u, glint on (weather 0.5 for the read, then
+//             handed back; his Alt+6 stance put back). The probe's profile keeps the save, so offbed, after clear's pull, is the
+//             REMEMBERED build pressed and dug in, with clear's iron read carried. Dug in: <run>.wound10 (glint on) visible >= that iron
+//             read (the wound mode's d10.range) and <run>.woundAnchor (glint hidden, at the anchor carried in her frame) visible >= 1200
+//             px and >= 60% of the footprint (the wound mode's anchor.read). His hose is hidden for these reads (its path is the fight's
+//             and the walk's history: across the seam in one run, 78 px); the read with it is booked as d10hose. BP_WSHOT=<prefix> saves
+//             the 10 u frame beside the JSON.
 //   reentry   LEAVING ZONE 0 MID-WAY AND COMING BACK (Review Focus 1). Three sessions (BP_RUNS, default i,ii,iii), each a fresh load:
 //               i    mid-rise: __lev.cmd('wake'), stepped until L.stand >= 0.3
 //               ii   mid-point: woken, stood, him PLACED 35 u off, calmed, stepped until pointPh 2
@@ -976,7 +986,7 @@ const WOUND_INSTALL = `(async () => {
     prem: { sculpted: !!L.sculpted, buried: !!L.buried, wound: !!H.wound, pulled: !!H.pulled, pressed: !!H.pressed, seatOk: !!H.seatOk, dormant: !!L.dormant, scar: !!(H.scar && H.scar.visible),
       iron: !!(H.iron && H.iron.visible), hook: typeof H._woundShow === 'function', seam: [r2(H.seam.x), r2(H.seam.y), r2(H.seam.z)], normal: [r2(H.normal.x), r2(H.normal.y), r2(H.normal.z)],
       anchor: [r2(H.anchor.x), r2(H.anchor.y), r2(H.anchor.z)] },
-    show,
+    show, L, seamNow,
     _pk: null, _pg: null, _pw: null,
     // him on the sand d u out from the seam along her sand side (mode 'sand'; 'normal': along the seam's normal, for stills), or at Alt+6's anchor (mode 'anchor'); yaw so the seam sits at
     // ndc.x ~ tx beside him (a player looks past his diver, not through him); the post chain settled over each try
@@ -1367,28 +1377,49 @@ try {
   // reference, glint on; her sculpt waited for, so the framing's seam is the seated one); dug in, the wound's read at 10 u (glint on) and at
   // the anchor (glint hidden), both riding her body (WOUND_INSTALL keeps the seam and the anchor in her frame). Weather 0.5 for the reads
   // only, as the wound mode's, then handed back
+  // (run AFTER Alt+6, which rebuilds her: the framing must hold the sleeper the dig-in runs on; Alt+6's stance is put back after the read.
+  // The probe's profile keeps the save, so offbed, after clear's pull, is the REMEMBERED build pressed and dug in: its iron reference is
+  // clear's, carried)
+  let ironD10 = null;
   const woundRef = async sess => {
     if (RED || !(sess.run === 'clear' || sess.run === 'offbed')) return;
     await c.until(`(window.__bench.step(10), !!(window.lev && window.lev.sculpted))`, 30000, 100).catch(() => null);
+    const p = await c.ev(WOUND_INSTALL); if (!p || p.err) throw new Error('wound install: ' + JSON.stringify(p));
+    sess.woundIron = { prem: p };
+    if (p.wound) { sess.woundIron.d10 = ironD10; sess.woundIron.carried = true; return; }
+    if (!p.iron) throw new Error('wound install (the iron): ' + JSON.stringify(p));
+    const st0 = await c.ev(`(() => { const P = window.player; return { x: P.pos.x, y: P.pos.y, z: P.pos.z, yaw: P.yaw, pitch: P.pitch }; })()`);
     await c.ev(`(window.weather.set(0.5, 0), 1)`);
-    const p = await c.ev(WOUND_INSTALL); if (!p || p.err || p.wound || !p.iron) throw new Error('wound install (the iron): ' + JSON.stringify(p));
-    sess.woundIron = { prem: p, aim: await c.ev(`window.__bpWound.aim('sand', 10, 0.3)`) };
-    sess.woundIron.d10 = await c.ev(`window.__bpWound.read({ glint: true })`);
+    sess.woundIron.aim = await c.ev(`window.__bpWound.aim('sand', 10, 0.3)`);
+    sess.woundIron.d10 = ironD10 = await c.ev(`window.__bpWound.read({ glint: true })`);
     await c.ev(`(window.weather.set(null, null), 1)`);
+    await c.ev(`(() => { const P = window.player, s = ${JSON.stringify(st0)}; window.__bench.place(s.x, s.z, s.yaw); P.pos.set(s.x, s.y, s.z); P.yaw = s.yaw; P.pitch = s.pitch; P.vel.set(0, 0, 0); window.__bench.step(30); return 1; })()`);
   };
   const woundAfter = async sess => {
     if (!sess.woundIron || !sess.endState || !sess.endState.dugIn) return;
     await c.ev(`(window.weather.set(0.5, 0), 1)`);
+    // (his hose hidden for the reads: its path is the fight's and the walk's history, not the wound; in one run it lay across the seam at
+    // 10 u and the read fell to 78 px. Booked as read with it, d10hose)
     const W = sess.woundAfter = {};
-    W.d10aim = await c.ev(`window.__bpWound.aim('sand', 10, 0.3)`); W.d10 = await c.ev(`window.__bpWound.read({ glint: true })`);
+    W.d10hose = null;
+    W.d10aim = await c.ev(`window.__bpWound.aim('sand', 10, 0.3)`);
+    W.d10hose = await c.ev(`window.__bpWound.read({ glint: true })`);
+    W.hoseHidden = await c.ev(`window.__bench.hide(/systems\\/tether/)`);
+    W.d10 = await c.ev(`window.__bpWound.read({ glint: true })`);
+    if (process.env.BP_WSHOT) { const url = await c.ev(`(async () => { const k = window.__plugClk && window.__plugClk.clock, e = k ? k.elapsedTime : 0; const a = await window.__bench.capture({}); if (k) k.elapsedTime = e; return window.__bench.png(a, 1); })()`);
+      mkdirSync(dirname(OUT), { recursive: true }); writeFileSync(join(dirname(OUT), `${process.env.BP_WSHOT}-${sess.run}-d10.png`), Buffer.from(url.split(',')[1], 'base64')); }
+    W.glint = await c.ev(`(() => { const H = window.lev.harpoon, P = window.player; return { glint: +(H.glint || 0).toFixed(3), op: +H.glintSpr.material.opacity.toFixed(3), vis: H.glintSpr.visible, light: P.light, col: H.glintSpr.material.color.getHexString() }; })()`);
     W.anaim = await c.ev(`window.__bpWound.aim('anchor', 0, 0.3)`); W.anchor = await c.ev(`window.__bpWound.read({ glint: false })`);
-    W.state = await c.ev(`(() => { const L = window.lev, H = L.harpoon; return { healed: H.healed ?? null, pulled: !!H.pulled, dugIn: !!L.dugIn, w: L.crustU && L.crustU.uWound ? L.crustU.uWound.value.w : null }; })()`);
+    await c.ev(`(window.__bench.hide(/systems\\/tether/, false), 1)`);
+    W.state = await c.ev(`(async () => { const THREE = await import('three'); const L = window.lev, H = L.harpoon, R = window.__bpWound, sn = R.seamNow(), sp = new THREE.Vector3().setFromMatrixPosition(H.scar.matrixWorld);
+      return { same: R.L === L, healed: H.healed ?? null, pulled: !!H.pulled, dugIn: !!L.dugIn, w: L.crustU && L.crustU.uWound ? L.crustU.uWound.value.w : null, scarVis: !!H.scar.visible,
+        seamNow: [sn.x, sn.y, sn.z].map(q => +q.toFixed(2)), piece: [sp.x, sp.y, sp.z].map(q => +q.toFixed(2)), her: [+L.pos.x.toFixed(2), +L.pos.z.toFixed(2)] }; })()`);
     await c.ev(`(window.weather.set(null, null), 1)`);
     console.log(`  [${sess.run}] wound after the dig-in: d10 ${JSON.stringify(W.d10aim)} ${JSON.stringify(W.d10)}; anchor ${JSON.stringify(W.anaim)} ${JSON.stringify(W.anchor)}; ${JSON.stringify(W.state)}`);
   };
   const digChain = async sess => {
-    await woundRef(sess);
     await alt(c, 6);
+    await woundRef(sess);
     const ins = await c.ev(DIG_INSTALL); if (!ins || ins.err) throw new Error('install: ' + (ins && ins.err));
     sess.ins = ins;
     await dig(30);
