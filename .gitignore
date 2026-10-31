@@ -3,3 +3,4 @@ __pycache__/
 .claude/worktrees/
 threejs-skills/
 tools/relief/*.gen.mjs
+out/
