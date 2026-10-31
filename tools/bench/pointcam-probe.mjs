@@ -443,7 +443,7 @@ async function session(o) {
       if (ses.settleF) await c.ev(`window.__bench.step(${ses.settleF})`);
     }
     // (Task 10 review M4) a face() that ran out of frames is no placement: UNMEASURED
-    if (!fc.faced) throw new Error(`UNFACED: she did not come within 10 deg of facing him in ${fc.n} frames`);
+    if (!fc.faced && AT !== 'side') throw new Error(`UNFACED: she did not come within 10 deg of facing him in ${fc.n} frames`);
     const pre = await c.ev(`window.__pcR.state()`);
     console.log(`stood ${(stoodF / 60).toFixed(2)} s after the wake; placed ${JSON.stringify(pl)}; faced him in ${fc.n} frames: ${JSON.stringify(pre)}`);
     if (o.on != null) ses.knobs = await c.ev(`(() => { const C = window.__pointcam; if (!C) return null; C.knobs.on = ${o.on}; return Object.assign({}, C.knobs); })()`);
@@ -498,6 +498,14 @@ async function session(o) {
     }
     if (VIDEO) {   // (clawpoint) PC_VIDEO: every frame rendered, every 3rd captured (20 fps of game time), the playtest panels hidden
       mkdirSync(VIDEO, { recursive: true });
+      // PC_VCAM='{"x":1.8,"y":0.35,"z":0.8,"lx":0.2,"ly":0.05,"lz":0.9}': a LOOK lens (bench.js __benchCam, the draw only) at that spot (eye, look-at)
+      // in her body frame (units of R: her matrix carries her scale), fixed in the WORLD where her frame stands at the raise (so her body's own motion reads), else the play lens
+      if (process.env.PC_VCAM) await c.ev(`(() => { const V = ${process.env.PC_VCAM}; let P = null, Q = null;
+        window.__benchCam = { apply(cam) { const L = window.lev;
+          if (!P && L.pointPh >= 2) { L.body.updateMatrixWorld(true); const m = L.body.matrixWorld;
+            P = cam.position.clone().set(V.x, V.y, V.z); P.applyMatrix4(m);
+            Q = cam.position.clone().set(V.lx, V.ly, V.lz); Q.applyMatrix4(m); }
+          if (P) { cam.position.copy(P); cam.lookAt(Q); } } }; return 1; })()`);
       await c.ev(`(['title','pause','ptPanel','ptToast','ptDock'].forEach(id => { const e = document.getElementById(id); if (e) e.style.visibility = 'hidden'; }), 1)`);
       let vn = 0;
       while (at < N) {
