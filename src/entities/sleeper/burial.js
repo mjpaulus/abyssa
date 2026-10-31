@@ -1126,41 +1126,47 @@ if (uBury > 0.001) {
       crSand *= 1.0 - crGap;
     }
     // (oldwound) THE OLD WOUND, painted into her shell where the iron was (uWound: the seam's outer surface in her object space, w on;
-    // uWoundN its normal, uWoundD down the shell there, uWoundS object units per world unit): only on a remembered build at home (w 0
-    // everywhere else, a uniform branch). The sand gives way round it (a bare, scraped patch ~0.6 u), the puncture is a dark torn
-    // pit with fractures running out of it and a ridge of healed callus round them, and a rust weep runs ~1.6 u down the shell
-    float crWb = 0.0, crWp = 0.0, crWf = 0.0, crWc = 0.0, crWr = 0.0;
+    // uWoundN its normal, uWoundD world down, both in her object space; uWoundS object units per world unit): only on a remembered build
+    // at home (w 0 everywhere else, a uniform branch). Round the puncture the sand has given way and the shell is broken and stained dark
+    // with old rust (crWb, ~0.7 u, a ragged edge), a ridge of pale healed callus rims it (crWc), fractures run out of it (crWf), the
+    // puncture itself is a black pit (crWp), and a rust weep has run down whatever face lies under it (crWr: a curtain, world down, ~2 u)
+    float crWb = 0.0, crWp = 0.0, crWf = 0.0, crWc = 0.0, crWr = 0.0, crWv = 0.0;
     if (uWound.w > 0.001) {
       vec3 wq = (vCrO - uWound.xyz) / uWoundS;
-      float wn = dot(wq, uWoundN);
-      vec3 wt = wq - uWoundN * wn;
-      float wy = dot(wt, uWoundD), wx = dot(wt, cross(uWoundN, uWoundD));
+      vec3 wnh = normalize(uWoundN - uWoundD * dot(uWoundN, uWoundD) + vec3(1e-5)), wsd = normalize(cross(uWoundD, wnh));
+      float wy = dot(wq, uWoundD), wx = dot(wq, wsd), wd = dot(wq, wnh);
       float wR = length(wq), wz = crVN(wq * 3.3 + 11.0), wz2 = crVN(wq * 9.0 + 3.0);
       float wK = uWound.w * smoothstep(0.0, 0.3, uBury);
-      float wrb = 0.5 + 0.3 * wz;
-      crWb = wK * (1.0 - smoothstep(wrb - 0.16, wrb, wR));
-      float wrp = 0.10 + 0.07 * wz2;
-      crWp = wK * (1.0 - smoothstep(wrp, wrp + 0.05, wR));
+      float wrb = 0.55 + 0.3 * wz;
+      crWb = wK * (1.0 - smoothstep(wrb - 0.12, wrb, wR));
+      float wrp = 0.09 + 0.06 * wz2;
+      crWp = wK * (1.0 - smoothstep(wrp, wrp + 0.04, wR));
       float wa = atan(wx, wy);
-      crWf = wK * pow(abs(sin(wa * 3.5 + wz * 4.0)), 18.0) * (1.0 - smoothstep(0.12, 0.42 + 0.12 * wz2, wR)) * step(0.08, wR);
-      crWc = wK * exp(-pow((wR - (0.27 + 0.05 * wz2)) / 0.055, 2.0)) * (0.6 + 0.4 * wz);
-      float wu = clamp(wy / 1.6, 0.0, 1.0), wob = 0.05 * sin(wy * 4.3 + 1.7) + 0.03 * sin(wy * 11.0);
-      float wwd = mix(0.11, 0.035, wu) * (0.75 + 0.5 * wz2);
-      crWr = wK * smoothstep(-0.05, 0.12, wy) * (1.0 - smoothstep(0.9, 1.6, wy)) * (1.0 - smoothstep(wwd * 0.55, wwd, abs(wx - wob))) * (1.0 - smoothstep(0.35, 0.6, abs(wn)));
-      crWr = max(crWr, wK * (1.0 - smoothstep(0.1, 0.32, wR)) * 0.8);
-      crSand *= 1.0 - crWb;
+      crWf = wK * pow(abs(sin(wa * 3.5 + wz * 4.0)), 14.0) * (1.0 - smoothstep(0.15, 0.6 + 0.15 * wz2, wR)) * step(0.08, wR);
+      crWc = wK * exp(-pow((wR - (wrb - 0.06)) / 0.05, 2.0));
+      float wu = clamp(wy / 2.0, 0.0, 1.0), wob = 0.06 * sin(wy * 3.1 + 1.7) + 0.03 * sin(wy * 8.0);
+      float wwd = mix(0.17, 0.05, wu) * (0.75 + 0.5 * wz2);
+      crWr = wK * smoothstep(0.0, 0.25, wy) * (1.0 - smoothstep(1.3, 2.1, wy)) * (1.0 - smoothstep(wwd * 0.5, wwd, abs(wx - wob)))
+        * (1.0 - smoothstep(0.3, 0.6, wd)) * (1.0 - smoothstep(1.2, 1.6, -wd));
+      crWv = wz2;
+      crSand *= 1.0 - max(crWb, crWr);
     }
     roughnessFactor = mix(roughnessFactor, 0.95, crSand);
     normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand * (0.85 + 0.3 * crN1), crSand);
     diffuseColor.rgb *= 1.0 - 0.85 * crGap;
     if (uWound.w > 0.001) {
-      diffuseColor.rgb *= 1.0 - 0.35 * crWb;
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.27, 0.22), crWc * 0.75);
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.20, 0.055, 0.018), min(1.0, crWr) * 0.85);
-      diffuseColor.rgb *= 1.0 - 0.8 * crWf;
-      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.008, 0.005, 0.004), crWp);
-      roughnessFactor = mix(roughnessFactor, 0.45, crWr);
+      // (absolute colours, not a tint: under the sand her own shell is paler than the sand, so a tint of what the cleared patch shows
+      // came out no darker than the crust round it; anchor read, first build)
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.032, 0.016, 0.009) * (0.8 + 0.4 * crWv), crWb * 0.9);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.09, 0.028, 0.01), min(1.0, crWr) * 0.9);
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.30, 0.27, 0.22), crWc * 0.8);
+      diffuseColor.rgb *= 1.0 - 0.85 * crWf;
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.004, 0.003, 0.002), crWp);
+      roughnessFactor = mix(roughnessFactor, 0.92, crWb);
+      roughnessFactor = mix(roughnessFactor, 0.6, crWr);
+      // (the probe's paint: burial-probe wound sets w 2 for ONE capture to find the wound's pixels; the game never writes over 1)
+      if (uWound.w > 1.5) diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.0, 1.0), step(0.02, max(max(crWb, crWr), max(crWc, crWp))));
     }
   } else {
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand, crSand);
@@ -1192,7 +1198,7 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
 }
 // (oldwound) THE OLD WOUND's place in the crust (harpoon.js seat, a remembered build at home): p / n the seam's OUTER surface point and
 // its normal (world, her dormant pose), into her shell's object space, where the crust samples it (vCrO: it rides her). on false clears
-// it (w 0: the branch is not taken). No-op before the sculpt lands (no crust yet): seat runs again then. Uniform writes only
+// it (w 0: the branch is not taken). (A pure down normal leaves the weep's side axis to the shader's epsilon.) No-op before the sculpt lands (no crust yet): seat runs again then. Uniform writes only
 const _wInv = new THREE.Matrix4(), _wa = V3(), _wb = V3();
 export function setCrustWound(L, p, n, on) {
   const u = L.crustU, sh = L.parts && L.parts.shell;
@@ -1203,9 +1209,7 @@ export function setCrustWound(L, p, n, on) {
   _wa.copy(p).applyMatrix4(_wInv);
   u.uWound.value.set(_wa.x, _wa.y, _wa.z, 1);
   u.uWoundN.value.copy(n).transformDirection(_wInv);
-  _wb.set(0, -1, 0).addScaledVector(n, n.y);                 // world down, in the surface's plane
-  if (_wb.lengthSq() < 1e-6) _wb.set(1, 0, 0).addScaledVector(n, -n.x);
-  u.uWoundD.value.copy(_wb.normalize()).transformDirection(_wInv);
+  u.uWoundD.value.copy(_wb.set(0, -1, 0)).transformDirection(_wInv);   // world down (the weep runs down whatever face lies under it)
   u.uWoundS.value = 1 / sh.matrixWorld.getMaxScaleOnAxis();
   return true;
 }

@@ -357,22 +357,32 @@
 //             the seat found, the scar shown (else exit 2). window.start() (the title click's own path) and the zone line booked (the line that
 //             holds 'OLD WOUND'); then the READ at 14 / 10 / 6 u on the sand side (ndc.x 0.3), at Alt+6's anchor (ndc.x 0.3) and at 10 u and the
 //             anchor straight at it (ndc.x 0, info); the growth off the seam; then the RITE: Alt+6, the prompt, REAL E, she wakes.
-//             THE READ (window.__bpWound.read): the FOOTPRINT is every pixel the wound changes, from two frozen captures under the post bypass
-//             (the scene alone, deterministic: the bypass A/A is booked as `floor`), the wound on and off (the build's H._woundShow when it has one;
-//             983224c's wound is its scar mesh alone, toggled; the iron and its line on a fresh save), a pixel in it when a channel moves > 6
-//             codes; the READ is on ONE settled capture through the whole post chain (what he sees, grain off): the median luma (Rec.709, sRGB
-//             codes) of the footprint against the median of an annulus round it (every pixel within r = max(4, eqD / 2) px, Chebyshev, not in
-//             it), Weber = |Lm - La| / La, and `visible` = footprint pixels >= 10 codes off La. The bars' reads are taken with the glint
-//             hidden, so the wound's own marks carry them; with the glint on is booked beside.
-//             BARS (pre-registered on 983224c before the build; a 1280 x 713 frame, the 9 u follow lens 18-23 u from the seam at the sand
-//             views): d10.read visible >= 150 px (a 14 x 11 px mark, ~0.3 deg on a laptop at arm's length: a thing you see, not a fleck)
-//             and Weber >= 0.2 (a dark mark 20% off murky crust is plain; 10% is lost in the grain and the haze); anchor.read visible
-//             >= 1200 px and Weber >= 0.25 (stood at it, it must be the thing in front of him); d14.vsIron the remembered build's
-//             footprint at 14 u, glint on, <= 1.25 x the iron's on the fresh save (it gives her away from the sand no more than the
-//             iron did); fronds: no drawn frond and no coral vertex within GROW.near of the seam or in its sight corridor (GROW.sight);
-//             line: the zone line holds 'OLD WOUND' and, she being buried, not 'RIDGE'; rite: Alt+6 -> "[E] PRESS THE OLD WOUND", REAL E,
-//             H.pressed and she wakes (lev.dormant false) within 10 s; shader: __shaderFailed() []. BP_RED=noscar: the wound hidden
-//             page-side before the reads -> d10.read and anchor.read fail, exit 5.
+//             THE READ (window.__bpWound.read), all on frozen captures through the whole post chain (what he sees, grain off) after 30
+//             counted rendered frames: the FOOTPRINT is every pixel, inside a WINDOW +-3 u round the seam's projection at its distance from
+//             the lens, that the PAINT turns hot magenta (R and B >= 40 codes over G and >= 40 codes off the plain frame): the paint is
+//             one capture with everything the wound puts on screen made magenta (the scar / piece by its emissive, the glint by its colour,
+//             the crust's own paint by uWound.w 2 where it has one; the iron, its line and its glint on a fresh save), so the footprint is
+//             what reaches the screen past Sal, the fronds and her own rock. `floor` = the same test between two plain captures (over 2%
+//             of the window is VOID). (The post bypass was tried first: on the plugged clock its frozen capture is a black frame.) The READ
+//             is on the plain capture: the median luma (Rec.709, sRGB codes) of the footprint against the median of an annulus round it
+//             (every pixel within r = max(4, eqD / 2) px, Chebyshev, not in it), Weber = |Lm - La| / La, and `visible` = footprint pixels
+//             >= 10 codes off La. The bars' reads are taken with the glint hidden, so the wound's own marks carry them; with it on, beside.
+//             BARS (a 1280 x 713 frame; the 9 u follow lens is 18-19 u from the seam at the 10 / 14 u sand views). FIRST REGISTERED (before
+//             any reading of the iron): d10 visible >= 150 px and Weber >= 0.2 with the glint hidden, the anchor >= 1200 px and Weber >= 0.25.
+//             RE-REGISTERED after the first build's data, before the final tuning: the iron itself, read the same way on a fresh save, is
+//             46 px / Weber 0.066 at 10 u and 58 px / 0.004 at 14 u with its glint hidden (171 / 0.47 at 14 u with it): in this murk at
+//             18 u no albedo mark reads, the iron's stub included, and its read from the sand WAS its glint. The first bars asked the wound
+//             to read three times better than the iron ever did, against the brief ("as subtle as the iron's own read: a glint plus a dark
+//             stub from 14 u"). So: d10.range (glint on) visible >= the iron's at 10 u (it reads at least as the iron did); d14.vsIron
+//             (glint on) visible <= 1.25 x the iron's at 14 u (no more of a give-away); d6.mark (glint hidden) visible >= 150 px (a
+//             14 x 11 px mark, ~0.3 deg on a laptop at arm's length: a thing you see, not a fleck); anchor.read (glint hidden) visible
+//             >= 1200 px and Weber >= 0.1 (stood at it the mark is ~100 px across: for a patch that size 10% is plain, the eye's contrast
+//             threshold for large targets is 1-2%, and the lantern's in-scatter veils everything at 3 u: dark can only fall to the veil);
+//             fronds: no drawn frond and no coral vertex within GROW.near of the seam or in its sight corridor (GROW.sight); line: the zone
+//             line holds 'OLD WOUND' and, she being buried, not 'RIDGE'; rite: Alt+6 -> "[E] PRESS THE OLD WOUND", REAL E, H.pressed and
+//             she wakes (lev.dormant false) within 10 s; shader: __shaderFailed() []. The anchor view turns him 0.96 rad to put the seam
+//             beside him: the lens then sits ~3.4 u from it against her crest (anchorc, straight at it: his body covers it, booked).
+//             BP_RED=noscar: the wound hidden page-side before the reads -> d10.range, d6.mark and anchor.read fail, exit 5.
 // BP_RED variants (each must fail ITS bar): ridge (__burial.set({on:0}): the shipped ridge at home) -> sides, crest;
 // shallow (crest 5.5) -> crest height; steep (repose 2.0: the dune fitted to fall at 63 deg; the bar is fixed, so it must fail) ->
 // repose; still (breath: __burial.set({breath:{lift:0}})) -> amplitude; lazy (programs: after (a) her shell material's key gains
@@ -439,7 +449,7 @@ const REDS = { disguise: { ridge: { set: { on: 0 }, bars: ['sides', 'top'], main
     // (Task 13) a second ward flagged remembered after the return -> the second rise's rise.c (memN <= 1)
     mem2: { set: {}, page: true, bars: ['rise.c'], runs: ['iii'] } },
   // (oldwound) the wound hidden page-side before the reads
-  wound: { noscar: { set: {}, page: true, bars: ['d10.read', 'anchor.read'] } } };
+  wound: { noscar: { set: {}, page: true, bars: ['d10.range', 'd6.mark', 'anchor.read'] } } };
 const RED = process.env.BP_RED || '';
 if (RED === 'lazy' && !process.env.BP_BASE) { console.error('BP_RED=lazy needs BP_BASE (a programs JSON of the base build): the base itself compiles in the rise, so the rise bar alone cannot tell the RED from it'); process.exit(2); }
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`BP_RED: mode ${MODE} has ${REDS[MODE] ? 'the variants ' + Object.keys(REDS[MODE]).join(', ') : 'no RED variant'} (got ${JSON.stringify(RED)})`); process.exit(2); }
@@ -954,10 +964,11 @@ const WOUND_INSTALL = `(async () => {
     H.glintSpr.visible = !!(on && glint);
   };
   const R = window.__bpWound = {
-    prem: { buried: !!L.buried, wound: !!H.wound, pulled: !!H.pulled, pressed: !!H.pressed, seatOk: !!H.seatOk, dormant: !!L.dormant, scar: !!(H.scar && H.scar.visible),
+    prem: { sculpted: !!L.sculpted, buried: !!L.buried, wound: !!H.wound, pulled: !!H.pulled, pressed: !!H.pressed, seatOk: !!H.seatOk, dormant: !!L.dormant, scar: !!(H.scar && H.scar.visible),
       iron: !!(H.iron && H.iron.visible), hook: typeof H._woundShow === 'function', seam: [r2(H.seam.x), r2(H.seam.y), r2(H.seam.z)], normal: [r2(H.normal.x), r2(H.normal.y), r2(H.normal.z)],
       anchor: [r2(H.anchor.x), r2(H.anchor.y), r2(H.anchor.z)] },
     show,
+    _pk: null, _pg: null, _pw: null,
     // him on the sand d u out from the seam along her sand side (mode 'sand'), or at Alt+6's anchor (mode 'anchor'); yaw so the seam sits at
     // ndc.x ~ tx beside him (a player looks past his diver, not through him); the post chain settled over each try
     aim(mode, d, tx) {
@@ -979,29 +990,39 @@ const WOUND_INSTALL = `(async () => {
     },
     // THE READ (header): the footprint from two captures under the post bypass (the scene alone: deterministic), the wound on and off; the
     // read on ONE settled capture through the whole post chain (what he sees): the footprint against the annulus round it
+    // the PAINT (the footprint's pass): everything the wound (or the iron) puts on screen turned hot magenta for one capture: the scar /
+    // piece and the iron and its line by their emissive, the glint by its colour, the crust's paint by uWound.w 2 (burial.js: the probe's
+    // paint, where the wound's terms are > 0.02); all uniforms, no program change
+    paint(on) {
+      const ms = H.wound ? [H.scar.material] : [H.iron.material, H.rope.material], u = L.crustU && L.crustU.uWound;
+      if (on) { R._pk = ms.map(m => m.emissive ? m.emissive.clone() : null); R._pg = H.glintSpr.material.color.clone();
+        for (const m of ms) if (m.emissive) m.emissive.setRGB(1.5, 0, 1.5);
+        H.glintSpr.material.color.setRGB(1, 0, 1);
+        if (u && u.value.w > 0.5) { R._pw = u.value.w; u.value.w = 2; } else R._pw = null; }
+      else { ms.forEach((m, k) => { if (m.emissive && R._pk[k]) m.emissive.copy(R._pk[k]); }); H.glintSpr.material.color.copy(R._pg); if (u && R._pw != null) u.value.w = R._pw; }
+    },
     async read(o = {}) {
-      const B = window.__bench, TH = 6, clk = window.__plugClk ? window.__plugClk.clock : null;
+      const B = window.__bench, clk = window.__plugClk ? window.__plugClk.clock : null;
       // (a frozen capture steps the world at dt 1e-4 outside __bench.step; its few ms of game time are put back, so the plugged ledger
       // books only the counted frames)
       const cap = async () => { const e = clk ? clk.elapsedTime : 0; try { return await B.capture({}); } finally { if (clk) clk.elapsedTime = e; } };
-      PF.setPostBypass(true);
-      let a, b, aa;
-      try { show(true, o.glint); a = await cap(); aa = await cap(); show(false, false); b = await cap(); }
-      finally { show(true, o.glint); PF.setPostBypass(false); }
+      show(true, o.glint);
       B.step(30, null, { render: true });   // (counted on the plugged clock: capture's own settle is not)
-      const c = await cap();
-      show(true, true);
-      const W = a.w, Hh = a.h, N = W * Hh, M = new Uint8Array(N);
-      // the WINDOW: +-o.win u (default 3) round the seam's projection at its distance from the lens (pixel rows bottom-up, as read back);
-      // a pixel the bypass A/A moves is noise (a mote, a caustic) and is never footprint
+      let c, m, cc;
+      try { c = await cap(); cc = await cap(); R.paint(true); m = await cap(); } finally { R.paint(false); show(true, true); }
+      const W = c.w, Hh = c.h;
+      // the WINDOW: +-o.win u (default 3) round the seam's projection at its distance from the lens (pixel rows bottom-up, as read back)
       cam.updateMatrixWorld(); const sp = H.seam.clone().project(cam), dist = cam.position.distanceTo(H.seam);
       const pxu = (Hh / 2) / Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2) / dist, half = Math.max(24, Math.round((o.win || 3) * pxu));
       const cx = Math.round((sp.x + 1) / 2 * W), cy = Math.round((sp.y + 1) / 2 * Hh);
-      const dmax = (p, q, k) => Math.max(Math.abs(p.px[k] - q.px[k]), Math.abs(p.px[k + 1] - q.px[k + 1]), Math.abs(p.px[k + 2] - q.px[k + 2]));
+      // a footprint pixel: painted magenta (red and blue both >= 40 codes over green) and >= 40 codes off the plain frame; floor = the same
+      // test between two plain frames (the post chain's own A/A)
+      const hot = (p, q, k) => p.px[k] - p.px[k + 1] >= 40 && p.px[k + 2] - p.px[k + 1] >= 40 && Math.max(Math.abs(p.px[k] - q.px[k]), Math.abs(p.px[k + 2] - q.px[k + 2])) >= 40;
+      const M = new Uint8Array(W * Hh);
       let area = 0, floor = 0, x0 = W, x1 = -1, y0 = Hh, y1 = -1;
       for (let y = Math.max(0, cy - half); y <= Math.min(Hh - 1, cy + half); y++) for (let x = Math.max(0, cx - half); x <= Math.min(W - 1, cx + half); x++) {
-        const i = y * W + x, k = i * 4; if (dmax(a, aa, k) > TH) { floor++; continue; }
-        if (dmax(a, b, k) > TH) { M[i] = 1; area++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } }
+        const i = y * W + x, k = i * 4; if (hot(cc, c, k)) floor++;
+        if (hot(m, c, k)) { M[i] = 1; area++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; } }
       const Y = i => { const k = i * 4; return 0.2126 * c.px[k] + 0.7152 * c.px[k + 1] + 0.0722 * c.px[k + 2]; };
       const out = { area, floor, eqD: +(2 * Math.sqrt(area / Math.PI)).toFixed(1), bbox: area ? [x0, Hh - 1 - y1, x1, Hh - 1 - y0] : null, at: [cx, Hh - 1 - cy], half, pxu: +pxu.toFixed(1), W, H: Hh };
       if (!area) return Object.assign(out, { visible: 0, Lm: null, La: null, weber: 0 });
@@ -1531,26 +1552,35 @@ try {
   if (MODE === 'wound') {
     // (oldwound) THE OLD WOUND READS (header). Session 1: the iron, on this fresh profile
     await c.ev(`(window.weather.set(0.5, 0), 1)`);
+    // her sculpt (the shell the seat and the crust are on) lands asynchronously: wait for it, stepping (counted)
+    const sculpted = () => c.until(`(window.__bench.step(10), !!(window.lev && window.lev.sculpted))`, 30000, 100).catch(() => null);
+    await sculpted();
     const iron = { prem: await c.ev(WOUND_INSTALL) };
     if (!iron.prem || iron.prem.err) throw new Error('install (iron): ' + (iron.prem && iron.prem.err));
-    if (iron.prem.wound || !iron.prem.iron) throw new Error('session 1 is not a fresh save with the iron in her: ' + JSON.stringify(iron.prem));
-    iron.d14aim = await c.ev(`window.__bpWound.aim('sand', 14, 0.3)`);
-    iron.d14 = await c.ev(`window.__bpWound.read({ glint: true })`);
-    console.log(`  iron d14 ${JSON.stringify(iron.d14aim)} ${JSON.stringify(iron.d14)}`);
+    if (iron.prem.wound || !iron.prem.iron || !iron.prem.sculpted) throw new Error('session 1 is not a fresh save with the iron in her: ' + JSON.stringify(iron.prem));
+    for (const d of [14, 10]) {
+      iron['d' + d + 'aim'] = await c.ev(`window.__bpWound.aim('sand', ${d}, 0.3)`);
+      iron['d' + d] = await c.ev(`window.__bpWound.read({ glint: true })`);
+      iron['d' + d + 'bare'] = await c.ev(`window.__bpWound.read({ glint: false })`);
+      console.log(`  iron d${d} ${JSON.stringify(iron['d' + d + 'aim'])} glint ${JSON.stringify(iron['d' + d])} bare ${JSON.stringify(iron['d' + d + 'bare'])}`);
+    }
     // session 2: the remembered build, a pulled save seeded before the page's scripts
     await c.send('Page.addScriptToEvaluateOnNewDocument', { source: `try { localStorage.setItem('abyssa.chart.v1', JSON.stringify({ site: 0, pulled: [1, 0, 0, 0], sighted: [1, 0, 0, 0], tools: { harpoon: true } })); } catch (e) { }` });
     await reload();
+    await sculpted();
     const wd = { prem: await c.ev(WOUND_INSTALL) }, reads = {};
     if (!wd.prem || wd.prem.err) throw new Error('install (wound): ' + (wd.prem && wd.prem.err));
     const p = wd.prem;
-    if (!(p.buried && p.dormant && p.wound && p.pulled && !p.pressed && p.seatOk && p.scar)) { out = { err: 'premise: not the remembered build (home, buried, dormant, the wound, the seat, the scar) ' + JSON.stringify(p), iron, wound: wd }; }
+    if (!(p.sculpted && p.buried && p.dormant && p.wound && p.pulled && !p.pressed && p.seatOk && p.scar)) { out = { err: 'premise: not the remembered build (home, buried, dormant, the wound, the seat, the scar) ' + JSON.stringify(p), iron, wound: wd }; }
     else {
       // the zone line, by the title click's own path
       wd.line = await c.ev(`(() => { window.setState('title'); window.start(); window.__helm = true; const seen = []; window.__bench.step(900, () => { const m = window.__msg(); for (const t of [m.live].concat(m.queue)) if (t && !seen.includes(t)) seen.push(t); }); return seen; })()`);
       await c.ev(`(window.__helm = true, window.__chart.arrive(0), window.gotoZone(0), window.weather.set(0.5, 0), window.__bench.step(30), 1)`);
-      await c.ev(WOUND_INSTALL);
+      await sculpted();
+      const p2 = await c.ev(WOUND_INSTALL);
+      if (!p2 || p2.err || !(p2.sculpted && p2.wound && p2.dormant)) throw new Error('the rebuilt remembered sleeper: ' + JSON.stringify(p2));
       if (RED === 'noscar') wd.mutant = await c.ev(`(() => { const H = window.lev.harpoon; if (H._woundShow) H._woundShow(false); H.scar.visible = false; H._woundShow = () => {}; H.scar.visible = false; return 'hidden'; })()`);
-      for (const [name, mode, d, tx, glintToo] of [['d14', 'sand', 14, 0.3, true], ['d10', 'sand', 10, 0.3, true], ['d6', 'sand', 6, 0.3, false], ['anchor', 'anchor', 0, 0.3, true], ['d10c', 'sand', 10, 0, false], ['anchorc', 'anchor', 0, 0, false]]) {
+      for (const [name, mode, d, tx, glintToo] of [['d14', 'sand', 14, 0.3, true], ['d10', 'sand', 10, 0.3, true], ['d6', 'sand', 6, 0.3, true], ['anchor', 'anchor', 0, 0.3, true], ['d10c', 'sand', 10, 0, false], ['anchorc', 'anchor', 0, 0, false]]) {
         const aim = await c.ev(`window.__bpWound.aim('${mode}', ${d}, ${tx})`);
         const r = await c.ev(`window.__bpWound.read({ glint: false })`);
         const g = glintToo ? await c.ev(`window.__bpWound.read({ glint: true })`) : null;
@@ -1784,14 +1814,19 @@ if (MODE === 'reentry') {
 // (oldwound) wound: the bars (header)
 if (MODE === 'wound') {
   const ck = [], R = out.reads || {}, W = out.wound || {}, I = out.iron || {};
-  const rd = (name, minVis, minWeber) => { const q = R[name] && R[name].read;
-    ck.push({ name: name + '.read', val: q ? { visible: q.visible, weber: q.weber, area: q.area, eqD: q.eqD, Lm: q.Lm, La: q.La, floor: q.floor, ndc: R[name].aim.ndc, camD: R[name].aim.camD } : null,
-      bar: `visible >= ${minVis} px and Weber >= ${minWeber} (glint hidden)`, ok: !!q && q.visible >= minVis && q.weber >= minWeber, vacuous: !q || q.floor > 50, judged: true }); };
-  rd('d10', 150, 0.2); rd('anchor', 1200, 0.25);
-  for (const n of ['d14', 'd6', 'd10c', 'anchorc']) { const q = R[n]; ck.push({ name: n + '.read', val: q ? { visible: q.read.visible, weber: q.read.weber, area: q.read.area, ndc: q.aim.ndc } : null, bar: 'booked', ok: true, vacuous: false, judged: false }); }
-  for (const n of ['d14', 'd10', 'anchor']) { const q = R[n] && R[n].glint; if (q) ck.push({ name: n + '.glint', val: { visible: q.visible, weber: q.weber, area: q.area }, bar: 'booked (the read with the glint on)', ok: true, vacuous: false, judged: false }); }
-  { const w = R.d14 && R.d14.glint, i = I.d14; ck.push({ name: 'd14.vsIron', val: { wound: w ? w.area : null, iron: i ? i.area : null, woundVis: w ? w.visible : null, ironVis: i ? i.visible : null },
-      bar: 'the remembered footprint at 14 u (glint on) <= 1.25 x the iron\'s on a fresh save', ok: !!w && !!i && w.area <= 1.25 * i.area, vacuous: !w || !i || !i.area, judged: true }); }
+  const R0 = n => R[n] && R[n].read, G0 = n => R[n] && R[n].glint, pick = q => q ? { visible: q.visible, weber: q.weber, area: q.area, eqD: q.eqD, Lm: q.Lm, La: q.La, floor: q.floor } : null;
+  const voidOf = q => !q || q.floor > 0.02 * Math.pow(2 * q.half + 1, 2);   // (VOID: the plain A/A turned > 2% of the window hot)
+  // THE RANGE READ, as the iron's was read (its glint and its stub): at 10 u at least the iron's visible pixels there; at 14 u at most 1.25 x them
+  { const w = G0('d10'), i = I.d10; ck.push({ name: 'd10.range', val: { wound: pick(w), iron: pick(i), ndc: R.d10 && R.d10.aim.ndc, camD: R.d10 && R.d10.aim.camD },
+      bar: 'glint on: visible >= the iron\'s visible at 10 u on a fresh save', ok: !!w && !!i && w.visible >= i.visible, vacuous: voidOf(w) || voidOf(i) || !i.visible, judged: true }); }
+  { const w = G0('d14'), i = I.d14; ck.push({ name: 'd14.vsIron', val: { wound: pick(w), iron: pick(i) },
+      bar: 'glint on: visible <= 1.25 x the iron\'s at 14 u on a fresh save (no more of a give-away than the iron)', ok: !!w && !!i && w.visible <= 1.25 * i.visible, vacuous: voidOf(w) || voidOf(i) || !i.visible, judged: true }); }
+  // THE MARK, the glint hidden: at 6 u on the sand and at the anchor
+  { const q = R0('d6'); ck.push({ name: 'd6.mark', val: Object.assign(pick(q) || {}, { ndc: R.d6 && R.d6.aim.ndc }), bar: 'glint hidden: visible >= 150 px', ok: !!q && q.visible >= 150, vacuous: voidOf(q), judged: true }); }
+  { const q = R0('anchor'); ck.push({ name: 'anchor.read', val: Object.assign(pick(q) || {}, { ndc: R.anchor && R.anchor.aim.ndc, camD: R.anchor && R.anchor.aim.camD }), bar: 'glint hidden: visible >= 1200 px and Weber >= 0.1', ok: !!q && q.visible >= 1200 && q.weber >= 0.1, vacuous: voidOf(q), judged: true }); }
+  for (const n of ['d10', 'd14', 'd10c', 'anchorc']) { const q = R0(n); ck.push({ name: n + '.mark', val: q ? Object.assign(pick(q), { ndc: R[n].aim.ndc }) : null, bar: 'booked (glint hidden)', ok: true, vacuous: false, judged: false }); }
+  for (const n of ['anchor']) { const q = G0(n); if (q) ck.push({ name: n + '.glint', val: pick(q), bar: 'booked (the read with the glint on)', ok: true, vacuous: false, judged: false }); }
+  for (const n of ['d10bare', 'd14bare']) { const q = I[n]; ck.push({ name: 'iron.' + n, val: pick(q), bar: 'booked (the iron on a fresh save, its glint hidden)', ok: true, vacuous: false, judged: false }); }
   { const f = W.fronds; ck.push({ name: 'fronds', val: f || null, bar: 'no drawn frond or coral vertex within GROW.near of the seam or in its sight corridor', ok: !!f && !f.weedNear && !f.weedSight && !f.coralNear && !f.coralSight, vacuous: !f || !f.weedN, judged: true }); }
   { const L = W.line || [], z = L.find(t => /OLD WOUND/.test(t)) || null; ck.push({ name: 'line', val: z, bar: "the zone line holds 'OLD WOUND' and not 'RIDGE' (she is buried)", ok: !!z && !/RIDGE/.test(z), vacuous: !W.line, judged: true }); }
   { const r = W.rite; ck.push({ name: 'rite', val: r || null, bar: '"[E] PRESS THE OLD WOUND" at the anchor, REAL E, pressed, she wakes within 10 s', ok: !!r && r.prompt === '[E] PRESS THE OLD WOUND' && r.pressed && r.wokeF >= 0, vacuous: !r, judged: true });

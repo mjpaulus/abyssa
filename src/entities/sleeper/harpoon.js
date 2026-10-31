@@ -74,7 +74,7 @@ const GLINT_K = 1.0, GLINT_FAR = 120, SIGHT_R = 24;   // (the sprite's own fade 
 // between GL_OUT0 and GL_OUT1 (the murk has it by then)
 const GL_NEAR = 3, GL_FULL = 6.5, GL_OUT0 = 26, GL_OUT1 = 40, GL_CATCH = 0.4;
 // (oldwound) the old wound's broken barb glints on the same curve, colder, smaller and dimmer than the brass did (k of the iron's)
-const OLD_GLINT_K = 0.6, OLD_GLINT_C = 0xc4d6e6, OLD_GLINT_S = 0.5;
+const OLD_GLINT_K = 0.45, OLD_GLINT_C = 0xc4d6e6, OLD_GLINT_S = 0.4;
 // (oldwound) the ray that finds the seam's OUTER surface: from OUT_R u out along the normal, back in, through her shell's triangles within OUT_NEAR u
 const OUT_R = 1.2, OUT_NEAR = 2.5;
 export const LINE_FIRST_SIGHT = 'A HARPOON IN HER SIDE. SOMEONE CAME BEFORE YOU.';
