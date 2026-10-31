@@ -11,6 +11,12 @@
 //           needs &playtest) or 'deck' (Alt+1, deck calm)
 //     variant-js: an expression run page-side after setup, before recording (an experiment knob),
 //           e.g. "__exposure.set({every: 1e9})" (meter frozen). Default: none.
+//           `__stall.pre = () => {...}` installs a hook the recorder calls first thing in each
+//           game rAF, INSIDE the timed frame (the experiment that read the exposure PBO at
+//           frame start: "__stall.pre = () => __exposure.pass()._poll()").
+//   Targets the tab whose URL carries ?bench (as hitch.mjs does), else the first page; the tab
+//   is parked on about:blank at the end only if it was a ?bench page to begin with (any other
+//   page is sent back to the URL it had).
 //   Env: BENCH_DBG_PORT (as cdp.mjs), STALL_SCALE (DRS pin; default the ceiling RES_SCALE),
 //        STALL_OUT (append one JSON line per view to this file), STALL_TRACE=<file> (also a
 //        DevTools trace of the last 4 s of each view: <file>.<view>.json).
@@ -22,7 +28,8 @@ const [, , URL0, VIEWS = 'z0', SECS = '15', VARIANT = '', LABEL = ''] = process.
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 async function json(path) { const r = await fetch(`http://127.0.0.1:${DBG}${path}`); return r.json(); }
 const list = await json('/json/list');
-const tgt = list.find(t => t.type === 'page');
+const tgt = list.find(t => t.type === 'page' && /[?&]bench/.test(t.url)) || list.find(t => t.type === 'page');
+const ownTab = /[?&]bench/.test(tgt.url);
 const ws = new WebSocket(tgt.webSocketDebuggerUrl);
 let id = 0; const wait = new Map(); const events = [];
 ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id && wait.has(d.id)) { wait.get(d.id)(d); wait.delete(d.id); } else if (d.method) events.push(d); };
@@ -129,6 +136,7 @@ for (const view of VIEWS.split(',')) {
   const env = await ev(`({ drs: __drs.state().scale, ceil: __drs.state().ceil, cap: __power.state().cap, focus: document.hasFocus(), hidden: document.hidden, vis: document.visibilityState, lights: (() => { let n = 0; window.scene && window.scene.traverse(o => { if (o.isLight) n++; }); return n; })(), where: __bench.where ? __bench.where() : null })`);
   const secs = +SECS;
   let traceFile = null;
+  const early0 = await ev(`window.__exposure.early ? { ...window.__exposure.early } : null`);
   await ev(`(() => { __stall.rec.length = 0; __stall.on = true; return 1; })()`);
   if (process.env.STALL_TRACE) {
     await sleep(Math.max(0, secs - 4) * 1000);
@@ -142,11 +150,12 @@ for (const view of VIEWS.split(',')) {
     writeFileSync(traceFile, JSON.stringify({ traceEvents: chunks }));
   } else await sleep(secs * 1000);
   const rec = await ev(`(() => { __stall.on = false; return __stall.rec.slice(); })()`);
+  const post = await ev(`({ early: window.__exposure.early ? { ...window.__exposure.early } : null, lag: __gpu.lag ? __gpu.lag() : null, lagMax: __gpu.lagMax ? __gpu.lagMax() : null })`);
   const a = analyse(rec);
-  const row = { label: LABEL, view, variant: VARIANT, secs, env, ...a, traceFile, t: new Date().toISOString() };
+  const row = { label: LABEL, view, variant: VARIANT, secs, env, ...a, post, early0, traceFile, t: new Date().toISOString() };
   out.push(row);
   console.log(JSON.stringify(row));
   if (process.env.STALL_OUT) { appendFileSync(process.env.STALL_OUT, JSON.stringify(row) + '\n'); appendFileSync(process.env.STALL_OUT.replace(/\.jsonl$/, '') + '.raw.jsonl', JSON.stringify({ label: LABEL, view, variant: VARIANT, rec }) + '\n'); }
 }
-await send('Page.navigate', { url: 'about:blank' });
+await send('Page.navigate', { url: ownTab ? 'about:blank' : tgt.url });   // a tab that was not a bench page goes back where it was
 ws.close();

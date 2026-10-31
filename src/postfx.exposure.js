@@ -225,12 +225,18 @@ export class ExposurePass extends Pass {
   // Uncapped (cap 0, the bench's live()) there is no idle moment: the queue is always
   // frames deep, the read waits ~26-30 ms wherever it sits (the primfix bench's every-8th
   // 11-38 ms frames), and at frame start it measured +0.4 ms mean (perf-budget-oct; again
-  // 2026-10-31), so cap 0 keeps the read in render() as before.
+  // 2026-10-31), so cap 0 keeps the read in render() as before. A paced frame under a GPU
+  // BACKLOG (postfx.frameStart: the last readable timer query came back 2+ frames late, DRS's
+  // tell) also leaves it to render(): there the GPU process may still be busy at frame start.
+  // Forced (4x canvas, DRS pinned): every due read stepped aside; DRS free: 18 stepped aside
+  // while it shed the backlog, then 132 ran at 0.2 ms.
   // MEASURED NEGATIVES (2026-10-31, roadmap/bench-zone0-stalls.md): ring depth and lag
   // change nothing (lag 1 / 3 / 7: 1.8 / 1.9 / 1.8 ms); a fence per readback changes
   // nothing either (1.9 ms) -- Blink's fenceSync is a READBACK_SHADOW_COPIES_UPDATED query
   // that fills a shadow copy only MapBufferRange reads, which WebGL does not expose, and it
   // logs "written, then fenced, but written again" warnings for every READ-usage PBO.
+  // a map-back is due this frame (the ring holds a readback PBO_LAG issues old)
+  due() { return !!this.gl && this.issued - this.read > PBO_LAG; }
   early() {
     const E = GLASS.exposure;
     if (!this.gl || this.failed || !E || !(E.on > 0)) return;

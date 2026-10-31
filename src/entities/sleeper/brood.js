@@ -47,6 +47,7 @@ import { emitDust } from '../../world/footfx.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import * as G from './brooderGeo.js';
 import { BURY } from './burial.js';
+import { fogWall } from '../../config.js';
 // (velfix) the clutch's pose after the calm moves at most this much a second (the re-rise's whole swing in ~0.6 s)
 const ST_CALM_RATE = 1.0;
 
@@ -1196,15 +1197,21 @@ export function makeBrood(L, idx, trailFrom) {
       B.setae.visible = on && dc < 40;
       B.core.visible = on;
     }
-    // THE TRAIL'S FOG CULL (built in buildTrail). The wall is creatures.js's: the range at which GREEN, the
-    // water's most transmitted channel (K_EXT 1.45 x the fog density at the eye), is down to 2%, the radius
-    // every school, jelly and predator is culled at. The eye's density is the silt's on the seabed and less above
-    // it, so the range only grows as he rises (never culls what the path to it still shows). A piece draws
-    // while the nearest point of its box is inside the wall + 10 u and is dropped past + 20 u (no flicker at
-    // the edge). Off for the first 12 s of her clock, as the bead gate above (the boot's warm frames also force
-    // everything drawn). Programs: none new (visibility only).
+    // THE TRAIL'S FOG CULL (built in buildTrail). The wall is config.js fogWall, the radius every school,
+    // jelly, predator and fauna dither is culled at: the range at which GREEN, the water's most transmitted
+    // channel, is down to 2%, from the fog density AT THE EYE. That is exact for a path in the eye's own water,
+    // and safe when the eye is at or above the piece: the silt pools on the bed, so the path down to it is no
+    // clearer than the eye's water. With the eye BELOW a piece (on a lower tread looking up at one) the path
+    // thins over its last few metres; the +20 u hysteresis absorbs that. Clear-water density is highest at the
+    // surface (water.js rhoClearAt), so above the silt the wall shrinks slightly as he rises: nothing here
+    // assumes it only grows. A piece draws while the nearest point of its box is inside the wall + 10 u and is
+    // dropped past + 20 u (no flicker at the edge). Off for the first 12 s of her clock, as the bead gate above
+    // (the boot's warm frames also force everything drawn). Programs: none new (visibility only).
+    // DEV PATHS ONLY (review Minor 2): it reads the camera as the last frame left it, so a teleport draws one
+    // frame on the old verdict; and a jump that lands paused (Alt+6 without the helm) runs no update, so pieces
+    // culled where he was stay hidden until play resumes. Real play moves the camera a few cm a frame.
     if (B.trailParts && scene.fog) {
-      const wall = Math.min(420, 3.912 / Math.max(scene.fog.density * 1.45, 1e-4));
+      const wall = fogWall(scene.fog.density);
       for (let i = 0; i < B.trailParts.length; i++) {
         const P = B.trailParts[i], d = B.t < 12 ? 0 : P.box.distanceToPoint(camera.position);
         P.on = P.on ? d < wall + 20 : d < wall + 10;

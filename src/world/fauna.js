@@ -52,7 +52,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { scene, camera } from '../core.js';
-import { WORLD_R, zoneTop, zoneBottom, zoneBand } from '../config.js';
+import { WORLD_R, zoneTop, zoneBottom, zoneBand, fogWall } from '../config.js';
 import { registerPaint, injectStrokes } from '../lib/paint.js';
 import { clamp } from '../lib/math.js';
 import { terrainH } from './terrain.js';
@@ -206,7 +206,6 @@ const uTime = { value: 0 };
 const uGaze = { value: new THREE.Vector4(0, -1e5, 0, 0) };
 const uFogD = { value: 0.016 };
 const uCull = { value: 205 };
-const CULL_MAX = 420;
 
 // Fixed-step steering.
 const STEP = 1 / 30;
@@ -2021,7 +2020,7 @@ export function updateFauna(dt, t) {
   uTime.value = t;
   if (scene.fog) {
     uFogD.value = scene.fog.density;
-    uCull.value = Math.min(CULL_MAX, 3.912 / Math.max(scene.fog.density * 1.45, 1e-4));
+    uCull.value = fogWall(scene.fog.density);   // config.js THE FOG WALL
   }
   const cy = camera.position.y;
   const cull = uCull.value;

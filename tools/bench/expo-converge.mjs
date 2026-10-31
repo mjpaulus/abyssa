@@ -5,6 +5,8 @@
 // there: 1800 rendered frames at dt 1/60. Between frames it calls postfx.frameStart(60), the paced
 // frame's start, so a build that maps the readback back there (stalls branch) does so here too.
 //   node tools/bench/expo-converge.mjs <url> <out.json>      (Env BENCH_DBG_PORT, as cdp.mjs)
+// Exit (clockplug.mjs's convention): 0 measured, 2 UNMEASURED (no clock reading), 4 LOST (the game clock
+// moved other than by the stepped frames: re-run).
 import { writeFileSync } from 'node:fs';
 import { plug, drift, lost, unmeasured } from './clockplug.mjs';
 const DBG = +(process.env.BENCH_DBG_PORT || 9333);
@@ -44,3 +46,5 @@ const d = await drift(c);
 writeFileSync(OUTF, JSON.stringify({ url: URL0, drift: d, series: res }));
 console.log(JSON.stringify({ url: URL0, n: res.length, drift: d, lost: lost(d), unmeasured: unmeasured(d), first: res[0], cut: res[299], end: res[res.length - 1] }));
 ws.close();
+if (unmeasured(d)) { console.log('UNMEASURED: no clock reading'); process.exit(2); }
+if (lost(d)) { console.log('CLOCK LOST: drift ' + d.drift + ' s'); process.exit(4); }
