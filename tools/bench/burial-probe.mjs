@@ -376,8 +376,11 @@
 //             stub from 14 u"). So: d10.range (glint on) visible >= the iron's at 10 u (it reads at least as the iron did); d14.vsIron
 //             (glint on) visible <= 1.25 x the iron's at 14 u (no more of a give-away); d6.mark (glint hidden) visible >= 150 px (a
 //             14 x 11 px mark, ~0.3 deg on a laptop at arm's length: a thing you see, not a fleck); anchor.read (glint hidden) visible
-//             >= 1200 px and Weber >= 0.1 (stood at it the mark is ~100 px across: for a patch that size 10% is plain, the eye's contrast
-//             threshold for large targets is 1-2%, and the lantern's in-scatter veils everything at 3 u: dark can only fall to the veil);
+//             >= 1200 px and >= 60% of the footprint visible (stood at it the mark is ~130 px across and most of it must stand off its
+//             surround; the eye's contrast threshold for large targets is 1-2%, and the lantern's in-scatter veils everything at 3 u, so
+//             dark can only fall to the veil). Re-registered a second time: its first form, Weber >= 0.1 on the medians, read 0.204 /
+//             0.197 / 0.114 / 0.099 / 0.165 over five GREEN runs (the surround's median moves 106-134 codes with the lantern), while the
+//             visible share held 0.83-0.90 (Weber stays booked);
 //             fronds: no drawn frond and no coral vertex within GROW.near of the seam or in its sight corridor (GROW.sight); line: the zone
 //             line holds 'OLD WOUND' and, she being buried, not 'RIDGE'; rite: Alt+6 -> "[E] PRESS THE OLD WOUND", REAL E, H.pressed and
 //             she wakes (lev.dormant false) within 10 s; shader: __shaderFailed() []. The anchor view turns him 0.96 rad to put the seam
@@ -1823,7 +1826,7 @@ if (MODE === 'wound') {
       bar: 'glint on: visible <= 1.25 x the iron\'s at 14 u on a fresh save (no more of a give-away than the iron)', ok: !!w && !!i && w.visible <= 1.25 * i.visible, vacuous: voidOf(w) || voidOf(i) || !i.visible, judged: true }); }
   // THE MARK, the glint hidden: at 6 u on the sand and at the anchor
   { const q = R0('d6'); ck.push({ name: 'd6.mark', val: Object.assign(pick(q) || {}, { ndc: R.d6 && R.d6.aim.ndc }), bar: 'glint hidden: visible >= 150 px', ok: !!q && q.visible >= 150, vacuous: voidOf(q), judged: true }); }
-  { const q = R0('anchor'); ck.push({ name: 'anchor.read', val: Object.assign(pick(q) || {}, { ndc: R.anchor && R.anchor.aim.ndc, camD: R.anchor && R.anchor.aim.camD }), bar: 'glint hidden: visible >= 1200 px and Weber >= 0.1', ok: !!q && q.visible >= 1200 && q.weber >= 0.1, vacuous: voidOf(q), judged: true }); }
+  { const q = R0('anchor'); ck.push({ name: 'anchor.read', val: Object.assign(pick(q) || {}, { ndc: R.anchor && R.anchor.aim.ndc, camD: R.anchor && R.anchor.aim.camD }), bar: 'glint hidden: visible >= 1200 px and >= 60% of the footprint visible (Weber booked)', ok: !!q && q.visible >= 1200 && q.visible >= 0.6 * q.area, vacuous: voidOf(q), judged: true }); }
   for (const n of ['d10', 'd14', 'd10c', 'anchorc']) { const q = R0(n); ck.push({ name: n + '.mark', val: q ? Object.assign(pick(q), { ndc: R[n].aim.ndc }) : null, bar: 'booked (glint hidden)', ok: true, vacuous: false, judged: false }); }
   for (const n of ['anchor']) { const q = G0(n); if (q) ck.push({ name: n + '.glint', val: pick(q), bar: 'booked (the read with the glint on)', ok: true, vacuous: false, judged: false }); }
   for (const n of ['d10bare', 'd14bare']) { const q = I[n]; ck.push({ name: 'iron.' + n, val: pick(q), bar: 'booked (the iron on a fresh save, its glint hidden)', ok: true, vacuous: false, judged: false }); }

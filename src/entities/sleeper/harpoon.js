@@ -123,8 +123,9 @@ function woundGeo() {
 
 // (oldwound) THE OLD WOUND AT HOME (a remembered build, buried): the healed scar above sat flush on the crest seam, which is a crevice
 // vertex under an overhang of her rock: 154 of its 176 vertices lay inside her drawn shell (up to 0.54 u, its centre 0.26 u under the
-// overhang), and ~1 px of it reached the screen from 10 u. The wound is now painted into her shell by the crust (burial.js
-// setCrustWound: the bare patch, the torn pit, the callus, the rust weep) at the seam's OUTER surface (seat: a ray in along the normal),
+// overhang): what reached the screen was an 8 px fleck from 10 u (burial-probe wound on 983224c). The wound is now painted into her
+// shell by the crust (burial.js setCrustWound: the stain, the torn pit, the callus, the rust) at the seam's OUTER surface (seat: a ray
+// in from over the lip, outerHit),
 // and this small piece is what stands proud of it there: the torn lip of the puncture, and in it the broken BARB of the iron, a dull
 // cold flake whose glint is the range cue (H.update). Its own geometry in the scar's own material: the same program
 let _oldGeo = null;
