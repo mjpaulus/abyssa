@@ -2609,12 +2609,13 @@ export function updateBrooder(L, dt, t, player) {
   // deliberate step that widens her base under the load (once a point, early in the raise, when that foot's pair is not stepping). Never
   // TOWARD him: a foot set down nearer him than it stood puts her leg between him and the lens (framing, v2: the brace parked a leg in
   // front of the lens through the hold), so with him on that side the step is not taken (the body and the IK legs still brace)
+  // (Still turning through the raise, that foot is often mid-step: the brace is armed until u 1.0 and taken on the first frame it stands.)
   let brace = -1;
-  if (L.pointPh === 2 && REACH.on && REACH.brace && L.braceAt !== L.pointR && L.pointU >= 0.08 && L.pointU < 0.6 && L.feet[0].t < 0 && !_busy[L.feet[0].group ^ 1]) {
+  if (L.pointPh === 2 && REACH.on && REACH.brace && L.braceAt !== L.pointR && L.pointU >= 0.08 && L.pointU < 1.0 && L.feet[0].t < 0 && !_busy[L.feet[0].group ^ 1]) {
     L.braceAt = L.pointR;
     const fp = L.feet[0].planted, bo = REACH.brace * R, bf = 0.4 * bo, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
     const bx = fp.x + cy * bo + sy * bf, bz = fp.z - sy * bo + cy * bf;
-    if (!player || Math.hypot(bx - player.pos.x, bz - player.pos.z) > Math.hypot(fp.x - player.pos.x, fp.z - player.pos.z) + 0.5 * bo) brace = 0;
+    if (!player || Math.hypot(bx - player.pos.x, bz - player.pos.z) > Math.hypot(fp.x - player.pos.x, fp.z - player.pos.z) + 0.5 * bo) { brace = 0; L.braceN = (L.braceN | 0) + 1; }
   }
   for (let li = 0; li < 8; li++) {
     const f = L.feet[li], sd = li < 4 ? 1 : -1, k = li & 3;
