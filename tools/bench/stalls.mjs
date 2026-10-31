@@ -20,6 +20,8 @@
 //   Env: BENCH_DBG_PORT (as cdp.mjs), STALL_SCALE (DRS pin; default the ceiling RES_SCALE),
 //        STALL_OUT (append one JSON line per view to this file), STALL_TRACE=<file> (also a
 //        DevTools trace of the last 4 s of each view: <file>.<view>.json).
+// The map-back block is split by owner (the bound PIXEL_PACK_BUFFER: the exposure ring's, else the sky probe's): `gbExp`, `gbSky`,
+// the work on sky read / issue / no-sky frames, and `skySeries` (the per-frame check that stats.sunVis is the last value the ring read).
 // Prints per view: p50/p95/p99/max interval, missed-vsync count, stall-gap histogram, the
 // autocorrelation of frame() main-thread time at lags 1..24, and the cost split by frame kind.
 import { writeFileSync, appendFileSync } from 'node:fs';
