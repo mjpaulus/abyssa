@@ -570,7 +570,13 @@ against explicit contracts and reviewed on return.
   terms are > 0.02), never written by the game. Off home and on a fresh save nothing changes (w 0). The zone line at home says "FIND THE
   OLD WOUND IN THE ROCK." (lev.buried; RIDGE elsewhere). Measured (burial-probe `wound`): the iron's own read from the sand WAS its glint
   (bare stub 43 px / Weber 0.06 at 10 u); the wound reads >= the iron at 10 u and <= 1.25x it at 14 u with the glint, ~194-226 px at 6 u
-  and ~10-13k px (83-90% of it visible; median Weber 0.10-0.20, run to run) at the anchor without it. Stills: tools/bench/oldwound-shots.mjs. THE FIGHT IS NOT MAIN'S: the paired 48-fight campaign (Task 14) FAILED bar (b)
+  and ~10-13k px (83-90% of it visible; median Weber 0.10-0.20, run to run) at the anchor without it. Stills: tools/bench/oldwound-shots.mjs. A FRESH PULL HEALS
+  INTO IT (oldwound, the coordinator's extension of Q5): every buried seat measures the outer place (`H.outerM` in her body's frame,
+  `H.crustRec` in her shell's: burial.js `crustWoundRec` / `setCrustWoundRec`), so when she digs back in after the pull (`L.digging` and
+  the re-bed's job done) `heal` swaps the fresh scar for the old wound's piece and barb, lights the crust's stain (it comes up with the sand)
+  and the cold glint (dormant or `L.dugIn`): matrix copies and uniform writes, no ray in the dig-in's frames; it rides her body through the
+  re-bed. burial-probe digin books it on clear and offbed (`<run>.wound10`, `<run>.woundAnchor`, the wound mode's bars; the hose hidden for
+  those reads). The zone line needs no change there: calmed and dug in she is not dormant, so no wards line shows. THE FIGHT IS NOT MAIN'S: the paired 48-fight campaign (Task 14) FAILED bar (b)
   on the scripted perfect player (median 73.5 s against main's 49.7, ratio 1.48, p 0.0073; the average player 56.8 vs 49.2, inside),
   and the diagnosis puts it on the bench policy meeting the designed opening (he pulls the iron standing on her crest: the off-back
   rule +2.3 s, a failed dash then a drop +3 s, a walk-only close-in stall on her flank +22.5 s; the tool change, the burial after the
