@@ -36,6 +36,7 @@ import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos,
 import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
+import { REACH, reach } from './brooderPoint.js';
 import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
   fitMoundJ, prepGrowthJ, jobSlice, growCover, limbRelease } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
@@ -58,7 +59,11 @@ Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
 //            out to her side (pointcam-probe back, b3e903f). 10 deg, under the probe's 12: the claw solved there drifts by the last ~10 deg of
 //            the turn. Already facing (pointcam-probe ahead) the raise is at turnT as before, the claw up through the line
 //   faceMax  s: past it she raises facing or not (never stuck standing: a blocked turn cannot keep her from going home)
-export const POINT = { turn: 0.5, turnT: 2.9, raiseT: 1.0, holdT: 3.0, lowerT: 1.0, face: 10, faceMax: 14 };
+//   (clawpoint 2026-10-31, Michael: "the claw still feels very robotic") raiseT 1.0 -> 1.2, holdT 3.0 -> 2.9, lowerT 1.0 -> 1.8: the
+//            reach (pointK) still reaches 0.95 at ~1.04 s, before the line when she already faces it (2.9 + 1.04 < 4.1), the lower starts
+//            where it did (4.1 s after the raise) and is slower than the raise (gravity started, muscle braked). The joints, the finger
+//            and her body ride brooderPoint.js REACH on top of pointK (the aim, PT_* and aimPoint, unchanged)
+export const POINT = { turn: 0.5, turnT: 2.9, raiseT: 1.2, holdT: 2.9, lowerT: 1.8, face: 10, faceMax: 14 };
 BURY.point = 1;
 
 // THE SCULPT (tools/blender pipeline, roadmap: sculpt): her shell, limbs, eyes and mouth as
@@ -380,7 +385,9 @@ export function makeBrooder(idx, cfg) {
     soleLift: 0, pushed: 0, seen: true, lastSeen: V3(), blindT: 0, clearT: 0, tau: 0, aim: V3(),
     // (velkath-buried-rock Task 10) THE POINT (POINT above): its phase (0 none / 1 turn / 2 raise / 3 hold / 4 lower), its clock, the
     // claw's reach 0..1, the crack's opening and the reach's root pose [ry, rz] (aimPoint); calmNext: the lab verb 'calm'
-    pointPh: 0, pointT: 0, pointR: 0, pointK: 0, pointAt: V3(), pointPose: [0, 0], calmNext: false
+    pointPh: 0, pointT: 0, pointR: 0, pointK: 0, pointAt: V3(), pointPose: [0, 0], calmNext: false,
+    // (clawpoint) the point's own clock (s since the raise) and REACH's offsets for this frame (brooderPoint.js; null = none this frame)
+    pointU: 0, ptO: null, ptLive: null
   };
 
   // ---- materials ----
@@ -1268,9 +1275,19 @@ function poseEyes(L, dt, player) {
   const search = player && !L.dormant && !L.calmed && !L.seen;
   const track = player && !L.dormant && !L.calmed && L.seen && L._pd < 70;
   if (track || search) { _et.copy(L.aim); _et.y += 1.2; _et.applyMatrix4(_inv); }
+  // (clawpoint) THE POINT: calmed, from the turn to the lower her eyes go to the opening first and stay on it (small looks about it), the
+  // body coming round after them and the claw following them out
+  const look = !track && !search && L.calmed && L.pointPh > 0;
+  if (look) _et.copy(L.pointAt).applyMatrix4(_inv);
   for (const e of E) {
     // what this eye wants
     if (track) e.want.copy(_et).sub(e.piv).normalize();
+    else if (look) {
+      // on the opening every frame (she is turning under them), a small look about it re-rolled now and then
+      if ((e.scanT = (e.scanT || 0) - dt) <= 0) { e.scanT = 0.9 + Math.random() * 1.1; e.jx = (Math.random() - 0.5) * 0.08; e.jy = (Math.random() - 0.5) * 0.05; }
+      e.want.copy(_et).sub(e.piv).normalize();
+      e.want.x += e.jx || 0; e.want.y += e.jy || 0; e.want.normalize();
+    }
     else if (search) {
       if ((e.scanT = (e.scanT || 0) - dt) <= 0) {
         e.scanT = 0.28 + Math.random() * 0.45;
@@ -1482,10 +1499,20 @@ function poseClaws(L, dt) {
       c.dj.rotation.z = chela(c, L, th, gape, snap, hold, t, dt) * hk;
       c.djShip = (0.08 + 0.20 * gape + snap + 1.00 * th * (1 - 0.9 * sw) + 0.35 * ck) * hk;
       if (L.pointK > 0) {   // (velkath-buried-rock Task 10) THE POINT: the reach, blended in by L.pointK (no swing, no threat: she is calmed)
-        const k = L.pointK, r = c.root.rotation;
+        const k = L.pointK, r = c.root.rotation, o = L.ptLive;
         r.set(r.x + (0 - r.x) * k, r.y + (L.pointPose[0] - r.y) * k, r.z + (L.pointPose[1] - r.z) * k);
-        tuckJoint(c.cj, PT_CJ, 0, sd, k); tuckJoint(c.pj, PT_PJ, 0, sd, k);
-        c.dj.rotation.z += (PT_DJ - c.dj.rotation.z) * k; c.djShip += (PT_DJ - c.djShip) * k;
+        if (!o) {   // REACH.on 0: the shipped rigid reach (every joint on pointK)
+          tuckJoint(c.cj, PT_CJ, 0, sd, k); tuckJoint(c.pj, PT_PJ, 0, sd, k);
+          c.dj.rotation.z += (PT_DJ - c.dj.rotation.z) * k; c.djShip += (PT_DJ - c.djShip) * k;
+        } else {
+          // (clawpoint, brooderPoint.js) the shoulder leads on pointK, the elbow and the wrist unfold behind it and refold behind it on
+          // the lower; the load sags and is hitched, a fine tremor, some of her idle drift kept; the finger has its own beat
+          r.z += o.rz + o.drift * dz; r.y += o.ry + o.drift * dy;
+          tuckJoint(c.cj, PT_CJ, 0, sd, o.kE); tuckJoint(c.pj, PT_PJ, 0, sd, o.kW);
+          c.cj.rotation.y -= sd * o.ey; c.cj.rotation.z += o.ez; c.pj.rotation.z += o.wz;
+          const f = c.dj.rotation.z + (o.f - c.dj.rotation.z) * o.kF;
+          c.dj.rotation.z = f; c.djShip += (f - c.djShip) * k;
+        }
       }
     } else {
       // the minor stays low and close, a guard across the mouth, working; it spreads
@@ -1498,6 +1525,9 @@ function poseClaws(L, dt) {
       c.cj.rotation.set(0, -sd * lerp(0.95, 1.20, th) + sd * 0.3 * ck, 0.30);
       c.pj.rotation.set(0, -sd * 0.45, -0.55 + 0.6 * dz);
       c.dj.rotation.z = (0.08 + 0.28 * gape + snap + 0.35 * th + 0.25 * Math.max(0, Math.sin(t * 3.1)) * th + 0.3 * ck) * (1 - 0.8 * Math.min(1, Math.max(0, h)));
+      // (clawpoint) while the crusher points the cutter draws in and down under her mouth, a guard, its finger closing (CHELA.minor holds it)
+      const o = L.ptLive;
+      if (o && o.mk > 0) { const m = o.mk; c.root.rotation.z -= 0.10 * m; c.cj.rotation.y -= sd * 0.14 * m; c.dj.rotation.z -= 0.15 * m; }
     }
     // asleep: folded back flat under the prow, pincers shut
     const d = 1 - st;
@@ -1648,6 +1678,9 @@ function clampClaw(L, c, dt) {
 
 function poseAll(L, dt, player) {
   buildNear(L, L.R * 2.6);
+  // (clawpoint) THE POINT, ALIVE: this frame's REACH (brooderPoint.js) while she raises, holds and lowers; null otherwise (nothing below
+  // reads it then: the shipped pose bit for bit)
+  const po = L.ptLive = L.pointPh > 1 && REACH.on ? reach(L.pointU, POINT, L.t, L.ptO || (L.ptO = { kE: 0, kW: 0, rz: 0, ry: 0, drift: 0, ey: 0, ez: 0, wz: 0, f: 0, kF: 0, lift: 0, pit: 0, rol: 0, mk: 0 })) : null;
   const b = L.body, R = L.R, st = L.standE, hv = L.heave.x, hc = clamp(hv, 0, 1), h = L.hurt.x, ck = L.cock * L.threatE;
   // body on the ground. ASLEEP she is the ridge Michael approved: bedded in the silt on
   // the old five-sample estimate (her flank and prow deep in the dune, the drift banked
@@ -1728,6 +1761,7 @@ function poseAll(L, dt, player) {
   L.bodyY = gy + R * (lerp(0.06, STAND.h - CROUCH.drop * cK, hv) + 0.10 * liftK * (1 - cK) + breath - DORM.drop * (1 - hv) + 0.06 * ck + 0.05 * h) + L.standLift * hv + L.bY.x
     - L.buryD * L.bury + L.breathY * L.bury;   // (velkath-buried-rock) sunk under her bed, the sand's breath with her
   if (L.dropY) L.bodyY += L.dropY;   // (velhard) THE DROP: braced up, slammed down, risen (noSafeSpot)
+  if (po) L.bodyY += po.lift * R;    // (clawpoint) she loads, rises high on her legs with the claw up, settles as it lands
   b.position.set(L.pos.x + L.offX.x, L.bodyY, L.pos.z + L.offZ.x);
   // the lean: toward him, in her own frame (front down = +x rotation, her +X side down = -z)
   let leanP = 0, leanR = 0;
@@ -1740,6 +1774,7 @@ function poseAll(L, dt, player) {
   // Cocking the hammer she rears (front up); a flinch throws her back; she lists a little
   // toward the crusher (+X), its weight
   b.rotation.set(pit + 0.06 * hc + 0.12 * liftK * (1 - cK) - 0.10 * ck - 0.14 * h - (L.lookP || 0) - (L.frontUp || 0) + L.bP.x + leanP, L.yaw, rol - 0.025 * hc + L.bR.x + leanR);
+  if (po) { b.rotation.x += po.pit; b.rotation.z += po.rol; }   // (clawpoint) rears with the claw up, lists to it under the load
   // the sole stays on the ground (L.grp sits at the origin, so body.matrix IS its world)
   b.updateMatrix();
   // (asleep the floor is off; it comes on through the heave, so the rise lifts her OUT)
@@ -2410,7 +2445,7 @@ export function updateBrooder(L, dt, t, player) {
     if (L.pointPh > 1) {
       const u = t - L.pointR, t3 = P.raiseT + P.holdT, t4 = t3 + P.lowerT;
       const ph = u < P.raiseT ? 2 : u < t3 ? 3 : u < t4 ? 4 : 0;
-      L.pointPh = ph;
+      L.pointPh = ph; L.pointU = u;
       L.pointK = ph === 2 ? ease(u / P.raiseT) : ph === 3 ? 1 : ph === 4 ? 1 - ease((u - t3) / P.lowerT) : 0;
     } else L.pointK = 0;
     if (!L.pointPh) { L.walkTo = L.lairPos.clone(); L.toBed = true; }    // done: the shipped walk home
@@ -2570,6 +2605,12 @@ export function updateBrooder(L, dt, t, player) {
     L.shuffleT = 2.5 + Math.random() * 4;
     shuffle = (Math.random() * 8) | 0;
   }
+  // (clawpoint) THE BRACE: as the great claw starts up she sets her front foot on its side (+X, leg 0) out and a little forward, a low
+  // deliberate step that widens her base under the load (once a point, early in the raise, when that foot's pair is not stepping)
+  let brace = -1;
+  if (L.pointPh === 2 && REACH.on && REACH.brace && L.braceAt !== L.pointR && L.pointU >= 0.08 && L.pointU < 0.6 && L.feet[0].t < 0 && !_busy[L.feet[0].group ^ 1]) {
+    brace = 0; L.braceAt = L.pointR;
+  }
   for (let li = 0; li < 8; li++) {
     const f = L.feet[li], sd = li < 4 ? 1 : -1, k = li & 3;
     restWorld(L, li, _rw);
@@ -2598,13 +2639,17 @@ export function updateBrooder(L, dt, t, player) {
       }
     } else if (L.standE > 0.35) {
       const d = f.planted.distanceTo(_rw);
-      if (!_busy[f.group ^ 1] && (d > STRIDE * L.R || li === shuffle)) {
+      if (!_busy[f.group ^ 1] && (d > STRIDE * L.R || li === shuffle || li === brace)) {
         f.from.copy(f.planted);
         f.to.copy(_rw).addScaledVector(L.vel, swT * 0.6);
         if (li === shuffle) { f.to.x += (Math.random() - 0.5) * 0.06 * R; f.to.z += (Math.random() - 0.5) * 0.06 * R; }
+        if (li === brace) {   // her +X out, her front a little (her +X in the world is (cos yaw, -sin yaw), her front (sin yaw, cos yaw))
+          const bo = REACH.brace * R, bf = 0.4 * REACH.brace * R, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
+          f.to.x += cy * bo + sy * bf; f.to.z += -sy * bo + cy * bf;
+        }
         reachFoot(L, li, f.to);                        // on the ground or a rock top, beside a hull, inside the leg's reach
         // a shuffle is a small, low step; a stride lifts high
-        f.h = li === shuffle && d < STRIDE * L.R ? 0.09 : 0.30;
+        f.h = li === brace ? 0.13 : li === shuffle && d < STRIDE * L.R ? 0.09 : 0.30;
         f.t = 0;
         _busy[f.group]++;
       }
