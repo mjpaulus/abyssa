@@ -54,7 +54,7 @@ const INSTALL = `(async () => {
       if (!R.on) return cb(t);
       const ep = window.__exposure.pass(), f0 = ep.frame, i0 = ep.issued, r0 = ep.read, s0 = Lm.floorShadow.refreshes;
       R.gb = 0; R.gbN = 0;
-      const a = performance.now(); cb(t); const w = performance.now() - a;
+      const a = performance.now(); if (R.pre) R.pre(); cb(t); const w = performance.now() - a;
       R.rec.push([t, w, R.gb, R.gbN, ep.frame - f0, ep.issued - i0, ep.read - r0, Lm.floorShadow.refreshes - s0, +window.__exposure.state().exposure]);
     });
   };
@@ -106,7 +106,9 @@ function analyse(rec) {
     interval: { p50: r2(pct(iv, 0.5)), p95: r2(pct(iv, 0.95)), p99: r2(pct(iv, 0.99)), max: r2(Math.max(...iv)), mean: r2(iv.reduce((s, v) => s + v, 0) / iv.length) },
     missed: miss.length, missedPer1000: r2(miss.length / iv.length * 1000), stallGaps: gaps, missKind,
     work: { p50: r2(pct(work, 0.5)), p95: r2(pct(work, 0.95)), p99: r2(pct(work, 0.99)), max: r2(Math.max(...work)) },
-    workAcf: acf(work, 24),
+    workAcf: acf(work, 24), intervalAcf: acf(iv, 24),
+    // a rAF interval booked to the frame that ran just before it (the frame whose work delayed the next)
+    ivByKind: (() => { const o = {}; for (let i = 1; i < rec.length; i++) { const r = rec[i - 1]; const k = r[4] === 0 ? 'idle' : r[6] > 0 ? 'read' : r[7] > 0 ? 'shadow' : 'plain'; (o[k] = o[k] || []).push(iv[i - 1]); } for (const k in o) o[k] = { n: o[k].length, p50: r2(pct(o[k], 0.5)), p99: r2(pct(o[k], 0.99)), max: r2(Math.max(...o[k])) }; return o; })(),
     gbsd: gb.length ? { n: gb.length, p50: r2(pct(gb, 0.5)), p95: r2(pct(gb, 0.95)), max: r2(Math.max(...gb)) } : null,
     byKind: kstat,
     expo: { first: exp[0], last: exp[exp.length - 1], min: Math.min(...exp), max: Math.max(...exp) }
@@ -115,6 +117,9 @@ function analyse(rec) {
 
 const out = [];
 await send('Page.enable');
+// a visible window that is not the OS key window reports document.hasFocus() false; the game reads it
+// (frameCap's idle rule). Focus emulation makes the page focused without stealing Michael's keyboard.
+if (!process.env.STALL_NOFOCUS) await send('Emulation.setFocusEmulationEnabled', { enabled: true });
 for (const view of VIEWS.split(',')) {
   await send('Page.navigate', { url: URL0 });
   await sleep(1500);

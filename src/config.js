@@ -474,6 +474,7 @@ export const GLASS = {
                           // readback round trip (~1.8 ms main thread under load); 2 -> 8
                           // saved 0.3-0.9 ms a frame (perf-budget-oct). 7.5 Hz is still
                           // ~4.5 samples per tauBright.
+    fence: 0,             // EXPERIMENT (bench-zone0-stalls): 1 = map a PBO back only once its fence signalled
     airRaw: 0.65,         // deck correction: the unexposed share of an air frame (dome, sea
                           // surface are raw shaders); measured loop gain -0.65 at noon
     // Measured 2026-09-25 at multiplier 1 (scene-referred mean log2, ACES inverted):

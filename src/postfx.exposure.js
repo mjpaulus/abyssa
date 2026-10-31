@@ -137,7 +137,10 @@ export class ExposurePass extends Pass {
     this.u = this.material.uniforms;
 
     // Readback ring: PBOs + fences, created lazily on the live context.
-    this.gl = null; this.pbo = null; this.issued = 0; this.read = 0;   // monotonic counters; slot = n % PBO_RING
+    this.gl = null; this.pbo = null; this.issued = 0; this.read = 0;   // monotonic counters; slot = n % ring
+    this.ring = PBO_RING; this.lag = PBO_LAG;   // experiment knobs (__exposure.ring(n, lag)); shipped 4 / 3
+    this.sync = [];                              // per slot: the fence issued right after its readPixels
+    this.waits = 0;                              // map-backs deferred because the fence had not signalled
     this.out = new Float32Array(4);
     this.frame = 0; this.failed = false;
 
@@ -182,20 +185,34 @@ export class ExposurePass extends Pass {
     if (!gl.PIXEL_PACK_BUFFER || !gl.getBufferSubData) { this.failed = true; return false; }
     this.gl = gl;
     this.pbo = [];
-    for (let i = 0; i < PBO_RING; i++) {
+    for (let i = 0; i < this.ring; i++) {
       const b = gl.createBuffer();
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, b);
       gl.bufferData(gl.PIXEL_PACK_BUFFER, 16, gl.STREAM_READ);
       this.pbo.push(b);
     }
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+    this.sync = new Array(this.ring).fill(null);
     return true;
+  }
+  // Experiment only: rebuild the ring at another depth / lag (drops whatever is in flight).
+  setRing(n = PBO_RING, lag = PBO_LAG) {
+    if (this.gl && this.pbo) { for (const b of this.pbo) this.gl.deleteBuffer(b); for (const s of this.sync) if (s) this.gl.deleteSync(s); }
+    this.gl = null; this.pbo = null; this.sync = []; this.issued = 0; this.read = 0;
+    this.ring = Math.max(2, n | 0); this.lag = Math.max(0, Math.min(this.ring - 1, lag | 0));
+    return { ring: this.ring, lag: this.lag };
   }
   // Map back every readback that is at least PBO_LAG issues old, in issue order.
   _poll() {
     const gl = this.gl;
-    while (this.issued - this.read > PBO_LAG) {
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.read % PBO_RING]);
+    const fenced = GLASS.exposure.fence > 0;
+    while (this.issued - this.read > this.lag) {
+      const slot = this.read % this.ring, sy = this.sync[slot];
+      if (sy) {
+        if (fenced && gl.getSyncParameter(sy, gl.SYNC_STATUS) !== gl.SIGNALED) { this.waits++; break; }
+        gl.deleteSync(sy); this.sync[slot] = null;
+      }
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[slot]);
       gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, this.out);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
       this.read++;
@@ -212,7 +229,7 @@ export class ExposurePass extends Pass {
     this._poll();
     // Sparse in time as well as space: meter every `every` frames, and never with the
     // ring full (a slow readback simply drops this frame's sample).
-    if ((this.frame++ % Math.max(1, E.every | 0)) !== 0 || this.issued - this.read >= PBO_RING) return;
+    if ((this.frame++ % Math.max(1, E.every | 0)) !== 0 || this.issued - this.read >= this.ring) return;
     const u = this.u;
     if (this.profiling > 0) this._profBegin(gl);
     u.uCentre.value = Math.max(0, Math.min(1, E.centre));
@@ -225,9 +242,11 @@ export class ExposurePass extends Pass {
     renderer.setRenderTarget(this.rtC); renderer.render(this.scene, this.camera);
     // The 1x1 is bound now: queue the read into the next PBO. No fence, no flush.
     try {
-      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[this.issued % PBO_RING]);
+      const slot = this.issued % this.ring;
+      gl.bindBuffer(gl.PIXEL_PACK_BUFFER, this.pbo[slot]);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.FLOAT, 0);
       gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+      if (E.fence > 0) this.sync[slot] = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
       this.issued++;
       if (this.profiling > 0) this._profEnd(gl);
     } catch (e) {
@@ -296,7 +315,7 @@ export class ExposurePass extends Pass {
   }
   dispose() {
     this.rtA.dispose(); this.rtB.dispose(); this.rtC.dispose(); this.material.dispose();
-    if (this.gl && this.pbo) for (const b of this.pbo) this.gl.deleteBuffer(b);
+    if (this.gl && this.pbo) { for (const b of this.pbo) this.gl.deleteBuffer(b); for (const s of this.sync) if (s) this.gl.deleteSync(s); }
     this.pbo = null;
   }
 }
