@@ -557,7 +557,20 @@ against explicit contracts and reviewed on return.
   and offbed, ~6.2 u off the first bed: every coral vertex inside the strip she lies in now).
   Leaving zone 0 mid-rise, mid-point or mid-dig and returning rebuilds her at her bed, buried and still (the zone rebuild; a
   second rise after a dig-in works). A save with `pulled[0]` rebuilds her buried with the OLD WOUND at the seat ("[E] PRESS THE OLD
-  WOUND" raises her the same way, grants nothing). THE FIGHT IS NOT MAIN'S: the paired 48-fight campaign (Task 14) FAILED bar (b)
+  WOUND" raises her the same way, grants nothing). THE OLD WOUND READS (branch oldwound, 2026-10-31; Michael played a pulled save: "I went down
+  to velkath and there was no harpoon to pull"; his ruling: the old wound must be visible): the shipped scar disc lay tangent at the crest
+  seam, a crevice vertex under an overhang of her rock, 154 of its 176 vertices inside her drawn shell (up to 0.54 u), ~1 px of it on
+  screen from 10 u. On a remembered build at home (harpoon.js `oldW` = wound && L.buried) the wound is PAINTED into her shell by the
+  crust (burial.js `setCrustWound`, uniforms uWound / uWoundN / uWoundD / uWoundS in the one '|crust' program: no new program, vsBase [])
+  at the seam's OUTER surface (`outerHit`: a ray in from over the lip, OUT_UP 0.7, through her triangles near it): the sand gives way and
+  the shell is stained dark round a black pit, a ridge of pale callus rims it, fractures run out, a short rust tongue under it (mostly on
+  faces the lens does not see: the seam faces 25 deg down); a small proud piece (`oldWoundGeo`: the torn lip and a broken BARB, the
+  scar's own material) sits on it, and the barb GLINTS cold on the iron's curve (OLD_GLINT_K 0.45 of the brass, colour 0xc4d6e6, scale
+  0.4; no first-sight line). `H._woundShow(on)` toggles all of it (the probe's A/B). uWound.w 2 is the probe's PAINT (magenta where the
+  terms are > 0.02), never written by the game. Off home and on a fresh save nothing changes (w 0). The zone line at home says "FIND THE
+  OLD WOUND IN THE ROCK." (lev.buried; RIDGE elsewhere). Measured (burial-probe `wound`): the iron's own read from the sand WAS its glint
+  (bare stub 43 px / Weber 0.06 at 10 u); the wound reads >= the iron at 10 u and <= 1.25x it at 14 u with the glint, ~194-226 px at 6 u
+  and ~10-12k px / Weber 0.11-0.20 at the anchor without it. Stills: tools/bench/oldwound-shots.mjs. THE FIGHT IS NOT MAIN'S: the paired 48-fight campaign (Task 14) FAILED bar (b)
   on the scripted perfect player (median 73.5 s against main's 49.7, ratio 1.48, p 0.0073; the average player 56.8 vs 49.2, inside),
   and the diagnosis puts it on the bench policy meeting the designed opening (he pulls the iron standing on her crest: the off-back
   rule +2.3 s, a failed dash then a drop +3 s, a walk-only close-in stall on her flank +22.5 s; the tool change, the burial after the
@@ -566,7 +579,7 @@ against explicit contracts and reviewed on return.
   `sandAt`, `inStrip`, `setCrust`, `knobs` = BURY, `crust` = CRUST), `window.__pointcam`, `window.__plume` (`densKind`, `rec`), lab verb
   `calm`. Probes (all `DRV_PORT=<own> node tools/bench/<x>.mjs`, stepped ones on the PLUGGED clock, `tools/bench/clockplug.mjs`:
   `plug` / `drift` / `lost` / `unmeasured`, CLOCK_LOST 0.05, exit 4): `burial-probe.mjs <disguise|breath|programs|rise|digin|
-  reentry> <port>` (the plan's gates, each with a `BP_RED`: ridge shallow steep late still lazy noshove tearable early nofoot sunk
+  reentry|wound> <port>` (`wound`: the old wound's read, see its header; RED noscar) (the plan's gates, each with a `BP_RED`: ridge shallow steep late still lazy noshove tearable early nofoot sunk
   noplume fastdig nopause keepdig mem2; `BP_AT` anchor / crest / off / front / dune / under; digin's runs clear pause afloat crest offbed
   early throwpose throwfit; every DISGUISE judges `coral`, the rock's coral inside this bed's strip; `BP_BASE` = a base run's programs JSON,
   because the base compiles its own first-sight shadow variants; `BP_CHECK`), `relief-walk.mjs mound` (real keys, live loop; `RW_RED`
