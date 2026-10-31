@@ -51,7 +51,7 @@ Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
 // 0 is the shipped calm (__burial.set({ point: 0 }): pointcam-probe's RED nopoint).
 //   turn     rad/s (pre-registered; past it is Michael's feel call, never a tuning knob)
 //   turnT / raiseT / holdT / lowerT  s on her own clock from the calm: the raise from 2.9 s (late in the pour, the light at 3.6), so
-//            the claw is up (pointK 0.95) by ~3.8 s, before the line at 4.1; held to 6.9 s, down by 7.9 s. (A raise from 3.6 s put
+//            the claw is up (pointK 0.95) by ~3.9 s, before the line at 4.1; held to 7.0 s, down by 8.8 s. (A raise from 3.6 s put
 //            the claw at 0.95 only at ~4.5 s: the line landed mid-raise and "holds it ... through the line" failed its own bar.)
 //   face     deg: FINISH TURNING, THEN POINT (Michael's ruling 2026-10-21, "1"). The raise waits, past turnT, until her front is within
 //            `face` of the bearing to the opening, even after the light and the line. At 0.5 rad/s a diver on her far side left the opening
@@ -61,7 +61,7 @@ Object.assign(BURY, { floor: 1, solidK: 0.98, capShell: 1 });
 //   faceMax  s: past it she raises facing or not (never stuck standing: a blocked turn cannot keep her from going home)
 //   (clawpoint 2026-10-31, Michael: "the claw still feels very robotic") raiseT 1.0 -> 1.2, holdT 3.0 -> 2.9, lowerT 1.0 -> 1.8: the
 //            reach (pointK) still reaches 0.95 at ~1.04 s, before the line when she already faces it (2.9 + 1.04 < 4.1), the lower starts
-//            where it did (4.1 s after the raise) and is slower than the raise (gravity started, muscle braked). The joints, the finger
+//            4.1 s after the raise (it was 4.0) and is slower than the raise (gravity started, muscle braked). The joints, the finger
 //            and her body ride brooderPoint.js REACH on top of pointK (the aim, PT_* and aimPoint, unchanged)
 export const POINT = { turn: 0.5, turnT: 2.9, raiseT: 1.2, holdT: 2.9, lowerT: 1.8, face: 10, faceMax: 14 };
 BURY.point = 1;
@@ -1277,7 +1277,7 @@ function poseEyes(L, dt, player) {
   if (track || search) { _et.copy(L.aim); _et.y += 1.2; _et.applyMatrix4(_inv); }
   // (clawpoint) THE POINT: calmed, from the turn to the lower her eyes go to the opening first and stay on it (small looks about it), the
   // body coming round after them and the claw following them out
-  const look = !track && !search && L.calmed && L.pointPh > 0;
+  const look = REACH.on && !track && !search && L.calmed && L.pointPh > 0;   // (REACH.on 0: the shipped eyes)
   if (look) _et.copy(L.pointAt).applyMatrix4(_inv);
   for (const e of E) {
     // what this eye wants
@@ -2064,6 +2064,18 @@ setSlabDust(emitDust);                                // (Task 7b: the slabs' an
 const LEG_DELAY = new Float32Array(8);
 WAKE_ORDER.forEach((li, o) => { LEG_DELAY[li] = 0.08 + o * 0.055; });
 const _busy = new Int8Array(2);
+const _bt = V3(), _brw = V3();
+// (clawpoint) THE BRACE's target, built as the feet loop builds a step (the rest spot reached, plus the stride's lead, plus the offset: her +X
+// out and her front a little, in the world (cos yaw, -sin yaw) and (sin yaw, cos yaw)): the test and the step share it, so the test judges
+// the spot the foot will really land on. Zero allocation (module temps).
+function braceTarget(L, R, swT, out) {
+  restWorld(L, 0, _brw);
+  reachFoot(L, 0, _brw);
+  const bo = REACH.brace * R, bf = 0.4 * bo, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
+  out.copy(_brw).addScaledVector(L.vel, swT * 0.6);
+  out.x += cy * bo + sy * bf; out.z += -sy * bo + cy * bf;
+  return reachFoot(L, 0, out);
+}
 
 // ---- SIGHT (brooder-ground-plume) ------------------------------------------------------
 // She sees Sal along the line from her head to his chest. The sand plume (plume.js) has an
@@ -2605,17 +2617,21 @@ export function updateBrooder(L, dt, t, player) {
     L.shuffleT = 2.5 + Math.random() * 4;
     shuffle = (Math.random() * 8) | 0;
   }
-  // (clawpoint) THE BRACE: as the great claw starts up she sets her front foot on its side (+X, leg 0) out and a little forward, a low
-  // deliberate step that widens her base under the load (once a point, early in the raise, when that foot's pair is not stepping). Never
-  // TOWARD him: a foot set down nearer him than it stood puts her leg between him and the lens (framing, v2: the brace parked a leg in
-  // front of the lens through the hold), so with him on that side the step is not taken (the body and the IK legs still brace)
-  // (Still turning through the raise, that foot is often mid-step: the brace is armed until u 1.0 and taken on the first frame it stands.)
+  // (clawpoint) THE BRACE: as the great claw goes up she sets her front foot on its side (+X, leg 0) out and a little forward, a low deliberate
+  // step that widens her base under the load (once a point, from the raise into the first of the hold, when that foot's pair is not stepping).
+  // Never TOWARD him: a foot set down nearer him than it stood puts her leg between him and the lens (framing, v2: the brace parked a leg in
+  // front of the lens through the hold), so with him on that side the step is not taken (the body and the IK legs still brace).
+  // The test judges the target the feet loop below builds (braceTarget: rest spot + stride lead + the brace offset, reached), not where the foot
+  // stands now: while she is still turning planted and rest differ by up to STRIDE, so the step could fall toward him or be a re-step of
+  // ~0.3 R, not a brace. One that would move the foot more than 2 x REACH.brace R is skipped, never forced as a big step, and the test runs
+  // again the next frame the foot stands (the gait's own step usually closes the gap first).
+  // Armed u 0.08 to 2.0 (pointPh 2-3): still turning, her gait has the opposite pair stepping through most of the raise, so a window that
+  // landed before the hold (u 0.4) took it on almost no run. A step begun by u 2.0 lands by ~2.8, so it can land in the hold: its LANDING is
+  // quiet (f.br: no body-spring kick, quake or thump), a leg placed, not a stamp, so she does not shake while she holds.
   let brace = -1;
-  if (L.pointPh === 2 && REACH.on && REACH.brace && L.braceAt !== L.pointR && L.pointU >= 0.08 && L.pointU < 1.0 && L.feet[0].t < 0 && !_busy[L.feet[0].group ^ 1]) {
-    L.braceAt = L.pointR;
-    const fp = L.feet[0].planted, bo = REACH.brace * R, bf = 0.4 * bo, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
-    const bx = fp.x + cy * bo + sy * bf, bz = fp.z - sy * bo + cy * bf;
-    if (!player || Math.hypot(bx - player.pos.x, bz - player.pos.z) > Math.hypot(fp.x - player.pos.x, fp.z - player.pos.z) + 0.5 * bo) { brace = 0; L.braceN = (L.braceN | 0) + 1; }
+  if ((L.pointPh === 2 || L.pointPh === 3) && REACH.on && REACH.brace && L.braceAt !== L.pointR && L.pointU >= 0.08 && L.pointU < 2.0 && L.standE > 0.35 && L.feet[0].t < 0 && !_busy[L.feet[0].group ^ 1]) {
+    const fp = L.feet[0].planted, bo = REACH.brace * R, bt = braceTarget(L, R, swT, _bt);
+    if (Math.hypot(bt.x - fp.x, bt.z - fp.z) <= 2 * bo && (!player || Math.hypot(bt.x - player.pos.x, bt.z - player.pos.z) > Math.hypot(fp.x - player.pos.x, fp.z - player.pos.z) + 0.5 * bo)) { brace = 0; L.braceAt = L.pointR; L.braceN = (L.braceN | 0) + 1; }
   }
   for (let li = 0; li < 8; li++) {
     const f = L.feet[li], sd = li < 4 ? 1 : -1, k = li & 3;
@@ -2638,23 +2654,23 @@ export function updateBrooder(L, dt, t, player) {
         // ...and going hard, a slow one that hangs where she went (render only: her wake)
         const vH = Math.hypot(L.vel.x, L.vel.z);
         if (f.h > 0.2 && vH > 1.0 && !L.dormant) spawnWake(f.cur.x, f.cur.y, f.cur.z, clamp(vH / 3.8, 0.3, 1), L.idx);
-        L.bY.v -= R * 0.10 * f.h / 0.30;
-        L.bR.v += sd * 0.10 * f.h / 0.30;
-        quake(L, ev, f.cur.x, f.cur.z, 0.16 * f.h / 0.30, player);
-        thump(L, ev, f.cur.x, f.cur.z, (0.18 + 0.12 * clamp(vH / 3.8, 0, 1)) * f.h / 0.30, player);
+        if (!f.br) {
+          L.bY.v -= R * 0.10 * f.h / 0.30;
+          L.bR.v += sd * 0.10 * f.h / 0.30;
+          quake(L, ev, f.cur.x, f.cur.z, 0.16 * f.h / 0.30, player);
+          thump(L, ev, f.cur.x, f.cur.z, (0.18 + 0.12 * clamp(vH / 3.8, 0, 1)) * f.h / 0.30, player);
+        }
       }
     } else if (L.standE > 0.35) {
       const d = f.planted.distanceTo(_rw);
       if (!_busy[f.group ^ 1] && (d > STRIDE * L.R || li === shuffle || li === brace)) {
         f.from.copy(f.planted);
         f.to.copy(_rw).addScaledVector(L.vel, swT * 0.6);
-        if (li === shuffle) { f.to.x += (Math.random() - 0.5) * 0.06 * R; f.to.z += (Math.random() - 0.5) * 0.06 * R; }
-        if (li === brace) {   // her +X out, her front a little (her +X in the world is (cos yaw, -sin yaw), her front (sin yaw, cos yaw))
-          const bo = REACH.brace * R, bf = 0.4 * REACH.brace * R, cy = Math.cos(L.yaw), sy = Math.sin(L.yaw);
-          f.to.x += cy * bo + sy * bf; f.to.z += -sy * bo + cy * bf;
-        }
+        if (li === shuffle && li !== brace) { f.to.x += (Math.random() - 0.5) * 0.06 * R; f.to.z += (Math.random() - 0.5) * 0.06 * R; }
+        if (li === brace) f.to.copy(_bt);   // the target the brace test judged (braceTarget)
         reachFoot(L, li, f.to);                        // on the ground or a rock top, beside a hull, inside the leg's reach
         // a shuffle is a small, low step; a stride lifts high
+        f.br = li === brace;   // (clawpoint) a brace step lands quietly (see the brace block)
         f.h = li === brace ? 0.13 : li === shuffle && d < STRIDE * L.R ? 0.09 : 0.30;
         f.t = 0;
         _busy[f.group]++;
