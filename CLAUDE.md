@@ -111,7 +111,8 @@ against explicit contracts and reviewed on return.
   CLAWCAM's tolerances) drops it at once for the rest of that calm, and a pause ends it on the spring for the rest of that point (CLAWCAM's
   house rule). It cannot move the lens out of her: that is CRECAM's guard. RISECAM (sandrise 2026-10-31; `RISECAM` / `__risecam`) is the third:
   POINTCAM's rules and helpers keyed to the rise (from the crack while her sand pours, `until` 4.0 s, before she stands), aimed at the edge of
-  her back nearest the lens; none of the turn with the lens pressed within `near` 2.6-4.5 u of his bonnet; hands back over ~1.3 s (wOut 3).
+  her back nearest the lens; none of the turn with the lens pressed within `near` 2.6-4.5 u of his bonnet; hands back over ~1.3 s (wOut 3). The behind gate (a turn past maxYaw + behind) carries `hyst` 5 deg like POINTCAM's; a real look or a pause is read
+  through the hand-back too (a look there zeroes the cue at once).
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
   AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
@@ -615,6 +616,9 @@ against explicit contracts and reviewed on return.
   stays `hold` 20 s after she stands then drifts off over `restT` 90 s; asleep and dug in it is the shipped cover value for value. FOUND: the
   drift noise read vCrO (object space, the shell drawn x15.4), so the drifts were ~one value over her and only the veil showed: `CRUST.driftWorld`
   1 reads it at world scale; `sandC` 0x3f4744 -> 0x5a6663 (the old hex drew no sand anyone could see). Both change the ASLEEP look (knobs).
+  The old wound's fade (burial.js CRUST_APPLY, wK) keys to the cover the crust draws (crSB, uShed.x), not uBury: on a pulled save the stain and its hole in
+  the sand stay through the shed and go with the sand. A dig-in that throws (L.digFail) keeps the shed state and the residual's own fade; a dug-in L
+  restarts shedT / stoodT, so a later crack sheds normally. `SHED.on` 0 leaves shedT at 0: RISECAM's `until` then runs until she stands.
   (2) THE CLOUD (plume.js `RISE_LOOK`, `spawnPour`; per-particle aE tint/flat): the rise kind DRAWS a low sandy cloud (rn .. rkd) and the pour off
   her rim (brooder.js POUR, her shell's outline), render only; its DENSITY MODEL and records are the shipped ones (record life from K.life), so
   the blind spell is unchanged; the veil's rise share is capped (veilMax) and tinted. (3) RISECAM (camera bullet). Probes: `sandpix-probe.mjs

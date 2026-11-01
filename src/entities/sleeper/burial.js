@@ -1122,7 +1122,8 @@ if (uBury > 0.001 || uShed.x > 0.001) {
     float crPool = max(1.0 - smoothstep(0.35, 0.85, crAO), smoothstep(0.3, 1.5, -crCv)) * smoothstep(0.0, 0.3, crGN.y);
     // (sandrise) THE SHED: the sand on her (uShed.x, crSB) has its own clock from the crack (uShed.y, crP: 0 asleep and digging in at
     // bury 1, 1 once it has run): at crP 0 every line here is the shipped cover, read off uBury's value. Shedding, the field is read
-    // UPSLOPE of where it lies by how far the sand has run (uShed.z, object units, steep faces run, flats hold), drawn out along the
+    // UPSLOPE of where it lies by how far the sand has run (uShed.z, in crQ's units: applied after the uDriftS scale, so WORLD units with
+    // driftWorld 1 and object units with driftWorld 0; steep faces run, flats hold), drawn out along the
     // fall line into streams, and each spot lets go when the shed passes its own time (crLeave: steep faces first, then the flats, the
     // hollows never): the threshold climbs THERE, so a drift shrinks from its thin edges to its core and runs, it does not fade
     float crSB = uShed.x, crP = uShed.y, crSteep = 1.0 - crGN.y;
@@ -1166,7 +1167,9 @@ if (uBury > 0.001 || uShed.x > 0.001) {
       vec3 wnh = normalize(uWoundN - uWoundD * dot(uWoundN, uWoundD) + vec3(1e-5)), wsd = normalize(cross(uWoundD, wnh));
       float wy = dot(wq, uWoundD), wx = dot(wq, wsd), wd = dot(wq, wnh);
       float wR = length(wq), wz = crVN(wq * 3.3 + 11.0), wz2 = crVN(wq * 9.0 + 3.0);
-      float wK = uWound.w * smoothstep(0.0, 0.3, uBury);
+      // (sandrise) keyed to the cover the crust draws (crSB, uShed.x), not uBury: the sand on her now runs on its own clock (the shed), so
+      // on a rise from a pulled save the stain and its hole in the sand stay while sand is on her and go with it (as they went with bury on main)
+      float wK = uWound.w * smoothstep(0.0, 0.3, crSB);
       float wrb = 0.65 + 0.3 * wz;
       crWb = wK * (1.0 - smoothstep(wrb - 0.12, wrb, wR));
       float wrp = 0.09 + 0.06 * wz2;
@@ -1275,7 +1278,10 @@ export function setCrustWoundRec(L, rec, on) {
 // in, shedP eases back to 0 as bury rises and sandS = max(what was left, bury): the dig-in ends on the asleep cover exactly.
 // Reference (out/report.md): sand on a body lifting off the bed avalanches where the slope passes repose (~30-35 deg) and runs in sheets off
 // the high edges; the flats keep it longer and the hollows keep it.
-//   T s, the shed (from the crack; her rise's bury runs out at ~3.7 s); run u, how far a drift on a steep face has slid by the end; hold / restT s
+//   T s, the shed (from the crack; her rise's bury runs out at ~3.7 s); run u, how far a drift on a steep face has slid by the end (WORLD units
+//   with CRUST.driftWorld 1, the shipped value: the shader applies it after the uDriftS scale; object units, her shell x15.4, with driftWorld 0);
+//   hold / restT s. on 0 = the shipped cover (sandS = bury) AND shedT stays 0, so RISECAM's 'until' (game.js; it reads L.shedT) never closes
+//   its window: the cue then runs until she stands
 export const SHED = { on: 1, T: 3.8, pow: 1.4, run: 3.0, hold: 20, restT: 90 };
 const _shInv = new THREE.Matrix4();
 // the shed's progress from the crack: slow to start (the sand holds through the crack and her first heave), then it runs (pow)
@@ -1285,12 +1291,19 @@ export function shedTick(L, dt) {
   if (L.digging || (L.dugIn && !L.cracked)) {
     if (!L.shedDig) { L.shedDig = true; L.shedP0 = L.shedP || 0; L.sandS0 = L.sandS ?? 0; }
     L.shedP = L.shedP0 * (1 - L.bury); L.sandS = Math.max(L.sandS0, L.bury);
+    // dug in: the shed's clocks start over, so a later crack on this same L sheds from its own zero (a failed dig-in keeps them: below)
+    if (L.dugIn) { L.shedT = 0; L.stoodT = 0; }
     return;
   }
   L.shedDig = false;
-  if (L.dormant || !L.cracked) { L.shedT = 0; L.shedP = 0; L.sandS = L.bury; L.stoodT = 0; return; }
-  L.shedT = (L.shedT || 0) + dt;
-  if (!L.hasStood) { L.shedP = shedCurve(L.shedT); L.sandS = 1; L.stoodT = 0; return; }
+  // a dig-in that threw (brooder.js digStep: L.digFail, she stays risen and beginDig has put cracked and hasStood back): the shed state is
+  // kept as it was and the residual goes on with its own hold and fade, never zeroed in a frame (the !L.cracked line below is the asleep case)
+  const failed = L.digFail && !L.dugIn && !L.cracked && !L.dormant;
+  if (!failed && (L.dormant || !L.cracked)) { L.shedT = 0; L.shedP = 0; L.sandS = L.bury; L.stoodT = 0; return; }
+  if (!failed) {
+    L.shedT = (L.shedT || 0) + dt;
+    if (!L.hasStood) { L.shedP = shedCurve(L.shedT); L.sandS = 1; L.stoodT = 0; return; }
+  }
   // stood: the shed runs out (a lab calm mid-rise jumps her to stood: eased, never snapped), then the residual's slow drift off
   L.shedP = Math.min(1, Math.max(shedCurve(L.shedT), (L.shedP || 0) + dt / 0.6));
   L.stoodT = (L.stoodT || 0) + dt;
@@ -1303,7 +1316,7 @@ export function crustTick(L) {
   // (M6) uCrack and uCrackO lag the body one frame: crustTick runs where updateBrooder calls it, before this frame's poseAll has moved her
   // body (L.crackK is last frame's too), so the network trails her by a frame's rise (<= 8 u/s x 1/60 = 0.13 u, bar (d)); cosmetic
   u.uBury.value = L.bury; u.uCrack.value = L.crackK || 0;
-  // (sandrise) the shed (shedTick): the sand on her, its progress and the run (object units); the crack drawn on the sand still on her,
+  // (sandrise) the shed (shedTick): the sand on her, its progress and the run (world units with driftWorld 1, see SHED); the crack drawn on the sand still on her,
   // closing as the shed ends (L.crackK itself is unchanged: it falls with bury and is 0 at the stand)
   const sp = L.shedP || 0, ss = L.buried ? (L.sandS ?? L.bury) : 0, sh = L.parts && L.parts.shell;
   if (sp > 0 && sh) {

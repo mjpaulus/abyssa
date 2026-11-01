@@ -1687,18 +1687,19 @@ window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), amt: 
 // lens bit for bit (`__risecam.state().qPre`). POINTCAM's rules, its helpers (ptNdc / ptAimAt / ptLims / ptGuard / ptKeep, run on this cue's
 // own pre-cue lens and bonnet offset, the point's put back after: the point's own state is untouched): his bonnet held inside NDC helmNdc
 // (a bisected share, rate-limited both ways), the full turn slewed `slew` deg/s, the caps; a turn past maxYaw + `behind` (she is behind the
-// lens) is no cue. THE MOUSE OWNS THE VIEW: from the crack, 5 deg net or 15 deg of looking about (CLAWCAM's lookNet / lookPath) drops it at
+// lens) is no cue, with `hyst` deg of hysteresis on that gate (POINTCAM's pattern, review I1: the gate is wider by hyst while the cue is on
+// and narrower while it is off, so a turn hovering near the line cannot pump the target). THE MOUSE OWNS THE VIEW: from the crack, 5 deg net or 15 deg of looking about (CLAWCAM's lookNet / lookPath) drops it at
 // once for the rest of this rise; a crack that comes mid-sweep starts off. A PAUSE ends it on the spring, off for the rest of the rise.
 // THE HAND-BACK (the window closes, or she is gone) eases k out on the LAST aim, held (no candidate is computed outside the window).
 //   until s from the crack (the shed's T 3.8 + 0.2: the pour; later her unfolding legs come between the lens and her back); out / up x R, the aim on her;
 //   near u: the lens pressed on him (its distance from his bonnet under near[0], CRECAM's press under her) takes none of the turn, all of
 //   it from near[1] (the first takes: at 2-3 u the guard held his bonnet's centre in frame while the frame cut half of it away)
-//   maxYaw / maxPitch deg caps; behind deg past the yaw cap where she counts as behind him (no cue); slew deg/s; wIn / wOut /s (critically
+//   maxYaw / maxPitch deg caps; behind deg past the yaw cap where she counts as behind him (no cue), hyst deg of hysteresis on that line; slew deg/s; wIn / wOut /s (critically
 //   damped: in ~95% by ~1.8 s; out ~1.3 s, wOut 3: at 6 a ~79 deg turn stepped 2.6 deg a frame handing back, risecam-probe handback)
-const RISECAM = { on: 1, until: 4.0, out: 0.45, up: 0.12, near: [2.6, 4.5], maxYaw: 75, maxPitch: 25, behind: 30, helmNdc: 0.82, slew: 45, wIn: 2.6, wOut: 3,
+const RISECAM = { on: 1, until: 4.0, out: 0.45, up: 0.12, near: [2.6, 4.5], maxYaw: 75, maxPitch: 25, behind: 30, hyst: 5, helmNdc: 0.82, slew: 45, wIn: 2.6, wOut: 3,
   lookNet: 5, lookPath: 15, lookTau: 0.3 };
 let rcK = 0, rcKV = 0, rcOff = false, rcOpen = false, rcY0 = 0, rcP0 = 0, rcPath = 0, rcRecent = 0, rcYawWas = 0, rcPitchWas = 0, rcWhy = '', rcTgt = 0;
-let rcYaw = 0, rcPitch = 0, rcAmt = 0, rcDy = 0, rcDp = 0, rcG = 0, rcCy = 0, rcCp = 0, rcHOk = false, rcN = 0;
+let rcYaw = 0, rcPitch = 0, rcAmt = 0, rcDy = 0, rcDp = 0, rcG = 0, rcCy = 0, rcCp = 0, rcHOk = false, rcN = 0, rcBeh = '';   // rcBeh: the behind gate's last answer ('on' | 'behind' | '' = none yet: no hysteresis)
 const _rcQ = new THREE.Quaternion(), _rcSvQ = new THREE.Quaternion(), _rcHO = V3(), _rcSvHO = V3(), _rcA = V3(), _rcH = V3();
 // this frame's candidate full turn (rcCy, rcCp) toward her rising shell: false when she is behind the lens. ptLims() first (under the swap)
 function rcCand(L) {
@@ -1706,7 +1707,10 @@ function rcCand(L) {
   let ux = camera.position.x - bx, uz = camera.position.z - bz; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
   _rcA.set(bx + ux * R * C.out, (L.bodyY != null ? L.bodyY : L.body.position.y) + R * C.up, bz + uz * R * C.out);
   ptAimAt(_rcA);
-  if (Math.abs(ptAy) > (C.maxYaw + C.behind) * d2r) return false;
+  // (L1: POINTCAM's hyst) the line is hyst deg wider while the cue is on and hyst deg narrower while she is behind, so a turn near it cannot pump
+  const eo = (rcBeh === 'on' ? C.hyst : rcBeh === 'behind' ? -C.hyst : 0) * d2r;
+  if (Math.abs(ptAy) > (C.maxYaw + C.behind) * d2r + eo) { rcBeh = 'behind'; return false; }
+  rcBeh = 'on';
   rcCy = clamp(ptAy, -C.maxYaw * d2r, C.maxYaw * d2r); rcCp = clamp(ptAp, -C.maxPitch * d2r, C.maxPitch * d2r);
   return true;
 }
@@ -1718,15 +1722,19 @@ function riseFrame(dt) {
   rcRecent = rcRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
   const her = !!(L && L.kind === 'brooder' && L.buried && L.body);
   const win = her && !L.dormant && !L.calmed && !!L.cracked && !L.hasStood && (L.shedT || 0) < C.until;
-  if (!her || L.dormant || !L.cracked) { rcOff = false; rcOpen = false; rcHOk = false; }   // the guard: the next rise is a new one
-  if (win) {
-    if (!rcOpen) { rcOpen = true; rcY0 = player.yaw; rcP0 = player.pitch; rcPath = 0; if (rcRecent > C.lookNet * d2r) rcOff = true; }
-    else rcPath += dl;
-    if (Math.abs(player.yaw - rcY0) + Math.abs(player.pitch - rcP0) > C.lookNet * d2r || rcPath > C.lookPath * d2r) { rcOff = true; rcK = 0; rcKV = 0; }
+  if (!her || L.dormant || !L.cracked) { rcOff = false; rcOpen = false; rcHOk = false; rcBeh = ''; }   // the guard: the next rise is a new one
+  // (L2) his look and a pause are read while the cue is drawn too, the hand-back (win closed, k still easing out) included: a real look there
+  // zeroes it at once (k 0, so q === qPre from that frame on), a pause leaves it on the spring
+  if (win || rcK > 0 || rcKV !== 0) {
+    if (!rcOpen) { if (win) { rcOpen = true; rcY0 = player.yaw; rcP0 = player.pitch; rcPath = 0; if (rcRecent > C.lookNet * d2r) rcOff = true; } }
+    else {
+      rcPath += dl;
+      if (Math.abs(player.yaw - rcY0) + Math.abs(player.pitch - rcP0) > C.lookNet * d2r || rcPath > C.lookPath * d2r) { rcOff = true; rcK = 0; rcKV = 0; }
+    }
     if (paused) rcOff = true;
   }
   if (!C.on || (!win && !(rcK > 0) && rcKV === 0)) {                // (the common frame: nothing to do, the lens untouched)
-    rcWhy = !C.on ? 'off' : her && L.cracked && !L.hasStood ? 'until' : 'none'; rcTgt = 0;
+    rcWhy = !C.on ? 'off' : her && L.cracked && !L.hasStood ? 'until' : 'none'; rcTgt = 0; rcBeh = '';
     if (!her) { rcK = 0; rcKV = 0; }
     rcYaw = 0; rcPitch = 0; rcAmt = 0; return;
   }
@@ -1768,7 +1776,7 @@ function riseFrame(dt) {
   }
   _ptQ.copy(_rcSvQ); _ptHO.copy(_rcSvHO);
 }
-window.__risecam = { knobs: RISECAM, state: () => ({ k: +rcK.toFixed(4), amt: +rcAmt.toFixed(4), guard: +rcG.toFixed(4), tgt: rcTgt, why: rcWhy, off: rcOff, n: rcN,
+window.__risecam = { knobs: RISECAM, state: () => ({ beh: rcBeh, k: +rcK.toFixed(4), amt: +rcAmt.toFixed(4), guard: +rcG.toFixed(4), tgt: rcTgt, why: rcWhy, off: rcOff, n: rcN,
   yawDeg: +(rcYaw * 57.29578).toFixed(2), pitchDeg: +(rcPitch * 57.29578).toFixed(2), aimYawDeg: +(rcDy * 57.29578).toFixed(3), aimPitchDeg: +(rcDp * 57.29578).toFixed(3), qPre: _rcQ.clone(),
   aim: _rcA.toArray(), lookNetDeg: rcOpen ? +((Math.abs(player.yaw - rcY0) + Math.abs(player.pitch - rcP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(rcPath * 57.29578).toFixed(2), recentDeg: +(rcRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),

@@ -55,6 +55,8 @@ export const PLUME = {
 // (sandrise) the drawn sand's colour and weight: tint x uAlb (0.60, 0.55, 0.45): the shipped pale silt x the zone-0 seabed's own silt hue
 // relative to it; flat squashes the sprite's height (1 = round); lamp scales the lantern's light on it; veilMax caps the share of the lens's
 // veil the rise kind can bring (a camera inside the low cloud sees murk, never a whiteout); veilTint pulls the veil toward the tint
+// NOTE flat: the per-particle aE.w it writes is the lamp cut's switch too: the vertex shader takes vLampR = uLampR (lamp) only while aE.w < 0.999,
+// so flat 1 (round, the shipped sprite) also turns the lamp cut OFF (full lantern light on the cloud), whatever lamp says
 export const RISE_LOOK = { tint: [0.78, 0.88, 0.9], flat: 0.55, lamp: 0.25, veilMax: 0.35, on: 1 };
 // HER WAKE (brooder-clutch: "the chase must read"): a footfall at a run throws a low, slow
 // cloud that HANGS where she went, so in the zone-0 murk her path is a pale haze on the dark

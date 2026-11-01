@@ -4,7 +4,8 @@
 // reads what is drawn, through the whole post chain (the post bypass's frozen capture is black on the plugged clock: burial-probe's wound
 // header), from FIXED framings (window.__camPin, re-set every stepped frame so it rides her body), on the PLUGGED clock.
 //   DRV_PORT=<own> node tools/bench/sandpix-probe.mjs <crust|cloud> <game port>
-// Exit 0 pass | 1 a bar failed | 2 UNMEASURED | 3 a RED whose bars did NOT fail | 4 LOST (clock drift) | 5 a RED whose bars failed, as they must.
+// Exit 0 pass | 1 a bar failed | 2 UNMEASURED | 3 a RED where ANY of its named bars did NOT fail | 4 LOST (clock drift) | 5 a RED whose named bars ALL failed,
+// as they must (risecam-probe's rule: a RED that moves one of two bars proves one of them, not both).
 // JSON -> SP_OUT (default out/probe/sandpix-<mode>-<tag>.json under the cwd).
 //   crust  Home, her asleep and buried; he stands 40 u off her centre on her sand side (out of the frame; she turns to him once she stands,
 //          away from the lens); the lens is pinned 24 u off her body on her FAR side, 24 u up, looking at her body + 3 u, re-pinned every frame.
@@ -22,8 +23,8 @@
 //            sheds    frac(S) <= 0.6 x frac(A) and frac(S) < frac(+1) (it has run off)
 //            rest     frac(S) >= 0.02 (some is left lying on her after she stands; the shed's hollows)
 //          Booked: every reading, __burial.shedState(), L.bury, uShed.
-//          SP_RED=off  the cover off throughout (setCrust cover 0, dust 0): asleep, seen must fail
-//          SP_RED=fade the shed off (__burial.shed.on = 0: main's crust, the sand going with bury): rest must fail
+//          SP_RED=off  the cover off throughout (setCrust cover 0, dust 0): asleep AND seen must both fail
+//          SP_RED=fade the shed off (__burial.shed.on = 0: main's crust, the sand going with bury): rest must fail (its one bar)
 //   cloud  Home, her asleep; he stands 40 u off her centre on her FAR side (she rises and turns away from the lens); the lens pinned 34 u
 //          off her centre on her SAND side, 4 u over the floor there, looking at her centre at the floor + 2.5 u (the cloud rolls off her
 //          toward the lens). She is woken; at +1, +2, +3, +5, +8 and +12 s after the wake TWO captures of the SAME frozen frame: the plumes
@@ -37,8 +38,8 @@
 //            low      >= 75% of the cloud pixels under the 7 u row at +3 and +5 (it hugs the bed; it does not balloon)
 //            sandy    at +3: sat(cloud) >= 0.6 x sat(seabed) and dL <= 25 codes (the zone's sand in its water, not a pale puff)
 //            settles  cov(+12) <= 0.7 x the largest cov booked
-//          SP_RED=nocloud  no rise cloud drawn (__plume.look.on = 0 and the rise kind's render off: __burial.set({ plume: 0 })): seen fails
-//          SP_RED=pale     the shipped rise cloud (__plume.look.on = 0: main's render params, the pale climbing puff): low or sandy must fail
+//          SP_RED=nocloud  no rise cloud drawn (__plume.look.on = 0 and the rise kind's render off: __burial.set({ plume: 0 })): seen must fail (its one bar)
+//          SP_RED=pale     the shipped rise cloud (__plume.look.on = 0: main's render params, the pale climbing puff): low AND sandy must both fail
 // ENV: DRV_PORT (a port of this probe's own; never 8777 / 8790 / 9419), SP_RED, SP_OUT, SP_TAG, SP_SHOTS=<dir> (the captures as PNGs).
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error('sandpix-probe: set DRV_PORT to a port of its own'); process.exit(2); }
@@ -191,8 +192,9 @@ if (unmeasured(d)) { console.log('UNMEASURED (clock)'); process.exit(2); }
 if (lost(d)) { console.log('CLOCK LOST'); process.exit(4); }
 if (RED) {
   const mine = REDS[MODE][RED], failed = mine.filter(b => bars[b] && bars[b].ok === false);
-  console.log(failed.length ? `RED ${RED}: ${failed.join(', ')} FAILED, as it must (exit 5)` : `RED ${RED}: its bars (${mine.join(', ')}) did NOT fail (exit 3)`);
-  console.log('JSON ' + OUT); process.exit(failed.length ? 5 : 3);
+  const ok = failed.length === mine.length;
+  console.log(ok ? `RED ${RED}: ${failed.join(', ')} FAILED, as they must (exit 5)` : `RED ${RED}: ${mine.filter(b => !failed.includes(b)).join(', ')} did NOT fail (exit 3)`);
+  console.log('JSON ' + OUT); process.exit(ok ? 5 : 3);
 }
 const fails = Object.entries(bars).filter(([, v]) => v.ok === false).map(([k]) => k), voids = Object.entries(bars).filter(([, v]) => v.ok === null).map(([k]) => k);
 console.log(fails.length ? 'FAIL ' + fails.join(', ') : voids.length ? 'UNMEASURED ' + voids.join(', ') : 'PASS');

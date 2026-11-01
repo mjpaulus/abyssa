@@ -37,6 +37,11 @@
 //            ~1.3 s), so the window went to 1.5 s; the 1.5 deg step is unchanged. The snap RED's k sat at 0.86 on the frame before the close
 //            (wOut 1e6 snaps k onto every dip of the under-gate's target), so a k >= 0.9 premise found no close (VOID): it reads >= 0.5
 //            RED: RC_RED=snap (__risecam.knobs.wOut 1e6: the hand-back in a frame): must fail
+//            look (L2, review of 2026-10-31: the mouse-look drop sat inside the window, so a real look DURING the hand-back left the cue easing
+//            out): a second session, the hand-back found as above (premise: tgt 0 and k >= 0.1 on the frame before) and ONE 48 px move (6.05 deg
+//            net, the mouse mode's `six`) landing 12 frames into it, k > 0 and tgt 0 on the frame before it (else VOID): k 0 and q === qPre on
+//            that same frame, and k 0 / eq on every frame after it to wake + 9 s
+//            RED: RC_RED=nolook (__risecam.knobs.lookNet / lookPath 1e9): look must fail. Only look is judged under it, and only eased under snap
 // ENV: DRV_PORT (own; never 8777 / 8790 / 9419), RC_AT, RC_ON, RC_RED, RC_OUT, RC_TAG
 const P = /^\d+$/.test(process.env.DRV_PORT || '') ? +process.env.DRV_PORT : NaN;
 if (!Number.isInteger(P) || P < 1024 || P > 65535 || [8777, 8790, 9419].includes(P)) { console.error('risecam-probe: set DRV_PORT to a port of its own'); process.exit(2); }
@@ -46,7 +51,7 @@ if (!MODES.includes(MODE) || !/^\d+$/.test(PORT || '')) { console.error('usage: 
 const AT = process.env.RC_AT || 'anchor';
 if (!['anchor', 'off'].includes(AT)) { console.error('RC_AT: anchor | off'); process.exit(2); }
 const ON = process.env.RC_ON == null || process.env.RC_ON === '' ? null : +process.env.RC_ON;
-const REDS = { mouse: { nodrop: ['six'] }, off: { on: ['bitid'] }, handback: { snap: ['eased'] } };
+const REDS = { mouse: { nodrop: ['six'] }, off: { on: ['bitid'] }, handback: { snap: ['eased'], nolook: ['look'] } };
 const RED = process.env.RC_RED || '';
 if (RED && !(REDS[MODE] && REDS[MODE][RED])) { console.error(`RC_RED: ${MODE} has ${REDS[MODE] ? Object.keys(REDS[MODE]).join(', ') : 'none'}`); process.exit(2); }
 if (ON === 0 && MODE !== 'engage') { console.error('RC_ON=0 is engage\'s RED'); process.exit(2); }
@@ -99,7 +104,7 @@ const OFFPLACE = `(async () => { const T = await import('/src/world/terrain.js')
   return [+x.toFixed(2), +z.toFixed(2)]; })()`;
 
 // one session: a fresh load, the knobs, the rise; pattern = px moves landing 1.0 s after the wake
-async function session(knobs, pattern) {
+async function session(knobs, pattern, atHb) {
   await c.send('Page.navigate', { url: `http://localhost:${PORT}/?bench&playtest` });
   await c.until(`!document.getElementById('load') && typeof window.setState === 'function' && !!window.__bench && !!window.__chart && !!window.lev`, 300000, 500);
   await c.ev(`(window.__helm = true, window.setState('play'), 1)`);
@@ -134,6 +139,13 @@ async function session(knobs, pattern) {
   const end = wakeF + SECS * 60;
   if (pattern) {
     ses.inputF = wakeF + 60;
+    if (atHb) {   // the hand-back's start (the frame the target goes to 0 from a drawn cue), then 12 frames into it
+      const HB = `(() => { const S = window.__rcR.S; for (let i = 1; i < S.length; i++) if (S[i].tgt === 0 && S[i - 1].tgt > 0 && S[i - 1].k >= 0.1) return i; return -1; })()`;
+      let hb = -1;
+      while (hb < 0 && (await c.ev(`window.__rcR.S.length`)) < wakeF + SECS * 60 - 90) { await c.ev(`window.__rcR.step(4)`); hb = await c.ev(HB); }
+      if (hb < 0) throw new Error('look: no hand-back found to put the look into');
+      ses.hbF = hb; ses.inputF = hb + 12;
+    }
     while ((await c.ev(`window.__rcR.S.length`)) < ses.inputF) await c.ev(`window.__rcR.step(1)`);
     for (const px of pattern) {
       if (ses.input === 'cdp') { ses.mx += px; await c.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: ses.mx, y: ses.my }); }
@@ -184,6 +196,7 @@ try {
     }
   } else {
     const kn = RED === 'snap' ? { wOut: 1e6 } : null;
+    if (RED !== 'nolook') {
     const s = await session(kn, null); out.sessions.hb = { ...s, S: undefined }; clocks.push(s.clock);
     const S = s.S, hb = S.findIndex((r, i) => i > 0 && r.tgt === 0 && S[i - 1].tgt > 0 && S[i - 1].k >= 0.1);
     let kOut = -1; if (hb >= 0) for (let i = hb; i < S.length; i++) if (S[i].k <= 0.5 * S[hb - 1].k) { kOut = i; break; }
@@ -192,6 +205,12 @@ try {
     let step = 0, stepDq = 0; if (hb >= 0) for (let i = hb + 1; i < Math.min(S.length, hb + 90); i++) { step = Math.max(step, Math.abs(S[i].amt - S[i - 1].amt) * S[i].aim); stepDq = Math.max(stepDq, Math.abs(S[i].dq - S[i - 1].dq)); }
     out.sessions.hb.rows = hb >= 0 ? S.slice(hb - 2, hb + 60) : []; out.sessions.hb.kSeries = S.map(r => [r.k, r.why]);
     bar('eased', hb >= 0 && kOut >= 0 ? (kOut - hb) / 60 >= 0.15 && (kOut - hb) / 60 <= 1.0 && step <= 1.5 : null, { hbS: hb >= 0 ? +((hb - s.wakeF) / 60).toFixed(3) : null, why: hb >= 0 ? S[hb].why : null, k0: hb >= 0 ? S[hb - 1].k : null, kHalfS: kOut >= 0 ? +((kOut - hb) / 60).toFixed(3) : null, maxStepDeg: +step.toFixed(3), maxStepDqDeg: +stepDq.toFixed(3) }, 'from the target\'s drop to 0, k halves in 0.15-1.0 s and the hand-back steps <= 1.5 deg a frame');
+    }
+    if (RED !== 'snap') {   // L2: a real look during the hand-back (the pattern lands 12 frames into it)
+      const lk = await session(RED === 'nolook' ? { lookNet: 1e9, lookPath: 1e9 } : null, [48], true); out.sessions.look = { ...lk, S: undefined, rows: lk.S.slice(lk.inputF - 3, lk.inputF + 5) }; clocks.push(lk.clock);
+      const f = lk.inputF, T = lk.S, prem = T[f - 1] && T[f - 1].k > 0 && T[f - 1].tgt === 0, aft = T.slice(f);
+      bar('look', prem ? T[f].k === 0 && T[f].eq === 1 && aft.every(r => r.k === 0 && r.eq === 1) : null, { hbF: lk.hbF - lk.wakeF, inputF: f - lk.wakeF, premiseK: T[f - 1] ? T[f - 1].k : null, premiseTgt: T[f - 1] ? T[f - 1].tgt : null, atK: T[f] ? T[f].k : null, atWhy: T[f] ? T[f].why : null, atEq: T[f] ? T[f].eq : null, laterOn: aft.filter(r => r.k > 0).length, laterNeq: aft.filter(r => !r.eq).length, input: lk.input }, 'a 48 px move (6 deg) 12 frames into the hand-back: k 0 and q === qPre on that frame and every later one');
+    }
   }
 } catch (e) { console.log('UNMEASURED: ' + (e && e.message || e)); c.close(); process.exit(2); }
 out.clocks = clocks;
