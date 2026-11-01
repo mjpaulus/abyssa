@@ -1421,7 +1421,9 @@ function ironTest(L) {
 // that strays is dropped. Off the harpoon's seam by GROW.clear u AND out of the seam's sight corridor (ironTest), so the iron reads from the
 // sand. Seeded per site; at most GROW.* of each (fewer where the strip has no room). Rebuilt at every bed (an event); the dig-in does not
 // re-lay it (it rides her body).
-// THE REFERENCE (reefback; out/report.md has the sources): on an old wreck or boulder the fouling is set by EXPOSURE AND ORIENTATION:
+// THE REFERENCE (reefback; sources: the ex-HMAS Brisbane epibenthos study (USC research repository), a Florida wreck's fouling and flow
+// (MDPI Water 9(1):11), Paramuricea clavata fan orientation (VLIZ), Nantucket Shoals boulder scour and the MarLIN / JNCC scoured-rock
+// biotopes (coralline crusts on scoured boulders)): on an old wreck or boulder the fouling is set by EXPOSURE AND ORIENTATION:
 // heaviest where the flow first meets it and on the high, vertical and ridge faces (suspension feeders want laminar flow), weakest on the
 // sediment-laden horizontal surfaces and in sheltered hollows; sea fans stand with their face across the prevailing current; near the
 // sand line scour keeps the rock bare but for scour-proof crustose coralline and small stuff; growth comes in COLONIES (a mat with lumps
@@ -1433,6 +1435,8 @@ function ironTest(L) {
 //                 on the gentler faces of it, coralline skins, lumps, tube clumps above the scour band, and a FAN at its highest ridge
 //                 spot when it is exposed, its plane across the current
 //   sprinkle      the rest of the rock: coralline flecks and small lumps drawn by a softer exposure (the scour band: coralline only)
+//   inset         every coral part's footprint GROW.inset u inside the strip: the dig-in does not re-lay it, and a bed off the first moves the
+//                 strip (burial-probe digin offbed)
 //   weed          GROW.tufts tufts of 7-12 fronds from one holdfast (splayed out from it, the middle ones tallest) in the flanks' hollows
 //                 and cracks (her shell 0.9-3.8 u over the mean ground: where sand lodges and weed roots), GROW.space apart
 // (Task 7b, M6) revealT s: the growth outside the strip uncovered from the crack over this long (growReveal); revRamp u: a frond grows from
@@ -1443,6 +1447,7 @@ export const GROW = { weed: 150, tufts: 15, colonies: 28, fan: 14, crust: 40, co
   clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 const cl01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const OC8 = Float64Array.from({ length: 8 }, (_, b) => Math.cos(b * Math.PI / 4)), OS8 = Float64Array.from({ length: 8 }, (_, b) => Math.sin(b * Math.PI / 4));
 // a colony's hue (brooderGeo RG_HUE): the greyed bone, olive, rose-grey and umber most, the ochre, rust and fan rose less (lantern-lit
 // at a few u the rust mats read as salmon cloth: after1-d8)
 const COL_HUE = [3, 3, 1, 1, 5, 5, 4, 0, 2, 6];
@@ -1581,8 +1586,8 @@ function growRockAt(L, MD) {
     const P = parts[i].attributes.position; let ok = true;
     OD.fill(-Infinity);
     for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z);
-      for (let b = 0; b < 8; b++) { const d = _gs.x * Math.cos(b * 0.7854) + _gs.z * Math.sin(b * 0.7854); if (d > OD[b]) { OD[b] = d; OX[b] = _gs.x; OZ[b] = _gs.z; } } }
-    for (let b = 0; b < 8 && ok; b++) ok = inStrip(MD, OX[b] + Math.cos(b * 0.7854) * ins, OZ[b] + Math.sin(b * 0.7854) * ins);
+      for (let b = 0; b < 8; b++) { const d = _gs.x * OC8[b] + _gs.z * OS8[b]; if (d > OD[b]) { OD[b] = d; OX[b] = _gs.x; OZ[b] = _gs.z; } } }
+    for (let b = 0; b < 8 && ok; b++) ok = inStrip(MD, OX[b] + OC8[b] * ins, OZ[b] + OS8[b] * ins);
     if (ok) { keep.push(parts[i]); L.growN[spots[i][0]]++; } else parts[i].dispose();
   }
   let co = L.parts.coral;
