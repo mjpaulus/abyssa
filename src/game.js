@@ -1676,6 +1676,95 @@ function pointFrame(dt) {
 window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), amt: +ptAmt.toFixed(4), guard: +ptG.toFixed(4), aim: ptMode, tgt: ptTgt, yawDeg: +(ptYaw * 57.29578).toFixed(2), pitchDeg: +(ptPitch * 57.29578).toFixed(2),
   aimYawDeg: +(ptDy * 57.29578).toFixed(3), aimPitchDeg: +(ptDp * 57.29578).toFixed(3), off: ptOff, why: ptWhy, qPre: _ptQ.clone(),
   lookNetDeg: ptOpen ? +((Math.abs(player.yaw - ptY0) + Math.abs(player.pitch - ptP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(ptPath * 57.29578).toFixed(2), recentDeg: +(ptRecent * 57.29578).toFixed(2) }) };
+// ---- THE RISE IN THE LENS (sandrise, 2026-10-31; card roadmap/velkath-sand-rise.md; Michael approved "yes do all three for the sand": the
+// lens turns to her during the rise). In play the shove at the crack carries him off her and the follow lens goes with him, her rising shell
+// off the frame while the sand pours off it. RISECAM is POINTCAM's cue for the rise: from the crack (L.cracked) while her sand runs off
+// (L.shedT < `until` s) and until she has stood, the lens EASES ROUND toward her rising shell: the edge of her back nearest the lens
+// (`out` x R from her centre toward the lens, `up` x R over her body), where the sand pours off her rim. An EVENT, the lens's LAST rotation
+// (after POINTCAM: the two never overlap, a rise is over before a calm can point, and a lab calm mid-rise stands her at once): yaw about world
+// up, then pitch about the lens's own right axis; the boom and the lens position untouched, so CRECAM's and SALCAP's guards keep the last
+// word on where the lens IS (a rotation cannot put it in her or in him). Outside it the rotation is exactly 0 and the lens is the grounded
+// lens bit for bit (`__risecam.state().qPre`). POINTCAM's rules, its helpers (ptNdc / ptAimAt / ptLims / ptGuard / ptKeep, run on this cue's
+// own pre-cue lens and bonnet offset, the point's put back after: the point's own state is untouched): his bonnet held inside NDC helmNdc
+// (a bisected share, rate-limited both ways), the full turn slewed `slew` deg/s, the caps; a turn past maxYaw + `behind` (she is behind the
+// lens) is no cue. THE MOUSE OWNS THE VIEW: from the crack, 5 deg net or 15 deg of looking about (CLAWCAM's lookNet / lookPath) drops it at
+// once for the rest of this rise; a crack that comes mid-sweep starts off. A PAUSE ends it on the spring, off for the rest of the rise.
+// THE HAND-BACK (the window closes, or she is gone) eases k out on the LAST aim, held (no candidate is computed outside the window).
+//   until s from the crack (the shed's T 3.8 + 1.5: the last of the pour and the cloud rolling off her); out / up x R, the aim on her
+//   maxYaw / maxPitch deg caps; behind deg past the yaw cap where she counts as behind him (no cue); slew deg/s; wIn / wOut /s (critically
+//   damped: in ~95% by ~1.8 s, out ~94% by ~0.7 s)
+const RISECAM = { on: 1, until: 5.3, out: 0.45, up: 0.12, maxYaw: 75, maxPitch: 25, behind: 30, helmNdc: 0.82, slew: 45, wIn: 2.6, wOut: 6,
+  lookNet: 5, lookPath: 15, lookTau: 0.3 };
+let rcK = 0, rcKV = 0, rcOff = false, rcOpen = false, rcY0 = 0, rcP0 = 0, rcPath = 0, rcRecent = 0, rcYawWas = 0, rcPitchWas = 0, rcWhy = '', rcTgt = 0;
+let rcYaw = 0, rcPitch = 0, rcAmt = 0, rcDy = 0, rcDp = 0, rcG = 0, rcCy = 0, rcCp = 0, rcHOk = false, rcN = 0;
+const _rcQ = new THREE.Quaternion(), _rcSvQ = new THREE.Quaternion(), _rcHO = V3(), _rcSvHO = V3(), _rcA = V3();
+// this frame's candidate full turn (rcCy, rcCp) toward her rising shell: false when she is behind the lens. ptLims() first (under the swap)
+function rcCand(L) {
+  const C = RISECAM, d2r = Math.PI / 180, R = L.R || 10, bx = L.body.position.x, bz = L.body.position.z;
+  let ux = camera.position.x - bx, uz = camera.position.z - bz; const ul = Math.hypot(ux, uz) || 1; ux /= ul; uz /= ul;
+  _rcA.set(bx + ux * R * C.out, (L.bodyY != null ? L.bodyY : L.body.position.y) + R * C.up, bz + uz * R * C.out);
+  ptAimAt(_rcA);
+  if (Math.abs(ptAy) > (C.maxYaw + C.behind) * d2r) return false;
+  rcCy = clamp(ptAy, -C.maxYaw * d2r, C.maxYaw * d2r); rcCp = clamp(ptAp, -C.maxPitch * d2r, C.maxPitch * d2r);
+  return true;
+}
+function riseFrame(dt) {
+  const L = lev, C = RISECAM, d2r = Math.PI / 180;
+  _rcQ.copy(camera.quaternion);                                   // the lens without the cue: the on:0 lens
+  const dl = Math.abs(player.yaw - rcYawWas) + Math.abs(player.pitch - rcPitchWas);
+  rcYawWas = player.yaw; rcPitchWas = player.pitch;
+  rcRecent = rcRecent * Math.exp(-Math.min(dt, 0.1) / C.lookTau) + dl;
+  const her = !!(L && L.kind === 'brooder' && L.buried && L.body);
+  const win = her && !L.dormant && !L.calmed && !!L.cracked && !L.hasStood && (L.shedT || 0) < C.until;
+  if (!her || L.dormant || !L.cracked) { rcOff = false; rcOpen = false; rcHOk = false; }   // the guard: the next rise is a new one
+  if (win) {
+    if (!rcOpen) { rcOpen = true; rcY0 = player.yaw; rcP0 = player.pitch; rcPath = 0; if (rcRecent > C.lookNet * d2r) rcOff = true; }
+    else rcPath += dl;
+    if (Math.abs(player.yaw - rcY0) + Math.abs(player.pitch - rcP0) > C.lookNet * d2r || rcPath > C.lookPath * d2r) { rcOff = true; rcK = 0; rcKV = 0; }
+    if (paused) rcOff = true;
+  }
+  if (!C.on || (!win && !(rcK > 0) && rcKV === 0)) {                // (the common frame: nothing to do, the lens untouched)
+    rcWhy = !C.on ? 'off' : her && L.cracked && !L.hasStood ? 'until' : 'none'; rcTgt = 0;
+    if (!her) { rcK = 0; rcKV = 0; }
+    rcYaw = 0; rcPitch = 0; rcAmt = 0; return;
+  }
+  // POINTCAM's helpers on this cue's pre-cue lens and bonnet offset (put back below)
+  _rcSvQ.copy(_ptQ); _rcSvHO.copy(_ptHO); _ptQ.copy(_rcQ); _ptHO.copy(_rcHO);
+  if (win && !rcHOk) { ptHelmOff(); _rcHO.copy(_ptHO); rcHOk = true; }
+  const lims = her && (win || rcK > 0) && ptLims();
+  const cand = lims && win && rcCand(L);
+  let tgt = 0, why = '';
+  if (!win) why = 'until'; else if (rcOff) why = 'mouse';
+  else if (paused || deckK > 0 || throatOn) why = 'place';
+  else if (!cand) why = 'behind';
+  else { tgt = 1 - ccStep(0.1, 0.5, creUnder); why = tgt > 0 ? 'on' : 'under'; }
+  const w = tgt > rcK ? C.wIn : C.wOut, h = Math.min(dt, 0.05);
+  if (h > 0 && (tgt > 0 || rcK > 0 || rcKV !== 0)) { const ex = Math.exp(-w * h), e0 = rcK - tgt, k = rcKV + w * e0; rcK = tgt + (e0 + k * h) * ex; rcKV = (rcKV - w * k * h) * ex; }
+  if (rcK < 0) { rcK = 0; if (rcKV < 0) rcKV = 0; }
+  if (tgt === 0 && rcK < 1e-4 && Math.abs(rcKV) < 1e-3) { rcK = 0; rcKV = 0; }
+  if (!her) { rcK = 0; rcKV = 0; }
+  rcWhy = why; rcTgt = tgt;
+  if (!(rcK > 0)) { rcYaw = 0; rcPitch = 0; rcAmt = 0; }
+  else {
+    // the full turn: as it is when the cue starts, then slewed; no candidate this frame: the last one held
+    if (rcAmt === 0) { if (cand) { rcDy = rcCy; rcDp = rcCp; } }
+    else if (cand) { const s = C.slew * d2r * h; rcDy += clamp(rcCy - rcDy, -s, s); rcDp += clamp(rcCp - rcDp, -s, s); }
+    if (rcAmt === 0 && !cand) { rcYaw = 0; rcPitch = 0; }
+    else {
+      ptLimX = Math.max(C.helmNdc, ptLimX); ptLimY = Math.max(C.helmNdc, ptLimY);   // (ptLims bounds at POINTCAM's; this cue's own, if wider)
+      rcG = lims ? ptGuard(rcDy, rcDp) : 0;
+      const up = C.wIn / Math.E * h, down = C.wOut / Math.E * h;
+      rcAmt = clamp(Math.min(rcK, rcG), rcAmt - down, rcAmt + up);
+      rcYaw = rcDy * rcAmt; rcPitch = rcDp * rcAmt;
+      if (rcAmt > 0 && lims) { ptKeep(rcYaw, rcPitch); rcYaw = ptFy; rcPitch = ptFp; }
+      if (rcAmt > 0) { camera.rotateOnWorldAxis(camUpAxis, rcYaw); camera.rotateX(rcPitch); rcN++; }
+    }
+  }
+  _ptQ.copy(_rcSvQ); _ptHO.copy(_rcSvHO);
+}
+window.__risecam = { knobs: RISECAM, state: () => ({ k: +rcK.toFixed(4), amt: +rcAmt.toFixed(4), guard: +rcG.toFixed(4), tgt: rcTgt, why: rcWhy, off: rcOff, n: rcN,
+  yawDeg: +(rcYaw * 57.29578).toFixed(2), pitchDeg: +(rcPitch * 57.29578).toFixed(2), aimYawDeg: +(rcDy * 57.29578).toFixed(3), aimPitchDeg: +(rcDp * 57.29578).toFixed(3), qPre: _rcQ.clone(),
+  aim: _rcA.toArray(), lookNetDeg: rcOpen ? +((Math.abs(player.yaw - rcY0) + Math.abs(player.pitch - rcP0)) * 57.29578).toFixed(2) : 0, lookPathDeg: +(rcPath * 57.29578).toFixed(2), recentDeg: +(rcRecent * 57.29578).toFixed(2) }) };
 window.__crecam = { knobs: CRECAM, dbg: CREDBG, state: () => ({ k: +creK.toFixed(3), lift: +creLift.toFixed(3), liftT: creLiftT, hold: +creHold.toFixed(2), under: +creUnder.toFixed(2), camDist: +camDist.toFixed(2), stops: creStops, eggs: creEggs, eggFail: creEggFail, salCapPush, body: Object.assign({}, BODY),
   drop: +creDrop.toFixed(3), dropT: creDropT, eng: creEng, dropN: creDropN, dropMiss: creDropMiss, punchN: crePunchN, guardN: creGuardN, guardArc: creGuardArc, guardOff: creGuardOff, guardTgt: creGuardTgt, guardMain: creGuardMain, keepN: creKeepN, keepArc: creKeepArc, keepSph: creKeepSph, keepMax: +creKeepMax.toFixed(4), keepFail: creKeepFail, nearN: creNearN, nearMin: +creNearMin.toFixed(4) }) };
 function deckTarget() {
@@ -2770,6 +2859,8 @@ function updateCamera(dt, t, fwd) {
   clawFrame(dt);
   // (velkath-buried-rock Task 11) THE POINT IN THE LENS: round to the opening crack while she points (POINTCAM), the very last rotation
   pointFrame(dt);
+  // (sandrise) THE RISE IN THE LENS: toward her rising shell while the sand pours off it (RISECAM), the very last rotation
+  riseFrame(dt);
   // DEV (look-dev stills): window.__camPin = { p: [x,y,z], t: [x,y,z] } pins the lens; nothing sets it in play
   const pin = window.__camPin;
   if (pin) { camera.position.fromArray(pin.p); camera.lookAt(pin.t[0], pin.t[1], pin.t[2]); }
