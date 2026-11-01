@@ -1692,8 +1692,8 @@ window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), amt: 
 // THE HAND-BACK (the window closes, or she is gone) eases k out on the LAST aim, held (no candidate is computed outside the window).
 //   until s from the crack (the shed's T 3.8 + 1.5: the last of the pour and the cloud rolling off her); out / up x R, the aim on her
 //   maxYaw / maxPitch deg caps; behind deg past the yaw cap where she counts as behind him (no cue); slew deg/s; wIn / wOut /s (critically
-//   damped: in ~95% by ~1.8 s, out ~94% by ~0.7 s)
-const RISECAM = { on: 1, until: 5.3, out: 0.45, up: 0.12, maxYaw: 75, maxPitch: 25, behind: 30, helmNdc: 0.82, slew: 45, wIn: 2.6, wOut: 6,
+//   damped: in ~95% by ~1.8 s; out ~1.3 s, wOut 3: at 6 a ~79 deg turn stepped 2.6 deg a frame handing back, risecam-probe handback)
+const RISECAM = { on: 1, until: 5.3, out: 0.45, up: 0.12, maxYaw: 75, maxPitch: 25, behind: 30, helmNdc: 0.82, slew: 45, wIn: 2.6, wOut: 3,
   lookNet: 5, lookPath: 15, lookTau: 0.3 };
 let rcK = 0, rcKV = 0, rcOff = false, rcOpen = false, rcY0 = 0, rcP0 = 0, rcPath = 0, rcRecent = 0, rcYawWas = 0, rcPitchWas = 0, rcWhy = '', rcTgt = 0;
 let rcYaw = 0, rcPitch = 0, rcAmt = 0, rcDy = 0, rcDp = 0, rcG = 0, rcCy = 0, rcCp = 0, rcHOk = false, rcN = 0;

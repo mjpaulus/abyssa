@@ -273,7 +273,11 @@ export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
   // (Task 8) the footfalls' ring is its shipped 8 (records 4..11), written out: as PL - 4 it would run on into the rise's records, and her
   // legs step during the rise (standE > 0.35: brooder.js's 'small' plume on a heavy footfall), inside her blind window
   else { o = (4 + recHeadS) * 8; recHeadS = (recHeadS + 1) % 8; }
-  rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = clock; rec[o + 4] = lifeMax; rec[o + 5] = ki; rec[o + 6] = k; rec[o + 7] = 1;
+  // (sandrise) the density record's life is the shipped kind's own (the longest of its n particles' lives, drawn from K.life), never the
+  // drawn cloud's: the drawn rise lives longer (rlife), and a record living as long held her blind ~2 s past the shipped find (rise anchor 6.0 s)
+  let recLife = lifeMax;
+  if (R) { recLife = 0; const nd = Math.max(1, Math.round(K.n * (0.6 + 0.4 * k))); for (let i = 0; i < nd; i++) { const l = rr(K.life); if (l > recLife) recLife = l; } }
+  rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = clock; rec[o + 4] = recLife; rec[o + 5] = ki; rec[o + 6] = k; rec[o + 7] = 1;
   alive = Math.max(alive, clock + lifeMax + 0.2);
   mesh.visible = true;
 }
