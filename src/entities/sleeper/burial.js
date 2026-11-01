@@ -1439,10 +1439,13 @@ function ironTest(L) {
 // its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
 // (Task 12) coverU: the bury over which the dig-in covers it (growCover): from 0.1 (the dune's first tenth up) to 0.7, before her flanks are
 // under it (the dune's rings draw at bury x their fitted height)
-export const GROW = { weed: 150, tufts: 15, colonies: 17, fan: 12, crust: 28, coralline: 44, lump: 52, tube: 16, sprinkle: 44, ex: 4.0, scour: 1.6, space: 0.11,
+export const GROW = { weed: 150, tufts: 15, colonies: 28, fan: 14, crust: 40, coralline: 80, lump: 70, tube: 22, sprinkle: 100, ex: 4.0, scour: 1.6, space: 0.10,
   clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 const cl01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+// a colony's hue (brooderGeo RG_HUE): the greyed bone, olive, rose-grey and umber most, the ochre, rust and fan rose less (lantern-lit
+// at a few u the rust mats read as salmon cloth: after1-d8)
+const COL_HUE = [3, 3, 1, 1, 5, 5, 4, 0, 2, 6];
 export function growRock(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
   L.growN = { weed: 0, tufts: 0, colonies: 0, fan: 0, crust: 0, coralline: 0, lump: 0, tube: 0 };
@@ -1522,33 +1525,45 @@ export function growRock(L, MD) {
   // THE CORAL: colonies by exposure, then the sprinkle; every part kept only if all of it lies on the strip and off the iron
   const spots = [], cap = { fan: GROW.fan, crust: GROW.crust, coralline: GROW.coralline, lump: GROW.lump, tube: GROW.tube }, got = { fan: 0, crust: 0, coralline: 0, lump: 0, tube: 0 };
   const add = (kind, c, size, hue, yaw) => { if (!c || got[kind] >= cap[kind]) return; got[kind]++; spots.push([kind, c.x, c.z, size, hue, yaw]); };
+  // a mat lies only where her top under it is near its own plane (crust() moulds a heightfield to topH: across a lip of her rock it hung
+  // down the face as a crumpled sheet, stills after1-d8 / -crest): her top at 0.55 and 1.1 of its radius, 8 bearings, off the plane of
+  // the centre's slope by under 0.45 of the radius
+  const lies = (q, r) => { for (let a = 0; a < 8; a++) { const ca = Math.cos(a * 0.7854), sa = Math.sin(a * 0.7854);
+    for (const f of [0.55, 1.1]) { const dx = ca * r * f, dz = sa * r * f, h = top(q.x + dx, q.z + dz); if (h == null || Math.abs(h - (q.h - q.nx * dx - q.nz * dz)) > 0.45 * r) return false; } } return true; };
   const fanYaw = () => Math.atan2(ux, uz) + (rnd() - 0.5) * 0.5;   // its face to the current, give or take 15 deg
   const cols = [];
   for (let t = 0; t < GROW.colonies; t++) {
     const c = draw(C, q => Math.exp(GROW.ex * q.ex), cols, GROW.space); if (!c) continue;
     cols.push(c);
-    const rc = 0.045 + 0.045 * rnd(), hue = Math.floor(rnd() * 7), rich = cl01(0.5 + c.ex);
+    const rc = 0.045 + 0.045 * rnd(), hue = COL_HUE[Math.floor(rnd() * COL_HUE.length)], rich = cl01(0.5 + c.ex);
     const near = C.filter(q => (q.x - c.x) ** 2 + (q.z - c.z) ** 2 < rc * rc);
     // the middle of the colony first: a pick from the nearer of two
     const pick = f => { const s = near.filter(f); if (!s.length) return null; const p = s[Math.floor(rnd() * s.length)], q = s[Math.floor(rnd() * s.length)];
       return (p.x - c.x) ** 2 + (p.z - c.z) ** 2 < (q.x - c.x) ** 2 + (q.z - c.z) ** 2 ? p : q; };
     const hueOf = () => rnd() < 0.7 ? hue : (hue + 1 + Math.floor(rnd() * 2)) % 7;
     const nMat = 1 + (rnd() < rich ? 1 : 0) + (rnd() < 0.35 ? 1 : 0);
-    for (let k = 0; k < nMat; k++) add('crust', pick(q => q.slope < 0.9 && q.scour < 0.5), 0.035 + 0.04 * rnd(), hueOf());
-    for (let k = 0, m = 2 + Math.floor(rnd() * 2); k < m; k++) add('coralline', pick(q => q.slope < 1.4), 0.022 + 0.026 * rnd(), Math.floor(rnd() * 4));
+    // (a mat that finds no spot it lies on tries once more at 0.65 of the size)
+    const mat = (kind, r, f, hu) => { for (const k of [1, 0.65]) { const q = pick(p => f(p) && lies(p, r * k)); if (q) return add(kind, q, r * k, hu); } };
+    for (let k = 0; k < nMat; k++) mat('crust', 0.035 + 0.04 * rnd(), q => q.slope < 0.9 && q.scour < 0.5, hueOf());
+    for (let k = 0, m = 2 + Math.floor(rnd() * 2); k < m; k++) mat('coralline', 0.022 + 0.026 * rnd(), q => q.slope < 1.4, Math.floor(rnd() * 4));
     for (let k = 0, m = 2 + Math.floor(rnd() * 3 * (0.5 + rich)); k < m; k++) add('lump', pick(() => true), 0.014 + 0.018 * rnd(), hueOf());
-    if (c.up > GROW.scour) for (let k = 0, m = (rnd() < 0.6 ? 1 : 0) + (rnd() < 0.3 * rich ? 1 : 0); k < m; k++) add('tube', pick(q => q.up > GROW.scour), 0.011 + 0.009 * rnd(), hueOf());
+    // (the tube clumps on her high ridges the larger: they break her skyline from the sand)
+    if (c.up > GROW.scour) for (let k = 0, m = (rnd() < 0.6 ? 1 : 0) + (rnd() < 0.3 * rich ? 1 : 0); k < m; k++) { const q = pick(q => q.up > GROW.scour); if (q) add('tube', q, (0.011 + 0.009 * rnd()) * (1 + 0.35 * cl01((q.up - 3.5) / 2.5)), hueOf()); }
     // the fan on the colony's ridge, where it is exposed: its highest convex spot
     if (rnd() < 0.3 + 0.5 * Math.max(0, c.face) + (c.cv > 0.08 ? 0.3 : 0) && c.up > 2.5) {
       let b = null; for (const q of near) if (q.up > 2.5 && (!b || q.cv + 0.15 * q.up > b.cv + 0.15 * b.up)) b = q;
-      add('fan', b, 0.09 + 0.08 * rnd(), Math.floor(rnd() * 3), fanYaw());
+      add('fan', b, 0.10 + 0.09 * rnd(), Math.floor(rnd() * 3), fanYaw());
     }
   }
   L.growN.colonies = cols.length;
+  // the ridge fans: her highest exposed ridges that no colony took, a fan apiece, across the current (they stand on her skyline)
+  const ridge = C.filter(q => q.up > 3.5 && q.cv > 0.05 && q.face > -0.2), fans = cols.slice();
+  for (let t = 0; t < GROW.fan && got.fan < cap.fan; t++) { const c = draw(ridge, q => Math.exp(3 * (q.cv / 0.3 + q.face)), fans, GROW.space * 1.2); if (!c) continue; fans.push(c); add('fan', c, 0.10 + 0.09 * rnd(), Math.floor(rnd() * 3), fanYaw()); }
   // the sprinkle: the rest of the rock, coralline flecks and small lumps (in the scour band coralline only)
   for (let t = 0; t < GROW.sprinkle; t++) {
     const c = draw(C, q => Math.exp(1.6 * q.ex)); if (!c) break;
-    if (c.scour > 0.5 || rnd() < 0.6) add('coralline', c, 0.016 + 0.022 * rnd(), Math.floor(rnd() * 4));
+    const r = 0.016 + 0.022 * rnd();
+    if (c.scour > 0.5 || rnd() < 0.6) { if (lies(c, r)) add('coralline', c, r, Math.floor(rnd() * 4)); }
     else add('lump', c, 0.010 + 0.012 * rnd(), Math.floor(rnd() * 7));
   }
   G.setShellHeight(top);
