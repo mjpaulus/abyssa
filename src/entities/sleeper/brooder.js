@@ -717,9 +717,11 @@ export function makeBrooder(idx, cfg) {
   } else {
     // (velkath-buried-rock) buried: her bed in the burial's order (bedDown), no silt drift (the mound covers her: Task 3a). The sink
     // is read off the drawn shell, so the sculpt's landing beds her down again on the baked one
+    // (reefback) the sculpt cached (noHarpoon): the second bedDown is this frame's and lays the growth on the drawn rock, so the first lays none
+    // (it was grown on the procedural shell and thrown away at once: 53 + 41 ms headless); not cached, the procedural build shows until it lands
     bedDown(L, !!SC);
-    if (SC) { installSculpt(L, SC); if (L.dormant) bedDown(L); }
-    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L); else { poseAll(L, 0, null); L.keepIdx = keepOutline(L); } } });
+    if (SC) { installSculpt(L, SC); if (L.dormant) bedDown(L, false, true); }
+    else SCULPT.then(a => { if (a && !L.gone) { installSculpt(L, a); if (L.dormant) bedDown(L, false, true); else { poseAll(L, 0, null); L.keepIdx = keepOutline(L); } } });
   }
   const pd = L.onDispose;
   // (pd holds makeMound's link when she is buried: the mound's mesh lifted out of L.grp, its geometry disposed, before disposeSleeper
@@ -739,7 +741,8 @@ function seatRite(L, noHarpoon = false) {
 // tongue of eggs lies on the sand exactly as shipped, and buried it is under the floor with her); then the sink, then (Task 3a) the
 // mound over the sunk pose and the growth on her back buried under it, then (Task 4) the harpoon on the crest. Called only when
 // L.buried: the shipped paths keep their own lines.
-function bedDown(L, noHarpoon = false) {
+// again: the second bed of one build (the sculpt's landing): L.growMs adds its growth to the first's instead of replacing it
+function bedDown(L, noHarpoon = false, again = false) {
   // (Task 7a) the rise's state, defined before use and reset at every bed (bedDown runs only while she is dormant): the dune drawn whole
   // (moundK 1), no crack, not stood
   L.moundK = 1; L.cracked = false; L.crackT = 0; L.crackK = 0; L.hasStood = false; L.risenUp = false; L.shoveN = 0; L.riseSheetN = 0;   // (Task 8: the plume's sheets spawned)
@@ -765,7 +768,7 @@ function bedDown(L, noHarpoon = false) {
   if (L.harpoon && !noHarpoon) { L.harpoon.keep(); L.harpoon.seat(); }
   // (Task 5b) the weed and coral on the exposed rock (burial.js growRock: after the seat, so they keep clear of the iron), then the growth
   // outside the strip buried with her (prepGrowth)
-  if (L.mound) { growRock(L, L.mound); prepGrowth(L, L.mound); }
+  if (L.mound) { if (!(noHarpoon && L.dormant)) growRock(L, L.mound, again); prepGrowth(L, L.mound); }
 }
 
 // (velkath-buried-rock Task 12) a live L reused at a new bed (bedDown, the lab's place): no point under way, no calm verb pending (Task 10 review,

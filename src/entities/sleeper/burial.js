@@ -1414,7 +1414,7 @@ function ironTest(L) {
 // THE GROWTH ON THE EXPOSED ROCK (Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and coral"; reefback
 // 2026-10-31, asked whether it was right: "better but can be pushed more", then "grow more coral"). Laid at the bed (bedDown: after the fit
 // and the harpoon's seat, before prepGrowth), home only (only a buried build beds down). No new program: the weed's own InstancedMesh (the
-// same mesh, the same material; its instance buffer grown here to hold GROW.weed fronds past the sculpt's 60, the old buffer released
+// same mesh, the same material; its instance buffer grown here to hold GROW.weed fronds past weedBase (the sculpt's 60: 210; the procedural build's 150: 300), the old buffer released
 // through the mesh's dispose event first) and ONE mesh of her own reef's parts (brooderGeo.js rockGrowthParts: fans, sponge mats,
 // coralline skins, lumps, tube clumps) drawn in the reef's own material object (the same program; the parts carry its uv). Every vertex of
 // every frond and part on the strip (inStrip, as prepGrowth keeps the reef's triangles), so nothing of it stands out of the dune; a part
@@ -1451,9 +1451,11 @@ const OC8 = Float64Array.from({ length: 8 }, (_, b) => Math.cos(b * Math.PI / 4)
 // a colony's hue (brooderGeo RG_HUE): the greyed bone, olive, rose-grey and umber most, the ochre, rust and fan rose less (lantern-lit
 // at a few u the rust mats read as salmon cloth: after1-d8)
 const COL_HUE = [3, 3, 1, 1, 5, 5, 4, 0, 2, 6];
-export function growRock(L, MD) {
+// L.growMs: the ms this build's growth took, headless wall time (never a __gpu number); `add` books it onto the first pass's (a build whose
+// sculpt lands later grows twice), else it replaces it
+export function growRock(L, MD, add = false) {
   const t0 = performance.now();
-  try { growRockAt(L, MD); } finally { L.growMs = performance.now() - t0; }
+  try { growRockAt(L, MD); } finally { L.growMs = (add && L.growMs || 0) + performance.now() - t0; }
 }
 function growRockAt(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
@@ -1568,12 +1570,13 @@ function growRockAt(L, MD) {
   // the ridge fans: her highest exposed ridges that no colony took, a fan apiece, across the current (they stand on her skyline)
   const ridge = C.filter(q => q.up > 3.5 && q.cv > 0.05 && q.face > -0.2), fans = cols.slice();
   for (let t = 0; t < GROW.fan && got.fan < cap.fan; t++) { const c = draw(ridge, q => Math.exp(3 * (q.cv / 0.3 + q.face)), fans, GROW.space * 1.2); if (!c) continue; fans.push(c); add('fan', c, 0.10 + 0.09 * rnd(), Math.floor(rnd() * 3), fanYaw()); }
-  // the sprinkle: the rest of the rock, coralline flecks and small lumps (in the scour band coralline only)
+  // the sprinkle: the rest of the rock, coralline flecks and small lumps (in the scour band coralline only; a lump under 0.014 stood wholly
+  // under the shell, brooderGeo RG_SEAT)
   for (let t = 0; t < GROW.sprinkle; t++) {
     const c = draw(C, q => Math.exp(1.6 * q.ex)); if (!c) break;
     const r = 0.016 + 0.022 * rnd();
     if (c.scour > 0.5 || rnd() < 0.6) { if (lies(c, r)) add('coralline', c, r, Math.floor(rnd() * 4)); }
-    else add('lump', c, 0.010 + 0.012 * rnd(), Math.floor(rnd() * 7));
+    else add('lump', c, 0.014 + 0.010 * rnd(), Math.floor(rnd() * 7));
   }
   G.setShellHeight(top);
   let parts;
