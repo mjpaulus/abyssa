@@ -1063,7 +1063,7 @@ export function setSlabDust(f) { emitSlabDust = f; }
 export const CRUST_LOOKS = { shell: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0, drift: 0, dust: 0, flat: 0 }, light: { alb: 0.45, nrm: 0.35, rough: 0.5, sand: 0.45, cover: 0, drift: 0, dust: 0, flat: 0 },
   stone: { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7, cover: 0, drift: 0, dust: 0, flat: 0 },
   sand: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0.3, drift: 1.0, dust: 0.1, flat: 0.3 } };
-export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x3f4744 };
+export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x3f4744, driftWorld: 1 };
 const CRUST_HEAD = `
 varying vec3 vCrW, vCrO;
 uniform float uBury, uCrack;
@@ -1076,6 +1076,10 @@ uniform float uCrustRough;
 uniform vec4 uWound;
 uniform vec3 uWoundN, uWoundD;
 uniform float uWoundS;
+uniform vec4 uShed;
+uniform vec3 uDownO;
+uniform float uDriftS;
+float crPaint = 0.0;
 vec4 crTri(sampler2D t, vec3 p, vec3 bw, float f) { return texture2D(t, p.zy * f) * bw.x + texture2D(t, p.xz * f) * bw.y + texture2D(t, p.xy * f) * bw.z; }
 vec3 crNrm(vec3 p, vec3 n, vec3 bw, float f, float str) {
   vec3 tx = texture2D(uCrustNrm, p.zy * f).xyz * 2.0 - 1.0, ty = texture2D(uCrustNrm, p.xz * f).xyz * 2.0 - 1.0, tz = texture2D(uCrustNrm, p.xy * f).xyz * 2.0 - 1.0;
@@ -1089,7 +1093,7 @@ float crVN(vec3 x) {
     mix(mix(crH(i + vec3(0.0, 0.0, 1.0)), crH(i + vec3(1.0, 0.0, 1.0)), f.x), mix(crH(i + vec3(0.0, 1.0, 1.0)), crH(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
 }`;
 const CRUST_APPLY = `
-if (uBury > 0.001) {
+if (uBury > 0.001 || uShed.x > 0.001) {
   vec3 crWN = normalize(inverseTransformDirection(normal, viewMatrix));
   vec3 crBW = pow(abs(crWN), vec3(4.0)); crBW /= (crBW.x + crBW.y + crBW.z);
   vec4 crPd = crTri(uCrustPack, vCrW, crBW, 0.32), crPc = crTri(uCrustPack, vCrW + vec3(7.3, 2.9, 5.1), crBW, 0.073);
@@ -1112,10 +1116,32 @@ if (uBury > 0.001) {
     float crCv = (dot(dFdx(crGN), crDx) + dot(dFdy(crGN), crDy)) / max(dot(crDx, crDx) + dot(crDy, crDy), 1e-6);
     float crUp = smoothstep(0.3, 0.85, crGN.y) * smoothstep(0.15, 0.6, crWN.y) * (1.0 - smoothstep(0.8, 2.5, crCv));
     float crPool = max(1.0 - smoothstep(0.35, 0.85, crAO), smoothstep(0.3, 1.5, -crCv)) * smoothstep(0.0, 0.3, crGN.y);
-    float crN0 = crVN(vCrO * vec3(0.4, 0.55, 0.4)), crN1 = crVN(vCrO * 1.4 + 17.0);
+    // (sandrise) THE SHED: the sand on her (uShed.x, crSB) has its own clock from the crack (uShed.y, crP: 0 asleep and digging in at
+    // bury 1, 1 once it has run): at crP 0 every line here is the shipped cover, read off uBury's value. Shedding, the field is read
+    // UPSLOPE of where it lies by how far the sand has run (uShed.z, object units, steep faces run, flats hold), drawn out along the
+    // fall line into streams, and each spot lets go when the shed passes its own time (crLeave: steep faces first, then the flats, the
+    // hollows never): the threshold climbs THERE, so a drift shrinks from its thin edges to its core and runs, it does not fade
+    float crSB = uShed.x, crP = uShed.y, crSteep = 1.0 - crGN.y;
+    vec3 crQ = vCrO * uDriftS;
+    float crStr = 0.0;
+    if (crP > 0.0) {
+      float crSl = smoothstep(0.12, 0.55, crSteep);
+      crQ -= uDownO * (uShed.z * crSl);
+      crStr = crSl * min(1.0, crP * 3.0);
+      crQ -= uDownO * (dot(crQ, uDownO) * 0.7 * crStr);
+    }
+    float crN0 = crVN(crQ * vec3(0.4, 0.55, 0.4)), crN1 = crVN(crQ * 1.4 + 17.0);
     float crS = crUp * 0.6 + crPool * 0.4 + (crN0 * 0.65 + crN1 * 0.35 - 0.5) * 1.5 * uSandK.y;
-    float crT = 1.0 - uBury * uSandK.x;
-    float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, uBury * 4.0) + uBury * uSandK.z * crUp;
+    float crT = 1.0 - crSB * uSandK.x;
+    float crVeil = crSB * uSandK.z * crUp;
+    if (crP > 0.0) {
+      float crN2 = crVN(crQ * 0.8 + 5.0);
+      crS += (crN2 - 0.5) * 0.7 * crStr;
+      float crLeave = 0.22 + 0.7 * crGN.y * crGN.y + 0.9 * crPool + 0.4 * (crN1 - 0.5);
+      crT += 1.3 * smoothstep(crLeave - 0.3, crLeave, crP);
+      crVeil *= 1.0 - smoothstep(0.0, 0.45, crP);
+    }
+    float crCov = smoothstep(crT - 0.1, crT + 0.1, crS) * 0.9 * min(1.0, crSB * 4.0) + crVeil;
     crSand = max(crSand, min(crCov, 0.92));
     // (Task 7b) THE CRUST CRACKS: the sand on her breaks into plates along the rock map's crevice channel (crPk.b, the shipped fissure
     // network, sampled triplanar in her OWN frame: vCrO, it rides her as she rises), the lines widening with uCrack; in a line the sand is gone and the gap is dark
@@ -1151,6 +1177,7 @@ if (uBury > 0.001) {
       crWv = wz2;
       crSand *= 1.0 - max(crWb, crWr);
     }
+    crPaint = crSand;
     roughnessFactor = mix(roughnessFactor, 0.95, crSand);
     normal = normalize(mix(normal, nonPerturbedNormal, crSand * uSandK.w));
     diffuseColor.rgb = mix(diffuseColor.rgb, uSand * (0.85 + 0.3 * crN1), crSand);
@@ -1177,12 +1204,18 @@ if (uBury > 0.001) {
     }
   }
 }`;
+// (sandrise) the probe's PAINT (uShed.w 1, sandpix-probe only; the game never writes it): every fragment of her body's material drawn in
+// one of three pure hues after the material's own light and fog: RED where the sand cover is over the threshold (uShed.w - 1; paint(on, thr), default 0.3) on a face that looks up, BLUE a bare
+// face that looks up, GREEN any other face of hers. Read through the whole post chain by the dominant channel (the post bypass's frozen
+// capture is black on the plugged clock: burial-probe's wound header), so a capture reads the cover as drawn, through the depth test
+const CRUST_PAINT = 'if (uShed.w > 0.5) { float crPU = inverseTransformDirection(nonPerturbedNormal, viewMatrix).y; gl_FragColor = crPU > 0.5 ? (crPaint > uShed.w - 1.0 ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 0.0, 1.0, 1.0)) : vec4(0.0, 1.0, 0.0, 1.0); }';
 export function crustTerm(L, m, rockSet, rockC, sandC) {
   const u = { uBury: { value: 0 }, uCrack: { value: 0 }, uCrackO: { value: V3() }, uCrackS: { value: 0.32 * L.R }, uCrustPack: { value: rockSet.pack }, uCrustNrm: { value: rockSet.nrm },
     uRockC: { value: new THREE.Color(rockC) }, uSand: { value: new THREE.Color(sandC) },
     uCrustK: { value: new THREE.Vector4(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack) }, uCrustRough: { value: CRUST.rough },
     uSandK: { value: new THREE.Vector4(CRUST.cover, CRUST.drift, CRUST.dust, CRUST.flat) },
-    uWound: { value: new THREE.Vector4(0, 0, 0, 0) }, uWoundN: { value: V3(0, 0, 1) }, uWoundD: { value: V3(0, -1, 0) }, uWoundS: { value: 1 } };
+    uWound: { value: new THREE.Vector4(0, 0, 0, 0) }, uWoundN: { value: V3(0, 0, 1) }, uWoundD: { value: V3(0, -1, 0) }, uWoundS: { value: 1 },
+    uShed: { value: new THREE.Vector4(0, 0, 0, 0) }, uDownO: { value: V3(0, -1, 0) }, uDriftS: { value: 1 } };
   L.crustU = u; L.crustSilt = new THREE.Color(sandC);   // (the zone's silt: setCrust({ sandC: null }) goes back to it)
   const prev = m.onBeforeCompile, prevKey = m.customProgramCacheKey;
   m.onBeforeCompile = function (sh, r) {
@@ -1191,7 +1224,8 @@ export function crustTerm(L, m, rockSet, rockC, sandC) {
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCrW, vCrO;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvCrW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvCrO = transformed;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>' + CRUST_HEAD)
-      .replace('#include <lights_physical_fragment>', CRUST_APPLY + '\n#include <lights_physical_fragment>');
+      .replace('#include <lights_physical_fragment>', CRUST_APPLY + '\n#include <lights_physical_fragment>')
+      .replace('#include <dithering_fragment>', '#include <dithering_fragment>\n' + CRUST_PAINT);
   };
   m.customProgramCacheKey = () => (prevKey ? prevKey.call(m) : '') + '|crust';
   m.needsUpdate = true;
@@ -1226,12 +1260,59 @@ export function setCrustWoundRec(L, rec, on) {
   u.uWoundN.value.copy(rec.n); u.uWoundD.value.copy(rec.d); u.uWoundS.value = rec.s;
   return true;
 }
+// (sandrise, 2026-10-31; card roadmap/velkath-sand-rise.md; Michael: "we lost that she is partially covered in sand and when she rises the
+// sand rolls off in a slight dust cloud", approved "yes do all three for the sand") THE SHED: the sand on her shell no longer goes with
+// L.bury (which reaches 0 at ~3.7 s, riseU, so she stood clean); it has its own clock from the crack. Two values, written into the crust's
+// uShed by crustTick: L.sandS, the sand on her (the cover's own "bury": the threshold and the fades read it in place of uBury), and L.shedP,
+// the shed's progress (0 .. 1 over T s from the crack). Asleep and dug in, shedP 0 and sandS = L.bury: the shipped cover, value for value.
+// Shedding, each spot of her shell lets go at its own time (the shader's crLeave: steep faces first, then her flats, her hollows not at all),
+// the drifts run down the fall line `run` u (accelerating, run x shedP^2) drawn out into streams, and what lies in her hollows when it has run
+// STAYS (the residual) until she has stood `hold` s, then drifts off over `restT` s (sandS eased to 0: the cover's own fade, no pop). Digging
+// in, shedP eases back to 0 as bury rises and sandS = max(what was left, bury): the dig-in ends on the asleep cover exactly.
+// Reference (out/report.md): sand on a body lifting off the bed avalanches where the slope passes repose (~30-35 deg) and runs in sheets off
+// the high edges; the flats keep it longer and the hollows keep it.
+//   T s, the shed (from the crack; her rise's bury runs out at ~3.7 s); run u, how far a drift on a steep face has slid by the end; hold / restT s
+export const SHED = { on: 1, T: 3.8, pow: 1.4, run: 3.0, hold: 20, restT: 90 };
+const _shInv = new THREE.Matrix4();
+// the shed's progress from the crack: slow to start (the sand holds through the crack and her first heave), then it runs (pow)
+function shedCurve(t) { const x = Math.min(1, Math.max(0, t / SHED.T)); return Math.pow(x, SHED.pow); }
+export function shedTick(L, dt) {
+  if (!L.buried || !(SHED.on > 0)) { L.shedP = 0; L.sandS = L.bury; L.shedT = 0; L.shedDig = false; return; }
+  if (L.digging || (L.dugIn && !L.cracked)) {
+    if (!L.shedDig) { L.shedDig = true; L.shedP0 = L.shedP || 0; L.sandS0 = L.sandS ?? 0; }
+    L.shedP = L.shedP0 * (1 - L.bury); L.sandS = Math.max(L.sandS0, L.bury);
+    return;
+  }
+  L.shedDig = false;
+  if (L.dormant || !L.cracked) { L.shedT = 0; L.shedP = 0; L.sandS = L.bury; L.stoodT = 0; return; }
+  L.shedT = (L.shedT || 0) + dt;
+  if (!L.hasStood) { L.shedP = shedCurve(L.shedT); L.sandS = 1; L.stoodT = 0; return; }
+  // stood: the shed runs out (a lab calm mid-rise jumps her to stood: eased, never snapped), then the residual's slow drift off
+  L.shedP = Math.min(1, Math.max(shedCurve(L.shedT), (L.shedP || 0) + dt / 0.6));
+  L.stoodT = (L.stoodT || 0) + dt;
+  const r = Math.min(1, Math.max(0, (L.stoodT - SHED.hold) / SHED.restT));
+  L.sandS = Math.min(L.sandS ?? 1, 1 - r * r * (3 - 2 * r));
+}
 // the crust's uniforms each frame (brooder.js updateBrooder): uniform writes only, never a program change
 export function crustTick(L) {
   const u = L.crustU;
   // (M6) uCrack and uCrackO lag the body one frame: crustTick runs where updateBrooder calls it, before this frame's poseAll has moved her
   // body (L.crackK is last frame's too), so the network trails her by a frame's rise (<= 8 u/s x 1/60 = 0.13 u, bar (d)); cosmetic
   u.uBury.value = L.bury; u.uCrack.value = L.crackK || 0;
+  // (sandrise) the shed (shedTick): the sand on her, its progress and the run (object units); the crack drawn on the sand still on her,
+  // closing as the shed ends (L.crackK itself is unchanged: it falls with bury and is 0 at the stand)
+  const sp = L.shedP || 0, ss = L.buried ? (L.sandS ?? L.bury) : 0, sh = L.parts && L.parts.shell;
+  if (sp > 0 && sh) {
+    _shInv.copy(sh.matrixWorld).invert();
+    u.uDownO.value.set(0, -1, 0).transformDirection(_shInv);
+    u.uShed.value.set(ss, sp, SHED.run * sp * sp, u.uShed.value.w);
+    if (L.cracked) u.uCrack.value = Math.min(1, (L.crackT || 0) / BURY.crackT) * ss * (1 - smoothK(0.55, 1, sp));
+  } else u.uShed.value.set(ss, 0, 0, u.uShed.value.w);
+  // (sandrise) THE DRIFTS' SCALE: the cover's noise reads vCrO, her shell's OBJECT space, and the sculpted shell is drawn at x15.4 (L.R): at
+  // the shipped scale (driftWorld 0, uDriftS 1) its two octaves span her whole shell in under a cell, so the field is ~one value over her and
+  // the threshold left only the thin veil (sandpix-probe: asleep, the cover over 0.3 on 0 of ~26k up-facing pixels of her strip). driftWorld 1
+  // reads it at the world scale the look-dev comment describes (~2.5 u and ~0.7 u), so the drifts lie in patches with edges
+  u.uDriftS.value = CRUST.driftWorld > 0 && sh ? sh.matrixWorld.getMaxScaleOnAxis() : 1;
   // (Task 7b) the crack's network rides her: sampled where her body was at the crack (vCrW less how far she has risen since)
   if (L.crackK > 0 && L.crackO0) u.uCrackO.value.subVectors(L.body.position, L.crackO0); else u.uCrackO.value.set(0, 0, 0);
   u.uCrustK.value.set(CRUST.alb, CRUST.nrm, CRUST.sand, CRUST.crack); u.uCrustRough.value = CRUST.rough;
@@ -1241,6 +1322,7 @@ export function crustTick(L) {
 
 // ---- THE TELL ----
 const ease = x => x * x * (3 - 2 * x);
+function smoothK(a, b, x) { const t = Math.min(1, Math.max(0, (x - a) / (b - a))); return t * t * (3 - 2 * t); }
 const TRICKLE_J = [-2, 0, 2];                         // the trickle's three bearings round the nearest one (module scratch, not a literal per breath)
 // THE TELL (spec §1): every 8-10 s the sand over her lifts a few centimetres and settles; a thin trickle of silt slides off the
 // crest's edge with each breath. Only a careful eye catches it: the lift is drawn only with the lens within BURY.breath.draw u of the strip's edge (a
@@ -1527,6 +1609,10 @@ if (typeof window !== 'undefined') window.__burial = {
   inStrip: (x, z) => { const L = liveV(); return inStrip(L && L.mound, x, z); },
   // THE CRUST's knobs (Task 5): a patch, no rebuild (updateBrooder writes them into the uniforms every frame)
   crust: CRUST,
+  // (sandrise) THE SHED's knobs (SHED: on 0 = the shipped cover, the sand going with bury: sandpix-probe's RED fade) and its live values;
+  // paint(on): the crust's probe paint (uShed.w), sandpix-probe only
+  shed: SHED, shedState: () => { const L = liveV(); return L ? { shedP: L.shedP || 0, sandS: L.sandS ?? null, shedT: L.shedT || 0, stoodT: L.stoodT || 0 } : null; },
+  paint(on, thr = 0.3) { const L = liveV(); if (L && L.crustU) L.crustU.uShed.value.w = on ? 1 + thr : 0; return !!(L && L.crustU); },
   // { look: 'sand' (the shipped default) | 'shell' | 'light' | 'stone' } sets that look's values (alb, nrm, rough, sand, and the sand cover's cover / drift / dust / flat; the three non-sand looks zero the cover keys); any other key patches its own value
   setCrust(p) { if (p.look && !CRUST_LOOKS[p.look]) throw new Error('setCrust: look is ' + Object.keys(CRUST_LOOKS).join(' | ')); Object.assign(CRUST, p.look ? CRUST_LOOKS[p.look] : null, p); return Object.assign({}, CRUST); }
 };
