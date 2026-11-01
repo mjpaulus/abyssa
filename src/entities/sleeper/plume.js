@@ -38,9 +38,26 @@ export const PLUME = {
   // THE RISE (velkath-buried-rock §2): the sand pouring off her as she comes up out of it. A ring at the crack, more as the sheets
   // fall; it spreads to 15-20 u and climbs, and it is REAL to her (the density model): the SIGHT rule blinds her in it, no new rule.
   // Long-lived and slow (kd), so the line from her eyes stays thick past her first look (standE 0.5, ~3 s in).
+  // (sandrise, 2026-10-31; Michael: "when she rises the sand rolls off in a slight dust cloud", approved "yes do all three for the sand")
+  // THE DRAWN CLOUD IS LOW AND SANDY NOW; THE DENSITY MODEL IS UNCHANGED. The kind's two halves are independent: n .. kd and the
+  // tint / flat / lamp below are RENDER (the vertex shader); rh*, hv*, D are the DENSITY MODEL sight() reads, so the blind spell
+  // (lost ~3.2-4.0 s, found ~6.6-7.9 s), the footprint and the climb are the shipped ones by construction. What is drawn: a low ring
+  // at the crack (rn particles a record, not n) and the POUR (spawnPour, render only): sand falling off her rim to the bed and
+  // spreading along it, heavy (vy small, the floor reached as it travels), sprites flattened (flat), the zone's silt colour (tint x
+  // uAlb), the lantern's share cut (lamp: the pale puff round him was his lantern on the silt). Reference (out/report.md): sediment
+  // released at the bed runs as a low, laterally spreading turbid layer; only a few percent of it rises 2 m over the bed.
   rise: { n: 16, life: [5.5, 6.5], vr: [1.0, 3.5], vy: [2.0, 7.0], s0: [4.0, 6.0], s1: [8, 12], a: 0.62, kd: 0.55,
-    rh0: 2.0, rhA: 3.0, rhK: 0.45, hv0: 2.0, hvA: 12.0, hvK: 0.45, D: 4.2 }
+    rh0: 2.0, rhA: 3.0, rhK: 0.45, hv0: 2.0, hvA: 12.0, hvK: 0.45, D: 4.2,
+    rn: 8, rlife: [6.0, 8.5], rvr: [1.5, 4.5], rvy: [0.15, 0.6], rs0: [2.2, 3.4], rs1: [5.0, 8.0], ra: 0.5, rkd: 0.45 },
+  // the pour off her rim (spawnPour): a puff of n particles from a point of her shell's outline, outward along her rim's bearing (+- arc rad)
+  pour: { n: 5, life: [5.0, 8.0], vr: [0.8, 3.0], vy: [0.0, 0.35], s0: [1.2, 2.0], s1: [3.8, 6.5], a: 0.5, kd: 0.5, arc: 0.9 }
 };
+// (sandrise) the drawn sand's colour and weight: tint x uAlb (0.60, 0.55, 0.45): the shipped pale silt x the zone-0 seabed's own silt hue
+// relative to it; flat squashes the sprite's height (1 = round); lamp scales the lantern's light on it; veilMax caps the share of the lens's
+// veil the rise kind can bring (a camera inside the low cloud sees murk, never a whiteout); veilTint pulls the veil toward the tint
+// NOTE flat: the per-particle aE.w it writes is the lamp cut's switch too: the vertex shader takes vLampR = uLampR (lamp) only while aE.w < 0.999,
+// so flat 1 (round, the shipped sprite) also turns the lamp cut OFF (full lantern light on the cloud), whatever lamp says
+export const RISE_LOOK = { tint: [0.78, 0.88, 0.9], flat: 0.55, lamp: 0.25, veilMax: 0.35, on: 1 };
 // HER WAKE (brooder-clutch: "the chase must read"): a footfall at a run throws a low, slow
 // cloud that HANGS where she went, so in the zone-0 murk her path is a pale haze on the dark
 // ground. Render only: it is not in the density model (her sight never reads it, the plume
@@ -93,11 +110,13 @@ function build() {
   g.setIndex([0, 1, 2, 0, 2, 3]);
   const mk = () => { const a = new THREE.InstancedBufferAttribute(new Float32Array(N * 4), 4); a.setUsage(THREE.DynamicDrawUsage); return a; };
   g.setAttribute('aA', mk()); g.setAttribute('aB', mk()); g.setAttribute('aC', mk()); g.setAttribute('aD', mk());
+  // (sandrise) aE: the particle's tint (rgb, x uAlb) and its sprite's height share (w); (1, 1, 1, 1) the shipped silt
+  { const e = mk(), ea = e.array; for (let i = 0; i < ea.length; i++) ea[i] = 1; g.setAttribute('aE', e); }
   // dead until born: life 0
   g.instanceCount = N;
   uni = Object.assign(THREE.UniformsUtils.clone(THREE.UniformsLib.fog), {
     uTime: { value: 0 }, uTex: { value: puffTexture() }, uAlb: { value: new THREE.Color(0.60, 0.55, 0.45) },
-    uAmb: { value: new THREE.Vector3(0.05, 0.06, 0.06) }, uLampK: { value: 1 }, uSink: { value: PLUME_TUNE.sink }
+    uAmb: { value: new THREE.Vector3(0.05, 0.06, 0.06) }, uLampK: { value: 1 }, uSink: { value: PLUME_TUNE.sink }, uLampR: { value: 1 }
   });
   // THE WATER, PER VERTEX. The patched fog chunk (water.js: stratified Beer-Lambert, both
   // lamp in-scatter slots, the bolt) is the costliest thing a fragment of this cloud would
@@ -111,14 +130,14 @@ function build() {
   const mat = new THREE.ShaderMaterial({
     uniforms: uni, transparent: true, depthWrite: false, depthTest: true, fog: true,
     vertexShader: /* glsl */`
-      uniform float uTime, uSink;
-      attribute vec4 aA, aB, aC, aD;
-      varying vec2 vUv; varying float vA, vH, vCell; varying vec3 vW, vFogT, vFogS;
+      uniform float uTime, uSink, uLampR;
+      attribute vec4 aA, aB, aC, aD, aE;
+      varying vec2 vUv; varying float vA, vH, vCell, vLampR; varying vec3 vW, vFogT, vFogS, vTint;
       #define ABYSSA_LIT
       #include <fog_pars_fragment>
       void main(){
         float age = uTime - aA.w, life = aC.z;
-        vA = 0.0; vUv = vec2(0.0); vH = 0.0; vCell = 0.0; vW = vec3(0.0);
+        vA = 0.0; vUv = vec2(0.0); vH = 0.0; vCell = 0.0; vW = vec3(0.0); vTint = aE.rgb; vLampR = aE.w < 0.999 ? uLampR : 1.0;
         vec3 w = vec3(0.0, -1e5, 0.0);
         if (age > 0.0 && age < life) {
           float kd = aD.w, rp = 1.0 - exp(-kd * age);
@@ -135,6 +154,7 @@ function build() {
           c.z += cos(uTime * 0.33 + aD.x * 17.0) * 0.5 * rp;
           float ang = aD.x * 6.283 + aD.y * age;
           vec2 q = position.xy, qr = vec2(q.x * cos(ang) - q.y * sin(ang), q.x * sin(ang) + q.y * cos(ang)) * sz;
+          qr.y *= aE.w;
           vec3 right = vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]);
           vec3 up = vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]);
           w = c + right * qr.x + up * qr.y;
@@ -165,7 +185,7 @@ function build() {
     fragmentShader: /* glsl */`
       uniform sampler2D uTex; uniform vec3 uAlb, uAmb; uniform float uLampK;
       uniform vec4 abyssaLampA, abyssaLampAC;
-      varying vec2 vUv; varying float vA, vH, vCell; varying vec3 vW, vFogT, vFogS;
+      varying vec2 vUv; varying float vA, vH, vCell, vLampR; varying vec3 vW, vFogT, vFogS, vTint;
       void main(){
         if (vA < 0.002) discard;
         vec2 cell = vec2(mod(vCell, 2.0), floor(vCell / 2.0));
@@ -178,9 +198,9 @@ function build() {
         if (abyssaLampA.w > 0.0) {
           vec3 dl = vW - abyssaLampA.xyz;
           float d2 = dot(dl, dl), q = d2 / max(abyssaLampAC.w * abyssaLampAC.w, 1.0), wn = clamp(1.0 - q * q, 0.0, 1.0);
-          E += abyssaLampAC.rgb * (abyssaLampA.w * wn * wn / max(d2, 1.0) * 0.3183 * uLampK * (0.55 + 0.45 * sh));
+          E += abyssaLampAC.rgb * (abyssaLampA.w * wn * wn / max(d2, 1.0) * 0.3183 * uLampK * vLampR * (0.55 + 0.45 * sh));
         }
-        gl_FragColor = vec4(uAlb * E * vFogT + vFogS, a);
+        gl_FragColor = vec4(uAlb * vTint * E * vFogT + vFogS, a);
       }`
   });
   mesh = new THREE.Mesh(g, mat);
@@ -206,28 +226,37 @@ function build() {
 }
 
 const rr = (a) => a[0] + (a[1] - a[0]) * Math.random();
-const AKEYS = ['aA', 'aB', 'aC', 'aD'];
+const AKEYS = ['aA', 'aB', 'aC', 'aD', 'aE'];
+// (sandrise) a particle's look: the rise's sand (tint, flat) or the shipped silt (1, 1, 1, 1)
+function lookAt(e, p, rise) {
+  if (rise && RISE_LOOK.on) { const t = RISE_LOOK.tint; e[p] = t[0]; e[p + 1] = t[1]; e[p + 2] = t[2]; e[p + 3] = RISE_LOOK.flat; }
+  else { e[p] = 1; e[p + 1] = 1; e[p + 2] = 1; e[p + 3] = 1; }
+}
 
 // A plume at x,y(floor),z: kind 'big' (the hammer), 'small' (a footfall) or 'rise' (Task 8: her rise out of the sand); k scales it.
 export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
   if (!mesh) build();
   const ki = kind === 'small' ? 1 : kind === 'rise' ? 2 : 0, K = KINDS[ki];
-  const A = mesh.geometry.attributes, a = A.aA.array, b = A.aB.array, c = A.aC.array, d = A.aD.array;
-  const n = Math.max(1, Math.round(K.n * (0.6 + 0.4 * k)));
+  const A = mesh.geometry.attributes, a = A.aA.array, b = A.aB.array, c = A.aC.array, d = A.aD.array, e = A.aE.array;
+  // (sandrise) the rise kind draws its own low cloud (rn .. rkd, RISE_LOOK): its density record below is the shipped one
+  const R = ki === 2 && RISE_LOOK.on, life0 = R ? K.rlife : K.life, vr0 = R ? K.rvr : K.vr, vy0 = R ? K.rvy : K.vy, s00 = R ? K.rs0 : K.s0, s10 = R ? K.rs1 : K.s1;
+  const a0 = R ? K.ra : K.a, kd0 = R ? K.rkd : K.kd;
+  const n = R ? Math.max(0, Math.round(K.rn * (0.6 + 0.4 * k))) : Math.max(1, Math.round(K.n * (0.6 + 0.4 * k)));
   const start = head;
   let lifeMax = 0;
   for (let i = 0; i < n; i++) {
     const p = head * 4; head = (head + 1) % N0;
     if (c[p + 2] > 0 && clock - a[p + 3] < c[p + 2]) quadEvicted++;   // (Task 8) that slot's particle is still alive
-    const ang = Math.random() * 6.283, vr = rr(K.vr) * (0.7 + 0.3 * k), kd = K.kd;
-    const dx = Math.cos(ang), dz = Math.sin(ang), life = rr(K.life);
+    const ang = Math.random() * 6.283, vr = rr(vr0) * (0.7 + 0.3 * k), kd = kd0;
+    const dx = Math.cos(ang), dz = Math.sin(ang), life = rr(life0);
     if (life > lifeMax) lifeMax = life;
     // a third of a big cloud starts as the core column straight off the impact
     const core = ki === 0 && i % 3 === 0;
-    const vrr = core ? vr * 0.25 : vr, vy = rr(K.vy) * (core ? 1.35 : 1) * (0.75 + 0.25 * k);
+    const vrr = core ? vr * 0.25 : vr, vy = rr(vy0) * (core ? 1.35 : 1) * (0.75 + 0.25 * k);
     a[p] = x + dx * 0.6; a[p + 1] = y; a[p + 2] = z + dz * 0.6; a[p + 3] = clock + Math.random() * 0.12;
     b[p] = dx; b[p + 1] = dz; b[p + 2] = vrr; b[p + 3] = vy;
-    c[p] = rr(K.s0) * (0.75 + 0.25 * k); c[p + 1] = rr(K.s1) * (0.7 + 0.3 * k); c[p + 2] = life; c[p + 3] = K.a;
+    c[p] = rr(s00) * (0.75 + 0.25 * k); c[p + 1] = rr(s10) * (0.7 + 0.3 * k); c[p + 2] = life; c[p + 3] = a0;
+    lookAt(e, p, ki === 2);
     const reach = vrr / kd;
     d[p] = Math.random(); d[p + 1] = (Math.random() - 0.5) * 0.5; d[p + 2] = terrainH(x + dx * reach, z + dz * reach, zi); d[p + 3] = kd;
   }
@@ -235,6 +264,7 @@ export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
   // the same frame has its own ranges queued)
   for (const key of AKEYS) {
     const at = A[key];
+    if (!n) break;
     if (start + n <= N0) at.addUpdateRange(start * 4, n * 4);
     else { at.addUpdateRange(start * 4, (N0 - start) * 4); at.addUpdateRange(0, (start + n - N0) * 4); }
     at.needsUpdate = true;
@@ -245,7 +275,11 @@ export function spawnPlume(x, y, z, kind, k = 1, zi = 0) {
   // (Task 8) the footfalls' ring is its shipped 8 (records 4..11), written out: as PL - 4 it would run on into the rise's records, and her
   // legs step during the rise (standE > 0.35: brooder.js's 'small' plume on a heavy footfall), inside her blind window
   else { o = (4 + recHeadS) * 8; recHeadS = (recHeadS + 1) % 8; }
-  rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = clock; rec[o + 4] = lifeMax; rec[o + 5] = ki; rec[o + 6] = k; rec[o + 7] = 1;
+  // (sandrise) the density record's life is the shipped kind's own (the longest of its n particles' lives, drawn from K.life), never the
+  // drawn cloud's: the drawn rise lives longer (rlife), and a record living as long held her blind ~2 s past the shipped find (rise anchor 6.0 s)
+  let recLife = lifeMax;
+  if (R) { recLife = 0; const nd = Math.max(1, Math.round(K.n * (0.6 + 0.4 * k))); for (let i = 0; i < nd; i++) { const l = rr(K.life); if (l > recLife) recLife = l; } }
+  rec[o] = x; rec[o + 1] = y; rec[o + 2] = z; rec[o + 3] = clock; rec[o + 4] = recLife; rec[o + 5] = ki; rec[o + 6] = k; rec[o + 7] = 1;
   alive = Math.max(alive, clock + lifeMax + 0.2);
   mesh.visible = true;
 }
@@ -264,12 +298,47 @@ export function spawnWake(x, y, z, k = 1, zi = 0) {
     c[p] = rr(K.s0); c[p + 1] = rr(K.s1) * (0.75 + 0.25 * k); c[p + 2] = life; c[p + 3] = K.a * (0.6 + 0.4 * k);
     const reach = vr / K.kd;
     d[p] = Math.random(); d[p + 1] = (Math.random() - 0.5) * 0.3; d[p + 2] = terrainH(x + dx * reach, z + dz * reach, zi); d[p + 3] = K.kd;
+    lookAt(A.aE.array, p, false);
     for (const key of AKEYS) A[key].addUpdateRange(p, 4);
   }
   for (const key of AKEYS) A[key].needsUpdate = true;
   alive = Math.max(alive, clock + lifeMax + 0.2);
   mesh.visible = true;
 }
+
+// (sandrise) THE POUR, render only (no density record: sight() reads the rise records spawnPlume writes, unchanged): sand falling off her
+// rim at (x, y, z) (her shell's outline, high over the bed) to the bed and spreading out along it, outward along (ox, oz) +- PLUME.pour.arc.
+// It falls because a particle's floor eases from its spawn height to the bed under where it travels (the vertex shader's fl): a heavy
+// sheet, not a burst. k 0..1 scales it. Particles in the plumes' ring of 448 (quadEvicted counts a live one overwritten)
+export function spawnPour(x, y, z, ox, oz, k = 1, zi = 0) {
+  if (!mesh) build();
+  if (!RISE_LOOK.on) return;
+  const K = PLUME.pour, A = mesh.geometry.attributes, a = A.aA.array, b = A.aB.array, c = A.aC.array, d = A.aD.array, e = A.aE.array;
+  const n = Math.max(1, Math.round(K.n * k)), start = head, base = Math.atan2(oz, ox);
+  let lifeMax = 0;
+  for (let i = 0; i < n; i++) {
+    const p = head * 4; head = (head + 1) % N0;
+    if (c[p + 2] > 0 && clock - a[p + 3] < c[p + 2]) quadEvicted++;
+    const ang = base + (Math.random() * 2 - 1) * K.arc, dx = Math.cos(ang), dz = Math.sin(ang), life = rr(K.life), vr = rr(K.vr) * (0.7 + 0.3 * k);
+    if (life > lifeMax) lifeMax = life;
+    a[p] = x + dx * 0.3; a[p + 1] = y; a[p + 2] = z + dz * 0.3; a[p + 3] = clock + Math.random() * 0.15;
+    b[p] = dx; b[p + 1] = dz; b[p + 2] = vr; b[p + 3] = rr(K.vy);
+    c[p] = rr(K.s0); c[p + 1] = rr(K.s1) * (0.7 + 0.3 * k); c[p + 2] = life; c[p + 3] = K.a;
+    const reach = vr / K.kd;
+    d[p] = Math.random(); d[p + 1] = (Math.random() - 0.5) * 0.4; d[p + 2] = terrainH(x + dx * reach, z + dz * reach, zi); d[p + 3] = K.kd;
+    lookAt(e, p, true);
+  }
+  for (const key of AKEYS) {
+    const at = A[key];
+    if (start + n <= N0) at.addUpdateRange(start * 4, n * 4);
+    else { at.addUpdateRange(start * 4, (N0 - start) * 4); at.addUpdateRange(0, (start + n - N0) * 4); }
+    at.needsUpdate = true;
+  }
+  pourN += n;
+  alive = Math.max(alive, clock + lifeMax + 0.2);
+  mesh.visible = true;
+}
+let pourN = 0, veilR = 0;
 
 // Density per unit length at a point (the model the gameplay reads).
 function densRec(o, x, y, z) {
@@ -335,6 +404,7 @@ export function updatePlumes(dt) {
   uni.uTime.value = clock;
   uni.uLampK.value = PLUME_TUNE.lampK;
   uni.uSink.value = PLUME_TUNE.sink;
+  uni.uLampR.value = RISE_LOOK.lamp;
   const on = clock < alive && !PLUME_TUNE.off;
   mesh.visible = on;
   if (!on) { veil.visible = false; return; }
@@ -348,7 +418,14 @@ export function updatePlumes(dt) {
   uni.uAmb.value.set(r * k, g * k, b * k);
   // the veil
   const cp = camera.position, dc = plumeDensity(cp.x, cp.y, cp.z);
-  const va = (1 - Math.exp(-dc * 4.5 * PLUME_TUNE.veilK)) * 0.92;
+  // (sandrise) the rise kind's share of the veil is capped (RISE_LOOK.veilMax) and tinted: the lens in her low cloud sees sandy murk, never
+  // a whiteout (at the anchor the shove carried the lens into the model's 14 u ellipsoids and the veil read 0.9: the pale puff round him)
+  let dr = 0;
+  if (RISE_LOOK.on) for (let i = 12; i < PL; i++) dr += densRec(i * 8, cp.x, cp.y, cp.z);
+  const vo = 1 - Math.exp(-(dc - dr) * 4.5 * PLUME_TUNE.veilK), vr = Math.min(RISE_LOOK.veilMax, 1 - Math.exp(-dr * 4.5 * PLUME_TUNE.veilK));
+  // (no rise record at the lens: the shipped expression verbatim, so the veil off home and outside a rise is the shipped one bit for bit)
+  const va = dr > 0 ? (1 - (1 - vo) * (1 - vr)) * 0.92 : (1 - Math.exp(-dc * 4.5 * PLUME_TUNE.veilK)) * 0.92, vrs = dr > 0 ? vr / Math.max(1e-6, vo + vr) : 0;
+  veilR = vr;
   veil.visible = va > 0.01;
   if (veil.visible) {
     let lr = 0, lg = 0, lb = 0;
@@ -358,8 +435,9 @@ export function updatePlumes(dt) {
       const e = LA[3] * wn * wn / Math.max(d2, 1) * 0.3183 * PLUME_TUNE.lampK * 0.7;
       lr = LC[0] * e; lg = LC[1] * e; lb = LC[2] * e;
     }
-    const A = uni.uAlb.value, U = uni.uAmb.value;
-    _c.setRGB(A.r * (U.x * 0.8 + lr), A.g * (U.y * 0.8 + lg), A.b * (U.z * 0.8 + lb));
+    const A = uni.uAlb.value, U = uni.uAmb.value, T = RISE_LOOK.tint, lk = 1 - vrs * (1 - RISE_LOOK.lamp);
+    const tr = 1 + vrs * (T[0] - 1), tg = 1 + vrs * (T[1] - 1), tb = 1 + vrs * (T[2] - 1);
+    _c.setRGB(A.r * tr * (U.x * 0.8 + lr * lk), A.g * tg * (U.y * 0.8 + lg * lk), A.b * tb * (U.z * 0.8 + lb * lk));
     veil.material.uniforms.uCol.value.copy(_c);
     veil.material.uniforms.uA.value = va;
   }
@@ -367,13 +445,16 @@ export function updatePlumes(dt) {
 
 export function clearPlumes() {
   rec.fill(0);
-  recHeadR = riseEvicted = quadEvicted = 0;   // (Task 8) every new sleeper calls this on dispose: a rise's counters belong to that rise
+  recHeadR = riseEvicted = quadEvicted = 0; pourN = 0; veilR = 0;   // (Task 8) every new sleeper calls this on dispose: a rise's counters belong to that rise
   alive = 0;
   if (mesh) { mesh.visible = false; veil.visible = false; }
 }
 export function plumeState() {
   let n = 0, big = 0, rise = 0;
   for (let i = 0; i < PL; i++) if (rec[i * 8 + 7] && clock - rec[i * 8 + 3] < rec[i * 8 + 4]) { n++; if (i < 4) big++; else if (i >= 12) rise++; }
-  return { live: n, big, rise, riseEvicted, quadEvicted, clock, visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
+  return { live: n, big, rise, riseEvicted, quadEvicted, clock, pourN, veilR: +veilR.toFixed(3), visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
 }
-if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, densKind, rec, spawn: spawnPlume, clear: clearPlumes };
+if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, densKind, rec, spawn: spawnPlume, clear: clearPlumes,
+  look: RISE_LOOK, pour: spawnPour,
+  // (sandrise, sandpix-probe's A/B) every plume and the veil hidden while off (PLUME_TUNE.off: updatePlumes re-sets mesh.visible each frame)
+  show: on => { PLUME_TUNE.off = !on; if (mesh && !on) { mesh.visible = false; veil.visible = false; } return !!mesh; } };

@@ -33,10 +33,10 @@ import { emitDust } from '../../world/footfx.js';
 import { loadSculpted, assetTextures, assetGeos } from '../../lib/assets.js';
 import { applyMicroDetail, patchNormalRG, microTexture } from '../../lib/microDetail.js';
 import { buildNear, groundAt, placeFoot, pushOut, steer, overTall, soleFromGeos, hullSamples, penetration } from './brooderGround.js';
-import { spawnPlume, spawnWake, updatePlumes, plumeTau, clearPlumes } from './plume.js';
+import { spawnPlume, spawnWake, spawnPour, updatePlumes, plumeTau, clearPlumes } from './plume.js';
 import { beginBodyCols, addCapsule, markLimbs, setShell, setClutch, endBodyCols, clearBodyCols, fitCapsules, shellProxy, limbNearXZ, setBodyCalm, shellPlanNear, setMound, crestFootAt, shellHiAt } from './bodyCols.js';
 import { PH_COCK0, PH_COCK1, PH_SLAM0, PH_SLAM1, whip, chela, CHELA, WHIP } from './brooderClaw.js';
-import { BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
+import { SHED, shedTick, sandY, BURY, fitSink, makeMound, fitMound, prepGrowth, setMoundK, breathTick, buryGrowth, crustTerm, crustTick, growRock, makeSlabs, slabsBreak, slabTick, slabsBed, setSlabDust, growReveal,
   fitMoundJ, prepGrowthJ, jobSlice, growCover, limbRelease } from './burial.js';
 // (velkath-buried-rock, Task 3b) THE FOOTING's knobs on burial.js's BURY (publishCols below): floor 0 = her dune and crest are not ground
 // (__burial.set({ floor: 0 }): relief-walk mound's RED nofloor-mound); solidK = the bury at or over which she is "fully buried" (her crest is
@@ -2208,7 +2208,9 @@ function keepShell(L, dt) {
 const RIDGE_LINE = 'THE RIDGE IS WARM UNDER YOUR HAND.';
 // (Task 8) the rise plume's spawn points on the FITTED dune (MD.M: a cloud bursts where the sand was); module level, so no closure or
 // array literal per rising frame
-const RISE_J = [0, 21, 43, 64, 85, 107];                                     // the crack's ring of six bearings
+const RISE_J = [0, 21, 43, 64, 85, 107];
+// (sandrise) the pour off her rim (above): s between pours at the shed's base rate (x 0.5 .. 2 over it)
+const POUR = { dt: 0.12 };                                     // the crack's ring of six bearings
 const ringAt = (MD, ring, j) => (ring * MD.COLS + (j % MD.COLS)) * 3;       // a dune vertex's offset
 export function updateBrooder(L, dt, t, player) {
   const ev = resetEv();
@@ -2231,7 +2233,7 @@ export function updateBrooder(L, dt, t, player) {
     else if (L.digging && !L.digJob) growCover(L, L.bury);   // (Task 12) the sand slides back up over it as she digs in
     else buryGrowth(L, L.bury > 0.5);
   }
-  if (L.crustU) crustTick(L);   // (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there. uCrack / uCrackO lag the body a frame: M6, see crustTick)
+  if (L.crustU) { shedTick(L, dt); crustTick(L); }   // (sandrise: the shed's own clock, burial.js SHED) (the crust: L.bury, the crack, the CRUST knobs; uniforms only. L.bury is 0 off home: no crust there. uCrack / uCrackO lag the body a frame: M6, see crustTick)
   L.t += dt;
   L.uni.uTime.value = L.t;
   const R = L.R;
@@ -2284,6 +2286,23 @@ export function updateBrooder(L, dt, t, player) {
         let o = ringAt(MD, 5, j0); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
         o = ringAt(MD, 5, j0 + 64); spawnPlume(MD.M[o], MD.M[o + 1], MD.M[o + 2], 'rise', 1, L.idx);
         L.riseSheetN = (L.riseSheetN || 0) + 1;
+      }
+    }
+    // (sandrise) THE POUR: while the shed runs (burial.js SHED, L.shedP) the sand pours off her RIM: a point of her shell's outline (keepIdx,
+    // the 32 outermost vertices by bearing), as she is posed now, over the drawn sand there, every POUR.dt s at the shed's rate (its fastest
+    // at the middle of the shed); outward from her centre along that bearing (plume.js spawnPour, render only)
+    if (BURY.plume && L.keepIdx && L.shedP > 0.02 && L.shedP < 1) {
+      L.pourT = (L.pourT || 0) - dt * (0.5 + 1.5 * Math.sin(Math.PI * L.shedP));
+      if (L.pourT <= 0) {
+        L.pourT = POUR.dt;
+        const k = (Math.random() * L.keepIdx.length) | 0, vi = L.keepIdx[k];
+        if (vi >= 0) {
+          const P = L.parts.shell.geometry.attributes.position, e = L.parts.shell.matrixWorld.elements, x = P.getX(vi), y = P.getY(vi), z = P.getZ(vi);
+          const wx = e[0] * x + e[4] * y + e[8] * z + e[12], wy = e[1] * x + e[5] * y + e[9] * z + e[13], wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+          const gy = L.mound ? sandY(L.mound, wx, wz, L.idx) : terrainH(wx, wz, L.idx);
+          spawnPour(wx, Math.max(wy, gy) + 0.3, wz, wx - L.body.position.x, wz - L.body.position.z, 1, L.idx);
+          L.pourN = (L.pourN || 0) + 1;
+        }
       }
     }
   }
