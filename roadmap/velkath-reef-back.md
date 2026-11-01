@@ -15,3 +15,4 @@ Acceptance: Michael's eye on stills / play; burial-probe disguise (incl. `coral`
 
 ## Log
 - 2026-10-31 — created from Michael's answer. Branch reefback.
+- 2026-10-31 — built on reefback (to 9e9aa06): exposure-drawn colonies (10 fans, 28 mats, 59 coralline skins, 57 lumps, 17 tube clumps; 120 fronds in tufts), coral kept out of the seam's sight corridor, mats only where they lie. Michael on the stills: "1. good". Code review in progress. Not merged.
