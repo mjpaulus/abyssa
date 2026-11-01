@@ -1690,14 +1690,16 @@ window.__pointcam = { knobs: POINTCAM, state: () => ({ k: +ptK.toFixed(4), amt: 
 // lens) is no cue. THE MOUSE OWNS THE VIEW: from the crack, 5 deg net or 15 deg of looking about (CLAWCAM's lookNet / lookPath) drops it at
 // once for the rest of this rise; a crack that comes mid-sweep starts off. A PAUSE ends it on the spring, off for the rest of the rise.
 // THE HAND-BACK (the window closes, or she is gone) eases k out on the LAST aim, held (no candidate is computed outside the window).
-//   until s from the crack (the shed's T 3.8 + 1.5: the last of the pour and the cloud rolling off her); out / up x R, the aim on her
+//   until s from the crack (the shed's T 3.8 + 0.2: the pour; later her unfolding legs come between the lens and her back); out / up x R, the aim on her;
+//   near u: the lens pressed on him (its distance from his bonnet under near[0], CRECAM's press under her) takes none of the turn, all of
+//   it from near[1] (the first takes: at 2-3 u the guard held his bonnet's centre in frame while the frame cut half of it away)
 //   maxYaw / maxPitch deg caps; behind deg past the yaw cap where she counts as behind him (no cue); slew deg/s; wIn / wOut /s (critically
 //   damped: in ~95% by ~1.8 s; out ~1.3 s, wOut 3: at 6 a ~79 deg turn stepped 2.6 deg a frame handing back, risecam-probe handback)
-const RISECAM = { on: 1, until: 5.3, out: 0.45, up: 0.12, maxYaw: 75, maxPitch: 25, behind: 30, helmNdc: 0.82, slew: 45, wIn: 2.6, wOut: 3,
+const RISECAM = { on: 1, until: 4.0, out: 0.45, up: 0.12, near: [2.6, 4.5], maxYaw: 75, maxPitch: 25, behind: 30, helmNdc: 0.82, slew: 45, wIn: 2.6, wOut: 3,
   lookNet: 5, lookPath: 15, lookTau: 0.3 };
 let rcK = 0, rcKV = 0, rcOff = false, rcOpen = false, rcY0 = 0, rcP0 = 0, rcPath = 0, rcRecent = 0, rcYawWas = 0, rcPitchWas = 0, rcWhy = '', rcTgt = 0;
 let rcYaw = 0, rcPitch = 0, rcAmt = 0, rcDy = 0, rcDp = 0, rcG = 0, rcCy = 0, rcCp = 0, rcHOk = false, rcN = 0;
-const _rcQ = new THREE.Quaternion(), _rcSvQ = new THREE.Quaternion(), _rcHO = V3(), _rcSvHO = V3(), _rcA = V3();
+const _rcQ = new THREE.Quaternion(), _rcSvQ = new THREE.Quaternion(), _rcHO = V3(), _rcSvHO = V3(), _rcA = V3(), _rcH = V3();
 // this frame's candidate full turn (rcCy, rcCp) toward her rising shell: false when she is behind the lens. ptLims() first (under the swap)
 function rcCand(L) {
   const C = RISECAM, d2r = Math.PI / 180, R = L.R || 10, bx = L.body.position.x, bz = L.body.position.z;
@@ -1737,7 +1739,11 @@ function riseFrame(dt) {
   if (!win) why = 'until'; else if (rcOff) why = 'mouse';
   else if (paused || deckK > 0 || throatOn) why = 'place';
   else if (!cand) why = 'behind';
-  else { tgt = 1 - ccStep(0.1, 0.5, creUnder); why = tgt > 0 ? 'on' : 'under'; }
+  else {
+    _rcH.setFromMatrixPosition(diver.helmGroup.matrixWorld);
+    tgt = (1 - ccStep(0.1, 0.5, creUnder)) * ccStep(C.near[0], C.near[1], camera.position.distanceTo(_rcH));
+    why = tgt > 0 ? 'on' : creUnder > 0.4 ? 'under' : 'near';
+  }
   const w = tgt > rcK ? C.wIn : C.wOut, h = Math.min(dt, 0.05);
   if (h > 0 && (tgt > 0 || rcK > 0 || rcKV !== 0)) { const ex = Math.exp(-w * h), e0 = rcK - tgt, k = rcKV + w * e0; rcK = tgt + (e0 + k * h) * ex; rcKV = (rcKV - w * k * h) * ex; }
   if (rcK < 0) { rcK = 0; if (rcKV < 0) rcKV = 0; }
