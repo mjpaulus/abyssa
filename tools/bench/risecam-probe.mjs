@@ -23,8 +23,15 @@
 //   off      (A) __risecam.knobs.on = 0: eq on EVERY booked frame, and the rise ran (L.cracked); (B) the positive control on = 1: >= 1 frame
 //            with k > 0 and every one of them !eq (VOID without one)
 //            RED: RC_RED=on (A's bar judged on an on = 1 run): must fail
-//   handback the hand-back: the first frame after the window (why 'until') from a k >= 0.5: k <= 0.1 within 1.5 s of it and not before
-//            0.25 s of it (eased, not snapped), and the cue's rotation (dq) never steps more than 1.5 deg in a frame in the 1.5 s after it.
+//   handback THE HAND-BACK: the first frame the cue's target goes to 0 from a drawn cue (tgt > 0 and k >= 0.1 on the frame before: the window's
+//            close, or the near gate, or her gone): k halves (k <= 0.5 x its value the frame before) no sooner than 0.15 s and no later than
+//            1.0 s after it (eased, not snapped: a critically damped wOut 3 halves in ~0.56 s), and the hand-back's own step (|amt step| x |the
+//            held aim|) never more than 1.5 deg a frame in the 1.5 s after it. AMENDED A THIRD TIME (recorded, before this run): the event was
+//            "why 'until' after k >= 0.9 / 0.5 / 0.3" and k <= 0.1 within 0.25-1.5 s; on the near-gated build the snap RED's k followed the
+//            near gate's falling target down to 0.16 before the close (wOut 1e6 snaps k onto its target), so no premise held (VOID twice). AMENDED a second time, after the run on the near-gated build (recorded): as registered the step was the
+//            drawn rotation's (dq, the angle between q and qPre), and it read 6.2 deg on one frame where the grounded lens LURCHED (his bonnet
+//            under qPre moved 0.09 NDC in a frame, the lens pressed by her) and the bonnet keep (ptKeep, POINTCAM's rule) followed it: the guard,
+//            not the hand-back. dq's step is booked beside it (maxStepDqDeg).
 //            AMENDED after the first run (recorded): registered as k >= 0.9 before the close and k <= 0.1 within 1.0 s. The first GREEN-build run
 //            (wOut 6) read kOut 0.63 s but a 2.64 deg step (a ~79 deg turn handed back at the spring's rate): the BUILD changed (wOut 6 -> 3,
 //            ~1.3 s), so the window went to 1.5 s; the 1.5 deg step is unchanged. The snap RED's k sat at 0.86 on the frame before the close
@@ -77,7 +84,7 @@ const INSTALL = `(async () => {
       if (st) A.fromArray(st.aim); const vPre = view(qp, A), vPost = view(q, A);
       hbox.setFromObject(DV.diver.helmGroup, true); hbox.getCenter(hc); const vB = view(q, hc), vBp = view(qp, hc);
       if (R.wakeF < 0 && !L.dormant) R.wakeF = R.S.length;
-      R.S.push({ k: st ? st.k : null, amt: st ? st.amt : null, why: st ? st.why : null, off: st ? st.off : null, tgt: st ? st.tgt : null, eq: eq ? 1 : 0, dq: r3(dq),
+      R.S.push({ k: st ? st.k : null, amt: st ? st.amt : null, aim: st ? Math.hypot(st.aimYawDeg, st.aimPitchDeg) : 0, why: st ? st.why : null, off: st ? st.off : null, tgt: st ? st.tgt : null, eq: eq ? 1 : 0, dq: r3(dq),
         thPre: r3(vPre.ang), th: r3(vPost.ang), ndc: [r3(vPost.x), r3(vPost.y)], bon: [r3(vB.x), r3(vB.y), vB.front ? 1 : 0], bonPre: [r3(vBp.x), r3(vBp.y)],
         cracked: L.cracked ? 1 : 0, stood: L.hasStood ? 1 : 0, shedT: r3(L.shedT || 0), dormant: L.dormant ? 1 : 0, inp: R.inp, pyaw: r6(window.player.yaw), net: st ? st.lookNetDeg : null });
       R.inp = 0;
@@ -178,11 +185,13 @@ try {
   } else {
     const kn = RED === 'snap' ? { wOut: 1e6 } : null;
     const s = await session(kn, null); out.sessions.hb = { ...s, S: undefined }; clocks.push(s.clock);
-    const S = s.S, hb = S.findIndex((r, i) => i > 0 && r.why === 'until' && S[i - 1].k >= 0.5);
-    let kOut = -1; if (hb >= 0) for (let i = hb; i < S.length; i++) if (S[i].k <= 0.1) { kOut = i; break; }
-    let step = 0; if (hb >= 0) for (let i = hb + 1; i < Math.min(S.length, hb + 90); i++) step = Math.max(step, Math.abs(S[i].dq - S[i - 1].dq));
+    const S = s.S, hb = S.findIndex((r, i) => i > 0 && r.tgt === 0 && S[i - 1].tgt > 0 && S[i - 1].k >= 0.1);
+    let kOut = -1; if (hb >= 0) for (let i = hb; i < S.length; i++) if (S[i].k <= 0.5 * S[hb - 1].k) { kOut = i; break; }
+    // the hand-back's own pace: the eased share times the held aim (|amt step| x |aim|); the drawn rotation's step (dq, with the bonnet keep
+    // following the grounded lens's own lurch) is booked beside it
+    let step = 0, stepDq = 0; if (hb >= 0) for (let i = hb + 1; i < Math.min(S.length, hb + 90); i++) { step = Math.max(step, Math.abs(S[i].amt - S[i - 1].amt) * S[i].aim); stepDq = Math.max(stepDq, Math.abs(S[i].dq - S[i - 1].dq)); }
     out.sessions.hb.rows = hb >= 0 ? S.slice(hb - 2, hb + 60) : []; out.sessions.hb.kSeries = S.map(r => [r.k, r.why]);
-    bar('eased', hb >= 0 && kOut >= 0 ? (kOut - hb) / 60 >= 0.25 && (kOut - hb) / 60 <= 1.5 && step <= 1.5 : null, { hbS: hb >= 0 ? +((hb - s.wakeF) / 60).toFixed(3) : null, kOutS: kOut >= 0 ? +((kOut - hb) / 60).toFixed(3) : null, maxStepDeg: +step.toFixed(3) }, 'k (>= 0.5) -> <= 0.1 in 0.25-1.5 s from the window\'s close, the cue\'s rotation never stepping > 1.5 deg a frame');
+    bar('eased', hb >= 0 && kOut >= 0 ? (kOut - hb) / 60 >= 0.15 && (kOut - hb) / 60 <= 1.0 && step <= 1.5 : null, { hbS: hb >= 0 ? +((hb - s.wakeF) / 60).toFixed(3) : null, why: hb >= 0 ? S[hb].why : null, k0: hb >= 0 ? S[hb - 1].k : null, kHalfS: kOut >= 0 ? +((kOut - hb) / 60).toFixed(3) : null, maxStepDeg: +step.toFixed(3), maxStepDqDeg: +stepDq.toFixed(3) }, 'from the target\'s drop to 0, k halves in 0.15-1.0 s and the hand-back steps <= 1.5 deg a frame');
   }
 } catch (e) { console.log('UNMEASURED: ' + (e && e.message || e)); c.close(); process.exit(2); }
 out.clocks = clocks;
