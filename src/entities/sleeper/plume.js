@@ -421,7 +421,8 @@ export function updatePlumes(dt) {
   let dr = 0;
   if (RISE_LOOK.on) for (let i = 12; i < PL; i++) dr += densRec(i * 8, cp.x, cp.y, cp.z);
   const vo = 1 - Math.exp(-(dc - dr) * 4.5 * PLUME_TUNE.veilK), vr = Math.min(RISE_LOOK.veilMax, 1 - Math.exp(-dr * 4.5 * PLUME_TUNE.veilK));
-  const va = (1 - (1 - vo) * (1 - vr)) * 0.92, vrs = vr / Math.max(1e-6, vo + vr);
+  // (no rise record at the lens: the shipped expression verbatim, so the veil off home and outside a rise is the shipped one bit for bit)
+  const va = dr > 0 ? (1 - (1 - vo) * (1 - vr)) * 0.92 : (1 - Math.exp(-dc * 4.5 * PLUME_TUNE.veilK)) * 0.92, vrs = dr > 0 ? vr / Math.max(1e-6, vo + vr) : 0;
   veilR = vr;
   veil.visible = va > 0.01;
   if (veil.visible) {
