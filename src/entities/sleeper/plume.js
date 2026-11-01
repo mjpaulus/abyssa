@@ -48,9 +48,9 @@ export const PLUME = {
   // released at the bed runs as a low, laterally spreading turbid layer; only a few percent of it rises 2 m over the bed.
   rise: { n: 16, life: [5.5, 6.5], vr: [1.0, 3.5], vy: [2.0, 7.0], s0: [4.0, 6.0], s1: [8, 12], a: 0.62, kd: 0.55,
     rh0: 2.0, rhA: 3.0, rhK: 0.45, hv0: 2.0, hvA: 12.0, hvK: 0.45, D: 4.2,
-    rn: 8, rlife: [6.0, 8.5], rvr: [1.5, 4.5], rvy: [0.15, 0.6], rs0: [2.2, 3.4], rs1: [5.0, 8.0], ra: 0.42, rkd: 0.45 },
+    rn: 8, rlife: [6.0, 8.5], rvr: [1.5, 4.5], rvy: [0.15, 0.6], rs0: [2.2, 3.4], rs1: [5.0, 8.0], ra: 0.5, rkd: 0.45 },
   // the pour off her rim (spawnPour): a puff of n particles from a point of her shell's outline, outward along her rim's bearing (+- arc rad)
-  pour: { n: 5, life: [5.0, 8.0], vr: [0.8, 3.0], vy: [0.0, 0.35], s0: [1.2, 2.0], s1: [3.8, 6.5], a: 0.42, kd: 0.5, arc: 0.9 }
+  pour: { n: 5, life: [5.0, 8.0], vr: [0.8, 3.0], vy: [0.0, 0.35], s0: [1.2, 2.0], s1: [3.8, 6.5], a: 0.5, kd: 0.5, arc: 0.9 }
 };
 // (sandrise) the drawn sand's colour and weight: tint x uAlb (0.60, 0.55, 0.45): the shipped pale silt x the zone-0 seabed's own silt hue
 // relative to it; flat squashes the sprite's height (1 = round); lamp scales the lantern's light on it; veilMax caps the share of the lens's
