@@ -1439,7 +1439,7 @@ function ironTest(L) {
 // its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
 // (Task 12) coverU: the bury over which the dig-in covers it (growCover): from 0.1 (the dune's first tenth up) to 0.7, before her flanks are
 // under it (the dune's rings draw at bury x their fitted height)
-export const GROW = { weed: 150, tufts: 15, colonies: 28, fan: 14, crust: 40, coralline: 80, lump: 70, tube: 22, sprinkle: 100, ex: 4.0, scour: 1.6, space: 0.10,
+export const GROW = { weed: 150, tufts: 15, colonies: 28, fan: 14, crust: 40, coralline: 80, lump: 70, tube: 22, sprinkle: 100, ex: 4.0, scour: 1.6, space: 0.10, inset: 0.8,
   clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
 const cl01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
@@ -1447,6 +1447,10 @@ const cl01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
 // at a few u the rust mats read as salmon cloth: after1-d8)
 const COL_HUE = [3, 3, 1, 1, 5, 5, 4, 0, 2, 6];
 export function growRock(L, MD) {
+  const t0 = performance.now();
+  try { growRockAt(L, MD); } finally { L.growMs = performance.now() - t0; }
+}
+function growRockAt(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
   L.growN = { weed: 0, tufts: 0, colonies: 0, fan: 0, crust: 0, coralline: 0, lump: 0, tube: 0 };
   if (!weed || !reef || !top || !MD) return;
@@ -1569,10 +1573,16 @@ export function growRock(L, MD) {
   G.setShellHeight(top);
   let parts;
   try { parts = G.rockGrowthParts(0xC0BA1 + L.idx, spots); } finally { G.setShellHeight(null); }
-  const keep = [];
+  // (reefback) and its footprint GROW.inset u inside the strip: the dig-in does not re-lay the growth, and a bed off the first one moves the
+  // strip (burial-probe digin offbed, 6.2 u off it: with the denser growth 1 coral vertex of 54683 fell outside the new bed's band). The
+  // footprint's outline: its outermost vertex on 8 bearings, each pushed GROW.inset u further out along that bearing
+  const keep = [], OX = new Float64Array(8), OZ = new Float64Array(8), OD = new Float64Array(8), ins = GROW.inset;
   for (let i = 0; i < parts.length; i++) {
     const P = parts[i].attributes.position; let ok = true;
-    for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z); }
+    OD.fill(-Infinity);
+    for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z);
+      for (let b = 0; b < 8; b++) { const d = _gs.x * Math.cos(b * 0.7854) + _gs.z * Math.sin(b * 0.7854); if (d > OD[b]) { OD[b] = d; OX[b] = _gs.x; OZ[b] = _gs.z; } } }
+    for (let b = 0; b < 8 && ok; b++) ok = inStrip(MD, OX[b] + Math.cos(b * 0.7854) * ins, OZ[b] + Math.sin(b * 0.7854) * ins);
     if (ok) { keep.push(parts[i]); L.growN[spots[i][0]]++; } else parts[i].dispose();
   }
   let co = L.parts.coral;
