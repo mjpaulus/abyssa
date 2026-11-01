@@ -1315,10 +1315,7 @@ export function* prepGrowthJ(L, MD) {
     // within GROW.near u of the seam, or in the corridor his eye looks down at it from the sand: out from the seam along its normal's level
     // part, 0 .. GROW.sight[0] u, within GROW.sight[1] u of that line (a sphere of 3 u buried 24 of her 32 fronds on the strip; 1.5 u alone
     // left the ones rooted 2-3 u off it in the line of sight). The strip's new fronds keep GROW.clear off it already
-    const WP = weed.geometry.attributes.position, Hs = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, nr2 = GROW.near * GROW.near;
-    let snx = 0, snz = 0; if (Hs) { const hn = L.harpoon.normal, l = Math.hypot(hn.x, hn.z) || 1; snx = hn.x / l; snz = hn.z / l; }
-    const overIron = p => { if (!Hs) return false; const dx = p.x - Hs.x, dy = p.y - Hs.y, dz = p.z - Hs.z; if (dx * dx + dy * dy + dz * dz < nr2) return true;
-      const t = dx * snx + dz * snz; if (t < 0 || t > GROW.sight[0]) return false; const qx = dx - snx * t, qz = dz - snz * t; return qx * qx + dy * dy + qz * qz < GROW.sight[1] * GROW.sight[1]; };
+    const WP = weed.geometry.attributes.position, iron = ironTest(L), overIron = p => !!iron && iron(p.x, p.y, p.z);
     for (let k = 0; k < weed.count; k++) {
       if (dueNow()) yield;
       weed.getMatrixAt(k, _gm); _gm.premultiply(weed.matrixWorld);
@@ -1401,80 +1398,199 @@ export function growCover(L, b) {
     weed.instanceMatrix.needsUpdate = true;
   }
 }
-// THE GROWTH ON THE EXPOSED ROCK (Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and coral"). Laid at the
-// bed (bedDown: after the fit and the harpoon's seat, before prepGrowth), home only (only a buried build beds down). No new program: the
-// weed's spare slots (her weed InstancedMesh is built for 150 fronds and the sculpt keeps 60: the same mesh, the same material) and ONE
-// mesh of her own reef's parts (brooderGeo.js rockGrowthParts: fans, encrusting mats, coralline lumps, tube clumps) drawn in the reef's
-// own material object (the same program; the parts carry its uv). Every vertex of every frond and part on the strip (inStrip, as
-// prepGrowth keeps the reef's triangles), so nothing of it stands out of the dune; a part that strays is dropped. Clear of the harpoon's
-// seam by GROW.clear u (fronds hid the iron from 3 u: stills t5b-dev/g2-h3 .. g5, prepGrowth). Seeded per site; at most GROW.* of each (fewer where the strip has no room). Rebuilt at every bed (an event).
-//   weed     fronds added (the spare slots), in GROW.tufts clumps at the rock's foot and flanks (her shell 1-3.5 u over the mean ground:
-//            where sand lodges and weed roots), small (k 0.45-0.95: a frond 1.0-2.0 u)
-//   fan / crust / lump / tube   the coral: fans on her high points, mats on the faces that look up, lumps and tube clumps between
+// THE SEAM'S KEEP-OFF (prepGrowth's and growRock's one rule; burial-probe disguise `fronds` judges it): true for a world point within
+// GROW.near u of the harpoon's seam, or in the corridor his eye looks down at it from the sand (out from the seam along its normal's level
+// part, 0 .. GROW.sight[0] u, within GROW.sight[1] u of that line). null with no seated iron. (reefback: lifted out of prepGrowth so the
+// rock's coral keeps out of the corridor too; before, only its fronds did, and the coral kept GROW.clear's sphere alone)
+function ironTest(L) {
+  const Hs = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null;
+  if (!Hs) return null;
+  const hn = L.harpoon.normal, l = Math.hypot(hn.x, hn.z) || 1, snx = hn.x / l, snz = hn.z / l, nr2 = GROW.near * GROW.near, s0 = GROW.sight[0], s2 = GROW.sight[1] * GROW.sight[1];
+  return (x, y, z) => {
+    const dx = x - Hs.x, dy = y - Hs.y, dz = z - Hs.z; if (dx * dx + dy * dy + dz * dz < nr2) return true;
+    const t = dx * snx + dz * snz; if (t < 0 || t > s0) return false; const qx = dx - snx * t, qz = dz - snz * t; return qx * qx + dy * dy + qz * qz < s2;
+  };
+}
+// THE GROWTH ON THE EXPOSED ROCK (Task 5b; Michael's checkpoint 2026-10-20: "keep the weeds maybe even add more and coral"; reefback
+// 2026-10-31, asked whether it was right: "better but can be pushed more", then "grow more coral"). Laid at the bed (bedDown: after the fit
+// and the harpoon's seat, before prepGrowth), home only (only a buried build beds down). No new program: the weed's own InstancedMesh (the
+// same mesh, the same material; its instance buffer grown here to hold GROW.weed fronds past weedBase (the sculpt's 60: 210; the procedural build's 150: 300), the old buffer released
+// through the mesh's dispose event first) and ONE mesh of her own reef's parts (brooderGeo.js rockGrowthParts: fans, sponge mats,
+// coralline skins, lumps, tube clumps) drawn in the reef's own material object (the same program; the parts carry its uv). Every vertex of
+// every frond and part on the strip (inStrip, as prepGrowth keeps the reef's triangles), so nothing of it stands out of the dune; a part
+// that strays is dropped. Off the harpoon's seam by GROW.clear u AND out of the seam's sight corridor (ironTest), so the iron reads from the
+// sand. Seeded per site; at most GROW.* of each (fewer where the strip has no room). Rebuilt at every bed (an event); the dig-in does not
+// re-lay it (it rides her body).
+// THE REFERENCE (reefback; sources: the ex-HMAS Brisbane epibenthos study (USC research repository), a Florida wreck's fouling and flow
+// (MDPI Water 9(1):11), Paramuricea clavata fan orientation (VLIZ), Nantucket Shoals boulder scour and the MarLIN / JNCC scoured-rock
+// biotopes (coralline crusts on scoured boulders)): on an old wreck or boulder the fouling is set by EXPOSURE AND ORIENTATION:
+// heaviest where the flow first meets it and on the high, vertical and ridge faces (suspension feeders want laminar flow), weakest on the
+// sediment-laden horizontal surfaces and in sheltered hollows; sea fans stand with their face across the prevailing current; near the
+// sand line scour keeps the rock bare but for scour-proof crustose coralline and small stuff; growth comes in COLONIES (a mat with lumps
+// and buds on it, a fan on the ridge above), not an even scatter; algae in tufts from a holdfast in the cracks. So here:
+//   the current   from her open sand (L.sand) across her back toward the crack (the rift draws the water); in her body's frame `ux, uz`
+//   exposure      per spot of her top: height over the mean ground, facing up-current, ridge (convexity), less the scour band (within
+//                 GROW.scour u of the mean ground) and the flat tops where the sand lies (the crust shader's sand: keep it reading)
+//   colonies      GROW.colonies centres drawn by exposure (exp(GROW.ex x score)), GROW.space apart, each a dominant hue: sponge mats
+//                 on the gentler faces of it, coralline skins, lumps, tube clumps above the scour band, and a FAN at its highest ridge
+//                 spot when it is exposed, its plane across the current
+//   sprinkle      the rest of the rock: coralline flecks and small lumps drawn by a softer exposure (the scour band: coralline only)
+//   inset         every coral part's footprint GROW.inset u inside the strip: the dig-in does not re-lay it, and a bed off the first moves the
+//                 strip (burial-probe digin offbed)
+//   weed          GROW.tufts tufts of 7-12 fronds from one holdfast (splayed out from it, the middle ones tallest) in the flanks' hollows
+//                 and cracks (her shell 0.9-3.8 u over the mean ground: where sand lodges and weed roots), GROW.space apart
 // (Task 7b, M6) revealT s: the growth outside the strip uncovered from the crack over this long (growReveal); revRamp u: a frond grows from
 // its root over this much of the front; revPuff: a puff of silt every this many reef triangles uncovered
 // (Task 12) coverU: the bury over which the dig-in covers it (growCover): from 0.1 (the dune's first tenth up) to 0.7, before her flanks are
 // under it (the dune's rings draw at bury x their fitted height)
-export const GROW = { weed: 90, tufts: 12, fan: 6, crust: 12, lump: 12, tube: 5, clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
+export const GROW = { weed: 150, tufts: 15, colonies: 28, fan: 14, crust: 40, coralline: 80, lump: 70, tube: 22, sprinkle: 100, ex: 4.0, scour: 1.6, space: 0.10, inset: 0.8,
+  clear: 3.0, near: 1.2, sight: [8, 1.5], revealT: 2.5, revRamp: 1.5, revPuff: 80, coverU: [0.1, 0.7] };
 const _gq = new THREE.Quaternion(), _gq2 = new THREE.Quaternion(), _gn = V3(), _gu = V3(0, 1, 0), _gs = V3(), _gmw = new THREE.Matrix4(), _gm2 = new THREE.Matrix4(), _gm3 = new THREE.Matrix4();
-export function growRock(L, MD) {
+const cl01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const OC8 = Float64Array.from({ length: 8 }, (_, b) => Math.cos(b * Math.PI / 4)), OS8 = Float64Array.from({ length: 8 }, (_, b) => Math.sin(b * Math.PI / 4));
+// a colony's hue (brooderGeo RG_HUE): the greyed bone, olive, rose-grey and umber most, the ochre, rust and fan rose less (lantern-lit
+// at a few u the rust mats read as salmon cloth: after1-d8)
+const COL_HUE = [3, 3, 1, 1, 5, 5, 4, 0, 2, 6];
+// L.growMs: the ms this build's growth took, headless wall time (never a __gpu number); `add` books it onto the first pass's (a build whose
+// sculpt lands later grows twice), else it replaces it
+export function growRock(L, MD, add = false) {
+  const t0 = performance.now();
+  try { growRockAt(L, MD); } finally { L.growMs = (add && L.growMs || 0) + performance.now() - t0; }
+}
+function growRockAt(L, MD) {
   const weed = L.parts.weed, reef = L.parts.reef, top = L.topAt;
-  L.growN = { weed: 0, fan: 0, crust: 0, lump: 0, tube: 0 };
+  L.growN = { weed: 0, tufts: 0, colonies: 0, fan: 0, crust: 0, coralline: 0, lump: 0, tube: 0 };
   if (!weed || !reef || !top || !MD) return;
   // a re-bed on the same growth: the full growth back first (prepGrowth's own first step; done here, or its restore would write the last
   // bed's fronds over this one's), then prepGrowth finds it whole
   if (L.reefIdx && L.reefIdx.geo === reef.geometry) buryGrowth(L, false);
   if (L.weedBase == null) L.weedBase = weed.count;   // (the procedural build: every slot used; the sculpt sets its own, brooder.js)
-  const rnd = seededRand(0x5B6E0C + L.idx), mw = _gmw.fromArray(MD.mw), base = L.weedBase, cap = weed.instanceMatrix.count;
-  const H = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, clr2 = GROW.clear * GROW.clear;
-  const offSeam = (x, y, z) => !H || (x - H.x) ** 2 + (y - H.y) ** 2 + (z - H.z) ** 2 > clr2;
-  // the candidates: her top on a 0.03 grid (0.46 u), on the strip and over the floor (the strip has no dune)
-  const C = [];
+  const rnd = seededRand(0x5B6E0C + L.idx), mw = _gmw.fromArray(MD.mw), base = L.weedBase, Rs = MD.R || L.R || 1;
+  const H = L.harpoon && L.harpoon.seatOk ? L.harpoon.seamWorld() : null, clr2 = GROW.clear * GROW.clear, iron = ironTest(L);
+  const offSeam = (x, y, z) => (!H || (x - H.x) ** 2 + (y - H.y) ** 2 + (z - H.z) ** 2 > clr2) && !(iron && iron(x, y, z));
+  // the current's up-current direction in her body's frame (THE REFERENCE)
+  const sl = L.sand ? Math.hypot(L.sand.x, L.sand.z) : 0;
+  _gn.set(sl ? L.sand.x / sl : 1, 0, sl ? L.sand.z / sl : 0).transformDirection(_gm2.copy(mw).invert());
+  const ul = Math.hypot(_gn.x, _gn.z) || 1, ux = _gn.x / ul, uz = _gn.z / ul;
+  // the candidates: her top on a 0.03 grid (0.46 u), on the strip and over the floor (the strip has no dune), each with its exposure
+  const C = [], e = 0.02, rr = 0.06;
   for (let x = -1.3; x <= 1.3; x += 0.03) for (let z = -1.0; z <= 1.15; z += 0.03) {
     const h = top(x, z); if (h == null) continue;
     _gs.set(x, h, z).applyMatrix4(mw);
     if (!inStrip(MD, _gs.x, _gs.z) || _gs.y < terrainH(_gs.x, _gs.z, L.idx) + 0.3) continue;
-    const e = 0.02, hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
-    C.push({ x, z, h, wy: _gs.y, up: _gs.y - L.meanG, nx: -(hx - h) / e, nz: -(hz - h) / e });
+    const hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
+    const gx = (hx - h) / e, gz = (hz - h) / e, up = _gs.y - L.meanG;
+    const a1 = top(x + rr, z), a2 = top(x - rr, z), a3 = top(x, z + rr), a4 = top(x, z - rr);
+    const cv = a1 == null || a2 == null || a3 == null || a4 == null ? 0 : (h - (a1 + a2 + a3 + a4) / 4) * Rs;   // u; + a ridge, - a hollow
+    const face = Math.max(-1, Math.min(1, -gx * ux - gz * uz)), slope = Math.hypot(gx, gz), scour = cl01((GROW.scour - up) / 1.2);
+    const ex = 0.5 * cl01(up / 6.5) + 0.55 * Math.max(0, face) + 0.35 * Math.max(-1, Math.min(1, cv / 0.35)) - 0.7 * scour - 0.3 * (1 - cl01(slope / 0.25));
+    C.push({ x, z, h, wy: _gs.y, up, nx: -gx, nz: -gz, slope, cv, face, scour, ex });
   }
   if (!C.length) return;
-  const pick = f => { const s = C.filter(f); return s.length ? s[Math.floor(rnd() * s.length)] : null; };
-  // THE WEED: clumps at the rock's foot and flanks
-  const WP = weed.geometry.attributes.position, A = weed.instanceMatrix.array, want = Math.min(GROW.weed, cap - base);
+  // a weighted draw from a list of candidates (weight fn), optionally kept GROW.space off the ones taken
+  const draw = (list, wf, taken, space) => {
+    let tot = 0; const W = new Float64Array(list.length);
+    for (let i = 0; i < list.length; i++) { W[i] = wf(list[i]); tot += W[i]; }
+    for (let tries = 0; tries < 80 && tot > 0; tries++) {
+      let r = rnd() * tot, i = 0; while (i < list.length - 1 && r > W[i]) { r -= W[i]; i++; }
+      const c = list[i];
+      if (taken && taken.some(t => (t.x - c.x) ** 2 + (t.z - c.z) ** 2 < space * space)) continue;
+      return c;
+    }
+    return null;
+  };
+  // THE WEED: tufts in the flanks' hollows and cracks, each a holdfast with its fronds splayed out of it
+  const WP = weed.geometry.attributes.position, want = GROW.weed;
+  if (weed.instanceMatrix.count < base + want) {
+    const old = weed.instanceMatrix, na = new Float32Array((base + want) * 16);
+    na.set(old.array.subarray(0, Math.min(old.array.length, na.length)));
+    weed.dispose();   // (the renderer releases the old instance buffer on the mesh's dispose event: geometry and material are untouched)
+    weed.instanceMatrix = new THREE.InstancedBufferAttribute(na, 16); weed.instanceMatrix.setUsage(old.usage);
+  }
+  const A = weed.instanceMatrix.array, tufts = [], flank = C.filter(q => q.up > 0.9 && q.up < 3.8);
   let n = base;
   for (let t = 0; t < GROW.tufts && n < base + want; t++) {
-    const c = pick(q => q.up > 1.0 && q.up < 3.5); if (!c) break;
-    const per = Math.ceil(want / GROW.tufts);
+    const c = draw(flank, q => Math.exp(1.5 * cl01(-q.cv / 0.3) + 0.6 * cl01(q.slope)), tufts, GROW.space); if (!c) continue;
+    tufts.push(c);
+    const per = 7 + Math.floor(rnd() * 6), rad = 0.010 + 0.010 * rnd(), n0 = n;
     for (let k = 0, tries = 0; k < per && n < base + want && tries < per * 6; tries++) {
-      const x = c.x + (rnd() - 0.5) * 0.09, z = c.z + (rnd() - 0.5) * 0.09, h = top(x, z); if (h == null) continue;
-      const e = 0.02, hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
+      const a = rnd() * Math.PI * 2, d = Math.sqrt(rnd()) * rad, x = c.x + Math.cos(a) * d, z = c.z + Math.sin(a) * d, h = top(x, z); if (h == null) continue;
+      const hx = top(x + e, z), hz = top(x, z + e); if (hx == null || hz == null) continue;
+      // splayed out from the holdfast: the shell's normal eased up, then leaned out along the frond's bearing from the tuft's middle
+      const lean = 0.25 + 0.55 * (d / rad);
       _gn.set(-(hx - h) / e, 1, -(hz - h) / e).normalize().lerp(_gu, 0.45).normalize();
+      _gn.x += Math.cos(a) * lean; _gn.z += Math.sin(a) * lean; _gn.normalize();
       _gq.setFromUnitVectors(_gu, _gn).multiply(_gq2.setFromAxisAngle(_gu, rnd() * Math.PI * 2));
-      const kk = 0.45 + 0.5 * rnd();
+      const kk = (0.55 + 0.5 * rnd()) * (1.15 - 0.4 * (d / rad));
       _gm2.compose(_gs.set(x, h - 0.003, z), _gq, _gn.set(kk, kk, kk));
-      // every vertex of it on the strip (prepGrowth's own rule, here at the source)
+      // every vertex of it on the strip and off the iron (prepGrowth's own rule, here at the source)
       let ok = true; const wm = _gm3.multiplyMatrices(mw, _gm2);
       for (let v = 0; v < WP.count && ok; v++) { _gs.fromBufferAttribute(WP, v).applyMatrix4(wm); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z); }
       if (!ok) continue;
       _gm2.toArray(A, n * 16); n++; k++;
     }
+    if (n > n0) L.growN.tufts++;
   }
   weed.count = n; weed.instanceMatrix.needsUpdate = true; weed.computeBoundingSphere();
   L.growN.weed = n - base;
-  // THE CORAL: spots by kind, then every part kept only if all of it lies on the strip and clear of the seam
-  const spots = [];
-  const put = (kind, nWant, f, size) => { for (let i = 0; i < nWant; i++) { const c = pick(f); if (c) spots.push([kind, c.x, c.z, size(), Math.floor(rnd() * 7)]); } };
-  put('fan', GROW.fan, q => q.up > 4.0, () => 0.07 + 0.05 * rnd());
-  put('crust', GROW.crust, q => q.nx * q.nx + q.nz * q.nz < 0.6, () => 0.04 + 0.05 * rnd());
-  put('lump', GROW.lump, () => true, () => 0.018 + 0.016 * rnd());
-  put('tube', GROW.tube, q => q.up > 2.0, () => 0.010 + 0.006 * rnd());
+  // THE CORAL: colonies by exposure, then the sprinkle; every part kept only if all of it lies on the strip and off the iron
+  const spots = [], cap = { fan: GROW.fan, crust: GROW.crust, coralline: GROW.coralline, lump: GROW.lump, tube: GROW.tube }, got = { fan: 0, crust: 0, coralline: 0, lump: 0, tube: 0 };
+  const add = (kind, c, size, hue, yaw) => { if (!c || got[kind] >= cap[kind]) return; got[kind]++; spots.push([kind, c.x, c.z, size, hue, yaw]); };
+  // a mat lies only where her top under it is near its own plane (crust() moulds a heightfield to topH: across a lip of her rock it hung
+  // down the face as a crumpled sheet, stills after1-d8 / -crest): her top at 0.55 and 1.1 of its radius, 8 bearings, off the plane of
+  // the centre's slope by under 0.45 of the radius
+  const lies = (q, r) => { for (let a = 0; a < 8; a++) { const ca = Math.cos(a * 0.7854), sa = Math.sin(a * 0.7854);
+    for (const f of [0.55, 1.1]) { const dx = ca * r * f, dz = sa * r * f, h = top(q.x + dx, q.z + dz); if (h == null || Math.abs(h - (q.h - q.nx * dx - q.nz * dz)) > 0.45 * r) return false; } } return true; };
+  const fanYaw = () => Math.atan2(ux, uz) + (rnd() - 0.5) * 0.5;   // its face to the current, give or take 15 deg
+  const cols = [];
+  for (let t = 0; t < GROW.colonies; t++) {
+    const c = draw(C, q => Math.exp(GROW.ex * q.ex), cols, GROW.space); if (!c) continue;
+    cols.push(c);
+    const rc = 0.045 + 0.045 * rnd(), hue = COL_HUE[Math.floor(rnd() * COL_HUE.length)], rich = cl01(0.5 + c.ex);
+    const near = C.filter(q => (q.x - c.x) ** 2 + (q.z - c.z) ** 2 < rc * rc);
+    // the middle of the colony first: a pick from the nearer of two
+    const pick = f => { const s = near.filter(f); if (!s.length) return null; const p = s[Math.floor(rnd() * s.length)], q = s[Math.floor(rnd() * s.length)];
+      return (p.x - c.x) ** 2 + (p.z - c.z) ** 2 < (q.x - c.x) ** 2 + (q.z - c.z) ** 2 ? p : q; };
+    const hueOf = () => rnd() < 0.7 ? hue : (hue + 1 + Math.floor(rnd() * 2)) % 7;
+    const nMat = 1 + (rnd() < rich ? 1 : 0) + (rnd() < 0.35 ? 1 : 0);
+    // (a mat that finds no spot it lies on tries once more at 0.65 of the size)
+    const mat = (kind, r, f, hu) => { for (const k of [1, 0.65]) { const q = pick(p => f(p) && lies(p, r * k)); if (q) return add(kind, q, r * k, hu); } };
+    for (let k = 0; k < nMat; k++) mat('crust', 0.035 + 0.04 * rnd(), q => q.slope < 0.9 && q.scour < 0.5, hueOf());
+    for (let k = 0, m = 2 + Math.floor(rnd() * 2); k < m; k++) mat('coralline', 0.022 + 0.026 * rnd(), q => q.slope < 1.4, Math.floor(rnd() * 4));
+    for (let k = 0, m = 2 + Math.floor(rnd() * 3 * (0.5 + rich)); k < m; k++) add('lump', pick(() => true), 0.014 + 0.018 * rnd(), hueOf());
+    // (the tube clumps on her high ridges the larger: they break her skyline from the sand)
+    if (c.up > GROW.scour) for (let k = 0, m = (rnd() < 0.6 ? 1 : 0) + (rnd() < 0.3 * rich ? 1 : 0); k < m; k++) { const q = pick(q => q.up > GROW.scour); if (q) add('tube', q, (0.011 + 0.009 * rnd()) * (1 + 0.35 * cl01((q.up - 3.5) / 2.5)), hueOf()); }
+    // the fan on the colony's ridge, where it is exposed: its highest convex spot
+    if (rnd() < 0.3 + 0.5 * Math.max(0, c.face) + (c.cv > 0.08 ? 0.3 : 0) && c.up > 2.5) {
+      let b = null; for (const q of near) if (q.up > 2.5 && (!b || q.cv + 0.15 * q.up > b.cv + 0.15 * b.up)) b = q;
+      add('fan', b, 0.10 + 0.09 * rnd(), Math.floor(rnd() * 3), fanYaw());
+    }
+  }
+  L.growN.colonies = cols.length;
+  // the ridge fans: her highest exposed ridges that no colony took, a fan apiece, across the current (they stand on her skyline)
+  const ridge = C.filter(q => q.up > 3.5 && q.cv > 0.05 && q.face > -0.2), fans = cols.slice();
+  for (let t = 0; t < GROW.fan && got.fan < cap.fan; t++) { const c = draw(ridge, q => Math.exp(3 * (q.cv / 0.3 + q.face)), fans, GROW.space * 1.2); if (!c) continue; fans.push(c); add('fan', c, 0.10 + 0.09 * rnd(), Math.floor(rnd() * 3), fanYaw()); }
+  // the sprinkle: the rest of the rock, coralline flecks and small lumps (in the scour band coralline only; a lump under 0.014 stood wholly
+  // under the shell, brooderGeo RG_SEAT)
+  for (let t = 0; t < GROW.sprinkle; t++) {
+    const c = draw(C, q => Math.exp(1.6 * q.ex)); if (!c) break;
+    const r = 0.016 + 0.022 * rnd();
+    if (c.scour > 0.5 || rnd() < 0.6) { if (lies(c, r)) add('coralline', c, r, Math.floor(rnd() * 4)); }
+    else add('lump', c, 0.014 + 0.010 * rnd(), Math.floor(rnd() * 7));
+  }
   G.setShellHeight(top);
   let parts;
   try { parts = G.rockGrowthParts(0xC0BA1 + L.idx, spots); } finally { G.setShellHeight(null); }
-  const keep = [];
+  // (reefback) and its footprint GROW.inset u inside the strip: the dig-in does not re-lay the growth, and a bed off the first one moves the
+  // strip (burial-probe digin offbed, 6.2 u off it: with the denser growth 1 coral vertex of 54683 fell outside the new bed's band). The
+  // footprint's outline: its outermost vertex on 8 bearings, each pushed GROW.inset u further out along that bearing
+  const keep = [], OX = new Float64Array(8), OZ = new Float64Array(8), OD = new Float64Array(8), ins = GROW.inset;
   for (let i = 0; i < parts.length; i++) {
     const P = parts[i].attributes.position; let ok = true;
-    for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z); }
+    OD.fill(-Infinity);
+    for (let v = 0; v < P.count && ok; v++) { _gs.fromBufferAttribute(P, v).applyMatrix4(mw); ok = inStrip(MD, _gs.x, _gs.z) && offSeam(_gs.x, _gs.y, _gs.z);
+      for (let b = 0; b < 8; b++) { const d = _gs.x * OC8[b] + _gs.z * OS8[b]; if (d > OD[b]) { OD[b] = d; OX[b] = _gs.x; OZ[b] = _gs.z; } } }
+    for (let b = 0; b < 8 && ok; b++) ok = inStrip(MD, OX[b] + OC8[b] * ins, OZ[b] + OS8[b] * ins);
     if (ok) { keep.push(parts[i]); L.growN[spots[i][0]]++; } else parts[i].dispose();
   }
   let co = L.parts.coral;

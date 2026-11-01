@@ -531,8 +531,15 @@ against explicit contracts and reviewed on return.
   (burial.js `crustTerm`: ONE program on EVERY build at every site, uBury 0 off home, compiled in the boot tail; her body's four
   lighting variants each carry it): sand lying on her shell in object space (`vCrO`, it rides her as she rises and breathes), look
   `CRUST.look` 'sand' shipped ('shell' / 'light' / 'stone' kept), `sandC` 0x3f4744 = zone 0's seabed silt, the crack network in
-  her own frame; weed and coral stand on the exposed rock (`growRock`: her reef's parts and the weed's spare slots, no new
-  program) and the rest is buried (`prepGrowth`, uncovered from the crack by `growReveal`, covered again by `growCover`). Michael's third look
+  her own frame; weed and coral stand on the exposed rock and the rest is buried (`prepGrowth`, uncovered from the crack by
+  `growReveal`, covered again by `growCover`). `growRock` (reefback, Michael 2026-10-31 "grow more coral") grows the weed's instance buffer past
+  `weedBase` (the old buffer released through the mesh's dispose event) and lays her reef's parts in exposure-drawn colonies (current,
+  height, ridge, less the sand's scour band) in ONE mesh in the reef's material object, no new program: 10 fans, 28 mats, 59 coralline, 57
+  lumps, 17 tube clumps, 120 fronds in 13 tufts, coral ~72k tris, ~37 ms headless a pass (`L.growMs`, summed over a build's two passes when
+  the sculpt lands late; with it cached the first bedDown lays none). Every part is `GROW.inset` 0.8 u inside the strip and off the iron by the
+  shared `ironTest` (the seam's keep-off, also `prepGrowth`'s); that rule applies at BED TIME only: an off-bed dig-in carries the coral with
+  her, unchanged, and is not re-laid (burial-probe digin `offbed.coral`). Parts sit on the DRAWN sculpted shell (brooderGeo `RG_SEAT`: the
+  bake's top is not the mesh; at the reef's own seats 51% of the skins and 38% of the lumps were 3 cm under). Michael's third look
   at the disguise (2026-10-20): "that looks right, keep going". THE HARPOON: `seat()` takes a CREST seat (harpoon.js,
   no bearing test, `H._crestScan`): seam 4.45 u over the sand, the anchor on a ledge of her rock, the rope laid on the drawn ground;
   from the sand the iron is seen end-on. THE RISE: [E] PULL, the 1.5 s wrench and the wake are as shipped; at the wake `L.crackK` runs
