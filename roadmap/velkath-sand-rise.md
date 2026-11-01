@@ -1,8 +1,8 @@
 ---
 title: The sand rolls off her as she rises
-status: wip
+status: done
 tags: velkath, burial, look, camera, user
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 When Velkath rises, sand stays on her and pours off her back and flanks over a few seconds, a low sandy cloud rolls off her edges, and the camera turns to her for the rise, then hands back.
 
@@ -19,3 +19,4 @@ Acceptance: Michael watches it in play and says it reads; a pixel check on the c
 ## Log
 - 2026-10-31 — created; Michael approved all three parts. Branch sandrise.
 - 2026-10-31 — built on sandrise (to ce7a286): the shed, the low sandy cloud + pour, RISECAM; drift noise at world scale and sandC 0x5a6663 (the asleep look changed). Michael on the videos: "2. keep new" (the asleep sand), "3. good" (the cloud), "4. good" (RISECAM), "5. good" (the residual after she stands). Review fixes in progress (old wound fading under the sand, RISECAM hysteresis / hand-back look drop, dig-fail residual pop, probe RED rule). Not merged.
+- 2026-11-01 — merged to main and pushed (ee7f943) on Michael's word: "push and merge this". Load invariants pass on the merged tree. The camera clipping into her during the rise is older than this work and stays open.

@@ -1,8 +1,8 @@
 ---
 title: More reef on her back
-status: wip
+status: done
 tags: velkath, burial, look, user
-updated: 2026-10-31
+updated: 2026-11-01
 ---
 The coral and weed on Velkath's exposed back are better but should be pushed further: grow more of it, so the buried rock reads as an old reef-covered stone.
 
@@ -16,3 +16,4 @@ Acceptance: Michael's eye on stills / play; burial-probe disguise (incl. `coral`
 ## Log
 - 2026-10-31 — created from Michael's answer. Branch reefback.
 - 2026-10-31 — built on reefback (to 9e9aa06): exposure-drawn colonies (10 fans, 28 mats, 59 coralline skins, 57 lumps, 17 tube clumps; 120 fronds in tufts), coral kept out of the seam's sight corridor, mats only where they lie. Michael on the stills: "1. good". Code review in progress. Not merged.
+- 2026-11-01 — merged to main and pushed (ee7f943) on Michael's word: "push and merge this". Load invariants pass on the merged tree. The camera clipping into her during the rise is older than this work and stays open.
