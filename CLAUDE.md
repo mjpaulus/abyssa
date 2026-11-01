@@ -109,7 +109,9 @@ against explicit contracts and reviewed on return.
   claw or nothing, the full turn slewed 45 deg/s, and it hands back over ~0.5 s on its LAST aim, held (the candidate is computed only in the
   raise and the hold: a sleeper rebuilt under it has pointPh 0 and pointAt (0, 0, 0)); any real look (5 deg net or 15 deg of looking about,
   CLAWCAM's tolerances) drops it at once for the rest of that calm, and a pause ends it on the spring for the rest of that point (CLAWCAM's
-  house rule). It cannot move the lens out of her: that is CRECAM's guard.
+  house rule). It cannot move the lens out of her: that is CRECAM's guard. RISECAM (sandrise 2026-10-31; `RISECAM` / `__risecam`) is the third:
+  POINTCAM's rules and helpers keyed to the rise (from the crack while her sand pours, `until` 4.0 s, before she stands), aimed at the edge of
+  her back nearest the lens; none of the turn with the lens pressed within `near` 2.6-4.5 u of his bonnet; hands back over ~1.3 s (wOut 3).
 - `postfx.js` — RenderPass → N8AO → VolumetricLightPass → EffectPass(DoF, Bloom,
   Chroma, Grade, Finite) → EffectPass(SMAA, Vignette, Grain — grain lands AFTER the
   AA; the library runs effects order-as-given, no auto-sort). Composer is HalfFloat
@@ -606,6 +608,18 @@ against explicit contracts and reviewed on return.
   off her ground, facing her, until the expression is true, 60 s cap; RECORDING ONLY, not for FP_GATE comparisons) took the dig-in
   video. `ritepolicy.mjs` reads his height off `max(terrainH, window.__xf)` where riteplay's setup sets `__xf = extraFloorAt`; the other
   hosts (fullplay, fullplay-gate, velfix-gate) run it without `__xf`, so their `agl` reads terrainH only.
+  THE SAND ROLLS OFF HER (sandrise, 2026-10-31; Michael: "we lost that she is partially covered in sand and when she rises the sand rolls off
+  in a slight dust cloud", approved "yes do all three for the sand"; report out/report.md on the branch). (1) THE SHED (burial.js `SHED`,
+  `shedTick`; uniforms uShed / uDownO / uDriftS in the one '|crust' program): the cover no longer goes with `bury`; from the crack each spot
+  lets go at its own time (steep faces first, flats, hollows never), the drifts run down the fall line drawn into streams, the hollows' residual
+  stays `hold` 20 s after she stands then drifts off over `restT` 90 s; asleep and dug in it is the shipped cover value for value. FOUND: the
+  drift noise read vCrO (object space, the shell drawn x15.4), so the drifts were ~one value over her and only the veil showed: `CRUST.driftWorld`
+  1 reads it at world scale; `sandC` 0x3f4744 -> 0x5a6663 (the old hex drew no sand anyone could see). Both change the ASLEEP look (knobs).
+  (2) THE CLOUD (plume.js `RISE_LOOK`, `spawnPour`; per-particle aE tint/flat): the rise kind DRAWS a low sandy cloud (rn .. rkd) and the pour off
+  her rim (brooder.js POUR, her shell's outline), render only; its DENSITY MODEL and records are the shipped ones (record life from K.life), so
+  the blind spell is unchanged; the veil's rise share is capped (veilMax) and tinted. (3) RISECAM (camera bullet). Probes: `sandpix-probe.mjs
+  <crust|cloud>` (pixel bars through the post chain, the crust's probe paint `__burial.paint`; SP_RED off / fade / nocloud / pale),
+  `risecam-probe.mjs <engage|mouse|off|handback>` (RC_ON=0, RC_RED nodrop / on / snap), recorder `sandrise-rec.mjs <anchor|off>`.
   Zone 1 SHIPS ORUNE THE HOARDER (`sleeper/hoarder.js`, `hoarderGeo.js`, `hoard.js`):
   wrapped round the trawler, the hoard of drowned lanterns; taking the ship's lamp
   wakes her; arms lash/grab (the blade frees: `lev.onSlash(pos, fwd, reach, tipReach, guard)`, held: knife 3 /
@@ -885,7 +899,7 @@ against explicit contracts and reviewed on return.
   short lines, period voice ("BITUMEN — FOOD FOR THE PUMP").
 - Debug surfaces are namespaced on window and kept: player, survival, lev, zone,
   gameState, setState, playEnding, pred, wrecks, weather, __helm, __sky, __audio,
-  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __relief, __shaderFailed, __burial, __pointcam.
+  __breath, __boil, __grade, __hit, __rm, __feel, __gait, __chart, __relief, __shaderFailed, __burial, __pointcam, __risecam.
 - INVARIANTS checked before every commit (fresh tab): 14 lights in the scene; `__lev.fp(0/1/2)`
   15ce888c / c938fe6e / 652d0412; `__ridge.fp()` home 5c0705a1 (zones 1+2 d49d451d, Pallid b1c58f8d, Burned
   d2b6fb68; since THE RELIEF 2026-10-14, was 3b526986 since THE FISSURE 2026-10-10 and 119f0cae before);
