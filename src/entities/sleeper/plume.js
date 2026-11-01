@@ -448,4 +448,6 @@ export function plumeState() {
   return { live: n, big, rise, riseEvicted, quadEvicted, clock, pourN, veilR: +veilR.toFixed(3), visible: !!(mesh && mesh.visible), veil: veil ? +veil.material.uniforms.uA.value.toFixed(3) : 0, veilOn: !!(veil && veil.visible) };
 }
 if (typeof window !== 'undefined') window.__plume = { state: plumeState, tune: PLUME_TUNE, kinds: PLUME, tau: plumeTau, dens: plumeDensity, densKind, rec, spawn: spawnPlume, clear: clearPlumes,
-  look: RISE_LOOK, pour: spawnPour, show: on => { if (mesh) mesh.visible = !!on; if (veil && !on) veil.visible = false; return !!mesh; } };
+  look: RISE_LOOK, pour: spawnPour,
+  // (sandrise, sandpix-probe's A/B) every plume and the veil hidden while off (PLUME_TUNE.off: updatePlumes re-sets mesh.visible each frame)
+  show: on => { PLUME_TUNE.off = !on; if (mesh && !on) { mesh.visible = false; veil.visible = false; } return !!mesh; } };

@@ -1063,7 +1063,11 @@ export function setSlabDust(f) { emitSlabDust = f; }
 export const CRUST_LOOKS = { shell: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0, drift: 0, dust: 0, flat: 0 }, light: { alb: 0.45, nrm: 0.35, rough: 0.5, sand: 0.45, cover: 0, drift: 0, dust: 0, flat: 0 },
   stone: { alb: 0.92, nrm: 0.85, rough: 0.9, sand: 0.7, cover: 0, drift: 0, dust: 0, flat: 0 },
   sand: { alb: 0, nrm: 0, rough: 0, sand: 0, cover: 0.3, drift: 1.0, dust: 0.1, flat: 0.3 } };
-export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x3f4744, driftWorld: 1 };
+// (sandrise) sandC 0x3f4744 -> 0x5a6663: the dune's silt hex laid on her drew no sand anyone could see (sandpix-probe crust `seen`: 2% of her
+// up pixels moved >= 6 codes of luma with the cover taken off, mean 1.4 codes): her own shell under it is about as dark in his light, while
+// the dune beside her reads lighter (the terrain's own lighting). 0x5a6663 is the dune's tone as it reads beside her (stills out/dev/sc-sheet:
+// none / 0x3f4744 / 0x5a6663 / 0x76837f; the last read as pale drifts, too bright). The knob: setCrust({ sandC })
+export const CRUST = { look: 'sand', ...CRUST_LOOKS.sand, crack: 0.85, sandC: 0x5a6663, driftWorld: 1 };
 const CRUST_HEAD = `
 varying vec3 vCrW, vCrO;
 uniform float uBury, uCrack;
